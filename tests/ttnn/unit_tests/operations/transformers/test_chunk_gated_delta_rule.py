@@ -23,7 +23,7 @@ import pytest
 import torch
 
 import ttnn
-from models.common.utility_functions import is_blackhole
+from tt_py_test_utils_common.utility_functions import is_blackhole
 from models.experimental.gated_attention_gated_deltanet.torch_functional.delta_rule_ops import (
     l2_norm,
     recurrent_gated_delta_rule,
@@ -36,6 +36,12 @@ CHUNK = 32  # the phased op's supported chunk size (Ct=1); 64 splits the WY matr
 # so the long cases run on hardware only.
 _SIM = bool(os.environ.get("TT_METAL_SIMULATOR"))
 _hw_only = pytest.mark.skipif(_SIM, reason="hardware test only: too slow on the simulator for the coverage it adds")
+# The chunk-64 phased prep program (Ct=2) exceeds the kernel-config buffer when the watcher is compiled in: its three
+# compute binaries alone are 62 KB of the 69 KB there. The production chunk size is 32.
+_no_watcher = pytest.mark.skipif(
+    bool(os.environ.get("TT_METAL_WATCHER")),
+    reason="chunk-64 prep binaries exceed the kernel-config buffer under the watcher",
+)
 REPEATS = 0 if _SIM else 8  # extra multicast runs per shape, to give a non-deterministic race a chance to show
 
 # Measured:
@@ -194,6 +200,69 @@ def test_gated_delta_attn_seq_golden_matches_documented_scan():
 
     torch.testing.assert_close(actual_output, torch.stack(expected_outputs, dim=1))
     torch.testing.assert_close(actual_state, expected_state)
+
+
+def _gated_delta_attn_seq_inputs(batch_heads, num_chunks, with_initial_state, seed):
+    """Inputs for gated_delta_attn_seq at the only size it accepts (C = Dk = Dv = 128)."""
+    gen = torch.Generator().manual_seed(seed)
+    C = Dk = Dv = 128
+
+    def r(*shape):
+        return torch.randn(*shape, generator=gen) * 0.1
+
+    # Well-conditioned unit-lower-triangular L, and the inverse of each of its 32x32 diagonal blocks.
+    L_unit = (
+        torch.eye(C).expand(batch_heads, num_chunks, C, C)
+        + torch.tril(r(batch_heads, num_chunks, C, C), diagonal=-1) * 0.1
+    )
+    L_inv = torch.cat([torch.linalg.inv(L_unit[..., i : i + 32, i : i + 32]) for i in range(0, C, 32)], dim=-2)
+    inputs = dict(
+        L_unit=L_unit,
+        v_beta_sc=r(batch_heads, num_chunks, C, Dv),
+        k_bd_sc=r(batch_heads, num_chunks, C, Dk),
+        intra_attn=torch.tril(r(batch_heads, num_chunks, C, C)),
+        q_decay=r(batch_heads, num_chunks, C, Dk),
+        k_decay_t=r(batch_heads, num_chunks, Dk, C),
+        dl_exp=torch.rand(batch_heads, num_chunks, 1, 1, generator=gen) * 0.5 + 0.5,
+        L_inv=L_inv,
+    )
+    initial_state = r(batch_heads, Dk, Dv) if with_initial_state else None
+    return inputs, initial_state
+
+
+@pytest.mark.parametrize(
+    "num_chunks", [1, 2, pytest.param(3, marks=_hw_only), pytest.param(4, marks=_hw_only)], ids=lambda n: f"NC{n}"
+)
+@pytest.mark.parametrize("with_initial_state", [False, True], ids=["s0=0", "s0=rand"])
+def test_gated_delta_attn_seq_vs_golden(device, num_chunks, with_initial_state):
+    """Device gated_delta_attn_seq vs its golden.
+
+    The reader seeds the starting state (loaded, or zero-filled when there is none) into its own CB,
+    which compute reads on chunk 0; on later chunks compute reads the state it carried over itself.
+    NC = 1 covers the seed alone; NC >= 2 covers the hand-off from the seed to the carried state.
+    The op runs twice with fresh inputs, so the second run hits the program cache.
+    """
+    batch_heads = 3
+    golden = ttnn.get_golden_function(ttnn.transformer.gated_delta_attn_seq)
+
+    def dev(t):
+        return ttnn.from_torch(t, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    for run in range(2):
+        inputs, initial_state = _gated_delta_attn_seq_inputs(
+            batch_heads, num_chunks, with_initial_state, seed=100 * num_chunks + 10 * with_initial_state + run
+        )
+        out_tt, state_tt = ttnn.transformer.gated_delta_attn_seq(
+            **{name: dev(t) for name, t in inputs.items()},
+            initial_state=dev(initial_state) if initial_state is not None else None,
+        )
+        out_ref, state_ref = golden(**inputs, initial_state=initial_state)
+
+        ok_o, pcc_o = check_with_pcc(out_ref, ttnn.to_torch(out_tt), 0.999)
+        ok_s, pcc_s = check_with_pcc(state_ref, ttnn.to_torch(state_tt), 0.999)
+        print(f"\nrun {run}: PCC output={pcc_o} final_state={pcc_s}")
+        assert ok_o, f"run {run}: output vs golden: {pcc_o}"
+        assert ok_s, f"run {run}: final_state vs golden: {pcc_s}"
 
 
 def _const_tiles(device, chunk_size=CHUNK):
@@ -391,7 +460,9 @@ def _run_op(device, tensors, const_tiles, initial_state, chunk_size, use_mcast):
             2, 16, 48, 128, 128, 256, 32, False, marks=_hw_only
         ),  # batched prefill: BH=96 -> NV=1, plain reader
         (1, 4, 12, 64, 128, 256, 32, True),  # K != V: kd/q_decay/k_dec_t shrink, v_beta does not
-        (1, 4, 12, 128, 128, 256, 64, True),  # chunk_size=64 -> Ct=2: two tile-rows per chunk
+        pytest.param(
+            1, 4, 12, 128, 128, 256, 64, True, marks=_no_watcher
+        ),  # chunk_size=64 -> Ct=2: two tile-rows per chunk
         (1, 4, 12, 128, 128, 32, 32, True),  # T == chunk_size -> NC==1: single-chunk handshake
         (1, 4, 12, 128, 64, 256, 32, True),  # small V: Ct*Vt < 3, the prep mask-slot capacity regime
     ],
@@ -553,6 +624,19 @@ def test_compute_kernel_config_contract(device, expect_error, make_program_confi
         with expect_error(RuntimeError, "HiFi4 with fp32 destination accumulation"):
             _run_with_compute_config(device, tensors, const_tiles, pc, ttnn.WormholeComputeKernelConfig(**kwargs))
             pytest.fail(f"{name} was accepted; the op must reject arithmetic other than the one it was validated at")
+
+
+@pytest.mark.skipif(not is_blackhole(), reason="chunk_gated_delta_rule is Blackhole-only")
+@pytest.mark.parametrize("chunk_size", [48, 96, 128])
+def test_chunk_size_contract(device, expect_error, chunk_size):
+    """The kernels are validated at one and two tile rows per chunk; any other chunk_size, a multiple of
+    32 or not, is rejected."""
+    (q, k, v, g, beta), (eye, tril, ones, masks) = _small_inputs(device)
+    with expect_error(RuntimeError, "chunk_size must be 32 or 64"):
+        ttnn.transformer.chunk_gated_delta_rule(
+            q, k, v, g, beta, chunk_size=chunk_size, eye=eye, tril=tril, ones=ones, masks=masks
+        )
+        pytest.fail(f"chunk_size {chunk_size} was accepted; the op supports 32 and 64 only")
 
 
 # --------------------------------------------------------------------------------------------

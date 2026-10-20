@@ -3,8 +3,11 @@
 
 from __future__ import annotations
 
+import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -133,9 +136,48 @@ def test_title_never_exceeds_the_jira_limit():
     assert len(title) <= 255 and title.endswith("...")
 
 
+def _gh_answers(monkeypatch, *results):
+    """subprocess.run answering with each (returncode, stdout, stderr) in turn; returns the queue and the sleeps."""
+    queue, sleeps = list(results), []
+    monkeypatch.setattr(subprocess, "run", lambda argv, **kw: subprocess.CompletedProcess(argv, *queue.pop(0)))
+    monkeypatch.setattr(rft.time, "sleep", sleeps.append)
+    return queue, sleeps
+
+
+def test_gh_retries_a_server_error_with_backoff(monkeypatch, capsys):
+    bad, ok = (1, "", "gh: Server Error (HTTP 502)\n"), (0, "{}\n", "")
+    queue, sleeps = _gh_answers(monkeypatch, bad, bad, ok)
+    assert rft._gh(["repos/o/r/actions/runs/1"]) == "{}\n"
+    assert not queue and sleeps == [5, 10]
+    assert "Server Error (HTTP 502); retrying in 5s" in capsys.readouterr().out
+
+
+def test_gh_gives_up_with_the_real_error(monkeypatch):
+    _gh_answers(monkeypatch, *[(1, "", "gh: Server Error (HTTP 502)\n")] * 4)
+    with pytest.raises(SystemExit, match=r"runs/1/jobs: gh: Server Error \(HTTP 502\)"):
+        rft._gh(["repos/o/r/actions/runs/1/jobs"])
+
+
+def test_gh_does_not_retry_a_client_error(monkeypatch):
+    queue, sleeps = _gh_answers(monkeypatch, (1, "", "gh: Not Found (HTTP 404)\n"), (0, "{}\n", ""))
+    with pytest.raises(SystemExit, match="HTTP 404"):
+        rft._gh(["repos/o/r/actions/runs/1"])
+    assert len(queue) == 1 and not sleeps
+
+
+def test_failed_jobs_come_from_the_check_runs_then_the_job_itself(monkeypatch):
+    answers = {
+        "repos/o/r/check-suites/77/check-runs?per_page=100": "11\n12\n",
+        "repos/o/r/actions/jobs/11": '{"id": 11, "steps": []}',
+        "repos/o/r/actions/jobs/12": '{"id": 12, "steps": []}',
+    }
+    monkeypatch.setattr(rft, "_gh", lambda args: answers[next(a for a in args if a.startswith("repos/"))])
+    assert [j["id"] for j in rft.fetch_failed_jobs("o/r", {"check_suite_id": 77})] == [11, 12]
+
+
 def _wire(monkeypatch, run, jobs, summary=None):
-    monkeypatch.setattr(rft, "fetch_run", lambda repo, run_id: run)
-    monkeypatch.setattr(rft, "fetch_jobs", lambda repo, run_id: jobs)
+    monkeypatch.setattr(rft, "fetch_run", lambda repo, run_id: {"status": "completed", **run})
+    monkeypatch.setattr(rft, "fetch_failed_jobs", lambda repo, run: jobs)
     monkeypatch.setattr(rft, "_fetch_summary", lambda repo, run_id: summary)
     for k, v in {
         "REPO": "o/r",
@@ -168,14 +210,26 @@ def test_main_files_one_issue_per_failed_job(monkeypatch):
     }
 
 
+def test_main_leaves_a_run_being_re_run_to_its_last_attempt(monkeypatch, capsys):
+    _wire(
+        monkeypatch, {"head_branch": "main", "head_sha": "abc", "status": "in_progress", "run_attempt": 2}, [job("A")]
+    )
+    monkeypatch.setattr(
+        rft, "fetch_failed_jobs", lambda repo, run: (_ for _ in ()).throw(AssertionError("must not list"))
+    )
+    monkeypatch.setattr(rft, "file_issue", lambda **kw: (_ for _ in ()).throw(AssertionError("must not file")))
+    rft.main()
+    assert "already on attempt 2" in capsys.readouterr().out
+
+
 def test_main_skips_non_release_refs_without_listing_jobs(monkeypatch, capsys):
     monkeypatch.setattr(
-        rft, "fetch_jobs", lambda repo, run_id: (_ for _ in ()).throw(AssertionError("must not list jobs"))
+        rft, "fetch_failed_jobs", lambda repo, run: (_ for _ in ()).throw(AssertionError("must not list jobs"))
     )
     monkeypatch.setattr(rft, "file_issue", lambda **kw: (_ for _ in ()).throw(AssertionError("must not file")))
     _wire(monkeypatch, {"head_branch": "dgnidash/feature", "head_sha": "abc"}, [])
     monkeypatch.setattr(
-        rft, "fetch_jobs", lambda repo, run_id: (_ for _ in ()).throw(AssertionError("must not list jobs"))
+        rft, "fetch_failed_jobs", lambda repo, run: (_ for _ in ()).throw(AssertionError("must not list jobs"))
     )
     rft.main()
     assert "not a release ref" in capsys.readouterr().out

@@ -90,6 +90,7 @@
 #include "tt_metal.hpp"  // WriteRuntimeArgsToDevice
 #include "kernels/kernel.hpp"
 #include <tt-metalium/experimental/blaze/named_kernel_args.hpp>
+#include <tt-metalium/experimental/op_profiler_support.hpp>
 #include <tt_stl/reflection.hpp>
 #include <impl/dispatch/dispatch_query_manager.hpp>
 #include <llrt/tt_cluster.hpp>
@@ -97,6 +98,7 @@
 #include <internal/service/service_core_manager.hpp>
 #include "impl/internal/service/service_core_manager_impl.hpp"
 #include "tt_metal/tools/profiler/tracy_debug_zones.hpp"
+#include <fmt/ranges.h>
 
 namespace tt {
 enum CBIndex : std::uint8_t;
@@ -116,6 +118,80 @@ size_t get_ringbuffer_size(IDevice* device, HalProgrammableCoreType programmable
                hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::KERNEL_CONFIG);
     }
     return hal.get_dev_size(programmable_core_type, HalL1MemAddrType::KERNEL_CONFIG);
+}
+
+// End of a kernel group's packed binaries. finalize_kernel_bins sizes the kernel text section by the
+// largest end, so the group with it is the text-sizing group.
+uint32_t kernel_text_end(const KernelGroup& kg) {
+    const auto sizes = kg.launch_msg.view().kernel_config().kernel_text_size();
+    uint32_t end = 0;
+    for (uint32_t p = 0; p < kg.kernel_text_offsets.size(); p++) {
+        end = std::max(end, kg.kernel_text_offsets[p] + sizes[p]);
+    }
+    return end;
+}
+
+// The rows as "  label  value" lines, one per row, for the TT_FATAL message.
+std::string format_rows(const SummaryRows& rows) {
+    std::string out;
+    for (const auto& [label, value] : rows) {
+        fmt::format_to(std::back_inserter(out), "\n  {:<28} {}", label, value);
+    }
+    return out;
+}
+
+// A program's kernel config buffer use as (label, value) rows. Each section is sized by the kernel group
+// that needs the most of it; kernel text dominates in practice, so the rows also give each RISC's binary
+// size, cores and kernels for the text-sizing group.
+SummaryRows program_config_breakdown(
+    const MetalContext& metal_ctx,
+    HalProgrammableCoreType core_type,
+    const detail::ProgramOffsetsState& state,
+    const std::vector<std::shared_ptr<KernelGroup>>& kernel_groups,
+    const std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& kernels) {
+    const auto bytes = [](uint32_t b) { return fmt::format("{} B", b); };
+    const uint32_t rta_size = state.sem_offset - state.rta_offset;
+    SummaryRows rows = {
+        {"runtime args", bytes(rta_size)},
+        {"semaphores", bytes(state.sem_size)},
+        {"circular buffers", bytes(state.cb_size)},
+        {"dataflow buffers", bytes(state.dfb_size)},
+    };
+    // Alignment padding and the cross-node DFB and prefetcher pipe regions. Listed before kernel text so
+    // the text rows below follow their section.
+    const uint32_t listed = rta_size + state.sem_size + state.cb_size + state.dfb_size + state.kernel_text_size;
+    TT_ASSERT(state.offset >= listed, "Program config sections ({} B) exceed its size ({} B)", listed, state.offset);
+    if (state.offset > listed) {
+        rows.emplace_back("other", bytes(state.offset - listed));
+    }
+    rows.emplace_back("kernel text", bytes(state.kernel_text_size));
+    // No packed text (binaries not stored in the config buffer, or not finalized): no group sizes it.
+    if (state.kernel_text_size == 0) {
+        return rows;
+    }
+    const auto& hal = metal_ctx.hal();
+    const uint32_t num_processors = hal.get_num_risc_processors(core_type);
+    // kernel_text_size > 0 means some group packed text, so kernel_groups is not empty.
+    const KernelGroup& sizing_group =
+        **std::ranges::max_element(kernel_groups, {}, [](const auto& kg) { return kernel_text_end(*kg); });
+    auto sizes = sizing_group.launch_msg.view().kernel_config().kernel_text_size();
+    for (uint32_t p = 0; p < num_processors; p++) {
+        const auto [processor_class, processor_id] = hal.get_processor_class_and_type_from_index(core_type, p);
+        rows.emplace_back(
+            "  " + hal.get_jit_build_query().target_name(
+                       {false, core_type, processor_class, processor_id, metal_ctx.rtoptions()}),
+            bytes(sizes[p]));
+    }
+    std::vector<std::string> names;
+    for (const auto kernel_id : sizing_group.kernel_ids) {
+        auto name = kernels.at(kernel_id)->name();
+        if (std::find(names.begin(), names.end(), name) == names.end()) {
+            names.push_back(std::move(name));
+        }
+    }
+    rows.emplace_back("  text-sizing group, cores", sizing_group.core_ranges.str());
+    rows.emplace_back("  text-sizing group, kernels", fmt::format("{}", fmt::join(names, ", ")));
+    return rows;
 }
 
 void validate_kernel_placement(bool force_slow_dispatch, std::shared_ptr<Kernel> kernel, tt::ChipId physical_chip_id) {
@@ -310,12 +386,14 @@ KernelCompileDescriptor build_kernel_descriptor(
     return desc;
 }
 
-std::string ensure_kernel_binaries(
+// With no_wait, returns nullopt instead of waiting while another thread builds kernel_hash.
+std::optional<std::string> ensure_kernel_binaries(
     const std::shared_ptr<Kernel>& kernel,
     IDevice* device,
     JitBuildOptions& build_options,
     const DeviceBuildEnv& build_env,
-    size_t kernel_hash) {
+    size_t kernel_hash,
+    bool no_wait = false) {
     if (const auto& precompiled_config = kernel->precompiled_config(); precompiled_config.has_value()) {
         if (kernel->binaries_exist_on_disk(device, precompiled_config->precompiled_dir)) {
             log_debug(
@@ -333,14 +411,21 @@ std::string ensure_kernel_binaries(
         }
     }
 
-    jit_build_once(kernel_hash, [&] {
+    auto build = [&] {
         try {
             jit_build_genfiles_descriptors(build_env.build_env, build_options);
             kernel->generate_binaries(device, build_options);
         } catch (std::runtime_error& ex) {
             TT_THROW("Failed to generate binaries for {} {}", kernel->name(), ex.what());
         }
-    });
+    };
+    if (no_wait) {
+        if (!jit_build_once_no_wait(kernel_hash, build)) {
+            return std::nullopt;
+        }
+    } else {
+        jit_build_once(kernel_hash, build);
+    }
     return build_env.build_env.get_out_kernel_root_path();
 }
 }  // namespace
@@ -411,6 +496,7 @@ Program::Program(std::shared_ptr<detail::ProgramImpl> impl) : internal_(std::mov
 Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shared<detail::ProgramImpl>()) {
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
     LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureProgramConstructor, *this);
+    ScopedBusyClock build_busy(kProgramBuildBusy);
 
     if (descriptor.reload_table.has_value()) {
         internal_->set_reload_table(descriptor.reload_table->address, descriptor.reload_table->cores);
@@ -820,6 +906,11 @@ const std::vector<std::pair<uint32_t, std::string>>& ProgramImpl::get_dfb_borrow
 }
 // ============================================================================
 
+std::vector<detail::KernelMeta> experimental::collect_kernel_meta(
+    const Program& program, distributed::MeshDevice& mesh_device) {
+    return program.impl().collect_kernel_meta(&mesh_device);
+}
+
 std::vector<detail::KernelMeta> detail::collect_kernel_meta(const Program& program, IDevice* device) {
     return program.impl().collect_kernel_meta(device);
 }
@@ -840,6 +931,7 @@ KernelGroup::KernelGroup(
     uint32_t programmable_core_type_index,
     std::vector<KernelHandle> kernel_ids,
     uint64_t local_cb_mask,
+    uint32_t num_local_dfbs,
     uint32_t min_remote_cb_start_index,
     const CoreRangeSet& new_ranges,
     const dev_msgs::Factory& dev_msgs_factory) :
@@ -848,7 +940,8 @@ KernelGroup::KernelGroup(
 
     kernel_ids(std::move(kernel_ids)),
     launch_msg(dev_msgs_factory.create<dev_msgs::launch_msg_t>()),
-    go_msg(dev_msgs_factory.create<dev_msgs::go_msg_t>()) {
+    go_msg(dev_msgs_factory.create<dev_msgs::go_msg_t>()),
+    num_local_dfbs(num_local_dfbs) {
     this->core_ranges = this->core_ranges.merge(new_ranges);
 
     auto kernel_config = this->launch_msg.view().kernel_config();
@@ -1162,8 +1255,6 @@ void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_i
                         if (not hal.get_supports_dfbs(programmable_core_type_index)) {
                             continue;
                         }
-                        // Hacky here but dfbs and cbs aren't used interchangeably so use the local_cb_mask on
-                        // KernelGroup to hold value of number of dfbs
                         auto local_dfb_val = per_core_num_dfbs_.find(core);
                         if (local_dfb_val != per_core_num_dfbs_.end()) {
                             num_dfbs = local_dfb_val->second;
@@ -1185,7 +1276,6 @@ void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_i
                 "local_cb_mask: {}, num_dfbs: {}",
                 local_cb_mask,
                 num_dfbs);
-            local_cb_mask = (num_dfbs > 0 && local_cb_mask == 0) ? num_dfbs : local_cb_mask;
             std::vector<KernelHandle> kernel_ids(kernels.begin(), kernels.end());
             // Sort kernel ids by processor index, so loops over this array will be in processor order
             std::sort(kernel_ids.begin(), kernel_ids.end(), [&](KernelHandle a, KernelHandle b) {
@@ -1206,6 +1296,7 @@ void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_i
                 programmable_core_type_index,
                 std::move(kernel_ids),
                 local_cb_mask,
+                num_dfbs,
                 min_remote_cb_start_index,
                 cores,
                 hal.get_dev_msgs_factory(hal.get_programmable_core_type(programmable_core_type_index))));
@@ -3120,6 +3211,7 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
         Inspector::program_compile_already_exists(this, device, build_env.build_key());
         return;
     }
+    ScopedBusyClock compile_busy(kProgramCompileBusy);
     // Clear the determined sub_device_ids when we compile the program for the first time
     // This way, determine_sub_device_ids is forced to recalculate with the finalized information on the used cores
     if (compiled_.empty()) {
@@ -3191,6 +3283,22 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
         return std::pair{std::move(build_options), kernel_hash};
     };
 
+    auto load_kernel_binaries = [&](const std::shared_ptr<Kernel>& kernel,
+                                    const JitBuildOptions& build_options,
+                                    const std::string& binary_root) {
+        kernel->read_binaries(device, binary_root);
+        kernel->register_kernel_elf_paths_with_watcher(*device, binary_root);
+        Inspector::program_kernel_compile_finished(this, device, kernel, build_options, binary_root);
+    };
+
+    // Validate every kernel before starting any build: a throw after a local task launches would unwind
+    // locals it still references, and a throw after a remote submit would leave its dedup entry pending.
+    for (const auto& kernels : kernels_) {
+        for (const auto& [id, kernel] : kernels) {
+            validate_kernel_placement(force_slow_dispatch, kernel, device->build_id());
+        }
+    }
+
     if (remote_enabled) {
         // Remote path: prep and submit are sequential.  Parallelism is on compilation which happens on the remote
         // server.
@@ -3218,7 +3326,6 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
 
         for (auto& kernels : kernels_) {
             for (auto& [id, kernel] : kernels) {
-                validate_kernel_placement(force_slow_dispatch, kernel, device->build_id());
                 auto [build_options, kernel_hash] = prep_kernel(kernel);
                 // Skip the remote round-trip when the ELF is already validly cached locally.
                 if (!remote_kernel_cached(device, kernel)) {
@@ -3246,28 +3353,37 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
 
         const std::string binary_root = build_env.build_env.get_out_kernel_root_path();
         for (const auto& [kernel, build_options] : submitted_kernels) {
-            kernel->read_binaries(device, binary_root);
-            kernel->register_kernel_elf_paths_with_watcher(*device, binary_root);
-            Inspector::program_kernel_compile_finished(this, device, kernel, build_options, binary_root);
+            load_kernel_binaries(kernel, build_options, binary_root);
         }
     } else {
         // Local path: parallel build via thread pool.
+        std::mutex deferred_mutex;
+        std::vector<std::tuple<std::shared_ptr<Kernel>, JitBuildOptions, size_t>> deferred;
         for (auto& kernels : kernels_) {
             for (auto& [id, kernel] : kernels) {
-                validate_kernel_placement(force_slow_dispatch, kernel, device->build_id());
                 launch_build_step(
                     [&, kernel] {
                         auto [build_options, kernel_hash] = prep_kernel(kernel);
-                        const std::string binary_root =
-                            ensure_kernel_binaries(kernel, device, build_options, build_env, kernel_hash);
-                        kernel->read_binaries(device, binary_root);
-                        kernel->register_kernel_elf_paths_with_watcher(*device, binary_root);
-                        Inspector::program_kernel_compile_finished(this, device, kernel, build_options, binary_root);
+                        // A duplicate that waited here would hold a compile worker, so it joins the
+                        // build after the sync below.
+                        const auto binary_root = ensure_kernel_binaries(
+                            kernel, device, build_options, build_env, kernel_hash, /*no_wait=*/true);
+                        if (!binary_root) {
+                            std::lock_guard<std::mutex> lock(deferred_mutex);
+                            deferred.emplace_back(kernel, std::move(build_options), kernel_hash);
+                            return;
+                        }
+                        load_kernel_binaries(kernel, build_options, *binary_root);
                     },
                     events);
             }
         }
         sync_build_steps(events);
+        // Join in-progress builds only now, once this Program's tasks have released their compile workers.
+        for (auto& [kernel, build_options, kernel_hash] : deferred) {
+            load_kernel_binaries(
+                kernel, build_options, *ensure_kernel_binaries(kernel, device, build_options, build_env, kernel_hash));
+        }
     }
     if (detail::MemoryReporter::enabled()) {
         detail::MemoryReporter::inst().flush_program_memory_usage(get_id(), device);
@@ -3391,14 +3507,6 @@ uint32_t detail::ProgramImpl::get_cb_size(IDevice* device, CoreCoord logical_cor
 }
 
 // TODO: Too low level for program.cpp. Move this to HAL, once we have support.
-bool detail::ProgramImpl::runs_on_noc_unicast_only_cores() {
-    const auto& hal = MetalContext::instance(context_id_).hal();
-    return (
-        hal.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH) != -1 and
-        not this->get_kernel_groups(hal.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH)).empty());
-}
-
-// TODO: Too low level for program.cpp. Move this to HAL, once we have support.
 bool detail::ProgramImpl::runs_on_noc_multicast_only_cores() {
     const auto& hal = MetalContext::instance(context_id_).hal();
     return (
@@ -3502,7 +3610,9 @@ void detail::ProgramImpl::set_program_offsets_and_sizes(uint32_t index, const Pr
 
 void detail::ProgramImpl::set_program_attrs_across_core_types(IDevice* device) {
     program_config_sizes_[programmable_core_count_] = runs_on_noc_multicast_only_cores();
-    program_config_sizes_[programmable_core_count_ + 1] = runs_on_noc_unicast_only_cores();
+    // The dispatch-to-eth go-signal unicast path was removed; this slot (formerly
+    // runs_on_noc_unicast_only_cores()) is retained to keep the worker config-buffer layout stable.
+    program_config_sizes_[programmable_core_count_ + 1] = 0;
     set_launch_msg_sem_offsets();
     // TODO: This check is wrong - it populates dispatch data for dispatch kernels
     if (MetalContext::instance(context_id_).rtoptions().get_fast_dispatch()) {
@@ -3597,10 +3707,9 @@ uint32_t detail::ProgramImpl::finalize_program_offsets(
         state.offset = tt::tt_metal::experimental::dfb::detail::finalize_dfbs(
             index, kernel_groups_getter(index), dataflow_buffers, state.offset, state.dfb_offset, state.dfb_size);
 
-        // On WH/BH, DFBs reuse the CB firmware init path; set local_cb_mask to a proper DFB
-        // slot bitmask so setup_local_cb_read_write_interfaces initialises every DFB slot.
-        if (!hal.has_tile_counter_registers() && !dataflow_buffers.empty()) {
-            program_dispatch::finalize_dfb_masks(kernel_groups_getter(index), dataflow_buffers);
+        // Only now that the CB and DFB config regions are placed may local_cb_mask describe the DFBs.
+        if (!dataflow_buffers.empty()) {
+            program_dispatch::finalize_dfb_masks(metal_ctx, kernel_groups_getter(index), dataflow_buffers);
         }
 
         TT_ASSERT(state.offset == tt::align(state.offset, hal.get_alignment(HalMemType::L1)));
@@ -3635,13 +3744,19 @@ uint32_t detail::ProgramImpl::finalize_program_offsets(
         TT_ASSERT(state.offset == tt::align(state.offset, hal.get_alignment(HalMemType::L1)));
 
         size_t max_size = get_ringbuffer_size(device, programmable_core_type);
+        const auto breakdown = [&] {
+            return program_config_breakdown(
+                metal_ctx, programmable_core_type, state, kernel_groups_getter(index), kernels_getter(index));
+        };
 
         TT_FATAL(
             state.offset <= max_size,
-            "Program size ({}) too large for kernel config buffer ({}) on {}",
+            "Program size ({}) too large for kernel config buffer ({}) on {}, {} B over:{}",
             state.offset,
             max_size,
-            enchantum::to_string(programmable_core_type));
+            enchantum::to_string(programmable_core_type),
+            state.offset - max_size,
+            format_rows(breakdown()));
 
         // Recorded here, not per program: `state` is computed once per core type and then copied
         // into every program in the span, so recording inside the loop below would log the same
@@ -3660,6 +3775,15 @@ uint32_t detail::ProgramImpl::finalize_program_offsets(
             record_size("program_config_size.dataflow_buffer", state.dfb_size);
             record_size("program_config_size.kernel_text", state.kernel_text_size);
             record_size("program_config_size.total", state.offset);
+            // Bytes left in the kernel config buffer; its min is how close any program came to the
+            // TT_FATAL above. Core types the program doesn't use (offset 0) are skipped: their headroom
+            // is the whole buffer, which would only inflate the metric's mean and max.
+            if (state.offset != 0) {
+                const auto limit = static_cast<uint32_t>(max_size);
+                const uint32_t headroom = limit - state.offset;
+                record_size("program_config_size.headroom", headroom);
+                BuildCacheTelemetry::inst().note_program_headroom(target, headroom, limit, breakdown);
+            }
         }
 
         for (auto& program : programs) {

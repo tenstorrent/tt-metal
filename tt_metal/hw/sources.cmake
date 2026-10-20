@@ -25,6 +25,7 @@ set(HW_JIT_API_HEADERS
     inc/api/debug/noc_logging.h
     inc/api/debug/ring_buffer.h
     inc/api/debug/waypoint.h
+    inc/api/debug/kernel_profiler.hpp
     inc/api/numeric/bfloat16.h
     inc/api/numeric/float32.h
     inc/api/numeric/int32.h
@@ -139,6 +140,7 @@ set(HW_JIT_API_HEADERS
     inc/api/compute/experimental/2_0/transpose.h
     inc/api/compute/experimental/2_0/internal/llk_descriptor.h
     inc/api/compute/experimental/add_rsqrt.h
+    inc/api/compute/experimental/block_max8.h
     inc/api/compute/experimental/compressed_custom_mm.h
     inc/api/compute/experimental/compute_kernel_hw_cleanup.h
     inc/api/compute/experimental/csa_index_remap.h
@@ -167,7 +169,6 @@ set(HW_JIT_API_HEADERS
     inc/api/compute/experimental/sdpa_custom_mm_reuse_dest_srcb.h
     inc/api/compute/experimental/sdpa_sub_custom.h
     inc/api/compute/experimental/sdpa_weighted_reduce.h
-    inc/api/compute/experimental/semaphore.h
     inc/api/compute/experimental/semaphore_compute_impl.h
     inc/api/compute/experimental/sinkhorn.h
     inc/api/compute/experimental/softmax_k.h
@@ -209,8 +210,6 @@ set(HW_JIT_API_HEADERS
     inc/api/compute/transpose.h
     inc/api/compute/triangle_solve.h
     inc/api/compute/transpose_dest.h
-    inc/api/compute/transpose_wh.h
-    inc/api/compute/transpose_wh_dest.h
     inc/api/compute/untilize.h
     inc/api/compute/welford.h
     inc/api/compute/xlogy.h
@@ -222,6 +221,7 @@ set(HW_JIT_API_HEADERS
     inc/api/dataflow/cross_node_dfb.h
     inc/api/dataflow/prefetcher_pipe.h
     inc/api/dataflow/dataflow_buffer.h
+    inc/api/dataflow/dfb_access.h
     inc/api/dataflow/dfb_binding_token.h
     inc/api/dataflow/prefetcher_pipe_binding_token.h
     inc/experimental/kernel_args.h
@@ -231,6 +231,7 @@ set(HW_JIT_API_HEADERS
     inc/api/dataflow/semaphore_binding_token.h
     inc/api/core_local_mem.h
     inc/api/tensor/noc_traits.h
+    inc/hostdev/buf_rw_common.h
     inc/hostdev/debug_ring_buffer_common.h
     inc/hostdev/dev_msgs.h
     inc/hostdev/device_print_common.h
@@ -243,7 +244,18 @@ set(HW_JIT_API_HEADERS
     inc/hostdev/streaming_profiler_common.h
     inc/hostdev/rta_constants.h
     inc/hostdev/socket.h
+    inc/hostdev/fabric_edm_packet_header.hpp
+    inc/hostdev/fabric_direction_table_interface.h
+    inc/hostdev/fabric_routing_path_interface.h
     inc/internal/hw_thread.h
+    inc/internal/profiler/event_metadata.hpp
+    inc/internal/profiler/fabric_event_profiler.hpp
+    inc/internal/profiler/kernel_profiler_streaming.hpp
+    inc/internal/profiler/noc_debugging_metadata.hpp
+    inc/internal/profiler/noc_debugging_profiler.hpp
+    inc/internal/profiler/noc_event_profiler.hpp
+    inc/internal/profiler/perf_counters.hpp
+    inc/internal/profiler/synchronization_event_profiler.hpp
     inc/internal/atomic_rwptr.h
     inc/internal/bit_utils.h
     inc/internal/circular_buffer_interface.h
@@ -263,6 +275,7 @@ set(HW_JIT_API_HEADERS
     inc/internal/vptr_uint.h
     inc/internal/dataflow/dataflow_api_addrgen.h
     inc/internal/dataflow/dataflow_api_common.h
+    inc/internal/dataflow/dataflow_api_raw.h
     inc/internal/dataflow/dataflow_cmd_bufs.h
     inc/internal/dataflow/noc_address_backend_xy.h
     inc/internal/debug/assert_common.h
@@ -281,6 +294,7 @@ set(HW_JIT_API_HEADERS
     inc/internal/tensor/binding_id.h
     inc/internal/tensor/const.h
     inc/internal/tensor/dspec.h
+    inc/internal/tensor/generated_noc_addr.h
     inc/internal/tensor/helpers.h
     inc/internal/tensor/transfer_noc_addr.h
     inc/internal/tt-1xx/cache.h
@@ -311,7 +325,6 @@ set(HW_JIT_API_HEADERS
     inc/internal/tt-2xx/dataflow_buffer/dataflow_buffer_interface.h
     inc/internal/tt-2xx/dataflow_buffer/dataflow_buffer_isr.h
     inc/internal/tt-2xx/quasar/cache.h
-    inc/internal/tt-2xx/quasar/cfg_defines.h
     inc/internal/tt-2xx/quasar/core_config.h
     inc/internal/tt-2xx/quasar/dev_mem_map.h
     inc/internal/tt-2xx/quasar/device_print_mem.h
@@ -377,10 +390,16 @@ set(HW_JIT_API_HEADERS
     inc/internal/tt-2xx/tt-2.0.2/meta/registers/tt_cluster_plic_reg.h
     inc/internal/tt-2xx/tt-2.0.2/meta/registers/tt_overlay_llk_tile_counters_reg.h
     inc/internal/tt-2xx/tt-2.0.2/meta/registers/tt_rocc_accel_reg.h
+    inc/internal/tt-2xx/quasar/overlay/addrgen_api.hpp
+    inc/internal/tt-2xx/quasar/overlay/addrgen_state.h
+    inc/internal/tt-2xx/quasar/overlay/cmdbuff_api.hpp
     inc/internal/tt-2xx/quasar/overlay/overlay_addresses.h
+    inc/internal/tt-2xx/quasar/overlay/rocc_instructions.hpp
+    inc/internal/tt-2xx/quasar/overlay/xcustom_test.hpp
     inc/internal/tt-2xx/quasar/stream_interface.h
     inc/internal/tt-2xx/quasar/stream_io_map.h
     inc/internal/tt-2xx/quasar/tdma_xmov.h
+    inc/internal/tt-2xx/quasar/tensor/addrgen_sequencer.h
     inc/internal/tt-2xx/quasar/tensix.h
     inc/internal/tt-2xx/quasar/tensix_types.h
     inc/internal/tt-1xx/noc_address_backend.h

@@ -21,6 +21,7 @@ on:
           - qwen2.5-7b
           # qwen2.5-72b: disabled — ci-token-matching hanging on CI
           - qwen2.5-vl-32b
+          - qwen2.5-vl-7b
           - qwen3-0.6b
           - qwen3-1.7b
           - qwq-32b
