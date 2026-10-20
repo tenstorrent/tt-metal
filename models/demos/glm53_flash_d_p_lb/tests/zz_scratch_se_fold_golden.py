@@ -82,14 +82,15 @@ def test_se_fold_golden(mesh_device):
         )
         F = ttnn.MathFidelity
         variants = {
-            "bf8 HiFi2": {},
+            "default": {},
+            "bf8 HiFi2": dict(fidelity=F.HiFi2),
             "bf16 HiFi4": dict(w_dtype=ttnn.bfloat16, fidelity=F.HiFi4),
             "bf8 HiFi4": dict(fidelity=F.HiFi4),
             "bf8 HiFi3": dict(fidelity=F.HiFi3),
             "bf16 HiFi2": dict(w_dtype=ttnn.bfloat16),
             "bf8 LoFi": dict(fidelity=F.LoFi),
         }
-        want_v = os.environ.get("GLM_SFG_VARIANTS", "bf8 HiFi2,bf16 HiFi4").split(",")
+        want_v = os.environ.get("GLM_SFG_VARIANTS", "default,bf16 HiFi4").split(",")
         for name, kw in ((f"folded {v}", variants[v]) for v in want_v):
             se = TtSharedTpRow(mesh_device, wg, wu, wd, limit=cfg.swiglu_limit, axis=0, **kw)
             o = se(xd)

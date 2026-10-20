@@ -10,7 +10,7 @@ the chip's slice of the clamped SwiGLU MLP on them, and the combine carries each
     h    = silu(min(g, L)) * clamp(u, -L, L)
     o    = h @ Wd_c                        [C S, H] bf16, the partial (summed over the row by the combine)
 
-Weights bf8 (w_dtype), HiFi2 (fidelity) + fp32 accumulation, bf16 gate / up and h; the activation is one op
+Weights bf8 (w_dtype), HiFi3 (fidelity; HiFi2 shrank the output ~0.8% vs the golden) + fp32 accumulation, bf16 gate / up and h; the activation is one op
 (combine_rf/glu_act.py: the SFPU's clamped SiLU GLU, limit 10). The block runs it before allocating its arena
 (the fused op has its own barrier), so l1_budget (circular-buffer bytes per core) can be most of L1."""
 
@@ -64,7 +64,7 @@ class TtSharedTpRow:
         l1_budget: int = 700 * 1024,
         axis: int = 1,
         w_dtype=ttnn.bfloat8_b,
-        fidelity=ttnn.MathFidelity.HiFi2,
+        fidelity=ttnn.MathFidelity.HiFi3,
     ):
         """HF weights: w_gate, w_up [I, H]; w_down [H, I]. axis: the group is each mesh row (1: slice c on chip (r,
         c)) or each column (0: slice r)."""

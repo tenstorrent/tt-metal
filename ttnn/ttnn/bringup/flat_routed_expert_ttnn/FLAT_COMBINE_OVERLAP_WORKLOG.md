@@ -1588,3 +1588,4 @@ equal in rel L2 (L3 0.081, L4 0.146, L20 0.134, L44 0.070 - the bfp4 routed part
 Whole model, 56k last chunk top1 / top5 per run: separate 0.667 0.684 0.674 0.677 0.652 (mean 0.670 / 0.881); folded
 bf8 HiFi2 0.647 0.664 0.655 0.658 0.667 0.688 (0.663 / 0.873); bf8 HiFi3 0.663 0.636 0.656 (0.651); bf16 HiFi4 0.687
 0.649. Run-to-run sd ~1.3 points (arrival-order fp32 sums): no difference resolvable at these counts.
+Default set to bf8 HiFi3 (owner, 2026-10-20): L4 shared expert 0.0070 / 0.9988 vs golden; MoE block scale 1.0199 vs separate 1.0203 (was 1.0191 with HiFi2); GLM_SE_PREC=bf8_hifi2 / bf16_hifi4 probes.
