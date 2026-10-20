@@ -1,0 +1,17 @@
+# conf 0
+b1 M ids/job0_main.txt L1_TO_L1
+b1 H ids/job0_head.txt L1_TO_L1
+b1 H2 ids/job0_aa.txt L1_TO_L1
+b1 M ids/job0_main.txt L1_TO_L1
+b2 H2 ids/job0_aa.txt L1_TO_L1
+b2 M ids/job0_main.txt L1_TO_L1
+b2 M ids/job0_main.txt L1_TO_L1
+b2 H ids/job0_head.txt L1_TO_L1
+b3 M ids/job0_main.txt L1_TO_L1
+b3 H ids/job0_head.txt L1_TO_L1
+b3 H2 ids/job0_aa.txt L1_TO_L1
+b3 M ids/job0_main.txt L1_TO_L1
+b4 H2 ids/job0_aa.txt L1_TO_L1
+b4 M ids/job0_main.txt L1_TO_L1
+b4 M ids/job0_main.txt L1_TO_L1
+b4 H ids/job0_head.txt L1_TO_L1
