@@ -9652,6 +9652,68 @@ tasks:
       pcc_state_min: '>= 0.97'
       host_transfers_per_layer: == 0
       device_ms_attn_collapse: '< 5.0'
+- id: P.15
+  title: 'Attention and RoPE glue folded into ops (glue report items 1, 2, 6): owner comparison'
+  step: perf
+  role: perf
+  deps:
+  - P.14
+  device: true
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/bringup/hooks.py
+  - ttnn/ttnn/bringup
+  ab:
+    change:
+      ATTN_GLUE: 'on'
+    env:
+      ATTN_GLUE: 'off'
+  brief:
+    details: 'Owner (2026-10-20): fold the attention-side glue the read-only analysis found (/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/reports/glue_ops_report.md, items 1, 2 and 6, with file:line): (1) the RoPE pair interleave / deinterleave done through row-major reshapes (rope.py) as an exact 0/1 permutation matmul after the bf16 cast, and the inverse interleave dropped by permuting wo_a rows at load; (2) the q head reshape + transpose (attention.py, indexer.py) through ttnn.experimental.nlp_create_q_heads_split; (6) the attention output kept in bf16 (no bf16 -> fp32 -> bf16), nlp_concat_heads instead of slices + concat after wo_a, no fp32 cast after the reduce-scatter where mhc_post takes bf16. ONE setting ATTN_GLUE {off (default), on}; each fold exact or within the measured error at NUMERICS=native (check it). Report the attention section before / after and the op count. Final check: `python -m models.demos.common.bringup.orchestrator measure --task P.15`.'
+  gate:
+    cmd: for t in swa swa_engram enc_source enc_source_engram enc_reuse dec_candidate dec_reindex dec_reuse; do scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_${t}_experts.py || exit 1; done
+      && for t in swa_12 swa_engram_15 enc_source_14 enc_source_engram_17 enc_reuse_12 dec_candidate_14 dec_reindex_13
+      dec_reuse_12; do scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_${t}_experts.py
+      || exit 1; done && BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=10000
+      scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+    metrics:
+      pcc_layer_L*: '>= 0.97'
+      pcc_state_min: '>= 0.97'
+      host_transfers_per_layer: == 0
+      device_ms_total: '> 0'
+- id: P.16
+  title: 'Indexer and shared-source glue (glue report items 3, 7, 8, 9, 10): owner comparison'
+  step: perf
+  role: perf
+  deps:
+  - P.15
+  device: true
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/bringup/hooks.py
+  - ttnn/ttnn/bringup
+  ab:
+    change:
+      INDEXER_GLUE: 'on'
+    env:
+      INDEXER_GLUE: 'off'
+  brief:
+    details: 'Owner (2026-10-20): fold the indexer / shared-source glue (/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/reports/glue_ops_report.md, items 3, 7, 8, 9 and 10): the layer-20 candidate block max as an epilogue option of the ring_indexer_score_dsa fork; the compressed history and index lists a reader layer re-gathers from its source cached per (kv source, chunk); the re-indexer bias as a bias input of the score op; the rope cos / sin rows and the router weights computed once a chunk; the collective-path casts (indexer gates, the compressor partial in bf16). Bring-up ops extended behind options (default unchanged, README / INDEX current). ONE setting INDEXER_GLUE {off (default), on}. Report the indexer / compressor / kv sections and the op count. Final check: `python -m models.demos.common.bringup.orchestrator measure --task P.16`.'
+  gate:
+    cmd: for t in swa swa_engram enc_source enc_source_engram enc_reuse dec_candidate dec_reindex dec_reuse; do scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_${t}_experts.py || exit 1; done
+      && for t in swa_12 swa_engram_15 enc_source_14 enc_source_engram_17 enc_reuse_12 dec_candidate_14 dec_reindex_13
+      dec_reuse_12; do scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_${t}_experts.py
+      || exit 1; done && BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=10000
+      scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+    metrics:
+      pcc_layer_L*: '>= 0.97'
+      pcc_state_min: '>= 0.97'
+      host_transfers_per_layer: == 0
+      device_ms_total: '> 0'
 - id: X.3
   title: 'Final: full-target accuracy, warm full prefill (no readback), one warm chunk at several positions'
   step: perf
@@ -9667,6 +9729,8 @@ tasks:
   - P.12
   - P.13
   - P.14
+  - P.15
+  - P.16
   gate:
     cmd: BRINGUP_RUNG=s55296 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py && BRINGUP_FULL_PREFILL=1
       BRINGUP_PROFILE_OPS=1 TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1
