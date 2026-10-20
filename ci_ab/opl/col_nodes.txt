@@ -1,0 +1,5 @@
+ci_ab/opl/test_col_ab.py::test_sum_h
+ci_ab/opl/test_col_ab.py::test_mean_h
+ci_ab/opl/test_col_ab.py::test_moreh_sum_h
+ci_ab/opl/test_col_ab.py::test_moreh_mean_h
+ci_ab/opl/test_col_ab.py::test_moreh_softmax_h

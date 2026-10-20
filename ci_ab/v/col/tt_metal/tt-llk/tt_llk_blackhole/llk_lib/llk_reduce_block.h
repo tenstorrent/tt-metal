@@ -1,0 +1,35 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include <cstdint>
+
+#include "llk_defs.h"
+#include "tensor_shape.h"
+
+namespace ckernel
+{
+
+// Tiles per unpack context: the data unpacker's Z counter addresses 256 faces.
+constexpr std::uint32_t REDUCE_BLOCK_MAX_TILES = 32;
+
+// Unpack and math agree on this: SUM/AVG REDUCE_ROW of full 32x32 tiles keeps the scaler in SrcA for a whole chunk.
+template <PoolType pool_type, ReduceDim reduce_dim>
+constexpr bool reduce_block_holds_scaler(const TensorShape& tensor_shape)
+{
+    return (reduce_dim == ReduceDim::REDUCE_ROW) && (pool_type != PoolType::MAX) && (tensor_shape.total_num_faces() == 4) &&
+           (tensor_shape.face_r_dim == FACE_R_DIM);
+}
+
+// Unpack and math agree on this: SUM/AVG REDUCE_COL of full 32x32 tiles unpacks faces 0,1 and 2,3 into one SrcA bank each (rows 0 and 16),
+// so the two face chains of a face row can alternate in the math thread.
+template <PoolType pool_type, ReduceDim reduce_dim>
+constexpr bool reduce_col_paired(const TensorShape& tensor_shape)
+{
+    return (reduce_dim == ReduceDim::REDUCE_COL) && (pool_type != PoolType::MAX) && (tensor_shape.total_num_faces() == 4) &&
+           (tensor_shape.face_r_dim == FACE_R_DIM);
+}
+
+}
