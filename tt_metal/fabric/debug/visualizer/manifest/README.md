@@ -46,6 +46,7 @@ The types at L1 addresses come from the struct layouts in `fabric_struct_layouts
 | `fabric_context` | Topology, packet header, payload and channel buffer sizes, the route buffer size, `multi_txq` |
 | `vocabulary` | Every field `category` and `kind`, and every chip `z_port_role` |
 | `archs.<arch>.areas` | L1 areas the architecture fixes: heartbeat, telemetry, routing table, go and launch messages, Ethernet firmware mailbox |
+| `archs.<arch>.stream_registers` | Where the stream registers are: `base`, `stride`, `count` and `register_offsets`, from the HAL |
 | `archs.<arch>.types` | Every struct a schema names, with its size and members in order |
 | `enums` | Every enum a schema names, with its values |
 | `meshes` | Each mesh, its chips, and each local chip's routers |
@@ -80,7 +81,9 @@ path:
   `size_per_element`, and a packed table `num_elements` and `bits_per_entry`. `cleared_by_host` means the host zeroes
   it before launch.
 - A **stream register** is `{stream_id, register, schema}`. `register` is `buf_space_available` (the
-  increment-on-write count) or `remote_src` (a plain read-write register).
+  increment-on-write count) or `remote_src` (a plain read-write register). Its address is
+  `base + stream_id * stride + register_offsets[register]`, from `archs.<arch>.stream_registers`, and `stream_id` is
+  below its `count`.
 - A **schema** is an integer (`u8` to `u32`, `i8` to `i32`), `struct:<Name>` (in `archs.<arch>.types`),
   `enum:<Name>` (in `enums`), `packed:<name>`, `bytes` or `pad`. Every `struct:` and `enum:` schema resolves: the
   writer throws otherwise.
