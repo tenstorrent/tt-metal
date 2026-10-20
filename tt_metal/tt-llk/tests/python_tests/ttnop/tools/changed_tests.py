@@ -152,12 +152,12 @@ def _github(url: str) -> bytes:
     request = urllib.request.Request(url)
     # Unredirected: the artifact download redirects to storage that rejects it.
     request.add_unredirected_header("Authorization", f"Bearer {os.environ['GH_TOKEN']}")
-    with urllib.request.urlopen(request) as response:
+    with urllib.request.urlopen(request, timeout=60) as response:
         return response.read()
 
 
-def _last_failed_tests(repo: Path, arch: str) -> list[str]:
-    """Test files that failed in the last scheduled run, from its junit artifacts."""
+def _last_failed_tests(repo: Path, base: str, arch: str) -> tuple[str, list[str]]:
+    """A failed last scheduled run gives its commit and its failed test files."""
     api = f"https://api.github.com/repos/{os.environ['GITHUB_REPOSITORY']}/actions"
     runs = json.loads(
         _github(
@@ -166,7 +166,7 @@ def _last_failed_tests(repo: Path, arch: str) -> list[str]:
         )
     )["workflow_runs"]
     if not runs or runs[0]["conclusion"] == "success":
-        return []
+        return base, []
     artifacts = json.loads(
         _github(f"{api}/runs/{runs[0]['id']}/artifacts?per_page=100")
     )["artifacts"]
@@ -185,17 +185,15 @@ def _last_failed_tests(repo: Path, arch: str) -> list[str]:
                         continue
                     path = case.get("classname").replace(".", "/") + ".py"
                     files.add(f"tt_metal/tt-llk/tests/python_tests/{path}")
-    return sorted(path for path in files if (repo / path).is_file())
+    return runs[0]["head_sha"], sorted(
+        path for path in files if (repo / path).is_file()
+    )
 
 
 def _weekly(repo: Path, base: str, arch: str) -> tuple[str, list[str]]:
-    """Look back one week at most; a failed week is retried only by its failed files."""
-    week = _run(repo, "git", "rev-list", "-1", "--before=7 days ago", "HEAD").strip()
-    # Empty `week..base` means base is no newer than week.
-    if not week or _run(repo, "git", "rev-list", f"{week}..{base}").strip():
-        return base, []
+    """A failed week is retried only by its failed files."""
     try:
-        return week, _last_failed_tests(repo, arch)
+        return _last_failed_tests(repo, base, arch)
     except Exception as error:
         # Without the failed list, sweep everything since the given base.
         print(f"::warning::ttnop retry lookup failed: {error}", file=sys.stderr)
