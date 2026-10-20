@@ -22,7 +22,7 @@ import ml_dtypes
 import ttnn
 import ttml
 from ttml.modules import AbstractModuleBase, ModuleList, Parameter, RunMode
-from ttml.common.utils import round_up_to_tile, get_tt_metal_runtime_root, create_optimizer, build_causal_mask
+from ttml.common.utils import round_up_to_tile, get_tt_metal_runtime_root, create_optimizer
 from ttml.common.config import load_config, TrainingConfig as BaseTrainingConfig
 from ttml.common.data import CharTokenizer
 
@@ -426,11 +426,6 @@ def create_dataset_from_text(
     return dataset, tokenizer
 
 
-def create_causal_mask_tensor(sequence_length: int) -> ttml.autograd.Tensor:
-    mask_np = build_causal_mask(sequence_length)
-    return ttml.autograd.Tensor.from_numpy(mask_np, layout=ttnn.Layout.TILE, new_type=ttnn.DataType.BFLOAT16)
-
-
 def collate_fn(
     samples: list, batch_size: int, sequence_length: int
 ) -> Tuple[ttml.autograd.Tensor, ttml.autograd.Tensor]:
@@ -464,7 +459,7 @@ def train_step(
     scheduler_step: int,
     input_tokens: ttml.autograd.Tensor,
     target_tokens: ttml.autograd.Tensor,
-    mask: ttml.autograd.Tensor,
+    mask: Optional[ttml.autograd.Tensor],
     gradient_accumulator: GradientAccumulator,
     use_clip_grad_norm: bool,
     clip_grad_norm_max_norm: float,
@@ -538,7 +533,7 @@ def sample_greedy(
     prompt: str,
     max_new_tokens: int,
     sequence_length: int,
-    mask: ttml.autograd.Tensor,
+    mask: Optional[ttml.autograd.Tensor],
     temperature: float = 1.0,
     top_k: int = 0,
 ) -> str:
@@ -575,7 +570,7 @@ def sample_greedy(
         inp = np.array(running[-sequence_length:], dtype=np.uint32).reshape(1, 1, 1, sequence_length)
         input_tensor = ttml.autograd.Tensor.from_numpy(inp, layout=ttnn.Layout.ROW_MAJOR, new_type=ttnn.DataType.UINT32)
         # Clone mask before each use to avoid TTNN memory reuse corrupting the original
-        mask_for_model = ttml.autograd.Tensor(ttnn.clone(mask.get_value()), False)
+        mask_for_model = None if mask is None else ttml.autograd.Tensor(ttnn.clone(mask.get_value()), False)
         logits = model(input_tensor, mask_for_model)
         logits_np = logits.to_numpy(ttnn.DataType.FLOAT32)
         logits_shape = logits_np.shape
@@ -1054,11 +1049,8 @@ def main():
         else:
             print(f"   - Scheduler: identity (constant LR)")
 
-    if inference_only:
-        print("\n2. Creating attention mask...")
-    else:
-        print("\n5. Creating attention mask...")
-    mask = create_causal_mask_tensor(sequence_length)
+    # No mask: the fused SDPA applies the causal mask itself (query and key lengths are equal here).
+    mask = None
 
     if args.prompt:
         print("\n6. Inference mode - skipping training")
