@@ -95,7 +95,8 @@ inline Tensor move_impl(const Tensor& input_tensor, const std::optional<MemoryCo
         output_tensor.buffer()->size(),
         output_tensor.buffer()->page_size(),
         num_l1_banks,
-        std::max(hal::get_l1_alignment(), output_tensor.buffer()->alignment()));
+        std::max(
+            {hal::get_l1_alignment(), ghost_input_tensor.buffer()->alignment(), output_tensor.buffer()->alignment()}));
 
     if (move_within_same_mem_space) {
         switch (input_mem_config.buffer_type()) {
