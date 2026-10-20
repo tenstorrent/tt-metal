@@ -9,10 +9,11 @@
 // RUN: not %{diagnose} %t/src-increment-and-save.cpp 2>&1 | FileCheck %s --check-prefix=DEST_ONLY
 // RUN: not %{diagnose} %t/set-immediate.cpp 2>&1 | FileCheck %s --check-prefix=NOT_CONSTANT
 // RUN: not %{diagnose} %t/increment-immediate.cpp 2>&1 | FileCheck %s --check-prefix=NOT_CONSTANT
-// RUN: not %{diagnose} %t/operation-two-instructions.cpp 2>&1 | FileCheck %s --check-prefix=NOT_CONSTANT
+// RUN: not %{diagnose} %t/operation-two-instructions.cpp 2>&1 | FileCheck %s --check-prefix=TWO_INSTRUCTIONS
 // EMPTY: error: static assertion failed: math-counter descriptor must update a counter, flip a bank, or clear the fidelity phase
 // DEST_ONLY: error: could not convert {{.*}}IncrementAndSave{{.*}} to 'hal::counters::rwc::SrcUpdate'
 // NOT_CONSTANT: error: {{.*}}is not a constant expression
+// TWO_INSTRUCTIONS: error: call to non-'constexpr' function 'void hal::counters::rwc::detail::reject_two_instructions()'
 // clang-format on
 
 //--- common.h
