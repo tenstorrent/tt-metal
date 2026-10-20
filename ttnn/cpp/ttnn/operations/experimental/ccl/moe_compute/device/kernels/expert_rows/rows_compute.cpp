@@ -42,13 +42,13 @@ constexpr uint32_t intermediate_tiles = get_named_compile_time_arg_val("intermed
 constexpr uint32_t ring_cores = get_named_compile_time_arg_val("ring_cores");
 constexpr bool has_bias = get_named_compile_time_arg_val("has_bias") == 1;
 constexpr uint32_t cb_x = get_named_compile_time_arg_val("cb_x");
-constexpr uint32_t cb_activated = get_named_compile_time_arg_val("cb_a");      // this core's activated columns
-constexpr uint32_t cb_intermediate = get_named_compile_time_arg_val("cb_a2");  // the job's whole intermediate
+constexpr uint32_t cb_activated = get_named_compile_time_arg_val("cb_activated");  // this core's activated columns
+constexpr uint32_t cb_intermediate = get_named_compile_time_arg_val("cb_intermediate");  // the job's whole intermediate
 constexpr uint32_t cb_rows = get_named_compile_time_arg_val("cb_rows");
 constexpr uint32_t cb_ctl = get_named_compile_time_arg_val("cb_ctl");
 constexpr uint32_t cb_ones = get_named_compile_time_arg_val("cb_ones");
-constexpr uint32_t cb_partials = get_named_compile_time_arg_val("cb_part");
-constexpr uint32_t activated_tiles = get_named_compile_time_arg_val("a_tiles");  // per row tile
+constexpr uint32_t cb_partials = get_named_compile_time_arg_val("cb_partials");
+constexpr uint32_t activated_tiles = get_named_compile_time_arg_val("activated_tiles");  // per row tile
 constexpr uint32_t row_tiles = get_named_compile_time_arg_val("row_tiles");
 constexpr uint32_t chunk_tiles = get_named_compile_time_arg_val("chunk_tiles");
 constexpr uint32_t chunk_blocks = get_named_compile_time_arg_val("chunk_blocks");

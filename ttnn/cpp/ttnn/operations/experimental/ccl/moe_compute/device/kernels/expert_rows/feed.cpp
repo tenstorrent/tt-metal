@@ -35,7 +35,8 @@ constexpr uint32_t table_counts = get_named_compile_time_arg_val("table_counts")
 constexpr uint32_t table_offsets = get_named_compile_time_arg_val("table_offsets");
 constexpr uint32_t table_rows = get_named_compile_time_arg_val("table_rows");
 constexpr uint32_t table_bytes = get_named_compile_time_arg_val("table_bytes");
-constexpr uint32_t scratch_stage = get_named_compile_time_arg_val("s_stage");  // two staging buffers of batch_rows
+constexpr uint32_t scratch_stage =
+    get_named_compile_time_arg_val("scratch_stage");  // two staging buffers of batch_rows
 constexpr uint32_t combine_sync_semaphore_id = get_named_compile_time_arg_val("combine_sync_semaphore_id");
 constexpr uint32_t shard_row_bytes = shard_width_tiles * tile_width_bytes;
 
