@@ -256,3 +256,12 @@
   - all C.*/S.*/M.1/L.* regressions PASS.
   - Runner feeder: tt-d-gen engine.
 - Re-run: `bfw job check --task K.1` (~25 min; launch detached and wait on the pid in the foreground).
+
+## C.attn.attention (run 20261020-144235-gemma31-glx-3, attempt 1), 2026-10-20
+- No code change. The previous gate run (19:28) hit pytest-timeout (300 s) inside the composed SDPA's P V matmul, after
+  ~140 s of host-side setup (CPU reference cases) and a cold JIT cache (41.9 % hits), with the host load average ~12.
+- Re-run: PASS, test call 169 s. pcc 0.999991, auto_margin_min 1.133 (vs_cpu column 1658 0.0338 / 0.0382),
+  device_ops 62, host_flops_frac 0.
+- Headroom: the frozen test runs under the repo's 300 s default timeout; the module's whole run (6 input cases plus
+  A,B,A determinism) uses 170-250 s of it. A slower module (e.g. MATMUL_CORE_GRID smaller than 8x8) can time out.
+- Re-run: `bfw job check --task C.attn.attention`.
