@@ -153,6 +153,26 @@ Log `test_sp_prefill_lb2.log` (first-call walls include compile: 15.1 / 10.8 / 0
 TTFT, resident model layers 0-5 on the rows-2-3 (2,4) block, prompt 128 tokens (`test_mesh_model_ttft_lb2_l0-5.log`):
 warm 300 ms (cold 38.7 s = first-call compiles), chain 0.999479 vs HF rows, first greedy token == host head (1526).
 
+## Per-layer profile at the real 8x4 layout (2026-10-20, `tests/test_perf_mesh.py` GLM53_PERF_MESH_SHAPE=8,4, rank router)
+
+Chip (0,0) device time of one traced decode step (reports `_logs/mesh/report_perf8x4_l{4,3}_b{4,32}/summary.md`,
+per-chip tables in the same dirs; device ids row-major `[0,4,12,8,1,5,13,9,...]`):
+
+| layer | users/row | step | mHC | experts local (sparse_matmul) | router | attention | CCL composites (kernels) |
+|---|---|---|---|---|---|---|---|
+| 4 KDA+MoE | 4 | 5.25 ms / 524 ops | 1.89 ms (36 %, 220 ops) | 1.10 ms (0.86: gate|up [32x4096x512] 733 us, down 130 us) | 0.70 ms (139 ops) | 0.89 ms (75 ops) | 0.48 ms, 59 ops (0.24 ms, 7 kernels) |
+| 4 | 32 | 15.54 ms | 2.23 ms | 8.48 ms (6.48: 8 blocks x gate|up ~700 us each: the active experts' weights are re-streamed per 32-token block) | 0.54 ms | 3.25 ms (KDA recurrence at 32 users) | 0.89 ms (ReduceScatter 653 us) |
+| 3 DSA+MoE | 4 | 5.02 ms | 1.88 ms | 1.00 ms (0.76) | 0.70 ms | 0.74 ms | 0.55 ms (0.32) |
+| 3 | 32 | 12.70 ms | 2.22 ms | 8.05 ms (6.05) | 0.54 ms | 0.91 ms | 0.84 ms |
+
+Reading: against the design budget (~0.7 ms per MoE layer at 4 users/row, ~1.2 ms at 32), every term is a
+composite-overhead or kernel-shape problem, not a bandwidth one: (1) mHC = 220 small ops; (2) the gate|up
+expert matmul at N = 512 runs on 16 cores (output-width split) and, at 32 users/row, is repeated per 32-token
+block; (3) the router = 139 ops; (4) the KDA decode recurrence composite; (5) the generic collectives expand to
+59 ops at 4 users/row (AllBroadcast + pads for the non-tile-aligned row gather). Work items 1-4 run in
+parallel on branches `arg/glm53_optmhc`, `arg/glm53_optexperts`, `arg/glm53_optkda` plus the router top-k
+variant in this branch.
+
 ## Optimization 1: router tie-break (2026-10-20)
 
 The exact fp32 top-8 router's first-match tie-break used `ttnn.cumsum` (single-core, 330 us x 8 rounds =
