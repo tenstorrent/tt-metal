@@ -611,6 +611,8 @@ class ttKDA:
             compute_kernel_config=self.norm_compute_config,
             output_dtype=self.gated_rms_output_dtype,
             gate_column_offset=output_gate_offset,
+            # A BF16 output needs only a BF16-grade gate.
+            bf16_gate=self.gated_rms_output_dtype == ttnn.bfloat16,
         )
 
     def _project_output(

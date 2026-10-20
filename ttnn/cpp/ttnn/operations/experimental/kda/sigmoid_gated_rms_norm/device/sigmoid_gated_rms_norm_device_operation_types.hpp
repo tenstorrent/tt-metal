@@ -23,6 +23,9 @@ struct SigmoidGatedRmsNormParams {
     DeviceComputeKernelConfig compute_kernel_config;
     // Gate columns start at this element offset within each row of the gate tensor.
     uint32_t gate_column_offset = 0;
+    // The gate's sigmoid at BF16 grade (exp_21f, one Newton step) instead of FP32-accurate, for a gate that multiplies
+    // into a BF16 output.
+    bool bf16_gate = false;
 };
 
 struct SigmoidGatedRmsNormInputs {

@@ -82,7 +82,7 @@ void apply_weight(uint32_t Vt, DFB& tmp) {
     tmp.push_back(Vt);
 }
 
-template <typename DFB>
+template <bool Bf16Gate, typename DFB>
 void activate_gate(uint32_t Vt, DFB& norm) {
     norm.reserve_back(Vt);
     pack_reconfig_data_format(dfb::norm);
@@ -92,8 +92,12 @@ void activate_gate(uint32_t Vt, DFB& norm) {
     for (uint32_t i = 0; i < Vt; i++) {
         tile_regs_acquire();
         copy_tile(dfb::gate, i, 0);
-        // BF16-grade sigmoid (exp_21f, one Newton step): the gate multiplies into a BF16 output.
-        sigmoid_tile<VectorMode::RC, false, false>(0);
+        if constexpr (Bf16Gate) {
+            // BF16-grade sigmoid (exp_21f, one Newton step): the gate multiplies into a BF16 output.
+            sigmoid_tile<VectorMode::RC, false, false>(0);
+        } else {
+            sigmoid_tile(0);
+        }
         tile_regs_commit();
         tile_regs_wait();
         pack_tile(0, dfb::norm, i);
@@ -119,7 +123,7 @@ void multiply_output(uint32_t Vt, DFB& out) {
     out.push_back(Vt);
 }
 
-template <uint32_t Vt>
+template <uint32_t Vt, uint32_t bf16_gate>
 TT_KERNEL void compute(uint32_t wi_count) {
     compute_kernel_hw_startup(dfb::x, dfb::scaler, dfb::out);
     DataflowBuffer x(dfb::x);
@@ -153,7 +157,7 @@ TT_KERNEL void compute(uint32_t wi_count) {
         apply_weight(Vt, tmp);
         tmp.wait_front(Vt);
         norm.pop_front(Vt);
-        activate_gate(Vt, norm);
+        activate_gate<bf16_gate != 0>(Vt, norm);
         norm.wait_front(Vt);
         gate.pop_front(Vt);
         multiply_output(Vt, out);
