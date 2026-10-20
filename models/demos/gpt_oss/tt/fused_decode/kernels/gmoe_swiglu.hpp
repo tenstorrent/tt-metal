@@ -110,6 +110,40 @@ inline void calculate_swiglu(const uint gate_tile_idx, const uint up_tile_idx, c
     }
 }
 
+// calculate_swiglu times a third DST tile (the dense decode MoE's routing weights, dense_swiglu_compute.cpp): the
+// same products in the same order as the SwiGLU then a separate multiply, without that pass over DST
+template <bool is_fp32_dest_acc_en, int ITERATIONS = 8, class Config = SwiGLUConfigGPTOSS>
+inline void calculate_swiglu_weighted(
+    const uint gate_tile_idx, const uint up_tile_idx, const uint out_tile_idx, const uint w_tile_idx) {
+    constexpr float alpha = Config::alpha;
+    constexpr float clamp_limit = Config::clamp_limit;
+    constexpr uint dst_tile_size = 32;
+    for (int d = 0; d < ITERATIONS; d++) {
+        sfpi::vFloat gate = sfpi::dst_reg[gate_tile_idx * dst_tile_size];
+        sfpi::vFloat up = sfpi::dst_reg[up_tile_idx * dst_tile_size];
+        v_if(gate > clamp_limit) { gate = clamp_limit; }
+        v_endif;
+        v_if(up > clamp_limit) { up = clamp_limit; }
+        v_endif;
+        v_if(up < -clamp_limit) { up = -clamp_limit; }
+        v_endif;
+        up = up + 1.0f;
+        sfpi::vFloat alpha_gate = gate * alpha;
+        sfpi::vFloat sig = _swiglu_sigmoid_<is_fp32_dest_acc_en>(alpha_gate);
+        sfpi::vFloat glu = gate * sig;
+        sfpi::vFloat result = up * glu;
+        if constexpr (!is_fp32_dest_acc_en) {
+            result = sfpi::convert<sfpi::vFloat16b>(result, RoundMode::Nearest);
+        }
+        result = result * sfpi::dst_reg[w_tile_idx * dst_tile_size];
+        if constexpr (!is_fp32_dest_acc_en) {
+            result = sfpi::convert<sfpi::vFloat16b>(result, RoundMode::Nearest);
+        }
+        sfpi::dst_reg[out_tile_idx * dst_tile_size] = result;
+        sfpi::dst_reg++;
+    }
+}
+
 inline void swiglu_init() {
     // SwiGLU uses sigmoid internally, which needs reciprocal table init.
     recip_init<false, false>();
@@ -134,6 +168,20 @@ inline void gmoe_swiglu(uint gate_tile, uint32_t up_tile, uint32_t out_tile, Vec
         up_tile,
         out_tile,
         vector_mode);
+}
+
+template <bool is_fp32_dest_acc_en = false, class Config = ckernel::sfpu::gmoe_swiglu::SwiGLUConfigGPTOSS>
+inline void gmoe_swiglu_weighted(uint gate_tile, uint32_t up_tile, uint32_t w_tile, uint32_t out_tile) {
+    SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        gmoe_swiglu::calculate_swiglu_weighted,
+        (is_fp32_dest_acc_en, 8 /*ITERATIONS*/, Config),
+        gate_tile,
+        up_tile,
+        out_tile,
+        VectorMode::RC,
+        w_tile);
 }
 
 }  // namespace ckernel

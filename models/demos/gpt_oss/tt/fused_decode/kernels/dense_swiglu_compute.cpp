@@ -4,7 +4,7 @@
 // Batched decode dense MoE, compute (dense_swiglu_reader.cpp): per column tile j of this core's shard
 //   g = gate_j + gate_bias_j, u = up_j + up_bias_j (row broadcast of the bias rows),
 //   act_j = SwiGLU(g, u) (gpt-oss: (clamp(u, -l, l) + 1) clamp(g, max l) sigmoid(alpha clamp(g, max l)),
-//   gmoe_swiglu.hpp)
+//   gmoe_swiglu.hpp, in the same SFPU pass as the multiply)
 //           x (w E_j) (the routing weight of each column's expert: the [32 tokens, E] weights times the one-hot expand
 //           tile, a K = 1 matmul)
 // packed into the act shard (a tensor-backed CB) in order.
@@ -50,9 +50,7 @@ void kernel_main() {
         matmul_init(cb_w, cb_e, 0);
         matmul_tiles(cb_w, cb_e, 0, 0, 2);
         MATH((ckernel::gmoe_swiglu_init()));
-        MATH((ckernel::gmoe_swiglu<DST_ACCUM_MODE>(0, 1, 0)));
-        mul_binary_tile_init();
-        mul_binary_tile(0, 2, 0);
+        MATH((ckernel::gmoe_swiglu_weighted<DST_ACCUM_MODE>(0, 1, 2, 0)));  // (times the weights tile: one SFPU pass)
         tile_regs_commit();
         cb_reserve_back(cb_act, 1);
         tile_regs_wait();
