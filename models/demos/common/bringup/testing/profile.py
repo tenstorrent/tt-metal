@@ -243,8 +243,9 @@ def run_profile(s, mesh, rung_name: str | None = None) -> dict:
     host = []
     gap = [0.0]  # F119: seconds spent uploading golden inputs at layer gaps in the current run
 
-    def run(count=False, only=None):
+    def run(count=False, only=None, per_layer=False):
         run_layers = layers if only is None else only
+        pccs = {}
         run_starts = starts if only is None else {k for n, k in enumerate(only) if n == 0 or only[n - 1] != k - 1}
         h = None
         begin_chunk(model, tokens, start)  # F65
@@ -265,6 +266,8 @@ def run_profile(s, mesh, rung_name: str | None = None) -> dict:
                 host.append(ht.total)
             else:
                 h2 = model.layer(i, h, start, state)
+            if per_layer:  # F122: this layer's output vs the golden's, outside the host-transfer count
+                pccs[i] = metrics.pcc(model.to_host(h2).float(), g.layer(g.n_chunks - 1, i)["out"].float())
             model.free(h)
             h = h2
         model.sync()
@@ -274,6 +277,7 @@ def run_profile(s, mesh, rung_name: str | None = None) -> dict:
             got = model.to_host(h).float()
             metrics.record("pcc_chunk_out", metrics.pcc(got, g.layer(g.n_chunks - 1, layers[-1])["out"].float()))
         model.free(h)
+        return pccs
 
     run()  # compile and fill the program cache: performance is measured warm only
     if os.environ.get("BRINGUP_PROFILE_WALL") == "1":  # F114: the clean wall run (device profiler off), nothing else
@@ -299,6 +303,13 @@ def run_profile(s, mesh, rung_name: str | None = None) -> dict:
             f"PROFILE wall (device profiler off, gap uploads excluded): {walls} ms, median of the last "
             f"{len(kept)} {med}; gap uploads {sorted(gaps)[len(gaps) // 2]} ms"
         )
+        if os.environ.get("BRINGUP_QUICK") == "1":  # F122: the quick A/B also checks every layer against the golden
+            reload()
+            pcc = run(count=True, per_layer=True)
+            for i, v in pcc.items():
+                metrics.record(f"pcc_layer_L{i:02d}", v)
+            metrics.record("host_transfers_per_layer", max(host) if host else 0)
+            print(f"PROFILE quick: worst layer PCC {min(pcc.values()):.5f} (L{min(pcc, key=pcc.get):02d})")
         return {"wall_ms": med, "wall_runs_ms": walls}
     reload()
     cpu_bridge.STATS.reset()
