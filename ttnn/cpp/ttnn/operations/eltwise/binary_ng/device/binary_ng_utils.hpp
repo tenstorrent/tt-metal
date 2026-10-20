@@ -68,6 +68,7 @@ struct OpConfig {
         LCM,
         LOGADDEXP,
         LOGADDEXP2,
+        LDEXP,
         LEFT_SHIFT,
         RIGHT_SHIFT,
         LOGICAL_RIGHT_SHIFT,
