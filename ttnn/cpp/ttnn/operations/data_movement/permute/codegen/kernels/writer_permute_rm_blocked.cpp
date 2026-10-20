@@ -121,7 +121,12 @@ void kernel_main() {
                 {.offset_bytes = l1_offset},
                 {.page_id = dest_linear_idx, .offset_bytes = x_offset});
         }
+#ifdef ARCH_BLACKHOLE
+        // Blackhole falls behind native when sub-line DRAM writes from successive blocks pile up in flight.
+        noc.async_write_barrier();
+#else
         noc.async_writes_flushed();
+#endif
         cb_out.pop_front(w_block_size);
     }
     noc.async_write_barrier();
