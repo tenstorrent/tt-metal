@@ -84,7 +84,7 @@ def test_kda_prefill_then_decode(mesh_device, weights, seq_len):
     rec = ttnn.to_torch(state.recurrent)
     p_rec = pcc(hf_layer.recurrent_states[0], rec)
     conv_hf = hf_layer.conv_states[0][:, :, -3:].transpose(1, 2)  # [1,3,W]
-    p_conv = pcc(conv_hf, ttnn.to_torch(state.convolution))
+    p_conv = pcc(conv_hf, tt.conv_history_torch(state))
     logger.info(f"  recurrent state pcc {p_rec:.6f}   conv history pcc {p_conv:.6f}")
     assert p > 0.995 and p_rec > 0.995 and p_conv > 0.995
 
@@ -124,9 +124,7 @@ def test_kda_block_vs_composite(mesh_device, weights, batch):
     for tt in (comp, blk):
         st = tt.allocate_state(B)
         ttnn.copy_host_to_device_tensor(ttnn.from_torch(S0, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT), st.recurrent)
-        ttnn.copy_host_to_device_tensor(
-            ttnn.from_torch(conv0, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT), st.convolution
-        )
+        tt.upload_conv_history(st, conv0)
         states.append(st)
     # the HF module tracks user 0 through its cache
     from transformers import DynamicCache
@@ -158,7 +156,7 @@ def test_kda_block_vs_composite(mesh_device, weights, batch):
     s_c, s_b = ttnn.to_torch(states[0].recurrent), ttnn.to_torch(states[1].recurrent)
     p_state = pcc(s_c, s_b)
     p_state_hf = pcc(layer_cache.recurrent_states[0], s_b[:1])
-    p_conv = pcc(ttnn.to_torch(states[0].convolution).float(), ttnn.to_torch(states[1].convolution).float())
+    p_conv = pcc(comp.conv_history_torch(states[0]).float(), blk.conv_history_torch(states[1]).float())
     logger.info(
         f"KDA layer {LAYER} B={B} after {n_steps} steps: state pcc block vs composite {p_state:.6f} (vs HF user 0 "
         f"{p_state_hf:.6f}), conv history pcc {p_conv:.6f}; worst output pcc {worst_o:.6f} (vs HF {worst_hf:.6f})"
