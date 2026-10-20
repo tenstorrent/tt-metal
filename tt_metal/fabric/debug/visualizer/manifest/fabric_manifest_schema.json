@@ -168,6 +168,26 @@
           ],
           "additionalProperties": false
         },
+        "stream_registers": {
+          "description": "Where a stream register is: stream N's register R is at base + N * stride + register_offsets[R].",
+          "type": "object",
+          "properties": {
+            "base": { "$ref": "#/$defs/count" },
+            "stride": { "$ref": "#/$defs/count" },
+            "count": { "$ref": "#/$defs/count" },
+            "register_offsets": {
+              "type": "object",
+              "properties": {
+                "buf_space_available": { "$ref": "#/$defs/count" },
+                "remote_src": { "$ref": "#/$defs/count" }
+              },
+              "required": ["buf_space_available", "remote_src"],
+              "additionalProperties": false
+            }
+          },
+          "required": ["base", "stride", "count", "register_offsets"],
+          "additionalProperties": false
+        },
         "types": {
           "type": "object",
           "additionalProperties": {
@@ -192,7 +212,7 @@
           }
         }
       },
-      "required": ["areas", "types"],
+      "required": ["areas", "stream_registers", "types"],
       "additionalProperties": false
     },
 

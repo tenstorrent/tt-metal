@@ -170,6 +170,19 @@ json heartbeat_json(const manifest::Heartbeat& heartbeat) {
     return out;
 }
 
+json stream_registers_json(const manifest::StreamRegisters& registers) {
+    json offsets = json::object();
+    for (const auto& [reg, offset] : registers.register_offsets) {
+        offsets[lower_enum_name(reg)] = offset;
+    }
+    json out;
+    out["base"] = registers.base;
+    out["stride"] = registers.stride;
+    out["count"] = registers.count;
+    out["register_offsets"] = std::move(offsets);
+    return out;
+}
+
 // Each struct by name, with its members in order.
 json types_json(const std::vector<layout::StructType>& types) {
     json out = json::object();
@@ -203,6 +216,7 @@ json make_archs_json(const manifest::Arch& arch) {
     areas_json["eth_fw_mailbox"] = optional_l1_json(areas.eth_fw_mailbox);
     json archs;
     archs[lower_enum_name(arch.arch)]["areas"] = std::move(areas_json);
+    archs[lower_enum_name(arch.arch)]["stream_registers"] = stream_registers_json(arch.stream_registers);
     archs[lower_enum_name(arch.arch)]["types"] = types_json(arch.types);
     return archs;
 }

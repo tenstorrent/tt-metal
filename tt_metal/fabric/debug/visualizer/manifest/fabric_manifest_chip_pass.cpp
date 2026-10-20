@@ -19,6 +19,7 @@
 #include <utility>
 #include <vector>
 
+#include "tt_metal/fabric/builder/fabric_stream_assignment.hpp"
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_fields.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_names.hpp"
@@ -322,6 +323,32 @@ manifest::Heartbeat heartbeat(tt::ARCH arch) {
     };
 }
 
+// A stream register's byte offset in its stream's block.
+uint32_t stream_register_offset(const tt::tt_metal::Hal& hal, manifest::StreamRegister reg) {
+    switch (reg) {
+        case manifest::StreamRegister::BUF_SPACE_AVAILABLE:
+            return hal.get_noc_stream_remote_dest_buf_space_available_reg_index() * sizeof(uint32_t);
+        case manifest::StreamRegister::REMOTE_SRC: return hal.get_noc_stream_remote_src_reg_index() * sizeof(uint32_t);
+    }
+    TT_THROW("Fabric manifest: unknown stream register {}", static_cast<int>(reg));
+}
+
+manifest::StreamRegisters stream_registers(const tt::tt_metal::Hal& hal) {
+    TT_FATAL(
+        hal.has_stream_registers(),
+        "Fabric manifest: the HAL gives no stream register addresses on {}",
+        manifest::lower_enum_name(hal.get_arch()));
+    manifest::StreamRegisters out{
+        .base = hal.get_noc_overlay_start_addr(),
+        .stride = hal.get_noc_stream_reg_space_size(),
+        .count = StreamRegAssignments::num_eth_stream_registers,
+    };
+    for (const auto reg : enchantum::values<manifest::StreamRegister>) {
+        out.register_offsets.emplace_back(reg, stream_register_offset(hal, reg));
+    }
+    return out;
+}
+
 }  // namespace
 
 manifest::Chip join_chip(
@@ -373,6 +400,7 @@ manifest::Arch describe_arch(const tt::tt_metal::Hal& hal) {
                         ? std::optional(hal_area(hal, HalL1MemAddrType::ETH_FW_MAILBOX, layout::type_of<uint32_t>()))
                         : std::nullopt,
             },
+        .stream_registers = stream_registers(hal),
         .types = std::move(types),
     };
 }
