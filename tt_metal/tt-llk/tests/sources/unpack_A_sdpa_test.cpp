@@ -159,9 +159,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
     constexpr DstSync sync_mode = DstSync::SyncHalf;
 
     // SDPA unpack keeps data in SrcA (BType::NONE, unpack_to_dest=false) -> A2D copy.
-    constexpr DataCopyType copy_type = DataCopyType::A2D;
+    constexpr DataCopyType copy_type        = DataCopyType::A2D;
+    const ckernel::TensorShape tensor_shape = ckernel::make_tensor_shape_from_legacy(params.TEST_FACE_R_DIM, params.num_faces);
     _llk_math_eltwise_unary_datacopy_init_wrapper_<copy_type, is_fp32_dest_acc_en, BroadcastType::NONE, is_int_fpu_en, PackMode::Default>(
-        ckernel::make_tensor_shape_from_legacy(params.TEST_FACE_R_DIM, params.num_faces), formats.math);
+        tensor_shape, formats.math);
 
     // A2D datacopy MOP override: end-op clears ONLY SrcA (CLR_A, not the stock CLR_AB).
     // llk_unpack_A_sdpa is SrcA-only and never validates SrcB, so the stock CLR_AB would
@@ -186,7 +187,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
             LLK_ASSERT(
                 (tile_in_block < get_dest_max_tiles<sync_mode, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
                 "Block tile index exceeds maximum destination tiles");
-            _llk_math_eltwise_unary_datacopy_<copy_type, sync_mode, is_fp32_dest_acc_en, BroadcastType::NONE, false>(tile_in_block, formats.math, formats.math);
+            _llk_math_eltwise_unary_datacopy_<copy_type, sync_mode, is_fp32_dest_acc_en, BroadcastType::NONE, false>(
+                tile_in_block, formats.math, formats.math, tensor_shape);
         }
         _llk_math_dest_section_done_<sync_mode, is_fp32_dest_acc_en>();
     }

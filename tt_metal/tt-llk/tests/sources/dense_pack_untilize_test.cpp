@@ -58,8 +58,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false, PackMode::Default>(
-        ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, params.num_faces), formats.math);
+    const ckernel::TensorShape tensor_shape = ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, params.num_faces);
+    _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false, PackMode::Default>(tensor_shape, formats.math);
     _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
     _llk_math_reconfig_remap_(true);
@@ -70,7 +70,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         for (std::uint32_t tile = 0; tile < params.NUM_TILES_IN_BLOCK; ++tile)
         {
             _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, dest_sync, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
-                tile, formats.math, formats.math);
+                tile, formats.math, formats.math, tensor_shape);
         }
         _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
     }
