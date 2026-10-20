@@ -115,7 +115,13 @@ class TtRouter(LightweightModule):
         # [1,1,1,E], broadcast over the token rows
         self.bias = self.mesh.upload(correction_bias.float().reshape(1, 1, 1, self.E), ttnn.float32)
         self.iota = self.mesh.upload(torch.arange(self.E, dtype=torch.float32).reshape(1, 1, 1, self.E), ttnn.float32)
+        self.iota_desc = self.mesh.upload(
+            (self.E - torch.arange(self.E, dtype=torch.float32)).reshape(1, 1, 1, self.E), ttnn.float32
+        )
         self.fp32 = _compute(device, ttnn.MathFidelity.HiFi4, packer_l1_acc=False)
+        import os
+
+        self.tie_break = os.environ.get("GLM53_ROUTER_TIE_BREAK", "rank")  # rank (default) | cumsum (A/B)
 
     def forward(self, x: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
         """x [1,1,T,H] bf16 -> (weights [1,1,T,8] fp32, indices [1,1,T,8] fp32 (integral), dense [1,1,T,E] fp32).
@@ -135,13 +141,22 @@ class TtRouter(LightweightModule):
         for _ in range(self.k):
             # first-match argmax of the biased scores (one index per row, exact fp32 ranking) -> one-hot
             # by comparing against the expert iota; replaces max + eq + single-core cumsum tie-break
-            choice_rm = ttnn.untilize(choice, use_multicore=True)
-            m_idx = ttnn.argmax(choice_rm, dim=-1, keepdim=True)  # [1,1,T,1] uint32 ROW_MAJOR (first max)
-            ttnn.deallocate(choice_rm)
-            m_f = ttnn.typecast(ttnn.to_layout(m_idx, ttnn.TILE_LAYOUT), ttnn.float32)  # [1,1,T,1] (tile-padded)
-            onehot = ttnn.eq(self.iota, m_f)  # [1,1,1,E] vs [1,1,T,1] -> [1,1,T,E]
-            ttnn.deallocate(m_idx)
-            ttnn.deallocate(m_f)
+            # exact fp32 first-match selection in TILE layout: max -> candidate columns; a second max over
+            # the candidates weighted by a descending iota keeps only the LOWEST tied column (no cumsum,
+            # no layout change; padded columns >= E weigh <= 0 and can never win)
+            m = ttnn.max(choice, dim=-1, keepdim=True)  # [1,1,T,1]
+            cand = ttnn.eq(choice, m)
+            if self.tie_break == "cumsum":  # the stage-1 reference path (single-core cumsum), kept for A/B
+                csum = ttnn.cumsum(cand, dim=-1)
+                onehot = ttnn.multiply(cand, ttnn.eq(csum, 1.0))
+                ttnn.deallocate(csum)
+                ttnn.deallocate(m)
+            else:
+                ranked = ttnn.multiply(cand, self.iota_desc)  # [1,1,T,E]: E - column index on the candidates
+                mx = ttnn.max(ranked, dim=-1, keepdim=True)
+                onehot = ttnn.eq(ranked, mx)
+                for t in (m, cand, ranked, mx):
+                    ttnn.deallocate(t)
             sel = ttnn.multiply(onehot, scores)  # [1,1,T,E]
             dense = sel if dense is None else ttnn.add(dense, sel, output_tensor=dense)
             idx_cols.append(ttnn.sum(ttnn.multiply(onehot, self.iota), dim=-1, keepdim=True))
