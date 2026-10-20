@@ -42,19 +42,24 @@ class StencilMatrixOp:
         )
         tables = [L.line_band, L.band_y0, L.band_ny, L.band_start]
         tab = np.concatenate([np.asarray(t, np.int64) for t in tables])  # the same for every core
-        ends = [L.starts[c] + L.count(c) for c in range(8)]
-        rows = []
-        for k in range(plan.nc):
-            lo, _, l1 = plan.pieces[k]
-            offs = list(np.cumsum([36] + [len(t) for t in tables] + [len(lo)]))  # word offsets of the six tables
-            head = [L.nx, L.nb, L.nl, ntlv, len(lo), 0] + plan.own[k].reshape(-1).tolist() + ends + offs
-            rows.append(np.concatenate([np.asarray(head, np.int64), tab, lo, l1]))
+        plo, _, pl1, npc = plan.piece_arrays
+        nc, w0 = plan.nc, 36 + len(tab)  # w0: word offset of the piece lo table (then the piece l1 table)
         # rows of whole 4 KB pages: the tensor's page size is then the same at every grid size, and so is the kernel
         # binary (a tensor accessor's page size is a compile-time argument)
-        w = -(-max(len(r) for r in rows) // TILE) * TILE
-        meta = np.zeros((plan.nc, w), np.int64)
-        for k, r in enumerate(rows):
-            meta[k, : len(r)] = r
+        w = -(-(w0 + 2 * int(npc.max())) // TILE) * TILE
+        meta = np.zeros((nc, w), np.int64)
+        meta[:, :6] = [L.nx, L.nb, L.nl, ntlv, 0, 0]
+        meta[:, 4] = npc
+        meta[:, 6:22] = plan.own.reshape(nc, -1)
+        meta[:, 22:30] = [L.starts[c] + L.count(c) for c in range(8)]
+        meta[:, 30:34] = np.cumsum([36] + [len(t) for t in tables[:-1]])  # word offsets of the four tables
+        meta[:, 34] = w0
+        meta[:, 35] = w0 + npc
+        meta[:, 36:w0] = tab
+        for k in range(nc):
+            n = npc[k]
+            meta[k, w0 : w0 + n] = plo[k, :n]
+            meta[k, w0 + n : w0 + 2 * n] = pl1[k, :n]
         self.meta = u32_rows(device, meta.reshape(-1, TILE))
         meta_pages = w // TILE
         cores = core_ranges(plan.nc, g.x)

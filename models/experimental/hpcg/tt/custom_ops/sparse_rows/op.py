@@ -17,7 +17,6 @@ Modes
   spmv  out = A x for every phase block (1-slot plans: restriction and prolongation gathers; addb: out = b + A x).
 """
 
-import numpy as np
 import ttnn
 
 from models.experimental.hpcg.tt.layout import TILE, u32_rows
@@ -149,13 +148,12 @@ class SparseRowOp:
             raise ValueError("values must be fp32, TILE or ROW_MAJOR rows of 1024 (4 KB pages)")
         g = device.compute_with_storage_grid_size()
         noc_xy = noc_coords(device)
-        meta, nseg, nseg_gs, nseg_r = plan.meta(phases, noc_xy, tpw)
         # rows of whole 4 KB pages, and the grid-dependent sizes (table pages, pages per slot, window bytes) as
         # runtime arguments: the kernel binaries then do not depend on the level or the grid size, so a process
         # loads each binary once (about 2-3 ms per binary)
-        meta_pages = -(-meta.shape[1] // TILE)
-        meta_bytes = -(-meta.shape[1] * 4 // 64) * 64  # the rows' used length, read at launch
-        meta = np.pad(meta, ((0, 0), (0, meta_pages * TILE - meta.shape[1])))
+        meta, nseg, nseg_gs, nseg_r, used = plan.meta(phases, noc_xy, tpw, align=TILE)
+        meta_pages = meta.shape[1] // TILE
+        meta_bytes = -(-used * 4 // 64) * 64  # the rows' used length, read at launch
         meta_t = u32_rows(device, meta.reshape(-1, TILE))
         self.keep = [meta_t]
         meta_b = meta_pages * 4096

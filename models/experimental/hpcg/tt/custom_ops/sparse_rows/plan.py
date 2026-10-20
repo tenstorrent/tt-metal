@@ -57,22 +57,19 @@ class SparseRowPlan:
         own = np.zeros((nc, NB, 2), np.int64)
         for b, (s, e) in enumerate(out_blocks):
             if bands is not None:  # band j of the block -> cores j*pb .. (j+1)*pb - 1, even ALIGN-row cuts
-                cuts = list(bands[b])
+                cuts = np.array(bands[b], np.int64)
                 cuts[0], cuts[-1] = s, e
                 B = len(cuts) - 1
                 pb = nc // B
-                k = 0
-                for j in range(B):
-                    bs, be = cuts[j], cuts[j + 1]
-                    c = [bs] + [min(be, -(-(bs + i * (be - bs) // pb) // ALIGN) * ALIGN) for i in range(1, pb)] + [be]
-                    for i in range(pb):
-                        own[k, b] = (c[i], max(c[i], c[i + 1]))
-                        k += 1
+                bs, be = cuts[:-1, None], cuts[1:, None]
+                inner = np.minimum(be, -(-(bs + np.arange(1, pb)[None, :] * (be - bs) // pb) // ALIGN) * ALIGN)
+                c = np.concatenate([bs, inner, be], axis=1)  # band j's cuts: c[j, i] .. c[j, i + 1] -> core j*pb + i
+                own[:, b, 0] = c[:, :-1].reshape(-1)
+                own[:, b, 1] = np.maximum(c[:, :-1], c[:, 1:]).reshape(-1)
             else:  # equal contiguous ALIGN-row shares of the block
                 per = -(-(e - s) // (nc * ALIGN)) * ALIGN
-                for k in range(nc):
-                    a = min(e, s + k * per)
-                    own[k, b] = (a, min(e, a + per))
+                a = np.minimum(e, s + np.arange(nc) * per)
+                own[:, b, 0], own[:, b, 1] = a, np.minimum(e, a + per)
         ng = max(e for _, e in src_regions) // GRAN + 2  # granules of the input vector
         lib = native.lib()
         if stencil is not None:
@@ -83,6 +80,7 @@ class SparseRowPlan:
         else:
             pieces, off, own_l1, ents = self._plan_numpy(COL, pout, own, exchange, ng, src_regions[0][0])
         plo, pln, pl1, npc = pieces  # [nc, maxp] each (zero past npc[k]), and pieces per core
+        self.piece_arrays = (plo, pln, pl1, npc)
         pieces = [(plo[k, : npc[k]], pln[k, : npc[k]], pl1[k, : npc[k]]) for k in range(nc)]  # views, no copies
         words = pln.sum(axis=1)
         # window CB bytes: a multiple of 512 (ZEROX clears it in 512-B pieces from the hardware zero region)
@@ -99,9 +97,9 @@ class SparseRowPlan:
         nxy = np.asarray(noc_xy, np.int64).reshape(-1, 2)
         self._exch_rows = np.column_stack([nxy[E[:, 2], 0], nxy[E[:, 2], 1], E[:, 3], E[:, 4], E[:, 5]])
         self._exch_at = np.searchsorted(key, np.arange(nc * NB + 1))
-        nbr = [set() for _ in range(nc)]
-        for p in np.unique(np.concatenate([E[:, 0] * nc + E[:, 2], E[:, 2] * nc + E[:, 0]])).tolist():
-            nbr[p // nc].add(p % nc)
+        # neighbours of each core (sorted): the cores it pushes rows to or receives rows from
+        pairs = np.unique(np.concatenate([E[:, 0] * nc + E[:, 2], E[:, 2] * nc + E[:, 0]]))
+        nbr = [x.tolist() for x in np.split(pairs % nc, np.searchsorted(pairs // nc, np.arange(1, nc)))]
         self.nc, self.own, self.own_l1, self.pieces, self.nbr = nc, own, own_l1, pieces, nbr
         self.out_blocks = out_blocks
         self._tables = {}  # _core_tables cache
@@ -274,13 +272,15 @@ class SparseRowPlan:
         self._tables[key] = out
         return out
 
-    def meta(self, phases, noc_xy, tpw=TILE):
-        """Per-core metadata rows (layout in kernels/common.h) and segment counts for the compute kernel.
-        phases: out block ids; 8 + b = an SpMV pass over block b (RESID launches). Built by the compiled helper
-        (host/native_setup.cpp's hpcg_plan_meta); _meta_python is the readable definition and the fallback."""
+    def meta(self, phases, noc_xy, tpw=TILE, align=16):
+        """Per-core metadata rows (layout in kernels/common.h), segment counts for the compute kernel, and the
+        longest row's length in words. phases: out block ids; 8 + b = an SpMV pass over block b (RESID launches).
+        align: the rows' width is a multiple of it (TILE: whole 4 KB pages). Built by the compiled helper
+        (host/native_setup.cpp's hpcg_plan_meta) as the 32-bit table that is uploaded; _meta_python is the readable
+        definition and the fallback."""
         lib = native.lib()
         if lib is None:
-            return self._meta_python(phases, noc_xy, tpw)
+            return self._meta_python(phases, noc_xy, tpw, align)
         key = ("native", tuple(map(tuple, noc_xy)))
         if key not in self._tables:
             NB = len(self.out_blocks)
@@ -299,11 +299,11 @@ class SparseRowPlan:
         ph = np.asarray(list(phases), np.int64)
         counts = [np.zeros(self.nc, np.int64) for _ in range(3)]
         longest = lib.hpcg_plan_meta(self.nc, NB, ph.size, ph, *args, tpw, 0, None, *counts)
-        m = np.zeros((self.nc, -(-longest // 16) * 16), np.int64)
+        m = np.zeros((self.nc, -(-longest // align) * align), np.int32)
         lib.hpcg_plan_meta(self.nc, NB, ph.size, ph, *args, tpw, m.shape[1], m.ctypes.data, *counts)
-        return (m,) + tuple(c.tolist() for c in counts)
+        return (m,) + tuple(c.tolist() for c in counts) + (int(longest),)
 
-    def _meta_python(self, phases, noc_xy, tpw=TILE):
+    def _meta_python(self, phases, noc_xy, tpw=TILE, align=16):
         """meta() in Python: the readable definition, and the fallback without a C++ compiler."""
         NB = len(self.out_blocks)
         phases = [int(p) for p in phases]
@@ -319,8 +319,8 @@ class SparseRowPlan:
         nseg_core = nsegs[:, ph & 7].sum(axis=1).tolist()
         nseg_gs_core = nsegs[:, ph[ph < 8]].sum(axis=1).tolist()
         nseg_r_core = (nsegs[:, 0] * int((ph == 8).sum())).tolist()
-        w = -(-max(len(r) for r in rows) // 16) * 16
-        m = np.zeros((self.nc, w), np.int64)
+        longest = max(len(r) for r in rows)
+        m = np.zeros((self.nc, -(-longest // align) * align), np.int64)
         for k, r in enumerate(rows):
             m[k, : len(r)] = r
-        return m, nseg_core, nseg_gs_core, nseg_r_core
+        return m, nseg_core, nseg_gs_core, nseg_r_core, longest

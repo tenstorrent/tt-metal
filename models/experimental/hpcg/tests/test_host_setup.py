@@ -97,6 +97,6 @@ def test_meta_matches_python(nx, bands):
     p = SparseRowPlan(L.COL_rows, blocks, blocks, 130, noc, True, bands=L.bstarts if bands > 1 else None, pout=L.P)
     gs = list(range(7, -1, -1)) + list(range(8))
     for phases in (gs, gs + [8 + b for b in range(8)], [8 + b for b in range(8)], [0]):
-        for tpw in (1024, 256):
-            got, want = p.meta(phases, noc, tpw), p._meta_python(phases, noc, tpw)
-            assert np.array_equal(got[0], want[0]) and list(got[1:]) == list(want[1:]), (phases[:3], tpw)
+        for tpw, align in ((1024, 16), (256, 16), (1024, 1024)):
+            got, want = p.meta(phases, noc, tpw, align), p._meta_python(phases, noc, tpw, align)
+            assert np.array_equal(got[0], want[0]) and list(got[1:]) == list(want[1:]), (phases[:3], tpw, align)

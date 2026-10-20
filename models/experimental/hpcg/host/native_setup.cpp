@@ -620,7 +620,8 @@ int64_t hpcg_plan_exchange(
 // same rows as SparseRowPlan.meta's Python version. Inputs per core k: window pieces plo/pln/pl1[pat[k] .. pat[k+1]),
 // neighbours nbr[nat[k] .. nat[k+1]) (sorted), own (a, e) and own_l1 per block, exchange rows (5 words each)
 // xrows[xat[k * NB + b] .. xat[k * NB + b + 1]). With m == nullptr, returns the longest row; otherwise writes rows
-// into m ([nc][w], zero-filled) and the segment counts (all phases, Gauss-Seidel phases, phase 8) per core.
+// into m ([nc][w] 32-bit words, zero-filled: the table as uploaded) and the segment counts (all phases,
+// Gauss-Seidel phases, phase 8) per core.
 int64_t hpcg_plan_meta(
     int32_t nc,
     int32_t NB,
@@ -639,7 +640,7 @@ int64_t hpcg_plan_meta(
     const int64_t* xrows,
     int64_t tpw,
     int64_t w,
-    int64_t* m,
+    int32_t* m,
     int64_t* nseg,
     int64_t* nseg_gs,
     int64_t* nseg_r) {
@@ -660,51 +661,51 @@ int64_t hpcg_plan_meta(
         if (m == nullptr) {
             continue;
         }
-        int64_t* r = m + (int64_t)k * w;
-        r[0] = R;
-        r[1] = nph;
-        r[2] = nnb + 1;
-        r[3] = nnb;
-        r[4] = NB;
+        int32_t* r = m + (int64_t)k * w;
+        r[0] = (int32_t)(R);
+        r[1] = (int32_t)(nph);
+        r[2] = (int32_t)(nnb + 1);
+        r[3] = (int32_t)(nnb);
+        r[4] = (int32_t)(NB);
         for (int64_t i = 0; i < R; ++i) {
-            r[5 + 3 * i] = plo[pat[k] + i];
-            r[6 + 3 * i] = pln[pat[k] + i];
-            r[7 + 3 * i] = pl1[pat[k] + i];
+            r[5 + 3 * i] = (int32_t)(plo[pat[k] + i]);
+            r[6 + 3 * i] = (int32_t)(pln[pat[k] + i]);
+            r[7 + 3 * i] = (int32_t)(pl1[pat[k] + i]);
         }
-        int64_t* blk = r + 5 + 3 * R;
-        int64_t* nbw = blk + 7 * NB;
+        int32_t* blk = r + 5 + 3 * R;
+        int32_t* nbw = blk + 7 * NB;
         for (int64_t i = 0; i < nnb; ++i) {
             const int64_t mm = nbr[nat[k] + i];
             const int64_t* f = std::lower_bound(nbr + nat[mm], nbr + nat[mm + 1], (int64_t)k);
-            nbw[3 * i] = noc_xy[2 * mm];
-            nbw[3 * i + 1] = noc_xy[2 * mm + 1];
-            nbw[3 * i + 2] = 1 + (f - (nbr + nat[mm]));  // my slot on m
+            nbw[3 * i] = (int32_t)(noc_xy[2 * mm]);
+            nbw[3 * i + 1] = (int32_t)(noc_xy[2 * mm + 1]);
+            nbw[3 * i + 2] = (int32_t)(1 + (f - (nbr + nat[mm])));  // my slot on m
         }
-        int64_t* ph = nbw + 3 * nnb;
+        int32_t* ph = nbw + 3 * nnb;
         for (int32_t p = 0; p < nph; ++p) {
-            ph[p] = phases[p];
+            ph[p] = (int32_t)(phases[p]);
         }
         int64_t at = pos;
         for (int32_t b = 0; b < NB; ++b) {
             const int64_t a = own[(k * NB + b) * 2], e = own[(k * NB + b) * 2 + 1];
-            blk[7 * b] = at;
-            blk[7 * b + 1] = segs_in[b];
+            blk[7 * b] = (int32_t)(at);
+            blk[7 * b + 1] = (int32_t)(segs_in[b]);
             for (int64_t q = a; q < e;) {
                 const int64_t q1 = std::min(e, (q / tpw + 1) * tpw);
-                r[at++] = q;
-                r[at++] = q1;
+                r[at++] = (int32_t)(q);
+                r[at++] = (int32_t)(q1);
                 q = q1;
             }
         }
         for (int32_t b = 0; b < NB; ++b) {
             const int64_t x0 = xat[k * NB + b], x1 = xat[k * NB + b + 1];
-            blk[7 * b + 2] = at;
-            blk[7 * b + 3] = x1 - x0;
-            blk[7 * b + 4] = own[(k * NB + b) * 2];
-            blk[7 * b + 5] = own[(k * NB + b) * 2 + 1];
-            blk[7 * b + 6] = own_l1[k * NB + b];
+            blk[7 * b + 2] = (int32_t)(at);
+            blk[7 * b + 3] = (int32_t)(x1 - x0);
+            blk[7 * b + 4] = (int32_t)(own[(k * NB + b) * 2]);
+            blk[7 * b + 5] = (int32_t)(own[(k * NB + b) * 2 + 1]);
+            blk[7 * b + 6] = (int32_t)(own_l1[k * NB + b]);
             for (int64_t i = 5 * x0; i < 5 * x1; ++i) {
-                r[at++] = xrows[i];
+                r[at++] = (int32_t)(xrows[i]);
             }
         }
         int64_t s = 0, sg = 0, sr = 0;

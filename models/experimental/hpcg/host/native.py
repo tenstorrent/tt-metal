@@ -114,7 +114,7 @@ def lib():
 
 
 _MADV_HUGEPAGE = 14
-_HUGE_MIN = 4 << 20
+_HUGE_MIN = 2 << 20  # one huge page
 
 
 def zeros(shape, dtype):
