@@ -103,7 +103,9 @@ bool MetalEnvImpl::check_use_count_zero() const {
 
 llrt::RunTimeOptions& MetalEnvImpl::get_rtoptions() { return *rtoptions_; }
 const Hal& MetalEnvImpl::get_hal() { return *hal_; }
+const Hal& MetalEnvImpl::get_hal() const { return *hal_; }
 Cluster& MetalEnvImpl::get_cluster() { return *cluster_; }
+const Cluster& MetalEnvImpl::get_cluster() const { return *cluster_; }
 const MetalEnvDescriptor& MetalEnvImpl::get_descriptor() const { return descriptor_; }
 
 namespace {
@@ -140,15 +142,6 @@ bool should_enable_blackhole_dram_programmable_cores(const Cluster& cluster, con
 
 // The qsr.s1 emulator model only routes device NoC traffic through the boot-programmed
 // address-translation tables, so tt-metal defaults it to the grendel_qsr1 ATT map.
-// The simulator directory basename, with any trailing separator stripped so filename() is not empty.
-std::string quasar_simulator_name(const llrt::RunTimeOptions& rtoptions) {
-    std::string simulator = rtoptions.get_simulator_path().string();
-    while (simulator.size() > 1 && simulator.back() == '/') {
-        simulator.pop_back();
-    }
-    return std::filesystem::path(simulator).filename().string();
-}
-
 // Set the qsr.s1 ATT default from the simulator path alone. Only called when the user did not set
 // TT_METAL_NOC_ATT.
 void default_quasar_noc_att_from_path(llrt::RunTimeOptions& rtoptions) {
@@ -158,8 +151,9 @@ void default_quasar_noc_att_from_path(llrt::RunTimeOptions& rtoptions) {
     rtoptions.set_noc_att_map("grendel_qsr1");
     log_info(
         tt::LogMetal,
-        "TT_METAL_NOC_ATT defaulted to grendel_qsr1 for the qsr.s1 simulator '{}' (set TT_METAL_NOC_ATT=off to opt out)",
-        quasar_simulator_name(rtoptions));
+        "TT_METAL_NOC_ATT defaulted to grendel_qsr1 for the qsr.s1 simulator '{}' (set TT_METAL_NOC_ATT=off to opt "
+        "out)",
+        rtoptions.get_simulator_name());
 }
 
 }  // namespace
@@ -741,24 +735,30 @@ const FabricConfigDescriptor& MetalEnv::get_fabric_config_descriptor() const {
     return impl_->get_fabric_config_descriptor();
 }
 
-tt::ARCH MetalEnv::get_arch() const { return impl_->get_cluster().arch(); }
-std::string MetalEnv::get_arch_name() const { return tt::get_string_lowercase(get_arch()); }
 uint32_t MetalEnv::get_num_pcie_devices() const { return impl_->get_cluster().number_of_pci_devices(); }
 uint32_t MetalEnv::get_num_available_devices() const { return impl_->get_cluster().number_of_user_devices(); }
-uint32_t MetalEnv::get_l1_size() const {
+
+MetalDeviceProperties MetalEnv::get_device_properties() const { return MetalDeviceProperties(*impl_); }
+
+tt::ARCH MetalDeviceProperties::arch() const { return impl_->get_cluster().arch(); }
+std::string MetalDeviceProperties::arch_name() const { return tt::get_string_lowercase(arch()); }
+uint32_t MetalDeviceProperties::node_local_mem_size() const {
     return impl_->get_hal().get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE);
 }
-uint32_t MetalEnv::get_dram_alignment() const { return impl_->get_hal().get_alignment(HalMemType::DRAM); }
-uint32_t MetalEnv::get_l1_alignment() const { return impl_->get_hal().get_alignment(HalMemType::L1); }
-uint32_t MetalEnv::get_num_dataflow_buffers() const { return impl_->get_hal().get_num_dataflow_buffers(); }
-uint32_t MetalEnv::get_max_worker_l1_unreserved_size() const {
-    size_t l1_end = impl_->get_hal().get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE) +
-                    impl_->get_hal().get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE);
-    return l1_end - impl_->get_hal().get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::KERNEL_CONFIG);
+uint32_t MetalDeviceProperties::dram_alignment() const { return impl_->get_hal().get_alignment(HalMemType::DRAM); }
+uint32_t MetalDeviceProperties::node_local_mem_alignment() const {
+    return impl_->get_hal().get_alignment(HalMemType::L1);
 }
-float MetalEnv::get_eps() const { return impl_->get_hal().get_eps(); }
-float MetalEnv::get_nan() const { return impl_->get_hal().get_nan(); }
-float MetalEnv::get_inf() const { return impl_->get_hal().get_inf(); }
+uint32_t MetalDeviceProperties::num_dataflow_buffers() const { return impl_->get_hal().get_num_dataflow_buffers(); }
+uint32_t MetalDeviceProperties::max_worker_node_local_mem_unreserved_size() const {
+    const Hal& hal = impl_->get_hal();
+    size_t node_local_mem_end = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE) +
+                                hal.get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE);
+    return node_local_mem_end - hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::KERNEL_CONFIG);
+}
+float MetalDeviceProperties::sfpu_eps() const { return impl_->get_hal().get_eps(); }
+float MetalDeviceProperties::sfpu_nan() const { return impl_->get_hal().get_nan(); }
+float MetalDeviceProperties::sfpu_inf() const { return impl_->get_hal().get_inf(); }
 
 distributed::SystemMesh& MetalEnv::get_system_mesh() {
     impl_->ensure_context_registered(*this);

@@ -91,7 +91,7 @@ ttnn:
     wh_galaxy: 125
     bh_galaxy: 40
     bh_p100: 815
-    bh_p150b_civ2: 855
+    bh_p150b_civ2: 870
     wh_n150_civ2: 1040
     wh_n300_civ2: 1190
     bh_p150b_civ2_viommu: 125
@@ -279,7 +279,7 @@ runtime:
     bh_p150b_civ2: 360
     bh_loudbox: 25
     wh_galaxy: 15
-    bh_galaxy: 15
+    bh_galaxy: 17
   profiler:
     wh_llmbox: 60
     wh_galaxy: 50
@@ -326,6 +326,10 @@ llk:
   bit_exact:
     wh_n150_civ2: 90
     bh_p150b_civ2: 180
+  # /llk-sfpu-test (llk-sfpu-report.yaml): on demand, one leg per arch per command.
+  on_demand:
+    wh_n150_civ2: 60
+    bh_p150b_civ2: 60
   ttnop:
     wh_n150_civ2: 21600
     bh_p150b_civ2: 21600
@@ -352,10 +356,10 @@ models:
   e2e:
     bh_p150b_civ2: 8
     bh_p300: 20
-    bh_loudbox: 200
+    bh_loudbox: 215
     bh_quietbox_2: 90
     bh_sc1: 20
-    bh_galaxy: 13
+    bh_galaxy: 40
   e2e_tier1:
     wh_n150: 28
     wh_galaxy_perf: 215
@@ -381,7 +385,7 @@ models:
     bh_p300: 13
     bh_quietbox_2: 62
   unit_tier1:
-    wh_llmbox: 155
+    wh_llmbox: 335
     wh_n150: 133
     wh_galaxy: 260
     wh_galaxy_perf: 65

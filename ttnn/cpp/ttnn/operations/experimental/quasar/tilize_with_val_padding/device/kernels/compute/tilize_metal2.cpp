@@ -4,10 +4,7 @@
 
 // Metal 2.0 fork of tilize.cpp. Identical compute logic; the CB indices and loop counts
 // are sourced from Metal 2.0 named bindings (dfb::in / dfb::out) and named compile-time args
-// instead of positional CTAs / hardcoded CB indices. The legacy tilize.cpp is retained for the
-// not-yet-ported multi_core_default / multi_core_sharded factories; delete this fork's twin (or
-// the legacy copy) once all tilize_with_val_padding factories that instantiate tilize.cpp are on
-// Metal 2.0.
+// instead of positional CTAs / hardcoded CB indices.
 
 #include <cstdint>
 
