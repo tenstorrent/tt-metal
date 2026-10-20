@@ -461,6 +461,8 @@ class LTXDistilledPipeline(LTXPipeline):
         assert ref_num_frames is not None or not any(
             s.endswith("_ref") for s in stages
         ), "ref trace stages (s1_ref/s2_ref) require ref_num_frames"
+        # From here on a gen whose trace family no warmup set up refuses (_assert_trace_family_warmed).
+        self._warmup_ran = True
 
         # Keyframe worker bakes the tail-padded shape (one extra latent frame) so a last-frame keyframe
         # decodes interior; generate() pads + trims to match. Every keyframe gen — interior or last —
@@ -1157,17 +1159,22 @@ class LTXDistilledPipeline(LTXPipeline):
         return f"{trace_key}_i2v"
 
     def _assert_trace_family_warmed(self, trace_key, traced):
-        """Refuse a traced per-token gen whose family a T2V-only warmup skipped."""
-        if (
-            traced
-            and getattr(self, "_warmup_t2v_only", False)
-            and trace_key is not None
-            and trace_key.endswith("_i2v")
-            and trace_key not in self._trace_state
-        ):
+        """Refuse a traced gen whose trace family a warmup skipped, before any denoise upload. Capturing
+        it now would load programs warmup never compiled (TT_FATAL "Cannot load new binaries during trace
+        capture", exabox job 138701: a no-sheet gen on a reference-only warmup) or bake its trace io into
+        another trace's activation region (deferred capture is the blank-video bug). A pipeline that never
+        warmed, or whose traces were released, still captures at gen time."""
+        if not traced or trace_key is None or trace_key in self._trace_state:
+            return
+        if getattr(self, "_warmup_t2v_only", False) and trace_key.endswith("_i2v"):
             raise RuntimeError(
                 f"trace family {trace_key} was not captured: warmup ran with LTX_WARMUP_T2V_ONLY=1, "
                 "so this worker serves plain t2v only (unset it to serve image-conditioned gens)"
+            )
+        if getattr(self, "_warmup_ran", False):
+            raise RuntimeError(
+                f"trace family {trace_key} was not warmed: this pipeline warmed {sorted(self._trace_state)} "
+                "only (a reference-only warmup serves reference-sheet gens only; warm its stages to serve it)"
             )
 
     def _prealloc_trace_io(self, trace_key, *, num_frames, height, width, ref_num_frames=0):
