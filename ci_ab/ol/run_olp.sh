@@ -25,6 +25,7 @@ use() {  # use <arm>
     cp "$S/v/$v/$rel" "/work/$rel"; for p in ${PK[$rel]}; do cp "$S/v/$v/$rel" "$p"; done
     if [[ -z ${PK[$rel]} && $rel == tt_metal/* && -d $SP/ttnn/tt_metal ]]; then mkdir -p "$SP/ttnn/$(dirname $rel)"; cp "$S/v/$v/$rel" "$SP/ttnn/$rel"; fi
   done < $S/files.txt
+  for p in ${PK[tt_metal/tt-llk/tt_llk_blackhole/llk_lib/llk_unpack_tilize.h]}; do echo "RAB HDR $1 $(md5sum < $p | cut -c1-10) $p"; done
   export TT_METAL_CACHE=$OUT/cache_$1; mkdir -p $TT_METAL_CACHE
 }
 python3 -m pytest --collect-only -q -p no:cacheprovider -o addopts= tests/ttnn/unit_tests/operations/data_movement/test_tab_ol.py 2>&1 | tail -8 | cut -c1-200
