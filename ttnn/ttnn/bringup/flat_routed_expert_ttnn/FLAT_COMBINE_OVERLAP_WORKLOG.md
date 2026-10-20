@@ -1521,7 +1521,7 @@ link rate with the full-L1 arena, sparse dispatch 0.82, TP AG / RS 0.87 / 0.74, 
 ~3.5 ms modelled vs 3.32 ms traced. Results (Residual Layouts page, "With measured efficiencies"):
 - 1D loses everywhere (3-39% behind the best 2D): combine no cheaper (8x4 equal once ties are split; 4x4 both hot
   links mid-SP-line), dispatch 1.4-2x link load, AG + RS on the critical path. Stay 2D.
-- Shared expert: replicated = TP-split while dispatch precedes the experts (the SE fits under router / gather /
-  planner / dispatch); running it there instead of serially: K3 block -11%. Under full overlap with a DRAM-bound
-  middle, TP-split wins K3 -7% (4x4) / -12% (8x4), V4.1 / K2.7 -4 / -7%.
+- Shared expert: replication is ruled out (user); TP-split only. Serially the TP SE costs 17-41% (K3 4x4: 3852 vs
+  3163 us); overlapped (AG + matmuls under router / gather / planner / dispatch, RS beside the combine) it is free in
+  the model. Gather -> 2D owners = token-split within 0-4% once overlapped.
 - Combine levers at 16K (link-bound nearly everywhere): ties split -11..-16% on 8x4, fp8 rows -34..-43%.
