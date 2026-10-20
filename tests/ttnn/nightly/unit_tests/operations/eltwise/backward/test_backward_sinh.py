@@ -265,8 +265,12 @@ def test_sinh_bw_exhaustive_bfloat16(grad, device):
 SINH_BW_FUSED_CALLS = (
     "interleaved_tiles",
     "interleaved_l1",
+    "height_sharded",
+    "width_sharded",
+    "block_sharded",
     "height_sharded_dram",
     "width_sharded_dram",
+    "nd_sharded",
     "nd_sharded_dram",
     "sharded_to_interleaved",
     "interleaved_to_sharded",
@@ -318,7 +322,6 @@ def _sinh_bw_placements(shape):
 
     height_l1 = sharded(layout.HEIGHT_SHARDED, L1, cores(2, 1), (height // 2, width))
     block_l1 = sharded(layout.BLOCK_SHARDED, L1, cores(2, 2), (height // 2, width // 2))
-    height_dram = sharded(layout.HEIGHT_SHARDED, DRAM, cores(2, 1), (height // 2, width))
     width_dram = sharded(layout.WIDTH_SHARDED, DRAM, cores(2, 1), (height, width // 2))
     dram, l1 = ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG
     return {
@@ -326,14 +329,13 @@ def _sinh_bw_placements(shape):
         "height_sharded": (height_l1, height_l1, None),
         "width_sharded": (*(sharded(layout.WIDTH_SHARDED, L1, cores(2, 1), (height, width // 2)),) * 2, None),
         "block_sharded": (block_l1, block_l1, None),
-        "height_sharded_dram": (height_dram, height_dram, None),
+        "height_sharded_dram": (*(sharded(layout.HEIGHT_SHARDED, DRAM, cores(2, 1), (height // 2, width)),) * 2, None),
         "width_sharded_dram": (width_dram, width_dram, None),
         "nd_sharded": (nd(L1, cores(2, 2)), nd(L1, cores(2, 2)), None),
         "nd_sharded_dram": (nd(DRAM, cores(2, 1)), nd(DRAM, cores(2, 1)), None),
-        "sharded_to_interleaved": (height_dram, height_dram, dram),
-        "interleaved_to_sharded": (dram, dram, width_dram),
-        "mixed_placements": (height_dram, width_dram, l1),
-        "interleaved_to_l1_sharded": (dram, dram, block_l1),
+        "sharded_to_interleaved": (height_l1, height_l1, dram),
+        "interleaved_to_sharded": (dram, dram, block_l1),
+        "mixed_placements": (height_l1, width_dram, l1),
         "grad_in_l1": (l1, dram, None),
         "sharded_output_without_spec": (height_l1, height_l1, ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG),
     }
@@ -345,17 +347,16 @@ def _sinh_bw_placements(shape):
     [
         "interleaved_tiles",
         "interleaved_l1",
+        "height_sharded",
+        "width_sharded",
+        "block_sharded",
         "height_sharded_dram",
         "width_sharded_dram",
+        "nd_sharded",
         "nd_sharded_dram",
         "sharded_to_interleaved",
         "interleaved_to_sharded",
         "mixed_placements",
-        "height_sharded",
-        "width_sharded",
-        "block_sharded",
-        "nd_sharded",
-        "interleaved_to_l1_sharded",
         "broadcast_grad",
         "row_major",
         "mixed_layouts",
@@ -365,9 +366,9 @@ def _sinh_bw_placements(shape):
     ],
 )
 def test_sinh_bw_runs_the_fused_program_only_where_it_applies(call, device):
-    """BF16 operands of one shape in tiles, interleaved or sharded in DRAM, with one placement or an
-    output config run the fused program and match torch; every other call keeps the composite, which
-    broadcasts and takes any layout, placement and dtype, and is faster where a tensor is sharded in L1."""
+    """BF16 operands of one shape in tiles, interleaved or sharded in L1 or DRAM, with one placement or
+    an output config run the fused program and match torch; every other call keeps the composite,
+    which broadcasts and takes any layout, placement and dtype."""
     shape = (1, 2, 64, 128)
     generator = torch.Generator().manual_seed(0)
     x = (4 * torch.randn(shape, generator=generator)).to(torch.bfloat16)
@@ -388,14 +389,19 @@ def test_sinh_bw_runs_the_fused_program_only_where_it_applies(call, device):
 
     assert ("UnaryBackwardDeviceOperation" in trace) == (call in SINH_BW_FUSED_CALLS), trace
     if call not in SINH_BW_FUSED_CALLS:
-        # The composite's own results, or its refusal of a call (some refuse row-major operands), are
-        # its tests' to judge; here it only has to be the program that ran.
-        assert error is not None or list(result.shape) == list(shape)
+        # The composite's refusal of a call (some refuse row-major operands) is its tests' to judge; a result it
+        # returns is held to torch as the fused program's is.
+        if error is None:
+            assert list(result.shape) == list(shape)
+            # Only where torch's result is finite: at NaN inputs and poles the composite stores its own values.
+            expected = _sinh_bw_torch_gradient(g.expand(shape), x)
+            finite = torch.isfinite(expected)
+            assert_with_pcc(expected[finite], ttnn.to_torch(result).float()[finite], 0.999)
         return
     assert error is None, error
     expected = _sinh_bw_torch_gradient(g, x)
     assert_with_pcc(expected, ttnn.to_torch(result).float(), 0.999)
-    if call != "interleaved_tiles":
+    if call != "interleaved_tiles" and call in SINH_BW_FUSED_CALLS:
         # A layout moves tiles, not arithmetic: the result is where the call asks for it, and is the
         # interleaved call's bit for bit, so the exhaustive test's accuracy holds in every layout.
         placement = tt_x.memory_config()
