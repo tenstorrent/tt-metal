@@ -83,3 +83,7 @@ ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernor
 ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm_sharded_post_allgather.cpp
 ttnn/cpp/ttnn/operations/normalization/softmax/device/kernels/attention/compute/softmax.cpp
 ttnn/cpp/ttnn/operations/reduction/sampling/device/kernels/compute/sampling.cpp
+tt_metal/tt-llk/tt_llk_blackhole/llk_lib/experimental/llk_unpack_AB_custom_mm.h
+tt_metal/tt-llk/tt_llk_blackhole/llk_lib/llk_unpack_AB_matmul.h
+tt_metal/tt-llk/tt_llk_blackhole/llk_lib/llk_unpack_AB_reduce.h
+tt_metal/tt-llk/tt_llk_blackhole/llk_lib/llk_unpack_untilize.h
