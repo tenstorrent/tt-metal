@@ -70,7 +70,7 @@ text, top-20 last-token logits, per-step top-5, wall times, needle flag, config)
 |---|---|
 | `--selftest` (blocked indexer vs stock, S=300 + 1-token step, S=257 + 5-token step) | same top-k sets |
 | `--validate-g16 --attn eager` (13-token prompt, 16 greedy tokens) | all 16 tokens identical to FULLMODEL_G16, top-5 ids identical at every step, max abs logit difference 0.000 |
-| `--validate-g16 --attn sdpa` | pending |
+| `--validate-g16 --attn sdpa` | first 7 tokens and the step-0 top-5 identical (max abs logit difference 0.31 at step 0, <= 0.5 through step 7); at step 7 a near-tie flips (eager top-2 [73538, 11478] -> sdpa [11478, 73538]) and the greedy chains part. HF-internal numerics: eager multiplies P x V in bf16 after an fp32 softmax, the sdpa CPU flash kernel accumulates in fp32. The needle references use sdpa (the `from_pretrained` default; the only path that fits 65K), so a TT-vs-HF greedy divergence at a near-tie is expected too; `compare_to_tt.py` prints HF's top-5 at the divergence step |
 | NEEDLE_4096 / NEEDLE_16384 / NEEDLE_65536 | pending (see `/home/ttuser/ashai/glm53/_agents/hfref/STATUS.md`) |
 
 Host (AMD EPYC 9354P 32c/64t, avx512_bf16, shared with two other jobs at the time): 13-token prefill 61 s, decode
