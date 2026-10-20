@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // The vector kernels of the host-side decode and the per-lane state they run against; the frame walk that drives
-// them is StreamDecoder::decode_frame (streaming_profiler_decode.hpp). A frame is a 16-word prefix (word 1 = payload
+// them is StreamDecoder::decode_frame (decode.hpp). A frame is a 16-word prefix (word 1 = payload
 // length), the SPSC_SPAN_WIRE_CTRL_WORDS control block, then each RISC's live ring window packed flat with congruence
 // pads and wraps resolved device-side. Packet formats: spsc_packet.h. The producer publishes its tail only on
 // packet boundaries, so a window never ends mid-packet.

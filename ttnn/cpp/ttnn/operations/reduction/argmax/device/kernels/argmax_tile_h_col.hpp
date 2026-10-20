@@ -64,9 +64,9 @@ void process_loaded_tile_all_h_columns(
                 const DTYPE value = col_ptr[row * face_width];
                 bool new_max = false;
                 if constexpr (format == DataFormat::Float16_b) {
-                    new_max = bfloat16_greater(value, curr_max);
+                    new_max = argmax_bfloat16_greater(value, curr_max);
                 } else if constexpr (format == DataFormat::Float32) {
-                    new_max = float32_greater(value, curr_max);
+                    new_max = argmax_float32_greater(value, curr_max);
                 }
                 if (new_max) {
                     curr_max = value;

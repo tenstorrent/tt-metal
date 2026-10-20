@@ -12,7 +12,6 @@
 #include <tt-metalium/experimental/inspector_config.hpp>
 #include "context/metal_context.hpp"
 #include "distributed/mesh_device_impl.hpp"
-#include "distributed/mesh_workload_impl.hpp"
 #include <program_cache.hpp>
 #include <system_mesh.hpp>
 #include "jit_build/build_env_manager.hpp"
@@ -62,7 +61,8 @@ Data::Data(std::optional<int> rank, ContextId context_id) :
             get_rpc_server().setGetProgramsCallback([this](auto result) { this->rpc_get_programs(result); });
             get_rpc_server().setGetMeshDevicesCallback([this](auto result) { this->rpc_get_mesh_devices(result); });
             get_rpc_server().setGetSocketsCallback([this](auto result) { this->rpc_get_sockets(result); });
-            get_rpc_server().setGetMeshWorkloadsCallback([this](auto result) { this->rpc_get_mesh_workloads(result); });
+            get_rpc_server().setGetGlobalSemaphoresCallback(
+                [this](auto result) { this->rpc_get_global_semaphores(result); });
             get_rpc_server().setGetMeshWorkloadRuntimeEntriesCallback(
                 [this](auto result) { this->rpc_get_mesh_workload_runtime_entries(result); });
             get_rpc_server().setGetDevicesInUseCallback([this](auto result) { this->rpc_get_devices_in_use(result); });
@@ -133,6 +133,20 @@ void Data::rpc_get_programs(rpc::Inspector::GetProgramsResults::Builder& results
                 elf_paths_list.set(k, kernel_data.processor_elf_paths[k]);
             }
         }
+
+        auto semaphores_list = program.initSemaphores(program_data.semaphores.size());
+        j = 0;
+        for (const auto& semaphore_data : program_data.semaphores) {
+            auto semaphore = semaphores_list[j++];
+            semaphore.setId(semaphore_data.id());
+            semaphore.setCoreType(
+                semaphore_data.core_type() == CoreType::ETH ? rpc::SemaphoreCoreType::ETH
+                                                            : rpc::SemaphoreCoreType::TENSIX);
+            semaphore.setInitialValue(semaphore_data.initial_value());
+            semaphore.setOffset(semaphore_data.offset());
+            const auto core_ranges = semaphore_data.core_range_set();
+            populate_core_ranges(semaphore.initCoreRanges(core_ranges.ranges().size()), core_ranges);
+        }
     }
 }
 
@@ -199,40 +213,19 @@ void Data::rpc_get_sockets(rpc::Inspector::GetSocketsResults::Builder& results) 
     }
 }
 
-void Data::rpc_get_mesh_workloads(rpc::Inspector::GetMeshWorkloadsResults::Builder& results) {
-    std::lock_guard<std::mutex> lock(mesh_workloads_mutex);
-    auto mesh_workloads = results.initMeshWorkloads(mesh_workloads_data.size());
+void Data::rpc_get_global_semaphores(rpc::Inspector::GetGlobalSemaphoresResults::Builder& results) {
+    std::lock_guard<std::mutex> lock(mesh_buffers_mutex);
+    auto semaphores = results.initSemaphores(global_semaphores_data.size());
     uint32_t i = 0;
-    for (const auto& [mesh_workload_id, mesh_workload_data] : mesh_workloads_data) {
-        auto mesh_workload = mesh_workloads[i++];
-        mesh_workload.setMeshWorkloadId(mesh_workload_id);
-
-        const auto& programs = mesh_workload_data.mesh_workload->get_programs();
-        auto programs_data = mesh_workload.initPrograms(programs.size());
-        uint32_t j = 0;
-        for (const auto& [device_range, program] : programs) {
-            auto program_data = programs_data[j++];
-            program_data.setProgramId(program.impl().get_id());
-            auto coordinates_list = program_data.initCoordinates(device_range.shape().mesh_size());
-            uint32_t k = 0;
-            for (const auto& device_coordinate : device_range) {
-                auto mesh_coordinate = coordinates_list[k++];
-                auto coords = device_coordinate.coords();
-                auto coordinates = mesh_coordinate.initCoordinates(coords.size());
-                for (size_t l = 0; l < coords.size(); ++l) {
-                    coordinates.set(l, coords[l]);
-                }
-            }
+    for (const auto& [buffer, semaphore_data] : global_semaphores_data) {
+        auto semaphore = semaphores[i++];
+        semaphore.setAddress(semaphore_data.address);
+        populate_core_ranges(semaphore.initCoreRanges(semaphore_data.cores.ranges().size()), semaphore_data.cores);
+        auto chip_ids = semaphore.initChipIds(semaphore_data.chip_ids.size());
+        for (uint32_t j = 0; j < semaphore_data.chip_ids.size(); ++j) {
+            chip_ids.set(j, semaphore_data.chip_ids[j]);
         }
-
-        auto binary_status_list =
-            mesh_workload.initBinaryStatusPerMeshDevice(mesh_workload_data.binary_status_per_device.size());
-        j = 0;
-        for (const auto& [mesh_id, status] : mesh_workload_data.binary_status_per_device) {
-            auto binary_status = binary_status_list[j++];
-            binary_status.setMeshId(mesh_id);
-            binary_status.setStatus(convert_binary_status(status));
-        }
+        semaphore.setResetValue(semaphore_data.reset_value ? int64_t{*semaphore_data.reset_value} : -1);
     }
 }
 
@@ -482,6 +475,19 @@ rpc::BinaryStatus Data::convert_binary_status(ProgramBinaryStatus status) {
 }
 
 // Helper function to populate the core info
+void Data::populate_core_ranges(
+    ::capnp::List<rpc::LogicalCoreRange>::Builder list, const CoreRangeSet& core_range_set) {
+    const auto& ranges = core_range_set.ranges();
+    for (size_t i = 0; i < ranges.size(); ++i) {
+        auto start = list[i].initStart();
+        start.setX(ranges[i].start_coord.x);
+        start.setY(ranges[i].start_coord.y);
+        auto end = list[i].initEnd();
+        end.setX(ranges[i].end_coord.x);
+        end.setY(ranges[i].end_coord.y);
+    }
+}
+
 void Data::populate_core_info(rpc::CoreInfo::Builder& out, const CoreInfo& info, uint32_t event_id) {
     out.setMetalDeviceId(info.device_id);
     out.setServicingMetalDeviceId(info.servicing_device_id);
@@ -600,6 +606,7 @@ void collect_rtoptions_entries(std::vector<ConfigurationEntry>& entries, const t
     RT_CUSTOM("target_device", static_cast<int>(rt.get_target_device()));
     RT(simulator_enabled);
     RT_CUSTOM("simulator_path", rt.get_simulator_path().string());
+    RT(simulator_serve_over_sockets);
     RT(mock_enabled);
     RT(mock_cluster_desc_path);
     RT(visible_devices);
@@ -629,7 +636,6 @@ void collect_rtoptions_entries(std::vector<ConfigurationEntry>& entries, const t
     RT(disable_fabric_2_erisc_mode);
     RT(disable_dma_ops);
     RT(disable_sfploadmacro);
-    RT(disable_xip_dump);
     RT(skip_eth_cores_with_retrain);
     RT(use_mesh_graph_descriptor_2_0);
     RT(custom_fabric_mesh_graph_desc_path);

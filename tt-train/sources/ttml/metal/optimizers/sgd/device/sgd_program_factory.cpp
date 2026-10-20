@@ -80,94 +80,6 @@ struct SGDKernels {
     tt::tt_metal::KernelHandle compute_group_2;
 };
 
-/**
- * Set up the runtime arguments for the 4 relevant kernels (reader, writer, compute G1, compute G2)
- *        for each core in the grid.
- */
-void assign_per_core_runtime_args(
-    tt::tt_metal::Program& program,
-    const SGDKernels& kernels,
-    const tt::tt_metal::Buffer* param_buffer,
-    const tt::tt_metal::Buffer* grad_buffer,
-    const tt::tt_metal::Buffer* momentum_buffer,
-    const float lr,
-    const float momentum,
-    const float dampening,
-    const float weight_decay,
-    const tt::tt_metal::Buffer* output_buffer,
-    uint32_t num_cores,
-    uint32_t num_cores_y,
-    uint32_t num_tiles_per_core_group_1,
-    uint32_t num_tiles_per_core_group_2,
-    const tt::tt_metal::CoreRangeSet& core_group_1,
-    const tt::tt_metal::CoreRangeSet& core_group_2) {
-    bfloat16 bfloat_lr = bfloat16(lr);
-    uint32_t packed_lr = pack_two_bfloat16_into_uint32({bfloat_lr, bfloat_lr});
-
-    bfloat16 bfloat_momentum = bfloat16(momentum);
-    uint32_t packed_momentum = pack_two_bfloat16_into_uint32({bfloat_momentum, bfloat_momentum});
-
-    bfloat16 bfloat_one_minus_dampening = bfloat16(1.0F - dampening);
-    uint32_t packed_one_minus_dampening =
-        pack_two_bfloat16_into_uint32({bfloat_one_minus_dampening, bfloat_one_minus_dampening});
-
-    bfloat16 bfloat_wd = bfloat16(weight_decay);
-    uint32_t packed_wd = pack_two_bfloat16_into_uint32({bfloat_wd, bfloat_wd});
-
-    const bool use_weight_decay = !(bfloat_wd == bfloat16(0.0F));
-    const bool use_dampening = !(bfloat_one_minus_dampening == bfloat16(1.0F));
-
-    for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++) {
-        tt::tt_metal::CoreCoord core = {i / num_cores_y, i % num_cores_y};
-
-        // Determine how many tiles this core will process
-        uint32_t num_tiles_per_core = 0;
-        if (core_group_1.contains(core)) {
-            num_tiles_per_core = num_tiles_per_core_group_1;
-        } else if (core_group_2.contains(core)) {
-            num_tiles_per_core = num_tiles_per_core_group_2;
-        } else {
-            TT_THROW("Core {} not in specified core ranges", core);
-        }
-
-        // Reader kernel: (param_addr, grad_addr, lr, number_of_tiles, offset_in_tiles)
-        SetRuntimeArgs(
-            program,
-            kernels.reader,
-            core,
-            {param_buffer->address(),
-             grad_buffer->address(),
-             momentum_buffer != nullptr ? momentum_buffer->address() : 0U,
-             packed_lr,
-             packed_momentum,
-             packed_one_minus_dampening,
-             packed_wd,
-             num_tiles_per_core,
-             num_tiles_written});
-
-        // Compute kernel: (learning_rate)
-        if (core_group_1.contains(core)) {
-            SetRuntimeArgs(program, kernels.compute_group_1, core, {use_weight_decay, use_dampening});
-        } else if (core_group_2.contains(core)) {
-            SetRuntimeArgs(program, kernels.compute_group_2, core, {use_weight_decay, use_dampening});
-        } else {
-            TT_THROW("Core {} not in specified core ranges", core);
-        }
-
-        // Writer kernel: (dst_addr, number_of_tiles, offset_in_tiles)
-        SetRuntimeArgs(
-            program,
-            kernels.writer,
-            core,
-            {output_buffer->address(),
-             momentum_buffer != nullptr ? momentum_buffer->address() : 0U,
-             num_tiles_per_core,
-             num_tiles_written});
-
-        num_tiles_written += num_tiles_per_core;
-    }
-}
-
 SGDProgramFactory::cached_program_t SGDProgramFactory::create(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
@@ -347,23 +259,53 @@ SGDProgramFactory::cached_program_t SGDProgramFactory::create(
     // 5) Assign runtime args for each core
     // -------------------------------------------------------------------------
 
-    assign_per_core_runtime_args(
-        program,
-        kernels,
-        param_buffer,
-        grad_buffer,
-        momentum_buffer,
-        lr,
-        momentum,
-        dampening,
-        weight_decay,
-        output_buffer,
+    const bfloat16 bfloat_lr = bfloat16(lr);
+    const uint32_t packed_lr = pack_two_bfloat16_into_uint32({bfloat_lr, bfloat_lr});
+    const bfloat16 bfloat_momentum = bfloat16(momentum);
+    const uint32_t packed_momentum = pack_two_bfloat16_into_uint32({bfloat_momentum, bfloat_momentum});
+    const bfloat16 bfloat_one_minus_dampening = bfloat16(1.0F - dampening);
+    const uint32_t packed_one_minus_dampening =
+        pack_two_bfloat16_into_uint32({bfloat_one_minus_dampening, bfloat_one_minus_dampening});
+    const bfloat16 bfloat_wd = bfloat16(weight_decay);
+    const uint32_t packed_wd = pack_two_bfloat16_into_uint32({bfloat_wd, bfloat_wd});
+    const bool use_weight_decay = !(bfloat_wd == bfloat16(0.0F));
+    const bool use_dampening = !(bfloat_one_minus_dampening == bfloat16(1.0F));
+    for_each_core_with_work(
         num_cores,
         num_cores_y,
+        core_group_1,
+        core_group_2,
         num_tiles_per_core_group_1,
         num_tiles_per_core_group_2,
-        core_group_1,
-        core_group_2);
+        [&](const CoreWork& work) {
+            const auto& [core, core_index, num_tiles, start_tile, in_group_1] = work;
+            SetRuntimeArgs(
+                program,
+                kernels.reader,
+                core,
+                {param_buffer->address(),
+                 grad_buffer->address(),
+                 momentum_buffer != nullptr ? momentum_buffer->address() : 0U,
+                 packed_lr,
+                 packed_momentum,
+                 packed_one_minus_dampening,
+                 packed_wd,
+                 num_tiles,
+                 start_tile});
+            SetRuntimeArgs(
+                program,
+                in_group_1 ? kernels.compute_group_1 : kernels.compute_group_2,
+                core,
+                {use_weight_decay, use_dampening});
+            SetRuntimeArgs(
+                program,
+                kernels.writer,
+                core,
+                {output_buffer->address(),
+                 momentum_buffer != nullptr ? momentum_buffer->address() : 0U,
+                 num_tiles,
+                 start_tile});
+        });
 
     // -------------------------------------------------------------------------
     // 6) Return the fully configured program & relevant shared variables
@@ -434,9 +376,7 @@ void SGDProgramFactory::override_runtime_arguments(
     const bool use_weight_decay = !(bfloat_wd == bfloat16(0.0F));
     const bool use_dampening = !(bfloat_one_minus_dampening == bfloat16(1.0F));
 
-    for (uint32_t i = 0; i < num_cores; i++) {
-        tt::tt_metal::CoreCoord core = {i / num_cores_y, i % num_cores_y};
-
+    for_each_core(num_cores, num_cores_y, [&](const tt::tt_metal::CoreCoord& core) {
         // Update input buffers for the reader kernel
         {
             auto& runtime_args = reader_runtime_args[core.x][core.y];
@@ -465,7 +405,7 @@ void SGDProgramFactory::override_runtime_arguments(
             runtime_args[kOutputAddrIdx] = output_buffer->address();
             runtime_args[kMomentumDramAddrIdx] = momentum_buffer != nullptr ? momentum_buffer->address() : 0U;
         }
-    }
+    });
 }
 
 }  // namespace ttml::metal::optimizers::sgd::device

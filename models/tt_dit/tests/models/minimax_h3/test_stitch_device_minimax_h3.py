@@ -6,6 +6,7 @@
 Separate file because these run FABRIC_1D_RING while test_vae_parallel_minimax_h3.py runs
 FABRIC_1D, and fabric_config is a process-global one-shot (second distinct value is TT_FATAL)."""
 
+import numpy as np
 import pytest
 import torch
 from loguru import logger
@@ -21,7 +22,10 @@ from ....models.vae.minimax_h3.vae_minimax_h3 import (
     split_tiles,
     stitch_tiles,
 )
+from ....parallel.manager import CCLManager
 from ....utils.check import assert_quality
+from ....utils.yuv_d2h import fast_device_to_host_yuv, replicated_to_host_yuv
+from .common import GALAXY_MESHES
 
 SINGLE_DEVICE = [pytest.param((1, 1), {"l1_small_size": 65536}, id="single_device")]
 
@@ -42,7 +46,8 @@ def _geometry():
 @pytest.mark.timeout(1800)
 @pytest.mark.parametrize(("mesh_device", "device_params"), SINGLE_DEVICE, indirect=["mesh_device", "device_params"])
 def test_stitch_matches_host_at_production_geometry(mesh_device, reset_seeds):
-    """The whole 4x7 stitch, device against host."""
+    """4x7 stitch vs host."""
+    blend_dtype = ttnn.float32
     height_overlaps, width_overlaps = _geometry()
     rows, columns = len(height_overlaps) + 1, len(width_overlaps) + 1
     logger.info(f"grid {rows}x{columns} = {rows * columns} tiles, overlaps h={height_overlaps} w={width_overlaps}")
@@ -53,10 +58,10 @@ def test_stitch_matches_host_at_production_geometry(mesh_device, reset_seeds):
 
     stitcher = DeviceTileStitcher(mesh_device)
     device_tiles = [
-        [ttnn.from_torch(t, dtype=ttnn.float32, device=mesh_device, layout=ttnn.TILE_LAYOUT) for t in row]
+        [ttnn.from_torch(t, dtype=blend_dtype, device=mesh_device, layout=ttnn.TILE_LAYOUT) for t in row]
         for row in tiles
     ]
-    actual = ttnn.to_torch(stitcher.stitch(device_tiles, height_overlaps, width_overlaps))
+    actual = ttnn.to_torch(stitcher.stitch(device_tiles, height_overlaps, width_overlaps)).float()
 
     assert actual.shape == expected.shape, f"{tuple(actual.shape)} != {tuple(expected.shape)}"
     assert_quality(expected, actual, pcc=0.9999, relative_rmse=0.02)
@@ -194,10 +199,122 @@ def test_two_axis_all_gather_permutes_dim0_by_transpose(mesh_device):
         assert other == observed, f"device {index} sees order {other}, device 0 sees {observed}"
 
 
-# --- host-only numerics for the YUV decode path (no device, no fixtures) ---------------------
+@pytest.mark.parametrize(("mesh_device", "device_params"), MESH_4X8, indirect=["mesh_device", "device_params"])
+def test_one_axis_all_gather_keeps_mesh_order(mesh_device):
+    """Gather keeps mesh order."""
+    rows, cols = tuple(mesh_device.shape)
+    num_devices = rows * cols
+    host = torch.arange(num_devices, dtype=torch.float32).reshape(num_devices, 1, 1, 1).expand(num_devices, 1, 1, 32)
+    sharded = ttnn.from_torch(
+        host.contiguous(),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+    )
+    for axis, extent in ((0, rows), (1, cols)):
+        gathered = ttnn.all_gather(sharded, 0, cluster_axis=axis, topology=ttnn.Topology.Ring)
+        replicas = ttnn.get_device_tensors(gathered)
+        assert replicas[0].shape[0] == extent, f"axis {axis}: local dim 0 is {replicas[0].shape[0]}, expected {extent}"
+        for device_index, replica in enumerate(replicas):
+            r, c = divmod(device_index, cols)
+            observed = [int(v) for v in ttnn.to_torch(replica)[:, 0, 0, 0].round().tolist()]
+            expected = [i * cols + c for i in range(rows)] if axis == 0 else [r * cols + j for j in range(cols)]
+            assert observed == expected, f"device {device_index} ({r},{c}) axis {axis}: {observed} != {expected}"
+
+
+MESH_4X8_RING_L1 = [
+    pytest.param(
+        (4, 8),
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+            "require_exact_physical_num_devices": True,
+            "l1_small_size": 65536,
+        },
+        id="4x8ring",
+    )
+]
 
 MINIMAX_H3_PIXEL_MEAN = (0.485, 0.456, 0.406)
 MINIMAX_H3_PIXEL_STD = (0.229, 0.224, 0.225)
+DECODE_STAGE_LATENT_HW = (48, 84)
+
+
+def _stub_decoder_vae(mesh_device):
+    """Weightless VAE: decoder maps tokens to tile pixels."""
+    from ....models.vae.minimax_h3.vae_minimax_h3 import MiniMaxH3Vae
+    from ....parallel.manager import CCLManager
+    from .common import weights_subdir
+
+    weights_dir = weights_subdir("vae")
+    if weights_dir is None:
+        pytest.skip("MiniMax-H3 vae not found; set MINIMAX_H3_MODEL_PATH")
+    config = MiniMaxH3VaeConfig.from_pretrained(weights_dir)
+    torch.manual_seed(3)
+
+    ccl_manager = CCLManager(mesh_device, num_links=2, topology=ttnn.Topology.Ring)
+    vae = MiniMaxH3Vae(
+        config,
+        task="t2va",
+        mesh_device=mesh_device,
+        ccl_manager=ccl_manager,
+        device_stitch=True,
+        stitch_exchange="gather",
+        pixel_denorm=(MINIMAX_H3_PIXEL_MEAN, MINIMAX_H3_PIXEL_STD),
+    )
+    num_frames, height, width = vae.decoder.latent_shape
+    row_width = config.out_channels * config.temporal_compression_ratio * config.spatial_compression_ratio**2
+    projection = ttnn.from_torch(
+        torch.randn(config.latent_channels, row_width) * 0.5,
+        dtype=ttnn.bfloat16,
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+    class _StubDecoder:
+        def __init__(self, latent_shape, projection):
+            self.latent_shape = latent_shape
+            self._projection = projection
+
+        def __call__(self, tokens):
+            return ttnn.matmul(tokens, self._projection)
+
+    vae.decoder = _StubDecoder((num_frames, height, width), projection)
+    latent_h, latent_w = DECODE_STAGE_LATENT_HW
+    chunk = torch.randn(1, config.latent_channels, num_frames, latent_h, latent_w)
+    return vae, chunk
+
+
+@pytest.mark.timeout(1800)
+@pytest.mark.parametrize(("mesh_device", "device_params"), MESH_4X8_RING_L1, indirect=["mesh_device", "device_params"])
+def test_strip_stitch_matches_gather_stitch_bitwise(mesh_device):
+    """Strip stitch matches gather stitch bitwise."""
+    import numpy as np
+
+    vae, chunk = _stub_decoder_vae(mesh_device)
+    outputs = {}
+    for mode in ("gather", "strips"):
+        vae.stitch_exchange = mode
+        vae._stitcher = None
+        vae._profile = vae._empty_profile()
+        canvas = vae._decode_clips_device_stitched([chunk], "float")[0]
+        vae._profile = vae._empty_profile()
+        planar = vae._decode_clips_device_stitched([chunk], "yuv420")[0]
+        logger.info(f"{mode}: canvas {tuple(canvas.shape)} {canvas.dtype}, planar {planar.shape} {planar.dtype}")
+        outputs[mode] = (canvas, planar)
+
+    (g_canvas, g_planar), (s_canvas, s_planar) = outputs["gather"], outputs["strips"]
+    assert tuple(s_canvas.shape) == tuple(g_canvas.shape), f"{tuple(s_canvas.shape)} != {tuple(g_canvas.shape)}"
+    assert tuple(g_canvas.shape[-2:]) == (HEIGHT, WIDTH), f"canvas is {tuple(g_canvas.shape[-2:])}"
+    assert torch.isfinite(g_canvas).all() and torch.isfinite(s_canvas).all()
+    differing = (g_canvas != s_canvas).sum().item()
+    assert (
+        differing == 0
+    ), f"{differing} of {g_canvas.numel()} canvas values differ, max |diff| {(g_canvas - s_canvas).abs().max():.3e}"
+    assert s_planar.shape == g_planar.shape and s_planar.dtype == g_planar.dtype == np.uint8
+    differing = int((g_planar != s_planar).sum())
+    assert differing == 0, f"{differing} of {g_planar.size} planar bytes differ"
 
 
 def test_pixel_denorm_fold_is_exact_and_commutes_with_the_blend():
@@ -277,3 +394,88 @@ def test_temporal_crossfade_survives_the_yuv_conversion():
     assert convert_last.shape == blend_last.shape, f"{convert_last.shape} != {blend_last.shape}"
     worst = np.abs(convert_last.astype(int) - blend_last.astype(int)).max()
     assert worst <= 1, f"reordering the cross-fade past the YUV conversion costs {worst} LSB, not <=1"
+
+
+@pytest.mark.parametrize("width", [1152, 1120], ids=["w1152", "w1120"])
+@pytest.mark.parametrize(("mesh_device", "device_params"), GALAXY_MESHES, indirect=["mesh_device", "device_params"])
+def test_replicated_readback_matches_gather_path(mesh_device, width):
+    """`replicated_to_host_yuv` must produce the same bytes as partitioning the canvas and
+    reading it back through `fast_device_to_host_yuv`'s gather path. Both end in the same
+    `rgb_to_yuv` and planar assembly, so any difference is a layout bug and must be zero.
+    W = 1120 splits oddly over 32 columns, so the reference pads to an even per-device width
+    and crops on host, as `_read_canvas_yuv` used to."""
+    frames, height = 28, 768
+    _, mesh_cols = tuple(mesh_device.shape)
+
+    # Independent random pixels, so a misplaced slab changes nearly every byte it covers.
+    generator = torch.Generator().manual_seed(0)
+    canvas_torch = torch.rand(1, CHANNELS, frames, height, width, generator=generator) * 2 - 1
+    canvas = ttnn.from_torch(
+        canvas_torch,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+    padded_width = -(-width // (2 * mesh_cols)) * (2 * mesh_cols)
+    ccl_manager = CCLManager(mesh_device, num_links=2, topology=ttnn.Topology.Ring)
+
+    def gather_path():
+        reference_in = canvas
+        if padded_width != width:
+            reference_in = ttnn.pad(canvas, [(0, 0), (0, 0), (0, 0), (0, 0), (0, padded_width - width)], value=0.0)
+        reference_in = ttnn.mesh_partition(reference_in, dim=-2, cluster_axis=0)
+        reference_in = ttnn.mesh_partition(reference_in, dim=-1, cluster_axis=1)
+        return fast_device_to_host_yuv(
+            reference_in, mesh_device, ccl_manager=ccl_manager, use_persistent_buffer=False, logical_w=width
+        )
+
+    # Unrounded BT.601 limited-range planes from the bf16 the device saw: at a differing byte,
+    # whichever path is nearer to this is the one that rounded correctly.
+    rgb = canvas_torch.to(torch.bfloat16).float()[0]
+    r, g, b = ((rgb + 1) / 2).unbind(0)
+    host_y = 16 + 219 * (0.299 * r + 0.587 * g + 0.114 * b)
+    host_cb = 128 + 224 * (-0.168736 * r - 0.331264 * g + 0.5 * b)
+    host_cr = 128 + 224 * (0.5 * r - 0.418688 * g - 0.081312 * b)
+    sub = lambda p: p.reshape(frames, height // 2, 2, width // 2, 2).mean(dim=(2, 4))
+    host_planes = {"Y": host_y, "Cb": sub(host_cb), "Cr": sub(host_cr)}
+
+    hw, uv = height * width, (height // 2) * (width // 2)
+    n_hosts = int(ttnn.distributed_context_get_size()) if ttnn.using_distributed_env() else 1
+    # Per-device column extents on the two paths, so a differing byte can be placed within its device slab.
+    new_w_per, gather_w_per = width * n_hosts // mesh_cols, padded_width // mesh_cols
+
+    def describe(flat_index, actual, expected):
+        t, offset = divmod(int(flat_index), hw + 2 * uv)
+        if offset < hw:
+            plane, (y, x), chroma = "Y", divmod(offset, width), 1
+        else:
+            plane, (y, x), chroma = ("Cb", "Cr")[(offset - hw) // uv], divmod((offset - hw) % uv, width // 2), 2
+        return (
+            f"t={t} {plane}[{y},{x}] new={int(actual.flat[flat_index])} gather={int(expected.flat[flat_index])} "
+            f"host={float(host_planes[plane][t, y, x]):.3f} "
+            f"(x within new slab: {x % (new_w_per // chroma)}/{new_w_per // chroma}, "
+            f"within gather slab: {x % (gather_w_per // chroma)}/{gather_w_per // chroma})"
+        )
+
+    reports = []
+    for run in range(2):
+        actual = replicated_to_host_yuv(canvas, mesh_device)
+        expected = gather_path()
+        assert actual.shape == expected.shape, f"{actual.shape} != {expected.shape}"
+        where = np.flatnonzero(actual != expected)
+        reports.append((set(where.tolist()), [describe(i, actual, expected) for i in where[:16]]))
+        logger.info(
+            f"run {run}: {len(where)} of {actual.size} bytes differ" + "".join(f"\n  {d}" for d in reports[-1][1])
+        )
+
+    (first, first_desc), (second, _) = reports
+    stability = (
+        "same positions both runs"
+        if first == second
+        else f"positions differ between runs ({len(first ^ second)} changed)"
+    )
+    assert (
+        not first and not second
+    ), f"{len(first)}/{len(second)} bytes differ from the gather path; {stability}\n" + "\n".join(first_desc)

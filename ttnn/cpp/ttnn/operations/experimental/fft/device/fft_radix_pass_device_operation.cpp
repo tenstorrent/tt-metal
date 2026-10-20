@@ -96,7 +96,7 @@ FftRadixPassDeviceOperation::tensor_return_value_t FftRadixPassDeviceOperation::
     return {make_like(args.input_real), make_like(args.input_real)};
 }
 
-tt::stl::hash::hash_t FftRadixPassDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t FftRadixPassDeviceOperation::compute_program_hash(
     const operation_attributes_t& attrs, const tensor_args_t& args) {
     // Include `has_imag` so a real vs complex call to the same shape
     // doesn't alias program cache entries (the kernel ABI is identical

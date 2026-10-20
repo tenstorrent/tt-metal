@@ -3,7 +3,7 @@
 
 """Sparse-attention (DSA) prefill adapters: the shared ``SparseMLAPrefillAdapter`` base + DeepSeek-V3.2-Exp.
 
-GLM-5.1 / GLM-5.2 have their own serving adapters (``adapters/glm_5_1.py`` / ``adapters/glm_5_2.py``);
+GLM-5.3 has its own serving adapter (``adapters/glm_5_3.py``);
 what remains here is the test-only base + DeepSeek-V3.2-Exp.
 
 Both add a lightning indexer (DeepSeek Sparse Attention) on top of the MLA + MoE

@@ -79,6 +79,9 @@ class Transformer(LightweightModule):
         use_paged_kv_cache=False,
         attention_class=None,
         rope_setup_class=None,
+        block_class=None,
+        lm_head_cls=None,
+        final_norm_builder=None,
         prefetcher=None,
     ):
         super().__init__()
@@ -188,8 +191,24 @@ class Transformer(LightweightModule):
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
 
+        # Model-family dispatch (Command-R / cohere): swap the decoder block, final
+        # norm and LM head. Lazy imports keep the experimental cohere module out of the default path.
+        ActualBlockClass = block_class
+        ActualLMHeadCls = lm_head_cls
+        final_norm_builder_resolved = final_norm_builder
+        if str(getattr(self.args, "model_type", None) or "").lower() == "cohere":
+            from models.experimental.cohere.tt.cohere_decoder import CohereDecoderLayer
+            from models.experimental.cohere.tt.cohere_lm_head import CohereLMHead
+            from models.experimental.cohere.tt.cohere_norm import build_cohere_final_norm
+
+            ActualBlockClass = ActualBlockClass or CohereDecoderLayer
+            ActualLMHeadCls = ActualLMHeadCls or CohereLMHead
+            final_norm_builder_resolved = final_norm_builder_resolved or build_cohere_final_norm
+        ActualBlockClass = ActualBlockClass or TransformerBlock
+        ActualLMHeadCls = ActualLMHeadCls or LMHead
+
         self.layers = [
-            TransformerBlock(
+            ActualBlockClass(
                 args=args,
                 mesh_device=mesh_device,
                 tt_ccl=self.tt_ccl,
@@ -205,28 +224,39 @@ class Transformer(LightweightModule):
             )
             for i in tqdm(range(self.n_layers))
         ]
-        self.norm = DistributedNorm(
-            RMSNorm(
-                device=mesh_device,
-                dim=args.dim,
-                eps=args.norm_eps,
+        self.norm = (
+            final_norm_builder_resolved(
+                args=args,
+                mesh_device=mesh_device,
                 state_dict=state_dict,
-                state_dict_prefix=args.get_state_dict_prefix("", None),
-                weight_cache_path=None if args.dummy_weights else weight_cache_path,
-                weight_dtype=ttnn.bfloat16,
-                weight_key="norm",
-                add_unit_offset=self.args.rms_norm_add_unit_offset,
-                is_distributed=self.args.is_distributed_norm,
-                ccl_topology=self.args.ccl_topology(),
+                weight_cache_path=weight_cache_path,
+                dtype=dtype,
                 tt_ccl=self.tt_ccl,
-            ),
-            args,
-            tt_ccl=self.tt_ccl,
-            prefetcher=prefetcher,
-            TG=args.is_galaxy,
-        )
+            )
+            if final_norm_builder_resolved is not None
+            else DistributedNorm(
+                RMSNorm(
+                    device=mesh_device,
+                    dim=args.dim,
+                    eps=args.norm_eps,
+                    state_dict=state_dict,
+                    state_dict_prefix=args.get_state_dict_prefix("", None),
+                    weight_cache_path=None if args.dummy_weights else weight_cache_path,
+                    weight_dtype=ttnn.bfloat16,
+                    weight_key="norm",
+                    add_unit_offset=self.args.rms_norm_add_unit_offset,
+                    is_distributed=self.args.is_distributed_norm,
+                    ccl_topology=self.args.ccl_topology(),
+                    tt_ccl=self.tt_ccl,
+                ),
+                args,
+                tt_ccl=self.tt_ccl,
+                prefetcher=prefetcher,
+                TG=args.is_galaxy,
+            )
+        )  # close the final_norm_builder_resolved conditional-expression paren
 
-        self.lm_head = LMHead(
+        self.lm_head = ActualLMHeadCls(
             args=args,
             mesh_device=mesh_device,
             tt_ccl=self.tt_ccl,
@@ -616,6 +646,13 @@ class Transformer(LightweightModule):
             tt_rot_mats_prefill_local = None
 
         if page_table is not None:
+            if chunk_page_table is not None:
+                # Chunked SDPA cannot read -1 blocks. Use an initialized block from
+                # this request for padded reads; causal masking excludes those
+                # positions from valid queries. Keep -1 in the separate write table.
+                if page_table.shape[1] == 0 or torch.any(page_table[:, :1] < 0):
+                    raise ValueError("Chunked prefill requires an owned first KV cache block")
+                page_table = torch.where(page_table == -1, page_table[:, :1], page_table)
             # For batched prefill, replicate page_table to all devices (same as single-user path)
             # The KV cache fill will loop over users and use batch_idx=user_id for each
             tt_page_table = ttnn.from_torch(
@@ -807,7 +844,8 @@ class Transformer(LightweightModule):
             tt_out = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0]).float()
         else:
             tt_out = ttnn.to_torch(tt_out).float()
-        tt_out = tt_out[:, :, :B, : self.vocab_size].view(B, S, -1)
+        # B is the serving limit; a bucketed decode can return fewer rows.
+        tt_out = tt_out[:, :, :B, : self.vocab_size].reshape(-1, S, self.vocab_size)
         return tt_out
 
     def ttnn_prefill_forward(

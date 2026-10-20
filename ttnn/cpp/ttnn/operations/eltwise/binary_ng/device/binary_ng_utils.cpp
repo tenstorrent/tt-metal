@@ -149,7 +149,10 @@ std::string get_kernel_file_path(KernelName kernel_name, bool is_sfpu, bool is_w
 //  EnumT can either be FpuBinaryOp or SfpuBinaryOp
 template <class EnumT>
 OpConfig::OpConfig(
-    BinaryOpType binary_op_type, std::in_place_type_t<EnumT>, [[maybe_unused]] std::optional<DataType> dtype) :
+    BinaryOpType binary_op_type,
+    std::in_place_type_t<EnumT>,
+    [[maybe_unused]] std::optional<DataType> dtype,
+    const std::optional<binary::BinaryOpParams>& op_params) :
     binary_op(EnumT::SUB) {
     switch (binary_op_type) {
         case BinaryOpType::ADD: binary_op = EnumT::ADD; break;
@@ -221,10 +224,16 @@ OpConfig::OpConfig(
         // (a-b)**2
         case BinaryOpType::SQUARED_DIFFERENCE: postprocess = unary::UnaryOpType::SQUARE; break;
         // gelu(a+b)
-        case BinaryOpType::BIAS_GELU:
+        case BinaryOpType::BIAS_GELU: {
             binary_op = EnumT::ADD;
-            postprocess = unary::UnaryOpType::GELU;
+            const auto* gelu_params =
+                op_params.has_value() ? std::get_if<binary::BiasGeluParams>(&op_params.value()) : nullptr;
+            const bool fast_and_approximate = gelu_params != nullptr && gelu_params->fast_and_approximate;
+            // The parameter is required: without it this reaches gelu_tile's default template
+            // argument, which is the approximate variant, where ttnn.gelu defaults to exact.
+            postprocess = unary::EltwiseUnaryWithParam{unary::UnaryOpType::GELU, fast_and_approximate ? 1.0f : 0.0f};
             break;
+        }
         case BinaryOpType::LOGICAL_AND:
             process_lhs = unary::UnaryOpType::NEZ;
             process_rhs = unary::UnaryOpType::NEZ;
@@ -247,19 +256,27 @@ OpConfig::OpConfig(
             process_rhs = unary::UnaryOpType::EXP2;
             binary_op = EnumT::MUL;
             break;
-        // log( exp(a) + exp(b) )
+        // max(a, b) + log1p(exp(-|a - b|)), in the fused SFPU kernel. There is no FPU form:
+        // the composed log(exp(a) + exp(b)) overflows at |x| > 88.7 even though the result
+        // is bounded by its inputs, so the FPU arm refuses instead of building it. Today that
+        // arm is unreachable -- LOGADDEXP is float_only, supports_mixed_float_inputs is false
+        // for it, and the SFPU gate accepts exactly that set -- and the throw keeps a future
+        // widening of either set from silently bringing the overflow back.
         case BinaryOpType::LOGADDEXP:
-            process_lhs = unary::UnaryOpType::EXP;
-            process_rhs = unary::UnaryOpType::EXP;
-            binary_op = EnumT::ADD;
-            postprocess = unary::UnaryOpType::LOG;
+            if (is_sfpu_op()) {
+                binary_op = SfpuBinaryOp::LOGADDEXP;
+            } else {
+                TT_THROW("Unsupported binary op for FPU {}", binary_op_type);
+            }
             break;
-        // log2( 2**a + 2**b )
+        // max(a, b) + log2(1 + 2**-|a - b|): same reasoning, the composed log2(2**a + 2**b)
+        // overflowing at |x| > 127.
         case BinaryOpType::LOGADDEXP2:
-            process_lhs = unary::UnaryOpType::EXP2;
-            process_rhs = unary::UnaryOpType::EXP2;
-            binary_op = EnumT::ADD;
-            postprocess = unary::UnaryOpType::LOG2;
+            if (is_sfpu_op()) {
+                binary_op = SfpuBinaryOp::LOGADDEXP2;
+            } else {
+                TT_THROW("Unsupported binary op for FPU {}", binary_op_type);
+            }
             break;
         case BinaryOpType::BITWISE_AND:
             if (is_sfpu_op()) {
@@ -402,6 +419,8 @@ OpConfig::OpConfig(
             postprocess = unary::UnaryOpType::SQRT;
             break;
         case BinaryOpType::ISCLOSE: binary_op = SfpuBinaryOp::ISCLOSE; break;
+        // situ_glu(gate=lhs, up=rhs) with Kimi K3's betas compiled into the LLK; see api/compute/situ_glu.h.
+        case BinaryOpType::SITU_GLU: binary_op = SfpuBinaryOp::SITU_GLU; break;
         default: TT_THROW("Unsupported binary op {}", binary_op_type);
     }
 }
@@ -468,6 +487,8 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
             return {"rsub_binary_tile_init();", fmt::format("rsub_binary_tile<{}>", kRneDstRoundingMode)};
         case GCD: return {"gcd_tile_init();", "gcd_tile"};
         case LCM: return {"lcm_tile_init();", "lcm_tile"};
+        case LOGADDEXP: return {"logaddexp_binary_tile_init();", "logaddexp_binary_tile"};
+        case LOGADDEXP2: return {"logaddexp2_binary_tile_init();", "logaddexp2_binary_tile"};
         case LEFT_SHIFT:
             return {
                 "binary_shift_tile_init();",
@@ -573,6 +594,7 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
             return {"where_tile_init();", fmt::format("where_tile<DataFormat::{}>", data_format)};
         }
         case ISCLOSE: return {"isclose_binary_tile_init();", "isclose_binary_tile<(bool)ISCLOSE_EQUAL_NAN>"};
+        case SITU_GLU: return {"situ_glu_tile_init();", "situ_glu_tile"};
         default: TT_THROW("Unsupported sfpu binary op {}", sfpu_binary_op);
     }
 }
@@ -665,31 +687,45 @@ std::map<std::string, std::string> make_dataflow_defines(
 
     if (b_dtype == DataType::FLOAT32) {
         defines["FILL_TILE_WITH_FIRST_COLUMN_B"] = "fill_tile_with_first_column";
+        defines["FILL_TILE_WITH_FIRST_COLUMN_RM_B"] = "fill_tile_with_first_column_rm";
+        defines["FILL_TILE_WITH_FIRST_ROW_RM_B"] = "fill_tile_with_first_row_rm";
         defines["FILL_TILE_WITH_FIRST_ROW_B"] = "fill_tile_with_first_row";
         defines["FILL_TILE_WITH_FIRST_ELEMENT_B"] = "fill_tile_with_first_element<float>";
         defines["FILL_WITH_VALUE_FLOAT_B"] = "fill_with_val<1024, float>";
     } else if (b_dtype == DataType::INT32) {
         defines["FILL_TILE_WITH_FIRST_COLUMN_B"] = "fill_tile_with_first_column";
+        defines["FILL_TILE_WITH_FIRST_COLUMN_RM_B"] = "fill_tile_with_first_column_rm";
+        defines["FILL_TILE_WITH_FIRST_ROW_RM_B"] = "fill_tile_with_first_row_rm";
         defines["FILL_TILE_WITH_FIRST_ROW_B"] = "fill_tile_with_first_row";
         defines["FILL_TILE_WITH_FIRST_ELEMENT_B"] = "fill_tile_with_first_element<int32_t>";
         defines["FILL_WITH_VALUE_B"] = "fill_with_val<1024, int32_t>";
     } else if (b_dtype == DataType::UINT32) {
         defines["FILL_TILE_WITH_FIRST_COLUMN_B"] = "fill_tile_with_first_column";
+        defines["FILL_TILE_WITH_FIRST_COLUMN_RM_B"] = "fill_tile_with_first_column_rm";
+        defines["FILL_TILE_WITH_FIRST_ROW_RM_B"] = "fill_tile_with_first_row_rm";
         defines["FILL_TILE_WITH_FIRST_ROW_B"] = "fill_tile_with_first_row";
         defines["FILL_TILE_WITH_FIRST_ELEMENT_B"] = "fill_tile_with_first_element<uint32_t>";
         defines["FILL_WITH_VALUE_B"] = "fill_with_val<1024, uint32_t>";
     } else if (b_dtype == DataType::BFLOAT8_B) {
         defines["FILL_TILE_WITH_FIRST_COLUMN_B"] = "fill_tile_with_first_column_bfp8";
         defines["FILL_TILE_WITH_FIRST_ROW_B"] = "fill_tile_with_first_row_bfp8";
+        // Block float is not a flat row-major element type. These kernels pass
+        // (ptr, width[, rows]); keep the bf16 row-major helpers so the call compiles.
+        defines["FILL_TILE_WITH_FIRST_COLUMN_RM_B"] = "fill_tile_with_first_column_rm_bfloat16";
+        defines["FILL_TILE_WITH_FIRST_ROW_RM_B"] = "fill_tile_with_first_row_rm_bfloat16";
         defines["FILL_TILE_WITH_FIRST_ELEMENT_B"] = "fill_tile_with_first_element_bfp8";
         defines["FILL_WITH_VALUE_B"] = "fill_with_val_bfloat16";
     } else if (b_dtype == DataType::BFLOAT4_B) {
         defines["FILL_TILE_WITH_FIRST_COLUMN_B"] = "fill_tile_with_first_column_bfp4";
         defines["FILL_TILE_WITH_FIRST_ROW_B"] = "fill_tile_with_first_row_bfp4";
+        defines["FILL_TILE_WITH_FIRST_COLUMN_RM_B"] = "fill_tile_with_first_column_rm_bfloat16";
+        defines["FILL_TILE_WITH_FIRST_ROW_RM_B"] = "fill_tile_with_first_row_rm_bfloat16";
         defines["FILL_TILE_WITH_FIRST_ELEMENT_B"] = "fill_tile_with_first_element_bfp4";
         defines["FILL_WITH_VALUE_B"] = "fill_with_val_bfloat16";
     } else {
         defines["FILL_TILE_WITH_FIRST_COLUMN_B"] = "fill_tile_with_first_column_bfloat16";
+        defines["FILL_TILE_WITH_FIRST_COLUMN_RM_B"] = "fill_tile_with_first_column_rm_bfloat16";
+        defines["FILL_TILE_WITH_FIRST_ROW_RM_B"] = "fill_tile_with_first_row_rm_bfloat16";
         defines["FILL_TILE_WITH_FIRST_ROW_B"] = "fill_tile_with_first_row_bfloat16";
         defines["FILL_TILE_WITH_FIRST_ELEMENT_B"] = "fill_tile_with_first_element_bfloat16";
         defines["FILL_WITH_VALUE_B"] = "fill_with_val_bfloat16";
@@ -722,8 +758,16 @@ uint32_t pack_scalar_runtime_arg(const unary::ScalarVariant scalar, const DataTy
         scalar);
 }
 
-template OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<FpuBinaryOp>, std::optional<DataType>);
-template OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<SfpuBinaryOp>, std::optional<DataType>);
+template OpConfig::OpConfig(
+    BinaryOpType binary_op_type,
+    std::in_place_type_t<FpuBinaryOp>,
+    std::optional<DataType>,
+    const std::optional<binary::BinaryOpParams>&);
+template OpConfig::OpConfig(
+    BinaryOpType binary_op_type,
+    std::in_place_type_t<SfpuBinaryOp>,
+    std::optional<DataType>,
+    const std::optional<binary::BinaryOpParams>&);
 
 tt::tt_metal::ShardSpec adjust_to_shape(
     const tt::tt_metal::ShardSpec& shard_spec, const ttnn::Shape& from_shape, const ttnn::Shape& to_shape) {
@@ -786,6 +830,15 @@ bool is_uneven(const tt::tt_metal::TensorSpec& t) {
 bool is_native_L1_sharding(
     const tt::tt_metal::TensorSpec& a, const std::optional<tt::tt_metal::TensorSpec>& b, const MemoryConfig& c) {
     if (!c.is_sharded()) {
+        return false;
+    }
+
+    // The native path sizes per-core work from the legacy 2D shard specs, which an ND_SHARDED config lacks.
+    auto lacks_2d_shard_spec = [](const MemoryConfig& config) {
+        return config.is_sharded() && !config.shard_spec().has_value();
+    };
+    if (lacks_2d_shard_spec(c) || lacks_2d_shard_spec(a.memory_config()) ||
+        (b.has_value() && lacks_2d_shard_spec(b->memory_config()))) {
         return false;
     }
 
@@ -917,6 +970,10 @@ ttnn::Shape compute_broadcasted_output(const ttnn::Shape& shape_a, const ttnn::S
 }
 
 MemoryConfig compute_mem_config_actual(const ttnn::Tensor& input_tensor_a, const ttnn::Shape& shape_b) {
+    // An ND_SHARDED config has no 2D shard spec to adjust; its nd_shard_spec applies to any shape as is.
+    if (!input_tensor_a.memory_config().shard_spec().has_value()) {
+        return input_tensor_a.memory_config();
+    }
     // Compute adjusted shard spec for output shape
     const auto& padded_a_shape = input_tensor_a.padded_shape();
     const auto& logical_out_shape =

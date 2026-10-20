@@ -20,7 +20,11 @@ from ttnn.device import is_blackhole
 import ttnn
 from models.common.utility_functions import comp_pcc, hf_cache_layer_kv
 from models.demos.deepseek_v3_d_p.reference.mla_reference import create_mla_reference
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, torus_xy_device_params
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
+    fabric2d_device_params,
+    torus_xy_device_params,
+    torus_y_device_params,
+)
 from models.demos.deepseek_v3_d_p.tests.reference_runners import run_reference_mla
 from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import num_full_indexer_layers, resolve_has_indexer
@@ -123,7 +127,7 @@ def run_mla_inference(
     if has_indexer:
         rope_tensors = rope_setup.get_rope_tensors_indexed(cache_seq_len_global=seq_len, chunk_size_global=seq_len)
         # Layer-slot count mirrors the serving adapter: the indexer strides the folded user-major cache by
-        # num_full_indexer_layers (GLM-5.2 cross-layer reuse), so the cache must carry that many slots for
+        # num_full_indexer_layers (GLM-5.3 cross-layer reuse), so the cache must carry that many slots for
         # update_padded_kv_cache's cache_batch % num_layers check. Falls back to 1 (no indexer_types).
         index_kv_cache = init_kvpe_cache(
             kvpe_cache_head_dim=config.index_head_dim,
@@ -170,7 +174,7 @@ def run_mla_inference(
         layout=ttnn.TILE_LAYOUT,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
     )
-    # GLM-5.2 indexer reuse (return_indices / inject_indices): capture this layer's top-k selection, or
+    # GLM-5.3 indexer reuse (return_indices / inject_indices): capture this layer's top-k selection, or
     # feed a prior layer's to skip the indexer. Defaults leave the forward unchanged.
     mla_out = mla_tt.forward(
         hidden_states=tt_hidden_states,
@@ -515,10 +519,9 @@ DETERMINISM_PCC_THRESHOLD = 1.0
 DETERMINISM_REPS = 3
 
 # Realtime ("lightweight") profiler perf gate: in-process device program records, so no Tracy
-# subprocess, no signposts and no ops-CSV re-parse -- it runs on the plain build (PR #49840).
-# Measured 2026-08-05 on bh_sc1_high_power (run 31010521345): 12.073 ms. Reads 4.4% above the Tracy
-# path's 11_562_468 as expected -- Tracy averages collectives across chips, this takes the max.
-K3_CHUNKED_RT_PERF_NS = 12_073_303
+# subprocess, no signposts and no ops-CSV re-parse -- it runs on the plain build. Not comparable to
+# the Tracy path's number -- Tracy averages collectives across chips, this takes the max.
+K3_CHUNKED_RT_PERF_NS = 10_556_000
 K3_CHUNKED_RT_PERF_MARGIN = 0.03
 
 
@@ -1394,6 +1397,30 @@ def test_mla_chunked_prefill(
         use_metadata_tensor=use_metadata_tensor,
         determinism_check=determinism_check,
         **kwargs,
+    )
+
+
+@pytest.mark.parametrize("mesh_device", [(8, 1)], ids=["8x1"], indirect=True)
+@pytest.mark.parametrize("device_params", [torus_y_device_params(l1_small_size=1152)], ids=["torus-y"], indirect=True)
+@pytest.mark.parametrize("variant", ["mistral_small_4"], ids=["mistral4"], indirect=True)
+@pytest.mark.skipif(not is_blackhole(), reason="Mistral Small 4 LoudBox perf targets Blackhole")
+@pytest.mark.timeout(0)
+def test_mistral4_mla_chunked_prefill_loudbox(request, mesh_device, device_params, variant):
+    """One functional 50k-prefix + 5k-chunk MLA forward at the PP4 stage shape.
+
+    Prefix preparation is outside MLA_START/MLA_END. Scalar metadata and determinism checks are
+    pinned so the perf wrapper measures exactly one forward. Use an eight-device LoudBox or a
+    Galaxy column exposed with TT_VISIBLE_DEVICES; the fixture requires eight visible devices.
+    """
+    _run_chunked_prefill(
+        request,
+        mesh_device,
+        reference=None,
+        topology=per_axis_topology(device_params["fabric_config"]),
+        use_metadata_tensor=False,
+        determinism_check=False,
+        iters_isl=[5120],
+        prefill_len=50 * 1024,
     )
 
 

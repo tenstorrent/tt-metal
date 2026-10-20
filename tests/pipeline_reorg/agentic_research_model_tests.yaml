@@ -253,3 +253,94 @@
   owner_id: U03HY7MK4BT # Mark O'Connor
   team: models
   budget_type: agentic_research
+
+- name: Qwen3.8 27B QB2 model, GPQA subset and serving
+  cmd: bash models/demos/qwen38_27b_qb2/tests/run_ci.sh
+  model: qwen38-27b-qb2
+  model_family: Qwen
+  skus:
+    bh_quietbox_2:
+      timeout: 50
+      tier: 3
+  owner_id: U08BGTAMU1W # Marina Vasiljevic
+  team: models
+  budget_type: agentic_research
+
+- name: Qwen Image 2.1 P150 image agreement and serving
+  cmd: |
+    set -euo pipefail
+    umask 077
+    run_started=$SECONDS
+    cd "${TT_METAL_HOME:?Set TT_METAL_HOME to the tt-metal checkout}"
+    model_dir=models/experimental/qwen_image_2_1
+    results="$PWD/generated/test_reports/qwen_image_2_1"
+    mkdir -p "$results" generated/test_logs
+    work=$(mktemp -d)
+    export TT_METAL_CACHE="$work/tt-cache" TT_METAL_KERNEL_CACHE_PATH="$work/tt-cache"
+    export HF_HOME="${HF_HOME:-/mnt/MLPerf/huggingface}" ARCH_NAME=blackhole
+    export QWEN_IMAGE_ETH_DISPATCH=0 QWEN_IMAGE_EDITING=1 QWEN_IMAGE_TRACE_REGION=1073741824
+    export QWEN_IMAGE_RESULTS="$results" QWEN_IMAGE_FIXTURES="$work/fixtures"
+    export QWEN_IMAGE_SERVER_URL=http://127.0.0.1:20000
+    uv pip install -r "$model_dir/requirements.txt"
+    if ! snapshot=$(python -c 'from models.experimental.qwen_image_2_1.common.config import snapshot_dir; print(snapshot_dir())'); then
+        # The runner's shared cache is read-only and offline. Download only into task-local caches.
+        export HF_HOME="$work/hf-home" HF_HUB_CACHE="$work/hf" HF_XET_CACHE="$work/xet"
+        snapshot=$(HF_HUB_OFFLINE=0 python - <<'PY_SNAPSHOT'
+    from huggingface_hub import snapshot_download
+    print(snapshot_download("Qwen/Qwen-Image-2.1", revision="790c92633540aa0cb11d9abf19eb46d861714758"))
+    PY_SNAPSHOT
+        )
+    fi
+    export QWEN_IMAGE_SNAPSHOT="$snapshot"
+    printf 'Qwen Image checkpoint=%s setup_elapsed_seconds=%s\n' "$snapshot" "$((SECONDS - run_started))"
+    mkdir -p "$QWEN_IMAGE_FIXTURES"
+    for asset in reference_rtx5090.png edit_demo_p150.png edit_ref_llama.jpg edit_ref_gongnyang.jpg; do
+        curl --fail --silent --show-error --location --retry 3 \
+            "https://huggingface.co/changh95/qwen-image-2.1-p150/resolve/d8befe24901fbdbf0feeb13964b6f175989f5758/media/$asset" \
+            --output "$QWEN_IMAGE_FIXTURES/$asset"
+    done
+    # The serving tests verify every fixture's SHA-256 before issuing requests.
+    python -m pytest "$model_dir/tests/test_config.py" "$model_dir/tests/test_server_host.py" \
+        "$model_dir/tests/test_host_math.py" --timeout 120 --junitxml "$results/host.xml"
+
+    server_pid=
+    cleanup() {
+        if [ -z "$server_pid" ]; then return; fi
+        kill -TERM -- -"$server_pid" 2>/dev/null || true
+        for attempt in {1..60}; do
+            if ! kill -0 -- -"$server_pid" 2>/dev/null; then break; fi
+            sleep 1
+        done
+        if kill -0 -- -"$server_pid" 2>/dev/null; then kill -KILL -- -"$server_pid" 2>/dev/null || true; fi
+        wait "$server_pid" 2>/dev/null || true
+        server_pid=
+    }
+    trap cleanup EXIT
+    setsid python -u -m uvicorn models.experimental.qwen_image_2_1.server.app:app \
+        --host 127.0.0.1 --port 20000 > generated/test_logs/qwen_image_2_1_server.log 2>&1 &
+    server_pid=$!
+    for attempt in {1..180}; do
+        kill -0 "$server_pid"
+        if curl --fail --silent http://127.0.0.1:20000/health | \
+            python -c 'import json,sys; sys.exit(json.load(sys.stdin).get("status") != "ok")' 2>/dev/null; then break; fi
+        sleep 5
+    done
+    curl --fail --silent http://127.0.0.1:20000/health | \
+        python -c 'import json,sys; assert json.load(sys.stdin)["status"] == "ok"'
+    status=0
+    python -m pytest "$model_dir/tests/test_serving.py" --timeout 600 \
+        --junitxml "$results/serving.xml" || status=$?
+    CI=true python -m models.experimental.qwen_image_2_1.tests.report "$results" || status=$?
+    cleanup
+    printf 'Qwen Image registry elapsed_seconds=%s\n' "$((SECONDS - run_started))" | tee "$results/elapsed.log"
+    exit "$status"
+  model: qwen-image-2.1-p150
+  model_family: Qwen Image
+  skus:
+    bh_p150:
+      # Warm weights/dependencies with cold TT kernel cache measured18m01s; cold download is under validation.
+      timeout: 30
+      tier: 3
+  owner_id: U03HY7MK4BT # Mark O'Connor
+  team: models
+  budget_type: agentic_research

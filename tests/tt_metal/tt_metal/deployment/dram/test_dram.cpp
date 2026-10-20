@@ -19,7 +19,6 @@
 #include <mutex>
 #include <condition_variable>
 
-#include <sstream>
 #include <iostream>
 #include <vector>
 #include <fstream>
@@ -27,7 +26,6 @@
 #include <cctype>
 #include <dirent.h>
 
-#include <iomanip>
 #include <array>
 
 namespace tt::tt_metal {
@@ -255,28 +253,6 @@ static void handle_sigint(int) {
     }
 }
 
-[[maybe_unused]]
-static uint64_t bytes_to_mb_floor(uint64_t bytes) {
-    return bytes / (1024ull * 1024ull);
-}
-
-static std::string format_bytes(uint64_t bytes) {
-    std::ostringstream oss;
-
-    const double KB = 1024.0;
-    const double MB = 1024.0 * 1024.0;
-
-    if (bytes < 1024ull) {
-        oss << bytes << "B";
-    } else if (bytes < 1024ull * 1024ull) {
-        oss << std::fixed << std::setprecision(2) << (bytes / KB) << "KB";
-    } else {
-        oss << std::fixed << std::setprecision(2) << (bytes / MB) << "MB";
-    }
-
-    return oss.str();
-}
-
 static std::string format_error_pct(double pct) {
     if (pct == 0.0) {
         return "0%";
@@ -434,42 +410,6 @@ static void log_dram_bank_result_table(const DramGalaxySummary& s) {
     }
 
     log_info(tt::LogTest, "{}", make_separator());
-}
-
-static void print_subtest_status(
-    uint32_t test_index,
-    uint32_t total_tests,
-    uint64_t subtest_index,
-    uint64_t total_subtests,
-    uint32_t mesh_x,
-    uint32_t mesh_y,
-    uint32_t bank_id,
-    uint32_t pattern_id,
-    double elapsed_ms,
-    const DramRunSummary* summary = nullptr) {
-    std::string out = fmt::format(
-        "test {}/{} subtest {}/{} mesh({},{}) bank:{} pattern:{} time:{:.2f}ms",
-        test_index,
-        total_tests,
-        subtest_index,
-        total_subtests,
-        mesh_x,
-        mesh_y,
-        bank_id,
-        pattern_name(pattern_id),
-        elapsed_ms);
-
-    if (summary != nullptr && !summary->pass) {
-        out = fmt::format(
-            "{} {}/{} suspected write errors {}/{} suspected read errors",
-            out,
-            format_bytes(summary->suspected_write_error_bytes),
-            format_bytes(summary->checked_bytes),
-            format_bytes(summary->suspected_read_error_bytes),
-            format_bytes(summary->checked_bytes));
-    }
-
-    log_info(tt::LogTest, "{}", out);
 }
 
 static bool get_dram_test_fast_from_env() {
@@ -668,68 +608,7 @@ static bool get_env_flag(const char* name, bool default_val = false) {
 }
 
 [[maybe_unused]]
-static std::vector<CoreCoord> get_first_n_worker_cores(IDevice* device, size_t n) {
-    const auto all_cores = get_worker_cores_for_deployment(device);
-    TT_FATAL(all_cores.size() >= n, "Need at least {} worker cores, found {}", n, all_cores.size());
-
-    return std::vector<CoreCoord>(all_cores.begin(), all_cores.begin() + n);
-}
-
-[[maybe_unused]]
-static uint32_t get_bank_id_for_core_in_all_controllers_test(size_t core_index, size_t total_cores) {
-    constexpr size_t num_controllers = 8u;
-
-    const size_t base_cores_per_controller = total_cores / num_controllers;
-    const size_t remainder_cores = total_cores % num_controllers;
-
-    size_t core_begin = 0;
-
-    for (uint32_t bank_id = 0; bank_id < num_controllers; bank_id++) {
-        const size_t cores_in_this_controller = base_cores_per_controller + (bank_id < remainder_cores ? 1u : 0u);
-
-        const size_t core_end = core_begin + cores_in_this_controller;
-
-        if (core_index >= core_begin && core_index < core_end) {
-            return bank_id;
-        }
-
-        core_begin = core_end;
-    }
-
-    TT_FATAL(false, "Invalid core_index={} for total_cores={}", core_index, total_cores);
-}
-
-[[maybe_unused]]
 const bool verbose = get_env_flag("DRAM_TEST_VERBOSE", false);
-
-[[maybe_unused]]
-static void print_subtest_status_per_instance(
-    uint32_t test_index,
-    uint32_t total_tests,
-    uint64_t subtest_index,
-    uint64_t total_subtests,
-    const DramPerCoreResult& per_core,
-    double elapsed_ms) {
-    /* ======================== */
-    DramRunSummary tmp{};
-    tmp.pass = (per_core.result.failures == 0u);
-    tmp.bank_id = per_core.result.bank_id;
-    tmp.checked_bytes = per_core.result.words_checked * sizeof(uint32_t);
-    tmp.suspected_write_error_bytes = per_core.result.suspected_write_failures * sizeof(uint32_t);
-    tmp.suspected_read_error_bytes = per_core.result.suspected_read_failures * sizeof(uint32_t);
-
-    print_subtest_status(
-        test_index,
-        total_tests,
-        subtest_index,
-        total_subtests,
-        per_core.core.x,
-        per_core.core.y,
-        per_core.result.bank_id,
-        per_core.result.pattern_id,
-        elapsed_ms,
-        tmp.pass ? nullptr : &tmp);
-}
 
 [[maybe_unused]]
 static uint32_t get_dram_chunk_bytes_from_env(uint32_t default_bytes) {

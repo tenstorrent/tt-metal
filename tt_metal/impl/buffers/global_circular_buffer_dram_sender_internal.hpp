@@ -12,6 +12,7 @@
 #pragma once
 
 #include <cstdint>
+#include <memory>
 #include <vector>
 
 #include <tt-metalium/buffer_types.hpp>
@@ -36,23 +37,21 @@ DeviceAddr pages_sent_worker_l1_base(const GlobalCircularBuffer& gcb);
 // and writes fifo_wr_ptr back so the ring offset survives multi-GCB request switching.
 // Layout: tt_metal/impl/buffers/dram_sender_state_block.hpp. Zero for worker-sender GCBs.
 DeviceAddr sender_state_drisc_l1_base(const GlobalCircularBuffer& gcb);
+}  // namespace tt::tt_metal::experimental
+
+namespace tt::tt_metal {
+class DriscL1Allocation;
+}  // namespace tt::tt_metal
+
+namespace tt::tt_metal::experimental {
+// The DRISC L1 range holding that block and its pages_sent counters, released when the last copy of
+// the GCB goes. The prefetcher keeps a weak reference to tell whether the block is still this GCB's.
+// Null for worker-sender GCBs.
+std::shared_ptr<DriscL1Allocation> sender_state_drisc_l1_allocation(const GlobalCircularBuffer& gcb);
 
 // Each sender's receivers as logical coords, row-wise (the order the DRISC kernel's slab
 // indices follow). Logical rather than physical because the physical worker coord depends on
 // which device of the mesh is being addressed. Empty for worker-sender GCBs.
 const std::vector<std::vector<CoreCoord>>& receiver_logical_cores_per_sender(const GlobalCircularBuffer& gcb);
-
-// Per-sender bank-local slab indices: entry [s][r] is the bank-local slab index
-// (recv_index_base + r) that sender s's local receiver r reads, in
-// sender_receiver_core_mapping() order. This is the same "slab" the DRAM-sender kernel
-// addresses, and the single source of truth for the recv_index_base accounting (which the
-// GCB owns because it encodes the dual-sender-per-bank split contract).
-//
-// Order-agnostic on purpose: mapping a receiver's (bank, slab index) to a global position
-// depends on the tensor's shard distribution (ROUND_ROBIN_1D strided vs CONTIGUOUS_1D
-// contiguous), which a ring-matmul consumer treats as a "ring position". That is the
-// caller's concept, not the GCB's, so the streaming Tensor prefetcher reads the raw slab
-// indices here and permutes them itself. DRAM-sender GCBs only.
-std::vector<std::vector<uint32_t>> receiver_slab_indices(const GlobalCircularBuffer& gcb);
 
 }  // namespace tt::tt_metal::experimental

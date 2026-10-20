@@ -25,32 +25,6 @@ def test_where_golden_treats_negative_predicates_as_true():
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_mac_all_tensors(device, h, w):
-    torch.manual_seed(0)
-
-    torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
-    torch_input_tensor1 = torch.rand((h, w), dtype=torch.bfloat16)
-    torch_input_tensor2 = torch.rand((h, w), dtype=torch.bfloat16)
-
-    golden_fn = ttnn.get_golden_function(ttnn.mac)
-    torch_output_tensor = golden_fn(torch_input_tensor, torch_input_tensor1, torch_input_tensor2)
-
-    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
-    input_tensor = ttnn.to_device(input_tensor, device)
-    input_tensor1 = ttnn.from_torch(torch_input_tensor1, layout=ttnn.TILE_LAYOUT, device=device)
-    input_tensor1 = ttnn.to_device(input_tensor1, device)
-    input_tensor2 = ttnn.from_torch(torch_input_tensor2, layout=ttnn.TILE_LAYOUT, device=device)
-    input_tensor2 = ttnn.to_device(input_tensor2, device)
-    output_tensor = ttnn.mac(input_tensor, input_tensor1, input_tensor2)
-    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
-    output_tensor = ttnn.from_device(output_tensor)
-    output_tensor = ttnn.to_torch(output_tensor)
-
-    assert_with_ulp(expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=2)
-
-
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
 @pytest.mark.parametrize("scalar1", [5.5])
 @pytest.mark.parametrize("scalar2", [-13.25])
 def test_mac_tensor_with_2_scalaras(device, h, w, scalar1, scalar2):
@@ -125,37 +99,6 @@ def test_where_bcast(device, dtype, hc, ht, hf, wc, wt, wf):
     torch_input_tensor2 = torch.rand((hf, wf), dtype=dtype).uniform_(-100, 100)
 
     assert_where_exact(torch_input_tensor, torch_input_tensor1, torch_input_tensor2, device)
-
-
-def run_ternary_test_value(device, h, w, value, ttnn_function, pcc=0.9999):
-    torch.manual_seed(0)
-
-    torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16).uniform_(-100, 100)
-    torch_input_tensor1 = torch.rand((h, w), dtype=torch.bfloat16).uniform_(-100, 100)
-    torch_input_tensor2 = torch.rand((h, w), dtype=torch.bfloat16).uniform_(-100, 100)
-
-    golden_fn = ttnn.get_golden_function(ttnn_function)
-    torch_output_tensor = golden_fn(torch_input_tensor, torch_input_tensor1, torch_input_tensor2, value=value)
-
-    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
-    input_tensor = ttnn.to_device(input_tensor, device)
-    input_tensor1 = ttnn.from_torch(torch_input_tensor1, layout=ttnn.TILE_LAYOUT, device=device)
-    input_tensor1 = ttnn.to_device(input_tensor1, device)
-    input_tensor2 = ttnn.from_torch(torch_input_tensor2, layout=ttnn.TILE_LAYOUT, device=device)
-    input_tensor2 = ttnn.to_device(input_tensor2, device)
-    output_tensor = ttnn_function(input_tensor, input_tensor1, input_tensor2, value=value)
-    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
-    output_tensor = ttnn.from_device(output_tensor)
-    output_tensor = ttnn.to_torch(output_tensor)
-
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc)
-
-
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-@pytest.mark.parametrize("value", [15.5])
-def test_addcdiv(device, h, w, value):
-    run_ternary_test_value(device, h, w, value, ttnn.addcdiv)
 
 
 @pytest.mark.parametrize(
@@ -388,6 +331,114 @@ def test_addcdiv(device, torch_dtype, ttnn_dtype, value, in_data1_shape, in_data
         )
 
     assert_with_ulp(expected_result=golden_tensor, actual_result=output_tensor, ulp_threshold=1, allow_nonfinite=True)
+
+
+_MIXED_INPUT_CASES = [
+    (ttnn.bfloat16, ttnn.float32, None),
+    (ttnn.float32, ttnn.bfloat16, None),
+]
+_MIXED_OUTPUT_CASES = [
+    (ttnn.float32, ttnn.float32, ttnn.bfloat16),
+    (ttnn.bfloat16, ttnn.bfloat16, ttnn.float32),
+]
+_TO_TORCH_DTYPE = {ttnn.bfloat16: torch.bfloat16, ttnn.float32: torch.float32}
+
+
+def _mixed_dtype_case_id(a_dtype, bc_dtype, out_dtype):
+    name = {ttnn.bfloat16: "bf16", ttnn.float32: "fp32"}
+    return f"a_{name[a_dtype]}-bc_{name[bc_dtype]}-out_{name[out_dtype or a_dtype]}"
+
+
+def _assert_ternary_close(expected, result, out_dtype):
+    if out_dtype == ttnn.float32:
+        assert torch.allclose(result, expected, rtol=1e-5, atol=1e-5)
+    else:
+        assert_with_ulp(expected_result=expected.to(torch.bfloat16), actual_result=result, ulp_threshold=1)
+
+
+@pytest.mark.parametrize(
+    "op, a_dtype, bc_dtype, out_dtype",
+    [
+        pytest.param(op, *case, id=f"{op}-{_mixed_dtype_case_id(*case)}")
+        for op in ["lerp", "addcdiv", "mac", "addcmul", "snake_beta"]
+        # addcmul and snake_beta require all inputs to share a dtype.
+        for case in (
+            _MIXED_OUTPUT_CASES if op in ("addcmul", "snake_beta") else _MIXED_INPUT_CASES + _MIXED_OUTPUT_CASES
+        )
+    ],
+)
+@pytest.mark.parametrize("bc_shape", [(1, 1, 64, 128), (1, 1, 1, 128)], ids=["no_bcast", "row_bcast"])
+def test_ternary_mixed_dtypes(device, op, a_dtype, bc_dtype, out_dtype, bc_shape):
+    # Regression for #60223: fp32 operands or output require an fp32 DEST and per-CB unpack formats.
+    torch.manual_seed(0)
+    a = torch.randn((1, 1, 64, 128), dtype=_TO_TORCH_DTYPE[a_dtype])
+    b = torch.randn(bc_shape, dtype=_TO_TORCH_DTYPE[bc_dtype])
+    c = (torch.rand(bc_shape) + 0.5).to(_TO_TORCH_DTYPE[bc_dtype])
+    tt_a, tt_b, tt_c = (
+        ttnn.from_torch(x, dtype=d, layout=ttnn.TILE_LAYOUT, device=device)
+        for x, d in ((a, a_dtype), (b, bc_dtype), (c, bc_dtype))
+    )
+    output_tensor = None
+    if out_dtype is not None:
+        output_tensor = ttnn.from_torch(torch.zeros(a.shape), dtype=out_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    A, B, C = a.float(), b.float(), c.float()
+    if op == "lerp":
+        output = ttnn.lerp(tt_a, tt_b, tt_c, output_tensor=output_tensor)
+        expected = A + C * (B - A)
+    elif op == "addcdiv":
+        output = ttnn.addcdiv(tt_a, tt_b, tt_c, value=0.5, output_tensor=output_tensor)
+        expected = A + 0.5 * B / C
+    elif op == "addcmul":
+        output = ttnn.addcmul(tt_a, tt_b, tt_c, value=0.5, output_tensor=output_tensor)
+        expected = A + 0.5 * B * C
+    elif op == "snake_beta":
+        output = ttnn.snake_beta(tt_a, tt_b, tt_c, output_tensor=output_tensor)
+        expected = A + torch.sin(B * A) ** 2 / C
+    else:
+        output = ttnn.mac(tt_a, tt_b, tt_c, output_tensor=output_tensor)
+        expected = A * B + C
+
+    out_dtype = out_dtype or a_dtype
+    assert output.dtype == out_dtype
+    _assert_ternary_close(expected, ttnn.to_torch(output), out_dtype)
+
+
+@pytest.mark.parametrize(
+    "op",
+    ["lerp_tts", "mac_tts", "mac_tst"],
+)
+@pytest.mark.parametrize(
+    "a_dtype, t_dtype",
+    [(ttnn.bfloat16, ttnn.float32), (ttnn.float32, ttnn.bfloat16)],
+    ids=["a_bf16-t_fp32", "a_fp32-t_bf16"],
+)
+@pytest.mark.parametrize(
+    "t_shape",
+    [(1, 1, 64, 128), (1, 1, 64, 1), (1, 1, 1, 1), (1, 1, 1, 128)],
+    ids=["no_bcast", "col_bcast", "scalar_bcast", "row_bcast"],
+)
+def test_ternary_scalar_mixed_dtypes(device, op, a_dtype, t_dtype, t_shape):
+    # Tensor-scalar variants share the predicate/tensor CB pair, which can hold different dtypes (#60223).
+    torch.manual_seed(0)
+    a = torch.randn((1, 1, 64, 128), dtype=_TO_TORCH_DTYPE[a_dtype])
+    t = torch.randn(t_shape, dtype=_TO_TORCH_DTYPE[t_dtype])
+    tt_a = ttnn.from_torch(a, dtype=a_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_t = ttnn.from_torch(t, dtype=t_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    A, T = a.float(), t.float()
+    if op == "lerp_tts":
+        output = ttnn.lerp(tt_a, tt_t, 0.25)
+        expected = A + 0.25 * (T - A)
+    elif op == "mac_tts":
+        output = ttnn.mac(tt_a, tt_t, 1.5)
+        expected = A * T + 1.5
+    else:
+        output = ttnn.mac(tt_a, 1.5, tt_t)
+        expected = A * 1.5 + T
+
+    assert output.dtype == a_dtype
+    _assert_ternary_close(expected, ttnn.to_torch(output), a_dtype)
 
 
 def test_ternary_scalar_distinguishes_cache_entries(device):

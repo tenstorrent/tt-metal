@@ -93,6 +93,8 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceCBAllocation) {
     EXPECT_THROW(program.impl().validate_circular_buffer_region(mesh_device.get()), std::exception);
     global_buffer.reset();
     program.impl().validate_circular_buffer_region(mesh_device.get());
+    program.impl().compile_and_allocate(mesh_device.get(), false);
+    program.impl().compile_and_allocate(mesh_device.get(), false);  // cached layout, still no L1 collision
     ShardSpecBuffer local_shard_spec_buffer =
         ShardSpecBuffer(sharded_cores_1, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {sharded_cores_1.num_cores(), 1});
     distributed::DeviceLocalBufferConfig local_config_2 = {
@@ -104,9 +106,12 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceCBAllocation) {
 
     auto local_buffer = distributed::MeshBuffer::create(replicated_config_1, local_config_2, mesh_device.get());
     EXPECT_THROW(program.impl().validate_circular_buffer_region(mesh_device.get()), std::exception);
+    EXPECT_THROW(program.impl().compile_and_allocate(mesh_device.get(), false), std::exception);
     UpdateCircularBufferTotalSize(program, cb_src0, k_local_l1_size / 4);
     program.impl().allocate_circular_buffers(mesh_device.get());
     program.impl().validate_circular_buffer_region(mesh_device.get());
+    EXPECT_NO_THROW(program.impl().compile_and_allocate(mesh_device.get(), false));
+    EXPECT_NO_THROW(program.impl().compile_and_allocate(mesh_device.get(), false));
     mesh_device->clear_loaded_sub_device_manager();
     mesh_device->remove_sub_device_manager(sub_device_manager_1);
 }

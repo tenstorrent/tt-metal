@@ -41,6 +41,7 @@ on:
           - bh-galaxy-fabric-torus-stability
           - bh-galaxy-socket-pipeline
           - bh-galaxy-tensor-prefetcher
+          - bh-galaxy-complete-host-tensor-dual-rank
       wormhole:
         required: false
         type: boolean
