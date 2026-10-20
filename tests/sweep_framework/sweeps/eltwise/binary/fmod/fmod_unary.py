@@ -96,7 +96,7 @@ def run(
         while unsafe_range[0] <= scalar <= unsafe_range[1]:
             scalar = torch.tensor(1, dtype=torch.bfloat16).uniform_(-100, 100).item()
 
-    golden_function = ttnn.get_golden_function(ttnn.remainder)
+    golden_function = ttnn.get_golden_function(ttnn.fmod)
     torch_output_tensor = golden_function(torch_input_tensor_a, scalar, device=device)
 
     input_tensor_a = ttnn.from_torch(
@@ -108,7 +108,7 @@ def run(
     )
 
     start_time = start_measuring_time()
-    output_tensor = ttnn.remainder(input_tensor_a, scalar, memory_config=output_memory_config)
+    output_tensor = ttnn.fmod(input_tensor_a, scalar, memory_config=output_memory_config)
     e2e_perf = stop_measuring_time(start_time)
 
     output_tensor = ttnn.to_torch(output_tensor)
