@@ -1,6 +1,13 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
+// Planes per Q row of the BF16 recipes' numerator CB: O, then a redone group's chunk PV. Ring builds whose every
+// non-first K chunk is fused rescale O in place on a redo and keep O alone (SDPA_RECIPE_O_ONE_PLANE).
+#ifdef SDPA_RECIPE_O_ONE_PLANE
+constexpr uint32_t kRecipeOPlanes = 1;
+#else
+constexpr uint32_t kRecipeOPlanes = 2;
+#endif
 #include "api/dataflow/circular_buffer.h"
 #include "../recipe_state_layout.hpp"
 
@@ -37,7 +44,8 @@ void transfer_recipe_state(Noc& noc, const Accessor& backing) {
                 return offset;
             }
             const uint32_t tile = offset / Transfer::page_bytes;
-            return ((tile / d_tiles) * 2 * d_tiles + tile % d_tiles) * Transfer::page_bytes + offset % Transfer::page_bytes;
+            return ((tile / d_tiles) * kRecipeOPlanes * d_tiles + tile % d_tiles) * Transfer::page_bytes +
+                   offset % Transfer::page_bytes;
         };
         if constexpr (Transfer::page_aligned<q_tiles, d_tiles, max_bytes>) {
             for (uint32_t offset = 0; offset < bytes; offset += Transfer::page_bytes, ++page) {
@@ -102,7 +110,7 @@ void stream_recipe_state(Noc& noc, const Accessor& backing) {
     const auto move_o_rows = [&](uint32_t base, uint32_t address, uint32_t row0, uint32_t rows, bool restore) {
         for (uint32_t r = row0; !recipe_state_compute_only && r < row0 + rows; ++r) {
             for (uint32_t c = 0; c < d_tiles; ++c) {
-                const uint32_t l1 = address + (r * 2 * d_tiles + c) * page;
+                const uint32_t l1 = address + (r * kRecipeOPlanes * d_tiles + c) * page;
                 const uint32_t page_id = base + 1 + r * d_tiles + c;
                 if (restore) {
                     noc.async_read(backing, CoreLocalMem<uint32_t>(l1), page, {.page_id = page_id}, {});

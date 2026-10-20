@@ -77,6 +77,15 @@ public:
                     }),
                 cbs.end());
         }
+        // Every non-first K chunk of a fused BF16-state ring is fused (no attn_mask), so only a redone group used O's
+        // second plane; it rescales O in place instead (SDPA_RECIPE_O_ONE_PLANE). EXPERIMENT opt-out:
+        // TT_SDPA_RECIPE_O_TWO_PLANES=1.
+        const char* two_planes = std::getenv("TT_SDPA_RECIPE_O_TWO_PLANES");
+        o_one_plane_ =
+            !(two_planes && two_planes[0] == '1') && has_define("SDPA_RECIPE_FUSED") && !has_define("SDPA_RECIPE_FP32");
+        if (o_one_plane_) {
+            set_o_planes(1);
+        }
         desc.cbs = program_.cbs;
         causal_ = args.is_causal;
         // Chunked prefill (Q shorter than the K/V shard): the device's Q slab and the chunk group, in tiles.
@@ -155,6 +164,16 @@ public:
             // up Q prefetch, so this goes last).
             cb_bytes -= ring_recipes::recipe_drop_fused(desc.cbs, program_.kernels.front().defines, Sq_chunk_t_);
             log_debug(tt::LogOp, "Named ring recipe: unfused chunks to fit L1");
+            if (o_one_plane_) {
+                // Unfused chunks rescale through O's second plane.
+                o_one_plane_ = false;
+                for (auto& cb : desc.cbs) {
+                    if (!cb.format_descriptors.empty() && cb.format_descriptors.front().buffer_index == 9) {
+                        cb_bytes += cb.total_size;
+                        cb.total_size *= 2;
+                    }
+                }
+            }
         }
         TT_FATAL(
             cb_bytes <= available,
@@ -193,6 +212,9 @@ public:
         if (latent_v_) {
             defines.emplace_back("SDPA_RECIPE_LATENT_V", "1");
         }
+        if (o_one_plane_) {
+            defines.emplace_back("SDPA_RECIPE_O_ONE_PLANE", "1");
+        }
         // Causal (and balanced) rings: diagonal masking, skipped K chunks and Q chunks (streaming/recipe_ring.hpp).
         if (causal_ || chunked_q_tiles_) {
             defines.emplace_back("SDPA_RECIPE_RING_CAUSAL", "1");
@@ -213,6 +235,18 @@ private:
     tt::tt_metal::CoreRangeSet grid_;
     bool causal_ = false;
     bool latent_v_ = false;
+    mutable bool o_one_plane_ = false;
+    bool has_define(const char* name) const {
+        const auto& d = program_.kernels.front().defines;
+        return std::any_of(d.begin(), d.end(), [&](const auto& kv) { return kv.first == name; });
+    }
+    void set_o_planes(uint32_t planes) {
+        for (auto& cb : program_.cbs) {
+            if (!cb.format_descriptors.empty() && cb.format_descriptors.front().buffer_index == 9) {
+                cb.total_size = cb.total_size / 2 * planes;
+            }
+        }
+    }
     uint32_t chunked_q_tiles_ = 0;
     uint32_t chunk_group_tiles_ = 0;
     uint32_t Sq_chunk_t_ = 0;

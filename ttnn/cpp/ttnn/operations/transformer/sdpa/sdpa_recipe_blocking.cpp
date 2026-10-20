@@ -288,7 +288,10 @@ RecipeL1Estimate recipe_l1_bytes(
                     ? uint64_t{k_tiles} * context.vd_tiles * 2 *
                           tt::tile_size(datatype_to_dataformat_converter(recipe_kv_dtype(policy.selection.kv_storage)))
                     : 0;
-            const uint64_t bytes = build.cb_bytes - v_cb + kRingRecipeExtraBytes;
+            // Fused BF16-state rings keep O in one plane (RingJointSDPARecipeProgramFactory: SDPA_RECIPE_O_ONE_PLANE).
+            const bool one_plane = latent && build.fused_cb_bytes > 0;
+            const uint64_t o_plane = one_plane ? uint64_t{q_tiles} * context.vd_tiles * 4096 : 0;
+            const uint64_t bytes = build.cb_bytes - v_cb - o_plane + kRingRecipeExtraBytes;
             // The factory's fallbacks: drop the fused chunks' CBs, then single-slot Q.
             return {bytes, bytes - droppable_fused(q_tiles, build) - q_slot};
         }

@@ -25,8 +25,14 @@ constexpr uint32_t sdpa_out_stride = 1;
 constexpr auto kBalancedQkFidelity = MathFidelity::HiFi3;
 #endif
 #else
+#ifdef SDPA_RECIPE_O_ONE_PLANE
+// Ring builds whose non-first K chunks are all fused: a redone group rescales O in place, so each query-tile row
+// holds the Float32 numerator alone.
+constexpr uint32_t sdpa_out_stride = 1;
+#else
 // Each query-tile row holds the Float32 numerator (plane 0), then a changed group's chunk PV (plane 1).
 constexpr uint32_t sdpa_out_stride = 2;
+#endif
 #endif
 
 // Blackhole's pack-to-unpack handshake overlaps row-max reduction with QK packing.
@@ -282,7 +288,7 @@ ALWI void pack_contiguous_rows_nocfg(
     uint32_t pack_width) {
 #ifndef SDPA_RECIPE_FP32
     if (out_cb == 8 || out_cb == 9) {
-        row_stride *= 2;
+        row_stride *= sdpa_out_stride;
     }
 #endif
     uint32_t dst_index = 0;
@@ -517,6 +523,19 @@ inline void calculate_sdpa_trunc7() {
     }
 }
 #endif
+// dest tiles [0, w) *= the column-broadcast correction in tile w (a redone group's in-place O rescale).
+template <int w>
+inline void calculate_sdpa_rescale() {
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
+    for (int i = 0; i < 32; ++i) {
+        sfpi::vFloat c = sfpi::dst_reg[32 * w];
+#pragma GCC unroll 2
+        for (int t = 0; t < w; ++t) {
+            sfpi::dst_reg[32 * t] = sfpi::dst_reg[32 * t] * c;
+        }
+        sfpi::dst_reg++;
+    }
+}
 // dest tiles [0, w): state; [w, 2w): this chunk's term; tile 2w: column-broadcast correction c.
 // state = state * c + term.
 template <int w>
@@ -1797,7 +1816,7 @@ static SDPA_RECIPE_COLD bool sdpa_inner_loop_step(
                         tile_regs_acquire();
                         reconfig_data_format_srca(out_cb);
                         copy_init(out_cb);
-                        const uint32_t rbase = (read_row + r) * 2 * vDHt + j;
+                        const uint32_t rbase = (read_row + r) * sdpa_out_stride * vDHt + j;
                         copy_tile(out_cb, rbase, 0);
                         if (pair) {
                             copy_tile(out_cb, rbase + 1, 1);
@@ -1823,7 +1842,7 @@ static SDPA_RECIPE_COLD bool sdpa_inner_loop_step(
                         pack_reconfig_data_format(out_cb);
                         configure_single_tile_pack(out_cb);
                         PACK((llk_pack_reconfig_l1_acc(0)));
-                        const uint32_t wbase = r * 2 * vDHt + j;
+                        const uint32_t wbase = r * sdpa_out_stride * vDHt + j;
                         pack_tile<true>(0, out_cb, wbase);
                         if (pair) {
                             pack_tile<true>(1, out_cb, wbase + 1);

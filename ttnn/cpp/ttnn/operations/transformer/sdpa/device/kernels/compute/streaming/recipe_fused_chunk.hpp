@@ -492,7 +492,8 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
     };
 
     // Redo group g on the reduce path (rare): scores, the real max with the theta select, P and sums,
-    // its PV into plane 1, then O = O * c + PV and l = l * c + l_chunk row by row.
+    // its PV into plane 1, then O = O * c + PV and l = l * c + l_chunk row by row. SDPA_RECIPE_O_ONE_PLANE (no
+    // plane 1): l = l * c + l_chunk and O = O * c row by row, then the PV accumulates onto O.
     auto redo_group = [&](uint32_t g) SDPA_FUSED_REDO {
         SDPA_FUSED_LEAVE_QK();
         const uint32_t h = rows(g);
@@ -523,8 +524,10 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
         pack_cb = cb_qkt_im;
         srca = cb_qkt_im;
         pack_to_unpack_barrier();
+#ifndef SDPA_RECIPE_O_ONE_PLANE
         pv_piece(g, 0, KT, vDHt, false);
         pack_to_unpack_barrier();
+#endif
         const uint32_t read_base = is_last_iter ? 0 : row0;
         for (uint32_t r = 0; r < h; ++r) {
             // c = exp(scale * (m_old - m_new)) for this Q tile row, column-broadcast below.
@@ -564,6 +567,42 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
             configure_single_tile_pack(cur.sum);
             pack_tile<true>(0, cur.sum, r);
             tile_regs_release();
+#ifdef SDPA_RECIPE_O_ONE_PLANE
+            // O = O * c in place, two head-dim tiles at a time; the group's PV then accumulates onto it.
+            for (uint32_t j = 0; j < vDHt; j += 2) {
+                const bool pair = j + 1 < vDHt;
+                tile_regs_acquire();
+                set_srca(out_cb);
+                copy_init(out_cb);
+                const uint32_t rbase = (read_base + r) * vDHt + j;
+                copy_tile(out_cb, rbase, 0);
+                if (pair) {
+                    copy_tile(out_cb, rbase + 1, 1);
+                }
+                set_srca(cb_recip_scratch);
+                unary_bcast_init<BroadcastType::COL>(cb_recip_scratch);
+                unary_bcast<BroadcastType::COL>(cb_recip_scratch, 0, pair ? 2 : 1);
+                unary_bcast_uninit<BroadcastType::COL>(cb_recip_scratch);
+                tile_regs_commit();
+                tile_regs_wait();
+                if (pair) {
+                    PACK((SFPU_UNARY_CALL(
+                        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sdpa_rescale, (2), 0, VectorMode::None)));
+                } else {
+                    PACK((SFPU_UNARY_CALL(
+                        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sdpa_rescale, (1), 0, VectorMode::None)));
+                }
+                PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
+                set_pack(out_cb);
+                configure_single_tile_pack(out_cb);
+                const uint32_t wbase = r * vDHt + j;
+                pack_tile<true>(0, out_cb, wbase);
+                if (pair) {
+                    pack_tile<true>(1, out_cb, wbase + 1);
+                }
+                tile_regs_release();
+            }
+#else
             // O = O * c + PV, two head-dim tiles at a time
             for (uint32_t j = 0; j < vDHt; j += 2) {
                 const bool pair = j + 1 < vDHt;
@@ -602,8 +641,13 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
                 }
                 tile_regs_release();
             }
+#endif
             CircularBuffer(cb_recip_scratch).pop_front(1);
         }
+#ifdef SDPA_RECIPE_O_ONE_PLANE
+        pack_to_unpack_barrier();
+        pv_piece(g, 0, KT, 0, true);
+#endif
         // The new maxima become this group's reference (cur.max was scratch, prev.max is the state).
         set_srca(cur.max);
         copy_init(cur.max);
