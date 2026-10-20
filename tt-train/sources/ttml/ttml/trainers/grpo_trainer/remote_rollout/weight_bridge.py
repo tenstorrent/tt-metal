@@ -229,8 +229,6 @@ class HostWeightBridge(WeightBridge):
         if self._role != _ROLE_SENDER:
             raise RuntimeError("HostWeightBridge.send_weights called on a receiver.")
         keys = sorted(weights.keys())
-        for k in keys:
-            _validate_source_tensor(k, weights[k])
         _send_manifest(self._peer_rank, weights, keys)
         for k in keys:
             blob = _torch_save_bytes(_device0_to_host(weights[k]))
