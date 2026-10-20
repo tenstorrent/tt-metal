@@ -82,15 +82,28 @@ blocks freed and reallocated in between, found no unsafe buffer at any replay an
 
 ## Decode-slot parity
 
-A user's decode logits depend on whether its decode slot is even or odd: slots 0 and 2 give bitwise-identical
-logits, slots 1 and 3 too, but the two parities differ (max |logit diff| 0.4-1.5 over 10 steps from the same
-prefill). Companions, lanes and interleaved prefills change nothing. The standalone generator shows the same
-numbers, so it is a property of the model's TP=8 global-layer user split, not of serving. vLLM places a request in
-either parity, which is what the 13 reproducibility tests catch.
+A user's decode logits used to depend on whether its decode slot was even or odd (max |logit diff| 0.4-1.5 over 10
+steps from the same prefill; slots of one parity were bitwise identical), which vLLM's 13 seed / batch
+reproducibility tests catch since a request can land in either parity. The cause was layer 0, the dense global
+layer: its decode attention ended in `ttnn.all_reduce`. A global layer's chip pair splits the users by slot parity,
+so only chips 0/2/4/6 (even slots) or 1/3/5/7 (odd slots) contribute a user's row, and the ring reduce-scatter adds
+those rows with bf16 partial sums in a parity-dependent order. The compact layers 1-47 were not affected: ReduceExpand
+sums the chips in chip order in fp32, so the other chip's zero row does not change the order.
+
+Layer 0's attention now reduces like theirs (`TtMiMoDecoderLayer.set_compact_attention`, at most 4 decode users):
+slots 0-3 give bitwise-identical logits (48 layers, 10 traced steps; 1 layer before: up to 0.125, after: 0.0). Decode
+time is unchanged (device loop 13.48 / 15.06 ms on 1 / 4 rows, 13.47 / 15.07 before). `test_model_tp8_dp4`: PCC min
+0.9608, mean 0.9925 as before; top-1 39/40 -> 38/40, the changed row being golden 1's third decode step, a reference
+near-tie (fp32 top-1 / top-2 margin 0.089) that is now an exact bf16 tie (margin 0.125 before), broken toward the
+other token.
+
+A global layer's prefill chunk after the first (`_prefill_owner_chunk`) zeroes the non-owner chip's rows before an
+`all_reduce` in the same way, so prompts longer than one chunk likely still prefill slightly differently per parity
+(not measured).
 
 ## Not done
 
-- Decode-slot parity (above), and prefill recaptures down to zero.
+- Slot parity of chunked prefill (above), and prefill recaptures down to zero.
 - Device sampling and async decode (host sampling reads every user's logit rows each step).
 - A 1M-token prompt: at ~250 prefill tokens/s per lane it would take ~70 min; the expert-major MoE prefill
   (tenstorrent/tt-metal#61462) is the fix.
