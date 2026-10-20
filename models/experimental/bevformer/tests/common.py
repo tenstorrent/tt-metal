@@ -1000,11 +1000,32 @@ def frame_metas(batch_size, num_frames, generator, yaw_step_deg=0.0, motion=None
     return frames
 
 
+def signposted_forward(device, forward):
+    """Runs ``forward()`` once between Tracy's ``start`` and ``stop`` signposts and returns what it
+    returns. The call is the measured region, so host dispatch and the stage signposts inside
+    ``forward`` land in it. Syncs before ``stop``: otherwise the marker can fire while the device
+    is still running the last programs."""
+    # Imported here: only the perf harnesses run under Tracy.
+    from tracy import signpost
+
+    ttnn.synchronize_device(device)
+    # Drains and resets the device profiler buffers so the signposted region starts from
+    # empty; the warmup's markers would otherwise eat into the same budget.
+    ttnn.ReadDeviceProfiler(device)
+    signpost("start")
+    outputs = forward()
+    ttnn.synchronize_device(device)
+    signpost("stop")
+    return outputs
+
+
 @contextmanager
 def signposted_trace(device, forward):
     """Captures ``forward()`` as a trace and replays it once between Tracy's ``start`` and ``stop``
     signposts; yields the trace id and the outputs the replays write into. Run ``forward`` once
-    before, so the capture records already-compiled programs. The trace is released on exit."""
+    before, so the capture records already-compiled programs. The trace is released on exit.
+    Stage signposts fire during the capture, outside this window: the replay runs the recorded
+    device commands and does not re-enter ``forward``."""
     # Imported here: only the perf harnesses run under Tracy.
     from tracy import signpost
 
