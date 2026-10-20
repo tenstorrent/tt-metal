@@ -40,7 +40,8 @@ Hal::Hal(
     bool is_simulator,
     bool enable_blackhole_dram_programmable_cores,
     bool enable_aerisc_ptp_trace,
-    bool enable_cce_programmable_cores) :
+    bool enable_cce_programmable_cores,
+    uint64_t cce_l1_noc_offset) :
     arch_(arch) {
     switch (this->arch_) {
         case tt::ARCH::WORMHOLE_B0:
@@ -48,7 +49,11 @@ Hal::Hal(
             break;
 
         case tt::ARCH::QUASAR:
-            initialize_qa(profiler_dram_bank_size_per_risc_bytes, enable_dram_backed_cq, enable_cce_programmable_cores);
+            initialize_qa(
+                profiler_dram_bank_size_per_risc_bytes,
+                enable_dram_backed_cq,
+                enable_cce_programmable_cores,
+                cce_l1_noc_offset);
             break;
 
         case tt::ARCH::BLACKHOLE:
