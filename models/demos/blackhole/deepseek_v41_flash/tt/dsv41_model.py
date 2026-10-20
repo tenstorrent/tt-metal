@@ -1039,8 +1039,8 @@ class Model:
         # of 40-60; bisected in evals_gpqa_tau3/b16_isolation: FILL=1 alone fixes the 4,934-token probe in every slot). 1M builds already ran the fill export (generator_vllm).
         KEY_FILL = os.environ.get("DSV41_KEY_EXPORT_FILL", "1") == "1"
         FILL_MAX = int(
-            os.environ.get("DSV41_KEY_EXPORT_FILL_MAX", "262144")
-        )  # (rows of the prefix written in one fill_cache: beyond it the slice_write path as before)
+            os.environ.get("DSV41_KEY_EXPORT_FILL_MAX", "524288")
+        )  # (rows of the prefix written in one fill_cache: beyond it the slice_write path, which RE-ALLOCATES the slab the decode traces read: a ratio-1 slab of a 262,144-token build has 262,176 rows, so a limit of 262,144 sent the last piece (prompts beyond ~196k tokens) to slice_write: layer 20's slab moved and the decode steps of long prompts read the stale buffer. Limit 524,288 keeps every 262k-build export in place; 1M builds (slab > 1M rows) still need a different in-place write for the pieces beyond the limit)
         NP = -(-NA // P)
         for base, SB, q0 in blocks:
             hi = min(base + SB, KL)
