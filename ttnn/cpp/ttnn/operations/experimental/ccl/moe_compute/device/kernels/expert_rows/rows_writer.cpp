@@ -34,21 +34,21 @@ namespace {
 constexpr uint32_t group_cores = get_named_compile_time_arg_val("group_cores");
 constexpr uint32_t intermediate_tiles = get_named_compile_time_arg_val("intermediate_tiles");
 constexpr uint32_t hidden_tiles = get_named_compile_time_arg_val("hidden_tiles");
-constexpr uint32_t intermediate_slots = get_named_compile_time_arg_val("a2_slots");
+constexpr uint32_t intermediate_slots = get_named_compile_time_arg_val("intermediate_slots");
 constexpr uint32_t x_slots = get_named_compile_time_arg_val("x_slots");
-constexpr uint32_t activated_tiles = get_named_compile_time_arg_val("a_tiles");  // per row tile
-constexpr uint32_t rt_ctl = get_named_compile_time_arg_val("rt_ctl");
-constexpr uint32_t rt_rows = get_named_compile_time_arg_val("rt_rows");
-constexpr uint32_t rt_jobs = get_named_compile_time_arg_val("rt_jobs");
+constexpr uint32_t activated_tiles = get_named_compile_time_arg_val("activated_tiles");  // per row tile
+constexpr uint32_t routing_ctl = get_named_compile_time_arg_val("routing_ctl");
+constexpr uint32_t routing_row_tokens = get_named_compile_time_arg_val("routing_row_tokens");
+constexpr uint32_t routing_jobs = get_named_compile_time_arg_val("routing_jobs");
 constexpr uint32_t grid_w = get_named_compile_time_arg_val("grid_w");
 constexpr uint32_t grid_h = get_named_compile_time_arg_val("grid_h");
 constexpr uint32_t mask_words = get_named_compile_time_arg_val("mask_words");
 constexpr uint32_t row_bytes = get_named_compile_time_arg_val("row_bytes");  // 2 hidden_size
 constexpr uint32_t expert_groups = get_named_compile_time_arg_val("expert_groups");
-constexpr uint32_t sem_intermediate = get_named_compile_time_arg_val("sem_a2");            // intermediate_slots
+constexpr uint32_t sem_intermediate = get_named_compile_time_arg_val("sem_intermediate");  // intermediate_slots
 constexpr uint32_t sem_x = get_named_compile_time_arg_val("sem_x");                        // x_slots
-constexpr uint32_t sem_intermediate_free = get_named_compile_time_arg_val("sem_a2_free");  // with credits
-constexpr uint32_t sem_x_free = get_named_compile_time_arg_val("sem_x_free");              // with credits
+constexpr uint32_t sem_intermediate_free = get_named_compile_time_arg_val("sem_intermediate_free");  // with credits
+constexpr uint32_t sem_x_free = get_named_compile_time_arg_val("sem_x_free");                        // with credits
 constexpr uint32_t row_tiles = get_named_compile_time_arg_val("row_tiles");
 constexpr uint32_t chunk_tiles = get_named_compile_time_arg_val("chunk_tiles");
 constexpr uint32_t chunk_piece_max = get_named_compile_time_arg_val("chunk_piece_max");
@@ -358,11 +358,11 @@ struct OutputRows {
 }  // namespace
 
 void kernel_main() {
-    CircularBuffer cb_activated(get_named_compile_time_arg_val("cb_a"));
-    CircularBuffer cb_intermediate(get_named_compile_time_arg_val("cb_a2"));
-    CircularBuffer cb_routing(get_named_compile_time_arg_val("cb_rt"));
+    CircularBuffer cb_activated(get_named_compile_time_arg_val("cb_activated"));
+    CircularBuffer cb_intermediate(get_named_compile_time_arg_val("cb_intermediate"));
+    CircularBuffer cb_routing(get_named_compile_time_arg_val("cb_routing"));
     CircularBuffer cb_x(get_named_compile_time_arg_val("cb_x"));
-    CircularBuffer cb_scratch(get_named_compile_time_arg_val("cb_z"));
+    CircularBuffer cb_scratch(get_named_compile_time_arg_val("cb_scratch"));
     CircularBuffer cb_rows(get_named_compile_time_arg_val("cb_rows"));
     constexpr auto x_args = TensorAccessorArgs<0>();
     constexpr auto row_buffer_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
@@ -393,11 +393,12 @@ void kernel_main() {
     cb_routing.wait_front(1);
     invalidate_l1_cache();  // the table arrives by NoC read from the root core (rows_reader.cpp)
     const uint32_t routing = cb_routing.get_read_ptr();
-    volatile tt_l1_ptr uint16_t* row_tokens = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(routing + rt_rows);
-    volatile tt_l1_ptr uint16_t* job_table = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(routing + rt_jobs);
-    volatile tt_l1_ptr uint32_t* ctl = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(routing + rt_ctl);
+    volatile tt_l1_ptr uint16_t* row_tokens =
+        reinterpret_cast<volatile tt_l1_ptr uint16_t*>(routing + routing_row_tokens);
+    volatile tt_l1_ptr uint16_t* job_table = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(routing + routing_jobs);
+    volatile tt_l1_ptr uint32_t* ctl = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(routing + routing_ctl);
     volatile tt_l1_ptr uint16_t* group_first_job =
-        reinterpret_cast<volatile tt_l1_ptr uint16_t*>(routing + rt_ctl + 16);
+        reinterpret_cast<volatile tt_l1_ptr uint16_t*>(routing + routing_ctl + 16);
     const uint32_t table_jobs = ctl[0];
     const GroupJobs jobs{.table = job_table, .group = group, .first = row_tiles > 1 ? group_first_job[group] : group};
     const uint32_t job_count =

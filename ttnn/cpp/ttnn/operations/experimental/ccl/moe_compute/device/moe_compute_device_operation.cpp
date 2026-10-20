@@ -41,12 +41,10 @@ MoEComputeDeviceOperation::program_factory_t MoEComputeDeviceOperation::select_p
 
 ttsl::hash::hash_t MoEComputeDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    // The ring program compiles the layer in; the expert rows path's second program never reads the weights, so one
-    // program serves every layer (the expert-row program takes the layer as a runtime offset).
+    // The ring program compiles the layer in; the expert rows path's placement program never reads the weights, so one
+    // program serves every layer (the expert rows program takes the layer as a runtime offset).
     if (tensor_args.expert_rows_tensor.has_value()) {
-        operation_attributes_t keyed = args;
-        keyed.layer_id = 0;
-        return ttsl::hash::hash_objects_with_default_seed(keyed, tensor_args);
+        return hash_without_layer_id(args, tensor_args);
     }
     return ttsl::hash::hash_objects_with_default_seed(args, tensor_args);
 }
@@ -785,6 +783,7 @@ std::vector<ttnn::Tensor> moe_compute(
         .activation_limit = activation_limit,
         .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en};
+    // filled by the expert rows program before the launch; tensor_args refers to them
     std::optional<ttnn::Tensor> expert_rows;
     std::optional<ttnn::Tensor> expert_rows_table;
     const OperationType::tensor_args_t tensor_args{

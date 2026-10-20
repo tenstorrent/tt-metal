@@ -48,6 +48,7 @@ file(
     moe_compute/device/kernels/*.cpp
     moe_compute/device/kernels/*.h
     moe_compute/device/kernels/expert_rows/*.cpp
+    moe_compute/device/kernels/expert_rows/*.h
     moe_compute/device/hostdevcommon/*.hpp
     moe/selective_reduce_combine/device/kernels/*.cpp
     all_gather_minimal_matmul_async/device/kernels/*.cpp

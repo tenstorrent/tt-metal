@@ -48,18 +48,18 @@ constexpr uint32_t metadata_semaphore_id = get_named_compile_time_arg_val("metad
 constexpr uint32_t table_counts = get_named_compile_time_arg_val("table_counts");
 constexpr uint32_t table_offsets = get_named_compile_time_arg_val("table_offsets");
 constexpr uint32_t table_rows = get_named_compile_time_arg_val("table_rows");
-constexpr uint32_t table_entry_slots = get_named_compile_time_arg_val("table_entry_slots");
+constexpr uint32_t table_entry_experts = get_named_compile_time_arg_val("table_entry_experts");
 constexpr uint32_t table_entry_tokens = get_named_compile_time_arg_val("table_entry_tokens");
 constexpr uint32_t table_entry_scores = get_named_compile_time_arg_val("table_entry_scores");
 constexpr uint32_t table_entry_k = get_named_compile_time_arg_val("table_entry_k");
 constexpr uint32_t table_bytes = get_named_compile_time_arg_val("table_bytes");
 // byte offsets in the scratch CB
-constexpr uint32_t scratch_counts = get_named_compile_time_arg_val("s_counts");
-constexpr uint32_t scratch_offsets = get_named_compile_time_arg_val("s_offsets");
-constexpr uint32_t scratch_e_t = get_named_compile_time_arg_val("s_e_t");
-constexpr uint32_t scratch_activation = get_named_compile_time_arg_val("s_activation");
-constexpr uint32_t scratch_count_row = get_named_compile_time_arg_val("s_count_row");
-constexpr uint32_t scratch_table = get_named_compile_time_arg_val("s_table");
+constexpr uint32_t scratch_counts = get_named_compile_time_arg_val("scratch_counts");
+constexpr uint32_t scratch_offsets = get_named_compile_time_arg_val("scratch_offsets");
+constexpr uint32_t scratch_e_t = get_named_compile_time_arg_val("scratch_e_t");
+constexpr uint32_t scratch_activation = get_named_compile_time_arg_val("scratch_activation");
+constexpr uint32_t scratch_count_row = get_named_compile_time_arg_val("scratch_count_row");
+constexpr uint32_t scratch_table = get_named_compile_time_arg_val("scratch_table");
 constexpr uint32_t activation_buffers = 8;  // activation rows in flight before a write barrier
 constexpr uint32_t not_routed_k = top_k + 1;
 
@@ -84,7 +84,7 @@ FORCE_INLINE uint32_t read_routing_table(
     const uint32_t part_bytes = (routed_rows * 2 + 63) & ~63u;
     if (routed_rows) {
         const uint32_t parts[5] = {
-            table_rows, table_entry_slots, table_entry_tokens, table_entry_scores, table_entry_k};
+            table_rows, table_entry_experts, table_entry_tokens, table_entry_scores, table_entry_k};
         for (uint32_t i = 0; i < 5; ++i) {
             noc.async_read(
                 PrecomposedUnicastEndpoint{},
@@ -177,7 +177,7 @@ template <typename ActivationAccessor>
 FORCE_INLINE uint32_t write_activated_rows(
     const Noc& noc, const ActivationAccessor& activation, uint32_t scratch, uint32_t routed_rows, uint32_t core_index) {
     const tt_l1_ptr uint16_t* entry_slots =
-        reinterpret_cast<const tt_l1_ptr uint16_t*>(scratch + scratch_table + table_entry_slots);
+        reinterpret_cast<const tt_l1_ptr uint16_t*>(scratch + scratch_table + table_entry_experts);
     const tt_l1_ptr uint16_t* entry_tokens =
         reinterpret_cast<const tt_l1_ptr uint16_t*>(scratch + scratch_table + table_entry_tokens);
     const tt_l1_ptr uint16_t* entry_scores =
