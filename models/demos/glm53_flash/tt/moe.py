@@ -8,8 +8,9 @@ HF ``Glm5NextTextMoE``:
     y = sum_j w_j * expert_{idx_j}(x) + shared_expert(x)
     expert(x) = (silu(clamp(gate, max=10)) * clamp(up, -10, 10)) @ W2^T
 
-Router: ``ttnn.experimental.deepseek_prefill.moe_grouped_topk`` single-group path (n_groups=1,
-sigmoid, bias, renormalize, route_scale), fp32 logits as HF.
+Router: the exact fp32 composite ``TtRouter.forward`` (fp32 logits as HF, sigmoid + bias, top-8 by
+iterative masked argmax, renormalized and scaled). The fused ``moe_grouped_topk`` kernel is NOT used:
+it ranks at bf16 resolution and swaps near-tied experts (see ``TtRouter.forward``).
 
 Experts: ``ttnn.sparse_matmul`` with a per-expert activity mask (union over the tokens of a
 32-token block) so only the experts any token in the block routes to are computed; the dense
@@ -19,6 +20,12 @@ runtime (a static nnz that disagrees with the mask deadlocks the op). Prefill pr
 sequence in 32-token blocks with the same code.
 
 Weight layout for sparse_matmul: W13 ``[1, E, H, 2I]`` (gate columns then up), W2 ``[1, E, I, H]``.
+
+Expert dtype knobs (design section 9): ``expert_dtype`` is the routed W13 (gate/up) format and
+``expert_down_dtype`` the routed W2 format, both ``bfloat8_b`` by default; ``bfloat4_b`` for W13 is
+the candidate that halves the dominant expert-streaming term and is adopted only if the eval-set
+accuracy is unchanged (``tests/test_expert_dtype.py`` carries the single-layer evidence). The shared
+expert stays on ``weight_dtype`` like the dense MLP.
 """
 
 from __future__ import annotations
@@ -30,6 +37,7 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.glm53_flash.tt.config import GLM53FlashConfig
+from models.demos.glm53_flash.tt.mesh import GLMMesh, interleave_blocks, single_chip
 from models.demos.glm53_flash.tt.mlp import TtClampedSwiGLU
 
 TILE = 32
@@ -88,23 +96,25 @@ def sparse_matmul_config(device_grid, m: int, n: int, k: int, in0_block_w: int =
 
 
 class TtRouter(LightweightModule):
-    def __init__(self, device, cfg: GLM53FlashConfig, gate_weight: torch.Tensor, correction_bias: torch.Tensor):
+    def __init__(
+        self,
+        device,
+        cfg: GLM53FlashConfig,
+        gate_weight: torch.Tensor,
+        correction_bias: torch.Tensor,
+        *,
+        mesh: GLMMesh | None = None,
+    ):
+        """Replicated on every chip: identical (replicated) inputs give identical routing everywhere."""
         self.device = device
+        self.mesh = mesh if mesh is not None else single_chip(device)
         self.cfg = cfg
         self.E = cfg.n_routed_experts
         self.k = cfg.num_experts_per_tok
-        self.w_gate = ttnn.from_torch(
-            gate_weight.float().t().contiguous(), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device
-        )  # [H, E] fp32
-        self.bias = ttnn.from_torch(
-            correction_bias.float().reshape(1, 1, 1, self.E), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device
-        )  # [1,1,1,E], broadcast over the token rows
-        self.iota = ttnn.from_torch(
-            torch.arange(self.E, dtype=torch.float32).reshape(1, 1, 1, self.E),
-            dtype=ttnn.float32,
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
-        )
+        self.w_gate = self.mesh.upload(gate_weight.float().t(), ttnn.float32)  # [H, E] fp32
+        # [1,1,1,E], broadcast over the token rows
+        self.bias = self.mesh.upload(correction_bias.float().reshape(1, 1, 1, self.E), ttnn.float32)
+        self.iota = self.mesh.upload(torch.arange(self.E, dtype=torch.float32).reshape(1, 1, 1, self.E), ttnn.float32)
         self.fp32 = _compute(device, ttnn.MathFidelity.HiFi4, packer_l1_acc=False)
 
     def forward(self, x: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
@@ -155,27 +165,51 @@ class TtRoutedExperts(LightweightModule):
         gate_up: torch.Tensor,  # [E, 2I, H] (HF stacked: gate rows then up rows)
         down: torch.Tensor,  # [E, H, I]
         *,
-        weight_dtype=ttnn.bfloat8_b,
+        expert_dtype=ttnn.bfloat8_b,  # W13 (gate/up) format
+        expert_down_dtype=ttnn.bfloat8_b,  # W2 (down) format
         activation_dtype=ttnn.bfloat16,
+        mesh: GLMMesh | None = None,
     ):
+        """Hybrid placement (design 5.4): the experts are split over the mesh columns (chip column
+        ``c`` holds experts ``[c*E/cols, (c+1)*E/cols)``) and every expert's intermediate over the mesh
+        rows (row ``r`` holds the slice ``[r*I/rows, (r+1)*I/rows)``). ``forward`` gathers the rows'
+        tokens, runs the local expert slices and reduce-scatters the partials back to the token's row;
+        the result is still a TP partial over the columns (the caller all-reduces once)."""
         self.device = device
+        self.mesh = mesh if mesh is not None else single_chip(device)
         self.cfg = cfg
         self.E, self.H, self.I = cfg.n_routed_experts, cfg.hidden_size, cfg.moe_intermediate_size
         self.limit = float(cfg.swiglu_limit)
         self.activation_dtype = activation_dtype
+        self.expert_dtype = expert_dtype
+        self.expert_down_dtype = expert_down_dtype
         assert tuple(gate_up.shape) == (self.E, 2 * self.I, self.H) and tuple(down.shape) == (self.E, self.H, self.I)
-        w13 = gate_up.transpose(1, 2).contiguous().reshape(1, self.E, self.H, 2 * self.I)  # [1,E,H,2I]
+        ep, tpr = self.mesh.cols, self.mesh.rows
+        assert self.E % ep == 0 and self.I % (tpr * TILE) == 0, (self.E, self.I, ep, tpr)
+        self.E_local, self.I_local = self.E // ep, self.I // tpr
+        gate = gate_up[:, : self.I, :].transpose(1, 2)  # [E, H, I]
+        up = gate_up[:, self.I :, :].transpose(1, 2)
+        # [1,E,H,2I] in tpr blocks of [gate_r | up_r] so a row split of the last dim keeps the pairs
+        w13 = interleave_blocks([gate, up], tpr, dim=-1).reshape(1, self.E, self.H, 2 * self.I)
         w2 = down.transpose(1, 2).contiguous().reshape(1, self.E, self.I, self.H)  # [1,E,I,H]
-        self.w13 = ttnn.from_torch(w13, dtype=weight_dtype, layout=ttnn.TILE_LAYOUT, device=device)
-        self.w2 = ttnn.from_torch(w2, dtype=weight_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+        self.w13 = self.mesh.upload(w13, expert_dtype, rows=3, cols=1)
+        self.w2 = self.mesh.upload(w2, expert_down_dtype, rows=2, cols=1)
+        # column c's expert selector: the [E, E_local] block of the identity for its experts
+        self.select = (
+            None if ep == 1 else self.mesh.upload(torch.eye(self.E, dtype=torch.float32), ttnn.float32, cols=-1)
+        )
         grid = device.compute_with_storage_grid_size()
         self.grid = (grid.x, grid.y)
         self.compute = _compute(device)
+        self.fp32 = _compute(device, ttnn.MathFidelity.HiFi4, packer_l1_acc=False)
 
     def _block(self, xb: ttnn.Tensor, dense_w: ttnn.Tensor) -> ttnn.Tensor:
-        """One token block (<= 32 rows). xb [1,1,M,H] bf16, dense_w [1,1,M,E] fp32 -> [1,1,M,H]."""
-        E, H, I = self.E, self.H, self.I
+        """One token block (<= 32 rows). xb [1,1,M,H] bf16, dense_w [1,1,M,E] fp32 -> [1,1,M,H]
+        (this chip's experts and intermediate slice only)."""
+        E, H, I = self.E_local, self.H, self.I_local
         M = xb.shape[-2]
+        if self.select is not None:  # keep the routing weights of this column's experts: [1,1,M,E_local]
+            dense_w = ttnn.matmul(dense_w, self.select, dtype=ttnn.float32, compute_kernel_config=self.fp32)
         # per-expert activity mask over the block (nonzero = active); bf16 ROW_MAJOR [1,1,1,E]
         active = ttnn.sum(dense_w, dim=-2, keepdim=True)  # [1,1,1,E] fp32
         sparsity = ttnn.to_layout(ttnn.typecast(active, ttnn.bfloat16), ttnn.ROW_MAJOR_LAYOUT)
@@ -224,20 +258,30 @@ class TtRoutedExperts(LightweightModule):
         return y
 
     def forward(self, x: ttnn.Tensor, dense_w: ttnn.Tensor) -> ttnn.Tensor:
-        """x [1,1,T,H] bf16, dense_w [1,1,T,E] fp32 -> [1,1,T,H]. Processed in 32-token blocks;
-        a short last block (or T < 32, e.g. decode with few users) runs on its padded tile rows."""
+        """x [1,1,T,H] bf16, dense_w [1,1,T,E] fp32 (this row's tokens) -> [1,1,T,H] TP partial over
+        the columns. Processed in 32-token blocks; a short last block (or T < 32, e.g. decode with few
+        users) runs on its padded tile rows. On a multi-row mesh the rows' tokens are gathered first
+        and the expert-slice partials reduce-scattered back to each token's row."""
+        if self.mesh.rows > 1:
+            x = self.mesh.all_gather_rows(x, dim=2)
+            dense_w = self.mesh.all_gather_rows(dense_w, dim=2)
         T = x.shape[-2]
         if T <= TILE:
-            return self._block(x, dense_w)
-        outs = []
-        for t0 in range(0, T, TILE):
-            t1 = min(t0 + TILE, T)
-            xb = ttnn.slice(x, [0, 0, t0, 0], [1, 1, t1, self.H])
-            wb = ttnn.slice(dense_w, [0, 0, t0, 0], [1, 1, t1, self.E])
-            outs.append(self._block(xb, wb))
-        y = ttnn.concat(outs, dim=-2)
-        for o in outs:
-            ttnn.deallocate(o)
+            y = self._block(x, dense_w)
+        else:
+            outs = []
+            for t0 in range(0, T, TILE):
+                t1 = min(t0 + TILE, T)
+                xb = ttnn.slice(x, [0, 0, t0, 0], [1, 1, t1, self.H])
+                wb = ttnn.slice(dense_w, [0, 0, t0, 0], [1, 1, t1, self.E])
+                outs.append(self._block(xb, wb))
+            y = ttnn.concat(outs, dim=-2)
+            for o in outs:
+                ttnn.deallocate(o)
+        if self.mesh.rows > 1:
+            ttnn.deallocate(x)
+            ttnn.deallocate(dense_w)
+            y = self.mesh.reduce_scatter_rows(y, dim=2)
         return y
 
 
@@ -245,11 +289,24 @@ class TtMoE(LightweightModule):
     """Router + routed experts + shared expert (HF Glm5NextTextMoE)."""
 
     def __init__(
-        self, device, cfg: GLM53FlashConfig, mlp_state_dict: dict[str, torch.Tensor], *, weight_dtype=ttnn.bfloat8_b
+        self,
+        device,
+        cfg: GLM53FlashConfig,
+        mlp_state_dict: dict[str, torch.Tensor],
+        *,
+        weight_dtype=ttnn.bfloat8_b,
+        expert_dtype=ttnn.bfloat8_b,
+        expert_down_dtype=ttnn.bfloat8_b,
+        mesh: GLMMesh | None = None,
     ):
         """``mlp_state_dict``: raw checkpoint tensors of ``mlp.`` (prefix stripped), experts as
-        ``experts.N.{gate,up,down}_proj.weight`` or pre-stacked ``experts.gate_up_proj/down_proj``."""
+        ``experts.N.{gate,up,down}_proj.weight`` or pre-stacked ``experts.gate_up_proj/down_proj``.
+        ``weight_dtype`` is the shared expert's format; the routed experts take ``expert_dtype``
+        (gate/up) and ``expert_down_dtype`` (down). On a mesh (``tt/mesh.py``) the routed experts
+        use the hybrid placement, the shared expert is TP over the columns and the two partials
+        share one all-reduce."""
         self.cfg = cfg
+        self.mesh = mesh if mesh is not None else single_chip(device)
         E, I, H = cfg.n_routed_experts, cfg.moe_intermediate_size, cfg.hidden_size
         if "experts.gate_up_proj" in mlp_state_dict:
             gate_up, down = mlp_state_dict["experts.gate_up_proj"], mlp_state_dict["experts.down_proj"]
@@ -268,9 +325,17 @@ class TtMoE(LightweightModule):
             )
             down = torch.stack([mlp_state_dict[f"experts.{e}.down_proj.weight"] for e in range(E)])
         self.router = TtRouter(
-            device, cfg, mlp_state_dict["gate.weight"], mlp_state_dict["gate.e_score_correction_bias"]
+            device, cfg, mlp_state_dict["gate.weight"], mlp_state_dict["gate.e_score_correction_bias"], mesh=self.mesh
         )
-        self.experts = TtRoutedExperts(device, cfg, gate_up, down, weight_dtype=weight_dtype)
+        self.experts = TtRoutedExperts(
+            device,
+            cfg,
+            gate_up,
+            down,
+            expert_dtype=expert_dtype,
+            expert_down_dtype=expert_down_dtype,
+            mesh=self.mesh,
+        )
         self.shared = TtClampedSwiGLU(
             device,
             mlp_state_dict["shared_experts.gate_proj.weight"],
@@ -278,14 +343,15 @@ class TtMoE(LightweightModule):
             mlp_state_dict["shared_experts.down_proj.weight"],
             cfg.swiglu_limit,
             weight_dtype=weight_dtype,
+            mesh=self.mesh,
         )
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        """x [1,1,T,H] bf16 (T multiple of 32) -> [1,1,T,H]."""
+        """x [1,1,T,H] bf16 (T multiple of 32; replicated over the TP columns) -> [1,1,T,H] replicated."""
         _, _, dense = self.router(x)
         routed = self.experts(x, dense)
         ttnn.deallocate(dense)
-        shared = self.shared(x)
+        shared = self.shared(x, reduce=False)
         y = ttnn.add(routed, shared, output_tensor=routed)
         ttnn.deallocate(shared)
-        return y
+        return self.mesh.all_reduce_cols(y)

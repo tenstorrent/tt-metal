@@ -3,7 +3,7 @@
 """Model configuration for GLM-5.3-Flash (``Glm5NextForConditionalGeneration``, text tower).
 
 All values come from the checkpoint's ``config.json``; nothing here is tunable. The device-side
-precision policy and parallel layout live in ``tt/mesh.py`` and the module program configs.
+precision policy and parallel layout live in the Phase-2 mesh module and the module program configs.
 """
 
 from __future__ import annotations
