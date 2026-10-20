@@ -494,12 +494,21 @@ inline void _llk_math_eltwise_binary_standard_(const ckernel::TensorShape tensor
  *
  * @tparam binary_reuse_dest: Reuse destination as source type, values = <DEST_TO_SRCA/DEST_TO_SRCB>
  */
-template <EltwiseBinaryReuseDestType binary_reuse_dest>
+template <EltwiseBinaryReuseDestType binary_reuse_dest, bool d2a_8_rows = true>
 inline void eltwise_binary_reuse_dest_as_src()
 {
     if constexpr (binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCA)
     {
-        move_d2a_fixed_face(ADDR_MOD_1);
+        if constexpr (d2a_8_rows)
+        {
+            TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::MATH | p_stall::SRCA_VLD);
+            TTI_MOVD2A(0, p_mova2d::MATH_HALO_ROWS + 0, ADDR_MOD_1, p_movd2a::MOV_8_ROWS, 0);
+            TTI_MOVD2A(0, p_mova2d::MATH_HALO_ROWS + 8, ADDR_MOD_1, p_movd2a::MOV_8_ROWS, 8);
+        }
+        else
+        {
+            move_d2a_fixed_face(ADDR_MOD_1);
+        }
     }
     else if constexpr (binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCB)
     {
@@ -508,11 +517,16 @@ inline void eltwise_binary_reuse_dest_as_src()
 }
 
 // Four 4-row moves, no wait; face is a template parameter because TTI_ operands must be immediates.
-template <EltwiseBinaryReuseDestType binary_reuse_dest, std::uint32_t face>
+template <EltwiseBinaryReuseDestType binary_reuse_dest, std::uint32_t face, bool d2a_8_rows = false>
 inline void eltwise_binary_move_dest_face_to_src()
 {
     constexpr std::uint32_t row = face * FACE_R_DIM;
-    if constexpr (binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCA)
+    if constexpr (binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCA && d2a_8_rows)
+    {
+        TTI_MOVD2A(0, p_mova2d::MATH_HALO_ROWS + row + 0, ADDR_MOD_1, p_movd2a::MOV_8_ROWS, row + 0);
+        TTI_MOVD2A(0, p_mova2d::MATH_HALO_ROWS + row + 8, ADDR_MOD_1, p_movd2a::MOV_8_ROWS, row + 8);
+    }
+    else if constexpr (binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCA)
     {
         TTI_MOVD2A(0, p_mova2d::MATH_HALO_ROWS + row + 0, ADDR_MOD_1, p_movd2a::MOV_4_ROWS, row + 0);
         TTI_MOVD2A(0, p_mova2d::MATH_HALO_ROWS + row + 4, ADDR_MOD_1, p_movd2a::MOV_4_ROWS, row + 4);
@@ -529,7 +543,7 @@ inline void eltwise_binary_move_dest_face_to_src()
 }
 
 // Whole-tile program: every face of the DEST tile moves into the reused source bank under one pipeline drain and bank wait.
-template <EltwiseBinaryReuseDestType binary_reuse_dest>
+template <EltwiseBinaryReuseDestType binary_reuse_dest, bool d2a_8_rows = false>
 inline void eltwise_binary_reuse_dest_as_src_tile(const std::uint32_t num_faces)
 {
     if constexpr (binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCA)
@@ -540,15 +554,15 @@ inline void eltwise_binary_reuse_dest_as_src_tile(const std::uint32_t num_faces)
     {
         TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::MATH | p_stall::SRCB_VLD);
     }
-    eltwise_binary_move_dest_face_to_src<binary_reuse_dest, 0>();
+    eltwise_binary_move_dest_face_to_src<binary_reuse_dest, 0, d2a_8_rows>();
     if (num_faces > 1)
     {
-        eltwise_binary_move_dest_face_to_src<binary_reuse_dest, 1>();
+        eltwise_binary_move_dest_face_to_src<binary_reuse_dest, 1, d2a_8_rows>();
     }
     if (num_faces > 2)
     {
-        eltwise_binary_move_dest_face_to_src<binary_reuse_dest, 2>();
-        eltwise_binary_move_dest_face_to_src<binary_reuse_dest, 3>();
+        eltwise_binary_move_dest_face_to_src<binary_reuse_dest, 2, d2a_8_rows>();
+        eltwise_binary_move_dest_face_to_src<binary_reuse_dest, 3, d2a_8_rows>();
     }
 }
 
@@ -746,7 +760,7 @@ inline void eltwise_binary_run_with_dest_reuse(
 #pragma GCC unroll 0
     for (std::uint32_t n = 0; n < loop_count; n++)
     {
-        eltwise_binary_reuse_dest_as_src<binary_reuse_dest>();
+        eltwise_binary_reuse_dest_as_src<binary_reuse_dest, true>();
 
         // Clear DEST face-by-face when reusing dest as source
         int clear_fp32                     = is_fp32_dest_acc_en && clear_fp32_dst_acc ? 1 : 0;
@@ -803,7 +817,7 @@ inline void eltwise_binary_run_with_dest_reuse(
 template <EltwiseBinaryType eltwise_binary_type, bool is_fp32_dest_acc_en, EltwiseBinaryReuseDestType binary_reuse_dest>
 inline void eltwise_binary_run_with_dest_reuse_tile(const std::uint32_t num_faces, const bool clear_fp32_dst_acc, const std::uint32_t dst_index)
 {
-    eltwise_binary_reuse_dest_as_src_tile<binary_reuse_dest>(num_faces);
+    eltwise_binary_reuse_dest_as_src_tile<binary_reuse_dest, true>(num_faces);
 
     if constexpr (eltwise_binary_type == EltwiseBinaryType::ELWMUL)
     {
@@ -884,7 +898,7 @@ inline void _llk_math_eltwise_binary_with_dest_reuse_(const ckernel::TensorShape
 #pragma GCC unroll 0
                 for (std::uint32_t face_col = 0; face_col < num_faces_c_dim; face_col++)
                 {
-                    eltwise_binary_reuse_dest_as_src<binary_reuse_dest>();
+                    eltwise_binary_reuse_dest_as_src<binary_reuse_dest, true>();
                     ckernel_template::run();
                 }
                 TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, 0);
@@ -896,7 +910,7 @@ inline void _llk_math_eltwise_binary_with_dest_reuse_(const ckernel::TensorShape
 #pragma GCC unroll 0
             for (std::uint32_t n = 0; n < num_faces; n++)
             {
-                eltwise_binary_reuse_dest_as_src<binary_reuse_dest>();
+                eltwise_binary_reuse_dest_as_src<binary_reuse_dest, true>();
                 ckernel_template::run();
             }
             if constexpr (src_b_bcast_type == BroadcastType::SCALAR)
