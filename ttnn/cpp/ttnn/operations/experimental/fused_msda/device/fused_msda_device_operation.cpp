@@ -4,8 +4,13 @@
 
 #include "fused_msda_device_operation.hpp"
 
+#include <algorithm>
+#include <cstdlib>
 #include <string_view>
 
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/tt_align.hpp>
+#include "ttnn/operations/core/program_cache_l1.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::operations::experimental::fused_msda {
@@ -26,7 +31,12 @@ constexpr uint32_t MAX_LEVELS = 8;
 // device/kernels/compute/msda_geometry.hpp.
 constexpr uint32_t MAX_SPATIAL_EXTENT = 256;
 
-void check_common_tensor(const Tensor& t, std::string_view name, const Tensor& ref, bool allow_float32 = false) {
+void check_common_tensor(
+    const Tensor& t,
+    std::string_view name,
+    const Tensor& ref,
+    bool allow_float32 = false,
+    bool require_row_major = true) {
     TT_FATAL(t.storage_type() == StorageType::DEVICE, "fused_msda: {} must be on device", name);
     TT_FATAL(t.device() == ref.device(), "fused_msda: {} must be on the same device as value", name);
     TT_FATAL(
@@ -35,7 +45,11 @@ void check_common_tensor(const Tensor& t, std::string_view name, const Tensor& r
         name,
         allow_float32 ? " or FLOAT32" : "",
         t.dtype());
-    TT_FATAL(t.layout() == Layout::ROW_MAJOR, "fused_msda: {} must be ROW_MAJOR, got {}", name, t.layout());
+    TT_FATAL(
+        !require_row_major || t.layout() == Layout::ROW_MAJOR,
+        "fused_msda: {} must be ROW_MAJOR, got {}",
+        name,
+        t.layout());
     TT_FATAL(
         t.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
         "fused_msda: {} memory_layout must be INTERLEAVED (sharded inputs are not supported)",
@@ -45,7 +59,9 @@ void check_common_tensor(const Tensor& t, std::string_view name, const Tensor& r
 }  // namespace
 
 MSDAShapes derive_shapes(
-    const FusedMSDAOperation::operation_attributes_t& attrs, const FusedMSDAOperation::tensor_args_t& args) {
+    const FusedMSDAOperation::operation_attributes_t& attrs,
+    const FusedMSDAOperation::tensor_args_t& args,
+    bool require_value_row_major) {
     MSDAShapes s;
 
     const auto& value = args.value;
@@ -53,7 +69,7 @@ MSDAShapes derive_shapes(
 
     TT_FATAL(value.storage_type() == StorageType::DEVICE, "fused_msda: value must be on device");
     TT_FATAL(value.device()->arch() != tt::ARCH::QUASAR, "fused_msda is not supported on Quasar");
-    check_common_tensor(value, "value", value);
+    check_common_tensor(value, "value", value, /*allow_float32=*/false, require_value_row_major);
     check_common_tensor(attn, "attention_weights", value);
 
     // ---- spatial_shapes ----
@@ -72,12 +88,8 @@ MSDAShapes derive_shapes(
         const uint32_t h = hw[2 * l];
         const uint32_t w = hw[2 * l + 1];
         TT_FATAL(h > 0 && w > 0, "fused_msda: spatial_shapes[{}] must be positive, got ({}, {})", l, h, w);
-        // The floored bilinear corner crosses from the compute kernel to the
-        // reader as bf16, which carries 8 significant bits and so represents
-        // every integer up to MAX_SPATIAL_EXTENT exactly and nothing beyond it
-        // reliably. Past that an in-bounds corner index would round to a
-        // different, still in-bounds pixel — a silently wrong sample rather
-        // than a failure. Refuse instead.
+        // Past MAX_SPATIAL_EXTENT an in-bounds corner index would round to a
+        // different, still in-bounds pixel: a silently wrong sample, so refuse.
         TT_FATAL(
             h <= MAX_SPATIAL_EXTENT && w <= MAX_SPATIAL_EXTENT,
             "fused_msda: spatial_shapes[{}] = ({}, {}) exceeds the {}-pixel per-axis limit. The sampling geometry "
@@ -299,6 +311,15 @@ namespace {
 
 using OperationType = ttnn::operations::experimental::fused_msda::FusedMSDAOperation;
 
+bool hybrid_allocator_enabled() {
+    // Allocator mode is process-wide and fixed during MetalContext initialization.
+    static const bool enabled = [] {
+        const char* value = std::getenv("TT_METAL_ALLOCATOR_MODE_HYBRID");
+        return value != nullptr && value[0] == '1';
+    }();
+    return enabled;
+}
+
 ttsl::SmallVector<uint32_t> flatten_spatial_shapes(const std::vector<std::array<uint32_t, 2>>& spatial_shapes) {
     TT_FATAL(!spatial_shapes.empty(), "fused_msda: spatial_shapes must not be empty");
     ttsl::SmallVector<uint32_t> flat;
@@ -308,6 +329,18 @@ ttsl::SmallVector<uint32_t> flatten_spatial_shapes(const std::vector<std::array<
         flat.push_back(hw[1]);
     }
     return flat;
+}
+
+// Bytes `spec` takes in its fullest L1 bank. The L1 free lists hand out blocks
+// in DRAM-alignment granules, so even a small tensor costs a whole granule.
+uint64_t allocation_bytes_per_bank(const tt::tt_metal::TensorSpec& spec, const tt::tt_metal::Allocator& allocator) {
+    using tt::tt_metal::BufferType;
+
+    const uint64_t page_alignment = allocator.get_alignment(BufferType::L1);
+    const uint64_t allocation_granule = allocator.get_alignment(BufferType::DRAM);
+    const uint64_t num_banks = allocator.get_num_banks(BufferType::L1);
+    const uint64_t page_bytes = spec.compute_consumed_memory_bytes_per_bank(page_alignment, num_banks);
+    return tt::align(std::max(page_bytes, allocation_granule), allocation_granule);
 }
 
 }  // namespace
@@ -366,6 +399,82 @@ ttnn::Tensor fused_msda_from_offsets(
         .sampling_offsets = sampling_offsets,
     };
     return ttnn::device_operation::launch<OperationType>(attrs, args);
+}
+
+bool can_use_fused_msda_from_offsets_l1_value(
+    const Tensor& value,
+    const Tensor& reference_points,
+    const Tensor& sampling_offsets,
+    const Tensor& attention_weights,
+    const std::vector<std::array<uint32_t, 2>>& spatial_shapes,
+    ttnn::experimental::MSDAReferenceMode reference_mode,
+    bool align_corners) {
+    using tt::tt_metal::BufferType;
+    using tt::tt_metal::Layout;
+    using tt::tt_metal::PageConfig;
+    using tt::tt_metal::TensorLayout;
+    using tt::tt_metal::TensorMemoryLayout;
+    using tt::tt_metal::TensorSpec;
+
+    const MemoryConfig l1_memory_config{TensorMemoryLayout::INTERLEAVED, BufferType::L1};
+    auto attrs = OperationType::operation_attributes_t{
+        .output_memory_config = l1_memory_config,
+        .spatial_shapes_hw = flatten_spatial_shapes(spatial_shapes),
+        .align_corners = align_corners,
+        .locations_in_grid_space = false,
+        .from_offsets = true,
+        .reference_mode = reference_mode,
+    };
+    auto args = OperationType::tensor_args_t{
+        .value = value,
+        .attention_weights = attention_weights,
+        .sampling_locations = std::nullopt,
+        .reference_points = reference_points,
+        .sampling_offsets = sampling_offsets,
+    };
+    const auto shapes = derive_shapes(attrs, args, /*require_value_row_major=*/false);
+
+    if (hybrid_allocator_enabled()) {
+        return false;
+    }
+    auto* device = value.device();
+    const auto& allocator = *device->allocator();
+    const uint64_t num_banks = allocator.get_num_banks(BufferType::L1);
+    if (num_banks == 0) {
+        return false;
+    }
+
+    // A value already in ROW_MAJOR L1 is part of the allocator state below;
+    // counting it again would double-charge it.
+    uint64_t pending_tensor_bytes = 0;
+    const bool value_is_staged = value.layout() == Layout::ROW_MAJOR && value.memory_config() == l1_memory_config;
+    if (!value_is_staged) {
+        const TensorSpec value_spec(
+            value.logical_shape(), TensorLayout(value.dtype(), PageConfig(Layout::ROW_MAJOR), l1_memory_config));
+        pending_tensor_bytes += allocation_bytes_per_bank(value_spec, allocator);
+    }
+
+    const Shape output_shape({shapes.batch, shapes.num_queries, shapes.num_heads * shapes.head_dim});
+    const TensorSpec output_spec(
+        output_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::ROW_MAJOR), l1_memory_config));
+    pending_tensor_bytes += allocation_bytes_per_bank(output_spec, allocator);
+
+    // Conservative: both tensors are charged against the single largest free block.
+    const auto stats = allocator.get_statistics(BufferType::L1);
+    if (pending_tensor_bytes > stats.largest_free_block_bytes) {
+        return false;
+    }
+
+    // L1 is allocated top-down, so the new tensors land below the current frontier
+    // and take the space this program's CBs would otherwise use.
+    const uint64_t usable_program_l1 = ttnn::operations::core::usable_program_l1_capacity(device);
+    if (pending_tensor_bytes >= usable_program_l1) {
+        return false;
+    }
+
+    const auto cb_plan =
+        derive_circular_buffer_plan(attrs, args, shapes, BufferType::L1, BufferType::L1, output_spec.data_type());
+    return usable_program_l1 - pending_tensor_bytes > circular_buffer_bytes_per_core(cb_plan);
 }
 
 }  // namespace ttnn::prim
