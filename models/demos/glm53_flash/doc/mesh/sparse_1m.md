@@ -3,10 +3,11 @@
 Design note for the traced multi-user sparse decode of the DSA layers at full ISL (1 048 576 positions per
 user) on the 8x4 Galaxy. Design of record: `~/ashai/GLM_5.3_DESIGN.md` sections 5.3, 6, 7, 8. Code:
 `tt/dsa.py` (`SparseDecodeMeta`, `TtDSA._decode_unified`), `tt/indexer.py` (`score_decode_row`,
-`select_decode_pools`), the new op `ttnn.experimental.paged_pool_gather`
-(`ttnn/cpp/ttnn/operations/experimental/paged_pool_gather/`), tests `test_pool_gather.py`,
-`test_dsa_sparse_traced.py`, `test_sparse_1m.py`, `test_sparse_perf.py`. Branch `arg/glm53_sparse1m`
-(worktree `wt_sparse1m`, needs its own C++ build: the gather op).
+`select_decode_pools`), the model-local generic op `custom_ops/paged_pool_gather/` (`op.py`, `kernels/`,
+README), tests `tests/custom_ops/test_paged_pool_gather.py`, `test_dsa_sparse_traced.py`, `test_sparse_1m.py`,
+`test_sparse_perf.py`. Branch `arg/glm53_sparse1m` (worktree `wt_sparse1m`); runs on the main-tree build
+(no `ttnn/cpp` / `tt_metal` changes: the gather is a `ttnn.generic_op` whose kernel is JIT-compiled from the
+model directory).
 
 ## 1. Where the step time went (before)
 
@@ -45,7 +46,7 @@ for u in users:                                                                 
 rows = concat(scores[u])                                             [B,1,1,W] bf16 RM    (1 op)
 top = topk_large_indices(rows, k = 512, valid_length_tensor = meta.valid_len_rows)   [B,1,1,512]   (1 op, per-row bounds)
 ids = typecast(concat(top, meta.tail_pool)) * meta.keep + meta.dense_term -> uint32     (5 ops, batched)
-compact = paged_pool_gather(latent_cache, page_table, ids, pool_size = 4)   [B*65,1,32,512]   (1 op, NEW)
+compact = PagedPoolGather(latent_cache, page_table, ids, out)   [B*65,1,32,512]   (1 generic op, custom_ops/)
 o = paged_flash_multi_latent_attention_decode(q_lat, compact, identity page table, cur_pos = meta.cur_pos)
 absorb (W_kv_b2), o_proj, all_reduce over the TP columns                             (existing)
 ```
@@ -86,7 +87,7 @@ allocation, i.e. the kernel's causal mask is disabled, the pool cache gets 8 poo
 user's exact causal bound is applied by the top-k's per-user `valid_len` instead. The pools between `n`
 and the slack score against their current (finite) content and are never ranked.
 
-### 2.3 The latent gather (`paged_pool_gather`, new op)
+### 2.3 The latent gather (`custom_ops/paged_pool_gather`, a model-local generic op)
 
 Candidates considered for reading the paged TILE latent cache without the whole-prefix TILE -> RM copy:
 
@@ -104,10 +105,13 @@ contiguous 128-byte runs per tile (one per face column), so a pool is 32 reads o
 amplification) and the same 32 writes into the compact tile block. The op takes the cache
 `[max_blocks,1,32,512]`, the page table (any mapping, looked up per pool as a 64-byte fragment) and
 `pool_ids [B,1,1,N]` (`N = 513`: 512 ranked pools + the tail pool), zero-fills sentinel / out-of-range
-pools and the padding rows, and writes `[B*65,1,32,512]`; work items are (user, output block), one
-data-movement kernel per core with two L1 blocks alternating reads and writes. Measured on chip 0 with a
-1 M-position cache (`test_pool_gather.py`): 0.061 ms for 1 user, 0.183 ms for 4, 0.339 ms for 8 (2 / 8 / 16
-MB moved); bit-exact vs a torch gather with permuted page tables, sentinels and out-of-range ids.
+pools and the padding rows, and writes the caller's persistent `[B*65,1,32,512]` output (`TtDSA` keeps one
+per batch size: under trace the generic op's runtime args carry the io tensors' addresses); work items are
+(user, output block), one data-movement kernel per core with two L1 blocks alternating reads and writes
+(`ttnn.generic_op`, one `KernelDescriptor` with a `ReaderConfigDescriptor`, three CBs; contract in the op's
+README). Measured on chip 0 with a 1 M-position cache: 0.061 ms for 1 user, 0.183 ms for 4, 0.339 ms for 8
+(2 / 8 / 16 MB moved); bit-exact vs the torch golden with permuted page tables, sentinels and out-of-range ids,
+including under trace replay with refreshed ids.
 
 ### 2.4 Index-scoring cost at 8 users x 1 M per chip (the step's bandwidth term)
 
@@ -134,9 +138,12 @@ kernel work on `indexer_score_dsa`; this note records the measured geometry they
 
 `topk_large_indices` over 262 176 scores: 1.14 ms for ONE row and 1.16 ms for 8 rows in one call (the rows
 run on different cores; a row is serial over its 512-element windows), i.e. per-user calls cost 8 x 1.14 ms at
-8 users. The op therefore got a per-row `valid_length_tensor` (`[rows, 1]`: the reader reads page `row`,
-derives that row's bounds and pushes them to the compute mailbox per row; the 1-element form is unchanged)
-and the decode path ranks all users in one call (`GLM53_TOPK_BATCHED=0` restores the per-user calls).
+8 users. A per-row `valid_length_tensor` (`[rows, 1]`: the reader reads page `row`, derives that row's bounds
+and pushes them to the compute mailbox per row) was prototyped as a 40-line change to the shared op and
+measured (8 rows with per-row bounds: 1.138 ms, every row's ids inside its own bound, score multisets equal to
+torch's per-prefix top-k); under the model-local-ops rule it has to be re-homed as a custom op (the shared op's
+three kernels copied next to the model with that reader change), so the decode path ranks per user today
+(`GLM53_TOPK_BATCHED=1` selects the batched call once that op exists; the shared op is untouched).
 
 ## 3. The user-partitioned cache over the row's 4 columns (deliverable 3, design)
 
@@ -175,7 +182,7 @@ PCC vs the single-chip traced path (same tokens, same positions), then one user 
 
 | test | what | result | log |
 |---|---|---|---|
-| `test_pool_gather.py` | `paged_pool_gather` vs a torch gather: permuted page tables, sentinels, out-of-range ids, B 1/2/3/4, N 513/20/1, a second call with new ids | bit-equal in every case | `sparse1m_test_pool_gather.log` |
+| `tests/custom_ops/test_paged_pool_gather.py` | the generic op vs its torch golden: permuted page tables, sentinels, out-of-range ids, B 1/4/32, N 513/20/1, a second call with new ids, trace replay with refreshed ids | bit-equal in every case (C++ prototype: `sparse1m_test_pool_gather.log`; generic op on the main build: `sparse1m_main_customop.log`) | |
 | `test_dsa_sparse_traced.py::test_two_users_dense_sparse_traced` | 2 user slots, permuted page table: user 0 = R2040 (positions 2040..2051: dense form, the 2047 switch, the 2050 HF bound), user 1 = R4097 (4097..4108); steps 0-1 eager, trace captured on 2, replayed 3..11; every (user, step) layer output vs its HF dump | 26/26 samples > 0.9998 (worst 0.999847 = R4097 step 4, the step with the lowest id overlap); prefill 0.999883 / 0.999930; the dense user's new-path output is BIT-EQUAL to the eager reference path, the sparse user's 0.999988 vs it | `sparse1m_test_traced_2.log` |
 | `test_dsa_sparse_traced.py::test_selected_pools_vs_hf` | the traced path's selected pools (+ tail) vs HF `index_ids`, R4097 steps 0-11 | 97.9-99.0 % of the HF ids per step (the eager path: 98-99 %); layer pcc 0.99985-0.99998 | same |
 | `test_sparse_1m.py` | 1 user seeded to 16 K / 131 K / 1 M (synthetic context, host twin = `test_cache_1m`), decode at N, N+1 vs the HF restricted forward | new path 0.999803 / 0.999838 (16 K), 0.999767 / 0.999757 (131 K), 0.999680 / 0.999706 (1 M); the eager reference path at the same steps 0.999792 / 0.999822, 0.999747 / 0.999752, 0.999671 / 0.999695 (new vs eager 0.99992-0.99994); id overlap 0.94 / 0.92 / 0.87 (the synthetic-context regime of `test_cache_1m`: near-ties at the top-512 boundary) | `sparse1m_test_1m_2.log` |
@@ -212,6 +219,12 @@ Before / after at 1 M, layer 3: 26.5 ms eager layer step for ONE user (`test_cac
 7.05 ms traced layer step for 1 user, 10.2 ms for 4, 14.2 ms for 8 (attention block 3.0 / 4.5 / 6.4 ms), every
 user in one graph; against the design's ~0.7 ms per layer at 8 users x 1 M the attention block is 9x off, the
 scorer read (section 2.4) being the floor-setting term.
+
+### 4.4 Main-tree build (the rule of 2026-10-20: model-local ops only)
+
+The same tests on the main-tree build (`TT_METAL_HOME=$W`, `GLM53_KDA_FUSED=0`; the gather as the generic op, per-user
+top-k calls): `sparse1m_main_{customop,traced,regress,1m,perf}.log` -- the figures to quote for the integration
+branch are those of section 4.2 / 4.3's per-user-top-k columns (the batched-top-k columns need the custom top-k op).
 
 ## 5. What remains
 

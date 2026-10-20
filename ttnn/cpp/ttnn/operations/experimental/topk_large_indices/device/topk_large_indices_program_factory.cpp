@@ -232,9 +232,6 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
     // one flag now, and the kernel reads presence from the common arg's VALUE (0 = uncapped).
     const bool has_vend = tensor_args.has_valid_end_metadata();
     interleaved_accessor_args(has_vend ? *tensor_args.valid_end_tensor : input).append_to(reader_compile_args);
-    // per-row valid lengths ([rows, 1] metadata): the reader pushes one bounds entry per row, compute pops per row
-    const bool per_row_meta = has_meta && tensor_args.valid_length_tensor->logical_volume() > 1;
-    reader_compile_args.push_back(per_row_meta ? 1u : 0u);
 
     auto reader_kernel = tt::tt_metal::CreateKernel(
         program,
@@ -246,7 +243,6 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
     std::vector<uint32_t> compute_compile_args = {cb_in, cb_indices, llk_k, static_cast<uint32_t>(body_mode)};
     compute_compile_args.push_back(has_meta ? 1u : 0u);
     compute_compile_args.push_back(has_meta ? cb_meta : 0u);
-    compute_compile_args.push_back(per_row_meta ? 1u : 0u);
     auto compute_kernel = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/topk_large_indices/device/kernels/compute.cpp",

@@ -45,6 +45,7 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.demos.glm53_flash.custom_ops.paged_pool_gather.op import PagedPoolGather
 from models.demos.glm53_flash.tt.config import GLM53FlashConfig
 from models.demos.glm53_flash.tt.indexer import TtDSAIndexer, TtIndexCache, height_shard_rows
 from models.demos.glm53_flash.tt.matmul_configs import DecodeLinear
@@ -532,6 +533,9 @@ class TtDSA(LightweightModule):
             packer_l1_acc=False,
         )
         self.stage_timer: StageTimer | None = None
+        # the sparse-decode latent gather (model-local generic op) and its persistent compact output per batch size
+        self.pool_gather = PagedPoolGather(device, pool_size=cfg.index_kpool)
+        self._compact: dict[int, ttnn.Tensor] = {}
 
     def set_stage_timer(self, timer: StageTimer | None):
         """Install (or remove, ``None``) the per-stage timer on this layer and its indexer."""
@@ -929,9 +933,10 @@ class TtDSA(LightweightModule):
         ttnn.deallocate(q_i)
         ttnn.deallocate(w_i)
         self._mark("index_queries")
-        # the top-k runs ONCE over all users' score rows when the op takes per-row bounds (``valid_len_rows``,
-        # the per-row metadata mode of topk_large_indices): one row costs the same as B rows in one call
-        batched = meta.valid_len_rows is not None and os.environ.get("GLM53_TOPK_BATCHED", "1") == "1"
+        # GLM53_TOPK_BATCHED=1: the top-k runs ONCE over all users' score rows with per-row bounds (``valid_len_rows``):
+        # one row costs the same as B rows in one call (1.14 ms at 262 K pools). The shared topk_large_indices takes a
+        # single bound only; the per-row variant is a pending model-local custom op, so the default is per-user calls.
+        batched = meta.valid_len_rows is not None and os.environ.get("GLM53_TOPK_BATCHED", "0") == "1"
         rows_or_tops = []
         for u in range(B):
             qb = ttnn.slice(q_big, [0, 0, u, 0], [1, Hi, u + TILE, D])
@@ -972,7 +977,16 @@ class TtDSA(LightweightModule):
         ids = ttnn.typecast(ids_f2, ttnn.uint32)
         ttnn.deallocate(ids_f2)
         self._mark("ids")
-        compact = ttnn.experimental.paged_pool_gather(cache.cache, cache.page_table, ids, pool_size=P)
+        if (
+            B not in self._compact
+        ):  # persistent output of the gather (the generic op's io tensors keep their addresses under trace)
+            self._compact[B] = ttnn.zeros(
+                self.pool_gather.output_shape(ids, self.L),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+            )
+        compact = self.pool_gather(cache.cache, cache.page_table, ids, self._compact[B])
         ttnn.deallocate(ids)
         out_blocks = compact.shape[0] // B
         self._mark("pool_gather")
@@ -989,7 +1003,6 @@ class TtDSA(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )  # [1,B,H,L]
         ttnn.deallocate(q_dec)
-        ttnn.deallocate(compact)
         oh = ttnn.transpose(o_lat, 1, 2)  # [1,H,B,L]
         ttnn.deallocate(o_lat)
         self._mark("compact_mla_decode")

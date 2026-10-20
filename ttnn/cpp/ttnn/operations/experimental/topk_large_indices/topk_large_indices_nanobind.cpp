@@ -59,8 +59,7 @@ void bind_topk_large_indices(nb::module_& mod) {
             k: required number of indices to return.
             valid_length: optional number of leading columns to search (default: full width).
             valid_length_tensor: optional 1-element UINT32 row-major DRAM tensor read on-device. Use for
-                dynamic valid lengths during trace replay. Mutually exclusive with valid_length. A [rows, 1]
-                tensor (one value per flattened input row) ranks every row over its own prefix.
+                dynamic valid lengths during trace replay. Mutually exclusive with valid_length.
             valid_length_offset: constant added to valid_length_tensor[0] (default 0).
             subdevice_id: optional active subdevice containing the top-k workers.
             sub_core_grids: optional core restriction within ``subdevice_id``.

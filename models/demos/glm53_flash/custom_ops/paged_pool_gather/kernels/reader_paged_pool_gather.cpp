@@ -2,13 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// paged_pool_gather data-movement kernel. Per work item (user b, compact block blk): for each of the
-// slots_per_block pool slots of the block, look the pool id up in the user's pool-id row, translate the
-// pool's logical block through the user's page-table row, and copy its P token rows out of every tile of
-// the source block into the same rows of an L1 tile block (a P-row run inside each 16-row tile face is
-// P*32 contiguous bytes: two runs per tile, one per face column). Invalid pools (sentinel / out of range)
-// and the padding slots are zero-filled. The finished block is written as Wt whole tiles. Two L1 blocks
-// alternate so the writes of one item drain while the next item's reads are in flight.
+// paged_pool_gather data-movement kernel (model-local generic op: custom_ops/paged_pool_gather/op.py). Per work item
+// (user b, compact block blk): for each of the slots_per_block pool slots of the block, look the pool id up in the
+// user's pool-id row, translate the pool's logical block through the user's page-table row, and copy its P token rows
+// out of every tile of the source block into the same rows of an L1 tile block (a P-row run inside each 16-row tile
+// face is P*32 contiguous bytes: two runs per tile, one per face column). Invalid pools (sentinel / out of range) and
+// the padding slots are zero-filled. The finished block is written as Wt whole tiles. Two L1 blocks alternate so the
+// writes of one item drain while the next item's reads are in flight.
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
