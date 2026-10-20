@@ -37,16 +37,13 @@ class MatmulFpu(Fpu):
         rt_dim = block.block_rows
         ct_dim = block.block_cols
 
-        partial_face = compute_unit.src_a.partial_face.cpp_enum_value
-        tile_r_dim_a = compute_unit.src_a.tile_shape.total_row_dim()
-        tile_c_dim_a = compute_unit.src_a.tile_shape.total_col_dim()
-        tile_r_dim_b = compute_unit.src_b.tile_shape.total_row_dim()
-        tile_c_dim_b = compute_unit.src_b.tile_shape.total_col_dim()
+        in0_tensor_shape = compute_unit.src_a.tile_shape.cpp_value
+        in1_tensor_shape = compute_unit.src_b.tile_shape.cpp_value
 
         return (
             f"// Operation {stage}: Matmul FPU\n"
             f"_llk_math_matmul_init_<{math_fidelity}>(\n"
-            f"    {tile_r_dim_a}, {tile_c_dim_a}, {tile_r_dim_b}, {tile_c_dim_b}, {partial_face}, {transpose}, {ct_dim}, {rt_dim}\n"
+            f"    {in0_tensor_shape}, {in1_tensor_shape}, {transpose}, {ct_dim}, {rt_dim}\n"
             f");\n"
         )
 

@@ -59,13 +59,8 @@ class MatmulUnpacker(Unpacker):
         compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
-        operand_a, operand_b = self.physical_operands(compute_unit)
-        face_r_dim_a = operand_a.tile_shape.face_r_dim
-        face_r_dim_b = operand_b.tile_shape.face_r_dim
-        num_faces_a = operand_a.tile_shape.total_num_faces()
-        num_faces_b = operand_b.tile_shape.total_num_faces()
-        partial_face_a = str(operand_a.tile_shape.total_row_dim() < 32).lower()
-        partial_face_b = str(operand_b.tile_shape.total_row_dim() < 32).lower()
+        in0_tensor_shape = compute_unit.src_a.tile_shape.cpp_value
+        in1_tensor_shape = compute_unit.src_b.tile_shape.cpp_value
         rt_dim = block.block_rows
         ct_dim = block.block_cols
         num_cols = compute_unit.src_a.tile_shape.total_col_dim()
@@ -74,8 +69,7 @@ class MatmulUnpacker(Unpacker):
 
         return (
             f"_llk_unpack_AB_matmul_init_<>({transpose}, {ct_dim}, {rt_dim}, {kt_dim}, "
-            f"{face_r_dim_a}, {face_r_dim_b}, {num_faces_a}, {num_faces_b}, "
-            f"{partial_face_a}, {partial_face_b});\n"
+            f"{in0_tensor_shape}, {in1_tensor_shape});\n"
         )
 
     def unpack(
@@ -95,9 +89,8 @@ class MatmulUnpacker(Unpacker):
             compute_unit.src_b.dimensions[1]
             // compute_unit.src_b.tile_shape.total_col_dim()
         )
-        operand_a, operand_b = self.physical_operands(compute_unit)
-        src_a_partial_face = str(operand_a.tile_shape.total_row_dim() < 32).lower()
-        src_b_partial_face = str(operand_b.tile_shape.total_row_dim() < 32).lower()
+        in0_tensor_shape = compute_unit.src_a.tile_shape.cpp_value
+        in1_tensor_shape = compute_unit.src_b.tile_shape.cpp_value
         buffer_a = compute_unit.src_a.cpp_name
         buffer_b = compute_unit.src_b.cpp_name
 
@@ -110,7 +103,7 @@ class MatmulUnpacker(Unpacker):
             f"                L1_ADDRESS({buffer_a}[0]), L1_ADDRESS({buffer_b}[0]),\n"
             f"                srca_tile_idx, srcb_tile_idx,\n"
             f"                {unpack_tile_size_a}, {unpack_tile_size_b},\n"
-            f"                {src_a_partial_face}, {src_b_partial_face},\n"
+            f"                {in0_tensor_shape}, {in1_tensor_shape},\n"
             f"                {ct_dim}, {rt_dim}, {kt_dim}\n"
             f"            );\n"
             f"        }}\n"
