@@ -2877,6 +2877,8 @@ void sdpa_ring_v2(
         const auto sliding_band = ttnn::operations::transformer::sdpa::ring_joint::sliding_ksplit_range(
             sliding_q_plan.total_k_chunk_count, sliding_split_idx, sliding_split_count);
         // Sol chunk mode: plan words [kept bitmask lo, hi, do_pooled] for this (ring iter, Q chunk).
+        // Q2 page accounting, both from plan word 5 (see the read below).
+        [[maybe_unused]] uint32_t sol_total_kept_blocks = 0, sol_n_pages = 0;
         [[maybe_unused]] uint32_t sol_kept_lo = 0, sol_kept_hi = 0, sol_do_pooled = 0;
         [[maybe_unused]] uint32_t sol_union_lo = 0xffffffffu, sol_union_hi = 0xffffffffu;
         [[maybe_unused]] uint32_t sol_cnt_words[16] = {};
@@ -2887,6 +2889,14 @@ void sdpa_ring_v2(
             sol_do_pooled = ckernel::read_tile_value(cb_sol_plan, 0, 2);
             sol_union_lo = ckernel::read_tile_value(cb_sol_plan, 0, 3);
             sol_union_hi = ckernel::read_tile_value(cb_sol_plan, 0, 4);
+            if constexpr (sol_pack) {
+                // Q2: the reader publishes the kept-block TOTAL (word 5), computed from the same per-chunk counts
+                // it wrote into words 8..23. Both the page count and the trailing page's fill come from it, so
+                // they agree with each other and with the reader. Re-deriving it here diverged and deadlocked --
+                // see the note in ring_joint_reader.cpp.
+                sol_total_kept_blocks = ckernel::read_tile_value(cb_sol_plan, 0, 5);
+                sol_n_pages = (sol_total_kept_blocks + sol_blocks_per_page - 1) / sol_blocks_per_page;
+            }
             if constexpr (sol_compact) {
                 for (uint32_t w = 0; w < (num_local_k_chunks + 3) / 4; ++w) {
                     sol_cnt_words[w] = ckernel::read_tile_value(cb_sol_plan, 0, 8 + w);
@@ -2914,9 +2924,6 @@ void sdpa_ring_v2(
         };
         uint32_t per_q_valid_kv =
             packed_sources ? packed_kv.chunk_count() : (has_sliding_window ? sliding_band.end - sliding_band.begin : 0);
-        // Q2: kept blocks across this ring iteration's chunks, which the counting loop below turns into a page
-        // count. Reader and compute derive page boundaries from the same bitmask, so no plan word carries them.
-        [[maybe_unused]] uint32_t sol_total_kept_blocks = 0;
         for (uint32_t k = 0;
              !(sol_enabled && !sol_chunk_mode) && !packed_sources && !has_sliding_window && k < num_kv_chunks;
              ++k) {
@@ -2937,16 +2944,12 @@ void sdpa_ring_v2(
                 }
             }
             if constexpr (sol_pack) {
-                // Q2: a kept chunk is no longer a step. Accumulate its blocks; the steps are the pages they fill.
-                sol_total_kept_blocks += sol_chunk_blocks(k);
-                continue;
+                continue;  // a kept chunk is not a step under packing; the steps are the pages, counted above
             }
             per_q_valid_kv++;
         }
         if constexpr (sol_pack) {
-            // ceil: the trailing partial page is a step too. Must match the reader, which pushes a page at every
-            // sol_blocks_per_page boundary and flushes the remainder at the end of the ring iteration.
-            per_q_valid_kv += (sol_total_kept_blocks + sol_blocks_per_page - 1) / sol_blocks_per_page;
+            per_q_valid_kv += sol_n_pages;  // from the plan, not re-derived
         }
         if constexpr (sol_chunk_mode) {
             if (sol_do_pooled) {
@@ -2998,8 +3001,6 @@ void sdpa_ring_v2(
         // sol_blocks_per_page kept blocks plus a partial at the end of the iteration, and nothing else -- raw
         // chunks never reach compute, so there is nothing to skip and nothing to drain. Pooled chunks follow the
         // pages exactly as they used to follow the chunks.
-        [[maybe_unused]] const uint32_t sol_n_pages =
-            (sol_total_kept_blocks + sol_blocks_per_page - 1) / sol_blocks_per_page;
         if constexpr (sol_pack) {
             q_k_loop_count = sol_n_pages + (sol_do_pooled ? sol_pooled_chunks : 0);
         }

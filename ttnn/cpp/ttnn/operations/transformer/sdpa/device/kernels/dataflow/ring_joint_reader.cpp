@@ -1615,6 +1615,7 @@ void kernel_main() {
                             }
                         }
                         uint32_t lo = 0, hi = 0;
+                        [[maybe_unused]] uint32_t sol_total_kept = 0;
                         for (uint32_t k = 0; k < num_local_k_chunks; ++k) {
                             const uint32_t cnt = row_chunk_kept(k);
                             if (cnt != 0) {
@@ -1623,11 +1624,30 @@ void kernel_main() {
                                 } else {
                                     hi |= 1u << (k - 32);
                                 }
+                                sol_total_kept += cnt;
                                 if constexpr (sol_compact) {
                                     const uint32_t w = 8 + k / 4;
                                     plan_words[w] = plan_words[w] | (cnt << (8 * (k % 4)));
                                 }
                             }
+                        }
+                        if constexpr (sol_pack) {
+                            // Q2: publish the page count instead of letting compute re-derive it.
+                            //
+                            // The first version had both sides walk the kept bitmask and compute
+                            // ceil(total / blocks_per_page) independently. They disagreed: compute accumulates
+                            // after try_skip_oob_kv, the causal skip and `k < num_kv_chunks`, while the packing
+                            // walk below applies none of those and runs to q_k_loop_count. Any asymmetry --
+                            // joint chunks, out-of-range chunks, padded iterations -- shifts the count, the
+                            // reader out-produces compute, and it parks in cb_reserve_back. Measured 2026-10-20:
+                            // 51,720 CRBW waypoints against 1,400 CWFW.
+                            //
+                            // This loop is the authority: the same `cnt` values that drive the per-chunk counts
+                            // compute already trusts. One producer, one consumer, nothing to drift.
+                            // Publish the BLOCK total, not the page count: compute needs both the number of
+                            // pages and the fill of the trailing partial page, and deriving both from one
+                            // published number keeps them consistent with each other too.
+                            plan_words[5] = sol_total_kept;
                         }
                         uint32_t ulo = lo, uhi = hi;
                         if (sol_n_members > 0 && head_chain.is_participant && nq == head_chain.chain_head) {

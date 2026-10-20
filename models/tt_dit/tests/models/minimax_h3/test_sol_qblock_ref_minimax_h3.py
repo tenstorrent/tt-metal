@@ -185,10 +185,17 @@ def _big_setup(seed=0, rows=2048, shards=4, heads=2, dim=64, q_chunk=256):
 
 
 def _or_ratio(q, k, v, geo, consts, *, tau, scale, thresh_type):
+    """Densities over REAL rows only.
+
+    e has nb_pad Q-block rows and c has nqc_pad Q-chunk rows, and the two pad to 32 independently: at
+    rows=2048/q_chunk=256 that is 32 real blocks but only 8 real chunks in 32 slots. Averaging c over all 32
+    diluted it 4x and produced an "OR cost" below 1.0 -- impossible, since an OR can only add blocks.
+    """
     e = score_blocks(q, k, v, geo, consts, tau=tau, scale=scale, thresh_type=thresh_type)["exact"]
     c = ((e.transpose(2, 3) @ consts["qc_pool_t"]).transpose(2, 3) > 0.5).float() * consts["full_row"]
     valid = consts["full_row"].reshape(-1) > 0.5
-    s_blk, s_chk = e[..., valid].mean().item(), c[..., valid].mean().item()
+    s_blk = e[:, :, : geo.nb][..., valid].mean().item()
+    s_chk = c[:, :, : geo.nqc][..., valid].mean().item()
     return s_blk, s_chk, s_chk / max(s_blk, 1e-9)
 
 
@@ -213,7 +220,7 @@ def test_or_cost_at_production_density(thresh_type):
     tq = geo.q_chunk // geo.block
     print(f"\n  thresh={thresh_type}  TQ={tq}  blocks/shard={geo.nb}  shards={geo.shards}")
     in_band = []
-    for tau in (0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 4.0):
+    for tau in (0.5, 0.9, 1.0, 1.1, 1.2, 1.3, 1.5, 2.0):
         s_blk, s_chk, ratio = _or_ratio(q, k, v, geo, consts, tau=tau, scale=scale, thresh_type=thresh_type)
         indep = (1.0 - (1.0 - s_blk) ** tq) / max(s_blk, 1e-9)
         flag = ""
