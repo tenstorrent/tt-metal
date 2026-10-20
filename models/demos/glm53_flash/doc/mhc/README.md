@@ -141,6 +141,49 @@ Error budget (`_logs/optmhc_probe6.log`, device == host emulation): with 2-way s
 parts dominates (`A` 2.4e-6, `x` 1.6e-6, the dropped lo*lo term ~1e-6), hence the 3-way split for the 1e-6 bar.
 The h matmul (`P @ x`) stays inexact in every mode (the hidden is bf16 for the sublayer).
 
+### Plan: the cheapest exact-enough residual update (host analysis while chip 1 is reserved, 2026-10-20)
+
+Error model on real layer-4 streams (dump rows + 1e-3 relative noise = an fp32 residual) and real Sinkhorn
+coefficients, torch emulation of the HiFi4 matmul (bf16-rounded operands, fp32 accumulate; the emulation matched
+the device bit-for-bit in probe 6), `_logs/optmhc_host_model.log`, rel rms vs the exact chain (attn / ffn wrap):
+
+| candidate | products | rel rms |
+|---|---|---|
+| S0 default: A 8-bit, x 8-bit | 1 | 1.55e-3 / 1.59e-3 |
+| S1: x 16-bit (hi/lo), A 8-bit (`in0 = [A|A]`, `in1 = [x_hi; x_lo]`) | 2 | 1.20e-3 / 1.26e-3 |
+| S2: A 16-bit, x 8-bit | 2 | 9.9e-4 / 9.8e-4 |
+| S3: both 16-bit, drop lo*lo | 3 | 2.8e-6 / 2.8e-6 |
+| S3b: both 16-bit, 4 products | 4 | 2.6e-6 / 2.5e-6 |
+| S4: A 24-bit, x 16-bit | 5 | 1.6e-6 / 1.6e-6 |
+| S5: both 24-bit (`exact=3` as measured) | 6 | 2.8e-9 / 2.7e-9 |
+
+The Sinkhorn coefficients are not bf16-exact (max relative deviation 3.8e-3 / 3.7e-3), so (a) "split only x" is
+S1 and stays at 1e-3: for <= 1e-5 BOTH operands need their low 8 bits as a separate bf16-exact tensor (S3). Each
+operand therefore costs at least: typecast to bf16 (hi), subtract (lo; one op if binary_ng takes fp32 - bf16,
+else typecast-widen + subtract), and one stacking op for the K-stacked `[x_hi; x_hi; x_lo]` (`ttnn.where` with a
+`[3,1,1,1]` condition broadcasting two `[1,1,128,C]` tensors, one compute op instead of a concat; for `A` the
+`[hi32, hi32, lo]` source stack feeds the existing mask extraction with a `[n,3,n,1,32]` mask, so the
+block-diagonal `[128, 384]` `in0` costs no extra op). Lean S3 op list per wrap (replacing the default's 1 matmul):
+
+| side | ops | expected device us (from the measured per-op times at B=32) |
+|---|---|---|
+| x: typecast -> bf16, subtract (mixed dtype) or widen + subtract, `where`-stack `[hi; hi; lo]` (6 MB fp32) | 3-4 | 13 + (11) + 24 + ~40 |
+| A: typecast, (widen), subtract, `where`-stack on the `[32,32]` comb tile; mask extraction unchanged | 3-4 tiny | ~8 |
+| matmul `128 x 384 x 4096` (in1 fp32 6 MB; or bf16 3 MB with one more typecast of x_lo) | 0 (+0) | 32 (vs 19) |
+| total | **+6 (if the mixed-dtype subtract and the batch-broadcast `where` exist) else +8** | **~+100 us per wrap** (212 -> ~310 at B=32, i.e. +0.2 ms per layer) |
+
+Measured so far: `exact=2` as committed (concat-based stacking) = +10 ops / +93 us (2.0e-6), `exact=3` = +16 /
++167 us (1.1e-7). The two `where`/mixed-dtype assumptions and the lean S3 numbers are to be verified when chip 1
+returns. Conclusion: with the existing ttnn primitives, <= 1e-5 costs >= +6 ops / ~+90-100 us per wrap, because
+the HiFi4 matmul rounds every fp32 operand to bf16 and no exact (SFPU) reduction over the stream dim exists
+(`fast_reduce_nc` rounds, `ttnn.sum(dim=1)` transposes with 8x padding). A <= +3-op exact residual update needs
+a dedicated fp32 kernel: one eltwise-style program computing `out[j, t, c] = sum_i comb[t,i,j] x[i,t,c] +
+post[t,j] y[t,c]` per output tile from 4 x-tiles, 1 y-tile and the kernel's `[32,32]` coefficient tiles with
+SFPU fp32 FMAs (the column-broadcast multiply binary_ng already implements), bandwidth-bound (~2.5 MB in, 2 MB
+out, ~10-15 us): it replaces the coefficient extraction (4 ops), the `A` build, the matmul and the `addcmul`, so
+the post-block becomes 2 ops (typecast y + the kernel) at exact fp32, ~70 us less than today's default; a
+`collapse` flag covers the last layer. Estimated 2-3 days of kernel work.
+
 ## Tests
 
 | test | what |
