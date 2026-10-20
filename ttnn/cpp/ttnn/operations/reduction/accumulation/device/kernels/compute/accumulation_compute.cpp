@@ -18,6 +18,53 @@
 #include "experimental/kernel_args.h"
 #include "../accumulation_common.hpp"
 
+#if defined(COMPENSATED_SUM) && defined(TRISC_MATH)
+namespace ckernel::sfpu {
+
+// Single-pass Kahan summation step across the four Dest tiles:
+//   y = in - c
+//   t = acc + y
+//   diff = t - acc
+//   c_new = (t - acc) - y
+// When the running total reaches +-inf (or diff = t - acc overflows to +-inf while t remains
+// finite), (t - acc) - y evaluates to NaN or +-inf, which would poison every subsequent scan
+// element via y = in - c (#58986). Zeroing c_new whenever diff is non-finite (biased exponent >= 255)
+// keeps subsequent steps on standard IEEE/PyTorch fp32 addition while preserving bit-exact
+// compensated summation whenever diff is finite.
+template <uint32_t DST_IN, uint32_t DST_ACC, uint32_t DST_COMP, uint32_t DST_T, int ITERATIONS = 8>
+inline void calculate_kahan_step() {
+    constexpr uint32_t dst_tile_size_sfpi = 32;
+#pragma GCC unroll 0
+    for (int d = 0; d < ITERATIONS; d++) {
+        sfpi::vFloat in = sfpi::dst_reg[DST_IN * dst_tile_size_sfpi];
+        sfpi::vFloat acc = sfpi::dst_reg[DST_ACC * dst_tile_size_sfpi];
+        sfpi::vFloat c = sfpi::dst_reg[DST_COMP * dst_tile_size_sfpi];
+        sfpi::vFloat y = in - c;
+        sfpi::vFloat t = acc + y;
+        sfpi::vFloat diff = t - acc;
+        sfpi::vFloat c_new = diff - y;
+        v_if(sfpi::exexp(diff, sfpi::ExponentMode::Biased) >= 255) { c_new = 0.0f; }
+        v_endif;
+        sfpi::dst_reg[DST_COMP * dst_tile_size_sfpi] = c_new;
+        sfpi::dst_reg[DST_T * dst_tile_size_sfpi] = t;
+        sfpi::dst_reg++;
+    }
+}
+
+}  // namespace ckernel::sfpu
+
+template <uint32_t DST_IN, uint32_t DST_ACC, uint32_t DST_COMP, uint32_t DST_T>
+inline void kahan_step_tile() {
+    SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_kahan_step,
+        (DST_IN, DST_ACC, DST_COMP, DST_T, 8 /* ITERATIONS */),
+        0,
+        VectorMode::RC);
+}
+#endif
+
 void kernel_main() {
     constexpr auto default_acc_value = get_arg(args::default_acc_value);
 
@@ -113,23 +160,13 @@ void kernel_main() {
             copy_tile(dfb::acc, 0, DST_ACC);
 
 #ifdef COMPENSATED_SUM
-            reconfig_data_format(dfb::comp, dfb::comp);
-            copy_init(dfb::comp);
+            // dfb::comp shares DataFormat::Float32 and UnpackToDest with dfb::acc.
             copy_tile(dfb::comp, 0, DST_COMP);
 
-            // Compensated (Kahan) summation on the running total. The plain path computes
-            // acc = acc + in and throws away the rounding error of every add, so over a long scan
-            // the error grows as ~T^1.5 and there is no length at which it stops (#55542). This
-            // keeps the discarded low-order part in COMP and feeds it back on the next add, which
-            // pins the error to O(1) ULP of the result independent of scan length. Four SFPU ops
-            // per tile instead of one. Each op is a genuinely rounded fp32 op on the SFPU, which is
-            // what the algorithm depends on: (t - acc) - y must NOT be simplified to zero.
-            // Kahan step. No re-init between add and sub: the SFPU binary init is op-specific
-            // only for DIV/POW/XLOGY (ckernel_sfpu_binary.h), so BINARY_OP_INIT above covers both.
-            sub_binary_tile(DST_IN, DST_COMP, DST_IN);    // y = in - c
-            add_binary_tile(DST_ACC, DST_IN, DST_T);      // t = acc + y
-            sub_binary_tile(DST_T, DST_ACC, DST_COMP);    // (t - acc)
-            sub_binary_tile(DST_COMP, DST_IN, DST_COMP);  // c = (t - acc) - y
+            // Compensated (Kahan) summation on the running total in a single SFPU pass,
+            // guarded against non-finite (t - acc) so +-inf or overflow does not poison
+            // subsequent elements with NaN (#58986).
+            MATH((kahan_step_tile<DST_IN, DST_ACC, DST_COMP, DST_T>()));
             constexpr uint32_t DST_RESULT = DST_T;
             dfb_comp_obj.pop_front(ONE_TILE);
 #else
