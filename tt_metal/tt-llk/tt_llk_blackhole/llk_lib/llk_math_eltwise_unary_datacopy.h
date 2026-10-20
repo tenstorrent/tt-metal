@@ -554,6 +554,8 @@ inline void eltwise_unary_configure_mop(
  * @tparam pack_mode: Packing layout, values = <Default/Tilize>
  * @param tensor_shape: Tile geometry (face_r_dim, face grid). Total face count must be 1, 2, or 4.
  * @param dst_format: Destination data format (DataFormat enum underlying value); 255 means unset.
+ * @note COL broadcast supports only a full 32x32 tile (16-row faces, 2x2 face grid).
+ * @note B2D ROW broadcast does not support a 32x16 tile (2x1 face grid).
  * @note On the unpack thread, pair with @ref _llk_unpack_A_init_ (copy/transpose), @ref _llk_unpack_tilize_init_ (tilize) or @ref _llk_unpack_untilize_init_
  * (untilize) which feed the tile.
  * @note @ref _llk_math_eltwise_unary_datacopy_ runs the configured op with matching template args.
@@ -579,14 +581,16 @@ inline void _llk_math_eltwise_unary_datacopy_init_(
         // The COL MOP covers two faces and the execute runs it twice, so it needs a full 32x32 tile
         // (4 faces of 16 rows). A 1x32 tile was seen to hang on Wormhole.
         LLK_ASSERT(
-            tensor_shape.face_r_dim == MAX_FACE_R_DIM && tensor_shape.num_faces_r_dim == 2 && tensor_shape.num_faces_c_dim == 2,
+            tensor_shape.face_r_dim == MAX_FACE_R_DIM && tensor_shape.num_faces_r_dim == MAX_NUM_FACES_R_DIM &&
+                tensor_shape.num_faces_c_dim == MAX_NUM_FACES_C_DIM,
             "Column broadcast datacopy supports only 32x32 tiles");
     }
     if constexpr (type == DataCopyType::B2D && src_b_bcast_type == BroadcastType::ROW)
     {
         // The ROW MOP runs one pass per face. A 32x16 tile (2x1 face grid) gave wrong results on ttsim
         // and is not covered on silicon, so it is blocked until a test proves it.
-        LLK_ASSERT(!(tensor_shape.num_faces_r_dim == 2 && tensor_shape.num_faces_c_dim == 1), "Row broadcast datacopy does not support 32x16 tiles");
+        LLK_ASSERT(
+            !(tensor_shape.num_faces_r_dim == MAX_NUM_FACES_R_DIM && tensor_shape.num_faces_c_dim == 1), "Row broadcast datacopy does not support 32x16 tiles");
     }
     eltwise_unary_configure_addrmod<type, src_b_bcast_type>(dst_format);
 
