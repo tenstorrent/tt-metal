@@ -29,9 +29,18 @@ pytestmark = run_for_blackhole()
 @pytest.mark.parametrize(
     "mesh_device,sp_axis,tp_axis,device_params",
     [
-        ((1, 8), 0, 1, kda_device_params((1, 8))),
-        ((2, 4), 0, 1, kda_device_params((2, 4))),
-        ((2, 4), 1, 0, kda_device_params((2, 4))),
+        pytest.param((1, 8), 0, 1, kda_device_params((1, 8)), id="SP1xTP8"),
+        pytest.param((2, 4), 0, 1, kda_device_params((2, 4)), id="SP2xTP4"),
+        pytest.param((2, 4), 1, 0, kda_device_params((2, 4)), id="SP4xTP2"),
+        # One 4x4 prefill stage (a Galaxy tray half): SP=4 on the axis-1 ring, TP=4 on the axis-0 line.
+        pytest.param(
+            (4, 4),
+            1,
+            0,
+            kda_device_params((4, 4)),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+            id="SP4xTP4-torus-x-4x4",
+        ),
     ],
     indirect=["mesh_device", "device_params"],
 )

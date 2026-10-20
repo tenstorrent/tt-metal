@@ -65,6 +65,8 @@ def _kimi_k3(local_rows: int, tensor_parallel: int, memory_config: ttnn.MemoryCo
 # LoudBox's production layout, SP2xTP4. Q, K and V exceed KDA_QKV_L1_BYTES_PER_CORE and the projection is not the
 # tuned L1 one at 2560 rows, so both stay in DRAM, as in the layer.
 _LOUDBOX_SP2XTP4 = _kimi_k3(2560, 4, ttnn.DRAM_MEMORY_CONFIG)
+# One 4x4 prefill stage, SP4xTP4: a 5120-token chunk is 1280 rows per SP rank, at LoudBox's per-device width.
+_GALAXY_4X4_SP4XTP4 = _kimi_k3(1280, 4, ttnn.DRAM_MEMORY_CONFIG)
 # QuietBox exchange coverage: Galaxy's row count and placement with a third of its channels, still wider
 # than one fabric packet per exchanged row, so every row goes out in more than one chunk.
 _COVERAGE = _Geometry(640, (1024, 1024, 1024), 32, ttnn.L1_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG)
@@ -89,6 +91,8 @@ _MESHES = [
     # QuietBox: an SP4 ring on TorusX and SP2 on an unwrapped 2D fabric.
     _mesh((1, 4), 1, kda_device_params((1, 4)), "ring", "quietbox-SP4-axis1-ring", _COVERAGE),
     _mesh((2, 2), 0, kda_device_params((2, 2)), "mesh-2x2", "quietbox-SP2xTP2-fabric-2d", _COVERAGE),
+    # One 4x4 prefill stage (a Galaxy tray half): the SP4 ring is mesh axis 1, a straight X wrap.
+    _mesh((4, 4), 1, kda_device_params((4, 4)), "mesh-4x4", "galaxy4x4-SP4xTP4-torus-x", _GALAXY_4X4_SP4XTP4),
 ]
 
 

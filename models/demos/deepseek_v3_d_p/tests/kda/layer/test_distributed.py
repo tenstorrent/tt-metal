@@ -24,10 +24,29 @@ from models.demos.deepseek_v3_d_p.tt.kda.kda import ttKDA
 from models.tt_transformers.tt.ccl import TT_CCL
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_accurate, make_actual_start
 
+
+def _not_the_4x4_stage_layout(**params):
+    """On the 4x4 stage only TP on axis 0 is the deployed layout; SP's ring is axis 1."""
+    return params["mesh_device"] == (4, 4) and params["tensor_parallel_axis"] != 0
+
+
 pytestmark = [
     run_for_blackhole(),
-    pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True),
-    pytest.mark.parametrize("device_params", [kda_device_params((2, 4))], indirect=True),
+    pytest.mark.parametrize(
+        "mesh_device,device_params",
+        [
+            pytest.param((2, 4), kda_device_params((2, 4)), id="2x4"),
+            # One 4x4 prefill stage (a Galaxy tray half): SP=4 on the axis-1 ring, TP=4 on the axis-0 line.
+            pytest.param(
+                (4, 4),
+                kda_device_params((4, 4)),
+                marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+                id="4x4-torus-x",
+            ),
+        ],
+        indirect=True,
+    ),
+    pytest.mark.uncollect_if(pred=_not_the_4x4_stage_layout),
 ]
 
 
