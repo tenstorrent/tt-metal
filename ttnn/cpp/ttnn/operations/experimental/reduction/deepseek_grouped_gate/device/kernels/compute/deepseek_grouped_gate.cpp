@@ -266,7 +266,7 @@ void topk(
     transpose_tile(cb_winning_group_indices, 1, 3);
     // llk_topk_sort -> inplace
     ckernel::topk_local_sort(0, (int)ascending, 4);
-    ckernel::topk_merge(0, 0, 32);
+    ckernel::topk_merge<32>(0, 0);
 
     // Use insertion sort; discard lower half and keep upper half
     // Compare upper half with the next tile; insert into correct position
@@ -280,7 +280,7 @@ void topk(
         transpose_tile(cb_winning_group_indices, j, 3);
 
         ckernel::topk_local_sort(0, (int)ascending, 4);
-        ckernel::topk_merge(0, 0, 32);
+        ckernel::topk_merge<32>(0, 0);
     }
     ckernel::topk_rebuild(0, (int)ascending, 0, 32, 5, true);
     tile_regs_commit();

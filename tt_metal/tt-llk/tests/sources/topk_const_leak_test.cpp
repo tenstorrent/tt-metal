@@ -125,6 +125,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 ckernel::sfpu::_init_topk();
             }
 
+#ifdef ARCH_BLACKHOLE
+            ckernel::sfpu::calculate_bitonic_topk_merge<
+                APPROX,
+                is_fp32_dest_acc_en,
+                TOPK_SORT_DIRECTION,
+                NETWORK_STABLE_SORT,
+                TOPK_FUSED_STABLE,
+                TOPK_RANK_STAMPED,
+                ckernel::sfpu::TopkTieOrder::Unset,
+                TOPK_TAG_BITS,
+                TOPK_K>(0 /* m_iter */);
+#else
             ckernel::sfpu::calculate_bitonic_topk_merge<
                 APPROX,
                 is_fp32_dest_acc_en,
@@ -134,6 +146,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 TOPK_RANK_STAMPED,
                 ckernel::sfpu::TopkTieOrder::Unset,
                 TOPK_TAG_BITS>(0 /* m_iter */, TOPK_K);
+#endif
         },
         0 /* dst_index */,
         VectorMode::None);

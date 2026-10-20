@@ -1183,6 +1183,16 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
         // the sort direction (top_min/idir) is the 3rd template parameter, so it must be bound
         // explicitly (false, matching the idir=0 used by the sibling topk calls here) for
         // STABLE_SORT to land in the 4th slot instead of silently binding to the direction.
+#ifdef ARCH_BLACKHOLE
+        SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            _bitonic_topk_merge,
+            (APPROX_MODE, is_fp32_dest_acc_en, false /* top_min (idir) */, STABLE_SORT, FUSED_SORT, false /* RANK_STAMPED */, TopkTieOrder::Ascending, 16, 10 /* k */),
+            dst_index,
+            vector_mode,
+            5 /* m_iter */);
+#else
         SFPU_UNARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
@@ -1192,6 +1202,7 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
             vector_mode,
             5 /* m_iter */,
             10 /* k */);
+#endif
     }
     else if constexpr (OPERATION == SfpuType::topk_rebuild)
     {
