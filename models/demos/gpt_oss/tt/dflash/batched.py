@@ -291,6 +291,11 @@ class BatchedDraft:
         user_tables = torch.arange(users * self.num_blocks, dtype=torch.int32).reshape(users, self.num_blocks)
         self.user_tables = user_tables
         self.page_table = _replicate(mesh, user_tables, ttnn.int32)  # row u: user u (each 32-row step)
+        from ..batched_decode import sharded_norm_program_config
+        from ..fused_decode.config import width_sharded_memory_config
+
+        self.res_mc = width_sharded_memory_config(mesh, self.hidden, _TPAllReduce.CORES, rows=self.rows)
+        self.norm_pc = sharded_norm_program_config(self.res_mc)
         # attention: block attention (b1's kernels, uniform), 8 users per program on 4 x 3 cores each
         self.ba = _UserBlockAttention(
             mesh, users, self.block, nq, nkv, hd, block_size, 8, 3, uniform=True, window=window or 0
@@ -471,10 +476,22 @@ class BatchedDraft:
         Returns the per-device argmax of every row (rows 32 i + u, i >= 1: the draft of position start_u + i)."""
         _TPAllReduce.reset()
         emb = ttnn.embedding(tokens, self.target.embedding_weight, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
-        h = ttnn.typecast(ttnn.reshape(emb, [1, 1, self.rows, self.hidden]), ttnn.float32)
+        # the FP32 residual stays width-sharded on the all-reduce's 90 cores: the residual adds and the norms run on
+        # the shards (no DRAM round trips; the DRAM norm ran on 8 cores)
+        h = ttnn.to_memory_config(ttnn.reshape(emb, [1, 1, self.rows, self.hidden]), self.res_mc, dtype=ttnn.float32)
+
+        def norm(h, w):
+            n = ttnn.rms_norm(
+                h, epsilon=self.eps, weight=w, program_config=self.norm_pc, memory_config=self.res_mc,
+                compute_kernel_config=self.ck,
+            )  # fmt: skip
+            x = ttnn.to_memory_config(n, ttnn.DRAM_MEMORY_CONFIG)
+            n.deallocate(True)
+            return x
+
         for li in range(self.layers):
             L = self.L[li]
-            x = ttnn.rms_norm(h, epsilon=self.eps, weight=L["ln1"], compute_kernel_config=self.ck)
+            x = norm(h, L["ln1"])
             qkv = self._linear(x, L["qkv"], L["qkv_b"])
             x.deallocate(True)
             qkv2, q_rows = self._rows_qk(qkv, L, *rot, with_q=True)
@@ -495,14 +512,14 @@ class BatchedDraft:
             perm.deallocate(True)
             partial = self._linear(heads, L["o"])
             heads.deallocate(True)
-            o = _all_reduce(partial)
+            o = _all_reduce(partial, None)  # (the residual's shards)
             partial.deallocate(True)
             o = ttnn.add(o, L["o_b"], output_tensor=o)
-            h2 = ttnn.add(h, o, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.float32)
+            h2 = ttnn.add(h, o, memory_config=self.res_mc, dtype=ttnn.float32)
             h.deallocate(True)
             o.deallocate(True)
             h = h2
-            x = ttnn.rms_norm(h, epsilon=self.eps, weight=L["ln2"], compute_kernel_config=self.ck)
+            x = norm(h, L["ln2"])
             g, u = self._linear(x, L["g"]), self._linear(x, L["u"])
             x.deallocate(True)
             act = ttnn.multiply(g, u, input_tensor_a_activations=[ttnn.UnaryOpType.SILU])
@@ -510,13 +527,13 @@ class BatchedDraft:
             u.deallocate(True)
             partial = self._linear(act, L["down"])
             act.deallocate(True)
-            mlp = _all_reduce(partial)
+            mlp = _all_reduce(partial, None)
             partial.deallocate(True)
-            h2 = ttnn.add(h, mlp, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.float32)
+            h2 = ttnn.add(h, mlp, memory_config=self.res_mc, dtype=ttnn.float32)
             h.deallocate(True)
             mlp.deallocate(True)
             h = h2
-        x = ttnn.rms_norm(h, epsilon=self.eps, weight=self.norm, compute_kernel_config=self.ck)
+        x = norm(h, self.norm)
         h.deallocate(True)
         x8 = ttnn.typecast(x, ttnn.bfloat8_b)
         x.deallocate(True)
