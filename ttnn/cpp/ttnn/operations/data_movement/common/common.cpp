@@ -698,8 +698,9 @@ uint32_t pack_scalar_into_uint32(DataType dtype, float value) {
             const uint16_t v = float_to_uint16(value);
             return pack_two_uint16_into_uint32({v, v});
         }
-        case DataType::INT32: return std::bit_cast<uint32_t>(saturating_float_to_int<int32_t>(value));
-        case DataType::UINT32: return saturating_float_to_int<uint32_t>(value);
+        // 32-bit integers truncate, matching fill_pad and the single-core tile pad.
+        case DataType::INT32: return std::bit_cast<uint32_t>(saturating_float_to_int<int32_t>(std::trunc(value)));
+        case DataType::UINT32: return saturating_float_to_int<uint32_t>(std::trunc(value));
         case DataType::BFLOAT8_B:
         case DataType::BFLOAT4_B:
         case DataType::FP8_E4M3:
