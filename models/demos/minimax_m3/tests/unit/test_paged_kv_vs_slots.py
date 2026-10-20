@@ -28,6 +28,7 @@ from models.demos.minimax_m3.tt.attention import allocate_kv_caches
 from models.demos.minimax_m3.tt.attention.kv_cache import (
     PAGE_SIZE,
     PAGE_UNMAPPED,
+    fixed_page_table,
     page_owner,
     read_paged_slot_block,
     set_page_table,
@@ -73,16 +74,13 @@ CASES = {
 
 
 def build_table(kind, *, width, num_pages, seed):
-    """Host page table. ``ordered``: row r takes physical pages [r*n, (r+1)*n) of every rank, n = ceil(width/SP), in
-    position order. ``shuffled``: every row's pages drawn at random from each rank's pool. ``shared``: shuffled, and
+    """Host page table. ``ordered``: the runner's fixed page table, row r taking physical pages [r*n, (r+1)*n) of every
+    rank in position order. ``shuffled``: every row's pages drawn at random from each rank's pool. ``shared``: shuffled, and
     row 1 maps row 0's pages under SHARED_PREFIX. ``request``: shuffled, and row 2 maps only the pages under its
     C + 300 tokens."""
     owner = [page_owner(q, chunk_local=C // SP, sp=SP) for q in range(width)]
     if kind == "ordered":
-        pages_per_slab = C // SP // PAGE_SIZE
-        q = torch.arange(width)
-        local = q // (pages_per_slab * SP) * pages_per_slab + q % pages_per_slab  # q's index among its rank's pages
-        table = torch.arange(USERS)[:, None] * -(-width // SP) + local
+        table = fixed_page_table(num_users=USERS, max_seq_len=width * PAGE_SIZE, sp=SP, chunk_size=C)
         assert int(table.max()) < num_pages
         return table
     gen = torch.Generator().manual_seed(seed)
