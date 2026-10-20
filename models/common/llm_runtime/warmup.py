@@ -670,7 +670,7 @@ def _build_plan(
     lane_batch_size: int,
     allow_force_argmax: bool,
     can_sample_on_device: bool,
-    log_probs_supported: bool,
+    log_probs_supported: bool = False,
 ) -> WarmupPlan:
     sampling_paths = ["logits"]
     if can_sample_on_device:
