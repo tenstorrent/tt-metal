@@ -184,6 +184,10 @@ tables in `expert_kernel_sweep_tables.md`): the N = 512 gate|up call is latency-
 reduce) runs the whole expert block in 1.48 ms at 256 real tokens in one pass against 9.7 ms for today's 8 sparse
 blocks (`tests/test_moe_block.py`, real layer-4 weights, PCC 0.99996 vs the current block), the recommended decode
 path at >= 8 users/row; at <= 4 users/row the sparse path with the new config (1358 -> 705 us per block) stays.
+Op-count pass (`expert_kernel_sweep.md` section 7): dense block 11 -> 6 device ops (two gate/up matmuls,
+`clamped_silu_glu`, one routing-weight matmul from the router's bf16 matrix, the multiply, W2), 1475 -> 1231 us at
+256 real tokens; sparse block 18 -> 13 device ops (`clamped_silu_glu`, one `permute` for the routing weights, no
+typecasts), bit-identical output.
 
 ## Optimization 1: router tie-break (2026-10-20)
 
