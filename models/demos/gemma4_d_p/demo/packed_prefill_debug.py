@@ -15,7 +15,6 @@ from models.demos.gemma4_d_p.demo.text_demo_prefill import TRACE_REGION_SIZE, _g
 from models.demos.gemma4_d_p.tests.test_factory import parametrize_mesh_with_fabric
 from models.demos.gemma4_d_p.tt.common import create_tt_model
 from models.demos.gemma4_d_p.tt.model_config import Gemma4ModelArgs
-from models.demos.gemma4_d_p.tt.prefill_metadata import PrefillMetadata
 from models.demos.gemma4_d_p.tt.runners.kv_caches import allocate_ring_kv_caches
 from models.demos.gemma4_d_p.tt.runners.packing import PrefillSegment, pack_positions, pack_tokens
 
@@ -45,6 +44,7 @@ def test_prefill_packed_4k_traced(mesh_device, reset_seeds):
         max_batch_size=1,
         ring_kv_caches=caches,
         stripe_size=32,
+        max_prefill_requests=len(lengths),
     )
     token_count = max(s.slot_id * chunk_size + s.actual_end for s in segments)
     tokens_all = _get_prefill_tokens(hf_model, token_count, args.vocab_size)[0]
@@ -52,8 +52,7 @@ def test_prefill_packed_4k_traced(mesh_device, reset_seeds):
         tokens_all[s.slot_id * chunk_size + s.actual_start : s.slot_id * chunk_size + s.actual_end].tolist()
         for s in segments
     ]
-    metadata = [model.prefill_metadata] + [PrefillMetadata(mesh) for _ in lengths[1:]]
-    for segment, request_metadata in zip(segments, metadata):
+    for segment, request_metadata in zip(segments, model.request_metadata):
         request_metadata.update(
             slot_idx=segment.slot_id, kv_actual_global=segment.actual_start, valid_global=segment.actual_end
         )
@@ -70,11 +69,10 @@ def test_prefill_packed_4k_traced(mesh_device, reset_seeds):
     tokens = upload(pack_tokens(token_lists, segments, chunk_size=chunk_size, cp=mesh.cp_degree))
     positions = upload(pack_positions(segments, chunk_size=chunk_size, cp=mesh.cp_degree))
     model.set_prefill_rope_positions(positions)
-    model._prefill_metadata_external = True
 
     def forward():
         embeddings = model.transform_and_embed_prefill_inputs_device(tokens)
-        return model(hidden_states=embeddings, prefill_batch=tuple(zip(lengths, metadata)))
+        return model(hidden_states=embeddings, prefill_lengths=lengths)
 
     warmup = forward()
     ttnn.synchronize_device(mesh_device)

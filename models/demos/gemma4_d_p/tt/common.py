@@ -51,6 +51,7 @@ def create_tt_model(
     force_rebuild=False,
     tt_cache_path=None,
     stripe_size=None,
+    max_prefill_requests=1,
 ):
     """
     Create Gemma4 model with all weights loaded to device.
@@ -116,6 +117,7 @@ def create_tt_model(
         num_layers=num_layers,
         ring_kv_caches=ring_kv_caches,
         stripe_size=stripe_size,
+        max_prefill_requests=max_prefill_requests,
     )
 
     # After a full cold build, record completion (+ capture host-consumed weights to the sidecar)

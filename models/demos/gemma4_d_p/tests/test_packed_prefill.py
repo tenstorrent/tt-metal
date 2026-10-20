@@ -91,6 +91,7 @@ def test_packed_prefill_runner(mesh_device, monkeypatch):
             max_seq_len=16384,
             ring_kv_caches=caches,
             stripe_size=32,
+            max_prefill_requests=kwargs["max_prefill_requests"],
         )
         return args, model, caches, state
 

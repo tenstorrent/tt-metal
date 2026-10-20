@@ -97,6 +97,7 @@ class Gemma4Model:
         num_layers=None,
         ring_kv_caches=None,
         stripe_size=None,
+        max_prefill_requests=1,
     ):
         assert state_dict and any(
             key.startswith("model.language_model.") for key in state_dict
@@ -112,10 +113,14 @@ class Gemma4Model:
         )
         if geometry_error:
             raise ValueError(geometry_error)
+        request_limit = prefill_chunk_size // (mesh_config.cp_degree * stripe_size) if stripe_size else 1
+        if not 1 <= max_prefill_requests <= request_limit:
+            raise ValueError(f"max_prefill_requests must be between 1 and {request_limit}")
 
         self.mesh_device = mesh_device
         self.hf_config = hf_config
         self.prefill_chunk_size = prefill_chunk_size
+        self.stripe_size = stripe_size
         self.ring_cache_max_seq_len = ring_cache_capacity(max_seq_len, prefill_chunk_size)
         self.mesh_config = mesh_config
         self.hidden_size = hf_config.hidden_size
@@ -132,8 +137,9 @@ class Gemma4Model:
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
 
+        self.request_metadata = tuple(PrefillMetadata(mesh_config) for _ in range(max_prefill_requests))
+        self.prefill_metadata = self.request_metadata[0]
         # When True the caller refreshes the ring metadata itself, outside any trace.
-        self.prefill_metadata = PrefillMetadata(mesh_config)
         self._prefill_metadata_external = False
         self._prefill_trace_controller = None
         self.max_seq_len = max_seq_len
@@ -237,19 +243,34 @@ class Gemma4Model:
         on_layer_complete=None,
         d2h_service=None,
         metadata_msg=None,
-        prefill_batch=None,
+        prefill_lengths=None,
     ):
         """Prefill a token batch and return its final decoder hidden states.
 
         ``hidden_states`` holds this TP device's 1/TP of the chunk's rows, as
         ``transform_and_embed_prefill_inputs_device`` returns them. The caller owns
         trace staging. Migration acknowledgements follow each layer's KV writes.
+        ``prefill_lengths`` selects packed attention using padded request lengths
+        paired with the model's persistent ``request_metadata`` entries.
         """
         if hidden_states.shape[0] != 1 or hidden_states.shape[1] != 1:
             raise ValueError("Prefill expects [1, 1, local_tokens, hidden_size] with requests packed along tokens")
         if d2h_service is not None and metadata_msg is None:
             raise ValueError("metadata_msg is required for D2H layer acknowledgements")
-        if prefill_batch is None and not self._prefill_metadata_external:
+        prefill_batch = None
+        if prefill_lengths is not None:
+            prefill_lengths = tuple(prefill_lengths)
+            if self.stripe_size is None:
+                raise ValueError("Packed prefill requires a striped model")
+            if not 1 <= len(prefill_lengths) <= len(self.request_metadata):
+                raise ValueError("Packed request count exceeds the model's metadata capacity or is empty")
+            quantum = self.mesh_config.cp_degree * self.stripe_size
+            if any(length <= 0 or length % quantum for length in prefill_lengths):
+                raise ValueError(f"Packed request lengths must be positive multiples of {quantum}")
+            if sum(prefill_lengths) > self.prefill_chunk_size:
+                raise ValueError("Packed request lengths exceed the model's chunk size")
+            prefill_batch = tuple(zip(prefill_lengths, self.request_metadata))
+        elif not self._prefill_metadata_external:
             self.prefill_metadata.update(slot_idx=user_id, kv_actual_global=chunk_start_idx)
 
         # Each layer type's RoPE lanes are looked up once per chunk and shared by all its layers.

@@ -11,7 +11,6 @@ import torch
 import ttnn
 from models.demos.gemma4_d_p.config import MeshConfig
 from models.demos.gemma4_d_p.tt.common import create_tt_model
-from models.demos.gemma4_d_p.tt.prefill_metadata import PrefillMetadata
 from models.demos.gemma4_d_p.tt.runners.packing import (
     PrefillSegment,
     pack_positions,
@@ -59,7 +58,7 @@ class Gemma4PrefillRuntime:
         return ttnn.to_device(self._host_rows(rows), self.mesh_device)
 
     def _stage_batch(self, segments):
-        for segment, metadata in zip(segments, self.request_metadata):
+        for segment, metadata in zip(segments, self.model.request_metadata):
             metadata.update(
                 slot_idx=segment.slot_id, kv_actual_global=segment.actual_start, valid_global=segment.actual_end
             )
@@ -78,7 +77,7 @@ class Gemma4PrefillRuntime:
 
     def _forward(self):
         embeddings = self.model.transform_and_embed_prefill_inputs_device(self.input_tokens)
-        result = self.model(hidden_states=embeddings, prefill_batch=tuple(zip(self._layout, self.request_metadata)))
+        result = self.model(hidden_states=embeddings, prefill_lengths=self._layout)
         if getattr(self, "output", None) is None:
             return result
         ttnn.copy(result, self.output)
@@ -95,11 +94,10 @@ class Gemma4PrefillRuntime:
             tt_cache_path=self.tt_cache_path,
             num_layers=self.config.num_layers if self.config.num_layers != 60 else None,
             stripe_size=32,
+            max_prefill_requests=min(
+                self.config.num_users, self.config.chunk_size // (32 * self.mesh_config.cp_degree)
+            ),
         )
-        capacity = min(self.config.num_users, self.config.chunk_size // (32 * self.mesh_config.cp_degree))
-        self.request_metadata = [self.model.prefill_metadata] + [
-            PrefillMetadata(self.mesh_config) for _ in range(capacity - 1)
-        ]
         self.input_tokens = self.make_chunk_input([0] * self.config.chunk_size)
         self.positions = self.make_chunk_input([0] * self.config.chunk_size)
         self.model.set_prefill_rope_positions(self.positions)
