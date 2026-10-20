@@ -2,40 +2,29 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Triage one host straight from the logs, without the index.
+"""Find and parse one host's health-check runs straight from /data. Nothing is stored."""
 
-Only that host's runs are parsed, into an in-memory database with the index schema, so scoring and rendering are
-the same code as `triage --index`. Live mode sees one host, so signal weights come from a fleet snapshot
-(`signal_rarity.json`) and failures shared by many hosts at once (sweeps) aren't recognised. Tickets come live from
-Jira when a token is configured, else from a `jira-sync` cache if there is one.
-"""
-
-import json
 import os
 import re
 import shutil
-import sqlite3
 import subprocess
-import sys
 from datetime import datetime, timezone
 from multiprocessing import Pool
 from pathlib import Path
 
-from . import index, jira_sync, tickets, triage
-from .config import (
-    BMC_REBOOT_ROOT,
-    CLUSTER_REPORT_ROOTS,
-    DCAMP_HC_ROOT,
-    JIRA_ENV,
-    MACHINE_HC_ROOT,
-    RECOVER_LOG_ROOT,
-    STACKSTORM_ROOT,
-)
+from .config import BMC_REBOOT_ROOT, CLUSTER_REPORT_ROOTS, MACHINE_HC_ROOT, RECOVER_LOG_ROOT, STACKSTORM_ROOT
+from .model import HostData, UnitResult
+from .sources import cluster_hc, machine_hc
 
-RARITY_SNAPSHOT = Path(__file__).with_name("signal_rarity.json")
-LIVE_TICKET_LIMIT = 100
+DAY = 86400.0
+PARSERS = {
+    "machine_hc": machine_hc.parse_run,
+    "bmc_reboot": machine_hc.parse_run,
+    "cluster_report": cluster_hc.parse_report,
+    "cluster_log": cluster_hc.parse_log,
+}
 RECOVER_DIR_DATE_RE = re.compile(r"-(\d{8})T\d{6}Z")
-# Unit patterns of the cluster HC sources (as the index discovers them); files are found by the host name in them.
+# Cluster HC files that hold runs; they are found by the host name in their text.
 CLUSTER_PATTERNS = (
     ("cluster_report", [str(root / "*/*/*.json") for root in CLUSTER_REPORT_ROOTS]),
     (
@@ -49,8 +38,12 @@ CLUSTER_PATTERNS = (
 )
 
 
-def fleet_stats() -> triage.FleetStats:
-    return triage.FleetStats(json.loads(RARITY_SNAPSHOT.read_text())["rarity"], {})
+def parse_unit(job: tuple[str, str]) -> UnitResult:
+    source, unit = job
+    try:
+        return PARSERS[source](unit)
+    except Exception as exc:  # one unreadable file must not stop the rest
+        return UnitResult(unit=unit, error=f"{type(exc).__name__}: {exc}"[:300])
 
 
 def _run_dirs(root: Path, host: str, since_day: str) -> list[str]:
@@ -98,15 +91,10 @@ def _cluster_search_roots(since_day: str, since_ts: float) -> list[Path]:
 
 def host_units(host: str, as_of: float, days: int) -> list[tuple[str, str]]:
     """(source, unit) for every run of `host` that can fall in the window."""
-    since_ts = as_of - (days + 1) * triage.DAY
+    since_ts = as_of - (days + 1) * DAY
     since_day = datetime.fromtimestamp(since_ts, timezone.utc).strftime("%Y-%m-%d")
     units = [("machine_hc", d) for d in _run_dirs(MACHINE_HC_ROOT, host, since_day)]
     units += [("bmc_reboot", d) for d in _run_dirs(BMC_REBOOT_ROOT, host, since_day)]
-    units += [
-        ("dcamp_hc", str(p.parent))
-        for p in sorted((DCAMP_HC_ROOT / host).glob("*/*/ticket.json"))
-        if p.parent.parent.name >= since_day
-    ]
     for path in _files_naming(host, _cluster_search_roots(since_day, since_ts), since_ts):
         source = next((s for s, patterns in CLUSTER_PATTERNS if any(path.match(p) for p in patterns)), None)
         if source:
@@ -114,40 +102,10 @@ def host_units(host: str, as_of: float, days: int) -> list[tuple[str, str]]:
     return units
 
 
-def _siblings(host: str) -> list[str]:
-    """The same rack/slot in the other superpod: a short name (`b02u08`) in a ticket may mean either."""
-    m = re.fullmatch(r"bh-glx-(\d{3})-([a-d]\d{2}u\d{2})", host)
-    return [f"bh-glx-{pod}-{m.group(2)}" for pod in ("110", "120") if pod != m.group(1)] if m else []
-
-
-def host_tickets(host: str) -> list[dict]:
-    """Tickets mentioning the host: live from Jira with a token, else from a jira-sync cache."""
-    suffix = host.rsplit("-", 1)[-1].lower()
-    if not JIRA_ENV.exists():
-        return [t for t in tickets.load_cached_tickets() if suffix in t["text"].lower()]
-    client = jira_sync.Client(*jira_sync.load_credentials())
-    # Jira doesn't split `bh-glx-120-b03u02` into words: search the full name and the short one (`b03u02`).
-    jql = f'(project = DIIM OR project = DCAMP) AND (text ~ "{host}" OR text ~ "{suffix}") ORDER BY created DESC'
-    out = []
-    try:
-        for issue in client.search(jql, jira_sync.FIELDS):
-            comments = (issue["fields"].get("comment") or {}).get("comments", [])
-            out.append(tickets.ticket_from_issue(jira_sync.normalize(issue, comments)))
-            if len(out) >= LIVE_TICKET_LIMIT:
-                break
-    except jira_sync.JiraError as exc:
-        print(f"Jira unavailable, tickets not shown: {exc}", file=sys.stderr)
-    return out
-
-
-def connect(host: str, as_of: float, days: int, workers: int = 8) -> sqlite3.Connection:
-    conn = sqlite3.connect(":memory:")
-    conn.executescript(index.SCHEMA)
+def collect(host: str, as_of: float, days: int, workers: int = 8) -> HostData:
     units = host_units(host, as_of, days)
-    source_of = dict((unit, source) for source, unit in units)
+    data = HostData()
     with Pool(max(1, min(workers, len(units) // 8))) as pool:
-        for res in pool.imap_unordered(index.parse_unit, units, chunksize=4):
-            index.store_unit(conn, source_of[res.unit], res, 0.0, 0, "live")
-    conn.executescript(tickets.SCHEMA)
-    tickets.insert_tickets(conn, host_tickets(host), {host, *_siblings(host)}, tickets.load_jql_categories())
-    return conn
+        for res in pool.imap_unordered(parse_unit, units, chunksize=4):
+            data.add(res)
+    return data

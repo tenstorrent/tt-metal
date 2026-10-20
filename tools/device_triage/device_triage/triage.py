@@ -2,29 +2,27 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Per-device status and likely issue, from the index.
+"""Per-device status and likely issue, from one host's health-check runs.
 
 Scoring, per category over a time window ending at `as_of`:
   event weight = severity x source factor x rarity(signal) x recency
-  rarity  = how few hosts in the fleet show the signal (IDF): a WARN that every
+  rarity  = how few hosts in the fleet show the signal (IDF, from the shipped snapshot): a WARN that every
             host has says nothing about this one
   recency = exponential decay, half-life 7 days
 Within one run (or log file) a category counts once, at its strongest event, so
 a log repeating one error 500 times is one piece of evidence, not 500.
 """
 
-import bisect
 import json
 import math
-import sqlite3
-import time
 from collections import Counter, defaultdict
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
+from pathlib import Path
 
 from . import hosts
+from .model import Event, HostData, Run
 from .signatures import CATEGORIES, SEVERITY_WEIGHT
-from .tickets import HC_BOT_PREFIX
 
 DAY = 86400.0
 HALF_LIFE_DAYS = 7.0
@@ -37,22 +35,19 @@ NON_DEVICE = {"infra", "unknown", "host"}
 # A chip dropping off PCIe and a reset that can't bring it back are one incident seen from two sides;
 # tickets are titled by whichever the filer saw first.
 CATEGORY_FAMILY = {"pcie": "pcie_reset", "reset": "pcie_reset"}
+RARITY_SNAPSHOT = Path(__file__).with_name("signal_rarity.json")
 
 
 def same_family(a: str, b: str) -> bool:
     return CATEGORY_FAMILY.get(a, a) == CATEGORY_FAMILY.get(b, b)
 
 
-# Machine HC runs are per host, so the same failure on several hosts within minutes is an environment
-# event (neighbours resetting their ETH links, a driver rollout), not a fault on each host.
-SWEEP_SOURCES = ("machine_hc", "bmc_reboot")
-SWEEP_WINDOW_S = 300.0
-SWEEP_MIN_HOSTS = 3
-SWEEP_FACTOR = 0.25
-
-
 def fmt_ts(ts: float | None) -> str:
     return datetime.fromtimestamp(ts, timezone.utc).strftime("%Y-%m-%d %H:%M") if ts else "?"
+
+
+def load_rarity() -> dict[str, float]:
+    return json.loads(RARITY_SNAPSHOT.read_text())["rarity"]
 
 
 @dataclass
@@ -105,45 +100,6 @@ def base_signal(signal: str) -> str:
     return signal.rsplit(":", 1)[-1]
 
 
-def signal_rarity(conn: sqlite3.Connection) -> dict[str, float]:
-    """IDF per base signal over the whole index, in [0, 1]."""
-    (n_hosts,) = conn.execute("SELECT COUNT(DISTINCT host) FROM events WHERE host IS NOT NULL").fetchone()
-    hosts_by_signal: dict[str, set[str]] = defaultdict(set)
-    for sig, host in conn.execute("SELECT DISTINCT signal, host FROM events WHERE host IS NOT NULL"):
-        hosts_by_signal[base_signal(sig)].add(host)
-    denom = math.log(n_hosts + 1) or 1.0
-    return {sig: math.log((n_hosts + 1) / (len(h) + 1)) / denom for sig, h in hosts_by_signal.items()}
-
-
-@dataclass
-class FleetStats:
-    """Fleet-wide statistics that scoring a single host depends on. Compute once per report."""
-
-    rarity: dict[str, float]
-    sweeps: dict[str, tuple[list[float], list[str]]]
-
-    def sweep_hosts(self, signal: str, ts: float) -> int:
-        """Distinct hosts with the same signal within SWEEP_WINDOW_S of ts."""
-        times, host_list = self.sweeps.get(signal, ([], []))
-        lo = bisect.bisect_left(times, ts - SWEEP_WINDOW_S)
-        hi = bisect.bisect_right(times, ts + SWEEP_WINDOW_S)
-        return len(set(host_list[lo:hi]))
-
-
-def fleet_stats(conn: sqlite3.Connection) -> FleetStats:
-    sweeps: dict[str, tuple[list[float], list[str]]] = {}
-    rows = conn.execute(
-        f"SELECT ts, host, signal FROM events WHERE source IN ({','.join('?' * len(SWEEP_SOURCES))}) "
-        "AND severity = 'fail' AND ts IS NOT NULL AND host IS NOT NULL ORDER BY ts",
-        SWEEP_SOURCES,
-    )
-    for ts, host, sig in rows:
-        times, host_list = sweeps.setdefault(base_signal(sig), ([], []))
-        times.append(ts)
-        host_list.append(host)
-    return FleetStats(signal_rarity(conn), sweeps)
-
-
 def event_weight(
     severity: str, source: str, origin: str, signal: str, age_days: float, rarity: dict[str, float]
 ) -> float:
@@ -154,13 +110,12 @@ def event_weight(
     return SEVERITY_WEIGHT[severity] * factor * idf * 0.5 ** (age_days / HALF_LIFE_DAYS)
 
 
-def ordinal_map(conn: sqlite3.Connection, host: str) -> dict[int, str]:
+def ordinal_map(chip_map: list[tuple[str, str, str, int | None]], host: str) -> dict[int, str]:
     """Driver ordinal -> chip, as most often observed in this host's triage tables."""
     votes: dict[int, Counter] = defaultdict(Counter)
-    for ordinal, chip in conn.execute(
-        "SELECT ordinal, chip FROM chip_obs WHERE host = ? AND ordinal IS NOT NULL", (host,)
-    ):
-        votes[ordinal][chip] += 1
+    for h, _bdf, chip, ordinal in chip_map:
+        if h == host and ordinal is not None:
+            votes[ordinal][chip] += 1
     return {o: c.most_common(1)[0][0] for o, c in votes.items()}
 
 
@@ -175,48 +130,48 @@ def _resolve_chips(chips: str, ordinals: dict[int, str]) -> list[str]:
     return out
 
 
+def _in_window(ts: float | None, as_of: float, window_days: int) -> bool:
+    return ts is not None and as_of - window_days * DAY <= ts <= as_of
+
+
 def score_host(
-    conn: sqlite3.Connection, host: str, as_of: float, window_days: int, stats: FleetStats, ordinals: dict[int, str]
+    events: list[tuple[str, Event]],
+    host: str,
+    as_of: float,
+    window_days: int,
+    rarity: dict[str, float],
+    ordinals: dict[int, str],
 ) -> list[CategoryScore]:
-    rows = conn.execute(
-        "SELECT ts, source, origin, category, signal, severity, chips, detail, path, line, count, unit "
-        "FROM events WHERE host = ? AND ts BETWEEN ? AND ? AND severity != 'info'",
-        (host, as_of - window_days * DAY, as_of),
-    ).fetchall()
     unit_best: dict[tuple[str, str], Evidence] = {}
     signal_best: dict[tuple[str, str], Evidence] = {}
     signal_units: dict[tuple[str, str], set[str]] = defaultdict(set)
     signal_first: dict[tuple[str, str], float] = {}
     chip_weight: dict[str, Counter] = defaultdict(Counter)
-    for ts, source, origin, cat, sig, sev, chips, detail, path, line, count, unit in rows:
-        weight = event_weight(sev, source, origin, sig, max(0.0, (as_of - (ts or as_of)) / DAY), stats.rarity)
-        if ts and sev == "fail" and source in SWEEP_SOURCES:
-            n_hosts = stats.sweep_hosts(base_signal(sig), ts)
-            if n_hosts >= SWEEP_MIN_HOSTS:
-                weight *= SWEEP_FACTOR
-                detail = f"{detail} [same failure on {n_hosts} hosts within {SWEEP_WINDOW_S / 60:.0f} min]"
+    for unit, e in events:
+        if e.host != host or e.severity == "info" or not _in_window(e.ts, as_of, window_days):
+            continue
+        weight = event_weight(e.severity, e.source, e.origin, e.signal, (as_of - e.ts) / DAY, rarity)
         ev = Evidence(
-            ts,
-            source,
-            origin,
-            cat,
-            sig,
-            sev,
-            ",".join(_resolve_chips(chips or "", ordinals)),
-            detail,
-            path,
-            line,
-            count,
+            e.ts,
+            e.source,
+            e.origin,
+            e.category,
+            e.signal,
+            e.severity,
+            ",".join(_resolve_chips(e.chips or "", ordinals)),
+            e.detail,
+            e.path,
+            e.line,
+            e.count,
             weight,
         )
         for chip in filter(None, ev.chips.split(",")):
-            chip_weight[cat][chip] += weight
-        if (unit, cat) not in unit_best or weight > unit_best[(unit, cat)].weight:
-            unit_best[(unit, cat)] = ev
-        key = (cat, sig)
+            chip_weight[ev.category][chip] += weight
+        if (unit, ev.category) not in unit_best or weight > unit_best[(unit, ev.category)].weight:
+            unit_best[(unit, ev.category)] = ev
+        key = (ev.category, ev.signal)
         signal_units[key].add(unit)
-        if ts:
-            signal_first[key] = min(signal_first.get(key, ts), ts)
+        signal_first[key] = min(signal_first.get(key, e.ts), e.ts)
         if key not in signal_best or weight > signal_best[key].weight:
             signal_best[key] = ev
     scores = []
@@ -227,9 +182,15 @@ def score_host(
             ev.runs = len(signal_units[(cat, ev.signal)])
             ev.first_ts = signal_first.get((cat, ev.signal))
         # Where = the chips of the strongest evidence; summing every event would let chips that checks merely
-        # list (the first BDF of a table) outweigh the tray that is actually missing.
+        # list (the first BDF of a table) outweigh the tray that is actually missing. Unless the category hits
+        # every tray: a check that lists only its first few failing chips must still read "all".
         lead = next((ev for ev in evidence if ev.chips), None)
-        chips = hosts.summarize_chips(dict.fromkeys(lead.chips.split(","), 1.0) if lead else chip_weight[cat])
+        overall = hosts.summarize_chips(chip_weight[cat])
+        chips = (
+            overall
+            if overall == "all" or not lead
+            else hosts.summarize_chips(dict.fromkeys(lead.chips.split(","), 1.0))
+        )
         scores.append(
             CategoryScore(
                 category=cat,
@@ -243,85 +204,48 @@ def score_host(
     return sorted(scores, key=lambda s: -s.score)
 
 
-def _machine_hc_status(conn: sqlite3.Connection, host: str, as_of: float, window_days: int) -> dict:
-    runs = conn.execute(
-        "SELECT r.run_id, r.ts_start, r.status, r.summary, r.path, r.extra FROM runs r JOIN run_hosts h USING (run_id) "
-        "WHERE h.host = ? AND r.source = 'machine_hc' AND r.ts_start BETWEEN ? AND ? ORDER BY r.ts_start",
-        (host, as_of - window_days * DAY, as_of),
-    ).fetchall()
-    if not runs:
+def _machine_hc_status(runs: list[Run], host: str, as_of: float, window_days: int) -> dict:
+    mhc = sorted(
+        (
+            r
+            for r in runs
+            if r.source == "machine_hc" and host in r.hosts and _in_window(r.ts_start, as_of, window_days)
+        ),
+        key=lambda r: r.ts_start,
+    )
+    if not mhc:
         return {"runs": 0}
-    last = runs[-1]
+    last = mhc[-1]
     return {
-        "runs": len(runs),
-        "counts": dict(Counter(r[2] for r in runs)),
-        "last_ts": last[1],
-        "last_status": last[2],
-        "last_summary": last[3],
-        "last_path": last[4],
-        "last_pass": max((r[1] for r in runs if r[2] == "PASS"), default=None),
-        "last_fail": max((r[1] for r in runs if r[2] == "FAIL"), default=None),
-        "history": "".join(r[2][0] for r in runs[-20:]),
-        "recent": "".join(r[2][0] for r in runs if r[1] >= as_of - RECENT_DAYS * DAY),
-        "overall_status": json.loads(last[5] or "{}").get("overall_status"),
+        "runs": len(mhc),
+        "counts": dict(Counter(r.status for r in mhc)),
+        "last_ts": last.ts_start,
+        "last_status": last.status,
+        "last_summary": last.summary,
+        "last_path": last.path,
+        "last_pass": max((r.ts_start for r in mhc if r.status == "PASS"), default=None),
+        "last_fail": max((r.ts_start for r in mhc if r.status == "FAIL"), default=None),
+        "history": "".join(r.status[0] for r in mhc[-20:]),
+        "recent": "".join(r.status[0] for r in mhc if r.ts_start >= as_of - RECENT_DAYS * DAY),
+        "overall_status": last.extra.get("overall_status"),
     }
 
 
-def _cluster_hc_status(conn: sqlite3.Connection, host: str, as_of: float, window_days: int) -> dict:
+def _cluster_hc_status(runs: list[Run], host: str, as_of: float, window_days: int) -> dict:
     out: dict[str, dict] = {}
-    rows = conn.execute(
-        "SELECT r.kind, r.status, r.ts_end, (SELECT COUNT(*) FROM run_hosts x WHERE x.run_id = r.run_id) "
-        "FROM runs r JOIN run_hosts h USING (run_id) WHERE h.host = ? AND r.source = 'cluster_hc' "
-        "AND r.ts_end BETWEEN ? AND ? ORDER BY r.ts_end",
-        (host, as_of - window_days * DAY, as_of),
-    ).fetchall()
-    for kind, status, ts, n_hosts in rows:
-        k = out.setdefault(kind, {"runs": 0, "failed": 0, "single_host_runs": 0, "single_host_failed": 0})
+    chc = sorted(
+        (r for r in runs if r.source == "cluster_hc" and host in r.hosts and _in_window(r.ts_end, as_of, window_days)),
+        key=lambda r: r.ts_end,
+    )
+    for r in chc:
+        k = out.setdefault(r.kind, {"runs": 0, "failed": 0, "single_host_runs": 0, "single_host_failed": 0})
         k["runs"] += 1
-        k["failed"] += status == "FAIL"
-        if n_hosts == 1:
+        k["failed"] += r.status == "FAIL"
+        if len(r.hosts) == 1:
             k["single_host_runs"] += 1
-            k["single_host_failed"] += status == "FAIL"
-            k["single_last_status"], k["single_last_ts"] = status, ts
-        k["last_status"], k["last_ts"] = status, ts
-    return out
-
-
-def host_tickets(conn: sqlite3.Connection, host: str) -> list[dict]:
-    """Tickets about the host first (`subject`), then ones that only mention it; humans' before the HC bot's."""
-    rows = conn.execute(
-        "SELECT t.key, t.created, t.status, t.is_open, t.summary, t.primary_category, h.how, h.subject, "
-        "(SELECT group_concat(DISTINCT category) FROM ticket_cats c WHERE c.key = t.key) "
-        "FROM tickets t JOIN ticket_hosts h USING (key) WHERE h.host = ? "
-        "ORDER BY h.subject DESC, substr(t.summary, 1, ?) = ?, t.is_open DESC, t.created DESC",
-        (host, len(HC_BOT_PREFIX), HC_BOT_PREFIX),
-    ).fetchall()
-    out = []
-    for k, c, s, o, su, p, how, subject, cats in rows:
-        evidence = conn.execute(
-            "SELECT category, signal, severity, chips, detail, path, line, count FROM ticket_evidence "
-            "WHERE key = ? AND (host = ? OR host IS NULL) AND severity != 'info' "
-            "ORDER BY severity = 'fail' DESC, count DESC LIMIT 3",
-            (k, host),
-        ).fetchall()
-        out.append(
-            {
-                "key": k,
-                "created": c,
-                "status": s,
-                "open": bool(o),
-                "summary": su,
-                "primary": p,
-                "how": how,
-                "subject": bool(subject),
-                "bot": su.startswith(HC_BOT_PREFIX),
-                "categories": sorted(set((cats or "").split(",")) - {""}),
-                "attachment_evidence": [
-                    dict(zip(("category", "signal", "severity", "chips", "detail", "path", "line", "count"), e))
-                    for e in evidence
-                ],
-            }
-        )
+            k["single_host_failed"] += r.status == "FAIL"
+            k["single_last_status"], k["single_last_ts"] = r.status, r.ts_end
+        k["last_status"], k["last_ts"] = r.status, r.ts_end
     return out
 
 
@@ -364,22 +288,20 @@ def _likely(scores: list[CategoryScore]) -> tuple[str, str, str]:
 
 
 def triage(
-    conn: sqlite3.Connection,
     host: str,
-    as_of: float | None = None,
+    data: HostData,
+    tickets: list[dict],
+    as_of: float,
     window_days: int = 30,
-    stats: FleetStats | None = None,
+    rarity: dict[str, float] | None = None,
 ) -> Report:
-    host = hosts.normalize_host(host) or host
-    as_of = as_of or time.time()
-    stats = stats or fleet_stats(conn)
-    ordinals = ordinal_map(conn, host)
-    scores = score_host(conn, host, as_of, window_days, stats, ordinals)
+    rarity = rarity if rarity is not None else load_rarity()
+    ordinals = ordinal_map(data.chip_map, host)
+    scores = score_host(data.events, host, as_of, window_days, rarity, ordinals)
     likely, confidence, chips = _likely(scores)
-    mhc = _machine_hc_status(conn, host, as_of, window_days)
-    chc = _cluster_hc_status(conn, host, as_of, window_days)
+    mhc = _machine_hc_status(data.runs, host, as_of, window_days)
+    chc = _cluster_hc_status(data.runs, host, as_of, window_days)
     status, reason = _status(mhc, chc, next((s for s in scores if s.category == likely), None), as_of)
-    tickets = host_tickets(conn, host) if _has_tickets(conn) else []
     return Report(
         host,
         as_of,
@@ -395,10 +317,6 @@ def triage(
         tickets,
         {f"dev{o}": c for o, c in sorted(ordinals.items())},
     )
-
-
-def _has_tickets(conn: sqlite3.Connection) -> bool:
-    return bool(conn.execute("SELECT 1 FROM sqlite_master WHERE name = 'tickets'").fetchone())
 
 
 def render(report: Report, verbose: bool = False) -> str:
@@ -461,12 +379,6 @@ def render(report: Report, verbose: bool = False) -> str:
                 f"  {'OPEN' if t['open'] else 'done'} {t['key']:<10} {fmt_ts(t['created'])[:10]} [{t['status']}] "
                 f"{t['summary'][:100]}{how}  cats={','.join(t['categories']) or '-'}{match}"
             )
-            for e in t["attachment_evidence"]:
-                chips = f" [{e['chips']}]" if e["chips"] else ""
-                lines.append(
-                    f"      attachment: {e['category']}/{e['signal']}{chips} {e['detail'][:120]}"
-                    f"  ({e['path'].rsplit('/', 1)[-1]}:{e['line']})"
-                )
     if bot:
         open_bot = [t["key"] for t in bot if t["open"]]
         lines.append(

@@ -40,10 +40,27 @@ class Run:
 
 @dataclass
 class UnitResult:
-    """Everything one indexing unit (a run directory or a log file) contributes."""
+    """Everything one parsed unit (a run directory or a log file) contributes."""
 
     unit: str
     runs: list[Run] = field(default_factory=list)
     events: list[Event] = field(default_factory=list)
     chip_map: list[tuple[str, str, str, int | None]] = field(default_factory=list)
     error: str = ""
+
+
+@dataclass
+class HostData:
+    """One host's parsed runs: events keyed by the unit they came from (a run counts once per category)."""
+
+    runs: list[Run] = field(default_factory=list)
+    events: list[tuple[str, Event]] = field(default_factory=list)
+    chip_map: list[tuple[str, str, str, int | None]] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
+
+    def add(self, res: UnitResult) -> None:
+        self.runs += res.runs
+        self.events += [(res.unit, ev) for ev in res.events]
+        self.chip_map += res.chip_map
+        if res.error:
+            self.errors.append(f"{res.unit}: {res.error}")

@@ -1,5 +1,5 @@
 {
- "note": "IDF per base signal over the fleet (229 hosts, 2026-10-14). Live triage sees one host, so it weighs signals with this snapshot instead of the index.",
+ "note": "IDF per base signal over the fleet (229 hosts, all machine HC and cluster HC events up to 2026-10-14). triage sees one host, so it weighs signals with this snapshot.",
  "rarity": {
   "aiclk_settle_timeout": 0.479,
   "analyzer_input_error": 0.642,

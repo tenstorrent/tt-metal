@@ -10,7 +10,6 @@ import re
 from pathlib import Path
 
 from .. import hosts
-from ..config import CLUSTER_REPORT_ROOTS, RECOVER_LOG_ROOT, STACKSTORM_ROOT
 from ..logscan import iso_ts, read_lines, scan_lines, utc_ts
 from ..model import Event, Run, UnitResult
 from ..signatures import ANALYZER_CODES
@@ -21,20 +20,6 @@ PATH_TS_RES = (
     (re.compile(r"(\d{8}_\d{6})"), "%Y%m%d_%H%M%S"),
 )
 DOWNGRADE = {"fail": "warn", "warn": "info", "info": "info"}
-
-
-def discover_reports() -> list[tuple[str, str]]:
-    out = []
-    for root in CLUSTER_REPORT_ROOTS:
-        out += [(str(p), str(p)) for p in root.glob("*/*/*.json")]
-    return out
-
-
-def discover_logs() -> list[tuple[str, str]]:
-    paths = list(RECOVER_LOG_ROOT.glob("*/recover_*.log"))
-    paths += STACKSTORM_ROOT.glob("*/logs/recover-*.log")
-    paths += STACKSTORM_ROOT.glob("nightly-health-check/*/physical_validation/*/*/cluster_validation_iteration_*.log")
-    return [(str(p), str(p)) for p in paths if os.access(p, os.R_OK)]
 
 
 def parse_report(path: str) -> UnitResult:

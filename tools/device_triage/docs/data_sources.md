@@ -1,7 +1,7 @@
 # Data sources
 
-Everything here is read-only. `/data` is shared NFS: scan with `nice`/`ionice`,
-moderate parallelism, and incrementally (the index remembers path+mtime+size).
+Everything here is read-only. `/data` is shared NFS: `triage` searches it with `nice` and parses only the
+files of one host that can hold runs from its window.
 
 ## Machine HC (`/data/ci-provisioner`)
 
@@ -127,29 +127,20 @@ Site `tenstorrent.atlassian.net`, cloudId `b9d94484-5dbd-4ae2-b670-6f414aefb4cd`
 - `bmc bot` / `bmc_bots` = the tool people use to reach a host's BMC and power-cycle it;
   BMC tickets are "BMC ip not reachable", "bmc unavailable", ipmitool failures.
 
-### DCAMP bot attachments = machine HC history before hc_logs
+### DCAMP bot attachments
 
-hc_logs on disk start 2026-09-11; the bot tickets carry the failing runs' files back to April.
-`jira-sync` rebuilds them as run directories in `cache/dcamp_hc/<host>/<date>/<job>/` (index source
-`dcamp_hc`, parsed like machine HC), skipping jobs still on disk:
+hc_logs on disk start 2026-09-11, but the bot tickets carry the failing runs' files back to April. `triage`
+doesn't read them (they'd need downloading); they are the place to look for older history:
 
-| era | attached | rebuilt as |
-| --- | --- | --- |
-| Apr-Jun | `<host>-<job>.log`: console of the older fabric health check (gtest `Cluster.*` + UMD lines) | `suite.log`, scanned line by line |
-| Jul-Oct | `diag_report[-<job>].json`, `<check>[-<job>].log`, `triage_host_side-<job>.txt`, console `<host>-<job>.log` | same layout as hc_logs |
+| era | attached |
+| --- | --- |
+| Apr-Jun | `<host>-<job>.log`: console of the older fabric health check (gtest `Cluster.*` + UMD lines) |
+| Jul-Oct | `diag_report[-<job>].json`, `<check>[-<job>].log`, `triage_host_side-<job>.txt`, console `<host>-<job>.log` |
 
 Every bot-uploaded `diag_report` is **base64 inside quotes and cut off** (~75% of the file): the snapshot
-phase survives, the tests phase is usually lost. They are decoded and the JSON repaired (`diag: repaired`
-in `ticket.json`); the console log is kept as `suite.log` for the test failures.
+phase survives, the tests phase (why the run failed) is usually lost. Early tickets use pre-superpod names
+(`bh-glx-b05u02`); some reports name a container (`6ddeaba6e2a2`) instead of the host.
 
-Telemetry `.prom` and `qsfp_dump` files (half the bytes) are not fetched. Early tickets use pre-superpod
-names (`bh-glx-b05u02`), resolved when exactly one known host matches. Some reports name a container
-(`6ddeaba6e2a2`) instead of the host. Every rebuilt run counts as FAIL (it was ticketed), so this adds
-failure history only.
-
-Access: REST with an API token (`~/.config/device_triage/jira.env`, 0600): `python3 -m device_triage
-jira-sync` (GET only; issues + all comments, DIIM attachments, DCAMP run rebuild, JQL refresh).
-Without it, the Atlassian MCP: `searchJiraIssuesUsingJql` (JQL `text ~` searches summary,
-description and comments server-side), `getJiraIssue`, `listJiraIssueComments`
-(executeRead), `downloadJiraIssueAttachment` (executeRead; returns a curl command with
-a short-lived URL, so the bytes go to disk, not into the agent's context).
+Access: REST with an API token (`~/.config/device_triage/jira.env`, 0600), GET only. `text ~` searches
+summary, description and comments, but doesn't split `bh-glx-120-b03u02` into words: search the full
+name and the short one (`b03u02`).

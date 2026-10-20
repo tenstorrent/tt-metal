@@ -2,38 +2,13 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Jira tickets in the index: hosts they name, categories they belong to.
-
-Tickets come from `cache/jira/issues/*.json` (`jira-sync`, full text) or an older summary-only listing in
-`cache/jira/mcp/*.tsv`. Category membership by JQL (summary + description) comes from `jql_membership.json`.
-"""
+"""Jira tickets as seen from one host: which hosts a ticket names, how, and which categories it is in."""
 
 import itertools
-import json
 import re
-import sqlite3
-import zipfile
-from collections.abc import Iterator
 from datetime import datetime
-from pathlib import Path
 
-from . import hosts, index, logscan
-from .config import JIRA_CACHE, JQL_MEMBERSHIP, JQL_QUERIES, MAX_LINES_PER_FILE
-
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS tickets (key TEXT PRIMARY KEY, project TEXT, created REAL, resolved REAL, status TEXT,
-    is_open INTEGER, summary TEXT, text TEXT, primary_category TEXT, source TEXT);
-CREATE TABLE IF NOT EXISTS ticket_hosts (key TEXT, host TEXT, how TEXT, subject INTEGER, PRIMARY KEY (key, host));
-CREATE TABLE IF NOT EXISTS ticket_cats (key TEXT, category TEXT, source TEXT, PRIMARY KEY (key, category, source));
-CREATE TABLE IF NOT EXISTS ticket_refs (key TEXT, ref TEXT, PRIMARY KEY (key, ref));
-CREATE TABLE IF NOT EXISTS ticket_evidence (key TEXT, host TEXT, category TEXT, signal TEXT, severity TEXT,
-    chips TEXT, detail TEXT, path TEXT, line INTEGER, count INTEGER);
-CREATE INDEX IF NOT EXISTS ticket_hosts_host ON ticket_hosts(host);
-CREATE TABLE IF NOT EXISTS attachment_scans (path TEXT PRIMARY KEY, mtime REAL, size INTEGER, version TEXT,
-    events TEXT);
-"""
-ATTACHMENTS_DIR = JIRA_CACHE / "attachments"
-TEXT_SUFFIXES = {".log", ".txt", ".out", ".json", ".jsonl", ".csv", ".yaml", ".yml", ""}
+from . import hosts
 
 CLOSED_STATUSES = {"done", "closed", "resolved", "won't do", "wont do", "cancelled", "duplicate"}
 
@@ -70,10 +45,8 @@ TEXT_CATEGORIES: tuple[tuple[str, re.Pattern], ...] = tuple(
         ("infra", r"slurm|provision|access\b|install|script|weights|\bci\b|runner|descriptor|recabl|request"),
     )
 )
-# JQL membership whose terms are specific enough to trust as a category label.
-TRUSTED_JQL = {"gddr", "tensix", "pcie"}
-# ticket_hosts.how for a host the title names unambiguously. Hosts only in the description are "description"
-# (they often list a whole quad around the one affected host); hosts only in comments are "comment".
+# How a ticket names a host: in the title unambiguously (NAMED_HOWS); hosts only in the description are
+# "description" (they often list a whole quad around the one affected host); only in comments, "comment".
 NAMED_HOWS = ("full", "bracket", "quad", "short")
 # A ticket is about (`subject`) the hosts its title names, else the hosts its description names if at most
 # this many; longer lists are fleet-wide tickets (KMD versions, Weka, SP-wide logs), not about each host.
@@ -132,48 +105,16 @@ def _parse_jira_ts(text: str | None) -> float | None:
     return None
 
 
-def load_cached_tickets() -> list[dict]:
-    """Full issues from a REST sync if present, else the MCP summary listing."""
-    issues_dir = JIRA_CACHE / "issues"
-    tickets: dict[str, dict] = {}
-    for path in sorted((JIRA_CACHE / "mcp").glob("*_p*.tsv")):
-        project = path.name.split("_", 1)[0]
-        for line in path.read_text().splitlines():
-            key, created, status, summary = (line.split("\t", 3) + ["", "", ""])[:4]
-            tickets[key] = {
-                "key": key,
-                "project": project,
-                "created": _parse_jira_ts(created),
-                "resolved": None,
-                "status": status,
-                "summary": summary,
-                "description": "",
-                "comments": "",
-                "text": summary,
-                "source": "mcp",
-            }
-    if issues_dir.is_dir():
-        for path in issues_dir.glob("*.json"):
-            ticket = ticket_from_issue(json.loads(path.read_text()))
-            tickets[ticket["key"]] = ticket
-    return list(tickets.values())
-
-
 def ticket_from_issue(issue: dict) -> dict:
-    """A synced issue record (`jira_sync.normalize`) as a ticket row."""
+    """An issue (`jira.normalize`) as a ticket: text split into title, description and comments."""
     summary, description = issue.get("summary", ""), issue.get("description", "")
-    comments = "\n".join(c.get("body", "") for c in issue.get("comments", []))
     return {
         "key": issue["key"],
-        "project": issue["key"].split("-")[0],
         "created": _parse_jira_ts(issue.get("created")),
-        "resolved": _parse_jira_ts(issue.get("resolved")),
         "status": issue.get("status", ""),
         "summary": summary,
         "description": description,
-        "comments": comments,
-        "text": "\n".join([summary, description, comments]),
-        "source": "rest",
+        "comments": "\n".join(c.get("body", "") for c in issue.get("comments", [])),
     }
 
 
@@ -192,133 +133,32 @@ def subjects(found: dict[str, str]) -> set[str]:
     return named or (described if len(described) <= MAX_DESCRIPTION_SUBJECTS else set())
 
 
-def subject_hosts(conn: sqlite3.Connection, key: str) -> list[str]:
-    return [
-        h for (h,) in conn.execute("SELECT host FROM ticket_hosts WHERE key = ? AND subject = 1 ORDER BY host", (key,))
-    ]
+def siblings(host: str) -> list[str]:
+    """The same rack/slot in the other superpod: a short name (`b02u08`) in a ticket may mean either."""
+    m = re.fullmatch(r"bh-glx-(\d{3})-([a-d]\d{2}u\d{2})", host)
+    return [f"bh-glx-{pod}-{m.group(2)}" for pod in ("110", "120") if pod != m.group(1)] if m else []
 
 
-def jql_membership() -> dict[str, dict]:
-    """category -> {"jql", "keys"}; keys are empty until jira-sync has run the queries."""
-    if JQL_MEMBERSHIP.exists():
-        return json.loads(JQL_MEMBERSHIP.read_text())["categories"]
-    legacy = JIRA_CACHE / "mcp" / "DIIM_jql_categories.json"
-    if legacy.exists():
-        return {
-            cat: {"jql": e["jql"], "keys": [f"DIIM-{n}" for n in e["keys"]]}
-            for cat, e in json.loads(legacy.read_text())["categories"].items()
-        }
-    return {cat: {"jql": jql, "keys": []} for cat, jql in json.loads(JQL_QUERIES.read_text())["queries"].items()}
-
-
-def load_jql_categories() -> dict[str, set[str]]:
-    return {cat: set(entry["keys"]) for cat, entry in jql_membership().items()}
-
-
-def _attachment_texts(path: Path) -> Iterator[tuple[str, list[str]]]:
-    """(display path, lines) for a text attachment or each text member of a zip."""
-    if path.suffix == ".zip":
-        with zipfile.ZipFile(path) as zf:
-            for name in zf.namelist():
-                if not name.endswith("/") and Path(name).suffix.lower() in TEXT_SUFFIXES:
-                    text = zf.read(name).decode("utf-8", "replace")
-                    yield f"{path}:{name}", text.splitlines()[:MAX_LINES_PER_FILE]
-    elif path.suffix.lower() in TEXT_SUFFIXES:
-        yield str(path), path.read_text(errors="replace").splitlines()[:MAX_LINES_PER_FILE]
-
-
-def _scan_attachment(path: Path) -> list[list]:
-    """[host, category, signal, severity, chips, detail, display path, line, count] per hit; host only if a line names it."""
-    return [
-        [e.host, e.category, e.signal, e.severity, e.chips, e.detail, e.path, e.line, e.count]
-        for display, lines in _attachment_texts(path)
-        for e in logscan.scan_lines(
-            lines, default_host=None, base_ts=None, source="jira_attachment", origin="log:attachment", path=display
-        )
-    ]
-
-
-def scan_attachments(conn: sqlite3.Connection) -> int:
-    """Signature hits in downloaded ticket attachments, attributed to the ticket (and host when known).
-
-    Kept apart from `events` so validation never scores a ticket with its own logs. Scans are cached per file
-    (mtime, size, signature version) in attachment_scans, which survives ticket reloads.
-    """
-    n = 0
-    if not ATTACHMENTS_DIR.is_dir():
-        return n
-    version = index.parser_version("jira_attachment")
-    cache = {p: (m, s, v, ev) for p, m, s, v, ev in conn.execute("SELECT * FROM attachment_scans")}
-    for ticket_dir in sorted(p for p in ATTACHMENTS_DIR.iterdir() if p.is_dir()):
-        key = ticket_dir.name
-        named = subject_hosts(conn, key)
-        default_host = named[0] if len(named) == 1 else None
-        for path in sorted(p for p in ticket_dir.rglob("*") if p.is_file()):
-            st = path.stat()
-            hit = cache.get(str(path))
-            if hit and hit[:3] == (st.st_mtime, st.st_size, version):
-                hits = json.loads(hit[3])
-            else:
-                hits = _scan_attachment(path)
-                conn.execute(
-                    "INSERT OR REPLACE INTO attachment_scans VALUES (?,?,?,?,?)",
-                    (str(path), st.st_mtime, st.st_size, version, json.dumps(hits)),
-                )
-            conn.executemany(
-                "INSERT INTO ticket_evidence VALUES (?,?,?,?,?,?,?,?,?,?)",
-                [(key, h[0] or default_host, *h[1:]) for h in hits],
-            )
-            conn.executemany(
-                "INSERT OR IGNORE INTO ticket_cats VALUES (?,?,?)",
-                [(key, h[1], "attachment") for h in hits if h[3] == "fail"],
-            )
-            n += len(hits)
-    return n
-
-
-def build(conn: sqlite3.Connection) -> int:
-    for table in ("tickets", "ticket_hosts", "ticket_cats", "ticket_refs", "ticket_evidence"):
-        conn.execute(f"DROP TABLE IF EXISTS {table}")
-    conn.executescript(SCHEMA)
-    known = {h for (h,) in conn.execute("SELECT DISTINCT host FROM run_hosts")}
-    tickets = load_cached_tickets()
-    insert_tickets(conn, tickets, known, load_jql_categories())
-    scan_attachments(conn)
-    conn.commit()
-    return len(tickets)
-
-
-def insert_tickets(conn: sqlite3.Connection, tickets: list[dict], known: set[str], jql: dict[str, set[str]]) -> None:
+def host_view(tickets: list[dict], host: str, jql_categories: dict[str, set[str]]) -> list[dict]:
+    """The tickets that name `host`, as triage shows them: about the host first, humans' before the HC bot's,
+    open first, newest first. `jql_categories` maps a ticket key to the categories whose JQL it matches."""
+    known = {host, *siblings(host)}
+    out = []
     for t in tickets:
-        cats = text_categories(t["summary"])
-        jql_cats = [c for c, keys in jql.items() if t["key"] in keys]
-        primary = cats[0] if cats else next((c for c in ("gddr", "tensix", "pcie") if c in jql_cats), "unknown")
-        is_open = int(t["status"].strip().lower() not in CLOSED_STATUSES)
-        conn.execute(
-            "INSERT INTO tickets VALUES (?,?,?,?,?,?,?,?,?,?)",
-            (
-                t["key"],
-                t["project"],
-                t["created"],
-                t["resolved"],
-                t["status"],
-                is_open,
-                t["summary"],
-                t["text"],
-                primary,
-                t["source"],
-            ),
-        )
-        conn.executemany(
-            "INSERT OR IGNORE INTO ticket_cats VALUES (?,?,?)",
-            [(t["key"], c, "text") for c in cats] + [(t["key"], c, "jql") for c in jql_cats],
-        )
         found = ticket_hosts_by_part(t, known)
-        about = subjects(found)
-        conn.executemany(
-            "INSERT OR IGNORE INTO ticket_hosts VALUES (?,?,?,?)",
-            [(t["key"], h, how, int(h in about)) for h, how in found.items()],
+        if host not in found:
+            continue
+        out.append(
+            {
+                "key": t["key"],
+                "created": t["created"],
+                "status": t["status"],
+                "open": t["status"].strip().lower() not in CLOSED_STATUSES,
+                "summary": t["summary"],
+                "how": found[host],
+                "subject": host in subjects(found),
+                "bot": t["summary"].startswith(HC_BOT_PREFIX),
+                "categories": sorted(set(text_categories(t["summary"])) | jql_categories.get(t["key"], set())),
+            }
         )
-        conn.executemany(
-            "INSERT OR IGNORE INTO ticket_refs VALUES (?,?)", [(t["key"], r) for r in hosts.ticket_chip_refs(t["text"])]
-        )
+    return sorted(out, key=lambda v: (not v["subject"], v["bot"], not v["open"], -(v["created"] or 0)))

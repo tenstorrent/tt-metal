@@ -10,7 +10,7 @@ import re
 from pathlib import Path
 
 from .. import hosts
-from ..config import BMC_REBOOT_ROOT, MACHINE_HC_ROOT, MAX_EVIDENCE_CHARS
+from ..config import BMC_REBOOT_ROOT, MAX_EVIDENCE_CHARS
 from ..logscan import iso_ts, read_lines, scan_lines
 from ..model import Event, Run, UnitResult
 from ..signatures import RESET_CHECK_RE, classify_check
@@ -18,18 +18,6 @@ from ..signatures import RESET_CHECK_RE, classify_check
 TRIAGE_ROW_RE = re.compile(r"^\s*(\d+)\s+(0000:[0-9a-f]{2}:00\.\d)\s+u(\d)c(\d)\b", re.I)
 KLOG_SECTION = "-- PCIe, IOMMU and machine check faults"
 STATUS_RANK = {"SKIP": 0, "PASS": 1, "WARN": 2, "FAIL": 3}
-
-
-def discover_runs(root: Path) -> list[tuple[str, str]]:
-    return [(str(p.parent), str(p)) for p in root.glob("*/*/*/diag_report.json")]
-
-
-def discover_machine_hc() -> list[tuple[str, str]]:
-    return discover_runs(MACHINE_HC_ROOT)
-
-
-def discover_bmc_reboot() -> list[tuple[str, str]]:
-    return discover_runs(BMC_REBOOT_ROOT)
 
 
 def _triage_table(run_dir: Path) -> tuple[dict[str, str], dict[int, str], list[str], int]:
