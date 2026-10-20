@@ -1,8 +1,9 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Host-only checks of the AgentX simulator: the prefix cache, the cache state a request sent mid-step sees, and the
---config validation. No device and no traces: `pytest models/demos/gemma4_d_p/agentx_sim/test_agentx_sim.py`."""
+"""Host-only checks of the AgentX simulator: the prefix cache, the cache state a request sent mid-step sees, the
+--config validation and the --ttft-out records. No device and no traces:
+`pytest models/demos/gemma4_d_p/agentx_sim/test_agentx_sim.py`."""
 
 import json
 import os
@@ -11,8 +12,9 @@ import sys
 import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from agentx_sim import BLOCK, PrefixCache, json_record, parse_config, parse_sessions, run  # noqa: E402
+from agentx_sim import BLOCK, PrefixCache, json_record, parse_config, parse_sessions, run, ttft_record  # noqa: E402
 from cost_model import Model  # noqa: E402
+from plot_ttft_cdf import labels, load_runs  # noqa: E402
 
 
 def test_prefix_cache_longest_prefix():
@@ -167,3 +169,25 @@ def test_fcfs_keeps_admitted_requests_ahead_of_later_arrivals():
     assert a.send < b.send < c.send < a.done, "precondition: C is sent while A still holds a slot"
     assert c.done == pytest.approx(a.done + 1.0), "C took A's slot on the step after A finished"
     assert max(model.steps) <= 2
+
+
+def test_ttft_out_records_each_request_and_filters_by_knob(tmp_path):
+    """--ttft-out keeps every request's TTFT and new tokens; plot_ttft_cdf reads them back, filters by knob and labels
+    the curves by the knobs that differ."""
+    sessions = [[_node(BLOCK, [1]), _node(2 * BLOCK, [1, 2], deps=[0], t=1.0)]]
+    res = run(_OneSecondSteps(), sessions, BLOCK, BLOCK, "fcfs", 1)
+    path = tmp_path / "ttft.jsonl"
+    with open(path, "w") as f:
+        for conc in (32, 64):
+            knobs = dict(config="64x64:fcfs", concurrency=conc, cache="inf", align="chunk", max_think_s=60.0)
+            f.write(json.dumps(ttft_record(knobs, res["_stats"])) + "\n")
+    runs = load_runs([str(path)], [])
+    assert runs[0]["ttft_s"] == [pytest.approx(x.done - x.send) for x in res["_stats"]]
+    assert runs[0]["new_tokens"] == [BLOCK, BLOCK], "the second request's first block is cached"
+    assert [r["concurrency"] for r in load_runs([str(path)], [("concurrency", "64"), ("max_think_s", "60")])] == [64]
+    names, shared = labels(runs)
+    assert names == ["32 sessions", "64 sessions"] and "unlimited cache" in shared
+    assert labels([{**runs[0], "config": c} for c in ("8192x8192:fcfs", "2048x8192:pack")])[0] == [
+        "8k",
+        "2k x4 lanes, shortest-first",
+    ]

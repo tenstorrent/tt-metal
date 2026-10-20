@@ -5,10 +5,11 @@
 """Replay AgentX traces through the Gemma4 continuous-batching cost model (host only).
 
     agentx_sim.py --traces .../cc-traces-weka-062126-256k/traces.jsonl --config 8192x8192:fcfs,2048x8192:pack \
-        --concurrency 16,32,64 [--cache inf,4e6] [--align chunk,exact] [-j 16] [--json runs.jsonl]
+        --concurrency 16,32,64 [--cache inf,4e6] [--align chunk,exact] [-j 16] [--json runs.jsonl] [--ttft-out ttft.jsonl]
 
 Every knob but --sessions and --seed takes a comma list; the runs are their product, -j at a time (the traces are
 parsed once and shared with the forked workers). One row per run, and one JSON line per run with every metric.
+--ttft-out writes each run's per-request TTFT and new tokens, for plot_ttft_cdf.py.
 
 Workload (closed loop, like AIPerf's AgentX replay):
 - Each session is a DAG. Main-agent requests chain in order; each sub-agent chain starts after the main
@@ -519,9 +520,19 @@ def parse_config(cfg, model):
     return C, budget, policy
 
 
+def ttft_record(knobs, stats):
+    """A --ttft-out line: the run's knobs, then each request's TTFT (s) and new tokens (input not in the cache), in
+    finish order."""
+    return {
+        **knobs,
+        "ttft_s": [round(x.done - x.send, 4) for x in stats],
+        "new_tokens": [x.n_in - x.cached for x in stats],
+    }
+
+
 def run_config(job):
     """One run of the grid, job = (UNITxBUDGET:POLICY, concurrency, cache, align, max_think_s, decode_tps); returns
-    its JSON record (the knobs, the metrics and the run's wall time)."""
+    its JSON record (the knobs, the metrics and the run's wall time), and its --ttft-out record when that is set."""
     cfg, concurrency, cache, align, max_think_s, decode_tps = job
     t0 = time.time()
     C, budget, policy = parse_config(cfg, G["model"])  # checked in main() before the workers fork
@@ -540,13 +551,14 @@ def run_config(job):
         max_sessions=G["max_sessions"],
     )
     knobs = dict(config=cfg, concurrency=concurrency, cache=cache, align=align, max_think_s=max_think_s)
-    return {
+    record = {
         **knobs,
         "uncalibrated": G["model"].calibration(C, budget)[1],
         "decode_tps": decode_tps,
         **{k: v for k, v in r.items() if not k.startswith("_")},
         "wall_s": round(time.time() - t0, 2),
     }
+    return record, ttft_record({**knobs, "decode_tps": decode_tps}, r["_stats"]) if G["ttft_out"] else None
 
 
 def main():
@@ -563,11 +575,12 @@ def main():
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("-j", type=int, default=1, help="parallel runs")
     ap.add_argument("--json", help="append one JSON line per run here")
+    ap.add_argument("--ttft-out", help="append one JSON line per run with every request's TTFT here (plot_ttft_cdf.py)")
     a = ap.parse_args()
 
     t0 = time.time()
     split = lambda s, f=str: [f(x) for x in s.split(",") if x]
-    G.update(model=Model.load(a.data), seed=a.seed, max_sessions=a.sessions)
+    G.update(model=Model.load(a.data), seed=a.seed, max_sessions=a.sessions, ttft_out=a.ttft_out)
     for cfg in split(a.config):  # before the traces load and the workers fork
         parse_config(cfg, G["model"])
     for align in split(a.align):
@@ -594,7 +607,7 @@ def main():
     print(hdr + "\n" + "-" * len(hdr), flush=True)
     uncalibrated = {}
     with mp.get_context("fork").Pool(a.j) as pool:
-        for r in pool.imap(run_config, jobs):
+        for r, ttft in pool.imap(run_config, jobs):
             ss = (
                 f"{r['ss_util']:7.2f} {r['ss_useful_ideal_tok_s'] / 1e3:8.1f}k {r['ss_ttft_p50']:6.2f} {r['ss_ttft_p99']:6.1f}"
                 if "ss_util" in r
@@ -612,6 +625,9 @@ def main():
             if a.json:
                 with open(a.json, "a") as f:
                     f.write(json.dumps(json_record(r), allow_nan=False) + "\n")
+            if ttft:
+                with open(a.ttft_out, "a") as f:
+                    f.write(json.dumps(ttft) + "\n")
     for cfg, why in uncalibrated.items():
         print(f"* {cfg}: not fitted on silicon, {why}")
 

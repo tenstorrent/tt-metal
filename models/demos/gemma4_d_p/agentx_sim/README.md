@@ -28,6 +28,18 @@ One row per run (`--json` writes every metric):
 - `hit`: prefix-cache hit rate. `used`: the part of it kept after rounding to the chunk.
 - `ss ...`: the steady window, while all `--concurrency` sessions are running: device utilisation, new tokens per wall second (against an unlimited cache) and TTFT. Compare designs here at a fixed load; `ss util` near 1.0 means saturated.
 
+## TTFT distributions
+
+`--ttft-out` writes each run's per-request TTFT and new tokens; `plot_ttft_cdf.py` draws one CDF per run, labelled by the knobs that differ (needs matplotlib, `pip install matplotlib`).
+
+```
+./agentx_sim.py --traces <dir>/traces.jsonl --config 8192x8192:fcfs,4096x4096:fcfs,2048x2048:fcfs,2048x8192:fcfs,2048x8192:pack \
+    --concurrency 64 --max-think-s 60,1800 -j 10 --ttft-out ttft.jsonl
+./plot_ttft_cdf.py ttft.jsonl --where max_think_s=60 --out ttft_cdf.png            # all requests
+./plot_ttft_cdf.py ttft.jsonl --where max_think_s=60 --by-size --out ttft_cdf_by_size.png  # one panel per new-token bucket
+./plot_ttft_cdf.py ttft.jsonl --where max_think_s=60 --xmax 30 --out ttft_cdf_linear.png     # linear axis, cut at 30 s
+```
+
 ## Other configurations
 
 `--config UNITxBUDGET:POLICY`: UNIT is the chunk size, BUDGET / UNIT the lanes per step (UNIT == BUDGET is unbatched), POLICY `fcfs` or `pack` (fewest rows left first).
