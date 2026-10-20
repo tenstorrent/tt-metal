@@ -254,7 +254,9 @@ class TtMiMoModel:
             if layer.is_moe:
                 layer.mlp.set_decode_users(num_users)
         self.kv_caches, tables = [], {}
-        max_blocks = self.max_seq_len // self.block_size
+        # SwaDecodeQkv reads a page table row in 64 B pieces, so the width is padded to 16 blocks; the entries past
+        # max_seq_len are never read.
+        max_blocks = pad_to(self.max_seq_len // self.block_size, 16)
         swa_layers = [layer for layer in self.layers if layer.is_swa]
         self.swa_table = None
         if swa_layers:
