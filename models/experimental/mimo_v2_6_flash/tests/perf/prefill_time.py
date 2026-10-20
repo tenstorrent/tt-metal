@@ -73,7 +73,7 @@ def main():
             times = []
             for s in range(0, n, chunk):
                 t0 = time.time()
-                x = model._prefill_chunk(tokens[s : s + chunk], 0, s, None)
+                x, _ = model._prefill_chunk(tokens[s : s + chunk], 0, s, None)
                 ttnn.synchronize_device(model.mesh_device)
                 times.append(time.time() - t0)
                 x.deallocate(True)

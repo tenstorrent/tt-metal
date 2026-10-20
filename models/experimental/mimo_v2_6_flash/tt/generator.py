@@ -178,9 +178,10 @@ class MiMoGalaxyGenerator:
 
     @staticmethod
     def greedy_token(candidate):
-        """Argmax token from a ``mode="topk"`` entry."""
+        """Argmax token from a ``mode="topk"`` entry: the lowest id on ties, like torch.argmax over the full vocab and
+        GreedyHead (the candidates are in chip, then top-k order, which does not order tied ids)."""
         values, ids = candidate
-        return int(ids[int(values.argmax())])
+        return int(ids[values == values.max()].min())
 
     def generate_greedy(self, prompts, max_new_tokens):
         """Greedy decode for every user; returns (generated token lists, seconds per decode step)."""
