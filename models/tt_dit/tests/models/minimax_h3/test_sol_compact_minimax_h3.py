@@ -295,6 +295,82 @@ def test_qblock_is_sparser_than_qchunk(mesh_device, sp_axis, tp_axis, num_links,
     assert coarse >= fine - 1e-6, "the OR over query blocks cannot reduce density"
 
 
+def _pack_env(on):
+    """TT_SOL_PACK gates Q2 in the program factory; it is read at program creation, so set it before the run."""
+    prev = os.environ.get("TT_SOL_PACK")
+    os.environ["TT_SOL_PACK"] = "1" if on else "0"
+    return prev
+
+
+def _pack_env_restore(prev):
+    if prev is None:
+        os.environ.pop("TT_SOL_PACK", None)
+    else:
+        os.environ["TT_SOL_PACK"] = prev
+
+
+@GALAXY_RING
+def test_q2_packing_matches_unpacked(
+    mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, reset_seeds, capfd
+):
+    """Q2's correctness gate: packing regroups blocks into full pages and must not change the math.
+
+    Same inputs, same mask, same tau -- only the delivery unit differs (kept chunks vs packed pages). Any
+    disagreement means the page accounting diverged between reader and compute: the two derive page boundaries
+    independently from the kept bitmask, so a mismatch shows up as wrong output or a hang rather than a warning.
+
+    This is also the first run that compiles the sol_pack branches of compute_streaming.hpp. Those live behind
+    `if constexpr (sol_pack)` with sol_pack a TEMPLATE parameter, so they are not type-checked at all until a
+    program is created with packing on -- unlike the reader's, where sol_pack is a plain constexpr bool and the
+    discarded branch is still checked.
+    """
+    prev = _pack_env(False)
+    try:
+        base = _run(mesh_device, sp_axis, num_links, topology, capfd, mode="compact", tau=1.0, want_dense=False)
+        _pack_env(True)
+        packed = _run(mesh_device, sp_axis, num_links, topology, capfd, mode="compact", tau=1.0, want_dense=False)
+    finally:
+        _pack_env_restore(prev)
+    logger.info(f"[q2] density {base.density:.4f}; pcc(packed, unpacked) {_pcc(base.sol, packed.sol):.6f}")
+    assert base.density == packed.density, "packing changed the mask; it must only change delivery"
+    assert _pcc(base.sol, packed.sol) > 0.9999
+
+
+@GALAXY_RING
+@pytest.mark.parametrize("tau", [0.5, 1.0, 2.0])
+def test_q2_packing_across_densities(
+    mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, tau, reset_seeds, capfd
+):
+    """Sweeps the page-fill pattern. tau sets how many blocks are kept, which sets how chunks straddle page
+    boundaries and how big the trailing partial page is -- the two cases most likely to desynchronise the
+    reader's `push at sol_blocks_per_page` from compute's `ceil(total / sol_blocks_per_page)`.
+    """
+    prev = _pack_env(True)
+    try:
+        r = _run(mesh_device, sp_axis, num_links, topology, capfd, mode="compact", tau=tau)
+    finally:
+        _pack_env_restore(prev)
+    logger.info(f"[q2] tau={tau} density {r.density:.4f} pcc vs dense {_pcc(r.dense, r.sol):.5f}")
+    assert _pcc(r.dense, r.sol) > 0.99
+
+
+@GALAXY_RING
+def test_q2_zero_kept_iteration(mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, reset_seeds, capfd):
+    """The degenerate page case: a very high tau leaves ring iterations with no kept blocks at all.
+
+    Then no page is ever filled, the partial flush has nothing to push, and compute's page count is 0 for that
+    iteration -- it must fall straight through to the pooled chunks. This is the path that deadlocks if the
+    reader's trailing un-pushed reserve and compute's loop bound disagree.
+    """
+    prev = _pack_env(True)
+    try:
+        r = _run(mesh_device, sp_axis, num_links, topology, capfd, mode="compact", tau=6.0)
+    finally:
+        _pack_env_restore(prev)
+    logger.info(f"[q2] tau=6 density {r.density:.4f} pcc vs dense {_pcc(r.dense, r.sol):.5f}")
+    assert torch.isfinite(r.sol).all(), "non-finite output: the pooled correction did not carry a near-empty mask"
+
+
 @SLOW
 @GALAXY_RING
 @pytest.mark.parametrize("mode", MODES)
