@@ -40,7 +40,7 @@ def _run(device, indices, mask, n_routed_experts, num_experts_per_token):
 def test_masked_bincount_program_cache_hit_patches_addresses(device):
     grid = device.compute_with_storage_grid_size()
     if grid.x < 8 or grid.y < 8:
-        pytest.skip("masked_bincount places work on a fixed 8x8 core grid")
+        pytest.skip("masked_bincount places work on up to an 8x8 core grid")
 
     device.enable_program_cache()
     n_routed_experts = 8
