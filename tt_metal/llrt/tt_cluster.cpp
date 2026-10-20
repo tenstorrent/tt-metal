@@ -975,10 +975,13 @@ void Cluster::write_core_immediate(const void* mem_ptr, uint32_t sz_in_bytes, tt
     }
 
     tt::umd::CoreCoord core_coord = soc_desc.get_coord_at(core, CoordSystem::TRANSLATED);
-    this->driver_->write_to_device_reg(mem_ptr, sz_in_bytes, core.chip, core_coord, addr);
-
     if (this->get_cluster_desc()->is_chip_remote(chip_id)) {
+        // Callers write L1 structs (core_info, launch_msg), not registers. UMD sends a remote register write as one
+        // ethernet command per 4-byte word (tt-umd#3649), so send the struct as one data write and flush instead.
+        this->driver_->write_to_device(mem_ptr, sz_in_bytes, core.chip, core_coord, addr);
         this->driver_->wait_for_non_mmio_flush(chip_id);
+    } else {
+        this->driver_->write_to_device_reg(mem_ptr, sz_in_bytes, core.chip, core_coord, addr);
     }
 }
 
