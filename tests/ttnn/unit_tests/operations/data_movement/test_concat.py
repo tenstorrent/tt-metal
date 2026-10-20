@@ -1202,8 +1202,6 @@ def test_sharded_concat_height_interleaves_leading_dims(device, strategy, shape,
 @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat4_b])
 @pytest.mark.parametrize("widths", [(32, 32), (32, 64), (96, 32), (32, 32, 32)])
 def test_concat_last_dim_block_float_32_wide_is_exact(device, dtype, widths):
-    # A 32-wide block-float input used to take the transpose fallback on Blackhole (64 B DRAM alignment),
-    # which re-rounds shared exponents (#60650). Concat only moves data, so the output must match exactly.
     torch.manual_seed(0)
     inputs = [
         ttnn.from_torch(torch.randn(1, 1, 64, w), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device) for w in widths
