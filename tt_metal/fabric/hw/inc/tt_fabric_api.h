@@ -290,7 +290,7 @@ inline void fabric_set_single_hop_unicast_route_from_direction(
             packet_header->route_buffer[dst_y] = Routing2DCodec::ACTION_LOCAL_DELIVER;
             break;
         case eth_chan_directions::Z:
-            if (FabricExpressConfig::z_decodes_x_only()) {
+            if (Fabric2DRoutingConfig::z_decodes_x_only()) {
                 packet_header->route_buffer[mesh_y_size + dst_x] = Routing2DCodec::ACTION_LOCAL_DELIVER;
             } else {
                 packet_header->route_buffer[dst_y] = Routing2DCodec::ACTION_LOCAL_DELIVER;
