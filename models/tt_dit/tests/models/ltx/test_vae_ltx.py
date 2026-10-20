@@ -1218,7 +1218,40 @@ def _run_ltx_encoder_parity(
     assert tt_out.shape == ref_out.shape, f"shape mismatch: TT {tt_out.shape} vs ref {ref_out.shape}"
     assert torch.isfinite(tt_out).all(), "NaN/Inf in TT encoder output"
     assert_quality(ref_out, tt_out, pcc=pcc)
+    _assert_no_shard_corner_error(
+        ref_out, tt_out, height, width, parallel_config.height_parallel.factor, parallel_config.width_parallel.factor
+    )
     logger.info("PASSED: production LTXVideoEncoder matches diffusers reference encoder")
+
+
+def _shard_corner_mask(lat_h, lat_w, height, width, h_factor, w_factor, stride=32):
+    """Latent cells whose pixel span touches an inner pixel-shard corner (where the 2D halo crosses)."""
+
+    def cells(size, factor):
+        out = set()
+        for k in range(1, factor):
+            b = k * size // factor
+            out |= {(b - 1) // stride, b // stride}
+        return sorted(out)
+
+    mask = torch.zeros(lat_h, lat_w, dtype=torch.bool)
+    rows, cols = cells(height, h_factor), cells(width, w_factor)
+    if rows and cols:
+        mask[torch.tensor(rows)[:, None], torch.tensor(cols)[None, :]] = True
+    return mask
+
+
+def _assert_no_shard_corner_error(ref_out, tt_out, height, width, h_factor, w_factor, ratio=2.0):
+    """Mean |TT - ref| at the latent cells next to the pixel-shard corners must stay within ``ratio`` x
+    the mean elsewhere. The 2D halo-only exchange broke exactly there (dots at the tile corners of
+    first-frame clips) while the overall PCC stayed at 0.998."""
+    err = (tt_out.float() - ref_out.float()).abs().mean(dim=(0, 1, 2))  # (H', W')
+    mask = _shard_corner_mask(err.shape[0], err.shape[1], height, width, h_factor, w_factor)
+    if not mask.any() or mask.all():
+        return
+    corner, rest = err[mask].mean().item(), err[~mask].mean().item()
+    logger.info(f"shard-corner error {corner:.5f} vs elsewhere {rest:.5f} (ratio {corner / rest:.2f})")
+    assert corner <= ratio * rest, f"shard-corner error {corner:.5f} > {ratio} x elsewhere {rest:.5f}"
 
 
 # (num_frames, H, W). On a 4x8 mesh (H//4, W//8) the per-device spatial dim after patchify and
