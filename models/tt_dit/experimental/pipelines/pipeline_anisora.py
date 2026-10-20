@@ -91,7 +91,7 @@ class AniSoraPipeline(WanPipelineI2V):
             cache.load_model(
                 state.model,
                 model_name=self.RANDOM_CACHE_NAMESPACE,
-                subfolder=state.checkpoint.subfolder,
+                subfolder=state.checkpoint.cache_subfolder(state.model),
                 parallel_config=self.parallel_config,
                 mesh_shape=tuple(self.mesh_device.shape),
                 mesh_device=self.mesh_device,
@@ -104,7 +104,7 @@ class AniSoraPipeline(WanPipelineI2V):
         cache.load_model(
             state.model,
             model_name=self.CACHE_NAMESPACE,
-            subfolder=state.checkpoint.subfolder,
+            subfolder=state.checkpoint.cache_subfolder(state.model),
             parallel_config=self.parallel_config,
             mesh_shape=tuple(self.mesh_device.shape),
             mesh_device=self.mesh_device,
