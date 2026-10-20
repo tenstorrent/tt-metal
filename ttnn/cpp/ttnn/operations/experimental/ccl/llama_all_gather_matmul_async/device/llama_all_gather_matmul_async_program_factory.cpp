@@ -130,7 +130,7 @@ LlamaAllGatherMatmulAsyncProgramFactory::cached_program_t LlamaAllGatherMatmulAs
 
     matmul_fused_op_signaler->init_fused_op(
         program,
-        sender_device,
+        mesh_device,
         aggregated_tensor.memory_config().shard_spec()->grid.bounding_box(),
         ttnn::experimental::ccl::FusedOpSignalerMode::SINGLE);
     // Section end for fusion signaler initialization

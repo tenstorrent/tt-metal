@@ -12,7 +12,7 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/routing_plane_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_mux.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
-#include "fabric/fabric_edm_packet_header.hpp"
+#include "hostdev/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/api_common.h"
 
 using namespace tt::tt_fabric::common::experimental;
@@ -35,7 +35,7 @@ static FORCE_INLINE void fabric_set_mcast_route(
     volatile PACKET_HEADER_TYPE* packet_header,
     uint8_t* range,
     uint8_t i) {
-#if defined(FABRIC_2D)  // for both DYNAMIC
+#if defined(FABRIC_2D)
     // 2D multicast
     const auto& slot = connection_manager.get(i);
     if (range[i] != 0) {

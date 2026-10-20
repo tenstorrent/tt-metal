@@ -98,7 +98,7 @@ void queue_tensor_prefetcher_request(
 // out as shared_ptrs.
 std::vector<std::shared_ptr<tt::tt_metal::experimental::PrefetcherPipe>> create_prefetcher_pipes_for_tensor_prefetcher(
     tt::tt_metal::experimental::PrefetcherPipeSpace& space,
-    const std::vector<std::pair<uint32_t, CoreRangeSet>>& bank_to_receivers,
+    const std::vector<std::pair<uint32_t, tt::tt_metal::CoreRangeSet>>& bank_to_receivers,
     bool support_multi_receiver_shards = false);
 
 // Fence the prefetcher against a command queue: every prefetch request queued after this

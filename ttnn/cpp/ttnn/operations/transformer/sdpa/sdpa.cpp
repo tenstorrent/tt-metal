@@ -47,7 +47,8 @@ ttnn::Tensor scaled_dot_product_attention(
     const std::optional<ttnn::Tensor>& cu_window_seqlens,
     uint32_t windowed_q_token_offset,
     const std::optional<ttnn::Tensor>& windowed_q_token_offset_tensor,
-    bool output_concat_heads) {
+    bool output_concat_heads,
+    const std::optional<ttnn::Tensor>& attn_mask_block_map) {
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor_q.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi2, true, false, false);
 
@@ -95,8 +96,9 @@ ttnn::Tensor scaled_dot_product_attention(
         cu_window_seqlens,
         windowed_q_token_offset,
         windowed_q_token_offset_tensor,
-        std::nullopt,
-        output_concat_heads);
+        std::nullopt,  // paged_cache_geometry
+        output_concat_heads,
+        attn_mask_block_map);
 }
 
 // Legacy: chunk_start_idx as scalar (part of program cache key).
@@ -340,6 +342,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> ring_mla(
     const std::optional<ttnn::Tensor>& kv_actual_isl_tensor,
     std::optional<uint32_t> kv_cache_num_layers,
     std::optional<uint32_t> kv_cache_layer_idx) {
+    auto topology_1d = ttnn::ccl::convert_2d_to_1d_topology(topology);
     auto output_tensors = ttnn::prim::ring_joint_scaled_dot_product_attention(
         input_tensor_q,
         input_tensor_kv,
@@ -360,7 +363,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> ring_mla(
         num_links,
         cluster_axis,
         mesh_device,
-        topology,
+        topology_1d,
         ccl_core_grid_offset,
         subdevice_id,
         /*is_causal=*/true,

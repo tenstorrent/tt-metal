@@ -4,15 +4,15 @@
 
 #pragma once
 
+#include <fmt/base.h>
 #include <stdint.h>
+#include <cstddef>
 #include <functional>
 #include <ostream>
 #include <optional>
+#include <utility>
 #include <vector>
-#include <tt_stl/assert.hpp>
 #include <tt_stl/strong_type.hpp>
-
-#include <fmt/format.h>
 
 namespace tt::tt_fabric {
 

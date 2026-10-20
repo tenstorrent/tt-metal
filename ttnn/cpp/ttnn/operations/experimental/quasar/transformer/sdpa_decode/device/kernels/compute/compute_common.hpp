@@ -146,7 +146,6 @@ void max_block(uint32_t in0, uint32_t in1, uint32_t out_dfb, uint32_t num_tiles)
     DataflowBuffer dfb_in1(in1);
     DataflowBuffer dfb_out(out_dfb);
     // inputs come in full, outputs go out full
-    copy_init(in0);
     binary_max_tile_init();
 
     constexpr uint32_t dst_reg_0 = 0;
@@ -156,7 +155,13 @@ void max_block(uint32_t in0, uint32_t in1, uint32_t out_dfb, uint32_t num_tiles)
     dfb_out.reserve_back(num_tiles);
     for (uint32_t i = 0; i < num_tiles; ++i) {
         tile_regs_acquire();
+        // copy_init programs the unpacker for one DFB; Quasar asserts if copy_tile then reads another
+        // (LLK reinit guard), so re-init per operand.
+        reconfig_data_format_srca(in0);
+        copy_init(in0);
         copy_tile(in0, i, dst_reg_0);
+        reconfig_data_format_srca(in1);
+        copy_init(in1);
         copy_tile(in1, i, dst_reg_1);
         binary_max_tile(dst_reg_0, dst_reg_1, dst_reg_0, vector_mode);
         tile_regs_commit();
@@ -1310,11 +1315,13 @@ ALWI void matmul_blocks(
             }
             if (add_mask) {
                 dfb_mask.wait_front(out_subblock_num_tiles);
-                dfb_zero.wait_front(1);
+                // zero_dfb is identity_scale_in: the zero tile sits behind the reduce scaler (entry 1).
+                constexpr uint32_t zero_tile_idx = 1;
+                dfb_zero.wait_front(zero_tile_idx + 1);
                 reconfig_data_format(zero_dfb, mask_dfb);
                 add_init(zero_dfb, mask_dfb, true);
                 for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
-                    add_tiles(zero_dfb, mask_dfb, 0, i, i);
+                    add_tiles(zero_dfb, mask_dfb, zero_tile_idx, i, i);
                 }
                 reconfig_data_format(in1_dfb, in0_dfb);
                 matmul_block_init(in0_dfb, in1_dfb, transpose, subblock_w, subblock_h, in0_block_w);
@@ -1390,6 +1397,10 @@ void matmul_reduce(uint32_t in1_dfb, const uint32_t& out_dfb) {
 
         tile_regs_commit();
         dfb_out.pop_front(subblock_h);
+        // In-place: reserve before packing. On Quasar the POP (unpack thread) and PUSH (pack thread)
+        // land on the tile counter asynchronously; without this WAIT_FREE the PUSH can beat the POP
+        // and overflow a DFB sized to exactly subblock_h.
+        dfb_out.reserve_back(subblock_h);
 
         tile_regs_wait();
         for (uint32_t i = 0; i < subblock_h; i++) {
@@ -2244,10 +2255,15 @@ void sdpa_inner_loop(
             //    This compares the previous max with the sink logit
             reconfig_data_format(dfb_attention_sink, dfb_identity_scale_in);
 
-            reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, dfb_attention_sink, dfb_identity_scale_in, Sq_chunk_t, 1>(
-                alias_cur_max, alias_prev_max, true);
+            // Runtime-cols reduce_c (as in the flash loop above): the compile-time-cols overload copies
+            // prev_max with a within-face-only transpose, which Quasar's unpack-A init rejects.
+            reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, dfb_attention_sink, dfb_identity_scale_in, Sq_chunk_t>(
+                alias_cur_max, alias_prev_max, 1, true);
 
             // 2. Compute exp((prev_max - cur_max) * scale) to rescale previous statistics
+            //    sub_exp_block packs via a bare pack_tile; on Quasar the packer is still latched to
+            //    alias_cur_max from the reduce above, so point it at dfb_exp_max_diff first.
+            pack_reconfig_out(dfb_exp_max_diff);
             sub_exp_block<scale_fp32>(alias_prev_max, alias_cur_max, dfb_exp_max_diff, Sq_chunk_t);
             DataflowBuffer(alias_prev_max).pop_front(Sq_chunk_t);
 

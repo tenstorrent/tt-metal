@@ -14,7 +14,7 @@
 
 namespace iscore = ttnn::operations::experimental::indexer_score;
 
-// Common dim args 0..8 (same in every kernel). chunk_start is NOT here -- it's a per-device RUNTIME arg,
+// Common dim args 0..9 (same in every kernel). chunk_start is NOT here -- it's a per-device RUNTIME arg,
 // so distinct values reuse one program.
 constexpr uint32_t num_heads = get_compile_time_arg_val(0);         // indexer heads
 constexpr uint32_t q_len_tiles = get_compile_time_arg_val(1);       // q chunk rows, in tiles
@@ -25,7 +25,8 @@ constexpr uint32_t k_tiles_per_unit = get_compile_time_arg_val(5);  // k tiles p
 constexpr uint32_t heads_per_group = get_compile_time_arg_val(6);   // heads resident at once (head_group knob)
 constexpr uint32_t num_out_groups = get_compile_time_arg_val(7);    // output groups; score [B, num_out_groups, Sq, T]
 constexpr uint32_t block_tiles = get_compile_time_arg_val(8);       // block-max-pool width in k-tiles; 0 = no pooling
-constexpr uint32_t num_dim_args = 9;
+constexpr uint32_t key_compression_ratio = get_compile_time_arg_val(9);  // query tokens represented by one K row
+constexpr uint32_t num_dim_args = 10;
 
 // Heads summed per output plane. num_out_groups==1 sums all heads into one plane; >1 partitions into
 // num_out_groups groups of reduce_heads each, summed within a group (per-group planes).
@@ -50,8 +51,8 @@ constexpr uint32_t cb_pool_scratch = get_compile_time_arg_val(num_dim_args + isc
 // Dim args + CB indices are common to all kernels; per-kernel compile-time args start here.
 constexpr uint32_t num_common_ct_args = num_dim_args + iscore::num_cb_args;
 
-// Mask tile count, as a bare name for the kernels (defined in indexer_score_cb.hpp).
-constexpr uint32_t num_mask_tiles = iscore::num_mask_tiles;
+// One partial causal tile per compressed-key residue, followed by one all--inf tile.
+constexpr uint32_t num_mask_tiles = key_compression_ratio + 1;
 
 // True when heads don't all fit L1 resident, so they stream in groups.
 constexpr bool stream_heads = heads_per_group < num_heads;
@@ -80,7 +81,13 @@ inline uint32_t row_valid_prefix(
     uint32_t straddle_q_tile,
     uint32_t straddle_jump_tiles) {
     return iscore::valid_prefix_tiles(
-        q_row_abs, k_tile_start, k_tiles_in_unit, chunk_start_tiles, straddle_q_tile, straddle_jump_tiles);
+        q_row_abs,
+        k_tile_start,
+        k_tiles_in_unit,
+        chunk_start_tiles,
+        straddle_q_tile,
+        straddle_jump_tiles,
+        key_compression_ratio);
 }
 
 /** (group, band) cell cursor. group = absolute q-row-group index; band = absolute k-band index; the
