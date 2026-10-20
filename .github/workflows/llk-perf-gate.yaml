@@ -312,6 +312,8 @@ jobs:
         env:
           ARCH: ${{ matrix.arch }}
           THRESHOLD: ${{ matrix.arch == 'wormhole' && '0.13' || '0.02' }}
+          HEAD_RESULT: ${{ needs.placement-measure-head.result }}
+          BASE_RESULT: ${{ needs.placement-measure-base.result }}
         run: |
           mkdir -p current baseline
           python3 tt_metal/tt-llk/perf/placement_check.py decide \
@@ -319,6 +321,12 @@ jobs:
             --baseline baseline --current current \
             --threshold "$THRESHOLD" --min-cycles 30 \
             --arch "$ARCH" --report stage2.md || true
+          if [ "$HEAD_RESULT" != success ] || [ "$BASE_RESULT" != success ]; then
+            NOTE="> ⚠️ A stage-2 measuring job did not succeed (PR head: ${HEAD_RESULT}, branch point: ${BASE_RESULT}). What it did not measure is listed as not re-measured."
+            printf '%s\n\n%s\n' "$(head -1 stage2.md)" "$NOTE" > stage2.tmp
+            tail -n +2 stage2.md >> stage2.tmp
+            mv stage2.tmp stage2.md
+          fi
           cat stage2.md >> "$GITHUB_STEP_SUMMARY"
       - name: Add stage 2 to the gate comment
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
