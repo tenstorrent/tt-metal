@@ -212,8 +212,22 @@ void validate_matmul_block_and_subblock_configuration(
                     attributes.compute_kernel_config.has_value(),
                     "compute_kernel_config must be set for matmul subblock validation");
                 TT_FATAL(attributes.output_tile.has_value(), "output_tile must be set for matmul subblock validation");
-                const uint32_t available_reg_count = ttnn::get_dest_reg_count(
-                    attributes.compute_kernel_config.value(), attributes.output_tile.value().get_tile_shape());
+                // Only the 1D gather_in0 kernel computes subblocks in the full-sync dest register. The 2D, 1D and
+                // Reuse factories give wrong values (or hang) above the half-sync count even with dst_full_sync_en:
+                // the 1D factory always runs half-sync, and the others fail above it too (#59689).
+                auto dest_config = attributes.compute_kernel_config.value();
+                bool full_sync_dest_supported = false;
+                if constexpr (std::is_same_v<
+                                  ProgramConfigType,
+                                  operations::experimental::quasar::matmul::
+                                      MatmulMultiCoreReuseMultiCast1DProgramConfig>) {
+                    full_sync_dest_supported = program_config.gather_in0;
+                }
+                if (!full_sync_dest_supported) {
+                    dest_config.dst_full_sync_en = false;
+                }
+                const uint32_t available_reg_count =
+                    ttnn::get_dest_reg_count(dest_config, attributes.output_tile.value().get_tile_shape());
                 TT_FATAL(
                     program_config.out_subblock_h * program_config.out_subblock_w <= available_reg_count,
                     "out_subblock_w {} times out_subblock_h {} needs to be at "
@@ -2349,7 +2363,9 @@ MatmulParams create_matmul_attributes(
     // Due to hardware bug (#38306), HiFi4 + fp32_dest_acc_en can sometime produce incorrect results on Wormhole.
     // When inputs are FLOAT32 (which drives fp32_dest_acc_en=True by default), use HiFi3 on Wormhole B0.
     const auto is_wormhole = arch == tt::ARCH::WORMHOLE_B0;
-    math_fidelity = are_inputs_32F ? (is_wormhole ? tt::tt_metal::MathFidelity::HiFi3 : tt::tt_metal::MathFidelity::HiFi4) : math_fidelity;
+    math_fidelity = are_inputs_32F
+                        ? (is_wormhole ? tt::tt_metal::MathFidelity::HiFi3 : tt::tt_metal::MathFidelity::HiFi4)
+                        : math_fidelity;
 
     bool broadcast_batch = parameters.bcast_batch.value_or(get_broadcast_batch(
         input_tensor_a, input_tensor_b, parameters.transpose_a, parameters.transpose_b, parameters.program_config));
