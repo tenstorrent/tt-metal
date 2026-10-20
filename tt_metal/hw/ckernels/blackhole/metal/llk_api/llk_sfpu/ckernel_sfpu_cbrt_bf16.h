@@ -17,18 +17,24 @@ struct CbrtBf16Config {
 
 namespace ckernel::sfpu {
 
-// The kernel is fitted on BF16 data; the SFPU reads DEST in the math thread's SrcB format.
+// The kernel is fitted on BF16 data; the SFPU reads DEST in the math thread's SrcB format, as BF16 for
+// Float16_b and the block formats sharing its exponent.
 inline bool bf16_dest_cbrt() {
 #if defined(TRISC_MATH) || defined(LLK_TRISC_MATH)
-    return ckernel::math::src_zero_flag_srcb_fmt == static_cast<std::uint32_t>(DataFormat::Float16_b);
+    const std::uint32_t format = ckernel::math::src_zero_flag_srcb_fmt;
+    return format == static_cast<std::uint32_t>(DataFormat::Float16_b) ||
+           format == static_cast<std::uint32_t>(DataFormat::Bfp8_b) ||
+           format == static_cast<std::uint32_t>(DataFormat::Bfp4_b) ||
+           format == static_cast<std::uint32_t>(DataFormat::Bfp2_b);
 #else
     return false;
 #endif
 }
-// The Blackhole whole-tile call as the fitter's scheduler issues it (ttpoly/sfpu_schedule.py): the
-// compiled instructions of ckernel::sfpu::bf16::cbrt::calculate_newton_root<ckernel::sfpu::CbrtBf16Config, 32> in a
-// stall-filling order, rows addressed by their immediates, constants held in LRegs. It stores the same word for every
-// BF16 input.
+// The Blackhole whole-tile call as tt-polynomial-fitter's scheduler issues it (ttpoly/sfpu_schedule.py
+// in tenstorrent/tt-polynomial-fitter, not in this repository): the compiled instructions of
+// ckernel::sfpu::bf16::cbrt::calculate_newton_root<ckernel::sfpu::CbrtBf16Config, 32> in a stall-filling order, rows
+// addressed by their immediates, constants held in LRegs. It stores the same word for every BF16 input; other
+// ITERATIONS run the compiled body itself.
 inline void calculate_cbrt_bf16_scheduled() {
     TTI_SFPLOAD(3, 0, 7, 0);
     TTI_SFPLOAD(0, 0, 7, 2);
@@ -517,7 +523,7 @@ inline void calculate_cbrt_bf16_scheduled() {
     TTI_SFPSTORE(0, 0, 7, 0x3e);
 }
 
-template <int ITERATIONS = 8>
+template <int ITERATIONS = 32>
 inline void calculate_cbrt_bf16() {
     if constexpr (ITERATIONS == 32) {
         calculate_cbrt_bf16_scheduled();
@@ -525,10 +531,6 @@ inline void calculate_cbrt_bf16() {
         ckernel::sfpu::bf16::cbrt::calculate_newton_root<ckernel::sfpu::CbrtBf16Config, ITERATIONS>();
     }
 }
-inline void init_cbrt_bf16() {
-    if (bf16_dest_cbrt()) {
-        ckernel::sfpu::bf16::cbrt::init_newton_root<ckernel::sfpu::CbrtBf16Config>();
-    }
-}
+inline void init_cbrt_bf16() { ckernel::sfpu::bf16::cbrt::init_newton_root<ckernel::sfpu::CbrtBf16Config>(); }
 
 }  // namespace ckernel::sfpu

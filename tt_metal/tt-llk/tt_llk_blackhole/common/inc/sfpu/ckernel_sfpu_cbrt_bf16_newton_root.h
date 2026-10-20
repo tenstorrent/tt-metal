@@ -34,12 +34,19 @@ inline void calculate_newton_root()
         TTI_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_UPPER, magic_bits >> 16);
         TTI_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_LOWER, magic_bits & 0xffffu);
     }
-    TTI_REPLAY(0, Config::kBodySlots, 1, 1);
-    ttpoly::cbrt::newton_cbrt_body<ADDR_MOD_7, ADDR_MOD_6>();
+    load_replay_buf<Exec>(
+        0,
+        Config::kBodySlots,
+        [&]
+        {
+            ttpoly::cbrt::newton_cbrt_body<ADDR_MOD_7, ADDR_MOD_7>();
+            TTI_INCRWC(0, 2, 0, 0);
+        });
 #pragma GCC unroll 8
     for (int row = 1; row < Iterations; ++row)
     {
         TTI_REPLAY(0, Config::kBodySlots, 0, 0);
+        TTI_INCRWC(0, 2, 0, 0);
     }
 }
 } // namespace ckernel::sfpu::bf16::cbrt

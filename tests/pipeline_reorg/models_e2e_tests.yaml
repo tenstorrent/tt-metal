@@ -923,6 +923,11 @@
   cmd: |
     export TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-20b/ HF_MODEL=openai/gpt-oss-20b
     pytest models/demos/gpt_oss/demo/text_demo.py --timeout 600
+    # DFlash accuracy (QuietBox 2; skips elsewhere). The drafter is not in the shared HF cache (read-only, offline here):
+    # download it into a job-local cache.
+    DFLASH_DRAFT_PATH=$(HF_HUB_OFFLINE=0 HF_HUB_CACHE=/tmp/dflash_hf python3 -c "from huggingface_hub import snapshot_download; print(snapshot_download('z-lab/gpt-oss-20b-DFlash'))")
+    export DFLASH_DRAFT_PATH
+    pytest models/demos/gpt_oss/tests/test_dflash.py -k isl_1k
   model: gpt-oss-20b
   model_family: GPT-OSS
   skus:
@@ -935,7 +940,7 @@
       tier: 2
       release_ready: false
     bh_quietbox_2:
-      timeout: 15
+      timeout: 26 # text_demo 7.2 min + DFlash test 9-12 min (measured: the weight load from the shared cache varies)
       tier: 2
       release_ready: false
   owner_id: U08TJ70UFRT # Harry Andrews

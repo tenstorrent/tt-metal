@@ -15,6 +15,9 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import is_blackhole
 from models.demos.common.prefill.adapter import DEFAULT_MODEL, PrefillRunParams, get_adapter
+from models.demos.common.prefill.runners.layer_completion_layout import layer_completion_layout
+from models.demos.common.prefill.runners.layer_completion_ring_reader import scheduler_shm_name
+from models.demos.common.prefill.runners.layer_completion_ring_writer import LayerCompletionRingWriter
 from models.demos.common.prefill.runners.migration import (
     migration_file_export_enabled,
     migration_publish_enabled,
@@ -144,58 +147,17 @@ def _handle_sigterm(signum, frame):
     _shutdown = True
 
 
-LAYER_COMPLETION_PUSH_SPIN_TIMEOUT_S = float(os.environ.get("PREFILL_LAYER_COMPLETION_PUSH_TIMEOUT_S", 30.0))
-LAYER_COMPLETION_PUSH_SPIN_LOG_EVERY_S = 10.0
-LAYER_COMPLETION_PUSH_SPIN_SLEEP_S = 0.001
-
-
-def build_layer_completion_sink(producer, *, source_rank, num_layers, ack_idx_of_layer=None):
-    """`num_layers` and `ack_idx_of_layer` are in ACK space; see the routing block in main().
-
-    The callback is handed a GLOBAL layer index, and `layer_idx` stays global in the pushed record
-    because the router addresses the KV stage with it. Only `seq` is translated.
-    """
-
-    def on_layer_complete(layer_idx: int, request_id: int) -> None:
-        ack_idx = layer_idx if ack_idx_of_layer is None else ack_idx_of_layer[layer_idx]
-        seq = request_id * num_layers + ack_idx
-        if producer.try_push(seq=seq, source_rank=source_rank, layer_idx=layer_idx, request_id=request_id):
-            return
-
-        start = time.monotonic()
-        next_log = start + LAYER_COMPLETION_PUSH_SPIN_LOG_EVERY_S
-        logger.warning(
-            f"[layer-completion] ring full (seq={seq}); spinning up to "
-            f"{LAYER_COMPLETION_PUSH_SPIN_TIMEOUT_S:.0f}s for router to drain"
-        )
-        while True:
-            if producer.try_push(seq=seq, source_rank=source_rank, layer_idx=layer_idx, request_id=request_id):
-                logger.info(f"[layer-completion] ring drained after {time.monotonic() - start:.1f}s; pushed seq={seq}")
-                return
-            if _shutdown:
-                raise RuntimeError(f"layer-completion ring full (seq={seq}); shutdown requested while spinning")
-            now = time.monotonic()
-            if now - start >= LAYER_COMPLETION_PUSH_SPIN_TIMEOUT_S:
-                logger.error(f"[layer-completion] gave up after {now - start:.1f}s spinning on full ring (seq={seq})")
-                raise RuntimeError(
-                    f"layer-completion ring full (seq={seq}); router not draining after "
-                    f"{LAYER_COMPLETION_PUSH_SPIN_TIMEOUT_S:.0f}s"
-                )
-            if now >= next_log:
-                logger.warning(f"[layer-completion] still spinning on full ring (seq={seq}) after {now - start:.0f}s")
-                next_log += LAYER_COMPLETION_PUSH_SPIN_LOG_EVERY_S
-            time.sleep(LAYER_COMPLETION_PUSH_SPIN_SLEEP_S)
-
-    return on_layer_complete
-
-
-def _decode_metadata(metadata_msg: ttnn.Tensor) -> dict:
+def _decode_metadata(metadata_msg: ttnn.Tensor, with_provided_levels: bool = False) -> dict:
+    # One D2H read; the 4th word is MTP provided_levels.
     m = ttnn.to_torch(ttnn.get_device_tensors(metadata_msg)[0]).view(torch.int32).flatten()
-    return {
+    meta = {
         "slot_id": int(m[0]),
         "actual_start": int(m[1]),
         "actual_end": int(m[2]),
     }
+    if with_provided_levels:
+        meta["provided_levels"] = max(0, int(m[3]))
+    return meta
 
 
 def mtp_provided_levels(mtp_tokens, meta: dict) -> int:
@@ -300,10 +262,7 @@ def _d2d_recv(inbound) -> tuple:
     act, metadata_msg = ttnn.experimental.deepseek_prefill.inbound_socket_service_sync(
         inbound, metadata_size_bytes=D2D_METADATA_SIZE_BYTES
     )
-    meta = _decode_metadata(metadata_msg)
-    if MTP_LEVELS:
-        words = ttnn.to_torch(ttnn.get_device_tensors(metadata_msg)[0]).view(torch.int32).flatten()
-        meta["provided_levels"] = max(0, int(words[3]))
+    meta = _decode_metadata(metadata_msg, with_provided_levels=bool(MTP_LEVELS))
     where = f"[{meta['actual_start']},{meta['actual_end']}) slot={meta['slot_id']}"
     logger.info(f"[pp] RECV-d2d {where} [xfer] sync={(time.perf_counter() - t0) * 1000.0:.2f}ms")
     return act, meta, metadata_msg
@@ -482,6 +441,7 @@ def run_request_loop(
     d2d_in=None,
     d2d_out=None,
     d2h_service=None,
+    layer_ack_service=None,
     before_first_chunk=None,
 ) -> None:
     cfg = runtime.config
@@ -535,6 +495,8 @@ def run_request_loop(
         if first is None:
             first = t
         c += 1
+        if layer_ack_service is not None:
+            layer_ack_service.check()  # a lost D2H record is fatal for the run; surface it here, not at exit
     _drain_and_log_e2e(runtime, rank, d2d_out, first, c, t0)
 
 
@@ -732,7 +694,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
         ttnn.distributed_context_barrier()
 
     service_id = os.environ.get("PREFILL_H2D_SERVICE_ID", "ds_prefill")
-    ack_shm_name = f"/tt_prefill_layer_acks_{service_id}"
+    ack_shm_name = scheduler_shm_name(service_id)
     master_rank = int(os.environ.get("PREFILL_MASTER_RANK", "0"))
     router = None
     d2h_service = None
@@ -763,81 +725,49 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
     _unlink_stale_shm(ring_shm_name)
     if rank == master_rank:
         _unlink_stale_shm(ack_shm_name)
+    # Record layout (layer_completion_layout.py); the migration block below uses layer space.
+    layer_split = compute_layer_split(NUM_LAYERS, num_ranks, ADAPTER.layer_split_boundaries(NUM_LAYERS), MTP_LEVELS)
+    first_layer_idx, num_my_layers = layer_split[rank]
+    extra_layers = runtime.layer_ack_layers(0, 0)[0] if getattr(runtime, "layer_ack_layers", None) else 0
+    layout = layer_completion_layout(
+        layer_split,
+        rank,
+        kv_slot_layer_ids=getattr(ADAPTER, "kv_slot_layer_ids", lambda n: None)(NUM_LAYERS),
+        extra_layers=extra_layers,
+    )
     router = LayerCompletionRouter(
         rank=rank,
         world_size=num_ranks,
         master_rank=master_rank,
         ring_shm_name=ring_shm_name,
-        scheduler_channel_shm_name=ack_shm_name if rank == master_rank else "",
+        scheduler_shm_name=ack_shm_name if rank == master_rank else "",
+        completions_per_chunk=layout.completions_per_chunk,
         teardown_timeout_ms=30000,
     )
-    # ACK space, not layer space, and for BOTH transports below. Each derives a record's identity
-    # from a plain dense counter -- LayerAckService from
-    # seq = (k // local_layers) * num_layers + first_layer_idx + k % local_layers, the host sink
-    # from seq = request_id * num_layers + ack_idx -- and LayerCompletionReorderBuffer advances
-    # next_expected_ by exactly 1 per drained record. So both must count records this rank actually
-    # EMITS, not layers it holds. A hybrid stack acks only on KV-writing layers (`block.py` gates
-    # the ack on `attention.writes_kv`), so a 24-layer Kimi-K3 rank emits 6 records per chunk
-    # against a configured 24: on the D2H transport four real chunks are then labelled as one and
-    # every layer_idx and request_id is fabricated, and on the host transport the global indices
-    # {3,7,11,...} leave seq 0 never sent, so nothing ever drains.
-    # Dense models have one ack per layer, so acks == layers and this is a no-op for them.
-    #
-    # Derived here rather than taken from main(): this is a separate function and main()'s
-    # `layer_split` is not in its scope. The migration block below reads the layer-space pair.
-    layer_split = compute_layer_split(NUM_LAYERS, num_ranks, ADAPTER.layer_split_boundaries(NUM_LAYERS), MTP_LEVELS)
-    first_layer_idx, num_my_layers = layer_split[rank]
-    ack_layer_ids = getattr(ADAPTER, "kv_slot_layer_ids", lambda n: None)(NUM_LAYERS)
-    if ack_layer_ids is None:
-        acks_per_rank = [count for _, count in layer_split]
-        ack_idx_of_layer = None
-    else:
-        ack_layer_ids = sorted(ack_layer_ids)
-        acks_per_rank = [
-            sum(1 for layer in ack_layer_ids if first <= layer < first + count) for first, count in layer_split
-        ]
-        ack_idx_of_layer = {layer: idx for idx, layer in enumerate(ack_layer_ids)}
-    num_ack_layers = sum(acks_per_rank)
-    # Distinct names: `first_layer_idx` / `num_my_layers` are rebound in LAYER space by the
-    # migration block further down, and ack indices addressing a KV stage would be silently wrong
-    # (6/12/18 instead of 24/48/72 on Kimi-K3).
-    ack_first_idx = sum(acks_per_rank[:rank])
-    ack_local_count = acks_per_rank[rank]
-    if ack_local_count == 0:
-        raise RuntimeError(
-            f"rank {rank} holds layers [{first_layer_idx}, {first_layer_idx + num_my_layers}) and none of "
-            f"them writes a KV slab, so it emits no layer-completion records; "
-            f"LayerAckService requires at least one "
-            f"(TT_FATAL on local_layers=0) and the reorder buffer would wait on records that never come. "
-            f"Use a layer split that gives every rank a KV-writing layer, or run without migration."
-        )
-    # A runtime may ack rows no layer of the split describes -- DFlash acks the drafter's context K/V
-    # as layers past the verifier's last, because those writes land after the forward returns. Widen
-    # the ack space here rather than at the two call sites: every rank must agree on the global count,
-    # since it is the modulus of the seq the master router reorders on.
-    if getattr(runtime, "layer_ack_layers", None) is not None:
-        num_ack_layers, ack_local_count = runtime.layer_ack_layers(num_ack_layers, ack_local_count)
     if use_d2h:
         fifo_size_bytes = LAYER_ACK_FIFO_SIZE_BYTES
         if runtime.config.use_trace:
             # The capture's warm pass fires a whole chunk's acks before any host reader exists. Acks
             # that arrive while the FIFO is full overrun the reader kernel's exact-count write-ack
             # wait, which then never matches again, so the FIFO must hold all of them.
-            fifo_size_bytes = max(fifo_size_bytes, 1 << (ack_local_count * LAYER_ACK_RECORD_BYTES - 1).bit_length())
+            ack_fifo_bytes = layout.rank_record_count * LAYER_ACK_RECORD_BYTES
+            fifo_size_bytes = max(fifo_size_bytes, 1 << (ack_fifo_bytes - 1).bit_length())
         d2h_service = ttnn.D2HStreamService(
             mesh_device,
             global_spec=None,
             fifo_size_bytes=fifo_size_bytes,
             worker_cores=SYNC_WORKER_CORES,
             metadata_size_bytes=(CHUNK_METADATA_SIZE_BYTES if rank == 0 else D2D_METADATA_SIZE_BYTES),
+            metadata_ring=True,
         )
+        # The D2H record is the chunk's metadata {slot_id, actual_start, actual_end}; LayerAckService labels it
+        # and detects a dropped record from it.
         layer_ack_service = ttnn.LayerAckService(
             d2h_service,
             ring_shm_name,
-            source_rank=rank,
-            num_layers=num_ack_layers,
-            first_layer_idx=ack_first_idx,
-            local_layers=ack_local_count,
+            first_record=layout.rank_first_record,
+            record_count=layout.rank_record_count,
+            layer_ids=layout.rank_layer_ids,
         )
         if runtime.config.use_trace:
             runtime.set_d2h_ack_service(d2h_service)
@@ -845,6 +775,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             layer_ack_service.start()
         source_desc = "D2H device records"
     else:
+        # Host-callback transport: the only one MiniMax-M3 and GPT-OSS have.
         if getattr(runtime, "set_layer_completion_sink", None) is None:
             raise RuntimeError(
                 f"runtime {type(runtime).__name__} does not implement set_layer_completion_sink(sink), "
@@ -852,19 +783,14 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
                 "(see docs/ADDING_A_PREFILL_MODEL.md)."
             )
         producer = LayerCompletionQueue.connect(ring_shm_name, connect_timeout_ms=30000)
-        runtime.set_layer_completion_sink(
-            build_layer_completion_sink(
-                producer,
-                source_rank=rank,
-                num_layers=num_ack_layers,
-                ack_idx_of_layer=ack_idx_of_layer,
-            )
-        )
+        sink = LayerCompletionRingWriter(producer, is_shutdown=lambda: _shutdown)
+        runtime.set_layer_completion_sink(sink)
         source_desc = "host on_layer_complete callback"
     logger.info(
-        f"[migration] layer-completion routing up: rank={rank}/{num_ranks} master={master_rank} "
+        f"[migration] layer-completion routing up: "
+        f"rank={rank}/{num_ranks} master={master_rank} "
         f"ring={ring_shm_name} source={source_desc} "
-        + (f"(owns scheduler channel {ack_shm_name})" if rank == master_rank else "(subordinate -> master)")
+        + (f"(owns scheduler shm {ack_shm_name})" if rank == master_rank else "(subordinate -> master)")
     )
 
     migration_endpoint = setup_kv_chunk_table(
@@ -909,6 +835,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             d2d_in=d2d_in,
             d2d_out=d2d_out,
             d2h_service=d2h_service,
+            layer_ack_service=layer_ack_service,
             before_first_chunk=_capture_trace if traced else None,
         )
     finally:
