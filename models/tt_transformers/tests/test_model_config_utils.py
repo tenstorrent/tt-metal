@@ -293,3 +293,9 @@ def test_llama8_n150_prefill_k_block_scope(device_name, model_name, seq_len, exp
     assert overrides == [expected_override]
     assert config.in0_block_w == (4 if expected_override else 8)
     assert (args.dim // ttnn.TILE_SIZE) % config.in0_block_w == 0
+
+
+@pytest.mark.parametrize("key", ["hidden_act", "hidden_activation"])
+def test_gelu_pytorch_tanh_maps_to_gelu_tanh(key):
+    activation = ModelArgs._get_hidden_activation_type(None, {key: "gelu_pytorch_tanh"})
+    assert activation.op_type == ttnn.UnaryOpType.GELU_TANH
