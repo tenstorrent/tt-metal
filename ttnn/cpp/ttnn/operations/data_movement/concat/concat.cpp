@@ -277,7 +277,6 @@ ttnn::Tensor concat(
 
     if (input_tensors.size() == 1) {
         const ttnn::Tensor& input_tensor = input_tensors.front();
-        // ttnn::to_memory_config does not handle a device tensor with no elements.
         if (input_tensor.logical_volume() == 0 && ttnn::is_device_tensor(input_tensor) && input_tensor.is_allocated())
             [[unlikely]] {
             const tt::tt_metal::TensorSpec output_spec(
@@ -343,7 +342,6 @@ ttnn::Tensor concat(
     ttnn::Shape logical_output_shape = compute_output_shape(input_tensors, dim);
 
     if (has_empty_input || logical_output_shape.volume() == 0) [[unlikely]] {
-        // Zero-sized inputs never reach the device operation: apply the operand rules that every path checks.
         for (const auto& input_tensor : input_tensors) {
             TT_FATAL(
                 ttnn::is_device_tensor(input_tensor),
@@ -363,7 +361,6 @@ ttnn::Tensor concat(
         return ttnn::create_device_tensor(output_spec, first_tensor.device());
     }
 
-    // As in torch.cat, an input that is empty along dim adds nothing; the program factories do not handle it.
     if (has_empty_input) [[unlikely]] {
         std::vector<ttnn::Tensor> non_empty_tensors;
         non_empty_tensors.reserve(input_tensors.size());
@@ -373,8 +370,6 @@ ttnn::Tensor concat(
             }
         }
         if (non_empty_tensors.size() == 1) {
-            // Return a new tensor, as a multi-input concat does (to_memory_config may return its input);
-            // a sharded input is unsharded first, as concat_impl does.
             const ttnn::Tensor& input_tensor = non_empty_tensors.front();
             if (input_tensor.is_sharded()) {
                 const ttnn::Tensor interleaved_tensor =

@@ -12,7 +12,6 @@ TORCH_DTYPE = {ttnn.bfloat16: torch.float32, ttnn.float32: torch.float32, ttnn.i
 
 
 def _distinct_values(shape, base, dtype):
-    """Small integers that every tested dtype holds exactly; each input gets its own base."""
     count = 1
     for extent in shape:
         count *= extent
@@ -26,7 +25,6 @@ def _empty_along(shape, dim):
 
 
 def _torch_inputs(order, shape, dim, dtype):
-    """`order` spells the input list: "E" is an input with no elements along `dim`, any other letter a regular one."""
     torch_inputs = []
     for position, kind in enumerate(order):
         if kind == "E":
@@ -63,7 +61,6 @@ def _two_core_sharded_config(memory_layout, shard_shape, buffer_type=ttnn.Buffer
 
 
 def _height_sharded_config(shard_width):
-    """Two shards of 32 rows on two cores, in L1."""
     return _two_core_sharded_config(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, [32, shard_width])
 
 
@@ -73,11 +70,6 @@ def _height_sharded_config(shard_width):
 @pytest.mark.parametrize("dim", [-1, -2, 1])
 @pytest.mark.parametrize("order", ["EA", "AE", "EAB", "AEB", "ABE", "EEAB", "EE"])
 def test_concat_with_empty_inputs(device, order, dim, dtype, layout, width):
-    """An input that is empty along the concat dimension adds nothing to the result, as in torch.cat.
-
-    "EAB" is concat([empty, a, b]). The inputs are deallocated before the result is read: the result
-    must own its data, also when only one input has elements.
-    """
     torch_inputs = _torch_inputs(order, (1, 2, 32, width), dim, dtype)
     expected = torch.cat(torch_inputs, dim=dim)
 
@@ -101,7 +93,6 @@ def test_concat_with_empty_inputs(device, order, dim, dtype, layout, width):
 def test_concat_with_one_non_empty_input_across_memory_configs(
     device, order, layout, width, input_memory_config, output_memory_config
 ):
-    """With one input left that has elements, the result is a copy of it in the requested memory config."""
     torch_inputs = _torch_inputs(order, (1, 2, 32, width), -1, ttnn.bfloat16)
     expected = torch.cat(torch_inputs, dim=-1)
 
@@ -120,7 +111,6 @@ def test_concat_with_one_non_empty_input_across_memory_configs(
 
 @pytest.mark.parametrize("order", ["EA", "AE"])
 def test_concat_with_one_non_empty_input_and_sharded_output(device, order):
-    """With one input left that has elements, a sharded output memory config is honoured, as it is for two."""
     sharded_config = _height_sharded_config(64)
     torch_inputs = _torch_inputs(order, (1, 1, 64, 64), -1, ttnn.bfloat16)
     expected = torch.cat(torch_inputs, dim=-1)
@@ -142,7 +132,6 @@ def test_concat_with_one_non_empty_input_and_sharded_output(device, order):
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT], ids=["tile", "row_major"])
 @pytest.mark.parametrize("dim", [-1, 1])
 def test_concat_with_zero_sized_other_dimension(device, dim, layout, width, memory_config):
-    """Inputs with a zero-sized dimension other than the concat one give an empty result of the right shape."""
     torch_inputs = [torch.zeros((1, 2, 0, width)), torch.zeros((1, 2, 0, width))]
     expected = torch.cat(torch_inputs, dim=dim)
 
@@ -161,7 +150,6 @@ def test_concat_with_zero_sized_other_dimension(device, dim, layout, width, memo
 @pytest.mark.parametrize("shape", [(1, 2, 32, 0), (1, 2, 0, 64)], ids=["empty_last_dim", "empty_other_dim"])
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT], ids=["tile", "row_major"])
 def test_concat_of_a_single_zero_sized_input(device, layout, shape, input_memory_config, output_memory_config):
-    """A list holding one zero-sized input gives an empty result of that shape in the requested memory config."""
     torch_input = torch.zeros(shape)
     tensor = ttnn.from_torch(
         torch_input, dtype=ttnn.bfloat16, layout=layout, device=device, memory_config=input_memory_config
@@ -172,7 +160,6 @@ def test_concat_of_a_single_zero_sized_input(device, layout, shape, input_memory
 
 
 def test_concat_of_a_single_deallocated_zero_sized_input_is_rejected(device, expect_error):
-    """A deallocated zero-sized input is rejected when it is the only input, as a deallocated regular input is."""
     tensor = ttnn.from_torch(torch.zeros((1, 2, 32, 0)), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     ttnn.deallocate(tensor)
 
@@ -181,7 +168,6 @@ def test_concat_of_a_single_deallocated_zero_sized_input_is_rejected(device, exp
 
 
 def test_concat_of_a_single_host_zero_sized_input_is_rejected(device, expect_error):
-    """A zero-sized host input is rejected when it is the only input, as a regular host input is."""
     tensor = ttnn.from_torch(torch.zeros((1, 2, 32, 0)), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
 
     with expect_error(RuntimeError, "Device Operations expect device tensors as inputs"):
@@ -190,7 +176,6 @@ def test_concat_of_a_single_host_zero_sized_input_is_rejected(device, expect_err
 
 @pytest.mark.parametrize("order", ["AE", "EA", "EE", "AEB"])
 def test_concat_with_zero_sized_input_keeps_dtype_rule(device, expect_error, order):
-    """Inputs of two dtypes are rejected with a zero-sized input in the list, as they are without one."""
     inputs = []
     for position, torch_input in enumerate(_torch_inputs(order, (1, 2, 32, 64), -1, ttnn.bfloat16)):
         dtype = ttnn.float32 if position == 1 else ttnn.bfloat16
@@ -202,7 +187,6 @@ def test_concat_with_zero_sized_input_keeps_dtype_rule(device, expect_error, ord
 
 @pytest.mark.parametrize("order", ["AE", "EA", "EE", "AEB"])
 def test_concat_with_zero_sized_input_keeps_device_rule(device, expect_error, order):
-    """A host tensor is rejected with a zero-sized input in the list, as it is without one."""
     inputs = []
     for position, torch_input in enumerate(_torch_inputs(order, (1, 2, 32, 64), -1, ttnn.bfloat16)):
         on_device = {} if position == 1 else {"device": device}
@@ -215,7 +199,6 @@ def test_concat_with_zero_sized_input_keeps_device_rule(device, expect_error, or
 @pytest.mark.parametrize("width", [64, 50], ids=["tile_aligned", "not_tile_aligned"])
 @pytest.mark.parametrize("order", ["AE", "EA", "AEB"])
 def test_concat_with_zero_sized_input_of_another_layout(device, order, width):
-    """A zero-sized input is left out before the inputs are converted to one layout: its layout does not matter."""
     torch_inputs = _torch_inputs(order, (1, 2, 32, width), -1, ttnn.bfloat16)
     expected = torch.cat(torch_inputs, dim=-1)
 
@@ -242,7 +225,6 @@ def test_concat_with_zero_sized_input_of_another_layout(device, order, width):
 def test_concat_with_interleaved_zero_sized_input_next_to_sharded_inputs(
     device, order, layout, memory_layout, shape, shard_shape, dim
 ):
-    """A zero-sized input is left out before the device operation: that it is interleaved does not matter."""
     sharded_config = _two_core_sharded_config(memory_layout, shard_shape)
     torch_inputs = _torch_inputs(order, shape, dim, ttnn.bfloat16)
     expected = torch.cat(torch_inputs, dim=dim)
@@ -261,7 +243,6 @@ def test_concat_with_interleaved_zero_sized_input_next_to_sharded_inputs(
 @pytest.mark.parametrize("buffer_type", [ttnn.BufferType.L1, ttnn.BufferType.DRAM], ids=["l1", "dram"])
 @pytest.mark.parametrize("order", ["AE", "EA"])
 def test_concat_with_one_sharded_input_left_and_its_memory_config(device, order, buffer_type):
-    """With one sharded input left and its own memory config requested, the result is a sharded copy of it."""
     sharded_config = _two_core_sharded_config(ttnn.TensorMemoryLayout.WIDTH_SHARDED, [32, 32], buffer_type)
     torch_inputs = _torch_inputs(order, (1, 1, 32, 64), -2, ttnn.bfloat16)
     expected = torch.cat(torch_inputs, dim=-2)
@@ -281,7 +262,6 @@ def test_concat_with_one_sharded_input_left_and_its_memory_config(device, order,
 
 @pytest.mark.parametrize("order", ["AE", "EE"])
 def test_concat_with_zero_sized_input_keeps_allocation_rule(device, expect_error, order):
-    """A deallocated zero-sized input is rejected, as a deallocated regular input is."""
     inputs = [
         ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
         for t in _torch_inputs(order, (1, 2, 32, 64), -1, ttnn.bfloat16)
@@ -296,7 +276,6 @@ def test_concat_with_zero_sized_input_keeps_allocation_rule(device, expect_error
 @pytest.mark.parametrize("dim", [0, -1])
 @pytest.mark.parametrize("shape", [(2, 0, 4), (2, 3, 0)], ids=["empty_middle_dim", "empty_last_dim"])
 def test_stack_of_zero_sized_inputs(device, shape, dim, layout):
-    """ttnn.stack is built on ttnn.concat: zero-sized inputs give an empty result of the torch.stack shape."""
     torch_inputs = [torch.zeros(shape), torch.zeros(shape)]
     expected = torch.stack(torch_inputs, dim=dim)
 
