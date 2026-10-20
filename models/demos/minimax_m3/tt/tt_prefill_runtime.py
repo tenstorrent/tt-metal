@@ -574,7 +574,13 @@ class TtPrefillRuntime:
 
         first_layer_idx = self.config.first_layer_idx if first_layer_idx is None else int(first_layer_idx)
         num_my_layers = self.config.num_layers if num_my_layers is None else int(num_my_layers)
-        check_stage_paging(self.hf_config, self.config, kv_cache, first_layer_idx, num_my_layers)
+        check_stage_paging(
+            self.config,
+            kv_cache,
+            first_layer_idx,
+            num_my_layers,
+            paged=stage_is_paged(self.hf_config, first_layer_idx, num_my_layers),
+        )
         return [
             KvCacheStage(int(t.buffer_address()), first_layer_idx, num_my_layers)
             for t in (kv_cache.k, kv_cache.v, kv_cache.index_k)
@@ -602,8 +608,13 @@ class TtPrefillRuntime:
 
         c = self.config
         first_layer_idx = c.first_layer_idx if first_layer_idx is None else first_layer_idx
+        num_my_layers = c.num_layers if num_my_layers is None else num_my_layers
         check_stage_paging(
-            self.hf_config, c, kv_cache, first_layer_idx, c.num_layers if num_my_layers is None else num_my_layers
+            c,
+            kv_cache,
+            first_layer_idx,
+            num_my_layers,
+            paged=stage_is_paged(self.hf_config, first_layer_idx, num_my_layers),
         )
 
         @functools.cache
@@ -773,15 +784,14 @@ class TtPrefillRuntime:
         )
 
 
-def check_stage_paging(hf_config, config, kv_cache, first_layer_idx, num_layers) -> None:
+def check_stage_paging(config, kv_cache, first_layer_idx, num_layers, *, paged) -> None:
     """Rank 0 addresses every paged stage's pool through fixed_page_table, from stage_is_paged and the config's sizes
-    alone, so the cache a stage holds must be of the kind stage_is_paged gives it and, when paged, hold
+    alone, so the cache a stage holds must be paged exactly when ``paged`` (stage_is_paged for its layers) and then hold
     fixed_pool_pages pages. This catches a cache of the wrong kind or size, not a paged cache holding another table."""
     layers = f"layers [{first_layer_idx}, {first_layer_idx + num_layers})"
-    paged = kv_cache.page_table is not None
-    if paged != stage_is_paged(hf_config, first_layer_idx, num_layers):
+    if (kv_cache.page_table is not None) != paged:
         raise ValueError(
-            f"{layers} hold a {'paged' if paged else 'slot'} KV cache where stage_is_paged gives the other kind; "
+            f"{layers} hold a {'slot' if paged else 'paged'} KV cache where stage_is_paged gives the other kind; "
             "allocate it with the adapter's allocate_kv_cache"
         )
     if paged:
