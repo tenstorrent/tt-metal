@@ -398,6 +398,7 @@ def populate_kv_chunk_address_table_block_cyclic(
     stage_layout=None,
     layer_rows=None,
     tp_axis=None,
+    alias_rows=None,
 ):
     """
     Populate ONE config (``config_id``) of an existing KvChunkAddressTable from a device cache tensor.
@@ -418,6 +419,8 @@ def populate_kv_chunk_address_table_block_cyclic(
         tp_axis: None (default) = TP-REPLICATED, one device group per row. When set (KV dedup), each
             (row, col) device holds a distinct sub-slice, so the table uses per-device singleton groups:
             linear chip row*tp + col owns tokens [seq_chunk*5120 + row*640 + col*(640/tp), +640/tp).
+        alias_rows: {alias table row: source table row}; each alias gets every location its source does.
+            Decode MTP levels that share one KV cache read level 1's rows this way. None = no aliases.
         (remaining args as in create_kv_chunk_address_table_block_cyclic)
 
     Returns:
@@ -433,6 +436,10 @@ def populate_kv_chunk_address_table_block_cyclic(
             f"the map must cover every layer the cache physically stores"
         )
         return layer_rows[dense_layer]
+
+    aliases_of = {}
+    for alias, source in (alias_rows or {}).items():
+        aliases_of.setdefault(source, []).append(alias)
 
     if stage_layout is not None:
         # ---- stage_layout-driven path (PP-capable, #48826). ----
@@ -487,6 +494,8 @@ def populate_kv_chunk_address_table_block_cyclic(
                     for slot in range(num_users):
                         for local_layer in range(count):
                             global_layer = first + local_layer
+                            table_row = _table_row(global_layer)
+                            aliases = aliases_of.get(table_row, ())
                             for seq_chunk in range(num_chunks_per_seq_len):
                                 chunk_token_start = (
                                     seq_chunk * PREFILL_CHUNK_TOKENS
@@ -501,7 +510,9 @@ def populate_kv_chunk_address_table_block_cyclic(
                                     location.noc_addr = (curr_bank_id << 32) | (dram_bank_base_addr + curr_bank_offset)
                                     location.size_bytes = chunk_size_bytes
                                     location.device_group_index = group_idx
-                                    lookup_table.set(_table_row(global_layer), position, slot, location, config_id)
+                                    lookup_table.set(table_row, position, slot, location, config_id)
+                                    for alias in aliases:
+                                        lookup_table.set(alias, position, slot, location, config_id)
 
                                     curr_bank_id = (curr_bank_id + 1) % num_dram_banks
                                     if curr_bank_id == 0:
@@ -588,6 +599,8 @@ def populate_kv_chunk_address_table_block_cyclic(
             curr_bank_offset = 0
             for slot in range(num_users):
                 for layer in range(num_layers):
+                    table_row = _table_row(layer)
+                    aliases = aliases_of.get(table_row, ())
                     for seq_chunk in range(num_chunks_per_seq_len):
                         chunk_token_start = (
                             seq_chunk * PREFILL_CHUNK_TOKENS
@@ -600,7 +613,9 @@ def populate_kv_chunk_address_table_block_cyclic(
                             location.noc_addr = (curr_bank_id << 32) | (dram_bank_base_addr + curr_bank_offset)
                             location.size_bytes = chunk_size_bytes
                             location.device_group_index = group_idx
-                            lookup_table.set(_table_row(layer), position, slot, location, config_id)
+                            lookup_table.set(table_row, position, slot, location, config_id)
+                            for alias in aliases:
+                                lookup_table.set(alias, position, slot, location, config_id)
 
                             curr_bank_id = (curr_bank_id + 1) % num_dram_banks
                             if curr_bank_id == 0:
