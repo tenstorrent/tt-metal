@@ -69,6 +69,23 @@ TEST(MoveOnlyFunctionTest, CPU_ReturnsValueAndTakesArguments) {
     EXPECT_EQ(add(2, 3), 5u);
 }
 
+struct MoveCounter {
+    static inline int moves = 0;
+    MoveCounter() = default;
+    MoveCounter(MoveCounter&&) noexcept { ++moves; }
+    MoveCounter(const MoveCounter&) = delete;
+    MoveCounter& operator=(MoveCounter&&) = delete;
+    MoveCounter& operator=(const MoveCounter&) = delete;
+};
+
+// Only into the target's own parameter, as with std::function: the table passes class types by reference.
+TEST(MoveOnlyFunctionTest, CPU_ClassArgumentIsMovedOnce) {
+    move_only_function<void(MoveCounter)> f{[](MoveCounter) {}};
+    MoveCounter::moves = 0;
+    f(MoveCounter{});
+    EXPECT_EQ(MoveCounter::moves, 1);
+}
+
 TEST(MoveOnlyFunctionTest, CPU_HoldsMoveOnlyCapture) {
     auto owned = std::make_unique<int>(7);
     move_only_function<int()> f{[owned = std::move(owned)]() { return *owned; }};
