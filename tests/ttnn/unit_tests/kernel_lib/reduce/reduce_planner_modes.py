@@ -74,8 +74,9 @@ class ReduceCase:
     partial_elements: int = 0
     max_identity_only: bool = False
     scalar: float = 1.0
-    allow_empty_auxiliary: bool = False
     math_fidelity: str = "HiFi4"
+    # None: the widest group the reader can stream, as a factory would choose.
+    output_group: int | None = None
 
     @property
     def logical_height(self) -> int:
@@ -111,6 +112,27 @@ class ReduceCase:
             return None if self.scalar == 1.0 else self.scalar / (self.reduced_elements * self.calls)
         return self.scalar
 
+    @property
+    def streams_column_groups(self) -> bool:
+        # The default group is min(cols, DEST capacity), which is wider than one column unless cols == 1.
+        return (self.output_group if self.output_group is not None else self.cols) != 1
+
+    def output_group_for(self, hardware, input_dtype: ttnn.DataType) -> int:
+        if self.output_group is not None:
+            return self.output_group
+        if self.dim != "REDUCE_COL":
+            return 1
+        group = min(
+            self.cols,
+            _PLANNER.max_reduce_output_group(
+                hardware, input_dtype, _REDUCE_MATH[self.pool], _FP32_MODE[self.fp32_mode]
+            ),
+        )
+        if self.input_mode == "bulk":
+            while self.cols % group:
+                group -= 1
+        return group
+
     def additive_cutoff(self, arch) -> int:
         # Reduced-axis tiles at which TileSum starts to win, per (row, col, scalar).
         cutoffs = {
@@ -143,7 +165,7 @@ class ReduceCase:
             and self.pool in ("SUM", "AVG")
             and self.input_dtype in ("bf16", "fp32", "bf8", "bf4")
             and self.fp32_mode != "Accurate"
-            and not (self.dim == "REDUCE_COL" and self.input_mode == "per_tile")
+            and not (self.dim == "REDUCE_COL" and self.input_mode == "per_tile" and self.streams_column_groups)
             and reduced_tiles * self.calls >= cutoff
         )
         return "TILE_SUM" if additive else "NATIVE"
@@ -175,9 +197,27 @@ def _input_space_cases() -> list[ReduceCase]:
                         input_mode=input_mode,
                         calls=2 if accumulated else 1,
                         output_dtype="fp32",
-                        allow_empty_auxiliary=input_mode == "per_tile",
                     )
                 )
+    # One-column strips let streamed H reductions use TileSum, including its partial-tile mask.
+    rows, cols, batches = _shape_for_dim("REDUCE_COL")
+    for partial in (0, 5):
+        for accumulated in (False, True):
+            cases.append(
+                ReduceCase(
+                    name=f"input-REDUCE_COL-per_tile-group1-partial{partial}-acc{int(accumulated)}",
+                    family="input-space",
+                    dim="REDUCE_COL",
+                    rows=rows,
+                    cols=cols,
+                    batches=batches,
+                    input_mode="per_tile",
+                    calls=2 if accumulated else 1,
+                    output_dtype="fp32",
+                    partial_elements=partial,
+                    output_group=1,
+                )
+            )
     return cases
 
 
@@ -505,10 +545,6 @@ def _ttnn_dtype(name: str) -> ttnn.DataType:
     }[name]
 
 
-def _scaler_dtype(case: ReduceCase) -> ttnn.DataType:
-    return ttnn.float32 if case.input_dtype == "fp32" else ttnn.bfloat16
-
-
 def _input_cb_ids(call_count: int) -> list[int]:
     available = [cb_id for cb_id in range(32) if cb_id not in (CB_SCALER, CB_ACCUMULATOR, CB_OUTPUT)]
     assert call_count <= len(available)
@@ -540,6 +576,12 @@ def _make_plan(
     output_dtype: ttnn.DataType,
     input_cb_ids: list[int],
 ):
+    hardware = _PLANNER.ReduceHardwareConfig(
+        arch=device.arch(),
+        fp32_dest_acc_en=case.fp32_dest_acc_en,
+        dst_full_sync_en=False,
+        math_fidelity=getattr(ttnn.MathFidelity, case.math_fidelity),
+    )
     block = _PLANNER.ReduceBlockSpec(
         case.logical_height,
         case.logical_width,
@@ -549,7 +591,7 @@ def _make_plan(
         padded_h=case.rows * TILE,
         padded_w=case.cols * TILE,
         input_cb_tiles=case.rows * case.cols * case.batches,
-        allow_empty_auxiliary=case.allow_empty_auxiliary,
+        output_group=case.output_group_for(hardware, input_dtype),
     )
     reductions = [
         (
@@ -573,12 +615,7 @@ def _make_plan(
             output_cb_id=CB_OUTPUT,
             accumulator_cb_tiles=case.output_tiles,
         ),
-        hardware=_PLANNER.ReduceHardwareConfig(
-            arch=device.arch(),
-            fp32_dest_acc_en=case.fp32_dest_acc_en,
-            dst_full_sync_en=False,
-            math_fidelity=getattr(ttnn.MathFidelity, case.math_fidelity),
-        ),
+        hardware=hardware,
     )
     _assert_plan(case, plan, input_cb_ids, device.arch())
     return plan
@@ -586,12 +623,12 @@ def _make_plan(
 
 def _assert_plan(case: ReduceCase, plan, input_cb_ids: list[int], arch) -> None:
     assert len(plan) == plan.call_count == len(plan.calls) == case.calls
-    assert plan.auxiliary.cb_id == (CB_SCALER if plan.auxiliary.tiles else _PLANNER.NO_CB_ID)
-    assert plan.auxiliary.tiles or case.allow_empty_auxiliary
-    if case.family == "empty-auxiliary":
-        assert not plan.auxiliary.tiles
-        assert plan.auxiliary.cb is None
-        assert all(call.plan.auxiliary_cb is None for call in plan.calls)
+    assert plan.auxiliary.cb_id == CB_SCALER
+    assert plan.auxiliary.tiles
+    assert plan.auxiliary.cb.page_count == len(plan.auxiliary.tiles)
+    if case.family == "sfpu-placeholder":
+        assert len(plan.auxiliary.tiles) == 1
+        assert plan.auxiliary.tiles[0].type == _PLANNER.ReduceAuxiliaryTileType.PLACEHOLDER
     elif case.family == "shared-zero":
         assert len(plan.calls[0].plan.auxiliary_tiles) == 1
         assert plan.calls[0].auxiliary_tile_offset == plan.calls[1].auxiliary_tile_offset
@@ -614,11 +651,12 @@ def _assert_plan(case: ReduceCase, plan, input_cb_ids: list[int], arch) -> None:
 
     for index, (call, input_cb_id) in enumerate(zip(plan.calls, input_cb_ids)):
         assert call.input_cb_id == input_cb_id
-        assert call.auxiliary_cb_id == (CB_SCALER if call.plan.auxiliary_tiles else _PLANNER.NO_CB_ID)
+        assert call.auxiliary_cb_id == CB_SCALER
         expected_policy = _INPUT_POLICY[case.input_mode]
         assert call.plan.input_policy == expected_policy
         assert call.plan.algorithm == _ALGORITHM[case.expected_algorithm(arch)]
         assert call.plan.partial_mode == expected_partial
+        assert case.output_group is None or call.plan.chunk.output_tiles == case.output_group
         assert call.plan.Ht == case.rows
         assert call.plan.Wt == case.cols
         assert call.plan.batches == case.batches
@@ -726,9 +764,8 @@ def _make_logical_chunks(case: ReduceCase) -> list[torch.Tensor]:
         elif case.family == "fidelity":
             # Small exactly representable values keep LoFi's native path accurate.
             chunk = (torch.arange(math.prod(shape)).reshape(shape) % 7 - 3).to(torch.bfloat16)
-        elif case.family == "empty-auxiliary":
-            # Small integer-valued floats keep these folds exact, so removing
-            # a CB is checked independently of Fast-mode rounding differences.
+        elif case.family == "sfpu-placeholder":
+            # Small integer-valued floats keep these SFPU folds exact.
             chunk = torch.randint(-16, 17, shape, generator=generator).float()
             if case.input_dtype == "bf16":
                 chunk = chunk.to(torch.bfloat16)
@@ -853,7 +890,7 @@ def _mark_sfpu_row_accumulation(request, case: ReduceCase) -> None:
         )
 
 
-def _run_case(device, case: ReduceCase, *, keep_empty_auxiliary_cb=False) -> tuple[torch.Tensor, torch.Tensor]:
+def _run_case(device, case: ReduceCase) -> tuple[torch.Tensor, torch.Tensor]:
     input_dtype = _ttnn_dtype(case.input_dtype)
     output_dtype = _ttnn_dtype(case.output_dtype)
     input_shape = (case.batches * case.rows * TILE, case.cols * TILE)
@@ -893,8 +930,7 @@ def _run_case(device, case: ReduceCase, *, keep_empty_auxiliary_cb=False) -> tup
 
     cbs = [ttnn.cb_descriptor_from_sharded_tensor(cb_id, tensor) for cb_id, tensor in zip(input_cb_ids, device_inputs)]
     cbs.append(ttnn.cb_descriptor_from_sharded_tensor(CB_OUTPUT, output))
-    if plan.auxiliary.tiles or keep_empty_auxiliary_cb:
-        cbs.append(_scratch_cb(CB_SCALER, _scaler_dtype(case), max(1, len(plan.auxiliary.tiles))))
+    cbs.append(_scratch_cb(CB_SCALER, plan.auxiliary.cb.data_format, plan.auxiliary.cb.page_count))
     if case.calls > 1:
         cbs.append(_scratch_cb(CB_ACCUMULATOR, output_dtype, case.output_tiles))
 
@@ -1315,12 +1351,18 @@ def test_reduce_runtime_tail_stream_wraps(device, dim, pool, algorithm, fp32_inp
         "per_tile_odd": _PLANNER.ReduceInputPolicy.WAIT_AND_POP_PER_TILE,
         "bulk": _PLANNER.ReduceInputPolicy.BULK_WAIT_BULK_POP,
     }[input_policy]
-    if input_policy != "bulk" and dim == "REDUCE_COL":
-        algorithm = "NATIVE"
     input_dtype = ttnn.float32 if fp32_input else ttnn.bfloat16
     for height, width, batches in ((135, 135, 2), (160, 160, 2), (192, 192, 2), (64, 64, 1), (1, 17, 2)):
         scalar = None if pool == "AVG" else 1.0
         tail_shape = (height, width, batches)
+        # fp32 DEST holds four outputs. Bulk groups divide both the 8 full and the tail columns;
+        # streamed TileSum needs one-column strips.
+        if dim != "REDUCE_COL" or (input_policy != "bulk" and algorithm != "NATIVE"):
+            output_group = 1
+        elif input_policy == "bulk":
+            output_group = min(4, math.gcd(256 // TILE, (width + TILE - 1) // TILE))
+        else:
+            output_group = 4
 
         def plan_sequence(capacity):
             block = _PLANNER.ReduceBlockSpec(
@@ -1331,6 +1373,7 @@ def test_reduce_runtime_tail_stream_wraps(device, dim, pool, algorithm, fp32_inp
                 input_cb_tiles=capacity,
                 batches=2,
                 tail=_PLANNER.ReduceTailConfig(_PLANNER.ReduceValidShape(*tail_shape)),
+                output_group=output_group,
             )
             return _PLANNER.make_reduce_sequence_plan(
                 reductions=[
@@ -1356,11 +1399,10 @@ def test_reduce_runtime_tail_stream_wraps(device, dim, pool, algorithm, fp32_inp
             )
 
         if input_policy == "bulk":
-            # The shared full/tail packet is lcm(axes) times an output group that divides the 8 full columns.
+            # The shared full/tail packet is lcm(axes) times the output group.
             tail_axis = (tail_shape[1] if dim == "REDUCE_ROW" else tail_shape[0]) + TILE - 1
             axes = math.lcm(256 // TILE, tail_axis // TILE)
-            group = plan_sequence(axes * 256 // TILE).calls[0].plan.chunk.output_tiles
-            capacity = axes * group * capacity_multiplier
+            capacity = axes * output_group * capacity_multiplier
         elif input_policy == "per_tile_odd":
             # An odd ring holding a whole 8-tile row makes each row cross the FIFO end at most once,
             # where the additive path realigns its pairs.
@@ -1586,7 +1628,6 @@ def test_reduce_runtime_tail_rebinds_both_algorithms(device, runtime_arg_offset,
         ttnn.bfloat16,
         ttnn.float32,
         input_cb_tiles=14,
-        allow_empty_auxiliary=True,
         tail=_PLANNER.ReduceTailConfig(_PLANNER.ReduceValidShape(32, 17)),
     )
     sequence = _PLANNER.make_reduce_sequence_plan(
@@ -1813,12 +1854,12 @@ def test_reduce_plan_sequence_repeated_input_cb(device):
 @pytest.mark.parametrize("dtype,fp32_mode,pool", (("int32", "Fast", "MAX"), ("fp32", "Accurate", "SUM")))
 @pytest.mark.parametrize("dim", ("REDUCE_ROW", "REDUCE_COL"))
 @pytest.mark.parametrize("calls", (1, 2))
-def test_reduce_helpers_empty_auxiliary(request, device, dtype, fp32_mode, pool, dim, calls):
+def test_reduce_helpers_sfpu_placeholder_auxiliary(request, device, dtype, fp32_mode, pool, dim, calls):
     if "QUASAR" in str(device.arch()).upper():
-        pytest.skip("The planner's auxiliary-free SFPU backends are not enabled on Quasar")
+        pytest.skip("The planner's SFPU backends are not enabled on Quasar")
     case = ReduceCase(
-        name=f"empty-aux-{dtype}-{dim}-{calls}",
-        family="empty-auxiliary",
+        name=f"sfpu-placeholder-{dtype}-{dim}-{calls}",
+        family="sfpu-placeholder",
         dim=dim,
         rows=8 if dim == "REDUCE_COL" else 2,
         cols=8 if dim == "REDUCE_ROW" else 3,
@@ -1829,29 +1870,9 @@ def test_reduce_helpers_empty_auxiliary(request, device, dtype, fp32_mode, pool,
         input_dtype=dtype,
         output_dtype="int32" if dtype == "int32" else "fp32",
         fp32_mode=fp32_mode,
-        allow_empty_auxiliary=True,
     )
     _mark_sfpu_row_accumulation(request, case)
     actual, expected = _run_case(device, case)
-    torch.testing.assert_close(actual.to(torch.float64), expected.to(torch.float64), rtol=0, atol=0)
-
-
-def test_reduce_helpers_empty_auxiliary_with_existing_cb(device):
-    if "QUASAR" in str(device.arch()).upper():
-        pytest.skip("TileSum is not enabled on Quasar")
-    case = ReduceCase(
-        name="empty-aux-kept-cb",
-        family="empty-auxiliary",
-        dim="REDUCE_ROW",
-        rows=2,
-        cols=8,
-        input_mode="alias",
-        input_dtype="fp32",
-        output_dtype="fp32",
-        fp32_mode="Accurate",
-        allow_empty_auxiliary=True,
-    )
-    actual, expected = _run_case(device, case, keep_empty_auxiliary_cb=True)
     torch.testing.assert_close(actual.to(torch.float64), expected.to(torch.float64), rtol=0, atol=0)
 
 
@@ -1869,7 +1890,6 @@ def test_reduce_helpers_shared_zero_pair(device, dim):
         calls=2,
         input_dtype="bf8",
         output_dtype="fp32",
-        allow_empty_auxiliary=True,
     )
     actual, expected = _run_case(device, case)
     torch.testing.assert_close(actual.to(torch.float64), expected, rtol=0, atol=0)

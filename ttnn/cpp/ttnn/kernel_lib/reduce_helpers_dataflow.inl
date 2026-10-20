@@ -245,6 +245,12 @@ template <
     uint32_t value_bits>
 FORCE_INLINE void prepare_reduce_auxiliary_tile() {
     using ttnn::kernel_lib::ReduceAuxiliaryTileType;
+    if constexpr (tile_type == ReduceAuxiliaryTileType::Placeholder) {
+        DataflowBuffer dfb(dfb_id);
+        dfb.reserve_back(1);
+        dfb.push_back(1);
+        return;
+    }
     constexpr DataFormat data_format = get_dataformat(dfb_id);
     constexpr uint32_t tile_r_dim = get_tile_r_dim<dfb_id>();
     constexpr uint32_t tile_c_dim = get_tile_c_dim<dfb_id>();
@@ -265,7 +271,9 @@ FORCE_INLINE void prepare_reduce_auxiliary_tile() {
         static_assert(
             valid_elements <= tile_r_dim, "Column-oriented auxiliary tile valid-element count exceeds the tile height");
     } else {
-        static_assert(tile_type == ReduceAuxiliaryTileType::Zero, "Unknown reduction auxiliary tile type");
+        static_assert(
+            tile_type == ReduceAuxiliaryTileType::Zero || tile_type == ReduceAuxiliaryTileType::Placeholder,
+            "Unknown reduction auxiliary tile type");
     }
 
     DataflowBuffer dfb(dfb_id);

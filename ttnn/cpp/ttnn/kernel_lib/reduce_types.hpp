@@ -46,6 +46,8 @@ enum class ReduceAuxiliaryTileType : std::uint8_t {
     // of each participating face row.
     FirstRowPerFaceRow = 2,
     Zero = 3,
+    // Pushed without being written, for reductions that read no auxiliary tile; contents are unspecified.
+    Placeholder = 4,
 };
 
 }  // namespace ttnn::kernel_lib

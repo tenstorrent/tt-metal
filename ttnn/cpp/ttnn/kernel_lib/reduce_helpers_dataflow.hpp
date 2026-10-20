@@ -19,15 +19,12 @@ using ckernel::ReduceDim;
 constexpr uint32_t SUM_AND_MAX_REDUCE_FACTOR = 1;
 
 // Host-planned reductions (kernel_lib/host/reduce_host.hpp) serialize one auxiliary-tile recipe per planning unit;
-// prepare_reduce_auxiliary_tiles() materializes it. By convention the writer produces the auxiliary CB, since the
-// reader is on the input-streaming critical path. A writer shared with non-reduction users guards the call with the
-// REDUCE_AUXILIARY_CB define, which the factory sets to the auxiliary CB binding:
+// prepare_reduce_auxiliary_tiles() materializes it into the auxiliary CB every planned reduction binds. By
+// convention the writer produces it, since the reader is on the input-streaming critical path:
 //
-//   #ifdef REDUCE_AUXILIARY_CB
-//       using Auxiliary = ttnn::kernel_lib::BoundReduceAuxiliaryArgs<
-//           ttnn::kernel_lib::ReduceAuxiliaryArgs<AUXILIARY_ARGS_OFFSET>, REDUCE_AUXILIARY_CB>;
-//       dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<Auxiliary>();
-//   #endif
+//   using Auxiliary = ttnn::kernel_lib::BoundReduceAuxiliaryArgs<
+//       ttnn::kernel_lib::ReduceAuxiliaryArgs<AUXILIARY_ARGS_OFFSET>, dfb::scaler>;
+//   dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<Auxiliary>();
 
 // Scaler tiles for the reduce LLK only, not for arbitrary constant tiles. Prefer
 // calculate_and_prepare_reduce_scaler (1/N for AVG, 1.0 otherwise); use prepare_reduce_scaler only for a
@@ -63,7 +60,8 @@ FORCE_INLINE void calculate_and_prepare_reduce_scaler(
  *
  * FirstRow fills row 0 and FirstColumn fills column 0 over valid_elements; FirstRowPerFaceRow fills row 0 of each
  * face over the valid elements in that face row. A full FirstRow scaler writes only the rows reduction reads;
- * every other pattern zeroes the rest of the tile. value_bits is the fill value as float32 bits. Float16_b and
+ * Placeholder pushes the page unwritten, for reductions that read no auxiliary tile; every other pattern zeroes the
+ * rest of the tile. value_bits is the fill value as float32 bits. Float16_b and
  * Float32 only.
  */
 template <

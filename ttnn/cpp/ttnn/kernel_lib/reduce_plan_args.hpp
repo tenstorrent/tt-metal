@@ -86,12 +86,13 @@ public:
         reduce_plan_args::auxiliary_configuration::valid_elements_mask);
     static constexpr std::uint32_t value_bits = word<reduce_plan_args::AuxiliaryTileWord::ValueBits>();
 
+    static constexpr bool has_value =
+        type != ReduceAuxiliaryTileType::Zero && type != ReduceAuxiliaryTileType::Placeholder;
     static_assert(
-        type == ReduceAuxiliaryTileType::Zero || num_valid_elements > 0,
-        "A non-zero auxiliary tile must contain at least one valid element");
+        !has_value || num_valid_elements > 0, "A non-zero auxiliary tile must contain at least one valid element");
     static_assert(
-        type != ReduceAuxiliaryTileType::Zero || (num_valid_elements == 0 && value_bits == 0),
-        "A zero auxiliary tile must use zero value bits and zero valid elements");
+        has_value || (num_valid_elements == 0 && value_bits == 0),
+        "Zero and placeholder auxiliary tiles must use zero value bits and zero valid elements");
 };
 
 /**

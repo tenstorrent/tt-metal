@@ -8,14 +8,13 @@
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
 
-#ifdef REDUCE_AUXILIARY_CB
+#ifdef PREPARE_REDUCE_AUXILIARY
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #endif
 
 void kernel_main() {
-#ifdef REDUCE_AUXILIARY_CB
-    using Auxiliary =
-        ttnn::kernel_lib::BoundReduceAuxiliaryArgs<ttnn::kernel_lib::ReduceAuxiliaryArgs<0>, REDUCE_AUXILIARY_CB>;
+#ifdef PREPARE_REDUCE_AUXILIARY
+    using Auxiliary = ttnn::kernel_lib::BoundReduceAuxiliaryArgs<ttnn::kernel_lib::ReduceAuxiliaryArgs<0>, dfb::scaler>;
     dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<Auxiliary>();
 #endif
 

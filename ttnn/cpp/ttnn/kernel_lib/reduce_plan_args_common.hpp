@@ -107,8 +107,8 @@ inline constexpr std::uint32_t auxiliary_tile_word_count = static_cast<std::uint
 
 namespace auxiliary_configuration {
 inline constexpr std::uint32_t tile_type_shift = 0;
-inline constexpr std::uint32_t tile_type_mask = 0x3;
-inline constexpr std::uint32_t valid_elements_shift = 2;
+inline constexpr std::uint32_t tile_type_mask = 0x7;
+inline constexpr std::uint32_t valid_elements_shift = 3;
 inline constexpr std::uint32_t valid_elements_mask = 0xFFFF;
 }  // namespace auxiliary_configuration
 

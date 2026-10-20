@@ -85,7 +85,8 @@ void bind_reduce_planner(nb::module_& mod) {
         .value("FIRST_ROW", ttnn::kernel_lib::ReduceAuxiliaryTileType::FirstRow)
         .value("FIRST_COLUMN", ttnn::kernel_lib::ReduceAuxiliaryTileType::FirstColumn)
         .value("FIRST_ROW_PER_FACE_ROW", ttnn::kernel_lib::ReduceAuxiliaryTileType::FirstRowPerFaceRow)
-        .value("ZERO", ttnn::kernel_lib::ReduceAuxiliaryTileType::Zero);
+        .value("ZERO", ttnn::kernel_lib::ReduceAuxiliaryTileType::Zero)
+        .value("PLACEHOLDER", ttnn::kernel_lib::ReduceAuxiliaryTileType::Placeholder);
 
     nb::class_<host::ReduceHardwareConfig>(planner, "ReduceHardwareConfig")
         .def(
@@ -249,7 +250,7 @@ void bind_reduce_planner(nb::module_& mod) {
                tt::tt_metal::Tile output_tile,
                uint32_t input_row_stride_tiles,
                std::optional<host::ReduceTailConfig> tail,
-               bool allow_empty_auxiliary) {
+               uint32_t output_group) {
                 auto block =
                     host::ReduceBlockSpec::tiled(logical_h, logical_w, input_dtype, output_dtype, batches, input_tile);
                 block.padded_h = padded_h.value_or(block.padded_h);
@@ -258,7 +259,7 @@ void bind_reduce_planner(nb::module_& mod) {
                 block.input_row_stride_tiles = input_row_stride_tiles;
                 block.input_cb_tiles = input_cb_tiles;
                 block.tail = tail;
-                block.allow_empty_auxiliary = allow_empty_auxiliary;
+                block.output_group = output_group;
                 new (self) host::ReduceBlockSpec(std::move(block));
             },
             nb::arg("logical_h"),
@@ -274,7 +275,7 @@ void bind_reduce_planner(nb::module_& mod) {
             nb::arg("output_tile") = tt::tt_metal::Tile{},
             nb::arg("input_row_stride_tiles") = 0,
             nb::arg("tail") = nb::none(),
-            nb::arg("allow_empty_auxiliary") = false,
+            nb::arg("output_group") = 1,
             "Local work for one reduction call on one core. Padding defaults to whole tiles; no tensor placement is "
             "inferred.")
         .def_rw("logical_h", &host::ReduceBlockSpec::logical_h)
@@ -289,7 +290,7 @@ void bind_reduce_planner(nb::module_& mod) {
         .def_rw("input_row_stride_tiles", &host::ReduceBlockSpec::input_row_stride_tiles)
         .def_rw("input_cb_tiles", &host::ReduceBlockSpec::input_cb_tiles)
         .def_rw("tail", &host::ReduceBlockSpec::tail)
-        .def_rw("allow_empty_auxiliary", &host::ReduceBlockSpec::allow_empty_auxiliary);
+        .def_rw("output_group", &host::ReduceBlockSpec::output_group);
 
     nb::class_<host::ReduceCallConfig>(planner, "ReduceCallConfig")
         .def(
@@ -392,6 +393,14 @@ void bind_reduce_planner(nb::module_& mod) {
             "Append the aggregate auxiliary-CB record to dataflow-kernel arguments.")
         .def("__len__", [](const host::ReduceSequencePlan& self) { return self.calls.size(); });
 
+    planner.def(
+        "max_reduce_output_group",
+        &host::max_reduce_output_group,
+        nb::arg("hardware"),
+        nb::arg("input_dtype"),
+        nb::arg("reduce_math"),
+        nb::arg("fp32_mode"),
+        "Largest ReduceBlockSpec.output_group the hardware's DEST holds for this reduction.");
     planner.def(
         "make_reduce_plan",
         &host::make_reduce_plan,
