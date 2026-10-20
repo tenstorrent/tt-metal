@@ -13,9 +13,11 @@ Shapes and program config follow the Qwen3.6-27B GDN prefill out projection
 (models/demos/blackhole/qwen36/tt/tp_common.py::matmul_reduce_scatter_prefill), at M=128.
 """
 import math
+import os
 
 import pytest
 import torch
+from loguru import logger
 
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
@@ -45,6 +47,12 @@ def test_matmul_reduce_scatter_cache_hit(mesh_device, in_dtype, w_dtype, use_bia
     grid = (8, 8)
 
     crs = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid[0] - 1, grid[1] - 1))})
+    # Probe: MMRS_SEM_FULL_GRID=1 puts the semaphores on the whole grid, which includes the RS rows.
+    grid_size = mesh_device.compute_with_storage_grid_size()
+    full_grid = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1))}
+    )
+    sem_crs = full_grid if os.environ.get("MMRS_SEM_FULL_GRID") == "1" else crs
     shard_k = lambda dim: ttnn.ShardTensorToMesh(mesh_device, dim=dim)
     replicate = ttnn.ReplicateTensorToMesh(mesh_device)
 
@@ -77,8 +85,8 @@ def test_matmul_reduce_scatter_cache_hit(mesh_device, in_dtype, w_dtype, use_bia
                 "bias": to_device(bias, in_dtype, replicate) if use_bias else None,
                 "interm": to_device(torch.zeros(1, 1, M, N), in_dtype, replicate),
                 "out_buf": to_device(torch.zeros(1, 1, M, N // nd), in_dtype, replicate),
-                "rs_sems": [ttnn.create_global_semaphore(mesh_device, crs, 0) for _ in range(3)],
-                "barrier_sem": ttnn.create_global_semaphore(mesh_device, crs, 0),
+                "rs_sems": [ttnn.create_global_semaphore(mesh_device, sem_crs, 0) for _ in range(3)],
+                "barrier_sem": ttnn.create_global_semaphore(mesh_device, sem_crs, 0),
                 "ref": x @ w + nd * bias if use_bias else x @ w,
             }
         )
@@ -105,6 +113,41 @@ def test_matmul_reduce_scatter_cache_hit(mesh_device, in_dtype, w_dtype, use_bia
         tuple(ttnn.get_global_semaphore_address(s) for s in call["rs_sems"] + [call["barrier_sem"]]) for call in calls
     ]
     assert len(set(sem_addrs)) == NUM_CALLS, f"the calls must not share semaphore addresses: {sem_addrs}"
+
+    # Probe: MMRS_SEM_PROBE=read logs the semaphore words on the RS rows before call 0.
+    # MMRS_SEM_PROBE=poison or zero writes POISON or 0 there instead.
+    probe = os.environ.get("MMRS_SEM_PROBE")
+    if probe:
+        rs_cores = [ttnn.CoreCoord(x, y) for y in range(grid[1], grid_size.y) for x in range(grid_size.x)]
+        matmul_cores = [ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid[0] - 1, grid[1] - 1)]
+        coords = [ttnn.MeshCoordinate(r, c) for r in range(mesh_device.shape[0]) for c in range(mesh_device.shape[1])]
+
+        def words(cores):
+            for coord in coords:
+                for core in cores:
+                    for i, addrs in enumerate(sem_addrs):
+                        for j, addr in enumerate(addrs):
+                            yield coord, core, i, j, addr
+
+        logger.info(f"SEMPROBE {probe}: sem_crs={sem_crs} grid_size={grid_size} addrs={sem_addrs}")
+        if probe == "read":
+            for name, cores in (("rs_rows", rs_cores), ("matmul_grid", matmul_cores)):
+                nonzero, total = 0, 0
+                for coord, core, i, j, addr in words(cores):
+                    value = ttnn.experimental.reload.read_core_l1(mesh_device, core, addr, 4, coord)[0]
+                    total += 1
+                    if value:
+                        nonzero += 1
+                        logger.info(
+                            f"SEMPROBE {name} chip={coord} core=({core.x},{core.y}) call={i} sem={j} "
+                            f"addr={addr:#x} value={value:#x}"
+                        )
+                logger.info(f"SEMPROBE summary {name}: {nonzero} of {total} words non-zero")
+        else:
+            value = POISON if probe == "poison" else 0
+            for coord, core, i, j, addr in words(rs_cores):
+                ttnn.experimental.reload.write_core_l1(mesh_device, core, addr, [value], coord)
+            logger.info(f"SEMPROBE summary wrote {value:#x} to the RS rows")
 
     # Only the op runs between the cache-entry readings, so any extra entry is the op missing the cache.
     outputs = []
