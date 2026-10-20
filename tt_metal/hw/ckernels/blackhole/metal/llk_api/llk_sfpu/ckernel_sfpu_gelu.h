@@ -149,10 +149,8 @@ constexpr float GELU_HCORR_C3 = 7.5950479368e-04f;
 // GELU(x) = x * Phi(x) where Phi is approximated piecewise
 sfpi_inline sfpi::vFloat calculate_gelu_piecewise(sfpi::vFloat x) {
     sfpi::vFloat x2 = x * x;
-    // Default for x <= -5.54259443 (torch saturation): x - x is +0 for finite x and NaN for a NaN or -inf.
     sfpi::vFloat result = x - x;
 
-    // -5.54296875 fits a 16-bit immediate, and no BF16 value lies between it and -5.54259443.
     v_if(x > -5.54296875f) {
         // Shared smooth H ≈ ½·erfc(|x|/√2) via Moroz exp_21f · corr_H.
         constexpr float NEG_HALF_ONE_LN2 = -0.72134752044f;  // -0.5 / ln(2)
