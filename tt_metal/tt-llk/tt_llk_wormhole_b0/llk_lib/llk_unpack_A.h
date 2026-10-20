@@ -304,7 +304,11 @@ inline void _llk_unpack_A_init_(
     LLK_VALIDATE_TENSOR_SHAPE_UNPACK("_llk_unpack_A_init_", tensor_shape);
     const std::uint8_t face_r_dim = tensor_shape.face_r_dim;
     const std::uint8_t num_faces  = tensor_shape.total_num_faces();
-    LLK_ASSERT(BType != BroadcastType::COL || num_faces == 4, "Unary Broadcast Column requires num_faces == 4 (32x32 only)");
+    // Column broadcast through SrcB follows the face grid for every tile shape. The acc_to_dest
+    // and unpack-to-dest (32-bit) paths are still 32x32-only.
+    LLK_ASSERT(
+        BType != BroadcastType::COL || num_faces == 4 || (!acc_to_dest && !should_unpack_to_dest(unpack_to_dest, unpack_src_format, unpack_dst_format)),
+        "Unary Broadcast Column: tiles other than 32x32 need no acc_to_dest and no unpack to dest");
     LLK_ASSERT(transpose_of_faces == 0 || face_r_dim == 16, "Partial faces are not supported for transpose datacopy, face_r_dim must be 16 rows");
     LLK_ASSERT(
         is_unpacker_format_conversion_supported_dest(static_cast<DataFormat>(unpack_src_format), static_cast<DataFormat>(unpack_dst_format), unpack_to_dest),
