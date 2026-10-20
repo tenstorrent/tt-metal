@@ -6,6 +6,9 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
+#ifdef SOL_PACK_DEBUG
+#include "debug/dprint.h"
+#endif
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "dataflow_common.hpp"
@@ -1007,6 +1010,7 @@ void kernel_main() {
                     cb_vp.reserve_back(v_cb_entry_tiles);
                     k_dst = cb_kp.get_write_ptr();
                     v_dst = cb_vp.get_write_ptr();
+                    ++sol_pages_pushed;
                     fill = 0;
                     moved = false;  // the new page needs its own barrier before the next move
                 }
@@ -1766,6 +1770,7 @@ void kernel_main() {
                 // commits it.
                 [[maybe_unused]] uint32_t sol_pack_fill = 0;
                 [[maybe_unused]] uint32_t sol_pack_k_src = 0;  // K staging address, carried to the V site
+                [[maybe_unused]] uint32_t sol_pages_pushed = 0;  // SOL_PACK_DEBUG: pages handed to compute
                 [[maybe_unused]] uint32_t sol_packed_k_addr = 0;
                 [[maybe_unused]] uint32_t sol_packed_v_addr = 0;
                 if constexpr (sol_pack) {
@@ -2238,8 +2243,15 @@ void kernel_main() {
                     if (!is_padded_iter && sol_pack_fill > 0) {
                         cb_kp.push_back(k_chunk_tiles);
                         cb_vp.push_back(v_cb_entry_tiles);
+                        ++sol_pages_pushed;
                         sol_pack_fill = 0;
                     }
+#ifdef SOL_PACK_DEBUG
+                    if (!is_padded_iter) {
+                        DPRINT << "PACK r=" << ring_id << " q=" << q_chunk << " pushed=" << sol_pages_pushed
+                               << ENDL();
+                    }
+#endif
                     // The trailing reserve_back (from the loop, or the pre-loop one when nothing was kept) is
                     // left un-pushed: the write pointer does not advance, so the next iteration's reserve returns
                     // the same address. Same staging-area idiom the padded-mcast path uses above.

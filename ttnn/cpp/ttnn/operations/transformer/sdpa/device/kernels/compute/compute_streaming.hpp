@@ -23,6 +23,9 @@
 #endif
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/dataflow/circular_buffer.h"
+#ifdef SOL_PACK_DEBUG
+#include "debug/dprint.h"
+#endif
 #include "api/debug/kernel_profiler.hpp"
 
 namespace ring_joint = ttnn::operations::transformer::sdpa::ring_joint;
@@ -2896,6 +2899,9 @@ void sdpa_ring_v2(
                 // see the note in ring_joint_reader.cpp.
                 sol_total_kept_blocks = ckernel::read_tile_value(cb_sol_plan, 0, 5);
                 sol_n_pages = (sol_total_kept_blocks + sol_blocks_per_page - 1) / sol_blocks_per_page;
+#ifdef SOL_PACK_DEBUG
+                DPRINT << "COMP kept=" << sol_total_kept_blocks << " expect=" << sol_n_pages << ENDL();
+#endif
             }
             if constexpr (sol_compact) {
                 for (uint32_t w = 0; w < (num_local_k_chunks + 3) / 4; ++w) {
