@@ -62,6 +62,7 @@ public:
     // layout's CB bytes after any fallback.
     virtual uint64_t check_l1(
         tt::tt_metal::ProgramDescriptor& /*desc*/,
+        std::map<std::string, std::string>& /*defines*/,
         uint64_t cb_bytes,
         uint64_t /*usable_l1*/,
         uint32_t /*q_chunk_size*/) const {
@@ -71,10 +72,6 @@ public:
     virtual std::optional<tt::tt_metal::KernelDescriptor::ConfigDescriptor> compute_config() const {
         return std::nullopt;
     }
-    // Named compile-time arguments the variant adds to the compute kernel, and its optimization level.
-    virtual void append_compute_named_compile_time_args(
-        tt::tt_metal::KernelDescriptor::NamedCompileTimeArgs& /*args*/) const {}
-    virtual std::optional<tt::tt_metal::KernelBuildOptLevel> compute_opt_level() const { return std::nullopt; }
 };
 
 tt::tt_metal::WorkloadDescriptor build_workload_descriptor(
