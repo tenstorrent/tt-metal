@@ -9606,6 +9606,52 @@ tasks:
       pcc_state_min: '>= 0.97'
       host_transfers_per_layer: == 0
       device_ms_total: '> 0'
+- id: P.14
+  title: 'Fused mHC: mhc_post also emits the next sublayer''s statistics, mhc_pre collapses with split hidden columns
+    (one pass each) vs the addcmul chain: owner comparison'
+  step: perf
+  role: perf
+  deps:
+  - P.13
+  device: true
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/bringup/hooks.py
+  - ttnn/ttnn/bringup/mhc_pre_ttnn
+  - ttnn/ttnn/bringup/mhc_post_ttnn
+  - ttnn/ttnn/bringup/INDEX.md
+  ab:
+    change:
+      MHC_FUSED: 'on'
+    env:
+      MHC_FUSED: 'off'
+  brief:
+    details: 'Owner (2026-10-20): mHC costs ~22 ms a chunk (attn / ffn collapse 5.0 + 5.0, attn / ffn hc 3.2 + 3.2,
+      residuals 3.1 + 2.4) against a DRAM floor of ~6-7 ms (estimate: the fp32 streams [S/SP, 4 x H/TP] are ~42 MB a chip
+      and are read 3-4 times a sublayer). The streams stay fp32 (the reference''s dtype). Extend the bring-up ops behind
+      options whose defaults keep every current behaviour and program (skill bringup-fork-op; Xing uses mhc_pre too):
+      (1) ttnn.bringup.mhc_post: an option that, in the same pass that writes the new streams, also produces the next
+      sublayer''s partial statistics (this chip''s sum of squares and its slice of the 24-wide hc_fn projection), so the
+      next hc step does not read the streams again; (2) ttnn.bringup.mhc_pre (split-hidden mode): from the exchanged
+      partials (one row exchange as today) compute the coefficients and collapse the streams into the sublayer input in
+      ONE program, replacing tt/collapse.py''s ttnn.addcmul chain. Check the combined path bit-for-bit or within the
+      ops'' measured error against today''s path (fork unit tests, random inputs, the model''s shapes), keep each op''s README
+      (Options: realistic / precision only) and its INDEX.md entry current with the new functionality. ONE model setting
+      MHC_FUSED {off (default), on}. Also (the 2026-10-20 glue-op analysis, /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/reports/glue_ops_report.md, items 4 and 5): attn_collapse through mhc_pre_xing(coefficients_given=True) carrying the full ffn_hc mixes [R, 24] as the pending pre, and the engram add as mhc_post with an identity comb plus an engram mode on mhc_pre_xing_pack. Report the mHC sections before / after and the device total. Final check:
+      `python -m models.demos.common.bringup.orchestrator measure --task P.14`.'
+  gate:
+    cmd: for t in swa swa_engram enc_source enc_source_engram enc_reuse dec_candidate dec_reindex dec_reuse; do scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_${t}_experts.py || exit 1; done
+      && for t in swa_12 swa_engram_15 enc_source_14 enc_source_engram_17 enc_reuse_12 dec_candidate_14 dec_reindex_13
+      dec_reuse_12; do scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_${t}_experts.py
+      || exit 1; done && BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=10000
+      scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+    metrics:
+      pcc_layer_L*: '>= 0.97'
+      pcc_state_min: '>= 0.97'
+      host_transfers_per_layer: == 0
+      device_ms_attn_collapse: '< 5.0'
 - id: X.3
   title: 'Final: full-target accuracy, warm full prefill (no readback), one warm chunk at several positions'
   step: perf
@@ -9620,6 +9666,7 @@ tasks:
   - P.11
   - P.12
   - P.13
+  - P.14
   gate:
     cmd: BRINGUP_RUNG=s55296 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py && BRINGUP_FULL_PREFILL=1
       BRINGUP_PROFILE_OPS=1 TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1
