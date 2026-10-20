@@ -113,6 +113,7 @@ void kernel_main() {
     const uint32_t user_page_bytes = get_common_arg_val<uint32_t>(3);  // page of the user-major tables
     constexpr uint32_t K = indices_page_bytes / 4;
     constexpr uint32_t SENT = 0xFFFFFFFFu;
+    constexpr uint32_t seg_div = seg_rows_per_user ? seg_rows_per_user : 1;  // a constant divisor of 0 is a build error
 
     const auto indices =
         TensorAccessor(indices_args, indices_addr, seg_rows_per_user ? user_page_bytes : indices_page_bytes);
@@ -122,8 +123,8 @@ void kernel_main() {
     CircularBuffer indices_scratch_cb(cb_indices_scratch);
     for (uint32_t local_row = 0; local_row < num_rows; ++local_row) {
         const uint32_t row = start_row + local_row;
-        const uint32_t page = seg_rows_per_user ? row / seg_rows_per_user : row;
-        const uint32_t col_off = seg_rows_per_user ? (row % seg_rows_per_user) * indices_page_bytes : 0;
+        const uint32_t page = seg_rows_per_user ? row / seg_div : row;
+        const uint32_t col_off = seg_rows_per_user ? (row % seg_div) * indices_page_bytes : 0;
         if constexpr (translate) {
             // the contiguous ranked row into scratch, translate in place, write
             indices_cb.wait_front(1);

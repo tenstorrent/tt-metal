@@ -308,11 +308,31 @@ unchanged in PCC (two-user worst 0.999598; 1 M 0.999782 / 0.999796); DSA block *
 point including 4 K, against a faster traced attention step: host load during that sweep (other agents' jobs);
 to be re-measured.
 
+### 4.8 Two-stage top-k (`custom_ops/topk_rows` segmented mode + scorer writer v2; default on wide caches)
+
+The scorer's writer v2 writes -inf at and beyond each user's bound (`valid_rows`) and lays the row out as S
+segment pages; stage 1 ranks every segment row on its own core and also emits the ranked VALUES (the survivor's
+value tiles, materialized like the index tiles, into user-major `[B,1,1,S*512]` tables); stage 2 ranks the S*512
+candidate values per user (a bf16 typecast of the table) and its writer translates the winning slots back to pool
+ids through the stage-1 id table. -inf candidates rank last, so no per-row bound is needed anywhere. S =
+`segments_for(W)`: the largest S <= 8 dividing W/256 with W/S >= 512, and 1 below W = 65536 (two launches + the
+typecast lose on short rows). Main build, `sparse1m_seg_{topk_3,traced,1m}.log`:
+
+| what | result |
+|---|---|
+| `test_topk_rows.py::test_topk_rows_segmented` | ids inside the bound and score multisets == torch (W 262 400 B 1 / 8 with S = 5, W 2560 B 4); stage-1 values consistent with the scores; 262 400 x 8 rows: 0.64 ms vs 1.21 ms single-stage (B = 1: 1.16 vs 1.24; W = 2560: 0.64 vs 0.35, hence the width threshold) |
+| `test_index_score_decode.py::test_index_score_decode_masked_segmented` | masked prefix bit-equal to the plain output, tail -inf; segmented layout == masked |
+| `test_dsa_sparse_traced.py` | 26/26 > 0.9995 (worst 0.999598) |
+| `test_sparse_1m.py` | PCC vs HF 0.999773 at 1 M (unchanged regime); attention step **1.85 / 2.55 / 3.41 ms at 1 / 4 / 8 users**, the same at 16 K and 131 K (the step no longer depends on the position; the cache is the 1 M one) -- from 2.73 / 3.42 / 4.28 |
+
+Against the 0.7 ms budget at 8 users x 1 M the attention block is 3.4 ms; the scorer's 1.4 ms read (bf16; 0.7 with
+bfp8 pools) and ~45 small fixed ops (stems, index maintenance, two top-k stages, gather, compact attention) remain.
+
 ## 5. What remains
 
-1. Done: `custom_ops/index_score_decode` (section 4.6), the bfp8 pool-cache knob, and the metadata blend + tail
-   folded into the gather kernel (section 4.7). Next: multi-core top-k rows (section 4.8, `GLM53_TOPK_SEGMENTS`),
-   the 1-user scorer latency (0.49 ms for 64 MiB: fewer, longer bands).
+1. Done: the batched scorer (4.6), the bfp8 pool-cache knob, the blend folded into the gather (4.7), the two-stage
+   top-k (4.8). Next: the 1-user scorer latency (0.49 ms for 64 MiB: fewer, longer bands), a fused stage-1
+   (score + per-segment top-k in one program), the fixed small ops of the step.
 2. The op count: 4 ops per user (slice q, slice w, score, row slice) + ~45 fixed; the batched scorer removes
    the per-user part; the metadata blend (5 ops) can fold into the gather kernel (dense users = pools in order,
    tail slot) once it takes the positions tensor. A multi-core top-k row (the 512-window chain is serial on one

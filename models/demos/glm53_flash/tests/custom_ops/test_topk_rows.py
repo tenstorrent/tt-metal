@@ -17,7 +17,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.glm53_flash.custom_ops.topk_rows.op import TopkRows
+from models.demos.glm53_flash.custom_ops.topk_rows.op import SENTINEL, TopkRows
 
 K = 512
 

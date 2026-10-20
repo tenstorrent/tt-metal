@@ -1079,10 +1079,10 @@ class TtDSA(LightweightModule):
             q4 = ttnn.transpose(q_i, 1, 2)  # [1,B,Hi,D]
             ttnn.deallocate(q_i)
             W = cache.index.pools_per_user
-            # GLM53_TOPK_SEGMENTS=1: the scorer masks the columns beyond each user's bound (-inf) and writes S segment
-            # rows per user; the top-k runs in two stages (S cores per user, then the S*512 candidates) instead of one
-            # serial row per core (1.26 ms at 262 K pools)
-            S = self.topk_rows.segments_for(W) if os.environ.get("GLM53_TOPK_SEGMENTS", "0") == "1" else 1
+            # GLM53_TOPK_SEGMENTS=1 (default; wide pool caches only, segments_for): the scorer masks the columns beyond
+            # each user's bound (-inf) and writes S segment rows per user; the top-k runs in two stages (S cores per
+            # user, then the S*512 candidates) instead of one serial row per core (1.26 ms at 262 K pools)
+            S = self.topk_rows.segments_for(W) if os.environ.get("GLM53_TOPK_SEGMENTS", "1") == "1" else 1
             if B not in self._top_buf:
                 self._top_buf[B] = ttnn.zeros(
                     (B, 1, 1, K), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device

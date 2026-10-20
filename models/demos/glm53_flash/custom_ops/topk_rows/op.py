@@ -66,9 +66,13 @@ class TopkRows:
         return out
 
     @staticmethod
-    def segments_for(W: int, max_segments: int = 8, k: int = 512, chunk: int = 256) -> int:
-        """The largest S <= max_segments with S | W/chunk and W/S >= k (1 when none)."""
+    def segments_for(W: int, max_segments: int = 8, k: int = 512, chunk: int = 256, min_width: int = 65536) -> int:
+        """The largest S <= max_segments with S | W/chunk and W/S >= k (1 when none, and 1 below ``min_width``: the
+        two stages cost two launches + a typecast, which a short row ranks faster in one: 0.64 vs 0.35 ms at W=2560,
+        0.64 vs 1.21 ms at W=262 400 for 8 rows)."""
         best = 1
+        if W < min_width:
+            return best
         for S in range(2, max_segments + 1):
             if (W // chunk) % S == 0 and W // S >= k and (W // S) % chunk == 0:
                 best = S
