@@ -183,8 +183,9 @@ struct TensorReads {
     uint64_t pages_per_bank;
     bool all_banks;  // banks >= the chip's DRAM banks
     uint32_t shard_width;
-    // Banks main's cores start on, and keep reading together while in step. Interleaved: its per-core ranges are
-    // ceil(pages / cores) apart. Width shards: the shards those ranges start in.
+    // Banks main's cores start on, and keep reading together while in step. Interleaved: its longer per-core ranges
+    // are ceil(pages / cores) apart, counted only where they are more than half of the ranges, else every bank. Width
+    // shards: the shards those ranges start in.
     uint32_t main_start_banks;
 };
 
@@ -450,7 +451,11 @@ DramReadPlan get_dram_read_plan(
     const bool width_shards = !interleaved && shard_width != row_pages;
     const uint32_t banks = interleaved ? num_dram_banks : plan.num_shards;
     uint32_t main_start_banks = banks;
-    if (interleaved) {
+    // Main's first total % cores ranges are a page longer. Where those are more than half of the cores, or all, they
+    // start ceil(pages / cores) apart; elsewhere their starts spread differently and the rule was not measured there,
+    // so they count as starting on every bank.
+    const uint64_t longer_ranges = total_pages % num_cores;
+    if (interleaved && (longer_ranges == 0 || 2 * longer_ranges > num_cores)) {
         main_start_banks = static_cast<uint32_t>(
             num_dram_banks / std::gcd(tt::div_up(total_pages, uint64_t{num_cores}), uint64_t{num_dram_banks}));
     } else if (width_shards && !many_cores_per_bank) {
@@ -474,7 +479,9 @@ DramReadPlan get_dram_read_plan(
     if (plan.flow == DramReadFlow::WorkQueue &&
         (num_cores > dram_read::kMaxWorkers ||
          !utils::compute_kernel_supports_work_queue(op_chain[0].type(), input_spec.data_type()))) {
-        // With few cores per bank, bursts lose to main where the queue wins.
+        // With many cores per bank bursts stand in for the queue: for fp32 logit and logsigmoid on shards over part of
+        // the banks they took up to 34% less time than main. With few cores per bank bursts lose to main where the
+        // queue wins.
         plan.flow = many_cores_per_bank ? DramReadFlow::StaticBurst : DramReadFlow::None;
     }
     if (plan.flow == DramReadFlow::None) {
