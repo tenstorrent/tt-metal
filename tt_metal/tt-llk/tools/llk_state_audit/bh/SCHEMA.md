@@ -52,6 +52,9 @@ Each file goes through these steps, and every step keeps byte offsets:
    - `#ifdef TRISC_{UNPACK,MATH,PACK}` and `UCK_CHLKC_*` regions do not become conditions.
      They are recorded as the thread of the lines they cover.
    - Directive lines are blanked. `#define` lines become `MacroDef`.
+   - The argument lists of `LLK_ASSERT`, `LLK_ASSERT_BLOCK`, `LLK_PANIC`, `ASSERT`, `SAN_HOOK` and
+     `static_assert` are blanked (`scan.UNEVALUATED_MACROS`): in a production build they are not
+     evaluated, so calls and effects written inside them are not part of the analysed code.
 3. A brace-scope walk finds every definition at namespace or class scope. This covers free
    functions, `ALWI`, `inline`, `sfpi_inline`, `__attribute__((..))` and attribute-macro
    prefixes (e.g. `RECONFIG_DF_DEPRECATED("..") ALWI void f(..)`). It also covers templates,
@@ -88,7 +91,14 @@ The `receiver_type` of a member call is the class of a typed local (`ckernel_tem
 or of a temporary (`addr_mod_t{..}.set(ADDR_MOD_0)`).
 
 Helpers: `scan.evaluate(expr)` and `scan.truth(expr)` do three-valued constant folding. Qualified
-names are symbolic: `a::X == a::X` is true and `a::X == a::Y` is false. `scan.split_args`,
+names are symbolic: `a::X == a::X` is true and `a::X == a::Y` is false; two spellings of one
+enumerator with more or less qualification compare equal (`ckernel::BinaryOp::ADD == BinaryOp::ADD`),
+and a bare identifier equals a qualified enumerator with that last component (`StartZero ==
+DstStart::StartZero`, from `using namespace`). A template call `f<..>(..)` is an opaque operand.
+`truth` is memoized; when the whole text does not evaluate, the top-level `||` / `&&` operands are
+decided one by one (one false conjunct makes the conjunction false). `scan.simplify_condition(expr)`
+returns `(verdict, text)` with the always-true conjuncts dropped. Conditions are joined with
+`scan.join_conditions`, which parenthesizes parts that hold a top-level `||` or `?:`. `scan.split_args`,
 `match_close`, `match_angle` and `expand_all(text, macros)` are also exported.
 
 ---
@@ -110,6 +120,13 @@ start a family. A module exports:
 | `extract(fn, ctx) -> Iterable[Effect]` | no | Imperative hook called once per `scan.FunctionDef`. `ctx.effects(fn, pattern_id=..., resource_expr=..., normalizer=..., access=..., value=..., offset=... or line=..., condition=..., thread=..., detail=...)` builds effects exactly like a pattern would. |
 | `role(fn, default) -> str \| None` | no | Role override (section 6). The first family in name order that returns non-`None` wins. |
 | `thread(fn, default) -> str \| None` | no | Function thread override (`unpack`, `math`, `pack` or `any`). The first non-`None` wins. |
+| `SUPERSEDES: dict[str, tuple[str]]` | no | `{"<family pattern>": ("<coarse pattern>", ..)}`: an effect of a coarse pattern is dropped when an effect of the refining pattern exists in the same function at the same evidence with the same access (e.g. `unpack.cfg_ternary` refines `core.cfg_assign`). |
+
+`ctx` (`effects_db.FamilyContext`) carries `tables`, `family` and `index` (the tree's
+`scan.ScanIndex`, for callee lookup); `ctx.effects(.., evidence="path:line")` overrides the sink.
+A family effect whose content (resource, access, value, condition, evidence, thread, granularity,
+detail) equals a core effect of the same function is dropped in favour of the core one: once the
+core models what a family worked around, the companion is redundant.
 
 Keep hooks scoped to your own files or names. Another family may otherwise override the same function.
 
@@ -192,7 +209,11 @@ Pattern("sfpu.c", "assign", r"vConst(?:Float|Int)Prgm[0-3]", "name", "sfpi_const
 
 `TT_OP_*` forms build instruction words that a MOP or a replay program executes later. The
 core puts `detail="deferred"` on them, and families should do the same by passing
-`detail=effects_db.deferred`.
+`detail=effects_db.deferred`. Instructions that are only recorded into the replay buffer are deferred
+too: the callable of `load_replay_buf<NoExec>(..)` and the next `len` instruction macros after
+`lltt::record<NoExec>(start, len)` or `TTI_REPLAY(start, len, 0, 1)` (`effects_db.replay_recorded`).
+For declarative patterns the core appends `deferred` to the effect detail (`LO_16;deferred`); a
+normalizer's own detail and the pattern's detail are merged (`model.merge_detail`).
 
 Suggested ownership, to avoid duplicate effects:
 
@@ -217,7 +238,7 @@ Identical effects from two sources are deduplicated (`Effect.identity()`).
 | `core.wrcfg.*`, `core.rdcfg.*` | WRCFG/RDCFG | CFG word and `GPR.<t>.<N>` |
 | `core.rmwcib`, `core.cfgshiftmask` | RMWCIB0-3, CFGSHIFTMASK | `CFG.<FIELD>` (byte) |
 | `core.setc16` | SETC16 | `THDCFG.<FIELD>`, or `ADDR_MOD.<n>` for `addr_mod_*_reg_addr[n]` |
-| `core.setdmareg`, `core.dmareg_alu.*`, `core.regfile_assign` | GPR writes and reads | `GPR.<t>.<NAME>` |
+| `core.setdmareg`, `core.dmareg_alu.*`, `core.regfile_assign` | GPR writes and reads (DMA-register ALU: result, OpA and, unless `OpBisConst`, OpB; 5-operand forms `BITWOP`/`SHIFT`/`CMP` take `OpSel` first) | `GPR.<t>.<NAME>` |
 | `core.addr_mod_set`, `core.addr_mod_pack_set` | `addr_mod_t` / `addr_mod_pack_t` `.set(n)` | `ADDR_MOD.n`, `ADDR_MOD_PACK.n` |
 | `core.addr_mod_use`, `core.addr_mod_pack_use` | ADDR_MOD operand of ELW*, MVMUL, MOV*, POOL, SFPLOAD/STORE/LOADMACRO, ZEROACC (read); PACR (read) | `ADDR_MOD.n` / `ADDR_MOD_PACK.n` |
 | `core.mop_program`, `core.mop_cfg_assign`, `core.mop_run.*` | MOP program (write), run or TTI_MOP (read) | `MOP` |
@@ -225,7 +246,7 @@ Identical effects from two sources are deduplicated (`Effect.identity()`).
 | `core.setadc*`, `core.setrwc` | ADC and RWC | `ADC.<UNP_A\|UNP_B\|PAC>.<X\|Y\|Z\|W\|XY\|ZW\|XX>`, `RWC.<SRCA\|SRCB\|DEST\|FIDELITY\|CR>` |
 | `core.sfpconfig`, `core.sfploadmacro` | SFPCONFIG write, LOADMACRO read | `SFPU.*` |
 | `core.sfpi_constant`, `core.sfpi_constant_read` | `vConst*Prgm0-3` assigned or used | `SFPU.LREG11-14` |
-| `core.seminit`, `core.sempost_get`, `core.semwait`, `core.t6_semaphore_*` | Semaphores | `SEM.<NAME>` |
+| `core.seminit`, `core.sempost_get`, `core.semwait`, `core.t6_semaphore_*`, `core.semaphore_read` | Semaphores (`semaphore_read(semaphore::X)` is a read) | `SEM.<NAME>` |
 | `core.mailbox_*` | `mailbox_write`, `mailbox_read` | `MAILBOX.<thread>` |
 | `core.sw_global` | Assignment to an LLK global (`unp_cfg_context`, `dest_offset_id`, `src_zero_flag_*`, ...) | `SW.<name>` |
 
@@ -295,8 +316,10 @@ Transitive semantics (`CallGraph`) follow these rules:
   locals assigned exactly once, are substituted too (e.g. `UNP_SEL`, `addr_mod`). Pack
   expansions (`args...`) expand against the bound pack.
 - **Folding.** A condition that folds to `false` drops the effect, and one that folds to
-  `true` is removed. `if constexpr (sfpu_op == SfpuType::abs)` therefore folds under
-  `SfpuType::exponential`.
+  `true` is removed; conjuncts that are always true are dropped from an undecided condition.
+  `if constexpr (sfpu_op == SfpuType::abs)` therefore folds under `SfpuType::exponential`.
+  Conditions are kept in full while they propagate (the 300-character cap applies to the JSON
+  only), so a long `if constexpr` chain still folds several levels up.
 - **Renormalization.** A resource that depended on a parameter is normalized again
   (`addr_mod_t::set(mod_index)` -> `ADDR_MOD.3`). `_RMW` template arguments are expanded
   to `ADDR32, SHAMT, MASK`.
@@ -311,8 +334,11 @@ Transitive semantics (`CallGraph`) follow these rules:
 - **Threads.** An effect whose thread is `any` takes the call site's wrapper thread, else
   the caller's thread.
 - **Limits.** The analysis stops at depth 24 and on cycles. Results are memoized per
-  `(function, relevant bindings)`. Substituted texts are kept up to 4000 characters, and
-  value, condition and detail are capped at 300 for display.
+  `(function, relevant bindings)`. Substituted texts are kept up to 4000 characters; value and
+  detail are capped at 300, and the condition is capped at 300 in the JSON only.
+- **Params.** Literal words (`true`, `false`, `nullptr`) of a bound argument are not params.
+- **Value kinds.** Direct effects are classified too (`classify_value`); a `GPR(..)` value (the
+  content of a GPR) is `expr`, never `const`.
 
 The bh-effects JSON uses sorted keys and puts one function per line under `functions`.
 Each function holds:
@@ -334,7 +360,7 @@ API for full transitive detail.
 
 | Class | Scope | Name | Normalizer (`ResourceTables.normalizers`) |
 |---|---|---|---|
-| `CFG` | shared | `CFG.<FIELD>`: the `cfg_defines.h` field without `_ADDR32`/`_SHAMT`/`_MASK`/`_RMW`. A word write is named after the field whose `ADDR32` the source used, or the first field of the word for `X_ADDR32 + k`. | `cfg_rmw` (field), `cfg_addr32` (word), `cfg_byte` (byte) |
+| `CFG` | shared | `CFG.<FIELD>`: the `cfg_defines.h` field without `_ADDR32`/`_SHAMT`/`_MASK`/`_RMW`. A word write is named after the field whose `ADDR32` the source used, or the first field of the word for `X_ADDR32 + k`. `cfg_rmw<X_ADDR32, SHAMT, MASK>` names every field of X's word that MASK covers when MASK evaluates (cfg_defines `_ADDR32`/`_SHAMT`/`_MASK` symbols and the function's constexpr locals are known to `int_value`); a SHAMT of a field in another word does not rename the field. | `cfg_rmw` (field), `cfg_addr32` (word), `cfg_byte` (byte) |
 | `THDCFG` | per_thread | `THDCFG.<FIELD>` for THREAD-section registers (SETC16) | `thread_cfg` |
 | `ADDR_MOD`, `ADDR_MOD_PACK` | per_thread | `ADDR_MOD.<0-7>`, `ADDR_MOD_PACK.<0-3>` | `addr_mod`, `addr_mod_pack` |
 | `GPR` | thread_named | `GPR.<unpack\|math\|pack\|any>.<NAME>`, where `NAME` comes from `ckernel_gpr_map.h`. `p_gpr::*` maps to `any`. An unnamed index is `R<n>`. `LO_16`/`HI_16` go in `detail`. | `gpr` |
@@ -356,7 +382,8 @@ Rules:
 - For `per_thread` classes, two effects touch the same storage only when
   `resources.same_thread(e1.thread, e2.thread)`.
 - `tables.overlaps(a, b, granularity_a, granularity_b)` compares cfg storage. A word, byte
-  or word_range write overlaps every field of its word.
+  or word_range write overlaps every field of its word. ADC names overlap when the unit is the
+  same and they share a dimension (`ADC.UNP_A.XY` overlaps `.X` and `.Y`).
 - `tables.groups_of(name)` returns semantic groups such as `pack.relu`, `pack.edge_mask`,
   `pack.l1_acc`, `pack.strides`, `pack.format`, `unpack.format`, `alu.format`,
   `thread.dest_offset`, `sfpu.constants`, `sfpu.loadmacro` and `addr_mod`. Families add
@@ -418,6 +445,9 @@ Normalization does the following:
 - unknown keys are dropped;
 - findings are sorted by `(rank, kind, resource, ops)`, with `summary`, `kernels` and
   `evidence` as tie-breakers, and then numbered `H0001`...
+
+`hazards.run` itself merges findings with the same `(kind, resource, ops)` (overloads of one API)
+and drops findings whose resource is unresolved (contains `?`).
 
 `tree_fingerprint` is the sha256 over the (path, bytes) of every analysed header in path
 order, plus `cfg_defines.h`.

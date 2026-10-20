@@ -33,9 +33,12 @@ from .model import (
     Pattern,
     PatternMatch,
     classify_value,
+    combine_conditions,
     compact,
     dedupe_effects,
     identifiers,
+    merge_detail,
+    substitute,
 )
 
 SCHEMA_VERSION = 1
@@ -100,6 +103,18 @@ ADDR_MOD_OPERANDS: dict[str, int] = {
     "SHIFTXB": 0,
     "ZEROACC": 3,
 }
+
+
+#: DMA-register ALU instructions with an ``OpSel`` operand (5 operands:
+#: ``OpBisConst, OpSel, Result, OpB, OpA``); the others have 4 (``OpBisConst, Result, OpB, OpA``).
+_DMAREG_OPSEL = ("BITWOPDMAREG", "SHIFTDMAREG", "CMPDMAREG")
+
+
+def _dmareg_operand(m: PatternMatch, which: str) -> str | None:
+    base = re.sub(r"^TT(?:I|_OP)?_", "", m.name)
+    first = 2 if base in _DMAREG_OPSEL else 1
+    position = {"result": first, "b": first + 1, "a": first + 2}[which]
+    return m.args[position] if position < len(m.args) else None
 
 
 def _addr_mod_operand(m: PatternMatch) -> str | None:
@@ -232,19 +247,29 @@ CORE_PATTERNS: tuple[Pattern, ...] = (
         "core.dmareg_alu.write",
         "call",
         _ins(r"(?:ADD|SUB|MUL|BITWOP|SHIFT|CMP)DMAREG"),
-        "arg:1",
+        lambda m: _dmareg_operand(m, "result"),
         "gpr",
-        value="fmt:{name}({arg3}, {arg2})",
+        value=lambda m: f"{m.name}({_dmareg_operand(m, 'a')}, {_dmareg_operand(m, 'b')})",
         detail=_deferred,
     ),
     Pattern(
         "core.dmareg_alu.read",
         "call",
         _ins(r"(?:ADD|SUB|MUL|BITWOP|SHIFT|CMP)DMAREG"),
-        "arg:3",
+        lambda m: _dmareg_operand(m, "a"),
         "gpr",
         access="read",
         detail=_deferred,
+    ),
+    Pattern(
+        "core.dmareg_alu.read_b",
+        "call",
+        _ins(r"(?:ADD|SUB|MUL|BITWOP|SHIFT|CMP)DMAREG"),
+        lambda m: _dmareg_operand(m, "b"),
+        "gpr",
+        access="read",
+        detail=_deferred,
+        when=lambda m: compact(m.args[0] if m.args else "") not in ("1", "true"),
     ),
     Pattern(
         "core.regfile_assign",
@@ -500,6 +525,14 @@ CORE_PATTERNS: tuple[Pattern, ...] = (
         value="name",
     ),
     Pattern(
+        "core.semaphore_read",
+        "call",
+        r"semaphore_read",
+        "arg:0",
+        "semaphore",
+        access="read",
+    ),
+    Pattern(
         "core.t6_semaphore_wait",
         "call",
         r"t6_semaphore_wait_on_(?:max|zero)",
@@ -717,10 +750,13 @@ class FamilyContext:
         tables: resources.ResourceTables,
         family: str,
         normalizers: dict[str, Callable],
+        index: scan.ScanIndex | None = None,
     ):
         self.tables = tables
         self.family = family
         self._normalizers = normalizers
+        #: the tree's :class:`scan.ScanIndex` (callee lookup for argument mapping)
+        self.index = index
 
     def normalize(self, normalizer: Any, expr: str | None, thread: str | None = None):
         if callable(normalizer):
@@ -753,8 +789,12 @@ class FamilyContext:
         detail: str = "",
         granularity: str | None = None,
         confidence: str = "high",
+        evidence: str | None = None,
     ) -> list[Effect]:
-        """Build effects for ``fn`` exactly like a declarative pattern would."""
+        """Build effects for ``fn`` exactly like a declarative pattern would.
+
+        ``evidence`` overrides the sink ``path:line`` (default: ``fn.path`` at ``line``).
+        """
         if line is None:
             line = fn.line_at(offset or 0)
         if condition is None and offset is not None:
@@ -772,7 +812,7 @@ class FamilyContext:
             value=value or "",
             detail=detail,
             condition=condition or "",
-            evidence=f"{fn.path}:{line}",
+            evidence=evidence or f"{fn.path}:{line}",
             thread=effective_thread,
             granularity=granularity,
             confidence=confidence,
@@ -812,7 +852,7 @@ def _make_effects(
                 family=family,
                 pattern=pattern_id,
                 granularity=granularity or item.granularity,
-                detail=compact(item.detail or detail),
+                detail=compact(merge_detail(item.detail, detail)),
                 resolved=item.resolved,
                 confidence=confidence if item.resolved else "low",
                 resource_expr=compact(resource_expr),
@@ -914,6 +954,93 @@ def _assign_matches(
         yield match.start(), match.group("name"), index, op, rhs
 
 
+_INSN_MACRO = re.compile(r"TTI?_[A-Z][A-Z0-9_]*")
+_EXEC_TARG = re.compile(r"(?<!No)Exec\b|^true$")
+
+
+def _block_end(masked: str, offset: int) -> int:
+    """End offset of the innermost ``{}`` block containing ``offset`` (or the body end)."""
+    depth = 0
+    for position in range(offset, len(masked)):
+        char = masked[position]
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            if depth == 0:
+                return position
+            depth -= 1
+    return len(masked)
+
+
+def replay_recorded(
+    fn: scan.FunctionDef, tables: resources.ResourceTables | None = None
+) -> tuple[list[tuple[int, int]], set[int]]:
+    """Code that is recorded into the replay buffer instead of being issued.
+
+    Returns (masked_body spans, ``fn.calls`` indices): the callable argument of
+    ``load_replay_buf<NoExec>(..)`` (span), and the next ``len`` instruction macros after
+    ``lltt::record<NoExec>(start, len)`` or ``TTI_REPLAY(start, len, 0 /*exec*/, 1 /*load*/)``
+    (the rest of the enclosing block when ``len`` is not a constant).
+    """
+    masked = fn.masked_body
+    calls = list(enumerate(fn.calls))
+    spans: list[tuple[int, int]] = []
+
+    def number(text: str) -> int | None:
+        if tables is not None:
+            return tables.int_value(text)
+        value = scan.evaluate(text)
+        return value if isinstance(value, int) else None
+
+    for _, call in calls:
+        if call.name == "load_replay_buf" and not any(
+            _EXEC_TARG.search(compact(t)) for t in call.template_args
+        ):
+            opening = masked.find("(", call.offset)
+            if opening >= 0:
+                close = scan.match_close(masked, opening, "()")
+                if close is not None:
+                    spans.append((opening, close))
+    indices: set[int] = set()
+    for position, call in calls:
+        window = None
+        if (
+            call.name == "record"
+            and call.qualifier.lstrip(":").endswith("lltt")
+            and not any(_EXEC_TARG.search(compact(t)) for t in call.template_args)
+        ):
+            window = number(call.args[1]) if len(call.args) > 1 else None
+            window = -1 if window is None else window
+        elif re.fullmatch(r"TTI?_REPLAY", call.name) and len(call.args) >= 4:
+            load, execute = number(call.args[3]), number(call.args[2])
+            if load and execute == 0:
+                window = number(call.args[1])
+                window = -1 if window is None else window
+        if window is None:
+            continue
+        block_end = _block_end(masked, call.offset)
+        remaining = window
+        for later, other in calls[position + 1 :]:
+            if other.offset > block_end or remaining == 0:
+                break
+            indices.add(later)
+            if remaining > 0 and (
+                _INSN_MACRO.fullmatch(other.name) or other.name == "TT_INSN"
+            ):
+                remaining -= 1
+    for index, call in calls:
+        if any(start < call.offset < end for start, end in spans):
+            indices.add(index)
+    return spans, indices
+
+
+def _mark_deferred(effect: Effect) -> Effect:
+    detail = effect.detail or ""
+    if any(part.split(":", 1)[0] == "deferred" for part in detail.split(";")):
+        return effect
+    return replace(effect, detail=f"{detail};deferred" if detail else "deferred")
+
+
 def _direct_effects(
     fn: scan.FunctionDef,
     patterns: Sequence[tuple[str, Pattern]],
@@ -925,8 +1052,18 @@ def _direct_effects(
     consumed: dict[int, list[str]] = {}
     fn_thread = fn.thread_hint
     spans = scan.thread_spans(fn.masked_body)
+    local_constants: dict[str, str] | None = None
 
     def normalize(pattern: Pattern, expr: str, thread: str):
+        nonlocal local_constants
+        if pattern.normalizer == "cfg_rmw" and fn.masked_body:
+            # SHAMT/MASK operands are often constexpr locals (``alu_mask``): resolve them
+            if local_constants is None:
+                local_constants = {}
+                for name, value in _local_constants(fn):
+                    local_constants[name] = substitute(value, local_constants)
+            if local_constants and identifiers(expr) & set(local_constants):
+                expr = substitute(expr, local_constants)
         if callable(pattern.normalizer):
             result = pattern.normalizer(expr, thread=thread)
         elif pattern.normalizer in normalizer_lookup:
@@ -980,13 +1117,26 @@ def _direct_effects(
         )
         return True
 
+    recorded_spans, recorded_calls = (
+        replay_recorded(fn, tables)
+        if (
+            "load_replay_buf" in fn.masked_body
+            or "record" in fn.masked_body
+            or "REPLAY" in fn.masked_body
+        )
+        else ([], set())
+    )
     for family, pattern in patterns:
         if pattern.kind in ("call", "member", "ctor"):
             for index, call in enumerate(fn.calls):
+                before = len(effects)
                 if _call_matches(pattern, call) and emit(
                     family, pattern, _call_match(call), call.line
                 ):
                     consumed.setdefault(index, []).append(pattern.id)
+                    if index in recorded_calls:
+                        # recorded into the replay buffer: runs when the replay is issued
+                        effects[before:] = [_mark_deferred(e) for e in effects[before:]]
             continue
         for text, expansion in _segments(fn):
             if pattern.kind == "regex":
@@ -1040,7 +1190,11 @@ def _direct_effects(
                     condition=condition,
                     via_macro=via_macro,
                 )
-                emit(family, pattern, m, line)
+                before = len(effects)
+                if emit(family, pattern, m, line) and recorded_spans:
+                    at = offset if expansion is None else expansion.offset
+                    if any(start < at < end for start, end in recorded_spans):
+                        effects[before:] = [_mark_deferred(e) for e in effects[before:]]
     return effects, consumed
 
 
@@ -1265,9 +1419,11 @@ class EffectDB:
                 bindings = self.graph.bind(callee, template_args, args)
                 for effect in self.graph._resolve(callee, bindings, 1):
                     if effect.condition:
-                        verdict = scan.truth(effect.condition)
+                        verdict, simplified = scan.simplify_condition(effect.condition)
                         if verdict is False:
                             continue
+                        if simplified != effect.condition:
+                            effect = replace(effect, condition=simplified)
                     confidence = (
                         "low"
                         if resolution == "ambiguous" or not effect.resolved
@@ -1293,11 +1449,7 @@ class EffectDB:
                 replace(
                     effect,
                     thread=effect_thread,
-                    condition=compact(
-                        " && ".join(
-                            part for part in (condition, effect.condition) if part
-                        )
-                    ),
+                    condition=combine_conditions(condition, effect.condition),
                     value_kind=classify_value(
                         effect.value, effect.params, self.graph.constants
                     ),
@@ -1331,7 +1483,12 @@ class EffectDB:
         for fn in scanned:
             fn.key = f"{fn.key}@{fn.path}"
             model, consumed = _function_model(
-                fn, self.patterns, self.tables, self._normalizer_lookup, families
+                fn,
+                self.patterns,
+                self.tables,
+                self._normalizer_lookup,
+                families,
+                self.scan,
             )
             if model.layer == "kernel" and model.name in ("MAIN", "kernel_main"):
                 model.role = "execute"
@@ -1440,7 +1597,7 @@ def build(
     consumed_by_key: dict[str, dict[int, list[str]]] = {}
     for fn in index.functions:
         model, consumed = _function_model(
-            fn, patterns, tables, custom_normalizers, loaded
+            fn, patterns, tables, custom_normalizers, loaded, index
         )
         functions[model.key] = model
         consumed_by_key[model.key] = consumed
@@ -1451,6 +1608,7 @@ def build(
         arg_expanders=(resources.expand_rmw_args,),
         constants=set(index.constants),
         custom_normalizers=custom_normalizers,
+        simplify=scan.simplify_condition,
     )
     stop_ids = {pattern.id for _, pattern in patterns if pattern.stop}
     for key in sorted(functions):
@@ -1482,12 +1640,57 @@ def build(
     return db
 
 
+def _content(effect: Effect) -> tuple:
+    return (
+        effect.resource,
+        effect.access,
+        effect.value,
+        effect.condition,
+        effect.evidence,
+        effect.thread,
+        effect.granularity,
+        effect.detail,
+    )
+
+
+def _supersede(effects: list[Effect], families: Sequence[Family]) -> list[Effect]:
+    """Drop coarse effects that a family effect at the same sink refines.
+
+    A family module may export ``SUPERSEDES = {"<family pattern>": ("<pattern>", ..)}``:
+    an effect of a listed pattern is dropped when an effect of the refining pattern
+    exists at the same evidence with the same access.
+    """
+    # a family companion identical to a core effect (same sink, resource, value,
+    # condition, thread): the family's workaround and the core now agree, keep the core one
+    core_items = {_content(e) for e in effects if e.family == "core"}
+    if core_items:
+        effects = [
+            e for e in effects if e.family == "core" or _content(e) not in core_items
+        ]
+    rules: dict[str, tuple[str, ...]] = {}
+    for family in families:
+        for refined, coarse in sorted(
+            (getattr(family.module, "SUPERSEDES", None) or {}).items()
+        ):
+            rules[refined] = tuple(coarse)
+    if not rules:
+        return effects
+    covered: set[tuple[str, str, str]] = set()
+    for effect in effects:
+        for coarse in rules.get(effect.pattern, ()):
+            covered.add((coarse, effect.evidence, effect.access))
+    if not covered:
+        return effects
+    return [e for e in effects if (e.pattern, e.evidence, e.access) not in covered]
+
+
 def _function_model(
     fn: scan.FunctionDef,
     patterns: Sequence[tuple[str, Pattern]],
     tables: resources.ResourceTables,
     custom_normalizers: dict[str, Callable],
     families: Sequence[Family],
+    index: scan.ScanIndex | None = None,
 ) -> tuple[FunctionModel, dict[int, list[str]]]:
     """Direct effects, role and thread of one scanned function."""
     effects, consumed = _direct_effects(fn, patterns, tables, custom_normalizers)
@@ -1495,10 +1698,11 @@ def _function_model(
         if family.extract is None:
             continue
         extra = family.extract(
-            fn, FamilyContext(tables, family.name, custom_normalizers)
+            fn, FamilyContext(tables, family.name, custom_normalizers, index)
         )
         if extra:
             effects.extend(extra)
+    effects = _supersede(effects, families)
     role = default_role(fn)
     thread = fn.thread_hint or "any"
     for family in families:
@@ -1530,6 +1734,15 @@ def _function_model(
     effects = [
         replace(
             e, params=tuple(sorted(_flowing_params(_effect_identifiers(e), flow, own)))
+        )
+        for e in effects
+    ]
+    constants = tables.constant_names()
+    effects = [
+        (
+            replace(e, value_kind=classify_value(e.value, e.params, constants))
+            if e.value_kind == "unknown"
+            else e
         )
         for e in effects
     ]

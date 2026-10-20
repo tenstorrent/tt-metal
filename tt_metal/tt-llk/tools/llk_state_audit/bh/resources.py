@@ -387,9 +387,9 @@ class ResourceTables:
             "rwc": self.rwc,
             "semaphore": self.semaphore,
             "mop": lambda expr, thread=None: [Normalized("MOP", "whole")],
-            "replay": lambda expr, thread=None: [
-                Normalized("REPLAY", "range", detail=scan.compact(expr or ""))
-            ],
+            # the pattern's detail (``start=..;len=..``, ``deferred``) is kept: the
+            # normalizer adds none of its own
+            "replay": lambda expr, thread=None: [Normalized("REPLAY", "range")],
             "sw": self.sw,
             "mailbox": self.mailbox,
         }
@@ -427,6 +427,25 @@ class ResourceTables:
         )
 
     # ---- constants -------------------------------------------------------- #
+    def constant_names(self) -> set[str]:
+        """Names of the scanned integer constants (for ``classify_value``)."""
+        cached = getattr(self, "_constant_names", None)
+        if cached is None:
+            cached = self._constant_names = set(self._constants_text)
+        return cached
+
+    def _cfg_symbol(self, name: str) -> int | None:
+        """``X_ADDR32`` / ``X_SHAMT`` / ``X_MASK`` of a cfg_defines.h field."""
+        match = re.fullmatch(r"(?:ckernel::)?([A-Za-z_]\w*?)_(ADDR32|SHAMT|MASK)", name)
+        if not match:
+            return None
+        item = self.cfg.fields.get(match.group(1))
+        if item is None:
+            return None
+        return {"ADDR32": item.addr32, "SHAMT": item.shamt, "MASK": item.mask}[
+            match.group(2)
+        ]
+
     def int_value(self, expr: str | None) -> int | None:
         """Evaluate an integer constant expression (scanned constexpr names allowed)."""
         if expr is None:
@@ -448,6 +467,10 @@ class ResourceTables:
                     if value is not None:
                         identifiers[name] = value
                     break
+            if name not in identifiers:
+                value = self._cfg_symbol(name)
+                if value is not None:
+                    identifiers[name] = value
         cleaned = re.sub(
             r"static_cast<[^<>]*>|\b(?:std::)?u?int(?:8|16|32|64)_t\s*\(", "(", text
         )
@@ -476,16 +499,46 @@ class ResourceTables:
         return None, ""
 
     def cfg_rmw(self, expr, thread=None):
-        """``X_RMW`` or ``X_ADDR32, X_SHAMT, X_MASK`` -> field-granular CFG write."""
+        """``X_RMW`` or ``ADDR32, SHAMT, MASK`` -> field-granular CFG write(s).
+
+        ``cfg_reg_rmw_tensix<ADDR32, SHAMT, MASK>(v)`` writes ``(v << SHAMT) & MASK``
+        into word ``ADDR32`` (MASK is in place). When ADDR32 and MASK evaluate (cfg_defines
+        symbols, constants), every field of that word the mask touches is reported;
+        otherwise the field is named after ADDR32 (or after SHAMT when that names a
+        sibling field of the same word).
+        """
         parts = scan.split_args(expr or "")
         if not parts:
             return []
         name, suffix = self._cfg_field_name(parts[0])
+        if name is not None and suffix in ("RMW",) and len(parts) == 1:
+            prefix = "THDCFG" if self._section_of(name) == "THREAD" else "CFG"
+            return [Normalized(f"{prefix}.{name}", "field")]
+        if name is not None and suffix == "ADDR32" and len(parts) >= 3:
+            item = self.cfg.fields.get(name)
+            mask = self.int_value(parts[2])
+            if item is not None and mask is not None and mask:
+                hit = [
+                    n
+                    for n in self.cfg.words.get((item.space, item.addr32), [])
+                    if self.cfg.fields[n].mask & mask
+                ]
+                if hit:
+                    prefix = "THDCFG" if item.space == "thread" else "CFG"
+                    return [Normalized(f"{prefix}.{n}", "field") for n in hit]
         if name is not None:
             prefix = "THDCFG" if self._section_of(name) == "THREAD" else "CFG"
             if suffix == "ADDR32" and len(parts) >= 3:
                 shamt_name, _ = self._cfg_field_name(parts[1])
-                if shamt_name and shamt_name != name:
+                own = self.cfg.fields.get(name)
+                sibling = self.cfg.fields.get(shamt_name or "")
+                if (
+                    shamt_name
+                    and shamt_name != name
+                    and own is not None
+                    and sibling is not None
+                    and (sibling.space, sibling.addr32) == (own.space, own.addr32)
+                ):
                     name = (
                         shamt_name  # field named by SHAMT when ADDR32 names a sibling
                     )
@@ -835,6 +888,8 @@ class ResourceTables:
             return False
         if "?" in a or "?" in b:
             return True
+        if cls_a == "ADC":
+            return _adc_overlap(a, b)
         storage_a, storage_b = self.storage(a), self.storage(b)
         if storage_a is None or storage_b is None:
             return False
@@ -851,6 +906,17 @@ class ResourceTables:
             else storage_b[2]
         )
         return bool(mask_a & mask_b)
+
+
+def _adc_overlap(a: str, b: str) -> bool:
+    """``ADC.<unit>.<dims>``: same unit and a shared dimension (``XY`` covers X and Y)."""
+    unit_a, _, dims_a = a[len("ADC.") :].partition(".")
+    unit_b, _, dims_b = b[len("ADC.") :].partition(".")
+    if unit_a != unit_b:
+        return False
+    if "ALL" in (dims_a, dims_b):
+        return True
+    return bool(set(dims_a) & set(dims_b))
 
 
 def same_thread(thread_a: str, thread_b: str) -> bool:

@@ -210,6 +210,67 @@ def compact(value: str) -> str:
 
 
 # --------------------------------------------------------------------------- #
+# Condition text helpers (precedence-safe joining, top-level splitting)
+# --------------------------------------------------------------------------- #
+def _top_level_positions(text: str, token: str) -> list[int]:
+    """Offsets of ``token`` (``&&``, ``||``, ``?``) outside any bracket pair."""
+    found: list[int] = []
+    depth = 0
+    index = 0
+    length = len(text)
+    while index < length:
+        char = text[index]
+        if char in "([{":
+            depth += 1
+        elif char in ")]}":
+            depth -= 1
+        elif depth == 0 and text.startswith(token, index):
+            if token == "?" or text[index : index + 2] == token:
+                found.append(index)
+                index += len(token)
+                continue
+        index += 1
+    return found
+
+
+def low_precedence(text: str) -> bool:
+    """Whether ``text`` has a top-level ``||`` or ``?:`` (needs parentheses under ``&&``)."""
+    return bool(_top_level_positions(text, "||") or _top_level_positions(text, "?"))
+
+
+def wrap_condition(text: str) -> str:
+    """``text`` parenthesized when it would change meaning as an ``&&`` operand."""
+    text = compact(text or "")
+    if text and low_precedence(text):
+        return f"({text})"
+    return text
+
+
+def join_conditions(*parts: str | None) -> str:
+    """``&&``-join condition parts (deduplicated, in order), parenthesizing ``||``/``?:`` parts."""
+    items: list[str] = []
+    for part in parts:
+        text = wrap_condition(part or "")
+        if text and text not in items:
+            items.append(text)
+    return " && ".join(items)
+
+
+def split_top_level_condition(text: str, token: str) -> list[str]:
+    """Split ``text`` at top-level ``&&`` or ``||`` (no split inside brackets)."""
+    positions = _top_level_positions(text, token)
+    if not positions:
+        return [compact(text)]
+    parts: list[str] = []
+    start = 0
+    for position in positions:
+        parts.append(compact(text[start:position]))
+        start = position + len(token)
+    parts.append(compact(text[start:]))
+    return parts
+
+
+# --------------------------------------------------------------------------- #
 # Data model
 # --------------------------------------------------------------------------- #
 @dataclass(frozen=True)
@@ -378,7 +439,7 @@ class FunctionDef:
         control = condition_at(_control_blocks_cached(self), offset)
         if control:
             parts.append(control)
-        return " && ".join(parts) if parts else None
+        return join_conditions(*parts) if parts else None
 
     def to_json(self, *, include_calls: bool = True) -> dict:
         data = {
@@ -579,6 +640,51 @@ class _Evaluator:
             raise ValueError("trailing tokens")
         return value
 
+    def _template_call_end(self) -> int | None:
+        """Token index after ``<..>(..)`` when the tokens at ``self.index`` (a ``<``) form a
+        template argument list followed by a call, else None. The argument list must not hold
+        ``&&``/``||``/``?`` at its top level (then ``<`` is a comparison)."""
+        tokens = self.tokens
+        position = self.index
+        depth = 0
+        paren = 0
+        while position < len(tokens):
+            kind, text = tokens[position]
+            if kind == "op":
+                if text == "(":
+                    paren += 1
+                elif text == ")":
+                    if paren == 0:
+                        return None
+                    paren -= 1
+                elif paren == 0 and text == "<":
+                    depth += 1
+                elif paren == 0 and text in (">", ">>"):
+                    depth -= 1 if text == ">" else 2
+                    if depth <= 0:
+                        if depth < 0:
+                            return None
+                        break
+                elif paren == 0 and text in ("&&", "||", "?", ":"):
+                    return None
+            position += 1
+        else:
+            return None
+        position += 1
+        if position >= len(tokens) or tokens[position] != ("op", "("):
+            return None
+        paren = 0
+        while position < len(tokens):
+            token = tokens[position]
+            if token == ("op", "("):
+                paren += 1
+            elif token == ("op", ")"):
+                paren -= 1
+                if paren == 0:
+                    return position + 1
+            position += 1
+        return None
+
     def ternary(self):
         condition = self.logical_or()
         if self.peek() == ("op", "?"):
@@ -767,6 +873,12 @@ class _Evaluator:
                 return self.resolve_builtin(value, "".join(parts))
             if value in ("true", "false"):
                 return value == "true"
+            if self.peek() == ("op", "<"):
+                end = self._template_call_end()
+                if end is not None:
+                    # ``f<T, U>(..)``: a constexpr helper we cannot evaluate (opaque)
+                    self.index = end
+                    return UNKNOWN
             if self.peek() == ("op", "("):
                 # A function-like construct we cannot evaluate: skip its arguments.
                 self.take()
@@ -804,17 +916,36 @@ def _truth(value) -> bool | None:
     return bool(value)
 
 
+def _scope_suffix(a: str, b: str) -> bool:
+    """``a`` and ``b`` name the same scope modulo leading qualification
+    (``ckernel::BinaryOp`` vs ``BinaryOp``)."""
+    return a == b or a.endswith("::" + b) or b.endswith("::" + a)
+
+
 def _equal(left, right) -> bool | None:
     if left is UNKNOWN or right is UNKNOWN:
         return None
     if isinstance(left, tuple) or isinstance(right, tuple):
         if isinstance(left, tuple) and isinstance(right, tuple):
-            if left[1] == right[1]:
-                return True
-            left_scope = left[1].rsplit("::", 1)[0] if "::" in left[1] else None
-            right_scope = right[1].rsplit("::", 1)[0] if "::" in right[1] else None
-            if left_scope and left_scope == right_scope:
-                return False  # two different enumerators of the same scope
+            kinds = (left[0], right[0])
+            if kinds == ("sym", "sym"):
+                if left[1] == right[1]:
+                    return True
+                left_scope, _, left_name = left[1].rpartition("::")
+                right_scope, _, right_name = right[1].rpartition("::")
+                if (
+                    left_scope
+                    and right_scope
+                    and _scope_suffix(left_scope, right_scope)
+                ):
+                    # same enumeration written with more or less qualification
+                    return left_name == right_name
+            elif "bare" in kinds and "sym" in kinds:
+                # an unqualified enumerator (``using namespace``) vs a qualified one
+                bare = left[1] if left[0] == "bare" else right[1]
+                sym = right[1] if left[0] == "bare" else left[1]
+                if sym.rpartition("::")[2] == bare:
+                    return True
         return None
     return int(left) == int(right)
 
@@ -866,6 +997,10 @@ def evaluate(
             return 1 if value is True else value
         if symbolic_qualified and "::" in name:
             return ("sym", name.lstrip(":"))
+        if symbolic_qualified:
+            # unknown bare identifier: only comparable with a qualified enumerator of
+            # the same name (``StartZero == DstStart::StartZero`` under ``using``)
+            return ("bare", name)
         return UNKNOWN
 
     def resolve_defined(name: str):
@@ -887,10 +1022,103 @@ def evaluate(
 
 
 def truth(expression: str | None, **kwargs) -> bool | None:
-    """``True``/``False`` when the expression is decidable, ``None`` otherwise."""
+    """``True``/``False`` when the expression is decidable, ``None`` otherwise.
+
+    When the whole text cannot be evaluated (an operand the tokenizer does not
+    know, e.g. a member call or a float literal), the top-level ``||`` / ``&&``
+    operands are decided one by one: one false conjunct makes a conjunction false
+    and one true disjunct makes a disjunction true. Results are memoized.
+    """
     if expression is None or not expression.strip():
         return True
-    return _truth(evaluate(expression, **kwargs))
+    if kwargs:
+        return _truth_split(expression, kwargs, 0)
+    return _truth_cached(expression)
+
+
+_TRUTH_CACHE: dict[str, bool | None] = {}
+_TRUTH_CACHE_LIMIT = 500_000
+
+
+def _truth_cached(expression: str) -> bool | None:
+    cached = _TRUTH_CACHE.get(expression, _TRUTH_MISSING)
+    if cached is not _TRUTH_MISSING:
+        return cached
+    result = _truth_split(expression, {}, 0)
+    if len(_TRUTH_CACHE) >= _TRUTH_CACHE_LIMIT:
+        _TRUTH_CACHE.clear()
+    _TRUTH_CACHE[expression] = result
+    return result
+
+
+_TRUTH_MISSING = object()
+
+
+def _strip_outer_parens(text: str) -> str:
+    text = compact(text)
+    while text.startswith("(") and match_close(text, 0, "()") == len(text) - 1:
+        text = compact(text[1:-1])
+    return text
+
+
+def _truth_split(expression: str, kwargs: dict, depth: int) -> bool | None:
+    verdict = _truth(evaluate(expression, **kwargs))
+    if verdict is not None or depth > 6:
+        return verdict
+    text = _strip_outer_parens(expression)
+    if not text:
+        return None
+    truncated = text.endswith("...")
+    if _top_level_positions(text, "?"):
+        return None
+    disjuncts = split_top_level_condition(text, "||")
+    if len(disjuncts) > 1:
+        if truncated:
+            disjuncts = disjuncts[:-1]
+        verdicts = [_truth_split(part, kwargs, depth + 1) for part in disjuncts if part]
+        if any(v is True for v in verdicts):
+            return True
+        if not truncated and verdicts and all(v is False for v in verdicts):
+            return False
+        return None
+    conjuncts = split_top_level_condition(text, "&&")
+    if len(conjuncts) > 1:
+        if truncated:
+            conjuncts = conjuncts[:-1]
+        verdicts = [_truth_split(part, kwargs, depth + 1) for part in conjuncts if part]
+        if any(v is False for v in verdicts):
+            return False
+        if not truncated and verdicts and all(v is True for v in verdicts):
+            return True
+        return None
+    if text.startswith("!") and not truncated:
+        inner = text[1:].strip()
+        if inner.startswith("(") and match_close(inner, 0, "()") == len(inner) - 1:
+            verdict = _truth_split(inner, kwargs, depth + 1)
+            return None if verdict is None else not verdict
+    return None
+
+
+def simplify_condition(expression: str | None) -> tuple[bool | None, str]:
+    """(verdict, simplified text) of a condition.
+
+    ``False``: the condition can never hold. ``True``: it always holds (text ``""``).
+    ``None``: undecided; conjuncts that are always true are dropped from the text
+    (``!(SyncHalf == SyncFull) && dest_offset_id`` -> ``dest_offset_id``).
+    """
+    text = compact(expression or "")
+    if not text:
+        return True, ""
+    verdict = truth(text)
+    if verdict is not None:
+        return verdict, "" if verdict else text
+    if text.endswith("...") or low_precedence(text):
+        return None, text
+    conjuncts = split_top_level_condition(text, "&&")
+    if len(conjuncts) < 2:
+        return None, text
+    kept = [part for part in conjuncts if part and truth(part) is not True]
+    return None, " && ".join(kept)
 
 
 # --------------------------------------------------------------------------- #
@@ -938,7 +1166,7 @@ def preprocess(
 
     def current_condition() -> str | None:
         parts = [frame["cond"] for frame in stack if frame["cond"]]
-        return " && ".join(parts) if parts else None
+        return join_conditions(*parts) if parts else None
 
     def branch(
         expression: str, kind: str
@@ -1017,7 +1245,7 @@ def preprocess(
                 result, thread, cond = branch(tail, "if")
                 negated = [f"!({c})" for c in frame["prior"]]
                 frame["thread"] = thread
-                frame["cond"] = " && ".join(negated + ([cond] if cond else [])) or None
+                frame["cond"] = join_conditions(*negated, cond) or None
                 frame["prior"] = frame["prior"] + ([cond] if cond else [])
                 frame["taken"] = result is True and frame["all_false"]
                 frame["all_false"] = frame["all_false"] and result is False
@@ -1029,7 +1257,9 @@ def preprocess(
             else:
                 active = frame["parent_active"]
             frame["thread"] = None
-            frame["cond"] = " && ".join(f"!({c})" for c in frame["prior"]) or None
+            frame["cond"] = (
+                join_conditions(*(f"!({c})" for c in frame["prior"])) or None
+            )
             frame["taken"] = True
         elif kind == "endif" and stack:
             active = stack.pop()["parent_active"]
@@ -1704,7 +1934,7 @@ def condition_at(blocks: list[dict], offset: int) -> str | None:
         for block in blocks
         if block["start"] <= offset < block["end"]
     ]
-    return " && ".join(enclosing) if enclosing else None
+    return join_conditions(*enclosing) if enclosing else None
 
 
 def thread_spans(masked: str) -> list[tuple[int, int, str]]:
@@ -1885,7 +2115,7 @@ def find_calls(
     for match in _QUALIFIED_IDENT.finditer(masked):
         text = match.group(0)
         start = match.start()
-        name = text.replace(" ", "").rsplit("::", 1)[-1]
+        name = _SPACE.sub("", text).rsplit("::", 1)[-1]
         if name in _KEYWORDS or name in THREAD_WRAPPERS:
             continue
         if name.startswith("~"):
@@ -1976,7 +2206,7 @@ def find_calls(
             control = condition_at(blocks, start)
             if control:
                 parts.append(control)
-            condition = " && ".join(parts) if parts else None
+            condition = join_conditions(*parts) if parts else None
         macro = (
             macros.get(name)
             if not is_member and not is_ctor and "::" not in callee
@@ -2125,6 +2355,35 @@ def _signature_key(
     )
 
 
+#: Macros whose arguments are not evaluated in a production (non-assert, non-sanitizer)
+#: Blackhole build: ``LLK_ASSERT`` is ``(void)sizeof(cond)`` and ``LLK_ASSERT_BLOCK``
+#: wraps its call in ``sizeof(decltype(..))`` unless ``ENABLE_LLK_ASSERT`` is defined.
+UNEVALUATED_MACROS = (
+    "LLK_ASSERT_BLOCK",
+    "LLK_ASSERT",
+    "LLK_PANIC",
+    "ASSERT",
+    "SAN_HOOK",
+    "static_assert",
+)
+_UNEVALUATED = re.compile(r"(?<![\w.>#])(?:" + "|".join(UNEVALUATED_MACROS) + r")\s*\(")
+
+
+def blank_unevaluated(masked: str) -> str:
+    """Blank the argument lists of :data:`UNEVALUATED_MACROS` (offsets/newlines kept),
+    so calls and effects written inside asserts are not part of the analysed code."""
+    if not _UNEVALUATED.search(masked):
+        return masked
+    chars = list(masked)
+    for match in _UNEVALUATED.finditer(masked):
+        opening = match.end() - 1
+        close = match_close(masked, opening, "()")
+        if close is None:
+            continue
+        _blank(chars, opening + 1, close)
+    return "".join(chars)
+
+
 def scan_text(
     text: str,
     path: str,
@@ -2136,7 +2395,7 @@ def scan_text(
     """Scan one file: definitions, macros, constants and globals (no calls yet)."""
     masked0 = mask_comments_and_strings(text)
     pp = preprocess(masked0, path, defines=defines, has_rvtt_builtins=has_rvtt_builtins)
-    analysis = pp.text
+    analysis = blank_unevaluated(pp.text)
     starts = _line_starts(text)
     source = SourceFile(
         path=path,

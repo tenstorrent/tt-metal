@@ -141,7 +141,7 @@ class Effect:
     def to_json(self) -> dict:
         return {
             "access": self.access,
-            "condition": self.condition,
+            "condition": cap(self.condition),
             "confidence": self.confidence,
             "detail": self.detail,
             "evidence": self.evidence,
@@ -368,7 +368,7 @@ def summarize_effects(effects: Sequence[Effect], *, keep: int = 3) -> list[dict]
             {
                 "access": access,
                 "conditional": all(bool(e.condition) for e in items),
-                "conditions": first(e.condition for e in items),
+                "conditions": first(cap(e.condition) for e in items),
                 "count": len(items),
                 "evidence": first(e.evidence for e in items),
                 "families": sorted({e.family for e in items}),
@@ -442,6 +442,9 @@ def cap(text: str, limit: int = _MAX_TEXT) -> str:
     return text if len(text) <= limit else text[: limit - 3] + "..."
 
 
+#: Words that are literals, never parameters of a caller scope.
+_LITERAL_WORDS = frozenset({"true", "false", "nullptr"})
+
 _CONST_TOKEN = re.compile(
     r"^(?:true|false|nullptr|[A-Z][A-Z0-9_]*|to_underlying|static_cast|reinterpret_cast|uint\w*|int\w*|std|sizeof)$"
 )
@@ -459,6 +462,8 @@ def classify_value(
         return "param"
     if "?" in text:
         return "unknown" if text.startswith("?") and text[1:].isidentifier() else "expr"
+    if re.match(r"GPR\(", text):
+        return "expr"  # the content of a GPR, not a constant (WRCFG/cfg_rmw_gpr values)
     names = identifiers(text)
     if names & params:
         return "expr"
@@ -470,10 +475,54 @@ def classify_value(
     return "const"
 
 
+def _low_precedence(text: str) -> bool:
+    """Top-level ``||`` or ``?:`` (outside brackets): needs parentheses under ``&&``."""
+    depth = 0
+    index = 0
+    while index < len(text):
+        char = text[index]
+        if char in "([{":
+            depth += 1
+        elif char in ")]}":
+            depth -= 1
+        elif depth == 0 and (char == "?" or text.startswith("||", index)):
+            return True
+        index += 1
+    return False
+
+
+def _deferred_part(detail: str) -> bool:
+    return any(
+        part.strip().split(":", 1)[0] == "deferred"
+        for part in (detail or "").split(";")
+    )
+
+
+def merge_detail(normalizer_detail: str, pattern_detail: str) -> str:
+    """A normalizer's detail (``LO_16``, ``mask=..``) plus the pattern's (``deferred``), deduplicated."""
+    parts = [p for p in (normalizer_detail or "").split(";") if p]
+    for part in (pattern_detail or "").split(";"):
+        if part and part not in parts:
+            parts.append(part)
+    return ";".join(parts)
+
+
+def keep_deferred(new_detail: str, old_detail: str) -> str:
+    """``new_detail`` (re-normalized) keeping the ``deferred`` marker of ``old_detail``."""
+    if _deferred_part(old_detail) and not _deferred_part(new_detail):
+        return f"{new_detail};deferred" if new_detail else "deferred"
+    return new_detail
+
+
 def combine_conditions(*parts: str | None) -> str:
-    items = [compact(part) for part in parts if part and compact(part)]
+    """``&&``-join conditions (deduplicated), parenthesizing ``||`` / ``?:`` parts."""
     unique: list[str] = []
-    for item in items:
+    for part in parts:
+        item = compact(part)
+        if not item:
+            continue
+        if _low_precedence(item):
+            item = f"({item})"
         if item not in unique:
             unique.append(item)
     return " && ".join(unique)
@@ -500,10 +549,12 @@ class CallGraph:
         arg_expanders: Sequence[Callable[[Iterable[str]], tuple[str, ...]]] = (),
         constants: set[str] | None = None,
         custom_normalizers: dict[str, Callable] | None = None,
+        simplify: Callable[[str], tuple[bool | None, str]] | None = None,
     ):
         self.functions = functions
         self.normalize = normalize
         self.truth = truth
+        self.simplify = simplify
         self.arg_expanders = tuple(arg_expanders)
         self.constants = constants or set()
         self.custom_normalizers = custom_normalizers or {}
@@ -900,18 +951,22 @@ class CallGraph:
             return [replace(effect, params=tuple(sorted(params_in_effect)))]
         condition = substitute(effect.condition, bound) if effect.condition else ""
         if condition:
-            verdict = self.truth(condition)
+            # the full condition is kept (display capping happens in to_json): a capped
+            # text no longer folds one level up
+            if self.simplify is not None:
+                verdict, condition = self.simplify(condition)
+            else:
+                verdict = self.truth(condition)
             if verdict is False:
                 return None
             if verdict is True:
                 condition = ""
-        condition = cap(condition)
         value = cap(substitute(effect.value, bound)) if effect.value else ""
         detail = cap(substitute(effect.detail, bound)) if effect.detail else ""
         new_params: set[str] = set()
         for name in params_in_effect:
             if name in bound:
-                new_params |= identifiers(bound[name])
+                new_params |= identifiers(bound[name]) - _LITERAL_WORDS
             else:
                 new_params.add(name)
         resource_expr = (
@@ -943,7 +998,7 @@ class CallGraph:
                     base,
                     resource=item.name,
                     granularity=item.granularity,
-                    detail=item.detail or detail,
+                    detail=keep_deferred(item.detail or detail, detail),
                     resolved=item.resolved,
                     resource_expr=resource_expr,
                     norm_index=index,
