@@ -102,7 +102,12 @@ class TtExpertsTs:
                 if d0 is None:
                     _DONE[("se", id(mesh))] = self.shared.flat.done
             else:
-                self.shared = TtSharedTpRow(mesh, *shared_weights, limit=limit, axis=shared_axis)
+                prec = {}  # (probe GLM_SE_PREC=bf16_hifi4: the model MLP's precision, for accuracy A/B)
+                if os.environ.get("GLM_SE_PREC") == "bf16_hifi4":
+                    prec = dict(w_dtype=ttnn.bfloat16, fidelity=ttnn.MathFidelity.HiFi4)
+                elif os.environ.get("GLM_SE_PREC") == "bf8_hifi3":
+                    prec = dict(fidelity=ttnn.MathFidelity.HiFi3)
+                self.shared = TtSharedTpRow(mesh, *shared_weights, limit=limit, axis=shared_axis, **prec)
         wdtype = {ttnn.bfloat4_b: "bf4", ttnn.bfloat8_b: "bf8"}[weights_dtype]
         fake = isinstance(torch_weights, str)
         prefix = None

@@ -1576,3 +1576,15 @@ untilize per piece 160) - next: one custom op (fused activation, in-op tilize / 
 | chunk 2048 | 2423 | 2130 | 1903 | 1885 | **1791** |
 Chunk 5120 now: router 35 + 9 + 48 | gather 39 | planner 73 | prep 30 | dispatch 482 | SE tilize 50 + gu 106 + glu 30 +
 down 78 + untilize 52 | zero 3 | fused 1751 | tilize 25.
+
+### Folded shared expert: accuracy isolation (2026-10-20, real weights, layer golden; zz_scratch_se_fold_golden.py)
+Shared expert alone (deterministic, golden ffn_norm in, vs golden shared_out; rel L2 / scale), L4 | L44:
+model MLP (8-way bf16 HiFi4) 0.0030 / 0.9991 | 0.0032 / 0.9996; folded bf16 HiFi4 0.0036 / 0.9999 | 0.0045 / 1.0004;
+folded bf8 HiFi2 (default) 0.0114 / 0.9915 | 0.0164 / 0.9900; bf8 HiFi3 0.0070 / 0.9988 | 0.0129 / 0.9979; bf8 HiFi4
+= HiFi3; bf16 HiFi2 0.0088 / 0.9926 | 0.0095 / 0.9925; bf8 LoFi 0.034 / 0.97. HiFi2 shrinks the output ~0.8% (with either
+weight dtype); HiFi3 removes it (+46 us at chunk 5120: gate/up 106 -> 139, down 78 -> 91). The fold itself is exact
+(bf16 HiFi4 folded = the model MLP). MoE block (routed + shared, golden routing) vs golden mlp_out: folded and separate
+equal in rel L2 (L3 0.081, L4 0.146, L20 0.134, L44 0.070 - the bfp4 routed part dominates), folded scale 0.3-1% lower.
+Whole model, 56k last chunk top1 / top5 per run: separate 0.667 0.684 0.674 0.677 0.652 (mean 0.670 / 0.881); folded
+bf8 HiFi2 0.647 0.664 0.655 0.658 0.667 0.688 (0.663 / 0.873); bf8 HiFi3 0.663 0.636 0.656 (0.651); bf16 HiFi4 0.687
+0.649. Run-to-run sd ~1.3 points (arrival-order fp32 sums): no difference resolvable at these counts.
