@@ -147,6 +147,17 @@ def test_sol_e2e(mesh_device, reset_seeds):
                     f"DENSITY gen={state['gen']} step={state['step']} layers={len(vals)} mean={sum(vals)/len(vals):.4f} min={min(vals):.4f} max={max(vals):.4f} per_layer="
                     + " ".join(f"{i}:{d:.3f}" for i, d in dens)
                 )
+        rl = state.pop("reuse_log", None)
+        if rl:
+            fresh = [r for r in rl if r[1] == "fresh"]
+            reused = [r for r in rl if r[1] == "reused"]
+            bad = [r for r in reused if not r[2]]
+            logger.info(
+                f"REUSECHECK gen={state['gen']} step={state['step']} fresh={len(fresh)} reused={len(reused)} "
+                f"mismatch={len(bad)} kept_bits_fresh={sum(r[3] for r in fresh)} "
+                f"kept_bits_reused={sum(r[3] for r in reused)} kept_bits_reused_expected={sum(r[4] for r in reused)}"
+                + (" BAD_LAYERS=" + ",".join(f"{r[0]}:{r[3]}/{r[4]}" for r in bad) if bad else "")
+            )
         return out
 
     def denoise(self, transformer, layout, *args, **kwargs):
@@ -171,6 +182,24 @@ def test_sol_e2e(mesh_device, reset_seeds):
 
     drop_held = os.environ.get("SOL_E2E_DROP_HELD_POOLED", "0") == "1"
     post_check = os.environ.get("SOL_E2E_POSTOP_CHECK", "0") == "1"
+    # E10 retry: on these forwards, read back every layer's block mask after the pre-pass. A fresh (routed) call records
+    # (sum, hash, kept bits) per layer; a reused call is compared against the record of its layer, so a held mask whose
+    # DRAM was handed out again (the TTNN_SHARDED_UPLOAD_BUG pattern) shows up as a checksum mismatch and a different
+    # kept-bit count. Logged per forward as REUSECHECK. Costs host time on those steps only.
+    reuse_check_steps = {int(x) for x in os.environ.get("SOL_E2E_REUSE_CHECK_STEPS", "").split(",") if x}
+
+    def _mask_stats(t):
+        import torch
+
+        f = ttnn.to_torch(t, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0)).to(torch.int64).flatten()
+        s = int(f.sum())
+        h = int((f[::31] * torch.arange(1, f[::31].numel() + 1)).sum() & 0xFFFFFFFF)
+        x = f & 0xFFFFFFFF
+        bits = 0
+        for _ in range(32):
+            bits += int((x & 1).sum())
+            x >>= 1
+        return s, h, bits
 
     def _mask_sum(t):
         import torch
@@ -188,6 +217,18 @@ def test_sol_e2e(mesh_device, reset_seeds):
             self._sol_prepass._pooled_v = None
         out = orig_sol_tensors(self, q, k, v)
         layer = attns.index(self) if self in attns else -1
+        pp = getattr(self, "_sol_prepass", None)
+        if state["step"] in reuse_check_steps and pp is not None and getattr(pp, "mask_reuse", 1) > 1:
+            ttnn.synchronize_device(mesh_device)
+            s_, h_, bits = _mask_stats(out["sol_block_mask"])
+            rec = state.setdefault("reuse_fresh", {})
+            if getattr(pp, "last_mask_reused", False):
+                ref = rec.get(layer)
+                ok = ref is not None and ref[0] == s_ and ref[1] == h_
+                state.setdefault("reuse_log", []).append((layer, "reused", ok, bits, ref[2] if ref else -1))
+            else:
+                rec[layer] = (s_, h_, bits)
+                state.setdefault("reuse_log", []).append((layer, "fresh", True, bits, bits))
         if post_check and state["step"] in (dump_step, dump_step + 1) and layer in dump_layers:
             ttnn.synchronize_device(mesh_device)
             state["post_check"] = (layer, out["sol_block_mask"], _mask_sum(out["sol_block_mask"]))
