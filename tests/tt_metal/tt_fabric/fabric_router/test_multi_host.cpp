@@ -404,10 +404,9 @@ TEST(MultiHost, TestDual2x4ControlPlaneInit) {
     check_asic_mapping_against_golden("TestDual2x4ControlPlaneInit");
 }
 
-// Mock-cluster coverage for ControlPlane::validate_fabric_config_compatibility (the inter-mesh dimensionality
-// check moved out of MeshGraph). dual_t3k is two 2x4 meshes inter-linked ALL_TO_ALL, so the compatibility
-// check runs over a real inter-mesh link; both meshes are 2D (FABRIC_2D), so it must accept them (no throw)
-// and each mesh must resolve to a 2D config. Replaces the old MeshGraph-only InterMesh*Compatible tests.
+// Mock-cluster coverage for ControlPlane::validate_fabric_config_compatibility. dual_t3k is two 2x4 meshes
+// inter-linked ALL_TO_ALL; both are 2D (FABRIC_2D), so the compatibility check must accept them (no throw)
+// and each mesh must resolve to 2D. Replaces the old MeshGraph-only InterMesh*Compatible tests.
 TEST(MultiHost, DualT3kInterMeshFabricConfigCompatibility) {
     if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() != tt::tt_metal::ClusterType::T3K) {
         log_info(tt::LogTest, "This test is only for T3K");
@@ -1518,11 +1517,10 @@ TEST(MultiHost, BHDualGalaxyFabricConfigMismatchAcrossRanksFatal) {
 }
 
 // Non-uniform ENV guard: enable_fabric_vc2 (like enable_fabric_mesh_pass_through and the
-// max_packet_payload_size override) is a process-wide knob that selects the per-VC buffer-slot table and
-// channel buffer size. The launcher does not guarantee it is set identically on every rank, so a user can
-// export it on one process and not another; the two ends of an inter-mesh channel then size their buffers
-// differently and the fabric silently credit-stalls. The cross-rank parity check in
-// ControlPlane::validate_fabric_config_across_ranks must catch this and TT_FATAL consistently on every rank.
+// max_packet_payload_size override) is a process-wide knob selecting the per-VC buffer-slot table and channel
+// buffer size. The launcher does not force it uniform, so a per-rank disagreement sizes the two ends of an
+// inter-mesh channel differently and silently credit-stalls. The cross-rank parity check in
+// ControlPlane::validate_fabric_config_compatibility must catch this and TT_FATAL consistently on every rank.
 TEST(MultiHost, BHDualGalaxyNonUniformFabricEnvAcrossRanksFatal) {
     const auto world_ctx = tt::tt_metal::distributed::multihost::DistributedContext::get_world_context();
     if (*world_ctx->size() < 2) {
@@ -1554,10 +1552,8 @@ TEST(MultiHost, BHDualGalaxyNonUniformFabricEnvAcrossRanksFatal) {
     rtoptions.set_enable_fabric_vc2(saved_vc2);
 }
 
-// Companion to the VC2 test for the SECOND channel-geometry env knob: enable_fabric_mesh_pass_through.
-// Same mechanism -- a process-wide knob the launcher does not force uniform; a per-rank disagreement sizes
-// the two ends of an inter-mesh channel differently and silently credit-stalls. The cross-rank parity guard
-// must TT_FATAL consistently on every rank. Config is uniform so the env knob is the only disagreement.
+// Companion to the VC2 test for the SECOND channel-geometry env knob, enable_fabric_mesh_pass_through (same
+// mechanism and guard). Config is uniform so this env knob is the only disagreement.
 TEST(MultiHost, BHDualGalaxyNonUniformMeshPassThroughAcrossRanksFatal) {
     const auto world_ctx = tt::tt_metal::distributed::multihost::DistributedContext::get_world_context();
     if (*world_ctx->size() < 2) {
@@ -1586,11 +1582,10 @@ TEST(MultiHost, BHDualGalaxyNonUniformMeshPassThroughAcrossRanksFatal) {
     rtoptions.set_enable_fabric_mesh_pass_through(saved_pass_through);
 }
 
-// Companion for the THIRD channel-geometry knob: the max_packet_payload_size override. Unlike the other two
-// this is not an rtoptions flag but a FabricRouterConfig field (max_packet_payload_size_bytes), so a per-rank
-// disagreement is injected by passing a different router config on each rank. It sets the channel buffer size;
-// a mismatch across an inter-mesh channel diverges the buffer geometry and silently stalls. The parity guard
-// must TT_FATAL on every rank. Config and env flags are uniform so the payload override is the only difference.
+// Companion for the THIRD channel-geometry knob, the max_packet_payload_size override (same guard). Unlike
+// the other two it is a FabricRouterConfig field (max_packet_payload_size_bytes), not an rtoptions flag, so
+// the per-rank disagreement is injected via a different router config per rank. Config and env flags are
+// uniform so the payload override is the only difference.
 TEST(MultiHost, BHDualGalaxyNonUniformMaxPayloadAcrossRanksFatal) {
     const auto world_ctx = tt::tt_metal::distributed::multihost::DistributedContext::get_world_context();
     if (*world_ctx->size() < 2) {

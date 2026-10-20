@@ -324,12 +324,10 @@ public:
 
     void clear_fabric_context();
 
-    // Align the control plane's resolved fabric config with the env's current config (called from teardown and
-    // any other config transition), then re-adopt a per-mesh config the mesh graph declares explicitly
-    // (MGD-declared). get_fabric_config() reads through to the control plane, so this keeps the control plane
-    // and the env in sync on every transition -- not just the disable case: on an auto-discovered system the
-    // config follows the env exactly (e.g. back to DISABLED on teardown), while an MGD's explicit per-mesh
-    // fabric_config is preserved via the re-adopt.
+    // Align the resolved fabric config with the env's current config (called on every config transition, e.g.
+    // teardown), then re-adopt an MGD-declared per-mesh config. Keeps the read-through get_fabric_config() in
+    // sync: an auto-discovered system follows the env exactly (back to DISABLED on teardown), while an MGD's
+    // explicit per-mesh fabric_config is preserved.
     void sync_fabric_config(FabricConfig config);
 
     // Check if the provided chip and channel is a cross-host eth link
@@ -649,10 +647,9 @@ private:
     // Returns std::nullopt if not in multi-host context
     LocalMeshBinding initialize_local_mesh_binding();
 
-    // In the per-rank process model each rank owns a single mesh, so this process should build fabric for
-    // that mesh's resolved config, not the raw process-wide override. Adopts it into fabric_config_ once
-    // the local mesh binding is known. No-op when the rank owns multiple meshes or the MGD declares no
-    // explicit per-mesh config (resolves back to the process-wide override).
+    // Per-rank model: each rank owns one mesh, so build fabric for that mesh's resolved config rather than the
+    // raw process-wide override. Adopts it into fabric_config_ once the local mesh binding is known. No-op when
+    // the rank owns multiple meshes or the MGD declares no explicit per-mesh config.
     void adopt_local_mesh_fabric_config();
 
     // Top level function responsible for generating intermesh connectivity

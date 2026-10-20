@@ -692,11 +692,9 @@ FabricType MeshGraphDescriptor::infer_fabric_type_from_dim_types(const proto::Sw
     return infer_declared_fabric_type_from_dim_types(switch_desc);
 }
 
-// Derive a mesh's default FabricConfig from its declared device_topology dim_types, used when neither
-// the MGD nor a process-wide override supplies one. The auto-derived config is ALWAYS a 2D-family config
-// (plain FABRIC_2D or a torus variant) regardless of dim_types -- 1D is never auto-derived; it can only
-// be requested explicitly (in the MGD or in code). The torus variant follows the declared ring axes:
-// dim 0 (rows, N/S) => TORUS_Y, dim 1 (cols, E/W) => TORUS_X, both => TORUS_XY, neither => FABRIC_2D.
+// Derive a mesh's default FabricConfig from its declared device_topology dim_types (used when neither the MGD
+// nor a process-wide override supplies one). ALWAYS 2D-family -- 1D is never auto-derived, only requested
+// explicitly. Torus variant follows the ring axes: dim 0 => TORUS_Y, dim 1 => TORUS_X, both => TORUS_XY.
 FabricConfig MeshGraphDescriptor::default_fabric_config_from_dim_types(const proto::MeshDescriptor* mesh_desc) {
     const auto& dim_types = mesh_desc->device_topology().dim_types();
     const auto is_ring = [&](int axis) {
