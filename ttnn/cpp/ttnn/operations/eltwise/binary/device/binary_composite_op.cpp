@@ -872,8 +872,6 @@ Tensor fmod(
 
 Tensor floor_div(
     const Tensor& input_a, unary::ScalarVariant value, const std::optional<MemoryConfig>& output_mem_config) {
-    // The float path below is wrong for INT32: the reciprocal is truncated to an integer when multiplied into the
-    // tensor, and floor runs on the raw integer bits (#58000). div's floor rounding mode is an integer floored divide.
     if (input_a.dtype() == DataType::INT32) {
         return ttnn::div(input_a, value, false, "floor", std::nullopt, output_mem_config);
     }

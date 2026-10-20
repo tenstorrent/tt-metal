@@ -2344,8 +2344,6 @@ def test_mixed_float_int_promotion(device, ttnn_op, float_dtype, int_dtype, int_
 
 @pytest.mark.parametrize("scalar", [1, 2, 3, 7, -2, 1000])
 def test_floor_div_int32_tensor_scalar(device, scalar):
-    # The scalar overload multiplied by a float reciprocal (truncated to 0 for int32) and ran float floor on the
-    # integer bits, so nearly every element was wrong (#58000).
     torch.manual_seed(0)
     x = torch.randint(-100000, 100000, (1, 1, 32, 32), dtype=torch.int32)
     input_tensor = ttnn.from_torch(x, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
