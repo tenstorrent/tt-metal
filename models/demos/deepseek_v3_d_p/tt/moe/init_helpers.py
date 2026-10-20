@@ -305,6 +305,29 @@ class ExpertMapping:
         return logical_chip_id * num_dispatch_groups + dispatch_group_idx
 
     @staticmethod
+    def metadata_source_for_sp_axis(
+        metadata: torch.Tensor,
+        num_dispatch_groups: int,
+        dispatch_group_size: int,
+        sp_axis: int,
+    ) -> torch.Tensor:
+        """
+        Re-encode the source field (metadata[..., 0]) of reference dispatch metadata as the device does.
+
+        The reference writes `compute_linearized_mesh_coord`, which is the device's row-major mesh index
+        only when SP runs along mesh rows. The dispatch op writes, and the combine op reads, the row-major
+        index, so at sp_axis=1 (chip on the column, group on the row) it is group * dispatch_group_size +
+        chip. Unfilled slots (negative) are left as they are. Returns `metadata` itself at sp_axis=0.
+        """
+        if sp_axis == 0:
+            return metadata
+        src = metadata[..., 0]
+        chip, group = src // num_dispatch_groups, src % num_dispatch_groups
+        out = metadata.clone()
+        out[..., 0] = torch.where(src >= 0, group * dispatch_group_size + chip, src)
+        return out
+
+    @staticmethod
     def gather_weights_for_mesh_distribution(
         torch_weights: list[dict],
         local_expert_idx: int,
