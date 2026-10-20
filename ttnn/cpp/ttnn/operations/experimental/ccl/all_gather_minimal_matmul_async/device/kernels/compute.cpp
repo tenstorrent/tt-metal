@@ -15,6 +15,31 @@
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/dataflow/circular_buffer.h"
 
+// ---------------------------------------------------------------------------------------------
+// Per-stage cycle accounting for the device profiler. Compiled only into profiler builds
+// (PROFILE_KERNEL); each AGMM_TIME costs two wall-clock reads, and the totals are emitted once at
+// kernel end as timestamped data (zone names agmm-*). Zero cost otherwise.
+#if defined(PROFILE_KERNEL)
+#define AGMM_PROF 1
+FORCE_INLINE uint32_t agmm_clock() {
+    return *reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
+}
+struct AgmmTimer {
+    uint64_t& acc;
+    uint32_t start;
+    FORCE_INLINE AgmmTimer(uint64_t& a) : acc(a), start(agmm_clock()) {}
+    FORCE_INLINE ~AgmmTimer() { acc += static_cast<uint32_t>(agmm_clock() - start); }
+};
+#define AGMM_CAT2(a, b) a##b
+#define AGMM_CAT(a, b) AGMM_CAT2(a, b)
+#define AGMM_TIME(acc) AgmmTimer AGMM_CAT(agmm_timer_, __LINE__)(acc)
+#define AGMM_REPORT(name, acc) DeviceTimestampedData(name, acc)
+#else
+#define AGMM_TIME(acc)
+#define AGMM_REPORT(name, acc)
+#endif
+// ---------------------------------------------------------------------------------------------
+
 #ifdef FUSE_SWIGLU
 // Fused SwiGLU output stage. The matmul produced an interleaved gate/up block in `in_cb`:
 // within each M row, column tile 2p is the gate projection and 2p+1 the up projection (the
@@ -451,6 +476,7 @@ void kernel_main() {
     constexpr uint32_t N_num_subblocks = N_block_tiles / subblock_w;
 
     bool reuse_in0_block = false;
+    uint64_t agmm_t_wait = 0, agmm_t_mm = 0, agmm_t_epi = 0;
 
     uint32_t current_M_block_tiles = M_block_tiles;
     uint32_t current_N_block_tiles = N_block_tiles;
@@ -481,19 +507,24 @@ void kernel_main() {
             // Accumulation buffer
             intermediate_cb.reserve_back(out_block_num_tiles);
             for (uint32_t k_block = 0; k_block < K_num_blocks; k_block++) {
-                in0_cb.wait_front(in0_block_num_tiles);
-                in1_cb.wait_front(in1_block_num_tiles);
-
-                matmul_blocks(
-                    in0_cb,
-                    in1_cb,
-                    intermediate_cb,
-                    current_M_block_tiles,
-                    current_N_block_tiles,
-                    N_block_tiles,
-                    K_block_tiles,
-                    current_subblock_h,
-                    current_subblock_w);
+                {
+                    AGMM_TIME(agmm_t_wait);
+                    in0_cb.wait_front(in0_block_num_tiles);
+                    in1_cb.wait_front(in1_block_num_tiles);
+                }
+                {
+                    AGMM_TIME(agmm_t_mm);
+                    matmul_blocks(
+                        in0_cb,
+                        in1_cb,
+                        intermediate_cb,
+                        current_M_block_tiles,
+                        current_N_block_tiles,
+                        N_block_tiles,
+                        K_block_tiles,
+                        current_subblock_h,
+                        current_subblock_w);
+                }
 
                 if (k_block == K_num_blocks - 1) {
                     /**
@@ -522,6 +553,8 @@ void kernel_main() {
 
             intermediate_cb.push_back(out_block_num_tiles);
             PACK((llk_pack_reconfig_l1_acc(0)));
+            {
+            AGMM_TIME(agmm_t_epi);
 
 #ifdef FUSE_SWIGLU
             // SwiGLU collapses the interleaved gate/up block to half its N width.
@@ -562,6 +595,10 @@ void kernel_main() {
                 N_block_tiles,
                 broadcast_ternary_b);
 #endif  // FUSE_TERNARY
+            }  // epilogue timer
         }
     }
+    AGMM_REPORT("agmm-c-wait", agmm_t_wait);
+    AGMM_REPORT("agmm-c-mm", agmm_t_mm);
+    AGMM_REPORT("agmm-c-epi", agmm_t_epi);
 }

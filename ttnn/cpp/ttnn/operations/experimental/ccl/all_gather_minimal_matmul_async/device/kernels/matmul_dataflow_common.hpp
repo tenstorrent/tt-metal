@@ -12,6 +12,31 @@
 #include "api/dataflow/noc_semaphore.h"
 #include "api/core_local_mem.h"
 
+// ---------------------------------------------------------------------------------------------
+// Per-stage cycle accounting for the device profiler. Compiled only into profiler builds
+// (PROFILE_KERNEL); each AGMM_TIME costs two wall-clock reads, and the totals are emitted once at
+// kernel end as timestamped data (zone names agmm-*). Zero cost otherwise.
+#if defined(PROFILE_KERNEL)
+#define AGMM_PROF 1
+FORCE_INLINE uint32_t agmm_clock() {
+    return *reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
+}
+struct AgmmTimer {
+    uint64_t& acc;
+    uint32_t start;
+    FORCE_INLINE AgmmTimer(uint64_t& a) : acc(a), start(agmm_clock()) {}
+    FORCE_INLINE ~AgmmTimer() { acc += static_cast<uint32_t>(agmm_clock() - start); }
+};
+#define AGMM_CAT2(a, b) a##b
+#define AGMM_CAT(a, b) AGMM_CAT2(a, b)
+#define AGMM_TIME(acc) AgmmTimer AGMM_CAT(agmm_timer_, __LINE__)(acc)
+#define AGMM_REPORT(name, acc) DeviceTimestampedData(name, acc)
+#else
+#define AGMM_TIME(acc)
+#define AGMM_REPORT(name, acc)
+#endif
+// ---------------------------------------------------------------------------------------------
+
 namespace detail {
 template <typename... Args, uint32_t... Indexes>
 auto make_tensor_accessor_tuple_impl(
