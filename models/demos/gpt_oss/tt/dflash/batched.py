@@ -857,6 +857,10 @@ class BatchedVerify:
         # full-attention layers: block attention (each user's K / V read once for its 8 rows), 8 users per program on 3
         # history slices each (96 cores): 24 layers' attention at 16K context 47.9 -> 18.1 ms (16 x 1: 20.3, 4 x 6:
         # 20.6), at 300 11.3 -> 10.9 ms
+        # the heads' sink tiles in L1 (every slice-0 core of a program reads them: one DRAM page each)
+        self.sinks = [
+            ttnn.to_memory_config(l.self_attn.weights.decode_sinks, ttnn.L1_MEMORY_CONFIG) for l in model.layers
+        ]
         # (16 x 1 after the one-kernel-set change: round -0.4 ms at ISL 256 .. 4K, +2.4 ms at 16K)
         self.block_attn = _UserBlockAttention(
             self.mesh, users, block, self.local_heads, self.local_kv_heads, hd, kv_cache[1][0].shape[2], 8, 3
@@ -1069,7 +1073,7 @@ class BatchedVerify:
         v.deallocate(True)
         if block_attn or self.swin_attn is not None:
             ba = self.block_attn if block_attn else self.swin_attn
-            out = ba(q2, k_cache, v_cache, pos[self.block], self.page_table, w.decode_sinks, cfg.scaling, heads_io=True)
+            out = ba(q2, k_cache, v_cache, pos[self.block], self.page_table, self.sinks[li], cfg.scaling, heads_io=True)
             q2.deallocate(True)
             return out
         q_rows = ttnn.permute(q2, (0, 2, 1, 3), memory_config=ttnn.DRAM_MEMORY_CONFIG)
