@@ -113,7 +113,7 @@ inline void calculate_lgamma_stirling_fp32(
         sfpi::vFloat in = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
         sfpi::vFloat log_z = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
 
-        // 1. Reflection: z = 1 - x for x < 0.5, capped at 2^24 (every x <= -2^24 is a pole; avoids inf - inf)
+        // 1. Reflection for x < 0.5
         sfpi::vFloat z = sfpi::max(in, sfpi::min(1.0f - in, 16777216.0f));
 
         sfpi::vFloat d1 = z - 1.0f;
