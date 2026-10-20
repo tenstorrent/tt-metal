@@ -9,7 +9,6 @@
 #include <bit>
 #include <cmath>
 #include <cstdlib>
-#include <iterator>
 #include <set>
 
 #include <tt-metalium/allocator.hpp>
@@ -88,50 +87,6 @@ bool recipe_fused_cb(const CBDescriptor& cb) {
 }
 
 uint32_t recipe_subblock_width(uint32_t tiles) { return tiles % 4 == 0 ? 4 : tiles % 2 == 0 ? 2 : 1; }
-
-std::optional<KernelBuildOptLevel> recipe_opt_level(KernelBuildOptLevel level) {
-    // The JIT build enables the watcher from RunTimeOptions (tt_metal internal), which takes it from this variable.
-    const char* watcher = std::getenv("TT_METAL_WATCHER");
-    if (watcher != nullptr && watcher[0] != '\0') {
-        return std::nullopt;
-    }
-    return level;
-}
-
-void set_named_arg(NamedCompileTimeArgs& args, std::string_view name, uint32_t value) {
-    const auto it = std::ranges::find_if(args, [&](const auto& arg) { return arg.first == name; });
-    if (it != args.end()) {
-        it->second = value;
-    } else {
-        args.emplace_back(std::string(name), value);
-    }
-}
-
-uint32_t named_arg(const NamedCompileTimeArgs& args, std::string_view name) {
-    const auto it = std::ranges::find_if(args, [&](const auto& arg) { return arg.first == name; });
-    TT_FATAL(it != args.end(), "SDPA recipe kernel has no named compile-time argument {}", name);
-    return it->second;
-}
-
-NamedCompileTimeArgs recipe_named_args(const NamedCompileTimeArgs& args) {
-    NamedCompileTimeArgs recipe_args;
-    std::ranges::copy_if(
-        args, std::back_inserter(recipe_args), [](const auto& arg) { return arg.first.starts_with("recipe_"); });
-    return recipe_args;
-}
-
-uint64_t recipe_drop_fused(ProgramDescriptor::CBDescriptors& cbs, NamedCompileTimeArgs& args, uint32_t q_tiles) {
-    if (q_tiles % 2 != 0 && named_arg(args, "recipe_lofi") == 0) {
-        return 0;
-    }
-    uint64_t freed = 0;
-    for (const auto& cb : cbs) {
-        freed += recipe_fused_cb(cb) ? cb.total_size : 0;
-    }
-    cbs.erase(std::remove_if(cbs.begin(), cbs.end(), recipe_fused_cb), cbs.end());
-    set_named_arg(args, "recipe_fused", 0);
-    return freed;
-}
 
 namespace {
 // Legacy SDPA's granularity rule: the largest value <= limit that divides the tile count.
@@ -233,34 +188,32 @@ ProgramDescriptor recipe_compute_program(
              {"scale", std::bit_cast<uint32_t>(1.0f / std::sqrt(static_cast<float>(d_tiles * 32)))},
              {"q_tiles", q_tiles},
              {"k_tiles", k_tiles},
-             {"d_tiles", d_tiles},
-             // The recipe selection (recipe_config.hpp). Callers set the feature arguments they use.
-             {"recipe_fp32", fp32 ? 1u : 0u},
-             {"recipe_accurate", policy.selection.recipe == Recipe::D ? 1u : 0u},
-             {"recipe_lofi", policy.selection.recipe == Recipe::E ? 1u : 0u},
-             {"recipe_fused", fused ? 1u : 0u},
-             {"recipe_mask", 0},
-             {"recipe_ring", 0},
-             {"recipe_ring_stream_state", 0},
-             {"recipe_k_primary_rows", 0},
-             {"recipe_k_joint_rows", 0},
-             {"recipe_qk_w", recipe_subblock_width(k_tiles)},
-             {"recipe_pv_w", recipe_subblock_width(d_tiles)}},
+             {"d_tiles", d_tiles}},
         .defines =
             {{"EXP_APPROX_MODE", "1"},
              {"STATS_GRANULARITY", std::to_string(recipe_granularity(q_tiles, fp32 ? 4 : 8))},
              {"SUB_EXP_GRANULARITY", std::to_string(recipe_granularity(k_tiles, fp32 ? 4 : 8))},
              {"MUL_BCAST_GRANULARITY", std::to_string(recipe_granularity(q_tiles * k_tiles, fp32 ? 4 : 8))},
              {"DHT_GRANULARITY", std::to_string(recipe_granularity(d_tiles, 8))},
-             {"REDUCE_GRANULARITY", std::to_string(recipe_granularity(q_tiles, fp32 ? 2 : 4))}},
+             {"REDUCE_GRANULARITY", std::to_string(recipe_granularity(q_tiles, fp32 ? 2 : 4))},
+             {"SDPA_RECIPE_QK_W", std::to_string(recipe_subblock_width(k_tiles))},
+             {"SDPA_RECIPE_PV_W", std::to_string(recipe_subblock_width(d_tiles))}},
         .config = compute_config};
     // The recipes record their exp programs in the replay buffer once and replay them per tile from other
     // functions; the SFPI compiler's replay optimization would overwrite them (tenstorrent/tt-metal#58433).
     // Internal-only, temporary workaround (tt_metal/api/internal): drop this define once the compiler fix lands.
     compute.defines.emplace_back(tt::tt_metal::internal::DISABLE_SFPU_REPLAY_OPTIMIZATION_DEFINE, "1");
+    if (fp32) {
+        compute.defines.emplace_back("SDPA_RECIPE_FP32", "1");
+    }
     if (policy.selection.recipe == Recipe::D) {
-        // The dense ACCURATE kernel builds at -O2 (the ring factories choose their own level).
-        compute.opt_level = recipe_opt_level(KernelBuildOptLevel::O2);
+        compute.defines.emplace_back("SDPA_RECIPE_ACCURATE", "1");
+    }
+    if (policy.selection.recipe == Recipe::E) {
+        compute.defines.emplace_back("SDPA_RECIPE_LOFI", "1");
+    }
+    if (fused) {
+        compute.defines.emplace_back("SDPA_RECIPE_FUSED", "1");
     }
     program.kernels.push_back(std::move(compute));
     return program;
@@ -305,7 +258,7 @@ static void check_recipe_l1_fit(ProgramDescriptor& program, IDevice& device, uin
     const uint64_t available =
         device.l1_size_per_core() - device.allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
     if (bytes > available) {
-        bytes -= recipe_drop_fused(program.cbs, program.kernels.front().named_compile_time_args, q_chunk / 32);
+        bytes -= recipe_drop_fused(program.cbs, program.kernels.front().defines, q_chunk / 32);
     }
     TT_FATAL(
         bytes <= available,
@@ -484,9 +437,9 @@ static std::vector<Tensor> run_recipe_segments(
     const uint32_t compute_q_tiles = recipe_compute_q_tiles(policy, q_tiles, k_tiles, attn_mask.has_value());
     auto program = recipe_compute_program(policy, grid, k_chunks, compute_q_tiles, k_tiles, d_tiles);
     if (attn_mask) {
-        // The fused chunks run without an attn_mask (recipe_config.hpp: fused_active), so a masked build drops their
-        // CBs and clears recipe_fused.
-        recipe_drop_fused(program.cbs, program.kernels.front().named_compile_time_args, compute_q_tiles);
+        // The fused chunks run without an attn_mask (recipe_streaming.hpp: SDPA_RECIPE_FUSED_ACTIVE), so a masked
+        // build drops their CBs and SDPA_RECIPE_FUSED.
+        recipe_drop_fused(program.cbs, program.kernels.front().defines, compute_q_tiles);
     }
     const uint32_t mask_group_rows = recipe_mask_group_rows(policy);
     if (attn_mask) {
@@ -504,7 +457,8 @@ static std::vector<Tensor> run_recipe_segments(
             .total_size = groups * group_bytes,
             .core_ranges = grid,
             .format_descriptors = {{.buffer_index = kRecipeMaskCb, .data_format = mask_format, .page_size = mask_page}}});
-        set_named_arg(program.kernels.front().named_compile_time_args, "recipe_mask", 1);
+        auto& defines = program.kernels.front().defines;
+        defines.emplace_back("SDPA_RECIPE_MASK", "1");
         if (mask_format == tt::DataFormat::Float32) {
             // Unpack the FP32 mask straight to DST so the L1 add sees the exact FP32 values.
             auto& config = std::get<ComputeConfigDescriptor>(program.kernels.front().config);
@@ -513,9 +467,9 @@ static std::vector<Tensor> run_recipe_segments(
     }
     check_recipe_l1_fit(program, *q.device(), q_chunk, k_chunk);
     if (k_length % k_chunk != 0 || k.logical_shape()[2] % 32 != 0 || joint_k_rows % 32 != 0) {
-        auto& compute_args = program.kernels.front().named_compile_time_args;
-        set_named_arg(compute_args, "recipe_k_primary_rows", k.logical_shape()[2]);
-        set_named_arg(compute_args, "recipe_k_joint_rows", joint_k_rows);
+        program.kernels.front().defines.emplace_back(
+            "SDPA_RECIPE_K_PRIMARY_ROWS", std::to_string(k.logical_shape()[2]));
+        program.kernels.front().defines.emplace_back("SDPA_RECIPE_K_JOINT_ROWS", std::to_string(joint_k_rows));
     }
     for (uint32_t i = 0; i < 3; ++i) {
         program.semaphores.push_back({.id = i, .core_ranges = grid, .initial_value = i == 2 ? 1u : 0u});
@@ -526,42 +480,41 @@ static std::vector<Tensor> run_recipe_segments(
         .core_ranges = grid,
         .compile_time_args =
             {q_tiles, k_chunks, jobs_per_head, q.logical_shape()[2], joint_q_rows, k.logical_shape()[2], joint_k_rows},
-        .named_compile_time_args =
-            {{"joint", segments.size() == 2 ? 1u : 0u},
-             {"k_chunk_tiles", k_tiles},
-             {"d_tiles", d_tiles},
-             {"q_pad_tiles", compute_q_tiles - q_tiles},
-             {"q_per_kv_head", qs[1] / k.logical_shape()[1]},
-             {"mask", 0},
-             {"mask_cb", kRecipeMaskCb},
-             {"mask_group_rows", mask_group_rows},
-             {"mask_q_tiles", 0},
-             {"mask_k_tiles", 0},
-             {"mask_heads", qs[1]},
-             {"mask_bcast_batch", 0},
-             {"mask_bcast_heads", 0}},
         .config = ReaderConfigDescriptor{}};
+    if (segments.size() == 2) {
+        reader.defines.emplace_back("SDPA_JOINT", "1");
+    }
+    reader.defines.emplace_back("SDPA_K_CHUNK_TILES", std::to_string(k_tiles));
+    reader.defines.emplace_back("SDPA_RECIPE_Q_PAD_TILES", std::to_string(compute_q_tiles - q_tiles));
+    reader.defines.emplace_back("SDPA_RECIPE_DHT", std::to_string(d_tiles));
+    if (qs[1] != k.logical_shape()[1]) {
+        reader.defines.emplace_back("SDPA_RECIPE_Q_PER_KV_HEAD", std::to_string(qs[1] / k.logical_shape()[1]));
+    }
     for (const auto& tensor : io) {
         TensorAccessorArgs(tensor.buffer()).append_to(reader.compile_time_args);
     }
     if (attn_mask) {
         const auto& ms = attn_mask->logical_shape();
-        set_named_arg(reader.named_compile_time_args, "mask", 1);
-        set_named_arg(reader.named_compile_time_args, "mask_q_tiles", (ms[2] + 31) / 32);
-        set_named_arg(reader.named_compile_time_args, "mask_k_tiles", (ms[3] + 31) / 32);
-        set_named_arg(reader.named_compile_time_args, "mask_bcast_batch", ms[0] == 1 ? 1 : 0);
-        set_named_arg(reader.named_compile_time_args, "mask_bcast_heads", ms[1] == 1 ? 1 : 0);
+        reader.defines.emplace_back("SDPA_RECIPE_MASK", "1");
+        reader.defines.emplace_back("SDPA_RECIPE_MASK_CB", std::to_string(kRecipeMaskCb));
+        reader.defines.emplace_back("SDPA_RECIPE_MASK_GROUP_ROWS", std::to_string(mask_group_rows));
+        reader.defines.emplace_back("SDPA_RECIPE_MASK_Q_TILES", std::to_string((ms[2] + 31) / 32));
+        reader.defines.emplace_back("SDPA_RECIPE_MASK_K_TILES", std::to_string((ms[3] + 31) / 32));
+        reader.defines.emplace_back("SDPA_RECIPE_MASK_HEADS", std::to_string(qs[1]));
+        reader.defines.emplace_back("SDPA_RECIPE_MASK_BCAST_BATCH", ms[0] == 1 ? "1" : "0");
+        reader.defines.emplace_back("SDPA_RECIPE_MASK_BCAST_HEADS", ms[1] == 1 ? "1" : "0");
         TensorAccessorArgs(attn_mask->buffer()).append_to(reader.compile_time_args);
     }
     KernelDescriptor writer{
         .kernel_source = prefix + "dataflow/writer_recipe.cpp",
         .core_ranges = grid,
         .compile_time_args = {q_tiles, q.logical_shape()[2], joint_q_rows},
-        .named_compile_time_args =
-            {{"joint", segments.size() == 2 ? 1u : 0u},
-             {"d_tiles", d_tiles},
-             {"q_pad_tiles", compute_q_tiles - q_tiles}},
         .config = WriterConfigDescriptor{}};
+    if (segments.size() == 2) {
+        writer.defines.emplace_back("SDPA_JOINT", "1");
+    }
+    writer.defines.emplace_back("SDPA_RECIPE_DHT", std::to_string(d_tiles));
+    writer.defines.emplace_back("SDPA_RECIPE_Q_PAD_TILES", std::to_string(compute_q_tiles - q_tiles));
     for (const auto& tensor : outputs) {
         TensorAccessorArgs(tensor.buffer()).append_to(writer.compile_time_args);
     }

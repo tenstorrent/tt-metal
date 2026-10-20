@@ -7,7 +7,7 @@ namespace sdpa::streaming {
 
 struct StateTransfer {
     // Save / Restore move a whole Q block's state while compute waits. The streamed actions (ring kernels with
-    // fused chunks, recipe_ring_stream_state) overlap it with compute: SaveRows moves the O rows [Row0, Row0 + Rows)
+    // fused chunks, SDPA_RING_STREAM_STATE) overlap it with compute: SaveRows moves the O rows [Row0, Row0 + Rows)
     // as the last K chunk finishes them, SaveTail the remaining O rows from Row0 plus maxima, sums and header;
     // RestoreStream acks once for header, maxima and sums, then once per O row as it lands. A SaveTail with
     // Rows = 1 acks once its bytes have left L1 (the next block reuses the banks without a restore).
