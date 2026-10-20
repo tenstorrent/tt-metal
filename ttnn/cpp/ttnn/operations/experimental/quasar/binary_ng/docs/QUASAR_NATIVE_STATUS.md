@@ -29,6 +29,11 @@ less accessible, so it is spent deliberately and rarely. **Never mix numbers fro
   of each batch comes out right. At the old rule the whole no-broadcast file failed 22 FPU cases at 4,4,2. The
   SFPU kernel keeps 4 tiles in a 16-bit DST and 2 in a 32-bit DST, exact at every stride.
   `TTNN_QSR_TILES_PER_CYCLE` still sets any batch.
+- **TODO, blocked on #61774**: `llk_unpack_AB` steps one ring entry per tile of a batch. A two-line fix that
+  mirrors `llk_unpack_A` made every FPU op exact at a batch of 8 on craq-sim (4,4,2: 160 of 288 and 1792 of 2080
+  tiles wrong before; 1,4,1: 224 of 256), with the module and the suites otherwise unchanged. When it lands,
+  `native_compute_batch_exact` returns true for the FPU kernel, and the rule batches it at 8 at 4,4,2 and 1,4,1
+  (design §8, F19).
 - **Verified** on craq-sim `b9d8e2f4`, with nothing set: the native module 171 passed, 1 skipped, 2 strict
   expected failures (the two batching-defect tests, which now set the batch of 8); every Quasar suite file in one
   process each, all passing except the activation-format file's 10 BFP8 and BFP4 cases, which fail the DFB
