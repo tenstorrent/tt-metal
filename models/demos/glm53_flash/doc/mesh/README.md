@@ -153,6 +153,18 @@ Log `test_sp_prefill_lb2.log` (first-call walls include compile: 15.1 / 10.8 / 0
 TTFT, resident model layers 0-5 on the rows-2-3 (2,4) block, prompt 128 tokens (`test_mesh_model_ttft_lb2_l0-5.log`):
 warm 300 ms (cold 38.7 s = first-call compiles), chain 0.999479 vs HF rows, first greedy token == host head (1526).
 
+## Optimization 2: routed-expert kernels (2026-10-20, `expert_kernel_sweep.md`)
+
+Single-chip sweep of `ttnn.sparse_matmul` at the 8x4 per-chip shapes (`tests/test_expert_kernel_perf.py`, raw
+tables in `expert_kernel_sweep_tables.md`): the N = 512 gate|up call is latency-bound by its 4-tile K blocks on
+16 cores (1092 -> 369 us per 32 active experts with 64-tile blocks, `sparse_matmul_config`), the down call wants
+32 cores x 4 tiles (171 -> 144 us), and no sparse configuration handles 256 gathered tokens (one call 6.6 ms,
+8 blocks ~9.5 ms). The dense layout (`TtRoutedExperts(dense=True)` / `GLM53_DENSE_EXPERTS=1`: one
+[4096, 72x512] and one [72x256, 4096] matmul over all local experts, expert sum = K reduction, no slab / fill /
+reduce) runs the whole expert block in 1.48 ms at 256 real tokens in one pass against 9.7 ms for today's 8 sparse
+blocks (`tests/test_moe_block.py`, real layer-4 weights, PCC 0.99996 vs the current block), the recommended decode
+path at >= 8 users/row; at <= 4 users/row the sparse path with the new config (1358 -> 705 us per block) stays.
+
 ## Optimization 1: router tie-break (2026-10-20)
 
 The exact fp32 top-8 router's first-match tie-break used `ttnn.cumsum` (single-core, 330 us x 8 rounds =

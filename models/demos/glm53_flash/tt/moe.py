@@ -37,6 +37,7 @@ expert tensors (``TtRoutedExperts.cache_complete``), so the caller can skip dequ
 from __future__ import annotations
 
 import math
+import os
 from pathlib import Path
 
 import torch
@@ -60,41 +61,116 @@ def _compute(device, fidelity=ttnn.MathFidelity.HiFi2, packer_l1_acc=True):
     )
 
 
-def pick_sparse_grid(device_grid, n: int) -> tuple[int, int]:
+def pick_sparse_grid(device_grid, n: int, max_cores: int | None = None) -> tuple[int, int]:
     """Largest rectangular core grid inside ``device_grid`` whose core count divides the output
-    tile count Nt, so every core in the mcast receiver rectangle has work (the sparse matmul
-    factory requires num_cores_with_work == receiver cores)."""
+    tile count Nt (and is at most ``max_cores``), so every core in the mcast receiver rectangle has
+    work (the sparse matmul factory requires num_cores_with_work == receiver cores)."""
     Nt = math.ceil(n / TILE)
     best = (1, 1)
-    for x in range(1, device_grid[0] + 1):
-        for y in range(1, device_grid[1] + 1):
-            if Nt % (x * y) == 0 and x * y > best[0] * best[1]:
+    for y in range(1, device_grid[1] + 1):
+        for x in range(1, device_grid[0] + 1):
+            cores = x * y
+            if Nt % cores or (max_cores is not None and cores > max_cores):
+                continue
+            # most cores; among equal counts the squarest rectangle, ties to the wider one (the measured
+            # 16-core grids at N=512: (4,4) 375 us, (8,2) 377 us, (2,8) 463 us)
+            if cores > best[0] * best[1] or (cores == best[0] * best[1] and abs(x - y) < abs(best[0] - best[1])):
                 best = (x, y)
     return best
 
 
-def sparse_matmul_config(device_grid, m: int, n: int, k: int, in0_block_w: int = 4, out_subblock_w: int = 1):
+# in1 tiles per core per K block the sparse matmul streams between barriers (tests/test_expert_kernel_perf.py,
+# doc/mesh/expert_kernel_sweep.md): the 1D mcast_in0 kernel pays one memory latency + one semaphore round trip per
+# K block, so narrow outputs with few cores want big blocks (N=512 on 16 cores: 4 -> 64 tiles = 1092 -> 369 us
+# per 32 active experts); with >= 32 cores the per-core streams are the limit and 16-tile blocks pipeline best.
+SPARSE_BLOCK_TILES_FEW_CORES = 64
+SPARSE_BLOCK_TILES = 16
+SPARSE_L1_BUDGET = 1_000_000  # bytes of the kernel's dataflow buffers per core (1.46 MB L1)
+
+
+def dense_matmul_config(device_grid, m: int, n: int, k: int):
+    """1D mcast_in0 config for the dense expert matmuls (every core an output-width slice; the sweep of
+    tests/test_expert_kernel_perf.py, stage dense2, on the 8x4 per-chip shapes): W13 [M, 4096] x
+    [4096, 72 x 512] runs best on 96 cores with 4-tile K blocks (421 us = 74 % of DRAM peak at M = 32,
+    631 us at M = 256), W2 [M, 72 x 256] x [72 x 256, 4096] on 32 cores x 4 tiles with 8-tile K blocks
+    (240 us = 65 %) up to M = 128 and on 64 cores with 16-tile blocks at M = 256 (335 us). Output blocks are
+    capped at 16 tiles per core (fp32 partials in L1); returns None (ttnn's choice) when Nt < 32."""
+    Nt, Kt, Mt = math.ceil(n / TILE), math.ceil(k / TILE), math.ceil(m / TILE)
+    if Nt < 32:
+        return None
+    if Nt >= 256:  # the gate|up width (many tiles per core)
+        cores = (min(12, device_grid[0]), min(8, device_grid[1]))
+        ibw = 4 if Mt <= 4 else 8
+    else:  # the hidden width (Nt = 128)
+        cores = (8, 4) if Mt <= 4 else (8, 8)
+        ibw = 8 if Mt <= 4 else 16
+    num_cores = cores[0] * cores[1]
+    per_core_N = math.ceil(Nt / num_cores)
+    in0_block_w = max(d for d in range(1, ibw + 1) if Kt % d == 0)
+    out_block_w = max(d for d in range(1, min(per_core_N, 16) + 1) if per_core_N % d == 0)
+    out_subblock_w = max(w for w in (1, 2, 4) if out_block_w % w == 0)
+    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=cores,
+        in0_block_w=in0_block_w,
+        out_subblock_h=1,
+        out_subblock_w=out_subblock_w,
+        out_block_h=Mt,
+        out_block_w=out_block_w,
+        per_core_M=Mt,
+        per_core_N=per_core_N,
+        fuse_batch=True,
+        fused_activation=None,
+        mcast_in0=True,
+    )
+
+
+def sparse_matmul_config(
+    device_grid, m: int, n: int, k: int, in0_block_w: int | None = None, out_subblock_w: int | None = None
+):
     """MatmulMultiCoreReuseMultiCast1DProgramConfig for sparse_matmul (mcast_in0=True), the
-    gpt_oss builder's rules: per_core_N = ceil(Nt / cores); in0_block_w must divide Kt;
-    out_subblock_w must divide out_block_w (= per_core_N); subblock area <= 8."""
-    core_x, core_y = pick_sparse_grid(device_grid, n)
-    num_cores = core_x * core_y
+    gpt_oss builder's rules plus the measured block sizes: per_core_N = ceil(Nt / cores); in0_block_w
+    must divide Kt; out_subblock_w must divide out_block_w (= per_core_N); subblock area <= 4 (fp32
+    accumulation, half-sync dest). Wide outputs (Nt >= 128) take 4 tiles per core (32 cores at N=4096:
+    66 % of DRAM peak vs 57 % on 64 cores), narrow ones every core that divides Nt.
+    ``in0_block_w=None`` picks the largest divisor of Kt whose per-core in1 block stays within
+    ``SPARSE_BLOCK_TILES(_FEW_CORES)`` tiles (or the whole K when that is at most 64 tiles) and whose
+    dataflow buffers (double-buffered in0 and in1, fp32 partials, bf16 output) fit the L1 budget."""
     Nt = math.ceil(n / TILE)
     Kt = math.ceil(k / TILE)
+    Mt = math.ceil(m / TILE)
+    if (
+        os.environ.get("GLM53_SPARSE_CONFIG") == "legacy"
+    ):  # the pre-sweep rule (A/B switch): most cores, 4-tile K blocks
+        core_x, core_y = pick_sparse_grid(device_grid, n)
+        in0_block_w, out_subblock_w = 4, 1
+    else:
+        core_x, core_y = pick_sparse_grid(device_grid, n, max_cores=Nt // 4 if Nt >= 128 else None)
+    num_cores = core_x * core_y
     per_core_N = (Nt + num_cores - 1) // num_cores
-    if Kt % in0_block_w != 0:
-        divisors = [d for d in range(2, in0_block_w + 1) if Kt % d == 0]
-        in0_block_w = max(divisors) if divisors else Kt
+
+    def l1_bytes(ibw: int) -> int:  # bf16 in0 (2048 B/tile), bfp8 in1 (1088 B), fp32 partials + bf16 out
+        return 2 * Mt * ibw * 2048 + 2 * ibw * per_core_N * 1088 + Mt * per_core_N * (4096 + 2048)
+
+    divisors = [d for d in range(1, Kt + 1) if Kt % d == 0]
+    if in0_block_w is None:
+        target = SPARSE_BLOCK_TILES_FEW_CORES if num_cores <= 16 else SPARSE_BLOCK_TILES
+        fits = [d for d in divisors if l1_bytes(d) <= SPARSE_L1_BUDGET]
+        ok = [d for d in fits if d * per_core_N <= target or (d == Kt and Kt * per_core_N <= 64)]
+        in0_block_w = max(ok or fits[:1] or [1])
+    elif Kt % in0_block_w != 0:
+        in0_block_w = max([d for d in divisors if 2 <= d <= in0_block_w] or [Kt])
     out_block_w = per_core_N
-    out_subblock_w = max(w for w in range(1, min(out_subblock_w, 8) + 1) if out_block_w % w == 0)
+    if out_subblock_w is None:
+        out_subblock_w = 4
+    out_subblock_w = max(w for w in range(1, min(out_subblock_w, 4) + 1) if out_block_w % w == 0)
     return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=(core_x, core_y),
         in0_block_w=in0_block_w,
         out_subblock_h=1,
         out_subblock_w=out_subblock_w,
-        out_block_h=math.ceil(m / TILE),
+        out_block_h=Mt,
         out_block_w=out_block_w,
-        per_core_M=math.ceil(m / TILE),
+        per_core_M=Mt,
         per_core_N=per_core_N,
         fuse_batch=True,
         fused_activation=None,
@@ -126,8 +202,6 @@ class TtRouter(LightweightModule):
             (self.E - torch.arange(self.E, dtype=torch.float32)).reshape(1, 1, 1, self.E), ttnn.float32
         )
         self.fp32 = _compute(device, ttnn.MathFidelity.HiFi4, packer_l1_acc=False)
-        import os
-
         self.tie_break = os.environ.get("GLM53_ROUTER_TIE_BREAK", "rank")  # rank (default) | cumsum (A/B)
 
     def forward(self, x: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
@@ -184,9 +258,11 @@ class TtRouter(LightweightModule):
 
 class TtRoutedExperts(LightweightModule):
     @staticmethod
-    def cache_files(cache_dir: Path | str, mesh: GLMMesh, expert_dtype, expert_down_dtype) -> dict[str, Path]:
-        """Tensorbin paths of the routed-expert device tensors for this placement / format."""
-        tag = f"mesh{mesh.rows}x{mesh.cols}"
+    def cache_files(
+        cache_dir: Path | str, mesh: GLMMesh, expert_dtype, expert_down_dtype, dense: bool = False
+    ) -> dict[str, Path]:
+        """Tensorbin paths of the routed-expert device tensors for this placement / format / layout."""
+        tag = f"mesh{mesh.rows}x{mesh.cols}" + ("_dense" if dense else "")
         cache_dir = Path(cache_dir)
         return {
             "w13": cache_dir / f"experts_w13_{expert_dtype.name}_{tag}.tensorbin",
@@ -194,11 +270,15 @@ class TtRoutedExperts(LightweightModule):
         }
 
     @classmethod
-    def cache_complete(cls, cache_dir: Path | str | None, mesh: GLMMesh, expert_dtype, expert_down_dtype) -> bool:
+    def cache_complete(
+        cls, cache_dir: Path | str | None, mesh: GLMMesh, expert_dtype, expert_down_dtype, dense: bool = False
+    ) -> bool:
         """True when both expert tensorbins exist (the constructor then needs no expert host tensors)."""
         if cache_dir is None:
             return False
-        return all(f.is_file() for f in cls.cache_files(cache_dir, mesh, expert_dtype, expert_down_dtype).values())
+        return all(
+            f.is_file() for f in cls.cache_files(cache_dir, mesh, expert_dtype, expert_down_dtype, dense).values()
+        )
 
     def __init__(
         self,
@@ -212,6 +292,7 @@ class TtRoutedExperts(LightweightModule):
         activation_dtype=ttnn.bfloat16,
         mesh: GLMMesh | None = None,
         weight_cache_path: Path | str | None = None,
+        dense: bool = False,
     ):
         """Hybrid placement (design 5.4): the experts are split over the mesh columns (chip column
         ``c`` holds experts ``[c*E/cols, (c+1)*E/cols)``) and every expert's intermediate over the mesh
@@ -219,7 +300,14 @@ class TtRoutedExperts(LightweightModule):
         tokens, runs the local expert slices and reduce-scatters the partials back to the token's row;
         the result is still a TP partial over the columns (the caller all-reduces once).
         ``weight_cache_path``: per-layer tensorbin directory (``cache_files``); ``gate_up`` / ``down``
-        may be ``None`` when ``cache_complete`` (the host tensors are then never needed)."""
+        may be ``None`` when ``cache_complete`` (the host tensors are then never needed).
+        ``dense``: the dense expert layout (``_block_dense``): the chip's expert slices side by side in
+        ONE W13 ``[1, 1, H, 2 * E_local * I_local]`` (all gates, then all ups) and ONE W2
+        ``[1, 1, E_local * I_local, H]``, run as ordinary matmuls over all gathered tokens at once; every
+        local expert is read exactly once per step whatever the token count, the expert sum is the W2
+        K reduction (no per-expert output slab, no zero-fill, no reduce), at the price of reading the
+        inactive experts too. Right when most local experts are active (>= ~32 gathered tokens on
+        the 8x4: tests/test_expert_kernel_perf.py, doc/mesh/expert_kernel_sweep.md)."""
         self.device = device
         self.mesh = mesh if mesh is not None else single_chip(device)
         self.cfg = cfg
@@ -228,16 +316,17 @@ class TtRoutedExperts(LightweightModule):
         self.activation_dtype = activation_dtype
         self.expert_dtype = expert_dtype
         self.expert_down_dtype = expert_down_dtype
+        self.dense = dense
         ep, tpr = self.mesh.cols, self.mesh.rows
         assert self.E % ep == 0 and self.I % (tpr * TILE) == 0, (self.E, self.I, ep, tpr)
         self.E_local, self.I_local = self.E // ep, self.I // tpr
         files = (
-            self.cache_files(weight_cache_path, self.mesh, expert_dtype, expert_down_dtype)
+            self.cache_files(weight_cache_path, self.mesh, expert_dtype, expert_down_dtype, dense)
             if weight_cache_path is not None
             else {"w13": None, "w2": None}
         )
         if gate_up is None or down is None:
-            if not self.cache_complete(weight_cache_path, self.mesh, expert_dtype, expert_down_dtype):
+            if not self.cache_complete(weight_cache_path, self.mesh, expert_dtype, expert_down_dtype, dense):
                 raise ValueError("routed experts without host tensors need a complete weight cache")
         else:
             assert tuple(gate_up.shape) == (self.E, 2 * self.I, self.H) and tuple(down.shape) == (
@@ -246,6 +335,7 @@ class TtRoutedExperts(LightweightModule):
                 self.I,
             ), (gate_up.shape, down.shape)
         E, H, I = self.E, self.H, self.I
+        E_loc, I_loc = self.E_local, self.I_local
 
         def make_w13() -> torch.Tensor:
             gate = gate_up[:, :I, :].transpose(1, 2)  # [E, H, I]
@@ -256,12 +346,54 @@ class TtRoutedExperts(LightweightModule):
         def make_w2() -> torch.Tensor:
             return down.transpose(1, 2).contiguous().reshape(1, E, I, H)  # [1,E,I,H]
 
-        self.w13 = self.mesh.upload_cached(
-            make_w13, expert_dtype, files["w13"], rows=3, cols=1, expect_shape=(1, E, H, 2 * I)
-        )
-        self.w2 = self.mesh.upload_cached(
-            make_w2, expert_down_dtype, files["w2"], rows=2, cols=1, expect_shape=(1, E, I, H)
-        )
+        def make_w13_dense() -> torch.Tensor:
+            # [1, cols, H, rows * (2 * E_loc * I_loc)]: a column split of dim 1 and a row split of dim 3 hand chip
+            # (r, c) [H, gates(e in c, slice r) | ups(e in c, slice r)], (expert, i) order inside each half
+            def per_chip(t):  # [E, H, I] -> [cols, H, rows, E_loc * I_loc]
+                return t.reshape(ep, E_loc, H, tpr, I_loc).permute(0, 2, 3, 1, 4).reshape(ep, H, tpr, E_loc * I_loc)
+
+            gate = gate_up[:, :I, :].transpose(1, 2)
+            up = gate_up[:, I:, :].transpose(1, 2)
+            w = torch.cat([per_chip(gate), per_chip(up)], dim=-1)  # [cols, H, rows, 2 * E_loc * I_loc]
+            return w.reshape(1, ep, H, tpr * 2 * E_loc * I_loc).contiguous()
+
+        def make_w2_dense() -> torch.Tensor:
+            # [1, cols, rows * (E_loc * I_loc), H]: chip (r, c) gets rows (e in c, i in slice r) of every W2
+            w2 = down.transpose(1, 2).reshape(ep, E_loc, tpr, I_loc, H).permute(0, 2, 1, 3, 4)
+            return w2.reshape(1, ep, tpr * E_loc * I_loc, H).contiguous()
+
+        if dense:
+            self.w13 = self.mesh.upload_cached(
+                make_w13_dense,
+                expert_dtype,
+                files["w13"],
+                rows=3,
+                cols=1,
+                expect_shape=(1, ep, H, tpr * 2 * E_loc * I_loc),
+            )
+            self.w2 = self.mesh.upload_cached(
+                make_w2_dense,
+                expert_down_dtype,
+                files["w2"],
+                rows=2,
+                cols=1,
+                expect_shape=(1, ep, tpr * E_loc * I_loc, H),
+            )
+            # routing weight expansion: [M, E_loc] @ [E_loc, E_loc * I_loc] repeats a token's weight for expert e
+            # over e's I_loc intermediate columns (0/1 entries: exact in bf16)
+            self.expand = self.mesh.upload(
+                torch.eye(E_loc, dtype=torch.bfloat16)
+                .repeat_interleave(I_loc, dim=1)
+                .reshape(1, 1, E_loc, E_loc * I_loc),
+                ttnn.bfloat16,
+            )
+        else:
+            self.w13 = self.mesh.upload_cached(
+                make_w13, expert_dtype, files["w13"], rows=3, cols=1, expect_shape=(1, E, H, 2 * I)
+            )
+            self.w2 = self.mesh.upload_cached(
+                make_w2, expert_down_dtype, files["w2"], rows=2, cols=1, expect_shape=(1, E, I, H)
+            )
         # column c's expert selector: the [E, E_local] block of the identity for its experts
         self.select = (
             None if ep == 1 else self.mesh.upload(torch.eye(self.E, dtype=torch.float32), ttnn.float32, cols=-1)
@@ -325,16 +457,61 @@ class TtRoutedExperts(LightweightModule):
         ttnn.deallocate(down)
         return y
 
+    def _block_dense(self, x: ttnn.Tensor, dense_w: ttnn.Tensor) -> ttnn.Tensor:
+        """All gathered tokens at once through the dense layout. x [1,1,T,H] bf16, dense_w [1,1,T,E]
+        fp32 -> [1,1,T,H] (this chip's expert slices, summed over its experts)."""
+        E, H, I = self.E_local, self.H, self.I_local
+        T = x.shape[-2]
+        if self.select is not None:
+            dense_w = ttnn.matmul(dense_w, self.select, dtype=ttnn.float32, compute_kernel_config=self.fp32)
+        gu = ttnn.matmul(
+            x,
+            self.w13,
+            program_config=dense_matmul_config(self.grid, T, 2 * E * I, H),
+            dtype=self.activation_dtype,
+            compute_kernel_config=self.compute,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )  # [1,1,T, 2*E*I]: all gates, then all ups, (expert, i) order
+        gate = ttnn.slice(gu, [0, 0, 0, 0], [1, 1, T, E * I])
+        up = ttnn.slice(gu, [0, 0, 0, E * I], [1, 1, T, 2 * E * I])
+        ttnn.deallocate(gu)
+        gate = ttnn.clamp(gate, min=None, max=self.limit, output_tensor=gate)
+        up = ttnn.clamp(up, min=-self.limit, max=self.limit, output_tensor=up)
+        act = ttnn.silu(gate, output_tensor=gate)
+        h = ttnn.multiply(act, up, output_tensor=act)  # [1,1,T,E*I]
+        ttnn.deallocate(up)
+        w_exp = ttnn.matmul(
+            ttnn.typecast(dense_w, self.activation_dtype),
+            self.expand,
+            dtype=self.activation_dtype,
+            compute_kernel_config=self.compute,
+        )  # [1,1,T,E*I]
+        h = ttnn.multiply(h, w_exp, output_tensor=h)
+        ttnn.deallocate(w_exp)
+        y = ttnn.matmul(
+            h,
+            self.w2,
+            program_config=dense_matmul_config(self.grid, T, H, E * I),
+            dtype=self.activation_dtype,
+            compute_kernel_config=self.compute,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )  # [1,1,T,H] = sum over the chip's experts
+        ttnn.deallocate(h)
+        return y
+
     def forward(self, x: ttnn.Tensor, dense_w: ttnn.Tensor) -> ttnn.Tensor:
         """x [1,1,T,H] bf16, dense_w [1,1,T,E] fp32 (this row's tokens) -> [1,1,T,H] TP partial over
-        the columns. Processed in 32-token blocks; a short last block (or T < 32, e.g. decode with few
-        users) runs on its padded tile rows. On a multi-row mesh the rows' tokens are gathered first
-        and the expert-slice partials reduce-scattered back to each token's row."""
+        the columns. Sparse layout: processed in 32-token blocks; a short last block (or T < 32, e.g.
+        decode with few users) runs on its padded tile rows. Dense layout: all tokens in one pass. On a
+        multi-row mesh the rows' tokens are gathered first and the expert-slice partials
+        reduce-scattered back to each token's row."""
         if self.mesh.rows > 1:
             x = self.mesh.all_gather_rows(x, dim=2)
             dense_w = self.mesh.all_gather_rows(dense_w, dim=2)
         T = x.shape[-2]
-        if T <= TILE:
+        if self.dense:
+            y = self._block_dense(x, dense_w)
+        elif T <= TILE:
             y = self._block(x, dense_w)
         else:
             outs = []
@@ -367,6 +544,7 @@ class TtMoE(LightweightModule):
         expert_down_dtype=ttnn.bfloat8_b,
         mesh: GLMMesh | None = None,
         weight_cache_path: Path | str | None = None,
+        dense_experts: bool | None = None,
     ):
         """``mlp_state_dict``: raw checkpoint tensors of ``mlp.`` (prefix stripped), experts as
         ``experts.N.{gate,up,down}_proj.weight`` or pre-stacked ``experts.gate_up_proj/down_proj``,
@@ -374,8 +552,11 @@ class TtMoE(LightweightModule):
         ``weight_dtype`` is the shared expert's format; the routed experts take ``expert_dtype``
         (gate/up) and ``expert_down_dtype`` (down). On a mesh (``tt/mesh.py``) the routed experts
         use the hybrid placement, the shared expert is TP over the columns and the two partials
-        share one all-reduce."""
+        share one all-reduce. ``dense_experts`` selects the dense expert layout
+        (``TtRoutedExperts(dense=True)``); ``None`` reads ``GLM53_DENSE_EXPERTS`` (unset / 0 = sparse)."""
         self.cfg = cfg
+        if dense_experts is None:
+            dense_experts = os.environ.get("GLM53_DENSE_EXPERTS", "0") == "1"
         self.mesh = mesh if mesh is not None else single_chip(device)
         E, I, H = cfg.n_routed_experts, cfg.moe_intermediate_size, cfg.hidden_size
         if "experts.gate_up_proj" in mlp_state_dict:
@@ -408,6 +589,7 @@ class TtMoE(LightweightModule):
             expert_down_dtype=expert_down_dtype,
             mesh=self.mesh,
             weight_cache_path=weight_cache_path,
+            dense=dense_experts,
         )
         self.shared = TtClampedSwiGLU(
             device,
@@ -420,8 +602,12 @@ class TtMoE(LightweightModule):
         )
 
     @staticmethod
-    def expert_cache_complete(cache_dir, mesh: GLMMesh, expert_dtype=ttnn.bfloat8_b, expert_down_dtype=ttnn.bfloat8_b):
-        return TtRoutedExperts.cache_complete(cache_dir, mesh, expert_dtype, expert_down_dtype)
+    def expert_cache_complete(
+        cache_dir, mesh: GLMMesh, expert_dtype=ttnn.bfloat8_b, expert_down_dtype=ttnn.bfloat8_b, dense_experts=None
+    ):
+        if dense_experts is None:
+            dense_experts = os.environ.get("GLM53_DENSE_EXPERTS", "0") == "1"
+        return TtRoutedExperts.cache_complete(cache_dir, mesh, expert_dtype, expert_down_dtype, dense_experts)
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """x [1,1,T,H] bf16 (T multiple of 32; replicated over the TP columns) -> [1,1,T,H] replicated."""
