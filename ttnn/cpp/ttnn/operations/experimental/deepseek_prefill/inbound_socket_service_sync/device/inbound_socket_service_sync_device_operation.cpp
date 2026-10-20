@@ -76,6 +76,19 @@ void InboundSocketServiceSyncOperation::validate_on_program_cache_miss(
     if (tensor_args.tokens_out.has_value() || tensor_args.overhang_out.has_value() ||
         tensor_args.metadata_out.has_value()) {
         const auto specs = compute_output_specs(args, tensor_args);
+        // The factory hands the kernel each destination's address and the service's own chips write it, so a
+        // same-shaped tensor on another mesh would be left untouched while this mesh scribbled over whatever
+        // happens to sit at that address. The generic checks do not catch it: they cover allocation and
+        // relative mesh coordinates, not device identity.
+        const auto validate_destination_device = [&backing](const std::optional<Tensor>& destination) {
+            TT_FATAL(
+                !destination.has_value() || destination->device() == backing.device(),
+                "inbound_socket_service_sync: every caller-supplied destination must live on the service's mesh "
+                "device");
+        };
+        validate_destination_device(tensor_args.tokens_out);
+        validate_destination_device(tensor_args.overhang_out);
+        validate_destination_device(tensor_args.metadata_out);
         if (tensor_args.tokens_out.has_value()) {
             TT_FATAL(
                 tensor_args.tokens_out->tensor_spec() == specs.front(),

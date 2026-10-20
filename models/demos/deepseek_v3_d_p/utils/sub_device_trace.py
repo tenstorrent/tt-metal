@@ -264,9 +264,15 @@ class CapturedCall:
         assert self._tid is None, "already captured"
         tid = ttnn.begin_trace_capture(self.mesh_device, cq_id=self.cq_id)
         try:
-            fn()
-        finally:
-            ttnn.end_trace_capture(self.mesh_device, tid, cq_id=self.cq_id)
+            try:
+                fn()
+            finally:
+                ttnn.end_trace_capture(self.mesh_device, tid, cq_id=self.cq_id)
+        except BaseException:
+            # Nothing owns `tid` once this propagates -- self._tid stays None, so release() would not
+            # reach it and the trace would sit on the device until teardown.
+            ttnn.release_trace(self.mesh_device, tid)
+            raise
         self._tid = tid
 
     def replay(self):

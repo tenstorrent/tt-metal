@@ -197,7 +197,8 @@ def _decode_metadata(metadata_msg: ttnn.Tensor) -> dict:
         "actual_start": int(m[1]),
         "actual_end": int(m[2]),
     }
-    if m.numel() > 3:
+    # Mirror _metadata_record_words: the fourth word exists only when MTP is on.
+    if MTP_LEVELS and m.numel() > 3:
         meta["provided_levels"] = max(0, int(m[3]))
     return meta
 
@@ -256,7 +257,7 @@ def _h2d_drain_op(h2d_service, sockets, n_mtp: int):
         h2d_service,
         metadata_size_bytes=CHUNK_METADATA_SIZE_BYTES,
         overhang_size_bytes=n_mtp * TOKEN_ID_BYTES,
-        metadata_out=sockets.metadata,
+        metadata_out=sockets.persistent_metadata(),
         tokens_out=sockets.tokens,
         overhang_out=sockets.overhang,
     )
@@ -322,7 +323,7 @@ def _d2d_drain_op(inbound, sockets):
     return ttnn.experimental.deepseek_prefill.inbound_socket_service_sync(
         inbound,
         metadata_size_bytes=D2D_METADATA_SIZE_BYTES,
-        metadata_out=sockets.metadata,
+        metadata_out=sockets.persistent_metadata(),
         tokens_out=sockets.tokens,
     )
 
@@ -445,11 +446,18 @@ def _lease_reclaim(d2d_in, d2d_out) -> None:
 class SocketBuffers:
     def __init__(self, metadata, tokens=None, overhang=None, send_record=None):
         self.metadata = metadata
+        # Only a buffer handed in here is ours to reuse; `metadata` is rebound per chunk otherwise.
+        self._metadata_is_persistent = metadata is not None
         self.tokens = tokens
         self.overhang = overhang
         self.send_record = send_record
         self.drain_trace = None
         self.send_trace = None
+
+    def persistent_metadata(self):
+        """The metadata destination for the drain, or None when it must allocate its own: without a
+        claimed buffer, `metadata` holds the previous chunk's tensor, which Gemma4 frees after use."""
+        return self.metadata if self._metadata_is_persistent else None
 
     def release_traces(self) -> None:
         for trace in (self.drain_trace, self.send_trace):
@@ -467,7 +475,7 @@ def _capture_socket_ops(
 
     if inbound is None:
         drain_skip = "no inbound socket"
-    elif sockets.tokens is None or sockets.metadata is None:
+    elif sockets.tokens is None or sockets.persistent_metadata() is None:
         drain_skip = "the drain has no persistent destinations"
     elif n_mtp and sockets.overhang is None:
         drain_skip = "the MTP lookahead overhang has no persistent destination"
@@ -1036,6 +1044,9 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
     )
 
     def _capture_trace() -> None:
+        # Runs after the first record was drained into the persistent buffers, which is safe: capture_trace()
+        # only reads _trace_input (via _forward_traced) and _forward_send_warmup works on its own
+        # send_warmup_inputs() tensors. The writers are _prepare_trace(), back in compile(), and prefill_chunk().
         if d2d_out is not None:
             _forward_send_warmup(runtime, d2d_out, rank)
         runtime.capture_trace(kv_caches)
