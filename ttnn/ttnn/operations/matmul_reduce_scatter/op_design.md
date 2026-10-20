@@ -28,8 +28,8 @@
 
 | Name | Type | Required | Valid Range | Default | CT/RT |
 |------|------|----------|-------------|---------|-------|
-| `input_tensor` | ttnn.Tensor (mesh) | yes | per device `(..., M, K)`, rank 2-4, all leading dims 1, TILE, DRAM interleaved | — | addresses RT |
-| `weight` | ttnn.Tensor (mesh) | yes | per device `(K, N)`, TILE, DRAM interleaved | — | address RT |
+| `input_tensor` | ttnn.Tensor (mesh) | yes | per device `(..., M, K)`, rank 2-4, all leading dims 1, TILE, interleaved (DRAM or L1) | — | addresses RT |
+| `weight` | ttnn.Tensor (mesh) | yes | per device `(K, N)` (rank 2-4, leading dims 1), TILE, interleaved (DRAM or L1) | — | address RT |
 | `cluster_axis` | int | yes (kw) | 0 or 1; `G = mesh_shape[cluster_axis] ≥ 2` | — | host (schedule) |
 | `scatter_dim` | int | no (kw) | -2 / -1. A non-negative index is canonicalized to its negative equivalent (`d - rank`) **before** the support check. | -2 | host (schedule) |
 | `topology` | `Topology` (`from ttnn.operations.ccl import Topology`) | no (kw) | Linear, Ring | Linear | host (schedule) |
@@ -45,7 +45,7 @@
 | `SUPPORTED` (Phase 0) | `dtype: [bfloat16]`, `weight_dtype: [bfloat16, bfloat8_b]`, `layout: [TILE]`, `alignment: ["tile_aligned"]`, `cluster_axis: [0, 1]`, `scatter_dim: [-1, -2]`, `topology: [Linear, Ring]`, `num_links: [1, 2]` |
 | `EXCLUSIONS` | `[]` |
 | `validate()` | First line of the entry point. It builds axes from the call (dtype = activation dtype, weight_dtype, layout, alignment via the tagger, cluster_axis, canonical scatter_dim, topology, num_links). It raises `UnsupportedAxisValue` for an axis value outside SUPPORTED, then `ExcludedCell`. `num_links=None` is not a registry value: it is resolved after validate to all usable links, and the code is generic in L. |
-| Caller errors → `ValueError` | rank outside 2-4 or a leading dim ≠ 1; K mismatch; inputs not DRAM interleaved / not TILE; `G < 2`; scattered extent not `% (32·G)`; explicit `num_links` ≤ 0 or above the discovered links on any hop; `topology=Ring` with `G ≥ 3` when the active fabric config does not wrap `cluster_axis` (wrapping configs: TORUS_X → axis 1, TORUS_Y → axis 0, TORUS_XY → both, 1D_RING → its routed line), or when `get_forwarding_link_indices(last, first)` is empty |
+| Caller errors → `ValueError` | rank outside 2-4 or a leading dim ≠ 1; K mismatch; inputs not interleaved / not TILE; `G < 2`; scattered extent not `% (32·G)`; explicit `num_links` ≤ 0 or above the discovered links on any hop; `topology=Ring` with `G ≥ 3` when the active fabric config does not wrap `cluster_axis` (wrapping configs: TORUS_X → axis 1, TORUS_Y → axis 0, TORUS_XY → both, 1D_RING → its routed line), or when `get_forwarding_link_indices(last, first)` is empty |
 | Structural impossibilities | none (feature_spec `INVALID = []` is correct) |
 | Default compute config | exported `default_compute_kernel_config()`; `None` resolves through it |
 
@@ -55,10 +55,10 @@
 
 | Property | Requirement |
 |----------|-------------|
-| Shape | A: `(..., M, K)`, rank 2-4, all leading dims 1. W: `(K, N)`. Identical on every device. |
+| Shape | A: `(..., M, K)`, rank 2-4, all leading dims 1. W: `(K, N)`, rank 2-4, leading dims 1. Identical on every device. |
 | Dtype | A: bfloat16 (Phase 0); TARGET adds bfloat8_b. W: bfloat16, bfloat8_b (Phase 0); TARGET adds bfloat4_b. |
 | Layout | TILE |
-| Memory | DRAM interleaved (both) |
+| Memory | interleaved, DRAM or L1 (both; read through TensorAccessor) |
 
 ### Output
 
@@ -152,7 +152,7 @@ Re-running the table on the intermediate data (the per-entry partial sums) gives
 
    The acceptance test pins both residency regimes through these hooks, so regime coverage does not depend on the box's grid size.
 
-`F(kb, resident)` is the per-core footprint, defined in `l1_ledger.md`. `L1_budget = L1_bank_size − L1_allocator_base − L1_HEADROOM (64 KiB, named constant)`. The staging tensor is part of `F`, not of the headroom.
+`F(kb, resident)` is the per-core footprint, defined in `l1_ledger.md`. `L1_budget = min(L1_bank_size, lowest occupied L1 address − L1_allocator_base) − L1_HEADROOM (64 KiB, named constant)`: the CB region must end below any L1 tensor alive at the call, and the op's own staging (when kept from a previous call) is added back. The staging tensor is part of `F`, not of the headroom. `STAGING_POLICY` (env `MRS_STAGING`): `exact` (default; reallocated when the size changes), `grow` (never shrinks), `ephemeral` (allocated per call and freed once the program is enqueued, so it does not sit under later ops' static CBs inside a model).
 
 ### Traffic ranking
 

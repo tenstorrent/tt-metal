@@ -118,7 +118,7 @@ CLOCK_MHZ = 1350
 # and the cached tensor is reallocated whenever its size differs. "grow" keeps the old grow-only cache: the allocated
 # size is a floor in every later plan's footprint, so after one large call (Wan 720p, P = 44: 880 KiB of staging) the
 # smaller shapes lose their resident regime (measured: Wan 8x4 chunks resident -> stream). env: perf experiments only
-STAGING_POLICY = os.environ.get("MRS_STAGING", "exact")
+STAGING_POLICY = os.environ.get("MRS_STAGING", "exact")  # "exact" | "grow" | "ephemeral" (allocated per call)
 KB_MIN_RESIDENT = 8  # smallest K-block the resident regime accepts (min(Kt, this))
 # largest K-block: the streamed operand needs several K-blocks per entry to overlap read / mcast / math (focus case,
 # diagonal senders: kb 64 -> 212 us, 32 -> 160 us, 16 -> 159 us, 8 -> 164 us on the fastest chip; Refinement 2,
@@ -741,7 +741,12 @@ def _mesh_resources(mesh, staging_tiles):
 
 def _l1_budget(mesh):
     """L1_bank_size - allocator base - headroom: the allocatable L1 region of a worker core minus L1_HEADROOM."""
-    return int(ttnn._ttnn.reports.get_device_info(mesh).l1_bank_size) - L1_HEADROOM
+    l1_top = int(ttnn._ttnn.reports.get_device_info(mesh).l1_bank_size)
+    # Live L1 buffers grow down from the top of the bank; the CB region must end below the lowest of them.
+    lowest = ttnn._ttnn.device.GetLowestOccupiedComputeL1Address(mesh)
+    if lowest is not None:
+        l1_top = min(l1_top, int(lowest) - int(ttnn._ttnn.device.GetAllocatorBaseAddress(mesh, ttnn.BufferType.L1)))
+    return l1_top - L1_HEADROOM
 
 
 # ======================================================================================================================
@@ -751,8 +756,8 @@ def _l1_budget(mesh):
 
 def _check_dram_interleaved_tile(t, what):
     mc = t.memory_config()
-    if mc.buffer_type != ttnn.BufferType.DRAM or mc.memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED:
-        raise ValueError(f"matmul_reduce_scatter: {what} must be DRAM interleaved")
+    if mc.memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED:  # the readers address it through TensorAccessor
+        raise ValueError(f"matmul_reduce_scatter: {what} must be interleaved (DRAM or L1)")
     if t.layout != ttnn.TILE_LAYOUT:
         raise ValueError(f"matmul_reduce_scatter: {what} must be TILE layout")
 
@@ -785,8 +790,9 @@ def run(a, w, *, cluster_axis, scatter_dim, topology, num_links, compute_kernel_
     a_shape, w_shape = list(a.shape), list(w.shape)
     if not 2 <= len(a_shape) <= 4 or any(s != 1 for s in a_shape[:-2]):
         raise ValueError(f"matmul_reduce_scatter: A must be rank 2-4 with leading dims 1, got {a_shape}")
-    if len(w_shape) != 2:
-        raise ValueError(f"matmul_reduce_scatter: W must be (K, N), got {w_shape}")
+    if not 2 <= len(w_shape) <= 4 or any(s != 1 for s in w_shape[:-2]):
+        raise ValueError(f"matmul_reduce_scatter: W must be (K, N) with leading dims 1, got {w_shape}")
+    w_shape = w_shape[-2:]
     M, K = a_shape[-2:]
     K2, N = w_shape
     if K != K2:
@@ -842,6 +848,8 @@ def run(a, w, *, cluster_axis, scatter_dim, topology, num_links, compute_kernel_
     if STAGING_POLICY == "exact":
         staging_floor = 0  # reallocated to this call's size below
     budget = _l1_budget(mesh)
+    if cached is not None and cached["mesh"] is mesh and cached["staging"] is not None:
+        budget += cached["staging_tiles"] * STAGE_TILE_BYTES  # our own staging is below the other L1 buffers
     force_resident = getattr(hooks, "_FORCE_XBLOCK_RESIDENCY", None)
     forced = getattr(hooks, "_FORCE_CHUNKS", None) or (
         tuple(int(v) for v in os.environ["MRS_CHUNKS"].split(",")) if os.environ.get("MRS_CHUNKS") else None
@@ -971,7 +979,13 @@ def run(a, w, *, cluster_axis, scatter_dim, topology, num_links, compute_kernel_
         gy=gy,
     )
     desc = create_mesh_program_descriptor(ctx)
-    return ttnn.generic_op([a, w, output], desc)
+    result = ttnn.generic_op([a, w, output], desc)
+    if STAGING_POLICY == "ephemeral":
+        # Free the L1 staging once the program is enqueued: later ops reuse it only after this one finishes, and
+        # peers write into it only while this program runs. Keeps it from crowding other ops' static CBs.
+        ttnn.deallocate(res["staging"])
+        res["staging"], res["staging_tiles"] = None, 0
+    return result
 
 
 # ======================================================================================================================
