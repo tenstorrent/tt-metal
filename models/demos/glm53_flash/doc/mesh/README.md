@@ -345,3 +345,7 @@ writes it.
 TTFT at 128 tokens (r4): warm 919 ms (4/row) and 971 ms (32/row) vs 2587 ms in the morning, but the first token
 differs from the host head (39030 vs 102647, chain PCC 0.82 vs 0.91): the prefill-side regression under the fast exact
 mHC path; A/B with the composite wrap on the prefill rows queued (`GLM53_MHC_PREFILL_IMPL=wrap`).
+
+Demo (`prefill_128-4users`, 8x4, 45 layers bfp8, 21:05): ISL 79-92, TTFT mean 2896 ms, decode 166.63 ms/step =
+6.0 tok/s/user, 192 tok/s aggregate with the composite hybrid experts (the demo sets no expert policy); the e2e r4
+step with stream experts is 76.45 ms, so the expert path is ~90 ms of the 4-users/row step. Outputs coherent.
