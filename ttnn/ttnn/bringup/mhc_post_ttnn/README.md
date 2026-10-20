@@ -13,12 +13,16 @@ on the SFPU. Cores: full compute grid, row-weighted work split. Single device, p
 
 ## Options
 (from `mhc_post_ttnn_nanobind.cpp`)
+
+Realistic (use by default): every option below.
 - `input_tensor`: F (..., T, C), TILE, DRAM interleaved, C % 32 == 0, fp32 or bf16.
 - `residual`: X (..., T, n*C), fp32 or bf16, TILE, DRAM interleaved.
 - `post`: (..., T, n), fp32 TILE, 1 <= n <= 5.
 - `comb`: (..., T, n*n), fp32 TILE, `comb[..., i*n + j] = comb[i][j]`.
 - `compute_kernel_config=None`: default HiFi4, fp32 DEST, approx off; `fp32_dest_acc_en` must be True.
 - `comb_transposed=True` (opt-in `False` is a fork addition, CHANGELOG 5): False computes `X'_j = post_j F + sum_i comb[j*n + i] X_i` (Xing4.0 order). C++ op only; the Python builder has no such option.
+
+Precision only: per-step checks or a measured end-to-end gap (rule 7): none (fp32 DEST is required, not an option).
 
 ## Measured
 - C++ host side, GLM-5.3 shape (T 5120, C 4096, n 4, bf16): host 0.676 -> 0.019 ms per call, device-bound wall 1.195 -> 1.161 ms per call (CHANGELOG.md change 2).

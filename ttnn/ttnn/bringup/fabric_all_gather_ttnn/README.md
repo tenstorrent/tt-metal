@@ -30,6 +30,8 @@ from high_bw_all_gather's (`device/fabric_all_gather_device_operation.hpp`); onl
   (caller-owned semaphores: no allocation, no sync).
 
 ## Options
+Realistic (use by default): every option below.
+
 C++ `ttnn.bringup.fabric_all_gather(input_tensor, dim, output_tensor, *, cluster_axis, ...)` (all as
 high_bw_all_gather; no fork additions):
 - `input_tensor`, `dim`, `output_tensor`: required; output preallocated at the worst-case gathered shape.
@@ -53,6 +55,8 @@ sub_core_grid=None, ready_semaphore=None, data_valid_semaphore=None)`:
   torus sides >= 3). `placement`: "auto" (probe Ethernet cores, NoC1-nearest port) or "simple" (forced under the
   emulator). `balance`: split the opposite shard between both directions of an even ring. `desync`: start the
   backward walk halfway round its bank set. Others as the C++ op.
+
+Precision only: per-step checks or a measured end-to-end gap (rule 7): none.
 
 ## Measured
 - QuietBox 4x p150a, 16 MiB bf16 per chip, 2 links, Python prototype: FABRIC_1D 4-chip ring 125.7 GB/s per chip, line

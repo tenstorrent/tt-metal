@@ -14,16 +14,19 @@ Fork of `ttnn.experimental.indexer_score_dsa` / `ring_indexer_score_dsa` / `inde
 Everything else as `ttnn.experimental.<same name>` / `ttnn.IndexerScoreProgramConfig`.
 
 ## Consider it instead of
-- `ttnn.experimental.ring_indexer_score_dsa` / `indexer_score_dsa` when the bf16-DEST logits are too coarse for the
-  top-k selection (the source scores ~1.7% low per row and fails a 0.99 top-k overlap gate on Hy4's indexer; CHANGELOG.md).
-- the same source ops when the index keys pool 2 tokens (`key_compression_ratio=2`, DeepSeek-V4.1), or when queries
-  are natural contiguous blocks over a block-cyclic key cache.
+- `ttnn.experimental.ring_indexer_score_dsa` / `indexer_score_dsa` when the index keys pool 2 tokens
+  (`key_compression_ratio=2`, DeepSeek-V4.1), or when queries are natural contiguous blocks over a block-cyclic key cache.
 - a `ttnn.all_gather` of the keys + `ttnn.experimental.indexer_score_dsa`: the ring op (source and fork) fuses the SP
   gather with the scoring.
+- Precision only (rule 7), not a reason to fork: fp32 DEST when the bf16-DEST logits are too coarse for the top-k
+  selection (the source scores ~1.7% low per row and fails a 0.99 top-k overlap gate on Hy4's indexer; CHANGELOG.md),
+  for per-step checks or a measured end-to-end gap.
 With fp32 DEST off, ratio 1 / 4 and `natural_query_blocks=False` the fork is the source program; prefer the source op then.
 
 ## Options
 Fork additions marked; the rest as the source (`indexer_score_nanobind.cpp`).
+
+Realistic (use by default):
 - `IndexerScoreProgramConfig(q_chunk_size=32, k_chunk_size=32, head_group_size=1)`; value `__repr__` (fork).
 - `indexer_score_dsa(q, k, weights, *, chunk_start_idx=None, key_compression_ratio=1, program_config=IndexerScoreProgramConfig(),
   compute_kernel_config=None, cache_batch_idx=None, kv_len=None, seq_shard_axes=None, block_cyclic_sp_axis=None,
@@ -36,12 +39,14 @@ Fork additions marked; the rest as the source (`indexer_score_nanobind.cpp`).
 - `indexer_score_msa(q, k, *, num_groups, chunk_start_idx=None, scale=1.0, block_size=0, program_config=..., compute_kernel_config=None,
   cache_batch_idx=None, kv_len=None, seq_shard_axes=None, block_cyclic_sp_axis=None, block_cyclic_chunk_local=None,
   block_cyclic_cache_tp_sharded=False)`: unchanged by the fork.
-- `compute_kernel_config.fp32_dest_acc_en` (fork, opt-in, default False): fp32 DEST for DSA scoring. Use
-  `k_chunk_size=32`: above 32 the head reduction uses a blocked multiply that runs at LoFi-like precision whatever the
-  fidelity (CHANGELOG.md).
 - `key_compression_ratio` (fork adds 2): 1 (default), 2, 4.
 - `natural_query_blocks=False` (fork, opt-in, ring only): needs `block_cyclic_sp_axis` / `block_cyclic_chunk_local`,
   an axis ring (`cluster_axis` set) and the host-scalar `chunk_start_idx` (refused with `chunk_start_idx_tensor`).
+
+Precision only: per-step checks or a measured end-to-end gap (rule 7):
+- `compute_kernel_config.fp32_dest_acc_en` (fork, opt-in, default False): fp32 DEST for DSA scoring. Use
+  `k_chunk_size=32`: above 32 the head reduction uses a blocked multiply that runs at LoFi-like precision whatever the
+  fidelity (CHANGELOG.md).
 
 ## Measured
 - Hy4 layer-0 indexer golden (32 heads x 128, top-2048 of 4096 keys): source logits rel 0.024, top-k overlap 0.985;

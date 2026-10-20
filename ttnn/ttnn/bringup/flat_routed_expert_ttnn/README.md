@@ -33,6 +33,8 @@ New op (Marko Staletovic's, no TTNN source on this tree). Blackhole only.
   TP2 at M 512 / 2048 and on K2 TP4 at M 2048 (FLAT_EXPERT_WORKLOG.md "TP2 vs existing", "Final defaults").
 
 ## Options
+Realistic (use by default):
+
 `flat_routed_expert(dispatched_buffer, expert_token_counts, expert_region_offsets, global_expert_ids, gate_up_weights, down_weights, reader_down_weights=None, done_words, intermediate, max_tokens_per_expert, *, ...)`
 - `reader_down_weights=None`: required iff the plan has reader tails (`plan["rdown"]`).
 - `done_words`: persistent zeroed L1 tensor on `plan["coords"]` (FlatRoutedExpert allocates it).
@@ -42,11 +44,11 @@ New op (Marko Staletovic's, no TTNN source on this tree). Blackhole only.
 - `token_index=None`: [1, rows] uint32; indexed mode, flat row r reads x row token_index[r]; y has token_index's rows.
 - `x_pages_per_row=1`: x stored as [rows * P, H / P] (P 8 at H 4096 spreads each row over the 8 DRAM banks).
 - `y_row_major=False`: y bf16 ROW_MAJOR, pack-untilized on the down cores.
-- `down_fp32=False`: (fork addition) fp32 DEST, full-sync down projection.
-- `pack_stochastic_rounding=False`: stochastic rounding in the packers (x tilize, h, y).
-- `x_bf16=False`, `h_bf16=False`: x / h tiles bf16 instead of bfp8; must match the plan the weights were laid out with.
-- `y_bf16=False`: tiled y as bf16 instead of bfp8 (not with y_row_major).
-- `math_fidelity=0`: matmul fidelity (0 LoFi; 2 HiFi2; the DeepSeek-V4.1 model passes HiFi4).
+- `down_fp32=False`: (fork addition) fp32 DEST, full-sync down projection. Realistic: rule 7's reference point
+  (GLM-5.3: experts LoFi with fp32 accumulation; glm53_flash_d_p `tt/experts_ag.py` GLM_AG_DOWN_FP32=1); with bfp4
+  weights bf16 DEST over K = I inflates y (Measured).
+- `math_fidelity=0`: matmul fidelity (0 LoFi; 2 HiFi2; the DeepSeek-V4.1 model passes HiFi4). Rule 7: LoFi with bfp4 /
+  bfp8 weights where the end-to-end check holds, else HiFi2; HiFi4 is the max_precision value.
 - `routing_weights=None`: (fork addition) [rows of x, 32] FLOAT32 TILE DRAM; h *= the row's weight for its local
   expert (fp32 SFPU) before down. Needs a plan built with `routed=True`.
 - `fp8_act_quant=False`: (fork addition) fp8 e4m3 q-dq of h per 32 values, ue8m0 scale, RNE, before down.
@@ -62,6 +64,12 @@ New op (Marko Staletovic's, no TTNN source on this tree). Blackhole only.
 `FlatRoutedExpert(device, weights, *, m, H, I, gids, n_global, wdtype="bf4", act="silu", pin=1, cache_prefix=None, x_bf16=False, h_bf16=False, weights_nk=False, routed=False, check_exact=False)`; `weights="fake"` = uninitialised weights (perf only). `__call__(x, counts, regions, token_index=None, x_pages_per_row=1, y_row_major=False, down_fp32=False, pack_stochastic_rounding=False, y_bf16=False, math_fidelity=0, routing_weights=None, fp8_act_quant=False, hidden=0)`.
 
 Many `MIMO_FL_*` environment knobs change the plan (flat_expert.py, device/flat_routed_expert_plan.cpp); defaults are the tested ones.
+
+Precision only: per-step checks or a measured end-to-end gap (rule 7) (the same names in every entry point above):
+- `x_bf16=False`, `h_bf16=False`: x / h tiles bf16 instead of bfp8; must match the plan the weights were laid out with.
+- `y_bf16=False`: tiled y as bf16 instead of bfp8 (not with y_row_major).
+- `pack_stochastic_rounding=False`: stochastic rounding in the packers (x tilize, h, y); analysis only in glm53_flash_d_p
+  (`tt/experts_ag.py`, GLM_AG_PACK_SRND).
 
 ## Measured
 - GLM 5.3 at H 4096 / I 2048, 36 experts, bfp4, one chip: `down_fp32` output scale 1.0337 -> 1.0105 vs the quantized
@@ -131,6 +139,11 @@ test_weighted_combine_routes.
 - deepseek_v41_flash_d_p P.8: tt/weighted_combine.py (EXPERTS_COMBINE=weighted): flat_routed_expert_with_program with
   combine_rf's sparse_combine_rf appended, token_index x (the column's gathered q(x)), math_fidelity, weights_nk,
   down_fp32, the plan without the h options (routed=False).
+- deepseek_v41_flash_d_p P.12: tt/shared_expert.py (SHARED_EXPERT_IMPL=flat): the shared expert's TP slice as one
+  always-on expert (counts [S], regions [0]; intermediate zero-padded to a multiple of 256, the down kernel's K block:
+  se6_dcompute.cpp `kt_d % 8`), bfp8 weights_nk, token_index into the routed experts' gathered q(x), y_bf16,
+  down_fp32, LoFi / bfp8 x / h (EXPERTS_PRECISION=glm); official numerics: routing_weights = 1 + fp8_act_quant. 2x2,
+  1024 rows x 1280 x 5120: 250 us a layer vs 1431 us for the ttnn.linear chain.
 - glm53_flash_d_p (via glm53_flash_d_p_lb): tt/experts_ag.py (GLM_EXPERTS_MODE=ag): indexed x, y_row_major,
   down_fp32 (GLM_AG_DOWN_FP32=1 default), clamped_silu.
 - glm53_flash_d_p_lb tests (test_flat_*.py); deepseek_v3_d_p test_flat_combine_overlap.py (flat_combine_overlap).
