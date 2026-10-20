@@ -36,7 +36,6 @@ _UNPACK_TILIZE_QSR_COLS = (
     "data_copy_type",
     "face_c_dim",
     "face_r_dim",
-    "implied_math_format",
     "num_faces_c_dim_A",
     "num_faces_c_dim_B",
     "num_faces_r_dim_A",
@@ -67,9 +66,7 @@ def test_schema_for_arch_rejects_unsupported_architecture():
 def test_quasar_schema_is_not_wh_bh_schema():
     # The split: Quasar-only columns must not land in the WH/BH published table.
     qsr_only = {c.name for c in QSR_SCHEMA} - {c.name for c in WH_BH_SCHEMA}
-    assert "face_c_dim" in qsr_only
     assert "unpacker_engine_sel" in qsr_only
-    assert "implied_math_format" in qsr_only
     assert "vector_mode" in qsr_only
     assert "enable_2x_format" in qsr_only
     assert "enable_direct_indexing" in qsr_only
@@ -104,7 +101,7 @@ def test_catalog_columns_are_in_quasar_db_schema():
 
 
 def test_convert_keeps_quasar_unpack_tilize_columns(tmp_path):
-    # The 9 unpack-tilize columns that used to trip the live-run drop warning
+    # The 8 unpack-tilize columns that used to trip the live-run drop warning
     # against the WH/BH schema: they must survive CSV -> Parquet on a Quasar run.
     df = pd.DataFrame(
         {
@@ -112,7 +109,6 @@ def test_convert_keeps_quasar_unpack_tilize_columns(tmp_path):
             "data_copy_type": ["DataCopyType.A2D"],
             "face_c_dim": [16],
             "face_r_dim": [16],
-            "implied_math_format": ["ImpliedMathFormat.Yes"],
             "num_faces_c_dim_A": [2],
             "num_faces_c_dim_B": [2],
             "num_faces_r_dim_A": [2],
@@ -157,11 +153,10 @@ def test_convert_drops_quasar_columns_on_wh_bh_schema(tmp_path):
     )
 
     assert diag["unknown_columns"]["perf_unpack_tilize_quasar"] == [
-        "face_c_dim",
         "unpacker_engine_sel",
     ]
     names = pq.read_table(tmp_path / "out.parquet").schema.names
-    assert "face_c_dim" not in names
+    assert "face_c_dim" in names
     assert names == [c.name for c in WH_BH_SCHEMA]
 
 
@@ -171,7 +166,6 @@ def test_convert_drops_sfpu_isolate_text_size_on_quasar(tmp_path):
         {
             "marker": ["INIT"],
             "enable_2x_format": [True],
-            "implied_math_format": ["ImpliedMathFormat.Yes"],
             "TEXT_SIZE(SFPU_ISOLATE)": [4096],
             "tile_cnt": [8],
         }
@@ -184,7 +178,6 @@ def test_convert_drops_sfpu_isolate_text_size_on_quasar(tmp_path):
     names = pq.read_table(tmp_path / "out.parquet").schema.names
     assert "TEXT_SIZE(SFPU_ISOLATE)" not in names
     assert "enable_2x_format" in names
-    assert "implied_math_format" in names
     assert names == [c.name for c in QSR_SCHEMA]
 
 
@@ -194,7 +187,6 @@ def test_convert_keeps_quasar_sfpu_where_vector_mode(tmp_path):
         {
             "marker": ["INIT"],
             "vector_mode": ["VectorMode.RC"],
-            "implied_math_format": ["ImpliedMathFormat.Yes"],
             "unpacker_engine_sel": ["UnpackerEngine.UnpA"],
             "tile_cnt": [3],
         }

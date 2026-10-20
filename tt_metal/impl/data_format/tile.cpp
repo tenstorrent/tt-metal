@@ -68,7 +68,6 @@ Tile::Tile(std::array<uint32_t, 2> tile_shape, std::array<uint32_t, 2> face_shap
     face_shape(face_shape),
     tile_hw(tile_shape[0] * tile_shape[1]),
     face_hw(face_shape[0] * face_shape[1]),
-    num_faces(tile_hw / face_hw),
     partial_face(static_cast<uint32_t>(tile_shape[0] < constants::TILE_HEIGHT)),
     narrow_tile(static_cast<uint32_t>(tile_shape[1] < constants::TILE_WIDTH)),
     transpose_within_face(transpose_tile),
@@ -79,15 +78,6 @@ Tile::Tile(std::array<uint32_t, 2> tile_shape, std::array<uint32_t, 2> face_shap
         });
 
     TT_FATAL(known_tile_shape, "Tile size is not valid for our hardware");
-
-    // Face shape must fit evenly into tile shape
-    TT_FATAL(
-        (tile_shape[0] % face_shape[0]) == 0 && (tile_shape[1] % face_shape[1]) == 0,
-        "tile shape ({}x{}) must tile evenly into face shape ({}x{})",
-        tile_shape[0],
-        tile_shape[1],
-        face_shape[0],
-        face_shape[1]);
 
     // These constants are derived from device side constants at (tt-llk/common/tensor_shape.h)
     // Maintainers: Please keep these in sync with device side constants.
@@ -100,8 +90,8 @@ Tile::Tile(std::array<uint32_t, 2> tile_shape, std::array<uint32_t, 2> face_shap
     constexpr std::uint8_t MAX_NUM_FACES = MAX_NUM_FACES_R_DIM * MAX_NUM_FACES_C_DIM;
 
     TT_FATAL(
-        face_shape[0] <= MAX_FACE_R_DIM && face_shape[1] <= MAX_FACE_C_DIM,
-        "face shape ({}x{}) exceeds the maximum supported face shape ({}x{})",
+        face_shape[0] >= 1 && face_shape[0] <= MAX_FACE_R_DIM && face_shape[1] >= 1 && face_shape[1] <= MAX_FACE_C_DIM,
+        "face shape ({}x{}) has a zero dimension or exceeds the maximum supported face shape ({}x{})",
         face_shape[0],
         face_shape[1],
         MAX_FACE_R_DIM,
@@ -114,6 +104,15 @@ Tile::Tile(std::array<uint32_t, 2> tile_shape, std::array<uint32_t, 2> face_shap
         MAX_TILE_R_DIM,
         MAX_TILE_C_DIM);
 
+    // Face shape must fit evenly into tile shape
+    TT_FATAL(
+        (tile_shape[0] % face_shape[0]) == 0 && (tile_shape[1] % face_shape[1]) == 0,
+        "tile shape ({}x{}) must tile evenly into face shape ({}x{})",
+        tile_shape[0],
+        tile_shape[1],
+        face_shape[0],
+        face_shape[1]);
+
     auto num_faces_r = tile_shape[0] / face_shape[0];
     auto num_faces_c = tile_shape[1] / face_shape[1];
     TT_FATAL(
@@ -124,6 +123,7 @@ Tile::Tile(std::array<uint32_t, 2> tile_shape, std::array<uint32_t, 2> face_shap
         MAX_NUM_FACES_R_DIM,
         MAX_NUM_FACES_C_DIM);
 
+    num_faces = num_faces_r * num_faces_c;
     TT_FATAL(
         num_faces <= MAX_NUM_FACES,
         "num_faces ({}) exceeds the maximum supported num_faces ({})",

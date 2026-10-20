@@ -22,7 +22,7 @@ class DeepSeekV4ProConfig:
     # shape the composite already wins from 256 and gives the band back only at 576, where its
     # tail per_core_M rounds 18 tile-rows up to 32. 128 is the aggregate-optimal cut over that
     # sawtooth (+0.02% against a per-count oracle, worst cell +3.8% at 576).
-    # Not enabled: only Kimi K2.7 and GLM 5.1/5.2 dispatch both routed-expert ops today.
+    # Not enabled: only Kimi K2.7 and GLM 5.2 dispatch both routed-expert ops today.
     # The measured crossover is kept under _MEASURED so it is not re-derived; rename it back to
     # ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD to turn the split on, which is all the readers look for.
     ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD_MEASURED = 128
@@ -65,6 +65,12 @@ class DeepSeekV4ProConfig:
     # Compressed attention config
     COMPRESS_RATES = {"compressed_sparse_attention": 4, "heavily_compressed_attention": 128}
     COMPRESS_ROPE_THETA = 160000.0
+    # YaRN scaling, as stated in config.json rope_scaling. It reaches the compressed branches only:
+    # DeepseekV4Config folds these into rope_parameters["compress"] and leaves the sliding rope plain.
+    ROPE_SCALING_FACTOR = 16
+    ROPE_SCALING_ORIGINAL_MAX_POSITION_EMBEDDINGS = 65536
+    ROPE_SCALING_BETA_FAST = 32
+    ROPE_SCALING_BETA_SLOW = 1
     HC_MULT = 4
     HC_SINKHORN_ITERS = 20
     HC_EPS = 1.0e-6

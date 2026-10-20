@@ -20,7 +20,7 @@ from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_flash_config import DeepSeekV4FlashConfig
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_pro_config import DeepSeekV4ProConfig
-from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
+from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import GLM53Config
 from models.demos.deepseek_v3_d_p.reference.gpt_oss_120b_config import GptOss120BConfig
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_7_config import KimiK27Config
 from models.demos.deepseek_v3_d_p.reference.minimax_m2_7_config import MiniMaxM27Config
@@ -202,7 +202,7 @@ def run_dispatch_combine(
         num_links=num_links,
         experts_per_chip=experts_per_chip,
     )
-    tt_dispatch_offsets, tt_expert_token_counts, tt_expert_region_offsets, _ = tt_moe_routing_setup(
+    tt_dispatch_offsets, tt_expert_token_counts, tt_expert_region_offsets, _, _ = tt_moe_routing_setup(
         ttnn_top_k_experts_indices=indices,
         num_routed_experts=num_routed_experts,
         num_experts_per_tok=num_experts_per_tok,
@@ -378,7 +378,7 @@ def run_dispatch_combine(
 # @pytest.mark.extended_model.
 DISPATCH_COMBINE_MODELS = [
     ("dsv3", DeepSeekV3Config, False),
-    ("glm_51", GLM51Config, True),
+    ("glm_53", GLM53Config, True),
     ("kimi_k2_7", KimiK27Config, True),
     ("minimax_m27", MiniMaxM27Config, True),
     ("dsv4_pro", DeepSeekV4ProConfig, True),
@@ -641,7 +641,7 @@ def test_ttnn_dispatch_combine_overflow(mesh_device, device_params, num_links, o
         num_links=num_links,
         experts_per_chip=experts_per_chip,
     )
-    tt_dispatch_offsets, tt_expert_token_counts, tt_expert_region_offsets, _ = tt_moe_routing_setup(
+    tt_dispatch_offsets, tt_expert_token_counts, tt_expert_region_offsets, _, _ = tt_moe_routing_setup(
         ttnn_top_k_experts_indices=indices,
         num_routed_experts=num_routed_experts,
         num_experts_per_tok=num_experts_per_tok,

@@ -29,3 +29,21 @@ set_target_properties(
 )
 
 add_dependencies(metal_tests unit_tests_gha_annotation)
+
+add_executable(unit_tests_integer_test_utils test_integer_helpers.cpp)
+target_include_directories(unit_tests_integer_test_utils PRIVATE "${PROJECT_SOURCE_DIR}/tests")
+target_link_libraries(
+    unit_tests_integer_test_utils
+    PRIVATE
+        TT::STL
+        gtest
+        gtest_main
+)
+tt_reuse_precompile_headers(unit_tests_integer_test_utils metal_common_pch)
+set_target_properties(
+    unit_tests_integer_test_utils
+    PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY
+            ${PROJECT_BINARY_DIR}/test/tt_metal
+)
+add_dependencies(metal_tests unit_tests_integer_test_utils)

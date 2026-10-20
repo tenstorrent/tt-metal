@@ -70,14 +70,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
     _llk_math_pack_sync_init_<DST_SYNC, is_fp32_dest_acc_en>();
 
-    test_utils::call_unary_sfpu_operation_init<
-        SFPU_UNARY_OPERATION,
-        APPROX_MODE,
-        is_fp32_dest_acc_en,
-        iterations,
-        FAST_MODE,
-        false /* STABLE_SORT */,
-        CLAMP_NEGATIVE>();
+    test_utils::
+        call_unary_sfpu_operation_init<SFPU_UNARY_OPERATION, APPROX_MODE, is_fp32_dest_acc_en, iterations, FAST_MODE, false /* STABLE_SORT */, CLAMP_NEGATIVE>(
+            formats.math);
 
     LLK_ASSERT(
         (params.NUM_TILES_IN_BLOCK <= get_dest_max_tiles<DST_SYNC, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),

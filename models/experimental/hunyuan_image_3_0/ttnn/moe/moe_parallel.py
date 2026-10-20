@@ -395,7 +395,7 @@ class HunyuanTtMoEParallel(LightweightModule):
         scores3 = ttnn.reshape(w_rm, (1, spc, self.moe_topk))
         idx2 = ttnn.reshape(idx_rm, (spc, self.moe_topk))
 
-        offsets, counts, region_offsets, _ = m["routing_setup"](
+        offsets, counts, region_offsets, _, _ = m["routing_setup"](
             ttnn_top_k_experts_indices=idx2,
             num_routed_experts=self.num_experts,
             num_experts_per_tok=self.moe_topk,

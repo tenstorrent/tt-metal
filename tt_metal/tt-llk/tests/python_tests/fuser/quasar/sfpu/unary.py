@@ -77,7 +77,7 @@ class UnarySfpu(Sfpu):
         return (
             f"test_utils::call_unary_sfpu_operation_quasar<"
             f"{op}, {dest_sync}, {en_32bit_dest}, {approx_mode}, {quasar_iterations}"
-            f">({block.tile_id_dest}, {sfpu_format});\n"
+            f">({block.tile_id_dest}, {sfpu_format}, true, {self.fill_const_value});\n"
         )
 
     def __str__(self) -> str:

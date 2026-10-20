@@ -16,9 +16,12 @@ namespace ckernel {
 // Cumulative sum
 /**
  * Calculates the columnwise (top to bottom) cumulative sum.
- * For multi tile comulative sum, tiles must come in NWH order (for example using reader_unary_transpose_wh) and
+ * For multi tile cumulative sum, tiles must come in NWH order (for example using reader_unary_transpose_wh_8bank) and
  * *first* must be false for all tiles where H != 0.
- * Tiles are also output in NWH order so writer_unary_transpose_wh can be used to store them correctly in L1
+ * Tiles are also output in NWH order so writer_unary_transpose_wh can be used to store them back in NHW order.
+ * The running column totals are carried between the tiles of one column in SFPU registers, so no other SFPU
+ * operation may run between the *cumsum_tile* calls of the same column. After any other SFPU operation,
+ * call *cumsum_tile_init* again before the next *cumsum_tile*.
  * The DST register buffer must be in acquired state via *acquire_dst* call.
  * This call is blocking and is only available on the compute engine.
  *

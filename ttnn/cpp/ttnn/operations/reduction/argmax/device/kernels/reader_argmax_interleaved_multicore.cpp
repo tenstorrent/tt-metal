@@ -85,7 +85,7 @@ inline void find_argmax_for_core(
                 uint16_t val = in_vals[i - red_dim_offset];
                 process_value_comparison<data_format, uint16_t, reduce_all>(
                     val, max_val, max_idx, i, outer_idx, j, inner_dim_units, red_dim_units, [](uint16_t a, uint16_t b) {
-                        return bfloat16_greater(a, b);
+                        return argmax_bfloat16_greater(a, b);
                     });
 
             } else if constexpr (data_format == DataFormat::UInt16) {
@@ -99,7 +99,7 @@ inline void find_argmax_for_core(
                 const uint32_t val = in_vals[i - red_dim_offset];
                 process_value_comparison<data_format, uint32_t, reduce_all>(
                     val, max_val, max_idx, i, outer_idx, j, inner_dim_units, red_dim_units, [](uint32_t a, uint32_t b) {
-                        return float32_greater(a, b);
+                        return argmax_float32_greater(a, b);
                     });
 
             } else if constexpr (data_format == DataFormat::Int32) {
@@ -109,12 +109,14 @@ inline void find_argmax_for_core(
                         return int32_greater(a, b);
                     });
 
+#ifndef ARCH_QUASAR  // Quasar's kernel DataFormat enum has no UInt32; this input branch is unused (bf16 input)
             } else if constexpr (data_format == DataFormat::UInt32) {
                 uint32_t val = in_vals[i - red_dim_offset];
                 process_value_comparison<data_format, uint32_t, reduce_all>(
                     val, max_val, max_idx, i, outer_idx, j, inner_dim_units, red_dim_units, [](uint32_t a, uint32_t b) {
                         return a > b;
                     });
+#endif
 
             } else {
                 // We need a value-dependent expression (gcc-12) that is not
@@ -178,7 +180,7 @@ inline uint32_t find_argmax_from_intermediate_outputs(
 
             process_core_data<data_format>(
                 inner_idx, i_red_vals, i_red_idxs, max_val, max_idx, [](uint16_t a, uint16_t b) {
-                    return bfloat16_greater(a, b);
+                    return argmax_bfloat16_greater(a, b);
                 });
 
         } else if constexpr (data_format == DataFormat::UInt16) {
@@ -194,7 +196,7 @@ inline uint32_t find_argmax_from_intermediate_outputs(
 
             process_core_data<data_format>(
                 inner_idx, i_red_vals, i_red_idxs, max_val, max_idx, [](uint32_t a, uint32_t b) {
-                    return float32_greater(a, b);
+                    return argmax_float32_greater(a, b);
                 });
 
         } else if constexpr (data_format == DataFormat::Int32) {
@@ -206,12 +208,14 @@ inline uint32_t find_argmax_from_intermediate_outputs(
                     return int32_greater(a, b);
                 });
 
+#ifndef ARCH_QUASAR  // Quasar's kernel DataFormat enum has no UInt32; this input branch is unused (bf16 input)
         } else if constexpr (data_format == DataFormat::UInt32) {
             volatile tt_l1_ptr auto i_red_vals = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
                 red_val_dfb_local_base_addr + (i * red_val_size_per_core));
 
             process_core_data<data_format>(
                 inner_idx, i_red_vals, i_red_idxs, max_val, max_idx, [](uint32_t a, uint32_t b) { return a > b; });
+#endif
 
         } else {
             // We need a value-dependent expression (gcc-12) that is not

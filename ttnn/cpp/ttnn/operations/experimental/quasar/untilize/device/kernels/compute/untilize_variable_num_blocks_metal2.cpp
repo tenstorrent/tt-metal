@@ -4,8 +4,7 @@
 
 // Metal 2.0 fork of untilize_variable_num_blocks.cpp. Identical compute logic; the CB indices become
 // dfb:: bindings, the per-block tile count a named compile-time arg, and the variable per-core block
-// count a named runtime arg. The legacy copy is retained for the not-yet-ported sharded untilize
-// factories that still instantiate it.
+// count a named runtime arg.
 
 #include <cstdint>
 

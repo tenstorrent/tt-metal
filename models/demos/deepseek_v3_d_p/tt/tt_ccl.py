@@ -165,10 +165,89 @@ class TT_CCL:
         # keyed by shape signature. See get_indexer_ring_k_buffer.
         self.indexer_ring_k_buffers: dict[tuple, "ttnn.Tensor"] = {}
 
+        # Shared across sequential norm layers. Semaphore and stats scratch must
+        # alternate together to absorb inter-device skew at collective completion.
+        # Sequential layers with the same geometry share two semaphore/stats pairs.
+        # Keep resources alive until mesh teardown: traces may still reference them.
+        self.fused_rmsnorm_resources: dict[tuple, dict] = {}
+
         # One model-wide sparse-MLA overlap manager and external high-BW-gather semaphore pair.
         # Full-indexer layers execute serially, so they reuse the same resources. The pair belongs
         # exclusively to the SP KV-prefix gather branch and is never shared with the TP index gather.
         self.sparse_mla_overlap_resources: SparseMlaOverlapResources | None = None
+
+        # The routed expert / combine_fabric2d overlap's fwd_arrived, final_arrived and expert_go, shared by every
+        # MoE layer. Created on first use; see get_combine_overlap_semaphores.
+        self.combine_overlap_semaphores = None
+        # The same overlap's DRAM forwarding buffer, one per shape; see get_combine_forwarding_buffer.
+        self.combine_forwarding_buffers = {}
+
+    def get_fused_rmsnorm_resources(self, x, weight, cluster_axis, num_links):
+        key = (
+            tuple(x.shape),
+            tuple(x.padded_shape),
+            x.dtype,
+            tuple(weight.shape),
+            weight.dtype,
+            cluster_axis,
+            num_links,
+        )
+        resources = self.fused_rmsnorm_resources.get(key)
+        if resources is None:
+            pairs = []
+            for _ in range(2):
+                semaphores = [ttnn.create_global_semaphore(self.mesh_device, self.sub_device_crs, 0)]
+                stats = ttnn.experimental.dit_fused_distributed_rmsnorm_create_stats_buffer(
+                    x, cluster_axis, self.mesh_device, num_links=num_links, weight=weight
+                )
+                pairs.append((semaphores, stats))
+            # All chips must initialize their semaphores before any peer sends.
+            # This allocation happens during the first warmup, once per geometry.
+            ttnn.synchronize_device(self.mesh_device)
+            resources = {"pairs": pairs, "next": 0}
+            self.fused_rmsnorm_resources[key] = resources
+        index = resources["next"]
+        resources["next"] = 1 - index
+        return resources["pairs"][index]
+
+    def get_combine_overlap_semaphores(self):
+        """(fwd_arrived, final_arrived, expert_go) for hybrid_routed_expert_moe overlapped with combine.
+
+        Neighbouring chips bump these across launches, so they must outlive every program: one set for the mesh,
+        shared by all MoE layers, which run one after another and each leave the counts as they found them. On every
+        worker core, so the address is uniform across the mesh and covers both ops' rows.
+        """
+        if self.combine_overlap_semaphores is None:
+            self.combine_overlap_semaphores = tuple(
+                ttnn.create_global_semaphore(self.mesh_device, self.sub_device_crs, 0) for _ in range(3)
+            )
+            # Every chip must have zeroed its copies before any neighbour bumps them.
+            ttnn.synchronize_device(self.mesh_device)
+        return self.combine_overlap_semaphores
+
+    def get_combine_forwarding_buffer(
+        self, emb_dim, experts_per_chip, num_experts_per_tok, seq_len_per_chip, num_links
+    ):
+        """combine_fabric2d's DRAM forwarding buffer for hybrid_routed_expert_moe overlapped with combine.
+
+        One per shape, shared by every MoE layer, which run one after another. Call it before the first overlapped
+        forward: left to the op, it is allocated while that forward's dispatch buffer and outputs are live and stays
+        pinned there, splitting the DRAM each later layer's dispatch buffer needs in one piece.
+        """
+        key = (emb_dim, experts_per_chip, num_experts_per_tok, seq_len_per_chip, num_links)
+        buffer = self.combine_forwarding_buffers.get(key)
+        if buffer is None:
+            buffer = ttnn.experimental.deepseek_prefill.hybrid_routed_expert_moe_forwarding_buffer(
+                self.mesh_device,
+                emb_dim=emb_dim,
+                experts_per_chip=experts_per_chip,
+                num_experts_per_tok=num_experts_per_tok,
+                seq_len_per_chip=seq_len_per_chip,
+                combine_axis=0,
+                combine_num_links=num_links,
+            )
+            self.combine_forwarding_buffers[key] = buffer
+        return buffer
 
     def get_sparse_mla_overlap_resources(self, profile: str) -> SparseMlaOverlapResources:
         """Create or return the exact 80/40 production or 80/30 QB2 overlap profile.
@@ -542,6 +621,29 @@ def per_axis_topology(
             "Add it to the mapping if a ring topology is intended."
         )
     return (ttnn.Topology.Linear, ttnn.Topology.Linear)
+
+
+def resolve_per_axis_topology(topology, sp_axis: int, tp_axis: int):
+    """Split a caller-supplied ``topology`` argument into ``(sp_topology, tp_topology)``.
+
+    The companion to ``per_axis_topology`` above: that one derives both axes from a fabric config, this
+    one normalizes whatever a caller passed down. Ring is valid only on an axis the fabric physically
+    wraps, so the two axes can legitimately differ -- under ``FABRIC_2D_TORUS_X`` the TP axis rings and
+    the SP axis has no wrap. Handing one axis's topology to a collective on the other makes it wait
+    forever on a wrap link the fabric does not service, so a ``(dim0, dim1)`` tuple is unpacked per axis.
+    A scalar applies to both, which preserves non-torus and 1D-ring behavior.
+
+    Shared by ttMLA and the V4 attention blocks and compressors, which all take the same ``topology``
+    argument and all own collectives on both axes.
+    """
+    if isinstance(topology, tuple):
+        if len(topology) != 2:
+            raise ValueError(f"a per-axis topology tuple must be (dim0, dim1), got {topology}")
+        # Unpacking the (dim0, dim1) tuple as (sp, tp) is only correct at sp_axis=0/tp_axis=1.
+        if sp_axis != 0 or tp_axis != 1:
+            raise ValueError("per-axis topology tuple assumes sp_axis=0, tp_axis=1")
+        return topology
+    return topology, topology
 
 
 # =============================================================================

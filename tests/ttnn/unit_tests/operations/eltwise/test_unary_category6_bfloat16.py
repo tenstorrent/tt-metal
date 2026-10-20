@@ -66,9 +66,11 @@ refactor of those files doesn't silently delete coverage this one relies on):
     bfloat16 row was removed in favour of the sweep here.
 
 Golden-function quirks (see ttnn/ttnn/operations/unary.py):
-  - _golden_function_selu ignores its scale/alpha kwargs and always uses the
-    paper defaults, but the kernel does honour them, so this file computes
-    its own reference (_selu_reference) to actually exercise them.
+  - _golden_function_selu used to ignore its scale/alpha kwargs (#57116). It
+    now honours them (torch.nn.functional.selu for the full-precision
+    defaults, closed form otherwise); test_selu_scale_alpha_golden and
+    test_selu_default_golden_uses_torch pin that. test_selu_op still uses its
+    own float64 reference (_selu_reference), decoupled from the golden.
   - bitcast only supports same-bit-width dtype pairs; bfloat16 -> uint16 is
     the only valid target.
 
@@ -525,8 +527,8 @@ def test_round_op(device, decimals):
     assert_with_ulp(expected_result=golden[finite], actual_result=result[finite], ulp_threshold=1)
 
 
-# selu(x) = scale * (x if x > 0 else alpha * (exp(x) - 1)). The attached golden
-# ignores scale/alpha, so a scale/alpha-aware reference is computed here.
+# selu(x) = scale * (x if x > 0 else alpha * (exp(x) - 1)). Computed in float64
+# here rather than via the attached golden, to stay decoupled from it.
 def _selu_reference(x, scale, alpha):
     x64 = x.to(torch.float64)
     pos = x64
@@ -561,6 +563,46 @@ def test_selu_op(device, scale, alpha):
 
     keep = ~ftz
     assert_with_ulp(expected_result=golden[keep], actual_result=result[keep], ulp_threshold=1, allow_nonfinite=True)
+
+
+@pytest.mark.parametrize(
+    "scale, alpha",
+    [
+        (1.0507, 1.67326),  # ttnn.selu's kernel defaults (unary_nanobind.cpp); closed-form path
+        (3.0, 2.0),  # non-default: regression for #57116
+        (0.5, 0.1),
+    ],
+)
+def test_selu_scale_alpha_golden(scale, alpha):
+    # ttnn.selu's registered golden used to call torch.nn.functional.selu(input_tensor_a),
+    # which hardcodes the canonical SELU constants and silently ignores scale/alpha -- the
+    # golden was identical for every (scale, alpha) pair. Pin the golden itself (host-only,
+    # no device dependency) against the closed-form definition so a future regression back to
+    # the old torch.nn.functional.selu call fails here immediately.
+    torch.manual_seed(0)
+    x = torch.empty(64).uniform_(-5, 5)
+    expected = torch.where(x >= 0, scale * x, scale * alpha * (torch.exp(x) - 1))
+
+    golden_function = ttnn.get_golden_function(ttnn.selu)
+    golden = golden_function(x, scale=scale, alpha=alpha)
+
+    torch.testing.assert_close(golden, expected)
+
+
+def test_selu_default_golden_uses_torch():
+    # With default (canonical) scale/alpha the golden routes through torch.nn.functional.selu.
+    torch.manual_seed(0)
+    x = torch.empty(64).uniform_(-5, 5)
+    expected = torch.nn.functional.selu(x)
+
+    golden_function = ttnn.get_golden_function(ttnn.selu)
+    torch.testing.assert_close(golden_function(x), expected, rtol=0, atol=0)
+    torch.testing.assert_close(
+        golden_function(x, scale=1.0507009873554804934193349852946, alpha=1.6732632423543772848170429916717),
+        expected,
+        rtol=0,
+        atol=0,
+    )
 
 
 # Above this |x|, reciprocal(x) underflows and is flushed to zero before the

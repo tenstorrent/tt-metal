@@ -3,6 +3,7 @@
 
 import os
 from enum import Enum
+from pathlib import Path
 
 
 class ChipArchitecture(Enum):
@@ -31,6 +32,33 @@ class ChipArchitecture(Enum):
         if enum_value is None:
             raise ValueError(f"Unknown architecture: {arch_str}")
         return enum_value
+
+
+QUASAR_ARCH_ROOT = Path(__file__).resolve().parents[3] / "tt_llk_quasar" / "arch"
+
+
+# Other spellings tt-metal accepts for TT_METAL_QUASAR_VARIANT. Empty means the base Quasar part.
+QUASAR_VARIANT_ALIASES = {
+    "quasar": "",
+    "2.0.0": "",
+    "2.0.1": "horizon",
+    "2.0.2": "trinity",
+}
+
+
+def quasar_variant():
+    raw = os.getenv("TT_METAL_QUASAR_VARIANT", "").strip().lower()
+    variant = QUASAR_VARIANT_ALIASES.get(raw, raw)
+    if variant and not (QUASAR_ARCH_ROOT / variant).is_dir():
+        known = sorted(p.name for p in QUASAR_ARCH_ROOT.iterdir() if p.is_dir())
+        raise ValueError(
+            f"TT_METAL_QUASAR_VARIANT={raw!r} has no directory under {QUASAR_ARCH_ROOT}; known variants: {known}"
+        )
+    return variant
+
+
+def is_4row_arch():
+    return quasar_variant() == "trinity"
 
 
 # Cache for chip architecture

@@ -44,6 +44,7 @@ Execution model: RISC-V cores push instructions to corresponding coprocessor thr
 | Inspecting VCS/FSDB waves for a Quasar runtime failure | `llk-wave-debug` (`.claude/skills/llk-wave-debug/SKILL.md`) | Runs deterministic private waveform diagnosis and reports evidence (Quasar only) |
 | Porting kernels between architectures | `port-kernel` (`.claude/skills/port-kernel/SKILL.md`) | Launches source + target sages, reads test harness |
 | Creating or repairing Quasar perf tests | `quasar-perf-test` (`.claude/skills/quasar-perf-test/SKILL.md`) | Reuses correctness tests, wires `PerfConfig`, implements `PerfRunType` paths, and selects tile/dimension coverage via `PERF_TILE_SIZES` |
+| Choosing the sweep axes of a Quasar functional test | `quasar-test-coverage` (`.claude/skills/quasar-test-coverage/SKILL.md`) | Picks input dimensions (incl. dest bank switching), MX format pairs, and math fidelity so variants buy coverage |
 | Generating or refreshing a performance report | `perf-report` (`.claude/skills/perf-report/SKILL.md`) | Runs the producer/consumer perf sweep, combines `perf_data` CSVs, and validates schema, coverage, and metric plausibility |
 | Analyzing performance-report CSV parameter impact | `perf-parameter-impact` (`.claude/skills/perf-parameter-impact/SKILL.md`) | Builds paired, bottleneck-aware Canvas reports for formats, fidelity, dimensions, accumulation, indexing, and related parameters |
 | TensorShape / tile-size API conversion or coverage | `tensor-shape` (`.claude/skills/tensor-shape/SKILL.md`) | Plumbs `TensorShape` through lib/API, TRISC coverage, review checklist |
@@ -57,6 +58,7 @@ Trigger examples for `arch-lookup`:
 ## Coding Style
 
 - **`const` placement**: write `const <type>` (e.g. `const uint32_t x`), never `<type> const` (e.g. `uint32_t const x`). Semantics are identical, but the codebase uses `const <type>` everywhere — match it. Applies to all type qualifiers in the same position (e.g. `volatile`, `constexpr` modifiers on declarations).
+- **Literal arguments in HAL**: prefer existing named constants or enums for hardware modes. Otherwise, label numeric and boolean arguments in function/instruction calls and template instantiations with the declared parameter name immediately after the literal: `0 /*Shamt*/`, `false /*IsSrcB*/`, `wait(1 /*cycles*/)`. Declarations/defaults, arithmetic, assertions, and descriptor tables with a documented field layout need no redundant labels.
 
 ### Documentation
 
