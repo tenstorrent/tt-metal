@@ -1168,19 +1168,19 @@ def test_llama4_query_scale_is_applied_in_q_stem(request, mesh_device, kv_actual
     want = 1.0 + beta * torch.log(1.0 + torch.floor(flat / orig_max))
     assert want.min() > 1.0, f"kv_actual={kv_actual} produced scale 1.0; the test cannot fail as written"
 
-    # Compare where the unscaled magnitude is large enough that the ratio is not dominated by bf16
-    # quantisation of near-zero entries.
-    ref = plain[0, 0, :, :]
-    got = scaled[0, 0, :, :]
-    mask = ref.abs() > 0.1
-    assert mask.any(), "no usable magnitudes in the q stem output"
-    ratio = (got[mask] / ref[mask]).float()
-    per_row = want.unsqueeze(-1).expand_as(ref)[mask]
+    # ttMLA applies the scale to the q_a latent, upstream of q_b_proj, wkv_b1 and RoPE, so each output
+    # element is a long dot product of rounded scaled inputs. An element-wise scaled/plain ratio is
+    # then noisy wherever that dot product nearly cancels. Compare per row (= per position, where the
+    # scale is constant) with the least-squares ratio <scaled, plain> / <plain, plain> instead: it is
+    # the scale when the multiply is wired, and 1.0 when it is not.
+    ref = plain[0, :, :, :].permute(1, 0, 2).reshape(plain.shape[2], -1)  # [rows, heads * width]
+    got = scaled[0, :, :, :].permute(1, 0, 2).reshape(scaled.shape[2], -1)
+    ratio = (got * ref).sum(-1) / (ref * ref).sum(-1)
     logger.info(
         f"kv_actual={kv_actual}: expected scale range [{want.min():.6f}, {want.max():.6f}], "
-        f"observed ratio range [{ratio.min():.6f}, {ratio.max():.6f}]"
+        f"observed per-row ratio range [{ratio.min():.6f}, {ratio.max():.6f}]"
     )
-    torch.testing.assert_close(ratio, per_row, rtol=2e-2, atol=2e-2)
+    torch.testing.assert_close(ratio, want.to(ratio.dtype), rtol=1e-2, atol=0)
 
 
 # ---------------------------------------------------------------------------------------------------
@@ -1225,17 +1225,21 @@ def test_llama4_scale_buffer_is_live_under_trace_replay(request, mesh_device, va
     expect = {off: 1.0 + beta * math.log(1.0 + off // orig_max) for off in (off_a, off_b)}
     assert expect[off_a] != expect[off_b], "offsets must differ in scale or this test proves nothing"
 
+    # The operand stands in for what ttMLA scales: the normed q_a latent, [1, 1, S, q_lora_rank],
+    # SP-sharded on the sequence and replicated across TP (see rope._llama4_scale_geometry). The read
+    # back concatenates the replicated TP copies on dim 1 and keeps one.
+    in_dims = [None, None]
+    in_dims[sp_axis] = 2
     shard_dims = [None, None]
     shard_dims[sp_axis] = 2
     shard_dims[tp_axis] = 1
-    width = config.kv_lora_rank + config.qk_rope_head_dim
     q = ttnn.from_torch(
-        torch.ones(1, config.num_attention_heads, chunk_size_global, width, dtype=torch.bfloat16),
+        torch.ones(1, 1, chunk_size_global, config.q_lora_rank, dtype=torch.bfloat16),
         device=mesh_device,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=in_dims),
     )
 
     refresh_llama4_scale(scale_buf, config, mesh_device, off_a, chunk_size_global, sp_axis=sp_axis)
