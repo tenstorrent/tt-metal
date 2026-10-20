@@ -46,7 +46,12 @@ from models.experimental.nomic_embed_text_v2_moe.tt.model_config import OpGroup
 from models.experimental.nomic_embed_text_v2_moe.tt.router import Routing
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
-pytestmark = [run_for_blackhole(), pytest.mark.use_module_device, pytest.mark.needs_weights]
+# The trace region holds test_routed_pass_replays_in_a_trace's commands: a few hundred kilobytes.
+pytestmark = [
+    run_for_blackhole(),
+    pytest.mark.use_module_device({"trace_region_size": 8 << 20}),
+    pytest.mark.needs_weights,
+]
 
 # Two chained matmuls, one 768-deep and one 3072-deep, with bfloat8_b weights and intermediate.
 MODULE_PCC = 0.998
@@ -77,6 +82,13 @@ ROUTED_SHAPES = [(3, 110), (2, 512), (10, 500)]
 # scores about 1.
 ROUTED_PCC = 0.9999
 ROUTED_TOKEN_ERROR = 0.015
+
+# The routed pass with the experts on the device: grouped_matmul's bfloat8_b weights and
+# intermediate, HiFi2 and LoFi, and the tanh GELU where the reference uses exact erf. Measured over
+# seeds 0..7 at ROUTED_SHAPES: PCC 0.9998944 at worst and a token error of 2.96e-02; the bounds are
+# about three times as loose.
+ROUTED_DEVICE_PCC = 0.9995
+ROUTED_DEVICE_TOKEN_ERROR = 0.09
 
 PREFIX = f"encoder.layers.{MOE_LAYER}.mlp.experts."
 
@@ -322,6 +334,47 @@ def window_metadata(routing: Routing, num_experts: int, token_start: int, num_to
     return outputs, to_host(outputs)
 
 
+def bfloat16_ties_away(values: torch.Tensor) -> torch.Tensor:
+    """float32 to bfloat16 rounding to nearest, ties away from zero, as the packer rounds."""
+    bits = values.float().view(torch.int32)
+    return ((bits + 0x8000) & ~0xFFFF).view(torch.float32).bfloat16()
+
+
+def device_rows(rows: torch.Tensor, device):
+    """(R, H) expert output rows as grouped_w2 writes them: bfloat16, row-major."""
+    return to_device(rows.reshape(1, 1, *rows.shape), device, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+
+def routed_pass(tt_experts, x, routing: Routing, num_experts: int) -> list:
+    """Each window's (1, 1, t, H) result of the routed pass: metadata, dispatch, both grouped
+    matmuls and combine, every step on the device. Each intermediate is freed once its consumer has
+    run, which the routed passes' L1 budget (ROUTED_L1_MAX_BANK_BYTES) relies on."""
+    x_rows = tt_experts.dispatch_table(x)
+    windows = routed_windows(x.shape[-2])
+    sums = []
+    for window, (token_start, num_tokens) in enumerate(windows):
+        (
+            gather_index,
+            combine_index,
+            combine_weights,
+            expert_counts,
+        ) = ttnn.experimental.nomic_embed_text_v2_moe.routing_metadata(
+            routing.indices, routing.values, num_experts=num_experts, token_start=token_start, num_tokens=num_tokens
+        )
+        dispatched = tt_experts.dispatch(x_rows, gather_index)
+        ttnn.deallocate(gather_index)
+        if window == len(windows) - 1:
+            ttnn.deallocate(x_rows)
+        activated = tt_experts.grouped_w1(dispatched, expert_counts)
+        ttnn.deallocate(dispatched)
+        expert_rows = tt_experts.grouped_w2(activated, expert_counts)
+        ttnn.deallocate(activated)
+        sums.append(tt_experts.combine(expert_rows, combine_index, combine_weights, num_tokens))
+        for tensor in (combine_index, combine_weights, expert_counts, expert_rows):
+            ttnn.deallocate(tensor)
+    return sums
+
+
 def torch_experts(reference, dispatched: torch.Tensor, expert_counts: torch.Tensor) -> torch.Tensor:
     """The routed experts on the host: each block of dispatched rows through its expert, in bfloat16.
 
@@ -367,13 +420,15 @@ def test_dispatch_copies_each_slot_row(device, config, tt_experts, batch, seqlen
 
 @pytest.mark.parametrize("batch, seqlen", ROUTED_SHAPES)
 def test_combine_returns_each_slot_row(device, config, tt_experts, batch, seqlen):
-    """At weights (1, 0) each token's sum is its first slot's row, at (0, 1) its second's, bit for bit.
+    """At weights (1, 0) each token's result is its first slot's row plus the shared bias, at (0, 1)
+    its second's, rounded to bfloat16 once, bit for bit.
 
     Every expert output row that holds no slot is NaN, so a token reading one would show it. Padding
-    tokens read row 0, a real slot's row, at weight 0, so the tile padding of the sum is exact zeros.
+    tokens read row 0, a real slot's row, at weight 0, so the tile padding of the result is the bias.
     """
     tokens, hidden, top_k = batch * seqlen, config.hidden_size, config.moe_top_k
     _, indices = routing_selection(tokens, config.num_experts, top_k)
+    bias = ttnn.to_torch(tt_experts.bias).float().reshape(1, hidden)
 
     for k in range(top_k):
         values = torch.zeros(tokens, top_k)
@@ -390,17 +445,18 @@ def test_combine_returns_each_slot_row(device, config, tt_experts, batch, seqlen
             used[rows[:, :num_tokens].reshape(-1)] = True
             expert_outputs[~used] = float("nan")
 
-            out = tt_experts.combine(
-                to_device(expert_outputs.reshape(1, 1, -1, hidden), device), combine_index, combine_weights, num_tokens
-            )
+            out = tt_experts.combine(device_rows(expert_outputs, device), combine_index, combine_weights, num_tokens)
             padded = ttnn.to_torch(ttnn.reshape(out, (1, 1, padded_tokens, hidden), (1, 1, padded_tokens, hidden)))
             padded = padded.reshape(padded_tokens, hidden)
+            want = bfloat16_ties_away(expert_outputs[rows[k, :num_tokens]].float() + bias)
 
             assert list(out.shape) == [1, 1, num_tokens, hidden]
             assert torch.equal(
-                padded[:num_tokens].view(torch.int16), expert_outputs[rows[k, :num_tokens]].view(torch.int16)
-            ), f"window at {token_start}: a token's sum at k={k} is not its slot's row"
-            assert (padded[num_tokens:] == 0).all(), f"window at {token_start}: the padding of the sum is not zero"
+                padded[:num_tokens].view(torch.int16), want.view(torch.int16)
+            ), f"window at {token_start}: a token's result at k={k} is not its slot's row plus the bias"
+            assert torch.equal(
+                padded[num_tokens:].float(), bias.expand(padded_tokens - num_tokens, hidden)
+            ), f"window at {token_start}: the padding of the result is not the bias"
 
 
 @pytest.mark.parametrize("batch, seqlen", ROUTED_SHAPES)
@@ -425,18 +481,74 @@ def test_routed_pass_with_torch_experts(device, config, reference, tt_experts, b
         )
         dispatched = ttnn.to_torch(tt_experts.dispatch(x_rows, gather_index)).float().reshape(-1, hidden)
         expert_outputs = torch_experts(reference, dispatched, metadata.expert_counts)
-        out = tt_experts.combine(
-            to_device(expert_outputs.reshape(1, 1, -1, hidden), device), combine_index, combine_weights, num_tokens
-        )
+        out = tt_experts.combine(device_rows(expert_outputs, device), combine_index, combine_weights, num_tokens)
         sums.append(ttnn.to_torch(out).float().reshape(num_tokens, hidden))
     got = torch.cat(sums)
 
     with torch.no_grad():
         x_host = ttnn.to_torch(x).float().reshape(1, tokens, hidden)
-        ref = (reference(x_host, values, indices) - reference.bias).reshape(tokens, hidden)
+        ref = reference(x_host, values, indices).reshape(tokens, hidden)
     token_error = (got - ref).norm(dim=-1) / ref.norm(dim=-1)
 
     assert_with_pcc(ref, got, ROUTED_PCC)
     assert (
         token_error.max() < ROUTED_TOKEN_ERROR
     ), f"token {int(token_error.argmax())} is off by {float(token_error.max()):.3e} of its norm"
+
+
+@pytest.mark.parametrize("batch, seqlen", ROUTED_SHAPES)
+def test_routed_pass_with_device_experts(device, config, reference, tt_experts, batch, seqlen):
+    """The whole routed pass on the device reproduces the reference's per-expert loop.
+
+    Routing metadata, dispatch, grouped_matmul for w1 and its GELU and for w2, and routed_combine
+    with the shared bias, window by window. The token-wise bound catches a token routed to a wrong
+    expert or summed from a wrong row, which whole-output PCC barely sees.
+    """
+    tokens, hidden = batch * seqlen, config.hidden_size
+    x = flatten_tokens(to_device(to_block_layout(hidden_states(batch, seqlen, hidden)), device))
+    values, indices = routing_selection(tokens, config.num_experts, config.moe_top_k)
+    routing = device_selection(values, indices, device)
+
+    got = torch.cat(
+        [
+            ttnn.to_torch(window).float().reshape(-1, hidden)
+            for window in routed_pass(tt_experts, x, routing, config.num_experts)
+        ]
+    )
+
+    with torch.no_grad():
+        x_host = ttnn.to_torch(x).float().reshape(1, tokens, hidden)
+        ref = reference(x_host, values, indices).reshape(tokens, hidden)
+    token_error = (got - ref).norm(dim=-1) / ref.norm(dim=-1)
+
+    assert_with_pcc(ref, got, ROUTED_DEVICE_PCC)
+    assert (
+        token_error.max() < ROUTED_DEVICE_TOKEN_ERROR
+    ), f"token {int(token_error.argmax())} is off by {float(token_error.max()):.3e} of its norm"
+
+
+def test_routed_pass_replays_in_a_trace(device, config, tt_experts):
+    """The routed pass reads its routing on the device only, so a captured trace replays it for a
+    new routing: a replay after copying in a new selection equals running that selection directly.
+    """
+    batch, seqlen = 2, 512
+    tokens, hidden = batch * seqlen, config.hidden_size
+    x = flatten_tokens(to_device(to_block_layout(hidden_states(batch, seqlen, hidden)), device))
+    first = device_selection(*routing_selection(tokens, config.num_experts, config.moe_top_k), device)
+    second_values, second_indices = routing_selection(tokens, config.num_experts, config.moe_top_k)
+    second = device_selection(second_values, second_indices, device)
+
+    # Compiles every program first: a trace captures commands, not compilation.
+    (direct,) = routed_pass(tt_experts, x, second, config.num_experts)
+    want = ttnn.to_torch(direct)
+
+    trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+    (traced,) = routed_pass(tt_experts, x, first, config.num_experts)
+    ttnn.end_trace_capture(device, trace_id, cq_id=0)
+    for source, target in ((second.indices, first.indices), (second.values, first.values)):
+        ttnn.copy_host_to_device_tensor(ttnn.from_device(source), target)
+    ttnn.execute_trace(device, trace_id, cq_id=0, blocking=True)
+    got = ttnn.to_torch(traced)
+    ttnn.release_trace(device, trace_id)
+
+    assert torch.equal(got.view(torch.int16), want.view(torch.int16))

@@ -136,7 +136,7 @@ class TtNomicBertModel(LightweightModule):
             weight=weight,
             bias=bias,
             epsilon=self.config.layer_norm_epsilon,
-            memory_config=activation_memory_config(hidden),
+            memory_config=activation_memory_config(hidden.shape),
             compute_kernel_config=self.tt_config.compute_kernel_config(OpGroup.NORM),
         )
         ttnn.deallocate(hidden)

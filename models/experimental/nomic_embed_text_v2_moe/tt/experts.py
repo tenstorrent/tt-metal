@@ -95,6 +95,15 @@ HELD_MAX_TILES = 4
 MAX_TOKENS_PER_PASS = 4096
 
 
+# A routed pass's gathered rows, w1 output and expert rows go to L1 when each bank's share is at most
+# this. At 4096 tokens grouped w2's circular buffers take 848 KB of the 1.46 MB a core has for them
+# and L1 buffers together, its input (the w1 output) 250 KB and its output 118 KB, which leaves
+# 244 KB. So a pass frees the gathered rows (118 KB) once w1 has read them, and a one-pass layer its
+# dispatch table (58 KB) once dispatch has.
+ROUTED_L1_MAX_BANK_BYTES = 256 << 10
+BFLOAT16_BYTES = 2
+
+
 def routed_windows(tokens: int, max_tokens: int = MAX_TOKENS_PER_PASS) -> list[tuple[int, int]]:
     """(token_start, num_tokens) of each routed pass: as few as max_tokens allows, of one size.
 
@@ -267,7 +276,7 @@ class TtNomicExperts(LightweightModule):
             ),
             compute_kernel_config=compute_kernel_config,
             dtype=self.tt_config.activation_dtype,
-            memory_config=activation_memory_config(gated),
+            memory_config=activation_memory_config(gated.shape),
         )
 
     def transposed_w1(self, x: ttnn.Tensor, gelu: ttnn.GeluVariant | None = None) -> ttnn.Tensor:
@@ -345,12 +354,23 @@ class TtNomicExperts(LightweightModule):
             dtype=self.tt_config.expert_output_dtype,
         )
 
+    def routed_memory_config(self, pages: int, page_bytes: int) -> ttnn.MemoryConfig:
+        """L1 for a routed-pass intermediate of `pages` pages when its share of each bank fits
+        ROUTED_L1_MAX_BANK_BYTES, DRAM otherwise."""
+        bank_bytes = ttnn.core.divup(pages, self.tt_config.l1_banks) * page_bytes
+        return ttnn.L1_MEMORY_CONFIG if bank_bytes <= ROUTED_L1_MAX_BANK_BYTES else ttnn.DRAM_MEMORY_CONFIG
+
     def dispatch_table(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """(1, 1, T, H) -> the row-major rows every routed pass of the layer gathers from.
 
-        Untilized once a layer: ttnn.embedding untilizes a tile-layout table on every call.
+        Untilized once a layer: ttnn.embedding untilizes a tile-layout table on every call. It lives
+        through all the layer's passes, so it takes L1 only when the layer is one pass.
         """
-        return ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+        tokens, hidden = x.shape[-2], x.shape[-1]
+        memory_config = ttnn.DRAM_MEMORY_CONFIG
+        if len(routed_windows(tokens)) == 1:
+            memory_config = self.routed_memory_config(tokens, hidden * BFLOAT16_BYTES)
+        return ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT, memory_config=memory_config)
 
     def dispatch(self, x_rows: ttnn.Tensor, gather_index: ttnn.Tensor) -> ttnn.Tensor:
         """routing_metadata's (1, R) gather_index -> (1, 1, R, H), row r a copy of row gather_index[r] of x_rows.
@@ -358,29 +378,71 @@ class TtNomicExperts(LightweightModule):
         The ids are global, so every pass of a layer gathers from the one dispatch_table. The copy
         is exact: ttnn.embedding moves whole rows and tilizes them without arithmetic.
         """
-        dispatched = ttnn.embedding(gather_index, x_rows, layout=ttnn.TILE_LAYOUT)
+        rows, hidden = gather_index.shape[-1], x_rows.shape[-1]
+        tiles = rows // ttnn.TILE_SIZE * hidden // ttnn.TILE_SIZE
+        dispatched = ttnn.embedding(
+            gather_index,
+            x_rows,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=self.routed_memory_config(tiles, ttnn.tile_size(ttnn.bfloat16)),
+        )
         return ttnn.reshape(dispatched, (1, 1, dispatched.shape[-2], dispatched.shape[-1]))
 
-    def combine(
-        self, expert_outputs: ttnn.Tensor, combine_index: ttnn.Tensor, combine_weights: ttnn.Tensor, tokens: int
-    ) -> ttnn.Tensor:
-        """The routed experts' (1, 1, R, H) rows -> (1, 1, t, H), each token's top-k rows weighted and summed.
+    def grouped_w1(self, dispatched: ttnn.Tensor, expert_counts: ttnn.Tensor) -> ttnn.Tensor:
+        """dispatch's (1, 1, R, H) rows -> (1, 1, R, F), each 32-row block through its expert's w1 and GELU.
 
-        The shared bias is not added. A padding token reads row 0, always a real slot's row, at
-        weight 0, so the tile padding of the sum holds exact zeros: it stays finite into the next
-        attention, which non-finite padded keys corrupt. The reduce writes the tile-padded token
-        count, and the last reshape, a view, gives back t.
+        The expert of each block follows from expert_counts on the device. Blocks past the last
+        expert's region are neither computed nor written; nothing reads them.
         """
-        gathered = ttnn.embedding(combine_index, expert_outputs, layout=ttnn.TILE_LAYOUT)
-        top_k, padded_tokens, hidden = gathered.shape[0], gathered.shape[1], gathered.shape[2]
-        summed = ttnn.experimental.deepseek_prefill.attn_res_weighted_reduce_nc(
-            ttnn.reshape(gathered, (1, top_k, padded_tokens, hidden)),
+        dtype = self.tt_config.expert_intermediate_dtype
+        tiles = dispatched.shape[-2] // ttnn.TILE_SIZE * self.w1_columns.shape[-1] // self.num_experts // ttnn.TILE_SIZE
+        return ttnn.experimental.nomic_embed_text_v2_moe.grouped_matmul(
+            dispatched,
+            self.w1_columns,
+            expert_counts,
+            dtype=dtype,
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU_TANH, 1.0 if self.tt_config.routed_fast_gelu else 0.0),
+            memory_config=self.routed_memory_config(tiles, ttnn.tile_size(dtype)),
+            compute_kernel_config=self.tt_config.compute_kernel_config(OpGroup.EXPERT_W1),
+        )
+
+    def grouped_w2(self, activated: ttnn.Tensor, expert_counts: ttnn.Tensor) -> ttnn.Tensor:
+        """grouped_w1's (1, 1, R, F) -> (1, 1, R, H) bfloat16 rows, each block through its expert's w2.
+
+        Row-major, so combine reads each token's rows whole. w2_columns is read transposed, the copy
+        the stacked pass reads, so set_w2's misoriented control covers both.
+        """
+        rows, hidden = activated.shape[-2], self.w2_columns.shape[-2]
+        return ttnn.experimental.nomic_embed_text_v2_moe.grouped_matmul(
+            activated,
+            self.w2_columns,
+            expert_counts,
+            dtype=ttnn.bfloat16,
+            transpose_weight=True,
+            output_layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=self.routed_memory_config(rows, hidden * BFLOAT16_BYTES),
+            compute_kernel_config=self.tt_config.compute_kernel_config(OpGroup.EXPERT_W2),
+        )
+
+    def combine(
+        self, expert_rows: ttnn.Tensor, combine_index: ttnn.Tensor, combine_weights: ttnn.Tensor, tokens: int
+    ) -> ttnn.Tensor:
+        """grouped_w2's (1, 1, R, H) rows -> (1, 1, t, H): each token's top-k rows weighted and summed, plus the bias.
+
+        A padding token reads row 0, always a real slot's row, at weight 0, so the tile padding of
+        the result holds the bias: it stays finite into the next attention, which non-finite padded
+        keys corrupt.
+        """
+        return ttnn.experimental.nomic_embed_text_v2_moe.routed_combine(
+            expert_rows,
+            combine_index,
             combine_weights,
-            dim=1,
+            self.bias,
+            num_tokens=tokens,
+            # The module's output, placed as the other passes place theirs.
+            memory_config=activation_memory_config((1, 1, tokens, expert_rows.shape[-1])),
             compute_kernel_config=self.tt_config.compute_kernel_config(OpGroup.REDUCE),
         )
-        ttnn.deallocate(gathered)
-        return ttnn.reshape(summed, (1, 1, tokens, hidden), (1, 1, padded_tokens, hidden))
 
     def _stacked_sum(self, x: ttnn.Tensor, dense_weights: ttnn.Tensor, buffers: StackedBuffers | None) -> ttnn.Tensor:
         """(1, 1, t, H) -> (1, 1, t, H) for a pass of at most STACKED_MAX_TOKENS, the bias included."""

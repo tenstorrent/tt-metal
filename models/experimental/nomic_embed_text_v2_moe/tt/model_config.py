@@ -70,6 +70,12 @@ on real weights and real-text activations:
                        of 512 draws over 5e-3 against 37) and fails five tests, two of
                        test_ttnn_model.py at 2x37 and three of test_ttnn_encoder.py at 2x128; it is
                        a TtModelConfig switch away (expert_gelu).
+  routed GELU          the routed experts' w1 (grouped_matmul) computes the same tanh GELU as
+                       x / (1 + exp(-2u)), GELU_TANH param 1 (routed_fast_gelu), within 1 bf16 ULP
+                       of the accurate form. On every MoE layer's real inputs at 8x512 and 2x512
+                       its bfloat8_b outputs equal the accurate form's in 99.99% of elements, with
+                       the same error against float64 erf GELU to four digits; it takes w1 from
+                       370 to 272 us at 4096 tokens.
 
 None of the reduced-precision choices above moved retrieval nDCG beyond run-to-run noise. These
 were measured and left off:
@@ -122,6 +128,7 @@ ATTENTION_MASK_DTYPE = ttnn.bfloat4_b
 # The GELU of the dense FFN and of the experts. See the module docstring.
 DENSE_GELU = ttnn.GeluVariant.Tanh
 EXPERT_GELU = ttnn.GeluVariant.Tanh
+ROUTED_FAST_GELU = True
 
 LAYOUT = ttnn.TILE_LAYOUT
 MEMORY_CONFIG = ttnn.DRAM_MEMORY_CONFIG
@@ -149,7 +156,7 @@ class OpGroup(Enum):
     SDPA = "sdpa"
     SOFTMAX = "softmax"  # the router's
     NORM = "norm"  # emb_ln and both block norms
-    REDUCE = "reduce"  # the expert fast_reduce_nc and the pooling sums
+    REDUCE = "reduce"  # the expert fast_reduce_nc, routed_combine and the pooling sums
 
 
 MATMUL_GROUPS = (
@@ -236,6 +243,7 @@ class TtModelConfig:
     attention_mask_dtype: ttnn.DataType = ATTENTION_MASK_DTYPE
     dense_gelu: ttnn.GeluVariant = DENSE_GELU
     expert_gelu: ttnn.GeluVariant = EXPERT_GELU
+    routed_fast_gelu: bool = ROUTED_FAST_GELU
     attention_l1: bool = True  # the head tensors and SDPA's output in L1 where they fit, tt/attention.py
     layout: ttnn.Layout = LAYOUT
 

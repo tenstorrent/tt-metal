@@ -224,7 +224,7 @@ class TtNomicRouter(LightweightModule):
             probabilities,
             mask,
             dtype=activation_dtype,
-            memory_config=activation_memory_config(probabilities),
+            memory_config=activation_memory_config(probabilities.shape),
             sub_core_grids=self._tile_cores(probabilities),
         )
         ttnn.deallocate(mask)

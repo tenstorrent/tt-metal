@@ -76,13 +76,14 @@ def to_device(
 ACTIVATION_L1_MAX_TILES = 10
 
 
-def activation_memory_config(x: ttnn.Tensor) -> ttnn.MemoryConfig:
+def activation_memory_config(shape: ttnn.Shape | tuple[int, ...]) -> ttnn.MemoryConfig:
     """L1 for an activation of at most ACTIVATION_L1_MAX_TILES tile rows of M, DRAM above.
 
     M counts each sequence at its tile-padded length: B * ceil(S / 32) rows for (B, 1, S, W), and
-    ceil(T / 32) for the flat (1, 1, T, W).
+    ceil(T / 32) for the flat (1, 1, T, W). It takes a shape, so an op's output can be placed before
+    it exists.
     """
-    m_tiles = x.shape[0] * ttnn.core.divup(x.shape[-2], ttnn.TILE_SIZE)
+    m_tiles = shape[0] * ttnn.core.divup(shape[-2], ttnn.TILE_SIZE)
     return ttnn.L1_MEMORY_CONFIG if m_tiles <= ACTIVATION_L1_MAX_TILES else ttnn.DRAM_MEMORY_CONFIG
 
 

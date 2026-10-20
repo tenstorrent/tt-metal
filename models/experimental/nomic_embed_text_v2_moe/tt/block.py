@@ -83,7 +83,7 @@ class TtNomicBertBlock(LightweightModule):
             weight=weight,
             bias=bias,
             epsilon=self.epsilon,
-            memory_config=activation_memory_config(x) if memory_config is None else memory_config,
+            memory_config=activation_memory_config(x.shape) if memory_config is None else memory_config,
             compute_kernel_config=self.tt_config.compute_kernel_config(OpGroup.NORM),
         )
 
