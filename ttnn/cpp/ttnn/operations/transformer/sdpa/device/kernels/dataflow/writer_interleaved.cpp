@@ -311,7 +311,7 @@ void kernel_main() {
                 // Streaming: drain per row-group (cb_out is a 2-slot ping-pong).
                 // Compute always pushes Sq_chunk_t rows; rows past out_row_tile_count
                 // are padding and get popped without being written.
-                write_block_row_grouped(
+                write_block_row_grouped<head_rows>(
                     noc,
                     out_writer,
                     cb_out,
@@ -323,10 +323,9 @@ void kernel_main() {
                     out_subblock_h,
                     barrier_threshold,
                     out_row_stride,
-                    head_rows,
                     first_row_in_head);
             } else {
-                write_block(
+                write_block<head_rows>(
                     noc,
                     out_writer,
                     cb_out,
@@ -337,7 +336,6 @@ void kernel_main() {
                     tile_bytes,
                     barrier_threshold,
                     out_row_stride,
-                    head_rows,
                     first_row_in_head);
             }
         }
