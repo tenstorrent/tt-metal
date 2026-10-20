@@ -5,7 +5,9 @@
 #include "llrt/metal_soc_descriptor.hpp"
 
 #include <algorithm>
+#include <numeric>
 #include <optional>
+#include <tuple>
 #include <tt_stl/assert.hpp>
 #include <yaml-cpp/yaml.h>
 
@@ -479,6 +481,29 @@ void metal_SocDescriptor::load_dram_metadata_from_device_descriptor(
             }
         }
         this->dram_bank_endpoint_coords.push_back(std::move(bank_endpoints));
+    }
+
+    // EXPERIMENT: use a common translated NoC-1 bank order on harvested Blackhole.
+    // Fabric collectives generate remote DRAM addresses from the sender's table.
+    if (this->arch == tt::ARCH::BLACKHOLE && this->dram_view_channels.size() == 7) {
+        std::vector<size_t> order(this->dram_view_channels.size());
+        std::iota(order.begin(), order.end(), 0);
+        std::sort(order.begin(), order.end(), [&](size_t a, size_t b) {
+            const auto& lhs = this->dram_view_worker_cores[a][1];
+            const auto& rhs = this->dram_view_worker_cores[b][1];
+            return std::tie(lhs.x, lhs.y) < std::tie(rhs.x, rhs.y);
+        });
+        const auto reorder = [&](auto& values) {
+            auto original = values;
+            for (size_t i = 0; i < order.size(); ++i) {
+                values[i] = std::move(original[order[i]]);
+            }
+        };
+        reorder(this->dram_view_channels);
+        reorder(this->dram_view_address_offsets);
+        reorder(this->dram_view_eth_cores);
+        reorder(this->dram_view_worker_cores);
+        reorder(this->dram_bank_endpoint_coords);
     }
 }
 
