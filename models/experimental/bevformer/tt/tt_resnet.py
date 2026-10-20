@@ -8,7 +8,10 @@ Bottleneck stages. layer3 and layer4 use a modulated deformable conv for conv2.
 Each BatchNorm is already folded into the conv before it.
 """
 
+import math
+
 import ttnn
+from models.experimental.bevformer.model_config import DCN_SHARDED_INPUT_CHANNELS
 from models.experimental.bevformer.tt.tt_common import TTConv2D, signpost
 from models.experimental.bevformer.tt.tt_modulated_deform_conv import TTModulatedDeformConv2dDevice
 
@@ -62,6 +65,26 @@ class TTModulatedDeformConv2dPack:
             output_layout=ttnn.ROW_MAJOR_LAYOUT,
         )
 
+        # The DCN's input, height-sharded over the grid in whole 32-row blocks where that pays
+        # (DCN_SHARDED_INPUT_CHANNELS): the op gives each core the output rows of its own shard, so
+        # most bilinear corners are in its own L1 and the rest in a neighbour's, instead of spread
+        # over every core's. Otherwise interleaved in L1.
+        self.input_memory_config = ttnn.L1_MEMORY_CONFIG
+        if offset_args.in_channels not in DCN_SHARDED_INPUT_CHANNELS:
+            return
+        grid = device.compute_with_storage_grid_size()
+        rows = offset_args.batch_size * offset_args.input_height * offset_args.input_width
+        shard_rows = math.ceil(rows / (grid.x * grid.y) / ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+        self.input_memory_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(
+                ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))}),
+                [shard_rows, offset_args.in_channels],
+                ttnn.ShardOrientation.ROW_MAJOR,
+            ),
+        )
+
     def __call__(self, x):
         """``x`` is a (1, 1, B*H*W, C_in) tensor in conv2d's layout. Returns the
         (1, 1, B*H_out*W_out, C_out) output, also in conv2d's layout, and its height and width."""
@@ -76,8 +99,8 @@ class TTModulatedDeformConv2dPack:
         # At stride 1 the input has the output's height and width. The DCN's reads are many
         # small scattered sticks, which L1 serves far faster than DRAM; conv_offset's weights
         # are prepared for a DRAM input, so only the DCN gets the L1 copy.
-        x_nhwc = ttnn.reshape(x, (self.batch_size, out_h, out_w, x.shape[-1]))
-        x_nhwc = ttnn.to_memory_config(x_nhwc, ttnn.L1_MEMORY_CONFIG)
+        x_nhwc = ttnn.to_memory_config(x, self.input_memory_config)
+        x_nhwc = ttnn.reshape(x_nhwc, (self.batch_size, out_h, out_w, x.shape[-1]))
         out = self.device_dcn(x_nhwc, offset_mask)
         ttnn.deallocate(x_nhwc)
         ttnn.deallocate(offset_mask)
