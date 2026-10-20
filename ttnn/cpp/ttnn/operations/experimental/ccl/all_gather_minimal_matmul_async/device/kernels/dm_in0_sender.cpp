@@ -276,15 +276,22 @@ void kernel_main() {
         safe_get_noc_addr(out_ready_sem_injector_noc0_x, out_ready_sem_injector_noc0_y, out_ready_sem_forward, 0);
 
 #ifdef USE_MUX
+    // Headers come from a per-RISC pool of 8, so only the core that sends in a direction allocates
+    // that direction's set (the "forward" chain core sends through pkt_hdrs_backward and the
+    // "backward" chain core through pkt_hdrs_forward; see the Ring/Linear send blocks below).
     auto pkt_hdrs_backward = allocate_and_init_packet_headers(
-        detail::valid_targets(1),
+        detail::valid_targets(1) && (in0_core_order_index == forward_in0_core_order_index),
         unicast_route_info_backward,
         in0_reader,
         num_tiles_to_write_per_packet,
         in3_tile_size);
 
     auto pkt_hdrs_forward = allocate_and_init_packet_headers(
-        detail::valid_targets(0), unicast_route_info_forward, in0_reader, num_tiles_to_write_per_packet, in3_tile_size);
+        detail::valid_targets(0) && (in0_core_order_index == backward_in0_core_order_index),
+        unicast_route_info_forward,
+        in0_reader,
+        num_tiles_to_write_per_packet,
+        in3_tile_size);
 #endif
 
     /**
