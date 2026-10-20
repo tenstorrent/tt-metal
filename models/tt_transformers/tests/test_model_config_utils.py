@@ -16,6 +16,7 @@ from models.tt_transformers.tt.model_config import (
     compute_galaxy_width_shard_cores,
     compute_padded_vocab_size,
     create_galaxy_ff1_out_reduce_scatter_memcfg,
+    disables_batched_prefill,
     should_pad_sampling_logits_to_power_of_2,
 )
 
@@ -221,6 +222,24 @@ def test_should_pad_sampling_logits_to_power_of_2(base_model_name, padded_vocab_
 def test_should_pad_sampling_logits_to_power_of_2_rejects_invalid_sampling_splits(expect_error):
     with expect_error(ValueError, "sampling_splits must be >= 1"):
         should_pad_sampling_logits_to_power_of_2("Llama-3.1-70B", 128256, 0)
+
+
+@pytest.mark.parametrize(
+    ("base_model_name", "device_name", "expected"),
+    [
+        ("Llama-3.1-8B", "P100", True),
+        ("Llama-3.1-8B", "P150", True),
+        ("Llama-3.1-8B", "P300", True),
+        ("Llama-3.1-8B", "P150x4", True),
+        ("Llama-3.1-8B", "P150x8", True),
+        ("Llama-3.1-8B", "N150", False),
+        ("Llama-3.1-8B", "T3K", False),
+        ("Qwen3-32B", "P150x4", True),
+        ("Qwen3-32B", "P150", False),
+    ],
+)
+def test_disables_batched_prefill(base_model_name, device_name, expected):
+    assert disables_batched_prefill(base_model_name, device_name) is expected
 
 
 def _llama_model_args(device_name="P150"):

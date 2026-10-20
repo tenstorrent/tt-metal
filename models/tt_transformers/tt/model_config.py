@@ -215,6 +215,12 @@ def should_pad_sampling_logits_to_power_of_2(
     return per_device_vocab > 0 and (per_device_vocab & (per_device_vocab - 1)) != 0
 
 
+def disables_batched_prefill(base_model_name: str, device_name: str) -> bool:
+    return (base_model_name == "Qwen3-32B" and device_name == "P150x4") or (
+        base_model_name == "Llama-3.1-8B" and device_name in ("P100", "P150", "P300", "P150x4", "P150x8")
+    )
+
+
 class MathFidelitySetting(Enum):
     LOFI = "lofi"
     HIFI2 = "hifi2"
@@ -755,17 +761,14 @@ class ModelArgs:
         # Set the max number of tokens for each prefill chunk based on the model and device
         self.max_prefill_chunk_size = self.get_max_prefill_chunk_size()
         # TODO: Enable batched_prefill once this is fixed: https://github.com/tenstorrent/tt-metal/issues/47238
-        # Prefill logits are batch-variant on multi-chip Blackhole: the
+        # Prefill logits are batch-variant on Blackhole: the
         # float-reduction order in the prefill matmul/attention depends on the
         # batched-token count, so identical same-seed requests that land in
         # different-sized prefill batches get slightly different logits. Seeded
         # sampling under concurrency then diverges (tt-inference-server#4004,
         # test_non_uniform_seeding). Forcing per-user batch-1 prefill removes the
         # variance. Workaround until the prefill kernels are batch-invariant.
-        # Disabled for Qwen3-32B (P150x4) and Llama-3.1-8B (P300/P150x4/P150x8).
-        self.disable_batched_prefill = (self.base_model_name == "Qwen3-32B" and self.device_name == "P150x4") or (
-            self.base_model_name == "Llama-3.1-8B" and self.device_name in ("P150", "P300", "P150x4", "P150x8")
-        )
+        self.disable_batched_prefill = disables_batched_prefill(self.base_model_name, self.device_name)
 
         if (
             self.base_model_name
