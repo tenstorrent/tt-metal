@@ -59,6 +59,24 @@ eager step in the middle), and the outputs are checked byte-equal across the fou
 | `test_mesh_decoder.py` layer 0, B=2/row (16 users, DP8 x TP4) | per-user pcc vs HF prefill min 0.999869 p10 0.999873 median 0.999913; traced HF-cache steps min 0.99985-0.99988 | `test_8x4_decoder_l0_torus.log` (47 s) |
 | layers 3, 4 (hybrid experts EP4 x TP8: 72 experts x 256-wide slices per chip) | layer 3: per-user min 0.999525 p10 0.999659 median 0.999773; layer 4: min 0.999912 p10 0.999966 median 0.999986 (16 users x 48 traced steps + 3 HF-cache steps) | `test_8x4_decoder_l34_torus.log` (132 s incl. weight load) |
 
+## Decode performance on the (2,4) block (2026-10-20, `tracy/README.md`)
+
+`tests/test_perf_mesh.py` (traced decode, Tracy signposts, seed-only DSA cache, labelled eager pass for the
+per-module attribution) + `tests/perf_mesh_report.py` (per-device `tt-perf-report` tables from the one ops CSV
+of the mesh profiler). Device time of chip (0,0), position 1024, expert weights bfp8:
+
+| layer | users/row (total) | device ms/step | single-layer tok/s per user / aggregate | top shares |
+|---|---|---|---|---|
+| 4 KDA+MoE | 4 (8) | 7.985 | 125 / 1002 | router composite 42 %, mHC 24 %, experts 18 %, KDA 12 %, CCL 1.7 % |
+| 4 KDA+MoE | 32 (64) | 12.448 | 80 / 5141 | router 27 %, KDA 26 %, experts 26 %, mHC 18 %, CCL 1.9 % |
+| 3 DSA+MoE | 4 (8) | 7.785 | 128 / 1028 | router 44 %, mHC 24 %, experts 17 %, DSA 9.5 %, CCL 3.0 % |
+| 3 DSA+MoE | 32 (64) | 9.940 | 101 / 6439 | router 34 %, experts 30 %, mHC 22 %, DSA 9.1 %, CCL 3.3 % |
+
+Single chip: layer 4 10.76 ms, layer 3 10.87 ms (B=1). The first targets are the replicated exact-fp32 router (8 single-core
+`cumsum` = 2.64 ms per MoE layer on every chip), the mHC composite (1.9 ms, 220 ops) and the KDA decode
+recurrence at B=32 (3.2 ms); the collectives are < 2 % of the step (all-reduce = ReduceScatter + AllGather,
+41-65 us).
+
 ## Root cause of the TP4 sparse-row gap (2026-10-20)
 
 `test_tp4_sparse_prefill_layer3` first gave rows >= 2048 at 0.99777 (single chip 0.99990) while the
@@ -84,4 +102,4 @@ score 0 against positive real scores; prefill fills the whole prompt before sele
 1. B=32/row and the (1,4) TP prefill for layers 3/4 (running).
 2. Full 8x4 mesh (needs all 32 chips free) with FABRIC_2D_TORUS_XY; A/B TP4 vs TP8.
 3. Mesh prefill: ttKDA sequence-parallel over the rows + chunked DSA (after the chunked-prefill branch lands), user-partitioned latent/index cache, sparse decode through metadata tensors, 1 M-position cache test.
-4. `tt-perf-report` of the mesh decode step (layer 4), hybrid vs `TTMoEDecode`, expert dtype under the eval gate.
+4. ~~`tt-perf-report` of the mesh decode step~~ (done, `tracy/README.md`); hybrid vs `TTMoEDecode`, expert dtype under the eval gate; the router composite / mHC / KDA-decode targets listed there.
