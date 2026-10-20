@@ -155,6 +155,10 @@ SC16_REVAB_AISLED_SINGLE_GALAXY_CLUSTER_DESC="tt_metal/third_party/tt-cluster-de
 SC16_REVC_AISLEC_SINGLE_GALAXY_CLUSTER_DESC="tt_metal/third_party/tt-cluster-descriptors/superclusters/blackhole/SC16_32x4_revC_aisleC/SC16_32x4_revC_aisleC_cluster_desc/SC16_32x4_revC_aisleC_cluster_desc_bh-glx-110-c06u08_rank_50.yaml"
 SC20_REVC_SUBTORUS_AISLEC_SINGLE_GALAXY_CLUSTER_DESC="tt_metal/third_party/tt-cluster-descriptors/superclusters/blackhole/SC20_32x4_revC_subtorus_aisleC/SC20_32x4_revC_subtorus_aisleC_cluster_desc/SC20_32x4_revC_subtorus_aisleC_cluster_desc_bh-glx-110-c07u08.yaml"
 SC16_REVC_SUBTORUS_AISLED_SINGLE_GALAXY_CLUSTER_DESC="tt_metal/third_party/tt-cluster-descriptors/superclusters/blackhole/SC16_32x4_revC_subtorus_aisleD/SC16_32x4_revC_subtorus_aisleD_cluster_desc/SC16_32x4_revC_subtorus_aisleD_cluster_desc_bh-glx-110-d07u08_rank_13.yaml"
+# Single-host single BH galaxy (32 ASICs) synced from host bg-nttdc3-r010u11-12 via the UMD
+# topology tool after a tt-smi reset. Backs the galaxy-validation MGDs that were run on the real
+# host (4x8 / 4x8z / 2x4x4z), re-run CPU-only against this mock descriptor.
+NTTDC3_SINGLE_GALAXY_CLUSTER_DESC="tt_metal/third_party/tt-cluster-descriptors/blackhole/bg-nttdc3-r010u11-12_cluster_descriptor/bg-nttdc3-r010u11-12_cluster_descriptor.yaml"
 
 # Custom mesh graph descriptor directories (MGD filenames appear inline in commands).
 MGD_CUSTOM="tests/tt_metal/tt_fabric/custom_mesh_descriptors"
@@ -552,6 +556,19 @@ for mock in \
     run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD_CUSTOM}/fabric_cpu_only_single_galaxy_2x2_line_4stage_ring_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${mock}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="${GTEST_SINGLE_GALAXY_2X2_Z}"
   fi
 done
+
+# bg-nttdc3-r010u11-12 galaxy MGDs: the three topologies validated on the real single-host BH galaxy
+# (see tt-cluster-descriptors bg-nttdc3-r010u11-12_cluster_descriptor), re-run CPU-only against the
+# synced mock. 4x8 is a single 8x4 mesh; 4x8z/2x4x4z fold the galaxy into multiple z-stacked meshes,
+# so they go through tt-run (one rank per mesh), mirroring how they ran on hardware.
+#   4x8    (single_bh_galaxy_torus_xy)  -> maps cleanly.
+#   4x8z   (single_bh_galaxy_4x4x2_z)   -> 4 meshes, maps cleanly.
+#   2x4x4z (single_bh_galaxy_2x4x4_z)   -> 2 meshes; the SAT joint placement currently cannot fit this
+#          graph in the discovered topology (TT_FATAL in topology_mapper.cpp), so this one is expected
+#          to fail until the placement issue is resolved.
+run_test env TT_METAL_MOCK_CLUSTER_DESC_PATH="${NTTDC3_SINGLE_GALAXY_CLUSTER_DESC}" TT_MESH_GRAPH_DESC_PATH=tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="${GTEST_GALAXY_LAYOUT_CHECK}:${GTEST_GALAXY_CORNER_PINS}"
+run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_4x4x2_z_graph_descriptor.textproto --mock-cluster-rank-binding "${NTTDC3_SINGLE_GALAXY_CLUSTER_DESC}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="${GTEST_GALAXY_LAYOUT_CHECK}"
+run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_2x4x4_z_graph_descriptor.textproto --mock-cluster-rank-binding "${NTTDC3_SINGLE_GALAXY_CLUSTER_DESC}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="${GTEST_GALAXY_LAYOUT_CHECK}"
 
 fi # bh-single-galaxy
 
