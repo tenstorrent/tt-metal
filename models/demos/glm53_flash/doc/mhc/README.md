@@ -409,3 +409,22 @@ coordinator's work, and the exact SFPU projection variant.
 | `tests/test_perf_layer.py` (`GLM53_PERF_B`, `GLM53_PERF_EAGER=1`) + `tests/perf_layer_report.py` | layer-4 traced decode step, wall and per-module Tracy attribution |
 
 Knobs: `GLM53_MHC_IMPL=wrap` restores the composite path (`build_mhc(impl=)`); `GLM53_MHC_EXACT=0|2|3` (above).
+
+## Prefill dump A/B: composite wrap vs fast exact path (2026-10-20, rows 4-5 block)
+
+22 layers, 4 users/row, S=128, `GLM53_MHC_DUMP` of every wrap (in / h = sublayer input / y = sublayer output / out),
+`tests/mhc_dump_diff.py` (relative rms, `|a-b| / |a|`). Fast path = `GLM53_MHC_IMPL=fast GLM53_MHC_POST_KERNEL=2
+GLM53_MHC_PREFILL_EXACT=1 GLM53_MHC_DECODE_EXACT=1`.
+
+| | composite wrap | fast exact |
+|---|---|---|
+| TTFT warm (22 L, S=128, 2x4) | 417 ms | 294 ms |
+| first wrap with rel rms > 1e-6 | L01_attn `h` 2.1e-5 (L00 both wraps exact to 7e-8) | |
+| rel rms at L05 / L10 / L15 / L21 (out) | 1.8e-2 / 4.1e-2 / 9.2e-2 / 2.8e-1 | |
+
+Reading: the two pre-blocks differ at the bf16 rounding level once (2e-5 at the L01 attention input); the
+sublayers amplify it (L01 attention 2.6e-3, the MoE top-k flips from L01_ffn on), so by layer 21 the two
+runs are 28% apart in rel rms. The A/B cannot say which path is closer to HF (both bf16 pipelines sit
+inside the model's own sensitivity); the 45-layer token-level gate on the 8x4 is the arbiter (the fast path
+flipped the first token before the exact prefill path; with it the token matched). Decision: the 8x4 chain
+runs the fast exact path and the gate decides; the composite wrap stays the default until the gate passes.
