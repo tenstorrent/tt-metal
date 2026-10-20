@@ -58,16 +58,19 @@
 //       ./build/test/ttnn/multiprocess/unit_tests_cross_process_d2d
 
 #include <cstdint>
-#include <filesystem>
 #include <memory>
+#include <string>
 #include <thread>
 #include <utility>
 #include <vector>
+
+#include <unistd.h>
 
 #include "gtest/gtest.h"
 
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/hal.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/distributed.hpp>
@@ -1305,12 +1308,12 @@ TEST_F(CrossProcessD2DFixture, ExportPipelineDescriptor) {
     if (inbound) {
         receivers.push_back(inbound.get());
     }
-    const auto path =
-        D2DStreamService::export_pipeline_descriptor("gtest_cross_process_export", receivers, Rank{0}, ctx);
-    EXPECT_EQ(path.has_value(), rank == 0);
+    // Only the root writes, so its pid keeps the path unique.
+    auto file = D2DStreamService::export_pipeline_descriptor(
+        "gtest_cross_process_export_" + std::to_string(getpid()), receivers, Rank{0}, ctx);
+    EXPECT_EQ(file != nullptr, rank == 0);
     if (rank == 0) {
-        const auto desc = ttnn::D2DPipelineDescriptor::wait_and_read(*path);
-        std::filesystem::remove(*path);
+        const auto desc = ttnn::D2DPipelineDescriptor::wait_and_read(file->path());
         ASSERT_EQ(desc.ranks.size(), static_cast<size_t>(world_size));
         for (int r = 0; r < world_size; ++r) {
             const auto& rd = desc.ranks[r];
@@ -1324,10 +1327,13 @@ TEST_F(CrossProcessD2DFixture, ExportPipelineDescriptor) {
             EXPECT_EQ(rx.sender_rank, r - 1);
             EXPECT_EQ(rx.metadata_size_bytes, kMetadataBytes);
             EXPECT_EQ(rx.stage_gate, gate_cfg);
+            EXPECT_EQ(rx.stage_gate_stride_bytes, tt::tt_metal::hal::get_l1_alignment());
+            EXPECT_NE(rx.metadata_addr, 0u);
             ASSERT_FALSE(rx.coords.empty());
             for (const auto& c : rx.coords) {
                 EXPECT_NE(c.backing_tensor_addr, 0u);
                 EXPECT_NE(c.stage_gate_base_addr, 0u);
+                EXPECT_TRUE(c.metadata_core.has_value());
                 EXPECT_NE(c.sender_fabric_node_id, c.fabric_node_id);
             }
         }

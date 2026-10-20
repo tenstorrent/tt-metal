@@ -440,14 +440,16 @@ def _d2d_send_indices(
     _d2d_send(idx_out, staged, rank, meta, deallocate=staged is not indices, metadata_msg=metadata_msg)
 
 
-def export_d2d_pipeline_descriptor(receivers, rank: int, service_id: str, master_rank: int) -> None:
+def export_d2d_pipeline_descriptor(receivers, rank: int, service_id: str, master_rank: int):
     """Collective: the master writes every rank's D2D receivers to one file for the engine.
 
-    `receivers` lists this rank's receivers, one per pipeline stage it receives into.
+    `receivers` lists this rank's receivers, one per pipeline stage it receives into. Returns the
+    file on the master (it removes the file when dropped) and None elsewhere.
     """
-    path = ttnn.D2DStreamService.export_pipeline_descriptor(service_id, receivers, root=master_rank)
-    if path is not None:
-        logger.info(f"[pp rank {rank}] [d2d] pipeline descriptor service_id={service_id!r} -> {path}")
+    descriptor = ttnn.D2DStreamService.export_pipeline_descriptor(service_id, receivers, root=master_rank)
+    if descriptor is not None:
+        logger.info(f"[pp rank {rank}] [d2d] pipeline descriptor service_id={service_id!r} -> {descriptor.path}")
+    return descriptor
 
 
 def _d2d_drain_op(inbound, sockets):
@@ -1082,6 +1084,7 @@ def _assert_ranks_agree_on_config(rank: int, num_ranks: int) -> None:
         "PREFILL_ENABLE_MIGRATION": migration_publish_enabled(),
         "PREFILL_MIGRATION_EXPORT_TO_FILE": migration_file_export_enabled(),
         "PREFILL_HYBRID_PAGE_POOL_V2": HYBRID_PAGE_POOL_V2,
+        "PREFILL_MASTER_RANK": int(os.environ.get("PREFILL_MASTER_RANK", "0")),
     }
     fingerprint = "|".join(f"{k}={v}" for k, v in fields.items())
     digest = zlib.crc32(fingerprint.encode()) & 0x7FFFFFFF
@@ -1231,7 +1234,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
         service_id = os.environ.get("PREFILL_H2D_SERVICE_ID", "ds_prefill")
         h2d_service = _open_h2d(make_h2d_spec(GLOBAL_MESH_SHAPE, FORWARD_TOKENS_BUDGET, MTP_LEVELS), service_id)
 
-    d2d_in = d2d_out = idx_in = idx_out = None
+    d2d_in = d2d_out = idx_in = idx_out = d2d_descriptor = None
     if num_ranks > 1:
         idx_inbound = getattr(runtime, "receives_indexer_indices", False)
         idx_outbound = getattr(runtime, "forwards_indexer_indices", False)
@@ -1254,9 +1257,9 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
     ack_shm_name = scheduler_shm_name(service_id)
     master_rank = int(os.environ.get("PREFILL_MASTER_RANK", "0"))
     if HYBRID_PAGE_POOL_V2:
-        # Published even on a single rank: the engine reads this host's stages from the file.
+        # Published even on a single rank, so the engine always finds the file.
         receivers = [d2d_in] if d2d_in is not None else []
-        export_d2d_pipeline_descriptor(receivers, rank, service_id, master_rank)
+        d2d_descriptor = export_d2d_pipeline_descriptor(receivers, rank, service_id, master_rank)
     router = None
     d2h_service = None
     layer_ack_service = None
@@ -1441,7 +1444,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
         if layer_ack_service is not None:
             layer_ack_service.stop()
             layer_ack_service = None
-        h2d_service = d2d_in = d2d_out = idx_in = idx_out = d2h_service = None
+        d2d_descriptor = h2d_service = d2d_in = d2d_out = idx_in = idx_out = d2h_service = None
         gc.collect()
         if producer is not None:
             producer.shutdown()

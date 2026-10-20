@@ -224,6 +224,7 @@ from ttnn._ttnn.d2d_stream_service import (
     D2DReceiverDescriptor,
     D2DRankDescriptor,
     D2DPipelineDescriptor,
+    D2DPipelineDescriptorFile,
     d2d_pipeline_descriptor_path,
 )
 

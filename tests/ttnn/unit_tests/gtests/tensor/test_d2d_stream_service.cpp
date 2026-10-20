@@ -2858,12 +2858,21 @@ TEST(D2DPipelineDescriptorTest, RoundTrip) {
     using tt::tt_metal::distributed::MeshCoreCoord;
     using tt::tt_metal::distributed::PCIeCoreLocation;
     ttnn::D2DPipelineDescriptor desc;
-    const auto receiver = [](int sender_rank, uint32_t pcie_device_id, uint32_t mesh_id) {
+    // With `with_extras`, the receiver has metadata and stage gates; without, it has neither.
+    const auto receiver = [](int sender_rank, uint32_t pcie_device_id, uint32_t mesh_id, bool with_extras) {
+        const PCIeCoreLocation metadata_core{
+            .pcie_device_id = pcie_device_id,
+            .core = MeshCoreCoord(MeshCoordinate(0, 1), CoreCoord(0, 0)),
+            .virtual_core = CoreCoord(1, 2)};
         return ttnn::D2DReceiverDescriptor{
             .sender_rank = sender_rank,
-            .metadata_size_bytes = 20,
+            .metadata_size_bytes = with_extras ? 20u : 0u,
+            .metadata_addr = with_extras ? 0x3000u : 0u,
             .stage_gate =
-                ttnn::D2DStageGateConfig{.num_gates = 4, .slot_id_offset_bytes = 0, .gate_mode_offset_bytes = 16},
+                with_extras
+                    ? ttnn::D2DStageGateConfig{.num_gates = 4, .slot_id_offset_bytes = 0, .gate_mode_offset_bytes = 16}
+                    : ttnn::D2DStageGateConfig{},
+            .stage_gate_stride_bytes = with_extras ? 16u : 0u,
             .coords = {ttnn::D2DReceiverCoordDescriptor{
                 .service_core =
                     PCIeCoreLocation{
@@ -2873,14 +2882,16 @@ TEST(D2DPipelineDescriptorTest, RoundTrip) {
                 .fabric_node_id = tt::tt_fabric::FabricNodeId(tt::tt_fabric::MeshId{mesh_id}, 3),
                 .sender_fabric_node_id = tt::tt_fabric::FabricNodeId(tt::tt_fabric::MeshId{mesh_id - 1}, 3),
                 .backing_tensor_addr = 0x1'0000'0040ull,
-                .stage_gate_base_addr = 0x2000u}}};
+                .stage_gate_base_addr = with_extras ? 0x2000u : 0u,
+                .metadata_core = with_extras ? std::optional(metadata_core) : std::nullopt}}};
     };
     // Rank 0 receives nothing, rank 1 receives from rank 0, and rank 2 hosts two stages, so it
     // has two receivers.
     desc.ranks.push_back(ttnn::D2DRankDescriptor{.rank = 0, .host_name = "host0"});
-    desc.ranks.push_back(ttnn::D2DRankDescriptor{.rank = 1, .host_name = "host1", .receivers = {receiver(0, 7, 1)}});
     desc.ranks.push_back(
-        ttnn::D2DRankDescriptor{.rank = 2, .host_name = "host2", .receivers = {receiver(1, 2, 2), receiver(2, 3, 3)}});
+        ttnn::D2DRankDescriptor{.rank = 1, .host_name = "host1", .receivers = {receiver(0, 7, 1, true)}});
+    desc.ranks.push_back(ttnn::D2DRankDescriptor{
+        .rank = 2, .host_name = "host2", .receivers = {receiver(1, 2, 2, true), receiver(2, 3, 3, false)}});
     EXPECT_EQ(ttnn::D2DPipelineDescriptor::deserialize(desc.serialize()), desc);
 
     const auto path = ttnn::d2d_pipeline_descriptor_path("gtest_round_trip_" + std::to_string(getpid()));
@@ -2908,9 +2919,15 @@ void verify_pipeline_descriptor_export(
             .num_gates = kGateNumGates,
             .slot_id_offset_bytes = kGateSlotOffsetBytes,
             .gate_mode_offset_bytes = kGateModeOffsetBytes}));
+    EXPECT_EQ(rd.metadata_addr, receiver->get_metadata_addr());
+    EXPECT_EQ(rd.stage_gate_stride_bytes, tt::tt_metal::hal::get_l1_alignment());
     ASSERT_FALSE(rd.coords.empty());
     for (const auto& rc : rd.coords) {
         const auto& coord = rc.service_core.core.device_coord;
+        ASSERT_TRUE(rc.metadata_core.has_value());
+        EXPECT_EQ(rc.metadata_core->core, tt::tt_metal::distributed::MeshCoreCoord(coord, kWorkerCores.start_coord));
+        EXPECT_EQ(
+            rc.metadata_core->virtual_core, receiver_mesh->worker_core_from_logical_core(kWorkerCores.start_coord));
         EXPECT_EQ(rc.fabric_node_id, receiver_mesh->get_fabric_node_id(coord));
         EXPECT_EQ(rc.sender_fabric_node_id, sender_mesh->get_fabric_node_id(coord));
         const auto gate = receiver->get_stage_gate_descriptor(coord);
@@ -2928,20 +2945,33 @@ void verify_pipeline_descriptor_export(
     std::unique_ptr<D2DStreamServiceSender> second_sender;
     std::unique_ptr<D2DStreamServiceReceiver> second_receiver;
     if (second_sender_mesh) {
+        // No metadata and no gates, so their fields come out empty.
         std::tie(second_sender, second_receiver) = D2DStreamService::create_pair(
-            second_sender_mesh, second_receiver_mesh, make_stage_gate_config(second_sender_mesh));
+            second_sender_mesh, second_receiver_mesh, make_config(second_sender_mesh, ttnn::Shape({1, 1, 32, 512})));
+        const auto second = second_receiver->describe();
+        EXPECT_EQ(second.metadata_addr, 0u);
+        EXPECT_EQ(second.stage_gate, ttnn::D2DStageGateConfig{});
+        EXPECT_EQ(second.stage_gate_stride_bytes, 0u);
+        for (const auto& rc : second.coords) {
+            EXPECT_FALSE(rc.metadata_core.has_value());
+            EXPECT_EQ(rc.stage_gate_base_addr, 0u);
+        }
         receivers.push_back(second_receiver.get());
-        expected.push_back(second_receiver->describe());
+        expected.push_back(second);
     }
 
-    const auto path =
-        D2DStreamService::export_pipeline_descriptor("gtest_export_" + std::to_string(getpid()), receivers);
-    ASSERT_TRUE(path.has_value());
-    const auto desc = ttnn::D2DPipelineDescriptor::wait_and_read(*path);
-    std::filesystem::remove(*path);
+    // A file left by an earlier run is replaced, and the export's handle removes the file.
+    const auto path = ttnn::d2d_pipeline_descriptor_path("gtest_export_" + std::to_string(getpid()));
+    ttnn::D2DPipelineDescriptor{}.write_to_file(path);
+    auto file = D2DStreamService::export_pipeline_descriptor("gtest_export_" + std::to_string(getpid()), receivers);
+    ASSERT_NE(file, nullptr);
+    EXPECT_EQ(file->path(), path);
+    const auto desc = ttnn::D2DPipelineDescriptor::wait_and_read(path);
     ASSERT_EQ(desc.ranks.size(), 1u);
     EXPECT_FALSE(desc.ranks[0].host_name.empty());
     EXPECT_EQ(desc.ranks[0].receivers, expected);
+    file.reset();
+    EXPECT_FALSE(std::filesystem::exists(path));
 }
 
 TEST_F(D2DStreamServiceTest, PipelineDescriptorExportSingleChipPair) {

@@ -9,6 +9,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -26,7 +27,10 @@ struct D2DReceiverCoordDescriptor {
     tt::tt_fabric::FabricNodeId fabric_node_id{tt::tt_fabric::MeshId{0}, 0};
     tt::tt_fabric::FabricNodeId sender_fabric_node_id{tt::tt_fabric::MeshId{0}, 0};
     tt::tt_metal::DeviceAddr backing_tensor_addr = 0;
-    tt::tt_metal::DeviceAddr stage_gate_base_addr = 0;  // gate i is the uint32 at + i * L1 alignment; 0 without gates
+    tt::tt_metal::DeviceAddr stage_gate_base_addr = 0;  // service-core L1 of gate 0; 0 without gates
+    // A receiver worker core holding the metadata (every receiver worker core gets a copy).
+    // Empty without metadata.
+    std::optional<tt::tt_metal::distributed::PCIeCoreLocation> metadata_core;
 
     bool operator==(const D2DReceiverCoordDescriptor&) const = default;
 };
@@ -35,7 +39,9 @@ struct D2DReceiverCoordDescriptor {
 struct D2DReceiverDescriptor {
     int sender_rank = 0;
     uint32_t metadata_size_bytes = 0;
-    D2DStageGateConfig stage_gate;  // num_gates == 0 when gates are off
+    tt::tt_metal::DeviceAddr metadata_addr = 0;  // worker L1, same on every core and chip; 0 without metadata
+    D2DStageGateConfig stage_gate;               // num_gates == 0 when gates are off
+    uint32_t stage_gate_stride_bytes = 0;        // gate i is the uint32 at stage_gate_base_addr + i * this
     std::vector<D2DReceiverCoordDescriptor> coords;
 
     bool operator==(const D2DReceiverDescriptor&) const = default;
@@ -68,5 +74,19 @@ struct D2DPipelineDescriptor {
 
 // /dev/shm/tt_d2d_pipeline_<service_id>.bin
 std::string d2d_pipeline_descriptor_path(const std::string& service_id);
+
+// An exported descriptor file. Removes the file when destroyed.
+class D2DPipelineDescriptorFile {
+public:
+    explicit D2DPipelineDescriptorFile(std::string path);
+    ~D2DPipelineDescriptorFile();
+    D2DPipelineDescriptorFile(const D2DPipelineDescriptorFile&) = delete;
+    D2DPipelineDescriptorFile& operator=(const D2DPipelineDescriptorFile&) = delete;
+
+    const std::string& path() const { return path_; }
+
+private:
+    std::string path_;
+};
 
 }  // namespace ttnn

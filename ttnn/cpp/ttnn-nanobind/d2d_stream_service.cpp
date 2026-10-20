@@ -10,6 +10,7 @@
 #include <utility>
 
 #include <nanobind/nanobind.h>
+#include <nanobind/operators.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/pair.h>
 #include <nanobind/stl/shared_ptr.h>
@@ -117,31 +118,39 @@ void py_module_types(nb::module_& mod) {
         .def_ro(
             "pcie_device_id", &PCIeCoreLocation::pcie_device_id, "Physical PCIe device number (/dev/tenstorrent/N).")
         .def_ro("core", &PCIeCoreLocation::core, "Mesh coord + logical core.")
-        .def_ro("virtual_core", &PCIeCoreLocation::virtual_core, "Virtual (translated) NoC coords.");
+        .def_ro("virtual_core", &PCIeCoreLocation::virtual_core, "Virtual (translated) NoC coords.")
+        .def(nb::self == nb::self);
 
     nb::class_<D2DReceiverCoordDescriptor>(mod, "D2DReceiverCoordDescriptor")
         .def_ro("service_core", &D2DReceiverCoordDescriptor::service_core)
         .def_ro("fabric_node_id", &D2DReceiverCoordDescriptor::fabric_node_id)
         .def_ro("sender_fabric_node_id", &D2DReceiverCoordDescriptor::sender_fabric_node_id)
         .def_ro("backing_tensor_addr", &D2DReceiverCoordDescriptor::backing_tensor_addr)
-        .def_ro("stage_gate_base_addr", &D2DReceiverCoordDescriptor::stage_gate_base_addr);
+        .def_ro("stage_gate_base_addr", &D2DReceiverCoordDescriptor::stage_gate_base_addr)
+        .def_ro("metadata_core", &D2DReceiverCoordDescriptor::metadata_core)
+        .def(nb::self == nb::self);
 
     nb::class_<D2DReceiverDescriptor>(mod, "D2DReceiverDescriptor")
         .def_ro("sender_rank", &D2DReceiverDescriptor::sender_rank)
         .def_ro("metadata_size_bytes", &D2DReceiverDescriptor::metadata_size_bytes)
+        .def_ro("metadata_addr", &D2DReceiverDescriptor::metadata_addr)
         .def_ro("stage_gate", &D2DReceiverDescriptor::stage_gate)
-        .def_ro("coords", &D2DReceiverDescriptor::coords);
+        .def_ro("stage_gate_stride_bytes", &D2DReceiverDescriptor::stage_gate_stride_bytes)
+        .def_ro("coords", &D2DReceiverDescriptor::coords)
+        .def(nb::self == nb::self);
 
     nb::class_<D2DRankDescriptor>(mod, "D2DRankDescriptor")
         .def_ro("rank", &D2DRankDescriptor::rank)
         .def_ro("host_name", &D2DRankDescriptor::host_name)
-        .def_ro("receivers", &D2DRankDescriptor::receivers);
+        .def_ro("receivers", &D2DRankDescriptor::receivers)
+        .def(nb::self == nb::self);
 
     nb::class_<D2DPipelineDescriptor>(mod, "D2DPipelineDescriptor", R"doc(
         Every D2DStreamService receiver of a pipeline, as written by
         D2DStreamService.export_pipeline_descriptor.
     )doc")
         .def_ro("ranks", &D2DPipelineDescriptor::ranks)
+        .def(nb::self == nb::self)
         .def_static(
             "wait_and_read",
             &D2DPipelineDescriptor::wait_and_read,
@@ -154,6 +163,11 @@ void py_module_types(nb::module_& mod) {
         &ttnn::d2d_pipeline_descriptor_path,
         nb::arg("service_id"),
         "Path export_pipeline_descriptor writes for `service_id`.");
+
+    nb::class_<ttnn::D2DPipelineDescriptorFile>(mod, "D2DPipelineDescriptorFile", R"doc(
+        An exported descriptor file. Removes the file when garbage-collected.
+    )doc")
+        .def_prop_ro("path", &ttnn::D2DPipelineDescriptorFile::path);
 
     // ----- Sender handle (created only via D2DStreamService factories) -----
     nb::class_<D2DStreamServiceSender>(mod, "D2DStreamServiceSender")
@@ -466,8 +480,9 @@ void py_module_types(nb::module_& mod) {
             R"doc(
                 Collective over the current distributed world: every rank calls it with the receivers
                 it owns, one per pipeline stage it receives into (empty list if none). `root` gathers
-                them and writes d2d_pipeline_descriptor_path(service_id). Returns the path on `root`,
-                None elsewhere.
+                them and writes d2d_pipeline_descriptor_path(service_id). Returns a
+                D2DPipelineDescriptorFile on `root`, None elsewhere. Keep it alive for as long as
+                readers need the file: it removes the file when garbage-collected.
             )doc");
 }
 
