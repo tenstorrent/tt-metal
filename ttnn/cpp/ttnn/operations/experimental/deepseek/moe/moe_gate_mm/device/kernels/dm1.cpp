@@ -378,6 +378,8 @@ void kernel_main() {
         // Multicast this data to all the cores
         noc_async_write_multicast_one_packet(
             local_group_masks_addr, group_masks_noc_addr, /*size=*/2048, /*num_dests=*/7);
+        // Free the multicast path before the partial-semaphore set, or a destination can miss it.
+        noc_async_write_barrier();
 
         // Set the semaphore to let the clients know they got the data
         *my_semaphore_ptr = 1;
@@ -389,6 +391,7 @@ void kernel_main() {
             collector_physical_y,
             /*num_dests=*/7,
             /*linked=*/false);
+        noc_async_write_barrier();
 
         cb_w2c_in5.pop_front(1);
 
