@@ -48,10 +48,14 @@ Per denoise step: 1.39 s (480p) and 3.87 s (720p) at 75 W; 1.02 s and 3.21 s at 
 
 **Against the CI targets** (`t2v_metrics()` in the test, BH 4x8 ring; I2V uses the same targets):
 
-| Res | Target denoise / VAE / total | 75 W | 130 W |
-|---|---|---|---|
-| 480p | 75.0 / 0.42 / 76.0 | 55.75 / **0.52** / 56.34 | 40.99 / **0.49** / 41.56 |
-| 720p | 205.0 / 0.85 / 206.0 | 154.97 / **1.10** / 156.14 | 128.41 / **1.01** / 129.49 |
+| Res | Stage | CI target | b10u20, 75 W | b10u20, 130 W |
+|---|---|---|---|---|
+| 480p | Denoise | 75.0 | 55.75 | 40.99 |
+| 480p | VAE decode | 0.42 | **0.52** | **0.49** |
+| 480p | Total | 76.0 | 56.34 | 41.56 |
+| 720p | Denoise | 205.0 | 154.97 | 128.41 |
+| 720p | VAE decode | 0.85 | **1.10** | **1.01** |
+| 720p | Total | 206.0 | 156.14 | 129.49 |
 
 Every frame range is 0–255 (not the flat grey of `main` on this hardware). These perf runs do not score quality (no CLIP / VBench), and frames were not inspected.
 
@@ -59,18 +63,21 @@ Every frame range is 0–255 (not the flat grey of `main` on this hardware). The
 
 Source: the nightly `TT-DiT Wan2.2-T2V-A14B single galaxy e2e tests [bh_sc1]` job (`models-t1-e2e-tests.yaml` on `main`), which runs this same `ring_bh_4x8_sp1tp0` T2V test with the same environment. Numbers come from the job logs. The CI hosts have 8 DRAM banks: their 720p runs decode the full 21 latent frames in one pass, which runs out of memory on 7 banks (#59504), and UMD logs no "inconsistent DRAM harvesting" warning.
 
-| Nightly (main SHA) | Host | 480p denoise / VAE / total | 720p denoise / VAE / total |
-|---|---|---|---|
-| 10-13 (`3cdbe9ca17`) | bh-glx-120-d04u20 | 56.65 / 0.736 / 57.47 | 157.38 / 1.030 / 158.51 |
-| 10-14 (`3de19707aa`) | bh-glx-120-d04u14 | 56.28 / 0.699 / 57.07 | 156.15 / 1.107 / 157.35 |
-| 10-15 (`d1f9992507`) | bh-glx-120-d07u02 | 39.59 / 0.713 / 40.39 | 124.47 / 1.028 / 125.59 |
-| 10-16 (`426b1f10d4`) | bh-glx-120-d06u08 | 38.79 / 0.739 / 39.63 | 122.47 / 0.977 / 123.55 |
-| 10-17 (`628dbed7cc`) | bh-glx-120-d07u08 | 39.13 / 0.747 / 39.96 | 123.80 / 1.031 / 124.93 |
-| 10-18 (`9f98dee9c5`) | bh-glx-120-d07u08 | 39.12 / 0.736 / 39.94 | 123.96 / 1.024 / 125.07 |
-| 10-20 (`909748641c`) | bh-glx-120-d04u08 | 56.34 / 0.758 / 57.20 | – (hung: device timeout in fetch queue wait) |
-| **this branch on CI** ([run 39492727180](https://github.com/tenstorrent/tt-metal/actions/runs/39492727180), 10-20, `6482b03632f`) | bh-glx-120-d06u08 | 38.99 / 0.745 / 39.82 | 122.36 / 1.024 / 123.49 |
-| **this branch, b10u20, 75 W** | bh-glx-120-b10u20 | 55.75 / 0.523 / 56.34 | 154.97 / 1.096 / 156.14 |
-| **this branch, b10u20, 130 W** | bh-glx-120-b10u20 | 40.99 / 0.492 / 41.56 | 128.41 / 1.006 / 129.49 |
+Seconds, lower is better. Rows are grouped by speed: the `d04` hosts with b10u20 at 75 W, then the `d06`/`d07` hosts with b10u20 at 130 W. CI power limits are unknown.
+
+| Run | Host | DRAM banks | VAE mode | 480p denoise | 480p VAE | 480p total | 720p denoise | 720p VAE | 720p total |
+|---|---|---|---|---|---|---|---|---|---|
+| `main` nightly 10-13 (`3cdbe9ca17`) | bh-glx-120-d04u20 | 8 | full-T | 56.65 | 0.736 | 57.47 | 157.38 | 1.030 | 158.51 |
+| `main` nightly 10-14 (`3de19707aa`) | bh-glx-120-d04u14 | 8 | full-T | 56.28 | 0.699 | 57.07 | 156.15 | 1.107 | 157.35 |
+| `main` nightly 10-20 (`909748641c`) | bh-glx-120-d04u08 | 8 | full-T | 56.34 | 0.758 | 57.20 | – | – | – (hung) |
+| this branch, b10u20, 75 W (default) | bh-glx-120-b10u20 | 7 | chunk 7 | 55.75 | 0.523 | 56.34 | 154.97 | 1.096 | 156.14 |
+| | | | | | | | | | |
+| `main` nightly 10-15 (`d1f9992507`) | bh-glx-120-d07u02 | 8 | full-T | 39.59 | 0.713 | 40.39 | 124.47 | 1.028 | 125.59 |
+| `main` nightly 10-16 (`426b1f10d4`) | bh-glx-120-d06u08 | 8 | full-T | 38.79 | 0.739 | 39.63 | 122.47 | 0.977 | 123.55 |
+| `main` nightly 10-17 (`628dbed7cc`) | bh-glx-120-d07u08 | 8 | full-T | 39.13 | 0.747 | 39.96 | 123.80 | 1.031 | 124.93 |
+| `main` nightly 10-18 (`9f98dee9c5`) | bh-glx-120-d07u08 | 8 | full-T | 39.12 | 0.736 | 39.94 | 123.96 | 1.024 | 125.07 |
+| **this branch on CI** ([run 39492727180](https://github.com/tenstorrent/tt-metal/actions/runs/39492727180), 10-20) | bh-glx-120-d06u08 | 8 | full-T | 38.99 | 0.745 | 39.82 | 122.36 | 1.024 | 123.49 |
+| this branch, b10u20, 130 W | bh-glx-120-b10u20 | 7 | chunk 7 | 40.99 | 0.492 | 41.56 | 128.41 | 1.006 | 129.49 |
 
 (10-19 got no perf numbers.)
 
