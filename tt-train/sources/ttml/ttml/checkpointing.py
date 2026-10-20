@@ -25,6 +25,12 @@ FORMAT_VERSION = 1
 
 NATIVE = ttml.autograd.PreferredPrecision.NATIVE
 
+# What to do about a refused tensor, shared by every refusal of a save and of a load respectively.
+_SAVE_REMEDY = (
+    "Nothing was written. Fix the label where the tensor was produced (the op that relabelled it), not the checkpoint."
+)
+_LOAD_REMEDY = "Nothing was restored past this point; re-save from a run whose tensors gather to their full shape."
+
 
 class CheckpointShapeError(ValueError):
     """A tensor would be saved or restored at a shape that contradicts the shape it must have.
@@ -80,7 +86,7 @@ def _load_into(path: tuple, name: str, live: ttml.autograd.Tensor, meta: dict, d
             f"checkpointing: {_leaf_label(path, name)} record of shape {tuple(data.shape)} does not redistribute to "
             f"the live per-device shape ({e}). The record does not hold a full tensor of the layout "
             f"{sharding.describe()}; most likely it was saved as one device's shard through a wrong topology label. "
-            f"Nothing was restored past this point; re-save from a run whose tensors gather to their full shape."
+            f"{_LOAD_REMEDY}"
         ) from e
 
 
@@ -140,8 +146,7 @@ def _rebuild(
                     f"checkpointing: {_leaf_label(path, name)} record has shape {tuple(data.shape)} but the parameter "
                     f"{name!r} was saved at {model_shapes[name]} in the same file. Optimizer state always has its "
                     f"parameter's shape, so this record holds truncated state (saved as one device's shard through a "
-                    f"wrong topology label). Refusing to restore it; re-save from a run whose state gathers to the "
-                    f"full shape."
+                    f"wrong topology label). {_LOAD_REMEDY}"
                 )
             _load_into(path, name, live_node[name], meta, data)
             named[name] = live_node[name]
@@ -220,9 +225,16 @@ def _check_state_shape(
         f"checkpointing: {_leaf_label(('optimizer', *path), name)} gathers to {shape} but its parameter model[{name}] "
         f"gathers to {tuple(parameter_shape)}. The tensor is laid out as {Sharding.from_tensor(tensor).describe()}; if "
         f"that label does not describe its data (e.g. Replicate on a mesh axis the parameter is sharded on), gathering "
-        f"by it keeps one device's copy and the checkpoint would hold truncated state. Nothing was written. Fix the "
-        f"label where the tensor was produced (the op that relabelled it), not the checkpoint."
+        f"by it keeps one device's copy and the checkpoint would hold truncated state. {_SAVE_REMEDY}"
     )
+
+
+def _gather_record(group: str, path: tuple, name: str, tensor: ttml.autograd.Tensor, verify_replicas: bool):
+    """Gather one tensor to the host by its own label, naming the leaf if the copies its label calls replicas differ."""
+    try:
+        return Sharding.from_tensor(tensor).gather(tensor, verify_replicas=verify_replicas)
+    except ReplicaMismatchError as e:
+        raise ReplicaMismatchError(f"checkpointing: {_leaf_label((group, *path), name)} is {e}. {_SAVE_REMEDY}") from e
 
 
 def save_checkpoint(
@@ -277,15 +289,7 @@ def save_checkpoint(
             for group, sub_path, name, tensor in _progress(
                 records, total=len(records), desc="Saving checkpoint", enabled=display_progress
             ):
-                try:
-                    # Gather one at a time; freed after dump.
-                    data = Sharding.from_tensor(tensor).gather(tensor, verify_replicas=verify_replicas)
-                except ReplicaMismatchError as e:
-                    leaf = _leaf_label((group, *sub_path), name)
-                    raise ReplicaMismatchError(
-                        f"checkpointing: {leaf} is {e}. Nothing was written. Fix the label where the tensor was "
-                        "produced (the op that relabelled it), not the checkpoint."
-                    ) from e
+                data = _gather_record(group, sub_path, name, tensor, verify_replicas)  # one at a time; freed after dump
                 shape = tuple(data.shape)
                 if group == "model":
                     model_shapes[name] = shape
