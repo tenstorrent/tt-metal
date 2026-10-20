@@ -26,7 +26,7 @@ POISON = 1 << 20
 
 
 @pytest.mark.parametrize(
-    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 24576}], indirect=True
+    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "l1_small_size": 24576}], indirect=True
 )
 @pytest.mark.parametrize("mesh_device", [(1, 4)], indirect=True)
 @pytest.mark.parametrize(
