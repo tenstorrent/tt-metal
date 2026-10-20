@@ -3,7 +3,8 @@ name: "LLK ttsim PR gate impl"
 # Quasar half of tests/pipeline_reorg/llk_pr_gate_tests.yaml. Wormhole and Blackhole
 # shards stay on silicon in llk-smoke-impl.yaml; this workflow runs the sim_quasar_xl
 # shards against ttsim. run_ttsim_regression.sh applies tests/pipeline_reorg/ttsim-skip-list.yaml
-# unless the cmd passes --no-ignore. A shard failure fails the job.
+# unless the cmd passes --no-ignore. The shard cmds pass --no-html; JUnit XML is
+# still uploaded. A shard failure fails the job.
 
 on:
   workflow_call:

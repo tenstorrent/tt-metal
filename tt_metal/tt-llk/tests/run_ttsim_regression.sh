@@ -14,8 +14,10 @@
 #
 # Generates:
 #   - JUnit XML at python_tests/ttsim_results/ttsim_<timestamp>.xml
-#   - Self-contained HTML at python_tests/ttsim_results/ttsim_<timestamp>.html
+#   - Self-contained HTML at python_tests/ttsim_results/ttsim_<timestamp>.html,
+#     unless --no-html is set (the Quasar PR-gate shards use that)
 #   - Symlinks `latest.xml` / `latest.html` pointing at the most recent run.
+#     latest.html is omitted when HTML is disabled.
 
 set -euo pipefail
 
@@ -35,6 +37,7 @@ TIMEOUT="${TIMEOUT:-300}"
 ARCHITECTURE="${TTSIM_ARCHITECTURE:-blackhole}"
 USE_IGNORE=1
 LIST_IGNORE=0
+WRITE_HTML=1
 TEST_PATHS=()
 PYTEST_ARGS=()
 DESELECT_ARGS=()
@@ -63,7 +66,8 @@ Usage: $(basename "$0") [OPTIONS] [TEST_PATH...] [-- PYTEST_EXTRA_ARGS...]
 Runs the LLK pytest suite on ttsim. Wormhole/Blackhole runs exclude
 Quasar-only tests; Quasar runs select Quasar-only tests. Per-test
 process isolation via pytest-forked converts ttsim _Exit(1) crashes into normal pytest
-failures; junit XML + HTML report are produced in:
+failures; junit XML is produced in the directory below. HTML is produced too
+unless --no-html is set:
 
   ${RESULTS_DIR}
 
@@ -81,6 +85,7 @@ Options:
                         file.py::test_name also skips test_name_extra; use
                         file.py::test_name[ to skip one parametrized test.
   --no-ignore           Run every collected test; do not read the skip list.
+  --no-html             Do not render the HTML report. JUnit XML is still written.
   --list-ignore         Print the prefixes selected for --architecture and exit.
                         Does not download ttsim or run pytest.
   -h, --help            Show this help message.
@@ -126,6 +131,7 @@ while [[ $# -gt 0 ]]; do
             shift 2
             ;;
         --no-ignore)       USE_IGNORE=0; shift ;;
+        --no-html)         WRITE_HTML=0; shift ;;
         --list-ignore)     LIST_IGNORE=1; shift ;;
         -h|--help)         usage ;;
         --)           shift; PYTEST_ARGS+=("$@"); break ;;
@@ -509,7 +515,11 @@ else
     echo " Skip list      : disabled"
 fi
 echo " JUnit XML      : ${XML_PATH}"
-echo " HTML report    : ${HTML_PATH}"
+if [[ "$WRITE_HTML" -eq 1 ]]; then
+    echo " HTML report    : ${HTML_PATH}"
+else
+    echo " HTML report    : disabled"
+fi
 echo " Test paths     : ${TEST_PATHS[*]:-<all>}"
 echo " Extra args     : ${PYTEST_ARGS[*]:-<none>}"
 echo "============================================================"
@@ -536,7 +546,8 @@ pytest_exit=0
 ) || pytest_exit=$?
 
 # ──────────────────────────────────────────────────────────────
-# Render HTML (always, so partial/failed runs still produce a report)
+# Render HTML unless --no-html. Partial and failed runs still get a report
+# when rendering is enabled.
 # ──────────────────────────────────────────────────────────────
 # Prefer the in-tree renderer (render_ttsim_report.py) which produces a
 # polished single-page report with pass/fail/skip percentages, a donut
@@ -545,7 +556,10 @@ pytest_exit=0
 RENDERER="${SCRIPT_DIR}/render_ttsim_report.py"
 if [[ -f "$XML_PATH" ]]; then
     rendered=0
-    if [[ -x "$RENDERER" || -f "$RENDERER" ]] \
+    if [[ "$WRITE_HTML" -eq 0 ]]; then
+        ln -sfn "$(basename "$XML_PATH")" "$LATEST_XML"
+        [[ -s "$COLLECTED_PATH" ]] && ln -sfn "$(basename "$COLLECTED_PATH")" "$LATEST_COLLECTED"
+    elif [[ -x "$RENDERER" || -f "$RENDERER" ]] \
        && python3 -c "import junitparser" &>/dev/null; then
         RENDER_CMD=(python3 "$RENDERER" "$XML_PATH" "$HTML_PATH")
         # Pass the expected-test list so the renderer can flag the
@@ -557,16 +571,16 @@ if [[ -f "$XML_PATH" ]]; then
             rendered=1
         fi
     fi
-    if [[ $rendered -eq 0 ]] && command -v junit2html &>/dev/null; then
+    if [[ "$WRITE_HTML" -eq 1 && $rendered -eq 0 ]] && command -v junit2html &>/dev/null; then
         echo "Falling back to junit2html (install junitparser for the nicer report)" >&2
         junit2html "$XML_PATH" "$HTML_PATH"
         rendered=1
     fi
-    if [[ $rendered -eq 1 ]]; then
+    if [[ "$WRITE_HTML" -eq 1 && $rendered -eq 1 ]]; then
         ln -sfn "$(basename "$XML_PATH")"  "$LATEST_XML"
         ln -sfn "$(basename "$HTML_PATH")" "$LATEST_HTML"
         [[ -s "$COLLECTED_PATH" ]] && ln -sfn "$(basename "$COLLECTED_PATH")" "$LATEST_COLLECTED"
-    else
+    elif [[ "$WRITE_HTML" -eq 1 ]]; then
         echo ""
         echo "WARNING: no HTML renderer available; only XML produced." >&2
         echo "         Install with:  pip install junitparser"          >&2
