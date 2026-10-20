@@ -2232,20 +2232,20 @@ void detail::ProgramImpl::allocate_scratchpads(const IDevice* device) {
 
     // Performs the actual allocation
     //
-    // kernel_cores: The nodes the allocation takes in place
+    // cores: The nodes the allocation takes in place
     // size_bytes: The size of allocation in bytes
     //
     // returns: the new allocated address across the cores supplied
-    // side-effect: the allocated space (from the new allocated address spanning size_bytes on kernel_cores) are marked
+    // side-effect: the allocated space (from the new allocated address spanning size_bytes on cores) are marked
     // as allocated.
-    auto allocate_new_address = [&](const CoreRangeSet& kernel_cores,
+    auto allocate_new_address = [&](const CoreRangeSet& cores,
                                     std::uint32_t size_bytes) -> DeviceAddr /* allocated address */ {
         // A scratchpad bumps onto the program-scope L1 region, stacking on top of any DFBs.
         // (DFBs and CBs are mutually exclusive, so dfb_allocators_ own the whole region.)
         //
         // Ensure a CircularBufferAllocator exists for each of the kernel's core ranges:
         // a scratchpad-bearing kernel may have no DFBs, so the allocators may not exist yet.
-        for (const CoreRange& core_range : kernel_cores.ranges()) {
+        for (const CoreRange& core_range : cores.ranges()) {
             bool exists = false;
             for (const CircularBufferAllocator& a : this->dfb_allocators_) {
                 if (a.core_range == core_range) {
@@ -2266,7 +2266,7 @@ void detail::ProgramImpl::allocate_scratchpads(const IDevice* device) {
         std::vector<CircularBufferAllocator*> touched;
         touched.reserve(this->dfb_allocators_.size());
         for (CircularBufferAllocator& a : this->dfb_allocators_) {
-            for (const CoreRange& core_range : kernel_cores.ranges()) {
+            for (const CoreRange& core_range : cores.ranges()) {
                 if (a.core_range.intersects(core_range)) {
                     touched.push_back(&a);
                     break;
@@ -2274,9 +2274,12 @@ void detail::ProgramImpl::allocate_scratchpads(const IDevice* device) {
             }
         }
 
-        uint64_t addr = reserve_program_local_l1(device, kernel_cores);
+        uint64_t addr = reserve_program_local_l1(device, cores);
         for (const CircularBufferAllocator* a : touched) {
             addr = std::max<uint64_t>(addr, a->get_cb_region_end());
+            // CircularBufferAllocator could be covering a wider region than `cores`,
+            // so we also need to take the reserved region of the CircularBufferAllocator.
+            addr = std::max(addr, reserve_program_local_l1(device, CoreRangeSet(a->core_range)));
         }
         addr = align(addr, alignment);
         for (CircularBufferAllocator* a : touched) {
