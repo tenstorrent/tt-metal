@@ -26,6 +26,7 @@ CB = dict(CB_S0=0, CB_S1=1, CB_M0=2, CB_M1=3, CB_Z=4, CB_X0=5, CB_X1=6)
 XCAP = 2048  # value exceptions per staging set (generate.cpp)
 SET_PAGES = 55  # staging set per RISC: 27 offset pages, 27 value pages, one b page (generate.cpp's SET)
 JOB_ARGS = 10  # common arguments per job (generate.cpp)
+MIN_META_PAGES = 8  # META circular buffer pages per RISC at least (a program's buffer sizes are part of its cache key)
 
 
 def _rows(device, n):
@@ -46,16 +47,22 @@ class StencilJob:
 
     kind = 0
 
-    def __init__(self, device, L, plan, b=None, zeros=()):
+    def __init__(self, device, L, plan, b=None, zeros=(), tables=None):
+        """tables: (values, offsets) allocated beforehand (StencilJob.allocate), or None."""
         if len(zeros) > 2:
             raise ValueError("at most two zero vectors")
         if plan.off is not None or plan.nslot != 27:
             raise ValueError("needs a 27-slot plan made with SparseRowPlan(..., stencil=L)")
         self.plan, self.ntlv = plan, L.stride // TILE
-        self.values, self.offsets = (_rows(device, 27 * self.ntlv) for _ in range(2))
+        self.values, self.offsets = tables if tables is not None else StencilJob.allocate(device, L)
         self.b, self.zeros = b, list(zeros)
         self.levels, self.hw = [L], 36  # levels whose tables the job reads; header words of its META segment
         self.head = {0: [L.nx, L.nb, L.nl, self.ntlv], 22: [L.starts[c] + L.count(c) for c in range(8)]}
+
+    @staticmethod
+    def allocate(device, L):
+        """The values and offsets tensors of level L (they depend on its size only, not on the plan)."""
+        return tuple(_rows(device, 27 * (L.stride // TILE)) for _ in range(2))
 
     def tensors(self):
         return [self.values, self.offsets] + self.zeros + ([self.b] if self.b is not None else [])
@@ -94,10 +101,12 @@ class StencilMatrixOp:
     """One launch that runs every job (StencilJob / TransferJob) in order, on as many cores as the largest job's plan.
     Every job's tables are written once the launch completes."""
 
-    def __init__(self, device, jobs):
-        """jobs: StencilJob / TransferJob list; empty: a launch that only loads the kernel binaries (warm_up)."""
+    def __init__(self, device, jobs, ncores=None, job_slots=None):
+        """jobs: StencilJob / TransferJob list; empty: a launch that only loads the kernel binaries (warm_up).
+        ncores: cores of the launch (default: the most any job's plan uses). job_slots: argument slots for this many
+        jobs (default len(jobs)); with the same cores, slots and table pages two launches share one built program."""
         g = device.compute_with_storage_grid_size()
-        nc = max((j.plan.nc for j in jobs), default=1)
+        nc = ncores if ncores is not None else max((j.plan.nc for j in jobs), default=1)
         # META: a shared region read by every core (each level's storage-order tables, once), then one row per core
         # (the jobs' segments one after another, 16-word aligned: header, then the core's window piece lo and l1
         # tables). Both are whole 4 KB pages: the tensor's page size is then the same for every launch, and so is the
@@ -150,13 +159,16 @@ class StencilMatrixOp:
             args += [j.kind, j.plan.nc, a, j.values.buffer_address(), j.offsets.buffer_address()]
             args += [bt.buffer_address(), int(j.b is not None), len(j.zeros)]
             args += [zt[0].buffer_address(), zt[1].buffer_address()]
+        args += [0] * (JOB_ARGS * ((job_slots or len(jobs)) - len(jobs)))  # unused slots (the kernel reads len(jobs))
 
         def cb(idx, nbytes, page):
             fd = ttnn.CBFormatDescriptor(buffer_index=idx, data_format=ttnn.float32, page_size=page)
             return ttnn.CBDescriptor(total_size=nbytes, core_ranges=cores, format_descriptors=[fd])
 
         cbs = [cb(CB[f"CB_S{h}"], 2 * SET_PAGES * 4096, 4096) for h in (0, 1)]
-        cbs += [cb(CB[f"CB_M{h}"], (shared_pages + meta_pages) * 4096, 4096) for h in (0, 1)]
+        # at least MIN_META_PAGES, so launches with small tables (the fine level's, the warm-up) share a program
+        meta_cb = max(shared_pages + meta_pages, MIN_META_PAGES) * 4096
+        cbs += [cb(CB[f"CB_M{h}"], meta_cb, 4096) for h in (0, 1)]
         cbs.append(cb(CB["CB_Z"], 4096, 4096))
         cbs += [cb(CB[f"CB_X{h}"], 2 * XCAP * 4, 2 * XCAP * 4) for h in (0, 1)]
         kernels = []
@@ -179,8 +191,9 @@ class StencilMatrixOp:
         return ttnn.generic_op(self.io, self.prog)
 
 
-def warm_up(device):
-    """A launch with no jobs on one core: the process loads the kernel binaries (about 1.7 ms on the P150's host the
-    first time) while the caller plans the fine level, so the first real launch starts that much sooner. TT-NN
-    releases the Python GIL while it builds and enqueues a program, so this can run in a thread."""
-    StencilMatrixOp(device, [])()
+def warm_up(device, ncores):
+    """A launch with no jobs on ncores cores, shaped like a one-job launch on them: the process loads the kernel
+    binaries and builds that program (about 2 ms on the P150's host the first time) while the caller plans the fine
+    level, so the fine level's launch (one job, the same cores) reuses the program and starts at once. TT-NN releases
+    the Python GIL while it builds and enqueues a program, so this can run in a thread."""
+    StencilMatrixOp(device, [], ncores=ncores, job_slots=1)()

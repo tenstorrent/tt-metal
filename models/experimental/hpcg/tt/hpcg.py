@@ -53,7 +53,7 @@ class DeviceLevel:
     it, StencilMatrixOp); None on the host-tables path.
     Work vectors are allocated without a fill: every launch writes them before any launch reads them."""
 
-    def __init__(self, device, L, ncores, noc_xy, r=None, b=None, zeros=(), plan=None):
+    def __init__(self, device, L, ncores, noc_xy, r=None, b=None, zeros=(), plan=None, tables=None):
         self.L, self.P = L, L.P
         blocks = [(L.starts[c], L.starts[c + 1]) for c in range(8)]
         plan_args = (blocks, blocks, ncores, noc_xy, True)
@@ -70,7 +70,7 @@ class DeviceLevel:
             self.job = None
         else:  # the device writes the values, the offsets, b and the zero vectors; the host plans the windows only
             self.plan = plan if plan is not None else DeviceLevel.stencil_plan(L, ncores, noc_xy)
-            self.job = StencilJob(device, L, self.plan, b=b, zeros=zeros)
+            self.job = StencilJob(device, L, self.plan, b=b, zeros=zeros, tables=tables)
             self.values, self.offsets = self.job.values, self.job.offsets
         self.z, self.Az = (empty_device(device, L.P) for _ in range(2))
         self.r = r if r is not None else empty_device(device, L.P)  # the fine level shares CG's r
@@ -104,25 +104,29 @@ class HPCG:
         nc = g.x * g.y
         bands = list(bands) if bands is not None else [default_bands(nx >> l) for l in range(4)]
         noc_xy = noc_coords(device)
-        # generation launches go through one worker thread, in order (TT-NN releases the GIL while it builds and
-        # enqueues a program): first a launch with no jobs that loads the kernel binaries while this thread builds
-        # and plans the fine level, then each real launch, its program built there while this thread goes on. A
-        # launch is handed over only after its table upload returned, so the upload is ahead of it in the queue
-        gen = None if host_tables else ThreadPoolExecutor(max_workers=1)
-        launched = [] if gen is None else [gen.submit(warm_up, device)]
         self.order = list(order)
         lc = list(level_cores or []) + [nc] * 4  # cores per level for the smoothers (default: all)
+        # generation launches go through one worker thread, in order (TT-NN releases the GIL while it builds and
+        # enqueues a program): first a launch with no jobs, shaped like the fine level's, that loads the kernel
+        # binaries and builds that program while this thread builds and plans the fine level; then each real launch
+        # (the fine level's reuses the program), while this thread goes on. A launch is handed over only after its
+        # table upload returned, so the upload is ahead of it in the queue
+        gen = None if host_tables else ThreadPoolExecutor(max_workers=1)
+        launched = [] if gen is None else [gen.submit(warm_up, device, min(nc, lc[0]))]
+        tables0 = None
         if host_tables:
             self.levels = build(nx, bands, slot_stride, tables=True)
             L0, plan0 = self.levels[0], None
         else:  # the fine level first: the coarser ones are built after its generation launch
             L0 = Level(nx, bands[0], slot_stride, tables=False)
-            plan0 = DeviceLevel.stencil_plan(L0, min(nc, lc[0]), noc_xy)
+            tables0 = StencilJob.allocate(device, L0)  # allocations need no plan: done before planning
         self.r, self.b, self.x, self.p, self.Ap = (empty_device(device, L0.P) for _ in range(5))
+        if not host_tables:
+            plan0 = DeviceLevel.stencil_plan(L0, min(nc, lc[0]), noc_xy)
         fine = dict(r=self.r, b=self.b, zeros=(self.x, self.p))  # x = 0 (initial guess) and p = 0 on the fine level
         # matrix generation in two launches: the fine level's as soon as it is planned (the device writes it while
         # the host plans the rest), then the coarser levels' and the grid transfers' together
-        self.lv = [DeviceLevel(device, L0, min(nc, lc[0]), noc_xy, plan=plan0, **fine)]
+        self.lv = [DeviceLevel(device, L0, min(nc, lc[0]), noc_xy, plan=plan0, tables=tables0, **fine)]
         if self.lv[0].job is not None:
             launched.append(gen.submit(StencilMatrixOp(device, [self.lv[0].job])))
             self.levels = build(nx, bands, slot_stride, tables=False, finest=L0)
