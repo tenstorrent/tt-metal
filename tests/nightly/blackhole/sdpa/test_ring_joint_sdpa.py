@@ -9013,6 +9013,32 @@ def test_ring_joint_attention_gemma4_global_lofi_matmul_accuracy(tokens_per_devi
 
 
 @pytest.mark.timeout(900)
+@pytest.mark.parametrize(
+    "d_k",
+    [544, 896, 1024],
+    ids=["v-from-k15", "v-from-k4", "no-overlap"],
+)
+@pytest.mark.parametrize("k_splits", [1, 3], ids=["unsplit", "ksplit"])
+def test_ring_joint_attention_packed_kv_v_offset_accuracy(d_k, k_splits):
+    """Packed K/V rows where V starts at a different column of K's 512: the reader builds V's overlapping tile
+    columns from the K^T tiles it already holds and reads only the rest from DRAM. 544 and 896 put V at tile 1 and
+    tile 12 (15 and 4 columns copied from K); 1024 puts V after K, where the reader keeps the plain DRAM read."""
+    tokens_per_device = 256
+    q_chunk_size = 64
+    chunk_size = tokens_per_device * MESH_CONFIG.sp_size
+    k_splits = fitting_k_splits(k_splits, GEMMA4_GLOBAL_CHUNKED_MODEL.nhq * tokens_per_device // q_chunk_size)
+    run_ring_joint_sdpa_chunked(
+        MESH_CONFIG,
+        replace(GEMMA4_GLOBAL_CHUNKED_MODEL, name=f"packed_kv_dk{d_k}", d_k=d_k),
+        chunk_size=chunk_size,
+        total_seq=3 * chunk_size,
+        qk_configs=[(q_chunk_size, 256)],
+        k_splits=k_splits,
+        use_ring_mla=True,
+    )
+
+
+@pytest.mark.timeout(900)
 def test_ring_joint_attention_hifi_matmul_on_lofi_compute_config():
     """A HiFi2 matmul override on a LoFi compute config. On the last K chunk normalize_row records a LoFi matmul
     image between two P.V setups, so P.V must fully re-init rather than reuse it (it hung or went wrong from three
