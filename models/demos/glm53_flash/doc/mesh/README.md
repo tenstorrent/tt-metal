@@ -349,3 +349,13 @@ mHC path; A/B with the composite wrap on the prefill rows queued (`GLM53_MHC_PRE
 Demo (`prefill_128-4users`, 8x4, 45 layers bfp8, 21:05): ISL 79-92, TTFT mean 2896 ms, decode 166.63 ms/step =
 6.0 tok/s/user, 192 tok/s aggregate with the composite hybrid experts (the demo sets no expert policy); the e2e r4
 step with stream experts is 76.45 ms, so the expert path is ~90 ms of the 4-users/row step. Outputs coherent.
+
+### 21:41 board incident and recovery
+
+Every device open failed with `Timeout waiting for ARC msg request queue` (UMD power-state messages timing out on
+all 32 chips); `tt-smi -s` still answered but its telemetry was stale (heartbeat identical across snapshots):
+the chips' management firmware had stopped board-wide, right after a clean single-chip close and the next
+full-mesh open. No process held a device. Host reboot by the user (~22:00); heartbeats advance again, the 8x4
+sanity passed, queue relaunched (`_logs/mesh/sched_v7.sh`). Merged meanwhile: deterministic indexer stems for
+chunked prefill (`prefill_linear`, 97642663bc2), partition_cols ROW_MAJOR path (586ad64479f), cache-hit shard
+shape (661c25de72c), partitioned-test sizing (ab6e38d1e71).
