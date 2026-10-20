@@ -332,3 +332,10 @@ ack leaves them unequal forever. Fix 20eaa501a00: `kda_decode` and `mhc_pre_bloc
 `noc_async_full_barrier()`. Also from this run: the 45-layer build costs ~60 s per layer of host weight conversion;
 the e2e test and demo now build through the tensorbin cache (`GLM53_MESH_CACHE`, default `_cache/mesh`), first run
 writes it.
+
+### 8x4 decode after the kernel barrier fix (2026-10-20 19:38, run r4)
+
+| config (45 layers, bfp8 experts, ISL 16) | step | tok/s per user | aggregate | chain PCC median | greedy id == host head |
+|---|---|---|---|---|---|
+| morning (composite ops), 4 users/row = 32 users | 203.35 ms | 4.9 | 157 | 0.868 | 75 % |
+| r4 (fast exact mHC + KDA block + stream experts), 4 users/row = 32 users | 76.45 ms | 13.1 | 419 | 0.842 | 100 % |
