@@ -1350,7 +1350,7 @@ protected:
         // between test fixtures possibly because the previously issued commands
         // are not completed before next firmware launch
         HostMemDeviceCommand cmd(metal_ctx, cmd_calc.write_offset_bytes());
-        cmd.add_dispatch_wait(CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0, 0, 0, 0);
+        cmd.add_dispatch_wait(CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0, 0, 0);
         dc.add_data(cmd.data(), cmd.size_bytes(), cmd.size_bytes());
         entry_sizes.push_back(cmd.size_bytes());
 
@@ -1463,6 +1463,10 @@ inline std::map<std::string, std::string> make_sd_dispatch_defines(
         {"MAX_NUM_WORKER_SEMS", std::to_string(DispatchSettings::DISPATCH_MESSAGE_ENTRIES)},
         {"MAX_NUM_GO_SIGNAL_NOC_DATA_ENTRIES", std::to_string(DispatchSettings::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES)},
         {"MCAST_GO_SIGNAL_ADDR", "0"},
+        {"MCAST_GO_RING_SIZE", "0"},  // The harness sends no gos.
+        // Workers report done for a go to the dispatcher that sent it.
+        {"GO_DONE_NOC_X", std::to_string(my_virtual.x)},
+        {"GO_DONE_NOC_Y", std::to_string(my_virtual.y)},
         {"UNICAST_GO_SIGNAL_ADDR", "0"},
         {"DISTRIBUTED_DISPATCHER", "0"},
         {"HOST_COMPLETION_Q_WR_PTR",
