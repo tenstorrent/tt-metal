@@ -175,8 +175,10 @@ inline void llk_unpack_A_block(
                 return;
             }
         }
+        // Tiles smaller than 32x32 are bound by the per-call setup, so even one or two take the block form.
+        const bool small_tile = get_operand_num_faces(operand_id) != 4 || get_operand_face_r_dim(operand_id) != 16;
         // A run-time count of one or two tiles takes straight calls: a loop beside the block path loses its registers.
-        if (!__builtin_constant_p(ntiles)) {
+        if (!__builtin_constant_p(ntiles) && !small_tile) {
             if (ntiles == 1) {
                 WAYPOINT("UPAW");
                 _llk_unpack_A_<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest>(
@@ -194,7 +196,7 @@ inline void llk_unpack_A_block(
                 return;
             }
         }
-        if (ntiles > 2) {
+        if (ntiles > 2 || (small_tile && ntiles > 0)) {
             WAYPOINT("UPAW");
             // A CB page holds one tile, so the tiles of an uncompressed block lie back to back
             if (!IS_BFP_FORMAT(unpack_src_format[operand_id])) {

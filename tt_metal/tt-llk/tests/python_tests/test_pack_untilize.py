@@ -33,6 +33,7 @@ from helpers.test_variant_parameters import (
     PACK_UNTILIZE_DATUM_SIZES,
     TILE_COUNT,
     TILE_DST_CT_OFFSET,
+    UNPACK_BLOCK,
     UNTILIZE_ROW_DATUMS,
     generate_input_dim,
 )
@@ -166,6 +167,33 @@ def test_pack_untilize_narrow_row_all_formats(
     )
 
 
+# The block unpack call on block rows of one and two tiles, which production takes for tiles under 32x32; two or more
+# tiles so the tile stride is known.
+@skip_for_wormhole
+@parametrize(
+    formats=[
+        InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
+        InputOutputFormat(DataFormat.Float32, DataFormat.Float32),
+        InputOutputFormat(DataFormat.Bfp8_b, DataFormat.Float16_b),
+    ],
+    dest_acc=lambda formats: get_valid_dest_accumulation_modes(formats),
+    input_dimensions=[[64, 32], [32, 64], [64, 64], [32, 128]],
+    block_ct_dim=[1, 2],
+)
+def test_pack_untilize_block_unpack(formats, dest_acc, input_dimensions, block_ct_dim):
+    if input_dimensions[1] // 32 % block_ct_dim:
+        pytest.skip("The block width does not divide the row")
+    _check_pack_untilize(
+        formats,
+        dest_acc,
+        input_dimensions,
+        DestSync.Half,
+        0,
+        block_ct_dim,
+        unpack_block=True,
+    )
+
+
 def _check_pack_untilize_rows(formats, dest_acc, input_dimensions, block_ct_dim):
     if dest_acc == DestAccumulation.Yes and block_ct_dim > 4:
         pytest.skip("A 32-bit DEST half holds four tiles")
@@ -190,6 +218,7 @@ def _check_pack_untilize(
     tile_dst_ct_offset,
     block_ct_dim=None,
     row_datums=32,
+    unpack_block=False,
 ):
     if TestConfig.WITH_COVERAGE and input_dimensions == [64, 512]:
         pytest.skip(
@@ -287,6 +316,7 @@ def _check_pack_untilize(
             TILE_DST_CT_OFFSET(tile_dst_ct_offset),
             UNTILIZE_ROW_DATUMS(row_datums),
             PACK_UNTILIZE_DATUM_SIZES(formats, dest_acc, unpack_to_dest),
+            *([UNPACK_BLOCK(True)] if unpack_block else []),
         ],
         runtimes=[TILE_COUNT(tile_cnt_A), NUM_FACES(4)],
         variant_stimuli=StimuliConfig(

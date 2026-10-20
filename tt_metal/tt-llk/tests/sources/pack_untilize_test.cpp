@@ -52,6 +52,11 @@ inline bool math_clears_dest(const std::uint32_t unpack_src)
 #include "llk_unpack_common.h"
 #include "params.h"
 
+// UNPACK_BLOCK (driver template): the block call for block rows of one or two tiles too
+#ifndef UNPACK_BLOCK
+#define UNPACK_BLOCK 0
+#endif
+
 void run_kernel(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
@@ -77,11 +82,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
             const std::uint32_t src_format = formats.unpack_A_src;
             const bool src_32bit           = src_format == ckernel::to_underlying(DataFormat::Float32) || src_format == ckernel::to_underlying(DataFormat::Int32) ||
                                    src_format == ckernel::to_underlying(DataFormat::UInt32);
-            if (BLOCK_CT_DIM > 2 && !src_32bit)
+            if ((BLOCK_CT_DIM > 2 || UNPACK_BLOCK) && !src_32bit)
             {
                 const std::uint32_t first      = rt * FULL_CT_DIM + block_num * BLOCK_CT_DIM;
                 const std::uint32_t address    = L1_ADDRESS(params.buffer_A[first]);
-                const std::uint32_t stride_16B = L1_ADDRESS(params.buffer_A[first + 1]) - address;
+                const std::uint32_t stride_16B = L1_ADDRESS(params.buffer_A[1]) - L1_ADDRESS(params.buffer_A[0]);
                 if (!IS_BFP_FORMAT(formats.unpack_A_src) && stride_16B == params.num_faces * FACE_R_DIM * datum_size_in_bytes(formats.unpack_A_src))
                 {
                     _llk_unpack_A_block_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, false, is_fp32_dest_acc_en, true>(

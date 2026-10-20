@@ -14,7 +14,9 @@ sparse-to-dense packing into a contiguous L1 block.
 
 import torch
 from conftest import skip_for_wormhole
-from helpers.format_config import DataFormat
+from helpers.constraints import get_valid_dest_accumulation_modes
+from helpers.format_config import DataFormat, InputOutputFormat
+from helpers.golden_generators import quantize_input_to_unpack_format
 from helpers.llk_params import (
     DestAccumulation,
     L1Accumulation,
@@ -35,6 +37,7 @@ from helpers.test_variant_parameters import (
     TEST_FACE_DIMS,
     TILE_COUNT,
     TINY_PACK_MODE,
+    UNPACK_BLOCK,
 )
 from helpers.tile_constants import calculate_tile_size_bytes, get_tile_params
 from helpers.utils import passed_test
@@ -46,12 +49,15 @@ def _make_config(
     formats,
     dest_acc,
     pack_mode=0,
+    unpack_block_tiles=0,
 ):
     """Build TestConfig for a given tile shape and tile count."""
     tile_r, tile_c = tile_dims
     face_r_dim, num_faces_r_dim, num_faces_c_dim = get_tile_params(tile_dims)
     num_faces = num_faces_r_dim * num_faces_c_dim
 
+    # unpack_block_tiles: the unpack takes one _llk_unpack_A_block_ call per block of that many tiles, in the
+    # tile's own L1 layout, and the DEST blocks are as large
     # Stack tiles vertically so input_dimensions = (num_tiles * tile_r, tile_c)
     input_dimensions = [tile_r * num_tiles, tile_c]
 
@@ -65,7 +71,9 @@ def _make_config(
 
     # Golden: input round-tripped through the output format
     torch_format = format_dict[formats.output_format]
-    golden_tensor = src_A.to(torch_format)
+    golden_tensor = quantize_input_to_unpack_format(src_A, formats.input_format).to(
+        torch_format
+    )
 
     # Determine DEST capacity (SyncHalf: 8 tiles FP16, 4 tiles FP32)
     capacity_divisor = (
@@ -82,18 +90,24 @@ def _make_config(
     elif pack_mode != 0:
         max_tiles_in_dest = 4  # whole-tile slots of a 32-bit DEST half, whatever the harness picks for the DEST width
 
-    num_tiles_in_block = min(tile_cnt_A, max_tiles_in_dest)
+    num_tiles_in_block = min(tile_cnt_A, unpack_block_tiles or max_tiles_in_dest)
     num_blocks = tile_cnt_A // num_tiles_in_block
 
     assert num_blocks * num_tiles_in_block == tile_cnt_A, (
         f"Tile count {tile_cnt_A} not evenly divisible into "
         f"{num_blocks} blocks of {num_tiles_in_block}"
     )
+    unpack_to_dest = (
+        formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
+    )
 
     configuration = TestConfig(
         "sources/pack_tiny_tile_block_test.cpp",
         formats,
-        templates=[TINY_PACK_MODE(pack_mode)],
+        templates=[
+            TINY_PACK_MODE(pack_mode),
+            *([UNPACK_BLOCK(True)] if unpack_block_tiles else []),
+        ],
         runtimes=[
             DEST_INDEX(0),
             TILE_COUNT(tile_cnt_A),
@@ -122,6 +136,7 @@ def _make_config(
             ),
         ),
         dest_acc=dest_acc,
+        unpack_to_dest=unpack_to_dest,
     )
 
     return configuration, golden_tensor, torch_format
@@ -167,6 +182,39 @@ def test_pack_tiny_tile_block(
     assert len(res_from_L1) == len(
         golden_tensor
     ), f"Length mismatch: got {len(res_from_L1)}, expected {len(golden_tensor)}"
+
+    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
+    assert passed_test(golden_tensor, res_tensor, formats.output_format)
+
+
+# ── Block unpack of tiny tiles: one or two tiles per _llk_unpack_A_block_ call ──
+
+
+@skip_for_wormhole
+@parametrize(
+    formats=[
+        InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
+        InputOutputFormat(DataFormat.Bfp8_b, DataFormat.Float16_b),
+        InputOutputFormat(DataFormat.Float32, DataFormat.Float32),
+    ],
+    dest_acc=get_valid_dest_accumulation_modes,
+    tile_dims=[(1, 32), (2, 32), (4, 32), (8, 32), (16, 32), (16, 16)],
+    unpack_block_tiles=[0, 1, 2],
+)
+def test_unpack_block_tiny_tile(formats, dest_acc, tile_dims, unpack_block_tiles):
+    """unpack_block_tiles 0 is the per-tile unpack, the control."""
+    configuration, golden_tensor, torch_format = _make_config(
+        tile_dims,
+        4,
+        formats,
+        dest_acc,
+        pack_mode=2,
+        unpack_block_tiles=unpack_block_tiles,
+    )
+
+    res_from_L1 = configuration.run().result
+
+    assert len(res_from_L1) == len(golden_tensor)
 
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
     assert passed_test(golden_tensor, res_tensor, formats.output_format)
