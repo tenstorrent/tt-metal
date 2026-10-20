@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import contextlib
 import math
 import os
 import pathlib
@@ -837,15 +838,22 @@ def verify_shards_match_topology(tensor: ttnn.Tensor, *, compare_replica_content
 _as_tensor_cache_repair = True
 
 
-def set_as_tensor_cache_repair(enabled: bool) -> None:
-    """Sets whether ``ttnn.as_tensor`` regenerates a cache file that exists but fails to load.
+@contextlib.contextmanager
+def as_tensor_cache_repair(enabled: bool):
+    """Scopes whether ``ttnn.as_tensor`` regenerates a cache file that exists but fails to load.
 
-    On by default: the file is rewritten from the tensor passed to ``as_tensor``. Turn it off when
-    that tensor is a dataless placeholder (a warm-cache build), so a failed load raises instead of
-    overwriting a good cache file with the placeholder's contents.
+    On by default: the file is rewritten from the tensor passed to ``as_tensor``. Wrap a warm-cache
+    build, whose tensors are dataless placeholders, in ``with ttnn.as_tensor_cache_repair(False):``
+    so a failed load raises instead of overwriting a good cache file with the placeholder's
+    contents. The previous setting is restored on exit.
     """
     global _as_tensor_cache_repair
+    previous = _as_tensor_cache_repair
     _as_tensor_cache_repair = enabled
+    try:
+        yield
+    finally:
+        _as_tensor_cache_repair = previous
 
 
 def _golden_function_as_tensor(tensor, dtype=None, *, preprocess=None, **kwargs):

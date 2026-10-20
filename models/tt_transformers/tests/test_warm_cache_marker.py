@@ -78,12 +78,6 @@ def _clear_force_env(monkeypatch):
     monkeypatch.delenv("TT_TRANSFORMERS_FORCE_MODEL_LOAD", raising=False)
 
 
-@pytest.fixture(autouse=True)
-def _restore_as_tensor_cache_repair(monkeypatch):
-    # Building a warm state_dict turns as_tensor's cache repair off for the whole process.
-    monkeypatch.setattr(ttnn.operations.core, "_as_tensor_cache_repair", True)
-
-
 def test_cold_cache_is_incomplete(tmp_path):
     args = _FakeArgs(tmp_path)
     assert args.weight_cache_is_complete(DTYPE) is False
@@ -487,7 +481,12 @@ def test_warm_build_raises_on_unloadable_cache_file(tmp_path, build_placeholders
     placeholders = build_placeholders(tmp_path, {key: weight})
 
     (cache_path,) = tmp_path.glob("*.tensorbin")
-    cache_path.write_bytes(b"not a tensorbin")
-    with expect_error(RuntimeError, "Failed to load cache file"):
-        ttnn.as_tensor(placeholders[key], dtype=ttnn.float32, cache_file_name=tmp_path / key)
-    assert cache_path.read_bytes() == b"not a tensorbin"
+    data = cache_path.read_bytes()
+    truncated = data[: len(data) // 2]
+    cache_path.write_bytes(truncated)
+    # The model factories scope the switch like this around the model build.
+    assert placeholders.is_placeholder
+    with ttnn.as_tensor_cache_repair(not placeholders.is_placeholder):
+        with expect_error(RuntimeError, "truncated or corrupt"):
+            ttnn.as_tensor(placeholders[key], dtype=ttnn.float32, cache_file_name=tmp_path / key)
+    assert cache_path.read_bytes() == truncated
