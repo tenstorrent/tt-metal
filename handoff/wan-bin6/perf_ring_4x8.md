@@ -8,8 +8,8 @@ Run 2026-10-20 by a Claude Code session for jameslee@tenstorrent.com.
 
 - **The 4x8 ring runs on this machine.** Unlike `b10u08` (see `README.md`), `b10u20` is cabled as a full 4x8 torus.
 - **All 8 runs passed, none hung:** T2V and I2V at 480p and 720p, each at the default power limit and at `TT_METAL_TDP_LIMIT_WATTS=130`. That includes 720p with the chunked VAE, which hung 17 of 17 times on `b10u08` without the 130 W setting.
-- **Only VAE decode misses its CI target, by 17–29%.** Denoise and total are 24–26% under target at the default limit. On 7-bank DRAM the branch decodes in chunks (`vae_t_chunk_size=7`), but CI's 8-bank hosts miss the VAE target by more (see the comparison below).
-- **Against CI on 8-bank BH Galaxies, Bin6 costs little or nothing in denoise.** b10u20 at 75 W matches the slower CI hosts (`d04*`, about 56.5 s at 480p) to within 1–2%, and at 130 W it comes within 4–5% of the faster ones (`d06*`/`d07*`, about 39 s). CI also misses the VAE target (0.70–0.76 s at 480p), so the target is stale, and that miss is why the nightly job is red.
+- **Only VAE decode misses its CI target, by 17–29%, and the chunking is why.** Denoise and total are 24–26% under target at the default limit. On 7-bank DRAM the branch decodes in chunks (`vae_t_chunk_size=7`). In an A/B on b10u20 at 480p, chunking costs about 52% in VAE time (0.52 s against 0.35 s full-T), or 0.18 s per video, about 0.3% of the total. Full-T meets the 0.42 s target on this machine.
+- **Against CI on 8-bank BH Galaxies, Bin6 costs little or nothing in denoise.** b10u20 at 75 W matches the slower CI hosts (`d04*`, about 56.5 s at 480p) to within 1–2%, and at 130 W it comes within 4–5% of the faster ones (`d06*`/`d07*`, about 39 s). CI misses the VAE target too, by more (0.70–0.76 s at 480p, full-T), and that is why the nightly job is red. CI's VAE is about 2x slower than full-T on b10u20 for reasons not yet known (see the comparison below).
 - **130 W is not a cap here: the board default is 75 W.** With every chip at 75 W out of the box (read back with `TT_METAL_TDP_LIMIT_WATTS=0`), setting 130 W *raises* the limit, and every config runs 17–26% faster. This probably reverses the README's finding 5 for `b10u08`: raising the limit, not capping it, is what stopped the hang.
 
 ## Machine checks
@@ -76,7 +76,18 @@ What this shows:
 
 1. **The CI hosts split into two speed groups, and b10u20 lands on one or the other depending on the power limit.** `d04*` hosts denoise 480p in about 56.5 s and 720p in about 157 s, the same as b10u20 at its 75 W default (55.75 / 154.97). `d06*` / `d07*` hosts take about 39 s and 123.5 s, close to b10u20 at 130 W (40.99 / 128.41, 4–5% slower). The CI logs don't show TDP, so it is a guess that the fast hosts simply run with a higher power limit, but the match is close. Worth checking with `TT_METAL_TDP_LIMIT_WATTS=0` on a `d04` and a `d07` host.
 2. **Bin6 plus PR #60190 costs little or nothing in denoise.** At the same power level b10u20 is within 1–2% of the `d04` group, and within 4–5% of the `d06`/`d07` group when running at 130 W.
-3. **The VAE target is stale.** CI misses it too: 0.70–0.76 s at 480p against 0.42, and that assert is why every one of these nightlies is red. At 480p the chunked decode on b10u20 (0.49–0.52 s) is *faster* than CI's full-T decode. At 720p the two are about the same (1.01–1.10 s against 0.98–1.11 s).
+3. **CI's VAE decode is about 2x slower than b10u20's, for an unknown reason.** CI misses the target too: 0.70–0.76 s at 480p against 0.42, and that assert is why every one of these nightlies is red. b10u20 with the same full-T decode takes 0.35 s (A/B below). So the target is fine; the CI runs are slow. Code age is ruled out: this branch's base (`7086ed4c7a0`, 10-14) is newer than the 10-12/10-13 CI runs that already showed 0.70–0.74 s. One guess, unverified: the `vae` section includes reading 81 frames back from 32 chips and converting them in numpy, so host speed counts, and CI runs inside a container under `mpirun`. At 720p, b10u20's chunked decode (1.01–1.10 s) matches CI's full-T (0.98–1.11 s). Full-T can't run at 720p on 7 banks (#59504), so there is no like-for-like 720p number.
+
+### VAE chunking A/B (b10u20, T2V 480p, 75 W, same build)
+
+`vae_t_chunk_size` forced by a pytest plugin that logs the value it actually applied. The order alternated between the two settings.
+
+| `vae_t_chunk_size` | VAE decode | Denoise | Total |
+|---|---|---|---|
+| `None` (full-T, as `main`) run 1 / 2 | 0.349 / 0.343 s | 55.63 / 55.74 s | 56.06 / 56.16 s |
+| `7` (this branch on 7 banks) run 1 / 2 | 0.531 / 0.520 s | 55.66 / 55.69 s | 56.27 / 56.29 s |
+
+Chunking adds about 0.18 s (+52%) to the VAE and nothing to denoise. The work is about the same (the same causal convolutions, run on 21 latent frames in pieces of 1, 7, 7 and 6 with a cache passed between them), so the extra time is probably per-chunk op and dispatch overhead plus the `concat` that joins the chunks. The branch chunks at every resolution on 7-bank DRAM. Chunking only at 720p, where full-T runs out of memory, would get the 480p time back.
 
 ## Notes
 
