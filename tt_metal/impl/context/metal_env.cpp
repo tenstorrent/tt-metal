@@ -477,6 +477,17 @@ void MetalEnvImpl::teardown_fabric_config() {
             this->get_control_plane().clear_fabric_context();
             this->get_control_plane().sync_fabric_config(this->fabric_config_);
         }
+    } else if (this->control_plane_) {
+        // Devices are still open, so tearing down the fabric context (clear_fabric_context) is deferred to the
+        // fabric firmware teardown that runs as the last device closes. The config field, however, must still be
+        // synced now: we have just marked the env config DISABLED with zero active routing planes, and
+        // get_fabric_config() reads through to the control plane. Without this, the control plane keeps reporting
+        // a stale non-DISABLED config (e.g. the FABRIC_1D a prior open enabled for dispatch) while the routing
+        // planes are gone, so the next device open takes the "fabric already configured" branch and trips
+        // "Fabric is enabled for dispatch but no routing planes are active" (device_manager.cpp). This mirrors
+        // the !devices_still_open branch above, minus clear_fabric_context; adopt still preserves an MGD's
+        // per-mesh config. Routing-plane teardown continues to happen later via the deferred firmware path.
+        this->control_plane_->sync_fabric_config(this->fabric_config_);
     }
 }
 
