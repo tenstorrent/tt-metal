@@ -1838,6 +1838,114 @@ constexpr std::uint32_t topk_merge_walk_mask(const int kq)
 }
 
 template <
+    bool is_fp32_dest_acc_en,
+    bool top_min,
+    bool STABLE_SORT,
+    bool FUSED,
+    bool RANK_STAMPED,
+    TopkTieOrder TIE_ORDER,
+    int kq,
+    bool OPAQUE_K>
+__attribute__((always_inline)) inline void _topk_merge_walk_(const int m_iter, const int k_in)
+{
+    // OPAQUE_K hides k from the compiler so the walk compiles as one run-time-k body, which schedules better for k under 32.
+    int kk = k_in;
+    if constexpr (OPAQUE_K)
+    {
+        asm volatile("" : "+r"(kk));
+    }
+    constexpr bool merge_macros = TOPK_STEP_LOADMACRO && !STABLE_SORT && !RANK_STAMPED;
+    if constexpr (merge_macros)
+    {
+        _topk_merge_macros_init_<FUSED>();
+    }
+    [[maybe_unused]] std::uint32_t macro_set = 0;
+    auto merge_group        = [&macro_set](const std::uint32_t offset, const std::uint32_t ld_dist, [[maybe_unused]] const bool first_in_block)
+    {
+        if constexpr (merge_macros)
+        {
+            const std::uint32_t lo = (offset & 0xF) + (offset >> 4) * 32;
+            const std::uint32_t a  = top_min ? lo + ld_dist : lo;
+            const std::uint32_t b  = top_min ? lo : lo + ld_dist;
+            if (macro_set == 0)
+            {
+                bitonic_topk_merge_group_macro<is_fp32_dest_acc_en, FUSED, 0>(a, b);
+            }
+            else if (macro_set == 1)
+            {
+                bitonic_topk_merge_group_macro<is_fp32_dest_acc_en, FUSED, 1>(a, b);
+            }
+            else if constexpr (FUSED)
+            {
+                bitonic_topk_merge_group_macro<is_fp32_dest_acc_en, FUSED, 2>(a, b);
+            }
+            macro_set = (macro_set + 1 == topk_merge_macro_sets<FUSED>()) ? 0 : macro_set + 1;
+        }
+        else
+        {
+            bitonic_topk_merge_group<is_fp32_dest_acc_en, top_min, STABLE_SORT, FUSED, RANK_STAMPED, TIE_ORDER>(offset, ld_dist, first_in_block);
+        }
+    };
+
+    std::uint32_t dst_addr_offset = 0;
+    for (int face = 0; face < 2; face++)
+    {
+        for (int col = 0; col < 2; col++)
+        {
+            TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+            const int k_max       = OPAQUE_K ? kk : kq;
+            std::uint32_t inner_d = k_max >> 2; // inner loop comparisons to sort len=K sequence;
+            // From 32 up the run fills a quadrant at every m_iter, so the loop bounds do not depend on it.
+            std::uint32_t total_datums_to_compare =
+                (k_max >= 32 || (64 >> m_iter) < 2 * k_max) ? 2 * k_max
+                                                            : (64 >> m_iter); // max(2, max(64, 64/(2^m))) total datums to compare
+            std::uint32_t dist            = (k_max >= 32 || (k_max << m_iter) > 32) ? 32 : (k_max << m_iter); // min(32, k*2^k)
+            std::uint32_t ld_dist         = (dist < 16) ? dist : 2 * dist;                   // Accounts for face offsets within a tile
+            std::uint32_t datums_compared = 0;
+            // Blocks start on a face row: the dest counter walks a block's fixed group words, 4 rows on (20 into the next face).
+            std::uint32_t blk_offset = 0;
+            while (datums_compared < total_datums_to_compare)
+            {
+                if (blk_offset > 0)
+                {
+                    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+                }
+#pragma GCC unroll 8
+                for (std::uint32_t ii = 0; ii < inner_d; ii++)
+                {
+                    if ((ii & 3) == 0 && ii > 0)
+                    {
+                        TTI_INCRWC(0, 10, 0, 0);
+                        TTI_INCRWC(0, 10, 0, 0);
+                    }
+                    else if (ii > 0)
+                    {
+                        TTI_INCRWC(0, 4, 0, 0);
+                    }
+                    merge_group(blk_offset, ld_dist, ii == 0);
+                    datums_compared += 8;
+                }
+                blk_offset += 2 * dist;
+            }
+            dst_addr_offset += 2;
+            set_dst_write_addr(dst_addr_offset);
+        }
+        dst_addr_offset = 16;
+        set_dst_write_addr(dst_addr_offset);
+    }
+    if constexpr (merge_macros)
+    {
+        bitonic_topk_step_macro_drain<FUSED>();
+    }
+}
+
+template <bool is_fp32_dest_acc_en, bool top_min, bool STABLE_SORT, bool FUSED, bool RANK_STAMPED, TopkTieOrder TIE_ORDER, int kq>
+__attribute__((noinline)) void _topk_merge_walk_call_(const int m_iter, const int k_in)
+{
+    _topk_merge_walk_<is_fp32_dest_acc_en, top_min, STABLE_SORT, FUSED, RANK_STAMPED, TIE_ORDER, kq, true>(m_iter, k_in);
+}
+
+template <
     bool APPROXIMATION_MODE,
     bool is_fp32_dest_acc_en,
     bool top_min,
@@ -1931,98 +2039,18 @@ inline void _bitonic_topk_merge(const int m_iter)
     if constexpr (walk_none)
     {
         merge_per_group();
-        return;
     }
-    else if constexpr (!walk_all)
+    else if constexpr (walk_all)
     {
-        if (((walk_mask >> (m_iter > 7 ? 7 : m_iter)) & 1) == 0)
-        {
-            merge_per_group();
-            return;
-        }
+        _topk_merge_walk_<is_fp32_dest_acc_en, top_min, STABLE_SORT, FUSED, RANK_STAMPED, TIE_ORDER, kq, (kq < 32)>(m_iter, kq);
     }
-    constexpr bool merge_macros = TOPK_STEP_LOADMACRO && !STABLE_SORT && !RANK_STAMPED;
-    if constexpr (merge_macros)
+    else if (((walk_mask >> (m_iter > 7 ? 7 : m_iter)) & 1) == 0)
     {
-        _topk_merge_macros_init_<FUSED>();
+        merge_per_group();
     }
-    [[maybe_unused]] std::uint32_t macro_set = 0;
-    auto merge_group        = [&macro_set](const std::uint32_t offset, const std::uint32_t ld_dist, [[maybe_unused]] const bool first_in_block)
+    else
     {
-        if constexpr (merge_macros)
-        {
-            const std::uint32_t lo = (offset & 0xF) + (offset >> 4) * 32;
-            const std::uint32_t a  = top_min ? lo + ld_dist : lo;
-            const std::uint32_t b  = top_min ? lo : lo + ld_dist;
-            if (macro_set == 0)
-            {
-                bitonic_topk_merge_group_macro<is_fp32_dest_acc_en, FUSED, 0>(a, b);
-            }
-            else if (macro_set == 1)
-            {
-                bitonic_topk_merge_group_macro<is_fp32_dest_acc_en, FUSED, 1>(a, b);
-            }
-            else if constexpr (FUSED)
-            {
-                bitonic_topk_merge_group_macro<is_fp32_dest_acc_en, FUSED, 2>(a, b);
-            }
-            macro_set = (macro_set + 1 == topk_merge_macro_sets<FUSED>()) ? 0 : macro_set + 1;
-        }
-        else
-        {
-            bitonic_topk_merge_group<is_fp32_dest_acc_en, top_min, STABLE_SORT, FUSED, RANK_STAMPED, TIE_ORDER>(offset, ld_dist, first_in_block);
-        }
-    };
-
-    std::uint32_t dst_addr_offset = 0;
-    for (int face = 0; face < 2; face++)
-    {
-        for (int col = 0; col < 2; col++)
-        {
-            TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
-            constexpr int k_max   = kq;
-            std::uint32_t inner_d = k_max >> 2; // inner loop comparisons to sort len=K sequence;
-            // From 32 up the run fills a quadrant at every m_iter, so the loop bounds do not depend on it.
-            std::uint32_t total_datums_to_compare =
-                (k_max >= 32 || (64 >> m_iter) < 2 * k_max) ? 2 * k_max
-                                                            : (64 >> m_iter); // max(2, max(64, 64/(2^m))) total datums to compare
-            std::uint32_t dist            = (k_max >= 32 || (k_max << m_iter) > 32) ? 32 : (k_max << m_iter); // min(32, k*2^k)
-            std::uint32_t ld_dist         = (dist < 16) ? dist : 2 * dist;                   // Accounts for face offsets within a tile
-            std::uint32_t datums_compared = 0;
-            // Blocks start on a face row: the dest counter walks a block's fixed group words, 4 rows on (20 into the next face).
-            std::uint32_t blk_offset = 0;
-            while (datums_compared < total_datums_to_compare)
-            {
-                if (blk_offset > 0)
-                {
-                    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
-                }
-#pragma GCC unroll 8
-                for (std::uint32_t ii = 0; ii < inner_d; ii++)
-                {
-                    if ((ii & 3) == 0 && ii > 0)
-                    {
-                        TTI_INCRWC(0, 10, 0, 0);
-                        TTI_INCRWC(0, 10, 0, 0);
-                    }
-                    else if (ii > 0)
-                    {
-                        TTI_INCRWC(0, 4, 0, 0);
-                    }
-                    merge_group(blk_offset, ld_dist, ii == 0);
-                    datums_compared += 8;
-                }
-                blk_offset += 2 * dist;
-            }
-            dst_addr_offset += 2;
-            set_dst_write_addr(dst_addr_offset);
-        }
-        dst_addr_offset = 16;
-        set_dst_write_addr(dst_addr_offset);
-    }
-    if constexpr (merge_macros)
-    {
-        bitonic_topk_step_macro_drain<FUSED>();
+        _topk_merge_walk_call_<is_fp32_dest_acc_en, top_min, STABLE_SORT, FUSED, RANK_STAMPED, TIE_ORDER, kq>(m_iter, kq);
     }
 }
 
