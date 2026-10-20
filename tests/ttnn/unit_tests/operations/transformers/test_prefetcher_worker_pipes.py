@@ -21,6 +21,7 @@ import ttnn
 from loguru import logger
 
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
+from tt_py_test_utils_common.utility_functions import skip_for_slow_dispatch
 from tests.ttnn.unit_tests.operations.prefetcher_common import (
     bank_receivers_contiguous,
     bytes_per_tile,
@@ -149,6 +150,7 @@ def _prefetcher_sub_devices(device, layout):
         device.remove_sub_device_manager(sub_device_manager)
 
 
+@skip_for_slow_dispatch("sub-device managers need fast dispatch")
 @pytest.mark.parametrize("num_layers", [1, 2], ids=["1layer", "2layers"])
 @pytest.mark.parametrize("num_tensors", [1, 2], ids=["1tensor", "2tensors"])
 def test_worker_pipes_completion(device, num_tensors, num_layers):
@@ -191,6 +193,7 @@ def _matmul_program_config(layout, per_core_n):
     )
 
 
+@skip_for_slow_dispatch("sub-device managers need fast dispatch")
 @pytest.mark.parametrize("enable_performance_mode", [False, True], ids=["counted", "perf"])
 @pytest.mark.parametrize("num_layers", [1, 2], ids=["1layer", "2layers"])
 @pytest.mark.parametrize("recv_per_reader", [1, 2], ids=["1recv", "2recv"])
@@ -203,6 +206,7 @@ def test_worker_pipes_matmul(device, recv_per_reader, num_layers, enable_perform
     _check_matmuls(device, _Layout(device, recv_per_reader), num_layers, enable_performance_mode)
 
 
+@skip_for_slow_dispatch("sub-device managers need fast dispatch")
 def test_worker_pipes_readers_follow_pipe_order(device):
     """Reader i drives the i-th pipe given, wherever its sender sits.
 

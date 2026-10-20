@@ -794,3 +794,30 @@ def test_the_report_skips_a_shape_the_verdict_broadcast_rather_than_raising():
     with _ulp_report_enabled():
         logged = "\n".join(_logs_for(lambda: passed_test(golden, result, fmt), "INFO"))
     assert "ULP report skipped" in logged and "ULP report —" not in logged
+
+
+def test_the_gate_and_within_ulp_count_the_same_floor_held_lanes():
+    """A covered lane inside the step budget needed no rescue, so neither caller counts
+    it as held by the floor: the gate's log and ``within_ulp`` name the same one lane,
+    the one past the budget."""
+    from helpers.ulp import within_ulp
+
+    fmt = DataFormat.Float32
+    golden = _tile(100.0, fmt)
+    golden[1], golden[2] = 1e-4, 2e-4
+    result = golden.clone()
+    result[1] = 1.1e-4  # far past the budget, inside the floor
+    result[2] = _step(golden[2:3], 1)[0]  # covered by the floor, and within budget
+
+    _, message = within_ulp(golden, result, max_ulp=1, fmt=fmt, near_zero_atol=1e-4)
+    assert "1 held by the floor" in message, message
+    with _ulp_report_enabled():
+        logged = "\n".join(
+            _logs_for(
+                lambda: passed_test(
+                    golden, result, fmt, max_ulp=1, near_zero_atol=1e-4
+                ),
+                "INFO",
+            )
+        )
+    assert "1 held by the floor" in logged, logged
