@@ -442,3 +442,25 @@ times) are the coordinator's follow-up.
 Down-op note for the EP shapes: every down core reads every pass's full [32, I] activation block (I = 2048:
 128 KB per pass per core, 64 cores); at the 8x4 shape (<= ~20 passes) that is ~2.6 MB per core, on a (2,4)
 chip (36 experts, ~36 passes) ~4.6 MB: the expert-parallel down split (section 10) would cut it 8x.
+
+## 12. Pair-parallel work units in the gate|up dispatch (2026-10-20, host-only during the board reset; UNMEASURED)
+
+Why: at full width a chip's experts are few (9 on the 8x4, 2-3 active at 32-256 tokens) and the LPT over
+*experts* left one expert per core: a core streamed its expert's 2.2 MB (8 column pairs) alone at a 1/12 bank
+share, ~310 us per expert whatever the token count (`test_moe_ep.py`: 297 us at T = 32 with 2 active, 590 us at
+T = 256 with 3 active, of which ~350 us gate|up).
+
+Change (`for_each_unit` in `dispatch_common.hpp`, the three gate|up dispatch kernels): the work unit is
+(expert, column pair); the bank's `ppb` pairs of an active expert spread over the bank's 12 cores (LPT by pass
+count: with one pair per bank it is exactly the old per-expert assignment, so the 8x4 hybrid path is
+unchanged); every unit's pair is streamed once and stays resident over the expert's passes (no per-pass
+re-streaming for `ppb > 1` any more); the unit's core gathers / tilizes the pass rows itself (8x the gather +
+tilize work per expert at `ppb = 8`, spread over 8 cores: ~16 us per pass per unit); the pass table is written by
+the (bank 0, pair 0) unit. No unit list in memory: each kernel replays the deterministic assignment and acts on its
+own units.
+
+Expected at the 8x4 EP shape: 3 active experts = 24 units per bank = 2 per core = 557 KB per core at ~5.3 GB/s:
+~105 us + 2 units x passes x 16 us -> ~140 us gate|up (was ~350); 2 active at T = 32 -> ~75 us (was ~300);
+9 active -> bank-bound ~310 us as before. The (2,4) share (36 experts) is bank-bound either way.
+To measure after the reset: `pytest tests/custom_ops/test_expert_dispatch.py -k ep` (correctness, 4 shapes +
+bfp4) then `tests/test_moe_ep.py` (the table of section 11 again).

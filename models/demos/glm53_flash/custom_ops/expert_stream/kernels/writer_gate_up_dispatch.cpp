@@ -4,14 +4,15 @@
 // Row gather, routing-weight tiles, pass table and output scatter (BRISC, NOC1) of the per-expert dispatch gate|up
 // op (custom_ops/expert_stream/op.py, ExpertGateUpDispatch).
 //
-// Per expert of this core's group (dispatch_common.hpp assignment) and per 32-row pass of the tokens routed to it:
+// Per work unit (expert e, column pair q) of this core (dispatch_common.hpp for_each_unit) and per 32-row pass of
+// the tokens routed to e:
 // 1. gathers the pass's token rows of the ROW_MAJOR activation x [T, K] (one 8 KB NOC read per row) into a 32-row
 //    row-major block that the compute tilizes (rows past the pass's count keep the previous content: finite values
 //    that the zero routing weight annihilates; the first pass fills them with its first row);
 // 2. builds D = diag(w[t_i, e]) (BF16, exact) for the pass's rows;
-// 3. writes the finished [32, 32] tiles to act [1, P, 32, I] (tile page = pass * I_tiles + bank * ppb + q);
-// 4. on bank 0 writes the pass table row [n_rows, e, t_0 .. t_31] (uint16) that the down op dispatches from.
-// The compute learns each expert's pass count through the BRISC mailboxes (0 = done).
+// 3. writes the finished [32, 32] tile to act [1, P, 32, I] (tile page = pass * I_tiles + bank * ppb + q);
+// 4. on bank 0 (pair 0) writes the pass table row [n_rows, e, t_0 .. t_31] (uint16) the down op dispatches from.
+// The compute learns each unit's pass count through the BRISC mailboxes (0 = done).
 //
 // runtime args: [x_addr, routing_addr (EP: weights), counts_addr (EP: idx), act_addr, table_addr, bank_id, group,
 //                (EP) base_addr]
@@ -79,7 +80,7 @@ void kernel_main() {
         noc_async_read(s_r.get_noc_addr(i), r_l1 + i * tile_page, tile_page);
     }
     uint32_t expert_base = 0;
-    uint16_t n_tok[E], passes[E], base[E], mine[E];
+    uint16_t n_tok[E], passes[E], base[E];
     if constexpr (EP) {
         const uint32_t base_addr = get_arg_val<uint32_t>(7);
         const auto s_b = TensorAccessor(base_args, base_addr, 32);
@@ -94,14 +95,13 @@ void kernel_main() {
         read_counts<E>(reinterpret_cast<volatile tt_l1_ptr uint16_t*>(c_l1), n_tok);
     }
     pass_bases<E>(n_tok, passes, base);
-    const uint32_t n_mine = assign_group<E, 32>(passes, groups, group, mine);
     const volatile tt_l1_ptr uint16_t* routing = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(r_l1);
 
     uint16_t rows[T];
     uint16_t wbits[T];
     bool first_pass = true;
-    for (uint32_t i = 0; i < n_mine; ++i) {
-        const uint32_t e = mine[i];
+    // this core's work units (expert e, column pair q): the pair's output tile of every pass of e
+    for_each_unit<E, ppb, 32>(passes, groups, group, [&](uint32_t e, uint32_t q) {
         // the tokens routed to e, ascending, and their routing weights
         uint32_t nr = 0;
         if constexpr (EP) {
@@ -123,7 +123,7 @@ void kernel_main() {
             const uint32_t i0 = p * 32;
             const uint32_t nr_p = (nr - i0) < 32 ? (nr - i0) : 32;
             const uint32_t k = base[e] + p;
-            if (bank_id == 0) {  // the pass table row
+            if (bank_id == 0 && q == 0) {  // the pass table row (once per pass)
                 cb_reserve_back(cb_t, 1);
                 const uint32_t t_l1 = get_write_ptr(cb_t);
                 volatile tt_l1_ptr uint16_t* tab = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(t_l1);
@@ -162,14 +162,12 @@ void kernel_main() {
             cb_push_back(cb_xrm, kt);
             cb_push_back(cb_d, 1);
 
-            for (uint32_t q = 0; q < ppb; ++q) {
-                cb_wait_front(cb_out, 1);
-                noc_async_write(get_read_ptr(cb_out), s_act.get_noc_addr(k * i_tiles + bank_id * ppb + q), tile_page);
-                noc_async_write_barrier();
-                cb_pop_front(cb_out, 1);
-            }
+            cb_wait_front(cb_out, 1);
+            noc_async_write(get_read_ptr(cb_out), s_act.get_noc_addr(k * i_tiles + bank_id * ppb + q), tile_page);
+            noc_async_write_barrier();
+            cb_pop_front(cb_out, 1);
         }
-    }
+    });
     ckernel::mailbox_write(ckernel::ThreadId::UnpackThreadId, 0);
     ckernel::mailbox_write(ckernel::ThreadId::MathThreadId, 0);
     ckernel::mailbox_write(ckernel::ThreadId::PackThreadId, 0);
