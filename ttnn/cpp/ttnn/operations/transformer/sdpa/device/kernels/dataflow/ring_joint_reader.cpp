@@ -1770,11 +1770,18 @@ void kernel_main() {
                 [[maybe_unused]] uint32_t sol_packed_v_addr = 0;
                 if constexpr (sol_pack) {
                     // Packed pages go out on the ordinary K/V CBs, so compute's inner-step call is unchanged.
-                    CircularBuffer cb_kp(cb_k_in), cb_vp(cb_v_in);
-                    cb_kp.reserve_back(k_chunk_tiles);
-                    cb_vp.reserve_back(v_cb_entry_tiles);
-                    sol_packed_k_addr = cb_kp.get_write_ptr();
-                    sol_packed_v_addr = cb_vp.get_write_ptr();
+                    //
+                    // Guarded on !is_padded_iter to match the plan block and the packing sites: a padded
+                    // iteration writes no plan and packs nothing, so compute processes nothing for it. An
+                    // unguarded reserve_back here would block waiting for space it never uses -- and after the
+                    // last real iteration compute has stopped draining, so it would block forever.
+                    if (!is_padded_iter) {
+                        CircularBuffer cb_kp(cb_k_in), cb_vp(cb_v_in);
+                        cb_kp.reserve_back(k_chunk_tiles);
+                        cb_vp.reserve_back(v_cb_entry_tiles);
+                        sol_packed_k_addr = cb_kp.get_write_ptr();
+                        sol_packed_v_addr = cb_vp.get_write_ptr();
+                    }
                 }
                 for (uint32_t k_chunk = has_sliding_window ? sliding_band.begin : 0; k_chunk < q_k_loop_count;
                      ++k_chunk) {
@@ -2228,7 +2235,7 @@ void kernel_main() {
                 // hence exp(0) = 1, a full-weight softmax term against a zero V, inflating the denominator.
                 if constexpr (sol_pack) {
                     CircularBuffer cb_kp(cb_k_in), cb_vp(cb_v_in);
-                    if (sol_pack_fill > 0) {
+                    if (!is_padded_iter && sol_pack_fill > 0) {
                         cb_kp.push_back(k_chunk_tiles);
                         cb_vp.push_back(v_cb_entry_tiles);
                         sol_pack_fill = 0;
