@@ -317,6 +317,12 @@ struct ArchAreas {
     content::L1 launch_msg_rd_ptr;
     // Null when the architecture has no Ethernet firmware mailbox.
     std::optional<content::L1> eth_fw_mailbox;
+    // Base firmware's link status words. Each is null when the HAL gives no address for it, as on Wormhole.
+    std::optional<content::L1> base_fw_port_status;
+    std::optional<content::L1> base_fw_train_status;
+    std::optional<content::L1> base_fw_retrain_count;
+    std::optional<content::L1> base_fw_rx_link_up;
+    std::optional<content::L1> base_fw_postcode;
 };
 
 // Where a router core's stream registers are.
