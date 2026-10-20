@@ -9,12 +9,10 @@ import ttnn
 
 pytestmark = pytest.mark.use_module_device
 
-# Tiles per row: a W sum with a 16-bit DEST is exact up to 128 tiles, saturates by 256, and flips sign further out.
 WT = [128, 192, 256, 512, 2048, 8192]
 
 
 def _config(fp32_dest_acc_en):
-    # HiFi3: HiFi4 with fp32_dest_acc_en can return wrong results on Wormhole (#38306).
     return ttnn.WormholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.HiFi3,
         math_approx_mode=False,
@@ -45,7 +43,6 @@ def test_sum_w_signed_matches_reference(device, wt, fp32_dest_acc_en):
     expected = torch_input[0, 0, 0].double().sum().item()
     tt_input = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
     got = _first(ttnn.sum(tt_input, dim=-1, compute_kernel_config=_config(fp32_dest_acc_en)))
-    # 1% covers the bfloat16 output.
     assert abs(got - expected) <= 0.01 * abs(expected), f"sum over {w} columns returned {got}, expected {expected}"
 
 
@@ -60,7 +57,6 @@ def test_mean_w_matches_reference(device, wt):
     assert abs(got - expected) <= 0.01 * abs(expected), f"mean over {w} columns returned {got}, expected {expected}"
 
 
-# An HW reduction runs W first, so its first stage folds whole rows too.
 @pytest.mark.parametrize("h, w", [(32, 4096), (32, 65536), (1024, 8192)])
 @pytest.mark.parametrize("fp32_dest_acc_en", [False, True])
 def test_sum_hw_ones_is_exact(device, h, w, fp32_dest_acc_en):

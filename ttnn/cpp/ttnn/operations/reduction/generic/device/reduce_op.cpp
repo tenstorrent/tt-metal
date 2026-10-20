@@ -215,8 +215,6 @@ Tensor reduce(
     const bool use_sfpu_reduce =
         use_sfpu_fp32_sum || use_sfpu_fp32_mean || use_sfpu_fp32_max || use_sfpu_fp32_min || use_sfpu_bf16_min;
 
-    // REDUCE_ROW folds a whole row into one DEST register, which saturates past 128 tiles in a 16-bit DEST: widen
-    // DEST for that call only, after use_sfpu_reduce so the SFPU/FPU choice holds, and keep HiFi3 on WH (#38306).
     ttnn::DeviceComputeKernelConfig row_fold_config = config;
     if (!use_sfpu_reduce &&
         (reduce_math == tt::tt_metal::ReduceOpMath::SUM || reduce_math == tt::tt_metal::ReduceOpMath::AVG)) {
@@ -514,7 +512,6 @@ Tensor reduce(
         reduce_scaler,
         output_mem_config,
         output_dtype.value_or(input_tensor.dtype()),
-        // The dense ROW_MAJOR W path runs a different kernel that does not fold through one DEST register.
         (reduce_dim == tt::tt_metal::ReduceOpDim::W && !use_rm_dense_w) ? row_fold_config : config,
         sub_core_grids,
         negate,
