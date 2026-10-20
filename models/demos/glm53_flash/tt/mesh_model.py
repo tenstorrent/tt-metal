@@ -103,12 +103,17 @@ class GLM53MeshModel:
             self.layers[0].update_decode_positions(self.positions, host_positions)
 
     # ------------------------------------------------------------------ step
-    def decode_step(self, ids_dev: ttnn.Tensor, positions: DecodePositions):
-        """ids [1,1,1,B] (per row) -> (streams after the last layer [1,1,B,16384], logits, greedy ids)."""
+    def decode_step(self, ids_dev: ttnn.Tensor, positions: DecodePositions, keep_layer_outputs: bool = False):
+        """ids [1,1,1,B] (per row) -> (streams after the last layer [1,1,B,16384], logits, greedy ids).
+        ``keep_layer_outputs`` (eager diagnostics only) keeps every layer's output in ``self.layer_outputs``."""
         streams = self.embedding(ids_dev)
+        self.layer_outputs = []
         for dec in self.layers:
             out = dec.decode_forward(streams, positions=positions)
-            ttnn.deallocate(streams)
+            if keep_layer_outputs:
+                self.layer_outputs.append(out)
+            else:
+                ttnn.deallocate(streams)
             streams = out
         if self.head is None:
             return streams, None, None

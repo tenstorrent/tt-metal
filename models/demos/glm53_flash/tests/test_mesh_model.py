@@ -103,6 +103,27 @@ def test_mesh_model_chain_and_perf(mesh_device):
         f"greedy id at position {S - 1} == host head argmax for {agree_last * 100:.0f} % of users (host id {int(host_top1[S - 1])})"
     )
     chain_min = per_user[0]  # asserted at the end so the perf numbers are always logged
+    if os.environ.get("GLM53_MODEL_CHAIN_DIAG", "0") == "1":
+        # per-layer error accumulation: the prompt again, eagerly, keeping every layer's output; reference =
+        # the dump's HF x_out of that layer (its chain). Reset the KDA states / reuse the slots (start over).
+        model.reset_kda_states()
+        refs_l = {i: torch.load(DUMP / f"layer{i}_prefill.pt")["x_out"][0, :S] for i in layers}
+        per_layer = {i: [] for i in layers}
+        for t in range(S):
+            model.load_ids(prompt[t].repeat(U))
+            model.set_positions([t] * U)
+            model.decode_step(model.ids_dev, model.positions, keep_layer_outputs=True)
+            for i, o in zip(layers, model.layer_outputs):
+                per_layer[i].append(model.mesh.to_host(o, rows=2 if model.mesh.rows > 1 else None).float()[0, 0, 0])
+                ttnn.deallocate(o)
+        for i in layers:
+            chain_i = torch.stack(per_layer[i]).reshape(S, 4, -1)
+            row_p = [pcc(refs_l[i][t], chain_i[t]) for t in range(S)]
+            logger.info(
+                f"  chain diag layer {i:2d}: pcc vs HF x_out {pcc(refs_l[i], chain_i):.6f}; per position min {min(row_p):.4f} "
+                f"first {row_p[0]:.4f} last {row_p[-1]:.4f}; out std {chain_i.std():.4f} ref std {refs_l[i].std():.4f}"
+            )
+        model.reset_kda_states()
     # traced e2e decode perf: steady-state replays at a fixed position
     model.set_positions([S] * U)
     for _ in range(3):
