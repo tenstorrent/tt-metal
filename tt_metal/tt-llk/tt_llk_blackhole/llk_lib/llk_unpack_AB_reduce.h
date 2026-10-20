@@ -111,6 +111,10 @@ inline void _llk_unpack_AB_reduce_init_(const ckernel::TensorShape tensor_shape)
         pool_type != PoolType::MIN,
         "The FPU reduce has no MIN: the hardware provides GMPOOL (max) and GAPOOL (average) only. "
         "Use the SFPU reduce instead (ckernel_sfpu_reduce.h::calculate_reduce).");
+    static_assert(
+        pool_type != PoolType::PROD,
+        "The FPU reduce has no PROD: GAPOOL/GMPOOL have no product variant. "
+        "Use the SFPU reduce instead (ckernel_sfpu_reduce.h::calculate_reduce with REDUCE_SCALAR).");
 
     // Validate tensor shape for tile-dependent operations
     LLK_VALIDATE_TENSOR_SHAPE_UNPACK("_llk_unpack_AB_reduce_init_", tensor_shape);

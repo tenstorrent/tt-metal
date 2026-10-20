@@ -16,7 +16,8 @@
 using namespace ckernel;
 #include "params.h" // POOL_TYPE, REDUCE_DIM, BLOCK_CT_DIM, BLOCK_RT_DIM, is_fp32_dest_acc_en
 
-// SFPU reduce on Quasar: collapse a Dest block along one axis with SUM, AVG, MAX or MIN.
+// SFPU reduce on Quasar: collapse a Dest block along one axis with SUM, AVG, MAX or MIN, or a whole
+// tile with PROD (REDUCE_SCALAR).
 //
 // Three programs in one file, one per thread:
 //   T0 unpack: load every tile of buffer_A from L1 into Dest. One _llk_unpack_unary_operand_
@@ -161,9 +162,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
-                if constexpr (REDUCE_DIM == ckernel::ReduceDim::REDUCE_COL)
+                if constexpr (REDUCE_DIM == ckernel::ReduceDim::REDUCE_COL || REDUCE_DIM == ckernel::ReduceDim::REDUCE_SCALAR)
                 {
-                    // A column lives inside one tile, so each tile reduces onto its own row 0.
+                    // A column (or a scalar PROD) lives inside one tile, so each tile reduces onto its own row 0.
                     for (std::uint32_t tile = 0; tile < TILE_CNT; ++tile)
                     {
                         SFPU_UNARY_CALL(
@@ -173,8 +174,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             (POOL_TYPE, REDUCE_DIM, REDUCE_MATH_FORMAT, is_fp32_dest_acc_en, dest_sync),
                             DST_INDEX + tile,
                             VectorMode::RC_custom,
-                            1 /*block_ct_dim: unused by the column reduce*/,
-                            1 /*block_rt_dim: unused by the column reduce*/);
+                            1 /*block_ct_dim: unused by the column and scalar reduces*/,
+                            1 /*block_rt_dim: unused by the column and scalar reduces*/);
                     }
                 }
                 else

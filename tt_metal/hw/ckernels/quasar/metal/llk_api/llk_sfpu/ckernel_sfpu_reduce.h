@@ -106,7 +106,7 @@ constexpr bool is_supported_reduce_format(DataFormat format) {
 /**
  * @brief Fold @p SRC into @p DST with the reduction's operator (AVG adds; its caller scales).
  *
- * @tparam POOL_TYPE: Reduction operator, values = <SUM/AVG/MAX/MIN>
+ * @tparam POOL_TYPE: Reduction operator, values = <SUM/AVG/MAX/MIN/PROD>
  * @tparam IS_INT: Integer operands: selects the adder and the SFPSWAP compare domain
  * @tparam DST: LREG holding the running result; overwritten
  * @tparam SRC: LREG holding the incoming value; clobbered
@@ -131,6 +131,10 @@ inline void reduce_combine() {
             TTI_SFPSWAP(SWAP_IMM12, SRC, DST, p_sfpswap::ALL_ROWS_MAX);
         }
         TTI_SFPNOP(0 /* srcs_wr_done */, 0 /* srcs_rd_done */, 0 /* dest_done */);
+    } else if constexpr (POOL_TYPE == PoolType::PROD) {
+        static_assert(!IS_INT, "PROD reduces float operands only");
+        // SFPMUL is dest = a * b + c, so c = 0.0 makes it dest = DST * SRC.
+        TTI_SFPMUL(DST, SRC, p_sfpu::LCONST_0, DST, 0 /* instr_mod1: no negation */);
     } else if constexpr (IS_INT) {
         // SFPIADD raises CC off the result sign by default; the reduce never predicates on it.
         TTI_SFPIADD(0 /* imm12 */, SRC, DST, p_sfpu::sfp_binary_mod::SFPIADD_DISABLE_CC);
@@ -388,6 +392,72 @@ inline void reduce_row_load_reciprocal(const std::uint32_t num_cols) {
 }
 
 // ============================================================================
+// Scalar reduce (REDUCE_SCALAR, PROD only): collapse a whole tile onto element [0][0]
+// ============================================================================
+
+/**
+ * @brief Multiply one slice - one face at one column parity, 16 rows x 8 columns - into the lane
+ *        accumulators: LREG0 takes the slice's row groups 0 and 2, LREG4 its row groups 1 and 3.
+ *
+ * @tparam MODE: SFPLOAD format-select code, @ref reduce_sfpmem_mode
+ * @tparam SEED: First slice: write the accumulators instead of multiplying into them
+ * @param slice_addr: Dest address of the slice's first row group (face base + column parity)
+ */
+template <std::uint32_t MODE, bool SEED>
+inline void reduce_scalar_prod_slice(const std::uint32_t slice_addr) {
+    TT_SFPLOAD(p_sfpu::LREG1, MODE, ADDR_MOD_7, 0 /* done */, slice_addr + 0 * REDUCE_ROWS_PER_LOAD);
+    TT_SFPLOAD(p_sfpu::LREG5, MODE, ADDR_MOD_7, 0 /* done */, slice_addr + 1 * REDUCE_ROWS_PER_LOAD);
+    TT_SFPLOAD(p_sfpu::LREG2, MODE, ADDR_MOD_7, 0 /* done */, slice_addr + 2 * REDUCE_ROWS_PER_LOAD);
+    TT_SFPLOAD(p_sfpu::LREG6, MODE, ADDR_MOD_7, 0 /* done */, slice_addr + 3 * REDUCE_ROWS_PER_LOAD);
+
+    reduce_combine<PoolType::PROD, false, p_sfpu::LREG1, p_sfpu::LREG2>();
+    reduce_combine<PoolType::PROD, false, p_sfpu::LREG5, p_sfpu::LREG6>();
+    if constexpr (SEED) {
+        TTI_SFPMOV(p_sfpu::LREG1, p_sfpu::LREG0, 0 /* instr_mod1: plain copy */);
+        TTI_SFPMOV(p_sfpu::LREG5, p_sfpu::LREG4, 0 /* instr_mod1: plain copy */);
+    } else {
+        reduce_combine<PoolType::PROD, false, p_sfpu::LREG0, p_sfpu::LREG1>();
+        reduce_combine<PoolType::PROD, false, p_sfpu::LREG4, p_sfpu::LREG5>();
+    }
+}
+
+/**
+ * @brief Multiply all 1024 values of one 32x32 Dest tile and store the product to its element [0][0].
+ *
+ * Every lane multiplies its share of the tile's 8 slices (4 faces x 2 column parities) into
+ * LREG0 / LREG4. The two accumulators then fold into LREG0, SFPTRANSP spreads its 4 rows across
+ * row 0 of LREG0-3 for the row fold, and @ref reduce_row_fold_columns folds the 8 columns. Every
+ * multiply stays in the fp32 lanes, so only the final store rounds.
+ *
+ * @tparam FORMAT: Math-side data format of the operand
+ * @note Only element [0][0] is defined afterwards; rows 0-3 of face 0's even columns keep fold
+ *       leftovers.
+ */
+template <DataFormat FORMAT>
+inline void reduce_scalar_prod_tile() {
+    constexpr std::uint32_t MODE = reduce_sfpmem_mode<FORMAT>();
+    constexpr std::uint32_t SLICES = 2 * TILE_NUM_FACES;
+
+    reduce_scalar_prod_slice<MODE, true /* SEED */>(p_sfpu::col_offset::EVEN_COL);
+    for (std::uint32_t slice = 1; slice < SLICES; slice++) {
+        const std::uint32_t parity = (slice % 2 == 0) ? p_sfpu::col_offset::EVEN_COL : p_sfpu::col_offset::ODD_COL;
+        reduce_scalar_prod_slice<MODE, false /* SEED */>((slice / 2) * REDUCE_FACE_STRIDE + parity);
+    }
+
+    reduce_combine<PoolType::PROD, false, p_sfpu::LREG0, p_sfpu::LREG4>();
+
+    TTI_SFPTRANSP;
+    reduce_combine<PoolType::PROD, false, p_sfpu::LREG0, p_sfpu::LREG1>();
+    reduce_combine<PoolType::PROD, false, p_sfpu::LREG2, p_sfpu::LREG3>();
+    reduce_combine<PoolType::PROD, false, p_sfpu::LREG0, p_sfpu::LREG2>();
+
+    TTI_SFPMOV(p_sfpu::LREG0, REDUCE_ACC_REG, 0 /* instr_mod1: plain copy */);
+    reduce_row_fold_columns<PoolType::PROD, false>();
+
+    TTI_SFPSTORE(REDUCE_ACC_REG, MODE, ADDR_MOD_7, 0 /* done */, p_sfpu::col_offset::EVEN_COL);
+}
+
+// ============================================================================
 // Public API
 // ============================================================================
 
@@ -404,7 +474,7 @@ inline void reduce_row_load_reciprocal(const std::uint32_t num_cols) {
  * defaults, and SFPCONFIG can overwrite those - gelu_init in approximate mode does - while
  * @c _init_sfpu_config_reg_ restores only SFPU_CTRL and LREG11.
  *
- * @tparam POOL_TYPE: Reduction operator, values = <SUM/AVG/MAX/MIN>
+ * @tparam POOL_TYPE: Reduction operator, values = <SUM/AVG/MAX/MIN/PROD>; PROD takes float formats only
  * @tparam FORMAT: Math-side data format of the operand
  * @tparam IS_FP32_DEST_ACC_EN: Whether Dest holds 32-bit words
  * @param block_ct_dim: Unused. Present so the signature matches Blackhole/Wormhole, which the
@@ -417,8 +487,10 @@ inline void init_reduce([[maybe_unused]] const std::uint32_t block_ct_dim = 1) {
         is_supported_reduce_format(FORMAT), "Unsupported reduce format: expected Float32, Float16_b, Float16 or Int32");
     static_assert(
         POOL_TYPE == PoolType::SUM || POOL_TYPE == PoolType::AVG || POOL_TYPE == PoolType::MAX ||
-            POOL_TYPE == PoolType::MIN,
-        "Unsupported pool_type: expected SUM, AVG, MAX or MIN");
+            POOL_TYPE == PoolType::MIN || POOL_TYPE == PoolType::PROD,
+        "Unsupported pool_type: expected SUM, AVG, MAX, MIN or PROD");
+    static_assert(
+        POOL_TYPE != PoolType::PROD || !reduce_is_int_format<FORMAT>(), "PROD reduce supports float formats only");
 
     // One-directional: a 32-bit datum cannot fit a 16-bit Dest word. The converse is legal - a
     // narrow format in a 32-bit Dest is what an FPU datacopy produces - so the reverse implication
@@ -437,8 +509,11 @@ inline void init_reduce([[maybe_unused]] const std::uint32_t block_ct_dim = 1) {
  * REDUCE_ROW folds a tile row's columns onto column 0. A row spans every tile in its tile row, so
  * call once for the whole block - which must be resident in Dest.
  *
- * @tparam POOL_TYPE: Reduction operator, values = <SUM/AVG/MAX/MIN>
- * @tparam reduce_dim: Axis to collapse, values = <REDUCE_COL/REDUCE_ROW>
+ * REDUCE_SCALAR (PROD only) multiplies all 1024 values of a tile onto element [0][0]; call once
+ * per tile.
+ *
+ * @tparam POOL_TYPE: Reduction operator, values = <SUM/AVG/MAX/MIN/PROD>
+ * @tparam reduce_dim: Axis to collapse, values = <REDUCE_COL/REDUCE_ROW/REDUCE_SCALAR>
  * @tparam FORMAT: Math-side data format of the operand
  * @tparam IS_FP32_DEST_ACC_EN: Whether Dest holds 32-bit words
  * @tparam DST_SYNC: Dest sync mode; with @p IS_FP32_DEST_ACC_EN it gives the Dest tile capacity
@@ -463,8 +538,10 @@ inline void calculate_reduce(
     static_assert(
         is_supported_reduce_format(FORMAT), "Unsupported reduce format: expected Float32, Float16_b, Float16 or Int32");
     static_assert(
-        reduce_dim == ReduceDim::REDUCE_COL || reduce_dim == ReduceDim::REDUCE_ROW,
-        "Unsupported reduce_dim: expected REDUCE_COL or REDUCE_ROW");
+        (POOL_TYPE == PoolType::PROD) == (reduce_dim == ReduceDim::REDUCE_SCALAR),
+        "PROD reduces the whole tile (REDUCE_SCALAR only), and REDUCE_SCALAR is supported for PROD only");
+    static_assert(
+        POOL_TYPE != PoolType::PROD || !reduce_is_int_format<FORMAT>(), "PROD reduce supports float formats only");
     static_assert(
         !reduce_is_32_bit_format<FORMAT>() || IS_FP32_DEST_ACC_EN,
         "a 32-bit reduce format requires a 32-bit Dest (IS_FP32_DEST_ACC_EN)");
@@ -477,7 +554,12 @@ inline void calculate_reduce(
         "Integer row AVG is not supported: the row divisor is a runtime column count. Integer AVG is "
         "column-only; reduce as a float format if you need the row axis.");
 
-    if constexpr (reduce_dim == ReduceDim::REDUCE_COL) {
+    if constexpr (reduce_dim == ReduceDim::REDUCE_SCALAR) {
+        LLK_ASSERT(
+            block_ct_dim == 1 && block_rt_dim == 1,
+            "scalar reduce works a single tile (block_ct_dim == block_rt_dim == 1); call it once per tile");
+        reduce_scalar_prod_tile<FORMAT>();
+    } else if constexpr (reduce_dim == ReduceDim::REDUCE_COL) {
         LLK_ASSERT(
             block_ct_dim == 1 && block_rt_dim == 1,
             "column reduce works a single tile (block_ct_dim == block_rt_dim == 1); call it once per tile");

@@ -39,6 +39,10 @@ void kernel_main() {
 
 #ifdef REDUCE_AXIS_ROW
         sfpu_reduce<REDUCE_POOL_TYPE, REDUCE_FORMAT, ReduceDim::REDUCE_ROW>(/* idst */ 0, block_ct_dim, block_rt_dim);
+#elif defined(REDUCE_AXIS_SCALAR)
+        for (std::uint32_t tile = 0; tile < tiles_per_block; ++tile) {
+            sfpu_reduce<REDUCE_POOL_TYPE, REDUCE_FORMAT, ReduceDim::REDUCE_SCALAR>(tile);
+        }
 #else
         for (std::uint32_t tile = 0; tile < tiles_per_block; ++tile) {
             sfpu_reduce<REDUCE_POOL_TYPE, REDUCE_FORMAT, ReduceDim::REDUCE_COL>(tile);

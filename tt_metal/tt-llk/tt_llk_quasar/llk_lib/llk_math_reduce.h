@@ -510,6 +510,10 @@ inline void _llk_math_reduce_init_(const DataFormat src_a_format, const DataForm
         POOL_TYPE != PoolType::MIN,
         "The FPU reduce has no MIN: the hardware provides GMPOOL (max) and GAPOOL (average) only. "
         "Use the SFPU reduce instead (ckernel_sfpu_reduce.h::calculate_reduce).");
+    static_assert(
+        POOL_TYPE != PoolType::PROD,
+        "The FPU reduce has no PROD: GAPOOL/GMPOOL have no product variant. "
+        "Use the SFPU reduce instead (ckernel_sfpu_reduce.h::calculate_reduce with REDUCE_SCALAR).");
 
     LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
     const auto fidelity       = math_fidelity_schedule<FIDELITY>(src_a_format, src_b_format);

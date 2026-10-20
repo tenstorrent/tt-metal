@@ -544,3 +544,103 @@ def test_int32_reduce_extreme(mathop, reduce_pool, injected_value, base_range):
         f"{num_mismatch} mismatched reduction lanes for {reduce_pool} {mathop} "
         f"injected={int(injected_value)} over base_range={base_range} (see log)"
     )
+
+
+# Scalar PROD (REDUCE_SCALAR) multiplies each tile's 1024 values onto its element [0][0]. Floats only.
+PROD_FORMATS = [
+    InputOutputFormat(fmt, fmt)
+    for fmt in (DataFormat.Float32, DataFormat.Float16_b, DataFormat.Float16)
+]
+PROD_DIMENSIONS = [[TILE_DIM, TILE_DIM], [2 * TILE_DIM, 2 * TILE_DIM]]
+
+
+def generate_prod_stimuli(stimulus: str, tile_cnt: int) -> torch.Tensor:
+    """Per-tile PROD stimuli, laid out tile by tile (the product does not depend on the order).
+
+    ``pow2``: +-1, +-2 and +-0.5 only, with t + 1 more 2s than 0.5s in tile t, so every partial
+    product is an exact power of two and a dropped value, lane or sign shows up as a bit mismatch.
+    ``near_one``: random signs on magnitudes in (0.9, 1.1), so the product stays inside even fp16's
+    range while the fp32 multiply chain rounds.
+    """
+    gen = torch.Generator().manual_seed(48794)
+    tiles = []
+    for t in range(tile_cnt):
+        if stimulus == "pow2":
+            magnitudes = torch.ones(ELEMENTS_PER_TILE)
+            magnitudes[: 64 + t + 1] = 2.0
+            magnitudes[64 + t + 1 : 128 + t + 1] = 0.5
+            magnitudes = magnitudes[torch.randperm(ELEMENTS_PER_TILE, generator=gen)]
+        else:
+            magnitudes = torch.empty(ELEMENTS_PER_TILE).uniform_(
+                0.9, 1.1, generator=gen
+            )
+        signs = torch.where(
+            torch.rand(ELEMENTS_PER_TILE, generator=gen) < 0.5, -1.0, 1.0
+        )
+        tiles.append(magnitudes * signs)
+    return torch.cat(tiles)
+
+
+@pytest.mark.quasar
+@parametrize(
+    formats=PROD_FORMATS,
+    stimulus=runtime(["pow2", "near_one"]),
+    dimension_combinations=PROD_DIMENSIONS,
+)
+def test_sfpu_reduce_prod_quasar(formats, stimulus, dimension_combinations):
+    """Scalar PROD on Quasar: every tile's product must land in its element [0][0].
+
+    pow2 stimuli have an exact product, so they must match bit-exactly. near_one allows ~1023 fp32
+    roundings plus the one rounding of the final store to the output format.
+    """
+    # Same single legal unpack-to-dest width per format as the sweep above.
+    dest_acc = (
+        DestAccumulation.Yes
+        if formats.input_format.is_32_bit()
+        else DestAccumulation.No
+    )
+    input_dimensions = dimension_combinations
+    tile_cnt = input_dimensions[0] * input_dimensions[1] // ELEMENTS_PER_TILE
+
+    src_A = generate_prod_stimuli(stimulus, tile_cnt).to(
+        format_dict[formats.input_format]
+    )
+    src_B = torch.zeros_like(src_A)
+
+    golden = (
+        src_A.to(torch.float64)
+        .view(tile_cnt, ELEMENTS_PER_TILE)
+        .prod(dim=1)
+        .to(format_dict[formats.output_format])
+        .to(torch.float64)
+    )
+
+    configuration = create_test_or_perf_config(
+        is_perf=False,
+        run_types=(PerfRunType.L1_TO_L1,),
+        test_config_kwargs=_reduce_test_config_kwargs(
+            formats,
+            MathOperation.ReduceScalar,
+            ReducePool.Prod,
+            input_dimensions,
+            tile_cnt,
+            src_A,
+            src_B,
+            dest_acc,
+        ),
+    )
+    res_from_L1 = configuration.run().result
+
+    res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
+    # Element [0][0] of every tile: the first datum of its face 0.
+    result = res_tensor.view(tile_cnt, ELEMENTS_PER_TILE)[:, 0].to(torch.float64)
+
+    rtol = (
+        0.0
+        if stimulus == "pow2"
+        else 3e-4 + 2 * _FLOAT_FORMAT_EPS[formats.output_format]
+    )
+    assert torch.allclose(result, golden, rtol=rtol, atol=0.0), (
+        f"scalar PROD mismatch ({stimulus}): golden={golden.tolist()} device={result.tolist()} "
+        f"rtol={rtol}"
+    )

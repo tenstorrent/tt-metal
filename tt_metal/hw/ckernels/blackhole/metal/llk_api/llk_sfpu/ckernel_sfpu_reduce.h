@@ -1783,14 +1783,99 @@ inline void calculate_reduce_max_min_int32_col() {
 }
 
 // ============================================================================
+// Scalar PROD reduce: the product of every value of a 32x32 tile
+// ============================================================================
+// The tile is 8 slices (4 faces x even/odd columns) of 4 SFPLOAD row groups each. Every lane multiplies its share
+// of the tile into LREG0 / LREG4, the two accumulators fold into LREG0, SFPTRANSP brings LREG0's 4 rows onto row 0 of
+// LREG0-3 for a 3-multiply fold, and an SFPSHFT2 butterfly folds the 8 columns. All multiplies stay in the fp32 LREGs,
+// so only the final store rounds. Each consumer issues at least one instruction after its producer, which covers the
+// 2-cycle SFPMAD latency for the non-SFPMAD consumers that Blackhole does not interlock.
+
+constexpr std::uint32_t SCALAR_PROD_FACE_ADDRS[NUM_FACES] = {0, 16, 32, 48};
+constexpr std::uint32_t SCALAR_PROD_COLUMN_OFFSETS[2] = {0, 2};  // even, odd columns
+
+/**
+ * @brief Multiply one slice (16 rows x 8 columns) into the lane accumulators: LREG0 takes row groups 0 and 2,
+ *        LREG4 row groups 1 and 3.
+ * @tparam INSTRUCTION_MODE The load mode for the Dest format
+ * @tparam seed True for the first slice, which writes the accumulators instead of multiplying into them
+ * @param slice_addr Dest address of the slice's first row group (face base + column offset)
+ */
+template <InstrModLoadStore INSTRUCTION_MODE, bool seed>
+inline void scalar_prod_accumulate_slice(const std::uint32_t slice_addr) {
+    TT_SFPLOAD(p_sfpu::LREG1, INSTRUCTION_MODE, ADDR_MOD_7, slice_addr);
+    TT_SFPLOAD(p_sfpu::LREG5, INSTRUCTION_MODE, ADDR_MOD_7, slice_addr + ROWS_PER_LOAD);
+    TT_SFPLOAD(p_sfpu::LREG2, INSTRUCTION_MODE, ADDR_MOD_7, slice_addr + 2 * ROWS_PER_LOAD);
+    TT_SFPLOAD(p_sfpu::LREG6, INSTRUCTION_MODE, ADDR_MOD_7, slice_addr + 3 * ROWS_PER_LOAD);
+    TTI_SFPMUL(p_sfpu::LREG1, p_sfpu::LREG2, p_sfpu::LCONST_0, p_sfpu::LREG1, 0);
+    TTI_SFPMUL(p_sfpu::LREG5, p_sfpu::LREG6, p_sfpu::LCONST_0, p_sfpu::LREG5, 0);
+    if constexpr (seed) {
+        TTI_SFPMOV(0, p_sfpu::LREG1, p_sfpu::LREG0, 0);
+        TTI_SFPMOV(0, p_sfpu::LREG5, p_sfpu::LREG4, 0);
+    } else {
+        TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
+        TTI_SFPMUL(p_sfpu::LREG4, p_sfpu::LREG5, p_sfpu::LCONST_0, p_sfpu::LREG4, 0);
+    }
+}
+
+/**
+ * @brief Fold the 8 columns of LREG0 by multiplication: rotate a copy by 4, 2 and 1 columns and multiply after each
+ *        stage, leaving the product of all 8 columns in every column. Clobbers LREG1.
+ */
+inline void scalar_prod_fold_columns() {
+    for (std::uint32_t shift = 4; shift > 0; shift >>= 1) {
+        TTI_SFPSHFT2(0, p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+        for (std::uint32_t step = 1; step < shift; step++) {
+            TTI_SFPNOP;
+            TTI_SFPSHFT2(0, p_sfpu::LREG1, p_sfpu::LREG1, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+        }
+        TTI_SFPNOP;
+        TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
+        TTI_SFPNOP;
+    }
+}
+
+/**
+ * @brief Multiply all 1024 values of the 32x32 tile at the current Dest base and store the product to element [0][0].
+ * @tparam INSTRUCTION_MODE The load/store mode for the Dest format (FP32 or FP16B)
+ * @note Only element [0][0] is defined afterwards; rows 0-3 of face 0's even columns hold fold leftovers.
+ */
+template <InstrModLoadStore INSTRUCTION_MODE>
+inline void perform_reduce_scalar_prod() {
+    scalar_prod_accumulate_slice<INSTRUCTION_MODE, true /*seed*/>(
+        SCALAR_PROD_FACE_ADDRS[0] + SCALAR_PROD_COLUMN_OFFSETS[0]);
+    for (std::uint32_t slice = 1; slice < 2 * NUM_FACES; slice++) {
+        scalar_prod_accumulate_slice<INSTRUCTION_MODE, false /*seed*/>(
+            SCALAR_PROD_FACE_ADDRS[slice / 2] + SCALAR_PROD_COLUMN_OFFSETS[slice % 2]);
+    }
+
+    // Each lane of LREG0 then holds the product of 32 values.
+    TTI_SFPNOP;
+    TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG4, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
+    TTI_SFPNOP;
+
+    // Spread LREG0's 4 rows across row 0 of LREG0-3 and fold them.
+    TTI_SFPTRANSP(0, 0, 0, 0);
+    TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
+    TTI_SFPMUL(p_sfpu::LREG2, p_sfpu::LREG3, p_sfpu::LCONST_0, p_sfpu::LREG2, 0);
+    TTI_SFPNOP;
+    TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
+    TTI_SFPNOP;
+
+    scalar_prod_fold_columns();
+    TTI_SFPSTORE(p_sfpu::LREG0, INSTRUCTION_MODE, ADDR_MOD_7, 0);
+}
+
+// ============================================================================
 // Public API
 // ============================================================================
 
 /**
  * @brief Unified reduction init kernel wrapper for SFPU reduce kernel.
  *        Determines the instruction mode from format, then dispatches to the appropriate init kernel.
- * @tparam pool_type The reduction operation, currently supported: (SUM, AVG, MAX, MIN)
- * @tparam format The data format, currently supported: (Int32, UInt32, UInt16, Float32, Float16_b)
+ * @tparam pool_type The reduction operation, currently supported: (SUM, AVG, MAX, MIN, PROD)
+ * @tparam format The data format, currently supported: (Int32, UInt32, UInt16, Float32, Float16_b); PROD takes
+ *         Float32 and Float16_b only
  * @param block_ct_dim Block dimension (used for MAX/MIN reduction to specify number of columns, default is 1 for single
  * tile)
  */
@@ -1840,20 +1925,26 @@ inline void init_reduce(std::uint32_t block_ct_dim = 1) {
         }
     } else if constexpr (pool_type == PoolType::SUM || pool_type == PoolType::AVG) {
         init_reduce_sum_avg<INSTRUCTION_MODE, pool_type>();
+    } else if constexpr (pool_type == PoolType::PROD) {
+        static_assert(
+            format == DataFormat::Float32 || format == DataFormat::Float16_b,
+            "PROD reduce supports Float32 and Float16_b only");
+        _init_sfpu_config_reg();
     } else {
         static_assert(
             pool_type == PoolType::SUM || pool_type == PoolType::AVG || pool_type == PoolType::MAX ||
-                pool_type == PoolType::MIN,
-            "Unsupported pool_type. Currently supported: SUM, AVG, MAX, MIN");
+                pool_type == PoolType::MIN || pool_type == PoolType::PROD,
+            "Unsupported pool_type. Currently supported: SUM, AVG, MAX, MIN, PROD");
     }
 }
 
 /**
  * @brief Unified reduction kernel wrapper for a 32x32 tile.
  *        Determines the instruction mode from format, then dispatches to the appropriate reduction kernel.
- * @tparam pool_type The reduction operation, currently supported: (SUM, AVG, MAX, MIN)
+ * @tparam pool_type The reduction operation, currently supported: (SUM, AVG, MAX, MIN, PROD)
  * @tparam reduce_dim The reduction dimension: REDUCE_COL for column-wise, REDUCE_ROW for row-wise (SUM/MAX/MIN all
- * formats; AVG float formats only).
+ * formats; AVG float formats only), REDUCE_SCALAR for the whole tile (PROD only, Float32 and Float16_b; the product
+ * lands in element [0][0]).
  * @tparam format The INPUT data format, currently supported: (Int32, UInt32, UInt16, Float32, Float16_b). Drives the
  *         instruction mode and load-time high-bit masking.
  * @tparam output_format The packer-visible OUTPUT data format (defaults to @p format). Drives the final store mode:
@@ -1864,7 +1955,8 @@ inline void init_reduce(std::uint32_t block_ct_dim = 1) {
  * single tile)
  * @param block_rt_dim Block dimension (used for MAX/MIN reduction to specify block height, or SUM/MAX row reduction;
  * default is 1 for single tile)
- * @note Column MAX/MIN with Int32 or UInt32 reduces a single tile per call (block_ct_dim == block_rt_dim == 1).
+ * @note Column MAX/MIN with Int32 or UInt32, and scalar PROD, reduce a single tile per call
+ *       (block_ct_dim == block_rt_dim == 1).
  */
 template <
     PoolType pool_type,
@@ -1879,11 +1971,15 @@ inline void calculate_reduce(
     // reciprocal-multiply divides exactly (integer AVG stays column-only with its fixed /32 divisor).
     constexpr bool is_float_format = (format == DataFormat::Float32 || format == DataFormat::Float16_b);
     static_assert(
-        reduce_dim == ReduceDim::REDUCE_COL ||
+        reduce_dim == ReduceDim::REDUCE_COL || reduce_dim == ReduceDim::REDUCE_SCALAR ||
             (reduce_dim == ReduceDim::REDUCE_ROW &&
              (pool_type == PoolType::SUM || pool_type == PoolType::MAX || pool_type == PoolType::MIN ||
               (pool_type == PoolType::AVG && is_float_format))),
         "Row reduction (REDUCE_ROW) supports SUM/MAX/MIN (all formats) and AVG (float formats only)");
+    static_assert(
+        (pool_type == PoolType::PROD) == (reduce_dim == ReduceDim::REDUCE_SCALAR),
+        "PROD reduces the whole tile (REDUCE_SCALAR only), and REDUCE_SCALAR is supported for PROD only");
+    static_assert(pool_type != PoolType::PROD || is_float_format, "PROD reduce supports Float32 and Float16_b only");
     static_assert(
         is_supported_reduce_format(format),
         "Unsupported data format. Supported formats: Int32, UInt32, UInt16, Float32, Float16_b");
@@ -1974,11 +2070,16 @@ inline void calculate_reduce(
     } else if constexpr (pool_type == PoolType::SUM || pool_type == PoolType::AVG) {
         calculate_reduce_sum_avg<pool_type, reduce_dim, INSTRUCTION_MODE, clear_high_bits, pack_low16, is_signed_int>(
             block_ct_dim, block_rt_dim);
+    } else if constexpr (pool_type == PoolType::PROD) {
+        LLK_ASSERT(
+            block_ct_dim == 1 && block_rt_dim == 1,
+            "Scalar PROD reduce is single-tile (block_ct_dim == block_rt_dim == 1); call it once per tile");
+        perform_reduce_scalar_prod<INSTRUCTION_MODE>();
     } else {
         static_assert(
             pool_type == PoolType::SUM || pool_type == PoolType::AVG || pool_type == PoolType::MAX ||
-                pool_type == PoolType::MIN,
-            "Unsupported pool_type. Currently supported: SUM, AVG, MAX, MIN");
+                pool_type == PoolType::MIN || pool_type == PoolType::PROD,
+            "Unsupported pool_type. Currently supported: SUM, AVG, MAX, MIN, PROD");
     }
 }
 
