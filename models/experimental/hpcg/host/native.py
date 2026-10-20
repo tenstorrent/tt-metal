@@ -24,10 +24,25 @@ import numpy as np
 SRC = pathlib.Path(__file__).with_name("native_setup.cpp")
 _LIB = {}
 
-i32p = np.ctypeslib.ndpointer(np.int32, flags="C_CONTIGUOUS")
-i64p = np.ctypeslib.ndpointer(np.int64, flags="C_CONTIGUOUS")
-f32p = np.ctypeslib.ndpointer(np.float32, flags="C_CONTIGUOUS")
-f64p = np.ctypeslib.ndpointer(np.float64, flags="C_CONTIGUOUS")
+
+
+def _array(dtype):
+    """ctypes argument type of a C-contiguous numpy array of dtype: the checks of np.ctypeslib.ndpointer(dtype,
+    flags="C_CONTIGUOUS") at 1.45 instead of 2.47 us per argument (ndpointer builds a ctypes view of each array);
+    a setup passes about 260 arrays."""
+    dt = np.dtype(dtype)
+
+    class ArrayPointer(ctypes.c_void_p):
+        @classmethod
+        def from_param(cls, a):
+            if not isinstance(a, np.ndarray) or a.dtype != dt or not a.flags.c_contiguous:
+                raise TypeError(f"expected a C-contiguous {dt} numpy array, got {type(a).__name__}")
+            return ctypes.c_void_p(a.__array_interface__["data"][0])
+
+    return ArrayPointer
+
+
+i32p, i64p, f32p, f64p = (_array(t) for t in (np.int32, np.int64, np.float32, np.float64))
 I32, I64 = ctypes.c_int32, ctypes.c_int64
 
 

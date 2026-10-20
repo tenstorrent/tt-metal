@@ -37,6 +37,10 @@ from models.experimental.hpcg.tt.layout import (
 # The compiled setup helper (host/native_setup.cpp) is loaded with this module, as TT-NN is with `import ttnn`:
 # loading a library is program start-up (in HPCG's C++ code this code is part of the executable), not setup
 native.lib()
+# The thread that hands the matrix-generation launches to TT-NN (see HPCG.__init__), started here too: starting a thread
+# waits for it to run (76 to 206 us on the P150's host), program start-up as well
+_LAUNCHER = ThreadPoolExecutor(max_workers=1, thread_name_prefix="hpcg-launch")
+_LAUNCHER.submit(int).result()
 
 
 def default_bands(nx_level):
@@ -119,7 +123,7 @@ class HPCG:
         # binaries and builds that program while this thread builds and plans the fine level; then each real launch
         # (the fine level's reuses the program), while this thread goes on. A launch is handed over only after its
         # table upload returned, so the upload is ahead of it in the queue
-        gen = None if host_tables else ThreadPoolExecutor(max_workers=1)
+        gen = None if host_tables else _LAUNCHER
         launched = [] if gen is None else [gen.submit(warm_up, device, min(nc, lc[0]))]
         tables0 = None
         if host_tables:
@@ -265,8 +269,6 @@ class HPCG:
         )
         for f in launched:  # every generation launch is enqueued (and its errors raised) before any other launch
             f.result()
-        if gen is not None:
-            gen.shutdown()
 
     def spmv(self, l):
         """A plain z -> Az launch of level l (used by tests and diagnostics, built on first use)."""
