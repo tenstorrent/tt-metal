@@ -386,17 +386,45 @@ def test_shared_generator_rejects_cross_lane_sampling_remap(expect_error):
         Generator._apply_sampling_slot_remap(fake, torch.tensor([0, 2, 2, 3]))
 
 
-@pytest.mark.parametrize(
-    "adapter_path",
-    [
-        "models.tt_transformers.tt.generator_vllm:Mistral3ForConditionalGeneration",
-        "models.tt_transformers.tt.generator_vllm:Gemma3ForConditionalGeneration",
-        "models.demos.blackhole.qwen36.tt.qwen36_vllm:Qwen36ForCausalLM",
-    ],
-    ids=lambda path: path.rsplit(":", 1)[1],
-)
-def test_adapter_forwards_deferred_decode_to_shared_generator(adapter_path, monkeypatch):
-    """A device grammar adapter must hand the deferred decode to Generator unchanged."""
+# Adapters that declare supports_device_grammar. Each inherits the device grammar contract from the
+# shared Generator; its decode_forward must hand the plugin's deferred decode to Generator unchanged.
+DEVICE_GRAMMAR_ADAPTERS = [
+    "models.tt_transformers.tt.generator_vllm:LlamaForCausalLM",
+    "models.tt_transformers.tt.generator_vllm:QwenForCausalLM",
+    "models.tt_transformers.tt.generator_vllm:MistralForCausalLM",
+    "models.tt_transformers.tt.generator_vllm:Mistral3ForConditionalGeneration",
+    "models.tt_transformers.tt.generator_vllm:Gemma3ForConditionalGeneration",
+    "models.demos.blackhole.qwen36.tt.qwen36_vllm:Qwen36ForCausalLM",
+]
+
+
+def _adapter_id(adapter_path):
+    return adapter_path.rsplit(":", 1)[1]
+
+
+@pytest.mark.parametrize("adapter_path", DEVICE_GRAMMAR_ADAPTERS, ids=_adapter_id)
+def test_device_grammar_adapter_declares_sampling_capabilities(adapter_path):
+    """Read the class-level declaration from source, so the check runs without vLLM installed."""
+    module_name, class_name = adapter_path.split(":")
+    source_path = Path(*module_name.split(".")).with_suffix(".py")
+    tree = ast.parse(source_path.read_text(encoding="utf-8"), filename=str(source_path))
+    class_node = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == class_name)
+    assignment = next(
+        node
+        for node in class_node.body
+        if isinstance(node, ast.Assign)
+        and any(isinstance(target, ast.Name) and target.id == "model_capabilities" for target in node.targets)
+    )
+    capabilities = ast.literal_eval(assignment.value)
+
+    assert capabilities["supports_sample_on_device"] is True
+    assert capabilities["supports_device_grammar"] is True
+    assert capabilities["max_device_top_k"] == 32
+    assert capabilities.get("output_tokens_per_step", 1) == 1
+
+
+@pytest.mark.parametrize("adapter_path", DEVICE_GRAMMAR_ADAPTERS, ids=_adapter_id)
+def test_device_grammar_adapter_forwards_deferred_decode_to_shared_generator(adapter_path, monkeypatch):
     pytest.importorskip("vllm")
     import importlib
 
