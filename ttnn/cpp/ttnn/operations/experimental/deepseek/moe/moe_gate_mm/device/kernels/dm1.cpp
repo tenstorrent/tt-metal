@@ -374,7 +374,6 @@ void kernel_main() {
         //-----------------------------------------------------------------
         cb_w2c_in5.wait_front(1);
         // Unicast each worker. The ring rectangle includes a dispatch core when dispatch is on a row.
-        *my_semaphore_ptr = 1;
         for (uint32_t receiver = 0; receiver < num_mask_receivers; ++receiver) {
             const uint32_t receiver_x = get_arg_val<uint32_t>(argidx + (receiver * 2));
             const uint32_t receiver_y = get_arg_val<uint32_t>(argidx + (receiver * 2) + 1);
@@ -385,12 +384,15 @@ void kernel_main() {
                 /*noc=*/1,
                 vchannel);
         }
-        noc_async_write_barrier();
+        Noc noc_obj(1);
+        Semaphore<> partial_sem(partial_semaphore);
+        noc_obj.async_write_barrier();
         for (uint32_t receiver = 0; receiver < num_mask_receivers; ++receiver) {
             const uint32_t receiver_x = get_arg_val<uint32_t>(argidx + (receiver * 2));
             const uint32_t receiver_y = get_arg_val<uint32_t>(argidx + (receiver * 2) + 1);
-            noc_semaphore_set_remote(semaphore_addr, get_noc_addr(receiver_x, receiver_y, semaphore_addr), /*noc=*/1);
+            partial_sem.up(noc_obj, receiver_x, receiver_y, 1);
         }
+        noc_obj.async_atomic_barrier();
 
         cb_w2c_in5.pop_front(1);
 
