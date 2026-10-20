@@ -51,6 +51,9 @@ Ask in one message for what you cannot find out yourself, with defaults proposed
   At most the canonical prompt's length. On a smaller box the goldens are the scaled model's (after SG.1). Goldens are
   made only for this box's rungs; another box's goldens come from that box's own run.
 - **Layer subset**: in partial mode, the first layers that cover every layer type; in full mode, every layer.
+- **Precision reference point** (F123): the model ships realistic precision from the start (agents' rule 7);
+  propose a reference (default: GLM-5.3's production settings: attention HiFi2, experts LoFi with fp32 accumulation,
+  checkpoint-width weights, bf16 cross-chip sums) and record it in `agents.rules`.
 - **Owner rules** for every agent of this model (beyond the standing ones in the agent definition, such as always
   2D fabric). They go in `agents.rules` and appear in every brief.
 - **Dashboard style**: `standard` (the ERNIE look), `teletext` (a 90s teletext service on a CRT), or `both`. Goes in
