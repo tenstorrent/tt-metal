@@ -31,6 +31,7 @@ SKIP_FILES = {
 BANNED_HEADERS = {
     "tt_stl/reflection.hpp": "reflection.hpp pulls in <reflect> and <nlohmann/json.hpp>; use forward declarations or move usage to .cpp files",
     "tt_stl/concepts.hpp": "concepts.hpp pulls in <reflect>; use sizeof(T)==0 for always_false_v, or move usage to .cpp files",
+    "tt-metalium/host_api.hpp": "host_api.hpp declares the free-function API (CreateKernel, CreateBuffer, ...) and pulls in program, buffer, device and kernel headers; include only the specific headers you actually need",
 }
 
 # Exhaustive set of UMD headers allowed in the public API.
@@ -38,10 +39,16 @@ BANNED_HEADERS = {
 # the UMD surface from public headers.  If you need a UMD type in a public header,
 # prefer forward declarations or move the dependency to a .cpp file.
 ALLOWED_UMD_HEADERS = {
-    "umd/device/types/arch.hpp",
-    "umd/device/types/cluster_descriptor_types.hpp",
-    "umd/device/types/core_coordinates.hpp",
-    "umd/device/types/xy_pair.hpp",
+    "tt-umd/types/arch.hpp",
+    "tt-umd/types/cluster_descriptor_types.hpp",
+    "tt-umd/types/core_coordinates.hpp",
+    "tt-umd/types/xy_pair.hpp",
+    # PhysicalSystemDescriptor holds a tt::umd::SemVer by value. semver.hpp already reached the
+    # API through cluster_descriptor_types.hpp; it is listed so the header can include it directly.
+    "tt-umd/utils/semver.hpp",
+    # SemVer is defined here; tt-umd/utils/semver.hpp only wraps it. Included directly so
+    # misc-include-cleaner is satisfied.
+    "tt-umd-utils/semver.hpp",
 }
 
 ALLOWED_PREFIXES = {
@@ -49,7 +56,8 @@ ALLOWED_PREFIXES = {
     "internal",
     "tt-metalium",
     "tt_stl",
-    "umd",
+    "tt-umd",
+    "tt-umd-utils",
     "fmt",
     "enchantum",
     "nlohmann",
@@ -383,7 +391,7 @@ class Include(NamedTuple):
 
     def check_for_umd_header(self) -> Optional[str]:
         """Error if a UMD include is not in the frozen allowlist."""
-        if self.prefix == "umd" and self.path not in ALLOWED_UMD_HEADERS:
+        if self.prefix in {"tt-umd", "tt-umd-utils"} and self.path not in ALLOWED_UMD_HEADERS:
             return (
                 f"{self.source_file}:{self.line_num}: "
                 f"New UMD include not allowed in public API: <{self.path}> "

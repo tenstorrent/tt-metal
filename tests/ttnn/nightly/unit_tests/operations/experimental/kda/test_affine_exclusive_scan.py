@@ -11,7 +11,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import run_for_blackhole, skip_with_llk_assert, skip_with_watcher
+from tt_py_test_utils_common.utility_functions import run_for_blackhole, skip_with_llk_assert, skip_with_watcher
 from tests.ttnn.nightly.unit_tests.operations.experimental.kda import kda_performance_model_test_utils as perf_model
 from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
@@ -53,12 +53,13 @@ _UNIT_CASE = _ProductionCase(
     expected_duration_ns=8250,
 )
 
-# Kimi-K3 production layouts. References are pooled medians from two independent
-# three-sample Blackhole runs after scoping synchronization to each independent head.
+# Kimi-K3 production layouts. References are medians of the CI bh_p150b_civ2_viommu runner (four main nightlies,
+# plus one PR run for sp1-tp8 and sp2-tp4); the earlier development-machine references sat at the top of the
+# runner's spread, so sp2-tp4 fell below its band on an ordinary run (72,849 ns).
 _PRODUCTION_CASES = (
-    _ProductionCase("sp1-tp8", 12, 8, 128, 128, 96782),
-    _ProductionCase("sp2-tp4", 24, 4, 128, 128, 76542),
-    _ProductionCase("sp4-tp2", 48, 2, 128, 128, 65000),
+    _ProductionCase("sp1-tp8", 12, 8, 128, 128, 99597),
+    _ProductionCase("sp2-tp4", 24, 4, 128, 128, 74808),
+    _ProductionCase("sp4-tp2", 48, 2, 128, 128, 65831),
 )
 
 
@@ -278,12 +279,15 @@ def test_affine_exclusive_scan_contract_and_trace(
     ttnn.synchronize_device(device)
 
     actual = ttnn.to_torch(first)
-    assert_accurate(expected, actual, name=f"{summary_dtype} exclusive entry states", pcc_threshold=0.999)
+    assert_accurate(
+        expected, actual, name=f"{summary_dtype} exclusive entry states", pcc_threshold=0.999, nrmse_threshold=0.01
+    )
     assert_accurate(
         snapshots[2],
         actual.reshape(batch_heads, groups_per_head, key_dim, value_dim)[:, 0],
         name="exclusive first entry",
         pcc_threshold=0.999,
+        nrmse_threshold=0.0006,
     )
     assert_bit_identical(actual, ttnn.to_torch(traced), name="trace replay")
     for name, snapshot, tensor in zip(("a", "b", "initial_state"), snapshots, (a_tt, b_tt, state_tt), strict=True):
@@ -331,6 +335,7 @@ def test_affine_exclusive_scan_shape_accuracy(
         ttnn.to_torch(output),
         name=f"{summary_dtype} shape-sweep exclusive entry states",
         pcc_threshold=0.999,
+        nrmse_threshold=0.007,
     )
 
 
@@ -356,7 +361,9 @@ def test_affine_exclusive_scan_is_device_deterministic(
         mismatch_marker,
         name=f"{summary_dtype} exclusive scan device-side exact-value determinism marker",
     )
-    assert_accurate(expected, output, name=f"{summary_dtype} exclusive entry states", pcc_threshold=0.999)
+    assert_accurate(
+        expected, output, name=f"{summary_dtype} exclusive entry states", pcc_threshold=0.999, nrmse_threshold=0.01
+    )
     ttnn.deallocate(output_tt)
 
 
@@ -390,8 +397,8 @@ def test_affine_exclusive_scan_cache_hit_rebinds_fresh_tensors(
     expected_b = _oracle(*host_b, case.batch_heads, case.groups_per_head)
     actual_a = ttnn.to_torch(output_a)
     actual_b = ttnn.to_torch(output_b)
-    assert_accurate(expected_a, actual_a, name="cache miss tensors", pcc_threshold=0.999)
-    assert_accurate(expected_b, actual_b, name="cache hit fresh tensors", pcc_threshold=0.999)
+    assert_accurate(expected_a, actual_a, name="cache miss tensors", pcc_threshold=0.999, nrmse_threshold=0.01)
+    assert_accurate(expected_b, actual_b, name="cache hit fresh tensors", pcc_threshold=0.999, nrmse_threshold=0.01)
     assert not torch.equal(actual_a, actual_b)
 
 
@@ -443,8 +450,10 @@ def test_affine_exclusive_scan_approximate_math_uses_distinct_accurate_program(
     )
     assert device.num_program_cache_entries() == entries + 1
     expected = _oracle(*host, case.batch_heads, case.groups_per_head)
-    assert_accurate(expected, ttnn.to_torch(exact), name="exact math", pcc_threshold=0.999)
-    assert_accurate(expected, ttnn.to_torch(approximate), name="approximate math", pcc_threshold=0.999)
+    assert_accurate(expected, ttnn.to_torch(exact), name="exact math", pcc_threshold=0.999, nrmse_threshold=0.01)
+    assert_accurate(
+        expected, ttnn.to_torch(approximate), name="approximate math", pcc_threshold=0.999, nrmse_threshold=0.002
+    )
 
 
 def test_affine_exclusive_scan_rejects_unsupported_compute_config(
@@ -509,7 +518,13 @@ def test_affine_exclusive_scan_production_performance(
         case.value_dim,
     )
     assert output.dtype == ttnn.float32
-    assert_accurate(expected, ttnn.to_torch(output), name=f"{case.case_id} production output", pcc_threshold=0.999)
+    assert_accurate(
+        expected,
+        ttnn.to_torch(output),
+        name=f"{case.case_id} production output",
+        pcc_threshold=0.999,
+        nrmse_threshold=0.02,
+    )
     performance = _affine_exclusive_scan_performance(
         *device_inputs,
         output,
@@ -548,8 +563,16 @@ def test_affine_exclusive_scan_matches_composed_ttnn_baseline(zero_actual_start,
     with ttnn.manage_config("throw_exception_on_fallback", True):
         composed = _composed_ttnn_baseline(a, b, initial_state, device, batch_heads, groups_per_head)
     ttnn.synchronize_device(device)
-    assert_accurate(expected, ttnn.to_torch(fused), name="fused exclusive scan", pcc_threshold=0.999)
-    assert_accurate(expected, ttnn.to_torch(composed), name="composed TTNN exclusive scan", pcc_threshold=0.999)
+    assert_accurate(
+        expected, ttnn.to_torch(fused), name="fused exclusive scan", pcc_threshold=0.999, nrmse_threshold=0.01
+    )
+    assert_accurate(
+        expected,
+        ttnn.to_torch(composed),
+        name="composed TTNN exclusive scan",
+        pcc_threshold=0.999,
+        nrmse_threshold=0.002,
+    )
 
 
 @pytest.mark.parametrize(

@@ -2,6 +2,7 @@
 # Module owners should update this file when adding/removing/renaming source files
 
 set(UNIT_TESTS_LLK_SRC
+    test_block_max8.cpp
     test_broadcast.cpp
     test_compute_kernel_sentinel.cpp
     test_copy_block_matmul_partials.cpp
@@ -37,6 +38,7 @@ set(UNIT_TESTS_LLK_SRC
     test_single_core_matmul_int8.cpp
     test_top32_rm_dev.cpp
     test_transpose.cpp
+    test_triangle_solve.cpp
     test_unary_broadcast.cpp
     test_unpack_to_dest_bcast_dst_offset.cpp
     test_untilize_tilize.cpp

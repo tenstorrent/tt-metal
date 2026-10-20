@@ -53,12 +53,9 @@ uint32_t padded_slice_rm_reader_address(
     const bool is_width_sharded = output_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED;
     const uint32_t output_row_size_bytes = output_shard_spec.shape[1] * input_tensor.element_size();
 
-    const auto src_buffer_alignment =
-        input_buffer->buffer_type() == BufferType::DRAM ? hal::get_dram_alignment() : hal::get_l1_alignment();
     const auto dst_buffer_alignment =
         output_buffer->buffer_type() == BufferType::DRAM ? hal::get_dram_alignment() : hal::get_l1_alignment();
     const uint32_t begins_bytes = output_tensor_start[-1] * input_tensor.element_size();
-    const uint32_t misalignment = begins_bytes % src_buffer_alignment;
     const uint32_t output_row_size_bytes_offset = tt::round_up(output_row_size_bytes, dst_buffer_alignment);
 
     uint32_t core_w_index = 0;
@@ -68,8 +65,9 @@ uint32_t padded_slice_rm_reader_address(
         core_w_index = core_index;
     }
     const int width_offset = static_cast<int>(core_w_index * output_row_size_bytes_offset);
-    // read from nearest aligned address
-    uint32_t read_address = input_buffer->address() + begins_bytes - misalignment;
+    // Pass the exact start. When it isn't aligned to the source buffer, create_descriptor enables the
+    // reader's non-aligned path, which reads from the aligned address below it and skips the difference.
+    uint32_t read_address = input_buffer->address() + begins_bytes;
     read_address += static_cast<uint32_t>(width_offset);
     return read_address;
 }
@@ -104,6 +102,8 @@ get_padded_slice_runtime_args_rm_sharded_output(
     [[maybe_unused]] uint32_t num_cores_channels =
         ttnn::operations::experimental::detail::get_num_cores_channels_from_sharded_tensor(output_tensor);
     int input_page_size = input_shape[-1] * input_tensor.element_size();
+    // Sliced last-dim width. The reader base already includes the slice's start offset.
+    const int slice_row_size_bytes = static_cast<int>(actual_output_shape[-1] * input_tensor.element_size());
     [[maybe_unused]] uint32_t input_row_size_bytes =
         tt::div_up(input_shape[-1], num_cores_channels) * input_tensor.element_size();
 
@@ -155,7 +155,7 @@ get_padded_slice_runtime_args_rm_sharded_output(
 
     uint32_t output_row_size_bytes_offset = tt::round_up(output_row_size_bytes, dst_buffer_alignment);
     std::vector<uint32_t> common_reader_kernel_args = {
-        0u,  // read from nearest aligned address
+        0u,  // exact start address, set per core
         input_page_size,
         output_row_size_bytes,
         output_row_size_bytes_offset,
@@ -203,7 +203,7 @@ get_padded_slice_runtime_args_rm_sharded_output(
         }
 
         int this_input_row_size_bytes =
-            std::max(std::min<int>(output_row_size_bytes, input_page_size - width_offset), 0);
+            std::max(std::min<int>(output_row_size_bytes, slice_row_size_bytes - width_offset), 0);
         uint32_t this_core_num_sticks = num_sticks_per_core;
         if (this_input_row_size_bytes == 0) {
             this_core_num_sticks = 0;
@@ -274,8 +274,8 @@ ProgramDescriptor PaddedSliceRMProgramFactory::create_descriptor(
     bool pad_output_row = false;
     log_debug(tt::LogOp, "Input Shape {}, Padded Shape : {}", a.logical_shape(), a.padded_shape());
 
-    uint32_t input_row_size_bytes = a.logical_shape()[-1] * a.element_size();
-    input_row_size_bytes = input_row_size_bytes / num_cores_channels;
+    uint32_t slice_row_size_bytes = actual_output_shape[-1] * a.element_size();
+    slice_row_size_bytes = slice_row_size_bytes / num_cores_channels;
 
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
     TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
@@ -303,8 +303,11 @@ ProgramDescriptor PaddedSliceRMProgramFactory::create_descriptor(
         dst_buffer_alignment);
     auto alignment = std::max(src_buffer_alignment, dst_buffer_alignment);
 
+    // A start that isn't aligned to the source buffer needs the non-aligned path too: the reader gets the
+    // exact start address and skips the bytes between the aligned address below it and the start.
+    const uint32_t begins_bytes = output_tensor_start[-1] * a.element_size();
     auto is_non_aligned = false;
-    if (output_row_size_bytes % alignment) {
+    if (output_row_size_bytes % alignment || begins_bytes % src_buffer_alignment) {
         is_non_aligned = true;
     }
 
@@ -317,7 +320,7 @@ ProgramDescriptor PaddedSliceRMProgramFactory::create_descriptor(
 
     desc.cbs.push_back(make_slice_cb_descriptor(
         output_cb_index, total_cores, output_cb_page_size, num_output_sticks_per_core, cb_data_format, dst_buffer));
-    if (output_row_size_bytes > input_row_size_bytes) {
+    if (output_row_size_bytes > slice_row_size_bytes) {
         pad_output_row = true;
         desc.cbs.push_back(
             make_slice_cb_descriptor(temp_pad_cb_index, total_cores, output_row_size_bytes, 1, cb_data_format));

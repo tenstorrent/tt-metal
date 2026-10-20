@@ -33,7 +33,7 @@
 #include "tests/tt_metal/tt_metal/common/device_fixture.hpp"
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
-#include "tt_metal/distributed/hd_socket_descriptor.hpp"
+#include <tt-metalium/experimental/sockets/hd_socket_descriptor.hpp>
 #include "tt_metal/hw/inc/hostdev/socket.h"
 #include "tt_metal/llrt/tt_cluster.hpp"
 

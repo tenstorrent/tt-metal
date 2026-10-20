@@ -9,7 +9,6 @@ from helpers.llk_params import (
     PERF_RUN_TYPES_QUASAR,
     DestAccumulation,
     DestSync,
-    ImpliedMathFormat,
     ReducePool,
 )
 from helpers.param_config import generate_perf_input_dimensions, parametrize
@@ -72,7 +71,6 @@ PERF_INPUT_BOUNDS = (-100, 100)
     formats=PERF_FORMATS,
     mathop=get_supported_reduce_axes,
     dimension_combinations=perf_input_dimensions,
-    implied_math_format=[ImpliedMathFormat.Yes],
     run_types=PERF_RUN_TYPES_QUASAR,
     loop_factor=[PERF_LOOP_FACTOR_QUASAR],
     is_perf=[True],
@@ -83,7 +81,6 @@ def test_perf_sfpu_reduce_quasar(
     formats,
     mathop,
     dimension_combinations,
-    implied_math_format,
     run_types,
     loop_factor,
     is_perf,
@@ -100,7 +97,6 @@ def test_perf_sfpu_reduce_quasar(
         PERF_INPUT_BOUNDS,
         dimension_combinations,
         TILE_DIM,
-        implied_math_format,
         run_types=run_types,
         loop_factor=loop_factor,
         is_perf=is_perf,

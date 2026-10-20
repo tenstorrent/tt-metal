@@ -108,8 +108,8 @@ ttnn::Tensor reduce_scatter(
     std::optional<uint32_t> num_buffers_per_channel,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     bool use_l1_small_for_semaphores) {
-    // If cluster_axis is None, but mesh shape is not 1xM or Mx1, then we call reduce-scatter on cluster_axis=1, then
-    // reduce-scatter on cluster_axis=0
+    // If cluster_axis is None, but mesh shape is not 1xM or Mx1, then we call reduce-scatter once per mesh axis, in
+    // axis order (cluster_axis=0, then cluster_axis=1).
     if (cluster_axis == std::nullopt) {
         auto mesh_shape = input_tensor.device()->get_view().shape();
         if (!mesh_shape.is_line_topology()) {
@@ -143,7 +143,7 @@ ttnn::Tensor reduce_scatter(
     // TODO: until #27196 is resolved, the fabric API does not subtract out the one link correctly for dispatch used
     // when not all devices are mmio capable. Manually doing it requires the use of "is_mmio_capable" counting, but as
     // the one link that's subtracted out is only along one cluster axis, we will be using less links we would like
-    uint32_t num_links_ = num_links.value_or(common::get_num_links(*mesh_device, cluster_axis));
+    uint32_t num_links_ = num_links.has_value() ? *num_links : common::get_num_links(*mesh_device, cluster_axis);
 
     auto resolved_compute_kernel_config =
         ttnn::ccl::resolve_fp32_acc_compute_kernel_config(compute_kernel_config, input_tensor.dtype());

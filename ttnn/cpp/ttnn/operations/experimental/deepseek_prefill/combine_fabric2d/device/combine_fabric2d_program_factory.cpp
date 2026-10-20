@@ -98,10 +98,11 @@ L1Layout compute_l1_layout(
     l.pkt_hdr_drain = base + PKT_HDR_DRAIN_OFF;
     l.drain_sink = base + DRAIN_SINK_OFF;
     l.ring = base + PROD_BUF_OFF;
-    // One prebuilt header per ring slot, past the ring itself. A slot is the token plus its metadata tail.
+    // One prebuilt header per packet of each ring slot, past the ring itself. A slot is the token plus its
+    // metadata tail.
     l.pkt_hdr_ring = l.ring + num_l1_slots * (token_size_bytes + cmbf2d::FORWARDING_METADATA_SIZE);
-    const uint32_t hdr_ring_bytes =
-        num_l1_slots * static_cast<uint32_t>(tt::tt_fabric::get_tt_fabric_packet_header_size_bytes());
+    const uint32_t hdr_ring_bytes = num_l1_slots * cmbf2d::packets_per_token(token_size_bytes) *
+                                    static_cast<uint32_t>(tt::tt_fabric::get_tt_fabric_packet_header_size_bytes());
     // 64-byte aligned: DRAM reads need a DRAM_ALIGNMENT-aligned L1 destination on Blackhole
     // (LOG_BASE_2_OF_DRAM_ALIGNMENT = 6), and the control region is read straight out of DRAM.
     l.control = align_l1(l.pkt_hdr_ring + hdr_ring_bytes);
@@ -169,12 +170,17 @@ std::vector<uint32_t> ring_chip_ids(ttnn::MeshDevice* mesh, const ttnn::MeshCoor
 // GlobalSemaphores rather than the op's own L1 region so they sit at an address uniform across the mesh:
 // `fwd_arrived` is bumped by the upstream chip, which has to know where it lives.
 //
+// `final_arrived` is the receive count for the tokens the upstream chip writes straight into this chip's
+// output. Nothing else on this chip sees those land, so without it this chip's program can finish -- and the
+// next op on it read the output -- while a neighbour is still delivering. The reader waits for the count it
+// expects before exiting.
+//
 // Nothing zeroes them between launches — they outlive the cached workload — so the kernels undo each launch's
 // count at end of stream. `filled` and `freed` are zeroed, which is safe because only the reader and sender
-// on the same core bump them. `fwd_arrived` is bumped by the upstream chip, which may already be in the next
-// launch, so the reader subtracts what it consumed instead. Skipping that leaves the next launch reading this
-// one's totals, and a stale `freed` underflows the reader's free-slot arithmetic into a silent buffer
-// overwrite rather than a clean failure.
+// on the same core bump them. `fwd_arrived` and `final_arrived` are bumped by the upstream chip, which may
+// already be in the next launch, so the reader subtracts what this launch accounted for instead. Skipping that
+// leaves the next launch reading this one's totals, and a stale `freed` underflows the reader's free-slot
+// arithmetic into a silent buffer overwrite rather than a clean failure.
 // The untilizer handshake needs the same treatment for the same reason. `untilized[j]` lives on a reader's
 // core and is bumped by its group's j-th untilizer; `unt_freed[c]` lives on an untilizer's core and is
 // bumped by the reader on link c. One semaphore per INDEX serves the whole mesh, because a core only ever
@@ -187,11 +193,13 @@ struct RingSemaphores {
     tt::tt_metal::GlobalSemaphore filled;
     tt::tt_metal::GlobalSemaphore freed;
     tt::tt_metal::GlobalSemaphore fwd_arrived;
+    tt::tt_metal::GlobalSemaphore final_arrived;
     std::vector<tt::tt_metal::GlobalSemaphore> untilized;
     std::vector<tt::tt_metal::GlobalSemaphore> unt_freed;
 
     uint32_t lowest_address() const {
-        uint32_t lowest = static_cast<uint32_t>(std::min({filled.address(), freed.address(), fwd_arrived.address()}));
+        uint32_t lowest = static_cast<uint32_t>(
+            std::min({filled.address(), freed.address(), fwd_arrived.address(), final_arrived.address()}));
         for (const auto* group : {&untilized, &unt_freed}) {
             for (const auto& sem : *group) {
                 lowest = std::min(lowest, static_cast<uint32_t>(sem.address()));
@@ -210,7 +218,7 @@ RingSemaphores allocate_ring_semaphores(ttnn::MeshDevice* mesh, uint32_t num_lin
     auto make = [&] {
         return ttnn::global_semaphore::create_global_semaphore(mesh, all_workers, 0, tt::tt_metal::BufferType::L1);
     };
-    RingSemaphores sems{make(), make(), make(), {}, {}};
+    RingSemaphores sems{make(), make(), make(), make(), {}, {}};
     if (untilizers_per_group != 0) {
         for (uint32_t j = 0; j < untilizers_per_group; j++) {
             sems.untilized.push_back(make());
@@ -219,7 +227,7 @@ RingSemaphores allocate_ring_semaphores(ttnn::MeshDevice* mesh, uint32_t num_lin
             sems.unt_freed.push_back(make());
         }
     }
-    tt::tt_metal::distributed::Synchronize(mesh, std::nullopt, {});
+    tt::tt_metal::distributed::Synchronize(*mesh, std::nullopt, {});
     return sems;
 }
 
@@ -271,9 +279,10 @@ KernelPlan make_kernel_plan(
     uint32_t pages_per_stream) {
     KernelPlan plan;
     plan.pages_per_stream = pages_per_stream;
-    plan.ring_filled_addr = static_cast<uint32_t>(sems.filled.address());
-    plan.ring_freed_addr = static_cast<uint32_t>(sems.freed.address());
+    plan.ring_filled_slot = static_cast<uint32_t>(sems.filled.address());
+    plan.ring_freed_slot = static_cast<uint32_t>(sems.freed.address());
     plan.fwd_arrived_addr = static_cast<uint32_t>(sems.fwd_arrived.address());
+    plan.final_arrived_addr = static_cast<uint32_t>(sems.final_arrived.address());
     // Which of the `num_routed_experts` columns this chip hosts. The dispatch group is this device's position
     // on the OTHER mesh axis; with one group per column of a 2D mesh that is just the other coordinate. Same
     // derivation as the production reader's compile-time `offset`.
@@ -421,7 +430,7 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             plan.my_index = j;
             plan.num_peers = static_cast<uint32_t>(groups[g].size());
             plan.control_addr = l1.unt_control;
-            plan.produced_addr = static_cast<uint32_t>(sems.untilized.at(j).address());
+            plan.produced_slot = static_cast<uint32_t>(sems.untilized.at(j).address());
             // A group serves one ring direction: group 0 is clockwise, matching untilizer_group_of.
             const StreamId first = make_stream_id(0, g == 0);
             plan.walks_down = stream_is_cw(first);
@@ -508,6 +517,7 @@ tt::tt_metal::WorkloadDescriptor CombineFabric2dProgramFactory::create_workload_
     workload_descriptor.semaphores.push_back(sems.filled);
     workload_descriptor.semaphores.push_back(sems.freed);
     workload_descriptor.semaphores.push_back(sems.fwd_arrived);
+    workload_descriptor.semaphores.push_back(sems.final_arrived);
     for (const auto* group : {&sems.untilized, &sems.unt_freed}) {
         for (const auto& sem : *group) {
             workload_descriptor.semaphores.push_back(sem);

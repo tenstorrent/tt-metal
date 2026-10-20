@@ -65,9 +65,27 @@ inline void _llk_unpack_AB_compressed_custom_mm_mop_config_()
         });
 }
 
-template <bool transpose = false>
+/**
+ * @brief Configure the unpack thread for a compressed custom_mm block matmul, whose weight tiles each carry their own
+ *        BFP format.
+ *
+ * Records the per-format unpack sequences into the replay buffer, sets the unpacker X ends, and loads the per-format
+ * SrcA tile-size increments (SCRATCH_SEC0-2) and tile descriptors (GPRs PERF_UNPACK_NUM_TILES_1-3) the execute uses.
+ *
+ * @tparam transpose: Transpose the SrcA read, values = <true/false>
+ * @tparam clear_src: Zero both SrcB banks once here, values = <true/false>. Only unpB_face_r_dim rows of each
+ *                    SrcB face are unpacked, so zeroing the rest saves FPU power.
+ * @param unpB_face_r_dim: Activation rows per face, 1, 2, 4 or 8. Sets unpacker 1's X end.
+ * @note Call this before @ref _llk_unpack_AB_compressed_custom_mm_, and again after any other op has run, in
+ *       particular one that writes SrcB, SCRATCH_SEC0-2 or those GPRs (a custom_mm execute rewrites SCRATCH_SEC0/1):
+ *       the execute relies on all of them and sets none.
+ * @note On the math thread, pair with @ref _llk_math_compressed_custom_mm_init_.
+ */
+template <bool transpose = false, bool clear_src = true>
 inline void _llk_unpack_AB_compressed_custom_mm_init_(const std::uint32_t unpB_face_r_dim)
 {
+    volatile std::uint32_t* cfg = get_cfg_pointer();
+
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(transpose ? 1 : 0);
 
     constexpr std::uint32_t unpA_x_end = TILE_NUM_FACES * FACE_R_DIM * FACE_C_DIM - 1;
@@ -77,8 +95,29 @@ inline void _llk_unpack_AB_compressed_custom_mm_init_(const std::uint32_t unpB_f
 
     _llk_unpack_AB_compressed_custom_mm_mop_config_();
 
+    if constexpr (clear_src)
+    {
+        // Clear SrcB as we only unpack into 1/8 FPU rows so zeroing them gives power savings
+        // This particular instruction clears both banks after waiting for both of them to be free
+        // It must run alone: a both-bank SrcB clear drops SrcA writes that unpacker 0 makes while it runs
+        TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::UNPACK);
+        TTI_UNPACR_NOP(SrcB, 0, 0, 0, 0, 0, 1, 0, p_unpacr_nop::CLR_SRC);
+        TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::UNPACK1);
+    }
+
     TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
     TTI_SETADCXY(0b011, 0, 0, 0, 0, 0b1010);
+
+    // These are RISC-V stores, so they can overtake unpacks still queued from the previous op (e.g. a
+    // tilize whose CFGSHIFTMASK reads SCRATCH_SEC0); wait for its contexts to retire first.
+    wait_for_next_context(1);
+
+    cfg[SCRATCH_SEC0_val_ADDR32]                   = 68;
+    cfg[SCRATCH_SEC1_val_ADDR32]                   = 36;
+    cfg[SCRATCH_SEC2_val_ADDR32]                   = 20;
+    regfile[p_gpr_unpack::PERF_UNPACK_NUM_TILES_3] = 0x10 | static_cast<std::uint32_t>(DataFormat::Bfp8_b);
+    regfile[p_gpr_unpack::PERF_UNPACK_NUM_TILES_2] = 0x10 | static_cast<std::uint32_t>(DataFormat::Bfp4_b);
+    regfile[p_gpr_unpack::PERF_UNPACK_NUM_TILES_1] = 0x10 | static_cast<std::uint32_t>(DataFormat::Bfp2_b);
 }
 
 constexpr std::uint32_t get_replay_insn_for_combo(const std::uint8_t combo)
@@ -124,7 +163,24 @@ constexpr std::uint32_t get_replay_insn_for_combo(const std::uint8_t combo)
     return lltt::replay_insn(start_idx + start_offset, replay_len);
 }
 
-template <bool clear_src = true>
+/**
+ * @brief Unpack a kt_dim x ct_dim block of compressed weight tiles into SrcA and the matching activation tiles into
+ *        SrcB, switching the SrcA format per tile as the metadata says.
+ *
+ * @param base_address_a: L1 address of the compressed weight stream (SrcA), in the 16-byte-word encoding of
+ *                        L1_ADDRESS(). Tiles are packed back to back at their own format's size; zero tiles take no
+ *                        space.
+ * @param base_address_b: L1 address of the activations (SrcB), in the same encoding.
+ * @param base_address_meta: Byte address of the per-tile metadata, read by the RISC-V (so not L1_ADDRESS()). Each
+ *                           word holds 10 tiles: the previous tile's format in bits 1:0, then per tile a use_b bit
+ *                           and a 2-bit format (0 zero, 1 bfp2, 2 bfp4, 3 bfp8).
+ * @param kt_dim: Inner dimension in tiles, an even number from 2 to 256.
+ * @param ct_dim: Output width in tiles, 1 to 16.
+ * @note Call @ref _llk_unpack_AB_compressed_custom_mm_init_ first.
+ * @note Every call ends on the to/from-bfp2 format stall, so the next call's metadata can start from the
+ *       previous-format sentinel (0) without encoding one.
+ * @note On the math thread, pair with @ref _llk_math_compressed_custom_mm_.
+ */
 inline void _llk_unpack_AB_compressed_custom_mm_(
     const std::uint32_t base_address_a,
     const std::uint32_t base_address_b,
@@ -132,7 +188,7 @@ inline void _llk_unpack_AB_compressed_custom_mm_(
     const std::uint32_t kt_dim,
     const std::uint32_t ct_dim = 1)
 {
-    constexpr std::uint32_t FMTABLE[32] = {
+    static constexpr std::uint32_t FMTABLE[32] = {
         get_replay_insn_for_combo(0b000'00), // 0b000'00 zero to zero
         get_replay_insn_for_combo(0b000'01), // 0b000'01 bfp2 to zero
         get_replay_insn_for_combo(0b000'10), // 0b000'10 bfp4 to zero
@@ -185,19 +241,8 @@ inline void _llk_unpack_AB_compressed_custom_mm_(
     wait_for_next_context(1);
     reset_config_context();
 
-    if constexpr (clear_src)
-    {
-        TTI_UNPACR_NOP(SrcB, 0, 0, 0, 0, 0, 1, 0, p_unpacr_nop::CLR_SRC);
-    }
-
-    cfg[THCON_SEC0_REG3_Base_address_ADDR32]       = address_a;
-    cfg[THCON_SEC1_REG3_Base_address_ADDR32]       = address_b;
-    cfg[SCRATCH_SEC0_val_ADDR32]                   = 68;
-    cfg[SCRATCH_SEC1_val_ADDR32]                   = 36;
-    cfg[SCRATCH_SEC2_val_ADDR32]                   = 20;
-    regfile[p_gpr_unpack::PERF_UNPACK_NUM_TILES_3] = 0x10 | static_cast<std::uint32_t>(DataFormat::Bfp8_b);
-    regfile[p_gpr_unpack::PERF_UNPACK_NUM_TILES_2] = 0x10 | static_cast<std::uint32_t>(DataFormat::Bfp4_b);
-    regfile[p_gpr_unpack::PERF_UNPACK_NUM_TILES_1] = 0x10 | static_cast<std::uint32_t>(DataFormat::Bfp2_b);
+    cfg[THCON_SEC0_REG3_Base_address_ADDR32] = address_a;
+    cfg[THCON_SEC1_REG3_Base_address_ADDR32] = address_b;
 
     semaphore_post(semaphore::UNPACK_SYNC);
 
@@ -237,7 +282,12 @@ inline void _llk_unpack_AB_compressed_custom_mm_(
         meta >>= 3;
     }
 
-    t6_semaphore_get<p_stall::UNPACK>(semaphore::UNPACK_SYNC);
+    t6_semaphore_get(semaphore::UNPACK_SYNC);
+
+    // The to/from bfp2 stall is encoded per tile only within a call; the first tile's prev format is a
+    // metadata sentinel, not the last format of the previous call, so always end on the stall. It only has
+    // to precede the next call's unpacks, so it goes after the SEMGET to keep it out of the context handshake.
+    TTI_UNPACR_NOP(SrcA, 0, 0, 0, 0, 1 /* Stall_Clr_Cntrl */, 0, 0, p_unpacr_nop::CLR_SRC);
 
     wait_for_next_context(1);
     reset_config_context();
