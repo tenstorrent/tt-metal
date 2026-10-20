@@ -23,7 +23,7 @@ import torch
 import ttml
 import ttnn
 from safetensors.numpy import save_file
-from ttml.common.schedulers import WarmupConstantScheduler, WarmupCosineScheduler
+from ttml.common.schedulers import CosineAnnealingScheduler, LinearScheduler, SequentialScheduler
 from ttml.common.utils import create_optimizer, no_grad, validate_clip_grad_norm
 
 from .callback import TrainerCallback
@@ -731,6 +731,25 @@ def iter_micro_batch(
         yield prompts[start:end], completions[start:end]
 
 
+def _build_lr_scheduler(optimizer: Any, cfg: GRPOConfig, total_steps: int) -> Any:
+    """LR scheduler for a non-constant ``cfg.lr_scheduler_type``.
+
+    Warmup trains 0-indexed step ``i`` at ``base_lr * (i + 1) / warmup_steps``; the cosine types then
+    decay to ``base_lr * min_lr_rate`` (0 for ``"cosine"``) at ``total_steps``.
+    """
+    base_lr = optimizer.get_lr()
+    warmup_steps = cfg.warmup_steps
+    warmup = LinearScheduler(optimizer, 1.0 / warmup_steps, 1.0, max(1, warmup_steps - 1)) if warmup_steps > 0 else None
+    decay_steps = total_steps - warmup_steps
+    if cfg.lr_scheduler_type == "constant_with_warmup" or decay_steps <= 0:
+        return warmup
+    min_lr_rate = cfg.min_lr_rate if cfg.lr_scheduler_type == "cosine_with_min_lr" else 0.0
+    decay = CosineAnnealingScheduler(optimizer, decay_steps, base_lr * min_lr_rate)
+    if warmup is None:
+        return decay
+    return SequentialScheduler(optimizer, [warmup, decay], [warmup_steps, decay_steps])
+
+
 def save_checkpoint(
     model: Any,
     step: int,
@@ -1139,14 +1158,8 @@ class GRPOTrainer:
                 f"or 'constant_with_warmup' with warmup_steps=0 (got lr_scheduler_type="
                 f"{grpo_cfg.lr_scheduler_type!r}, warmup_steps={grpo_cfg.warmup_steps})."
             )
-        if grpo_cfg.lr_scheduler_type == "constant_with_warmup" and grpo_cfg.warmup_steps > 0:
-            self._lr_scheduler = WarmupConstantScheduler(optimizer, grpo_cfg.warmup_steps)
-        elif grpo_cfg.lr_scheduler_type == "cosine":
-            self._lr_scheduler = WarmupCosineScheduler(optimizer, grpo_cfg.warmup_steps, total_optimizer_steps)
-        elif grpo_cfg.lr_scheduler_type == "cosine_with_min_lr":
-            self._lr_scheduler = WarmupCosineScheduler(
-                optimizer, grpo_cfg.warmup_steps, total_optimizer_steps, grpo_cfg.min_lr_rate
-            )
+        if not constant_lr:
+            self._lr_scheduler = _build_lr_scheduler(optimizer, grpo_cfg, total_optimizer_steps)
 
     # -- phase helpers -------------------------------------------------------
     #

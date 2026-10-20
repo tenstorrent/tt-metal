@@ -420,3 +420,38 @@ def test_validate_clip_grad_norm_rejects_sharded_params(monkeypatch, expect_erro
     monkeypatch.setattr(ttml.Sharding, "from_tensor", lambda tensor: SimpleNamespace(is_fully_replicated=False))
     with expect_error(ValueError, "not supported with sharded parameters"):
         validate_clip_grad_norm(_Model())
+
+
+@pytest.mark.parametrize(
+    "lr_scheduler_type, warmup_steps, total_steps, min_lr_rate, expected",
+    [
+        ("constant_with_warmup", 1, 3, 0.0, [1.0, 1.0, 1.0]),
+        ("constant_with_warmup", 2, 4, 0.0, [0.5, 1.0, 1.0, 1.0]),
+        ("constant_with_warmup", 4, 5, 0.0, [0.25, 0.5, 0.75, 1.0, 1.0]),
+        ("cosine", 0, 5, 0.0, [1.0, 0.904508, 0.654508, 0.345492, 0.095492]),
+        ("cosine_with_min_lr", 0, 5, 0.5, [1.0, 0.952254, 0.827254, 0.672746, 0.547746]),
+        ("cosine_with_min_lr", 0, 5, 0.9, [1.0, 0.990451, 0.965451, 0.934549, 0.909549]),
+        ("cosine_with_min_lr", 2, 6, 0.1, [0.5, 1.0, 1.0, 0.868198, 0.55, 0.231802]),
+        ("cosine", 0, 1, 0.0, [1.0]),
+        ("cosine", 4, 2, 0.0, [0.25, 0.5]),
+    ],
+)
+def test_build_lr_scheduler_trajectory(lr_scheduler_type, warmup_steps, total_steps, min_lr_rate, expected):
+    from ttml.trainers.grpo_trainer import _build_lr_scheduler
+
+    base_lr = 0.1
+    opt = ttml.optimizers.create_optimizer({"type": "AdamW", "lr": base_lr}, ttml.NamedParameters())
+    cfg = GRPOConfig(
+        **{
+            **_HOST_GRPO_CONFIG,
+            "lr_scheduler_type": lr_scheduler_type,
+            "warmup_steps": warmup_steps,
+            "min_lr_rate": min_lr_rate,
+        }
+    )
+    sched = _build_lr_scheduler(opt, cfg, total_steps)
+    lrs = []
+    for _ in range(total_steps):
+        lrs.append(opt.get_lr() / base_lr)
+        sched.step()
+    assert lrs == pytest.approx(expected, abs=1e-6)

@@ -24,8 +24,6 @@ from ttml.common.schedulers import (
     LinearScheduler,
     SequentialScheduler,
     StepScheduler,
-    WarmupConstantScheduler,
-    WarmupCosineScheduler,
 )
 
 
@@ -1421,81 +1419,6 @@ class TestMuonWithAdamWPerInnerScheduling:
         StepScheduler(dst.adamw_optimizer(), step_size=10, gamma=0.1)
         assert dst.get_lr() == pytest.approx(MUON_LR, abs=1e-8)
         assert dst.get_adamw_lr() == pytest.approx(ADAMW_LR, abs=1e-8)
-
-
-# ---------------------------------------------------------------------------
-# WarmupConstantScheduler / WarmupCosineScheduler
-#
-# Expected values are the LR (as a fraction of BASE_LR) each optimizer step
-# trains at. Decay values are HF ``cosine_with_min_lr``; warmup is (i + 1) / w.
-# ---------------------------------------------------------------------------
-
-
-def _trace(sched, n):
-    lrs = []
-    for _ in range(n):
-        lrs.append(sched.get_last_lr() / BASE_LR)
-        sched.step()
-    return lrs
-
-
-class TestWarmupConstantScheduler:
-    @pytest.mark.parametrize(
-        "warmup, expected",
-        [(1, [1.0, 1.0, 1.0]), (2, [0.5, 1.0, 1.0, 1.0]), (4, [0.25, 0.5, 0.75, 1.0, 1.0])],
-    )
-    def test_trajectory(self, warmup, expected):
-        sched = WarmupConstantScheduler(_make_opt(), warmup)
-        assert _trace(sched, len(expected)) == pytest.approx(expected, abs=1e-7)
-
-    def test_rejects_non_positive_warmup(self, expect_error):
-        with expect_error(ValueError, "must be greater than zero"):
-            WarmupConstantScheduler(_make_opt(), 0)
-
-
-class TestWarmupCosineScheduler:
-    @pytest.mark.parametrize(
-        "warmup, total, min_lr_rate, expected",
-        [
-            (0, 5, 0.0, [1.0, 0.904508, 0.654508, 0.345492, 0.095492]),
-            (2, 6, 0.1, [0.5, 1.0, 1.0, 0.868198, 0.55, 0.231802]),
-            (0, 1, 0.0, [1.0]),
-            (4, 2, 0.0, [0.25, 0.5]),
-        ],
-    )
-    def test_trajectory(self, warmup, total, min_lr_rate, expected):
-        sched = WarmupCosineScheduler(_make_opt(), warmup, total, min_lr_rate)
-        assert _trace(sched, total) == pytest.approx(expected, abs=1e-6)
-
-    @pytest.mark.parametrize(
-        "kwargs, message",
-        [
-            ({"total_steps": 0}, "total_steps = 0 must be greater than zero"),
-            ({"warmup_steps": -1}, "warmup_steps = -1 must be non-negative"),
-            ({"min_lr_rate": 1.5}, r"min_lr_rate = 1.5 must be in \[0, 1\]"),
-        ],
-    )
-    def test_rejects_invalid_args(self, expect_error, kwargs, message):
-        with expect_error(ValueError, message):
-            WarmupCosineScheduler(_make_opt(), **{"warmup_steps": 2, "total_steps": 6, **kwargs})
-
-
-class TestWarmupSchedulersStateDict:
-    def test_constant_roundtrip(self):
-        def make():
-            opt = _make_opt()
-            return opt, WarmupConstantScheduler(opt, 10)
-
-        resumed, reference = _roundtrip(make)
-        assert resumed == pytest.approx(reference, abs=1e-7)
-
-    def test_cosine_roundtrip(self):
-        def make():
-            opt = _make_opt()
-            return opt, WarmupCosineScheduler(opt, 10, N_STEPS, 0.1)
-
-        resumed, reference = _roundtrip(make)
-        assert resumed == pytest.approx(reference, abs=1e-7)
 
 
 if __name__ == "__main__":
