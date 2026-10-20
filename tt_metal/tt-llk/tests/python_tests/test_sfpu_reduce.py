@@ -26,6 +26,12 @@ from helpers.param_config import (
     get_num_blocks_and_num_tiles_in_block,
     parametrize,
 )
+from helpers.reduce_prod import (
+    PROD_DIMENSIONS,
+    PROD_STIMULI,
+    generate_prod_stimuli,
+    prod_result_bounds,
+)
 from helpers.sfpu_domains import generated_nan_sign_is_asserted, specials_safe
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_config import TestConfig
@@ -466,41 +472,6 @@ PROD_FORMATS = [
     InputOutputFormat(DataFormat.Float32, DataFormat.Float32),
     InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
 ]
-PROD_DIMENSIONS = [[TILE_DIM, TILE_DIM], [2 * TILE_DIM, 2 * TILE_DIM]]
-
-
-def generate_prod_stimuli(stimulus: str, tile_cnt: int) -> torch.Tensor:
-    """Per-tile PROD stimuli, laid out tile by tile (the product does not depend on the order).
-
-    ``pow2``: +-1, +-2 and +-0.5 only, with t + 1 more 2s than 0.5s in tile t, so every partial
-    product is an exact power of two and a dropped value, lane or sign shows up as a bit mismatch.
-    ``near_one``: random signs on magnitudes in (0.9, 1.1), so the product stays in range while the
-    fp32 multiply chain rounds.
-    """
-    gen = torch.Generator().manual_seed(48794)
-    tiles = []
-    for t in range(tile_cnt):
-        if stimulus == "pow2":
-            magnitudes = torch.ones(ELEMENTS_PER_TILE)
-            magnitudes[: 64 + t + 1] = 2.0
-            magnitudes[64 + t + 1 : 128 + t + 1] = 0.5
-            magnitudes = magnitudes[torch.randperm(ELEMENTS_PER_TILE, generator=gen)]
-        else:
-            magnitudes = torch.empty(ELEMENTS_PER_TILE).uniform_(
-                0.9, 1.1, generator=gen
-            )
-        signs = torch.where(
-            torch.rand(ELEMENTS_PER_TILE, generator=gen) < 0.5, -1.0, 1.0
-        )
-        tiles.append(magnitudes * signs)
-    return torch.cat(tiles)
-
-
-def get_prod_rtol(stimulus: str, output_format: DataFormat) -> float:
-    """pow2 products are exact. near_one allows ~1023 fp32 roundings plus one output-format rounding."""
-    if stimulus == "pow2":
-        return 0.0
-    return 3e-4 + 2 * _FLOAT_FORMAT_EPS[output_format]
 
 
 @parametrize(
@@ -510,7 +481,7 @@ def get_prod_rtol(stimulus: str, output_format: DataFormat) -> float:
         if formats.input_format.is_32_bit()
         else [DestAccumulation.No, DestAccumulation.Yes]
     ),
-    stimulus=["pow2", "near_one"],
+    stimulus=PROD_STIMULI,
     dimension_combinations=PROD_DIMENSIONS,
 )
 def test_sfpu_reduce_prod(formats, dest_acc, stimulus, dimension_combinations):
@@ -530,14 +501,7 @@ def test_sfpu_reduce_prod(formats, dest_acc, stimulus, dimension_combinations):
         format_dict[formats.input_format]
     )
     src_B = torch.zeros_like(src_A)
-
-    golden = (
-        src_A.to(torch.float64)
-        .view(tile_cnt, ELEMENTS_PER_TILE)
-        .prod(dim=1)
-        .to(format_dict[formats.output_format])
-        .to(torch.float64)
-    )
+    lower, upper = prod_result_bounds(src_A, tile_cnt, stimulus, formats, dest_acc)
 
     configuration = TestConfig(
         "sources/sfpu_reduce_test.cpp",
@@ -573,10 +537,9 @@ def test_sfpu_reduce_prod(formats, dest_acc, stimulus, dimension_combinations):
     # Element [0][0] of every tile: the first datum of its face 0.
     result = res_tensor.view(tile_cnt, ELEMENTS_PER_TILE)[:, 0].to(torch.float64)
 
-    rtol = get_prod_rtol(stimulus, formats.output_format)
-    assert torch.allclose(result, golden, rtol=rtol, atol=0.0), (
-        f"scalar PROD mismatch ({stimulus}): golden={golden.tolist()} device={result.tolist()} "
-        f"rtol={rtol}"
+    assert torch.all((result >= lower) & (result <= upper)), (
+        f"scalar PROD mismatch ({stimulus}): device={result.tolist()} "
+        f"allowed=[{lower.tolist()}, {upper.tolist()}]"
     )
 
 

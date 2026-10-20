@@ -1693,11 +1693,13 @@ inline void calculate_reduce_sum_avg(std::uint32_t block_ct_dim, std::uint32_t b
 // The tile is 8 slices (4 faces x even/odd columns) of 4 SFPLOAD row groups each. Every lane multiplies its share
 // of the tile into LREG0 / LREG4, the two accumulators fold into LREG0, SFPTRANSP brings LREG0's 4 rows onto row 0 of
 // LREG0-3 for a 3-multiply fold, and an SFPSHFT2 butterfly folds the 8 columns. All multiplies stay in the fp32 LREGs,
-// so only the final store rounds. Each consumer issues at least one instruction after its producer, which covers the
-// 2-cycle SFPMAD and SFPSHFT2 latency.
+// so only the final store narrows; into a 16-bit Dest SFPSTORE truncates toward zero rather than rounding. Each
+// consumer issues at least one instruction after its producer, which covers the 2-cycle SFPMAD and SFPSHFT2 latency.
 
-constexpr std::uint32_t SCALAR_PROD_FACE_ADDRS[NUM_FACES] = {0, 16, 32, 48};
-constexpr std::uint32_t SCALAR_PROD_COLUMN_OFFSETS[2] = {0, 2};  // even, odd columns
+// Dest address of slice `slice`: face slice / 2, even (0) or odd (1) columns by slice % 2.
+constexpr std::uint32_t scalar_prod_slice_addr(const std::uint32_t slice) {
+    return (slice / 2) * ROWS_PER_FACE + COLUMN_OFFSETS[slice % 2];
+}
 
 /**
  * @brief Multiply one slice (16 rows x 8 columns) into the lane accumulators: LREG0 takes row groups 0 and 2,
@@ -1729,10 +1731,10 @@ inline void scalar_prod_accumulate_slice(const std::uint32_t slice_addr) {
  */
 inline void scalar_prod_fold_columns() {
     for (std::uint32_t shift = 4; shift > 0; shift >>= 1) {
-        TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);
-        for (std::uint32_t step = 0; step < shift; step++) {
+        TTI_SFPSHFT2(0, p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+        for (std::uint32_t step = 1; step < shift; step++) {
             TTI_SFPNOP;
-            TTI_SFPSHFT2(0, p_sfpu::LREG1, p_sfpu::LREG1, 3);  // rotate right by one column
+            TTI_SFPSHFT2(0, p_sfpu::LREG1, p_sfpu::LREG1, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
         }
         TTI_SFPNOP;
         TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
@@ -1747,11 +1749,9 @@ inline void scalar_prod_fold_columns() {
  */
 template <InstrModLoadStore INSTRUCTION_MODE>
 inline void perform_reduce_scalar_prod() {
-    scalar_prod_accumulate_slice<INSTRUCTION_MODE, true /*seed*/>(
-        SCALAR_PROD_FACE_ADDRS[0] + SCALAR_PROD_COLUMN_OFFSETS[0]);
+    scalar_prod_accumulate_slice<INSTRUCTION_MODE, true /*seed*/>(scalar_prod_slice_addr(0));
     for (std::uint32_t slice = 1; slice < 2 * NUM_FACES; slice++) {
-        scalar_prod_accumulate_slice<INSTRUCTION_MODE, false /*seed*/>(
-            SCALAR_PROD_FACE_ADDRS[slice / 2] + SCALAR_PROD_COLUMN_OFFSETS[slice % 2]);
+        scalar_prod_accumulate_slice<INSTRUCTION_MODE, false /*seed*/>(scalar_prod_slice_addr(slice));
     }
 
     // Each lane of LREG0 then holds the product of 32 values.

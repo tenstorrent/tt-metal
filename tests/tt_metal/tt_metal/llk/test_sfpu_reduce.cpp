@@ -196,6 +196,20 @@ std::vector<double> as_seen_by_device(const std::vector<std::uint32_t>& encoded,
     return values;
 }
 
+// Scalar PROD tiles cycle through three stimuli, by tile index.
+enum class ProdTile { PowerOfTwo, NearOne, Zero };
+constexpr std::uint32_t kProdTileKinds = 3;
+// NearOne magnitudes lie in [1 - spread, 1 + spread]: the fp32 multiply chain rounds, and a 1024-value
+// product stays far inside fp16's range.
+constexpr double kProdNearOneSpread = 0.05;
+// Relative error the ~1023 fp32 multiplies may build up; covers 1023 * 2^-23, the all-truncating worst case.
+constexpr double kProdFp32ChainRtol = 3e-4;
+// A PowerOfTwo tile holds this many 0.5s and (tile % kProdPow2ExtraTwosCycle) + 1 more 2s than that.
+constexpr std::uint32_t kProdPow2HalvesPerTile = 64;
+constexpr std::uint32_t kProdPow2ExtraTwosCycle = 4;
+
+ProdTile prod_tile_kind(std::uint32_t tile) { return static_cast<ProdTile>(tile % kProdTileKinds); }
+
 // Stimulus in a range the accumulating pools can hold. A row reduce folds block_ct_dim * 32 terms,
 // so the bound is chosen against the widest fold the config asks for rather than a fixed span.
 std::vector<double> generate_stimulus(
@@ -205,17 +219,28 @@ std::vector<double> generate_stimulus(
 
     std::vector<double> values(static_cast<size_t>(rows) * cols);
     if (config.pool == ReducePool::Prod) {
-        // +-1, +-2 and +-0.5 only, with (tile % 4) + 1 more 2s than 0.5s per tile: exact in every float
-        // format (and TF32), so the product is exact and a dropped value or sign is a mismatch.
+        // PowerOfTwo is exact even in TF32: a lost sign or a dropped or duplicated +-2/+-0.5 mismatches; a dropped +-1
+        // does not. NearOne exercises fp32 rounding; Zero plants one 0, so its product must be exactly 0.
         std::uniform_int_distribution<int> sign(0, 1);
+        std::uniform_real_distribution<double> near_one(1.0 - kProdNearOneSpread, 1.0 + kProdNearOneSpread);
+        std::uniform_int_distribution<std::uint32_t> position(0, kTileHeight * kTileWidth - 1);
         std::uint32_t tile = 0;
         for (std::uint32_t tr = 0; tr < rows / kTileHeight; ++tr) {
             for (std::uint32_t tc = 0; tc < cols / kTileWidth; ++tc, ++tile) {
-                const std::uint32_t twos = 64 + (tile % 4) + 1;
                 std::vector<double> tile_values(kTileHeight * kTileWidth, 1.0);
-                std::fill_n(tile_values.begin(), twos, 2.0);
-                std::fill_n(tile_values.begin() + twos, 64, 0.5);
-                std::shuffle(tile_values.begin(), tile_values.end(), gen);
+                if (prod_tile_kind(tile) == ProdTile::PowerOfTwo) {
+                    const std::uint32_t twos = kProdPow2HalvesPerTile + (tile % kProdPow2ExtraTwosCycle) + 1;
+                    std::fill_n(tile_values.begin(), twos, 2.0);
+                    std::fill_n(tile_values.begin() + twos, kProdPow2HalvesPerTile, 0.5);
+                    std::shuffle(tile_values.begin(), tile_values.end(), gen);
+                } else {
+                    for (auto& v : tile_values) {
+                        v = near_one(gen);
+                    }
+                    if (prod_tile_kind(tile) == ProdTile::Zero) {
+                        tile_values[position(gen)] = 0.0;
+                    }
+                }
                 for (std::uint32_t i = 0; i < kTileHeight * kTileWidth; ++i) {
                     const size_t row = static_cast<size_t>(tr) * kTileHeight + i / kTileWidth;
                     const size_t col = static_cast<size_t>(tc) * kTileWidth + i % kTileWidth;
@@ -357,12 +382,11 @@ double output_ulp(tt::DataFormat format, double value) {
     return std::ldexp(1.0, std::ilogb(value) - mantissa_bits);
 }
 
-// Allowed |device - golden| per element. MAX/MIN, PROD (power-of-two stimuli) and the integer pools are exact.
-// SUM/AVG fold in fp32 and round once at the final store, so they get one ulp of the result plus fp32 fold headroom
-// (~1e-6 real error; the bound stays well below a result rounded to bf16 or tf32 precision).
+// Allowed |device - golden| per element. MAX/MIN and the integer pools are exact. SUM/AVG fold in fp32 and round once
+// at the final store, so they get one ulp of the result plus fp32 fold headroom (~1e-6 real error; the bound stays well
+// below a result rounded to bf16 or tf32 precision).
 double reduce_tolerance(const SfpuReduceConfig& config, std::uint32_t cols, double golden) {
-    if (is_int_format(config.format) || config.pool == ReducePool::Max || config.pool == ReducePool::Min ||
-        config.pool == ReducePool::Prod) {
+    if (is_int_format(config.format) || config.pool == ReducePool::Max || config.pool == ReducePool::Min) {
         return 0.0;
     }
     const double num_terms = (config.axis == ReduceAxis::Row) ? cols : kTileHeight;
@@ -371,6 +395,16 @@ double reduce_tolerance(const SfpuReduceConfig& config, std::uint32_t cols, doub
         fold /= num_terms;
     }
     return fold + kFp32FoldRtol * std::abs(golden) + output_ulp(config.format, golden);
+}
+
+// Allowed |device - golden| for scalar PROD tile `tile`. PowerOfTwo and Zero tiles are exact. A NearOne tile gets the
+// fp32 chain's error plus two output ulps: the store narrows once, truncating into a 16-bit Dest, and the chain's
+// result may sit in a different binade than the golden.
+double prod_tolerance(tt::DataFormat format, std::uint32_t tile, double golden) {
+    if (prod_tile_kind(tile) != ProdTile::NearOne) {
+        return 0.0;
+    }
+    return kProdFp32ChainRtol * std::abs(golden) + 2.0 * output_ulp(format, golden);
 }
 
 void run_single_core_sfpu_reduce(
@@ -551,7 +585,9 @@ void run_single_core_sfpu_reduce(
 
     for (size_t i = 0; i < golden.size(); ++i) {
         const double diff = std::abs(golden[i] - device[i]);
-        const double tolerance = reduce_tolerance(config, cols, golden[i]);
+        const double tolerance = (config.pool == ReducePool::Prod)
+                                     ? prod_tolerance(config.format, static_cast<std::uint32_t>(i), golden[i])
+                                     : reduce_tolerance(config, cols, golden[i]);
         ASSERT_LE(diff, tolerance) << fmt::format(
             "mismatch at {}: golden={} device={} (tolerance={} seed={})", i, golden[i], device[i], tolerance, seed);
     }
@@ -676,8 +712,8 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixComputeSfpuReduceWideDest) {
     }
 }
 
-// Scalar PROD on every arch: one product per tile into its element [0][0]. Streams tiles through Dest
-// one at a time and holds a two-tile block; Float16_b also runs in a 32-bit Dest.
+// Scalar PROD on every arch: one product per tile into its element [0][0]. Streams three tiles through Dest one at a
+// time and holds two two-tile blocks, so both cover every ProdTile kind; Float16_b also runs in a 32-bit Dest.
 TEST_F(LLKMeshDeviceSingleCardFixture, TensixComputeSfpuReduceScalarProd) {
     std::vector<tt::DataFormat> formats = {tt::DataFormat::Float16_b, tt::DataFormat::Float32};
     if (this->devices_.at(0)->arch() == tt::ARCH::QUASAR) {
@@ -694,7 +730,7 @@ TEST_F(LLKMeshDeviceSingleCardFixture, TensixComputeSfpuReduceScalarProd) {
                     SfpuReduceConfig{
                         .block_ct_dim = block_ct_dim,
                         .block_rt_dim = 1,
-                        .num_blocks = (block_ct_dim == 1) ? 2u : 1u,
+                        .num_blocks = (block_ct_dim == 1) ? 3u : 2u,
                         .axis = ReduceAxis::Scalar,
                         .pool = ReducePool::Prod,
                         .format = format,

@@ -39,8 +39,8 @@ constexpr std::uint32_t REDUCE_COLS_PER_TILE = TILE_C_DIM;
 // instruction into a Load Macro register instead of executing it, while 9/10/11 hold the constants
 // 0.0, 1.0 and -1.0 - no ordinary SFPU instruction writes those, but SFPCONFIG can reprogram them
 // (see @ref init_reduce).
-constexpr std::uint32_t REDUCE_ACC_REG = p_sfpu::LREG4;    // row reduce: running per-row total
-constexpr std::uint32_t REDUCE_ROT_REG = p_sfpu::LREG5;    // row reduce: rotated copy of the accumulator
+constexpr std::uint32_t REDUCE_ACC_REG = p_sfpu::LREG4;    // row reduce: running per-row total; scalar PROD: product
+constexpr std::uint32_t REDUCE_ROT_REG = p_sfpu::LREG5;    // row reduce and scalar PROD: rotated accumulator copy
 constexpr std::uint32_t REDUCE_RECIP_REG = p_sfpu::LREG6;  // row AVG: 1/num_cols, live for the whole block
 
 // bfloat16 encoding of 1/REDUCE_COL_EXTENT, the column-AVG divisor. A power of two, so the
@@ -270,7 +270,7 @@ inline void reduce_col_tile() {
  * then by 2, then by 1. After three stages every column holds the total of all eight, so the store
  * that follows is correct whichever lane the packer reads.
  *
- * @tparam POOL_TYPE: Reduction operator, values = <SUM/AVG/MAX/MIN>
+ * @tparam POOL_TYPE: Reduction operator, values = <SUM/AVG/MAX/MIN/PROD>
  * @tparam IS_INT: Whether operands are integers
  * @note An SFPNOP separates each rotate from its reader: SFPSHFT2 takes 2 cycles and this kernel
  *       does not assume the pipeline interlocks a dependent read.
@@ -427,7 +427,8 @@ inline void reduce_scalar_prod_slice(const std::uint32_t slice_addr) {
  * Every lane multiplies its share of the tile's 8 slices (4 faces x 2 column parities) into
  * LREG0 / LREG4. The two accumulators then fold into LREG0, SFPTRANSP spreads its 4 rows across
  * row 0 of LREG0-3 for the row fold, and @ref reduce_row_fold_columns folds the 8 columns. Every
- * multiply stays in the fp32 lanes, so only the final store rounds.
+ * multiply stays in the fp32 lanes, so only the final store narrows; into a 16-bit Dest SFPSTORE
+ * truncates toward zero rather than rounding.
  *
  * @tparam FORMAT: Math-side data format of the operand
  * @note Only element [0][0] is defined afterwards; rows 0-3 of face 0's even columns keep fold

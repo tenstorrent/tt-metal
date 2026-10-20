@@ -495,8 +495,8 @@ inline void _llk_math_reduce_addrmod_(const MathFidelitySchedule fidelity, const
  * @note @ref _llk_math_reduce_ runs the configured reduction with matching template args.
  * @note Pass the source register formats: for SUM/AVG, init lowers the fidelity to the highest one they can use and skips phases they
  *       cannot use. Run init again whenever either format changes.
- * @note PoolType::MIN is rejected here. Nothing reduces without this init, so that closes the whole
- *       FPU path to it.
+ * @note PoolType::MIN and PoolType::PROD are rejected here. Nothing reduces without this init, so
+ *       that closes the whole FPU path to them.
  */
 template <PoolType POOL_TYPE, ReduceDim REDUCE_DIMENSION, bool EN_32BIT_DEST, ckernel::MathFidelity MATH_FIDELITY_TYPE, bool is_int_fpu_en = false>
 inline void _llk_math_reduce_init_(const DataFormat src_a_format, const DataFormat src_b_format, const TensorShape tensor_shape)
