@@ -179,6 +179,16 @@ class PagedStateSink:
         if self.taps is not None:
             h2d(self.taps.upload(self._host_taps(s0, C), host=True), bufs["tap"])
 
+    def write_lat(self, attn, lat):
+        """PF1 (tt/prefill_paged.py): the chunk's latents of the kv-source layer ``attn`` into the pool pages, BEFORE its indexer / attention; ``write`` then skips them."""
+        Cc = int(lat.shape[2])
+        C = Cc * attn.ratio
+        bufs = self.bufs[C]
+        src = ttnn.to_layout(ttnn.reshape(lat, [1, 1, self.U * Cc, HEAD_DIM]), ttnn.ROW_MAJOR_LAYOUT)
+        P.paged_scatter_rows(self.pool.pool, src, bufs["lat"][attn.src_layer])
+        ttnn.deallocate(src)
+        attn.prefill._lat_written = True
+
     # ---- the sink (trace-safe: static shapes, persistent index tensors) --------------------------------------------------------------
     def write(self, attn, pa, kv, lat, cs, s0, C, h):
         pool, U = self.pool, self.U
@@ -201,7 +211,11 @@ class PagedStateSink:
         src = ttnn.to_layout(ttnn.reshape(kv, [1, 1, U * C, HEAD_DIM]), ttnn.ROW_MAJOR_LAYOUT)
         P.paged_scatter_rows(pool.pool, src, bufs["ring"], base_offset=pool.ring_base(attn.ring_slot))
         ttnn.deallocate(src)
-        if lat is not None and "lat" not in skip:  # kv-source layer: its latents live in the shared pages
+        lat_done = getattr(attn.prefill, "_lat_written", False)
+        attn.prefill._lat_written = False
+        if (
+            lat is not None and "lat" not in skip and not lat_done
+        ):  # kv-source layer: its latents live in the shared pages
             Cc = C // attn.ratio
             src = ttnn.to_layout(ttnn.reshape(lat, [1, 1, U * Cc, HEAD_DIM]), ttnn.ROW_MAJOR_LAYOUT)
             P.paged_scatter_rows(pool.pool, src, bufs["lat"][attn.src_layer])

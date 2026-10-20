@@ -41,7 +41,15 @@ class PagedKVPool:
     """Device tensors of the paged KV cache of ONE mesh: pool, page table, ring regions; plus the host allocators (one per mesh row)."""
 
     def __init__(
-        self, mesh_device, users_per_row, num_pages, n_ring_layers, max_ctx, ring_rows=RING_ROWS, dtype=ttnn.bfloat16
+        self,
+        mesh_device,
+        users_per_row,
+        num_pages,
+        n_ring_layers,
+        max_ctx,
+        ring_rows=RING_ROWS,
+        dtype=ttnn.bfloat16,
+        scratch_rows=0,
     ):
         from models.demos.blackhole.deepseek_v41_flash.tt.kv_paged import PageAllocator
 
@@ -57,7 +65,10 @@ class PagedKVPool:
         self.max_pages = -(-max_ctx // PAGE_TOKENS)
         self.ring_origin = num_pages * PAGE_ROWS
         self.n_ring_layers = n_ring_layers
-        self.total_rows = self.ring_origin + n_ring_layers * users_per_row * ring_rows
+        # paged prefill (tt/prefill_paged.py): window scratch rows of the prefill slots, after the rings
+        self.scratch_origin = self.ring_origin + n_ring_layers * users_per_row * ring_rows
+        self.scratch_rows = scratch_rows
+        self.total_rows = self.scratch_origin + scratch_rows
         if dtype == ttnn.bfloat16:
             self.pool = ttnn.zeros(
                 ttnn.Shape([1, 1, self.total_rows, HEAD_DIM]),

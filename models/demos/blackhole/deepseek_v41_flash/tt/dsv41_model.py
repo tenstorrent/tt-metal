@@ -21,6 +21,7 @@ import torch
 
 import ttnn
 from models.demos.blackhole.deepseek_v41_flash.reference import ref_layer as R
+from models.demos.blackhole.deepseek_v41_flash.tt import prefill_paged as PGM
 from models.demos.blackhole.deepseek_v41_flash.tt import uni_policy
 from models.demos.blackhole.deepseek_v41_flash.tt.decoder import DSV41Decoder
 from models.demos.blackhole.deepseek_v41_flash.tt.device_head import DSV41DeviceEmbedding, DSV41DeviceHead
@@ -125,8 +126,12 @@ class Model:
                 os.environ.get("DSV41_RING_ROWS", "128")
             ),  # 160 = window + speculative-decoding slack (tt/spec_paged.py RING_SPEC)
             dtype=kv_dtype,
+            scratch_rows=PGM.scratch_rows(self.Up, int(os.environ.get("DSV41_PF_CMAX", "2048")))
+            if PGM.MODE != "0"
+            else 0,
         )
         self.sink = PagedStateSink(mesh_device, self.pool, self.Up, decode_users=self.U)
+        PGM.bind(self.sink)
         # speculative builds (pool ring rows for the spec runners): the prefill chunk trace also writes the drafter's taps (layers 37-39 stream means of the last 128 positions of every
         # user, tt/prefill_taps.py), which seed the drafter after the prefill instead of replaying the prompt tail through the verify trace. ``tap_n[user]`` = prompt length the stash holds.
         self.tap_n = {}
@@ -170,6 +175,7 @@ class Model:
                 chain.moe_buffers = layer.moe.decode.buffers
             pa = DSV41PrefillAttention(attn, w["attn"]["attn_sink"].float(), users=self.Up)
             pa.state_sink = functools.partial(self.sink.write, attn)
+            pa.lat_sink = functools.partial(self.sink.write_lat, attn)
             attn.prefill = pa
             pmoe = DSV41PrefillMoE(layer.moe, T=T, buffers=None if first_pmoe is None else first_pmoe.decode.buffers)
             first_pmoe = first_pmoe or pmoe

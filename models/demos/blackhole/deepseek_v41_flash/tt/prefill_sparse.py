@@ -26,6 +26,7 @@ import torch
 
 import ttnn
 from models.demos.blackhole.deepseek_v41_flash.tt import pf_tune
+from models.demos.blackhole.deepseek_v41_flash.tt import prefill_paged as PG
 from models.demos.blackhole.deepseek_v41_flash.tt.attention import HEAD_DIM, LOCAL_HEADS, WINDOW
 from models.demos.blackhole.deepseek_v41_flash.tt.h2d import h2d
 from models.demos.blackhole.deepseek_v41_flash.tt.indexer import DIM as IDIM
@@ -125,6 +126,26 @@ class PrefillKV:
         )
         if full is not kv:
             ttnn.deallocate(full)
+
+
+class PagedView:
+    """Stands in for ``PrefillKV`` of a kv-source group when the prefill reads the paged pool (DSV41_PF_PAGED=read): no table is allocated, only the dtype / format of the pool."""
+
+    def __init__(self, pool):
+        self.t = None
+        self.dt = pool.dtype
+        self.fmt = (
+            ttnn.transformer.SparseKVFormat.BF16
+            if pool.dtype == ttnn.bfloat16
+            else ttnn.transformer.SparseKVFormat.FP8_E4M3
+        )
+
+    def rm(self, x):
+        x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+        return x if x.dtype == self.dt else ttnn.typecast(x, self.dt)
+
+    def free(self):
+        pass
 
 
 def zeros_rm(md, shape):
@@ -821,9 +842,10 @@ class DSV41PrefillSparse:
         if not self.dyn_on:
             return
         cols = shard_cols(self.md, L, ctx.C, r) if self.indexer is not None else 0
+        paged = PG.read_on()
         if self.owner:
             self._free_tables()  # the eager-sized tables (or those of a previous capture) are replaced, never leaked
-            self.kvt = PrefillKV(self.md, self.U, L, ctx.C)
+            self.kvt = PagedView(PG.BOUND["sink"].pool) if paged else PrefillKV(self.md, self.U, L, ctx.C)
             if self.indexer is not None and self.indexer.key_owner is None and not cols:
                 ix = self.indexer
                 ix.KL = L
@@ -837,6 +859,10 @@ class DSV41PrefillSparse:
                 self.indexer.alloc_shard(ctx, L, cols, pa.a.mesh_config, pa.a.ccl, self.indexer.key_owner is None)
             else:
                 self.indexer.sh = None
+        if paged and not hasattr(ctx, "pg"):
+            assert PG.BOUND["sink"].pool.dtype == ttnn.bfloat16, "DSV41_PF_PAGED=read needs a bf16 pool (P1)"
+            ctx.pg = PG.PagedCtx(self.md, ctx, self.U)
+            ctx.upd_hooks.append(lambda c, s0: c.pg.update(s0))
         if not hasattr(ctx, "sp_win"):
             ctx.sp_win, ctx.sp_vis = {}, {}
             ctx.upd_hooks.append(self._upd_hook)
@@ -944,7 +970,12 @@ class DSV41PrefillSparse:
         r, L, C = pa.ratio, ctx.L[pa.ratio], ctx.C
         Cc = C // r
         kt = self.kvt.t
-        if lat is not None:  # latent FIFO (kv table rows [0, L))
+        paged = PG.read_on()
+        if (
+            lat is not None and PG.write_on()
+        ):  # PF1: the chunk's latents go to the pool pages BEFORE the indexer / attention
+            pa.lat_sink(lat)
+        if lat is not None and not paged:  # latent FIFO (kv table rows [0, L))
             if (
                 L == Cc
             ):  # single-chunk prompt (S_pad == C): the FIFO is just this chunk (a zero-length slice breaks the concat)
@@ -994,23 +1025,33 @@ class DSV41PrefillSparse:
             tab = ctx.lat_tabs[r] if r > 1 else ctx.tabs[True]
             (ix.add_keys_dyn_sharded if ix.sh else ix.add_keys_dyn)(lat_pre, tab, Cc, ctx)
         full = self.kvt.rm(ttnn.concat([halo, kv], dim=2))
-        ttnn.experimental.slice_write(full, kt, [0, 0, L, 0], [U, 1, L + WINDOW + C, HEAD_DIM], [1, 1, 1, 1])
+        if paged:
+            ctx.pg.write_window(full)
+        else:
+            ttnn.experimental.slice_write(full, kt, [0, 0, L, 0], [U, 1, L + WINDOW + C, HEAD_DIM], [1, 1, 1, 1])
         ttnn.deallocate(full)
         if ix is not None:
             self.ids = (ix.select_dyn_sharded if ix.sh else ix.select_dyn)(h, qr, ctx.tabs[True], ctx.sp_vis[r], C, L)
+            if paged:  # FIFO slots -> pool rows (one translation per (kv source, index source) pair)
+                if getattr(self, "pids", None) is not None:
+                    ttnn.deallocate(self.pids)
+                self.pids = ctx.pg.translate(self.ids, r, pa.a.src_layer)
         ids = self.ids if ix is not None else self.idx_src.ids
+        if paged:
+            ids = self.pids if ix is not None else self.idx_src.pids
         win = ctx.sp_win[r]
         zero_heads = zeros_rm(self.md, [1, PAD_HEADS - LOCAL_HEADS, C, HEAD_DIM])
         outs = []
         for u in range(U):
+            wu = ttnn.slice(ctx.pg.win, [u, 0, 0, 0], [u + 1, 1, C, WINDOW]) if paged else win
             idx = compact_rows(
-                ttnn.concat([win, ttnn.slice(ids, [u, 0, 0, 0], [u + 1, 1, C, TOPK])], dim=3), ctx.sp_perm
+                ttnn.concat([wu, ttnn.slice(ids, [u, 0, 0, 0], [u + 1, 1, C, TOPK])], dim=3), ctx.sp_perm
             )
             qu = ttnn.to_layout(ttnn.slice(qh, [u, 0, 0, 0], [u + 1, LOCAL_HEADS, C, HEAD_DIM]), ttnn.ROW_MAJOR_LAYOUT)
             qu = ttnn.concat([qu, zero_heads], dim=1)
             o = ttnn.transformer.sparse_sdpa(
                 qu,
-                kt,
+                ctx.pg.pool.pool if paged else kt,
                 idx,
                 HEAD_DIM,
                 kv_format=self.kvt.fmt,
@@ -1018,7 +1059,7 @@ class DSV41PrefillSparse:
                 k_chunk_size=pf_tune.SP_KC,
                 compute_kernel_config=pa.ckc_sdpa,
                 attention_sink=self.sink,
-                cache_batch_idx=u,
+                **({} if paged else {"cache_batch_idx": u}),
             )
             ttnn.deallocate(qu)
             ttnn.deallocate(idx)
