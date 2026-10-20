@@ -532,6 +532,9 @@ class TtDSA(LightweightModule):
             packer_l1_acc=False,
         )
         self.stage_timer: StageTimer | None = None
+        # test hook: ``on_indices(query_start, indices)`` sees every sparse-prefill index block [1,1,rows,W]
+        # (uint32 ROW_MAJOR, read-only, deallocated after the call) with the absolute position of its first row
+        self.on_indices = None
         if fused_decode is None:
             self.fused_decode = DSA_FUSED_DEFAULT
         elif isinstance(fused_decode, bool):
@@ -740,11 +743,16 @@ class TtDSA(LightweightModule):
             raise ValueError(f"start {start} must be a multiple of the cache block size {cache.block_size}")
         end = start + seq_len
         split = min(T, max(0, self.sparse_row_start - start))  # chunk rows [0, split) are dense
+        if self.stage_timer is not None:
+            self.stage_timer.start()
         q_resid = self._q_resid(x)
         q = self._q(q_resid)  # [1,1,T,H*Dq]
         c = self._latent(x)  # [1,1,T,L]
+        self._mark("prefill_stems")
         cache.fill(c, user, start=start)
+        self._mark("cache_fill")
         self.indexer.maintain_prefill(x, cache.index, user, seq_len, start=start)
+        self._mark("index_maintain")
         prefix = cache.user_rows(user, start) if start and split else None  # [1,1,start,L]
         if split == T:
             ttnn.deallocate(q_resid)
@@ -753,7 +761,10 @@ class TtDSA(LightweightModule):
             ttnn.deallocate(c)
             if prefix is not None:
                 ttnn.deallocate(prefix)
-            return self._o_proj(o)
+            self._mark("dense_attention")
+            y = self._o_proj(o)
+            self._mark("out_proj")
+            return y
         # dense rows [0, split) (absolute positions [start, 2048))
         o_dense = None
         if split:
@@ -765,6 +776,7 @@ class TtDSA(LightweightModule):
             )
             if prefix is not None:
                 ttnn.deallocate(prefix)
+            self._mark("dense_attention")
         ttnn.deallocate(c)
         # sparse rows [split, T) (absolute positions from max(start, 2048)) in query sub-blocks of
         # GLM53_PREFILL_QBLOCK rows (default 2048): the prefill scorer emits [rows, pools] bf16 scores (1 GB per
@@ -773,6 +785,7 @@ class TtDSA(LightweightModule):
         idx = self.indexer
         rows_form = idx.prefill_scorer_custom  # the custom scorer's query layout (multi-row meshes; knob)
         kv_rm = cache.user_rows_rm(user, start + T)
+        self._mark("kv_copy")
         qb = max(TILE, (int(os.environ.get("GLM53_PREFILL_QBLOCK", "2048")) // TILE) * TILE)
         o_parts = []
         for q0 in range(split, T, qb):
@@ -784,6 +797,7 @@ class TtDSA(LightweightModule):
             if not whole:
                 ttnn.deallocate(x_s)
                 ttnn.deallocate(qr_s)
+            self._mark("index_queries")
             indices = idx.select(
                 q_i,
                 w_i,
@@ -795,9 +809,12 @@ class TtDSA(LightweightModule):
             )
             ttnn.deallocate(q_i)
             ttnn.deallocate(w_i)
+            if self.on_indices is not None:
+                self.on_indices(start + q0, indices)
             q_lat = self._absorb_q(q if whole else ttnn.slice(q, [0, 0, q0, 0], [1, 1, q1, self.H * self.Dq]))
             q_rm = ttnn.to_layout(q_lat, ttnn.ROW_MAJOR_LAYOUT)
             ttnn.deallocate(q_lat)
+            self._mark("absorb_q")
             o_rm = ttnn.transformer.sparse_sdpa(
                 self._pad_heads_rm(q_rm),
                 kv_rm,
@@ -807,12 +824,14 @@ class TtDSA(LightweightModule):
                 scale=self.scale,
                 k_chunk_size=128,
             )  # [1,H,q1-q0,L] row-major
+            self._mark("sparse_sdpa")
             ttnn.deallocate(q_rm)
             ttnn.deallocate(indices)
             o_lat = self._unpad_heads(ttnn.to_layout(o_rm, ttnn.TILE_LAYOUT))
             ttnn.deallocate(o_rm)
             o_parts.append(self._o_lat_to_heads(o_lat))  # [1,1,q1-q0,H*Dv]
             ttnn.deallocate(o_lat)
+            self._mark("sparse_out")
         ttnn.deallocate(q_resid)
         ttnn.deallocate(q)
         ttnn.deallocate(kv_rm)
@@ -823,11 +842,15 @@ class TtDSA(LightweightModule):
             for part in o_parts:
                 ttnn.deallocate(part)
         if o_dense is None:  # the whole chunk lies in the sparse region
-            return self._o_proj(o_sparse)
+            y = self._o_proj(o_sparse)
+            self._mark("out_proj")
+            return y
         o = ttnn.concat([o_dense, o_sparse], dim=-2)  # [1,1,T,H*Dv]
         ttnn.deallocate(o_dense)
         ttnn.deallocate(o_sparse)
-        return self._o_proj(o)
+        y = self._o_proj(o)
+        self._mark("out_proj")
+        return y
 
     # ---------------------------------------------------------------------- decode
     def decode_forward(
