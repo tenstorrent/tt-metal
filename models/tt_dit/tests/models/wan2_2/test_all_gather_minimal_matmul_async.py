@@ -1429,8 +1429,25 @@ def test_linear_k_tail(
             9,
             0,
         ],
+        # WH Galaxy: 4 links x 2 workers, 8x8 worker grid (row 9 = muxes).
+        [
+            (4, 8),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+                "fabric_router_config": create_fabric_router_config(4096),
+                "trace_region_size": 90112,
+            },
+            ttnn.Topology.Ring,
+            4,
+            2,
+            1,
+            0,
+            8,
+            8,
+            0,
+        ],
     ],
-    ids=["bh4x8links2"],
+    ids=["bh4x8links2", "wh4x8links4_ring"],
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize("use_bias", [False, True], ids=["no_bias", "bias"])
