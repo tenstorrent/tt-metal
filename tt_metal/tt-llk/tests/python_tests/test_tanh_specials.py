@@ -41,6 +41,7 @@ from helpers.llk_params import (
     format_dict,
 )
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
+from helpers.utils import classify_special
 from test_eltwise_unary_sfpu import eltwise_unary_sfpu
 
 # exp field all ones -> 2 infinities + 254 NaNs, both signs
