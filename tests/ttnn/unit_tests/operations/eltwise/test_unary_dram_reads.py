@@ -96,10 +96,11 @@ def run_against_default_path(op, a, device, memory_config, dtype=ttnn.bfloat16, 
         ("large", 7),
         ("large_short_last_shard", 7),
         ("large_four_shards", 4),
-        ("large_eight_shards", 8),
+        ("large_all_banks", None),
     ],
 )
 def test_height_sharded(device, op_name, case, num_shards):
+    num_shards = num_shards or device.dram_grid_size().x  # None: one shard per DRAM bank of this device
     if case == "small":
         rows = 7 * 1024
     elif case == "few_pages_per_core":  # bursts with few cores per bank, the queue with many
@@ -120,10 +121,12 @@ def test_height_sharded(device, op_name, case, num_shards):
         ("large", 7 * 1024, 7),
         ("large_one_tile_shards", 7 * 32, 7),
         ("large_four_shards", 4 * 1024, 4),
-        ("large_eight_shards", 8 * 1024, 8),
+        ("large_all_banks", None, None),
     ],
 )
 def test_width_sharded(device, op_name, case, width, num_shards):
+    num_shards = num_shards or device.dram_grid_size().x  # None: one shard per DRAM bank of this device
+    width = width or num_shards * 1024
     rows = 1024 if case == "small" else large_rows(device, width, 32)
     shape = [1, 1, rows, width]
     run_against_default_path(OPS[op_name], random_input(shape), device, dram_sharded(shape, WIDTH, num_shards))
