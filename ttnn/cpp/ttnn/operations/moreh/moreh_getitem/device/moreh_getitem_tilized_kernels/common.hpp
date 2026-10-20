@@ -10,7 +10,6 @@
 
 #define INDEX_TILE_SIZE (4096)
 
-// Blackhole DRAM reads need source and destination at the same offset modulo DRAM_ALIGNMENT (64 B).
 inline uint32_t same_alignment_offset(uint32_t src_offset, uint32_t dst_addr) {
     return (src_offset - dst_addr) & (DRAM_ALIGNMENT - 1);
 }

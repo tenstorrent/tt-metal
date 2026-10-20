@@ -154,7 +154,6 @@ ttnn::device_operation::ProgramArtifacts MorehGetItemOperation::MorehGetItemTili
         auto index_cb_data_format = datatype_to_dataformat_converter(index_tensors[0].dtype());
         auto output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
 
-        // The readers stage each read at the source offset modulo the DRAM alignment.
         auto rounded_input_page_size = round_up_to_mul32(input_unit_size) + hal::get_dram_alignment();
         spec.dataflow_buffers.push_back(DataflowBufferSpec{
             .unique_id = IN0,
@@ -519,7 +518,6 @@ ttnn::device_operation::ProgramArtifacts MorehGetItemOperation::MorehGetItemTili
     auto src_cb_data_format = datatype_to_dataformat_converter(input.dtype());
     auto index_cb_data_format = datatype_to_dataformat_converter(index_tensors[0].dtype());
 
-    // The readers stage each read at the source offset modulo the DRAM alignment.
     auto rounded_input_page_size = round_up_to_mul32(input_unit_size) + hal::get_dram_alignment();
     spec.dataflow_buffers.push_back(DataflowBufferSpec{
         .unique_id = IN0,
