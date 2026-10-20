@@ -22,10 +22,17 @@ using address_t = uint32_t;
 
 namespace paged_kv = ttnn::operations::experimental::deepseek_prefill::paged_kv_table;
 
-// Logical source page -> physical pool page of a paged source. A worker visits its pages in increasing order, so
-// the request's page-table row is streamed through one L1 window that is refilled when a page falls past it.
-template <uint32_t PageRows, uint32_t RowPages, uint32_t ChunkRows, uint32_t TableWidth, uint32_t WindowEntries>
-struct PagedSource {
+// Logical source page -> the input page to read. A contiguous source reads the logical page. A paged one reads the
+// physical pool page; a worker visits its pages in increasing order, so the request's page-table row is streamed
+// through one L1 window that is refilled when a page falls past it.
+template <
+    bool Paged,
+    uint32_t PageRows,
+    uint32_t RowPages,
+    uint32_t ChunkRows,
+    uint32_t TableWidth,
+    uint32_t WindowEntries>
+struct SourcePages {
     uint32_t window_l1 = 0;
     uint32_t row = 0;
     uint32_t rank = 0;
@@ -36,33 +43,39 @@ struct PagedSource {
     uint32_t base = 0;
     uint32_t count = 0;
 
-    // Returns kUnmappedPage for a page the row does not map (or one outside the pool).
+    // Returns kUnmappedPage for a page the row does not map (or one outside the pool). A member template, so the
+    // discarded branch (the table read) is never instantiated for a contiguous source.
     template <typename Table>
-    uint32_t physical_page(Noc& noc, const Table& table, uint32_t logical_page) {
-        const uint32_t local_row = logical_page / RowPages;
-        const uint32_t global_row = ((local_row / ChunkRows) * num_ranks + rank) * ChunkRows + local_row % ChunkRows;
-        const uint32_t q = global_row / PageRows;
-        if (q >= TableWidth) {
-            return paged_kv::kUnmappedPage;
+    uint32_t input_page(Noc& noc, const Table& table, uint32_t logical_page) {
+        if constexpr (!Paged) {
+            return logical_page;
+        } else {
+            const uint32_t local_row = logical_page / RowPages;
+            const uint32_t global_row =
+                ((local_row / ChunkRows) * num_ranks + rank) * ChunkRows + local_row % ChunkRows;
+            const uint32_t q = global_row / PageRows;
+            if (q >= TableWidth) {
+                return paged_kv::kUnmappedPage;
+            }
+            if (q - base >= count) {
+                base = q - q % paged_kv::kTableEntriesPerRead;
+                count = TableWidth - base < WindowEntries ? TableWidth - base : WindowEntries;
+                noc.async_read(
+                    table,
+                    CoreLocalMem<uint32_t>(window_l1),
+                    count * sizeof(uint32_t),
+                    {.page_id = row, .offset_bytes = base * static_cast<uint32_t>(sizeof(uint32_t))},
+                    {});
+                noc.async_read_barrier();
+                invalidate_l1_cache();
+            }
+            const uint32_t physical = CoreLocalMem<volatile uint32_t>(window_l1)[q - base];
+            if (physical >= pool_pages) {
+                return paged_kv::kUnmappedPage;
+            }
+            return ((physical * num_layers + layer) * PageRows + global_row % PageRows) * RowPages +
+                   logical_page % RowPages;
         }
-        if (q - base >= count) {
-            base = q - q % paged_kv::kTableEntriesPerRead;
-            count = TableWidth - base < WindowEntries ? TableWidth - base : WindowEntries;
-            noc.async_read(
-                table,
-                CoreLocalMem<uint32_t>(window_l1),
-                count * sizeof(uint32_t),
-                {.page_id = row, .offset_bytes = base * static_cast<uint32_t>(sizeof(uint32_t))},
-                {});
-            noc.async_read_barrier();
-            invalidate_l1_cache();
-        }
-        const uint32_t physical = CoreLocalMem<volatile uint32_t>(window_l1)[q - base];
-        if (physical >= pool_pages) {
-            return paged_kv::kUnmappedPage;
-        }
-        return ((physical * num_layers + layer) * PageRows + global_row % PageRows) * RowPages +
-               logical_page % RowPages;
     }
 };
 
@@ -73,16 +86,6 @@ inline auto make_page_table(const Args& args, uint32_t address) {
         return TensorAccessor(args, address);
     } else {
         return 0u;
-    }
-}
-
-// Templated so the paged translation is not instantiated for a contiguous source.
-template <bool Paged, typename PagedT, typename Table>
-inline uint32_t source_page_of(PagedT& paged, Noc& noc, const Table& table, uint32_t page) {
-    if constexpr (Paged) {
-        return paged.physical_page(noc, table, page);
-    } else {
-        return page;
     }
 }
 
@@ -334,7 +337,7 @@ void kernel_main() {
     }
 
     // Paged source: [6] page table, [8] this rank, [9] pool pages (common args).
-    PagedSource<page_rows, row_pages, chunk_rows, table_width, window_entries> paged{};
+    SourcePages<paged_source, page_rows, row_pages, chunk_rows, table_width, window_entries> paged{};
     if constexpr (paged_source) {
         CircularBuffer cb_table(cb_page_table_id);
         cb_table.reserve_back(1);
@@ -359,7 +362,7 @@ void kernel_main() {
                 cb.reserve_back(1);
                 uint32_t l1_write_addr = cb.get_write_ptr();
                 for (uint32_t i = 0; i < inputs_per_cb_page && page < page_end; ++i) {
-                    const uint32_t source_page = source_page_of<paged_source>(paged, noc, page_table, page);
+                    const uint32_t source_page = paged.input_page(noc, page_table, page);
                     // An unmapped page is not read, but its CB slot is still produced: the relay and
                     // data_valid counts are page counts, and a short count would hang the ring.
                     if (!paged_source || source_page != paged_kv::kUnmappedPage) {
