@@ -1,0 +1,10 @@
+# job
+b1 B ids/perf.txt all
+b1 SA ids/perf.txt all
+b1 V1 ids/perf.txt all
+b1 B2 ids/perf.txt all
+func SA ids/func.txt all
+b2 B2 ids/perf.txt all
+b2 V1 ids/perf.txt all
+b2 SA ids/perf.txt all
+b2 B ids/perf.txt all

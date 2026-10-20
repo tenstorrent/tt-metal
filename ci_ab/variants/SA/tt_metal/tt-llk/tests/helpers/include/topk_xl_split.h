@@ -1,0 +1,421 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+//
+// The fused K = 512, 1024 or 2048 topk_xl chunk split across threads: copy and face transposes on MATH, SFPU work on PACK.
+// Chunk c runs stage j at step 9c + 2j, so MATH transposes one chunk while PACK sorts the other.
+
+#pragma once
+
+#include <cstdint>
+
+#include "ckernel.h"
+
+namespace topk_xl_split
+{
+
+constexpr std::uint8_t F2S                   = ckernel::semaphore::FPU_SFPU;
+constexpr std::uint8_t S2F                   = ckernel::semaphore::UNPACK_MATH_DONE;
+constexpr std::uint32_t STEPS_PER_CHUNK      = 9;
+constexpr std::uint32_t STAGES_FIRST_CHUNK   = 7;
+constexpr std::uint32_t STAGES_MERGING_CHUNK = 9;
+
+inline bool decode_step(const std::uint32_t c1, const std::uint32_t r, const std::uint32_t num_chunks, std::uint32_t& chunk, std::uint32_t& stage)
+{
+    if ((r & 1) == 0)
+    {
+        chunk = c1;
+        stage = r >> 1;
+    }
+    else
+    {
+        if (c1 == 0)
+        {
+            return false;
+        }
+        chunk = c1 - 1;
+        stage = (r + STEPS_PER_CHUNK) >> 1;
+    }
+    return chunk < num_chunks && stage < (chunk == 0 ? STAGES_FIRST_CHUNK : STAGES_MERGING_CHUNK);
+}
+
+// Rows of two or more chunks open with chunks 0 and 1 side by side (chunk 0 on even steps, chunk 1 on odd steps up to their
+// stage 6 merge), so no chunk starts alone; the K 512 two-chunk layout keeps both chunks in one bank and runs in sequence.
+constexpr std::uint32_t HEAD_STEPS = 14;
+
+template <std::uint32_t K>
+constexpr bool paired_head(const std::uint32_t num_chunks)
+{
+    return num_chunks >= 2 && !(K == 512 && num_chunks == 2);
+}
+
+// Step `step` of a paired-head row: slot c1 >= 2 follows decode_step, except that chunk 1 arrives with its stages 0 to 6 done.
+inline bool decode_paired_step(const std::uint32_t step, const std::uint32_t num_chunks, std::uint32_t& chunk, std::uint32_t& stage)
+{
+    if (step < HEAD_STEPS)
+    {
+        chunk = step & 1;
+        stage = step >> 1;
+        return true;
+    }
+    const std::uint32_t c1 = 2 + (step - HEAD_STEPS) / STEPS_PER_CHUNK;
+    const std::uint32_t r  = (step - HEAD_STEPS) % STEPS_PER_CHUNK;
+    if ((r & 1) == 0)
+    {
+        chunk = c1;
+        stage = r >> 1;
+    }
+    else
+    {
+        chunk = c1 - 1;
+        stage = ((r + STEPS_PER_CHUNK) >> 1) + (c1 == 2 ? 2 : 0);
+    }
+    return chunk < num_chunks && stage < (chunk == 0 ? STAGES_FIRST_CHUNK : STAGES_MERGING_CHUNK);
+}
+
+template <std::uint32_t K>
+constexpr std::uint32_t tiles_per_sequence = K == 2048 ? 2 : 1;
+
+// DEST bank 1 starts at tile 4 in 32-bit mode. Chunks alternate banks, two slots per bank in turn, and each merge
+// leaves the survivor in the merged chunk's tiles, so MATH's face moves on one chunk never share a bank with PACK's
+// SFPU work on the other. Slots count back from the last chunk, so the row ends with the survivor in tile 0.
+template <std::uint32_t K>
+constexpr std::uint32_t slot_tile(const std::uint32_t from_last)
+{
+    return ((from_last & 1) ? 4 : 0) + ((from_last >> 1) & 1) * tiles_per_sequence<K>;
+}
+
+template <std::uint32_t K>
+constexpr std::uint32_t chunk_tile(const std::uint32_t chunk, const std::uint32_t num_chunks)
+{
+    // K 512 rows of two chunks keep the one-thread layout (survivor in tile 0, chunk 1 in tile 1): the index split
+    // writes half of tile 1 and the rest of it then holds what the one-thread kernel leaves there.
+    if (K == 512 && num_chunks == 2)
+    {
+        return chunk;
+    }
+    return slot_tile<K>(num_chunks - 1 - chunk);
+}
+
+// Where chunk `chunk`'s stages 7 and 8 find the survivor.
+template <std::uint32_t K>
+constexpr std::uint32_t survivor_tile(const std::uint32_t chunk, const std::uint32_t num_chunks)
+{
+    return K == 512 && num_chunks == 2 ? 0 : chunk_tile<K>(chunk, num_chunks);
+}
+
+// Rows from a chunk's tiles to the survivor of the chunk before it, mod the 1024-row Dst address; slot_parity is the
+// chunk's from_last & 3.
+template <std::uint32_t K>
+constexpr int survivor_distance(const std::uint32_t slot_parity)
+{
+    return static_cast<int>(((slot_tile<K>(slot_parity + 1) - slot_tile<K>(slot_parity)) & 15) << 6);
+}
+
+// Whether the next row's first chunk can be copied while this row finishes: it lands in bank 1, which the survivor and
+// index tiles never use.
+template <std::uint32_t K>
+constexpr bool can_prefetch(const std::uint32_t num_chunks)
+{
+    return (num_chunks & 1) == 0 && !(K == 512 && num_chunks == 2);
+}
+
+#ifdef LLK_TRISC_MATH
+
+inline void take_pack_token()
+{
+    ckernel::t6_semaphore_wait_on_zero<ckernel::p_stall::STALL_SYNC>(S2F);
+    ckernel::t6_semaphore_get(S2F);
+}
+
+// Runs before PACK issues any SFPU instruction; start_pack's MATH_PACK post is then PACK's start signal.
+inline void init_tokens()
+{
+    ckernel::t6_semaphore_init(F2S, 0, 15);
+    ckernel::t6_semaphore_init(S2F, 0, 15);
+}
+
+inline void start_pack()
+{
+    ckernel::t6_semaphore_post<ckernel::p_stall::MATH | ckernel::p_stall::WAIT_SFPU>(ckernel::semaphore::MATH_PACK);
+}
+
+inline void release_src()
+{
+    TTI_SETRWC(ckernel::p_setrwc::CLR_AB, 0, 0, 0, 0, ckernel::p_setrwc::SET_ABD);
+}
+
+// One Dst section. The SrcA/SrcB releases keep the single-thread order (after the copy, halfway through the chunk, before
+// the next copy), and every release and copy runs with the transpose CFG block closed, as in the single-thread kernel.
+template <std::uint32_t K, typename CopyChunk>
+inline void math_row(const std::uint32_t num_chunks, CopyChunk&& copy_chunk, const bool first_prefetched = false, const bool prefetch_next = false)
+{
+    std::uint32_t posted = 0, taken = 0, half_release_step = 0;
+    bool prev_step_busy = false, cfg_open = false, half_release_due = false;
+
+    const bool paired            = paired_head<K>(num_chunks);
+    const std::uint32_t num_steps = paired ? HEAD_STEPS + (num_chunks - 1) * STEPS_PER_CHUNK : (num_chunks + 1) * STEPS_PER_CHUNK;
+
+    for (std::uint32_t step = 0; step < num_steps; step++)
+    {
+        {
+            std::uint32_t chunk, stage;
+            if (!(paired ? decode_paired_step(step, num_chunks, chunk, stage) : decode_step(step / STEPS_PER_CHUNK, step % STEPS_PER_CHUNK, num_chunks, chunk, stage)))
+            {
+                prev_step_busy = false;
+                continue;
+            }
+            // Wait for every SFPU part at least two steps back: that covers this chunk's previous stage, the survivor
+            // rebuild before a merge and the merge that frees a tile before its next copy.
+            const std::uint32_t need = (paired && step == 1) ? posted : posted - (prev_step_busy ? 1 : 0);
+            for (; taken < need; taken++)
+            {
+                take_pack_token();
+            }
+
+            if (first_prefetched && step == 0)
+            {
+                posted++;
+                prev_step_busy = true;
+                continue;
+            }
+            if (stage == 0)
+            {
+                if (cfg_open)
+                {
+                    ckernel::sfpu::leave_transpose_cfg_block();
+                    cfg_open = false;
+                }
+                if (chunk > 0)
+                {
+                    release_src();
+                    half_release_due  = true;
+                    half_release_step = step + 5;
+                }
+                copy_chunk(chunk, chunk_tile<K>(chunk, num_chunks));
+            }
+            else
+            {
+                if (half_release_due && step >= half_release_step)
+                {
+                    if (cfg_open)
+                    {
+                        ckernel::sfpu::leave_transpose_cfg_block();
+                        cfg_open = false;
+                    }
+                    release_src();
+                    half_release_due = false;
+                }
+                if (!cfg_open)
+                {
+                    ckernel::sfpu::enter_transpose_cfg_block();
+                    cfg_open = true;
+                }
+                ckernel::sfpu::_topk_xl_split_transpose_<K>(
+                    (stage >= STAGES_FIRST_CHUNK ? survivor_tile<K>(chunk, num_chunks) : chunk_tile<K>(chunk, num_chunks)) << 6);
+            }
+
+            ckernel::t6_semaphore_post<ckernel::p_stall::MATH>(F2S);
+            posted++;
+            prev_step_busy = true;
+        }
+    }
+
+    if (cfg_open)
+    {
+        ckernel::sfpu::leave_transpose_cfg_block();
+    }
+    release_src();
+    if (prefetch_next)
+    {
+        // Stage 6 of the last chunk has read the other chunk's tiles; stages 7 and 8 stay in the survivor's bank.
+        for (; taken + 2 < posted; taken++)
+        {
+            take_pack_token();
+        }
+        copy_chunk(0, chunk_tile<K>(0, num_chunks));
+        ckernel::t6_semaphore_post<ckernel::p_stall::MATH>(F2S);
+    }
+    for (; taken < posted; taken++)
+    {
+        take_pack_token();
+    }
+}
+
+#endif // LLK_TRISC_MATH
+
+#ifdef LLK_TRISC_PACK
+
+inline void take_math_token()
+{
+    ckernel::t6_semaphore_wait_on_zero<ckernel::p_stall::STALL_SYNC>(F2S);
+    ckernel::t6_semaphore_get(F2S);
+}
+
+// Waits for MATH's start signal, then owns the SFPU state: LaneConfig, LRegs, PACK's ADDR_MODs, replay and MOP.
+template <std::uint32_t K>
+inline void wait_start()
+{
+    _llk_packer_wait_for_math_done_();
+    _llk_packer_set_math_semaphore_<ckernel::p_stall::NONE>();
+    ckernel::sfpu::_topk_xl_split_sfpu_init_<K, true>();
+}
+
+template <std::uint32_t K, std::uint32_t stage>
+inline __attribute__((always_inline)) void sfpu_stage(const std::uint32_t chunk, const std::uint32_t num_chunks)
+{
+    using namespace ckernel::sfpu;
+    const std::uint32_t tile_offset = chunk_tile<K>(chunk, num_chunks) << 6;
+    const bool ascending            = chunk > 0;
+    switch (stage)
+    {
+        case 0:
+            _topk_xl_split_stamp_<K>(tile_offset, chunk);
+            if constexpr (K == 2048)
+            {
+                _topk_xl_split_sort_head_2048_(tile_offset, ascending);
+            }
+            else if constexpr (K == 1024)
+            {
+                _topk_xl_split_sort_head_1024_(tile_offset, ascending);
+            }
+            else
+            {
+                _topk_xl_split_sort_head_512_<true>(tile_offset, ascending);
+            }
+            break;
+        case 1:
+            _topk_xl_split_stride2_<K, 4>(tile_offset, ascending);
+            break;
+        case 2:
+            _topk_xl_split_columns_<K, 0x5050>(tile_offset, ascending);
+            break;
+        case 3:
+            _topk_xl_split_stride2_<K, 8>(tile_offset, ascending);
+            break;
+        case 4:
+            _topk_xl_split_columns_<K, 0x5500>(tile_offset, ascending);
+            break;
+        case 5:
+            _topk_xl_split_stride2_<K, 16>(tile_offset, ascending);
+            break;
+        case 6:
+            _topk_xl_split_columns_<K, 0>(tile_offset, ascending);
+            if constexpr (K == 512)
+            {
+                if (chunk > 0 && num_chunks == 2)
+                {
+                    _topk_xl_split_merge_<K, 64, true>(0);
+                    break;
+                }
+            }
+            if (chunk > 0)
+            {
+                switch ((num_chunks - 1 - chunk) & 3)
+                {
+                    case 1:
+                        _topk_xl_split_merge_<K, survivor_distance<K>(1), true>(tile_offset);
+                        break;
+                    case 3:
+                        _topk_xl_split_merge_<K, survivor_distance<K>(3), true>(tile_offset);
+                        break;
+                    default:
+                        _topk_xl_split_merge_<K, survivor_distance<K>(0), true>(tile_offset);
+                        break;
+                }
+            }
+            break;
+        case 7:
+            _topk_xl_split_rebuild_build_<K>(survivor_tile<K>(chunk, num_chunks) << 6, false);
+            break;
+        default:
+            _topk_xl_split_columns_<K, 0>(survivor_tile<K>(chunk, num_chunks) << 6, false);
+            break;
+    }
+}
+
+// One SFPU part, the step's stage chosen at run time so that each stage body exists once.
+template <std::uint32_t K>
+inline __attribute__((noinline)) void sfpu_step(const std::uint32_t chunk, const std::uint32_t stage, const std::uint32_t num_chunks)
+{
+    take_math_token();
+    switch (stage)
+    {
+        case 0:
+            sfpu_stage<K, 0>(chunk, num_chunks);
+            break;
+        case 1:
+            sfpu_stage<K, 1>(chunk, num_chunks);
+            break;
+        case 2:
+            sfpu_stage<K, 2>(chunk, num_chunks);
+            break;
+        case 3:
+            sfpu_stage<K, 3>(chunk, num_chunks);
+            break;
+        case 4:
+            sfpu_stage<K, 4>(chunk, num_chunks);
+            break;
+        case 5:
+            sfpu_stage<K, 5>(chunk, num_chunks);
+            break;
+        case 6:
+            sfpu_stage<K, 6>(chunk, num_chunks);
+            break;
+        case 7:
+            sfpu_stage<K, 7>(chunk, num_chunks);
+            break;
+        default:
+            sfpu_stage<K, 8>(chunk, num_chunks);
+            break;
+    }
+    ckernel::t6_semaphore_post<ckernel::p_stall::WAIT_SFPU>(S2F);
+}
+
+// Every SFPU part of one Dst section in MATH's step order, survivor left fused in sequence 0.
+template <std::uint32_t K>
+inline void pack_row(const std::uint32_t num_chunks)
+{
+    TTI_STALLWAIT(ckernel::p_stall::STALL_SFPU, ckernel::p_stall::MATH);
+    const bool paired             = paired_head<K>(num_chunks);
+    const std::uint32_t num_steps = paired ? HEAD_STEPS + (num_chunks - 1) * STEPS_PER_CHUNK : (num_chunks + 1) * STEPS_PER_CHUNK;
+    for (std::uint32_t step = 0; step < num_steps; step++)
+    {
+        std::uint32_t chunk, stage;
+        if (paired ? decode_paired_step(step, num_chunks, chunk, stage) : decode_step(step / STEPS_PER_CHUNK, step % STEPS_PER_CHUNK, num_chunks, chunk, stage))
+        {
+            sfpu_step<K>(chunk, stage, num_chunks);
+        }
+    }
+}
+
+// Releases Dst to MATH, clearing only bank 0: bank 1 may already hold the next row's first chunk.
+template <bool fp32>
+inline void release_dest_bank0()
+{
+    TTI_STALLWAIT(ckernel::p_stall::STALL_MATH, ckernel::p_stall::PACK);
+    TTI_ZEROACC(ckernel::p_zeroacc::CLR_HALF, fp32, 0, ckernel::ADDR_MOD_1, 0);
+    _llk_packer_set_math_semaphore_<ckernel::p_stall::NONE>();
+}
+
+// The row-major global index split of sequence 0 into values (sequence 0) and indices (the tiles after it), on PACK.
+template <std::uint32_t K>
+inline void split_indices(const std::uint32_t seg_base)
+{
+    ckernel::sfpu::_topk_xl_separate_indices_row_major_global_init_();
+    ckernel::sfpu::_topk_xl_split_begin_(0);
+    if (seg_base != 0)
+    {
+        ckernel::sfpu::_topk_xl_separate_indices_row_major_global_base_<K>(seg_base);
+    }
+    else
+    {
+        ckernel::sfpu::_topk_xl_separate_indices_row_major_global_<K>();
+    }
+    TTI_SETRWC(ckernel::p_setrwc::CLR_NONE, 0, 0, 0, 0, ckernel::p_setrwc::SET_D);
+    TTI_STALLWAIT(ckernel::p_stall::STALL_PACK, ckernel::p_stall::WAIT_SFPU);
+}
+
+#endif // LLK_TRISC_PACK
+
+}
