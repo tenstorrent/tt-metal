@@ -105,8 +105,11 @@
     unset TT_METAL_WATCHER  # blocked by #50886
     pytest --timeout 600 models/common/tests/test_tt_sampling.py
     # Complements the above: SeedManager slot/salt state machine, params broadcast/scatter,
-    # host-level trace bookkeeping. -k drops the log-probs tests, the only ones needing >1 device.
-    pytest --timeout 600 models/common/tests/test_sampling.py -k "not log_probs and not logprobs"
+    # host-level trace bookkeeping. -k drops the log-probs tests that need >1 device, but
+    # the single-device calculator cases run here on wh_n150/bh_p150.
+    # test_log_probs_returns_none_when_disabled requires FABRIC_1D (TT_FATAL at
+    # fabric_firmware_initializer.cpp:317 on 1-chip hosts), so it stays out of this filter.
+    pytest --timeout 600 models/common/tests/test_sampling.py -k "(not log_probs and not logprobs) or test_log_probs_calculation_single_device"
   model: sampling-common
   skus:
     wh_n150:

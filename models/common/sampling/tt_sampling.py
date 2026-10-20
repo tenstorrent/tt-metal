@@ -1077,8 +1077,8 @@ class TTSampling(LightweightModule):
 
         if self._force_argmax_sampling:
             logger.info("Forcing argmax sampling")
-            # Logprobs consume the original vocabulary shards, before argmax's
-            # gather/slice. Keep token selection identical when reporting toggles.
+            # Logprobs consume the vocabulary shards before argmax's gather/slice,
+            # masked below. Keep token selection identical when reporting toggles.
             logits_for_log_probs = x
             # BH galaxy prefetcher (unfused-CCL) keeps a split senders/worker sub-device manager
             # loaded during decode. The vocab-trim ttnn.slice auto-grids a 32-core block from origin
@@ -1092,6 +1092,12 @@ class TTSampling(LightweightModule):
             slice_valid_vocab = self._can_slice_valid_vocab_for_argmax() and not force_argmax_skip_vocab_trim
             if not slice_valid_vocab:
                 x = self._mask_invalid_vocab_logits(x)
+                logits_for_log_probs = x
+            elif self.log_probs_calculator.enable_log_probs:
+                # The valid-vocab slice only trims the gathered tensor; the shards the
+                # calculator normalizes over would otherwise keep the padded tail in sum(exp).
+                logits_for_log_probs = self._mask_invalid_vocab_logits(x)
+            owns_log_prob_logits = logits_for_log_probs is not x
             # Gather the output across all devices and untilize the tensor (for argmax)
             num_devices = self.mesh_device.get_num_devices()
             if num_devices > 1:
@@ -1162,6 +1168,8 @@ class TTSampling(LightweightModule):
                 self.tt_log_probs = self.log_probs_calculator.calculate_log_probs(logits_for_log_probs, logprob_indices)
             else:
                 self.tt_log_probs = None
+            if owns_log_prob_logits:
+                ttnn.deallocate(logits_for_log_probs)
             return tt_out_tok, self.tt_log_probs
 
         # Decode logits normally arrive in bfloat16 already; a bf16->bf16 ttnn.typecast is
@@ -1170,6 +1178,10 @@ class TTSampling(LightweightModule):
             x if x.dtype == ttnn.bfloat16 else ttnn.typecast(x, dtype=ttnn.bfloat16, sub_core_grids=self.sub_core_grids)
         )
         x_bf16 = self._mask_invalid_vocab_logits(x_bf16)
+        # The calculator derives per-shard width from its logits, which must match the
+        # padded_vocab_size // num_shards offsets in tt_indices_device_offsets, so keep the
+        # masked logits from before any power-of-2 pad below.
+        logits_for_log_probs = x_bf16
 
         # The single-device split below exists only because the stock top-k factories cap
         # out near 64K columns. When ttnn.topk would take the Blackhole topk_large_indices
@@ -1396,14 +1408,14 @@ class TTSampling(LightweightModule):
         if self.log_probs_calculator.enable_log_probs and self.log_probs_calculator._use_topk_logprobs:
             # New path: top-K logprobs for gpt-oss-120b
             self.tt_log_probs = self.log_probs_calculator.calculate_topk_log_probs(
-                logits_tensor=x,
+                logits_tensor=logits_for_log_probs,
                 topk_values=topk_values_gathered_bf16_interleaved,
                 topk_global_indices=topk_global_indices_interleaved,
                 sub_core_grid_topk=self.sub_core_grid_topk,
             )
         elif self.log_probs_calculator.enable_log_probs:
             # Old path: single sampled-token logprob
-            self.tt_log_probs = self.log_probs_calculator.calculate_log_probs(x, tt_out_tok)
+            self.tt_log_probs = self.log_probs_calculator.calculate_log_probs(logits_for_log_probs, tt_out_tok)
         else:
             self.tt_log_probs = None
 
