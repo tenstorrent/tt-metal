@@ -36,7 +36,18 @@ struct LLKOperandExtractor {
         binding_token_with_llk_metadata<TokenT>,
         "LLKOperandFrom requires a BindingToken with llk metadata (DFB / Scratchpad / Tensor)");
 
+    // This function provides a guard to prevent returning an invalid data format that could prevent this variable from
+    // instantiating, this is the desired behavior.
+    // However, the guard is implemented as a watcher assert, so it is not guaranteed an invalid data format can never
+    // be derived here.
     static constexpr DataFormat format = get_dataformat(Token);
+
+    // Reject missing format metadata even when device assertions are disabled.
+    static_assert(
+        format != DataFormat::Invalid,
+        "LLKOperandFrom: this token has no data format. Did you forget to set data_format_metadata on ScratchpadSpec/ "
+        "DataflowBufferSpec?");
+
     static constexpr ckernel::TensorShape shape{
         get_face_r_dim(Token), get_face_c_dim(Token), get_num_faces_r_dim(Token), get_num_faces_c_dim(Token)};
 
