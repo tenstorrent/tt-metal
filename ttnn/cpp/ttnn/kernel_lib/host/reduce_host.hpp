@@ -77,19 +77,20 @@ struct ReduceHardwareConfig {
 };
 
 struct ReduceChunkPlan {
-    // Independent outputs retained in DEST for the chunk (greater than one for H reduction).
+    // Independent outputs retained in DEST for the chunk: the block's output_group.
     std::uint32_t output_tiles = 1;
     // Number of chunks required by the default input allocation.
     std::uint32_t buffers = 1;
 };
 
-// The auxiliary CB the caller allocates. It is the only reduction CB whose size and format the
-// planner decides: the caller sizes input (input_cb_tiles), output and accumulator CBs itself.
+// The auxiliary CB the caller allocates for every planned reduction. It is the only reduction CB
+// whose size and format the planner decides: the caller sizes input (input_cb_tiles), output and
+// accumulator CBs itself.
 struct ReduceAuxiliaryCb {
-    tt::DataFormat data_format;
-    std::uint32_t page_size;
-    std::uint32_t page_count;
-    std::size_t total_size_bytes;
+    tt::DataFormat data_format = tt::DataFormat::Invalid;
+    std::uint32_t page_size = 0;
+    std::uint32_t page_count = 0;
+    std::size_t total_size_bytes = 0;
 };
 
 // One concrete tile for the dataflow-side auxiliary recipe. The planner has
@@ -110,8 +111,7 @@ float round_reduce_auxiliary_value(float value, tt::DataFormat data_format);
 struct ReduceAuxiliaryPlan {
     std::uint32_t cb_id = no_cb_id;
     std::vector<ReduceAuxiliaryTileSpec> tiles;
-    // Absent when no call reads auxiliary tiles.
-    std::optional<ReduceAuxiliaryCb> cb;
+    ReduceAuxiliaryCb cb;
 };
 
 struct ReducePlan {
@@ -154,8 +154,9 @@ struct ReducePlan {
     std::vector<ReduceAuxiliaryTileSpec> auxiliary_tiles;
     std::uint32_t partial_reduce_axis_elements = 0;
 
-    // Absent when the plan reads no auxiliary tiles.
-    std::optional<ReduceAuxiliaryCb> auxiliary_cb;
+    // SFPU reductions read no auxiliary tile; they plan one placeholder so that every
+    // reduction allocates and binds the same CB.
+    ReduceAuxiliaryCb auxiliary_cb;
     std::uint32_t input_cb_tiles = 0;
     tt::DataFormat input_format = tt::DataFormat::Invalid;
 
@@ -183,9 +184,16 @@ struct ReduceBlockSpec {
     // Retained input policies only. Zero means contiguous at padded_w.
     std::uint32_t input_row_stride_tiles = 0;
     // Capacity of the input CB in tiles. Retained policies need the whole block,
-    // BulkWaitBulkPop a whole number of planned bulk packets, and streaming
-    // TileSum at least two tiles; a one-tile streaming CB plans Native.
+    // BulkWaitBulkPop a whole number of bulk packets (Ht * output_group tiles for
+    // H, Wt for W, Ht * Wt for HW), and streaming TileSum at least two tiles; a
+    // one-tile streaming CB plans Native.
     std::uint32_t input_cb_tiles = 0;
+    // H reduction only: output columns reduced together in DEST, at most
+    // max_reduce_output_group(). Streaming and bulk inputs must arrive as strips of
+    // this many columns, row-major within each strip; bulk input also requires it to
+    // divide the block's (and tail's) column count. Streaming TileSum requires 1.
+    // W and HW reductions require 1.
+    std::uint32_t output_group = 1;
     // Absent: reduce the whole logical block. Present: also plan this known
     // smaller shape, including its normalization and auxiliary tiles. Runtime
     // arguments select full or tail work on each core of the same kernel grid.
@@ -195,12 +203,6 @@ struct ReduceBlockSpec {
     // retains the full block's pitches. FIFO producers use the common planned
     // packet size and pad unused pages at the final axis/output group.
     std::optional<ReduceTailConfig> tail;
-
-    // Allow algorithms that do not read auxiliary tiles to return an empty
-    // recipe and no Auxiliary CB requirement. False preserves the legacy
-    // placeholder tile for factories that always allocate and bind that CB.
-    // Required scalers, masks and accumulation zeros are still planned.
-    bool allow_empty_auxiliary = false;
 
     // Convenience for a local tiled block with padding rounded to whole tiles.
     static ReduceBlockSpec tiled(
@@ -313,6 +315,13 @@ public:
 private:
     std::vector<std::uint32_t> compile_time_args_;
 };
+
+// Largest ReduceBlockSpec::output_group the hardware's DEST holds for this reduction.
+std::uint32_t max_reduce_output_group(
+    const ReduceHardwareConfig& hardware,
+    tt::tt_metal::DataType input_dtype,
+    tt::tt_metal::ReduceOpMath reduce_math,
+    ReduceFp32Mode fp32_mode);
 
 // Plan one local tiled reduction using the requested input policy. The planner
 // reports the auxiliary CB it needs; the factory owns allocation and L1 fit checks.

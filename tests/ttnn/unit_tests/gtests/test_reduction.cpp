@@ -146,7 +146,7 @@ TEST(ReduceHostPlanner, AdditiveStreamingRequiresPairs) {
             const ReduceHardwareConfig hardware{.arch = arch, .fp32_dest_acc_en = true};
             auto block = ReduceBlockSpec::tiled(9 * 32, 14 * 32, dtype, DataType::FLOAT32);
             block.input_cb_tiles = 2;
-            for (const auto dim : {ReduceOpDim::W, ReduceOpDim::HW}) {
+            for (const auto dim : {ReduceOpDim::W, ReduceOpDim::H, ReduceOpDim::HW}) {
                 const auto plan = make_reduce_plan(
                     block,
                     ReduceOpMath::SUM,
@@ -212,7 +212,85 @@ TEST(ReduceHostPlanner, StreamingCapacityDependsOnAlgorithm) {
     EXPECT_EQ(native.input_policy, Policy::WaitAndPopPerTile);
 }
 
-TEST(ReduceHostPlanner, EmptyAuxiliaryRecipeOmitsAllocationAndSerializesNoCb) {
+// The output group fixes the reader's tile order, so the planner validates it and never changes it.
+TEST(ReduceHostPlanner, OutputGroupIsACallerContract) {
+    using namespace tt::tt_metal;
+    using namespace ttnn::kernel_lib::host;
+    using Policy = compute_kernel_lib::ReduceInputPolicy;
+    using Algorithm = compute_kernel_lib::ReduceAlgorithm;
+    const ReduceHardwareConfig half_sync{.arch = tt::ARCH::WORMHOLE_B0};
+    const ReduceHardwareConfig fp32_dest{.arch = tt::ARCH::WORMHOLE_B0, .fp32_dest_acc_en = true};
+    const ReduceHardwareConfig full_sync{.arch = tt::ARCH::WORMHOLE_B0, .dst_full_sync_en = true};
+
+    EXPECT_EQ(max_reduce_output_group(half_sync, DataType::BFLOAT16, ReduceOpMath::SUM, ReduceFp32Mode::Fast), 8U);
+    EXPECT_EQ(max_reduce_output_group(fp32_dest, DataType::BFLOAT16, ReduceOpMath::SUM, ReduceFp32Mode::Fast), 4U);
+    EXPECT_EQ(max_reduce_output_group(full_sync, DataType::BFLOAT16, ReduceOpMath::SUM, ReduceFp32Mode::Fast), 16U);
+    EXPECT_EQ(max_reduce_output_group(half_sync, DataType::INT32, ReduceOpMath::SUM, ReduceFp32Mode::Fast), 7U);
+
+    const auto plan = [](ReduceBlockSpec block,
+                         const ReduceHardwareConfig& hardware,
+                         Policy policy,
+                         ReduceOpDim dim = ReduceOpDim::H,
+                         DataType dtype = DataType::BFLOAT16) {
+        block.input_dtype = dtype;
+        block.output_dtype = dtype;
+        return make_reduce_plan(block, ReduceOpMath::SUM, dim, std::nullopt, ReduceFp32Mode::Fast, hardware, policy);
+    };
+    auto block = whole_input(ReduceBlockSpec::tiled(2 * 32, 6 * 32, DataType::BFLOAT16, DataType::BFLOAT16));
+    block.output_group = 3;
+    for (const auto policy : {Policy::WaitAndPopPerTile, Policy::BulkWaitBulkPop, Policy::WaitUpfrontNoPop}) {
+        const auto grouped = plan(block, half_sync, policy);
+        EXPECT_EQ(grouped.chunk.output_tiles, 3U);
+        EXPECT_NO_THROW(ReduceCallArgs(grouped, {0, 1, 16}));
+    }
+
+    auto too_wide = block;
+    too_wide.output_group = 5;
+    EXPECT_NO_THROW(plan(too_wide, half_sync, Policy::WaitUpfrontNoPop));
+    EXPECT_ANY_THROW(plan(too_wide, fp32_dest, Policy::WaitUpfrontNoPop));
+    too_wide.output_group = 8;
+    EXPECT_NO_THROW(plan(too_wide, half_sync, Policy::WaitUpfrontNoPop));
+    EXPECT_ANY_THROW(plan(too_wide, half_sync, Policy::WaitUpfrontNoPop, ReduceOpDim::H, DataType::INT32));
+
+    auto uneven = block;
+    uneven.output_group = 4;
+    EXPECT_NO_THROW(plan(uneven, half_sync, Policy::WaitAndPopPerTile));
+    EXPECT_ANY_THROW(plan(uneven, half_sync, Policy::BulkWaitBulkPop));
+
+    auto zero = block;
+    zero.output_group = 0;
+    EXPECT_ANY_THROW(plan(zero, half_sync, Policy::WaitUpfrontNoPop));
+    for (const auto dim : {ReduceOpDim::W, ReduceOpDim::HW}) {
+        auto other_axis = block;
+        other_axis.output_group = 2;
+        EXPECT_ANY_THROW(plan(other_axis, half_sync, Policy::WaitUpfrontNoPop, dim));
+    }
+
+    // Streaming TileSum folds one column as consecutive pairs, so only one-column strips may use it.
+    auto tall = ReduceBlockSpec::tiled(8 * 32, 2 * 32, DataType::BFLOAT16, DataType::BFLOAT16);
+    tall.input_cb_tiles = 2;
+    EXPECT_EQ(plan(tall, half_sync, Policy::WaitAndPopPerTile).algorithm, Algorithm::TileSum);
+    tall.output_group = 2;
+    EXPECT_EQ(plan(tall, half_sync, Policy::WaitAndPopPerTile).algorithm, Algorithm::Native);
+    const ReduceCallConfig grouped_stream{
+        tall, ReduceOpMath::SUM, ReduceOpDim::H, std::nullopt, ReduceFp32Mode::Fast, Policy::WaitAndPopPerTile};
+    EXPECT_ANY_THROW(make_reduce_sequence_plan({{0, grouped_stream}}, {1, 2, 16, 64}, half_sync, Algorithm::TileSum));
+
+    // Full and tail bulk packets share the group, so it must divide both column counts.
+    auto tailed = ReduceBlockSpec::tiled(2 * 32, 8 * 32, DataType::BFLOAT16, DataType::BFLOAT16);
+    tailed.input_cb_tiles = 16;
+    tailed.tail = ReduceTailConfig{ReduceValidShape{2 * 32, 5 * 32}};
+    EXPECT_NO_THROW(plan(tailed, half_sync, Policy::BulkWaitBulkPop));
+    tailed.output_group = 2;
+    EXPECT_ANY_THROW(plan(tailed, half_sync, Policy::BulkWaitBulkPop));
+    tailed.tail = ReduceTailConfig{ReduceValidShape{2 * 32, 6 * 32}};
+    const auto shared = plan(tailed, half_sync, Policy::BulkWaitBulkPop);
+    EXPECT_EQ(shared.chunk.output_tiles, 2U);
+    ASSERT_NE(shared.tail_plan, nullptr);
+    EXPECT_EQ(shared.tail_plan->chunk.output_tiles, 2U);
+}
+
+TEST(ReduceHostPlanner, SfpuReductionsPlanAPlaceholderAuxiliary) {
     using namespace tt::tt_metal;
     using namespace ttnn::kernel_lib::host;
     namespace args = ttnn::kernel_lib::reduce_plan_args;
@@ -222,15 +300,6 @@ TEST(ReduceHostPlanner, EmptyAuxiliaryRecipeOmitsAllocationAndSerializesNoCb) {
             auto block = whole_input(ReduceBlockSpec::tiled(256, 256, dtype, dtype));
             block.input_cb_tiles = 64;
             const auto mode = dtype == DataType::FLOAT32 ? ReduceFp32Mode::Accurate : ReduceFp32Mode::Fast;
-            const auto legacy = make_reduce_plan(
-                block,
-                ReduceOpMath::SUM,
-                dim,
-                1.0F,
-                mode,
-                hardware,
-                compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop);
-            block.allow_empty_auxiliary = true;
             const auto plan = make_reduce_plan(
                 block,
                 ReduceOpMath::SUM,
@@ -239,29 +308,59 @@ TEST(ReduceHostPlanner, EmptyAuxiliaryRecipeOmitsAllocationAndSerializesNoCb) {
                 mode,
                 hardware,
                 compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop);
-            EXPECT_TRUE(plan.auxiliary_tiles.empty());
-            EXPECT_FALSE(plan.auxiliary_cb.has_value());
-            const auto words = ReduceCallArgs(plan, {0, no_cb_id, 16}).get_compile_time_args();
+            ASSERT_EQ(plan.auxiliary_tiles.size(), 1U);
+            EXPECT_EQ(plan.auxiliary_tiles[0].type, ReduceAuxiliaryTileType::Placeholder);
+            EXPECT_EQ(plan.auxiliary_tiles[0].num_valid_elements, 0U);
+            EXPECT_EQ(std::bit_cast<uint32_t>(plan.auxiliary_tiles[0].value), 0U);
+            const auto format = dtype == DataType::FLOAT32 ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+            EXPECT_EQ(plan.auxiliary_cb.data_format, format);
+            EXPECT_EQ(plan.auxiliary_cb.page_count, 1U);
+            const auto words = ReduceCallArgs(plan, {0, 1, 16}).get_compile_time_args();
             EXPECT_EQ(
                 args::extract(
                     words[static_cast<uint32_t>(args::CallWord::CircularBuffers)],
                     args::circular_buffers::auxiliary_shift,
                     args::circular_buffers::id_mask),
-                no_cb_id);
-            EXPECT_EQ(ReduceAuxiliaryArgs({no_cb_id, {}}).get_compile_time_args(), (std::vector<uint32_t>{no_cb_id}));
-            // Keeping an existing CB is also valid; the empty descriptor never references it.
-            EXPECT_EQ(ReduceCallArgs(plan, {0, 1, 16}).get_compile_time_args(), words);
-            EXPECT_EQ(ReduceAuxiliaryArgs({1, {}}).get_compile_time_args(), (std::vector<uint32_t>{no_cb_id}));
+                1U);
+            EXPECT_ANY_THROW(ReduceCallArgs(plan, {0, no_cb_id, 16}));
+            EXPECT_ANY_THROW(ReduceAuxiliaryArgs({no_cb_id, plan.auxiliary_tiles}));
+            EXPECT_ANY_THROW(ReduceAuxiliaryArgs({1, {}}));
         }
+    }
+
+    // Accurate mode sends FP32 to the SFPU but BF16 to Native, whose scaler format the placeholder adopts.
+    auto sfpu_block = whole_input(ReduceBlockSpec::tiled(32, 256, DataType::FLOAT32, DataType::FLOAT32));
+    auto native_block = whole_input(ReduceBlockSpec::tiled(32, 256, DataType::BFLOAT16, DataType::FLOAT32));
+    const auto sequence = make_reduce_sequence_plan(
+        {{0,
+          {sfpu_block,
+           ReduceOpMath::SUM,
+           ReduceOpDim::W,
+           1.0F,
+           ReduceFp32Mode::Accurate,
+           compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop}},
+         {3,
+          {native_block,
+           ReduceOpMath::SUM,
+           ReduceOpDim::W,
+           1.0F,
+           ReduceFp32Mode::Accurate,
+           compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop}}},
+        {1, 2, 16, 64},
+        hardware,
+        compute_kernel_lib::ReduceAlgorithm::Native);
+    EXPECT_EQ(sequence.auxiliary.cb.data_format, tt::DataFormat::Float16_b);
+    for (const auto& call : sequence.calls) {
+        EXPECT_EQ(call.plan.auxiliary_cb.data_format, tt::DataFormat::Float16_b);
+        EXPECT_EQ(call.auxiliary_cb_id, 1U);
     }
 }
 
-TEST(ReduceHostPlanner, EmptyAuxiliaryOptionPreservesRequiredScalersAndTailMasks) {
+TEST(ReduceHostPlanner, AuxiliaryRecipesKeepRequiredScalersAndTailMasks) {
     using namespace tt::tt_metal;
     using namespace ttnn::kernel_lib::host;
     ReduceHardwareConfig hardware{.arch = tt::ARCH::WORMHOLE_B0, .fp32_dest_acc_en = true};
     auto block = whole_input(ReduceBlockSpec::tiled(32, 512, DataType::BFLOAT16, DataType::FLOAT32));
-    block.allow_empty_auxiliary = true;
     block.input_cb_tiles = 16;
     const auto full = make_reduce_plan(
         block,
@@ -315,7 +414,6 @@ TEST(ReduceHostPlanner, AdditiveCallsAlwaysShareRequiredZero) {
     using namespace ttnn::kernel_lib::host;
     const ReduceHardwareConfig hardware{.arch = tt::ARCH::WORMHOLE_B0, .fp32_dest_acc_en = true};
     auto block = whole_input(ReduceBlockSpec::tiled(32, 256, DataType::BFLOAT16, DataType::FLOAT32));
-    block.allow_empty_auxiliary = true;
     block.input_cb_tiles = 8;
     const ReduceCallConfig first{
         block,
@@ -334,7 +432,7 @@ TEST(ReduceHostPlanner, AdditiveCallsAlwaysShareRequiredZero) {
     ASSERT_EQ(mixed.auxiliary.tiles.size(), 1U);
     EXPECT_EQ(mixed.auxiliary.tiles[0].type, ReduceAuxiliaryTileType::Zero);
     EXPECT_EQ(mixed.calls[1].auxiliary_cb_id, 1U);
-    EXPECT_EQ(mixed.calls[1].plan.auxiliary_cb->page_count, 1U);
+    EXPECT_EQ(mixed.calls[1].plan.auxiliary_cb.page_count, 1U);
     EXPECT_NO_THROW(mixed.get_compile_time_args());
     EXPECT_EQ(mixed.calls[0].auxiliary_tile_offset, mixed.calls[1].auxiliary_tile_offset);
     EXPECT_ANY_THROW(make_reduce_sequence_plan({{0, first}, {3, second}}, {no_cb_id, 2, 16, 64}, hardware));
@@ -345,6 +443,8 @@ TEST(ReduceHostPlanner, DefaultPolicyDoesNotDependOnInputCapacity) {
     using namespace ttnn::kernel_lib::host;
     const ReduceHardwareConfig hardware{.arch = tt::ARCH::WORMHOLE_B0, .fp32_dest_acc_en = true};
     auto block = whole_input(ReduceBlockSpec::tiled(256, 256, DataType::BFLOAT16, DataType::FLOAT32));
+    // Multi-column strips keep streamed H reductions on Native at any capacity.
+    block.output_group = 4;
     for (const auto capacity : {1U, 64U}) {
         block.input_cb_tiles = capacity;
         const auto plan =
@@ -385,7 +485,7 @@ TEST(ReduceHostPlanner, TailPlanningResolvesExactScalersAndMasks) {
             const auto& tail = *full.tail_plan;
             const bool add = algorithm == compute_kernel_lib::ReduceAlgorithm::TileSum;
             ASSERT_EQ(tail.auxiliary_tiles.size(), 2U);
-            EXPECT_EQ(full.auxiliary_cb->page_count, sequence.auxiliary.tiles.size());
+            EXPECT_EQ(full.auxiliary_cb.page_count, sequence.auxiliary.tiles.size());
             EXPECT_EQ(full.reduce_factor, add ? 256U : 1U);
             EXPECT_EQ(full.logical_h, 256U);
             EXPECT_EQ(full.logical_w, 256U);
@@ -426,7 +526,6 @@ TEST(ReduceHostPlanner, AlignedTailNeedsNoEdgeMasks) {
     const ReduceHardwareConfig hardware{.arch = tt::ARCH::WORMHOLE_B0, .fp32_dest_acc_en = true};
     auto block = whole_input(ReduceBlockSpec::tiled(256, 512, DataType::BFLOAT16, DataType::FLOAT32, 2));
     block.input_cb_tiles = 256;
-    block.allow_empty_auxiliary = true;
     block.tail = ReduceTailConfig{{64, 448, 1}};
     const auto native = make_reduce_plan(
         block,
@@ -734,7 +833,7 @@ TEST(ReduceHostPlanner, TailAuxiliaryRequirementsAreReportedWithoutBudgeting) {
     block.tail = ReduceTailConfig{{63, 63, 1}};
     const auto tail =
         make_reduce_plan(block, ReduceOpMath::MAX, ReduceOpDim::W, std::nullopt, ReduceFp32Mode::Fast, hardware);
-    EXPECT_GT(tail.auxiliary_cb->page_count, full.auxiliary_cb->page_count);
+    EXPECT_GT(tail.auxiliary_cb.page_count, full.auxiliary_cb.page_count);
 }
 
 TEST(ReduceHostPlanner, RetainedWholeRowHWTailsUseTheirOwnNormalization) {
@@ -934,7 +1033,10 @@ TEST(ReduceHostPlanner, PartialMaxUsesExistingScalerRecipe) {
                 const auto spec = [dtype](const Shape& shape) { return local_reduce_block(shape, dtype); };
                 for (const auto dim : {ReduceOpDim::W, ReduceOpDim::H}) {
                     for (const uint32_t valid : {1U, 15U, 16U, 17U, 31U}) {
-                        const auto input = spec(dim == ReduceOpDim::W ? Shape{32, 64 + valid} : Shape{64 + valid, 160});
+                        auto input = spec(dim == ReduceOpDim::W ? Shape{32, 64 + valid} : Shape{64 + valid, 160});
+                        if (dim == ReduceOpDim::H) {
+                            input.output_group = fp32_dest ? 4U : 5U;
+                        }
                         const auto plan = make_reduce_plan(
                             input,
                             ReduceOpMath::MAX,
@@ -1021,11 +1123,16 @@ TEST(ReduceHostPlanner, Bfloat16MinUsesTheSfpuExceptOnQuasar) {
     using namespace tt::tt_metal;
     using namespace ttnn::kernel_lib::host;
     auto input = local_reduce_block(Shape{64, 16 * 32}, DataType::BFLOAT16);
-    input.allow_empty_auxiliary = true;
     for (const auto dim : {ReduceOpDim::W, ReduceOpDim::H}) {
         for (const auto arch : {tt::ARCH::WORMHOLE_B0, tt::ARCH::BLACKHOLE}) {
+            auto block = input;
+            block.output_group =
+                dim == ReduceOpDim::H
+                    ? max_reduce_output_group(
+                          {arch, false, false}, DataType::BFLOAT16, ReduceOpMath::MIN, ReduceFp32Mode::Fast)
+                    : 1U;
             const auto plan = make_reduce_plan(
-                input,
+                block,
                 ReduceOpMath::MIN,
                 dim,
                 std::nullopt,
@@ -1033,7 +1140,7 @@ TEST(ReduceHostPlanner, Bfloat16MinUsesTheSfpuExceptOnQuasar) {
                 {arch, false, false},
                 compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop);
             EXPECT_EQ(plan.algorithm, compute_kernel_lib::ReduceAlgorithm::Native);
-            EXPECT_TRUE(plan.auxiliary_tiles.empty());
+            ASSERT_EQ(plan.auxiliary_tiles.size(), 1U);
             // The SFPU keeps one of the eight half-sync DEST tiles for itself.
             EXPECT_EQ(plan.chunk.output_tiles, dim == ReduceOpDim::H ? 7U : 1U);
         }
@@ -1185,7 +1292,7 @@ TEST(ReduceHostPlanner, SfpuScalarSurvivesSingleAndSequenceSerialization) {
                         compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop);
                     EXPECT_FLOAT_EQ(plan.post_scale, scalar);
                     ASSERT_EQ(plan.auxiliary_tiles.size(), 1U);
-                    EXPECT_FLOAT_EQ(plan.auxiliary_tiles[0].value, 1.0F);
+                    EXPECT_EQ(plan.auxiliary_tiles[0].type, ReduceAuxiliaryTileType::Placeholder);
                     const auto words = ReduceCallArgs(plan, {0U, 1U, 2U}).get_compile_time_args();
                     EXPECT_EQ(
                         words[static_cast<uint32_t>(args::CallWord::PostScaleBits)], std::bit_cast<uint32_t>(scalar));
@@ -1208,7 +1315,7 @@ TEST(ReduceHostPlanner, SfpuScalarSurvivesSingleAndSequenceSerialization) {
                         final_words[static_cast<uint32_t>(args::CallWord::PostScaleBits)],
                         std::bit_cast<uint32_t>(scalar));
                     ASSERT_EQ(sequence.auxiliary.tiles.size(), 1U);
-                    EXPECT_FLOAT_EQ(sequence.auxiliary.tiles[0].value, 1.0F);
+                    EXPECT_EQ(sequence.auxiliary.tiles[0].type, ReduceAuxiliaryTileType::Placeholder);
                 }
             }
         }
@@ -1272,7 +1379,8 @@ TEST(ReduceHostPlanner, BasicAlgorithmAndChunkSanity) {
     EXPECT_EQ(streaming_plan.input_policy, compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile);
     EXPECT_EQ(streaming_plan.input_cb_tiles, 2U);
 
-    const auto col_input = make_block(Shape{1, 1, 8 * 32, 8 * 32});
+    auto col_input = make_block(Shape{1, 1, 8 * 32, 8 * 32});
+    col_input.output_group = 8;
     const std::vector<ReduceCbConfig> reductions{
         {0U,
          ReduceCallConfig{
@@ -1385,8 +1493,7 @@ TEST(ReduceHostPlanner, BasicAlgorithmAndChunkSanity) {
     ASSERT_EQ(partial_sequence.calls[1].plan.auxiliary_tiles.size(), 2U);
     EXPECT_EQ(partial_sequence.calls[1].plan.auxiliary_tiles[0].type, ReduceAuxiliaryTileType::FirstRow);
     EXPECT_EQ(partial_sequence.calls[1].plan.auxiliary_tiles[1].type, ReduceAuxiliaryTileType::Zero);
-    ASSERT_TRUE(partial_sequence.calls[1].plan.auxiliary_cb.has_value());
-    EXPECT_EQ(partial_sequence.calls[1].plan.auxiliary_cb->page_count, 2U);
+    EXPECT_EQ(partial_sequence.calls[1].plan.auxiliary_cb.page_count, 2U);
     const auto first_serialized = ReduceCallArgs(partial_sequence.calls[0]).get_compile_time_args();
     const auto second_serialized = ReduceCallArgs(partial_sequence.calls[1]).get_compile_time_args();
     EXPECT_EQ(first_serialized.size(), ttnn::kernel_lib::reduce_plan_args::call_word_count);
@@ -1719,11 +1826,10 @@ TEST(ReduceHostPlanner, AuxiliaryCbDescribesTheRecipe) {
         block.input_cb_tiles = 2;
         const auto plan =
             make_reduce_plan(block, ReduceOpMath::SUM, ReduceOpDim::W, 1.0F, ReduceFp32Mode::Fast, hardware);
-        ASSERT_TRUE(plan.auxiliary_cb.has_value());
-        EXPECT_EQ(plan.auxiliary_cb->data_format, format);
-        EXPECT_EQ(plan.auxiliary_cb->page_size, tt::tile_size(format));
-        EXPECT_EQ(plan.auxiliary_cb->page_count, plan.auxiliary_tiles.size());
-        EXPECT_EQ(plan.auxiliary_cb->total_size_bytes, plan.auxiliary_tiles.size() * tt::tile_size(format));
+        EXPECT_EQ(plan.auxiliary_cb.data_format, format);
+        EXPECT_EQ(plan.auxiliary_cb.page_size, tt::tile_size(format));
+        EXPECT_EQ(plan.auxiliary_cb.page_count, plan.auxiliary_tiles.size());
+        EXPECT_EQ(plan.auxiliary_cb.total_size_bytes, plan.auxiliary_tiles.size() * tt::tile_size(format));
         EXPECT_EQ(plan.input_cb_tiles, 2U);
     }
 
@@ -1733,9 +1839,8 @@ TEST(ReduceHostPlanner, AuxiliaryCbDescribesTheRecipe) {
     auto aligned = config;
     aligned.block.logical_w = aligned.block.padded_w = 128;
     const auto sequence = make_reduce_sequence_plan({{0, config}, {3, aligned}}, {1, 2, 16, 2}, hardware);
-    ASSERT_TRUE(sequence.auxiliary.cb.has_value());
-    EXPECT_EQ(sequence.auxiliary.cb->page_count, sequence.auxiliary.tiles.size());
-    EXPECT_EQ(sequence.auxiliary.cb->data_format, tt::DataFormat::Float16_b);
+    EXPECT_EQ(sequence.auxiliary.cb.page_count, sequence.auxiliary.tiles.size());
+    EXPECT_EQ(sequence.auxiliary.cb.data_format, tt::DataFormat::Float16_b);
 }
 
 TEST(ReduceHostPlanner, AccumulatedSequencesRequireAccumulatorCapacity) {

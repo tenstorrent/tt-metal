@@ -7,8 +7,8 @@
 #include "experimental/kernel_args.h"
 
 void kernel_main() {
-    using Call = ttnn::kernel_lib::
-        BoundReduceCallArgs<ttnn::kernel_lib::ReduceCallArgs<0>, dfb::input, REDUCE_AUXILIARY_CB, dfb::out>;
+    using Call =
+        ttnn::kernel_lib::BoundReduceCallArgs<ttnn::kernel_lib::ReduceCallArgs<0>, dfb::input, dfb::scaler, dfb::out>;
     compute_kernel_hw_startup(dfb::input, dfb::out);
 
     // The reader streams each column contiguously. The plan handles its full

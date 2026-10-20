@@ -118,11 +118,10 @@ def run_moreh_mean_backward(
 
 
 @pytest.mark.parametrize("height", [128, 256, 273])
-def test_moreh_mean_optional_auxiliary(height, device):
-    # Aligned and partial heights with the optional-auxiliary factory contract.
-    # The factory explicitly requests chunked consumption through its two-tile FIFO.
-    # Reusing each program checks that leaving auxiliaries resident at exit does
-    # not carry their occupancy into the next launch.
+def test_moreh_mean_planned_auxiliary(height, device):
+    # Aligned and partial heights stream through the two-tile input FIFO; at HiFi4 the taller
+    # heights plan TileSum. Reusing each program checks that leaving auxiliaries resident at
+    # exit does not carry their occupancy into the next launch.
     torch.manual_seed(2024)
     for _ in range(2):
         run_moreh_mean(([height, 160], [0]), device, keepdim=True, compute_kernel_options=True)
