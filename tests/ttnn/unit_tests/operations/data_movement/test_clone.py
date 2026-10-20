@@ -501,7 +501,6 @@ def _two_shard_memory_config(shard_layout, buffer_type, shard_shape):
         ([1, 1, 128, 256], ttnn.TensorMemoryLayout.HEIGHT_SHARDED, [64, 256]),
         ([1, 1, 128, 256], ttnn.TensorMemoryLayout.WIDTH_SHARDED, [128, 128]),
         ([1, 1, 128, 256], ttnn.TensorMemoryLayout.BLOCK_SHARDED, [128, 128]),
-        # The last shard is a partial one.
         ([1, 1, 96, 96], ttnn.TensorMemoryLayout.HEIGHT_SHARDED, [64, 96]),
         ([1, 1, 64, 96], ttnn.TensorMemoryLayout.WIDTH_SHARDED, [64, 64]),
     ],
@@ -527,12 +526,8 @@ def test_clone_dram_sharded(
     request,
     device,
 ):
-    """
-    Test case to verify the clone operation when the input or the output is sharded in DRAM.
-    """
     if output_dtype and not tilized:
         pytest.skip("When not tilized, dtype conversion is not supported.")
-    # A different seed per case, so data left in DRAM by the previous case cannot match.
     torch.manual_seed(zlib.crc32(request.node.name.encode()))
     torch_input = torch.randn(shape, dtype=get_lib_dtype(torch, input_dtype))
     ttnn_input = ttnn.from_torch(

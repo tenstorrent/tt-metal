@@ -36,10 +36,8 @@ ttnn::device_operation::ProgramArtifacts CloneProgramFactory::create_program_art
 
     auto output_memory_layout = output.memory_config().memory_layout();
     bool is_sharded = output_memory_layout != TensorMemoryLayout::INTERLEAVED;
-    // The sharded kernels read and write the shard in their own L1; DRAM shards take the TensorAccessor path.
     bool shards_in_l1 = is_sharded && input.memory_config().is_l1() && output.memory_config().is_l1();
     if (is_sharded && !shards_in_l1 && !tilized) {
-        // Sharded row-major pages are one shard row wide.
         input_unit_size = input.buffer()->page_size();
         output_unit_size = output.buffer()->page_size();
         num_units = output.buffer()->num_pages();
