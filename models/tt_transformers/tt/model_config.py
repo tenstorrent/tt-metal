@@ -1432,6 +1432,7 @@ class ModelArgs:
                         self.dim,
                         self.hidden_dim // self.cluster_shape[1],  # Use padded N
                         prefetcher.ring_size,
+                        max_subblock_w=self.ring_matmul_max_subblock_w(OpGroup.LI_FF1_FF3),
                     )
                 else:
                     return self.dram_matmul_config(
@@ -1499,6 +1500,7 @@ class ModelArgs:
                         self.hidden_dim // self.cluster_shape[1],
                         self.dim,  # Use padded N
                         prefetcher.ring_size,
+                        max_subblock_w=self.ring_matmul_max_subblock_w(OpGroup.LI_FF2),
                     )
                 else:
                     return self.dram_matmul_config(
@@ -1846,6 +1848,7 @@ class ModelArgs:
                     self.dim // self.cluster_shape[0],
                     self.qkv_size // self.cluster_shape[1],  # Use padded N
                     prefetcher.ring_size,
+                    max_subblock_w=self.ring_matmul_max_subblock_w(OpGroup.LI_QKV_DECODE),
                     untilize_out=True,
                 )
             else:
@@ -2113,6 +2116,7 @@ class ModelArgs:
                     k_wo,
                     n_wo,
                     prefetcher.ring_size,
+                    max_subblock_w=self.ring_matmul_max_subblock_w(OpGroup.LI_O_DECODE),
                 )
             else:
                 if self.use_fused_all_gather_matmul:
@@ -2174,6 +2178,7 @@ class ModelArgs:
                     k_wo,
                     n_wo,
                     prefetcher.ring_size,
+                    max_subblock_w=self.ring_matmul_max_subblock_w(OpGroup.LI_O_DECODE),
                 )
             elif self.is_galaxy:
                 return None  # TG uses core_grid parameter instead
@@ -3967,6 +3972,19 @@ class ModelArgs:
             num_workers_per_dram_bank=num_workers_per_dram_bank,
         )
 
+    def ring_matmul_max_subblock_w(self, op: OpGroup) -> int:
+        """The widest one-row output subblock a decode ring matmul of ``op`` may use: what DEST holds under every
+        layer's compute config for ``op`` (8 tiles, 4 when it accumulates in fp32), up to 8."""
+
+        def dest_tiles(compute_kernel_config):
+            return 4 if compute_kernel_config.fp32_dest_acc_en else 8
+
+        optimizations = self.decoders_optimizations
+        return min(
+            dest_tiles(optimizations.get_math_fidelity(decoder_id, op, configuration=self))
+            for decoder_id in optimizations.decoder_optimizations
+        )
+
     def matmul_1d_ring_config(
         self,
         B,
@@ -3975,6 +3993,7 @@ class ModelArgs:
         N,
         num_cores,
         untilize_out=False,
+        max_subblock_w=8,
     ):
         M *= B  # Fuse batch always enabled
 
@@ -3990,9 +4009,6 @@ class ModelArgs:
             assert False, f"num_blocks_total {num_blocks_total} != num_cores {num_cores}"
 
         out_subblock_h = 1
-        # For Blackhole with fp32_dest_acc_en=True, out_subblock_h * out_subblock_w must be <= 4
-        # For Wormhole/Grayskull with fp32_dest_acc_en=False, the limit is 8
-        max_subblock_w = 8
         out_subblock_w = max_subblock_w
         while out_block_w % out_subblock_w != 0:
             out_subblock_w -= 1
