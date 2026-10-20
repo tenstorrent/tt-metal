@@ -509,3 +509,4 @@ section "With measured efficiencies".
   so the arena is zeroed after the shared expert and the shared expert has all of L1. Group: mesh rows on Galaxy
   (TP), SP pairs on the LoudBox (its TP line carries the combine). Router: one fused top-k writing the block's routing
   rows. L4 MoE block 4058 -> 2811 us (chunk 5120), 2423 -> 1791 (2048). Details: FLAT_COMBINE_OVERLAP_WORKLOG.md.
+  Next: the fused shared expert and its overlap with the dispatch - ttnn/ttnn/bringup/combine_rf/FUSED_SHARED_EXPERT_PLAN.md.
