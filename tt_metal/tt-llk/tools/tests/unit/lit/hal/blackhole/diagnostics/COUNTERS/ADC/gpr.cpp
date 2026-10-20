@@ -17,7 +17,7 @@
 //--- common.h
 #pragma once
 
-#include "hal/counters.h"
+#include "hal/tensix_counters.h"
 
 namespace counters = hal::counters;
 namespace adc      = hal::counters::adc;
