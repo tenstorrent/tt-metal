@@ -17,15 +17,20 @@ matrix, index tables and programs on the host (HPCG's GenerateProblem + Optimize
 """
 
 import json
+import os
 import sys
 import time
 
-import numpy as np
-import ttnn
+# TT-Metal's inspector appends a log record for every program it creates; on ext4 such an append can wait ~30 ms for
+# a journal commit (seen as a rare 30+ ms first launch). A timed run turns it off unless the caller sets it.
+os.environ.setdefault("TT_METAL_INSPECTOR", "0")
 
-from models.experimental.hpcg.reference import speed_of_light
-from models.experimental.hpcg.tt.hpcg import HPCG
-from models.experimental.hpcg.tt.layout import from_device
+import numpy as np  # noqa: E402
+import ttnn  # noqa: E402
+
+from models.experimental.hpcg.reference import speed_of_light  # noqa: E402
+from models.experimental.hpcg.tt.hpcg import HPCG  # noqa: E402
+from models.experimental.hpcg.tt.layout import from_device  # noqa: E402
 
 # HPCG 3.1 reference code (fp64, 24 threads, Ryzen 9 7900X): residual after 50 iterations
 CPU_REFERENCE_RESIDUAL_50 = {104: 4.99963e-08, 128: 3.945e-07, 192: 5.315e-05}
