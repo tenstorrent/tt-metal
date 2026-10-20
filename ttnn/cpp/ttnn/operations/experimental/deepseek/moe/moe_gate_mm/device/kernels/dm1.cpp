@@ -78,6 +78,7 @@ void kernel_main() {
     constexpr uint32_t collector_physical_y = get_named_compile_time_arg_val("collector_physical_y");
     constexpr uint32_t first_physical_x = get_named_compile_time_arg_val("first_physical_x");
     constexpr uint32_t first_physical_y = get_named_compile_time_arg_val("first_physical_y");
+    constexpr uint32_t num_mask_receivers = get_named_compile_time_arg_val("num_mask_receivers");
 
     constexpr auto in_args = TensorAccessorArgs<0>();
     constexpr auto w_args = TensorAccessorArgs<in_args.next_compile_time_args_offset()>();
@@ -159,7 +160,8 @@ void kernel_main() {
     //-------------------------------------------------------------------------
     // Collector core
     //-------------------------------------------------------------------------
-    constexpr uint32_t COLLECTOR_CORE_ID = 7;
+    // Last non-sender tile id; it equals the group-mask receiver count.
+    constexpr uint32_t COLLECTOR_CORE_ID = num_mask_receivers;
 
     const uint32_t local_collector_addr = 1024 + cb_w2c_in4.get_write_ptr();
     const uint64_t collector_dst_base_addr =
@@ -362,7 +364,7 @@ void kernel_main() {
         cb_w2c_in4.reserve_back(1);
 
         // I am collecting, let us wait for everyone else to finish sending their data to me
-        noc_semaphore_wait_min(my_collector_semaphore_ptr, 7);
+        noc_semaphore_wait_min(my_collector_semaphore_ptr, num_mask_receivers);
 
         // Let compute know that we got the group scores
         cb_w2c_in4.push_back(1);
@@ -373,7 +375,6 @@ void kernel_main() {
         cb_w2c_in5.wait_front(1);
         // Unicast each worker. The ring rectangle includes a dispatch core when dispatch is on a row.
         *my_semaphore_ptr = 1;
-        constexpr uint32_t num_mask_receivers = 7;
         for (uint32_t receiver = 0; receiver < num_mask_receivers; ++receiver) {
             const uint32_t receiver_x = get_arg_val<uint32_t>(argidx + (receiver * 2));
             const uint32_t receiver_y = get_arg_val<uint32_t>(argidx + (receiver * 2) + 1);
@@ -396,7 +397,7 @@ void kernel_main() {
         cb_w2c_in6.reserve_back(4);
 
         // Wait for the top8 partials to arrive (7 group-score + 7 top8 increments)
-        noc_semaphore_wait_min(my_collector_semaphore_ptr, 7 + 7);
+        noc_semaphore_wait_min(my_collector_semaphore_ptr, num_mask_receivers + num_mask_receivers);
 
         // Let compute know that we got the top8 partials
         cb_w2c_in6.push_back(4);
