@@ -103,7 +103,7 @@ class move_only_function;
 template <typename R, typename... Args>
 class move_only_function<R(Args...)> {
     struct alignas(8) VTable {  // room for the three tag bits on 32-bit targets too
-        R (*call)(void* storage, Args&&... args);
+        R (*call)(void* storage, Args... args);
         void (*relocate)(void* dst, void* src) noexcept;  // move-construct into dst, then destroy src
         void (*destroy)(void* storage) noexcept;
     };
