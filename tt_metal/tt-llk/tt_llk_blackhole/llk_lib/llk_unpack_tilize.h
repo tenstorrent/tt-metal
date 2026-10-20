@@ -495,8 +495,7 @@ inline void _llk_unpack_tilizeA_B_init_(
     config_unpacker_x_end<p_setadc::UNP_B>(unpB_face_r_dim);
 
     // Set Y stride for SrcA to be one 1x16 row of datums
-    std::uint32_t unpA_ch1_y_stride = SCALE_DATUM_SIZE(unpack_dst_format, FACE_C_DIM);
-    cfg_reg_rmw_tensix<UNP0_ADDR_CTRL_XY_REG_1_Ystride_RMW>(unpA_ch1_y_stride);
+    cfg_reg_rmw_tensix<UNP0_ADDR_CTRL_XY_REG_1_Ystride_RMW>(canonical_unpA_y_stride(unpack_dst_format));
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(0);
 
     _llk_unpack_tilizeA_B_mop_config_<neginf_srcA, reload_srcB, zero_srcA, zero_srcA_reduce>(num_faces);

@@ -340,7 +340,10 @@ def test_grid_sample_wide_reduction(device, input_shape, grid_shape, align_corne
 @pytest.mark.parametrize("sharded_grid", [False, True])
 @pytest.mark.parametrize("align_corners", [False, True])
 @pytest.mark.parametrize("channels", [32, 384])
-def test_grid_sample_bilinear_weight_format(device, input_dtype, grid_kind, sharded_grid, align_corners, channels):
+@pytest.mark.parametrize("fp32_dest_acc_en", [False, True])
+def test_grid_sample_bilinear_weight_format(
+    device, input_dtype, grid_kind, sharded_grid, align_corners, channels, fp32_dest_acc_en
+):
     torch.manual_seed(42)
     input_tensor = torch.randn(1, 8, 16, channels).to(input_dtype)
     # Dyadic coordinates keep weights exactly representable while covering image boundaries.
@@ -377,6 +380,12 @@ def test_grid_sample_bilinear_weight_format(device, input_dtype, grid_kind, shar
         mode="bilinear",
         align_corners=align_corners,
         use_precomputed_grid=use_precomputed_grid,
+        compute_kernel_config=ttnn.init_device_compute_kernel_config(
+            device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=fp32_dest_acc_en,
+        ),
     )
     torch.testing.assert_close(ttnn.to_torch(output), expected, atol=0.02, rtol=0.02)
 
