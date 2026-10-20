@@ -104,6 +104,16 @@ ALWI void sdpa_reduce_copy_tile_to_dst_init_short(uint32_t dfbid, uint32_t trans
 #endif
 }
 
+// Pops a constant the writer pushed once and compute read by index without popping. Waiting first makes the
+// pop safe on a core that never read it; dummy_unpack orders the pop after the wait on Quasar (a bare
+// wait_front -> pop_front traps the unpacker).
+ALWI void release_writer_constant(uint32_t dfb_id, uint32_t num_tiles) {
+    DataflowBuffer dfb(dfb_id);
+    dfb.wait_front(num_tiles);
+    dummy_unpack(dfb_id);
+    dfb.pop_front(num_tiles);
+}
+
 /**
  * in0_dfb = max(in0_dfb, in1_dfb)
  */

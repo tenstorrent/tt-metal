@@ -6,6 +6,7 @@
 #define BCAST_DIM BroadcastType::COL
 
 #include <cstdint>
+#include "api/compute/tile_move_copy.h"  // dummy_unpack
 #include "api/compute/reduce.h"
 #include "api/compute/bcast.h"
 #include "api/compute/layernorm.h"
@@ -15,6 +16,7 @@
 #include "api/compute/sfpu_binary_bcast.h"
 #include "ttnn/operations/normalization/kernel_util/compute/combine_welford.h"
 #include "ttnn/operations/normalization/kernel_util/compute/memory.h"
+#include "api/compute/pack.h"  // dummy_pack
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
 
@@ -132,6 +134,17 @@ inline uint32_t get_next_set_size(
     return block_set_size((own_row * num_blocks_first_stage) + block, boundary_width_index, block_w, last_block_w);
 }
 }  // namespace
+// Without FUSE_PRE_ADD the intake is the resident input shard (in0, and its x_welford alias), and this kernel
+// is its only producer and consumer (self-loop). The rows below are read relative to the read pointer and
+// popped to advance it, so push each row (the data is already in L1) right before it is popped to keep the
+// buffer balanced. On Quasar a push with no intervening pack trips the TEN-4746 guard, so emit a no-write
+// PACR first (a no-op on WH/BH).
+ALWI void push_resident_row(DataflowBuffer& dfb, uint32_t num_tiles) {
+    dfb.reserve_back(num_tiles);
+    dummy_pack(dfb.get_id());
+    dfb.push_back(num_tiles);
+}
+
 void kernel_main() {
     // An idle core sits in a hole of a non-rectangular shard grid. It carries this program's dataflow
     // buffers so the reduction's multicast has somewhere to land, and does no work of its own, so its
@@ -609,6 +622,10 @@ void kernel_main() {
                 }
                 tile_regs_release();
             }
+#ifndef FUSE_PRE_ADD
+            push_resident_row(dfb_in, block_wt);
+            push_resident_row(dfb_x_welford, block_wt);
+#endif
             dfb_in.pop_front(block_wt);
             dfb_x_welford.pop_front(block_wt);
             dfb_transpose.pop_front(2);
@@ -639,6 +656,9 @@ void kernel_main() {
                 tile_regs_release();
                 index_subblock_w_offset += subblock_wt;
             }
+#ifndef FUSE_PRE_ADD
+            push_resident_row(dfb_in, block_wt);
+#endif
             dfb_in.pop_front(block_wt);
         }
         dfb_xmm.push_back(num_tiles_per_block);
@@ -769,6 +789,13 @@ void kernel_main() {
     // Beta is read by tile index across every row of the block, so it is waited once rather
     // than per row. Pop it here to balance the buffer.
     dfb_beta.pop_front(block_wt);
+#endif
+#ifdef OUT_SELF_LOOP
+    // Without a write-back the output buffer has no reader: this kernel is its only producer and consumer.
+    // Pop what it pushed so the buffer is left balanced.
+    dfb_out.wait_front(num_tiles_per_block);
+    dummy_unpack(dfb_out_id);
+    dfb_out.pop_front(num_tiles_per_block);
 #endif
 
 #endif  // IDLE_CORE

@@ -288,7 +288,13 @@ void kernel_main() {
     // Welford produces the mean and variance together in the pass above, so it has no separate
     // variance reduction and those buffers are not declared either.
 #ifndef USE_WELFORD
+#ifdef TWO_STAGE_REDUCE
     global_reduce_receiver(dfb::ex_partial2, dfb::ex_external2, dfb::ex2pe, dfb::ex_global, dfb::ex2, 1);
+#else
+    // A single-stage reduce has no first-stage result, so ex2 does not exist. The argument goes unused;
+    // ex2pe stands in for it, as ex does in the E[x] call above.
+    global_reduce_receiver(dfb::ex_partial2, dfb::ex_external2, dfb::ex2pe, dfb::ex_global, dfb::ex2pe, 1);
+#endif
 #endif
 
 #endif  // IDLE_CORE

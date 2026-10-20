@@ -29,6 +29,10 @@
 #include "api/compute/tilize.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "experimental/kernel_args.h"
+#ifdef OUT_SELF_LOOP
+#include "api/compute/tile_move_copy.h"  // dummy_unpack
+#include "api/dataflow/dataflow_buffer.h"
+#endif
 
 void kernel_main() {
     constexpr uint32_t per_core_block_cnt = get_arg(args::per_core_block_cnt);
@@ -49,4 +53,15 @@ void kernel_main() {
         compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
         compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure,
         fp32_mode>(per_core_block_cnt);
+#ifdef OUT_SELF_LOOP
+    // Sharded output (embeddings): there is no writer, so this kernel is the output shard's only producer and
+    // consumer (self-loop). Pop everything it pushed so the buffer is left balanced; the tiles stay in place.
+    // dummy_unpack orders the pop after the wait on Quasar (nothing unpacks this buffer).
+    {
+        DataflowBuffer out_dfb(dfb::out);
+        out_dfb.wait_front(per_core_block_cnt * per_core_block_tile_cnt);
+        dummy_unpack(dfb::out);
+        out_dfb.pop_front(per_core_block_cnt * per_core_block_tile_cnt);
+    }
+#endif
 }
