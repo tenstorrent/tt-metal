@@ -41,7 +41,7 @@ GRID = SimpleNamespace(x=11, y=10)
     ],
 )
 def test_ring_sdpa_chunk_sizes(slab, sliding, expected):
-    assert ring_sdpa_chunk_sizes(slab, sliding, num_heads=8, num_cores=110) == expected
+    assert ring_sdpa_chunk_sizes(slab, sliding, num_heads=8, num_cores=110, use_tuned_configs=True) == expected
 
 
 @pytest.fixture
@@ -56,20 +56,10 @@ def ring_sdpa_table_file(tmp_path, monkeypatch):
 def test_ring_sdpa_table_unavailable_uses_heuristic(ring_sdpa_table_file, contents):
     if contents is not None:
         ring_sdpa_table_file.write_text(contents)
-    assert ring_sdpa_chunk_sizes(768, False) == (96, 256, 1, True)
+    assert ring_sdpa_chunk_sizes(768, False, use_tuned_configs=True) == (96, 256, 1, True)
     # The old small-slab heuristic could request segments for 112 Q units on 110 cores.
-    assert ring_sdpa_chunk_sizes(448, False) == (32, 256, 3, False)
-    assert ring_sdpa_chunk_sizes(448, True) == (128, 128, 3, False)
-
-
-@pytest.mark.parametrize(
-    "invalid",
-    [None, {}, [128, 256], [112, 256, 3, True], [128, 0, 3, True], [128, 256, 0, True], [128, 256, 3, "true"]],
-)
-def test_ring_sdpa_bad_entry_preserves_other_entries(ring_sdpa_table_file, invalid):
-    ring_sdpa_table_file.write_text(json.dumps({"configs": {"6144": invalid, "4096": [128, 288, 3, True]}}))
-    assert ring_sdpa_chunk_sizes(768, False) == (96, 256, 1, True)
-    assert ring_sdpa_chunk_sizes(512, False) == (128, 288, 3, True)
+    assert ring_sdpa_chunk_sizes(448, False, use_tuned_configs=True) == (32, 256, 3, False)
+    assert ring_sdpa_chunk_sizes(448, True, use_tuned_configs=True) == (128, 128, 3, False)
 
 
 def test_ring_sdpa_table_is_relative_to_module_and_cached(ring_sdpa_table_file, tmp_path, monkeypatch):
@@ -77,15 +67,16 @@ def test_ring_sdpa_table_is_relative_to_module_and_cached(ring_sdpa_table_file, 
     other.mkdir()
     monkeypatch.chdir(other)
     ring_sdpa_table_file.write_text(json.dumps({"configs": {"6144": [128, 256, 3, True]}}))
-    assert ring_sdpa_chunk_sizes(768, False) == (128, 256, 3, True)
+    assert ring_sdpa_chunk_sizes(768, False, use_tuned_configs=True) == (128, 256, 3, True)
     ring_sdpa_table_file.unlink()
-    assert ring_sdpa_chunk_sizes(768, False) == (128, 256, 3, True)
+    assert ring_sdpa_chunk_sizes(768, False, use_tuned_configs=True) == (128, 256, 3, True)
 
 
 def test_ring_sdpa_tuning_is_optional_and_geometry_specific():
+    assert ring_sdpa_chunk_sizes(768, False) == (96, 256, 1, True)
     assert ring_sdpa_chunk_sizes(768, False, use_tuned_configs=False) == (96, 256, 1, True)
-    assert ring_sdpa_chunk_sizes(768, False, num_heads=4) == (96, 256, 1, True)
-    assert ring_sdpa_chunk_sizes(768, False, num_cores=120) == (96, 256, 1, True)
+    assert ring_sdpa_chunk_sizes(768, False, num_heads=4, use_tuned_configs=True) == (96, 256, 1, True)
+    assert ring_sdpa_chunk_sizes(768, False, num_cores=120, use_tuned_configs=True) == (96, 256, 1, True)
 
 
 @pytest.mark.parametrize(

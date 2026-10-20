@@ -191,21 +191,26 @@ def global_ring_prefill_attention(
     mesh_device = mesh_config.device
     if program_config is None:
         sdpa_grid = ccl_manager.compute_grid_size
+
+        # Determine whether to use the tuned configurations for the ring prefill attention.
+        use_tuned_configs = (
+            mesh_device.arch() == ttnn.Arch.BLACKHOLE
+            and mesh_config.cp_degree == 8
+            and mesh_config.tp_degree == 4
+            and (sdpa_grid.x - 1, sdpa_grid.y) == (11, 10)
+            and num_local_kv_heads == 1
+            and tt_q.dtype == ttnn.bfloat16
+            and cache_kv.dtype == ttnn.bfloat8_b
+        )
+
         q_chunk, k_chunk, k_splits, segmented = ring_sdpa_chunk_sizes(
             tt_q.shape[-2],
             sliding=False,
             num_heads=tt_q.shape[1],
             num_cores=(sdpa_grid.x - 1) * sdpa_grid.y,
-            use_tuned_configs=(
-                mesh_device.arch() == ttnn.Arch.BLACKHOLE
-                and mesh_config.cp_degree == 8
-                and mesh_config.tp_degree == 4
-                and (sdpa_grid.x - 1, sdpa_grid.y) == (11, 10)
-                and num_local_kv_heads == 1
-                and tt_q.dtype == ttnn.bfloat16
-                and cache_kv.dtype == ttnn.bfloat8_b
-            ),
+            use_tuned_configs=use_tuned_configs,
         )
+
         program_config = ring_prefill_program_config(
             mesh_device,
             ccl_manager,
@@ -217,6 +222,7 @@ def global_ring_prefill_attention(
             matmul_math_fidelity=ttnn.MathFidelity.LoFi,
             segmented_accumulation=segmented,
         )
+
     # Dense attention gathers each device's whole shard, so the buffer spans the full cache capacity. Sizing it to
     # logical_n survives a 2-chunk run and then fails "gather dim 2 too small".
     cp = mesh_config.cp_degree
@@ -260,36 +266,18 @@ _GLOBAL_Q_CHUNKS = (96, 128)
 
 @lru_cache(maxsize=1)
 def _load_global_ring_sdpa_configs():
-    """Read the optional full-context LoFi table once; ignore unusable entries."""
+    """Load the tuned ring SDPA configurations from a JSON file."""
     try:
         data = json.loads(Path(__file__).with_name("ring_sdpa_configs.json").read_text())
     except (OSError, ValueError):
         return {}
     if not isinstance(data, dict) or not isinstance(data.get("configs"), dict):
         return {}
-    configs = {}
-    for chunk, config in data["configs"].items():
-        if not chunk.isdecimal() or int(chunk) <= 0 or int(chunk) % (8 * TILE_HEIGHT):
-            continue
-        if not isinstance(config, list) or len(config) != 4:
-            continue
-        q, k, splits, segmented = config
-        if (
-            type(q) is int
-            and 0 < q <= int(chunk) // 8
-            and q % TILE_HEIGHT == 0
-            and type(k) is int
-            and k > 0
-            and k % TILE_HEIGHT == 0
-            and type(splits) is int
-            and 1 <= splits <= 4
-            and type(segmented) is bool
-        ):
-            configs[int(chunk)] = (q, k, splits, segmented)
-    return configs
+
+    return {int(chunk): tuple(config) for chunk, config in data["configs"].items()}
 
 
-def ring_sdpa_chunk_sizes(q_slab_tokens, sliding, num_heads=8, num_cores=110, *, use_tuned_configs=True):
+def ring_sdpa_chunk_sizes(q_slab_tokens, sliding, num_heads=8, num_cores=110, *, use_tuned_configs=False):
     """(q_chunk_size, k_chunk_size, max_k_splits, segmented_accumulation) for the ring SDPA, from the per-rank Q slab
     (chunk / CP), the local heads and the SDPA cores.
     """
