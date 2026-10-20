@@ -770,7 +770,8 @@ class TtDSA(LightweightModule):
         idx = self.indexer
         x_s = ttnn.slice(x, [0, 0, split, 0], [1, 1, T, x.shape[-1]]) if split else x
         qr_s = ttnn.slice(q_resid, [0, 0, split, 0], [1, 1, T, q_resid.shape[-1]]) if split else q_resid
-        q_i, w_i = idx.queries_and_weights(x_s, qr_s)
+        rows_form = idx.prefill_scorer_custom  # the custom scorer's query layout (multi-row meshes; knob)
+        q_i, w_i = idx.queries_and_weights(x_s, qr_s, rows_form=rows_form)
         ttnn.deallocate(q_resid)
         indices = idx.select(
             q_i,
@@ -779,6 +780,7 @@ class TtDSA(LightweightModule):
             cache.index.prefill_slot(user),
             query_start=start + split,
             num_pools_valid=end // idx.P,
+            q_rows_form=rows_form,
         )
         ttnn.deallocate(q_i)
         ttnn.deallocate(w_i)

@@ -43,18 +43,29 @@ class IndexScoreDecode:
         out: ttnn.Tensor,
         valid_rows: ttnn.Tensor | None = None,
         segments: int = 1,
+        slot: int | None = None,
+        cols: int | None = None,
     ) -> ttnn.Tensor:
         """q [1, B, 32, D] bf16 TILE (user b's 32 index heads as rows); w [1, 1, B, 32] bf16 TILE (B <= 32 per tile
         row, the head weights with the n_heads^-0.5 folded); pools [slots, 1, W, D] bf16 / bfp8_b TILE (the pooled-key
         cache view, slots >= B, user b = slot b, W % (32*KC) == 0); out bf16 ROW_MAJOR, pre-allocated: [B, 1, 1, W], or
         [B*segments, 1, 1, W/segments] with ``segments`` > 1 (the two-stage top-k's per-segment rows; W/segments %
         (32*KC) == 0). ``valid_rows`` [B, 1] uint32 (the per-user bound in pools): columns at and beyond it are written
-        as -inf, so the top-k needs no per-row bound. Returns ``out``."""
+        as -inf, so the top-k needs no per-row bound. ``slot``: every user scores the pools of that ONE cache slot
+        (prefill: the T queries of one prompt as T users of the same slot, each bounded by its own causal pool count);
+        ``cols``: score only the first ``cols`` pools of the slot (cols % (32*KC) == 0; the out row is ``cols`` wide),
+        the slot stride stays the cache width. Returns ``out``."""
         B, Hi, D = q.shape[1], q.shape[2], q.shape[3]
-        W = pools.shape[2]
+        W_full = pools.shape[2]
+        W = cols if cols is not None else W_full
         assert list(q.shape) == [1, B, TILE, D] and Hi == TILE, q.shape
         assert list(w.shape) == [1, 1, B, TILE], w.shape
-        assert list(pools.shape)[1:] == [1, W, D] and pools.shape[0] >= B, (pools.shape, B)
+        assert list(pools.shape)[1:] == [1, W_full, D], pools.shape
+        assert W % TILE == 0 and W <= W_full, (W, W_full)
+        if slot is None:
+            assert pools.shape[0] >= B, (pools.shape, B)
+        else:
+            assert 0 <= slot < pools.shape[0], (slot, pools.shape)
         assert segments >= 1 and W % segments == 0, (W, segments)
         seg_cols = W // segments
         assert list(out.shape) == [B * segments, 1, 1, seg_cols], (out.shape, B, segments, seg_cols)
@@ -75,6 +86,8 @@ class IndexScoreDecode:
         Dt, KC = D // TILE, self.KC
         Tt = W // TILE
         total_chunks = Tt // KC
+        # the user's pool slot: slot_base + b * slot_stride, slot_pages tile pages apart (the cache width, not ``cols``)
+        slot_base, slot_stride, slot_pages = (slot, 0, (W_full // TILE) * Dt) if slot is not None else (0, 1, Tt * Dt)
         # work items (user, k-band): about one per core, bands of whole chunks
         n_bands = max(1, min(-(-self.n_cores // B), total_chunks))
         band_chunks = -(-total_chunks // n_bands)
@@ -107,7 +120,7 @@ class IndexScoreDecode:
             cb(7, 64, 1),  # the user's bound page (writer v2 scratch)
         ]
         acc = lambda t: ttnn.TensorAccessorArgs(t).get_compile_time_args()
-        reader_ct = [Dt, KC, Tt, k_tile_bytes] + acc(q) + acc(pools) + acc(w)
+        reader_ct = [Dt, KC, Tt, k_tile_bytes, slot_base, slot_stride, slot_pages] + acc(q) + acc(pools) + acc(w)
         compute_ct = [Dt, KC]
         writer_ct = [KC] + acc(out)
         if v2:

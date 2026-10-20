@@ -38,6 +38,7 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.demos.glm53_flash.custom_ops.index_score_decode.op import IndexScoreDecode
 from models.demos.glm53_flash.tt.config import GLM53FlashConfig
 
 TILE = 32
@@ -292,6 +293,7 @@ class TtDSAIndexer(LightweightModule):
         self.fp32 = _compute(device)
         self.score_cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=32, k_chunk_size=32, head_group_size=0)
         self._mesh_rows = tuple(device.shape)[0] if isinstance(device, ttnn.MeshDevice) else 1
+        self._prefill_scorer: IndexScoreDecode | None = None
         self._const_cache: dict[tuple, ttnn.Tensor] = {}
         self.stage_timer = None  # TtDSA.set_stage_timer installs a StageTimer (test instrumentation)
 
@@ -327,13 +329,16 @@ class TtDSAIndexer(LightweightModule):
         return ttnn.reshape(self._pool_groups(ring_k, ring_g), [1, B, 1, self.D])
 
     def queries_and_weights(
-        self, x: ttnn.Tensor, q_resid: ttnn.Tensor, w: ttnn.Tensor | None = None
+        self, x: ttnn.Tensor, q_resid: ttnn.Tensor, w: ttnn.Tensor | None = None, *, rows_form: bool = False
     ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """-> q [1,Hi,T,D] bf16 (scale folded), w [1,1,T,Hi] bf16 (n_heads^-0.5 folded; ``w`` given =
-        already computed by the caller's fused stem)."""
+        already computed by the caller's fused stem). ``rows_form``: q as [1,T,Hi,D] instead (query t's heads as
+        the rows of its tile row: the custom scorer's layout, ``select(q_rows_form=True)``)."""
         T = x.shape[-2]
         q = ttnn.linear(q_resid, self.w_qb, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)  # [1,1,T,Hi*D]
-        q = ttnn.transpose(ttnn.reshape(q, [1, T, self.Hi, self.D]), 1, 2)  # [1,Hi,T,D]
+        q = ttnn.reshape(q, [1, T, self.Hi, self.D])  # [1,T,Hi,D]
+        if not rows_form:
+            q = ttnn.transpose(q, 1, 2)  # [1,Hi,T,D]
         if w is None:
             w = ttnn.linear(x, self.w_weights, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)  # [1,1,T,Hi]
         return q, w
@@ -444,13 +449,16 @@ class TtDSAIndexer(LightweightModule):
         query_start: int,
         num_pools_valid: int,
         row: int | None = None,
+        q_rows_form: bool = False,
     ) -> ttnn.Tensor:
         """Top-2048 token ids (+ tail, sentinel-padded to a multiple of 128) for queries at absolute
         positions ``query_start + s``. Returns [1,1,T,W] uint32 ROW_MAJOR. With ``row`` only that query
         row of the (tile-aligned) block is selected: the scores are sliced to the row before the 4x
         expansion and the top-k, so a decode query costs one row of the key-wide pass instead of the
-        32 rows of its padded block; the result is [1,1,1,W] (identical to row ``row`` of the full one)."""
-        T = q.shape[-2]
+        32 rows of its padded block; the result is [1,1,1,W] (identical to row ``row`` of the full one).
+        ``q_rows_form``: ``q`` is [1,T,Hi,D] and the scores come from the custom scorer (``_score_prefill_rows``:
+        per-row causal bounds, no per-device chunk offset, hence the form for multi-row meshes)."""
+        T = q.shape[1] if q_rows_form else q.shape[-2]
         # one spare tile beyond the valid pools: the op requires the (32-aligned) chunk start to lie inside
         # kv_len*P tokens, and a decode query at position a may sit in a block starting at a - a%32 >= 4*pools.
         # The spare rows are causally invisible to the real query (pool p visible iff 4p+3 <= a).
@@ -459,27 +467,34 @@ class TtDSAIndexer(LightweightModule):
         # the whole-mesh ring scores with chunk_start + r*Sq); the queries here are REPLICATED over the
         # tensor-parallel columns, so the SP axis is the row axis (extent 1 on a single-row mesh ->
         # every chip uses chunk_start as-is). Multi-row meshes are the Phase-3 SP prefill engine.
-        if self._mesh_rows != 1:
-            raise NotImplementedError("sparse selection on a multi-row mesh is not wired (sequence-parallel rows)")
-        scores = ttnn.experimental.indexer_score_dsa(
-            q,
-            cache.pools_batched(),
-            w,
-            chunk_start_idx=query_start,
-            key_compression_ratio=self.P,
-            program_config=self.score_cfg,
-            cache_batch_idx=user,
-            kv_len=kv_len,
-            seq_shard_axes=[0],
-        )  # [1,1,T,pools_per_user] bf16, -inf where not visible
-        self._mark("index_score")
-        # The op scores the allocated width (pools_per_user, the KV pool size: 262 176 at 1 M positions); only
-        # the first kv_len columns can be selected, so the untilize + expansion + top-k work on that prefix
-        # and scale with the user's context rather than the pool size.
-        scores_valid = scores
-        if kv_len < scores.shape[-1]:
-            scores_valid = ttnn.slice(scores, [0, 0, 0, 0], [1, 1, T, kv_len])
-        scores_rm = ttnn.to_layout(scores_valid, ttnn.ROW_MAJOR_LAYOUT)
+        if q_rows_form:
+            scores = scores_valid = None
+            scores_rm = self._score_prefill_rows(q, w, cache, user, query_start=query_start, kv_len=kv_len)
+            self._mark("index_score")
+        else:
+            if self._mesh_rows != 1:
+                # the shared op gives mesh row r the chunk start + r*Sq (sequence-parallel rows); replicated or
+                # independent rows score through the custom scorer instead (GLM53_PREFILL_SCORER)
+                raise NotImplementedError("sparse selection on a multi-row mesh needs q_rows_form (custom scorer)")
+            scores = ttnn.experimental.indexer_score_dsa(
+                q,
+                cache.pools_batched(),
+                w,
+                chunk_start_idx=query_start,
+                key_compression_ratio=self.P,
+                program_config=self.score_cfg,
+                cache_batch_idx=user,
+                kv_len=kv_len,
+                seq_shard_axes=[0],
+            )  # [1,1,T,pools_per_user] bf16, -inf where not visible
+            self._mark("index_score")
+            # The op scores the allocated width (pools_per_user, the KV pool size: 262 176 at 1 M positions); only
+            # the first kv_len columns can be selected, so the untilize + expansion + top-k work on that prefix
+            # and scale with the user's context rather than the pool size.
+            scores_valid = scores
+            if kv_len < scores.shape[-1]:
+                scores_valid = ttnn.slice(scores, [0, 0, 0, 0], [1, 1, T, kv_len])
+            scores_rm = ttnn.to_layout(scores_valid, ttnn.ROW_MAJOR_LAYOUT)
         tail = self._tail_ids(T, query_start)  # [1,1,T,P-1] uint32 (cached per geometry)
         row_slice = None
         if row is not None:
@@ -519,6 +534,38 @@ class TtDSAIndexer(LightweightModule):
                 ttnn.deallocate(t)
         self._mark("ids_concat")
         return idx
+
+    @property
+    def prefill_scorer_custom(self) -> bool:
+        """``GLM53_PREFILL_SCORER``: ``auto`` (default: the custom scorer on multi-row meshes, the shared
+        ``indexer_score_dsa`` on one row / one chip), ``custom``, ``shared``."""
+        mode = os.environ.get("GLM53_PREFILL_SCORER", "auto")
+        if mode == "auto":
+            return self._mesh_rows != 1
+        assert mode in ("custom", "shared"), mode
+        return mode == "custom"
+
+    def _score_prefill_rows(
+        self, q: ttnn.Tensor, w: ttnn.Tensor, cache: TtIndexCache, user: int, *, query_start: int, kv_len: int
+    ) -> ttnn.Tensor:
+        """Pool scores of T prefill queries through the batched decode scorer (``custom_ops/index_score_decode``):
+        query t is one "user" of the op (its Hi = 32 index heads as the rows of its [32, D] block, ``q`` [1,T,Hi,D]),
+        every user scores the same slot ``user`` over the first ``kv_len`` (256-rounded) pools, and the causal bound
+        of row t (pools < floor((query_start + t + 1) / P)) is written as -inf by the op's per-row mask -- no
+        per-device chunk offset, so mesh rows holding replicated or independent prompts score alike (the shared op
+        gives row r the start + r*Sq of a sequence-parallel ring). [1,1,T,cols] bf16 ROW_MAJOR, cols >= kv_len."""
+        T = q.shape[1]
+        W = cache.pools_per_user
+        if self._prefill_scorer is None:
+            self._prefill_scorer = IndexScoreDecode(self.device)
+        unit = TILE * self._prefill_scorer.KC
+        cols = min(W, -(-kv_len // unit) * unit)
+        bounds = torch.tensor([[min(cols, (query_start + t + 1) // self.P)] for t in range(T)], dtype=torch.int32)
+        valid_rows = ttnn.from_torch(bounds, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device)
+        out = ttnn.zeros((T, 1, 1, cols), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device)
+        self._prefill_scorer(q, w, cache.pools_batched(), out, valid_rows=valid_rows, slot=user, cols=cols)
+        ttnn.deallocate(valid_rows)
+        return ttnn.reshape(out, [1, 1, T, cols])
 
     # ------------------------------------------------- traced multi-user decode
     def decode_chunk_start(self, cache: TtIndexCache) -> int:
