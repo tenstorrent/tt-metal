@@ -305,7 +305,15 @@ void assert_fastpath_parity(
         if (!desc.kernels[k].common_runtime_args.empty()) {
             const auto& f = GetCommonRuntimeArgs(fast, k);
             const auto& r = GetCommonRuntimeArgs(rebuilt, k);
-            for (uint32_t i = 0; i < static_cast<uint32_t>(std::min(f.size(), r.size())); ++i) {
+            TT_FATAL(
+                f.size() == r.size(),
+                "descriptor fast-path parity FAILED for op {}: kernel {} has {} common runtime args on the "
+                "cache-hit fast path but {} on a fresh rebuild.",
+                op_name,
+                k,
+                f.size(),
+                r.size());
+            for (uint32_t i = 0; i < static_cast<uint32_t>(f.size()); ++i) {
                 TT_FATAL(
                     f[i] == r[i],
                     "descriptor fast-path parity FAILED for op {}: kernel {} common arg[{}] fast=0x{:x} "
