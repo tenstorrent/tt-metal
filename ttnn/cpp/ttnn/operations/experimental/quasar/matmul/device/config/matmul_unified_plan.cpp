@@ -136,6 +136,155 @@ bool shard_matches(
     return shard_cores == cores;
 }
 
+// Every field of the plan for one set of choices: C slice, subblock, K chunk, reader threads and C buffer depth. `base`
+// holds the fields every candidate shares; `cores` are the config's cores, of which the first C_slices_per_batch are
+// active.
+MatmulUnifiedPlan make_plan(
+    const MatmulUnifiedPlan& base,
+    const CoreRangeSet& cores,
+    const ttnn::Tensor& A,
+    const ttnn::Tensor& B,
+    const std::optional<ttnn::Tensor>& output,
+    const MatmulParams& attributes,
+    uint32_t C_slice_M_tiles,
+    uint32_t C_slice_N_tiles,
+    uint32_t subblock_M_tiles,
+    uint32_t subblock_N_tiles,
+    uint32_t K_chunk_tiles,
+    uint32_t num_reader_threads,
+    uint32_t C_buffer_depth) {
+    MatmulUnifiedPlan plan = base;
+    const std::vector<CoreCoord> all_cores =
+        corerange_to_cores(cores, std::nullopt, base.orientation == ShardOrientation::ROW_MAJOR);
+    const bool packer_l1_acc =
+        std::get<3>(get_compute_kernel_config_args(A.device()->arch(), attributes.compute_kernel_config.value()));
+    plan.C_slice_M_tiles = C_slice_M_tiles;
+    plan.C_slice_N_tiles = C_slice_N_tiles;
+    // The C slices of one batch, walked across N then down M; every core produces its C slices for all batches.
+    const uint32_t C_slices_across_N = tt::div_up(plan.N_tiles, C_slice_N_tiles);
+    const uint32_t C_slices_down_M = tt::div_up(plan.M_tiles, C_slice_M_tiles);
+    plan.C_slices_across_N = C_slices_across_N;
+    plan.C_slices_per_batch = C_slices_down_M * C_slices_across_N;
+    plan.sharded_output_layout = C_slices_across_N == 1 ? tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED
+                                 : C_slices_down_M == 1 ? tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED
+                                                        : tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED;
+    const uint32_t num_active = std::min<uint32_t>(all_cores.size(), plan.C_slices_per_batch);
+    plan.cores.assign(all_cores.begin(), all_cores.begin() + num_active);
+    plan.max_C_slices_per_core = tt::div_up(plan.C_slices_per_batch, num_active);
+    // The busiest core's C slices over all batches.
+    const uint64_t C_slices_per_core = (uint64_t)plan.batch_size * plan.max_C_slices_per_core;
+
+    // Shards that match the C slice.
+    // A: the C slice's rows for all of K; C slices must span N so no two cores need the same rows. The copy
+    // path zeroes A's K padding in the DFB; a borrowed shard is never written, so K must be a tile multiple.
+    plan.A_shard_borrowable =
+        C_slices_per_core == 1 && C_slices_across_N == 1 && plan.A_last_K_tile_valid_columns == 0 &&
+        shard_matches(A, C_slice_M_tiles, plan.K_tiles, plan.cores) &&
+        (uint64_t)C_slice_M_tiles * plan.K_tiles * tt::tile_size(plan.A_format) <= MAX_DFB_EXTENT_BYTES;
+    // B: the C slice's columns for all of K; C slices must span M.
+    plan.B_shard_borrowable =
+        C_slices_per_core == 1 && C_slices_down_M == 1 && shard_matches(B, plan.K_tiles, C_slice_N_tiles, plan.cores) &&
+        (uint64_t)plan.K_tiles * C_slice_N_tiles * tt::tile_size(plan.B_format) <= MAX_DFB_EXTENT_BYTES;
+    // C: packed straight into the shard when subblock-major pack order equals the shard's row-major order,
+    // which also needs a single compute thread (with several, each thread owns every N-th entry).
+    const bool C_shard_matches = output.has_value()
+                                     ? shard_matches(output.value(), C_slice_M_tiles, C_slice_N_tiles, plan.cores)
+                                     : (attributes.output_mem_config.is_sharded() &&
+                                        attributes.output_mem_config.buffer_type() == tt::tt_metal::BufferType::L1);
+    plan.C_shard_borrowable = C_shard_matches && C_slices_per_core == 1 && plan.num_compute_threads == 1;
+
+    // Multicast.
+    // One C slice per core on a rectangle laid out as the C slices tile C (walked row-major): the cores of a row
+    // then need the same A slice at the same time, and the cores of a column the same B slice. When C is a single
+    // row of C slices every core of any rectangle needs the same A slice (one column: the same B slice).
+    const std::vector<CoreRange>& core_ranges = cores.ranges();
+    const bool one_C_slice_per_core_of_rectangle =
+        core_ranges.size() == 1 && plan.max_C_slices_per_core == 1 && plan.cores.size() == core_ranges[0].size();
+    const bool cores_tile_C =
+        one_C_slice_per_core_of_rectangle && core_ranges[0].grid_size().x == C_slices_across_N &&
+        core_ranges[0].grid_size().y == C_slices_down_M &&
+        (base.orientation == ShardOrientation::ROW_MAJOR || C_slices_across_N == 1 || C_slices_down_M == 1);
+    plan.A_mcast_to_all_cores = one_C_slice_per_core_of_rectangle && !cores_tile_C && C_slices_down_M == 1;
+    plan.B_mcast_to_all_cores = one_C_slice_per_core_of_rectangle && !cores_tile_C && C_slices_across_N == 1;
+    const uint32_t A_mcast_group = cores_tile_C ? C_slices_across_N : plan.A_mcast_to_all_cores ? plan.cores.size() : 1;
+    const uint32_t B_mcast_group = cores_tile_C ? C_slices_down_M : plan.B_mcast_to_all_cores ? plan.cores.size() : 1;
+    plan.A_mcast_num_dests = plan.A_shard_borrowable ? 0 : A_mcast_group - 1;
+    plan.B_mcast_num_dests = plan.B_shard_borrowable ? 0 : B_mcast_group - 1;
+
+    // Subblock: the C slice's tiles accumulated in DST at once; the C slice is rounded up to it.
+    plan.subblock_M_tiles = subblock_M_tiles;
+    plan.subblock_N_tiles = subblock_N_tiles;
+    plan.C_slice_M_padded_tiles = tt::round_up(C_slice_M_tiles, subblock_M_tiles);
+    plan.C_slice_N_padded_tiles = tt::round_up(C_slice_N_tiles, subblock_N_tiles);
+    const bool M_padded = plan.C_slice_M_padded_tiles != C_slice_M_tiles;
+    const bool N_padded = plan.C_slice_N_padded_tiles != C_slice_N_tiles;
+
+    // K chunk.
+    plan.K_chunk_tiles = K_chunk_tiles;
+    plan.K_chunks_per_C_slice = plan.K_tiles / K_chunk_tiles;
+    plan.num_reader_threads = num_reader_threads;
+    plan.K_chunks_per_C_slice_padded = tt::round_up(plan.K_chunks_per_C_slice, num_reader_threads);
+    // The packer accumulates partials in L1 only when there are enough K chunks for the reconfig overhead
+    // to pay off (the last K chunk spills and reloads either way, so more than two).
+    plan.packer_l1_acc_en = packer_l1_acc && plan.K_chunks_per_C_slice > 2;
+    plan.C_partials_format = base.fp32_dest_acc_en   ? tt::DataFormat::Float32
+                             : plan.packer_l1_acc_en ? tt::DataFormat::Float16_b
+                                                     : plan.C_format;
+
+    // Borrowed operands: a matching shard bound as the DFB itself, when nothing is padded.
+    // A borrowed shard holds only the true C slice dims. A's must also cover all of K in one K chunk, and C's tile
+    // order matches the pack order only when subblocks span the C slice width.
+    plan.borrow_A = plan.A_shard_borrowable && !M_padded && plan.K_chunks_per_C_slice == 1;
+    plan.borrow_B = plan.B_shard_borrowable && !N_padded;
+    plan.borrow_C = plan.C_shard_borrowable && subblock_N_tiles == C_slice_N_tiles && !M_padded;
+
+    // DFB sizes.
+    // A thread's share of the C slice (its subblocks back to back, padded to the busiest thread's) is
+    // C_entries_per_thread one-tile entries of C_slice and C_partials, pushed and popped as one batch per K chunk:
+    // every thread then moves the same credits, and its C_partials entries come back to the same addresses every
+    // K chunk, where the packer's L1 accumulation needs them.
+    const uint32_t num_subblocks =
+        (plan.C_slice_M_padded_tiles / subblock_M_tiles) * (plan.C_slice_N_padded_tiles / subblock_N_tiles);
+    plan.C_entries_per_thread =
+        tt::div_up(num_subblocks, plan.num_compute_threads) * subblock_M_tiles * subblock_N_tiles;
+    plan.C_entry_bytes = tt::tile_size(plan.C_format);
+    plan.C_partials_entry_bytes = tt::tile_size(plan.C_partials_format);
+    plan.C_buffer_depth = C_buffer_depth;
+    plan.C_slice_entries = plan.C_entries_per_thread * plan.num_compute_threads * C_buffer_depth;
+    // A copied operand's DFB holds operand_buffer_depth slices, one when a single slice passes through; a borrowed
+    // DFB is the resident shard itself.
+    const bool more_than_one_slice = C_slices_per_core * plan.K_chunks_per_C_slice_padded > 1;
+    plan.operand_buffer_depth = more_than_one_slice ? std::max(MIN_OPERAND_BUFFER_DEPTH, num_reader_threads) : 1;
+    plan.A_entry_bytes = tt::tile_size(plan.A_format);
+    plan.B_entry_bytes = tt::tile_size(plan.B_format);
+    plan.A_slice_entries = plan.borrow_A ? C_slice_M_tiles * plan.K_tiles
+                                         : plan.C_slice_M_padded_tiles * K_chunk_tiles * plan.operand_buffer_depth;
+    plan.B_slice_entries = plan.borrow_B ? plan.K_tiles * C_slice_N_tiles
+                                         : K_chunk_tiles * plan.C_slice_N_padded_tiles * plan.operand_buffer_depth;
+    // Alias C_partials onto C_slice only when partials are never live while C_slice holds unread data
+    // (else compute packs slice i+1's partials over slice i before the writer drains it).
+    const bool partials_ever_written = plan.K_chunks_per_C_slice > 1;
+    plan.alias_C_partials_onto_C_slice = (plan.C_partials_format == plan.C_format) && C_buffer_depth == 1 &&
+                                         (!partials_ever_written || C_slices_per_core == 1);
+    // Partials that are never written need one entry per thread when they cannot share C_slice's L1.
+    plan.C_partials_entries = (partials_ever_written || plan.alias_C_partials_onto_C_slice)
+                                  ? plan.C_entries_per_thread * plan.num_compute_threads
+                                  : plan.num_compute_threads;
+    // One C slice's bias per reader thread, and at least two when the core has several, so a single reader reads
+    // the next C slice's bias (and the A and B slices behind it) while compute uses this one.
+    const uint32_t bias_buffer_depth =
+        std::max(num_reader_threads, C_slices_per_core == 1 ? 1u : MIN_OPERAND_BUFFER_DEPTH);
+    plan.bias_entries = plan.has_bias ? plan.C_slice_N_padded_tiles * bias_buffer_depth : 0;
+    // Borrowed DFBs are the tensors' own memory and cost nothing here.
+    plan.l1_bytes =
+        (plan.borrow_A ? 0 : (uint64_t)plan.A_slice_entries * plan.A_entry_bytes) +
+        (plan.borrow_B ? 0 : (uint64_t)plan.B_slice_entries * plan.B_entry_bytes) +
+        (plan.borrow_C ? 0 : (uint64_t)plan.C_slice_entries * plan.C_entry_bytes) +
+        (plan.alias_C_partials_onto_C_slice ? 0 : (uint64_t)plan.C_partials_entries * plan.C_partials_entry_bytes) +
+        (uint64_t)plan.bias_entries * plan.bias_entry_bytes;
+    return plan;
+}
+
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
@@ -210,15 +359,11 @@ std::optional<MatmulUnifiedPlan> plan_unified_matmul(
 
     // ---- 3. Fixed for every candidate: cores, threads, formats, L1 budget ----
     base.orientation = config.orientation;
-    const std::vector<CoreCoord> all_cores =
-        corerange_to_cores(config.cores, std::nullopt, config.orientation == ShardOrientation::ROW_MAJOR);
     base.num_compute_threads = requested_threads != 0 ? static_cast<uint32_t>(requested_threads) : (is_quasar ? 4 : 1);
     // Writer thread t writes the shares of compute threads t, t + num_writer_threads, ...
     base.num_writer_threads =
         is_quasar && base.num_compute_threads % QUASAR_NUM_WRITER_THREADS == 0 ? QUASAR_NUM_WRITER_THREADS : 1;
     base.fp32_dest_acc_en = fp32_dest_acc_en;
-    const bool packer_l1_acc =
-        std::get<3>(get_compute_kernel_config_args(device.arch(), attributes.compute_kernel_config.value()));
     base.A_format = tt::tt_metal::datatype_to_dataformat_converter(A.dtype());
     base.B_format = tt::tt_metal::datatype_to_dataformat_converter(B.dtype());
     base.C_format = tt::tt_metal::datatype_to_dataformat_converter(attributes.output_dtype.value());
@@ -229,150 +374,7 @@ std::optional<MatmulUnifiedPlan> plan_unified_matmul(
     const uint32_t l1_ceiling = device.lowest_occupied_compute_l1_address().value_or(device.l1_size_per_core());
     const uint64_t l1_budget = l1_ceiling - l1_base;
 
-    // ---- 4. The plan for one set of choices ----
-    // Every field of the plan for a C slice, subblock, K chunk, reader thread count and C buffer depth. The search
-    // below tries choices in order and keeps those whose DFBs fit L1 (dfbs_fit).
-    const auto make_plan = [&](uint32_t C_slice_M_tiles,
-                               uint32_t C_slice_N_tiles,
-                               uint32_t subblock_M_tiles,
-                               uint32_t subblock_N_tiles,
-                               uint32_t K_chunk_tiles,
-                               uint32_t num_reader_threads,
-                               uint32_t C_buffer_depth) {
-        MatmulUnifiedPlan plan = base;
-        plan.C_slice_M_tiles = C_slice_M_tiles;
-        plan.C_slice_N_tiles = C_slice_N_tiles;
-        // The C slices of one batch, walked across N then down M; every core produces its C slices for all batches.
-        const uint32_t C_slices_across_N = tt::div_up(plan.N_tiles, C_slice_N_tiles);
-        const uint32_t C_slices_down_M = tt::div_up(plan.M_tiles, C_slice_M_tiles);
-        plan.C_slices_across_N = C_slices_across_N;
-        plan.C_slices_per_batch = C_slices_down_M * C_slices_across_N;
-        plan.sharded_output_layout = C_slices_across_N == 1 ? tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED
-                                     : C_slices_down_M == 1 ? tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED
-                                                            : tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED;
-        const uint32_t num_active = std::min<uint32_t>(all_cores.size(), plan.C_slices_per_batch);
-        plan.cores.assign(all_cores.begin(), all_cores.begin() + num_active);
-        plan.max_C_slices_per_core = tt::div_up(plan.C_slices_per_batch, num_active);
-        // The busiest core's C slices over all batches.
-        const uint64_t C_slices_per_core = (uint64_t)plan.batch_size * plan.max_C_slices_per_core;
-
-        // Shards that match the C slice.
-        // A: the C slice's rows for all of K; C slices must span N so no two cores need the same rows. The copy
-        // path zeroes A's K padding in the DFB; a borrowed shard is never written, so K must be a tile multiple.
-        plan.A_shard_borrowable =
-            C_slices_per_core == 1 && C_slices_across_N == 1 && plan.A_last_K_tile_valid_columns == 0 &&
-            shard_matches(A, C_slice_M_tiles, plan.K_tiles, plan.cores) &&
-            (uint64_t)C_slice_M_tiles * plan.K_tiles * tt::tile_size(plan.A_format) <= MAX_DFB_EXTENT_BYTES;
-        // B: the C slice's columns for all of K; C slices must span M.
-        plan.B_shard_borrowable =
-            C_slices_per_core == 1 && C_slices_down_M == 1 &&
-            shard_matches(B, plan.K_tiles, C_slice_N_tiles, plan.cores) &&
-            (uint64_t)plan.K_tiles * C_slice_N_tiles * tt::tile_size(plan.B_format) <= MAX_DFB_EXTENT_BYTES;
-        // C: packed straight into the shard when subblock-major pack order equals the shard's row-major order,
-        // which also needs a single compute thread (with several, each thread owns every N-th entry).
-        const bool C_shard_matches = output.has_value()
-                                         ? shard_matches(output.value(), C_slice_M_tiles, C_slice_N_tiles, plan.cores)
-                                         : (attributes.output_mem_config.is_sharded() &&
-                                            attributes.output_mem_config.buffer_type() == tt::tt_metal::BufferType::L1);
-        plan.C_shard_borrowable = C_shard_matches && C_slices_per_core == 1 && plan.num_compute_threads == 1;
-
-        // Multicast.
-        // One C slice per core on a rectangle laid out as the C slices tile C (walked row-major): the cores of a row
-        // then need the same A slice at the same time, and the cores of a column the same B slice. When C is a single
-        // row of C slices every core of any rectangle needs the same A slice (one column: the same B slice).
-        const std::vector<CoreRange>& core_ranges = config.cores.ranges();
-        const bool one_C_slice_per_core_of_rectangle =
-            core_ranges.size() == 1 && plan.max_C_slices_per_core == 1 && plan.cores.size() == core_ranges[0].size();
-        const bool cores_tile_C =
-            one_C_slice_per_core_of_rectangle && core_ranges[0].grid_size().x == C_slices_across_N &&
-            core_ranges[0].grid_size().y == C_slices_down_M &&
-            (config.orientation == ShardOrientation::ROW_MAJOR || C_slices_across_N == 1 || C_slices_down_M == 1);
-        plan.A_mcast_to_all_cores = one_C_slice_per_core_of_rectangle && !cores_tile_C && C_slices_down_M == 1;
-        plan.B_mcast_to_all_cores = one_C_slice_per_core_of_rectangle && !cores_tile_C && C_slices_across_N == 1;
-        const uint32_t A_mcast_group = cores_tile_C                ? C_slices_across_N
-                                       : plan.A_mcast_to_all_cores ? plan.cores.size()
-                                                                   : 1;
-        const uint32_t B_mcast_group = cores_tile_C                ? C_slices_down_M
-                                       : plan.B_mcast_to_all_cores ? plan.cores.size()
-                                                                   : 1;
-        plan.A_mcast_num_dests = plan.A_shard_borrowable ? 0 : A_mcast_group - 1;
-        plan.B_mcast_num_dests = plan.B_shard_borrowable ? 0 : B_mcast_group - 1;
-
-        // Subblock: the C slice's tiles accumulated in DST at once; the C slice is rounded up to it.
-        plan.subblock_M_tiles = subblock_M_tiles;
-        plan.subblock_N_tiles = subblock_N_tiles;
-        plan.C_slice_M_padded_tiles = tt::round_up(C_slice_M_tiles, subblock_M_tiles);
-        plan.C_slice_N_padded_tiles = tt::round_up(C_slice_N_tiles, subblock_N_tiles);
-        const bool M_padded = plan.C_slice_M_padded_tiles != C_slice_M_tiles;
-        const bool N_padded = plan.C_slice_N_padded_tiles != C_slice_N_tiles;
-
-        // K chunk.
-        plan.K_chunk_tiles = K_chunk_tiles;
-        plan.K_chunks_per_C_slice = plan.K_tiles / K_chunk_tiles;
-        plan.num_reader_threads = num_reader_threads;
-        plan.K_chunks_per_C_slice_padded = tt::round_up(plan.K_chunks_per_C_slice, num_reader_threads);
-        // The packer accumulates partials in L1 only when there are enough K chunks for the reconfig overhead
-        // to pay off (the last K chunk spills and reloads either way, so more than two).
-        plan.packer_l1_acc_en = packer_l1_acc && plan.K_chunks_per_C_slice > 2;
-        plan.C_partials_format = fp32_dest_acc_en        ? tt::DataFormat::Float32
-                                 : plan.packer_l1_acc_en ? tt::DataFormat::Float16_b
-                                                         : plan.C_format;
-
-        // Borrowed operands: a matching shard bound as the DFB itself, when nothing is padded.
-        // A borrowed shard holds only the true C slice dims. A's must also cover all of K in one K chunk, and C's tile
-        // order matches the pack order only when subblocks span the C slice width.
-        plan.borrow_A = plan.A_shard_borrowable && !M_padded && plan.K_chunks_per_C_slice == 1;
-        plan.borrow_B = plan.B_shard_borrowable && !N_padded;
-        plan.borrow_C = plan.C_shard_borrowable && subblock_N_tiles == C_slice_N_tiles && !M_padded;
-
-        // DFB sizes.
-        // A thread's share of the C slice (its subblocks back to back, padded to the busiest thread's) is
-        // C_entries_per_thread one-tile entries of C_slice and C_partials, pushed and popped as one batch per K chunk:
-        // every thread then moves the same credits, and its C_partials entries come back to the same addresses every
-        // K chunk, where the packer's L1 accumulation needs them.
-        const uint32_t num_subblocks =
-            (plan.C_slice_M_padded_tiles / subblock_M_tiles) * (plan.C_slice_N_padded_tiles / subblock_N_tiles);
-        plan.C_entries_per_thread =
-            tt::div_up(num_subblocks, plan.num_compute_threads) * subblock_M_tiles * subblock_N_tiles;
-        plan.C_entry_bytes = tt::tile_size(plan.C_format);
-        plan.C_partials_entry_bytes = tt::tile_size(plan.C_partials_format);
-        plan.C_buffer_depth = C_buffer_depth;
-        plan.C_slice_entries = plan.C_entries_per_thread * plan.num_compute_threads * C_buffer_depth;
-        // A copied operand's DFB holds operand_buffer_depth slices, one when a single slice passes through; a borrowed
-        // DFB is the resident shard itself.
-        const bool more_than_one_slice = C_slices_per_core * plan.K_chunks_per_C_slice_padded > 1;
-        plan.operand_buffer_depth = more_than_one_slice ? std::max(MIN_OPERAND_BUFFER_DEPTH, num_reader_threads) : 1;
-        plan.A_entry_bytes = tt::tile_size(plan.A_format);
-        plan.B_entry_bytes = tt::tile_size(plan.B_format);
-        plan.A_slice_entries = plan.borrow_A ? C_slice_M_tiles * plan.K_tiles
-                                             : plan.C_slice_M_padded_tiles * K_chunk_tiles * plan.operand_buffer_depth;
-        plan.B_slice_entries = plan.borrow_B ? plan.K_tiles * C_slice_N_tiles
-                                             : K_chunk_tiles * plan.C_slice_N_padded_tiles * plan.operand_buffer_depth;
-        // Alias C_partials onto C_slice only when partials are never live while C_slice holds unread data
-        // (else compute packs slice i+1's partials over slice i before the writer drains it).
-        const bool partials_ever_written = plan.K_chunks_per_C_slice > 1;
-        plan.alias_C_partials_onto_C_slice = (plan.C_partials_format == plan.C_format) && C_buffer_depth == 1 &&
-                                             (!partials_ever_written || C_slices_per_core == 1);
-        // Partials that are never written need one entry per thread when they cannot share C_slice's L1.
-        plan.C_partials_entries = (partials_ever_written || plan.alias_C_partials_onto_C_slice)
-                                      ? plan.C_entries_per_thread * plan.num_compute_threads
-                                      : plan.num_compute_threads;
-        // One C slice's bias per reader thread, and at least two when the core has several, so a single reader reads
-        // the next C slice's bias (and the A and B slices behind it) while compute uses this one.
-        const uint32_t bias_buffer_depth =
-            std::max(num_reader_threads, C_slices_per_core == 1 ? 1u : MIN_OPERAND_BUFFER_DEPTH);
-        plan.bias_entries = plan.has_bias ? plan.C_slice_N_padded_tiles * bias_buffer_depth : 0;
-        // Borrowed DFBs are the tensors' own memory and cost nothing here.
-        plan.l1_bytes =
-            (plan.borrow_A ? 0 : (uint64_t)plan.A_slice_entries * plan.A_entry_bytes) +
-            (plan.borrow_B ? 0 : (uint64_t)plan.B_slice_entries * plan.B_entry_bytes) +
-            (plan.borrow_C ? 0 : (uint64_t)plan.C_slice_entries * plan.C_entry_bytes) +
-            (plan.alias_C_partials_onto_C_slice ? 0 : (uint64_t)plan.C_partials_entries * plan.C_partials_entry_bytes) +
-            (uint64_t)plan.bias_entries * plan.bias_entry_bytes;
-        return plan;
-    };
-
-    // ---- 5. C slice candidates ----
+    // ---- 4. C slice candidates ----
     // Each core's share of C: the output shard when C is sharded, else M / N split over the bounding box of
     // the cores. A C slice dim the config or the shard gives is fixed; an auto one is any divisor of the share's.
     const bool C_slice_from_shard = C_shard.has_value() && (config.C_slice_M_tiles == 0 || config.C_slice_N_tiles == 0);
@@ -405,7 +407,7 @@ std::optional<MatmulUnifiedPlan> plan_unified_matmul(
         const uint64_t area_b = (uint64_t)b.first * b.second;
         return area_a != area_b ? area_a > area_b : a.second > b.second;
     });
-    // ---- 6. Search: each C slice's subblock, then its K chunk, with one reader thread and one C slice in flight ----
+    // ---- 5. Search: each C slice's subblock, then its K chunk, with one reader thread and one C slice in flight ----
     // The first C slice that fits wins, except one that fits only with K_chunk_tiles == 1 yields to a smaller C slice
     // with a longer K chunk and more work per L1 fill (C slice tiles x K chunk); the whole share is never shrunk if it
     // fits (#57884).
@@ -427,6 +429,12 @@ std::optional<MatmulUnifiedPlan> plan_unified_matmul(
         if (subblock_M_tiles == 0) {
             const auto subblock_viable = [&](uint32_t candidate_M_tiles, uint32_t candidate_N_tiles) {
                 const MatmulUnifiedPlan at_shortest_K_chunk = make_plan(
+                    base,
+                    config.cores,
+                    A,
+                    B,
+                    output,
+                    attributes,
                     C_slice_M_tiles,
                     C_slice_N_tiles,
                     candidate_M_tiles,
@@ -453,6 +461,12 @@ std::optional<MatmulUnifiedPlan> plan_unified_matmul(
         // walking down from a cap. A small C slice makes the A and B slices cheap, so its K chunk is not capped, but
         // keeps the readers busy.
         MatmulUnifiedPlan candidate = make_plan(
+            base,
+            config.cores,
+            A,
+            B,
+            output,
+            attributes,
             C_slice_M_tiles,
             C_slice_N_tiles,
             subblock_M_tiles,
@@ -473,6 +487,12 @@ std::optional<MatmulUnifiedPlan> plan_unified_matmul(
                     continue;
                 }
                 candidate = make_plan(
+                    base,
+                    config.cores,
+                    A,
+                    B,
+                    output,
+                    attributes,
                     C_slice_M_tiles,
                     C_slice_N_tiles,
                     subblock_M_tiles,
@@ -522,7 +542,7 @@ std::optional<MatmulUnifiedPlan> plan_unified_matmul(
     }
     MatmulUnifiedPlan plan = std::move(*best);
 
-    // ---- 7. Sharded output: one C slice per core, batch 1, and a grid the accessor maps the same way ----
+    // ---- 6. Sharded output: one C slice per core, batch 1, and a grid the accessor maps the same way ----
     if (attributes.output_mem_config.is_sharded()) {
         const bool one_C_slice_per_core = plan.max_C_slices_per_core == 1;
         const uint32_t C_slices_down_M = tt::div_up(plan.M_tiles, plan.C_slice_M_tiles);
@@ -548,13 +568,21 @@ std::optional<MatmulUnifiedPlan> plan_unified_matmul(
             config.cores.str());
     }
 
-    // ---- 8. Reader threads, then C slices in flight, each in the L1 the C slice, subblock and K chunk leave ----
-    // Several reader threads each own part of the A and B DFBs, which a borrowed shard cannot be split into, and
-    // reader threads beyond the K chunks of a C slice would only carry padding. Four are tried, then two, whose A and B
-    // DFBs take no more L1 than one's: an operand DFB holds at least MIN_OPERAND_BUFFER_DEPTH (two) slices.
+    // ---- 7. Overlap in the L1 left over: more reader threads, then a second C slice in flight ----
+    // The search planned the leanest buffering (one reader thread, one C slice in flight), so buffering never costs a
+    // larger C slice or K chunk. Each step re-plans, since the DFB sizes change, and is kept only if it still fits.
+    // Reader threads: four, or else as many as an operand DFB holds anyway (two), which cost no more A and B L1 than
+    // one. Each owns part of the A and B DFBs, which a borrowed shard cannot be split into; reader threads beyond the
+    // K chunks of a C slice would only carry padding.
     if (is_quasar && !plan.borrow_A && !plan.borrow_B) {
-        for (uint32_t num_reader_threads : {QUASAR_NUM_READER_THREADS, 2u}) {
+        for (uint32_t num_reader_threads : {QUASAR_NUM_READER_THREADS, MIN_OPERAND_BUFFER_DEPTH}) {
             const MatmulUnifiedPlan candidate = make_plan(
+                base,
+                config.cores,
+                A,
+                B,
+                output,
+                attributes,
                 plan.C_slice_M_tiles,
                 plan.C_slice_N_tiles,
                 plan.subblock_M_tiles,
@@ -568,8 +596,15 @@ std::optional<MatmulUnifiedPlan> plan_unified_matmul(
             }
         }
     }
+    // A second C slice in flight, on cores that produce several.
     if ((uint64_t)plan.batch_size * plan.max_C_slices_per_core > 1) {
         const MatmulUnifiedPlan candidate = make_plan(
+            base,
+            config.cores,
+            A,
+            B,
+            output,
+            attributes,
             plan.C_slice_M_tiles,
             plan.C_slice_N_tiles,
             plan.subblock_M_tiles,
