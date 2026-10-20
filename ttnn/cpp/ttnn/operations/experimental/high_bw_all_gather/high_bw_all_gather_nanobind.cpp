@@ -107,18 +107,21 @@ void bind_experimental_high_bw_all_gather_operation(nb::module_& mod) {
                     Supplying both semaphore handles selects the allocation-free, no-internal-sync
                     dispatch path intended for sub-device overlap.
                 page_table: Selects a paged source, in the format of
-                    ``update_padded_kv_cache/device/kernels/paged_kv_table.hpp`` (not the
-                    ``paged_update_cache`` / SDPA one). ``input_tensor`` is then a pool of single-head pages
-                    ``[num_pages * batch_slot_num_layers, 1, page, D]`` (``page`` a multiple of 32, 32x32 tiles
-                    when tiled) and ``page_table`` an INT32 ROW_MAJOR DRAM tensor ``[rows, width]``,
-                    replicated, with ``width * page`` covering the output. The request's row maps global
-                    logical page ``q`` to the physical page holding it on the rank that owns it; an unmapped
-                    page (-1, or an invalid entry outside the pool) gathers as zeros. Requires
+                    ``ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/update_padded_kv_cache/device/kernels/paged_kv_table.hpp``
+                    (not the ``paged_update_cache`` / SDPA one). ``input_tensor`` is then, on every rank, its own
+                    pool of single-head pages ``[num_pages * batch_slot_num_layers, 1, page, D]`` (``page`` a
+                    positive multiple of 32, 32x32 tiles when tiled) and ``page_table`` an INT32 ROW_MAJOR DRAM
+                    tensor ``[rows, width]``, replicated, with ``width * page`` covering the output. The request's
+                    row maps global logical page ``q`` to the physical page holding it on the rank that owns it;
+                    an unmapped page (-1, or an invalid entry outside the pool) gathers as zeros. Requires
                     ``cluster_axis``, ``dim`` 2, a request (``input_batch_index`` or
-                    ``input_batch_index_tensor``), a pool whose entries are a multiple of
-                    ``batch_slot_num_layers``, a ``gathered_slab_global`` of whole pages per rank and an output
-                    ``[1, 1, ranks x whole pages, D]``, which takes the layout of a slot gather. Under trace,
-                    keep one persistent table and edit its rows in place: a capture records its address.
+                    ``input_batch_index_tensor``), ``batch_slot_num_layers`` equal to the pool's layer count on
+                    every request form (the default 1 means a one-layer pool; a wrong count reads the wrong pages
+                    and cannot be detected), a ``gathered_slab_global`` of whole pages per rank equal to the
+                    ``chunk_local * ranks`` the pages were written with (not checked), and an output
+                    ``[1, 1, whole slabs, D]``, which takes the layout of a slot gather. The table's shape is part
+                    of the program key: keep one table shape per workload. Under trace, keep one persistent table
+                    and edit its rows in place: a capture records its address.
         )doc",
         &high_bw_all_gather,
         nb::arg("input_tensor").noconvert(),

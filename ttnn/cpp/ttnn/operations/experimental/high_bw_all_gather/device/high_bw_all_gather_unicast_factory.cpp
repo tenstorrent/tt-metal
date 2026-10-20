@@ -240,6 +240,13 @@ uint32_t paged_pool_pages(const Tensor& input_tensor, const HighBwAllGatherParam
     return input_tensor.padded_shape()[0] / operation_attributes.batch_slot_num_layers;
 }
 
+// The scalar slot as far as it moves the per-core page schedule: a slot cache's slot sets the page base; a paged
+// request reaches the reader through common args [5] and [7] only.
+std::optional<uint32_t> schedule_batch_index(
+    const HighBwAllGatherParams& operation_attributes, const HighBwAllGatherInputs& tensor_args) {
+    return tensor_args.is_paged() ? std::nullopt : operation_attributes.input_batch_index;
+}
+
 // A paged request's page-table row and layer: the scalar form names the flat slot row * num_layers + layer, the
 // tensor form the row on-device (so 0 here) and the layer in batch_slot_layer_idx.
 std::pair<uint32_t, uint32_t> paged_row_and_layer(const HighBwAllGatherParams& operation_attributes) {
@@ -973,7 +980,7 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
             tiled ? input_tensor.padded_shape()[-1] / tt::constants::TILE_WIDTH : 1u);  // tiles per row
         reader_compile_args.push_back(
             operation_attributes.gathered_slab_global / operation_attributes.num_devices /
-            row_height);  // rows per slab
+            row_height);  // rows per rank per slab (chunk_local / row height)
         reader_compile_args.push_back(paged_kv::page_table_width(*tensor_args.page_table));
         reader_compile_args.push_back(kPageTableWindowEntries);
         tt::tt_metal::TensorAccessorArgs(tensor_args.page_table->buffer()).append_to(reader_compile_args);
@@ -1246,7 +1253,7 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
         .is_ring = is_ring,
         .ring_even_split = ring_even_split,
         .output_bank_owned_schedule = output_bank_owned_schedule,
-        .input_batch_index = operation_attributes.input_batch_index,
+        .input_batch_index = schedule_batch_index(operation_attributes, tensor_args),
         .gathered_dim_size = operation_attributes.gathered_dim_size,
     };
 
@@ -1349,7 +1356,8 @@ void HighBwAllGatherUnicastFactory::override_runtime_arguments(
 
         // Common addresses and metadata above must refresh even when the schedule is unchanged.
         // Metadata-driven extents are derived on device; their host schedule stays at maximum capacity.
-        if (!has_runtime_controls || (shared_vars.input_batch_index == operation_attributes.input_batch_index &&
+        const auto batch_index = schedule_batch_index(operation_attributes, tensor_args);
+        if (!has_runtime_controls || (shared_vars.input_batch_index == batch_index &&
                                       shared_vars.gathered_dim_size == operation_attributes.gathered_dim_size)) {
             continue;
         }
@@ -1460,7 +1468,7 @@ void HighBwAllGatherUnicastFactory::override_runtime_arguments(
                 writer_args.at(rt_arg_index(WriterRtArg::FinalCount)) = final_count;
             }
         }
-        shared_vars.input_batch_index = operation_attributes.input_batch_index;
+        shared_vars.input_batch_index = batch_index;
         shared_vars.gathered_dim_size = operation_attributes.gathered_dim_size;
     }
 }

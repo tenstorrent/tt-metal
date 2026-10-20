@@ -237,12 +237,11 @@ void validate_gathered_prefix_metadata(const HighBwAllGatherParams& args, const 
 
 namespace paged_kv = ttnn::operations::experimental::paged_kv;
 
-// Structural checks of a paged source. All of it is in the program key, so it runs on the cache-miss path only.
+// Structural checks of a paged source, all in the program key, so on the cache-miss path only.
 void validate_paged_source(const HighBwAllGatherParams& args, const HighBwAllGatherInputs& tensor_args) {
     const auto& input = tensor_args.input_tensor;
     const auto& in_shape = input.padded_shape();
     const auto& out_shape = tensor_args.output_tensor.padded_shape();
-    paged_kv::validate_page_table(*tensor_args.page_table, input);
     paged_kv::validate_page_pool(input);
     // Page ownership is defined over the ranks of one cluster axis (paged_kv_table.hpp).
     TT_FATAL(!args.linearized_mesh_ring, "high_bw_all_gather paged source requires a cluster_axis");
@@ -277,11 +276,19 @@ void validate_paged_source(const HighBwAllGatherParams& args, const HighBwAllGat
         "high_bw_all_gather paged source needs gathered_slab_global (chunk_local * ranks, {}) to hold whole pages "
         "per rank",
         args.gathered_slab_global);
+    // A rank's rows past its last whole slab would map to logical pages it does not own.
+    TT_FATAL(
+        out_shape[2] % args.gathered_slab_global == 0,
+        "high_bw_all_gather paged output ({} positions) must be whole slabs of gathered_slab_global {}",
+        out_shape[2],
+        args.gathered_slab_global);
 }
 
-// Bounds of a paged request, on both paths: each involves a value the program key leaves out (the layer count, the
-// layer, the scalar request). The tensor-form row is read on-device, so the caller keeps it < page_table rows.
+// Checks of a paged request, on both paths: each involves what the program key leaves out (the table's device and
+// placement, the layer count, the layer, the scalar request). The tensor-form row is read on-device, so the caller
+// keeps it < page_table rows.
 void validate_paged_request(const HighBwAllGatherParams& args, const HighBwAllGatherInputs& tensor_args) {
+    paged_kv::validate_page_table(*tensor_args.page_table, tensor_args.input_tensor);
     // First, so a zero layer count fails here rather than in the modulo below.
     TT_FATAL(
         args.batch_slot_layer_idx < args.batch_slot_num_layers,
@@ -305,7 +312,8 @@ void validate_paged_request(const HighBwAllGatherParams& args, const HighBwAllGa
 }
 
 void validate_slot_extent_control_mix(const HighBwAllGatherParams& args, const HighBwAllGatherInputs& tensor_args) {
-    // A paged reader takes its scalar request from runtime args on every path, so it combines with the extent tensor.
+    // A paged request is common arg [7], not folded into the page range the extent tensor recomputes, so it combines
+    // with the extent tensor.
     if (!tensor_args.has_gathered_prefix_metadata() || tensor_args.is_paged()) {
         return;
     }

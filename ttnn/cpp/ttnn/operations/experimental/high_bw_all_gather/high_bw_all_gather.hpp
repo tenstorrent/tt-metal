@@ -35,12 +35,12 @@ Tensor high_bw_all_gather(
     uint32_t gathered_slab_global = 0,
     const std::optional<GlobalSemaphore>& ready_semaphore = std::nullopt,
     const std::optional<GlobalSemaphore>& data_valid_semaphore = std::nullopt,
-    // Paged source (update_padded_kv_cache/device/kernels/paged_kv_table.hpp): `input_tensor` is a pool of single-head
-    // pages [num_pages * batch_slot_num_layers, 1, page, D] and `page_table` an INT32 table whose request row
-    // locates each page. A request is required: the scalar input_batch_index is the flat slot
-    // row * batch_slot_num_layers + layer, as for a slot cache, or the tensor form names the row.
-    // gathered_slab_global (chunk_local * ranks) is required and holds whole pages per rank. Unmapped pages gather as
-    // zeros.
+    // Paged source (update_padded_kv_cache/device/kernels/paged_kv_table.hpp): `input_tensor` is, on every rank, a pool
+    // of single-head pages [num_pages * batch_slot_num_layers, 1, page, D] and `page_table` an INT32 table whose
+    // request row locates each page. A request is required: the scalar input_batch_index is the flat slot
+    // row * batch_slot_num_layers + layer, as for a slot cache, or the tensor form names the row; on every form
+    // batch_slot_num_layers must be the pool's layer count (not detectable). gathered_slab_global is required: the
+    // chunk_local * ranks the pages were written with, whole pages per rank. Unmapped pages gather as zeros.
     const std::optional<Tensor>& page_table = std::nullopt);
 
 }  // namespace ttnn::operations::experimental::high_bw_all_gather

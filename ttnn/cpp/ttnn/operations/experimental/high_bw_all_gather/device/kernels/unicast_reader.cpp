@@ -49,8 +49,8 @@ struct SourcePages {
     uint32_t base = 0;
     uint32_t count = 0;
 
-    // Returns kUnmappedPage for a page the row does not map (or one outside the pool). A member template, so the
-    // discarded branch (the table read) is never instantiated for a contiguous source.
+    // Returns kUnmappedPage for a page the row does not map (or one outside the pool). A member template, so `table`
+    // can be a contiguous source's placeholder (make_page_table): the read on it is dependent and discarded.
     template <typename Table>
     uint32_t input_page(Noc& noc, const Table& table, uint32_t local_page) {
         if constexpr (!Paged) {
