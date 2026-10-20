@@ -1750,6 +1750,11 @@ class Generator(WarmupForwardMixin):
             )
         tokens_tt, current_pos_tt, rope_idxs_tt, page_table_tt = prepared
 
+        # Warmup can add persistent L1 allocations between mode switches. Let the
+        # GCB move until decode preparation ends, then keep the addresses that
+        # this trace captures. This also covers inputs prepared before prefill.
+        self.model.prepare_decode_global_cb()
+
         # Save the buffer addresses for preallocated tensors.
         # Same reasoning as the prefill capture: everything allocated inside the capture window
         # belongs to the trace being recorded and must stay allocated for replay, so scope it

@@ -70,6 +70,7 @@ def test_global_cb_fixed_addresses_across_trace_mode_switches(
         # traces exist. The actual trace capture must still happen in decode mode.
         for on_device_logits in (False, True):
             generator._prepare_decode_before_prefill(page_table, kv_cache, on_device_logits)
+        assert model._global_cb_addresses is None  # Warmup must not fix the placement yet.
 
         # Stage and compile the exact prefill shape used below before recording it.
         # This follows the generator's deferred-capture warmup sequence without
@@ -138,6 +139,7 @@ def test_global_cb_fixed_addresses_across_trace_mode_switches(
 
             global_cb = model.prefetcher_setup.global_circular_buffer
             layout = (global_cb.buffer_address(), global_cb.config_address(), global_cb.size())
+            assert model._global_cb_addresses == layout[:2]
             logger.info(f"Reconstructed GCB: data={layout[0]:#x}, config={layout[1]:#x}, size={layout[2]}")
             del global_cb
             ids = trace_ids()
