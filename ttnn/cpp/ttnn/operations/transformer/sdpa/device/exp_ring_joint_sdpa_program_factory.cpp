@@ -1072,7 +1072,7 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
         total_cb_bytes += cb.total_size;
     }
     if (owns_compute_cbs) {
-        total_cb_bytes = variant.check_l1(desc, defines, total_cb_bytes, usable_l1, q_chunk_size);
+        total_cb_bytes = variant.check_l1(desc, total_cb_bytes, usable_l1, q_chunk_size);
     }
     // A variant-owned layout already keeps a single-slot Q per pass (read once, popped at the pass's end);
     // the default re-read-every-iteration stream_q protocol never applies to it.
@@ -1589,6 +1589,10 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
     };
     if (auto config = variant.compute_config()) {
         compute_kernel.config = std::move(*config);
+    }
+    variant.append_compute_named_compile_time_args(compute_kernel.named_compile_time_args);
+    if (auto opt_level = variant.compute_opt_level()) {
+        compute_kernel.opt_level = opt_level;
     }
 
     // Live-length tensor address for all three kernels -- each derives chunk-skip counts from it and

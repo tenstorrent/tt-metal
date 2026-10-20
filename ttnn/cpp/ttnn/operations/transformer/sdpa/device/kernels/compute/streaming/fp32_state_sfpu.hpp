@@ -3,6 +3,7 @@
 
 #pragma once
 
+// SFPI code exists in the MATH and PACK builds only.
 #if defined(TRISC_MATH) || defined(TRISC_PACK)
 #include "ckernel_sfpu_recip.h"
 #include "llk_math_eltwise_unary_sfpu_macros.h"

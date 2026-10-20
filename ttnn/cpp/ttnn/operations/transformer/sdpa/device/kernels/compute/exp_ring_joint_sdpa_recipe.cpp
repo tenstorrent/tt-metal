@@ -5,25 +5,21 @@
 // Exp ring joint SDPA compute for the named precision recipes B/C/D/E (precision unset keeps exp_ring_joint_sdpa.cpp).
 // The shared streaming recipe continuation (recipe_ring.hpp) keeps one recurrent state per pass across the
 // ring. Compile-time arguments share the exp-ring layout (ExpRingJointSDPARecipeProgramFactory). Any
-// tile-aligned Q/K chunk and head dim (the QK/PV subblock widths are the host's SDPA_RECIPE_QK_W/PV_W).
+// tile-aligned Q/K chunk and head dim (the QK/PV subblock widths are the host's recipe::qk_w / pv_w).
 
 #include <cstdint>
 
-// The recipe headers key their ring hooks (valid-row key tail masking) on SDPA_RECIPE_RING. The host builds this
-// kernel with the SFPI compiler's replay optimization disabled (tenstorrent/tt-metal#58433): with it, -O3 pack
-// code recorded over the exp programs this kernel records once and replays per tile, corrupting every chunk
-// after a masked tail.
-#define SDPA_RECIPE_RING 1
+// The host builds this kernel with the SFPI compiler's replay optimization disabled (tenstorrent/tt-metal#58433):
+// with it, -O3 pack code recorded over the exp programs this kernel records once and replays per tile, corrupting
+// every chunk after a masked tail.
 #define LLK_ZEROFLAG_OUTLINE 1
-// Optimization: unpack and pack at -O3, math at -O2 (see ring_joint_sdpa_recipe.cpp); watcher builds are
-// size-optimized on every thread.
+// Optimization: unpack and pack at the kernel's level (the host builds fused chunks, STANDARD and FAST, and
+// ACCURATE at -O2: their code overflows the kernel config buffer at -O3; else -O3), math at -O2 (see
+// ring_joint_sdpa_recipe.cpp); watcher builds are size-optimized on every thread.
 #if defined(WATCHER_ENABLED)
 #pragma GCC optimize("Os")
-#elif defined(TRISC_MATH) || defined(SDPA_RECIPE_FUSED) || defined(SDPA_RECIPE_ACCURATE)
-// Fused chunks (STANDARD, FAST) and ACCURATE's FP32 paths overflow the kernel config buffer at -O3 unpack/pack.
+#elif defined(TRISC_MATH)
 #pragma GCC optimize("O2")
-#else
-#pragma GCC optimize("O3")
 #endif
 
 #define REDUCE_OP (PoolType::MAX)
@@ -72,11 +68,7 @@ void kernel_main() {
     // qk_im=6, state {sum,max,out} = {12,10,8}/{13,11,9}, out=16.
     constexpr uint32_t recipe_cb_q = 0, recipe_cb_k = 1, recipe_cb_qk_im = 6;
     constexpr uint32_t recipe_cb_identity_scale = 3, recipe_cb_col_identity = 4;
-#ifdef SDPA_RECIPE_FP32
-    constexpr uint32_t recipe_subblock_h = 1;
-#else
-    constexpr uint32_t recipe_subblock_h = 2;
-#endif
+    constexpr uint32_t recipe_subblock_h = recipe::fp32 ? 1 : 2;
     // Live length from the reader's mailbox (compute cannot NoC-read DRAM), read once so compute and the
     // reader derive the same chunk skips. Must precede compute_kernel_hw_startup (read_tile_value
     // rendezvouses UNPACK -> MATH/PACK through the mailboxes).

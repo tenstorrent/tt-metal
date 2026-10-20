@@ -4,11 +4,8 @@
 #include "recipe_checkpoint.hpp"
 #include "../../dataflow/chunked_prefill_utils.hpp"
 
-// QK/PV subblock widths come from the host (recipe_subblock_width in sdpa_recipe.cpp, shared with the dense
-// recipe): the largest of 4, 2 and 1 dividing the K chunk / head dim.
-#ifndef SDPA_RECIPE_PV_W
-#define SDPA_RECIPE_PV_W 4
-#endif
+// QK/PV subblock widths (recipe::qk_w / pv_w) come from the host (recipe_subblock_width in sdpa_recipe.cpp, shared
+// with the dense recipe): the largest of 4, 2 and 1 dividing the K chunk / head dim.
 
 template <uint32_t q_tiles, uint32_t scale, uint32_t subblock_h, uint32_t k_tiles, uint32_t d_tiles>
 void sdpa_recipe_ring_segment(
@@ -22,7 +19,7 @@ void sdpa_recipe_ring_segment(
     bool first_ring,
     bool last_ring,
     uint32_t padded_slots) {
-    static_assert(k_tiles % SDPA_RECIPE_QK_W == 0 && d_tiles % SDPA_RECIPE_PV_W == 0);
+    static_assert(k_tiles % recipe::qk_w == 0 && d_tiles % recipe::pv_w == 0);
     const bool staged = q_end - q_begin > 1;
     constexpr uint32_t chunk_rows = k_tiles * 32;
     recipe_k_chunk_rows = chunk_rows;
@@ -32,11 +29,11 @@ void sdpa_recipe_ring_segment(
     for (uint32_t q = q_begin; q < q_end; ++q) {
         RecipeAccumulatorState state = staged ? RecipeAccumulatorState{{12, 10, 8}, {13, 11, 9}} : resident;
         if (staged && !first_ring) {
-#ifdef SDPA_RING_STREAM_STATE
-            recipe_checkpoint_restore_stream<q_tiles, 17, 18>(state, q);
-#else
-            recipe_checkpoint<q_tiles, 17, 18, d_tiles>(state, q, true);
-#endif
+            if constexpr (recipe::ring_stream_state) {
+                recipe_checkpoint_restore_stream<q_tiles, 17, 18>(state, q);
+            } else {
+                recipe_checkpoint<q_tiles, 17, 18, d_tiles>(state, q, true);
+            }
         }
         uint32_t processed = 0;
         for (uint32_t k = 0; k < total_chunks; ++k) {
@@ -48,12 +45,12 @@ void sdpa_recipe_ring_segment(
             recipe_k_tile_offset = 0;
             recipe_k_valid_rows = rows - origin < chunk_rows ? rows - origin : chunk_rows;
             const bool last_k = ++processed == valid_chunks;
-#ifdef SDPA_RING_STREAM_STATE
-            if (staged && !last_ring && last_k) {
-                recipe_stream_save_slot = q;  // the fused chunk hands its finished O rows to the writer
-                recipe_stream_saved_rows = 0;
+            if constexpr (recipe::ring_stream_state) {
+                if (staged && !last_ring && last_k) {
+                    recipe_stream_save_slot = q;  // the fused chunk hands its finished O rows to the writer
+                    recipe_stream_saved_rows = 0;
+                }
             }
-#endif
             sdpa_segment_v2<
                 q_tiles,
                 k_tiles,
@@ -61,9 +58,9 @@ void sdpa_recipe_ring_segment(
                 d_tiles,
                 scale,
                 subblock_h,
-                SDPA_RECIPE_QK_W,
+                recipe::qk_w,
                 subblock_h,
-                SDPA_RECIPE_PV_W,
+                recipe::pv_w,
                 0,
                 1,
                 2,
@@ -73,16 +70,15 @@ void sdpa_recipe_ring_segment(
                 4,
                 5,
                 16,
-                true>(
-                state, 1, last_ring && last_k, last_k && (staged || last_ring));
+                true>(state, 1, last_ring && last_k, last_k && (staged || last_ring));
         }
         if (staged && !last_ring) {
-#ifdef SDPA_RING_STREAM_STATE
-            // The next block of the first ring iteration reuses the banks without a restore.
-            recipe_checkpoint_save_tail<q_tiles, 17, 18>(state, q, first_ring && q + 1 < q_end);
-#else
-            recipe_checkpoint<q_tiles, 17, 18, d_tiles>(state, q, false);
-#endif
+            if constexpr (recipe::ring_stream_state) {
+                // The next block of the first ring iteration reuses the banks without a restore.
+                recipe_checkpoint_save_tail<q_tiles, 17, 18>(state, q, first_ring && q + 1 < q_end);
+            } else {
+                recipe_checkpoint<q_tiles, 17, 18, d_tiles>(state, q, false);
+            }
         }
         if (!staged) {
             resident = state;
