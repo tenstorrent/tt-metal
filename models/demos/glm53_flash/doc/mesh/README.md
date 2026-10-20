@@ -239,3 +239,26 @@ score 0 against positive real scores; prefill fills the whole prompt before sele
 4. Sparse decode on multi-row meshes through the metadata-tensor variants (`chunk_start_idx_tensor` /
    `valid_end_tensor` of `indexer_score_dsa`); user-partitioned latent/index cache (design 5.3) and a paged/tiled kv
    read for `sparse_sdpa` (the 1 M untilize cost); hybrid vs `TTMoEDecode` A/B.
+
+## Optimization round 1 (2026-10-20): data-movement ops out, projection configs in
+
+Directive: every data-movement op is merged into a single op or removed before any compute tuning (the
+step has to end up weight-bandwidth bound; at 45 layers the 30 ms / 32-user target is ~0.67 ms = ~60-80
+device ops per layer). Changes on `arg/glm53_mesh` (4d381ab55d9, 1630e1dc250, merge 49f6812fdce):
+
+| item | before | after | evidence |
+|---|---|---|---|
+| row collectives (`GLMMesh.all_gather_rows/cols`, `reduce_scatter_rows`) | generic composites: on 8 rows all_broadcast + 8 untilize + concat + tilize (gather), 8 fill_pad + concat + rs (reduce-scatter) | one `*_async` op each (persistent TT_CCL semaphores), `GLM53_CCL=generic` keeps the composites | `tests/test_ccl_perf.py` on the 2x4 block: same per-call time (37 / 75 us at B=4); all_reduce stays generic (async 58 vs 53 us) |
+| decode projection matmuls (16 per-chip shapes) | default dispatch, 30-240 GB/s of bfp8 weights | 1D `mcast_in0` configs on interleaved tensors, 200-330 GB/s (`tt/matmul_configs.py`) | `tests/test_matmul_sweep.py` chip 4: 959 -> 497 us summed, PCC identical; DRAM-sharded weights lose once the activation reshard is counted |
+| DSA decode stem (q_a, kv_a, indexer k, pool gate, head weights) | 5 matmuls on 4-48 cores, ~170 us | one [4096 x 2336] bf16 matmul on 74 cores + tile-aligned slices | layer 3 decode / sparse decode 0.99995 / 0.9999+ (`test_decoder_layer`, `test_dsa_sparse`) |
+| absorb batched matmuls | 65.8 / 106.4 us (16 / 8 cores) | one core per head: 24.1 / 23.2 us | `tests/test_bmm_sweep.py` |
+| MLP activation | slice, slice, clamp, clamp, silu, mul | slice, slice, `ttnn.clamped_silu_glu` | layer 0 unchanged (0.99996) |
+| router | 139 ops (rank) -> 13 (top-k) | 9: sigmoid fused into the gate matmul, sum -> rdiv -> mul, no host casts | identical top-8 sets 32/32, 255/256 (`test_moe`) |
+| LM head | replicated 0.63 GB head on every chip, 5 chunk matmuls + concat | vocab split over the TP columns, one [4096 x 38720] matmul per chip + `all_gather_cols` | first token == host head (`test_mesh_model` 2x4, 4 and 6 layers) |
+| experts (agent, `expert_kernel_sweep.md`) | sparse N=512 gate|up 1092 us (4-tile K blocks on 16 cores), 8 slab blocks at 32 users/row (9.7 ms) | sparse config from the sweep (369 us); dense layout `GLM53_DENSE_EXPERTS=1`: one [4096, 72x512] + one [72x256, 4096] matmul, no slab fill / expert-sum (1.48 ms per layer at 256 tokens) | `tests/test_moe_block.py` real layer-4 weights, PCC 0.99996 vs the sparse block |
+
+2x4 block, chip (0,0), one traced decode step at 4 users/row after the first six items (reports
+`_logs/mesh/report_perf2x4_r1_l{4,3}_b4/`): layer 4 368 ops / 4.61 ms device, layer 3 334 ops / 4.21 ms.
+What is left is the mHC glue (Slice 80, UntilizeWithUnpadding 54, TilizeWithValPadding 49, Ternary 38 of
+the 368), the KDA head split + recurrence composite, and the single-core input norms: the three agent
+tracks (mHC fused pre/post blocks with the norm folded in, fused KDA decode, dense expert path op count).
