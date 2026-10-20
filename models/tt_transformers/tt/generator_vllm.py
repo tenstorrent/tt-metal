@@ -454,6 +454,7 @@ class Mistral3ForConditionalGeneration(Generator, SupportsMultiModal):
     model_capabilities = {
         "supports_prefix_caching": False,
         "supports_sample_on_device": True,
+        "supports_device_grammar": True,
         "max_device_top_k": 32,
     }
 
@@ -1038,6 +1039,7 @@ class Gemma3ForConditionalGeneration(HybridAttentionForCausalLM, SupportsMultiMo
         "supports_prefix_caching": False,
         "supports_async_decode": True,
         "supports_sample_on_device": True,
+        "supports_device_grammar": True,
         "max_device_top_k": 32,
     }
 

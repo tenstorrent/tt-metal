@@ -338,7 +338,13 @@ def test_legacy_device_sampling_capabilities_declare_the_exact_limit(relative_pa
 
 @pytest.mark.parametrize(
     "class_name",
-    ["LlamaForCausalLM", "QwenForCausalLM", "MistralForCausalLM"],
+    [
+        "LlamaForCausalLM",
+        "QwenForCausalLM",
+        "MistralForCausalLM",
+        "Mistral3ForConditionalGeneration",
+        "Gemma3ForConditionalGeneration",
+    ],
 )
 def test_device_grammar_generators_retain_sampling_capabilities(class_name):
     relative_path = "models/tt_transformers/tt/generator_vllm.py"
