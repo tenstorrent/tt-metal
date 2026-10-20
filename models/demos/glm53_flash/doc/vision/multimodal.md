@@ -1,0 +1,62 @@
+# GLM-5.3-Flash multimodal (image + text) path
+
+Branch `arg/glm53_mm` (worktree `~/ashai/glm53/wt_mm`, from `arg/glm53_mesh` @ d1d7a64d33c). Code
+`tt/multimodal.py`; models `tt/model.py` (`GLM53Model.prefill_streams`, `generate(streams=)`) and
+`tt/mesh_model.py` (`GLM53MeshModel.prefill_streams`); HF side `reference/hf_multimodal_reference.py`
+(+ `generate_streaming(x0=)` in `reference/hf_layer_reference.py`); tests `tests/test_multimodal.py`; demo
+`demo/multimodal_demo.py` with `demo/sample_prompts/shapes_hello.png`.
+
+## What HF does (`Glm5NextModel.forward`)
+
+```
+inputs_embeds = embed_tokens(input_ids)                               # bf16 [1, S, 4096]
+image_embeds  = visual(pixel_values, image_grid_thw).pooler_output    # [N_img, 4096] -> bf16
+inputs_embeds = inputs_embeds.masked_scatter(input_ids == image_token_id, image_embeds)
+hidden        = inputs_embeds.unsqueeze(2).expand(-1, -1, 4, -1)      # the 4 mHC streams
+```
+
+The text model has no rotary embedding (`qk_rope_head_dim == 0`), so an image token is an ordinary
+sequence position: the only multimodal work on the text side is the input streams.
+
+## Device path
+
+| step | where | what |
+|---|---|---|
+| `encode_multimodal(processor, image, question, think=False)` | host | `Glm5NextProcessor.apply_chat_template` with `{"type": "image"}` + the question: `<|begin_of_image|>` + `grid.prod()//4` x `<|image|>` (154854) + `<|end_of_image|>` + question + `<|assistant|><think>`; `think=False` appends `</think>` (154842) so the answer starts immediately (a checkable caption). 448x448 image -> grid (1, 32, 32), 1024 patches `[1024, 1176]`, 256 image tokens |
+| `image_features(device, pixel_values, grid_thw, tower=None)` | device | `tt/vision.py` `TtVisionTower` (fp32 activations, bf16 weights, bf16 output): `prepare_inputs` -> tower -> per-image `[tokens, 4096]` host features (bf16 values, HF's cast). On a mesh the tower weights are replicated (`from_torch` without a mapper) and every chip runs it; chip 0's output is read. Without a resident `tower` it is built, run and released (the single-chip model needs the DRAM for the streamed text layers) |
+| `multimodal_streams(model, input_ids, features)` | device | the text path for the ids (`TtEmbedding`: `ttnn.embedding` of the bf16 table into fp32 + `mhc_expand`), then `streams = streams * keep + img` with host-built `keep` (1.0 on text rows, 0.0 on image rows) and `img` (features rounded to bf16, repeated over the 4 streams, 0 elsewhere): fp32 ops with 1.0 / 0.0 operands, bit-exact on the text rows. `T_pad = ceil(S / (32 * rows)) * 32 * rows`; on a multi-row mesh `keep` / `img` are row-sharded on dim 2 (`mesh.upload(rows=2)`) like the ids (`rows=3`), i.e. each row holds its slab of the prompt, the layout `GLM53MeshModel.prefill` builds for text |
+| `prefill_multimodal(model, input_ids, features, user=0)` | device | `model.prefill_streams(streams, S, user=user)`: the layers exactly as the text `prefill` (which now calls `prefill_streams` after embedding the ids); `GLM53Model` returns the last-token logits, `GLM53MeshModel` `(streams_local, logits_last, owner_row)` |
+| decode | device | unchanged (text tokens); `GLM53Model.generate(ids, n, streams=...)` runs the prefill from the streams, the mesh demo / test replay the traced decode step |
+
+## HF reference (`bringup/references/glm53_flash/MM_shapes_hello`)
+
+`reference/hf_multimodal_reference.py --image demo/sample_prompts/shapes_hello.png --question "What shapes
+and what word are in this image? Answer in one sentence." --generate 16`: the same `encode_multimodal`
+prompt (286 tokens: 256 image tokens at rows 11..266, `</think>` appended), the tower in fp32 on the CPU
+(`features.pt`: `fp32`, and `bf16_model` = the tower run in bf16 as the shipped model does), the scatter
+into the bf16 embeddings (`inputs_embeds.pt`), then all 45 text layers in bf16 streamed one module at a time
+per token (`generate_streaming(x0=streams)`: `generate.json`, `text.txt`). CPU time: tower seconds, prefill
+pass of 286 tokens ~10-20 min, each decode pass ~8-10 min.
+
+## Validation
+
+(filled in as the device runs complete; see `_agents/vision/STATUS.md` for the live state)
+
+| check | result |
+|---|---|
+| processor encoding == reference ids | pending |
+| tower on device vs HF fp32 features (this image) | pending (HF-bf16 floor on this image 0.9909) |
+| streams from HF features: text rows bit-exact vs device text embedding and HF inputs_embeds; image rows bit-exact vs HF | pending |
+| streams from TT features: image rows PCC == tower PCC | pending |
+| single chip, 45 layers: first token == HF; 16-token greedy continuation | pending |
+| mesh (`GLM53_MESH_SHAPE`): first token == HF; traced decode | pending |
+
+## Open issues
+
+- The sample image (flat shapes on white) is a moderately ill-conditioned input for the tower: HF itself in
+  bf16 scores PCC 0.9909 against its fp32 run (test_vision.py documents the gradient image at 0.86). The
+  tower bar in `test_multimodal.py` is therefore `min(0.995, floor - 0.03)` as in `test_vision.py`.
+- The HF reference runs the tower in fp32 and the text layers in bf16 (the shipped `from_pretrained(bf16)`
+  model runs the tower in bf16 too); the TT tower (fp32 activations, bf16 weights) is closer to the fp32 run.
+- Multi-image prompts and video are not wired (one image per prompt; `image_features` already splits per
+  image and `multimodal_streams` concatenates in prompt order, so several images need only the processor call).
