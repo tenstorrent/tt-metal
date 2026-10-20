@@ -35,11 +35,11 @@ constexpr bool bmm_reload_every_block = get_arg(args::num_blocks_inner_dim) > 1;
 #if defined(UCK_CHLKC_PACK)
 constexpr bool bmm_main_form = false;
 #else
-// HiFi2 on one-tile sub blocks of 16-bit operands reads slower on the row MOP and the unpack forms than on main's
-// per-row path; with 8-bit operands the forms gain
+// HiFi2 on one-tile sub blocks of 16-bit operands over many inner blocks reads slower on the row MOP and the unpack
+// forms than on main's per-row path; with 8-bit operands or few inner blocks the forms gain
 constexpr bool bmm_main_form =
     MATH_FIDELITY == ckernel::MathFidelity::HiFi2 &&
-    get_arg(args::out_subblock_w) * get_arg(args::out_subblock_h) == 1 &&
+    get_arg(args::out_subblock_w) * get_arg(args::out_subblock_h) == 1 && get_arg(args::num_blocks_inner_dim) >= 32 &&
     unpack_src_format[dfb::in0] != (uint8_t)DataFormat::Bfp8_b &&
     unpack_src_format[dfb::in1] != (uint8_t)DataFormat::Bfp8_b &&
     unpack_src_format[dfb::in0] != (uint8_t)DataFormat::Bfp4_b &&
