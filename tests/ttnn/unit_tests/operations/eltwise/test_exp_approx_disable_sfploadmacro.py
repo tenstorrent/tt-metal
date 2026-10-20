@@ -5,8 +5,9 @@
 
 One core runs copy_tile -> exp_tile<approx=true>(x) -> pack_tile through ttnn.generic_op with the stock
 eltwise_sfpu.cpp test kernel, once per InputClamping mode. DISABLE_SFPLOADMACRO is passed as a kernel define
-(it feeds the kernel build hash), so the cases run in-process on the shared device fixture; the env var
-TT_METAL_DISABLE_SFPLOADMACRO=1 compiles every kernel the same way.
+(it feeds the kernel build hash), so the cases run in-process on the shared device fixture. The env var
+TT_METAL_DISABLE_SFPLOADMACRO=1 compiles every kernel the same way and a define cannot undo it, so the
+sfploadmacro_on cases skip when it is set (the ttsim lane exports it).
 
 Wormhole has no SFPU scoreboard: an instruction that reads an LReg on the cycle after SFPMAD wrote it
 does not see the SFPMAD result. The fallback loops in ckernel_sfpu_exp.h issue SFPMAD and then
@@ -14,6 +15,8 @@ SFP_STOCH_RND on the same LReg back to back, which needs an SFPNOP between them.
   - InputClamping::None (the SDPA streaming path): every output is 0.
   - InputClamping::ClampToNegative: lanes whose input is below the clamp threshold return garbage.
 """
+import os
+
 import pytest
 import torch
 
@@ -25,6 +28,7 @@ UNARY_DATAFLOW = "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow
 CB_IN = 0  # tt::CBIndex::c_0 in eltwise_sfpu.cpp
 CB_OUT = 16  # tt::CBIndex::c_16 in eltwise_sfpu.cpp
 NUM_TILES = 4
+TILE_PAGE_BYTES = 32 * 32 * 2  # one bf16 tile
 CLAMP_THRESHOLD = -88.5  # ClampToNegative maps inputs below this to exp(CLAMP_THRESHOLD) ~ 0
 PCC = 0.999
 ATOL = 0.1  # approx exp is within ~3.5 % of exp(x) <= exp(0.5)
@@ -56,12 +60,13 @@ def run_exp_approx(device, x, clamp, disable_sfploadmacro):
         ttnn.Shape(list(x.shape)), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG
     )
     core = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))])
-    page = 32 * 32 * 2
     cbs = [
         ttnn.CBDescriptor(
-            total_size=pages * page,
+            total_size=pages * TILE_PAGE_BYTES,
             core_ranges=core,
-            format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=cb, data_format=ttnn.bfloat16, page_size=page)],
+            format_descriptors=[
+                ttnn.CBFormatDescriptor(buffer_index=cb, data_format=ttnn.bfloat16, page_size=TILE_PAGE_BYTES)
+            ],
         )
         for cb, pages in ((CB_IN, 2), (CB_OUT, NUM_TILES))  # the kernel reserves the whole output block at once
     ]
@@ -97,10 +102,15 @@ def run_exp_approx(device, x, clamp, disable_sfploadmacro):
     return ttnn.to_torch(ttnn.generic_op([inp, out], program)).float()
 
 
-@pytest.mark.skipif(not is_wormhole_b0(), reason="Wormhole-only: Blackhole stalls on SFPMAD read-after-write")
+@pytest.mark.skipif(
+    not is_wormhole_b0(),
+    reason="Wormhole-only: the Blackhole SFPU stalls an SFPMAD read-after-write in hardware (Blackhole ISA, SFPMAD scheduling)",
+)
 @pytest.mark.parametrize("clamp", [False, True], ids=["clamp_none", "clamp_negative"])
 @pytest.mark.parametrize("disable_sfploadmacro", [True, False], ids=["sfploadmacro_off", "sfploadmacro_on"])
 def test_exp_approx_disable_sfploadmacro(device, disable_sfploadmacro, clamp):
+    if not disable_sfploadmacro and os.environ.get("TT_METAL_DISABLE_SFPLOADMACRO") == "1":
+        pytest.skip("TT_METAL_DISABLE_SFPLOADMACRO=1 builds every kernel without SFPLOADMACRO; same as the off case")
     x = make_input(clamp)
     y = run_exp_approx(device, x, clamp, disable_sfploadmacro)
     ref = torch.exp(x.float())
