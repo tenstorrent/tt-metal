@@ -157,8 +157,6 @@ ttnn::device_operation::ProgramArtifacts PagedRowMajorFusedUpdateCacheProgramFac
     const tt::DataFormat interm_dfb_data_format =
         fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     const uint32_t interm_single_tile_size = tt::tile_size(interm_dfb_data_format);
-    // The writer copies each input row into the untilized cache block. When the two formats differ, the
-    // reader first converts the rows into a buffer of the block format.
     const bool convert_input = input_dfb_data_format != interm_dfb_data_format;
 
     const uint32_t B = input_tensor1.padded_shape()[1];
@@ -544,9 +542,6 @@ ttnn::device_operation::ProgramArtifacts PagedRowMajorFusedUpdateCacheProgramFac
         // reproduces it exactly.
         ComputeHardwareConfig compute_hw{.enable_32_bit_dest = fp32_dest_acc_en};
         if (fp32_dest_acc_en) {
-            // A 32-bit Dest requires an explicit unpack mode for every Float32 buffer the compute
-            // kernel consumes: UnpackToDest for FLOAT32 caches, the legacy UnpackToSrc otherwise. The input
-            // buffer is absent from this list because the row-major compute kernel never reads it.
             const auto require_unpack_mode = [&](const DFBSpecName& dfb, tt::DataFormat format) {
                 if (format == tt::DataFormat::Float32) {
                     compute_hw.unpack_modes.emplace(

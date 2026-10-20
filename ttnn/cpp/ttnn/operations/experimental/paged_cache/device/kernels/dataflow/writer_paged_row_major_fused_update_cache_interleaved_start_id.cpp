@@ -65,7 +65,6 @@ void kernel_main() {
     // is structural, one writer per input shard grid.
     DataflowBuffer dfb_untilized_input(dfb::untilized_input);
 #ifdef CONVERT_INPUT
-    // The input is not in the format of the untilized cache block; the reader converts each row into this buffer.
     DataflowBuffer dfb_converted_input(dfb::converted_input);
 #endif
 #ifdef USE_INDEX_TENSOR
