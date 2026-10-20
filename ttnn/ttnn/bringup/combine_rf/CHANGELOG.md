@@ -7,6 +7,26 @@
 
 imported, unchanged.
 
+### acc_dtype: bf16 running sums, twice the home tokens a call (2026-10-20, deepseek_v41_flash_d_p P.9)
+- What: `sparse_combine_rf_prepare(acc_dtype=ttnn.bfloat16)` keeps every home token's running sum in bf16 (CB_ACC
+  Float16_b, 2048 B tiles) instead of fp32 (4096 B): the packer's L1 accumulation adds each weighted row (fp32 DEST,
+  HiFi4 multiply unchanged) onto the bf16 sum. Same kernels, same summation order (deterministic stays bit-identical),
+  same output formats. `accumulator_bytes(..., acc_dtype=)` and the arena refusal (ValueError numbers, "bf16 tiles")
+  size with it; `acc_page(acc_dtype)`. Default None = ttnn.float32: every program before is unchanged (same CB format,
+  sizes and kernel sources).
+- Why: deepseek_v41_flash_d_p P.9 (owner, option B): with fp32 sums 9 accumulators hold <= 558 home tokens, so the
+  model's 1024 home tokens per chip (2x2, chunk 2048) ran in 2 passes and the flat expert streamed every expert's
+  weights twice a layer; with bf16 sums one pass holds <= 1143.
+- Results (2x2 QuietBox p300c): tests/unit/test_acc_dtype.py 4 / 4: sizing (bf16 1143 vs fp32 567 tokens a call at 9
+  accumulators, 1356 KB), refusal (1024 tokens in 1156 KB: bf16 "<= 963 home tokens or >= 10 accumulators", 963
+  builds, 972 refused; fp32 "<= 477"), precision on the standalone combine (6 bf16 rows a token, 2^-6..2^6 scales, vs
+  the float64 sum): fp32 rel 7e-9, bf16 rel 2.7e-3 (one rounding of the exact sum: 1.66e-3), bias -1.2e-5, worst row
+  3.9e-3. Model (tt/perf_experts.py::test_combine_acc, layers 0 / 24): one pass; full precision vs float64 fp32 0.0029,
+  bf16 0.0041, bf16 vs fp32 0.0029; 0 of 10.5M values differ between calls; experts call 5.74 -> 4.29 ms a layer
+  (shipped glm precision).
+- Needed by: deepseek_v41_flash_d_p P.9 (tt/weighted_combine.py, setting COMBINE_ACC)
+- Files: sparse_combine_rf.py, tests/unit/test_acc_dtype.py
+
 ### Clear refusal when the accumulators' fp32 sums do not fit the arena (2026-10-19, deepseek_v41_flash_d_p P.8 follow-up)
 - What: `sparse_combine_rf_prepare` with an arena raises ValueError when the arena cannot hold the accumulators' state,
   one ring slot per source, the CBs (the fp32 sums of ceil(S / A) home tokens) and the local ring. The message gives

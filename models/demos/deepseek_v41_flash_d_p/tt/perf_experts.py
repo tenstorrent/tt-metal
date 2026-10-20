@@ -591,6 +591,154 @@ def test_weighted_combine_routes(mesh_device, route, S, arena_kb):
 @pytest.mark.timeout(1200)
 @pytest.mark.parametrize("device_params", [_weighted_params()], indirect=True, ids=["box_payload"])
 @pytest.mark.parametrize("mesh_device", [tuple(spec().mesh)], indirect=True, ids=["x".join(map(str, spec().mesh))])
+@pytest.mark.parametrize("route", ["local", "remote", "random"])
+@pytest.mark.parametrize("S", [1024])
+def test_weighted_combine_routes_bf16(mesh_device, route, S):
+    """COMBINE_ACC=bf16 (P.9): the 2x2 chunk's 1024 home tokens per chip in ONE pass (bf16 sums, 9 accumulators),
+    every row local / remote / random (fake weights: the call must finish, in one pass)."""
+    wc, fe, xg, ids_g, wts_g = _wc_setup(mesh_device, route, S, acc_dtype=ttnn.bfloat16)
+    assert wc.P == 1, f"bf16 sums: {S} home tokens in {wc.P} passes"
+    t0 = time.time()
+    out = wc(fe, xg, ids_g, wts_g, 4)
+    ttnn.synchronize_device(mesh_device)
+    print(f"WC_ROUTES_BF16 route={route} S={S} passes={wc.P} x {wc.S_pass} first call {time.time() - t0:.2f} s")
+    o = ttnn.to_torch(ttnn.get_device_tensors(out)[0]).float()
+    print(f"WC_ROUTES_BF16 route={route} S={S} out {tuple(o.shape)} finite {bool(torch.isfinite(o).all())}")
+
+
+def _ref64(ck, cfg, layer, x, dense, sel, xdt, numerics):
+    """float64 y = sum_k w_k w2(silu(min(w1 q, lim)) clamp(w3 q, +-lim)) on the rows ``sel``, q = x as the device reads it
+    (bf16 cast natively, fp8 q-dq officially), no rounding of h."""
+    xq = x[sel].double()
+    if xdt == ttnn.bfloat16:
+        xq = xq.to(torch.bfloat16).double()
+    if numerics == "official":
+        from models.demos.deepseek_v41_flash_d_p.reference.kernels import act_quant_dequant
+
+        xq = act_quant_dequant(xq.float(), 32).double()
+    else:
+        xq = xq.to(torch.bfloat16).double()
+    ref = torch.zeros(len(sel), cfg.dim, dtype=torch.float64)
+    ds = dense[sel].double()
+    lim = float(cfg.swiglu_limit)
+    for e in sorted(set(torch.nonzero(ds)[:, 1].tolist())):
+        rows = torch.nonzero(ds[:, e]).flatten()
+        p = ck.expert(layer, e)
+        w1, w3, w2 = (E.fp4_dequant(*p[nm]).double() for nm in E.NAMES)
+        g_, u_ = xq[rows] @ w1.T, xq[rows] @ w3.T
+        h = torch.nn.functional.silu(g_.clamp(max=lim)) * u_.clamp(-lim, lim)
+        ref[rows] += ds[rows, e : e + 1] * (h @ w2.T)
+    return ref
+
+
+def _cmp(a, b):
+    d = a - b
+    rel = (d.norm() / b.norm()).item()
+    bias = ((d * b).sum() / (b * b).sum()).item()
+    row = (d.norm(dim=1) / b.norm(dim=1).clamp_min(1e-30)).max().item()
+    return rel, bias, row
+
+
+@pytest.mark.timeout(3600)
+@pytest.mark.parametrize("device_params", [_weighted_params()], indirect=True, ids=["box_payload"])
+@pytest.mark.parametrize("mesh_device", [tuple(spec().mesh)], indirect=True, ids=["x".join(map(str, spec().mesh))])
+@pytest.mark.parametrize("layer", [0, 24], ids=["L00", "L24"])
+@pytest.mark.parametrize("prof", [False, True], ids=["time", "ops"])
+def test_combine_acc(mesh_device, layer, prof):
+    """COMBINE_ACC A/B (P.9) on the same random inputs (EXPERTS_COMBINE=weighted, the current NUMERICS /
+    FFN_NORM_DTYPE / EXPERTS_PRECISION / CCL_IMPL settings): fp32 sums in passes vs bf16 sums in one pass. Per side the
+    pass count, the mean wall time of a whole experts call (q(x) .. the weighted combine's partial, synchronized: the
+    device time of one layer's experts per chunk) and, with prof (ids "ops"; the profiler env of testing/profiler.py),
+    the device time per op of one more call. Precision: each vs a float64 reference on N_REF tokens, bf16 vs fp32 on
+    every row, and bf16 twice on the same inputs (the fixed order: bit-identical)."""
+    from models.demos.deepseek_v41_flash_d_p.tt.settings import settings
+
+    S = spec()
+    ck, cfg = hooks._checkpoint(S), hooks._config(S)
+    chunk = hooks._chunk(S)
+    g = torch.Generator().manual_seed(0)
+    x = torch.randn(chunk, cfg.dim, generator=g)
+    sc = torch.rand(chunk, cfg.n_experts, generator=g)
+    top = sc.topk(cfg.topk_experts, dim=-1)
+    dense = torch.zeros(chunk, cfg.n_experts)
+    dense.scatter_(1, top.indices, 1.5 * top.values / top.values.sum(-1, keepdim=True))
+    xdt = ttnn.bfloat16 if settings.get("FFN_NORM_DTYPE") == "bf16" else ttnn.float32
+    tag = " ".join(f"{k}={settings.get(k)}" for k in ("NUMERICS", "FFN_NORM_DTYPE", "EXPERTS_PRECISION", "CCL_IMPL"))
+    outs, again = {}, None
+    for acc in ("fp32", "bf16"):
+        t0 = time.time()
+        mod = E.build_experts(mesh_device, ck, cfg, layer, chunk, combine="weighted", combine_acc=acc)
+        load = time.time() - t0
+        P = mod.wc.P
+        if acc == "bf16":
+            assert P == 1, f"COMBINE_ACC=bf16 ran {P} passes"
+        xd = row_split_to_device(mesh_device, x, dtype=xdt)
+        rd = row_split_to_device(mesh_device, dense)
+        for _ in range(2):
+            ttnn.deallocate(mod(xd, rd))
+        ttnn.synchronize_device(mesh_device)
+        t0 = time.time()
+        for _ in range(N_CALLS):
+            ttnn.deallocate(mod(xd, rd))
+        ttnn.synchronize_device(mesh_device)
+        dt = (time.time() - t0) / N_CALLS
+        od = mod(xd, rd)
+        outs[acc] = _host(mesh_device, od)
+        ttnn.deallocate(od)
+        if acc == "bf16":
+            od = mod(xd, rd)
+            again = _host(mesh_device, od)
+            ttnn.deallocate(od)
+        if prof:
+            from models.demos.common.bringup.testing import profiler
+
+            profiler.enable(mesh_device, ops=True)
+            profiler.signpost(f"experts_{acc}")
+            ttnn.deallocate(mod(xd, rd))
+            profiler.signpost("end")
+            res = profiler.result()
+            profiler.disable()
+            tot = 0.0
+            for key, rows_ in res["op_ns"].items():
+                if not key.startswith("experts_"):
+                    continue
+                for r_ in rows_:
+                    tot += r_["ns"]
+                    print(
+                        f"COMBINE_ACC_OPS L{layer:02d} {acc} {r_['op'][:60]:60s} calls {r_['calls']:3d} "
+                        f"{r_['ns'] / 1e3:9.1f} us  {r_['shape'][:70]}"
+                    )
+            print(f"COMBINE_ACC_OPS L{layer:02d} {acc} total {tot / 1e3:.1f} us (device, slowest chip per op)")
+        print(
+            f"COMBINE_ACC_TIME L{layer:02d} acc={acc} passes={P} x {mod.wc.S_pass} chunk={chunk} "
+            f"call_ms={dt * 1e3:.2f} load_s={load:.1f} {tag}"
+        )
+        for t in (xd, rd):
+            ttnn.deallocate(t)
+        mod.free()
+        del mod
+    sel = torch.arange(0, chunk, chunk // N_REF)
+    ref = _ref64(ck, cfg, layer, x, dense, sel, xdt, settings.get("NUMERICS"))
+    for acc, o in outs.items():
+        rel, bias, row = _cmp(o[sel], ref)
+        print(
+            f"COMBINE_ACC_REF L{layer:02d} {acc} vs float64 ({len(sel)} tokens): rel {rel:.6f} bias {bias:+.6f} "
+            f"worst_row {row:.5f} {tag}"
+        )
+    rel, bias, row = _cmp(outs["bf16"], outs["fp32"])
+    print(
+        f"COMBINE_ACC_CMP L{layer:02d} bf16 vs fp32 (all {chunk} rows): rel {rel:.6f} bias {bias:+.6f} worst_row {row:.5f}"
+    )
+    b = outs["bf16"]
+    nd = int((again != b).sum().item())
+    print(f"COMBINE_ACC_DETERMINISM L{layer:02d} bf16 twice: {nd} of {b.numel()} elements differ")
+    assert bool(torch.isfinite(b).all())
+    assert nd == 0, f"bf16 sums not bit-identical between calls ({nd} values)"
+
+
+@pytest.mark.timeout(1200)
+@pytest.mark.parametrize("device_params", [_weighted_params()], indirect=True, ids=["box_payload"])
+@pytest.mark.parametrize("mesh_device", [tuple(spec().mesh)], indirect=True, ids=["x".join(map(str, spec().mesh))])
 @pytest.mark.parametrize("fid", [0, 4], ids=["LoFi", "HiFi4"])
 @pytest.mark.parametrize("passes", [1, 2, 3])
 @pytest.mark.parametrize("S", [512, 1024])
