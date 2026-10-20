@@ -1457,7 +1457,7 @@ class ModelArgs:
                 # a measured fit, not an assertion that 4 is throughput-optimal.
                 in0_block_w=(
                     4
-                    if self.device_name == "N150"
+                    if self.device_name in ("N150", "P100")
                     and self.base_model_name == "Llama-3.1-8B"
                     and seq_len >= self.prefill_len_cutoff
                     else None
