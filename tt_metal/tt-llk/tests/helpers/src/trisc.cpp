@@ -71,7 +71,8 @@ int main(void)
 #endif
     device_setup();
 #if defined(ARCH_QUASAR)
-    // No BRISC on Quasar: unpack scrubs the debug features while the others are held in reset.
+    // No BRISC on Quasar: unpack resets the barrier and scrubs the debug features while the others are held in reset.
+    llk_barrier::reset_semaphores();
     llk_perf::clear_debug_features();
 #endif
     clear_trisc_soft_reset(); // Release the rest of the triscs
