@@ -12,9 +12,11 @@
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include <tt_stl/overloaded.hpp>
+#include <umd/device/arch/architecture_implementation.hpp>
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <filesystem>
 #include <fstream>
 #include <map>
@@ -1046,7 +1048,7 @@ void check_router_fields(const json& manifest, const std::vector<RouterEntry>& r
         std::set<std::string> used_processors;
         for (const auto& [risc_key, erisc] : router.at("eriscs").items()) {
             SCOPED_TRACE(risc_key);
-            EXPECT_EQ(keys_of(erisc), (std::set<std::string>{"processor", "fields"}));
+            EXPECT_EQ(keys_of(erisc), (std::set<std::string>{"processor", "physical_erisc", "fields"}));
             const auto processor = erisc.at("processor").get<std::string>();
             EXPECT_TRUE(processors.contains(processor)) << processor;
             EXPECT_TRUE(used_processors.insert(processor).second) << "two ERISCs run on " << processor;
@@ -1213,7 +1215,7 @@ void check_archs(const json& manifest) {
     EXPECT_EQ(keys_of(manifest.at("archs")), (std::set<std::string>{lower_enum_name(BaseFabricFixture::arch_)}));
     EXPECT_EQ(
         keys_of(manifest.at("archs").at(lower_enum_name(BaseFabricFixture::arch_))),
-        (std::set<std::string>{"areas", "stream_registers", "types"}));
+        (std::set<std::string>{"areas", "stream_registers", "core_registers", "types"}));
     const auto& areas = arch_areas(manifest);
     EXPECT_EQ(
         keys_of(areas),
@@ -1292,6 +1294,68 @@ void check_arch_stream_registers(const json& manifest) {
         EXPECT_LT(offset.get<uint32_t>(), stride);
         for (uint32_t stream_id = 0; stream_id < count; ++stream_id) {
             EXPECT_TRUE(hal.valid_reg_addr(base + (stream_id * stride) + offset.get<uint32_t>())) << stream_id;
+        }
+    }
+}
+
+// The soft reset and wall clock registers are at the HAL's addresses, in the order they are read, and soft_reset has
+// UMD's reset bit for each physical ERISC. Each router ERISC names the physical ERISC its processor runs on.
+void check_arch_core_registers(const json& manifest, const std::vector<RouterEntry>& routers) {
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    const auto arch = BaseFabricFixture::arch_;
+    const auto& registers = manifest.at("archs").at(lower_enum_name(arch)).at("core_registers");
+    ASSERT_EQ(registers.size(), 3u);
+    const std::array<std::pair<const char*, uint32_t>, 3> expected = {{
+        {"soft_reset", hal.get_risc_soft_reset_addr()},
+        {"wall_clock_low", hal.get_wall_clock_low_addr()},
+        {"wall_clock_high", hal.get_wall_clock_high_addr()},
+    }};
+    for (size_t i = 0; i < expected.size(); ++i) {
+        const auto& [name, address] = expected[i];
+        SCOPED_TRACE(name);
+        const auto& reg = registers.at(i);
+        std::set<std::string> keys = {"name", "address", "size", "schema"};
+        if (i == 0) {
+            keys.insert("reset_masks");
+        }
+        EXPECT_EQ(keys_of(reg), keys);
+        EXPECT_EQ(reg.at("name"), name);
+        EXPECT_NE(address, 0u);
+        EXPECT_EQ(reg.at("address").get<uint32_t>(), address);
+        EXPECT_EQ(reg.at("size"), sizeof(uint32_t));
+        EXPECT_EQ(reg.at("schema"), "u32");
+    }
+
+    // A Wormhole Ethernet core has one ERISC, and a Blackhole one two.
+    const auto umd_arch = tt::umd::ArchitectureImplementation::create(arch);
+    ASSERT_NE(umd_arch, nullptr);
+    std::vector<uint32_t> expected_masks = {umd_arch->get_soft_reset_reg_value(tt::umd::RiscType::ERISC0)};
+    if (arch == tt::ARCH::BLACKHOLE) {
+        expected_masks.push_back(umd_arch->get_soft_reset_reg_value(tt::umd::RiscType::ERISC1));
+    }
+    const auto masks = registers.at(0).at("reset_masks").get<std::vector<uint32_t>>();
+    EXPECT_EQ(masks, expected_masks);
+    uint32_t seen = 0;
+    for (const auto mask : masks) {
+        EXPECT_EQ(std::popcount(mask), 1) << mask;
+        EXPECT_EQ(seen & mask, 0u) << mask;
+        seen |= mask;
+    }
+
+    // In Blackhole single-ERISC mode, base firmware keeps ERISC0 and the one processor runs on ERISC1.
+    const bool single_erisc_blackhole =
+        arch == tt::ARCH::BLACKHOLE && !tt::tt_metal::MetalContext::instance().rtoptions().get_enable_2_erisc_mode();
+    const auto riscv_1 = lower_enum_name(tt::tt_metal::DataMovementProcessor::RISCV_1);
+    for (const auto& entry : routers) {
+        SCOPED_TRACE(entry.path);
+        std::set<uint32_t> used;
+        for (const auto& [risc_key, erisc] : entry.router->at("eriscs").items()) {
+            SCOPED_TRACE(risc_key);
+            const auto physical = erisc.at("physical_erisc").get<uint32_t>();
+            const bool on_riscv_1 = erisc.at("processor").get<std::string>() == riscv_1;
+            EXPECT_EQ(physical, single_erisc_blackhole || on_riscv_1 ? 1u : 0u);
+            EXPECT_LT(physical, masks.size());
+            EXPECT_TRUE(used.insert(physical).second) << "two ERISCs run on physical ERISC " << physical;
         }
     }
 }
@@ -1481,6 +1545,9 @@ TEST_F(Fabric2DManifestFixture, Archs) { check_archs(manifest_); }
 
 TEST_F(Fabric1DManifestFixture, ArchStreamRegisters) { check_arch_stream_registers(manifest_); }
 TEST_F(Fabric2DManifestFixture, ArchStreamRegisters) { check_arch_stream_registers(manifest_); }
+
+TEST_F(Fabric1DManifestFixture, ArchCoreRegisters) { check_arch_core_registers(manifest_, routers_); }
+TEST_F(Fabric2DManifestFixture, ArchCoreRegisters) { check_arch_core_registers(manifest_, routers_); }
 
 TEST_F(Fabric1DManifestFixture, Enums) { check_enums(manifest_); }
 TEST_F(Fabric2DManifestFixture, Enums) { check_enums(manifest_); }

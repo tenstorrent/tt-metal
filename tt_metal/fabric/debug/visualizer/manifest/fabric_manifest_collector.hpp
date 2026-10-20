@@ -13,6 +13,10 @@
 
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_model.hpp"
 
+namespace tt::tt_metal {
+class Hal;
+}  // namespace tt::tt_metal
+
 namespace tt::tt_fabric {
 
 class FabricEriscDatamoverBuilder;
@@ -38,6 +42,7 @@ struct ManifestRouterInputs {
     // get_fabric_router_addresses_to_clear()
     const std::vector<size_t>& addresses_to_clear;
     const RouterKernelInputs& kernel;
+    const tt::tt_metal::Hal& hal;
 };
 
 // Throws unless every named argument and define in `kernel` is read by the manifest or listed as unrecorded

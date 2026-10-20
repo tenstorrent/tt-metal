@@ -8,8 +8,10 @@
 #include <tt_stl/assert.hpp>
 #include <llrt/tt_cluster.hpp>
 #include <enchantum/enchantum.hpp>
+#include <umd/device/arch/architecture_implementation.hpp>
 
 #include <algorithm>
+#include <array>
 #include <iterator>
 #include <map>
 #include <optional>
@@ -349,6 +351,35 @@ manifest::StreamRegisters stream_registers(const tt::tt_metal::Hal& hal) {
     return out;
 }
 
+manifest::CoreRegisters core_registers(const tt::tt_metal::Hal& hal) {
+    const auto arch = hal.get_arch();
+    manifest::CoreRegisters out{
+        .soft_reset = hal.get_risc_soft_reset_addr(),
+        .wall_clock_low = hal.get_wall_clock_low_addr(),
+        .wall_clock_high = hal.get_wall_clock_high_addr(),
+    };
+    TT_FATAL(
+        out.soft_reset != 0 && out.wall_clock_low != 0 && out.wall_clock_high != 0,
+        "Fabric manifest: the HAL gives no soft reset or wall clock address on {}",
+        manifest::lower_enum_name(arch));
+    const auto umd_arch = tt::umd::ArchitectureImplementation::create(arch);
+    TT_FATAL(
+        umd_arch != nullptr, "Fabric manifest: UMD has no soft reset bits for {}", manifest::lower_enum_name(arch));
+    constexpr std::array k_eriscs = {tt::umd::RiscType::ERISC0, tt::umd::RiscType::ERISC1};
+    const uint32_t num_eriscs = hal.get_num_physical_risc_processors(HalProgrammableCoreType::ACTIVE_ETH);
+    TT_FATAL(
+        num_eriscs > 0 && num_eriscs <= k_eriscs.size(),
+        "Fabric manifest: the HAL gives {} ERISCs on {}, but the manifest has soft reset bits for 1 to {}",
+        num_eriscs,
+        manifest::lower_enum_name(arch),
+        k_eriscs.size());
+    out.reset_masks.reserve(num_eriscs);
+    for (uint32_t erisc = 0; erisc < num_eriscs; ++erisc) {
+        out.reset_masks.push_back(umd_arch->get_soft_reset_reg_value(k_eriscs[erisc]));
+    }
+    return out;
+}
+
 }  // namespace
 
 manifest::Chip join_chip(
@@ -401,6 +432,7 @@ manifest::Arch describe_arch(const tt::tt_metal::Hal& hal) {
                         : std::nullopt,
             },
         .stream_registers = stream_registers(hal),
+        .core_registers = core_registers(hal),
         .types = std::move(types),
     };
 }
