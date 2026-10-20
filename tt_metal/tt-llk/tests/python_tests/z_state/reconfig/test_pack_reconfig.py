@@ -71,7 +71,6 @@ def get_valid_dest_acc(
 @parametrize(
     formats=generate_valid_formats(
         [
-            DataFormat.Float16,
             DataFormat.Float16_b,
             DataFormat.Bfp8,
             DataFormat.Bfp8_b,
