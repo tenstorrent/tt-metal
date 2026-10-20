@@ -15,6 +15,10 @@ Two entry points:
   ``num_decode`` single-token decode steps, and dump every layer's input/output residual streams
   plus the autoregressive state to ``bringup/references/glm53_flash``. The TTNN tests compare
   against those files, so the device never needs the host modules at test time.
+* ``main --generate N``: greedy generation of ``N`` tokens from ``--prompt`` through the whole
+  stack (embedding, all 45 layers streamed one module at a time per token, ``hc_head`` mean, final
+  norm, ``lm_head``, argmax), the host side of the full-model test (``tests/test_full_model.py``).
+  The model's own bf16 path is used for the head; the result is resumable (``generate_state.pt``).
 
 Residual contract (from ``Glm5NextTextModel.forward``): the layer input/output is the mHC stream
 tensor ``[B, S, hc_mult=4, hidden=4096]``; layer 0's input is the embedding repeated 4x.
@@ -32,7 +36,15 @@ from pathlib import Path
 import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from checkpoint import EMBED_KEY, default_snapshot_dir, load_layer_raw, load_tensors, shard_headers  # noqa: E402
+from checkpoint import (  # noqa: E402
+    EMBED_KEY,
+    FINAL_NORM_KEY,
+    LM_HEAD_KEY,
+    default_snapshot_dir,
+    load_layer_raw,
+    load_tensors,
+    shard_headers,
+)
 
 # Glm5NextPreTrainedModel._keep_in_fp32_modules_strict
 STRICT_FP32 = ("e_score_correction_bias", "conv1d", "dt_bias", "A_log")
@@ -120,7 +132,7 @@ def build_layer(snapshot: Path, text_config, layer_idx: int, headers=None, raw=N
     with torch.device("meta"):
         layer = Glm5NextTextDecoderLayer(text_config, layer_idx)
     layer = layer.to_empty(device="cpu")
-    missing, unexpected = layer.load_state_dict(sd, strict=False)
+    missing, unexpected = layer.load_state_dict(sd, strict=False, assign=True)  # no second copy of the experts
     missing = [k for k in missing]
     if missing or unexpected:
         raise RuntimeError(f"layer {layer_idx}: missing={missing} unexpected={unexpected}")
@@ -303,6 +315,113 @@ def _cache_snapshot(cache, li: int) -> dict:
     return out
 
 
+@torch.no_grad()
+def generate_streaming(
+    snapshot: Path,
+    text_config,
+    prompt_ids: torch.Tensor,
+    n: int,
+    out_dir: Path,
+    *,
+    resume: bool = True,
+    layers: list[int] | None = None,
+) -> dict:
+    """Greedy generation of ``n`` tokens with every layer streamed per token (prefill pass, then
+    ``n - 1`` decode passes; a pass builds each of the 45 HF layers in turn, ~10 s per MoE layer on
+    a warm page cache, and frees it). The head is the model's bf16 path: ``hc_head`` (stream mean)
+    -> ``norm`` -> ``lm_head`` in bf16 -> argmax (first index on ties, as ``torch.argmax``).
+    Writes ``generate.json`` (prompt ids, generated ids, per-step top-5 ids/logits, timings) and a
+    resumable ``generate_state.pt`` (the ``DynamicCache`` + tokens so far) after every token."""
+    import gc
+
+    from transformers import DynamicCache
+    from transformers.models.glm5_next.modeling_glm5_next import Glm5NextTextHyperHead, Glm5NextTextRMSNorm
+
+    headers = shard_headers(snapshot)
+    embed = load_tensors(snapshot, [EMBED_KEY], headers)[EMBED_KEY]
+    head_w = load_tensors(snapshot, [FINAL_NORM_KEY, LM_HEAD_KEY], headers)
+    norm = Glm5NextTextRMSNorm(text_config.hidden_size, eps=text_config.rms_norm_eps)
+    norm.weight.data = head_w[FINAL_NORM_KEY].to(torch.bfloat16)
+    lm_w = head_w[LM_HEAD_KEY].to(torch.bfloat16)
+    hc_head = Glm5NextTextHyperHead()
+    hc = text_config.hc_mult
+    layers = (
+        list(range(text_config.num_hidden_layers)) if layers is None else layers
+    )  # a subset only for mechanics checks
+    out_dir.mkdir(parents=True, exist_ok=True)
+    state_file = out_dir / "generate_state.pt"
+
+    def head(x_last: torch.Tensor) -> torch.Tensor:
+        """x_last [1, 1, 4, 4096] bf16 -> logits [vocab] fp32 (bf16 values)."""
+        h = norm(hc_head(x_last))  # bf16 [1, 1, H]
+        return torch.nn.functional.linear(h, lm_w)[0, -1].float()
+
+    def record(step: int, position: int, logits: torch.Tensor, seconds: float) -> dict:
+        top = logits.topk(5)
+        return {
+            "step": step,
+            "position": position,
+            "token": int(logits.argmax()),
+            "top5_ids": top.indices.tolist(),
+            "top5_logits": [round(float(v), 4) for v in top.values],
+            "pass_s": round(seconds, 1),
+        }
+
+    def run_pass(x: torch.Tensor, cache, mask: torch.Tensor) -> torch.Tensor:
+        topk = None
+        for li in layers:
+            layer, sd = build_layer(snapshot, text_config, li, headers)
+            del sd
+            x, topk = layer(x, attention_mask=mask, past_key_values=cache, use_cache=True, prev_topk_indices=topk)
+            del layer
+            gc.collect()
+        return x
+
+    B, T = prompt_ids.shape
+    if resume and state_file.exists():
+        st = torch.load(state_file, weights_only=False)
+        assert torch.equal(st["prompt_ids"], prompt_ids), "generate_state.pt belongs to another prompt"
+        cache, generated, records = st["cache"], st["generated"], st["records"]
+        print(f"resuming after {len(generated)} generated tokens", flush=True)
+    else:
+        cache, generated, records = DynamicCache(config=text_config), [], []
+
+    def save():
+        torch.save({"prompt_ids": prompt_ids, "generated": generated, "records": records, "cache": cache}, state_file)
+        (out_dir / "generate.json").write_text(
+            json.dumps(
+                {"prompt_ids": prompt_ids[0].tolist(), "generated": generated, "records": records, "n": n}, indent=1
+            )
+        )
+
+    if not generated:
+        t0 = time.time()
+        x = embed[prompt_ids].unsqueeze(2).expand(-1, -1, hc, -1).contiguous()
+        x = run_pass(x, cache, torch.ones(B, T, dtype=torch.bool))
+        logits = head(x[:, -1:])
+        records.append(record(0, T - 1, logits, time.time() - t0))
+        generated.append(records[-1]["token"])
+        save()
+        print(
+            f"prefill T={T}: token {generated[-1]} ({time.time() - t0:.0f}s); top5 {records[-1]['top5_ids']}",
+            flush=True,
+        )
+    while len(generated) < n:
+        t0 = time.time()
+        pos = T + len(generated) - 1  # position of the token being fed (the last generated one)
+        x = embed[torch.tensor([[generated[-1]]])].unsqueeze(2).expand(-1, -1, hc, -1).contiguous()
+        x = run_pass(x, cache, torch.ones(B, 1, dtype=torch.bool))
+        logits = head(x)
+        records.append(record(len(generated), pos, logits, time.time() - t0))
+        generated.append(records[-1]["token"])
+        save()
+        print(
+            f"decode pos {pos}: token {generated[-1]} ({time.time() - t0:.0f}s); top5 {records[-1]['top5_ids']}",
+            flush=True,
+        )
+    return {"prompt_ids": prompt_ids[0].tolist(), "generated": generated, "records": records}
+
+
 def parse_layers(spec: str) -> list[int]:
     """``"0,1,2"`` or ``"0-44"`` (inclusive) -> sorted layer indices."""
     out: list[int] = []
@@ -319,7 +438,12 @@ def parse_layers(spec: str) -> list[int]:
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--snapshot", type=Path, default=None)
-    ap.add_argument("--layers", type=str, default="0,1,2,3,4", help="consecutive layers starting at 0 (a,b,c or a-b)")
+    ap.add_argument(
+        "--layers",
+        type=str,
+        default=None,
+        help="consecutive layers starting at 0 (a,b,c or a-b); default 0,1,2,3,4 for dumps, all layers for --generate",
+    )
     ap.add_argument(
         "--stream",
         action="store_true",
@@ -339,6 +463,14 @@ def main():
     ap.add_argument(
         "--perturb", type=float, default=0.0, help="relative noise on the layer-0 input (chain-sensitivity control)"
     )
+    ap.add_argument(
+        "--generate",
+        type=int,
+        default=None,
+        metavar="N",
+        help="greedy-generate N tokens from --prompt through all layers (streamed per token) instead of dumping",
+    )
+    ap.add_argument("--no-resume", action="store_true", help="--generate: ignore an existing generate_state.pt")
     args = ap.parse_args()
 
     from transformers import AutoTokenizer
@@ -355,10 +487,22 @@ def main():
         if args.seq_len is not None:
             reps = (args.seq_len + ids.shape[1] - 1) // ids.shape[1]
             ids = ids.repeat(1, reps)[:, : args.seq_len]
-    layers = parse_layers(args.layers)
-    assert layers[0] == 0 and layers == list(range(layers[0], layers[-1] + 1)), "layers must be 0..N"
     print(f"snapshot {snapshot}\nprompt tokens {ids.shape}", flush=True)
     torch.manual_seed(0)
+    if args.generate is not None:
+        res = generate_streaming(
+            snapshot,
+            text,
+            ids,
+            args.generate,
+            args.out,
+            resume=not args.no_resume,
+            layers=parse_layers(args.layers) if args.layers else None,
+        )
+        print(f"generated ids {res['generated']}\ntext: {tok.decode(res['generated'])!r}", flush=True)
+        return
+    layers = parse_layers(args.layers or "0,1,2,3,4")
+    assert layers[0] == 0 and layers == list(range(layers[0], layers[-1] + 1)), "layers must be 0..N"
     run_layers(snapshot, layers, ids, args.num_decode, args.out, text, stream=args.stream, perturb=args.perturb)
 
 
