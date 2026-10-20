@@ -1,6 +1,6 @@
 # DeepSeek-V4.1-Flash on Blackhole Galaxy: getting started
 
-OpenAI-compatible vLLM server on one Blackhole Galaxy (32 chips, 4x8 mesh). Release notes: `RELEASE_NOTES.md`. All options, request fields, image input, evaluation and build steps: `GETTING_STARTED_DETAILED.md`.
+OpenAI-compatible vLLM server on one Blackhole Galaxy (32 chips, 4x8 mesh). Release notes: `RELEASE_NOTES.md`.
 
 ## Docker image
 
@@ -19,7 +19,7 @@ ghcr.io/tenstorrent/tt-inference-server/vllm-tt-metal-src-dsv4.1-flash:0.24.0-06
 | **B=16** | 16 | 262,144 | `runtime_spec_b16_k5_262144_vision.json` |
 | **B=4** | 4 | 1,048,576 | `runtime_spec_b4_k5_1048576_vision.json` |
 
-Both: speculative decoding k = 5, image input, prefix caching off, token budget 67,584. Other specs (no images, 131,072 tokens, prefix caching + chunked prefill `*_apc.json`): `GETTING_STARTED_DETAILED.md`.
+Both: speculative decoding k = 5, image input, prefix caching off, token budget 67,584. The `assets/` folder has more specs (no images, 131,072 tokens, prefix caching + chunked prefill `*_apc.json`).
 
 ## Start
 
@@ -40,7 +40,17 @@ mkdir -p $R/refs $R/snapshots/local && echo -n local > $R/refs/main
 cp $CKPT/config.json $CKPT/tokenizer.json $CKPT/tokenizer_config.json $R/snapshots/local/
 ```
 
-Pick the configuration (run from `models/demos/blackhole/deepseek_v41_flash/` of tt-metal):
+Get the runtime specs (JSON files). They are inside the image (no checkout needed):
+
+```bash
+C=$(docker create $IMAGE)
+docker cp $C:/home/container_app_user/tt-metal/models/demos/blackhole/deepseek_v41_flash/assets ./assets
+docker rm $C
+```
+
+or from the tt-metal repo, branch `ssinghal/dsv4p1`: `models/demos/blackhole/deepseek_v41_flash/assets/`. The specs use in-container paths (`/ckpt`, `/cache/...`), so they need no editing.
+
+Pick the configuration:
 
 ```bash
 export SPEC=$PWD/assets/runtime_spec_b16_k5_262144_vision.json     # B=16
