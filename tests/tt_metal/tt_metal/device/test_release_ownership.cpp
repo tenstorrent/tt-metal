@@ -122,7 +122,7 @@ TEST(TensixReleaseOwnership, ReleaseOwnershipWithSubprocess) {
 namespace {
 
 constexpr const char* kTdpLimitEnvVar = "TT_METAL_TDP_LIMIT_WATTS";
-constexpr uint32_t kTestTdpLimitWatts = 200;
+constexpr uint32_t kTestTdpLimitWatts = 75;
 
 // Mirrors TDP_LIMIT_MIN_FIRMWARE_VERSION in UMD's firmware_utils.cpp, which is file-local there.
 const umd::FirmwareBundleVersion kMinTdpLimitFirmware(19, 11, 0);
