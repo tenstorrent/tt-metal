@@ -970,3 +970,130 @@ def reference_unpatchify_on_device(mesh: VaeMesh, rows: ttnn.Tensor, height: int
     host = tensor.to_torch(z)
     ttnn.deallocate(z)
     return host
+
+
+def test_klein_partitioned_decoder_slices() -> None:
+    """V5c (host): the per-device slice keys of the H-partitioned decoder (2026-10-20). Up to 1536x1536 every decoder
+    conv keeps ttnn's auto slicer (count 0, the configuration the M6/M8 gates and the sweep measured); above it every
+    conv of every level gets an explicit count inside ``conv_slice_cap`` whose bf16 input bytes per slice stay under
+    the budget; the keys carry the halo rows (``H_level / 8 + 2``) and the registration writes them next to the
+    full-image keys without touching a shipped entry."""
+    from ....layers.conv2d import Conv2d
+    from ....pipelines.flux3_klein.vae_flux3_klein import (
+        AUTO_SLICE_MAX_AREA,
+        DECODER_SLICE_BUDGET_BYTES,
+        KLEIN_DECODER_CONVS_PER_LEVEL,
+        conv_slice_cap,
+        decoder_slice_count,
+        klein_conv_slices,
+        klein_partitioned_decoder_slices,
+        partitioned_conv_rows,
+        register_klein_conv_slices,
+    )
+
+    assert partitioned_conv_rows(2048, 8) == 258 and partitioned_conv_rows(1024, 8) == 130
+    assert partitioned_conv_rows(2048, 1) == 2048 and partitioned_conv_rows(36 * 8, 8) == 38
+    # the decoder conv list covers the shapes of every level once (upsamplers included) and nothing else
+    assert KLEIN_DECODER_CONVS_PER_LEVEL[0][0] == (256, 256, True) and KLEIN_DECODER_CONVS_PER_LEVEL[1][0] == (
+        512,
+        512,
+        True,
+    )
+    assert KLEIN_DECODER_CONVS_PER_LEVEL[0][-1] == (128, 3, False) and KLEIN_DECODER_CONVS_PER_LEVEL[3][0] == (
+        32,
+        512,
+        True,
+    )
+    assert klein_partitioned_decoder_slices(1024, 1024, h_factor=1, tp_factor=4) == {}
+    auto = klein_partitioned_decoder_slices(1024, 1024, h_factor=8, tp_factor=4)
+    assert len(auto) == sum(len(level) for level in KLEIN_DECODER_CONVS_PER_LEVEL)
+    assert set(auto.values()) == {0} and (130, 1024, 256, 256) in auto and (18, 128, 32, 512) in auto
+    assert set(klein_partitioned_decoder_slices(1536, 1536, h_factor=8, tp_factor=4).values()) == {0}
+    assert 1536 * 1536 == AUTO_SLICE_MAX_AREA
+    explicit_sizes = {
+        "2048x2048": (2048, 2048),
+        "4096x2304": (2304, 4096),
+        "4096x4096": (4096, 4096),
+        "2560x1440": (1440, 2560),
+    }
+    assert set(klein_partitioned_decoder_slices(1152, 2048, h_factor=8, tp_factor=4).values()) == {0}  # = the bound
+    for label, (height, width) in explicit_sizes.items():
+        table = klein_partitioned_decoder_slices(height, width, h_factor=8, tp_factor=4)
+        assert len(table) == sum(len(level) for level in KLEIN_DECODER_CONVS_PER_LEVEL), label
+        for (rows, w, cin, cout), count in table.items():
+            assert 1 <= count <= conv_slice_cap(w), (label, (rows, w, cin, cout), count)
+            tensor_parallel = cout != 3
+            cin_device = cin // 4 if (tensor_parallel and cin >= cout) else cin
+            per_slice = rows * (-(-w // count)) * cin_device * 2
+            assert per_slice <= DECODER_SLICE_BUDGET_BYTES or count == conv_slice_cap(w), (
+                label,
+                (rows, w, cin, cout),
+                count,
+                per_slice,
+            )
+            assert count == decoder_slice_count(rows, w, cin, cout, tensor_parallel, 4)
+    t2048 = klein_partitioned_decoder_slices(2048, 2048, h_factor=8, tp_factor=4)
+    assert t2048[(258, 2048, 256, 256)] == 17 and t2048[(258, 2048, 128, 128)] == 9 and t2048[(258, 2048, 128, 3)] == 33
+    assert t2048[(130, 1024, 512, 512)] == 9 and t2048[(34, 256, 32, 512)] == 1
+    t4096 = klein_partitioned_decoder_slices(4096, 4096, h_factor=8, tp_factor=4)
+    assert t4096[(514, 4096, 128, 3)] == conv_slice_cap(4096) == 128  # the only budget-capped entry
+    assert t4096[(514, 4096, 256, 256)] == 66 and t4096[(258, 2048, 512, 512)] == 33
+    # registration: full-image + per-device keys side by side, shipped entries untouched, idempotent
+    mesh = (97, 97)  # a shape no other test registers
+    Conv2d.slice_params.pop(mesh, None)
+    register_klein_conv_slices(mesh, 2048, 2048, h_factor=8, tp_factor=4)
+    table = Conv2d.slice_params[mesh]
+    for key, count in Conv2d.slice_default.items():
+        assert table[key] == count, key
+    for key, count in klein_conv_slices(2048, 2048).items():  # shipped (replicated 2048) entries win where both exist
+        assert table[key] == Conv2d.slice_default.get(key, count), key
+    for key, count in t2048.items():
+        assert table[key] == count, key
+    before = dict(table)
+    register_klein_conv_slices(mesh, 2048, 2048, h_factor=8, tp_factor=4)
+    register_klein_conv_slices(mesh, 2048, 2048, h_factor=1, tp_factor=4)
+    assert Conv2d.slice_params[mesh] == before
+    Conv2d.slice_params.pop(mesh, None)
+    logger.info(f"partitioned decoder slice keys: 1024 auto {len(auto)} entries; 2048 {t2048}; 4096 {t4096}")
+
+
+def test_set_conv_config_overrides() -> None:
+    """V5d (host): ``set_conv_config_overrides`` reaches every conv under a module tree (per instance) and nothing
+    else; the Klein VAE builders set ``config_tensors_in_dram=True`` through it."""
+    import inspect
+
+    from ....layers.module import Module
+    from ....pipelines.flux3_klein import vae_encode_flux3_klein, vae_flux3_klein
+    from ....pipelines.flux3_klein.vae_flux3_klein import set_conv_config_overrides
+
+    class Leaf(Module):
+        def forward(self, x):  # noqa: ANN001, ANN202 - stand-in
+            return x
+
+    class FakeConv(Leaf):
+        def __init__(self) -> None:
+            super().__init__()
+            self.conv_config_overrides: dict[str, object] = {}
+
+    class Tree(Leaf):
+        def __init__(self) -> None:
+            super().__init__()
+            self.a = FakeConv()
+            self.inner = Leaf()
+            self.inner.b = FakeConv()
+            self.inner.leaf = Leaf()
+
+    tree = Tree()
+    assert set_conv_config_overrides(tree, config_tensors_in_dram=True) == 2
+    assert tree.a.conv_config_overrides == {"config_tensors_in_dram": True}
+    assert tree.inner.b.conv_config_overrides == {"config_tensors_in_dram": True}
+    assert not hasattr(tree.inner.leaf, "conv_config_overrides")
+    assert set_conv_config_overrides(tree, act_block_h_override=64) == 2
+    assert tree.a.conv_config_overrides == {"config_tensors_in_dram": True, "act_block_h_override": 64}
+    for builder in (
+        vae_flux3_klein.build_flux3_klein_vae_decoder,
+        vae_encode_flux3_klein.build_flux3_klein_vae_encoder,
+    ):
+        assert "set_conv_config_overrides(" in inspect.getsource(
+            builder
+        ) and "config_tensors_in_dram=True" in inspect.getsource(builder)
