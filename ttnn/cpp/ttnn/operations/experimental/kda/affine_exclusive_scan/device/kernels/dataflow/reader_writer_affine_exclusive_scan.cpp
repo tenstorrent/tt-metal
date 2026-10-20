@@ -173,6 +173,10 @@ TT_KERNEL void dataflow(uint32_t worker_index, uint32_t group) {
     if (group >= active) {
         return;
     }
+    {
+        DataflowBuffer identity(dfb::identity);
+        kda::seed_identity_tile(noc, identity);
+    }
     // An exclusive scan passes each worker's transition to the next group. For a
     // group-aligned split, the preceding worker therefore publishes the tail seed.
     const uint32_t reset_group = topology.reset_group(G);
@@ -196,7 +200,7 @@ TT_KERNEL void dataflow(uint32_t worker_index, uint32_t group) {
     if constexpr (has_tail) {
         if (reset_worker) {
             if (!aligned_reset) {
-                // The tail transform's packed [A | B] rows are contiguous pages of slot 1.
+                // The tail transform's packed [E | B] rows are contiguous pages of slot 1.
                 tail_affine.reserve_back(affine_tiles);
                 issue_tensor_block_read(
                     noc,
