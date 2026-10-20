@@ -744,27 +744,29 @@ class _UserBlockAttention:
         grid = mesh.compute_with_storage_grid_size()
         per = BlockAttention.cores_needed(n_kv, block, slices)
         cores = [ttnn.CoreCoord(x, y) for y in range(grid.y) for x in range(grid.x)]
-        assert per * per_program <= len(cores) and users % per_program == 0
+        assert per * per_program <= len(cores)
         # one kernel set for the program's users (a set per user: 3 x per_program kernel groups to dispatch, the
-        # sliding-window program 57 us)
-        self.inst = [
-            BlockAttention(
+        # sliding-window program 57 us); the last program may hold fewer users
+        self.programs = [(p0, min(per_program, users - p0)) for p0 in range(0, users, per_program)]
+        self.inst = {
+            n: BlockAttention(
                 mesh,
                 block,
                 n_heads,
                 n_kv,
                 head_dim,
                 block_size,
-                cores[: per * per_program],
+                cores[: per * n],
                 slices,
                 q_rows=True,
                 min_chunks=min_chunks,
                 uniform=uniform,
                 window=window,
                 swin=swin,
-                users=per_program,
+                users=n,
             )
-        ]
+            for n in sorted({n for _, n in self.programs})
+        }
 
     def __call__(self, q, k_cache, v_cache, pos_ui, page_table, sinks, scale, heads_io=False):
         """q: [1, rows, heads, hd] (row 32 i + u, rotated); pos_ui: INT32 [rows] (8 u + i: start_u + i); page_table:
@@ -775,19 +777,14 @@ class _UserBlockAttention:
         else:
             shape, mc = list(q.shape), ttnn.DRAM_MEMORY_CONFIG
         out = ttnn.empty(shape, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.mesh, memory_config=mc)
-        for p0 in range(0, self.users, self.P):
-            kernels, cbs, sems, io = [], [], [], []
-            for j, inst in enumerate(self.inst):
-                kk, cc, tio = inst.parts(
-                    q, k_cache, v_cache, pos_ui, page_table, sinks, scale, wait=(self.WAIT_SEM, 0),
-                    user=(p0, self.users), out=out, heads_io=heads_io,
-                )  # fmt: skip
-                kernels += kk
-                cbs += cc
-                sems += inst.semaphores() + [
-                    ttnn.SemaphoreDescriptor(self.WAIT_SEM, ttnn.CoreType.WORKER, inst.cores, 0)
-                ]
-                io += [t for t in tio[:-1] if all(t is not u for u in io)]
+        for p0, n in self.programs:
+            inst = self.inst[n]
+            kernels, cbs, tio = inst.parts(
+                q, k_cache, v_cache, pos_ui, page_table, sinks, scale, wait=(self.WAIT_SEM, 0),
+                user=(p0, self.users), out=out, heads_io=heads_io,
+            )  # fmt: skip
+            sems = inst.semaphores() + [ttnn.SemaphoreDescriptor(self.WAIT_SEM, ttnn.CoreType.WORKER, inst.cores, 0)]
+            io = [t for t in tio if t is not out]
             ttnn.generic_op(io + [out], ttnn.ProgramDescriptor(kernels=kernels, semaphores=sems, cbs=cbs))
         return out
 
@@ -939,8 +936,9 @@ class BatchedVerify:
         ]
         # (16 x 1 after the one-kernel-set change: round -0.4 ms at ISL 256 .. 4K, +2.4 ms at 16K)
         self.block_attn = _UserBlockAttention(
-            self.mesh, users, block, self.local_heads, self.local_kv_heads, hd, kv_cache[1][0].shape[2], 8, 3
-        )
+            self.mesh, users, block, self.local_heads, self.local_kv_heads, hd, kv_cache[1][0].shape[2],
+            int(os.environ.get("B32_BA_P", "8")), int(os.environ.get("B32_BA_S", "3")),
+        )  # fmt: skip
         # sliding-window layers: the same block attention, windowed (row r attends [pos_r + 1 - window, pos_r]: at most
         # 6 chunks), 16 users per program on 1 slice each (64 cores), instead of one decode SDPA per 32-row step (8
         # SDPA calls + 8 Q slices + the concat per layer). B32_SWIN=0: the per-step decode SDPA.
