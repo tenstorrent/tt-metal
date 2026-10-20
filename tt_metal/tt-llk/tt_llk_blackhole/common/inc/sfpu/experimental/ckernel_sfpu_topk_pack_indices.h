@@ -5,10 +5,27 @@
 
 #include <cstdint>
 
+#include "ckernel_addrmod.h"
 #include "sfpi.h"
 
 namespace ckernel::sfpu
 {
+
+/**
+ * @brief Configure the advancing output store for supplied-index packing.
+ * @note Call after shared SFPU initialization and operand copy initialization, before
+ *       @ref _topk_xl_pack_supplied_indices_. Programs ADDR_MOD_0; leaves the TopK
+ *       bitonic address modifiers intact. Reinitialize datacopy before the next copy.
+ */
+inline void _topk_xl_pack_supplied_indices_init_()
+{
+    addr_mod_t {
+        .srca = {.incr = 0},
+        .srcb = {.incr = 0},
+        .dest = {.incr = 2},
+    }
+        .set(ADDR_MOD_0);
+}
 
 /**
  * @brief Fuse BF16-expanded scores with supplied low-16-bit indices in FP32 DEST.
@@ -18,7 +35,8 @@ namespace ckernel::sfpu
  * @param output: First packed output tile in DEST.
  * @param score_half: For K=512, select the first or second 512-element score half; IDs always start at indices[0].
  * @note Use the shared SFPU params wrapper with VectorMode::RC_custom and initialize
- *       the SFPU before calling. Load indices without numeric conversion. Output may
+ *       the SFPU, then call @ref _topk_xl_pack_supplied_indices_init_ before calling.
+ *       Load indices without numeric conversion. Output may
  *       alias either input at the same start; other overlapping regions are unsupported.
  *       UINT32_MAX maps to negative-infinity padding. K=512 also clears the output tail.
  */
@@ -45,15 +63,13 @@ inline void _topk_xl_pack_supplied_indices_(const std::uint32_t scores, const st
             packed = padding;
         }
         v_endif;
-        sfpi::dst_reg[output * tile_slots].mode<sfpi::DataLayout::I32>() = packed;
-        sfpi::dst_reg++;
+        sfpi::dst_reg[output * tile_slots].mode<sfpi::DataLayout::I32>(ADDR_MOD_0) = packed;
     }
     if constexpr (K == 512)
     {
         for (std::uint32_t i = 0; i < half_slots; ++i)
         {
-            sfpi::dst_reg[output * tile_slots].mode<sfpi::DataLayout::I32>() = sfpi::vInt(padding);
-            sfpi::dst_reg++;
+            sfpi::dst_reg[output * tile_slots].mode<sfpi::DataLayout::I32>(ADDR_MOD_0) = sfpi::vInt(padding);
         }
     }
 }
