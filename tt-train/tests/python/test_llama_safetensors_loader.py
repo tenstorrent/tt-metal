@@ -547,8 +547,11 @@ def write_hf_checkpoint(directory, tensors: dict[str, np.ndarray]) -> dict[str, 
     return tensors
 
 
-def as_bf16(array: np.ndarray) -> np.ndarray:
-    """*array* as the loader stores it, so a read-back comparison can be exact."""
+def as_stored(param, array: np.ndarray) -> np.ndarray:
+    """*array* as *param* stores it, so a read-back comparison can be exact: an fp32 parameter
+    keeps the checkpoint's values, a bf16 one rounds them."""
+    if param.dtype() == ttnn.DataType.FLOAT32:
+        return array.astype(np.float32)
     return array.astype(ml_dtypes.bfloat16).astype(np.float32)
 
 
@@ -564,6 +567,17 @@ def gather(tensor, shard_dim: int | None) -> np.ndarray:
             isinstance(placement, ttnn.PlacementShard) and placement.dim == shard_dim
         ), f"expected a shard on dim {shard_dim} over 'tp', got {sharding.placements}"
     return sharding.gather(tensor).astype(np.float32)
+
+
+def store_as(model, dtype) -> None:
+    """Store every parameter as *dtype*, as a run that trains in that precision does. New parameters are bf16."""
+    precision = (
+        ttml.autograd.PreferredPrecision.FULL
+        if dtype == ttnn.DataType.FLOAT32
+        else ttml.autograd.PreferredPrecision.HALF
+    )
+    for param in model.parameters().values():
+        param.set_value(param.get_value(precision))
 
 
 def read_param(params, name: str, shard_dim: int | None) -> np.ndarray:
@@ -605,7 +619,7 @@ def assert_every_parameter_loaded(model, hf, tp_size=1, placement=EmbeddingPlace
     params = model.parameters()
     tied = model.config.weight_tying == WeightTyingType.Enabled
     for name in params:
-        expected = as_bf16(expected_value(name, hf, tp_size, tied))
+        expected = as_stored(params[name], expected_value(name, hf, tp_size, tied))
         got = read_param(params, name, tp_shard_dim(name, placement) if tp_size > 1 else None)
         rows = expected.shape[0]
         assert got.shape[0] >= rows and got.shape[1] == expected.shape[1], f"{name}: {got.shape} vs {expected.shape}"
@@ -668,6 +682,18 @@ class TestLoadIntoModel:
         hf = write_hf_checkpoint(tmp_path, hf_tensors(tied=tying == WeightTyingType.Enabled))
         model = Llama(e2e_config(False, EmbeddingPlacement.Replicated, tying))
         load_from_safetensors(model, tmp_path)
+        assert_every_parameter_loaded(model, hf)
+
+    @pytest.mark.parametrize("dtype", [ttnn.DataType.FLOAT32, ttnn.DataType.BFLOAT16], ids=["f32", "bf16"])
+    def test_keeps_the_models_dtype(self, tmp_path, dtype):
+        """The model decides the precision and the checkpoint supplies the values: an fp32 parameter
+        holds an fp32 checkpoint exactly, a bf16 one its rounding."""
+        hf = write_hf_checkpoint(tmp_path, hf_tensors())
+        model = Llama(e2e_config(False, EmbeddingPlacement.Replicated))
+        store_as(model, dtype)
+        load_from_safetensors(model, tmp_path)
+        for name, param in model.parameters().items():
+            assert param.dtype() == dtype, f"{name}: stored as {param.dtype()}"
         assert_every_parameter_loaded(model, hf)
 
     def test_a_tied_checkpoint_may_keep_a_copy_of_its_embedding_as_lm_head(self, tmp_path):
@@ -821,6 +847,16 @@ class TestLoadIntoTensorParallelModel:
         model = Llama(e2e_config(True, EmbeddingPlacement.VocabParallel, vocab_size=vocab))
         assert model.padded_vocab_size > vocab, "premise: the model rounds the vocab up"
         load_from_safetensors(model, tmp_path)
+        assert_every_parameter_loaded(model, hf, ttml.mesh().axis_size("tp"), EmbeddingPlacement.VocabParallel)
+
+    def test_keeps_an_fp32_models_values(self, tmp_path):
+        """The fused blocks are interleaved and sharded in the parameter's dtype, not rounded to bf16 on the way."""
+        hf = write_hf_checkpoint(tmp_path, hf_tensors())
+        model = Llama(e2e_config(True, EmbeddingPlacement.VocabParallel))
+        store_as(model, ttnn.DataType.FLOAT32)
+        load_from_safetensors(model, tmp_path)
+        for name, param in model.parameters().items():
+            assert param.dtype() == ttnn.DataType.FLOAT32, f"{name}: stored as {param.dtype()}"
         assert_every_parameter_loaded(model, hf, ttml.mesh().axis_size("tp"), EmbeddingPlacement.VocabParallel)
 
     def test_logits_match_hugging_face(self, tmp_path):
