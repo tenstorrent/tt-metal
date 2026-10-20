@@ -12,9 +12,11 @@
 #include <cstddef>
 #include <iterator>
 #include <optional>
+#include <utility>
 #include <string_view>
 
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/hal.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt_stl/small_vector.hpp>
 #include "ttnn/global_semaphore.hpp"
@@ -227,14 +229,25 @@ PageGeometry derive_page_geometry(
         input_page_base};
 }
 
-// Entries of the request's page-table row a paged reader keeps in L1, refilled as it walks the prefix in
-// increasing order; reads start on a DRAM-aligned (64 B) entry.
+// Entries of the request's page-table row a paged reader keeps in L1 (2 KiB per worker). A worker walks its share of
+// the whole gathered prefix in increasing page order, so it refills about once per 512 entries of the row (5 times
+// for 143k tokens of 64-token pages); unlike a writer's per-slab window, no smaller bound holds.
 constexpr uint32_t kPageTableWindowEntries = 512;
-constexpr uint32_t kPageTableAlignBytes = 64;
 
 // Physical pages in a paged source's pool: one entry per (page, layer).
 uint32_t paged_pool_pages(const Tensor& input_tensor, const HighBwAllGatherParams& operation_attributes) {
     return input_tensor.padded_shape()[0] / operation_attributes.batch_slot_num_layers;
+}
+
+// A paged request's page-table row and layer: the scalar form names the flat slot row * num_layers + layer, the
+// tensor form the row on-device (so 0 here) and the layer in batch_slot_layer_idx.
+std::pair<uint32_t, uint32_t> paged_row_and_layer(const HighBwAllGatherParams& operation_attributes) {
+    if (operation_attributes.input_batch_index.has_value()) {
+        const uint32_t num_layers = operation_attributes.batch_slot_num_layers;
+        return {
+            *operation_attributes.input_batch_index / num_layers, *operation_attributes.input_batch_index % num_layers};
+    }
+    return {0, operation_attributes.batch_slot_layer_idx};
 }
 
 uint32_t derive_data_valid_granularity(const PageGeometry& geometry, uint32_t packet_size, uint32_t total_slices) {
@@ -812,10 +825,12 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
                 .set_page_size(cb_meta_writer_id, kMetaCbPageSize);
         CreateCircularBuffer(program, worker_core_range, cb_meta_writer_config);
     }
-    // Paged source only: a window of the request's page-table row, plus one DRAM-alignment unit.
+    // Paged source only: a window of the request's page-table row, plus one DRAM alignment unit so the kernel can
+    // align it for DRAM reads.
     uint32_t cb_page_table_id = tt::CB::c_in3;
     if (tensor_args.is_paged()) {
-        constexpr uint32_t table_cb_bytes = kPageTableWindowEntries * sizeof(uint32_t) + kPageTableAlignBytes;
+        const uint32_t table_cb_bytes =
+            kPageTableWindowEntries * sizeof(uint32_t) + tt::tt_metal::hal::get_dram_alignment();
         tt::tt_metal::CircularBufferConfig cb_table_config =
             tt::tt_metal::CircularBufferConfig(table_cb_bytes, {{cb_page_table_id, tt::DataFormat::UInt32}})
                 .set_page_size(cb_page_table_id, table_cb_bytes);
@@ -948,14 +963,17 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
     const bool paged = tensor_args.is_paged();
     reader_compile_args.push_back(paged ? 1u : 0u);
     if (paged) {
+        // Rows are 32-token tile-rows when tiled (32x32 tiles, validate_paged_source), else tokens.
         const bool tiled = input_tensor.layout() == Layout::TILE;
         const uint32_t row_height = tiled ? tt::constants::TILE_HEIGHT : 1u;
         reader_compile_args.push_back(cb_page_table_id);
-        reader_compile_args.push_back(operation_attributes.page_size / row_height);  // page-rows per page
-        reader_compile_args.push_back(tiled ? input_tensor.padded_shape()[-1] / tt::constants::TILE_WIDTH : 1u);
+        reader_compile_args.push_back(input_tensor.padded_shape()[2] / row_height);  // rows per KV page
         reader_compile_args.push_back(
-            operation_attributes.gathered_slab_global / operation_attributes.num_devices / row_height);
-        reader_compile_args.push_back(tensor_args.page_table->logical_shape()[-1]);
+            tiled ? input_tensor.padded_shape()[-1] / tt::constants::TILE_WIDTH : 1u);  // pages per row
+        reader_compile_args.push_back(
+            operation_attributes.gathered_slab_global / operation_attributes.num_devices /
+            row_height);                                                             // rows per slab
+        reader_compile_args.push_back(tensor_args.page_table->logical_shape()[-1]);  // table width
         reader_compile_args.push_back(kPageTableWindowEntries);
         tt::tt_metal::TensorAccessorArgs(tensor_args.page_table->buffer()).append_to(reader_compile_args);
     }
@@ -1028,8 +1046,10 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
     const uint32_t batch_metadata_address =
         batch_index_from_metadata ? tensor_args.input_batch_index_tensor->buffer()->address() : 0u;
     // Slot recomposition stays runtime so layers and cache depths share one cached program. The paged
-    // source's terms follow (zeros otherwise): [6] page table, [7] scalar request row, [8] this rank,
-    // [9] pool pages.
+    // source's terms follow (zeros otherwise): [6] page table, [7] scalar request row, [8] this rank's position
+    // in the block-cyclic order (fixed per device program, so never patched), [9] pool pages. A paged layer
+    // replaces [5].
+    const auto [paged_row, paged_layer] = paged ? paged_row_and_layer(operation_attributes) : std::pair{0u, 0u};
     tt::tt_metal::SetCommonRuntimeArgs(
         program,
         reader_kernel_id,
@@ -1038,10 +1058,10 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
          prefix_metadata_address,
          batch_metadata_address,
          operation_attributes.batch_slot_num_layers,
-         operation_attributes.batch_slot_layer_idx,
+         paged ? paged_layer : operation_attributes.batch_slot_layer_idx,
          paged ? tensor_args.page_table->buffer()->address() : 0u,
-         paged ? operation_attributes.input_batch_index.value_or(0) : 0u,
-         paged ? device_idx : 0u,
+         paged_row,
+         paged ? mesh_ring_position.tensor_rank : 0u,
          paged ? paged_pool_pages(input_tensor, operation_attributes) : 0u});
     tt::tt_metal::SetCommonRuntimeArgs(program, writer_kernel_id, {output_addr, data_valid_granularity});
 
@@ -1317,8 +1337,10 @@ void HighBwAllGatherUnicastFactory::override_runtime_arguments(
         reader_common.at(4) = operation_attributes.batch_slot_num_layers;
         reader_common.at(5) = operation_attributes.batch_slot_layer_idx;
         if (tensor_args.is_paged()) {
+            const auto [row, layer] = paged_row_and_layer(operation_attributes);
+            reader_common.at(5) = layer;
             reader_common.at(6) = tensor_args.page_table->buffer()->address();
-            reader_common.at(7) = operation_attributes.input_batch_index.value_or(0);
+            reader_common.at(7) = row;
             reader_common.at(9) = paged_pool_pages(tensor_args.input_tensor, operation_attributes);
         }
         auto& writer_common = GetCommonRuntimeArgs(program, shared_vars.writer_kernel_id);

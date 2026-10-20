@@ -82,14 +82,6 @@ struct HighBwAllGatherParams {
     // `gathered_slab_global` is the block-cyclic slab width in gathered-dim elements (chunk_local * sp).
     // It is structural -- identical for every chunk and every layer -- so it is hashed.
     uint32_t gathered_slab_global = 0;
-
-    // Paged source. The input is a page pool [num_pages * batch_slot_num_layers, 1, page_size, D] and the
-    // request's row of `page_table` maps every global logical page to the physical page that holds it on
-    // the rank that owns it (update_padded_kv_cache/device/kernels/paged_kv_table.hpp). The request is
-    // `input_batch_index` or `input_batch_index_tensor`, the layer batch_slot_layer_idx, and
-    // gathered_slab_global (chunk_local * sp) locates each local row in the global sequence. The output
-    // keeps the contiguous layout, so its consumers do not change. 0 = a contiguous input.
-    uint32_t page_size = 0;
 };
 
 struct HighBwAllGatherInputs {
@@ -104,7 +96,12 @@ struct HighBwAllGatherInputs {
     // start position in the gathered dim.
     std::optional<Tensor> gathered_prefix_tensor{std::nullopt};
     bool has_gathered_prefix_metadata() const { return gathered_prefix_tensor.has_value(); }
-    // Paged source (see HighBwAllGatherParams::page_size): [rows, pages] uint32 ROW_MAJOR DRAM, replicated.
+    // Paged source (update_padded_kv_cache/device/kernels/paged_kv_table.hpp): the input is a pool of single-head
+    // pages [num_pages * batch_slot_num_layers, 1, page, D] and this INT32 [rows, width] table, replicated, maps
+    // each request's global logical pages to the pool pages of the ranks that hold them. The request row and layer
+    // come from input_batch_index (the flat slot row * num_layers + layer) or from input_batch_index_tensor (the row)
+    // and batch_slot_layer_idx; gathered_slab_global (chunk_local * sp) places local rows in the global sequence.
+    // The output has a slot gather's layout, with zeros for unmapped pages, so consumers are source-agnostic.
     std::optional<Tensor> page_table{std::nullopt};
     bool is_paged() const { return page_table.has_value(); }
 };

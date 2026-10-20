@@ -64,7 +64,8 @@ void bind_experimental_high_bw_all_gather_operation(nb::module_& mod) {
                 sub_core_grids: Optional worker-core restriction.
                 input_batch_index: Optional batch slot selected from a persistent input cache.
                     When set, input has shape [B, 1, ...], output has batch 1, and only that
-                    slot is transported.
+                    slot is transported. With ``page_table`` it is the same flat slot of a pool,
+                    ``row * batch_slot_num_layers + layer``: the request's page-table row and layer.
                 gathered_dim_size: Optional active global gathered extent along ``dim``. The
                     output tensor must still be allocated at its worst-case full gathered size.
                     Each rank writes its active local prefix into that rank's fixed worst-case
@@ -78,10 +79,13 @@ void bind_experimental_high_bw_all_gather_operation(nb::module_& mod) {
                     user-major). Use this instead of ``input_batch_index`` whenever the call is captured
                     into a ttnn trace: a host scalar is patched per dispatch, and a replay never re-runs
                     that patch, so every replay would re-read the slot live at capture time. Mutually
-                    exclusive with ``input_batch_index``.
+                    exclusive with ``input_batch_index``. With ``page_table`` the tensor holds the request's
+                    page-table row, which the caller keeps below the table's row count, and
+                    ``batch_slot_layer_idx`` the layer.
                 batch_slot_num_layers: Layers per user in the input cache's batch dim. Runtime (NOT
                     hashed, so one program serves caches of any depth) and only read on the
-                    ``input_batch_index_tensor`` path.
+                    ``input_batch_index_tensor`` path, or with ``page_table``, where it is the pool's
+                    layers per page on every path.
                 batch_slot_layer_idx: This call's layer index within a user's slots. Runtime (not
                     hashed, so all layers share one program) and only read on the
                     ``input_batch_index_tensor`` path.
@@ -94,23 +98,25 @@ void bind_experimental_high_bw_all_gather_operation(nb::module_& mod) {
                     grows every chunk, and a replay would re-gather only the captured chunk's prefix.
                     Mutually exclusive with ``gathered_dim_size``.
                 gathered_slab_global: Block-cyclic slab width in gathered-dim elements
-                    (``chunk_local * num_devices``). Required with ``gathered_prefix_tensor`` and hashed,
-                    being structural rather than per-chunk.
+                    (``chunk_local * num_devices``). Required with ``gathered_prefix_tensor`` or
+                    ``page_table`` and hashed, being structural rather than per-chunk.
                 ready_semaphore: Optional caller-owned persistent startup semaphore. Must be
                     supplied together with ``data_valid_semaphore`` and initialized to zero on
                     the complete worker-core restriction before the first call.
                 data_valid_semaphore: Optional caller-owned persistent relay/completion semaphore.
                     Supplying both semaphore handles selects the allocation-free, no-internal-sync
                     dispatch path intended for sub-device overlap.
-                page_table: Selects a paged source. ``input_tensor`` is then a pool of page-sized
-                    entries ``[num_pages * batch_slot_num_layers, 1, page_size, D]`` and ``page_table``
-                    a uint32 ROW_MAJOR DRAM tensor ``[rows, pages]`` (``pages`` a multiple of 16),
-                    replicated. The request's row (``input_batch_index`` or ``input_batch_index_tensor``)
-                    maps global logical page ``q`` (positions ``[q * page_size, (q + 1) * page_size)``)
-                    to the physical page holding it on the rank that owns it; 0xFFFFFFFF is unmapped and
-                    is not read. ``batch_slot_layer_idx`` selects the layer and ``gathered_slab_global``
-                    is required. The output keeps the contiguous layout of a slot gather.
-                page_size: Tokens per page, with ``page_table``. A multiple of 32.
+                page_table: Selects a paged source, in the format of
+                    ``update_padded_kv_cache/device/kernels/paged_kv_table.hpp`` (not the
+                    ``paged_update_cache`` / SDPA one). ``input_tensor`` is then a pool of single-head pages
+                    ``[num_pages * batch_slot_num_layers, 1, page, D]`` (``page`` a multiple of 32, 32x32 tiles
+                    when tiled) and ``page_table`` an INT32 ROW_MAJOR DRAM tensor ``[rows, width]``,
+                    replicated, with ``width * page`` covering the output. The request's row maps global
+                    logical page ``q`` to the physical page holding it on the rank that owns it; an unmapped
+                    page (-1, or an invalid entry outside the pool) gathers as zeros. Requires
+                    ``cluster_axis``, ``dim`` 2, ``gathered_slab_global`` and an output
+                    ``[1, 1, ranks x whole pages, D]``, which takes the layout of a slot gather. Under trace,
+                    keep one persistent table and edit its rows in place: a capture records its address.
         )doc",
         &high_bw_all_gather,
         nb::arg("input_tensor").noconvert(),
@@ -130,8 +136,7 @@ void bind_experimental_high_bw_all_gather_operation(nb::module_& mod) {
         nb::arg("gathered_slab_global") = 0,
         nb::arg("ready_semaphore") = nb::none(),
         nb::arg("data_valid_semaphore") = nb::none(),
-        nb::arg("page_table").noconvert() = nb::none(),
-        nb::arg("page_size") = 0);
+        nb::arg("page_table").noconvert() = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::high_bw_all_gather::detail
