@@ -343,7 +343,7 @@ def load_from_safetensors(model: Llama, safetensors_path: str | os.PathLike) -> 
         RuntimeError: if
             - the model has a parameter no rule loads, or a rule loads a parameter the model lacks
             - the checkpoint is missing a tensor, or is tied while the model is untied (or vice versa)
-            - the checkpoint ships biases, which this loader can't load
+            - the checkpoint ships a bias the model has, which this loader can't load; any other lands in ``unused``
             - a tensor appears in two files, or is not 1-D or 2-D
             - a tensor's shape differs from what the config implies (a transposed weight included)
             - a parameter is sharded over a mesh axis other than 'tp', or over 'tp' on a dim other than rows or columns

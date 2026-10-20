@@ -97,9 +97,9 @@ completer = LlamaCompleterRemoteRollout(
 | Parameter            | Type                 | Description                                                                                                           |
 | -------------------- | -------------------- | --------------------------------------------------------------------------------------------------------------------- |
 | `ctx`                | `LlamaCompletionCtx` | Generation parameters (max tokens, temperature, completions per prompt).                                              |
-| `transformer_config` | `TransformerConfig`  | Model architecture config (parsed from the YAML training config).                                                     |
+| `transformer_config` | `TransformerConfig`  | Run settings from the YAML training config; the architecture comes from the checkpoint's `config.json`.               |
 | `mesh_device`        | `ttnn.MeshDevice`    | Already-opened TTML mesh. The caller owns its lifetime; the completer does not open or close it.                      |
-| `model_source`       | `str`                | HuggingFace model ID or path to a local directory containing `model.safetensors`.                                     |
+| `model_source`       | `str`                | HuggingFace model ID, or a local directory holding its `.safetensors` files, `config.json` and tokenizer.             |
 | `inference_client`   | `MPIRolloutClient`   | RPC client to the TTT rank. The completer routes `generate` and `push_weights` calls through this.                    |
 | `enable_ddp`         | `bool`               | Enable distributed data parallelism across the TTML mesh. Must agree with the `enable_ddp` in the YAML device config. |
 
