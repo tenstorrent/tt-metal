@@ -1669,6 +1669,12 @@ def test_ref_with_frame0_puts_the_first_frame_at_reference_frame_0(monkeypatch):
     assert ref_with_frame0(ref, None) is ref
     monkeypatch.setenv("LTX_REF_IMG0", "0")
     assert ref_with_frame0(ref, [(0, img0, 1.0)]) is ref
+    monkeypatch.setenv("LTX_REF_IMG0", "s2")
+    assert ref_with_frame0(ref, [(0, img0, 1.0)], "s1") is ref
+    assert torch.equal(ref_with_frame0(ref, [(0, img0, 1.0)], "s2")[:, :, 0:1], img0.to(ref.dtype))
+    monkeypatch.setenv("LTX_REF_IMG0", "s1")
+    assert ref_with_frame0(ref, [(0, img0, 1.0)], "s2") is ref
+    assert torch.equal(ref_with_frame0(ref, [(0, img0, 1.0)], "s1")[:, :, 0:1], img0.to(ref.dtype))
 
 # --- full coverage matrix: every model x tier x resolution, t2v AND i2v ---------------------------
 # Deselected by default (LTX_MATRIX=1 to arm): one cell loads 22B weights and renders two clips, so
