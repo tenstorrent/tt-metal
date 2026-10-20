@@ -22,7 +22,7 @@ using address_t = uint32_t;
 
 namespace paged_kv = ttnn::operations::experimental::paged_kv;
 
-// Logical source page -> the input page to read. A contiguous source reads the logical page. A paged one reads the
+// This rank's source page -> the input page to read. A contiguous source reads it as is. A paged one reads the
 // physical pool page (paged_kv_table.hpp): a worker visits its pages in increasing order, so the request's table row is
 // streamed through one L1 window that is refilled when a page falls past it. Rows are 32-token tile-rows when tiled,
 // tokens otherwise: KvPageRows per KV page, TilesPerRow input pages per row, SlabRows per rank per slab.
@@ -34,9 +34,10 @@ template <
     uint32_t TableWidth,
     uint32_t WindowEntries>
 struct SourcePages {
-    // Window reads start on a DRAM-aligned entry and cover whole aligned groups.
+    // Window reads start on a DRAM-aligned entry, so the window must hold the aligned group of the page that refills
+    // it.
     static constexpr uint32_t kGroup = DRAM_ALIGNMENT / sizeof(uint32_t);
-    static_assert(!Paged || WindowEntries % kGroup == 0, "the table window must hold whole DRAM-aligned groups");
+    static_assert(!Paged || WindowEntries >= kGroup, "the table window must hold one DRAM-aligned group");
 
     uint32_t window_l1 = 0;
     uint32_t table_row = 0;
@@ -51,19 +52,19 @@ struct SourcePages {
     // Returns kUnmappedPage for a page the row does not map (or one outside the pool). A member template, so the
     // discarded branch (the table read) is never instantiated for a contiguous source.
     template <typename Table>
-    uint32_t input_page(Noc& noc, const Table& table, uint32_t logical_page) {
+    uint32_t input_page(Noc& noc, const Table& table, uint32_t local_page) {
         if constexpr (!Paged) {
-            return logical_page;
+            return local_page;
         } else {
             const uint32_t global_row =
-                paged_kv::global_row_of_local(logical_page / TilesPerRow, rank, num_ranks, SlabRows);
-            const uint32_t q = global_row / KvPageRows;
-            if (q >= TableWidth) {
+                paged_kv::global_row_of_local(local_page / TilesPerRow, rank, num_ranks, SlabRows);
+            const uint32_t kv_page = global_row / KvPageRows;
+            if (kv_page >= TableWidth) {
                 return paged_kv::kUnmappedPage;
             }
             // Unsigned: a page below the window's base wraps past its count, so this also refills going back.
-            if (q - base >= count) {
-                base = q - q % kGroup;
+            if (kv_page - base >= count) {
+                base = kv_page - kv_page % kGroup;
                 count = TableWidth - base < WindowEntries ? TableWidth - base : WindowEntries;
                 noc.async_read(
                     table,
@@ -72,15 +73,16 @@ struct SourcePages {
                     {.page_id = table_row, .offset_bytes = base * static_cast<uint32_t>(sizeof(uint32_t))},
                     {});
                 noc.async_read_barrier();
-                // The window was filled by DMA, which does not evict this core's L1 cache.
+                // NoC writes to L1 do not invalidate this core's data cache.
                 invalidate_l1_cache();
             }
-            const uint32_t physical = CoreLocalMem<volatile uint32_t>(window_l1)[q - base];
+            const uint32_t physical = CoreLocalMem<volatile uint32_t>(window_l1)[kv_page - base];
             if (physical >= pool_pages) {
                 return paged_kv::kUnmappedPage;
             }
-            return ((physical * num_layers + layer) * KvPageRows + global_row % KvPageRows) * TilesPerRow +
-                   logical_page % TilesPerRow;
+            return (paged_kv::pool_entry(physical, layer, num_layers) * KvPageRows + global_row % KvPageRows) *
+                       TilesPerRow +
+                   local_page % TilesPerRow;
         }
     }
 };

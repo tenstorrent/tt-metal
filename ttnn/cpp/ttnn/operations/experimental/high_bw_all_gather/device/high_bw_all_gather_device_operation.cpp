@@ -140,6 +140,8 @@ ttsl::hash::hash_t HighBwAllGatherDeviceOperation::compute_program_hash(
         // hashed -- it is structural (chunk_local * sp), identical for every chunk and layer.
         tensor_args.has_gathered_prefix_metadata(),
         args.gathered_slab_global,
+        // Includes the page table's spec: the reader compiles in its width and row stride; its address is a
+        // runtime arg.
         tensor_args);
 }
 
@@ -240,22 +242,12 @@ void validate_paged_source(const HighBwAllGatherParams& args, const HighBwAllGat
     const auto& input = tensor_args.input_tensor;
     const auto& in_shape = input.padded_shape();
     const auto& out_shape = tensor_args.output_tensor.padded_shape();
-    const int32_t rank = static_cast<int32_t>(in_shape.rank());
     paged_kv::validate_page_table(*tensor_args.page_table, input);
+    paged_kv::validate_page_pool(input);
     // Page ownership is defined over the ranks of one cluster axis (paged_kv_table.hpp).
     TT_FATAL(!args.linearized_mesh_ring, "high_bw_all_gather paged source requires a cluster_axis");
-    TT_FATAL(
-        rank == 4 && args.dim == rank - 2,
-        "high_bw_all_gather paged source gathers the sequence dim of a 4D pool; got rank {}, dim {}",
-        rank,
-        args.dim);
+    TT_FATAL(args.dim == 2, "high_bw_all_gather paged source gathers the pool's sequence dim 2; got dim {}", args.dim);
     const uint32_t page = in_shape[2];
-    TT_FATAL(
-        in_shape[1] == 1 && page % tt::constants::TILE_HEIGHT == 0,
-        "high_bw_all_gather paged source must be a pool of single-head pages [entries, 1, page, D] with page a "
-        "multiple of {}; got {}",
-        tt::constants::TILE_HEIGHT,
-        in_shape);
     if (input.layout() == Layout::TILE) {
         // The reader translates whole 32-row tile-rows of a page.
         const auto& tile = input.tensor_spec().tile();
@@ -273,7 +265,7 @@ void validate_paged_source(const HighBwAllGatherParams& args, const HighBwAllGat
         out_shape);
     TT_FATAL(
         paged_kv::page_table_width(*tensor_args.page_table) * page >= out_shape[2],
-        "high_bw_all_gather page_table rows ({} pages of {}) must cover the output's {} positions",
+        "high_bw_all_gather page_table width ({} pages of {} tokens) must cover the output's {} positions",
         paged_kv::page_table_width(*tensor_args.page_table),
         page,
         out_shape[2]);
@@ -287,16 +279,21 @@ void validate_paged_source(const HighBwAllGatherParams& args, const HighBwAllGat
         args.gathered_slab_global);
 }
 
-// Bounds of a paged request, on both paths: none of it is in the program key. The tensor-form row is read
-// on-device, so the caller keeps it < page_table rows.
+// Bounds of a paged request, on both paths: each involves a value the program key leaves out (the layer count, the
+// layer, the scalar request). The tensor-form row is read on-device, so the caller keeps it < page_table rows.
 void validate_paged_request(const HighBwAllGatherParams& args, const HighBwAllGatherInputs& tensor_args) {
+    // First, so a zero layer count fails here rather than in the modulo below.
+    TT_FATAL(
+        args.batch_slot_layer_idx < args.batch_slot_num_layers,
+        "high_bw_all_gather batch_slot_layer_idx {} must be < batch_slot_num_layers {}",
+        args.batch_slot_layer_idx,
+        args.batch_slot_num_layers);
     const uint32_t entries = tensor_args.input_tensor.padded_shape()[0];
     TT_FATAL(
-        args.batch_slot_layer_idx < args.batch_slot_num_layers && entries % args.batch_slot_num_layers == 0,
-        "high_bw_all_gather paged pool entries {} must be pages x batch_slot_num_layers {} (layer {})",
+        entries % args.batch_slot_num_layers == 0,
+        "high_bw_all_gather paged pool entries {} must be pages x batch_slot_num_layers {}",
         entries,
-        args.batch_slot_num_layers,
-        args.batch_slot_layer_idx);
+        args.batch_slot_num_layers);
     const uint32_t rows = paged_kv::page_table_rows(*tensor_args.page_table);
     TT_FATAL(
         !args.input_batch_index.has_value() || *args.input_batch_index < rows * args.batch_slot_num_layers,
@@ -406,9 +403,13 @@ void HighBwAllGatherDeviceOperation::validate_on_program_cache_miss(
         auto output_shape = output_tensor.padded_shape();
         auto input_padded_shape = input_tensor.padded_shape();
         auto expected_output_shape = input_padded_shape;
-        // A paged source's output extent is the request capacity, not the pool's page (validate_paged_source).
-        expected_output_shape[args.dim] =
-            tensor_args.is_paged() ? output_shape[args.dim] : input_padded_shape[args.dim] * args.num_devices;
+        expected_output_shape[args.dim] = input_padded_shape[args.dim] * args.num_devices;
+        if (tensor_args.is_paged()) {
+            // One request's gather: batch 1, its extent the request capacity rather than a page
+            // (validate_paged_source).
+            expected_output_shape[0] = 1;
+            expected_output_shape[args.dim] = output_shape[args.dim];
+        }
         TT_FATAL(
             output_shape.size() == input_padded_shape.size(),
             "Output tensor shape should have same number of dimensions as input tensor but has {}",

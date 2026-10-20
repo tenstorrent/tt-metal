@@ -23,6 +23,7 @@
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/common/host/mesh_ring_plan.hpp"
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/update_padded_kv_cache/device/paged_kv_table_validation.hpp"
 
 namespace ttnn::operations::experimental::high_bw_all_gather {
 
@@ -870,7 +871,7 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
     };
     tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_args);
     tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(reader_compile_args);
-    // Metadata slot-select block, appended LAST so the two accessor blocks above keep their positional
+    // Metadata slot-select block, appended after the two accessor blocks so they keep their positional
     // offsets (the kernel resolves them with next_compile_time_args_offset()). The flag is always pushed,
     // including 0 on the scalar path, so one kernel binary serves both forms with a stable layout.
     reader_compile_args.push_back(batch_index_from_metadata ? 1u : 0u);
@@ -884,7 +885,7 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
         reader_compile_args.push_back(cb_meta_id);
         tt::tt_metal::TensorAccessorArgs(tensor_args.input_batch_index_tensor->buffer()).append_to(reader_compile_args);
     }
-    // Active-extent block, appended after the slot block. The 14 scalars are pushed UNCONDITIONALLY
+    // Active-extent block, appended after the slot block. The 15 scalars are pushed UNCONDITIONALLY
     // (zeros when unused) because the kernel's guarded-index trick -- collapsing the block base to 0 on
     // the off path -- only works when at least that many arguments exist at index 0, and this block is
     // far wider than the reader's fixed prefix. Only the tensor accessor stays conditional, since it has
@@ -969,11 +970,11 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
         reader_compile_args.push_back(cb_page_table_id);
         reader_compile_args.push_back(input_tensor.padded_shape()[2] / row_height);  // rows per KV page
         reader_compile_args.push_back(
-            tiled ? input_tensor.padded_shape()[-1] / tt::constants::TILE_WIDTH : 1u);  // pages per row
+            tiled ? input_tensor.padded_shape()[-1] / tt::constants::TILE_WIDTH : 1u);  // tiles per row
         reader_compile_args.push_back(
             operation_attributes.gathered_slab_global / operation_attributes.num_devices /
-            row_height);                                                             // rows per slab
-        reader_compile_args.push_back(tensor_args.page_table->logical_shape()[-1]);  // table width
+            row_height);  // rows per slab
+        reader_compile_args.push_back(paged_kv::page_table_width(*tensor_args.page_table));
         reader_compile_args.push_back(kPageTableWindowEntries);
         tt::tt_metal::TensorAccessorArgs(tensor_args.page_table->buffer()).append_to(reader_compile_args);
     }
@@ -1045,10 +1046,10 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
         extent_from_metadata ? tensor_args.gathered_prefix_tensor->buffer()->address() : 0u;
     const uint32_t batch_metadata_address =
         batch_index_from_metadata ? tensor_args.input_batch_index_tensor->buffer()->address() : 0u;
-    // Slot recomposition stays runtime so layers and cache depths share one cached program. The paged
-    // source's terms follow (zeros otherwise): [6] page table, [7] scalar request row, [8] this rank's position
-    // in the block-cyclic order (fixed per device program, so never patched), [9] pool pages. A paged layer
-    // replaces [5].
+    // Slot recomposition stays runtime so layers and cache depths share one cached program. [5] is the layer: a
+    // paged scalar request takes it from its flat slot. The paged source's terms follow (zeros otherwise): [6] page
+    // table, [7] scalar request row, [8] this rank's position in the block-cyclic order (fixed per device program,
+    // so never patched), [9] pool pages.
     const auto [paged_row, paged_layer] = paged ? paged_row_and_layer(operation_attributes) : std::pair{0u, 0u};
     tt::tt_metal::SetCommonRuntimeArgs(
         program,
