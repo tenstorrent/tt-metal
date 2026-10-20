@@ -679,16 +679,15 @@ class TtWindowAttention:
             ttnn.deallocate(qs)
             ttnn.deallocate(table)
             out = self._out_heads(o, cos, sin)
-            for t in (cos, sin):
-                ttnn.deallocate(t)
+            self.rope.free(cos, sin)  # INDEXER_GLUE=on: the chunk's memoized rows stay
             return out
         q_rm = self._q(q_resid, cos, sin)
         o = self._sdpa(q_rm, table, self.tables.index[g.start_class(start)])
         ttnn.deallocate(q_rm)
         ttnn.deallocate(table)
         out = self._out(o, cos, sin)
-        for t in (o, cos, sin):
-            ttnn.deallocate(t)
+        ttnn.deallocate(o)
+        self.rope.free(cos, sin)  # INDEXER_GLUE=on: the chunk's memoized rows stay
         return out
 
 

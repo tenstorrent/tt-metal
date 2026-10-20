@@ -74,12 +74,12 @@ class TtWindowKv:
         if self.rope.pairs is not None and native():
             # ATTN_GLUE=on (P.15): rope + cast to bf16 + re-interleave as a PairPerm matmul (act_q == the cast)
             out = rope_deinterleaved_bf16(kn, cos, sin, self.rope.pairs)
-            for t in (kn, cos, sin):
-                ttnn.deallocate(t)
+            ttnn.deallocate(kn)
+            self.rope.free(cos, sin)  # INDEXER_GLUE=on: the chunk's memoized rows stay
             return out
         kr = rope_deinterleaved(kn, cos, sin)
-        for t in (kn, cos, sin):
-            ttnn.deallocate(t)
+        ttnn.deallocate(kn)
+        self.rope.free(cos, sin)
         out = act_q(kr, dtype=ttnn.bfloat16)  # NUMERICS=native: a cast (tt/quant.py)
         if out is not kr:
             ttnn.deallocate(kr)

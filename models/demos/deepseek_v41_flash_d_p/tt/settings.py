@@ -188,6 +188,29 @@ TABLE = {
         "rel 0.00736 off and on (max precision 0.00136 both)",
     ),
     # ---- routed experts (tt/experts.py)
+    "INDEXER_GLUE": Setting(
+        "on",
+        ("on", "off"),
+        "P.16 (owner comparison 2026-10-20, glue report items 3, 7, 8, 9, 10): the indexer / shared-source glue folded "
+        "into ops or computed once. on = (3) layer 20's candidate block max (max over 8 keys) written by "
+        "ttnn.bringup.ring_indexer_score_dsa's writer as a second output (fork option block_max_out; was 8 strided "
+        "slices + 7 maximum of the scores), the newest block pinned there too; (8) the re-indexer's candidate bias "
+        "applied by the score op's writer (fork option block_bias: blocks whose bias is -inf written -inf; was "
+        "repeat_interleave x 8 + add of [Sq, T]); (7) the KV source's gathered compressed history, the index list of "
+        "a shared top-k and the tiled index keys computed once per (source, chunk) and reused by the reader layers "
+        "(tt/sparse_attention.ChunkMemo, freed after their last reader); (9) the RoPE cos / sin rows (and the "
+        "indexer's TP split of them, the compressed-row rows) computed once per (table, start), and the router's "
+        "weights handed to the weighted experts (no dense scatter, no to_layout + gather); (10) the indexer gates "
+        "written bf16 by their linear and reduce-scattered once (the RS block is the chip's query rows: no all_gather, "
+        "mesh_partition or casts), the compressor partial written in the CCL's partial dtype. off = the P.15 path. "
+        "Data moves and the same roundings (the bf16 partials as q_a's, P.6): not a precision switch. Measured P.16 "
+        "(2x2, chunk 53248-55296, plain profile, off (P.15) -> on): indexer 25.15 -> 12.94 ms a chunk, attention 43.01 "
+        "-> 40.56, router 1.82 -> 1.47, experts 17.18 -> 16.82, compressor 1.90 -> 1.79, kv 1.24 -> 1.18; device sum "
+        "119.82 -> 104.28 ms; programs (4 chips) 8892 -> 7800 (indexer 660 -> 376, attention 2648 -> 2244, kv 928 -> "
+        "800, compressor 1048 -> 964, router / experts 480 -> 384 each). Score op alone (layer 20's shapes): 1.68 ms, "
+        "+ block max and pin 1.96, + bias 1.69. Quick A/B: chunk wall 197.0 (off) -> 171.9-175.7 ms (on); layers equal "
+        "to 1e-5 (worst L03 0.99489 / 0.99490)",
+    ),
     "EXPERTS_IMPL": Setting(
         "bfp4",
         ("bfp8", "bfp4", "fp4_decode"),

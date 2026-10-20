@@ -226,6 +226,22 @@ def tp_sum(mesh, t: ttnn.Tensor, exact: bool = False) -> ttnn.Tensor:
     return out
 
 
+def sum_rows(mesh, t: ttnn.Tensor) -> ttnn.Tensor | None:
+    """INDEXER_GLUE=on (P.16): the sum of ``t`` ([1, 1, R, W] TILE partials) over the TP axis, only the chip's row
+    block [1, 1, R/TP, W] (mesh column c: rows [c R/TP, (c+1) R/TP), what tp_sum + mesh_partition(dim 2) keep): ONE
+    fabric_reduce_scatter by row blocks, no row gather. fabric_bf16: the bf16 RS (FPU add) of bf16 / fp32 partials,
+    bf16 out, the same values tp_sum's bf16 path gathers; fabric: the exact fp32 RS. None when the fork does not fit
+    (stock, untiled rows): the caller takes tp_sum + mesh_partition. Does not consume ``t``."""
+    tp = mesh.shape[TP_AXIS]
+    if tp == 1 or not fabric() or not _rs_ok(t, 2, tp):
+        return None
+    if bf16_sums():
+        return _rs_bf16(mesh, t, 2)
+    return ttnn.bringup.fabric_reduce_scatter(
+        t, cluster_axis=TP_AXIS, num_links=rs_links(mesh), dim=2, exact_fp32_add=True, cache_descriptors=True
+    )
+
+
 def sum_cols(mesh, t: ttnn.Tensor, fp32: bool = True) -> ttnn.Tensor:
     """The exact fp32 sum of ``t`` ([1, 1, R, H] fp32 TILE) over the TP axis, the chip's hidden columns
     [1, 1, R, H/TP] (mesh column c: [c H/TP, (c+1) H/TP)). Does not consume ``t``. stock: _gather_add +

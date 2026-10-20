@@ -464,6 +464,13 @@ ttsl::hash::hash_t IndexerScoreDeviceOperation::compute_program_hash(
         fused_route_plan_hash,
         attrs.key_stripe_split,      // bakes the reader's invP divisors: unsplit vs tp-split must not share a program
         attrs.natural_query_blocks,  // bring-up fork: natural query blocks (linear causal geometry)
+        // bring-up fork block epilogue: its presence adds a define, CBs and writer arguments
+        attrs.block_keys,
+        attrs.block_max_pin,
+        tensor_args.block_bias.has_value(),
+        tensor_args.block_max_out.has_value(),
+        tensor_args.block_bias.has_value() ? tensor_args.block_bias->logical_shape()[-1] : 0u,
+        tensor_args.block_max_out.has_value() ? tensor_args.block_max_out->logical_shape()[-1] : 0u,
         tensor_args);
 }
 
@@ -936,7 +943,12 @@ ttnn::Tensor launch_indexer_score(
     uint32_t index_cache_num_layers = 1,
     uint32_t index_cache_layer_idx = 0,
     // Bring-up fork: natural query blocks with a block-cyclic key cache (operation_attributes_t).
-    bool natural_query_blocks = false) {
+    bool natural_query_blocks = false,
+    // Bring-up fork block epilogue (operation_attributes_t::block_keys, tensor_args_t::block_bias / block_max_out).
+    uint32_t block_keys = 0,
+    std::optional<ttnn::Tensor> block_bias = std::nullopt,
+    std::optional<ttnn::Tensor> block_max_out = std::nullopt,
+    bool block_max_pin = false) {
     // Decompose the seq-shard axes into the SP/TP roles the validation + causal geometry below reason about.
     const auto [cluster_axis, seq_subshard_axis] = split_seq_shard_axes(seq_shard_axes, allow_subshard);
     using OperationType = ttnn::operations::bringup::indexer_score::IndexerScoreDeviceOperation;
@@ -1177,6 +1189,65 @@ ttnn::Tensor launch_indexer_score(
             "the rotated geometry on device)");
     }
     operation_attributes.natural_query_blocks = natural_query_blocks;
+    // Bring-up fork block epilogue: the writer biases / pools the untilized scores of the fused ring program.
+    const bool epilogue = block_bias.has_value() || block_max_out.has_value();
+    TT_FATAL(
+        epilogue == (block_keys > 0),
+        "indexer_score: block_keys ({}) must be > 0 exactly when block_bias or block_max_out is given",
+        block_keys);
+    TT_FATAL(!block_max_pin || block_max_out.has_value(), "indexer_score: block_max_pin needs block_max_out");
+    if (epilogue) {
+        TT_FATAL(
+            operation_attributes.fused_ring.has_value() && num_groups == 1 && block_size == 0 &&
+                q.logical_shape()[0] == 1,
+            "indexer_score: block_bias / block_max_out are supported by ring_indexer_score_dsa only (batch 1)");
+        TT_FATAL(
+            block_keys <= tt::constants::TILE_WIDTH && tt::constants::TILE_WIDTH % block_keys == 0,
+            "indexer_score: block_keys ({}) must divide {}",
+            block_keys,
+            tt::constants::TILE_WIDTH);
+        const uint32_t T = k.logical_shape()[2];
+        const auto check = [&](const ttnn::Tensor& t,
+                               DataType dtype,
+                               Layout layout,
+                               uint32_t align_cols,
+                               const char* name) {
+            const auto& shape = t.logical_shape();
+            TT_FATAL(
+                t.storage_type() == StorageType::DEVICE && t.dtype() == dtype && t.layout() == layout &&
+                    t.memory_config().buffer_type() == BufferType::DRAM &&
+                    t.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+                "indexer_score: {} must be a DRAM-interleaved {} {} device tensor",
+                name,
+                layout,
+                dtype);
+            TT_FATAL(
+                shape.rank() == 4 && shape[0] == 1 && shape[1] == 1 && shape[2] == Sq && shape[3] % align_cols == 0 &&
+                    static_cast<uint64_t>(shape[3]) * block_keys >= T,
+                "indexer_score: {} must be [1, 1, Sq={}, NB] with NB a multiple of {} and NB * block_keys >= T ({}); "
+                "got {}",
+                name,
+                Sq,
+                align_cols,
+                T,
+                shape);
+        };
+        if (block_bias.has_value()) {
+            check(*block_bias, DataType::BFLOAT16, Layout::TILE, 32, "block_bias");
+        }
+        if (block_max_out.has_value()) {
+            TT_FATAL(
+                block_keys <= 8,
+                "indexer_score: block_max_out needs block_keys <= 8 (a tile's fp32 run of 32 / block_keys values "
+                "must be 16-byte aligned); got {}",
+                block_keys);
+            check(*block_max_out, DataType::FLOAT32, Layout::ROW_MAJOR, 4, "block_max_out");
+        }
+    }
+    operation_attributes.block_keys = block_keys;
+    operation_attributes.block_max_pin = block_max_pin;
+    tensor_args.block_bias = std::move(block_bias);
+    tensor_args.block_max_out = std::move(block_max_out);
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
@@ -1288,7 +1359,11 @@ ttnn::Tensor ring_indexer_score_dsa(
     const std::optional<ttnn::Tensor>& cache_batch_idx_tensor,
     uint32_t index_cache_num_layers,
     uint32_t index_cache_layer_idx,
-    bool natural_query_blocks) {
+    bool natural_query_blocks,
+    uint32_t block_keys,
+    const std::optional<ttnn::Tensor>& block_bias,
+    const std::optional<ttnn::Tensor>& block_max_out,
+    bool block_max_pin) {
     // Fused DSA: same knobs as indexer_score_dsa (relu, one plane, no pool, real weights) + the all-gather it
     // subsumes. The factory auto-reserves the AG worker column(s) off the compute rectangle.
     ttnn::operations::bringup::indexer_score::FusedRingConfig fused_ring;
@@ -1400,7 +1475,11 @@ ttnn::Tensor ring_indexer_score_dsa(
         cache_batch_idx_tensor,
         index_cache_num_layers,
         index_cache_layer_idx,
-        natural_query_blocks);
+        natural_query_blocks,
+        block_keys,
+        block_bias,
+        block_max_out,
+        block_max_pin);
 }
 
 }  // namespace ttnn::experimental::bringup

@@ -52,6 +52,49 @@ from .rope import RopeTable
 TOPK_LIMIT = 1 << 24  # ids (and table rows) are exact in fp32 below this
 
 
+class ChunkMemo:
+    """INDEXER_GLUE=on (P.16, glue report item 7): device tensors several layers of a chunk read from one source,
+    computed by the first and reused by the rest, one entry per slot:
+
+        ("comp", kv source)    the KV source's compressed history gathered over the mesh (``_compressed``) and nb:
+                               the source layer's own attention and every reader of it (L3 of L2; L21, L24 of L20)
+        ("index", idx source)  the index list of a shared top-k ([window | top-k rows], ``_index``): L3 = L2's, L21 =
+                               L20's (same top-k, same KV source, same start)
+        ("keys", kv source)    the tiled index keys of a served index-key cache (tt/indexer.py ``_keys``): L24 =
+                               L20's
+
+    Each entry carries the key it was made for (the chunk start, the source cache's write version, its identity);
+    a lookup with another key misses, and a new entry frees the slot's old one. tt/model.py drops a slot after its
+    last reader layer of the chunk (``TtDS41Model.memo_last``) and the top-k store drops the "index" slot of a layer
+    whose top-k is replaced; nothing is reused across chunks in the forward pass. Per slot (per DS41DeviceState)."""
+
+    def __init__(self):
+        self._d: dict = {}
+
+    def get(self, slot, key):
+        hit = self._d.get(slot)
+        if hit is None or hit[0] != key:
+            return None
+        return hit[1]
+
+    def put(self, slot, key, value) -> None:
+        self.drop(slot)
+        self._d[slot] = (key, value)
+
+    def drop(self, slot) -> None:
+        hit = self._d.pop(slot, None)
+        if hit is None:
+            return
+        v = hit[1]
+        for t in v if isinstance(v, tuple) else (v,):
+            if isinstance(t, ttnn.Tensor) and t.is_allocated():
+                ttnn.deallocate(t)
+
+    def clear(self) -> None:
+        for slot in list(self._d):
+            self.drop(slot)
+
+
 class SparseIndexTables:
     """Load-time compaction permutations of the [window 128 | top-k K] index list, per start class < 128 (the class
     of start >= 128 is the identity): [SP, TP, q_rows, 128 + K] uint32, chip (r, c) its own query rows."""
@@ -183,25 +226,52 @@ class TtSparseAttention(TtWindowAttention):
         ttnn.deallocate(src)
         return out
 
-    def __call__(self, q_resid, kv, start: int, end: int | None, cache: TtWindowCache, ckv_cache, topk) -> ttnn.Tensor:
+    def __call__(
+        self,
+        q_resid,
+        kv,
+        start: int,
+        end: int | None,
+        cache: TtWindowCache,
+        ckv_cache,
+        topk,
+        memo: ChunkMemo | None = None,
+        sources: tuple[int, int] | None = None,
+    ) -> ttnn.Tensor:
+        """``memo`` / ``sources`` (INDEXER_GLUE=on, P.16): the chunk's ChunkMemo and this layer's (KV source, index
+        source) layers: the gathered compressed history and the index list are taken from it when an earlier layer
+        of the chunk made them for the same source, start and cache version."""
         g = self.geo
         s = q_resid.shape[-2] * g.sp
         assert s == g.chunk, f"chunk of {s} rows; the window tables were built for {g.chunk}"
         end = start + s if end is None else int(end)
         cos, sin = self.rope.rows(start, s)
         window = self._table(kv, start, end, cache)  # [1, 1, 128 + S, 512], interleaved tail (INTERLEAVED)
-        comp, nb = self._compressed(ckv_cache, start)
+        shared = memo is not None and sources is not None
+        ckey = (start, id(ckv_cache), ckv_cache.version)
+        hit = memo.get(("comp", sources[0]), ckey) if shared else None
+        if hit is None:
+            comp, nb = self._compressed(ckv_cache, start)
+            if shared:
+                memo.put(("comp", sources[0]), ckey, (comp, nb))
+        else:
+            comp, nb = hit
         table = ttnn.concat([window, comp], dim=2, memory_config=DRAM)
         ttnn.deallocate(window)
-        ttnn.deallocate(comp)
-        index = self._index(topk, ckv_cache, nb, start)
+        if not shared:
+            ttnn.deallocate(comp)
+        index = memo.get(("index", sources[1]), ckey) if shared else None
+        if index is None:
+            index = self._index(topk, ckv_cache, nb, start)
+            if shared:
+                memo.put(("index", sources[1]), ckey, index)
         q_rm = self._q(q_resid, cos, sin)
         o = self._sdpa(q_rm, table, index)
-        for t in (q_rm, table, index):
+        for t in (q_rm, table) + (() if shared else (index,)):
             ttnn.deallocate(t)
         out = self._out(o, cos, sin)
-        for t in (o, cos, sin):
-            ttnn.deallocate(t)
+        ttnn.deallocate(o)
+        self.rope.free(cos, sin)  # INDEXER_GLUE=on: the chunk's memoized rows stay
         return out
 
 

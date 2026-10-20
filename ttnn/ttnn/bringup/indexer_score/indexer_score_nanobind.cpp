@@ -310,6 +310,19 @@ void bind_indexer_score(nb::module_& mod) {
                 diagonal, no rotation or straddle. Needs block_cyclic_sp_axis / block_cyclic_chunk_local, an
                 axis ring (cluster_axis set) and the host-scalar chunk_start_idx. False = the rotation-exact
                 geometry of a mid-slab start (the source's).
+            block_keys: optional int (default 0; bring-up fork block epilogue). > 0 exactly when block_bias or
+                block_max_out is given: blocks of block_keys adjacent logical keys (block b = keys
+                [b * block_keys, (b + 1) * block_keys)), a divisor of 32. The writer applies them to the
+                untilized scores before they go out.
+            block_bias: optional [1, 1, Sq, NB] bf16 TILE DRAM tensor (bring-up fork; NB * block_keys >= T,
+                NB a multiple of 32), read: every score of a block whose bias is nonzero (-inf) is written -inf;
+                0 keeps it (a candidate mask: score + bias for bias in {0, -inf}).
+            block_max_out: optional [1, 1, Sq, NBm] fp32 ROW_MAJOR DRAM tensor (bring-up fork; NBm * block_keys
+                >= T, NBm a multiple of 4, block_keys <= 8), written in place: column b = the max of block b's
+                written (biased) bf16 scores, exactly widened to fp32, for the blocks of the first kv_len keys;
+                later columns untouched.
+            block_max_pin: optional bool (default False; needs block_max_out): +inf in block_max_out at each
+                query's own block (the block of its newest visible key, (pos + 1) // ratio - 1).
 
         Returns: score [B, 1, Sq, T] bf16 row-major; future/pad columns -inf.
         )doc",
@@ -339,7 +352,11 @@ void bind_indexer_score(nb::module_& mod) {
         nb::arg("cache_batch_idx_tensor") = nb::none(),
         nb::arg("index_cache_num_layers") = 1,
         nb::arg("index_cache_layer_idx") = 0,
-        nb::arg("natural_query_blocks") = false);
+        nb::arg("natural_query_blocks") = false,
+        nb::arg("block_keys") = 0,
+        nb::arg("block_bias") = nb::none(),
+        nb::arg("block_max_out") = nb::none(),
+        nb::arg("block_max_pin") = false);
 }
 
 }  // namespace ttnn::operations::bringup::indexer_score::detail

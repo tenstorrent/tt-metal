@@ -797,7 +797,9 @@ class TtExperts:
         ttnn.deallocate(rw)
         return out
 
-    def _weighted(self, x: ttnn.Tensor, dense: ttnn.Tensor, idx: ttnn.Tensor | None) -> ttnn.Tensor:
+    def _weighted(
+        self, x: ttnn.Tensor, dense: ttnn.Tensor | None, idx: ttnn.Tensor | None, wts: ttnn.Tensor | None = None
+    ) -> ttnn.Tensor:
         """EXPERTS_COMBINE=weighted (tt/weighted_combine.py): q(x) of the mesh row gathered over the column, the
         column's top-k ids and bf16 weights, then the flat expert + weighted fp32 combine in one program per pass.
         Returns this column group's partial [1, 1, s, H] (fp32; bf16 under CCL_IMPL=fabric_bf16)."""
@@ -808,18 +810,26 @@ class TtExperts:
         xg = wc.gather_x(qx)
         if qx is not x:
             ttnn.deallocate(qx)
-        dk = dense if dense.layout == ttnn.TILE_LAYOUT else ttnn.to_layout(dense, ttnn.TILE_LAYOUT, memory_config=DRAM)
-        if idx is None:  # (the routing's K nonzero weights and their ids; order is free: the combine sums them)
-            wts, ids = ttnn.topk(dk, k=K, dim=-1, largest=True, sorted=True)
-        else:
+        given = wts is not None and idx is not None  # INDEXER_GLUE=on (P.16): the router's own weights, as they are
+        if given:
             ids = idx
-            wts = ttnn.gather(dk, dim=-1, index=idx)
-        if dk is not dense:
-            ttnn.deallocate(dk)
+        else:
+            dk = (
+                dense
+                if dense.layout == ttnn.TILE_LAYOUT
+                else ttnn.to_layout(dense, ttnn.TILE_LAYOUT, memory_config=DRAM)
+            )
+            if idx is None:  # (the routing's K nonzero weights and their ids; order is free: the combine sums them)
+                wts, ids = ttnn.topk(dk, k=K, dim=-1, largest=True, sorted=True)
+            else:
+                ids = idx
+                wts = ttnn.gather(dk, dim=-1, index=idx)  # = the router's wts (dense is their scatter)
+            if dk is not dense:
+                ttnn.deallocate(dk)
         ids16 = ids if ids.dtype == ttnn.uint16 else ttnn.typecast(ids, ttnn.uint16, memory_config=DRAM)
         ids_g, wts_g = wc.routing(ids16, wts)
         for t in {id(t): t for t in (ids16, wts) + ((ids,) if idx is None else ())}.values():
-            if t is not idx:
+            if t is not idx and not (given and t is wts):  # (the router's outputs: the block frees them)
                 ttnn.deallocate(t)
         out = wc(self.fe, xg, ids_g, wts_g, int(self.fidelity.value))
         for t in (ids_g, wts_g):
@@ -838,12 +848,16 @@ class TtExperts:
         rows, self._rows = self._rows, None
         return rows
 
-    def partial(self, x: ttnn.Tensor, dense: ttnn.Tensor, idx: ttnn.Tensor | None = None) -> ttnn.Tensor:
+    def partial(
+        self, x: ttnn.Tensor, dense: ttnn.Tensor | None, idx: ttnn.Tensor | None = None, wts: ttnn.Tensor | None = None
+    ) -> ttnn.Tensor:
         """This column group's experts over the chip's rows. x: ffn_norm [1, 1, s, H] fp32 TILE (rows split over axis
         0, replicated over axis 1); dense: routing [1, 1, s, E] fp32 (same placement); idx: the router's top-k ids
-        [1, 1, s, K] (None: top-k of dense). Returns [1, 1, s, H] fp32 TILE (the group's sum, weights applied)."""
+        [1, 1, s, K] (None: top-k of dense). ``wts``: the router's weights of ``idx`` [1, 1, s, K] fp32 TILE (weighted
+        mode only, INDEXER_GLUE=on: dense may then be None). Returns [1, 1, s, H] fp32 TILE (the group's sum, weights
+        applied)."""
         if self.weighted:
-            return self._weighted(x, dense, idx)
+            return self._weighted(x, dense, idx, wts)
         s, K, H = x.shape[-2], self.K, self.H
         dispatch, combine, cap = self._modules(s)
         tmp = []

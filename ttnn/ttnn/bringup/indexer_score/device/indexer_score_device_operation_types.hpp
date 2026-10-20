@@ -139,6 +139,12 @@ struct operation_attributes_t {
     // causal diagonal, no straddle. Host-scalar chunk_start_idx only (the metadata path derives the rotated
     // geometry on device). HASHED (it selects the causal geometry; cheap insurance against a stale override).
     bool natural_query_blocks{false};
+    // Bring-up fork block epilogue (opt-in, fused ring only; default 0 / false = no epilogue, the program unchanged):
+    // block_keys > 0 when tensor_args.block_bias or block_max_out is given -- blocks of block_keys adjacent logical
+    // keys (block b = keys [b block_keys, (b + 1) block_keys)), applied by the writer to the untilized scores.
+    // block_max_pin: block_max_out gets +inf at each query's own block (its newest visible key). HASHED.
+    uint32_t block_keys{0};
+    bool block_max_pin{false};
     // The (stripes, per-stripe chunk) pair the invP remap decodes with; the product is the global chunk either way.
     uint32_t key_stripes() const { return block_cyclic.has_value() ? block_cyclic->sp * key_stripe_split : 1; }
     uint32_t key_stripe_chunk() const {
@@ -168,6 +174,14 @@ struct tensor_args_t {
     // mirroring TtIndexer's own host formula. Mutually exclusive with the scalar cache_batch_idx.
     std::optional<Tensor> cache_batch_idx_tensor{std::nullopt};
     bool has_cache_slot_metadata() const { return cache_batch_idx_tensor.has_value(); }
+    // Bring-up fork block epilogue (opt-in; see operation_attributes_t::block_keys). block_bias [1, 1, Sq, NB] bf16
+    // TILE (NB block_keys >= T, NB a multiple of 32): a block whose bias is nonzero (-inf) has its scores written -inf,
+    // 0 keeps them. block_max_out [1, 1, Sq, NBm] fp32 ROW_MAJOR (NBm block_keys >= T, NBm a multiple of 4): written
+    // with the max of each block's written (biased) scores, columns past kv_len / block_keys untouched. Both read /
+    // written in place (not outputs of the op).
+    std::optional<Tensor> block_bias{std::nullopt};
+    std::optional<Tensor> block_max_out{std::nullopt};
+    bool has_block_epilogue() const { return block_bias.has_value() || block_max_out.has_value(); }
 };
 
 using tensor_return_value_t = Tensor;
