@@ -9,6 +9,8 @@
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/tuple.h>
+#include <nanobind/stl/variant.h>
 
 #include "ttnn-nanobind/bind_function.hpp"
 #include "mhc_post_ttnn.hpp"
@@ -80,18 +82,26 @@ void bind_mhc_post_ttnn(nb::module_& mod) {
                 Defaults to HiFi4, fp32 DEST, approx off.
             comb_transposed (bool, optional): True (default) applies comb transposed as above. False applies it
                 as stored: X'[t, j*C:(j+1)*C] = post[t, j] * F[t, :] + sum_i comb[t, j*n + i] * X[t, i*C:(i+1)*C].
+            stats_weight (ttnn.Tensor, optional): W (..., n*C, 32) float32 TILE, leading dims 1 (default None: the
+                op as it was, one output). Given: a separate program also returns the next mHC hc step's partial row
+                from the same pass, stats (..., T, 32) float32 = X' @ W (FPU, fp32 DEST, compute_kernel_config's
+                fidelity) with column n (n + 2) replaced by sum over the row of X'^2 (exact fp32 SFPU) =
+                mhc_pre_xing_pack(X' @ W, X'). Needs float32 F and X, n <= 4. X' is bit-identical to the op without
+                it (deepseek_v41_flash_d_p P.14).
 
         Returns:
-            ttnn.Tensor: X' (..., T, n*C), the residual's dtype, TILE, DRAM interleaved.
+            ttnn.Tensor: X' (..., T, n*C), the residual's dtype, TILE, DRAM interleaved; with stats_weight the tuple
+            (X', stats).
         )doc",
-        &mhc_post,
+        &mhc_post_py,
         nb::arg("input_tensor"),
         nb::arg("residual"),
         nb::arg("post"),
         nb::arg("comb"),
         nb::kw_only(),
         nb::arg("compute_kernel_config") = nb::none(),
-        nb::arg("comb_transposed") = true);
+        nb::arg("comb_transposed") = true,
+        nb::arg("stats_weight") = nb::none());
 
     mod.def(
         "_mhc_post_ttnn_program_descriptor",

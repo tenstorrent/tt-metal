@@ -58,6 +58,12 @@ class TtHcMixes:
         self.inv_n = 1.0 / float(HC * hidden)
         self.norm_eps, self.hc_eps, self.iters = float(norm_eps), float(hc_eps), int(iters)
         self.ckc = compute_config(mesh)
+        # MHC_FUSED=on: the residual's mhc_post(stats_weight=fn_t) multiplies x' @ fn^T at the same fidelity (fp32 DEST)
+        self.post_cfg = ttnn.ComputeConfigDescriptor(
+            math_fidelity=getattr(ttnn.MathFidelity, settings.get("MATMUL_FIDELITY")),
+            fp32_dest_acc_en=True,
+            math_approx_mode=False,
+        )
         # fn^T in the chip-major (c, j, k) row order, padded to 32 output columns; rows split over mesh columns
         # (axis 1), replicated over mesh rows (axis 0): chip (r, c) holds its [4 x H/TP, 32] block.
         fn_t = torch.zeros(HC * hidden, W, dtype=torch.float32)
@@ -87,6 +93,41 @@ class TtHcMixes:
             memory_config=DRAM,
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
         )
+
+    def partial_row(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        """This chip's partial row [1, 1, R, 32]: x @ fn^T (its hidden slice) in columns 0..23, its sum of x^2 in
+        column 24 (what ttnn.bringup.mhc_post(stats_weight=fn_t) emits in the residual's pass, MHC_FUSED=on)."""
+        mix = ttnn.matmul(x, self.fn_t, dtype=ttnn.float32, compute_kernel_config=self.ckc, memory_config=DRAM)
+        packed = ttnn.bringup.mhc_pre_xing_pack(mix, x, n=HC)  # column 24 = this chip's sum of x^2 (exact)
+        ttnn.deallocate(mix)
+        return packed
+
+    def fused(self, x: ttnn.Tensor, pre: ttnn.Tensor, row: ttnn.Tensor | None = None):
+        """MHC_FUSED=on: (hc [1, 1, R, 24], y [1, 1, R, H/TP]) = this step's coefficients and the collapse
+        y = sum_n pre[:, n] x_n with the GIVEN pre (single-pass mHC, DS41-3: the pending / previous sublayer's), from
+        one exchange and ONE ttnn.bringup.mhc_pre_xing(collapse_pre=pre) program. ``row``: this chip's partial row
+        when the previous residual already emitted it (mhc_post stats); None = compute it here (matmul + pack).
+        Consumes ``row``, not x / pre."""
+        assert self.sinkhorn == "sfpu_fp32", "MHC_FUSED=on needs HC_SINKHORN=sfpu_fp32"
+        if row is None:
+            row = self.partial_row(x)
+        red = tp_sum(self.mesh, row)
+        ttnn.deallocate(row)
+        hc, y = ttnn.bringup.mhc_pre_xing(
+            red,
+            x,
+            scale=self.scale,
+            base=self.base,
+            norm_width=float(HC * self.hidden),
+            n=HC,
+            norm_eps=self.norm_eps,
+            hc_eps=self.hc_eps,
+            sinkhorn_iters=self.iters,
+            deepseek=True,
+            collapse_pre=pre,
+        )
+        ttnn.deallocate(red)
+        return hc, y
 
     def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
         rows = x.shape[-2]

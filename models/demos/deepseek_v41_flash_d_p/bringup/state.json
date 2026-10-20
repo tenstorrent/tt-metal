@@ -7341,6 +7341,7 @@
   "attempt": 1,
   "attempts": 0,
   "duration_s": 0.0,
+  "full_pending": true,
   "history": [
    {
     "s": 0.0,
@@ -7393,6 +7394,213 @@
   "reason": [],
   "role": "perf",
   "started": "2026-10-20T13:50:30",
+  "status": "PASS",
+  "waiting": null
+ },
+ "P.14": {
+  "ab": {
+   "at": "2026-10-20T15:59:01",
+   "by": "dnijemcevic",
+   "changed": [
+    "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+    "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+    "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+    "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/P.14.perf.1.json",
+    "models/demos/deepseek_v41_flash_d_p/tt/ccl.py",
+    "models/demos/deepseek_v41_flash_d_p/tt/collapse.py",
+    "models/demos/deepseek_v41_flash_d_p/tt/common.py",
+    "models/demos/deepseek_v41_flash_d_p/tt/engram_add.py",
+    "models/demos/deepseek_v41_flash_d_p/tt/mhc.py",
+    "models/demos/deepseek_v41_flash_d_p/tt/model.py",
+    "models/demos/deepseek_v41_flash_d_p/tt/residual.py",
+    "models/demos/deepseek_v41_flash_d_p/tt/settings.py",
+    "ttnn/ttnn/bringup/INDEX.md",
+    "ttnn/ttnn/bringup/mhc_post_ttnn/CHANGELOG.md",
+    "ttnn/ttnn/bringup/mhc_post_ttnn/README.md",
+    "ttnn/ttnn/bringup/mhc_post_ttnn/device/mhc_post_stats_device_operation.cpp",
+    "ttnn/ttnn/bringup/mhc_post_ttnn/device/mhc_post_stats_device_operation.hpp",
+    "ttnn/ttnn/bringup/mhc_post_ttnn/device/mhc_post_stats_program_factory.cpp",
+    "ttnn/ttnn/bringup/mhc_post_ttnn/kernels/mhc_post_stats_common.hpp",
+    "ttnn/ttnn/bringup/mhc_post_ttnn/kernels/mhc_post_stats_compute.cpp",
+    "ttnn/ttnn/bringup/mhc_post_ttnn/kernels/mhc_post_stats_reader.cpp",
+    "ttnn/ttnn/bringup/mhc_post_ttnn/kernels/mhc_post_stats_writer.cpp",
+    "ttnn/ttnn/bringup/mhc_post_ttnn/mhc_post_ttnn.cpp",
+    "ttnn/ttnn/bringup/mhc_post_ttnn/mhc_post_ttnn.hpp",
+    "ttnn/ttnn/bringup/mhc_post_ttnn/mhc_post_ttnn_nanobind.cpp",
+    "ttnn/ttnn/bringup/mhc_post_ttnn/sources.cmake",
+    "ttnn/ttnn/bringup/mhc_post_ttnn/tests/unit/test_mhc_post_stats.py",
+    "ttnn/ttnn/bringup/mhc_pre_ttnn/CHANGELOG.md",
+    "ttnn/ttnn/bringup/mhc_pre_ttnn/README.md",
+    "ttnn/ttnn/bringup/mhc_pre_ttnn/device/mhc_engram_pack_device_operation.cpp",
+    "ttnn/ttnn/bringup/mhc_pre_ttnn/device/mhc_engram_pack_device_operation.hpp",
+    "ttnn/ttnn/bringup/mhc_pre_ttnn/device/mhc_engram_pack_program_factory.cpp",
+    "ttnn/ttnn/bringup/mhc_pre_ttnn/device/mhc_pre_xing_device_operation.cpp",
+    "ttnn/ttnn/bringup/mhc_pre_ttnn/device/mhc_pre_xing_device_operation.hpp",
+    "ttnn/ttnn/bringup/mhc_pre_ttnn/device/mhc_pre_xing_program_factory.cpp",
+    "ttnn/ttnn/bringup/mhc_pre_ttnn/kernels/mhc_engram_pack_common.hpp",
+    "ttnn/ttnn/bringup/mhc_pre_ttnn/kernels/mhc_engram_pack_compute.cpp",
+    "ttnn/ttnn/bringup/mhc_pre_ttnn/kernels/mhc_engram_pack_reader.cpp",
+    "ttnn/ttnn/bringup/mhc_pre_ttnn/kernels/mhc_engram_pack_writer.cpp",
+    "ttnn/ttnn/bringup/mhc_pre_ttnn/kernels/mhc_pre_xing_reader.cpp",
+    "ttnn/ttnn/bringup/mhc_pre_ttnn/kernels/mhc_pre_xing_writer.cpp",
+    "ttnn/ttnn/bringup/mhc_pre_ttnn/mhc_pre_ttnn_nanobind.cpp",
+    "ttnn/ttnn/bringup/mhc_pre_ttnn/mhc_pre_xing.cpp",
+    "ttnn/ttnn/bringup/mhc_pre_ttnn/mhc_pre_xing.hpp",
+    "ttnn/ttnn/bringup/mhc_pre_ttnn/sources.cmake",
+    "ttnn/ttnn/bringup/mhc_pre_ttnn/tests/unit/test_engram_pack.py",
+    "ttnn/ttnn/bringup/mhc_pre_ttnn/tests/unit/test_xing_collapse_pre.py"
+   ],
+   "decided": "2026-10-20T16:18:48",
+   "decision": "accept",
+   "env": {
+    "DS41_MHC_FUSED": "off"
+   },
+   "gate_on": {
+    "failing": [],
+    "ok": true,
+    "partial": true
+   },
+   "key": "1e06c4bdfeba0666",
+   "ladder": {},
+   "note": "owner rule: device 219.54 -> 202.30 ms per chunk (mHC 21.96 -> 10.19, engram add 6.99 -> 1.78); 20-run warm wall 232.0 -> 209.0 ms with gap uploads equal (316.0 vs 316.2; the quick table's 282 vs 388 was noise); worst L03 0.99488 (P.13 0.99486), chunk out 0.99941; fork options default off, regressions match baselines",
+   "on": {
+    "DS41_MHC_FUSED": "on"
+   },
+   "profile": {},
+   "quick": {
+    "new": {
+     "chunk_wall_gap_ms": 388.0,
+     "chunk_wall_ms": 213.7,
+     "chunk_wall_ms_spread": 22.1,
+     "host_transfers_per_layer": 0,
+     "min layer": "L03",
+     "min layer PCC": 0.9948762074408961,
+     "pcc_chunk_out": 0.999405633440428,
+     "rc": 0
+    },
+    "old": {
+     "chunk_wall_gap_ms": 282.5,
+     "chunk_wall_ms": 234.8,
+     "chunk_wall_ms_spread": 17.4,
+     "host_transfers_per_layer": 0,
+     "min layer": "L03",
+     "min layer PCC": 0.9948564923788652,
+     "pcc_chunk_out": 0.9994056258299459,
+     "rc": 0
+    }
+   },
+   "rungs": [
+    "last",
+    "s55296"
+   ],
+   "table": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/ab/P.14/table.md",
+   "tests": {},
+   "why": "apply P.14 or not? A/B table at /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/ab/P.14/table.md; the gate with the change on would PASS; then: python -m models.demos.common.bringup.orchestrator decide --task P.14 --accept|--reject --spec /localdev/dnijemcevic/tt-metal2/models/demos/deepseek_v41_flash_d_p/bringup/spec.yaml, and resume"
+  },
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "6a871808d80f9a716013970608cdbf8e28a8bba4",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "6132eac2d9dc2e5e78a7d4c9163e8c1124adab19",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "7caaabe6033d38ae575f9261f7a986853a3593b4",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5",
+   "session_id": "b627244f-5a08-4d1b-804d-c725ea0fd2ab"
+  },
+  "agent_runs": [
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/briefs/P.14.perf.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "6a871808d80f9a716013970608cdbf8e28a8bba4",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "6132eac2d9dc2e5e78a7d4c9163e8c1124adab19",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "7caaabe6033d38ae575f9261f7a986853a3593b4",
+      "dirty": false
+     }
+    },
+    "knowledge_contradicted": [],
+    "knowledge_report": "ok",
+    "log": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/agents/P.14.perf.1.jsonl",
+    "model": "claude-opus-5-5",
+    "problems": [],
+    "rc": 0,
+    "role": "perf",
+    "seconds": 7696.4,
+    "session_id": "b627244f-5a08-4d1b-804d-c725ea0fd2ab",
+    "t": "2026-10-20T15:59:01"
+   }
+  ],
+  "attempt": 1,
+  "attempts": 0,
+  "duration_s": 0.0,
+  "history": [
+   {
+    "s": 0.0,
+    "status": "PASS",
+    "t": "2026-10-20T16:19:00"
+   }
+  ],
+  "last_run": "2026-10-20T16:19:00",
+  "log": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/logs/P.14.log",
+  "metrics": {
+   "chunk_wall_clean": 1,
+   "chunk_wall_gap_ms": 388.0,
+   "chunk_wall_ms": 213.7,
+   "chunk_wall_ms_runs": [
+    351.8,
+    324.3,
+    360.4,
+    240.7,
+    215.4,
+    302.2,
+    236.4,
+    244.8,
+    360.2,
+    217.8,
+    214.2,
+    233.7,
+    211.7,
+    232.3,
+    213.6,
+    232.9,
+    211.6,
+    213.7,
+    213.7,
+    213.1
+   ],
+   "chunk_wall_ms_spread": 22.1,
+   "host_transfers_per_layer": 0,
+   "pcc_chunk_out": 0.999405633440428,
+   "pcc_layer_L00": 0.9993245359509351,
+   "pcc_layer_L01": 0.9989255345889079,
+   "pcc_layer_L02": 0.9976787177357791,
+   "pcc_layer_L03": 0.9948762074408961,
+   "pcc_layer_L14": 0.9960896295570468,
+   "pcc_layer_L20": 0.9992730063404075,
+   "pcc_layer_L21": 0.9968185636529796,
+   "pcc_layer_L24": 0.999405633440428,
+   "scaled_run": 1
+  },
+  "rc": 0,
+  "reason": [],
+  "role": "perf",
+  "started": "2026-10-20T16:19:00",
   "status": "PASS",
   "waiting": null
  },

@@ -198,12 +198,14 @@ def _rs_ok(t: ttnn.Tensor, dim: int, g: int) -> bool:
     return s[3] % (32 * g) == 0
 
 
-def tp_sum(mesh, t: ttnn.Tensor) -> ttnn.Tensor:
+def tp_sum(mesh, t: ttnn.Tensor, exact: bool = False) -> ttnn.Tensor:
     """The exact fp32 sum of ``t`` ([1, 1, R, W] fp32 TILE) over the TP axis, replicated on every chip of the row,
     bit-identical across them. Does not consume ``t``. stock: _gather_add. fabric: fabric_reduce_scatter of row
     blocks (exact SFPU add) -> fabric_all_gather of the rows; when R is not a multiple of 32 TP or W of 32 (the norms'
     [S/SP, 1] sum of squares, the engram gates' [S/SP, 12]), _gather_add on the fabric gather. fabric_bf16 (P.6): the
-    RS (FPU add) and the row gather in bf16, the result typecast to fp32; ``t`` may be bf16 (partial_dtype)."""
+    RS (FPU add) and the row gather in bf16, the result typecast to fp32; ``t`` may be bf16 (partial_dtype).
+    ``exact`` (an fp32 ``t``): the exact fp32 sum under fabric_bf16 too (the engram gate partials, MHC_FUSED=on: the
+    [S/SP, 32] row the fork writes is tile-aligned, where the old [S/SP, 12] row was not and stayed exact)."""
     tp = mesh.shape[TP_AXIS]
     if not fabric() or not _rs_ok(t, 2, tp):
         tf = _exact_input(t)
@@ -211,7 +213,7 @@ def tp_sum(mesh, t: ttnn.Tensor) -> ttnn.Tensor:
         if tf is not t:
             ttnn.deallocate(tf)
         return out
-    if bf16_sums():  # CCL_IMPL=fabric_bf16: RS and row gather in bf16, back to fp32 (P.6)
+    if bf16_sums() and not exact:  # CCL_IMPL=fabric_bf16: RS and row gather in bf16, back to fp32 (P.6)
         part = _rs_bf16(mesh, t, 2)
         out = all_gather(part, 2, TP_AXIS)
         ttnn.deallocate(part)

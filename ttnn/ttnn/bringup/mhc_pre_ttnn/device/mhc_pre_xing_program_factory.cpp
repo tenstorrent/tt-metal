@@ -41,6 +41,7 @@ constexpr uint8_t CB_PB = 4;        // pre-block tile                     writer
 constexpr uint8_t CB_X = 5;         // n stream tiles per y column        reader -> compute
 constexpr uint8_t CB_Y = 16;        // y column tiles                     compute -> writer
 constexpr uint8_t CB_ACC = 6;       // pack_stats: lane-wise sum x^2 tile compute -> writer
+constexpr uint8_t CB_GPRE = 7;      // given_pre: the collapse_pre row tile reader -> writer
 constexpr uint32_t X_DEPTH_COLS = 4;
 constexpr uint32_t Y_DEPTH = 4;
 
@@ -103,7 +104,7 @@ KernelDescriptor make_kernel(
 }
 
 struct Addresses {
-    uint32_t row, x, hc, y;
+    uint32_t row, x, hc, y, pre;
 };
 
 Addresses addresses(const MhcPreXingParams& p, const MhcPreXingInputs& in, const std::vector<Tensor>& out) {
@@ -111,7 +112,8 @@ Addresses addresses(const MhcPreXingParams& p, const MhcPreXingInputs& in, const
     const Tensor& x = in.streams.has_value() ? *in.streams : in.input;
     const Tensor& hc = (p.compute_coef || p.pack_stats) ? out.at(0) : row;
     const Tensor& y = (in.streams.has_value() && !p.pack_stats) ? out.back() : hc;
-    return {row.buffer()->address(), x.buffer()->address(), hc.buffer()->address(), y.buffer()->address()};
+    const uint32_t pre = in.collapse_pre.has_value() ? in.collapse_pre->buffer()->address() : 0u;
+    return {row.buffer()->address(), x.buffer()->address(), hc.buffer()->address(), y.buffer()->address(), pre};
 }
 
 }  // namespace
@@ -125,6 +127,9 @@ ProgramDescriptor create_xing_program_descriptor(
     const Tensor& y = (has_streams && !p.pack_stats) ? out.back() : hc;
     auto* device = row.device();
     TT_FATAL(!p.pack_stats || (has_streams && !p.compute_coef), "mhc_pre_xing: pack_stats needs streams");
+    TT_FATAL(
+        !p.given_pre || (has_streams && p.compute_coef && !p.pack_stats && in.collapse_pre.has_value()),
+        "mhc_pre_xing: collapse_pre needs streams and the coefficients");
 
     const uint32_t n = p.n;
     const int64_t rows = token_tiles(row.padded_shape());
@@ -158,6 +163,11 @@ ProgramDescriptor create_xing_program_descriptor(
         desc.cbs.push_back(make_cb(CB_SOA_OUT, page, 2, all_cores));
         desc.cbs.push_back(make_cb(CB_HC_STAGE, page, 1, all_cores));
     }
+    if (p.given_pre) {
+        TT_FATAL(
+            in.collapse_pre->buffer()->page_size() == page, "mhc_pre_xing: collapse_pre must be one fp32 tile wide");
+        desc.cbs.push_back(make_cb(CB_GPRE, page, 2, all_cores));
+    }
     if (has_streams && !p.pack_stats) {
         desc.cbs.push_back(make_cb(CB_PB, page, 2, all_cores));
         desc.cbs.push_back(make_cb(CB_X, page, n * X_DEPTH_COLS, all_cores));
@@ -176,6 +186,11 @@ ProgramDescriptor create_xing_program_descriptor(
         chunk};
     for (const Tensor* t : {&row, &x}) {
         const auto a = tt::tt_metal::TensorAccessorArgs(*t->buffer()).get_compile_time_args();
+        reader_ct.insert(reader_ct.end(), a.begin(), a.end());
+    }
+    if (p.given_pre) {  // appended only when on (MHC_XING_GIVEN_PRE): the off program keeps its CT args
+        reader_ct.push_back(CB_GPRE);
+        const auto a = tt::tt_metal::TensorAccessorArgs(*in.collapse_pre->buffer()).get_compile_time_args();
         reader_ct.insert(reader_ct.end(), a.begin(), a.end());
     }
     std::vector<uint32_t> writer_ct = {
@@ -200,6 +215,9 @@ ProgramDescriptor create_xing_program_descriptor(
         const auto a = tt::tt_metal::TensorAccessorArgs(*t->buffer()).get_compile_time_args();
         writer_ct.insert(writer_ct.end(), a.begin(), a.end());
     }
+    if (p.given_pre) {
+        writer_ct.push_back(CB_GPRE);
+    }
     std::vector<uint32_t> compute_ct = {
         n,
         ct,
@@ -220,7 +238,11 @@ ProgramDescriptor create_xing_program_descriptor(
     uint32_t start = 0;
     for (const auto& [group, per_core] : {std::pair{group_1, units_1}, std::pair{group_2, units_2}}) {
         for (const auto& core : tt::tt_metal::corerange_to_cores(group, std::nullopt, true)) {
-            reader_rt.emplace_back(core, std::vector<uint32_t>{a.row, a.x, start, per_core});
+            std::vector<uint32_t> r = {a.row, a.x, start, per_core};
+            if (p.given_pre) {
+                r.push_back(a.pre);
+            }
+            reader_rt.emplace_back(core, std::move(r));
             writer_rt.emplace_back(core, std::vector<uint32_t>{a.hc, a.y, start, per_core});
             std::vector<uint32_t> c = {start, per_core};
             c.insert(c.end(), scalars.begin(), scalars.end());
@@ -248,6 +270,11 @@ ProgramDescriptor create_xing_program_descriptor(
     if (p.deepseek) {  // absent when off: Xing's program unchanged
         desc.kernels.back().defines.emplace_back("MHC_XING_DEEPSEEK", "1");
     }
+    if (p.given_pre) {  // absent when off: the reader / writer are the ones they were
+        for (uint32_t k : {READER_KERNEL, WRITER_KERNEL}) {
+            desc.kernels[k].defines.emplace_back("MHC_XING_GIVEN_PRE", "1");
+        }
+    }
     return desc;
 }
 
@@ -269,6 +296,9 @@ void MhcPreXingProgramFactory::override_runtime_arguments(
             if (args.size() >= 4) {
                 args[0] = a.row;
                 args[1] = a.x;
+            }
+            if (operation_attributes.given_pre && args.size() >= 5) {
+                args[4] = a.pre;
             }
         }
     }

@@ -52,12 +52,13 @@ from .experts import build_experts
 from .indexer import TtCandidateIndexer, TtReindexer, build_indexer
 from .kv import TtWindowKv, attn_in_weights, rope_freqs
 from .layout import HC, hidden_split_to_host, row_split_to_device, row_split_to_host, streams_to_device, streams_to_host
-from .mhc import build_hc
+from .mhc import NG, build_hc
 from .norm import TtDistributedRmsNorm, build_norm
 from .q_a import TtAttnInProj, TtQa
 from .residual import build_residual
 from .rope import RopeTable
 from .router import build_router
+from .settings import settings
 from .shared_expert import build_shared_expert
 from .sparse_attention import SparseIndexTables, TtSparseAttention
 
@@ -65,15 +66,25 @@ NONE_ID = 0xFFFFFFFF  # the device's "no index" (top-k / candidate pads)
 
 
 class DevH:
-    """A block boundary on the device: the 4 mHC streams and the pending pre (DS41-3)."""
+    """A block boundary on the device: the 4 mHC streams and the pending pre (DS41-3). MHC_FUSED=on: ``pre`` is the
+    whole [S/SP, 24] mixes of the previous ffn_hc (pre in columns 0..3; layer 0: one-hot), and ``stats`` may carry
+    (layer, row): this chip's partial hc row [S/SP, 32] of the streams for that layer's attn_hc, emitted by the
+    previous residual's mhc_post pass (used only by that layer, freed with the boundary)."""
 
-    __slots__ = ("streams", "pre")
+    __slots__ = ("streams", "pre", "stats")
 
-    def __init__(self, streams: ttnn.Tensor, pre: ttnn.Tensor):
-        self.streams, self.pre = streams, pre
+    def __init__(self, streams: ttnn.Tensor, pre: ttnn.Tensor, stats=None):
+        self.streams, self.pre, self.stats = streams, pre, stats
 
     def tensors(self):
-        return [self.streams, self.pre]
+        return [self.streams, self.pre] + ([self.stats[1]] if self.stats is not None else [])
+
+    def take_stats(self, layer: int):
+        """The partial row for ``layer``'s attn_hc, or None (none emitted, or for another layer)."""
+        if self.stats is None or self.stats[0] != layer:
+            return None
+        row, self.stats = self.stats[1], None
+        return row
 
 
 class Keep:
@@ -305,6 +316,7 @@ class TtDS41Block:
         self.attn_hc = build_hc(mesh, ck, cfg, i, "attn_hc")
         self.ffn_hc = build_hc(mesh, ck, cfg, i, "ffn_hc")
         self.collapse = TtHcCollapse(n=cfg.hc)
+        self.fused = model.fused  # MHC_FUSED=on (P.14): hc + collapse in one program, residuals emit the next hc row
         self.attn_norm = build_norm(mesh, ck, cfg, i, "attn_norm")
         self.ffn_norm = build_norm(mesh, ck, cfg, i, "ffn_norm")
         self.attn_res = build_residual(cfg)
@@ -331,7 +343,7 @@ class TtDS41Block:
         self.engram_kv = self.engram_add = None
         if cfg.is_engram(i):
             self.engram_kv = build_engram_kv(mesh, ck, cfg, i)
-            self.engram_add = build_engram_add(mesh, ck, cfg, i)
+            self.engram_add = build_engram_add(mesh, ck, cfg, i, rows=model.chunk // model.sp)
         # MoE
         self.router = build_router(mesh, ck, cfg, i, model.chunk)
         self.experts = build_experts(mesh, ck, cfg, i, model.chunk)
@@ -360,8 +372,9 @@ class TtDS41Block:
             return self.engram_kv(rows)
 
         def engram_add(ctx, x, kv):
-            s, pre = self.engram_add(x.streams, kv, x.pre)
-            return DevH(s, pre)
+            # MHC_FUSED=on: the add's mhc_post pass also emits this layer's attn_hc partial row (P.14)
+            s, pre, row = self.engram_add.add(x.streams, kv, x.pre, hc=self.attn_hc if self.fused else None)
+            return DevH(s, pre, stats=(i, row) if row is not None else None)
 
         def attn_hc(ctx, x):
             return self.attn_hc(x.streams)
@@ -451,6 +464,39 @@ class TtDS41Block:
             o, pre = self.ffn_res(h, mix, y)
             return DevH(o, pre)
 
+        if self.fused:
+            # MHC_FUSED=on (P.14): the hc steps compute their coefficients and collapse the streams with the given pre
+            # in one program (tt/mhc.py:TtHcMixes.fused); the collapse steps hand that output on. attn_hc collapses x
+            # with the pending pre (the previous ffn_hc's whole mixes), ffn_hc h_mid with attn_hc's mixes (DS41-3).
+            def attn_hc(ctx, x):  # noqa: F811
+                hc, y = self.attn_hc.fused(x.streams, x.pre, row=x.take_stats(i))
+                ctx.extra["attn_in"] = y
+                ctx.extra["attn_mix"] = hc  # ffn_hc's collapse pre (freed by the block after ffn_collapse)
+                return hc
+
+            def attn_collapse(ctx, x):  # noqa: F811
+                return ctx.extra.pop("attn_in")
+
+            def attn_residual(ctx, x, mix, y):  # noqa: F811
+                out, row = self.attn_res.fused(x.streams, mix, y, self.ffn_hc)
+                if row is not None:
+                    ctx.extra["ffn_row"] = row
+                return out
+
+            def ffn_hc(ctx, h):  # noqa: F811
+                hc, y = self.ffn_hc.fused(h, ctx.extra["attn_mix"], row=ctx.extra.pop("ffn_row", None))
+                ctx.extra["ffn_in"] = y
+                return hc
+
+            def ffn_collapse(ctx, h, mix):  # noqa: F811
+                ctx.extra.pop("attn_mix", None)
+                return ctx.extra.pop("ffn_in")
+
+            def ffn_residual(ctx, h, mix, y):  # noqa: F811
+                nxt = self.model.next_hc(i)
+                out, row = self.ffn_res.fused(h, mix, y, nxt.attn_hc if nxt is not None else None)
+                return DevH(out, mix, stats=(nxt.layer, row) if row is not None else None)
+
         table = dict(
             engram_rows=engram_rows,
             engram_kv=engram_kv,
@@ -524,6 +570,7 @@ class TtDS41Model:
         self.max_seq, self.chunk = int(max_seq), int(chunk)
         self.sp, self.tp = mesh.shape[SP_AXIS], mesh.shape[TP_AXIS]
         assert self.chunk % (32 * self.sp * self.tp) == 0, (self.chunk, tuple(mesh.shape))
+        self.fused = settings.get("MHC_FUSED") == "on"  # P.14
         for i in self.layers:
             missing = [j for j in cfg.sources(i) if j not in self.layers]
             assert not missing, f"layer {i} reads the state of layers {missing}, which are not loaded"
@@ -553,18 +600,28 @@ class TtDS41Model:
         )
         del emb
         # layer 0's pending pre: one-hot on stream 0 (reference first_block_input), [S/SP, 4] fp32, cloned per chunk
+        # (MHC_FUSED=on: [S/SP, 24], the width of the mixes the boundary carries; only columns 0..3 are read)
         rows = self.chunk // self.sp
-        pre0 = torch.zeros(1, 1, self.chunk, HC)
+        self.pre_w = NG if self.fused else HC
+        pre0 = torch.zeros(1, 1, self.chunk, self.pre_w)
         pre0[..., 0] = 1.0
-        self.pre0 = row_split_to_device(mesh, pre0.reshape(self.chunk, HC))
+        self.pre0 = row_split_to_device(mesh, pre0.reshape(self.chunk, self.pre_w))
         assert self.pre0.shape[-2] == rows, (self.pre0.shape, rows)
-        self.final_collapse = TtHcCollapse(n=cfg.hc)
+        self.final_collapse = TtHcCollapse(n=cfg.hc)  # MHC_FUSED=on: mhc_pre_xing(coefficients_given=True)
         self.final_norm_mod = TtDistributedRmsNorm(mesh, ck.weight("norm.weight", torch.float32), cfg.eps)
         self.head_w = ck.weight("head.weight", torch.float32) if lm_head else None
         self.blocks = {}
         for i in self.layers:
             self.blocks[i] = TtDS41Block(self, i)
         self.load_seconds = time.time() - t0
+
+    def next_hc(self, i: int):
+        """MHC_FUSED=on: the block whose attn_hc reads layer i's output streams as they are (the next layer, loaded
+        and consecutive, without an engram add first), else None (then nothing is emitted for it)."""
+        b = self.blocks.get(i + 1)
+        if not self.fused or b is None or self.cfg.is_engram(i + 1):
+            return None
+        return b
 
     # ------------------------------------------------------------------ load-time shared tables
     def rope(self, ratio: int) -> RopeTable:
@@ -651,7 +708,10 @@ class TtDS41Model:
         """Packed block input rows [S, 4H + 4] (natural order) -> DevH."""
         hidden = self.cfg.dim
         assert h.shape[-1] == HC * hidden + HC, h.shape
-        return DevH(streams_to_device(self.mesh, h, hidden), row_split_to_device(self.mesh, h[:, HC * hidden :]))
+        pre = h[:, HC * hidden :].float()
+        if self.pre_w > HC:  # MHC_FUSED=on: the boundary's pre is [S, 24] wide (columns 4.. unread)
+            pre = torch.nn.functional.pad(pre, (0, self.pre_w - HC))
+        return DevH(streams_to_device(self.mesh, h, hidden), row_split_to_device(self.mesh, pre))
 
     def to_host(self, h) -> torch.Tensor:
         """DevH -> the reference's packed [S, 4H + 4]; a hidden-split tensor (the final norm) -> [S, H]."""
