@@ -63,8 +63,9 @@ def _heuristic(Kt: int, Nt: int, gx: int, gy: int):
     return cx, cy, pcn, ibw
 
 
-def decode_linear_config(K: int, N: int, grid) -> ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig:
-    """1D ``mcast_in0`` program config for ``[1, 1, <= 32, K] x [K, N]`` on ``grid`` (CoreCoord-like, ``.x/.y``)."""
+def decode_linear_config(K: int, N: int, grid, activation=None) -> ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig:
+    """1D ``mcast_in0`` program config for ``[1, 1, <= 32, K] x [K, N]`` on ``grid`` (CoreCoord-like, ``.x/.y``);
+    ``activation`` = a ``ttnn.UnaryOpType`` fused into the output tiles."""
     gx, gy = int(grid.x), int(grid.y)
     Kt, Nt = K // TILE, math.ceil(N / TILE)
     assert K % TILE == 0, K
@@ -85,7 +86,7 @@ def decode_linear_config(K: int, N: int, grid) -> ttnn.MatmulMultiCoreReuseMulti
         per_core_M=1,
         per_core_N=pcn,
         fuse_batch=True,
-        fused_activation=None,
+        fused_activation=activation,
         mcast_in0=True,
     )
 
@@ -94,15 +95,16 @@ class DecodeLinear:
     """Caches the decode program config of one weight; ``__call__`` = ``ttnn.linear`` with it for
     decode-shaped inputs (``[1, 1, M <= 32, K]``), the default dispatch otherwise."""
 
-    def __init__(self, device, weight: ttnn.Tensor):
+    def __init__(self, device, weight: ttnn.Tensor, activation=None):
         self.w = weight
         self.K, self.N = int(weight.shape[-2]), int(weight.shape[-1])
         self._grid = device.compute_with_storage_grid_size()
+        self._activation = activation  # fused into the decode config only (the default dispatch applies none)
         self._cfg = None
 
     def config(self):
         if self._cfg is None:
-            self._cfg = decode_linear_config(self.K, self.N, self._grid)
+            self._cfg = decode_linear_config(self.K, self.N, self._grid, self._activation)
         return self._cfg
 
     def __call__(self, x: ttnn.Tensor, **kw) -> ttnn.Tensor:

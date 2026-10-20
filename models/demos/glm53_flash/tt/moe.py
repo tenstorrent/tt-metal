@@ -37,6 +37,7 @@ expert tensors (``TtRoutedExperts.cache_complete``), so the caller can skip dequ
 from __future__ import annotations
 
 import math
+import os
 from pathlib import Path
 
 import torch
@@ -128,15 +129,20 @@ class TtRouter(LightweightModule):
         )
         self.fp32 = _compute(device, ttnn.MathFidelity.HiFi4, packer_l1_acc=False)
         self.lin_gate = DecodeLinear(device, self.w_gate)
+        # decode: sigmoid fused into the gate matmul's output tiles (GLM53_ROUTER_FUSED_SIGMOID=0: separate op)
+        self.fused_sigmoid = os.environ.get("GLM53_ROUTER_FUSED_SIGMOID", "1") == "1"
+        self.lin_gate_sig = DecodeLinear(device, self.w_gate, activation=ttnn.UnaryOpType.SIGMOID)
         import os
 
         self.tie_break = os.environ.get("GLM53_ROUTER_TIE_BREAK", "topk")  # topk (default) | rank | cumsum
         self._const: dict[tuple, ttnn.Tensor] = {}
 
-    def _forward_topk(self, scores, choice, T):
+    def _forward_topk(self, scores, choice, T, dense_only=False):
         """One fp32 ``ttnn.topk`` (stable bitonic network: exact fp32 ranking, lowest index on ties) over the
-        biased scores, the unbiased scores gathered at the winners, renormalized and scattered into the dense
-        [1,1,T,E] matrix: ~10 ops instead of 8 rounds of the composite."""
+        biased scores, the unbiased scores gathered at the winners, renormalized (sum -> scale/sum -> multiply;
+        the sum of sigmoids is > 0, no epsilon) and scattered into the dense [1,1,T,E] matrix: 8 device ops
+        after the gate matmul (topk, gather, sum, rdiv, mul, typecast, scatter) instead of 8 rounds of the
+        composite."""
         k = self.k
         vals, idx = ttnn.topk(
             choice, k, dim=-1, largest=True, sorted=True
@@ -145,14 +151,20 @@ class TtRouter(LightweightModule):
         ttnn.deallocate(choice)
         w = ttnn.gather(scores, -1, idx)  # unbiased scores at the winners [1,1,T,k] fp32
         ttnn.deallocate(scores)
-        denom = ttnn.add(ttnn.sum(w, dim=-1, keepdim=True), 1e-20)
-        norm = ttnn.multiply(ttnn.reciprocal(denom), self.cfg.routed_scaling_factor)  # [1,1,T,1]
+        denom = ttnn.sum(w, dim=-1, keepdim=True)  # [1,1,T,1] > 0
+        norm = ttnn.rdiv(denom, self.cfg.routed_scaling_factor)  # scale / sum
+        ttnn.deallocate(denom)
         w = ttnn.multiply(w, norm, output_tensor=w)
+        ttnn.deallocate(norm)
         # scatter has no fp32 TILE path: the dense matrix is built in bf16, which is the dtype the expert
         # block applies anyway (it typecasts the fp32 weights to bf16 before weighting the expert outputs)
         w16 = ttnn.typecast(w, ttnn.bfloat16)
         dense = ttnn.scatter(self._dense_zeros(T), -1, idx, w16)  # [1,1,T,E] bf16: weights at their columns
         ttnn.deallocate(w16)
+        if dense_only:
+            ttnn.deallocate(w)
+            ttnn.deallocate(idx)
+            return None, None, dense
         return w, ttnn.typecast(idx, ttnn.float32), dense
 
     def _dense_zeros(self, T: int) -> ttnn.Tensor:
@@ -163,8 +175,9 @@ class TtRouter(LightweightModule):
             )
         return self._const[key]
 
-    def forward(self, x: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
+    def forward(self, x: ttnn.Tensor, *, dense_only: bool = False) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
         """x [1,1,T,H] bf16 -> (weights [1,1,T,8] fp32, indices [1,1,T,8] fp32 (integral), dense [1,1,T,E] fp32).
+        ``dense_only`` (the MoE forward): weights / indices come back as ``None`` (their host-side casts are skipped).
 
         Exact fp32 selection (HF noaux_tc, n_group=1): ``choice = sigmoid(logits) + bias``, top-8 by
         iterative masked argmax, weights = unbiased scores at the selected experts, renormalized and
@@ -172,12 +185,15 @@ class TtRouter(LightweightModule):
         biased scores), which swaps the 8th expert on ~20% of real tokens; the composite is exact.
         """
         T = x.shape[-2]
-        logits = self.lin_gate(x, dtype=ttnn.float32, compute_kernel_config=self.fp32)
-        scores = ttnn.sigmoid(logits)  # fp32 [1,1,T,E]
-        ttnn.deallocate(logits)
+        if self.fused_sigmoid and T <= TILE and self.tie_break == "topk":
+            scores = self.lin_gate_sig(x, dtype=ttnn.float32, compute_kernel_config=self.fp32)  # sigmoid fused
+        else:
+            logits = self.lin_gate(x, dtype=ttnn.float32, compute_kernel_config=self.fp32)
+            scores = ttnn.sigmoid(logits)  # fp32 [1,1,T,E]
+            ttnn.deallocate(logits)
         choice = ttnn.add(scores, self.bias)
         if self.tie_break == "topk":
-            return self._forward_topk(scores, choice, T)
+            return self._forward_topk(scores, choice, T, dense_only=dense_only)
         dense = None  # selected unbiased scores at their expert columns, else 0
         idx_cols, w_cols = [], []
         for _ in range(self.k):
@@ -465,7 +481,7 @@ class TtMoE(LightweightModule):
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """x [1,1,T,H] bf16 (T multiple of 32; replicated over the TP columns) -> [1,1,T,H] replicated."""
-        _, _, dense = self.router(x)
+        _, _, dense = self.router(x, dense_only=True)
         routed = self.experts(x, dense)
         ttnn.deallocate(dense)
         shared = self.shared(x, reduce=False)

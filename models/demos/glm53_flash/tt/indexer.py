@@ -227,12 +227,16 @@ class TtDSAIndexer(LightweightModule):
         B = ring_k.shape[0]
         return ttnn.reshape(self._pool_groups(ring_k, ring_g), [1, B, 1, self.D])
 
-    def queries_and_weights(self, x: ttnn.Tensor, q_resid: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        """-> q [1,Hi,T,D] bf16 (scale folded), w [1,1,T,Hi] bf16 (n_heads^-0.5 folded)."""
+    def queries_and_weights(
+        self, x: ttnn.Tensor, q_resid: ttnn.Tensor, w: ttnn.Tensor | None = None
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """-> q [1,Hi,T,D] bf16 (scale folded), w [1,1,T,Hi] bf16 (n_heads^-0.5 folded; ``w`` given =
+        already computed by the caller's fused stem)."""
         T = x.shape[-2]
         q = ttnn.linear(q_resid, self.w_qb, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)  # [1,1,T,Hi*D]
         q = ttnn.transpose(ttnn.reshape(q, [1, T, self.Hi, self.D]), 1, 2)  # [1,Hi,T,D]
-        w = ttnn.linear(x, self.w_weights, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)  # [1,1,T,Hi]
+        if w is None:
+            w = ttnn.linear(x, self.w_weights, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)  # [1,1,T,Hi]
         return q, w
 
     # ------------------------------------------------------- maintenance
@@ -299,11 +303,22 @@ class TtDSAIndexer(LightweightModule):
             g_row = ttnn.reshape(ttnn.slice(g_idx, [0, 0, row, 0], [1, 1, row + 1, D]), [1, 1, 1, D])
             cache.write_ring_rows(k_row, g_row, cache._slot_ids[slot0 + j], page_table=cache._user_pts[user])
 
-    def maintain_decode(self, x: ttnn.Tensor, cache: TtIndexCache, pool_ids: ttnn.Tensor, ring_slots: ttnn.Tensor):
+    def maintain_decode(
+        self, x: ttnn.Tensor, cache: TtIndexCache, pool_ids: ttnn.Tensor, ring_slots: ttnn.Tensor, kg=None
+    ):
         """Batched, trace-safe: x [1,1,B,4096] (token at position a per user), pool_ids = a // P,
-        ring_slots = a % P ([B] int32 device tensors). Writes the ring rows, then pool a // P."""
+        ring_slots = a % P ([B] int32 device tensors). Writes the ring rows, then pool a // P.
+        ``kg = (k_raw, g)``: the raw (un-normed) key and gate projections [1,1,B,D] when the caller's
+        fused stem already computed them (the k LayerNorm is applied here)."""
         B = x.shape[-2]
-        k_idx, g_idx = self.keys_and_gates(x)  # [1,1,B,D]
+        if kg is None:
+            k_idx, g_idx = self.keys_and_gates(x)  # [1,1,B,D]
+        else:
+            k_raw, g_idx = kg
+            k_idx = ttnn.layer_norm(
+                k_raw, weight=self.knorm_w, bias=self.knorm_b, epsilon=1e-6, compute_kernel_config=self.fp32
+            )
+            ttnn.deallocate(k_raw)
         cache.write_ring_rows(
             ttnn.reshape(k_idx, [1, B, 1, self.D]), ttnn.reshape(g_idx, [1, B, 1, self.D]), ring_slots
         )

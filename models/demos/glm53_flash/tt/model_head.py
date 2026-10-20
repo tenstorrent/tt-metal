@@ -42,6 +42,8 @@ from models.demos.glm53_flash.reference.checkpoint import (
     shard_headers,
 )
 from models.demos.glm53_flash.tt.config import GLM53FlashConfig
+from models.demos.glm53_flash.tt.matmul_configs import DecodeLinear
+from models.demos.glm53_flash.tt.mesh import GLMMesh, single_chip
 
 TILE = 32
 
@@ -89,17 +91,40 @@ class TtModelHead(LightweightModule):
         *,
         lm_head_dtype=ttnn.bfloat8_b,
         vocab_chunks: int = 5,
+        mesh: GLMMesh | None = None,
     ):
+        """On a mesh the vocab is split over the TP columns (column ``c`` keeps the contiguous block
+        ``[c*V/cols, (c+1)*V/cols)``, chunked inside the block); ``logits`` all-gathers the column
+        blocks back into the natural vocab order so ``greedy`` / callers see ``[.., V]`` on every chip.
+        Each chip then streams ``V/cols`` head columns per step instead of the whole 0.63 GB head."""
         H, V = cfg.hidden_size, cfg.vocab_size
         assert tuple(norm_weight.shape) == (H,), norm_weight.shape
         assert tuple(lm_head_weight.shape) == (V, H), lm_head_weight.shape
         self.device = device
+        self.mesh = mesh if mesh is not None else single_chip(device)
         self.hidden, self.vocab, self.n = H, V, cfg.hc_mult
         self.eps = float(cfg.rms_norm_eps)
         self.norm_w = _upload(device, norm_weight.float().reshape(1, 1, 1, H), ttnn.bfloat16)
         wt = lm_head_weight.t()  # [H, V]
-        self.bounds = vocab_chunk_bounds(V, vocab_chunks)
-        self.lm_w = [_upload(device, wt[:, a:b], lm_head_dtype) for a, b in self.bounds]
+        cols = self.mesh.cols
+        assert V % (cols * TILE) == 0, (V, cols)
+        V_local = V // cols
+        if cols > 1:
+            vocab_chunks = 1  # the 4-way split already bounds the matmul width (38720 for GLM-5.3-Flash)
+        self.bounds = vocab_chunk_bounds(V_local, vocab_chunks)  # chunk bounds inside one column block
+        if cols == 1:
+            self.lm_w = [_upload(device, wt[:, a:b], lm_head_dtype) for a, b in self.bounds]
+        else:
+            # chunk i host tensor = [block(c=0, i) | block(c=1, i) | ...]; ``upload(cols=-1)`` hands column c its block
+            self.lm_w = [
+                self.mesh.upload(
+                    torch.cat([wt[:, c * V_local + a : c * V_local + b] for c in range(cols)], dim=-1),
+                    lm_head_dtype,
+                    cols=-1,
+                )
+                for a, b in self.bounds
+            ]
+        self.lm_lin = [DecodeLinear(device, w) for w in self.lm_w]  # 1D mcast configs for decode-shaped rows
         self.lm_head_dtype = lm_head_dtype
         # HiFi2 is the project policy for bfp8 matmuls; a bf16 head keeps the full mantissas.
         fid = ttnn.MathFidelity.HiFi2 if lm_head_dtype == ttnn.bfloat8_b else ttnn.MathFidelity.HiFi4
@@ -132,13 +157,19 @@ class TtModelHead(LightweightModule):
         return yb
 
     def logits(self, h: ttnn.Tensor) -> ttnn.Tensor:
-        """``[1, 1, T, H]`` bf16 -> ``[1, 1, T, vocab]`` bf16 (fp32 accumulation)."""
-        outs = [ttnn.linear(h, w, dtype=ttnn.bfloat16, compute_kernel_config=self.lm_compute) for w in self.lm_w]
+        """``[1, 1, T, H]`` bf16 -> ``[1, 1, T, vocab]`` bf16 (fp32 accumulation); on a mesh the column
+        blocks are all-gathered over the TP columns into the natural vocab order."""
+        outs = [lin(h, dtype=ttnn.bfloat16, compute_kernel_config=self.lm_compute) for lin in self.lm_lin]
         if len(outs) == 1:
-            return outs[0]
-        out = ttnn.concat(outs, dim=-1)
-        for t in outs:
-            ttnn.deallocate(t)
+            out = outs[0]
+        else:
+            out = ttnn.concat(outs, dim=-1)
+            for t in outs:
+                ttnn.deallocate(t)
+        if self.mesh.cols > 1:
+            full = self.mesh.all_gather_cols(out, dim=-1)
+            ttnn.deallocate(out)
+            out = full
         return out
 
     def greedy(self, logits: ttnn.Tensor) -> ttnn.Tensor:
