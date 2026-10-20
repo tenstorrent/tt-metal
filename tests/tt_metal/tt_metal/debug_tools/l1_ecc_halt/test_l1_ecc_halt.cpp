@@ -122,6 +122,8 @@ TEST_F(L1EccHaltTest, EmulatedHaltIsReported) {
     distributed::EnqueueMeshWorkload(cq, workload, false);
     expect_halt_reported_by([&] { distributed::Finish(cq); });
     EXPECT_TRUE(MetalContext::instance().l1_ecc_halt_detected());
+    // A retry after the caught error must not return as if the work had completed.
+    EXPECT_THROW(distributed::Finish(cq), std::runtime_error);
 }
 
 // The L1 address is (row * 32 + bank) * 16. Banks 16-31 are in the second last-error word.
