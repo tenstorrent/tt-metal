@@ -17,6 +17,7 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.demos.glm53_flash.tt.mesh import GLMMesh, interleave_blocks, single_chip
 
 
 def _compute_config(device, fidelity=ttnn.MathFidelity.HiFi2):
@@ -36,27 +37,35 @@ class TtClampedSwiGLU(LightweightModule):
         *,
         weight_dtype=ttnn.bfloat8_b,
         activation_dtype=ttnn.bfloat16,
+        mesh: GLMMesh | None = None,
     ):
+        """Tensor-parallel over the mesh columns (``mesh.tp``): chip ``c`` keeps the ``c``-th slice of
+        the intermediate (``[gate_c | up_c]`` of ``w13``, rows ``c`` of ``w2``) and ``forward`` returns
+        the all-reduced result (or the TP partial with ``reduce=False``, for callers that fold more
+        partials in before one collective)."""
         self.device = device
+        self.mesh = mesh if mesh is not None else single_chip(device)
         self.limit = float(swiglu_limit)
         self.activation_dtype = activation_dtype
         self.hidden = gate_proj.shape[1]
         self.intermediate = gate_proj.shape[0]
         assert up_proj.shape == gate_proj.shape and tuple(down_proj.shape) == (self.hidden, self.intermediate)
-        # fused [H, 2I]: gate columns first, then up
-        w13 = torch.cat([gate_proj.t(), up_proj.t()], dim=-1).contiguous()
-        self.w13 = ttnn.from_torch(w13, dtype=weight_dtype, layout=ttnn.TILE_LAYOUT, device=device)
-        self.w2 = ttnn.from_torch(
-            down_proj.t().contiguous(), dtype=weight_dtype, layout=ttnn.TILE_LAYOUT, device=device
-        )
+        tp = self.mesh.tp
+        assert self.intermediate % (tp * 32) == 0, (self.intermediate, tp)
+        self.intermediate_local = self.intermediate // tp
+        # fused [H, 2I] in tp blocks of [gate_c | up_c] so a plain column split hands each chip its pair
+        w13 = interleave_blocks([gate_proj.t(), up_proj.t()], tp, dim=-1)
+        self.w13 = self.mesh.upload(w13, weight_dtype, cols=-1)
+        self.w2 = self.mesh.upload(down_proj.t(), weight_dtype, cols=-2)
         self.compute = _compute_config(device)
 
-    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        """x: [1, 1, T, H] -> [1, 1, T, H]."""
+    def forward(self, x: ttnn.Tensor, *, reduce: bool = True) -> ttnn.Tensor:
+        """x: [1, 1, T, H] (replicated over the TP group) -> [1, 1, T, H] (TP partial if not ``reduce``)."""
         T = x.shape[-2]
+        I = self.intermediate_local
         gu = ttnn.linear(x, self.w13, dtype=self.activation_dtype, compute_kernel_config=self.compute)
-        gate = ttnn.slice(gu, [0, 0, 0, 0], [1, 1, T, self.intermediate])
-        up = ttnn.slice(gu, [0, 0, 0, self.intermediate], [1, 1, T, 2 * self.intermediate])
+        gate = ttnn.slice(gu, [0, 0, 0, 0], [1, 1, T, I])
+        up = ttnn.slice(gu, [0, 0, 0, I], [1, 1, T, 2 * I])
         ttnn.deallocate(gu)
         gate = ttnn.clamp(gate, min=None, max=self.limit, output_tensor=gate)
         up = ttnn.clamp(up, min=-self.limit, max=self.limit, output_tensor=up)
@@ -66,4 +75,6 @@ class TtClampedSwiGLU(LightweightModule):
         ttnn.deallocate(up)
         y = ttnn.linear(h, self.w2, dtype=self.activation_dtype, compute_kernel_config=self.compute)
         ttnn.deallocate(h)
+        if reduce:
+            y = self.mesh.all_reduce_cols(y)
         return y

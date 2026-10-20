@@ -28,6 +28,7 @@ from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState
 from models.demos.glm53_flash.tt.config import GLM53FlashConfig
 from models.demos.glm53_flash.tt.dsa import TtDSA, TtLatentCache
 from models.demos.glm53_flash.tt.kda import TtKDA
+from models.demos.glm53_flash.tt.mesh import GLMMesh, single_chip
 from models.demos.glm53_flash.tt.mhc import build_mhc
 from models.demos.glm53_flash.tt.mlp import TtClampedSwiGLU
 from models.demos.glm53_flash.tt.moe import TtMoE
@@ -55,10 +56,14 @@ class TtDecoderLayer(LightweightModule):
         *,
         weight_cache_path: Path | None = None,
         weight_dtype=ttnn.bfloat8_b,
+        mesh: GLMMesh | None = None,
     ):
         """``state_dict``: raw checkpoint tensors of ``model.language_model.layers.{i}.`` with the
-        prefix stripped and the fp8 groups dequantized (``reference/checkpoint.load_layer_raw``)."""
+        prefix stripped and the fp8 groups dequantized (``reference/checkpoint.load_layer_raw``).
+        ``mesh`` (``tt/mesh.py``): the multi-chip placement; the hyper-connections and norms are
+        replicated, the sublayers are tensor-parallel over the columns."""
         self.device = device
+        self.mesh = mesh if mesh is not None else single_chip(device)
         self.cfg = cfg
         self.layer_idx = layer_idx
         self.is_kda = cfg.is_kda(layer_idx)
@@ -89,12 +94,13 @@ class TtDecoderLayer(LightweightModule):
                 layer_idx=layer_idx,
                 weight_cache_path=weight_cache_path,
                 weight_dtype=weight_dtype,
+                mesh=self.mesh,
             )
         else:
-            self.attn = TtDSA(device, cfg, attn_sd, layer_idx=layer_idx, weight_dtype=weight_dtype)
+            self.attn = TtDSA(device, cfg, attn_sd, layer_idx=layer_idx, weight_dtype=weight_dtype, mesh=self.mesh)
         mlp_sd = _strip(sd, "mlp.")
         if self.is_moe:
-            self.mlp = TtMoE(device, cfg, mlp_sd, weight_dtype=weight_dtype)
+            self.mlp = TtMoE(device, cfg, mlp_sd, weight_dtype=weight_dtype, mesh=self.mesh)
         else:
             self.mlp = TtClampedSwiGLU(
                 device,
@@ -103,6 +109,7 @@ class TtDecoderLayer(LightweightModule):
                 mlp_sd["down_proj.weight"],
                 cfg.swiglu_limit,
                 weight_dtype=weight_dtype,
+                mesh=self.mesh,
             )
         self.norm_compute = ttnn.init_device_compute_kernel_config(
             device.arch(),

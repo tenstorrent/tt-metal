@@ -38,6 +38,7 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.glm53_flash.tt.config import GLM53FlashConfig
 from models.demos.glm53_flash.tt.indexer import TtDSAIndexer, TtIndexCache, height_shard_rows
+from models.demos.glm53_flash.tt.mesh import GLMMesh, single_chip
 
 TILE = 32
 CORES_PER_USER_DECODE = 4
@@ -57,13 +58,15 @@ def _upload(device, t: torch.Tensor, dtype, layout=ttnn.TILE_LAYOUT, memory_conf
     return ttnn.from_torch(t.contiguous(), dtype=dtype, layout=layout, device=device, memory_config=memory_config)
 
 
-def decode_position_tensors(device, host_positions: list[int], kpool: int):
-    """(positions, positions // kpool, positions % kpool) as [B] int32 ROW_MAJOR device tensors."""
+def decode_position_tensors(device, host_positions: list[int], kpool: int, mesh: GLMMesh | None = None):
+    """(positions, positions // kpool, positions % kpool) as [B] int32 ROW_MAJOR device tensors
+    (row-sharded over a multi-row ``mesh``: ``host_positions`` then lists ``rows * B`` entries)."""
 
     def up(vals):
-        return ttnn.from_torch(
-            torch.tensor(vals, dtype=torch.int32), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
-        )
+        t = torch.tensor(vals, dtype=torch.int32)
+        if mesh is not None and mesh.rows > 1:
+            return mesh.upload(t, ttnn.int32, rows=0, layout=ttnn.ROW_MAJOR_LAYOUT)
+        return ttnn.from_torch(t, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
 
     return up(host_positions), up([p // kpool for p in host_positions]), up([p % kpool for p in host_positions])
 
@@ -149,32 +152,44 @@ class TtDSA(LightweightModule):
         *,
         layer_idx: int,
         weight_dtype=ttnn.bfloat8_b,
+        mesh: GLMMesh | None = None,
     ):
-        """``attn_state_dict``: raw checkpoint tensors of ``self_attn.`` (prefix stripped, fp8 dequantized)."""
+        """``attn_state_dict``: raw checkpoint tensors of ``self_attn.`` (prefix stripped, fp8 dequantized).
+
+        On a mesh the heads are split over the columns (``mesh.tp``, ``self.H`` = local heads): the
+        latent stems (q_a, kv_a, their norms) and the indexer are replicated, q_b / kv_b / o_proj are
+        head-sharded, the latent cache and the pooled-key index are replicated across the columns
+        (Phase-2 first step; the user-partitioned cache comes next), and the output projection is
+        all-reduced over the columns."""
         self.device = device
+        self.mesh = mesh if mesh is not None else single_chip(device)
+        tp = self.mesh.tp
         self.cfg = cfg
         self.layer_idx = layer_idx
         H, Dq, Dv, L = cfg.num_attention_heads, cfg.qk_head_dim, cfg.v_head_dim, cfg.kv_lora_rank
-        self.H, self.Dq, self.Dv, self.L = H, Dq, Dv, L
+        assert H % tp == 0, (H, tp)
+        self.H_total = H
+        self.H, self.Dq, self.Dv, self.L = H // tp, Dq, Dv, L
         self.scale = cfg.mla_softmax_scale
         sd = attn_state_dict
-        self.w_qa = _upload(device, sd["q_a_proj.weight"].t(), weight_dtype)  # [4096,1536]
-        self.qa_norm = _upload(device, sd["q_a_layernorm.weight"].float().reshape(1, 1, 1, -1), ttnn.bfloat16)
-        self.w_qb = _upload(device, sd["q_b_proj.weight"].t(), weight_dtype)  # [1536, H*256]
-        self.w_kva = _upload(device, sd["kv_a_proj_with_mqa.weight"].t(), weight_dtype)  # [4096, 512]
-        self.kva_norm = _upload(device, sd["kv_a_layernorm.weight"].float().reshape(1, 1, 1, -1), ttnn.bfloat16)
+        up = self.mesh.upload
+        self.w_qa = up(sd["q_a_proj.weight"].t(), weight_dtype)  # [4096,1536]
+        self.qa_norm = up(sd["q_a_layernorm.weight"].float().reshape(1, 1, 1, -1), ttnn.bfloat16)
+        self.w_qb = up(sd["q_b_proj.weight"].t(), weight_dtype, cols=-1)  # [1536, H*256] head-major
+        self.w_kva = up(sd["kv_a_proj_with_mqa.weight"].t(), weight_dtype)  # [4096, 512]
+        self.kva_norm = up(sd["kv_a_layernorm.weight"].float().reshape(1, 1, 1, -1), ttnn.bfloat16)
         wkb = sd["kv_b_proj.weight"].reshape(H, Dq + Dv, L)  # [H, 512, L]
         wkb1 = wkb[:, :Dq, :]  # k_nope[h] = c @ wkb1[h]^T   -> [H, 256, L]
         wkb2 = wkb[:, Dq:, :]  # v[h]      = c @ wkb2[h]^T   -> [H, 256, L]
         # prefill: K = c @ Wk^T for all heads at once: [T, L] @ [L, H*256]; same for V
-        self.w_k_all = _upload(
-            device, wkb1.transpose(0, 1).reshape(Dq, H, L).permute(2, 1, 0).reshape(L, H * Dq), weight_dtype
+        self.w_k_all = up(
+            wkb1.transpose(0, 1).reshape(Dq, H, L).permute(2, 1, 0).reshape(L, H * Dq), weight_dtype, cols=-1
         )
-        self.w_v_all = _upload(device, wkb2.permute(2, 0, 1).reshape(L, H * Dv), weight_dtype)
+        self.w_v_all = up(wkb2.permute(2, 0, 1).reshape(L, H * Dv), weight_dtype, cols=-1)
         # decode (absorbed): per-head [H, 256, L] for q -> latent, and [H, L, 256] for latent -> v space
-        self.w_absorb_q = _upload(device, wkb1.reshape(1, H, Dq, L), weight_dtype)
-        self.w_absorb_o = _upload(device, wkb2.transpose(1, 2).reshape(1, H, L, Dv), weight_dtype)
-        self.w_o = _upload(device, sd["o_proj.weight"].t(), weight_dtype)  # [H*256, 4096]
+        self.w_absorb_q = up(wkb1.reshape(1, H, Dq, L), weight_dtype, cols=1)
+        self.w_absorb_o = up(wkb2.transpose(1, 2).reshape(1, H, L, Dv), weight_dtype, cols=1)
+        self.w_o = up(sd["o_proj.weight"].t(), weight_dtype, cols=-2)  # [H*256, 4096] row-parallel
         self.indexer = TtDSAIndexer(
             device, cfg, {k[len("indexer.") :]: v for k, v in sd.items() if k.startswith("indexer.")}
         )
@@ -244,7 +259,8 @@ class TtDSA(LightweightModule):
         return ttnn.reshape(ttnn.transpose(o, 1, 2), [1, 1, T, self.H * self.Dv])
 
     def _o_proj(self, o_heads: ttnn.Tensor) -> ttnn.Tensor:
-        return ttnn.linear(o_heads, self.w_o, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)
+        y = ttnn.linear(o_heads, self.w_o, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)
+        return self.mesh.all_reduce_cols(y)  # TP partial -> replicated over the row's columns
 
     def _dense_attention(self, q: ttnn.Tensor, c: ttnn.Tensor) -> ttnn.Tensor:
         """Causal attention of q [1,1,T,H*Dq] over the latent c [1,1,T,L] (K/V materialized);

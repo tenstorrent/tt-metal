@@ -34,6 +34,7 @@ from models.demos.deepseek_v3_d_p.tt.kda.config import KDAProgramConfig
 from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState, ttKDA
 from models.demos.deepseek_v3_d_p.tt.kda.weights import KDAWeights, load_kda_weights
 from models.demos.glm53_flash.tt.config import GLM53FlashConfig
+from models.demos.glm53_flash.tt.mesh import GLMMesh, interleave_blocks, single_chip
 
 L2_NORM_EPS = 1e-6  # FLA l2norm: x / sqrt(sum(x^2) + 1e-6)
 
@@ -98,15 +99,25 @@ class TtKDA(LightweightModule):
         layer_idx: int,
         weight_cache_path: Path | None = None,
         weight_dtype=ttnn.bfloat8_b,
+        mesh: GLMMesh | None = None,
     ):
-        """``attn_state_dict``: the raw checkpoint tensors of ``self_attn.`` (prefix stripped)."""
+        """``attn_state_dict``: the raw checkpoint tensors of ``self_attn.`` (prefix stripped).
+
+        On a mesh the heads are split over the columns (``mesh.tp``): every projection that is
+        per head is column-sharded head-major, the state holds the local heads, the decode output
+        projection is row-parallel and all-reduced over the columns (ttKDA's prefill weights use
+        the same placement through ``tensor_parallel_axis=1``)."""
         self.device = device
+        self.mesh = mesh if mesh is not None else single_chip(device)
+        tp = self.mesh.tp
         self.cfg = cfg
         self.layer_idx = layer_idx
         self.kcfg = kda_config(cfg)
-        self.H, self.K, self.V = self.kcfg.num_heads, self.kcfg.head_k_dim, self.kcfg.head_v_dim
-        self.qkv_dim = self.kcfg.q_dim
-        self.conv_width = self.kcfg.q_dim + self.kcfg.k_dim + self.kcfg.v_dim
+        assert self.kcfg.num_heads % tp == 0, (self.kcfg.num_heads, tp)
+        self.H_total = self.kcfg.num_heads
+        self.H, self.K, self.V = self.kcfg.num_heads // tp, self.kcfg.head_k_dim, self.kcfg.head_v_dim
+        self.qkv_dim = self.kcfg.q_dim // tp  # local heads x K
+        self.conv_width = (self.kcfg.q_dim + self.kcfg.k_dim + self.kcfg.v_dim) // tp  # [q_c | k_c | v_c]
         raw = normalize_kda_state_dict(attn_state_dict, self.kcfg)
         self.weight_cache_path = weight_cache_path
         # ---- prefill (ttKDA) weights, materialized once and shared across sequence lengths
@@ -119,29 +130,30 @@ class TtKDA(LightweightModule):
             tensor_parallel_axis=1,
         )
         self._prefill_layers: dict[int, ttKDA] = {}
-        # ---- decode weights
-        self.w_qkv = _upload(
-            device,
-            torch.cat([raw["q_proj.weight"], raw["k_proj.weight"], raw["v_proj.weight"]], dim=0).t(),
+        # ---- decode weights (per-head tensors column-sharded head-major: [q_c | k_c | v_c] per chip)
+        up = self.mesh.upload
+        self.w_qkv = up(
+            interleave_blocks([raw["q_proj.weight"].t(), raw["k_proj.weight"].t(), raw["v_proj.weight"].t()], tp),
             weight_dtype,
+            cols=-1,
         )
         taps = [
-            torch.cat(
-                [raw["q_conv1d.weight"][:, 0, j], raw["k_conv1d.weight"][:, 0, j], raw["v_conv1d.weight"][:, 0, j]]
+            interleave_blocks(
+                [raw["q_conv1d.weight"][:, 0, j], raw["k_conv1d.weight"][:, 0, j], raw["v_conv1d.weight"][:, 0, j]], tp
             ).reshape(1, 1, 1, -1)
             for j in range(self.kcfg.conv_kernel_size)
         ]
-        self.taps = [_upload(device, t.float(), ttnn.bfloat16) for t in taps]
-        self.w_fa = _upload(device, raw["f_a_proj.weight"].t(), ttnn.bfloat16)
-        self.w_fb = _upload(device, raw["f_b_proj.weight"].t(), ttnn.bfloat16)
-        self.w_ga = _upload(device, raw["g_a_proj.weight"].t(), ttnn.bfloat16)
-        self.w_gb = _upload(device, raw["g_b_proj.weight"].t(), ttnn.bfloat16)
-        self.w_b = _upload(device, raw["b_proj.weight"].t(), ttnn.bfloat16)
-        a_exp = raw["A_log"].float().reshape(self.H, 1).exp().expand(self.H, self.K).reshape(1, 1, 1, -1)
-        self.a_exp = _upload(device, a_exp, ttnn.float32)
-        self.dt_bias = _upload(device, raw["dt_bias"].float().reshape(1, 1, 1, -1), ttnn.float32)
-        self.o_norm_w = _upload(device, raw["o_norm.weight"].float().reshape(1, 1, 1, -1), ttnn.bfloat16)
-        self.w_o = _upload(device, raw["o_proj.weight"].t(), weight_dtype)
+        self.taps = [up(t.float(), ttnn.bfloat16, cols=-1) for t in taps]
+        self.w_fa = up(raw["f_a_proj.weight"].t(), ttnn.bfloat16)
+        self.w_fb = up(raw["f_b_proj.weight"].t(), ttnn.bfloat16, cols=-1)
+        self.w_ga = up(raw["g_a_proj.weight"].t(), ttnn.bfloat16)
+        self.w_gb = up(raw["g_b_proj.weight"].t(), ttnn.bfloat16, cols=-1)
+        self.w_b = up(raw["b_proj.weight"].t(), ttnn.bfloat16, cols=-1)
+        a_exp = raw["A_log"].float().reshape(self.H_total, 1).exp().expand(self.H_total, self.K).reshape(1, 1, 1, -1)
+        self.a_exp = up(a_exp, ttnn.float32, cols=-1)
+        self.dt_bias = up(raw["dt_bias"].float().reshape(1, 1, 1, -1), ttnn.float32, cols=-1)
+        self.o_norm_w = up(raw["o_norm.weight"].float().reshape(1, 1, 1, -1), ttnn.bfloat16)
+        self.w_o = up(raw["o_proj.weight"].t(), weight_dtype, cols=-2)
         self.fp32 = _fp32_compute(device)
         self.hifi2 = _hifi2_compute(device)
         self.gate_lower_bound = float(self.kcfg.gate_lower_bound)
@@ -150,7 +162,9 @@ class TtKDA(LightweightModule):
     def scalar(self, value: int) -> ttnn.Tensor:
         """Cached replicated UINT32 device scalar (ttKDA's actual_start / actual_end)."""
         if value not in self._scalars:
-            self._scalars[value] = device_scalar_u32(self.device, value)
+            self._scalars[value] = self.mesh.upload(
+                torch.tensor([[[[int(value)]]]], dtype=torch.int32), ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT
+            )
         return self._scalars[value]
 
     # ------------------------------------------------------------------ state
@@ -203,9 +217,17 @@ class TtKDA(LightweightModule):
         self, x: ttnn.Tensor, state: KdaState, actual_start: ttnn.Tensor, actual_end: ttnn.Tensor | None = None
     ) -> tuple[ttnn.Tensor, KdaState]:
         """x: [1, T_phys, hidden] bf16 TILE (T_phys % 32 == 0; rows past ``actual_end`` are padding).
-        Returns y [1, T_phys, hidden] bf16 and the new state (the old one is only read)."""
+        Returns y [1, T_phys, hidden] bf16 and the new state (the old one is only read).
+        Multi-row meshes are not wired yet: ttKDA runs sequence-parallel over the rows there
+        (the Phase-3 prefill engine); decode is the Phase-2 mesh path."""
+        if self.mesh.rows > 1:
+            raise NotImplementedError("KDA prefill on a multi-row mesh (sequence-parallel ttKDA) is not wired yet")
         layer = self.prefill_layer(x.shape[1])
-        return layer.forward(x, state, actual_start, actual_end)
+        y, new_state = layer.forward(x, state, actual_start, actual_end)
+        if self.mesh.tp > 1:
+            # ttKDA reduce-scatters the TP partials on the hidden dim; make the output replicated
+            y = self.mesh.all_gather_cols(y, dim=-1)
+        return y, new_state
 
     # ----------------------------------------------------------------- decode
     def decode_forward(self, x: ttnn.Tensor, state: KdaState, *, inplace: bool = True) -> tuple[ttnn.Tensor, KdaState]:
@@ -281,6 +303,7 @@ class TtKDA(LightweightModule):
         oh = ttnn.multiply(oh, gate, output_tensor=oh)
         o_flat = ttnn.typecast(ttnn.reshape(oh, [1, 1, B, H * V]), ttnn.bfloat16)
         y = ttnn.linear(o_flat, self.w_o, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)  # [1,1,B,hidden]
+        y = self.mesh.all_reduce_cols(y)  # TP partial -> replicated over the row's columns
         if inplace:
             # write the new carries back into the caller's persistent tensors so a captured decode
             # trace reads the updated state on the next replay (device-owned autoregressive state)
