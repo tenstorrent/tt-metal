@@ -168,11 +168,17 @@
             "go_msg": { "$ref": "#/$defs/region" },
             "launch": { "$ref": "#/$defs/region" },
             "launch_msg_rd_ptr": { "$ref": "#/$defs/region" },
-            "eth_fw_mailbox": { "$ref": "#/$defs/optional_region" }
+            "eth_fw_mailbox": { "$ref": "#/$defs/optional_region" },
+            "base_fw_port_status": { "$ref": "#/$defs/optional_region" },
+            "base_fw_train_status": { "$ref": "#/$defs/optional_region" },
+            "base_fw_retrain_count": { "$ref": "#/$defs/optional_region" },
+            "base_fw_rx_link_up": { "$ref": "#/$defs/optional_region" },
+            "base_fw_postcode": { "$ref": "#/$defs/optional_region" }
           },
           "required": [
             "heartbeat", "fabric_telemetry", "routing_table", "go_msg", "launch", "launch_msg_rd_ptr",
-            "eth_fw_mailbox"
+            "eth_fw_mailbox", "base_fw_port_status", "base_fw_train_status", "base_fw_retrain_count",
+            "base_fw_rx_link_up", "base_fw_postcode"
           ],
           "additionalProperties": false
         },

@@ -1226,7 +1226,12 @@ void check_archs(const json& manifest) {
             "go_msg",
             "launch",
             "launch_msg_rd_ptr",
-            "eth_fw_mailbox"}));
+            "eth_fw_mailbox",
+            "base_fw_port_status",
+            "base_fw_train_status",
+            "base_fw_retrain_count",
+            "base_fw_rx_link_up",
+            "base_fw_postcode"}));
 
     const auto expect_hal_area = [&](const char* key, HalL1MemAddrType type) {
         SCOPED_TRACE(key);
@@ -1243,6 +1248,29 @@ void check_archs(const json& manifest) {
     } else {
         EXPECT_TRUE(areas.at("eth_fw_mailbox").is_null());
     }
+
+    // Base firmware's link status words, where the HAL gives them: on Blackhole, and not on Wormhole.
+    using tt::tt_metal::FWMailboxMsg;
+    const auto expect_base_fw_word = [&](const char* key, FWMailboxMsg word) {
+        SCOPED_TRACE(key);
+        const auto& area = areas.at(key);
+        const uint32_t address = hal.get_eth_fw_mailbox_val(word);
+        EXPECT_EQ(address != 0, BaseFabricFixture::arch_ == tt::ARCH::BLACKHOLE);
+        if (address == 0) {
+            EXPECT_TRUE(area.is_null());
+            return;
+        }
+        ASSERT_TRUE(area.is_object());
+        EXPECT_EQ(keys_of(area), k_region_keys);
+        EXPECT_EQ(area.at("address").get<uint32_t>(), address);
+        EXPECT_EQ(area.at("size"), sizeof(uint32_t));
+        EXPECT_EQ(area.at("schema"), "u32");
+    };
+    expect_base_fw_word("base_fw_port_status", FWMailboxMsg::PORT_STATUS);
+    expect_base_fw_word("base_fw_train_status", FWMailboxMsg::TRAIN_STATUS);
+    expect_base_fw_word("base_fw_retrain_count", FWMailboxMsg::RETRAIN_COUNT);
+    expect_base_fw_word("base_fw_rx_link_up", FWMailboxMsg::RX_LINK_UP);
+    expect_base_fw_word("base_fw_postcode", FWMailboxMsg::POSTCODE);
 
     // Only the first of the HAL's go messages: the one active ERISC firmware uses.
     const auto& go_msg = areas.at("go_msg");
@@ -1262,6 +1290,11 @@ void check_archs(const json& manifest) {
         keys_of(heartbeat),
         (std::set<std::string>{"address", "size", "schema", "cleared_by_host", "magic", "magic_mask", "period_iters"}));
     EXPECT_EQ(heartbeat.at("size"), sizeof(uint32_t));
+    // Where base firmware has a heartbeat word, the router's heartbeat is that word, so it has no area of its own.
+    const uint32_t base_fw_heartbeat = hal.get_eth_fw_mailbox_val(FWMailboxMsg::HEARTBEAT);
+    if (base_fw_heartbeat != 0) {
+        EXPECT_EQ(heartbeat.at("address").get<uint32_t>(), base_fw_heartbeat);
+    }
 }
 
 // The stream registers are where the HAL puts them, and every register of every stream is in the HAL's register
