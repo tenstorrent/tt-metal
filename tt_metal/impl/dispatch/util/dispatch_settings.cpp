@@ -17,7 +17,7 @@
 #include "dispatch/dispatch_settings.hpp"
 #include "size_literals.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 #include <llrt/tt_cluster.hpp>
 
 namespace tt::tt_metal {
