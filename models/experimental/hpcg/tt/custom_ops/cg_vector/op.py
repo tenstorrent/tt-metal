@@ -48,14 +48,16 @@ class CgVectorOp:
         part = part if part is not None else a
         o1 = b if mode == "axpy" else a  # axpy writes over b (p = z + beta p); xr writes x (a) and r (c)
         o2 = b if mode == "dot" else c  # dot: the writer reads b
+        # the mode is a runtime argument (0 dot, 1 axpy, 2 xr): one kernel binary for all three modes
+        mcode = {"dot": 0, "axpy": 1, "xr": 2}[mode]
         # reader / writer: common arguments (a core derives its tile range from its logical position); the compute
         # kernel keeps its per-core tile count
-        reader_common = [x.buffer_address() for x in (a, b, c, d, s1, s2)] + [base, rem, g.x]
-        writer_common = [x.buffer_address() for x in (o1, o2, part)] + [base, rem, g.x, d.buffer_address()]
+        reader_common = [x.buffer_address() for x in (a, b, c, d, s1, s2)] + [base, rem, g.x, mcode]
+        writer_common = [x.buffer_address() for x in (o1, o2, part)] + [base, rem, g.x, d.buffer_address(), mcode]
         ca = ttnn.RuntimeArgs()
         for i in range(nc):
-            ca[i % g.x][i // g.x] = [base + (1 if i < rem else 0)]
-        defs = [(k, str(v)) for k, v in CB.items()] + [("MODE_" + mode.upper(), "1"), ("VB", str(VB))]
+            ca[i % g.x][i // g.x] = [base + (1 if i < rem else 0), mcode]
+        defs = [(k, str(v)) for k, v in CB.items()] + [("VB", str(VB))]
 
         def accessors(*ts):
             return [x for tt in ts for x in ttnn.TensorAccessorArgs(tt).get_compile_time_args()]

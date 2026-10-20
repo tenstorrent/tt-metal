@@ -13,6 +13,8 @@ void kernel_main() {
     const uint32_t base = get_common_arg_val<uint32_t>(3), rem = get_common_arg_val<uint32_t>(4);
     const uint32_t core = get_absolute_logical_y() * get_common_arg_val<uint32_t>(5) + get_absolute_logical_x();
     const uint32_t nt = base + (core < rem), t0 = core * base + (core < rem ? core : rem);
+    const uint32_t mode = get_common_arg_val<uint32_t>(7);  // 0 dot, 1 axpy, 2 xr (one binary for all three)
+    const bool dot = mode == 0, xr = mode == 2;
     constexpr auto a1 = TensorAccessorArgs<0>();
     constexpr auto a2 = TensorAccessorArgs<a1.next_compile_time_args_offset()>();
     constexpr auto ap = TensorAccessorArgs<a2.next_compile_time_args_offset()>();
@@ -25,23 +27,22 @@ void kernel_main() {
     (void)O2;
     (void)PART;
     (void)Dv;
-#if defined(MODE_AXPY) || defined(MODE_XR)
-    for (uint32_t t = t0; t < t0 + nt; ++t) {
-        cb_wait_front(CB_OUT, 1);
-        noc_async_write(get_read_ptr(CB_OUT), O1.get_noc_addr(t), 4096);
-#ifdef MODE_XR
-        cb_wait_front(CB_OUT2, 1);
-        noc_async_write(get_read_ptr(CB_OUT2), O2.get_noc_addr(t), 4096);
-#endif
-        noc_async_write_barrier();
-        cb_pop_front(CB_OUT, 1);
-#ifdef MODE_XR
-        cb_pop_front(CB_OUT2, 1);
-#endif
+    if (!dot) {
+        for (uint32_t t = t0; t < t0 + nt; ++t) {
+            cb_wait_front(CB_OUT, 1);
+            noc_async_write(get_read_ptr(CB_OUT), O1.get_noc_addr(t), 4096);
+            if (xr) {
+                cb_wait_front(CB_OUT2, 1);
+                noc_async_write(get_read_ptr(CB_OUT2), O2.get_noc_addr(t), 4096);
+            }
+            noc_async_write_barrier();
+            cb_pop_front(CB_OUT, 1);
+            if (xr) {
+                cb_pop_front(CB_OUT2, 1);
+            }
+        }
     }
-#endif
-#ifdef MODE_DOT
-    for (uint32_t t = t0; t < t0 + nt; t += VB) {  // DOT: b tiles (O2 = b), batched like the reader's
+    for (uint32_t t = t0; dot && t < t0 + nt; t += VB) {  // DOT: b tiles (O2 = b), batched like the reader's
         const uint32_t n = (t0 + nt - t) < VB ? (t0 + nt - t) : VB;
         cb_reserve_back(CB_B, n);
         const uint32_t pb = get_write_ptr(CB_B);
@@ -51,22 +52,17 @@ void kernel_main() {
         noc_async_read_barrier();
         cb_push_back(CB_B, n);
     }
-#endif
-#if defined(MODE_DOT) || defined(MODE_XR)
-#ifdef MODE_DOT
-    constexpr uint32_t cbp = CB_OUT;
-#else
-    constexpr uint32_t cbp = CB_OUT3;
-#endif
-    // this core's value is element (0, 0) = word 0 of the packed tile: it goes to its own 64-byte slot of PART (the
-    // rest of the slot zeroed), so the finish step reads core-count * 64 bytes instead of one tile per core
-    cb_wait_front(cbp, 1);
-    volatile tt_l1_ptr uint32_t* w = (volatile tt_l1_ptr uint32_t*)get_read_ptr(cbp);
-    for (uint32_t i = 1; i < 16; ++i) {
-        w[i] = 0;
+    if (dot || xr) {
+        const uint32_t cbp = dot ? CB_OUT : CB_OUT3;
+        // this core's value is element (0, 0) = word 0 of the packed tile: it goes to its own 64-byte slot of PART (the
+        // rest of the slot zeroed), so the finish step reads core-count * 64 bytes instead of one tile per core
+        cb_wait_front(cbp, 1);
+        volatile tt_l1_ptr uint32_t* w = (volatile tt_l1_ptr uint32_t*)get_read_ptr(cbp);
+        for (uint32_t i = 1; i < 16; ++i) {
+            w[i] = 0;
+        }
+        noc_async_write(get_read_ptr(cbp), PART.get_noc_addr((core * 64) / 4096) + (core * 64) % 4096, 64);
+        noc_async_write_barrier();
+        cb_pop_front(cbp, 1);
     }
-    noc_async_write(get_read_ptr(cbp), PART.get_noc_addr((core * 64) / 4096) + (core * 64) % 4096, 64);
-    noc_async_write_barrier();
-    cb_pop_front(cbp, 1);
-#endif
 }

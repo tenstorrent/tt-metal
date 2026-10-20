@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Fused CG vector kernels, reader (BRISC). Each core owns tiles [t0, t0 + nt) of the vectors.
+// The mode is a runtime argument (MODE_DOT 0 / MODE_AXPY 1 / MODE_XR 2), so one binary serves all three:
 // MODE_DOT : A = a, B = b                         (partial a.b per core)
 // MODE_AXPY: A = a, B = b, S = s1 / s2            (w = a + S*b, written over b: p = z + beta*p)
 // MODE_XR  : A = x, B = p, C = r, D = Ap, S = s1 / s2   (x += S*p, r -= S*Ap, partial r.r; S = alpha)
@@ -18,6 +19,8 @@ void kernel_main() {
     const uint32_t base = get_common_arg_val<uint32_t>(6), rem = get_common_arg_val<uint32_t>(7);
     const uint32_t i = get_absolute_logical_y() * get_common_arg_val<uint32_t>(8) + get_absolute_logical_x();
     const uint32_t nt = base + (i < rem), t0 = i * base + (i < rem ? i : rem);
+    const uint32_t mode = get_common_arg_val<uint32_t>(9);
+    const bool dot = mode == 0, xr = mode == 2;
     constexpr auto aa = TensorAccessorArgs<0>();
     constexpr auto ab = TensorAccessorArgs<aa.next_compile_time_args_offset()>();
     constexpr auto ac = TensorAccessorArgs<ab.next_compile_time_args_offset()>();
@@ -35,8 +38,7 @@ void kernel_main() {
     (void)D;
     (void)S1;
     (void)S2;
-#if defined(MODE_AXPY) || defined(MODE_XR)
-    {  // S = s1 / s2 (element (0, 0) of two 1x1 tiles = word 0 of their pages)
+    if (!dot) {  // S = s1 / s2 (element (0, 0) of two 1x1 tiles = word 0 of their pages)
         cb_reserve_back(CB_S, 1);
         const uint32_t sb = get_write_ptr(CB_S);
         noc_async_read(S1.get_noc_addr(0), sb, 64);
@@ -51,41 +53,40 @@ void kernel_main() {
         }
         cb_push_back(CB_S, 1);
     }
-#endif
     // VB tiles per batch: all of a batch's reads are in flight together (one wait per batch, not per tile)
     for (uint32_t t = t0; t < t0 + nt; t += VB) {
         const uint32_t n = (t0 + nt - t) < VB ? (t0 + nt - t) : VB;
         cb_reserve_back(CB_A, n);
-#ifndef MODE_DOT
-        cb_reserve_back(CB_B, n);
-#endif
+        if (!dot) {
+            cb_reserve_back(CB_B, n);
+        }
+        if (xr) {
+            cb_reserve_back(CB_C, n);
+            cb_reserve_back(CB_D, n);
+        }
         const uint32_t pa = get_write_ptr(CB_A), pb = get_write_ptr(CB_B);
-        (void)pb;
-#ifdef MODE_XR
-        cb_reserve_back(CB_C, n);
-        cb_reserve_back(CB_D, n);
         const uint32_t pc = get_write_ptr(CB_C), pd = get_write_ptr(CB_D);
-#endif
 
         for (uint32_t i = 0; i < n; ++i) {
             noc_async_read(A.get_noc_addr(t + i), pa + i * 4096, 4096);
-#ifndef MODE_DOT  // DOT: the writer reads b (one data-movement processor alone tops out near 420 GB/s chip-wide);
-                  // AXPY / XR keep all reads here: their writer also writes, and sharing measured slower
-            noc_async_read(B.get_noc_addr(t + i), pb + i * 4096, 4096);
-#endif
-#ifdef MODE_XR
-            noc_async_read(C.get_noc_addr(t + i), pc + i * 4096, 4096);
-            noc_async_read(D.get_noc_addr(t + i), pd + i * 4096, 4096);
-#endif
+            // DOT: the writer reads b (one data-movement processor alone tops out near 420 GB/s chip-wide);
+            // AXPY / XR keep all reads here: their writer also writes, and sharing measured slower
+            if (!dot) {
+                noc_async_read(B.get_noc_addr(t + i), pb + i * 4096, 4096);
+            }
+            if (xr) {
+                noc_async_read(C.get_noc_addr(t + i), pc + i * 4096, 4096);
+                noc_async_read(D.get_noc_addr(t + i), pd + i * 4096, 4096);
+            }
         }
         noc_async_read_barrier();
         cb_push_back(CB_A, n);
-#ifndef MODE_DOT
-        cb_push_back(CB_B, n);
-#endif
-#ifdef MODE_XR
-        cb_push_back(CB_C, n);
-        cb_push_back(CB_D, n);
-#endif
+        if (!dot) {
+            cb_push_back(CB_B, n);
+        }
+        if (xr) {
+            cb_push_back(CB_C, n);
+            cb_push_back(CB_D, n);
+        }
     }
 }
