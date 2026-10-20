@@ -408,6 +408,7 @@ tt::tt_metal::ProgramDescriptor build_all_gather_async_minimal_default_program_d
     auto num_header_only_channels = 0;
     size_t buffer_size_bytes_full_size_channel = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(*mesh_device);
     auto mux_kernel_config = tt::tt_fabric::FabricMuxConfig(
+        *mesh_device,
         num_full_size_channels,
         num_header_only_channels,
         num_buffers_full_size_channels,
@@ -553,11 +554,11 @@ tt::tt_metal::ProgramDescriptor build_all_gather_async_minimal_default_program_d
                     if (dir) {  // forward
                         const auto dst_node_id = mesh_device->get_fabric_node_id(backward_coord.value());
                         mux_rt_args = mux_kernel_config.get_fabric_mux_run_time_args<tt::tt_metal::ProgramDescriptor>(
-                            src_node_id, dst_node_id, link, desc, mux_logical_core);
+                            *mesh_device, src_node_id, dst_node_id, link, desc, mux_logical_core);
                     } else {
                         const auto dst_node_id = mesh_device->get_fabric_node_id(forward_coord.value());
                         mux_rt_args = mux_kernel_config.get_fabric_mux_run_time_args<tt::tt_metal::ProgramDescriptor>(
-                            src_node_id, dst_node_id, link, desc, mux_logical_core);
+                            *mesh_device, src_node_id, dst_node_id, link, desc, mux_logical_core);
                     }
                     desc.kernels[mux_kernel_index.value()].runtime_args.emplace_back(
                         mux_logical_core, std::move(mux_rt_args));
@@ -1094,6 +1095,7 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
     auto num_header_only_channels = 0;
     size_t buffer_size_bytes_full_size_channel = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(*mesh_device);
     auto mux_kernel_config = tt::tt_fabric::FabricMuxConfig(
+        *mesh_device,
         num_full_size_channels,
         num_header_only_channels,
         num_buffers_full_size_channels,
@@ -1222,11 +1224,11 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
                     if (dir) {  // forward
                         const auto dst_node_id = mesh_device->get_fabric_node_id(backward_coord.value());
                         mux_rt_args = mux_kernel_config.get_fabric_mux_run_time_args(
-                            src_node_id, dst_node_id, link, program, {mux_logical_core});
+                            *mesh_device, src_node_id, dst_node_id, link, program, {mux_logical_core});
                     } else {
                         const auto dst_node_id = mesh_device->get_fabric_node_id(forward_coord.value());
                         mux_rt_args = mux_kernel_config.get_fabric_mux_run_time_args(
-                            src_node_id, dst_node_id, link, program, {mux_logical_core});
+                            *mesh_device, src_node_id, dst_node_id, link, program, {mux_logical_core});
                     }
                     tt::tt_metal::SetRuntimeArgs(program, mux_kernel_id, {mux_logical_core}, mux_rt_args);
                 }
