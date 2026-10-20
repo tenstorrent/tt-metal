@@ -33,7 +33,7 @@ from safetensors import safe_open
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config, kimi_k3_kda_config
 from models.demos.deepseek_v3_d_p.tests.kda.checkpoint_utils import load_kda_layer_state_dict, resolve_model_root
 from models.demos.deepseek_v3_d_p.tt.kda.config import KIMI_K3_PROJECTION_DTYPE
-from models.demos.deepseek_v3_d_p.tt.kda.weights import PROJECTION_ARTIFACTS as KDA_PROJECTION_ARTIFACTS
+from models.demos.deepseek_v3_d_p.tt.kda.weights import current_cache_globs as kda_current_cache_globs
 
 # What each TT module reads out of a layer's state dict. Kept here rather than inline so the map
 # from checkpoint name to TT name is in one place and can be read against the modules.
@@ -259,24 +259,26 @@ def _marker_exists(root: Path | None, layer_idx: int) -> bool:
     return root is not None and _marker(root, layer_idx).is_file()
 
 
-def _kda_projections_cached(root: Path, layer_idx: int) -> bool:
-    """Whether every KDA projection tensorbin of this layer is stored at `KIMI_K3_PROJECTION_DTYPE`."""
+def _kda_cache_current(root: Path, layer_idx: int) -> bool:
+    """Whether every KDA tensorbin of this layer is in the current KDA cache format, projections at
+    `KIMI_K3_PROJECTION_DTYPE`."""
     return all(
-        any(root.glob(f"layer_{layer_idx}.kda.{name}.*_dtype_{KIMI_K3_PROJECTION_DTYPE.name}_*.tensorbin"))
-        for name in KDA_PROJECTION_ARTIFACTS
+        any(root.glob(pattern))
+        for pattern in kda_current_cache_globs(f"layer_{layer_idx}.kda", kimi_k3_kda_config(), KIMI_K3_PROJECTION_DTYPE)
     )
 
 
 def layer_is_stale(root: Path | None, layer_idx: int, model_cfg: type = KimiK3Config) -> bool:
-    """A marked KDA layer whose projections are not all at `KIMI_K3_PROJECTION_DTYPE`.
+    """A marked KDA layer whose KDA tensorbins are not all in the current KDA cache format.
 
-    Its marker predates the projections leaving bfloat16, or a rebuild of them was interrupted. Every
-    other tensorbin of the layer is still good, so only the KDA projections need rebuilding.
+    Its marker predates a KDA cache format change (projections leaving bfloat16, FP32 decay terms), or
+    a rebuild was interrupted. Every other tensorbin of the layer is still good, so only the KDA
+    weights need rebuilding.
     """
     return (
         _marker_exists(root, layer_idx)
         and layer_idx not in model_cfg.mla_layer_ids()
-        and not _kda_projections_cached(root, layer_idx)
+        and not _kda_cache_current(root, layer_idx)
     )
 
 
@@ -308,9 +310,9 @@ def load_layer_state_dict_cached(
         logger.info(f"layer {layer_idx}: cache hit, not opening the checkpoint")
         return {}
     if layer_is_stale(root, layer_idx, model_cfg):
-        # Rebuild only the KDA projections, from this layer's attention weights; every other
+        # Rebuild only the KDA weights, from this layer's attention weights; every other
         # component still loads from its tensorbins.
-        logger.info(f"layer {layer_idx}: cache hit, rebuilding its KDA projections")
+        logger.info(f"layer {layer_idx}: cache hit, rebuilding its KDA weights")
         return {"kda_weights": load_kda_layer_state_dict(Path(checkpoint_dir), layer_idx, kimi_k3_kda_config())}
     state_dict = load_layer_state_dict(checkpoint_dir, layer_idx, model_cfg=model_cfg)
     if layer_idx >= model_cfg.NUM_DENSE_LAYERS:

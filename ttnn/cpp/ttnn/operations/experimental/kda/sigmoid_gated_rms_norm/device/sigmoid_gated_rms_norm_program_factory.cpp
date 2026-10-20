@@ -51,12 +51,9 @@ ttnn::device_operation::ProgramArtifacts SigmoidGatedRmsNormProgramFactory::crea
     const m2::DFBSpecName GATE_DFB{"gate"};
     const m2::DFBSpecName WEIGHT_DFB{"weight"};
     const m2::DFBSpecName TMP_DFB{"tmp"};
-    const m2::DFBSpecName STATS_DFB{"stats"};
     const m2::DFBSpecName INV_DFB{"inv"};
-    const m2::DFBSpecName NORM_DFB{"norm"};
     const m2::DFBSpecName OUT_DFB{"out"};
-    const m2::DFBSpecName SCALER_DFB{"scaler"};
-    const m2::DFBSpecName EPS_DFB{"epsilon"};
+    const m2::DFBSpecName ONES_DFB{"ones"};
 
     const m2::TensorParamName INPUT{"input"};
     const m2::TensorParamName GATE{"gate"};
@@ -80,16 +77,16 @@ ttnn::device_operation::ProgramArtifacts SigmoidGatedRmsNormProgramFactory::crea
         make_dfb(GATE_DFB, 2 * Vt, tt::DataFormat::Float16_b),
         make_dfb(WEIGHT_DFB, Vt, tt::DataFormat::Float16_b),
         make_dfb(TMP_DFB, Vt, tt::DataFormat::Float32),
-        make_dfb(STATS_DFB, 1, tt::DataFormat::Float32),
         make_dfb(INV_DFB, 1, tt::DataFormat::Float32),
-        make_dfb(NORM_DFB, Vt, tt::DataFormat::Float32),
         make_dfb(OUT_DFB, 2 * Vt, output_format),
-        make_dfb(SCALER_DFB, 1, tt::DataFormat::Float32),
-        make_dfb(EPS_DFB, 1, tt::DataFormat::Float16_b),
+        make_dfb(ONES_DFB, 1, tt::DataFormat::Float16_b),
     };
 
     uint32_t eps_bits = 0;
     std::memcpy(&eps_bits, &attrs.epsilon, sizeof(float));
+    const float inverse_width = 1.0F / static_cast<float>(attrs.value_dim);
+    uint32_t inverse_width_bits = 0;
+    std::memcpy(&inverse_width_bits, &inverse_width, sizeof(float));
 
     m2::KernelSpec reader{
         .unique_id = READER,
@@ -101,8 +98,7 @@ ttnn::device_operation::ProgramArtifacts SigmoidGatedRmsNormProgramFactory::crea
                 m2::DFBBinding{X_DFB, "x", m2::DFBEndpointType::PRODUCER},
                 m2::DFBBinding{GATE_DFB, "gate", m2::DFBEndpointType::PRODUCER},
                 m2::DFBBinding{WEIGHT_DFB, "weight", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{SCALER_DFB, "scaler", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{EPS_DFB, "epsilon", m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{ONES_DFB, "ones", m2::DFBEndpointType::PRODUCER},
             },
         .tensor_bindings =
             {
@@ -114,7 +110,6 @@ ttnn::device_operation::ProgramArtifacts SigmoidGatedRmsNormProgramFactory::crea
             {{"Vt", Vt},
              {"H", attrs.num_heads},
              {"Mt", Mt},
-             {"epsilon_bits", eps_bits},
              {"gate_row_tiles", static_cast<uint32_t>(in.gate.padded_shape()[-1]) / TILE_WIDTH},
              {"gate_offset_tiles", attrs.gate_column_offset / TILE_WIDTH}},
         .runtime_arg_schema = {.runtime_arg_names = {"wi_start", "wi_count"}},
@@ -135,13 +130,12 @@ ttnn::device_operation::ProgramArtifacts SigmoidGatedRmsNormProgramFactory::crea
 
     auto compute_hw = ttnn::to_compute_hardware_config(attrs.compute_kernel_config);
     auto& unpack_modes = compute_hw.unpack_modes;
+    // x^2 feeds the row-sum matmul through a source register; x and inv reach the SFPU products through DST
+    // losslessly (an FP32 x or inv is unpacked to DST; a BF16 x is exact either way).
     unpack_modes[TMP_DFB] = UnpackMode::UnpackToSrc;
-    unpack_modes[STATS_DFB] = UnpackMode::UnpackToSrc;
-    unpack_modes[INV_DFB] = UnpackMode::UnpackToSrc;
-    unpack_modes[NORM_DFB] = UnpackMode::UnpackToSrc;
-    unpack_modes[SCALER_DFB] = UnpackMode::UnpackToSrc;
+    unpack_modes[INV_DFB] = UnpackMode::UnpackToDest;
     if (input_format == tt::DataFormat::Float32) {
-        unpack_modes[X_DFB] = UnpackMode::UnpackToSrc;
+        unpack_modes[X_DFB] = UnpackMode::UnpackToDest;
     }
 
     m2::KernelSpec compute{
@@ -157,17 +151,12 @@ ttnn::device_operation::ProgramArtifacts SigmoidGatedRmsNormProgramFactory::crea
                 m2::DFBBinding{WEIGHT_DFB, "weight", m2::DFBEndpointType::CONSUMER},
                 m2::DFBBinding{TMP_DFB, "tmp", m2::DFBEndpointType::PRODUCER},
                 m2::DFBBinding{TMP_DFB, "tmp", m2::DFBEndpointType::CONSUMER},
-                m2::DFBBinding{STATS_DFB, "stats", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{STATS_DFB, "stats", m2::DFBEndpointType::CONSUMER},
                 m2::DFBBinding{INV_DFB, "inv", m2::DFBEndpointType::PRODUCER},
                 m2::DFBBinding{INV_DFB, "inv", m2::DFBEndpointType::CONSUMER},
-                m2::DFBBinding{NORM_DFB, "norm", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{NORM_DFB, "norm", m2::DFBEndpointType::CONSUMER},
                 m2::DFBBinding{OUT_DFB, "out", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{SCALER_DFB, "scaler", m2::DFBEndpointType::CONSUMER},
-                m2::DFBBinding{EPS_DFB, "epsilon", m2::DFBEndpointType::CONSUMER},
+                m2::DFBBinding{ONES_DFB, "ones", m2::DFBEndpointType::CONSUMER},
             },
-        .compile_time_args = {{"Vt", Vt}},
+        .compile_time_args = {{"Vt", Vt}, {"inverse_width_bits", inverse_width_bits}, {"epsilon_bits", eps_bits}},
         .runtime_arg_schema = {.runtime_arg_names = {"wi_count"}},
         .hw_config = std::move(compute_hw),
     };

@@ -220,10 +220,19 @@ def _scan_chunks(
 
 
 def pack_transform(transform: AffineTransform) -> ttnn.Tensor:
-    """Pack a FP32 transform into the BF16 [1, BH, K, K+V] rows of [A | B] that the prefix gathers."""
+    """Pack a FP32 transform into the BF16 [1, BH, K, K+V] rows of [E | B] (E = A - I) that the prefix gathers."""
     transform_a, transform_b = transform.a, transform.b
     batch_heads, key_dim = tuple(transform_a.shape)[0], tuple(transform_a.shape)[1]
     value_dim = transform_b.shape[-1]
+    # chain_affine_transforms takes the complement form; subtract I in FP32 before narrowing so E keeps its precision.
+    eye = ttnn.from_torch(
+        torch.eye(key_dim, dtype=torch.float32).expand(batch_heads, key_dim, key_dim).contiguous(),
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        device=transform_a.device(),
+        memory_config=KDA_DISTRIBUTED_WORKING_MEMORY_CONFIG,
+    )
+    transform_a = ttnn.subtract(transform_a, eye, memory_config=KDA_DISTRIBUTED_WORKING_MEMORY_CONFIG)
     # Precision boundary: FP32 composition is transported as BF16. Rounding is elementwise, so
     # packing in FP32 (in L1) and narrowing once matches narrowing each half before packing.
     packed = ttnn.concat(

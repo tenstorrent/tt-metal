@@ -74,8 +74,14 @@ def test_chain_affine_transforms_matches_reference(mesh_device, start):
     compute_config = ttnn.init_device_compute_kernel_config(
         mesh_device.arch(), math_fidelity=ttnn.MathFidelity.HiFi2, fp32_dest_acc_en=True, packer_l1_acc=False
     )
+    packed = pack_transform(AffineTransform(per_rank(a), per_rank(b)))
+    # The prefix chains the complement form [E | B], E = A - I, as packed (BF16) for each rank.
+    packed_host = [
+        ttnn.to_torch(ttnn.get_device_tensors(packed)[rank * tp_size]).reshape(_HEADS, _KEY, _KEY + _VALUE)
+        for rank in range(sp_size)
+    ]
     entry, final = distributed_prefix(
-        pack_transform(AffineTransform(per_rank(a), per_rank(b))),
+        packed,
         replicated(initial, ttnn.float32),
         sequence_parallel_axis=0,
         compute_config=compute_config,
@@ -84,19 +90,26 @@ def test_chain_affine_transforms_matches_reference(mesh_device, start):
     )
 
     first_rank = (start // _ROWS) % sp_size
-    # The op-by-op chain the kernel replaced: per rank a BF16 -> FP32 typecast, an FP32 matmul and an FP32 add.
+    # The op-by-op chain the kernel replaced: per rank a BF16 -> FP32 typecast of the packed E and B, an FP32 matmul
+    # and the FP32 adds carry + (E @ carry + B).
     working = ttnn.L1_MEMORY_CONFIG
     op_by_op_carry = replicated(initial.reshape(1, _HEADS, _KEY, _VALUE), ttnn.float32, working)
     op_by_op_entries = {}
     for step in range(sp_size):
         rank = (first_rank + step) % sp_size
         op_by_op_entries[rank] = op_by_op_carry
-        transform_a = ttnn.typecast(replicated(a[rank : rank + 1], ttnn.bfloat16, working), ttnn.float32)
-        transform_b = ttnn.typecast(replicated(b[rank : rank + 1], ttnn.bfloat16, working), ttnn.float32)
-        product = ttnn.matmul(
-            transform_a, op_by_op_carry, memory_config=working, dtype=ttnn.float32, compute_kernel_config=compute_config
+        transform_e = ttnn.typecast(
+            replicated(packed_host[rank][None, :, :, :_KEY], ttnn.bfloat16, working), ttnn.float32
         )
-        op_by_op_carry = ttnn.add(product, transform_b, memory_config=working)
+        transform_b = ttnn.typecast(
+            replicated(packed_host[rank][None, :, :, _KEY:], ttnn.bfloat16, working), ttnn.float32
+        )
+        product = ttnn.matmul(
+            transform_e, op_by_op_carry, memory_config=working, dtype=ttnn.float32, compute_kernel_config=compute_config
+        )
+        op_by_op_carry = ttnn.add(
+            op_by_op_carry, ttnn.add(product, transform_b, memory_config=working), memory_config=working
+        )
 
     carry = initial
     entries = {}
