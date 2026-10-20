@@ -91,7 +91,9 @@ def build_needle_ids(tok, n_tokens: int, depth: float) -> tuple[list[int], str]:
     """Chat-templated prompt of about ``n_tokens`` tokens: filler with the needle at ``depth``, then the question."""
 
     def ids_of(text: str) -> list[int]:
-        return tok.apply_chat_template([{"role": "user", "content": text}], add_generation_prompt=True, tokenize=True)
+        return tok.apply_chat_template(
+            [{"role": "user", "content": text}], add_generation_prompt=True, tokenize=True, return_dict=False
+        )
 
     def prompt(n_sent: int) -> str:
         a = filler_sentences(max(1, int(n_sent * depth)), seed=1)
