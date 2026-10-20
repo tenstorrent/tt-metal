@@ -37,10 +37,17 @@ _SPECIAL32 = [
 _FLOAT = {ttnn.bfloat16: (torch.bfloat16, torch.int16), ttnn.float32: (torch.float32, torch.int32)}
 
 
+# Integer dtypes: full value range, carried in int64 so uint32 keeps its top bit.
+_INT_RANGE = {ttnn.int32: (-(1 << 31), (1 << 31) - 1), ttnn.uint32: (0, (1 << 32) - 1), ttnn.uint16: (0, (1 << 16) - 1)}
+
+
 def _make(shape, dtype):
     torch.manual_seed(0)
-    if dtype == ttnn.uint16:
-        return torch.randint(0, (1 << 16) - 1, shape, dtype=torch.int64)
+    if dtype in _INT_RANGE:
+        low, high = _INT_RANGE[dtype]
+        return torch.randint(low, high, shape, dtype=torch.int64).to(
+            torch.int32 if dtype == ttnn.int32 else torch.int64
+        )
     host, bits = _FLOAT[dtype]
     data = torch.randn(shape, dtype=torch.float32).to(host)
     width = 16 if bits == torch.int16 else 32
