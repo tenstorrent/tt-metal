@@ -1641,3 +1641,27 @@ the full 56k prefill twice in one process, every (chunk, layer) output compared;
   fused op). A port counts piggybacked credits as returned when it sends the row, but they reach the home's port only
   when its accumulator takes the row, and the deterministic order leaves landed rows in their ring until their
   token's turn. Fix: no piggybacking with the deterministic order (it is a debug / A/B mode).
+
+## Long-context accuracy is the KDA state (2026-10-20)
+
+Follow-up to the run-to-run spread. The fp32 CPU golden (s56320) has top-1 vs text 0.89-0.97 per chunk (0.908 on the
+last); the device 0.70 (test_perf fixed: it re-ran the last chunk on KDA carries that already held it - 0.65 before).
+- Run to run vs the reference, last chunk (zz_scratch_determ_state.py): layer outputs 1e-3 (L4) -> 17% (L44) apart
+  between runs, but 7% (L3) -> 64% (L44) from the golden. Routing sets differ between runs for 0.2% (L4) -> 60%
+  (L25+) of the tokens. States vs golden: KDA recurrent 4% (L0), 18% (L1) ... 53% (L44); MLA latent 4-31%.
+- Ladder: golden context + device last chunk: final hidden PCC 0.938, top-1 vs reference 0.897; device context
+  0.790 / 0.703. Swapping one kind of state to the golden before the last chunk (zz_scratch_ctx_swap.py): golden
+  KDA states alone 0.937 / top-1 vs text 0.870 (= all golden); golden MLA + indexer caches alone 0.800 / 0.716 (=
+  device). The long-context loss is the KDA recurrent state.
+- Layers 0-2 alone (dense KDA, the embedding in, zz_scratch_kda_drift.py): most heads 0.7-4% off, the slowest-decay
+  heads far off and biased: L2 h56 rel 70% with norm 1.52x, L1 h45 33% / 1.17x (steady from 51200 to 56320). The
+  decay gate is exact (zz_scratch_kda_gate.py: device / fp32 0.9997-1.0001 per head).
+- Cause: the per-chunk decay factor alpha = exp(G_last) of a slow channel is ~0.998. (1) chunk preparation stores it
+  in bf16 (KDA_PREP_OUTPUT_BF16_MASK bit 5): rounds to 1.0, no decay; (2) recurrent_chunk_scan applies it with
+  mul_tiles_bcast_cols and adds the update with an FPU add: fp32 operands read at TF32 (truncated), the state twice
+  per chunk: effective 1 - alpha + ~1e-3. Both: steady state ~1/(1e-3) instead of 1/(1.6e-3): 1.6x (measured 1.52x);
+  fp32 final_decay alone (mask 0x6 / 0): the TF32 bias left, states 0.92-0.98x too small (L1 18 -> 12%, L2 19 ->
+  16%). Also in the prep: alpha = square(exp(G_last / 2)) and a row-to-column transpose, both on the FPU.
+- Fix (not done yet): alpha exactly (G_last as a mask matmul of the transposed bf16 gate, all 32 columns, exp in
+  DST, fp32 out) and the scan's decay multiply + add as SFPU ops on fp32 in DST (unpack to dest). Kimi K3 uses the
+  same KDA ops.

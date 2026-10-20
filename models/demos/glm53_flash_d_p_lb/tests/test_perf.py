@@ -84,25 +84,27 @@ def test_perf(mesh_device):
         model.free(h)
         return None
 
-    def full_prefill(tag: str) -> list[float]:
-        times = []
+    def full_prefill(tag: str, keep_last: bool = False):
+        times, hid = [], None
         for start in range(0, seq, chunk):
             t = time.time()
-            run_chunk(start)
+            # (the last chunk's hidden for the accuracy check: re-running that chunk later would read KDA carries that
+            # already include it - they are not keyed by position)
+            hid = run_chunk(start, keep_hidden=keep_last and start + chunk == seq)
             model.sync()
             times.append(time.time() - t)
             print(f"[{tag}] chunk [{start},{start + chunk}) {times[-1] * 1e3:8.1f} ms", flush=True)
         print(f"[{tag}] total {sum(times):.2f}s  {seq / sum(times):.0f} tok/s", flush=True)
-        return times
+        return times, hid
 
-    cold = full_prefill("cold")
-    warm = full_prefill("warm")
+    cold, _ = full_prefill("cold")
+    warm, hid = full_prefill("warm", keep_last=True)
 
     # per-layer breakdown of one warm chunk at the last position (state content does not change the work done)
     last = seq - chunk
     per_layer = {}
     t = time.time()
-    hid = run_chunk(last, per_layer=per_layer, keep_hidden=True)
+    run_chunk(last, per_layer=per_layer)
     model.sync()
     synced_s = time.time() - t
     by_type = defaultdict(lambda: [0, 0.0])
@@ -114,7 +116,7 @@ def test_perf(mesh_device):
     for name, (n, tot) in sorted(by_type.items()):
         print(f"  {name:10s} {n:2d} layers  {tot * 1e3:8.1f} ms total  {tot / n * 1e3:6.1f} ms/layer", flush=True)
 
-    # long-context check: next-token accuracy over the last chunk vs the prompt itself
+    # long-context check: next-token accuracy over the last chunk (the warm prefill's) vs the prompt itself
     rows = list(range(chunk - 1))
     want = tokens[last + 1 : last + chunk]
     hits1 = hits5 = 0
