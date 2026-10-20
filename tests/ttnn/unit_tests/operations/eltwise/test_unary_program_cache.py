@@ -436,6 +436,8 @@ def test_unary_sharded_mixed_inplace_outofplace(device, first_inplace):
 # =============================================================================
 
 
+# Both shapes are above the small-tensor worker grid (get_worker_grid), so they share the full grid and the cache entry,
+# while their work splits differ: 441 tiles against 1024 tiles over every core.
 @pytest.mark.parametrize(
     "shape_first, shape_second",
     [
@@ -449,9 +451,7 @@ def test_unary_inplace_cache_reuse_different_shapes(device, shape_first, shape_s
     excludes volume from compute_program_hash). The second call is a cache HIT that reuses the first
     program WITHOUT rebuild; override_runtime_arguments must re-derive every per-core work-split arg
     (per-core tile counts, start_tile_id, and the work-core set itself) for the new shape, or the
-    reused program corrupts the result. Interleaved analog of the SDXL in-place silu class of bug.
-    Both shapes are above the small-tensor worker grid (get_worker_grid), so they share the full grid and the
-    entry, while their work splits differ: 441 tiles against 1024 tiles over every core."""
+    reused program corrupts the result. Interleaved analog of the SDXL in-place silu class of bug."""
     device.cache_entries_counter.reset()
 
     def inplace_relu(shape, seed):

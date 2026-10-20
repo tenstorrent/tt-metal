@@ -4,7 +4,7 @@
 
 // Flow choice of get_dram_read_plan for unary ops on DRAM tensors. Host only: the plan depends on the tensor specs,
 // the op chain and the core and DRAM bank counts, so both chip families are checked on any machine. The device tests
-// (test_unary_dram_reads.py) check that every flow gives main's output.
+// (test_unary_dram_reads.py) check that every flow gives the default path's output.
 
 #include <gtest/gtest.h>
 
@@ -76,14 +76,21 @@ TensorSpec width_shards(uint32_t shards, uint32_t rows, uint32_t shard_width) {
     return make_spec(ttnn::Shape{1, 1, rows * kTile, shards * shard_width * kTile}, memory_config, DataType::BFLOAT16);
 }
 
-DramReadPlan plan(UnaryOpType op, const TensorSpec& spec, Chip chip, uint32_t num_cores = 0) {
-    return get_dram_read_plan(
-        {EltwiseUnaryWithParam{op}}, spec, spec, num_cores == 0 ? chip.cores : num_cores, chip.cores, chip.banks);
+DramReadPlan plan(
+    const std::vector<EltwiseUnaryWithParam>& op_chain,
+    const TensorSpec& input,
+    const TensorSpec& output,
+    Chip chip,
+    uint32_t num_cores) {
+    return get_dram_read_plan(op_chain, input, output, num_cores, chip.cores, chip.banks);
 }
 
-DramReadFlow flow(UnaryOpType op, const TensorSpec& spec, Chip chip, uint32_t num_cores = 0) {
-    return plan(op, spec, chip, num_cores).flow;
+// One op on the whole grid, output like the input.
+DramReadPlan plan(UnaryOpType op, const TensorSpec& spec, Chip chip) {
+    return plan({EltwiseUnaryWithParam{op}}, spec, spec, chip, chip.cores);
 }
+
+DramReadFlow flow(UnaryOpType op, const TensorSpec& spec, Chip chip) { return plan(op, spec, chip).flow; }
 
 constexpr auto kNone = DramReadFlow::None;
 constexpr auto kBurst = DramReadFlow::StaticBurst;
@@ -96,7 +103,7 @@ TEST(UnaryDramReadPlan, ManyCoresPerBankGates) {
     EXPECT_EQ(flow(UnaryOpType::RELU, interleaved(chip.cores * 64), chip), kNone);
     EXPECT_EQ(flow(UnaryOpType::RELU, interleaved(chip.cores * 65), chip), kBurst);
     EXPECT_EQ(flow(UnaryOpType::RELU, interleaved(chip.cores * 128), chip), kQueue);
-    // Mid ops keep main's path with every bank serving the tensor.
+    // Mid ops keep the default path with every bank serving the tensor.
     EXPECT_EQ(flow(UnaryOpType::SILU, interleaved(chip.cores * 200), chip), kNone);
     // Height shards over part of the banks: the queue from 40 pages per core (7 * 628 / 110 = 39, 7 * 629 / 110 = 40),
     // mid ops from 32.
@@ -133,7 +140,8 @@ TEST(UnaryDramReadPlan, FewCoresPerBankGates) {
     EXPECT_EQ(flow(UnaryOpType::RELU, height_shards(6, 384), chip), kBurst);
     EXPECT_EQ(flow(UnaryOpType::RELU, height_shards(6, 1152), chip), kQueue);
     // The rule was measured on the whole grid.
-    EXPECT_EQ(flow(UnaryOpType::RELU, interleaved(64 * 200), chip, 64), kNone);
+    const TensorSpec part_grid = interleaved(64 * 200);
+    EXPECT_EQ(plan({EltwiseUnaryWithParam{UnaryOpType::RELU}}, part_grid, part_grid, chip, 64).flow, kNone);
 }
 
 TEST(UnaryDramReadPlan, FewCoresPerBankMidOpsInterleaved) {
@@ -148,8 +156,33 @@ TEST(UnaryDramReadPlan, FewCoresPerBankMidOpsInterleaved) {
     EXPECT_EQ(flow(UnaryOpType::SILU, interleaved(chip.cores * 912), chip), kNone);
 }
 
-TEST(UnaryDramReadPlan, KeepsMainPath) {
-    // With many cores per bank heavy ops and softplus keep main's path, also on shards over part of the banks.
+TEST(UnaryDramReadPlan, FewCoresPerBankWidthShards) {
+    const Chip chip = kFewCoresPerBank;
+    // 32-page shards on every bank, 384-page rows. At 192 pages per core the default split's cores start in 2 of the 12
+    // shards, so even very heavy ops take the queue.
+    EXPECT_EQ(flow(UnaryOpType::GELU, width_shards(12, 36, 32), chip), kQueue);
+    // At 64 pages per core they start in 6: heavy ops take the queue, very heavy ones keep the default path.
+    EXPECT_EQ(flow(UnaryOpType::ELU, width_shards(12, 12, 32), chip), kQueue);
+    EXPECT_EQ(flow(UnaryOpType::GELU, width_shards(12, 12, 32), chip), kNone);
+}
+
+TEST(UnaryDramReadPlan, FewCoresPerBankCosts) {
+    const Chip chip = kFewCoresPerBank;
+    // On interleaved tensors only light ops take the queue, and a chain of two light ops counts as moderate.
+    const TensorSpec tensor = interleaved(chip.cores * 200);
+    const std::vector<EltwiseUnaryWithParam> two_ops = {
+        EltwiseUnaryWithParam{UnaryOpType::RELU}, EltwiseUnaryWithParam{UnaryOpType::RELU}};
+    EXPECT_EQ(flow(UnaryOpType::RELU, tensor, chip), kQueue);
+    EXPECT_EQ(plan(two_ops, tensor, tensor, chip, chip.cores).flow, kNone);
+    // With 4 KB pages relu stays light, and softplus counts as very heavy.
+    EXPECT_EQ(flow(UnaryOpType::RELU, interleaved(chip.cores * 200, DataType::FLOAT32), chip), kQueue);
+    EXPECT_EQ(flow(UnaryOpType::SOFTPLUS, interleaved(chip.cores * 200, DataType::FLOAT32), chip), kNone);
+    // More workers than the queue's scheduler serves: the default path, as bursts are slower there.
+    EXPECT_EQ(flow(UnaryOpType::RELU, interleaved(150 * 200), Chip{150, 20}), kNone);
+}
+
+TEST(UnaryDramReadPlan, KeepsDefaultPath) {
+    // With many cores per bank heavy ops and softplus keep the default path, also on shards over part of the banks.
     EXPECT_EQ(flow(UnaryOpType::ELU, height_shards(7, 4715), kManyCoresPerBank), kNone);
     EXPECT_EQ(flow(UnaryOpType::SOFTPLUS, height_shards(7, 4715), kManyCoresPerBank), kNone);
     for (const Chip chip : {kManyCoresPerBank, kFewCoresPerBank}) {
@@ -161,13 +194,8 @@ TEST(UnaryDramReadPlan, KeepsMainPath) {
         EXPECT_EQ(flow(UnaryOpType::RELU, interleaved(chip.cores * 200, DataType::BFLOAT8_B), chip), kNone);
         // Input and output in different layouts.
         EXPECT_EQ(
-            get_dram_read_plan(
-                {EltwiseUnaryWithParam{UnaryOpType::RELU}},
-                tensor,
-                height_shards(8, chip.cores * 25),
-                chip.cores,
-                chip.cores,
-                chip.banks)
+            plan(
+                {EltwiseUnaryWithParam{UnaryOpType::RELU}}, tensor, height_shards(8, chip.cores * 25), chip, chip.cores)
                 .flow,
             kNone);
     }
