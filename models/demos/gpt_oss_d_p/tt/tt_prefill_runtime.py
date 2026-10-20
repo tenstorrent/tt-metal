@@ -29,6 +29,8 @@ both one-shot and multi-chunk.
 
 import json
 import os
+import queue
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -122,6 +124,8 @@ class TtPrefillRuntime:
         self.compiled = False
         self.kv_cache = None
         self._layer_completion_sink = None
+        self._layer_completion_queue = None
+        self._layer_completion_error = None
         self._slot_chunk_size = {}  # slot_id -> chunk size its current sequence started with
 
         self._build_model(state_dict)
@@ -368,11 +372,20 @@ class TtPrefillRuntime:
         if self._layer_completion_sink is not None:
             sink = self._layer_completion_sink
 
-            def on_layer_complete(layer_idx: int) -> None:
-                # Migration reads KV outside this command queue. Publish only after
-                # the enqueued writes are device-complete, as in DeepSeek's host ACK path.
-                ttnn.synchronize_device(self.mesh_device)
-                sink(self.config.first_layer_idx + layer_idx, request_id)
+            if self._layer_completion_queue is not None:
+                def on_layer_complete(layer_idx: int) -> None:
+                    if self._layer_completion_error is not None:
+                        raise RuntimeError("asynchronous layer completion failed") from self._layer_completion_error
+                    event = ttnn.record_event(self.mesh_device, 0)
+                    self._layer_completion_queue.put((event, self.config.first_layer_idx + layer_idx, request_id))
+
+            else:
+
+                def on_layer_complete(layer_idx: int) -> None:
+                    # Migration reads KV outside this command queue. Publish only after
+                    # the enqueued writes are device-complete, as in DeepSeek's host ACK path.
+                    ttnn.synchronize_device(self.mesh_device)
+                    sink(self.config.first_layer_idx + layer_idx, request_id)
 
         else:
             on_layer_complete = None
@@ -388,6 +401,10 @@ class TtPrefillRuntime:
             indexed_rope=True,
             on_layer_complete=on_layer_complete,
         )
+        if self._layer_completion_queue is not None:
+            self._layer_completion_queue.join()
+            if self._layer_completion_error is not None:
+                raise RuntimeError("asynchronous layer completion failed") from self._layer_completion_error
         if not self.config.is_last_rank:
             return out
         if skip_lm_head:
@@ -402,6 +419,24 @@ class TtPrefillRuntime:
         reads no mutable runtime state."""
         assert self.compiled, "Call compile() before set_layer_completion_sink()"
         self._layer_completion_sink = sink
+        if os.getenv("PREFILL_ASYNC_LAYER_COMPLETION") == "1":
+            self._layer_completion_queue = queue.Queue()
+
+            def completion_worker() -> None:
+                while True:
+                    event, layer_indices, request_id = self._layer_completion_queue.get()
+                    try:
+                        ttnn.event_synchronize(event)
+                        if isinstance(layer_indices, int):
+                            layer_indices = (layer_indices,)
+                        for layer_idx in layer_indices:
+                            sink(layer_idx, request_id)
+                    except BaseException as error:
+                        self._layer_completion_error = error
+                    finally:
+                        self._layer_completion_queue.task_done()
+
+            threading.Thread(target=completion_worker, name="gpt-oss-layer-completion", daemon=True).start()
 
     def kv_migration_stages(self, kv_caches, first_layer_idx=None, num_my_layers=None):
         """One ``KvCacheStage`` anchored on K, for the runner's device-map / stage-layout gather.
