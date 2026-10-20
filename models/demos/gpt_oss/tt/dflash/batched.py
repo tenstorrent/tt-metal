@@ -1600,6 +1600,16 @@ class BatchedVerify:
         heads = self._attention_rows(li, attn_mod, qkv, pos, rot)
         qkv.deallocate(True)
         op = attn_mod.batched_oproj
+        if os.environ.get("B32_OPROJ_BIAS_MM", "1") == "1" and self.resnorm is not None:
+            # the bias inside the matmul (BF16 output; the all-reduce converts it to its BFP8 input shards): one op
+            # instead of the matmul + the bias add with the BF8 output
+            o = ttnn.linear(heads, self.oproj_w[li], bias=op.bias,
+                            program_config=_mm_config_256(heads.shape[-1], self.oproj_w[li].shape[-1]),
+                            dtype=ttnn.bfloat16, compute_kernel_config=self.qkv_ck, memory_config=amc)  # fmt: skip
+            heads.deallocate(True)
+            out = _all_reduce(o, None)
+            o.deallocate(True)
+            return out
         o = ttnn.matmul(
             heads,
             self.oproj_w[li],
