@@ -51,45 +51,65 @@ struct TensorBindingToken {
     // or construct an operand with LLKOperandFrom<token>.
     explicit constexpr TensorBindingToken(binding_details::LLKMetadata llk) noexcept : llk_metadata_(llk) {}
 
-    /**
-     * Extract DataFormat metadata associated with a `TensorBindingToken`.
-     * This metadata describes the data format of the `MeshTensor` that this token represents.
-     */
-    friend constexpr DataFormat get_dataformat(const TensorBindingToken& token) {
-        return static_cast<DataFormat>(token.llk_metadata_.format);
-    }
-
-    /**
-     * Extract the face height (in elements) associated with a `TensorBindingToken`.
-     * This metadata describes the tile layout of the `MeshTensor` that this token represents.
-     */
-    friend constexpr uint8_t get_face_r_dim(const TensorBindingToken& token) { return token.llk_metadata_.face_r_dim; }
-
-    /**
-     * Extract the face width (in elements) associated with a `TensorBindingToken`.
-     * This metadata describes the tile layout of the `MeshTensor` that this token represents.
-     */
-    friend constexpr uint8_t get_face_c_dim(const TensorBindingToken& token) { return token.llk_metadata_.face_c_dim; }
-
-    /**
-     * Extract the number of faces along the tile's row dimension associated with a `TensorBindingToken`.
-     * This metadata describes the tile layout of the `MeshTensor` that this token represents.
-     */
-    friend constexpr uint8_t get_num_faces_r_dim(const TensorBindingToken& token) {
-        return token.llk_metadata_.num_faces_r_dim;
-    }
-
-    /**
-     * Extract the number of faces along the tile's column dimension associated with a `TensorBindingToken`.
-     * This metadata describes the tile layout of the `MeshTensor` that this token represents.
-     */
-    friend constexpr uint8_t get_num_faces_c_dim(const TensorBindingToken& token) {
-        return token.llk_metadata_.num_faces_c_dim;
-    }
-
 private:
+    template <uint32_t Cta, uint32_t Addr>
+    friend constexpr DataFormat get_dataformat(const TensorBindingToken<Cta, Addr>& token);
+    template <uint32_t Cta, uint32_t Addr>
+    friend constexpr uint8_t get_face_r_dim(const TensorBindingToken<Cta, Addr>& token);
+    template <uint32_t Cta, uint32_t Addr>
+    friend constexpr uint8_t get_face_c_dim(const TensorBindingToken<Cta, Addr>& token);
+    template <uint32_t Cta, uint32_t Addr>
+    friend constexpr uint8_t get_num_faces_r_dim(const TensorBindingToken<Cta, Addr>& token);
+    template <uint32_t Cta, uint32_t Addr>
+    friend constexpr uint8_t get_num_faces_c_dim(const TensorBindingToken<Cta, Addr>& token);
+
     binding_details::LLKMetadata llk_metadata_;
 };
+
+/**
+ * Extract DataFormat metadata associated with a `TensorBindingToken`.
+ * This metadata describes the data format of the `MeshTensor` that this token represents.
+ */
+template <uint32_t Cta, uint32_t Addr>
+constexpr DataFormat get_dataformat(const TensorBindingToken<Cta, Addr>& token) {
+    return static_cast<DataFormat>(token.llk_metadata_.format);
+}
+
+/**
+ * Extract the face height (in elements) associated with a `TensorBindingToken`.
+ * This metadata describes the tile layout of the `MeshTensor` that this token represents.
+ */
+template <uint32_t Cta, uint32_t Addr>
+constexpr uint8_t get_face_r_dim(const TensorBindingToken<Cta, Addr>& token) {
+    return token.llk_metadata_.face_r_dim;
+}
+
+/**
+ * Extract the face width (in elements) associated with a `TensorBindingToken`.
+ * This metadata describes the tile layout of the `MeshTensor` that this token represents.
+ */
+template <uint32_t Cta, uint32_t Addr>
+constexpr uint8_t get_face_c_dim(const TensorBindingToken<Cta, Addr>& token) {
+    return token.llk_metadata_.face_c_dim;
+}
+
+/**
+ * Extract the number of faces along the tile's row dimension associated with a `TensorBindingToken`.
+ * This metadata describes the tile layout of the `MeshTensor` that this token represents.
+ */
+template <uint32_t Cta, uint32_t Addr>
+constexpr uint8_t get_num_faces_r_dim(const TensorBindingToken<Cta, Addr>& token) {
+    return token.llk_metadata_.num_faces_r_dim;
+}
+
+/**
+ * Extract the number of faces along the tile's column dimension associated with a `TensorBindingToken`.
+ * This metadata describes the tile layout of the `MeshTensor` that this token represents.
+ */
+template <uint32_t Cta, uint32_t Addr>
+constexpr uint8_t get_num_faces_c_dim(const TensorBindingToken<Cta, Addr>& token) {
+    return token.llk_metadata_.num_faces_c_dim;
+}
 
 // NullTensorBindingToken: the "this name is not bound" result of a binding lookup.
 //
