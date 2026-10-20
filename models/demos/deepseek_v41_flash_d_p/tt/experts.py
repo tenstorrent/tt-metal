@@ -198,9 +198,11 @@ class TtExperts:
         impl: str | None = None,
         combine: str | None = None,
         combine_acc: str | None = None,
+        combine_planner: str | None = None,
     ):
         """ck: reference/weights.Checkpoint (experts read one at a time, packed). max_chunk: the largest chunk (all
-        mesh rows together). impl: EXPERTS_IMPL value, combine: EXPERTS_COMBINE value, combine_acc: COMBINE_ACC value
+        mesh rows together). impl: EXPERTS_IMPL value, combine: EXPERTS_COMBINE value, combine_acc: COMBINE_ACC value,
+        combine_planner: COMBINE_PLANNER value
         (None: the setting)."""
         rows, cols = tuple(mesh.shape)
         n = rows * cols
@@ -229,6 +231,10 @@ class TtExperts:
         # tokens) or bf16 (one pass: the expert weights stream once a layer)
         self.combine_acc = combine_acc or settings.get("COMBINE_ACC")
         assert self.combine_acc in ("fp32", "bf16"), self.combine_acc
+        # COMBINE_PLANNER (P.11): the weighted combine's planner on one core per pass, or the column multi-core
+        # planner (bit-identical tables)
+        self.combine_planner = combine_planner or settings.get("COMBINE_PLANNER")
+        assert self.combine_planner in ("one", "multi"), self.combine_planner
         # NUMERICS=native (P.8): no fp8 q(x) / q(h) (rule 17); the expert ops then run without fp8_act_quant
         self.qdq = not native()
         self.mesh, self.layer, self.num_links = mesh, layer, num_links
@@ -517,6 +523,7 @@ class TtExperts:
                 x_bf16=self.precision == "full",
                 h_bf16=self.precision == "full",
                 acc_dtype=ttnn.bfloat16 if self.combine_acc == "bf16" else ttnn.float32,
+                planner=self.combine_planner,
             )
             # COMBINE_ACC=bf16 exists to run the chunk's home tokens in ONE pass (the weights streamed once a layer)
             assert self.combine_acc != "bf16" or self.wc.P == 1, (
@@ -524,7 +531,8 @@ class TtExperts:
                 f"({self.wc.A} accumulators)"
             )
             logger.info(
-                f"EXPERTS_WEIGHTED layer={self.layer} COMBINE_ACC={self.combine_acc} passes={self.wc.P} x {self.wc.S_pass}"
+                f"EXPERTS_WEIGHTED layer={self.layer} COMBINE_ACC={self.combine_acc} passes={self.wc.P} x {self.wc.S_pass} "
+                f"COMBINE_PLANNER={self.combine_planner} ({self.wc.planner_desc})"
             )
 
     # ------------------------------------------------------------------ sizes (built once per rows-per-chip)
@@ -968,6 +976,7 @@ def build_experts(
     impl: str | None = None,
     combine: str | None = None,
     combine_acc: str | None = None,
+    combine_planner: str | None = None,
 ) -> TtExperts:
     """The routed experts of one layer (reference Config: n_experts, topk_experts, dim, inter, swiglu_limit)."""
     return TtExperts(
@@ -983,4 +992,5 @@ def build_experts(
         impl=impl,
         combine=combine,
         combine_acc=combine_acc,
+        combine_planner=combine_planner,
     )

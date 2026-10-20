@@ -7,6 +7,34 @@
 
 imported, unchanged.
 
+### Column multi-core planner: combine_planner_prepare(axis=0, cores=...) (2026-10-20, deepseek_v41_flash_d_p P.11)
+- What: the one-core planner's column / pass options (axis=0, id_offset, tokens / token_base, ids_uint32, tile_in,
+  det) on several cores, a new kernel `_PLANNER_MCC` with the V2 multi-core planner's structure (Marko Staletovic's
+  `_PLANNER_MC2`, whole-mesh only): M = N ceil(S / CT) cores (`_mcc_geometry`: chunks of 32-token multiples inside one
+  home, <= the `cores` given), each reads its chunk's tiles (faces 0 / 2 of the TILE ids / weights), counting-sorts its
+  local-expert rows into a bucket of final table words, sends counts (+ det: its rows per column expert) to all; expert
+  owners total and broadcast each chunk's first row; every core pulls its 1/M of the row tiles from the buckets and
+  writes them, and its share of the token index / table tail as zeros; n_inj / n_ret / n_local / want as atomics on
+  core 0's plan; det: each chunk of this chip's home tokens computes its tokens' order lists itself (a row's place in
+  its expert's list = the rows of the chunks before it, the source schedules from the totals; packed sums, per-expert
+  entry lists), the accumulators' owners (core a % M) assemble the pages. Chunk order = the one-core planner's (home,
+  token, k) scan order, so every output is bit-identical. `run.programs` / `run.cores` / `run.tensors` (+ dord) as the
+  one-core column path; `run.mcc = (M, CT)`; `run.tdbg` = per-core phase timestamps. Default `cores=None` with axis=0:
+  the one-core planner, its program unchanged; the whole-mesh planners (`_PLANNER`, `_PLANNER_MC`, `_PLANNER_MC2`)
+  unchanged.
+- Why: deepseek_v41_flash_d_p P.11 (owner): the one-core column planner took 1573 us of a ~3.4 ms experts call a layer
+  at 1024 home tokens per chip (P.9, DS41-73).
+- Results (2x2 QuietBox p300c): tests/unit/test_column_planner_mc.py 20 / 20 (12 skips by design: uint16 ids one pass,
+  32 cores): every output word identical to the one-core planner's, both mesh columns, S 512 / 1024 one pass, 1024 in
+  passes of 512 and 342, det and arrival order, 32 and 8 cores, uint32 / uint16 ids, uniform / hot / one-column
+  routings, outputs pre-filled with garbage. Model (deepseek_v41_flash_d_p tt/perf_experts.py::test_combine_planner,
+  layers 0 / 24, chunk 2048, profiler op mode): planner 1572.7 -> 68.8 us (32 cores x 64 tokens); experts ops 3427 ->
+  1912 us (L00), 3426 -> 1927 us (L24); synced experts call 3.66-3.68 -> 2.10-2.16 ms; experts output 0 of 10.5M values
+  differ. Whole fork suite with the option off: tests/unit 28 passed (test_column_planner 4/4, test_acc_dtype 4/4: the
+  baseline) + the new file.
+- Needed by: deepseek_v41_flash_d_p P.11 (tt/weighted_combine.py, setting COMBINE_PLANNER)
+- Files: combine_plan.py, tests/unit/test_column_planner_mc.py
+
 ### acc_dtype: bf16 running sums, twice the home tokens a call (2026-10-20, deepseek_v41_flash_d_p P.9)
 - What: `sparse_combine_rf_prepare(acc_dtype=ttnn.bfloat16)` keeps every home token's running sum in bf16 (CB_ACC
   Float16_b, 2048 B tiles) instead of fp32 (4096 B): the packer's L1 accumulation adds each weighted row (fp32 DEST,

@@ -2027,3 +2027,43 @@ Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deeps
 - Re-run: on `DS41_EXPERTS_IMPL=bfp4`, off `DS41_EXPERTS_IMPL=bfp8`; A/B: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh
   --run-all --no-precompile "models/demos/deepseek_v41_flash_d_p/tt/perf_experts.py::test_weights_bfp4" -k "time"`
   (ops: with the profiler env of testing/profiler.py).
+
+## P.11 perf (attempt 1): the weighted combine's planner on several cores (column multi-core planner) vs one core
+- Setting COMBINE_PLANNER {one, multi} (tt/settings.py; default one = today's program, as the owner's text says; the
+  orchestrator sets both sides). Not a precision switch (bit-identical tables), so not in MAX_PRECISION. Used only under
+  EXPERTS_COMBINE=weighted: tt/experts.py `combine_planner` -> tt/weighted_combine.py `WeightedCombine(planner=,
+  planner_cores=32)`; each pass's planner on its own 32 cores (disjoint: run_planners merges the passes' programs, now
+  with their semaphores). Logged per layer: `COMBINE_PLANNER=multi (multi: 32 cores x 64 tokens a pass)`.
+- Fork combine_rf: `combine_planner_prepare(axis=0, cores=[...], tile_in=True)` = new kernel `_PLANNER_MCC`: Marko's V2
+  multi-core structure (counting sort into per-chunk buckets of final table words, count exchange, per-expert chunk
+  bases, 1/M of the row tiles pulled per core, atomics onto core 0's plan) with the one-core planner's column / pass
+  options (id_offset skip, tokens / token_base, uint32 or uint16 TILE ids read as faces 0 / 2, det). Chunks = 32-token
+  multiples inside one home (`_mcc_geometry`: M = N ceil(S / CT)), so chunk order = the one-core (home, token, k) scan
+  and every expert's rows land in the same order. det: the chunks of this chip's home tokens build their tokens' order
+  lists themselves (a row's rank = the rows of the chunks before it, sent with the counts; source schedules from the
+  totals), the accumulators' owners (core a % M) assemble the pages. The tails past the planned rows are written as
+  zeros (the one-core planner writes the whole page). Default cores=None: the one-core program unchanged; the
+  whole-mesh planners untouched. CHANGELOG / README / INDEX updated; Python + runtime-compiled kernel (no build).
+- Tests: fork tests/unit/test_column_planner_mc.py 20 passed / 12 skipped by design: one-core vs multi-core, every
+  output word (counts, regions, whole token index and table, plan, det pages) identical per chip (both columns), S 512 /
+  1024 one pass, 1024 in passes of 512 and of 342, det / arrival, 32 / 8 cores (8 < 9 accumulators), uint32 / uint16
+  ids, uniform / hot / one-column routings, outputs pre-filled with garbage. Fork suite tests/unit: 28 passed (the old
+  8 = baseline, option off).
+- Measured, tt/perf_experts.py::test_combine_planner (default path: bfp4, COMBINE_ACC bf16, glm, native, ffn_norm
+  bf16, fabric_bf16; 2x2, chunk 2048; same random inputs): planner op 1572.7 -> 68.8 µs (device, profiler op mode, L00
+  and L24); experts ops total 3427.5 -> 1912.4 µs (L00), 3425.5 -> 1927.1 µs (L24); synced experts call 3.66-3.68 ->
+  2.10-2.16 ms; experts output multi vs one 0 of 10.5M values differ (both layers).
+- Phases (run.tdbg, cycles at ~1.31 GHz, chip 0): chunk scan + sort ~20K, exchanges + slices ~15K, det ~50K on the 16
+  home-chunk cores (count sums 10K, 2 schedules 10K, order lists ~20K, owner pages ~9K). DS41-75: scalar L1 accesses
+  cost ~10-25 cycles (counters moved to local arrays, core 0's zeroing to local NoC copies: 104K -> 90K). Next lever
+  if wanted: the schedules on idle cores (8 per det core on 8x4), not worth it on 2x2 (~7 µs).
+- Final check `python -m models.demos.common.bringup.orchestrator measure --task P.11` (quick, change on): rc 0, layer
+  PCCs equal to P.10 (L00 0.99937, L01 0.99903, L02 0.99787, L03 0.99530, L14 0.99617, L20 0.99929, L21 0.99689, L24
+  0.99943), pcc_chunk_out 0.99943, chunk_wall_ms 232.1 (P.10 238.3), host_transfers_per_layer 0. Not run by me: the
+  frozen tests (MAX_PRECISION runs EXPERTS_COMBINE=separate: the planner is not on their path) and the plain profile
+  (device_ms_experts < 38.9; expected about -1.5 ms a layer x 8).
+- Re-run: on `DS41_COMBINE_PLANNER=multi`, off `DS41_COMBINE_PLANNER=one`; A/B: `PYTHONPATH=$PWD
+  scripts/run_safe_pytest.sh --run-all --no-precompile "models/demos/deepseek_v41_flash_d_p/tt/perf_experts.py::
+  test_combine_planner" -k time` (ops: with TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1
+  TT_METAL_PROFILER_CPP_POST_PROCESS=1 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=10000, -k ops); fork:
+  `scripts/run_safe_pytest.sh --run-all --no-precompile ttnn/ttnn/bringup/combine_rf/tests/unit`.
