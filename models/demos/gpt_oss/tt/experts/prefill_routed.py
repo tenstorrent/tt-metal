@@ -38,6 +38,7 @@ import weakref
 from pathlib import Path
 
 import torch
+from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping, get_ep_mesh_mapper
@@ -58,6 +59,9 @@ ROUTED_PREFILL_PLACEMENT_DEFAULT = "calibrated"
 # The routed path is the default where the mesh supports it (Blackhole, one mesh row: routed_prefill_mesh_supported);
 # GPT_OSS_ROUTED_PREFILL=0 selects the dense all-expert prefill path instead.
 ROUTED_PREFILL_DEFAULT = "1"
+# Experts of the model the routed path is built and calibrated for (gpt-oss-20b: placements, bf8 layers, L1 budgets);
+# gpt-oss-120b (128 experts) keeps the dense prefill path.
+ROUTED_PREFILL_NUM_EXPERTS = 32
 # Shortest prefill (tokens) that takes the routed path; shorter ones run dense.
 ROUTED_PREFILL_MIN_SEQ_DEFAULT = 128
 # Tokens per routed chunk: bounds the dispatch / expert-output buffers ([4C, H] bf16 per device). 16384 vs 8192
@@ -200,6 +204,8 @@ def routed_prefill_mesh_supported(mesh_device, num_experts=32):
 def routed_prefill_supported(mesh_device, mesh_config, hf_config, use_throughput_experts):
     """Whether the MLP builds the routed prefill experts (env flag, mesh, prefill parallelism)."""
     if not routed_prefill_enabled() or use_throughput_experts:
+        return False
+    if hf_config.num_local_experts != ROUTED_PREFILL_NUM_EXPERTS:
         return False
     if not routed_prefill_mesh_supported(mesh_device, hf_config.num_local_experts):
         return False
@@ -473,8 +479,17 @@ class RoutedPrefillExperts:
         prefix = f"routed_v{ROUTED_PREFILL_WEIGHTS_VERSION}"
 
         has_weights = bool(state_dict) and "gate_up_proj" in state_dict
-        if has_weights and cache_dir is not None:
-            cache_dir.mkdir(parents=True, exist_ok=True)
+        if has_weights and cache_dir is not None and not self._cache_complete(prefix):
+            # A read-only cache (CI mounts the shared one read-only) cannot take the routed files: place the HF
+            # weights without caching them.
+            try:
+                cache_dir.mkdir(parents=True, exist_ok=True)
+                writable = os.access(cache_dir, os.W_OK)
+            except OSError:
+                writable = False
+            if not writable:
+                logger.warning(f"Routed prefill weight cache {cache_dir} is not writable; loading without caching.")
+                self.cache_dir = cache_dir = None
         if not has_weights and not self._cache_complete(prefix):
             raise RoutedWeightsUnavailable(
                 f"Routed prefill expert weights are not cached in {cache_dir} and no HF expert weights were loaded. "

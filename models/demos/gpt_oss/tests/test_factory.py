@@ -217,6 +217,28 @@ def parametrize_weights(use_real=False):
     return pytest.mark.parametrize("use_real_weights", [use_real], ids=["real" if use_real else "random"])
 
 
+def real_checkpoint_path(model_path=None):
+    """Directory of the HF checkpoint (with model.safetensors.index.json) that HF_MODEL names, or None when only a config
+    is available (CI's unit tests set HF_MODEL to models/demos/gpt_oss/configs/<model>). A hub id resolves to its local
+    snapshot when it is downloaded; nothing is fetched."""
+    from pathlib import Path
+
+    path = model_path or os.getenv("HF_MODEL")
+    if not path:
+        return None
+    if (Path(path) / "model.safetensors.index.json").is_file():
+        return str(path)
+    if Path(path).exists():
+        return None
+    try:
+        from huggingface_hub import snapshot_download
+
+        snapshot = snapshot_download(path, local_files_only=True)
+    except Exception:
+        return None
+    return snapshot if (Path(snapshot) / "model.safetensors.index.json").is_file() else None
+
+
 # Test helper functions
 def compare_tensors(tt_tensor, torch_tensor, mesh_device, pcc_threshold=0.99):
     """Universal tensor comparison - handles both TT tensors and already-converted torch tensors"""

@@ -405,13 +405,19 @@ class ModelArgs:
     def _routed_prefill_weights_version(self):
         """Routed prefill expert weight-cache version when this model builds them (env flag + mesh), else None."""
         from models.demos.gpt_oss.tt.experts.prefill_routed import (
+            ROUTED_PREFILL_NUM_EXPERTS,
             ROUTED_PREFILL_WEIGHTS_VERSION,
             routed_prefill_bf8_layers,
             routed_prefill_enabled,
             routed_prefill_mesh_supported,
         )
 
-        if routed_prefill_enabled() and routed_prefill_mesh_supported(self.mesh_device):
+        num_experts = getattr(getattr(self, "hf_config", None), "num_local_experts", None)
+        if (
+            routed_prefill_enabled()
+            and num_experts == ROUTED_PREFILL_NUM_EXPERTS
+            and routed_prefill_mesh_supported(self.mesh_device, num_experts)
+        ):
             bf8 = routed_prefill_bf8_layers()
             # The bf8 layer set changes which routed caches must exist, so it is part of the marker.
             return f"{ROUTED_PREFILL_WEIGHTS_VERSION}:bf8={bf8}" if bf8 else ROUTED_PREFILL_WEIGHTS_VERSION

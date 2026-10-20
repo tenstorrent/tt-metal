@@ -37,16 +37,31 @@ from models.common.utility_functions import comp_pcc
 from ...tt.experts.prefill_routed import (
     ROUTED_PREFILL_CHUNK_ENV,
     ROUTED_PREFILL_ENV,
+    ROUTED_PREFILL_NUM_EXPERTS,
     ROUTED_PREFILL_PLACEMENT_ENV,
     routed_prefill_mesh_supported,
 )
 from ...tt.mlp import MLP
-from ..test_factory import TestFactory, parametrize_mesh_with_fabric
+from ..test_factory import TestFactory, parametrize_mesh_with_fabric, real_checkpoint_path
 
 THRESHOLDS = json.loads((Path(__file__).resolve().parents[2] / "unit_test_thresholds.json").read_text())
 ROUTED_VS_DENSE_PCC = 0.99
 # Lengths of test_routed_prefill_experts that the dense prefill path can also run (the routed-vs-dense check).
 DENSE_REF_LENGTHS = (128, 1024, 4096, 8256, 16448)
+
+
+def _routed_setup(mesh_device):
+    """TestFactory setup and the HF checkpoint directory, or skip: the routed path needs a single-row Blackhole mesh and
+    gpt-oss-20b, and these checks need the real checkpoint weights (CI's unit tests only have the config)."""
+    if not routed_prefill_mesh_supported(mesh_device):
+        pytest.skip("routed prefill needs a single-row Blackhole mesh with > 1 device")
+    setup = TestFactory.setup_test(mesh_device, use_real_weights=False)
+    if setup["config"].num_local_experts != ROUTED_PREFILL_NUM_EXPERTS:
+        pytest.skip(f"the routed prefill path is built for {ROUTED_PREFILL_NUM_EXPERTS} experts (gpt-oss-20b)")
+    model_path = real_checkpoint_path(os.environ.get("HF_MODEL", setup["model_args"].model_path))
+    if model_path is None:
+        pytest.skip("needs the real checkpoint weights (HF_MODEL with model.safetensors.index.json)")
+    return setup, model_path
 
 
 def _load_layer_moe(model_path, layer_idx):
@@ -157,15 +172,12 @@ def routed_env(monkeypatch):
 def test_routed_prefill_experts(
     mesh_device, device_params, seq_len, chunk, layer_idx, routed_env, monkeypatch, reset_seeds
 ):
-    if not routed_prefill_mesh_supported(mesh_device):
-        pytest.skip("routed prefill needs a single-row Blackhole mesh with > 1 device")
+    setup, model_path = _routed_setup(mesh_device)
     if chunk is not None:
         # Multi-chunk: the sequence runs as seq_len / chunk routed chunks, concatenated before the all-reduce.
         monkeypatch.setenv(ROUTED_PREFILL_CHUNK_ENV, str(chunk))
-    setup = TestFactory.setup_test(mesh_device, use_real_weights=False)
     config = setup["config"]
     thresholds = THRESHOLDS[setup["model_args"].model_name]["prefill"]
-    model_path = os.environ.get("HF_MODEL", setup["model_args"].model_path)
 
     router_sd, experts_sd = _load_layer_moe(model_path, layer_idx)
     reference = _reference_mlp(config, router_sd, experts_sd)
@@ -286,11 +298,8 @@ def test_routed_prefill_experts(
 def test_routed_prefill_layers_back_to_back(mesh_device, device_params, seq_len, routed_env, reset_seeds):
     """Several layers' MoE on one device, interleaved: every layer has the same shapes, so each op after the first
     layer runs from the program cache with that layer's own weights, biases and tables."""
-    if not routed_prefill_mesh_supported(mesh_device):
-        pytest.skip("routed prefill needs a single-row Blackhole mesh with > 1 device")
-    setup = TestFactory.setup_test(mesh_device, use_real_weights=False)
+    setup, model_path = _routed_setup(mesh_device)
     config = setup["config"]
-    model_path = os.environ.get("HF_MODEL", setup["model_args"].model_path)
     layers = [0, 12, 23]
     mlps, refs, ref_bf16s, ref_qs = [], [], [], []
     for layer_idx in layers:
@@ -357,11 +366,8 @@ def test_routed_pair_positions_exact(mesh_device, device_params, seq_len, routed
     the pair's expert + its rank among that expert's pairs (token order) for local pairs, the spare tile otherwise.
     Random routing and the worst case (every token -> experts 0..k-1, ranks up to C - 1). A sequence longer than the
     routed chunk is split as RoutedPrefillExperts.__call__ splits it, and every chunk is checked on its own."""
-    if not routed_prefill_mesh_supported(mesh_device):
-        pytest.skip("routed prefill needs a single-row Blackhole mesh with > 1 device")
-    setup = TestFactory.setup_test(mesh_device, use_real_weights=False)
+    setup, model_path = _routed_setup(mesh_device)
     config = setup["config"]
-    model_path = os.environ.get("HF_MODEL", setup["model_args"].model_path)
     router_sd, experts_sd = _load_layer_moe(model_path, 0)
     state_dict = {f"router.{k}": v for k, v in router_sd.items()}
     state_dict.update({f"experts.{k}": v for k, v in experts_sd.items()})
@@ -431,10 +437,9 @@ def test_routed_prefill_placement(mesh_device, device_params, seq_len, routed_en
     device 0), and the per-slot token counts are the slot-id histogram."""
     if not routed_prefill_mesh_supported(mesh_device) or mesh_device.shape[1] != 4:
         pytest.skip("the calibrated placement is for a 1x4 Blackhole mesh")
-    setup = TestFactory.setup_test(mesh_device, use_real_weights=False)
+    setup, model_path = _routed_setup(mesh_device)
     config = setup["config"]
     thresholds = THRESHOLDS[setup["model_args"].model_name]["prefill"]
-    model_path = os.environ.get("HF_MODEL", setup["model_args"].model_path)
     layer_idx = 12
     E, k = config.num_local_experts, config.num_experts_per_tok
     router_sd, experts_sd = _load_layer_moe(model_path, layer_idx)

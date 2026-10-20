@@ -29,7 +29,7 @@ from models.demos.gpt_oss.tt.model import PREFILL_SP_ENV, PREFILL_SP_MIN_SEQ, Mo
 from models.demos.gpt_oss.utils.general_utils import get_default_num_links
 from models.tt_transformers.tt.load_checkpoints import convert_hf_qkv_to_meta_format
 
-from ...tt.experts.prefill_routed import ROUTED_PREFILL_ENV, routed_prefill_mesh_supported
+from ...tt.experts.prefill_routed import ROUTED_PREFILL_ENV, ROUTED_PREFILL_NUM_EXPERTS, routed_prefill_mesh_supported
 from ..test_factory import TestFactory, parametrize_mesh_with_fabric
 
 SEQ_LEN = 1024
@@ -74,6 +74,8 @@ def test_prefill_sequence_parallel_bit_identical(mesh_device, device_params, mon
 
     setup = TestFactory.setup_test(mesh_device, use_real_weights=False)
     config = setup["config"]
+    if config.num_local_experts != ROUTED_PREFILL_NUM_EXPERTS:
+        pytest.skip(f"the routed prefill path is built for {ROUTED_PREFILL_NUM_EXPERTS} experts (gpt-oss-20b)")
     config.num_hidden_layers = 1
     config._attn_implementation = "eager"
     reference = GptOssForCausalLM(config)

@@ -15,7 +15,8 @@ fail by layer 23). Checked here on random partial sums / rows:
 Run: pytest models/demos/gpt_oss/tests/unit/test_batched_prefill.py -k 1x4
 """
 
-import os
+import json
+from pathlib import Path
 
 import pytest
 import torch
@@ -31,8 +32,9 @@ from models.demos.gpt_oss.tt.batched_prefill import (
     per_user_reduce,
     takes_direct_reduce_scatter,
 )
+from models.demos.gpt_oss.tt.experts.prefill_routed import ROUTED_PREFILL_NUM_EXPERTS
 
-from ..test_factory import parametrize_mesh_with_fabric
+from ..test_factory import parametrize_mesh_with_fabric, real_checkpoint_path
 
 H = 2880
 USERS = (0, 5, 31)
@@ -187,8 +189,11 @@ MODEL_KV_LEN = 2048  # KV tokens per user (32 users)
 
 def _model_ctx(mesh_device):
     _skip_unless_bh_1x4(mesh_device)
-    if not os.getenv("HF_MODEL"):
-        pytest.skip("model-level batched prefill checks need HF_MODEL (real weights)")
+    checkpoint = real_checkpoint_path()
+    if checkpoint is None:
+        pytest.skip("model-level batched prefill checks need HF_MODEL with the real checkpoint (weights, tokenizer)")
+    if json.loads((Path(checkpoint) / "config.json").read_text())["num_local_experts"] != ROUTED_PREFILL_NUM_EXPERTS:
+        pytest.skip(f"batched prefill is built for {ROUTED_PREFILL_NUM_EXPERTS} experts (gpt-oss-20b)")
     from models.demos.gpt_oss.tests.perf.prefill_common import build_prefill_generator_b32
 
     ctx = build_prefill_generator_b32(mesh_device, MODEL_KV_LEN)
