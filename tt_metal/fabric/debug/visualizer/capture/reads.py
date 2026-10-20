@@ -53,6 +53,7 @@ class ReadPlan:
     arch: str  # run.arch
     core_registers: dict[str, RegisterRead]  # by name, in array order
     areas: dict[str, L1Read]  # the non-null areas, by name, in manifest order
+    heartbeat: RegisterRead | None  # the heartbeat area as one word, which liveness rounds sample, or None if it's null
     routers: tuple[RouterPlan, ...]  # in manifest order
 
 
@@ -182,6 +183,12 @@ def get_read_plan(manifest: dict) -> ReadPlan:
         for name, area in lookup(manifest, f"{arch_where}.areas", "object", of=("object", "null")).items()
         if area is not None
     }
+    heartbeat = areas.get("heartbeat")
+    if heartbeat is not None and heartbeat.size != REGISTER_BYTES:
+        raise ManifestError(
+            f"{arch_where}.areas.heartbeat.size is {heartbeat.size}; "
+            f"capture samples it as one {REGISTER_BYTES}-byte word"
+        )
 
     # Collect all the stream registers the manifest names
     stream_registers = _get_stream_registers(manifest, f"{arch_where}.stream_registers")
@@ -204,4 +211,10 @@ def get_read_plan(manifest: dict) -> ReadPlan:
                     )
                 )
 
-    return ReadPlan(arch=arch, core_registers=core_registers, areas=areas, routers=tuple(routers))
+    return ReadPlan(
+        arch=arch,
+        core_registers=core_registers,
+        areas=areas,
+        heartbeat=None if heartbeat is None else RegisterRead(heartbeat.address),
+        routers=tuple(routers),
+    )

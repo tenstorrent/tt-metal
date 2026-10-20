@@ -7,10 +7,13 @@ Takes a snapshot of each fabric manifest given, reading its local chips' routers
 
 Usage, from the repository root:
     python3 -m tt_metal.fabric.debug.visualizer.capture MANIFEST|DIR [MANIFEST|DIR ...] [-o DIR]
+        [--liveness-rounds N] [--liveness-interval S]
 
 A DIR stands for the fabric_manifest_rank_*.json files in it, such as the run's generated/fabric. Each snapshot goes
-next to its manifest, or into -o's directory. Prints one line per snapshot and one per router error. Exits non-zero when
-ttexalens doesn't start or a manifest can't be read or its snapshot written; a router error alone doesn't.
+next to its manifest, or into -o's directory. Before each main pass, capture samples every router's heartbeat and core
+registers in N liveness rounds (default 3, 0 turns them off), S seconds apart (default 1.0). Prints one line per
+snapshot and one per router error. Exits non-zero when ttexalens doesn't start or a manifest can't be read or its
+snapshot written.
 """
 
 import argparse
@@ -52,7 +55,23 @@ def main(argv: list) -> int:
         type=pathlib.Path,
         help="the directory to write snapshots to (default: next to each manifest)",
     )
+    parser.add_argument(
+        "--liveness-rounds",
+        type=int,
+        default=3,
+        metavar="N",
+        help="rounds of heartbeat and core register samples before the main pass (default: 3; 0 turns them off)",
+    )
+    parser.add_argument(
+        "--liveness-interval",
+        type=float,
+        default=1.0,
+        metavar="S",
+        help="seconds between liveness rounds (default: 1.0)",
+    )
     args = parser.parse_args(argv)
+    if args.liveness_rounds < 0 or args.liveness_interval < 0:
+        parser.error("--liveness-rounds and --liveness-interval can't be negative")
 
     # Check the paths exist
     missing = [str(path) for path in args.paths if not path.exists()]
@@ -79,7 +98,13 @@ def main(argv: list) -> int:
         started = time.monotonic()
         try:
             snapshot = take_snapshot(
-                manifest_path, args.out_dir or manifest_path.parent, device, host=socket.gethostname(), argv=sys.argv
+                manifest_path,
+                args.out_dir or manifest_path.parent,
+                device,
+                host=socket.gethostname(),
+                argv=sys.argv,
+                liveness_rounds=args.liveness_rounds,
+                liveness_interval_s=args.liveness_interval,
             )
         except (ManifestError, json.JSONDecodeError, OSError) as error:
             failed += 1

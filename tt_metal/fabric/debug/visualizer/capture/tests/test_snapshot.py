@@ -26,6 +26,8 @@ FINISHED = datetime.datetime(2026, 10, 20, 12, 0, 5, tzinfo=datetime.timezone.ut
 PLAN = get_read_plan(MANIFEST)
 E1, S1 = PLAN.routers
 REMOTE_SRC_31 = E1.streams[(31, "remote_src")].address
+HEARTBEAT = PLAN.heartbeat.address
+INTERVAL_S = 0.5
 NAME = "fabric_snapshot_rank_1_of_1_20261020T120000Z"
 
 
@@ -76,6 +78,20 @@ def main_pass_reads(router) -> list:
     return [(router.path, *read) for read in words + streams + l1 + streams]
 
 
+def liveness_reads(router) -> list:
+    """The reads of one liveness sample on `router`, in order."""
+    words = [HEARTBEAT, *(r.address for r in PLAN.core_registers.values())]
+    return [(router.path, address, REGISTER_BYTES) for address in words]
+
+
+def core_register_words(router, nth: int) -> dict:
+    return {name: device_word(router.path, r.address, nth) for name, r in PLAN.core_registers.items()}
+
+
+def without_times(samples: list) -> list:
+    return [{key: value for key, value in sample.items() if key != "t_ns"} for sample in samples]
+
+
 class SnapshotCase(unittest.TestCase):
     def setUp(self):
         directory = tempfile.TemporaryDirectory()
@@ -84,16 +100,20 @@ class SnapshotCase(unittest.TestCase):
         self.manifest_path = self.dir / "fabric_manifest_rank_1_of_1.json"
         self.out_dir = self.dir / "out"
 
-    def take(self, device=None, manifest=MANIFEST):
+    def take(self, device=None, manifest=MANIFEST, rounds=0):
         self.manifest_path.write_text(json.dumps(manifest))
         self.device = device or FakeDevice()
+        self.sleeps = []
         self.result = take_snapshot(
             self.manifest_path,
             self.out_dir,
             self.device,
             host="test-host",
             argv=["capture", str(self.manifest_path)],
+            liveness_rounds=rounds,
+            liveness_interval_s=INTERVAL_S,
             monotonic_ns=itertools.count(1000, 1000).__next__,
+            sleep=self.sleeps.append,
             utc_now=iter([STARTED, FINISHED]).__next__,
         )
         self.snapshot = json.loads(self.result.json_path.read_text())
@@ -137,6 +157,8 @@ class Snapshots(SnapshotCase):
                 "host": "test-host",
                 "argv": ["capture", str(self.manifest_path)],
                 "ttexalens": "fake 1.0",
+                "liveness_rounds": 0,
+                "liveness_interval_s": INTERVAL_S,
             },
         )
         self.assertEqual(
@@ -195,6 +217,50 @@ class Snapshots(SnapshotCase):
         self.assertEqual(self.device.reads, main_pass_reads(E1) + main_pass_reads(S1))
 
 
+class Liveness(SnapshotCase):
+    def test_rounds_go_across_the_routers_before_the_main_pass(self):
+        self.take(rounds=3)
+        rounds = (liveness_reads(E1) + liveness_reads(S1)) * 3
+        self.assertEqual(self.device.reads, rounds + main_pass_reads(E1) + main_pass_reads(S1))
+        self.assertEqual(self.sleeps, [INTERVAL_S, INTERVAL_S])
+        self.assertEqual(self.snapshot["capture"]["liveness_rounds"], 3)
+
+    def test_samples(self):
+        self.take(rounds=3)
+        entry = self.snapshot["routers"]["M0/C0/E1"]
+        self.assertEqual(
+            without_times(entry["liveness"]),
+            [
+                {"heartbeat": device_word(E1.path, HEARTBEAT, nth), "core_registers": core_register_words(E1, nth)}
+                for nth in range(3)
+            ],
+        )
+        self.assertEqual(entry["core_registers"], core_register_words(E1, 3))
+        self.assertEqual(len(self.snapshot["routers"]["M1/C0/S1"]["liveness"]), 3)
+
+    def test_sample_times_are_in_read_order(self):
+        self.take(rounds=2)
+        e1, s1 = self.snapshot["routers"]["M0/C0/E1"], self.snapshot["routers"]["M1/C0/S1"]
+        times = [e1["liveness"][0], s1["liveness"][0], e1["liveness"][1], s1["liveness"][1]]
+        times = [sample["t_ns"] for sample in times] + [e1["started_ns"]]
+        self.assertEqual(times, sorted(set(times)))
+
+    def test_no_rounds(self):
+        self.take(rounds=0)
+        self.assertEqual([entry["liveness"] for entry in self.snapshot["routers"].values()], [[], []])
+        self.assertEqual(self.sleeps, [])
+
+    def test_a_manifest_without_a_heartbeat_samples_only_core_registers(self):
+        manifest = copy.deepcopy(MANIFEST)
+        manifest["archs"]["wormhole_b0"]["areas"]["heartbeat"] = None
+        self.take(manifest=manifest, rounds=1)
+        entry = self.snapshot["routers"]["M0/C0/E1"]
+        self.assertEqual(
+            without_times(entry["liveness"]), [{"heartbeat": None, "core_registers": core_register_words(E1, 0)}]
+        )
+        self.assertEqual(self.device.reads[:3], liveness_reads(E1)[1:])
+
+
 class Errors(SnapshotCase):
     def test_a_router_that_does_not_open(self):
         self.take(FakeDevice(unopenable={"M0/C0/E1"}))
@@ -207,6 +273,32 @@ class Errors(SnapshotCase):
         self.assertEqual((entry["core_registers"], entry["areas"], entry["regions"], entry["streams"]), ({},) * 4)
         self.assertEqual(self.device.reads, main_pass_reads(S1))
         self.assert_l1(S1, "regions", S1.regions)
+
+    def test_a_router_that_does_not_open_is_not_sampled(self):
+        self.take(FakeDevice(unopenable={"M0/C0/E1"}), rounds=2)
+        self.assertEqual(self.snapshot["routers"]["M0/C0/E1"]["liveness"], [])
+        self.assertEqual(self.device.reads, liveness_reads(S1) * 2 + main_pass_reads(S1))
+
+    def test_a_failed_liveness_read_stops_its_router_for_the_rest_of_the_capture(self):
+        soft_reset = PLAN.core_registers["soft_reset"].address
+        self.take(FakeDevice(failing=("M0/C0/E1", soft_reset)), rounds=3)
+        entry = self.snapshot["routers"]["M0/C0/E1"]
+        self.assertEqual(entry["error"], {"stage": "liveness", "path": "soft_reset", "message": "timed out"})
+        # The sample keeps the words read before soft_reset: the heartbeat and wall_clock_low.
+        self.assertEqual(
+            without_times(entry["liveness"]),
+            [
+                {
+                    "heartbeat": device_word(E1.path, HEARTBEAT, 0),
+                    "core_registers": {"wall_clock_low": core_register_words(E1, 0)["wall_clock_low"]},
+                }
+            ],
+        )
+        self.assertIsNone(entry["started_ns"])
+        self.assertEqual((entry["core_registers"], entry["areas"], entry["regions"], entry["streams"]), ({},) * 4)
+        sampled = liveness_reads(E1)[:3] + liveness_reads(S1) * 3
+        self.assertEqual(self.device.reads, sampled + main_pass_reads(S1))
+        self.assertEqual(self.result.errors, {"M0/C0/E1": entry["error"]})
 
     def test_a_failed_read_stops_its_router_and_keeps_what_was_read(self):
         failing = E1.regions["channels/receivers/vc0/ch0/ring_buffer"]
