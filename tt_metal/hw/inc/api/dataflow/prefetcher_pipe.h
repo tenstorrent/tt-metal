@@ -144,7 +144,7 @@ namespace experimental {
 //    wait_front(n);
 //    auto lock = scoped_read_lock(n);
 //    auto rd = lock.get_ptr();  // CoreLocalMem at fifo front
-//    // process data at rd.get_address() / rd.get_unsafe_ptr() ...
+//    // process data at rd[i] / *rd, or pass rd to Noc as an endpoint ...
 //    pop_front(n);
 //
 //  Mid-flight resize (receiver):

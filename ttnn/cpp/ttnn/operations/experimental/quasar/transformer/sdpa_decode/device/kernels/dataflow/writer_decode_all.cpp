@@ -14,6 +14,7 @@
 #include "api/debug/assert.h"
 #include "ttnn/operations/experimental/quasar/transformer/sdpa_decode/device/kernels/rt_args_common.hpp"
 #include "dataflow_common.hpp"
+#include "internal/local_mem/address_access.h"
 
 #define MAX_TREE_REDUCTION_ROUNDS 6
 
@@ -274,7 +275,6 @@ void kernel_main() {
 
 #ifdef HAS_INTERMED_OUT
     Scratchpad<uint8_t> intermed_scratch(scratch_id_intermed_out);
-    const uint32_t intermed_base = intermed_scratch.get_base_address();
 #endif
 
     for (uint32_t cur_head = cur_head_group * num_heads_per_core;
@@ -311,11 +311,8 @@ void kernel_main() {
 
                     // Calculate offset based on round (child writes at round offset)
                     uint32_t block_offset = round * (out_chunk_tiles + 2 * PNHt) * tile_bytes_intermed;
-                    const uint8_t noc_id = noc.get_noc_id();
-                    const uint32_t my_noc_x = my_x[noc_id];
-                    const uint32_t my_noc_y = my_y[noc_id];
-                    uint32_t intermed_l1_read_addr = intermed_base + block_offset;
-                    UnicastEndpoint intermed_src;
+                    // Local L1 loopback reads: the scratchpad is the NoC-side source.
+                    uint32_t intermed_read_offset = block_offset;
 
                     // Reserve space in CBs and read data
                     // Order: l, m, o (same as sender writes)
@@ -323,12 +320,12 @@ void kernel_main() {
                     dfb_l.reserve_back(PNHt);
                     uint32_t l_write_ptr = dfb_l.get_write_ptr();
                     noc.async_read(
-                        intermed_src,
+                        intermed_scratch,
                         CoreLocalMem<uint32_t>(l_write_ptr),
                         ml_read_size,
-                        {.noc_x = my_noc_x, .noc_y = my_noc_y, .addr = intermed_l1_read_addr},
+                        {.offset_bytes = intermed_read_offset},
                         {});
-                    intermed_l1_read_addr += ml_read_size;
+                    intermed_read_offset += ml_read_size;
                     noc.async_read_barrier();
                     dfb_l.push_back(PNHt);
 
@@ -336,12 +333,12 @@ void kernel_main() {
                     dfb_m.reserve_back(PNHt);
                     uint32_t m_write_ptr = dfb_m.get_write_ptr();
                     noc.async_read(
-                        intermed_src,
+                        intermed_scratch,
                         CoreLocalMem<uint32_t>(m_write_ptr),
                         ml_read_size,
-                        {.noc_x = my_noc_x, .noc_y = my_noc_y, .addr = intermed_l1_read_addr},
+                        {.offset_bytes = intermed_read_offset},
                         {});
-                    intermed_l1_read_addr += ml_read_size;
+                    intermed_read_offset += ml_read_size;
                     noc.async_read_barrier();
                     dfb_m.push_back(PNHt);
 
@@ -349,10 +346,10 @@ void kernel_main() {
                     dfb_o.reserve_back(out_chunk_tiles);
                     uint32_t o_write_ptr = dfb_o.get_write_ptr();
                     noc.async_read(
-                        intermed_src,
+                        intermed_scratch,
                         CoreLocalMem<uint32_t>(o_write_ptr),
                         o_read_size,
-                        {.noc_x = my_noc_x, .noc_y = my_noc_y, .addr = intermed_l1_read_addr},
+                        {.offset_bytes = intermed_read_offset},
                         {});
                     noc.async_read_barrier();
                     dfb_o.push_back(out_chunk_tiles);
@@ -379,7 +376,11 @@ void kernel_main() {
             // Get parent's NOC address — reduction_group_core_xs/ys[c] = get_vararg(c) / get_vararg(ncph + c).
             uint32_t parent_noc_x = get_vararg(parent_core_in_group);
             uint32_t parent_noc_y = get_vararg(num_cores_per_head + parent_core_in_group);
-            uint32_t output_write_addr = intermed_base + block_offset;
+            // Raw address: the parent's intermediate scratchpad sits at the same L1 address as ours, and a remote
+            // core's L1 has no handle form.
+            uint32_t output_write_addr =
+                static_cast<uint32_t>(local_mem::detail::AddressAccess::address(intermed_scratch.local_mem())) +
+                block_offset;
             UnicastEndpoint output_dst;
 
             // Send l, m, o to parent (same order as original worker_compute)

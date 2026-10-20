@@ -38,6 +38,7 @@
 #include "api/dataflow/circular_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/dataflow/endpoints.h"
+#include "internal/local_mem/address_access.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "hostdevcommon/common_values.hpp"
 #include "chunk_gdn_handoff_dm.hpp"
@@ -358,7 +359,8 @@ void kernel_main() {
 #else
             canary[slot] = c;
 #endif
-            const uint32_t canary_addr = (canary + slot).get_address();
+            // Raw: this same address is sent to every remote receiver's canary word (same offset on every core).
+            const uint32_t canary_addr = local_mem::detail::AddressAccess::address(canary + slot);
             for (uint32_t v = 0; v < NV; v++) {
                 if constexpr (POSTED) {
                     noc.async_write<NocOptions::POSTED>(

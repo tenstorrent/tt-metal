@@ -7,6 +7,7 @@
 #include "api/tensor/noc_traits.h"
 #include "api/tensor/local_tensor_accessor.h"
 #include "experimental/kernel_args.h"
+#include "internal/local_mem/address_access.h"
 
 // Op-to-op R/W inference coverage: one tensor binding per NoC access path, so the kernel's resolved R/W sets show,
 // per binding, whether that path is attributed (and as what). A path that fails to note at all would show up as its
@@ -26,7 +27,8 @@
 //   unused                          -- bound but never touched                                    -> neither set
 void kernel_main() {
     Scratchpad<uint32_t> pad(scratch::pad);
-    const uint32_t l1 = pad.get_base_address();
+    // Raw address: the legacy free functions and the raw noc_async_read below take a uint32_t L1 address.
+    const uint32_t l1 = static_cast<uint32_t>(local_mem::detail::AddressAccess::address(pad.local_mem()));
     const uint32_t size = pad.size_in_bytes();
     Noc noc;
 

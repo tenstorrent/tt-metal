@@ -491,7 +491,8 @@ void kernel_main() {
     const uint32_t tensor_base = acc.get_bank_base_address();
     const uint32_t page_size = acc.get_aligned_page_size();  // binding's 2nd CRTA word (dynamic_tensor_shape)
     Scratchpad<uint32_t> pad(scratch::pad);
-    const uint32_t scratch_base = pad.get_base_address();
+    // Raw address: the base is reported to the host for comparison.
+    const uint32_t scratch_base = static_cast<uint32_t>(local_mem::detail::AddressAccess::address(pad.local_mem()));
     const uint32_t vararg0 = get_common_vararg(0);
     const uint32_t vararg1 = get_common_vararg(1);
     DataflowBuffer buf(dfb::stage);
@@ -516,6 +517,7 @@ void kernel_main() {
 #include "api/dataflow/endpoints.h"
 #include "api/dataflow/noc.h"
 #include "experimental/kernel_args.h"
+#include "internal/local_mem/address_access.h"
 void kernel_main() {
     auto dst_addr = get_arg(args::dst_addr);
     auto bank_id = get_arg(args::bank_id);
