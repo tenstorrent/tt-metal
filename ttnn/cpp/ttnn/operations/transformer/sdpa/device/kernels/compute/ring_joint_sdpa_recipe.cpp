@@ -7,26 +7,23 @@
 // active contribution normalizes. Compile-time and runtime arguments share the ring-joint layout built by
 // RingJointSDPARecipeMeshWorkloadFactory. Causal/balanced, sliding-window, chunked, KV-pad rotation and
 // attention sinks are rejected on the host. Device-tensor logical lengths arrive from the reader through
-// cb_kv_pad_derived. Any tile-aligned Q/K chunk and head dim (subblock widths: SDPA_RECIPE_QK_W/PV_W).
+// cb_kv_pad_derived. Any tile-aligned Q/K chunk and head dim (subblock widths: recipe::qk_w / pv_w).
 
 #include <cstdint>
 
 // This kernel reconfigs ~30x; inlining the LLK Src zero-flag DEFAULT configurator at each site pushes
 // the program over the kernel-config buffer. Force it out-of-line here.
 #define LLK_ZEROFLAG_OUTLINE 1
-// The recipe headers key their ring hooks (valid-row key tail masking) on SDPA_RECIPE_RING.
-#define SDPA_RECIPE_RING 1
 
-// Optimization: unpack and pack at -O3, math at -O2. Even-row Q chunks (the host rounds a paired recipe's odd Q
-// chunk up) keep every recipe inside the kernel config buffer (70656 B at the default Blackhole worker L1).
-// Watcher builds are size-optimized on every thread.
+// Optimization: unpack and pack at the kernel's level (the host builds fused chunks, STANDARD and FAST, and ACCURATE
+// at -O2: their code overflows the kernel config buffer at -O3; else -O3), math at -O2 (a per-thread level only the
+// preprocessor can select). Even-row Q chunks (the host rounds a paired recipe's odd Q chunk up) keep every recipe
+// inside the kernel config buffer (70656 B at the default Blackhole worker L1). Watcher builds are size-optimized
+// on every thread.
 #if defined(WATCHER_ENABLED)
 #pragma GCC optimize("Os")
-#elif defined(TRISC_MATH) || defined(SDPA_RECIPE_FUSED)
-// Fused chunks (STANDARD, FAST) add enough code that -O3 unpack/pack overflows the kernel config buffer.
+#elif defined(TRISC_MATH)
 #pragma GCC optimize("O2")
-#else
-#pragma GCC optimize("O3")
 #endif
 
 #define REDUCE_OP (PoolType::MAX)
@@ -132,11 +129,11 @@ void kernel_main() {
     }
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_q_in, cb_k_in, cb_qk_im);
-#ifdef SDPA_RECIPE_LOFI
-    recipe_mm_init(cb_q_in, cb_k_in, true, 1, 1, 1);  // no MOP matmul code (see normalize_row_streaming)
-#else
-    matmul_init(cb_q_in, cb_k_in);
-#endif
+    if constexpr (recipe::lofi) {
+        recipe_mm_init(cb_q_in, cb_k_in, true, 1, 1, 1);  // no MOP matmul code (see normalize_row_streaming)
+    } else {
+        matmul_init(cb_q_in, cb_k_in);
+    }
 
     // Wait once for the reduce scaler and column identity. The recipe masks key tails from valid-row
     // counts in the pack thread, so it never reads the writer's lightweight mask tiles.
@@ -181,16 +178,7 @@ void kernel_main() {
         const uint32_t joint_rows = !do_joint_kv || valid_l_rows <= l_origin           ? 0
                                     : valid_l_rows - l_origin < joint_shard_tiles * 32 ? valid_l_rows - l_origin
                                                                                        : joint_shard_tiles * 32;
-        sdpa_recipe_ring_segment<
-            Sq_chunk_t,
-            scale_fp32,
-#ifdef SDPA_RECIPE_FP32
-            1,
-#else
-            2,
-#endif
-            Sk_chunk_t,
-            DHt>(
+        sdpa_recipe_ring_segment<Sq_chunk_t, scale_fp32, recipe::fp32 ? 1 : 2, Sk_chunk_t, DHt>(
             acc_state,
             global_q_start,
             global_q_end,
