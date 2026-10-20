@@ -1034,7 +1034,10 @@ class Model:
                 blocks.append((cols * q0 - dL, cols * Lq, q0))
             blocks = list(dict.fromkeys(blocks))
         warm = n == 0 and off == 0 and not rows_sel
-        KEY_FILL = os.environ.get("DSV41_KEY_EXPORT_FILL", "0") == "1"
+        # DEFAULT ON (DSV41_KEY_EXPORT_FILL=0 selects the slice_write export). The slice_write export re-allocates the decode key slab, which the captured decode traces reference by address: with
+        # prefill slots < users per row (DSV41_PREFILL_UP=1, the serving default) the decode steps then score stale / misplaced keys (B=16 / 262144: wrong greedy answers, logits 20-31 instead
+        # of 40-60; bisected in evals_gpqa_tau3/b16_isolation: FILL=1 alone fixes the 4,934-token probe in every slot). 1M builds already ran the fill export (generator_vllm).
+        KEY_FILL = os.environ.get("DSV41_KEY_EXPORT_FILL", "1") == "1"
         FILL_MAX = int(
             os.environ.get("DSV41_KEY_EXPORT_FILL_MAX", "262144")
         )  # (rows of the prefix written in one fill_cache: beyond it the slice_write path as before)
