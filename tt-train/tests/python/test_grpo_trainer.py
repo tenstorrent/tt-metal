@@ -32,7 +32,14 @@ which is a gated HuggingFace repo. To run this in CI without an
 
 from __future__ import annotations
 
+import collections
+import contextlib
 import csv
+import os
+import queue
+import subprocess
+import sys
+import threading
 
 import numpy as np
 import pytest
@@ -44,10 +51,11 @@ from transformers import AutoTokenizer
 
 from ttml.common.config import DeviceConfig, TransformerConfig
 from ttml.modules import RunMode
-from ttml.trainers import GRPOConfig, GRPOTrainer, TrainerCallback, get_grpo_config
+from ttml.trainers import GRPOConfig, GRPOTrainer, RolloutBatch, RolloutSampler, TrainerCallback, get_grpo_config
 from ttml.trainers.grpo_trainer import grpo_ttml_model, layout_microbatch, place_old_nlog_probs, save_checkpoint
+from ttml.trainers.grpo_trainer.remote_rollout import mpi_rollout
+from ttml.trainers.grpo_trainer.remote_rollout.weight_bridge import TTML_RANK, TTT_RANK
 from ttml.trainers.grpo_trainer.ttml_rollout_sampler import TTMLRolloutSampler
-
 
 HF_MODEL_ID = "unsloth/Llama-3.2-1B-Instruct"  # not gated
 
@@ -755,3 +763,104 @@ def test_build_lr_scheduler_cosine_with_min_lr_scales_each_group_relatively(warm
         if step < total_steps:
             scheduler.step()
     assert observed_scales == pytest.approx(expected_scales, abs=2e-3)
+
+
+class _LoopbackBridge:
+    def connect(self):
+        pass
+
+    def send_weights(self, weights):
+        self.weights = weights
+
+    def receive_weights(self):
+        return [self.weights]
+
+    def barrier(self):
+        pass
+
+
+class _EchoSampler(RolloutSampler):
+    """Returns each prompt as its completion; an empty prompt raises."""
+
+    def __init__(self):
+        self._version = -1
+
+    def generate(self, prompts):
+        if any(not p for p in prompts):
+            raise ValueError("empty prompt")
+        logprobs = np.full((len(prompts), 4), -0.5, dtype=np.float32)
+        return RolloutBatch(weight_version=self._version, prompts=prompts, completions=prompts, logprobs=logprobs)
+
+    @property
+    def weight_version(self):
+        return self._version
+
+    def update_weights(self, weights, version):
+        if version <= self._version:
+            raise ValueError(f"version {version} <= {self._version}")
+        self._version = version
+
+
+def test_mpi_rollout_loopback(monkeypatch, expect_error):
+    """Real MPIRolloutServer (in a thread) against the real MPIRolloutClient, with MPI
+    replaced by one in-memory queue per tag. In order:
+
+    1. send_weights delivers the version, and the client consumes the transfer response.
+    2. remote_generate returns completions, log-probs cut to each completion's length, and the version.
+    3. A raising generate() reaches the client as OP_ERROR: a RuntimeError with rank 1's traceback.
+    4. A raising update_weights() reaches the client the same way.
+    5. After both errors the protocol is still in sync: the next remote_generate works.
+    """
+    queues = collections.defaultdict(queue.Queue)
+    monkeypatch.setattr(mpi_rollout, "_mpi_send_bytes", lambda data, peer, tag: queues[tag].put(bytes(data)))
+    monkeypatch.setattr(mpi_rollout, "_mpi_recv_bytes", lambda n, peer, tag: queues[tag].get(timeout=30))
+    monkeypatch.setattr(
+        mpi_rollout,
+        "_require_distributed_context",
+        lambda owner: TTT_RANK if owner == "MPIRolloutServer" else TTML_RANK,
+    )
+    # Without real MPI: no os._exit, and no shutdown at pytest exit.
+    monkeypatch.setattr(mpi_rollout, "exit_on_error", contextlib.nullcontext)
+    monkeypatch.setattr(mpi_rollout.atexit, "register", lambda fn: None)
+    bridge, sampler = _LoopbackBridge(), _EchoSampler()
+    server = mpi_rollout.MPIRolloutServer(peer_rank=TTML_RANK, bridge=bridge, sampler=sampler)
+    client = mpi_rollout.MPIRolloutClient(peer_rank=TTT_RANK, bridge=bridge)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    client.send_weights({}, version=0)
+    assert client.remote_generate([[1, 2], [3]]) == ([[1, 2], [3]], [[-0.5, -0.5], [-0.5]], 0)
+    with expect_error(RuntimeError, r"rollout rank 1 failed:[\s\S]*ValueError: empty prompt"):
+        client.remote_generate([[1], []])
+    with expect_error(RuntimeError, r"rollout rank 1 failed:[\s\S]*ValueError: version 0 <= 0"):
+        client.send_weights({}, version=0)
+    _, _, version = client.remote_generate([[4]])
+    assert version == 0
+
+    client.shutdown()
+    thread.join(timeout=30)
+
+
+_RAISE_AFTER_CONNECT = """
+from ttml.trainers.grpo_trainer.remote_rollout import mpi_rollout
+
+class _Bridge:
+    def connect(self):
+        pass
+
+mpi_rollout._require_distributed_context = lambda owner: mpi_rollout.TTML_RANK
+mpi_rollout._mpi_send_bytes = lambda data, peer, tag: print("sent op", int.from_bytes(bytes(data)[:4], "little"), flush=True)
+client = mpi_rollout.MPIRolloutClient(peer_rank=mpi_rollout.TTT_RANK, bridge=_Bridge())
+raise ValueError("trainer failed")
+"""
+
+
+def test_mpi_rollout_client_sends_shutdown_when_process_raises():
+    """A process that raises after connecting sends OP_SHUTDOWN once, from atexit."""
+    env = {**os.environ, "PYTHONPATH": os.pathsep.join(sys.path)}
+    result = subprocess.run(
+        [sys.executable, "-c", _RAISE_AFTER_CONNECT], capture_output=True, text=True, timeout=120, env=env
+    )
+    assert result.returncode == 1
+    assert "ValueError: trainer failed" in result.stderr
+    assert result.stdout.splitlines().count(f"sent op {mpi_rollout.OP_SHUTDOWN}") == 1

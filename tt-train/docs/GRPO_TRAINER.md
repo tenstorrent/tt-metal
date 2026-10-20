@@ -175,10 +175,13 @@ Rules and limitations of `ttt_remote_sync`:
   log-prob of the sampled token.
 - **Prompts are never truncated**: a prompt longer than
   `max_seq_len - max_completion_length` raises `ValueError` on rank 1.
-- **No failure handling yet.** Cross-rank calls are blocking MPI sends and
-  receives without deadlines. An exception on either rank ends the tt-run job;
-  a rank that exits cleanly without reaching its peer's matching call, or a
-  stuck peer, hangs the other rank.
+- **A failure on either rank ends the job.** An exception in rank 1's
+  `generate` or `update_weights` is raised on rank 0 with rank 1's traceback.
+  Rank 0 sends rank 1 the shutdown request when training ends or rank 0's setup
+  or training raises. A failure before the two ranks connect, or in the middle
+  of a cross-rank exchange, prints the traceback and calls `os._exit(1)`.
+  Cross-rank calls have no deadlines, so a stuck peer still hangs the other
+  rank.
 
 ---
 
