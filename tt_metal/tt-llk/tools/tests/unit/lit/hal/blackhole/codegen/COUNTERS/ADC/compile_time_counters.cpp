@@ -5,7 +5,7 @@
 // RUN: %{blackhole_tensix_compile} %{blackhole_unpack_thread} -c %s -o %t.o
 // RUN: %{blackhole_objdump} -d %t.o | FileCheck %s
 
-#include "hal/counters.h"
+#include "hal/tensix_counters.h"
 
 namespace counters = hal::counters;
 namespace adc      = hal::counters::adc;
