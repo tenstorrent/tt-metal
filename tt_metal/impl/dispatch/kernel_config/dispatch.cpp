@@ -26,7 +26,7 @@
 #include "prefetch.hpp"
 #include "context/context_descriptor.hpp"
 #include "debug/inspector/inspector.hpp"
-#include <umd/device/types/xy_pair.hpp>
+#include <tt-umd/types/xy_pair.hpp>
 #include "dispatch/system_memory_manager.hpp"
 
 #include "device/device_manager.hpp"
