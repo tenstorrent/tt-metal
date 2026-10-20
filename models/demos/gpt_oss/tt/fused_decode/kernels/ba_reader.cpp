@@ -23,6 +23,7 @@
 // per block row (2 per word))]
 // BA_USER_ARG (batch-32 verify, dflash/batched.py): the block of user u = common arg BA_USER_ARG: its positions are
 // pos[M u .. M u + M - 1], its page table row u, its Q rows (rows layout, BA_Q_ROWS) row r = q row r BA_Q_RSTRIDE + u.
+// BA_Q_HEADS (with BA_USER_ARG): Q in the heads layout [1, heads, rows, 64] (BA_Q_HEADS row tiles per head) instead.
 // BA_UNIFORM: every row attends [0, pos[M - 1]] (the drafter's block; [pos[M - 1] + 1 - BA_WINDOW, ..] with a window),
 // no sinks.
 // BA_SWIN: row r attends the sliding window [pos[r] + 1 - BA_SWIN, pos[r]] (and the sinks): 2 more mask tiles in cb_aux
@@ -308,7 +309,26 @@ void kernel_main() {
         cb_reserve_back(cb_q, 2);
         const uint32_t ql1 = get_write_ptr(cb_q);
         noc_async_read_set_trid(15);
-#ifdef BA_Q_ROWS
+#ifdef BA_Q_HEADS
+        // Q in the heads layout [1, heads, rows, 64] (the RoPE output: head h's row tile rt at pages (h BA_Q_HEADS +
+        // rt) 2 + d, row R = block row r BA_Q_RSTRIDE + user): packed tile (t, d) row 8 i + j = row 4 t + i of head 8 g
+        // + j, one 32-byte face row per (i, j, f)
+        for (uint32_t d = 0; d < 2; ++d) {
+            for (uint32_t i = 0; i < 4; ++i) {
+                const uint32_t R = (4 * t + i) * BA_Q_RSTRIDE + user, rr = R % 32;
+                for (uint32_t j = 0; j < 8; ++j) {
+                    const uint64_t src = s_q.get_noc_addr(((8 * g + j) * BA_Q_HEADS + R / 32) * 2 + d);
+                    const uint32_t pr = 8 * i + j;
+                    for (uint32_t f = 0; f < 2; ++f) {
+                        noc_async_read(
+                            src + ((rr / 16) * 2 + f) * 512 + (rr % 16) * 32,
+                            ql1 + d * tile + ((pr / 16) * 2 + f) * 512 + (pr % 16) * 32,
+                            32);
+                    }
+                }
+            }
+        }
+#elif defined(BA_Q_ROWS)
         // Q in the rows layout [1, M, heads, 64] (row r's tiles 2 r + d, heads in tile rows): gather packed tile (t, d)
         // rows 8 i .. 8 i + 7 = row 4 t + i's heads 8 g .. 8 g + 7 (256-byte segments per 16-column half f)
         for (uint32_t d = 0; d < 2; ++d) {

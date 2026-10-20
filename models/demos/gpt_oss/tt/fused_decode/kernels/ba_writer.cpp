@@ -11,6 +11,7 @@
 // (BA_OUT_NOTIFY_N: the consumer cores' noc (x << 8 | y), 2 per word), (BA_USER_ARG_W: the user)]
 // BA_OUT_ROWS (batch-32 verify): the root writes its packed tile's 4 rows into the rows layout [1, rows, heads, 64]
 // instead (block row r of user u = out row r BA_Q_RSTRIDE + u, kv head g's 8 heads = tile rows 8 g .. 8 g + 7).
+// BA_OUT_CONCAT: into the concatenated-heads layout [1, 1, rows, heads * 64] (BA_OUT_CONCAT column tiles) instead.
 
 #include <stdint.h>
 
@@ -99,7 +100,27 @@ void kernel_main() {
     if (sl.send_round < 0) {
         cb_wait_front(cb_out, 2);
         const uint32_t src = get_read_ptr(cb_out);
-#ifdef BA_OUT_ROWS
+#ifdef BA_OUT_CONCAT
+        // the concatenated-heads layout [1, 1, rows, heads * 64] (o_proj's input: row tile rt's column tile c at page
+        // rt BA_OUT_CONCAT + c): packed row 8 i + j (block row 4 t + i, head 8 g + j) -> row R = (4 t + i) BA_Q_RSTRIDE
+        // + user, column tiles 2 (8 g + j) + d, one 32-byte face row per (i, j, d, f)
+        const uint32_t user = get_common_arg_val<uint32_t>(BA_USER_ARG_W);
+        for (uint32_t d = 0; d < 2; ++d) {
+            for (uint32_t i = 0; i < 4; ++i) {
+                const uint32_t R = (4 * t + i) * BA_Q_RSTRIDE + user, rr = R % 32;
+                for (uint32_t j = 0; j < 8; ++j) {
+                    const uint64_t dst = s_out.get_noc_addr((R / 32) * BA_OUT_CONCAT + 2 * (8 * g + j) + d);
+                    const uint32_t pr = 8 * i + j;
+                    for (uint32_t f = 0; f < 2; ++f) {
+                        noc_async_write(
+                            src + d * tile + ((pr / 16) * 2 + f) * 512 + (pr % 16) * 32,
+                            dst + ((rr / 16) * 2 + f) * 512 + (rr % 16) * 32,
+                            32);
+                    }
+                }
+            }
+        }
+#elif defined(BA_OUT_ROWS)
         const uint32_t user = get_common_arg_val<uint32_t>(BA_USER_ARG_W);
         for (uint32_t d = 0; d < 2; ++d) {
             for (uint32_t i = 0; i < 4; ++i) {

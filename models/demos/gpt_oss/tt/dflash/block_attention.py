@@ -131,14 +131,29 @@ class BlockAttention:
         return [noc[i] for i in sorted(range(len(noc)), key=lambda i: (i % self.S, i))]
 
     def parts(
-        self, q, k_cache, v_cache, pos, page_table, sinks, scale, wait, patch=None, out_notify=None, user=None, out=None
+        self,
+        q,
+        k_cache,
+        v_cache,
+        pos,
+        page_table,
+        sinks,
+        scale,
+        wait,
+        patch=None,
+        out_notify=None,
+        user=None,
+        out=None,
+        heads_io=False,
     ):
         """(kernels, cbs, io); q: the packed Q [1, nkv, Tt * 32, 64] (tile (g, t, d) at page (g Tt + t) 2 + d); pos:
         INT32 [>= M] (row r at pos[r], non-decreasing, consecutive rows within 32 positions); page_table: INT32 [*,
         blocks] (row 0 used); sinks: the heads' [heads, 32] BF16 sink tile; wait = (semaphore id, count): the QKV
         writers' signal that q and the block's K / V rows are written.
         user = (u, users) (batch-32 verify, q_rows): the block of user u among `users`: positions pos[M u ..], page table
-        row u, Q rows (and the output, `out` in the same rows layout [1, M users, heads, 64]) row r users + u."""
+        row u, Q rows (and the output, `out` in the same rows layout [1, M users, heads, 64]) row r users + u.
+        heads_io (with user): q in the heads layout [1, heads, M users, 64] (the RoPE output) and out in the
+        concatenated-heads layout [1, 1, M users, heads * 64] (o_proj's input), row r users + u."""
         out = self.out if out is None else out
         cap, S = CAP, self.S
         sinks = sinks if sinks is not None else self.mask_lib  # uniform: no sinks (a placeholder address)
@@ -255,7 +270,11 @@ class BlockAttention:
         if user is not None:
             assert self.q_rows and patch is None and out_notify is None
             defines += [("BA_USER_ARG", str(len(reader_common))), ("BA_USER_ARG_W", str(len(writer_common)))]
-            defines += [("BA_Q_RSTRIDE", str(user[1])), ("BA_OUT_ROWS", "1")]
+            defines += [("BA_Q_RSTRIDE", str(user[1]))]
+            if heads_io:
+                defines += [("BA_Q_HEADS", str(q.shape[2] // TILE)), ("BA_OUT_CONCAT", str(out.shape[-1] // TILE))]
+            else:
+                defines += [("BA_OUT_ROWS", "1")]
             reader_common.append(user[0])
             writer_common.append(user[0])
         if self.window:  # one window for all rows

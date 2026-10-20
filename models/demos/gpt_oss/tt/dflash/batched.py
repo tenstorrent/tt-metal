@@ -686,17 +686,21 @@ class _UserBlockAttention:
             for j in range(per_program)
         ]
 
-    def __call__(self, q, k_cache, v_cache, pos_ui, page_table, sinks, scale):
+    def __call__(self, q, k_cache, v_cache, pos_ui, page_table, sinks, scale, heads_io=False):
         """q: [1, rows, heads, hd] (row 32 i + u, rotated); pos_ui: INT32 [rows] (8 u + i: start_u + i); page_table:
-        INT32 [users, blocks]. Returns the attention output in q's layout."""
-        out = ttnn.empty(list(q.shape), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.mesh,
-                         memory_config=ttnn.DRAM_MEMORY_CONFIG)  # fmt: skip
+        INT32 [users, blocks]. Returns the attention output in q's layout. heads_io: q in the heads layout [1, heads,
+        rows, hd] (the RoPE output) and the output [1, 1, rows, heads * hd] (o_proj's input) in L1."""
+        if heads_io:
+            shape, mc = [1, 1, q.shape[2], q.shape[1] * q.shape[3]], ttnn.L1_MEMORY_CONFIG
+        else:
+            shape, mc = list(q.shape), ttnn.DRAM_MEMORY_CONFIG
+        out = ttnn.empty(shape, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.mesh, memory_config=mc)
         for p0 in range(0, self.users, self.P):
             kernels, cbs, sems, io = [], [], [], []
             for j, inst in enumerate(self.inst):
                 kk, cc, tio = inst.parts(
                     q, k_cache, v_cache, pos_ui, page_table, sinks, scale, wait=(self.WAIT_SEM, 0),
-                    user=(p0 + j, self.users), out=out,
+                    user=(p0 + j, self.users), out=out, heads_io=heads_io,
                 )  # fmt: skip
                 kernels += kk
                 cbs += cc
@@ -909,11 +913,11 @@ class BatchedVerify:
         e.deallocate(True)
         return (w, indices) if with_ids else w
 
-    def _moe(self, li, layer, x):
-        """The MoE (this device's TP share, _moe_dense or _moe_grouped) and the TP all-reduce. x: [1, 1, rows, hidden]
-        normed (DRAM)."""
+    def _moe(self, li, layer, x, memory_config=ttnn.DRAM_MEMORY_CONFIG):
+        """The MoE (this device's TP share, _moe_dense or _moe_grouped) and the TP all-reduce (into memory_config). x:
+        [1, 1, rows, hidden] normed (DRAM)."""
         down = (self._moe_grouped if self.grouped is not None else self._moe_dense)(li, layer, x)
-        out = _all_reduce(down)
+        out = _all_reduce(down, memory_config)
         down.deallocate(True)
         return out
 
@@ -1011,13 +1015,8 @@ class BatchedVerify:
             compute_kernel_config=self.qkv_ck,
         )
         x.deallocate(True)
-        sdpa = self._attention_rows(li, attn_mod, qkv, pos, rot)
+        heads = self._attention_rows(li, attn_mod, qkv, pos, rot)
         qkv.deallocate(True)
-        # [1, rows, heads, hd] (row 32 i + u) -> [1, heads, rows, hd] -> [1, 1, rows, heads * hd]
-        perm = ttnn.permute(sdpa, (0, 2, 1, 3))
-        sdpa.deallocate(True)
-        heads = ttnn.experimental.nlp_concat_heads(perm, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        perm.deallocate(True)
         op = attn_mod.batched_oproj
         o = ttnn.matmul(
             heads,
@@ -1038,8 +1037,10 @@ class BatchedVerify:
 
     def _attention_rows(self, li, attn_mod, qkv, pos, cos_sin):
         """The attention core for all 256 rows at once: QKV -> prefill-layout heads [1, heads, rows, hd], Q and K rotated
-        per row, K / V into the BFP8_b caches by one multi-user kernel, then block attention (full layers) or one
-        sliding-window decode SDPA per 32-row step on Q's step slice. Returns [1, rows, heads, hd] (row 32 i + u)."""
+        per row, K / V into the BFP8_b caches by one multi-user kernel, then block attention (full layers; windowed on
+        the sliding-window layers; or with B32_SWIN=0 one sliding-window decode SDPA per 32-row step on Q's step slice).
+        Returns the concatenated heads [1, 1, rows, heads * hd] (row 32 i + u). The block attention reads Q in the RoPE
+        output's heads layout and writes o_proj's input layout itself (no transposes, no concat-heads op)."""
         w, cfg = attn_mod.weights, attn_mod.config
         nh, nkv, hd = self.local_heads, self.local_kv_heads, cfg.head_dim
         k_cache, v_cache = self.kv_cache[li]
@@ -1048,20 +1049,22 @@ class BatchedVerify:
             qkv, num_heads=nh, num_kv_heads=nkv, transpose_k_heads=False, memory_config=ttnn.L1_MEMORY_CONFIG
         )
         cos, sin = cos_sin
-        q2 = ttnn.experimental.rotary_embedding_llama(q, cos, sin, self.trans_rows, is_decode_mode=False)
+        # (in L1, as q: the block attention reads its rows 32 bytes at a time)
+        q2 = ttnn.experimental.rotary_embedding_llama(q, cos, sin, self.trans_rows, is_decode_mode=False,
+                                                      memory_config=ttnn.L1_MEMORY_CONFIG)  # fmt: skip
         q.deallocate(True)
         k2 = ttnn.experimental.rotary_embedding_llama(k, cos, sin, self.trans_rows, is_decode_mode=False)
         k.deallocate(True)
         self.kv_write([k2], [v], [(k_cache, v_cache)], pos[self.block], self.page_table)
         k2.deallocate(True)
         v.deallocate(True)
-        q_rows = ttnn.permute(q2, (0, 2, 1, 3), memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        q2.deallocate(True)
         if block_attn or self.swin_attn is not None:
             ba = self.block_attn if block_attn else self.swin_attn
-            out = ba(q_rows, k_cache, v_cache, pos[self.block], self.page_table, w.decode_sinks, cfg.scaling)
-            q_rows.deallocate(True)
+            out = ba(q2, k_cache, v_cache, pos[self.block], self.page_table, w.decode_sinks, cfg.scaling, heads_io=True)
+            q2.deallocate(True)
             return out
+        q_rows = ttnn.permute(q2, (0, 2, 1, 3), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        q2.deallocate(True)
         outs = []
         for i in range(self.block):
             qi = ttnn.slice(q_rows, [0, i * U32, 0, 0], [1, (i + 1) * U32, nh, hd])
@@ -1085,7 +1088,12 @@ class BatchedVerify:
         out = ttnn.concat(outs, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         for t in outs:
             t.deallocate(True)
-        return out
+        # [1, rows, heads, hd] (row 32 i + u) -> [1, heads, rows, hd] -> [1, 1, rows, heads * hd]
+        perm = ttnn.permute(out, (0, 2, 1, 3))
+        out.deallocate(True)
+        heads = ttnn.experimental.nlp_concat_heads(perm, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        perm.deallocate(True)
+        return heads
 
     def _sharded_rows(self, x, norm, residual_mc):
         """Norm each 32-row tile of x on its width-sharded residual shards (the batched decode's norm)."""
@@ -1120,25 +1128,19 @@ class BatchedVerify:
             n2 = layer.post_attention_layernorm.forward_sharded(res2)
             normed = ttnn.to_memory_config(n2, ttnn.DRAM_MEMORY_CONFIG)
             n2.deallocate(True)
-            x = ttnn.to_memory_config(res2, ttnn.DRAM_MEMORY_CONFIG)
-            res2.deallocate(True)
-            moe = self._moe(li, layer, normed)
+            # the MoE's all-reduce lands on the residual shards: the residual add stays sharded (as the attention's)
+            moe = self._moe(li, layer, normed, self.residual_mc)
             normed.deallocate(True)
-            x2 = ttnn.add(x, moe, dtype=ttnn.bfloat16)
-            x.deallocate(True)
+            res = ttnn.add(res2, moe, memory_config=self.residual_mc, dtype=ttnn.bfloat16)
+            res2.deallocate(True)
             moe.deallocate(True)
             if li in self.capture_layers:
-                feats.append(ttnn.clone(x2))
-            res = ttnn.to_memory_config(x2, self.residual_mc)
-            x = x2
-            if li < len(model.layers) - 1:
-                x2.deallocate(True)
+                feats.append(ttnn.to_memory_config(res, ttnn.DRAM_MEMORY_CONFIG))
         features = ttnn.concat(feats, dim=-1)
         for t in feats:
             t.deallocate(True)
         normed_s = model.norm.forward_sharded(res)
         res.deallocate(True)
-        x.deallocate(True)
         normed = ttnn.to_memory_config(normed_s, ttnn.DRAM_MEMORY_CONFIG)
         normed_s.deallocate(True)
         normed8 = ttnn.typecast(normed, ttnn.bfloat8_b)  # (to_memory_config to the same layout returns its input)
