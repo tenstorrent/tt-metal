@@ -34,6 +34,14 @@ struct ReceiverChannelCounterBasedResponseCreditSender {
         update_sender_side_credits();
     }
 
+    FORCE_INLINE void accumulate_completion_credit(uint8_t src_id, uint32_t num_completions = 1) {
+        const uint32_t c = completion_counters[src_id] + num_completions;
+        completion_counters[src_id] = c;
+        completion_counters_base_ptr[src_id] = c;
+    }
+
+    FORCE_INLINE void flush_completion_credits() const { update_sender_side_credits(); }
+
     // Assumes !eth_txq_is_busy() -- PLEASE CHECK BEFORE CALLING
     FORCE_INLINE void send_ack_credit(uint8_t src_id) {
         ack_counters[src_id]++;
@@ -68,6 +76,12 @@ struct ReceiverChannelStreamRegisterFreeSlotsBasedCreditSender {
     FORCE_INLINE void send_completion_credit(uint8_t src_id, uint32_t num_completions) {
         remote_update_ptr_val<receiver_txq_id>(sender_channel_packets_completed_stream_ids[src_id], num_completions);
     }
+
+    FORCE_INLINE void accumulate_completion_credit(uint8_t src_id, uint32_t num_completions = 1) {
+        remote_update_ptr_val<receiver_txq_id>(sender_channel_packets_completed_stream_ids[src_id], num_completions);
+    }
+
+    FORCE_INLINE void flush_completion_credits() const {}
 
     // Assumes !eth_txq_is_busy() -- PLEASE CHECK BEFORE CALLING
     FORCE_INLINE void send_ack_credit(uint8_t src_id) {
@@ -154,10 +168,17 @@ struct SenderChannelFromReceiverCounterBasedCreditsReceiver {
         completions_received_and_processed += num_completions;
     }
 
+    // Experiment (EXP_TX_LEAN_COMPLETIONS): the receiver acks and completes only packets this channel sent, so
+    // while every sent packet is processed the counters cannot have moved.
+    FORCE_INLINE void note_packet_sent() { packets_sent++; }
+    FORCE_INLINE bool has_completions_pending() const { return packets_sent != completions_received_and_processed; }
+    FORCE_INLINE bool has_acks_pending() const { return packets_sent != acks_received_and_processed; }
+
     volatile uint32_t* acks_received_counter_ptr;
     volatile uint32_t* completions_received_counter_ptr;
     uint32_t acks_received_and_processed = 0;
     uint32_t completions_received_and_processed = 0;
+    uint32_t packets_sent = 0;
 };
 
 struct SenderChannelFromReceiverStreamRegisterFreeSlotsBasedCreditsReceiver {
@@ -183,6 +204,11 @@ struct SenderChannelFromReceiverStreamRegisterFreeSlotsBasedCreditsReceiver {
     FORCE_INLINE void increment_num_processed_completions(size_t num_completions) {
         increment_local_update_ptr_val(to_sender_packets_completed_stream, -num_completions);
     }
+
+    // EXP_TX_LEAN_COMPLETIONS is implemented for counter credits only; here every visit still reads.
+    FORCE_INLINE void note_packet_sent() {}
+    FORCE_INLINE bool has_completions_pending() const { return true; }
+    FORCE_INLINE bool has_acks_pending() const { return true; }
 
     uint32_t to_sender_packets_acked_stream;
     uint32_t to_sender_packets_completed_stream;

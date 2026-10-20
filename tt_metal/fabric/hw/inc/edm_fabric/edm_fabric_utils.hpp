@@ -51,8 +51,19 @@ FORCE_INLINE void send_chunk_from_address_with_trid(
     constexpr bool update_counter = false;
 #endif
     if constexpr (stateful_api) {
+#if defined(ARCH_BLACKHOLE) && !defined(DEBUG_PRINT_ENABLED) && !defined(WATCHER_ENABLED)
+        while (!noc_cmd_buf_ready(noc, cmd_buf));
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_PACKET_TAG, NOC_PACKET_TAG_TRANSACTION_ID(trid));
+        ncrisc_noc_write_with_state<
+            DM_DEDICATED_NOC,
+            /*posted=*/true,
+            update_counter,
+            /*one_packet=*/false,
+            /*skip_cmdbuf_chk=*/true>(noc, cmd_buf, local_l1_address, remote_l1_write_addr_l, page_size * num_pages);
+#else
         noc_async_write_one_packet_with_trid_with_state<update_counter, true>(
             local_l1_address, remote_l1_write_addr_l, page_size * num_pages, trid, cmd_buf, noc);
+#endif
     } else {
         noc_async_write_one_packet_with_trid<update_counter, true>(
             local_l1_address,

@@ -1,0 +1,17 @@
+Tests:
+  - name: "FlowControlMeshLowLatency"
+    enable_flow_control: true
+    fabric_setup:
+      topology: Mesh
+
+    parametrization_params:
+      ftype: [mcast]
+      ntype: [unicast_scatter_write]
+      num_links: [2]
+      size: [1024, 2048, 4096]
+
+    defaults:
+      num_packets: 10000
+
+    patterns:
+      - type: all_to_all

@@ -27,6 +27,7 @@ using FabricNodeId = tt::tt_fabric::FabricNodeId;
 using RoutingDirection = tt::tt_fabric::RoutingDirection;
 using SenderMemoryMap = tt::tt_fabric::fabric_tests::SenderMemoryMap;
 using TrafficPatternConfig = tt::tt_fabric::fabric_tests::TrafficPatternConfig;
+using TrafficSummaryLabel = tt::tt_fabric::fabric_tests::TrafficSummaryLabel;
 using BandwidthResult = tt::tt_fabric::fabric_tests::BandwidthResult;
 using BandwidthResultSummary = tt::tt_fabric::fabric_tests::BandwidthResultSummary;
 using IDeviceInfoProvider = tt::tt_fabric::fabric_tests::IDeviceInfoProvider;
@@ -65,6 +66,13 @@ private:
 
     // Internal scratch state (per test)
     std::map<FabricNodeId, std::map<RoutingDirection, uint32_t>> outgoing_traffic_;
+    // Payload bytes and packets of every flow crossing each device boundary, so links that carry
+    // flows of different sizes or counts are totalled correctly.
+    struct LinkLoad {
+        uint64_t bytes = 0;
+        uint64_t packets = 0;
+    };
+    std::map<FabricNodeId, std::map<RoutingDirection, LinkLoad>> outgoing_load_;
     std::map<FabricNodeId, std::map<RoutingDirection, std::map<uint32_t, uint64_t>>> device_direction_cycles_;
     std::map<FabricNodeId, std::map<CoreCoord, uint64_t>> device_core_cycles_;
     std::optional<double> telemetry_bw_min_;

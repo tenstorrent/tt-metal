@@ -1,0 +1,18 @@
+# Diagnostic: the ChannelTrimming CI shape (Linear, 0 -> 1, unicast, no flow control) carrying a stream.
+Tests:
+  - name: "ChannelTrimmingStream"
+    fabric_setup:
+      topology: Linear
+      enable_channel_trimming: true
+    defaults:
+      ftype: unicast
+      size: 1024
+      repeat: 25
+      stream:
+        - {ntype: unicast_write, count: 3}
+        - fused_atomic_inc
+    senders:
+      - device: 0
+        patterns:
+          - destination:
+              device: 1

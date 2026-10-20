@@ -1,0 +1,55 @@
+# Forward 1-hop write at 4000 / 4032 B with a light reverse flow (256 B, 40000 packets: shorter than the forward
+# flow, so the summary's maximum over flows bounds the forward one) on the same link, channel trimming on. RESULTS 15.
+allocation_policies:
+    receiver:
+      policy: RoundRobin
+      max_configs_per_core: 4
+
+Tests:
+  - name: "Mesh1HopNSRev"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+      enable_channel_trimming: true
+    parametrization_params:
+      ntype: [unicast_write]
+      size: [4000, 4032]
+    defaults:
+      ftype: unicast
+      num_packets: 50000
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [0, 4]
+      - device: [0, 4]
+        patterns:
+          - destination:
+              device: [0, 0]
+            size: 256
+            num_packets: 40000
+
+  - name: "Mesh1HopEWRev"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+      enable_channel_trimming: true
+    parametrization_params:
+      ntype: [unicast_write]
+      size: [4000, 4032]
+    defaults:
+      ftype: unicast
+      num_packets: 50000
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [0, 1]
+      - device: [0, 1]
+        patterns:
+          - destination:
+              device: [0, 0]
+            size: 256
+            num_packets: 40000

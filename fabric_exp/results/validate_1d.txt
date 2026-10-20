@@ -1,0 +1,58 @@
+1. Interval per reported packet (cycles): the slowest router in the model vs the benchmark (no telemetry).
+   Decode + admission 28; other piece costs from the 2D-calibrated catalog.
+
+  test                              size measured  model  error   slowest router in the model
+  LinearMulticast write             1024    174.4  167.0  -4.2%   ([1, 2]) ch 7: sends 60033, receives 20011 (fwd 1, local 1); E0, E0=167 E1=76
+  LinearMulticast write             2048    174.8  167.0  -4.5%   ([1, 2]) ch 7: sends 60033, receives 20011 (fwd 1, local 1); E0, E0=167 E1=76
+  LinearMulticast write             4096    175.6  167.0  -4.9%   ([1, 2]) ch 7: sends 60033, receives 20011 (fwd 1, local 1); E0, E0=167 E1=76
+  LinearMulticast scatter           1024    226.1  202.1 -10.6%   ([1, 3]) ch 4: sends 20011, receives 60033 (fwd 0, local 1); E1, E0=56 E1=202
+  LinearMulticast scatter           2048    226.3  202.1 -10.7%   ([1, 3]) ch 4: sends 20011, receives 60033 (fwd 0, local 1); E1, E0=56 E1=202
+  LinearMulticast scatter           4096    226.7  202.1 -10.8%   ([1, 3]) ch 4: sends 20011, receives 60033 (fwd 0, local 1); E1, E0=56 E1=202
+  UnidirLinearMulticast write       1024    239.8  228.1  -4.9%   ([1, 2]) ch 6: sends 40022, receives 40022 (fwd 1, local 1); E1, E0=167 E1=228
+  UnidirLinearMulticast write       2048    240.7  228.1  -5.2%   ([1, 2]) ch 6: sends 40022, receives 40022 (fwd 1, local 1); E1, E0=167 E1=228
+  UnidirLinearMulticast write       4096    241.2  228.1  -5.4%   ([1, 2]) ch 6: sends 40022, receives 40022 (fwd 1, local 1); E1, E0=167 E1=228
+  UnidirLinearMulticast scatter     1024    290.8  285.2  -2.0%   ([1, 2]) ch 6: sends 40022, receives 40022 (fwd 1, local 1); E1, E0=167 E1=285
+  UnidirLinearMulticast scatter     2048    290.9  285.2  -2.0%   ([1, 2]) ch 6: sends 40022, receives 40022 (fwd 1, local 1); E1, E0=167 E1=285
+  UnidirLinearMulticast scatter     4096    291.3  285.2  -2.1%   ([1, 2]) ch 6: sends 40022, receives 40022 (fwd 1, local 1); E1, E0=167 E1=285
+
+  mean |error| 5.6%, max 10.8%
+
+2. Delay injection at 2 KiB (RESULTS §2): change in the interval, measured / model. The model adds the spin's
+   own cost: N + 12 on the receiver, N + 12 - 14 on the sender (overlapping its TX-queue wait).
+
+  test                                  TX +30      TX +60      RX +30      RX +60
+  LinearMulticast write             +28 /  +28  +52 /  +58  +42 /  +20  +71 /  +50
+  LinearMulticast scatter            +0 /   +0  +16 /  +23  +45 /  +42  +74 /  +72
+  UnidirLinearMulticast write        +0 /   +0  +13 /   +0  +45 /  +42  +75 /  +72
+  UnidirLinearMulticast scatter      +0 /   +0   +0 /   +0  +45 /  +42  +75 /  +72
+3. Receive-pipeline designs on the measured 1D traffic, 4 KiB, lean poll + batch x4 (static; the
+   event-driven model assumes symmetric traffic). Per design: the slowest router's interval per reported packet
+   (line rate <= 117), that router, and its per-core loads.
+
+=== LinearMulticast write
+  today                         117  ([1, 2]) ch 6 (sends 40022, receives 40022, fwd 1): E1, E0=49 E1=117
+  P3 E admits, D moves          116  ([1, 2]) ch 7 (sends 60033, receives 20011, fwd 1): wire, D0=40 E0=72 E1=50
+  P3s P3, fwd/local NoCs        116  ([1, 2]) ch 7 (sends 60033, receives 20011, fwd 1): wire, D0=40 E0=72 E1=50
+  P5 push, D does the rest      116  ([1, 2]) ch 7 (sends 60033, receives 20011, fwd 1): wire, D0=51 E0=72 E1=46
+  P5L push, E local             116  ([1, 2]) ch 7 (sends 60033, receives 20011, fwd 1): wire, D0=30 E0=72 E1=67
+
+=== LinearMulticast scatter
+  today                         155  ([1, 2]) ch 6 (sends 40022, receives 40022, fwd 1): E1, E0=49 E1=155
+  P3 E admits, D moves          124  ([1, 3]) ch 4 (sends 20011, receives 60033, fwd 0): D0, D0=124 E0=24 E1=80
+  P3s P3, fwd/local NoCs        124  ([1, 3]) ch 4 (sends 20011, receives 60033, fwd 0): D0, D0=124 E0=24 E1=80
+  P5 push, D does the rest      152  ([1, 3]) ch 4 (sends 20011, receives 60033, fwd 0): D0, D0=152 E0=24 E1=52
+  P5L push, E local             149  ([1, 3]) ch 4 (sends 20011, receives 60033, fwd 0): E1, E0=24 E1=149
+
+=== UnidirLinearMulticast write
+  today                         175  ([1, 2]) ch 6 (sends 40022, receives 40022, fwd 1): E1, E0=74 E1=175
+  P3 E admits, D moves          152  ([1, 2]) ch 6 (sends 40022, receives 40022, fwd 1): noc port, D0=119 E0=74 E1=89
+  P3s P3, fwd/local NoCs        119  ([1, 2]) ch 6 (sends 40022, receives 40022, fwd 1): D0, D0=119 E0=74 E1=89
+  P5 push, D does the rest      153  ([1, 2]) ch 6 (sends 40022, receives 40022, fwd 1): D0, D0=153 E0=74 E1=77
+  P5L push, E local             153  ([1, 2]) ch 6 (sends 40022, receives 40022, fwd 1): noc port, D0=91 E0=74 E1=139
+
+=== UnidirLinearMulticast scatter
+  today                         232  ([1, 2]) ch 6 (sends 40022, receives 40022, fwd 1): E1, E0=74 E1=232
+  P3 E admits, D moves          176  ([1, 2]) ch 6 (sends 40022, receives 40022, fwd 1): D0, D0=176 E0=74 E1=89
+  P3s P3, fwd/local NoCs        176  ([1, 2]) ch 6 (sends 40022, receives 40022, fwd 1): D0, D0=176 E0=74 E1=89
+  P5 push, D does the rest      210  ([1, 2]) ch 6 (sends 40022, receives 40022, fwd 1): D0, D0=210 E0=74 E1=77
+  P5L push, E local             196  ([1, 2]) ch 6 (sends 40022, receives 40022, fwd 1): E1, D0=91 E0=74 E1=196

@@ -1,0 +1,25 @@
+1. Designs at 4096 B with lean poll + batch x4 (line rate <= 117 cycles/packet). Event-driven: 32/32 Ethernet slots, 12 DRISC staging slots, downstream channels of 16 and 24 slots.
+
+=== 1d_linear_mcast
+  design                   static  ds16  ds24 retry  static per-core load     placement
+  today                       175   175   175  0.00  E0=74 E1=175             E0: tx_send+tx_completion  E1: rx_poll+rx_decode+rx_admit+rx_local+rx_forward+rx_ack
+  P0 keep decode              175   175   175  0.00  E0=74 E1=175             E0: tx_send+tx_completion  E1: rx_poll+rx_decode+rx_admit+rx_local+rx_forward+rx_ack
+  P3 E admits, D moves        152   211   211  1.40  D0=118 E0=74 E1=89       D0: rx_local+rx_forward  E0: tx_send+tx_completion  E1: rx_poll+rx_decode+rx_admit+rx_ack
+  P1 D decodes, E admits      152   161   159  1.08  D0=146 E0=74 E1=84       D0: rx_decode+rx_local+rx_forward  E0: tx_send+tx_completion  E1: rx_poll+rx_admit+rx_ack
+  P2 credit relay             152   152   152  0.00  D0=152 E0=74 E1=77       D0: rx_decode+rx_admit+rx_local+rx_forward  E0: tx_send+tx_completion  E1: rx_poll+rx_ack
+  P4 D admits, relay          153   153   153  0.00  D0=90 E0=74 E1=139       D0: rx_admit+rx_forward  E0: tx_send+tx_completion  E1: rx_poll+rx_decode+rx_local+rx_ack
+  P4d D admits, own credits    153   153   153  0.00  D0=84 E0=74 E1=114       D0: rx_admit+rx_forward  E0: tx_send+tx_completion  E1: rx_poll+rx_decode+rx_local+rx_ack
+  P5 push, D does the rest    152   146   146  0.00  D0=152 E0=74 E1=77       D0: rx_decode+rx_admit+rx_local+rx_forward  E0: tx_send+tx_completion  E1: rx_poll+rx_ack
+  P5L push, E local           153   153   153  0.00  D0=90 E0=74 E1=139       D0: rx_admit+rx_forward  E0: tx_send+tx_completion  E1: rx_poll+rx_decode+rx_local+rx_ack
+
+=== 1d_linear_mcast_scatter
+  design                   static  ds16  ds24 retry  static per-core load     placement
+  today                       232   232   232  0.00  E0=74 E1=232             E0: tx_send+tx_completion  E1: rx_poll+rx_decode+rx_admit+rx_local+rx_forward+rx_ack
+  P0 keep decode              232   232   232  0.00  E0=74 E1=232             E0: tx_send+tx_completion  E1: rx_poll+rx_decode+rx_admit+rx_local+rx_forward+rx_ack
+  P3 E admits, D moves        176   190   190  0.00  D0=176 E0=74 E1=89       D0: rx_local+rx_forward  E0: tx_send+tx_completion  E1: rx_poll+rx_decode+rx_admit+rx_ack
+  P1 D decodes, E admits      187   176   176  0.00  D0=100 E0=74 E1=187      D0: rx_decode+rx_forward  E0: tx_send+tx_completion  E1: rx_poll+rx_admit+rx_local+rx_ack
+  P2 credit relay             191   168   168  0.00  D0=110 E0=74 E1=191      D0: rx_decode+rx_admit+rx_forward  E0: tx_send+tx_completion  E1: rx_poll+rx_local+rx_ack
+  P4 D admits, relay          196   169   169  0.00  D0=90 E0=74 E1=196       D0: rx_admit+rx_forward  E0: tx_send+tx_completion  E1: rx_poll+rx_decode+rx_local+rx_ack
+  P4d D admits, own credits    171   160   160  0.00  D0=84 E0=74 E1=171       D0: rx_admit+rx_forward  E0: tx_send+tx_completion  E1: rx_poll+rx_decode+rx_local+rx_ack
+  P5 push, D does the rest    210   203   203  0.00  D0=210 E0=74 E1=77       D0: rx_decode+rx_admit+rx_local+rx_forward  E0: tx_send+tx_completion  E1: rx_poll+rx_ack
+  P5L push, E local           196   169   169  0.00  D0=90 E0=74 E1=196       D0: rx_admit+rx_forward  E0: tx_send+tx_completion  E1: rx_poll+rx_decode+rx_local+rx_ack

@@ -1,0 +1,82 @@
+core,measurement,cycles,ops,cycles_per_op
+DRISC,timer read,468,64,7.3125
+DRISC,wall clock read,593,64,9.26562
+DRISC,L1 load, dependent,528,64,8.25
+DRISC,L1 load, 4 independent (per load),1430,256,5.58594
+DRISC,fence + L1 load (counter poll),924,64,14.4375
+DRISC,stream register read (doorbell poll),657,64,10.2656
+DRISC,stream register read, 4 independent (per read),1299,256,5.07422
+DRISC,local stream register update,208,64,3.25
+DRISC,NoC cmd buffer ready read,654,64,10.2188
+DRISC,NoC0 write 64 B -> ERISC, issue,2139,64,33.4219
+DRISC,NoC0 write 64 B -> ERISC, drain,2432,64,38
+DRISC,NoC0 write payload -> ERISC, issue,4485,64,70.0781
+DRISC,NoC0 write payload -> ERISC, drain,4893,64,76.4531
+DRISC,NoC0 posted write payload, issue,4479,64,69.9844
+DRISC,NoC0 posted write payload, drain,4604,64,71.9375
+DRISC,NoC0 doorbell -> ERISC stream reg, issue,2037,64,31.8281
+DRISC,NoC0 doorbell -> ERISC stream reg, drain,2325,64,36.3281
+DRISC,NoC0 forward copy (payload + doorbell), issue,5195,64,81.1719
+DRISC,NoC0 forward copy (payload + doorbell), drain,5530,64,86.4062
+DRISC,NoC0 write payload + wait for ack,12696,32,396.75
+DRISC,NoC0 read payload <- ERISC, issue,1647,64,25.7344
+DRISC,NoC0 read payload <- ERISC, drain,4994,64,78.0312
+DRISC,NoC0 read payload + wait for data,12898,32,403.062
+DRISC,NoC1 write 64 B -> ERISC, issue,2135,64,33.3594
+DRISC,NoC1 write 64 B -> ERISC, drain,2427,64,37.9219
+DRISC,NoC1 write payload -> ERISC, issue,4481,64,70.0156
+DRISC,NoC1 write payload -> ERISC, drain,4889,64,76.3906
+DRISC,NoC1 posted write payload, issue,4480,64,70
+DRISC,NoC1 posted write payload, drain,4604,64,71.9375
+DRISC,NoC1 doorbell -> ERISC stream reg, issue,2033,64,31.7656
+DRISC,NoC1 doorbell -> ERISC stream reg, drain,2321,64,36.2656
+DRISC,NoC1 forward copy (payload + doorbell), issue,5189,64,81.0781
+DRISC,NoC1 forward copy (payload + doorbell), drain,5524,64,86.3125
+DRISC,NoC1 write payload + wait for ack,12696,32,396.75
+DRISC,NoC1 read payload <- ERISC, issue,1640,64,25.625
+DRISC,NoC1 read payload <- ERISC, drain,4971,64,77.6719
+DRISC,NoC1 read payload + wait for data,12897,32,403.031
+ERISC,timer read,464,64,7.25
+ERISC,L1 load, dependent,526,64,8.21875
+ERISC,L1 load, 4 independent (per load),1429,256,5.58203
+ERISC,stream register read,659,64,10.2969
+ERISC,stream register read, 4 independent (per read),1558,256,6.08594
+ERISC,write payload -> DRISC, issue,4499,64,70.2969
+ERISC,write payload -> DRISC, drain,4905,64,76.6406
+ERISC,doorbell -> DRISC stream reg, issue,1569,64,24.5156
+ERISC,doorbell -> DRISC stream reg, drain,1854,64,28.9688
+ERISC,push (payload + doorbell), issue,4771,64,74.5469
+ERISC,push (payload + doorbell), drain,5116,64,79.9375
+ERISC,write payload + wait for ack,12691,32,396.594
+ERISC,ping: doorbell there and back,8822,32,275.688
+ERISC,ping: payload + doorbell there and back,14204,32,443.875
+ERISC,pipeline depth 1 total,304937,512,595.58
+ERISC,pipeline depth 1 busy,35884,512,70.0859
+ERISC,pipeline depth 1 full-ring polls,16883,512,32.9746
+DRISC,pipeline depth 1 busy,100872,512,197.016
+DRISC,pipeline depth 1 idle polls,6399,512,12.498
+ERISC,pipeline depth 2 total,182636,512,356.711
+ERISC,pipeline depth 2 busy,35890,512,70.0977
+ERISC,pipeline depth 2 full-ring polls,8912,512,17.4062
+DRISC,pipeline depth 2 busy,80896,512,158
+DRISC,pipeline depth 2 idle polls,3184,512,6.21875
+ERISC,pipeline depth 4 total,91234,512,178.191
+ERISC,pipeline depth 4 busy,35877,512,70.0723
+ERISC,pipeline depth 4 full-ring polls,2831,512,5.5293
+DRISC,pipeline depth 4 busy,74395,512,145.303
+DRISC,pipeline depth 4 idle polls,131,512,0.255859
+ERISC,pipeline depth 8 total,67124,512,131.102
+ERISC,pipeline depth 8 busy,35912,512,70.1406
+ERISC,pipeline depth 8 full-ring polls,1280,512,2.5
+DRISC,pipeline depth 8 busy,61602,512,120.316
+DRISC,pipeline depth 8 idle polls,4,512,0.0078125
+ERISC,pipeline depth 12 total,61160,512,119.453
+ERISC,pipeline depth 12 busy,35900,512,70.1172
+ERISC,pipeline depth 12 full-ring polls,915,512,1.78711
+DRISC,pipeline depth 12 busy,57819,512,112.928
+DRISC,pipeline depth 12 idle polls,4,512,0.0078125
+ERISC,pipeline depth 16 total,58774,512,114.793
+ERISC,pipeline depth 16 busy,35903,512,70.123
+ERISC,pipeline depth 16 full-ring polls,756,512,1.47656
+DRISC,pipeline depth 16 busy,56136,512,109.641
+DRISC,pipeline depth 16 idle polls,4,512,0.0078125

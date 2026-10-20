@@ -775,6 +775,19 @@ void TestDevice::add_sender_traffic_config(tt::tt_metal::CoreCoord logical_core,
     this->senders_.at(logical_core).add_config(std::move(config));
 }
 
+void TestDevice::set_sender_stream(tt::tt_metal::CoreCoord logical_core, const StreamProgram& stream) {
+    TT_FATAL(this->senders_.contains(logical_core), "Stream set for core {} before its traffic configs", logical_core);
+    auto& sender = this->senders_.at(logical_core);
+    TT_FATAL(!sender.stream_.has_value(), "Core {} already carries a stream", logical_core);
+    TT_FATAL(
+        sender.configs_.size() == stream.counts.size(),
+        "Core {} has {} traffic configs but its stream has {} segments; a stream sender's core can't be shared",
+        logical_core,
+        sender.configs_.size(),
+        stream.counts.size());
+    sender.stream_ = stream;
+}
+
 void TestDevice::add_sender_sync_config(tt::tt_metal::CoreCoord logical_core, TestTrafficSyncConfig sync_config) {
     if (!this->sync_workers_.contains(logical_core)) {
         this->add_worker(TestWorkerType::SYNC, logical_core);
@@ -1013,6 +1026,21 @@ void TestDevice::create_sender_kernels() {
         bool has_mux_connections = connection_manager_.is_mux_client(core);
         uint32_t num_muxes_to_terminate = connection_manager_.get_num_muxes_to_terminate();
 
+        if (sender.stream_.has_value()) {
+            TT_FATAL(
+                num_connections == 1,
+                "Stream sender core {} on {} needs {} fabric connections; a stream feeds one router",
+                core.str(),
+                fabric_node_id_,
+                num_connections);
+            // Backstop for validate_test: the benchmark stream path drives the router adapter directly.
+            TT_FATAL(
+                !(benchmark_mode_ && has_mux_connections),
+                "Stream sender core {} on {} is a mux client, which the benchmark stream path doesn't support",
+                core.str(),
+                fabric_node_id_);
+        }
+
         // All configs on a core must share the same vc_id: the kernel is compiled with a single
         // VC_ID template arg and all EDM connection runtime args are interpreted using that adapter
         // type. Mixing VC0 and VC2 configs on the same core would silently corrupt connection parsing.
@@ -1040,7 +1068,8 @@ void TestDevice::create_sender_kernels() {
             sender_memory_map_->common.get_kernel_config_size(), /* kernel config buffer size */
             has_mux_connections ? 1u : 0u,                       /* HAS_MUX_CONNECTIONS */
             num_muxes_to_terminate,                              /* NUM_MUXES_TO_TERMINATE */
-            sender_vc_id                                         /* VC_ID */
+            sender_vc_id,                                        /* VC_ID */
+            sender.stream_.has_value() ? 1u : 0u                 /* STREAM_MODE */
         };
 
         // Runtime args with connection type information
@@ -1093,6 +1122,12 @@ void TestDevice::create_sender_kernels() {
         for (const auto& [config, _] : sender.configs_) {
             auto traffic_config_args = config.get_args(false);  // false = not a sync config
             local_args.insert(local_args.end(), traffic_config_args.begin(), traffic_config_args.end());
+        }
+
+        // Stream program: lap count, then packets per lap for each traffic config in order.
+        if (sender.stream_.has_value()) {
+            local_args.push_back(sender.stream_->repeat);
+            local_args.insert(local_args.end(), sender.stream_->counts.begin(), sender.stream_->counts.end());
         }
 
         // Add mux termination local args (empty vector if not a mux client)

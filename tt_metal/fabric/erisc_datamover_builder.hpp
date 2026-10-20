@@ -169,6 +169,8 @@ struct FabricEriscDatamoverConfig {
 
     // Code profiling buffer address (16B aligned)
     std::size_t code_profiling_buffer_address = 0;
+    // Experimental per-ERISC phase profile counters (TT_FABRIC_PHASE_PROFILE); 0 when not allocated
+    std::size_t phase_profile_buffer_address = 0;
 
     std::vector<FabricRiscConfig> risc_configs;
     // ----------- Sender Channels
@@ -450,6 +452,10 @@ public:
         std::unordered_map<std::string, uint32_t> named;
     };
     [[nodiscard]] CompileTimeArgs get_compile_time_args(uint32_t risc_id) const;
+    [[nodiscard]] bool has_drisc_offload() const;
+    [[nodiscard]] tt::tt_metal::CoreCoord get_drisc_translated_core() const;
+    [[nodiscard]] tt::tt_metal::CoreCoord get_drisc_logical_core() const;
+    [[nodiscard]] CompileTimeArgs get_drisc_compile_time_args() const;
 
     // Helper for `get_compile_time_args`
     void get_telemetry_compile_time_args(uint32_t risc_id, std::unordered_map<std::string, uint32_t>& named_args) const;

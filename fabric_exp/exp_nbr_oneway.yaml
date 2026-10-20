@@ -1,0 +1,23 @@
+# Neighbor-exchange fast path in one direction only (chip 0 -> chip 1), 1 link, plain writes. RESULTS section 15.
+allocation_policies:
+    receiver:
+      policy: RoundRobin
+      max_configs_per_core: 4
+
+Tests:
+  - name: "NbrXUni"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: NeighborExchange
+    parametrization_params:
+      size: [2048, 4000, 4096]
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      num_packets: 50000
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [0, 1]

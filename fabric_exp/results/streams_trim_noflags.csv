@@ -1,0 +1,5 @@
+test_name,ftype,ntype,topology,num_devices,num_links,packet_size,iterations,avg_cycles,avg_packets_per_s,avg_bandwidth_gigabytes_per_s,bw_min_gigabytes_per_s,bw_max_gigabytes_per_s,bw_std_dev_gigabytes_per_s,tolerance_percent
+TrimStream1HopEW,CHIP_UNICAST,STREAM,Mesh,"[8]",1,3264,1,10336385.000000,5224263.608602,17.051996,17.051996,17.051996,0.000000,1.000000
+TrimStream1HopEW,CHIP_UNICAST,STREAM,Mesh,"[8]",1,3264,1,9350855.000000,5774872.992897,18.849185,18.849185,18.849185,0.000000,1.000000
+TrimStream3HopEW,CHIP_UNICAST,STREAM,Mesh,"[8]",1,4352,1,9490686.000000,5689788.915153,24.761961,24.761961,24.761961,0.000000,1.000000
+TrimStream3HopEW,CHIP_UNICAST,STREAM,Mesh,"[8]",1,4352,1,7466659.000000,7232150.283011,31.474318,31.474318,31.474318,0.000000,1.000000

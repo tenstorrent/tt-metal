@@ -1,0 +1,13 @@
+# Diagnostic: plain (non-stream) equivalent of StreamChannelTrimmingLinear, which hung in replay.
+Tests:
+  - name: "TrimUnidirPlain"
+    fabric_setup:
+      topology: Linear
+      enable_channel_trimming: true
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      size: 1024
+      num_packets: 80
+    patterns:
+      - type: unidirectional_linear

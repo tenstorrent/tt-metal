@@ -12,6 +12,7 @@
 #include <tt_stl/assert.hpp>
 #include <tt_stl/fmt.hpp>
 #include <algorithm>
+#include <cstdlib>
 #include <numeric>
 
 namespace tt::tt_fabric {
@@ -72,6 +73,14 @@ size_t FabricStaticSizedChannelsAllocator::get_receiver_channel_base_address(siz
     return receiver_channels_base_address[vc_id][channel_id];
 }
 
+namespace {
+// Experimental caps on VC0 channel depth for latency/credit-loop sweeps (0 = no cap).
+size_t fabric_experiment_slot_cap(const char* name) {
+    const char* value = std::getenv(name);
+    return value ? std::strtoul(value, nullptr, 0) : 0;
+}
+}  // namespace
+
 FabricStaticSizedChannelsAllocator::FabricStaticSizedChannelsAllocator(
     tt::tt_fabric::Topology topology,
     const FabricEriscDatamoverOptions& options,
@@ -129,6 +138,19 @@ FabricStaticSizedChannelsAllocator::FabricStaticSizedChannelsAllocator(
         total_slot_count += vc_sender_slots + vc_receiver_slots;
 
         log_trace(tt::LogFabric, "VC{} num_sender_buffer_slots: {}", vc, num_sender_buffer_slots_per_vc[vc]);
+        if (std::getenv("TT_FABRIC_EXP_LOG_SLOTS") != nullptr && num_used_sender_channels_per_vc[vc] > 0) {
+            log_info(
+                tt::LogFabric,
+                "VC{} sender slots {} receiver slots {} (channel buffer {} B)",
+                vc,
+                std::vector<size_t>(
+                    num_sender_buffer_slots_per_vc[vc].begin(),
+                    num_sender_buffer_slots_per_vc[vc].begin() + num_used_sender_channels_per_vc[vc]),
+                std::vector<size_t>(
+                    num_receiver_buffer_slots_per_vc[vc].begin(),
+                    num_receiver_buffer_slots_per_vc[vc].begin() + num_used_receiver_channels_per_vc[vc]),
+                channel_buffer_size_bytes);
+        }
         log_trace(
             tt::LogFabric, "VC{} num_remote_sender_buffer_slots: {}", vc, num_remote_sender_buffer_slots_per_vc[vc]);
         log_trace(tt::LogFabric, "VC{} num_receiver_buffer_slots: {}", vc, num_receiver_buffer_slots_per_vc[vc]);
@@ -514,7 +536,13 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
         bool vc1_needed = (num_vc1_sender_channels > 0) || (num_vc1_receiver_channels > 0);
         bool vc2_needed = (num_vc2_sender_channels > 0) || (num_vc2_receiver_channels > 0);
         bool found_valid_option = false;
+        const size_t sender_slot_cap = fabric_experiment_slot_cap("TT_FABRIC_EXP_MAX_SENDER_SLOTS");
+        const size_t receiver_slot_cap = fabric_experiment_slot_cap("TT_FABRIC_EXP_MAX_RECEIVER_SLOTS");
         for (auto& option : buffer_slot_options) {
+            if ((sender_slot_cap != 0 && option.vc0_sender_slots > sender_slot_cap) ||
+                (receiver_slot_cap != 0 && option.vc0_receiver_slots > receiver_slot_cap)) {
+                continue;
+            }
             vc0_sender_buffer_slots = option.vc0_sender_slots;
             vc0_receiver_buffer_slots = option.vc0_receiver_slots;
             vc1_sender_buffer_slots = option.vc1_sender_slots;
@@ -722,7 +750,35 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
         const uint32_t worker_channel = get_worker_connected_sender_channel();
 
         const size_t requested_worker_slots = num_sender_buffer_slots_per_vc[0][worker_channel] + spare_slots;
-        const size_t worker_slots = std::min(requested_worker_slots, MAX_CHANNEL_BUFFER_SLOTS);
+        size_t worker_slots = std::min(requested_worker_slots, MAX_CHANNEL_BUFFER_SLOTS);
+        if (const size_t cap = fabric_experiment_slot_cap("TT_FABRIC_EXP_MAX_SENDER_SLOTS"); cap != 0) {
+            worker_slots = std::min(worker_slots, std::max(cap, num_sender_buffer_slots_per_vc[0][worker_channel]));
+        }
+        if (const size_t exp_worker_slots = fabric_experiment_slot_cap("TT_FABRIC_EXP_WORKER_SLOTS");
+            exp_worker_slots != 0) {
+            worker_slots = std::min(exp_worker_slots, MAX_CHANNEL_BUFFER_SLOTS);
+            const size_t non_vc0_sender_slots =
+                allocated_slots - num_used_sender_channels_per_vc[0] * vc0_sender_buffer_slots;
+            TT_FATAL(
+                worker_slots + non_vc0_sender_slots <= slot_capacity,
+                "TT_FABRIC_EXP_WORKER_SLOTS={} exceeds slot capacity {} (other channels use {})",
+                worker_slots,
+                slot_capacity,
+                non_vc0_sender_slots);
+            const size_t fwd_channels =
+                num_used_sender_channels_per_vc[0] > 1 ? num_used_sender_channels_per_vc[0] - 1 : 0;
+            if (fwd_channels > 0) {
+                const size_t max_fwd_slots = (slot_capacity - non_vc0_sender_slots - worker_slots) / fwd_channels;
+                const size_t fwd_slots = std::min(vc0_sender_buffer_slots, max_fwd_slots);
+                TT_FATAL(
+                    fwd_slots > 0,
+                    "TT_FABRIC_EXP_WORKER_SLOTS={} leaves 0 slots for {} forwarding channels",
+                    worker_slots,
+                    fwd_channels);
+                num_sender_buffer_slots_per_vc[0].fill(fwd_slots);
+                num_remote_sender_buffer_slots_per_vc[0].fill(fwd_slots);
+            }
+        }
 
         num_sender_buffer_slots_per_vc[0][worker_channel] = worker_slots;
         num_remote_sender_buffer_slots_per_vc[0][worker_channel] = worker_slots;

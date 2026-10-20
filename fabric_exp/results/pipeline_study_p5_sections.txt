@@ -1,0 +1,80 @@
+3. Sensitivity to the costs that are still estimated or depend on implementation (static model, best
+   placement per design). Defaults: lean stateful issue, DRISC forward copy 45 (31 measured + 14 estimated
+   for the next-hop slot address and header update), alpha 1.0 (measured).
+
+=== 2d_3hop_middle
+  variant                                  P0     P3     P5    P5L   bottleneck (P5)
+  defaults                                132    117    117    117   wire
+  forward copy 31 (no header work)        132    117    117    117   wire
+  forward copy 60                         132    117    124    117   D0
+  stateless issue (stock NoC calls)       132    117    126    117   D0
+  DRISC alpha 1.2                         132    117    131    117   D0
+
+=== 2d_mcast_ns_router
+  variant                                  P0     P3     P5    P5L   bottleneck (P5)
+  defaults                                290    170    248    178   D0
+  forward copy 31 (no header work)        290    170    220    178   D0
+  forward copy 60                         290    170    278    194   D0
+  stateless issue (stock NoC calls)       290    178    279    200   D0
+  DRISC alpha 1.2                         290    170    298    197   D0
+
+4. One DRISC serving two routers (E/W routers sharing the two spare dual-NoC DRISCs): the DRISC carries both
+   routers' work and NoC traffic. Event-driven, 24-slot downstream, 12 staging slots.
+
+=== 2d_3hop_middle
+  design                        own DRISC: static event  E1  D0      shared by 2: static event  E1  D0
+  P5 push, D does the rest                 117    118   77  110                   219    205   77  219
+  P5L push, E local                        117    118   96   90                   181    167   96  181
+
+=== 2d_mcast_ns_router
+  design                        own DRISC: static event  E1  D0      shared by 2: static event  E1  D0
+  P5 push, D does the rest                 248    222  102  248                   496    444  102  496
+  P5L push, E local                        178    153  178  164                   328    303  178  328
+
+5. Moving E0's sender-channel scan (and connection checks) to E1: E1 finds packets and hands each to E0
+   through their shared L1 (descriptor + doorbell); E0 only sends. Static model (the event-driven model does
+   not model this). 4 and 9 sender channels.
+
+=== 2d_3hop_middle
+  design                     channels    E0 scans: interval  E0  E1  D0     E1 scans: interval  E0  E1  D0
+  today                             4                132   77  132    -                 148   74  148    -
+  today                             9                132   92  132    -                 163   74  163    -
+  P5 push, D does the rest          4                117   77   77  110                 117   74   93  110
+  P5 push, D does the rest          9                117   90   87  110                 117   74  108  110
+  P5L push, E local                 4                117   77   96   90                 117   74  112   90
+  P5L push, E local                 9                117   92   96   90                 127   74  127   90
+
+=== 2d_mcast_ns_router
+  design                     channels    E0 scans: interval  E0  E1  D0     E1 scans: interval  E0  E1  D0
+  today                             4                298   77  298    -                 315   74  315    -
+  today                             9                298   92  298    -                 329   74  329    -
+  P5 push, D does the rest          4                248   77  102  248                 248   74  118  248
+  P5 push, D does the rest          9                248   92  102  248                 248   74  133  248
+  P5L push, E local                 4                178   77  178  164                 194   74  194  164
+  P5L push, E local                 9                178   92  178  164                 209   74  209  164
+
+6. DRISC speed. alpha = DRISC cycles per ERISC cycle for the same work, applied to all of its work; our
+   DRISC microbenchmark measures 1.0 (RESULTS §14), so this is sensitivity only. Event-driven, 24-slot
+   downstream, 12 staging slots; DRISC forward copy 45 / 60 before scaling.
+
+=== 2d_3hop_middle
+  no DRISC (P0): static 132
+  design                       alpha 1.0: 45   60   alpha 1.25: 45   60    alpha 1.5: 45   60
+  P3 E admits, D moves                  118   119             119   119             119   121
+  P1 D decodes, E admits                118   123             130   147             154   177
+  P2 credit relay                       118   119             128   147             154   176
+  P4 D admits, relay                    118   118             119   123             125   148
+  P4d D admits, own credits             119   119             119   123             125   148
+  P5 push, D does the rest              118   119             128   147             154   176
+  P5L push, E local                     118   118             119   123             125   148
+
+=== 2d_mcast_ns_router
+  no DRISC (P0): static 290
+  design                       alpha 1.0: 45   60   alpha 1.25: 45   60    alpha 1.5: 45   60
+  P3 E admits, D moves                  153   153             153   176             166   211
+  P1 D decodes, E admits                164   189             198   236             238   283
+  P2 credit relay                       188   217             233   271             281   325
+  P4 D admits, relay                    153   177             183   221             220   265
+  P4d D admits, own credits             153   177             183   221             220   265
+  P5 push, D does the rest              222   253             278   316             333   379
+  P5L push, E local                     153   177             183   221             220   265

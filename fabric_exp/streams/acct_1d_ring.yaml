@@ -1,0 +1,143 @@
+# Linear/Ring benchmark tests from test_fabric_ubench_at_least_2x2_mesh.yaml, trimmed, for the accounting before/after check.
+allocation_policies:
+    receiver:
+      policy: RoundRobin
+      max_configs_per_core: 4
+
+Tests:
+  ### NEIGHBOR EXCHANGE BANDWIDTH TESTS ###
+  - name: "LinearMulticast"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Linear
+
+    parametrization_params:
+      num_links: [1, 2]
+      ntype: [unicast_write]
+      size: [4096]
+
+    defaults:
+      ftype: mcast
+      num_packets: 20000
+
+    patterns:
+      - type: all_to_all
+        iterations: 3
+
+  - name: "UnidirLinearMulticast"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Linear
+
+    parametrization_params:
+      num_links: [1, 2]
+      ntype: [unicast_write]
+      size: [4096]
+
+    defaults:
+      ftype: mcast
+      num_packets: 20000
+
+    patterns:
+      - type: unidirectional_linear
+        iterations: 3
+
+  - name: "SingleSenderLinearUnicastAllDevices"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Linear
+
+    parametrization_params:
+      num_links: [1, 2]
+      ntype: [unicast_write]
+      size: [4096]
+
+    defaults:
+      ftype: unicast
+      num_packets: 20000
+
+    patterns:
+      - type: one_to_all
+        iterations: 3
+
+  - name: "NeighborExchangeLinear"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Linear
+
+    parametrization_params:
+      num_links: [1, 2]
+      ntype: [unicast_write]
+      size: [4096]
+
+    defaults:
+      ftype: unicast
+      num_packets: 20000
+
+    patterns:
+      - type: neighbor_exchange
+        iterations: 3
+
+  ### LINEAR LATENCY TESTS ###
+  - name: "FullRingMulticast"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Ring
+
+    parametrization_params:
+      num_links: [1, 2]
+      ntype: [unicast_write]
+      size: [4096]
+
+    defaults:
+      ftype: mcast
+      num_packets: 20000
+
+    patterns:
+      - type: full_ring
+        iterations: 3
+
+  - name: "FullRingUnicast"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Ring
+
+    parametrization_params:
+      num_links: [1, 2]
+      ntype: [unicast_write]
+      size: [4096]
+
+    defaults:
+      ftype: unicast
+      num_packets: 20000
+
+    patterns:
+      - type: full_ring
+        iterations: 3
+
+  - name: "HalfRingMulticast"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Ring
+
+    parametrization_params:
+      num_links: [1, 2]
+      ntype: [unicast_write]
+      size: [4096]
+
+    defaults:
+      ftype: mcast
+      num_packets: 20000
+
+    patterns:
+      - type: half_ring
+        iterations: 3
+
+  ### RING LATENCY TESTS ###

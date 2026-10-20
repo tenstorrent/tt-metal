@@ -1,0 +1,90 @@
+# Neighbor-exchange (1D speedy path) packet-size sweep, 1 link, plain writes.
+allocation_policies:
+    receiver:
+      policy: RoundRobin
+      max_configs_per_core: 4
+
+Tests:
+  - name: "NbrXSweep"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: NeighborExchange
+    parametrization_params:
+      num_links: [1]
+      size: [1024, 2048, 3072, 4096]
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      num_packets: 50000
+    patterns:
+      - type: neighbor_exchange
+        iterations: 1
+
+  - name: "NbrXSweep5440"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: NeighborExchange
+      max_packet_size: 5440
+    parametrization_params:
+      num_links: [1]
+      size: [5440]
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      num_packets: 50000
+    patterns:
+      - type: neighbor_exchange
+        iterations: 1
+
+  - name: "NbrXSweep7616"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: NeighborExchange
+      max_packet_size: 7616
+    parametrization_params:
+      num_links: [1]
+      size: [7616]
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      num_packets: 50000
+    patterns:
+      - type: neighbor_exchange
+        iterations: 1
+
+  - name: "NbrXSweep8704"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: NeighborExchange
+      max_packet_size: 8704
+    parametrization_params:
+      num_links: [1]
+      size: [8704]
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      num_packets: 50000
+    patterns:
+      - type: neighbor_exchange
+        iterations: 1
+
+  - name: "NbrXSweep15232"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: NeighborExchange
+      max_packet_size: 15232
+    parametrization_params:
+      num_links: [1]
+      size: [15232]
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      num_packets: 50000
+    patterns:
+      - type: neighbor_exchange
+        iterations: 1

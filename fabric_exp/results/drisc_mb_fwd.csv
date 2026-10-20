@@ -1,0 +1,186 @@
+core,measurement,cycles,ops,cycles_per_op
+DRISC,"timer read",468,64,7.3125
+DRISC,"wall clock read",593,64,9.26562
+DRISC,"L1 load, dependent",528,64,8.25
+DRISC,"L1 load, 4 independent (per load)",1429,256,5.58203
+DRISC,"fence + L1 load (counter poll)",924,64,14.4375
+DRISC,"stream register read (doorbell poll)",657,64,10.2656
+DRISC,"stream register read, 4 independent (per read)",1299,256,5.07422
+DRISC,"local stream register update",208,64,3.25
+DRISC,"NoC cmd buffer ready read",655,64,10.2344
+DRISC,"NoC0 write 64 B -> ERISC, issue",2227,64,34.7969
+DRISC,"NoC0 write 64 B -> ERISC, drain",2519,64,39.3594
+DRISC,"NoC0 write payload -> ERISC, issue",4491,64,70.1719
+DRISC,"NoC0 write payload -> ERISC, drain",4899,64,76.5469
+DRISC,"NoC0 posted write payload, issue",4491,64,70.1719
+DRISC,"NoC0 posted write payload, drain",4616,64,72.125
+DRISC,"NoC0 doorbell -> ERISC stream reg, issue",1586,64,24.7812
+DRISC,"NoC0 doorbell -> ERISC stream reg, drain",1874,64,29.2812
+DRISC,"NoC0 forward copy (payload + doorbell), issue",5020,64,78.4375
+DRISC,"NoC0 forward copy (payload + doorbell), drain",5365,64,83.8281
+DRISC,"NoC0 forward copy, stateful + trid, issue",4849,64,75.7656
+DRISC,"NoC0 forward copy, stateful + trid, drain",5195,64,81.1719
+DRISC,"NoC0 forward copy, stateful + trid, alone",4160,64,65
+DRISC,"NoC0 doorbell -> ERISC stream reg, alone",1984,64,31
+DRISC,"NoC0 forward copy, lean stateful, issue",4738,64,74.0312
+DRISC,"NoC0 forward copy, lean stateful, drain",5091,64,79.5469
+DRISC,"NoC0 forward copy, lean stateful, alone",2434,64,38.0312
+DRISC,"NoC0 write payload + wait for ack",12790,32,399.688
+DRISC,"NoC0 read payload <- ERISC, issue",1643,64,25.6719
+DRISC,"NoC0 read payload <- ERISC, drain",4983,64,77.8594
+DRISC,"NoC0 read payload + wait for data",12929,32,404.031
+DRISC,"NoC1 write 64 B -> ERISC, issue",2211,64,34.5469
+DRISC,"NoC1 write 64 B -> ERISC, drain",2503,64,39.1094
+DRISC,"NoC1 write payload -> ERISC, issue",4481,64,70.0156
+DRISC,"NoC1 write payload -> ERISC, drain",4889,64,76.3906
+DRISC,"NoC1 posted write payload, issue",4483,64,70.0469
+DRISC,"NoC1 posted write payload, drain",4608,64,72
+DRISC,"NoC1 doorbell -> ERISC stream reg, issue",1581,64,24.7031
+DRISC,"NoC1 doorbell -> ERISC stream reg, drain",1869,64,29.2031
+DRISC,"NoC1 forward copy (payload + doorbell), issue",4993,64,78.0156
+DRISC,"NoC1 forward copy (payload + doorbell), drain",5338,64,83.4062
+DRISC,"NoC1 forward copy, stateful + trid, issue",4847,64,75.7344
+DRISC,"NoC1 forward copy, stateful + trid, drain",5193,64,81.1406
+DRISC,"NoC1 forward copy, stateful + trid, alone",4160,64,65
+DRISC,"NoC1 doorbell -> ERISC stream reg, alone",1984,64,31
+DRISC,"NoC1 forward copy, lean stateful, issue",4737,64,74.0156
+DRISC,"NoC1 forward copy, lean stateful, drain",5090,64,79.5312
+DRISC,"NoC1 forward copy, lean stateful, alone",2432,64,38
+DRISC,"NoC1 write payload + wait for ack",12788,32,399.625
+DRISC,"NoC1 read payload <- ERISC, issue",1636,64,25.5625
+DRISC,"NoC1 read payload <- ERISC, drain",4976,64,77.75
+DRISC,"NoC1 read payload + wait for data",12928,32,404
+ERISC,"timer read",468,64,7.3125
+ERISC,"L1 load, dependent",527,64,8.23438
+ERISC,"L1 load, 4 independent (per load)",1429,256,5.58203
+ERISC,"stream register read",658,64,10.2812
+ERISC,"stream register read, 4 independent (per read)",1307,256,5.10547
+ERISC,"write payload -> DRISC, issue",4495,64,70.2344
+ERISC,"write payload -> DRISC, drain",4909,64,76.7031
+ERISC,"doorbell -> DRISC stream reg, issue",1516,64,23.6875
+ERISC,"doorbell -> DRISC stream reg, drain",1802,64,28.1562
+ERISC,"push (payload + doorbell), issue",4762,64,74.4062
+ERISC,"push (payload + doorbell), drain",5111,64,79.8594
+ERISC,"push, stateful + trid, issue",4784,64,74.75
+ERISC,"push, stateful + trid, drain",5128,64,80.125
+ERISC,"push, stateful + trid, alone",3648,64,57
+ERISC,"write payload, stateful + trid, alone",2112,64,33
+ERISC,"write payload -> DRISC, alone",1667,64,26.0469
+ERISC,"doorbell -> DRISC stream reg, alone",1729,64,27.0156
+ERISC,"push (payload + doorbell), alone",3396,64,53.0625
+ERISC,"push, lean stateful, issue",4748,64,74.1875
+ERISC,"push, lean stateful, drain",5099,64,79.6719
+ERISC,"push, lean stateful, alone",2497,64,39.0156
+ERISC,"write payload, lean stateful, alone",1536,64,24
+ERISC,"doorbell, lean stateful, alone",1217,64,19.0156
+ERISC,"write payload + wait for ack",12693,32,396.656
+ERISC,"ping: doorbell there and back",5439,32,169.969
+ERISC,"ping: payload + doorbell there and back",10652,32,332.875
+ERISC,"pipeline stateless depth 1 total",242566,512,473.762
+ERISC,"pipeline stateless depth 1 busy",38446,512,75.0898
+ERISC,"pipeline stateless depth 1 full-ring polls",13532,512,26.4297
+DRISC,"pipeline stateless depth 1 busy",96295,512,188.076
+DRISC,"pipeline stateless depth 1 work",96295,512,188.076
+DRISC,"pipeline stateless depth 1 idle polls",5347,512,10.4434
+ERISC,"pipeline stateless depth 2 total",150558,512,294.059
+ERISC,"pipeline stateless depth 2 busy",38441,512,75.0801
+ERISC,"pipeline stateless depth 2 full-ring polls",7163,512,13.9902
+DRISC,"pipeline stateless depth 2 busy",77057,512,150.502
+DRISC,"pipeline stateless depth 2 work",77057,512,150.502
+DRISC,"pipeline stateless depth 2 idle polls",2688,512,5.25
+ERISC,"pipeline stateless depth 4 total",93616,512,182.844
+ERISC,"pipeline stateless depth 4 busy",38444,512,75.0859
+ERISC,"pipeline stateless depth 4 full-ring polls",3174,512,6.19922
+DRISC,"pipeline stateless depth 4 busy",75282,512,147.035
+DRISC,"pipeline stateless depth 4 work",75282,512,147.035
+DRISC,"pipeline stateless depth 4 idle polls",0,512,0
+ERISC,"pipeline stateless depth 8 total",62717,512,122.494
+ERISC,"pipeline stateless depth 8 busy",38453,512,75.1035
+ERISC,"pipeline stateless depth 8 full-ring polls",955,512,1.86523
+DRISC,"pipeline stateless depth 8 busy",57803,512,112.896
+DRISC,"pipeline stateless depth 8 work",57803,512,112.896
+DRISC,"pipeline stateless depth 8 idle polls",0,512,0
+ERISC,"pipeline stateless depth 12 total",57983,512,113.248
+ERISC,"pipeline stateless depth 12 busy",38452,512,75.1016
+ERISC,"pipeline stateless depth 12 full-ring polls",655,512,1.2793
+DRISC,"pipeline stateless depth 12 busy",54796,512,107.023
+DRISC,"pipeline stateless depth 12 work",54796,512,107.023
+DRISC,"pipeline stateless depth 12 idle polls",0,512,0
+ERISC,"pipeline stateless depth 16 total",56582,512,110.512
+ERISC,"pipeline stateless depth 16 busy",38475,512,75.1465
+ERISC,"pipeline stateless depth 16 full-ring polls",554,512,1.08203
+DRISC,"pipeline stateless depth 16 busy",54047,512,105.561
+DRISC,"pipeline stateless depth 16 work",54047,512,105.561
+DRISC,"pipeline stateless depth 16 idle polls",0,512,0
+ERISC,"pipeline lean depth 1 total",219058,512,427.848
+ERISC,"pipeline lean depth 1 busy",26164,512,51.1016
+ERISC,"pipeline lean depth 1 full-ring polls",11816,512,23.0781
+DRISC,"pipeline lean depth 1 busy",78379,512,153.084
+DRISC,"pipeline lean depth 1 work",78379,512,153.084
+DRISC,"pipeline lean depth 1 idle polls",4656,512,9.09375
+ERISC,"pipeline lean depth 2 total",130394,512,254.676
+ERISC,"pipeline lean depth 2 busy",26144,512,51.0625
+ERISC,"pipeline lean depth 2 full-ring polls",5930,512,11.582
+DRISC,"pipeline lean depth 2 busy",74730,512,145.957
+DRISC,"pipeline lean depth 2 work",74730,512,145.957
+DRISC,"pipeline lean depth 2 idle polls",1179,512,2.30273
+ERISC,"pipeline lean depth 4 total",81325,512,158.838
+ERISC,"pipeline lean depth 4 busy",29931,512,58.459
+ERISC,"pipeline lean depth 4 full-ring polls",2623,512,5.12305
+DRISC,"pipeline lean depth 4 busy",63651,512,124.318
+DRISC,"pipeline lean depth 4 work",63651,512,124.318
+DRISC,"pipeline lean depth 4 idle polls",0,512,0
+ERISC,"pipeline lean depth 8 total",57294,512,111.902
+ERISC,"pipeline lean depth 8 busy",30702,512,59.9648
+ERISC,"pipeline lean depth 8 full-ring polls",1004,512,1.96094
+DRISC,"pipeline lean depth 8 busy",52836,512,103.195
+DRISC,"pipeline lean depth 8 work",52836,512,103.195
+DRISC,"pipeline lean depth 8 idle polls",0,512,0
+ERISC,"pipeline lean depth 12 total",54513,512,106.471
+ERISC,"pipeline lean depth 12 busy",30830,512,60.2148
+ERISC,"pipeline lean depth 12 full-ring polls",826,512,1.61328
+DRISC,"pipeline lean depth 12 busy",51398,512,100.387
+DRISC,"pipeline lean depth 12 work",51398,512,100.387
+DRISC,"pipeline lean depth 12 idle polls",0,512,0
+ERISC,"pipeline lean depth 16 total",53265,512,104.033
+ERISC,"pipeline lean depth 16 busy",30886,512,60.3242
+ERISC,"pipeline lean depth 16 full-ring polls",734,512,1.43359
+DRISC,"pipeline lean depth 16 busy",50819,512,99.2559
+DRISC,"pipeline lean depth 16 work",50819,512,99.2559
+DRISC,"pipeline lean depth 16 idle polls",0,512,0
+DRISC,"NoC0 command buffer hold, one write",1925,64,30.0781
+DRISC,"NoC0 writes over 1 command buffers, issue",4517,64,70.5781
+DRISC,"NoC0 writes over 1 command buffers, drain",4923,64,76.9219
+DRISC,"NoC0 writes over 2 command buffers, issue",4429,64,69.2031
+DRISC,"NoC0 writes over 2 command buffers, drain",4907,64,76.6719
+DRISC,"NoC0 writes over 3 command buffers, issue",4364,64,68.1875
+DRISC,"NoC0 writes over 3 command buffers, drain",4914,64,76.7812
+DRISC,"NoC1 command buffer hold, one write",1920,64,30
+DRISC,"NoC1 writes over 1 command buffers, issue",4500,64,70.3125
+DRISC,"NoC1 writes over 1 command buffers, drain",4906,64,76.6562
+DRISC,"NoC1 writes over 2 command buffers, issue",4429,64,69.2031
+DRISC,"NoC1 writes over 2 command buffers, drain",4907,64,76.6719
+DRISC,"NoC1 writes over 3 command buffers, issue",4364,64,68.1875
+DRISC,"NoC1 writes over 3 command buffers, drain",4906,64,76.6562
+DRISC,"NoC0 + NoC1 writes, 1 command buffers each, issue",2297,64,35.8906
+DRISC,"NoC0 + NoC1 writes, 1 command buffers each, drain",2709,64,42.3281
+DRISC,"NoC0 + NoC1 writes, 2 command buffers each, issue",2193,64,34.2656
+DRISC,"NoC0 + NoC1 writes, 2 command buffers each, drain",2661,64,41.5781
+DRISC,"pull NoC0 + forward NoC0, 1 write buffer, issue per pair",5301,64,82.8281
+DRISC,"pull NoC0 + forward NoC0, 1 write buffer, drain per pair",5682,64,88.7812
+DRISC,"pull NoC0 + forward NoC0, 2 write buffers, issue per pair",5282,64,82.5312
+DRISC,"pull NoC0 + forward NoC0, 2 write buffers, drain per pair",5655,64,88.3594
+DRISC,"pull NoC0 + forward NoC1, 1 write buffer, issue per pair",5283,64,82.5469
+DRISC,"pull NoC0 + forward NoC1, 1 write buffer, drain per pair",5640,64,88.125
+DRISC,"pull NoC0 + forward NoC1, 2 write buffers, issue per pair",5282,64,82.5312
+DRISC,"pull NoC0 + forward NoC1, 2 write buffers, drain per pair",5639,64,88.1094
+DRISC,"copy to B on NoC0 only (reference), issue per packet",4517,64,70.5781
+DRISC,"copy to B on NoC0 only (reference), drain per packet",4964,64,77.5625
+DRISC,"pull + copy to B, NoC0, issue per packet",4768,64,74.5
+DRISC,"pull + copy to B, NoC0, drain per packet",5190,64,81.0938
+DRISC,"pull + copy to B on NoC1, issue per packet",4589,64,71.7031
+DRISC,"pull + copy to B on NoC1, drain per packet",5035,64,78.6719
+DRISC,"pull + copies to B on NoC0, C on NoC1, issue per packet",6136,64,95.875
+DRISC,"pull + copies to B on NoC0, C on NoC1, drain per packet",6542,64,102.219
+DRISC,"pull + copies to B and C on NoC1, issue per packet",9029,64,141.078
+DRISC,"pull + copies to B and C on NoC1, drain per packet",9508,64,148.562

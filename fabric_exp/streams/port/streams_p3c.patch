@@ -1,0 +1,1271 @@
+diff --git a/tests/tt_metal/tt_fabric/test_infra/kernels/tt_fabric_test_kernels_utils.hpp b/tests/tt_metal/tt_fabric/test_infra/kernels/tt_fabric_test_kernels_utils.hpp
+index 63b0497d825..4a64f50a183 100644
+--- a/tests/tt_metal/tt_fabric/test_infra/kernels/tt_fabric_test_kernels_utils.hpp
++++ b/tests/tt_metal/tt_fabric/test_infra/kernels/tt_fabric_test_kernels_utils.hpp
+@@ -85,6 +85,22 @@ inline void write_test_packets(uint32_t result_buffer_base, uint64_t packets) {
+     result_buffer[TT_FABRIC_WORD_CNT_INDEX + 1] = static_cast<uint32_t>(packets >> 32);
+ }
+ 
++// Word indices of a benchmark stream sender's counters: packets that rewrote their router slot's
++// header, packets that found no free router slot, and the send loop's cycles minus the cycles spent
++// waiting for a slot (two words). Must match tt_fabric_test_memory_map.hpp.
++static constexpr uint32_t STREAM_HEADER_COPIES_WORD_INDEX = 8;
++static constexpr uint32_t STREAM_SLOT_WAITS_WORD_INDEX = 10;
++static constexpr uint32_t STREAM_BUSY_CYCLES_WORD_INDEX = 12;
++
++inline void write_stream_counters(
++    uint32_t result_buffer_base, uint32_t header_copies, uint32_t slot_waits, uint64_t busy_cycles) {
++    auto* result_buffer = reinterpret_cast<tt_l1_ptr uint32_t*>(result_buffer_base);
++    result_buffer[STREAM_HEADER_COPIES_WORD_INDEX] = header_copies;
++    result_buffer[STREAM_SLOT_WAITS_WORD_INDEX] = slot_waits;
++    result_buffer[STREAM_BUSY_CYCLES_WORD_INDEX] = static_cast<uint32_t>(busy_cycles);
++    result_buffer[STREAM_BUSY_CYCLES_WORD_INDEX + 1] = static_cast<uint32_t>(busy_cycles >> 32);
++}
++
+ inline void clear_test_results(uint32_t result_buffer_base, uint32_t result_buffer_size) {
+     auto* result_buffer = reinterpret_cast<tt_l1_ptr uint32_t*>(result_buffer_base);
+     uint32_t num_words = result_buffer_size / sizeof(uint32_t);
+diff --git a/tests/tt_metal/tt_fabric/test_infra/kernels/tt_fabric_test_sender.cpp b/tests/tt_metal/tt_fabric/test_infra/kernels/tt_fabric_test_sender.cpp
+index 51600c659c4..387d665753d 100644
+--- a/tests/tt_metal/tt_fabric/test_infra/kernels/tt_fabric_test_sender.cpp
++++ b/tests/tt_metal/tt_fabric/test_infra/kernels/tt_fabric_test_sender.cpp
+@@ -18,6 +18,7 @@ constexpr uint32_t KERNEL_CONFIG_BUFFER_SIZE = get_compile_time_arg_val(6);
+ constexpr bool HAS_MUX_CONNECTIONS = get_compile_time_arg_val(7);
+ constexpr uint8_t NUM_MUXES_TO_TERMINATE = get_compile_time_arg_val(8);
+ constexpr uint8_t VC_ID = get_compile_time_arg_val(9);
++constexpr bool STREAM_MODE = get_compile_time_arg_val(10);
+ 
+ // Select the EDM sender adapter type based on VC_ID:
+ // VC0/VC1 use WorkerToFabricEdmSender (stream ID 22), VC2 uses WorkerToFabricEdmSenderVC2 (stream ID 30)
+@@ -35,6 +36,29 @@ static_assert(
+ static_assert(
+     NUM_FABRIC_CONNECTIONS <= MAX_NUM_FABRIC_CONNECTIONS, "NUM_FABRIC_CONNECTIONS exceeds MAX_NUM_FABRIC_CONNECTIONS");
+ 
++// A stream feeds one router.
++static_assert(!STREAM_MODE || NUM_FABRIC_CONNECTIONS == 1, "A stream sender has exactly one fabric connection");
++
++// Benchmark stream path: the segment whose header each router slot holds, so a slot is rewritten
++// only when its next packet belongs to a different segment.
++constexpr uint32_t MAX_STREAM_SLOTS = 256;
++constexpr uint8_t STREAM_SLOT_EMPTY = 0xFF;
++static_assert(!STREAM_MODE || NUM_TRAFFIC_CONFIGS < STREAM_SLOT_EMPTY, "Too many stream segments for the slot table");
++uint8_t stream_slot_segment[STREAM_MODE ? MAX_STREAM_SLOTS : 1];
++
++// Sends the header already in the current slot again by returning the slot to the router, without
++// copying it. Only the VC0 adapter exposes the credit-only update, so other adapters return false
++// and the caller copies the header instead.
++template <typename EdmSenderT>
++FORCE_INLINE bool replay_current_slot(EdmSenderT* conn) {
++    if constexpr (std::is_same_v<EdmSenderT, WorkerToFabricEdmSender>) {
++        tt::tt_fabric::fabric_detail::update_credits_and_slots</*STATEFUL_NOC=*/true>(conn);
++        return true;
++    } else {
++        return false;
++    }
++}
++
+ void kernel_main() {
+     size_t rt_args_idx = 0;
+     size_t local_args_idx = 0;  // Initialize local args index
+@@ -48,6 +72,17 @@ void kernel_main() {
+         SenderKernelConfigType(SenderKernelConfigType::build_from_args(
+             common_memory_map, rt_args_idx, local_args_idx, NUM_FABRIC_CONNECTIONS));
+ 
++    // Stream program, after the traffic configs in local args: lap count, then packets per lap for
++    // each traffic config in order.
++    uint32_t stream_repeat = 0;
++    uint32_t stream_counts[NUM_TRAFFIC_CONFIGS];
++    if constexpr (STREAM_MODE) {
++        stream_repeat = get_local_arg_val<uint32_t>(local_args_idx++);
++        for (uint8_t i = 0; i < NUM_TRAFFIC_CONFIGS; i++) {
++            stream_counts[i] = get_local_arg_val<uint32_t>(local_args_idx++);
++        }
++    }
++
+     // Build mux termination manager from local args (uses advanced local_args_idx)
+     MuxTerminationManager<HAS_MUX_CONNECTIONS, NUM_MUXES_TO_TERMINATE> mux_termination_manager(
+         local_args_idx, common_memory_map.mux_termination_sync_address);
+@@ -96,11 +131,98 @@ void kernel_main() {
+         packets_left_to_send |= traffic_config->has_packets_to_send();
+     };
+ 
++    constexpr uint32_t PROGRESS_UPDATE_INTERVAL = 1000;  // Write progress every 1000 loops
++
++    auto write_progress = [&]() {
++        auto* per_config_results = get_per_config_results(sender_config->get_result_buffer_address());
++        uint64_t progress_packets_sent = 0;
++        for (uint8_t i = 0; i < NUM_TRAFFIC_CONFIGS; i++) {
++            uint64_t config_packets = sender_config->traffic_config_ptrs[i]->num_packets_processed;
++            progress_packets_sent += config_packets;
++            write_per_config_result(&per_config_results[i], config_packets);
++        }
++        write_test_packets(sender_config->get_result_buffer_address(), progress_packets_sent);
++    };
++
++    // Benchmark stream: every segment goes to the same router. Each segment's header is built once;
++    // a packet copies it into the router slot only when that slot last held another segment's header,
++    // and otherwise just returns the slot so the router sends the header already there.
++    auto send_stream_benchmark = [&]() {
++        auto* conn = static_cast<EdmSenderType*>(sender_config->traffic_config_ptrs[0]->connection_ptr_);
++        ASSERT(conn->num_buffers_per_channel <= MAX_STREAM_SLOTS);
++        for (uint32_t slot = 0; slot < conn->num_buffers_per_channel; slot++) {
++            stream_slot_segment[slot] = STREAM_SLOT_EMPTY;
++        }
++
++        // Arms the header-copy and credit command buffers for this router. The loop below issues no
++        // other NoC writes, since under DM_DYNAMIC_NOC they would share these command buffers.
++        conn->setup_stateful_send_cmd_bufs();
++        uint32_t header_copies = 0;
++        // Packets that found every router slot full. A router that keeps up with the worker never
++        // fills up, so a run with almost no waits measured the worker rather than the router.
++        uint32_t slot_waits = 0;
++        // Cycles spent waiting for a slot, timed only when a wait happens. The rest of the loop's time
++        // is the worker's own cost per packet, which a router-bound run otherwise hides.
++        uint64_t wait_cycles = 0;
++        const uint64_t loop_start = get_timestamp();
++        for (uint32_t lap = 0; lap < stream_repeat; lap++) {
++            for (uint8_t segment = 0; segment < NUM_TRAFFIC_CONFIGS; segment++) {
++                const uint32_t header_address = (uint32_t)sender_config->traffic_config_ptrs[segment]->packet_header;
++                for (uint32_t i = 0; i < stream_counts[segment]; i++) {
++                    if (!conn->edm_has_space_for_packet()) {
++                        slot_waits++;
++                        const uint64_t wait_start = get_timestamp();
++                        conn->wait_for_empty_write_slot();
++                        wait_cycles += get_timestamp() - wait_start;
++                    }
++                    const uint8_t slot = conn->buffer_slot_index.get();
++                    if (stream_slot_segment[slot] == segment && replay_current_slot(conn)) {
++                        continue;
++                    }
++                    conn->send_current_slot_stateful_non_blocking_from_address(
++                        header_address, sizeof(PACKET_HEADER_TYPE));
++                    stream_slot_segment[slot] = segment;
++                    header_copies++;
++                }
++            }
++        }
++
++        for (uint8_t segment = 0; segment < NUM_TRAFFIC_CONFIGS; segment++) {
++            sender_config->traffic_config_ptrs[segment]->num_packets_processed = stream_repeat * stream_counts[segment];
++        }
++        const uint64_t busy_cycles = get_timestamp() - loop_start - wait_cycles;
++        write_stream_counters(sender_config->get_result_buffer_address(), header_copies, slot_waits, busy_cycles);
++    };
++
++    // Validated stream: the normal per-packet send in program order. A segment that is out of
++    // flow-control credits holds up the stream rather than letting another segment go first.
++    auto send_stream_validated = [&]() {
++        uint32_t packets_since_progress = 0;
++        for (uint32_t lap = 0; lap < stream_repeat; lap++) {
++            for (uint8_t segment = 0; segment < NUM_TRAFFIC_CONFIGS; segment++) {
++                auto* traffic_config = sender_config->traffic_config_ptrs[segment];
++                for (uint32_t i = 0; i < stream_counts[segment]; i++) {
++                    while (!traffic_config->template send_one_packet<false>()) {
++                    }
++                    if (++packets_since_progress == PROGRESS_UPDATE_INTERVAL) {
++                        packets_since_progress = 0;
++                        write_progress();
++                    }
++                }
++            }
++        }
++    };
++
+     // Round-robin packet sending: send one packet from each config per iteration
+     uint64_t start_timestamp = get_timestamp();
+-    constexpr uint32_t PROGRESS_UPDATE_INTERVAL = 1000;  // Write progress every 1000 loops
+ 
+-    if constexpr (NUM_TRAFFIC_CONFIGS == 1 && BENCHMARK_MODE) {
++    if constexpr (STREAM_MODE) {
++        if constexpr (BENCHMARK_MODE) {
++            send_stream_benchmark();
++        } else {
++            send_stream_validated();
++        }
++    } else if constexpr (NUM_TRAFFIC_CONFIGS == 1 && BENCHMARK_MODE) {
+         // Stateful sends optimized for single traffic config tests
+         send_packets_stateful();
+     } else {
+@@ -117,14 +239,7 @@ void kernel_main() {
+             // Periodically write progress updates (skip in BENCHMARK_MODE for performance)
+             if constexpr (!BENCHMARK_MODE) {
+                 if (loop_count % PROGRESS_UPDATE_INTERVAL == 0) {
+-                    auto* per_config_results = get_per_config_results(sender_config->get_result_buffer_address());
+-                    uint64_t progress_packets_sent = 0;
+-                    for (uint8_t i = 0; i < NUM_TRAFFIC_CONFIGS; i++) {
+-                        uint64_t config_packets = sender_config->traffic_config_ptrs[i]->num_packets_processed;
+-                        progress_packets_sent += config_packets;
+-                        write_per_config_result(&per_config_results[i], config_packets);
+-                    }
+-                    write_test_packets(sender_config->get_result_buffer_address(), progress_packets_sent);
++                    write_progress();
+                 }
+             }
+         }
+diff --git a/tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_stream_sanity.yaml b/tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_stream_sanity.yaml
+new file mode 100644
+index 00000000000..16e29cdbd70
+--- /dev/null
++++ b/tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_stream_sanity.yaml
+@@ -0,0 +1,106 @@
++# Traffic streams, data-validated (not benchmark mode).
++#
++# A stream is an ordered list of segments (packet shapes) that a sender sends in laps:
++#   stream:                                  # a bare ntype string is shorthand for {ntype: ...}
++#     - {ntype: unicast_write, count: 7}     # count: packets of this segment per lap (default 1)
++#     - fused_atomic_inc
++#   repeat: 100                              # laps (default 1); a stream pattern can't set num_packets
++# Segments set ntype, size and atomic_inc_val, inheriting the rest from the pattern. ftype and the
++# destination apply to the whole stream, so a stream uses one router.
++#
++# Every test uses a high-level pattern that gives each sender one flow, which a stream needs.
++# Long runs use flow control so a sender can't overwrite data its receiver hasn't checked yet.
++
++Tests:
++  # All four command types in one stream
++  - name: "StreamCommandTypesMesh"
++    enable_flow_control: true
++    fabric_setup:
++      topology: Mesh
++    parametrization_params:
++      num_links: [1, 2]
++      size: [1024, 4096]
++    defaults:
++      ftype: unicast
++      repeat: 500
++      stream: [unicast_write, unicast_scatter_write, fused_atomic_inc, atomic_inc]
++    patterns:
++      - type: full_device_random_pairing
++
++  # Sizes from 16 B to 4 KB in one stream
++  - name: "StreamSizesMesh"
++    enable_flow_control: true
++    fabric_setup:
++      topology: Mesh
++    defaults:
++      ftype: unicast
++      ntype: unicast_write
++      repeat: 300
++      stream:
++        - {size: 4096, count: 2}
++        - {size: 2048}
++        - {size: 256, count: 3}
++        - {size: 16, count: 4}
++    patterns:
++      - type: full_device_random_pairing
++
++  # A collective's chunk: seven page writes, then a write that also signals
++  - name: "StreamCollectiveChunkMesh"
++    enable_flow_control: true
++    fabric_setup:
++      topology: Mesh
++    defaults:
++      ftype: unicast
++      size: 4096
++      atomic_inc_val: 2
++      repeat: 200
++      stream:
++        - {ntype: unicast_write, count: 7}
++        - fused_atomic_inc
++    patterns:
++      - type: full_device_random_pairing
++
++  # Line multicast down each axis, every command type
++  - name: "StreamMulticastMesh"
++    enable_flow_control: true
++    fabric_setup:
++      topology: Mesh
++    defaults:
++      ftype: mcast
++      size: 2048
++      repeat: 200
++      stream: [unicast_write, unicast_scatter_write, fused_atomic_inc, atomic_inc]
++    patterns:
++      - type: unidirectional_linear
++
++  # 1D fabric, unicast and multicast
++  - name: "StreamLinear"
++    enable_flow_control: true
++    fabric_setup:
++      topology: Linear
++    parametrization_params:
++      ftype: [unicast, mcast]
++    defaults:
++      size: 2048
++      repeat: 200
++      stream:
++        - {ntype: unicast_write, count: 2}
++        - unicast_scatter_write
++        - {ntype: fused_atomic_inc, size: 512}
++    patterns:
++      - type: unidirectional_linear
++
++  # Without flow control: short enough that no sender laps its receiver's buffer
++  - name: "StreamNoFlowControlMesh"
++    fabric_setup:
++      topology: Mesh
++    defaults:
++      ftype: unicast
++      ntype: unicast_write
++      repeat: 8
++      stream:
++        - {size: 4096, count: 2}
++        - {size: 1024}
++        - {size: 16, count: 2}
++    patterns:
++      - type: full_device_random_pairing
+diff --git a/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_allocator.hpp b/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_allocator.hpp
+index c7f39fdd439..cea14c2eaab 100644
+--- a/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_allocator.hpp
++++ b/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_allocator.hpp
+@@ -602,7 +602,10 @@ inline void TestDeviceResources::reserve_core_internal(
+  */
+ inline static std::pair<uint32_t, uint32_t> calculate_credit_config(
+     uint32_t buffer_capacity_bytes, uint32_t packet_size_bytes, uint32_t num_packets) {
+-    uint32_t buffer_capacity_packets = buffer_capacity_bytes / packet_size_bytes;
++    // A packet with no payload (a stream's atomic_inc segment) takes no buffer space, so only the
++    // packet count limits its credits.
++    uint32_t buffer_capacity_packets =
++        packet_size_bytes == 0 ? num_packets : buffer_capacity_bytes / packet_size_bytes;
+     uint32_t initial_credits = std::min(buffer_capacity_packets, num_packets);
+     uint32_t batch_size = std::max(1u, initial_credits / 4);
+     return {initial_credits, batch_size};
+diff --git a/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_bandwidth_profiler.cpp b/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_bandwidth_profiler.cpp
+index c710f0e097e..9dac7c30488 100644
+--- a/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_bandwidth_profiler.cpp
++++ b/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_bandwidth_profiler.cpp
+@@ -26,6 +26,7 @@ void BandwidthProfiler::profile_results(
+     latest_result_ = BandwidthResult{};
+     latest_summary_ = BandwidthResultSummary{};
+     outgoing_traffic_.clear();
++    outgoing_load_.clear();
+     device_direction_cycles_.clear();
+     device_core_cycles_.clear();
+ 
+@@ -46,6 +47,7 @@ void BandwidthProfiler::reset() {
+     latest_summary_ = BandwidthResultSummary{};
+     latest_results_.clear();
+     outgoing_traffic_.clear();
++    outgoing_load_.clear();
+     device_direction_cycles_.clear();
+     device_core_cycles_.clear();
+     telemetry_bw_min_.reset();
+@@ -57,6 +59,7 @@ std::map<FabricNodeId, std::map<RoutingDirection, uint32_t>>
+ BandwidthProfiler::calculate_outgoing_traffics_through_device_boundaries(
+     const std::unordered_map<MeshCoordinate, TestDevice>& test_devices) {
+     outgoing_traffic_.clear();  // Clear previous data
++    outgoing_load_.clear();
+ 
+     log_debug(tt::LogTest, "Calculating outgoing traffic through device boundaries");
+ 
+@@ -119,6 +122,9 @@ void BandwidthProfiler::trace_ring_traffic_path(
+         FabricNodeId source_node = src_node_id;
+         for (const auto& [destination_node, direction] : ring_path) {
+             outgoing_traffic_[source_node][direction]++;
++            auto& load = outgoing_load_[source_node][direction];
++            load.bytes += static_cast<uint64_t>(config.parameters.payload_size_bytes) * config.parameters.num_packets;
++            load.packets += config.parameters.num_packets;
+             source_node = destination_node;  // Move to next source for the next hop
+         }
+     }
+@@ -136,6 +142,10 @@ void BandwidthProfiler::trace_line_or_mesh_traffic_path(
+     for (const auto& [device_id, direction_map] : traffic) {
+         for (const auto& [direction, count] : direction_map) {
+             outgoing_traffic_[device_id][direction] += count;
++            auto& load = outgoing_load_[device_id][direction];
++            load.bytes +=
++                static_cast<uint64_t>(config.parameters.payload_size_bytes) * config.parameters.num_packets * count;
++            load.packets += static_cast<uint64_t>(config.parameters.num_packets) * count;
+         }
+     }
+ }
+@@ -208,6 +218,44 @@ void BandwidthProfiler::read_performance_results(
+                 uint64_t total_cycles = static_cast<uint64_t>(cycles_high) << 32 | cycles_low;
+ 
+                 device_core_cycles_[device.device_node_id][core] = total_cycles;
++
++                // A stream sender copies a header into a router slot only when the slot held another
++                // segment's header, and copies cost worker time. If the worker almost never found the
++                // router's slots full, the router kept up with it, so the run measured the worker.
++                const auto& sender = test_devices.at(device.device_coord).get_senders().at(core);
++                if (sender.stream_.has_value()) {
++                    const uint64_t packets = static_cast<uint64_t>(core_data[TT_FABRIC_WORD_CNT_INDEX + 1]) << 32 |
++                                             core_data[TT_FABRIC_WORD_CNT_INDEX];
++                    const uint32_t copies = core_data[tt::tt_fabric::fabric_tests::STREAM_HEADER_COPIES_WORD_INDEX];
++                    const uint32_t waits = core_data[tt::tt_fabric::fabric_tests::STREAM_SLOT_WAITS_WORD_INDEX];
++                    constexpr uint32_t busy_index = tt::tt_fabric::fabric_tests::STREAM_BUSY_CYCLES_WORD_INDEX;
++                    const uint64_t busy_cycles =
++                        static_cast<uint64_t>(core_data[busy_index + 1]) << 32 | core_data[busy_index];
++                    const auto percent = [&](uint64_t count) {
++                        return packets == 0 ? 0.0 : 100.0 * static_cast<double>(count) / static_cast<double>(packets);
++                    };
++                    log_info(
++                        tt::LogTest,
++                        "Stream sender on device {} core {}: {} of {} packets copied a header ({:.1f}%), {} found "
++                        "the router's slots full ({:.1f}%), worker busy {:.1f} cycles/packet outside slot waits",
++                        device.device_node_id,
++                        core,
++                        copies,
++                        packets,
++                        percent(copies),
++                        waits,
++                        percent(waits),
++                        packets == 0 ? 0.0 : static_cast<double>(busy_cycles) / static_cast<double>(packets));
++                    if (packets > 0 && waits * 100 < packets) {
++                        log_warning(
++                            tt::LogTest,
++                            "Stream sender on device {} core {} was worker-bound: fewer than 1% of its packets found "
++                            "the router's slots full, so this test's bandwidth measures the sending worker, not the "
++                            "router",
++                            device.device_node_id,
++                            core);
++                    }
++                }
+             }
+         }
+     }
+@@ -266,11 +314,14 @@ void BandwidthProfiler::calculate_bandwidth(
+     latest_results_.clear();
+ 
+     uint64_t max_cycles = 0;
+-    uint32_t max_traffic_count = 0;
+     // Calculate total bytes and packets sent in this direction from this device
+     uint64_t total_bytes = 0;
+-    uint32_t total_packets = 0;
++    uint64_t total_packets = 0;
+     uint32_t total_traffic_count = 0;
++    // The summary reports the busiest link: most bytes, then most packets, then most cycles.
++    uint64_t busiest_bytes = 0;
++    uint64_t busiest_packets = 0;
++    uint64_t busiest_cycles = 0;
+     uint32_t packet_size = 0;
+     uint32_t num_packets = 0;
+     uint32_t device_freq = std::numeric_limits<uint32_t>::max();
+@@ -332,7 +383,6 @@ void BandwidthProfiler::calculate_bandwidth(
+ 
+                 // calculate the max for summary info
+                 max_cycles = std::max(max_cycles, cycles);
+-                max_traffic_count = std::max(max_traffic_count, total_traffic_count);
+ 
+                 // Use cache lookup instead of triply nested loop (O(1) vs O(n³))
+                 std::string cache_key = std::to_string(device_id.chip_id) + "_" +
+@@ -350,6 +400,28 @@ void BandwidthProfiler::calculate_bandwidth(
+                 total_bytes = static_cast<uint64_t>(payload_size_bytes) * num_packets * total_traffic_count;
+                 total_packets = static_cast<uint64_t>(num_packets) * total_traffic_count;
+ 
++                // Total over every flow that crosses this boundary. For a link whose flows all share
++                // one size and count this equals the product above; for mixed flows it is the true sum.
++                // num_packets is then the mean per flow and packet_size the mean payload per packet.
++                if (outgoing_load_.contains(device_id) && outgoing_load_[device_id].contains(direction)) {
++                    const auto& load = outgoing_load_[device_id][direction];
++                    total_bytes = load.bytes;
++                    total_packets = load.packets;
++                    if (total_traffic_count > 0) {
++                        num_packets = static_cast<uint32_t>(total_packets / total_traffic_count);
++                    }
++                    if (total_packets > 0) {
++                        packet_size = static_cast<uint32_t>((total_bytes + total_packets / 2) / total_packets);
++                    }
++                }
++
++                if (std::tie(total_bytes, total_packets, cycles) >
++                    std::tie(busiest_bytes, busiest_packets, busiest_cycles)) {
++                    busiest_bytes = total_bytes;
++                    busiest_packets = total_packets;
++                    busiest_cycles = cycles;
++                }
++
+                 // Calculate bandwidth in Bytes/cycle and convert to GB/s
+                 const auto device_frequency_mhz = device_info_.get_device_frequency_mhz(device_id);
+                 uint32_t device_frequency_hz = device_frequency_mhz * 1e6;
+@@ -392,21 +464,18 @@ void BandwidthProfiler::calculate_bandwidth(
+         latest_result_ = latest_results_.back();
+     }
+ 
+-    // Calculate and store a summary of this test
+-    total_bytes = static_cast<uint64_t>(packet_size) * num_packets * max_traffic_count;
+-    double bandwidth_bytes_per_cycle = static_cast<double>(total_bytes) / static_cast<double>(max_cycles);
++    // Calculate and store a summary of this test: the busiest link's load over the slowest sender's
++    // time. For tests whose flows all share one size and count, the busiest link is the one crossed
++    // by the most flows.
++    double bandwidth_bytes_per_cycle = static_cast<double>(busiest_bytes) / static_cast<double>(max_cycles);
+     double bandwidth_GB_s = (bandwidth_bytes_per_cycle * device_freq) / 1e9;
+ 
+     // Calculate packets per second
+     double duration_seconds = static_cast<double>(max_cycles) / static_cast<double>(device_freq);
+-    double packets_per_second = static_cast<double>(max_traffic_count * num_packets) / duration_seconds;
++    double packets_per_second = static_cast<double>(busiest_packets) / duration_seconds;
+ 
+     // Build summary entry
+-    const TrafficPatternConfig& first_pattern = fetch_first_traffic_pattern(config);
+-    std::string ftype_str = fetch_pattern_ftype(first_pattern);
+-    std::string ntype_str = fetch_pattern_ntype(first_pattern);
+-    uint32_t num_packets_first_pattern = fetch_pattern_num_packets(first_pattern);
+-    uint32_t packet_size_first_pattern = fetch_pattern_packet_size(first_pattern);
++    const TrafficSummaryLabel label = fetch_traffic_summary_label(config);
+ 
+     // Create a new entry that represents all iterations of the same test (per call we handle single iteration)
+     // Get max_packet_size from FabricContext (already accounts for user override and topology)
+@@ -418,13 +487,13 @@ void BandwidthProfiler::calculate_bandwidth(
+     latest_summary_ = BandwidthResultSummary{
+         .test_name = config.name,
+         .num_iterations = 1,
+-        .ftype = ftype_str,
+-        .ntype = ntype_str,
++        .ftype = label.ftype,
++        .ntype = label.ntype,
+         .topology = std::string(enchantum::to_string(config.fabric_setup.topology)),
+         .num_links = config.fabric_setup.num_links,
+-        .num_packets = num_packets_first_pattern,
++        .num_packets = label.num_packets,
+         .num_devices = std::vector<uint32_t>(num_devices_set.begin(), num_devices_set.end()),
+-        .packet_size = packet_size_first_pattern,
++        .packet_size = label.packet_size,
+         .cycles_vector = {static_cast<double>(max_cycles)},
+         .bandwidth_vector_GB_s = {bandwidth_GB_s},
+         .packets_per_second_vector = {packets_per_second},
+diff --git a/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_bandwidth_profiler.hpp b/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_bandwidth_profiler.hpp
+index bee5a31e851..c01edfd13db 100644
+--- a/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_bandwidth_profiler.hpp
++++ b/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_bandwidth_profiler.hpp
+@@ -27,6 +27,7 @@ using FabricNodeId = tt::tt_fabric::FabricNodeId;
+ using RoutingDirection = tt::tt_fabric::RoutingDirection;
+ using SenderMemoryMap = tt::tt_fabric::fabric_tests::SenderMemoryMap;
+ using TrafficPatternConfig = tt::tt_fabric::fabric_tests::TrafficPatternConfig;
++using TrafficSummaryLabel = tt::tt_fabric::fabric_tests::TrafficSummaryLabel;
+ using BandwidthResult = tt::tt_fabric::fabric_tests::BandwidthResult;
+ using BandwidthResultSummary = tt::tt_fabric::fabric_tests::BandwidthResultSummary;
+ using IDeviceInfoProvider = tt::tt_fabric::fabric_tests::IDeviceInfoProvider;
+@@ -65,6 +66,13 @@ private:
+ 
+     // Internal scratch state (per test)
+     std::map<FabricNodeId, std::map<RoutingDirection, uint32_t>> outgoing_traffic_;
++    // Payload bytes and packets of every flow crossing each device boundary, so links that carry
++    // flows of different sizes or counts are totalled correctly.
++    struct LinkLoad {
++        uint64_t bytes = 0;
++        uint64_t packets = 0;
++    };
++    std::map<FabricNodeId, std::map<RoutingDirection, LinkLoad>> outgoing_load_;
+     std::map<FabricNodeId, std::map<RoutingDirection, std::map<uint32_t, uint64_t>>> device_direction_cycles_;
+     std::map<FabricNodeId, std::map<CoreCoord, uint64_t>> device_core_cycles_;
+     std::optional<double> telemetry_bw_min_;
+diff --git a/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_bandwidth_results.cpp b/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_bandwidth_results.cpp
+index 9701780261a..b51601ebb34 100644
+--- a/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_bandwidth_results.cpp
++++ b/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_bandwidth_results.cpp
+@@ -119,10 +119,10 @@ void BandwidthResultsManager::add_summary(const TestConfig& config, const Bandwi
+ }
+ 
+ void BandwidthResultsManager::append_to_csv(const TestConfig& config, const BandwidthResult& result) {
+-    // Extract representative ftype and ntype from first sender's first pattern
+-    const TrafficPatternConfig& first_pattern = fetch_first_traffic_pattern(config);
+-    std::string ftype_str = fetch_pattern_ftype(first_pattern);
+-    std::string ntype_str = fetch_pattern_ntype(first_pattern);
++    // Representative ftype and ntype from the first sender (its first pattern, or its whole stream)
++    const TrafficSummaryLabel label = fetch_traffic_summary_label(config);
++    const std::string& ftype_str = label.ftype;
++    const std::string& ntype_str = label.ntype;
+ 
+     // Open CSV file in append mode
+     std::ofstream csv_stream(csv_file_path_, std::ios::out | std::ios::app);
+diff --git a/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_bandwidth_results.hpp b/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_bandwidth_results.hpp
+index 418cefab83e..d50d37bb0e8 100644
+--- a/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_bandwidth_results.hpp
++++ b/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_bandwidth_results.hpp
+@@ -27,6 +27,7 @@ using TestDevice = tt::tt_fabric::fabric_tests::TestDevice;
+ using TestConfig = tt::tt_fabric::fabric_tests::TestConfig;
+ using SenderMemoryMap = tt::tt_fabric::fabric_tests::SenderMemoryMap;
+ using TrafficPatternConfig = tt::tt_fabric::fabric_tests::TrafficPatternConfig;
++using TrafficSummaryLabel = tt::tt_fabric::fabric_tests::TrafficSummaryLabel;
+ using TrafficParameters = tt::tt_fabric::fabric_tests::TrafficParameters;
+ using TestTrafficSenderConfig = tt::tt_fabric::fabric_tests::TestTrafficSenderConfig;
+ using TestTrafficReceiverConfig = tt::tt_fabric::fabric_tests::TestTrafficReceiverConfig;
+diff --git a/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_common_types.cpp b/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_common_types.cpp
+index ca513b3c134..fa2728dfe6a 100644
+--- a/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_common_types.cpp
++++ b/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_common_types.cpp
+@@ -64,4 +64,33 @@ uint32_t fetch_pattern_packet_size(const TrafficPatternConfig& pattern) {
+     return fetch_pattern_int(pattern, [](const auto& pattern) { return pattern.size; });
+ }
+ 
++TrafficSummaryLabel fetch_traffic_summary_label(const TestConfig& config) {
++    const TrafficPatternConfig first_pattern = fetch_first_traffic_pattern(config);
++    TrafficSummaryLabel label{
++        .ftype = fetch_pattern_ftype(first_pattern),
++        .ntype = fetch_pattern_ntype(first_pattern),
++        .num_packets = fetch_pattern_num_packets(first_pattern),
++        .packet_size = fetch_pattern_packet_size(first_pattern)};
++
++    const auto& first_sender = config.senders[0];
++    if (!first_sender.stream.has_value()) {
++        return label;
++    }
++
++    uint64_t total_packets = 0;
++    uint64_t total_bytes = 0;
++    for (const auto& pattern : first_sender.patterns) {
++        if (pattern.ntype != first_pattern.ntype) {
++            label.ntype = "STREAM";
++        }
++        const uint32_t num_packets = fetch_pattern_num_packets(pattern);
++        total_packets += num_packets;
++        total_bytes += static_cast<uint64_t>(fetch_pattern_packet_size(pattern)) * num_packets;
++    }
++    label.num_packets = static_cast<uint32_t>(total_packets);
++    label.packet_size =
++        total_packets == 0 ? 0 : static_cast<uint32_t>((total_bytes + total_packets / 2) / total_packets);
++    return label;
++}
++
+ }  // namespace tt::tt_fabric::fabric_tests
+diff --git a/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_common_types.hpp b/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_common_types.hpp
+index db3187e7a21..7091e8b6c06 100644
+--- a/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_common_types.hpp
++++ b/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_common_types.hpp
+@@ -63,6 +63,18 @@ struct ParsedDestinationConfig {
+     std::optional<uint32_t> atomic_inc_address;
+ };
+ 
++// One entry of a traffic stream: a packet shape and how many packets of it each lap sends.
++// Unset fields are inherited from the pattern that carries the stream.
++struct ParsedStreamSegment {
++    std::optional<NocSendType> ntype;
++    std::optional<uint32_t> size;
++    std::optional<uint32_t> atomic_inc_val;
++    uint32_t count = 1;
++};
++
++// Upper bound on segments in one stream. Each segment becomes its own traffic config on the sender.
++inline constexpr uint32_t kMaxStreamSegments = 64;
++
+ struct ParsedTrafficPatternConfig {
+     std::optional<ChipSendType> ftype;
+     std::optional<NocSendType> ntype;
+@@ -72,6 +84,16 @@ struct ParsedTrafficPatternConfig {
+     std::optional<uint32_t> atomic_inc_val;
+     std::optional<uint32_t> mcast_start_hops;
+     std::optional<uint8_t> vc_id;  // VC selection: 0=VC0 (default), 2=VC2. Forwarded to generated senders.
++    // Ordered packet shapes sent in laps; expand_streams turns each segment into its own pattern.
++    std::optional<std::vector<ParsedStreamSegment>> stream;
++    std::optional<uint32_t> repeat;  // Number of laps through the stream (default 1)
++};
++
++// Send order for a sender built from a stream: each lap sends counts[i] packets of pattern i, in
++// pattern order, and the sender runs `repeat` laps.
++struct StreamProgram {
++    uint32_t repeat = 1;
++    std::vector<uint32_t> counts;
+ };
+ 
+ struct ParsedSenderConfig {
+@@ -79,8 +101,9 @@ struct ParsedSenderConfig {
+     std::optional<CoreConfig> core;
+     std::optional<tt::tt_metal::NOC> noc_id;
+     std::vector<ParsedTrafficPatternConfig> patterns;
+-    std::optional<uint32_t> link_id;  // Link ID for multi-link tests
+-    std::optional<uint8_t> vc_id;     // VC selection: 0=VC0 (default), 2=VC2
++    std::optional<uint32_t> link_id;      // Link ID for multi-link tests
++    std::optional<uint8_t> vc_id;         // VC selection: 0=VC0 (default), 2=VC2
++    std::optional<StreamProgram> stream;  // Set by expand_streams
+ };
+ 
+ // Resolved structures (after resolution) - use FabricNodeId
+@@ -122,6 +145,7 @@ struct SenderConfig {
+     uint32_t link_id = 0;          // Link ID for multi-link tests
+     std::optional<uint8_t> vc_id;  // VC selection: 0=VC0 (default), 2=VC2
+     bool use_vc2() const { return vc_id.value_or(0) == 2; }
++    std::optional<StreamProgram> stream;  // Present when the patterns were built from a stream
+ };
+ 
+ // Sync configuration for a single device
+@@ -358,4 +382,15 @@ uint32_t fetch_pattern_num_packets(const TrafficPatternConfig& pattern);
+ 
+ uint32_t fetch_pattern_packet_size(const TrafficPatternConfig& pattern);
+ 
++// Labels a test's traffic for result rows, from its first sender. A plain sender reports its first
++// pattern. A stream sender reports the whole stream: ntype is "STREAM" when the segments differ,
++// num_packets is the stream's total, and packet_size is the mean payload per packet.
++struct TrafficSummaryLabel {
++    std::string ftype;
++    std::string ntype;
++    uint32_t num_packets = 0;
++    uint32_t packet_size = 0;
++};
++TrafficSummaryLabel fetch_traffic_summary_label(const TestConfig& config);
++
+ }  // namespace tt::tt_fabric::fabric_tests
+diff --git a/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_config.cpp b/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_config.cpp
+index 921f0155e86..fc6c7731455 100644
+--- a/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_config.cpp
++++ b/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_config.cpp
+@@ -6,7 +6,9 @@
+ #include "tt_fabric_test_config.hpp"
+ #include "tt_fabric_test_constants.hpp"
+ #include <algorithm>
++#include <limits>
+ #include <optional>
++#include <set>
+ #include <variant>
+ #include "tt_fabric_test_common_types.hpp"
+ #include "tt-metalium/core_coord.hpp"
+@@ -148,10 +150,61 @@ ParsedTrafficPatternConfig YamlConfigParser::parse_traffic_pattern_config(const
+             "vc_id must be 0 or 2, got {}",
+             config.vc_id.value());
+     }
++    if (pattern_yaml["stream"]) {
++        config.stream = parse_stream(pattern_yaml["stream"]);
++    }
++    if (pattern_yaml["repeat"]) {
++        config.repeat = parse_scalar<uint32_t>(pattern_yaml["repeat"]);
++        TT_FATAL(config.repeat.value() > 0, "'repeat' must be at least 1");
++    }
+ 
+     return config;
+ }
+ 
++std::vector<ParsedStreamSegment> YamlConfigParser::parse_stream(const YAML::Node& stream_yaml) {
++    TT_FATAL(stream_yaml.IsSequence(), "Expected 'stream' to be a sequence of segments");
++    TT_FATAL(stream_yaml.size() > 0, "'stream' needs at least one segment");
++    TT_FATAL(
++        stream_yaml.size() <= kMaxStreamSegments,
++        "'stream' has {} segments; at most {} are supported",
++        stream_yaml.size(),
++        kMaxStreamSegments);
++
++    std::vector<ParsedStreamSegment> segments;
++    segments.reserve(stream_yaml.size());
++    for (const auto& segment_yaml : stream_yaml) {
++        ParsedStreamSegment segment;
++        if (segment_yaml.IsScalar()) {
++            // A bare string is shorthand for {ntype: <string>}
++            segment.ntype = detail::noc_send_type_mapper.from_string(parse_scalar<std::string>(segment_yaml), "ntype");
++            segments.push_back(segment);
++            continue;
++        }
++
++        TT_FATAL(segment_yaml.IsMap(), "Expected each stream segment to be an ntype string or a map");
++        for (const auto& field : segment_yaml) {
++            const auto key = parse_scalar<std::string>(field.first);
++            if (key == "ntype") {
++                segment.ntype = detail::noc_send_type_mapper.from_string(parse_scalar<std::string>(field.second), "ntype");
++            } else if (key == "size") {
++                segment.size = parse_scalar<uint32_t>(field.second);
++            } else if (key == "atomic_inc_val") {
++                segment.atomic_inc_val = parse_scalar<uint32_t>(field.second);
++            } else if (key == "count") {
++                segment.count = parse_scalar<uint32_t>(field.second);
++                TT_FATAL(segment.count > 0, "A stream segment's 'count' must be at least 1");
++            } else {
++                TT_THROW(
++                    "Unsupported stream segment field '{}'. A segment sets ntype, size, atomic_inc_val and count; "
++                    "ftype, destination, mcast_start_hops and the packet count (repeat) apply to the whole stream",
++                    key);
++            }
++        }
++        segments.push_back(segment);
++    }
++    return segments;
++}
++
+ ParsedSenderConfig YamlConfigParser::parse_sender_config(
+     const YAML::Node& sender_yaml, const ParsedTrafficPatternConfig& defaults) {
+     TT_FATAL(sender_yaml.IsMap(), "Expected sender to be a map");
+@@ -635,6 +688,37 @@ static bool check_num_links_filter(
+     return test_config.fabric_setup.num_links == stoi(filter_value.value());
+ }
+ 
++// A stream pattern takes ntype and size per segment, falling back to the pattern's own value. These
++// helpers apply a field filter to every segment, so a stream matches when any segment does.
++template <typename GetField>
++static auto pattern_field_values(const ParsedTrafficPatternConfig& pattern, GetField get_field) {
++    std::vector<decltype(get_field(pattern))> values;
++    if (!pattern.stream.has_value()) {
++        values.push_back(get_field(pattern));
++        return values;
++    }
++    for (const auto& segment : pattern.stream.value()) {
++        const auto value = get_field(segment);
++        values.push_back(value.has_value() ? value : get_field(pattern));
++    }
++    return values;
++}
++
++template <typename GetField, typename T>
++static bool pattern_field_matches(const ParsedTrafficPatternConfig& pattern, GetField get_field, const T& wanted) {
++    const auto values = pattern_field_values(pattern, get_field);
++    return std::any_of(
++        values.begin(), values.end(), [&](const auto& value) { return value.has_value() && value.value() == wanted; });
++}
++
++// True when every value is known and none matches, so the pattern can be dropped by the filter.
++template <typename GetField, typename T>
++static bool pattern_field_excludes(const ParsedTrafficPatternConfig& pattern, GetField get_field, const T& wanted) {
++    const auto values = pattern_field_values(pattern, get_field);
++    return std::all_of(
++        values.begin(), values.end(), [&](const auto& value) { return value.has_value() && value.value() != wanted; });
++}
++
+ static bool check_ntype_filter(
+     ParsedTestConfig& test_config, const std::optional<std::string>& filter_value, bool fine_grained) {
+     if (fine_grained && fine_grained_contains_string(test_config, "ntype", filter_value.value())) {
+@@ -643,10 +727,11 @@ static bool check_ntype_filter(
+     // soft filter
+     std::optional<tt::tt_fabric::NocSendType> ntype =
+         detail::noc_send_type_mapper.from_string(filter_value.value(), "ntype");
++    const auto get_ntype = [](const auto& shape) { return shape.ntype; };
+     bool checker = false;
+     for (const auto& sender : test_config.senders) {
+         for (const auto& pattern : sender.patterns) {
+-            if (pattern.ntype.has_value() && pattern.ntype.value() == ntype.value()) {
++            if (pattern_field_matches(pattern, get_ntype, ntype.value())) {
+                 checker = true;
+                 break;
+             }
+@@ -658,12 +743,12 @@ static bool check_ntype_filter(
+                 std::remove_if(
+                     sender.patterns.begin(),
+                     sender.patterns.end(),
+-                    [&](const auto& pattern) { return pattern.ntype.has_value() && pattern.ntype.value() != ntype; }),
++                    [&](const auto& pattern) { return pattern_field_excludes(pattern, get_ntype, ntype.value()); }),
+                 sender.patterns.end());
+         }
+     }
+-    if (!checker && test_config.defaults.has_value() && test_config.defaults.value().ntype.has_value()) {
+-        checker = test_config.defaults.value().ntype.value() == ntype.value();
++    if (!checker && test_config.defaults.has_value()) {
++        checker = pattern_field_matches(test_config.defaults.value(), get_ntype, ntype.value());
+     }
+     return checker;
+ }
+@@ -743,10 +828,11 @@ static bool check_size_filter(
+     if (fine_grained && fine_grained_contains_uint(test_config, "size", size)) {
+         return true;
+     }
++    const auto get_size = [](const auto& shape) { return shape.size; };
+     bool checker = false;
+     for (const auto& sender : test_config.senders) {
+         for (const auto& pattern : sender.patterns) {
+-            if (pattern.size.has_value() && pattern.size.value() == size) {
++            if (pattern_field_matches(pattern, get_size, size)) {
+                 checker = true;
+                 break;
+             }
+@@ -758,12 +844,12 @@ static bool check_size_filter(
+                 std::remove_if(
+                     sender.patterns.begin(),
+                     sender.patterns.end(),
+-                    [&](const auto& pattern) { return pattern.size.has_value() && pattern.size.value() != size; }),
++                    [&](const auto& pattern) { return pattern_field_excludes(pattern, get_size, size); }),
+                 sender.patterns.end());
+         }
+     }
+-    if (!checker && test_config.defaults.has_value() && test_config.defaults.value().size.has_value()) {
+-        checker = test_config.defaults.value().size.value() == size;
++    if (!checker && test_config.defaults.has_value()) {
++        checker = pattern_field_matches(test_config.defaults.value(), get_size, size);
+     }
+     return checker;
+ }
+@@ -1263,6 +1349,7 @@ SenderConfig TestConfigBuilder::resolve_sender_config(const ParsedSenderConfig&
+     resolved_sender.noc_id = parsed_sender.noc_id;
+     resolved_sender.link_id = parsed_sender.link_id.value_or(0);
+     resolved_sender.vc_id = parsed_sender.vc_id;
++    resolved_sender.stream = parsed_sender.stream;
+ 
+     resolve_core_config(parsed_sender, resolved_sender);
+ 
+@@ -1482,6 +1569,9 @@ std::vector<TestConfig> TestConfigBuilder::expand_high_level_patterns(ParsedTest
+         // After patterns are expanded, resolve any missing params based on policy
+         resolve_missing_params(iteration_test);
+ 
++        // Streams become one ordinary pattern per segment, so every later pass sees plain patterns.
++        expand_streams(iteration_test);
++
+         // After expansion and resolution, apply universal transformations like mcast splitting.
+         split_all_unicast_or_multicast_patterns(iteration_test);
+ 
+@@ -1862,6 +1952,88 @@ void TestConfigBuilder::validate_test(const TestConfig& test) const {
+             }
+         }
+     }
++
++    validate_stream_senders(test);
++}
++
++void TestConfigBuilder::validate_stream_senders(const TestConfig& test) const {
++    const bool has_stream = std::any_of(
++        test.senders.begin(), test.senders.end(), [](const auto& sender) { return sender.stream.has_value(); });
++    if (!has_stream) {
++        return;
++    }
++
++    TT_FATAL(
++        test.performance_test_mode != PerformanceTestMode::LATENCY,
++        "Test '{}': streams don't support latency_test_mode",
++        test.name);
++
++    for (const auto& sender : test.senders) {
++        if (sender.stream.has_value()) {
++            TT_FATAL(
++                sender.stream->counts.size() == sender.patterns.size(),
++                "Test '{}': stream program has {} entries for {} patterns",
++                test.name,
++                sender.stream->counts.size(),
++                sender.patterns.size());
++        }
++    }
++
++    // The benchmark send path drives the router adapter directly, so it can't go through a mux.
++    const bool benchmark_mode =
++        test.performance_test_mode == PerformanceTestMode::BANDWIDTH || test.skip_packet_validation;
++    if (!benchmark_mode) {
++        return;
++    }
++    TT_FATAL(
++        !test.enable_flow_control,
++        "Test '{}': streams can't combine benchmark mode with enable_flow_control, because flow control puts a mux "
++        "in front of the router",
++        test.name);
++
++    // A router has one worker channel, and without a mux only one sender core can feed it.
++    const auto routers_of = [&](const SenderConfig& sender) {
++        std::set<std::pair<RoutingDirection, uint32_t>> routers;
++        for (const auto& pattern : sender.patterns) {
++            const auto& dest = pattern.destination.value();
++            const RoutingDirection direction = dest.hops.has_value()
++                                                   ? route_manager_.get_forwarding_direction(dest.hops.value())
++                                                   : route_manager_.get_forwarding_direction(sender.device, dest.device.value());
++            routers.insert({direction, sender.link_id});
++        }
++        return routers;
++    };
++    for (size_t i = 0; i < test.senders.size(); ++i) {
++        const auto& stream_sender = test.senders[i];
++        if (!stream_sender.stream.has_value()) {
++            continue;
++        }
++        const auto stream_routers = routers_of(stream_sender);
++        for (size_t j = 0; j < test.senders.size(); ++j) {
++            const auto& other = test.senders[j];
++            if (j == i || other.device != stream_sender.device) {
++                continue;
++            }
++            const bool same_core = stream_sender.core.has_value() && other.core == stream_sender.core;
++            TT_FATAL(
++                !same_core,
++                "Test '{}': a stream sender on device {} shares core {} with another sender",
++                test.name,
++                stream_sender.device,
++                stream_sender.core.value());
++            for (const auto& router : routers_of(other)) {
++                TT_FATAL(
++                    !stream_routers.contains(router),
++                    "Test '{}': in benchmark mode two senders on device {} use the same router (direction {}, link "
++                    "{}). A router has one worker channel; load it from one sender, or add forwarded traffic from "
++                    "another chip.",
++                    test.name,
++                    stream_sender.device,
++                    router.first,
++                    router.second);
++            }
++        }
++    }
+ }
+ 
+ void TestConfigBuilder::expand_patterns_into_test(
+@@ -2654,7 +2826,9 @@ void TestConfigBuilder::resolve_missing_params(ParsedTestConfig& test) {
+                 if (!pattern.size.has_value()) {
+                     pattern.size = get_random_in_range(64, 2048);
+                 }
+-                if (!pattern.num_packets.has_value()) {
++                // A stream's packet count comes from repeat, so expand_streams can tell a user-set
++                // num_packets apart from a default.
++                if (!pattern.num_packets.has_value() && !pattern.stream.has_value()) {
+                     pattern.num_packets = get_random_in_range(10, 1000);
+                 }
+ 
+@@ -2687,7 +2861,7 @@ void TestConfigBuilder::resolve_missing_params(ParsedTestConfig& test) {
+                 if (!pattern.size.has_value()) {
+                     pattern.size = 1024;  // Default from cmdline parser
+                 }
+-                if (!pattern.num_packets.has_value()) {
++                if (!pattern.num_packets.has_value() && !pattern.stream.has_value()) {
+                     pattern.num_packets = 10;  // A reasonable default
+                 }
+             }
+@@ -2695,6 +2869,94 @@ void TestConfigBuilder::resolve_missing_params(ParsedTestConfig& test) {
+     }
+ }
+ 
++void TestConfigBuilder::expand_streams(ParsedTestConfig& test) {
++    for (auto& sender : test.senders) {
++        const bool has_stream = std::any_of(sender.patterns.begin(), sender.patterns.end(), [](const auto& pattern) {
++            return pattern.stream.has_value();
++        });
++        if (!has_stream) {
++            continue;
++        }
++
++        TT_FATAL(
++            sender.patterns.size() == 1,
++            "Test '{}': a sender with a stream can't have other patterns (found {}). High-level patterns that give "
++            "a sender several flows, such as all-to-all, can't carry a stream yet.",
++            test.name,
++            sender.patterns.size());
++
++        const ParsedTrafficPatternConfig stream_pattern = sender.patterns[0];
++        TT_FATAL(
++            !stream_pattern.num_packets.has_value(),
++            "Test '{}': a stream pattern can't have num_packets ({}); its packet count is repeat x the lap length. "
++            "num_packets may come from the pattern, 'defaults' or parametrization; in a test that mixes stream and "
++            "plain senders, set num_packets on the plain patterns instead of in 'defaults'.",
++            test.name,
++            stream_pattern.num_packets.value());
++
++        // One stream feeds one router. A multicast whose hops name several directions needs a
++        // connection per direction.
++        if (stream_pattern.ftype == ChipSendType::CHIP_MULTICAST && stream_pattern.destination.has_value() &&
++            stream_pattern.destination->hops.has_value()) {
++            TT_FATAL(
++                route_manager_.split_multicast_hops(stream_pattern.destination->hops.value()).size() == 1,
++                "Test '{}': a stream's multicast hops must name one direction, since a stream uses one router. Use "
++                "one sender per direction.",
++                test.name);
++        }
++
++        const uint32_t repeat = stream_pattern.repeat.value_or(1);
++        StreamProgram program{.repeat = repeat};
++        std::vector<ParsedTrafficPatternConfig> segment_patterns;
++        segment_patterns.reserve(stream_pattern.stream->size());
++        for (const auto& segment : stream_pattern.stream.value()) {
++            ParsedTrafficPatternConfig pattern = stream_pattern;
++            pattern.stream.reset();
++            pattern.repeat.reset();
++
++            if (segment.ntype.has_value()) {
++                pattern.ntype = segment.ntype;
++            }
++            if (segment.size.has_value()) {
++                pattern.size = segment.size;
++            }
++
++            const bool is_write_only = pattern.ntype == NocSendType::NOC_UNICAST_WRITE ||
++                                       pattern.ntype == NocSendType::NOC_UNICAST_SCATTER_WRITE;
++            if (segment.atomic_inc_val.has_value()) {
++                TT_FATAL(
++                    !is_write_only,
++                    "Test '{}': a stream segment sets atomic_inc_val but its ntype sends no atomic increment",
++                    test.name);
++                pattern.atomic_inc_val = segment.atomic_inc_val;
++            } else if (is_write_only) {
++                // An atomic_inc_val set on the pattern is meant for the stream's atomic segments.
++                pattern.atomic_inc_val.reset();
++            }
++
++            // atomic_inc carries no payload, so it counts as zero bytes in bandwidth results.
++            if (pattern.ntype == NocSendType::NOC_UNICAST_ATOMIC_INC) {
++                pattern.size = 0;
++            }
++
++            const uint64_t num_packets = static_cast<uint64_t>(repeat) * segment.count;
++            TT_FATAL(
++                num_packets <= std::numeric_limits<uint32_t>::max(),
++                "Test '{}': repeat {} x count {} overflows a segment's packet count",
++                test.name,
++                repeat,
++                segment.count);
++            pattern.num_packets = static_cast<uint32_t>(num_packets);
++
++            segment_patterns.push_back(std::move(pattern));
++            program.counts.push_back(segment.count);
++        }
++
++        sender.patterns = std::move(segment_patterns);
++        sender.stream = std::move(program);
++    }
++}
++
+ uint32_t TestConfigBuilder::get_random_in_range(uint32_t min, uint32_t max) {
+     if (min > max) {
+         std::swap(min, max);
+@@ -2878,6 +3140,15 @@ void YamlTestConfigSerializer::to_yaml(YAML::Emitter& out, const SenderConfig& c
+     }
+     out << YAML::EndSeq;
+ 
++    if (config.stream.has_value()) {
++        // Send order built from a stream: each lap sends counts[i] packets of patterns[i].
++        out << YAML::Key << "stream_program";
++        out << YAML::Value << YAML::BeginMap;
++        out << YAML::Key << "repeat" << YAML::Value << config.stream->repeat;
++        out << YAML::Key << "counts" << YAML::Value << YAML::Flow << config.stream->counts;
++        out << YAML::EndMap;
++    }
++
+     out << YAML::EndMap;
+ }
+ 
+diff --git a/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_config.hpp b/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_config.hpp
+index 6b55e63e304..8853acbf5e3 100644
+--- a/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_config.hpp
++++ b/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_config.hpp
+@@ -251,6 +251,11 @@ inline TrafficPatternType merge_patterns(const TrafficPatternType& base, const T
+     merged.atomic_inc_val = specific.atomic_inc_val.has_value() ? specific.atomic_inc_val : base.atomic_inc_val;
+     merged.mcast_start_hops = specific.mcast_start_hops.has_value() ? specific.mcast_start_hops : base.mcast_start_hops;
+     merged.vc_id = specific.vc_id.has_value() ? specific.vc_id : base.vc_id;
++    if constexpr (requires { merged.stream; }) {
++        // Segments are not merged here; expand_streams merges each one over the final pattern.
++        merged.stream = specific.stream.has_value() ? specific.stream : base.stream;
++        merged.repeat = specific.repeat.has_value() ? specific.repeat : base.repeat;
++    }
+ 
+     // Special handling for nested destination
+     if (specific.destination.has_value()) {
+@@ -299,6 +304,7 @@ private:
+     DeviceIdentifier parse_device_identifier(const YAML::Node& node);
+     ParsedDestinationConfig parse_destination_config(const YAML::Node& dest_yaml);
+     ParsedTrafficPatternConfig parse_traffic_pattern_config(const YAML::Node& pattern_yaml);
++    std::vector<ParsedStreamSegment> parse_stream(const YAML::Node& stream_yaml);
+     ParsedSenderConfig parse_sender_config(const YAML::Node& sender_yaml, const ParsedTrafficPatternConfig& defaults);
+     TestFabricSetup parse_fabric_setup(const YAML::Node& fabric_setup_yaml);
+     ParsedTestConfig parse_test_config(const YAML::Node& test_yaml);
+@@ -589,6 +595,12 @@ private:
+ 
+     void resolve_missing_params(ParsedTestConfig& test);
+ 
++    // Turns each stream segment into its own pattern and records the send order on the sender.
++    void expand_streams(ParsedTestConfig& test);
++
++    // Build-time checks for senders that carry a stream.
++    void validate_stream_senders(const TestConfig& test) const;
++
+     IDeviceInfoProvider& device_info_provider_;
+     IRouteManager& route_manager_;
+     std::mt19937& gen_;
+diff --git a/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_context.cpp b/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_context.cpp
+index dfe68ab6540..28af07c75a2 100644
+--- a/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_context.cpp
++++ b/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_context.cpp
+@@ -685,6 +685,13 @@ void TestContext::process_traffic_config(TestConfig& config) {
+             }
+             this->add_traffic_config(traffic_config);
+         }
++
++        // The sender core's traffic configs are this sender's patterns, in order, so the stream
++        // program indexes them directly.
++        if (sender.stream.has_value() && fixture_->is_local_fabric_node_id(sender.device)) {
++            const auto& src_coord = this->fixture_->get_device_coord(sender.device);
++            this->test_devices_.at(src_coord).set_sender_stream(sender.core.value(), sender.stream.value());
++        }
+     }
+ }
+ 
+diff --git a/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_device_setup.cpp b/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_device_setup.cpp
+index f2907c8c6ba..bdff8baf789 100644
+--- a/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_device_setup.cpp
++++ b/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_device_setup.cpp
+@@ -775,6 +775,19 @@ void TestDevice::add_sender_traffic_config(tt::tt_metal::CoreCoord logical_core,
+     this->senders_.at(logical_core).add_config(std::move(config));
+ }
+ 
++void TestDevice::set_sender_stream(tt::tt_metal::CoreCoord logical_core, const StreamProgram& stream) {
++    TT_FATAL(this->senders_.contains(logical_core), "Stream set for core {} before its traffic configs", logical_core);
++    auto& sender = this->senders_.at(logical_core);
++    TT_FATAL(!sender.stream_.has_value(), "Core {} already carries a stream", logical_core);
++    TT_FATAL(
++        sender.configs_.size() == stream.counts.size(),
++        "Core {} has {} traffic configs but its stream has {} segments; a stream sender's core can't be shared",
++        logical_core,
++        sender.configs_.size(),
++        stream.counts.size());
++    sender.stream_ = stream;
++}
++
+ void TestDevice::add_sender_sync_config(tt::tt_metal::CoreCoord logical_core, TestTrafficSyncConfig sync_config) {
+     if (!this->sync_workers_.contains(logical_core)) {
+         this->add_worker(TestWorkerType::SYNC, logical_core);
+@@ -1013,6 +1026,21 @@ void TestDevice::create_sender_kernels() {
+         bool has_mux_connections = connection_manager_.is_mux_client(core);
+         uint32_t num_muxes_to_terminate = connection_manager_.get_num_muxes_to_terminate();
+ 
++        if (sender.stream_.has_value()) {
++            TT_FATAL(
++                num_connections == 1,
++                "Stream sender core {} on {} needs {} fabric connections; a stream feeds one router",
++                core.str(),
++                fabric_node_id_,
++                num_connections);
++            // Backstop for validate_test: the benchmark stream path drives the router adapter directly.
++            TT_FATAL(
++                !(benchmark_mode_ && has_mux_connections),
++                "Stream sender core {} on {} is a mux client, which the benchmark stream path doesn't support",
++                core.str(),
++                fabric_node_id_);
++        }
++
+         // All configs on a core must share the same vc_id: the kernel is compiled with a single
+         // VC_ID template arg and all EDM connection runtime args are interpreted using that adapter
+         // type. Mixing VC0 and VC2 configs on the same core would silently corrupt connection parsing.
+@@ -1040,7 +1068,8 @@ void TestDevice::create_sender_kernels() {
+             sender_memory_map_->common.get_kernel_config_size(), /* kernel config buffer size */
+             has_mux_connections ? 1u : 0u,                       /* HAS_MUX_CONNECTIONS */
+             num_muxes_to_terminate,                              /* NUM_MUXES_TO_TERMINATE */
+-            sender_vc_id                                         /* VC_ID */
++            sender_vc_id,                                        /* VC_ID */
++            sender.stream_.has_value() ? 1u : 0u                 /* STREAM_MODE */
+         };
+ 
+         // Runtime args with connection type information
+@@ -1095,6 +1124,12 @@ void TestDevice::create_sender_kernels() {
+             local_args.insert(local_args.end(), traffic_config_args.begin(), traffic_config_args.end());
+         }
+ 
++        // Stream program: lap count, then packets per lap for each traffic config in order.
++        if (sender.stream_.has_value()) {
++            local_args.push_back(sender.stream_->repeat);
++            local_args.insert(local_args.end(), sender.stream_->counts.begin(), sender.stream_->counts.end());
++        }
++
+         // Add mux termination local args (empty vector if not a mux client)
+         auto mux_termination_local_args =
+             connection_manager_.generate_mux_termination_local_args_for_core(core, device_info_provider_);
+diff --git a/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_device_setup.hpp b/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_device_setup.hpp
+index 44411f4d3b1..52f8dd25db8 100644
+--- a/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_device_setup.hpp
++++ b/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_device_setup.hpp
+@@ -248,6 +248,9 @@ public:
+ 
+     // Multi-output 2D multicast configs carry one key per canonical root output.
+     std::vector<std::pair<TestTrafficSenderConfig, std::vector<ConnectionKey>>> configs_;
++
++    // Set when this core's configs come from a stream; counts index configs_ in order.
++    std::optional<StreamProgram> stream_;
+ };
+ 
+ struct TestReceiver : TestWorker {
+@@ -300,6 +303,7 @@ public:
+     tt::tt_metal::Program& get_program_handle();
+     const FabricNodeId& get_node_id() const;
+     void add_sender_traffic_config(tt::tt_metal::CoreCoord logical_core, TestTrafficSenderConfig config);
++    void set_sender_stream(tt::tt_metal::CoreCoord logical_core, const StreamProgram& stream);
+     void add_sender_sync_config(tt::tt_metal::CoreCoord logical_core, TestTrafficSyncConfig sync_config);
+     void add_receiver_traffic_config(tt::tt_metal::CoreCoord logical_core, const TestTrafficReceiverConfig& config);
+     void add_mux_worker_config(
+diff --git a/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_memory_map.hpp b/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_memory_map.hpp
+index 927bec501d9..341381b93ff 100644
+--- a/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_memory_map.hpp
++++ b/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_memory_map.hpp
+@@ -21,6 +21,13 @@ struct PerConfigResult {
+ // Words 0-31 are reserved for existing aggregate fields (status, word_cnt, cycles, iter, etc.).
+ static constexpr uint32_t PER_CONFIG_RESULT_BASE_WORD_INDEX = 32;
+ 
++// Word indices of a benchmark stream sender's counters: packets that copied a header into their
++// router slot, packets that found no free router slot, and the send loop's cycles minus its slot waits. Must match the kernel-side definitions
++// in kernels/tt_fabric_test_kernels_utils.hpp.
++static constexpr uint32_t STREAM_HEADER_COPIES_WORD_INDEX = 8;
++static constexpr uint32_t STREAM_SLOT_WAITS_WORD_INDEX = 10;
++static constexpr uint32_t STREAM_BUSY_CYCLES_WORD_INDEX = 12;  // two words
++
+ static_assert(sizeof(PerConfigResult) == 8, "PerConfigResult must be 8 bytes (2 words)");
+ 
+ struct BaseMemoryRegion {

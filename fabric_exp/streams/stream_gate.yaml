@@ -1,0 +1,73 @@
+# Worker-cost gate (plan W1-W3): 1-hop east, 4352 B writes, benchmark mode.
+# W0 is today's single-pattern fast path, the reference every W run is compared with.
+allocation_policies:
+    receiver:
+      policy: RoundRobin
+      max_configs_per_core: 4
+
+Tests:
+  - name: "W0Plain"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination: {device: [0, 1]}
+            ftype: unicast
+            ntype: unicast_write
+            size: 4352
+            num_packets: 60000
+
+  # One segment: the stream loop and slot check, no header copies after the first lap
+  - name: "W1OneSegment"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination: {device: [0, 1]}
+            ftype: unicast
+            ntype: unicast_write
+            size: 4352
+            repeat: 60000
+            stream: [unicast_write]
+
+  # Two identical write segments, each with its own receiver buffer: lap of 2, so no copies when the
+  # worker slot count is even (W32); the default trimmed 2D build has 17 slots, where every packet copies
+  - name: "W2TwoSegments"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination: {device: [0, 1]}
+            ftype: unicast
+            ntype: unicast_write
+            size: 4352
+            repeat: 30000
+            stream: [unicast_write, unicast_write]
+
+  # Lap of 6: with 32 worker slots (W32) 4 of every 6 packets copy a header. The run log reports
+  # the actual copy count, which depends on the router build's worker slot count.
+  - name: "W3HeaderCopies"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination: {device: [0, 1]}
+            ftype: unicast
+            ntype: unicast_write
+            size: 4352
+            repeat: 10000
+            stream:
+              - {count: 3}
+              - {count: 3}

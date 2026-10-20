@@ -1,0 +1,28 @@
+# Channel-trimmed variant of exp_2d_4k.yaml (4 KiB): each test runs a capture pass, then a replay with unused router
+# channels compiled out.
+# 2D (Mesh, VC0) throughput experiments on the 2x4 P150x8 mesh, 1 link.
+# Chip ids are row-major: [0, 0..3] is the top row, [0, 4..7] the bottom row.
+allocation_policies:
+    receiver:
+      policy: RoundRobin
+      max_configs_per_core: 4
+
+Tests:
+  # One flow, one hop north-south
+  - name: "Mesh1HopNS"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+      enable_channel_trimming: true
+    parametrization_params:
+      ntype: [unicast_write, unicast_scatter_write]
+      size: [4096]
+    defaults:
+      ftype: unicast
+      num_packets: 50000
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [0, 4]

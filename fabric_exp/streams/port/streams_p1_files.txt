@@ -1,0 +1,13 @@
+tests/tt_metal/tt_fabric/test_infra/kernels/tt_fabric_test_sender.cpp
+tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_allocator.hpp
+tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_bandwidth_profiler.cpp
+tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_bandwidth_profiler.hpp
+tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_bandwidth_results.cpp
+tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_bandwidth_results.hpp
+tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_common_types.cpp
+tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_common_types.hpp
+tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_config.cpp
+tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_config.hpp
+tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_context.cpp
+tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_device_setup.cpp
+tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_device_setup.hpp

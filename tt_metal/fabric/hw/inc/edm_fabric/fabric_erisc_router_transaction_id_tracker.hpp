@@ -97,6 +97,14 @@ struct WriteTransactionIdTracker {
             return this->buffer_slot_trids[buffer_index];
         }
     }
+    // Experiment (EXP_RX_GROUPED_READS): the NoC status register transaction_flushed() reads, so a caller can issue
+    // the read together with others. Only when one NoC carries both local and downstream writes (one register).
+    static constexpr bool SINGLE_NOC = EDM_TO_LOCAL_NOC == EDM_TO_DOWNSTREAM_NOC;
+    FORCE_INLINE uint32_t transaction_sent_reg_addr(tt::tt_fabric::BufferIndex buffer_index) const {
+        static_assert(SINGLE_NOC, "transaction_sent_reg_addr needs one NoC for local and downstream writes");
+        return (static_cast<uint32_t>(EDM_TO_LOCAL_NOC) << NOC_INSTANCE_OFFSET_BIT) +
+               NOC_STATUS(NIU_MST_WRITE_REQS_OUTGOING_ID(this->get_buffer_slot_trid(buffer_index)));
+    }
     FORCE_INLINE bool transaction_flushed(tt::tt_fabric::BufferIndex buffer_index) const {
         auto trid = this->get_buffer_slot_trid(buffer_index);
         if constexpr (EDM_TO_LOCAL_NOC == EDM_TO_DOWNSTREAM_NOC) {

@@ -1,0 +1,71 @@
+1. Best placement without and with one DRISC (4096 B; cycles/packet; event-driven at 16 and 32 slots; line rate <= 118)
+
+=== 2d_single_ew
+  levers                           2 ERISC     2 ERISC + DRISC          gain  placement with DRISC
+                         static    16    32   static    16    32   static   32
+  today                     213   195   195      213   195   195       0%   0%  D0: rx_decode+rx_local  E0: tx_send  E1: tx_completion+rx_poll+rx_ack
+  lean poll                 168   162   162      165   152   153       2%   6%  D0: rx_decode+rx_local  E0: tx_send  E1: tx_completion+rx_poll+rx_ack
+  batch x4                  116   183   117      116   183   117       0%   0%  D0: rx_local  E0: tx_send  E1: tx_completion+rx_poll+rx_decode+rx_ack
+  lean + batch x2           117   142   118      117   142   118       0%  -0%  D0: rx_decode+rx_local  E0: tx_send  E1: tx_completion+rx_poll+rx_ack
+  lean + batch x4           116   177   117      116   176   117       0%  -0%  D0: rx_local  E0: tx_send+tx_completion  E1: rx_poll+rx_decode+rx_ack
+  lean + batch x4 + 2 NoCs    116   155   117      116   154   117       0%   0%  D0: rx_local  E0: tx_send+tx_completion  E1: rx_poll+rx_decode+rx_ack
+
+=== 2d_single_ns
+  levers                           2 ERISC     2 ERISC + DRISC          gain  placement with DRISC
+                         static    16    32   static    16    32   static   32
+  today                     213   201   201      213   195   195       0%   3%  D0: rx_decode+rx_local  E0: tx_send  E1: tx_completion+rx_poll+rx_ack
+  lean poll                 168   166   166      165   152   153       2%   8%  D0: rx_decode+rx_local  E0: tx_send  E1: tx_completion+rx_poll+rx_ack
+  batch x4                  116   186   117      116   184   117       0%   0%  D0: rx_local  E0: tx_send+tx_completion  E1: rx_poll+rx_decode+rx_ack
+  lean + batch x2           117   149   118      117   139   118       0%   0%  D0: rx_local  E0: tx_send+tx_completion  E1: rx_poll+rx_decode+rx_ack
+  lean + batch x4           116   173   117      116   177   117       0%   0%  D0: rx_local  E0: tx_send+tx_completion  E1: rx_poll+rx_decode+rx_ack
+  lean + batch x4 + 2 NoCs    116   155   117      116   179   117       0%   0%  D0: rx_local  E0: tx_send+tx_completion  E1: rx_poll+rx_decode+rx_ack
+
+=== 2d_single_ew_scatter
+  levers                           2 ERISC     2 ERISC + DRISC          gain  placement with DRISC
+                         static    16    32   static    16    32   static   32
+  today                     221   216   216      213   195   195       4%  10%  D0: rx_decode+rx_local  E0: tx_send  E1: tx_completion+rx_poll+rx_ack
+  lean poll                 191   191   191      168   168   168      12%  12%  D0: rx_decode+rx_local  E0: tx_send  E1: tx_completion+rx_poll+rx_ack
+  batch x4                  138   185   138      124   183   125      10%   9%  D0: rx_local  E0: tx_send  E1: tx_completion+rx_poll+rx_decode+rx_ack
+  lean + batch x2           156   156   156      133   140   133      15%  15%  D0: rx_local  E0: tx_send+tx_completion  E1: rx_poll+rx_decode+rx_ack
+  lean + batch x4           138   183   138      124   163   124      10%  10%  D0: rx_local  E0: tx_send+tx_completion  E1: rx_poll+rx_decode+rx_ack
+  lean + batch x4 + 2 NoCs    138   182   138      124   154   124      10%  10%  D0: rx_local  E0: tx_send+tx_completion  E1: rx_poll+rx_decode+rx_ack
+
+=== 2d_single_ns_scatter
+  levers                           2 ERISC     2 ERISC + DRISC          gain  placement with DRISC
+                         static    16    32   static    16    32   static   32
+  today                     221   220   220      213   195   195       4%  12%  D0: rx_decode+rx_local  E0: tx_send  E1: tx_completion+rx_poll+rx_ack
+  lean poll                 206   206   206      168   160   160      18%  22%  D0: rx_local  E0: tx_send+tx_completion  E1: rx_poll+rx_decode+rx_ack
+  batch x4                  153   189   153      124   183   124      19%  19%  D0: rx_local  E0: tx_send+tx_completion  E1: rx_poll+rx_decode+rx_ack
+  lean + batch x2           170   171   171      133   139   133      22%  22%  D0: rx_local  E0: tx_send+tx_completion  E1: rx_poll+rx_decode+rx_ack
+  lean + batch x4           153   198   153      124   177   124      19%  19%  D0: rx_local  E0: tx_send+tx_completion  E1: rx_poll+rx_decode+rx_ack
+  lean + batch x4 + 2 NoCs    153   198   153      124   179   124      19%  19%  D0: rx_local  E0: tx_send+tx_completion  E1: rx_poll+rx_decode+rx_ack
+
+=== 2d_3hop_middle
+  levers                           2 ERISC     2 ERISC + DRISC          gain  placement with DRISC
+                         static    16    32   static    16    32   static   32
+  today                     221   218   218      213   195   195       4%  11%  D0: rx_decode+rx_admit+rx_forward  E0: tx_send  E1: tx_completion+rx_poll+rx_ack
+  lean poll                 185   185   185      168   177   177       9%   4%  D0: rx_decode+rx_admit+rx_forward  E0: tx_send+tx_completion  E1: rx_poll+rx_ack
+  batch x4                  132   184   132      116   186   126      12%   5%  D0: rx_forward  E0: tx_send+tx_completion  E1: rx_poll+rx_decode+rx_admit+rx_ack
+  lean + batch x2           150   150   150      117   142   126      22%  16%  D0: rx_forward  E0: tx_send+tx_completion  E1: rx_poll+rx_decode+rx_admit+rx_ack
+  lean + batch x4           132   183   132      116   178   126      12%   4%  D0: rx_forward  E0: tx_send+tx_completion  E1: rx_poll+rx_decode+rx_admit+rx_ack
+  lean + batch x4 + 2 NoCs    132   181   132      116   177   121      12%   8%  D0: rx_forward  E0: tx_send+tx_completion  E1: rx_poll+rx_decode+rx_admit+rx_ack
+
+=== 2d_mcast_heavy_link  (event-driven n/a: several active channels)
+  levers                           2 ERISC     2 ERISC + DRISC          gain  placement with DRISC
+                         static    16    32   static    16    32   static   32
+  today                     187     -     -      187     -     -       0%    -  D0: rx_decode+rx_local  E0: tx_send+tx_completion  E1: rx_poll+rx_ack
+  lean poll                 164     -     -      164     -     -       0%    -  D0: rx_decode+rx_local  E0: tx_send+tx_completion  E1: rx_poll+rx_ack
+  batch x4                  117     -     -      117     -     -       0%    -  D0: rx_local  E0: tx_send+tx_completion  E1: rx_poll+rx_decode+rx_ack
+  lean + batch x2           118     -     -      118     -     -       0%    -  D0: rx_local  E0: tx_send+tx_completion  E1: rx_poll+rx_decode+rx_ack
+  lean + batch x4           117     -     -      117     -     -       0%    -  D0: rx_local  E0: tx_send+tx_completion  E1: rx_poll+rx_decode+rx_ack
+  lean + batch x4 + 2 NoCs    117     -     -      117     -     -       0%    -  D0: rx_local  E0: tx_send+tx_completion  E1: rx_poll+rx_decode+rx_ack
+
+=== 2d_mcast_ns_router
+  levers                           2 ERISC     2 ERISC + DRISC          gain  placement with DRISC
+                         static    16    32   static    16    32   static   32
+  today                     352   337   337      228   236   236      35%  30%  D0: rx_local+rx_forward  E0: tx_send+tx_completion  E1: rx_poll+rx_decode+rx_admit+rx_ack
+  lean poll                 352   337   337      228   237   237      35%  30%  D0: rx_local+rx_forward  E0: tx_send+tx_completion  E1: rx_poll+rx_decode+rx_admit+rx_ack
+  batch x4                  298   284   284      159   188   188      47%  34%  D0: rx_decode+rx_forward  E0: tx_send+tx_completion  E1: rx_poll+rx_admit+rx_local+rx_ack
+  lean + batch x2           316   302   302      184   197   197      42%  35%  D0: rx_decode+rx_forward  E0: tx_send+tx_completion  E1: rx_poll+rx_admit+rx_local+rx_ack
+  lean + batch x4           298   284   284      159   188   188      47%  34%  D0: rx_decode+rx_forward  E0: tx_send+tx_completion  E1: rx_poll+rx_admit+rx_local+rx_ack
+  lean + batch x4 + 2 NoCs    298   284   284      159   182   182      47%  36%  D0: rx_decode+rx_forward  E0: tx_send+tx_completion  E1: rx_poll+rx_admit+rx_local+rx_ack

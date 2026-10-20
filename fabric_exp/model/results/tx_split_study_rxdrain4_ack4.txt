@@ -1,0 +1,162 @@
+Wire, 4 KiB + 96 B header: 118.5 one way, 120.7 with acks for the other direction (b_ptr = b_ack = 1). Send cost 72.
+Limits: E0, E1 (both ways), E1s / E1r (one way: sending chip's E1 / receiving chip's E1), D = DRISC, w = wire, noc = NoC port.
+
+### both ways, 4 busy sender channels, batching k_tx=1 k_rx=4 b_ptr=1 b_ack=4
+Cycles per packet (limit). Columns: sender channels on E1 (m).
+| receive work | E1 only, m=0 | E1 only, m=1 | E1 only, m=2 | +DRISC, m=0 | +DRISC, m=1 | +DRISC, m=2 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| local write E/W | 119 (w) | 119 (w) | 140 (E1) | 119 (w) | 119 (w) | 119 (w) |
+| local write N/S | 119 (w) | 128 (E1) | 155 (E1) | 119 (w) | 119 (w) | 119 (w) |
+| scatter E/W | 138 (E1) | 170 (E1) | 197 (E1) | 124 (D) | 124 (D) | 128 (E1) |
+| forward (3-hop middle) | 132 (E1) | 164 (E1) | 191 (E1) | 119 (w) | 119 (w) | 136 (E1) |
+| multicast N/S (local + 2 fwd) | 298 (E1) | 330 (E1) | 358 (E1) | 159 (D) | 186 (E1) | 214 (E1) |
+  local write E/W                E1    m=0: E0=117 E1=81   DRISC: -
+  local write E/W                E1    m=1: E0=89 E1=113   DRISC: -
+  local write E/W                E1    m=2: E0=60 E1=140   DRISC: -
+  local write E/W                DRISC m=0: E0=117 E1=69 D0=66   DRISC: rx_local
+  local write E/W                DRISC m=1: E0=89 E1=84 D0=84   DRISC: rx_decode+rx_local
+  local write E/W                DRISC m=2: E0=60 E1=111 D0=84   DRISC: rx_decode+rx_local
+  local write N/S                E1    m=0: E0=117 E1=96   DRISC: -
+  local write N/S                E1    m=1: E0=89 E1=128   DRISC: -
+  local write N/S                E1    m=2: E0=60 E1=155   DRISC: -
+  local write N/S                DRISC m=0: E0=117 E1=84 D0=66   DRISC: rx_local
+  local write N/S                DRISC m=1: E0=89 E1=84 D0=98   DRISC: rx_decode+rx_local
+  local write N/S                DRISC m=2: E0=60 E1=111 D0=98   DRISC: rx_decode+rx_local
+  scatter E/W                    E1    m=0: E0=117 E1=138   DRISC: -
+  scatter E/W                    E1    m=1: E0=89 E1=170   DRISC: -
+  scatter E/W                    E1    m=2: E0=60 E1=197   DRISC: -
+  scatter E/W                    DRISC m=0: E0=117 E1=69 D0=124   DRISC: rx_local
+  scatter E/W                    DRISC m=1: E0=89 E1=101 D0=124   DRISC: rx_local
+  scatter E/W                    DRISC m=2: E0=60 E1=128 D0=124   DRISC: rx_local
+  forward (3-hop middle)         E1    m=0: E0=117 E1=132   DRISC: -
+  forward (3-hop middle)         E1    m=1: E0=89 E1=164   DRISC: -
+  forward (3-hop middle)         E1    m=2: E0=60 E1=191   DRISC: -
+  forward (3-hop middle)         DRISC m=0: E0=117 E1=89 D0=66   DRISC: rx_forward
+  forward (3-hop middle)         DRISC m=1: E0=89 E1=109 D0=110   DRISC: rx_decode+rx_admit+rx_forward
+  forward (3-hop middle)         DRISC m=2: E0=60 E1=136 D0=110   DRISC: rx_decode+rx_admit+rx_forward
+  multicast N/S (local + 2 fwd)  E1    m=0: E0=117 E1=298   DRISC: -
+  multicast N/S (local + 2 fwd)  E1    m=1: E0=89 E1=330   DRISC: -
+  multicast N/S (local + 2 fwd)  E1    m=2: E0=60 E1=358   DRISC: -
+  multicast N/S (local + 2 fwd)  DRISC m=0: E0=117 E1=154 D0=159   DRISC: rx_decode+rx_forward
+  multicast N/S (local + 2 fwd)  DRISC m=1: E0=89 E1=186 D0=159   DRISC: rx_decode+rx_forward
+  multicast N/S (local + 2 fwd)  DRISC m=2: E0=60 E1=214 D0=159   DRISC: rx_decode+rx_forward
+
+### both ways, 1 busy sender channel, batching k_tx=1 k_rx=4 b_ptr=1 b_ack=4
+Cycles per packet (limit). Columns: sender channels on E1 (m).
+| receive work | E1 only, m=0 | E1 only, m=1 | E1 only, m=2 | +DRISC, m=0 | +DRISC, m=1 | +DRISC, m=2 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| local write E/W | 162 (E0) | 151 (E0) | 140 (E0) | 162 (E0) | 151 (E0) | 140 (E0) |
+| local write N/S | 162 (E0) | 151 (E0) | 140 (E0) | 162 (E0) | 151 (E0) | 140 (E0) |
+| scatter E/W | 162 (E0) | 151 (E0) | 147 (E1) | 162 (E0) | 151 (E0) | 140 (E0) |
+| forward (3-hop middle) | 162 (E0) | 151 (E0) | 141 (E1) | 162 (E0) | 151 (E0) | 140 (E0) |
+| multicast N/S (local + 2 fwd) | 298 (E1) | 305 (E1) | 307 (E1) | 162 (E0) | 161 (E1) | 163 (E1) |
+  local write E/W                E1    m=0: E0=162 E1=81   DRISC: -
+  local write E/W                E1    m=1: E0=151 E1=87   DRISC: -
+  local write E/W                E1    m=2: E0=140 E1=90   DRISC: -
+  local write E/W                DRISC m=0: E0=162 E1=69 D0=66   DRISC: rx_local
+  local write E/W                DRISC m=1: E0=151 E1=75 D0=66   DRISC: rx_local
+  local write E/W                DRISC m=2: E0=140 E1=78 D0=66   DRISC: rx_local
+  local write N/S                E1    m=0: E0=162 E1=96   DRISC: -
+  local write N/S                E1    m=1: E0=151 E1=102   DRISC: -
+  local write N/S                E1    m=2: E0=140 E1=105   DRISC: -
+  local write N/S                DRISC m=0: E0=162 E1=84 D0=66   DRISC: rx_local
+  local write N/S                DRISC m=1: E0=151 E1=90 D0=66   DRISC: rx_local
+  local write N/S                DRISC m=2: E0=140 E1=93 D0=66   DRISC: rx_local
+  scatter E/W                    E1    m=0: E0=162 E1=138   DRISC: -
+  scatter E/W                    E1    m=1: E0=151 E1=144   DRISC: -
+  scatter E/W                    E1    m=2: E0=140 E1=147   DRISC: -
+  scatter E/W                    DRISC m=0: E0=162 E1=69 D0=124   DRISC: rx_local
+  scatter E/W                    DRISC m=1: E0=151 E1=75 D0=124   DRISC: rx_local
+  scatter E/W                    DRISC m=2: E0=140 E1=78 D0=124   DRISC: rx_local
+  forward (3-hop middle)         E1    m=0: E0=162 E1=132   DRISC: -
+  forward (3-hop middle)         E1    m=1: E0=151 E1=138   DRISC: -
+  forward (3-hop middle)         E1    m=2: E0=140 E1=141   DRISC: -
+  forward (3-hop middle)         DRISC m=0: E0=162 E1=89 D0=66   DRISC: rx_forward
+  forward (3-hop middle)         DRISC m=1: E0=151 E1=95 D0=66   DRISC: rx_forward
+  forward (3-hop middle)         DRISC m=2: E0=140 E1=98 D0=66   DRISC: rx_forward
+  multicast N/S (local + 2 fwd)  E1    m=0: E0=162 E1=298   DRISC: -
+  multicast N/S (local + 2 fwd)  E1    m=1: E0=151 E1=305   DRISC: -
+  multicast N/S (local + 2 fwd)  E1    m=2: E0=140 E1=307   DRISC: -
+  multicast N/S (local + 2 fwd)  DRISC m=0: E0=162 E1=154 D0=159   DRISC: rx_decode+rx_forward
+  multicast N/S (local + 2 fwd)  DRISC m=1: E0=151 E1=161 D0=159   DRISC: rx_decode+rx_forward
+  multicast N/S (local + 2 fwd)  DRISC m=2: E0=140 E1=163 D0=159   DRISC: rx_decode+rx_forward
+
+### one way, 4 busy sender channels, batching k_tx=1 k_rx=4 b_ptr=1 b_ack=4
+Cycles per packet (limit). Columns: sender channels on E1 (m).
+| receive work | E1 only, m=0 | E1 only, m=1 | E1 only, m=2 | +DRISC, m=0 | +DRISC, m=1 | +DRISC, m=2 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| local write E/W | 118 (w) | 118 (w) | 118 (w) | 118 (w) | 118 (w) | 118 (w) |
+| local write N/S | 118 (w) | 118 (w) | 118 (w) | 118 (w) | 118 (w) | 118 (w) |
+| scatter E/W | 138 (E1r) | 144 (E1r) | 147 (E1r) | 124 (D) | 124 (D) | 124 (D) |
+| forward (3-hop middle) | 132 (E1r) | 138 (E1r) | 141 (E1r) | 118 (w) | 118 (w) | 118 (w) |
+| multicast N/S (local + 2 fwd) | 298 (E1r) | 305 (E1r) | 307 (E1r) | 159 (D) | 161 (E1r) | 163 (E1r) |
+  local write E/W                E1    m=0: E0=117 E1 recv=81   DRISC: -
+  local write E/W                E1    m=1: E0=89 E1 send=44 E1 recv=87   DRISC: -
+  local write E/W                E1    m=2: E0=60 E1 send=72 E1 recv=90   DRISC: -
+  local write E/W                DRISC m=0: E0=117 E1 recv=69 D0=66   DRISC: rx_local
+  local write E/W                DRISC m=1: E0=89 E1 send=47 E1 recv=75 D0=66   DRISC: rx_local
+  local write E/W                DRISC m=2: E0=60 E1 send=75 E1 recv=78 D0=66   DRISC: rx_local
+  local write N/S                E1    m=0: E0=117 E1 recv=96   DRISC: -
+  local write N/S                E1    m=1: E0=89 E1 send=44 E1 recv=102   DRISC: -
+  local write N/S                E1    m=2: E0=60 E1 send=72 E1 recv=105   DRISC: -
+  local write N/S                DRISC m=0: E0=117 E1 recv=84 D0=66   DRISC: rx_local
+  local write N/S                DRISC m=1: E0=89 E1 send=47 E1 recv=90 D0=66   DRISC: rx_local
+  local write N/S                DRISC m=2: E0=60 E1 send=75 E1 recv=93 D0=66   DRISC: rx_local
+  scatter E/W                    E1    m=0: E0=117 E1 recv=138   DRISC: -
+  scatter E/W                    E1    m=1: E0=89 E1 send=44 E1 recv=144   DRISC: -
+  scatter E/W                    E1    m=2: E0=60 E1 send=72 E1 recv=147   DRISC: -
+  scatter E/W                    DRISC m=0: E0=117 E1 recv=69 D0=124   DRISC: rx_local
+  scatter E/W                    DRISC m=1: E0=89 E1 send=47 E1 recv=75 D0=124   DRISC: rx_local
+  scatter E/W                    DRISC m=2: E0=60 E1 send=75 E1 recv=78 D0=124   DRISC: rx_local
+  forward (3-hop middle)         E1    m=0: E0=117 E1 recv=132   DRISC: -
+  forward (3-hop middle)         E1    m=1: E0=89 E1 send=44 E1 recv=138   DRISC: -
+  forward (3-hop middle)         E1    m=2: E0=60 E1 send=72 E1 recv=141   DRISC: -
+  forward (3-hop middle)         DRISC m=0: E0=117 E1 recv=89 D0=66   DRISC: rx_forward
+  forward (3-hop middle)         DRISC m=1: E0=89 E1 send=47 E1 recv=95 D0=66   DRISC: rx_forward
+  forward (3-hop middle)         DRISC m=2: E0=60 E1 send=75 E1 recv=98 D0=66   DRISC: rx_forward
+  multicast N/S (local + 2 fwd)  E1    m=0: E0=117 E1 recv=298   DRISC: -
+  multicast N/S (local + 2 fwd)  E1    m=1: E0=89 E1 send=44 E1 recv=305   DRISC: -
+  multicast N/S (local + 2 fwd)  E1    m=2: E0=60 E1 send=72 E1 recv=307   DRISC: -
+  multicast N/S (local + 2 fwd)  DRISC m=0: E0=117 E1 recv=154 D0=159   DRISC: rx_decode+rx_forward
+  multicast N/S (local + 2 fwd)  DRISC m=1: E0=89 E1 send=50 E1 recv=161 D0=159   DRISC: rx_decode+rx_forward
+  multicast N/S (local + 2 fwd)  DRISC m=2: E0=60 E1 send=78 E1 recv=163 D0=159   DRISC: rx_decode+rx_forward
+
+### one way, 1 busy sender channel, batching k_tx=1 k_rx=4 b_ptr=1 b_ack=4
+Cycles per packet (limit). Columns: sender channels on E1 (m).
+| receive work | E1 only, m=0 | E1 only, m=1 | E1 only, m=2 | +DRISC, m=0 | +DRISC, m=1 | +DRISC, m=2 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| local write E/W | 162 (E0) | 151 (E0) | 140 (E0) | 162 (E0) | 151 (E0) | 140 (E0) |
+| local write N/S | 162 (E0) | 151 (E0) | 140 (E0) | 162 (E0) | 151 (E0) | 140 (E0) |
+| scatter E/W | 162 (E0) | 151 (E0) | 147 (E1r) | 162 (E0) | 151 (E0) | 140 (E0) |
+| forward (3-hop middle) | 162 (E0) | 151 (E0) | 141 (E1r) | 162 (E0) | 151 (E0) | 140 (E0) |
+| multicast N/S (local + 2 fwd) | 298 (E1r) | 305 (E1r) | 307 (E1r) | 162 (E0) | 161 (E1r) | 163 (E1r) |
+  local write E/W                E1    m=0: E0=162 E1 recv=81   DRISC: -
+  local write E/W                E1    m=1: E0=151 E1 recv=87   DRISC: -
+  local write E/W                E1    m=2: E0=140 E1 recv=90   DRISC: -
+  local write E/W                DRISC m=0: E0=162 E1 recv=69 D0=66   DRISC: rx_local
+  local write E/W                DRISC m=1: E0=151 E1 recv=75 D0=66   DRISC: rx_local
+  local write E/W                DRISC m=2: E0=140 E1 recv=78 D0=66   DRISC: rx_local
+  local write N/S                E1    m=0: E0=162 E1 recv=96   DRISC: -
+  local write N/S                E1    m=1: E0=151 E1 recv=102   DRISC: -
+  local write N/S                E1    m=2: E0=140 E1 recv=105   DRISC: -
+  local write N/S                DRISC m=0: E0=162 E1 recv=84 D0=66   DRISC: rx_local
+  local write N/S                DRISC m=1: E0=151 E1 recv=90 D0=66   DRISC: rx_local
+  local write N/S                DRISC m=2: E0=140 E1 recv=93 D0=66   DRISC: rx_local
+  scatter E/W                    E1    m=0: E0=162 E1 recv=138   DRISC: -
+  scatter E/W                    E1    m=1: E0=151 E1 recv=144   DRISC: -
+  scatter E/W                    E1    m=2: E0=140 E1 recv=147   DRISC: -
+  scatter E/W                    DRISC m=0: E0=162 E1 recv=69 D0=124   DRISC: rx_local
+  scatter E/W                    DRISC m=1: E0=151 E1 recv=75 D0=124   DRISC: rx_local
+  scatter E/W                    DRISC m=2: E0=140 E1 recv=78 D0=124   DRISC: rx_local
+  forward (3-hop middle)         E1    m=0: E0=162 E1 recv=132   DRISC: -
+  forward (3-hop middle)         E1    m=1: E0=151 E1 recv=138   DRISC: -
+  forward (3-hop middle)         E1    m=2: E0=140 E1 recv=141   DRISC: -
+  forward (3-hop middle)         DRISC m=0: E0=162 E1 recv=89 D0=66   DRISC: rx_forward
+  forward (3-hop middle)         DRISC m=1: E0=151 E1 recv=95 D0=66   DRISC: rx_forward
+  forward (3-hop middle)         DRISC m=2: E0=140 E1 recv=98 D0=66   DRISC: rx_forward
+  multicast N/S (local + 2 fwd)  E1    m=0: E0=162 E1 recv=298   DRISC: -
+  multicast N/S (local + 2 fwd)  E1    m=1: E0=151 E1 recv=305   DRISC: -
+  multicast N/S (local + 2 fwd)  E1    m=2: E0=140 E1 recv=307   DRISC: -
+  multicast N/S (local + 2 fwd)  DRISC m=0: E0=162 E1 recv=154 D0=159   DRISC: rx_decode+rx_forward
+  multicast N/S (local + 2 fwd)  DRISC m=1: E0=151 E1 recv=161 D0=159   DRISC: rx_decode+rx_forward
+  multicast N/S (local + 2 fwd)  DRISC m=2: E0=140 E1 recv=163 D0=159   DRISC: rx_decode+rx_forward

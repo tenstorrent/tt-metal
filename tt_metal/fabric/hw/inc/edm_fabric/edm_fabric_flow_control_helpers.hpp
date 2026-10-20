@@ -228,6 +228,14 @@ struct OutboundReceiverChannelPointers {
             remote_receiver_channel_address_ptr = remote_receiver_channel_address_base;
         }
     }
+
+    template <uint32_t REMOTE_BASE_ADDR, uint32_t SLOT_STRIDE>
+    FORCE_INLINE void advance_remote_receiver_buffer_pointer_ct() {
+        constexpr uint32_t remote_last_addr =
+            REMOTE_BASE_ADDR + ((RECEIVER_NUM_BUFFERS > 0 ? RECEIVER_NUM_BUFFERS - 1U : 0U) * SLOT_STRIDE);
+        const uint32_t ptr = remote_receiver_channel_address_ptr;
+        remote_receiver_channel_address_ptr = ptr == remote_last_addr ? REMOTE_BASE_ADDR : ptr + SLOT_STRIDE;
+    }
 };
 
 /*
@@ -240,6 +248,9 @@ struct ReceiverChannelPointers {
     ChannelCounter<RECEIVER_NUM_BUFFERS> ack_counter;
     ChannelCounter<RECEIVER_NUM_BUFFERS> completion_counter;
     std::array<uint8_t, RECEIVER_NUM_BUFFERS> src_chan_ids;
+    // Experiment (EXP_RX_GROUPED_READS): packets-received count read at the end of the previous receiver step. The
+    // count only grows between that read and its use, so a stale value only delays a packet by one step.
+    int32_t exp_prefetched_pkts_received;
 
     FORCE_INLINE void set_src_chan_id(BufferIndex buffer_index, uint8_t src_chan_id) {
         src_chan_ids[buffer_index.get()] = src_chan_id;
@@ -256,6 +267,7 @@ struct ReceiverChannelPointers {
         wr_flush_counter.reset();
         ack_counter.reset();
         completion_counter.reset();
+        exp_prefetched_pkts_received = 0;
     }
 };
 

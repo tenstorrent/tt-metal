@@ -1,0 +1,87 @@
+# Validation-mode smoke tests for traffic streams (data checked by the receivers).
+# Long runs use flow control so a sender cannot lap its receiver's buffer; the NoFC test is short enough not to.
+# 2x4 P150x8 mesh, chip ids row-major: [0, 0..3] top row, [0, 4..7] bottom row.
+Tests:
+  - name: "StreamCmdTypes1HopE"
+    enable_flow_control: true
+    fabric_setup:
+      topology: Mesh
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination: {device: [0, 1]}
+            size: 4352
+            repeat: 200
+            stream: [unicast_write, unicast_scatter_write, fused_atomic_inc, atomic_inc]
+
+  - name: "StreamSizes1HopS"
+    enable_flow_control: true
+    fabric_setup:
+      topology: Mesh
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination: {device: [0, 4]}
+            repeat: 200
+            stream:
+              - {size: 4352, count: 3}
+              - {size: 1024}
+              - {size: 16, count: 2}
+
+  - name: "StreamMcastEMax"
+    enable_flow_control: true
+    fabric_setup:
+      topology: Mesh
+    senders:
+      - device: [0, 0]
+        patterns:
+          - ftype: mcast
+            destination: {hops: {E: max}}
+            size: 2048
+            repeat: 100
+            stream:
+              - {ntype: unicast_write, count: 3}
+              - fused_atomic_inc
+              - atomic_inc
+
+  - name: "StreamCollectiveFlowControl"
+    enable_flow_control: true
+    fabric_setup:
+      topology: Mesh
+    senders:
+      - device: [0, 1]
+        patterns:
+          - destination: {device: [0, 3]}
+            size: 4352
+            repeat: 300
+            stream:
+              - {ntype: unicast_write, count: 7}
+              - fused_atomic_inc
+
+  - name: "StreamRandomPairing"
+    enable_flow_control: true
+    fabric_setup:
+      topology: Mesh
+    defaults:
+      ftype: unicast
+      size: 1024
+      repeat: 100
+      stream:
+        - {ntype: unicast_write, count: 3}
+        - {ntype: unicast_scatter_write, size: 512}
+        - fused_atomic_inc
+    patterns:
+      - type: full_device_random_pairing
+
+  - name: "StreamSizesNoFC"
+    fabric_setup:
+      topology: Mesh
+    senders:
+      - device: [0, 2]
+        patterns:
+          - destination: {device: [0, 6]}
+            repeat: 10
+            stream:
+              - {size: 4352, count: 3}
+              - {size: 1024}
+              - {size: 16, count: 2}

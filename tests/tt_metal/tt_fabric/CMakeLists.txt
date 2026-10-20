@@ -149,6 +149,7 @@ set(TEST_TT_FABRIC_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/test_infra/tt_fabric_test_progress_monitor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_infra/tt_fabric_test_eth_readback.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_infra/tt_fabric_test_code_profiler.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_infra/tt_fabric_test_phase_profiler.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_infra/tt_fabric_telemetry_manager.cpp
 )
 
@@ -196,6 +197,84 @@ set_target_properties(
     PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY
             ${PROJECT_BINARY_DIR}/test/tt_metal/tt_fabric/test_infra
+)
+
+# ---- DRISC microbenchmark (router handoff costs between an ERISC and a DRISC; no fabric) ----
+add_executable(test_drisc_microbench ${CMAKE_CURRENT_SOURCE_DIR}/drisc_microbench/test_drisc_microbench.cpp)
+
+target_link_libraries(
+    test_drisc_microbench
+    PRIVATE
+        tt_metal
+        test_common_libs
+)
+
+target_include_directories(
+    test_drisc_microbench
+    PRIVATE
+        ${UMD_HOME}
+        ${PROJECT_SOURCE_DIR}
+        ${PROJECT_SOURCE_DIR}/tests
+        ${PROJECT_SOURCE_DIR}/tt_metal
+)
+
+set_target_properties(
+    test_drisc_microbench
+    PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY
+            ${PROJECT_BINARY_DIR}/test/tt_metal/tt_fabric
+)
+
+# ---- Ethernet TX queue probe (one-way link throughput per TXQ arrangement; no fabric) ----
+add_executable(test_eth_txq_probe ${CMAKE_CURRENT_SOURCE_DIR}/eth_txq_probe/test_eth_txq_probe.cpp)
+
+target_link_libraries(
+    test_eth_txq_probe
+    PRIVATE
+        tt_metal
+        test_common_libs
+)
+
+target_include_directories(
+    test_eth_txq_probe
+    PRIVATE
+        ${UMD_HOME}
+        ${PROJECT_SOURCE_DIR}
+        ${PROJECT_SOURCE_DIR}/tests
+        ${PROJECT_SOURCE_DIR}/tt_metal
+)
+
+set_target_properties(
+    test_eth_txq_probe
+    PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY
+            ${PROJECT_BINARY_DIR}/test/tt_metal/tt_fabric
+)
+
+# ---- ERISC load-overlap microbenchmark (read latency hiding on the router's sending ERISC; no fabric) ----
+add_executable(test_erisc_load_overlap ${CMAKE_CURRENT_SOURCE_DIR}/erisc_load_ubench/test_erisc_load_overlap.cpp)
+
+target_link_libraries(
+    test_erisc_load_overlap
+    PRIVATE
+        tt_metal
+        test_common_libs
+)
+
+target_include_directories(
+    test_erisc_load_overlap
+    PRIVATE
+        ${UMD_HOME}
+        ${PROJECT_SOURCE_DIR}
+        ${PROJECT_SOURCE_DIR}/tests
+        ${PROJECT_SOURCE_DIR}/tt_metal
+)
+
+set_target_properties(
+    test_erisc_load_overlap
+    PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY
+            ${PROJECT_BINARY_DIR}/test/tt_metal/tt_fabric
 )
 
 # ---- Bench: unicast ----

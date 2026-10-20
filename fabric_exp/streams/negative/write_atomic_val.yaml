@@ -1,0 +1,8 @@
+# Negative test: expected build error (see run_negative.sh).
+Tests:
+  - name: "NegWriteAtomicVal"
+    fabric_setup: {topology: Mesh}
+    senders:
+      - device: [0, 0]
+        patterns:
+          - {destination: {device: [0, 1]}, stream: [{ntype: unicast_write, atomic_inc_val: 3}]}

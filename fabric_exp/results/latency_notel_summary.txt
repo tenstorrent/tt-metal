@@ -1,0 +1,14 @@
+Net round-trip latency, median ns, 1000 samples; keepalive 1000; BW telemetry OFF (harness fixed for latency mode)
+test (EXP_FLAGS ->)                            0     128     256     384    5504   15744   21888   p10-p90 for 0 / 21888
+Lat1HopEW unicast_write 16                  1423    1393    1396    1389    1365    1379    1364   1349-1465 / 1336-1411
+Lat1HopEW unicast_write 4096                1743    1718    1724    1702    1708    1711    1704   1685-1796 / 1664-1751
+Lat1HopEW fused_atomic_inc 16               1463    1443    1461    1455    1429    1439    1423   1427-1538 / 1399-1472
+Lat1HopEW fused_atomic_inc 4096             1743    1723    1733    1709    1715    1715    1714   1693-1801 / 1673-1753
+Lat1HopNS unicast_write 16                  1431    1417    1397    1394    1374    1390    1373   1354-1467 / 1349-1416
+Lat1HopNS unicast_write 4096                1767    1720    1730    1710    1714    1712    1712   1691-1799 / 1673-1759
+Lat1HopNS fused_atomic_inc 16               1482    1453    1512    1462    1443    1446    1433   1433-1543 / 1408-1480
+Lat1HopNS fused_atomic_inc 4096             1765    1728    1734    1713    1724    1720    1721   1695-1807 / 1676-1763
+Lat3HopEW unicast_write 16                  3536    3459    3606    3521    3470    3484    3456   3444-3632 / 3396-3523
+Lat3HopEW unicast_write 4096                4399    4355    4441    4364    4369    4382    4357   4310-4500 / 4296-4442
+Lat3HopEW fused_atomic_inc 16               3563    3531    3666    3581    3542    3552    3519   3467-3708 / 3464-3596
+Lat3HopEW fused_atomic_inc 4096             4424    4356    4453    4373    4371    4396    4359   4334-4515 / 4303-4453

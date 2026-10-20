@@ -1,0 +1,46 @@
+# Channel trimming with streams, in the shapes the study's exp_2d_trim_4352.yaml already runs in the
+# experiment tree (Mesh, 1 link, benchmark mode). Each test runs a capture pass, then a replay with
+# unused router channels compiled out.
+allocation_policies:
+    receiver:
+      policy: RoundRobin
+      max_configs_per_core: 4
+
+Tests:
+  # One hop east-west: a command-type mix
+  - name: "TrimStream1HopEW"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+      enable_channel_trimming: true
+    defaults:
+      ftype: unicast
+      size: 4352
+      repeat: 10000
+      stream: [unicast_write, unicast_scatter_write, fused_atomic_inc, atomic_inc]
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [0, 1]
+
+  # Three hops east-west: chips 1 and 2 forward only, chip 3 delivers
+  - name: "TrimStream3HopEW"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+      enable_channel_trimming: true
+    defaults:
+      ftype: unicast
+      size: 4352
+      repeat: 5000
+      stream:
+        - {ntype: unicast_write, count: 7}
+        - fused_atomic_inc
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [0, 3]

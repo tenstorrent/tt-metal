@@ -6,7 +6,9 @@
 
 #include "internal/risc_attribs.h"
 #include "noc_overlay_parameters.h"
+#if !defined(COMPILE_FOR_DRISC)
 #include "internal/ethernet/tunneling.h"
+#endif
 #include "tt_metal/fabric/hw/inc/edm_fabric/named_types.hpp"
 
 using StreamId = tt::tt_fabric::NamedType<uint32_t, struct StreamIdType>;
@@ -93,6 +95,7 @@ FORCE_INLINE int32_t pack_value_for_inc_on_write_stream_reg_write(int32_t val) {
     return val << REMOTE_DEST_BUF_WORDS_FREE_INC;
 }
 
+#if !defined(COMPILE_FOR_DRISC)
 template <uint32_t stream_id, uint32_t txq_id>
 FORCE_INLINE void remote_update_ptr_val(int32_t val) {
     constexpr uint32_t addr = STREAM_REG_ADDR(stream_id, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX);
@@ -103,6 +106,7 @@ FORCE_INLINE void remote_update_ptr_val(uint32_t stream_id, int32_t val) {
     const uint32_t addr = STREAM_REG_ADDR(stream_id, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX);
     internal_::eth_write_remote_reg_no_txq_check(txq_id, addr, val << REMOTE_DEST_BUF_WORDS_FREE_INC);
 }
+#endif
 
 template <uint32_t stream_id>
 FORCE_INLINE void init_ptr_val(int32_t val) {

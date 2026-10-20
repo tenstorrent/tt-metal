@@ -8,7 +8,9 @@
 #include <hostdevcommon/common_values.hpp>
 #include "api/dataflow/dataflow_api.h"
 #include "noc_overlay_parameters.h"
+#if !defined(COMPILE_FOR_DRISC)
 #include "internal/ethernet/dataflow_api.h"
+#endif
 #include "eth_chan_noc_mapping.h"
 #include "hostdevcommon/fabric_common.h"
 #include "internal/tt-1xx/risc_common.h"

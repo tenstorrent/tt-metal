@@ -5,6 +5,7 @@
 #include <enchantum/enchantum.hpp>
 
 #include <cstdint>
+#include <cstdlib>
 #include <tt_stl/assert.hpp>
 #include <tt_stl/fmt.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
@@ -14,6 +15,7 @@
 #include "tt_metal/fabric/builder/fabric_stream_assignment.hpp"
 #include "fabric/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/telemetry/code_profiling_types.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/telemetry/fabric_phase_profile_types.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_trimming_types.hpp"
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -43,6 +45,19 @@
 #include <umd/device/types/core_coordinates.hpp>
 #include "tt_metal/llrt/rtoptions.hpp"
 #include "tt_metal/llrt/tt_cluster.hpp"
+
+namespace {
+// Experimental fabric throughput knobs, read straight from the environment (see fabric_phase_profile_types.hpp).
+uint32_t fabric_experiment_env(const char* name) {
+    const char* value = std::getenv(name);
+    return value ? static_cast<uint32_t>(std::strtoul(value, nullptr, 0)) : 0;
+}
+// Profile level of the offload DRISCs: TT_FABRIC_DRISC_PHASE_PROFILE if set, else TT_FABRIC_PHASE_PROFILE.
+uint32_t fabric_drisc_phase_profile_level() {
+    return std::getenv("TT_FABRIC_DRISC_PHASE_PROFILE") ? fabric_experiment_env("TT_FABRIC_DRISC_PHASE_PROFILE")
+                                                        : fabric_experiment_env("TT_FABRIC_PHASE_PROFILE");
+}
+}  // namespace
 
 namespace tt::tt_metal {
 class Program;
@@ -246,6 +261,20 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(const FabricContext& fabr
         next_l1_addr += code_profiling_buffer_size;
     } else {
         this->code_profiling_buffer_address = 0;  // Not allocated
+    }
+
+    // Allocate experimental phase profile counters / loopback scratch (conditionally enabled)
+    const uint32_t phase_profile_mode = fabric_experiment_env("TT_FABRIC_PHASE_PROFILE");
+    const uint32_t phase_profile_bytes = phase_profile_buffer_bytes(
+        phase_profile_mode,
+        fabric_experiment_env("TT_FABRIC_EXP_FLAGS"),
+        fabric_experiment_env("TT_FABRIC_TXQ_COUNTERS") != 0,
+        fabric_experiment_env("TT_FABRIC_EXP_STACK_PAINT") != 0,
+        fabric_drisc_phase_profile_level());
+    if (phase_profile_bytes != 0) {
+        next_l1_addr = tt::align(next_l1_addr, 16);
+        this->phase_profile_buffer_address = next_l1_addr;
+        next_l1_addr += phase_profile_bytes;
     }
 
     // Allocate channel trimming capture buffer (conditionally enabled)
@@ -886,6 +915,132 @@ void FabricEriscDatamoverBuilder::get_telemetry_compile_time_args(
         named_args["CODE_PROFILING_ENABLED_TIMERS"] = 0;
         named_args["CODE_PROFILING_BUFFER_ADDR"] = 0;
     }
+
+    named_args["PHASE_PROFILE_MODE"] =
+        config.phase_profile_buffer_address != 0 ? fabric_experiment_env("TT_FABRIC_PHASE_PROFILE") : 0;
+    named_args["PHASE_PROFILE_DRISC_MODE"] =
+        config.phase_profile_buffer_address != 0 ? fabric_drisc_phase_profile_level() : 0;
+    named_args["PHASE_PROFILE_BUFFER_ADDR"] = static_cast<uint32_t>(config.phase_profile_buffer_address);
+    named_args["PHASE_PROFILE_MASK"] =
+        std::getenv("TT_FABRIC_PHASE_MASK") ? fabric_experiment_env("TT_FABRIC_PHASE_MASK") : PHASE_MASK_ALL;
+    named_args["PHASE_PROFILE_ITER_TIMING"] = fabric_experiment_env("TT_FABRIC_PHASE_NO_ITER") == 0 ? 1 : 0;
+    named_args["PHASE_PROFILE_TXQ_COUNTERS"] =
+        config.phase_profile_buffer_address != 0 ? fabric_experiment_env("TT_FABRIC_TXQ_COUNTERS") : 0;
+    named_args["EXP_FLAGS"] = fabric_experiment_env("TT_FABRIC_EXP_FLAGS");
+    named_args["EXP_TX_DELAY"] = fabric_experiment_env("TT_FABRIC_EXP_TX_DELAY");
+    named_args["EXP_RX_DELAY"] = fabric_experiment_env("TT_FABRIC_EXP_RX_DELAY");
+    named_args["EXP_DRISC_DELAY"] = fabric_experiment_env("TT_FABRIC_EXP_DRISC_DELAY");
+    named_args["EXP_SEQ_UPDATE_TIMEOUT"] = fabric_experiment_env("TT_FABRIC_EXP_SEQ_UPDATE_TIMEOUT");
+    named_args["EXP_STACK_PAINT"] =
+        config.phase_profile_buffer_address != 0 ? fabric_experiment_env("TT_FABRIC_EXP_STACK_PAINT") : 0;
+
+    // EXP_RX_PUSH_DRISC / EXP_DRISC_OFFLOAD: each router on a chip pairs with a different Metal DRISC whose NIU0 and
+    // NIU1 are both in stream mode (soc.get_dram_endpoint_noc_mask(core) == 0). Plain L1 addresses then land in DRISC
+    // L1 on both NoCs, and the DRISC can drive NoC0 (downstream forwarding) and NoC1 (local delivery + E1 credits)
+    // concurrently.
+    uint32_t push_drisc_x = 0, push_drisc_y = 0, push_drisc_l1_base = 0, push_drisc_l1_size = 0;
+    const bool use_drisc =
+        this->has_drisc_offload() || (fabric_experiment_env("TT_FABRIC_EXP_FLAGS") & EXP_RX_PUSH_DRISC) != 0;
+    if (use_drisc) {
+        const auto drisc_core = this->get_drisc_translated_core();
+        const auto& hal = fabric_context_.get_hal();
+        push_drisc_x = drisc_core.x;
+        push_drisc_y = drisc_core.y;
+        push_drisc_l1_base = static_cast<uint32_t>(
+            hal.get_dev_addr(tt::tt_metal::HalProgrammableCoreType::DRAM, tt::tt_metal::HalL1MemAddrType::UNRESERVED));
+        push_drisc_l1_size = static_cast<uint32_t>(
+            hal.get_dev_size(tt::tt_metal::HalProgrammableCoreType::DRAM, tt::tt_metal::HalL1MemAddrType::UNRESERVED));
+        if (fabric_experiment_env("TT_FABRIC_EXP_LOG_CONFIG") != 0) {
+            const auto& control_plane = fabric_context_.get_control_plane();
+            const auto chip = control_plane.get_physical_chip_id_from_fabric_node_id(this->local_fabric_node_id);
+            log_info(
+                tt::LogFabric,
+                "DRISC pairing: chip {} eth chan {} risc {} -> DRISC ({},{}) L1 {:#x} + {}",
+                chip,
+                this->my_eth_channel,
+                risc_id,
+                push_drisc_x,
+                push_drisc_y,
+                push_drisc_l1_base,
+                push_drisc_l1_size);
+        }
+    }
+    named_args["EXP_PUSH_DRISC_X"] = push_drisc_x;
+    named_args["EXP_PUSH_DRISC_Y"] = push_drisc_y;
+    named_args["EXP_PUSH_DRISC_L1_BASE"] = push_drisc_l1_base;
+    named_args["EXP_PUSH_DRISC_L1_SIZE"] = push_drisc_l1_size;
+    named_args["PEER_ERISC_NOC_X"] = static_cast<uint32_t>(this->noc_x_);
+    named_args["PEER_ERISC_NOC_Y"] = static_cast<uint32_t>(this->noc_y_);
+}
+
+bool FabricEriscDatamoverBuilder::has_drisc_offload() const {
+    const bool flag_enabled = (fabric_experiment_env("TT_FABRIC_EXP_FLAGS") & EXP_DRISC_OFFLOAD) != 0 ||
+                              fabric_experiment_env("TT_FABRIC_DRISC_OFFLOAD") != 0;
+    if (!flag_enabled) {
+        return false;
+    }
+    if (fabric_context_.get_cluster().arch() != tt::ARCH::BLACKHOLE ||
+        !fabric_context_.get_hal().has_programmable_core_type(tt::tt_metal::HalProgrammableCoreType::DRAM)) {
+        return false;
+    }
+    if (this->get_configured_risc_count() < 2 || config.num_used_receiver_channels != 1 ||
+        config.num_used_receiver_channels_per_vc[1] != 0 || this->has_tensix_extension || this->udm_mode ||
+        this->num_downstream_tensix_connections != 0 || config.datapath_usage_l1_address != 0) {
+        return false;
+    }
+    return this->is_receiver_channel_serviced_[1][0];
+}
+
+tt::tt_metal::CoreCoord FabricEriscDatamoverBuilder::get_drisc_translated_core() const {
+    const auto& control_plane = fabric_context_.get_control_plane();
+    const auto chip = control_plane.get_physical_chip_id_from_fabric_node_id(this->local_fabric_node_id);
+    const auto& soc = fabric_context_.get_cluster().get_soc_desc(chip);
+    std::vector<tt::tt_metal::CoreCoord> driscs;
+    for (const auto& core : soc.get_metal_dram_cores(tt::CoordSystem::TRANSLATED)) {
+        if (soc.get_dram_endpoint_noc_mask(core) == 0) {
+            driscs.push_back(core);
+        }
+    }
+    std::sort(driscs.begin(), driscs.end());
+    std::vector<chan_id_t> channels;
+    for (const auto& [chan, direction] : control_plane.get_active_fabric_eth_channels(this->local_fabric_node_id)) {
+        channels.push_back(chan);
+    }
+    std::sort(channels.begin(), channels.end());
+    channels.erase(std::unique(channels.begin(), channels.end()), channels.end());
+    const auto rank = std::distance(
+        channels.begin(), std::find(channels.begin(), channels.end(), static_cast<chan_id_t>(this->my_eth_channel)));
+    TT_FATAL(
+        rank < static_cast<std::ptrdiff_t>(channels.size()) && rank < static_cast<std::ptrdiff_t>(driscs.size()),
+        "No dual-stream-NIU Metal DRISC available for chip {} eth chan {} (rank {} of {}, {} qualifying DRISCs)",
+        chip,
+        this->my_eth_channel,
+        rank,
+        channels.size(),
+        driscs.size());
+    return driscs[rank];
+}
+
+tt::tt_metal::CoreCoord FabricEriscDatamoverBuilder::get_drisc_logical_core() const {
+    const auto& control_plane = fabric_context_.get_control_plane();
+    const auto chip = control_plane.get_physical_chip_id_from_fabric_node_id(this->local_fabric_node_id);
+    const auto& soc = fabric_context_.get_cluster().get_soc_desc(chip);
+    return soc.get_logical_dram_core_from_translated(this->get_drisc_translated_core());
+}
+
+FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_drisc_compile_time_args() const {
+    auto args = this->get_compile_time_args(1);
+    // The paired DRISC has both NIU0 and NIU1 in stream mode: drive downstream router-to-router forwarding on NoC0
+    // and local-chip delivery + E1 credit returns on NoC1.
+    args.named["RX_CH_0_FWD_NOC_ID"] = 0;
+    args.named["ENABLE_CHANNEL_TRIMMING_RESOURCE_USAGE_CAPTURE"] = 0;
+    // The ERISC profiler stays off; the DRISC profiles itself at PHASE_PROFILE_DRISC_MODE (inherited from E1).
+    args.named["PHASE_PROFILE_MODE"] = 0;
+    args.named["PHASE_PROFILE_TXQ_COUNTERS"] = 0;
+    args.named["EXP_STACK_PAINT"] = 0;
+    args.named["PEER_ERISC_NOC_X"] = static_cast<uint32_t>(this->noc_x_);
+    args.named["PEER_ERISC_NOC_Y"] = static_cast<uint32_t>(this->noc_y_);
+    return args;
 }
 
 /*
@@ -1026,12 +1181,20 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
                                           ? actual_sender_channels_per_vc_.value()[2]
                                           : config.num_used_sender_channels_per_vc[2];
 
+    // Experiment (EXP_TX_UPSTREAM_ON_E1): ERISC1 handles the upstream side of ERISC0's sender channels, so it must use
+    // ERISC0's per-channel connection protocol (persistent vs. liveness-checked).
+    const bool exp_upstream_on_e1 =
+        (fabric_experiment_env("TT_FABRIC_EXP_FLAGS") & EXP_TX_UPSTREAM_ON_E1) != 0 && config.risc_configs.size() > 1;
+    auto sender_upstream_handled_by_this_risc = [&](size_t channel_id) -> bool {
+        return this->is_sender_channel_serviced_[risc_id][channel_id] ||
+               (exp_upstream_on_e1 && risc_id == 1 && this->is_sender_channel_serviced_[0][channel_id]);
+    };
     auto should_force_internal_sender_skip = [&](size_t channel_id) -> bool {
         if (channel_id >= num_sender_channels || channel_trimming_overrides_.has_value()) {
             return false;
         }
 
-        if (!this->is_sender_channel_serviced_[risc_id][channel_id]) {
+        if (!sender_upstream_handled_by_this_risc(channel_id)) {
             return false;
         }
 
@@ -1212,6 +1375,12 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
         named_args[fmt::format("IS_SENDER_CHANNEL_{}_SERVICED", i)] =
             static_cast<uint32_t>(this->is_sender_channel_serviced_[risc_id][i]);
     }
+    // The other ERISC's sender channels (experiment EXP_TX_UPSTREAM_ON_E1).
+    for (size_t i = 0; i < builder_config::num_max_sender_channels; i++) {
+        named_args[fmt::format("PEER_SENDER_CHANNEL_{}_SERVICED", i)] =
+            config.risc_configs.size() > 1 ? static_cast<uint32_t>(this->is_sender_channel_serviced_[1 - risc_id][i])
+                                           : 0;
+    }
     for (size_t i = 0; i < builder_config::num_max_receiver_channels; i++) {
         named_args[fmt::format("IS_RECEIVER_CHANNEL_{}_SERVICED", i)] =
             static_cast<uint32_t>(this->is_receiver_channel_serviced_[risc_id][i]);
@@ -1346,7 +1515,7 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     // forwarded-to capture together with locally-observed NOC writes when it is
     // trustworthy and fall back to the safe non-speedy default otherwise.
     auto compute_disable_rx_forwarding = [&](size_t vc) -> uint32_t {
-        if (vc == 0 && enable_speedy_vc0) {
+        if (vc == 0 && enable_speedy_vc0 && !this->has_drisc_offload()) {
             return 1;
         }
         if (!router_has_real_capture_entry) {
@@ -1394,6 +1563,11 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
                     reference_packet_size_bytes,
                     vc0_trim_fast_path_info_->peer_sender_max_packet_size_bytes);
             }
+            // Experiment: completions per receiver credit return on the fast path (1 = one per packet, as the
+            // generic path sends them).
+            if (const uint32_t exp_receiver_amort = fabric_experiment_env("TT_FABRIC_EXP_RECEIVER_AMORT")) {
+                receiver_amort_freq = exp_receiver_amort;
+            }
         }
     }
     named_args["SENDER_CREDIT_AMORTIZATION_FREQUENCY"] = sender_amort_freq;
@@ -1421,6 +1595,34 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     ct_args.push_back(0xabaddad7);
     receiver_channel_to_downstream_adapter->emit_ct_args(ct_args, config.num_fwd_paths);
     ct_args.push_back(0xabaddad9);
+
+    if (fabric_experiment_env("TT_FABRIC_EXP_LOG_CONFIG") != 0) {
+        std::string serviced;
+        for (uint32_t i = 0; i < builder_config::num_max_sender_channels; i++) {
+            serviced += named_args[fmt::format("IS_SENDER_CHANNEL_{}_SERVICED", i)] ? "S" : ".";
+        }
+        serviced += "|";
+        for (uint32_t i = 0; i < builder_config::num_max_receiver_channels; i++) {
+            serviced += named_args[fmt::format("IS_RECEIVER_CHANNEL_{}_SERVICED", i)] ? "R" : ".";
+        }
+        auto* static_alloc =
+            dynamic_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator*>(config.channel_allocator.get());
+        log_info(
+            tt::LogFabric,
+            "router chip {} eth ch {} erisc {}: speedy_vc0={} vc0_sender_channels={} serviced(sender|receiver)={} "
+            "sender_amort={} receiver_amort={} vc0 slots sender={} receiver={} buffer={} B",
+            this->local_fabric_node_id.chip_id,
+            my_eth_channel_,
+            risc_id,
+            enable_speedy_vc0,
+            actual_sender_channels_vc0,
+            serviced,
+            sender_amort_freq,
+            receiver_amort_freq,
+            static_alloc ? static_alloc->get_sender_channel_number_of_slots(0) : 0,
+            static_alloc ? static_alloc->get_receiver_channel_number_of_slots(0) : 0,
+            config.channel_buffer_size_bytes);
+    }
 
     return {std::move(ct_args), std::move(named_args)};
 }

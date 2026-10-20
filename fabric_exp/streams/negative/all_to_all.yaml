@@ -1,0 +1,7 @@
+# Negative test: expected build error (see run_negative.sh).
+Tests:
+  - name: "NegAllToAll"
+    fabric_setup: {topology: Mesh}
+    defaults: {ftype: unicast, stream: [unicast_write, fused_atomic_inc]}
+    patterns:
+      - type: all_to_all

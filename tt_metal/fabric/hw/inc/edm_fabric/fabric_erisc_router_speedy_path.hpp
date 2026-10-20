@@ -29,9 +29,11 @@ static_assert(
 static_assert(
     !super_speedy_mode || !speedy_mode_has_non_worker_vc0_sender,
     "super_speedy_mode requires all serviced VC0 senders beyond channel 0 to be trimmed");
+#if !defined(FABRIC_DRISC_OFFLOAD)
 static_assert(
     !super_speedy_mode || !is_receiver_channel_serviced[VC0_RECEIVER_CHANNEL] || disable_rx_ch0_forwarding,
     "super_speedy_mode requires RX channel 0 forwarding to be disabled when RX0 is serviced");
+#endif
 
 struct SpeedySenderState {
     size_t completion_count = 0;
@@ -116,12 +118,13 @@ FORCE_INLINE bool run_sender_channel_step_speedy(
     bool has_unsent_packet = free_slots != WorkerInterfaceT::num_buffers;
     bool can_send = receiver_has_space_for_packet && has_unsent_packet;
 
-    if constexpr (!ETH_TXQ_SPIN_WAIT_SEND_NEXT_DATA) {
+    if constexpr (!ETH_TXQ_SPIN_WAIT_SEND_NEXT_DATA && !fabric_exp_tx_no_send_txq_check) {
         can_send = can_send && !internal_::eth_txq_is_busy(sender_txq_id);
     }
 
     if (can_send) {
         progress = true;
+        const uint32_t send_start = phase_profiler.open<PHASE_TX_SEND>();
 
         auto* pkt_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(
             local_sender_channel.get_cached_next_buffer_slot_addr());
@@ -133,14 +136,19 @@ FORCE_INLINE bool run_sender_channel_step_speedy(
             const size_t payload_size_bytes = pkt_header->get_payload_size_including_header();
             record_sender_channel_usage(sender_channel_index, payload_size_bytes);
 
-            bool busy = internal_::eth_txq_is_busy(sender_txq_id);
+            bool busy = false;
+            if constexpr (ETH_TXQ_SPIN_WAIT_SEND_NEXT_DATA || !fabric_exp_tx_drop_dead_txq_read) {
+                busy = internal_::eth_txq_is_busy(sender_txq_id);
+            }
 
             const auto dest_addr = outbound_to_receiver_channel_pointers.remote_receiver_channel_address_ptr;
 
             if constexpr (ETH_TXQ_SPIN_WAIT_SEND_NEXT_DATA) {
+                const uint32_t prespin_start = phase_profiler.open<PHASE_TX_TXQ_PRESPIN>();
                 while (busy) {
                     busy = internal_::eth_txq_is_busy(sender_txq_id);
                 }
+                phase_profiler.close<PHASE_TX_TXQ_PRESPIN>(prespin_start);
             }
             internal_::eth_send_packet_bytes_unsafe(sender_txq_id, src_addr, dest_addr, payload_size_bytes);
 
@@ -156,9 +164,11 @@ FORCE_INLINE bool run_sender_channel_step_speedy(
 
             record_packet_send(perf_telemetry_recorder, sender_channel_index, payload_size_bytes);
 
+            const uint32_t spin_start = phase_profiler.open<PHASE_TX_TXQ_SPIN>();
             while (busy) {
                 busy = internal_::eth_txq_is_busy(sender_txq_id);
             };
+            phase_profiler.close<PHASE_TX_TXQ_SPIN>(spin_start);
             remote_update_ptr_val<to_receiver_pkts_sent_id, sender_txq_id>(1U);
         }
         sender_state.sender_amort_counter++;
@@ -166,6 +176,13 @@ FORCE_INLINE bool run_sender_channel_step_speedy(
             update_bw_counters(pkt_header, local_fabric_telemetry);
         }
         increment_local_update_ptr_val(sender_channel_free_slots_stream_id, 1);
+        phase_profiler.close<PHASE_TX_SEND>(send_start);
+        phase_profiler.mark_progress();
+        phase_profiler.count_pkt();
+        fabric_experiment_spin<fabric_exp_tx_delay>();
+    } else if (has_unsent_packet) {
+        phase_profiler.mark_blocked();
+        phase_profiler.count_event(receiver_has_space_for_packet ? EVENT_TX_BLOCKED_TXQ : EVENT_TX_BLOCKED_CREDIT);
     }
 
     // We only want to actually bother checking for completions after a certain number of sent packets are outstanding
@@ -175,10 +192,12 @@ FORCE_INLINE bool run_sender_channel_step_speedy(
         int32_t completions = sender_channel_from_receiver_credits
                                   .template get_num_unprocessed_completions_from_receiver<ENABLE_RISC_CPU_DATA_CACHE>();
         if (completions) {
+            const uint32_t completion_start = phase_profiler.open<PHASE_TX_COMPLETION>();
             outbound_to_receiver_channel_pointers.num_free_slots += completions;
             sender_channel_from_receiver_credits.increment_num_processed_completions(completions);
 
             sender_state.completion_count += completions;
+            phase_profiler.close<PHASE_TX_COMPLETION>(completion_start);
         }
     }
 
@@ -186,10 +205,12 @@ FORCE_INLINE bool run_sender_channel_step_speedy(
     // expensive operation.
     bool send_credits = sender_state.completion_count >= SENDER_CREDIT_AMORTIZATION_FREQUENCY_LOCAL;
     if (send_credits) {
+        const uint32_t credit_start = phase_profiler.open<PHASE_TX_COMPLETION>();
         send_credits_to_upstream_workers<false /*deadlock_avoidance*/, false /*SKIP_LIVENESS*/>(
             local_sender_channel_worker_interface, sender_state.completion_count, channel_connection_established);
         sender_state.sender_amort_counter -= sender_state.completion_count;
         sender_state.completion_count = 0;
+        phase_profiler.close<PHASE_TX_COMPLETION>(credit_start);
     }
 
     if constexpr (MANAGE_CONNECTION_LIVENESS_IN_SPEEDY_HELPER) {
@@ -210,10 +231,12 @@ FORCE_INLINE bool run_sender_channel_step_speedy(
             auto check_connection_status =
                 !channel_connection_established || local_sender_channel_worker_interface.has_worker_teardown_request();
             if (check_connection_status) {
+                const uint32_t conn_start = phase_profiler.open<PHASE_TX_CONN>();
                 check_worker_connections<MY_ETH_CHANNEL, ENABLE_RISC_CPU_DATA_CACHE>(
                     local_sender_channel_worker_interface,
                     channel_connection_established,
                     sender_channel_free_slots_stream_id);
+                phase_profiler.close<PHASE_TX_CONN>(conn_start);
             }
         }
     }
@@ -255,6 +278,7 @@ FORCE_INLINE bool run_receiver_channel_step_speedy(
     bool unwritten_packets = pkts_received != 0;
 
     if (unwritten_packets) {
+        const uint32_t rx_start = phase_profiler.open<PHASE_RX_DECODE_ADMIT>();
         static_assert(!ENABLE_RISC_CPU_DATA_CACHE, "ENABLE_RISC_CPU_DATA_CACHE must be disabled for speedy path");
         // TODO: hoist me between get_ptr_val and the mask for its value.
         auto receiver_buffer_index = wr_sent_counter.get_buffer_index();
@@ -265,12 +289,18 @@ FORCE_INLINE bool run_receiver_channel_step_speedy(
         // instead of two separate uncached L1 reads.
         auto packed = PACKET_HEADER_TYPE::PackedPayloadAndSendType::load(packet_header);
 
-        execute_chip_unicast_to_local_chip_impl(
-            packet_header,
-            packed.payload_size_bytes,
-            packed.noc_send_type,
-            receiver_state.current_write_trid,
-            receiver_channel);
+        phase_profiler.close<PHASE_RX_DECODE_ADMIT>(rx_start);
+        const uint32_t local_start = phase_profiler.open<PHASE_RX_LOCAL>();
+        if (!fabric_exp_rx_skip_local_delivery ||
+            !exp_local_delivery_is_data_only(packet_header, packed.noc_send_type)) {
+            execute_chip_unicast_to_local_chip_impl(
+                packet_header,
+                packed.payload_size_bytes,
+                packed.noc_send_type,
+                receiver_state.current_write_trid,
+                receiver_channel);
+        }
+        phase_profiler.close<PHASE_RX_LOCAL>(local_start);
 
         did_something = true;
         progress = true;
@@ -282,6 +312,9 @@ FORCE_INLINE bool run_receiver_channel_step_speedy(
         wr_sent_counter.increment();
         increment_local_update_ptr_val<to_receiver_pkts_sent_id>(-1);
         receiver_state.unacked_sends++;
+        phase_profiler.mark_progress();
+        phase_profiler.count_pkt();
+        fabric_experiment_spin<fabric_exp_rx_delay>();
     }
 
     // --- Ping-pong TRID flush ---
@@ -304,6 +337,7 @@ FORCE_INLINE bool run_receiver_channel_step_speedy(
             tt::tt_fabric::edm_to_local_chip_noc, receiver_state.pending_flush_trid);
 
         if (flushed) {
+            const uint32_t completion_start = phase_profiler.open<PHASE_RX_COMPLETION>();
             auto& completion_counter = receiver_channel_pointers.completion_counter;
             completion_counter.increment_n(receiver_state.pending_flush_batch_count);
             receiver_send_completion_ack<false /*CHECK_BUSY*/>(
@@ -313,6 +347,7 @@ FORCE_INLINE bool run_receiver_channel_step_speedy(
 
             receiver_state.unacked_sends -= receiver_state.pending_flush_batch_count;
             receiver_state.has_pending_flush = false;
+            phase_profiler.close<PHASE_RX_COMPLETION>(completion_start);
         }
     }
 

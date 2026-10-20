@@ -1,0 +1,14 @@
+# Diagnostic: channel trimming with a plain multicast pattern (no stream), same shape as StreamChannelTrimmingMesh.
+Tests:
+  - name: "TrimPlainMcast"
+    enable_flow_control: true
+    fabric_setup:
+      topology: Mesh
+      enable_channel_trimming: true
+    defaults:
+      ftype: mcast
+      ntype: unicast_write
+      size: 2048
+      num_packets: 300
+    patterns:
+      - type: unidirectional_linear

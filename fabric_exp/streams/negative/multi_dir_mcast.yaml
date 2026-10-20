@@ -1,0 +1,8 @@
+# Negative test: expected build error (see run_negative.sh).
+Tests:
+  - name: "NegMultiDirMcast"
+    fabric_setup: {topology: Mesh}
+    senders:
+      - device: [0, 1]
+        patterns:
+          - {destination: {hops: {E: 1, W: 1}}, ftype: mcast, stream: [unicast_write]}

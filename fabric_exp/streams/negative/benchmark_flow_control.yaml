@@ -1,0 +1,10 @@
+# Negative test: expected build error (see run_negative.sh).
+Tests:
+  - name: "NegBenchmarkFlowControl"
+    benchmark_mode: true
+    enable_flow_control: true
+    fabric_setup: {topology: Mesh}
+    senders:
+      - device: [0, 0]
+        patterns:
+          - {destination: {device: [0, 1]}, ftype: unicast, repeat: 10, stream: [unicast_write]}

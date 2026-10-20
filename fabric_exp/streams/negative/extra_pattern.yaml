@@ -1,0 +1,9 @@
+# Negative test: expected build error (see run_negative.sh).
+Tests:
+  - name: "NegExtraPattern"
+    fabric_setup: {topology: Mesh}
+    senders:
+      - device: [0, 0]
+        patterns:
+          - {destination: {device: [0, 1]}, ftype: unicast, stream: [unicast_write]}
+          - {destination: {device: [0, 4]}, ftype: unicast, num_packets: 10}

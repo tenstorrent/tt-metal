@@ -93,7 +93,30 @@ FORCE_INLINE void print_pkt_header(volatile tt::tt_fabric::LowLatencyPacketHeade
 #endif
 }
 
+// Flushes prior non-posted writes on this receiver channel so that all prior data writes (e.g., to DRAM or L1)
+// have been acknowledged at their destinations before a signaling atomic increment is issued.
+// NOTE: This intentionally flushes prior WRITES only; prior atomics are NOT waited on (matching Wormhole's
+// posted-atomic behavior and Blackhole VC1). On Blackhole, noc_fast_atomic_increment forces posted=false on
+// write_at_cmd_buf (which defaults to transaction ID 0), so the per-ID loop below incidentally serialized
+// against in-flight atomics on ID 0, whereas ncrisc_noc_nonposted_writes_flushed checks NIU_MST_WR_ACK_RECEIVED
+// and allows back-to-back atomics to pipeline. If a workload ever requires cross-core atomic-to-atomic ordering,
+// that should be exposed as an explicit opt-in check (ncrisc_noc_nonposted_atomics_flushed).
 FORCE_INLINE void flush_write_to_noc_pipeline(uint8_t rx_channel_id) {
+#if defined(ARCH_BLACKHOLE)
+    if constexpr (
+        !enable_deadlock_avoidance && (
+#if defined(COMPILE_FOR_DRISC)
+                                          true
+#else
+                                          fabric_exp_rx_batch_completion &&
+                                          tt::tt_fabric::local_chip_noc_equals_downstream_noc &&
+                                          tt::tt_fabric::edm_to_local_chip_noc == noc_index
+#endif
+                                          )) {
+        while (!ncrisc_noc_nonposted_writes_flushed(tt::tt_fabric::edm_to_local_chip_noc));
+        return;
+    }
+#endif
     if constexpr (enable_deadlock_avoidance) {
         auto start_trid = RX_CH_TRID_STARTS[rx_channel_id];
         auto end_trid = start_trid + NUM_TRANSACTION_IDS;
@@ -125,6 +148,73 @@ FORCE_INLINE void flush_write_to_noc_pipeline(uint8_t rx_channel_id) {
 
 // Shifts the chunk encoding in a scatter write packet to the next chunk
 FORCE_INLINE void shift_to_next_chunk(uint8_t& chunk_encodings) { chunk_encodings >>= 2; }
+
+#if defined(COMPILE_FOR_DRISC) && defined(ARCH_BLACKHOLE) && !defined(DEBUG_PRINT_ENABLED) && !defined(WATCHER_ENABLED)
+// On DRISC, NoC1 local_chip_data_cmd_buf (write_cmd_buf = 0) is dedicated to local-chip unicast writes on
+// forward_and_local_write_noc_vc, and write_at_cmd_buf (3) is dedicated to local-chip semaphore increments.
+// Pre-programming NOC_CTRL and MID=0 once at init (and restoring them after the rare NOC_UNICAST_INLINE_WRITE
+// path) avoids rewriting those registers on every write/atomic and lets flushed atomics pre-stage their
+// target address and data registers while waiting for the payload write ack.
+FORCE_INLINE void drisc_local_write_init_cmd_buf() {
+    constexpr uint8_t noc = tt::tt_fabric::edm_to_local_chip_noc;
+    constexpr uint8_t cmd_buf = tt::tt_fabric::local_chip_data_cmd_buf;
+    constexpr uint32_t noc_cmd_field = NOC_CMD_CPY | NOC_CMD_WR | NOC_CMD_VC_STATIC |
+                                       NOC_CMD_STATIC_VC(tt::tt_fabric::forward_and_local_write_noc_vc) |
+                                       NOC_CMD_RESP_MARKED;
+    while (!noc_cmd_buf_ready(noc, cmd_buf));
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL, noc_cmd_field);
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_MID, 0x0);
+
+    constexpr uint8_t at_cmd_buf = write_at_cmd_buf;
+    constexpr uint32_t noc_at_cmd_field = NOC_CMD_VC_STATIC |
+                                          NOC_CMD_STATIC_VC(tt::tt_fabric::forward_and_local_write_noc_vc) |
+                                          NOC_CMD_RESP_MARKED | NOC_CMD_AT;
+    while (!noc_cmd_buf_ready(noc, at_cmd_buf));
+    NOC_CMD_BUF_WRITE_REG(noc, at_cmd_buf, NOC_CTRL, noc_at_cmd_field);
+    NOC_CMD_BUF_WRITE_REG(noc, at_cmd_buf, NOC_TARG_ADDR_MID, 0x0);
+}
+
+template <bool set_trid = true, bool update_counters = true>
+FORCE_INLINE void drisc_local_write_one_packet(
+    uint32_t src_addr, uint64_t dest_addr, uint32_t len_bytes, uint32_t trid) {
+    constexpr uint8_t noc = tt::tt_fabric::edm_to_local_chip_noc;
+    constexpr uint8_t cmd_buf = tt::tt_fabric::local_chip_data_cmd_buf;
+    const uint32_t dest_lo = static_cast<uint32_t>(dest_addr);
+    const uint32_t dest_coord = static_cast<uint32_t>(dest_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK;
+    while (!noc_cmd_buf_ready(noc, cmd_buf));
+    if constexpr (set_trid) {
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_PACKET_TAG, NOC_PACKET_TAG_TRANSACTION_ID(trid));
+    }
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, src_addr);
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, dest_lo);
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_COORDINATE, dest_coord);
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN_BE, len_bytes);
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
+    if constexpr (update_counters) {
+        noc_nonposted_writes_num_issued[noc] += 1;
+        noc_nonposted_writes_acked[noc] += 1;
+    }
+}
+
+FORCE_INLINE void drisc_local_semaphore_inc(uint64_t addr, uint32_t incr, bool flush, uint8_t rx_channel_id) {
+    constexpr uint8_t noc = tt::tt_fabric::edm_to_local_chip_noc;
+    constexpr uint8_t cmd_buf = write_at_cmd_buf;
+    const uint32_t addr_lo = static_cast<uint32_t>(addr);
+    const uint32_t addr_coord = static_cast<uint32_t>(addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK;
+    const uint32_t at_len_be =
+        NOC_AT_INS(NOC_AT_INS_INCR_GET) | NOC_AT_WRAP(31) | NOC_AT_IND_32((addr_lo >> 2) & 0x3) | NOC_AT_IND_32_SRC(0);
+    while (!noc_cmd_buf_ready(noc, cmd_buf));
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, addr_lo);
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_COORDINATE, addr_coord);
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN_BE, at_len_be);
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_DATA, incr);
+    if (flush) {
+        flush_write_to_noc_pipeline(rx_channel_id);
+    }
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
+    noc_nonposted_atomics_acked[noc] += 1;
+}
+#endif
 
 // Core implementation of unicast-to-local-chip dispatch.
 // Accepts pre-resolved payload_size_bytes and noc_send_type to avoid redundant uncached L1 reads
@@ -176,6 +266,10 @@ FORCE_INLINE
     switch (noc_send_type) {
         case tt::tt_fabric::NocSendType::NOC_UNICAST_WRITE: {
             const auto dest_address = header.command_fields.unicast_write.noc_address;
+#if defined(COMPILE_FOR_DRISC) && defined(ARCH_BLACKHOLE) && !defined(DEBUG_PRINT_ENABLED) && !defined(WATCHER_ENABLED)
+            drisc_local_write_one_packet<true, true>(
+                payload_start_address, dest_address, payload_size_bytes, transaction_id);
+#else
             noc_async_write_one_packet_with_trid<update_counter, false>(
                 payload_start_address,
                 dest_address,
@@ -184,11 +278,16 @@ FORCE_INLINE
                 tt::tt_fabric::local_chip_data_cmd_buf,
                 tt::tt_fabric::edm_to_local_chip_noc,
                 tt::tt_fabric::forward_and_local_write_noc_vc);
+#endif
         } break;
 
         case tt::tt_fabric::NocSendType::NOC_UNICAST_ATOMIC_INC: {
             const uint64_t dest_address = header.command_fields.unicast_seminc.noc_address;
             const auto increment = header.command_fields.unicast_seminc.val;
+#if defined(COMPILE_FOR_DRISC) && defined(ARCH_BLACKHOLE) && !defined(DEBUG_PRINT_ENABLED) && !defined(WATCHER_ENABLED)
+            drisc_local_semaphore_inc(
+                dest_address, increment, header.command_fields.unicast_seminc.flush, rx_channel_id);
+#else
             if (header.command_fields.unicast_seminc.flush) {
                 flush_write_to_noc_pipeline(rx_channel_id);
             }
@@ -197,7 +296,7 @@ FORCE_INLINE
                 increment,
                 tt::tt_fabric::edm_to_local_chip_noc,
                 tt::tt_fabric::forward_and_local_write_noc_vc);
-
+#endif
         } break;
 
         case tt::tt_fabric::NocSendType::NOC_UNICAST_INLINE_WRITE: {
@@ -209,10 +308,21 @@ FORCE_INLINE
                 0xF,
                 tt::tt_fabric::edm_to_local_chip_noc,
                 tt::tt_fabric::forward_and_local_write_noc_vc);
+#if defined(COMPILE_FOR_DRISC) && defined(ARCH_BLACKHOLE) && !defined(DEBUG_PRINT_ENABLED) && !defined(WATCHER_ENABLED)
+            drisc_local_write_init_cmd_buf();
+#endif
         } break;
 
         case tt::tt_fabric::NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC: {
             const auto dest_address = header.command_fields.unicast_seminc_fused.noc_address;
+            const uint64_t semaphore_dest_address = header.command_fields.unicast_seminc_fused.semaphore_noc_address;
+            const auto increment = header.command_fields.unicast_seminc_fused.val;
+            const bool flush = header.command_fields.unicast_seminc_fused.flush;
+#if defined(COMPILE_FOR_DRISC) && defined(ARCH_BLACKHOLE) && !defined(DEBUG_PRINT_ENABLED) && !defined(WATCHER_ENABLED)
+            drisc_local_write_one_packet<true, true>(
+                payload_start_address, dest_address, payload_size_bytes, transaction_id);
+            drisc_local_semaphore_inc(semaphore_dest_address, increment, flush, rx_channel_id);
+#else
             noc_async_write_one_packet_with_trid<update_counter, false>(
                 payload_start_address,
                 dest_address,
@@ -221,10 +331,7 @@ FORCE_INLINE
                 tt::tt_fabric::local_chip_data_cmd_buf,
                 tt::tt_fabric::edm_to_local_chip_noc,
                 tt::tt_fabric::forward_and_local_write_noc_vc);
-
-            const uint64_t semaphore_dest_address = header.command_fields.unicast_seminc_fused.semaphore_noc_address;
-            const auto increment = header.command_fields.unicast_seminc_fused.val;
-            if (header.command_fields.unicast_seminc_fused.flush) {
+            if (flush) {
                 flush_write_to_noc_pipeline(rx_channel_id);
             }
             noc_semaphore_inc<true>(
@@ -232,11 +339,74 @@ FORCE_INLINE
                 increment,
                 tt::tt_fabric::edm_to_local_chip_noc,
                 tt::tt_fabric::forward_and_local_write_noc_vc);
+#endif
         } break;
 
         case tt::tt_fabric::NocSendType::NOC_UNICAST_SCATTER_WRITE: {
             using ChunkEncoding = tt::tt_fabric::NocScatterWriteChunkEncoding;
             const auto& scatter = header.command_fields.unicast_scatter_write;
+#if defined(COMPILE_FOR_DRISC) && defined(ARCH_BLACKHOLE) && !defined(DEBUG_PRINT_ENABLED) && !defined(WATCHER_ENABLED)
+            static_assert(offsetof(tt::tt_fabric::NocUnicastScatterCommandHeader, chunk_size) == 32);
+            static_assert(offsetof(tt::tt_fabric::NocUnicastScatterCommandHeader, chunk_count) == 38);
+            static_assert(offsetof(tt::tt_fabric::NocUnicastScatterCommandHeader, chunk_encoding) == 39);
+            const auto* const scatter_words = reinterpret_cast<const uint32_t*>(&scatter.chunk_size[0]);
+            const uint32_t sizes_01 = scatter_words[0];
+            const uint32_t size2_cnt_enc = scatter_words[1];
+            const uint8_t chunk_count = static_cast<uint8_t>(size2_cnt_enc >> 16);
+            uint8_t packet_encoding = static_cast<uint8_t>(size2_cnt_enc >> 24);
+
+            size_t offset = 0;
+            const uint8_t last_chunk_index = chunk_count - 1;
+            uint16_t chunk_size = static_cast<uint16_t>(sizes_01);
+            const uint64_t addr0 = scatter.noc_address[0];
+            drisc_local_write_one_packet</*set_trid=*/true, /*update_counters=*/false>(
+                payload_start_address, addr0, chunk_size, transaction_id);
+            offset += chunk_size;
+            shift_to_next_chunk(packet_encoding);
+            uint32_t num_write_chunks = 1;
+
+            if (chunk_count > 2) {
+                chunk_size = static_cast<uint16_t>(sizes_01 >> 16);
+                const uint64_t addr1 = scatter.noc_address[1];
+                drisc_local_write_one_packet</*set_trid=*/false, /*update_counters=*/false>(
+                    payload_start_address + offset, addr1, chunk_size, transaction_id);
+                offset += chunk_size;
+                shift_to_next_chunk(packet_encoding);
+                num_write_chunks++;
+
+                if (chunk_count == 4) [[likely]] {
+                    chunk_size = static_cast<uint16_t>(size2_cnt_enc);
+                    const uint64_t addr2 = scatter.noc_address[2];
+                    drisc_local_write_one_packet</*set_trid=*/false, /*update_counters=*/false>(
+                        payload_start_address + offset, addr2, chunk_size, transaction_id);
+                    offset += chunk_size;
+                    shift_to_next_chunk(packet_encoding);
+                    num_write_chunks++;
+                }
+            }
+
+            constexpr uint8_t CHUNK_ENCODING_MASK = 0b11;
+            const ChunkEncoding chunk_encoding = static_cast<ChunkEncoding>(packet_encoding & CHUNK_ENCODING_MASK);
+            const uint64_t final_destination_noc_address = scatter.noc_address[last_chunk_index];
+            if (chunk_encoding == ChunkEncoding::CHUNK_ENCODING_UNICAST_WRITE) {
+                const uint16_t final_chunk_size = static_cast<uint16_t>(payload_size_bytes - offset);
+                drisc_local_write_one_packet</*set_trid=*/false, /*update_counters=*/false>(
+                    payload_start_address + offset, final_destination_noc_address, final_chunk_size, transaction_id);
+                num_write_chunks++;
+                noc_nonposted_writes_num_issued[tt::tt_fabric::edm_to_local_chip_noc] += num_write_chunks;
+                noc_nonposted_writes_acked[tt::tt_fabric::edm_to_local_chip_noc] += num_write_chunks;
+            } else if (chunk_encoding != ChunkEncoding::CHUNK_ENCODING_NOP) {
+                noc_nonposted_writes_num_issued[tt::tt_fabric::edm_to_local_chip_noc] += num_write_chunks;
+                noc_nonposted_writes_acked[tt::tt_fabric::edm_to_local_chip_noc] += num_write_chunks;
+                drisc_local_semaphore_inc(
+                    final_destination_noc_address,
+                    scatter.chunk_size[last_chunk_index],
+                    chunk_encoding == ChunkEncoding::CHUNK_ENCODING_SEMINC_FLUSH,
+                    rx_channel_id);
+            } else {
+                ASSERT(false);
+            }
+#else
             const uint8_t chunk_count = scatter.chunk_count;
             uint8_t packet_encoding = scatter.chunk_encoding;
 
@@ -257,7 +427,8 @@ FORCE_INLINE
                 chunk_size,
                 transaction_id,
                 tt::tt_fabric::local_chip_data_cmd_buf,
-                tt::tt_fabric::edm_to_local_chip_noc);
+                tt::tt_fabric::edm_to_local_chip_noc,
+                tt::tt_fabric::forward_and_local_write_noc_vc);
             offset += chunk_size;
             shift_to_next_chunk(packet_encoding);
 
@@ -270,7 +441,8 @@ FORCE_INLINE
                     chunk_size,
                     transaction_id,
                     tt::tt_fabric::local_chip_data_cmd_buf,
-                    tt::tt_fabric::edm_to_local_chip_noc);
+                    tt::tt_fabric::edm_to_local_chip_noc,
+                    tt::tt_fabric::forward_and_local_write_noc_vc);
                 offset += chunk_size;
                 shift_to_next_chunk(packet_encoding);
 
@@ -283,7 +455,8 @@ FORCE_INLINE
                         chunk_size,
                         transaction_id,
                         tt::tt_fabric::local_chip_data_cmd_buf,
-                        tt::tt_fabric::edm_to_local_chip_noc);
+                        tt::tt_fabric::edm_to_local_chip_noc,
+                        tt::tt_fabric::forward_and_local_write_noc_vc);
                     offset += chunk_size;
                     shift_to_next_chunk(packet_encoding);
                 }
@@ -301,7 +474,8 @@ FORCE_INLINE
                     final_chunk_size,
                     transaction_id,
                     tt::tt_fabric::local_chip_data_cmd_buf,
-                    tt::tt_fabric::edm_to_local_chip_noc);
+                    tt::tt_fabric::edm_to_local_chip_noc,
+                    tt::tt_fabric::forward_and_local_write_noc_vc);
             } else if (chunk_encoding != ChunkEncoding::CHUNK_ENCODING_NOP) {
                 if (chunk_encoding == ChunkEncoding::CHUNK_ENCODING_SEMINC_FLUSH) {
                     flush_write_to_noc_pipeline(rx_channel_id);
@@ -318,6 +492,7 @@ FORCE_INLINE
                 // chunk_count-1 times. Therefore, we should never get here (seeing a NOP).
                 ASSERT(false);
             }
+#endif
         } break;
 
         case tt::tt_fabric::NocSendType::NOC_MULTICAST_WRITE:
@@ -452,7 +627,12 @@ void update_packet_header_for_next_hop(
 // !!!WARNING!!! * ENSURE DOWNSTREAM EDM HAS SPACE FOR PACKET BEFORE CALLING
 // !!!WARNING!!!
 // This function does a write, so needs to be volatile to avoid compiler optimizations
-template <bool enable_deadlock_avoidance, bool stateful_api, bool increment_pointers = true, uint8_t NUM_SENDER_BUFFERS>
+template <
+    bool enable_deadlock_avoidance,
+    bool stateful_api,
+    bool increment_pointers = true,
+    bool update_local_free_slots = true,
+    uint8_t NUM_SENDER_BUFFERS>
 #if !defined(FABRIC_2D) && !defined(ARCH_BLACKHOLE)
 FORCE_INLINE
 #endif
@@ -475,7 +655,8 @@ FORCE_INLINE
         enable_deadlock_avoidance,
         tt::tt_fabric::edm_to_downstream_noc,
         stateful_api,
-        increment_pointers>(
+        increment_pointers,
+        update_local_free_slots>(
         reinterpret_cast<size_t>(packet_header), payload_size_bytes + sizeof(PACKET_HEADER_TYPE), transaction_id);
     if constexpr (!increment_pointers) {
         update_packet_header_for_next_hop(downstream_edm_interface, cached_routing_fields.value);

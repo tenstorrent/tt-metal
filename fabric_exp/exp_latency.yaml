@@ -1,0 +1,47 @@
+# 2D (Mesh, VC0) latency on the 2x4 P150x8 mesh, untrimmed router: round trip of one packet at a time to a responder
+# (latency_test_mode), small and full-size packets. Chip ids are row-major: [0, 0..3] top row, [0, 4..7] bottom row.
+Tests:
+  - name: "Lat1HopEW"
+    latency_test_mode: true
+    fabric_setup:
+      topology: Mesh
+    parametrization_params:
+      size: [16, 4096]
+      ntype: [unicast_write, fused_atomic_inc]
+    senders:
+      - device: [0, 0]
+        patterns:
+          - ftype: unicast
+            num_packets: 1000
+            destination:
+              device: [0, 1]
+
+  - name: "Lat1HopNS"
+    latency_test_mode: true
+    fabric_setup:
+      topology: Mesh
+    parametrization_params:
+      size: [16, 4096]
+      ntype: [unicast_write, fused_atomic_inc]
+    senders:
+      - device: [0, 0]
+        patterns:
+          - ftype: unicast
+            num_packets: 1000
+            destination:
+              device: [0, 4]
+
+  - name: "Lat3HopEW"
+    latency_test_mode: true
+    fabric_setup:
+      topology: Mesh
+    parametrization_params:
+      size: [16, 4096]
+      ntype: [unicast_write, fused_atomic_inc]
+    senders:
+      - device: [0, 0]
+        patterns:
+          - ftype: unicast
+            num_packets: 1000
+            destination:
+              device: [0, 3]

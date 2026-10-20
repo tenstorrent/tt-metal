@@ -31,6 +31,7 @@
 #include "tt_fabric_test_bandwidth_profiler.hpp"
 #include "tt_fabric_test_eth_readback.hpp"
 #include "tt_fabric_test_code_profiler.hpp"
+#include "tt_fabric_test_phase_profiler.hpp"
 #include "tt_fabric_telemetry_manager.hpp"
 #include "tt_fabric_test_constants.hpp"
 #include <tt-logger/tt-logger.hpp>
@@ -206,6 +207,10 @@ public:
         return empty_entries;
     }
 
+    // Experimental router phase profiling (TT_FABRIC_PHASE_PROFILE)
+    void begin_phase_profile();
+    void end_phase_profile(const std::string& test_name);
+
     void set_global_sync(bool global_sync) { global_sync_ = global_sync; }
 
     bool has_test_failures() const { return has_test_failures_; }
@@ -298,6 +303,7 @@ private:
     // Ethernet core buffer readback helper
     std::unique_ptr<EthCoreBufferReadback> eth_readback_;
     std::unique_ptr<CodeProfiler> code_profiler_;
+    std::unique_ptr<PhaseProfiler> phase_profiler_;
     std::unique_ptr<TelemetryManager> telemetry_manager_;
 
     // Getter for lazy initialization of eth_readback_

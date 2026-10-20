@@ -110,9 +110,20 @@ struct RouterStaticSizedChannelWriterAdapter {
         // The EDM is guaranteed to know the number of free slots of the downstream EDM
         // becausen all EDMs are brought up/initialized at the same time
         init_ptr_val(this->worker_credits_stream_id, EDM_NUM_BUFFER_SLOTS);
+#if defined(COMPILE_FOR_DRISC)
+        ASSERT(this->buffer_size_bytes == channel_buffer_size);
+        this->edm_buffer_base_addr = static_cast<uint32_t>(edm_buffer_base_addr);
+        this->edm_buffer_cur_slot_addr = static_cast<uint32_t>(edm_buffer_base_addr);
+        this->edm_buffer_last_slot_addr =
+            static_cast<uint32_t>(edm_buffer_base_addr) + (EDM_NUM_BUFFER_SLOTS - 1) * this->buffer_size_bytes;
+        this->edm_noc_coord = static_cast<uint16_t>(
+            get_noc_addr(this->edm_noc_x, this->edm_noc_y, 0, tt::tt_fabric::edm_to_downstream_noc) >>
+            NOC_ADDR_COORD_SHIFT);
+#else
         for (size_t i = 0; i < EDM_NUM_BUFFER_SLOTS; ++i) {
             this->edm_buffer_slot_addrs[i] = edm_buffer_base_addr + (i * this->buffer_size_bytes);
         }
+#endif
     }
 
     template <ProgrammableCoreType my_core_type = ProgrammableCoreType::ACTIVE_ETH>
@@ -174,21 +185,31 @@ public:
         return get_ptr_val(worker_credits_stream_id) != 0;
     }
 
-    template <bool enable_deadlock_avoidance, uint8_t EDM_TO_DOWNSTREAM_NOC, bool stateful_api, bool increment_pointers>
+    template <
+        bool enable_deadlock_avoidance,
+        uint8_t EDM_TO_DOWNSTREAM_NOC,
+        bool stateful_api,
+        bool increment_pointers,
+        bool update_local_free_slots = true>
     FORCE_INLINE void send_payload_non_blocking_from_address_with_trid(
         uint32_t source_address, size_t size_bytes, uint8_t trid) {
         send_payload_from_address_with_trid_impl<
             enable_deadlock_avoidance,
             EDM_TO_DOWNSTREAM_NOC,
             stateful_api,
-            increment_pointers>(source_address, size_bytes, trid);
+            increment_pointers,
+            update_local_free_slots>(source_address, size_bytes, trid);
     }
 
     template <bool inc_pointers = true>
     FORCE_INLINE void update_edm_buffer_slot_word(uint32_t offset, uint32_t data, uint8_t noc = noc_index) {
         uint64_t noc_addr;
+#if defined(COMPILE_FOR_DRISC)
+        noc_addr = get_noc_addr(this->edm_noc_x, this->edm_noc_y, this->edm_buffer_cur_slot_addr + offset, noc);
+#else
         noc_addr = get_noc_addr(
             this->edm_noc_x, this->edm_noc_y, this->edm_buffer_slot_addrs[this->get_buffer_slot_index()] + offset, noc);
+#endif
 
         noc_inline_dw_write<InlineWriteDst::L1>(noc_addr, data, 0xf, noc);
         if constexpr (inc_pointers) {
@@ -209,7 +230,14 @@ public:
 
 private:
     mutable uint64_t noc_sem_addr_;
+#if defined(COMPILE_FOR_DRISC)
+    uint32_t edm_buffer_base_addr;
+    uint32_t edm_buffer_cur_slot_addr;
+    uint32_t edm_buffer_last_slot_addr;
+    uint16_t edm_noc_coord;
+#else
     std::array<uint32_t, EDM_NUM_BUFFER_SLOTS> edm_buffer_slot_addrs;
+#endif
 
     uint32_t worker_credits_stream_id;
     // Local copy of the the free slots on the downstream router
@@ -227,7 +255,9 @@ private:
 
     uint16_t buffer_size_bytes;
 
+#if !defined(COMPILE_FOR_DRISC)
     BufferIndex buffer_slot_index;
+#endif
 
     // noc location of the edm we are connected to (where packets are sent to)
     uint8_t edm_noc_x;
@@ -251,23 +281,59 @@ private:
     void open_finish() {
         connection::open_finish<posted, WORKER_HANDSHAKE_NOC>(
             this->edm_connection_handshake_l1_addr, this->worker_teardown_addr, this->edm_noc_x, this->edm_noc_y);
+#if defined(COMPILE_FOR_DRISC)
+        this->edm_buffer_cur_slot_addr = this->edm_buffer_base_addr;
+#else
         this->buffer_slot_index = BufferIndex(0);
+#endif
     }
 
-    template <bool stateful_api = false, bool enable_deadlock_avoidance = false>
+    template <bool stateful_api = false, bool enable_deadlock_avoidance = false, bool update_local_free_slots = true>
     FORCE_INLINE void update_edm_buffer_free_slots(uint8_t noc = noc_index) {
+#if defined(COMPILE_FOR_DRISC)
+        const uint8_t sync_cmd_buf = receiver_channel_forwarding_sync_cmd_buf_ids[0];
+#if defined(ARCH_BLACKHOLE) && !defined(DEBUG_PRINT_ENABLED) && !defined(WATCHER_ENABLED)
+        // On DRISC, setup_edm_noc_cmd_buf pre-programs NOC_CTRL (posted), NOC_AT_DATA (-1), NOC_TARG_ADDR_MID (0),
+        // and NOC_AT_LEN_BE (0xF) on NoC0 sync_cmd_buf (1), and nothing else uses NoC0 after connection open.
+        if constexpr (stateful_api) {
+            if constexpr (enable_deadlock_avoidance) {
+                noc_inline_dw_write_with_state<true, false, true, false, false, InlineWriteDst::REG>(
+                    0, this->edm_buffer_remote_free_slots_update_addr, sync_cmd_buf, noc);
+            } else {
+                noc_inline_dw_write_with_state<false, false, true, false, false, InlineWriteDst::REG>(
+                    0, 0, sync_cmd_buf, noc);
+            }
+        } else {
+            while (!noc_cmd_buf_ready(noc, sync_cmd_buf));
+            NOC_CMD_BUF_WRITE_REG(noc, sync_cmd_buf, NOC_TARG_ADDR_LO, this->edm_buffer_remote_free_slots_update_addr);
+            NOC_CMD_BUF_WRITE_REG(noc, sync_cmd_buf, NOC_TARG_ADDR_COORDINATE, this->edm_noc_coord);
+            NOC_CMD_BUF_WRITE_REG(noc, sync_cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
+            noc_posted_writes_num_issued[noc] += 1;
+        }
+        if constexpr (update_local_free_slots) {
+            if constexpr (stateful_api) {
+                increment_local_update_ptr_val<vc_0_free_slots_from_downstream_edge_1_stream_id>(-1);
+            } else {
+                *this->edm_buffer_local_free_slots_update_ptr = pack_value_for_inc_on_write_stream_reg_write(-1);
+            }
+        }
+        return;
+#endif
+#else
+        const uint8_t sync_cmd_buf = this->sync_noc_cmd_buf;
+#endif
         if constexpr (stateful_api) {
             if constexpr (enable_deadlock_avoidance) {
                 noc_inline_dw_write_with_state<true, false, true, false, false, InlineWriteDst::REG>(
                     0,  // val unused
                     this->edm_buffer_remote_free_slots_update_addr,
-                    this->sync_noc_cmd_buf,
+                    sync_cmd_buf,
                     noc);
             } else {
                 noc_inline_dw_write_with_state<false, false, true, false, false, InlineWriteDst::REG>(
                     0,  // val unused
                     0,  // addr unused
-                    this->sync_noc_cmd_buf,
+                    sync_cmd_buf,
                     noc);
             }
         } else {
@@ -276,29 +342,72 @@ private:
                 get_noc_addr(this->edm_noc_x, this->edm_noc_y, this->edm_buffer_remote_free_slots_update_addr, noc);
             noc_inline_dw_write<InlineWriteDst::REG>(noc_sem_addr, packed_val, 0xf, noc);
         }
-        // Local free-slots consume: same stream page as the poll, update-reg folded at init.
-        *this->edm_buffer_local_free_slots_update_ptr = pack_value_for_inc_on_write_stream_reg_write(-1);
+        if constexpr (update_local_free_slots) {
+            // Local free-slots consume: same stream page as the poll, update-reg folded at init.
+            *this->edm_buffer_local_free_slots_update_ptr = pack_value_for_inc_on_write_stream_reg_write(-1);
+        }
     }
 
+#if !defined(COMPILE_FOR_DRISC)
     FORCE_INLINE uint8_t get_buffer_slot_index() const { return this->buffer_slot_index.get(); }
+#endif
 
     FORCE_INLINE void advance_buffer_slot_write_index() {
+#if defined(COMPILE_FOR_DRISC)
+        const uint32_t cur_addr = this->edm_buffer_cur_slot_addr;
+        this->edm_buffer_cur_slot_addr =
+            cur_addr == this->edm_buffer_last_slot_addr ? this->edm_buffer_base_addr : cur_addr + channel_buffer_size;
+#else
         this->buffer_slot_index = BufferIndex{wrap_increment<EDM_NUM_BUFFER_SLOTS>(this->buffer_slot_index.get())};
+#endif
     }
 
-    template <bool stateful_api = false, bool enable_deadlock_avoidance = false>
+    template <bool stateful_api = false, bool enable_deadlock_avoidance = false, bool update_local_free_slots = true>
     FORCE_INLINE void post_send_payload_increment_pointers(uint8_t noc = noc_index) {
         this->advance_buffer_slot_write_index();
-        this->update_edm_buffer_free_slots<stateful_api, enable_deadlock_avoidance>(noc);
+        this->update_edm_buffer_free_slots<stateful_api, enable_deadlock_avoidance, update_local_free_slots>(noc);
     }
 
-    template <bool enable_deadlock_avoidance, uint8_t EDM_TO_DOWNSTREAM_NOC, bool stateful_api, bool increment_pointers>
+    template <
+        bool enable_deadlock_avoidance,
+        uint8_t EDM_TO_DOWNSTREAM_NOC,
+        bool stateful_api,
+        bool increment_pointers,
+        bool update_local_free_slots = true>
     FORCE_INLINE void send_payload_from_address_with_trid_impl(
         uint32_t source_address, size_t size_bytes, uint8_t trid) {
         ASSERT(size_bytes <= this->buffer_size_bytes);
         ASSERT(tt::tt_fabric::is_valid(
             *const_cast<PACKET_HEADER_TYPE*>(reinterpret_cast<volatile PACKET_HEADER_TYPE*>(source_address))));
 
+#if defined(COMPILE_FOR_DRISC)
+        const uint8_t data_cmd_buf = receiver_channel_forwarding_data_cmd_buf_ids[0];
+#if defined(ARCH_BLACKHOLE) && !defined(DEBUG_PRINT_ENABLED) && !defined(WATCHER_ENABLED)
+        while (!noc_cmd_buf_ready(EDM_TO_DOWNSTREAM_NOC, data_cmd_buf));
+        NOC_CMD_BUF_WRITE_REG(EDM_TO_DOWNSTREAM_NOC, data_cmd_buf, NOC_PACKET_TAG, NOC_PACKET_TAG_TRANSACTION_ID(trid));
+        if constexpr (!stateful_api) {
+            NOC_CMD_BUF_WRITE_REG(EDM_TO_DOWNSTREAM_NOC, data_cmd_buf, NOC_RET_ADDR_COORDINATE, this->edm_noc_coord);
+        }
+        ncrisc_noc_write_with_state<
+            DM_DEDICATED_NOC,
+            /*posted=*/true,
+            /*update_counter=*/true,
+            /*one_packet=*/false,
+            /*skip_cmdbuf_chk=*/true>(
+            EDM_TO_DOWNSTREAM_NOC, data_cmd_buf, source_address, this->edm_buffer_cur_slot_addr, size_bytes);
+#else
+        send_chunk_from_address_with_trid<stateful_api>(
+            source_address,
+            1,
+            size_bytes,
+            this->edm_noc_coord,
+            this->edm_buffer_cur_slot_addr,
+            trid,
+            EDM_TO_DOWNSTREAM_NOC,
+            data_cmd_buf);
+#endif
+#else
+        const uint8_t data_cmd_buf = this->data_noc_cmd_buf;
         send_chunk_from_address_with_trid<stateful_api>(
             source_address,
             1,
@@ -307,10 +416,12 @@ private:
             this->edm_buffer_slot_addrs[this->get_buffer_slot_index()],
             trid,
             EDM_TO_DOWNSTREAM_NOC,
-            this->data_noc_cmd_buf);
+            data_cmd_buf);
+#endif
 
         if constexpr (increment_pointers) {
-            post_send_payload_increment_pointers<stateful_api, enable_deadlock_avoidance>(EDM_TO_DOWNSTREAM_NOC);
+            post_send_payload_increment_pointers<stateful_api, enable_deadlock_avoidance, update_local_free_slots>(
+                EDM_TO_DOWNSTREAM_NOC);
         }
     }
 };

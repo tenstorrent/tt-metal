@@ -1,0 +1,813 @@
+<title>Blackhole 2D Router Waterfall</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@75..100,500..800&family=JetBrains+Mono:wght@400;600&family=Source+Sans+3:ital,wght@0,400;0,600;1,400&display=swap">
+<style>
+/* Layout: one reading column; the waterfall and listings break out to the full width on one shared cycle axis. */
+:root {
+  --bg: #f1f3f5; --panel: #ffffff; --ink: #17202a; --muted: #5a6775; --rule: #d5dbe2; --code-bg: #e8ecf0;
+  --move: #2a5aa8; --move-ink: #ffffff;
+  --book: #9db8de; --book-ink: #0e1c30;
+  --check: #d08c20; --check-ink: #221502;
+  --unk: #a0649a;
+  --wire: #3c4754; --wire-ink: #ffffff;
+  --idle: #a9b3bf;
+  --target: #c0392b; --floor: #6a4db0;
+  --stripe: rgba(8, 12, 18, 0.32);
+  --sel: #17202a;
+  --f-display: "Archivo", "Arial Narrow", "Helvetica Neue", sans-serif;
+  --f-body: "Source Sans 3", "Segoe UI", system-ui, sans-serif;
+  --f-mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0e1318; --panel: #151c23; --ink: #e1e7ed; --muted: #93a0ad; --rule: #29333e; --code-bg: #1a222b;
+    --move: #5f90dc; --move-ink: #06101d;
+    --book: #3a5377; --book-ink: #e1e7ed;
+    --check: #e1a547; --check-ink: #1c1204;
+    --unk: #c48cbe;
+    --wire: #8b97a5; --wire-ink: #0e1318;
+    --idle: #4b5663;
+    --target: #ff7a6a; --floor: #a68cf0;
+    --stripe: rgba(0, 0, 0, 0.38);
+    --sel: #ffffff;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0e1318; --panel: #151c23; --ink: #e1e7ed; --muted: #93a0ad; --rule: #29333e; --code-bg: #1a222b;
+  --move: #5f90dc; --move-ink: #06101d;
+  --book: #3a5377; --book-ink: #e1e7ed;
+  --check: #e1a547; --check-ink: #1c1204;
+  --unk: #c48cbe;
+  --wire: #8b97a5; --wire-ink: #0e1318;
+  --idle: #4b5663;
+  --target: #ff7a6a; --floor: #a68cf0;
+  --stripe: rgba(0, 0, 0, 0.38);
+  --sel: #ffffff;
+  color-scheme: dark;
+}
+
+body { background: var(--bg); color: var(--ink); font: 400 16px/1.55 var(--f-body); }
+.wrap { max-width: 1180px; margin: 0 auto; padding-inline: 20px; padding-block: 36px 72px; display: grid; gap: 56px; }
+section { display: grid; gap: 18px; min-width: 0; }
+h1, h2, h3 { font-family: var(--f-display); font-variation-settings: "wdth" 82; text-wrap: balance; margin: 0; line-height: 1.12; }
+h1 { font-size: clamp(30px, 4.4vw, 46px); font-weight: 750; letter-spacing: -0.01em; }
+h2 { font-size: 25px; font-weight: 700; }
+h3 { font-size: 19px; font-weight: 650; }
+p { margin: 0; max-width: 72ch; }
+.prose { display: grid; gap: 12px; }
+.eyebrow { font: 600 12px/1.3 var(--f-mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+.lede { font-size: 18px; color: var(--ink); max-width: 70ch; }
+code, .mono { font-family: var(--f-mono); font-size: 0.86em; }
+a { color: var(--move); }
+.muted { color: var(--muted); }
+.num { font-variant-numeric: tabular-nums; }
+
+/* Case settings */
+.case { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 1px; background: var(--rule); border: 1px solid var(--rule); border-radius: 6px; overflow: hidden; }
+.case div { background: var(--panel); padding: 10px 14px; display: grid; gap: 2px; min-width: 0; }
+.case dt { font: 600 11px/1.3 var(--f-mono); letter-spacing: 0.07em; text-transform: uppercase; color: var(--muted); }
+.case dd { margin: 0; font-size: 15px; }
+
+/* Stage summary */
+.stages { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
+.stage-sum { border-top: 3px solid var(--ink); padding-top: 8px; display: grid; gap: 2px; align-content: start; }
+.stage-sum.parked { border-top-style: dashed; }
+.stage-sum .v { font: 600 30px/1.1 var(--f-mono); font-variant-numeric: tabular-nums; }
+.stage-sum .v small { font-size: 13px; font-weight: 400; color: var(--muted); }
+.stage-sum .n { font: 650 15px/1.3 var(--f-display); font-variation-settings: "wdth" 85; }
+.stage-sum .s { font-size: 14px; color: var(--muted); }
+
+/* Legend */
+.legend { display: flex; flex-wrap: wrap; gap: 8px 20px; font-size: 14px; align-items: center; }
+.legend span { display: inline-flex; align-items: center; gap: 7px; }
+.sw { width: 26px; height: 13px; border-radius: 2px; display: inline-block; position: relative; flex: none; }
+.sw.move { background: var(--move); }
+.sw.check { background: var(--check); }
+.sw.wire { background: var(--wire); }
+.sw.wait { background: var(--check); }
+.sw.wait::after { content: ""; position: absolute; inset: 0; background: repeating-linear-gradient(135deg, var(--stripe) 0 3px, transparent 3px 6px); border-radius: 2px; }
+.sw.unk { background: repeating-linear-gradient(45deg, var(--unk) 0 3px, transparent 3px 6px); box-shadow: inset 0 0 0 1px var(--unk); }
+.sw.idle { border: 1px dashed var(--idle); }
+.ln { width: 0; height: 16px; display: inline-block; }
+.ln.meas { border-left: 2px solid var(--ink); }
+.ln.target { border-left: 2px dashed var(--target); }
+.ln.floor { border-left: 2px dotted var(--floor); }
+
+/* Waterfall */
+.wf-scroll { overflow-x: auto; background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; }
+.wf { min-width: 780px; padding: 6px 16px 14px; display: grid; gap: 4px; }
+.row { display: grid; grid-template-columns: 118px 1fr; align-items: stretch; }
+.axis { position: relative; height: 22px; border-bottom: 1px solid var(--rule); }
+.axis.bottom { border-bottom: 0; border-top: 1px solid var(--rule); }
+.tick { position: absolute; bottom: 3px; transform: translateX(-50%); font: 400 11px/1 var(--f-mono); color: var(--muted); font-variant-numeric: tabular-nums; }
+.axis.bottom .tick { bottom: auto; top: 5px; }
+.axis-cap { font: 600 11px/22px var(--f-mono); color: var(--muted); letter-spacing: 0.06em; text-transform: uppercase; }
+.stage { display: grid; gap: 2px; padding-top: 16px; }
+.stage + .stage { border-top: 1px solid var(--rule); margin-top: 10px; }
+.stage-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 14px; }
+.stage-head h3 { font-size: 18px; }
+.chip { font: 600 11px/1 var(--f-mono); letter-spacing: 0.05em; padding: 4px 7px; border-radius: 3px; border: 1px solid var(--rule); color: var(--muted); text-transform: uppercase; }
+.chip.parked { border-style: dashed; }
+.stage-note { font-size: 14px; color: var(--muted); max-width: 100ch; }
+.rail { position: relative; height: 34px; }
+.tag { position: absolute; font: 600 11px/1 var(--f-mono); white-space: nowrap; font-variant-numeric: tabular-nums; padding-inline: 4px; }
+.tag.t1 { top: 2px; color: var(--ink); }
+.tag.t2 { top: 18px; }
+.tag.target { color: var(--target); }
+.tag.floor { color: var(--floor); }
+.tag.l { transform: translateX(0); }
+.tag.r { transform: translateX(-100%); }
+.lane-label { font: 600 13px/1.1 var(--f-mono); display: flex; flex-direction: column; justify-content: center; gap: 2px; padding-right: 8px; }
+.lane-label small { font: 400 11.5px/1.1 var(--f-body); color: var(--muted); }
+.track { position: relative; height: 36px; }
+.seg { position: absolute; top: 4px; bottom: 4px; border: 0; margin: 0; padding: 0 5px; border-radius: 2px; overflow: hidden; white-space: nowrap; cursor: pointer; display: flex; align-items: center; font: 600 11.5px/1 var(--f-mono); text-align: left; box-shadow: inset -1px 0 0 var(--panel); }
+.seg .t { position: relative; z-index: 1; overflow: hidden; text-overflow: clip; }
+.seg .w { position: absolute; top: 0; bottom: 0; right: 0; background: repeating-linear-gradient(135deg, var(--stripe) 0 3px, transparent 3px 6px); }
+.seg.move { background: var(--move); color: var(--move-ink); }
+.seg.check { background: var(--check); color: var(--check-ink); }
+.seg.wire { background: var(--wire); color: var(--wire-ink); }
+.seg.unk { background: repeating-linear-gradient(45deg, var(--unk) 0 3px, transparent 3px 7px); box-shadow: inset 0 0 0 1px var(--unk); color: var(--ink); }
+.seg.idle { background: transparent; box-shadow: none; outline: 1px dashed var(--idle); outline-offset: -1px; color: var(--muted); font-weight: 400; }
+.seg:hover { filter: brightness(1.08); }
+.seg:focus-visible, .seg[aria-pressed="true"] { outline: 2px solid var(--sel); outline-offset: 1px; z-index: 2; }
+.mk { position: absolute; top: -2px; bottom: -2px; width: 0; pointer-events: none; z-index: 3; }
+.mk.meas { border-left: 2px solid var(--ink); }
+.mk.target { border-left: 1.5px dashed var(--target); }
+.mk.floor { border-left: 1.5px dotted var(--floor); }
+
+/* Detail */
+.detail { display: grid; grid-template-columns: minmax(200px, 260px) 1fr; gap: 18px 28px; background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; padding: 18px 20px; }
+.detail .where { font: 600 11px/1.3 var(--f-mono); letter-spacing: 0.07em; text-transform: uppercase; color: var(--muted); }
+.detail .name { font: 700 22px/1.15 var(--f-display); font-variation-settings: "wdth" 82; margin-top: 4px; }
+.detail .big { font: 600 40px/1 var(--f-mono); font-variant-numeric: tabular-nums; margin-top: 10px; }
+.detail .big small { font-size: 14px; font-weight: 400; color: var(--muted); }
+.detail dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; margin: 12px 0 0; font-size: 14px; }
+.detail dt { color: var(--muted); }
+.detail dd { margin: 0; font-family: var(--f-mono); font-size: 13px; font-variant-numeric: tabular-nums; }
+.detail .desc { display: grid; gap: 10px; align-content: start; min-width: 0; }
+.badge { display: inline-block; font: 600 11px/1 var(--f-mono); letter-spacing: 0.05em; padding: 4px 7px; border-radius: 3px; text-transform: uppercase; }
+.badge.measured { background: var(--ink); color: var(--panel); }
+.badge.derived { box-shadow: inset 0 0 0 1px var(--ink); color: var(--ink); }
+.badge.estimated { box-shadow: inset 0 0 0 1px var(--muted); color: var(--muted); border: 0; }
+.hint { font-size: 13px; color: var(--muted); }
+
+/* Tables */
+.tbl-scroll { overflow-x: auto; min-width: 0; }
+table { border-collapse: collapse; width: 100%; font-size: 14.5px; }
+th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+th { font: 600 11.5px/1.3 var(--f-mono); letter-spacing: 0.05em; text-transform: uppercase; color: var(--muted); border-bottom-color: var(--ink); }
+td.r, th.r { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+td.r { font-family: var(--f-mono); font-size: 13.5px; }
+tr.total td { border-top: 1.5px solid var(--ink); font-weight: 600; }
+sup.src { font: 600 9.5px/1 var(--f-mono); color: var(--muted); margin-left: 2px; }
+.dot { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 6px; vertical-align: 0; }
+.dot.move { background: var(--move); }
+.dot.book { background: var(--book); }
+.dot.wait { background: var(--check); background-image: repeating-linear-gradient(135deg, var(--stripe) 0 2px, transparent 2px 4px); }
+.dot.check { background: var(--check); }
+
+/* Send anatomy bar */
+.anat { display: flex; height: 46px; border-radius: 3px; overflow: hidden; min-width: 640px; }
+.anat > div { position: relative; display: flex; flex-direction: column; justify-content: center; padding: 0 5px; font: 600 11px/1.15 var(--f-mono); white-space: nowrap; overflow: hidden; box-shadow: inset -1px 0 0 var(--panel); }
+.anat .move { background: var(--move); color: var(--move-ink); }
+.anat .book { background: var(--book); color: var(--book-ink); }
+.anat .wait { background: var(--check); color: var(--check-ink); }
+.anat .st { position: absolute; top: 0; bottom: 0; right: 0; background: repeating-linear-gradient(135deg, var(--stripe) 0 3px, transparent 3px 6px); }
+.anat span { position: relative; z-index: 1; }
+.anat-scale { display: flex; justify-content: space-between; font: 400 11px/1 var(--f-mono); color: var(--muted); min-width: 640px; padding-top: 4px; }
+.split3 { display: flex; flex-wrap: wrap; gap: 8px 22px; font-size: 14.5px; }
+.split3 b { font-family: var(--f-mono); font-size: 14px; }
+
+/* Listings */
+.listing { width: 100%; font: 400 12.5px/1.45 var(--f-mono); border-collapse: collapse; }
+.listing td { padding: 2px 8px; border-bottom: 1px solid var(--rule); white-space: nowrap; }
+.listing td.note { white-space: normal; font-family: var(--f-body); font-size: 13.5px; color: var(--muted); min-width: 240px; }
+.listing td.addr { color: var(--muted); }
+.listing tr.g-move td.op { box-shadow: inset 3px 0 0 var(--move); }
+.listing tr.g-book td.op { box-shadow: inset 3px 0 0 var(--book); }
+.listing tr.g-wait td.op { box-shadow: inset 3px 0 0 var(--check); }
+.listing tr.read td.op { font-weight: 600; }
+.pair { display: grid; grid-template-columns: repeat(auto-fit, minmax(330px, 1fr)); gap: 20px; }
+.pair > div { min-width: 0; display: grid; gap: 8px; align-content: start; }
+.pair h3 .mono { font-size: 15px; color: var(--muted); font-weight: 400; }
+.cmd { background: var(--code-bg); border-radius: 4px; padding: 10px 12px; font: 400 13px/1.5 var(--f-mono); overflow-x: auto; white-space: pre; }
+ul.plain { margin: 0; padding-left: 20px; display: grid; gap: 6px; max-width: 80ch; }
+.status { font: 600 11px/1 var(--f-mono); text-transform: uppercase; letter-spacing: 0.04em; white-space: nowrap; }
+.status.done { color: var(--move); }
+.status.parked, .status.out { color: var(--target); }
+.status.open { color: var(--muted); }
+footer { font-size: 13px; color: var(--muted); border-top: 1px solid var(--rule); padding-top: 14px; }
+
+@media (max-width: 640px) {
+  .wrap { gap: 44px; padding-inline: 16px; }
+  .detail { grid-template-columns: 1fr; }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<div class="wrap">
+
+<header class="prose">
+  <div class="eyebrow">Fabric DRISC offload study · Blackhole P150 · ERISC at 1.35 GHz</div>
+  <h1>Where a 4 KiB packet's cycles go on the 2D router</h1>
+  <p class="lede">One flow, 2D 1-hop write, E/W, 4 KiB, untrimmed router: E0 polls all four VC0 sender channels, only ch0 (the worker) carries traffic. Each lane is one core's work for one packet in steady state, on a shared cycle axis. The cores work on different packets in parallel, so the longest lane sets the interval.</p>
+  <dl class="case">
+    <div><dt>Workload</dt><dd><code>exp_2d_4k.yaml</code>, single flow, 1-hop write E/W</dd></div>
+    <div><dt>Telemetry</dt><dd><code>TT_FABRIC_NO_BW_TELEMETRY=1</code>. CI's forced BW telemetry adds ~20 to E0.</dd></div>
+    <div><dt>Keepalive</dt><dd><code>TT_FABRIC_EXP_SEQ_UPDATE_TIMEOUT=1000</code>. At the firmware's 8000, one-way 4 KiB floors at 187.5.</dd></div>
+    <div><dt>Packet</dt><dd>4096 B payload + 96 B header (<code>HybridMeshPacketHeaderT&lt;36&gt;</code> on this mesh)</dd></div>
+    <div><dt>Target</dt><dd>117 cycles/packet (400G at 4 KiB). The wire alone needs 118.5.</dd></div>
+    <div><dt>Lanes</dt><dd>E0 on the sending chip, E1 on the receiving chip, the link in the data direction</dd></div>
+  </dl>
+</header>
+
+<section aria-labelledby="h-stages">
+  <h2 id="h-stages">Three builds of the same router</h2>
+  <div class="stages">
+    <div class="stage-sum"><div class="n">Today</div><div class="v">221.5 <small>cycles/packet</small></div><div class="s">No flags. E0 sets the interval.</div></div>
+    <div class="stage-sum"><div class="n">Polling flags</div><div class="v">186.2 <small>cycles/packet</small></div><div class="s"><code>EXP_FLAGS=384</code> (bits 7 + 8). E0 still sets it.</div></div>
+    <div class="stage-sum"><div class="n">+ Send changes</div><div class="v">168.7 <small>cycles/packet</small></div><div class="s"><code>EXP_FLAGS=21888</code> (bits 7, 8, 10, 12, 14). E0 still sets it.</div></div>
+    <div class="stage-sum parked"><div class="n">Upstream on E1 · parked</div><div class="v">161.5 <small>cycles/packet</small></div><div class="s"><code>EXP_FLAGS=896</code> (v3). The receiving E1 sets it. One-way only.</div></div>
+    <div class="stage-sum"><div class="n">Wire</div><div class="v">118.5 <small>cycles/packet</small></div><div class="s">2 data frames + 1 pointer-update frame at 37.04 B/cycle</div></div>
+  </div>
+</section>
+
+<section aria-labelledby="h-wf">
+  <h2 id="h-wf">Waterfall</h2>
+  <div class="legend" aria-label="Legend">
+    <span><i class="sw move"></i>Moves the packet</span>
+    <span><i class="sw check"></i>Looks for work</span>
+    <span><i class="sw wait"></i>Striped part: waiting on a read</span>
+    <span><i class="sw unk"></i>Unaccounted</span>
+    <span><i class="sw idle"></i>Idle</span>
+    <span><i class="sw wire"></i>Wire busy</span>
+    <span><i class="ln meas"></i>Measured interval</span>
+    <span><i class="ln target"></i>Target 117</span>
+    <span><i class="ln floor"></i>Keepalive floor 187.5 at firmware 8000</span>
+  </div>
+  <div class="wf-scroll"><div class="wf" id="wf"></div></div>
+  <p class="hint">Select a segment for its cycles, instructions and source. The order of segments within a lane is illustrative; the loop interleaves this work.</p>
+  <div class="detail" id="detail" aria-live="polite"></div>
+</section>
+
+<section aria-labelledby="h-e0">
+  <h2 id="h-e0">E0 segment by segment</h2>
+  <p>Cycles per packet. Superscripts give the source: <b>m</b> measured, <b>d</b> derived from measured intervals, <b>e</b> estimated from the instruction listing and the load-overlap microbenchmark.</p>
+  <div class="tbl-scroll"><table id="t-e0"></table></div>
+  <p class="muted">An earlier pass left 15 cycles of the polling-flags build unaccounted. Most of that was the send: in that build it is 52 instructions, not 45, because bit 7 adds a sent-count update and the grouped read leaves the free-slot stream address to be recomputed (see the send listing below). About 5 remain unexplained.</p>
+</section>
+
+<section aria-labelledby="h-e1">
+  <h2 id="h-e1">E1 on the receiving chip</h2>
+  <div class="tbl-scroll"><table id="t-e1"></table></div>
+  <p class="muted">E1's "loop + polls" is a residual; the compiled loop accounts for ~44 of its 53 (select the segment for the parts). It is paid once per loop iteration, and E1 handles one packet per iteration, so a faster E0 does not shrink it. On N/S, decode is 32 instead of 17, so E1 is busy ~152 and becomes the limit once E0 drops below that.</p>
+</section>
+
+<section aria-labelledby="h-send">
+  <h2 id="h-send">Inside the send</h2>
+  <p class="muted"><b>Update:</b> three of the ideas below are now measured (RESULTS §20). Dropping the write counter (−8 to −11), the stride slot address (−3) and the overlapped size read (−3) together take 1-hop E/W from 186.5 to 168.7 and the send from 52 to 35 instructions. The early TX-queue read and the compile-time stream id gained nothing. The breakdown below is the polling-flags build, before those changes.</p>
+  <p><code>send_next_data</code> for ch0 in the polling-flags build: 52 instructions, about 72 cycles. Only about 21 cycles are the work that has to happen (read the size, program the TX queue, send the pointer update). About 39 are pointer and counter bookkeeping, and 12 go to one register read before the pointer update.</p>
+  <div class="tbl-scroll">
+    <div class="anat" role="img" aria-label="Send cycles by group: packet header 11, TXQ payload command 4, pointer update 6, worker write counter 10, next local slot 12, remote receiver pointer 3, free the worker's slot 8, sent count 4, free slots 1, progress flag 1, TXQ latch wait 12">
+      <div class="move" style="flex:11 1 0"><span>header</span><span>11</span><i class="st" style="width:64%"></i></div>
+      <div class="move" style="flex:4 1 0"><span>txq</span><span>4</span></div>
+      <div class="move" style="flex:6 1 0"><span>ptr</span><span>6</span></div>
+      <div class="book" style="flex:10 1 0"><span>write ctr</span><span>10</span></div>
+      <div class="book" style="flex:12 1 0"><span>next slot</span><span>12</span></div>
+      <div class="book" style="flex:3 1 0"><span>rp</span><span>3</span></div>
+      <div class="book" style="flex:8 1 0"><span>free slot</span><span>8</span></div>
+      <div class="book" style="flex:4 1 0"><span>sent</span><span>4</span></div>
+      <div class="book" style="flex:1 1 0"></div>
+      <div class="book" style="flex:1 1 0"></div>
+      <div class="wait" style="flex:12 1 0"><span>latch</span><span>12</span><i class="st" style="width:67%"></i></div>
+    </div>
+    <div class="anat-scale"><span>0</span><span>18</span><span>36</span><span>54</span><span>72 cycles</span></div>
+  </div>
+  <div class="split3">
+    <span><i class="dot move"></i>TX queue work and header <b>21</b></span>
+    <span><i class="dot book"></i>Bookkeeping <b>39</b></span>
+    <span><i class="dot wait"></i>TX queue latch read <b>12</b></span>
+  </div>
+  <div class="tbl-scroll">
+    <table>
+      <thead><tr><th>Group</th><th class="r">Instr. today → flags</th><th class="r">Est. cycles</th><th>What it does</th><th>Idea</th></tr></thead>
+      <tbody>
+        <tr><td><i class="dot move"></i>Packet header</td><td class="r">4 → 4</td><td class="r">11</td><td>Cached slot address from the stack; payload size read from the header in L1 (a lone read, ~7); stamp <code>src_ch_id</code>; add the 96 B header.</td><td>Pair the size read with another read so it overlaps</td></tr>
+        <tr><td><i class="dot move"></i>TXQ payload command</td><td class="r">5 → 4</td><td class="r">4</td><td>Source, destination, size, "send data".</td><td></td></tr>
+        <tr><td><i class="dot wait"></i>TXQ latch wait</td><td class="r">4 → 4</td><td class="r">12</td><td>BH-55 dummy read of CMD, then STATUS, then branch. The queue is never busy here (§11), so this is read latency.</td><td>Issue the read early, as the speedy path does (~8)</td></tr>
+        <tr><td><i class="dot move"></i>Pointer update</td><td class="r">5 → 5</td><td class="r">6</td><td>Remote stream register address (spilled to the stack), data, "register write".</td><td>Batch (b_ptr), sustained streams only</td></tr>
+        <tr><td><i class="dot book"></i>Worker write counter</td><td class="r">9 → 9</td><td class="r">10</td><td>32-bit counter and an index wrapping at 17 slots, both on the stack.</td><td>Simpler wrap</td></tr>
+        <tr><td><i class="dot book"></i>Next local slot</td><td class="r">11 → 11</td><td class="r">12</td><td>Index wrap, then a lookup in the 17-entry slot address table on the stack.</td><td>Advance by stride (~8)</td></tr>
+        <tr><td><i class="dot book"></i>Remote receiver pointer</td><td class="r">3 → 3</td><td class="r">3</td><td>Next slot on the far receiver, with a wrap check.</td><td></td></tr>
+        <tr><td><i class="dot book"></i>Free the worker's slot</td><td class="r">2 → 7</td><td class="r">8</td><td>Free-slot stream register +1. In the flags build the address is rebuilt from a run-time stream id, because the grouped read no longer leaves it in a register.</td><td>Make the stream id a template constant (~5)</td></tr>
+        <tr><td><i class="dot book"></i>Sent count (bit 7)</td><td class="r">0 → 3</td><td class="r">4</td><td>Lean-completions count, on the stack.</td><td>Derive it from the write counter</td></tr>
+        <tr><td><i class="dot book"></i>Free slots, progress flag, move</td><td class="r">2 → 2</td><td class="r">2</td><td>Receiver free-slot count −1; <code>did_something</code> store (flags build); a register move (today).</td><td></td></tr>
+        <tr class="total"><td>Total</td><td class="r">45 → 52</td><td class="r">72</td><td colspan="2">The same method gives 63 for today's build, against 62 measured by the phase timer.</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <details open>
+    <summary class="hint">Full listing, polling-flags build, ch0 (<code>fabric_exp/disasm/e0_384.dis</code>, 0x9444–0x9510)</summary>
+    <div class="tbl-scroll"><table class="listing" id="t-send"></table></div>
+  </details>
+</section>
+
+<section aria-labelledby="h-idle">
+  <h2 id="h-idle">An idle channel visit</h2>
+  <p>ch1 to ch3 never carry traffic in this test, yet E0 visits each one every iteration. Bold rows are reads.</p>
+  <div class="pair">
+    <div>
+      <h3>Today <span class="mono">13 instructions · ~28 cycles</span></h3>
+      <p class="hint">Measured 27.5 by trimming. Both reads are used at once, so ~15 cycles are waiting.</p>
+      <div class="tbl-scroll"><table class="listing" id="t-idle-before"></table></div>
+    </div>
+    <div>
+      <h3>Polling flags <span class="mono">8 instructions · ~9 cycles</span></h3>
+      <p class="hint">The free-slot value comes from the grouped read; the completion counter is read only while packets are in flight.</p>
+      <div class="tbl-scroll"><table class="listing" id="t-idle-after"></table></div>
+    </div>
+  </div>
+</section>
+
+<section aria-labelledby="h-rules">
+  <h2 id="h-rules">Which reads an ERISC can hide</h2>
+  <p>From the load-overlap microbenchmark (<code>test_erisc_load_overlap</code>, data cache off as in the router). Cost is cycles beyond the same code without the read.</p>
+  <div class="tbl-scroll">
+    <table>
+      <thead><tr><th>Read</th><th class="r">Used at once</th><th>When it can be hidden</th></tr></thead>
+      <tbody>
+        <tr><td>Stream register</td><td class="r">7</td><td>Only with other reads issued together: 2 cost 2 and 4 cost 4, from ~4–6 instructions on</td></tr>
+        <tr><td>L1 word</td><td class="r">8</td><td>In a group, only if used 5–7 instructions after issue (3–4); used later it costs 9–10</td></tr>
+        <tr><td>Stack (local data memory)</td><td class="r">2</td><td>Pairs with a stream read like a second stream read</td></tr>
+        <tr><td>A lone read of any kind</td><td class="r">6–8</td><td>Never, however much work follows it</td></tr>
+        <tr><td>A read used at once while others are outstanding</td><td class="r">+6 to +14</td><td>It waits for the outstanding reads</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section aria-labelledby="h-ideas">
+  <h2 id="h-ideas">Ideas from this view</h2>
+  <p>Savings are per packet on E0 unless noted, estimated from the listing and the read rules.</p>
+  <div class="tbl-scroll">
+    <table>
+      <thead><tr><th>Idea</th><th>Where</th><th class="r">Est. saving</th><th>Basis</th><th>Status</th></tr></thead>
+      <tbody>
+        <tr><td>Skip the completion read on channels with nothing in flight</td><td>polling</td><td class="r">13</td><td>Bit 7, measured. Also lowers latency everywhere (−14 to −77 ns)</td><td><span class="status done">done, flag</span></td></tr>
+        <tr><td>Read the four free-slot registers together</td><td>polling</td><td class="r">23</td><td>Bit 8, measured. Alone it adds 29-103 ns to a 3-hop round trip (RESULTS §19): packets landing on router channels after the read wait an iteration</td><td><span class="status done">done, flag</span></td></tr>
+        <tr><td>Issue the TXQ latch read early, as the speedy path does</td><td>send</td><td class="r">0</td><td>Bit 11: the stack reloads that follow wait for the outstanding reads (§17, §20)</td><td><span class="status out">no gain</span></td></tr>
+        <tr><td>Advance the local slot address by stride instead of a stack table</td><td>send</td><td class="r">3</td><td>Bit 12, measured: 11 instructions to 5</td><td><span class="status done">done, flag</span></td></tr>
+        <tr><td>Make the free-slot stream id a template constant</td><td>send</td><td class="r">0</td><td>Bit 13: 5 instructions fewer, no measured gain; worse in combination</td><td><span class="status out">no gain</span></td></tr>
+        <tr><td>Drop the worker write counter: the router never reads it</td><td>send</td><td class="r">8–11</td><td>Bit 10, measured: 9 instructions per send</td><td><span class="status done">done, flag</span></td></tr>
+        <tr><td>Overlap the header size read with the can-send TX-queue reads</td><td>send</td><td class="r">3</td><td>Bit 14, measured; read only when a packet is ready (an unused read in flight cost +32)</td><td><span class="status done">done, flag</span></td></tr>
+        <tr><td>Read TXQ STATUS together with the grouped free-slot reads</td><td>polling</td><td class="r">~6</td><td>Register reads issued together overlap; TXQ registers not yet measured</td><td><span class="status open">needs microbench</span></td></tr>
+        <tr><td>Check teardown every N iterations instead of every visit</td><td>polling</td><td class="r">~10</td><td>4 instructions and an L1 read per visit</td><td><span class="status open">untried</span></td></tr>
+        <tr><td>Issue ch0's completion read 5–7 instructions before its use</td><td>polling</td><td class="r">~4</td><td>L1 overlap window</td><td><span class="status open">untried</span></td></tr>
+        <tr><td>Batch pointer updates (b_ptr 4)</td><td>send, wire</td><td class="r">~13, wire −1.7</td><td>Skips the update and its latch read 3 times in 4</td><td><span class="status open">sustained streams only</span></td></tr>
+        <tr><td>Handle every queued packet per E1 iteration (the packets-received register is a count) and ack per batch</td><td>E1</td><td class="r">~30 at 4 per iteration</td><td>~44 of E1's per-packet overhead is per iteration (listing)</td><td><span class="status open">untried</span></td></tr>
+        <tr><td>Skip E1's write-flushed status read when nothing is in flight</td><td>E1</td><td class="r">~10 when idle</td><td>Read every iteration today</td><td><span class="status open">untried</span></td></tr>
+        <tr><td>Move worker credits and connection checks to E1</td><td>E0 → E1</td><td class="r">25 one-way</td><td>Bit 9 v3: one-way −25; both directions +44</td><td><span class="status parked">parked</span></td></tr>
+        <tr><td>Remove the can-send TXQ busy check</td><td>polling</td><td class="r">—</td><td><code>EXP_FLAGS=64</code> hung the router</td><td><span class="status out">ruled out</span></td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="muted">Measured together (bits 10, 12, 14 on the polling flags, <code>EXP_FLAGS=21888</code>): 1-hop E/W 186.5 → 168.7, N/S 188.3 → 169.1, bidirectional 187.1 → 169.1, 3-hop 185.5 → 171.3, and 40–80 ns off every latency case. The estimate before measuring was ~25.</p>
+</section>
+
+<section aria-labelledby="h-method">
+  <h2 id="h-method">Sources and method</h2>
+  <ul class="plain">
+    <li><b>Measured</b>: the interval from the benchmark's bandwidth; phase timers (<code>TT_FABRIC_PHASE_PROFILE=2</code>, calibrated timer cost removed); the trimming ablation for idle visits.</li>
+    <li><b>Derived</b>: from differences between measured intervals. E1's loop + polls is the residual of the trimmed N/S case, where E1 is the limit. The upstream idle check on E1 comes from trimmed N/S 152.6 → 176.4.</li>
+    <li><b>Estimated</b>: instructions from the compiled router at one cycle each, plus read costs from the load-overlap microbenchmark. Applied to today's send it gives 63 against 62 measured.</li>
+    <li>Wire: Ethernet framing at 400 Gb/s (37.04 B/cycle), 56 B overhead per frame, at most 4114 B of payload per frame, 84 B minimum frame. The placement model still assumes an 80 B 2D header; this mesh compiles a 96 B header, +0.5 cycles at 4 KiB.</li>
+    <li>Disassembly: <code>fabric_exp/disasm/e0_untrimmed.dis</code> (no flags), <code>e0_384.dis</code> (bits 7 + 8), <code>e0_21888.dis</code> (bits 7, 8, 10, 12, 14), <code>e1_untrimmed.dis</code> (E1, no flags), <code>e1_896.dis</code> (E1, bits 7 + 8 + 9).</li>
+    <li>Write-ups in <code>fabric_exp/RESULTS.md</code>: §3 phase and primitive costs, §8 2D breakdown, §11 TX queue, §16 keepalive floor, §17 polling and read overlap, §18 stack, §19 latency, §20 the send.</li>
+  </ul>
+  <div class="cmd">fabric_exp/run_exp.sh &lt;label&gt; fabric_exp/exp_2d_4k.yaml \
+    TT_FABRIC_NO_BW_TELEMETRY=1 TT_FABRIC_EXP_SEQ_UPDATE_TIMEOUT=1000 TT_FABRIC_EXP_FLAGS=384</div>
+</section>
+
+<footer>Last updated 2026-10-13. Page source: <code>fabric_exp/timeline.html</code>. Nothing here is committed.</footer>
+</div>
+
+<script>
+(function () {
+  const MAX = 230;
+  const SRC = {
+    measured: "Measured",
+    derived: "Derived from measured intervals",
+    estimated: "Estimated from the listing",
+  };
+  const IDLE_DESC = "Visit to a sender channel that never carries traffic in this test.";
+
+  // c: cycles per packet, w: of which waiting on reads, n: instructions per packet
+  const E1_RX = [
+    { id: "e1loop", label: "loop + polls", short: "loop+polls", c: 53, kind: "check", src: "derived",
+      desc: "A residual from the trimmed N/S case. The compiled loop (disasm/e1_untrimmed.dis) accounts for ~44 of it per packet: packets-received stream register read used at once ~9; NoC write-flushed status read for the oldest in-flight slot + compare ~16 (read every iteration, even with nothing pending); TX-queue busy check before the completion ack ~12; slot and counter updates 4; loop counter 2; outer loop every 32 iterations ~1. E1 handles one packet per iteration, so when E1 is the limit this is paid per packet." },
+    { id: "decode", label: "decode", short: "dec", c: 17, kind: "move", src: "measured",
+      desc: "Header decode and route lookup. 32 on N/S." },
+    { id: "local", label: "local NoC write", short: "local write", c: 46, kind: "move", src: "measured",
+      desc: "CPU cost of issuing the 4 KiB NoC write to the destination core. The port then stays busy ~76 cycles, overlapped with other work." },
+    { id: "ack", label: "completion ack", short: "ack", c: 21, kind: "move", src: "measured",
+      desc: "Completion credit back to the sender over Ethernet, on TXQ1." },
+  ];
+  const WIRE = [
+    { id: "frames", label: "2 data frames", short: "data frames", c: 116.2, kind: "wire", src: "derived",
+      desc: "4096 B payload + 96 B header as two TT-link frames (at most 4114 B of payload each), 56 B overhead per frame, at 37.04 B/cycle." },
+    { id: "ptr", label: "pointer update frame", short: "ptr", c: 2.3, kind: "wire", src: "derived",
+      desc: "One minimum-size 84 B frame carrying the remote pointer update." },
+  ];
+  const IDLE_BEFORE = (k) => ({ id: "ch" + k, label: "ch" + k + " idle visit", short: "ch" + k, c: 28, w: 15, n: 13, kind: "check", src: "measured",
+    desc: IDLE_DESC + " Load its stream id from the stack, read the free-slot stream register and use it at once, then read the completion counter in L1 and use it at once. Trimming two channels saved 55." });
+  const IDLE_AFTER = (k) => ({ id: "ch" + k, label: "ch" + k + " idle visit", short: "ch" + k, c: 9, w: 1, n: 8, kind: "check", src: "estimated",
+    desc: IDLE_DESC + " Mask the free-slot value already read by the grouped read; compare the sent count (stack) with the processed count, skip the L1 read." });
+
+  const STAGES = [
+    {
+      id: "today", name: "Today", chip: "EXP_FLAGS 0", interval: 221.5,
+      note: "E0: 88 cycles move the packet and 139 look for work. About 99 of its 227 are waits on reads. E1 waits 84.5 per packet.",
+      lanes: [
+        { name: "E0", who: "sending chip", segs: [
+          { id: "ch0pkt", label: "ch0 packet check", short: "ch0", c: 18, w: 8, n: 10, kind: "check", src: "estimated",
+            desc: "Load ch0's stream id from the stack, read its free-slot stream register and use it at once: is there a packet, and does the receiver have space?" },
+          { id: "txq", label: "TXQ can-send", short: "txq", c: 13, w: 8, n: 5, kind: "check", src: "estimated",
+            desc: "Two TX-queue register reads, used at once: a dummy read of CMD (BH-55 workaround), then STATUS. The queue is never busy here (§11). Removing this check hung the router." },
+          { id: "send", label: "send_next_data", short: "send", c: 62, w: 17, n: 45, kind: "move", src: "measured",
+            desc: "Phase timer around send_next_data and freeing the worker's slot (§8). The TX-queue command itself (eth_send_packet_bytes_unsafe) is 4 register writes, ~5 cycles; the transfer then runs on its own. The rest: header read ~11, slot and counter bookkeeping ~26, the status read before the pointer update ~12, the pointer update ~6, freeing the slot ~2." },
+          { id: "ch0cmp", label: "ch0 completion check", short: "cmp", c: 10, w: 7, n: 3, kind: "check", src: "estimated",
+            desc: "Read the completion counter the far receiver writes into L1, every visit." },
+          { id: "credit", label: "credit to worker", short: "credit", c: 26, w: 6, n: 20, kind: "move", src: "measured",
+            desc: "35 cycles on the 74% of iterations that see new completions: update the read counter, wait for the NoC command buffer, write the credit to the worker's semaphore." },
+          { id: "tear", label: "teardown check", short: "tear", c: 12, w: 8, n: 4, kind: "check", src: "estimated",
+            desc: "Pointer from the stack, then an L1 read of the worker connection semaphore, every visit." },
+          IDLE_BEFORE(1), IDLE_BEFORE(2), IDLE_BEFORE(3),
+          { id: "loop", label: "loop", short: "", c: 2, n: 2, kind: "check", src: "estimated",
+            desc: "Loop counter and branch. Termination and context-switch checks run once per 32 iterations." },
+        ] },
+        { name: "E1", who: "receiving chip", segs: E1_RX.concat([{ id: "idle", label: "waiting", short: "waiting", c: 84.5, kind: "idle", src: "derived", desc: "Spins on an empty RX ring until E0's next packet arrives." }]) },
+        { name: "Wire", who: "data direction", segs: WIRE.concat([{ id: "widle", label: "link idle", short: "idle", c: 103, kind: "idle", src: "derived", desc: "The link waits for E0." }]) },
+      ],
+    },
+    {
+      id: "flags", name: "Polling flags", chip: "EXP_FLAGS 384", interval: 186.2,
+      note: "E0: 97 cycles move the packet, 84 look for work, ~5 unaccounted. Waits drop to ~53. E1's slack shrinks to 49.",
+      lanes: [
+        { name: "E0", who: "sending chip", segs: [
+          { id: "grp", label: "grouped free-slot reads", short: "G", c: 12, w: 3, n: 9, kind: "check", src: "estimated",
+            desc: "Bit 8: the four free-slot stream registers read back to back. Three of the four addresses are spilled and reloaded from the stack first. ch0 uses its value right away, which costs ~3 more than the best case." },
+          { id: "ch0pkt", label: "ch0 packet check", short: "ch0", c: 6, w: 0, n: 6, kind: "check", src: "estimated",
+            desc: "Mask the value already in a register and compare." },
+          { id: "txq", label: "TXQ can-send", short: "txq", c: 12, w: 7, n: 5, kind: "check", src: "estimated",
+            desc: "Unchanged: dummy CMD read, STATUS read, used at once." },
+          { id: "send", label: "send_next_data", short: "send", c: 72, w: 20, n: 52, kind: "move", src: "estimated",
+            desc: "52 instructions (45 today): +3 for the sent count (bit 7), +5 to rebuild the free-slot stream address, +1 progress flag, −2 elsewhere. See 'Inside the send'." },
+          { id: "ch0cmp", label: "ch0 completion check", short: "cmp", c: 14, w: 8, n: 6, kind: "check", src: "estimated",
+            desc: "Bit 7: compare the sent count (stack) with the processed count; ch0 always has packets in flight, so it still reads the L1 counter." },
+          { id: "credit", label: "credit to worker", short: "credit", c: 25, w: 5, n: 20, kind: "move", src: "estimated",
+            desc: "Unchanged code; same cost as today." },
+          { id: "tear", label: "teardown check", short: "tear", c: 11, w: 7, n: 4, kind: "check", src: "estimated",
+            desc: "Unchanged: L1 read of the connection semaphore every visit." },
+          IDLE_AFTER(1), IDLE_AFTER(2), IDLE_AFTER(3),
+          { id: "loop", label: "loop", short: "", c: 2, n: 2, kind: "check", src: "estimated", desc: "Loop counter and branch." },
+          { id: "unk", label: "unaccounted", short: "?", c: 5.2, kind: "unk", src: "derived",
+            desc: "Measured interval minus the sum of the parts. Candidates: the TXQ can-send read issued while the grouped reads may still be outstanding, or more stack traffic than counted." },
+        ] },
+        { name: "E1", who: "receiving chip", segs: E1_RX.concat([{ id: "idle", label: "waiting", short: "waiting", c: 49.2, kind: "idle", src: "derived", desc: "Spins on an empty RX ring until E0's next packet arrives." }]) },
+        { name: "Wire", who: "data direction", segs: WIRE.concat([{ id: "widle", label: "link idle", short: "idle", c: 67.7, kind: "idle", src: "derived", desc: "The link waits for E0." }]) },
+      ],
+    },
+    {
+      id: "send", name: "+ Send changes", chip: "EXP_FLAGS 21888", interval: 168.7,
+      note: "Bits 10, 12 and 14 on top of the polling flags: the unread write counter is gone, the slot address advances by stride, and the packet size is read alongside the can-send check. The send is 35 instructions instead of 52. Latency improves too (RESULTS §19, §20).",
+      lanes: [
+        { name: "E0", who: "sending chip", segs: [
+          { id: "grp", label: "grouped free-slot reads", short: "G", c: 12, w: 3, n: 9, kind: "check", src: "estimated", desc: "As in the polling-flags build." },
+          { id: "ch0pkt", label: "ch0 packet check", short: "ch0", c: 6, w: 0, n: 6, kind: "check", src: "estimated", desc: "As in the polling-flags build." },
+          { id: "txq", label: "TXQ can-send + size read", short: "txq", c: 13, w: 7, n: 8, kind: "check", src: "estimated",
+            desc: "Bit 14: when a packet is ready, the slot address (stack) and the packet size (L1) are read just before the two TX-queue register reads, so the L1 read overlaps them." },
+          { id: "send", label: "send_next_data", short: "send", c: 53.5, n: 35, kind: "move", src: "derived",
+            desc: "35 instructions (52 before): TX-queue payload and pointer-update commands 9, read before the pointer update 4, slot address by stride 5, far receiver pointer 3, releasing the worker's slot 7, sent count 3, header stamp / size / progress flag / free-slot count 4. Cycles derived: the measured interval minus the other parts." },
+          { id: "ch0cmp", label: "ch0 completion check", short: "cmp", c: 14, w: 8, n: 6, kind: "check", src: "estimated", desc: "As in the polling-flags build." },
+          { id: "credit", label: "credit to worker", short: "credit", c: 25, w: 5, n: 20, kind: "move", src: "estimated", desc: "Unchanged." },
+          { id: "tear", label: "teardown check", short: "tear", c: 11, w: 7, n: 4, kind: "check", src: "estimated", desc: "Unchanged." },
+          IDLE_AFTER(1), IDLE_AFTER(2), IDLE_AFTER(3),
+          { id: "loop", label: "loop", short: "", c: 2, n: 2, kind: "check", src: "estimated", desc: "Loop counter and branch." },
+          { id: "unk", label: "unaccounted", short: "?", c: 5.2, kind: "unk", src: "derived", desc: "Carried over from the polling-flags build; the send's cycles are derived around it." },
+        ] },
+        { name: "E1", who: "receiving chip", segs: E1_RX.concat([{ id: "idle", label: "waiting", short: "waiting", c: 31.7, kind: "idle", src: "derived", desc: "Spins on an empty RX ring until E0's next packet arrives." }]) },
+        { name: "Wire", who: "data direction", segs: WIRE.concat([{ id: "widle", label: "link idle", short: "idle", c: 50.2, kind: "idle", src: "derived", desc: "The link waits for E0." }]) },
+      ],
+    },
+    {
+      id: "upstream", name: "Upstream on E1", chip: "EXP_FLAGS 896 · parked", parked: true, interval: 161.5,
+      note: "One-way only. The sending chip's E1 takes the worker credits and connection checks. The receiving E1 pays ~22 per iteration for an idle upstream check and sets the interval. E0 here is estimated, not measured. Traffic both ways gets slower (bidirectional 187.1 → 230.7), so this is parked.",
+      lanes: [
+        { name: "E0", who: "sending chip (est.)", segs: [
+          { id: "grp", label: "grouped free-slot reads", short: "G", c: 12, w: 3, n: 9, kind: "check", src: "estimated", desc: "As in the polling-flags build." },
+          { id: "ch0pkt", label: "ch0 packet check", short: "ch0", c: 6, n: 6, kind: "check", src: "estimated", desc: "As in the polling-flags build." },
+          { id: "txq", label: "TXQ can-send", short: "txq", c: 12, w: 7, n: 5, kind: "check", src: "estimated", desc: "As in the polling-flags build." },
+          { id: "send", label: "send_next_data", short: "send", c: 75, w: 20, n: 55, kind: "move", src: "estimated",
+            desc: "As in the polling-flags build plus ~3 to add one to the in-flight stream register (24) per packet." },
+          { id: "ch0cmp", label: "ch0 completion check", short: "cmp", c: 14, w: 8, n: 6, kind: "check", src: "estimated",
+            desc: "E0 still reads the completion counter for its own receiver-slot accounting." },
+          IDLE_AFTER(1), IDLE_AFTER(2), IDLE_AFTER(3),
+          { id: "loop", label: "loop", short: "", c: 2, n: 2, kind: "check", src: "estimated", desc: "Loop counter and branch." },
+          { id: "unk", label: "slack or unaccounted", short: "?", c: 13.5, kind: "unk", src: "derived",
+            desc: "The interval minus E0's estimated parts. E0 is not the limit here, so this is slack plus whatever the estimate misses." },
+        ] },
+        { name: "E1", who: "receiving chip", segs: [
+          E1_RX[0],
+          { id: "upck", label: "idle upstream check", short: "up chk", c: 22, kind: "check", src: "derived",
+            desc: "In-flight register read used at once, iteration counter in local memory, and the out-of-line upstream call every 16th iteration for the connection check. Derived from trimmed N/S 152.6 → 176.4." },
+          E1_RX[1], E1_RX[2], E1_RX[3],
+          { id: "idle", label: "waiting", short: "", c: 2.5, kind: "idle", src: "derived", desc: "Almost none: E1 sets the interval." },
+        ] },
+        { name: "Wire", who: "data direction", segs: WIRE.concat([{ id: "widle", label: "link idle", short: "idle", c: 43, kind: "idle", src: "derived", desc: "The link waits for the receiving E1." }]) },
+      ],
+    },
+  ];
+
+  const pct = (x) => (x / MAX) * 100 + "%";
+  const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+  const fmt = (x) => (Math.round(x * 10) / 10).toString();
+
+  function axis(bottom) {
+    const row = el("div", "row");
+    row.appendChild(el("div", "axis-cap", bottom ? "" : "cycles"));
+    const a = el("div", "axis" + (bottom ? " bottom" : ""));
+    for (let x = 0; x <= 225; x += 25) { const t = el("span", "tick", String(x)); t.style.left = pct(x); a.appendChild(t); }
+    row.appendChild(a);
+    return row;
+  }
+
+  function tag(x, tier, cls, text) {
+    const t = el("span", "tag " + tier + " " + cls + (x > MAX * 0.6 ? " r" : " l"), text);
+    t.style.left = pct(x);
+    return t;
+  }
+
+  const wf = document.getElementById("wf");
+  const detail = document.getElementById("detail");
+  const segIndex = new Map();
+  let pinned = null;
+
+  wf.appendChild(axis(false));
+  for (const st of STAGES) {
+    const box = el("div", "stage");
+    const head = el("div", "stage-head");
+    head.appendChild(el("h3", null, st.name));
+    head.appendChild(el("span", "chip" + (st.parked ? " parked" : ""), st.chip));
+    head.appendChild(el("span", "mono num", fmt(st.interval) + " cycles/packet measured"));
+    box.appendChild(head);
+    box.appendChild(el("p", "stage-note", st.note));
+
+    const railRow = el("div", "row");
+    railRow.appendChild(el("div"));
+    const rail = el("div", "rail");
+    rail.appendChild(tag(st.interval, "t1", "meas", "measured " + fmt(st.interval)));
+    rail.appendChild(tag(117, "t2", "target", "target 117"));
+    rail.appendChild(tag(187.5, "t2", "floor", "floor 187.5"));
+    railRow.appendChild(rail);
+    box.appendChild(railRow);
+
+    for (const lane of st.lanes) {
+      const row = el("div", "row");
+      const lab = el("div", "lane-label", lane.name);
+      lab.appendChild(el("small", null, lane.who));
+      row.appendChild(lab);
+      const track = el("div", "track");
+      let x = 0;
+      for (const s of lane.segs) {
+        const b = el("button", "seg " + s.kind);
+        b.type = "button";
+        b.style.left = pct(x);
+        b.style.width = pct(s.c);
+        b.setAttribute("aria-pressed", "false");
+        b.setAttribute("aria-label", st.name + ", " + lane.name + ": " + s.label + ", " + fmt(s.c) + " cycles");
+        if (s.w) { const w = el("i", "w"); w.style.width = (s.w / s.c) * 100 + "%"; b.appendChild(w); }
+        const t = el("span", "t");
+        b.appendChild(t);
+        b._labels = [s.label + " " + fmt(s.c), (s.short ? s.short + " " : "") + fmt(s.c), fmt(s.c), ""];
+        const key = st.id + "/" + lane.name + "/" + s.id;
+        segIndex.set(key, { b, s, st, lane });
+        b.addEventListener("mouseenter", () => show(key));
+        b.addEventListener("focus", () => show(key));
+        b.addEventListener("mouseleave", () => show(pinned));
+        b.addEventListener("blur", () => show(pinned));
+        b.addEventListener("click", () => pin(key));
+        track.appendChild(b);
+        x += s.c;
+      }
+      for (const [mx, cls] of [[st.interval, "meas"], [117, "target"], [187.5, "floor"]]) {
+        const m = el("i", "mk " + cls);
+        m.style.left = pct(mx);
+        track.appendChild(m);
+      }
+      row.appendChild(track);
+      box.appendChild(row);
+    }
+    wf.appendChild(box);
+  }
+  wf.appendChild(axis(true));
+
+  function fit() {
+    for (const { b } of segIndex.values()) {
+      const t = b.querySelector(".t");
+      for (const l of b._labels) {
+        t.textContent = l;
+        if (t.scrollWidth <= b.clientWidth - 8 || l === "") break;
+      }
+    }
+  }
+
+  function show(key) {
+    const it = segIndex.get(key);
+    if (!it) return;
+    const { s, st, lane } = it;
+    detail.replaceChildren();
+    const left = el("div");
+    left.appendChild(el("div", "where", st.name + " · " + lane.name + " · " + lane.who));
+    left.appendChild(el("div", "name", s.label));
+    const big = el("div", "big", fmt(s.c) + " ");
+    big.appendChild(el("small", null, "cycles/packet"));
+    left.appendChild(big);
+    const dl = el("dl");
+    const add = (k, v) => { dl.appendChild(el("dt", null, k)); dl.appendChild(el("dd", null, v)); };
+    if (s.n != null) add("Instructions", String(s.n));
+    if (s.w) add("Waiting on reads", "~" + fmt(s.w));
+    add("Share of interval", Math.round((s.c / st.interval) * 100) + "%");
+    left.appendChild(dl);
+    const right = el("div", "desc");
+    right.appendChild(el("p", null, s.desc));
+    const badge = el("span", "badge " + s.src, SRC[s.src]);
+    const bp = el("p");
+    bp.appendChild(badge);
+    right.appendChild(bp);
+    detail.appendChild(left);
+    detail.appendChild(right);
+  }
+
+  function pin(key) {
+    if (pinned && segIndex.get(pinned)) segIndex.get(pinned).b.setAttribute("aria-pressed", "false");
+    pinned = key;
+    segIndex.get(key).b.setAttribute("aria-pressed", "true");
+    show(key);
+  }
+
+  pin("flags/E0/send");
+  fit();
+  if (window.ResizeObserver) new ResizeObserver(fit).observe(wf);
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(fit);
+
+  // Segment tables
+  const sup = (src) => ({ measured: "m", derived: "d", estimated: "e" })[src];
+  function laneTable(tableId, laneName, ids, extraCols) {
+    const t = document.getElementById(tableId);
+    const head = el("tr");
+    head.appendChild(el("th", null, "Segment"));
+    for (const st of STAGES) head.appendChild(el("th", "r", st.name));
+    for (const c of extraCols) head.appendChild(el("th", "r", c.title));
+    const thead = el("thead"); thead.appendChild(head); t.appendChild(thead);
+    const tb = el("tbody");
+    const sums = STAGES.map(() => 0);
+    for (const [id, name] of ids) {
+      const tr = el("tr");
+      tr.appendChild(el("td", null, name));
+      STAGES.forEach((st, i) => {
+        const lane = st.lanes.find((l) => l.name === laneName);
+        const s = lane.segs.find((q) => q.id === id);
+        const td = el("td", "r");
+        if (s) {
+          td.textContent = fmt(s.c);
+          td.appendChild(el("sup", "src", sup(s.src)));
+          if (s.kind !== "idle" && s.kind !== "unk") sums[i] += s.c;
+        } else td.textContent = "–";
+        tr.appendChild(td);
+      });
+      for (const c of extraCols) tr.appendChild(el("td", "r", c.get(id)));
+      tb.appendChild(tr);
+    }
+    const tot = el("tr", "total");
+    tot.appendChild(el("td", null, "Busy (sum of parts)"));
+    sums.forEach((v) => tot.appendChild(el("td", "r", fmt(v))));
+    for (const c of extraCols) tot.appendChild(el("td", "r", c.get("__total")));
+    tb.appendChild(tot);
+    const meas = el("tr");
+    meas.appendChild(el("td", null, "Measured interval"));
+    STAGES.forEach((st) => meas.appendChild(el("td", "r", fmt(st.interval))));
+    for (const c of extraCols) meas.appendChild(el("td", "r", ""));
+    tb.appendChild(meas);
+    t.appendChild(tb);
+  }
+  const flagsE0 = STAGES[1].lanes[0].segs;
+  laneTable("t-e0", "E0", [
+    ["grp", "Grouped free-slot reads"], ["ch0pkt", "ch0 packet check"], ["txq", "TXQ can-send check"],
+    ["send", "send_next_data + free slot"], ["ch0cmp", "ch0 completion check"], ["credit", "Credit to worker"],
+    ["tear", "Teardown check"], ["ch1", "ch1 idle visit"], ["ch2", "ch2 idle visit"], ["ch3", "ch3 idle visit"],
+    ["loop", "Loop"], ["unk", "Unaccounted"],
+  ], [{ title: "Instr. (flags)", get: (id) => {
+    if (id === "__total") return String(flagsE0.reduce((a, s) => a + (s.n || 0), 0));
+    const s = flagsE0.find((q) => q.id === id); return s && s.n != null ? String(s.n) : "";
+  } }]);
+  laneTable("t-e1", "E1", [
+    ["e1loop", "Loop + polls"], ["upck", "Idle upstream check"], ["decode", "Decode"],
+    ["local", "Local NoC write"], ["ack", "Completion ack"], ["idle", "Waiting"],
+  ], []);
+
+  // Listings: [address, instruction, group, note, isRead]
+  function listing(id, rows) {
+    const t = document.getElementById(id);
+    const tb = el("tbody");
+    for (const [addr, op, g, note, read] of rows) {
+      const tr = el("tr", "g-" + g + (read ? " read" : ""));
+      tr.appendChild(el("td", "addr", addr));
+      tr.appendChild(el("td", "op", op));
+      tr.appendChild(el("td", "note", note || ""));
+      tb.appendChild(tr);
+    }
+    t.appendChild(tb);
+  }
+  listing("t-send", [
+    ["9444", "lw    t2,1096(sp)", "move", "header: cached address of this slot (stack)", 1],
+    ["9448", "sb    a1,1352(t6)", "book", "did_something = true"],
+    ["944c", "lhu   t0,40(t2)", "move", "header: payload size from the packet header in L1, used 5 instructions later (~7)", 1],
+    ["9450", "sb    zero,43(t2)", "move", "header: stamp src_ch_id"],
+    ["9454", "lw    t4,196(sp)", "book", "free slot: ch0's free-slot stream id, a run-time value (stack)", 1],
+    ["9458", "sw    t2,20(a5)", "move", "TXQ: source address"],
+    ["945c", "sw    s2,28(a5)", "move", "TXQ: destination, the far receiver's slot"],
+    ["9460", "addi  t0,t0,96", "move", "header: + 96 B header"],
+    ["9464", "sw    t0,24(a5)", "move", "TXQ: size"],
+    ["9468", "sw    t1,4(a5)", "move", "TXQ: command = send data"],
+    ["946c", "lw    t0,564(sp)", "book", "write counter (stack)", 1],
+    ["9470", "lbu   t2,568(sp)", "book", "write index (stack)", 1],
+    ["9474", "addi  t0,t0,1", "book", ""],
+    ["9478", "sw    t0,564(sp)", "book", ""],
+    ["947c", "li    s5,16", "book", "index wraps after 17 slots"],
+    ["9480", "li    t0,0", "book", ""],
+    ["9484", "beq   t2,s5,948c", "book", ""],
+    ["9488", "addi  t0,t2,1", "book", ""],
+    ["948c", "sb    t0,568(sp)", "book", ""],
+    ["9490", "lw    t0,8(sp)", "book", "remote pointer: last slot address (stack)", 1],
+    ["9494", "beq   t0,s2,9dc4", "book", "wrap (cold path)"],
+    ["9498", "add   s2,s2,s4", "book", "remote pointer: next slot on the far receiver"],
+    ["949c", "lbu   t0,1100(sp)", "book", "next slot: cached index (stack)", 1],
+    ["94a0", "li    s5,16", "book", ""],
+    ["94a4", "li    t2,0", "book", ""],
+    ["94a8", "beq   t0,s5,94b8", "book", ""],
+    ["94ac", "addi  t0,t0,1", "book", ""],
+    ["94b0", "zext.b a0,t0", "book", ""],
+    ["94b4", "mv    t2,a0", "book", ""],
+    ["94b8", "sh2add a0,a0,sp", "book", "index the slot address table on the stack"],
+    ["94bc", "lw    a0,1028(a0)", "book", "", 1],
+    ["94c0", "sb    t2,1100(sp)", "book", ""],
+    ["94c4", "sw    a0,1096(sp)", "book", "cache the next slot address"],
+    ["94c8", "addi  s7,s7,-1", "book", "far receiver: one fewer free slot"],
+    ["94cc", "lw    a0,4(a5)", "wait", "latch: dummy read of TXQ CMD (BH-55 workaround)", 1],
+    ["94d0", "lw    a0,8(a5)", "wait", "latch: TXQ STATUS, used at once", 1],
+    ["94d4", "slli  t0,a0,0xf", "wait", ""],
+    ["94d8", "bltz  t0,94cc", "wait", "busy → retry (not taken in practice, §11)"],
+    ["94dc", "lw    a0,20(sp)", "move", "pointer update: remote register address, spilled (stack)", 1],
+    ["94e0", "li    t0,4", "move", ""],
+    ["94e4", "sw    a0,28(a5)", "move", "TXQ: destination = far stream register"],
+    ["94e8", "zext.b a0,t4", "book", "free slot: stream id → register address"],
+    ["94ec", "lui   t4,0xffb40", "book", ""],
+    ["94f0", "addi  t4,t4,1080", "book", ""],
+    ["94f4", "slli  a0,a0,0xc", "book", ""],
+    ["94f8", "add   a0,a0,t4", "book", ""],
+    ["94fc", "lw    t4,4(sp)", "book", "sent count (bit 7, stack)", 1],
+    ["9500", "sw    a6,68(a5)", "move", "TXQ: register-write data (+1)"],
+    ["9504", "sw    t0,4(a5)", "move", "TXQ: command = register write"],
+    ["9508", "addi  t4,t4,1", "book", ""],
+    ["950c", "sw    t4,4(sp)", "book", ""],
+    ["9510", "sw    a6,0(a0)", "book", "free slot: worker's free-slot stream register +1"],
+  ]);
+  listing("t-idle-before", [
+    ["92c4", "lbu   a0,152(sp)", "book", "this channel's stream id (stack)", 1],
+    ["92c8", "snez  t1,s8", "book", "far receiver has space?"],
+    ["92cc", "slli  a0,a0,0xc", "book", "id → register address"],
+    ["92d0", "add   a1,a0,a2", "book", ""],
+    ["92d4", "lw    a1,0(a1)", "wait", "free-slot stream register, used at once (~7)", 1],
+    ["92d8", "and   a1,a1,a5", "book", ""],
+    ["92dc", "addi  a1,a1,-16", "book", "all 16 slots free?"],
+    ["92e0", "snez  a1,a1", "book", ""],
+    ["92e4", "and   a1,a1,t1", "book", ""],
+    ["92e8", "beqz  a1,938c", "book", "no packet"],
+    ["938c", "lw    t1,-1100(a3)", "wait", "completion counter in L1, used at once (~8)", 1],
+    ["9390", "sub   t0,t1,s7", "book", ""],
+    ["9394", "beq   t1,s7,9408", "book", "nothing new → next channel"],
+  ]);
+  listing("t-idle-after", [
+    ["95a8", "and   a2,a2,a7", "book", "free-slot value from the grouped read"],
+    ["95ac", "addi  a2,a2,-16", "book", "all 16 slots free?"],
+    ["95b0", "snez  a2,a2", "book", ""],
+    ["95b4", "snez  a0,s7", "book", "far receiver has space?"],
+    ["95b8", "and   a2,a2,a0", "book", ""],
+    ["95bc", "beqz  a2,967c", "book", "no packet"],
+    ["967c", "lw    a2,16(sp)", "book", "sent count (stack, ~2)", 1],
+    ["9680", "beq   a2,s6,9704", "book", "sent == processed → skip the L1 read"],
+  ]);
+})();
+</script>

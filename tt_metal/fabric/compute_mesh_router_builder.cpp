@@ -951,21 +951,58 @@ void ComputeMeshRouterBuilder::create_kernel(tt::tt_metal::Program& program, con
         }
 
         auto opt_level = erisc_builder_->get_kernel_opt_level();
+        auto risc_defines = defines;
+        if (erisc_builder_->has_drisc_offload() && risc_id == 1) {
+            risc_defines["FABRIC_DRISC_OFFLOAD"] = "1";
+        }
+
+        const char* kernel_version_env = std::getenv("TT_FABRIC_KERNEL_VERSION");
+        const char* router_kernel_path = (kernel_version_env != nullptr && std::string_view(kernel_version_env) == "2")
+                                             ? "tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router_v2.cpp"
+                                             : "tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp";
 
         // Create the kernel
         auto kernel = tt::tt_metal::CreateKernel(
             program,
-            "tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp",
+            router_kernel_path,
             eth_logical_core,
             tt::tt_metal::EthernetConfig{
                 .noc = erisc_builder_->config.risc_configs[risc_id].get_configured_noc(),
                 .processor = proc,
                 .compile_args = ct_args,
-                .defines = defines,
+                .defines = risc_defines,
                 .named_compile_args = named_ct_args,
                 .opt_level = opt_level});
 
         tt::tt_metal::SetRuntimeArgs(program, kernel, eth_logical_core, rt_args);
+    }
+
+    if (erisc_builder_->has_drisc_offload()) {
+        const auto drisc_logical_core = erisc_builder_->get_drisc_logical_core();
+        auto [drisc_ct_args, drisc_named_ct_args] = erisc_builder_->get_drisc_compile_time_args();
+        drisc_named_ct_args["IS_LOCAL_HANDSHAKE_MASTER"] = 0;
+        drisc_named_ct_args["LOCAL_HANDSHAKE_MASTER_ETH_CHAN"] = ctx.master_router_chan;
+        drisc_named_ct_args["NUM_LOCAL_EDMS"] = ctx.num_local_fabric_routers;
+        drisc_named_ct_args["EDM_CHANNELS_MASK"] = ctx.router_channels_mask;
+        // CreateKernel injects the fabric defines (ROUTING_MODE, the 2D header size, ...) into data-movement and
+        // Ethernet kernels only, so a DRAM kernel needs them added here.
+        auto drisc_defines = defines;
+        for (const auto& [name, value] : control_plane.get_fabric_kernel_defines()) {
+            drisc_defines[name] = value;
+        }
+
+        auto drisc_kernel = tt::tt_metal::CreateKernel(
+            program,
+            "tt_metal/fabric/impl/kernels/edm_fabric/fabric_drisc_datamover.cpp",
+            drisc_logical_core,
+            tt::tt_metal::DramConfig{
+                .noc = tt::tt_metal::NOC::NOC_0,
+                .compile_args = drisc_ct_args,
+                .defines = drisc_defines,
+                .named_compile_args = drisc_named_ct_args,
+                .opt_level = erisc_builder_->get_kernel_opt_level()});
+
+        tt::tt_metal::SetRuntimeArgs(program, drisc_kernel, drisc_logical_core, rt_args);
     }
 
     log_debug(

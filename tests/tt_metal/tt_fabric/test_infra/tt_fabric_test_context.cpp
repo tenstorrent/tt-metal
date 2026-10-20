@@ -201,6 +201,20 @@ void TestContext::read_code_profiling_results() { get_code_profiler().read_code_
 
 void TestContext::report_code_profiling_results() { get_code_profiler().report_code_profiling_results(); }
 
+void TestContext::begin_phase_profile() {
+    if (!PhaseProfiler::is_enabled()) {
+        return;
+    }
+    phase_profiler_ = std::make_unique<PhaseProfiler>(get_eth_readback());
+    phase_profiler_->begin();
+}
+
+void TestContext::end_phase_profile(const std::string& test_name) {
+    if (phase_profiler_) {
+        phase_profiler_->end_and_report(test_name);
+    }
+}
+
 void TestContext::process_telemetry_for_golden() {
     auto& telemetry_manager = get_telemetry_manager();
     telemetry_manager.process_telemetry_for_golden();
@@ -336,6 +350,7 @@ void TestContext::reset_devices() {
     this->allocator_->reset();
 
     code_profiler_.reset();
+    phase_profiler_.reset();
     telemetry_manager_.reset();
     eth_readback_.reset();
 
@@ -684,6 +699,13 @@ void TestContext::process_traffic_config(TestConfig& config) {
                 traffic_config.hops = dest.hops;
             }
             this->add_traffic_config(traffic_config);
+        }
+
+        // The sender core's traffic configs are this sender's patterns, in order, so the stream
+        // program indexes them directly.
+        if (sender.stream.has_value() && fixture_->is_local_fabric_node_id(sender.device)) {
+            const auto& src_coord = this->fixture_->get_device_coord(sender.device);
+            this->test_devices_.at(src_coord).set_sender_stream(sender.core.value(), sender.stream.value());
         }
     }
 }

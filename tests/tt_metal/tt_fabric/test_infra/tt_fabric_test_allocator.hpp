@@ -602,7 +602,9 @@ inline void TestDeviceResources::reserve_core_internal(
  */
 inline static std::pair<uint32_t, uint32_t> calculate_credit_config(
     uint32_t buffer_capacity_bytes, uint32_t packet_size_bytes, uint32_t num_packets) {
-    uint32_t buffer_capacity_packets = buffer_capacity_bytes / packet_size_bytes;
+    // A packet with no payload (a stream's atomic_inc segment) takes no buffer space, so only the
+    // packet count limits its credits.
+    uint32_t buffer_capacity_packets = packet_size_bytes == 0 ? num_packets : buffer_capacity_bytes / packet_size_bytes;
     uint32_t initial_credits = std::min(buffer_capacity_packets, num_packets);
     uint32_t batch_size = std::max(1u, initial_credits / 4);
     return {initial_credits, batch_size};

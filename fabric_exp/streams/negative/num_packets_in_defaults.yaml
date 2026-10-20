@@ -1,0 +1,7 @@
+# Negative test: expected build error (see run_negative.sh).
+Tests:
+  - name: "NegNumPackets"
+    fabric_setup: {topology: Mesh}
+    defaults: {ftype: unicast, num_packets: 100, stream: [unicast_write, fused_atomic_inc]}
+    patterns:
+      - type: full_device_random_pairing

@@ -1,0 +1,7 @@
+# Raw run output stays local: per-run test logs (~91 MB) and per-sample latency CSVs (~180 MB).
+# The bandwidth and phase-profile CSVs that RESULTS.md and the compare scripts read are committed
+# (the repository's root .gitignore excludes *.csv, so they are re-included here).
+*.log
+!*.csv
+results/*_latency.csv
+__pycache__/

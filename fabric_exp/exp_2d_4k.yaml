@@ -1,0 +1,100 @@
+# 2D (Mesh, VC0) throughput experiments on the 2x4 P150x8 mesh, 1 link, 2 KiB.
+# Chip ids are row-major: [0, 0..3] is the top row, [0, 4..7] the bottom row.
+allocation_policies:
+    receiver:
+      policy: RoundRobin
+      max_configs_per_core: 4
+
+Tests:
+  # One flow, one hop east-west: TX of chip 0 -> RX of chip 1 (local delivery only)
+  - name: "Mesh1HopEW"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+    parametrization_params:
+      ntype: [unicast_write, unicast_scatter_write]
+      size: [4096]
+    defaults:
+      ftype: unicast
+      num_packets: 50000
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [0, 1]
+
+  # One flow, one hop north-south
+  - name: "Mesh1HopNS"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+    parametrization_params:
+      ntype: [unicast_write, unicast_scatter_write]
+      size: [4096]
+    defaults:
+      ftype: unicast
+      num_packets: 50000
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [0, 4]
+
+  # Two flows, one hop east-west in both directions: each eth core runs TX and RX concurrently
+  - name: "Mesh1HopEWBidir"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+    parametrization_params:
+      ntype: [unicast_write, unicast_scatter_write]
+      size: [4096]
+    defaults:
+      ftype: unicast
+      num_packets: 50000
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [0, 1]
+      - device: [0, 1]
+        patterns:
+          - destination:
+              device: [0, 0]
+
+  # One flow, three hops east-west: chips 1 and 2 forward only, chip 3 delivers
+  - name: "Mesh3HopEW"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+    parametrization_params:
+      ntype: [unicast_write, unicast_scatter_write]
+      size: [4096]
+    defaults:
+      ftype: unicast
+      num_packets: 50000
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [0, 3]
+
+  # All-to-all multicast (the golden's MeshMulticast)
+  - name: "MeshMulticast"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+    parametrization_params:
+      num_links: [1]
+      ntype: [unicast_write, unicast_scatter_write]
+      size: [4096]
+    defaults:
+      ftype: mcast
+      num_packets: 20000
+    patterns:
+      - type: all_to_all
+        iterations: 1

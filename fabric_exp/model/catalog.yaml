@@ -1,0 +1,289 @@
+# Piece catalog for the fabric router packing model ("lego" model).
+#
+# Units: core clock cycles at 1.35 GHz (ERISC and DRISC; measured ERISC mcycle == 1.35 GHz wall clock).
+# Every number carries `src`: "measured RESULTS §N" (on BH P150x8, 400G links, Oct 2026) or "estimated: <basis>".
+#
+# Model in one paragraph: a packet's work is a set of pieces. Each piece is placed on one core. A core spends, per
+# loop iteration, `loop` cycles plus one `poll` per queue it watches (its pieces' inputs that come from another core
+# or from outside: worker rings, Ethernet arrivals, other cores' handoffs, plus any idle channels it must scan).
+# Per packet, a core pays the work of its pieces plus its per-iteration overhead divided by the packets it moves per
+# iteration. When two adjacent pieces sit on different cores, a connector adds cost on both sides. The bottleneck
+# core sets the per-packet interval; the wire sets a floor.
+
+clock_hz: 1350000000
+
+# Placement rules the search must respect.
+rules:
+  # SC0 (worker entry, on the sending ERISC) and RC0 (on the receiving ERISC) must run in parallel: no receive piece
+  # may run on the ERISC that sends. Transmit work may move to the receiving ERISC.
+  rx_on_tx_erisc: false
+
+link:
+  # Wire time from Ethernet framing at the line rate, no fitted parameters. A packet (payload + header) goes out as
+  # TT-link L1-write frames of at most max_frame_payload_bytes each; every frame adds frame_overhead_bytes; pointer
+  # updates are minimum-size frames and credits are L1 writes of credit_bytes. This matches every wire-bound
+  # measurement within 0.1% (bare-link probe at 4000 and 4176 B, RESULTS §16; neighbor exchange at 5.4-8.7 KB, §10)
+  # and is 3% low at 2048 B.
+  line_rate_bytes_per_cycle: 37.037   # src: 400 Gb/s / 8 / 1.35 GHz
+  max_frame_payload_bytes: 4114       # src: measured ETH_TXQ_MAX_PKT_SIZE_BYTES (RESULTS §15); larger transfers split
+  frame_overhead_bytes: 56            # src: preamble + SFD 8, inter-frame gap 12, MAC header 14, FCS 4, TT-link header 18 (ISA doc)
+  min_frame_wire_bytes: 84            # src: 64 B minimum Ethernet frame + 20 (pointer update: a remote register write)
+  # Credits are counters on BH (two TX queues, so VC0_USES_COUNTER_CREDITS): each one is a single L1 write of the
+  # receiver's ack and completion counter arrays, 2 x (completion - ack counter base). 1D scenarios set credit_bytes: 32.
+  credit_bytes: {speedy: 32, generic: 96}   # src: router compile-time args (cached builds): 1D 32 B -> 88 B on the
+                                            # wire, 2D 96 B -> 152 B
+  header_bytes: {speedy: 48, generic: 96}   # src: fabric packet header by path: speedy 48 B; 2D 96 B, the compiled
+                                            # HybridMeshPacketHeaderT<36> on the 2x4 mesh (4448 B slot - 4352 B
+                                            # payload; 80 B is the smallest 2D tier). 1D scenarios set header_bytes: 48
+  # One-way floor: a TX queue with nothing to send returns the acknowledgements for what arrives on its paired RX
+  # queue only in a keepalive every keepalive_cycles, and a sender can have ~seq_window_frames frames
+  # unacknowledged, so a link with no data coming back moves at most that many frames per keepalive. Firmware sets
+  # 8000 (one-way 2D 4 KiB: 3 frames x 62.5 = 187.5); TT_FABRIC_EXP_SEQ_UPDATE_TIMEOUT=1000 makes the floor
+  # irrelevant (RESULTS §16). The model assumes that fix; Options(keepalive=8000) gives today's firmware.
+  keepalive_cycles: 1000          # src: measured RESULTS §16 (router knob; firmware default 8000)
+  seq_window_frames: 128          # src: measured RESULTS §15-16 (fits 125 / 187.5; 8-bit TT-link sequence numbers)
+  # One-way Ethernet latency, used only by the event-driven model; calibrated there against the slot sweep.
+  one_way_latency_cycles: 450     # src: calibrated against the slot sweep (RESULTS §5) by des.py --calibrate
+
+noc:
+  egress_bytes_per_cycle: 54      # src: measured RESULTS §3 microbench (2 KB NoC writes back-to-back, one ERISC port)
+  # The two ERISCs share their Ethernet tile's NoC ports. Today local writes and forwards both use NoC1
+  # (DEFAULT_RECEIVER_LOCAL_WRITE_NOC = DEFAULT_RECEIVER_FORWARDING_NOC = 1), so every copy leaves through one port.
+  eth_tile_noc_ports: 1           # src: erisc_datamover_builder.hpp
+  write_latency_cycles: 150       # src: estimated: half of the ~310-cycle NoC read round trip in the original doc
+
+core_types:
+  erisc:
+    has_txq: true                 # can drive the Ethernet TX queues
+    payload_local: true           # shares the Ethernet core's L1, where arriving payloads land
+    mmio_txqs_per_eth_core: 2     # src: BH ISA docs: only TX queues 0 and 1 carry remote register writes
+    loop: 25                      # src: measured RESULTS §8 (active-channel poll + loop 52 minus one channel poll 27)
+  drisc:                          # on a DRAM tile, a NoC trip away from the Ethernet core
+    has_txq: false
+    payload_local: false          # needs the payload pushed into its own L1
+    loop: 25                      # src: alpha = 1 (same per-op cost as ERISC, measured RESULTS §14)
+    alpha: 1.0                    # src: measured RESULTS §14: same cycles as the ERISC for loads, stream reads, NoC issue
+    share: 1                      # routers served by one DRISC; BH: 16 Metal DRISCs for at most 10 active Ethernet cores
+    egress_bytes_per_cycle: 54    # src: measured RESULTS §14: 53.5 B/cycle on NoC0 and NoC1 (4 KiB writes back to back)
+    noc_ports: 1                  # NoCs the DRISC sends on (a free-subchannel DRISC can use both)
+    # CPU per forward copy on a DRISC with lean stateful issue (one command-buffer poll, destination state kept):
+    # payload write + downstream doorbell 31 with the port free (measured RESULTS §14), plus the next-hop slot address
+    # and header update (estimated 14). Port time is charged separately (egress_bytes_per_cycle).
+    forward_per_copy: 45          # src: measured 31 + estimated 14
+
+# Poll cost per watched queue per loop iteration.
+polls:
+  sender_channel: 27   # src: measured RESULTS §8 (trimming ablation: ~27 per idle channel; includes completion/liveness reads)
+  # A sender-channel visit makes three separate checks (run_sender_channel_step_impl): new packet (free-slot stream
+  # register), completions from the far receiver (stream register / L1 counter), connection or teardown request (L1
+  # read). Only the 27 total is measured; the split is an estimate from the primitive costs (RESULTS §3).
+  sender_channel_parts: {packet: 11, completions: 10, connection: 6}   # src: estimated (see above)
+  connection_check_every: 16   # src: EXP 8 (lazy connection polling) checks one visit in 16
+  # Fused packet check: one block reads every channel's free-slot register, then one branch. Blocking: each read
+  # costs a full stream-register read (9, microbench RESULTS §3). Overlapped: the core keeps several MMIO reads in
+  # flight; unmeasured (the microbench times reads whose results are used immediately).
+  fused_fixed: 4                                   # src: estimated: combine + one branch
+  fused_per_channel: {blocking: 9, overlapped: 3}  # src: blocking measured RESULTS §3; overlapped estimated
+  rx_ring: 15          # src: estimated: stream-register read 9 + cache invalidate + branch (RX poll+loop ~50 measured)
+  retire: 10           # src: estimated: transaction-id sent check (RX poll+loop ~50 measured)
+  handoff: 12          # src: measured RESULTS §14: stream-register read 10.3 on ERISC and DRISC + branch
+  # Summary doorbell: every producer also increments one shared counter, and the sender reads that instead of
+  # scanning idle channels. A counter does not say which channel, so the sender compares it with the active channels'
+  # counts and scans everything when they disagree. The producer pays one more inline write per packet.
+  summary_doorbell: 12 # src: estimated: one stream-register read replacing per-channel scans
+  summary_doorbell_producer: 24   # src: measured RESULTS §3 (NoC inline write); charged per forwarded copy
+
+# Pieces. `cost` is cycles per occurrence for each router path; `per_packet` is occurrences per packet by default
+# (scenarios override); `batch` is the part of the cost that is paid once per batch of b packets when batching is on;
+# `needs`: txq (must run on a core with a TX queue), payload (must run where the payload is, else a push connector).
+pieces:
+  tx_send:
+    side: tx
+    needs: [txq]
+    input: sender_channel
+    cost: {speedy: 61, generic: 62}     # src: measured RESULTS §10 (speedy), §8 (generic)
+    batch: 15                           # src: estimated: pointer update = 3 TX-queue register writes + busy check
+  tx_completion:
+    side: tx
+    input: eth_completions
+    cost: {speedy: 18, generic: 35}     # src: measured RESULTS §10 (18 per batched check), §8 (35 per completion)
+    per_packet: {speedy: 0.45, generic: 0.74}  # src: measured occurrence rates
+  rx_decode:
+    side: rx
+    input: rx_ring
+    cost: {speedy: 13, generic: 17}     # src: measured RESULTS §10 / §8 (scenarios override: 31-54)
+  rx_admit:                             # only present when the packet has forwards (local delivery needs no credit)
+    side: rx
+    # Measured decode+admit is split: decode = scenario decode - check x outputs. The check (stream-register credit
+    # read) is the difference between scenarios with and without forwards: 3-hop E/W 31 vs 1-hop E/W 17 (1 output),
+    # multicast N/S 54 vs 1-hop N/S 32 (2 outputs): ~11-14 per output.
+    check_per_output: 12                # src: derived from RESULTS §8 (see above)
+    # Reserving a downstream slot (local credit decrement + slot-index advance) is taken out of the measured forward.
+    reserve_per_output: 6               # src: estimated: one stream-register write + index update (fabric_router_adapter.hpp)
+  rx_local:
+    side: rx
+    needs: [payload]
+    cost: {write: 46, scatter: 103}     # src: measured RESULTS §8, §10
+    noc_bytes: payload                  # bytes this piece sends out of the core's NoC port per occurrence
+  rx_forward:
+    side: rx
+    needs: [payload]
+    cost: {any: 83}                     # src: measured RESULTS §8 (per downstream copy, including the reservation)
+    per_packet: 0                       # scenarios set copies per packet
+    noc_bytes: payload
+  rx_ack:
+    side: rx
+    needs: [txq]
+    input: retire
+    cost: {speedy: 12, generic: 21}     # src: measured RESULTS §10 / §8 (per ack sent)
+    per_packet: {speedy: 0.25, generic: 1.0}   # speedy batches acks by 4
+    batch: 12                           # src: estimated: the per-ack cost is amortizable when batching
+
+# Connectors: extra cost when the producer and consumer pieces of an edge sit on different cores.
+# `producer`/`consumer` are cycles per packet on each side; `per_batch` parts are divided by the batch size.
+connectors:
+  erisc_to_erisc:        # descriptor ring in the shared Ethernet L1 + stream-register doorbell
+    producer: 2          # src: estimated: posted descriptor store
+    producer_per_batch: 3   # src: estimated: stream-register increment
+    consumer: 8          # src: estimated: descriptor load from L1 (RESULTS §3: dependent L1 load ~8)
+    poll: handoff
+  # Handoff costs below assume lean stateful issue on both cores (RESULTS §14: one command-buffer poll per write,
+  # destination and doorbell value kept in command-buffer state; the stock stateful API is slower than stateless).
+  erisc_to_drisc_payload:   # push the whole packet into the DRISC's L1
+    producer: 20         # src: measured RESULTS §14: lean push 32 with the port free = write ~17 + doorbell ~12 + 3
+    producer_per_batch: 12   # src: measured RESULTS §14: lean doorbell (stream-register increment) ~12
+    consumer: 8          # src: estimated: header load from the DRISC's own L1
+    poll: handoff
+    noc_bytes: payload_and_header
+  erisc_to_drisc_header:    # push only the header
+    producer: 17         # src: measured RESULTS §14: lean write with the port free (size does not change the CPU cost)
+    producer_per_batch: 12
+    consumer: 8
+    poll: handoff
+    noc_bytes: header
+  drisc_to_erisc:        # signal back (decision, retire, credits)
+    producer: 0
+    producer_per_batch: 13   # src: measured RESULTS §14: lean counted doorbell (value written per use) ~12-13
+    consumer: 8
+    poll: handoff
+  drisc_to_erisc_request:   # decoded output list for the ERISC to admit: descriptor ring in ERISC L1 + doorbell
+    producer: 4             # src: estimated: pack the output mask into a local staging word
+    producer_per_batch: 29  # src: measured RESULTS §14: one small lean write (~17) + lean doorbell (~12)
+    consumer: 8             # src: estimated: descriptor load from L1 (RESULTS §3: dependent L1 load ~8)
+    poll: handoff
+  erisc_to_drisc_grant:     # "next n packets admitted": a counting stream-register increment on the DRISC
+    producer: 0
+    producer_per_batch: 13  # src: measured RESULTS §14: lean counted doorbell
+    consumer: 4             # src: estimated: the DRISC mirrors the downstream slot indices itself
+    poll: handoff
+  credit_relay:             # ERISC reads downstream credits from its stream registers and forwards them to the DRISC
+    producer: 12            # src: measured RESULTS §14: credit register read 10.3 + consume write ~2, per output
+    producer_per_batch: 13  # src: measured RESULTS §14: lean counted doorbell to a DRISC stream register
+    consumer: 4
+    poll: handoff
+
+# Scenarios: traffic shapes the model is validated on (measured interval in `measured`). `reverse_data: false` marks
+# one-way benchmarks: no data comes back on the link, so its credits do not share the data direction's wire and, at the
+# firmware keepalive, the one-way floor applies (link.keepalive_cycles).
+scenarios:
+  nbr_speedy:
+    path: speedy
+    sender_channels: 1          # channels the sending core scans per iteration
+    active_channels: 1
+    pkts_per_iter: 1.0
+    rx: {decode: 13, local: write, forwards: 0}
+    measured: {tx_bound_interval: 124, rx_busy: 105}   # src: RESULTS §10
+  nbr_speedy_oneway:            # the same path in one direction only (exp_nbr_oneway.yaml)
+    path: speedy
+    sender_channels: 1
+    active_channels: 1
+    pkts_per_iter: 1.0
+    reverse_data: false
+    rx: {decode: 13, local: write, forwards: 0}
+    # 2048 / 4000 / 4096 B: keepalive 1000: 122.8 / 122.9 / 122.9; firmware keepalive: 129.6 / 130.3 / 187.5
+    measured: {interval: 122.9, firmware_keepalive_interval: 187.5}   # src: RESULTS §16
+  2d_single_ew:
+    path: generic
+    sender_channels: 4
+    active_channels: 1
+    pkts_per_iter: 1.0
+    reverse_data: false
+    rx: {decode: 17, local: write, forwards: 0}
+    # Trimmed 4 KiB: 169.8 with keepalive 1000 (the same as 2 KiB), 187.6 at the firmware keepalive (RESULTS §16).
+    measured: {interval: 223, trimmed_2ch_interval: 168}   # src: RESULTS §8
+  2d_single_ns:
+    path: generic
+    sender_channels: 4
+    active_channels: 1
+    pkts_per_iter: 1.0
+    reverse_data: false
+    rx: {decode: 32, local: write, forwards: 0}
+    # Trimmed 4 KiB: 152.5 with keepalive 1000, 187.6 at the firmware keepalive (RESULTS §16).
+    measured: {interval: 223, trimmed_1ch_interval: 152}   # src: RESULTS §8 (trimmed is RX-bound)
+  2d_single_ew_scatter:
+    path: generic
+    sender_channels: 4
+    active_channels: 1
+    pkts_per_iter: 1.0
+    reverse_data: false
+    rx: {decode: 17, local: scatter, forwards: 0}
+    measured: {trimmed_2ch_interval: 191}                  # src: RESULTS §8
+  2d_single_ns_scatter:
+    path: generic
+    sender_channels: 4
+    active_channels: 1
+    pkts_per_iter: 1.0
+    reverse_data: false
+    rx: {decode: 32, local: scatter, forwards: 0}
+    measured: {trimmed_1ch_interval: 206}                  # src: RESULTS §8
+  2d_3hop_middle:
+    path: generic
+    sender_channels: 4
+    active_channels: 1
+    pkts_per_iter: 1.0
+    reverse_data: false
+    rx: {decode: 31, local: none, forwards: 1}
+    # Trimmed 4 KiB: 186.5 with keepalive 1000, 196.4 at the firmware keepalive (RESULTS §16).
+    measured: {interval: 223, trimmed_interval: 189}       # src: RESULTS §8
+  2d_mcast_heavy_link:
+    path: generic
+    sender_channels: 4
+    active_channels: 3
+    pkts_per_iter: 1.4          # src: measured RESULTS §8 (4 channels / 2.85 visits per packet)
+    rx: {decode: 17, local: write, forwards: 0}
+    tx_extra: 4                 # src: measured (connection checks 12 x 0.33 per packet)
+    measured: {interval: 181}   # src: RESULTS §8
+  2d_mcast_ns_router:
+    path: generic
+    sender_channels: 4
+    active_channels: 1
+    pkts_per_iter: 1.0
+    rx: {decode: 54, local: write, forwards: 2}
+    # Admission failures per packet: measured 0.27-0.29 for mesh multicast at 2 KiB (phase profiler rx_blk_admit,
+    # results/final_p3_phase.csv, dB_phase.csv); 0 for the unicast benchmarks.
+    blocked_per_pkt: 0.27       # src: measured RESULTS phase profiles (mesh multicast)
+    measured: {}
+  # 1D linear, middle router of an all-to-all multicast: every packet is delivered locally and forwarded once
+  # (phase profile results/p2_phase.csv: decode + admit 26-28, forward 88, local write 60 / scatter 111, each once per
+  # packet, timers included). The receiving ERISC is critical (RESULTS §2).
+  1d_linear_mcast:
+    path: generic
+    header_bytes: 48            # src: 1D packet header
+    credit_bytes: 32            # src: 1D counter credits
+    sender_channels: 2          # src: builder_config num_sender_channels_1d_linear (worker + upstream router)
+    active_channels: 2          # a middle router's worker and its upstream router both send
+    pkts_per_iter: 1.0
+    rx: {decode: 28, local: write, forwards: 1}
+    # The model assumes a router sends and receives at one rate. In the measured test (all-to-all multicast on a line
+    # of 4) a router sends 1.5x the packets it receives (60,000 vs 40,000): the sending ERISC sets the reported 175
+    # cycles/packet (RESULTS §1, 2 KiB, no telemetry), and the receiving ERISC has 262 cycles per received packet.
+    measured: {}
+  1d_linear_mcast_scatter:
+    path: generic
+    header_bytes: 48            # src: 1D packet header
+    credit_bytes: 32            # src: 1D counter credits
+    sender_channels: 2
+    active_channels: 2
+    pkts_per_iter: 1.0
+    rx: {decode: 28, local: scatter, forwards: 1}
+    measured: {}                # RESULTS §1 reports 226 (scatter), with the same 1.5:1 send:receive asymmetry

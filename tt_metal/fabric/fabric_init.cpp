@@ -13,6 +13,9 @@
 #include "impl/dispatch/dispatch_core_common.hpp"
 #include "impl/program/program_impl.hpp"
 #include "llrt/metal_soc_descriptor.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/telemetry/fabric_phase_profile_types.hpp"
+
+#include <cstdlib>
 
 // hack for test_basic_fabric_apis.cpp
 // https://github.com/tenstorrent/tt-metal/issues/20000
@@ -73,6 +76,31 @@ void configure_fabric_cores(tt::tt_metal::MetalEnvImpl& env_impl, tt::tt_metal::
         auto router_logical_core = soc_desc.get_eth_core_for_channel(router_chan, CoordSystem::LOGICAL);
         for (const auto& address : addresses_to_clear) {
             tt::tt_metal::detail::WriteToDeviceL1(device, router_logical_core, address, router_zero_buf, CoreType::ETH);
+        }
+    }
+
+    const auto& hal = env_impl.get_hal();
+    // The same experiment knobs FabricEriscDatamoverBuilder::has_drisc_offload reads.
+    const auto experiment_env = [](const char* name) {
+        const char* value = std::getenv(name);
+        return value ? static_cast<uint32_t>(std::strtoul(value, nullptr, 0)) : 0u;
+    };
+    const bool drisc_offload_enabled = (experiment_env("TT_FABRIC_EXP_FLAGS") & EXP_DRISC_OFFLOAD) != 0 ||
+                                       experiment_env("TT_FABRIC_DRISC_OFFLOAD") != 0;
+    if (drisc_offload_enabled && env_impl.get_cluster().arch() == tt::ARCH::BLACKHOLE &&
+        hal.has_programmable_core_type(tt::tt_metal::HalProgrammableCoreType::DRAM)) {
+        const uint64_t drisc_host_unreserved_base = hal.get_dev_noc_addr(
+            tt::tt_metal::HalProgrammableCoreType::DRAM, tt::tt_metal::HalL1MemAddrType::UNRESERVED);
+        // Zero the DRISC offload control + teardown semaphore region (+0x0A90..+0x0AFF) before kernel launch.
+        const std::vector<uint32_t> drisc_zero_buf((0x0B00 - 0x0A90) / sizeof(uint32_t), 0);
+        for (const auto& core : soc_desc.get_metal_dram_cores(tt::CoordSystem::TRANSLATED)) {
+            if (soc_desc.get_dram_endpoint_noc_mask(core) == 0) {
+                env_impl.get_cluster().write_core(
+                    drisc_zero_buf.data(),
+                    drisc_zero_buf.size() * sizeof(uint32_t),
+                    tt_cxy_pair(device->id(), core),
+                    drisc_host_unreserved_base + 0x0A90);
+            }
         }
     }
 }

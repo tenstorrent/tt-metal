@@ -1,0 +1,5411 @@
+
+8310703137207683420/kernels/fabric_erisc_router/17188390148658530772//subordinate_active_erisc/subordinate_active_erisc.elf.xip.elf:     file format elf32-littleriscv
+
+
+Disassembly of section .text:
+
+0000c680 <_start>:
+_start():
+/home/aagarwal/tt-metal/tt_metal/hw/toolchain/substitutes.cpp:24 (discriminator 1)
+    c680:	lui	a5,0xffb01
+    c684:	lui	a4,0xffb01
+
+0000c688 <.LM3073>:
+/home/aagarwal/tt-metal/tt_metal/hw/toolchain/substitutes.cpp:22
+    c688:	addi	a5,a5,-844 # ffb00cb4 <exp_pending_upstream_credits+0x10>
+
+0000c68c <.LM3074>:
+/home/aagarwal/tt-metal/tt_metal/hw/toolchain/substitutes.cpp:24 (discriminator 1)
+    c68c:	addi	a4,a4,-808 # ffb00cd8 <__ldm_bss_end>
+    c690:	bltu	a4,a5,c6ac <.L239>
+
+0000c694 <.L240>:
+/home/aagarwal/tt-metal/tt_metal/hw/toolchain/substitutes.cpp:25
+    c694:	sw	zero,-4(a5)
+
+0000c698 <.LM3076>:
+    c698:	sw	zero,-8(a5)
+
+0000c69c <.LM3077>:
+    c69c:	sw	zero,-12(a5)
+
+0000c6a0 <.LM3078>:
+    c6a0:	sw	zero,-16(a5)
+
+0000c6a4 <.LM3079>:
+/home/aagarwal/tt-metal/tt_metal/hw/toolchain/substitutes.cpp:28
+    c6a4:	addi	a5,a5,16
+
+0000c6a8 <.LM3080>:
+/home/aagarwal/tt-metal/tt_metal/hw/toolchain/substitutes.cpp:24 (discriminator 1)
+    c6a8:	bgeu	a4,a5,c694 <.L240>
+
+0000c6ac <.L239>:
+/home/aagarwal/tt-metal/tt_metal/hw/toolchain/substitutes.cpp:32
+    c6ac:	addi	a3,a5,-8
+
+0000c6b0 <.LM3082>:
+/home/aagarwal/tt-metal/tt_metal/hw/toolchain/substitutes.cpp:33 (discriminator 1)
+    c6b0:	bltu	a4,a3,c768 <.L249>
+
+0000c6b4 <.LM3083>:
+/home/aagarwal/tt-metal/tt_metal/hw/toolchain/substitutes.cpp:34
+    c6b4:	sw	zero,-12(a5)
+
+0000c6b8 <.LM3084>:
+    c6b8:	sw	zero,-16(a5)
+
+0000c6bc <.L241>:
+/home/aagarwal/tt-metal/tt_metal/hw/toolchain/substitutes.cpp:37
+    c6bc:	addi	a3,a5,-4
+
+0000c6c0 <.LM3086>:
+/home/aagarwal/tt-metal/tt_metal/hw/toolchain/substitutes.cpp:38 (discriminator 1)
+    c6c0:	bltu	a4,a3,c6c8 <.L242>
+
+0000c6c4 <.LM3087>:
+/home/aagarwal/tt-metal/tt_metal/hw/toolchain/substitutes.cpp:39
+    c6c4:	sw	zero,-8(a5)
+
+0000c6c8 <.L242>:
+_Z7do_crt1U11rvtt_l1_ptrPm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/firmware_common.h:62
+    c6c8:	auipc	a4,0x1
+    c6cc:	addi	a4,a4,2024 # deb0 <__kernel_data_lma>
+    c6d0:	addi	a5,gp,1120 # ffb00c50 <__fw_export_ldm_end>
+    c6d4:	beq	a4,a5,c738 <.L244>
+
+0000c6d8 <.LBB3718>:
+_Z24l1_word_count_from_rangeImE11L1WordCountPT_S2_():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/risc_attribs.h:32
+    c6d8:	lui	a2,0xffb01
+    c6dc:	addi	a2,a2,-860 # ffb00ca4 <exp_pending_upstream_credits>
+    c6e0:	sub	a2,a2,a5
+
+0000c6e4 <.LBB3721>:
+_start():
+/home/aagarwal/tt-metal/tt_metal/hw/toolchain/substitutes.cpp:47 (discriminator 1)
+    c6e4:	li	a1,8
+
+0000c6e8 <.LBB3725>:
+_Z24l1_word_count_from_rangeImE11L1WordCountPT_S2_():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/risc_attribs.h:32
+    c6e8:	srai	a3,a2,0x2
+
+0000c6ec <.LBB3726>:
+/home/aagarwal/tt-metal/tt_metal/hw/toolchain/substitutes.cpp:47 (discriminator 1)
+    c6ec:	bge	a1,a2,c71c <.L245>
+    c6f0:	li	a6,2
+
+0000c6f4 <.L246>:
+/home/aagarwal/tt-metal/tt_metal/hw/toolchain/substitutes.cpp:48
+    c6f4:	lw	a0,0(a4)
+    c6f8:	lw	a1,4(a4)
+    c6fc:	lw	a2,8(a4)
+
+0000c700 <.LM3096>:
+/home/aagarwal/tt-metal/tt_metal/hw/toolchain/substitutes.cpp:57
+    c700:	addi	a4,a4,12
+    c704:	addi	a5,a5,12
+    c708:	addi	a3,a3,-3
+
+0000c70c <.LM3097>:
+/home/aagarwal/tt-metal/tt_metal/hw/toolchain/substitutes.cpp:63
+    c70c:	sw	a0,-12(a5)
+    c710:	sw	a1,-8(a5)
+    c714:	sw	a2,-4(a5)
+
+0000c718 <.LBE3723>:
+/home/aagarwal/tt-metal/tt_metal/hw/toolchain/substitutes.cpp:47 (discriminator 1)
+    c718:	blt	a6,a3,c6f4 <.L246>
+
+0000c71c <.L245>:
+/home/aagarwal/tt-metal/tt_metal/hw/toolchain/substitutes.cpp:67
+    c71c:	blez	a3,c738 <.L244>
+
+0000c720 <.LM3100>:
+/home/aagarwal/tt-metal/tt_metal/hw/toolchain/substitutes.cpp:68
+    c720:	lw	a1,0(a4)
+
+0000c724 <.LM3101>:
+/home/aagarwal/tt-metal/tt_metal/hw/toolchain/substitutes.cpp:69 (discriminator 1)
+    c724:	li	a2,2
+
+0000c728 <.LM3102>:
+/home/aagarwal/tt-metal/tt_metal/hw/toolchain/substitutes.cpp:68
+    c728:	sw	a1,0(a5)
+
+0000c72c <.LM3103>:
+/home/aagarwal/tt-metal/tt_metal/hw/toolchain/substitutes.cpp:69 (discriminator 1)
+    c72c:	bne	a3,a2,c738 <.L244>
+
+0000c730 <.LM3104>:
+/home/aagarwal/tt-metal/tt_metal/hw/toolchain/substitutes.cpp:70
+    c730:	lw	a4,4(a4)
+    c734:	sw	a4,4(a5)
+
+0000c738 <.L244>:
+_Z19NOC_STATUS_READ_REGmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:180
+    c738:	lui	a5,0xffb30
+    c73c:	lw	t3,520(a5) # ffb30208 <__stack_base+0x2f528>
+
+0000c740 <.LBB3733>:
+    c740:	lw	a7,552(a5)
+
+0000c744 <.LBB3735>:
+    c744:	lw	a0,516(a5)
+
+0000c748 <.LBB3737>:
+    c748:	lw	a2,512(a5)
+
+0000c74c <.LBB3739>:
+    c74c:	lw	a4,556(a5)
+
+0000c750 <.LBE3739>:
+_Z20noc_local_state_initi():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:870
+    c750:	sw	t3,-2024(gp) # ffb00008 <noc_reads_num_issued+0x4>
+
+0000c754 <.LM3151>:
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:871
+    c754:	sw	a7,-2016(gp) # ffb00010 <noc_nonposted_writes_num_issued+0x4>
+
+0000c758 <.LM3153>:
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:872
+    c758:	sw	a0,-2008(gp) # ffb00018 <noc_nonposted_writes_acked+0x4>
+
+0000c75c <.LM3155>:
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:873
+    c75c:	sw	a2,-2000(gp) # ffb00020 <noc_nonposted_atomics_acked+0x4>
+
+0000c760 <.LM3157>:
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:874
+    c760:	sw	a4,-1992(gp) # ffb00028 <noc_posted_writes_num_issued+0x4>
+
+0000c764 <.LBE3729>:
+_start():
+/home/aagarwal/tt-metal/tt_metal/hw/firmware/src/tt-1xx/active_erisck.cc:41
+    c764:	j	c914 <_Z11kernel_mainv>
+
+0000c768 <.L249>:
+/home/aagarwal/tt-metal/tt_metal/hw/toolchain/substitutes.cpp:32
+    c768:	mv	a5,a3
+    c76c:	j	c6bc <.L241>
+
+0000c770 <_Z26wait_for_other_local_eriscv>:
+_Z26wait_for_other_local_eriscv():
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3050 (discriminator 1)
+    c770:	lui	a5,0x2
+
+0000c774 <.LM7>:
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3050
+    c774:	lui	a4,0x1
+
+0000c778 <.LBB2>:
+_Z28read_stream_scratch_registerILm31EEmv():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp:25
+    c778:	lui	a2,0xffb5f
+
+0000c77c <.LBE2>:
+_Z26wait_for_other_local_eriscv():
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3050 (discriminator 1)
+    c77c:	addi	a1,a5,-1 # 1fff <.LLST570+0x7>
+
+0000c780 <.LM10>:
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3050
+    c780:	addi	a4,a4,-19 # fed <.LLST246>
+
+0000c784 <.L2>:
+_Z28read_stream_scratch_registerILm31EEmv():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp:25
+    c784:	lw	a3,16(a2) # ffb5f010 <__stack_base+0x5e330>
+
+0000c788 <.LBE5>:
+_Z26wait_for_other_local_eriscv():
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3050 (discriminator 1)
+    c788:	and	a3,a3,a1
+
+0000c78c <.LM15>:
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3050
+    c78c:	bne	a3,a4,c784 <.L2>
+
+0000c790 <.LBB6>:
+_Z29write_stream_scratch_registerILm31EEmm():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp:32
+    c790:	addi	a5,a5,-1107
+    c794:	sw	a5,16(a2)
+
+0000c798 <.LBE6>:
+_Z26wait_for_other_local_eriscv():
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3056
+    c798:	ret
+
+0000c79c <_Z8teardownU11rvtt_l1_ptrPVN2tt9tt_fabric17TerminationSignalEU11rvtt_l1_ptrPVNS0_9EDMStatusE25WriteTransactionIdTrackerILh16ELj4ELj0ELh1ELh1EE.isra.0>:
+_Z8teardownU11rvtt_l1_ptrPVN2tt9tt_fabric17TerminationSignalEU11rvtt_l1_ptrPVNS0_9EDMStatusE25WriteTransactionIdTrackerILh16ELj4ELj0ELh1ELh1EE():
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3058
+    c79c:	addi	sp,sp,-16
+    c7a0:	sw	ra,12(sp)
+    c7a4:	sw	s0,8(sp)
+    c7a8:	sw	s1,4(sp)
+
+0000c7ac <.LM23>:
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3087
+    c7ac:	jal	c770 <_Z26wait_for_other_local_eriscv>
+
+0000c7b0 <.LM24>:
+    c7b0:	lui	a5,0xffb30
+    c7b4:	addi	a4,a5,576 # ffb30240 <__stack_base+0x2f560>
+
+0000c7b8 <.LBB51>:
+_ZNK25WriteTransactionIdTrackerILh16ELj4ELj0ELh1ELh1EE34all_buffer_slot_transactions_ackedEv():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_router_transaction_id_tracker.hpp:118 (discriminator 1)
+    c7b8:	addi	a3,a5,592
+
+0000c7bc <.L6>:
+_Z19NOC_STATUS_READ_REGmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:180
+    c7bc:	lw	a2,0(a4)
+
+0000c7c0 <.LBE55>:
+_Z33noc_async_write_barrier_with_tridmh():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/api/dataflow/dataflow_api.h:2948 (discriminator 1)
+    c7c0:	bnez	a2,c7bc <.L6>
+
+0000c7c4 <.LBB58>:
+_Z19invalidate_l1_cachev():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/cache.h:14
+    c7c4:	fence
+
+0000c7c8 <.LBE53>:
+_ZNK25WriteTransactionIdTrackerILh16ELj4ELj0ELh1ELh1EE34all_buffer_slot_transactions_ackedEv():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_router_transaction_id_tracker.hpp:118 (discriminator 1)
+    c7c8:	addi	a4,a4,4
+
+0000c7cc <.LM32>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_router_transaction_id_tracker.hpp:118
+    c7cc:	bne	a4,a3,c7bc <.L6>
+
+0000c7d0 <.LBB60>:
+_Z19NOC_STATUS_READ_REGmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:180
+    c7d0:	lui	a4,0xffb20
+    c7d4:	lw	a3,520(a4) # ffb20208 <__stack_base+0x1f528>
+
+0000c7d8 <.LBE63>:
+_Z24ncrisc_noc_counters_initILh2EEvv():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:932
+    c7d8:	addi	a2,gp,-2028 # ffb00004 <noc_reads_num_issued>
+
+0000c7dc <.LBB66>:
+_Z19NOC_STATUS_READ_REGmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:180
+    c7dc:	lw	a7,552(a4)
+
+0000c7e0 <.LBB69>:
+    c7e0:	lw	a6,516(a4)
+
+0000c7e4 <.LBB72>:
+    c7e4:	lw	a0,512(a4)
+
+0000c7e8 <.LBB75>:
+    c7e8:	lw	a1,556(a4)
+
+0000c7ec <.LBE75>:
+_Z24ncrisc_noc_counters_initILh2EEvv():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:932
+    c7ec:	sw	a3,0(a2)
+
+0000c7f0 <.LM47>:
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:936
+    c7f0:	addi	a4,gp,-1996 # ffb00024 <noc_posted_writes_num_issued>
+
+0000c7f4 <.LM50>:
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:933
+    c7f4:	addi	a3,gp,-2020 # ffb0000c <noc_nonposted_writes_num_issued>
+
+0000c7f8 <.LM51>:
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:934
+    c7f8:	addi	s1,gp,-2012 # ffb00014 <noc_nonposted_writes_acked>
+
+0000c7fc <.LM52>:
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:935
+    c7fc:	addi	s0,gp,-2004 # ffb0001c <noc_nonposted_atomics_acked>
+
+0000c800 <.LM53>:
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:936
+    c800:	sw	a1,0(a4)
+
+0000c804 <.LM54>:
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:933
+    c804:	sw	a7,0(a3)
+
+0000c808 <.LM55>:
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:934
+    c808:	sw	a6,0(s1)
+
+0000c80c <.LM56>:
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:935
+    c80c:	sw	a0,0(s0)
+
+0000c810 <.LBB78>:
+_Z19NOC_STATUS_READ_REGmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:180
+    c810:	lw	a7,520(a5)
+
+0000c814 <.LBB79>:
+    c814:	lw	a6,552(a5)
+
+0000c818 <.LBB80>:
+    c818:	lw	a0,516(a5)
+
+0000c81c <.LBB81>:
+    c81c:	lw	a1,512(a5)
+
+0000c820 <.LBB82>:
+    c820:	lw	a5,556(a5)
+
+0000c824 <.LBE82>:
+_Z24ncrisc_noc_counters_initILh2EEvv():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:932
+    c824:	sw	a7,4(a2)
+
+0000c828 <.LM64>:
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:936
+    c828:	sw	a5,4(a4)
+
+0000c82c <.LM65>:
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:933
+    c82c:	sw	a6,4(a3)
+
+0000c830 <.LM66>:
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:934
+    c830:	sw	a0,4(s1)
+
+0000c834 <.LM67>:
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:935
+    c834:	sw	a1,4(s0)
+
+0000c838 <.LBE60>:
+_Z8teardownU11rvtt_l1_ptrPVN2tt9tt_fabric17TerminationSignalEU11rvtt_l1_ptrPVNS0_9EDMStatusE25WriteTransactionIdTrackerILh16ELj4ELj0ELh1ELh1EE():
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3113
+    c838:	jal	c770 <_Z26wait_for_other_local_eriscv>
+
+0000c83c <.LBB83>:
+_Z35ncrisc_noc_nonposted_writes_flushedm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:740 (discriminator 1)
+    c83c:	lw	a4,4(s1)
+
+0000c840 <.LBB87>:
+_Z19NOC_STATUS_READ_REGmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:180
+    c840:	lui	a5,0xffb30
+
+0000c844 <.L8>:
+    c844:	lw	a3,516(a5) # ffb30204 <__stack_base+0x2f524>
+
+0000c848 <.LBE85>:
+_Z23noc_async_write_barrierh():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/api/dataflow/dataflow_api.h:2122 (discriminator 2)
+    c848:	bne	a3,a4,c844 <.L8>
+
+0000c84c <.LBB89>:
+_Z19invalidate_l1_cachev():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/cache.h:14
+    c84c:	fence
+
+0000c850 <.LBB91>:
+_Z36ncrisc_noc_nonposted_atomics_flushedm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:761 (discriminator 1)
+    c850:	lw	a4,4(s0)
+
+0000c854 <.LBB95>:
+_Z19NOC_STATUS_READ_REGmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:180
+    c854:	lui	a5,0xffb30
+
+0000c858 <.L9>:
+    c858:	lw	a3,512(a5) # ffb30200 <__stack_base+0x2f520>
+
+0000c85c <.LBE93>:
+_Z24noc_async_atomic_barrierh():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/api/dataflow/dataflow_api.h:2205 (discriminator 2)
+    c85c:	bne	a3,a4,c858 <.L9>
+
+0000c860 <.LBB97>:
+_Z19invalidate_l1_cachev():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/cache.h:14
+    c860:	fence
+
+0000c864 <.LBB99>:
+_Z21NOC_CMD_BUF_WRITE_REGmmmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:168
+    c864:	sw	zero,24(a5)
+
+0000c868 <.LM84>:
+    c868:	lui	a5,0xffb31
+    c86c:	sw	zero,-2024(a5) # ffb30818 <__stack_base+0x2fb38>
+
+0000c870 <.LM85>:
+    c870:	sw	zero,24(a5)
+
+0000c874 <.LBE99>:
+_Z8teardownU11rvtt_l1_ptrPVN2tt9tt_fabric17TerminationSignalEU11rvtt_l1_ptrPVNS0_9EDMStatusE25WriteTransactionIdTrackerILh16ELj4ELj0ELh1ELh1EE():
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3144
+    c874:	lw	s0,8(sp)
+
+0000c878 <.LBB112>:
+_Z21NOC_CMD_BUF_WRITE_REGmmmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:168
+    c878:	lui	a5,0xffb32
+
+0000c87c <.LBE112>:
+_Z8teardownU11rvtt_l1_ptrPVN2tt9tt_fabric17TerminationSignalEU11rvtt_l1_ptrPVNS0_9EDMStatusE25WriteTransactionIdTrackerILh16ELj4ELj0ELh1ELh1EE():
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3144
+    c87c:	lw	ra,12(sp)
+    c880:	lw	s1,4(sp)
+
+0000c884 <.LBB113>:
+_Z21NOC_CMD_BUF_WRITE_REGmmmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:168
+    c884:	sw	zero,-2024(a5) # ffb31818 <__stack_base+0x30b38>
+
+0000c888 <.LBE113>:
+_Z8teardownU11rvtt_l1_ptrPVN2tt9tt_fabric17TerminationSignalEU11rvtt_l1_ptrPVNS0_9EDMStatusE25WriteTransactionIdTrackerILh16ELj4ELj0ELh1ELh1EE():
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3144
+    c888:	addi	sp,sp,16
+
+0000c88c <.LM93>:
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3138
+    c88c:	j	c770 <_Z26wait_for_other_local_eriscv>
+
+0000c890 <_Z37initialize_state_for_txq1_active_modev>:
+_Z17eth_txq_reg_writemmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/ethernet/tt_eth_api.h:27
+    c890:	lui	a5,0xffb91
+
+0000c894 <.LBE229>:
+_Z37initialize_state_for_txq1_active_modev():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_txq_setup.h:79
+    c894:	li	a4,1
+
+0000c898 <.LBB232>:
+_Z17eth_txq_reg_writemmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/ethernet/tt_eth_api.h:27
+    c898:	sw	a4,0(a5) # ffb91000 <__stack_base+0x90320>
+
+0000c89c <.LBB233>:
+    c89c:	sw	a4,0(a5)
+
+0000c8a0 <.LBB235>:
+_Z13eth_reg_writemm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/ethernet/tt_eth_api.h:34
+    c8a0:	li	a3,256
+    c8a4:	lui	a4,0xffb98
+    c8a8:	sw	a3,668(a4) # ffb9829c <__stack_base+0x975bc>
+
+0000c8ac <.LBB237>:
+    c8ac:	li	a3,1
+    c8b0:	sw	a3,664(a4)
+
+0000c8b4 <.LBB239>:
+    c8b4:	lui	a2,0xffb90
+    c8b8:	sw	a3,0(a2) # ffb90000 <__stack_base+0x8f320>
+
+0000c8bc <.LBB243>:
+    c8bc:	sw	a3,0(a5)
+
+0000c8c0 <.LBB247>:
+    c8c0:	sw	zero,132(a2)
+
+0000c8c4 <.LBB249>:
+    c8c4:	sw	a3,132(a5)
+
+0000c8c8 <.LBB251>:
+    c8c8:	sw	zero,128(a2)
+
+0000c8cc <.LBB255>:
+    c8cc:	li	a3,273
+    c8d0:	sw	a3,128(a5)
+
+0000c8d4 <.LBB259>:
+    c8d4:	lui	a2,0xffb94
+    c8d8:	li	a3,2
+    c8dc:	sw	a3,0(a2) # ffb94000 <__stack_base+0x93320>
+
+0000c8e0 <.LBB263>:
+    c8e0:	lui	a2,0xffb95
+    c8e4:	sw	a3,0(a2) # ffb95000 <__stack_base+0x94320>
+
+0000c8e8 <.LBB267>:
+_Z12eth_reg_readm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/ethernet/tt_eth_api.h:36
+    c8e8:	lw	a3,340(a4)
+
+0000c8ec <.LBB271>:
+_Z37initialize_state_for_txq1_active_modev():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_txq_setup.h:41 (discriminator 1)
+    c8ec:	andi	a3,a3,-256
+
+0000c8f0 <.LBB273>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_txq_setup.h:54
+    c8f0:	ori	a3,a3,80
+
+0000c8f4 <.LBB276>:
+_Z13eth_reg_writemm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/ethernet/tt_eth_api.h:34
+    c8f4:	sw	a3,340(a4)
+
+0000c8f8 <.LBB278>:
+    c8f8:	sw	zero,336(a4)
+
+0000c8fc <.LBB280>:
+_Z37initialize_state_for_txq1_active_modev():
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3149
+    c8fc:	lui	a4,0x16
+    c900:	sw	zero,-1056(a4) # 15be0 <.LASF1358+0x1c>
+
+0000c904 <.LM146>:
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3150
+    c904:	sw	zero,-1008(a4)
+
+0000c908 <.LBB281>:
+_Z17eth_txq_reg_writemmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/ethernet/tt_eth_api.h:27
+    c908:	li	a4,32
+    c90c:	sw	a4,108(a5)
+
+0000c910 <.LBE281>:
+_Z37initialize_state_for_txq1_active_modev():
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3153
+    c910:	ret
+
+0000c914 <_Z11kernel_mainv>:
+_Z11kernel_mainv():
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3202
+    c914:	addi	sp,sp,-624
+
+0000c918 <.LM160>:
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3209
+    c918:	lui	a5,0xb0c0d
+
+0000c91c <.LM161>:
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3202
+    c91c:	sw	s0,616(sp)
+    c920:	sw	s4,600(sp)
+    c924:	sw	ra,620(sp)
+    c928:	sw	s1,612(sp)
+    c92c:	sw	s2,608(sp)
+    c930:	sw	s3,604(sp)
+    c934:	sw	s5,596(sp)
+    c938:	sw	s6,592(sp)
+    c93c:	sw	s7,588(sp)
+    c940:	sw	s8,584(sp)
+
+0000c944 <.LM162>:
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3209
+    c944:	addi	a5,a5,224 # b0c0d0e0 <__tt_zone_meta_end+0xaa50d0e0>
+    c948:	lui	s4,0x70
+    c94c:	sw	a5,-432(s4) # 6fe50 <.LASF334+0x3f3ec>
+
+0000c950 <.LM163>:
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3214
+    c950:	lui	s0,0x6f
+    c954:	sw	zero,832(s0) # 6f340 <.LASF334+0x3e8dc>
+
+0000c958 <.LBB1347>:
+_Z17set_l1_data_cacheILb0EEvv():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/risc_common.h:170
+    c958:	fence
+    c95c:	li	t1,8
+    c960:	csrs	0x7c0,t1
+
+0000c964 <.LBB1349>:
+_Z27initialize_fabric_telemetryv():
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3172
+    c964:	li	a2,160
+    c968:	addi	a0,s4,-560
+    c96c:	li	a1,0
+    c970:	jal	ddd4 <memset>
+
+0000c974 <.LM177>:
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3175
+    c974:	lhu	a3,864(s0)
+
+0000c978 <.LM179>:
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3176
+    c978:	lhu	a4,866(s0)
+
+0000c97c <.LM180>:
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3175
+    c97c:	sh	a3,4(a0)
+
+0000c980 <.LM181>:
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3176
+    c980:	sb	a4,8(a0)
+
+0000c984 <.LM183>:
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3177
+    c984:	sb	zero,10(a0)
+
+0000c988 <.LM185>:
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3178
+    c988:	li	a4,1
+    c98c:	sw	a4,-560(s4)
+
+0000c990 <.LM187>:
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3179
+    c990:	sw	zero,12(a0)
+
+0000c994 <.LM189>:
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3183
+    c994:	li	a4,-1
+    c998:	sh	a4,6(a0)
+
+0000c99c <.LM191>:
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3184
+    c99c:	sb	a4,9(a0)
+
+0000c9a0 <.LM193>:
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3187
+    c9a0:	li	a4,15
+    c9a4:	sb	a4,11(a0)
+
+0000c9a8 <.LM195>:
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3194
+    c9a8:	sw	zero,104(a0)
+
+0000c9ac <.LBB1351>:
+_Z17eth_txq_reg_writemmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/ethernet/tt_eth_api.h:27
+    c9ac:	lui	a5,0xffb90
+    c9b0:	li	a4,32
+    c9b4:	sw	a4,108(a5) # ffb9006c <__stack_base+0x8f38c>
+
+0000c9b8 <.LBE1351>:
+_Z11kernel_mainv():
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3233
+    c9b8:	nop
+
+0000c9bc <.LBB1353>:
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3240
+    c9bc:	jal	c890 <_Z37initialize_state_for_txq1_active_modev>
+
+0000c9c0 <.LBB1354>:
+_Z12init_ptr_valILm0EEvl():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp:109
+    c9c0:	lui	s1,0xffb40
+
+0000c9c4 <.LBE1354>:
+_Z11kernel_mainv():
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3247
+    c9c4:	lui	a5,0xb1c1d
+    c9c8:	addi	a5,a5,481 # b1c1d1e1 <__tt_zone_meta_end+0xab51d1e1>
+    c9cc:	sw	a5,-432(s4)
+
+0000c9d0 <.LBB1357>:
+_Z12init_ptr_valILm4EEvl():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp:109
+    c9d0:	lui	a5,0xffb44
+    c9d4:	sw	zero,40(a5) # ffb44028 <__stack_base+0x43348>
+
+0000c9d8 <.LBB1359>:
+_Z12init_ptr_valILm0EEvl():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp:109
+    c9d8:	li	a5,17
+    c9dc:	sw	a5,40(s1) # ffb40028 <__stack_base+0x3f348>
+
+0000c9e0 <.LBB1360>:
+_Z12init_ptr_valILm1EEvl():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp:109
+    c9e0:	li	s0,16
+    c9e4:	lui	s6,0xffb41
+    c9e8:	sw	s0,40(s6) # ffb41028 <__stack_base+0x40348>
+
+0000c9ec <.LBE1360>:
+_Z11kernel_mainv():
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3275
+    c9ec:	jal	c770 <_Z26wait_for_other_local_eriscv>
+
+0000c9f0 <.LBB1362>:
+_Z12init_ptr_valILm2EEvl():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp:109
+    c9f0:	lui	a5,0xffb42
+    c9f4:	sw	s0,40(a5) # ffb42028 <__stack_base+0x41348>
+
+0000c9f8 <.LBB1366>:
+_Z12init_ptr_valILm3EEvl():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp:109
+    c9f8:	lui	a5,0xffb43
+    c9fc:	sw	s0,40(a5) # ffb43028 <__stack_base+0x42348>
+
+0000ca00 <.LBE1362>:
+_Z11kernel_mainv():
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3304
+    ca00:	lui	a5,0xb2c2d
+    ca04:	addi	a5,a5,738 # b2c2d2e2 <__tt_zone_meta_end+0xac52d2e2>
+    ca08:	sw	a5,-432(s4)
+
+0000ca0c <.LBB1369>:
+/home/aagarwal/tt-metal/tt_metal/hw/inc/api/dataflow/dataflow_api.h:111
+    ca0c:	lw	a5,-1976(gp) # ffb00038 <rta_l1_base>
+
+0000ca10 <.LBE1369>:
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3312
+    ca10:	lui	s0,0x16
+
+0000ca14 <.LBB1377>:
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3344 (discriminator 2)
+    ca14:	lw	a3,84(a5)
+
+0000ca18 <.LBB1378>:
+_Z11get_arg_valImET_i():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/api/dataflow/dataflow_api.h:150 (discriminator 1)
+    ca18:	lw	a4,88(a5)
+
+0000ca1c <.LBE1377>:
+_Z11kernel_mainv():
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3312
+    ca1c:	addi	a2,s0,-896 # 15c80 <.LASF1038+0x3>
+    ca20:	sw	a2,80(sp)
+
+0000ca24 <.LM259>:
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3314
+    ca24:	addi	a2,s0,-880
+    ca28:	sw	a2,76(sp)
+
+0000ca2c <.LM261>:
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3315
+    ca2c:	addi	a2,s0,-864
+
+0000ca30 <.LBB1382>:
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3358 (discriminator 2)
+    ca30:	lw	t3,100(a5)
+
+0000ca34 <.LBB1383>:
+_Z11get_arg_valImET_i():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/api/dataflow/dataflow_api.h:150 (discriminator 1)
+    ca34:	lw	t1,104(a5)
+
+0000ca38 <.LBB1387>:
+_Z11kernel_mainv():
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3361 (discriminator 2)
+    ca38:	lw	a7,108(a5)
+
+0000ca3c <.LBB1388>:
+_Z11get_arg_valImET_i():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/api/dataflow/dataflow_api.h:150 (discriminator 1)
+    ca3c:	lw	a6,112(a5)
+
+0000ca40 <.LBB1392>:
+_Z11kernel_mainv():
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3364 (discriminator 2)
+    ca40:	lw	a0,116(a5)
+
+0000ca44 <.LBB1393>:
+_Z11get_arg_valImET_i():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/api/dataflow/dataflow_api.h:150 (discriminator 1)
+    ca44:	lw	a1,120(a5)
+
+0000ca48 <.LBE1392>:
+_Z11kernel_mainv():
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3315
+    ca48:	sw	a2,72(sp)
+
+0000ca4c <.LBB1374>:
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3344 (discriminator 2)
+    ca4c:	sw	a3,108(sp)
+
+0000ca50 <.LBB1399>:
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3403
+    ca50:	lw	a2,124(a5)
+
+0000ca54 <.LBB1400>:
+_Z11get_arg_valImET_i():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/api/dataflow/dataflow_api.h:150 (discriminator 1)
+    ca54:	lw	a3,128(a5)
+
+0000ca58 <.LBB1414>:
+_Z11kernel_mainv():
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3344 (discriminator 2)
+    ca58:	sw	a4,112(sp)
+
+0000ca5c <.LBB1403>:
+_Z11get_arg_valImET_i():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/api/dataflow/dataflow_api.h:150 (discriminator 1)
+    ca5c:	lw	a4,132(a5)
+
+0000ca60 <.LBB1416>:
+    ca60:	lw	s5,80(a5)
+
+0000ca64 <.LBB1380>:
+    ca64:	lw	s3,92(a5)
+
+0000ca68 <.LBB1420>:
+    ca68:	lw	s2,96(a5)
+
+0000ca6c <.LBB1385>:
+_Z11kernel_mainv():
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3358 (discriminator 2)
+    ca6c:	sw	t3,100(sp)
+    ca70:	sw	t1,104(sp)
+
+0000ca74 <.LBB1427>:
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3361
+    ca74:	sw	a7,92(sp)
+    ca78:	sw	a6,96(sp)
+
+0000ca7c <.LBB1428>:
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3364
+    ca7c:	sw	a0,84(sp)
+    ca80:	sw	a1,88(sp)
+
+0000ca84 <.LBB1429>:
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3403
+    ca84:	sw	a2,128(sp)
+    ca88:	sw	a3,132(sp)
+    ca8c:	sw	a4,136(sp)
+
+0000ca90 <.LBB1430>:
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3446
+    ca90:	nop
+
+0000ca94 <.LM412>:
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3449
+    ca94:	lui	a5,0xa0b0c
+    ca98:	addi	a5,a5,208 # a0b0c0d0 <__tt_zone_meta_end+0x9a40c0d0>
+    ca9c:	sw	a5,-432(s4)
+
+0000caa0 <.LM413>:
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3451
+    caa0:	lw	a4,72(sp)
+
+0000caa4 <.LM415>:
+    caa4:	sw	a5,0(a4)
+
+0000caa8 <.LM416>:
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3452
+    caa8:	nop
+
+0000caac <.LBB1436>:
+_Z21take_first_n_elementsILj3ELj10EjESt5arrayIT1_XT_EERKS0_IS1_XT0_EE():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/compile_time_arg_tmp.hpp:56
+    caac:	lw	a5,132(sp)
+
+0000cab0 <.LM422>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/compile_time_arg_tmp.hpp:56 (discriminator 2)
+    cab0:	lw	a4,128(sp)
+    cab4:	sw	a5,120(sp)
+
+0000cab8 <.LM423>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/compile_time_arg_tmp.hpp:56 (discriminator 1)
+    cab8:	lw	a5,136(sp)
+
+0000cabc <.LBB1443>:
+_Z11kernel_mainv():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp:435
+    cabc:	addi	a0,sp,260
+make():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp:435
+    cac0:	li	a2,76
+    cac4:	li	a1,0
+
+0000cac8 <.LBB1439>:
+_Z21take_first_n_elementsILj3ELj10EjESt5arrayIT1_XT_EERKS0_IS1_XT0_EE():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/compile_time_arg_tmp.hpp:56 (discriminator 2)
+    cac8:	sw	a5,124(sp)
+
+0000cacc <.LBB1440>:
+    cacc:	sw	a4,116(sp)
+
+0000cad0 <.LBB1449>:
+make():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp:435
+    cad0:	jal	ddd4 <memset>
+
+0000cad4 <.LBB1450>:
+_Z11kernel_mainv():
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3502
+    cad4:	sw	zero,-784(s0)
+
+0000cad8 <.LBB1453>:
+    cad8:	sw	zero,-640(s0)
+
+0000cadc <.LBB1454>:
+    cadc:	sw	zero,-496(s0)
+
+0000cae0 <.LBB1455>:
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3510
+    cae0:	lui	a5,0xb3c3d
+
+0000cae4 <.LBB1456>:
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3502
+    cae4:	sw	zero,-352(s0)
+
+0000cae8 <.LBB1458>:
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3510
+    cae8:	addi	a5,a5,995 # b3c3d3e3 <__tt_zone_meta_end+0xad53d3e3>
+    caec:	sw	a5,-432(s4)
+
+0000caf0 <.LBB1477>:
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3531
+    caf0:	andi	s0,s5,15
+
+0000caf4 <.LBE1477>:
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3528
+    caf4:	beqz	s5,ccfc <.L19>
+
+0000caf8 <.LBB1585>:
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3534
+    caf8:	beqz	s0,ccfc <.L19>
+
+0000cafc <.LBB1480>:
+_ZN2tt9tt_fabric37RouterStaticSizedChannelWriterAdapterILh16EE4initIL20ProgrammableCoreType1EEEvbhhjhjjtjPVmS6_mmNS0_9NamedTypeIm12StreamIdTypeEEhh():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_router_adapter.hpp:104
+    cafc:	lui	t1,0x1
+
+0000cb00 <.LBB1485>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_router_adapter.hpp:114
+    cb00:	lui	s5,0x2
+
+0000cb04 <.LM503>:
+    cb04:	lui	s4,0x3
+    cb08:	lui	t2,0x4
+    cb0c:	lui	t0,0x5
+    cb10:	lui	t6,0x7
+    cb14:	lui	t5,0x8
+    cb18:	lui	t4,0x9
+    cb1c:	lui	t3,0xa
+    cb20:	sw	s9,580(sp)
+    cb24:	sw	s11,572(sp)
+
+0000cb28 <.LBE1485>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_router_adapter.hpp:90 (discriminator 1)
+    cb28:	addi	a6,s6,1080
+    cb2c:	sw	s10,576(sp)
+    cb30:	addi	a1,gp,1140 # ffb00c64 <_ZL26vc_0_free_slots_stream_ids>
+
+0000cb34 <.LM505>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_router_adapter.hpp:104
+    cb34:	addi	t1,t1,352 # 1160 <.LVUS267+0x2>
+
+0000cb38 <.LBB1486>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_router_adapter.hpp:114
+    cb38:	addi	s5,s5,704 # 22c0 <.LLST631+0x5>
+    cb3c:	addi	s4,s4,1056 # 3420 <.LLST943+0x16>
+    cb40:	addi	t2,t2,1408 # 4580 <.LLST1047+0x4>
+    cb44:	addi	t0,t0,1760 # 56e0 <.LLST1289>
+    cb48:	addi	t6,t6,-1984 # 6840 <.LVUS1515+0x3>
+    cb4c:	addi	t5,t5,-1632 # 79a0 <.LLST1783+0x2>
+    cb50:	addi	t4,t4,-1280 # 8b00 <.LLST2098+0x8>
+    cb54:	addi	t3,t3,-928 # 9c60 <.LASF2738+0xe>
+    cb58:	addi	a5,sp,336
+
+0000cb5c <.LBE1480>:
+_Z11kernel_mainv():
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3531
+    cb5c:	mv	a2,s0
+
+0000cb60 <.LM508>:
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3533
+    cb60:	li	a3,0
+    cb64:	addi	s9,sp,116
+
+0000cb68 <.LM509>:
+    cb68:	addi	s8,sp,108
+    cb6c:	addi	s7,sp,100
+    cb70:	addi	s6,sp,92
+    cb74:	addi	s11,sp,84
+
+0000cb78 <.L21>:
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3535
+    cb78:	andi	a4,a2,1
+
+0000cb7c <.LM512>:
+    cb7c:	bnez	a4,cb94 <.L229>
+
+0000cb80 <.L20>:
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3617
+    cb80:	srli	a2,a2,0x1
+
+0000cb84 <.LM517>:
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3535
+    cb84:	andi	a4,a2,1
+
+0000cb88 <.LM520>:
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3534
+    cb88:	addi	a1,a1,4
+    cb8c:	addi	a5,a5,112
+
+0000cb90 <.LM521>:
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3535
+    cb90:	beqz	a4,cb80 <.L20>
+
+0000cb94 <.L229>:
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3536 (discriminator 1)
+    cb94:	sh2add	a4,a3,s9
+
+0000cb98 <.LM528>:
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3538
+    cb98:	lw	a0,0(a4)
+
+0000cb9c <.LBB1487>:
+_Z24get_stream_reg_read_addrh():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp:80
+    cb9c:	lui	s10,0xffb40
+
+0000cba0 <.LBE1487>:
+_Z11kernel_mainv():
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3596
+    cba0:	sh2add	a4,a3,s7
+
+0000cba4 <.LM531>:
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3538
+    cba4:	sw	zero,0(a0)
+
+0000cba8 <.LBB1523>:
+_ZN2tt9tt_fabric37RouterStaticSizedChannelWriterAdapterILh16EE4initIL20ProgrammableCoreType1EEEvbhhjhjjtjPVmS6_mmNS0_9NamedTypeIm12StreamIdTypeEEhh():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_router_adapter.hpp:102
+    cba8:	sw	a0,100(a5)
+
+0000cbac <.LBB1554>:
+_Z30vc0_local_free_slots_stream_idj():
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:457 (discriminator 1)
+    cbac:	lw	a0,0(a1)
+
+0000cbb0 <.LBB1492>:
+_Z24get_stream_reg_read_addrh():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp:80
+    cbb0:	addi	s10,s10,1188 # ffb404a4 <__stack_base+0x3f7c4>
+    cbb4:	zext.b	a7,a0
+    cbb8:	slli	a7,a7,0xc
+
+0000cbbc <.LBE1492>:
+_Z11kernel_mainv():
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3596
+    cbbc:	lw	a4,0(a4)
+
+0000cbc0 <.LBB1493>:
+_Z24get_stream_reg_read_addrh():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp:80
+    cbc0:	add	s10,a7,s10
+
+0000cbc4 <.LBE1493>:
+_ZN2tt9tt_fabric37RouterStaticSizedChannelWriterAdapterILh16EE4initIL20ProgrammableCoreType1EEEvbhhjhjjtjPVmS6_mmNS0_9NamedTypeIm12StreamIdTypeEEhh():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_router_adapter.hpp:88
+    cbc4:	sw	s10,76(a5)
+
+0000cbc8 <.LBB1494>:
+_Z25get_stream_reg_write_addrh():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp:89
+    cbc8:	addi	s10,s1,1080
+
+0000cbcc <.LBE1494>:
+_ZN2tt9tt_fabric37RouterStaticSizedChannelWriterAdapterILh16EE4initIL20ProgrammableCoreType1EEEvbhhjhjjtjPVmS6_mmNS0_9NamedTypeIm12StreamIdTypeEEhh():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_router_adapter.hpp:93
+    cbcc:	sw	a4,88(a5)
+
+0000cbd0 <.LBE1525>:
+_Z11kernel_mainv():
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3596
+    cbd0:	sh2add	a4,a3,s6
+
+0000cbd4 <.LBB1498>:
+_Z25get_stream_reg_write_addrh():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp:89
+    cbd4:	add	a7,a7,s10
+
+0000cbd8 <.LBE1498>:
+_Z11kernel_mainv():
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3596
+    cbd8:	lw	a4,0(a4)
+
+0000cbdc <.LBB1527>:
+_ZN2tt9tt_fabric37RouterStaticSizedChannelWriterAdapterILh16EE4initIL20ProgrammableCoreType1EEEvbhhjhjjtjPVmS6_mmNS0_9NamedTypeIm12StreamIdTypeEEhh():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_router_adapter.hpp:91
+    cbdc:	sw	a7,80(a5)
+
+0000cbe0 <.LBE1527>:
+_Z11kernel_mainv():
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3550
+    cbe0:	slli	a7,a3,0x3
+
+0000cbe4 <.LBB1528>:
+_ZN2tt9tt_fabric37RouterStaticSizedChannelWriterAdapterILh16EE4initIL20ProgrammableCoreType1EEEvbhhjhjjtjPVmS6_mmNS0_9NamedTypeIm12StreamIdTypeEEhh():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_router_adapter.hpp:97
+    cbe4:	sw	a4,92(a5)
+
+0000cbe8 <.LBE1528>:
+_Z11kernel_mainv():
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3596
+    cbe8:	sh2add	a4,a3,s11
+
+0000cbec <.LM557>:
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3550
+    cbec:	srl	s10,s3,a7
+
+0000cbf0 <.LM558>:
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3596
+    cbf0:	lw	a4,0(a4)
+
+0000cbf4 <.LM559>:
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3551
+    cbf4:	srl	a7,s2,a7
+
+0000cbf8 <.LM560>:
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3596
+    cbf8:	sb	a7,108(a5)
+
+0000cbfc <.LBB1529>:
+_ZN2tt9tt_fabric37RouterStaticSizedChannelWriterAdapterILh16EE4initIL20ProgrammableCoreType1EEEvbhhjhjjtjPVmS6_mmNS0_9NamedTypeIm12StreamIdTypeEEhh():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_router_adapter.hpp:107
+    cbfc:	li	a7,2
+
+0000cc00 <.LM562>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_router_adapter.hpp:99
+    cc00:	sw	a4,96(a5)
+
+0000cc04 <.LBE1529>:
+_Z11kernel_mainv():
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3596
+    cc04:	sh2add	a4,a3,s8
+
+0000cc08 <.LBB1530>:
+_ZN2tt9tt_fabric37RouterStaticSizedChannelWriterAdapterILh16EE4initIL20ProgrammableCoreType1EEEvbhhjhjjtjPVmS6_mmNS0_9NamedTypeIm12StreamIdTypeEEhh():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_router_adapter.hpp:86 (discriminator 1)
+    cc08:	sw	a0,72(a5)
+
+0000cc0c <.LBE1530>:
+_Z11kernel_mainv():
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3596
+    cc0c:	lw	a4,0(a4)
+
+0000cc10 <.LBB1531>:
+_ZN2tt9tt_fabric37RouterStaticSizedChannelWriterAdapterILh16EE4initIL20ProgrammableCoreType1EEEvbhhjhjjtjPVmS6_mmNS0_9NamedTypeIm12StreamIdTypeEEhh():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_router_adapter.hpp:107
+    cc10:	sb	a7,109(a5)
+
+0000cc14 <.LBB1499>:
+_Z12init_ptr_valml():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp:113
+    cc14:	slli	a0,a0,0xc
+
+0000cc18 <.LBE1499>:
+_ZN2tt9tt_fabric37RouterStaticSizedChannelWriterAdapterILh16EE4initIL20ProgrammableCoreType1EEEvbhhjhjjtjPVmS6_mmNS0_9NamedTypeIm12StreamIdTypeEEhh():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_router_adapter.hpp:108
+    cc18:	li	a7,1
+    cc1c:	sb	a7,110(a5)
+
+0000cc20 <.LM570>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_router_adapter.hpp:90 (discriminator 1)
+    cc20:	sw	a6,84(a5)
+
+0000cc24 <.LM571>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_router_adapter.hpp:104
+    cc24:	sh	t1,104(a5)
+
+0000cc28 <.LBB1503>:
+_Z12init_ptr_valml():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp:113
+    cc28:	add	a0,a0,s1
+
+0000cc2c <.LBE1505>:
+_Z11kernel_mainv():
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3596
+    cc2c:	sb	s10,107(a5)
+
+0000cc30 <.LBB1506>:
+_Z12init_ptr_valml():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp:113
+    cc30:	li	a7,16
+    cc34:	sw	a7,40(a0)
+
+0000cc38 <.LBB1507>:
+_ZN2tt9tt_fabric37RouterStaticSizedChannelWriterAdapterILh16EE4initIL20ProgrammableCoreType1EEEvbhhjhjjtjPVmS6_mmNS0_9NamedTypeIm12StreamIdTypeEEhh():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_router_adapter.hpp:114
+    cc38:	add	a7,a4,t1
+
+0000cc3c <.LM600>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_router_adapter.hpp:114 (discriminator 1)
+    cc3c:	sw	a7,12(a5)
+
+0000cc40 <.LM601>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_router_adapter.hpp:114
+    cc40:	add	a7,a4,s5
+
+0000cc44 <.LM602>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_router_adapter.hpp:114 (discriminator 1)
+    cc44:	sw	a7,16(a5)
+
+0000cc48 <.LM603>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_router_adapter.hpp:114
+    cc48:	add	a7,a4,s4
+
+0000cc4c <.LM604>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_router_adapter.hpp:114 (discriminator 1)
+    cc4c:	sw	a7,20(a5)
+
+0000cc50 <.LM605>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_router_adapter.hpp:114
+    cc50:	add	a7,a4,t2
+
+0000cc54 <.LM606>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_router_adapter.hpp:114 (discriminator 1)
+    cc54:	sw	a7,24(a5)
+
+0000cc58 <.LM607>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_router_adapter.hpp:114
+    cc58:	add	a7,a4,t0
+
+0000cc5c <.LM608>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_router_adapter.hpp:114 (discriminator 1)
+    cc5c:	sw	a7,28(a5)
+
+0000cc60 <.LM609>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_router_adapter.hpp:114
+    cc60:	add	a7,a4,t6
+
+0000cc64 <.LM610>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_router_adapter.hpp:114 (discriminator 1)
+    cc64:	sw	a7,32(a5)
+
+0000cc68 <.LM611>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_router_adapter.hpp:114
+    cc68:	add	a7,a4,t5
+
+0000cc6c <.LM612>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_router_adapter.hpp:114 (discriminator 1)
+    cc6c:	sw	a7,36(a5)
+
+0000cc70 <.LM613>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_router_adapter.hpp:114
+    cc70:	add	a7,a4,t4
+
+0000cc74 <.LM614>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_router_adapter.hpp:114 (discriminator 1)
+    cc74:	sw	a7,40(a5)
+
+0000cc78 <.LM615>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_router_adapter.hpp:114
+    cc78:	lui	a0,0xb
+    cc7c:	add	a7,a4,t3
+
+0000cc80 <.LM616>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_router_adapter.hpp:114 (discriminator 1)
+    cc80:	sw	a7,44(a5)
+
+0000cc84 <.LM617>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_router_adapter.hpp:114
+    cc84:	addi	a0,a0,-576 # adc0 <.LASF3058+0x42>
+    cc88:	lui	a7,0xc
+    cc8c:	add	a0,a4,a0
+    cc90:	addi	a7,a7,-224 # bf20 <.LASF2968+0x5>
+    cc94:	add	a7,a4,a7
+
+0000cc98 <.LM618>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_router_adapter.hpp:114 (discriminator 1)
+    cc98:	sw	a4,8(a5)
+
+0000cc9c <.LM619>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_router_adapter.hpp:114
+    cc9c:	sw	a0,48(a5)
+
+0000cca0 <.LM640>:
+    cca0:	sw	a7,52(a5)
+
+0000cca4 <.LM643>:
+    cca4:	lui	a0,0xd
+    cca8:	lui	a7,0xe
+    ccac:	addi	a0,a0,128 # d080 <.LBE2156>
+    ccb0:	addi	a7,a7,480 # e1e0 <.LASF647+0x16>
+    ccb4:	add	a0,a4,a0
+    ccb8:	add	a7,a4,a7
+
+0000ccbc <.LM646>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_router_adapter.hpp:114 (discriminator 1)
+    ccbc:	sw	a0,56(a5)
+
+0000ccc0 <.LM647>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_router_adapter.hpp:114
+    ccc0:	sw	a7,60(a5)
+
+0000ccc4 <.LM650>:
+    ccc4:	lui	a0,0xf
+    ccc8:	lui	a7,0x10
+    cccc:	addi	a0,a0,832 # f340 <.LASF4138+0x17>
+    ccd0:	addi	a7,a7,1184 # 104a0 <.LASF1103+0x47>
+    ccd4:	add	a0,a4,a0
+    ccd8:	add	a4,a4,a7
+
+0000ccdc <.LBE1507>:
+_Z11kernel_mainv():
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3617
+    ccdc:	srli	a2,a2,0x1
+
+0000cce0 <.LBB1508>:
+_ZN2tt9tt_fabric37RouterStaticSizedChannelWriterAdapterILh16EE4initIL20ProgrammableCoreType1EEEvbhhjhjjtjPVmS6_mmNS0_9NamedTypeIm12StreamIdTypeEEhh():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_router_adapter.hpp:114 (discriminator 1)
+    cce0:	sw	a0,64(a5)
+
+0000cce4 <.LM656>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_router_adapter.hpp:114
+    cce4:	sw	a4,68(a5)
+
+0000cce8 <.LBE1508>:
+_Z11kernel_mainv():
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3534
+    cce8:	beqz	a2,ccf0 <.LBE1508+0x8>
+    ccec:	j	ddb8 <.L230>
+    ccf0:	lw	s9,580(sp)
+
+0000ccf4 <.LM670>:
+    ccf4:	lw	s10,576(sp)
+    ccf8:	lw	s11,572(sp)
+
+0000ccfc <.L19>:
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3730
+    ccfc:	lui	a5,0xb4c4d
+    cd00:	addi	a5,a5,1252 # b4c4d4e4 <__tt_zone_meta_end+0xae54d4e4>
+    cd04:	lui	a4,0x70
+    cd08:	sw	a5,-432(a4) # 6fe50 <.LASF334+0x3f3ec>
+
+0000cd0c <.LBB1587>:
+_ZN2tt9tt_fabric13SlotAddressesILh16ELb1EE4initEjj():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp:60 (discriminator 3)
+    cd0c:	lui	a3,0x1
+
+0000cd10 <.LBE1587>:
+_Z11kernel_mainv():
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3730
+    cd10:	lui	a4,0x5d
+    cd14:	addi	a4,a4,-896 # 5cc80 <.LASF334+0x2c21c>
+
+0000cd18 <.LBB1598>:
+_ZN2tt9tt_fabric13SlotAddressesILh16ELb1EE4initEjj():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp:60 (discriminator 3)
+    cd18:	addi	a3,a3,352 # 1160 <.LVUS267+0x2>
+    cd1c:	addi	a5,sp,260
+
+0000cd20 <.LM687>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp:60
+    cd20:	addi	a2,sp,324
+
+0000cd24 <.L18>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp:61 (discriminator 1)
+    cd24:	sw	a4,0(a5)
+
+0000cd28 <.LM689>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp:60 (discriminator 3)
+    cd28:	addi	a5,a5,4
+    cd2c:	add	a4,a4,a3
+
+0000cd30 <.LM692>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp:60
+    cd30:	bne	a5,a2,cd24 <.L18>
+    cd34:	lui	a3,0x5d
+
+0000cd38 <.LBB1599>:
+_ZN2tt9tt_fabric27StaticSizedEthChannelBufferINS0_23HybridMeshPacketHeaderTILi36EEELh16EE9init_implEjjj():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp:237
+    cd38:	lui	a2,0x1
+
+0000cd3c <.LM694>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp:231 (discriminator 1)
+    cd3c:	lui	a1,0x6e
+
+0000cd40 <.LBB1606>:
+_ZN2tt9tt_fabric13SlotAddressesILh16ELb1EE4initEjj():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp:231 (discriminator 1)
+    cd40:	addi	a4,a3,-800 # 5cce0 <.LASF334+0x2c27c>
+
+0000cd44 <.LBB1607>:
+_ZN2tt9tt_fabric27StaticSizedEthChannelBufferINS0_23HybridMeshPacketHeaderTILi36EEELh16EE9init_implEjjj():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp:237
+    cd44:	addi	a2,a2,352 # 1160 <.LVUS267+0x2>
+
+0000cd48 <.LBE1607>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp:230
+    cd48:	addi	a3,a3,-896
+
+0000cd4c <.LBB1608>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp:231 (discriminator 1)
+    cd4c:	addi	a1,a1,640 # 6e280 <.LASF334+0x3d81c>
+
+0000cd50 <.L22>:
+_Z11kernel_mainv():
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3730
+    cd50:	mv	a5,a3
+
+0000cd54 <.L23>:
+_ZN2tt9tt_fabric27StaticSizedEthChannelBufferINS0_23HybridMeshPacketHeaderTILi36EEELh16EE9init_implEjjj():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp:235
+    cd54:	sw	zero,0(a5)
+
+0000cd58 <.LM701>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp:234 (discriminator 3)
+    cd58:	addi	a5,a5,4
+    cd5c:	bne	a4,a5,cd54 <.L23>
+
+0000cd60 <.LBE1602>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp:237
+    cd60:	add	a3,a3,a2
+
+0000cd64 <.LM705>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp:231 (discriminator 1)
+    cd64:	add	a4,a4,a2
+    cd68:	bne	a3,a1,cd50 <.L22>
+    cd6c:	lui	a3,0x5d
+
+0000cd70 <.LBB1637>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp:237
+    cd70:	lui	a2,0x1
+
+0000cd74 <.LM710>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp:231 (discriminator 1)
+    cd74:	lui	a1,0x6e
+
+0000cd78 <.LBB1610>:
+    cd78:	addi	a4,a3,-800 # 5cce0 <.LASF334+0x2c27c>
+
+0000cd7c <.LBB1651>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp:237
+    cd7c:	addi	a2,a2,352 # 1160 <.LVUS267+0x2>
+
+0000cd80 <.LBE1651>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp:230
+    cd80:	addi	a3,a3,-896
+
+0000cd84 <.LBB1652>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp:231 (discriminator 1)
+    cd84:	addi	a1,a1,640 # 6e280 <.LASF334+0x3d81c>
+
+0000cd88 <.L24>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp:230
+    cd88:	mv	a5,a3
+
+0000cd8c <.L25>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp:235
+    cd8c:	sw	zero,0(a5)
+
+0000cd90 <.LM718>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp:234 (discriminator 3)
+    cd90:	addi	a5,a5,4
+    cd94:	bne	a4,a5,cd8c <.L25>
+
+0000cd98 <.LBE1647>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp:237
+    cd98:	add	a3,a3,a2
+
+0000cd9c <.LM722>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp:231 (discriminator 1)
+    cd9c:	add	a4,a4,a2
+    cda0:	bne	a3,a1,cd88 <.L24>
+    cda4:	lui	a1,0x16
+
+0000cda8 <.LBB1683>:
+_ZN2tt9tt_fabric27StaticSizedSenderEthChannelINS0_23HybridMeshPacketHeaderTILi36EEELh17EE9init_implEjjj():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp:111
+    cda8:	lui	a3,0x1
+
+0000cdac <.LM726>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp:105 (discriminator 1)
+    cdac:	lui	a2,0x29
+
+0000cdb0 <.LBB1654>:
+_ZN2tt9tt_fabric27StaticSizedEthChannelBufferINS0_23HybridMeshPacketHeaderTILi36EEELh16EE9init_implEjjj():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp:105 (discriminator 1)
+    cdb0:	addi	a4,a1,896 # 16380 <.LASF1139+0x32>
+
+0000cdb4 <.LBB1697>:
+_ZN2tt9tt_fabric27StaticSizedSenderEthChannelINS0_23HybridMeshPacketHeaderTILi36EEELh17EE9init_implEjjj():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp:111
+    cdb4:	addi	a3,a3,352 # 1160 <.LVUS267+0x2>
+
+0000cdb8 <.LBE1697>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp:104
+    cdb8:	addi	a1,a1,800
+
+0000cdbc <.LBB1698>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp:105 (discriminator 1)
+    cdbc:	addi	a0,a2,-1408 # 28a80 <.LASF619+0x1c>
+
+0000cdc0 <.L26>:
+_ZN2tt9tt_fabric27StaticSizedEthChannelBufferINS0_23HybridMeshPacketHeaderTILi36EEELh16EE9init_implEjjj():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp:230
+    cdc0:	mv	a5,a1
+
+0000cdc4 <.L27>:
+_ZN2tt9tt_fabric27StaticSizedSenderEthChannelINS0_23HybridMeshPacketHeaderTILi36EEELh17EE9init_implEjjj():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp:109
+    cdc4:	sw	zero,0(a5)
+
+0000cdc8 <.LM735>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp:108 (discriminator 3)
+    cdc8:	addi	a5,a5,4
+    cdcc:	bne	a5,a4,cdc4 <.L27>
+
+0000cdd0 <.LBE1693>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp:111
+    cdd0:	add	a1,a1,a3
+
+0000cdd4 <.LM739>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp:105 (discriminator 1)
+    cdd4:	add	a4,a5,a3
+    cdd8:	bne	a1,a0,cdc0 <.L26>
+
+0000cddc <.LBB1724>:
+_ZN2tt9tt_fabric27StaticSizedSenderEthChannelINS0_23HybridMeshPacketHeaderTILi36EEELh16EE9init_implEjjj():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp:111
+    cddc:	lui	a5,0x1
+
+0000cde0 <.LM743>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp:105 (discriminator 1)
+    cde0:	lui	a3,0x3a
+
+0000cde4 <.LBB1700>:
+_ZN2tt9tt_fabric27StaticSizedSenderEthChannelINS0_23HybridMeshPacketHeaderTILi36EEELh17EE9init_implEjjj():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp:105 (discriminator 1)
+    cde4:	addi	a4,a2,-1312
+
+0000cde8 <.LBB1735>:
+_ZN2tt9tt_fabric27StaticSizedSenderEthChannelINS0_23HybridMeshPacketHeaderTILi36EEELh16EE9init_implEjjj():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp:105 (discriminator 1)
+    cde8:	addi	a0,a3,128 # 3a080 <.LASF334+0x961c>
+
+0000cdec <.LM744>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp:111
+    cdec:	addi	a2,a5,352 # 1160 <.LVUS267+0x2>
+
+0000cdf0 <.L28>:
+_ZN2tt9tt_fabric27StaticSizedSenderEthChannelINS0_23HybridMeshPacketHeaderTILi36EEELh17EE9init_implEjjj():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp:104
+    cdf0:	mv	a5,a1
+
+0000cdf4 <.L29>:
+_ZN2tt9tt_fabric27StaticSizedSenderEthChannelINS0_23HybridMeshPacketHeaderTILi36EEELh16EE9init_implEjjj():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp:109
+    cdf4:	sw	zero,0(a5)
+
+0000cdf8 <.LM749>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp:108 (discriminator 3)
+    cdf8:	addi	a5,a5,4
+    cdfc:	bne	a4,a5,cdf4 <.L29>
+
+0000ce00 <.LBE1732>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp:111
+    ce00:	add	a1,a1,a2
+
+0000ce04 <.LM753>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp:105 (discriminator 1)
+    ce04:	add	a4,a4,a2
+    ce08:	bne	a1,a0,cdf0 <.L28>
+
+0000ce0c <.LBB1759>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp:111
+    ce0c:	lui	a2,0x1
+
+0000ce10 <.LM757>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp:105 (discriminator 1)
+    ce10:	lui	a4,0x4b
+
+0000ce14 <.LBB1737>:
+    ce14:	addi	a3,a3,224
+
+0000ce18 <.LBB1771>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp:111
+    ce18:	addi	a2,a2,352 # 1160 <.LVUS267+0x2>
+
+0000ce1c <.LM759>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp:105 (discriminator 1)
+    ce1c:	addi	a0,a4,1664 # 4b680 <.LASF334+0x1ac1c>
+
+0000ce20 <.L30>:
+_ZN2tt9tt_fabric27StaticSizedSenderEthChannelINS0_23HybridMeshPacketHeaderTILi36EEELh17EE9init_implEjjj():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp:108
+    ce20:	mv	a5,a1
+
+0000ce24 <.L31>:
+_ZN2tt9tt_fabric27StaticSizedSenderEthChannelINS0_23HybridMeshPacketHeaderTILi36EEELh16EE9init_implEjjj():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp:109
+    ce24:	sw	zero,0(a5)
+
+0000ce28 <.LM763>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp:108 (discriminator 3)
+    ce28:	addi	a5,a5,4
+    ce2c:	bne	a3,a5,ce24 <.L31>
+
+0000ce30 <.LBE1767>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp:111
+    ce30:	add	a1,a1,a2
+
+0000ce34 <.LM767>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp:105 (discriminator 1)
+    ce34:	add	a3,a3,a2
+    ce38:	bne	a1,a0,ce20 <.L30>
+
+0000ce3c <.LBB1790>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp:111
+    ce3c:	lui	a3,0x1
+
+0000ce40 <.LM771>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp:105 (discriminator 1)
+    ce40:	lui	a2,0x5d
+
+0000ce44 <.LBB1773>:
+    ce44:	addi	a4,a4,1760
+
+0000ce48 <.LBB1802>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp:111
+    ce48:	addi	a3,a3,352 # 1160 <.LVUS267+0x2>
+
+0000ce4c <.LM773>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp:105 (discriminator 1)
+    ce4c:	addi	a2,a2,-896 # 5cc80 <.LASF334+0x2c21c>
+
+0000ce50 <.L32>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp:108
+    ce50:	mv	a5,a1
+
+0000ce54 <.L33>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp:109
+    ce54:	sw	zero,0(a5)
+
+0000ce58 <.LM777>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp:108 (discriminator 3)
+    ce58:	addi	a5,a5,4
+    ce5c:	bne	a4,a5,ce54 <.L33>
+
+0000ce60 <.LBE1798>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp:111
+    ce60:	add	a1,a1,a3
+
+0000ce64 <.LM781>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp:105 (discriminator 1)
+    ce64:	add	a4,a4,a3
+    ce68:	bne	a1,a2,ce50 <.L32>
+
+0000ce6c <.LBE1803>:
+_Z11kernel_mainv():
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3802
+    ce6c:	jal	c770 <_Z26wait_for_other_local_eriscv>
+
+0000ce70 <.LM792>:
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3872
+    ce70:	jal	c770 <_Z26wait_for_other_local_eriscv>
+
+0000ce74 <.LM796>:
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3875
+    ce74:	lui	s1,0x70
+    ce78:	lui	a5,0xb7c7d
+    ce7c:	addi	a5,a5,2023 # b7c7d7e7 <__tt_zone_meta_end+0xb157d7e7>
+    ce80:	sw	a5,-432(s1) # 6fe50 <.LASF334+0x3f3ec>
+
+0000ce84 <.LBB1822>:
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3890
+    ce84:	beqz	s0,dcec <.L35>
+operator()<std::array<tt::tt_fabric::RouterStaticSizedChannelWriterAdapter<16>, 2> >():
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3890
+    ce88:	mv	a1,s0
+    ce8c:	addi	s1,sp,336
+
+0000ce90 <.LBB1825>:
+_Z33noc_get_interim_inline_value_addrmy():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:547
+    ce90:	lui	t1,0x3
+
+0000ce94 <.LBB1840>:
+_Z21NOC_CMD_BUF_WRITE_REGmmmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:168
+    ce94:	lui	a7,0x2
+
+0000ce98 <.LBB1922>:
+_Z21ncrisc_noc_fast_writeILh0ELb0ELb1EEvmmmymmbbmbbm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:638
+    ce98:	lui	t5,0x1000
+
+0000ce9c <.LBE1825>:
+operator()<std::array<tt::tt_fabric::RouterStaticSizedChannelWriterAdapter<16>, 2> >():
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3891
+    ce9c:	andi	a4,a1,1
+
+0000cea0 <.LM808>:
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3890
+    cea0:	mv	a3,s1
+    cea4:	addi	a2,gp,-2020 # ffb0000c <noc_nonposted_writes_num_issued>
+    cea8:	addi	t3,gp,-1996 # ffb00024 <noc_posted_writes_num_issued>
+    ceac:	addi	a0,gp,-2012 # ffb00014 <noc_nonposted_writes_acked>
+    ceb0:	addi	t0,gp,-2028 # ffb00004 <noc_reads_num_issued>
+
+0000ceb4 <.LBB1867>:
+_Z33noc_get_interim_inline_value_addrmy():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:547
+    ceb4:	addi	t1,t1,784 # 3310 <.LLST936+0x5>
+
+0000ceb8 <.LBB1846>:
+_Z21NOC_CMD_BUF_WRITE_REGmmmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:168
+    ceb8:	addi	a7,a7,146 # 2092 <.LVUS583+0x1>
+
+0000cebc <.LBB1949>:
+_Z21ncrisc_noc_fast_writeILh0ELb0ELb1EEvmmmymmbbmbbm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:638
+    cebc:	addi	t5,t5,-1 # ffffff <.LASF334+0xfcf59b>
+
+0000cec0 <.LBB1869>:
+_Z19NOC_STATUS_READ_REGmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:180
+    cec0:	lui	a5,0xffb30
+
+0000cec4 <.LBB1847>:
+_Z21NOC_CMD_BUF_WRITE_REGmmmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:168
+    cec4:	li	t4,4
+
+0000cec8 <.LBB1850>:
+    cec8:	li	a6,1
+
+0000cecc <.LBE1850>:
+operator()<std::array<tt::tt_fabric::RouterStaticSizedChannelWriterAdapter<16>, 2> >():
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3891
+    cecc:	bnez	a4,cee0 <.L231>
+
+0000ced0 <.L36>:
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3900
+    ced0:	srli	a1,a1,0x1
+
+0000ced4 <.L224>:
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3891
+    ced4:	andi	a4,a1,1
+
+0000ced8 <.LM820>:
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3890
+    ced8:	addi	a3,a3,112
+
+0000cedc <.LM821>:
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3891
+    cedc:	beqz	a4,ced0 <.L36>
+
+0000cee0 <.L231>:
+_ZN2tt9tt_fabric37RouterStaticSizedChannelWriterAdapterILh16EE10open_startILb0ELb0ELh1EEEvv():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_router_adapter.hpp:242
+    cee0:	lw	s5,92(a3)
+
+0000cee4 <.LBB2002>:
+_ZN22noc_address_backend_xy14worker_addressEmmmh():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/dataflow/noc_address_backend_xy.h:24
+    cee4:	lbu	s4,108(a3)
+    cee8:	lbu	a4,107(a3)
+
+0000ceec <.LBB1878>:
+_Z33noc_get_interim_inline_value_addrmy():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:534
+    ceec:	andi	s6,s5,15
+
+0000cef0 <.LBB2012>:
+_ZN22noc_address_backend_xy14worker_addressEmmmh():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/dataflow/noc_address_backend_xy.h:24
+    cef0:	slli	s4,s4,0xa
+    cef4:	slli	a4,a4,0x4
+
+0000cef8 <.LBE2012>:
+_ZN2tt9tt_fabric37RouterStaticSizedChannelWriterAdapterILh16EE10open_startILb0ELb0ELh1EEEvv():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_router_adapter.hpp:242
+    cef8:	lw	s7,80(a3)
+
+0000cefc <.LM829>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_router_adapter.hpp:245
+    cefc:	lw	t6,100(a3)
+
+0000cf00 <.LBB1879>:
+_Z32ncrisc_noc_nonposted_writes_sentm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:718 (discriminator 1)
+    cf00:	lw	s3,4(a2)
+
+0000cf04 <.LBB2015>:
+_ZN22noc_address_backend_xy14worker_addressEmmmh():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/dataflow/noc_address_backend_xy.h:24
+    cf04:	or	s4,s4,a4
+
+0000cf08 <.LBB1880>:
+_Z33noc_get_interim_inline_value_addrmy():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:547
+    cf08:	add	s6,s6,t1
+
+0000cf0c <.L37>:
+_Z19NOC_STATUS_READ_REGmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:180
+    cf0c:	lw	a4,552(a5) # ffb30228 <__stack_base+0x2f548>
+
+0000cf10 <.LBE1874>:
+_Z30noc_fast_spoof_write_dw_inlineILh0ELb1EEvmmmymmbbm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:1096 (discriminator 2)
+    cf10:	bne	a4,s3,cf0c <.L37>
+
+0000cf14 <.LBB1882>:
+_Z29ncrisc_noc_posted_writes_sentm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:729 (discriminator 1)
+    cf14:	lw	s3,4(t3)
+
+0000cf18 <.L38>:
+_Z19NOC_STATUS_READ_REGmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:180
+    cf18:	lw	a4,556(a5)
+
+0000cf1c <.LBE1884>:
+_Z30noc_fast_spoof_write_dw_inlineILh0ELb1EEvmmmymmbbm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:1097 (discriminator 2)
+    cf1c:	bne	a4,s3,cf18 <.L38>
+
+0000cf20 <.LM873>:
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:1102
+    cf20:	sw	s7,0(s6)
+
+0000cf24 <.L39>:
+_Z20NOC_CMD_BUF_READ_REGmmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:174
+    cf24:	lw	a4,64(a5)
+
+0000cf28 <.LBE1888>:
+_Z30noc_fast_spoof_write_dw_inlineILh0ELb1EEvmmmymmbbm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:1113 (discriminator 2)
+    cf28:	bnez	a4,cf24 <.L39>
+
+0000cf2c <.LBB1853>:
+_Z21NOC_CMD_BUF_WRITE_REGmmmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:168
+    cf2c:	sw	a7,28(a5)
+
+0000cf30 <.LBB1854>:
+    cf30:	sw	s6,0(a5)
+
+0000cf34 <.LBB1856>:
+    cf34:	sw	s5,12(a5)
+
+0000cf38 <.LBE1856>:
+_Z21ncrisc_noc_fast_writeILh0ELb0ELb1EEvmmmymmbbmbbm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:639
+    cf38:	srli	a4,s4,0x4
+
+0000cf3c <.LBB1858>:
+_Z21NOC_CMD_BUF_WRITE_REGmmmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:168
+    cf3c:	sw	a4,20(a5)
+
+0000cf40 <.LBB1860>:
+    cf40:	sw	t4,32(a5)
+
+0000cf44 <.LBB1861>:
+    cf44:	sw	a6,64(a5)
+
+0000cf48 <.LBE1861>:
+_Z21ncrisc_noc_fast_writeILh0ELb0ELb1EEvmmmymmbbmbbm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:648
+    cf48:	lw	a4,4(a0)
+
+0000cf4c <.LM923>:
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:647
+    cf4c:	lw	s3,4(a2)
+
+0000cf50 <.LBE1891>:
+_ZN2tt9tt_fabric10connection10open_startILb0ELb0ELh1EEEvjjjhh():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/adapters/fabric_adapter_utils.hpp:37
+    cf50:	addi	s8,s5,16
+
+0000cf54 <.LBB1892>:
+_Z21ncrisc_noc_fast_writeILh0ELb0ELb1EEvmmmymmbbmbbm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:648
+    cf54:	addi	a4,a4,1
+
+0000cf58 <.LM926>:
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:647
+    cf58:	addi	s3,s3,1
+
+0000cf5c <.LM927>:
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:648
+    cf5c:	sw	a4,4(a0)
+
+0000cf60 <.LBB1950>:
+_Z33noc_get_interim_inline_value_addrmy():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:534
+    cf60:	andi	s7,s8,15
+
+0000cf64 <.LBE1950>:
+_ZN2tt9tt_fabric10connection10open_startILb0ELb0ELh1EEEvjjjhh():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/adapters/fabric_adapter_utils.hpp:36
+    cf64:	srai	a4,s8,0x1f
+
+0000cf68 <.LBB1893>:
+_Z21ncrisc_noc_fast_writeILh0ELb0ELb1EEvmmmymmbbmbbm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:647
+    cf68:	sw	s3,4(a2)
+
+0000cf6c <.LBE1893>:
+_ZN2tt9tt_fabric10connection10open_startILb0ELb0ELh1EEEvjjjhh():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/adapters/fabric_adapter_utils.hpp:35
+    cf6c:	or	s6,a4,s4
+
+0000cf70 <.LBB1953>:
+_Z33noc_get_interim_inline_value_addrmy():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:547
+    cf70:	add	s7,s7,t1
+
+0000cf74 <.L40>:
+_Z19NOC_STATUS_READ_REGmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:180
+    cf74:	lw	a4,552(a5)
+
+0000cf78 <.LBE1954>:
+_Z30noc_fast_spoof_write_dw_inlineILh0ELb1EEvmmmymmbbm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:1096 (discriminator 2)
+    cf78:	bne	s3,a4,cf74 <.L40>
+
+0000cf7c <.LBB1957>:
+_Z29ncrisc_noc_posted_writes_sentm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:729 (discriminator 1)
+    cf7c:	lw	s3,4(t3)
+
+0000cf80 <.L41>:
+_Z19NOC_STATUS_READ_REGmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:180
+    cf80:	lw	a4,556(a5)
+
+0000cf84 <.LBE1959>:
+_Z30noc_fast_spoof_write_dw_inlineILh0ELb1EEvmmmymmbbm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:1097 (discriminator 2)
+    cf84:	bne	a4,s3,cf80 <.L41>
+
+0000cf88 <.LM968>:
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:1102
+    cf88:	sw	t6,0(s7)
+
+0000cf8c <.L42>:
+_Z20NOC_CMD_BUF_READ_REGmmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:174
+    cf8c:	lw	a4,64(a5)
+
+0000cf90 <.LBE1963>:
+_Z30noc_fast_spoof_write_dw_inlineILh0ELb1EEvmmmymmbbm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:1113 (discriminator 2)
+    cf90:	bnez	a4,cf8c <.L42>
+
+0000cf94 <.LBB1929>:
+_Z21NOC_CMD_BUF_WRITE_REGmmmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:168
+    cf94:	sw	a7,28(a5)
+
+0000cf98 <.LBB1931>:
+    cf98:	sw	s7,0(a5)
+
+0000cf9c <.LBB1933>:
+_Z21ncrisc_noc_fast_writeILh0ELb0ELb1EEvmmmymmbbmbbm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:639
+    cf9c:	srli	a4,s6,0x4
+
+0000cfa0 <.LBB1936>:
+_Z21NOC_CMD_BUF_WRITE_REGmmmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:168
+    cfa0:	sw	s8,12(a5)
+
+0000cfa4 <.LBE1936>:
+_Z21ncrisc_noc_fast_writeILh0ELb0ELb1EEvmmmymmbbmbbm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:638
+    cfa4:	and	a4,a4,t5
+
+0000cfa8 <.LBB1937>:
+_Z21NOC_CMD_BUF_WRITE_REGmmmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:168
+    cfa8:	sw	a4,20(a5)
+
+0000cfac <.LBB1939>:
+    cfac:	sw	t4,32(a5)
+
+0000cfb0 <.LBB1941>:
+    cfb0:	sw	a6,64(a5)
+
+0000cfb4 <.LBE1941>:
+_Z21ncrisc_noc_fast_writeILh0ELb0ELb1EEvmmmymmbbmbbm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:648
+    cfb4:	lw	a4,4(a0)
+
+0000cfb8 <.LBB2021>:
+_ZNK2tt9tt_fabric8WorkerXY9to_uint32Ev():
+/home/aagarwal/tt-metal/tt_metal/api/tt-metalium/experimental/fabric/fabric_edm_types.hpp:26
+    cfb8:	lbu	s6,-1988(gp) # ffb0002c <my_y>
+
+0000cfbc <.LBB1967>:
+_Z21ncrisc_noc_fast_writeILh0ELb0ELb1EEvmmmymmbbmbbm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:647
+    cfbc:	lw	s3,4(a2)
+
+0000cfc0 <.LBB2028>:
+_ZNK2tt9tt_fabric8WorkerXY9to_uint32Ev():
+/home/aagarwal/tt-metal/tt_metal/api/tt-metalium/experimental/fabric/fabric_edm_types.hpp:26
+    cfc0:	lbu	s7,-1984(gp) # ffb00030 <my_x>
+
+0000cfc4 <.LBE2028>:
+_ZN2tt9tt_fabric10connection10open_startILb0ELb0ELh1EEEvjjjhh():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/adapters/fabric_adapter_utils.hpp:46
+    cfc4:	addi	s5,s5,32
+
+0000cfc8 <.LBB1968>:
+_Z21ncrisc_noc_fast_writeILh0ELb0ELb1EEvmmmymmbbmbbm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:648
+    cfc8:	addi	a4,a4,1
+
+0000cfcc <.LBB2030>:
+_ZNK2tt9tt_fabric8WorkerXY9to_uint32Ev():
+/home/aagarwal/tt-metal/tt_metal/api/tt-metalium/experimental/fabric/fabric_edm_types.hpp:26
+    cfcc:	slli	s6,s6,0x10
+
+0000cfd0 <.LBB1969>:
+_Z21ncrisc_noc_fast_writeILh0ELb0ELb1EEvmmmymmbbmbbm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:647
+    cfd0:	addi	s3,s3,1
+
+0000cfd4 <.LM1028>:
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:648
+    cfd4:	sw	a4,4(a0)
+
+0000cfd8 <.LBB2032>:
+_ZNK2tt9tt_fabric8WorkerXY9to_uint32Ev():
+/home/aagarwal/tt-metal/tt_metal/api/tt-metalium/experimental/fabric/fabric_edm_types.hpp:26
+    cfd8:	or	s6,s6,s7
+
+0000cfdc <.LBE2032>:
+_ZN2tt9tt_fabric10connection10open_startILb0ELb0ELh1EEEvjjjhh():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/adapters/fabric_adapter_utils.hpp:46
+    cfdc:	srai	a4,s5,0x1f
+
+0000cfe0 <.LBB2033>:
+_Z33noc_get_interim_inline_value_addrmy():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:534
+    cfe0:	andi	s7,s5,15
+
+0000cfe4 <.LBB1970>:
+_Z21ncrisc_noc_fast_writeILh0ELb0ELb1EEvmmmymmbbmbbm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:647
+    cfe4:	sw	s3,4(a2)
+
+0000cfe8 <.LBE1970>:
+_ZN2tt9tt_fabric10connection10open_startILb0ELb0ELh1EEEvjjjhh():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/adapters/fabric_adapter_utils.hpp:45
+    cfe8:	or	s4,a4,s4
+
+0000cfec <.LBB2041>:
+_Z33noc_get_interim_inline_value_addrmy():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:547
+    cfec:	add	s7,s7,t1
+
+0000cff0 <.L43>:
+_Z19NOC_STATUS_READ_REGmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:180
+    cff0:	lw	a4,552(a5)
+
+0000cff4 <.LBE2042>:
+_Z30noc_fast_spoof_write_dw_inlineILh0ELb1EEvmmmymmbbm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:1096 (discriminator 2)
+    cff4:	bne	s3,a4,cff0 <.L43>
+
+0000cff8 <.LBB2045>:
+_Z29ncrisc_noc_posted_writes_sentm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:729 (discriminator 1)
+    cff8:	lw	s3,4(t3)
+
+0000cffc <.L44>:
+_Z19NOC_STATUS_READ_REGmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:180
+    cffc:	lw	a4,556(a5)
+
+0000d000 <.LBE2047>:
+_Z30noc_fast_spoof_write_dw_inlineILh0ELb1EEvmmmymmbbm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:1097 (discriminator 2)
+    d000:	bne	a4,s3,cffc <.L44>
+
+0000d004 <.LM1074>:
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:1102
+    d004:	sw	s6,0(s7)
+
+0000d008 <.L45>:
+_Z20NOC_CMD_BUF_READ_REGmmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:174
+    d008:	lw	a4,64(a5)
+
+0000d00c <.LBE2051>:
+_Z30noc_fast_spoof_write_dw_inlineILh0ELb1EEvmmmymmbbm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:1113 (discriminator 2)
+    d00c:	bnez	a4,d008 <.L45>
+
+0000d010 <.LBB2054>:
+_Z21NOC_CMD_BUF_WRITE_REGmmmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:168
+    d010:	sw	a7,28(a5)
+
+0000d014 <.LBB2058>:
+    d014:	sw	s7,0(a5)
+
+0000d018 <.LBB2060>:
+_Z21ncrisc_noc_fast_writeILh0ELb0ELb1EEvmmmymmbbmbbm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:639
+    d018:	srli	a4,s4,0x4
+
+0000d01c <.LBB2063>:
+_Z21NOC_CMD_BUF_WRITE_REGmmmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:168
+    d01c:	sw	s5,12(a5)
+
+0000d020 <.LBE2063>:
+_Z21ncrisc_noc_fast_writeILh0ELb0ELb1EEvmmmymmbbmbbm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:638
+    d020:	and	a4,a4,t5
+
+0000d024 <.LBB2064>:
+_Z21NOC_CMD_BUF_WRITE_REGmmmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:168
+    d024:	sw	a4,20(a5)
+
+0000d028 <.LBB2066>:
+    d028:	sw	t4,32(a5)
+
+0000d02c <.LBB2068>:
+    d02c:	sw	a6,64(a5)
+
+0000d030 <.LBE2068>:
+_Z21ncrisc_noc_fast_writeILh0ELb0ELb1EEvmmmymmbbmbbm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:648
+    d030:	lw	s3,4(a0)
+
+0000d034 <.LM1125>:
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:647
+    d034:	lw	s5,4(a2)
+
+0000d038 <.LBB2118>:
+_ZN22noc_address_backend_xy14worker_addressEmmmh():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/dataflow/noc_address_backend_xy.h:24
+    d038:	lbu	s4,108(a3)
+
+0000d03c <.LM1128>:
+    d03c:	lbu	a4,107(a3)
+
+0000d040 <.LBB2073>:
+_Z21ncrisc_noc_fast_writeILh0ELb0ELb1EEvmmmymmbbmbbm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:648
+    d040:	addi	s3,s3,1
+
+0000d044 <.LM1130>:
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:647
+    d044:	addi	s5,s5,1
+
+0000d048 <.LBB2131>:
+_ZN22noc_address_backend_xy14worker_addressEmmmh():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/dataflow/noc_address_backend_xy.h:24
+    d048:	slli	s4,s4,0xa
+    d04c:	slli	a4,a4,0x4
+
+0000d050 <.LBB2074>:
+_Z21ncrisc_noc_fast_writeILh0ELb0ELb1EEvmmmymmbbmbbm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:648
+    d050:	sw	s3,4(a0)
+
+0000d054 <.LBB2132>:
+_ZN22noc_address_backend_xy14worker_addressEmmmh():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/dataflow/noc_address_backend_xy.h:24
+    d054:	lw	s6,88(a3)
+
+0000d058 <.LBB2133>:
+_Z24ncrisc_noc_reads_flushedm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:589 (discriminator 1)
+    d058:	lw	s3,4(t0)
+
+0000d05c <.LBB2075>:
+_Z21ncrisc_noc_fast_writeILh0ELb0ELb1EEvmmmymmbbmbbm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:647
+    d05c:	sw	s5,4(a2)
+
+0000d060 <.LBB2144>:
+_ZN22noc_address_backend_xy14worker_addressEmmmh():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/dataflow/noc_address_backend_xy.h:24
+    d060:	or	s4,s4,a4
+
+0000d064 <.L46>:
+_Z19NOC_STATUS_READ_REGmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:180
+    d064:	lw	a4,520(a5)
+
+0000d068 <.LBE2137>:
+_Z22noc_async_read_barrierh():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/api/dataflow/dataflow_api.h:2092 (discriminator 2)
+    d068:	bne	a4,s3,d064 <.L46>
+
+0000d06c <.LBB2141>:
+_Z19invalidate_l1_cachev():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/cache.h:14
+    d06c:	fence
+
+0000d070 <.LBB2146>:
+_Z33noc_get_interim_inline_value_addrmy():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:534
+    d070:	andi	s5,s6,15
+
+0000d074 <.LBB2154>:
+_Z32ncrisc_noc_nonposted_writes_sentm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:718 (discriminator 1)
+    d074:	lw	s3,4(a2)
+
+0000d078 <.LBB2159>:
+_Z33noc_get_interim_inline_value_addrmy():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:547
+    d078:	add	s5,s5,t1
+
+0000d07c <.L47>:
+_Z19NOC_STATUS_READ_REGmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:180
+    d07c:	lw	a4,552(a5)
+
+0000d080 <.LBE2156>:
+_Z30noc_fast_spoof_write_dw_inlineILh0ELb1EEvmmmymmbbm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:1096 (discriminator 2)
+    d080:	bne	a4,s3,d07c <.L47>
+
+0000d084 <.LBB2161>:
+_Z29ncrisc_noc_posted_writes_sentm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:729 (discriminator 1)
+    d084:	lw	s3,4(t3)
+
+0000d088 <.L48>:
+_Z19NOC_STATUS_READ_REGmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:180
+    d088:	lw	a4,556(a5)
+
+0000d08c <.LBE2163>:
+_Z30noc_fast_spoof_write_dw_inlineILh0ELb1EEvmmmymmbbm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:1097 (discriminator 2)
+    d08c:	bne	a4,s3,d088 <.L48>
+
+0000d090 <.LM1204>:
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:1102
+    d090:	sw	a6,0(s5)
+
+0000d094 <.L49>:
+_Z20NOC_CMD_BUF_READ_REGmmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:174
+    d094:	lw	a4,64(a5)
+
+0000d098 <.LBE2167>:
+_Z30noc_fast_spoof_write_dw_inlineILh0ELb1EEvmmmymmbbm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:1113 (discriminator 2)
+    d098:	bnez	a4,d094 <.L49>
+
+0000d09c <.LBB2170>:
+_Z21NOC_CMD_BUF_WRITE_REGmmmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:168
+    d09c:	sw	a7,28(a5)
+
+0000d0a0 <.LBB2174>:
+    d0a0:	sw	s5,0(a5)
+
+0000d0a4 <.LBB2176>:
+    d0a4:	sw	s6,12(a5)
+
+0000d0a8 <.LBE2176>:
+_Z21ncrisc_noc_fast_writeILh0ELb0ELb1EEvmmmymmbbmbbm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:639
+    d0a8:	srli	s4,s4,0x4
+
+0000d0ac <.LBB2178>:
+_Z21NOC_CMD_BUF_WRITE_REGmmmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:168
+    d0ac:	sw	s4,20(a5)
+
+0000d0b0 <.LBB2180>:
+    d0b0:	sw	t4,32(a5)
+
+0000d0b4 <.LBB2182>:
+    d0b4:	sw	a6,64(a5)
+
+0000d0b8 <.LBE2182>:
+_Z21ncrisc_noc_fast_writeILh0ELb0ELb1EEvmmmymmbbmbbm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:647
+    d0b8:	lw	s3,4(a2)
+
+0000d0bc <.LM1254>:
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:648
+    d0bc:	lw	a4,4(a0)
+
+0000d0c0 <.LM1255>:
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:647
+    d0c0:	addi	s3,s3,1
+
+0000d0c4 <.LM1256>:
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:648
+    d0c4:	addi	a4,a4,1
+
+0000d0c8 <.LM1257>:
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:647
+    d0c8:	sw	s3,4(a2)
+
+0000d0cc <.LM1258>:
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:648
+    d0cc:	sw	a4,4(a0)
+
+0000d0d0 <.LBE2146>:
+_ZN2tt9tt_fabric37RouterStaticSizedChannelWriterAdapterILh16EE11open_finishILb0ELh1EEEvv():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_router_adapter.hpp:254 (discriminator 1)
+    d0d0:	sb	zero,106(a3)
+
+0000d0d4 <.LBE2202>:
+operator()<std::array<tt::tt_fabric::RouterStaticSizedChannelWriterAdapter<16>, 2> >():
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3900
+    d0d4:	srli	a1,a1,0x1
+
+0000d0d8 <.LBB2191>:
+_ZN2tt9tt_fabric10connection11open_finishILb0ELh1EEEvjPVmhh():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/adapters/fabric_adapter_utils.hpp:66
+    d0d8:	sw	zero,0(t6)
+
+0000d0dc <.LBB2192>:
+operator()<std::array<tt::tt_fabric::RouterStaticSizedChannelWriterAdapter<16>, 2> >():
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3890
+    d0dc:	bnez	a1,ced4 <.L224>
+
+0000d0e0 <.LBE1822>:
+_Z11kernel_mainv():
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3932
+    d0e0:	jal	c770 <_Z26wait_for_other_local_eriscv>
+
+0000d0e4 <.LM1272>:
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3935
+    d0e4:	lui	a5,0xb8c8e
+    d0e8:	addi	a5,a5,-1816 # b8c8d8e8 <__tt_zone_meta_end+0xb258d8e8>
+    d0ec:	lui	a4,0x70
+    d0f0:	sw	a5,-432(a4) # 6fe50 <.LASF334+0x3f3ec>
+
+0000d0f4 <.LBB2207>:
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3946
+    d0f4:	andi	a5,s0,1
+
+0000d0f8 <.LM1281>:
+    d0f8:	bnez	a5,d10c <.L232>
+
+0000d0fc <.L53>:
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3953
+    d0fc:	srli	s0,s0,0x1
+
+0000d100 <.L225>:
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3946
+    d100:	andi	a5,s0,1
+
+0000d104 <.LM1287>:
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3945
+    d104:	addi	s1,s1,112
+
+0000d108 <.LM1288>:
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3946
+    d108:	beqz	a5,d0fc <.L53>
+
+0000d10c <.L232>:
+_ZN22noc_address_backend_xy14worker_addressEmmmh():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/dataflow/noc_address_backend_xy.h:24
+    d10c:	lbu	a1,108(s1)
+
+0000d110 <.LM1296>:
+    d110:	lbu	a5,107(s1)
+
+0000d114 <.LBB2217>:
+_Z46noc_async_write_one_packet_with_trid_set_stateILb1EEvyhhh():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/api/dataflow/dataflow_api.h:2866
+    d114:	lbu	a2,109(s1)
+
+0000d118 <.LBB2219>:
+_Z20NOC_CMD_BUF_READ_REGmmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:172
+    d118:	lui	a4,0xffb30
+
+0000d11c <.LBB2262>:
+_ZN22noc_address_backend_xy14worker_addressEmmmh():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/dataflow/noc_address_backend_xy.h:24
+    d11c:	slli	a1,a1,0xa
+
+0000d120 <.LM1301>:
+    d120:	slli	a5,a5,0x4
+
+0000d124 <.LBB2230>:
+_Z20NOC_CMD_BUF_READ_REGmmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:172
+    d124:	slli	a2,a2,0xb
+
+0000d128 <.LM1304>:
+    d128:	addi	a4,a4,64 # ffb30040 <__stack_base+0x2f360>
+
+0000d12c <.LBB2264>:
+_ZN22noc_address_backend_xy14worker_addressEmmmh():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/dataflow/noc_address_backend_xy.h:24
+    d12c:	or	a1,a1,a5
+
+0000d130 <.LBB2231>:
+_Z20NOC_CMD_BUF_READ_REGmmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:172
+    d130:	add	a4,a2,a4
+
+0000d134 <.L54>:
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:174
+    d134:	lw	a5,0(a4)
+
+0000d138 <.LBE2232>:
+_Z26ncrisc_noc_write_set_stateILb1ELb0EEvmmymm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:1591 (discriminator 2)
+    d138:	bnez	a5,d134 <.L54>
+
+0000d13c <.LBB2233>:
+_Z21NOC_CMD_BUF_WRITE_REGmmmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:166
+    d13c:	lui	a5,0xffb30
+
+0000d140 <.LM1325>:
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:168
+    d140:	lui	a6,0x6
+
+0000d144 <.LM1326>:
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:166
+    d144:	add	a0,a2,a5
+
+0000d148 <.LM1327>:
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:168
+    d148:	addi	a6,a6,130 # 6082 <.LLST1387+0x13>
+
+0000d14c <.LBB2266>:
+_Z29noc_inline_dw_write_set_stateILb1ELb1EEvymhhhh():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/api/dataflow/dataflow_api.h:2521
+    d14c:	lbu	a3,110(s1)
+
+0000d150 <.LBB2236>:
+_Z21NOC_CMD_BUF_WRITE_REGmmmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:168
+    d150:	sw	a6,28(a0)
+
+0000d154 <.LBB2237>:
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:166
+    d154:	add	a4,a2,a5
+
+0000d158 <.LBB2326>:
+_ZN22noc_address_backend_xy14worker_addressEmmmh():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/dataflow/noc_address_backend_xy.h:24
+    d158:	lw	a0,84(s1)
+
+0000d15c <.LBB2240>:
+_Z21NOC_CMD_BUF_WRITE_REGmmmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:168
+    d15c:	sw	zero,16(a4)
+
+0000d160 <.LBB2241>:
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:166
+    d160:	add	a2,a2,a5
+
+0000d164 <.LBE2241>:
+_Z26ncrisc_noc_write_set_stateILb1ELb0EEvmmymm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:1602
+    d164:	srli	a6,a1,0x4
+
+0000d168 <.LBB2245>:
+_Z20NOC_CMD_BUF_READ_REGmmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:172
+    d168:	addi	a5,a5,64 # ffb30040 <__stack_base+0x2f360>
+
+0000d16c <.LM1348>:
+    d16c:	slli	a3,a3,0xb
+
+0000d170 <.LBE2268>:
+_ZNK2tt9tt_fabric37RouterStaticSizedChannelWriterAdapterILh16EE21setup_edm_noc_cmd_bufILh1ELh3EEEvv():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_router_adapter.hpp:165
+    d170:	sw	a1,4(s1)
+
+0000d174 <.LBB2246>:
+_Z21NOC_CMD_BUF_WRITE_REGmmmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:168
+    d174:	sw	a6,20(a2)
+
+0000d178 <.LBB2277>:
+_Z20NOC_CMD_BUF_READ_REGmmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:172
+    d178:	add	a4,a3,a5
+
+0000d17c <.LBE2277>:
+_ZNK2tt9tt_fabric37RouterStaticSizedChannelWriterAdapterILh16EE21setup_edm_noc_cmd_bufILh1ELh3EEEvv():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_router_adapter.hpp:165
+    d17c:	sw	a0,0(s1)
+
+0000d180 <.L55>:
+_Z20NOC_CMD_BUF_READ_REGmmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:174
+    d180:	lw	a5,0(a4)
+
+0000d184 <.LBE2278>:
+_Z34noc_fast_write_dw_inline_set_stateILb1ELb1EEvmmymmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:1771 (discriminator 2)
+    d184:	bnez	a5,d180 <.L55>
+
+0000d188 <.LBB2279>:
+_Z21NOC_CMD_BUF_WRITE_REGmmmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:166
+    d188:	lui	a5,0xffb30
+    d18c:	addi	a1,a5,40 # ffb30028 <__stack_base+0x2f348>
+
+0000d190 <.LM1375>:
+    d190:	add	a1,a3,a1
+
+0000d194 <.LBB2283>:
+    d194:	addi	a4,a5,28
+
+0000d198 <.LBB2287>:
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:168
+    d198:	li	a7,-64
+
+0000d19c <.LBB2288>:
+    d19c:	lui	a2,0x6
+
+0000d1a0 <.LBB2289>:
+    d1a0:	sw	a7,0(a1)
+
+0000d1a4 <.LBB2290>:
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:166
+    d1a4:	add	a4,a3,a4
+
+0000d1a8 <.LM1384>:
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:168
+    d1a8:	addi	a2,a2,138 # 608a <.LLST1387+0x1b>
+    d1ac:	sw	a2,0(a4)
+
+0000d1b0 <.LBB2291>:
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:166
+    d1b0:	add	a2,a3,a5
+
+0000d1b4 <.LBB2294>:
+    d1b4:	addi	a4,a5,4
+
+0000d1b8 <.LBB2298>:
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:168
+    d1b8:	sw	a0,0(a2)
+
+0000d1bc <.LBB2299>:
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:166
+    d1bc:	add	a4,a3,a4
+
+0000d1c0 <.LBB2300>:
+    d1c0:	addi	a2,a5,8
+
+0000d1c4 <.LBB2304>:
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:168
+    d1c4:	sw	zero,0(a4)
+
+0000d1c8 <.LBB2305>:
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:166
+    d1c8:	add	a2,a3,a2
+
+0000d1cc <.LBB2306>:
+    d1cc:	addi	a5,a5,32
+
+0000d1d0 <.LBE2306>:
+_Z34noc_fast_write_dw_inline_set_stateILb1ELb1EEvmmymmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:1786
+    d1d0:	li	a4,15
+
+0000d1d4 <.LBB2311>:
+_Z21NOC_CMD_BUF_WRITE_REGmmmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:166
+    d1d4:	add	a3,a3,a5
+
+0000d1d8 <.LBB2312>:
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:168
+    d1d8:	sw	a6,0(a2)
+
+0000d1dc <.LBE2312>:
+_Z34noc_fast_write_dw_inline_set_stateILb1ELb1EEvmmymmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:1786
+    d1dc:	sll	a5,a4,a0
+
+0000d1e0 <.LBB2313>:
+_Z11kernel_mainv():
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3953
+    d1e0:	srli	s0,s0,0x1
+
+0000d1e4 <.LBB2314>:
+_Z21NOC_CMD_BUF_WRITE_REGmmmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:168
+    d1e4:	sw	a5,0(a3)
+
+0000d1e8 <.LBE2314>:
+_Z11kernel_mainv():
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3945
+    d1e8:	bnez	s0,d100 <.L225>
+
+0000d1ec <.L52>:
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3982
+    d1ec:	jal	c770 <_Z26wait_for_other_local_eriscv>
+
+0000d1f0 <.LM1430>:
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3986
+    d1f0:	lui	s0,0x70
+    d1f4:	lui	a5,0xb9c9e
+    d1f8:	addi	a5,a5,-1559 # b9c9d9e9 <__tt_zone_meta_end+0xb359d9e9>
+    d1fc:	sw	a5,-432(s0) # 6fe50 <.LASF334+0x3f3ec>
+
+0000d200 <.LM1431>:
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3990
+    d200:	lw	a5,80(sp)
+
+0000d204 <.LM1434>:
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3995
+    d204:	jal	c770 <_Z26wait_for_other_local_eriscv>
+
+0000d208 <.LM1438>:
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3999
+    d208:	lui	a5,0xbacae
+    d20c:	addi	a5,a5,-1302 # bacadaea <__tt_zone_meta_end+0xb45adaea>
+    d210:	sw	a5,-432(s0)
+
+0000d214 <.LBB2340>:
+_Z22clear_telemetry_bufferI27L1PerfTelemetrySingleBufferEvRT_():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/telemetry/fabric_bandwidth_telemetry.hpp:146
+    d214:	lui	a4,0x16
+
+0000d218 <.LBE2342>:
+_Z11kernel_mainv():
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:2308
+    d218:	lbu	a5,-563(s0)
+
+0000d21c <.LM1443>:
+run_fabric_edm_main_loop<1, tt::tt_fabric::RouterStaticSizedChannelWriterAdapter<16>, tt::tt_fabric::RouterStaticSizedChannelWriterAdapter<0>, tt::tt_fabric::RouterStaticSizedChannelWriterAdapter<0>, tt::tt_fabric::AllocChannelTuple<tt::tt_fabric::HybridMeshPacketHeaderT<36>, ChannelAllocations<0, 4, 1>, std::tuple<tt::tt_fabric::StaticSizedSenderEthChannel<tt::tt_fabric::HybridMeshPacketHeaderT<36>, 17>, tt::tt_fabric::StaticSizedSenderEthChannel<tt::tt_fabric::HybridMeshPacketHeaderT<36>, 16>, tt::tt_fabric::StaticSizedSenderEthChannel<tt::tt_fabric::HybridMeshPacketHeaderT<36>, 16>, tt::tt_fabric::StaticSizedSenderEthChannel<tt::tt_fabric::HybridMeshPacketHeaderT<36>, 16> >, SENDER_TO_ENTRY_IDX>, tt::tt_fabric::AllocChannelTuple<tt::tt_fabric::HybridMeshPacketHeaderT<36>, ChannelAllocations<0, 4, 1>, std::tuple<tt::tt_fabric::StaticSizedEthChannelBuffer<tt::tt_fabric::HybridMeshPacketHeaderT<36>, 16> >, RECEIVER_TO_ENTRY_IDX>, tt::tt_fabric::AllocChannelTuple<tt::tt_fabric::HybridMeshPacketHeaderT<36>, ChannelAllocations<28, 0, 1>, std::tuple<tt::tt_fabric::StaticSizedEthChannelBuffer<tt::tt_fabric::HybridMeshPacketHeaderT<36>, 16> >, REMOTE_RECEIVER_TO_ENTRY_IDX>, tt::tt_fabric::EdmChannelWorkerInterfaceTuple<1, 17, 16, 16, 16>, WriteTransactionIdTracker<16, 4, 0, 1, 1> >():
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:2330 (discriminator 1)
+    d21c:	sw	zero,208(sp)
+    d220:	sw	zero,212(sp)
+    d224:	sw	zero,216(sp)
+    d228:	sw	zero,220(sp)
+    d22c:	sw	zero,224(sp)
+    d230:	sw	zero,228(sp)
+    d234:	sw	zero,232(sp)
+    d238:	sw	zero,236(sp)
+    d23c:	sw	zero,240(sp)
+    d240:	sw	zero,244(sp)
+    d244:	sw	zero,248(sp)
+    d248:	sw	zero,252(sp)
+    d24c:	sw	zero,256(sp)
+
+0000d250 <.LBE2340>:
+_Z11kernel_mainv():
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:4017
+    d250:	lw	s5,80(sp)
+
+0000d254 <.LBB2347>:
+_Z22clear_telemetry_bufferI27L1PerfTelemetrySingleBufferEvRT_():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/telemetry/fabric_bandwidth_telemetry.hpp:146
+    d254:	sw	zero,-1216(a4) # 15b40 <.LASF686+0x2>
+
+0000d258 <.LM1497>:
+    d258:	sw	zero,-1212(a4)
+
+0000d25c <.LM1501>:
+    d25c:	sw	zero,-1208(a4)
+
+0000d260 <.LM1505>:
+    d260:	sw	zero,-1204(a4)
+
+0000d264 <.LM1509>:
+    d264:	sw	zero,-1200(a4)
+
+0000d268 <.LM1513>:
+    d268:	sw	zero,-1196(a4)
+
+0000d26c <.LM1517>:
+    d26c:	sw	zero,-1192(a4)
+
+0000d270 <.LM1521>:
+    d270:	sw	zero,-1188(a4)
+
+0000d274 <.LBB2382>:
+_ZSt9__fill_a1IPllEvT_S1_RKT0_():
+/home/aagarwal/tt-metal/runtime/sfpi/compiler/riscv-tt-elf/include/c++/15.1.0/bits/stl_algobase.h:925
+    d274:	addi	a4,gp,1204 # ffb00ca4 <exp_pending_upstream_credits>
+
+0000d278 <.LBB2398>:
+_ZN47ReceiverChannelCounterBasedResponseCreditSenderC4Ej():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_router_flow_control.hpp:23
+    d278:	sw	zero,176(sp)
+    d27c:	sw	zero,180(sp)
+    d280:	sw	zero,184(sp)
+    d284:	sw	zero,188(sp)
+
+0000d288 <.LM1535>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_router_flow_control.hpp:24
+    d288:	sw	zero,192(sp)
+    d28c:	sw	zero,196(sp)
+    d290:	sw	zero,200(sp)
+    d294:	sw	zero,204(sp)
+
+0000d298 <.LBB2388>:
+_ZSt9__fill_a1IPllEvT_S1_RKT0_():
+/home/aagarwal/tt-metal/runtime/sfpi/compiler/riscv-tt-elf/include/c++/15.1.0/bits/stl_algobase.h:925
+    d298:	sw	zero,0(a4)
+
+0000d29c <.LM1579>:
+    d29c:	sw	zero,4(a4)
+
+0000d2a0 <.LM1582>:
+    d2a0:	sw	zero,8(a4)
+
+0000d2a4 <.LM1585>:
+    d2a4:	sw	zero,12(a4)
+
+0000d2a8 <.LM1588>:
+    d2a8:	sw	zero,16(a4)
+
+0000d2ac <.LM1591>:
+    d2ac:	sw	zero,20(a4)
+
+0000d2b0 <.LM1594>:
+    d2b0:	sw	zero,24(a4)
+
+0000d2b4 <.LM1597>:
+    d2b4:	sw	zero,28(a4)
+
+0000d2b8 <.LM1600>:
+    d2b8:	sw	zero,32(a4)
+
+0000d2bc <.LM1603>:
+    d2bc:	sw	zero,36(a4)
+
+0000d2c0 <.LBB2413>:
+_ZSt9__fill_a1IhhEN9__gnu_cxx11__enable_ifIXaasrSt9__is_byteIT_E7__valueoosrSt10__are_sameIS3_T0_E7__valuesrSt20__memcpyable_integerIS6_E7__widthEvE6__typeEPS3_SC_RKS6_():
+/home/aagarwal/tt-metal/runtime/sfpi/compiler/riscv-tt-elf/include/c++/15.1.0/bits/stl_algobase.h:951
+    d2c0:	sw	zero,40(a4)
+    d2c4:	sw	zero,44(a4)
+    d2c8:	sh	zero,48(a4)
+
+0000d2cc <.LBB2422>:
+_ZN2tt9tt_fabric32got_immediate_termination_signalILb0EEEbPVNS0_17TerminationSignalE():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/tt_fabric_utils.h:27
+    d2cc:	lw	a4,268(zero) # 10c <.LLRL157+0xd>
+
+0000d2d0 <.LM1622>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/tt_fabric_utils.h:29
+    d2d0:	lw	a2,0(s5)
+
+0000d2d4 <.LM1623>:
+    d2d4:	li	a3,2
+    d2d8:	beq	a2,a3,d484 <.L57>
+
+0000d2dc <.LM1624>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/tt_fabric_utils.h:28
+    d2dc:	li	a3,144
+    d2e0:	mul	a4,a4,a3
+
+0000d2e4 <.LBE2422>:
+run_fabric_edm_main_loop<1, tt::tt_fabric::RouterStaticSizedChannelWriterAdapter<16>, tt::tt_fabric::RouterStaticSizedChannelWriterAdapter<0>, tt::tt_fabric::RouterStaticSizedChannelWriterAdapter<0>, tt::tt_fabric::AllocChannelTuple<tt::tt_fabric::HybridMeshPacketHeaderT<36>, ChannelAllocations<0, 4, 1>, std::tuple<tt::tt_fabric::StaticSizedSenderEthChannel<tt::tt_fabric::HybridMeshPacketHeaderT<36>, 17>, tt::tt_fabric::StaticSizedSenderEthChannel<tt::tt_fabric::HybridMeshPacketHeaderT<36>, 16>, tt::tt_fabric::StaticSizedSenderEthChannel<tt::tt_fabric::HybridMeshPacketHeaderT<36>, 16>, tt::tt_fabric::StaticSizedSenderEthChannel<tt::tt_fabric::HybridMeshPacketHeaderT<36>, 16> >, SENDER_TO_ENTRY_IDX>, tt::tt_fabric::AllocChannelTuple<tt::tt_fabric::HybridMeshPacketHeaderT<36>, ChannelAllocations<0, 4, 1>, std::tuple<tt::tt_fabric::StaticSizedEthChannelBuffer<tt::tt_fabric::HybridMeshPacketHeaderT<36>, 16> >, RECEIVER_TO_ENTRY_IDX>, tt::tt_fabric::AllocChannelTuple<tt::tt_fabric::HybridMeshPacketHeaderT<36>, ChannelAllocations<28, 0, 1>, std::tuple<tt::tt_fabric::StaticSizedEthChannelBuffer<tt::tt_fabric::HybridMeshPacketHeaderT<36>, 16> >, REMOTE_RECEIVER_TO_ENTRY_IDX>, tt::tt_fabric::EdmChannelWorkerInterfaceTuple<1, 17, 16, 16, 16>, WriteTransactionIdTracker<16, 4, 0, 1, 1> >():
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:2330 (discriminator 1)
+    d2e4:	li	s8,0
+    d2e8:	mv	a3,a5
+
+0000d2ec <.LBB2427>:
+_ZN2tt9tt_fabric32got_immediate_termination_signalILb0EEEbPVNS0_17TerminationSignalE():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/tt_fabric_utils.h:28
+    d2ec:	addi	a4,a4,272
+    d2f0:	li	s4,0
+    d2f4:	li	t6,0
+    d2f8:	mv	a5,s5
+
+0000d2fc <.LM1627>:
+    d2fc:	mv	t0,s8
+    d300:	li	a7,0
+
+0000d304 <.L58>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/tt_fabric_utils.h:30
+    d304:	lbu	a4,107(a4)
+
+0000d308 <.LM1629>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/tt_fabric_utils.h:29 (discriminator 2)
+    d308:	bnez	a4,d484 <.L57>
+
+0000d30c <.LBB2428>:
+_ZN2tt9tt_fabric14Routing2DCodec13decode_actionILNS0_19eth_chan_directionsE0EEEhPVKhmmm():
+/home/aagarwal/tt-metal/tt_metal/hostdevcommon/api/hostdevcommon/fabric_common.h:295
+    d30c:	addi	a4,a3,2
+    d310:	sw	s10,576(sp)
+    d314:	sw	s11,572(sp)
+    d318:	sw	s9,580(sp)
+
+0000d31c <.LM1631>:
+    d31c:	sw	a4,56(sp)
+
+0000d320 <.LBB2488>:
+_Z30increment_local_update_ptr_valILm4EEvl():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp:66
+    d320:	li	s11,-64
+
+0000d324 <.LBB2492>:
+_Z20NOC_CMD_BUF_READ_REGmmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:174
+    d324:	lui	s0,0xffb32
+
+0000d328 <.LBB3465>:
+_Z30run_receiver_channel_step_implILh0ELh4ELb0ELj2E25WriteTransactionIdTrackerILh16ELj4ELj0ELh1ELh1EERN2tt9tt_fabric27StaticSizedEthChannelBufferINS3_23HybridMeshPacketHeaderTILi36EEELh16EEENS3_23ReceiverChannelPointersILh16EEENS3_37RouterStaticSizedChannelWriterAdapterILh16EEERNSB_ILh0EEE15FabricTelemetry47ReceiverChannelCounterBasedResponseCreditSenderEbRT4_RSt5arrayIT6_XT2_EERT7_RT5_RT3_RSJ_IhLj12EERT9_RKNS3_17routing_l1_info_tEthhRT8_():
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:2067
+    d328:	lui	t2,0x10
+    d32c:	mv	s2,s4
+    d330:	mv	s7,s8
+    d334:	mv	s6,t6
+    d338:	mv	s10,t0
+
+0000d33c <.L119>:
+_Z17eth_txq_reg_writemmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/ethernet/tt_eth_api.h:27
+    d33c:	sw	a5,12(sp)
+    d340:	sw	a3,24(sp)
+    d344:	mv	a5,a7
+
+0000d348 <.L116>:
+_ZN2tt9tt_fabric32got_immediate_termination_signalILb0EEEbPVNS0_17TerminationSignalE():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/tt_fabric_utils.h:29
+    d348:	lw	a3,12(sp)
+
+0000d34c <.LM1642>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/tt_fabric_utils.h:27
+    d34c:	lw	a4,268(zero) # 10c <.LLRL157+0xd>
+
+0000d350 <.LM1643>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/tt_fabric_utils.h:29
+    d350:	lw	a3,0(a3)
+
+0000d354 <.LM1644>:
+    d354:	li	a2,2
+    d358:	beq	a3,a2,d440 <.L124>
+
+0000d35c <.LM1645>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/tt_fabric_utils.h:28
+    d35c:	li	a3,144
+    d360:	mul	a4,a4,a3
+
+0000d364 <.LM1646>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/tt_fabric_utils.h:30
+    d364:	lbu	a4,379(a4)
+
+0000d368 <.LM1647>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/tt_fabric_utils.h:29 (discriminator 2)
+    d368:	bnez	a4,d440 <.L124>
+
+0000d36c <.LBB2751>:
+_Z39execute_chip_unicast_to_local_chip_implU11rvtt_l1_ptrPN2tt9tt_fabric23HybridMeshPacketHeaderTILi36EEEtNS0_11NocSendTypeEmh():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp:176
+    d36c:	addi	a7,gp,1120 # ffb00c50 <__fw_export_ldm_end>
+    d370:	auipc	t4,0x0
+
+0000d374 <.LBB2444>:
+_Z11get_ptr_valh():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp:55
+    d374:	lui	t3,0xffb40
+
+0000d378 <.LBB2555>:
+_Z39execute_chip_unicast_to_local_chip_implU11rvtt_l1_ptrPN2tt9tt_fabric23HybridMeshPacketHeaderTILi36EEEtNS0_11NocSendTypeEmh():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp:176
+    d378:	sw	a7,16(sp)
+    d37c:	addi	a7,t4,184 # d428 <.L74>
+
+0000d380 <.LBB2556>:
+_Z32noc_fast_default_write_dw_inlineILh0EEvmmmymmbbm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:1173
+    d380:	addi	a3,gp,-2020 # ffb0000c <noc_nonposted_writes_num_issued>
+
+0000d384 <.LM1655>:
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:1174
+    d384:	addi	a4,gp,-2012 # ffb00014 <noc_nonposted_writes_acked>
+
+0000d388 <.LBB3417>:
+_Z30increment_local_update_ptr_valILm4EEvl():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp:66
+    d388:	lui	s9,0xffb44
+
+0000d38c <.LBB2480>:
+_Z17admit_2d_dispatchIN2tt9tt_fabric37RouterStaticSizedChannelWriterAdapterILh16EEENS2_ILh0EEELj2EEbhbRSt5arrayIT_XT1_EERT0_():
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:1001 (discriminator 3)
+    d38c:	lui	a6,0x20
+
+0000d390 <.LBB3467>:
+_Z17exp_read_rx_groupILm4EEvmRmS0_S0_():
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:1777
+    d390:	lui	a2,0xffb91
+
+0000d394 <.LBB3331>:
+_Z39execute_chip_unicast_to_local_chip_implU11rvtt_l1_ptrPN2tt9tt_fabric23HybridMeshPacketHeaderTILi36EEEtNS0_11NocSendTypeEmh():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp:176
+    d394:	sw	a7,20(sp)
+
+0000d398 <.LBB2616>:
+_Z21ncrisc_noc_fast_writeILh0ELb1ELb1EEvmmmymmbbmbbm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:645
+    d398:	addi	a0,gp,-1996 # ffb00024 <noc_posted_writes_num_issued>
+
+0000d39c <.LBB2456>:
+_Z11get_ptr_valh():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp:55
+    d39c:	addi	a7,t3,1188 # ffb404a4 <__stack_base+0x3f7c4>
+
+0000d3a0 <.LBB3657>:
+_ZN2tt9tt_fabric32got_immediate_termination_signalILb0EEEbPVNS0_17TerminationSignalE():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp:55
+    d3a0:	lw	t0,56(sp)
+
+0000d3a4 <.LBB2557>:
+_Z32noc_fast_default_write_dw_inlineILh0EEvmmmymmbbm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:1173
+    d3a4:	sw	a3,40(sp)
+
+0000d3a8 <.LM1663>:
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:1174
+    d3a8:	sw	a4,44(sp)
+
+0000d3ac <.LBB2617>:
+_Z20NOC_CMD_BUF_READ_REGmmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:172
+    d3ac:	lui	a1,0xffb30
+
+0000d3b0 <.LBB3473>:
+_Z17exp_read_rx_groupILm4EEvmRmS0_S0_():
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:1777
+    d3b0:	addi	s8,s9,1188 # ffb444a4 <__stack_base+0x437c4>
+
+0000d3b4 <.LBB2457>:
+_Z11get_ptr_valh():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp:55
+    d3b4:	sw	a7,8(sp)
+
+0000d3b8 <.LBE2457>:
+_Z17admit_2d_dispatchIN2tt9tt_fabric37RouterStaticSizedChannelWriterAdapterILh16EEENS2_ILh0EEELj2EEbhbRSt5arrayIT_XT1_EERT0_():
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:1001 (discriminator 3)
+    d3b8:	addi	s5,a6,-1 # 1ffff <.LASF1263+0xf>
+
+0000d3bc <.LBB2626>:
+_Z21ncrisc_noc_fast_writeILh0ELb1ELb1EEvmmmymmbbmbbm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:645
+    d3bc:	sw	a0,36(sp)
+
+0000d3c0 <.LBB3474>:
+_Z17exp_read_rx_groupILm4EEvmRmS0_S0_():
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:1777
+    d3c0:	addi	a4,a2,4 # ffb91004 <__stack_base+0x90324>
+
+0000d3c4 <.LBB3659>:
+_ZN2tt9tt_fabric32got_immediate_termination_signalILb0EEEbPVNS0_17TerminationSignalE():
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:1777
+    d3c4:	li	a3,32
+    d3c8:	sw	a5,60(sp)
+
+0000d3cc <.L112>:
+_Z30run_receiver_channel_step_implILh0ELh4ELb0ELj2E25WriteTransactionIdTrackerILh16ELj4ELj0ELh1ELh1EERN2tt9tt_fabric27StaticSizedEthChannelBufferINS3_23HybridMeshPacketHeaderTILi36EEELh16EEENS3_23ReceiverChannelPointersILh16EEENS3_37RouterStaticSizedChannelWriterAdapterILh16EEERNSB_ILh0EEE15FabricTelemetry47ReceiverChannelCounterBasedResponseCreditSenderEbRT4_RSt5arrayIT6_XT2_EERT7_RT5_RT3_RSJ_IhLj12EERT9_RKNS3_17routing_l1_info_tEthhRT8_():
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:1864
+    d3cc:	lw	a5,256(sp)
+    d3d0:	beqz	a5,d6b4 <.L64>
+
+0000d3d4 <.LBB3424>:
+_ZNK2tt9tt_fabric13SlotAddressesILh16ELb1EEixEh():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp:64 (discriminator 1)
+    d3d4:	sh2add	a5,s10,sp
+    d3d8:	lw	a5,260(a5)
+
+0000d3dc <.LBB2483>:
+_ZN2tt9tt_fabric14Routing2DCodec13decode_actionILNS0_19eth_chan_directionsE0EEEhPVKhmmm():
+/home/aagarwal/tt-metal/tt_metal/hostdevcommon/api/hostdevcommon/fabric_common.h:295
+    d3dc:	add	a0,a5,t0
+    d3e0:	lbu	a6,48(a0)
+
+0000d3e4 <.LBB3436>:
+_ZN2tt9tt_fabric23ReceiverChannelPointersILh16EE15set_src_chan_idENS0_9NamedTypeIhNS0_15BufferIndexTypeEEEh():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_flow_control_helpers.hpp:248 (discriminator 2)
+    d3e4:	lbu	t1,43(a5)
+    d3e8:	add	a0,s10,sp
+
+0000d3ec <.LBB2484>:
+_Z17admit_2d_dispatchIN2tt9tt_fabric37RouterStaticSizedChannelWriterAdapterILh16EEENS2_ILh0EEELj2EEbhbRSt5arrayIT_XT1_EERT0_():
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:1000
+    d3ec:	andi	a7,a6,2
+
+0000d3f0 <.LBB3438>:
+_ZN2tt9tt_fabric23ReceiverChannelPointersILh16EE15set_src_chan_idENS0_9NamedTypeIhNS0_15BufferIndexTypeEEEh():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_flow_control_helpers.hpp:248 (discriminator 2)
+    d3f0:	sb	t1,240(a0)
+
+0000d3f4 <.LBB2485>:
+_Z17admit_2d_dispatchIN2tt9tt_fabric37RouterStaticSizedChannelWriterAdapterILh16EEENS2_ILh0EEELj2EEbhbRSt5arrayIT_XT1_EERT0_():
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:1000
+    d3f4:	bnez	a7,d974 <.L60>
+
+0000d3f8 <.LBB3384>:
+_Z19forward_2d_dispatchIN2tt9tt_fabric37RouterStaticSizedChannelWriterAdapterILh16EEELj2EEhhU11rvtt_l1_ptrPNS1_23HybridMeshPacketHeaderTILi36EEENS1_27LowLatencyMeshRoutingFieldsERSt5arrayIT_XT0_EEh():
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:1038
+    d3f8:	lhu	t1,40(a5)
+
+0000d3fc <.LBB3403>:
+_ZN25WriteTransactionIdTrackerILh16ELj4ELj0ELh1ELh1EE56update_buffer_slot_to_next_trid_and_advance_trid_counterEN2tt9tt_fabric9NamedTypeIhNS2_15BufferIndexTypeEEE():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_router_transaction_id_tracker.hpp:76 (discriminator 1)
+    d3fc:	andi	a7,s10,3
+
+0000d400 <.L61>:
+_Z30run_receiver_channel_step_implILh0ELh4ELb0ELj2E25WriteTransactionIdTrackerILh16ELj4ELj0ELh1ELh1EERN2tt9tt_fabric27StaticSizedEthChannelBufferINS3_23HybridMeshPacketHeaderTILi36EEELh16EEENS3_23ReceiverChannelPointersILh16EEENS3_37RouterStaticSizedChannelWriterAdapterILh16EEERNSB_ILh0EEE15FabricTelemetry47ReceiverChannelCounterBasedResponseCreditSenderEbRT4_RSt5arrayIT6_XT2_EERT7_RT5_RT3_RSJ_IhLj12EERT9_RKNS3_17routing_l1_info_tEthhRT8_():
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:1989
+    d400:	andi	a6,a6,32
+
+0000d404 <.LM1703>:
+    d404:	beqz	a6,d6a4 <.L67>
+
+0000d408 <.LBB3350>:
+_ZN2tt9tt_fabric16PacketHeaderBaseINS0_23HybridMeshPacketHeaderTILi36EEEE24PackedPayloadAndSendType4loadEPVKS3_():
+/home/aagarwal/tt-metal/tt_metal/fabric/fabric_edm_packet_header.hpp:434
+    d408:	lw	a0,40(a5)
+
+0000d40c <.LBB3332>:
+_Z39execute_chip_unicast_to_local_chip_implU11rvtt_l1_ptrPN2tt9tt_fabric23HybridMeshPacketHeaderTILi36EEEtNS0_11NocSendTypeEmh():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp:152
+    d40c:	li	a6,8
+
+0000d410 <.LBB3354>:
+_ZN2tt9tt_fabric16PacketHeaderBaseINS0_23HybridMeshPacketHeaderTILi36EEEE24PackedPayloadAndSendType4loadEPVKS3_():
+/home/aagarwal/tt-metal/tt_metal/fabric/fabric_edm_packet_header.hpp:438
+    d410:	srli	a0,a0,0x10
+
+0000d414 <.LM1712>:
+    d414:	zext.b	a0,a0
+
+0000d418 <.LBB3333>:
+_Z39execute_chip_unicast_to_local_chip_implU11rvtt_l1_ptrPN2tt9tt_fabric23HybridMeshPacketHeaderTILi36EEEtNS0_11NocSendTypeEmh():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp:144
+    d418:	addi	t5,a5,96
+
+0000d41c <.LM1725>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp:152
+    d41c:	beq	a0,a6,dc48 <.L233>
+
+0000d420 <.LM1728>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp:176
+    d420:	li	a6,4
+    d424:	bltu	a6,a0,d6a4 <.L67>
+
+0000d428 <.L74>:
+    d428:	lw	a6,16(sp)
+    d42c:	sh2add	a0,a0,a6
+
+0000d430 <.LM1731>:
+    d430:	lw	a6,20(sp)
+    d434:	lw	a0,0(a0)
+    d438:	add	a0,a0,a6
+    d43c:	jr	a0
+
+0000d440 <.L124>:
+_ZN2tt9tt_fabric32got_immediate_termination_signalILb0EEEbPVNS0_17TerminationSignalE():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/tt_fabric_utils.h:27
+    d440:	mv	a7,a5
+    d444:	lw	a5,12(sp)
+
+0000d448 <.LM1734>:
+    d448:	lw	a4,268(zero) # 10c <.LLRL157+0xd>
+
+0000d44c <.LM1735>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/tt_fabric_utils.h:28
+    d44c:	li	a2,144
+
+0000d450 <.LM1736>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/tt_fabric_utils.h:29
+    d450:	lw	a1,0(a5)
+
+0000d454 <.LM1737>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/tt_fabric_utils.h:28
+    d454:	mul	a4,a4,a2
+
+0000d458 <.LM1738>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/tt_fabric_utils.h:29
+    d458:	li	a2,2
+
+0000d45c <.LM1739>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/tt_fabric_utils.h:27
+    d45c:	mv	t0,s10
+    d460:	lw	a3,24(sp)
+    d464:	lw	s9,580(sp)
+    d468:	lw	s10,576(sp)
+
+0000d46c <.LM1740>:
+    d46c:	lw	s11,572(sp)
+    d470:	mv	s4,s2
+
+0000d474 <.LM1741>:
+    d474:	mv	s8,s7
+    d478:	mv	t6,s6
+
+0000d47c <.LBB3671>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/tt_fabric_utils.h:28
+    d47c:	addi	a4,a4,272
+
+0000d480 <.LM1746>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/tt_fabric_utils.h:29
+    d480:	bne	a1,a2,d304 <.L58>
+
+0000d484 <.L57>:
+_Z11kernel_mainv():
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:4038
+    d484:	lw	a5,80(sp)
+    d488:	lw	a5,72(sp)
+    d48c:	jal	c79c <_Z8teardownU11rvtt_l1_ptrPVN2tt9tt_fabric17TerminationSignalEU11rvtt_l1_ptrPVNS0_9EDMStatusE25WriteTransactionIdTrackerILh16ELj4ELj0ELh1ELh1EE.isra.0>
+
+0000d490 <.LBB3680>:
+_Z17set_l1_data_cacheILb0EEvv():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/risc_common.h:170
+    d490:	fence
+    d494:	li	t1,8
+    d498:	csrs	0x7c0,t1
+
+0000d49c <.LBE3680>:
+_Z11kernel_mainv():
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:4055
+    d49c:	lw	ra,620(sp)
+    d4a0:	lw	s0,616(sp)
+    d4a4:	lw	s1,612(sp)
+    d4a8:	lw	s2,608(sp)
+    d4ac:	lw	s3,604(sp)
+    d4b0:	lw	s4,600(sp)
+    d4b4:	lw	s5,596(sp)
+    d4b8:	lw	s6,592(sp)
+    d4bc:	lw	s7,588(sp)
+    d4c0:	lw	s8,584(sp)
+    d4c4:	addi	sp,sp,624
+
+0000d4c8 <.LM1757>:
+    d4c8:	ret
+
+0000d4cc <.L75>:
+_Z39execute_chip_unicast_to_local_chip_implU11rvtt_l1_ptrPN2tt9tt_fabric23HybridMeshPacketHeaderTILi36EEEtNS0_11NocSendTypeEmh():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp:215
+    d4cc:	lw	t4,0(a5)
+    d4d0:	lw	t3,4(a5)
+
+0000d4d4 <.LBB2761>:
+_Z20NOC_CMD_BUF_READ_REGmmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:174
+    d4d4:	lui	a0,0xffb30
+
+0000d4d8 <.L91>:
+    d4d8:	lw	a6,64(a0) # ffb30040 <__stack_base+0x2f360>
+
+0000d4dc <.LBE2768>:
+_Z36noc_async_write_one_packet_with_tridILb0ELb0EEvmymmhhh():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/api/dataflow/dataflow_api.h:2807 (discriminator 2)
+    d4dc:	bnez	a6,d4d8 <.L91>
+
+0000d4e0 <.LBB2769>:
+_Z21ncrisc_noc_fast_writeILh0ELb1ELb1EEvmmmymmbbmbbm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:629
+    d4e0:	slli	a7,a7,0xa
+
+0000d4e4 <.LBB2771>:
+_Z21NOC_CMD_BUF_WRITE_REGmmmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:168
+    d4e4:	lui	a6,0x6
+
+0000d4e8 <.LBB2777>:
+    d4e8:	sw	a7,24(a0)
+
+0000d4ec <.LBB2778>:
+    d4ec:	addi	a6,a6,146 # 6092 <.LLST1387+0x23>
+    d4f0:	sw	a6,28(a0)
+
+0000d4f4 <.LBB2779>:
+    d4f4:	sw	t5,0(a0)
+
+0000d4f8 <.LBB2781>:
+_Z21ncrisc_noc_fast_writeILh0ELb1ELb1EEvmmmymmbbmbbm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:638
+    d4f8:	slli	a7,t3,0x4
+
+0000d4fc <.LBB2784>:
+_Z21NOC_CMD_BUF_WRITE_REGmmmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:168
+    d4fc:	sw	t4,12(a0)
+
+0000d500 <.LBE2784>:
+_Z21ncrisc_noc_fast_writeILh0ELb1ELb1EEvmmmymmbbmbbm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:638
+    d500:	srli	a6,a7,0x8
+
+0000d504 <.LBB2785>:
+_Z21NOC_CMD_BUF_WRITE_REGmmmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:168
+    d504:	sw	a6,20(a0)
+
+0000d508 <.LBB2787>:
+    d508:	sw	t1,32(a0)
+
+0000d50c <.LBB2789>:
+    d50c:	li	a6,1
+    d510:	sw	a6,64(a0)
+
+0000d514 <.LBE2789>:
+_Z21ncrisc_noc_fast_writeILh0ELb1ELb1EEvmmmymmbbmbbm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:648
+    d514:	addi	a6,gp,-2012 # ffb00014 <noc_nonposted_writes_acked>
+
+0000d518 <.LM1824>:
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:647
+    d518:	addi	a0,gp,-2020 # ffb0000c <noc_nonposted_writes_num_issued>
+
+0000d51c <.LM1825>:
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:648
+    d51c:	lw	a7,4(a6)
+
+0000d520 <.LM1826>:
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:647
+    d520:	lw	t1,4(a0)
+
+0000d524 <.LM1827>:
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:648
+    d524:	addi	a7,a7,1
+
+0000d528 <.LM1828>:
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:647
+    d528:	addi	t1,t1,1
+
+0000d52c <.LBE2761>:
+_Z39execute_chip_unicast_to_local_chip_implU11rvtt_l1_ptrPN2tt9tt_fabric23HybridMeshPacketHeaderTILi36EEEtNS0_11NocSendTypeEmh():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp:227
+    d52c:	lbu	t3,20(a5)
+
+0000d530 <.LBB2793>:
+_Z21ncrisc_noc_fast_writeILh0ELb1ELb1EEvmmmymmbbmbbm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:648
+    d530:	sw	a7,4(a6)
+
+0000d534 <.LBB2794>:
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:647
+    d534:	sw	t1,4(a0)
+
+0000d538 <.LBE2794>:
+_Z39execute_chip_unicast_to_local_chip_implU11rvtt_l1_ptrPN2tt9tt_fabric23HybridMeshPacketHeaderTILi36EEEtNS0_11NocSendTypeEmh():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp:225
+    d538:	lw	a6,8(a5)
+    d53c:	lw	a7,12(a5)
+
+0000d540 <.LM1835>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp:226
+    d540:	lw	t1,16(a5)
+
+0000d544 <.LM1837>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp:227
+    d544:	beqz	t3,d578 <.L92>
+
+0000d548 <.LBB2799>:
+_Z19NOC_STATUS_READ_REGmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:180
+    d548:	lui	a0,0xffb30
+
+0000d54c <.L93>:
+    d54c:	lw	a5,576(a0) # ffb30240 <__stack_base+0x2f560>
+
+0000d550 <.LBE2818>:
+_Z27flush_write_to_noc_pipelineh():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp:115 (discriminator 2)
+    d550:	bnez	a5,d54c <.L93>
+
+0000d554 <.LBB2819>:
+_Z19NOC_STATUS_READ_REGmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:180
+    d554:	lui	a0,0xffb30
+
+0000d558 <.L94>:
+    d558:	lw	a5,580(a0) # ffb30244 <__stack_base+0x2f564>
+
+0000d55c <.LBE2820>:
+_Z27flush_write_to_noc_pipelineh():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp:115 (discriminator 2)
+    d55c:	bnez	a5,d558 <.L94>
+
+0000d560 <.LBB2821>:
+_Z19NOC_STATUS_READ_REGmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:180
+    d560:	lui	a0,0xffb30
+
+0000d564 <.L95>:
+    d564:	lw	a5,584(a0) # ffb30248 <__stack_base+0x2f568>
+
+0000d568 <.LBE2822>:
+_Z27flush_write_to_noc_pipelineh():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp:115 (discriminator 2)
+    d568:	bnez	a5,d564 <.L95>
+
+0000d56c <.LBB2823>:
+_Z19NOC_STATUS_READ_REGmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:180
+    d56c:	lui	a0,0xffb30
+
+0000d570 <.L96>:
+    d570:	lw	a5,588(a0) # ffb3024c <__stack_base+0x2f56c>
+
+0000d574 <.LBE2824>:
+_Z27flush_write_to_noc_pipelineh():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp:115 (discriminator 2)
+    d574:	bnez	a5,d570 <.L96>
+
+0000d578 <.L92>:
+_Z20NOC_CMD_BUF_READ_REGmmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:174
+    d578:	lui	a5,0xffb32
+
+0000d57c <.L152>:
+    d57c:	lw	a0,-1984(a5) # ffb31840 <__stack_base+0x30b60>
+
+0000d580 <.LBE2834>:
+_Z25noc_fast_atomic_incrementILh0ELb0EEvmmymmmbbm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:1261 (discriminator 2)
+    d580:	bnez	a0,d57c <.L152>
+
+0000d584 <.L227>:
+_Z21NOC_CMD_BUF_WRITE_REGmmmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:168
+    d584:	sw	a6,-2048(a5)
+
+0000d588 <.LBE2835>:
+_Z25noc_fast_atomic_incrementILh0ELb0EEvmmymmmbbm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:1288
+    d588:	srli	a0,a6,0x2
+
+0000d58c <.LM1901>:
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:1284
+    d58c:	lui	a6,0x1
+    d590:	addi	a6,a6,124 # 107c <.LASF1308+0x1>
+
+0000d594 <.LM1902>:
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:1288
+    d594:	andi	a0,a0,3
+
+0000d598 <.LM1903>:
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:1284
+    d598:	or	a0,a0,a6
+
+0000d59c <.LM1904>:
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:1275
+    d59c:	lui	a6,0x10000
+    d5a0:	addi	a6,a6,15 # 1000000f <__tt_zone_meta_end+0x990000f>
+    d5a4:	and	a6,a7,a6
+
+0000d5a8 <.LBB2837>:
+_Z21NOC_CMD_BUF_WRITE_REGmmmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:168
+    d5a8:	sw	a6,-2044(a5)
+
+0000d5ac <.LBE2837>:
+_Z25noc_fast_atomic_incrementILh0ELb0EEvmmymmmbbm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:1276
+    d5ac:	slli	a6,a7,0x4
+    d5b0:	srli	a7,a6,0x8
+
+0000d5b4 <.LBB2839>:
+_Z21NOC_CMD_BUF_WRITE_REGmmmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:168
+    d5b4:	lui	t3,0x6
+
+0000d5b8 <.LBB2846>:
+    d5b8:	sw	a7,-2040(a5)
+
+0000d5bc <.LBB2847>:
+    d5bc:	addi	a7,t3,145 # 6091 <.LLST1387+0x22>
+    d5c0:	sw	a7,-2020(a5)
+
+0000d5c4 <.LBB2849>:
+_Z25noc_fast_atomic_incrementILh0ELb0EEvmmymmmbbm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:1293
+    d5c4:	addi	a6,gp,-2004 # ffb0001c <noc_nonposted_atomics_acked>
+    d5c8:	lw	a7,4(a6)
+
+0000d5cc <.LBB2852>:
+_Z21NOC_CMD_BUF_WRITE_REGmmmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:168
+    d5cc:	sw	a0,-2016(a5)
+
+0000d5d0 <.LBB2853>:
+    d5d0:	sw	t1,-2008(a5)
+
+0000d5d4 <.LBB2855>:
+_Z25noc_fast_atomic_incrementILh0ELb0EEvmmymmmbbm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:1293
+    d5d4:	addi	a0,a7,1
+    d5d8:	sw	a0,4(a6)
+
+0000d5dc <.LBB2858>:
+_Z21NOC_CMD_BUF_WRITE_REGmmmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:168
+    d5dc:	li	a7,1
+    d5e0:	sw	a7,-1984(a5)
+
+0000d5e4 <.LBB2860>:
+_Z17noc_semaphore_incILb1EEvymhh():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/api/dataflow/dataflow_api.h:2623
+    d5e4:	j	d6a4 <.L67>
+
+0000d5e8 <.L76>:
+_Z39execute_chip_unicast_to_local_chip_implU11rvtt_l1_ptrPN2tt9tt_fabric23HybridMeshPacketHeaderTILi36EEEtNS0_11NocSendTypeEmh():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp:192
+    d5e8:	lbu	a0,12(a5)
+
+0000d5ec <.LM1952>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp:190
+    d5ec:	lw	a6,0(a5)
+    d5f0:	lw	a7,4(a5)
+
+0000d5f4 <.LM1953>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp:191
+    d5f4:	lw	t1,8(a5)
+
+0000d5f8 <.LM1955>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp:192
+    d5f8:	beqz	a0,d62c <.L80>
+
+0000d5fc <.LBB2863>:
+_Z19NOC_STATUS_READ_REGmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:180
+    d5fc:	lui	a0,0xffb30
+
+0000d600 <.L81>:
+    d600:	lw	a5,576(a0) # ffb30240 <__stack_base+0x2f560>
+
+0000d604 <.LBE2882>:
+_Z27flush_write_to_noc_pipelineh():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp:115 (discriminator 2)
+    d604:	bnez	a5,d600 <.L81>
+
+0000d608 <.LBB2883>:
+_Z19NOC_STATUS_READ_REGmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:180
+    d608:	lui	a0,0xffb30
+
+0000d60c <.L82>:
+    d60c:	lw	a5,580(a0) # ffb30244 <__stack_base+0x2f564>
+
+0000d610 <.LBE2884>:
+_Z27flush_write_to_noc_pipelineh():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp:115 (discriminator 2)
+    d610:	bnez	a5,d60c <.L82>
+
+0000d614 <.LBB2885>:
+_Z19NOC_STATUS_READ_REGmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:180
+    d614:	lui	a0,0xffb30
+
+0000d618 <.L83>:
+    d618:	lw	a5,584(a0) # ffb30248 <__stack_base+0x2f568>
+
+0000d61c <.LBE2886>:
+_Z27flush_write_to_noc_pipelineh():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp:115 (discriminator 2)
+    d61c:	bnez	a5,d618 <.L83>
+
+0000d620 <.LBB2887>:
+_Z19NOC_STATUS_READ_REGmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:180
+    d620:	lui	a0,0xffb30
+
+0000d624 <.L84>:
+    d624:	lw	a5,588(a0) # ffb3024c <__stack_base+0x2f56c>
+
+0000d628 <.LBE2888>:
+_Z27flush_write_to_noc_pipelineh():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp:115 (discriminator 2)
+    d628:	bnez	a5,d624 <.L84>
+
+0000d62c <.L80>:
+_Z20NOC_CMD_BUF_READ_REGmmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:174
+    d62c:	lui	a5,0xffb32
+
+0000d630 <.L151>:
+    d630:	lw	a0,-1984(a5) # ffb31840 <__stack_base+0x30b60>
+
+0000d634 <.LBE2898>:
+_Z25noc_fast_atomic_incrementILh0ELb0EEvmmymmmbbm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:1261 (discriminator 2)
+    d634:	bnez	a0,d630 <.L151>
+    d638:	j	d584 <.L227>
+
+0000d63c <.L78>:
+_Z39execute_chip_unicast_to_local_chip_implU11rvtt_l1_ptrPN2tt9tt_fabric23HybridMeshPacketHeaderTILi36EEEtNS0_11NocSendTypeEmh():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp:178
+    d63c:	lw	t3,0(a5)
+    d640:	lw	t4,4(a5)
+
+0000d644 <.LBB2900>:
+_Z20NOC_CMD_BUF_READ_REGmmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:174
+    d644:	lui	a5,0xffb30
+
+0000d648 <.L79>:
+    d648:	lw	a0,64(a5) # ffb30040 <__stack_base+0x2f360>
+
+0000d64c <.LBE2907>:
+_Z36noc_async_write_one_packet_with_tridILb0ELb0EEvmymmhhh():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/api/dataflow/dataflow_api.h:2807 (discriminator 2)
+    d64c:	bnez	a0,d648 <.L79>
+
+0000d650 <.LBB2908>:
+_Z21ncrisc_noc_fast_writeILh0ELb1ELb1EEvmmmymmbbmbbm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:629
+    d650:	slli	a7,a7,0xa
+
+0000d654 <.LBB2910>:
+_Z21NOC_CMD_BUF_WRITE_REGmmmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:168
+    d654:	lui	a6,0x6
+
+0000d658 <.LBB2916>:
+    d658:	sw	a7,24(a5)
+
+0000d65c <.LBB2917>:
+    d65c:	addi	a6,a6,146 # 6092 <.LLST1387+0x23>
+    d660:	sw	a6,28(a5)
+
+0000d664 <.LBB2918>:
+    d664:	sw	t5,0(a5)
+
+0000d668 <.LBB2920>:
+_Z21ncrisc_noc_fast_writeILh0ELb1ELb1EEvmmmymmbbmbbm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:638
+    d668:	slli	a6,t4,0x4
+    d66c:	srli	a0,a6,0x8
+
+0000d670 <.LBB2923>:
+_Z21NOC_CMD_BUF_WRITE_REGmmmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:168
+    d670:	sw	t3,12(a5)
+
+0000d674 <.LBB2924>:
+    d674:	sw	a0,20(a5)
+
+0000d678 <.LBB2926>:
+    d678:	sw	t1,32(a5)
+
+0000d67c <.LBB2928>:
+    d67c:	li	a7,1
+
+0000d680 <.LBB2931>:
+    d680:	sw	a7,64(a5)
+
+0000d684 <.LBE2931>:
+_Z21ncrisc_noc_fast_writeILh0ELb1ELb1EEvmmmymmbbmbbm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:647
+    d684:	addi	a0,gp,-2020 # ffb0000c <noc_nonposted_writes_num_issued>
+
+0000d688 <.LM2080>:
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:648
+    d688:	addi	a6,gp,-2012 # ffb00014 <noc_nonposted_writes_acked>
+
+0000d68c <.L226>:
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:647
+    d68c:	lw	a7,4(a0)
+
+0000d690 <.LM2083>:
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:648
+    d690:	lw	a5,4(a6)
+
+0000d694 <.LM2084>:
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:647
+    d694:	addi	a7,a7,1
+
+0000d698 <.LM2085>:
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:648
+    d698:	addi	a5,a5,1
+
+0000d69c <.LM2086>:
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:647
+    d69c:	sw	a7,4(a0)
+
+0000d6a0 <.LM2087>:
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:648
+    d6a0:	sw	a5,4(a6)
+
+0000d6a4 <.L67>:
+_ZN2tt9tt_fabric14wrap_incrementILj16EhEET0_S2_():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_flow_control_helpers.hpp:37
+    d6a4:	addi	s10,s10,1
+
+0000d6a8 <.LM2091>:
+    d6a8:	andi	s10,s10,15
+
+0000d6ac <.LBE3444>:
+_ZN2tt9tt_fabric14ChannelCounterILh16EE9incrementEv():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_flow_control_helpers.hpp:177
+    d6ac:	addi	s7,s7,1
+
+0000d6b0 <.LBB3446>:
+_Z30increment_local_update_ptr_valILm4EEvl():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp:66
+    d6b0:	sw	s11,1080(s9)
+
+0000d6b4 <.L64>:
+_ZNK25WriteTransactionIdTrackerILh16ELj4ELj0ELh1ELh1EE20get_buffer_slot_tridEN2tt9tt_fabric9NamedTypeIhNS2_15BufferIndexTypeEEE():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_router_transaction_id_tracker.hpp:95 (discriminator 1)
+    d6b4:	andi	a0,s2,3
+
+0000d6b8 <.LBE3479>:
+_ZNK25WriteTransactionIdTrackerILh16ELj4ELj0ELh1ELh1EE25transaction_sent_reg_addrEN2tt9tt_fabric9NamedTypeIhNS2_15BufferIndexTypeEEE():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_router_transaction_id_tracker.hpp:106
+    d6b8:	sh2add	a0,a0,a1
+
+0000d6bc <.LBB3484>:
+_Z17exp_read_rx_groupILm4EEvmRmS0_S0_():
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:1777
+    d6bc:	addi	a7,a2,8
+
+0000d6c0 <.LBB3485>:
+_ZNK25WriteTransactionIdTrackerILh16ELj4ELj0ELh1ELh1EE25transaction_sent_reg_addrEN2tt9tt_fabric9NamedTypeIhNS2_15BufferIndexTypeEEE():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_router_transaction_id_tracker.hpp:106
+    d6c0:	addi	a0,a0,640
+
+0000d6c4 <.LBB3486>:
+_Z17exp_read_rx_groupILm4EEvmRmS0_S0_():
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:1777
+    d6c4:	lw	a6,0(s8)
+    d6c8:	lw	a5,0(a4)
+    d6cc:	lw	a5,0(a7)
+    d6d0:	lw	t1,0(a0)
+
+0000d6d4 <.LBE3486>:
+_Z30run_receiver_channel_step_implILh0ELh4ELb0ELj2E25WriteTransactionIdTrackerILh16ELj4ELj0ELh1ELh1EERN2tt9tt_fabric27StaticSizedEthChannelBufferINS3_23HybridMeshPacketHeaderTILi36EEELh16EEENS3_23ReceiverChannelPointersILh16EEENS3_37RouterStaticSizedChannelWriterAdapterILh16EEERNSB_ILh0EEE15FabricTelemetry47ReceiverChannelCounterBasedResponseCreditSenderEbRT4_RSt5arrayIT6_XT2_EERT7_RT5_RT3_RSJ_IhLj12EERT9_RKNS3_17routing_l1_info_tEthhRT8_():
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:2067
+    d6d4:	and	a5,a5,t2
+
+0000d6d8 <.LBE3552>:
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:2074
+    d6d8:	or	a5,a5,t1
+
+0000d6dc <.LM2114>:
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:2051 (discriminator 1)
+    d6dc:	sub	a0,s7,s6
+
+0000d6e0 <.LM2115>:
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:2074
+    d6e0:	seqz	a5,a5
+
+0000d6e4 <.LBB3553>:
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:2065
+    d6e4:	and	a6,a6,s5
+
+0000d6e8 <.LBE3553>:
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:2051 (discriminator 1)
+    d6e8:	snez	a0,a0
+
+0000d6ec <.LBB3554>:
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:2064
+    d6ec:	sw	a6,256(sp)
+
+0000d6f0 <.LBE3554>:
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:2079
+    d6f0:	and	a5,a5,a0
+    d6f4:	beqz	a5,d74c <.L111>
+
+0000d6f8 <.LBB3527>:
+_ZNK2tt9tt_fabric23ReceiverChannelPointersILh16EE15get_src_chan_idENS0_9NamedTypeIhNS0_15BufferIndexTypeEEE():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_flow_control_helpers.hpp:251 (discriminator 2)
+    d6f8:	add	a5,s2,sp
+
+0000d6fc <.LBB3533>:
+_ZN47ReceiverChannelCounterBasedResponseCreditSender22send_completion_creditEhm():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_router_flow_control.hpp:32
+    d6fc:	lbu	a0,240(a5)
+
+0000d700 <.LBB3514>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_router_flow_control.hpp:32 (discriminator 1)
+    d700:	addi	a5,sp,176
+    d704:	sh2add	a6,a0,a5
+    d708:	lw	a5,0(a6)
+
+0000d70c <.LM2135>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_router_flow_control.hpp:33
+    d70c:	lui	a7,0x16
+
+0000d710 <.LM2136>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_router_flow_control.hpp:32
+    d710:	addi	a5,a5,1
+
+0000d714 <.LM2137>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_router_flow_control.hpp:33
+    d714:	sh2add	a0,a0,a7
+
+0000d718 <.LM2138>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_router_flow_control.hpp:32
+    d718:	sw	a5,0(a6)
+
+0000d71c <.LBB3497>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_router_flow_control.hpp:33 (discriminator 1)
+    d71c:	sw	a5,-1008(a0)
+
+0000d720 <.LBB3500>:
+_Z17eth_txq_reg_writemmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/ethernet/tt_eth_api.h:27
+    d720:	addi	a5,a7,-1056 # 15be0 <.LASF1358+0x1c>
+    d724:	sw	a5,20(a2)
+
+0000d728 <.LBB3501>:
+    d728:	addi	a5,a7,-1152
+    d72c:	sw	a5,28(a2)
+
+0000d730 <.LBB3503>:
+    d730:	li	a5,96
+    d734:	sw	a5,24(a2)
+
+0000d738 <.LBB3504>:
+_ZN2tt9tt_fabric14wrap_incrementILj16EhEET0_S2_():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_flow_control_helpers.hpp:37
+    d738:	addi	s2,s2,1
+
+0000d73c <.LBB3508>:
+_Z17eth_txq_reg_writemmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/ethernet/tt_eth_api.h:27
+    d73c:	li	a5,2
+
+0000d740 <.LBB3545>:
+_ZN2tt9tt_fabric14ChannelCounterILh16EE9incrementEv():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_flow_control_helpers.hpp:177
+    d740:	addi	s6,s6,1
+
+0000d744 <.LBB3539>:
+_ZN2tt9tt_fabric14wrap_incrementILj16EhEET0_S2_():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_flow_control_helpers.hpp:37
+    d744:	andi	s2,s2,15
+
+0000d748 <.LBB3509>:
+_Z17eth_txq_reg_writemmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/ethernet/tt_eth_api.h:27
+    d748:	sw	a5,0(a4)
+
+0000d74c <.L111>:
+_Z11kernel_mainv():
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:2439 (discriminator 1)
+    d74c:	addi	a3,a3,-1
+operator()():
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:2439 (discriminator 1)
+    d750:	bnez	a3,d3cc <.L112>
+
+0000d754 <.LBE3613>:
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:2766
+    d754:	lw	a5,60(sp)
+    d758:	addi	a5,a5,1
+
+0000d75c <.LM2181>:
+    d75c:	andi	a4,a5,63
+
+0000d760 <.LM2182>:
+    d760:	zext.h	a5,a5
+
+0000d764 <.LM2183>:
+    d764:	bnez	a4,daa4 <.L113>
+
+0000d768 <.LM2184>:
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:2767
+    d768:	lui	a4,0xdcba0
+    d76c:	or	a4,a5,a4
+
+0000d770 <.LM2185>:
+    d770:	lui	a3,0x7d
+    d774:	sw	a4,-912(a3) # 7cc70 <.LASF334+0x4c20c>
+
+0000d778 <.LBB3614>:
+_Z28read_stream_scratch_registerILm30EEmv():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp:25
+    d778:	lui	a4,0xffb5e
+    d77c:	lw	a3,16(a4) # ffb5e010 <__stack_base+0x5d330>
+
+0000d780 <.LBE3616>:
+_Z54run_routing_without_noc_sync_coordinated_as_non_masterPVN2tt9tt_fabric17TerminationSignalE():
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:1189 (discriminator 1)
+    d780:	li	a4,1
+    d784:	bne	a3,a4,d348 <.L116>
+
+0000d788 <.L228>:
+_Z29write_stream_scratch_registerILm30EEmm():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp:32
+    d788:	lui	a2,0xffb5e
+    d78c:	li	a1,2
+    d790:	lw	a3,24(sp)
+    d794:	mv	a7,a5
+
+0000d798 <.LBE3619>:
+_Z54run_routing_without_noc_sync_coordinated_as_non_masterPVN2tt9tt_fabric17TerminationSignalE():
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:1193 (discriminator 1)
+    d798:	li	a6,3
+    d79c:	lw	a5,12(sp)
+
+0000d7a0 <.LBB3622>:
+_ZN2tt9tt_fabric32got_immediate_termination_signalILb0EEEbPVNS0_17TerminationSignalE():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/tt_fabric_utils.h:28
+    d7a0:	li	a0,144
+
+0000d7a4 <.LBB3626>:
+_Z29write_stream_scratch_registerILm30EEmm():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp:32
+    d7a4:	sw	a1,16(a2) # ffb5e010 <__stack_base+0x5d330>
+
+0000d7a8 <.L117>:
+_Z28read_stream_scratch_registerILm30EEmv():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp:25
+    d7a8:	lw	a4,16(a2)
+
+0000d7ac <.LBE3627>:
+_Z54run_routing_without_noc_sync_coordinated_as_non_masterPVN2tt9tt_fabric17TerminationSignalE():
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:1193 (discriminator 1)
+    d7ac:	beq	a4,a6,dd80 <.L234>
+
+0000d7b0 <.LBB3629>:
+_ZN2tt9tt_fabric32got_immediate_termination_signalILb0EEEbPVNS0_17TerminationSignalE():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/tt_fabric_utils.h:27
+    d7b0:	lw	a4,268(zero) # 10c <.LLRL157+0xd>
+
+0000d7b4 <.LM2207>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/tt_fabric_utils.h:29
+    d7b4:	lw	t1,0(a5)
+
+0000d7b8 <.LM2208>:
+    d7b8:	beq	t1,a1,d33c <.L119>
+
+0000d7bc <.LM2209>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/tt_fabric_utils.h:28
+    d7bc:	mul	a4,a4,a0
+
+0000d7c0 <.LM2210>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/tt_fabric_utils.h:30
+    d7c0:	lbu	a4,379(a4)
+
+0000d7c4 <.LM2211>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/tt_fabric_utils.h:29 (discriminator 2)
+    d7c4:	bnez	a4,d33c <.L119>
+    d7c8:	j	d7a8 <.L117>
+
+0000d7cc <.L77>:
+_Z39execute_chip_unicast_to_local_chip_implU11rvtt_l1_ptrPN2tt9tt_fabric23HybridMeshPacketHeaderTILi36EEEtNS0_11NocSendTypeEmh():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp:204
+    d7cc:	lw	t1,0(a5)
+
+0000d7d0 <.LBB3160>:
+_Z29noc_fast_write_dw_inline_implILh0EL14InlineWriteDst0ELb1EEvmmmymmbbmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:1192
+    d7d0:	lui	a0,0xff000
+
+0000d7d4 <.LBE3160>:
+_Z39execute_chip_unicast_to_local_chip_implU11rvtt_l1_ptrPN2tt9tt_fabric23HybridMeshPacketHeaderTILi36EEEtNS0_11NocSendTypeEmh():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp:204
+    d7d4:	lw	a6,4(a5)
+
+0000d7d8 <.LM2219>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp:205
+    d7d8:	lw	t3,8(a5)
+
+0000d7dc <.LBB3256>:
+_Z29noc_fast_write_dw_inline_implILh0EL14InlineWriteDst0ELb1EEvmmmymmbbmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:1192
+    d7dc:	bltu	t1,a0,dbc4 <.L215>
+
+0000d7e0 <.LBB3164>:
+_Z32noc_fast_default_write_dw_inlineILh0EEvmmmymmbbm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:1158
+    d7e0:	li	t4,15
+    d7e4:	sll	t4,t4,t1
+
+0000d7e8 <.LBB3166>:
+_Z20NOC_CMD_BUF_READ_REGmmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:174
+    d7e8:	lui	a5,0xffb32
+
+0000d7ec <.L87>:
+    d7ec:	lw	a0,-1984(a5) # ffb31840 <__stack_base+0x30b60>
+
+0000d7f0 <.LBE3171>:
+_Z32noc_fast_default_write_dw_inlineILh0EEvmmmymmbbm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:1160 (discriminator 2)
+    d7f0:	bnez	a0,d7ec <.L87>
+
+0000d7f4 <.LBB3172>:
+_Z21NOC_CMD_BUF_WRITE_REGmmmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:168
+    d7f4:	lui	a0,0x6
+
+0000d7f8 <.LBB3178>:
+    d7f8:	sw	t3,-2008(a5)
+
+0000d7fc <.LBB3179>:
+    d7fc:	addi	a0,a0,138 # 608a <.LLST1387+0x1b>
+    d800:	sw	a0,-2020(a5)
+
+0000d804 <.LBB3180>:
+_Z32noc_fast_default_write_dw_inlineILh0EEvmmmymmbbm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:1164
+    d804:	lui	a0,0x10000
+    d808:	addi	a0,a0,15 # 1000000f <__tt_zone_meta_end+0x990000f>
+
+0000d80c <.LBB3183>:
+_Z21NOC_CMD_BUF_WRITE_REGmmmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:168
+    d80c:	sw	t1,-2048(a5)
+
+0000d810 <.LBE3183>:
+_Z32noc_fast_default_write_dw_inlineILh0EEvmmmymmbbm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:1164
+    d810:	and	a0,a6,a0
+
+0000d814 <.LBB3184>:
+_Z21NOC_CMD_BUF_WRITE_REGmmmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:168
+    d814:	sw	a0,-2044(a5)
+
+0000d818 <.LBE3187>:
+_Z32noc_fast_default_write_dw_inlineILh0EEvmmmymmbbm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:1171
+    d818:	addi	a7,gp,-1996 # ffb00024 <noc_posted_writes_num_issued>
+
+0000d81c <.LM2268>:
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:1165
+    d81c:	slli	a0,a6,0x4
+    d820:	srli	a6,a0,0x8
+
+0000d824 <.LBB3188>:
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:1171
+    d824:	lw	a0,4(a7)
+
+0000d828 <.LBB3191>:
+_Z21NOC_CMD_BUF_WRITE_REGmmmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:168
+    d828:	sw	a6,-2040(a5)
+
+0000d82c <.LBB3192>:
+    d82c:	sw	t4,-2016(a5)
+
+0000d830 <.LBB3194>:
+_Z32noc_fast_default_write_dw_inlineILh0EEvmmmymmbbm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:1171
+    d830:	addi	a0,a0,1
+
+0000d834 <.LBB3198>:
+_Z21NOC_CMD_BUF_WRITE_REGmmmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:168
+    d834:	li	a6,1
+
+0000d838 <.LBE3198>:
+_Z32noc_fast_default_write_dw_inlineILh0EEvmmmymmbbm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:1171
+    d838:	sw	a0,4(a7)
+
+0000d83c <.LBB3199>:
+_Z21NOC_CMD_BUF_WRITE_REGmmmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:168
+    d83c:	sw	a6,-1984(a5)
+
+0000d840 <.LBE3199>:
+_Z32noc_fast_default_write_dw_inlineILh0EEvmmmymmbbm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:168
+    d840:	j	d6a4 <.L67>
+
+0000d844 <.L72>:
+_Z39execute_chip_unicast_to_local_chip_implU11rvtt_l1_ptrPN2tt9tt_fabric23HybridMeshPacketHeaderTILi36EEEtNS0_11NocSendTypeEmh():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp:240
+    d844:	lbu	s1,38(a5)
+
+0000d848 <.LM2298>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp:241
+    d848:	lbu	t3,39(a5)
+
+0000d84c <.LM2300>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp:247
+    d84c:	addi	a0,s1,-1
+    d850:	zext.b	a0,a0
+
+0000d854 <.LM2303>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp:256
+    d854:	lw	s4,0(a5)
+    d858:	lw	s3,4(a5)
+
+0000d85c <.LM2304>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp:254
+    d85c:	lhu	t4,32(a5)
+
+0000d860 <.LM2305>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp:247
+    d860:	sw	a0,28(sp)
+
+0000d864 <.LBB3030>:
+_Z20NOC_CMD_BUF_READ_REGmmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:174
+    d864:	lui	a0,0xffb30
+
+0000d868 <.L97>:
+    d868:	lw	a6,64(a0) # ffb30040 <__stack_base+0x2f360>
+
+0000d86c <.LBE3037>:
+_Z36noc_async_write_one_packet_with_tridILb0ELb0EEvmymmhhh():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/api/dataflow/dataflow_api.h:2807 (discriminator 2)
+    d86c:	bnez	a6,d868 <.L97>
+
+0000d870 <.LBB3038>:
+_Z21ncrisc_noc_fast_writeILh0ELb1ELb1EEvmmmymmbbmbbm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:629
+    d870:	slli	a7,a7,0xa
+
+0000d874 <.LBB3040>:
+_Z21NOC_CMD_BUF_WRITE_REGmmmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:168
+    d874:	lui	a6,0x2
+
+0000d878 <.LBB3046>:
+    d878:	sw	a7,24(a0)
+
+0000d87c <.LBB3047>:
+    d87c:	addi	a6,a6,146 # 2092 <.LVUS583+0x1>
+    d880:	sw	a6,28(a0)
+
+0000d884 <.LBB3048>:
+    d884:	sw	t5,0(a0)
+
+0000d888 <.LBB3050>:
+_Z21ncrisc_noc_fast_writeILh0ELb1ELb1EEvmmmymmbbmbbm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:638
+    d888:	slli	t6,s3,0x4
+
+0000d88c <.LBB3053>:
+_Z21NOC_CMD_BUF_WRITE_REGmmmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:168
+    d88c:	sw	s4,12(a0)
+
+0000d890 <.LBE3053>:
+_Z21ncrisc_noc_fast_writeILh0ELb1ELb1EEvmmmymmbbmbbm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:638
+    d890:	srli	a6,t6,0x8
+
+0000d894 <.LBB3054>:
+_Z21NOC_CMD_BUF_WRITE_REGmmmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:168
+    d894:	sw	a6,20(a0)
+
+0000d898 <.LBB3056>:
+    d898:	sw	t4,32(a0)
+
+0000d89c <.LBB3058>:
+    d89c:	li	a6,1
+    d8a0:	sw	a6,64(a0)
+
+0000d8a4 <.LBE3058>:
+_Z21ncrisc_noc_fast_writeILh0ELb1ELb1EEvmmmymmbbmbbm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:647
+    d8a4:	addi	a0,gp,-2020 # ffb0000c <noc_nonposted_writes_num_issued>
+
+0000d8a8 <.LM2370>:
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:648
+    d8a8:	addi	a6,gp,-2012 # ffb00014 <noc_nonposted_writes_acked>
+
+0000d8ac <.LM2371>:
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:647
+    d8ac:	lw	t6,4(a0)
+
+0000d8b0 <.LM2372>:
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:648
+    d8b0:	lw	s4,4(a6)
+
+0000d8b4 <.LM2373>:
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:647
+    d8b4:	addi	s3,t6,1
+
+0000d8b8 <.LM2374>:
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:648
+    d8b8:	addi	t6,s4,1
+    d8bc:	sw	t6,4(a6)
+
+0000d8c0 <.LBB3061>:
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:647
+    d8c0:	sw	s3,4(a0)
+
+0000d8c4 <.LBE3061>:
+_Z39execute_chip_unicast_to_local_chip_implU11rvtt_l1_ptrPN2tt9tt_fabric23HybridMeshPacketHeaderTILi36EEEtNS0_11NocSendTypeEmh():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp:264
+    d8c4:	li	t6,2
+    d8c8:	bltu	t6,s1,dab8 <.L98>
+
+0000d8cc <.LBB3067>:
+_Z19shift_to_next_chunkRh():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp:127
+    d8cc:	srli	t3,t3,0x2
+
+0000d8d0 <.LBE3067>:
+_Z39execute_chip_unicast_to_local_chip_implU11rvtt_l1_ptrPN2tt9tt_fabric23HybridMeshPacketHeaderTILi36EEEtNS0_11NocSendTypeEmh():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp:294
+    d8d0:	andi	t3,t3,3
+
+0000d8d4 <.L99>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp:295
+    d8d4:	lw	t6,28(sp)
+
+0000d8d8 <.LM2391>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp:296
+    d8d8:	li	s3,1
+
+0000d8dc <.LM2392>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp:295
+    d8dc:	sh3add	s1,t6,a5
+    d8e0:	lw	t6,0(s1)
+    d8e4:	lw	s1,4(s1)
+
+0000d8e8 <.LM2393>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp:296
+    d8e8:	beq	t3,s3,dd00 <.L235>
+
+0000d8ec <.LM2394>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp:305
+    d8ec:	beqz	t3,d6a4 <.L67>
+
+0000d8f0 <.LM2395>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp:306
+    d8f0:	li	a0,3
+    d8f4:	beq	t3,a0,dd4c <.L236>
+
+0000d8f8 <.L105>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp:313
+    d8f8:	lw	a0,28(sp)
+    d8fc:	sh1add	a5,a0,a5
+
+0000d900 <.LM2398>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp:311
+    d900:	lhu	a7,32(a5)
+
+0000d904 <.LBB2965>:
+_Z20NOC_CMD_BUF_READ_REGmmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:174
+    d904:	lui	a0,0xffb32
+
+0000d908 <.L110>:
+    d908:	lw	a5,-1984(a0) # ffb31840 <__stack_base+0x30b60>
+
+0000d90c <.LBE2974>:
+_Z25noc_fast_atomic_incrementILh0ELb0EEvmmymmmbbm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:1261 (discriminator 2)
+    d90c:	bnez	a5,d908 <.L110>
+
+0000d910 <.LBB2975>:
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:1288
+    d910:	srli	a5,t6,0x2
+
+0000d914 <.LM2417>:
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:1284
+    d914:	lui	a6,0x1
+    d918:	addi	a6,a6,124 # 107c <.LASF1308+0x1>
+
+0000d91c <.LM2418>:
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:1288
+    d91c:	andi	a5,a5,3
+
+0000d920 <.LM2419>:
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:1284
+    d920:	or	a5,a5,a6
+
+0000d924 <.LM2420>:
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:1275
+    d924:	lui	a6,0x10000
+    d928:	addi	a6,a6,15 # 1000000f <__tt_zone_meta_end+0x990000f>
+
+0000d92c <.LBB2978>:
+_Z21NOC_CMD_BUF_WRITE_REGmmmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:168
+    d92c:	sw	t6,-2048(a0)
+
+0000d930 <.LBE2978>:
+_Z25noc_fast_atomic_incrementILh0ELb0EEvmmymmmbbm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:1275
+    d930:	and	a6,s1,a6
+
+0000d934 <.LBB2979>:
+_Z21NOC_CMD_BUF_WRITE_REGmmmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:168
+    d934:	sw	a6,-2044(a0)
+
+0000d938 <.LBE2979>:
+_Z25noc_fast_atomic_incrementILh0ELb0EEvmmymmmbbm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:1276
+    d938:	slli	a6,s1,0x4
+    d93c:	srli	s1,a6,0x8
+
+0000d940 <.LBB2981>:
+_Z21NOC_CMD_BUF_WRITE_REGmmmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:168
+    d940:	lui	t1,0x6
+
+0000d944 <.LBB2988>:
+    d944:	sw	s1,-2040(a0)
+
+0000d948 <.LBB2989>:
+    d948:	addi	t1,t1,145 # 6091 <.LLST1387+0x22>
+
+0000d94c <.LBB2990>:
+    d94c:	sw	t1,-2020(a0)
+
+0000d950 <.LBB2991>:
+_Z25noc_fast_atomic_incrementILh0ELb0EEvmmymmmbbm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:1293
+    d950:	addi	a6,gp,-2004 # ffb0001c <noc_nonposted_atomics_acked>
+    d954:	lw	t1,4(a6)
+
+0000d958 <.LBB2994>:
+_Z21NOC_CMD_BUF_WRITE_REGmmmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:168
+    d958:	sw	a5,-2016(a0)
+
+0000d95c <.LBB2995>:
+    d95c:	sw	a7,-2008(a0)
+
+0000d960 <.LBB2997>:
+_Z25noc_fast_atomic_incrementILh0ELb0EEvmmymmmbbm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:1293
+    d960:	addi	a5,t1,1
+
+0000d964 <.LBB3001>:
+_Z21NOC_CMD_BUF_WRITE_REGmmmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:168
+    d964:	li	a7,1
+
+0000d968 <.LBE3001>:
+_Z25noc_fast_atomic_incrementILh0ELb0EEvmmymmmbbm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:1293
+    d968:	sw	a5,4(a6)
+
+0000d96c <.LBB3002>:
+_Z21NOC_CMD_BUF_WRITE_REGmmmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:168
+    d96c:	sw	a7,-1984(a0)
+
+0000d970 <.LBE2967>:
+_Z17noc_semaphore_incILb1EEvymhh():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/api/dataflow/dataflow_api.h:2623
+    d970:	j	d6a4 <.L67>
+
+0000d974 <.L60>:
+_Z11get_ptr_valh():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp:55
+    d974:	lbu	a0,408(sp)
+    d978:	lw	a7,8(sp)
+    d97c:	slli	a0,a0,0xc
+    d980:	add	a0,a0,a7
+    d984:	lw	a0,0(a0)
+
+0000d988 <.LBE2458>:
+_Z17admit_2d_dispatchIN2tt9tt_fabric37RouterStaticSizedChannelWriterAdapterILh16EEENS2_ILh0EEELj2EEbhbRSt5arrayIT_XT1_EERT0_():
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:1001 (discriminator 3)
+    d988:	slli	a7,a0,0xf
+    d98c:	beqz	a7,d6b4 <.L64>
+
+0000d990 <.LBB2671>:
+_ZN22noc_address_backend_xy14worker_addressEmmmh():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/dataflow/noc_address_backend_xy.h:24
+    d990:	lbu	t5,444(sp)
+    d994:	lbu	a0,443(sp)
+
+0000d998 <.LBB2646>:
+_Z36noc_async_write_one_packet_with_tridILb1ELb1EEvmymmhhh():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/api/dataflow/dataflow_api.h:2807 (discriminator 2)
+    d998:	lbu	t4,445(sp)
+
+0000d99c <.LBB2681>:
+_ZN22noc_address_backend_xy14worker_addressEmmmh():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/dataflow/noc_address_backend_xy.h:24
+    d99c:	slli	a0,a0,0x4
+
+0000d9a0 <.LBB2682>:
+_ZNK2tt9tt_fabric37RouterStaticSizedChannelWriterAdapterILh16EE21get_buffer_slot_indexEv():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_router_adapter.hpp:283 (discriminator 1)
+    d9a0:	lbu	t6,442(sp)
+
+0000d9a4 <.LBB2684>:
+_ZN22noc_address_backend_xy14worker_addressEmmmh():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/dataflow/noc_address_backend_xy.h:24
+    d9a4:	slli	t5,t5,0xa
+
+0000d9a8 <.LBE2684>:
+_Z19forward_2d_dispatchIN2tt9tt_fabric37RouterStaticSizedChannelWriterAdapterILh16EEELj2EEhhU11rvtt_l1_ptrPNS1_23HybridMeshPacketHeaderTILi36EEENS1_27LowLatencyMeshRoutingFieldsERSt5arrayIT_XT0_EEh():
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:1038
+    d9a8:	lhu	t1,40(a5)
+
+0000d9ac <.LBB2717>:
+_ZN2tt9tt_fabric37RouterStaticSizedChannelWriterAdapterILh16EE40send_payload_from_address_with_trid_implILb0ELh1ELb0ELb1EEEvmjh():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_router_adapter.hpp:302
+    d9ac:	sh2add	a7,t6,sp
+
+0000d9b0 <.LBB2685>:
+_ZN22noc_address_backend_xy14worker_addressEmmmh():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/dataflow/noc_address_backend_xy.h:24
+    d9b0:	or	t5,t5,a0
+
+0000d9b4 <.LBB2627>:
+_Z20NOC_CMD_BUF_READ_REGmmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:172
+    d9b4:	lui	a0,0xffb30
+
+0000d9b8 <.LM2490>:
+    d9b8:	slli	t4,t4,0xb
+
+0000d9bc <.LM2491>:
+    d9bc:	addi	a0,a0,64 # ffb30040 <__stack_base+0x2f360>
+
+0000d9c0 <.LBB2648>:
+_ZN22noc_address_backend_xy21packed_worker_addressEmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/dataflow/noc_address_backend_xy.h:32
+    d9c0:	lw	s3,344(a7)
+
+0000d9c4 <.LBB2628>:
+_Z20NOC_CMD_BUF_READ_REGmmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:172
+    d9c4:	add	t3,t4,a0
+
+0000d9c8 <.LBE2628>:
+_Z33forward_payload_to_downstream_edmILb0ELb0ELb1ELh16EEvU11rvtt_l1_ptrPVN2tt9tt_fabric23HybridMeshPacketHeaderTILi36EEEtNS1_27LowLatencyMeshRoutingFieldsERNS1_37RouterStaticSizedChannelWriterAdapterIXT2_EEEh():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp:478
+    d9c8:	addi	s1,t1,96
+
+0000d9cc <.LBB3409>:
+_ZN25WriteTransactionIdTrackerILh16ELj4ELj0ELh1ELh1EE56update_buffer_slot_to_next_trid_and_advance_trid_counterEN2tt9tt_fabric9NamedTypeIhNS2_15BufferIndexTypeEEE():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_router_transaction_id_tracker.hpp:76 (discriminator 1)
+    d9cc:	andi	a7,s10,3
+
+0000d9d0 <.L62>:
+_Z20NOC_CMD_BUF_READ_REGmmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:174
+    d9d0:	lw	a0,0(t3)
+
+0000d9d4 <.LBE2629>:
+_Z36noc_async_write_one_packet_with_tridILb1ELb1EEvmymmhhh():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/api/dataflow/dataflow_api.h:2807 (discriminator 2)
+    d9d4:	bnez	a0,d9d0 <.L62>
+
+0000d9d8 <.LBB2577>:
+_ZN2tt9tt_fabric14wrap_incrementILj16EhEET0_S2_():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_flow_control_helpers.hpp:37
+    d9d8:	addi	t6,t6,1
+
+0000d9dc <.LM2504>:
+    d9dc:	andi	t6,t6,15
+
+0000d9e0 <.LBB2591>:
+_Z21NOC_CMD_BUF_WRITE_REGmmmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:166
+    d9e0:	add	a0,t4,a1
+
+0000d9e4 <.LBB2582>:
+_ZN2tt9tt_fabric37RouterStaticSizedChannelWriterAdapterILh16EE31advance_buffer_slot_write_indexEv():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_router_adapter.hpp:286 (discriminator 3)
+    d9e4:	sb	t6,442(sp)
+
+0000d9e8 <.LBB2631>:
+_Z21ncrisc_noc_fast_writeILh0ELb1ELb1EEvmmmymmbbmbbm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:629
+    d9e8:	slli	t6,a7,0xa
+
+0000d9ec <.LBB2594>:
+_Z21NOC_CMD_BUF_WRITE_REGmmmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:168
+    d9ec:	sw	t6,24(a0)
+
+0000d9f0 <.LBB2595>:
+    d9f0:	lui	t6,0x2
+
+0000d9f4 <.LM2512>:
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:166
+    d9f4:	add	a0,t4,a1
+
+0000d9f8 <.LM2513>:
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:168
+    d9f8:	addi	t6,t6,130 # 2082 <.LLST581+0x9>
+    d9fc:	sw	t6,28(a0)
+
+0000da00 <.LBB2597>:
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:166
+    da00:	add	a0,t4,a1
+
+0000da04 <.LM2516>:
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:168
+    da04:	sw	a5,0(a0)
+
+0000da08 <.LBB2599>:
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:166
+    da08:	add	t6,t4,a1
+
+0000da0c <.LM2519>:
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:168
+    da0c:	sw	s3,12(t6)
+
+0000da10 <.LBB2601>:
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:166
+    da10:	add	a0,t4,a1
+
+0000da14 <.LBE2601>:
+_Z21ncrisc_noc_fast_writeILh0ELb1ELb1EEvmmmymmbbmbbm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:639
+    da14:	srli	t5,t5,0x4
+
+0000da18 <.LBB2604>:
+_Z21NOC_CMD_BUF_WRITE_REGmmmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:168
+    da18:	sw	t5,20(a0)
+
+0000da1c <.LBB2605>:
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:166
+    da1c:	add	t4,t4,a1
+
+0000da20 <.LM2526>:
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:168
+    da20:	sw	s1,32(t4)
+
+0000da24 <.LBB2607>:
+    da24:	li	a0,1
+
+0000da28 <.LBE2607>:
+_Z21ncrisc_noc_fast_writeILh0ELb1ELb1EEvmmmymmbbmbbm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:645
+    da28:	lw	t4,36(sp)
+
+0000da2c <.LBB2610>:
+_Z21NOC_CMD_BUF_WRITE_REGmmmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:168
+    da2c:	sw	a0,0(t3)
+
+0000da30 <.LBE2610>:
+_Z21ncrisc_noc_fast_writeILh0ELb1ELb1EEvmmmymmbbmbbm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:645
+    da30:	lw	a0,4(t4)
+
+0000da34 <.LBB2558>:
+_ZN22noc_address_backend_xy14worker_addressEmmmh():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/dataflow/noc_address_backend_xy.h:24
+    da34:	lw	t3,420(sp)
+
+0000da38 <.LBB2632>:
+_Z21ncrisc_noc_fast_writeILh0ELb1ELb1EEvmmmymmbbmbbm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:645
+    da38:	addi	a0,a0,1
+    da3c:	sw	a0,4(t4)
+
+0000da40 <.LBB2561>:
+_Z32noc_fast_default_write_dw_inlineILh0EEvmmmymmbbm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:1158
+    da40:	li	a0,15
+    da44:	sll	t4,a0,t3
+
+0000da48 <.L65>:
+_Z20NOC_CMD_BUF_READ_REGmmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:174
+    da48:	lw	a0,-1984(s0) # ffb31840 <__stack_base+0x30b60>
+
+0000da4c <.LBE2516>:
+_Z32noc_fast_default_write_dw_inlineILh0EEvmmmymmbbm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:1160 (discriminator 2)
+    da4c:	bnez	a0,da48 <.L65>
+
+0000da50 <.LBB2517>:
+_Z21NOC_CMD_BUF_WRITE_REGmmmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:168
+    da50:	lui	a0,0x2
+
+0000da54 <.LBB2520>:
+    da54:	sw	s11,-2008(s0)
+
+0000da58 <.LBB2522>:
+    da58:	addi	a0,a0,154 # 209a <.LLST583+0x5>
+    da5c:	sw	a0,-2020(s0)
+
+0000da60 <.LBB2523>:
+    da60:	sw	t3,-2048(s0)
+
+0000da64 <.LBE2523>:
+_Z32noc_fast_default_write_dw_inlineILh0EEvmmmymmbbm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:1173
+    da64:	lw	t6,40(sp)
+
+0000da68 <.LM2544>:
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:1174
+    da68:	lw	s1,44(sp)
+
+0000da6c <.LBB2525>:
+_Z21NOC_CMD_BUF_WRITE_REGmmmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:168
+    da6c:	sw	zero,-2044(s0)
+
+0000da70 <.LBE2525>:
+_Z32noc_fast_default_write_dw_inlineILh0EEvmmmymmbbm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:1173
+    da70:	lw	t3,4(t6)
+
+0000da74 <.LM2548>:
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:1174
+    da74:	lw	a0,4(s1)
+
+0000da78 <.LBB2527>:
+_Z21NOC_CMD_BUF_WRITE_REGmmmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:168
+    da78:	sw	t5,-2040(s0)
+
+0000da7c <.LBB2529>:
+    da7c:	sw	t4,-2016(s0)
+
+0000da80 <.LBB2531>:
+    da80:	li	t5,1
+
+0000da84 <.LBE2531>:
+_ZN2tt9tt_fabric37RouterStaticSizedChannelWriterAdapterILh16EE28update_edm_buffer_free_slotsILb0ELb0EEEvh():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_router_adapter.hpp:280 (discriminator 1)
+    da84:	lw	t4,416(sp)
+
+0000da88 <.LBB2562>:
+_Z32noc_fast_default_write_dw_inlineILh0EEvmmmymmbbm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:1173
+    da88:	addi	t3,t3,1
+
+0000da8c <.LBB2534>:
+_Z21NOC_CMD_BUF_WRITE_REGmmmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:168
+    da8c:	sw	t5,-1984(s0)
+
+0000da90 <.LBE2534>:
+_Z32noc_fast_default_write_dw_inlineILh0EEvmmmymmbbm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:1174
+    da90:	addi	a0,a0,1
+
+0000da94 <.LM2557>:
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:1173
+    da94:	sw	t3,4(t6)
+
+0000da98 <.LM2558>:
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:1174
+    da98:	sw	a0,4(s1)
+
+0000da9c <.LBE2562>:
+_ZN2tt9tt_fabric37RouterStaticSizedChannelWriterAdapterILh16EE28update_edm_buffer_free_slotsILb0ELb0EEEvh():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_router_adapter.hpp:280 (discriminator 1)
+    da9c:	sw	s11,0(t4)
+
+0000daa0 <.LBE2584>:
+_Z33forward_payload_to_downstream_edmILb0ELb0ELb1ELh16EEvU11rvtt_l1_ptrPVN2tt9tt_fabric23HybridMeshPacketHeaderTILi36EEEtNS1_27LowLatencyMeshRoutingFieldsERNS1_37RouterStaticSizedChannelWriterAdapterIXT2_EEEh():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp:483
+    daa0:	j	d400 <.L61>
+
+0000daa4 <.L113>:
+_Z28read_stream_scratch_registerILm30EEmv():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp:25
+    daa4:	lui	a4,0xffb5e
+    daa8:	lw	a3,16(a4) # ffb5e010 <__stack_base+0x5d330>
+
+0000daac <.LBE3630>:
+_Z54run_routing_without_noc_sync_coordinated_as_non_masterPVN2tt9tt_fabric17TerminationSignalE():
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:1189 (discriminator 1)
+    daac:	li	a4,1
+    dab0:	bne	a3,a4,d348 <.L116>
+    dab4:	j	d788 <.L228>
+
+0000dab8 <.L98>:
+_Z39execute_chip_unicast_to_local_chip_implU11rvtt_l1_ptrPN2tt9tt_fabric23HybridMeshPacketHeaderTILi36EEEtNS0_11NocSendTypeEmh():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp:269
+    dab8:	lw	t6,8(a5)
+
+0000dabc <.LM2574>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp:267
+    dabc:	add	s4,t5,t4
+
+0000dac0 <.LBB3070>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp:269
+    dac0:	sw	t6,48(sp)
+
+0000dac4 <.LM2577>:
+    dac4:	lw	t6,12(a5)
+    dac8:	sw	t6,52(sp)
+
+0000dacc <.LM2578>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp:267
+    dacc:	lhu	t6,34(a5)
+    dad0:	sw	t6,32(sp)
+
+0000dad4 <.LBB3072>:
+_Z20NOC_CMD_BUF_READ_REGmmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:174
+    dad4:	lui	t6,0xffb30
+
+0000dad8 <.L100>:
+    dad8:	lw	s3,64(t6) # ffb30040 <__stack_base+0x2f360>
+
+0000dadc <.LBE3077>:
+_Z36noc_async_write_one_packet_with_tridILb0ELb0EEvmymmhhh():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/api/dataflow/dataflow_api.h:2807 (discriminator 2)
+    dadc:	bnez	s3,dad8 <.L100>
+
+0000dae0 <.LBB3078>:
+_Z21NOC_CMD_BUF_WRITE_REGmmmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:168
+    dae0:	lui	s3,0x2
+
+0000dae4 <.LBB3086>:
+    dae4:	sw	a7,24(t6)
+
+0000dae8 <.LBB3087>:
+    dae8:	addi	s3,s3,146 # 2092 <.LVUS583+0x1>
+    daec:	sw	s3,28(t6)
+
+0000daf0 <.LBB3088>:
+_Z21ncrisc_noc_fast_writeILh0ELb1ELb1EEvmmmymmbbmbbm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:638
+    daf0:	lw	s3,52(sp)
+
+0000daf4 <.LBB3091>:
+_Z21NOC_CMD_BUF_WRITE_REGmmmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:168
+    daf4:	sw	s4,0(t6)
+
+0000daf8 <.LBB3092>:
+_Z21ncrisc_noc_fast_writeILh0ELb1ELb1EEvmmmymmbbmbbm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:638
+    daf8:	slli	s4,s3,0x4
+
+0000dafc <.LM2616>:
+    dafc:	srli	s3,s4,0x8
+
+0000db00 <.LBB3095>:
+_Z21NOC_CMD_BUF_WRITE_REGmmmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:168
+    db00:	lw	s4,48(sp)
+    db04:	sw	s4,12(t6)
+
+0000db08 <.LBB3096>:
+    db08:	sw	s3,20(t6)
+
+0000db0c <.LBB3098>:
+    db0c:	lw	s3,32(sp)
+    db10:	sw	s3,32(t6)
+
+0000db14 <.LBB3100>:
+    db14:	li	s3,1
+    db18:	sw	s3,64(t6)
+
+0000db1c <.LBE3100>:
+_Z21ncrisc_noc_fast_writeILh0ELb1ELb1EEvmmmymmbbmbbm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:647
+    db1c:	lw	t6,4(a0)
+
+0000db20 <.LM2638>:
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:648
+    db20:	lw	s4,4(a6)
+
+0000db24 <.LM2639>:
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:647
+    db24:	add	s3,t6,s3
+    db28:	sw	s3,4(a0)
+
+0000db2c <.LM2640>:
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:648
+    db2c:	addi	t6,s4,1
+
+0000db30 <.LBE3078>:
+_Z39execute_chip_unicast_to_local_chip_implU11rvtt_l1_ptrPN2tt9tt_fabric23HybridMeshPacketHeaderTILi36EEEtNS0_11NocSendTypeEmh():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp:274
+    db30:	lw	s3,32(sp)
+
+0000db34 <.LBB3103>:
+_Z21ncrisc_noc_fast_writeILh0ELb1ELb1EEvmmmymmbbmbbm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:648
+    db34:	sw	t6,4(a6)
+
+0000db38 <.LBE3103>:
+_Z39execute_chip_unicast_to_local_chip_implU11rvtt_l1_ptrPN2tt9tt_fabric23HybridMeshPacketHeaderTILi36EEEtNS0_11NocSendTypeEmh():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp:277
+    db38:	li	t6,4
+
+0000db3c <.LM2646>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp:274
+    db3c:	add	t4,t4,s3
+
+0000db40 <.LBB3107>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp:277
+    db40:	bne	s1,t6,ddc8 <.L237>
+
+0000db44 <.LM2652>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp:282
+    db44:	lw	t6,16(a5)
+
+0000db48 <.LM2656>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp:280
+    db48:	lhu	s4,36(a5)
+
+0000db4c <.LM2657>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp:282
+    db4c:	sw	t6,32(sp)
+    db50:	lw	t6,20(a5)
+
+0000db54 <.LM2658>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp:280
+    db54:	add	s3,t5,t4
+
+0000db58 <.LBB3110>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp:282
+    db58:	sw	t6,48(sp)
+
+0000db5c <.LBB3112>:
+_Z20NOC_CMD_BUF_READ_REGmmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:174
+    db5c:	lui	t6,0xffb30
+
+0000db60 <.L102>:
+    db60:	lw	s1,64(t6) # ffb30040 <__stack_base+0x2f360>
+
+0000db64 <.LBE3117>:
+_Z36noc_async_write_one_packet_with_tridILb0ELb0EEvmymmhhh():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/api/dataflow/dataflow_api.h:2807 (discriminator 2)
+    db64:	bnez	s1,db60 <.L102>
+
+0000db68 <.LBB3118>:
+_Z21NOC_CMD_BUF_WRITE_REGmmmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:168
+    db68:	lui	s1,0x2
+
+0000db6c <.LBB3126>:
+    db6c:	sw	a7,24(t6)
+
+0000db70 <.LBB3127>:
+    db70:	addi	s1,s1,146 # 2092 <.LVUS583+0x1>
+    db74:	sw	s1,28(t6)
+
+0000db78 <.LBB3128>:
+_Z21ncrisc_noc_fast_writeILh0ELb1ELb1EEvmmmymmbbmbbm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:638
+    db78:	lw	s1,48(sp)
+
+0000db7c <.LBB3131>:
+_Z21NOC_CMD_BUF_WRITE_REGmmmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:168
+    db7c:	sw	s3,0(t6)
+
+0000db80 <.LBB3132>:
+_Z21ncrisc_noc_fast_writeILh0ELb1ELb1EEvmmmymmbbmbbm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:638
+    db80:	slli	s3,s1,0x4
+
+0000db84 <.LM2698>:
+    db84:	srli	s1,s3,0x8
+
+0000db88 <.LBB3136>:
+_Z21NOC_CMD_BUF_WRITE_REGmmmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:168
+    db88:	lw	s3,32(sp)
+
+0000db8c <.LBE3118>:
+_Z39execute_chip_unicast_to_local_chip_implU11rvtt_l1_ptrPN2tt9tt_fabric23HybridMeshPacketHeaderTILi36EEEtNS0_11NocSendTypeEmh():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp:287
+    db8c:	add	t4,t4,s4
+
+0000db90 <.LBB3137>:
+_Z21NOC_CMD_BUF_WRITE_REGmmmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:168
+    db90:	sw	s3,12(t6)
+
+0000db94 <.LBB3138>:
+    db94:	sw	s1,20(t6)
+
+0000db98 <.LBB3140>:
+    db98:	sw	s4,32(t6)
+
+0000db9c <.LBB3142>:
+    db9c:	li	s1,1
+    dba0:	sw	s1,64(t6)
+
+0000dba4 <.LBE3142>:
+_Z21ncrisc_noc_fast_writeILh0ELb1ELb1EEvmmmymmbbmbbm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:647
+    dba4:	lw	t6,4(a0)
+
+0000dba8 <.LM2722>:
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:648
+    dba8:	lw	s1,4(a6)
+
+0000dbac <.LM2723>:
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:647
+    dbac:	addi	t6,t6,1
+
+0000dbb0 <.LM2724>:
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:648
+    dbb0:	addi	s1,s1,1
+
+0000dbb4 <.LBB3152>:
+_Z19shift_to_next_chunkRh():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp:127
+    dbb4:	srli	t3,t3,0x6
+
+0000dbb8 <.LBB3147>:
+_Z21ncrisc_noc_fast_writeILh0ELb1ELb1EEvmmmymmbbmbbm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:647
+    dbb8:	sw	t6,4(a0)
+
+0000dbbc <.LM2728>:
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:648
+    dbbc:	sw	s1,4(a6)
+
+0000dbc0 <.LBB3156>:
+_Z19shift_to_next_chunkRh():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp:127
+    dbc0:	j	d8d4 <.L99>
+
+0000dbc4 <.L215>:
+_Z33noc_get_interim_inline_value_addrmy():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:547
+    dbc4:	lui	a5,0x3
+
+0000dbc8 <.LBB3216>:
+_Z32ncrisc_noc_nonposted_writes_sentm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:718 (discriminator 1)
+    dbc8:	lw	t4,-2016(gp) # ffb00010 <noc_nonposted_writes_num_issued+0x4>
+
+0000dbcc <.LBB3217>:
+_Z33noc_get_interim_inline_value_addrmy():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:547
+    dbcc:	addi	a5,a5,784 # 3310 <.LLST936+0x5>
+    dbd0:	andi	a0,t1,15
+
+0000dbd4 <.LM2747>:
+    dbd4:	add	a0,a0,a5
+
+0000dbd8 <.LBB3208>:
+_Z19NOC_STATUS_READ_REGmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:180
+    dbd8:	lui	a7,0xffb30
+
+0000dbdc <.L88>:
+    dbdc:	lw	a5,552(a7) # ffb30228 <__stack_base+0x2f548>
+
+0000dbe0 <.LBE3211>:
+_Z30noc_fast_spoof_write_dw_inlineILh0ELb1EEvmmmymmbbm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:1096 (discriminator 2)
+    dbe0:	bne	a5,t4,dbdc <.L88>
+
+0000dbe4 <.LBB3220>:
+_Z29ncrisc_noc_posted_writes_sentm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:729 (discriminator 1)
+    dbe4:	addi	a7,gp,-1996 # ffb00024 <noc_posted_writes_num_issued>
+    dbe8:	lw	t5,4(a7)
+
+0000dbec <.LBB3222>:
+_Z19NOC_STATUS_READ_REGmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:180
+    dbec:	lui	t4,0xffb30
+
+0000dbf0 <.L89>:
+    dbf0:	lw	a5,556(t4) # ffb3022c <__stack_base+0x2f54c>
+
+0000dbf4 <.LBE3225>:
+_Z30noc_fast_spoof_write_dw_inlineILh0ELb1EEvmmmymmbbm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:1097 (discriminator 2)
+    dbf4:	bne	a5,t5,dbf0 <.L89>
+
+0000dbf8 <.LM2774>:
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:1102
+    dbf8:	sw	t3,0(a0)
+
+0000dbfc <.LBB3228>:
+_Z20NOC_CMD_BUF_READ_REGmmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:174
+    dbfc:	lui	a5,0xffb30
+
+0000dc00 <.L90>:
+    dc00:	lw	t3,64(a5) # ffb30040 <__stack_base+0x2f360>
+
+0000dc04 <.LBE3233>:
+_Z30noc_fast_spoof_write_dw_inlineILh0ELb1EEvmmmymmbbm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:1113 (discriminator 2)
+    dc04:	bnez	t3,dc00 <.L90>
+
+0000dc08 <.LBB3234>:
+_Z21NOC_CMD_BUF_WRITE_REGmmmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:168
+    dc08:	lui	t3,0x6
+    dc0c:	addi	t3,t3,130 # 6082 <.LLST1387+0x13>
+    dc10:	sw	t3,28(a5)
+
+0000dc14 <.LBB3238>:
+    dc14:	sw	a0,0(a5)
+
+0000dc18 <.LBB3240>:
+_Z21ncrisc_noc_fast_writeILh0ELb0ELb1EEvmmmymmbbmbbm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:638
+    dc18:	slli	a0,a6,0x4
+
+0000dc1c <.LBB3243>:
+_Z21NOC_CMD_BUF_WRITE_REGmmmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:168
+    dc1c:	sw	t1,12(a5)
+
+0000dc20 <.LBE3243>:
+_Z21ncrisc_noc_fast_writeILh0ELb0ELb1EEvmmmymmbbmbbm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:638
+    dc20:	srli	a6,a0,0x8
+
+0000dc24 <.LBB3244>:
+_Z21NOC_CMD_BUF_WRITE_REGmmmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:168
+    dc24:	sw	a6,20(a5)
+
+0000dc28 <.LBB3246>:
+    dc28:	li	a0,4
+    dc2c:	sw	a0,32(a5)
+
+0000dc30 <.LBB3248>:
+    dc30:	li	a0,1
+    dc34:	sw	a0,64(a5)
+
+0000dc38 <.LBE3248>:
+_Z21ncrisc_noc_fast_writeILh0ELb0ELb1EEvmmmymmbbmbbm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:645
+    dc38:	lw	a5,4(a7)
+    dc3c:	add	a5,a5,a0
+    dc40:	sw	a5,4(a7)
+    dc44:	j	d6a4 <.L67>
+
+0000dc48 <.L233>:
+_Z39execute_chip_unicast_to_local_chip_implU11rvtt_l1_ptrPN2tt9tt_fabric23HybridMeshPacketHeaderTILi36EEEtNS0_11NocSendTypeEmh():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp:157
+    dc48:	lbu	a0,39(a5)
+
+0000dc4c <.LM2832>:
+    dc4c:	add	a0,a5,a0
+    dc50:	lbu	t4,32(a0)
+
+0000dc54 <.LBB3271>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp:159 (discriminator 1)
+    dc54:	beqz	t4,d6a4 <.L67>
+    dc58:	lbu	t6,38(a5)
+    dc5c:	add	t4,t4,t6
+
+0000dc60 <.LM2836>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp:159
+    dc60:	sh3add	t3,t6,a5
+    dc64:	sh3add	s1,t4,a5
+
+0000dc68 <.LBB3272>:
+_Z21NOC_CMD_BUF_WRITE_REGmmmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:168
+    dc68:	lui	a5,0x6
+
+0000dc6c <.LBE3276>:
+_Z21ncrisc_noc_fast_writeILh0ELb1ELb1EEvmmmymmbbmbbm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:638
+    dc6c:	lui	t4,0x1000
+
+0000dc70 <.LBB3280>:
+_Z21NOC_CMD_BUF_WRITE_REGmmmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:168
+    dc70:	addi	s4,a5,146 # 6092 <.LLST1387+0x23>
+
+0000dc74 <.LBE3280>:
+_Z21ncrisc_noc_fast_writeILh0ELb1ELb1EEvmmmymmbbmbbm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:638
+    dc74:	addi	a5,t4,-1 # ffffff <.LASF334+0xfcf59b>
+
+0000dc78 <.LM2842>:
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:629
+    dc78:	slli	s3,a7,0xa
+    dc7c:	addi	a0,gp,-2020 # ffb0000c <noc_nonposted_writes_num_issued>
+    dc80:	addi	a6,gp,-2012 # ffb00014 <noc_nonposted_writes_acked>
+
+0000dc84 <.LM2843>:
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:638
+    dc84:	sw	a5,28(sp)
+
+0000dc88 <.LBB3300>:
+_Z20NOC_CMD_BUF_READ_REGmmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:174
+    dc88:	lui	a7,0xffb30
+
+0000dc8c <.L71>:
+_Z39execute_chip_unicast_to_local_chip_implU11rvtt_l1_ptrPN2tt9tt_fabric23HybridMeshPacketHeaderTILi36EEEtNS0_11NocSendTypeEmh():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp:162
+    dc8c:	lw	t4,0(t3)
+    dc90:	lw	a5,4(t3)
+
+0000dc94 <.L70>:
+_Z20NOC_CMD_BUF_READ_REGmmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:174
+    dc94:	lw	t6,64(a7) # ffb30040 <__stack_base+0x2f360>
+
+0000dc98 <.LBE3305>:
+_Z36noc_async_write_one_packet_with_tridILb0ELb0EEvmymmhhh():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/api/dataflow/dataflow_api.h:2807 (discriminator 2)
+    dc98:	bnez	t6,dc94 <.L70>
+
+0000dc9c <.LBB3281>:
+_Z21NOC_CMD_BUF_WRITE_REGmmmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:168
+    dc9c:	sw	s3,24(a7)
+
+0000dca0 <.LBB3283>:
+    dca0:	sw	s4,28(a7)
+
+0000dca4 <.LBB3284>:
+_Z21ncrisc_noc_fast_writeILh0ELb1ELb1EEvmmmymmbbmbbm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:638
+    dca4:	lw	t6,28(sp)
+
+0000dca8 <.LBB3287>:
+_Z21NOC_CMD_BUF_WRITE_REGmmmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:168
+    dca8:	sw	t5,0(a7)
+
+0000dcac <.LBB3288>:
+_Z21ncrisc_noc_fast_writeILh0ELb1ELb1EEvmmmymmbbmbbm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:639
+    dcac:	srli	a5,a5,0x4
+
+0000dcb0 <.LBB3291>:
+_Z21NOC_CMD_BUF_WRITE_REGmmmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:168
+    dcb0:	sw	t4,12(a7)
+
+0000dcb4 <.LBE3291>:
+_Z21ncrisc_noc_fast_writeILh0ELb1ELb1EEvmmmymmbbmbbm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:638
+    dcb4:	and	a5,a5,t6
+
+0000dcb8 <.LBB3292>:
+_Z21NOC_CMD_BUF_WRITE_REGmmmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:168
+    dcb8:	sw	a5,20(a7)
+
+0000dcbc <.LBB3294>:
+    dcbc:	sw	t1,32(a7)
+
+0000dcc0 <.LBB3296>:
+    dcc0:	li	a5,1
+    dcc4:	sw	a5,64(a7)
+
+0000dcc8 <.LBE3296>:
+_Z21ncrisc_noc_fast_writeILh0ELb1ELb1EEvmmmymmbbmbbm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:647
+    dcc8:	lw	t4,4(a0)
+
+0000dccc <.LM2906>:
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:648
+    dccc:	lw	a5,4(a6)
+
+0000dcd0 <.LM2907>:
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:647
+    dcd0:	addi	t4,t4,1
+
+0000dcd4 <.LM2908>:
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:648
+    dcd4:	addi	a5,a5,1
+
+0000dcd8 <.LBE3306>:
+_Z39execute_chip_unicast_to_local_chip_implU11rvtt_l1_ptrPN2tt9tt_fabric23HybridMeshPacketHeaderTILi36EEEtNS0_11NocSendTypeEmh():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp:159 (discriminator 1)
+    dcd8:	addi	t3,t3,8
+
+0000dcdc <.LBB3307>:
+_Z21ncrisc_noc_fast_writeILh0ELb1ELb1EEvmmmymmbbmbbm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:647
+    dcdc:	sw	t4,4(a0)
+
+0000dce0 <.LM2911>:
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:648
+    dce0:	sw	a5,4(a6)
+
+0000dce4 <.LBE3307>:
+_Z39execute_chip_unicast_to_local_chip_implU11rvtt_l1_ptrPN2tt9tt_fabric23HybridMeshPacketHeaderTILi36EEEtNS0_11NocSendTypeEmh():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp:159 (discriminator 1)
+    dce4:	bne	t3,s1,dc8c <.L71>
+
+0000dce8 <.LM2915>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp:159
+    dce8:	j	d6a4 <.L67>
+
+0000dcec <.L35>:
+_Z11kernel_mainv():
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3932
+    dcec:	jal	c770 <_Z26wait_for_other_local_eriscv>
+
+0000dcf0 <.LM2921>:
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3935
+    dcf0:	lui	a5,0xb8c8e
+    dcf4:	addi	a5,a5,-1816 # b8c8d8e8 <__tt_zone_meta_end+0xb258d8e8>
+    dcf8:	sw	a5,-432(s1)
+
+0000dcfc <.LBB3684>:
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3945
+    dcfc:	j	d1ec <.L52>
+
+0000dd00 <.L235>:
+_Z39execute_chip_unicast_to_local_chip_implU11rvtt_l1_ptrPN2tt9tt_fabric23HybridMeshPacketHeaderTILi36EEEtNS0_11NocSendTypeEmh():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp:297
+    dd00:	sub	a5,t1,t4
+
+0000dd04 <.LM2932>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp:298
+    dd04:	add	t4,t5,t4
+
+0000dd08 <.LM2933>:
+    dd08:	zext.h	a5,a5
+
+0000dd0c <.LBB2956>:
+_Z20NOC_CMD_BUF_READ_REGmmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:174
+    dd0c:	lui	t1,0xffb30
+
+0000dd10 <.L104>:
+    dd10:	lw	t3,64(t1) # ffb30040 <__stack_base+0x2f360>
+
+0000dd14 <.LBE2961>:
+_Z36noc_async_write_one_packet_with_tridILb0ELb0EEvmymmhhh():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/api/dataflow/dataflow_api.h:2807 (discriminator 2)
+    dd14:	bnez	t3,dd10 <.L104>
+
+0000dd18 <.LBB2939>:
+_Z21NOC_CMD_BUF_WRITE_REGmmmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:168
+    dd18:	sw	a7,24(t1)
+
+0000dd1c <.LBB2941>:
+    dd1c:	lui	a7,0x2
+    dd20:	addi	a7,a7,146 # 2092 <.LVUS583+0x1>
+    dd24:	sw	a7,28(t1)
+
+0000dd28 <.LBB2943>:
+    dd28:	sw	t4,0(t1)
+
+0000dd2c <.LBB2945>:
+_Z21ncrisc_noc_fast_writeILh0ELb1ELb1EEvmmmymmbbmbbm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:638
+    dd2c:	slli	a7,s1,0x4
+
+0000dd30 <.LBB2948>:
+_Z21NOC_CMD_BUF_WRITE_REGmmmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:168
+    dd30:	sw	t6,12(t1)
+
+0000dd34 <.LBE2948>:
+_Z21ncrisc_noc_fast_writeILh0ELb1ELb1EEvmmmymmbbmbbm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:638
+    dd34:	srli	s1,a7,0x8
+
+0000dd38 <.LBB2949>:
+_Z21NOC_CMD_BUF_WRITE_REGmmmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:168
+    dd38:	sw	s1,20(t1)
+
+0000dd3c <.LBB2951>:
+    dd3c:	sw	a5,32(t1)
+
+0000dd40 <.LBB2953>:
+    dd40:	li	a5,1
+
+0000dd44 <.LM2991>:
+    dd44:	sw	a5,64(t1)
+
+0000dd48 <.LM2992>:
+    dd48:	j	d68c <.L226>
+
+0000dd4c <.L236>:
+_Z19NOC_STATUS_READ_REGmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:180
+    dd4c:	lui	a0,0xffb30
+
+0000dd50 <.L106>:
+    dd50:	lw	a6,576(a0) # ffb30240 <__stack_base+0x2f560>
+
+0000dd54 <.LBE3023>:
+_Z27flush_write_to_noc_pipelineh():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp:115 (discriminator 2)
+    dd54:	bnez	a6,dd50 <.L106>
+
+0000dd58 <.LBB3024>:
+_Z19NOC_STATUS_READ_REGmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:180
+    dd58:	lui	a0,0xffb30
+
+0000dd5c <.L107>:
+    dd5c:	lw	a6,580(a0) # ffb30244 <__stack_base+0x2f564>
+
+0000dd60 <.LBE3025>:
+_Z27flush_write_to_noc_pipelineh():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp:115 (discriminator 2)
+    dd60:	bnez	a6,dd5c <.L107>
+
+0000dd64 <.LBB3026>:
+_Z19NOC_STATUS_READ_REGmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:180
+    dd64:	lui	a0,0xffb30
+
+0000dd68 <.L108>:
+    dd68:	lw	a6,584(a0) # ffb30248 <__stack_base+0x2f568>
+
+0000dd6c <.LBE3027>:
+_Z27flush_write_to_noc_pipelineh():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp:115 (discriminator 2)
+    dd6c:	bnez	a6,dd68 <.L108>
+
+0000dd70 <.LBB3028>:
+_Z19NOC_STATUS_READ_REGmm():
+/home/aagarwal/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc_nonblocking_api.h:180
+    dd70:	lui	a0,0xffb30
+
+0000dd74 <.L109>:
+    dd74:	lw	a6,588(a0) # ffb3024c <__stack_base+0x2f56c>
+
+0000dd78 <.LBE3029>:
+_Z27flush_write_to_noc_pipelineh():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp:115 (discriminator 2)
+    dd78:	bnez	a6,dd74 <.L109>
+    dd7c:	j	d8f8 <.L105>
+
+0000dd80 <.L234>:
+_Z29write_stream_scratch_registerILm30EEmm():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp:32
+    dd80:	li	a4,4
+    dd84:	sw	a4,16(a2)
+
+0000dd88 <.LBB3633>:
+_Z28read_stream_scratch_registerILm30EEmv():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp:25
+    dd88:	lui	a0,0xffb5e
+
+0000dd8c <.LBB3636>:
+_ZN2tt9tt_fabric32got_immediate_termination_signalILb0EEEbPVNS0_17TerminationSignalE():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/tt_fabric_utils.h:29
+    dd8c:	li	a1,2
+
+0000dd90 <.LM3046>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/tt_fabric_utils.h:28
+    dd90:	li	a2,144
+
+0000dd94 <.L122>:
+_Z28read_stream_scratch_registerILm30EEmv():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp:25
+    dd94:	lw	a4,16(a0) # ffb5e010 <__stack_base+0x5d330>
+
+0000dd98 <.LBE3639>:
+_Z54run_routing_without_noc_sync_coordinated_as_non_masterPVN2tt9tt_fabric17TerminationSignalE():
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:1201 (discriminator 1)
+    dd98:	beqz	a4,d33c <.L119>
+
+0000dd9c <.LBB3640>:
+_ZN2tt9tt_fabric32got_immediate_termination_signalILb0EEEbPVNS0_17TerminationSignalE():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/tt_fabric_utils.h:27
+    dd9c:	lw	a4,268(zero) # 10c <.LLRL157+0xd>
+
+0000dda0 <.LM3054>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/tt_fabric_utils.h:29
+    dda0:	lw	a6,0(a5)
+
+0000dda4 <.LM3055>:
+    dda4:	beq	a6,a1,d33c <.L119>
+
+0000dda8 <.LM3056>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/tt_fabric_utils.h:28
+    dda8:	mul	a4,a4,a2
+
+0000ddac <.LM3057>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/tt_fabric_utils.h:30
+    ddac:	lbu	a4,379(a4)
+
+0000ddb0 <.LM3058>:
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/tt_fabric_utils.h:29 (discriminator 2)
+    ddb0:	bnez	a4,d33c <.L119>
+    ddb4:	j	dd94 <.L122>
+
+0000ddb8 <.L230>:
+_Z11kernel_mainv():
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3614
+    ddb8:	addi	a3,a3,1
+
+0000ddbc <.LBE1575>:
+/home/aagarwal/tt-metal/tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp:3534
+    ddbc:	addi	a1,a1,4 # ffb30004 <__stack_base+0x2f324>
+    ddc0:	addi	a5,a5,112
+    ddc4:	j	cb78 <.L21>
+
+0000ddc8 <.L237>:
+_Z19shift_to_next_chunkRh():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp:127
+    ddc8:	srli	t3,t3,0x4
+
+0000ddcc <.LBE3158>:
+_Z39execute_chip_unicast_to_local_chip_implU11rvtt_l1_ptrPN2tt9tt_fabric23HybridMeshPacketHeaderTILi36EEEtNS0_11NocSendTypeEmh():
+/home/aagarwal/tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp:294
+    ddcc:	andi	t3,t3,3
+    ddd0:	j	d8d4 <.L99>
+
+0000ddd4 <memset>:
+memset():
+    ddd4:	li	t1,15
+    ddd8:	mv	a4,a0
+    dddc:	bgeu	t1,a2,de18 <.Ltiny>
+    dde0:	andi	a5,a4,15
+    dde4:	bnez	a5,de84 <.Lmisaligned>
+
+0000dde8 <.Laligned>:
+    dde8:	bnez	a1,de6c <.Lwordify>
+
+0000ddec <.Lwordified>:
+    ddec:	andi	a3,a2,-16
+    ddf0:	andi	a2,a2,15
+    ddf4:	add	a3,a3,a4
+
+0000ddf8 <.L1^B1>:
+    ddf8:	sw	a1,0(a4)
+    ddfc:	sw	a1,4(a4)
+    de00:	sw	a1,8(a4)
+    de04:	sw	a1,12(a4)
+    de08:	addi	a4,a4,16
+    de0c:	bltu	a4,a3,ddf8 <.L1^B1>
+    de10:	bnez	a2,de18 <.Ltiny>
+    de14:	ret
+
+0000de18 <.Ltiny>:
+    de18:	sub	a3,t1,a2
+    de1c:	slli	a3,a3,0x2
+
+0000de20 <.L1^B2>:
+    de20:	auipc	t0,0x0
+    de24:	add	a3,a3,t0
+
+0000de28 <.Ltable_misaligned>:
+    de28:	jr	12(a3)
+
+0000de2c <.Ltable>:
+    de2c:	sb	a1,14(a4)
+    de30:	sb	a1,13(a4)
+    de34:	sb	a1,12(a4)
+    de38:	sb	a1,11(a4)
+    de3c:	sb	a1,10(a4)
+    de40:	sb	a1,9(a4)
+    de44:	sb	a1,8(a4)
+    de48:	sb	a1,7(a4)
+    de4c:	sb	a1,6(a4)
+    de50:	sb	a1,5(a4)
+    de54:	sb	a1,4(a4)
+    de58:	sb	a1,3(a4)
+    de5c:	sb	a1,2(a4)
+    de60:	sb	a1,1(a4)
+    de64:	sb	a1,0(a4)
+    de68:	ret
+
+0000de6c <.Lwordify>:
+    de6c:	zext.b	a1,a1
+    de70:	slli	a3,a1,0x8
+    de74:	or	a1,a1,a3
+    de78:	slli	a3,a1,0x10
+    de7c:	or	a1,a1,a3
+    de80:	j	ddec <.Lwordified>
+
+0000de84 <.Lmisaligned>:
+    de84:	slli	a3,a5,0x2
+
+0000de88 <.L1^B3>:
+    de88:	auipc	t0,0x0
+    de8c:	add	a3,a3,t0
+    de90:	mv	t0,ra
+    de94:	jalr	-96(a3)
+    de98:	mv	ra,t0
+    de9c:	addi	a5,a5,-16
+    dea0:	sub	a4,a4,a5
+    dea4:	add	a2,a2,a5
+    dea8:	bgeu	t1,a2,de18 <.Ltiny>
+    deac:	j	dde8 <.Laligned>

@@ -12,6 +12,7 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_trimming.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/telemetry/fabric_bandwidth_telemetry.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/telemetry/fabric_code_profiling.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/telemetry/fabric_phase_profiler.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_static_channels_ct_args.hpp"
 #include "hostdevcommon/fabric_telemetry_msgs.h"
 #include "api/alignment.h"
@@ -624,6 +625,110 @@ constexpr uint32_t code_profiling_enabled_timers_bitfield = NAMED_CT_ARG("CODE_P
 constexpr size_t code_profiling_buffer_base_addr = NAMED_CT_ARG("CODE_PROFILING_BUFFER_ADDR");
 
 // ============================================================================
+// Experimental phase profiling and throughput experiments (see fabric_phase_profile_types.hpp)
+// ============================================================================
+constexpr uint32_t phase_profile_mode = NAMED_CT_ARG("PHASE_PROFILE_MODE");
+constexpr size_t phase_profile_buffer_addr = NAMED_CT_ARG("PHASE_PROFILE_BUFFER_ADDR");
+constexpr uint32_t phase_profile_mask = NAMED_CT_ARG("PHASE_PROFILE_MASK");
+constexpr bool phase_profile_iter_timing = NAMED_CT_ARG("PHASE_PROFILE_ITER_TIMING") != 0;
+// Profile level of this router's offload DRISC (TT_FABRIC_DRISC_PHASE_PROFILE, else TT_FABRIC_PHASE_PROFILE).
+constexpr uint32_t drisc_phase_profile_mode = NAMED_CT_ARG("PHASE_PROFILE_DRISC_MODE");
+// Ethernet TX queues whose registers the profiler samples (TT_FABRIC_TXQ_COUNTERS): the ones this ERISC issues on.
+constexpr uint32_t phase_profile_txq_mask = NAMED_CT_ARG("PHASE_PROFILE_TXQ_COUNTERS") == 0
+                                                ? 0u
+                                                : ((any_sender_channel_serviced ? 1u << sender_txq_id : 0u) |
+                                                   (any_receiver_channel_serviced ? 1u << receiver_txq_id : 0u));
+constexpr uint32_t fabric_exp_flags = NAMED_CT_ARG("EXP_FLAGS");
+constexpr uint32_t fabric_exp_tx_delay = NAMED_CT_ARG("EXP_TX_DELAY");
+constexpr uint32_t fabric_exp_rx_delay = NAMED_CT_ARG("EXP_RX_DELAY");
+constexpr uint32_t fabric_exp_drisc_delay = NAMED_CT_ARG("EXP_DRISC_DELAY");
+// Keepalive (TT-link sequence update) period in cycles for this tile's TX queues; 0 keeps the firmware value (8000).
+constexpr uint32_t fabric_exp_seq_update_timeout = NAMED_CT_ARG("EXP_SEQ_UPDATE_TIMEOUT");
+// Stack depth measurement (TT_FABRIC_EXP_STACK_PAINT), reported in this ERISC's phase-profile block.
+constexpr bool fabric_exp_stack_paint = NAMED_CT_ARG("EXP_STACK_PAINT") != 0;
+static_assert(
+    !fabric_exp_stack_paint || (phase_profile_buffer_addr != 0 && phase_profile_mode == 0),
+    "TT_FABRIC_EXP_STACK_PAINT needs the profile buffer and no phase profiling (which rewrites the block)");
+constexpr bool fabric_exp_rx_skip_local_delivery = (fabric_exp_flags & EXP_RX_SKIP_LOCAL_DELIVERY) != 0;
+constexpr bool fabric_exp_rx_local_as_single_write = (fabric_exp_flags & EXP_RX_LOCAL_AS_SINGLE_WRITE) != 0;
+constexpr bool fabric_exp_tx_amortize_worker_credits = (fabric_exp_flags & EXP_TX_AMORTIZE_WORKER_CREDITS) != 0;
+constexpr bool fabric_exp_tx_lazy_conn_check = (fabric_exp_flags & EXP_TX_LAZY_CONN_CHECK) != 0;
+constexpr bool fabric_exp_rx_local_as_push = (fabric_exp_flags & EXP_RX_LOCAL_AS_PUSH) != 0;
+constexpr bool fabric_exp_rx_push_lean = (fabric_exp_flags & EXP_RX_PUSH_LEAN) != 0;
+static_assert(!fabric_exp_rx_push_lean || fabric_exp_rx_local_as_push, "EXP_RX_PUSH_LEAN needs EXP_RX_LOCAL_AS_PUSH");
+constexpr bool fabric_exp_drisc_offload = (fabric_exp_flags & EXP_DRISC_OFFLOAD) != 0;
+constexpr bool fabric_exp_rx_blind_push_drisc = false;
+constexpr bool fabric_exp_rx_batch_completion = (fabric_exp_flags & EXP_RX_BATCH_COMPLETION) != 0;
+constexpr bool fabric_exp_rx_push_drisc = (fabric_exp_flags & EXP_RX_PUSH_DRISC) != 0;
+static_assert(
+    !(fabric_exp_flags & EXP_RX_PUSH_DRISC) || fabric_exp_rx_local_as_push,
+    "EXP_RX_PUSH_DRISC needs EXP_RX_LOCAL_AS_PUSH");
+// EXP_RX_PUSH_DRISC / EXP_DRISC_OFFLOAD: this router's DRISC (translated NoC coordinates) and its free L1 (unreserved
+// region); the builder sets size 0 when it found none for this router.
+constexpr uint32_t exp_push_drisc_x = NAMED_CT_ARG("EXP_PUSH_DRISC_X");
+constexpr uint32_t exp_push_drisc_y = NAMED_CT_ARG("EXP_PUSH_DRISC_Y");
+constexpr uint32_t exp_push_drisc_l1_base = NAMED_CT_ARG("EXP_PUSH_DRISC_L1_BASE");
+constexpr uint32_t exp_push_drisc_l1_size = NAMED_CT_ARG("EXP_PUSH_DRISC_L1_SIZE");
+constexpr uint32_t peer_erisc_noc_x = NAMED_CT_ARG("PEER_ERISC_NOC_X");
+constexpr uint32_t peer_erisc_noc_y = NAMED_CT_ARG("PEER_ERISC_NOC_Y");
+
+// DRISC offload L1 memory layout (inside DRISC UNRESERVED L1, all 16-byte aligned):
+//   [+0x0000 .. +0x0A8F] routing_l1_info_t (2,704 B)
+//   [+0x0A90 .. +0x0A9F] drisc_e1_ready word (16 B)
+//   [+0x0AA0 .. +0x0AAF] drisc_termination_signal word (16 B)
+//   [+0x0AB0 .. +0x0AEF] 4 x 16B downstream EDM teardown semaphores (64 B)
+//   [+0x0B00 ..        ] 16-slot packet staging ring (16 * channel_buffer_size B)
+//   [ring end ..       ] phase profile staging block (sizeof(FabricPhaseProfile) B, TT_FABRIC_PHASE_PROFILE only)
+constexpr uint32_t drisc_routing_table_l1_addr = exp_push_drisc_l1_base;
+constexpr uint32_t drisc_e1_ready_l1_addr = exp_push_drisc_l1_base + 0x0A90;
+constexpr uint32_t drisc_termination_signal_l1_addr = exp_push_drisc_l1_base + 0x0AA0;
+constexpr uint32_t drisc_teardown_sem_base_addr = exp_push_drisc_l1_base + 0x0AB0;
+constexpr uint32_t drisc_ring_base_addr = exp_push_drisc_l1_base + 0x0B00;
+constexpr uint32_t drisc_ring_slots = 16;
+constexpr uint32_t drisc_ring_end_addr = drisc_ring_base_addr + drisc_ring_slots * channel_buffer_size;
+constexpr uint32_t drisc_phase_profile_staging_addr = drisc_ring_end_addr;
+// drisc_free_slots_stream_id is on the ERISC (32 stream registers); drisc_doorbell_stream_id is on the DRISC, whose
+// tile has only 16 (DRAM_NOC_NUM_STREAMS). 13 is the doorbell the DRISC microbenchmark and EXP_RX_PUSH_DRISC used.
+constexpr uint32_t drisc_free_slots_stream_id = 26;
+constexpr uint32_t drisc_doorbell_stream_id = 13;
+constexpr bool fabric_exp_tx_drop_dead_txq_read = (fabric_exp_flags & EXP_TX_DROP_DEAD_TXQ_READ) != 0;
+constexpr bool fabric_exp_tx_no_send_txq_check = (fabric_exp_flags & EXP_TX_NO_SEND_TXQ_CHECK) != 0;
+constexpr bool fabric_exp_tx_lean_completions = (fabric_exp_flags & EXP_TX_LEAN_COMPLETIONS) != 0;
+constexpr bool fabric_exp_tx_grouped_packet_check = (fabric_exp_flags & EXP_TX_GROUPED_PACKET_CHECK) != 0;
+constexpr bool fabric_exp_tx_send_no_write_counter = (fabric_exp_flags & EXP_TX_SEND_NO_WRITE_COUNTER) != 0;
+constexpr bool fabric_exp_tx_send_early_txq_read = (fabric_exp_flags & EXP_TX_SEND_EARLY_TXQ_READ) != 0;
+constexpr bool fabric_exp_tx_send_stride_slot = (fabric_exp_flags & EXP_TX_SEND_STRIDE_SLOT) != 0;
+constexpr bool fabric_exp_tx_send_ct_free_slot_stream = (fabric_exp_flags & EXP_TX_SEND_CT_FREE_SLOT_STREAM) != 0;
+constexpr bool fabric_exp_tx_send_early_size_read = (fabric_exp_flags & EXP_TX_SEND_EARLY_SIZE_READ) != 0;
+constexpr bool fabric_exp_tx_send_overlap_completion = (fabric_exp_flags & EXP_TX_SEND_OVERLAP_COMPLETION) != 0;
+constexpr bool fabric_exp_tx_lean_vc0_loop = (fabric_exp_flags & EXP_TX_LEAN_VC0_LOOP) != 0;
+constexpr bool fabric_exp_tx_idle_likely = (fabric_exp_flags & EXP_TX_IDLE_LIKELY) != 0;
+// EXP_RX_GROUPED_READS reads the receiver's TX-queue busy status inside a group of reads just before the completion
+// ack, in place of eth_txq_is_busy. It assumes this ERISC is the queue's only user (two ERISCs, separate sender and
+// receiver queues), that the step sends no first-level ack (checked where it is used), and that the ack does not
+// spin on the queue itself (ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK off).
+#if !defined(ARCH_WORMHOLE)
+constexpr bool fabric_exp_rx_grouped_reads = (fabric_exp_flags & EXP_RX_GROUPED_READS) != 0 && multi_txq_enabled &&
+                                             NUM_ACTIVE_ERISCS > 1 && !ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK;
+#else
+constexpr bool fabric_exp_rx_grouped_reads = false;
+#endif
+constexpr bool fabric_exp_rx_grouped_prefetch =
+    fabric_exp_rx_grouped_reads && (fabric_exp_flags & EXP_RX_GROUPED_NO_PREFETCH) == 0;
+static_assert(
+    !fabric_exp_tx_send_early_txq_read || !ETH_TXQ_SPIN_WAIT_SEND_NEXT_DATA,
+    "EXP_TX_SEND_EARLY_TXQ_READ assumes the busy check is in the can-send decision");
+constexpr size_t phase_profile_microbench_results_addr = phase_profile_buffer_addr + PHASE_PROFILE_BUFFER_SIZE;
+constexpr size_t phase_profile_microbench_scratch_addr =
+    phase_profile_microbench_results_addr + PHASE_PROFILE_MICROBENCH_RESULTS_SIZE;
+constexpr size_t exp_push_loopback_scratch_addr = phase_profile_mode >= 3
+                                                      ? phase_profile_microbench_scratch_addr
+                                                      : ((phase_profile_mode != 0 || phase_profile_txq_mask != 0 ||
+                                                          fabric_exp_stack_paint || drisc_phase_profile_mode != 0)
+                                                             ? phase_profile_buffer_addr + PHASE_PROFILE_BUFFER_SIZE
+                                                             : phase_profile_buffer_addr);
+
+// ============================================================================
 // Multi-TXQ credit counters (always available; 0 when inactive)
 // ============================================================================
 constexpr size_t to_sender_remote_ack_counters_base_address = NAMED_CT_ARG("TO_SENDER_REMOTE_ACK_COUNTERS_BASE_ADDR");
@@ -697,7 +802,14 @@ constexpr size_t receiver_channel_base_id = NUM_SENDER_CHANNELS;
 
 // TRANSACTION IDS
 // TODO: Pass this value from host
+#if !defined(FABRIC_2D_VC1_ACTIVE) && !defined(FABRIC_2D_VC2_SERVICED)
+constexpr uint8_t NUM_TRANSACTION_IDS =
+    (fabric_exp_rx_batch_completion && !enable_deadlock_avoidance && NUM_RECEIVER_CHANNELS == 1)
+        ? 16
+        : (enable_deadlock_avoidance ? 8 : 4);
+#else
 constexpr uint8_t NUM_TRANSACTION_IDS = enable_deadlock_avoidance ? 8 : 4;
+#endif
 
 constexpr std::array<uint8_t, MAX_NUM_RECEIVER_CHANNELS> RX_CH_TRID_STARTS =
     initialize_receiver_channel_trid_starts<MAX_NUM_RECEIVER_CHANNELS, NUM_TRANSACTION_IDS>();
@@ -856,6 +968,33 @@ constexpr uint32_t SENDER_CREDIT_AMORTIZATION_FREQUENCY =
 constexpr uint32_t RECEIVER_CREDIT_AMORTIZATION_FREQUENCY =
     get_named_compile_time_arg_val("RECEIVER_CREDIT_AMORTIZATION_FREQUENCY");
 constexpr bool super_speedy_mode = enable_speedy_vc0;
+
+// Experiment (EXP_TX_UPSTREAM_ON_E1): in two-ERISC mode on the generic path, E1 handles the upstream side of the sender
+// channels E0 services: completions turned into credits for the upstream worker or router, and worker connection
+// open/teardown. E0 still reads the completion counters for its own receiver-slot accounting; each core keeps its own
+// processed count, so this needs counter credits and no first-level ack.
+static constexpr std::array<bool, MAX_NUM_SENDER_CHANNELS> peer_sender_channel_serviced = {
+    static_cast<bool>(NAMED_CT_ARG("PEER_SENDER_CHANNEL_0_SERVICED")),
+    static_cast<bool>(NAMED_CT_ARG("PEER_SENDER_CHANNEL_1_SERVICED")),
+    static_cast<bool>(NAMED_CT_ARG("PEER_SENDER_CHANNEL_2_SERVICED")),
+    static_cast<bool>(NAMED_CT_ARG("PEER_SENDER_CHANNEL_3_SERVICED")),
+    static_cast<bool>(NAMED_CT_ARG("PEER_SENDER_CHANNEL_4_SERVICED")),
+    static_cast<bool>(NAMED_CT_ARG("PEER_SENDER_CHANNEL_5_SERVICED")),
+    static_cast<bool>(NAMED_CT_ARG("PEER_SENDER_CHANNEL_6_SERVICED")),
+    static_cast<bool>(NAMED_CT_ARG("PEER_SENDER_CHANNEL_7_SERVICED")),
+    static_cast<bool>(NAMED_CT_ARG("PEER_SENDER_CHANNEL_8_SERVICED")),
+    static_cast<bool>(NAMED_CT_ARG("PEER_SENDER_CHANNEL_9_SERVICED")),
+};
+constexpr bool fabric_exp_tx_upstream_on_e1 =
+    (fabric_exp_flags & EXP_TX_UPSTREAM_ON_E1) != 0 && NUM_ACTIVE_ERISCS > 1 && !super_speedy_mode;
+constexpr bool exp_tx_upstream_on_this_erisc = fabric_exp_tx_upstream_on_e1 && MY_ERISC_ID == 1;
+constexpr bool exp_tx_upstream_moved_off_this_erisc = fabric_exp_tx_upstream_on_e1 && MY_ERISC_ID == 0;
+static_assert(
+    !fabric_exp_tx_upstream_on_e1 ||
+        (vc0_uses_counter_credits && (ACTUAL_VC1_SENDER_CHANNELS == 0 || vc1_uses_counter_credits) &&
+         (ACTUAL_VC2_SENDER_CHANNELS == 0 || vc2_uses_counter_credits) && !ENABLE_FIRST_LEVEL_ACK_VC0 &&
+         !ENABLE_FIRST_LEVEL_ACK_VC1 && !fabric_exp_tx_amortize_worker_credits),
+    "EXP_TX_UPSTREAM_ON_E1 needs counter credits, no first-level ack and no amortized worker credits");
 static_assert(
     !super_speedy_mode || SENDER_CREDIT_AMORTIZATION_FREQUENCY > 0,
     "super_speedy_mode requires sender credit amortization to be enabled");

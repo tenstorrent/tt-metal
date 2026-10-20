@@ -1,0 +1,18 @@
+# Diagnostic: the ChannelTrimming entry from test_yamls/test_features.yaml, unchanged.
+Tests:
+  - name: "ChannelTrimming"
+    fabric_setup:
+      topology: Linear
+      enable_channel_trimming: true
+
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      size: 1024
+      num_packets: 100
+
+    senders:
+      - device: 0
+        patterns:
+          - destination:
+              device: 1

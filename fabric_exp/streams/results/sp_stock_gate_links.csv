@@ -1,0 +1,5 @@
+test_name,ftype,ntype,topology,num_devices,device,num_links,direction,total_traffic_count,num_packets,packet_size,cycles,bandwidth_GB_s,packets_per_second
+W0Plain,CHIP_UNICAST,NOC_UNICAST_WRITE,Mesh,8,0,1,E,1,60000,4352,13308405,26.487922,6086379.247
+W1OneSegment,CHIP_UNICAST,NOC_UNICAST_WRITE,Mesh,8,0,1,E,1,60000,4352,13311307,26.482148,6085052.354
+W2TwoSegments,CHIP_UNICAST,NOC_UNICAST_WRITE,Mesh,8,0,1,E,2,30000,4352,13297862,26.508923,6091204.737
+W3HeaderCopies,CHIP_UNICAST,NOC_UNICAST_WRITE,Mesh,8,0,1,E,2,30000,4352,13308948,26.486842,6086130.925

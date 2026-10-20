@@ -1,0 +1,10 @@
+Moving E0's sender-channel scan to E1 with no batching (k_drain 1, b_ptr 1, b_ack 1: bursty traffic), static.
+  scenario / design                           ch    E0 scans: interval  E0  E1  D0     E1 scans: interval  E0  E1  D0
+  2d_3hop_middle / P5                          4                168  168  148  146                 208  133  208  146
+  2d_3hop_middle / P5                          9                217  217  190  146                 265  133  265  146
+  2d_3hop_middle / P5L                         4                168  168  167  127                 228  133  228  127
+  2d_3hop_middle / P5L                         9                217  217  209  127                 284  133  284  127
+  2d_mcast_ns_router / P5                      4                285  168  173  285                 285  133  234  285
+  2d_mcast_ns_router / P5                      9                285  217  215  285                 290  133  290  285
+  2d_mcast_ns_router / P5L                     4                249  168  249  201                 310  133  310  201
+  2d_mcast_ns_router / P5L                     9                249  225  249  201                 366  133  366  201

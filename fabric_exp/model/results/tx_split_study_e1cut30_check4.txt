@@ -1,0 +1,83 @@
+Wire, 4 KiB + 96 B header: 118.5 one way, 120.7 with acks for the other direction (b_ptr = b_ack = 1). Send cost 72.
+Limits: E0, E1 (both ways), E1s / E1r (one way: sending chip's E1 / receiving chip's E1), D = DRISC, w = wire, noc = NoC port.
+Sensitivity: E1 loop + polls cut by 30; E1 sender checks per iteration 4.
+
+### both ways, 4 busy sender channels, batching k=1 b_ptr=1 b_ack=1
+Cycles per packet (limit). Columns: sender channels on E1 (m).
+| receive work | E1 only, m=0 | E1 only, m=1 | E1 only, m=2 | +DRISC, m=0 | +DRISC, m=1 | +DRISC, m=2 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| local write E/W | 136 (E0) | 135 (E1) | 163 (E1) | 136 (E0) | 124 (E1) | 152 (E1) |
+| local write N/S | 136 (E0) | 150 (E1) | 178 (E1) | 136 (E0) | 126 (D) | 152 (E1) |
+| scatter E/W | 161 (E1) | 192 (E1) | 220 (E1) | 151 (D) | 151 (D) | 168 (D) |
+| forward (3-hop middle) | 155 (E1) | 186 (E1) | 214 (E1) | 136 (E0) | 149 (E1) | 177 (E1) |
+| multicast N/S (local + 2 fwd) | 322 (E1) | 353 (E1) | 381 (E1) | 217 (D) | 228 (noc) | 246 (E1) |
+
+### both ways, 4 busy sender channels, batching k=4 b_ptr=4 b_ack=4
+Cycles per packet (limit). Columns: sender channels on E1 (m).
+| receive work | E1 only, m=0 | E1 only, m=1 | E1 only, m=2 | +DRISC, m=0 | +DRISC, m=1 | +DRISC, m=2 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| local write E/W | 117 (w) | 117 (w) | 117 (w) | 117 (w) | 117 (w) | 117 (w) |
+| local write N/S | 117 (w) | 117 (w) | 128 (E1) | 117 (w) | 117 (w) | 117 (w) |
+| scatter E/W | 130 (E1) | 150 (E1) | 170 (E1) | 124 (D) | 124 (D) | 124 (D) |
+| forward (3-hop middle) | 124 (E1) | 144 (E1) | 164 (E1) | 117 (w) | 117 (w) | 117 (w) |
+| multicast N/S (local + 2 fwd) | 291 (E1) | 311 (E1) | 330 (E1) | 159 (D) | 167 (E1) | 186 (E1) |
+
+### both ways, 1 busy sender channel, batching k=1 b_ptr=1 b_ack=1
+Cycles per packet (limit). Columns: sender channels on E1 (m).
+| receive work | E1 only, m=0 | E1 only, m=1 | E1 only, m=2 | +DRISC, m=0 | +DRISC, m=1 | +DRISC, m=2 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| local write E/W | 182 (E0) | 171 (E0) | 160 (E0) | 182 (E0) | 171 (E0) | 160 (E0) |
+| local write N/S | 182 (E0) | 171 (E0) | 160 (E0) | 182 (E0) | 171 (E0) | 160 (E0) |
+| scatter E/W | 182 (E0) | 171 (E0) | 165 (E1) | 182 (E0) | 171 (E0) | 160 (E0) |
+| forward (3-hop middle) | 182 (E0) | 171 (E0) | 160 (E0) | 182 (E0) | 171 (E0) | 160 (E0) |
+| multicast N/S (local + 2 fwd) | 322 (E1) | 326 (E1) | 326 (E1) | 217 (D) | 218 (E1) | 218 (E1) |
+
+### both ways, 1 busy sender channel, batching k=4 b_ptr=4 b_ack=4
+Cycles per packet (limit). Columns: sender channels on E1 (m).
+| receive work | E1 only, m=0 | E1 only, m=1 | E1 only, m=2 | +DRISC, m=0 | +DRISC, m=1 | +DRISC, m=2 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| local write E/W | 117 (w) | 117 (w) | 117 (w) | 117 (w) | 117 (w) | 117 (w) |
+| local write N/S | 117 (w) | 117 (w) | 117 (w) | 117 (w) | 117 (w) | 117 (w) |
+| scatter E/W | 130 (E1) | 131 (E1) | 131 (E1) | 124 (D) | 124 (D) | 124 (D) |
+| forward (3-hop middle) | 124 (E1) | 125 (E1) | 125 (E1) | 117 (w) | 117 (w) | 117 (w) |
+| multicast N/S (local + 2 fwd) | 291 (E1) | 292 (E1) | 292 (E1) | 159 (D) | 159 (D) | 159 (D) |
+
+### one way, 4 busy sender channels, batching k=1 b_ptr=1 b_ack=1
+Cycles per packet (limit). Columns: sender channels on E1 (m).
+| receive work | E1 only, m=0 | E1 only, m=1 | E1 only, m=2 | +DRISC, m=0 | +DRISC, m=1 | +DRISC, m=2 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| local write E/W | 136 (E0) | 118 (w) | 118 (w) | 136 (E0) | 118 (w) | 118 (w) |
+| local write N/S | 136 (E0) | 123 (E1r) | 123 (E1r) | 136 (E0) | 123 (E1r) | 123 (E1r) |
+| scatter E/W | 161 (E1r) | 165 (E1r) | 165 (E1r) | 151 (D) | 151 (D) | 151 (D) |
+| forward (3-hop middle) | 155 (E1r) | 159 (E1r) | 159 (E1r) | 136 (E0) | 134 (E1r) | 134 (E1r) |
+| multicast N/S (local + 2 fwd) | 322 (E1r) | 326 (E1r) | 326 (E1r) | 217 (D) | 218 (E1r) | 218 (E1r) |
+
+### one way, 4 busy sender channels, batching k=4 b_ptr=4 b_ack=4
+Cycles per packet (limit). Columns: sender channels on E1 (m).
+| receive work | E1 only, m=0 | E1 only, m=1 | E1 only, m=2 | +DRISC, m=0 | +DRISC, m=1 | +DRISC, m=2 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| local write E/W | 117 (w) | 117 (w) | 117 (w) | 117 (w) | 117 (w) | 117 (w) |
+| local write N/S | 117 (w) | 117 (w) | 117 (w) | 117 (w) | 117 (w) | 117 (w) |
+| scatter E/W | 130 (E1r) | 131 (E1r) | 131 (E1r) | 124 (D) | 124 (D) | 124 (D) |
+| forward (3-hop middle) | 124 (E1r) | 125 (E1r) | 125 (E1r) | 117 (w) | 117 (w) | 117 (w) |
+| multicast N/S (local + 2 fwd) | 291 (E1r) | 292 (E1r) | 292 (E1r) | 159 (D) | 159 (D) | 159 (D) |
+
+### one way, 1 busy sender channel, batching k=1 b_ptr=1 b_ack=1
+Cycles per packet (limit). Columns: sender channels on E1 (m).
+| receive work | E1 only, m=0 | E1 only, m=1 | E1 only, m=2 | +DRISC, m=0 | +DRISC, m=1 | +DRISC, m=2 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| local write E/W | 182 (E0) | 171 (E0) | 160 (E0) | 182 (E0) | 171 (E0) | 160 (E0) |
+| local write N/S | 182 (E0) | 171 (E0) | 160 (E0) | 182 (E0) | 171 (E0) | 160 (E0) |
+| scatter E/W | 182 (E0) | 171 (E0) | 165 (E1r) | 182 (E0) | 171 (E0) | 160 (E0) |
+| forward (3-hop middle) | 182 (E0) | 171 (E0) | 160 (E0) | 182 (E0) | 171 (E0) | 160 (E0) |
+| multicast N/S (local + 2 fwd) | 322 (E1r) | 326 (E1r) | 326 (E1r) | 217 (D) | 218 (E1r) | 218 (E1r) |
+
+### one way, 1 busy sender channel, batching k=4 b_ptr=4 b_ack=4
+Cycles per packet (limit). Columns: sender channels on E1 (m).
+| receive work | E1 only, m=0 | E1 only, m=1 | E1 only, m=2 | +DRISC, m=0 | +DRISC, m=1 | +DRISC, m=2 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| local write E/W | 117 (w) | 117 (w) | 117 (w) | 117 (w) | 117 (w) | 117 (w) |
+| local write N/S | 117 (w) | 117 (w) | 117 (w) | 117 (w) | 117 (w) | 117 (w) |
+| scatter E/W | 130 (E1r) | 131 (E1r) | 131 (E1r) | 124 (D) | 124 (D) | 124 (D) |
+| forward (3-hop middle) | 124 (E1r) | 125 (E1r) | 125 (E1r) | 117 (w) | 117 (w) | 117 (w) |
+| multicast N/S (local + 2 fwd) | 291 (E1r) | 292 (E1r) | 292 (E1r) | 159 (D) | 159 (D) | 159 (D) |

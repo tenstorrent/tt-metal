@@ -1,0 +1,4 @@
+variant,name,payload,status_tx,status_rx,rx_cyc_per_pkt,tx_cyc_per_pkt,rx_all_cyc_per_pkt,gbps,merge_errors,tx_q0_transfers,tx_q0_pkts_started,tx_q0_pkts_ended,tx_q0_words,tx_q0_resends,tx_q1_transfers,tx_q1_pkts_started,tx_q1_pkts_ended,tx_q1_words,tx_q1_resends,rx_q0_transfers,rx_q0_pkts_started,rx_q0_pkts_ended,rx_q0_words,rx_q0_resends,rx_q1_transfers,rx_q1_pkts_started,rx_q1_pkts_ended,rx_q1_words,rx_q1_resends
+2,"TXQ0+TXQ1 split, nothing back",2048,1,1,66.309,66.3082,66.3179,41.6957,0,50000,50000,50000,500009,0,50000,25412,50000,524184,0,1,416,415,415,0,0,415,415,415,0
+2,"TXQ0+TXQ1 split, nothing back",4000,1,1,111.781,111.781,111.782,48.3087,0,50000,47906,42579,1000119,0,50000,49996,42807,1053765,0,1,700,699,699,0,0,699,699,699,0
+2,"TXQ0+TXQ1 split, nothing back",4176,1,1,118.044,118.045,118.047,47.7585,0,50000,72796,71513,1108004,0,50000,72325,70615,1103151,0,1,739,738,738,0,0,738,738,738,0

@@ -28,6 +28,7 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_packet_recorder.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/telemetry/fabric_bandwidth_telemetry.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/telemetry/fabric_code_profiling.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/telemetry/fabric_erisc_microbench.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_channel_traits.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/router_data_cache.hpp"
 
@@ -473,6 +474,29 @@ enum PacketLocalForwardType : uint8_t {
 // the link is down
 bool did_something;
 
+// Experimental per-ERISC phase accounting (TT_FABRIC_PHASE_PROFILE); compiles away when disabled.
+FabricPhaseProfiler<
+    phase_profile_mode,
+    phase_profile_buffer_addr,
+    MY_ERISC_ID,
+    phase_profile_mask,
+    phase_profile_iter_timing,
+    phase_profile_txq_mask>
+    phase_profiler;
+
+template <size_t N>
+constexpr uint32_t count_serviced(const std::array<bool, N>& serviced) {
+    uint32_t count = 0;
+    for (bool s : serviced) {
+        count += s ? 1 : 0;
+    }
+    return count;
+}
+
+// State for the EXP_TX_AMORTIZE_WORKER_CREDITS / EXP_TX_LAZY_CONN_CHECK experiments, per sender channel.
+std::array<int32_t, MAX_NUM_SENDER_CHANNELS> exp_pending_upstream_credits;
+std::array<uint8_t, MAX_NUM_SENDER_CHANNELS> exp_conn_poll_counter;
+
 /////////////////////////////////////////////
 //   SENDER SIDE HELPERS
 /////////////////////////////////////////////
@@ -489,21 +513,27 @@ template <
     uint8_t sender_channel_index,
     uint8_t to_receiver_pkts_sent_id,
     bool SKIP_CONNECTION_LIVENESS_CHECK,
+    bool SKIP_TAIL = false,
+    uint32_t REMOTE_RECEIVER_BASE_ADDR = 0,
     typename SenderChannelT,
     typename WorkerInterfaceT,
-    typename ReceiverPointersT
->
+    typename ReceiverPointersT>
 FORCE_INLINE void send_next_data(
     SenderChannelT& sender_buffer_channel,
     WorkerInterfaceT& sender_worker_interface,
     ReceiverPointersT& outbound_to_receiver_channel_pointers,
-    PerfTelemetryRecorder& perf_telemetry_recorder) {
-
+    PerfTelemetryRecorder& perf_telemetry_recorder,
+    uint32_t exp_payload_size_bytes = 0) {
     auto& remote_receiver_num_free_slots = outbound_to_receiver_channel_pointers.num_free_slots;
     uint32_t src_addr = sender_buffer_channel.get_cached_next_buffer_slot_addr();
 
     volatile auto* pkt_header = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(src_addr);
-    size_t const payload_size_bytes = pkt_header->get_payload_size_including_header();
+    size_t payload_size_bytes;
+    if constexpr (fabric_exp_tx_send_early_size_read) {
+        payload_size_bytes = exp_payload_size_bytes;  // read by the caller before its TX-queue check
+    } else {
+        payload_size_bytes = pkt_header->get_payload_size_including_header();
+    }
 
     record_sender_channel_usage(sender_channel_index, payload_size_bytes);
 
@@ -514,25 +544,61 @@ FORCE_INLINE void send_next_data(
     }
 
     if constexpr (ETH_TXQ_SPIN_WAIT_SEND_NEXT_DATA) {
+        const uint32_t prespin_start = phase_profiler.open<PHASE_TX_TXQ_PRESPIN>();
         while (internal_::eth_txq_is_busy(sender_txq_id)) {
         };
+        phase_profiler.close<PHASE_TX_TXQ_PRESPIN>(prespin_start);
     }
     internal_::eth_send_packet_bytes_unsafe(sender_txq_id, src_addr, dest_addr, payload_size_bytes);
 
     // Note: We can only advance to the next buffer index if we have fully completed the send (both the payload and sync
     // messages)
-    sender_worker_interface.template update_write_counter_for_send<SKIP_CONNECTION_LIVENESS_CHECK>();
+    if constexpr (!fabric_exp_tx_send_no_write_counter) {
+        sender_worker_interface.template update_write_counter_for_send<SKIP_CONNECTION_LIVENESS_CHECK>();
+    }
 
     // Advance receiver buffer pointers
-    outbound_to_receiver_channel_pointers.advance_remote_receiver_buffer_pointer();
-    sender_buffer_channel.advance_to_next_cached_buffer_slot_addr();
+    if constexpr (fabric_exp_tx_lean_vc0_loop && REMOTE_RECEIVER_BASE_ADDR != 0) {
+        outbound_to_receiver_channel_pointers
+            .template advance_remote_receiver_buffer_pointer_ct<REMOTE_RECEIVER_BASE_ADDR, channel_buffer_size>();
+    } else {
+        outbound_to_receiver_channel_pointers.advance_remote_receiver_buffer_pointer();
+    }
+    // EXP_TX_SEND_EARLY_TXQ_READ: issue the busy read here and test it after the bookkeeping, as the speedy path does.
+    // eth_txq_is_busy still makes the BH-55 dummy register read before reading STATUS.
+    bool txq_busy = false;
+    if constexpr (fabric_exp_tx_send_early_txq_read && !SKIP_TAIL) {
+        txq_busy = internal_::eth_txq_is_busy(sender_txq_id);
+    }
+    if constexpr (fabric_exp_tx_send_stride_slot) {
+        if constexpr (fabric_exp_tx_lean_vc0_loop) {
+            constexpr size_t sender_entry_idx = SENDER_TO_ENTRY_IDX[sender_channel_index];
+            constexpr size_t sender_base_addr = channel_allocs::template Entry<sender_entry_idx>::base_address;
+            sender_buffer_channel
+                .template advance_to_next_cached_buffer_slot_addr_by_stride_ct<sender_base_addr, channel_buffer_size>();
+        } else {
+            sender_buffer_channel.advance_to_next_cached_buffer_slot_addr_by_stride();
+        }
+    } else {
+        sender_buffer_channel.advance_to_next_cached_buffer_slot_addr();
+    }
+    record_packet_send(perf_telemetry_recorder, sender_channel_index, payload_size_bytes);
+    if constexpr (SKIP_TAIL) {
+        return;
+    }
     remote_receiver_num_free_slots--;
     // update the remote reg
 
-    record_packet_send(perf_telemetry_recorder, sender_channel_index, payload_size_bytes);
-
-    while (internal_::eth_txq_is_busy(sender_txq_id)) {
-    };
+    const uint32_t spin_start = phase_profiler.open<PHASE_TX_TXQ_SPIN>();
+    if constexpr (fabric_exp_tx_send_early_txq_read) {
+        while (txq_busy) {
+            txq_busy = internal_::eth_txq_is_busy(sender_txq_id);
+        }
+    } else {
+        while (internal_::eth_txq_is_busy(sender_txq_id)) {
+        };
+    }
+    phase_profiler.close<PHASE_TX_TXQ_SPIN>(spin_start);
     remote_update_ptr_val<to_receiver_pkts_sent_id, sender_txq_id>(1U);
 }
 
@@ -540,6 +606,288 @@ FORCE_INLINE void send_next_data(
 //   RECEIVER SIDE HELPERS
 /////////////////////////////////////////////
 
+// True when local delivery of the packet is pure data movement, with no atomic or semaphore side effect that
+// other cores (e.g. test sync) depend on. Only such packets may be dropped by EXP_RX_SKIP_LOCAL_DELIVERY.
+FORCE_INLINE bool exp_local_delivery_is_data_only(
+    tt_l1_ptr PACKET_HEADER_TYPE* const packet_start, tt::tt_fabric::NocSendType noc_send_type) {
+    if (noc_send_type == tt::tt_fabric::NocSendType::NOC_UNICAST_WRITE) {
+        return true;
+    }
+    if (noc_send_type == tt::tt_fabric::NocSendType::NOC_UNICAST_SCATTER_WRITE) {
+        const auto& scatter = packet_start->command_fields.unicast_scatter_write;
+        const uint8_t last_encoding = (scatter.chunk_encoding >> (2 * (scatter.chunk_count - 1))) & 0b11;
+        return last_encoding == tt::tt_fabric::NocScatterWriteChunkEncoding::CHUNK_ENCODING_UNICAST_WRITE;
+    }
+    return false;
+}
+
+// EXP_RX_LOCAL_AS_PUSH: the local-write command buffer keeps its state pointed at this core's L1 scratch.
+static_assert(
+    !fabric_exp_rx_local_as_push ||
+        (receiver_channel_forwarding_data_cmd_buf_ids[0] != tt::tt_fabric::local_chip_data_cmd_buf &&
+         receiver_channel_forwarding_sync_cmd_buf_ids[0] != tt::tt_fabric::local_chip_data_cmd_buf),
+    "EXP_RX_LOCAL_AS_PUSH needs a local-write command buffer that forwarding does not share");
+// EXP_RX_PUSH_LEAN: the push's doorbell goes to a stream register on this tile that the router does not use.
+constexpr uint32_t exp_push_doorbell_stream_id = 26;
+template <size_t N>
+constexpr bool exp_stream_unused_in(const std::array<uint32_t, N>& ids, uint32_t id) {
+    for (size_t i = 0; i < N; i++) {
+        if (ids[i] == id) {
+            return false;
+        }
+    }
+    return true;
+}
+static_assert(
+    !fabric_exp_rx_push_lean ||
+        (exp_stream_unused_in(sender_channel_free_slots_stream_ids, exp_push_doorbell_stream_id) &&
+         exp_stream_unused_in(to_receiver_packets_sent_streams, exp_push_doorbell_stream_id) &&
+         exp_stream_unused_in(to_sender_packets_acked_streams, exp_push_doorbell_stream_id) &&
+         exp_stream_unused_in(to_sender_packets_completed_streams, exp_push_doorbell_stream_id) &&
+         vc_0_free_slots_from_downstream_edge_1_stream_id != exp_push_doorbell_stream_id &&
+         vc_0_free_slots_from_downstream_edge_2_stream_id != exp_push_doorbell_stream_id &&
+         vc_0_free_slots_from_downstream_edge_3_stream_id != exp_push_doorbell_stream_id &&
+         vc_0_free_slots_from_downstream_edge_4_stream_id != exp_push_doorbell_stream_id),
+    "EXP_RX_PUSH_LEAN's doorbell stream register is in use");
+uint64_t exp_push_doorbell_noc_addr;
+
+// EXP_RX_PUSH_DRISC: payload slots in the DRISC's free L1 (one channel buffer each), and the DRISC stream register the
+// doorbell adds to (one the DRISC microbenchmark used as its doorbell under the DRISC firmware).
+// In 2D two-ERISC mode, forwarding uses stateless noc_inline_dw_write<REG> for downstream credits, which hardcodes
+// write_at_cmd_buf (3) rather than receiver_channel_forwarding_sync_cmd_buf_ids (read_cmd_buf = 1). Putting the
+// stateful doorbell on write_at_cmd_buf therefore collides with forwarding on packets that both forward and deliver
+// locally (forwarding overwrites buffer 3 with the downstream router's credit register and -1, and the stateful
+// doorbell then sends a second -1 to the downstream router). read_cmd_buf (1) is unused on the receiving ERISC in 2D
+// two-ERISC mode once setup_edm_noc_cmd_buf has run before the main loop. In 1D, stateful forwarding uses read_cmd_buf
+// (1) and leaves write_at_cmd_buf (3) to local atomics.
+constexpr uint32_t exp_push_drisc_doorbell_stream_id = 13;
+constexpr uint32_t exp_push_drisc_slot_bytes = channel_buffer_size;
+constexpr uint32_t exp_push_drisc_slots = !fabric_exp_rx_push_drisc ? 0
+                                          : exp_push_drisc_l1_size / exp_push_drisc_slot_bytes >= 8
+                                              ? 8
+                                              : exp_push_drisc_l1_size / exp_push_drisc_slot_bytes;
+constexpr uint32_t exp_push_drisc_ring_end = exp_push_drisc_l1_base + exp_push_drisc_slots * exp_push_drisc_slot_bytes;
+#if defined(FABRIC_2D)
+constexpr uint8_t exp_push_doorbell_cmd_buf = read_cmd_buf;
+static_assert(
+    !fabric_exp_rx_push_drisc || NUM_ACTIVE_ERISCS > 1,
+    "EXP_RX_PUSH_DRISC in 2D uses read_cmd_buf, which single-ERISC stateful 2D forwarding also uses");
+#else
+constexpr uint8_t exp_push_doorbell_cmd_buf = write_at_cmd_buf;
+#endif
+static_assert(
+    !fabric_exp_rx_push_drisc || !any_receiver_channel_serviced ||
+        (exp_push_drisc_slots > 0 && exp_push_drisc_l1_base % 16 == 0 && exp_push_drisc_slot_bytes % 16 == 0),
+    "EXP_RX_PUSH_DRISC: the builder found no DRISC with free L1 for this router");
+static_assert(
+    !fabric_exp_rx_push_drisc || (exp_push_doorbell_cmd_buf != tt::tt_fabric::local_chip_data_cmd_buf &&
+                                  exp_push_doorbell_cmd_buf != receiver_channel_forwarding_data_cmd_buf_ids[0]),
+    "EXP_RX_PUSH_DRISC's doorbell command buffer is used by the push or by forwarding");
+uint32_t exp_push_drisc_next_slot;
+
+FORCE_INLINE void exp_push_set_state() {
+    if constexpr (fabric_exp_rx_push_drisc) {
+        noc_inline_dw_write_set_state</*posted=*/false, /*set_val=*/true>(
+            get_noc_addr(
+                exp_push_drisc_x,
+                exp_push_drisc_y,
+                STREAM_REG_ADDR(
+                    exp_push_drisc_doorbell_stream_id, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX),
+                tt::tt_fabric::edm_to_local_chip_noc),
+            1u << REMOTE_DEST_BUF_WORDS_FREE_INC,
+            0xF,
+            exp_push_doorbell_cmd_buf,
+            tt::tt_fabric::edm_to_local_chip_noc,
+            tt::tt_fabric::forward_and_local_write_noc_vc);
+        noc_async_write_one_packet_with_trid_set_state<false>(
+            get_noc_addr(
+                exp_push_drisc_x, exp_push_drisc_y, exp_push_drisc_l1_base, tt::tt_fabric::edm_to_local_chip_noc),
+            tt::tt_fabric::local_chip_data_cmd_buf,
+            tt::tt_fabric::edm_to_local_chip_noc,
+            tt::tt_fabric::forward_and_local_write_noc_vc);
+        NOC_CMD_BUF_WRITE_REG(
+            tt::tt_fabric::edm_to_local_chip_noc,
+            tt::tt_fabric::local_chip_data_cmd_buf,
+            NOC_AT_LEN_BE,
+            exp_push_drisc_slot_bytes);
+        return;
+    }
+    if constexpr (fabric_exp_rx_push_lean) {
+        exp_push_doorbell_noc_addr = get_noc_addr(
+            my_x[tt::tt_fabric::edm_to_local_chip_noc],
+            my_y[tt::tt_fabric::edm_to_local_chip_noc],
+            STREAM_REG_ADDR(exp_push_doorbell_stream_id, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX),
+            tt::tt_fabric::edm_to_local_chip_noc);
+    }
+    if constexpr (fabric_exp_rx_local_as_push) {
+        noc_async_write_one_packet_with_trid_set_state<false>(
+            get_noc_addr(
+                my_x[tt::tt_fabric::edm_to_local_chip_noc],
+                my_y[tt::tt_fabric::edm_to_local_chip_noc],
+                exp_push_loopback_scratch_addr,
+                tt::tt_fabric::edm_to_local_chip_noc),
+            tt::tt_fabric::local_chip_data_cmd_buf,
+            tt::tt_fabric::edm_to_local_chip_noc,
+            tt::tt_fabric::forward_and_local_write_noc_vc);
+    }
+}
+
+#if defined(FABRIC_DRISC_OFFLOAD)
+static_assert(
+    drisc_ring_base_addr + drisc_ring_slots * channel_buffer_size <= exp_push_drisc_l1_base + exp_push_drisc_l1_size,
+    "DRISC 16-slot staging ring exceeds DRISC UNRESERVED L1");
+static_assert(
+    exp_stream_unused_in(sender_channel_free_slots_stream_ids, drisc_free_slots_stream_id) &&
+        exp_stream_unused_in(to_receiver_packets_sent_streams, drisc_free_slots_stream_id) &&
+        exp_stream_unused_in(to_sender_packets_acked_streams, drisc_free_slots_stream_id) &&
+        exp_stream_unused_in(to_sender_packets_completed_streams, drisc_free_slots_stream_id),
+    "FABRIC_DRISC_OFFLOAD free-slots stream register is in use on ERISC");
+
+uint32_t drisc_offload_next_slot_addr;
+
+FORCE_INLINE void drisc_offload_init_noc_state() {
+    constexpr uint8_t noc = tt::tt_fabric::edm_to_local_chip_noc;
+    noc_inline_dw_write_set_state</*posted=*/true, /*set_val=*/true>(
+        get_noc_addr(
+            exp_push_drisc_x,
+            exp_push_drisc_y,
+            STREAM_REG_ADDR(drisc_doorbell_stream_id, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX),
+            noc),
+        1u << REMOTE_DEST_BUF_WORDS_FREE_INC,
+        0xF,
+        read_cmd_buf,
+        noc,
+        tt::tt_fabric::forward_and_local_write_noc_vc);
+    noc_async_write_one_packet_with_trid_set_state</*posted=*/false>(
+        get_noc_addr(exp_push_drisc_x, exp_push_drisc_y, drisc_ring_base_addr, noc),
+        tt::tt_fabric::local_chip_data_cmd_buf,
+        noc,
+        tt::tt_fabric::forward_and_local_write_noc_vc);
+}
+
+FORCE_INLINE void drisc_offload_push_packet(uint32_t pkt_addr, uint32_t total_bytes, uint8_t trid) {
+    constexpr uint8_t noc = tt::tt_fabric::edm_to_local_chip_noc;
+    constexpr uint8_t data_cmd_buf = tt::tt_fabric::local_chip_data_cmd_buf;
+    const uint32_t dst_addr = drisc_offload_next_slot_addr;
+    const uint32_t next_addr = dst_addr + channel_buffer_size;
+    drisc_offload_next_slot_addr = next_addr == drisc_ring_end_addr ? drisc_ring_base_addr : next_addr;
+
+    while (!noc_cmd_buf_ready(noc, data_cmd_buf));
+    NOC_CMD_BUF_WRITE_REG(noc, data_cmd_buf, NOC_PACKET_TAG, NOC_PACKET_TAG_TRANSACTION_ID(trid));
+    ncrisc_noc_write_with_state<
+        DM_DEDICATED_NOC,
+        /*posted=*/false,
+        /*update_counter=*/true,
+        /*one_packet=*/false,
+        /*skip_cmdbuf_chk=*/true>(noc, data_cmd_buf, pkt_addr, dst_addr, total_bytes);
+    noc_inline_dw_write_with_state<
+        /*update_addr_lo=*/false,
+        /*update_counter=*/true,
+        /*posted=*/true,
+        /*update_addr_hi=*/false,
+        /*update_val=*/false,
+        InlineWriteDst::REG>(0, 0, read_cmd_buf, noc);
+}
+#endif
+
+// Local-chip delivery for the generic receiver path, with the throughput-experiment overrides applied
+// (see FabricExperimentFlags). The speedy paths call execute_chip_unicast_to_local_chip_impl directly.
+FORCE_INLINE void generic_rx_local_delivery_impl(
+    tt_l1_ptr PACKET_HEADER_TYPE* const packet_start,
+    uint16_t payload_size_bytes,
+    tt::tt_fabric::NocSendType noc_send_type,
+    uint8_t transaction_id,
+    uint8_t rx_channel_id) {
+    const uint32_t local_start = phase_profiler.open<PHASE_RX_LOCAL>();
+    if constexpr (fabric_exp_rx_skip_local_delivery) {
+        // Data writes are dropped on purpose: measures the RX interval without their local-delivery work.
+        if (!exp_local_delivery_is_data_only(packet_start, noc_send_type)) {
+            execute_chip_unicast_to_local_chip_impl(
+                packet_start, payload_size_bytes, noc_send_type, transaction_id, rx_channel_id);
+        }
+    } else if constexpr (fabric_exp_rx_local_as_push) {
+        if (exp_local_delivery_is_data_only(packet_start, noc_send_type)) {
+            uint32_t push_dst = exp_push_loopback_scratch_addr;
+            if constexpr (fabric_exp_rx_push_drisc) {
+                push_dst = exp_push_drisc_next_slot;
+                const uint32_t next = push_dst + exp_push_drisc_slot_bytes;
+                exp_push_drisc_next_slot = next == exp_push_drisc_ring_end ? exp_push_drisc_l1_base : next;
+            }
+            if constexpr (fabric_exp_rx_push_lean) {
+                // One command-buffer poll (the stock call polls twice), then the id, length, addresses and go.
+                constexpr uint32_t noc = tt::tt_fabric::edm_to_local_chip_noc;
+                constexpr uint32_t cmd_buf = tt::tt_fabric::local_chip_data_cmd_buf;
+                while (!noc_cmd_buf_ready(noc, cmd_buf));
+                NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_PACKET_TAG, NOC_PACKET_TAG_TRANSACTION_ID(transaction_id));
+                ncrisc_noc_write_with_state<
+                    DM_DEDICATED_NOC,
+                    /*posted=*/false,
+                    /*update_counter=*/true,
+                    /*one_packet=*/false,
+                    /*skip_cmdbuf_chk=*/true>(
+                    noc,
+                    cmd_buf,
+                    reinterpret_cast<uint32_t>(packet_start),
+                    push_dst,
+                    payload_size_bytes + sizeof(PACKET_HEADER_TYPE));
+                if constexpr (!fabric_exp_rx_push_drisc) {
+                    noc_inline_dw_write<InlineWriteDst::REG>(
+                        exp_push_doorbell_noc_addr, 1u << REMOTE_DEST_BUF_WORDS_FREE_INC, 0xF, noc);
+                }
+            } else {
+                noc_async_write_one_packet_with_trid_with_state<false>(
+                    reinterpret_cast<size_t>(packet_start),
+                    push_dst,
+                    payload_size_bytes + sizeof(PACKET_HEADER_TYPE),
+                    transaction_id,
+                    tt::tt_fabric::local_chip_data_cmd_buf,
+                    tt::tt_fabric::edm_to_local_chip_noc);
+            }
+            if constexpr (fabric_exp_rx_push_drisc) {
+                // Stateful doorbell: destination and value were set once, so this is a command-buffer poll and a go.
+                noc_inline_dw_write_with_state<
+                    /*update_addr_lo=*/false,
+                    /*update_counter=*/true,
+                    /*posted=*/false,
+                    /*update_addr_hi=*/false,
+                    /*update_val=*/false,
+                    InlineWriteDst::REG>(0, 0, exp_push_doorbell_cmd_buf, tt::tt_fabric::edm_to_local_chip_noc);
+            }
+        } else {
+            execute_chip_unicast_to_local_chip_impl(
+                packet_start, payload_size_bytes, noc_send_type, transaction_id, rx_channel_id);
+            exp_push_set_state();
+        }
+    } else if constexpr (fabric_exp_rx_local_as_single_write) {
+        if (noc_send_type == tt::tt_fabric::NocSendType::NOC_UNICAST_WRITE) {
+            noc_async_write_one_packet_with_trid<false, false>(
+                reinterpret_cast<size_t>(packet_start) + sizeof(PACKET_HEADER_TYPE),
+                packet_start->command_fields.unicast_write.noc_address,
+                payload_size_bytes,
+                transaction_id,
+                tt::tt_fabric::local_chip_data_cmd_buf,
+                tt::tt_fabric::edm_to_local_chip_noc,
+                tt::tt_fabric::forward_and_local_write_noc_vc);
+        } else {
+            execute_chip_unicast_to_local_chip_impl(
+                packet_start, payload_size_bytes, noc_send_type, transaction_id, rx_channel_id);
+        }
+    } else {
+        execute_chip_unicast_to_local_chip_impl(
+            packet_start, payload_size_bytes, noc_send_type, transaction_id, rx_channel_id);
+    }
+    phase_profiler.close<PHASE_RX_LOCAL>(local_start);
+}
+
+FORCE_INLINE void generic_rx_local_delivery(
+    tt_l1_ptr PACKET_HEADER_TYPE* const packet_start,
+    uint16_t payload_size_bytes,
+    uint8_t transaction_id,
+    uint8_t rx_channel_id) {
+    auto packed = PACKET_HEADER_TYPE::PackedPayloadAndSendType::load(packet_start);
+    generic_rx_local_delivery_impl(
+        packet_start, payload_size_bytes, packed.noc_send_type, transaction_id, rx_channel_id);
+}
 
 template <typename DownstreamSenderT>
 FORCE_INLINE bool can_forward_packet_completely(
@@ -678,28 +1026,32 @@ FORCE_INLINE void receiver_forward_packet(
         bool not_last_destination_device = cached_routing_fields.value != tt::tt_fabric::RoutingFields::LAST_MCAST_VAL;
         // disable when dprint enabled due to noc cmd buf usage of DPRINT
         if (not_last_destination_device) {
+            const uint32_t forward_start = phase_profiler.open<PHASE_RX_FORWARD>();
             forward_payload_to_downstream_edm<enable_deadlock_avoidance, ENABLE_STATEFUL_NOC_APIS>(
                 packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interface, transaction_id);
             channel_trimming_usage_recorder.set_sender_channel_forwarded_to(rx_channel_id, 1);
+            phase_profiler.close<PHASE_RX_FORWARD>(forward_start);
         }
         if (start_distance_is_terminal_value) {
-            execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
+            generic_rx_local_delivery(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
         }
     } else if constexpr (std::is_same_v<ROUTING_FIELDS_TYPE, tt::tt_fabric::LowLatencyRoutingFields>) {
         const uint32_t routing = cached_routing_fields.value & LowLatencyFields::FIELD_MASK;
         uint16_t payload_size_bytes = packet_start->payload_size_bytes;
         switch (routing) {
             case LowLatencyFields::WRITE_ONLY:
-                execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
+                generic_rx_local_delivery(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
                 break;
-            case LowLatencyFields::FORWARD_ONLY:
+            case LowLatencyFields::FORWARD_ONLY: {
+                const uint32_t forward_start = phase_profiler.open<PHASE_RX_FORWARD>();
                 forward_payload_to_downstream_edm<enable_deadlock_avoidance, ENABLE_STATEFUL_NOC_APIS>(
                     packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interface, transaction_id);
+                phase_profiler.close<PHASE_RX_FORWARD>(forward_start);
 
                 // In 1D, the forwarding sender channel is always sender channel 1
                 // (channel 0 is worker, channel 1 receives forwarded traffic from upstream)
                 channel_trimming_usage_recorder.set_sender_channel_forwarded_to(rx_channel_id, 1);
-                break;
+            } break;
             case LowLatencyFields::WRITE_AND_FORWARD: {
                 // Resolve noc_send_type via the same packed 4B load the local-write path uses, then
                 // reuse it through the _impl entry point so the standard path does no extra L1 read
@@ -710,7 +1062,7 @@ FORCE_INLINE void receiver_forward_packet(
                     // write_idx/chip_idx advance so the downstream chip picks the next group. The advance
                     // must precede the forward because forwarding sends the (mutated) header downstream,
                     // and must follow the write because the write reads the pre-advance chip_idx.
-                    execute_chip_unicast_to_local_chip_impl(
+                    generic_rx_local_delivery_impl(
                         packet_start, payload_size_bytes, packed.noc_send_type, transaction_id, rx_channel_id);
                     auto& sparse = packet_start->command_fields.sparse_mcast_write;
                     sparse.write_idx += sparse.counts[sparse.chip_idx];
@@ -722,13 +1074,15 @@ FORCE_INLINE void receiver_forward_packet(
                         downstream_edm_interface,
                         transaction_id);
                 } else {
+                    const uint32_t forward_start = phase_profiler.open<PHASE_RX_FORWARD>();
                     forward_payload_to_downstream_edm<enable_deadlock_avoidance, ENABLE_STATEFUL_NOC_APIS>(
                         packet_start,
                         payload_size_bytes,
                         cached_routing_fields,
                         downstream_edm_interface,
                         transaction_id);
-                    execute_chip_unicast_to_local_chip_impl(
+                    phase_profiler.close<PHASE_RX_FORWARD>(forward_start);
+                    generic_rx_local_delivery_impl(
                         packet_start, payload_size_bytes, packed.noc_send_type, transaction_id, rx_channel_id);
                 }
                 // In 1D, the forwarding sender channel is always sender channel 1
@@ -758,7 +1112,7 @@ FORCE_INLINE void forward_to_local_destination(
         execute_chip_unicast_to_relay(
             local_relay_interface, packet_start, payload_size_bytes, transaction_id, rx_channel_id);
     } else {
-        execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
+        generic_rx_local_delivery(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
     }
 }
 
@@ -1186,6 +1540,277 @@ FORCE_INLINE void update_bw_cycles(
     }
 }
 
+// Experiment (TT_FABRIC_EXP_STACK_PAINT): stack depth. kernel_main fills the free stack, from its stack pointer down
+// to the end of this kernel's local-data-memory sections, with a pattern; the outer loop rescans it every 64
+// iterations (and teardown once more) and records the lowest word written in this ERISC's phase-profile block. On
+// ERISC0 this includes the base firmware routines the router calls on its own stack (context switch, link status).
+constexpr uint32_t exp_stack_pattern = 0x57AC57AC;
+uint32_t exp_stack_main_sp;
+uint32_t exp_stack_scan_counter;
+
+FORCE_INLINE uint32_t exp_stack_limit() {
+    extern uint32_t __ldm_bss_end[];
+    return (reinterpret_cast<uint32_t>(__ldm_bss_end) + 15) & ~15u;
+}
+
+FORCE_INLINE void exp_stack_report(uint32_t lowest_used) {
+    auto* block = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+        phase_profile_buffer_addr + MY_ERISC_ID * sizeof(FabricPhaseProfile));
+    block[offsetof(FabricPhaseProfile, stack_main_sp) / sizeof(uint32_t)] = exp_stack_main_sp;
+    block[offsetof(FabricPhaseProfile, stack_lowest_used) / sizeof(uint32_t)] = lowest_used;
+    block[offsetof(FabricPhaseProfile, stack_limit) / sizeof(uint32_t)] = exp_stack_limit();
+    block[offsetof(FabricPhaseProfile, stack_painted) / sizeof(uint32_t)] = 1;
+}
+
+// Inlined into kernel_main, so the fill starts right below kernel_main's frame and uses no stack itself.
+FORCE_INLINE void exp_paint_stack() {
+    if constexpr (fabric_exp_stack_paint) {
+        uint32_t sp;
+        asm volatile("mv %0, sp" : "=r"(sp));
+        exp_stack_main_sp = sp;
+        volatile uint32_t* p = reinterpret_cast<volatile uint32_t*>(sp & ~15u);
+        volatile uint32_t* const end = reinterpret_cast<volatile uint32_t*>(exp_stack_limit());
+        while (p > end) {
+            *--p = exp_stack_pattern;
+        }
+        exp_stack_report(sp);
+    }
+}
+
+FORCE_INLINE void exp_scan_stack(bool force = false) {
+    if constexpr (fabric_exp_stack_paint) {
+        if (force || (++exp_stack_scan_counter & 63) == 0) {
+            volatile uint32_t* p = reinterpret_cast<volatile uint32_t*>(exp_stack_limit());
+            while (*p == exp_stack_pattern) {
+                p++;
+            }
+            exp_stack_report(reinterpret_cast<uint32_t>(p));
+        }
+    }
+}
+
+// Experiment (EXP_TX_UPSTREAM_ON_E1), run by E1: the upstream side of the sender channels E0 services. Completions come
+// from the same L1 counters E0 reads (each core keeps its own processed count); the first four channels' counters are
+// contiguous and read in one group, so their latencies overlap. E1's main loop only checks the in-flight register
+// (exp_upstream_check) and calls the work out of line, when packets are in flight or every 16th iteration for the
+// worker connection check, so the upstream code does not take registers from the receive path.
+uint32_t exp_upstream_iteration;
+// Packets E0 has sent that E1 has not yet credited upstream: E0 adds one per send, E1 subtracts the completions it
+// processes. E1 skips the counter reads while it reads zero, so an ERISC whose E0 sends nothing pays one register
+// read per iteration. Stream 24 is unused by the router's 2D VC0 assignments (0-8, 30, 31).
+constexpr uint32_t exp_upstream_in_flight_stream_id = 24;
+static_assert(
+    !fabric_exp_tx_upstream_on_e1 ||
+        [] {
+            for (size_t i = 0; i < MAX_NUM_SENDER_CHANNELS; i++) {
+                if (sender_channel_free_slots_stream_ids[i] == exp_upstream_in_flight_stream_id ||
+                    to_sender_packets_acked_streams[i] == exp_upstream_in_flight_stream_id ||
+                    to_sender_packets_completed_streams[i] == exp_upstream_in_flight_stream_id) {
+                    return false;
+                }
+            }
+            for (size_t i = 0; i < MAX_NUM_RECEIVER_CHANNELS; i++) {
+                if (to_receiver_packets_sent_streams[i] == exp_upstream_in_flight_stream_id) {
+                    return false;
+                }
+            }
+            return true;
+        }(),
+    "EXP_TX_UPSTREAM_ON_E1 in-flight stream register collides with a router stream");
+
+template <size_t I, typename WorkerIFs, typename Credits, size_t N>
+FORCE_INLINE void exp_upstream_channel(
+    WorkerIFs& worker_interfaces,
+    std::array<bool, N>& connection_established,
+    Credits& credits,
+    uint32_t completions_received,
+    bool check_connections,
+    const std::array<uint32_t, MAX_NUM_SENDER_CHANNELS>& free_slots_stream_ids) {
+    if constexpr (I < N && peer_sender_channel_serviced[I]) {
+        auto& channel_credits = credits.template get<I>();
+        auto& worker_interface = worker_interfaces.template get<I>();
+        const uint32_t completions = completions_received - channel_credits.completions_received_and_processed;
+        if (completions != 0) {
+            channel_credits.increment_num_processed_completions(completions);
+            increment_local_update_ptr_val<exp_upstream_in_flight_stream_id>(-static_cast<int32_t>(completions));
+            send_credits_to_upstream_workers<enable_deadlock_avoidance, sender_ch_live_check_skip[I]>(
+                worker_interface, completions, connection_established[I]);
+        }
+        if constexpr (!sender_ch_live_check_skip[I]) {
+            if (check_connections && (!connection_established[I] || worker_interface.has_worker_teardown_request())) {
+                check_worker_connections<MY_ETH_CHANNEL, ENABLE_RISC_CPU_DATA_CACHE>(
+                    worker_interface,
+                    connection_established[I],
+                    free_slots_stream_ids[fabric_position_for_compact_sender(I)]);
+            }
+        }
+    }
+}
+
+template <typename WorkerIFs, typename Credits, size_t N>
+__attribute__((noinline)) void exp_run_upstream_steps(
+    WorkerIFs& worker_interfaces,
+    std::array<bool, N>& connection_established,
+    Credits& credits,
+    const std::array<uint32_t, MAX_NUM_SENDER_CHANNELS>& free_slots_stream_ids,
+    bool check_connections) {
+    uint32_t received[4];
+    asm volatile("lw %0, 0(%4)\n lw %1, 4(%4)\n lw %2, 8(%4)\n lw %3, 12(%4)\n"
+                 : "=&r"(received[0]), "=&r"(received[1]), "=&r"(received[2]), "=&r"(received[3])
+                 : "r"(to_sender_remote_completion_counters_base_address)
+                 : "memory");
+    exp_upstream_channel<0>(
+        worker_interfaces, connection_established, credits, received[0], check_connections, free_slots_stream_ids);
+    exp_upstream_channel<1>(
+        worker_interfaces, connection_established, credits, received[1], check_connections, free_slots_stream_ids);
+    exp_upstream_channel<2>(
+        worker_interfaces, connection_established, credits, received[2], check_connections, free_slots_stream_ids);
+    exp_upstream_channel<3>(
+        worker_interfaces, connection_established, credits, received[3], check_connections, free_slots_stream_ids);
+    [&]<size_t... Is>(std::index_sequence<Is...>) {
+        (exp_upstream_channel<Is + 4>(
+             worker_interfaces,
+             connection_established,
+             credits,
+             reinterpret_cast<volatile uint32_t*>(to_sender_remote_completion_counters_base_address)[Is + 4],
+             check_connections,
+             free_slots_stream_ids),
+         ...);
+    }(std::make_index_sequence<(N > 4 ? N - 4 : 0)>{});
+}
+
+// Experiment (EXP_TX_GROUPED_PACKET_CHECK): the free-slot stream registers of the first (up to) four VC0 sender
+// channels are read back to back in one asm block at the top of each loop iteration. Reads issued together overlap
+// (RESULTS §17: four cost ~4 cycles, against ~7 each when used at once); each channel masks its raw value where it
+// uses it, so nothing consumes a read right after it is issued.
+constexpr size_t exp_grouped_packet_check_channels = ACTUAL_VC0_SENDER_CHANNELS < 4 ? ACTUAL_VC0_SENDER_CHANNELS : 4;
+
+template <size_t CH>
+constexpr uint32_t exp_free_slots_reg_addr() {
+    return STREAM_REG_ADDR(
+        sender_channel_free_slots_stream_ids[fabric_position_for_compact_sender(CH)],
+        STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX);
+}
+
+template <size_t N = exp_grouped_packet_check_channels>
+FORCE_INLINE void exp_read_grouped_free_slots(uint32_t (&raw)[4]) {
+    if constexpr (N == 4) {
+        asm volatile("lw %0, 0(%4)\n lw %1, 0(%5)\n lw %2, 0(%6)\n lw %3, 0(%7)\n"
+                     : "=&r"(raw[0]), "=&r"(raw[1]), "=&r"(raw[2]), "=&r"(raw[3])
+                     : "r"(exp_free_slots_reg_addr<0>()),
+                       "r"(exp_free_slots_reg_addr<1>()),
+                       "r"(exp_free_slots_reg_addr<2>()),
+                       "r"(exp_free_slots_reg_addr<3>())
+                     : "memory");
+    } else if constexpr (N == 3) {
+        asm volatile(
+            "lw %0, 0(%3)\n lw %1, 0(%4)\n lw %2, 0(%5)\n"
+            : "=&r"(raw[0]), "=&r"(raw[1]), "=&r"(raw[2])
+            : "r"(exp_free_slots_reg_addr<0>()), "r"(exp_free_slots_reg_addr<1>()), "r"(exp_free_slots_reg_addr<2>())
+            : "memory");
+    } else if constexpr (N == 2) {
+        asm volatile("lw %0, 0(%2)\n lw %1, 0(%3)\n"
+                     : "=&r"(raw[0]), "=&r"(raw[1])
+                     : "r"(exp_free_slots_reg_addr<0>()), "r"(exp_free_slots_reg_addr<1>())
+                     : "memory");
+    } else if constexpr (N == 1) {
+        // A read issued alone does not overlap (RESULTS §17); kept for completeness.
+        asm volatile("lw %0, 0(%1)\n" : "=&r"(raw[0]) : "r"(exp_free_slots_reg_addr<0>()) : "memory");
+    }
+}
+
+// Experiment (EXP_TX_SKIP_IDLE_CHANNELS / EXP_TX_SKIP_IDLE_PER_CHANNEL): the forwarding channels in the grouped read
+// (compact 1..3) are skipped while they have no packet and no packets awaiting completion. A completion only follows
+// a send (EXP_TX_LEAN_COMPLETIONS), so a skipped visit misses no event. Their visits must have nothing else to do:
+// no connection liveness check, no batched upstream credits, no first-level acks, upstream credits on this ERISC.
+constexpr bool exp_skip_idle_channel(size_t ch) {
+    return ch >= 1 && ch < exp_grouped_packet_check_channels && is_sender_channel_serviced[ch];
+}
+constexpr bool exp_skip_idle_supported = [] {
+    // The main loop wraps the visits to channels 1 (and 2, 3 in 2D) in the skip: each serviced one must be covered.
+    for (size_t ch = 1; ch <= (is_2d_fabric ? 3 : 1) && ch < MAX_NUM_SENDER_CHANNELS; ch++) {
+        if (is_sender_channel_serviced[ch] && !exp_skip_idle_channel(ch)) {
+            return false;
+        }
+    }
+    bool any = false;
+    for (size_t ch = 1; ch < exp_grouped_packet_check_channels; ch++) {
+        if (is_sender_channel_serviced[ch]) {
+            if (!sender_ch_live_check_skip[ch]) {
+                return false;
+            }
+            any = true;
+        }
+    }
+    return any && fabric_exp_tx_lean_completions && fabric_exp_tx_grouped_packet_check && !ENABLE_FIRST_LEVEL_ACK_VC0 &&
+           !fabric_exp_tx_amortize_worker_credits && !fabric_exp_tx_upstream_on_e1;
+}();
+constexpr bool fabric_exp_tx_skip_idle_channels =
+    (fabric_exp_flags & EXP_TX_SKIP_IDLE_CHANNELS) != 0 && exp_skip_idle_supported;
+constexpr bool fabric_exp_tx_skip_idle_per_channel =
+    (fabric_exp_flags & EXP_TX_SKIP_IDLE_PER_CHANNEL) != 0 && exp_skip_idle_supported;
+
+// Packets the skipped channels have sent and not yet had completed.
+uint32_t exp_fwd_in_flight;
+
+// A free-slot count runs from 0 to the channel's slot count; with a power-of-two slot count N, bit N is set only when
+// all N slots are free, so one AND across the raw values tests every channel (the stream register's upper field sits
+// above bit 17).
+constexpr bool exp_skip_idle_bit_test = [] {
+    size_t n = 0;
+    for (size_t ch = 1; ch < exp_grouped_packet_check_channels; ch++) {
+        if (exp_skip_idle_channel(ch)) {
+            const size_t slots = SENDER_NUM_BUFFERS_ARRAY[ch];
+            if ((slots & (slots - 1)) != 0 || slots >= (1u << REMOTE_DEST_WORDS_FREE_WIDTH) || (n != 0 && slots != n)) {
+                return false;
+            }
+            n = slots;
+        }
+    }
+    return n != 0;
+}();
+
+template <size_t CH>
+FORCE_INLINE bool exp_channel_all_slots_free(uint32_t raw) {
+    if constexpr (exp_skip_idle_bit_test) {
+        return (raw & SENDER_NUM_BUFFERS_ARRAY[CH]) != 0;
+    } else {
+        return (raw & ((1 << REMOTE_DEST_WORDS_FREE_WIDTH) - 1)) == SENDER_NUM_BUFFERS_ARRAY[CH];
+    }
+}
+
+FORCE_INLINE bool exp_forwarding_channels_idle(const uint32_t (&raw)[4]) {
+    if constexpr (exp_skip_idle_bit_test) {
+        uint32_t all = ~0u;
+        size_t slots = 0;
+        if constexpr (exp_skip_idle_channel(1)) {
+            all &= raw[1];
+            slots = SENDER_NUM_BUFFERS_ARRAY[1];
+        }
+        if constexpr (exp_skip_idle_channel(2)) {
+            all &= raw[2];
+            slots = SENDER_NUM_BUFFERS_ARRAY[2];
+        }
+        if constexpr (exp_skip_idle_channel(3)) {
+            all &= raw[3];
+            slots = SENDER_NUM_BUFFERS_ARRAY[3];
+        }
+        return (all & slots) != 0 && exp_fwd_in_flight == 0;
+    } else {
+        bool all_free = true;
+        if constexpr (exp_skip_idle_channel(1)) {
+            all_free &= exp_channel_all_slots_free<1>(raw[1]);
+        }
+        if constexpr (exp_skip_idle_channel(2)) {
+            all_free &= exp_channel_all_slots_free<2>(raw[2]);
+        }
+        if constexpr (exp_skip_idle_channel(3)) {
+            all_free &= exp_channel_all_slots_free<3>(raw[3]);
+        }
+        return all_free && exp_fwd_in_flight == 0;
+    }
+}
+
 ////////////////////////////////////
 ////////////////////////////////////
 //  Main Control Loop
@@ -1196,6 +1821,7 @@ template <
     uint8_t to_receiver_pkts_sent_id,
     bool SKIP_CONNECTION_LIVENESS_CHECK,
     bool enable_first_level_ack,
+    uint8_t VC_RECEIVER_CHANNEL = 0,
     typename SenderChannelT,
     typename WorkerInterfaceT,
     typename ReceiverPointersT,
@@ -1215,7 +1841,8 @@ FORCE_INLINE
         uint32_t sender_channel_free_slots_stream_id,
         SenderChannelFromReceiverCreditsT& sender_channel_from_receiver_credits,
         PerfTelemetryRecorder& perf_telemetry_recorder,
-        LocalTelemetryT& local_fabric_telemetry) {
+        LocalTelemetryT& local_fabric_telemetry,
+        uint32_t exp_grouped_free_slots_raw = 0) {
     bool progress = false;
     // If the receiver has space, and we have one or more packets unsent from producer, then send one
     // TODO: convert to loop to send multiple packets back to back (or support sending multiple packets in one shot)
@@ -1228,6 +1855,20 @@ FORCE_INLINE
         !use_bubble_flow_control || enable_first_level_ack,
         "Bubble flow control and first level ack must be set to the same values");
 
+    if constexpr (fabric_exp_tx_skip_idle_per_channel && exp_skip_idle_channel(sender_channel_index)) {
+        if constexpr (fabric_exp_tx_idle_likely) {
+            if (exp_channel_all_slots_free<sender_channel_index>(exp_grouped_free_slots_raw) &&
+                !sender_channel_from_receiver_credits.has_completions_pending()) [[likely]] {
+                return false;
+            }
+        } else {
+            if (exp_channel_all_slots_free<sender_channel_index>(exp_grouped_free_slots_raw) &&
+                !sender_channel_from_receiver_credits.has_completions_pending()) {
+                return false;
+            }
+        }
+    }
+
     bool receiver_has_space_for_packet;
     if constexpr (use_bubble_flow_control) {
         receiver_has_space_for_packet = outbound_to_receiver_channel_pointers.num_free_slots >=
@@ -1235,67 +1876,285 @@ FORCE_INLINE
     } else {
         receiver_has_space_for_packet = outbound_to_receiver_channel_pointers.has_space_for_packet();
     }
-    uint32_t free_slots = get_ptr_val(sender_channel_free_slots_stream_id);
+    uint32_t free_slots;
+    if constexpr (fabric_exp_tx_grouped_packet_check && sender_channel_index < exp_grouped_packet_check_channels) {
+        // Read at the top of the iteration with the other channels' registers (exp_read_grouped_free_slots).
+        free_slots = exp_grouped_free_slots_raw & ((1 << REMOTE_DEST_WORDS_FREE_WIDTH) - 1);
+    } else {
+        free_slots = get_ptr_val(sender_channel_free_slots_stream_id);
+    }
     bool has_unsent_packet = free_slots != WorkerInterfaceT::num_buffers;
     bool can_send = receiver_has_space_for_packet && has_unsent_packet;
 
-    if constexpr (!ETH_TXQ_SPIN_WAIT_SEND_NEXT_DATA) {
+    // EXP_TX_SEND_EARLY_SIZE_READ: when a packet is ready, read its size just before the TX-queue reads so the L1
+    // read is in flight with them. Only then: an unused read left in flight delays the next read used at once.
+    uint32_t exp_payload_size_bytes = 0;
+    if constexpr (fabric_exp_tx_send_early_size_read) {
+        if (can_send) {
+            exp_payload_size_bytes = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(
+                                         local_sender_channel.get_cached_next_buffer_slot_addr())
+                                         ->get_payload_size_including_header();
+            if constexpr (!ETH_TXQ_SPIN_WAIT_SEND_NEXT_DATA && !fabric_exp_tx_no_send_txq_check) {
+                can_send = !internal_::eth_txq_is_busy(sender_txq_id);
+            }
+        }
+    } else if constexpr (!ETH_TXQ_SPIN_WAIT_SEND_NEXT_DATA && !fabric_exp_tx_no_send_txq_check) {
         can_send = can_send && !internal_::eth_txq_is_busy(sender_txq_id);
     }
+    constexpr bool exp_overlap_send_completion =
+#if defined(ARCH_BLACKHOLE)
+        fabric_exp_tx_send_overlap_completion && sender_channel_uses_counter_credits(sender_channel_index) &&
+        !ETH_TXQ_SPIN_WAIT_SEND_NEXT_DATA && !fabric_exp_tx_send_early_txq_read && !ENABLE_RISC_CPU_DATA_CACHE;
+#else
+        false;
+#endif
+    int32_t completions_since_last_check = 0;
     if (can_send) {
         did_something = true;
         progress = true;
+        phase_profiler.mark_progress();
+        const uint32_t send_start = phase_profiler.open<PHASE_TX_SEND>();
 
         auto* pkt_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(
             local_sender_channel.get_cached_next_buffer_slot_addr());
-        send_next_data<sender_channel_index, to_receiver_pkts_sent_id, SKIP_CONNECTION_LIVENESS_CHECK>(
+        constexpr size_t rem_rx_entry_idx =
+            eth_remote_channel_allocs::receiver_channel_to_entry_index[VC_RECEIVER_CHANNEL];
+        constexpr uint32_t rem_rx_base_addr =
+            static_cast<uint32_t>(eth_remote_channel_allocs::template Entry<rem_rx_entry_idx>::base_address);
+        send_next_data<
+            sender_channel_index,
+            to_receiver_pkts_sent_id,
+            SKIP_CONNECTION_LIVENESS_CHECK,
+            exp_overlap_send_completion,
+            rem_rx_base_addr>(
             local_sender_channel,
             local_sender_channel_worker_interface,
             outbound_to_receiver_channel_pointers,
-            perf_telemetry_recorder);
-        // Update local TX counters: split responsibility in multi-ERISC mode
-        if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
-            update_bw_counters(pkt_header, local_fabric_telemetry);
+            perf_telemetry_recorder,
+            exp_payload_size_bytes);
+        if constexpr (exp_overlap_send_completion) {
+            constexpr uint32_t txq_base = ETH_TXQ0_REGS_START + sender_txq_id * ETH_TXQ_REGS_SIZE;
+            constexpr uint32_t rem_stream_addr =
+                STREAM_REG_ADDR(to_receiver_pkts_sent_id, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX);
+            const uint32_t cptr =
+                reinterpret_cast<uint32_t>(sender_channel_from_receiver_credits.completions_received_counter_ptr);
+            uint32_t sent = sender_channel_from_receiver_credits.packets_sent;
+            const uint32_t proc = sender_channel_from_receiver_credits.completions_received_and_processed;
+            uint32_t free_rem = outbound_to_receiver_channel_pointers.num_free_slots;
+            uint32_t txq_st, comp_delta, cmd_wr;
+            if constexpr (fabric_exp_tx_lean_vc0_loop || fabric_exp_tx_send_ct_free_slot_stream) {
+                constexpr uint32_t ct_free_slot_stream_id =
+                    sender_channel_free_slots_stream_ids[fabric_position_for_compact_sender(sender_channel_index)];
+                constexpr uint32_t ct_lreg_addr =
+                    STREAM_REG_ADDR(ct_free_slot_stream_id, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX);
+                uint32_t lreg_addr;
+                asm volatile(
+                    "lw %[txq_st], 4(%[txq])\n\t"
+                    "lw %[txq_st], 8(%[txq])\n\t"
+                    "lw %[comp], 0(%[cptr])\n\t"
+                    "addi %[sent], %[sent], 1\n\t"
+                    "addi %[free], %[free], -1\n\t"
+                    "lui %[lreg], %[lreg_hi]\n\t"
+                    "addi %[lreg], %[lreg], %[lreg_lo]\n\t"
+                    "li %[cmd_wr], 4\n\t"
+                    "slli %[txq_st], %[txq_st], 15\n\t"
+                    "sub %[comp], %[comp], %[proc]\n\t"
+                    : [txq_st] "=&r"(txq_st),
+                      [comp] "=&r"(comp_delta),
+                      [cmd_wr] "=&r"(cmd_wr),
+                      [lreg] "=&r"(lreg_addr),
+                      [sent] "+r"(sent),
+                      [free] "+r"(free_rem)
+                    : [txq] "r"(txq_base),
+                      [cptr] "r"(cptr),
+                      [proc] "r"(proc),
+                      [lreg_hi] "i"(((ct_lreg_addr + 0x800u) >> 12) & 0xFFFFFu),
+                      [lreg_lo] "i"(static_cast<int32_t>(ct_lreg_addr << 20) >> 20)
+                    : "memory");
+                if (static_cast<int32_t>(txq_st) < 0) [[unlikely]] {
+                    while (internal_::eth_txq_is_busy(sender_txq_id)) {
+                    }
+                }
+                volatile uint32_t* const txq_regs = reinterpret_cast<volatile uint32_t*>(txq_base);
+                txq_regs[ETH_TXQ_DEST_ADDR >> 2] = rem_stream_addr;
+                txq_regs[ETH_TXQ_REMOTE_REG_DATA >> 2] = 1u << REMOTE_DEST_BUF_WORDS_FREE_INC;
+                txq_regs[ETH_TXQ_CMD >> 2] = cmd_wr;
+                outbound_to_receiver_channel_pointers.num_free_slots = free_rem;
+                if constexpr (fabric_exp_tx_lean_completions) {
+                    sender_channel_from_receiver_credits.packets_sent = sent;
+                }
+                if constexpr (fabric_exp_tx_skip_idle_channels && exp_skip_idle_channel(sender_channel_index)) {
+                    exp_fwd_in_flight++;
+                }
+                if constexpr (exp_tx_upstream_moved_off_this_erisc) {
+                    increment_local_update_ptr_val<exp_upstream_in_flight_stream_id>(1);
+                }
+                if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
+                    update_bw_counters(pkt_header, local_fabric_telemetry);
+                }
+                *reinterpret_cast<volatile uint32_t*>(lreg_addr) = 1u << REMOTE_DEST_BUF_WORDS_FREE_INC;
+                completions_since_last_check = static_cast<int32_t>(comp_delta);
+            } else {
+                constexpr uint32_t stream0_update_addr =
+                    STREAM_REG_ADDR(0, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX);
+                uint32_t lreg = sender_channel_free_slots_stream_id;
+                asm volatile(
+                    "lw %[txq_st], 4(%[txq])\n\t"
+                    "lw %[txq_st], 8(%[txq])\n\t"
+                    "lw %[comp], 0(%[cptr])\n\t"
+                    "addi %[sent], %[sent], 1\n\t"
+                    "addi %[free], %[free], -1\n\t"
+                    "zext.b %[lreg], %[lreg]\n\t"
+                    "slli %[lreg], %[lreg], 12\n\t"
+                    "add %[lreg], %[lreg], %[sbase]\n\t"
+                    "li %[cmd_wr], 4\n\t"
+                    "slli %[txq_st], %[txq_st], 15\n\t"
+                    "sub %[comp], %[comp], %[proc]\n\t"
+                    : [txq_st] "=&r"(txq_st),
+                      [comp] "=&r"(comp_delta),
+                      [cmd_wr] "=&r"(cmd_wr),
+                      [sent] "+r"(sent),
+                      [free] "+r"(free_rem),
+                      [lreg] "+r"(lreg)
+                    : [txq] "r"(txq_base), [cptr] "r"(cptr), [sbase] "r"(stream0_update_addr), [proc] "r"(proc)
+                    : "memory");
+                if (static_cast<int32_t>(txq_st) < 0) [[unlikely]] {
+                    while (internal_::eth_txq_is_busy(sender_txq_id)) {
+                    }
+                }
+                volatile uint32_t* const txq_regs = reinterpret_cast<volatile uint32_t*>(txq_base);
+                txq_regs[ETH_TXQ_DEST_ADDR >> 2] = rem_stream_addr;
+                txq_regs[ETH_TXQ_REMOTE_REG_DATA >> 2] = 1u << REMOTE_DEST_BUF_WORDS_FREE_INC;
+                txq_regs[ETH_TXQ_CMD >> 2] = cmd_wr;
+                outbound_to_receiver_channel_pointers.num_free_slots = free_rem;
+                if constexpr (fabric_exp_tx_lean_completions) {
+                    sender_channel_from_receiver_credits.packets_sent = sent;
+                }
+                if constexpr (fabric_exp_tx_skip_idle_channels && exp_skip_idle_channel(sender_channel_index)) {
+                    exp_fwd_in_flight++;
+                }
+                if constexpr (exp_tx_upstream_moved_off_this_erisc) {
+                    increment_local_update_ptr_val<exp_upstream_in_flight_stream_id>(1);
+                }
+                if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
+                    update_bw_counters(pkt_header, local_fabric_telemetry);
+                }
+                *reinterpret_cast<volatile uint32_t*>(lreg) = 1u << REMOTE_DEST_BUF_WORDS_FREE_INC;
+                completions_since_last_check = static_cast<int32_t>(comp_delta);
+            }
+        } else {
+            if constexpr (fabric_exp_tx_lean_completions) {
+                sender_channel_from_receiver_credits.note_packet_sent();
+            }
+            if constexpr (fabric_exp_tx_skip_idle_channels && exp_skip_idle_channel(sender_channel_index)) {
+                exp_fwd_in_flight++;
+            }
+            if constexpr (exp_tx_upstream_moved_off_this_erisc) {
+                increment_local_update_ptr_val<exp_upstream_in_flight_stream_id>(1);
+            }
+            // Update local TX counters: split responsibility in multi-ERISC mode
+            if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
+                update_bw_counters(pkt_header, local_fabric_telemetry);
+            }
+            if constexpr (fabric_exp_tx_send_ct_free_slot_stream) {
+                increment_local_update_ptr_val<
+                    sender_channel_free_slots_stream_ids[fabric_position_for_compact_sender(sender_channel_index)]>(1);
+            } else {
+                increment_local_update_ptr_val(sender_channel_free_slots_stream_id, 1);
+            }
         }
-        increment_local_update_ptr_val(sender_channel_free_slots_stream_id, 1);
+        phase_profiler.close<PHASE_TX_SEND>(send_start);
+        phase_profiler.count_pkt();
+        fabric_experiment_spin<fabric_exp_tx_delay>();
+    } else if (has_unsent_packet) {
+        phase_profiler.mark_blocked();
+        phase_profiler.count_event(receiver_has_space_for_packet ? EVENT_TX_BLOCKED_TXQ : EVENT_TX_BLOCKED_CREDIT);
     }
 
     // Process COMPLETIONs from receiver
-    int32_t completions_since_last_check =
-        sender_channel_from_receiver_credits.template get_num_unprocessed_completions_from_receiver<ENABLE_RISC_CPU_DATA_CACHE>();
+    if (!exp_overlap_send_completion || !can_send) {
+        if (!fabric_exp_tx_lean_completions || sender_channel_from_receiver_credits.has_completions_pending()) {
+            completions_since_last_check =
+                sender_channel_from_receiver_credits
+                    .template get_num_unprocessed_completions_from_receiver<ENABLE_RISC_CPU_DATA_CACHE>();
+        }
+    }
     if (completions_since_last_check) {
+        const uint32_t completion_start = phase_profiler.open<PHASE_TX_COMPLETION>();
         outbound_to_receiver_channel_pointers.num_free_slots += completions_since_last_check;
         sender_channel_from_receiver_credits.increment_num_processed_completions(completions_since_last_check);
+        if constexpr (fabric_exp_tx_skip_idle_channels && exp_skip_idle_channel(sender_channel_index)) {
+            exp_fwd_in_flight -= completions_since_last_check;
+        }
 
         // When first level ack is enabled, then credits can be sent to upstream workers as soon as we see
         // the ack, we don't need to wait for the completion from receiver. Therefore, only when we have
         // first level ack disabled will we send credits to workers on receipt of completion acknowledgements.
         if constexpr (!enable_first_level_ack) {
-            send_credits_to_upstream_workers<enable_deadlock_avoidance, SKIP_CONNECTION_LIVENESS_CHECK>(
-                local_sender_channel_worker_interface, completions_since_last_check, channel_connection_established);
+            if constexpr (fabric_exp_tx_amortize_worker_credits) {
+                exp_pending_upstream_credits[sender_channel_index] += completions_since_last_check;
+            } else if constexpr (!exp_tx_upstream_moved_off_this_erisc) {  // else E1 returns the credits
+                send_credits_to_upstream_workers<enable_deadlock_avoidance, SKIP_CONNECTION_LIVENESS_CHECK>(
+                    local_sender_channel_worker_interface,
+                    completions_since_last_check,
+                    channel_connection_established);
+            }
         }
+        phase_profiler.close<PHASE_TX_COMPLETION>(completion_start);
     }
 
     // Process ACKs from receiver
     // ACKs are processed second to avoid any sort of races. If we process acks second,
     // we are guaranteed to see equal to or greater the number of acks than completions
     if constexpr (enable_first_level_ack) {
-        auto acks_since_last_check = sender_channel_from_receiver_credits.template get_num_unprocessed_acks_from_receiver<ENABLE_RISC_CPU_DATA_CACHE>();
+        uint32_t acks_since_last_check = 0;
+        if (!fabric_exp_tx_lean_completions || sender_channel_from_receiver_credits.has_acks_pending()) {
+            acks_since_last_check = sender_channel_from_receiver_credits
+                                        .template get_num_unprocessed_acks_from_receiver<ENABLE_RISC_CPU_DATA_CACHE>();
+        }
         if (acks_since_last_check > 0) {
+            const uint32_t ack_start = phase_profiler.open<PHASE_TX_COMPLETION>();
             sender_channel_from_receiver_credits.increment_num_processed_acks(acks_since_last_check);
-            send_credits_to_upstream_workers<enable_deadlock_avoidance, SKIP_CONNECTION_LIVENESS_CHECK>(
-                local_sender_channel_worker_interface, acks_since_last_check, channel_connection_established);
+            if constexpr (fabric_exp_tx_amortize_worker_credits) {
+                exp_pending_upstream_credits[sender_channel_index] += acks_since_last_check;
+            } else {
+                send_credits_to_upstream_workers<enable_deadlock_avoidance, SKIP_CONNECTION_LIVENESS_CHECK>(
+                    local_sender_channel_worker_interface, acks_since_last_check, channel_connection_established);
+            }
+            phase_profiler.close<PHASE_TX_COMPLETION>(ack_start);
         }
     }
 
-    if constexpr (!SKIP_CONNECTION_LIVENESS_CHECK) {
+    if constexpr (fabric_exp_tx_amortize_worker_credits) {
+        constexpr int32_t credit_batch =
+            WorkerInterfaceT::num_buffers >= 8
+                ? 4
+                : (WorkerInterfaceT::num_buffers >= 2 ? WorkerInterfaceT::num_buffers / 2 : 1);
+        const int32_t pending = exp_pending_upstream_credits[sender_channel_index];
+        if (pending >= credit_batch || (pending > 0 && !has_unsent_packet)) {
+            const uint32_t credit_start = phase_profiler.open<PHASE_TX_COMPLETION>();
+            send_credits_to_upstream_workers<enable_deadlock_avoidance, SKIP_CONNECTION_LIVENESS_CHECK>(
+                local_sender_channel_worker_interface, pending, channel_connection_established);
+            exp_pending_upstream_credits[sender_channel_index] = 0;
+            phase_profiler.close<PHASE_TX_COMPLETION>(credit_start);
+        }
+    }
+
+    if constexpr (!SKIP_CONNECTION_LIVENESS_CHECK && !exp_tx_upstream_moved_off_this_erisc) {
+        bool poll_connection = true;
+        if constexpr (fabric_exp_tx_lazy_conn_check) {
+            poll_connection = (exp_conn_poll_counter[sender_channel_index]++ & 0xF) == 0;
+        }
         auto check_connection_status =
-            !channel_connection_established || local_sender_channel_worker_interface.has_worker_teardown_request();
+            poll_connection &&
+            (!channel_connection_established || local_sender_channel_worker_interface.has_worker_teardown_request());
         if (check_connection_status) {
+            const uint32_t conn_start = phase_profiler.open<PHASE_TX_CONN>();
             check_worker_connections<MY_ETH_CHANNEL, ENABLE_RISC_CPU_DATA_CACHE>(
                 local_sender_channel_worker_interface,
                 channel_connection_established,
                 sender_channel_free_slots_stream_id);
+            phase_profiler.close<PHASE_TX_CONN>(conn_start);
         }
     }
     return progress;
@@ -1324,17 +2183,20 @@ FORCE_INLINE
         std::array<uint32_t, MAX_NUM_SENDER_CHANNELS>& local_sender_channel_free_slots_stream_ids,
         SenderChannelFromReceiverCredits<NUM_SENDER_CHANNELS>& sender_channel_from_receiver_credits,
         PerfTelemetryRecorder& perf_telemetry_recorder,
-        LocalTelemetryT& local_fabric_telemetry) {
+        LocalTelemetryT& local_fabric_telemetry,
+        uint32_t exp_grouped_free_slots_raw = 0) {
     if constexpr (is_sender_channel_serviced[sender_channel_index]) {
+        const uint32_t visit_start = phase_profiler.open<PHASE_TX_VISIT>();
         // the cache is invalidated here because the channel will read some
         // L1 locations to see if it can make progress
         router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
 
-        return run_sender_channel_step_impl<
+        const bool progress = run_sender_channel_step_impl<
             sender_channel_index,
             to_receiver_packets_sent_streams[VC_RECEIVER_CHANNEL],
             sender_ch_live_check_skip[sender_channel_index],
-            enable_first_level_ack>(
+            enable_first_level_ack,
+            VC_RECEIVER_CHANNEL>(
             local_sender_channels.template get<sender_channel_index>(),
             local_sender_channel_worker_interfaces.template get<sender_channel_index>(),
             outbound_to_receiver_channel_pointers,
@@ -1343,9 +2205,39 @@ FORCE_INLINE
             local_sender_channel_free_slots_stream_ids[fabric_position_for_compact_sender(sender_channel_index)],
             sender_channel_from_receiver_credits.template get<sender_channel_index>(),
             perf_telemetry_recorder,
-            local_fabric_telemetry);
+            local_fabric_telemetry,
+            exp_grouped_free_slots_raw);
+        phase_profiler.close<PHASE_TX_VISIT>(visit_start);
+        return progress;
     }
     return false;
+}
+
+// Experiment (EXP_RX_GROUPED_READS): the receiver step's register reads issued back to back so their latencies
+// overlap (RESULTS §17: up to four register reads in flight cost ~4-8 cycles, against ~7-8 each used at once). The
+// TX queue's command register is read and discarded before its status, as eth_txq_is_busy does (BH-55).
+template <uint32_t pkts_sent_stream_id>
+FORCE_INLINE void exp_read_rx_group(
+    uint32_t write_sent_reg_addr, uint32_t& pkts_raw, uint32_t& txq_status_raw, uint32_t& write_sent_raw) {
+    constexpr uint32_t pkts_addr =
+        STREAM_REG_ADDR(pkts_sent_stream_id, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX);
+    constexpr uint32_t txq_cmd_addr = ETH_TXQ0_REGS_START + receiver_txq_id * ETH_TXQ_REGS_SIZE + ETH_TXQ_CMD;
+    constexpr uint32_t txq_status_addr = ETH_TXQ0_REGS_START + receiver_txq_id * ETH_TXQ_REGS_SIZE + ETH_TXQ_STATUS;
+    asm volatile("lw %0, 0(%3)\n lw %1, 0(%4)\n lw %1, 0(%5)\n lw %2, 0(%6)\n"
+                 : "=&r"(pkts_raw), "=&r"(txq_status_raw), "=&r"(write_sent_raw)
+                 : "r"(pkts_addr), "r"(txq_cmd_addr), "r"(txq_status_addr), "r"(write_sent_reg_addr)
+                 : "memory");
+}
+
+// EXP_RX_GROUPED_NO_PREFETCH: the same group without the packets-received count.
+FORCE_INLINE void exp_read_rx_completion_group(
+    uint32_t write_sent_reg_addr, uint32_t& txq_status_raw, uint32_t& write_sent_raw) {
+    constexpr uint32_t txq_cmd_addr = ETH_TXQ0_REGS_START + receiver_txq_id * ETH_TXQ_REGS_SIZE + ETH_TXQ_CMD;
+    constexpr uint32_t txq_status_addr = ETH_TXQ0_REGS_START + receiver_txq_id * ETH_TXQ_REGS_SIZE + ETH_TXQ_STATUS;
+    asm volatile("lw %0, 0(%2)\n lw %0, 0(%3)\n lw %1, 0(%4)\n"
+                 : "=&r"(txq_status_raw), "=&r"(write_sent_raw)
+                 : "r"(txq_cmd_addr), "r"(txq_status_addr), "r"(write_sent_reg_addr)
+                 : "memory");
 }
 
 template <
@@ -1362,20 +2254,29 @@ template <
     typename ReceiverChannelResponseCreditSenderT>
 FORCE_INLINE bool run_receiver_channel_step_impl(
     ReceiverChannelBufferT& local_receiver_channel,
-    std::array<DownstreamSenderT, DOWNSTREAM_EDM_SIZE>& downstream_edm_interfaces,
-    LocalRelayInterfaceT& local_relay_interface,
+    [[maybe_unused]] std::array<DownstreamSenderT, DOWNSTREAM_EDM_SIZE>& downstream_edm_interfaces,
+    [[maybe_unused]] LocalRelayInterfaceT& local_relay_interface,
     ReceiverChannelPointersT& receiver_channel_pointers,
     WriteTridTracker& receiver_channel_trid_tracker,
-    std::array<uint8_t, num_eth_ports>& port_direction_table,
+    [[maybe_unused]] std::array<uint8_t, num_eth_ports>& port_direction_table,
     ReceiverChannelResponseCreditSenderT& receiver_channel_response_credit_sender,
-    const tt::tt_fabric::routing_l1_info_t& routing_table,
-    uint16_t my_mesh_id,
-    uint8_t my_mesh_coord_y,
-    uint8_t my_mesh_coord_x,
+    [[maybe_unused]] const tt::tt_fabric::routing_l1_info_t& routing_table,
+    [[maybe_unused]] uint16_t my_mesh_id,
+    [[maybe_unused]] uint8_t my_mesh_coord_y,
+    [[maybe_unused]] uint8_t my_mesh_coord_x,
     LocalTelemetryT& local_fabric_telemetry) {
     bool progress = false;
     auto& wr_sent_counter = receiver_channel_pointers.wr_sent_counter;
-    auto pkts_received_since_last_check = get_ptr_val<to_receiver_pkts_sent_id>();
+    // EXP_RX_GROUPED_READS: the packets-received count was read at the end of the previous step, together with
+    // that step's completion reads (see the completion section below).
+    constexpr bool exp_grouped_reads =
+        fabric_exp_rx_grouped_reads && !enable_first_level_ack && WriteTridTracker::SINGLE_NOC;
+    int32_t pkts_received_since_last_check;
+    if constexpr (exp_grouped_reads && fabric_exp_rx_grouped_prefetch) {
+        pkts_received_since_last_check = receiver_channel_pointers.exp_prefetched_pkts_received;
+    } else {
+        pkts_received_since_last_check = get_ptr_val<to_receiver_pkts_sent_id>();
+    }
 
     bool unwritten_packets;
     if constexpr (enable_first_level_ack) {
@@ -1403,9 +2304,11 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
                 src_ch_id = receiver_channel_pointers.get_src_chan_id(receiver_buffer_index);
             }
 
+            const uint32_t ack_start = phase_profiler.open<PHASE_RX_ACK>();
             receiver_send_received_ack<ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK>(
                 receiver_channel_response_credit_sender, src_ch_id);
             ack_counter.increment();
+            phase_profiler.close<PHASE_RX_ACK>(ack_start);
         }
         unwritten_packets = !wr_sent_counter.is_caught_up_to(ack_counter);
 
@@ -1419,142 +2322,199 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
     receiver_forward_timer.open();
 
     if (unwritten_packets) {
+        const uint32_t rx_start = phase_profiler.open<PHASE_RX_DECODE_ADMIT>();
         router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
         auto receiver_buffer_index = wr_sent_counter.get_buffer_index();
         tt_l1_ptr PACKET_HEADER_TYPE* packet_header = const_cast<PACKET_HEADER_TYPE*>(
             local_receiver_channel.template get_packet_header<PACKET_HEADER_TYPE>(receiver_buffer_index));
 
-        ROUTING_FIELDS_TYPE cached_routing_fields{};
-#ifndef FABRIC_2D
-        cached_routing_fields = packet_header->routing_fields;
-#endif
-        if constexpr (!skip_src_ch_id_update && !enable_first_level_ack) {
-            receiver_channel_pointers.set_src_chan_id(receiver_buffer_index, packet_header->src_ch_id);
-        }
-        // Decode action is the dispatch word: LIVE slots test action_bit(dirs[slot]). Local
-        // delivery stays a separate flag (bit 5).
-        uint8_t action = 0;
-        bool local_deliver = false;
-        // Set only when this chip is the mesh's exit for the packet; carries the resolved INTERMESH
-        // downstream slot from admission to the forward phase.
-        bool intermesh_egress = false;
-        uint8_t intermesh_egress_index = 0;
-        bool can_send_to_all_local_chip_receivers;
-        if constexpr (is_2d_fabric) {
-#if defined(FABRIC_2D)
-            // need the FABRIC_2D ifdef since the packet header for 1D does not have route_buffer field in it.
-            {
-                // 2D action-map RX path: landing intercept (boundary receivers only) -> decode ->
-                // intermesh-exit intercept -> linear LIVE admit on action bits. No hop program
-                // and no header mutation. Self is not in fwd_dirs so no arm tests it; extra bits
-                // outside LIVE are ignored. boundary_dir_is_addressable is the only remaining
-                // bounds check, because a bad intermesh exit index walks off the compact array.
-                if constexpr (receiver_channel_is_intermesh_ingress[receiver_channel]) {
-                    // Runs before decode, which would otherwise consume stale source-mesh action maps. The
-                    // landing encode replaces them from this mesh's destination-major route table.
-                    fabric_set_2d_intermesh_landing_route(packet_header, routing_table, MESH_Y_SIZE, MESH_X_SIZE);
-                    // Rebuilt map requires Y action decode first.
-                    action = Routing2DCodec::decode_action_y_first(
-                        packet_header->route_buffer, my_mesh_coord_y, my_mesh_coord_x, MESH_Y_SIZE);
-                } else {
-                    action = Routing2DCodec::decode_action<static_cast<eth_chan_directions>(my_direction)>(
-                        packet_header->route_buffer, my_mesh_coord_y, my_mesh_coord_x, MESH_Y_SIZE);
-                }
-                // This chip is the exit when the maps say deliver here but the final mesh is
-                // elsewhere. CT-gated so interior routers skip the mesh-id compare.
-                bool intermesh_exit = false;
-                if constexpr (is_intramesh_router_on_edge) {
-                    intermesh_exit =
-                        Routing2DCodec::action_is_intermesh_exit(action, packet_header->dst_start_mesh_id, my_mesh_id);
-                }
-                if (intermesh_exit) {
-                    // Forward the packet as-is on the INTERMESH egress in boundary_dir, with no
-                    // local delivery and no map rebuild.
-                    const auto boundary_dir = static_cast<eth_chan_directions>(
-                        routing_table.inter_mesh_direction_table.get_original_direction(
-                            packet_header->dst_start_mesh_id));
-                    // boundary_dir is chosen per destination mesh, so unlike a decoded action it is
-                    // not constrained to the arms this router was built with. Indexing the compact
-                    // array unchecked would read past its end, so fail-stop instead.
-                    const bool boundary_dir_is_addressable =
-                        boundary_dir < eth_chan_directions::COUNT &&
-                        boundary_dir != static_cast<eth_chan_directions>(my_direction) &&
-                        get_downstream_edm_interface_index(boundary_dir) < downstream_edm_interfaces.size();
-                    if (!boundary_dir_is_addressable) {
-                        ASSERT(false);
-                        can_send_to_all_local_chip_receivers = false;
-                    } else {
-                        intermesh_egress = true;
-                        intermesh_egress_index = static_cast<uint8_t>(get_downstream_edm_interface_index(boundary_dir));
-                        can_send_to_all_local_chip_receivers =
-                            downstream_edm_interfaces[intermesh_egress_index]
-                                .template edm_has_space_for_packet<ENABLE_RISC_CPU_DATA_CACHE>();
-                    }
-                } else {
-                    local_deliver = (action & Routing2DCodec::ACTION_LOCAL_DELIVER) != 0;
-                    can_send_to_all_local_chip_receivers =
-                        admit_2d_dispatch(action, local_deliver, downstream_edm_interfaces, local_relay_interface);
-                }
-            }
-#endif
-        } else {
-#ifndef FABRIC_2D
-            can_send_to_all_local_chip_receivers =
-                can_forward_packet_completely(cached_routing_fields, downstream_edm_interfaces[0]);
-#endif
-        }
+#if defined(FABRIC_DRISC_OFFLOAD)
+        bool can_push = get_ptr_val<drisc_free_slots_stream_id>() != 0;
+        const bool admitted = can_push;
         if constexpr (enable_trid_flush_check_on_noc_txn) {
-            bool trid_flushed = receiver_channel_trid_tracker.transaction_flushed(receiver_buffer_index);
-            can_send_to_all_local_chip_receivers &= trid_flushed;
+            can_push = can_push && receiver_channel_trid_tracker.transaction_flushed(receiver_buffer_index);
         }
-        if (can_send_to_all_local_chip_receivers) {
+        if (can_push) {
+            const auto packed = PACKET_HEADER_TYPE::PackedPayloadAndSendType::load(packet_header);
+            if constexpr (!skip_src_ch_id_update && !enable_first_level_ack) {
+                receiver_channel_pointers.set_src_chan_id(receiver_buffer_index, packet_header->src_ch_id);
+            }
             did_something = true;
             progress = true;
-            // Count RX bytes/packets (header + payload) when consuming a packet from receiver buffer
+            phase_profiler.mark_progress();
+            phase_profiler.close<PHASE_RX_DECODE_ADMIT>(rx_start);
             if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
                 update_bw_counters(packet_header, local_fabric_telemetry);
             }
             channel_trimming_usage_recorder.set_receiver_channel_data_forwarded(receiver_channel);
-            if constexpr (!is_receiver_channel_forwarding_disabled[receiver_channel]) {
-                uint8_t trid = receiver_channel_trid_tracker.update_buffer_slot_to_next_trid_and_advance_trid_counter(
-                    receiver_buffer_index);
-                if constexpr (is_2d_fabric) {
-#if defined(FABRIC_2D)
-                    {
-                        if (intermesh_egress) {
-                            // The exit chip's only output is the INTERMESH egress, sent as-is.
-                            forward_payload_to_downstream_edm<enable_deadlock_avoidance, false>(
-                                packet_header,
-                                packet_header->payload_size_bytes,
-                                cached_routing_fields,
-                                downstream_edm_interfaces[intermesh_egress_index],
-                                trid);
-                            record_2d_forwarded_slots<receiver_channel>(1u << intermesh_egress_index);
-                        } else {
-                            // Same action byte as admission. Local delivery stays outside the scan.
-                            const uint8_t forwarded_slot_mask = forward_2d_dispatch(
-                                action, packet_header, cached_routing_fields, downstream_edm_interfaces, trid);
-                            record_2d_forwarded_slots<receiver_channel>(forwarded_slot_mask);
-                            if (local_deliver) {
-                                forward_to_local_destination<receiver_channel>(
-                                    local_relay_interface, packet_header, packet_header->payload_size_bytes, trid);
-                            }
-                        }
-                    }
-#endif
-                } else {
-#ifndef FABRIC_2D
-                    receiver_forward_packet<receiver_channel>(
-                        packet_header, cached_routing_fields, downstream_edm_interfaces[0], trid);
-#endif
-                }
-            }
+            const uint8_t trid = receiver_channel_trid_tracker.update_buffer_slot_to_next_trid_and_advance_trid_counter(
+                receiver_buffer_index);
+            const uint32_t local_start = phase_profiler.open<PHASE_RX_LOCAL>();
+            drisc_offload_push_packet(
+                reinterpret_cast<uint32_t>(packet_header),
+                packed.payload_size_bytes + sizeof(PACKET_HEADER_TYPE),
+                trid);
+            phase_profiler.close<PHASE_RX_LOCAL>(local_start);
+            increment_local_update_ptr_val<drisc_free_slots_stream_id>(-1);
             wr_sent_counter.increment();
-            // decrement the to_receiver_pkts_sent_id stream register by 1 since current packet has been processed.
             if constexpr (!enable_first_level_ack) {
                 increment_local_update_ptr_val<to_receiver_pkts_sent_id>(-1);
             }
+            phase_profiler.count_pkt();
+            fabric_experiment_spin<fabric_exp_rx_delay>();
+        } else {
+            phase_profiler.mark_blocked();
+            phase_profiler.count_event(admitted ? EVENT_RX_BLOCKED_TRID : EVENT_RX_BLOCKED_ADMIT);
         }
+#else
+        {
+            ROUTING_FIELDS_TYPE cached_routing_fields{};
+#ifndef FABRIC_2D
+            cached_routing_fields = packet_header->routing_fields;
+#endif
+            if constexpr (!skip_src_ch_id_update && !enable_first_level_ack) {
+                receiver_channel_pointers.set_src_chan_id(receiver_buffer_index, packet_header->src_ch_id);
+            }
+            // Decode action is the dispatch word: LIVE slots test action_bit(dirs[slot]). Local
+            // delivery stays a separate flag (bit 5).
+            uint8_t action = 0;
+            bool local_deliver = false;
+            // Set only when this chip is the mesh's exit for the packet; carries the resolved INTERMESH
+            // downstream slot from admission to the forward phase.
+            bool intermesh_egress = false;
+            uint8_t intermesh_egress_index = 0;
+            bool can_send_to_all_local_chip_receivers;
+            if constexpr (is_2d_fabric) {
+#if defined(FABRIC_2D)
+                // need the FABRIC_2D ifdef since the packet header for 1D does not have route_buffer field in it.
+                {
+                    // 2D action-map RX path: landing intercept (boundary receivers only) -> decode ->
+                    // intermesh-exit intercept -> linear LIVE admit on action bits. No hop program
+                    // and no header mutation. Self is not in fwd_dirs so no arm tests it; extra bits
+                    // outside LIVE are ignored. boundary_dir_is_addressable is the only remaining
+                    // bounds check, because a bad intermesh exit index walks off the compact array.
+                    if constexpr (receiver_channel_is_intermesh_ingress[receiver_channel]) {
+                        // Runs before decode, which would otherwise consume stale source-mesh action maps. The
+                        // landing encode replaces them from this mesh's destination-major route table.
+                        fabric_set_2d_intermesh_landing_route(packet_header, routing_table, MESH_Y_SIZE, MESH_X_SIZE);
+                        // Rebuilt map requires Y action decode first.
+                        action = Routing2DCodec::decode_action_y_first(
+                            packet_header->route_buffer, my_mesh_coord_y, my_mesh_coord_x, MESH_Y_SIZE);
+                    } else {
+                        action = Routing2DCodec::decode_action<static_cast<eth_chan_directions>(my_direction)>(
+                            packet_header->route_buffer, my_mesh_coord_y, my_mesh_coord_x, MESH_Y_SIZE);
+                    }
+                    // This chip is the exit when the maps say deliver here but the final mesh is
+                    // elsewhere. CT-gated so interior routers skip the mesh-id compare.
+                    bool intermesh_exit = false;
+                    if constexpr (is_intramesh_router_on_edge) {
+                        intermesh_exit = Routing2DCodec::action_is_intermesh_exit(
+                            action, packet_header->dst_start_mesh_id, my_mesh_id);
+                    }
+                    if (intermesh_exit) {
+                        // Forward the packet as-is on the INTERMESH egress in boundary_dir, with no
+                        // local delivery and no map rebuild.
+                        const auto boundary_dir = static_cast<eth_chan_directions>(
+                            routing_table.inter_mesh_direction_table.get_original_direction(
+                                packet_header->dst_start_mesh_id));
+                        // boundary_dir is chosen per destination mesh, so unlike a decoded action it is
+                        // not constrained to the arms this router was built with. Indexing the compact
+                        // array unchecked would read past its end, so fail-stop instead.
+                        const bool boundary_dir_is_addressable =
+                            boundary_dir < eth_chan_directions::COUNT &&
+                            boundary_dir != static_cast<eth_chan_directions>(my_direction) &&
+                            get_downstream_edm_interface_index(boundary_dir) < downstream_edm_interfaces.size();
+                        if (!boundary_dir_is_addressable) {
+                            ASSERT(false);
+                            can_send_to_all_local_chip_receivers = false;
+                        } else {
+                            intermesh_egress = true;
+                            intermesh_egress_index =
+                                static_cast<uint8_t>(get_downstream_edm_interface_index(boundary_dir));
+                            can_send_to_all_local_chip_receivers =
+                                downstream_edm_interfaces[intermesh_egress_index]
+                                    .template edm_has_space_for_packet<ENABLE_RISC_CPU_DATA_CACHE>();
+                        }
+                    } else {
+                        local_deliver = (action & Routing2DCodec::ACTION_LOCAL_DELIVER) != 0;
+                        can_send_to_all_local_chip_receivers =
+                            admit_2d_dispatch(action, local_deliver, downstream_edm_interfaces, local_relay_interface);
+                    }
+                }
+#endif
+            } else {
+#ifndef FABRIC_2D
+                can_send_to_all_local_chip_receivers =
+                    can_forward_packet_completely(cached_routing_fields, downstream_edm_interfaces[0]);
+#endif
+            }
+            const bool admitted = can_send_to_all_local_chip_receivers;
+            if constexpr (enable_trid_flush_check_on_noc_txn) {
+                bool trid_flushed = receiver_channel_trid_tracker.transaction_flushed(receiver_buffer_index);
+                can_send_to_all_local_chip_receivers &= trid_flushed;
+            }
+            if (can_send_to_all_local_chip_receivers) {
+                did_something = true;
+                progress = true;
+                phase_profiler.mark_progress();
+                phase_profiler.close<PHASE_RX_DECODE_ADMIT>(rx_start);
+                // Count RX bytes/packets (header + payload) when consuming a packet from receiver buffer
+                if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
+                    update_bw_counters(packet_header, local_fabric_telemetry);
+                }
+                channel_trimming_usage_recorder.set_receiver_channel_data_forwarded(receiver_channel);
+                if constexpr (!is_receiver_channel_forwarding_disabled[receiver_channel]) {
+                    uint8_t trid =
+                        receiver_channel_trid_tracker.update_buffer_slot_to_next_trid_and_advance_trid_counter(
+                            receiver_buffer_index);
+                    if constexpr (is_2d_fabric) {
+#if defined(FABRIC_2D)
+                        {
+                            if (intermesh_egress) {
+                                // The exit chip's only output is the INTERMESH egress, sent as-is.
+                                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false>(
+                                    packet_header,
+                                    packet_header->payload_size_bytes,
+                                    cached_routing_fields,
+                                    downstream_edm_interfaces[intermesh_egress_index],
+                                    trid);
+                                record_2d_forwarded_slots<receiver_channel>(1u << intermesh_egress_index);
+                            } else {
+                                // Same action byte as admission. Local delivery stays outside the scan.
+                                const uint32_t forward_start = phase_profiler.open<PHASE_RX_FORWARD>();
+                                const uint8_t forwarded_slot_mask = forward_2d_dispatch(
+                                    action, packet_header, cached_routing_fields, downstream_edm_interfaces, trid);
+                                record_2d_forwarded_slots<receiver_channel>(forwarded_slot_mask);
+                                if (forwarded_slot_mask != 0) {
+                                    phase_profiler.close<PHASE_RX_FORWARD>(forward_start);
+                                }
+                                if (local_deliver) {
+                                    forward_to_local_destination<receiver_channel>(
+                                        local_relay_interface, packet_header, packet_header->payload_size_bytes, trid);
+                                }
+                            }
+                        }
+#endif
+                    } else {
+#ifndef FABRIC_2D
+                        receiver_forward_packet<receiver_channel>(
+                            packet_header, cached_routing_fields, downstream_edm_interfaces[0], trid);
+#endif
+                    }
+                }
+                wr_sent_counter.increment();
+                // decrement the to_receiver_pkts_sent_id stream register by 1 since current packet has been processed.
+                if constexpr (!enable_first_level_ack) {
+                    increment_local_update_ptr_val<to_receiver_pkts_sent_id>(-1);
+                }
+                phase_profiler.count_pkt();
+                fabric_experiment_spin<fabric_exp_rx_delay>();
+            } else {
+                phase_profiler.mark_blocked();
+                phase_profiler.count_event(admitted ? EVENT_RX_BLOCKED_TRID : EVENT_RX_BLOCKED_ADMIT);
+            }
+        }
+#endif
     }
 
     // Close the code profiling timer
@@ -1578,12 +2538,73 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
             unsent_completions = unsent_completions && !internal_::eth_txq_is_busy(receiver_txq_id);
         }
         if (unsent_completions) {
+            const uint32_t completion_start = phase_profiler.open<PHASE_RX_COMPLETION>();
             // completion ptr incremented in callee
             auto receiver_buffer_index = wr_flush_counter.get_buffer_index();
             receiver_send_completion_ack<ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK>(
                 receiver_channel_response_credit_sender,
                 receiver_channel_pointers.get_src_chan_id(receiver_buffer_index));
             completion_counter.increment();
+            phase_profiler.close<PHASE_RX_COMPLETION>(completion_start);
+        }
+    } else if constexpr (fabric_exp_rx_batch_completion && !enable_first_level_ack) {
+        constexpr uint32_t batch_target = RECEIVER_NUM_BUFFERS_ARRAY[receiver_channel] >= 8 ? 4 : 1;
+        auto& completion_counter = receiver_channel_pointers.completion_counter;
+        const uint32_t uncompleted = completion_counter.distance_behind(wr_sent_counter);
+#if defined(FABRIC_DRISC_OFFLOAD)
+        // With DRISC offload, E1's push takes ~35 cycles while packets arrive over Ethernet every ~130 cycles, so
+        // progress is false on 2-3 polls between every arriving packet. Flush a full batch of 4 as soon as the 4th
+        // slot's write has left E1 L1, and only flush a partial 1..3 tail once the DRISC ring has completely drained.
+        const bool should_check_completion =
+            uncompleted > batch_target ||
+            (!progress &&
+             (uncompleted >= batch_target || (uncompleted != 0 && get_ptr_val<drisc_free_slots_stream_id>() ==
+                                                                      static_cast<int32_t>(drisc_ring_slots))));
+#else
+        // While packets keep arriving (progress == true), wait until a 5th slot has been issued so the first 4 slots
+        // have already drained from cmd_buf 0; when no packet arrived in this step (!progress), flush whatever slots
+        // are pending (1..4) as soon as they finish.
+        const bool should_check_completion = uncompleted > batch_target || (uncompleted != 0 && !progress);
+#endif
+        if (should_check_completion) {
+            const uint32_t batch = uncompleted > batch_target ? batch_target : uncompleted;
+            const auto base_idx = completion_counter.get_buffer_index();
+            const auto last_idx = tt::tt_fabric::BufferIndex{
+                tt::tt_fabric::wrap_increment_n<RECEIVER_NUM_BUFFERS_ARRAY[receiver_channel]>(
+                    base_idx.get(), batch - 1)};
+            bool can_send_completion = receiver_channel_trid_tracker.transaction_flushed(last_idx);
+#if !defined(FABRIC_DRISC_OFFLOAD)
+            if (!progress && batch > 1) {
+                can_send_completion =
+                    can_send_completion && receiver_channel_trid_tracker.transaction_flushed(base_idx);
+            }
+#endif
+            if constexpr (!ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK) {
+                can_send_completion = can_send_completion && !internal_::eth_txq_is_busy(receiver_txq_id);
+            }
+            if (can_send_completion) {
+                const uint32_t completion_start = phase_profiler.open<PHASE_RX_COMPLETION>();
+                if constexpr (skip_src_ch_id_update) {
+                    receiver_send_completion_ack<ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK>(
+                        receiver_channel_response_credit_sender, receiver_channel_pointers.get_src_chan_id(), batch);
+                } else {
+                    auto idx = base_idx;
+                    for (uint32_t k = 0; k < batch; k++) {
+                        receiver_channel_response_credit_sender.accumulate_completion_credit(
+                            receiver_channel_pointers.get_src_chan_id(idx), 1);
+                        receiver_channel_trid_tracker.clear_trid_at_buffer_slot(idx);
+                        idx = tt::tt_fabric::BufferIndex{
+                            tt::tt_fabric::wrap_increment<RECEIVER_NUM_BUFFERS_ARRAY[receiver_channel]>(idx.get())};
+                    }
+                    if constexpr (ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK) {
+                        while (internal_::eth_txq_is_busy(receiver_txq_id)) {
+                        }
+                    }
+                    receiver_channel_response_credit_sender.flush_completion_credits();
+                }
+                completion_counter.increment_n(batch);
+                phase_profiler.close<PHASE_RX_COMPLETION>(completion_start);
+            }
         }
     } else {
         // flush and completion are fused, so we only need to update one of the counters
@@ -1592,12 +2613,42 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
         // Currently unclear if it's better to loop here or not...
         bool unflushed_writes = !completion_counter.is_caught_up_to(wr_sent_counter);
         auto receiver_buffer_index = completion_counter.get_buffer_index();
-        bool next_trid_flushed = receiver_channel_trid_tracker.transaction_flushed(receiver_buffer_index);
+        bool next_trid_flushed;
+        bool exp_txq_busy = false;
+        if constexpr (exp_grouped_reads) {
+            // Read this slot's write-sent status and the TX queue's busy check where today's code reads them, together
+            // with the packets-received count for the next step, so the four reads overlap.
+            uint32_t txq_status_raw, write_sent_raw;
+            if constexpr (fabric_exp_rx_grouped_prefetch) {
+                uint32_t pkts_raw;
+                exp_read_rx_group<to_receiver_pkts_sent_id>(
+                    receiver_channel_trid_tracker.transaction_sent_reg_addr(receiver_buffer_index),
+                    pkts_raw,
+                    txq_status_raw,
+                    write_sent_raw);
+                receiver_channel_pointers.exp_prefetched_pkts_received =
+                    pkts_raw & ((1 << REMOTE_DEST_WORDS_FREE_WIDTH) - 1);
+            } else {
+                exp_read_rx_completion_group(
+                    receiver_channel_trid_tracker.transaction_sent_reg_addr(receiver_buffer_index),
+                    txq_status_raw,
+                    write_sent_raw);
+            }
+            next_trid_flushed = write_sent_raw == 0;
+            exp_txq_busy = ((txq_status_raw >> ETH_TXQ_STATUS_CMD_ONGOING_BIT) & 0x1) != 0;
+        } else {
+            next_trid_flushed = receiver_channel_trid_tracker.transaction_flushed(receiver_buffer_index);
+        }
         bool can_send_completion = unflushed_writes && next_trid_flushed;
         if constexpr (!ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK) {
-            can_send_completion = can_send_completion && !internal_::eth_txq_is_busy(receiver_txq_id);
+            if constexpr (exp_grouped_reads) {
+                can_send_completion = can_send_completion && !exp_txq_busy;
+            } else {
+                can_send_completion = can_send_completion && !internal_::eth_txq_is_busy(receiver_txq_id);
+            }
         }
         if (can_send_completion) {
+            const uint32_t completion_start = phase_profiler.open<PHASE_RX_COMPLETION>();
             uint8_t src_ch_id;
             if constexpr (skip_src_ch_id_update) {
                 src_ch_id = receiver_channel_pointers.get_src_chan_id();
@@ -1608,6 +2659,7 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
                 receiver_channel_response_credit_sender, src_ch_id);
             receiver_channel_trid_tracker.clear_trid_at_buffer_slot(receiver_buffer_index);
             completion_counter.increment();
+            phase_profiler.close<PHASE_RX_COMPLETION>(completion_start);
         }
     }
     return progress;
@@ -1637,8 +2689,9 @@ FORCE_INLINE bool run_receiver_channel_step(
     uint8_t my_mesh_coord_x,
     LocalTelemetryT& local_fabric_telemetry) {
     if constexpr (is_receiver_channel_serviced[receiver_channel]) {
+        const uint32_t visit_start = phase_profiler.open<PHASE_RX_VISIT>();
         router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
-        return run_receiver_channel_step_impl<
+        const bool progress = run_receiver_channel_step_impl<
             receiver_channel,
             to_receiver_packets_sent_streams[receiver_channel],
             enable_first_level_ack,
@@ -1660,6 +2713,8 @@ FORCE_INLINE bool run_receiver_channel_step(
             my_mesh_coord_y,
             my_mesh_coord_x,
             local_fabric_telemetry);
+        phase_profiler.close<PHASE_RX_VISIT>(visit_start);
+        return progress;
     }
     return false;
 }
@@ -1892,6 +2947,13 @@ FORCE_INLINE void run_fabric_edm_main_loop(
     static ActualSpeedyReceiverState<true, 2> persistent_speedy_receiver_state_vc2;
 #endif
 
+    phase_profiler.init<count_serviced(is_sender_channel_serviced), count_serviced(is_receiver_channel_serviced)>();
+    exp_push_drisc_next_slot = exp_push_drisc_l1_base;
+    exp_push_set_state();
+    exp_pending_upstream_credits.fill(0);
+    exp_conn_poll_counter.fill(0);
+    exp_fwd_in_flight = 0;
+
     uint16_t fabric_heartbeat_counter = 0;
 #if defined(ARCH_BLACKHOLE)
     constexpr uint32_t FABRIC_KERNEL_HEARTBEAT_ADDR = 0x7CC70;
@@ -1952,6 +3014,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                     router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
 
                     if constexpr (is_sender_channel_serviced[0]) {
+                        const uint32_t tx_visit_start = phase_profiler.open<PHASE_TX_VISIT>();
                         tx_progress |= run_sender_channel_step_speedy<
                             0,
                             to_receiver_packets_sent_streams[VC0_RECEIVER_CHANNEL],
@@ -1967,9 +3030,31 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                             inner_loop_perf_telemetry_collector,
                             local_fabric_telemetry,
                             local_speedy_sender_state);
+                        phase_profiler.close<PHASE_TX_VISIT>(tx_visit_start);
                     }
 
                     if constexpr (is_receiver_channel_serviced[0]) {
+#if defined(FABRIC_DRISC_OFFLOAD)
+                        rx_progress |= run_receiver_channel_step<
+                            0,
+                            ENABLE_FIRST_LEVEL_ACK_VC0,
+                            VC0_DOWNSTREAM_EDM_SIZE,
+                            DownstreamSenderVC0T,
+                            decltype(local_relay_interface)>(
+                            local_receiver_channels,
+                            downstream_edm_noc_interfaces_vc0,
+                            local_relay_interface,
+                            receiver_channel_pointers_ch0,
+                            receiver_channel_0_trid_tracker,
+                            port_direction_table,
+                            receiver_channel_response_credit_senders,
+                            routing_table,
+                            my_mesh_id,
+                            my_mesh_coord_y,
+                            my_mesh_coord_x,
+                            local_fabric_telemetry);
+#else
+                        const uint32_t rx_visit_start = phase_profiler.open<PHASE_RX_VISIT>();
 #if defined(FABRIC_2D_VC0_CROSSOVER_TO_VC1)
                         rx_progress |= run_receiver_channel_step_speedy<
                             0,
@@ -2003,9 +3088,27 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                             local_fabric_telemetry,
                             local_speedy_receiver_state);
 #endif
+                        phase_profiler.close<PHASE_RX_VISIT>(rx_visit_start);
+#endif
                     }
                 } else {  // non-speedy mode
                     router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
+                    uint32_t exp_free_slots_raw[4] = {0, 0, 0, 0};
+                    if constexpr (fabric_exp_tx_grouped_packet_check && any_sender_channel_serviced) {
+                        exp_read_grouped_free_slots(exp_free_slots_raw);
+                    }
+                    if constexpr (exp_tx_upstream_on_this_erisc) {
+                        // Packets in flight that are not credited upstream yet, or a connection-check iteration.
+                        const bool check_connections = (exp_upstream_iteration++ & 15) == 0;
+                        if (get_ptr_val<exp_upstream_in_flight_stream_id>() != 0 || check_connections) {
+                            exp_run_upstream_steps(
+                                local_sender_channel_worker_interfaces,
+                                channel_connection_established,
+                                sender_channel_from_receiver_credits,
+                                local_sender_channel_free_slots_stream_ids,
+                                check_connections);
+                        }
+                    }
                     // Capture these to see if we made progress
 
                     // There are some cases, mainly for performance, where we don't want to switch between sender
@@ -2020,7 +3123,8 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                         local_sender_channel_free_slots_stream_ids,
                         sender_channel_from_receiver_credits,
                         inner_loop_perf_telemetry_collector,
-                        local_fabric_telemetry);
+                        local_fabric_telemetry,
+                        exp_free_slots_raw[0]);
 #if defined(FABRIC_2D_VC0_CROSSOVER_TO_VC1)
                     // Inter-mesh routers receive neighbor mesh's locally generated traffic on VC0.
                     // This VC0 traffic needs to be forwarded over VC1 in the receiving mesh.
@@ -2062,18 +3166,9 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                         my_mesh_coord_x,
                         local_fabric_telemetry);
 #endif
-                    tx_progress |= run_sender_channel_step<VC0_RECEIVER_CHANNEL, 1, ENABLE_FIRST_LEVEL_ACK_VC0>(
-                        local_sender_channels,
-                        local_sender_channel_worker_interfaces,
-                        outbound_to_receiver_channel_pointer_ch0,
-                        remote_receiver_channels,
-                        channel_connection_established,
-                        local_sender_channel_free_slots_stream_ids,
-                        sender_channel_from_receiver_credits,
-                        inner_loop_perf_telemetry_collector,
-                        local_fabric_telemetry);
-                    if constexpr (is_2d_fabric) {
-                        tx_progress |= run_sender_channel_step<VC0_RECEIVER_CHANNEL, 2, ENABLE_FIRST_LEVEL_ACK_VC0>(
+                    // EXP_TX_SKIP_IDLE_CHANNELS: one branch over the forwarding channels while none has work.
+                    if (!fabric_exp_tx_skip_idle_channels || !exp_forwarding_channels_idle(exp_free_slots_raw)) {
+                        tx_progress |= run_sender_channel_step<VC0_RECEIVER_CHANNEL, 1, ENABLE_FIRST_LEVEL_ACK_VC0>(
                             local_sender_channels,
                             local_sender_channel_worker_interfaces,
                             outbound_to_receiver_channel_pointer_ch0,
@@ -2082,19 +3177,10 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                             local_sender_channel_free_slots_stream_ids,
                             sender_channel_from_receiver_credits,
                             inner_loop_perf_telemetry_collector,
-                            local_fabric_telemetry);
-                        tx_progress |= run_sender_channel_step<VC0_RECEIVER_CHANNEL, 3, ENABLE_FIRST_LEVEL_ACK_VC0>(
-                            local_sender_channels,
-                            local_sender_channel_worker_interfaces,
-                            outbound_to_receiver_channel_pointer_ch0,
-                            remote_receiver_channels,
-                            channel_connection_established,
-                            local_sender_channel_free_slots_stream_ids,
-                            sender_channel_from_receiver_credits,
-                            inner_loop_perf_telemetry_collector,
-                            local_fabric_telemetry);
-                        if constexpr (ACTUAL_VC0_SENDER_CHANNELS > 4) {
-                            tx_progress |= run_sender_channel_step<VC0_RECEIVER_CHANNEL, 4, ENABLE_FIRST_LEVEL_ACK_VC0>(
+                            local_fabric_telemetry,
+                            exp_free_slots_raw[1]);
+                        if constexpr (is_2d_fabric) {
+                            tx_progress |= run_sender_channel_step<VC0_RECEIVER_CHANNEL, 2, ENABLE_FIRST_LEVEL_ACK_VC0>(
                                 local_sender_channels,
                                 local_sender_channel_worker_interfaces,
                                 outbound_to_receiver_channel_pointer_ch0,
@@ -2103,8 +3189,32 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                                 local_sender_channel_free_slots_stream_ids,
                                 sender_channel_from_receiver_credits,
                                 inner_loop_perf_telemetry_collector,
-                                local_fabric_telemetry);
+                                local_fabric_telemetry,
+                                exp_free_slots_raw[2]);
+                            tx_progress |= run_sender_channel_step<VC0_RECEIVER_CHANNEL, 3, ENABLE_FIRST_LEVEL_ACK_VC0>(
+                                local_sender_channels,
+                                local_sender_channel_worker_interfaces,
+                                outbound_to_receiver_channel_pointer_ch0,
+                                remote_receiver_channels,
+                                channel_connection_established,
+                                local_sender_channel_free_slots_stream_ids,
+                                sender_channel_from_receiver_credits,
+                                inner_loop_perf_telemetry_collector,
+                                local_fabric_telemetry,
+                                exp_free_slots_raw[3]);
                         }
+                    }
+                    if constexpr (is_2d_fabric && ACTUAL_VC0_SENDER_CHANNELS > 4) {
+                        tx_progress |= run_sender_channel_step<VC0_RECEIVER_CHANNEL, 4, ENABLE_FIRST_LEVEL_ACK_VC0>(
+                            local_sender_channels,
+                            local_sender_channel_worker_interfaces,
+                            outbound_to_receiver_channel_pointer_ch0,
+                            remote_receiver_channels,
+                            channel_connection_established,
+                            local_sender_channel_free_slots_stream_ids,
+                            sender_channel_from_receiver_credits,
+                            inner_loop_perf_telemetry_collector,
+                            local_fabric_telemetry);
                     }
                 }  // end of if constexpr (super_speedy_mode) else block
                 if constexpr (is_2d_fabric) {
@@ -2230,7 +3340,10 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                         "VC2 receiver channel not serviced");
 #endif  // FABRIC_2D_VC2_SERVICED
                 }
+                phase_profiler.end_iteration();
             }
+            phase_profiler.flush();
+            exp_scan_stack();
 
             if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
                 uint64_t loop_end_cycles = get_timestamp();
@@ -2371,7 +3484,9 @@ void
     if constexpr (multi_txq_enabled) {
         tuple_for_each_constexpr(
             local_sender_channel_worker_interfaces.channel_worker_interfaces, [&](auto& interface, auto idx) {
-                if constexpr (is_sender_channel_serviced[idx]) {
+                if constexpr (
+                    is_sender_channel_serviced[idx] ||
+                    (exp_tx_upstream_on_this_erisc && peer_sender_channel_serviced[idx])) {
                     establish_static_connection_from_receiver_side(interface, idx);
                 }
             });
@@ -2485,6 +3600,34 @@ void populate_local_sender_channel_free_slots_stream_id_ordered_map(
 
 constexpr bool IS_TEARDOWN_MASTER() { return MY_ERISC_ID == 0; }
 
+// Experiment (TT_FABRIC_EXP_SEQ_UPDATE_TIMEOUT): a TX queue with nothing to send returns the acknowledgements for the
+// packets arriving on its paired RX queue only in a keepalive every ETH_TXQ_LOCAL_SEQ_UPDATE_TIMEOUT cycles, which caps
+// one-way traffic at ~128 Ethernet packets per period (fabric_exp/RESULTS.md section 16). ERISC0 sets the period on
+// both of this tile's queues before the handshake, whether or not it sends anything itself (a trimmed receive-only
+// router still returns the acknowledgements), and restores the firmware value in teardown.
+constexpr bool sets_seq_update_timeout = fabric_exp_seq_update_timeout != 0 && IS_TEARDOWN_MASTER();
+uint32_t firmware_seq_update_timeouts[2];
+
+__attribute__((optimize("Os"))) void exp_set_seq_update_timeouts() {
+    if constexpr (sets_seq_update_timeout) {
+        firmware_seq_update_timeouts[0] = eth_txq_reg_read(sender_txq_id, ETH_TXQ_LOCAL_SEQ_UPDATE_TIMEOUT);
+        eth_txq_reg_write(sender_txq_id, ETH_TXQ_LOCAL_SEQ_UPDATE_TIMEOUT, fabric_exp_seq_update_timeout);
+        if constexpr (receiver_txq_id != sender_txq_id) {
+            firmware_seq_update_timeouts[1] = eth_txq_reg_read(receiver_txq_id, ETH_TXQ_LOCAL_SEQ_UPDATE_TIMEOUT);
+            eth_txq_reg_write(receiver_txq_id, ETH_TXQ_LOCAL_SEQ_UPDATE_TIMEOUT, fabric_exp_seq_update_timeout);
+        }
+    }
+}
+
+__attribute__((optimize("Os"))) void exp_restore_seq_update_timeouts() {
+    if constexpr (sets_seq_update_timeout) {
+        eth_txq_reg_write(sender_txq_id, ETH_TXQ_LOCAL_SEQ_UPDATE_TIMEOUT, firmware_seq_update_timeouts[0]);
+        if constexpr (receiver_txq_id != sender_txq_id) {
+            eth_txq_reg_write(receiver_txq_id, ETH_TXQ_LOCAL_SEQ_UPDATE_TIMEOUT, firmware_seq_update_timeouts[1]);
+        }
+    }
+}
+
 // Note: No termination check is added here intentionally. Both local ERISCs share
 // the same termination signal, so both will see it and exit their respective wait
 // loops naturally. Adding a termination check here would be unsafe — if one ERISC
@@ -2542,6 +3685,18 @@ __attribute__((optimize("Os"))) void teardown(
     }
     if constexpr (is_receiver_channel_serviced[0]) {
         receiver_channel_0_trid_tracker.all_buffer_slot_transactions_acked();
+#if defined(FABRIC_DRISC_OFFLOAD)
+        constexpr uint8_t noc = tt::tt_fabric::edm_to_local_chip_noc;
+        noc_async_posted_writes_flushed(noc);
+        noc_clear_packet_tags(noc);
+        noc_init_one(noc, MEM_NOC_ATOMIC_RET_VAL_ADDR);
+        noc_async_write_one_packet(
+            reinterpret_cast<uint32_t>(termination_signal_ptr),
+            get_noc_addr(exp_push_drisc_x, exp_push_drisc_y, drisc_termination_signal_l1_addr, noc),
+            sizeof(uint32_t),
+            noc);
+        noc_async_write_barrier(noc);
+#endif
     }
 #if defined(FABRIC_2D_VC1_ACTIVE)
     if constexpr (is_receiver_channel_serviced[1]) {
@@ -2582,6 +3737,14 @@ __attribute__((optimize("Os"))) void teardown(
     noc_async_write_barrier();
     noc_async_atomic_barrier();
 
+#if defined(FABRIC_DRISC_OFFLOAD)
+    if constexpr (is_receiver_channel_serviced[0]) {
+        while (get_ptr_val<drisc_free_slots_stream_id>() < static_cast<int32_t>(drisc_ring_slots + 1)) {
+        }
+        init_ptr_val<drisc_free_slots_stream_id>(0);
+    }
+#endif
+
 #ifdef ARCH_BLACKHOLE
     // Tagged write completion does not reset command-buffer transaction IDs.
     // Restore this ERISC's dedicated NoC before the kernel-return checks.
@@ -2591,6 +3754,7 @@ __attribute__((optimize("Os"))) void teardown(
     if constexpr (NUM_ACTIVE_ERISCS > 1) {
         wait_for_other_local_erisc();
     }
+    exp_restore_seq_update_timeouts();
     if constexpr (IS_TEARDOWN_MASTER()) {
         *edm_status_ptr = tt::tt_fabric::EDMStatus::TERMINATED;
     }
@@ -2653,6 +3817,7 @@ void initialize_fabric_telemetry() {
 }
 
 void kernel_main() {
+    exp_paint_stack();
     if constexpr (ENABLE_CHANNEL_TRIMMING_RESOURCE_USAGE_CAPTURE) {
         channel_trimming_usage_recorder.reset();
     }
@@ -2667,10 +3832,21 @@ void kernel_main() {
 
     set_l1_data_cache<ENABLE_RISC_CPU_DATA_CACHE>();
 
+    // Experimental primitive-cost microbenchmark; must run before any stateful command-buffer setup.
+    if constexpr (phase_profile_mode >= 3 && any_receiver_channel_serviced) {
+        run_fabric_erisc_microbench<
+            phase_profile_microbench_results_addr,
+            phase_profile_microbench_scratch_addr,
+            tt::tt_fabric::edm_to_local_chip_noc,
+            tt::tt_fabric::local_chip_data_cmd_buf,
+            sender_txq_id>();
+    }
+
     // Initialize fabric telemetry early to ensure valid values before router starts
     initialize_fabric_telemetry();
 
     eth_txq_reg_write(sender_txq_id, ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD, DEFAULT_NUM_ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD);
+    exp_set_seq_update_timeouts();
     asm volatile("nop");
     static_assert(
         receiver_txq_id == sender_txq_id || receiver_txq_id == 1,
@@ -2695,6 +3871,12 @@ void kernel_main() {
     // We make sure to do this before we handshake to guarantee that the registers are
     // initialized before the other side has any possibility of modifying them.
     init_ptr_val<to_receiver_packets_sent_streams[0]>(0);
+#if defined(FABRIC_DRISC_OFFLOAD)
+    init_ptr_val<drisc_free_slots_stream_id>(0);
+#endif
+    if constexpr (exp_tx_upstream_on_this_erisc) {
+        init_ptr_val<exp_upstream_in_flight_stream_id>(0);
+    }
     init_stream_reg_if_used<to_sender_packets_acked_streams[0]>(0);
     init_stream_reg_if_used<to_sender_packets_acked_streams[1]>(0);
     init_stream_reg_if_used<to_sender_packets_completed_streams[0]>(0);
@@ -2777,21 +3959,22 @@ void kernel_main() {
     // For 2D: read densely packed connection data for up to four compact direction slots.
     // For 1D: reads as 1D and only uses first element
 #if defined(FABRIC_2D)
-    std::array<uint32_t, NUM_DOWNSTREAM_SENDERS_VC0> downstream_edm_vc0_buffer_base_addresses;
+    [[maybe_unused]] std::array<uint32_t, NUM_DOWNSTREAM_SENDERS_VC0> downstream_edm_vc0_buffer_base_addresses;
     for (size_t i = 0; i < NUM_DOWNSTREAM_SENDERS_VC0; i++) {
         downstream_edm_vc0_buffer_base_addresses[i] = get_arg_val<uint32_t>(arg_idx++);
     }
 #else
-    const auto downstream_edm_vc0_buffer_base_address = get_arg_val<uint32_t>(arg_idx++);
+    [[maybe_unused]] const auto downstream_edm_vc0_buffer_base_address = get_arg_val<uint32_t>(arg_idx++);
 #endif
 
-    const auto downstream_edm_vc0_noc_x = get_arg_val<uint32_t>(arg_idx++);
-    const auto downstream_edm_vc0_noc_y = get_arg_val<uint32_t>(arg_idx++);
+    [[maybe_unused]] const auto downstream_edm_vc0_noc_x = get_arg_val<uint32_t>(arg_idx++);
+    [[maybe_unused]] const auto downstream_edm_vc0_noc_y = get_arg_val<uint32_t>(arg_idx++);
 
 #if defined(FABRIC_2D)
-    std::array<uint32_t, NUM_DOWNSTREAM_SENDERS_VC0> downstream_edm_vc0_worker_registration_ids;
-    std::array<uint32_t, NUM_DOWNSTREAM_SENDERS_VC0> downstream_edm_vc0_worker_location_info_addresses;
-    std::array<uint32_t, NUM_DOWNSTREAM_SENDERS_VC0> downstream_edm_vc0_buffer_index_semaphore_addresses;
+    [[maybe_unused]] std::array<uint32_t, NUM_DOWNSTREAM_SENDERS_VC0> downstream_edm_vc0_worker_registration_ids;
+    [[maybe_unused]] std::array<uint32_t, NUM_DOWNSTREAM_SENDERS_VC0> downstream_edm_vc0_worker_location_info_addresses;
+    [[maybe_unused]] std::array<uint32_t, NUM_DOWNSTREAM_SENDERS_VC0>
+        downstream_edm_vc0_buffer_index_semaphore_addresses;
     for (size_t i = 0; i < NUM_DOWNSTREAM_SENDERS_VC0; i++) {
         downstream_edm_vc0_worker_registration_ids[i] = get_arg_val<uint32_t>(arg_idx++);
     }
@@ -2802,9 +3985,9 @@ void kernel_main() {
         downstream_edm_vc0_buffer_index_semaphore_addresses[i] = get_arg_val<uint32_t>(arg_idx++);
     }
 #else
-    const auto downstream_edm_vc0_worker_registration_id = get_arg_val<uint32_t>(arg_idx++);
-    const auto downstream_edm_vc0_worker_location_info_address = get_arg_val<uint32_t>(arg_idx++);
-    const auto downstream_edm_vc0_buffer_index_semaphore_address = get_arg_val<uint32_t>(arg_idx++);
+    [[maybe_unused]] const auto downstream_edm_vc0_worker_registration_id = get_arg_val<uint32_t>(arg_idx++);
+    [[maybe_unused]] const auto downstream_edm_vc0_worker_location_info_address = get_arg_val<uint32_t>(arg_idx++);
+    [[maybe_unused]] const auto downstream_edm_vc0_buffer_index_semaphore_address = get_arg_val<uint32_t>(arg_idx++);
 #endif
 
 #if defined(FABRIC_2D_VC1_ACTIVE)
@@ -2903,7 +4086,7 @@ void kernel_main() {
     // std::array<uint32_t, NUM_SENDER_CHANNELS == 1 ? 2 : NUM_SENDER_CHANNELS>
     // local_sender_channel_free_slots_stream_ids;
 
-    const auto& local_sem_for_teardown_from_downstream_edm =
+    [[maybe_unused]] const auto& local_sem_for_teardown_from_downstream_edm =
         take_first_n_elements<NUM_DOWNSTREAM_CHANNELS, MAX_NUM_SENDER_CHANNELS, size_t>(my_sem_for_teardown_from_edm);
 
     auto remote_receiver_channels = tt::tt_fabric::ReceiverChannelBuffersFromAllocs<
@@ -2914,8 +4097,17 @@ void kernel_main() {
     auto local_receiver_channels = tt::tt_fabric::
         ReceiverChannelBuffersFromAllocs<PACKET_HEADER_TYPE, channel_allocs, RECEIVER_TO_ENTRY_IDX>::make();
 
-    auto local_sender_channels =
-        tt::tt_fabric::SenderChannelBuffersFromAllocs<PACKET_HEADER_TYPE, channel_allocs, SENDER_TO_ENTRY_IDX>::make();
+#if !defined(FABRIC_2D_VC2_SERVICED)
+    constexpr bool exp_use_lean_stride_sender_channels =
+        fabric_exp_tx_lean_vc0_loop && fabric_exp_tx_send_stride_slot && !super_speedy_mode;
+#else
+    constexpr bool exp_use_lean_stride_sender_channels = false;
+#endif
+    using SenderChannelsAllocT = std::conditional_t<
+        exp_use_lean_stride_sender_channels,
+        tt::tt_fabric::LeanSenderChannelBuffersFromAllocs<PACKET_HEADER_TYPE, channel_allocs, SENDER_TO_ENTRY_IDX>,
+        tt::tt_fabric::SenderChannelBuffersFromAllocs<PACKET_HEADER_TYPE, channel_allocs, SENDER_TO_ENTRY_IDX>>;
+    auto local_sender_channels = SenderChannelsAllocT::make();
 
     std::array<size_t, NUM_SENDER_CHANNELS> local_sender_connection_live_semaphore_addresses =
         take_first_n_elements<NUM_SENDER_CHANNELS, MAX_NUM_SENDER_CHANNELS, size_t>(
@@ -2955,14 +4147,16 @@ void kernel_main() {
     // Ensure array size is at least 1 to avoid undefined behavior
     static_assert(VC0_DOWNSTREAM_EDM_SIZE > 0, "VC0_DOWNSTREAM_EDM_SIZE must be at least 1");
 #if defined(FABRIC_2D)
-    constexpr bool use_vc0_single_live_stateful_noc = use_2d_single_live_stateful_noc<VC0_DOWNSTREAM_EDM_SIZE>();
+    [[maybe_unused]] constexpr bool use_vc0_single_live_stateful_noc =
+        use_2d_single_live_stateful_noc<VC0_DOWNSTREAM_EDM_SIZE>();
 #else
-    constexpr bool use_vc0_single_live_stateful_noc = false;
+    [[maybe_unused]] constexpr bool use_vc0_single_live_stateful_noc = false;
 #endif
 
     populate_local_sender_channel_free_slots_stream_id_ordered_map(
         has_downstream_edm_vc0_buffer_connection, local_sender_channel_free_slots_stream_ids);
 
+#if !defined(FABRIC_DRISC_OFFLOAD)
     if (has_downstream_edm_vc0_buffer_connection) {
         // Only bit 0 is set for 1D
         // For 2D: 3 bits set for compact indices 0, 1, 2 (excluding router's own direction)
@@ -3069,6 +4263,7 @@ void kernel_main() {
         }
 #endif
     }
+#endif  // !FABRIC_DRISC_OFFLOAD
 
     std::array<RouterToRouterSender<DOWNSTREAM_SENDER_NUM_BUFFERS_VC1>, VC1_DOWNSTREAM_EDM_SIZE>
         downstream_edm_noc_interfaces_vc1;
@@ -3180,7 +4375,7 @@ void kernel_main() {
     // The initializer populates every sender interface. Channel trimming can leave a router with
     // only a nonzero static sender (for example, transit traffic on channel 1), so channel 0 cannot
     // be used as a proxy for whether initialization is needed.
-    if constexpr (any_sender_channel_serviced) {
+    if constexpr (any_sender_channel_serviced || exp_tx_upstream_on_this_erisc) {
         init_local_sender_channel_worker_interfaces(
             local_sender_connection_live_semaphore_addresses,
             local_sender_connection_info_addresses,
@@ -3221,9 +4416,9 @@ void kernel_main() {
 #ifdef ARCH_BLACKHOLE
     // A Blackhole hardware bug requires all noc inline writes to be non-posted so we hardcode to false here
     // A more detailed description can be found in `noc_inline_dw_write` in the `dataflow_api` header file
-    constexpr bool use_posted_writes_for_connection_open = false;
+    [[maybe_unused]] constexpr bool use_posted_writes_for_connection_open = false;
 #else
-    constexpr bool use_posted_writes_for_connection_open = true;
+    [[maybe_unused]] constexpr bool use_posted_writes_for_connection_open = true;
 #endif
 
     if constexpr (NUM_ACTIVE_ERISCS > 1) {
@@ -3319,6 +4514,34 @@ void kernel_main() {
             (uint32_t)edm_local_tensix_sync_ptr_addr, num_ds_or_local_tensix_connections, termination_signal_ptr);
     }
 
+#if defined(FABRIC_DRISC_OFFLOAD)
+    if constexpr (is_receiver_channel_serviced[0]) {
+        constexpr uint8_t noc = tt::tt_fabric::edm_to_local_chip_noc;
+        noc_async_write_one_packet(
+            ROUTING_TABLE_BASE,
+            get_noc_addr(exp_push_drisc_x, exp_push_drisc_y, drisc_routing_table_l1_addr, noc),
+            sizeof(tt::tt_fabric::routing_l1_info_t),
+            noc);
+        noc_async_write_barrier(noc);
+        noc_async_write_one_packet(
+            reinterpret_cast<uint32_t>(edm_status_ptr),
+            get_noc_addr(exp_push_drisc_x, exp_push_drisc_y, drisc_e1_ready_l1_addr, noc),
+            sizeof(uint32_t),
+            noc);
+        noc_async_write_barrier(noc);
+        while (get_ptr_val<drisc_free_slots_stream_id>() == 0 &&
+               !got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr)) {
+        }
+        drisc_offload_next_slot_addr = drisc_ring_base_addr;
+        drisc_offload_init_noc_state();
+    }
+    if constexpr (NUM_ACTIVE_ERISCS > 1) {
+        wait_for_other_local_erisc();
+    }
+#if !defined(FABRIC_2D_VC1_ACTIVE)
+    POSTCODE(tt::tt_fabric::EDMStatus::VCS_OPENED);
+#endif
+#else
     if constexpr (is_2d_fabric) {
         // Helper function to open downstream EDM connections, works for both VC0 and VC1
         auto open_downstream_edm_connections =
@@ -3414,6 +4637,7 @@ void kernel_main() {
         }
     }
 #endif  // FABRIC_2D_VC1_ACTIVE
+#endif  // FABRIC_DRISC_OFFLOAD
     std::array<uint8_t, num_eth_ports> port_direction_table;
 
     if constexpr (NUM_ACTIVE_ERISCS > 1) {
@@ -3487,6 +4711,7 @@ void kernel_main() {
 #endif  // FABRIC_2D_VC2_SERVICED
     );
 
+    exp_scan_stack(true);
     set_l1_data_cache<false>();
     WAYPOINT("DONE");
 }

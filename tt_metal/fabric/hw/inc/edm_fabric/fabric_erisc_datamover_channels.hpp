@@ -112,6 +112,9 @@ public:
         }
         if constexpr (NUM_BUFFERS) {
             cached_next_buffer_slot_addr = this->slot_addresses.base();
+            this->first_slot_addr = channel_base_address;
+            this->last_slot_addr = channel_base_address + (NUM_BUFFERS - 1) * max_eth_payload_size_in_bytes;
+            this->slot_stride = max_eth_payload_size_in_bytes;
         }
     }
 
@@ -132,10 +135,65 @@ public:
         this->cached_next_buffer_slot_addr = this->slot_addresses[next_packet_buffer_index.get()];
     }
 
+    // Experiment (EXP_TX_SEND_STRIDE_SLOT): advance the cached address by the slot stride, wrapping at the last
+    // slot. Leaves next_packet_buffer_index behind, so get_buffer_address_impl() must not be used alongside it.
+    FORCE_INLINE void advance_to_next_cached_buffer_slot_addr_by_stride() {
+        const size_t addr = this->cached_next_buffer_slot_addr;
+        this->cached_next_buffer_slot_addr =
+            addr == this->last_slot_addr ? this->first_slot_addr : addr + this->slot_stride;
+    }
+
+    template <size_t FIRST_SLOT_ADDR, size_t SLOT_STRIDE>
+    FORCE_INLINE void advance_to_next_cached_buffer_slot_addr_by_stride_ct() {
+        constexpr size_t last_addr = FIRST_SLOT_ADDR + (NUM_BUFFERS > 0 ? (NUM_BUFFERS - 1) * SLOT_STRIDE : 0);
+        const size_t addr = this->cached_next_buffer_slot_addr;
+        this->cached_next_buffer_slot_addr = addr == last_addr ? FIRST_SLOT_ADDR : addr + SLOT_STRIDE;
+    }
+
 private:
     SlotAddresses<NUM_BUFFERS> slot_addresses;
     std::size_t cached_next_buffer_slot_addr;
+    std::size_t first_slot_addr;
+    std::size_t last_slot_addr;
+    std::size_t slot_stride;
     BufferIndex next_packet_buffer_index;
+};
+
+// Lean sender channel representation for EXP_TX_LEAN_VC0_LOOP + EXP_TX_SEND_STRIDE_SLOT: stores only the single
+// 4-byte cached slot pointer on the stack (omitting the SlotAddresses table and runtime bound/stride fields) and
+// advances using compile-time bounds and stride.
+template <typename HEADER_TYPE, uint8_t NUM_BUFFERS>
+class LeanStrideSenderEthChannel
+    : public SenderEthChannelInterface<HEADER_TYPE, NUM_BUFFERS, LeanStrideSenderEthChannel<HEADER_TYPE, NUM_BUFFERS>> {
+public:
+    explicit LeanStrideSenderEthChannel() = default;
+
+    FORCE_INLINE void init_impl(
+        size_t channel_base_address, size_t max_eth_payload_size_in_bytes, size_t /*header_size_bytes*/) {
+        size_t slot_addr = channel_base_address;
+        for (uint8_t i = 0; i < NUM_BUFFERS; i++) {
+#pragma GCC unroll 1
+            for (size_t j = 0; j < sizeof(HEADER_TYPE) / sizeof(uint32_t); j++) {
+                reinterpret_cast<volatile uint32_t*>(slot_addr)[j] = 0;
+            }
+            slot_addr += max_eth_payload_size_in_bytes;
+        }
+        if constexpr (NUM_BUFFERS) {
+            cached_next_buffer_slot_addr = channel_base_address;
+        }
+    }
+
+    FORCE_INLINE size_t get_cached_next_buffer_slot_addr_impl() const { return this->cached_next_buffer_slot_addr; }
+
+    template <size_t FIRST_SLOT_ADDR, size_t SLOT_STRIDE>
+    FORCE_INLINE void advance_to_next_cached_buffer_slot_addr_by_stride_ct() {
+        constexpr size_t last_addr = FIRST_SLOT_ADDR + (NUM_BUFFERS > 0 ? (NUM_BUFFERS - 1) * SLOT_STRIDE : 0);
+        const size_t addr = this->cached_next_buffer_slot_addr;
+        this->cached_next_buffer_slot_addr = addr == last_addr ? FIRST_SLOT_ADDR : addr + SLOT_STRIDE;
+    }
+
+private:
+    std::size_t cached_next_buffer_slot_addr;
 };
 
 // A base Ethernet channel buffer interface class that will be specialized for different
@@ -426,6 +484,10 @@ struct ChannelBuffersFromAllocs {
 template <typename HEADER_TYPE, typename Allocs, auto& ChannelToEntryIndex>
 using SenderChannelBuffersFromAllocs =
     ChannelBuffersFromAllocs<HEADER_TYPE, Allocs, StaticSizedSenderEthChannel, ChannelToEntryIndex>;
+
+template <typename HEADER_TYPE, typename Allocs, auto& ChannelToEntryIndex>
+using LeanSenderChannelBuffersFromAllocs =
+    ChannelBuffersFromAllocs<HEADER_TYPE, Allocs, LeanStrideSenderEthChannel, ChannelToEntryIndex>;
 
 template <typename HEADER_TYPE, typename Allocs, auto& ChannelToEntryIndex>
 using ReceiverChannelBuffersFromAllocs =
