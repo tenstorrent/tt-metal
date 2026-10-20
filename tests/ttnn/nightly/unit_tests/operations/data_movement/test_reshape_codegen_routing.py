@@ -342,7 +342,7 @@ def test_reshape_codegen_lcm_shrinks_write_batch_under_l1_pressure(device):
     # Three 96 -> 192 fp32 chunks on one core. The full plan takes 144 KiB: 12 in and mid tiles and a 24-tile output CB
     # for 8-tile write batches. With 120 KiB free only 2-tile batches fit, over a 12-tile output CB.
     in_shape, out_shape, dtype = [1, 1, 3 * 64, 96], [1, 1, 3 * 32, 192], ttnn.float32
-    one_core = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))])
+    one_core = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))])
     source = gate._make(in_shape, dtype)
     expected = source.reshape(out_shape)
     x = _to_device(device, source, dtype, ttnn.TILE_LAYOUT)

@@ -334,7 +334,7 @@ def test_reshape_codegen_lcm_multi_chunk_one_core(device):
     # Three 96 -> 192 chunks on one core: compute tilizes 6 tiles at a time while the writer drains 8, so the output
     # CB must wrap at a multiple of both and leave compute room while the writer holds a batch.
     in_shape, out_shape, dtype = [1, 1, 3 * 64, 96], [1, 1, 3 * 32, 192], ttnn.float32
-    one_core = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))])
+    one_core = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))])
     source = _make(in_shape, dtype)
     expected = source.reshape(out_shape)
     x = _to_device(device, source, dtype, ttnn.TILE_LAYOUT, _DRAM)
