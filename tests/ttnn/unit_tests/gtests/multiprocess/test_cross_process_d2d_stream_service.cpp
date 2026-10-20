@@ -1341,5 +1341,34 @@ TEST_F(CrossProcessD2DFixture, ExportPipelineDescriptor) {
     ctx->barrier();
 }
 
+// A bad call on any rank makes every rank throw. Before, the failing rank threw on its own
+// and the root waited for it forever. A regression here hangs instead of failing.
+TEST(CrossProcessD2DExport, BadCallFailsOnEveryRank) {
+    const auto& ctx = DistributedContext::get_current_world();
+    const int world_size = *ctx->size();
+    const int rank = *ctx->rank();
+    if (world_size < 2) {
+        GTEST_SKIP() << "Needs >= 2 ranks; got " << world_size;
+    }
+    const std::string service_id = "gtest_cross_process_export_fail_" + std::to_string(getpid());
+    const std::vector<const D2DStreamServiceReceiver*> none;
+
+    // Only the last rank fails.
+    const std::vector<const D2DStreamServiceReceiver*> null_receiver{nullptr};
+    EXPECT_ANY_THROW(D2DStreamService::export_pipeline_descriptor(
+        service_id, rank == world_size - 1 ? null_receiver : none, Rank{0}, ctx));
+
+    // The ranks disagree on the root.
+    EXPECT_ANY_THROW(D2DStreamService::export_pipeline_descriptor(service_id, none, Rank{rank == 0 ? 1 : 0}, ctx));
+
+    // Every rank passes the same out-of-range root.
+    EXPECT_ANY_THROW(D2DStreamService::export_pipeline_descriptor(service_id, none, Rank{world_size}, ctx));
+
+    // A good call still works afterwards.
+    auto file = D2DStreamService::export_pipeline_descriptor(service_id, none, Rank{0}, ctx);
+    EXPECT_EQ(file != nullptr, rank == 0);
+    ctx->barrier();
+}
+
 }  // namespace
 }  // namespace ttnn::distributed::test

@@ -6,6 +6,8 @@
 
 #include <array>
 #include <chrono>
+#include <cstdint>
+#include <exception>
 #include <filesystem>
 #include <limits>
 #include <map>
@@ -2215,30 +2217,65 @@ std::unique_ptr<D2DPipelineDescriptorFile> D2DStreamService::export_pipeline_des
     }
     const int rank = *ctx->rank();
     const int world_size = *ctx->size();
+    const auto as_bytes = [](auto& v) {
+        return ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(v.data()), v.size() * sizeof(v[0]));
+    };
+
+    // Anything that can fail runs before the all_gather below and is reported through it, so
+    // every rank sees the same result and they all throw together. A rank throwing on its own
+    // would leave the others blocked forever waiting for it.
+    D2DRankDescriptor local;
+    std::vector<uint8_t> payload;
+    std::exception_ptr error;
+    try {
+        std::array<char, 256> host{};
+        gethostname(host.data(), host.size() - 1);
+        local = {.rank = rank, .host_name = host.data()};
+        for (const auto* receiver : receivers) {
+            TT_FATAL(receiver != nullptr, "D2DStreamService::export_pipeline_descriptor: null receiver");
+            local.receivers.push_back(receiver->describe());
+        }
+        if (rank != *root) {
+            payload = D2DPipelineDescriptor{.ranks = {std::move(local)}}.serialize();
+        }
+    } catch (...) {
+        error = std::current_exception();
+    }
+
+    struct Status {
+        int64_t root;
+        int64_t payload_size;  // < 0: this rank failed
+    };
+    std::array<Status, 1> mine{Status{*root, error ? -1 : static_cast<int64_t>(payload.size())}};
+    std::vector<Status> statuses(world_size);
+    ctx->all_gather(as_bytes(mine), as_bytes(statuses));
+    for (int r = 0; r < world_size; ++r) {
+        TT_FATAL(
+            statuses[r].root == *root,
+            "D2DStreamService::export_pipeline_descriptor: rank {} passed root {}, but rank {} passed root {}",
+            rank,
+            *root,
+            r,
+            statuses[r].root);
+    }
     TT_FATAL(
         *root >= 0 && *root < world_size,
         "D2DStreamService::export_pipeline_descriptor: root {} outside world of size {}",
         *root,
         world_size);
-
-    std::array<char, 256> host{};
-    gethostname(host.data(), host.size() - 1);
-    D2DRankDescriptor local{.rank = rank, .host_name = host.data()};
-    for (const auto* receiver : receivers) {
-        TT_FATAL(receiver != nullptr, "D2DStreamService::export_pipeline_descriptor: null receiver");
-        local.receivers.push_back(receiver->describe());
+    if (error) {
+        std::rethrow_exception(error);
+    }
+    for (int r = 0; r < world_size; ++r) {
+        TT_FATAL(
+            statuses[r].payload_size >= 0,
+            "D2DStreamService::export_pipeline_descriptor: rank {} failed to describe its receivers (see its log)",
+            r);
     }
 
     // Every rank sends its one-rank descriptor to the root, which merges them in rank order.
     const Tag tag{CMAKE_UNIQUE_NAMESPACE::kPipelineDescriptorTag};
-    const auto as_bytes = [](auto& v) {
-        return ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(v.data()), v.size() * sizeof(v[0]));
-    };
     if (rank != *root) {
-        auto payload = D2DPipelineDescriptor{.ranks = {std::move(local)}}.serialize();
-        uint64_t size = payload.size();
-        auto size_span = ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(&size), sizeof(size));
-        ctx->send(size_span, root, tag);
         ctx->send(as_bytes(payload), root, tag);
         return nullptr;
     }
@@ -2252,10 +2289,7 @@ std::unique_ptr<D2DPipelineDescriptorFile> D2DStreamService::export_pipeline_des
             pipeline.ranks.push_back(std::move(local));
             continue;
         }
-        uint64_t size = 0;
-        auto size_span = ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(&size), sizeof(size));
-        ctx->recv(size_span, Rank{r}, tag);
-        std::vector<uint8_t> bytes(size);
+        std::vector<uint8_t> bytes(statuses[r].payload_size);
         ctx->recv(as_bytes(bytes), Rank{r}, tag);
         pipeline.ranks.push_back(D2DPipelineDescriptor::deserialize(bytes).ranks.at(0));
     }

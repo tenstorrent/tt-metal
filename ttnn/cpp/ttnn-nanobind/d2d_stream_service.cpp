@@ -153,7 +153,10 @@ void py_module_types(nb::module_& mod) {
         .def(nb::self == nb::self)
         .def_static(
             "wait_and_read",
-            &D2DPipelineDescriptor::wait_and_read,
+            [](const std::string& path, uint32_t timeout_ms) {
+                nb::gil_scoped_release release;
+                return D2DPipelineDescriptor::wait_and_read(path, timeout_ms);
+            },
             nb::arg("path"),
             nb::arg("timeout_ms") = 10000u,
             "Wait for a descriptor file to appear, then read it.");
@@ -472,6 +475,8 @@ void py_module_types(nb::module_& mod) {
         .def_static(
             "export_pipeline_descriptor",
             [](const std::string& service_id, const std::vector<const D2DStreamServiceReceiver*>& receivers, int root) {
+                // Waits on the other ranks; let other Python threads run meanwhile.
+                nb::gil_scoped_release release;
                 return D2DStreamService::export_pipeline_descriptor(service_id, receivers, Rank{root});
             },
             nb::arg("service_id"),
