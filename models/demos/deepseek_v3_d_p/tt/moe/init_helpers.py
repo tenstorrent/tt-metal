@@ -32,6 +32,25 @@ def get_max_payload_size() -> int:
     return (MAX_PAYLOAD_SIZE_BH if is_blackhole() else MAX_PAYLOAD_SIZE_WH) + CMB_FABRIC2D_ROUTING_INFO_BYTES
 
 
+def combine_overlap_payload_size(routed_emb_dim: int) -> int:
+    """The fabric payload the routed expert / combine_fabric2d overlap needs: combine_fabric2d sends a bfloat16
+    token that does not fit one packet as two halves, the routing tail riding on the second."""
+    return routed_emb_dim + CMB_FABRIC2D_ROUTING_INFO_BYTES
+
+
+def moe_fabric_payload_size(model_cfg) -> int:
+    """The fabric payload to open a mesh with for a model whose MoE is TtMoe.
+
+    On Blackhole TtMoe overlaps the routed expert with combine_fabric2d, so the mesh needs room for half a bf16
+    token plus combine's routing tail. Everywhere else TtMoe runs the routed expert then combine as separate ops, and
+    the model's own FABRIC_PAYLOAD_SIZE stands. TtMoe reads the payload back to decide whether to overlap, so a
+    mesh opened any other way simply runs without it. Deferred to avoid probing hardware at import time.
+    """
+    if is_blackhole():
+        return max(model_cfg.FABRIC_PAYLOAD_SIZE, combine_overlap_payload_size(model_cfg.EMB_SIZE))
+    return model_cfg.FABRIC_PAYLOAD_SIZE
+
+
 @dataclass
 class MeshConfig:
     """Mesh configuration extracted from mesh_device."""
@@ -741,7 +760,7 @@ def load_captured_routing(
     ---------------------------------------------
         layer:                  int, MoE layer index (e.g. 27)
         col:                    int, Galaxy column [0, 4) to simulate
-        model:                  str, model name ("dsv3", "kimi26", "glm52"); selects the per-model
+        model:                  str, model name ("dsv3", "kimi26", "glm53"); selects the per-model
                                 capture file when captured_indices_path is unset
         captured_indices_path:  path to the capture safetensors; if falsy, falls back to
                                 CODE_DEBUG_5K_CHUNKED / "expert_routing_MODELNAME.safetensors"
@@ -777,8 +796,8 @@ def load_captured_routing(
         from models.demos.deepseek_v3_d_p.utils.transformer_helpers import CODE_DEBUG_5K_CHUNKED
 
         # "kimi26" not "kimi27": https://github.com/tenstorrent/tt-metal/issues/54972
-        if model not in {"dsv3", "kimi26", "glm52"}:
-            raise ValueError(f"Unknown model {model!r}; expected one of dsv3, kimi26, glm52")
+        if model not in {"dsv3", "kimi26", "glm53"}:
+            raise ValueError(f"Unknown model {model!r}; expected one of dsv3, kimi26, glm53")
 
         # Keep naming in this convention in order for other models to be consistent.
         path = CODE_DEBUG_5K_CHUNKED / f"expert_routing_{model}.safetensors"

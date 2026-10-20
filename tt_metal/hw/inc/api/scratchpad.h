@@ -12,6 +12,8 @@
 #include "api/scratchpad_binding_token.h"
 #include "experimental/kernel_args.h"
 
+enum class DataFormat : std::uint8_t;
+
 /**
  * @brief Kernel-side typed span over a Program-scope scratchpad.
  *
@@ -52,7 +54,10 @@ public:
 
     // Metal 2.0 ctor: Create a Scratchpad from its binding token:
     [[nodiscard]] explicit Scratchpad(const ScratchpadBindingToken& token) noexcept :
-        Scratchpad(pointer{get_common_arg_val<uint32_t>(token.crta_offset_)}, token.size_in_bytes_) {}
+        Scratchpad(
+            pointer{get_common_arg_val<uint32_t>(token.crta_offset_)},
+            token.size_in_bytes_,
+            static_cast<DataFormat>(token.llk_metadata_.format)) {}
 
     /** @brief Get the element at the given index
      *
@@ -87,6 +92,12 @@ public:
         return static_cast<size_type>(sentinel_addr_.get_address() - start_addr_.get_address());
     }
 
+    /** @brief Get the LLK data format configured for this scratchpad.
+     *
+     * Returns DataFormat::Invalid when the host ScratchpadSpec did not provide data format metadata.
+     */
+    [[nodiscard]] constexpr DataFormat get_dataformat() const noexcept { return data_format_; }
+
     /** @brief L1 base address of the scratchpad, as a raw uint32_t byte address.
      *
      * This is the form most kernel-side APIs consume (NOC transfers, CB/LLK configuration, ...).
@@ -96,6 +107,18 @@ public:
     [[nodiscard]] uint32_t get_base_address() const noexcept {
         return static_cast<uint32_t>(start_addr_.get_address());
     }
+
+#if defined(COMPILE_FOR_TRISC)
+    // Returns the LLKOperand pointing to the base address of the scratchpad
+    // Functionalities meant to be used with LLKOperand for LLK 2.0
+    //
+    // Parameters:
+    // - Operand: The LLKOperand type to return. (hint: use LLKOperandFrom<scratchpad::token>)
+    template <typename Operand>
+    [[nodiscard]] Operand operand() const noexcept {
+        return Operand{(get_base_address() >> 4) - 1};
+    }
+#endif
 
     // begin/end pair to enable range-based-for over the entire scratchpad region.
     // NOTE: This does not support standard-library algorithms that require a conforming iterator:
@@ -127,8 +150,10 @@ private:
     // Create a Scratchpad from an SRAM (L1) base address and size in bytes.
     // This ctor is private because a Scratchpad represents an allocated SRAM (L1) region.
     // A user may NOT construct a Scratchpad from an arbitrary address/size. (Use CoreLocalMem for that use case.)
-    [[nodiscard]] Scratchpad(pointer base_addr, size_type size_in_bytes) noexcept :
-        start_addr_(base_addr), sentinel_addr_(pointer{base_addr.get_address() + uintptr_t{size_in_bytes}}) {
+    [[nodiscard]] Scratchpad(pointer base_addr, size_type size_in_bytes, DataFormat data_format) noexcept :
+        start_addr_(base_addr),
+        sentinel_addr_(pointer{base_addr.get_address() + uintptr_t{size_in_bytes}}),
+        data_format_(data_format) {
         ASSERT(base_addr.get_address() % alignof(T) == 0);
         ASSERT(size_in_bytes % sizeof(T) == 0);
     }
@@ -136,7 +161,7 @@ private:
     // constexpr note:
     // The following members could be `constexpr` if `CoreLocalMem<T>` supported constexpr
     // construction/copy and a constexpr `get_address()`:
-    //   - Scratchpad(pointer, size_type)
+    //   - Scratchpad(pointer, size_type, DataFormat)
     //   - size(), size_in_bytes()
     //   - get_base_address(), local_mem()
     //   - begin(), end()
@@ -150,6 +175,7 @@ private:
     // Note:
     // sentinel_addr_ could be omitted in class layout if we inject the size information as a template parameter.
     pointer start_addr_, sentinel_addr_;
+    DataFormat data_format_;
 };
 
 // A scratchpad is a node-local SRAM (L1) allocation, so it can be either endpoint of a NoC transaction.

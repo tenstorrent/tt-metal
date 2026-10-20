@@ -13,8 +13,11 @@ on:
     inputs:
       source-filter:
         description: >-
-          Space-separated files or directories to analyze instead of the whole
-          host tree (e.g. 'tt_metal/fabric tools/scaleout')
+          Space-separated files or directories, relative to the repo root, whose
+          translation units to analyze instead of the whole host tree (e.g.
+          'tt_metal/fabric tools/scaleout'). Header-only directories such as
+          tt_metal/api select nothing: pick the directories whose .cpp files
+          include those headers instead.
         required: false
         type: string
         default: ""
@@ -73,7 +76,7 @@ jobs:
         with:
           name: iwyu-host-report
           path: |
-            /work/.build/iwyu/iwyu.txt
-            /work/.build/iwyu/iwyu-version.txt
-            /work/.build/iwyu/iwyu-exit-code.txt
+            /work/.build/iwyu/report/iwyu.txt
+            /work/.build/iwyu/report/iwyu-version.txt
+            /work/.build/iwyu/report/iwyu-exit-code.txt
           retention-days: 30

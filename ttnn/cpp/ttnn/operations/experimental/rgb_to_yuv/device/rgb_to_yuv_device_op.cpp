@@ -56,6 +56,7 @@ void RgbToYuvDeviceOperation::validate_on_program_cache_miss(
 
     TT_FATAL(
         attrs.format == YUVFormat::YUV420Planar, "Only YUV 4:2:0 planar output (YUVFormat::YUV420Planar) is supported");
+    TT_FATAL(!attrs.wide_rows || shape[3] <= 32, "wide_rows needs T <= 32 (one T tile per unit), got T={}", shape[3]);
 
     const auto& c = attrs.coefficients;
     for (int i = 0; i < 4; i++) {
@@ -83,6 +84,12 @@ RgbToYuvDeviceOperation::spec_return_value_t RgbToYuvDeviceOperation::compute_ou
     auto mem_cfg = attrs.output_memory_config;
     auto uint8_layout = TensorLayout(DataType::UINT8, Layout::ROW_MAJOR, mem_cfg);
 
+    if (attrs.wide_rows) {
+        TensorSpec y_spec(ttnn::Shape{1, H, W * T}, uint8_layout);
+        TensorSpec u_spec(ttnn::Shape{1, H / 2, (W / 2) * T}, uint8_layout);
+        TensorSpec v_spec(ttnn::Shape{1, H / 2, (W / 2) * T}, uint8_layout);
+        return {y_spec, u_spec, v_spec};
+    }
     TensorSpec y_spec(ttnn::Shape{1, H, W, T}, uint8_layout);
     TensorSpec u_spec(ttnn::Shape{1, H / 2, W / 2, T}, uint8_layout);
     TensorSpec v_spec(ttnn::Shape{1, H / 2, W / 2, T}, uint8_layout);
@@ -109,12 +116,14 @@ std::tuple<Tensor, Tensor, Tensor> rgb_to_yuv(
     const Tensor& input,
     const ttnn::experimental::prim::YUVCoefficients& coefficients,
     ttnn::experimental::prim::YUVFormat format,
-    const std::optional<tt::tt_metal::MemoryConfig>& memory_config) {
+    const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
+    bool wide_rows) {
     using Op = ttnn::experimental::prim::RgbToYuvDeviceOperation;
 
     auto op_attrs = Op::operation_attributes_t{
         .coefficients = coefficients,
         .format = format,
+        .wide_rows = wide_rows,
         .output_memory_config = memory_config.value_or(input.memory_config()),
     };
     auto tensor_args = Op::tensor_args_t{.input = input};

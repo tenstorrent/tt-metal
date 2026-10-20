@@ -15,7 +15,19 @@
 #ifndef ARCH_QUASAR
 #include "api/compute/eltwise_unary/identity.h"
 #include "api/compute/mask.h"
-#include "api/compute/copy_dest_values.h"  // CopyDest (DST -> DST)
+// CopyDest (DST -> DST) only calls the copy_dest_values<DataFormat> overload. The header's legacy
+// non-template overload calls a deprecated LLK in its body, so GCC warns on every includer even
+// though nothing calls it. Suppress only while parsing the header; callers of the legacy overload
+// are still warned at their own call sites. Its dependencies are included first so the
+// suppressed region covers copy_dest_values.h alone.
+#ifdef TRISC_MATH
+#include "ckernel_sfpu_copy_dest_values.h"
+#include "llk_math_eltwise_binary_sfpu_macros.h"
+#endif
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#include "api/compute/copy_dest_values.h"
+#pragma GCC diagnostic pop
 #endif
 
 namespace compute_kernel_lib {

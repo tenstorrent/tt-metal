@@ -75,6 +75,22 @@ def _rows(base, ref, gain=True):
     return rows
 
 
+def _ref_rows(ref):
+    rows = []
+    for family, name, unit, _, places in _FAMILIES:
+        for label in _ordered(ref.get(family, {})):
+            rows.append([f"{name} {label}", f"{ref[family][label]:,.{places}f} {unit}"])
+    return rows
+
+
+def _occupancy_lines(ref):
+    occ = [(k, ref[k]) for k in ("balance", "bottleneck_saturation", "global_occupancy") if k in ref]
+    if not occ:
+        return []
+    # Occupancy needs a pipeline, so only the multi-rank config reports it.
+    return ["", f"{_REF} pipeline occupancy:", *[f"  {k:<21} = {v:.4f}" for k, v in occ]]
+
+
 def _table(headers, rows):
     widths = [len(h) for h in headers]
     for row in rows:
@@ -96,6 +112,11 @@ def main():
     ap.add_argument("--metrics-dir", required=True, help="dir of *.json metrics sidecars (searched recursively)")
     ap.add_argument("--model", default=None, help="render only this model (default: every model found)")
     ap.add_argument("--gantt-url", default=None, help="link the pipeline gantt artifact under the table")
+    ap.add_argument(
+        "--sc4-only",
+        action="store_true",
+        help=f"report {_REF} alone, for a model whose {_BASE} leg runs a smaller model and so is no baseline",
+    )
     args = ap.parse_args()
 
     lines = []
@@ -110,6 +131,23 @@ def main():
         base, ref = configs.get(_BASE) or {}, configs.get(_REF) or {}
         lines.append(f"#### {model}")
         lines.append("")
+        if args.sc4_only:
+            if not ref:
+                lines.append(f"{_REF} did not report this run; nothing to show")
+                lines.append("")
+                continue
+            lines.append("```text")
+            lines.append(
+                f"request: {_REF} {ref['num_chunks']} chunks x {ref['chunk_size']} tok = {ref['max_seq']:,} tok"
+            )
+            lines += _table(["metric", _REF], _ref_rows(ref))
+            lines += _occupancy_lines(ref)
+            lines.append("```")
+            lines.append("")
+            if args.gantt_url:
+                lines.append(f"[4 Galaxy Pipeline gantt (PNG)]({args.gantt_url})")
+                lines.append("")
+            continue
         note = None
         if not base or not ref:
             note = f"only {', '.join(sorted(configs))} ran this run; no gain to compute"
@@ -131,19 +169,18 @@ def main():
             lines.append(f"ideal = a perfect {rb}-rank -> {rr}-rank pipeline, C chunks deep:")
             lines.append("        chunk_time x1 (latency is work, not width), ttft xC*R/(C+R-1), throughput xR")
         lines += _table(["metric", _BASE, _REF, f"{_REF} gain", "ideal", "of ideal"], _rows(base, ref, gain=not note))
-        occ = [(k, ref[k]) for k in ("balance", "bottleneck_saturation", "global_occupancy") if k in ref]
-        if occ:
-            lines.append("")
-            # Occupancy needs a pipeline, so only the multi-rank config reports it.
-            lines.append(f"{_REF} pipeline occupancy:")
-            lines += [f"  {k:<21} = {v:.4f}" for k, v in occ]
+        lines += _occupancy_lines(ref)
         lines.append("```")
         lines.append("")
         if args.gantt_url:
             lines.append(f"[4 Galaxy Pipeline gantt (PNG)]({args.gantt_url})")
             lines.append("")
 
-    title = f"disaggregated prefill scaling -- {_REF} vs {_BASE}"
+    title = (
+        f"disaggregated prefill perf -- {_REF}"
+        if args.sc4_only
+        else f"disaggregated prefill scaling -- {_REF} vs {_BASE}"
+    )
     block = "### {}\n\n{}\n".format(title, "\n".join(lines))
     print(block)
     step_summary = os.environ.get("GITHUB_STEP_SUMMARY")

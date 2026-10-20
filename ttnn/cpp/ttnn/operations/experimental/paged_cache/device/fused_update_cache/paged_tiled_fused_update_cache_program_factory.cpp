@@ -100,7 +100,8 @@ PagedTiledFusedUpdateCacheProgramFactory::compute_tiled_fused_offsets(
     const auto& input_tensor1 = tensor_args.input_tensor1;
     const auto& input_tensor2 = tensor_args.input_tensor2;
     const bool fp32_dest_acc_en = CMAKE_UNIQUE_NAMESPACE_TILED::enable_fp32_dest_acc(
-        *input_tensor1.device(), operation_attributes.compute_kernel_config);
+                                      *input_tensor1.device(), operation_attributes.compute_kernel_config) ||
+                                  cache_tensor1.dtype() == DataType::FLOAT32;
 
     const uint32_t Wt = cache_tensor1.padded_shape()[-1] / TILE_WIDTH;
     const uint32_t Wbytes = fp32_dest_acc_en ? cache_tensor1.padded_shape()[-1] * sizeof(float)
@@ -149,7 +150,9 @@ ttnn::device_operation::ProgramArtifacts PagedTiledFusedUpdateCacheProgramFactor
     tt::DataFormat input_dfb_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor1.dtype());
     uint32_t input_single_tile_size = tt::tile_size(input_dfb_data_format);
 
-    bool fp32_dest_acc_en = enable_fp32_dest_acc(*device, operation_attributes.compute_kernel_config);
+    const bool preserve_fp32_cache = cache_tensor1.dtype() == DataType::FLOAT32;
+    bool fp32_dest_acc_en =
+        enable_fp32_dest_acc(*device, operation_attributes.compute_kernel_config) || preserve_fp32_cache;
 
     tt::DataFormat interm_dfb_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     uint32_t interm_single_tile_size = tt::tile_size(interm_dfb_data_format);
@@ -509,10 +512,12 @@ ttnn::device_operation::ProgramArtifacts PagedTiledFusedUpdateCacheProgramFactor
         ComputeHardwareConfig compute_hw{.enable_32_bit_dest = fp32_dest_acc_en};
         if (fp32_dest_acc_en) {
             // A 32-bit Dest requires an explicit unpack mode for every Float32 buffer the compute
-            // kernel consumes. Legacy named none, which resolved to unpacking into SrcA/B.
+            // kernel consumes. UnpackToDest preserves full precision for FLOAT32 caches; for other caches,
+            // retain the legacy UnpackToSrc behavior.
             const auto require_unpack_mode = [&](const DFBSpecName& dfb, tt::DataFormat format) {
                 if (format == tt::DataFormat::Float32) {
-                    compute_hw.unpack_modes.emplace(dfb, UnpackMode::UnpackToSrc);
+                    compute_hw.unpack_modes.emplace(
+                        dfb, preserve_fp32_cache ? UnpackMode::UnpackToDest : UnpackMode::UnpackToSrc);
                 }
             };
             require_unpack_mode(TF_CACHE_TILES, cache_dfb_data_format);

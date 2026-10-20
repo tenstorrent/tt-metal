@@ -6,7 +6,7 @@
 
 Runs a TTNN matmul loop with ``TT_METAL_STREAMING_PROFILER_OPS_CSV`` set and checks the CSV the ops-csv
 consumer writes at process exit: one row per program launch, with the device-profiler report's device columns
-(see streaming_profiler_ops_csv.hpp). The Tracy sink is left off, so the ops-csv consumer is the sole record
+(see ops_csv.hpp). The Tracy sink is left off, so the ops-csv consumer is the sole record
 sink. Needs a Blackhole box with DRAM programmable cores; device work runs in a subprocess so the pytest parent
 never takes the PCIe lock.
 """

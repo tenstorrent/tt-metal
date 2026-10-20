@@ -27,7 +27,6 @@ void kernel_main() {
 
     constexpr uint32_t cb_id_in0 = 0;
     const uint32_t single_tile_size_bytes = get_tile_size(cb_id_in0);
-    const DataFormat data_format = get_dataformat(cb_id_in0);
     const auto s0 = TensorAccessor(in0_args, in0_tensor_addr);
 
     CircularBuffer cb_in0(cb_id_in0);

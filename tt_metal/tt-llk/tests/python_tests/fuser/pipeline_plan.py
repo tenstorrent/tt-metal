@@ -174,7 +174,11 @@ class PlannedBlock:
 
         def trace_sfpu(planned, bank, values):
             sources = set()
-            slots = ("src0", "src1") if planned.unit.input_count == 2 else ("dest",)
+            slots = (
+                tuple(f"src{i}" for i in range(planned.unit.input_count))
+                if planned.unit.input_count > 1
+                else ("dest",)
+            )
             for call in planned.loop.calls(bank):
                 producers = (
                     values.get(call.dest, {planned.node})
@@ -297,7 +301,11 @@ def _plan_node(planned: PlannedBlock, node: Node, role: str, unit: Unit) -> Plan
         row_tiles["out"] = node.output.tile_count_x
         slots = ["dest", "out"]
     else:
-        slots = ["src0", "src1", "dest"] if unit.input_count == 2 else ["dest"]
+        slots = (
+            [*(f"src{i}" for i in range(unit.input_count)), "dest"]
+            if unit.input_count > 1
+            else ["dest"]
+        )
 
     plan = default_plan(
         planned.region,

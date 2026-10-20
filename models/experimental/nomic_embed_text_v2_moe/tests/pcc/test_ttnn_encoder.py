@@ -9,7 +9,8 @@ a layer norm, so randn matches its statistics. The encoder's input has not: it i
 lookup followed by emb_ln, and feeding randn there is out of domain in a way that changes the
 answer.
 
-Measured, at B=2 S=128, comparing the two inputs at the same shapes:
+Measured at B=2 S=128 on the bring-up code, before the matmul precision changes of
+tt/model_config.py, comparing the two inputs at the same shapes:
 
   input               reference absmax    encoder PCC     pooled cosine
   embedding output         11 to 13       0.9937+         0.99950+
@@ -23,9 +24,10 @@ on activations the model can actually see. The per-operator gates in
 test_ttnn_operators.py cover fc2 itself.
 
 Two statistics are asserted, because they fail differently. The pooled cosine is what the model
-actually emits and is stable to four decimal places across draws. All-token PCC is the looser of
-the two on purpose: a handful of rerouted tokens are legitimately different, and with only a few
-hundred tokens that moves the aggregate more than it moves the embedding.
+actually emits and is stable to about three decimal places across draws, routing cascades aside.
+All-token PCC is the looser of the two on purpose: a handful of rerouted tokens are legitimately
+different, and with only a few hundred tokens that moves the aggregate more than it moves the
+embedding.
 """
 
 import pytest
@@ -54,15 +56,19 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 
 pytestmark = [run_for_blackhole(), pytest.mark.use_module_device, pytest.mark.needs_weights]
 
-# All-token PCC over the full stack. Measured 0.99366 to 0.99834 in domain over six seeds at each
-# of 2x128 and 2x512, so this holds the standard 0.99 module line with about 0.37% to spare. The
-# statistic still moves with how many tokens happened to reroute, which is why the pooled cosine
-# below is the tighter gate rather than this one.
+# All-token PCC over the full stack. Measured 0.99158 to 0.99811 in domain over seeds 0..7 at each
+# of 2x128 and 2x512, padded or not, outside the two routing cascades below (0.980 and 0.982), so
+# this holds the standard 0.99 module line with about 0.16% to spare. The statistic moves with how
+# many tokens happened to reroute, which is why the pooled cosine below is the tighter gate.
 MODULE_PCC = 0.99
 
-# The pooled, normalized embedding: what the model emits, and the tight gate. Measured 0.99950 to
-# 0.99978 across draws and both sequence lengths.
-POOLED_COSINE = 0.999
+# The pooled, normalized embedding: what the model emits, and the tight gate. Over seeds 0..7 at
+# both shapes, padded and not, 1 - cos is at most 1.7e-3 in 30 of 32 draws. The other two, both
+# padded, are routing cascades: 2.4e-2 at 2x128 and 7.9e-3 at 2x512. With the matmuls at their
+# earlier fidelities there are cascades too (1.5e-2 at 2x512 padded), and 2 of 8 draws at 2x128
+# exceed 1e-3, so the 0.999 gate this replaced held on the tested seed alone. These tests run seed
+# 0; the seed sweep of the pooled embedding is test_ttnn_model.py's, at its own tolerance.
+POOLED_COSINE = 0.998
 
 # Minimum per-layer PCC across the ladder. Measured 0.9937 to 0.9981.
 LADDER_PCC = 0.99
@@ -126,7 +132,7 @@ def test_encoder(device, config, reference_model, reference, tt_encoder, batch, 
 
 
 @pytest.mark.parametrize("batch, seqlen", STACK_SHAPES)
-def test_encoder_with_ragged_padding(device, config, reference_model, reference, tt_encoder, batch, seqlen):
+def test_encoder_with_ragged_padding(device, config, tt_config, reference_model, reference, tt_encoder, batch, seqlen):
     """The whole stack with 25% of each row padded, compared on the kept positions.
 
     The pooled embedding is taken with the same mask, so padded positions are excluded from it
@@ -139,7 +145,7 @@ def test_encoder_with_ragged_padding(device, config, reference_model, reference,
     out = tt_encoder(
         to_device(to_block_layout(x), device),
         rotary_tables(device, config, seqlen),
-        additive_attention_mask(mask, device),
+        additive_attention_mask(mask, device, mask_dtype=tt_config.attention_mask_dtype),
     )
 
     with torch.no_grad():
@@ -222,7 +228,7 @@ def test_routing_agreement_holds_at_depth(device, config, reference_model, refer
             # block input: the block input is one sub-block short of where routing happens, so
             # measuring there would report decisions the model never makes.
             tt_attn = layer.attn(tensor, rot_mats)
-            tt_hidden = layer._norm(tt_attn, tensor, layer.norm1_weight, layer.norm1_bias)
+            tt_hidden = layer._norm(tt_attn, tensor, layer.norm1)
             _, _, indices = layer.mlp.router.select(flatten_tokens(tt_hidden))
             selected = ttnn.to_torch(indices).long().reshape(tokens, config.moe_top_k)
             with torch.no_grad():
