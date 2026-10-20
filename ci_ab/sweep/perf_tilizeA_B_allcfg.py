@@ -73,5 +73,6 @@ def test_perf_tilizeA_B_allcfg(perf_report, case):
                                       tile_count_A=ct, tile_count_B=1, tile_count_res=ct),
         dest_acc=acc,
         unpack_to_dest=False,
+        compile_time_formats=os.environ.get("TA_CTF_ALL") == "1",
     )
     configuration.run(perf_report)
