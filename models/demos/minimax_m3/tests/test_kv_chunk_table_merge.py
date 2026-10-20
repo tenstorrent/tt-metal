@@ -10,8 +10,9 @@ table's addressing against the layouts: per-(stage, cache) base addresses at glo
 single-member per-head device groups vs the full-row index_k replica group, and the per-(config, stage,
 row) bank-walk restart, and the index_k rows limited to the MSA layers. The ``dedup_table`` cases rebuild
 it with index_k TP-deduped (``index_k_tp_axis``): index_k stays one config but every chip owns a distinct
-stripe, addressed by a single-chip group and its own bank walk, while K / V are unchanged. The ``paged`` case
-gives the second stage a paged pool: its chunks are addressed through each slot's page.
+stripe, addressed by a single-chip group and its own bank walk, while K / V are unchanged. The ``paged`` cases
+give the second stage a paged pool: each chunk of it must sit where the slot walk puts the same page of a pool
+built as a slot cache (one slot per page), and the runner's fixed page table must map slots one to one onto pages.
 """
 
 import os
@@ -21,10 +22,13 @@ import pytest
 
 import ttnn
 from models.demos.common.prefill.runners.migration import validate_stage_layout_contiguous
+from models.demos.minimax_m3.tt import tt_prefill_runtime
 from models.demos.minimax_m3.tt.attention.kv_cache import (
     NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK,
     PAGE_SIZE,
     fixed_page_table,
+    fixed_pool_pages,
+    page_owner,
 )
 from models.demos.minimax_m3.tt.runners.kv_chunk_table import _chunk_size_bytes, build_and_serialize_kv_chunk_table
 
@@ -71,9 +75,9 @@ def _stage_layouts():
     return layouts
 
 
-def _stub_cache(num_layers, seq_len=SEQ_LEN, index_k_tp_axis=None):
+def _stub_cache(num_layers, seq_len=SEQ_LEN, index_k_tp_axis=None, num_users=NUM_USERS):
     def t(dtype, rows):
-        return SimpleNamespace(shape=(NUM_USERS * num_layers, 1, rows, HEAD_DIM), dtype=dtype)
+        return SimpleNamespace(shape=(num_users * num_layers, 1, rows, HEAD_DIM), dtype=dtype)
 
     ik_rows = seq_len if index_k_tp_axis is None else seq_len // COLS
     # Migration requires a bf8 index_k (the decode peer's dtype); the builder rejects bf16.
@@ -93,18 +97,19 @@ def _build(
     seq_len=SEQ_LEN,
     chunk_size=CHUNK_SIZE,
     index_k_tp_axis=None,
+    num_users=NUM_USERS,
     **paging,
 ):
     path = os.path.join(str(tmp_path), "m3_merge_table.pb")
     # num_layers is THIS rank's stage count (rank 0 builds), used only for the local shape assert.
     return build_and_serialize_kv_chunk_table(
         mesh_device=None,
-        kv_cache=_stub_cache(STAGE_COUNTS[0], seq_len=seq_len, index_k_tp_axis=index_k_tp_axis),
+        kv_cache=_stub_cache(STAGE_COUNTS[0], seq_len=seq_len, index_k_tp_axis=index_k_tp_axis, num_users=num_users),
         seq_len=seq_len,
         num_layers=STAGE_COUNTS[0],
         mesh_shape=(SP, COLS),
         sp_axis=0,
-        num_users=NUM_USERS,
+        num_users=num_users,
         chunk_size=chunk_size,
         num_kv_heads=COLS,
         head_dim=HEAD_DIM,
@@ -347,45 +352,97 @@ def test_dedup_index_k_rows_limited_to_msa_layers(dedup_table, tmp_path):
                     ), f"config {cfg_id} slot {slot} layer {layer} pos {pos} changed device group"
 
 
+# Two pages per rank per chunk, two chunks per slot.
+PAGED_CHUNK_SIZE = 2 * PAGE_SIZE * SP
+PAGED_SEQ_LEN = 2 * PAGED_CHUNK_SIZE
+
+
 def test_paged_stage_addressing(tmp_path):
-    """Stage 1 holds a paged pool (stage 0 keeps slots): every chunk of it lands at the block of its slot's page,
-    pool entry page * count + layer, in the same 32-token round-robin walk; stage 0's slot walk is unchanged."""
-    seq_len, chunk_size = 256, PAGE_SIZE * SP  # one page per rank per chunk
-    chunk_local = chunk_size // SP
-    table = fixed_page_table(num_users=NUM_USERS, max_seq_len=seq_len, sp=SP, chunk_size=chunk_size)
-    layouts = _stage_layouts()
+    """Stage 1 holds a paged pool (stage 0 keeps slots). Oracle: the pool is a slot cache of one slot per page and
+    PAGE_SIZE rows per chip, so the slot walk over it places page p of rank r at slot p, positions [r * PAGE_SIZE,
+    (r + 1) * PAGE_SIZE). Every chunk of the paged stage, on every config, must sit at its page's oracle entry, and
+    stage 0's entries must equal a slots-only table's."""
     imp = ttnn.experimental.disaggregation.import_from_protobuf_file
-    (tmp_path / "paged").mkdir()
-    (tmp_path / "slots").mkdir()
-    paged = imp(
+    layouts = _stage_layouts()
+    for name in ("paged", "slots", "pool"):
+        (tmp_path / name).mkdir()
+    sizes = dict(seq_len=PAGED_SEQ_LEN, chunk_size=PAGED_CHUNK_SIZE)
+    paged = imp(_build(tmp_path / "paged", layouts, paged_stage=lambda first, count: first > 0, **sizes))
+    slots = imp(_build(tmp_path / "slots", layouts, **sizes))
+    num_pages = fixed_pool_pages(num_users=NUM_USERS, max_seq_len=PAGED_SEQ_LEN, sp=SP)
+    pool = imp(
         _build(
-            tmp_path / "paged",
+            tmp_path / "pool",
             layouts,
-            seq_len=seq_len,
-            chunk_size=chunk_size,
-            page_table=table,
-            paged_stage=lambda first, count: first > 0,
+            seq_len=PAGE_SIZE * SP,
+            chunk_size=PAGE_SIZE * SP,
+            num_users=num_pages,
         )
     )
-    slots = imp(_build(tmp_path / "slots", layouts, seq_len=seq_len, chunk_size=chunk_size))
-    k_bytes = _chunk_size_bytes(ttnn.bfloat8_b, HEAD_DIM)
-    stage = layouts[0][1]
-    blocks_per_page = PAGE_SIZE // NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
-    for slot in range(NUM_USERS):
-        for position in range(0, seq_len, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK):
-            row = (position // chunk_local) % SP
-            for local_layer in range(stage["count"]):
-                global_layer = stage["first_layer"] + local_layer
+    table = fixed_page_table(num_users=NUM_USERS, max_seq_len=PAGED_SEQ_LEN, sp=SP, chunk_size=PAGED_CHUNK_SIZE)
+    chunk_local = PAGED_CHUNK_SIZE // SP
+    total = sum(STAGE_COUNTS)
+    checked = 0
+    for cfg in range(2 * COLS + 1):
+        for slot in range(NUM_USERS):
+            for position in range(0, PAGED_SEQ_LEN, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK):
+                rank = page_owner(position // PAGE_SIZE, chunk_local=chunk_local, sp=SP)
                 page = int(table[slot, position // PAGE_SIZE])
-                block = (page * stage["count"] + local_layer) * blocks_per_page + (
-                    position % PAGE_SIZE
-                ) // NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
-                loc = paged.lookup(global_layer, position, slot, 0)
-                assert loc.noc_addr == ((block % NUM_BANKS) << 32) | (stage["base_addr"] + block // NUM_BANKS * k_bytes)
-                assert _ids(paged.get_device_group(loc.device_group_index).fabric_node_ids) == _ids(
-                    [stage["fnids"][row][0]]
-                )
-            for layer in range(STAGE_COUNTS[0]):
-                assert (
-                    paged.lookup(layer, position, slot, 0).noc_addr == slots.lookup(layer, position, slot, 0).noc_addr
-                )
+                for layer in range(total):
+                    got = paged.lookup(layer, position, slot, cfg)
+                    if layer < STAGE_COUNTS[0]:
+                        want = slots.lookup(layer, position, slot, cfg)
+                    else:
+                        want = pool.lookup(layer, rank * PAGE_SIZE + position % PAGE_SIZE, page, cfg)
+                    assert (got.noc_addr, got.size_bytes) == (want.noc_addr, want.size_bytes), (
+                        f"config {cfg} slot {slot} layer {layer} position {position}: "
+                        f"{got.noc_addr:#x} != {want.noc_addr:#x}"
+                    )
+                    assert _ids(paged.get_device_group(got.device_group_index).fabric_node_ids) == _ids(
+                        pool.get_device_group(want.device_group_index).fabric_node_ids
+                        if layer >= STAGE_COUNTS[0]
+                        else slots.get_device_group(want.device_group_index).fabric_node_ids
+                    )
+                    checked += 1
+    assert checked == (2 * COLS + 1) * NUM_USERS * total * PAGED_SEQ_LEN // NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
+
+
+def test_fixed_page_table_is_one_to_one():
+    """Every rank's pool pages are owned by exactly one (slot, page) of the fixed table."""
+    table = fixed_page_table(num_users=NUM_USERS, max_seq_len=PAGED_SEQ_LEN, sp=SP, chunk_size=PAGED_CHUNK_SIZE)
+    num_pages = fixed_pool_pages(num_users=NUM_USERS, max_seq_len=PAGED_SEQ_LEN, sp=SP)
+    for rank in range(SP):
+        owned = [q for q in range(table.shape[1]) if page_owner(q, chunk_local=PAGED_CHUNK_SIZE // SP, sp=SP) == rank]
+        assert sorted(table[:, owned].flatten().tolist()) == list(range(num_pages)), f"rank {rank}"
+
+
+def _hf_config(msa_layers, num_layers=6):
+    return SimpleNamespace(
+        sparse_attention_config={
+            "use_sparse_attention": True,
+            "sparse_attention_freq": [int(i in msa_layers) for i in range(num_layers)],
+        }
+    )
+
+
+@pytest.mark.parametrize(
+    "enabled, first, count, paged",
+    [(False, 3, 2, False), (True, 3, 2, True), (True, 2, 2, False), (True, 0, 6, False)],
+    ids=["off", "msa_stage", "dense_layer", "whole_model"],
+)
+def test_stage_is_paged(monkeypatch, enabled, first, count, paged):
+    """Only a stage of MSA layers is paged, and only with PAGED_KV_CACHE on."""
+    monkeypatch.setattr(tt_prefill_runtime, "PAGED_KV_CACHE", enabled)
+    assert tt_prefill_runtime.stage_is_paged(_hf_config({3, 4, 5}), first, count) == paged
+
+
+def test_paging_mismatch_raises(monkeypatch, expect_error):
+    """A stage whose cache disagrees with stage_is_paged would publish a wrong migration table: it raises."""
+    monkeypatch.setattr(tt_prefill_runtime, "PAGED_KV_CACHE", True)
+    runtime = SimpleNamespace(hf_config=_hf_config({3, 4, 5}))
+    check = tt_prefill_runtime.TtPrefillRuntime._check_paging
+    with expect_error(ValueError, "slot KV cache"):
+        check(runtime, SimpleNamespace(page_table=None), 3, 2)
+    with expect_error(ValueError, "paged KV cache"):
+        check(runtime, SimpleNamespace(page_table=object()), 0, 3)
+    check(runtime, SimpleNamespace(page_table=object()), 3, 2)
