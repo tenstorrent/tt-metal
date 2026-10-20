@@ -26,7 +26,7 @@ extern "C" __attribute__((noinline, used)) void reference_runtime_set_xy(std::ui
 {
     const auto ch0_x = x;
     const auto ch0_y = y;
-    TT_SETADCXY(1, 0, 0, ch0_y, ch0_x, 3);
+    TT_SETADCXY(0b001 /*UNP0*/, 0 /*Ch1_Y*/, 0 /*Ch1_X*/, ch0_y, ch0_x, 0b0011 /*BitMask*/);
 }
 
 extern "C" __attribute__((noinline, used)) void runtime_set_single_counter(std::uint32_t z)
@@ -37,7 +37,7 @@ extern "C" __attribute__((noinline, used)) void runtime_set_single_counter(std::
 
 extern "C" __attribute__((noinline, used)) void reference_runtime_set_single_counter(std::uint32_t z)
 {
-    TT_SETADC(2, 1, 2, z);
+    TT_SETADC(0b010 /*UNP1*/, 1 /*ChannelIndex*/, 2 /*SET_Z*/, z);
 }
 
 extern "C" __attribute__((noinline, used)) void runtime_set_x_both_channels(std::uint32_t x0, std::uint32_t x1)
@@ -50,7 +50,7 @@ extern "C" __attribute__((noinline, used)) void reference_runtime_set_x_both_cha
 {
     const auto ch0_x = x1;
     const auto ch1_x = x0;
-    TT_SETADCXX(4, ch1_x, ch0_x);
+    TT_SETADCXX(0b100 /*PAC*/, ch1_x, ch0_x);
 }
 
 extern "C" __attribute__((noinline, used)) void runtime_set_zw(std::uint32_t z, std::uint32_t w)
@@ -63,7 +63,7 @@ extern "C" __attribute__((noinline, used)) void reference_runtime_set_zw(std::ui
 {
     const auto ch1_z = z;
     const auto ch1_w = w;
-    TT_SETADCZW(4, ch1_w, ch1_z, 0, 0, 12);
+    TT_SETADCZW(0b100 /*PAC*/, ch1_w, ch1_z, 0 /*Ch0_W*/, 0 /*Ch0_Z*/, 0b1100 /*BitMask*/);
 }
 
 extern "C" __attribute__((noinline, used)) void runtime_increment_zw(std::uint32_t z, std::uint32_t w)
@@ -76,7 +76,7 @@ extern "C" __attribute__((noinline, used)) void reference_runtime_increment_zw(s
 {
     const auto ch0_z = z;
     const auto ch0_w = w;
-    TT_INCADCZW(4, 0, 0, ch0_w, ch0_z);
+    TT_INCADCZW(0b100 /*PAC*/, 0 /*Ch1_W*/, 0 /*Ch1_Z*/, ch0_w, ch0_z);
 }
 
 extern "C" __attribute__((noinline, used)) void runtime_advance_and_reset_xy(std::uint32_t x, std::uint32_t y)
@@ -89,7 +89,7 @@ extern "C" __attribute__((noinline, used)) void reference_runtime_advance_and_re
 {
     const auto ch0_x = x;
     const auto ch0_y = y;
-    TT_ADDRCRXY(1, 0, 0, ch0_y, ch0_x, 3);
+    TT_ADDRCRXY(0b001 /*UNP0*/, 0 /*Ch1_Y*/, 0 /*Ch1_X*/, ch0_y, ch0_x, 0b0011 /*BitMask*/);
 }
 
 extern "C" __attribute__((noinline, used)) std::uint32_t runtime_encoded_set_x(std::uint32_t x)
@@ -100,5 +100,5 @@ extern "C" __attribute__((noinline, used)) std::uint32_t runtime_encoded_set_x(s
 
 extern "C" __attribute__((noinline, used)) std::uint32_t reference_runtime_encoded_set_x(std::uint32_t x)
 {
-    return TT_OP_SETADC(1, 0, 0, x);
+    return TT_OP_SETADC(0b001 /*UNP0*/, 0 /*ChannelIndex*/, 0 /*SET_X*/, x);
 }
