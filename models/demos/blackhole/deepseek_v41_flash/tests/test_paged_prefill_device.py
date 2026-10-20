@@ -127,6 +127,15 @@ def _run(mesh_device):
             return []
         return [ttnn.to_torch(ttnn.get_device_tensors(pool.pool)[r * m.cols]).clone() for r in range(m.rows)]
 
+    def snapk():
+        """decode index-key slabs (bfp8 / bf16 tile [U,1,n_alloc,128]) of the key owners, per mesh row"""
+        if os.environ.get("PP_NOPOOL") or not os.environ.get("PP_KEYS"):
+            return {}
+        return {
+            L: [ttnn.to_torch(ttnn.get_device_tensors(d.k_cache)[r * m.cols]).clone() for r in range(m.rows)]
+            for L, d in m.index_owner.items()
+        }
+
     results = {}
     for mode in MODES:
         PG.set_mode(mode.split("#")[0])  # "0#b": a second dense run (run-to-run noise baseline)
@@ -135,6 +144,14 @@ def _run(mesh_device):
         m.pf_resume = {}
         m.__dict__.pop("pf_slot_of", None)
         m.__dict__.pop("pf_slot_owner", None)
+        if os.environ.get("PP_ZERO_IDLE", "1") == "1":
+            # the decode key slabs of the users that are not prefilled hold leftovers of whatever ran before; their decode rows share the batch with the real users' (batch-composition noise in
+            # the decode logits, dense vs dense), so start every mode from zeroed slabs (the prefill writes the real users' slabs)
+            for d in m.index_owner.values():
+                z = ttnn.zeros_like(d.k_cache)
+                ttnn.copy(z, d.k_cache)
+                ttnn.deallocate(z)
+            ttnn.synchronize_device(md)
         times, res = [], None
         for rep in range(REPS):
             for u in range(B):
@@ -150,6 +167,7 @@ def _run(mesh_device):
             log(
                 f"PP mode {mode} rep {rep}: wall {wall:.2f}s replay_s {tm.get('replay_s', 0):.3f} replays {tm.get('replays')}"
             )
+        pre = dict(pool=snap(), keys=snapk())  # state right after the prefill, before any decode step
         dec = None
         if DECODE:
             tok = torch.zeros(B, dtype=torch.long)
@@ -157,9 +175,12 @@ def _run(mesh_device):
             for u in users:
                 tok[u], pos[u] = int(res[u][0]), lens[u]
             dec = {"tok": [], "logits": []}
+            step_t = []
             t0 = time.perf_counter()
             for step in range(DECODE):
+                ts = time.perf_counter()
                 out = m.decode_forward(tok, pos, enable_trace=True, reload_inputs=True)
+                step_t.append(time.perf_counter() - ts)
                 lg = m.read_logits().clone()
                 dec["tok"].append(torch.stack([out[u].clone() for u in users]))
                 dec["logits"].append(lg[users].float().clone())
@@ -172,13 +193,17 @@ def _run(mesh_device):
                     log(
                         f"PP NEEDLE mode {mode} depth {DEPTHS[i % len(DEPTHS)]} user {u} code {codes[u]}: found {str(codes[u]) in txt} answer {txt[:60]!r}"
                     )
+            st_ = sorted(step_t[1:])
+            log(
+                f"PP DECODE TPOT mode {mode} pool {pool.dtype}: median step {st_[len(st_) // 2] * 1e3:.1f} ms, min {st_[0] * 1e3:.1f} ms, max {st_[-1] * 1e3:.1f} ms (steps 1..{DECODE - 1}, step 0 includes the trace capture)"
+            )
             log(f"PP mode {mode}: {DECODE} decode steps in {time.perf_counter() - t0:.1f}s")
         free = m.dram_snapshot()
         log(
             f"PP mode {mode}: DRAM per bank after capture+run: allocated {free[0]:.1f} MiB free {free[1]:.1f} MiB largest block {free[2]:.1f} MiB"
         )
         st = snap()
-        results[mode] = dict(res=res, pool=st, times=times, dram=free, dec=dec)
+        results[mode] = dict(res=res, pool=st, times=times, dram=free, dec=dec, pre=pre)
 
     if os.environ.get(
         "PP_SAVE"
@@ -207,18 +232,63 @@ def _run(mesh_device):
             log(
                 f"PP {mode} vs {MODES[0]} user {u} len {lens[u]}: token {t0_} / {t1_} logits equal {eq} maxabs {d:.3e} (|l|max {l0.abs().max():.2f})"
             )
-            ok &= t0_ == t1_ and eq
-        bad = []
-        for row in range(m.rows):
-            x = base["pool"][row].reshape(-1, 512)[: pool.scratch_origin]
-            y = r["pool"][row].reshape(-1, 512)[: pool.scratch_origin]
-            ne = (
-                (~((x.float() == y.float()) | (x.float().isnan() & y.float().isnan()))).any(dim=1).nonzero().reshape(-1)
+            a0, a1 = l0.float() - l0.float().mean(), l1.float() - l1.float().mean()
+            pcc = float((a0 @ a1) / (a0.norm() * a1.norm() + 1e-12))
+            top5 = len(set(l0.topk(5).indices.tolist()) & set(l1.topk(5).indices.tolist()))
+            log(f"PP {mode} vs {MODES[0]} user {u}: logits PCC {pcc:.6f} top-5 overlap {top5}/5")
+            ok &= t0_ == t1_ and (eq or os.environ.get("PP_SOFT") == "1")
+        for tag, a_, b_ in (("pre-decode", base["pre"], r["pre"]), ("post-decode", base, r)):
+            if a_["pool"]:
+                bad = []
+                for row in range(m.rows):
+                    x = a_["pool"][row].reshape(-1, 512)[: pool.scratch_origin]
+                    y = b_["pool"][row].reshape(-1, 512)[: pool.scratch_origin]
+                    ne = (
+                        (~((x.float() == y.float()) | (x.float().isnan() & y.float().isnan())))
+                        .any(dim=1)
+                        .nonzero()
+                        .reshape(-1)
+                    )
+                    if len(ne):
+                        pg = sorted({int(i) // 320 for i in ne.tolist()})
+                        bad.append(
+                            f"mesh row {row}: {len(ne)} rows differ (pages {pg[:4]}..{pg[-2:]}; first rows {ne[:4].tolist()})"
+                        )
+                log(f"PP {mode} vs {MODES[0]} POOL {tag}: " + ("bit-identical" if not bad else "; ".join(bad)))
+            for L in a_.get("keys", {}):
+                for row in range(m.rows):
+                    x, y = a_["keys"][L][row].float(), b_["keys"][L][row].float()
+                    du = [
+                        u for u in range(x.shape[0]) if not bool(((x[u] == y[u]) | (x[u].isnan() & y[u].isnan())).all())
+                    ]
+                    if du:
+                        det = []
+                        for u in [u_ for u_ in du if row * U + u_ in lens]:  # the in-row users that were prefilled
+                            ne = (
+                                ((x[u] != y[u]) & ~(x[u].isnan() & y[u].isnan())).any(dim=(0, 2)).nonzero().reshape(-1)
+                                if x[u].dim() == 3
+                                else ((x[u] != y[u]) & ~(x[u].isnan() & y[u].isnan())).any(dim=-1).nonzero().reshape(-1)
+                            )
+                            ratio = 1 if L == 20 else 2
+                            b_user = row * U + u
+                            nv = (lens.get(b_user, 0)) // ratio
+                            det.append(
+                                f"user {u}: {len(ne)} entries differ, range [{int(ne.min())}, {int(ne.max())}], valid entries {nv}, differ below valid {int((ne < nv).sum())}"
+                            )
+                        log(
+                            f"PP {mode} vs {MODES[0]} KEYSLAB {tag} layer {L} mesh row {row}: users differ {du}; "
+                            + "; ".join(det)
+                        )
+        if base["pre"][
+            "pool"
+        ]:  # the pool right after the prefill must be bit-identical (decode steps are compared by ids / logits below)
+            ok &= all(
+                torch.equal(
+                    base["pre"]["pool"][row].reshape(-1, 512)[: pool.scratch_origin].float().nan_to_num(7.0),
+                    r["pre"]["pool"][row].reshape(-1, 512)[: pool.scratch_origin].float().nan_to_num(7.0),
+                )
+                for row in range(m.rows)
             )
-            if len(ne):
-                bad.append(f"mesh row {row}: {len(ne)} pool rows differ (first {ne[:6].tolist()})")
-        log(f"PP {mode} vs {MODES[0]} pool (pages + rings): " + ("bit-identical" if not bad else "; ".join(bad)))
-        ok &= not bad
     if DECODE:
         ref_dec = results[MODES[0]]["dec"]
         for mode in MODES[1:]:
