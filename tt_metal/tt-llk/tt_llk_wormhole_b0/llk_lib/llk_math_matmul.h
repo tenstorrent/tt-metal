@@ -790,12 +790,14 @@ inline void matmul_configure_mop_throttled(
  * @brief Whether the matmul MOP supports this in0 x in1 tile-shape pair.
  *
  * Supported (checked with test_unpack_matmul / test_math_matmul): in0 1/2/4/8/16/32x32 with in1 32x32
- * or 32x16, and in0 32x16 or 16x16 with in1 16x32. Rejected:
- * - in0 columns != in1 rows (the contraction dims must match);
- * - in1 shorter than a full 16-row face (MVMUL reads 16 SrcA rows per face);
- * - in1 16x16: no MOP path, it falls into the 32x32 one (also covers 16x16 x 16x16);
+ * or 32x16, and in0 32x16 or 16x16 with in1 16x32. Rejected, among pairs whose contraction dims match:
+ * - in1 16x16: no MOP path, it falls into the 32x32 one (32x16 x 16x16 gives wrong results on
+ *   Wormhole; also covers the existing 16x16 x 16x16 assert);
  * - in0 with 16 columns and fewer than 16 rows (1/2/4/8x16): the recorded MOP does not match
  *   the replay length; on Wormhole the math thread hangs.
+ * Pairs whose contraction dims do not match (in0 columns != in1 rows) are not judged here: such a
+ * matmul is a caller bug, and some callers run this init on one CB only as a generic setup with no
+ * matmul after it (e.g. matmul_init(cb, cb) on an 8x32-tile CB).
  *
  * @param in0_tensor_shape: Tile shape of in0 (loaded to SrcB).
  * @param in1_tensor_shape: Tile shape of in1 (loaded to SrcA).
@@ -803,11 +805,11 @@ inline void matmul_configure_mop_throttled(
  */
 inline constexpr bool matmul_supports_tensor_shapes(const ckernel::TensorShape& in0_tensor_shape, const ckernel::TensorShape& in1_tensor_shape)
 {
-    const bool k_dims_match   = in0_tensor_shape.num_faces_c_dim == in1_tensor_shape.num_faces_r_dim;
-    const bool in1_full_faces = in1_tensor_shape.face_r_dim == MAX_FACE_R_DIM;
-    const bool in1_is_16x16   = (in1_tensor_shape.num_faces_r_dim == 1) && (in1_tensor_shape.num_faces_c_dim == 1);
-    const bool in0_short_k16  = (in0_tensor_shape.num_faces_c_dim == 1) && (in0_tensor_shape.face_r_dim != MAX_FACE_R_DIM);
-    return k_dims_match && in1_full_faces && !in1_is_16x16 && !in0_short_k16;
+    // in0 has 16 or 32 columns, so in1 faces shorter than 16 rows are a K mismatch too.
+    const bool k_dims_match  = (in0_tensor_shape.num_faces_c_dim == in1_tensor_shape.num_faces_r_dim) && (in1_tensor_shape.face_r_dim == MAX_FACE_R_DIM);
+    const bool in1_is_16x16  = (in1_tensor_shape.num_faces_r_dim == 1) && (in1_tensor_shape.num_faces_c_dim == 1);
+    const bool in0_short_k16 = (in0_tensor_shape.num_faces_c_dim == 1) && (in0_tensor_shape.face_r_dim != MAX_FACE_R_DIM);
+    return !k_dims_match || (!in1_is_16x16 && !in0_short_k16);
 }
 
 /**
@@ -831,6 +833,7 @@ inline constexpr bool matmul_supports_tensor_shapes(const ckernel::TensorShape& 
  * @param transpose: Non-zero to transpose in1 faces during the multiply.
  * @param ct_dim: Number of column tiles in the output block.
  * @param rt_dim: Number of row tiles in the output block.
+ * @note Asserts the in0 x in1 pair with @ref matmul_supports_tensor_shapes (when LLK asserts are on).
  * @note On the unpack thread, pair with @ref _llk_unpack_AB_matmul_init_ which feeds SrcA/SrcB.
  * @note @ref _llk_math_matmul_ runs the configured matmul with matching template args.
  * @note Establishes the operand-driven DEFAULT Src zero-substitution state; @ref
