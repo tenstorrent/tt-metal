@@ -192,7 +192,13 @@ class TtDecoderLayer(LightweightModule):
                 y, new_state.kda = self.attn.decode_forward(h, state.kda, inplace=True)
                 return y
             return self.attn.decode_forward(
-                h, state.cache, positions.positions, positions.pool_ids, positions.ring_slots, positions.host
+                h,
+                state.cache,
+                positions.positions,
+                positions.pool_ids,
+                positions.ring_slots,
+                positions.host,
+                dense_positions=getattr(positions, "dense_positions", None),
             )
 
         streams = self.attn_hc.forward(streams, attention, sublayer_dtype=ttnn.bfloat16)

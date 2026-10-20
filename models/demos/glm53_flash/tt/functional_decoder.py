@@ -109,6 +109,10 @@ class DecodePositions:
     pool_ids: ttnn.Tensor  # [B] int32: position // index_kpool
     ring_slots: ttnn.Tensor  # [B] int32: position % index_kpool
     host: list[int]  # the same values on the host (chunk geometry for the sparse path)
+    # [B] int32: min(position, 2050), the bound of the dense flash-MLA decode (DSA layers). A user beyond
+    # 2050 gets the sparse row instead, so its dense row is discarded: bounding the op there keeps its cost
+    # at <= 2051 keys instead of the whole prefix (1 GiB per layer at 1 M positions); identity otherwise.
+    dense_positions: ttnn.Tensor | None = None
 
 
 class FunctionalDecoder(LightweightModule):
@@ -230,7 +234,15 @@ class FunctionalDecoder(LightweightModule):
         pos, pool_ids, ring_slots = decode_position_tensors(
             self.device, host_positions, self.cfg.index_kpool, mesh=self.mesh
         )
-        return DecodePositions(pos, pool_ids, ring_slots, list(host_positions))
+        dense = None
+        if not self.layer.is_kda:
+            dense = decode_position_tensors(
+                self.device, self._dense_bound(host_positions), self.cfg.index_kpool, mesh=self.mesh
+            )[0]
+        return DecodePositions(pos, pool_ids, ring_slots, list(host_positions), dense)
+
+    def _dense_bound(self, host_positions: list[int]) -> list[int]:
+        return [min(p, self.layer.attn.dense_exact_max_pos) for p in host_positions]
 
     def update_decode_positions(self, dp: DecodePositions, host_positions: list[int]):
         """Refresh the persistent position tensors in place (trace-replay safe)."""
@@ -238,11 +250,14 @@ class FunctionalDecoder(LightweightModule):
             raise ValueError(f"{len(host_positions)} positions for {self.total_users} user slots")
         P = self.cfg.index_kpool
         mapper = self.mesh.shard_rows(0) if self.mesh.rows > 1 else None
-        for t, vals in (
+        updates = [
             (dp.positions, host_positions),
             (dp.pool_ids, [p // P for p in host_positions]),
             (dp.ring_slots, [p % P for p in host_positions]),
-        ):
+        ]
+        if dp.dense_positions is not None:
+            updates.append((dp.dense_positions, self._dense_bound(host_positions)))
+        for t, vals in updates:
             ttnn.copy_host_to_device_tensor(
                 ttnn.from_torch(
                     torch.tensor(vals, dtype=torch.int32),
