@@ -1278,6 +1278,127 @@ def test_sparse_mla_kv_push_matches_gather_chunked(
     [c for c in SPARSE_REUSE_CASES if "8x4" in c.id or "(8, 4)" in str(c.values)],
     indirect=["variant", "mesh_device", "device_params"],
 )
+@pytest.mark.parametrize(
+    "splits, prefix",
+    [((2592, 1568, 5120, 800), 0), ((2592, 1568, 5120, 800), 10240)],
+    ids=["padded_from0", "padded_from10k"],
+)
+@pytest.mark.parametrize(
+    "cache_format", [MlaKvCacheFormat.BF16_RM, MlaKvCacheFormat.SCALED_FP8], ids=["kv_bf16", "kv_scaled_fp8"]
+)
+@pytest.mark.skipif(not is_blackhole(), reason="DSA ops (indexer / sparse SDPA) are Blackhole-only")
+@pytest.mark.timeout(0)
+def test_sparse_mla_kv_push_matches_gather_padded(
+    mesh_device,
+    seq_len,
+    splits,
+    prefix,
+    device_params,
+    variant,
+    cache_format,
+    config_only,
+    ds_layer,
+    ds_checkpoint,
+    ds_repo,
+):
+    """Sparse KV push vs gather on PADDED chunks whose starts are not chunk-aligned (the server's rotated layout):
+    each split writes `isl` valid rows from an arbitrary start. Full chunks cover the optional aligned prefix first."""
+    chunk = 5120
+    starts, s = [], 0
+    while s < prefix:
+        starts.append((s, s + chunk))
+        s += chunk
+    for isl in splits:
+        starts.append((s, s + isl))
+        s += isl
+    total = -(-(starts[-1][0] + chunk) // chunk) * chunk  # the last window (start + chunk) must fit the cache
+    config = config_only
+    config.max_seq_len = total
+    weights, _ = build_weights(variant, config, layer=ds_layer, checkpoint_path=ds_checkpoint, repo=ds_repo)
+    mesh_shape = list(mesh_device.shape)
+    sp_axis, tp_axis = 0, 1
+    num_users, cache_user_id = 2, 1
+
+    def _layer(**kwargs):
+        mla = ttMLA(
+            config,
+            weights,
+            mesh_device,
+            layer_idx=0,
+            seq_len=total,
+            sp_axis=sp_axis,
+            tp_axis=tp_axis,
+            is_chunked=True,
+            active_seq_len=chunk,
+            slot_num=num_users,
+            layer_num=1,
+            sparse_kv_cache_format=cache_format,
+            **kwargs,
+        )
+        kvpe = init_mla_kv_cache(
+            cache_format=cache_format,
+            hf_config=config,
+            mesh_device=mesh_device,
+            seq_len=total,
+            mesh_shape=mesh_shape,
+            sp_axis=sp_axis,
+            num_kvpe_cache_layers=1,
+            num_users=num_users,
+            tp_axis=tp_axis,
+        )
+        index = _init_index_kv_cache(
+            config, mesh_device, total, mesh_shape, sp_axis, slot_num=num_users, tp_axis=tp_axis
+        )
+        return mla, kvpe, index
+
+    full, gather, push = _layer(), _layer(sparse_kv_push=False), _layer(sparse_kv_push=True)
+    rope_tensors = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=False).get_rope_tensors_indexed(
+        total, chunk
+    )
+    hidden = make_hidden(total, config.hidden_size, 42, None)
+    shard_dims = [None, None]
+    shard_dims[tp_axis], shard_dims[sp_axis] = -1, -2
+
+    def _to_torch(t):
+        return ttnn.to_torch(
+            t, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=shard_dims, mesh_shape=mesh_device.shape)
+        ).to(torch.bfloat16)
+
+    all_equal = True
+    for s, e in starts:
+        tt_x = ttnn.from_torch(
+            hidden[:, s : s + chunk].unsqueeze(0),
+            device=mesh_device,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
+        )
+        args = dict(actual_start=s, actual_end=e, cache_user_id=cache_user_id)
+        mla, kvpe, index = full
+        _, idx = mla.forward(tt_x, rope_tensors, kvpe, index_kv_cache=index, return_indexer_indices=True, **args)
+        outs = []
+        for mla, kvpe, index in (gather, push):
+            outs.append(
+                _to_torch(mla.forward(tt_x, rope_tensors, kvpe, index_kv_cache=index, indexer_indices=idx, **args))
+            )
+        a, b = outs
+        equal = torch.equal(a, b)
+        all_equal &= equal
+        _, pcc_message = assert_with_pcc(a, b, 0.9999)
+        logger.info(
+            f"[{variant.name}] padded chunk [{s}, {e}) (start % {chunk} = {s % chunk}) push vs gather "
+            f"({cache_format.name}): bitwise={equal} {pcc_message}"
+        )
+    logger.info(f"[{variant.name}] sparse KV push padded {starts} ({cache_format.name}): all bitwise={all_equal}")
+    ttnn.synchronize_device(mesh_device)
+
+
+@pytest.mark.parametrize(
+    "variant, mesh_device, seq_len, device_params",
+    [c for c in SPARSE_REUSE_CASES if "8x4" in c.id or "(8, 4)" in str(c.values)],
+    indirect=["variant", "mesh_device", "device_params"],
+)
 @pytest.mark.parametrize("total, chunk", [(5120, 1024), (10240, 5120)], ids=["5k_c1k", "10k_c5k"])
 @pytest.mark.skipif(not is_blackhole(), reason="DSA ops (indexer / sparse SDPA) are Blackhole-only")
 @pytest.mark.timeout(0)
