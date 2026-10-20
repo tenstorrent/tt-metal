@@ -52,6 +52,13 @@ reference of the decode output at step t (same recurrence / causal attention), t
 steps with a live cache follow. Every step after the warm-up runs through the captured trace (one
 eager step in the middle), and the outputs are checked byte-equal across the four columns of a row.
 
+## Full 8x4 Galaxy (native mesh, FABRIC_2D_TORUS_XY; `GLM53_MESH_SHAPE=8,4`)
+
+| test | result | log |
+|---|---|---|
+| `test_mesh_decoder.py` layer 0, B=2/row (16 users, DP8 x TP4) | per-user pcc vs HF prefill min 0.999869 p10 0.999873 median 0.999913; traced HF-cache steps min 0.99985-0.99988 | `test_8x4_decoder_l0_torus.log` (47 s) |
+| layers 3, 4 (hybrid experts EP4 x TP8: 72 experts x 256-wide slices per chip) | pending | `test_8x4_decoder_l34_torus.log` |
+
 ## Root cause of the TP4 sparse-row gap (2026-10-20)
 
 `test_tp4_sparse_prefill_layer3` first gave rows >= 2048 at 0.99777 (single chip 0.99990) while the
