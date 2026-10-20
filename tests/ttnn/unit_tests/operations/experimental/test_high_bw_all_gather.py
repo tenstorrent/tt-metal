@@ -2506,13 +2506,14 @@ def test_high_bw_all_gather_paged_source(mesh_device, ag_traced, dtype, layout, 
 
     Each rank's pages sit shuffled in its own pool, for two requests of two layers; the request, the layer and the
     extent change between calls on one cached program (one trace per layer when traced), including extents that end
-    mid-page (eager only: the traced extent is whole slabs). A row of 640 entries on 8 ranks (page 32) walks past the
-    512-entry table window. Every rank's active prefix must byte-match what the pool holds at the request's pages.
-    Then, eagerly and on the same cached program, a new table with one page moved and everything past the first slab
-    unmapped: the mapped slab lands from its new pages and every unmapped row gathers as zeros."""
+    mid-page (eager only: the traced extent is whole slabs). The table's width is not a whole number of DRAM-aligned
+    entry groups, so the last window read is short. Every rank's active prefix must byte-match what the pool holds at
+    the request's pages. Then, eagerly and on the same cached program, a new table with one page moved, one entry just
+    past the pool and everything past the first slab unmapped: the mapped slab lands from its new pages and every
+    other row gathers as zeros."""
     rank_line, cluster_axis = _rank_line_mesh(mesh_device)
     ranks = rank_line.shape[cluster_axis]
-    local_rows, chunk_local, num_users, num_layers = 2560, 256, 2, 2
+    local_rows, chunk_local, num_users, num_layers = 4608, 256, 2, 2
     slab_global = chunk_local * ranks
     num_pages = num_users * (local_rows // page_size) + _SPARE_POOL_PAGES
     table = _shuffled_page_table(
@@ -2524,6 +2525,12 @@ def test_high_bw_all_gather_paged_source(mesh_device, ag_traced, dtype, layout, 
         num_pages=num_pages,
         seed=5,
     )
+    # A row-major worker reads one DRAM bank's pages, which span the whole row: at page 32 the row is longer than the
+    # reader's 512-entry table window, so the window refills. A tiled worker reads a contiguous run of pages and does
+    # not refill.
+    if page_size == 32:
+        assert table.shape[1] > 512
+    table = torch.cat([table, torch.full((num_users, 5), _PAGE_UNMAPPED, dtype=torch.int32)], dim=1)
     torch.manual_seed(0)
     shard_dims = (2, None) if cluster_axis == 0 else (None, 2)
     device_pool = _make_tensor(
@@ -2549,7 +2556,7 @@ def test_high_bw_all_gather_paged_source(mesh_device, ag_traced, dtype, layout, 
         for local_row in range(0, rows, page_size):
             n = min(page_size, rows - local_row)
             phys = int(page_table[user, _global_row(local_row, rank, ranks, chunk_local) // page_size])
-            if phys != _PAGE_UNMAPPED:
+            if 0 <= phys < num_pages:
                 out[local_row : local_row + n] = pool_by_rank[rank][phys * num_layers + layer, 0][:n]
         return out
 
@@ -2562,10 +2569,10 @@ def test_high_bw_all_gather_paged_source(mesh_device, ag_traced, dtype, layout, 
                 assert torch.equal(got, want), f"user {user} layer {layer} rank {rank} rows {rows}: prefix differs"
 
     # (user, layer, rows per rank): grow to the whole row, switch request and layer, shrink; eagerly also extents
-    # that end mid-page.
+    # that end mid-page, each for another (user, layer) than the call before, whose rows it would otherwise repeat.
     cases = [(0, 0, 512), (1, 1, local_rows), (0, 1, 256), (1, 0, 768)]
     if not ag_traced:
-        cases += [(1, 0, chunk_local + 32), (0, 1, 2 * chunk_local + 96)]
+        cases += [(0, 0, chunk_local + 32), (0, 1, 2 * chunk_local + 96)]
     paging = dict(page_table=tt_table, gathered_slab_global=slab_global, batch_slot_num_layers=num_layers)
     traces = {}
     if ag_traced:
@@ -2624,14 +2631,17 @@ def test_high_bw_all_gather_paged_source(mesh_device, ag_traced, dtype, layout, 
 
     if ag_traced:
         return
-    # A new table on the cached program: page 0 of user 0 moved to a spare pool page, the rest past the first slab
-    # unmapped. The first table is freed before the call, so a program still bound to it cannot pass this check.
+    # A new table on the cached program: page 0 of user 0 moved to a spare pool page, page 1 one past the pool, the
+    # rest past the first slab unmapped. The first table stays allocated, so the new one sits at another address and
+    # a program still bound to the first cannot pass this check.
     sparse = table.clone()
     owned_by_rank0 = [q for q in range(table.shape[1]) if (q * page_size // chunk_local) % ranks == 0]
     sparse[0, 0] = min(set(range(num_pages)) - set(table[:, owned_by_rank0].flatten().tolist()))
+    sparse[0, 1] = num_pages
     sparse[:, slab_global // page_size :] = _PAGE_UNMAPPED
-    ttnn.deallocate(tt_table)
-    gather_eager(0, 0, local_rows, page_table=_page_table_tensor(rank_line, sparse))
+    tt_sparse = _page_table_tensor(rank_line, sparse)
+    assert tt_sparse.buffer_address() != tt_table.buffer_address()
+    gather_eager(0, 0, local_rows, page_table=tt_sparse)
     ttnn.synchronize_device(rank_line)
     assert rank_line.num_program_cache_entries() == entries, "a new table of the same shape is a cache hit"
     check(sparse, 0, 0, local_rows)
@@ -2674,34 +2684,55 @@ def test_high_bw_all_gather_paged_source_rejects(mesh_device, expect_error):
         device=rank_line,
     )
 
-    def gather(**overrides):
+    def gather(source=pool, **overrides):
         kwargs = dict(
+            output_tensor=output,
+            cluster_axis=cluster_axis,
             input_batch_index=0,
             gathered_dim_size=local_rows * ranks,
             batch_slot_num_layers=num_layers,
             gathered_slab_global=chunk_local * ranks,
             page_table=good,
         )
-        ttnn.experimental.high_bw_all_gather(
-            pool,
-            dim=2,
-            output_tensor=output,
-            cluster_axis=cluster_axis,
-            num_links=_NUM_LINKS,
-            **(kwargs | overrides),
-        )
+        ttnn.experimental.high_bw_all_gather(source, dim=2, num_links=_NUM_LINKS, **(kwargs | overrides))
 
     gather()
     with expect_error(RuntimeError, "row \\* batch_slot_num_layers \\+ layer"):
         gather(input_batch_index=2 * num_layers)
-    with expect_error(RuntimeError, "pages x batch_slot_num_layers"):
+    with expect_error(RuntimeError, "must be < batch_slot_num_layers 0"):
         gather(batch_slot_num_layers=0)
-    with expect_error(RuntimeError, "INT32"):
+    with expect_error(RuntimeError, "pages x batch_slot_num_layers"):
+        gather(batch_slot_num_layers=num_layers + 1)
+    with expect_error(RuntimeError, "page_table must be INT32"):
         gather(page_table=as_uint32)
     with expect_error(RuntimeError, "must cover the output"):
         gather(page_table=narrow)
     with expect_error(RuntimeError, "whole pages per rank"):
         gather(gathered_slab_global=ranks * page_size // 2)
+    with expect_error(RuntimeError, "whole pages per rank"):
+        gather(gathered_slab_global=0)
+    with expect_error(RuntimeError, "needs the request"):
+        gather(input_batch_index=None)
+    with expect_error(RuntimeError, "requires a cluster_axis"):
+        gather(cluster_axis=None)
+    uneven = _make_tensor(
+        rank_line,
+        torch.zeros((1, 1, local_rows * ranks + page_size, width), dtype=torch.bfloat16),
+        ttnn.bfloat16,
+        ttnn.ROW_MAJOR_LAYOUT,
+        ttnn.ReplicateTensorToMesh(rank_line),
+    )
+    with expect_error(RuntimeError, "ranks x whole pages"):
+        gather(output_tensor=uneven)
+    half_page_pool = _make_tensor(
+        rank_line,
+        torch.zeros((num_layers, 1, page_size // 2 * ranks, width), dtype=torch.bfloat16),
+        ttnn.bfloat16,
+        ttnn.ROW_MAJOR_LAYOUT,
+        ttnn.ShardTensor2dMesh(rank_line, dims=shard_dims, mesh_shape=tuple(rank_line.shape)),
+    )
+    with expect_error(RuntimeError, "must be a multiple of 32"):
+        gather(source=half_page_pool)
 
 
 @pytest.mark.parametrize(
