@@ -1128,10 +1128,11 @@ def sparse_combine_rf_prepare(
     row with the L1 hand-off: >= the row, and a fabric payload >= row + 32 B). inj_slots: a port's L1 hand-off
     injection ring (slots; less leaves the arena room for deeper rings with wide rows). ring_depth: the rings' depth
     exactly (default: min(depth, what the arena leaves)). probes: CombineProbes (default: CombineProbes.from_env()).
-    shared_rows (with l1): dict(tensor=) - the shared expert's partials of the chip's mesh row, [C S, W] bf16 row-major
-    in DRAM, block j = the owner in column (my column + j) % C (block 0: mine, not sent): every chip sends its row-mates
-    their blocks before the flat's rows, into the same accumulators with weight 1 (the TP shared expert's reduce-scatter,
-    on the combine's rings and credits; static counts on top of the plan's)."""
+    shared_rows (with l1): dict(tensor=, axis=1) - the shared expert's partials of the chip's group (its mesh row, axis
+    1, or column, axis 0; G chips), [G S, W] bf16 row-major in DRAM, block j = the owner j places along the group
+    ((r, (c + j) % C) / ((r + j) % R, c); block 0: mine, not sent): every chip sends its group-mates their blocks before
+    the flat's rows, into the same accumulators with weight 1 (the split shared expert's reduce-scatter, on the
+    combine's rings and credits; static counts on top of the plan's)."""
     R, C = tuple(mesh_device.shape)
     N, L, A0 = R * C, num_links, n_acc
     row_bytes = W * 2
@@ -1209,10 +1210,13 @@ def sparse_combine_rf_prepare(
     se_ret = {k: 0 for k in port_core}
     se_own = {k: [] for k in port_core}
     se_want = {(ch, i): [0] * N for ch in chips for i in range(A)}
+    se_axis = int(shared_rows.get("axis", 1)) if SE_ON else 1
+    se_g = C if se_axis == 1 else R
+    se_owner = lambda ch, j: (ch[0], (ch[1] + j) % C) if se_axis == 1 else ((ch[0] + j) % R, ch[1])  # noqa: E731
     if SE_ON:
         for ch in chips:
-            for j in range(1, C):
-                h = (ch[0], (ch[1] + j) % C)
+            for j in range(1, se_g):
+                h = se_owner(ch, j)
                 for t in range(S):
                     o = t % A
                     l = link_of(o, idx(ch), idx(h), L)

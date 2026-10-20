@@ -63,17 +63,21 @@ class TtSharedTpRow:
         w_down: torch.Tensor,
         limit: float = 10.0,
         l1_budget: int = 160 * 1024,
+        axis: int = 1,
     ):
-        """HF weights: w_gate, w_up [I, H]; w_down [H, I]."""
+        """HF weights: w_gate, w_up [I, H]; w_down [H, I]. axis: the group is each mesh row (1: slice c on chip (r,
+        c)) or each column (0: slice r)."""
         self.mesh = mesh
         self.limit = float(limit)
+        self.axis = axis
         R, C = tuple(mesh.shape)
+        G = C if axis == 1 else R
         inter, hidden = w_gate.shape
-        assert inter % (C * 32) == 0, f"intermediate {inter} not tile aligned over {C} columns"
-        self.per = per = inter // C
+        assert inter % (G * 32) == 0, f"intermediate {inter} not tile aligned over {G} chips"
+        self.per = per = inter // G
         gt, ut = w_gate.float().T, w_up.float().T  # [H, I]
         gu = torch.cat(
-            [torch.cat([gt[:, c * per : (c + 1) * per], ut[:, c * per : (c + 1) * per]], -1) for c in range(C)], -1
+            [torch.cat([gt[:, c * per : (c + 1) * per], ut[:, c * per : (c + 1) * per]], -1) for c in range(G)], -1
         )
         self.w_gu = self._shard(gu.reshape(1, 1, hidden, 2 * inter), -1)
         self.w_down = self._shard(w_down.float().T.reshape(1, 1, inter, hidden), -2)
@@ -88,7 +92,9 @@ class TtSharedTpRow:
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh, mesh_shape=(R, C), dims=(None, dim)),
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                self.mesh, mesh_shape=(R, C), dims=(None, dim) if self.axis == 1 else (dim, None)
+            ),
         )
 
     def _pc(self, x, w, out_dtype, budget):

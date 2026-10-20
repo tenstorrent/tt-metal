@@ -163,6 +163,7 @@ class TtK3TokenSplitMoE:
         dw_batch=None,
         layout_overrides=None,
         shared_tp=False,
+        shared_axis=1,
     ):
         """routed_only (GLM-5.3-Flash hack): only the routed experts and their combine - no router (the caller's top-k
         goes to routed()), no latent projections (d.latent = d.H: the dispatch rows are x), no shared expert; the
@@ -171,16 +172,19 @@ class TtK3TokenSplitMoE:
         defaults). combine_depth: the combine's rings per source chip. x_once / dw_batch / layout_overrides: the routed
         experts' program options for the fused call only (x read from DRAM once - default off with gu64 / routed_only;
         down-weight blocks per read barrier; any other FlatLayoutOptions fields). shared_tp (routed_only): the shared
-        expert folded in, split over each mesh row's chips - the dispatch also sends every token to its row-mates,
+        expert folded in, split over each mesh row's chips (shared_axis 1; 0: each column's) - the dispatch also sends
+        every token to its group-mates,
         routed(shared=) runs the chip's slice on the row's tokens between the dispatch and the experts, and the combine
         carries the partials to their owners (its shared_rows); the chip's own partial is added to the output."""
         self.mesh, self.d, self.S, self.torus = mesh_device, d, S, tuple(torus)
         self.routed_only = routed_only
         assert not routed_only or d.latent == d.H, "routed_only: no latent projections (d.latent = d.H)"
         self.shared_tp = bool(shared_tp)
+        self.shared_axis = int(shared_axis)
         assert not shared_tp or routed_only, "shared_tp: the routed_only block (the shared expert per call)"
         R, C = tuple(mesh_device.shape)
         self.R, self.C, self.N = R, C, R * C
+        self.G = C if self.shared_axis == 1 else R  # (the shared expert's group: chips sharing its slices)
         assert d.E % self.N == 0
         self.EPC = d.E // self.N
         rep = ttnn.ReplicateTensorToMesh(mesh_device)
@@ -430,6 +434,7 @@ class TtK3TokenSplitMoE:
                 copy=not self.lat_direct,
                 torus=self.torus,
                 row_mates=self.shared_tp,
+                mates_axis=self.shared_axis,
             )
             if self.sparse_dispatch
             else None
@@ -522,12 +527,14 @@ class TtK3TokenSplitMoE:
             ST, SB = S // 32, min(S, 32 * grid_.y)
             while S % SB:
                 SB -= 32
-            self.se_pieces = [(j, k * SB, SB) for j in list(range(1, C)) + [0] for k in range(S // SB)]
+            G, ax = self.G, self.shared_axis
+            mate = lambda ch, j: ch[0] * C + (ch[1] + j) % C if ax == 1 else ((ch[0] + j) % R) * C + ch[1]  # noqa: E731
+            self.se_pieces = [(j, k * SB, SB) for j in list(range(1, G)) + [0] for k in range(S // SB)]
             self.se_tilize = {
                 (j, r0): layout_op_prepare(
                     mesh_device,
                     "tilize",
-                    src_tile_of=lambda ch, tr, j=j, r0=r0: (ch[0] * C + (ch[1] + j) % C) * ST + r0 // 32 + tr,
+                    src_tile_of=lambda ch, tr, j=j, r0=r0: mate(ch, j) * ST + r0 // 32 + tr,
                 )
                 for j, r0, _ in self.se_pieces
             }
@@ -537,7 +544,7 @@ class TtK3TokenSplitMoE:
                 for j, r0, _ in self.se_pieces
             }
             self.y_se = ttnn.allocate_tensor_on_device(
-                ttnn.Shape([C * S, d.H]), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, mesh_device, dram
+                ttnn.Shape([self.G * S, d.H]), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, mesh_device, dram
             )
         probe = combine_planner_prepare(mesh_device, A=15, **self._planner_args)  # (outputs only: their addresses)
         self.combine = sparse_combine_rf_prepare(
@@ -557,7 +564,7 @@ class TtK3TokenSplitMoE:
             deterministic=deterministic,
             acc_on_ports=acc_on_ports,
             piece_max=max(7168, 2 * d.latent),  # (the L1 hand-off: one piece a row; a fabric payload >= row + 32 B)
-            shared_rows=dict(tensor=self.y_se) if self.shared_tp else None,
+            shared_rows=dict(tensor=self.y_se, axis=self.shared_axis) if self.shared_tp else None,
         )
         self.acc_on_ports = acc_on_ports
         self.A = len(self.combine.cells["accs"])

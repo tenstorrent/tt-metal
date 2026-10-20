@@ -63,10 +63,11 @@ class TtExpertsTs:
         cache: bool = True,
         num_links: int = 2,
         shared_weights=None,
+        shared_axis: int = 1,
     ):
         """shared_weights (gate, up [I_s, H], down [H, I_s] torch, HF layout): the shared expert folded into the block
         (split over each mesh row's chips, its partials summed by the combine): the call then returns routed + shared
-        and gathers no x for a separate shared expert."""
+        and gathers no x for a separate shared expert. shared_axis: its group is each mesh row (1) or column (0)."""
         from ttnn.bringup.flat_routed_expert_ttnn.flat_expert import FlatRoutedExpert
 
         assert float(limit) == 10.0, f"clamped_silu is fixed at limit 10, got {limit}"
@@ -83,7 +84,7 @@ class TtExpertsTs:
         if shared_weights is not None:
             from models.demos.glm53_flash_d_p.tt.shared_tp_row import TtSharedTpRow
 
-            self.shared = TtSharedTpRow(mesh, *shared_weights, limit=limit)
+            self.shared = TtSharedTpRow(mesh, *shared_weights, limit=limit, axis=shared_axis)
         wdtype = {ttnn.bfloat4_b: "bf4", ttnn.bfloat8_b: "bf8"}[weights_dtype]
         fake = isinstance(torch_weights, str)
         prefix = None
@@ -130,7 +131,7 @@ class TtExpertsTs:
     def _block(self, s):
         from models.demos.deepseek_v3_d_p.tt.moe.tt_k3_token_split_moe import K3Dims, TtK3TokenSplitMoE
 
-        key = (id(self.mesh), s, self.H, self.K, self.E, self.shared is not None)
+        key = (id(self.mesh), s, self.H, self.K, self.E, self.shared.axis if self.shared is not None else None)
         hit = _BLOCKS.get(key)
         # (built at the first call; rebuilt if L1 the model allocated since - e.g. a later op's first-call semaphores -
         # moved the arena: its address is baked into the kernels)
@@ -153,6 +154,7 @@ class TtExpertsTs:
                 routed_only=True,
                 flat_layout=FLAT_LAYOUT,
                 shared_tp=self.shared is not None,
+                shared_axis=self.shared.axis if self.shared is not None else 1,
                 # (hang hunting: block variants, e.g. {"acc_on_ports": false} or {"deterministic": true})
                 **json.loads(os.environ.get("GLM_TS_BLOCK_OPTS", "{}")),
             )
@@ -242,11 +244,16 @@ class TtExpertsTs:
 
 
 def build_experts_ts(mesh, loader, cfg, layer: int, max_chunk: int, weights_dtype=ttnn.bfloat4_b) -> TtExpertsTs:
-    """GLM_SHARED_EXPERT=folded (spec device.shared_expert): the layer's shared expert folded into the block."""
+    """GLM_SHARED_EXPERT (spec device.shared_expert): separate, or folded into the block - split over each mesh row
+    (folded) or each mesh column (folded_sp)."""
     shared = None
     mode = os.environ.get("GLM_SHARED_EXPERT", "separate")
-    assert mode in ("separate", "folded"), f"device.shared_expert: separate or folded, got {mode}"
-    if mode == "folded":
+    assert mode in (
+        "separate",
+        "folded",
+        "folded_sp",
+    ), f"device.shared_expert: separate / folded / folded_sp, got {mode}"
+    if mode != "separate":
         from models.demos.glm53_flash_d_p.reference.weights import PREFIX
 
         p = f"{PREFIX}layers.{layer}.mlp.shared_experts."
@@ -270,4 +277,5 @@ def build_experts_ts(mesh, loader, cfg, layer: int, max_chunk: int, weights_dtyp
         num_links=int(os.environ.get("GLM_MOE_LINKS", "1")),
         cache=os.environ.get("GLM_EXPERTS_CACHE", "1") != "0",
         shared_weights=shared,
+        shared_axis=0 if mode == "folded_sp" else 1,
     )

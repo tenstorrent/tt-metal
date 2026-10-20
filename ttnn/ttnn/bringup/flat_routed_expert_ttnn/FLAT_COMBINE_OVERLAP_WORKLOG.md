@@ -1533,3 +1533,22 @@ routing gather 38 / 38, planner 96 / 50, dispatch prep 31 / 13, arena zero 3 / 4
 combine 1638 / 1264, tilize 35 / 14 | SE (8-way I split over the mesh, all S tokens, HiFi4): gate/up linear 257 / 114,
 slice x2 + minimum + silu + clamp + multiply 182 / 102, down linear 252 / 97, fabric reduce-scatter (Ring) 471 / 196 |
 add 37 / 20. Total 4058 / 2423 us. x crosses the links twice (the SE's dense gather and the sparse dispatch).
+
+### GLM-5.3-Flash: the shared expert folded into the token-split block, v0 (2026-10-20, 2 x 4 bh-lb-09, L4 real weights)
+Design (no separate shared-expert collectives; nothing beside the fused op, which holds 119 / 120 cores and every
+link's single worker channel): dispatch_prep ORs the shared expert's group-mates into each own token's mask (the
+group's tokens land in the dispatch buffer); the chip's I_s / G slice runs between the dispatch and the fused op on
+those rows (TtSharedTpRow, stock ttnn ops sized to the L1 below the arena, per <= 320-row piece); the combine sends
+each partial row to its owner from a DRAM staging buffer before the flat's rows (shared_rows: static per-port rows,
+credits and expected counts on top of the device plan); the own block is added after the routed tilize. Spec
+device.shared_expert: separate | folded (group = mesh row, G 4) | folded_sp (group = mesh column, G 2).
+Accuracy (zz_scratch_experts_ts.py GLM_TS_SHARED=1, random weights): the shared part (folded - routed only) vs CPU fp32
+rel L2 0.6%, PCC 0.99998, both axes, 2048 / 5120, uniform / hot; routed-only path unchanged (ts vs ag 0.0037).
+MoE block device time (busiest chip per op, sum; /localdev/mstaletovic/blockops/run.sh, TAG=fold / foldsp), us:
+| chunk | today (8-way SE, x gathered over the mesh) | folded (rows, G 4) | folded_sp (columns, G 2) |
+| 5120 | 4058 | 4131 (fused 1638 -> 2148: the partials on the TP line) | **3497** (fused 1784, dispatch 480) |
+| 2048 | 2423 | 2245 | **2130** |
+On the LoudBox the TP axis is the line of 4 that already holds the combine's busiest link; the SP pairs' Y links have
+room (as the link model said). folded_sp keeps 2x the per-chip shared weights of folded (a 2-way, not 4-way, split).
+Left in folded_sp at 5120: the shared expert itself 854 us (linears 507 HiFi4 fp32, six eltwise ops 188, tilize /
+untilize per piece 160) - next: one custom op (fused activation, in-op tilize / row-major out, HiFi2), est. ~150 us.
