@@ -4,10 +4,13 @@
 #
 # Reshape codegen port: routing, bit-exactness of the program, edge shapes, sub_core_grids and program-cache keys.
 
+import contextlib
+
 import pytest
 import torch
 
 import ttnn
+from tt_py_test_utils_common.utility_functions import skip_for_slow_dispatch
 
 _dm = ttnn._ttnn.operations.data_movement
 _force_native = _dm.reshape_force_native
@@ -414,6 +417,82 @@ def test_reshape_codegen_rm_ring_within_cb_page_limit(device):
     one_core = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))])
     out = _force_codegen(x, out_shape, memory_config=_DRAM, sub_core_grids=one_core)
     _assert_bits(source.reshape(out_shape), ttnn.to_torch(out), dtype)
+
+
+def _best_effort(action):
+    # Once a capture has gone wrong these calls fail too, and the original error is the one worth surfacing.
+    try:
+        action()
+    except RuntimeError:
+        pass
+
+
+@contextlib.contextmanager
+def _capturing(device):
+    # A queue left mid-capture fails every later call against the device, so the capture closes even when the
+    # captured op raises.
+    trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+    try:
+        yield trace_id
+    finally:
+        _best_effort(lambda: ttnn.end_trace_capture(device, trace_id, cq_id=0))
+
+
+@pytest.mark.parametrize(
+    "hog_before_warmup",
+    [
+        True,
+        pytest.param(
+            False,
+            marks=pytest.mark.xfail(
+                reason="https://github.com/tenstorrent/tt-metal/issues/46533: a plan chosen from live L1 misses the "
+                "cache when free L1 shrinks between warm-up and capture, and a capture cannot compile the plan it "
+                "then needs",
+                raises=RuntimeError,
+                strict=True,
+            ),
+        ),
+    ],
+    ids=["warm_under_pressure", "warm_then_pressure"],
+)
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 4 * 1024 * 1024}], indirect=True)
+@skip_for_slow_dispatch("trace capture requires fast dispatch")
+def test_reshape_codegen_trace_capture_under_l1_pressure(device, hog_before_warmup):
+    # Trace capture compiles nothing, so it needs the plan warm-up cached. With 240 KiB free this head split takes
+    # its single-buffered plan instead of the full one. warm_under_pressure warms up under that pressure, as
+    # TraceCorrectness.md asks of a model, and the capture reuses the warm entry. warm_then_pressure warms up on
+    # free L1 and captures under pressure: the capture needs a plan warm-up never compiled and aborts. Strict, so the
+    # case fails if the pressure stops moving the plan.
+    in_shape, out_shape, dtype = [1, 256, 4096], [1, 256, 32, 128], ttnn.float32
+    source = _make(in_shape, dtype)
+    x = _to_device(device, source, dtype, ttnn.TILE_LAYOUT, _DRAM)
+    trace_id = None
+    hog = None
+    try:
+        if hog_before_warmup:
+            hog = _l1_hog_leaving(device, 240 * 1024)
+        warm = ttnn.reshape(x, out_shape, memory_config=_DRAM)
+        _assert_bits(source.reshape(out_shape), ttnn.to_torch(warm), dtype)
+        ttnn.deallocate(warm)
+        entries = device.num_program_cache_entries()
+        if not hog_before_warmup:
+            hog = _l1_hog_leaving(device, 240 * 1024)
+
+        with _capturing(device) as trace_id:
+            out = ttnn.reshape(x, out_shape, memory_config=_DRAM)
+        ttnn.synchronize_device(device)
+        assert device.num_program_cache_entries() == entries, "trace capture compiled a program"
+
+        # The capture already left a correct result in out, so only a swapped input shows the replay ran.
+        fresh = torch.flip(source, dims=[-1])
+        ttnn.copy_host_to_device_tensor(ttnn.from_torch(fresh, dtype=dtype, layout=ttnn.TILE_LAYOUT), x)
+        ttnn.execute_trace(device, trace_id, cq_id=0, blocking=True)
+        _assert_bits(fresh.reshape(out_shape), ttnn.to_torch(out), dtype)
+    finally:
+        if trace_id is not None:
+            _best_effort(lambda: ttnn.release_trace(device, trace_id))
+        if hog is not None:
+            ttnn.deallocate(hog)
 
 
 _OUT_OF_SCOPE = [
