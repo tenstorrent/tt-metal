@@ -959,6 +959,7 @@ void kernel_main() {
                                                      uint32_t v_src,
                                                      uint32_t& k_dst,
                                                      uint32_t& v_dst,
+                                                     uint32_t& pages_pushed,
                                                      uint32_t fill) -> uint32_t {
         if constexpr (sol_pack) {
             CoreLocalMem<volatile uint32_t> row(sol_row_addr);
@@ -1006,11 +1007,16 @@ void kernel_main() {
                     CircularBuffer cb_kp(cb_k_in), cb_vp(cb_v_in);
                     cb_kp.push_back(k_chunk_tiles);
                     cb_vp.push_back(v_cb_entry_tiles);
+#ifdef SOL_PACK_DEBUG
+                    // Printed before the reserve: reserve_back is where the reader blocks, so the last PUSH
+                    // line names the page it could not get space for.
+                    DPRINT << "PUSH k=" << k_chunk << " n=" << (pages_pushed + 1) << ENDL();
+#endif
                     cb_kp.reserve_back(k_chunk_tiles);
                     cb_vp.reserve_back(v_cb_entry_tiles);
                     k_dst = cb_kp.get_write_ptr();
                     v_dst = cb_vp.get_write_ptr();
-                    ++sol_pages_pushed;
+                    ++pages_pushed;
                     fill = 0;
                     moved = false;  // the new page needs its own barrier before the next move
                 }
@@ -2216,6 +2222,7 @@ void kernel_main() {
                                     cb_v_start_address,
                                     sol_packed_k_addr,
                                     sol_packed_v_addr,
+                                    sol_pages_pushed,
                                     sol_pack_fill);
                             }
                         } else if constexpr (sol_compact) {

@@ -3323,17 +3323,17 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     for (auto* kernel : {&reader_kernel, &writer_kernel, &compute_kernel}) {
         kernel->named_compile_time_args = ksplit_named_args;
     }
+    reader_kernel.named_compile_time_args.emplace_back(
+        "k_row_Wt", input_tensor_k.padded_shape()[3] / tt::constants::TILE_WIDTH);
+    reader_kernel.named_compile_time_args.emplace_back(
+        "v_row_Wt", input_tensor_v.padded_shape()[3] / tt::constants::TILE_WIDTH);
+    compute_kernel.defines = kernel_defines;
     // Q2 diagnostic: TT_SOL_PACK_DEBUG=1 makes the reader print pages pushed and compute print pages expected
     // per (ring iter, Q chunk). A mismatch is the page-accounting divergence; equal counts exonerate it.
     if (sol_pack && std::getenv("TT_SOL_PACK_DEBUG") && std::string(std::getenv("TT_SOL_PACK_DEBUG")) == "1") {
         reader_kernel.defines.emplace_back("SOL_PACK_DEBUG", "1");
         compute_kernel.defines.emplace_back("SOL_PACK_DEBUG", "1");
     }
-    reader_kernel.named_compile_time_args.emplace_back(
-        "k_row_Wt", input_tensor_k.padded_shape()[3] / tt::constants::TILE_WIDTH);
-    reader_kernel.named_compile_time_args.emplace_back(
-        "v_row_Wt", input_tensor_v.padded_shape()[3] / tt::constants::TILE_WIDTH);
-    compute_kernel.defines = kernel_defines;
     compute_kernel.config = ComputeConfigDescriptor{
         .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en,

@@ -461,3 +461,35 @@ def test_production_5s_geometry(mesh_device, sp_axis, tp_axis, num_links, topolo
         k_chunk=384,
     )
     assert _pcc(r.dense, r.sol) > 0.99
+
+
+@GALAXY_RING
+@pytest.mark.parametrize("mode", ["chunk", "compact"])
+@pytest.mark.parametrize(
+    "rows,what",
+    [
+        (1024, "neither"),            # 16 full blocks, 4 full Q chunks
+        (1152, "partial Q chunk"),    # 18 full blocks, 1152/256 = 4.5 -> last Q chunk holds 128 rows
+        (1184, "both"),               # 18 full + 32-token block, and a 160-row last Q chunk
+    ],
+)
+def test_ragged_bisect(mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, mode, rows, what, reset_seeds, capfd):
+    """Which raggedness breaks the block-form path: the partial K block, or the partial Q chunk?
+
+    Device (packing off, pre-existing): rows=1184 gives PCC ~0.855 for gather/compact while chunk mode passes.
+    The torch reference says pooling a partial K block costs only 0.007 PCC (0.98134 -> 0.97446), so that is not
+    it. But rows=1184 at q_chunk=256 also leaves 160 of 1184 rows in a partial final Q chunk -- 13.5 % of the
+    output, which matches a PCC of 0.855 almost exactly.
+
+    1024 isolates neither, 1152 isolates the partial Q chunk alone (all K blocks full), 1184 has both.
+      1152 fails  -> the partial Q chunk is the trigger, and production is exposed: 4736/320, 9184/256 and
+                     13664/256 all leave a partial final Q chunk.
+      1152 passes -> the partial K block is the trigger on device, despite the reference tolerating it.
+    """
+    r = _run(
+        mesh_device, sp_axis, num_links, topology, capfd,
+        mode=mode, tau=1.0, rows=rows, logical_n=8 * rows,
+    )
+    pcc = _pcc(r.dense, r.sol, logical_n=8 * rows)
+    logger.info(f"[ragged] mode={mode} rows={rows} ({what}) pcc={pcc:.5f}")
+    assert pcc > 0.99, f"{mode} rows={rows} ({what}): pcc {pcc:.5f}"
