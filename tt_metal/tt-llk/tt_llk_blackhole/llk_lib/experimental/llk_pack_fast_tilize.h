@@ -262,11 +262,11 @@ inline void _llk_pack_fast_tilize_l1_step_mop_config_(const std::uint32_t unit_d
     _llk_pack_fast_tilize_mop_config_<w_step>(unit_dim, !w_step && output_16b && (unit_dim == 2));
 }
 
-template <DstSync Dst, bool output_16b, bool program_mop, bool w_step = false>
+template <DstSync Dst, bool output_16b, bool program_mop, bool w_step = false, bool is_fp32_dest_acc_en = false>
 __attribute__((noinline)) void _llk_pack_fast_tilize_l1_step_init_(
     const std::uint32_t pack_dst_format, const std::uint32_t unit_dim, const std::uint32_t pack_src_format)
 {
-    _llk_pack_fast_tilize_configure_<Dst, false, w_step>(pack_dst_format, 4, pack_src_format);
+    _llk_pack_fast_tilize_configure_<Dst, is_fp32_dest_acc_en, w_step>(pack_dst_format, 4, pack_src_format);
     _llk_pack_fast_tilize_configure_addrmod_();
     if constexpr (w_step)
     {
@@ -306,7 +306,18 @@ TT_ALWAYS_INLINE void _llk_pack_fast_tilize_init_(
 {
     if constexpr (is_fp32_dest_acc_en)
     {
-        _llk_pack_fast_tilize_init_<Dst, true>(use_32bit_dest, pack_dst_format, unit_dim, num_faces, pack_src_format);
+        if (!w_step || input_32b)
+        {
+            _llk_pack_fast_tilize_init_<Dst, true>(use_32bit_dest, pack_dst_format, unit_dim, num_faces, pack_src_format);
+        }
+        else if (datum_size_in_bytes(pack_dst_format) == 2)
+        {
+            _llk_pack_fast_tilize_l1_step_init_<Dst, true, program_mop, w_step, true>(pack_dst_format, unit_dim, pack_src_format);
+        }
+        else
+        {
+            _llk_pack_fast_tilize_l1_step_init_<Dst, false, program_mop, w_step, true>(pack_dst_format, unit_dim, pack_src_format);
+        }
     }
     else if (input_32b)
     {
@@ -446,7 +457,7 @@ template <bool is_fp32_dest_acc_en, bool w_step = false>
 inline void _llk_pack_fast_tilize_reinit_unit_dim_(const std::uint32_t pack_dst_format, const std::uint32_t new_unit_dim, const bool input_32b)
 {
     LLK_ASSERT(!pack_fast_tilize_two_tile_row || new_unit_dim == 2, "fast_tilize: a row of two tiles takes two-tile chunks only");
-    if (is_fp32_dest_acc_en || input_32b)
+    if (input_32b || (is_fp32_dest_acc_en && !w_step))
     {
         _llk_pack_fast_tilize_mop_config_(new_unit_dim);
     }

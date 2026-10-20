@@ -57,12 +57,13 @@ constexpr bool can_use_fast_tilize() {
 }
 
 // BH fast tilize steps L1 by the packer's output W counter for paired 16-bit-input rows; a row of two tiles with a
-// 16-bit output keeps the paced init: back-to-back L1 writes there only slow the unpacker.
+// 16-bit output and a 16-bit DEST keeps the paced init: back-to-back L1 writes there only slow the unpacker.
 template <uint32_t block_width_tiles, uint32_t input_dfb, uint32_t output_dfb, tilize_config::ChunkPairing chunk_pairing>
 constexpr bool fast_tilize_w_step() {
     return chunk_pairing == tilize_config::ChunkPairing::Paired &&
-           (block_width_tiles >= 3 || (block_width_tiles == 2 && !is_16b_output_format<output_dfb>())) &&
-           !is_fp32_input_format<input_dfb>() && !DST_ACCUM_MODE;
+           (block_width_tiles >= 3 ||
+            (block_width_tiles == 2 && (!is_16b_output_format<output_dfb>() || DST_ACCUM_MODE))) &&
+           !is_fp32_input_format<input_dfb>();
 }
 
 // =============================================================================

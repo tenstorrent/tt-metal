@@ -327,8 +327,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_pack_common.h"
 
 // As the `ttnn.tilize` kernels: a 16-bit input steps L1 by the packer's output W counter, except a row of two tiles
-// with a 16-bit output, which keeps the paced init.
-constexpr bool w_step = FAST_TILIZE_W_STEP && !is_fp32_dest_acc_en && clear_on_acquire;
+// with a 16-bit output and a 16-bit DEST, which keeps the paced init.
+constexpr bool w_step = (FAST_TILIZE_W_STEP || (FAST_TILIZE_TWO_TILE_ROW && is_fp32_dest_acc_en)) && clear_on_acquire;
 
 inline void pack_section_done()
 {
