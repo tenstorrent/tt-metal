@@ -66,6 +66,7 @@ PERF_TEST_SCHEMAS = {
             "tile_cnt",
             "unpack_to_dest",
         ],
+        "aliases": {},
         "test_name_aliases": {"perf_block_max8": "perf_block_max8"},
     },
     "perf_eltwise_bcast_col_custom": {

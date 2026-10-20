@@ -1471,6 +1471,19 @@ class BLOCK_MAX8_PARAMS(RuntimeParameter):
         return "unsigned VALID_SCORES; unsigned INJECT_NEGATIVE_ZERO;", "II"
 
 
+@dataclass
+class BLOCK_MAX8_FPU_CALLS(RuntimeParameter):
+    """Number of FPU block-max calls per DST acquire."""
+
+    calls: int
+
+    def convert_to_cpp(self):
+        return f"constexpr unsigned FPU_CALLS = {self.calls};"
+
+    def convert_to_struct_fields(self):
+        return "unsigned FPU_CALLS;", "I"
+
+
 def generate_input_dim(
     srcA: tuple[int],
     srcB: tuple[int],

@@ -22,7 +22,13 @@ VALID_COUNTS = [0, 1, 7, 8, 9, 15, 16, 17, 511, 512, 513, 1023, 1024]
 PATTERNS = ["random", "winners", "fractional", "negative_zero"]
 
 
-def _run_block_max8(source, dst_index, valid, pattern, negative_zero_result):
+# Call k of an acquire pools slot (dst_index + CALL_STRIDE * k) % 8, as in block_max8_fpu_test.cpp.
+CALL_STRIDE = 3
+
+
+def _run_block_max8(
+    source, dst_index, valid, pattern, negative_zero_result, fpu_calls=None
+):
     """Check all pooled blocks and preserve every other tile in both DST halves.
 
     Three batches reuse the first half after exercising the second. Directed
@@ -30,44 +36,61 @@ def _run_block_max8(source, dst_index, valid, pattern, negative_zero_result):
     put large positive values in invalid tails to detect masking omissions.
     The negative-zero pattern is injected directly into DST because the input
     unpack/datacopy path can canonicalize its sign before the kernel sees it.
-    Exact negative-zero output bits are encoded as negative_zero_result in DST
-    before packing, which otherwise canonicalizes zeros.
+    negative_zero_result is the expected output for a block whose maximum is
+    -0.0. Both kernels encode an exact -0.0 result as -1 before packing, which
+    otherwise canonicalizes zeros, so -1.0 checks that the sign survived and
+    0.0 checks that it was flushed. fpu_calls (FPU kernel only) is the number
+    of calls per DST acquire, each on a different slot.
     """
+    pooled = (
+        [dst_index]
+        if fpu_calls is None
+        else [(dst_index + CALL_STRIDE * k) % 8 for k in range(fpu_calls)]
+    )
     generator = torch.Generator().manual_seed(4869)
     logical = torch.randint(-256, 0, (24, 32, 32), generator=generator).bfloat16()
-    targets = logical[dst_index::8].reshape(3, 128, 8).clone()
-    if pattern == "winners":
-        targets.fill_(-256)
-        blocks = torch.arange(128)
-        targets[:, blocks, blocks % 8] = (blocks - 128).bfloat16()
-    elif pattern == "fractional":
-        targets *= 0.125
-        targets[:, 0, :] = torch.tensor(
-            [0.0, -0.0, 768.0, -768.0, 1.5, -1.5, 0.125, -0.125], dtype=torch.bfloat16
-        )
-        targets[:, 1, :] = float("-inf")
-        targets[:, 2, 0] = float("inf")
-    elif pattern == "negative_zero":
-        targets.fill_(-0.0)
-    targets.reshape(3, 1024)[:, valid:] = 2048
-    logical[dst_index::8] = targets.reshape(3, 32, 32)
-    masked = targets.reshape(3, 1024).clone()
-    masked[:, valid:] = float("-inf")
-    expected = masked.reshape(3, 128, 8).amax(-1)
-    if pattern == "negative_zero":
-        expected[expected.view(torch.int16) == -32768] = negative_zero_result
+    expected = {}
+    for slot in pooled:
+        targets = logical[slot::8].reshape(3, 128, 8).clone()
+        if pattern == "winners":
+            targets.fill_(-256)
+            blocks = torch.arange(128)
+            # Offset by slot so that results swapped between slots differ.
+            targets[:, blocks, blocks % 8] = (blocks - 128 - slot).bfloat16()
+        elif pattern == "fractional":
+            targets *= 0.125
+            targets[:, 0, :] = torch.tensor(
+                [0.0, -0.0, 768.0, -768.0, 1.5, -1.5, 0.125, -0.125],
+                dtype=torch.bfloat16,
+            )
+            targets[:, 1, :] = float("-inf")
+            targets[:, 2, 0] = float("inf")
+        elif pattern == "negative_zero":
+            targets.fill_(-0.0)
+        targets.reshape(3, 1024)[:, valid:] = 2048
+        logical[slot::8] = targets.reshape(3, 32, 32)
+        masked = targets.reshape(3, 1024).clone()
+        masked[:, valid:] = float("-inf")
+        expected[slot] = masked.reshape(3, 128, 8).amax(-1)
+        if pattern == "negative_zero":
+            expected[slot][
+                expected[slot].view(torch.int16) == -32768
+            ] = negative_zero_result
     src = tilize_block(
         logical.reshape(-1), [24 * 32, 32], DataFormat.Float16_b
     ).flatten()
     formats = input_output_formats([DataFormat.Float16_b])[0]
+    runtimes = [
+        params.TILE_COUNT(24),
+        params.DEST_INDEX(dst_index),
+        params.BLOCK_MAX8_PARAMS(valid, int(pattern == "negative_zero")),
+    ]
+    if fpu_calls is not None:
+        runtimes.append(params.BLOCK_MAX8_FPU_CALLS(fpu_calls))
     config = LLKTestConfig(
         source,
         formats,
-        runtimes=[
-            params.TILE_COUNT(24),
-            params.DEST_INDEX(dst_index),
-            params.BLOCK_MAX8_PARAMS(valid, int(pattern == "negative_zero")),
-        ],
+        runtimes=runtimes,
         variant_stimuli=StimuliConfig(
             src,
             formats.input_format,
@@ -84,10 +107,12 @@ def _run_block_max8(source, dst_index, valid, pattern, negative_zero_result):
         actual = torch.as_tensor(config.run().result, dtype=torch.bfloat16).reshape(
             3, 8, 1024
         )
-        assert torch.equal(
-            actual[:, dst_index, :128].view(torch.int16), expected.view(torch.int16)
-        ), "Pooled values or compacted order differ"
-        untouched = [i for i in range(8) if i != dst_index]
+        for slot in pooled:
+            assert torch.equal(
+                actual[:, slot, :128].view(torch.int16),
+                expected[slot].view(torch.int16),
+            ), f"Pooled values or compacted order differ in slot {slot}"
+        untouched = [i for i in range(8) if i not in pooled]
         assert torch.equal(
             actual[:, untouched], src.reshape(3, 8, 1024)[:, untouched]
         ), "Another DST tile changed"
@@ -99,13 +124,30 @@ def _run_block_max8(source, dst_index, valid, pattern, negative_zero_result):
 @pytest.mark.parametrize("pattern", PATTERNS)
 def test_block_max8(dst_index, valid, pattern):
     """SFPU variant: a negative-zero block maximum keeps its sign (-1 probe; +0 cannot pass)."""
-    _run_block_max8("sources/block_max8_test.cpp", dst_index, valid, pattern, -1.0)
+    _run_block_max8(
+        "sources/block_max8_test.cpp",
+        dst_index,
+        valid,
+        pattern,
+        negative_zero_result=-1.0,
+    )
 
 
 @blackhole_only
 @pytest.mark.parametrize("dst_index", DST_INDICES)
 @pytest.mark.parametrize("valid", VALID_COUNTS)
 @pytest.mark.parametrize("pattern", PATTERNS)
-def test_block_max8_fpu(dst_index, valid, pattern):
-    """FPU (GMPOOL) variant: GMPOOL flushes exponent-zero inputs, so a negative-zero maximum returns +0."""
-    _run_block_max8("sources/block_max8_fpu_test.cpp", dst_index, valid, pattern, 0.0)
+@pytest.mark.parametrize("fpu_calls", [1, 3])
+def test_block_max8_fpu(dst_index, valid, pattern, fpu_calls):
+    """FPU (GMPOOL) variant: GMPOOL flushes exponent-zero inputs, so a negative-zero maximum returns +0.
+
+    Three calls per DST acquire chain FPU calls on different slots in one acquire.
+    """
+    _run_block_max8(
+        "sources/block_max8_fpu_test.cpp",
+        dst_index,
+        valid,
+        pattern,
+        negative_zero_result=0.0,
+        fpu_calls=fpu_calls,
+    )

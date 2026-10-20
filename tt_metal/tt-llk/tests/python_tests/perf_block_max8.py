@@ -7,6 +7,7 @@ import torch
 from helpers.llk_params import PerfRunType
 from helpers.perf.core import PerfConfig
 from tt_llk_harness import (
+    ELEMENTS_PER_TILE,
     DataFormat,
     StimuliConfig,
     blackhole_only,
@@ -14,23 +15,25 @@ from tt_llk_harness import (
     params,
 )
 
+LOOP_FACTOR = 64
+
 
 @pytest.mark.perf
 @blackhole_only
-@pytest.mark.parametrize("loop_factor", [64])
-def test_perf_block_max8(perf_report, loop_factor):
-    """Report cycles per call: divide each zone by loop_factor.
+def test_perf_block_max8(perf_report):
+    """Report cycles per call: divide each zone by LOOP_FACTOR.
 
     SFPU zones: DISPATCH, FULL_TILE, PARTIAL_TILE, MASK, REDUCE, COMPACT.
     FPU zones: FPU_FULL_TILE, FPU_PARTIAL_TILE.
     """
     formats = input_output_formats([DataFormat.Float16_b])[0]
-    src = torch.zeros(1024, dtype=torch.bfloat16)
+    src = torch.zeros(ELEMENTS_PER_TILE, dtype=torch.bfloat16)
     PerfConfig(
         "sources/block_max8_perf.cpp",
         formats,
         run_types=[PerfRunType.MATH_ISOLATE],
-        runtimes=[params.TILE_COUNT(1), params.LOOP_FACTOR(loop_factor)],
+        # Compile-time, so the kernel reads no runtime parameters (required under speed-of-light).
+        templates=[params.TILE_COUNT(1), params.LOOP_FACTOR(LOOP_FACTOR)],
         variant_stimuli=StimuliConfig(
             src,
             formats.input_format,

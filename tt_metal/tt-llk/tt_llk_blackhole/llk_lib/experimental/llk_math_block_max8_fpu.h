@@ -37,19 +37,15 @@ namespace ckernel
 namespace block_max8_gmpool
 {
 
-// FPU moves here use an all-zero address modifier; ADDR_MOD_3 avoids the slots datacopy programs.
+// All-zero address modifier for the FPU instructions below, programmed by _llk_math_block_max8_fpu_init_.
 constexpr std::uint32_t ADDR_MOD = ADDR_MOD_3;
-// TRNSPSRCB transposes SrcB rows 16..31 only.
-constexpr std::uint32_t SRCB_T = 16;
-
-/**
- * @brief First physical DST row of the left-face rows 4p..4p+3 of the tile.
- * @param p Output row, 0 through 7.
- */
-constexpr std::uint32_t left_row(std::uint32_t p)
-{
-    return 32 * (p / 4) + 4 * (p % 4);
-}
+// Scores per block: each GMPOOL reduces this many transposed SrcB rows.
+constexpr std::uint32_t BLOCK_WIDTH = 8;
+// Output rows per tile. The odd-block maxima are gathered ODD_ROWS rows below the even-block maxima.
+constexpr std::uint32_t OUTPUT_ROWS = 8;
+constexpr std::uint32_t ODD_ROWS    = OUTPUT_ROWS;
+// First SrcA row of the negative-infinity padding (rows 8..15) that the unpacker clears.
+constexpr std::uint32_t SRCA_NEG_INF_ROW = 8;
 
 /**
  * @brief Fill SrcB rows 16 + 4u .. 16 + 4u + 3 with the face rows of logical row 4p + u.
@@ -57,15 +53,19 @@ constexpr std::uint32_t left_row(std::uint32_t p)
  * Blocks 0/1 live in the left face row and 2/3 in the right face row, so each
  * face row is copied twice. After TRNSPSRCB, lane 4u + b of SrcB row 16 + c is
  * column c of that copy: lanes are already in output block order.
+ *
+ * @tparam P: Output row, 0 through 7.
+ * @tparam U: Logical row within the group of four that output row P covers, 0 through 3.
  */
 template <std::uint32_t P, std::uint32_t U>
 inline void load_logical_row()
 {
-    constexpr std::uint32_t left = left_row(P) + U;
-    TTI_MOVD2B(0, SRCB_T + 4 * U + 0, ADDR_MOD, p_movd2b::MOV_1_ROW, left);
-    TTI_MOVD2B(0, SRCB_T + 4 * U + 1, ADDR_MOD, p_movd2b::MOV_1_ROW, left);
-    TTI_MOVD2B(0, SRCB_T + 4 * U + 2, ADDR_MOD, p_movd2b::MOV_1_ROW, left + FACE_R_DIM);
-    TTI_MOVD2B(0, SRCB_T + 4 * U + 3, ADDR_MOD, p_movd2b::MOV_1_ROW, left + FACE_R_DIM);
+    constexpr std::uint32_t left = sfpu::block_max8::face_row_address(P) + U;
+    constexpr std::uint32_t srcb = p_movd2b::SRC_ROW16_OFFSET + 4 * U;
+    TTI_MOVD2B(p_mov::DEST_NORM, srcb + 0, ADDR_MOD, p_movd2b::MOV_1_ROW, left);
+    TTI_MOVD2B(p_mov::DEST_NORM, srcb + 1, ADDR_MOD, p_movd2b::MOV_1_ROW, left);
+    TTI_MOVD2B(p_mov::DEST_NORM, srcb + 2, ADDR_MOD, p_movd2b::MOV_1_ROW, left + FACE_R_DIM);
+    TTI_MOVD2B(p_mov::DEST_NORM, srcb + 3, ADDR_MOD, p_movd2b::MOV_1_ROW, left + FACE_R_DIM);
 }
 
 /**
@@ -74,35 +74,43 @@ inline void load_logical_row()
  * SrcA rows 8..15 hold negative infinity from the unpacker clear, so the 16-row
  * GMPOOL is a max of eight. GMPOOL also maxes with its DST row, so that row is
  * first seeded with negative infinity from SrcA row 8. ZEROACC is avoided: on
- * Blackhole its one-row mode clears eight rows, and with MOVB2A it was seen to
- * shift the DST row counter across kernel runs. GMPOOL zeroes the three rows
- * below its target; those rows were already consumed by load_logical_row.
+ * Blackhole its one-row mode clears from the target's 4-row group to the end
+ * of its 8-row block (measured), which would also clear input rows that later
+ * output rows still read. GMPOOL zeroes the three rows below its target; those
+ * rows were already consumed by load_logical_row.
+ *
+ * @tparam HALF: 0 pools the first block of each copy (SrcB rows 16..23), 1 the second (rows 24..31).
+ * @tparam DST_ROW: DST row that receives the maxima.
  */
 template <std::uint32_t HALF, std::uint32_t DST_ROW>
 inline void pool_half()
 {
-    TTI_MOVA2D(0, 8, ADDR_MOD, p_mova2d::MOV_1_ROW, DST_ROW);
-    TTI_MOVB2A(0, ADDR_MOD, p_movb2a::MOV_4_ROWS, SRCB_T + 8 * HALF + 0);
-    TTI_MOVB2A(4, ADDR_MOD, p_movb2a::MOV_4_ROWS, SRCB_T + 8 * HALF + 4);
-    TTI_GATESRCRST(0b1, 0b1);
+    constexpr std::uint32_t srcb = p_movb2a::SRCB_ROW16_OFFSET + BLOCK_WIDTH * HALF;
+    TTI_MOVA2D(p_mov::DEST_NORM, SRCA_NEG_INF_ROW, ADDR_MOD, p_mova2d::MOV_1_ROW, DST_ROW);
+    TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 0, ADDR_MOD, p_movb2a::MOV_4_ROWS, srcb + 0);
+    TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 4, ADDR_MOD, p_movb2a::MOV_4_ROWS, srcb + 4);
+    TTI_GATESRCRST(1 /*reset_srcb_gate_control*/, 1 /*reset_srca_gate_control*/);
     TTI_GMPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD, p_gpool::INDEX_DIS, DST_ROW);
 }
 
 /**
- * @brief Write even-block maxima for output row P at left_row(P) and odd-block maxima 16 rows below.
+ * @brief Write even-block maxima for output row P at its left-face DST row and odd-block maxima 16 rows below.
+ *
+ * @tparam P: Output row, 0 through 7.
  */
 template <std::uint32_t P>
 inline void pool_output_row()
 {
-    load_logical_row<P, 0>();
-    load_logical_row<P, 1>();
-    load_logical_row<P, 2>();
-    load_logical_row<P, 3>();
-    TTI_GATESRCRST(0b1, 0b1);
+    constexpr std::uint32_t left = sfpu::block_max8::face_row_address(P);
+    load_logical_row<P, 0 /*U*/>();
+    load_logical_row<P, 1 /*U*/>();
+    load_logical_row<P, 2 /*U*/>();
+    load_logical_row<P, 3 /*U*/>();
+    TTI_GATESRCRST(1 /*reset_srcb_gate_control*/, 1 /*reset_srca_gate_control*/);
     TTI_TRNSPSRCB;
-    TTI_GATESRCRST(0b1, 0b1);
-    pool_half<0, left_row(P)>();
-    pool_half<1, left_row(P) + FACE_R_DIM>();
+    TTI_GATESRCRST(1 /*reset_srcb_gate_control*/, 1 /*reset_srca_gate_control*/);
+    pool_half<0 /*HALF*/, left>();
+    pool_half<1 /*HALF*/, left + FACE_R_DIM>();
 }
 
 // Expand over output rows at compile time so every DST row address is an instruction immediate.
@@ -115,15 +123,17 @@ inline void pool_all(std::integer_sequence<std::uint32_t, P...>)
 template <std::uint32_t... P>
 inline void gather_all(std::integer_sequence<std::uint32_t, P...>)
 {
-    (TTI_MOVD2B(0, SRCB_T + P, ADDR_MOD, p_movd2b::MOV_1_ROW, left_row(P)), ...);
-    (TTI_MOVD2B(0, SRCB_T + 8 + P, ADDR_MOD, p_movd2b::MOV_1_ROW, left_row(P) + FACE_R_DIM), ...);
+    (TTI_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET + P, ADDR_MOD, p_movd2b::MOV_1_ROW, sfpu::block_max8::face_row_address(P)), ...);
+    (TTI_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET + ODD_ROWS + P, ADDR_MOD, p_movd2b::MOV_1_ROW, sfpu::block_max8::face_row_address(P) + FACE_R_DIM),
+     ...);
 }
 
 } // namespace block_max8_gmpool
 
 /**
  * @brief Initialize SFPU state for masking and the final merge, plus the zero FPU address modifier.
- * @note Call before @ref _llk_math_block_max8_fpu_. Pair each call with @ref _llk_unpack_block_max8_fpu_.
+ *
+ * @note Call before @ref _llk_math_block_max8_fpu_.
  */
 inline void _llk_math_block_max8_fpu_init_()
 {
@@ -137,13 +147,16 @@ inline void _llk_math_block_max8_fpu_init_()
  * Masking (partial tiles only) runs on the SFPU before pooling. The pooled rows
  * are gathered through SrcB, SrcA/SrcB are released, and a final SFPU pass takes
  * the odd lanes from the odd-block rows, since GMPOOL writes whole rows only.
- * @param dst_index Tile index in the acquired BF16 DST half.
- * @param valid_scores Length of the valid row-major prefix, from zero through 1024.
+ *
+ * @param dst_index: Tile index in the acquired BF16 DST half.
+ * @param valid_scores: Length of the valid row-major prefix, from zero through 1024.
  * @note Call @ref _llk_math_block_max8_fpu_init_ first. The unpack thread must
  *       issue @ref _llk_unpack_block_max8_fpu_ for each call.
  */
 inline void _llk_math_block_max8_fpu_(std::uint32_t dst_index, std::uint32_t valid_scores)
 {
+    using namespace block_max8_gmpool;
+
     math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
     math::reset_counters(p_setrwc::SET_ABD_F);
     if (valid_scores < TILE_R_DIM * TILE_C_DIM)
@@ -157,23 +170,23 @@ inline void _llk_math_block_max8_fpu_(std::uint32_t dst_index, std::uint32_t val
     // Keep exponent-zero BF16 bit patterns intact through the moves, as transpose_dest does.
     math::_configure_preserve_zero_flag_state_();
 
-    block_max8_gmpool::pool_all(std::make_integer_sequence<std::uint32_t, 8> {});
+    pool_all(std::make_integer_sequence<std::uint32_t, OUTPUT_ROWS> {});
 
-    block_max8_gmpool::gather_all(std::make_integer_sequence<std::uint32_t, 8> {});
-    TTI_GATESRCRST(0b1, 0b1);
-    TTI_MOVB2D(0, block_max8_gmpool::SRCB_T + 0, block_max8_gmpool::ADDR_MOD, p_movb2d::MOV_4_ROWS, 0);
-    TTI_MOVB2D(0, block_max8_gmpool::SRCB_T + 4, block_max8_gmpool::ADDR_MOD, p_movb2d::MOV_4_ROWS, 4);
-    TTI_MOVB2D(0, block_max8_gmpool::SRCB_T + 8, block_max8_gmpool::ADDR_MOD, p_movb2d::MOV_4_ROWS, 8);
-    TTI_MOVB2D(0, block_max8_gmpool::SRCB_T + 12, block_max8_gmpool::ADDR_MOD, p_movb2d::MOV_4_ROWS, 12);
-    TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_ABD);
+    gather_all(std::make_integer_sequence<std::uint32_t, OUTPUT_ROWS> {});
+    TTI_GATESRCRST(1 /*reset_srcb_gate_control*/, 1 /*reset_srca_gate_control*/);
+    TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 0, ADDR_MOD, p_movb2d::MOV_4_ROWS, 0 /*dst*/);
+    TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 4, ADDR_MOD, p_movb2d::MOV_4_ROWS, 4 /*dst*/);
+    TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 8, ADDR_MOD, p_movb2d::MOV_4_ROWS, 8 /*dst*/);
+    TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 12, ADDR_MOD, p_movb2d::MOV_4_ROWS, 12 /*dst*/);
+    // SET_ABD also returns the DST row counter to zero for the SFPU pass below.
+    TTI_SETRWC(p_setrwc::CLR_AB, 0 /*rwc_cr*/, 0 /*rwc_d*/, 0 /*rwc_b*/, 0 /*rwc_a*/, p_setrwc::SET_ABD);
 
     // Rows 0..7 hold even-block maxima in every lane; odd lanes (address + 2) come from rows 8..15.
     TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
-    TTI_SFPLOAD(p_sfpu::LREG0, sfpi::SFPLOAD_MOD0_FMT_FP16B, ADDR_MOD_7, 8 + 2);
+    TTI_SFPLOAD(p_sfpu::LREG0, sfpi::SFPLOAD_MOD0_FMT_FP16B, ADDR_MOD_7, ODD_ROWS + 2);
     TTI_SFPSTORE(p_sfpu::LREG0, sfpi::SFPSTORE_MOD0_FMT_FP16B, ADDR_MOD_7, 0 + 2);
-    TTI_SFPLOAD(p_sfpu::LREG0, sfpi::SFPLOAD_MOD0_FMT_FP16B, ADDR_MOD_7, 12 + 2);
+    TTI_SFPLOAD(p_sfpu::LREG0, sfpi::SFPLOAD_MOD0_FMT_FP16B, ADDR_MOD_7, ODD_ROWS + 4 + 2);
     TTI_SFPSTORE(p_sfpu::LREG0, sfpi::SFPSTORE_MOD0_FMT_FP16B, ADDR_MOD_7, 4 + 2);
-    math::clear_dst_reg_addr();
 }
 
 } // namespace ckernel

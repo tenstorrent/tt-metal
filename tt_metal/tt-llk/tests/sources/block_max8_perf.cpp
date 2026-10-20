@@ -24,9 +24,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    _llk_unpack_hw_configure_<false>(
+    _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
         formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, TILE_NUM_FACES, TILE_NUM_FACES);
-    for (std::uint32_t i = 0; i < 2 * params.LOOP_FACTOR; ++i)
+    for (std::uint32_t i = 0; i < 2 * LOOP_FACTOR; ++i)
     {
         _llk_unpack_block_max8_fpu_();
     }
@@ -72,7 +72,7 @@ void repeat(Callable&& fn, std::uint32_t loops, std::uint32_t valid_scores)
 {
     for (std::uint32_t i = 0; i < loops; ++i)
     {
-        _llk_math_eltwise_unary_sfpu_params_(fn, 0, VectorMode::RC_custom, valid_scores);
+        _llk_math_eltwise_unary_sfpu_params_(fn, 0 /*dst_index*/, VectorMode::RC_custom, valid_scores);
     }
 }
 
@@ -91,13 +91,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    _llk_math_hw_configure_<false>(formats.math, formats.math);
+    _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
     _llk_math_block_max8_fpu_init_();
-    const std::uint32_t loops       = params.LOOP_FACTOR;
+    constexpr std::uint32_t loops   = LOOP_FACTOR;
     constexpr std::uint32_t partial = 513; // any value below 1024 takes the masking path
     {
         ZONE_SCOPED("DISPATCH")
-        repeat(dispatch_only, loops, 0);
+        repeat(dispatch_only, loops, 0 /*valid_scores*/);
         PROFILER_SYNC();
     }
     {
@@ -117,19 +117,19 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
     {
         ZONE_SCOPED("REDUCE")
-        repeat(reduce_only, loops, 0);
+        repeat(reduce_only, loops, 0 /*valid_scores*/);
         PROFILER_SYNC();
     }
     {
         ZONE_SCOPED("COMPACT")
-        repeat(compact_only, loops, 0);
+        repeat(compact_only, loops, 0 /*valid_scores*/);
         PROFILER_SYNC();
     }
     {
         ZONE_SCOPED("FPU_FULL_TILE")
         for (std::uint32_t i = 0; i < loops; ++i)
         {
-            _llk_math_block_max8_fpu_(0, TILE_R_DIM * TILE_C_DIM);
+            _llk_math_block_max8_fpu_(0 /*dst_index*/, TILE_R_DIM * TILE_C_DIM);
         }
         PROFILER_SYNC();
     }
@@ -137,7 +137,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         ZONE_SCOPED("FPU_PARTIAL_TILE")
         for (std::uint32_t i = 0; i < loops; ++i)
         {
-            _llk_math_block_max8_fpu_(0, partial);
+            _llk_math_block_max8_fpu_(0 /*dst_index*/, partial);
         }
         PROFILER_SYNC();
     }

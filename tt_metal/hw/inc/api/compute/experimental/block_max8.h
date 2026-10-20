@@ -58,6 +58,9 @@ ALWI void block_max8_fpu_init() { MATH((llk_math_block_max8_fpu_init<DST_ACCUM_M
  * thread. The math thread must consume any earlier unpacked operand first, as
  * copy_tile does. A block whose maximum is -0.0 or a denormal returns +0.0, because
  * GMPOOL flushes inputs with a zero exponent.
+ * Use BF16 DST with SyncHalf throughout the call; runtime FP32 accumulation
+ * and full-DST synchronization are unsupported. Values outside the documented
+ * argument ranges are unsupported; release builds do not validate or clamp them.
  * @param dst_index Runtime tile index in the acquired BF16 DST half (0 through 7).
  * @param valid_scores Valid row-major prefix length, from zero through 1024; defaults to the full tile.
  */

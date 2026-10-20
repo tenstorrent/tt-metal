@@ -138,11 +138,11 @@ void run_block_max8(distributed::MeshDevice& mesh, bool fpu) {
 }  // namespace
 
 TEST_F(LLKBlackholeSingleCardFixture, BlockMax8CompactRowsAndNeighborPreservation) {
-    run_block_max8(*devices_.at(0), false);
+    run_block_max8(*devices_.at(0), false /*fpu*/);
 }
 
 TEST_F(LLKBlackholeSingleCardFixture, BlockMax8FpuCompactRowsAndNeighborPreservation) {
-    run_block_max8(*devices_.at(0), true);
+    run_block_max8(*devices_.at(0), true /*fpu*/);
 }
 
 }  // namespace tt::tt_metal

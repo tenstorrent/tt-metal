@@ -23,7 +23,7 @@ namespace block_max8
  * while sfpi::dst_reg indexes physical addresses in two-row units.
  * @param band Four-row logical band, starting at zero.
  */
-inline std::uint32_t face_row_address(std::uint32_t band)
+constexpr std::uint32_t face_row_address(std::uint32_t band)
 {
     const std::uint32_t row = band * 4;
     return (row / FACE_R_DIM) * 2 * FACE_R_DIM + row % FACE_R_DIM;
@@ -267,7 +267,7 @@ inline void _calculate_block_max8_(std::uint32_t valid_scores)
     }
     for (std::uint32_t band = 0; band < TILE_R_DIM / 4; ++band)
     {
-        const std::uint32_t address = block_max8::face_row_address(band);
+        const std::uint32_t address     = block_max8::face_row_address(band);
         const std::uint32_t dst_address = (band / 4) * 4;
         block_max8::compact_row_band<1>(address, dst_address + 2, band % 4);
         block_max8::compact_row_band<0>(address, dst_address, band % 4);
