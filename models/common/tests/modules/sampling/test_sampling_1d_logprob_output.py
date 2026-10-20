@@ -1,12 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Sampled-token logprobs returned by Sampling1D belong to the call that produced them.
-
-LogProbsCalculator writes every calculation into one persistent output tensor. The native runtime
-treats sampler outputs as invocation-owned: it reads them after later requests ran (#61326) and
-force-deallocates them (#61325). Host-only: torch tensors stand in for device tensors.
-"""
 
 from types import SimpleNamespace
 
@@ -18,8 +12,6 @@ from models.common.modules.sampling.sampling_1d import Sampling1D
 
 
 class _ReusingCalculator:
-    """Mirrors LogProbsCalculator: one output buffer, overwritten and returned by every call."""
-
     enable_log_probs = True
 
     def __init__(self):
