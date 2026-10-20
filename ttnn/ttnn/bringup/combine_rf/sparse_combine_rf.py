@@ -322,10 +322,18 @@ def state_layout(N, A):
     return CRED, USED, RET, CNT, MISC, HDRS, RINGS
 
 
-def accumulator_bytes(N, A, W, S, *, depth=1, out_dtype=None, local_slots=2):
+def acc_page(acc_dtype=None):
+    """Bytes of one accumulator tile (the home tokens' running sums): fp32 (default) 4096, bf16 2048."""
+    acc_dtype = ttnn.float32 if acc_dtype is None else acc_dtype
+    assert acc_dtype in (ttnn.float32, ttnn.bfloat16), acc_dtype
+    return 4096 if acc_dtype == ttnn.float32 else TILE
+
+
+def accumulator_bytes(N, A, W, S, *, depth=1, out_dtype=None, local_slots=2, acc_dtype=None):
     """L1 bytes per accumulator core of sparse_combine_rf_prepare with the L1 hand-off (one piece a row, no
-    deterministic order): the state block, N - 1 rings of `depth` slots, the CBs (fp32 sums of ceil(S / A) home tokens)
-    and a local ring of `local_slots`. A caller sizes S (e.g. a pass of its tokens) to fit its arena with this."""
+    deterministic order): the state block, N - 1 rings of `depth` slots, the CBs (the sums of ceil(S / A) home tokens:
+    fp32, or bf16 with acc_dtype=ttnn.bfloat16) and a local ring of `local_slots`. A caller sizes S (e.g. a pass of its
+    tokens) to fit its arena with this."""
     al = lambda v: (v + 63) // 64 * 64  # noqa: E731
     row_bytes = W * 2
     NT = (row_bytes + TILE - 1) // TILE
@@ -334,7 +342,8 @@ def accumulator_bytes(N, A, W, S, *, depth=1, out_dtype=None, local_slots=2):
     rings = state_layout(N, A)[-1]
     maxt = (S + A - 1) // A
     out_page = 4096 if out_dtype == ttnn.float32 else TILE
-    cbs = sum(al(v) for v in [256 * 8 + 128, 2 * NT * TILE, 2 * 32, maxt * NT * 4096, 2 * NT * out_page, 2 * TILE])
+    sums = maxt * NT * acc_page(acc_dtype)
+    cbs = sum(al(v) for v in [256 * 8 + 128, 2 * NT * TILE, 2 * 32, sums, 2 * NT * out_page, 2 * TILE])
     return al(rings + (N - 1) * depth * slot) + cbs + local_slots * slot
 
 
@@ -949,6 +958,7 @@ def sparse_combine_rf_prepare(
     out_row0=None,
     acc_unpack_fp32=False,
     zero_unseen=False,
+    acc_dtype=None,
 ):
     """rows_by_chip[coord] = list of (y row on that chip, home coord, home token t, link[, local expert]). cells: the
     logical (x, y) cells the combine may use (ports nearest their Ethernet cores, accumulators the rest), else the
@@ -984,10 +994,18 @@ def sparse_combine_rf_prepare(
                        CB; else it passes srcA at TF32: the sums are truncated to 10 mantissa bits before the output
                        packer, K-30).
       zero_unseen      (with l1) a home token that got no row this call is written as zeros (axis=0: all its experts
-                       in other columns); else its output row is whatever its accumulator tiles held."""
+                       in other columns); else its output row is whatever its accumulator tiles held.
+      acc_dtype        the home tokens' running sums in L1: ttnn.float32 (None, the default: the original program)
+                       or ttnn.bfloat16 (half the L1 a token: W x 2 B; the packer's L1 accumulation adds each
+                       weighted row from fp32 DEST onto the bf16 sum, one bf16 rounding per added row; the weight
+                       multiply unchanged, HiFi4 at fp32 DEST). Same kernels, same order (deterministic stays
+                       bit-identical); only the accumulator CB's format and size change."""
     R, C = tuple(mesh_device.shape)
     out_dtype = ttnn.bfloat16 if out_dtype is None else out_dtype
     assert out_dtype in (ttnn.bfloat16, ttnn.float32), out_dtype
+    acc_dtype = ttnn.float32 if acc_dtype is None else acc_dtype
+    ACC_PAGE = acc_page(acc_dtype)  # (one accumulator tile: fp32 4096 B, bf16 2048 B)
+    acc_name = "fp32" if acc_dtype == ttnn.float32 else "bf16"
     assert axis in (None, 0), axis
     G = R if axis == 0 else R * C  # chips in a combine group (axis=0: a column)
     N, L, A0 = G, num_links, n_acc
@@ -1081,7 +1099,8 @@ def sparse_combine_rf_prepare(
     tab_cb = max(256 * 8 + 128, 256 + 64 + (MAXT * det_k + 63) // 64 * 64) if det else 256 * 8 + 128
     acc_cbs = sum(
         al(v)
-        for v in [tab_cb, 2 * NT * TILE, 2 * 32, MAXT * NT * 4096, 2 * NT * CB_OUT_PAGE] + ([2 * TILE] if l1 else [])
+        for v in [tab_cb, 2 * NT * TILE, 2 * 32, MAXT * NT * ACC_PAGE, 2 * NT * CB_OUT_PAGE]
+        + ([2 * TILE] if l1 else [])
     )
     if arena is not None:  # (the rings' depth from what the arena leaves: the accumulators' CBs and 2 local slots)
         sh_ = arena.memory_config().shard_spec
@@ -1091,13 +1110,13 @@ def sparse_combine_rf_prepare(
         # grows them, below)
         keep = (8 + min(32, QP0)) * ISLOT if FUSED else (2 * ISLOT if l1 else 0)
         need_min = RINGS + (N - 1) * SLOT + acc_cbs + keep  # (one ring slot per source)
-        if need_min > arena_bytes:  # (L1 capacity: every home token's fp32 sum stays in its accumulator's L1)
-            sums = MAXT * NT * 4096
+        if need_min > arena_bytes:  # (L1 capacity: every home token's sum stays in its accumulator's L1)
+            sums = MAXT * NT * ACC_PAGE
             rest = need_min - al(sums)
-            s_fit = max(0, (arena_bytes - rest) // (NT * 4096)) * A
-            a_min = next((a for a in range(A, 65) if al(-(-S // a) * NT * 4096) + rest <= arena_bytes), None)
+            s_fit = max(0, (arena_bytes - rest) // (NT * ACC_PAGE)) * A
+            a_min = next((a for a in range(A, 65) if al(-(-S // a) * NT * ACC_PAGE) + rest <= arena_bytes), None)
             raise ValueError(
-                f"sparse_combine_rf: {S} home tokens over {A} accumulators = {MAXT} tokens x {NT} fp32 tiles = "
+                f"sparse_combine_rf: {S} home tokens over {A} accumulators = {MAXT} tokens x {NT} {acc_name} tiles = "
                 f"{sums >> 10} KB of sums per accumulator, {need_min >> 10} KB with the rings / CBs; the arena has "
                 f"{arena_bytes >> 10} KB. Call with <= {s_fit} home tokens (passes: out_row0 + the planner's tokens / "
                 f"token_base) or with >= {a_min} accumulators (n_acc <= 16, one free cell each)"
@@ -1336,7 +1355,7 @@ def sparse_combine_rf_prepare(
                 (CB_INJ, pset, 2 * inj_b * ISLOT, ttnn.uint32, ISLOT),
                 (CB_ROW, aset, 2 * NT * TILE, ttnn.bfloat16, TILE),
                 (CB_META, aset, 2 * 32, ttnn.uint32, 32),
-                (CB_ACC, aset, MAXT * NT * 4096, ttnn.float32, 4096),
+                (CB_ACC, aset, MAXT * NT * ACC_PAGE, acc_dtype, ACC_PAGE),
                 (CB_OUT, aset, 2 * NT * CB_OUT_PAGE, out_dtype, CB_OUT_PAGE),
             ] + ([(CB_W, aset, 2 * TILE, ttnn.bfloat16, TILE)] if l1 is not None else [])
             cbs = []  # (assigned at the end: program.cbs is a copy through the binding, appends to it are lost)

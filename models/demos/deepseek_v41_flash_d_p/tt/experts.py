@@ -195,9 +195,11 @@ class TtExperts:
         num_links: int = 1,
         impl: str | None = None,
         combine: str | None = None,
+        combine_acc: str | None = None,
     ):
         """ck: reference/weights.Checkpoint (experts read one at a time, packed). max_chunk: the largest chunk (all
-        mesh rows together). impl: EXPERTS_IMPL value, combine: EXPERTS_COMBINE value (None: the setting)."""
+        mesh rows together). impl: EXPERTS_IMPL value, combine: EXPERTS_COMBINE value, combine_acc: COMBINE_ACC value
+        (None: the setting)."""
         rows, cols = tuple(mesh.shape)
         n = rows * cols
         E = int(num_experts)
@@ -221,6 +223,10 @@ class TtExperts:
             self.combine_mode == "separate" or self.kernel == "flat"
         ), "EXPERTS_COMBINE=weighted needs EXPERTS_KERNEL=flat"
         self.weighted = self.combine_mode == "weighted"
+        # COMBINE_ACC (P.9): the weighted combine's per-token running sums in L1, fp32 (2x2: 2 passes of 512 home
+        # tokens) or bf16 (one pass: the expert weights stream once a layer)
+        self.combine_acc = combine_acc or settings.get("COMBINE_ACC")
+        assert self.combine_acc in ("fp32", "bf16"), self.combine_acc
         # NUMERICS=native (P.8): no fp8 q(x) / q(h) (rule 17); the expert ops then run without fp8_act_quant
         self.qdq = not native()
         self.mesh, self.layer, self.num_links = mesh, layer, num_links
@@ -508,6 +514,15 @@ class TtExperts:
                 out_dtype=ccl.partial_dtype(self.mesh) if self.sum_mode == "gather_add" else ttnn.float32,
                 x_bf16=self.precision == "full",
                 h_bf16=self.precision == "full",
+                acc_dtype=ttnn.bfloat16 if self.combine_acc == "bf16" else ttnn.float32,
+            )
+            # COMBINE_ACC=bf16 exists to run the chunk's home tokens in ONE pass (the weights streamed once a layer)
+            assert self.combine_acc != "bf16" or self.wc.P == 1, (
+                f"COMBINE_ACC=bf16: {self.wc.S} home tokens per chip need {self.wc.P} passes on this grid "
+                f"({self.wc.A} accumulators)"
+            )
+            logger.info(
+                f"EXPERTS_WEIGHTED layer={self.layer} COMBINE_ACC={self.combine_acc} passes={self.wc.P} x {self.wc.S_pass}"
             )
 
     # ------------------------------------------------------------------ sizes (built once per rows-per-chip)
@@ -943,7 +958,14 @@ def _combine(m, buf, meta, counts, region_offsets, seq_len):
 
 
 def build_experts(
-    mesh, ck, cfg, layer: int, chunk: int, impl: str | None = None, combine: str | None = None
+    mesh,
+    ck,
+    cfg,
+    layer: int,
+    chunk: int,
+    impl: str | None = None,
+    combine: str | None = None,
+    combine_acc: str | None = None,
 ) -> TtExperts:
     """The routed experts of one layer (reference Config: n_experts, topk_experts, dim, inter, swiglu_limit)."""
     return TtExperts(
@@ -958,4 +980,5 @@ def build_experts(
         max_chunk=chunk,
         impl=impl,
         combine=combine,
+        combine_acc=combine_acc,
     )

@@ -8284,6 +8284,191 @@
   "status": "PASS",
   "waiting": null
  },
+ "P.9": {
+  "ab": {
+   "at": "2026-10-20T07:25:09",
+   "by": "dnijemcevic",
+   "changed": [
+    "models/demos/deepseek_v41_flash_d_p/tt/experts.py",
+    "models/demos/deepseek_v41_flash_d_p/tt/perf_experts.py",
+    "models/demos/deepseek_v41_flash_d_p/tt/settings.py",
+    "models/demos/deepseek_v41_flash_d_p/tt/weighted_combine.py",
+    "ttnn/ttnn/bringup/INDEX.md",
+    "ttnn/ttnn/bringup/combine_rf/CHANGELOG.md",
+    "ttnn/ttnn/bringup/combine_rf/README.md",
+    "ttnn/ttnn/bringup/combine_rf/sparse_combine_rf.py",
+    "ttnn/ttnn/bringup/combine_rf/tests/unit/test_acc_dtype.py"
+   ],
+   "decided": "2026-10-20T07:57:44",
+   "decision": "accept",
+   "env": {
+    "DS41_COMBINE_ACC": "fp32"
+   },
+   "gate_on": {
+    "failing": [],
+    "ok": true,
+    "partial": true
+   },
+   "key": "c1faaf7ac1071370",
+   "ladder": {},
+   "note": "owner 2026-10-20: ok (accept), then bfp4",
+   "on": {
+    "DS41_COMBINE_ACC": "bf16"
+   },
+   "profile": {},
+   "quick": {
+    "new": {
+     "chunk_wall_gap_ms": 407.4,
+     "chunk_wall_ms": 237.1,
+     "chunk_wall_ms_spread": 9.7,
+     "host_transfers_per_layer": 0,
+     "min layer": "L03",
+     "min layer PCC": 0.9968040491898167,
+     "pcc_chunk_out": 0.9997682553016749,
+     "rc": 0
+    },
+    "old": {
+     "chunk_wall_gap_ms": 284.6,
+     "chunk_wall_ms": 239.1,
+     "chunk_wall_ms_spread": 6.5,
+     "host_transfers_per_layer": 0,
+     "min layer": "L03",
+     "min layer PCC": 0.996810850474721,
+     "pcc_chunk_out": 0.9997683096727958,
+     "rc": 0
+    }
+   },
+   "rungs": [
+    "last",
+    "s55296"
+   ],
+   "table": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/ab/P.9/table.md",
+   "tests": {},
+   "why": "apply P.9 or not? A/B table at /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/ab/P.9/table.md; the gate with the change on would PASS; then: python -m models.demos.common.bringup.orchestrator decide --task P.9 --accept|--reject --spec /localdev/dnijemcevic/tt-metal2/models/demos/deepseek_v41_flash_d_p/bringup/spec.yaml, and resume"
+  },
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "db7621c532faec099b306a12ec9e357f7ee045ad",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "6132eac2d9dc2e5e78a7d4c9163e8c1124adab19",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "96b9ded2aeebf36a44ea285e0a122344894b2b62",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5",
+   "session_id": "2eaafada-ad48-4b22-a0c5-deaa7a3be201"
+  },
+  "agent_runs": [
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/briefs/P.9.perf.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "db7621c532faec099b306a12ec9e357f7ee045ad",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "6132eac2d9dc2e5e78a7d4c9163e8c1124adab19",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "96b9ded2aeebf36a44ea285e0a122344894b2b62",
+      "dirty": false
+     }
+    },
+    "knowledge_contradicted": [],
+    "knowledge_report": "ok",
+    "log": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/agents/P.9.perf.1.jsonl",
+    "model": "claude-opus-5-5",
+    "problems": [],
+    "rc": 0,
+    "role": "perf",
+    "seconds": 4870.6,
+    "session_id": "2eaafada-ad48-4b22-a0c5-deaa7a3be201",
+    "t": "2026-10-20T07:24:07"
+   }
+  ],
+  "attempt": 1,
+  "attempts": 0,
+  "duration_s": 0.0,
+  "history": [
+   {
+    "attempt": 1,
+    "from": "RUNNING",
+    "role": "perf",
+    "status": "RESUMED",
+    "t": "2026-10-20T07:25:06"
+   },
+   {
+    "s": 0.0,
+    "status": "PASS",
+    "t": "2026-10-20T07:58:01"
+   },
+   {
+    "status": "FAIL",
+    "t": "2026-10-20T07:58:07"
+   },
+   {
+    "s": 0.0,
+    "status": "PASS",
+    "t": "2026-10-20T07:59:03"
+   }
+  ],
+  "last_run": "2026-10-20T07:59:03",
+  "log": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/logs/P.9.log",
+  "metrics": {
+   "chunk_wall_clean": 1,
+   "chunk_wall_gap_ms": 407.4,
+   "chunk_wall_ms": 237.1,
+   "chunk_wall_ms_runs": [
+    395.3,
+    327.5,
+    330.2,
+    289.5,
+    371.2,
+    302.9,
+    239.1,
+    292.9,
+    307.1,
+    261.9,
+    238.5,
+    235.3,
+    237.4,
+    239.1,
+    236.6,
+    235.8,
+    236.0,
+    236.8,
+    237.1,
+    245.0
+   ],
+   "chunk_wall_ms_spread": 9.7,
+   "host_transfers_per_layer": 0,
+   "pcc_chunk_out": 0.9997682553016749,
+   "pcc_layer_L00": 0.9995504899723048,
+   "pcc_layer_L01": 0.9993277851437633,
+   "pcc_layer_L02": 0.9985020697536953,
+   "pcc_layer_L03": 0.9968040491898167,
+   "pcc_layer_L14": 0.997360981122142,
+   "pcc_layer_L20": 0.9996530650864155,
+   "pcc_layer_L21": 0.9977569551916422,
+   "pcc_layer_L24": 0.9997682553016749,
+   "scaled_run": 1
+  },
+  "rc": 0,
+  "reason": [],
+  "role": "perf",
+  "started": "2026-10-20T07:59:03",
+  "status": "PASS",
+  "waiting": null
+ },
  "PL.0": {
   "attempts": 0,
   "duration_s": 10.5,

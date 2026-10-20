@@ -200,6 +200,20 @@ TABLE = {
         "(bringup/hooks.py:device_params). P.8, layer 0, 2x2, chunk 2048, synced experts call: glm 5.3-5.4 ms vs separate "
         "8.0 ms (arrival order), full precision 6.05 ms (det) vs 8.5 ms; vs float64 rel 0.0029 vs 0.0023 (full, fp32 out)",
     ),
+    "COMBINE_ACC": Setting(
+        "bf16",
+        ("fp32", "bf16"),
+        "EXPERTS_COMBINE=weighted only (P.9, owner comparison 2026-10-20, option B): the combine's running sum of each "
+        "home token in its accumulator core's L1 (combine_rf sparse_combine_rf acc_dtype): fp32 = 20 KB a token, so the "
+        "free cells' 9 accumulators hold <= 558 tokens and a 2x2 chip's 1024 home tokens run in 2 passes (the flat expert "
+        "streams every expert's weights twice a layer, DS41-69); bf16 = 10 KB a token (the packer's L1 accumulation adds "
+        "each weighted row from fp32 DEST onto a bf16 sum: one bf16 rounding per added row; the weight multiply "
+        "unchanged, HiFi4 at fp32 DEST), so the chunk runs in ONE pass (asserted, tt/experts.py). Same fixed summation "
+        "order (det): calls stay bit-identical. fp32 is the max-precision value and today's path (the default until the "
+        "owner accepts P.9). P.9, 2x2, chunk 2048, synced experts call, shipped glm precision: 5.74 ms (2 passes) -> 4.29 "
+        "ms (1 pass) at layers 0 and 24; full precision vs float64 (128 tokens) fp32 rel 0.0029, bf16 0.0041, bf16 vs "
+        "fp32 0.0029 (bias -2.3e-4)",
+    ),
     "NUMERICS": Setting(
         "native",
         ("official", "native"),
@@ -310,6 +324,7 @@ MAX_PRECISION = {
     # P.8: weighted cannot run the official arithmetic (q(r h) needs the weight before w2; it moves to the combine)
     # and multiplies by bf16 routing weights (the planner's / combine's format), so the max-precision path is separate
     "EXPERTS_COMBINE": "separate",
+    "COMBINE_ACC": "fp32",  # P.9: bf16 running sums (one pass) are judged end to end only
 }
 
 settings = Settings("DS41_", TABLE, max_precision=MAX_PRECISION)
