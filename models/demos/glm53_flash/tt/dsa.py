@@ -281,6 +281,12 @@ class TtDSA(LightweightModule):
         return ttnn.reshape(ttnn.transpose(o, 1, 2), [1, 1, T, self.H * self.Dv])
 
     def _o_proj(self, o_heads: ttnn.Tensor) -> ttnn.Tensor:
+        if self.mesh.tp > 1 and os.environ.get("GLM53_FP32_REDUCE") == "1":
+            # experiment: fp32 partials through the all-reduce (bf16 partial sums lose precision when
+            # the head groups' contributions cancel)
+            y = ttnn.linear(o_heads, self.w_o, dtype=ttnn.float32, compute_kernel_config=self.hifi2)
+            y = self.mesh.all_reduce_cols(y)
+            return ttnn.typecast(y, ttnn.bfloat16)
         y = ttnn.linear(o_heads, self.w_o, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)
         return self.mesh.all_reduce_cols(y)  # TP partial -> replicated over the row's columns
 

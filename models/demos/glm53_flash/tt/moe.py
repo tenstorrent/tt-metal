@@ -8,8 +8,9 @@ HF ``Glm5NextTextMoE``:
     y = sum_j w_j * expert_{idx_j}(x) + shared_expert(x)
     expert(x) = (silu(clamp(gate, max=10)) * clamp(up, -10, 10)) @ W2^T
 
-Router: ``ttnn.experimental.deepseek_prefill.moe_grouped_topk`` single-group path (n_groups=1,
-sigmoid, bias, renormalize, route_scale), fp32 logits as HF.
+Router: the exact fp32 composite ``TtRouter.forward`` (fp32 logits as HF, sigmoid + bias, top-8 by
+iterative masked argmax, renormalized and scaled). The fused ``moe_grouped_topk`` kernel is NOT used:
+it ranks at bf16 resolution and swaps near-tied experts (see ``TtRouter.forward``).
 
 Experts: ``ttnn.sparse_matmul`` with a per-expert activity mask (union over the tokens of a
 32-token block) so only the experts any token in the block routes to are computed; the dense

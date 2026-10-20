@@ -34,12 +34,16 @@ Tensor contract (the HF residual is the mHC stream tensor ``[B, S, 4, 4096]``):
   built by ``make_decode_positions(host_positions)`` and refreshed in place by
   ``update_decode_positions`` (persistent ``[B]`` int32 device tensors: the position, position // 4
   and position % 4, plus the host values). Returns ``[1, 1, B, 4*4096]``.
-  DSA layers attend densely while every user's position is < index_topk (2048) and switch to the
-  indexer + sparse_sdpa path (host chunk geometry, not traced) as soon as one user is beyond.
+  DSA layers append the latent, maintain the pooled-key index and run the dense flash-MLA decode
+  for EVERY user slot (HF-exact through position 2050 = index_topk + index_kpool - 2, trace-safe);
+  the rows of the users whose host position is > 2050 are then overwritten with the per-user
+  indexer + sparse_sdpa result (host chunk geometry, not traced). Mixed batches therefore stay
+  exact for the short users; the routing is per user, never a batch-wide switch.
 * ``capture_decode_trace`` / ``replay_decode``: the dense decode graph is capturable; the captured
-  graph reads the persistent position tensors and updates the state in place. Capturing a DSA
-  layer whose ``max_seq_len`` exceeds index_topk is refused unless the caller opts in, because
-  replays past position 2047 would run the dense attention outside HF semantics.
+  graph reads the persistent position tensors and updates the state and the pooled-key index in
+  place. Capturing a DSA layer whose ``max_seq_len`` exceeds 2051 is refused unless the caller opts
+  in (``allow_sparse_range``), because a replay at a position > 2050 would attend densely, which is
+  not HF semantics there (the sparse rows are never part of the captured graph).
 Use ``host_streams_to_device`` / ``device_streams_to_host`` at the test boundary only.
 
 Multi-chip (Phase 2, ``tt/mesh.py``): on a ``(rows, cols)`` mesh the columns are the tensor-parallel
@@ -310,9 +314,10 @@ class FunctionalDecoder(LightweightModule):
         Returns ``(trace_id, output tensor, warm-up output)``. Replay with ``replay_decode``; the
         state tensors are updated in place by the captured graph. The warm-up and the capture both
         consume the token at ``positions`` (the state advances twice), so capture on a throw-away
-        token or re-prefill afterwards. Refused for a DSA layer whose ``max_seq_len`` reaches the
-        sparse threshold unless ``allow_sparse_range`` (replays past position 2047 would run the dense
-        attention, which is not HF semantics there)."""
+        token or re-prefill afterwards. The captured graph is the dense path (flash-MLA for every
+        slot + index maintenance), HF-exact through position 2050: a DSA layer whose ``max_seq_len``
+        exceeds 2051 is refused unless ``allow_sparse_range`` (a replay at a position > 2050 would
+        attend densely instead of taking the eager per-user sparse row, which is not HF semantics)."""
         if (
             not self.layer.is_kda
             and self.max_seq_len > self.layer.attn.dense_exact_max_pos + 1

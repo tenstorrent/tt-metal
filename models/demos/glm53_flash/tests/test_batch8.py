@@ -1,7 +1,11 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Eight user slots: per-user prefill (different lengths, one with a page-table permutation),
-then batched decode of all 8 users for 3 steps, per-user PCC vs HF (batch-1 HF caches).
+"""B user slots (8 and 32): per-user prefill (mixed lengths 1..200, permuted page table), then
+batched decode of all B users (3 steps at B=8, 2 at B=32), per-user PCC vs HF (batch-1 HF caches).
+At B=32 the flash-MLA decode gets 120 cores (12x10 grid) for 32 users, i.e. 3 cores per user.
+Every per-user sample (each prefill, each decode row) is held to PCC > 0.995; the assertion is
+deferred to the end of the test so that one short-prompt sample (a 1..5-row prompt is one or a few
+draws of the per-row PCC distribution) cannot hide the batched-decode evidence of the other users.
 
     TT_VISIBLE_DEVICES=0 pytest models/demos/glm53_flash/tests/test_batch8.py -s
 """
@@ -16,7 +20,7 @@ from loguru import logger
 
 from models.demos.glm53_flash.reference.checkpoint import default_snapshot_dir, load_layer_raw, shard_headers
 from models.demos.glm53_flash.reference.hf_layer_reference import build_layer, load_config
-from models.demos.glm53_flash.tests.utils import pcc
+from models.demos.glm53_flash.tests.utils import pcc, per_row_stats
 from models.demos.glm53_flash.tt.config import GLM53FlashConfig
 from models.demos.glm53_flash.tt.functional_decoder import (
     FunctionalDecoder,
@@ -25,14 +29,26 @@ from models.demos.glm53_flash.tt.functional_decoder import (
 )
 
 DUMP = Path("bringup/references/glm53_flash/R4097")
-B = 8
-LENS = [100, 37, 64, 1, 200, 33, 96, 129]
+# B -> (prompt lengths, prompt offsets into the 4097-token random stream, decode steps)
+LENS8 = [100, 37, 64, 1, 200, 33, 96, 129]
+LENS32 = [100, 37, 64, 1, 200, 33, 96, 129, 2, 3, 31, 32, 65, 127, 128, 150]
+LENS32 += [17, 199, 5, 48, 77, 160, 12, 90, 63, 180, 8, 101, 45, 140, 24, 175]
+CASES = {
+    8: (LENS8, [0, 300, 600, 900, 1200, 1500, 1800, 2100], 3),
+    32: (LENS32, [90 * u for u in range(32)], 2),  # windows end before the decode tokens at 3000+
+}
 
 
 @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
 @pytest.mark.parametrize("layer_idx", [3, 4])
-def test_eight_users_decode_vs_hf(mesh_device, layer_idx):
+@pytest.mark.parametrize("B", [8, 32])
+@pytest.mark.timeout(3000)  # the B HF references run on the host CPU (B=32: minutes per layer)
+def test_users_decode_vs_hf(mesh_device, layer_idx, B):
     from transformers import DynamicCache
+
+    LENS, offs, n_decode = CASES[B]
+    assert len(LENS) == len(offs) == B and max(LENS) <= 200 and min(LENS) >= 1
+    below_bar = []  # every per-user sample below PCC 0.995 (prefill or decode row); asserted at the end
 
     snapshot = default_snapshot_dir()
     _, text = load_config(snapshot)
@@ -42,9 +58,7 @@ def test_eight_users_decode_vs_hf(mesh_device, layer_idx):
     hf, _ = build_layer(snapshot, text, layer_idx, headers)
     pre = torch.load(DUMP / f"layer{layer_idx}_prefill.pt")
     base = pre["x_in"]  # [1, 4097, 4, 4096] random-token streams
-    offs = [0, 300, 600, 900, 1200, 1500, 1800, 2100]
     prompts = [base[:, o : o + L] for o, L in zip(offs, LENS)]
-    n_decode = 3
     dec = FunctionalDecoder.from_state_dict(
         raw, hf_config=cfg, layer_idx=layer_idx, mesh_device=mesh_device, max_batch=B, max_seq_len=256
     )
@@ -59,9 +73,13 @@ def test_eight_users_decode_vs_hf(mesh_device, layer_idx):
         with torch.no_grad():
             y_hf, _ = hf(x, attention_mask=torch.ones(1, L, dtype=torch.bool), past_key_values=cache, use_cache=True)
         y = dec.prefill_forward(host_streams_to_device(x, mesh_device), user=u, seq_len=L)
-        p = pcc(y_hf, device_streams_to_host(y, 4, L))
-        logger.info(f"layer {layer_idx} user {u} prefill S={L}: pcc {p:.6f}")
-        assert p > 0.995
+        y_h = device_streams_to_host(y, 4, L)
+        p = pcc(y_hf, y_h)
+        logger.info(
+            f"layer {layer_idx} user {u} prefill S={L} (offset {offs[u]}): pcc {p:.6f}  {per_row_stats(y_hf, y_h)}"
+        )
+        if not p > 0.995:
+            below_bar.append(f"user {u} prefill S={L} (offset {offs[u]}): pcc {p:.6f}")
         caches.append(cache)
 
     for step in range(n_decode):
@@ -84,5 +102,7 @@ def test_eight_users_decode_vs_hf(mesh_device, layer_idx):
         for u in range(B):
             p_d = pcc(y_hf[u], out[:, u : u + 1])
             worst = min(worst, p_d)
-            assert p_d > 0.995, f"user {u} step {step}: pcc {p_d}"
-        logger.info(f"  decode step {step}: worst per-user pcc over {B} users {worst:.6f}")
+            if not p_d > 0.995:
+                below_bar.append(f"user {u} decode step {step} (pos {LENS[u] + step}): pcc {p_d:.6f}")
+        logger.info(f"layer {layer_idx} B={B} decode step {step}: worst per-user pcc over {B} users {worst:.6f}")
+    assert not below_bar, f"layer {layer_idx} B={B}: per-user PCC samples below 0.995: " + "; ".join(below_bar)
