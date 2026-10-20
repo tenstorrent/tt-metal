@@ -2344,8 +2344,6 @@ def test_mixed_float_int_promotion(device, ttnn_op, float_dtype, int_dtype, int_
 
 @pytest.mark.parametrize("activation", [ttnn.UnaryOpType.SIGMOID, ttnn.UnaryOpType.TANH, ttnn.UnaryOpType.SQRT])
 def test_binary_int32_fused_float_only_activation_is_rejected(device, activation):
-    # A float-only activation fused into an int32 binary op used to run and pack float bits into the int32
-    # result (#57211); it must be rejected the same way the standalone unary op is.
     t = ttnn.from_torch(
         torch.tensor([[1, 2, 3, 4]], dtype=torch.int32).repeat(32, 8),
         dtype=ttnn.int32,

@@ -378,7 +378,6 @@ void BinaryNgDeviceOperation::validate_on_program_cache_miss(
 
     BinaryNgDeviceOperation::validate_on_program_cache_hit(attributes, tensor_args);
 
-    // Fused activations follow the same integer-dtype rules as the standalone unary ops (#57211).
     auto validate_activations = [](const auto& activations, DataType dtype) {
         unary::validate_integer_input_dtype({activations.begin(), activations.end()}, dtype);
     };
