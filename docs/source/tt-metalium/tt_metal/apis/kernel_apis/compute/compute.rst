@@ -9,6 +9,11 @@ This page lists the APIs available in the compute kernels. These APIs cover:
 
 For details on function parameters and their meanings, see the :ref:`Compute Engines and Data Flow within Tensix<compute_engines_and_dataflow_within_tensix>` documentation.
 
+Kernel entry state
+------------------
+
+A compute kernel must start with no Tensix operation in flight and no register or configuration write pending. The compiler relies on this and does not check it. A kernel that starts while an earlier kernel's writes are still landing has undefined behavior. The values held in configuration registers and GPRs at entry are unknown and must be set by the kernel before use. The state at kernel exit is undefined: the next kernel must not depend on it.
+
 Synchronization
 ---------------
 .. toctree::
