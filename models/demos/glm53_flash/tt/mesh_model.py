@@ -126,11 +126,13 @@ class GLM53MeshModel:
         return streams, logits, ids
 
     # ------------------------------------------------------------------ prefill (TTFT)
-    def prefill(self, prompt_ids: torch.Tensor, user: int = 0):
-        """One prompt through every layer (sequence-parallel over the rows on a multi-row mesh) and the
-        head on its last token. Returns ``(streams_local, logits_last [1,1,1,V] per chip, owner_row)``:
-        the row holding the last token is ``owner_row`` (every row computes the head on its own local
-        row ``(S-1) % T_local``; only the owner's result is the prompt's)."""
+    def prefill(self, prompt_ids: torch.Tensor, user: int = 0, start: int = 0):
+        """One prompt (or one chunk of it: ``start`` > 0 continues the user's prompt, the
+        ``FunctionalDecoder`` chunked-prefill contract) through every layer (sequence-parallel over the
+        rows on a multi-row mesh) and the head on its last token. Returns ``(streams_local, logits_last
+        [1,1,1,V] per chip, owner_row)``: the row holding the last token is ``owner_row`` (every row
+        computes the head on its own local row ``(S-1) % T_local``; only the owner's result is the
+        prompt's)."""
         S = int(prompt_ids.numel())
         unit = 32 * self.mesh.rows
         T_pad = -(-S // unit) * unit
@@ -142,13 +144,35 @@ class GLM53MeshModel:
         streams = self.embedding(ids_dev)  # [1,1,T_pad/rows,16384] per row (its slab)
         ttnn.deallocate(ids_dev)
         for dec in self.layers:
-            out = dec.prefill_forward(streams, user=user, seq_len=S)
+            out = dec.prefill_forward(streams, user=user, seq_len=S, start=start)
             ttnn.deallocate(streams)
             streams = out
         T_loc = T_pad // self.mesh.rows
         owner_row, local_last = divmod(S - 1, T_loc)
         logits = self.head.last_token_logits(streams, local_last + 1) if self.head is not None else None
         return streams, logits, owner_row
+
+    def prefill_chunked(self, prompt_ids: torch.Tensor, user: int = 0, chunk: int = 32768, on_chunk=None):
+        """A long prompt through ``prefill`` in consecutive chunks (every chunk but the last is a multiple
+        of ``32 * rows`` tokens, so the row slabs stay tile-aligned). ``on_chunk(start, end, seconds)`` is
+        called after every chunk (synchronised). Returns the LAST chunk's ``(streams, logits_last,
+        owner_row)``: its ``owner_row`` / local row index the prompt's last token."""
+        S = int(prompt_ids.numel())
+        unit = 32 * self.mesh.rows
+        chunk = max(unit, (chunk // unit) * unit)
+        out = None
+        for s0 in range(0, S, chunk):
+            e = min(S, s0 + chunk)
+            if out is not None:
+                ttnn.deallocate(out[0])
+                if out[1] is not None:
+                    ttnn.deallocate(out[1])
+            t0 = time.perf_counter()
+            out = self.prefill(prompt_ids[s0:e], user=user, start=s0)
+            if on_chunk is not None:
+                ttnn.synchronize_device(self.device)
+                on_chunk(s0, e, time.perf_counter() - t0)
+        return out
 
     def first_token(self, logits_last: ttnn.Tensor, owner_row: int) -> int:
         ids = self.head.greedy(logits_last)  # [1,1,1,1] per chip

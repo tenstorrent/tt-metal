@@ -766,47 +766,62 @@ class TtDSA(LightweightModule):
             if prefix is not None:
                 ttnn.deallocate(prefix)
         ttnn.deallocate(c)
-        # sparse rows [split, T) (absolute positions from max(start, 2048))
+        # sparse rows [split, T) (absolute positions from max(start, 2048)) in query sub-blocks of
+        # GLM53_PREFILL_QBLOCK rows (default 2048): the prefill scorer emits [rows, pools] bf16 scores (1 GB per
+        # 2048 rows at 1 M positions) that the top-k reads back, so a 32 K-token chunk cannot be scored in one
+        # call; one whole-prefix ROW_MAJOR kv copy (the sparse_sdpa contract) serves every sub-block of the chunk
         idx = self.indexer
-        x_s = ttnn.slice(x, [0, 0, split, 0], [1, 1, T, x.shape[-1]]) if split else x
-        qr_s = ttnn.slice(q_resid, [0, 0, split, 0], [1, 1, T, q_resid.shape[-1]]) if split else q_resid
         rows_form = idx.prefill_scorer_custom  # the custom scorer's query layout (multi-row meshes; knob)
-        q_i, w_i = idx.queries_and_weights(x_s, qr_s, rows_form=rows_form)
-        ttnn.deallocate(q_resid)
-        indices = idx.select(
-            q_i,
-            w_i,
-            cache.index,
-            cache.index.prefill_slot(user),
-            query_start=start + split,
-            num_pools_valid=end // idx.P,
-            q_rows_form=rows_form,
-        )
-        ttnn.deallocate(q_i)
-        ttnn.deallocate(w_i)
-        q_lat = self._absorb_q(
-            ttnn.slice(q, [0, 0, split, 0], [1, 1, T, self.H * self.Dq]) if split else q
-        )  # [1,H,T-split,L]
-        ttnn.deallocate(q)
-        q_rm = ttnn.to_layout(q_lat, ttnn.ROW_MAJOR_LAYOUT)
-        ttnn.deallocate(q_lat)
         kv_rm = cache.user_rows_rm(user, start + T)
-        o_rm = ttnn.transformer.sparse_sdpa(
-            self._pad_heads_rm(q_rm),
-            kv_rm,
-            indices,
-            v_dim=self.L,
-            kv_format=ttnn.transformer.SparseKVFormat.BF16,
-            scale=self.scale,
-            k_chunk_size=128,
-        )  # [1,H,T-split,L] row-major
-        ttnn.deallocate(q_rm)
-        ttnn.deallocate(indices)
+        qb = max(TILE, (int(os.environ.get("GLM53_PREFILL_QBLOCK", "2048")) // TILE) * TILE)
+        o_parts = []
+        for q0 in range(split, T, qb):
+            q1 = min(T, q0 + qb)
+            whole = (q0, q1) == (0, T)
+            x_s = x if whole else ttnn.slice(x, [0, 0, q0, 0], [1, 1, q1, x.shape[-1]])
+            qr_s = q_resid if whole else ttnn.slice(q_resid, [0, 0, q0, 0], [1, 1, q1, q_resid.shape[-1]])
+            q_i, w_i = idx.queries_and_weights(x_s, qr_s, rows_form=rows_form)
+            if not whole:
+                ttnn.deallocate(x_s)
+                ttnn.deallocate(qr_s)
+            indices = idx.select(
+                q_i,
+                w_i,
+                cache.index,
+                cache.index.prefill_slot(user),
+                query_start=start + q0,
+                num_pools_valid=end // idx.P,
+                q_rows_form=rows_form,
+            )
+            ttnn.deallocate(q_i)
+            ttnn.deallocate(w_i)
+            q_lat = self._absorb_q(q if whole else ttnn.slice(q, [0, 0, q0, 0], [1, 1, q1, self.H * self.Dq]))
+            q_rm = ttnn.to_layout(q_lat, ttnn.ROW_MAJOR_LAYOUT)
+            ttnn.deallocate(q_lat)
+            o_rm = ttnn.transformer.sparse_sdpa(
+                self._pad_heads_rm(q_rm),
+                kv_rm,
+                indices,
+                v_dim=self.L,
+                kv_format=ttnn.transformer.SparseKVFormat.BF16,
+                scale=self.scale,
+                k_chunk_size=128,
+            )  # [1,H,q1-q0,L] row-major
+            ttnn.deallocate(q_rm)
+            ttnn.deallocate(indices)
+            o_lat = self._unpad_heads(ttnn.to_layout(o_rm, ttnn.TILE_LAYOUT))
+            ttnn.deallocate(o_rm)
+            o_parts.append(self._o_lat_to_heads(o_lat))  # [1,1,q1-q0,H*Dv]
+            ttnn.deallocate(o_lat)
+        ttnn.deallocate(q_resid)
+        ttnn.deallocate(q)
         ttnn.deallocate(kv_rm)
-        o_lat = self._unpad_heads(ttnn.to_layout(o_rm, ttnn.TILE_LAYOUT))
-        ttnn.deallocate(o_rm)
-        o_sparse = self._o_lat_to_heads(o_lat)  # [1,1,T-split,H*Dv]
-        ttnn.deallocate(o_lat)
+        if len(o_parts) == 1:
+            o_sparse = o_parts[0]
+        else:
+            o_sparse = ttnn.concat(o_parts, dim=-2)  # [1,1,T-split,H*Dv]
+            for part in o_parts:
+                ttnn.deallocate(part)
         if o_dense is None:  # the whole chunk lies in the sparse region
             return self._o_proj(o_sparse)
         o = ttnn.concat([o_dense, o_sparse], dim=-2)  # [1,1,T,H*Dv]
