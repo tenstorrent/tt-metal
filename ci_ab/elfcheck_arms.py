@@ -46,6 +46,10 @@ if "M2" in E:
 for h in E:
     if h in ("M", "M2"):
         continue
+    if h.startswith("U"):
+        ks, same = cmp("H1", h, "untilize_allcfg_perf.cpp")
+        ok &= len(ks) > 0 and same["unpack"] < len(ks)
+        continue
     ks, same = cmp("M", h, "untilize_allcfg_perf.cpp")
     ok &= len(ks) > 0 and same["pack"] == 0
     if h != "H1" and "H1" in E:
