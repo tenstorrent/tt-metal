@@ -1665,3 +1665,9 @@ last); the device 0.70 (test_perf fixed: it re-ran the last chunk on KDA carries
 - Fix (not done yet): alpha exactly (G_last as a mask matmul of the transposed bf16 gate, all 32 columns, exp in
   DST, fp32 out) and the scan's decay multiply + add as SFPU ops on fp32 in DST (unpack to dest). Kimi K3 uses the
   same KDA ops.
+- The fp32 CPU reference's own sensitivity (/localdev/mstaletovic/determ/ref_perturb.py: s4096 prompt, 2 x 2048, the
+  residual after L4 of chunk 0 rounded to bf16, rel 1.7e-3): chunk 0 grows to 1.7e-2 at L44 (device chunk 0: 1.7e-2),
+  chunk 1 to 5.8e-2 at L44 (device chunk 5120: ~9e-2); routing sets differ for 18-33% of tokens in the deep layers.
+  The amplification is the model's (routing flips, context), not our numerics. But the reference's argmax agrees
+  99.7% between the two runs (top-1 vs text 0.964 / 0.965, 0.970 / 0.971): its predictions have margin. The
+  device's flip 11-14% because its degraded (KDA state) predictions have little margin.
