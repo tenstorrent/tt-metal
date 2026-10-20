@@ -65,8 +65,10 @@ class TtFfn(TtSharedExpert):
         situ_beta: Optional[float] = None,
         situ_linear_beta: Optional[float] = None,
         clamped_silu_glu_limit: Optional[float] = None,
+        tp_axis: int = 1,
     ):
-        """Initialize TtFfn — same signature as before plus the GLU activation, no sub-device parameters."""
+        """Initialize TtFfn — same signature as before plus the GLU activation and tp_axis, no sub-device
+        parameters."""
         super().__init__(
             mesh_device=mesh_device,
             emb_dim=emb_dim,
@@ -83,6 +85,7 @@ class TtFfn(TtSharedExpert):
             situ_beta=situ_beta,
             situ_linear_beta=situ_linear_beta,
             clamped_silu_glu_limit=clamped_silu_glu_limit,
+            tp_axis=tp_axis,
             # subdevice_id / subdevice_cores intentionally left as defaults (None) —
             # TtFfn's overridden forward() does not use them.
         )
@@ -96,6 +99,7 @@ class TtFfn(TtSharedExpert):
         emb_dim: int = EMB_DIM,
         hidden_dim: int = HIDDEN_DIM,
         weights_dtype: ttnn.DataType = ttnn.bfloat8_b,
+        tp_axis: int = 1,
     ):
         """Build TTNN cache for dense FFN (delegates to TtSharedExpert)."""
         TtSharedExpert.build_ttnn_cache(
@@ -106,19 +110,20 @@ class TtFfn(TtSharedExpert):
             weights_dtype=weights_dtype,
             cache_path=cache_path,
             cache_name_prefix=cache_name_prefix,
+            tp_axis=tp_axis,
         )
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """
         Original simple forward pass — plain matmuls, fused SiLU via ttnn.mul, and
-        reduce_scatter over mesh columns. Independent of the sub-device-aware path
+        reduce_scatter over the TP axis. Independent of the sub-device-aware path
         in TtSharedExpert.forward().
         """
         batch_size = x.shape[0]
         logger.debug(f"Forward pass: input shape={x.shape}, batch_size={batch_size}")
 
-        # Verify input is replicated (full emb_dim) when multiple mesh columns
-        if self.mesh_device.shape[1] > 1:
+        # Verify input is replicated (full emb_dim) when TP > 1
+        if self.mesh_device.shape[self.tp_axis] > 1:
             assert x.shape[-1] == self.emb_dim, (
                 f"Input must be replicated (full emb_dim={self.emb_dim}), "
                 f"but got sharded input with shape[-1]={x.shape[-1]}"
@@ -167,12 +172,12 @@ class TtFfn(TtSharedExpert):
         output_full = ttnn.matmul(activated, self.down_proj, compute_kernel_config=self.compute_kernel_config)
         logger.debug(f"After down_proj matmul: {output_full.shape}")
 
-        # Step 5: Reduce-scatter output across mesh columns when TP > 1
-        if self.mesh_device.shape[1] > 1:
+        # Step 5: Reduce-scatter output across the TP axis when TP > 1
+        if self.mesh_device.shape[self.tp_axis] > 1:
             output = ttnn.reduce_scatter(
                 output_full,
                 dim=-1,
-                cluster_axis=1,
+                cluster_axis=self.tp_axis,
                 num_links=self.num_links,
                 topology=self.topology,
             )
