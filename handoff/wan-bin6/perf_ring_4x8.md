@@ -83,14 +83,21 @@ Seconds, lower is better. Rows are grouped by speed: the `d04` hosts with b10u20
 
 **I2V.** The nightly I2V jobs never reached a timed run: the CI cache starts empty, and converting the weights (17–20 min) used up the perf test's 1200 s timeout every night. The I2V numbers below come from a one-off dispatch of the same bh_sc1 job ([run 39489301673](https://github.com/tenstorrent/tt-metal/actions/runs/39489301673), branch `jameslee/wan-i2v-bh-sc1-perf-timeout` = `main` @ `f56b5484466` plus a 3600 s timeout and 480p added). Both tests completed; the job failed only on the VAE target.
 
-| Machine | Res | Text enc | Image enc | Denoise | VAE decode (target) | Total |
-|---|---|---|---|---|---|---|
-| CI bh-glx-120-d04u20 (`main`, 8 banks, full-T VAE) | 480p | 0.081 | 1.150 | 57.06 | 0.750 (0.42) | 59.05 |
-| b10u20, this branch, 75 W (7 banks, chunked VAE) | 480p | 0.067 | 0.921 | 55.97 | 0.514 | 57.48 |
-| b10u20, this branch, 130 W | 480p | 0.067 | 0.786 | 41.40 | 0.489 | 42.75 |
-| CI bh-glx-120-d04u20 (`main`, 8 banks, full-T VAE) | 720p | 0.089 | 1.329 | 157.47 | 1.101 (0.85) | 160.00 |
-| b10u20, this branch, 75 W (7 banks, chunked VAE) | 720p | 0.061 | 1.068 | 154.78 | 1.079 | 157.00 |
-| b10u20, this branch, 130 W | 720p | 0.062 | 0.954 | 128.63 | 1.009 | 130.66 |
+I2V 480p (seconds, lower is better; VAE target 0.42):
+
+| Host | Code | DRAM banks | VAE mode | Power limit | Text enc | Image enc | Denoise | VAE | Total |
+|---|---|---|---|---|---|---|---|---|---|
+| bh-glx-120-d04u20 (CI) | `main` | 8 | full-T | unknown | 0.081 | 1.150 | 57.06 | 0.750 | 59.05 |
+| bh-glx-120-b10u20 | this branch | 7 | chunk 7 | 75 W (default) | 0.067 | 0.921 | 55.97 | 0.514 | 57.48 |
+| bh-glx-120-b10u20 | this branch | 7 | chunk 7 | 130 W | 0.067 | 0.786 | 41.40 | 0.489 | 42.75 |
+
+I2V 720p (seconds, lower is better; VAE target 0.85):
+
+| Host | Code | DRAM banks | VAE mode | Power limit | Text enc | Image enc | Denoise | VAE | Total |
+|---|---|---|---|---|---|---|---|---|---|
+| bh-glx-120-d04u20 (CI) | `main` | 8 | full-T | unknown | 0.089 | 1.329 | 157.47 | 1.101 | 160.00 |
+| bh-glx-120-b10u20 | this branch | 7 | chunk 7 | 75 W (default) | 0.061 | 1.068 | 154.78 | 1.079 | 157.00 |
+| bh-glx-120-b10u20 | this branch | 7 | chunk 7 | 130 W | 0.062 | 0.954 | 128.63 | 1.009 | 130.66 |
 
 I2V tells the same story as T2V. Against the `d04` host, b10u20 at 75 W denoises 1.7–1.9% *faster* (55.97 against 57.06 s, 154.78 against 157.47 s). Every stage that involves host work is slower on CI: text encoding 0.08 against 0.06 s, image encoding 1.15 against 0.92 s, and the VAE (0.75 s full-T against 0.35 s full-T on b10u20 from the A/B). That fits the guess that CI's slow VAE comes from the host side, not the device.
 
