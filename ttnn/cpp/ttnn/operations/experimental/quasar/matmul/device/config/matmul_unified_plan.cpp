@@ -213,8 +213,9 @@ std::optional<MatmulUnifiedPlan> plan_unified_matmul(
     const uint64_t l1_budget = l1_ceiling - l1_base;
 
     // ---- 4. Plan builders ----
-    // A shard matches when the tensor is L1-sharded with that shard shape and its grid lists the active
-    // cores in assignment order (so shard i lives on the core that produces C slice i).
+    // True when every active core already holds, in its own L1, exactly the block of `tensor` its C slice uses: the
+    // tensor is L1-sharded with that shard shape and its grid lists the active cores in assignment order (shard i on
+    // the core that produces C slice i). Such a shard is borrowable: bound in place as the core's DFB, with no copy.
     const auto shard_matches = [&](const ttnn::Tensor& tensor,
                                    uint32_t shard_M_tiles,
                                    uint32_t shard_N_tiles,
