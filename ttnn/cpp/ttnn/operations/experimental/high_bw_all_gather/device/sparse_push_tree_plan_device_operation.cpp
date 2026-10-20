@@ -33,7 +33,8 @@ enum TreeCb : uint32_t {
     kVars = 8,
     kDens = 9,
     kCache = 10,
-    kHandoff = 11
+    kHandoff = 11,
+    kBlk = 12
 };
 constexpr uint32_t kCacheRows = 24576;  // rows a planner core remembers between its passes
 constexpr uint32_t kWin = 256;  // must match the kernel's bitmap window
@@ -132,7 +133,8 @@ tt::tt_metal::ProgramDescriptor SparsePushTreePlanDeviceOperation::create_descri
     add_cb(td::kRw, (max_blocks + td::round_up(W, 16)) * 4);
     add_cb(td::kIdx, 2 * 2048);
     add_cb(td::kVars, 8192);
-    add_cb(td::kDens, (cores + 1) * td::round_up(wpc / 16, 16) * 4);
+    add_cb(td::kDens, max_blocks * 4);
+    add_cb(td::kBlk, max_blocks * 4);
     add_cb(td::kCache, td::kCacheRows * 8);
     add_cb(td::kHandoff, 1024);
 

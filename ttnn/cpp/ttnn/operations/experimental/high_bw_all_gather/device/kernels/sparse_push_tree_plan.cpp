@@ -42,7 +42,8 @@ enum Cb : uint32_t {
     kVars = 8,
     kDens = 9,
     kCache = 10,
-    kHandoff = 11
+    kHandoff = 11,
+    kBlk = 12
 };
 constexpr uint32_t kWin = 256;        // bitmap words per requester streamed into L1 at a time
 constexpr uint32_t kChunkWords = 16;  // rows are balanced over cores in chunks of 512
@@ -162,11 +163,25 @@ void kernel_main() {
     };
 #if defined(REWRITE_HELPER)
     {
-        noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(handoff_sem_id)), 1);
-        invalidate_l1_cache();
-        const uint32_t a = handoff[0], vw = handoff[1];
         if (u_lo >= u_hi) {
             return;
+        }
+        // Everything but the lane counts is known up front: rank, this requester's valid extent, its path-table row
+        // (arrival direction and hop per owner), bitmap and block counts. BRISC hands over the lanes later.
+        const uint32_t tmp_l1 = get_write_ptr(kIdx);
+        auto* tmp = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tmp_l1);
+        noc_async_read(rank_t.get_noc_addr(0), tmp_l1, 64);
+        noc_async_read_barrier();
+        invalidate_l1_cache();
+        const uint32_t a = tmp[0];
+        noc_async_read(tables.get_noc_addr(a * table_pages), tmp_l1, 64);
+        noc_async_read(paths_t.get_noc_addr(a), tmp_l1 + 1024, 1024);
+        noc_async_read_barrier();
+        invalidate_l1_cache();
+        const uint32_t vw = tmp[3] * words_per_block;
+        uint32_t in_of[n_dev];
+        for (uint32_t o = 0; o < n_dev; ++o) {
+            in_of[o] = tmp[256 + n_dev + o];
         }
         // A needed row's slot follows from its owner: owned here -> the own region; otherwise it arrived from
         // in_of[owner] at that hop, so it sits at its rank among this chip's needed rows of owners with the same
@@ -201,12 +216,14 @@ void kernel_main() {
             cls_run[c] = 0;
         }
         for (uint32_t b = 0; b < blocks; ++b) {
-            const uint32_t o = b % n_dev, in = handoff[16 + o];
+            const uint32_t o = b % n_dev, in = in_of[o];
             const uint32_t c = o == a ? 0u : 1u + (in & 0xFF) % 4 * LV + (in >> 8);
             const uint32_t v = bpre[b];
             bpre[b] = cls_run[c];
             cls_run[c] += v;
         }
+        noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(handoff_sem_id)), 1);
+        invalidate_l1_cache();
         handoff[3] = 1;
         for (uint32_t u = u_lo; u < u_hi; ++u) {
             invalidate_l1_cache();
@@ -325,22 +342,19 @@ void kernel_main() {
 
     // Streams requester bitmaps [ws, we) through L1 window by window (zero past each requester's valid extent).
     auto* col_v = carve(32);
-    uint32_t* uni_win = bits + n_dev * kWin;
-    auto for_each_word = [&](uint32_t ws, uint32_t we, auto&& fn, bool with_union = false) {
-        for (uint32_t base_w = ws; base_w < we; base_w += kWin) {
+    // blk_w[b - blk_base]: this core's block weights (0 = no requester needs a row of block b).
+    uint32_t* blk_w = nullptr;
+    uint32_t blk_base = 0;
+    auto for_each_word = [&](uint32_t ws, uint32_t we, auto&& fn) {
+        for (uint32_t base_w = ws & ~15u; base_w < we; base_w += kWin) {
             const uint32_t end_w = base_w + kWin < we ? base_w + kWin : we;
-            if (with_union) {
-                noc_async_read(
-                    uni_t.get_noc_addr(0) + base_w * 4, reinterpret_cast<uint32_t>(uni_win), (end_w - base_w) * 4);
-                noc_async_read_barrier();
-                invalidate_l1_cache();
-                bool empty = true;
-                for (uint32_t w = 0; w < end_w - base_w && empty; ++w) {
-                    empty = uni_win[w] == 0;
-                }
-                if (empty) {
-                    continue;
-                }
+            const uint32_t from = base_w > ws ? base_w : ws;
+            bool empty = true;
+            for (uint32_t b = from / words_per_block; b * words_per_block < end_w && empty; ++b) {
+                empty = blk_w[b - blk_base] == 0;
+            }
+            if (empty) {
+                continue;
             }
             for (uint32_t d = 0; d < n_dev; ++d) {
                 const uint32_t hi = end_w < valid_words[d] ? end_w : valid_words[d];
@@ -360,21 +374,19 @@ void kernel_main() {
             }
             noc_async_read_barrier();
             invalidate_l1_cache();
-            for (uint32_t w = base_w; w < end_w; ++w) {
-                fn(w, w - base_w);
+            for (uint32_t w = from; w < end_w; ++w) {
+                if (blk_w[w / words_per_block - blk_base]) {
+                    fn(w, w - base_w);
+                }
             }
         }
     };
     // Rows of bitmap word i (owner o) that arrive here, leave in each direction, or that this chip needs.
     auto classify = [&](uint32_t i, uint32_t o, uint32_t& arrive, uint32_t* out, uint32_t& go, uint32_t& need) {
-        uint32_t* v = col_v;
-        for (uint32_t d = 0; d < n_dev; ++d) {
-            v[d] = bits[d * kWin + i];
-        }
         auto any_of = [&](uint32_t set) {
             uint32_t r = 0;
             for (; set; set &= set - 1) {
-                r |= v[ctz(set)];
+                r |= bits[ctz(set) * kWin + i];
             }
             return r;
         };
@@ -384,23 +396,17 @@ void kernel_main() {
             out[dr] = beyond[o * 4 + dr] ? any_of(beyond[o * 4 + dr]) : 0u;
             go |= out[dr];
         }
-        need = v[a];
+        need = bits[a * kWin + i];
     };
     // Visits every row of [ws, we) that involves this chip with its cache entry (see the count pass). The owner is
     // fixed per bitmap word, so arrival and each forwarding direction are ORs of a few requesters' words.
     auto for_each_entry = [&](uint32_t ws, uint32_t we, auto&& fn) {
         for_each_word(
-            ws,
-            we,
-            [&](uint32_t w, uint32_t i) {
-                if (!uni_win[i]) {
-                    return;
-                }
+            ws, we, [&](uint32_t w, uint32_t i) {
                 const uint32_t blk = (w * 32) / sc, o = blk % n_dev;
                 uint32_t arrive, out[4], go, need;
                 classify(i, o, arrive, out, go, need);
                 const uint32_t own = o == a ? 1u : 0u;
-                const uint32_t* v = col_v;
                 const uint32_t in_dir = in_of[o] & 0xFF, in_depth = in_of[o] >> 8;
                 for (uint32_t u = arrive | go | need; u; u &= u - 1) {
                     const uint32_t j = ctz(u), x = w * 32 + j;
@@ -409,7 +415,7 @@ void kernel_main() {
                     uint32_t outs = 0, n_out = 0;
                     for (uint32_t dr = 0; dr < 4; ++dr) {
                         if (out[dr] >> j & 1) {
-                            const uint32_t keep = (v[nbr[dr]] >> j & 1) ? 0u : 1u;
+                            const uint32_t keep = (bits[nbr[dr] * kWin + i] >> j & 1) ? 0u : 1u;
                             outs |= (dr | depth[o] << 2 | keep << 6) << (7 * n_out++);
                         }
                     }
@@ -417,79 +423,115 @@ void kernel_main() {
                            (arrives ? in_depth : 0u) << 25 | n_out << 29,
                        outs);
                 }
-            },
-            true);
+            });
     };
 
     PLAN_T(10);
-    // 0. Balance: needed rows per 512-row chunk over an even split, then contiguous chunk ranges of equal rows.
-    constexpr uint32_t chunks = W / kChunkWords;
-    constexpr uint32_t chunks_per_core = wpc / kChunkWords;
-    constexpr uint32_t dens_per_core = (chunks_per_core + 15) / 16 * 16;
-    static_assert(W % kChunkWords == 0 && wpc % kChunkWords == 0, "chunks of 16 bitmap words");
-    const uint32_t dens_l1 = get_write_ptr(kDens);
-    auto* dens = reinterpret_cast<uint32_t*>(dens_l1);
-    auto* my_dens = dens + G * dens_per_core;
+    // 0. Balance by block weight = requester rows of the block (+64 if any, for the scan), from the tables' block
+    // counts. Each core weighs an even share of blocks and posts the share's sum to core 0; every core then takes the
+    // prefix over the G sums, and the core whose share holds core c's start block (the first with c / G of the weight
+    // before it) finds it in its share and writes it to cores c (start) and c - 1 (end).
+    constexpr uint32_t nblocks = W / words_per_block;
+    constexpr uint32_t share = (nblocks + G - 1) / G / 16 * 16 + 16;
+    auto* bounds = carve(4);      // [first block, end block) of this core
+    auto* share_sums = carve(G);  // on core 0: every share's weight
+    const uint32_t k0 = me * share < nblocks ? me * share : nblocks;
+    const uint32_t k1 = k0 + share < nblocks ? k0 + share : nblocks;
+    auto* sums = reinterpret_cast<uint32_t*>(scratch_l1 + 1024);
     {
-        const uint32_t e0 = me * wpc < W ? me * wpc : W;
-        const uint32_t e1 = e0 + wpc < W ? e0 + wpc : W;
-        for (uint32_t k = 0; k < dens_per_core; ++k) {
-            my_dens[k] = 0;
-        }
-        for_each_word(e0, e1, [&](uint32_t w, uint32_t i) {
-            uint32_t any = 0;
+        uint32_t my_sum = 0;
+        if (k0 < k1) {
             for (uint32_t d = 0; d < n_dev; ++d) {
-                any |= bits[d * kWin + i];
+                for (uint32_t k = k0; k < k1;) {
+                    const uint32_t word = counts_off + k;
+                    const uint32_t in_page = word % 1024;
+                    const uint32_t n = k1 - k < 1024 - in_page ? k1 - k : 1024 - in_page;
+                    noc_async_read(
+                        tables.get_noc_addr(d * table_pages + word / 1024) + in_page * 4,
+                        all_l1 + (d * share + k - k0) * 4,
+                        n * 4);
+                    k += n;
+                }
             }
-            uni_win[i] = any;
-            if (any) {
-                uint32_t arrive, out[4], go, need;
-                classify(i, ((w * 32) / sc) % n_dev, arrive, out, go, need);
-                my_dens[(w - e0) / kChunkWords] += 5 * popcount(arrive | go | need) + 2;  // a row ~ 2.5 word scans
+            noc_async_read_barrier();
+            invalidate_l1_cache();
+            for (uint32_t k = k0; k < k1; ++k) {
+                uint32_t n = 0;
+                for (uint32_t d = 0; d < n_dev; ++d) {
+                    n += k < valid_words[d] / words_per_block ? all[d * share + (k - k0)] : 0u;
+                }
+                sums[k - k0] = n ? n + 64 : 0u;
+                my_sum += sums[k - k0];
             }
-            if (i + 1 == kWin || w + 1 == e1) {
-                const uint32_t first = w - i;
-                noc_async_write(reinterpret_cast<uint32_t>(uni_win), uni_t.get_noc_addr(0) + first * 4, (i + 1) * 4);
-                noc_async_write_barrier();
-            }
-        });
+            // The block weights also go to core 0, for each core's empty-block skips later.
+            noc_async_write(scratch_l1 + 1024, core_noc(0, get_write_ptr(kDens) + k0 * 4), (k1 - k0) * 4);
+        }
+        auto* slot = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch_l1 + 768 + (me % 4) * 4);
+        *slot = my_sum;
+        noc_async_write(
+            reinterpret_cast<uint32_t>(slot), core_noc(0, reinterpret_cast<uint32_t>(share_sums) + me * 4), 4);
     }
     PLAN_T(11);
     barrier();
     PLAN_T(12);
-    for (uint32_t c = 0; c < G; ++c) {
-        noc_async_read(
-            core_noc(c, dens_l1 + G * dens_per_core * 4), dens_l1 + c * dens_per_core * 4, dens_per_core * 4);
-    }
+    noc_async_read(core_noc(0, reinterpret_cast<uint32_t>(share_sums)), all_l1 + 16384, G * 4);
     noc_async_read_barrier();
     invalidate_l1_cache();
-    auto chunk_rows = [&](uint32_t k) { return dens[(k / chunks_per_core) * dens_per_core + k % chunks_per_core]; };
-    uint32_t total_rows = 0;
-    for (uint32_t k = 0; k < chunks; ++k) {
-        total_rows += chunk_rows(k);
-    }
-    // Core c starts at the first chunk with at least c / G of the rows before it.
-    uint32_t w0 = W, w1 = W;
     {
-        uint32_t before = 0, c = 0;
-        for (uint32_t k = 0; k <= chunks && c <= me + 1; ++k) {
-            while (c <= me + 1 &&
-                   (k == chunks || static_cast<uint64_t>(before) * G >= static_cast<uint64_t>(total_rows) * c)) {
-                if (c == me) {
-                    w0 = k * kChunkWords;
-                }
-                if (c == me + 1) {
-                    w1 = k * kChunkWords;
-                }
-                ++c;
+        const uint32_t* ss = all + 4096;
+        uint32_t total = 0, before = 0;
+        for (uint32_t c = 0; c < G; ++c) {
+            total += ss[c];
+            before += c < me ? ss[c] : 0u;
+        }
+        // This share claims the cores c with before * G < c * total <= (before + ss[me]) * G (a start exactly at a
+        // share edge belongs to the share that reaches it, so every start has one writer).
+        auto* out = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(all_l1 + 20480);
+        uint32_t c = total ? before * G / total + 1 : G;
+        uint32_t run = before, k = k0, slot_i = 0;
+        for (; c < G && k0 < k1; ++c) {
+            while (k < k1 && run * G < total * c) {
+                run += sums[k - k0];
+                ++k;
             }
-            if (k < chunks) {
-                before += chunk_rows(k);
+            if (k == k1 && run * G < total * c) {
+                break;  // starts in a later share
             }
+            // Same 16 B offset at both ends: the start goes from word 0 of the slot, the end from word 1.
+            out[4 * slot_i] = k;
+            out[4 * slot_i + 1] = k;
+            noc_async_write(all_l1 + 20480 + 16 * slot_i, core_noc(c, reinterpret_cast<uint32_t>(bounds)), 4);
+            noc_async_write(
+                all_l1 + 20480 + 16 * slot_i + 4, core_noc(c - 1, reinterpret_cast<uint32_t>(bounds) + 4), 4);
+            ++slot_i;
+        }
+        if (total == 0) {  // nothing needed anywhere
+            bounds[0] = bounds[1] = 0;
+        }
+        if (me == 0) {
+            bounds[0] = 0;
         }
         if (me + 1 == G) {
-            w1 = W;
+            bounds[1] = total ? nblocks : 0;
         }
+        noc_async_write_barrier();
+    }
+    PLAN_T(13);
+    barrier();
+    PLAN_T(14);
+    blk_base = 0;  // (set below)
+    const uint32_t dens_l1 = get_write_ptr(kDens);
+    // Clamped so that a bad boundary shows up as a wrong plan, not as an out-of-range read.
+    const uint32_t b0 = bounds[0] < nblocks ? bounds[0] : nblocks;
+    const uint32_t b1 = bounds[1] < b0 ? b0 : (bounds[1] < nblocks ? bounds[1] : nblocks);
+    const uint32_t w0 = b0 * words_per_block, w1 = b1 * words_per_block;
+    // This core's block weights (to skip empty blocks), copied from core 0.
+    blk_base = b0 & ~15u;
+    blk_w = reinterpret_cast<uint32_t*>(get_write_ptr(kBlk));
+    if (b0 < b1) {
+        noc_async_read(core_noc(0, dens_l1 + blk_base * 4), reinterpret_cast<uint32_t>(blk_w), (b1 - blk_base) * 4);
+        noc_async_read_barrier();
+        invalidate_l1_cache();
     }
 
     PLAN_T(1);
@@ -528,39 +570,46 @@ void kernel_main() {
     });
 
     PLAN_T(2);
-    // 2. Exchange: all[c][g] becomes core c's exclusive prefix; tot[g] the group total.
+    // 2. Exchange: core g owns group g -- it pulls that count from every core and writes back each core's rank
+    // offset (pre_row), the group total (tot) and, when the core's first rank lands inside a packet begun earlier,
+    // the core holding that packet's start (carry_to). Same carve order on every core, so the same L1 addresses.
+    auto* pre_row = carve(kGroups);
+    auto* tot = carve(kGroups);
+    auto* carry_to = carve(kGroups);
+    static_assert(kGroups <= G, "one core per group");
     barrier();
     PLAN_T(3);
-    for (uint32_t c = 0; c < G; ++c) {
-        noc_async_read(core_noc(c, cnt_l1), all_l1 + c * cnt_words * 4, cnt_words * 4);
-    }
-    noc_async_read_barrier();
-    invalidate_l1_cache();
-    auto* tot = carve(kGroups);
-    for (uint32_t g = 0; g < kGroups; ++g) {
-        tot[g] = 0;
-    }
-    for (uint32_t c = 0; c < G; ++c) {
-        uint32_t* row = all + c * cnt_words;
-        for (uint32_t g = 0; g < kGroups; ++g) {
-            const uint32_t v = row[g];
-            row[g] = tot[g];
-            tot[g] += v;
+    if (me < kGroups) {
+        const uint32_t g = me, off = (g % 4) * 4;
+        for (uint32_t c = 0; c < G; ++c) {
+            noc_async_read(core_noc(c, cnt_l1 + g * 4), all_l1 + c * 16 + off, 4);
         }
-    }
-    auto pre = [&](uint32_t c, uint32_t g) { return all[c * cnt_words + g]; };
-    auto owner_core = [&](uint32_t g, uint32_t rank) {  // core holding rank `rank` of group g
-        uint32_t lo = 0, hi = G - 1;
-        while (lo < hi) {
-            const uint32_t mid = (lo + hi + 1) / 2;
-            if (pre(mid, g) <= rank) {
-                lo = mid;
-            } else {
-                hi = mid - 1;
+        noc_async_read_barrier();
+        invalidate_l1_cache();
+        const uint32_t size = g == kNeed ? kLineSlots : P;
+        uint32_t run_g = 0, start_core = 0;
+        auto* out = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(all_l1 + 4096);  // [pre, carry] per core
+        for (uint32_t c = 0; c < G; ++c) {
+            const uint32_t v = all[c * 4 + g % 4];
+            out[c * 8 + g % 4] = run_g;
+            out[c * 8 + 4 + g % 4] = run_g % size ? start_core : c;
+            if (v && (run_g + size - 1) / size * size < run_g + v) {
+                start_core = c;  // a packet starts on core c
             }
+            run_g += v;
         }
-        return lo;
-    };
+        for (uint32_t c = 0; c < G; ++c) {
+            all[c * 4 + g % 4] = run_g;  // reuse as the total's source slot
+        }
+        for (uint32_t c = 0; c < G; ++c) {
+            noc_async_write(all_l1 + 4096 + c * 32 + off, core_noc(c, reinterpret_cast<uint32_t>(pre_row) + g * 4), 4);
+            noc_async_write(
+                all_l1 + 4096 + c * 32 + 16 + off, core_noc(c, reinterpret_cast<uint32_t>(carry_to) + g * 4), 4);
+            noc_async_write(all_l1 + c * 16 + off, core_noc(c, reinterpret_cast<uint32_t>(tot) + g * 4), 4);
+        }
+    }
+    barrier();
+    auto pre = [&](uint32_t c, uint32_t g) { return pre_row[g]; };
     // Per edge: packets of earlier (level, keep) groups, and lanes of earlier levels in the same keep region.
     auto* pkb = carve(2 * 4 * LV * 2);
     auto* lnb = carve(2 * 4 * LV * 2);
@@ -633,7 +682,7 @@ void kernel_main() {
         auto* s = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src);
         s[0] = v0;
         s[1] = v1;
-        noc_async_write(src, core_noc(owner_core(g, start), dst), line ? 4 : 8);
+        noc_async_write(src, core_noc(carry_to[g], dst), line ? 4 : 8);
     };
     // Writes group g's open packet (line) once complete, then clears it.
     auto flush = [&](uint32_t g, uint32_t start) {
@@ -796,13 +845,16 @@ void kernel_main() {
 #if defined(DEBUG_PRINT_ENABLED)
     PLAN_T(9);
     DPRINT(
-        "TPLAN core {} pre {} dens {} b0 {} bnd {} w0 {} w1 {} rows {} setup {} count {} b1 {} xch {} emit {} b2 {} "
+        "TPLAN core {} pre {} dens {} b0 {} bnd {} b0b {} blk {} w0 {} w1 {} rows {} setup {} count {} b1 {} xch {} "
+        "emit {} b2 {} "
         "tail {} b3 {} rewrite {}\n",
         me,
         stamp[10] - stamp[0],
         stamp[11] - stamp[10],
         stamp[12] - stamp[11],
-        stamp[1] - stamp[12],
+        stamp[13] - stamp[12],
+        stamp[14] - stamp[13],
+        stamp[1] - stamp[14],
         w0,
         w1,
         visited,
