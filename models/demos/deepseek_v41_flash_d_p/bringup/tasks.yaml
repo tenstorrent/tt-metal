@@ -9426,6 +9426,46 @@ tasks:
       pcc_state_min: '>= 0.97'
       host_transfers_per_layer: == 0
       device_ms_experts: '< 45.3'
+- id: P.10
+  title: 'Routed expert weights in bfp4 (the checkpoint''s fp4 width, owner rule F117) vs bfp8: owner comparison'
+  step: perf
+  role: perf
+  deps:
+  - P.9
+  device: true
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/bringup/hooks.py
+  - ttnn/ttnn/bringup/flat_routed_expert_ttnn
+  - ttnn/ttnn/bringup/combine_rf
+  - ttnn/ttnn/bringup/INDEX.md
+  ab:
+    change:
+      EXPERTS_IMPL: bfp4
+    env:
+      EXPERTS_IMPL: bfp8
+  brief:
+    details: 'Owner (2026-10-20): the routed experts'' weights in bfp4 (EXPERTS_IMPL=bfp4, the setting exists since P.1;
+      the checkpoint stores them in fp4, agents rule 7 / F117: the shipped default is the checkpoint''s width, bfp8
+      stays the exact max_precision value). The experts are DRAM-bound at LoFi (GLM precision), so bfp4 halves the
+      weight stream. Check that the current default path (flat expert + weighted combine, bf16 sums, one pass:
+      EXPERTS_COMBINE=weighted, COMBINE_ACC=bf16) runs with bfp4 weights at the model''s chunk (the flat plan may
+      change with the smaller weights: log it), fix only what bfp4 breaks, and measure with tt/perf_experts.py the
+      experts call per layer bfp8 vs bfp4 (layers 0 and 24) and the rel error vs float64 of both. Your final check:
+      `python -m models.demos.common.bringup.orchestrator measure --task P.10` (the quick A/B''s change-on run).'
+  gate:
+    cmd: for t in swa swa_engram enc_source enc_source_engram enc_reuse dec_candidate dec_reindex dec_reuse; do scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_${t}_experts.py || exit 1; done
+      && for t in swa_12 swa_engram_15 enc_source_14 enc_source_engram_17 enc_reuse_12 dec_candidate_14 dec_reindex_13
+      dec_reuse_12; do scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_${t}_experts.py
+      || exit 1; done && BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=10000
+      scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+    metrics:
+      pcc_layer_L*: '>= 0.97'
+      pcc_state_min: '>= 0.97'
+      host_transfers_per_layer: == 0
+      device_ms_experts: '< 38.9'
 - id: X.3
   title: 'Final: full-target accuracy, warm full prefill (no readback), one warm chunk at several positions'
   step: perf
@@ -9436,6 +9476,7 @@ tasks:
   - P.7
   - P.8
   - P.9
+  - P.10
   gate:
     cmd: BRINGUP_RUNG=s55296 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py && BRINGUP_FULL_PREFILL=1
       BRINGUP_PROFILE_OPS=1 TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1
