@@ -4,6 +4,7 @@
 
 #include <tt-metalium/experimental/sockets/d2h_socket.hpp>
 #include <internal/service/service_core_manager.hpp>
+#include <internal/l1_ecc_halt.hpp>
 #include "tt_metal/distributed/mesh_socket_utils.hpp"
 #include "distributed/mesh_device_impl.hpp"
 #include "impl/context/metal_env_impl.hpp"
@@ -588,7 +589,9 @@ void D2HSocket::set_page_size(uint32_t page_size) {
         uint32_t bytes_adjustment = fifo_size_ - next_fifo_rd_ptr;
         uint32_t bytes_recv = bytes_sent_ - bytes_acked_;
 
+        tt::tt_metal::internal::L1EccHaltWatch ecc_watch(mesh_device_);
         while (bytes_recv < bytes_adjustment) {
+            ecc_watch.stalled();
             // On mock, synthesize the wrap padding that bytes_acked_ consumes below.
             if (mock_flow_control_enabled_) {
                 simulate_device_sent(bytes_adjustment);
@@ -630,7 +633,9 @@ void D2HSocket::wait_for_bytes(uint32_t num_bytes) {
         num_bytes += fifo_size_ - fifo_curr_size_;
     }
     uint32_t bytes_recv = bytes_sent_ - bytes_acked_;
+    tt::tt_metal::internal::L1EccHaltWatch ecc_watch(mesh_device_);
     while (bytes_recv < num_bytes) {
+        ecc_watch.stalled();
         // On mock, synthesize exactly the wrap-adjusted bytes this read needs.
         if (mock_flow_control_enabled_) {
             simulate_device_sent(num_bytes);
@@ -742,7 +747,9 @@ void D2HSocket::barrier(std::optional<uint32_t> timeout_ms) {
     refresh_connector_read_state();
     volatile uint32_t bytes_sent_value = read_bytes_sent();
     auto start_time = std::chrono::high_resolution_clock::now();
+    tt::tt_metal::internal::L1EccHaltWatch ecc_watch(mesh_device_);
     while (bytes_acked_ - bytes_sent_value != 0) {
+        ecc_watch.stalled();
         refresh_connector_read_state();
         bytes_sent_value = read_bytes_sent();
         if (timeout_ms.has_value()) {
@@ -750,6 +757,7 @@ void D2HSocket::barrier(std::optional<uint32_t> timeout_ms) {
                                   std::chrono::high_resolution_clock::now() - start_time)
                                   .count();
             if (elapsed_ms > timeout_ms.value()) {
+                ecc_watch.check_now();
                 TT_THROW(
                     "Timeout waiting for host to acknowledge data over D2H socket. Bytes sent: {}, Bytes "
                     "acknowledged: {}. Barrier was potentially issued on host before all required reads were "

@@ -24,6 +24,7 @@
 #include "impl/context/metal_env_accessor.hpp"
 #include "impl/context/metal_env_impl.hpp"
 #include <impl/debug/watcher_server.hpp>
+#include <internal/l1_ecc_halt.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "hal_types.hpp"
 #include "llrt.hpp"
@@ -464,8 +465,10 @@ void wait_until_cores_done(
             std::chrono::duration_cast<std::chrono::milliseconds>(rtoptions.get_timeout_duration_for_operations())
                 .count();
     }
+    tt::tt_metal::internal::L1EccHaltWatch ecc_watch(context, device_id);
     while (!not_done_phys_cores.empty()) {
         throw_if_watcher_tripped_in_test_mode(context, device_id);
+        ecc_watch.stalled();
 
         if (timeout_ms > 0) {
             auto now = std::chrono::high_resolution_clock::now();
@@ -477,6 +480,7 @@ void wait_until_cores_done(
                 }
                 std::string cores = fmt::format("{}", fmt::join(not_done_phys_cores, ", "));
 
+                ecc_watch.check_now();
                 context.on_dispatch_timeout_detected();
 
                 TT_THROW(
