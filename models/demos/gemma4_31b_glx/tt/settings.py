@@ -126,6 +126,17 @@ TABLE = {
     ),
     "ATTN_RING_NUM_LINKS": Setting(2, (1, 2), "Ethernet links per direction for the ring SDPA's CP exchange (BH: 2)."),
     "KV_SLOTS": Setting(2, None, "User slots in the served KV cache (serving_answers.yaml)."),
+    "SERVING_HF_MODEL": Setting(
+        "/mnt/models/huggingface/hub/models--google--gemma-4-31B-it/snapshots/3548789868c5356dbf307c98e6f609007b82b3eb",
+        None,
+        "Checkpoint dir the prefill-runner adapter (tt/serving.py) loads the config and weights from.",
+    ),
+    "SERVING_GOLDEN_DIR": Setting(
+        "/data/dgolubovic/repos/tt-agentic-bringup-sc-gemma31-glx/.bringup/runs/prefill-stepwise/.bringup/goldens/"
+        "gemma4_31b_glx/c6563d9ac127e48c/s5120_c5120",
+        None,
+        "Golden trace (token ids + kv_cache/) the prefill producer defaults to (adapter.prefill_trace_default).",
+    ),
     "MLP_FIDELITY": Setting(
         "HiFi4",
         ("HiFi4", "HiFi3", "HiFi2", "LoFi"),

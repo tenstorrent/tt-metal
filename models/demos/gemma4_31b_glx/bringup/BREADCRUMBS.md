@@ -235,3 +235,24 @@
   worst state pcc 0.989, final hidden 0.9991, top1 0.986, top5 0.967, 59 device ops / 0 host transfers per layer.
   All 32 C.*/S.* regressions PASS.
 - Re-run: `bfw job check --task M.1`.
+
+## K.1 (run 20261019-050348-gemma31-glx-3, attempt 1), 2026-10-19
+- Serving adapter `tt/serving.py`, registered as `gemma4_31b_glx` in `models/demos/common/prefill/adapter.py`.
+  - The adapter allocates the served caches and passes them into the Model (`caches=`). Capacity is
+    `max(max_seq, 2*chunk)`: the sliding ring SDPA rejects a cache that holds only one chunk (`TT_FATAL is_chunked`
+    on the 5120/5120 contract rung).
+  - The runtime runs op by op (no trace), one slot scalar per slot. `ChunkMeta.slot_index` selects the global
+    composed SDPA's prefix slot. `Model.embed_device` takes the H2D payload `[SP,1,C/SP]` uint32 and clamps PAD ids
+    on device.
+  - Acks per layer: D2H `outbound_socket_service_sync` when the runner passes d2h_service, else sync + sink.
+  - Table: gemma4_d_p's 36 configs and walk, layer index = served layer. `kv_migration_base_address` = 0 because
+    layer 0 is sliding and config 0 (global) is unset there.
+  - Producer PCC: a generic `ADAPTER.read_slot_kv_and_check_pcc` hook in `prefill_producer.py`. The gemma
+    implementation reads each head through the table (`read_dram_umd`, bfp8 decode) against the golden mapped to the
+    served layout.
+- Gate: `bfw job check --task K.1` PASS (1491 s).
+  - contract_checks_failed 0, acks_early 0, layout_failures 0;
+  - pcc_producer_kv global 0.9876, sliding_k 0.9895, sliding_v 0.9848;
+  - all C.*/S.*/M.1/L.* regressions PASS.
+  - Runner feeder: tt-d-gen engine.
+- Re-run: `bfw job check --task K.1` (~25 min; launch detached and wait on the pid in the foreground).

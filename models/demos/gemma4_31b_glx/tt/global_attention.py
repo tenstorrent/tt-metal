@@ -63,8 +63,9 @@ def pack_global_kv(key: torch.Tensor, value: torch.Tensor) -> torch.Tensor:
 
 
 class GlobalAttention:
-    def __init__(self, mesh, w: dict, cfg: dict, max_seq: int, chunk: int, chunk_tables: bool = True):
+    def __init__(self, mesh, w: dict, cfg: dict, max_seq: int, chunk: int, chunk_tables: bool = True, cache=None):
         """w: checkpoint tensors q_proj, k_proj, o_proj, q_norm, k_norm (HF names without the prefix).
+        cache: the served packed cache allocated by the owner (tt/serving.py), None: allocate it here.
         cfg: the text config. max_seq / chunk: the served geometry (cache capacity and chunk size).
         chunk_tables: build this layer's own per-chunk RoPE tables, offsets and causal mask (chunk-aligned starts, the
         component test). The device model passes False and hands every call a ChunkMeta (tt/model.py)."""
@@ -188,8 +189,11 @@ class GlobalAttention:
 
         # The served packed cache, one layer: [slots, 1 head, max_seq / SP, d + 128] bfp8.
         self.packed = d + ROTARY_DIM
-        self.slots = settings.get("KV_SLOTS")
-        self.cache = _allocate_ring_cache(mesh, [self.slots, 1, max_seq // sp, self.packed], self.packed)
+        if cache is None:
+            self.slots = settings.get("KV_SLOTS")
+            self.cache = _allocate_ring_cache(mesh, [self.slots, 1, max_seq // sp, self.packed], self.packed)
+        else:
+            self.cache, self.slots = cache, cache.shape[0]
         # ring_mla gathers every chip's whole shard: the receive buffer spans the full capacity, DRAM interleaved
         # (the fused gather's bank-owned schedule needs an interleaved output).
         # Only the ring_mla mode reads it (38 MB per layer per chip).
@@ -400,7 +404,9 @@ class GlobalAttention:
             if meta is None:
                 attn = self._composed_sdpa(q_r, fresh, c * self.slab, self.chunk_mask, None)
             else:
-                attn = self._composed_sdpa(q_r, fresh, meta.prefix_rows, meta.chunk_mask, meta.prefix_mask)
+                attn = self._composed_sdpa(
+                    q_r, fresh, meta.prefix_rows, meta.chunk_mask, meta.prefix_mask, meta.slot_index
+                )
             ttnn.deallocate(fresh)
         else:
             self.write_kv(packed, start)
@@ -440,8 +446,8 @@ class GlobalAttention:
         ttnn.deallocate(g)
         return k, v
 
-    def _composed_sdpa(self, q, chunk_rows, prefix_rows, chunk_mask, prefix_mask):
-        """Causal attention of q [1, 8, L, 512] over slot 0's prefix and this chunk (prefix: the bfp8 cache's local rows
+    def _composed_sdpa(self, q, chunk_rows, prefix_rows, chunk_mask, prefix_mask, slot: int = 0):
+        """Causal attention of q [1, 8, L, 512] over the slot's prefix and this chunk (prefix: the bfp8 cache's local rows
         [0, prefix_rows) on every SP row, prefix_mask [1, 1, 1, SP * prefix_rows] masking keys at or past the start, None:
         all visible; chunk: chunk_rows, this chunk's packed rows in bf16, chunk_mask the causal mask of q against them):
         QK^T in fp32, mask, fp32 softmax, P V; scale 1.0. -> [1, 8, L, 512]."""
@@ -465,7 +471,10 @@ class GlobalAttention:
         vs = [v_cur]
         if prefix_rows:
             prefix = ttnn.slice(
-                self.cache, (0, 0, 0, 0), (1, 1, prefix_rows, self.packed), memory_config=ttnn.DRAM_MEMORY_CONFIG
+                self.cache,
+                (slot, 0, 0, 0),
+                (slot + 1, 1, prefix_rows, self.packed),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
             k_pre, v_pre = self._gather_rows(prefix)
             ttnn.deallocate(prefix)

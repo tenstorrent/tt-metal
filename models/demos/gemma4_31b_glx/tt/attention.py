@@ -109,8 +109,9 @@ def _allocate_ring_cache(mesh, shape, width):
 
 
 class SlidingAttention:
-    def __init__(self, mesh, w: dict, cfg: dict, max_seq: int, chunk: int, chunk_tables: bool = True):
+    def __init__(self, mesh, w: dict, cfg: dict, max_seq: int, chunk: int, chunk_tables: bool = True, caches=None):
         """w: checkpoint tensors q_proj, k_proj, v_proj, o_proj, q_norm, k_norm (HF names without the prefix).
+        caches: (K, V) served caches allocated by the owner (tt/serving.py), None: allocate them here.
         cfg: the text config. max_seq / chunk: the served geometry (cache capacity and chunk size).
         chunk_tables: build this layer's own RoPE tables and per-chunk positions / offsets (chunk-aligned starts,
         the component test). The device model passes False: it hands every call a ChunkMeta (tt/model.py) with the
@@ -227,10 +228,14 @@ class SlidingAttention:
         self.slot = scalar(0)
 
         # The served cache, one layer: [slots, n_kv_local, max_seq / SP, d] bfp8 K and V.
-        self.slots = settings.get("KV_SLOTS")
-        shape = [self.slots, self.n_kv_local, max_seq // sp, d]
-        self.cache_k = _allocate_ring_cache(mesh, shape, d)
-        self.cache_v = _allocate_ring_cache(mesh, shape, d)
+        if caches is None:
+            self.slots = settings.get("KV_SLOTS")
+            shape = [self.slots, self.n_kv_local, max_seq // sp, d]
+            self.cache_k = _allocate_ring_cache(mesh, shape, d)
+            self.cache_v = _allocate_ring_cache(mesh, shape, d)
+        else:
+            self.cache_k, self.cache_v = caches
+            self.slots = self.cache_k.shape[0]
 
         # Ring SDPA: CCL workers on the last compute column, SDPA on the rest.
         grid = mesh.compute_with_storage_grid_size()

@@ -90,6 +90,7 @@ class ChunkMeta:
     prefix_rows: int  # local cache rows of the slabs holding positions below start
     prefix_mask: object  # [1, 1, 1, SP * prefix_rows] fp32: MASK on cache keys at or past start; None: all visible
     owned: list  # device tensors to free with the meta
+    slot_index: int = 0  # the KV slot (host int) of the slot scalar
 
 
 class State:
@@ -194,7 +195,9 @@ class State:
 
 
 class Model:
-    def __init__(self, mesh, spec, layers, lm_head: bool = True):
+    def __init__(self, mesh, spec, layers, lm_head: bool = True, caches: dict | None = None):
+        """caches: {layer: served cache(s)} allocated by the serving adapter (tt/serving.py): a global layer's packed
+        tensor, a sliding layer's (K, V); None: every attention module allocates its own (KV_SLOTS slots)."""
         t0 = time.time()
         self.mesh = mesh
         self.sp, self.tp = sp, tp = tuple(mesh.shape)
@@ -236,8 +239,9 @@ class Model:
             sliding = cfg["layer_types"][i] == "sliding_attention"
             names = ["q_proj", "k_proj", "o_proj", "q_norm", "k_norm"] + (["v_proj"] if sliding else [])
             w = {n: weights.load(ckpt, f"layers.{i}.self_attn.{n}.weight").float() for n in names}
+            own = {} if caches is None else {"caches" if sliding else "cache": caches[i]}
             cls = SlidingAttention if sliding else GlobalAttention
-            self.attn[i] = cls(mesh, w, cfg, max_seq=self.max_seq, chunk=self.chunk, chunk_tables=False)
+            self.attn[i] = cls(mesh, w, cfg, max_seq=self.max_seq, chunk=self.chunk, chunk_tables=False, **own)
         self.final = RMSNorm(mesh, weights.load(ckpt, "norm.weight"), eps)
         self.has_global = any(isinstance(a, GlobalAttention) for a in self.attn.values())
         self.has_sliding = any(isinstance(a, SlidingAttention) for a in self.attn.values())
@@ -290,6 +294,7 @@ class Model:
             ]
 
         self.slot = self._scalar(0)
+        self.slot_scalars = {0: self.slot}  # slot index -> its replicated scalar, uploaded once per slot
         self.meta = None
         self.next_start = 0
 
@@ -362,9 +367,11 @@ class Model:
                 ttnn.deallocate(t)
             self.meta = None
 
-    def _stage(self, start: int, end: int):
-        """The chunk's ChunkMeta (module docstring)."""
+    def _stage(self, start: int, end: int, slot: int = 0):
+        """The chunk's ChunkMeta (module docstring), writing KV slot `slot`."""
         assert start % ttnn.TILE_SIZE == 0 and 0 <= start < end <= start + self.chunk, (start, end)
+        if slot not in self.slot_scalars:
+            self.slot_scalars[slot] = self._scalar(slot)
         assert start + self.chunk <= self.max_seq, (start, self.max_seq)  # the server pulls the last chunk back
         self._free_meta()
         pos = chunk_positions(start, self.chunk, self.sp)
@@ -419,7 +426,7 @@ class Model:
             start=start,
             end=end,
             order=pos - start,
-            slot=self.slot,
+            slot=self.slot_scalars[slot],
             kv_actual=kv_actual,
             valid=valid,
             sliding_rope=sliding_rope,
@@ -429,6 +436,7 @@ class Model:
             prefix_rows=prefix_rows,
             prefix_mask=prefix_mask,
             owned=owned,
+            slot_index=slot,
         )
         return positions
 
@@ -454,6 +462,20 @@ class Model:
         self.next_start = start + self.chunk
         ids = torch.where(pad, 0, tokens)[self.meta.order]
         tok = self._upload(ids.reshape(1, self.chunk), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, (1, None))
+        return self._embed_ids(tok)
+
+    def embed_device(self, payload, start: int, end: int, slot: int = 0):
+        """The server's chunk input, already on the device -> the residual. payload: [SP, 1, C / SP] uint32 sharded
+        on the SP axis, TP-replicated, in device row order (tt-d-gen's ring_sdpa_reshuffle by start, = chunk_positions),
+        PAD_ID past end; not consumed. PAD_ID is clamped to a valid id on the device (deepseek_v3_d_p
+        tt_parallel_embedding): its rows never reach a real token (causal) and the keep mask zeroes their K / V."""
+        self._stage(start, end, slot)
+        self.next_start = start + self.chunk
+        ids = ttnn.reshape(payload, (1, self.slab))
+        return self._embed_ids(ttnn.minimum(ids, self.vocab - 1))
+
+    def _embed_ids(self, tok):
+        """[1, L] uint32 ids per chip (device row order; consumed) -> the residual."""
         e = ttnn.embedding(tok, self.embed_w, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
         ttnn.deallocate(tok)
         # * sqrt(H) in fp32 (a bf16 scalar would be 73.5, not 73.32), into the residual stream dtype.
