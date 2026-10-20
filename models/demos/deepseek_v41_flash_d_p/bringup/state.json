@@ -6814,6 +6814,7 @@
   "attempt": 1,
   "attempts": 0,
   "duration_s": 0.0,
+  "full_pending": true,
   "history": [
    {
     "s": 0.0,
@@ -6866,6 +6867,179 @@
   "reason": [],
   "role": "perf",
   "started": "2026-10-20T09:13:40",
+  "status": "PASS",
+  "waiting": null
+ },
+ "P.11": {
+  "ab": {
+   "at": "2026-10-20T10:17:54",
+   "by": "dnijemcevic",
+   "changed": [
+    "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+    "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+    "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+    "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/P.11.perf.1.json",
+    "models/demos/deepseek_v41_flash_d_p/tt/experts.py",
+    "models/demos/deepseek_v41_flash_d_p/tt/perf_experts.py",
+    "models/demos/deepseek_v41_flash_d_p/tt/settings.py",
+    "models/demos/deepseek_v41_flash_d_p/tt/weighted_combine.py",
+    "ttnn/ttnn/bringup/INDEX.md",
+    "ttnn/ttnn/bringup/combine_rf/CHANGELOG.md",
+    "ttnn/ttnn/bringup/combine_rf/README.md",
+    "ttnn/ttnn/bringup/combine_rf/combine_plan.py",
+    "ttnn/ttnn/bringup/combine_rf/tests/unit/test_column_planner_mc.py"
+   ],
+   "decided": "2026-10-20T10:24:21",
+   "decision": "accept",
+   "env": {
+    "DS41_COMBINE_PLANNER": "one"
+   },
+   "gate_on": {
+    "failing": [],
+    "ok": true,
+    "partial": true
+   },
+   "key": "843bd5887612bf74",
+   "ladder": {},
+   "note": "overseer by the owner's rule: faster (planner 1573 -> 69 us, experts call 3.66 -> 2.1 ms a layer), PCC unchanged (0.9953 both), bit-identical",
+   "on": {
+    "DS41_COMBINE_PLANNER": "multi"
+   },
+   "profile": {},
+   "quick": {
+    "new": {
+     "chunk_wall_gap_ms": 277.7,
+     "chunk_wall_ms": 232.1,
+     "chunk_wall_ms_spread": 6.7,
+     "host_transfers_per_layer": 0,
+     "min layer": "L03",
+     "min layer PCC": 0.9952977419691894,
+     "pcc_chunk_out": 0.9994344024315253,
+     "rc": 0
+    },
+    "old": {
+     "chunk_wall_gap_ms": 398.2,
+     "chunk_wall_ms": 236.1,
+     "chunk_wall_ms_spread": 6.1,
+     "host_transfers_per_layer": 0,
+     "min layer": "L03",
+     "min layer PCC": 0.9952977419691894,
+     "pcc_chunk_out": 0.9994344024315253,
+     "rc": 0
+    }
+   },
+   "rungs": [
+    "last",
+    "s55296"
+   ],
+   "table": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/ab/P.11/table.md",
+   "tests": {},
+   "why": "apply P.11 or not? A/B table at /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/ab/P.11/table.md; the gate with the change on would PASS; then: python -m models.demos.common.bringup.orchestrator decide --task P.11 --accept|--reject --spec /localdev/dnijemcevic/tt-metal2/models/demos/deepseek_v41_flash_d_p/bringup/spec.yaml, and resume"
+  },
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "db7621c532faec099b306a12ec9e357f7ee045ad",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "6132eac2d9dc2e5e78a7d4c9163e8c1124adab19",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "7caaabe6033d38ae575f9261f7a986853a3593b4",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5",
+   "session_id": "aa24bcb8-9564-435b-9efc-4e90c35c0693"
+  },
+  "agent_runs": [
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/briefs/P.11.perf.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "db7621c532faec099b306a12ec9e357f7ee045ad",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "6132eac2d9dc2e5e78a7d4c9163e8c1124adab19",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "7caaabe6033d38ae575f9261f7a986853a3593b4",
+      "dirty": false
+     }
+    },
+    "knowledge_contradicted": [],
+    "knowledge_report": "ok",
+    "log": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/agents/P.11.perf.1.jsonl",
+    "model": "claude-opus-5-5",
+    "problems": [],
+    "rc": 0,
+    "role": "perf",
+    "seconds": 2600.0,
+    "session_id": "aa24bcb8-9564-435b-9efc-4e90c35c0693",
+    "t": "2026-10-20T10:17:54"
+   }
+  ],
+  "attempt": 1,
+  "attempts": 0,
+  "duration_s": 0.0,
+  "history": [
+   {
+    "s": 0.0,
+    "status": "PASS",
+    "t": "2026-10-20T10:24:33"
+   }
+  ],
+  "last_run": "2026-10-20T10:24:33",
+  "log": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/logs/P.11.log",
+  "metrics": {
+   "chunk_wall_clean": 1,
+   "chunk_wall_gap_ms": 277.7,
+   "chunk_wall_ms": 232.1,
+   "chunk_wall_ms_runs": [
+    412.0,
+    322.4,
+    322.7,
+    283.7,
+    362.3,
+    296.1,
+    236.0,
+    287.4,
+    305.6,
+    253.1,
+    235.8,
+    229.1,
+    231.9,
+    230.8,
+    235.1,
+    229.4,
+    233.6,
+    232.2,
+    232.1,
+    231.3
+   ],
+   "chunk_wall_ms_spread": 6.7,
+   "host_transfers_per_layer": 0,
+   "pcc_chunk_out": 0.9994344024315253,
+   "pcc_layer_L00": 0.9993749929385193,
+   "pcc_layer_L01": 0.9990290498851234,
+   "pcc_layer_L02": 0.997868997232638,
+   "pcc_layer_L03": 0.9952977419691894,
+   "pcc_layer_L14": 0.9961725086809963,
+   "pcc_layer_L20": 0.9992877984335666,
+   "pcc_layer_L21": 0.9968872261292097,
+   "pcc_layer_L24": 0.9994344024315253,
+   "scaled_run": 1
+  },
+  "rc": 0,
+  "reason": [],
+  "role": "perf",
+  "started": "2026-10-20T10:24:33",
   "status": "PASS",
   "waiting": null
  },

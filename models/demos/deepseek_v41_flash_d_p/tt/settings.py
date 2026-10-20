@@ -221,6 +221,17 @@ TABLE = {
         "ms (1 pass) at layers 0 and 24; full precision vs float64 (128 tokens) fp32 rel 0.0029, bf16 0.0041, bf16 vs "
         "fp32 0.0029 (bias -2.3e-4)",
     ),
+    "COMBINE_PLANNER": Setting(
+        "multi",
+        ("one", "multi"),
+        "EXPERTS_COMBINE=weighted only (P.11, owner comparison 2026-10-20): the weighted combine's per-call planner "
+        "(combine_rf combine_planner_prepare, column mode: the column's experts, id offset, passes, the det order table) "
+        "on one = ONE core per pass (today's program; ~1.57 ms a layer at 1024 home tokens per chip, DS41-73); multi = "
+        "the column multi-core planner (Marko Staletovic's V2 multi-core structure ported to the column options: up to "
+        "32 cores per pass, chunks of a home's tokens, count exchange, row slices, det order lists per chunk), its "
+        "outputs bit-identical to the one-core planner's (fork tests/unit/test_column_planner_mc.py), so the model's "
+        "numbers do not change. Not a precision switch",
+    ),
     "NUMERICS": Setting(
         "native",
         ("official", "native"),

@@ -99,8 +99,10 @@ New ops (Marko Staletovic's; no TTNN source). Each is a host builder that emits 
   column's experts); id_offset(r, c) = subtracted from every id (others' experts skipped); tokens / token_base = a
   pass of S tokens of `tokens` per home (token index home x tokens + token); ids_uint32 = uint32 ids; tile_in = ids
   / weights as TILE [tokens, K] (K <= 16), only the pass's tiles read; det with these options = the order table from
-  every column chip's flat schedule. `run.programs(ids, wts)` / `run.cores` / `run.tensors` (several planners in one
-  program). `port_luts(..., axis=0)`, `axis_ports(chips, axis)`, `plan_reference(..., id_offset=, token_base=)`.
+  every column chip's flat schedule. axis=0 with `cores` (and tile_in; P.11) = the column multi-core planner: the same
+  outputs bit for bit on M = N ceil(S / CT) <= len(cores) cores (chunks of CT tokens, a 32 multiple, inside one home;
+  `run.mcc = (M, CT)`, `run.tdbg` per-core phase timestamps). `run.programs(ids, wts)` / `run.cores` / `run.tensors`
+  (several planners in one program; merge their semaphores too with the multi-core planners). `port_luts(..., axis=0)`, `axis_ports(chips, axis)`, `plan_reference(..., id_offset=, token_base=)`.
 - `fabric_all_gather(input_tensor, *, cluster_axis=0, topology=ttnn.Topology.Linear, num_links=1, dim=0,
   placement="auto", scheme="ring", balance=False, desync=False, output=None, subdevice_id=None, sub_core_grid=None,
   ready_semaphore=None, data_valid_semaphore=None, extra=None)`.
@@ -150,14 +152,22 @@ All from ../flat_routed_expert_ttnn/FLAT_COMBINE_OVERLAP_WORKLOG.md (LoudBox 2 x
   planner 807 -> 1573 µs on one core instead of two passes' planners on two cores in parallel).
 - One-core planner, column options, tile input: 2 passes x (2048 tokens x 6) in 616 µs (one program, two cores); the
   same with the one-page input and a ttnn.reshape to one page: 758 + 2040 µs (the two reshapes).
+- Column multi-core planner (P.11), 2x2 QuietBox p300c, 1024 home tokens per chip in one pass (2048 column tokens x
+  6), det, 32 cores x 64 tokens, profiler op mode (deepseek_v41_flash_d_p/tt/perf_experts.py::test_combine_planner,
+  layers 0 / 24): 68.8 µs vs 1572.7 µs on one core; the whole experts call's ops 1912-1927 vs 3426-3427 µs; synced
+  call 2.10-2.16 vs 3.66-3.68 ms. Phases (run.tdbg, cycles at ~1.31 GHz): chunk scan + sort ~20K, exchanges + slices
+  ~15K, det (cores of this chip's home chunks: count sums 10K, two source schedules 10K, order lists ~20K, owner pages
+  ~9K) ~50K. Wall per call in the fork test (host dispatch included): det 131 vs 1571 µs, arrival 99 vs 913 µs.
 
 ## Limits
 - Tests in this tree: tests/unit/test_column_planner.py (the one-core planner's column / pass options vs
-  plan_reference, det order lists) and tests/unit/test_acc_dtype.py (acc_dtype: sizing, refusal math, bf16 vs fp32
+  plan_reference, det order lists), tests/unit/test_column_planner_mc.py (the column multi-core planner vs the one-core
+  planner, every output bit-identical) and tests/unit/test_acc_dtype.py (acc_dtype: sizing, refusal math, bf16 vs fp32
   sums vs float64 on the standalone combine); the harnesses named in the docstrings / worklog (scratch_flat_combine_rf.py,
   scratch_k3_moe_layer.py, zz_scratch_*.py) are on the source branch only.
-- axis=0: the one-core planner only (no multi-core column planner); the column's chips must fit the accumulators'
-  rings (R - 1 per accumulator); the fp32 accumulators hold every home token in L1 (W x 4 B a token): a caller with
+- axis=0: the one-core planner, or the column multi-core planner with `cores` (tile_in only; N <= 8 column chips,
+  A <= 16, NG < 255 column experts with det, N S < 65536; chunk core counts N ceil(S / CT)); the column's chips must
+  fit the accumulators' rings (R - 1 per accumulator); the fp32 accumulators hold every home token in L1 (W x 4 B a token): a caller with
   more home tokens than the free cells hold runs passes (tokens / token_base, out_row0).
 - With the L1 hand-off a combine needs a fabric payload of row + 32 B (V4.1: 10880 B) and nothing in the arena's L1
   between the zeroing and the call but a cross-chip barrier whose CBs fit under the arena (deepseek_v41 uses a
@@ -187,7 +197,7 @@ run(y, out)            # standalone: y rows in DRAM -> out, home tokens' weighte
 # overlapped: desc, l1_args = run.build_l1(y, out, arena) then
 # ttnn.bringup.flat_routed_expert_with_program(..., arena=arena, y=y, extra=desc, l1_args=l1_args, ...)
 ```
-Tests: tests/unit/test_column_planner.py (column planner), tests/unit/test_acc_dtype.py (acc_dtype); the model's tt/perf_experts.py::test_weighted_vs_separate /
+Tests: tests/unit/test_column_planner.py (column planner), tests/unit/test_column_planner_mc.py (multi-core column planner), tests/unit/test_acc_dtype.py (acc_dtype); the model's tt/perf_experts.py::test_weighted_vs_separate /
 test_weighted_combine_routes (deepseek_v41_flash_d_p).
 
 ## Used by
@@ -196,7 +206,8 @@ test_weighted_combine_routes (deepseek_v41_flash_d_p).
 - deepseek_v41_flash_d_p P.8: tt/weighted_combine.py (EXPERTS_COMBINE=weighted): sparse_combine_rf (axis=0, L1 hand-off,
   device plan, deterministic, ports_per_direction, out_dtype fp32 / bf16, out_row0, acc_unpack_fp32, zero_unseen; P.9:
   acc_dtype under the model's setting COMBINE_ACC),
-  combine_planner_prepare (axis=0, id_offset, tokens, token_base, ids_uint32, tile_in, det), l1_zero.
+  combine_planner_prepare (axis=0, id_offset, tokens, token_base, ids_uint32, tile_in, det; P.11: cores = the column
+  multi-core planner under the model's setting COMBINE_PLANNER=multi), l1_zero.
   Upstream it served the K3 token-split MoE block and the GLM-5.3 "ts" mode (FLAT_COMBINE_OVERLAP_WORKLOG.md).
 
 ## History
