@@ -135,12 +135,13 @@ skus:
       - pipeline-perf
     weights-cache-mode: local-disk
 
-  # Host-bound runtime perf cases differ across the bh_p150_perf machines, so they run on gh04's higher core count CPU.
-  # Replace the host label with a bh_p150_perf_high_core_count runner label once gh04 has one.
   bh_p150_perf_high_core_count:
     runs_on:
       - in-service
-      - yyzo-bh-gh04
+      - arch-blackhole
+      - P150
+      - pipeline-perf
+      - bh_p150_perf_high_core_count
     weights-cache-mode: local-disk
 
   bh_loudbox:
