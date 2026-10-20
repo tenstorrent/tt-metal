@@ -5,7 +5,7 @@
 #pragma once
 
 #include "hostdevcommon/fabric_common.h"
-#include <tt-metalium/cluster.hpp>
+#include <tt-metalium/experimental/context/metal_env.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include "llrt/metal_soc_descriptor.hpp"
@@ -67,7 +67,8 @@ public:
     // Non-Quasar .so simulators and builds with ip_layout.yaml return an empty target set,
     // leaving chip discovery and TT_VISIBLE_DEVICES filtering to UMD.
     // Other builds, including Quasar .so simulators without a layout, target chip 0.
-    static std::unordered_set<ChipId> simulator_target_devices(const std::filesystem::path& simulator_dir, tt::ARCH arch);
+    static std::unordered_set<ChipId> simulator_target_devices(
+        const std::filesystem::path& simulator_dir, tt::ARCH arch);
     Cluster& operator=(const Cluster&) = delete;
     Cluster& operator=(Cluster&& other) noexcept = delete;
     Cluster(const Cluster&) = delete;
