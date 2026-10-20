@@ -121,6 +121,21 @@ __attribute__((always_inline)) inline void flip(std::uint8_t sem)
 }
 } // namespace detail
 
+#if defined(ARCH_QUASAR)
+// device_setup initializes none of the barrier semaphores, so a launch would start from the levels its predecessors
+// left: unpack clears them before it releases the others.
+inline void reset_semaphores()
+{
+    for (std::uint8_t sem = ARRIVE_SEM; sem <= release_sem_of(NUM_THREADS - 2); ++sem)
+    {
+        while (detail::settled(ckernel::semaphore_read(sem)) != 0)
+        {
+            ckernel::semaphore_get(sem);
+        }
+    }
+}
+#endif
+
 // The release is a level, sampled by each peer before it arrives and flipped once every peer has; a token on a
 // shared count could be consumed twice and release a peer early. Waiters poll the PC buffer, not the measured L1.
 template <typename Action>
