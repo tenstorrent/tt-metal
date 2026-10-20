@@ -83,3 +83,4 @@ ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernor
 ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm_sharded_post_allgather.cpp
 ttnn/cpp/ttnn/operations/normalization/softmax/device/kernels/attention/compute/softmax.cpp
 ttnn/cpp/ttnn/operations/reduction/sampling/device/kernels/compute/sampling.cpp
+ttnn/cpp/ttnn/kernel_lib/tilize_helpers.inl

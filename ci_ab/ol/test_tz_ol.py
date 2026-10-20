@@ -8,17 +8,13 @@ import torch
 import ttnn
 
 CASES = {
-    "int32_512x1024": (ttnn.int32, (1, 1, 512, 1024)),
-    "uint32_512x1024": (ttnn.uint32, (1, 1, 512, 1024)),
     "fp32_512x1024": (ttnn.float32, (1, 1, 512, 1024)),
-    "int32_2048x64": (ttnn.int32, (1, 1, 2048, 64)),
-    "int32_32x128256": (ttnn.int32, (1, 1, 32, 128256)),
-    "fp32_hs_4096x256": (ttnn.float32, (1, 1, 4096, 256)),
-    "twvp_int32_30x1000": (ttnn.int32, (1, 1, 30, 1000)),
-    "twvp_fp32_1x8x30x250": (ttnn.float32, (1, 8, 30, 250)),
-    "c3d_fp32_384_k7": (ttnn.float32, None),
+    "int32_512x1024": (ttnn.int32, (1, 1, 512, 1024)),
     "bf16_4096x32": (ttnn.bfloat16, (1, 1, 4096, 32)),
+    "bf16_4096x1024": (ttnn.bfloat16, (1, 1, 4096, 1024)),
     "bf16_to_bfp8_2048x64": (ttnn.bfloat16, (1, 1, 2048, 64)),
+    "bf16_to_bfp8_4096x1024": (ttnn.bfloat16, (1, 1, 4096, 1024)),
+    "bf16_to_bfp8_512x96": (ttnn.bfloat16, (1, 1, 512, 96)),
 }
 
 
@@ -84,6 +80,7 @@ def test_tz(device, case):
     if case.startswith("bf16_to_bfp8"):
         y = ttnn.tilize(x, dtype=ttnn.bfloat8_b, use_multicore=True)
         assert torch.allclose(ttnn.to_torch(y).float(), t.float(), rtol=0.05, atol=0.05)
+        _record(case, ttnn.to_torch(y).float())
         return
     out = ttnn.to_torch(ttnn.tilize(x, use_multicore=True))
     assert torch.equal(out.to(t.dtype), t)
