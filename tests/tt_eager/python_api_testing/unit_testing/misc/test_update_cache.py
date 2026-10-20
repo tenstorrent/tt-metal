@@ -513,8 +513,8 @@ class TestUpdateCacheFP32:
 @pytest.mark.parametrize(
     "mesh_shape,seq_len,expected_seq_len_local",
     [
-        ((2, 4), 1024, 512),  # 2 layers * 512 / 32 = 32 shards
-        ((8, 4), 1024, 128),  # 2 layers * 128 / 32 = 8 shards
+        ((2, 4), 1024, 512),
+        ((8, 4), 1024, 128),
     ],
 )
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat8_b])
