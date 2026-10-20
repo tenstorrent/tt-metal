@@ -129,6 +129,16 @@ class GLMMesh:
             mesh_mapper=self.shard_2d(rows, cols),
         )
 
+    def _shard_shape(self, shape, rows: int | None, cols: int | None) -> tuple[int, ...]:
+        """The per-device shard shape of a global ``shape`` sharded on dim ``rows`` over the mesh rows and on
+        dim ``cols`` over the columns (``None`` = replicated on that axis; negative dims allowed)."""
+        local = list(shape)
+        for dim, n in ((rows, self.rows), (cols, self.cols)):
+            if dim is not None and n > 1:
+                d = dim % len(local)
+                local[d] = -(-local[d] // n)
+        return tuple(local)
+
     def upload_cached(
         self,
         make: Callable[[], torch.Tensor],
@@ -154,11 +164,17 @@ class GLMMesh:
             cache_file = Path(cache_file)
             if cache_file.is_file():
                 t = ttnn.load_tensor(cache_file, device=self.device)
-                shape_ok = expect_shape is None or tuple(t.shape) == tuple(expect_shape)
+                # a loaded multi-device tensor reports its per-device shard shape, the uploaded one the global
+                # (mesh-wide) shape: both describe the same shards, so either matches ``expect_shape``
+                shape_ok = expect_shape is None or tuple(t.shape) in (
+                    tuple(expect_shape),
+                    self._shard_shape(expect_shape, rows, cols),
+                )
                 if t.dtype != dtype or t.layout != layout or not shape_ok:
                     raise RuntimeError(
                         f"weight cache {cache_file}: {t.dtype} {t.layout} {tuple(t.shape)} does not match the "
-                        f"expected {dtype} {layout} {expect_shape}; delete the stale file"
+                        f"expected {dtype} {layout} {expect_shape} (per-device "
+                        f"{self._shard_shape(expect_shape, rows, cols)}); delete the stale file"
                     )
                 return t
         t = self.upload(make(), dtype, cols=cols, rows=rows, layout=layout, memory_config=memory_config)
