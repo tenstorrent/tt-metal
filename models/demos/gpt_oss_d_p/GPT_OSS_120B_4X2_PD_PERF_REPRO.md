@@ -36,9 +36,10 @@ tt-metal: 7e5cea12b36828e03b63700e98cc9875164b989a
 tt-blaze: 442cf2e74b40ef3a2a144277e910cc25732fea2e
 ```
 
-The tested frontend uses `ai-dynamo==1.5.0`. The tt-dynamo adapter, native
-KV manager, and DMK transport must be built from the matching internal
-tt-dynamo source.
+The tested frontend uses `ai-dynamo==1.5.0`. The tt-gen adapter, Python
+bindings, native KV manager, and DMK transport must be built from the
+matching internal tt-gen source. These instructions assume the user has
+access to tt-gen.
 
 ## Hardware and model prerequisites
 
@@ -47,7 +48,7 @@ tt-dynamo source.
 - GPT-OSS 120B checkpoint and tokenizer.
 - Shared filesystem visible from both hosts.
 - Open MPI 5.0.7 ULFM.
-- Built tt-metal, tt-blaze, tt-dynamo Python adapter, native KV manager, and
+- Built tt-metal, tt-blaze, tt-gen Python adapter, native KV manager, and
   DMK device-I/O ELF.
 
 Verify both machines before loading:
@@ -63,7 +64,7 @@ Define paths and addresses:
 export ROOT=/shared/gptoss-4x2-pd-repro
 export TT_METAL_HOME=$ROOT/tt-metal
 export TT_BLAZE_HOME=$ROOT/tt-blaze
-export TT_DGEN_HOME=$ROOT/tt-dynamo
+export TT_DGEN_HOME=$ROOT/tt-gen
 export RUN=$ROOT/run
 export MODEL=/path/to/gpt-oss-120b
 
@@ -213,7 +214,7 @@ KV_MANAGER_TABLE_HOST=<decode-host>
 KV_MANAGER_DEVICE_MAP_PATH=<run>/decode/decode-device-map.txt
 ```
 
-### 5. Start tt-dynamo workers
+### 5. Start tt-gen workers
 
 Run one worker on each host:
 
