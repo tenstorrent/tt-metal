@@ -78,6 +78,7 @@ void kernel_main() {
     };
 #if WORK_QUEUE
     dram_read::QueueReader::from_args(noc).for_each_chunk(read_pages);
+    noc.async_atomic_barrier();  // the cleared signal is a non-posted increment: wait for its ack before exit
 #else
     read_pages(start_id, num_pages);
 #endif

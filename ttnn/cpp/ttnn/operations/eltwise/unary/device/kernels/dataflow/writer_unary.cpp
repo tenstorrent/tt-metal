@@ -83,6 +83,7 @@ void kernel_main() {
     };
 #if WORK_QUEUE
     queue.for_each_chunk(write_pages);
+    noc.async_atomic_barrier();  // the scheduler's replies are non-posted increments: wait for their acks before exit
 #else
     write_pages(start_id, num_pages);
 #endif
