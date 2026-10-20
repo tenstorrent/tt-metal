@@ -70,7 +70,20 @@ Source: the nightly `TT-DiT Wan2.2-T2V-A14B single galaxy e2e tests [bh_sc1]` jo
 | **this branch, b10u20, 75 W** | bh-glx-120-b10u20 | 55.75 / 0.523 / 56.34 | 154.97 / 1.096 / 156.14 |
 | **this branch, b10u20, 130 W** | bh-glx-120-b10u20 | 40.99 / 0.492 / 41.56 | 128.41 / 1.006 / 129.49 |
 
-(10-19 got no perf numbers. I2V jobs in this window never reached the perf test, so there is no CI I2V comparison.)
+(10-19 got no perf numbers.)
+
+**I2V.** The nightly I2V jobs never reached a timed run: the CI cache starts empty, and converting the weights (17–20 min) used up the perf test's 1200 s timeout every night. The I2V numbers below come from a one-off dispatch of the same bh_sc1 job ([run 39489301673](https://github.com/tenstorrent/tt-metal/actions/runs/39489301673), branch `jameslee/wan-i2v-bh-sc1-perf-timeout` = `main` @ `f56b5484466` plus a 3600 s timeout and 480p added). Both tests completed; the job failed only on the VAE target.
+
+| Machine | Res | Text enc | Image enc | Denoise | VAE decode (target) | Total |
+|---|---|---|---|---|---|---|
+| CI bh-glx-120-d04u20 (`main`, 8 banks, full-T VAE) | 480p | 0.081 | 1.150 | 57.06 | 0.750 (0.42) | 59.05 |
+| b10u20, this branch, 75 W (7 banks, chunked VAE) | 480p | 0.067 | 0.921 | 55.97 | 0.514 | 57.48 |
+| b10u20, this branch, 130 W | 480p | 0.067 | 0.786 | 41.40 | 0.489 | 42.75 |
+| CI bh-glx-120-d04u20 (`main`, 8 banks, full-T VAE) | 720p | 0.089 | 1.329 | 157.47 | 1.101 (0.85) | 160.00 |
+| b10u20, this branch, 75 W (7 banks, chunked VAE) | 720p | 0.061 | 1.068 | 154.78 | 1.079 | 157.00 |
+| b10u20, this branch, 130 W | 720p | 0.062 | 0.954 | 128.63 | 1.009 | 130.66 |
+
+I2V tells the same story as T2V. Against the `d04` host, b10u20 at 75 W denoises 1.7–1.9% *faster* (55.97 against 57.06 s, 154.78 against 157.47 s). Every stage that involves host work is slower on CI: text encoding 0.08 against 0.06 s, image encoding 1.15 against 0.92 s, and the VAE (0.75 s full-T against 0.35 s full-T on b10u20 from the A/B). That fits the guess that CI's slow VAE comes from the host side, not the device.
 
 What this shows:
 
@@ -80,12 +93,31 @@ What this shows:
 
 ### VAE chunking A/B (b10u20, T2V 480p, 75 W, same build)
 
-`vae_t_chunk_size` forced by a pytest plugin that logs the value it actually applied. The order alternated between the two settings.
+`vae_t_chunk_size` forced by a pytest plugin that logs the value it actually applied. Each row is one full test run, listed in the order they ran (alternating settings).
 
-| `vae_t_chunk_size` | VAE decode | Denoise | Total |
-|---|---|---|---|
-| `None` (full-T, as `main`) run 1 / 2 | 0.349 / 0.343 s | 55.63 / 55.74 s | 56.06 / 56.16 s |
-| `7` (this branch on 7 banks) run 1 / 2 | 0.531 / 0.520 s | 55.66 / 55.69 s | 56.27 / 56.29 s |
+| Run order | `vae_t_chunk_size` | VAE decode | Denoise | Total |
+|---|---|---|---|---|
+| 1 | `None` (full-T, same as `main`) | 0.349 s | 55.63 s | 56.06 s |
+| 2 | `7` (this branch on 7-bank DRAM) | 0.531 s | 55.66 s | 56.27 s |
+| 3 | `None` (full-T, same as `main`) | 0.343 s | 55.74 s | 56.16 s |
+| 4 | `7` (this branch on 7-bank DRAM) | 0.520 s | 55.69 s | 56.29 s |
+| **Mean, full-T** | `None` | **0.346 s** | 55.69 s | 56.11 s |
+| **Mean, chunked** | `7` | **0.526 s** | 55.68 s | 56.28 s |
+| **Cost of chunking** | | **+0.180 s (+52%)** | ~0 | +0.17 s (+0.3%) |
+
+The same A/B at `TT_METAL_TDP_LIMIT_WATTS=130` (all 32 chips confirmed 130 W in every run):
+
+| Run order | `vae_t_chunk_size` | VAE decode | Denoise | Total |
+|---|---|---|---|---|
+| 1 | `None` (full-T, same as `main`) | 0.295 s | 40.48 s | 40.86 s |
+| 2 | `7` (this branch on 7-bank DRAM) | 0.489 s | 40.89 s | 41.46 s |
+| 3 | `None` (full-T, same as `main`) | 0.303 s | 41.10 s | 41.49 s |
+| 4 | `7` (this branch on 7-bank DRAM) | 0.497 s | 41.22 s | 41.79 s |
+| **Mean, full-T** | `None` | **0.299 s** | 40.79 s | 41.17 s |
+| **Mean, chunked** | `7` | **0.493 s** | 41.06 s | 41.62 s |
+| **Cost of chunking** | | **+0.194 s (+65%)** | +0.27 s (within run-to-run noise) | +0.45 s (+1.1%) |
+
+The cost of chunking is about the same in seconds at both power levels (+0.18 s at 75 W, +0.19 s at 130 W). Full-T gets faster with the higher limit (0.346 → 0.299 s), but the chunking cost doesn't, so it is probably fixed per-chunk host and dispatch overhead rather than device compute (not profiled).
 
 Chunking adds about 0.18 s (+52%) to the VAE and nothing to denoise. The work is about the same (the same causal convolutions, run on 21 latent frames in pieces of 1, 7, 7 and 6 with a cache passed between them), so the extra time is probably per-chunk op and dispatch overhead plus the `concat` that joins the chunks. The branch chunks at every resolution on 7-bank DRAM. Chunking only at 720p, where full-T runs out of memory, would get the 480p time back.
 
