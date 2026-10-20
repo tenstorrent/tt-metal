@@ -1619,6 +1619,169 @@ def test_sparse_mla_kv_push_prefetch_chain_padded(
     ttnn.synchronize_device(mesh_device)
 
 
+_TRACED_PUSH_CASES = [
+    pytest.param(*c.values[:3], {**c.values[3], "trace_region_size": 256 * 1024 * 1024}, id=c.id)
+    for c in SPARSE_REUSE_CASES
+    if "8x4" in c.id or "(8, 4)" in str(c.values)
+]
+
+
+@pytest.mark.parametrize(
+    "variant, mesh_device, seq_len, device_params",
+    _TRACED_PUSH_CASES,
+    indirect=["variant", "mesh_device", "device_params"],
+)
+@pytest.mark.skipif(not is_blackhole(), reason="DSA ops (indexer / sparse SDPA) are Blackhole-only")
+@pytest.mark.timeout(0)
+def test_sparse_mla_kv_push_traced_metadata_slots(
+    mesh_device, seq_len, device_params, variant, config_only, ds_layer, ds_checkpoint, ds_repo
+):
+    """The push chain (full -> shared -> shared, fused prefetch + resume) captured ONCE on the metadata path and
+    replayed for other user slots and chunk starts: only the metadata tensors and the input change in place
+    between replays. Each replay must match the dense-gather chain run eagerly on host scalars, bit for bit.
+    A host-frozen slot, chunk start or KV write offset in the push path shows up as a mismatch here."""
+    from models.demos.deepseek_v3_d_p.tt.mla.rope import ChunkMetadata, write_chunk_metadata
+    from models.demos.deepseek_v3_d_p.utils.sub_device_trace import SubDeviceTraceController
+
+    chunk, total = 5120, 20480
+    config = copy.deepcopy(config_only)
+    config.max_seq_len = total
+    config.indexer_types = ["full", "shared", "shared"]
+    cache_format = MlaKvCacheFormat.SCALED_FP8
+    weights, _ = build_weights(variant, config, layer=ds_layer, checkpoint_path=ds_checkpoint, repo=ds_repo)
+    mesh_shape = list(mesh_device.shape)
+    sp_axis, tp_axis = 0, 1
+    num_users, n_layers = 2, 3
+
+    def _chain(push):
+        layers = [
+            ttMLA(
+                config,
+                weights,
+                mesh_device,
+                layer_idx=i,
+                seq_len=total,
+                sp_axis=sp_axis,
+                tp_axis=tp_axis,
+                is_chunked=True,
+                active_seq_len=chunk,
+                slot_num=num_users,
+                layer_num=n_layers,
+                sparse_kv_cache_format=cache_format,
+                sparse_kv_push=push,
+            )
+            for i in range(n_layers)
+        ]
+        kvpe = init_mla_kv_cache(
+            cache_format=cache_format,
+            hf_config=config,
+            mesh_device=mesh_device,
+            seq_len=total,
+            mesh_shape=mesh_shape,
+            sp_axis=sp_axis,
+            num_kvpe_cache_layers=n_layers,
+            num_users=num_users,
+            tp_axis=tp_axis,
+        )
+        index = _init_index_kv_cache(
+            config, mesh_device, total, mesh_shape, sp_axis, slot_num=num_users, tp_axis=tp_axis
+        )
+        return layers, kvpe, index
+
+    gather, push = _chain(False), _chain(True)
+    assert push[0][0]._push_prefetch is not None, "the push chain must prefetch (overlap profile + TT_SPARSE_KV_PUSH_OVERLAP)"
+    rope_tensors = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=False).get_rope_tensors_indexed(
+        total, chunk
+    )
+    hidden = {u: make_hidden(total, config.hidden_size, 42 + u, None) for u in range(num_users)}
+    shard_dims = [None, None]
+    shard_dims[tp_axis], shard_dims[sp_axis] = -1, -2
+    mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims)
+
+    def _host_x(u, s):
+        return ttnn.from_torch(
+            hidden[u][:, s : s + chunk].unsqueeze(0), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=mapper
+        )
+
+    def _to_torch(t):
+        return ttnn.to_torch(
+            t, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=shard_dims, mesh_shape=mesh_device.shape)
+        ).to(torch.bfloat16)
+
+    # (user slot, chunk start): users interleave, so a frozen slot or start is visible on the next replay.
+    schedule = [(1, 0), (0, 0), (1, 5120), (0, 5120), (1, 10240), (1, 15360), (0, 10240)]
+
+    # Reference: the dense-gather chain, eager, host scalars.
+    ref = []
+    layers, kvpe, index = gather
+    for u, s in schedule:
+        tt_x = ttnn.to_device(_host_x(u, s), mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        args = dict(actual_start=s, actual_end=s + chunk, cache_user_id=u, index_kv_cache=index)
+        out, idx = layers[0].forward(tt_x, rope_tensors, kvpe, cache_layer_idx=0, return_indexer_indices=True, **args)
+        outs = [_to_torch(out)]
+        for i in (1, 2):
+            outs.append(_to_torch(layers[i].forward(tt_x, rope_tensors, kvpe, cache_layer_idx=i, indexer_indices=idx, **args)))
+        ref.append(outs)
+
+    # Push chain on the metadata path: warm on schedule[0], capture it, replay the rest.
+    layers, kvpe, index = push
+
+    def _meta1(v):
+        return ttnn.from_torch(
+            torch.tensor([[[[v]]]], dtype=torch.int32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+
+    u0, s0 = schedule[0]
+    metadata = ChunkMetadata(_meta1(u0), _meta1(s0), _meta1(s0 + chunk), None)
+    tt_x = ttnn.to_device(_host_x(u0, s0), mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    controller = SubDeviceTraceController(mesh_device)
+    for layer in layers:
+        layer.set_trace_controller(controller)
+
+    def _fwd():
+        args = dict(actual_start=None, actual_end=None, cache_user_id=0, index_kv_cache=index, metadata=metadata)
+        out, idx = layers[0].forward(tt_x, rope_tensors, kvpe, cache_layer_idx=0, return_indexer_indices=True, **args)
+        return [out] + [
+            layers[i].forward(tt_x, rope_tensors, kvpe, cache_layer_idx=i, indexer_indices=idx, **args) for i in (1, 2)
+        ]
+
+    _fwd()  # warm: compile + create every persistent push resource outside the capture
+    ttnn.synchronize_device(mesh_device)
+    controller.begin_capture()
+    traced_outs = _fwd()
+    controller.end_capture()
+    ttnn.synchronize_device(mesh_device)
+
+    all_equal = True
+    try:
+        for k, (u, s) in enumerate(schedule):
+            # A capture records without executing, so schedule[0] is replayed too (rewriting the same KV rows).
+            write_chunk_metadata(
+                metadata, (u, s, s + chunk), hf_config=config, mesh_device=mesh_device, chunk_size_global=chunk
+            )
+            ttnn.copy_host_to_device_tensor(_host_x(u, s), tt_x)
+            controller.replay()
+            ttnn.synchronize_device(mesh_device)
+            for i in range(n_layers):
+                got = _to_torch(traced_outs[i])
+                equal = torch.equal(ref[k][i], got)
+                all_equal &= equal
+                _, pcc_message = assert_with_pcc(ref[k][i], got, 0.9999)
+                logger.info(
+                    f"[{variant.name}] replay {k} user {u} start {s} layer {i}: traced push "
+                    f"vs eager gather bitwise={equal} {pcc_message}"
+                )
+    finally:
+        controller.release()
+    logger.info(f"[{variant.name}] traced push over slots/starts {schedule}: all bitwise={all_equal}")
+    assert all_equal, "traced push chain differs from the eager dense-gather chain"
+
+
 # Anchor cases (seq=5120) crossed with the single prefill chunk size; collected == run.
 @pytest.mark.parametrize(
     "variant, mesh_device, seq_len, device_params",
