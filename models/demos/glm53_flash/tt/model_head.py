@@ -196,7 +196,8 @@ class TtModelHead(LightweightModule):
         """Packed streams ``[1, 1, T, n*H]`` fp32 -> logits ``[1, 1, T, vocab]`` bf16 for every row."""
         h = self.collapse(streams)
         hn = self.norm(h)
-        ttnn.deallocate(h)
+        if h is not streams:  # the pass-through of an already collapsed hidden is the caller's tensor
+            ttnn.deallocate(h)
         out = self.logits(hn)
         ttnn.deallocate(hn)
         return out
