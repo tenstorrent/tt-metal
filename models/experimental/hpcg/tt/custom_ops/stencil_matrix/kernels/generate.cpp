@@ -32,11 +32,11 @@ uint32_t f32_bits(uint32_t n) {  // fp32 bits of a small non-negative integer (e
 }
 
 struct Geo {
-    const volatile uint32_t* m;
+    const uint32_t* m;  // read once from DRAM before init (after invalidate_l1_cache), then constant
     uint32_t nx, nb, nl, R;
-    const volatile uint32_t *lb, *by0, *bny, *bst, *plo, *pl1;
+    const uint32_t *lb, *by0, *bny, *bst, *plo, *pl1;
     void init(uint32_t addr) {
-        m = (const volatile uint32_t*)addr;
+        m = (const uint32_t*)addr;
         nx = m[0];
         nb = m[1];
         nl = m[2];
@@ -78,9 +78,9 @@ void fill_run(
     int32_t len,
     int32_t iy,
     int32_t iz,
-    volatile uint32_t* O,
-    volatile uint32_t* Vv,
-    volatile uint32_t* Bw) {
+    uint32_t* O,
+    uint32_t* Vv,
+    uint32_t* Bw) {
     const int32_t px = c & 1, nx = (int32_t)g.nx;
     const uint32_t sb = g.piece_base(q);  // the core's own rows sit in one window piece
     uint32_t K[27];                       // offset of slot j at x index i: K[j] + 4 i
@@ -112,29 +112,50 @@ void fill_run(
             }
         }
     }
-    for (int32_t t = 0; t < len; ++t) {
-        const int32_t i = i0 + t;
-        const uint32_t w = (q + t) & 1023, self = sb + 4 * (q + t);
-        uint32_t cnt = 0;
-        for (int32_t j = 0; j < 27; ++j) {
-            if (i >= ilo[j] && i <= ihi[j]) {
-                O[j * 1024 + w] = K[j] + 4 * i;
-                Vv[j * 1024 + w] = j == 13 ? F_26 : F_MINUS1;
-                ++cnt;
-            } else {
-                O[j * 1024 + w] = self;  // missing neighbour: a zero entry on the row itself
-                Vv[j * 1024 + w] = 0;
-            }
+    // slot by slot over the whole run: straight stores, then the rows at the run's ends whose neighbour is missing
+    const uint32_t w0 = q & 1023;
+    const uint32_t self0 = sb + 4 * q;  // offset of the run's first row; row t: self0 + 4 t
+    for (int32_t j = 0; j < 27; ++j) {
+        uint32_t* o = O + j * 1024 + w0;
+        uint32_t* v = Vv + j * 1024 + w0;
+        int32_t a = ilo[j] - i0, e = ihi[j] - i0 + 1;  // rows [a, e) of the run have this neighbour
+        a = a < 0 ? 0 : (a > len ? len : a);
+        e = e < a ? a : (e > len ? len : e);
+        const uint32_t vj = j == 13 ? F_26 : F_MINUS1;
+        uint32_t off = K[j] + 4 * (i0 + a), self = self0 + 4 * a;
+        for (int32_t t = a; t < e; ++t, off += 4) {
+            o[t] = off;
+            v[t] = vj;
         }
-        Bw[w] = f32_bits(27 - cnt);
+        for (int32_t t = 0; t < a; ++t) {  // missing neighbour: a zero entry on the row itself
+            o[t] = self0 + 4 * t;
+            v[t] = 0;
+        }
+        self = self0 + 4 * e;
+        for (int32_t t = e; t < len; ++t, self += 4) {
+            o[t] = self;
+            v[t] = 0;
+        }
+    }
+    // b = 26 - (neighbours - 1): lines inside the grid times x neighbours inside the grid
+    int32_t lines = 0;
+    for (int32_t j = 1; j < 27; j += 3) {
+        lines += ilo[j] <= ihi[j];  // the sx = 0 slot of each line: valid exactly when the line is
+    }
+    for (int32_t t = 0; t < len; ++t) {
+        const int32_t x = 2 * (i0 + t) + px;
+        const int32_t nxn = 1 + (x > 0) + (x < nx - 1);
+        Bw[w0 + t] = f32_bits(27 - (uint32_t)(lines * nxn));
     }
 }
 
 // rows [q0, q1) of colour block c (one DRAM page at most) into the staging set at base
 void fill_chunk(const Geo& g, uint32_t c, uint32_t q0, uint32_t q1, uint32_t real_end, uint32_t base) {
-    volatile uint32_t* O = (volatile uint32_t*)base;
-    volatile uint32_t* Vv = O + 27 * 1024;
-    volatile uint32_t* Bw = O + 54 * 1024;
+    // plain (not volatile) stores so the compiler can schedule the fill loops; kernel_main puts a compiler memory
+    // barrier between the fill and the NoC writes that read these pages
+    uint32_t* O = (uint32_t*)base;
+    uint32_t* Vv = O + 27 * 1024;
+    uint32_t* Bw = O + 54 * 1024;
     const uint32_t py = (c >> 1) & 1, pz = c >> 2, cxn = g.cx(c & 1), k0 = c * g.nb;
     const uint32_t end = q1 < real_end ? q1 : real_end;
     uint32_t jb = 0;
@@ -184,7 +205,7 @@ void kernel_main() {
     invalidate_l1_cache();
     Geo g;
     g.init(meta);
-    const volatile uint32_t* m = g.m;
+    const uint32_t* m = g.m;
     const uint32_t ntlv = m[3];
     const uint32_t stage = get_write_ptr(half ? CB_S1 : CB_S0);
     uint32_t set = 0, chunk = 0;
@@ -195,6 +216,7 @@ void kernel_main() {
             if ((chunk++ & 1) == half) {
                 const uint32_t base = stage + set * SET;
                 fill_chunk(g, c, q0, q1, real_end, base);
+                asm volatile("" ::: "memory");  // every staging store is issued before the NoC reads the pages
                 noc_async_write_barrier();  // the other set's writes have left L1 before it is filled again
                 const uint32_t t = q0 >> 10, wb = (q0 & 1023) * 4, nb = (q1 - q0) * 4;
                 for (uint32_t j = 0; j < 27; ++j) {

@@ -236,10 +236,16 @@ int64_t hpcg_link(
     for (int64_t qc = 0; qc < CP; ++qc) {
         Rw[qc] = 0.0;
     }
-    C.for_each_point([&](int64_t qc, int32_t x, int32_t y, int32_t z) {
-        R[qc] = F.q_of(2 * x, 2 * y, 2 * z);
-        Rw[qc] = 1.0;
-    });
+#pragma omp parallel for schedule(dynamic, 1)
+    for (int c = 0; c < 8; ++c) {  // the coarse colour blocks in parallel
+        const int64_t a = C.band_start[(int64_t)c * C.nbands];
+        C.for_each_run(c, a, a + C.count(c), [&](int64_t q, int32_t i0, int32_t len, int32_t y, int32_t z) {
+            for (int32_t i = 0; i < len; ++i) {
+                R[q + i] = F.q_of(2 * (2 * (i0 + i) + (c & 1)), 2 * y, 2 * z);
+                Rw[q + i] = 1.0;
+            }
+        });
+    }
     int64_t rmax = -1, last = 0;
     for (int64_t qc = 0; qc < CP; ++qc) {
         if (Rw[qc] > 0.0) {
