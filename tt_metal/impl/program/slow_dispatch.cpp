@@ -36,6 +36,8 @@
 #include "tracy/Tracy.hpp"
 #include <internal/service/service_core_manager.hpp>
 #include <tt-metalium/program.hpp>
+#include <umd/device/cluster.hpp>
+#include <umd/device/io_window/io_window.hpp>
 
 #ifdef TT_METAL_USE_EMULE
 #include "emulated_program_runner.hpp"
@@ -206,8 +208,24 @@ void ConfigureDeviceWithProgram(IDevice& device, Program& program, bool force_sl
                         kernel_config_base,
                         program.impl().get_program_config(index).dfb_offset,
                         bytes_written);
-                    metal_ctx.get_cluster().write_core(
-                        device_id, physical_core, std::span<const uint8_t>(dfb_config_vec.data(), bytes_written), addr);
+                    // Snoopable write: the DMs walk the DFB config through the cached view without
+                    // invalidating L2, so hardware must keep L2 coherent with this write.
+                    // create_io_window takes a umd::CoreCoord; this is the same translation
+                    // write_core() performs internally (tt_cluster.cpp).
+                    const auto& soc_desc = metal_ctx.get_cluster().get_soc_desc(device_id);
+                    const tt::umd::CoreCoord core_coord =
+                        soc_desc.get_coord_at(tt_cxy_pair(device_id, physical_core), CoordSystem::TRANSLATED);
+                    auto& driver = metal_ctx.get_cluster().get_driver();
+                    auto window = driver->create_io_window(
+                        device_id,
+                        core_coord,
+                        addr,
+                        tt::umd::HostIoWindowConfig{tt::umd::HostMemoryCaching::WC, bytes_written},
+                        tt::umd::IoOrdering::Strict,
+                        std::nullopt,
+                        tt::umd::WindowFlags::UnicastWrite | tt::umd::WindowFlags::Snoop);
+                    TT_FATAL(window != nullptr, "DFB config: create_io_window returned null");
+                    window->write_block(0, dfb_config_vec.data(), bytes_written);
                 }
 
                 // CrossNodeDFB dense index in the worker kernel-config window. Full host

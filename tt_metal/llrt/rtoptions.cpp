@@ -124,9 +124,10 @@ enum class EnvVarID {
     TT_METAL_SIMULATOR_SERVE_OVER_SOCKETS,              // Serve simulated chips over sockets
     TT_METAL_QUASAR_NOC_API_VERSION,                    // Quasar NOC API version
     TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES,  // Override Blackhole DRAM programmable cores
-    TT_METAL_MEASURE_DFB_INIT_TIME,  // Temporary DFB init rdcycle instrumentation (deprecate once device profiler
-                                     // covers this).
-    TT_METAL_TDP_LIMIT_WATTS,        // Firmware throttler TDP limit [W] (Blackhole)
+    TT_METAL_MEASURE_DFB_INIT_TIME,        // Temporary DFB init rdcycle instrumentation (deprecate once device profiler
+                                           // covers this).
+    TT_METAL_MEASURE_DFB_INIT_INNER_TIME,  // Adds per-phase DFB init timers (needs TT_METAL_MEASURE_DFB_INIT_TIME).
+    TT_METAL_TDP_LIMIT_WATTS,              // Firmware throttler TDP limit [W] (Blackhole)
 
     // ========================================
     // PROFILING & PERFORMANCE
@@ -1000,6 +1001,16 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Usage: export TT_METAL_MEASURE_DFB_INIT_TIME=1
         case EnvVarID::TT_METAL_MEASURE_DFB_INIT_TIME:
             this->measure_dfb_init_time_enabled = is_env_enabled(value);
+            break;
+
+        // TT_METAL_MEASURE_DFB_INIT_INNER_TIME
+        // With TT_METAL_MEASURE_DFB_INIT_TIME, also enables the per-phase rdcycle timers inside the DFB
+        // init functions (register writes, blob reads, ...). They sit inside the e2e window, so e2e
+        // includes their overhead; leave this off when measuring e2e.
+        // Default: false
+        // Usage: export TT_METAL_MEASURE_DFB_INIT_INNER_TIME=1
+        case EnvVarID::TT_METAL_MEASURE_DFB_INIT_INNER_TIME:
+            this->measure_dfb_init_inner_time_enabled = is_env_enabled(value);
             break;
 
         // TT_METAL_TDP_LIMIT_WATTS

@@ -436,15 +436,15 @@ inline __attribute__((always_inline)) void setup_isr_csrs() {
 
 inline __attribute__((always_inline)) void enable_dfb_tile_isr() {
     // Enable ROCC interrupt in mie
-    asm volatile("csrrs zero, mie, %0" : : "r"(1 << 13));
+    asm volatile("csrrs zero, mie, %0" : : "r"(1 << 13) : "memory");
 
     // Enable MIE in mstatus
-    asm volatile("csrrs zero, mstatus, %0" : : "r"(1 << 3));
+    asm volatile("csrrs zero, mstatus, %0" : : "r"(1 << 3) : "memory");
 }
 
 inline __attribute__((always_inline)) void disable_dfb_tile_isr() {
     // Disable ROCC interrupt in mie
-    asm volatile("csrrc zero, mie, %0" : : "r"(1 << 13));
+    asm volatile("csrrc zero, mie, %0" : : "r"(1 << 13) : "memory");
     // Keep machine interrupts enabled so an FDS machine-external go interrupt can reach DM0.
 }
 #else
