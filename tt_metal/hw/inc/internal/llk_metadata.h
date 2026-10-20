@@ -24,6 +24,7 @@ namespace binding_details {
 // 1. Coupling of LLK metadata with the Metal 2.0 binding infrastructure.
 // 2. Dealing with conditional includes of LLK among different kernels.
 struct LLKMetadata {
+    // Should be the same as DataFormat::Invalid
     static constexpr uint8_t kNoFormat = 0xFF;
 
     uint8_t format = kNoFormat;
