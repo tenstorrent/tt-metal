@@ -209,6 +209,11 @@ ttnn::device_operation::ProgramArtifacts SparseMatmulMultiCoreReuseMcast1DProgra
     uint32_t num_blocks_total = num_blocks_y * num_blocks_x;
 
     TT_FATAL(
+        num_blocks_y == 1,
+        "sparse_matmul requires num_blocks_y == 1 (Mt <= per_core_M) for mcast_in0. Got Mt={}, per_core_M={}.",
+        Mt,
+        per_core_M);
+    TT_FATAL(
         num_blocks_total <= num_cores_available,
         "Number of blocks exceeds number of cores available: {} blocks > {} cores",
         num_blocks_total,

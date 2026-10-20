@@ -1263,6 +1263,37 @@ def test_sparse_matmul_rejects_indivisible_per_core_M(device, expect_error):
         )
 
 
+def test_sparse_matmul_rejects_per_core_M_below_Mt(device, expect_error):
+    in0, in1, sparsity, nnz, pc, dims = _make_sparse_inputs(device, m=64)
+    _, _, _, _, tile_h, tile_w = dims
+
+    bad_pc = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=pc.compute_with_storage_grid_size,
+        in0_block_w=pc.in0_block_w,
+        out_subblock_h=pc.out_subblock_h,
+        out_subblock_w=pc.out_subblock_w,
+        out_block_h=pc.out_block_h,
+        out_block_w=pc.out_block_w,
+        per_core_M=1,
+        per_core_N=pc.per_core_N,
+        fuse_batch=False,
+        fused_activation=None,
+        mcast_in0=True,
+    )
+    with expect_error(RuntimeError, "requires num_blocks_y == 1"):
+        ttnn.sparse_matmul(
+            in0,
+            in1,
+            sparsity=sparsity,
+            nnz=nnz,
+            is_input_a_sparse=False,
+            is_input_b_sparse=True,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            output_tile=ttnn.Tile([tile_h, tile_w]),
+            program_config=bad_pc,
+        )
+
+
 @pytest.mark.parametrize(
     "fp32_dest_acc_en, packer_l1_acc, dtype",
     [
