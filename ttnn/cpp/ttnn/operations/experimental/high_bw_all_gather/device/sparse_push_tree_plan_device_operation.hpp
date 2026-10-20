@@ -43,7 +43,7 @@ struct SparsePushTreePlanDeviceOperation {
     using operation_attributes_t = SparsePushTreePlanParams;
     using tensor_args_t = SparsePushTreePlanInputs;
     using spec_return_value_t = std::vector<tt::tt_metal::TensorSpec>;
-    using tensor_return_value_t = std::vector<Tensor>;  // {sender streams, compact indices, slot table}
+    using tensor_return_value_t = std::vector<Tensor>;  // {sender streams, compact indices, slot table, union}
 
     static tt::tt_metal::ProgramDescriptor create_descriptor(
         const operation_attributes_t& attrs, const tensor_args_t& args, tensor_return_value_t& outputs);

@@ -40,7 +40,8 @@ enum Cb : uint32_t {
     kRw = 6,
     kIdx = 7,
     kVars = 8,
-    kDens = 9
+    kDens = 9,
+    kCache = 10
 };
 constexpr uint32_t kWin = 256;        // bitmap words per requester streamed into L1 at a time
 constexpr uint32_t kChunkWords = 16;  // rows are balanced over cores in chunks of 512
@@ -93,12 +94,14 @@ void kernel_main() {
     constexpr uint32_t slot_cap = get_compile_time_arg_val(22);
     constexpr uint32_t cnt_words = get_compile_time_arg_val(23);
     constexpr uint32_t max_blocks = get_compile_time_arg_val(24);
-    constexpr auto tables_args = TensorAccessorArgs<25>();
+    constexpr uint32_t cache_rows = get_compile_time_arg_val(25);
+    constexpr auto tables_args = TensorAccessorArgs<26>();
     constexpr auto idx_args = TensorAccessorArgs<tables_args.next_compile_time_args_offset()>();
     constexpr auto rank_args = TensorAccessorArgs<idx_args.next_compile_time_args_offset()>();
     constexpr auto streams_args = TensorAccessorArgs<rank_args.next_compile_time_args_offset()>();
     constexpr auto compact_args = TensorAccessorArgs<streams_args.next_compile_time_args_offset()>();
     constexpr auto slots_args = TensorAccessorArgs<compact_args.next_compile_time_args_offset()>();
+    constexpr auto uni_args = TensorAccessorArgs<slots_args.next_compile_time_args_offset()>();
 
     constexpr uint32_t per_dir = links * k_per;
     constexpr uint32_t senders = 4 * per_dir;
@@ -118,6 +121,7 @@ void kernel_main() {
     const auto streams = TensorAccessor(streams_args, get_arg_val<uint32_t>(4), stream_page_bytes);
     const auto compact = TensorAccessor(compact_args, get_arg_val<uint32_t>(5), topk * 4);
     const auto slots_t = TensorAccessor(slots_args, get_arg_val<uint32_t>(6), slot_cap * 4);
+    const auto uni_t = TensorAccessor(uni_args, get_arg_val<uint32_t>(7), W * 4);
 
     const uint32_t bits_l1 = get_write_ptr(kBits);
     const uint32_t cnt_l1 = get_write_ptr(kCnt);
@@ -170,14 +174,18 @@ void kernel_main() {
     const uint32_t ar = a / C, ac = a % C;
     auto* needed_rows = carve(n_dev);
     auto* valid_words = carve(n_dev);
+    constexpr uint32_t head_words = (owner_off + n_dev + 15) / 16 * 16;
     for (uint32_t d = 0; d < n_dev; ++d) {
-        noc_async_read(tables.get_noc_addr(d * table_pages), scratch_l1, 4 * (owner_off + n_dev));
-        noc_async_read_barrier();
-        invalidate_l1_cache();
-        valid_words[d] = scratch[3] * words_per_block;  // header [3]: active blocks; later words may be stale
+        noc_async_read(tables.get_noc_addr(d * table_pages), all_l1 + d * head_words * 4, head_words * 4);
+    }
+    noc_async_read_barrier();
+    invalidate_l1_cache();
+    for (uint32_t d = 0; d < n_dev; ++d) {
+        const uint32_t* head = all + d * head_words;
+        valid_words[d] = head[3] * words_per_block;  // header [3]: active blocks; later words may be stale
         uint32_t n = 0;
         for (uint32_t o = 0; o < n_dev; ++o) {
-            n += scratch[owner_off + o];
+            n += head[owner_off + o];
         }
         needed_rows[d] = n;
     }
@@ -197,30 +205,10 @@ void kernel_main() {
         return ((pick / k_per) * 4 + dr) * k_per + pick % k_per;
     };
 
-    // Ring covers: smallest (forward, backward) extents covering a set of ring offsets, balanced on ties.
-    // Entry: forward | backward << 8 | (forward + backward) << 16.
-    auto* cover_r = carve(1u << R);
-    auto* cover_c = carve(1u << C);
-    auto fill_cover = [](uint32_t* cov, uint32_t n) {
-        for (uint32_t set = 0; set < (1u << n); ++set) {
-            uint32_t best_sum = 1000, best_max = 1000, bf = 0, bb = 0;
-            for (uint32_t f = 0; f < n; ++f) {
-                uint32_t b = 0;
-                for (uint32_t t = f + 1; t < n; ++t) {
-                    if ((set >> t & 1) && n - t > b) {
-                        b = n - t;
-                    }
-                }
-                const uint32_t mx = f > b ? f : b;
-                if (f + b < best_sum || (f + b == best_sum && mx < best_max)) {
-                    best_sum = f + b, best_max = mx, bf = f, bb = b;
-                }
-            }
-            cov[set] = bf | bb << 8 | (bf + bb) << 16;
-        }
-    };
-    fill_cover(cover_r, R);
-    fill_cover(cover_c, C);
+    // Ring covers (host-computed): smallest (forward, backward) extents covering a set of ring offsets, balanced on
+    // ties. Entry: forward | backward << 8 | (forward + backward) << 16.
+    constexpr uint32_t cover_r[1u << R] = TREE_COVER_R;
+    constexpr uint32_t cover_c[1u << C] = TREE_COVER_C;
     static_assert(R == 8 && C == 4, "occupancy bit tricks assume the 8 x 4 mesh");
 
     // Tree of one row from its owner, given its requesters `rm` relative to the owner (bit r * C + c), seen from
@@ -282,9 +270,23 @@ void kernel_main() {
 
     // Streams requester bitmaps [ws, we) through L1 window by window (zero past each requester's valid extent).
     auto* col_v = carve(32);
-    auto for_each_word = [&](uint32_t ws, uint32_t we, auto&& fn) {
+    uint32_t* uni_win = bits + n_dev * kWin;
+    auto for_each_word = [&](uint32_t ws, uint32_t we, auto&& fn, bool with_union = false) {
         for (uint32_t base_w = ws; base_w < we; base_w += kWin) {
             const uint32_t end_w = base_w + kWin < we ? base_w + kWin : we;
+            if (with_union) {
+                noc_async_read(
+                    uni_t.get_noc_addr(0) + base_w * 4, reinterpret_cast<uint32_t>(uni_win), (end_w - base_w) * 4);
+                noc_async_read_barrier();
+                invalidate_l1_cache();
+                bool empty = true;
+                for (uint32_t w = 0; w < end_w - base_w && empty; ++w) {
+                    empty = uni_win[w] == 0;
+                }
+                if (empty) {
+                    continue;
+                }
+            }
             for (uint32_t d = 0; d < n_dev; ++d) {
                 const uint32_t hi = end_w < valid_words[d] ? end_w : valid_words[d];
                 for (uint32_t w = hi > base_w ? hi : base_w; w < end_w; ++w) {
@@ -308,47 +310,39 @@ void kernel_main() {
             }
         }
     };
-    // Visits every row of [ws, we) that someone needs with (row, requester mask). A window's union words are built
-    // requester by requester; sparse words gather each row's mask directly, dense ones transpose.
-    auto* uni = carve(kWin);
+    // Visits every row of [ws, we) that someone needs with (row, requester mask). Sparse words gather each row's mask
+    // directly, dense ones transpose.
     auto for_each_row = [&](uint32_t ws, uint32_t we, auto&& fn) {
-        for_each_word(ws, we, [&](uint32_t w, uint32_t i) {
-            if (i == 0) {
-                for (uint32_t k = 0; k < kWin; ++k) {
-                    uni[k] = 0;
+        for_each_word(
+            ws,
+            we,
+            [&](uint32_t w, uint32_t i) {
+                const uint32_t any = uni_win[i];
+                if (!any) {
+                    return;
                 }
-                for (uint32_t d = 0; d < n_dev; ++d) {
-                    const uint32_t* row = bits + d * kWin;
-                    for (uint32_t k = 0; k < kWin; ++k) {
-                        uni[k] |= row[k];
+                if (popcount(any) <= 2) {
+                    for (uint32_t u = any; u; u &= u - 1) {
+                        const uint32_t j = ctz(u);
+                        uint32_t m = 0;
+                        for (uint32_t d = 0; d < n_dev; ++d) {
+                            m |= ((bits[d * kWin + i] >> j) & 1u) << d;
+                        }
+                        fn(w * 32 + j, m);
                     }
+                    return;
                 }
-            }
-            const uint32_t any = uni[i];
-            if (!any) {
-                return;
-            }
-            if (popcount(any) <= 6) {
+                auto* col = col_v;
+                for (uint32_t d = 0; d < 32; ++d) {
+                    col[d] = d < n_dev ? bits[d * kWin + i] : 0;
+                }
+                transpose32(col);  // col[j] = requesters of row 32 w + j
                 for (uint32_t u = any; u; u &= u - 1) {
                     const uint32_t j = ctz(u);
-                    uint32_t m = 0;
-                    for (uint32_t d = 0; d < n_dev; ++d) {
-                        m |= ((bits[d * kWin + i] >> j) & 1u) << d;
-                    }
-                    fn(w * 32 + j, m);
+                    fn(w * 32 + j, col[j]);
                 }
-                return;
-            }
-            auto* col = col_v;
-            for (uint32_t d = 0; d < 32; ++d) {
-                col[d] = d < n_dev ? bits[d * kWin + i] : 0;
-            }
-            transpose32(col);  // col[j] = requesters of row 32 w + j
-            for (uint32_t u = any; u; u &= u - 1) {
-                const uint32_t j = ctz(u);
-                fn(w * 32 + j, col[j]);
-            }
-        });
+            },
+            true);
     };
 
     // 0. Balance: needed rows per 512-row chunk over an even split, then contiguous chunk ranges of equal rows.
@@ -370,7 +364,13 @@ void kernel_main() {
             for (uint32_t d = 0; d < n_dev; ++d) {
                 any |= bits[d * kWin + i];
             }
-            my_dens[(w - e0) / kChunkWords] += 4 * popcount(any) + 1;  // a row costs ~4 scanned words
+            uni_win[i] = any;
+            my_dens[(w - e0) / kChunkWords] += 64 * popcount(any) + 1;  // a row costs ~64 scanned words
+            if (i + 1 == kWin || w + 1 == e1) {
+                const uint32_t first = w - i;
+                noc_async_write(reinterpret_cast<uint32_t>(uni_win), uni_t.get_noc_addr(0) + first * 4, (i + 1) * 4);
+                noc_async_write_barrier();
+            }
         });
     }
     barrier();
@@ -410,22 +410,15 @@ void kernel_main() {
     }
 
     // Per-row tree view of this chip: role (incoming / outgoing edges), from the owner's point of view.
-    // Neighbouring rows mostly share owner and requesters, hence the tree: remember the last one per row parity.
-    uint32_t memo_owner[2] = {n_dev, n_dev}, memo_remote[2] = {0, 0};
-    Role memo_role[2];
     auto view = [&](uint32_t x, uint32_t mask, uint32_t& owner, uint32_t& local, uint32_t& remote, Role& role) {
         const uint32_t blk = x / sc;
         owner = blk % n_dev;
         local = (blk / n_dev) * sc + x % sc;
         remote = mask & ~(1u << owner);
         role.in_dir = 4;
+        role.in_depth = 0;
         role.n_out = 0;
         if (!remote) {
-            return;
-        }
-        const uint32_t par = x & 1;
-        if (memo_owner[par] == owner && memo_remote[par] == remote) {
-            role = memo_role[par];
             return;
         }
         const uint32_t ro = owner / C, co = owner % C;
@@ -462,14 +455,16 @@ void kernel_main() {
         } else {
             role_of(cols_set, col_bits[pc], false, pc, pr, role);
         }
-        memo_owner[par] = owner;
-        memo_remote[par] = remote;
-        memo_role[par] = role;
     };
 
     PLAN_T(1);
-    // 1. Count.
+    // 1. Count. Rows that involve this chip are also cached (2 words each) so the emit pass skips the rest:
+    //   [0] local | need << 20 | own << 21 | in_dir << 22 | in_depth << 25 | n_out << 29
+    //   [1] per outgoing edge e, 7 bits at 7e: dir | depth << 2 | keep << 6
     [[maybe_unused]] uint32_t visited = 0;
+    auto* cache = reinterpret_cast<uint32_t*>(get_write_ptr(kCache));
+    uint32_t cached = 0;
+    bool cache_full = false;
     for (uint32_t g = 0; g < cnt_words; ++g) {
         cnt[g] = 0;
     }
@@ -478,18 +473,33 @@ void kernel_main() {
         Role role;
         view(x, mask, owner, local, remote, role);
         const uint32_t need = mask >> a & 1;
+        const uint32_t own = owner == a ? 1u : 0u;
         ++visited;
         cnt[kNeed] += need;
-        if (owner == a && need) {
+        if (own && need) {
             cnt[kOwn] += 1;
         }
         if (role.in_dir < 4) {
             cnt[kIn + (role.in_dir * LV + role.in_depth) * 2 + (need ? 0 : 1)] += 1;
         }
+        uint32_t outs = 0;
         for (uint32_t e = 0; e < role.n_out; ++e) {
             const uint32_t b = neighbour(a, role.out_dir[e]);
-            cnt[kOut + (role.out_dir[e] * LV + role.out_depth[e]) * 2 + ((remote >> b & 1) ? 0 : 1)] += 1;
+            const uint32_t keep = (remote >> b & 1) ? 0 : 1;
+            cnt[kOut + (role.out_dir[e] * LV + role.out_depth[e]) * 2 + keep] += 1;
+            outs |= (role.out_dir[e] | role.out_depth[e] << 2 | keep << 6) << (7 * e);
         }
+        if (!need && role.in_dir == 4 && role.n_out == 0) {
+            return;
+        }
+        if (cached == cache_rows) {
+            cache_full = true;
+            return;
+        }
+        cache[2 * cached] =
+            local | need << 20 | own << 21 | role.in_dir << 22 | (role.in_depth & 15) << 25 | role.n_out << 29;
+        cache[2 * cached + 1] = outs;
+        ++cached;
     });
 
     PLAN_T(2);
@@ -628,40 +638,61 @@ void kernel_main() {
             flush(g, start);
         }
     };
-    for_each_row(w0, w1, [&](uint32_t x, uint32_t mask) {
-        uint32_t owner, local, remote;
-        Role role;
-        view(x, mask, owner, local, remote, role);
-        const uint32_t need = mask >> a & 1;
+    auto emit_row = [&](uint32_t e0, uint32_t outs) {
+        const uint32_t local = e0 & 0xFFFFFu, need = e0 >> 20 & 1, own = e0 >> 21 & 1;
+        const uint32_t in_dir = e0 >> 22 & 7, in_depth = e0 >> 25 & 15, n_out = e0 >> 29;
         uint32_t here = 0, arrival = 0;  // where the row sits on this chip, and its arrival
-        if (owner == a) {
+        if (own) {
             if (need) {
                 const uint32_t q = run[kOwn];
                 here = lane_rel(q / P) + (q % P) * B;
                 add(kOwn, local, 0);
             }
-        } else if (role.in_dir < 4) {
+        } else if (in_dir < 4) {
             const uint32_t keep = need ? 0 : 1;
-            const uint32_t g = kIn + (role.in_dir * LV + role.in_depth) * 2 + keep;
+            const uint32_t g = kIn + (in_dir * LV + in_depth) * 2 + keep;
             const uint32_t k = run[g]++;
-            const uint32_t n = pkb[at(1, role.in_dir, role.in_depth, keep)] + k / P;
-            here = base(a, role.in_dir, keep) + lane_rel(lnb[at(1, role.in_dir, role.in_depth, keep)] + k / P) +
-                   (k % P) * B;
-            arrival = (stream_of(role.in_dir, n) << 24) | (n / per_dir + 1);
+            const uint32_t n = pkb[at(1, in_dir, in_depth, keep)] + k / P;
+            here = base(a, in_dir, keep) + lane_rel(lnb[at(1, in_dir, in_depth, keep)] + k / P) + (k % P) * B;
+            arrival = (stream_of(in_dir, n) << 24) | (n / per_dir + 1);
         }
         if (need) {
             add(kNeed, here, 0);
         }
-        for (uint32_t e = 0; e < role.n_out; ++e) {
-            const uint32_t dr = role.out_dir[e], h = role.out_depth[e];
-            const uint32_t keep = (remote >> neighbour(a, dr) & 1) ? 0 : 1;
+        for (uint32_t e = 0; e < n_out; ++e) {
+            const uint32_t o = outs >> (7 * e);
+            const uint32_t dr = o & 3, h = (o >> 2) & 15, keep = (o >> 6) & 1;
             if (h == 0) {
                 add(kOut + (dr * LV + h) * 2 + keep, local, 0);
             } else {
                 add(kOut + (dr * LV + h) * 2 + keep, here, arrival);
             }
         }
-    });
+    };
+    if (!cache_full) {
+        for (uint32_t i = 0; i < cached; ++i) {
+            emit_row(cache[2 * i], cache[2 * i + 1]);
+        }
+    } else {
+        for_each_row(w0, w1, [&](uint32_t x, uint32_t mask) {
+            uint32_t owner, local, remote;
+            Role role;
+            view(x, mask, owner, local, remote, role);
+            const uint32_t need = mask >> a & 1;
+            if (!need && role.in_dir == 4 && role.n_out == 0) {
+                return;
+            }
+            uint32_t outs = 0;
+            for (uint32_t e = 0; e < role.n_out; ++e) {
+                const uint32_t keep = (remote >> neighbour(a, role.out_dir[e]) & 1) ? 0 : 1;
+                outs |= (role.out_dir[e] | role.out_depth[e] << 2 | keep << 6) << (7 * e);
+            }
+            emit_row(
+                local | need << 20 | (owner == a ? 1u : 0u) << 21 | role.in_dir << 22 | role.in_depth << 25 |
+                    role.n_out << 29,
+                outs);
+        });
+    }
 
     PLAN_T(5);
     // Packets begun here and finished on later cores: their tails are in the carry buffer now.
@@ -695,33 +726,33 @@ void kernel_main() {
         flush(g, start);
     }
 
-    // Headers, level markers and end records (core 0).
-    if (me == 0) {
-        auto* rec = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch_l1 + 1024);
-        for (uint32_t w = 0; w < senders; ++w) {
-            const uint32_t dr = (w / k_per) % 4, pick = (w / (4 * k_per)) * k_per + w % k_per;
-            noc_async_write_barrier();
+    // Headers, level markers and end records: sender w's on core w.
+    if (me < senders) {
+        const uint32_t w = me;
+        const uint32_t dr = (w / k_per) % 4, pick = (w / (4 * k_per)) * k_per + w % k_per;
+        uint32_t slot_i = 0;
+        auto stage = [&]() {
+            auto* rec = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch_l1 + 1024 + (slot_i++ % 8) * open_bytes);
+            noc_async_writes_flushed();
             for (uint32_t i = 0; i < kRecordWords; ++i) {
                 rec[i] = 0;
             }
-            for (uint32_t s = 0; s < senders; ++s) {
-                const uint32_t sd = (s / k_per) % 4, sp = (s / (4 * k_per)) * k_per + s % k_per;
-                const uint32_t e = edge_pk[4 + sd];
-                rec[1 + s] = e > sp ? ceil_div(e - sp, per_dir) : 0;
-            }
-            noc_async_write(scratch_l1 + 1024, streams.get_noc_addr(w), open_bytes);
-            noc_async_write_barrier();
-            for (uint32_t i = 0; i < kRecordWords; ++i) {
-                rec[i] = 0;
-            }
-            uint32_t through = 0, done = 0;
-            for (uint32_t h = 0; h < LV; ++h) {
-                through += pkb[at(0, dr, h, 1)] - pkb[at(0, dr, h, 0)] + ceil_div(tot[kOut + (dr * LV + h) * 2 + 1], P);
-                done = through > pick ? ceil_div(through - pick, per_dir) : 0;
-                rec[0] = h + 1 < LV ? kLevel : kEnd;
-                noc_async_write(scratch_l1 + 1024, record_noc(w, locals_of(w) + h + done), open_bytes);
-                noc_async_write_barrier();
-            }
+            return rec;
+        };
+        auto* head = stage();
+        for (uint32_t s2 = 0; s2 < senders; ++s2) {
+            const uint32_t sd = (s2 / k_per) % 4, sp = (s2 / (4 * k_per)) * k_per + s2 % k_per;
+            const uint32_t e = edge_pk[4 + sd];
+            head[1 + s2] = e > sp ? ceil_div(e - sp, per_dir) : 0;
+        }
+        noc_async_write(reinterpret_cast<uint32_t>(head), streams.get_noc_addr(w), open_bytes);
+        uint32_t through = 0;
+        for (uint32_t h = 0; h < LV; ++h) {
+            through += pkb[at(0, dr, h, 1)] - pkb[at(0, dr, h, 0)] + ceil_div(tot[kOut + (dr * LV + h) * 2 + 1], P);
+            const uint32_t done = through > pick ? ceil_div(through - pick, per_dir) : 0;
+            auto* rec = stage();
+            rec[0] = h + 1 < LV ? kLevel : kEnd;
+            noc_async_write(reinterpret_cast<uint32_t>(rec), record_noc(w, locals_of(w) + h + done), open_bytes);
         }
     }
 

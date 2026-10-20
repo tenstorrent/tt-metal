@@ -1678,7 +1678,7 @@ def test_sparse_push_tree(mesh_device):
                 pages_per_packet=pages_per_packet,
                 banks=_DRAM_BANKS,
             )
-            streams, idx_tree, _ = tree_plan()
+            streams, idx_tree, *_ = tree_plan()
             ttnn.synchronize_device(mesh_device)
             t_plan = timed(lambda: tree_plan())
             ref, ref_maps, stats = _tree_plan_records(
