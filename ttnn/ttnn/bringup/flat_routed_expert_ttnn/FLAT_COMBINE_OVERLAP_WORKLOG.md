@@ -1596,3 +1596,26 @@ per-chip source map). Correct (shared part 1.4% rel L2, random weights). L4 bloc
 the matmul path's 363 (tilize 50 + gate/up 140 + glu 30 + down 91 + untilize 52); chunk 2048 174 vs 181. At 5120 it
 runs ~54% of the HiFi3 peak of its 88-core grid (the 11 x 8 grid; each block re-streams the weights): not kept as the
 default (GLM_SE_IMPL=unified probe).
+
+### Combine on the wire, and piggybacked credits (2026-10-20, LoudBox 2 x 4, 200G)
+Wire ceiling (zz_scratch_fabric_wire.py: a sender per link, headers routed once, FABRIC_2D): per flow 11.4 / 22.0 / 23.8
+/ 23.9 GB/s at 2048 / 4096 / 8224 (a combine row + trailer) / 8704 B packets - 95% of 25 at our rows, ~180 ns a packet
+minimum; two links one way free, both ways -2%, a forwarded hop free, a forwarded + a local flow share a link 50/50.
+Busiest-link load of the harness's routings (device link rule): uniform 2574 rows (889 us at 23.8 GB/s), spread 2967
+(1025), packed 7415 (2562, one port). Combine alone S640 (pool depth 7): uniform 1133 us = the busiest link busy 78%,
+spread 80%, packed 94%. Of uniform's loss vs 25 GB/s: framing ~5%, credit packets on the data links ~5% (~320 a busy
+port x >= 180 ns), the feeding flows' gaps ~17% (the busiest link carries its port's rows and forwarded ones, 50/50;
+busy senders 868 ns a row against ~690 needed: credits 115, bookkeeping 173, ring-full 90, empty 83 us).
+Piggybacked credits (piggyback_credits / SPC_PIGGY=1): a row to home k carries this port's consumed counts of k's
+rows on its link class (<= 8 accumulators x 16 bits) in the trailer's spare words; k's accumulator copies them to its
+port facing me on that link, a slot per (source chip, receiving accumulator) - each slot only moves forward (one path,
+one ring) - and the port merges them into a monotonic count (SHW) with the snapshots, scanning the slots only when a
+ring looks full or at the drain. Bugs found on the way: decoding the other link class's rings (the drain never closed),
+a staged slot keeping the previous row's trailer flag, one slot per source (an older copy overwrote a newer one).
+Also a harness bug the larger state block exposed: the alone build's pool (depth x (N - 1)) was smaller than the
+fused build's (what the arena leaves), so its CBs sat on the fused rings' last slots and the next fused call took
+their garbage trailer flags as landed rows (hang) - the alone build now takes pool_slots=fused.pool.
+Combine alone (fused) us, off -> on: GLM-Flash S640 uniform 1126 -> 1087, spread 1279 -> 1224, packed 2730 -> 2734;
+S256 464 -> 457, 517 -> 513; K3 986 -> 955, 1057 -> 1041, packed 2337 -> 2393; V4.1 603 -> 596. Fused within +-1.5%
+(the combine is hidden there). Credit packets per busy port 318 -> 124, their time 116 -> 34 us. A modest win: kept
+as an option (default off); the feeding flows' gaps are the larger loss.

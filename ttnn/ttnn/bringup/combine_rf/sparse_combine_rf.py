@@ -56,6 +56,7 @@ class CombineProbes:
     credthr: str = "8"  # SPC_CREDTHR: credit return threshold
     noyread: str = "0"  # SPC_NOYREAD: rows not read from y (garbage)
     nodrain: bool = False  # SPC_NODRAIN=1: no end-of-call credit drain
+    piggy: str = ""  # SPC_PIGGY: 1 / 0 overrides piggyback_credits
     se: str = ""  # SPC_SE: shared_rows probes - off (no rows, both sides: wrong sums) / noread (no DRAM reads: garbage)
     # / noown (the accumulators skip the own block)
 
@@ -72,6 +73,7 @@ class CombineProbes:
             noyread=env.get("SPC_NOYREAD", "0"),
             nodrain=env.get("SPC_NODRAIN") == "1",
             se=env.get("SPC_SE", ""),
+            piggy=env.get("SPC_PIGGY", ""),
         )
 
 
@@ -308,7 +310,7 @@ M_RTOT, M_RDONE, M_TAKEN = 256, 288, 320
 def state_layout(N, A):
     """Byte offsets of the state block: CRED, USED, RET, CNT (collector counts), MISC, HDRS, RINGS (its end; the
     landing pool starts there), and LAYR / LAYO / U0 (state_layout_ext)."""
-    CRED, USED, RET, _, _, _, CNT, MISC, HDRS, RINGS = _state(N, A)
+    CRED, USED, RET, _, _, _, CNT, MISC, HDRS, RINGS, _, _ = _state(N, A)
     return CRED, USED, RET, CNT, MISC, HDRS, RINGS
 
 
@@ -323,10 +325,21 @@ def _state(N, A):
     AP = (A + 3) // 4 * 4
     rw = al(4 * N * AP)
     CRED, USED, RET, LAYR, LAYO, U0, CNT = (i * rw for i in range(7))
+    # (SHW: a port's monotonic credit count per ring, merged from its snapshots and the piggybacked words; PIG: per
+    # (home chip, receiving accumulator of this port's link class: 8 at most), the 16-bit consumed counts the rows from
+    # that chip carried - a slot per accumulator, so each only moves forward: one path, one ring, in order)
+    SHW = 7 * rw
+    PIG = SHW + rw
+    CNT = al(PIG + 16 * 8 * N)
     MISC = CNT + 512
     HDRS = MISC + MISC_BYTES
     RINGS = al(HDRS + N * NH_ * HSZ_ + NH_ * 4 * AP)
-    return CRED, USED, RET, LAYR, LAYO, U0, CNT, MISC, HDRS, RINGS
+    return CRED, USED, RET, LAYR, LAYO, U0, CNT, MISC, HDRS, RINGS, SHW, PIG
+
+
+def state_layout_pig(N, A):
+    """SHW (a port's monotonic credit count per ring) and PIG (per home chip, the piggybacked consumed counts)."""
+    return _state(N, A)[10:12]
 
 
 _RF_SENDER = r"""
@@ -365,6 +378,11 @@ constexpr uint32_t SE = __SE__, NSE = __NSE__;
 // atomic increment from every other chip in a persistent word (bar[0], cumulative; bar[1] its calls) and sends
 // nothing remote before all N - 1 of this call are in; each chip's port facing a chip increments that chip's ports
 constexpr uint32_t BAR = __BAR__;
+// piggybacked credits (PIGGY): a row to home k carries, in its trailer's spare words, this port's consumed counts of
+// k's rows on this link class (up to 8 accumulators, 16 bits each, cumulative); k's accumulator copies them to its
+// port facing me on that link (PIG words), which merges them with its snapshots (SHW: monotonic, so late or reordered
+// copies never take credits back). Standalone snapshots remain for when no row goes that way.
+constexpr uint32_t PIGGY = __PIGGY__, PIG = __PIG__, SHW = __SHW__;
 #if __FUSED__
 // (a port that is also an accumulator, acc_on_ports: this RISC also runs the port's L1 hand-off - slot grants to the y
 // writers, pushes of landed rows - and the accumulator's output writes; RISCV_1 runs the accumulator's reader)
@@ -602,13 +620,69 @@ void kernel_main() {
         for (uint32_t s = 0; s < N; ++s) t += rtot[s];
         return t;
     };
+    volatile tt_l1_ptr uint32_t* pig = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(area + PIG);
+    volatile tt_l1_ptr uint32_t* shw = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(area + SHW);
+    // ring ci's credits, cheap: the snapshot count and the last merged piggyback (SHW); the slots only when that is
+    // not enough (send_row) or at the drain
+    auto cred_fast = [&](uint32_t ci) -> uint32_t {
+        const uint32_t c = cred[ci];
+        if constexpr (PIGGY) {
+            const uint32_t s = shw[ci];
+            return static_cast<int32_t>(c - s) > 0 ? c : s;
+        }
+        return c;
+    };
+    // ring ci's credits: the snapshot count and the piggybacked one merged into SHW (both monotonic)
+    auto cred_of = [&](uint32_t ci) -> uint32_t {
+        const uint32_t c = cred[ci];
+        if constexpr (PIGGY) {
+            const uint32_t home = ci / AP, o = ci % AP, j = o / L;
+            if ((o + me + home) % L != lnk) return c;  // (another link class's ring: never piggybacked here)
+            uint32_t s = shw[ci];
+            if (static_cast<int32_t>(c - s) > 0) s = c;
+            for (uint32_t q = 0; q < (A + L - 1) / L; ++q) {  // (the receiving accumulators' slots: the furthest)
+                const uint32_t w = pig[(home * 8 + q) * 4 + (j >> 1)], p16 = (j & 1) ? (w >> 16) : (w & 0xFFFF);
+                const uint32_t d = (p16 - s) & 0xFFFF;
+                if (d && d < 0x8000) s += d;
+            }
+            shw[ci] = s;
+            return s;
+        }
+        return c;
+    };
+    uint32_t n_piggy = 0;
     // one row (P pieces, its trailer's header word at LASTPB) from L1 src to its home's ring; false: not yet (the
     // ring's layout has not arrived, or the ring is full)
     auto send_row = [&](uint32_t src) -> bool {
         const uint32_t hdr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src + LASTPB)[0];
         const uint32_t home = hdr & 0xFF, t = (hdr >> 8) & 0xFFFF, o = t % A, ci = home * AP + o;
         const uint32_t u = used[ci], lw = lay_r[ci], dep = lw & 0xFFF;
-        if ((lw >> 24) != tag || dep + cred[ci] - u < 1) return false;
+        if ((lw >> 24) != tag) return false;
+        if (dep + cred_fast(ci) - u < 1 && (!PIGGY || dep + cred_of(ci) - u < 1)) return false;
+        if constexpr (PIGGY) {  // (this port returns home's credits: the row carries this link class's counts)
+            // (the flag set or cleared on every row: a staged slot keeps its previous row's trailer words)
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src + LASTPB)[1] &= 0xFFFFu;
+            if (sx[home] && rtot[home] != rdone[home]) {
+                volatile tt_l1_ptr uint32_t* tr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src + LASTPB);
+                uint32_t w[4] = {0, 0, 0, 0}, cov = 0;
+                for (uint32_t o2 = 0; o2 < A; ++o2) {
+                    const uint32_t v = ret[home * AP + o2];
+                    cov += v;
+                    if ((o2 + me + home) % L == lnk) {
+                        const uint32_t j = o2 / L;
+                        w[j >> 1] |= (v & 0xFFFF) << (16 * (j & 1));
+                    }
+                }
+                tr[2] = w[0];
+                tr[4] = w[1];
+                tr[5] = w[2];
+                tr[6] = w[3];
+                tr[1] = tr[1] | 0x10000u;
+                returned += cov - rdone[home];
+                rdone[home] = cov;
+                ++n_piggy;
+            }
+        }
         const uint32_t dst = area + RINGS + (((lw >> 12) & 0xFFF) + (u - u0[ci]) % dep) * SLOT;  // (my ring there)
         auto& cn = conn_of(NL > 1 ? (o + me + home) % L : 0);
         for (uint32_t pc = 0; pc < P; ++pc) {
@@ -729,14 +803,14 @@ void kernel_main() {
     for (bool open_ = __DRAIN__; open_;) {
         invalidate_l1_cache();
         open_ = false;
-        for (uint32_t ci = 0; ci < N * AP; ++ci) open_ |= cred[ci] != used[ci];
+        for (uint32_t ci = 0; ci < N * AP; ++ci) open_ |= cred_of(ci) != used[ci];
     }
     if constexpr (__TPROF__) {
         const uint32_t tdbg = get_arg_val<uint32_t>(a_dbg + 2), tpage = get_arg_val<uint32_t>(a_dbg + 3);
         volatile tt_l1_ptr uint32_t* d = misc + 192;
         d[0] = 0x7E100000 | tpage; d[1] = p0; d[2] = get_timestamp_32b(); d[3] = p_slot; d[4] = p_idle; d[5] = p_cred;
         d[6] = n_blocked; d[7] = n_inj; d[8] = p_send; d[9] = n_empty; d[10] = p_flush; d[11] = n_credpk;
-        d[12] = p_book; d[13] = p_blk; d[14] = n_iter; d[15] = 0;
+        d[12] = p_book; d[13] = p_blk; d[14] = n_iter; d[15] = n_piggy;
         const InterleavedAddrGen<true> dg = {.bank_base_address = tdbg, .page_size = 512};
         noc_async_write(area + MISC + 192 * 4, get_noc_addr(tpage, dg), 64);
         noc_async_write_barrier();
@@ -1000,6 +1074,18 @@ void kernel_main() {
             if (tp[3] == 0 || tp[7] == 0) return false;
         }
         volatile tt_l1_ptr uint32_t* tr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(s + LASTPB);
+        if constexpr (__PIGGY__) {  // (credits for my chip's rows to k: to my port facing k on this link class)
+            if (tr[1] & 0x10000u) {
+                volatile tt_l1_ptr uint32_t* sc = misc + 116;
+                sc[0] = tr[2];
+                sc[1] = tr[4];
+                sc[2] = tr[5];
+                sc[3] = tr[6];
+                noc_async_write(
+                    reinterpret_cast<uint32_t>(sc), get_noc_addr(px[k], py[k], area + __PIG__ + 16 * (k * 8 + me / L)), 16);
+                noc_async_writes_flushed();
+            }
+        }
         push_pieces(s, (tr[0] >> 8) & 0xFFFF);
         for (uint32_t pc = 0; pc < P; ++pc) {
             volatile tt_l1_ptr uint32_t* tp =
@@ -1140,6 +1226,8 @@ def sparse_combine_rf_prepare(
     probes=None,
     shared_rows=None,
     barrier=None,
+    piggyback_credits=False,
+    pool_slots=None,
 ):
     """rows_by_chip[coord] = list of (y row on that chip, home coord, home token t, link[, local expert]). cells: the
     logical (x, y) cells the combine may use (ports nearest their Ethernet cores, accumulators the rest), else the
@@ -1170,7 +1258,11 @@ def sparse_combine_rf_prepare(
     combine's rings and credits; static counts on top of the plan's; the accumulators add block 0, the own tokens'
     partial, from DRAM). barrier (with l1): dict(tensor=) - a persistent L1
     tensor of >= 8 B per core on every core (zeros at creation, never rewritten by the caller): the program starts with
-    a cross-chip barrier, so the caller may zero the arena right before it (no other sync in between)."""
+    a cross-chip barrier, so the caller may zero the arena right before it (no other sync in between).
+    piggyback_credits: rows carry their link class's consumed counts back to the chip they go to (standalone credit
+    packets only when no row goes that way; a port per link, A <= 16, two links). pool_slots: the landing pool's slots
+    exactly (e.g. another build's run.pool, when two builds share the arena: equal pools, so neither's CBs sit on the
+    other's ring slots - whose trailer flags mark landed rows)."""
     R, C = tuple(mesh_device.shape)
     N, L, A0 = R * C, num_links, n_acc
     row_bytes = W * 2
@@ -1217,6 +1309,7 @@ def sparse_combine_rf_prepare(
     AP = (A + 3) // 4 * 4
     CRED, USED, RET, CNT, MISC, HDRS, RINGS = state_layout(N, A)
     LAYR, LAYO, U0 = state_layout_ext(N, A)
+    SHW, PIG = state_layout_pig(N, A)
     run_cells = dict(ports={k: (c.x, c.y) for k, c in port_core.items()}, accs=[(c.x, c.y) for c in acc_cores])
     virt = lambda c: mesh_device.worker_core_from_logical_core(c)
     node = lambda coord: mesh_device.get_fabric_node_id(ttnn.MeshCoordinate(*coord))
@@ -1241,6 +1334,10 @@ def sparse_combine_rf_prepare(
             want[(home, o)][idx(ch)] += 1
             n_ret[(home, fh(home, ch), l)] += 1
     # the shared expert's partials (shared_rows): row-mate h's block from chip ch, token t -> accumulator t % A on h
+    PIGGY = (pr.piggy == "1") if pr.piggy in ("0", "1") else bool(piggyback_credits)
+    if pr.piggy == "fused":  # (probe: piggyback only in the L1 hand-off programs)
+        PIGGY = l1 is not None
+    assert not PIGGY or (not PER_DIR and L == 2 and A0 <= 16), "piggyback_credits: a port per link, two links, A <= 16"
     SE_ON = shared_rows is not None
     assert not SE_ON or l1 is not None, "shared_rows: the L1 hand-off"
     assert not SE_ON or arena is not None, "shared_rows: the staging slots live in the arena"
@@ -1301,6 +1398,7 @@ def sparse_combine_rf_prepare(
     # (every source with rows gets at least one slot - the per-ring deadlock argument holds - the rest in proportion
     # to its rows); depth = the pool's average per source
     PSL = PSL if ring_depth is None else int(ring_depth) * (N - 1)
+    PSL = PSL if pool_slots is None else int(pool_slots)
     assert PSL >= N - 1, f"combine: no room for one landing slot per source chip ({N - 1} x {SLOT} B)"
     assert PSL < 4096, "combine: a ring's base / depth are 12-bit fields"
     D = PSL // (N - 1)
@@ -1443,6 +1541,9 @@ def sparse_combine_rf_prepare(
         "__SE__": str(int(SE_ON)),
         "__NSE__": str(max(NSE, 1)),
         "__BAR__": str(int(barrier is not None)),
+        "__PIGGY__": str(int(PIGGY)),
+        "__PIG__": str(PIG),
+        "__SHW__": str(SHW),
         "__SOWN__": str(S if SE_ON and pr.se not in ("off", "noown") else 0),
         "__SENOREAD__": str(int(pr.se == "noread")),
         "__OWNADDR__": str(int(shared_rows["tensor"].buffer_address()) if SE_ON else 0),

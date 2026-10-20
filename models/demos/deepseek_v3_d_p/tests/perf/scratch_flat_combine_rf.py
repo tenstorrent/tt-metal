@@ -352,6 +352,7 @@ def _flat_combine_rf_routing(mesh_device, op, routing):
             writers=0,
             ports_per_direction=PER_DIR_PORTS,
             **{**common, "depth": fused.depth},
+            pool_slots=fused.pool,  # (the fused build's pool exactly: its CBs must not sit on the fused ring slots)
             **_combine_opts(),
         )
     )
@@ -514,7 +515,7 @@ def _flat_combine_rf_routing(mesh_device, op, routing):
                     f"TPROF {routing} {name} chip {ci} sender {r[0] & 0xFF}: end {us(r[2]):.0f} slot {r[3] / 1350:.0f} "
                     f"idle {r[4] / 1350:.0f} cred {r[5] / 1350:.0f} send {r[8] / 1350:.0f} flush {r[10] / 1350:.0f} us | rows "
                     f"{r[7]} blocked {r[6]} empty {r[9]} credit packets {r[11]} | book {r[12] / 1350:.0f} blk {r[13] / 1350:.0f} us "
-                    f"passes {r[14]}"
+                    f"passes {r[14]} piggy {r[15]}"
                 )
             ae = sorted((us(r[3]), r[5], r[4]) for r in adp)  # (accumulators: end, rows, local rows)
             logger.info(
