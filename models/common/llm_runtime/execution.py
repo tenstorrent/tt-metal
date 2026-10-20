@@ -727,6 +727,7 @@ class TracedExecutor:
                         full_without_device_feedback=operation_plan.refresh_policy.full_without_device_feedback,
                         refresh_page_table_on_change=operation_plan.refresh_policy.refresh_page_table_on_change,
                     ),
+                    before_capture=getattr(operation_plan, "before_capture", None),
                 )
             )
         return program

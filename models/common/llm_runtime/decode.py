@@ -167,6 +167,7 @@ class DecodeCapturePlan:
     prepare_inputs: Any
     capture: Any
     refresh_policy: DecodeRefreshPolicy = DecodeRefreshPolicy()
+    before_capture: Any = None
 
 
 @dataclass(frozen=True)
@@ -543,12 +544,15 @@ class DecodeRuntime:
 
         self._require_prepared(prepared)
 
-        def prepare_inputs() -> DecodePersistentInputs:
+        def reset_sampling_state(persistent: Any = None) -> None:
             if self._sampling_state_controller is not None and prepared.prepared_sampling is not None:
                 self._sampling_state_controller.reset(
                     self._sampling_state,
                     dataclasses.replace(prepared.prepared_sampling, slot_remap=None),
                 )
+
+        def prepare_inputs() -> DecodePersistentInputs:
+            reset_sampling_state()
             host_inputs = self._prepare_inputs_host(prepared)
             device_inputs, kpt = self._stage_inputs_and_kpt(host_inputs, prepared)
             sampling = prepared.prepared_sampling
@@ -570,7 +574,10 @@ class DecodeRuntime:
                 advance_seeds=False,
             )
 
-        return DecodeCapturePlan(prepare_inputs=prepare_inputs, capture=capture)
+        # The trace compiler prepares every plan before the first capture, and the
+        # lane has one sampling state: re-admit this trace's sampling identity
+        # right before its own capture, outside the recorded body.
+        return DecodeCapturePlan(prepare_inputs=prepare_inputs, capture=capture, before_capture=reset_sampling_state)
 
     def refresh_trace(
         self,

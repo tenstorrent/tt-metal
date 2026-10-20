@@ -1172,6 +1172,28 @@ def test_capture_plan_describes_full_step_refresh_and_typed_persistent_inputs(mo
     assert plan.refresh_policy.refresh_page_table_on_change
 
 
+def test_capture_plan_readmits_its_own_sampling_state_before_capture(monkeypatch):
+    # The trace compiler prepares every plan before the first capture; with two
+    # sampled decode traces the lane state is left at the last one prepared.
+    runtime = make_runtime()
+    resets = []
+    runtime._sampling_state_controller = SimpleNamespace(reset=lambda state, prepared: resets.append(prepared))
+    runtime._sampling_state = object()
+    device = DecodeDeviceInputs("tokens", "positions", "rotary", "page_table")
+    monkeypatch.setattr(runtime, "_prepare_inputs_host", lambda request: "host")
+    monkeypatch.setattr(runtime, "_stage_inputs_and_kpt", lambda host, request: (device, "kpt"))
+    greedy = prepare(runtime, sampling_params=greedy_sampling())
+    topk = prepare(runtime, sampling_params=SamplingParams(temperature=1.0, top_k=32, top_p=0.08))
+    greedy_plan, topk_plan = runtime.capture_plan(greedy), runtime.capture_plan(topk)
+
+    greedy_persistent = greedy_plan.prepare_inputs()
+    topk_plan.prepare_inputs()
+    greedy_plan.before_capture(greedy_persistent)
+
+    assert [prepared.sampling_path for prepared in resets] == ["argmax", "topk", "argmax"]
+    assert resets[-1] == dataclasses.replace(greedy.prepared_sampling, slot_remap=None)
+
+
 def test_trace_refresh_skips_unchanged_sampling_values(monkeypatch):
     runtime = make_runtime(force_greedy_top_k=True)
     prepared = prepare(runtime, sampling_params=greedy_sampling())

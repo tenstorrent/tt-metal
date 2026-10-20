@@ -201,6 +201,40 @@ def test_capture_allocates_every_input_before_capture_and_coordinates_gates(monk
         compiler.compile(_Signature("program", 3), lambda context: torch.zeros(1))
 
 
+def test_before_capture_runs_after_every_allocation_and_right_before_its_own_capture(monkeypatch):
+    events = []
+    _patch_backend(monkeypatch, events)
+    compiler = ProgramCompiler("mesh", lambda: object())
+    programs = [compiler.compile(_Signature("program", variant), lambda context: torch.zeros(1)) for variant in (1, 2)]
+    trace = TraceCompiler(compiler)
+    for program, variant in zip(programs, (1, 2)):
+        trace.register_capture_plan(
+            TraceCapturePlan(
+                program.key,
+                _Signature("trace", variant),
+                "decode",
+                lambda variant=variant: events.append(("prepare", variant)) or (),
+                lambda persistent, variant=variant: events.append(("capture", variant)) or torch.zeros(1),
+                before_capture=lambda persistent, variant=variant: events.append(("before", variant)),
+            )
+        )
+    events.clear()
+
+    trace.capture_all()
+
+    order = [event for event in events if event[0] in ("prepare", "before", "begin", "capture")]
+    assert [event[0] if event[0] == "begin" else event for event in order] == [
+        ("prepare", 1),
+        ("prepare", 2),
+        ("before", 1),
+        "begin",
+        ("capture", 1),
+        ("before", 2),
+        "begin",
+        ("capture", 2),
+    ]
+
+
 def test_opt_in_capture_prime_runs_after_allocations_and_before_capture_gate(monkeypatch):
     events = []
     _patch_backend(monkeypatch, events)
