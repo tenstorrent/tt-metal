@@ -112,6 +112,35 @@ rows are zeroed by the `where` guard, and the output's pad rows are finite garba
 "unspecified"). `tests/test_mhc.py::test_mhc_fast_pad_rows`: finite garbage in the pad rows leaves the real rows
 bit-identical.
 
+## Exact residual update: `GLM53_MHC_EXACT` (2026-10-20, after the merge into `arg/glm53_mesh`)
+
+The default residual update (`A @ x`, one HiFi4 matmul) rounds `comb` and the fp32 residual to bf16 (~1e-3 rel
+rms per wrap); on the layer-3 mesh test it moved the known near-tie user from PCC 0.995003 to 0.994980 (median
+users unchanged at 0.99994). `GLM53_MHC_EXACT=3` (or `1`; `TtMHCFast(exact=3)`) recovers the composite path's
+fp32 precision: the HiFi4 matmul is exact for bf16-exact operands, so `A` (tiny) and the residual are each split
+into 3 bf16 parts (hi/mid/lo: typecast, widen, subtract, twice = 7 ops on the 2 MB residual + 7 tiny) and the 6
+products whose part indices sum to < 3 are stacked along K into ONE bf16 matmul `[128, 768] @ [768, 4096]` with
+fp32 accumulation (two concats build the stacked operands). `GLM53_MHC_EXACT=2` is the 2-way split (3 products,
+4 + 4 split ops). Measured on fp32 streams that are not bf16-exact (dump rows + 1e-3 relative noise), vs the
+composite (`tests/test_mhc.py::test_mhc_exact_residual`, `_logs/optmhc_test_mhc_exact.log`):
+
+| variant | residual update rel rms vs composite (T=4 / 32) | collapse mode | extra ops per wrap | device us per wrap (B=4 / B=32) |
+|---|---|---|---|---|
+| exact=0 (default) | 8.2e-4 / 8.2e-4 | 9.5e-4 / 9.4e-4 | 0 | 228 / 212 |
+| exact=2 | 1.9e-6 / 2.0e-6 | 2.1e-6 / 2.5e-6 | +10 (32 per wrap) | 321 (+93) / not measured (chip handed to the 8x4 e2e) |
+| exact=3 | 1.1e-7 / 1.1e-7 | 1.7e-7 / 1.7e-7 | +16 (38 / 37 per wrap) | 394 / 379 (+166 / +167) |
+
+exact=3 per wrap at B=32 (`layer4_B32_exact3/summary.md`): the residual's 3-way split = 7 ops, 109 us (typecast
+fp32->bf16 13, bf16->fp32 11, subtract 24, twice, + the last typecast 13), the `A` split 7 tiny ops ~15 us, the two
+operand concats 2 + 32 us, the stacked `128 x 768 x 4096` bf16 matmul 27 us (vs 19 us for the default `128 x 128`),
+i.e. +167 us and +16 ops per wrap, +0.33 ms per layer (both wraps; the default fast path is 0.43 ms per layer, the
+composite 2.3 ms). Wall per step not measured for the exact variants (chip handed to the 8x4 e2e); the device-time
+delta is the expectation (+0.33 ms per layer).
+
+Error budget (`_logs/optmhc_probe6.log`, device == host emulation): with 2-way splits the bf16 rounding of the lo
+parts dominates (`A` 2.4e-6, `x` 1.6e-6, the dropped lo*lo term ~1e-6), hence the 3-way split for the 1e-6 bar.
+The h matmul (`P @ x`) stays inexact in every mode (the hidden is bf16 for the sublayer).
+
 ## Tests
 
 | test | what |
@@ -119,7 +148,8 @@ bit-identical.
 | `tests/test_mhc.py::test_mhc_fast_vs_wrap[attn,ffn]` | project / hc_pre / hc_post / forward / forward+fused norm / collapse vs `TtMHCWrap` and vs float64 at T = 1, 2, 32, 256, 1024 on real layer-4 streams and parameters |
 | `tests/test_mhc.py::test_mhc_fast_pad_rows` | the pad-row contract |
 | `tests/test_mhc.py::test_decoder_collapse` | `FunctionalDecoder.decode_forward(collapse=True)` vs the head's collapse of the streams (layer 4, B=2) |
+| `tests/test_mhc.py::test_mhc_exact_residual` | residual update / collapse of exact = 0, 2, 3 vs the composite on non-bf16-exact fp32 streams (bars 5e-3 / 1e-5 / 1e-6) |
 | `tests/test_mhc_perf.py` | one wrap, traced, T=32 and T=1024, both implementations |
 | `tests/test_perf_layer.py` (`GLM53_PERF_B`, `GLM53_PERF_EAGER=1`) + `tests/perf_layer_report.py` | layer-4 traced decode step, wall and per-module Tracy attribution |
 
-Knobs: `GLM53_MHC_IMPL=wrap` restores the composite path (`build_mhc(impl=)`).
+Knobs: `GLM53_MHC_IMPL=wrap` restores the composite path (`build_mhc(impl=)`); `GLM53_MHC_EXACT=0|2|3` (above).

@@ -40,6 +40,10 @@ TILE = 32
 KS_DECODE = 32
 # "fast" (TtMHCFast, this module) | "wrap" (the DeepSeek composite TtMHCWrap, the reference path)
 MHC_IMPL = os.environ.get("GLM53_MHC_IMPL", "fast")
+# TtMHCFast residual update: 0 = one HiFi4 matmul (bf16-rounded operands, ~1e-3 rel rms per wrap); 3 (or 1) =
+# exact: both operands split into 3 bf16 parts, the 6 significant products in one stacked-K matmul (3e-9);
+# 2 = the cheaper 2-way split, 3 products (3e-6). See TtMHCFast._exact_mm.
+MHC_EXACT = {"0": 0, "1": 3, "2": 2, "3": 3}[os.environ.get("GLM53_MHC_EXACT", "0")]
 
 
 @dataclass(frozen=True)
@@ -170,10 +174,21 @@ class TtMHCFast(LightweightModule):
     fuses_norm = True  # forward(norm=(weight, eps)) applies the sublayer's input RMSNorm itself
     supports_collapse = True  # forward(collapse=True) emits the LM head's mean over the new streams
 
-    def __init__(self, device, cfg, fn: torch.Tensor, base: torch.Tensor, scale: torch.Tensor, dtype=ttnn.float32):
+    def __init__(
+        self,
+        device,
+        cfg,
+        fn: torch.Tensor,
+        base: torch.Tensor,
+        scale: torch.Tensor,
+        dtype=ttnn.float32,
+        exact: int | None = None,
+    ):
         assert dtype == ttnn.float32, f"TtMHCFast is fp32-only (fused op requires FLOAT32), got {dtype}"
         self.device = device
         self.cfg = cfg
+        self.exact = MHC_EXACT if exact is None else int(exact)  # residual update: 0 | 2 | 3 bf16 parts
+        assert self.exact in (0, 2, 3), self.exact
         self.n = int(cfg.n)
         self.C = int(cfg.dim)
         self.nC = self.n * self.C
@@ -332,6 +347,55 @@ class TtMHCFast(LightweightModule):
             self._rowmask[T] = _upload(self.device, m, (1, 1, TILE, 1), ttnn.float32)
         return self._rowmask[T]
 
+    def _bf16_parts(self, t: ttnn.Tensor, parts: int) -> list[ttnn.Tensor]:
+        """fp32 ``t`` -> ``parts`` bf16 tensors whose sum is ``t`` to 8*parts mantissa bits (3 parts: all
+        24, i.e. exact): typecast to bf16, widen back, subtract, repeat on the remainder (3*parts - 2 ops)."""
+        out, rem = [], t
+        for k in range(parts):
+            hi = ttnn.typecast(rem, ttnn.bfloat16)
+            out.append(hi)
+            if k < parts - 1:
+                hi32 = ttnn.typecast(hi, ttnn.float32)
+                nxt = ttnn.subtract(rem, hi32)
+                ttnn.deallocate(hi32)
+                if k > 0:
+                    ttnn.deallocate(rem)
+                rem = nxt
+        if parts > 1:
+            ttnn.deallocate(rem)
+        return out
+
+    def _exact_mm(self, coef: ttnn.Tensor, x: ttnn.Tensor) -> ttnn.Tensor:
+        """``coef [1,1,M,K] @ x [1,1,K,N]`` with the composite path's fp32 precision: the HiFi4 matmul is
+        exact for bf16-exact operands, so both are split into ``self.exact`` bf16 parts (hi, mid, lo) and
+        the products whose part indices sum to < parts (the ones above 2^-8*parts) are stacked along K
+        into ONE bf16 matmul with fp32 accumulation. 3 parts: 6 products, 3e-9 rel rms vs float64; 2 parts:
+        3 products, 3e-6 (`_logs/optmhc_probe6.log`)."""
+        parts = self.exact
+        pairs = [(a, b) for a in range(parts) for b in range(parts) if a + b < parts]
+        cp = self._bf16_parts(coef, parts)  # tiny
+        xp = self._bf16_parts(x, parts)  # the residual: 3*parts - 2 ops on 2 MB
+        in0 = ttnn.concat([cp[a] for a, b in pairs], dim=-1)  # [M, K*len(pairs)]
+        in1 = ttnn.concat([xp[b] for a, b in pairs], dim=-2)  # [K*len(pairs), N] bf16
+        for t in cp + xp:
+            ttnn.deallocate(t)
+        kt = coef.shape[-1] // TILE * len(pairs)
+        pc = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(8, 8),
+            in0_block_w=kt,
+            out_subblock_h=1 if coef.shape[-2] == TILE else 2,
+            out_subblock_w=2,
+            per_core_M=coef.shape[-2] // TILE,
+            per_core_N=2,
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=True,
+        )
+        out = ttnn.matmul(in0, in1, compute_kernel_config=self.ckc, program_config=pc, dtype=ttnn.float32)
+        ttnn.deallocate(in0)
+        ttnn.deallocate(in1)
+        return out
+
     # ------------------------------------------------------------------ stages
     def _project(self, x32: ttnn.Tensor, x_sm: ttnn.Tensor) -> ttnn.Tensor:
         """``[1,1,Tp,nC]`` -> mixes ``[1,1,Tp,32]`` = RMSNorm(x) @ fn_T (zero columns past mix_hc)."""
@@ -441,9 +505,11 @@ class TtMHCFast(LightweightModule):
                 pbar = self._coef(post, self.m_post_mean)  # [1, 1, Tp, 1]
                 Pb = ttnn.multiply(self.i_tile, cbar)  # [1,n,Tp,Tp]: delta(t,t') cbar[t,i]
                 ttnn.deallocate(cbar)
-                mix = ttnn.matmul(
-                    ttnn.experimental.view(Pb, [1, 1, Tp, n * Tp]), res_v, compute_kernel_config=self.ckc
-                )  # [1,1,Tp,C]
+                Pb2 = ttnn.experimental.view(Pb, [1, 1, Tp, n * Tp])
+                if self.exact:
+                    mix = self._exact_mm(Pb2, res_v)  # [1,1,Tp,C]
+                else:
+                    mix = ttnn.matmul(Pb2, res_v, compute_kernel_config=self.ckc)
                 ttnn.deallocate(Pb)
                 out = ttnn.addcmul(mix, y32, pbar, output_tensor=mix)
                 ttnn.deallocate(pbar)
@@ -454,12 +520,11 @@ class TtMHCFast(LightweightModule):
             post_c = self._coef(post, self.m_post)  # [1, n(j), Tp, 1]
             A = ttnn.multiply(self.i_tile, comb_c)  # [n,n,Tp,Tp]: delta(t,t') comb[t,i,j]
             ttnn.deallocate(comb_c)
-            mix = ttnn.matmul(
-                ttnn.experimental.view(A, [1, 1, n * Tp, n * Tp]),
-                res_v,
-                compute_kernel_config=self.ckc,
-                program_config=self.pc_mix,
-            )  # [(j,t), c]
+            A2 = ttnn.experimental.view(A, [1, 1, n * Tp, n * Tp])
+            if self.exact:
+                mix = self._exact_mm(A2, res_v)  # [(j,t), c], fp32-exact
+            else:
+                mix = ttnn.matmul(A2, res_v, compute_kernel_config=self.ckc, program_config=self.pc_mix)
             ttnn.deallocate(A)
             mix_sm = ttnn.reshape(mix, [1, n, Tp, self.C])
             out_sm = ttnn.addcmul(mix_sm, y32, post_c, output_tensor=mix_sm)  # + post_j * y
