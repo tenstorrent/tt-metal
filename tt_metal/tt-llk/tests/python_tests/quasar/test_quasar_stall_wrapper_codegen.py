@@ -115,7 +115,6 @@ def emitted(tmp_path_factory):
         [
             str(_COMPILER),
             "-mcpu=tt-qsr32-tensix",
-            "-save-temps=obj",
             "-std=c++17",
             "-S",
             "-O2",
