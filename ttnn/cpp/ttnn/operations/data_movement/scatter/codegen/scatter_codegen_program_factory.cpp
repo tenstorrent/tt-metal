@@ -183,17 +183,11 @@ uint32_t scatter_page_rank(const ttnn::Shape& shape, bool tiled) {
 ScatterPageMap compute_scatter_page_map(const ttnn::Shape& input_shape, const ttnn::Shape& index_shape, bool tiled) {
     const auto input_dims = scatter_page_dims(input_shape, tiled);
     const auto index_dims = scatter_page_dims(index_shape, tiled);
-    TT_FATAL(
-        input_dims.size() == index_dims.size(),
-        "scatter_codegen: page maps require equal-rank input/index tensors (got {} vs {})",
-        input_dims.size(),
-        index_dims.size());
-    const uint32_t rank = static_cast<uint32_t>(input_dims.size());
-    TT_FATAL(
-        rank <= kScatterMaxPageRank,
-        "scatter_codegen: at most {} page dimensions are supported; got {}",
-        kScatterMaxPageRank,
-        rank);
+    // Runs ahead of validate_on_program_cache_miss (build_scatter_codegen_params), which owns the
+    // equal-rank and max-rank checks; clamp so an operand validate will reject cannot index past
+    // the fixed-width map here.
+    const uint32_t rank = static_cast<uint32_t>(
+        std::min({input_dims.size(), index_dims.size(), static_cast<size_t>(kScatterMaxPageRank)}));
     ScatterPageMap page_map{};
     page_map[0] = rank;
     for (uint32_t i = 0; i < kScatterMaxPageRank; ++i) {
