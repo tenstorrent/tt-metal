@@ -302,3 +302,60 @@ from one Python thread, so four rows give 1.5x one row, not 4x.
 its second decode step (" that" and " of" both 17.625), and the host loop's `MiMoGalaxyGenerator.greedy_token` took the
 first of the per-chip top-k candidates while the device loop's GreedyHead takes the lowest id. `greedy_token` now takes
 the lowest id too, like `torch.argmax` over the full logits.
+
+## Accuracy, 2026-10-20 (branch `mimo-v2.6/top1`, MOPD)
+
+The 40-row top-1 of `test_model_tp8_dp4.py` went from 0.975 (`mimo-v2.6/dev`) to 0.925 on the merged vLLM branch. Six of
+its 40 rows have a reference top-2 margin under 0.2 logits. Rows with such a margin are near coin flips for every
+expert format below, so this metric moves by a row or two between equivalent builds. With the final experts, the
+measured hit rates give an expected 40-row top-1 of 0.926, and a 13% chance of reaching 0.975. Accuracy is measured
+here on many positions instead.
+
+**Larger golden** (`reference/make_golden_large.py`):
+- 32 C4 sequences of 96 tokens, from documents past the ones the GPTQ calibration uses.
+- The fp32 reference's last hidden states; the scorer applies the final norm and LM head.
+
+**Two tests on that golden:**
+- `test_model_error_tp8_dp4.py`: prefill every sequence whole. The device's last hidden states go through the fp32
+  head on the host.
+- `test_model_decode_eval_tp8_dp4.py`: teacher-forced decode after an 8-token prefill. These are the 40-row test's
+  decode rows, at 70x the count.
+
+**What changed:**
+- **fp32 logits** (HiFi2, fp32 accumulation). In bf16 the logits step is 0.125 at the usual top logit of 16-32, so
+  near-tied rows often tie exactly and the lowest token id wins. 3 of the 40 rows tied on the merged branch.
+  GreedyScan reads fp32. Decode step: 13.44 / 15.14 ms (1 / 4 rows), against 13.48 / 15.06.
+- **Prefill SDPA in fp32 dest.** Decode SDPA stays in bf16 dest: paged decode SDPA gave non-finite values with fp32
+  dest.
+- **Expert values prepared for bfloat4_b.** Same format, memory and speed; only the values change.
+  - MSE: each 16-value block takes the best shared exponent of {e, e-1, e+1}. This is tt-quant's `mse` policy
+    (`common.bfp_mse_prepare`), and it matches tt-quant's values exactly.
+  - GPTQ (`tests/perf/gptq_experts.py`): per expert, on routing-weighted input Hessians from 16K C4 tokens, with the
+    exponents {e, e+1}. Experts with fewer than 64 routed tokens use MSE.
+  - MXFP4 to bfloat4_b is a second quantization. E2M1 values need 4 magnitude bits on a shared grid, and bfloat4_b
+    has 3. The stock packer gives a weight SQNR of about 18.3 dB; MSE gives about 20.9 dB.
+  - A host fp32 reference with only the MSE expert values swapped in reproduces the device's error (positions >= 2:
+    KL 0.0143 vs 0.0146). So the expert values are what is left, not activations, attention or KV.
+
+`MIMO_EXPERT_QUANT=stock|mse|gptq` picks the expert values; each has its own cache files. `mse` is the default. `gptq`
+needs `gptq_experts.py` output in `MIMO_EXPERT_PREP_DIR` the first time its cache is built.
+
+| Experts | Prefill: top-1 / top-1 at margin >= 0.5 / KL (3072 positions) | Decode: top-1 / top-1 at margin >= 0.5 / KL (2784 positions) |
+|---|---|---|
+| stock packer (`mimo-v2.6/dev`, merged branch) | 0.8945 / 0.9739 / 0.0609 | 0.9077 / 0.9755 / 0.0556 |
+| MSE | 0.9020 / 0.9780 / 0.0466 | 0.9030 / 0.9830 / 0.0310 |
+| **GPTQ** | **0.9160 / 0.9876 / 0.0330** | **0.9242 / 0.9880 / 0.0274** |
+
+Decode top-1 by reference margin (stock -> GPTQ):
+
+| Reference margin | stock | GPTQ |
+|---|---|---|
+| < 0.1 | 0.53 | 0.51 |
+| 0.1-0.2 | 0.65 | 0.73 |
+| 0.2-0.5 | 0.84 | 0.86 |
+| 0.5-1 | 0.937 | 0.972 |
+| > 1 | 0.990 | 0.994 |
+
+On the 8 golden prompts (100 positions, `test_model_error_tp8_dp4.py`), the mean KL goes from 0.1535 (stock, bf16
+logits) to 0.068 (GPTQ). The first token's massive activation (about 1090 in dim 2412, cancelled in layers 41-45) had
+carried most of it.
