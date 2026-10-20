@@ -118,6 +118,31 @@ def _all_reduce(x, memory_config=ttnn.DRAM_MEMORY_CONFIG):
     return _TPAllReduce.get(x)(x, memory_config)
 
 
+def _mm_config_256(k, n):
+    """Program config for the drafter's [256, k] x [k, n] matmuls (None: the auto config). Measured on one device
+    (BF16 weights, HiFi4): the auto config spreads these narrow outputs over few cores with all 8 row tiles each; 2D
+    over 10 x 8 cores (one row tile, n / 10 columns each) is 1.4-2.0x faster (QKV 74 -> 37 us, gate / up 86 -> 49,
+    down 73 -> 51, o_proj 45 -> 33); the fc (k = 14400) is fastest 1D over 90 cores (487 -> 293 us). Round at ISL
+    256 49.2 -> 47.6 ms, acceptance 4.72 -> 4.77. (The verify's QKV / o_proj in these configs: 47.7 ms but acceptance
+    4.38 and agreement with plain decode 0.986 -> 0.974: not used there.)"""
+    kt, nt = k // TILE, n // TILE
+    if k == 14400 and nt == 90:
+        return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(11, 9), in0_block_w=10, out_subblock_h=1, out_subblock_w=1,
+            out_block_h=8, out_block_w=1, per_core_M=8, per_core_N=1, fuse_batch=True, fused_activation=None,
+            mcast_in0=True,
+        )  # fmt: skip
+    if nt % 10:
+        return None
+    pn = nt // 10
+    bw = {90: 10, 60: 12, 32: 8}.get(kt, max(d for d in range(1, 17) if kt % d == 0))
+    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(10, 8), in0_block_w=bw, out_subblock_h=1,
+        out_subblock_w=max(d for d in range(1, 5) if pn % d == 0), out_block_h=1, out_block_w=pn, per_core_M=1,
+        per_core_N=pn, transpose_mcast=False, fused_activation=None,
+    )  # fmt: skip
+
+
 class _Argmax:
     """Row argmax over a vocabulary split over the mesh columns: each device's best (value, index) on device; the host
     combines the devices (read after the pass)."""
@@ -304,6 +329,7 @@ class BatchedDraft:
         self.ck = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=False
         )
+        # (HiFi2 / LoFi: no faster at 256 rows -- not compute-bound)
         self.mm_ck = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=True
         )
@@ -314,10 +340,12 @@ class BatchedDraft:
 
     # -- pieces ----------------------------------------------------------------------------------------------------
     def _linear(self, x, w, bias=None):
+        pc = _mm_config_256(w.shape[-2], w.shape[-1]) if x.shape[-2] == self.rows else None
         return ttnn.linear(
             x,
             w,
             bias=bias,
+            program_config=pc,
             dtype=ttnn.bfloat16,
             compute_kernel_config=self.mm_ck,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -831,7 +859,13 @@ class BatchedVerify:
         normed = layer.input_layernorm.forward_sharded(res)
         x = ttnn.to_memory_config(normed, ttnn.DRAM_MEMORY_CONFIG)
         normed.deallocate(True)
-        qkv = ttnn.linear(x, w.wqkv, bias=w.wqkv_bias, dtype=ttnn.bfloat16, compute_kernel_config=self.qkv_ck)
+        qkv = ttnn.linear(
+            x,
+            w.wqkv,
+            bias=w.wqkv_bias,
+            dtype=ttnn.bfloat16,
+            compute_kernel_config=self.qkv_ck,
+        )
         x.deallocate(True)
         k_cache, v_cache = self.kv_cache[li]
         block_attn = self.block_attn is not None and not cfg.sliding_window
@@ -896,7 +930,12 @@ class BatchedVerify:
         heads = ttnn.experimental.nlp_concat_heads(perm, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         perm.deallocate(True)
         op = attn_mod.batched_oproj
-        o = ttnn.matmul(heads, self.oproj_w[li], dtype=ttnn.bfloat16, compute_kernel_config=self.qkv_ck)
+        o = ttnn.matmul(
+            heads,
+            self.oproj_w[li],
+            dtype=ttnn.bfloat16,
+            compute_kernel_config=self.qkv_ck,
+        )
         heads.deallocate(True)
         # the decode's BF8 partial sum (the bias inside the matmul with a BF8 output: top-1 vs HF 0.08)
         partial = ttnn.add(o, op.bias, dtype=ttnn.bfloat8_b)
