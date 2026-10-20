@@ -750,23 +750,40 @@ std::optional<MatmulUnifiedProgramConfig> choose_unified_placement(
     }
 
     constexpr tt::tt_metal::ShardOrientation ROW_MAJOR = tt::tt_metal::ShardOrientation::ROW_MAJOR;
-    // 2D: a rectangle of cores over C's rows and columns, the plan picking the C slice.
+    // 2D: a rectangle of cores over C's rows and columns, the plan picking the C slice. It is the rectangle the
+    // largest C slices (C over the grid's rows and columns, rounded up) fill, so A and B multicast along its rows and
+    // columns.
     try_placement(
-        CoreRangeSet(CoreRange({0, 0}, {std::min(grid_columns, N_tiles) - 1, std::min(grid_rows, M_tiles) - 1})),
+        CoreRangeSet(CoreRange(
+            {0, 0},
+            {tt::div_up(N_tiles, tt::div_up(N_tiles, grid_columns)) - 1,
+             tt::div_up(M_tiles, tt::div_up(M_tiles, grid_rows)) - 1})),
         ROW_MAJOR,
         std::nullopt,
         std::nullopt);
 
     // 1D across N (M): whole grid rows (part of one row for a narrow C) splitting C's columns (rows). With one C slice
-    // per core every core needs the same A (B), which is multicast to all of them.
-    const CoreRangeSet across_N_cores(CoreRange(
-        {0, 0}, {std::min(grid_columns, N_tiles) - 1, std::clamp(N_tiles / grid_columns, 1u, grid_rows) - 1}));
-    const CoreRangeSet across_M_cores(CoreRange(
-        {0, 0}, {std::min(grid_columns, M_tiles) - 1, std::clamp(M_tiles / grid_columns, 1u, grid_rows) - 1}));
-    try_1D_placement(
-        across_N_cores, ROW_MAJOR, tt::div_up(N_tiles, across_N_cores.num_cores()), /*C_slices_are_columns=*/true);
-    try_1D_placement(
-        across_M_cores, ROW_MAJOR, tt::div_up(M_tiles, across_M_cores.num_cores()), /*C_slices_are_columns=*/false);
+    // per core every core needs the same A (B), multicast to all of them when the C slices fill every core; so when
+    // they do not, also the most whole rows they fill.
+    for (const bool C_slices_are_columns : {true, false}) {
+        const uint32_t C_width_tiles = C_slices_are_columns ? N_tiles : M_tiles;
+        const uint32_t columns = std::min(grid_columns, C_width_tiles);
+        const uint32_t all_rows = std::clamp(C_width_tiles / grid_columns, 1u, grid_rows);
+        for (uint32_t rows = all_rows; rows >= 1; --rows) {
+            const uint32_t C_slice_width_tiles = tt::div_up(C_width_tiles, columns * rows);
+            const bool C_slices_fill_the_cores = tt::div_up(C_width_tiles, C_slice_width_tiles) == columns * rows;
+            if (rows == all_rows || C_slices_fill_the_cores) {
+                try_1D_placement(
+                    CoreRangeSet(CoreRange({0, 0}, {columns - 1, rows - 1})),
+                    ROW_MAJOR,
+                    C_slice_width_tiles,
+                    C_slices_are_columns);
+            }
+            if (C_slices_fill_the_cores) {
+                break;
+            }
+        }
+    }
 
     // 1D on a sharded operand's cores, which keeps it where it is: an L1 shard can then be bound in place, and a DRAM
     // shard is read by the core next to its bank.
