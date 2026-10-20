@@ -48,7 +48,6 @@
 #include <tt-metalium/tile.hpp>
 #include <umd/device/types/arch.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
-#include <tt-metalium/int8.hpp>
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 namespace tt::tt_metal {
@@ -1397,8 +1396,8 @@ std::pair<vector<uint32_t>, vector<uint32_t>> generate_packed_sfpu_binary_inputs
         return {lhs, rhs};
     }
     if (is_int8_binary_sfpu_op(op_name)) {
-        auto lhs = create_random_vector_of_int8(numel, seed);
-        auto rhs = create_random_vector_of_int8(numel, seed + 1);
+        auto lhs = tt::test_utils::create_random_vector_of_int8(numel, seed);
+        auto rhs = tt::test_utils::create_random_vector_of_int8(numel, seed + 1);
         return {lhs, rhs};
     }
     TT_THROW("Unsupported binary op_name in test");

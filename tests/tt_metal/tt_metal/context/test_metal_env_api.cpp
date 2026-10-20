@@ -31,8 +31,8 @@ TEST(MetalEnv, Mock) {
         .mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::WORMHOLE_B0, 1)};
     MetalEnv env_1(settings);
     MetalEnv env_2(settings);
-    EXPECT_EQ(env_1.get_arch(), tt::ARCH::WORMHOLE_B0);
-    EXPECT_EQ(env_2.get_arch(), tt::ARCH::WORMHOLE_B0);
+    EXPECT_EQ(env_1.get_device_properties().arch(), tt::ARCH::WORMHOLE_B0);
+    EXPECT_EQ(env_2.get_device_properties().arch(), tt::ARCH::WORMHOLE_B0);
 }
 
 TEST(MetalEnv, OnePhysicalMultipleMock) {
@@ -47,31 +47,52 @@ TEST(MetalEnv, OnePhysicalMultipleMock) {
 
 TEST(MetalEnv, EnvQueries) {
     MetalEnv env;
-    EXPECT_NO_THROW(env.get_arch());
-    EXPECT_NO_THROW(env.get_arch_name());
     EXPECT_NO_THROW(env.get_num_pcie_devices());
-    EXPECT_NO_THROW(env.get_l1_size());
-    EXPECT_NO_THROW(env.get_dram_alignment());
-    EXPECT_NO_THROW(env.get_l1_alignment());
-    EXPECT_NO_THROW(env.get_num_dataflow_buffers());
-    EXPECT_NO_THROW(env.get_max_worker_l1_unreserved_size());
-    EXPECT_NO_THROW(env.get_eps());
-    EXPECT_NO_THROW(env.get_nan());
-    EXPECT_NO_THROW(env.get_inf());
+    const auto props = env.get_device_properties();
+    EXPECT_NO_THROW(props.arch());
+    EXPECT_NO_THROW(props.arch_name());
+    EXPECT_NO_THROW(props.node_local_mem_size());
+    EXPECT_NO_THROW(props.dram_alignment());
+    EXPECT_NO_THROW(props.node_local_mem_alignment());
+    EXPECT_NO_THROW(props.num_dataflow_buffers());
+    EXPECT_NO_THROW(props.max_worker_node_local_mem_unreserved_size());
+    EXPECT_NO_THROW(props.sfpu_eps());
+    EXPECT_NO_THROW(props.sfpu_nan());
+    EXPECT_NO_THROW(props.sfpu_inf());
 }
 
 TEST(MetalEnv, EnvQueriesMock) {
     MetalEnv env({.mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::BLACKHOLE, 2)});
-    EXPECT_EQ(env.get_arch(), tt::ARCH::BLACKHOLE);
-    EXPECT_NO_THROW(env.get_l1_size());
     EXPECT_EQ(env.get_num_pcie_devices(), 2);
-    EXPECT_NO_THROW(env.get_dram_alignment());
-    EXPECT_NO_THROW(env.get_l1_alignment());
-    EXPECT_NO_THROW(env.get_num_dataflow_buffers());
-    EXPECT_NO_THROW(env.get_max_worker_l1_unreserved_size());
-    EXPECT_NO_THROW(env.get_eps());
-    EXPECT_NO_THROW(env.get_nan());
-    EXPECT_NO_THROW(env.get_inf());
+    const auto props = env.get_device_properties();
+    EXPECT_EQ(props.arch(), tt::ARCH::BLACKHOLE);
+    EXPECT_NO_THROW(props.node_local_mem_size());
+    EXPECT_NO_THROW(props.dram_alignment());
+    EXPECT_NO_THROW(props.node_local_mem_alignment());
+    EXPECT_NO_THROW(props.num_dataflow_buffers());
+    EXPECT_NO_THROW(props.max_worker_node_local_mem_unreserved_size());
+    EXPECT_NO_THROW(props.sfpu_eps());
+    EXPECT_NO_THROW(props.sfpu_nan());
+    EXPECT_NO_THROW(props.sfpu_inf());
+}
+
+TEST(MetalEnv, DevicePropertiesCopyAndAssign) {
+    MetalEnv env_wh({.mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::WORMHOLE_B0, 1)});
+    MetalEnv env_bh({.mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::BLACKHOLE, 2)});
+
+    // The handle is a regular value type: copyable and reassignable to a view of another env.
+    MetalDeviceProperties props = env_wh.get_device_properties();
+    const MetalDeviceProperties props_copy = props;
+    EXPECT_EQ(props_copy.arch(), tt::ARCH::WORMHOLE_B0);
+    EXPECT_EQ(props_copy.node_local_mem_alignment(), env_wh.get_device_properties().node_local_mem_alignment());
+
+    props = env_bh.get_device_properties();
+    EXPECT_EQ(props.arch(), tt::ARCH::BLACKHOLE);
+    EXPECT_EQ(props.arch_name(), "blackhole");
+    EXPECT_EQ(props.node_local_mem_size(), env_bh.get_device_properties().node_local_mem_size());
+
+    // The earlier copy still refers to the first env.
+    EXPECT_EQ(props_copy.arch(), tt::ARCH::WORMHOLE_B0);
 }
 
 TEST(MetalEnv, ForkSafety) {
