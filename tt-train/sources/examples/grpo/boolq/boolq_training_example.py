@@ -135,4 +135,3 @@ if __name__ == "__main__":
         optimizer_dict=optimizer_dict,
     )
     grpo_trainer.train()
-    logging.info("BOOLQ GRPO TRAINING COMPLETE")
