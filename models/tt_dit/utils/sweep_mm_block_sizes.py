@@ -197,6 +197,11 @@ SHAPES = [
     (3424, 5376, 5376, 8, 8, True, "qkv"),
     (3424, 7168, 1344, 8, 8, True, "plain"),
     (3424, 5376, 7168, 8, 8, True, "ff1_swiglu"),
+    # Same three shapes as a plain single-chip minimal_matmul (full K already present): the
+    # difference to the AGMM rows above is the cost of the ring gather and its data movement.
+    (3424, 5376, 5376, 8, 8, False, "plain"),
+    (3424, 7168, 1344, 8, 8, False, "plain"),
+    (3424, 5376, 7168, 8, 8, False, "plain"),
     # MiniMax-H3 fused MM+RS+addcmul (ff2). K = 14336 / tp = 3584 is already per-device. The core grid
     # is the *matmul* grid; the reduce-scatter takes the rows above it, so one entry per candidate grid.
     (4768, 3584, 5376, 12, 7, False, "mmrs"),
@@ -915,11 +920,14 @@ def _build_op_runner(cfg, mesh_device, M, K, N, dtype, is_agmm, uc_cfg, core_gri
     """
     # MM_SWEEP_FIDELITY=LoFi|HiFi2|HiFi3|HiFi4 overrides the model's HiFi2 for A/B runs.
     fidelity = getattr(ttnn.MathFidelity, os.environ.get("MM_SWEEP_FIDELITY", "HiFi2"))
+    # MM_SWEEP_FP32_DEST=0 switches to bf16 DST accumulation (8 DST tiles, so 2x4 subblocks) for
+    # A/B runs; the model runs fp32 (default 1).
+    fp32_dest = os.environ.get("MM_SWEEP_FP32_DEST", "1") != "0"
     compute_config = ttnn.init_device_compute_kernel_config(
         mesh_device.arch(),
         math_fidelity=fidelity,
         math_approx_mode=uc_cfg.get("math_approx_mode", False),
-        fp32_dest_acc_en=True,
+        fp32_dest_acc_en=fp32_dest,
         packer_l1_acc=True,
     )
 
