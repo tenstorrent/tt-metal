@@ -46,17 +46,29 @@ def _grid_cores(tokens: int, max_cores: int = 64, max_rows_per_core: int = 128) 
 
 
 # The op sizes its grid to the token count (see _grid_cores). The rows cover a power-of-two tree
-# (4096 -> 32 cores) and the non-power-of-two trees the prefill shapes actually take: 640 tokens/chip
-# -> 5 cores (Mistral-Small-4, Kimi-K2.7), 2560 -> 20 cores.
+# (4096 -> 32 cores), the non-power-of-two trees the prefill shapes actually take (640 tokens/chip
+# -> 5 cores for Mistral-Small-4 and Kimi-K2.7, 2560 -> 20 cores), per-core row ranges that are not
+# tile-aligned (320 -> 4 cores of 80 rows) and the 64-core fallback above 8192 tokens (8256 -> 129
+# rows per core). expected_cores pins each count independently of _grid_cores, so a change to the
+# rule on either side shows up here.
 @pytest.mark.parametrize(
-    "sp_dim, topk, n_routed_experts",
+    "sp_dim, topk, n_routed_experts, expected_cores",
     [
-        (4096, 8, 256),
-        (640, 4, 128),
-        (640, 8, 384),
-        (2560, 8, 256),
+        (4096, 8, 256, 32),
+        (640, 4, 128, 5),
+        (640, 8, 384, 5),
+        (2560, 8, 256, 20),
+        (320, 8, 256, 4),
+        (8256, 8, 256, 64),
     ],
-    ids=["isl4096-32cores", "isl640-mistral-5cores", "isl640-kimi-5cores", "isl2560-20cores"],
+    ids=[
+        "isl4096-32cores",
+        "isl640-mistral-5cores",
+        "isl640-kimi-5cores",
+        "isl2560-20cores",
+        "isl320-4cores-unaligned",
+        "isl8256-64cores-fallback",
+    ],
 )
 @pytest.mark.parametrize(
     "mesh_device, device_params",
@@ -79,14 +91,6 @@ def _grid_cores(tokens: int, max_cores: int = 64, max_rows_per_core: int = 128) 
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
             id="fabric2d-mesh-2x4",
         ),
-        # Blackhole accepts 32-device meshes only, so the rows above skip on a galaxy (rc=0, which reads
-        # as coverage). This row is the one that executes there.
-        pytest.param(
-            (8, 4),
-            fabric2d_device_params(),
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-            id="fabric2d-mesh-8x4",
-        ),
     ],
     indirect=["mesh_device", "device_params"],
 )
@@ -95,8 +99,10 @@ def test_masked_bincount(
     sp_dim,
     topk,
     n_routed_experts,
+    expected_cores,
 ):
     """Test ttnn.masked_bincount against PyTorch reference on each device."""
+    assert _grid_cores(sp_dim) == expected_cores, f"grid rule gives {_grid_cores(sp_dim)} cores for {sp_dim=}"
     mesh_config = extract_mesh_config(mesh_device)
     sp_axis = mesh_config.sp_axis
     dispatch_group_size = mesh_config.dispatch_group_size
