@@ -24,6 +24,7 @@ Passes (device tensors throughout; the host writes the per-round inputs and read
 
 import math
 import os
+import struct
 import time
 
 import torch
@@ -112,6 +113,192 @@ class _TPAllReduce:
         moved = ttnn.to_memory_config(out, memory_config)
         out.deallocate(True)
         return moved
+
+
+class _ResNorm:
+    """The residual add and the RMSNorm in one program (fused_decode/kernels/resnorm_*.cpp): the all-reduce output
+    (its [rows, hidden] width shards, _TPAllReduce.memory_config) + the residual (block sharded on GX x rows / 32 cores,
+    [32, hidden / GX] each) -> the new residual (same layout) and its RMSNorm (L1 interleaved, BF16). Replaces the
+    reshard of the all-reduce output to the residual, the add, the sharded norm and the norm output's copy to L1
+    interleaved. Each core sums its rows' squares over its 9 column tiles; the row's 10 partials are exchanged
+    (every core of a row gets all 10)."""
+
+    GX = 10
+
+    def __init__(self, mesh, rows, hidden, res_mc, ar_mc):
+        self.mesh, self.rows, self.hidden, self.res_mc = mesh, rows, hidden, res_mc
+        self.nt = hidden // TILE
+        self.nb = self.nt // self.GX
+        grid = ar_mc.shard_spec.grid.bounding_box()
+        gw = grid.end.x - grid.start.x + 1
+        assert ar_mc.shard_spec.shape[1] == TILE and gw * (grid.end.y - grid.start.y + 1) == self.nt
+        ar_cores = [ttnn.CoreCoord(grid.start.x + c % gw, grid.start.y + c // gw) for c in range(self.nt)]
+        res_cores = [ttnn.CoreCoord(x, y) for y in range(rows // TILE) for x in range(self.GX)]
+
+        def nocs(cores):
+            w = []
+            for c in cores:
+                p = mesh.worker_core_from_logical_core(c)
+                w.append((p.x << 8) | p.y)
+            w += [0] * (len(w) % 2)
+            return [w[i] | (w[i + 1] << 16) for i in range(0, len(w), 2)]
+
+        self.ar_noc, self.res_noc = nocs(ar_cores), nocs(res_cores)
+        self.cores = ttnn.CoreRangeSet(
+            [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(self.GX - 1, rows // TILE - 1))]
+        )
+        self.gammas = {}
+
+    def gamma(self, norm):
+        """norm's weights (an RMSNorm module, or its weights tensor [1, 1, hidden / 32, 32]) as [32, hidden] BF16 tiles
+        (every row the weights; DRAM), cached per module / tensor."""
+        if id(norm) not in self.gammas:
+            wt = norm.tt_weight if hasattr(norm, "tt_weight") else norm
+            w = ttnn.to_torch(ttnn.get_device_tensors(wt)[0]).float().reshape(-1)
+            assert w.numel() == self.hidden
+            self.gammas[id(norm)] = ttnn.from_torch(
+                w[None, None, None, :].expand(1, 1, TILE, self.hidden).contiguous(), dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT, device=self.mesh, memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
+            )  # fmt: skip
+        return self.gammas[id(norm)]
+
+    @staticmethod
+    def _ck(f32_res, cb_r):
+        fid = getattr(ttnn.MathFidelity, os.environ.get("B32_RESNORM_FID", "HiFi4"))
+        ck = ttnn.ComputeConfigDescriptor(math_fidelity=fid, fp32_dest_acc_en=True, math_approx_mode=False)
+        if f32_res:  # (the FP32 residual straight to DST: its add on the SFPU keeps every bit)
+            modes = [ttnn.UnpackToDestMode.Default] * 64
+            modes[cb_r] = ttnn.UnpackToDestMode.UnpackToDestFp32
+            ck.unpack_to_dest_mode = modes
+        return ck
+
+    def router_bias(self, r):
+        """The router's bias as a [32, 32] BF16 tile with every row the bias (DRAM), cached per router."""
+        key = ("rb", id(r))
+        if key not in self.gammas:
+            b = ttnn.to_torch(ttnn.get_device_tensors(r.bias)[0]).float().reshape(-1)[:TILE]
+            self.gammas[key] = ttnn.from_torch(
+                b[None, None, None, :].expand(1, 1, TILE, TILE).contiguous(), dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT, device=self.mesh, memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
+            )  # fmt: skip
+        return self.gammas[key]
+
+    def row_tiles(self, t):
+        """A [1, hidden] (or [1, 1, 1, hidden]) bias as [32, hidden] BF16 tiles, every row the bias (DRAM), cached."""
+        key = ("bias", id(t))
+        if key not in self.gammas:
+            b = ttnn.to_torch(ttnn.get_device_tensors(t)[0]).float().reshape(-1)[: self.hidden]
+            self.gammas[key] = ttnn.from_torch(
+                b[None, None, None, :].expand(1, 1, TILE, self.hidden).contiguous(), dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT, device=self.mesh, memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
+            )  # fmt: skip
+        return self.gammas[key]
+
+    def __call__(self, y, res, norm, out_bf16=True, x8=False, router=None, eps=None, bias=None, out_dtype=None):
+        """y: the all-reduce output (width shards); res: the residual. Returns [res + y, then the outputs asked for:
+        rmsnorm(res + y) in BF16 (out_bf16), in BFP8 (x8), and router (the MoE router module): its logits
+        rmsnorm(res + y) W + b ([rows, 32] BF16; each core's 9 K tiles, the row's 10 partials summed in FP32)].
+        An FP32 residual (the drafter's) is added in FP32 on the SFPU; bias: a [1, hidden] tensor added with y (row_tiles);
+        out_dtype: the normed output's dtype (BF16 default, FP32)."""
+        from ..fused_decode.boundary import KERNEL_DIR
+
+        g = self.gamma(norm)
+        shape = [1, 1, self.rows, self.hidden]
+        mk = lambda shp, dt: ttnn.empty(shp, dtype=dt, layout=ttnn.TILE_LAYOUT, device=self.mesh,
+                                         memory_config=ttnn.L1_MEMORY_CONFIG)  # fmt: skip
+        f32_res = res.dtype == ttnn.float32
+        out_dtype = out_dtype or ttnn.bfloat16
+        eps = norm.eps if eps is None else eps
+        res2 = ttnn.empty(shape, dtype=res.dtype, layout=ttnn.TILE_LAYOUT, device=self.mesh, memory_config=self.res_mc)
+        out = mk(shape, out_dtype) if out_bf16 else None
+        out8 = mk(shape, ttnn.bfloat8_b) if x8 else None
+        logits = mk([1, 1, self.rows, TILE], ttnn.bfloat16) if router is not None else None
+        (cb_y, cb_r, cb_g, cb_sc, cb_all, cb_r2, cb_sq, cb_part, cb_rs, cb_t, cb_n, cb_n8, cb_nm, cb_w, cb_lp, cb_lall,
+         cb_lb, cb_lo, cb_b) = range(19)  # fmt: skip
+        f32 = lambda v: struct.unpack("<I", struct.pack("<f", v))[0]
+        cores = self.cores
+        defines = ([("RN_OUT_BF16", "1")] if out_bf16 else []) + ([("RN_X8", "1")] if x8 else [])
+        defines += ([("RN_F32", "1")] if f32_res else []) + ([("RN_BIAS", "1")] if bias is not None else [])
+        reader_ct = [cb_y, cb_r, cb_g, cb_sc, cb_all, self.nb, self.GX, cb_w, cb_lb, cb_lall, cb_b]
+        reader_ct += ttnn.TensorAccessorArgs(g).get_compile_time_args()
+        reader_args = [y.buffer_address(), g.buffer_address()]
+        io = [y, res, g, res2]
+        if router is not None:
+            defines.append(("RN_ROUTER", "1"))
+            lb = self.router_bias(router)
+            reader_ct += ttnn.TensorAccessorArgs(router.weight).get_compile_time_args()
+            reader_ct += ttnn.TensorAccessorArgs(lb).get_compile_time_args()
+            reader_args += [router.weight.buffer_address(), lb.buffer_address()]
+            io += [router.weight, lb]
+        if bias is not None:
+            bt = self.row_tiles(bias)
+            reader_ct += ttnn.TensorAccessorArgs(bt).get_compile_time_args()
+            reader_args.append(bt.buffer_address())
+            io.append(bt)
+        n_tile = 4096 if out_dtype == ttnn.float32 else 2048
+        writer_ct = [cb_part, cb_all, cb_n, self.nb, self.GX, self.nt, cb_n8, cb_lp, cb_lall, cb_lo, n_tile]
+        for t in (out, out8, logits):
+            if t is not None:
+                writer_ct += ttnn.TensorAccessorArgs(t).get_compile_time_args()
+                io.append(t)
+        writer_args = [t.buffer_address() if t is not None else 0 for t in (out, out8, logits)] + self.res_noc
+        dm = ttnn.DataMovementConfigDescriptor
+        kernels = [
+            ttnn.KernelDescriptor(
+                kernel_source=str(KERNEL_DIR / "resnorm_reader.cpp"), core_ranges=cores, compile_time_args=reader_ct,
+                runtime_args=[], common_runtime_args=reader_args + self.ar_noc, defines=defines,
+                config=dm(processor=ttnn.DataMovementProcessor.RISCV_1, noc=ttnn.NOC.NOC_0),
+            ),
+            ttnn.KernelDescriptor(
+                kernel_source=str(KERNEL_DIR / "resnorm_writer.cpp"), core_ranges=cores, compile_time_args=writer_ct,
+                runtime_args=[], common_runtime_args=writer_args, defines=defines,
+                config=dm(processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.NOC_1),
+            ),
+            ttnn.KernelDescriptor(
+                kernel_source=str(KERNEL_DIR / "resnorm_compute.cpp"), core_ranges=cores,
+                compile_time_args=[cb_y, cb_r, cb_g, cb_sc, cb_all, cb_r2, cb_sq, cb_part, cb_rs, cb_t, cb_n, self.nb,
+                                   self.GX, f32(1.0 / self.hidden), f32(eps), cb_n8, cb_nm, cb_w, cb_lp, cb_lall,
+                                   cb_lb, cb_lo, cb_b],
+                runtime_args=[], defines=defines, config=self._ck(f32_res, cb_r),
+            ),
+        ]  # fmt: skip
+
+        def cb(i, dtype, page, pages):
+            return ttnn.CBDescriptor(total_size=page * pages, core_ranges=cores,
+                                     format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=i, data_format=dtype,
+                                                                                 page_size=page)])  # fmt: skip
+
+        bf, fp, b8 = ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b
+        nb = self.nb
+        cbs = [
+            cb(cb_y, bf, 2048, nb),
+            ttnn.cb_descriptor_from_sharded_tensor(cb_r, res),
+            cb(cb_g, bf, 2048, nb),
+            cb(cb_sc, bf, 2048, 1),
+            cb(cb_all, fp, 4096, self.GX),
+            ttnn.cb_descriptor_from_sharded_tensor(cb_r2, res2),
+            # (x^2 and x rs in one allocation: x^2 is consumed before x rs is written)
+            ttnn.CBDescriptor(total_size=4096 * nb, core_ranges=cores, format_descriptors=[
+                ttnn.CBFormatDescriptor(buffer_index=cb_sq, data_format=fp, page_size=4096),
+                ttnn.CBFormatDescriptor(buffer_index=cb_t, data_format=fp, page_size=4096)]),
+            cb(cb_part, fp, 4096, 1),
+            cb(cb_rs, fp, 4096, 1),
+        ]  # fmt: skip
+        if out_bf16:
+            cbs.append(cb(cb_n, out_dtype, n_tile, 2))
+        if bias is not None:
+            cbs.append(cb(cb_b, bf, 2048, nb))
+        if x8:
+            cbs.append(cb(cb_n8, b8, 1088, 2))
+        if router is not None:
+            cbs += [cb(cb_nm, bf, 2048, nb), cb(cb_w, bf, 2048, nb), cb(cb_lp, fp, 4096, 1),
+                    cb(cb_lall, fp, 4096, self.GX), cb(cb_lb, bf, 2048, 1), cb(cb_lo, bf, 2048, 1)]  # fmt: skip
+        sems = [ttnn.SemaphoreDescriptor(i, ttnn.CoreType.WORKER, cores, 0) for i in range(2)]
+        ttnn.generic_op(io, ttnn.ProgramDescriptor(kernels=kernels, semaphores=sems, cbs=cbs))
+        return [res2] + [t for t in (out, out8, logits) if t is not None]
 
 
 def _all_reduce(x, memory_config=ttnn.DRAM_MEMORY_CONFIG):
@@ -589,6 +776,13 @@ class BatchedDraft:
                 ttnn.ShardOrientation.ROW_MAJOR, use_height_and_width_as_shard_shape=True,
             )  # fmt: skip
         self.norm_pc = sharded_norm_program_config(self.res_mc)
+        # (B32_DRAFT_RESNORM, with the block residual: each residual add (+ the o_proj bias) and the norm after it in
+        # one program (_ResNorm, FP32 residual, FP32 norm outputs as the sharded norm's); the all-reduces' outputs stay in
+        # their width shards)
+        self.rn = None
+        if self.res_block and os.environ.get("B32_DRAFT_RESNORM", "1") == "1":
+            self.rn = _ResNorm(mesh, self.rows, self.hidden, self.res_mc,
+                               width_sharded_memory_config(mesh, self.hidden, _TPAllReduce.CORES, rows=self.rows))  # fmt: skip
         self.kv_write = BatchedKVWrite(mesh, users, self.block, nkv, hd, block_size)
         # (the context pass's 8-layer write: one core per (user, kv head))
         self.kv_write_ctx = BatchedKVWrite(mesh, users, self.block, nkv, hd, block_size, head_split=True)
@@ -645,6 +839,12 @@ class BatchedDraft:
         # ISL 256, acceptance in its spread (B32_DRAFT_LOGITS=bf16: BF16)
         self.logits_dt = {"bf16": ttnn.bfloat16, "bf8": ttnn.bfloat8_b}[os.environ.get("B32_DRAFT_LOGITS", "bf8")]
         self.argmax = _Argmax(lm8.shape[-1], target.vocab_size)
+        if self.rn is not None:  # (the weights' tiles made here, not during a trace capture)
+            for L in self.L:
+                self.rn.gamma(L["ln1"])
+                self.rn.gamma(L["ln2"])
+                self.rn.row_tiles(L["o_b"])
+            self.rn.gamma(self.norm)
 
     # -- pieces ----------------------------------------------------------------------------------------------------
     def _linear(self, x, w, bias=None, ck=None):
@@ -798,6 +998,56 @@ class BatchedDraft:
         k2.deallocate(True)
         v.deallocate(True)
 
+    def _draft_resnorm(self, h, x, pos, rot):
+        """draft()'s layers and LM head with _ResNorm: h the FP32 residual, x layer 0's input norm."""
+        rn, f32 = self.rn, ttnn.float32
+        for li in range(self.layers):
+            L = self.L[li]
+            qkv = self._linear(x, L["qkv"], L["qkv_b"])
+            x.deallocate(True)
+            q_rows, k, v = self._heads_qk(qkv, L, *rot, with_q=True)
+            qkv.deallocate(True)
+            self.kv_write([k], [v], [self.caches[li]], pos[self.block], self.page_table)
+            k.deallocate(True)
+            v.deallocate(True)
+            kc, vc = self.caches[li]
+            heads = self.ba(q_rows, kc, vc, pos[self.block], self.page_table, None, self.hd**-0.5, heads_io=True)
+            q_rows.deallocate(True)
+            partial = self._linear(heads, L["o"])
+            heads.deallocate(True)
+            o = _all_reduce(partial, None)
+            partial.deallocate(True)
+            h2, x = rn(o, h, L["ln2"], eps=self.eps, bias=L["o_b"], out_dtype=f32)
+            o.deallocate(True)
+            h.deallocate(True)
+            g, u = self._linear(x, L["g"]), self._linear(x, L["u"])
+            x.deallocate(True)
+            act = ttnn.multiply(g, u, input_tensor_a_activations=[ttnn.UnaryOpType.SILU], memory_config=self.act_mc)
+            g.deallocate(True)
+            u.deallocate(True)
+            partial = self._linear(act, L["down"])
+            act.deallocate(True)
+            mlp = _all_reduce(partial, None)
+            partial.deallocate(True)
+            last = li + 1 == self.layers
+            if last:  # the final norm straight to BFP8 (the LM head's input)
+                h, x8 = rn(mlp, h2, self.norm, out_bf16=False, x8=True, eps=self.eps)
+            else:
+                h, x = rn(mlp, h2, self.L[li + 1]["ln1"], eps=self.eps, out_dtype=f32)
+            mlp.deallocate(True)
+            h2.deallocate(True)
+        h.deallocate(True)
+        skip = self.argmax.custom and os.environ.get("B32_DRAFT_SKIP_ROW0", "1") == "1"
+        if skip:  # rows 0 .. 31 (each user's last token, i = 0) draft nothing: the LM head on rows 32 .. 255 only
+            x8r = ttnn.slice(x8, [0, 0, U32, 0], [1, 1, self.rows, self.hidden])
+            x8.deallocate(True)
+            x8 = x8r
+        logits = ttnn.matmul(x8, self.lm_head, dtype=self.logits_dt)
+        x8.deallocate(True)
+        out = self.argmax.device(logits, self.rows if skip else None)
+        logits.deallocate(True)
+        return out
+
     def draft(self, tokens, pos, rot, bound):
         """tokens: device [1, rows] UINT32 noise block (row 32 i + u: user u's last token for i = 0, else the mask).
         Returns the per-device argmax of every row (rows 32 i + u, i >= 1: the draft of position start_u + i)."""
@@ -816,6 +1066,8 @@ class BatchedDraft:
             n.deallocate(True)
             return x
 
+        if self.rn is not None:
+            return self._draft_resnorm(h, norm(h, self.L[0]["ln1"]), pos, rot)
         for li in range(self.layers):
             L = self.L[li]
             x = norm(h, L["ln1"])
@@ -1070,6 +1322,20 @@ class BatchedVerify:
                 (TILE, self.hidden // 10), ttnn.CoreGrid(x=10, y=self.rows // TILE), ttnn.ShardStrategy.BLOCK,
                 ttnn.ShardOrientation.ROW_MAJOR, use_height_and_width_as_shard_shape=True,
             )  # fmt: skip
+        # each residual add and the norm after it in one program (_ResNorm, B32_RESNORM; needs the block residual)
+        self.resnorm = None
+        if os.environ.get("B32_RESNORM", "1") == "1" and os.environ.get("B32_RES_BLOCK", "1") == "1":
+            self.resnorm = _ResNorm(self.mesh, self.rows, self.hidden, self.residual_mc,
+                                    width_sharded_memory_config(self.mesh, self.hidden, _TPAllReduce.CORES, rows=self.rows))  # fmt: skip
+            for l in model.layers:  # (the weights' tiles made here, not during a trace capture)
+                self.resnorm.gamma(l.input_layernorm)
+                self.resnorm.gamma(l.post_attention_layernorm)
+                self.resnorm.router_bias(l.mlp.router)
+            self.resnorm.gamma(model.norm)
+        # (B32_RESNORM_ROUTER: the post-attention _ResNorm also computes the router's logits (split K over its 10 cores of
+        # a row, FP32 sums) and the BFP8 copy for the grouped MoE's gather: no router matmul, no typecast)
+        self.resnorm_router = (self.resnorm is not None and self.route_fused
+                               and os.environ.get("B32_RESNORM_ROUTER", "1") == "1")  # fmt: skip
         # sliding-window layers: one decode SDPA per 32-row step (the decode's 8 x 8 config, Q read from DRAM)
         self.sliding_pc = sdpa_decode_program_config(True)
         # the unpadded decode o_proj (batched_decode.BatchedOProj) is DRAM width-sharded: interleaved copies
@@ -1245,7 +1511,7 @@ class BatchedVerify:
         bias.deallocate(True)
         return down
 
-    def _attention(self, li, layer, res, pos, rot):
+    def _attention(self, li, layer, res, pos, rot, x=None):
         """The layer's attention for all rows: input norm, QKV, the attention core (_attention_rows) and o_proj (+
         all-reduce), each once over the 256 rows. res: [rows, hidden] width-sharded residual; rot: every row's cos / sin
         [1, 1, rows, hd]. Returns res + attention (same layout)."""
@@ -1254,9 +1520,10 @@ class BatchedVerify:
         nh, nkv, hd = self.local_heads, self.local_kv_heads, cfg.head_dim
         # (the activations between the attention's ops in L1, B32_ATTN_L1)
         amc = self.attn_mc
-        normed = layer.input_layernorm.forward_sharded(res)
-        x = ttnn.to_memory_config(normed, amc)
-        normed.deallocate(True)
+        if x is None:
+            normed = layer.input_layernorm.forward_sharded(res)
+            x = ttnn.to_memory_config(normed, amc)
+            normed.deallocate(True)
         qkv = ttnn.linear(
             x,
             w.wqkv,
@@ -1283,6 +1550,10 @@ class BatchedVerify:
         # (written straight into the all-reduce's input shards: no conversion op before it)
         partial = ttnn.add(o, op.bias, dtype=ttnn.bfloat8_b, memory_config=_TPAllReduce.get(o).memory_config)
         o.deallocate(True)
+        if self.resnorm is not None:  # (the all-reduce output as is: _ResNorm adds it to the residual)
+            out = _all_reduce(partial, None)
+            partial.deallocate(True)
+            return out
         summed_s = _all_reduce(partial, self.residual_mc)
         partial.deallocate(True)
         out = ttnn.add(res, summed_s, memory_config=self.residual_mc, dtype=ttnn.bfloat16)
@@ -1383,6 +1654,60 @@ class BatchedVerify:
             t.deallocate(True)
         return out
 
+    def _forward_resnorm(self, res, pos, rot):
+        """forward() with each residual add and the norm after it in one program (_ResNorm): the attention's and the
+        MoE's all-reduce outputs stay in their width shards, the norms' outputs land in L1 interleaved."""
+        model = self.model
+        n0 = model.layers[0].input_layernorm.forward_sharded(res)
+        xin = ttnn.to_memory_config(n0, self.attn_mc)
+        n0.deallocate(True)
+        feats = []
+        L = len(model.layers)
+        for li, layer in enumerate(model.layers):
+            y = self._attention(li, layer, res, pos, rot, x=xin)  # (deallocates xin)
+            if self.resnorm_router and self.grouped is not None and self.grouped.bias_slot:
+                # the MoE input in BFP8 and the router's logits from the same program (the combine adds the down bias)
+                res2, x8, logits = self.resnorm(y, res, layer.post_attention_layernorm, out_bf16=False, x8=True,
+                                                router=layer.mlp.router)  # fmt: skip
+                y.deallocate(True)
+                res.deallocate(True)
+                w = self.grouped.route(logits, li)
+                logits.deallocate(True)
+                down = self.grouped.from_x8(li, x8)
+                x8.deallocate(True)
+                w.deallocate(True)
+                y = _all_reduce(down, None)
+                down.deallocate(True)
+            else:
+                res2, normed = self.resnorm(y, res, layer.post_attention_layernorm)
+                y.deallocate(True)
+                res.deallocate(True)
+                y = self._moe(li, layer, normed, None)
+                normed.deallocate(True)
+            nxt = model.layers[li + 1].input_layernorm if li + 1 < L else model.norm
+            res, xin = self.resnorm(y, res2, nxt)
+            y.deallocate(True)
+            res2.deallocate(True)
+            if li in self.capture_layers:
+                feats.append(ttnn.to_memory_config(res, ttnn.DRAM_MEMORY_CONFIG, dtype=self.feat_dt))
+        features = ttnn.concat(feats, dim=-1)
+        for t in feats:
+            t.deallocate(True)
+        res.deallocate(True)
+        normed8 = ttnn.typecast(xin, ttnn.bfloat8_b)
+        xin.deallocate(True)
+        logits8 = ttnn.matmul(normed8, self.lm_head, dtype=ttnn.bfloat8_b)  # as the batched decode's LM head
+        normed8.deallocate(True)
+        if self.argmax.custom:
+            out = self.argmax.device(logits8)
+            logits8.deallocate(True)
+            return out, features
+        logits = ttnn.typecast(logits8, ttnn.bfloat16)
+        logits8.deallocate(True)
+        out = self.argmax.device(logits)
+        logits.deallocate(True)
+        return out, features
+
     def forward(self, tokens, pos, rot):
         """tokens: device [1, rows] UINT32 (row 32 i + u). pos[i]: step i's [32] INT32 positions (pos[block]: every
         row's, user-major); rot: every row's cos / sin [1, 1, rows, hd] (BatchedDraft.rows_cos_sin). Returns (per-device argmax of every row, device features [1, 1, rows, 5 hidden]).
@@ -1394,6 +1719,8 @@ class BatchedVerify:
         feats = []
         res = ttnn.to_memory_config(x, self.residual_mc, dtype=ttnn.bfloat16)
         x.deallocate(True)
+        if self.resnorm is not None:
+            return self._forward_resnorm(res, pos, rot)
         for li, layer in enumerate(model.layers):
             res2 = self._attention(li, layer, res, pos, rot)
             res.deallocate(True)

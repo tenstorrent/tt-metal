@@ -382,6 +382,15 @@ class GroupedMoE:
         return ttnn.matmul(self.pw, self._yg(li), program_config=self.combine_pc, compute_kernel_config=self.ck_combine,
                            dtype=ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)  # fmt: skip
 
+    def from_x8(self, li, x8):
+        """__call__ after route() from the normed rows already in BFP8 (L1 interleaved; dflash/batched.py _ResNorm
+        writes them)."""
+        xg = self.gather(x8)
+        self.gate_up(li, xg)
+        xg.deallocate(True)
+        self.down(li)
+        return self.combine(li)
+
     def __call__(self, li, x, ids=None, w=None):
         """The routed experts' down outputs summed with their routing weights (no down bias, no all-reduce). x: the
         normed rows [1, 1, rows, hidden] BF16 (DRAM); ids / w: the router's top-5 ids and dense weights (None: the
