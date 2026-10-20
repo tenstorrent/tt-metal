@@ -30,6 +30,36 @@ from models.demos.glm53_flash.tt.moe import TtRoutedExperts
 
 ROWS, COLS = 8, 4  # the emulated placement: 8x4 Galaxy, chip (0, 0)
 STEPS = int(os.environ.get("GLM53_BLOCK_STEPS", "20"))
+# reference outputs of an earlier run (the "current block"): saved when the file does not exist, else loaded and
+# every path is compared against its entry (PCC >= 0.9999 = the exactness bar for a block rewrite)
+REF = os.environ.get("GLM53_BLOCK_REF", "")
+DENSE_W_DTYPE = (
+    ttnn.float32 if os.environ.get("GLM53_BLOCK_W_FP32", "0") == "1" else ttnn.bfloat16
+)  # the router's dtype
+
+
+def count_ops(device, fn) -> tuple[list[str], list[str]]:
+    """(top-level ttnn ops, device operations) of one call, from a graph capture with the fast runtime mode off
+    (so the C++-internal ops, e.g. the sparse matmul's output zero-fill, are visible)."""
+    with ttnn.manage_config("enable_fast_runtime_mode", False):
+        ttnn.graph.begin_graph_capture()
+        y = fn()
+        ttnn.synchronize_device(device)
+        graph = ttnn.graph.end_graph_capture()
+    ttnn.deallocate(y)
+    depth, top, dev = 0, [], []
+    for node in graph:
+        kind = node.get("node_type")
+        if kind == "function_start":
+            name = str(node.get("params", {}).get("name", "?"))
+            if depth == 0:
+                top.append(name)
+            if "::prim::" in name or "DeviceOperation" in name or name.endswith("operation::run"):
+                dev.append(name)
+            depth += 1
+        elif kind == "function_end":
+            depth -= 1
+    return top, dev
 
 
 def local_slices(sd, cfg: GLM53FlashConfig, row: int = 0, col: int = 0):
@@ -101,6 +131,11 @@ def test_expert_block_paths(mesh_device, weights):
     sparse = TtRoutedExperts(mesh_device, cfg_loc, gate_up_loc, down_loc)
     dense = TtRoutedExperts(mesh_device, cfg_loc, gate_up_loc, down_loc, dense=True)
     results = {}
+    ref_outs = None
+    if REF and os.path.isfile(REF):
+        ref_outs = {(int(k.split("|")[0]), k.split("|")[1]): v for k, v in torch.load(REF).items()}
+        logger.info(f"reference outputs loaded from {REF}: {sorted(ref_outs)}")
+    all_outs = {}
     for T in (32, 256):
         x, w_loc = x_all[:T], w_loc_all[:T]
         active = int((w_loc.abs().sum(0) > 0).sum())
@@ -109,7 +144,7 @@ def test_expert_block_paths(mesh_device, weights):
             x.reshape(1, 1, T, -1), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device
         )
         w_dev = ttnn.from_torch(
-            w_loc.reshape(1, 1, T, E_loc), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=mesh_device
+            w_loc.reshape(1, 1, T, E_loc), dtype=DENSE_W_DTYPE, layout=ttnn.TILE_LAYOUT, device=mesh_device
         )
         outs = {}
         for name, mod, env in (
@@ -118,24 +153,40 @@ def test_expert_block_paths(mesh_device, weights):
             ("dense", dense, ""),
         ):
             os.environ["GLM53_SPARSE_CONFIG"] = env
+            top, dev_ops = count_ops(mesh_device, lambda: mod.forward(x_dev, w_dev))
             y, dt = timed_trace(mesh_device, lambda: mod.forward(x_dev, w_dev), STEPS)
             os.environ.pop("GLM53_SPARSE_CONFIG", None)
             y = y.reshape(T, -1)
             outs[name] = y
+            all_outs[(T, name)] = y
             p = pcc(ref, y)
             p_vs = pcc(outs["sparse legacy"], y)
+            p_ref = pcc(ref_outs[(T, name)], y) if ref_outs is not None and (T, name) in ref_outs else float("nan")
             blocks = 1 if mod.dense else -(-T // 32)
-            results[(T, name)] = (dt, p, p_vs, active)
+            results[(T, name)] = (dt, p, p_vs, active, len(top), len(dev_ops), p_ref)
             logger.info(
                 f"M={T} ({active} of {E_loc} experts active) {name:14s}: {dt*1e6:8.1f} us/call "
-                f"({dt*1e6/blocks:7.1f} us per 32-token block x {blocks}), pcc vs torch {p:.6f}, vs sparse-legacy {p_vs:.6f}"
+                f"({dt*1e6/blocks:7.1f} us per 32-token block x {blocks}), {len(top)} ttnn ops / {len(dev_ops)} device ops, "
+                f"pcc vs torch {p:.6f}, vs sparse-legacy {p_vs:.6f}, vs reference run {p_ref:.6f}"
             )
+            logger.info(f"    ttnn ops: {top}")
+            logger.info(f"    device ops: {dev_ops}")
         ttnn.deallocate(x_dev)
         ttnn.deallocate(w_dev)
-    logger.info("| M | active | path | us/call | us per 32-token block | pcc vs torch | pcc vs sparse-legacy |")
-    for (T, name), (dt, p, p_vs, active) in results.items():
+    if REF and ref_outs is None:
+        torch.save({f"{T}|{name}": y for (T, name), y in all_outs.items()}, REF)
+        logger.info(f"reference outputs saved to {REF}")
+    logger.info(
+        "| M | active | path | us/call | us per 32-token block | ttnn ops | device ops | pcc vs torch | "
+        "pcc vs sparse-legacy | pcc vs reference run |"
+    )
+    for (T, name), (dt, p, p_vs, active, n_top, n_dev, p_ref) in results.items():
         blocks = 1 if name == "dense" else -(-T // 32)
-        logger.info(f"| {T} | {active}/{E_loc} | {name} | {dt*1e6:.1f} | {dt*1e6/blocks:.1f} | {p:.6f} | {p_vs:.6f} |")
-    for (T, name), (dt, p, p_vs, active) in results.items():
+        logger.info(
+            f"| {T} | {active}/{E_loc} | {name} | {dt*1e6:.1f} | {dt*1e6/blocks:.1f} | {n_top} | {n_dev} | {p:.6f} | "
+            f"{p_vs:.6f} | {p_ref:.6f} |"
+        )
+    for (T, name), (dt, p, p_vs, active, n_top, n_dev, p_ref) in results.items():
         assert p > 0.999, (T, name, p)
         assert p_vs > 0.9999, (T, name, p_vs)
+        assert p_ref != p_ref or p_ref > 0.9999, (T, name, p_ref)
