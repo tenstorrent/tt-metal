@@ -200,10 +200,28 @@ class GLM53Model:
         ids = token_ids.reshape(-1)
         S = int(ids.numel())
         x = self.embedding(self.embedding.tokens_to_device(ids, pad_to=padded_rows(S)))
+        return self.prefill_streams(x, S, user=user, start=start, all_rows=all_rows, on_layer=on_layer)
+
+    def prefill_streams(
+        self,
+        streams: ttnn.Tensor,
+        seq_len: int,
+        *,
+        user: int = 0,
+        start: int = 0,
+        all_rows: bool = False,
+        on_layer=None,
+    ) -> ttnn.Tensor:
+        """``prefill`` from ready-made input streams ``[1, 1, T_pad, 4*4096]`` fp32 (consumed; rows past
+        ``seq_len`` are padding): the multimodal path (``tt/multimodal.py``) builds them with the image
+        features at the placeholder rows. Same return as ``prefill``."""
         x = self._run_layers(
-            x, lambda dec, h: dec.prefill_forward(h, user=user, seq_len=S, start=start), "prefill", on_layer
+            streams,
+            lambda dec, h: dec.prefill_forward(h, user=user, seq_len=seq_len, start=start),
+            "prefill",
+            on_layer,
         )
-        logits = self.head(x) if all_rows else self.head.last_token_logits(x, S)
+        logits = self.head(x) if all_rows else self.head.last_token_logits(x, seq_len)
         ttnn.deallocate(x)
         return logits
 
@@ -244,12 +262,14 @@ class GLM53Model:
         return ttnn.to_torch(logits).float()[0, 0]
 
     def generate(
-        self, prompt_ids: torch.Tensor, n: int, *, user: int = 0, on_token=None
+        self, prompt_ids: torch.Tensor, n: int, *, user: int = 0, on_token=None, streams: ttnn.Tensor | None = None
     ) -> tuple[list[int], list[dict]]:
         """Greedy generation of ``n`` tokens for one user (``max_batch == 1``): a prefill pass, then
         ``n - 1`` decode passes (each streams all layers). The next token is the host argmax of the
         device logits (first index on ties, like torch); the device greedy id is recorded next to it.
-        Returns the ids and per-step records (position, top-5 ids / logits, pass seconds)."""
+        Returns the ids and per-step records (position, top-5 ids / logits, pass seconds).
+        ``streams``: prefill input streams replacing the embedding of ``prompt_ids`` (the multimodal
+        path; ``prompt_ids`` still gives the prompt length / positions)."""
         if self.max_batch != 1:
             raise ValueError("generate is a single-user loop (max_batch == 1)")
         ids = prompt_ids.reshape(-1)
@@ -278,7 +298,7 @@ class GLM53Model:
                 on_token(records[-1])
 
         t0 = time.perf_counter()
-        logits = self.prefill(ids, user=user)
+        logits = self.prefill(ids, user=user) if streams is None else self.prefill_streams(streams, S, user=user)
         take(self.host_logits(logits)[0], S - 1, time.perf_counter() - t0, None)
         ttnn.deallocate(logits)
         while len(out) < n:
