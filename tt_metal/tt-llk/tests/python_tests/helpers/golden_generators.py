@@ -1686,8 +1686,13 @@ class BroadcastGolden:
 
     Broadcasts operand values according to the specified broadcast type:
     - Scalar: Takes first element of each tile and broadcasts it across entire output tile
-    - Column: Broadcasts column values across rows (Faces 0-1 use Face 0's column, Faces 2-3 use Face 2's column)
-    - Row: Broadcasts row values down columns (first row of Face 0/1)
+    - Column: Broadcasts column values across rows (every face in a face row uses the column of
+      the left face of that row; for 32x32, faces 0-1 use face 0 and faces 2-3 use face 2)
+    - Row: Broadcasts row values down columns (every face in a face column uses row 0 of the top
+      face of that column; for 32x32, faces 0/2 use face 0 and faces 1/3 use face 1)
+
+    The face grid comes from num_faces_r_dim / num_faces_c_dim. When they are not given, it is
+    derived from num_faces the legacy way (2 faces = 1x2), so 32x16 tiles must pass the grid.
 
     Output size = tile_cnt * num_faces * (face_r_dim * 16) elements.
     """
@@ -1708,9 +1713,21 @@ class BroadcastGolden:
         tile_cnt: int = 1,
         face_r_dim: int = 16,
         input_format: DataFormat = None,
+        num_faces_r_dim: int = None,
+        num_faces_c_dim: int = None,
     ):
         if broadcast_type not in self.broadcast_handlers:
             raise ValueError(f"Unsupported broadcast type: {broadcast_type}")
+
+        if num_faces_r_dim is None or num_faces_c_dim is None:
+            if num_faces not in (1, 2, 4):
+                raise ValueError(f"num_faces must be 1, 2, or 4, got {num_faces}")
+            num_faces_r_dim = 2 if num_faces == 4 else 1
+            num_faces_c_dim = 1 if num_faces == 1 else 2
+        if num_faces_r_dim * num_faces_c_dim != num_faces:
+            raise ValueError(
+                f"Face grid {num_faces_r_dim}x{num_faces_c_dim} does not match num_faces={num_faces}"
+            )
 
         # Hold the operand in its own format, not the output's. The hardware unpacks src_B from
         # its L1 encoding and broadcasts that, so quantizing to the output format here rounds the
@@ -1747,7 +1764,10 @@ class BroadcastGolden:
             tile_data = input_flat[tile_start:tile_end]
 
             tile_result = self.broadcast_handlers[broadcast_type](
-                tile_data, num_faces=num_faces, face_r_dim=face_r_dim
+                tile_data,
+                face_r_dim=face_r_dim,
+                num_faces_r_dim=num_faces_r_dim,
+                num_faces_c_dim=num_faces_c_dim,
             )
             results.append(tile_result)
 
@@ -1762,70 +1782,45 @@ class BroadcastGolden:
     def _broadcast_column(
         self,
         tile_data,
-        num_faces: int,
         face_r_dim: int,
+        num_faces_r_dim: int,
+        num_faces_c_dim: int,
     ):
         """
         Process a single tile for column broadcast.
 
-        For a face_r_dim x 16 face: input has face_r_dim unique values (one per row),
-        each value is replicated 16 times across its row.
-        Output pattern: [row0_val]*16, [row1_val]*16, ..., [row(face_r_dim-1)_val]*16
+        Every face in face row r takes column 0 of the left face of that row (face r * num_faces_c_dim):
+        each of its face_r_dim values is replicated 16 times across its row.
         """
         face_size = face_r_dim * FACE_DIM
-
-        # Process face 0 (used by faces 0-1)
-        source_face_0 = tile_data[:face_size]
-        col_values_0 = source_face_0[::FACE_DIM]
-        face_0_broadcast = col_values_0.repeat_interleave(FACE_DIM)
-
-        # Handle different face counts: 1, 2, 4
-        if num_faces == 1:
-            return face_0_broadcast
-        elif num_faces == 2:
-            # Both faces use face 0 - use repeat instead of cat
-            return face_0_broadcast.repeat(2)
-        else:  # num_faces == 4
-            # Process face 2 (used by faces 2-3)
-            source_face_2 = tile_data[2 * face_size : 3 * face_size]
-            col_values_2 = source_face_2[::FACE_DIM]
-            face_2_broadcast = col_values_2.repeat_interleave(FACE_DIM)
-
-            return torch.cat(
-                [face_0_broadcast, face_0_broadcast, face_2_broadcast, face_2_broadcast]
-            )
+        faces = []
+        for r in range(num_faces_r_dim):
+            source_face = tile_data[
+                r * num_faces_c_dim * face_size : (r * num_faces_c_dim + 1) * face_size
+            ]
+            face_broadcast = source_face[::FACE_DIM].repeat_interleave(FACE_DIM)
+            faces.extend([face_broadcast] * num_faces_c_dim)
+        return torch.cat(faces)
 
     def _broadcast_row(
         self,
         tile_data,
-        num_faces: int,
         face_r_dim: int,
+        num_faces_r_dim: int,
+        num_faces_c_dim: int,
     ):
-        """Process a single tile for row broadcast."""
+        """
+        Process a single tile for row broadcast.
+
+        Every face in face column c takes row 0 of the top face of that column (face c),
+        repeated face_r_dim times.
+        """
         face_size = face_r_dim * FACE_DIM
-
-        # Process face 0: take first row and repeat to fill face
-        face_0_row = tile_data[:FACE_DIM]
-        face_0_broadcast = face_0_row.repeat(face_r_dim)
-
-        if num_faces == 1:
-            return face_0_broadcast
-        elif num_faces in (2, 4):
-            # Extract and repeat face 1 row
-            face_1_row = tile_data[face_size : face_size + FACE_DIM]
-            face_1_broadcast = face_1_row.repeat(face_r_dim)
-
-            if num_faces == 2:
-                return torch.cat([face_0_broadcast, face_1_broadcast])
-            else:  # num_faces == 4
-                return torch.cat(
-                    [
-                        face_0_broadcast,
-                        face_1_broadcast,
-                        face_0_broadcast,
-                        face_1_broadcast,
-                    ]
-                )
+        row_faces = [
+            tile_data[c * face_size : c * face_size + FACE_DIM].repeat(face_r_dim)
+            for c in range(num_faces_c_dim)
+        ]
+        return torch.cat(row_faces * num_faces_r_dim)
 
 
 @register_golden
