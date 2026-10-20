@@ -350,11 +350,9 @@ def test_dedup_index_k_rows_limited_to_msa_layers(dedup_table, tmp_path):
 def test_paged_stage_addressing(tmp_path):
     """Stage 1 holds a paged pool (stage 0 keeps slots): every chunk of it lands at the block of its slot's page,
     pool entry page * count + layer, in the same 32-token round-robin walk; stage 0's slot walk is unchanged."""
-    seq_len, chunk_size, num_pages = 256, PAGE_SIZE * SP, 9  # one page per rank per chunk, spare pages
+    seq_len, chunk_size = 256, PAGE_SIZE * SP  # one page per rank per chunk
     chunk_local = chunk_size // SP
-    table = fixed_page_table(
-        num_users=NUM_USERS, max_seq_len=seq_len, sp=SP, chunk_size=chunk_size, num_pages=num_pages
-    )
+    table = fixed_page_table(num_users=NUM_USERS, max_seq_len=seq_len, sp=SP, chunk_size=chunk_size)
     layouts = _stage_layouts()
     imp = ttnn.experimental.disaggregation.import_from_protobuf_file
     (tmp_path / "paged").mkdir()

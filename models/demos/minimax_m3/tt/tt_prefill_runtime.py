@@ -44,6 +44,10 @@ from models.demos.minimax_m3.tt.attention.kv_cache import fixed_page_table, read
 from models.demos.minimax_m3.tt.prefill_chunk import PrefillChunk, pack_forward_tokens, validate_chunks
 from models.demos.minimax_m3.utils.general_utils import sparse_attention_freq
 
+# Pipeline stages of MSA layers only hold a paged KV pool (stage_is_paged) instead of slot caches, mapped by the
+# runner's fixed page table (kv_cache.fixed_page_table) until the engine places pages itself.
+PAGED_KV_CACHE = False
+
 
 @dataclass
 class TtPrefillRuntimeConfig:
@@ -82,9 +86,6 @@ class TtPrefillRuntimeConfig:
     # MoE layers: run the shared expert on its own sub-device concurrently with dispatch (the runner's
     # PrefillRunParams.overlap_shared_expert_with_dispatch). Off: it runs before the MoE on the full grid.
     overlap_shared_expert: bool = True
-    # Pages per chip of the paged KV pool every MSA-only stage of the pipeline allocates (stage_is_paged); None =
-    # slot caches. The KV chunk table addresses those stages' pages.
-    kv_num_pages: Optional[int] = None
 
     def __post_init__(self):
         if self.forward_tokens_budget is None:
@@ -596,16 +597,12 @@ class TtPrefillRuntime:
 
         c = self.config
         paging = {}
-        if c.kv_num_pages is not None:
+        if PAGED_KV_CACHE:
             paging = dict(
                 page_table=fixed_page_table(
-                    num_users=c.num_users,
-                    max_seq_len=c.max_seq_len,
-                    sp=c.sp_factor,
-                    chunk_size=c.chunk_size,
-                    num_pages=c.kv_num_pages,
+                    num_users=c.num_users, max_seq_len=c.max_seq_len, sp=c.sp_factor, chunk_size=c.chunk_size
                 ),
-                paged_stage=lambda first, count: stage_is_paged(self.hf_config, c.kv_num_pages, first, count),
+                paged_stage=lambda first, count: stage_is_paged(self.hf_config, first, count),
             )
         return build_and_serialize_kv_chunk_table(
             mesh_device=self.mesh_device,
@@ -766,8 +763,8 @@ class TtPrefillRuntime:
         )
 
 
-def stage_is_paged(hf_config, kv_num_pages, first_layer_idx, num_layers) -> bool:
+def stage_is_paged(hf_config, first_layer_idx, num_layers) -> bool:
     """Whether the stage holding layers ``[first_layer_idx, first_layer_idx + num_layers)`` runs a paged KV pool:
-    paging is configured and every layer is MSA (only the MSA cache read is paged; ring_joint reads slots)."""
+    PAGED_KV_CACHE is on and every layer is MSA (only the MSA cache read is paged; ring_joint reads slots)."""
     msa = {i for i, f in enumerate(sparse_attention_freq(hf_config) or []) if f}
-    return kv_num_pages is not None and set(range(first_layer_idx, first_layer_idx + num_layers)) <= msa
+    return PAGED_KV_CACHE and set(range(first_layer_idx, first_layer_idx + num_layers)) <= msa

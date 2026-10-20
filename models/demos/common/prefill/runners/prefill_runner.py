@@ -101,8 +101,6 @@ NUM_LAYERS = int(os.environ.get("PREFILL_NUM_LAYERS", MODEL_CFG.NUM_LAYERS))
 CHUNK_SIZE = int(os.environ.get("PREFILL_CHUNK_SIZE", 5 * 1024))
 MAX_SEQ_LEN = int(os.environ.get("PREFILL_MAX_SEQ_LEN", CHUNK_SIZE * 11))
 NUM_USERS = int(os.environ.get("PREFILL_NUM_USERS", 2))
-# Pages per chip of a paged KV pool; unset = slot caches. Slot ids stay the requests' page-table rows.
-KV_NUM_PAGES = int(os.environ["PREFILL_KV_NUM_PAGES"]) if os.environ.get("PREFILL_KV_NUM_PAGES") else None
 CAPACITY_FACTOR = int(os.environ.get("PREFILL_CAPACITY_FACTOR", 8))
 _gate_mode_name = os.environ.get("PREFILL_GATE_FALLBACK_MODE", ADAPTER.default_gate_mode)
 DFLASH_MODEL = os.environ.get("DFLASH_HF_MODEL") or ADAPTER.dflash_model_default
@@ -523,10 +521,6 @@ def _print_config() -> None:
         ("PREFILL_CHUNK_SIZE", str(CHUNK_SIZE)),
         ("PREFILL_MAX_SEQ_LEN", str(MAX_SEQ_LEN)),
         ("PREFILL_NUM_USERS", str(NUM_USERS)),
-        (
-            "PREFILL_KV_NUM_PAGES",
-            f"{KV_NUM_PAGES or '<slot caches>'} (adapter.supports_paged_kv={ADAPTER.supports_paged_kv})",
-        ),
         ("PREFILL_CAPACITY_FACTOR", str(CAPACITY_FACTOR)),
         ("PREFILL_GATE_FALLBACK_MODE", _gate_mode_name),
         ("PREFILL_FABRIC_MODE", os.environ.get("PREFILL_FABRIC_MODE", "2d_torus_xy")),
@@ -561,7 +555,6 @@ def _assert_ranks_agree_on_config(rank: int, num_ranks: int) -> None:
         "chunk_size": CHUNK_SIZE,
         "max_seq_len": MAX_SEQ_LEN,
         "num_users": NUM_USERS,
-        "kv_num_pages": KV_NUM_PAGES,
         "mesh_shape": GLOBAL_MESH_SHAPE,
         "mtp_levels": MTP_LEVELS,
         "PREFILL_ENABLE_MIGRATION": migration_publish_enabled(),
@@ -589,8 +582,6 @@ def main() -> None:
     signal.signal(signal.SIGINT, _handle_sigterm)
 
     _print_config()
-    if KV_NUM_PAGES is not None and not ADAPTER.supports_paged_kv:
-        raise ValueError(f"PREFILL_KV_NUM_PAGES is set, but model {ADAPTER.name!r} has no paged KV cache")
 
     if not ttnn.distributed_context_is_initialized():
         ttnn.init_distributed_context()
@@ -635,7 +626,6 @@ def main() -> None:
         dflash_enabled=DFLASH_ENABLED,
         dflash_checkpoint_path=DFLASH_MODEL,
         mtp_levels=MTP_LEVELS,
-        kv_num_pages=KV_NUM_PAGES,
         weight_cache_path=ADAPTER.weight_cache_path(GLOBAL_MESH_SHAPE),
         sparse_kv_cache_format=ADAPTER.default_sparse_kv_cache_format,
         use_trace=USE_TRACE,

@@ -84,7 +84,6 @@ class MiniMaxM3PrefillAdapter(PrefillModelAdapter):
     # L1 with a warning and an L1-fragmentation risk. Same value as tt/ccl.py L1_SMALL_SIZE (kept literal so
     # importing the adapter stays cheap).
     l1_small_size = 1152
-    supports_paged_kv = True
 
     # The D2D hidden state ships in the residual stream's layer-boundary layout (see tt/residual.py).
     @property
@@ -130,18 +129,19 @@ class MiniMaxM3PrefillAdapter(PrefillModelAdapter):
         num_users * num_layers user-major slots. The engine owns the returned object and passes it into
         every runtime call.
 
-        With ``params.kv_num_pages`` a stage of MSA layers only gets a paged pool instead, and the runner's fixed
-        page table (``fixed_page_table``) maps each slot to pages of its own. A stage holding a dense layer keeps
-        slot caches: its ring_joint attention reads slots."""
-        from models.demos.minimax_m3.tt.attention.kv_cache import allocate_kv_caches, fixed_page_table, set_page_table
+        A stage of MSA layers only gets a paged pool instead when the runtime's PAGED_KV_CACHE is on
+        (``stage_is_paged``), and the runner's fixed page table maps each slot to pages of its own. A stage holding
+        a dense layer keeps slot caches: its ring_joint attention reads slots."""
+        from models.demos.minimax_m3.tt.attention.kv_cache import (
+            allocate_kv_caches,
+            fixed_page_table,
+            fixed_pool_pages,
+            set_page_table,
+        )
         from models.demos.minimax_m3.tt.tt_prefill_runtime import stage_is_paged
 
-        paged = stage_is_paged(hf_config, params.kv_num_pages, params.first_layer_idx, params.num_layers)
-        if params.kv_num_pages is not None and not paged:
-            logger.info(
-                f"[minimax_m3] layers [{params.first_layer_idx}, {params.first_layer_idx + params.num_layers}) "
-                "include a dense layer: this stage keeps slot caches"
-            )
+        paged = stage_is_paged(hf_config, params.first_layer_idx, params.num_layers)
+        sizes = dict(num_users=params.num_users, max_seq_len=params.max_seq_len, sp=params.sp_factor)
         kv_cache = allocate_kv_caches(
             mesh_device,
             num_layers=params.num_layers,
@@ -149,17 +149,10 @@ class MiniMaxM3PrefillAdapter(PrefillModelAdapter):
             sp_axis=params.sp_axis,
             num_users=params.num_users,
             head_dim=hf_config.head_dim,
-            num_pages=params.kv_num_pages if paged else None,
+            num_pages=fixed_pool_pages(**sizes) if paged else None,
         )
         if paged:
-            table = fixed_page_table(
-                num_users=params.num_users,
-                max_seq_len=params.max_seq_len,
-                sp=params.sp_factor,
-                chunk_size=params.chunk_size,
-                num_pages=params.kv_num_pages,
-            )
-            set_page_table(kv_cache, table)
+            set_page_table(kv_cache, fixed_page_table(chunk_size=params.chunk_size, **sizes))
         return kv_cache
 
     def build_runtime(self, *, mesh_device, hf_config, params: PrefillRunParams):
@@ -222,7 +215,6 @@ class MiniMaxM3PrefillAdapter(PrefillModelAdapter):
             pipeline_activation_emb_tp_sharded=self.pipeline_activation_emb_tp_sharded,
             use_trace=params.use_trace,
             overlap_shared_expert=params.overlap_shared_expert_with_dispatch,
-            kv_num_pages=params.kv_num_pages,
         )
         return TtPrefillRuntime(
             mesh_device=mesh_device,

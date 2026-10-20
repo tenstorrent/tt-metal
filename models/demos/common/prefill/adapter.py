@@ -86,8 +86,6 @@ class PrefillRunParams:
     # rather than re-read from the env downstream so one resolution decides which drafter gets built.
     dflash_checkpoint_path: str = ""
     mtp_levels: int = 0
-    # Pages per chip of a paged KV pool (PREFILL_KV_NUM_PAGES, models with supports_paged_kv); None = slot caches.
-    kv_num_pages: Optional[int] = None
 
     @property
     def sp_factor(self) -> int:
@@ -143,8 +141,6 @@ class PrefillModelAdapter(ABC):
     dflash_model_default: str = ""
     dflash_golden_default: str = ""
     supports_mtp: bool = False
-    # Whether allocate_kv_cache can give a stage a paged KV pool (PrefillRunParams.kv_num_pages).
-    supports_paged_kv: bool = False
 
     def fabric_payload_size(self) -> int:
         """The fabric packet payload the mesh is opened with. It is fixed at mesh open, before the model is
