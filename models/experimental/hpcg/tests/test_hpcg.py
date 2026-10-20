@@ -46,6 +46,7 @@ def test_hpcg_ops_and_cg(device, nx, bands):
         assert np.array_equal(vals.view(np.int32), L.V.view(np.int32)), f"level {l} generated values"
         assert np.array_equal(offs, hp.off[:, : L.P]), f"level {l} generated offsets"
     assert np.array_equal(from_device(h.b), levels[0].B.astype(np.float64)), "generated b"
+    assert not np.any(from_device(h.x)) and not np.any(from_device(h.p)), "generated x = 0 and p = 0"
 
     rng = np.random.default_rng(0)
     for l, d in enumerate(h.lv):
@@ -106,8 +107,9 @@ def test_hpcg_ops_and_cg(device, nx, bands):
     assert rel < 1e-6
 
     iters = 3
-    h.reset()
-    nr0 = float(ttnn.to_torch(h.start()).reshape(-1)[0])
+    for _ in range(2):  # reset() and start() must give the same state when run again (the demo repeats them)
+        h.reset()
+        nr0 = float(ttnn.to_torch(h.start()).reshape(-1)[0])
     _, hist64 = ref.cg(levels, iters, np.float64, order)
     for k in range(iters):
         nr = float(ttnn.to_torch(h.iteration()).reshape(-1)[0]) / nr0

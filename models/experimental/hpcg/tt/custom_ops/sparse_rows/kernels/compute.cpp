@@ -100,20 +100,23 @@ void kernel_main() {
     const uint32_t nseg = get_arg_val<uint32_t>(0);
     const uint32_t nseg_gs = get_arg_val<uint32_t>(1);  // the first nseg_gs segments are Gauss-Seidel updates
     const uint32_t nseg_r = get_arg_val<uint32_t>(2);   // RESTF: the next nseg_r (SpMV, block 0) output r - A z
+    const uint32_t flags = get_arg_val<uint32_t>(3);
+    const uint32_t ready_n = (flags & F_WSPLIT) ? 2 : 1;  // semaphore 0 at window load: reader (+ writer, WSPLIT)
     (void)nseg_gs;
     (void)nseg_r;
+    (void)ready_n;
     compute_kernel_hw_startup(CB_V, CB_OUT);
 #if NG > 2 && defined(TRISC_PACK)
     PackGather pg;
-    pg.init();
+    pg.init(ready_n);
 #endif
 #if NG > 3 && defined(TRISC_UNPACK)
     UnpackGather ug;
-    ug.init();
+    ug.init(ready_n);
 #endif
 #if defined(FASTMAC) && defined(TRISC_MATH)
     MathSeg ms;
-    ms.init();
+    ms.init(ready_n);
 #endif
     for (uint32_t t = 0; t < nseg; ++t) {
 #if NG > 2 && defined(TRISC_PACK)
@@ -186,8 +189,7 @@ void kernel_main() {
             }
 #endif
         }
-#ifdef ADDB
-        {  // prolongation: z = z + P zc (b = the output vector's old value)
+        if (flags & F_ADDB) {  // prolongation: z = z + P zc (b = the output vector's old value)
             cb_wait_front(CB_B, 1);
             copy_init(CB_B);
             copy_tile(CB_B, 0, 1);
@@ -195,9 +197,8 @@ void kernel_main() {
             add_binary_tile_init();
             add_binary_tile(0, 1, 0);
         }
-#endif
-#ifdef RESTF
-        if (!gsseg && t < nseg_gs + nseg_r) {  // restriction input: r - A z on block 0
+#ifdef GS
+        if ((flags & F_RESTF) && !gsseg && t < nseg_gs + nseg_r) {  // restriction input: r - A z on block 0
             cb_wait_front(CB_B, 1);
             copy_init(CB_B);
             copy_tile(CB_B, 0, 1);

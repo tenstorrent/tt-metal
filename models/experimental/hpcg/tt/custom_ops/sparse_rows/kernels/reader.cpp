@@ -61,15 +61,25 @@ void kernel_main() {
     const uint32_t meta_addr = get_arg_val<uint32_t>(3);
     const uint32_t b_addr = get_arg_val<uint32_t>(4);
     const uint32_t row = get_arg_val<uint32_t>(5);
+    // grid-dependent sizes come as runtime arguments, so one binary serves every level and grid size
+    const uint32_t meta_pages = get_arg_val<uint32_t>(7), ntlv = get_arg_val<uint32_t>(8);
+    const uint32_t winb = get_arg_val<uint32_t>(9), flags = get_arg_val<uint32_t>(10);
+    const uint32_t meta_bytes = get_arg_val<uint32_t>(11);  // this core's row length, a multiple of 64 bytes
+    const bool wsplit = flags & F_WSPLIT, addb = flags & F_ADDB, restf = flags & F_RESTF;
+#ifdef GS
+    constexpr bool kGS = true;
+#else
+    constexpr bool kGS = false;
+#endif
     constexpr auto as = TensorAccessorArgs<0>();
     constexpr auto av = TensorAccessorArgs<as.next_compile_time_args_offset()>();
     constexpr auto ao = TensorAccessorArgs<av.next_compile_time_args_offset()>();
     constexpr auto am = TensorAccessorArgs<ao.next_compile_time_args_offset()>();
     constexpr auto ab = TensorAccessorArgs<am.next_compile_time_args_offset()>();
-    [[maybe_unused]] const auto SRC = TensorAccessor(as, src_addr, 4096);  // unused when ZEROX
+    const auto SRC = TensorAccessor(as, src_addr, 4096);  // unused when ZEROX
     const auto V = TensorAccessor(av, v_addr, 4096);
     const auto OFF = TensorAccessor(ao, off_addr, 1024 * OFFB);
-    const auto META = TensorAccessor(am, meta_addr, META_B);
+    const auto META = TensorAccessor(am, meta_addr, 4096);  // this core's row: pages row * meta_pages onwards
     const auto Bv = TensorAccessor(ab, b_addr, 4096);
     (void)Bv;
 #ifdef KDEBUG
@@ -83,7 +93,7 @@ void kernel_main() {
 #define TOC(i)
 #endif
     const uint32_t meta = get_write_ptr(CB_META);
-    noc_async_read(META.get_noc_addr(row), meta, META_B);
+    read_meta(META, row * meta_pages, meta, meta_bytes);
     noc_async_read_barrier();
     invalidate_l1_cache();
     Meta M;
@@ -91,10 +101,9 @@ void kernel_main() {
     const uint32_t win = get_write_ptr(CB_WIN);
     const uint32_t offr = get_write_ptr(CB_OFF);  // 2 x count_of(0) offset pages
     TIC();
-#ifdef ZEROX
-    {  // x = 0 on entry (pre-smoother): zero the windows on chip instead of reading a zero vector from DRAM.
+    if (flags & F_ZEROX) {  // x = 0 on entry (pre-smoother): zero the windows on chip instead of reading a zero vector from DRAM.
         // 4 KB from the 512-B hardware zero region, then local copies of that 4 KB over the rest
-        const uint32_t nbytes = WINB;
+        const uint32_t nbytes = winb;
         const uint64_t zsrc = get_noc_addr(MEM_ZEROS_BASE);
         for (uint32_t o = 0; o < 4096 && o < nbytes; o += MEM_ZEROS_SIZE) {
             noc_async_read(zsrc, win + o, MEM_ZEROS_SIZE);
@@ -104,26 +113,19 @@ void kernel_main() {
         for (uint32_t o = 4096; o < nbytes; o += 4096) {
             noc_async_read(wsrc, win + o, (nbytes - o) < 4096 ? nbytes - o : 4096);
         }
+    } else {
+        // window pieces from DRAM x. WSPLIT: the writer loads the odd pieces on its own NoC, so a load uses both NoCs
+        for (uint32_t r = 0; r < M.R; r += wsplit ? 2 : 1) {
+            read_q(SRC, M.lo(r), win + M.l1(r), M.len(r), RNOC);
+        }
     }
-#else
-    // window pieces from DRAM x. WSPLIT: the writer loads the odd pieces on its own NoC, so a load uses both NoCs
-#if defined(WSPLIT)
-    for (uint32_t r = 0; r < M.R; r += 2) {
-        read_q(SRC, M.lo(r), win + M.l1(r), M.len(r), RNOC);
+    // without WSPLIT, the window wait moves after the first unit's matrix reads are issued (one combined wait)
+    const bool early_on = !wsplit;
+    if (wsplit) {
+        noc_async_read_barrier(RNOC);
+        noc_async_read_barrier();
+        invalidate_l1_cache();
     }
-#else
-    for (uint32_t r = 0; r < M.R; ++r) {
-        read_q(SRC, M.lo(r), win + M.l1(r), M.len(r), RNOC);
-    }
-#endif
-#endif
-#if !defined(WSPLIT)
-#define EARLY_ON 1  // the window wait moves after the first unit's matrix reads are issued (one combined wait)
-#else
-    noc_async_read_barrier(RNOC);
-    noc_async_read_barrier();
-    invalidate_l1_cache();
-#endif
     TOC(0);
     const uint32_t sem0 = get_semaphore(0);
     volatile tt_l1_ptr uint32_t* mb = (volatile tt_l1_ptr uint32_t*)get_write_ptr(CB_MB);
@@ -135,18 +137,14 @@ void kernel_main() {
         mb[i] = 0;  // pack / unpack thread cycle counters
     }
 #endif
-#ifdef WSPLIT
-    // semaphore 0 counts the two halves of the window load (reader + writer, NoC atomic increments)
-    noc_semaphore_inc(get_noc_addr(sem0), 1);
-    noc_async_atomic_barrier();
-    wait_sem(sem0, 2);
-#elif !defined(EARLY_ON)
-    *(volatile tt_l1_ptr uint32_t*)get_semaphore(0) = 1;  // tells the pack thread: windows + mailbox ready
-#endif
-#if !defined(EARLY_ON)
-    cb_reserve_back(CB_RDY, 1);
-    cb_push_back(CB_RDY, 1);
-#endif
+    if (wsplit) {
+        // semaphore 0 counts the two halves of the window load (reader + writer, NoC atomic increments)
+        noc_semaphore_inc(get_noc_addr(sem0), 1);
+        noc_async_atomic_barrier();
+        wait_sem(sem0, 2);
+        cb_reserve_back(CB_RDY, 1);
+        cb_push_back(CB_RDY, 1);
+    }
     constexpr uint32_t C0 = count_of(0), C2 = count_of(2);
     (void)C0;
     (void)C2;
@@ -207,17 +205,17 @@ void kernel_main() {
             if (owner(j) == 1)
                 continue;
 #endif
-            noc_async_read(V.get_noc_addr(j * NTLV + t, 0, RNOC) + wb, vb + nv * PGB + lw, nb, RNOC);
+            noc_async_read(V.get_noc_addr(j * ntlv + t, 0, RNOC) + wb, vb + nv * PGB + lw, nb, RNOC);
             ++nv;
             if (owner(j) == 0)
                 noc_async_read(
-                    OFF.get_noc_addr(j * NTLV + t, 0, RNOC) + ob,
+                    OFF.get_noc_addr(j * ntlv + t, 0, RNOC) + ob,
                     offr + (USLOT(u) * MG0 + rank_in(lo, j, 0)) * OPGB + lob,
                     onb,
                     RNOC);
 #if NG > 3 && !defined(OFFW)
             else if (owner(j) == 3) {
-                noc_async_read(OFF.get_noc_addr(j * NTLV + t, 0, RNOC) + ob, o4 + n4 * OPGB + lob, onb, RNOC);
+                noc_async_read(OFF.get_noc_addr(j * ntlv + t, 0, RNOC) + ob, o4 + n4 * OPGB + lob, onb, RNOC);
                 ++n4;
             }
 #endif
@@ -225,18 +223,16 @@ void kernel_main() {
             else if (owner(j) == 2) {
                 while (pk_issued + 1 - mb[3] > RING) invalidate_l1_cache();
                 noc_async_read(
-                    OFF.get_noc_addr(j * NTLV + t, 0, RNOC) + ob, ring + (pk_issued % RING) * OPGB + lob, onb, RNOC);
+                    OFF.get_noc_addr(j * ntlv + t, 0, RNOC) + ob, ring + (pk_issued % RING) * OPGB + lob, onb, RNOC);
                 ++pk_issued;
             }
 #endif
         }
-#if defined(GS) || defined(ADDB)
-        if (g == 0 && gsph) {
+        if ((kGS || addb) && g == 0 && gsph) {
             cb_reserve_back(CB_B, bpend + 1);
             noc_async_read(Bv.get_noc_addr(t) + wb, cb_ahead_ptr(CB_B, bpend, PGB) + lw, nb);
             ++bpend;
         }
-#endif
     };
 
     SegIter it;
@@ -245,17 +241,9 @@ void kernel_main() {
     uint32_t g = 0;
     SegIter is = it;  // issue cursor: unit ui = (is, ig), LOOK units ahead of the unit being gathered
     uint32_t ig = 0, ui = 0;
-    // b is read for Gauss-Seidel units and (RESTF) for the SpMV pass over block 0, whose output is r - A z
-#if defined(ADDB)
-    auto needb = [&](uint32_t p) {
-        (void)p;
-        return true;
-    };  // ADDB: every output is b + A x (prolongation)
-#elif defined(RESTF)
-    auto needb = [&](uint32_t p) { return !M.sp(p) || M.phase(p) == 8; };
-#else
-    auto needb = [&](uint32_t p) { return !M.sp(p); };
-#endif
+    // b is read for Gauss-Seidel units, (RESTF) for the SpMV pass over block 0, whose output is r - A z, and (ADDB)
+    // for every output, b + A x (prolongation)
+    auto needb = [&](uint32_t p) { return addb || !M.sp(p) || (restf && M.phase(p) == 8); };
     auto issue_next = [&]() {
         if (is.done()) {
             return;
@@ -272,16 +260,16 @@ void kernel_main() {
     for (uint32_t l = 0; l < LOOK; ++l) {
         issue_next();
     }
-#ifdef EARLY_ON
-    TIC();
-    noc_async_read_barrier(RNOC);  // window + unit 0
-    noc_async_read_barrier();
-    invalidate_l1_cache();
-    TOC(0);
-    *(volatile tt_l1_ptr uint32_t*)get_semaphore(0) = 1;  // windows + mailbox ready
-    cb_reserve_back(CB_RDY, 1);
-    cb_push_back(CB_RDY, 1);
-#endif
+    if (early_on) {
+        TIC();
+        noc_async_read_barrier(RNOC);  // window + unit 0
+        noc_async_read_barrier();
+        invalidate_l1_cache();
+        TOC(0);
+        *(volatile tt_l1_ptr uint32_t*)get_semaphore(0) = 1;  // windows + mailbox ready
+        cb_reserve_back(CB_RDY, 1);
+        cb_push_back(CB_RDY, 1);
+    }
     while (!it.done()) {
         const uint32_t q0 = it.q0(), q1 = it.q1();
         const uint32_t w0 = q0 & (TPW - 1), w1 = w0 + (q1 - q0);
@@ -295,12 +283,10 @@ void kernel_main() {
         cb_push_back(CB_OFF4, c4_of(g));
         opend -= c4_of(g);
 #endif
-#if defined(GS) || defined(ADDB)
-        if (g == 0 && needb(it.p)) {
+        if ((kGS || addb) && g == 0 && needb(it.p)) {
             cb_push_back(CB_B, 1);
             --bpend;
         }
-#endif
 #if NG > 2 && !defined(OFFW)
         mb[2] = pk_at[USLOT(u)];  // only entries whose reads have landed (units <= u)
 #endif

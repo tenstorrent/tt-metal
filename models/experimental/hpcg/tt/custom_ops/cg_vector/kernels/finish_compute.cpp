@@ -3,20 +3,18 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Dot-product finish, compute (one core, SFPU, fp32 in DEST): adds the pages of per-core values lane by lane (unused
-// lanes are zero), then reduces the 1024 lanes to one value (columns, then rows) at element (0, 0). SQRT: then takes
-// its square root.
+// lanes are zero), then reduces the 1024 lanes to one value (columns, then rows) at element (0, 0). do_sqrt (runtime
+// argument): then takes its square root.
 #include <cstdint>
 #include "api/compute/common.h"
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/compute_kernel_hw_startup.h"
-#ifdef SQRT
 #include "api/compute/eltwise_unary/sqrt.h"
-#endif
 
 void kernel_main() {
-    const uint32_t n = get_arg_val<uint32_t>(0);
+    const uint32_t n = get_arg_val<uint32_t>(0), do_sqrt = get_arg_val<uint32_t>(1);
     compute_kernel_hw_startup(CB_A, CB_OUT);
     tile_regs_acquire();
     copy_init(CB_A);
@@ -32,10 +30,10 @@ void kernel_main() {
     sfpu_reduce_init<PoolType::SUM, DataFormat::Float32>();
     sfpu_reduce<PoolType::SUM, DataFormat::Float32, ReduceDim::REDUCE_COL>(0);
     sfpu_reduce<PoolType::SUM, DataFormat::Float32, ReduceDim::REDUCE_ROW>(0);
-#ifdef SQRT
-    sqrt_tile_init();
-    sqrt_tile(0);
-#endif
+    if (do_sqrt) {
+        sqrt_tile_init();
+        sqrt_tile(0);
+    }
     tile_regs_commit();
     tile_regs_wait();
     cb_reserve_back(CB_OUT, 1);

@@ -7,11 +7,7 @@
 // reader, waits for the reader's window load and (GS) for each phase's neighbour semaphore, takes its offset pages
 // from the reader's ring (counters in the mailbox CB) and gathers its stencil slots into CB_G3 for the unpacker.
 #pragma once
-#ifdef WSPLIT
-#define READY_N 2  // semaphore 0 = halves of the window load done (reader + writer)
-#else
-#define READY_N 1
-#endif
+// ready_n (init argument): semaphore 0's value once the window is loaded: 1, or 2 with WSPLIT (reader + writer halves)
 #if (NG > 2 && (defined(TRISC_PACK) || defined(TRISC_UNPACK))) || (defined(FASTMAC) && defined(TRISC_MATH))
 #include "hostdev/dev_msgs.h"
 #define PFENCE() asm volatile("fence" ::: "memory")
@@ -33,7 +29,7 @@ struct PackGather {
     uint32_t win, ring, sem, consumed, R, NPH, NIN, NNB, NB;
     uint32_t p, k, nseg_p, need_start;  // current phase, segment index within it
     const volatile uint32_t* seg;
-    void init() {
+    void init(uint32_t ready_n) {
         const uint32_t sbase = launch_sem_base();
         sem = sbase;                                           // progress slots at semaphore 1 + i
         volatile uint32_t* ready = (volatile uint32_t*)sbase;  // semaphore 0: windows + mailbox ready
@@ -41,7 +37,7 @@ struct PackGather {
         win = get_local_cb_interface(CB_WIN).fifo_wr_ptr << 4;
         ring = get_local_cb_interface(CB_OFF3).fifo_wr_ptr << 4;
         m = (const volatile uint32_t*)(get_local_cb_interface(CB_META).fifo_wr_ptr << 4);
-        while (*ready < READY_N) {
+        while (*ready < ready_n) {
             PFENCE();
         }
         PFENCE();
@@ -136,13 +132,13 @@ struct UnpackGather {
     const volatile uint32_t* m;
     uint32_t win, sem, R, NPH, NNB, NB, p, k, nseg_p, need_start, w0, w1;
     const volatile uint32_t* seg;
-    void init() {
+    void init(uint32_t ready_n) {
         const uint32_t sbase = launch_sem_base();
         sem = sbase;
         volatile uint32_t* ready = (volatile uint32_t*)sbase;
         win = get_local_cb_interface(CB_WIN).fifo_rd_ptr << 4;
         m = (const volatile uint32_t*)(get_local_cb_interface(CB_META).fifo_rd_ptr << 4);
-        while (*ready < READY_N) {
+        while (*ready < ready_n) {
             PFENCE();
         }
         PFENCE();
@@ -226,7 +222,7 @@ struct MathSeg {
     const volatile uint32_t* m;
     uint32_t R, NPH, NNB, NB, p, k, nseg_p, f0, f1;
     const volatile uint32_t* seg;
-    void init() {
+    void init(uint32_t ready_n) {
         volatile uint32_t* ready = (volatile uint32_t*)launch_sem_base();
         // the math firmware sets up no CB interfaces: read CB_META's L1 address from the launch's CB config table
         // (word 0 of each 4-word entry = fifo address in bytes, as circular_buffer_init.h reads it)
@@ -236,7 +232,7 @@ struct MathSeg {
             (const volatile uint32_t*)(lm->kernel_config.kernel_config_base[ProgrammableCoreType::TENSIX] +
                                        lm->kernel_config.local_cb_offset);
         m = (const volatile uint32_t*)cbt[CB_META * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG];
-        while (*ready < READY_N) {
+        while (*ready < ready_n) {
             PFENCE();
         }
         PFENCE();

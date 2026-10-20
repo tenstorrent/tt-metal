@@ -23,25 +23,24 @@ void kernel_main() {
     const uint32_t row = get_arg_val<uint32_t>(2);
     const uint32_t off_addr = get_arg_val<uint32_t>(3);
     const uint32_t my_x = get_arg_val<uint32_t>(4), my_y = get_arg_val<uint32_t>(5);
+    const uint32_t meta_pages = get_arg_val<uint32_t>(10), ntlv = get_arg_val<uint32_t>(11);
+    const uint32_t flags = get_arg_val<uint32_t>(12), meta_bytes = get_arg_val<uint32_t>(13);
+    const bool wsplit = flags & F_WSPLIT;
     constexpr auto ao = TensorAccessorArgs<0>();
     constexpr auto am = TensorAccessorArgs<ao.next_compile_time_args_offset()>();
     constexpr auto af = TensorAccessorArgs<am.next_compile_time_args_offset()>();
     const auto OUT = TensorAccessor(ao, out_addr, 4096);
-    const auto META = TensorAccessor(am, meta_addr, META_B);
+    const auto META = TensorAccessor(am, meta_addr, 4096);
     const auto OFF = TensorAccessor(af, off_addr, 1024 * OFFB);
     [[maybe_unused]] constexpr auto adbg0 = TensorAccessorArgs<af.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto avv = TensorAccessorArgs<adbg0.next_compile_time_args_offset()>();
 #ifdef OFFW
     const auto V = TensorAccessor(avv, get_arg_val<uint32_t>(7), 4096);
 #endif
-    [[maybe_unused]] constexpr auto ao2 = TensorAccessorArgs<avv.next_compile_time_args_offset()>();
-#ifdef RESID
-    const auto OUT2 = TensorAccessor(ao2, get_arg_val<uint32_t>(8), 4096);  // A x of the SpMV passes
-#endif
-#if defined(WSPLIT) && !defined(ZEROX)
+    constexpr auto ao2 = TensorAccessorArgs<avv.next_compile_time_args_offset()>();
+    [[maybe_unused]] const auto OUT2 = TensorAccessor(ao2, get_arg_val<uint32_t>(8), 4096);  // A x of SpMV passes
     constexpr auto asr = TensorAccessorArgs<ao2.next_compile_time_args_offset()>();
     const auto SRC = TensorAccessor(asr, get_arg_val<uint32_t>(9), 4096);  // x, for the odd window regions
-#endif
 #ifdef KDEBUG
     uint32_t T[8] = {0, 0, 0, 0, 0, 0, 0, 0};
     uint32_t t0 = CLK();
@@ -53,7 +52,7 @@ void kernel_main() {
 #define TOC(i)
 #endif
     const uint32_t meta = get_write_ptr(CB_META2);
-    noc_async_read(META.get_noc_addr(row), meta, META_B);
+    read_meta(META, row * meta_pages, meta, meta_bytes);
     noc_async_read_barrier();
     invalidate_l1_cache();
     Meta M;
@@ -69,14 +68,12 @@ void kernel_main() {
         const uint32_t src = get_read_ptr(CB_OUT) + (e.q0 & (TPW - 1)) * 4;
         const uint32_t n = e.q1 - e.q0;
 #ifdef GS
-#ifdef RESID
-        if (e.sp) {
+        if (e.sp) {  // a segment of an SpMV pass (residual launches): A x goes to OUT2
             noc_async_write(src, OUT2.get_noc_addr(e.q0 >> 10) + (e.q0 & 1023) * 4, n * 4);
             noc_async_writes_flushed();
             cb_pop_front(CB_OUT, 1);
             return;
         }
-#endif
         const volatile uint32_t* bk = M.blk(e.b);
         noc_async_write(src, get_noc_addr(my_x, my_y, win + bk[6] + (e.q0 - bk[4]) * 4), n * 4);
         const volatile uint32_t* ex = M.m + bk[2];
@@ -136,18 +133,18 @@ void kernel_main() {
         for (uint32_t j = grp_lo(g); j < grp_hi(g); ++j) {
             if (owner(j) == 1) {
                 noc_async_read(
-                    OFF.get_noc_addr(j * NTLV + t) + ob,
+                    OFF.get_noc_addr(j * ntlv + t) + ob,
                     offw + (USLOT(u) * MG1 + rank_in(grp_lo(g), j, 1)) * OPGB + lob,
                     onb);
 #ifdef OFFW
-                noc_async_read(V.get_noc_addr(j * NTLV + t) + wb, v2 + n2 * PGB + lw, nb);
+                noc_async_read(V.get_noc_addr(j * ntlv + t) + wb, v2 + n2 * PGB + lw, nb);
                 ++n2;
             } else if (owner(j) == 3) {
-                noc_async_read(OFF.get_noc_addr(j * NTLV + t) + ob, o4 + n4 * OPGB + lob, onb);
+                noc_async_read(OFF.get_noc_addr(j * ntlv + t) + ob, o4 + n4 * OPGB + lob, onb);
                 ++n4;
             } else if (owner(j) == 2) {
                 while (pk_issued >= RING && pk_issued + 1 - mb[3] > RING) invalidate_l1_cache();  // ring starts empty
-                noc_async_read(OFF.get_noc_addr(j * NTLV + t) + ob, ring + (pk_issued % RING) * OPGB + lob, onb);
+                noc_async_read(OFF.get_noc_addr(j * ntlv + t) + ob, ring + (pk_issued % RING) * OPGB + lob, onb);
                 ++pk_issued;
 #endif
             }
@@ -191,28 +188,26 @@ void kernel_main() {
         }
     };
     bool early = false;
-#if !defined(WSPLIT)
-    // my first units' reads now (matrix values / offsets do not depend on the window)
-    for (uint32_t l = 0; l < LOOK; ++l) {
-        issue_next();
-    }
-    early = true;
-#endif
-    TIC();
-#ifdef WSPLIT
-    {
-        const uint32_t s0 = get_semaphore(0);
-#ifndef ZEROX
-        const uint32_t wn = get_write_ptr(CB_WIN);
-        for (uint32_t r = 1; r < M.R; r += 2) {
-            read_q(SRC, M.lo(r), wn + M.l1(r), M.len(r));
+    if (!wsplit) {
+        // my first units' reads now (matrix values / offsets do not depend on the window)
+        for (uint32_t l = 0; l < LOOK; ++l) {
+            issue_next();
         }
-        noc_async_read_barrier();
-#endif
+        early = true;
+    }
+    TIC();
+    if (wsplit) {
+        const uint32_t s0 = get_semaphore(0);
+        if (!(flags & F_ZEROX)) {
+            const uint32_t wn = get_write_ptr(CB_WIN);
+            for (uint32_t r = 1; r < M.R; r += 2) {
+                read_q(SRC, M.lo(r), wn + M.l1(r), M.len(r));
+            }
+            noc_async_read_barrier();
+        }
         noc_semaphore_inc(get_noc_addr(s0), 1);
         noc_async_atomic_barrier();
     }
-#endif
     cb_wait_front(CB_RDY, 1);
     TOC(0);
     invalidate_l1_cache();

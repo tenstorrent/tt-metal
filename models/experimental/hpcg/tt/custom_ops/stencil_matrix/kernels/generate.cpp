@@ -9,6 +9,7 @@
 //   is the row itself); padding rows: 1 on the diagonal, 0 elsewhere.
 //   offset of column col: l1 + (col - lo) * 4 of the core's window piece (lo, l1) that holds col.
 //   b = 26 - (neighbours - 1) on real rows, 0 on padding rows.
+//   zero vectors (up to two, e.g. the initial guess x = 0 and CG's p): 0 on every row.
 // Both data-movement RISCs run this kernel; RISC h takes the page-sized chunks of the core's rows with index % 2 == h.
 // Everything that depends on the grid comes in runtime arguments, so one compiled binary serves every level and grid
 // size (setup then only loads it from the kernel cache).
@@ -189,6 +190,7 @@ void kernel_main() {
     const uint32_t meta_addr = get_arg_val<uint32_t>(2), b_addr = get_arg_val<uint32_t>(3);
     const uint32_t row = get_arg_val<uint32_t>(4), half = get_arg_val<uint32_t>(5);
     const uint32_t meta_pages = get_arg_val<uint32_t>(6), has_b = get_arg_val<uint32_t>(7);
+    const uint32_t nzero = get_arg_val<uint32_t>(8);  // vectors to zero over this core's rows (0, 1 or 2)
     constexpr auto av = TensorAccessorArgs<0>();
     constexpr auto ao = TensorAccessorArgs<av.next_compile_time_args_offset()>();
     constexpr auto am = TensorAccessorArgs<ao.next_compile_time_args_offset()>();
@@ -197,6 +199,18 @@ void kernel_main() {
     const auto OFF = TensorAccessor(ao, off_addr, 4096);
     const auto META = TensorAccessor(am, meta_addr, 4096);  // this core's row: pages row * meta_pages onwards
     const auto Bv = TensorAccessor(ab, b_addr, 4096);
+    constexpr auto az0 = TensorAccessorArgs<ab.next_compile_time_args_offset()>();
+    constexpr auto az1 = TensorAccessorArgs<az0.next_compile_time_args_offset()>();
+    const auto Z0 = TensorAccessor(az0, get_arg_val<uint32_t>(9), 4096);
+    const auto Z1 = TensorAccessor(az1, get_arg_val<uint32_t>(10), 4096);
+    const uint32_t zpage = get_write_ptr(CB_Z);  // 4 KB of zeros, the source of the zero vectors' writes
+    if (nzero) {
+        const uint64_t zsrc = get_noc_addr(MEM_ZEROS_BASE);
+        for (uint32_t o = 0; o < 4096; o += MEM_ZEROS_SIZE) {
+            noc_async_read(zsrc, zpage + o, MEM_ZEROS_SIZE);
+        }
+        noc_async_read_barrier();
+    }
     const uint32_t meta = get_write_ptr(half ? CB_M1 : CB_M0);
     for (uint32_t p = 0; p < meta_pages; ++p) {
         noc_async_read(META.get_noc_addr(row * meta_pages + p), meta + p * 4096, 4096);
@@ -225,6 +239,12 @@ void kernel_main() {
                 }
                 if (has_b) {
                     noc_async_write(base + 54 * 4096 + wb, Bv.get_noc_addr(t) + wb, nb);
+                }
+                if (nzero > 0) {
+                    noc_async_write(zpage + wb, Z0.get_noc_addr(t) + wb, nb);
+                }
+                if (nzero > 1) {
+                    noc_async_write(zpage + wb, Z1.get_noc_addr(t) + wb, nb);
                 }
                 set ^= 1;
             }

@@ -17,6 +17,7 @@ Modes
   spmv  out = A x for every phase block (1-slot plans: restriction and prolongation gathers; addb: out = b + A x).
 """
 
+import numpy as np
 import ttnn
 
 from models.experimental.hpcg.tt.layout import TILE, u32_rows
@@ -26,6 +27,7 @@ KERNEL_ROOT = "models/experimental/hpcg/tt/custom_ops/sparse_rows/kernels"
 # circular buffers must end below 1,572,864 B of L1 and start 111,616 B in (measured: 1,500,480 B of CBs ended at
 # 1,612,096 B), so at most 1,461,248 B of CBs per core
 L1_BUDGET = 1461248
+F_WSPLIT, F_ZEROX, F_RESTF, F_ADDB = 1, 2, 4, 8  # launch option flags, as in kernels/gather.h
 CB = dict(
     CB_V=0,
     CB_G=1,
@@ -148,35 +150,37 @@ class SparseRowOp:
         g = device.compute_with_storage_grid_size()
         noc_xy = noc_coords(device)
         meta, nseg, nseg_gs, nseg_r = plan.meta(phases, noc_xy, tpw)
-        meta_t = u32_rows(device, meta)
+        # rows of whole 4 KB pages, and the grid-dependent sizes (table pages, pages per slot, window bytes) as
+        # runtime arguments: the kernel binaries then do not depend on the level or the grid size, so a process
+        # loads each binary once (about 2-3 ms per binary)
+        meta_pages = -(-meta.shape[1] // TILE)
+        meta_bytes = -(-meta.shape[1] * 4 // 64) * 64  # the rows' used length, read at launch
+        meta = np.pad(meta, ((0, 0), (0, meta_pages * TILE - meta.shape[1])))
+        meta_t = u32_rows(device, meta.reshape(-1, TILE))
         self.keep = [meta_t]
-        meta_b = meta.shape[1] * 4
+        meta_b = meta_pages * 4096
+        ntlv = slot_pages(plan.pout // TILE) if plan.nslot == 27 else plan.pout // TILE
         offw = plan.nslot == 27  # the writer reads its own slots' values and the other gatherers' offsets
         defs = dict(
             CB,
             NG=NGATH,
-            META_B=meta_b,
             NSLOT=plan.nslot,
-            WINB=plan.win_b,
             NGRP=min(NGRP, plan.nslot),
             TPW=tpw,
-            NTLV=slot_pages(plan.pout // TILE) if plan.nslot == 27 else plan.pout // TILE,
         )
         if mode == "gs":
             defs["GS"] = 1
         if offw:
             defs["OFFW"] = 1
             defs["FASTMAC"] = 1  # SFPU multiply-add on the occupied faces only, one pass per slot
-        if addb:
-            defs["ADDB"] = 1
-        if out2 is not None:
-            defs["RESID"] = 1
-            if restf:
-                defs["RESTF"] = 1
-        if zerox:
-            defs["ZEROX"] = 1
-        if wsplit:
-            defs["WSPLIT"] = 1
+        # launch options: one runtime flags word (kernels/gather.h), not defines, so launches that differ only in
+        # options share a kernel binary
+        flags = (
+            (F_WSPLIT if wsplit else 0)
+            | (F_ZEROX if zerox else 0)
+            | (F_RESTF if restf and out2 is not None else 0)
+            | (F_ADDB if addb else 0)
+        )
         if kernel_debug:
             defs["KDEBUG"] = 1
         b = b if b is not None else x
@@ -195,6 +199,11 @@ class SparseRowOp:
                 b.buffer_address(),
                 i,
                 dbg.buffer_address(),
+                meta_pages,
+                ntlv,
+                plan.win_b,
+                flags,
+                meta_bytes,
             ]
             writer_args[c] = [
                 out.buffer_address(),
@@ -207,8 +216,12 @@ class SparseRowOp:
                 values.buffer_address(),
                 o2.buffer_address(),
                 x.buffer_address(),
+                meta_pages,
+                ntlv,
+                flags,
+                meta_bytes,
             ]
-            compute_args[c] = [nseg[i], nseg_gs[i], nseg_r[i]]
+            compute_args[c] = [nseg[i], nseg_gs[i], nseg_r[i], flags]
 
         def accessors(*ts):
             return [a for t in ts for a in ttnn.TensorAccessorArgs(t).get_compile_time_args()]
@@ -264,8 +277,8 @@ class SparseRowOp:
                 cb(CB["CB_OUT"], 2 * pg, pg, True),
                 cb(CB["CB_WIN"], win_b, win_b),
                 cb(CB["CB_OFF"], 2 * mg[0] * pg, pg),
-                cb(CB["CB_META"], meta_b, meta_b),
-                cb(CB["CB_META2"], meta_b, meta_b),
+                cb(CB["CB_META"], meta_b),
+                cb(CB["CB_META2"], meta_b),
                 cb(CB["CB_OFF2"], 2 * mg[1] * pg, pg),
                 cb(CB["CB_G3"], gd * pg, pg, True),
                 cb(CB["CB_OFF3"], ring * pg, pg),

@@ -74,8 +74,19 @@ def rows_to_device(device, a):
     return ttnn.from_torch(torch.from_numpy(a), dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
 
 
-def zeros_device(device, P):
-    """A zero vector of length P, zero-filled by the device: ttnn.zeros builds the zeros on the host and uploads them
-    (9.5 ms for 28 MB on the P150), while allocating and filling on the device takes about 2 ms."""
-    t = ttnn.empty(ttnn.Shape([P // 32, 32]), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    return ttnn.zeros_like(t)
+def empty_device(device, P):
+    """An fp32 TILE vector of length P, allocated on the device and not filled (its first user writes it)."""
+    return ttnn.empty(ttnn.Shape([P // 32, 32]), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+
+
+def upload_zeros(device, P):
+    """A small zero vector of length P, uploaded from the host: no device program, so no kernel binary to load."""
+    return ttnn.from_torch(torch.zeros(P // 32, 32), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+
+
+def scalar_device(device, value, only_first=False):
+    """One fp32 tile holding value everywhere (a CG scalar is element (0, 0)), uploaded from the host. only_first:
+    value at element (0, 0) and zeros elsewhere (a per-core partial slot that DotFinishOp adds to exactly value)."""
+    t = torch.zeros((32, 32)) if only_first else torch.full((32, 32), float(value))
+    t[0, 0] = float(value)
+    return ttnn.from_torch(t, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)

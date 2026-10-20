@@ -12,6 +12,7 @@ Every matrix and vector pass is a custom op (tt/custom_ops), including the final
 start (start()) and every iteration run on the device only and are trace-capturable; the CG scalars stay on device.
 """
 
+import numpy as np
 import ttnn
 
 from models.experimental.hpcg.reference.problem import COLOUR_ORDER, build
@@ -19,7 +20,14 @@ from models.experimental.hpcg.tt.custom_ops.cg_vector import CgVectorOp, DotFini
 from models.experimental.hpcg.tt.custom_ops.sparse_rows import SparseRowOp, SparseRowPlan, slot_pages
 from models.experimental.hpcg.tt.custom_ops.sparse_rows.op import debug_buffer, noc_coords
 from models.experimental.hpcg.tt.custom_ops.stencil_matrix import StencilMatrixOp
-from models.experimental.hpcg.tt.layout import TILE, rows_to_device, to_device, zeros_device
+from models.experimental.hpcg.tt.layout import (
+    TILE,
+    empty_device,
+    rows_to_device,
+    scalar_device,
+    to_device,
+    upload_zeros,
+)
 
 
 def default_bands(nx_level):
@@ -36,9 +44,11 @@ def slot_stride(P):
 
 class DeviceLevel:
     """One multigrid level on device: matrix values and window offsets, and the level's work vectors.
-    b: for the fine level, CG's right-hand side, which the device fills when it generates the matrix."""
+    b: for the fine level, CG's right-hand side, which the device fills when it generates the matrix.
+    zeros: vectors of the level to set to zero alongside (the fine level's x and p).
+    Work vectors are allocated without a fill: every launch writes them before any launch reads them."""
 
-    def __init__(self, device, L, ncores, noc_xy, r=None, b=None):
+    def __init__(self, device, L, ncores, noc_xy, r=None, b=None, zeros=()):
         self.L, self.P = L, L.P
         blocks = [(L.starts[c], L.starts[c + 1]) for c in range(8)]
         plan_args = (blocks, blocks, ncores, noc_xy, True)
@@ -50,13 +60,15 @@ class DeviceLevel:
             self.offsets = rows_to_device(device, self.plan.off)  # 32-bit window offsets
             if b is not None:
                 ttnn.copy(to_device(device, L.B), b)
-        else:  # the device writes the values, the offsets and b itself; the host plans the windows only
+            for t in zeros:
+                ttnn.copy(to_device(device, np.zeros(L.P, np.float32)), t)
+        else:  # the device writes the values, the offsets, b and the zero vectors; the host plans the windows only
             self.plan = SparseRowPlan(None, *plan_args, bands=bands, pout=L.P, stencil=L)
-            gen = StencilMatrixOp(device, L, self.plan, b=b)
+            gen = StencilMatrixOp(device, L, self.plan, b=b, zeros=zeros)
             gen()
             self.values, self.offsets = gen.values, gen.offsets
-        self.z, self.Az = (zeros_device(device, L.P) for _ in range(2))
-        self.r = r if r is not None else zeros_device(device, L.P)  # the fine level shares CG's r
+        self.z, self.Az = (empty_device(device, L.P) for _ in range(2))
+        self.r = r if r is not None else empty_device(device, L.P)  # the fine level shares CG's r
 
 
 class HPCG:
@@ -84,12 +96,11 @@ class HPCG:
         noc_xy = noc_coords(device)
         lc = list(level_cores or []) + [nc] * 4  # cores per level for the smoothers (default: all)
         L0 = self.levels[0]
-        self.r, self.b = (zeros_device(device, L0.P) for _ in range(2))
+        self.r, self.b, self.x, self.p, self.Ap = (empty_device(device, L0.P) for _ in range(5))
+        fine = dict(r=self.r, b=self.b, zeros=(self.x, self.p))  # x = 0 (initial guess) and p = 0 on the fine level
         self.lv = [
-            DeviceLevel(device, L, min(nc, lc[l]), noc_xy, r=self.r if l == 0 else None, b=self.b if l == 0 else None)
-            for l, L in enumerate(self.levels)
+            DeviceLevel(device, L, min(nc, lc[l]), noc_xy, **(fine if l == 0 else {})) for l, L in enumerate(self.levels)
         ]
-        self.x, self.p, self.Ap, self.zero = (zeros_device(device, L0.P) for _ in range(4))
         self.debug = debug_buffer(device)  # per-core cycle counters, written by kernel_debug builds
         dbg = dict(kernel_debug=kernel_debug, debug=self.debug)
         self._dbg = dbg
@@ -171,14 +182,20 @@ class HPCG:
             out2=self.Ap,
             **dbg,
         )
-        ncv = min(nc, L0.P // TILE)
-        self.part = zeros_device(device, ncv * TILE)  # per-core dot partials, one tile each
-        # CG scalars, one fp32 tile each (value at element (0, 0)); they never leave the device
-        scalar = ttnn.Shape([1, 1])
-        self._one = ttnn.full(scalar, 1.0, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-        self.rtz, self.rtz_old, self.pAp, self.normr, self.normr0 = (
-            ttnn.full(scalar, 0.0, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device) for _ in range(5)
+        # CG start: A x written straight into r (then r = b - A x): the CG SpMV's binary, on other buffers. HPCG
+        # copies x to p and multiplies p; the product of x is the same and saves the copy
+        self.ops["spmv_start"] = SparseRowOp(
+            device, d0.plan, d0.values, d0.offsets, "gs", [8 + b for b in range(8)], self.x, self.x, b=self.x,
+            out2=self.r, **dbg
         )
+        ncv = min(nc, L0.P // TILE)
+        # per-core dot partials, one 64-byte slot per core; zero beyond the slots (the finish adds whole pages).
+        # Small constants are uploaded: a device fill would load one more kernel binary per process
+        self.part = upload_zeros(device, ncv * TILE)
+        # CG scalars, one fp32 tile each (value at element (0, 0)); they never leave the device
+        self._one, self._minus_one = (scalar_device(device, v) for v in (1.0, -1.0))
+        self._inf_slot = scalar_device(device, float("inf"), only_first=True)  # inf at element (0, 0), zeros elsewhere
+        self.rtz, self.rtz_old, self.pAp, self.normr, self.normr0 = (scalar_device(device, 0.0) for _ in range(5))
         z = self.lv[0].z
         rz = CgVectorOp(device, "dot", self.r, z, part=self.part)
         n = -(-rz.nc * 64 // (4 * TILE))  # pages holding one 64-byte slot per core
@@ -192,6 +209,11 @@ class HPCG:
             p=CgVectorOp(device, "axpy", z, self.p, s1=self.rtz, s2=self.rtz_old),
             xr=CgVectorOp(device, "xr", self.x, self.p, self.r, self.Ap, s1=self.rtz, s2=self.pAp, part=self.part),
             nr_fin=DotFinishOp(device, self.part, n, self.normr, sqrt=True),
+            # reset and CG start with the same binaries (no TT-NN copy / subtract / fill programs to load):
+            x0=CgVectorOp(device, "axpy", self.x, self.x, s1=self._minus_one, s2=self._one),  # x = x - x = 0
+            r_b=CgVectorOp(device, "axpy", self.b, self.r, s1=self._minus_one, s2=self._one),  # r = b - A x
+            # r.z = inf + 0 + ... = inf whatever r.z held before (so start() can run again before an iteration)
+            rtz_inf=DotFinishOp(device, self._inf_slot, 1, self.rtz),
         )
 
     def spmv(self, l):
@@ -214,19 +236,22 @@ class HPCG:
             self.ops[("gs", l)]()
 
     def reset(self):
-        """x = 0. HPCG zeroes x before each CG call (main.cpp), outside the CG timer."""
-        ttnn.copy(self.zero, self.x)
+        """x = 0. HPCG zeroes x before each CG call (main.cpp), outside the CG timer. Computed as x - x, exact for
+        finite x (x starts at 0 and stays finite)."""
+        self.vops["x0"]()
 
     def start(self):
-        """CG start, the part of HPCG's CG.cpp that runs inside its timer before iteration 1: p = x, Ap = A p,
-        r = b - Ap, normr0 = |r|. Device only and trace-capturable; returns normr0 as a 1x1 device tensor.
-        r.z starts at 1, so iteration 1 keeps 1 as the previous r.z and its p = z + (r.z / 1) p = z (p = x = 0)."""
-        ttnn.copy(self.x, self.p)
-        self.ops["spmv_cg"]()
-        ttnn.subtract(self.b, self.Ap, output_tensor=self.r)
-        self.vops["rr"]()
-        self.vops["nr0_fin"]()
-        ttnn.copy(self._one, self.rtz)
+        """CG start, the part of HPCG's CG.cpp that runs inside its timer before iteration 1: r = b - A x (HPCG
+        copies x to p and multiplies p; multiplying x gives the same r) and normr0 = |r|. Device only and
+        trace-capturable; returns normr0 as a 1x1 device tensor. The update is r = b + (-1) A x: the same bits as
+        b - A x. r.z starts at +inf, so iteration 1 keeps inf as the previous r.z and its p = z + (r.z / inf) p =
+        z + 0 p = z exactly (p is always finite: the device zeroes it at setup)."""
+        v = self.vops
+        self.ops["spmv_start"]()  # A x, into r
+        v["r_b"]()
+        v["rr"]()
+        v["nr0_fin"]()
+        v["rtz_inf"]()
         return self.normr0
 
     def iteration(self):

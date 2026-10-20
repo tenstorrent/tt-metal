@@ -144,14 +144,11 @@ class DotFinishOp:
         cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))])
         ra, wa, ca = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
         ra[0][0] = [part.buffer_address(), nparts]
-        wa[0][0] = [out.buffer_address(), old.buffer_address()]
-        ca[0][0] = [nparts]
+        wa[0][0] = [out.buffer_address(), old.buffer_address(), int(keep_old)]
+        ca[0][0] = [nparts, int(sqrt)]
         cbs_ids = dict(CB_A=0, CB_OUT=16, CB_T=17)
+        # keep_old and sqrt are runtime arguments: the three finishes of an iteration share one binary
         defs = [(k, str(v)) for k, v in cbs_ids.items()] + [("VB", str(VB))]
-        if keep_old:
-            defs.append(("KEEP_OLD", "1"))
-        if sqrt:
-            defs.append(("SQRT", "1"))
 
         def cb(idx, n):
             return ttnn.CBDescriptor(
