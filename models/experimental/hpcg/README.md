@@ -48,9 +48,10 @@ limit because their coarsest copies are too small to keep the cores busy.
 colouring of the grid (needed to run in parallel) takes 51 to 53 iterations to
 reach the accuracy HPCG's reference code reaches in 50, and HPCG credits only 50.
 HPCG also charges a tenth of the setup time to every 50 iterations; setup here
-takes 0.03 s at 104³ and 0.05 s at 192³. Each timed set also includes the CG
-start (r = b - A x and its norm), as HPCG times it. Scored this way, the P150
-rates 81.7, 93.8 and 104.0 GFLOP/s at 104³, 128³ and 192³. HPCG's fp64
+takes 0.010 s at 104³ and 0.013 s at 192³, which lowers the score by 0.1 to
+0.4%. Each timed set also includes the CG start (r = b - A x and its norm), as
+HPCG times it. Scored this way, the P150 rates 82.5, 94.4 and 104.3 GFLOP/s at
+104³, 128³ and 192³. HPCG's fp64
 reference code on a 24-thread Ryzen 9 7900X rates 3.83, 4.02 and 4.40 GFLOP/s,
 so the P150 is 21 to 24 times faster.
 
@@ -74,11 +75,12 @@ nothing while it runs.
 - **Vector operations.** Dot products and vector updates are single passes over
   the vectors. Each core reduces its share of a dot product to one number, and
   one small launch adds the 130 numbers.
-- **Setup.** The card writes the matrix itself: one launch per grid fills each
-  core's rows of matrix values and column offsets straight into DRAM, so
-  nothing large crosses from the host. The host only plans which rows and
-  pieces of x each core handles, in C++ (`host/native_setup.cpp`, compiled
-  automatically the first time it runs).
+- **Setup.** The card writes the matrix itself: each core fills its rows of
+  matrix values and column offsets straight into DRAM, and the same for the
+  tables of the transfers between grids, so nothing large crosses from the
+  host. The host only plans which rows and pieces of x each core handles, in
+  C++ (`host/native_setup.cpp`, compiled automatically the first time it
+  runs).
 
 ## Host time
 
@@ -88,16 +90,20 @@ Measured at 192³ on the P150's host (Ryzen 9 7900X).
   CG start and one per iteration (0.1 ms for 51 replays) and reads nothing
   back; a 50-iteration set measures 50 × 23.65 ms + 3.95 ms for the start.
 - **Setup, charged by HPCG's score (a tenth per 50-iteration set): about
-  0.05 s.** It is needed before the first launch:
-  - the card generating the matrix (one launch per grid, about 17 ms, mostly
-    the fine grid's 1.5 GB of values and offsets);
-  - planning which rows and pieces of x each core handles, and which updated
-    rows it sends to which neighbour (about 14 ms, C++);
-  - building the launch descriptions the card is dispatched with (about
-    10 ms), the grid-transfer tables (about 6 ms) and allocating the vectors
-    (about 4 ms).
+  13 ms**, the first time in a process (10 ms when repeated). The card and the
+  host work at the same time:
+  - the card writes the matrix in two launches: the fine grid (6.2 ms, 1.6 GB
+    of values and column offsets) as soon as the host has planned it, then the
+    three coarser grids and the six grid-transfer tables (2.2 ms). At 192³ the
+    card finishes about 1 ms after the host, so this is the longer of the two;
+  - the host plans which rows and pieces of x each core handles and which
+    updated rows it sends to which neighbour (about 2 ms, C++), builds the
+    launch descriptions and the small per-core tables the kernels read (about
+    5 ms), and allocates the vectors;
+  - a second host thread loads the matrix-writing kernel (1.7 ms) while the
+    fine grid is planned, so its first launch does not wait for it.
 - **Once per process, not charged:** `import ttnn` (1.5 s), opening the card
-  (0.2 s), loading the compiled kernels on first use (about 0.06 s) and
+  (0.2 s), loading the compiled kernels on first use (about 0.02 s) and
   recording the two traces (3 ms). These belong to TT-NN and the runtime, like
   loading a program for a CPU run.
 - **Checking results, outside the benchmark:** reading the residual after
