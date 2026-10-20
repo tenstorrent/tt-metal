@@ -69,16 +69,20 @@ constexpr bool _llk_unpack_A_asserts_check_unpacker_B_()
  *
  * Selects the UNPACR instruction sequence based on broadcast type, dest-reuse mode and
  * whether data is unpacked straight to the dest register, covering transpose-of-faces and
- * 32-bit-to-dest paths.
+ * 32-bit-to-dest paths. The MOP loops follow the tile's face grid (tt-metal#47328), except where
+ * noted below.
  *
  * @tparam BType: Broadcast type, values = <NONE/COL/ROW/SCALAR>
  * @tparam acc_to_dest: Accumulate the operand into the dest register rather than overwriting it.
  * @tparam binary_reuse_dest: Reuse dest as a source operand, values = <NONE/DEST_TO_SRCA/DEST_TO_SRCB>
  * @tparam unpack_to_dest: Unpack directly into the dest register (32-bit datums).
- * @param transpose_of_faces: Whether faces are reordered (transposed) during the unpack.
+ * @param transpose_of_faces: Whether to transpose the face grid during the unpack. Only a 2x2 grid
+ *        (32x32 tile) changes the face order; 1x1, 1x2 and 2x1 grids keep the L1 face order.
  * @param tensor_shape: Tensor shape describing tile dimensions (face_r_dim, face_c_dim, num_faces_r_dim, num_faces_c_dim).
  * @param unpack_src_format: Source data format of the operand in L1.
  * @param unpack_dst_format: Destination data format the operand is converted to.
+ * @note Unsupported on tiles other than 32x32 (asserted in @ref _llk_unpack_A_init_): COL broadcast
+ *       with acc_to_dest or unpack to dest, and ROW broadcast with acc_to_dest.
  */
 template <
     BroadcastType BType                          = BroadcastType::NONE,
@@ -99,7 +103,7 @@ inline void _llk_unpack_A_mop_config_(
     const std::uint8_t num_faces_c_dim = tensor_shape.num_faces_c_dim;
     // Transpose of faces reads input face (j, i) for output face (i, j). Only a 2x2 grid changes the
     // order; 1x1, 1x2 and 2x1 keep the L1 face order (1x2 becomes 2x1 and the reverse).
-    const bool reorder_faces = transpose_of_faces && (num_faces_r_dim == 2) && (num_faces_c_dim == 2);
+    const bool reorder_faces = transpose_of_faces && (num_faces_r_dim == MAX_NUM_FACES_R_DIM) && (num_faces_c_dim == MAX_NUM_FACES_C_DIM);
 
     static constexpr std::uint32_t unpack_srca =
         TT_OP_UNPACR(SrcA, 0b1 /*Z inc*/, 0, 0, 0, 1 /* Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
@@ -141,8 +145,9 @@ inline void _llk_unpack_A_mop_config_(
         }
         else if (BType == BroadcastType::ROW || BType == BroadcastType::SCALAR)
         {
-            // Row 0 of the top faces goes to row 0 of dest faces 0 and 1; math broadcasts them.
+            // ROW: row 0 of the top faces goes to row 0 of dest faces 0 and 1; math broadcasts them.
             // A tile with one face column reads face 0 for both, so the source face does not step.
+            // SCALAR unpacks one face (outerloop = 1): row 0 of face 0 to row 0 of dest face 0.
             static constexpr std::uint32_t unpack_srca_to_dest_same_face =
                 TT_OP_UNPACR(SrcA, 0b00010000 /*CH1 Z inc*/, 0, 0, 0, 1 /* Set OvrdThreadId*/, 0 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
             constexpr std::uint32_t outerloop = BType == BroadcastType::ROW ? 2 : 1;
@@ -171,7 +176,7 @@ inline void _llk_unpack_A_mop_config_(
         // Faces are stored row-major, so step the SrcB face counter by num_faces_c_dim.
         const std::uint32_t outerloop                 = 1;
         const std::uint32_t innerloop                 = num_faces_r_dim;
-        const std::uint32_t unpack_srcb_next_face_row = (num_faces_c_dim == 2) ? unpack_srcb_inc_z_2 : unpack_srcb;
+        const std::uint32_t unpack_srcb_next_face_row = (num_faces_c_dim == MAX_NUM_FACES_C_DIM) ? unpack_srcb_inc_z_2 : unpack_srcb;
         ckernel_template tmp(outerloop, innerloop, unpack_srcb_next_face_row);
         // ELWADD used in datacopy for float16
         tmp.set_start_op(unpack_srca_zerosrc_set_dvalid);
@@ -181,8 +186,8 @@ inline void _llk_unpack_A_mop_config_(
     {
         if constexpr (acc_to_dest)
         {
-            // Not generalized (no test for broadcast with acc_to_dest): one dummy SrcA DVALID, then
-            // faces 0, 1, 0, 1 to SrcB, i.e. the 32x32 order.
+            // Not generalized (tt-metal#47328): one dummy SrcA DVALID, then faces 0, 1, 0, 1 to SrcB,
+            // i.e. the 32x32 order. _llk_unpack_A_init_ asserts a 32x32 tile.
             constexpr std::uint32_t innerloop = 1;
             constexpr std::uint32_t outerloop = 1;
             ckernel_template tmp(outerloop, innerloop, unpack_srcb_unpack_srcb, srcb_clear_z);
@@ -283,11 +288,15 @@ inline void _llk_unpack_A_mop_config_(
  * @tparam acc_to_dest: Accumulate the operand into the dest register rather than overwriting it.
  * @tparam binary_reuse_dest: Reuse dest as a source operand, values = <NONE/DEST_TO_SRCA/DEST_TO_SRCB>
  * @tparam unpack_to_dest: Unpack directly into the dest register (32-bit datums).
- * @param transpose_of_faces: Nonzero to reorder (transpose) faces during the unpack.
+ * @param transpose_of_faces: Nonzero to transpose the face grid during the unpack. Only a 2x2 grid
+ *        (32x32 tile) changes the face order; 1x1, 1x2 and 2x1 grids keep the L1 face order.
+ *        Needs 16-row faces.
  * @param within_face_16x16_transpose: Nonzero to enable the 16x16 within-face transpose (haloize mode).
  * @param tensor_shape: Tensor shape describing tile dimensions (face_r_dim, face_c_dim, num_faces_r_dim, num_faces_c_dim).
  * @param unpack_src_format: Source data format of the operand in L1.
  * @param unpack_dst_format: Destination data format the operand is converted to.
+ * @note Asserted unsupported on tiles other than 32x32 (tt-metal#47328): COL broadcast with
+ *       acc_to_dest or unpack to dest, and ROW broadcast with acc_to_dest.
  * @note Call @ref _llk_unpack_A_uninit_ as the matching teardown; it is currently a no-op
  *       because unpacker X counters are reprogrammed by init.
  * @ref _llk_unpack_A_ is the matching execute call.
@@ -308,14 +317,16 @@ inline void _llk_unpack_A_init_(
     LLK_VALIDATE_TENSOR_SHAPE_UNPACK("_llk_unpack_A_init_", tensor_shape);
     const std::uint8_t face_r_dim = tensor_shape.face_r_dim;
     const std::uint8_t num_faces  = tensor_shape.total_num_faces();
-    // Column broadcast through SrcB follows the face grid for every tile shape. The acc_to_dest
-    // and unpack-to-dest (32-bit) paths are still 32x32-only.
+    // Column broadcast through SrcB follows the face grid for every tile shape. Not on other
+    // tiles yet (tt-metal#47328): the unpack-to-dest (32-bit) MOP always unpacks two faces in the
+    // 32x32 layout, and acc_to_dest has no test on them.
     LLK_ASSERT(
-        BType != BroadcastType::COL || num_faces == 4 || (!acc_to_dest && !should_unpack_to_dest(unpack_to_dest, unpack_src_format, unpack_dst_format)),
+        BType != BroadcastType::COL || num_faces == MAX_NUM_FACES ||
+            (!acc_to_dest && !should_unpack_to_dest(unpack_to_dest, unpack_src_format, unpack_dst_format)),
         "Unary Broadcast Column: tiles other than 32x32 need no acc_to_dest and no unpack to dest");
-    // Row broadcast with acc_to_dest keeps the 32x32 MOP and has no test for other tiles. (Scalar
+    // Row broadcast with acc_to_dest: the MOP keeps the 32x32 face order (tt-metal#47328). (Scalar
     // broadcast with acc_to_dest is rejected by a static_assert in _llk_unpack_A_mop_config_.)
-    LLK_ASSERT(BType != BroadcastType::ROW || !acc_to_dest || num_faces == 4, "Unary Broadcast Row with acc_to_dest: 32x32 only");
+    LLK_ASSERT(BType != BroadcastType::ROW || !acc_to_dest || num_faces == MAX_NUM_FACES, "Unary Broadcast Row with acc_to_dest: 32x32 only");
     LLK_ASSERT(transpose_of_faces == 0 || face_r_dim == 16, "Partial faces are not supported for transpose datacopy, face_r_dim must be 16 rows");
     LLK_ASSERT(
         is_unpacker_format_conversion_supported_dest(static_cast<DataFormat>(unpack_src_format), static_cast<DataFormat>(unpack_dst_format), unpack_to_dest),
