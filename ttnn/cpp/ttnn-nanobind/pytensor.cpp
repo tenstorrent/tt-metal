@@ -1873,6 +1873,25 @@ void pytensor_module(nb::module_& mod) {
             [](Tensor& self, std::size_t tensor_id) { self.tensor_id = tensor_id; });
 
     mod.def(
+        "experimental_allocate_single_device_tensor",
+        [](distributed::MeshDevice& mesh, const distributed::MeshCoordinate& coord, const TensorSpec& spec) {
+            TT_FATAL(spec.memory_config().buffer_type() == BufferType::L1, "Extent acquisition requires L1");
+            TT_FATAL(experimental::per_core_allocation::is_per_core_allocation(spec.compute_buffer_sharding_args()),
+                     "Extent acquisition requires per-core allocation");
+            auto buffer = experimental::per_core_allocation::create_on_single_device(
+                distributed::ReplicatedBufferConfig{.size = spec.compute_packed_buffer_size_bytes()},
+                distributed::DeviceLocalBufferConfig{
+                    .page_size = spec.compute_page_size_bytes(),
+                    .buffer_type = spec.memory_config().buffer_type(),
+                    .sharding_args = spec.compute_buffer_sharding_args()},
+                &mesh, coord);
+            TensorTopology topology(distributed::MeshShape(1, 1), {distributed::MeshMapperConfig::Replicate{}}, {coord});
+            return Tensor(DeviceStorage(
+                mesh_tensor_from_buffer_with_topology(std::move(*buffer), spec, std::move(topology)), {coord}));
+        },
+        nb::arg("mesh_device").noconvert(), nb::arg("coord"), nb::arg("tensor_spec"), nb::keep_alive<0, 1>(),
+        "Allocate per-core L1 on one device without initializing or uploading any bytes.");
+    mod.def(
         "experimental_to_single_device",
         [](const Tensor& host_tensor,
            tt::tt_metal::distributed::MeshDevice* mesh_device,
