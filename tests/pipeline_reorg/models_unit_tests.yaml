@@ -241,10 +241,9 @@
   model_family: Qwen
   skus:
     bh_quietbox_2:
-      # 40 -> 50 (2026-10-20): with the MTP spec engine's full warmup (cold JIT cache) the files before
-      # test_all_buckets_fit_trace_region take ~31.5 min, and its 64-layer load takes up to ~13 min on a
-      # cold NAS: ~45 min worst case. The 40 min budget timed out in run 39303454645.
-      timeout: 50
+      # ~28.5 min measured incl. setup and the spec engine warmup; the margin is for the 64-layer NAS
+      # load in test_all_buckets_fit_trace_region (35 s typical, ~10 min seen on a slow NAS).
+      timeout: 40
       tier: 1
   owner_id: U08HL8X1ECD # Aniruddha Tupe
   team: models
