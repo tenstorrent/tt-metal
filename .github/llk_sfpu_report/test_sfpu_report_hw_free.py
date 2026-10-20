@@ -223,7 +223,7 @@ def test_report_stays_under_the_comment_limit():
 def test_binary_ops_are_their_own_family():
     assert cli._family_of("Tanh") == "unary"
     assert cli._family_of("Typecast") == "typecast"
-    assert cli._family_of("SfpuLogsigmoid") == "binary"
+    assert cli._family_of("SfpuElwadd") == "binary"
     assert cli._family_of("SfpuDivInt32") == "binary"
 
 
@@ -445,8 +445,8 @@ def test_rebase_mode_says_what_it_compared():
 
 
 def test_requested_ops_take_any_case_and_skip_unknown_names():
-    ops, unknown = cli._requested_ops("tanh,SFPULOGSIGMOID,typecast,tanhh,Tanh")
-    assert ops == ["Tanh", "SfpuLogsigmoid", "Typecast"]
+    ops, unknown = cli._requested_ops("tanh,SFPUELWADD,typecast,tanhh,Tanh")
+    assert ops == ["Tanh", "SfpuElwadd", "Typecast"]
     assert unknown == ["tanhh"]
 
 
@@ -648,7 +648,8 @@ def test_ops_built_on_one_side_only_are_measured():
 
 def test_binary_enum_names_map_to_math_operations():
     names = cli._binary_enum_to_op()
-    assert names["LOGSIGMOID"] == "SfpuLogsigmoid"
+    assert names["ADD"] == "SfpuElwadd"
+    assert "LOGSIGMOID" not in names  # unary Logsigmoid since #54080
     assert names["ATAN2"] == "SfpuAtan2"
     assert names["DIV_INT32"] == "SfpuDivInt32"
 
@@ -813,7 +814,7 @@ def test_findings_list_every_regression_once():
 def test_a_special_result_that_changes_to_the_reference_is_not_a_regression():
     import torch
 
-    # #54080: logsigmoid(+inf) went from -0 to +0, which is what torch returns.
+    # A binary op whose f(+inf, 0) goes from -0 to +0, which is what torch returns.
     pairs = [(INF, 0.0), (3.4e38, 0.0), (NAN, 1.0), (1.0, 0.36)]
     golden = [0.0, 0.0, INF, -0.31]  # the harness maps a NaN input to inf
 
@@ -853,16 +854,6 @@ def test_a_special_result_that_changes_to_the_reference_is_not_a_regression():
         }
     )
     assert [v[3] for v in unary.values()] == [None, None, 4.0]
-
-
-def test_logsigmoid_perf_says_what_mains_cycles_leave_out():
-    summary = _summary()
-    for rows in summary["perf"]["unary"].values():
-        rows[0]["op"] = "SfpuLogsigmoid"
-    text = report.render([summary])
-    assert "math 191 → 479 cycles/tile (0.40x); the old cycles leave out exp(-x), see Performance" in text
-    assert "`SfpuLogsigmoid`: the test feeds exp(-x) as an input." in text
-    assert "feeds" not in report.render([_summary()])
 
 
 def test_a_clean_report_says_so():

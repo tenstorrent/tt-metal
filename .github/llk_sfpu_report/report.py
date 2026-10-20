@@ -14,7 +14,7 @@ import math
 import re
 from pathlib import Path
 
-from perf import DEVICE_COMPUTED_OPERAND, ROWS_PER_TILE
+from perf import ROWS_PER_TILE
 
 COMMENT_MARKER = "<!-- llk-sfpu-report -->"
 STALE_DAYS = 14
@@ -110,14 +110,6 @@ def perf_section(summaries):
             *[l for _, l in rest],
             "",
             "</details>",
-        ]
-    for op in sorted({row["op"].split(" (", 1)[0] for _, row in rows} & DEVICE_COMPUTED_OPERAND.keys()):
-        operand, work = DEVICE_COMPUTED_OPERAND[op]
-        lines += [
-            "",
-            f"`{op}`: the test feeds {operand} as an input. ttnn computes it on the device before "
-            f"this kernel runs ({work}), so the old cycles leave that work out, and a kernel that "
-            "does it itself measures slower here than it runs in ttnn. Compare such a change in ttnn.",
         ]
     lines += ["", _loadmacro_note(summaries), ""]
     return lines
@@ -600,9 +592,6 @@ def findings(summaries):
                             f"{label} {_num(cell['base'])} → {_num(cell['head'])} cycles/tile "
                             f"({_speedup(cell['base'], cell['head']).strip('*')})"
                         )
-                        computed = DEVICE_COMPUTED_OPERAND.get(row["op"].split(" (", 1)[0])
-                        if computed:
-                            what += f"; the old cycles leave out {computed[0]}, see Performance"
                     add(
                         "perf",
                         s["arch"],

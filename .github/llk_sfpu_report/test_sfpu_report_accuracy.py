@@ -263,7 +263,6 @@ BINARY_FORMATS = {
     "SfpuElwdiv": [F16B, F32],
     "SfpuAtan2": [F16B, F32],
     "SfpuIsclose": [F16B, F32],
-    "SfpuLogsigmoid": [F16B, F32],
     **{op: _FLOAT_FULL + [I32] for op in ("SfpuElwLt", "SfpuElwGt", "SfpuElwLe", "SfpuElwGe")},
     **{
         op: [I32]
@@ -302,23 +301,6 @@ EXACT_BINARY_OPS = {
     "SfpuIsclose",
 }
 
-#: Logsigmoid's x: both branches, including x > 4, which reads exp(-x) from in1.
-LOGSIGMOID_DOMAIN = (-60.0, 60.0)
-
-#: What the report says about an op's coverage when it is narrower than the format.
-BINARY_COVERAGE_NOTES = {
-    "SfpuLogsigmoid": f"x in [{LOGSIGMOID_DOMAIN[0]:g}, {LOGSIGMOID_DOMAIN[1]:g}], with its second "
-    "operand exp(-x) computed on the host (ttnn computes it on the device with a fast exp, so "
-    "device results can differ slightly)",
-}
-
-#: Ops whose second operand is a function of the first, not an independent input:
-#: op -> in1(x). Their stimuli are x and in1(x), never an independent pair.
-DERIVED_OPERAND = {
-    "SfpuLogsigmoid": lambda x: torch.exp(-x.to(torch.float64)),
-}
-
-
 #: Ops whose functional test feeds crafted operand pairs, with the ties and clean 0/1
 #: verdicts a random draw never produces: op -> its stimuli builder in
 #: test_eltwise_binary_sfpu.py, which returns (spec_A, spec_B).
@@ -330,11 +312,6 @@ PAIRED_STIMULI = {
 
 #: Ops whose golden cannot take a zero second operand (an int64 division raises).
 NONZERO_DIVISOR = {"SfpuDivInt32", "SfpuDivInt32Floor"}
-
-
-def _binary_dimensions(fmt):
-    """The functional driver's default size: 16 tile pairs, 8 for a 32-bit format."""
-    return [128, 128] if fmt.is_32_bit() else [256, 128]
 
 
 def _interleave(a, b):
@@ -421,21 +398,10 @@ def _binary_run(op_name, fmt, dest_acc, kind, monkeypatch):
     monkeypatch.setattr(fb, "generate_stimuli", capture_generate)
 
     kwargs = {}
-    derived = DERIVED_OPERAND.get(op_name)
     n = TILE_DIMENSIONS[0] * TILE_DIMENSIONS[1]
     if kind == "specials":
-        if derived:
-            a = torch.tensor(binary_special_values(fmt), dtype=torch.float64)
-            a = a.repeat(-(-n // a.numel()))[:n]
-            b = derived(a)
-        else:
-            a, b = binary_special_pairs(fmt, op_name)
+        a, b = binary_special_pairs(fmt, op_name)
         kwargs["src_A_override"] = _interleave(a, b)
-    elif derived:
-        dims = _binary_dimensions(fmt)
-        a = torch.linspace(*LOGSIGMOID_DOMAIN, dims[0] * dims[1] // 2, dtype=torch.float64)
-        kwargs["input_dimensions"] = dims
-        kwargs["src_A_override"] = _interleave(a, derived(a))
     elif op_name in PAIRED_STIMULI:
         kwargs["spec_A"], kwargs["spec_B"] = getattr(fb, PAIRED_STIMULI[op_name])()
     elif op_name == "SfpuAtan2":
@@ -491,7 +457,6 @@ def test_sfpu_report_accuracy_binary(op_name, fmt, dest_acc, kind, monkeypatch):
             "kind": kind,
             "binary": True,
             "exact": fmt.is_integer() or op_name in EXACT_BINARY_OPS,
-            "coverage": BINARY_COVERAGE_NOTES.get(op_name),
             "src": a,
             "src_b": b,
             "golden": golden,

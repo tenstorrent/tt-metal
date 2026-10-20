@@ -157,11 +157,6 @@ it, so each gets its own row: the binary float test's unpack broadcast
 (`SfpuElwadd (Dest bcast Row)`), fast mode (`Exp (fast_mode Yes)`) and the TopK sort
 switches.
 
-Logsigmoid's second operand, exp(-x), is an input to the test, but ttnn computes it on
-the device before the kernel runs (a negative and a fast exp). Main's cycles leave that
-work out, so a kernel that does it itself (#54080) measures slower here than it runs in
-ttnn; the report says so beside its rows and its regressions.
-
 **Accuracy.** `test_sfpu_report_accuracy.py` runs each op over every
 finite input of bf16 and fp16 (fp32: every 65,536th value) and over a tile of special
 values (NaN, ±inf, ±0, subnormals, the format's extremes), and saves the raw results.
@@ -186,10 +181,8 @@ variants accuracy does not cover.
 Binary ops use the functional driver `sfpu_binary()` of `test_eltwise_binary_sfpu.py`, so
 operand layout, domains and golden are the functional test's, and so are the crafted
 operand pairs of the comparisons (`Eq`/`Ne`, `Lt`/`Gt`/`Le`/`Ge`, `Isclose`), which hold
-the ties a random draw never produces. Logsigmoid is measured on x in [-60, 60], both
-branches, with its second operand exp(-x) computed on the host (the functional test
-stops at 3.9, below the branch that reads it). Not covered: `Mask`, `AddTopRow`,
-`CopyDest` (not elementwise functions of their inputs).
+the ties a random draw never produces. Not covered: `Mask`, `AddTopRow`, `CopyDest`
+(not elementwise functions of their inputs).
 
 Later: ternary and structural SFPU kernels (reduce, topk, cumsum, welford), plots,
 ttnn-level timing, Quasar (needs the emulator). A changed kernel the report cannot

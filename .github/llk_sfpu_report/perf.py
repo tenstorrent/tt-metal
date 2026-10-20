@@ -43,12 +43,6 @@ def _latest_csv(side, module):
 #: Perf tests without a ``mathop`` parameter that measure one op: op -> test.
 TEST_OF_OP = {"SfpuElwdiv": "test_perf_eltwise_binary_sfpu_div"}
 
-#: Binary ops whose second operand the test feeds as an input, while ttnn computes it
-#: on the device before the kernel runs: op -> (the operand, what ttnn runs for it).
-#: Main's cycles leave that work out, so a kernel that takes it over measures slower
-#: here than it runs in ttnn.
-DEVICE_COMPUTED_OPERAND = {"SfpuLogsigmoid": ("exp(-x)", "a negative and a fast exp")}
-
 
 def _selection(family, ops, formats=()):
     """The ``-k`` expression that keeps ``ops``' variants, in ``formats`` when given.
