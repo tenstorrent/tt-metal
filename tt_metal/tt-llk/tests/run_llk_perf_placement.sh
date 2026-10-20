@@ -33,9 +33,11 @@ for SHIFT in 0 4 20 36 52; do
   export RUNNER_TEMP="$TEMP_ROOT/placement-p$SHIFT"
   export PERF_RUN_TAG="p$SHIFT"
   if [[ "$SHIFT" == 0 ]]; then export LLK_WINDOW_HASH=1; else unset LLK_WINDOW_HASH; fi
+  [[ "$SHIFT" == 0 ]] || mv ../../perf_data/runs/windows "$TEMP_ROOT/windows-p0" 2>/dev/null || true
   pytest "${PYTEST_EXTRA[@]}" --compile-producer -n 10 --junitxml="pytest-report-placement-p${SHIFT}-1-compile.xml" . || STATUS=1
   pytest "${PYTEST_EXTRA[@]}" --compile-consumer --dist loadgroup -n 15 --junitxml="pytest-report-placement-p${SHIFT}-1-run.xml" . || STATUS=1
 done
 
+mv "$TEMP_ROOT/windows-p0" ../../perf_data/runs/windows 2>/dev/null || true
 # A test that failed at one position is reported as unclear; the comparison still runs.
 exit "$STATUS"
