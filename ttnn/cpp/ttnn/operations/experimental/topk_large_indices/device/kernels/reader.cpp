@@ -45,8 +45,8 @@ void kernel_main() {
     CircularBuffer input_cb(cb_in);
     Noc noc;
 
-    TopkMetadataBounds bounds;
-    uint32_t valid_end_cap = 0;  // per-row mode: the (optional) real-token-end cap, read once
+    TopkMetadataBounds bounds{0, 0};  // set below (once, or per row in per-row mode)
+    uint32_t valid_end_cap = 0;       // per-row mode: the (optional) real-token-end cap, read once
     if constexpr (metadata_mode && per_row_metadata) {
         const uint32_t valid_end_addr = get_common_arg_val<uint32_t>(topk_common_args::valid_end_address);
         if (valid_end_addr != 0) {

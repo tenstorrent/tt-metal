@@ -182,30 +182,36 @@ PCC vs the single-chip traced path (same tokens, same positions), then one user 
 
 ### 4.2 Step time, DSA attention block alone (traced, ms per step; the eager reference path for 1 user)
 
-| positions | 1 user (eager reference) | 4 users | 8 users |
-|---|---|---|---|
-| 16 384 | 1.885 (2.5) | 3.429 | 5.393 |
-| 131 072 | 2.007 (3.7) | 3.924 | 6.356 |
-| 1 048 576 | 3.003 (13.6) | 7.869 | 14.252 |
+| positions | 1 user (eager reference) | 4 users | 8 users | 4 / 8 users with per-user top-k calls |
+|---|---|---|---|---|
+| 16 384 | 1.888 (2.4) | 3.421 | 5.308 | 3.429 / 5.393 |
+| 131 072 | 2.006 (3.7-6.7) | 3.540 | 5.429 | 3.924 / 6.356 |
+| 1 048 576 | 3.012 (13.6-13.8) | 4.532 | 6.428 | 7.869 / 14.252 |
 
-(`test_sparse_1m.py`; the eager reference path is the same attention module through `dense_positions` + the
-per-user `sparse_sdpa` rows, warm, no stage timer -- its whole-layer figure in `test_cache_1m` was 26.5 ms.)
+(`test_sparse_1m.py`, `sparse1m_test_1m_3.log` (batched top-k) and `_2.log` (per-user top-k calls); the eager
+reference path is the same attention module through `dense_positions` + the per-user `sparse_sdpa` rows, warm,
+no stage timer (wall, host-noise bounds) -- its whole-layer figure in `test_cache_1m` was 26.5 ms.) The stage
+probe at 1 M (`sparse1m_probe_stages.log`, eager walls): score op 0.38 ms per user, row slice 0.06, top-k 1.14
+per call, pool gather 0.17 / 0.50 ms (1 / 8 users), compact flash-MLA 0.41 / 0.53 ms.
 
 ### 4.3 Step time, whole layer 3 (mHC + DSA + the single-chip 288-expert MoE), traced
 
-| positions | 1 user | 4 users | 8 users | DSA block ops (ttnn / device) |
+| positions | 1 user | 4 users | 8 users | DSA block ops (ttnn / device) for 1, 4, 8 users |
 |---|---|---|---|---|
-| 4 096 | 5.923 | 9.028 | 12.909 | 110 / 60, 148 / 93, 192 / 129 |
-| 131 072 | 6.066 | 9.569 | 13.996 | |
-| 1 048 576 | 7.046 | 13.505 | 21.807 | |
+| 4 096 | 5.933 | 9.067 | 13.039 | 110 / 60, 142 / 90, 178 / 122 |
+| 131 072 | 6.067 | 9.206 | 13.180 | |
+| 1 048 576 | 7.053 | 10.194 | 14.163 | |
+| 1 048 576, per-user top-k calls | 7.046 | 13.505 | 21.807 | 107 / 60, 145 / 93, 189 / 129 |
 
-(`test_sparse_perf.py`; the single-chip MoE dominates the short-context figures: the 2x4-block layer-3 step at 4
-users/row is 2.42 ms (mesh README). The ISL-dependent increment 4 K -> 1 M is 1.1 ms for 1 user, 4.5 for 4,
-8.9 for 8, i.e. ~1.1 ms per user at 1 M: the per-user scorer call (0.36 ms) + its 16 MB 32-row output and the
-row slice + the top-k (0.145 ms) + the gather and compact attention shares; section 2.4 has the floor.)
+(`test_sparse_perf.py`, `sparse1m_test_perf_2.log` / `_perf.log`; the single-chip MoE dominates the short-context
+figures: the 2x4-block layer-3 step at 4 users/row is 2.42 ms (mesh README). The ISL-dependent increment
+4 K -> 1 M is now ~1.1 ms at every batch; the per-user terms left are the scorer call (0.38 ms, 64 MiB of
+bf16 pooled keys) and the q / w / row slices.)
 
-Before / after at 1 M, 1 user, layer 3: 26.5 ms eager layer step (`test_cache_1m`, not traceable, 1 user only) ->
-7.0 ms traced layer step (3.0 ms of it the attention block), any number of users in one graph.
+Before / after at 1 M, layer 3: 26.5 ms eager layer step for ONE user (`test_cache_1m`, not traceable) ->
+7.05 ms traced layer step for 1 user, 10.2 ms for 4, 14.2 ms for 8 (attention block 3.0 / 4.5 / 6.4 ms), every
+user in one graph; against the design's ~0.7 ms per layer at 8 users x 1 M the attention block is 9x off, the
+scorer read (section 2.4) being the floor-setting term.
 
 ## 5. What remains
 
