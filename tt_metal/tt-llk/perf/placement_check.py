@@ -3,8 +3,16 @@
 
 """Stage 2 of the LLK perf gate: re-measure stage-1 regressions at other code positions.
 
-A candidate is a confirmed regression only when the current side is slower at every code position and the code of
-its measured TILE_LOOP window changed. Anything else is reported as unclear, with the reason.
+Each stage-1 regression gets one outcome; none is dropped from the report:
+
+- regression: slower at every code position, and the code of its measured TILE_LOOP window changed.
+- review: slower at every code position, but the loop code did not change (a change outside the loop, or a
+  placement effect that every position shares).
+- partial: the loop code changed, but it is slower at some code positions only.
+- placement: the loop code did not change and it is slower at some code positions only, so the move follows
+  where the code sits (a hardware effect).
+- not-reproduced: slower at no code position when measured again.
+- unmeasured: not measured at every position on both sides, or no window fingerprint.
 
     placement_check.py nodes  --candidates R.regressions.csv --map 'current/**/*.windowhash' --out nodes.txt
     placement_check.py decide --candidates R.regressions.csv --baseline DIR --current DIR --report stage2.md
@@ -168,10 +176,10 @@ def decide(
                 frozenset((k, _value(v)) for k, v in c["config"]),
             )
         )
-        row = dict(c, deltas=[], threads=[])
+        row = dict(c, deltas=[], threads=[], slower=0)
         if lookup is None or not all(lookup in side for side in base + cur):
             row.update(
-                outcome="unclear", why="not measured at every position on both sides"
+                outcome="unmeasured", why="not measured at every position on both sides"
             )
             results.append(row)
             continue
@@ -192,17 +200,16 @@ def decide(
                 str(v).startswith("no-") for v in list(bw.values()) + list(cw.values())
             )
         )
-        if not all(slower):
-            outcome, why = "unclear", "slower at some code positions only"
+        why = ""
+        if not any(slower):
+            outcome = "not-reproduced"
         elif missing:
-            outcome, why = "unclear", "no window fingerprint"
-        elif not threads:
-            outcome, why = (
-                "unclear",
-                "slower everywhere, but the loop code did not change",
-            )
+            outcome, why = "unmeasured", "no window fingerprint"
+        elif all(slower):
+            outcome = "regression" if threads else "review"
         else:
-            outcome, why = "regression", ""
+            outcome = "partial" if threads else "placement"
+        row["slower"] = sum(slower)
         row.update(outcome=outcome, why=why, deltas=deltas, threads=threads)
         results.append(row)
     return results
@@ -216,14 +223,56 @@ def _row(r):
     )
 
 
+_SECTIONS = (
+    (
+        "regression",
+        "Confirmed regressions",
+        "Slower at every code position, and the code of the measured loop changed.",
+        False,
+    ),
+    (
+        "review",
+        "Slower at every position, loop code unchanged: needs a look",
+        "Not caused by the loop's own instructions. Either a change outside the loop (for example a config "
+        "value written in init) or a placement effect that every position shares.",
+        False,
+    ),
+    (
+        "partial",
+        "Loop code changed, slower at some positions only: needs a look",
+        "Probably real, but how much slower depends on where the code sits, and at least one position stays "
+        "under the threshold. Not confirmed.",
+        False,
+    ),
+    (
+        "placement",
+        "Code-placement effects (hardware)",
+        "The loop code did not change and it is slower at some code positions only: the move follows where the "
+        "code sits, not what it does. This is real hardware behaviour (branch predictor, instruction fetch or "
+        "similar), reported so it is not hidden, but the PR's loop code is not the cause.",
+        False,
+    ),
+    (
+        "not-reproduced",
+        "Not reproduced",
+        "Slower at no code position when measured again.",
+        True,
+    ),
+    ("unmeasured", "Not re-measured", "", True),
+)
+
+
 def render(results, arch):
-    regressions = [r for r in results if r["outcome"] == "regression"]
-    unclear = [r for r in results if r["outcome"] == "unclear"]
+    by = collections.defaultdict(list)
+    for r in results:
+        by[r["outcome"]].append(r)
     name = f"{arch.capitalize()} stage 2" if arch else "Stage 2"
-    if regressions:
-        verdict = f"❌ {len(regressions)} confirmed regression(s)"
-    elif unclear:
-        verdict = "⚠️ no confirmed regression, some moves are unclear"
+    if by["regression"]:
+        verdict = f"❌ {len(by['regression'])} confirmed regression(s)"
+    elif by["review"] or by["partial"]:
+        verdict = f"⚠️ no confirmed regression, {len(by['review']) + len(by['partial'])} to review"
+    elif by["placement"]:
+        verdict = "ℹ️ no confirmed regression, code-placement effects only"
     else:
         verdict = "✅ no regressions"
     head = "| test | configuration | run type | change at positions +0 / +4 / +20 / +36 / +52 B | loop code changed in |"
@@ -231,24 +280,27 @@ def render(results, arch):
     lines = [
         f"## {name}: {verdict}",
         "",
-        "Stage 2 re-measured the stage-1 regressions with the code at 5 positions. A regression is confirmed "
-        "only when it is slower at every position and the code of the measured loop changed.",
+        "Stage 2 measured every stage-1 regression again with the TRISC code at 5 positions, on the branch point "
+        "and on the PR head.",
         "",
-        f"- {len(results)} stage-1 regression(s): **{len(regressions)} confirmed**, {len(unclear)} unclear",
+        f"- {len(results)} stage-1 regression(s)",
     ]
-    reasons = collections.Counter(r["why"] for r in unclear)
-    lines += [f"- unclear, {why}: {n}" for why, n in reasons.most_common()]
-    for title, rows, folded in (
-        ("Confirmed regressions", regressions, False),
-        ("Unclear", unclear, True),
-    ):
+    lines += [f"- {title}: {len(by[key])}" for key, title, _, _ in _SECTIONS if by[key]]
+    unmeasured = collections.Counter(r["why"] for r in by["unmeasured"])
+    lines += [f"  - {why}: {n}" for why, n in unmeasured.most_common()]
+    for key, title, text, folded in _SECTIONS:
+        rows = by[key]
         if not rows:
             continue
         rows = sorted(rows, key=lambda r: -min(r["deltas"] or [r["delta_pct"]]))
         caption = f"{title}: " + (
             f"top {_TOP_N} of {len(rows)}" if len(rows) > _TOP_N else f"all {len(rows)}"
         )
-        table = [head, rule] + [_row(r) for r in rows[:_TOP_N]]
+        table = (
+            ([text, ""] if text else [])
+            + [head, rule]
+            + [_row(r) for r in rows[:_TOP_N]]
+        )
         if folded:
             lines += ["", "<details>", f"<summary>{caption}</summary>", ""] + table
             lines += ["", "</details>"]
@@ -295,8 +347,9 @@ def main(argv=None):
     )
     Path(a.report).write_text(render(results, a.arch) + "\n")
     Path(a.report).with_suffix(".json").write_text(json.dumps(results, default=str))
-    confirmed = sum(r["outcome"] == "regression" for r in results)
-    print(f"stage2 confirmed={confirmed} unclear={len(results) - confirmed}")
+    counts = collections.Counter(r["outcome"] for r in results)
+    print("stage2", " ".join(f"{k}={v}" for k, v in sorted(counts.items())))
+    confirmed = counts["regression"]
     return 1 if confirmed else 0
 
 
