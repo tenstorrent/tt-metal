@@ -113,6 +113,8 @@ class PendingFinalCarry:
 @dataclass(frozen=True)
 class _RecurrenceComputeConfig:
     preparation: ttnn.DeviceComputeKernelConfig
+    # The packed one-group-per-head summary (preparation's config unless summary_math_fidelity is set).
+    summary: ttnn.DeviceComputeKernelConfig
     affine_prefix: ttnn.DeviceComputeKernelConfig
     scan: ttnn.DeviceComputeKernelConfig
 
@@ -481,7 +483,7 @@ def _scan_sp_grouped_chunks(
             actual_end=actual_end,
             sequence_parallel_axis=sequence_parallel_axis,
             memory_config=correction.memory_config if correct else KDA_OUTPUT_MEMORY_CONFIG,
-            compute_kernel_config=compute_config.preparation,
+            compute_kernel_config=compute_config.summary,
             packed_head=True,
             emit_outputs=correct,
             emit_memory_config=correction.terms_memory_config if correct else None,
@@ -687,8 +689,20 @@ class KDARecurrence:
             fp32_dest_acc_en=True,
             packer_l1_acc=False,
         )
+        summary = (
+            preparation
+            if program_config.summary_math_fidelity is None
+            else ttnn.init_device_compute_kernel_config(
+                device.arch(),
+                math_fidelity=program_config.summary_math_fidelity,
+                math_approx_mode=False,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=False,
+            )
+        )
         self._compute_config = _RecurrenceComputeConfig(
             preparation=preparation,
+            summary=summary,
             affine_prefix=affine_prefix,
             scan=scan,
         )

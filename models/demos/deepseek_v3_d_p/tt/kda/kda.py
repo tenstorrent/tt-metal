@@ -242,6 +242,12 @@ class ttKDA:
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
+        self.decay_compute_config = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=program_config.decay_projection_math_fidelity,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
         self.input_projection_compute_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
             math_fidelity=program_config.input_projection_math_fidelity,
@@ -577,7 +583,7 @@ class ttKDA:
             bias=weights.decay_bias_flat,
             program_config=self.decay_program_config,
             memory_config=self.decay_memory_config,
-            compute_kernel_config=self.compute_config,
+            compute_kernel_config=self.decay_compute_config,
             in0_column_offset=decay_rank_offset,
         )
         return gate if self._bounded_gate else self._softplus_decay(gate)

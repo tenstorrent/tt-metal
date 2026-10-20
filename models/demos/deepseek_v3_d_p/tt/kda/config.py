@@ -84,6 +84,8 @@ class KDARecurrenceProgramConfig:
     summary_group_chunks: int = 20
     # Chunk preparation and the chunk summary (its pairwise products and the summary's state products).
     preparation_math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.HiFi4
+    # The packed one-group-per-head summary's fidelity; None takes preparation_math_fidelity.
+    summary_math_fidelity: ttnn.MathFidelity | None = None
     affine_prefix_math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.HiFi2
     scan_math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.HiFi2
     # Gather the SP prefix summaries with high_bw_all_gather into a persistent DRAM buffer. The recurrence takes it only
@@ -135,6 +137,8 @@ class KDAProgramConfig:
     # TP ring while later ones compute), with the deferred final carry on its idle transport-row cores. Taken with the
     # carry deferral (overlap_output_gate) on a TP mesh.
     fused_output_reduce_scatter: bool = False
+    # The bounded decay gate's projection (K = the decay rank) fidelity.
+    decay_projection_math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.HiFi4
     # K-block tiles of the matmul-program projections (GateMatmulProgram).
     input_projection_k_block: int = 4
     output_projection_k_block: int = 4
@@ -247,6 +251,8 @@ def kimi_k3_program_config(*, active_seq_len_local: int, tp_ccl_topology: ttnn.T
             entry_correction=True,
             # HiFi3: preparation and summary -10 us at T=5120, output NRMSE unchanged (HiFi2 reaches 2.1e-2).
             preparation_math_fidelity=ttnn.MathFidelity.HiFi3,
+            # HiFi2: summary -2 us at T=5120, output NRMSE +0.03e-2.
+            summary_math_fidelity=ttnn.MathFidelity.HiFi2,
         ),
         qkv_channel_chunk_size=64,
         tp_ccl_topology=tp_ccl_topology,
@@ -263,6 +269,8 @@ def kimi_k3_program_config(*, active_seq_len_local: int, tp_ccl_topology: ttnn.T
         output_projection_k_block=8,
         input_projection_extra_gate_tiles=5,
         fused_output_reduce_scatter=active_seq_len_local == _TUNED_PROJECTION_ROWS,
+        # HiFi2: the decay projection -1.7 us at T=5120, output NRMSE +0.015e-2.
+        decay_projection_math_fidelity=ttnn.MathFidelity.HiFi2,
         # The output gate beside the relay (and the projections on the matmul program) also at T=1024, 2048 and
         # 2560: 0.752 -> 0.740 ms, 0.913 -> 0.839 ms and 1.021 -> 0.871 ms.
         overlap_output_gate=active_seq_len_local in (128, 256, 320, _TUNED_PROJECTION_ROWS),
