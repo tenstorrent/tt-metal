@@ -6,15 +6,31 @@
 
 #include <cstdint>
 #include <optional>
+#include <utility>
 #include <variant>
 
 #include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/math.hpp>
 
 #include "ttnn/operations/data_movement/reshape_view/codegen/reshape_codegen_tile_mapped_plan.hpp"
 #include "ttnn/operations/data_movement/reshape_view/codegen/reshape_codegen_tile_rows_plan.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::operations::data_movement::reshape_codegen {
+
+inline constexpr uint64_t kTileDim = 32;
+
+// Physical (C, H, W) model of a TILE shape: leading dims fold into C.
+struct Shape3 {
+    uint64_t c = 1;
+    uint64_t h = 1;
+    uint64_t w = 1;
+};
+
+inline uint64_t tile_pages(const Shape3& s) { return s.c * tt::div_up(s.h, kTileDim) * tt::div_up(s.w, kTileDim); }
+
+// Both shapes as Shape3; nullopt when either has rank 0 or a zero dim, or the volumes differ.
+std::optional<std::pair<Shape3, Shape3>> normalize_pair(const ttnn::Shape& in_shape, const ttnn::Shape& out_shape);
 
 // Largest single NOC read the coalesced RM reader issues.
 constexpr uint32_t kMaxReadSize = 2048;
@@ -141,11 +157,9 @@ uint64_t static_l1_budget(const Tensor& input, const tt::tt_metal::TensorSpec& o
 std::optional<TileRowsChoice> live_tile_rows_choice(
     const Tensor& input, const ttnn::Shape& logical_output_shape, const TileRowsChoice& planned);
 
-// The program of `planned.tile_route` sized to the L1 free below the lowest live allocation: the largest tile-rows
-// plan (live_tile_rows_choice), or the segment map, sliced where slicing pays off and fits, with the deepest input CB
-// that fits. When no tile-rows plan fits, the segment map: its smallest plan, unsliced with one input slot, needs no
-// more L1 than native's tiled reshape (tile_mapped_input_depth), so routing need not look at live L1. nullopt when
-// nothing fits. Same contract as live_tile_rows_choice.
+// The program of `planned.tile_route` sized to live L1: the largest tile-rows plan that fits, else the segment map
+// with the deepest input CB that fits; its smallest plan needs no more L1 than native's, so routing need not look at
+// live L1. nullopt when nothing fits. Same contract as live_tile_rows_choice.
 std::optional<TileChoice> live_tile_choice(
     const Tensor& input, const ttnn::Shape& logical_output_shape, uint32_t grid_cores, const LaunchPlan& planned);
 

@@ -17,14 +17,13 @@
 #include <tt-metalium/math.hpp>
 #include <tt_stl/assert.hpp>
 
-#include "ttnn/operations/data_movement/reshape_view/codegen/reshape_codegen_tile_shape.hpp"
+#include "ttnn/operations/data_movement/reshape_view/codegen/reshape_codegen_plan.hpp"
 
 namespace ttnn::operations::data_movement::reshape_codegen {
 
 // Named rather than anonymous: TileRowsSchedule, declared in the header, holds these types.
 namespace tile_rows_planner {
 
-constexpr uint64_t kTileDim = 32;
 constexpr uint64_t kFaceRows = 16;
 // Source caps tried, largest first, when the full plan does not fit.
 constexpr std::array<uint32_t, 6> kMaxInSteps = {kTileRowsMaxIn, 16, 8, 4, 2, 1};
@@ -39,8 +38,6 @@ constexpr uint64_t kMaxTableBytes = 32 * 1024 * 1024;
 constexpr uint64_t kMinRunsPerTile = 2;
 constexpr size_t kChoiceMemoEntries = 64;
 constexpr uint32_t kNoSource = std::numeric_limits<uint32_t>::max();
-
-uint64_t tile_pages(const Shape3& s) { return s.c * tt::div_up(s.h, kTileDim) * (s.w / kTileDim); }
 
 // Source (input tile, row) of every row of one output tile; padding rows have tile kNoSource and keep their own row.
 struct TileRowSources {
@@ -141,8 +138,7 @@ PlanInputs prepare(const Shape3& in, const Shape3& out) {
     for (uint64_t t = 0; t < p.out_pages; ++t) {
         add_tile(p, row_sources(in, out, t));
     }
-    // Ordering by smallest source puts output tiles that share sources next to each other. It is a heuristic:
-    // sharing tiles can still split across batches, which costs re-reads but not correctness.
+    // Heuristic: tiles that share sources land next to each other, but can still split across batches (re-reads).
     const auto& begin = p.tiles.source_begin;
     const auto& sources = p.tiles.sources;
     p.order.resize(p.out_pages);
@@ -203,13 +199,11 @@ bool exceeds_caps(const Shape3& out) {
 }
 
 std::optional<std::pair<Shape3, Shape3>> permutation_shapes(const ttnn::Shape& in_shape, const ttnn::Shape& out_shape) {
-    const auto in = normalize(in_shape);
-    const auto out = normalize(out_shape);
-    if (!in || !out || in->w % kTileDim != 0 || out->w % kTileDim != 0 ||
-        in->c * in->h * in->w != out->c * out->h * out->w) {
+    auto shapes = normalize_pair(in_shape, out_shape);
+    if (shapes && (shapes->first.w % kTileDim != 0 || shapes->second.w % kTileDim != 0)) {
         return std::nullopt;
     }
-    return std::make_pair(*in, *out);
+    return shapes;
 }
 
 }  // namespace tile_rows_planner

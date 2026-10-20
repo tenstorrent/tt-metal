@@ -91,15 +91,11 @@ const char* scope_violation(
     return nullptr;
 }
 
-// Native reshapes one output tile per core per round and reads every source tile it touches; tile rows reads each
-// source once per batch. Tile rows wins on any of three clauses: native reads at least 8x what the batches read,
-// the batches save at least 16 reads per output tile, or every output tile is whole face halves of its sources.
-// Both thresholds are judged on the full plan. Fitted on Blackhole; Wormhole cross-arch CI shows no routed loss at
-// this cut.
+// Native reads every source tile each output tile touches; tile rows reads each source once per batch. Thresholds
+// are judged on the full plan, fitted on Blackhole and checked on Wormhole.
 constexpr uint64_t kTileRowsMinReadCut = 8;
-// Source reads tile rows saves per output tile that pay for copying its rows one run at a time, whatever the ratio.
-// Width changes below the read cut save at most 6 and lose; a merge of a few heads gathers each output tile from 32
-// padded source tiles and saves 24. Fitted on Blackhole, holds on Wormhole.
+// Source reads saved per output tile that pay for copying its rows one run at a time, whatever the ratio. Width
+// changes below the read cut save at most 6 and lose; a merge of a few heads saves 24.
 constexpr uint64_t kTileRowsMinReadsSavedPerTile = 16;
 // Two runs per output tile means every output tile is whole face halves of its sources.
 constexpr uint64_t kWholeHalfRunsPerTile = 2;
@@ -129,13 +125,10 @@ struct TileRouteChoice {
     std::optional<tt::tt_metal::TensorSpec> output_spec;
 };
 
-// Tries, in order: tile rows where it beats native, then tile rows and the segment map where they do not; the first
-// whose smallest plan fits the static window is taken. The segment map beats native only on widths that are not
-// multiples of 32, where tile rows does not apply. Tile rows falls back to the segment map when live L1 holds none of
-// its plans, and the segment map's smallest plan needs no more L1 than native's tiled reshape
-// (tile_mapped_input_depth), so wherever native runs one of the two does; tile rows therefore beats native only while
-// the segment map is within its size caps. Native rejects uint16, so every program beats it there. With
-// `winners_only`, returns no plan before building any output spec when no program can beat native.
+// Tries tile rows where it beats native, then tile rows and the segment map where they do not; the first whose
+// smallest plan fits the static window is taken. Tile rows falls back to the segment map under live L1 pressure, so it
+// beats native only while the segment map is within its size caps. With `winners_only`, returns no plan before
+// building any output spec when no program can beat native.
 TileRouteChoice choose_tile_route(
     const Tensor& input,
     const ttnn::Shape& logical_output_shape,
@@ -481,10 +474,6 @@ bool supported_by_codegen(
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids) {
     return unsupported_reason(input, logical_output_shape, output_mem_config, sub_core_grids) == nullptr;
-}
-
-bool supported_by_codegen(const Tensor& input, const ttnn::Shape& logical_output_shape) {
-    return supported_by_codegen(input, logical_output_shape, input.memory_config());
 }
 
 bool is_demoted(
