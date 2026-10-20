@@ -58,7 +58,7 @@ _FUSED_MODES = {
     "block": "block",
     "recurrence": "recurrence",
 }
-KDA_FUSED_DEFAULT = _FUSED_MODES.get(os.environ.get("GLM53_KDA_FUSED", "0"), "composite")
+KDA_FUSED_DEFAULT = _FUSED_MODES.get(os.environ.get("GLM53_KDA_FUSED", "1"), "block")  # block = design 8.1 (6 ops)
 
 
 def kda_config(cfg: GLM53FlashConfig) -> KDAConfig:
