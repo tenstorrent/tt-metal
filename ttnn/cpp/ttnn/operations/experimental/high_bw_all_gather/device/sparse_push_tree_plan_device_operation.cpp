@@ -29,8 +29,10 @@ enum TreeCb : uint32_t {
     kScratch = 5,
     kRw = 6,
     kIdx = 7,
-    kVars = 8
+    kVars = 8,
+    kDens = 9
 };
+constexpr uint32_t kWin = 256;  // must match the kernel's bitmap window
 
 uint32_t round_up(uint32_t x, uint32_t m) { return (x + m - 1) / m * m; }
 
@@ -115,7 +117,7 @@ tt::tt_metal::ProgramDescriptor SparsePushTreePlanDeviceOperation::create_descri
         });
     };
     constexpr uint32_t kGroups = 4 * 12 * 2 * 2 + 2;
-    add_cb(td::kBits, 32 * wpc * 4);
+    add_cb(td::kBits, 32 * td::kWin * 4);
     add_cb(td::kCnt, td::kCntWords * 4);
     add_cb(td::kAllCnt, cores * td::kCntWords * 4);
     add_cb(td::kOpen, kGroups * td::kRecordBytes);
@@ -124,6 +126,7 @@ tt::tt_metal::ProgramDescriptor SparsePushTreePlanDeviceOperation::create_descri
     add_cb(td::kRw, (attrs.slot_capacity + max_blocks + td::round_up(W, 16)) * 4);
     add_cb(td::kIdx, td::round_up(topk * 4, 64));
     add_cb(td::kVars, 8192);
+    add_cb(td::kDens, (cores + 1) * td::round_up(wpc / 16, 16) * 4);
 
     auto add_semaphore = [&]() {
         const auto id = static_cast<uint32_t>(desc.semaphores.size());
