@@ -59,36 +59,48 @@ void swiglu_block(uint32_t in_cb, uint32_t bias_cb, uint32_t out_cb, uint32_t M_
 #endif
     pack_reconfig_data_format(out_cb);
 
-    constexpr uint32_t GATE_DST = 0;
-    constexpr uint32_t UP_DST = 1;
     const uint32_t out_N_block_tiles = N_block_tiles >> 1;
 
+    // Two gate/up pairs per DST round trip: 4 fp32 DST tiles are available in both half- and
+    // full-sync mode, and the unpack init plus the silu and mul SFPU programs are then set once
+    // per batch instead of once per output tile. Pair i uses DST 2i (gate, becomes the output)
+    // and 2i+1 (up).
+    constexpr uint32_t PAIRS_PER_BATCH = 2;
     for (uint32_t m = 0; m < M_block_tiles; m++) {
         const uint32_t row_base = m * N_block_tiles;
-        for (uint32_t p = 0; p < out_N_block_tiles; p++) {
-            const uint32_t gate_n = p << 1;
-            const uint32_t up_n = gate_n + 1;
-            const uint32_t gate_tile_id = row_base + gate_n;
-            const uint32_t up_tile_id = gate_tile_id + 1;
-
+        for (uint32_t p0 = 0; p0 < out_N_block_tiles; p0 += PAIRS_PER_BATCH) {
+            const uint32_t np = (out_N_block_tiles - p0 < PAIRS_PER_BATCH) ? (out_N_block_tiles - p0) : PAIRS_PER_BATCH;
             tile_regs_acquire();
 #ifdef FUSE_BIAS
             add_bcast_rows_init(in_cb, bias_cb);
-            add_tiles_bcast<BroadcastType::ROW>(in_cb, bias_cb, gate_tile_id, gate_n, GATE_DST);
-            add_tiles_bcast<BroadcastType::ROW>(in_cb, bias_cb, up_tile_id, up_n, UP_DST);
 #else
             copy_init(in_cb);
-            copy_tile(in_cb, gate_tile_id, GATE_DST);
-            copy_tile(in_cb, up_tile_id, UP_DST);
 #endif
+            for (uint32_t i = 0; i < np; i++) {
+                const uint32_t gate_n = (p0 + i) << 1;
+                const uint32_t gate_tile_id = row_base + gate_n;
+#ifdef FUSE_BIAS
+                add_tiles_bcast<BroadcastType::ROW>(in_cb, bias_cb, gate_tile_id, gate_n, 2 * i);
+                add_tiles_bcast<BroadcastType::ROW>(in_cb, bias_cb, gate_tile_id + 1, gate_n + 1, 2 * i + 1);
+#else
+                copy_tile(in_cb, gate_tile_id, 2 * i);
+                copy_tile(in_cb, gate_tile_id + 1, 2 * i + 1);
+#endif
+            }
             silu_tile_init();
-            silu_tile(GATE_DST);
+            for (uint32_t i = 0; i < np; i++) {
+                silu_tile(2 * i);
+            }
             mul_binary_tile_init();
-            mul_binary_tile(GATE_DST, UP_DST, GATE_DST);
+            for (uint32_t i = 0; i < np; i++) {
+                mul_binary_tile(2 * i, 2 * i + 1, 2 * i);
+            }
             tile_regs_commit();
 
             tile_regs_wait();
-            pack_tile(GATE_DST, out_cb);
+            for (uint32_t i = 0; i < np; i++) {
+                pack_tile(2 * i, out_cb);
+            }
             tile_regs_release();
         }
         cb_push_back(out_cb, out_N_block_tiles);
@@ -103,13 +115,13 @@ void copy_block(CircularBuffer& in_cb, CircularBuffer& out_cb, uint32_t M_block_
     uint32_t fused_act_dst_id = 0;
 
     uint32_t tile_id = 0;
+#ifdef SFPU_OP_INIT_ACTIVATION
+    // The fused-activation macro operates on DST 0, so keep one tile per round trip here.
     for (uint32_t m = 0; m < M_block_tiles; m++) {
         for (uint32_t n = 0; n < N_block_tiles; n++) {
             tile_regs_acquire();
             copy_tile(in_cb.get_cb_id(), tile_id, fused_act_dst_id /*dst*/);
-#ifdef SFPU_OP_INIT_ACTIVATION
             SFPU_OP_FUNC_ACTIVATION
-#endif
             tile_regs_commit();
             tile_regs_wait();
             pack_tile(fused_act_dst_id, out_cb.get_cb_id());
@@ -118,6 +130,27 @@ void copy_block(CircularBuffer& in_cb, CircularBuffer& out_cb, uint32_t M_block_
         }
         out_cb.push_back(N_block_tiles);
     }
+#else
+    // Four tiles per DST round trip (4 fp32 DST tiles are available in half- and full-sync mode).
+    constexpr uint32_t TILES_PER_BATCH = 4;
+    for (uint32_t m = 0; m < M_block_tiles; m++) {
+        for (uint32_t n0 = 0; n0 < N_block_tiles; n0 += TILES_PER_BATCH) {
+            const uint32_t nb = (N_block_tiles - n0 < TILES_PER_BATCH) ? (N_block_tiles - n0) : TILES_PER_BATCH;
+            tile_regs_acquire();
+            for (uint32_t i = 0; i < nb; i++) {
+                copy_tile(in_cb.get_cb_id(), tile_id + i, i /*dst*/);
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            for (uint32_t i = 0; i < nb; i++) {
+                pack_tile(i, out_cb.get_cb_id());
+            }
+            tile_regs_release();
+            tile_id += nb;
+        }
+        out_cb.push_back(N_block_tiles);
+    }
+#endif
 }
 
 // For caller: if FUSE_TERNARY defined then out_cb == in_cb
@@ -141,14 +174,14 @@ void add_bias_block(
     uint32_t fused_act_dst_id = 0;
 
     uint32_t tile_id = 0;
+#ifdef SFPU_OP_INIT_ACTIVATION
+    // The fused-activation macro operates on DST 0, so keep one tile per round trip here.
     for (uint32_t m = 0; m < M_block_tiles; m++) {
         for (uint32_t n = 0; n < N_block_tiles; n++) {
             tile_regs_acquire();
             add_tiles_bcast<BroadcastType::ROW>(
                 in_cb.get_cb_id(), bias_cb.get_cb_id(), tile_id, n, fused_act_dst_id /*dst*/);
-#ifdef SFPU_OP_INIT_ACTIVATION
             SFPU_OP_FUNC_ACTIVATION
-#endif
             tile_regs_commit();
             tile_regs_wait();
             pack_tile(fused_act_dst_id, out_cb.get_cb_id());
@@ -157,6 +190,28 @@ void add_bias_block(
         }
         out_cb.push_back(N_block_tiles);
     }
+#else
+    // Four tiles per DST round trip (4 fp32 DST tiles are available in half- and full-sync mode).
+    constexpr uint32_t TILES_PER_BATCH = 4;
+    for (uint32_t m = 0; m < M_block_tiles; m++) {
+        for (uint32_t n0 = 0; n0 < N_block_tiles; n0 += TILES_PER_BATCH) {
+            const uint32_t nb = (N_block_tiles - n0 < TILES_PER_BATCH) ? (N_block_tiles - n0) : TILES_PER_BATCH;
+            tile_regs_acquire();
+            for (uint32_t i = 0; i < nb; i++) {
+                add_tiles_bcast<BroadcastType::ROW>(
+                    in_cb.get_cb_id(), bias_cb.get_cb_id(), tile_id + i, n0 + i, i /*dst*/);
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            for (uint32_t i = 0; i < nb; i++) {
+                pack_tile(i, out_cb.get_cb_id());
+            }
+            tile_regs_release();
+            tile_id += nb;
+        }
+        out_cb.push_back(N_block_tiles);
+    }
+#endif
 }
 
 void add_bias_and_addcmul_block(
