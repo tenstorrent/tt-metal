@@ -521,8 +521,12 @@ def test_partial_block_bias_source(
     sol_bias_gen found nothing: block_len returns 32 correctly, the table holds ln(len)/scale, full_row zeroes
     the mask bit, and the pooled K-bar/V-bar use 1/len.
 
-    gen_bias=False  -> the op generates the bias on device (today's production path for compact).
-    gen_bias=True   -> the op consumes the pre-pass's Python bias instead.
+    Run in GATHER, not compact: ring_joint_sdpa_device_operation.cpp:576 asserts
+    `!sol_compact_mode || sol_bias_generated()`, so compact mode cannot accept an uploaded bias at all -- it has
+    no escape hatch from sol_bias_gen. Gather fails identically (0.855) and does allow one, so it is the probe.
+
+    gen_bias       -> the op generates the bias on device (compact's only option, and gather's default here).
+    uploaded_bias  -> the op consumes the pre-pass's Python bias instead.
 
     uploaded_bias passes and gen_bias fails -> the defect is in sol_bias_gen.
     both fail                               -> the bias is fine; look at the pooled chunk or the mask instead.
@@ -533,7 +537,7 @@ def test_partial_block_bias_source(
         num_links,
         topology,
         capfd,
-        mode="compact",
+        mode="gather",
         tau=1.0,
         rows=1184,
         logical_n=8 * 1184,
@@ -542,3 +546,41 @@ def test_partial_block_bias_source(
     pcc = _pcc(r.dense, r.sol, logical_n=8 * 1184)
     logger.info(f"[bias] upload_bias={upload_bias} rows=1184 pcc={pcc:.5f}")
     assert pcc > 0.99, f"upload_bias={upload_bias}: pcc {pcc:.5f}"
+
+
+@GALAXY_RING
+@pytest.mark.parametrize(
+    "rows,tau,what",
+    [
+        (1216, 1.0, "19 FULL blocks, no partial"),      # 1216 = 19*64 exactly
+        (1184, -1e4, "partial block is the ONLY approximation"),
+        (1184, 1.0, "partial block + normal sparsity"),  # the known failure, as control
+    ],
+)
+def test_partial_block_isolate(
+    mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, rows, tau, what, reset_seeds, capfd
+):
+    """Narrows the rows=1184 bug after bias was exonerated (both bias sources gave bit-identical 0.85523).
+
+    rows=1216 -- 19 full blocks, so nb is still odd and the padded tile count is still 38, but NOTHING is
+      partial. Fails => the trigger is nb/geometry, not partialness. Passes => partialness it is.
+
+    rows=1184 at tau=-1e4 -- every FULL block is exact, so the partial tail block is the only thing the pooled
+      correction approximates: 32 of 1184 tokens, 2.7 %. The reference puts that at 0.007 PCC. If this still
+      reads 0.855 then the partial block's pooled contribution is badly wrong on its own, which is as narrow as
+      this gets without a kernel dump.
+    """
+    r = _run(
+        mesh_device,
+        sp_axis,
+        num_links,
+        topology,
+        capfd,
+        mode="compact",
+        tau=tau,
+        rows=rows,
+        logical_n=8 * rows,
+    )
+    pcc = _pcc(r.dense, r.sol, logical_n=8 * rows)
+    logger.info(f"[isolate] rows={rows} tau={tau} ({what}) density={r.density:.4f} pcc={pcc:.5f}")
+    assert pcc > 0.99, f"rows={rows} tau={tau} ({what}): pcc {pcc:.5f}"
