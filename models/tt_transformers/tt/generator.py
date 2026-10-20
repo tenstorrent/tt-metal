@@ -331,6 +331,13 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             for slot in getattr(getattr(model, "sampling", None), "_trace_states", {}).values()
         )
 
+    def _batched_prefill_samples_on_device(self, model_id: int) -> bool:
+        """Whether the model has the hooks of the batched prefill's on-device sampling (prefill_forward_text):
+        last-token extraction from the batched hidden states, then norm + LM head on those rows. A model without
+        them prefills sequentially when sampling on device, and warms only batch 1 for it."""
+        model = self.model[model_id]
+        return hasattr(model, "extract_last_tokens_batched_prefill") and hasattr(model, "_apply_norm_and_lm_head")
+
     def _get_sampling_contract(self, model_id: int):
         sampling_module = getattr(self.model[model_id], "sampling", None)
         sampling_dp = getattr(self.model[model_id], "sampling_dp", 1)
@@ -375,7 +382,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         if (
             self.data_parallel == 1
             and not getattr(self.model_args[0], "disable_batched_prefill", False)
-            and (not can_sample_on_device or sampling_dp == 1)
+            and (not can_sample_on_device or (sampling_dp == 1 and self._batched_prefill_samples_on_device(0)))
             and not self._overrides_prefill_capture()
             and not self._uses_prefetcher()
         ):
@@ -1414,6 +1421,42 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 # must fall back to sequential prefill until a row-sharded
                 # batched-prefill sampling contract is implemented.
                 use_batched_prefill = False
+            elif on_device_sampling_enabled and not self._batched_prefill_samples_on_device(0):
+                logger.info("Batched prefill disabled: the model has no batched on-device sampling hooks")
+                use_batched_prefill = False
+
+        # Opt-in hook (GPT-OSS): a model's args may define ``batched_prefill_group_size(padded_len, batch_size)``
+        # to prefill the batch as consecutive groups of that many users, one batched forward per group (e.g. when
+        # all users together exceed the token budget). Each group places its users at local rows 0..g-1 of its
+        # own page-table slice, so only host logits are supported (no on-device sampling, no hidden states).
+        group_size_hook = getattr(self.model_args[0], "batched_prefill_group_size", None)
+        group = group_size_hook(prefill_seq_lens[0], batch_size) if callable(group_size_hook) else None
+        if (
+            use_batched_prefill
+            and group is not None
+            and 1 < group < batch_size
+            and not on_device_sampling_requested
+            and not return_hidden_states
+            and page_table is not None
+            and start_pos is None
+        ):
+            outputs = []
+            for g0 in range(0, batch_size, group):
+                g1 = min(g0 + group, batch_size)
+                outputs.append(
+                    self._prefill_forward_text_impl(
+                        tokens[g0:g1],
+                        page_table=page_table[g0:g1],
+                        kv_cache=kv_cache,
+                        prompt_lens=prompt_lens[g0:g1],
+                        empty_slots=list(range(g1 - g0)),
+                        enable_trace=enable_trace,
+                        model_id_warmup=model_id_warmup,
+                        warmup_prefill=False,
+                        **kwargs,
+                    )
+                )
+            return torch.cat(outputs, dim=0)
 
         # Opt-in models can use request-order prefill rows, then scatter the
         # final hidden states into physical sampler slots via ``slot_map``.
@@ -1621,6 +1664,24 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                     **local_kwargs,
                 )
             else:
+                # Opt-in hook (GPT-OSS): a model whose batched prefill forward can take the per-user last-token
+                # list returns one logits row per slot instead of every row of every user.
+                batched_last_token_rows = (
+                    use_batched_prefill
+                    and not sampling_enabled
+                    and not return_hidden_states
+                    and getattr(self.model[model_id], "batched_prefill_last_token_rows", False)
+                )
+                if batched_last_token_rows:
+                    local_kwargs["batched_last_token_rows"] = True
+                elif (
+                    use_batched_prefill
+                    and sampling_enabled
+                    and getattr(self.model[model_id], "batched_prefill_last_token_rows", False)
+                ):
+                    # Such a forward also runs the LM head itself; the sampling path below needs the final
+                    # residual of every row for extract_last_tokens_batched_prefill.
+                    local_kwargs["batched_skip_lm_head"] = True
                 logits = self.prefill_forward_single_user_text(
                     prefill_ids,
                     page_table=page_table_user,
@@ -1632,6 +1693,11 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                     batch_size=padded_batch if use_batched_prefill else 1,
                     **local_kwargs,
                 )
+                if batched_last_token_rows:
+                    rows = self.model[model_id].process_output_prefill_rows(logits, empty_slots)
+                    for local_idx, row in enumerate(rows):
+                        output_tensor[local_idx] = row
+                    break
             if use_batched_prefill:
                 hidden_dim = logits.shape[-1]
                 logits = ttnn.reshape(logits, [padded_batch, 1, prefill_seq_len, hidden_dim])
@@ -2037,6 +2103,8 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         model_id=-1,
         num_cached_tokens: int = 0,
         batch_size=1,
+        batched_last_token_rows=False,  # opt-in (prefill_forward_text): get_last_token = the per-user list
+        batched_skip_lm_head=False,  # opt-in (prefill_forward_text, on-device sampling): return the final residual
         **kwargs,
     ):
         seq_len = tokens.shape[-1]
@@ -2174,10 +2242,17 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 rot_mats_local=rot_mats_local_prefill,
                 user_id=user_id,
                 page_table=page_table_tt,
-                get_last_token=-1 if batch_size > 1 else (last_token_idx // 32) * 32,
+                get_last_token=(
+                    list(last_token_idx)
+                    if batched_last_token_rows
+                    else -1
+                    if batch_size > 1
+                    else (last_token_idx // 32) * 32
+                ),
                 kv_cache=kv_cache,
                 batch_size=batch_size,
                 **forward_kwargs,
+                **({"skip_lm_head": True} if batched_skip_lm_head else {}),
             )
             return tt_logits
 

@@ -5,6 +5,7 @@ import math
 
 import ttnn
 
+from ..batched_prefill import batched_reduce_links, per_user_reduce, ring_reduce_scatter
 from .weights import AttentionWeights
 
 
@@ -116,15 +117,24 @@ def apply_output_projection(tensor, weights: AttentionWeights, activation_dtype,
         Output tensor after projection
     """
     w, b = (weights.o_proj_prefill, weights.o_proj_bias_prefill) if unpadded else (weights.o_proj, weights.o_proj_bias)
-    tensor = ttnn.typecast(tensor, ttnn.bfloat8_b)
+    # The prefill attention casts the heads to bf8 before the concat (already bf8 here); the caller owns the input.
+    cast = tensor if tensor.dtype == ttnn.bfloat8_b else ttnn.typecast(tensor, ttnn.bfloat8_b)
     # Bias fused into the matmul (one pass over the output instead of a separate in-place add).
-    out = ttnn.linear(tensor, w, bias=b, dtype=activation_dtype, program_config=program_config)
-    tensor.deallocate(True)
+    out = ttnn.linear(cast, w, bias=b, dtype=activation_dtype, program_config=program_config)
+    if cast is not tensor:
+        cast.deallocate(True)
     return out
 
 
 def apply_output_projection_allreduce_prefill(
-    tensor, weights: AttentionWeights, activation_dtype, mesh_config, ccl_manager, program_config=None, scatter=False
+    tensor,
+    weights: AttentionWeights,
+    activation_dtype,
+    mesh_config,
+    ccl_manager,
+    program_config=None,
+    scatter=False,
+    batch_size=1,
 ):
     """Prefill o_proj on the unpadded weight, then one TP all_reduce over the full hidden width.
 
@@ -139,22 +149,25 @@ def apply_output_projection_allreduce_prefill(
 
     scatter: return only the reduce-scatter half (each device keeps its S / TP rows, the sequence-parallel prefill of
     DecoderLayer); the same ttnn.reduce_scatter that ttnn.all_reduce runs first, so the rows are bit-identical.
+
+    batch_size > 1 (batched prefill, rows stacked by user): batched_prefill.per_user_reduce, which reduces every
+    user's rows as this function does for that user alone.
     """
     out = apply_output_projection(tensor, weights, activation_dtype, unpadded=True, program_config=program_config)
+    links = batched_reduce_links(ccl_manager, mesh_config.tp_axis)  # 2 on BH 1x4, batch 1 too (bit-exact vs 1 link)
+    if batch_size > 1:
+        reduced = per_user_reduce(out, batch_size, mesh_config.tp_axis, links, scatter=scatter)
+        out.deallocate(True)
+        return reduced
     if scatter:
-        reduced = ttnn.reduce_scatter(
-            out,
-            2,
-            cluster_axis=mesh_config.tp_axis,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            num_links=ccl_manager.num_links,
-            topology=ccl_manager.topology,
+        reduced = ring_reduce_scatter(
+            out, mesh_config.tp_axis, links, topology=ccl_manager.topology, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
         out.deallocate(True)
         return reduced
     reduced = ttnn.all_reduce(
         out,
-        num_links=ccl_manager.num_links,
+        num_links=links,
         topology=ccl_manager.topology,
         cluster_axis=mesh_config.tp_axis,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,

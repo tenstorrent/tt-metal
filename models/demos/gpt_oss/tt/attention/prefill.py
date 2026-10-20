@@ -3,6 +3,7 @@
 
 import ttnn
 
+from ..batched_prefill import fill_batch_idx
 from .config import AttentionConfig, ProgramConfig
 from .operations import (
     apply_allgather_and_slice,
@@ -113,8 +114,8 @@ def prefill_forward(
     tt_q, tt_k, tt_v = split_qkv_heads_prefill(xqkv_fused, num_local_heads, num_local_kv_heads)
     xqkv_fused.deallocate(True)
 
-    # Apply RoPE (use per-user seq_len positions)
-    if batch_size > 1:
+    # Apply RoPE (use per-user seq_len positions; Model.prepare_inputs_prefill already slices them to seq_len)
+    if batch_size > 1 and rope_mats[0].shape[-2] != seq_len:
         rope_mats_sliced = [rope_mats[0][:, :, :seq_len, :], rope_mats[1][:, :, :seq_len, :]]
     else:
         rope_mats_sliced = rope_mats
@@ -138,18 +139,17 @@ def prefill_forward(
         block_size = k_cache.shape[2]
         page_len = page_table.shape[-1] * block_size
         if batch_size > 1:
-            # Per-user paged cache fill. The flattened approach (reshape batch into seq
-            # + flattened page_table) produces wrong cache for users beyond the first —
-            # paged_fill_cache doesn't correctly handle positions beyond the original
-            # page_table's block count. Use per-user calls with batch_idx=0 instead.
-            for b in range(batch_size):
-                k_b = tt_k[b : b + 1, :, :, :]
-                v_b = tt_v[b : b + 1, :, :, :]
-                pt_b = page_table[b : b + 1, :]
-                k_b_fill = k_b[:, :, :page_len, :] if page_len < k_b.shape[2] else k_b
-                v_b_fill = v_b[:, :, :page_len, :] if page_len < v_b.shape[2] else v_b
-                ttnn.experimental.paged_fill_cache(k_cache, k_b_fill, pt_b, batch_idx=0)
-                ttnn.experimental.paged_fill_cache(v_cache, v_b_fill, pt_b, batch_idx=0)
+            # One batched paged fill: input batch b ([B, kv_heads, S, head_dim]) goes through page-table row b
+            # (batch_idx_tensor 0..B-1); rows of padded users hold -1 and write nothing.
+            assert page_table.shape[0] == batch_size, f"page table rows {page_table.shape[0]} != batch {batch_size}"
+            batch_idx = fill_batch_idx(ccl_manager, batch_size)
+            tt_k_fill = tt_k[:, :, :page_len, :] if page_len < tt_k.shape[2] else tt_k
+            tt_v_fill = tt_v[:, :, :page_len, :] if page_len < tt_v.shape[2] else tt_v
+            ttnn.experimental.paged_fill_cache(k_cache, tt_k_fill, page_table, batch_idx_tensor=batch_idx)
+            ttnn.experimental.paged_fill_cache(v_cache, tt_v_fill, page_table, batch_idx_tensor=batch_idx)
+            if tt_k_fill is not tt_k:
+                tt_k_fill.deallocate(True)
+                tt_v_fill.deallocate(True)
         else:
             tt_k_sliced = tt_k[:, :, :page_len, :] if page_len < tt_k.shape[2] else tt_k
             tt_v_sliced = tt_v[:, :, :page_len, :] if page_len < tt_v.shape[2] else tt_v
@@ -189,9 +189,12 @@ def prefill_forward(
     tt_k.deallocate(True)
     tt_v.deallocate(True)
 
-    # Concat heads and apply output projection
-    tt_sdpa_out_pre_concat = tt_sdpa_out
-    tt_sdpa_out = concat_heads(tt_sdpa_out, is_decode_mode=False)
+    # Concat heads and apply output projection. Every o_proj path casts its input to bf8 first; the cast runs on the
+    # heads instead, so the concat moves bf8 tiles (half the bytes). A tile keeps its 32 x 32 values through the
+    # concat, so it packs to the same bf8 tile either way (bit-identical).
+    tt_sdpa_out_pre_concat = ttnn.typecast(tt_sdpa_out, ttnn.bfloat8_b)
+    tt_sdpa_out.deallocate(True)
+    tt_sdpa_out = concat_heads(tt_sdpa_out_pre_concat, is_decode_mode=False)
     tt_sdpa_out_pre_concat.deallocate(True)
 
     # Flatten back for output projection: [B, 1, S, H] -> [1, 1, B*S, H]
@@ -222,6 +225,7 @@ def prefill_forward(
                 mesh_device, "o", tt_sdpa_out, weights.o_proj_prefill, mesh_config.tp, in0_dtype=ttnn.bfloat8_b
             ),
             scatter=sequence_parallel,
+            batch_size=batch_size,
         )
         tt_sdpa_out.deallocate(True)
     else:

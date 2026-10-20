@@ -200,6 +200,141 @@ def build_prefill_generator(mesh_device, max_seq_len):
     }
 
 
+# ---- batch-32 (prefill_ttft_b32.py / prefill_gate_b32.py) -----------------------------------------------------------
+B32_BATCH = 32
+# User u's text prompt starts at token u * B32_PROMPT_STRIDE of the frozen stream (131072 / 32 = 4096), wrapping
+# around the stream end. For L <= 4096 the 32 prompts are disjoint; for longer L they are distinct shifts. User 0 is
+# the batch-1 text prompt (first L tokens).
+B32_PROMPT_STRIDE = 4096
+# KV cache: bf8 (attention/kv_cache.py init_kv_cache default), shape per device [blocks, 8 kv heads / 4 = 2, 64, 64].
+KV_BYTES_PER_BLOCK_PER_TENSOR = 2 * 64 * 64 // 1024 * 1088  # 8 bf8_b tiles of 1088 B
+N_LAYERS = 24
+
+
+def kv_bytes_per_device(num_blocks):
+    """K+V bytes per device for `num_blocks` 64-token pages in all 24 layers (bf8_b, 2 local kv heads)."""
+    return num_blocks * N_LAYERS * 2 * KV_BYTES_PER_BLOCK_PER_TENSOR
+
+
+def b32_prompt_tokens(length, mode, batch=B32_BATCH, stride=B32_PROMPT_STRIDE):
+    """[batch, length] prompts, one distinct prompt per user.
+
+    text: user u = tokens [u * stride, u * stride + length) of the frozen stream, wrapping around its end.
+    random: user u = random_prompt_tokens(length, seed=1234 + 7919 * u)."""
+    if mode == "text":
+        stream = load_or_build_prompt_tokens()
+        need = stride * (batch - 1) + length
+        ext = stream.repeat(-(-need // stream.numel()))
+        out = torch.stack([ext[u * stride : u * stride + length] for u in range(batch)])
+    else:
+        out = torch.cat([random_prompt_tokens(length, seed=1234 + 7919 * u) for u in range(batch)])
+    assert len({tuple(r[:64].tolist()) + tuple(r[-64:].tolist()) for r in out}) == batch, "prompts not distinct"
+    return out
+
+
+def dram_view(mesh_device):
+    """DRAM allocator view (per bank) as a dict; ttnn.get_memory_view reports the same numbers for every device."""
+    import ttnn
+
+    v = ttnn.get_memory_view(mesh_device, ttnn.BufferType.DRAM)
+    out = {k: getattr(v, k) for k in dir(v) if not k.startswith("_") and isinstance(getattr(v, k), (int, float))}
+    if "num_banks" in out:
+        for k in ("total_bytes_per_bank", "total_bytes_allocated_per_bank", "total_bytes_free_per_bank"):
+            if k in out:
+                out[k.replace("_per_bank", "_per_device_gb")] = out[k] * out["num_banks"] / 1e9
+    return out
+
+
+class _no_kv_file_cache:
+    """Skip the on-disk tensor cache for the KV cache tensors only (k_cache_* / v_cache_*).
+
+    init_kv_cache builds each layer's K and V with ttnn.as_tensor(torch.zeros(shape), cache_file_name=...), which
+    writes one file per layer, tensor and shape into the model's tensor cache (32 users x 64K = 285 MB per file, 48
+    files, 13.7 GB; the host disk has ~49 GB free). The device tensors are identical (zeros, bf8_b, TILE, DRAM,
+    replicated); only the file write/read is skipped. Weights keep using the cache."""
+
+    def __enter__(self):
+        from models.demos.gpt_oss.tt.attention import kv_cache as kvmod
+
+        self._mod, self._orig = kvmod, kvmod.get_cache_file_name
+
+        def patched(path, name, _orig=self._orig):
+            return None if name.startswith(("k_cache_", "v_cache_")) else _orig(path, name)
+
+        kvmod.get_cache_file_name = patched
+        return self
+
+    def __exit__(self, *exc):
+        self._mod.get_cache_file_name = self._orig
+        return False
+
+
+def build_prefill_generator_b32(mesh_device, kv_len_per_user, batch=B32_BATCH, max_seq_len=max(PREFILL_LENGTHS)):
+    """Build the 24-layer model + Generator for global batch `batch` on the mesh the way the demo's non-row-sharded
+    path does (prepare_gpt_oss_generator_args with global_batch_size=batch, max_batch_size=batch,
+    users_row_sharded=False, paged attention, block 64), with a paged KV cache of batch x kv_len_per_user tokens
+    (page table [batch, kv_len_per_user / 64], blocks shuffled by create_tt_page_table under torch.manual_seed(0)).
+    max_seq_len (rope / context limit) stays 128K as in the batch-1 harness."""
+    from models.demos.gpt_oss.demo.text_demo import prepare_gpt_oss_generator_args
+    from models.demos.gpt_oss.tests.test_factory import TestFactory
+    from models.tt_transformers.tt.generator import Generator
+
+    assert kv_len_per_user % PAGE_BLOCK_SIZE == 0
+    setup = TestFactory.setup_test(mesh_device, use_real_weights=False)
+    num_blocks = batch * kv_len_per_user // PAGE_BLOCK_SIZE
+    page_params = {"page_block_size": PAGE_BLOCK_SIZE, "page_max_num_blocks_per_dp": num_blocks}
+    torch.manual_seed(0)  # create_tt_page_table shuffles blocks with torch.randperm
+    with _no_kv_file_cache():
+        (model_args, model, page_table, tt_kv_cache, tokenizer, processor, _pac) = prepare_gpt_oss_generator_args(
+            num_devices=mesh_device.get_num_devices(),
+            data_parallel=1,
+            mesh_device=mesh_device,
+            global_batch_size=batch,
+            optimizations=None,
+            max_seq_len=max_seq_len,
+            page_params=page_params,
+            paged_attention=True,
+            mesh_config=setup["mesh_config"],
+            state_dict=None,
+            users_row_sharded=False,
+            long_context_mode=False,
+        )
+    assert tuple(page_table.shape) == (batch, kv_len_per_user // PAGE_BLOCK_SIZE), page_table.shape
+    assert model_args[0].max_batch_size == batch, model_args[0].max_batch_size
+    generator = Generator(model, model_args, mesh_device, processor=processor, tokenizer=tokenizer)
+    return {
+        "generator": generator,
+        "model": model,
+        "model_args": model_args,
+        "page_table": page_table,
+        "kv_cache": tt_kv_cache,
+        "tokenizer": tokenizer,
+        "batch": batch,
+        "kv_len_per_user": kv_len_per_user,
+        "kv_num_blocks": num_blocks,
+        "kv_dtype": str(tt_kv_cache[0][0][0].dtype),
+        "kv_shape_per_device": list(tt_kv_cache[0][0][0].shape),
+        "kv_bytes_per_device": kv_bytes_per_device(num_blocks),
+    }
+
+
+def run_prefill_batch(ctx, tokens, page_table=None):
+    """One Generator.prefill_forward_text call for all users in `tokens` [B, L] (untraced, logits to host).
+    Returns (seconds, logits [B, vocab] float)."""
+    B, L = tokens.shape
+    t0 = time.perf_counter()
+    logits = ctx["generator"].prefill_forward_text(
+        tokens,
+        page_table=ctx["page_table"] if page_table is None else page_table,
+        kv_cache=ctx["kv_cache"],
+        prompt_lens=[L] * B,
+        enable_trace=False,
+        warmup_prefill=False,
+    )
+    dt = time.perf_counter() - t0
+    return dt, logits.reshape(B, -1).float()
+
+
 def run_prefill(ctx, tokens, enable_trace=False):
     """One timed prefill through Generator.prefill_forward_text; returns (seconds, last-token logits [vocab])."""
     length = tokens.shape[-1]

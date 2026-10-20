@@ -25,6 +25,10 @@ from models.tt_transformers.tt.common import (
 )
 from models.tt_transformers.tt.load_checkpoints import convert_hf_qkv_to_meta_format
 
+# Batched prefill in groups (generator hook batched_prefill_group_size): padded length -> users per forward, for
+# lengths where all 32 users exceed the generator's token budget (B x S < 128K). Measured on BH 1x4 (keep 05).
+BATCHED_PREFILL_GROUPS = {4096: 16, 8192: 8}
+
 
 class ModelArgs:
     """GPT-OSS ModelArgs compatible with tt_transformers create_tt_model interface"""
@@ -113,9 +117,29 @@ class ModelArgs:
             self.tokenizer = AutoTokenizer.from_pretrained(self.weights_path, trust_remote_code=True)
             self.processor = None  # GPT-OSS doesn't use vision processor
 
-        self.disable_batched_prefill = True
+        # Batched prefill (several users flattened into one [1, 1, B*S, H] forward, attention per user) is validated
+        # on the Blackhole 1x4 mesh only (the routed-MoE prefill placement, experts/prefill_routed_placement.py, and
+        # the per-user exact reductions of batched_prefill.py); other meshes keep the sequential per-user prefill.
+        mesh_shape = tuple(mesh_device.shape) if mesh_device is not None else ()
+        self.disable_batched_prefill = not (mesh_shape == (1, 4) and is_blackhole())
+        # Padded length -> users per batched forward where all users do not fit the generator's token budget
+        # (batched_prefill_group_size). GPT_OSS_PREFILL_GROUPS="4096:16,8192:8" overrides it (tuning).
+        self.batched_prefill_groups = dict(BATCHED_PREFILL_GROUPS)
+        groups_env = os.getenv("GPT_OSS_PREFILL_GROUPS")
+        if groups_env is not None:
+            self.batched_prefill_groups = {
+                int(k): int(v) for k, v in (item.split(":") for item in groups_env.split(",") if item.strip())
+            }
         self.capped_warmup_seq_len = 2048
         self.trace_prefill_supported_seq_lens = self.get_trace_prefill_supported_seq_lens()
+
+    def batched_prefill_group_size(self, padded_len, batch_size):
+        """Users per batched prefill forward for batch_size users of padded_len (generator opt-in hook), or None
+        (the generator default: all users in one forward if they fit its token budget, else sequential)."""
+        if self.disable_batched_prefill:
+            return None
+        group = self.batched_prefill_groups.get(padded_len)
+        return group if group is not None and 1 < group < batch_size else None
 
     def get_warmup_prefill_supported_seq_lens(self):
         DEFAULT_VALUE = self.capped_warmup_seq_len

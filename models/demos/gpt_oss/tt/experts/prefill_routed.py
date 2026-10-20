@@ -44,6 +44,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping, get_
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import TtRoutedExpert, routed_expert_weight_memory_config
 from models.demos.gpt_oss.config import Mode
 
+from ..batched_prefill import batched_reduce_links, per_user_reduce, ring_reduce_scatter
 from .prefill_routed_placement import ROUTED_EXPERT_PLACEMENT, ROUTED_EXPERT_PLACEMENT_DEVICES
 
 ROUTED_PREFILL_ENV = "GPT_OSS_ROUTED_PREFILL"
@@ -67,6 +68,10 @@ ROUTED_PREFILL_CHUNK_DEFAULT = 16384
 # ones from the [chunk, chunk] one, so an 8K prompt reads the 8192 operator in place instead of a per-layer slice copy
 # of the larger one (measured +6 ms TTFT at 8K with only the 16384 operator).
 ROUTED_PREFIX_TRI_SMALL = 8192
+# Chunks of a multiple of this many tokens (at least two blocks) take the blocked prefix sum (_SharedBlockedPrefix)
+# instead of the [C, C] operator, whose read grows as C^2 (0.81 ms per 16384-token chunk on BH, a 64K-token batched
+# forward has 4 per layer).
+ROUTED_PREFIX_BLOCK = 512
 # masked_bincount splits the token rows over a fixed 64-core grid.
 ROUTED_PREFILL_SEQ_MULTIPLE = 64
 # ttnn.scatter parallelizes over rows only, so the [1, k*C] row -> token scatter of _chunk runs on one core (1.5 ms per
@@ -75,15 +80,20 @@ ROUTED_PREFILL_SEQ_MULTIPLE = 64
 ROUTED_SCATTER_SPLIT_MIN_C = 1024
 ROUTED_SCATTER_GROUPS = 32
 # The combine gather writes k rows per token ([Cs, k, H] bf16) that post_combine_reduce reads straight back. It runs on
-# token blocks of at most this many tokens so that intermediate (47 MB at 2048) and the reduced block live in L1 instead
-# of a DRAM round trip; at C = 8192 this measured 2.39 -> 1.91 ms per layer for gather + reduce + bf8 cast (one device).
-ROUTED_COMBINE_BLOCK = 2048
+# token blocks of at most this many tokens so that intermediate (71 MB at 3072) and the reduced block live in L1 instead
+# of a DRAM round trip; at C = 8192 this measured 2.39 -> 1.91 ms per layer for gather + reduce + bf8 cast (one device,
+# 2048-token blocks). 3072 vs 2048 measured b32 TTFT 512 -1.2%, 1K -0.5%, 2K -0.7% (fewer blocks per 16K chunk);
+# 3584 is slower and 4096 overflows L1 (static circular buffers clash with the L1 buffers).
+ROUTED_COMBINE_BLOCK = 3072
 # Largest chunk-size-dependent transient this module places in L1 (per device, interleaved). Above it the tensor goes
-# to DRAM, so a larger GPT_OSS_ROUTED_PREFILL_CHUNK still runs instead of overflowing L1. A chunk of 8192 puts the
-# dispatch-gather input x_rm (C*H*2 = 47 MB) under it (the default 16384 chunk keeps x_rm in DRAM); the combine block
-# is bounded by ROUTED_COMBINE_BLOCK (2048 tokens: [Cs, k, H] bf16 = 47 MB, the reduced block 12 MB), which is also
-# under it.
-ROUTED_L1_CAP_BYTES = 64 << 20
+# to DRAM, so a larger GPT_OSS_ROUTED_PREFILL_CHUNK still runs instead of overflowing L1 (the dispatch-gather input
+# x_rm has its own cap, ROUTED_XRM_L1_CAP_BYTES); the combine block is bounded by ROUTED_COMBINE_BLOCK (3072 tokens:
+# [Cs, k, H] bf16 = 67.5 MiB, the reduced block 17 MiB), which is also under it.
+ROUTED_L1_CAP_BYTES = 72 << 20
+# Cap for the dispatch-gather input x_rm alone (C*H*2 bytes): it is the only large transient live in L1 while it
+# exists (tok_of_row is small; the gather output goes to DRAM), so the default 16384 chunk (90 MiB) fits. Measured on
+# one BH device at C = 16384: untilize + dispatch gather 1.86 ms (x_rm in DRAM) -> 1.52 ms (L1), bit-identical.
+ROUTED_XRM_L1_CAP_BYTES = 96 << 20
 # Version of the cached routed-expert weights; the weight-cache completion marker records it (model_config.py).
 ROUTED_PREFILL_WEIGHTS_VERSION = 1
 ROUTED_CACHE_SUBDIR = "experts_routed_ep"
@@ -146,6 +156,40 @@ def _l1_if_fits(nbytes):
     return ttnn.L1_MEMORY_CONFIG if nbytes <= ROUTED_L1_CAP_BYTES else ttnn.DRAM_MEMORY_CONFIG
 
 
+def _narrowable(t, dim, start):
+    """True when ttnn.narrow can view t from row start along dim (zero-copy): t is DRAM-interleaved, dim is its first
+    dimension larger than 1, and the range starts on DRAM bank 0 (start page a multiple of the bank count)."""
+    shape = list(t.padded_shape)
+    dim = dim % len(shape)
+    mem = t.memory_config()
+    if mem.buffer_type != ttnn.BufferType.DRAM or mem.memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED:
+        return False
+    if any(shape[i] != 1 for i in range(dim)):
+        return False
+    inner = math.prod(shape[dim + 1 :])  # elements per row along dim (tile-padded for TILE)
+    if t.layout == ttnn.TILE_LAYOUT:
+        if start % ttnn.TILE_SIZE:
+            return False
+        pages = start * inner // (ttnn.TILE_SIZE * ttnn.TILE_SIZE)
+    else:
+        pages = start * inner // shape[-1]
+    return pages % t.device().dram_grid_size().x == 0
+
+
+def _row_view(t, dim, start, length):
+    """Rows [start, start + length) of t along dim: a zero-copy ttnn.narrow view where _narrowable, else a ttnn.slice
+    copy. Returns (tensor, owned): owned is True for a copy the caller deallocates; a view is only dropped."""
+    if _narrowable(t, dim, start):
+        return ttnn.narrow(t, dim, start, length), False
+    rank = len(t.shape)
+    dim = dim % rank
+    begins = [0] * rank
+    ends = list(t.shape)
+    begins[dim] = start
+    ends[dim] = start + length
+    return ttnn.slice(t, begins, ends), True
+
+
 def routed_prefill_mesh_supported(mesh_device, num_experts=32):
     """Single-row Blackhole mesh with more than one device whose column count divides the experts."""
     rows, cols = mesh_device.shape
@@ -204,6 +248,76 @@ def _shared_prefix_tri(mesh_device, cmax):
     return holder
 
 
+class _SharedBlockedPrefix:
+    """Operators of the blocked exclusive prefix sum over C = nb * b tokens (b = ROUTED_PREFIX_BLOCK), bfloat4_b
+    (0/1 values, exact): tri [nb, b, b], the strictly lower-triangular ones per block (prefix inside a block); ones
+    [nb, 1, b] (block totals); tri_blocks [nb, nb], strictly lower-triangular (sum of the earlier blocks' totals).
+    Their reads grow as C * b instead of C^2. One per (mesh device, C), shared by every layer; built on first use."""
+
+    def __init__(self, mesh_device, C, block):
+        assert C % block == 0, (C, block)
+        self.mesh_device = mesh_device
+        self.C = C
+        self.block = block
+        self.tensors = None
+
+    def get(self):
+        if self.tensors is None:
+            nb, b = self.C // self.block, self.block
+            kw = dict(
+                device=self.mesh_device,
+                dtype=ttnn.bfloat4_b,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+            self.tensors = (
+                ttnn.from_torch(torch.tril(torch.ones(b, b), diagonal=-1).expand(nb, b, b).contiguous(), **kw),
+                ttnn.from_torch(torch.ones(nb, 1, b), **kw),
+                ttnn.from_torch(torch.tril(torch.ones(nb, nb), diagonal=-1), **kw),
+            )
+        return self.tensors
+
+
+_BLOCKED_PREFIX_CACHE = weakref.WeakValueDictionary()
+
+# Program configs of the two batched matmuls of the blocked prefix (within: tri [nb, b, b] @ [nb, b, E]; totals:
+# ones [nb, 1, b] @ [nb, b, E]). The ttnn default runs within on 16 cores and totals on 1. Measured on BH at
+# nb = 32, b = 512, E = 32, ms per call (l16/mb_prefix*.py, l16/logs/): within 0.247 -> 0.033 (8x8, per_core_M 8),
+# totals 0.158 -> 0.018 (8x4); exact (integer sums) over fresh inputs at C = 1024 .. 16384.
+# A config that puts more than one output block on a core returned wrong sums (within, per_core_M 4 on 8x8 at
+# nb >= 24; l16/logs/mb_prefix_iso*.log), so each is used only where the blocks fit one per core.
+_PREFIX_WITHIN_GRID, _PREFIX_WITHIN_PCM = (8, 8), 8
+_PREFIX_TOTALS_GRID = (8, 4)
+
+
+def _prefix_bmm_config(grid, device_grid, nb, m_tiles, k_tiles, n_tiles, per_core_m):
+    """MatmulMultiCoreReuseProgramConfig of a [nb, M, K] @ [nb, K, N] prefix matmul with one output block of
+    per_core_m x n_tiles tiles per core, or None (ttnn default) when the blocks do not fit one per core of grid."""
+    gx, gy = grid
+    if gx > device_grid.x or gy > device_grid.y or m_tiles % per_core_m:
+        return None
+    if nb * (m_tiles // per_core_m) > gx * gy:
+        return None
+    return ttnn.MatmulMultiCoreReuseProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(gx, gy),
+        in0_block_w=k_tiles,
+        out_subblock_h=next(h for h in (4, 2, 1) if per_core_m % h == 0),
+        out_subblock_w=1,
+        per_core_M=per_core_m,
+        per_core_N=n_tiles,
+    )
+
+
+def _shared_blocked_prefix(mesh_device, C, block):
+    key = (mesh_device.id(), C, block)
+    holder = _BLOCKED_PREFIX_CACHE.get(key)
+    if holder is None or holder.mesh_device is not mesh_device:
+        holder = _SharedBlockedPrefix(mesh_device, C, block)
+        _BLOCKED_PREFIX_CACHE[key] = holder
+    return holder
+
+
 class RoutedWeightsUnavailable(RuntimeError):
     """Neither HF expert weights nor a complete routed-weight cache: the routed path cannot be built."""
 
@@ -259,6 +373,8 @@ class RoutedPrefillExperts:
         # chunks of at most ROUTED_PREFIX_TRI_SMALL tokens). Each is built on first use.
         self._prefix_tri = _shared_prefix_tri(mesh_device, self.chunk_size)
         self._prefix_tri_small = _shared_prefix_tri(mesh_device, min(self.chunk_size, ROUTED_PREFIX_TRI_SMALL))
+        # Blocked prefix operators per chunk length (strong references to the shared holders).
+        self._blocked_prefix = {}
         # fp32 dest + L1 packer accumulation keep the integer prefix sums of _pair_positions exact across K blocks.
         self._prefix_compute_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
@@ -641,6 +757,62 @@ class RoutedPrefillExperts:
         self._consts[C] = consts
         return consts
 
+    def _exclusive_prefix(self, per_token, C):
+        """[C, E] fp32 0/1 -> [C, E] fp32, row t = sum of rows < t (exact integers).
+
+        C a multiple of ROUTED_PREFIX_BLOCK (b), at least 2 blocks: per block i (nb = C / b), the prefix inside the
+        block (tri [nb, b, b] @ per_token as [nb, b, E]) plus the exclusive prefix of the block totals, broadcast over
+        the block's rows. Measured at C = 16384 on one BH device: 0.44 ms vs 0.82 ms for the [C, C] matmul (b = 512;
+        b = 256: 0.48, b = 128: 0.56). A [nb, 1, C] @ [C, E] matmul for the earlier blocks instead runs its K = C on
+        one core: 4.1 ms.
+
+        Otherwise one multi-core matmul with the strictly lower-triangular [C, C] ones matrix; a chunk shorter than its
+        shared [Cmax, Cmax] operator uses a transient copy of the top-left [C, C] block."""
+        b = ROUTED_PREFIX_BLOCK
+        E = per_token.shape[-1]
+        mm = dict(
+            dtype=ttnn.float32,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self._prefix_compute_config,
+        )
+        if C % b == 0 and C >= 2 * b:
+            holder = self._blocked_prefix.get(C)
+            if holder is None:
+                holder = self._blocked_prefix[C] = _shared_blocked_prefix(self.mesh_device, C, b)
+            tri, ones, tri_blocks = holder.get()
+            nb = C // b
+            per_block = ttnn.reshape(per_token, (nb, b, E))
+            device_grid = self.mesh_device.compute_with_storage_grid_size()
+            bt, et = b // ttnn.TILE_SIZE, -(-E // ttnn.TILE_SIZE)
+            within_pc = _prefix_bmm_config(_PREFIX_WITHIN_GRID, device_grid, nb, bt, bt, et, _PREFIX_WITHIN_PCM)
+            totals_pc = _prefix_bmm_config(_PREFIX_TOTALS_GRID, device_grid, nb, 1, bt, et, 1)
+            # [nb, b, E]: pairs from earlier tokens of the same block
+            within = ttnn.matmul(tri, per_block, program_config=within_pc, **mm)
+            totals = ttnn.matmul(ones, per_block, program_config=totals_pc, **mm)  # [nb, 1, E]: pairs per block
+            totals = ttnn.reshape(totals, (nb, E))
+            # Block totals reach b, so this operand needs more than LoFi's mantissa bits (HiFi4, as the slot selector).
+            earlier = ttnn.matmul(
+                tri_blocks,
+                totals,
+                dtype=ttnn.float32,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                compute_kernel_config=self._select_compute_config,
+            )  # [nb, E]: pairs from all earlier blocks
+            ttnn.deallocate(totals)
+            earlier = ttnn.reshape(earlier, (nb, 1, E))
+            before = ttnn.add(within, earlier, dtype=ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(within)
+            ttnn.deallocate(earlier)
+            return ttnn.reshape(before, (C, E))
+        assert C <= self._prefix_tri.cmax, f"chunk of {C} tokens exceeds the prefix operator ({self._prefix_tri.cmax})"
+        holder = self._prefix_tri_small if C <= self._prefix_tri_small.cmax else self._prefix_tri
+        tri = holder.get()
+        tri_c = tri if C == holder.cmax else ttnn.slice(tri, (0, 0), (C, C))
+        before = ttnn.matmul(tri_c, per_token, **mm)
+        if tri_c is not tri:
+            ttnn.deallocate(tri_c)
+        return before
+
     def _pair_positions(self, indices, region_offsets, consts):
         """Dispatch-buffer row of every (token, slot) pair, uint32 ROW_MAJOR, in two orders: token-major [C, k] (the
         combine gather index) and slot-major [G, k*C/G] (pair r = slot * C + token in row-major order, the scatter
@@ -650,7 +822,6 @@ class RoutedPrefillExperts:
         distinct, so this is the pair's rank within e's region). Non-local pairs: the spare tile. All arithmetic is
         fp32 on integers < 2^24, so it is exact."""
         C = indices.shape[-2]
-        assert C <= self._prefix_tri.cmax, f"chunk of {C} tokens exceeds the prefix operator ({self._prefix_tri.cmax})"
         k = self.top_k
         E = self.num_experts
         idx_f = ttnn.typecast(indices, ttnn.float32)
@@ -676,35 +847,17 @@ class RoutedPrefillExperts:
             compute_kernel_config=self._prefix_compute_config,
         )  # [C, E]: pairs of each expert per token (0/1)
         per_token = ttnn.mul(per_token, self.local_mask_f32, output_tensor=per_token)  # local experts only
-        # Exclusive prefix over tokens (pairs of e from earlier tokens) as one multi-core matmul with the strictly
-        # lower-triangular [C, C] ones matrix. Operands are 0/1 (exact in bf4 / tf32) and the sums (< C, 2^14 at the
-        # default chunk) accumulate in the fp32 dest, so the result is exact.
-        # A chunk shorter than its shared [Cmax, Cmax] operator uses a transient copy of the top-left [C, C] block.
-        holder = self._prefix_tri_small if C <= self._prefix_tri_small.cmax else self._prefix_tri
-        tri = holder.get()
-        tri_c = tri if C == holder.cmax else ttnn.slice(tri, (0, 0), (C, C))
-        before = ttnn.matmul(
-            tri_c,
-            per_token,
-            dtype=ttnn.float32,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self._prefix_compute_config,
-        )
-        if tri_c is not tri:
-            ttnn.deallocate(tri_c)
+        # Exclusive prefix over tokens (pairs of e from earlier tokens). Operands are 0/1 (exact in bf4 / tf32) and the
+        # sums (< C, 2^14 at the default chunk) accumulate in the fp32 dest, so the result is exact either way.
+        before = self._exclusive_prefix(per_token, C)
         ttnn.deallocate(per_token)
         base = ttnn.add(before, region, output_tensor=before)
         ttnn.deallocate(region)
-        cols = []
-        for j in range(k):
-            oh = ttnn.slice(onehot, (0, j * E), (C, (j + 1) * E))  # tile-aligned block j
-            cols.append(ttnn.sum(ttnn.mul(oh, base, output_tensor=oh), dim=-1, keepdim=True))
-            ttnn.deallocate(oh)
         ttnn.deallocate(onehot)
+        # Pair (t, j) reads base[t, indices[t, j]] (its expert's column): one gather instead of a per-slot one-hot
+        # mask, row sum and concat (each row of a slot's one-hot block has exactly one 1, so the same value).
+        pos = ttnn.gather(base, -1, index=indices)  # [C, k] fp32 TILE
         ttnn.deallocate(base)
-        pos = ttnn.concat(cols, dim=-1)  # [C, k] fp32 TILE
-        for c in cols:
-            ttnn.deallocate(c)
         pos = ttnn.typecast(pos, ttnn.uint32)
         # Slot-major copy via a tile transpose: [k, C] row-major is k long rows, so the flatten to [1, k*C] is cheap
         # (the token-major [C, k] -> [1, k*C] reshape copies C 16-byte rows and cost 3.3 ms per layer at 8K).
@@ -716,12 +869,13 @@ class RoutedPrefillExperts:
         ttnn.deallocate(pos)
         return pos_tm, pos_sm
 
-    def _chunk(self, x, indices, weights):
+    def _chunk(self, x, indices, weights, out=None, out_start=0):
         """Partial MoE output of this device's experts for one chunk.
 
         x: [1, 1, C, H] (any float dtype, TILE); indices: [C, k] uint16 TILE; weights: [C, k] bf16 TILE.
         Returns the [1, 1, Cs, H] bf8 TILE blocks of the output in token order (ROUTED_COMBINE_BLOCK tokens each, the
-        last one shorter; zero rows where no top-k expert is local)."""
+        last one shorter; zero rows where no top-k expert is local). With out ([1, 1, S, H] bf8, every block start
+        _narrowable), the blocks are written to its rows out_start onward instead and the list is empty."""
         C = x.shape[-2]
         H = self.hidden_size
         k = self.top_k
@@ -767,8 +921,9 @@ class RoutedPrefillExperts:
             ttnn.deallocate(tok_u)
         # The row-major copy of x lives in L1 (47 MB at C = 8192) only for the gather: the untilize skips a DRAM write
         # and the gather reads the local pairs' rows from L1 (measured 0.94 -> 0.77 ms per layer at 8K, one device).
-        # A chunk whose copy exceeds ROUTED_L1_CAP_BYTES (C > 11650) keeps it in DRAM.
-        x_rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, memory_config=_l1_if_fits(C * H * 2))
+        # A chunk whose copy exceeds ROUTED_XRM_L1_CAP_BYTES (C > 17476) keeps it in DRAM.
+        x_rm_mem = ttnn.L1_MEMORY_CONFIG if C * H * 2 <= ROUTED_XRM_L1_CAP_BYTES else ttnn.DRAM_MEMORY_CONFIG
+        x_rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, memory_config=x_rm_mem)
         x_rm = ttnn.reshape(x_rm, (C, H))
         # padding_idx=0: every row that reads token 0 (about 3/4 of the k*C buffer rows on each of the N devices are
         # unwritten and read token 0) is served from a per-core L1 copy of x[0] instead of DRAM; same values.
@@ -822,11 +977,11 @@ class RoutedPrefillExperts:
         for s in range(0, C, Cs):
             e = min(s + Cs, C)
             if s == 0 and e == C:
-                pos_s, w_s, idx_s = pos_tm, w_5d, idx_rm
+                block = [(pos_tm, False), (w_5d, False), (idx_rm, False)]
             else:
-                pos_s = ttnn.slice(pos_tm, (s, 0), (e, k))
-                w_s = ttnn.slice(w_5d, (0, 0, s, 0, 0), (1, 1, e, k, 1))
-                idx_s = ttnn.slice(idx_rm, (0, s, 0), (1, e, k))
+                # Zero-copy row views where the block starts on DRAM bank 0 (every block start at the default size).
+                block = [_row_view(pos_tm, 0, s, e - s), _row_view(w_5d, 2, s, e - s), _row_view(idx_rm, 1, s, e - s)]
+            (pos_s, _), (w_s, _), (idx_s, _) = block
             # padding_idx=spare: the non-local pairs (about (N-1)/N of them) all point at the spare row and are served
             # from a per-core L1 copy of it instead of DRAM; same values, and post_combine_reduce skips them anyway.
             combined = ttnn.embedding(
@@ -846,11 +1001,15 @@ class RoutedPrefillExperts:
                 output_memory_config=part_mem,
             )
             ttnn.deallocate(combined)
-            if pos_s is not pos_tm:
-                ttnn.deallocate(pos_s)
-                ttnn.deallocate(w_s)
-                ttnn.deallocate(idx_s)
-            pieces.append(ttnn.typecast(part, ttnn.bfloat8_b, memory_config=ttnn.DRAM_MEMORY_CONFIG))
+            for t, owned in block:
+                if owned:
+                    ttnn.deallocate(t)
+            if out is not None:
+                # Cast straight into this block's rows of the preallocated output (a narrow view): no concat.
+                dst = ttnn.narrow(out, 2, out_start + s, e - s)
+                ttnn.typecast(part, ttnn.bfloat8_b, output_tensor=dst)
+            else:
+                pieces.append(ttnn.typecast(part, ttnn.bfloat8_b, memory_config=ttnn.DRAM_MEMORY_CONFIG))
             ttnn.deallocate(part)
         ttnn.deallocate(out_rm)
         ttnn.deallocate(pos_tm)
@@ -858,14 +1017,18 @@ class RoutedPrefillExperts:
         ttnn.deallocate(idx_rm)
         return pieces
 
-    def __call__(self, hidden_states, topk_indices, topk_weights, scatter=False):
+    def __call__(self, hidden_states, topk_indices, topk_weights, scatter=False, batch_size=1):
         """hidden_states: [1, 1, S, H] replicated; topk_indices / topk_weights: [S, k] (router top-k path).
         topk_indices are slot ids: id v is expert self.expert_order[v] (the HF id itself when expert_order is None),
         as the MLP's routed router emits them (TopKRouter.with_expert_order).
 
         Returns the MoE output [1, 1, S, H] (bf8), all-reduced over the mesh row like the dense TP path; with scatter
         (sequence-parallel prefill, S % (32 * N) == 0) only the reduce-scatter half: [1, 1, S / N, H], device d holding
-        rows d * S / N onward, bit-identical to those rows of the all-reduce."""
+        rows d * S / N onward, bit-identical to those rows of the all-reduce.
+
+        batch_size > 1 (batched prefill): the S rows are B users' tokens stacked by user; the experts are per token,
+        and the reduction is batched_prefill.per_user_reduce (each user's rows as in that user's batch-1 call; with
+        scatter, device d holds rows d * S / (B N) onward of every user)."""
         seq_len = hidden_states.shape[-2]
         assert self.supports(
             hidden_states.shape
@@ -874,39 +1037,58 @@ class RoutedPrefillExperts:
         if len(x.shape) != 4:
             x = ttnn.reshape(x, (1, 1, seq_len, self.hidden_size))
         C = min(self.chunk_size, seq_len)
+        Cs = min(C, ROUTED_COMBINE_BLOCK)
+        # More than one combine block: cast every block into its rows of one preallocated output (narrow views)
+        # instead of concatenating the blocks afterwards (a full read + write of the [S, H] bf8 output), when every
+        # block start is a view start.
+        out = None
+        if seq_len > Cs:
+            out = ttnn.empty(
+                (1, 1, seq_len, self.hidden_size),
+                dtype=ttnn.bfloat8_b,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            starts = (c + b for c in range(0, seq_len, C) for b in range(0, min(C, seq_len - c), Cs))
+            if not all(_narrowable(out, 2, r) for r in starts):
+                ttnn.deallocate(out)
+                out = None
         outputs = []
         for start in range(0, seq_len, C):
             end = min(start + C, seq_len)
             if start == 0 and end == seq_len:
-                x_c, i_c, w_c = x, topk_indices, topk_weights
+                chunk = [(x, False), (topk_indices, False), (topk_weights, False)]
             else:
-                x_c = ttnn.slice(x, (0, 0, start, 0), (1, 1, end, self.hidden_size))
-                i_c = ttnn.slice(topk_indices, (start, 0), (end, self.top_k))
-                w_c = ttnn.slice(topk_weights, (start, 0), (end, self.top_k))
-            outputs.extend(self._chunk(x_c, i_c, w_c))
-            if x_c is not x:
-                ttnn.deallocate(x_c)
-                ttnn.deallocate(i_c)
-                ttnn.deallocate(w_c)
-        if len(outputs) == 1:
+                # Zero-copy row views where the chunk starts on DRAM bank 0 (any multiple of 256 tokens), else copies.
+                chunk = [
+                    _row_view(x, 2, start, end - start),
+                    _row_view(topk_indices, 0, start, end - start),
+                    _row_view(topk_weights, 0, start, end - start),
+                ]
+            outputs.extend(self._chunk(*(t for t, _ in chunk), out=out, out_start=start))
+            for t, owned in chunk:
+                if owned:
+                    ttnn.deallocate(t)
+        if out is None and len(outputs) == 1:
             out = outputs[0]
-        else:
+        elif out is None:
             out = ttnn.concat(outputs, dim=2)
             for t in outputs:
                 ttnn.deallocate(t)
+        axis = self.mesh_config.tp_axis
+        links = batched_reduce_links(self.ccl_manager, axis)  # 2 on BH 1x4, batch 1 too (bit-exact vs 1 link)
+        if batch_size > 1:
+            reduced = per_user_reduce(out, batch_size, axis, links, scatter=scatter)
+            ttnn.deallocate(out)
+            return reduced
         if scatter:
-            reduced = ttnn.reduce_scatter(
-                out,
-                2,
-                cluster_axis=self.mesh_config.tp_axis,
-                num_links=self.ccl_manager.num_links,
-                topology=ttnn.Topology.Ring,
-            )
+            reduced = ring_reduce_scatter(out, self.mesh_config.tp_axis, links)
             ttnn.deallocate(out)
             return reduced
         reduced = ttnn.all_reduce(
             out,
-            num_links=self.ccl_manager.num_links,
+            num_links=links,
             topology=ttnn.Topology.Ring,
             cluster_axis=self.mesh_config.tp_axis,
         )
