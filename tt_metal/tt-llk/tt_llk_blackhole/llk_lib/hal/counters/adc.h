@@ -135,7 +135,7 @@ public:
         static_assert(sizeof...(Clients) != 0, "select at least one address-counter client");
         static_assert(((Clients == Client::Unpacker0 || Clients == Client::Unpacker1 || Clients == Client::Packers) && ...), "invalid address-counter client");
         auto result    = *this;
-        result.clients = (std::uint8_t {0} | ... | static_cast<std::uint8_t>(Clients));
+        result.clients = (std::uint8_t {0} | ... | hal::to_underlying(Clients));
         return result;
     }
 
@@ -160,7 +160,7 @@ namespace detail
 inline constexpr std::uint8_t EmptyClientMask = 0; ///< No destination clients selected.
 /** @brief Bitmask of all supported unpacker and packer clients. */
 inline constexpr std::uint8_t AllClientsMask =
-    static_cast<std::uint8_t>(Client::Unpacker0) | static_cast<std::uint8_t>(Client::Unpacker1) | static_cast<std::uint8_t>(Client::Packers);
+    hal::to_underlying(Client::Unpacker0) | hal::to_underlying(Client::Unpacker1) | hal::to_underlying(Client::Packers);
 inline constexpr std::uint8_t EmptyCounterMask = 0; ///< No counters selected within a group.
 /** @brief X/Y group mask selecting channel 0 X at bit 0 and channel 1 X at bit 2. */
 inline constexpr std::uint8_t BothXChannelsMask = 0b0101;
