@@ -98,11 +98,6 @@ void validate_paged(
     // TP-deduped nor the complete-mesh placement maps onto it.
     TT_FATAL(!args.tp_axis.has_value(), "a paged cache does not support tp_axis");
     TT_FATAL(args.cluster_axis.has_value(), "a paged cache requires an explicit cluster_axis");
-    // A pool entry is one head's page, addressed without a head stride.
-    TT_FATAL(
-        tensor_args.input.padded_shape()[1] == 1,
-        "a paged cache takes one head per chip (input {})",
-        tensor_args.input.padded_shape());
     // A page must not straddle chips: block-cyclic placement keeps each chip's chunk_local run contiguous.
     const uint32_t page_size = cache.padded_shape()[-2];
     const uint32_t chunk_local = tensor_args.input.padded_shape()[-2];
