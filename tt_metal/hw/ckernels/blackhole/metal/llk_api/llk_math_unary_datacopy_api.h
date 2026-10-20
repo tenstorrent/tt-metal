@@ -21,10 +21,13 @@ template <
     BroadcastType src_b_bcast_type = BroadcastType::NONE,
     bool unpack_to_dest = false>
 inline void llk_math_eltwise_unary_datacopy_impl(
-    std::uint32_t dst_index, std::uint32_t src_format, std::uint32_t dst_format) {
+    std::uint32_t dst_index,
+    std::uint32_t src_format,
+    std::uint32_t dst_format,
+    const ckernel::TensorShape tensor_shape) {
     LLK_ASSERT((dst_index < get_dest_max_tiles_rt<DST_SYNC_MODE, DstTileShape::Tile32x32>()), "");
     _llk_math_eltwise_unary_datacopy_<type, DST_SYNC_MODE, is_fp32_dest_acc_en, src_b_bcast_type, unpack_to_dest>(
-        dst_index, src_format, dst_format);
+        dst_index, src_format, dst_format, tensor_shape);
 }
 
 template <
@@ -33,7 +36,8 @@ template <
     BroadcastType src_b_bcast_type = BroadcastType::NONE,
     bool is_int_fpu_en = false,
     PackMode pack_mode = PackMode::Default>
-inline void llk_math_eltwise_unary_datacopy_init_impl(std::uint32_t num_faces, std::uint32_t dst_format) {
+inline void llk_math_eltwise_unary_datacopy_init_impl(
+    const ckernel::TensorShape tensor_shape, std::uint32_t dst_format) {
     static_assert(
         pack_mode == PackMode::Default || pack_mode == PackMode::Tilize,
         "Blackhole math datacopy init supports only PackMode::Default and PackMode::Tilize");
@@ -41,11 +45,11 @@ inline void llk_math_eltwise_unary_datacopy_init_impl(std::uint32_t num_faces, s
     SAN_HOOK(init<OperationFpuEltwiseUnaryDatacopy>(
         StateVal<OperationFpuEltwiseUnaryDatacopy::DataCopyType>(to_underlying(type)),
         StateVal<OperationFpuEltwiseUnaryDatacopy::BroadcastType>(to_underlying(src_b_bcast_type)),
-        StateVal<OperationFpuEltwiseUnaryDatacopy::NumFaces>(num_faces),
+        StateVal<OperationFpuEltwiseUnaryDatacopy::NumFaces>(tensor_shape.total_num_faces()),
         StateVal<Operand<Exu::Fpu>::Format>(dst_format)));
 
     _llk_math_eltwise_unary_datacopy_init_<type, is_fp32_dest_acc_en, src_b_bcast_type, is_int_fpu_en, pack_mode>(
-        num_faces, dst_format);
+        tensor_shape, dst_format);
 }
 
 template <
@@ -63,7 +67,7 @@ inline void llk_math_eltwise_unary_datacopy(std::uint32_t dst_index, std::uint32
         StateDiscard<std::uint32_t>(dst_index)));
 
     llk_math_eltwise_unary_datacopy_impl<type, is_fp32_dest_acc_en, src_b_bcast_type, unpack_to_dest>(
-        dst_index, unpack_src_format[operand_id], unpack_dst_format[operand_id]);
+        dst_index, unpack_src_format[operand_id], unpack_dst_format[operand_id], get_operand_tensor_shape(operand_id));
 }
 
 template <
@@ -74,6 +78,7 @@ template <
 inline void llk_math_eltwise_unary_datacopy_block(
     std::uint32_t start_dst_index, std::uint32_t ntiles, std::uint32_t operand) {
     const std::uint32_t operand_id = get_operand_id(operand);
+    const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand_id);
 
     SAN_HOOK(execute<OperationFpuEltwiseUnaryDatacopy>(
         StateVal<OperationFpuEltwiseUnaryDatacopy::DataCopyType>(to_underlying(type)),
@@ -87,7 +92,7 @@ inline void llk_math_eltwise_unary_datacopy_block(
         LLK_ASSERT((dst_index < get_dest_max_tiles_rt<DST_SYNC_MODE, DstTileShape::Tile32x32>()), "");
 
         _llk_math_eltwise_unary_datacopy_<type, DST_SYNC_MODE, is_fp32_dest_acc_en, src_b_bcast_type, unpack_to_dest>(
-            dst_index, unpack_src_format[operand_id], unpack_dst_format[operand_id]);
+            dst_index, unpack_src_format[operand_id], unpack_dst_format[operand_id], tensor_shape);
     }
 }
 
@@ -100,7 +105,7 @@ template <
 inline void llk_math_eltwise_unary_datacopy_init(const std::uint32_t operand) {
     const std::uint32_t operand_id = get_operand_id(operand);
     llk_math_eltwise_unary_datacopy_init_impl<type, is_fp32_dest_acc_en, src_b_bcast_type, is_int_fpu_en, pack_mode>(
-        get_operand_num_faces(operand_id), get_operand_dst_format(operand_id));
+        get_operand_tensor_shape(operand_id), get_operand_dst_format(operand_id));
 }
 
 template <BroadcastType src_b_bcast_type = BroadcastType::NONE, bool unpack_to_dest = false>
