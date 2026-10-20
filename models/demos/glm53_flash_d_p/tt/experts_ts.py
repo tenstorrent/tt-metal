@@ -69,8 +69,9 @@ class TtExpertsTs:
         """shared_weights (gate, up [I_s, H], down [H, I_s] torch, HF layout): the shared expert folded into the block
         (split over each mesh row's chips, its partials summed by the combine): the call then returns routed + shared
         and gathers no x for a separate shared expert. shared_axis: its group is each mesh row (1) or column (0).
-        shared_impl: ttnn (matmuls + glu_act; default) or flat (the flat expert op, one expert, rows from the dispatch
-        buffer, no tilize / untilize: slower - L4 chunk 5120 424 vs 338 us, too few gate/up cores for one I 1024 expert).
+        shared_impl: ttnn (matmuls + glu_act; default), unified (the bring-up unified op, high precision, ClampedSiluGlu
+        fused, x tilized inside: L4 HiFi3 chunk 5120 366 + 51 untilize vs 363 us; 2048 174 vs 181) or flat (the flat expert
+        op, no tilize / untilize: 424 vs 338 us at HiFi2 - too few gate/up cores for one I 1024 expert).
         """
         from ttnn.bringup.flat_routed_expert_ttnn.flat_expert import FlatRoutedExpert
 
