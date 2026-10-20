@@ -3572,27 +3572,53 @@ class TPGatedDeltaNet:
         ttnn.copy(new, win)
         ttnn.deallocate(new)
 
-    def save_spec_user(self, u):
-        """Host copy of user u's ring blocks (every slot) and E_prev row.
-
-        Returns ([D*T, Nv, Dk, Dv], [D, K-1+T, C]); D = devices.
-        """
+    def spec_users_save_enqueue(self, users):
+        """Phase 1 of a batched park: slice the ring blocks (every slot) and the E_prev row of each user and enqueue their
+        D2H copies NON-blocking. The host tensors are filled only by a synchronize that comes after this call; hand the
+        result to spec_users_save_finish then. Many layers can enqueue before the one synchronize."""
         assert self._spec_ring is not None, "save_spec_user before prepare_spec_verify"
         B, Nv, Dk, Dv, K, C = self.B, self.Nv, self.Dk, self.Dv, self.K, self.qkv_dim_tp
         T = self._spec_shape[1]
         r4 = ttnn.reshape(self._spec_ring, (T, B * Nv, Dk, Dv))
-        ring_dev = ttnn.slice(r4, (0, u * Nv, 0, 0), (T, (u + 1) * Nv, Dk, Dv))
-        e_dev = ttnn.slice(self.verify_win_cur(), (u, 0, 0), (u + 1, K - 1 + T, C))
+        win = self.verify_win_cur()
+        pend = []
+        for u in users:
+            ring_dev = ttnn.slice(r4, (0, u * Nv, 0, 0), (T, (u + 1) * Nv, Dk, Dv))
+            e_dev = ttnn.slice(win, (u, 0, 0), (u + 1, K - 1 + T, C))
+            pend.append(
+                (
+                    u,
+                    ring_dev,
+                    e_dev,
+                    ttnn.from_device(ring_dev, blocking=False),
+                    ttnn.from_device(e_dev, blocking=False),
+                )
+            )
+        return pend
+
+    def spec_users_save_finish(self, pend):
+        """Phase 2 (after the synchronize): {u: (ring [D*T, Nv, Dk, Dv], E_prev row [D, K-1+T, C])} host tensors."""
         comp = ttnn.ConcatMeshToTensor(self.mesh, dim=0)
-        ring, e = ttnn.to_torch(ring_dev, mesh_composer=comp), ttnn.to_torch(e_dev, mesh_composer=comp)
-        ttnn.deallocate(ring_dev)
-        ttnn.deallocate(e_dev)
-        return ring, e
+        out = {}
+        for u, ring_dev, e_dev, ring_h, e_h in pend:
+            out[u] = (ttnn.to_torch(ring_h, mesh_composer=comp), ttnn.to_torch(e_h, mesh_composer=comp))
+            ttnn.deallocate(ring_dev)
+            ttnn.deallocate(e_dev)
+        return out
 
-    def load_spec_users(self, states):
-        """Write host states {u: (ring slot [D, Nv, Dk, Dv], E_prev row [D, K-1+T, C])}.
+    def save_spec_user(self, u):
+        """Host copy of user u's ring blocks (every slot) and E_prev row.
 
-        Goes into ring slot 0 / the E_prev row of each u; other users kept.
+        Returns ([D*T, Nv, Dk, Dv], [D, K-1+T, C]); D = devices. One synchronize (the engine's batched park calls
+        spec_users_save_enqueue for all layers and rows instead, and synchronizes once for all of them).
+        """
+        pend = self.spec_users_save_enqueue([u])
+        ttnn.synchronize_device(self.mesh)
+        return self.spec_users_save_finish(pend)[u]
+
+    def spec_users_load_enqueue(self, states):
+        """Write host states {u: (ring slot [D, Nv, Dk, Dv], E_prev row [D, K-1+T, C])} into ring slot 0 / the E_prev row of
+        each u (other users kept) without synchronizing; the caller synchronizes (and keeps ``states`` alive until then).
         """
         mapper = ttnn.ShardTensorToMesh(self.mesh, dim=0)
 
@@ -3602,6 +3628,14 @@ class TPGatedDeltaNet:
         ring_parts = {u: up(r, ttnn.float32) for u, (r, _) in states.items()}
         e_parts = {u: up(e, self.verify_win_cur().dtype) for u, (_, e) in states.items()}
         self._write_spec_rows(ring_parts, e_parts)
+
+    def load_spec_users(self, states):
+        """Write host states {u: (ring slot [D, Nv, Dk, Dv], E_prev row [D, K-1+T, C])}.
+
+        Goes into ring slot 0 / the E_prev row of each u; other users kept.
+        """
+        self.spec_users_load_enqueue(states)
+        ttnn.synchronize_device(self.mesh)
 
     def forward_verify_recurrent(
         self,

@@ -102,6 +102,58 @@ def spec_hostset_enabled():
     return os.environ.get("QWEN36_SPEC_HOSTSET", "1") != "0"
 
 
+def spec_fused_enabled():
+    """QWEN36_SPEC_FUSED (default "0"): the MTP spec step may run the greedy accept on the device (spec_mode
+    "fused_sample", work/notes/45 stage S1): verify, accept trace and drafter trace in one enqueue and one synchronize.
+    Read at prepare_decode (allocates the accept buffers and trace) and by the vLLM class's SpecPlan."""
+    return os.environ.get("QWEN36_SPEC_FUSED", "0") == "1"
+
+
+def spec_fused_sampled_enabled():
+    """QWEN36_SPEC_FUSED_SAMPLED (default "1"; needs QWEN36_SPEC_FUSED=1 and the verify top-k trace): stage S2, the engine also
+    prepares and captures the SAMPLED accept trace, so a fused_sample step that carries ``spec_sampling`` runs on the device.
+    Off: such a step takes the full-logits host walk (reason "no_sampled_trace")."""
+    return os.environ.get("QWEN36_SPEC_FUSED_SAMPLED", "1") != "0"
+
+
+def spec_chain_sampled_enabled():
+    """QWEN36_SPEC_CHAIN_SAMPLED (default "0"): a deferred (defer_read=True) fused step may carry a non-greedy row in
+    ``spec_sampling``. Off, decode_forward raises ValueError for it: sampled overflow is not handled for deferred steps yet, so
+    the plugin runs a sampled step as the synchronous S2 step and defers only greedy-only steps."""
+    return os.environ.get("QWEN36_SPEC_CHAIN_SAMPLED", "0") == "1"
+
+
+def spec_fused_audit_enabled():
+    """QWEN36_SPEC_FUSED_AUDIT (default "1" in stage S2): every sampled fused step reads back the top-k union (two extra
+    reads) and checks the device commit against spec_fused_sampled.fused_sampled_reference."""
+    return os.environ.get("QWEN36_SPEC_FUSED_AUDIT", "1") != "0"
+
+
+def spec_fused_audit_every():
+    """QWEN36_SPEC_FUSED_AUDIT_EVERY (default "1" = every sampled fused step; integer >= 1): the S2 audit runs only on
+    sampled fused steps whose per-engine sampled-step counter % N == 0."""
+    return max(1, int(os.environ.get("QWEN36_SPEC_FUSED_AUDIT_EVERY", "1")))
+
+
+def spec_chain_enabled():
+    """QWEN36_SPEC_CHAIN (default "0"; needs QWEN36_SPEC_FUSED=1): stage S3c, chain mode in sync serving. A fused step that follows
+    a fused step on the same live rows lets the device build the next verify's token and aux buffers (the chain trace, tt/spec_chain.py)
+    instead of the host staging them. Read at prepare_decode (allocates the chain device) and capture_decode (captures its traces).
+    """
+    return os.environ.get("QWEN36_SPEC_CHAIN", "0") == "1"
+
+
+def spec_chain_audit_enabled():
+    """QWEN36_SPEC_CHAIN_AUDIT (default "1"): on a chain step, the host builds the words today's path would stage and, after the
+    step's synchronize, requires them bit-equal to what the device wrote into the verify token / aux buffers."""
+    return os.environ.get("QWEN36_SPEC_CHAIN_AUDIT", "1") != "0"
+
+
+def spec_chain_audit_every():
+    """QWEN36_SPEC_CHAIN_AUDIT_EVERY (default 1; integer >= 1): the chain audit runs on chain steps whose counter % N == 0."""
+    return max(1, int(os.environ.get("QWEN36_SPEC_CHAIN_AUDIT_EVERY", "1")))
+
+
 def spec_hostset_trace_enabled():
     """The part of QWEN36_SPEC_HOSTSET that changes the captured traces: one packed uint32 input buffer per trace with
     in-trace slices, and cos/sin rows looked up from the resident RoPE tables by position (ttnn.embedding) instead of

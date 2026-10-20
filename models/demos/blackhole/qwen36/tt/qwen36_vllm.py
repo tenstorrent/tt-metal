@@ -27,7 +27,13 @@ import ttnn
 from models.demos.blackhole.qwen36.tt.common import create_tt_model
 from models.demos.blackhole.qwen36.tt.generator_interface import prefill_dispatch, warmup_decode_buckets
 from models.demos.blackhole.qwen36.tt.model import serve_device_decode_env_enabled
-from models.demos.blackhole.qwen36.tt.tp_common import fabric_router_config, spec_hostset_enabled, verify_device_topk_m
+from models.demos.blackhole.qwen36.tt.tp_common import (
+    fabric_router_config,
+    spec_chain_enabled,
+    spec_fused_enabled,
+    spec_hostset_enabled,
+    verify_device_topk_m,
+)
 from models.tt_transformers.tt.generator import Generator
 
 # Sampler top-k limit (models/common/sampling TTSampling.max_top_k default; ttnn.sampling walks k <= 32 candidates).
@@ -939,8 +945,15 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
         "supports_spec_decode": True,
         "spec_requirements": ("device_propose", "hidden_feed"),
         "spec_hidden_handoff": ("on_device",),
-        "supports_async_decode": False,
-        "supports_async_spec_decode": False,
+        # Same condition as supports_async_spec_decode: the platform gate disables async scheduling for the whole launch otherwise.
+        # Only plain narrow decode steps (_decode_narrow, host logits, no device sampling so never overlapped) reach it besides verifies.
+        "supports_async_decode": bool(spec_chain_enabled() and spec_fused_enabled()),
+        # QWEN36_SPEC_CHAIN=1 and QWEN36_SPEC_FUSED=1 (stage S4b): fused verifies are enqueue-only (decode_forward defer_read), read on
+        # the plugin's reader thread (read_decode_output) and may chain on the step in flight. Read at import, like the other flags here.
+        "supports_async_spec_decode": bool(spec_chain_enabled() and spec_fused_enabled()),
+        # decode_forward(finishing_slots=[runner slots]): requests left out of a step only because the step in flight ends them at
+        # max_tokens. The engine frees their rows without parking (spec_engine._apply_finishing). Only meaningful with spec.
+        "supports_finishing_slots": True,
         "output_tokens_per_step": 1,
         "supports_sample_on_device": False,
     }
@@ -1030,7 +1043,9 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
             lanes_per_request=1,
             extra_bytes_per_seq=per_seq,
             extra_bytes_per_token=per_token,
-            accept_modes=("argmax_ids", "logits") + (("topk",) if topk_m else ()),
+            accept_modes=("argmax_ids", "logits")
+            + (("topk",) if topk_m else ())
+            + (("fused_sample",) if spec_fused_enabled() else ()),
             drafter_state="internal",
             supports_narrow_decode=True,
             **topk_kw,
@@ -1168,8 +1183,38 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
         num_valid_drafts = kwargs.pop("num_valid_drafts")
         accepted_counts = kwargs.pop("accepted_counts")
         spec_mode = kwargs.pop("spec_mode")
-        check_spec_side_tensors(num_valid_drafts, accepted_counts, int(tokens.shape[0]), self._SPEC_K)
+        defer_read = bool(kwargs.pop("defer_read", False))
+        chain_rows, chain_tip = kwargs.pop("chain_rows", None), kwargs.pop("chain_tip", None)
+        finishing_slots = kwargs.pop("finishing_slots", None)
+        if finishing_slots is not None:
+            finishing_slots = [int(s) for s in finishing_slots]
+            if not self.model_capabilities.get("supports_finishing_slots", False):
+                raise ValueError("finishing_slots needs the supports_finishing_slots capability")
+        if defer_read or chain_rows is not None or chain_tip is not None:
+            if spec_mode != "fused_sample":
+                raise ValueError(
+                    f"defer_read / chain_rows / chain_tip need spec_mode 'fused_sample', got {spec_mode!r}"
+                )
+            if not self.model_capabilities.get("supports_async_spec_decode", False):
+                raise ValueError(
+                    "defer_read needs QWEN36_SPEC_CHAIN=1 and QWEN36_SPEC_FUSED=1 (supports_async_spec_decode)"
+                )
+            if chain_rows is not None and not defer_read:
+                raise ValueError("chain_rows needs defer_read=True")
+        B = int(tokens.shape[0])
+        if chain_rows is not None:  # chain rows carry accepted_counts -1; everything else is checked as ever
+            if tuple(chain_rows.shape) != (B,) or chain_rows.dtype != torch.bool:
+                raise ValueError(
+                    f"chain_rows must be a bool tensor of shape [{B}], got {chain_rows.dtype} {tuple(chain_rows.shape)}"
+                )
+            if bool((accepted_counts[chain_rows] != -1).any()):
+                raise ValueError("a chain row must carry accepted_counts -1")
+            counts_chk = torch.where(chain_rows, torch.ones_like(accepted_counts), accepted_counts)
+            check_spec_side_tensors(num_valid_drafts, counts_chk, B, self._SPEC_K)
+        else:
+            check_spec_side_tensors(num_valid_drafts, accepted_counts, B, self._SPEC_K)
         assert kwargs.get("page_tables_per_layer") is None, "per-layer page tables unsupported"
+        spec_sampling = self._check_spec_sampling(kwargs.pop("spec_sampling", None), spec_mode, int(tokens.shape[0]))
         eng = self._ensure_ready()
         res = eng.decode_forward(
             tokens,
@@ -1179,8 +1224,25 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
             page_table=self._table(page_table),
             spec_mode=spec_mode,
             slot_remap=remap,
+            # stage S2 (fused_sample with sampled rows); sent only when present, so a greedy / older call keeps its shape
+            **({} if spec_sampling is None else {"spec_sampling": spec_sampling}),
+            **({"defer_read": True} if defer_read else {}),
+            **({} if chain_rows is None else {"chain_rows": chain_rows, "chain_tip": chain_tip}),
+            **({} if not finishing_slots else {"finishing_slots": finishing_slots}),
         )
         logits = res.logits if spec_mode == "logits" else None
+        if (
+            spec_mode == "fused_sample" and defer_read
+        ):  # stage S4b: no host tensors; the reader thread resolves the handle
+            return VerifyOutput(spec_mode=res.spec_mode, handle=res.handle)
+        if spec_mode == "fused_sample":  # QWEN36_SPEC_FUSED: greedy rows (S1) or, with spec_sampling, sampled rows (S2)
+            return VerifyOutput(
+                spec_mode=res.spec_mode,
+                argmax_ids=res.argmax_ids,
+                accepted_token_ids=res.accepted_token_ids,
+                accepted_counts=res.accepted_counts,
+                hidden=None,
+            )
         if spec_mode == "topk":
             # The candidates plus the lazy full-logits fallback (one device round trip; the plugin walks acceptance on
             # the runner thread before it proposes, see supports_async_spec_decode=False).
@@ -1193,6 +1255,60 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
                 fetch_logits=res.fetch_logits,
             )
         return VerifyOutput(spec_mode=res.spec_mode, argmax_ids=res.argmax_ids, hidden=None, logits=logits)
+
+    def read_decode_output(self, tt_out, async_read=False, **kwargs):
+        """Reader-thread read of a deferred fused verify (stage S4b): ``read_decode_output(handle)`` blocks on the step's device event
+        and returns FusedReadout(accepted_token_ids [B,1+K] int32, accepted_counts [B] int32, p0 [B] int32). It makes no other device
+        call and changes no engine state (the handle's own result cache only). Any other ``tt_out`` takes the Generator's path.
+        """
+        from models.demos.blackhole.qwen36.tt.spec_engine import FusedHandle
+
+        if isinstance(tt_out, FusedHandle):
+            from vllm_tt_plugin.spec_decode import FusedReadout
+
+            ids, counts, p0 = tt_out.wait()
+            return FusedReadout(accepted_token_ids=ids, accepted_counts=counts, p0=p0)
+        if async_read and hasattr(tt_out, "spec_mode") and getattr(tt_out, "handle", None) is None:
+            # Non-deferred VerifyOutput (sampled fused_sample, topk): already host when every present tensor field is.
+            fields = [
+                getattr(tt_out, n, None)
+                for n in ("argmax_ids", "accepted_token_ids", "accepted_counts", "logits", "topk_values", "topk_ids")
+            ]
+            if all(f is None or isinstance(f, torch.Tensor) for f in fields):
+                return tt_out, []
+        if async_read and isinstance(tt_out, torch.Tensor):
+            # Already host (narrow decode logits, non-deferred verify): the Generator's path only reads ttnn tensors.
+            # The plugin's finalize_decode takes host output with no events to wait on.
+            return tt_out, []
+        return super().read_decode_output(tt_out, async_read=async_read, **kwargs)
+
+    def _check_spec_sampling(self, ss, spec_mode, B):
+        """Validate the plugin's ``spec_sampling`` (stage S2; docs/SPEC_DECODE_CONTRACT.md): host tensors over the padded rows
+        B: temperature fp32 [B], top_k int32 [B], top_p fp32 [B], greedy bool [B], uniforms fp32 [B, K+2]. Only a
+        fused_sample verify may carry it. Returns the dict (tensors) or None."""
+        if ss is None:
+            return None
+        if spec_mode != "fused_sample":
+            raise ValueError(f"spec_sampling is only valid with spec_mode 'fused_sample', got {spec_mode!r}")
+        K = self._SPEC_K
+        want = {
+            "temperature": ((B,), torch.float32),
+            "top_k": ((B,), torch.int32),
+            "top_p": ((B,), torch.float32),
+            "greedy": ((B,), torch.bool),
+            "uniforms": ((B, K + 2), torch.float32),
+        }
+        if set(ss) != set(want):
+            raise ValueError(f"spec_sampling keys {sorted(ss)} != {sorted(want)}")
+        for name, (shape, dtype) in want.items():
+            t = ss[name]
+            if not isinstance(t, torch.Tensor) or tuple(t.shape) != shape or t.dtype != dtype:
+                got = (tuple(t.shape), t.dtype) if isinstance(t, torch.Tensor) else type(t).__name__
+                raise ValueError(f"spec_sampling[{name!r}] must be a {dtype} tensor of shape {shape}, got {got}")
+        u = ss["uniforms"]
+        if bool(((u < 0) | (u >= 1.0)).any()):
+            raise ValueError("spec_sampling['uniforms'] must lie in [0, 1)")
+        return ss
 
     def _decode_narrow(self, tokens, start_pos, page_table, kwargs, remap=None):
         """Ordinary [B, 1] decode step (no drafts) run as a 1-column verify; ``accepted_counts`` resolves a
@@ -1225,6 +1341,11 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
             spec_mode="logits",
             slot_remap=remap,
             **({"narrow_col0": True} if spec_hostset_enabled() else {}),  # QWEN36_SPEC_HOSTSET: read column 0 only
+            **(
+                {"finishing_slots": [int(x) for x in kwargs["finishing_slots"]]}
+                if kwargs.get("finishing_slots")
+                else {}
+            ),
         )
         return res.logits[:, :1].float()
 

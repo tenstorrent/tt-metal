@@ -43,6 +43,16 @@ def serve_device_decode_env_enabled():
     return os.environ.get("QWEN36_SERVE_DEVICE_DECODE", "1") == "1"
 
 
+class VerifyHandle:
+    """What ``verify_after_external_sync`` needs from ``verify_stage_and_enqueue``."""
+
+    __slots__ = ("rows", "B", "read_logits", "read_topk", "read_col0", "fused")
+
+    def __init__(self, rows, B, read_logits, read_topk, read_col0, fused):
+        self.rows, self.B = rows, B
+        self.read_logits, self.read_topk, self.read_col0, self.fused = read_logits, read_topk, read_col0, fused
+
+
 class _ShortPrefillTrace:
     """Persistent device buffers + outputs of ONE captured bucket short-prompt prefill trace (any length <= bucket).
 
@@ -2011,15 +2021,18 @@ class Qwen36Model:
             owned.append(ctrl)
         return kvpos, cos, sin, ctrl, owned
 
-    def _vfy_aux_host(self, row_positions, mi_prev):
-        """Host form of ``_vfy_aux_buf``: torch.int32 [3 (2 without the fused GDN op), W]."""
+    def _vfy_aux_host(self, row_positions, mi_prev, parity=None):
+        """Host form of ``_vfy_aux_buf``: torch.int32 [3 (2 without the fused GDN op), W]. ``parity`` (default: the layers'
+        current GDN window parity): the parity word of the ctrl page, for a step whose replay was enqueued earlier."""
         from models.demos.blackhole.qwen36.tt.gdn.tp import spec_ctrl_page
 
         segs = [row_positions, rope_row_index(row_positions, self.rope.rope_delta, self.rope.max_seq_len)]
         if getattr(self, "_vfy_fused", False):
-            _pars = {dn._spec_win_par for dn in self._vfy_gdn}
-            assert len(_pars) == 1, f"GDN window parities out of step: {sorted(_pars)}"
-            segs.append(spec_ctrl_page(mi_prev, self._vfy_B, self._vfy_Nv, parity=_pars.pop()).reshape(-1))
+            if parity is None:
+                _pars = {dn._spec_win_par for dn in self._vfy_gdn}
+                assert len(_pars) == 1, f"GDN window parities out of step: {sorted(_pars)}"
+                parity = _pars.pop()
+            segs.append(spec_ctrl_page(mi_prev, self._vfy_B, self._vfy_Nv, parity=parity).reshape(-1))
         return pack_u32_rows(segs)
 
     def _vfy_stage_aux(self, aux_host):
@@ -2033,6 +2046,13 @@ class Qwen36Model:
         ttnn.copy_host_to_device_tensor(_h, self._vfy_aux_buf)
         self._vfy_aux_staged = aux_host.clone()
         return True
+
+    def vfy_gdn_parity(self):
+        """The GDN conv-window parity the NEXT verify replay reads (one value for every layer; it flips once per replay, in
+        verify_after_external_sync). The chain overlay (spec_chain.pack_ovr_host) carries it as its parity word."""
+        _pars = {dn._spec_win_par for dn in self._vfy_gdn}
+        assert len(_pars) == 1, f"GDN window parities out of step: {sorted(_pars)}"
+        return _pars.pop()
 
     def prestage_verify_aux(self, positions, mi_prev):
         """Stage the NEXT verify's packed aux inputs for the predicted ``positions`` / ``mi_prev`` (B ints each) while the
@@ -2665,7 +2685,9 @@ class Qwen36Model:
         read_topk=False,
         read_col0=False,
     ):
-        """Replay the captured verify trace for B users x T candidates.
+        """Stage, replay, sync and read one verify step: ``verify_stage_and_enqueue`` then ``verify_sync_and_read``.
+
+        Replay the captured verify trace for B users x T candidates.
 
         ``tokens``: B lists of T ids ([pending] + drafts per user). ``positions``: B ints, user u's
         first verify slot this iteration (row u*T+j lands at positions[u]+j). ``mi_prev``: B ints,
@@ -2699,12 +2721,57 @@ class Qwen36Model:
         before the next replay (the spec loop reads its anchor rows and reseeds the drafter within
         the iteration).
         """
+        handle = self.verify_stage_and_enqueue(
+            tokens,
+            positions,
+            mi_prev,
+            read_logits=read_logits,
+            page_tables=page_tables,
+            inactive=inactive,
+            read_topk=read_topk,
+            read_col0=read_col0,
+        )
+        return self.verify_sync_and_read(handle)
+
+    def verify_stage_and_enqueue(
+        self,
+        tokens,
+        positions,
+        mi_prev,
+        read_logits=False,
+        page_tables=None,
+        inactive=None,
+        read_topk=False,
+        read_col0=False,
+        execute_topk=False,
+        skip_tokens_h2d=False,
+        skip_aux_h2d=False,
+        skip_kv_check=False,
+        flip_parity=False,
+    ):
+        """First half of ``verify_traced`` (same arguments): validate, stage every per-replay input, and enqueue the
+        main trace plus the optional logits / topk traces with ``blocking=False``. No synchronize and no readback.
+        ``execute_topk`` (QWEN36_SPEC_FUSED stage S2): enqueue the topk trace but do not read it back (the handle says
+        read_topk=False); the fused sampled accept trace consumes ``_vfy_topk_vals_out`` / ``_vfy_topk_ids_out`` on the device.
+        ``skip_tokens_h2d`` / ``skip_aux_h2d`` (QWEN36_SPEC_CHAIN, stage S3c): the chain trace already wrote the token buffer / the
+        packed aux buffer on the device, so the host copy is not made (the arguments still feed the page-table and KV-write checks);
+        skipping the aux copy forgets the host mirror ``_vfy_aux_staged`` (it no longer describes the device words).
+        ``skip_kv_check`` (deferred chain step, S4b): the positions are only upper bounds, so the per-step same-tile collision check is
+        replaced by the caller's invariant (no non-null block shared across active rows). ``flip_parity`` (deferred serving):
+        flip the GDN window parity HERE, once per replay, because no ``verify_after_external_sync`` follows (the next step's overlay
+        must know its parity word at submit time); the returned handle then has ``fused=False`` so a later after-sync call cannot flip again.
+
+        Returns a ``VerifyHandle`` for ``verify_sync_and_read`` (blocking read) or ``verify_after_external_sync``
+        (the caller already synchronized the device). Exactly one of those must follow each call: the GDN window
+        parity flips there, once per replay.
+        """
         from models.demos.blackhole.qwen36.tt.gdn.tp import spec_conv_sel, spec_ctrl_page, spec_state_blk_idx
 
         assert getattr(self, "_vfy_trace_id", None) is not None, "call record_verify_trace first"
         if read_topk:
             if read_logits:
                 raise ValueError("verify_traced: read_logits and read_topk are exclusive reads")
+        if read_topk or execute_topk:
             if getattr(self, "_vfy_topk_trace_id", None) is None:
                 raise ValueError("verify_traced(read_topk=True) needs QWEN36_VERIFY_DEVICE_TOPK=1 at capture")
         T, B = self._vfy_T, self._vfy_B
@@ -2728,7 +2795,7 @@ class Qwen36Model:
             if pt.shape[1] < W:
                 pt = torch.cat([pt, torch.zeros(B, W - pt.shape[1], dtype=torch.int32)], dim=1)
             pt = pt.contiguous()
-        if self._vfy_kv_grouped:
+        if self._vfy_kv_grouped and not skip_kv_check:
             chk = positions if inactive is None else [-1 if x else int(p) for p, x in zip(positions, inactive)]
             self._vfy_check_kv_writes(pt, chk)
         if page_tables is not None:
@@ -2745,9 +2812,10 @@ class Qwen36Model:
 
         # Stage per-replay inputs into the persistent buffers (addresses preserved). Row-major flatten
         # of the B x T token lists is the user-major row order.
-        tok = torch.tensor([int(t) for row in tokens for t in row], dtype=torch.int32).reshape(1, rows)
-        _h = ttnn.from_torch(tok, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=None, mesh_mapper=rep)
-        ttnn.copy_host_to_device_tensor(_h, self._vfy_token_buf)
+        if not skip_tokens_h2d:
+            tok = torch.tensor([int(t) for row in tokens for t in row], dtype=torch.int32).reshape(1, rows)
+            _h = ttnn.from_torch(tok, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=None, mesh_mapper=rep)
+            ttnn.copy_host_to_device_tensor(_h, self._vfy_token_buf)
         # Absolute cache slot for each row: positions[u] + j. This doubles as the decode SDPA's
         # per-row cur_pos, which is what makes the hybrid verify causal.
         pos = self._vfy_row_positions(positions)
@@ -2804,13 +2872,37 @@ class Qwen36Model:
         if _hostset:
             # kvpos + RoPE rows + ctrl page: one packed copy, skipped when the next-verify prestage already staged these
             # exact words (prestage_verify_aux); the trace slices them and looks cos/sin up on the device.
-            self._vfy_stage_aux(self._vfy_aux_host(pos, mi_prev))
+            if skip_aux_h2d:
+                self._vfy_aux_staged = None
+            else:
+                self._vfy_stage_aux(self._vfy_aux_host(pos, mi_prev))
         ttnn.execute_trace(dev, self._vfy_trace_id, cq_id=0, blocking=False)
         if read_logits and self._vfy_sharded:
             ttnn.execute_trace(dev, self._vfy_logits_trace_id, cq_id=0, blocking=False)
-        if read_topk:
+        if read_topk or execute_topk:
             ttnn.execute_trace(dev, self._vfy_topk_trace_id, cq_id=0, blocking=False)
-        ttnn.synchronize_device(dev)
+        if flip_parity and _fused:
+            for dn in self._vfy_gdn:
+                dn._spec_win_par ^= 1
+        return VerifyHandle(
+            rows=rows,
+            B=B,
+            read_logits=read_logits,
+            read_topk=read_topk,
+            read_col0=read_col0,
+            fused=_fused and not flip_parity,
+        )
+
+    def verify_sync_and_read(self, handle):
+        """Second half of ``verify_traced``: synchronize the device, then ``verify_after_external_sync``."""
+        ttnn.synchronize_device(self.device)
+        return self.verify_after_external_sync(handle)
+
+    def verify_after_external_sync(self, handle):
+        """``verify_sync_and_read`` minus the synchronize (the caller synced after enqueueing). Flips the GDN window
+        parity (once per replay) and reads ids / logits / topk. Returns what ``verify_traced`` returns."""
+        rows, B = handle.rows, handle.B
+        read_logits, read_topk, read_col0, _fused = handle.read_logits, handle.read_topk, handle.read_col0, handle.fused
         if _fused:
             # The replay rebuilt every user's conv window into win[1-par], so that half is now E_prev for every GDN
             # layer; flip them together (verify_win_cur / the next page follow).

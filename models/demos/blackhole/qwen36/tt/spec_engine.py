@@ -43,7 +43,9 @@ for every prompt chunk, slot Tp-1 written at the first verify (_warm_mtp_last)."
 
 import math
 import os
+import threading
 import time
+import weakref
 from dataclasses import dataclass
 from typing import Callable
 
@@ -53,11 +55,41 @@ from ttnn.tools import trace_allocation_tracker
 
 import ttnn
 from models.demos.blackhole.qwen36.tt.mtp import draft_argmax
+from models.demos.blackhole.qwen36.tt.spec_chain import (
+    ChainDevice,
+    fused_fit_mode_bounds,
+    fused_fit_mode_range,
+    pack_ovr_host,
+)
+from models.demos.blackhole.qwen36.tt.spec_fused import (
+    AUX_ACTIVE,
+    AUX_DECLINED,
+    AUX_KEEP,
+    AUX_P0,
+    FUSED_AUX_ROWS,
+    FusedGreedyDevice,
+    fused_accept_aux_host,
+    fused_greedy_walk,
+)
+from models.demos.blackhole.qwen36.tt.spec_fused_sampled import (
+    FusedSampledDevice,
+    audit_boundary_users,
+    fused_sampled_reference,
+    host_redo_walk,
+)
 from models.demos.blackhole.qwen36.tt.tp_common import (
     pack_u32_rows,
     rope_row_index,
+    spec_chain_audit_enabled,
+    spec_chain_audit_every,
+    spec_chain_enabled,
+    spec_chain_sampled_enabled,
     spec_fast_join_enabled,
     spec_fast_prefill_enabled,
+    spec_fused_audit_enabled,
+    spec_fused_audit_every,
+    spec_fused_enabled,
+    spec_fused_sampled_enabled,
     spec_hostfix_enabled,
     spec_hostset_enabled,
     spec_hostset_trace_enabled,
@@ -75,7 +107,7 @@ _WARM_PROMPT_LENS = (100, 128, 200, 256, 400, 512, 900, 1024, 1900, 2048, 2148, 
 PLACEHOLDER_TOKEN_ID = -1
 # "topk" (QWEN36_VERIFY_DEVICE_TOPK): the exact per-position top-M candidates instead of the full logits, with the
 # full logits fetched lazily when a row cannot be served from them (note 26).
-SPEC_MODES = ("argmax_ids", "logits", "topk")
+SPEC_MODES = ("argmax_ids", "logits", "topk", "fused_sample")
 # Token ids are packed below the value in the exact top-k sort key (exact_topk): the vocabulary must fit.
 _TOPK_ID_BITS = 20
 
@@ -103,6 +135,22 @@ class VerifyResult:
     topk_values: torch.Tensor | None = None
     topk_ids: torch.Tensor | None = None
     fetch_logits: Callable[[], torch.Tensor] | None = None
+    # "fused_sample" (QWEN36_SPEC_FUSED, greedy rows): the greedy walk done here. committed [B, 1+K] int32 (-1 past the
+    # count) and counts [B] int32 in [1, 1+K]; a padding row commits its column-0 argmax with count 1.
+    accepted_token_ids: torch.Tensor | None = None
+    accepted_counts: torch.Tensor | None = None
+    # decode_forward(defer_read=True): the FusedHandle of the enqueued step (no host tensors above; see MTPSpecEngine._decode_forward_deferred)
+    handle: object = None
+
+
+@dataclass
+class FusedStep:
+    """What ``verify(fused=True)`` hands back besides the ids: committed / counts in ENGINE rows and the DraftResult
+    the fused step made for them (None after a fallback)."""
+
+    committed: torch.Tensor
+    counts: torch.Tensor
+    drafts: "DraftResult | None" = None
 
 
 @dataclass
@@ -650,6 +698,52 @@ def _device_bytes(t):
     return math.prod(int(d) for d in shape) * _elem_bytes(t.dtype)
 
 
+class _CorePlan:
+    """Host plan of one ``propose`` (see MTPSpecEngine._propose_core_plan)."""
+
+    def __init__(self, **kw):
+        self.drafts = None
+        self.recorded = False
+        self.dpt = None
+        self.__dict__.update(kw)
+
+
+class FusedHandle:
+    """A deferred fused step (``decode_forward(defer_read=True)``): everything its read and its later engine bookkeeping need,
+    captured at enqueue. ``tip_id`` (int, increasing per fused step) is what ``chain_tip`` names. ``wait()`` (reader thread) blocks on
+    the step's device event and returns ``(accepted_token_ids [B,1+K] int32, accepted_counts [B] int32, p0 [B] int32)`` in
+    runner slots (p0 negative on padding rows); it makes no device call other than the event wait and mutates only this handle
+    (its lock and result cache). A *ready* handle (``device`` False) stands for a step that ran synchronously."""
+
+    def __init__(self, engine, tip_id, kind):
+        self._eng, self.tip_id, self.kind = engine, int(tip_id), kind
+        self._lock = threading.Lock()
+        self._data = self._readout = None  # per-handle result cache (engine rows / runner slots)
+        self.device, self.ready, self.chainable = True, False, True
+        self.event = self.res_t = self.aux_t = self.ids_t = self.union = self.audit = None
+        self.dr_ts, self.res_rows = [], 2
+        self.active = self.declined = self.cmask = self.prev = self.succ = None
+        self.nvv = (
+            self.nv_own
+        ) = self.tokens = self.start_host = self.mi_host = self.aux = self.pt = self.sampling = None
+        self.lo = self.hi = self.exact = self.fin = self.draft_result = self.perm = None
+        self.parity, self.cap, self.skip, self.finished = 0, 0, [], False
+
+    def wait(self):
+        return self._eng._def_wait(self)
+
+
+class _ProposePlan:
+    """Host plan of one ``propose_draft_tokens`` (see MTPSpecEngine._propose_plan)."""
+
+    def __init__(self, **kw):
+        self.skip_all = False
+        self.core = None
+        self.decline = None
+        self.keep = None
+        self.__dict__.update(kw)
+
+
 class MTPSpecEngine:
     """MTP speculative decode engine over B users (see module docstring)."""
 
@@ -734,12 +828,33 @@ class MTPSpecEngine:
         self._dr_pack = None
         self._dr_eye = None
         self._dr_rs_cache = None  # (real-row mask, table or None) the reseed page-table buffer holds
+        # QWEN36_SPEC_FUSED (stage S1): the device accept (FusedGreedyDevice bound to the live buffers), its trace, the
+        # DraftResult of the last fused step with the commit it was made for, and the host mirror of pt_rows_in
+        self._fa = None
+        self._fa_trace = None
+        self._fused_cache = None
+        self._fa_pt_host = None
+        # stage S2: the SAMPLED accept (FusedSampledDevice sharing the S1 buffers) and its trace; audit boundary count
+        self._fs = None
+        self._fs_trace = None
+        self.fused_boundary_diffs = 0
+        self.fused_fallbacks = {}  # reason -> count of fused_sample steps that ran the argmax path
+        self.fused_steps = 0  # fused_sample verify steps (eligible + fallback)
+        # QWEN36_SPEC_CHAIN (stage S3c): two ChainDevice instances (the S1 / S2 result buffer they read), their traces, the state of
+        # the last fused step a chain step may continue (_chain_prev), counters
+        self._ch_g = self._ch_s = self._ch_trace_g = self._ch_trace_s = None
+        self._ch_standins = ()
+        self._chain_prev = self._chain_in = self._chain_cand = self._chain_ev = None
+        self._chain_dropped = self._chain_why = None
+        self.chain_steps = self.chain_audits = 0
+        self.chain_breaks = {}  # reason -> count of fused steps that could have chained and ran the host-staged path
         self._dr_trace = None  # trace id: anchor gather + batched reseed + K draft steps
         self._dr_outs = []  # K persistent [1,1,B] uint32 ids outputs of that trace
         self._last_pt = None  # fitted host page table of the most recent verify
         self._fresh = {}  # slot -> prompt length, prefilled and awaiting the seed verify
         self._active = set()  # slots holding a live request
         self._parked = {}  # slot -> per-GDN-layer host state of a live row left out of a verify
+        self._finishing = set()  # engine rows freed by decode_forward(finishing_slots) and not prefilled since
         self._prompts = {}  # slot -> (prompt ids, page-table row) of a fresh slot, for a re-prefill
         self._fresh_dirty = set()  # fresh slots left out of a seed, which overwrote their prefill state
         self._row_active = None  # [B] bool: rows that held a request in the last verify (None = all)
@@ -828,6 +943,23 @@ class MTPSpecEngine:
             return
         self._stage(host, dev, dtype, layout)
         cache[id(dev)] = (dev, host.clone())
+
+    _dr_rs_dirty = False  # the device wrote _dr_rs_pt (fused step): _dr_rs_cache no longer mirrors it
+    # class defaults of the fused-step state (set per instance in __init__; engines built without it read these)
+    _fa = _fa_trace = _fused_cache = _fa_pt_host = None
+    _fs = _fs_trace = None
+    _fs_standin = ()
+    fused_steps = fused_boundary_diffs = 0
+    fused_sampled_steps = fused_audited_steps = 0
+    # QWEN36_SPEC_CHAIN (stage S3c) class defaults: with the flag off every one of these stays None / 0 and no hook does anything
+    _ch_g = _ch_s = _ch_trace_g = _ch_trace_s = None
+    _ch_standins = ()
+    _chain_prev = _chain_in = _chain_cand = _chain_ev = _chain_dropped = _chain_why = None
+    chain_steps = chain_audits = 0
+    # deferred serving (stage S4b): the newest FusedHandle (chain_tip must name it), the context verify() reads, tip counter
+    _def_last = _def_ctx = None
+    _tip_seq = 0
+    fused_greedy_checked = 0
 
     def _alloc_host_replicated(self, host, dtype, layout):
         return ttnn.from_torch(
@@ -1110,6 +1242,8 @@ class MTPSpecEngine:
                 ttnn.deallocate(o)
             ttnn.synchronize_device(self.mesh)
             ttnn.deallocate(feed)
+            if spec_fused_enabled():
+                self._prepare_fused()
 
         ttnn.synchronize_device(self.mesh)
         self.prepared = True
@@ -1118,6 +1252,176 @@ class MTPSpecEngine:
             f"(slot remaps: {'host slot map' if self.host_slotmap else 'device GDN remap, QWEN36_SPEC_SLOTMAP=0'}; "
             f"fresh rows: {'seeded in the verify replay (QWEN36_SPEC_FAST_JOIN=1)' if self.fast_join else 'eager T=1 seed forward'})"
         )
+
+    def _prepare_fused(self):
+        """QWEN36_SPEC_FUSED: allocate the device accept bound to the LIVE buffers (verify token buffer, drafter pack, reseed
+        page table; the verify ids output is a trace output, bound in capture_decode) and run its body eagerly once so
+        every program is compiled before capture forbids cache misses."""
+        model = self.model
+        if not (self.recorded_drafter and self._dr_hostset and getattr(model, "_vfy_sharded", False)):
+            logger.warning(
+                "[spec_engine] QWEN36_SPEC_FUSED=1 needs the recorded packed drafter and the sharded verify argmax; "
+                "fused_sample steps will run the argmax path"
+            )
+            return
+        W = int(self._dr_pack.shape[-1])
+        self._fa = FusedGreedyDevice.allocate(
+            self.mesh,
+            self.B,
+            self.K,
+            self.nb,
+            W,
+            tok_in=model._vfy_token_buf,
+            pack_out=self._dr_pack,
+            rs_pt_out=self._dr_rs_pt,
+        )
+        self._fa.body()  # writes the live pack / rs_pt from zero inputs: the mirrors below forget them
+        ttnn.synchronize_device(self.mesh)
+        self._prepare_fused_sampled(W)
+        self._dr_rs_dirty = True
+        self._fa_pt_host = None
+        self._prepare_chain()
+
+    def _prepare_chain(self):
+        """QWEN36_SPEC_CHAIN (stage S3c): allocate the chain device (tt/spec_chain.py) bound to the LIVE verify token buffer, packed
+        aux buffer and the fused aux (shared by S1 / S2), once per result buffer (S1 ``fa.result_out`` and, when the sampled accept
+        exists, S2 ``fs.result_out``), with stand-in draft inputs (the live ones are the drafter trace's outputs, bound in
+        capture_decode), and compile the bodies eagerly. Any shape mismatch leaves chain mode off (host-staged steps as before).
+        """
+        if not spec_chain_enabled():
+            return
+        model, fa, fs = self.model, self._fa, self._fs
+        if not (
+            getattr(model, "_vfy_hostset", False)
+            and getattr(model, "_vfy_fused", False)
+            and getattr(model, "_vfy_aux_buf", None) is not None
+        ):
+            logger.warning(
+                "[spec_engine] QWEN36_SPEC_CHAIN=1 needs the packed verify aux buffer (QWEN36_SPEC_HOSTSET) and the fused GDN op; chain off"
+            )
+            return
+        kw = dict(aux_prev_in=fa.aux_in, tok_out=model._vfy_token_buf, vaux_out=model._vfy_aux_buf)
+        Nv = int(model._vfy_Nv)
+        ch_g = ch_s = None
+        try:
+            ch_g = ChainDevice.allocate(self.mesh, self.B, self.K, Nv, result_in=fa.result_out, **kw)
+            if fs is not None:
+                ch_s = ChainDevice.allocate(self.mesh, self.B, self.K, Nv, result_in=fs.result_out, **kw)
+        except AssertionError as e:
+            logger.warning(f"[spec_engine] chain mode disabled: {e}")
+            return
+        for ch in (ch_g, ch_s):
+            if ch is not None:
+                ch.body()  # compiles every program (stand-in drafts, zero inputs); writes the live token / aux buffers
+        ttnn.synchronize_device(self.mesh)
+        model._vfy_aux_staged = None  # the body overwrote the device words the host mirror describes
+        self._ch_g, self._ch_s = ch_g, ch_s
+        self._ch_standins = tuple(t for ch in (ch_g, ch_s) if ch is not None for t in ch.draft_ins)
+
+    def _prepare_fused_sampled(self, W):
+        """Stage S2: allocate the sampled accept (FusedSampledDevice) over the S1 buffers (ids stand-in, token buffer, aux, pt
+        rows, drafter pack, reseed table are SHARED; only samp_in, result_out [3, W] and the sampled body are new) with stand-in
+        union buffers (the live ones are the topk trace outputs, bound in capture_decode), and compile its body eagerly. Needs
+        the verify topk trace (QWEN36_VERIFY_DEVICE_TOPK) and TP * M <= 1024; otherwise sampled fused steps take the
+        full-logits host walk (reason "no_sampled_trace")."""
+        model, fa = self.model, self._fa
+        if not (spec_fused_sampled_enabled() and getattr(model, "_vfy_topk", False)):
+            logger.info("[spec_engine] fused sampled accept off (QWEN36_SPEC_FUSED_SAMPLED=0 or no verify topk trace)")
+            return
+        TP, M = int(model.num_devices), int(model._vfy_topk_m)
+        try:
+            self._fs = FusedSampledDevice.allocate(
+                self.mesh,
+                self.B,
+                self.K,
+                self.nb,
+                W,
+                TP,
+                M,
+                int(model.vocab_size) // TP,
+                ids_in=fa.ids_in,
+                tok_in=model._vfy_token_buf,
+                pack_out=self._dr_pack,
+                rs_pt_out=self._dr_rs_pt,
+                aux_in=fa.aux_in,
+                pt_rows_in=fa.pt_rows_in,
+            )
+        except AssertionError as e:
+            logger.warning(f"[spec_engine] fused sampled accept disabled (TP={TP}, M={M}): {e}")
+            self._fs = None
+            return
+        self._fs_standin = (
+            self._fs.union_vals_in,
+            self._fs.union_ids_in,
+        )  # freed at shutdown (the live ones are trace outputs)
+        self._fs.body()  # compiles every program of the sampled body (stand-in union / ids, zero inputs)
+        ttnn.synchronize_device(self.mesh)
+
+    def _capture_fused(self):
+        """Inside capture_decode's guarded scope, after the verify trace exists: bind its ids output and capture the
+        accept trace. A verify trace without the [1,1,1,32] ids row (unsharded argmax) disables the fused step."""
+        fa = self._fa
+        try:
+            fa.bind_ids(self.model._vfy_ids_out)
+        except AssertionError as e:
+            logger.warning(f"[spec_engine] fused accept disabled: {e}")
+            self._fa = None
+            return
+        self._fa_trace = ttnn.begin_trace_capture(self.mesh, cq_id=0)
+        fa.body()
+        ttnn.end_trace_capture(self.mesh, self._fa_trace, cq_id=0)
+        ttnn.synchronize_device(self.mesh)
+        self._dr_rs_dirty = True
+        logger.info("[spec_engine] fused accept trace captured (greedy walk + drafter inputs on device)")
+        self._capture_fused_sampled()
+        self._capture_chain()
+
+    def _capture_chain(self):
+        """QWEN36_SPEC_CHAIN, inside the guarded scope after the fused traces: bind the live drafter id outputs and capture the chain
+        trace of each variant (S1 always, S2 when its sampled accept trace exists)."""
+        if self._ch_g is None:
+            return
+        try:
+            for ch in (self._ch_g, self._ch_s):
+                if ch is not None:
+                    ch.bind_draft_ins(self._dr_outs)
+        except AssertionError as e:
+            logger.warning(f"[spec_engine] chain mode disabled: {e}")
+            self._ch_g = self._ch_s = None
+            return
+        self._ch_trace_g = ttnn.begin_trace_capture(self.mesh, cq_id=0)
+        self._ch_g.body()
+        ttnn.end_trace_capture(self.mesh, self._ch_trace_g, cq_id=0)
+        if self._ch_s is not None and self._fs is not None and self._fs_trace is not None:
+            self._ch_trace_s = ttnn.begin_trace_capture(self.mesh, cq_id=0)
+            self._ch_s.body()
+            ttnn.end_trace_capture(self.mesh, self._ch_trace_s, cq_id=0)
+        else:
+            self._ch_s = None
+        ttnn.synchronize_device(self.mesh)
+        logger.info(
+            "[spec_engine] chain trace captured (device builds the next verify's tokens / aux from the previous fused step"
+            f"{'; greedy + sampled variants' if self._ch_trace_s is not None else '; greedy variant'})"
+        )
+
+    def _capture_fused_sampled(self):
+        """Stage S2, inside the guarded scope: bind the live verify ids and the live topk trace outputs and capture the sampled
+        accept trace. A model without the topk outputs (or of another shape) leaves sampled steps on the host walk."""
+        fs, model = self._fs, self.model
+        if fs is None:
+            return
+        try:
+            fs.bind_ids(model._vfy_ids_out)
+            fs.bind_union(model._vfy_topk_vals_out, model._vfy_topk_ids_out)
+        except (AssertionError, AttributeError) as e:
+            logger.warning(f"[spec_engine] fused sampled accept disabled: {e}")
+            self._fs = None
+            return
+        self._fs_trace = ttnn.begin_trace_capture(self.mesh, cq_id=0)
+        fs.body()
+        ttnn.end_trace_capture(self.mesh, self._fs_trace, cq_id=0)
+        ttnn.synchronize_device(self.mesh)
+        logger.info("[spec_engine] fused sampled accept trace captured (union top-k -> sampled walk + drafter inputs)")
 
     def capture_decode(self):
         """Record the verify trace, then the drafter trace. Idempotent; requires prepare_decode."""
@@ -1137,6 +1441,8 @@ class MTPSpecEngine:
                     ttnn.end_trace_capture(self.mesh, self._dr_trace, cq_id=0)
                     ttnn.synchronize_device(self.mesh)
                     logger.info(f"[spec_engine] drafter trace captured (anchor + reseed + {self.K} draft steps)")
+                    if self._fa is not None:
+                        self._capture_fused()
                 else:
                     logger.info("[spec_engine] drafter runs eagerly (QWEN36_SPEC_EAGER_DRAFTER=1)")
         finally:
@@ -1157,6 +1463,42 @@ class MTPSpecEngine:
         if self.fast_prefill:
             model.release_prefill_trace_short()  # the spec short traces (captured or only prepared) and their inputs
             model.release_gdn_slot_write_traces()
+        for name in ("_ch_trace_g", "_ch_trace_s"):
+            if getattr(self, name) is not None:
+                ttnn.release_trace(self.mesh, getattr(self, name))
+                setattr(self, name, None)
+        for ch in (self._ch_g, self._ch_s):
+            if ch is not None:  # the shared buffers (token / aux / result_in / aux_prev_in) belong to their owners
+                for t in (ch.ovr_in, *(v for n, v in vars(ch).items() if n.startswith("c_"))):
+                    ttnn.deallocate(t)
+        for t in self._ch_standins:
+            ttnn.deallocate(t)
+        self._ch_g = self._ch_s = None
+        self._ch_standins = ()
+        self._chain_prev = self._chain_in = self._chain_cand = None
+        if self._fa_trace is not None:
+            ttnn.release_trace(self.mesh, self._fa_trace)
+            self._fa_trace = None
+        if self._fs_trace is not None:
+            ttnn.release_trace(self.mesh, self._fs_trace)
+            self._fs_trace = None
+        if self._fs is not None:
+            fs = self._fs
+            for t in (
+                fs.samp_in,
+                fs.result_out,
+                *self._fs_standin,
+                *(v for n, v in vars(fs).items() if n.startswith("c_")),
+            ):
+                if t is not None:  # the live union buffers are the topk trace's outputs: they died with that trace
+                    ttnn.deallocate(t)
+        self._fs, self._fs_standin = None, ()
+        if self._fa is not None:
+            for name in ("aux_in", "pt_rows_in", "result_out", "c_iota_t", "c_iota_k", "c_ut", "c_one"):
+                ttnn.deallocate(getattr(self._fa, name))
+            if self._fa.ids_standin is not None:  # the warm-pass stand-in (the live ids buffer dies with its trace)
+                ttnn.deallocate(self._fa.ids_standin)
+        self._fa, self._fused_cache, self._fa_pt_host, self._dr_rs_dirty = None, None, None, False
         if self._dr_trace is not None:
             ttnn.release_trace(self.mesh, self._dr_trace)
             self._dr_trace = None
@@ -1197,6 +1539,7 @@ class MTPSpecEngine:
         self._prep_pt = None
         self._fresh.clear()
         self._active.clear()
+        self.__dict__.setdefault("_finishing", set()).clear()
         self._set_slot_map(range(self.B))
         self.prefill_prepared = self.prefill_recorded = self.prepared = self.captured = False
         if getattr(model, "_spec_engine", None) is self:
@@ -1255,6 +1598,70 @@ class MTPSpecEngine:
             d["total"] = sum(d.values())
         return {"per_seq": per_seq, "fixed": fixed, "per_token": per_token}
 
+    def _park_save(self, us):
+        """{row: [per-GDN-layer (ring, e_prev) host state]} of the rows ``us``. With layers that offer
+        spec_users_save_enqueue (TPGatedDeltaNet) every layer's D2H copy is enqueued non-blocking and the device is
+        synchronized ONCE; otherwise one blocking save_spec_user per layer and row. Same bytes either way."""
+        gdn = self._gdn
+        if gdn and all(hasattr(dn, "spec_users_save_enqueue") for dn in gdn):
+            pend = [dn.spec_users_save_enqueue(us) for dn in gdn]
+            ttnn.synchronize_device(self.mesh)
+            per_layer = [dn.spec_users_save_finish(p) for dn, p in zip(gdn, pend)]
+            return {u: [d[u] for d in per_layer] for u in us}
+        return {u: [dn.save_spec_user(u) for dn in gdn] for u in us}
+
+    def _park_load(self, states):
+        """Restore parked rows: ``states`` = per GDN layer {row: (ring slot, e_prev)}. Batched like _park_save: all H2D
+        writes enqueued, one synchronize (keeps the host tensors alive until the copies are done)."""
+        gdn = self._gdn
+        if gdn and all(hasattr(dn, "spec_users_load_enqueue") for dn in gdn):
+            for dn, st in zip(gdn, states):
+                dn.spec_users_load_enqueue(st)
+            ttnn.synchronize_device(self.mesh)
+            return
+        for dn, st in zip(gdn, states):
+            dn.load_spec_users(st)
+
+    def _park_note(self, kind, t0):
+        d = self.__dict__.setdefault("park_stats", {})
+        n, ms = d.get(kind, (0, 0.0))
+        self._park_last_ms = (time.perf_counter() - t0) * 1e3
+        d[kind] = (n + 1, ms + self._park_last_ms)
+
+    def _check_finishing_rows(self, active_rows):
+        bad = sorted(u for u in active_rows if u in self.__dict__.get("_finishing", ()))
+        if bad:
+            raise RuntimeError(
+                f"finishing engine rows {bad} are also scheduled in this step: they were freed as finishing (their request ends in the "
+                "step in flight) and carry a request again without a prefill: their GDN state was not parked, so they cannot resume"
+            )
+
+    def _apply_finishing(self, finishing_slots):
+        """decode_forward(finishing_slots): requests left out of this step only because their in-flight step reaches
+        max_tokens. ``finishing_slots`` are in the PRE-remap runner numbering (the slot the request held before this step's
+        ``slot_remap``; the plugin pops them before it computes the remap, so the remap may reuse that slot number for another
+        request). They are resolved to engine rows with the slot map as it is NOW, so call this BEFORE ``remap_slots``; the
+        rows are freed as a finished request is (release, no park), remembered in ``_finishing`` until a prefill reassigns
+        them, and are inactive overlay rows of the chain. remap_slots then permutes ``_finishing`` with the other per-row
+        sets. The "also scheduled" check runs on engine rows after the remap and the scatter (``_check_finishing_rows``).
+        Order in decode_forward / _decode_forward_deferred: validate block -> _apply_finishing (pre-remap slots) -> remap_slots
+        -> _to_rows (post-remap slots -> engine rows) -> _check_finishing_rows -> verify (parked / fresh rows as usual).
+        """
+        if finishing_slots is None:
+            return
+        slots = [int(s) for s in finishing_slots]
+        for s in slots:
+            if not 0 <= s < self.B:
+                raise ValueError(f"finishing slot {s} out of range [0,{self.B})")
+        rows = [self._phys[s] for s in slots]
+        if len(set(rows)) != len(rows):
+            raise RuntimeError(f"finishing slots {slots} name an engine row twice")
+        fin = self.__dict__.setdefault("_finishing", set())
+        for s, row in zip(slots, rows):
+            fin.add(row)
+            self.release(s)
+        self.finishing_freed = self.__dict__.get("finishing_freed", 0) + len(slots)
+
     def release(self, slot):
         """Mark runner slot ``slot`` (engine row _phys[slot]) empty and re-offer drafts to every row (no device work)."""
         slot = self._phys[int(slot)]
@@ -1281,6 +1688,8 @@ class MTPSpecEngine:
         if self.host_slotmap:
             self._set_slot_map(slot_map_after_remap(self._phys, idx))
             return
+        if getattr(self, "_ch_g", None) is not None:  # QWEN36_SPEC_CHAIN
+            self._chain_drop("slot_change")  # the device remap moves the engine rows the chain state describes
         for dn in self._gdn:
             dn.remap_spec_slots(idx)
         new_of = {old: new for new, old in enumerate(idx)}
@@ -1288,6 +1697,7 @@ class MTPSpecEngine:
         self._fresh = {new_of[u]: n for u, n in self._fresh.items()}
         self._withheld_streak = {new_of[u]: n for u, n in self._withheld_streak.items()}
         self._parked = {new_of[u]: v for u, v in self._parked.items()}
+        self._finishing = {new_of[u] for u in self.__dict__.get("_finishing", ())}
         self._prompts = {new_of[u]: v for u, v in self._prompts.items()}
         self._fresh_dirty = {new_of[u] for u in self._fresh_dirty}
         self._active = {new_of[u] for u in self._active}
@@ -1306,12 +1716,19 @@ class MTPSpecEngine:
         prefix-state cache on the model (B > 1) the prefill resumes from a snapshot <= start_pos (see
         Qwen36Model.plan_spec_prefix) on the traced fast path and on the eager path; B == 1 recomputes from 0."""
         assert 0 <= slot < self.B, f"slot {slot} out of range [0,{self.B})"
+        if getattr(self, "_ch_g", None) is not None:  # QWEN36_SPEC_CHAIN
+            self._chain_drop("prefill")
+        if (
+            getattr(self, "_def_last", None) is not None
+        ):  # deferred serving: nothing chains on the pending step across a prefill
+            self._def_last.chainable = False
         return self._prefill_row(self._phys[int(slot)], prompt_ids, page_table_row, _cap_blocks, start_pos)
 
     def _prefill_row(self, slot, prompt_ids, page_table_row, _cap_blocks=None, start_pos=None):
         """``prefill`` of engine row ``slot``."""
         reset_draft_skip(self, slot)
         self._parked.pop(slot, None)
+        self.__dict__.setdefault("_finishing", set()).discard(slot)  # a prefill gives the slot a new request
         self._fresh_dirty.discard(slot)
         model = self.model
         assert 0 <= slot < self.B, f"slot {slot} out of range [0,{self.B})"
@@ -1635,6 +2052,8 @@ class MTPSpecEngine:
         num_valid_drafts=None,
         read_topk=False,
         narrow=False,
+        fused=False,
+        sampling=None,
     ):
         """Replay the verify trace over [B, T] tokens at start_pos[u] + j. The first verify after prefill is
         the seed (see _seed): row 0 holds the first generated token, other rows are filler, accepted_counts = 1.
@@ -1651,8 +2070,16 @@ class MTPSpecEngine:
         host logits those steps read anyway (exact_topk), which are then cached for fetch_verify_logits.
         ``narrow`` (with ``read_logits``; QWEN36_SPEC_HOSTSET): only column 0 of each row is wanted (a no-draft step), so
         the replay reads [B, 1, V] logits (column 0 sliced on the device) instead of [B, T, V]; the returned logits
-        are [B, 1, V] when that read was served (otherwise [B, T, V] as always)."""
+        are [B, 1, V] when that read was served (otherwise [B, T, V] as always).
+        ``fused`` (spec_mode "fused_sample", greedy rows; needs ``num_valid_drafts``): returns (ids, None, FusedStep)
+        instead; the step either ran the device accept + drafter in this call (``FusedStep.drafts`` set) or fell back
+        to the argmax verify plus the host walk (see _verify_fused). ``sampling`` (with ``fused``, engine rows; stage S2): the
+        sampled-row controls and pre-drawn uniforms of decode_forward's ``spec_sampling``."""
         assert self.captured, "verify before capture"
+        if fused and (read_logits or read_topk or num_valid_drafts is None):
+            raise ValueError("verify(fused=True) needs num_valid_drafts and no logits / topk read")
+        if sampling is not None and not fused:
+            raise ValueError("verify(sampling=...) needs fused=True")
         if read_topk and read_logits:
             raise ValueError("verify: read_logits and read_topk are exclusive")
         B, T = self.B, self.T
@@ -1668,20 +2095,39 @@ class MTPSpecEngine:
         # QWEN36_SPEC_HOSTSET: plain bools for the per-row loops (a tensor index per row costs ~2 us each)
         act = active.tolist() if spec_hostset_enabled() else active
         rows = [u for u in range(B) if act[u]]
+        self._check_finishing_rows(rows)
         unknown = [u for u in rows if u not in self._active]
         if unknown:
             raise ValueError(f"rows {unknown} carry a request that was never prefilled into that slot")
         # contract 4e: a live row left out of a step keeps its GDN state on host until it returns
-        for u in range(B):
-            if not act[u] and u in self._active and u not in self._fresh and u not in self._parked:
-                self._parked[u] = [dn.save_spec_user(u) for dn in self._gdn]
-                logger.info(f"[spec_engine] parked slot {u} (left out of a step)")
+        to_park = [
+            u for u in range(B) if not act[u] and u in self._active and u not in self._fresh and u not in self._parked
+        ]
+        if to_park:
+            t0 = time.perf_counter()
+            saved = self._park_save(to_park)
+            for u in to_park:
+                self._parked[u] = saved[u]
+            self._park_note("park", t0)
+            for u in to_park:
+                logger.info(
+                    f"[spec_engine] parked slot {u} (left out of a step), {self._park_last_ms:.1f} ms for {len(to_park)} row(s)"
+                )
+            self._chain_ev = self._chain_ev or "park"
         back = [u for u in rows if u in self._parked]
         if back:
-            for li, dn in enumerate(self._gdn):
-                dn.load_spec_users({u: parked_rows_host(*self._parked[u][li], int(mi_prev[u]), T) for u in back})
+            self._chain_ev = self._chain_ev or "unpark"
+        if back:
+            t0 = time.perf_counter()
+            states = [
+                {u: parked_rows_host(*self._parked[u][li], int(mi_prev[u]), T) for u in back}
+                for li in range(len(self._gdn))
+            ]
+            self._park_load(states)
             for u in back:
                 del self._parked[u]
+            self._park_note("unpark", t0)
+            logger.info(f"[spec_engine] unparked slot(s) {back}, {self._park_last_ms:.1f} ms")
             # restored into ring slot 0: the returning row verifies from mi = 0
             mi_prev = mi_prev.clone()
             mi_prev[back] = 0
@@ -1700,6 +2146,7 @@ class MTPSpecEngine:
 
         fresh_now = {u: Tp for u, Tp in self._fresh.items() if act[u]}
         if fresh_now:
+            self._chain_ev = self._chain_ev or "fresh"
             # a row prefilled past its prompt (vLLM pad_spec_decode placeholders) is re-prefilled at the true length
             fresh_now = self._reconcile_fresh_rows(fresh_now, start_pos)
         if fresh_now and self.fast_join:
@@ -1725,9 +2172,15 @@ class MTPSpecEngine:
                 self._prompts.pop(u, None)
                 self._fresh_dirty.discard(u)
             if set(fresh) == set(rows):
-                out = self._seed(tokens, start_pos, vpt, read_logits or read_topk)
+                out = self._seed(tokens, start_pos, vpt, read_logits or read_topk or sampling is not None)
             else:
-                out = self._join(tokens, start_pos, mi_prev, vpt, active, fresh, read_logits or read_topk)
+                out = self._join(
+                    tokens, start_pos, mi_prev, vpt, active, fresh, read_logits or read_topk or sampling is not None
+                )
+            if fused:  # QWEN36_SPEC_FAST_JOIN=0: the eager seed / join read host logits; walk them on the host
+                return self._fused_fallback_result(
+                    out[0], tokens, num_valid_drafts, "eager_join", logits=out[1], sampling=sampling
+                )
             return self._topk_from_logits(out) if read_topk else out
 
         args = (tokens.tolist(), start_pos.tolist(), mi_prev.tolist())
@@ -1736,6 +2189,8 @@ class MTPSpecEngine:
             kw["read_topk"] = True  # only when asked: an older model.verify_traced has no such argument
         if narrow and read_logits and spec_hostset_enabled():
             kw["read_col0"] = True
+        if fused:
+            return self._verify_fused(tokens, start_pos, pt, active, num_valid_drafts, args, kw, sampling)
         if self._timing:
             ids, vfeed, lt = self._verify_split(*args, **kw)
         else:
@@ -1921,23 +2376,80 @@ class MTPSpecEngine:
         spec_mode="argmax_ids",
         slot_remap=None,
         narrow_col0=False,
+        spec_sampling=None,
+        defer_read=False,
+        chain_rows=None,
+        chain_tip=None,
+        finishing_slots=None,
     ):
         """Runner verify contract over a [B, 1+K] block (see sanitize_verify_block) in runner slots; slot_remap is
         applied after validation, then every per-row input is scattered to engine rows (_to_rows) and the outputs
         are gathered back (_to_slots). Returns VerifyResult. ``narrow_col0`` (spec_mode "logits", the narrow
-        no-draft step; QWEN36_SPEC_HOSTSET): the caller uses only column 0, so ``logits`` may come back [B, 1, V]."""
+        no-draft step; QWEN36_SPEC_HOSTSET): the caller uses only column 0, so ``logits`` may come back [B, 1, V].
+        ``spec_sampling`` (spec_mode "fused_sample", stage S2; runner slots): dict temperature fp32 [B], top_k int32 [B],
+        top_p fp32 [B], greedy bool [B], uniforms fp32 [B, K+2] (the plugin's pre-drawn table: col 0 bonus, 1..K accepts, K+1
+        correction). None, or every row greedy: the S1 greedy step.
+        ``defer_read`` (spec_mode "fused_sample"; QWEN36_SPEC_CHAIN + QWEN36_SPEC_FUSED, stage S4b): enqueue the whole step, no
+        synchronize, and return VerifyResult(handle=FusedHandle); ``chain_rows`` (bool [B], runner order) / ``chain_tip`` (the tip_id of the
+        newest fused step): rows whose placeholder tokens (-1), provisional positions and counts (-1) the device replaces from that step.
+        See _decode_forward_deferred. ``finishing_slots`` (runner slots, QWEN36 plugin contract): requests left out of this step
+        only because the step in flight ends them at max_tokens; freed without parking (see _apply_finishing)."""
         if spec_mode not in SPEC_MODES:
             raise ValueError(f"spec_mode {spec_mode!r} not in {SPEC_MODES}")
+        if spec_sampling is not None and spec_mode != "fused_sample":
+            raise ValueError(f"spec_sampling needs spec_mode 'fused_sample', got {spec_mode!r}")
+        if defer_read:
+            if (
+                spec_sampling is not None
+                and not spec_chain_sampled_enabled()
+                and not bool(torch.as_tensor(spec_sampling["greedy"]).all())
+            ):
+                raise ValueError(
+                    "defer_read=True with a non-greedy row in spec_sampling needs QWEN36_SPEC_CHAIN_SAMPLED=1 (sampled overflow is not "
+                    "handled for deferred steps); run a sampled step synchronously (defer_read=False)"
+                )
+            return self._decode_forward_deferred(
+                tokens,
+                start_pos,
+                num_valid_drafts,
+                accepted_counts,
+                page_table,
+                spec_mode,
+                slot_remap,
+                spec_sampling,
+                chain_rows,
+                chain_tip,
+                finishing_slots,
+            )
+        if chain_rows is not None or chain_tip is not None:
+            raise ValueError("chain_rows / chain_tip need defer_read=True")
+        self._fused_cache = None  # a fused step's drafts are good for the propose that follows it, nothing older
+        if self._ch_g is not None:  # QWEN36_SPEC_CHAIN: take what the last fused step left (consumed by _chain_plan)
+            self._chain_in, self._chain_prev = self._chain_prev, None
+            self._chain_why, self._chain_dropped = self._chain_dropped, None
+            self._chain_cand = self._chain_ev = None
+            if spec_mode != "fused_sample":
+                self._chain_in = None
+                self._chain_drop("non_fused_step")
         clean, start0, active = sanitize_verify_block(tokens, start_pos, num_valid_drafts, self.K)
         if clean.shape[0] != self.B:
             raise ValueError(f"block has {clean.shape[0]} rows, engine has B={self.B}")
         if not bool(active.any()):
             raise ValueError("no active row in the verify block")
+        self._apply_finishing(finishing_slots)  # pre-remap slots, before the slot map moves
         if slot_remap is not None:
             self.remap_slots(slot_remap)
+            if (
+                self._chain_in is not None
+                and not self.host_slotmap
+                and tuple(int(x) for x in slot_remap) != tuple(range(self.B))
+            ):
+                self._chain_in = None  # the device remap moved the engine rows
+                self._chain_why = "slot_change"
         clean, start0, active, nv_rows, acc_rows, pt_rows = self._to_rows(
             clean, start0, active, num_valid_drafts, accepted_counts, page_table
         )
+        self._check_finishing_rows([u for u in range(self.B) if bool(active[u])])
         self._no_draft = note_withheld_drafts(
             self._offered,
             self._no_draft,
@@ -1949,6 +2461,40 @@ class MTPSpecEngine:
         kw = {"read_topk": True} if spec_mode == "topk" else {}
         if narrow_col0 and spec_mode == "logits":
             kw["narrow"] = True
+        if spec_mode == "fused_sample":
+            sampling = None
+            if spec_sampling is not None:
+                names = ("temperature", "top_k", "top_p", "greedy", "uniforms")
+                sampling = dict(zip(names, self._to_rows(*(spec_sampling[n] for n in names))))
+                if bool(torch.as_tensor(sampling["greedy"]).all()):
+                    sampling = None  # nothing sampled: the S1 step
+            ids, _, fz = self.verify(
+                clean,
+                start0,
+                acc_rows,
+                pt_rows,
+                active=active,
+                num_valid_drafts=nv_rows,
+                fused=True,
+                sampling=sampling,
+            )
+            ids, committed, counts = self._to_slots(ids, fz.committed, fz.counts)
+            if fz.drafts is not None:  # cache what the plugin's propose will ask for, in runner slots
+                cpos = self._committed_positions(start0, active, fz.committed, fz.counts)
+                cpos, act = self._to_slots(cpos, active)
+                self._fused_cache = (fz.drafts, committed.clone(), cpos, counts.clone(), act.clone())
+            if self._ch_g is not None:  # the next step may chain on this one once its propose took the cache
+                self._chain_in = None
+                if fz.drafts is not None and self._chain_cand is not None:
+                    self._chain_prev, self._chain_cand = self._chain_cand, None
+                else:
+                    self._chain_drop("prev_not_fused")
+            return VerifyResult(
+                spec_mode,
+                mask_unused_columns(ids, num_valid_drafts),
+                accepted_token_ids=committed.to(torch.int32),
+                accepted_counts=counts.to(torch.int32),
+            )
         ids, logits = self.verify(
             clean,
             start0,
@@ -1995,6 +2541,1156 @@ class MTPSpecEngine:
         return out
 
     # --------------------------------------------------------------------- #
+    # Fused greedy step (QWEN36_SPEC_FUSED, spec_mode "fused_sample")
+    # --------------------------------------------------------------------- #
+    @staticmethod
+    def _committed_positions(start0, active, committed, counts):
+        """The plugin's committed_positions for a commit: [B, T] p0 + 1 + j for j < count, -1 past it and on padding rows
+        (model_runner._committed_positions), int64."""
+        T = committed.shape[1]
+        cpos = torch.as_tensor(start0).reshape(-1, 1) + 1 + torch.arange(T)[None, :]
+        keep = (torch.arange(T)[None, :] < torch.as_tensor(counts).reshape(-1, 1)) & torch.as_tensor(active).reshape(
+            -1, 1
+        )
+        return torch.where(keep, cpos, torch.full_like(cpos, -1)).to(torch.int64)
+
+    def _fused_note(self, reason):
+        if reason is not None:
+            fb = self.__dict__.setdefault("fused_fallbacks", {})
+            fb[reason] = fb.get(reason, 0) + 1
+            self._chain_drop(reason)
+        self.fused_steps += 1
+        if self.fused_steps % 256 == 0:
+            fb = self.__dict__.setdefault("fused_fallbacks", {})
+            logger.info(
+                f"[spec_engine] fused steps {self.fused_steps}, fallbacks {sum(fb.values())}: "
+                + (", ".join(f"{k}={v}" for k, v in sorted(fb.items())) or "none")
+                + f"; audited {self.fused_audited_steps}, boundary_diffs {self.fused_boundary_diffs}"
+                + (
+                    f"; chain steps {self.chain_steps}, breaks "
+                    + (
+                        ", ".join(f"{k}={v}" for k, v in sorted(self.__dict__.get("chain_breaks", {}).items()))
+                        or "none"
+                    )
+                    + f", audits {self.chain_audits}"
+                    if self._ch_g is not None
+                    else ""
+                )
+                + self._park_note_text()
+            )
+
+    def _park_note_text(self):
+        """Tail of the periodic fused line: deferred chain breaks by reason, park / unpark counts and times, finishing rows."""
+        out = ""
+        db = self.__dict__.get("def_breaks", {})
+        if db:
+            out += (
+                f"; deferred breaks {sum(db.values())} (" + ", ".join(f"{k}={v}" for k, v in sorted(db.items())) + ")"
+            )
+        for kind, (n, ms) in sorted(self.__dict__.get("park_stats", {}).items()):
+            out += f"; {kind} n={n} total={ms:.1f} ms avg={ms / max(n, 1):.1f} ms"
+        fin = self.__dict__.get("finishing_freed", 0)
+        if fin:
+            out += f"; finishing rows freed {fin}"
+        return out
+
+    def _fused_fallback_result(self, ids, tokens, num_valid, reason, logits=None, sampling=None):
+        """Fallback tail: ``ids`` [B, T] (from the argmax verify) walked on the host with the greedy rule; no drafts cached.
+        A step with ``sampling`` (stage S2) walks the full ``logits`` [B, T, V] or [B*T, V] instead (host_redo_walk, the
+        plugin's uniforms)."""
+        self._fused_note(reason)
+        if sampling is not None:
+            return ids, None, self._host_walk_step(logits, tokens, num_valid, sampling)
+        committed, counts = fused_greedy_walk(ids, tokens, num_valid, self.K)
+        return ids, None, FusedStep(committed.to(torch.int32), counts.to(torch.int32), None)
+
+    def _host_walk_step(self, logits, tokens, num_valid, sampling):
+        """The exact host walk of a sampled fused step on the full logits (engine rows): a FusedStep without drafts, so the
+        propose that follows runs the normal path."""
+        B, K = self.B, self.K
+        committed, counts = host_redo_walk(
+            torch.as_tensor(logits).reshape(B * (K + 1), -1)[:, : self.vocab],
+            tokens,
+            sampling,
+            sampling["uniforms"],
+            B=B,
+            K=K,
+            num_valid=num_valid,
+        )
+        return FusedStep(committed, counts, None)
+
+    def _fused_ineligible(self, start_pos, nv, active):
+        """(reason, aux): reason None when this step can run the device accept. The decline / skip decisions are all known
+        before the step (no row's fit depends on m), else the step falls back."""
+        B, K = self.B, self.K
+        if self._fa is None or self._fa_trace is None or not self.captured or self._dr_trace is None:
+            return "not_captured", None
+        if B == 1 and int(start_pos[0]) + K > self.eager_reseed_len:  # the eager drafter may be chosen, whatever m is
+            return "eager_drafter", None
+        skip, skip_all = propose_skip_plan(self._no_draft, B)
+        if skip_all and B == 1:
+            return "skip_all", None
+        try:
+            aux = fused_accept_aux_host(
+                nv,
+                start_pos,
+                active,
+                skip,
+                table_capacity(self._last_cap_blocks, self.block_size),
+                K,
+                int(self._scratch_block),
+                self.model.rope.rope_delta,
+                self.model.rope.max_seq_len,
+            )
+        except ValueError:
+            return "mixed_fit", None
+        if bool(aux[2, :B].all()):
+            return "all_declined", None
+        return None, aux
+
+    def _verify_fused(self, tokens, start_pos, pt, active, num_valid, args, kw, sampling=None):
+        """The fused step after verify's host pre-work. Eligible: stage aux (+ page-table rows, + the MTP table), enqueue
+        verify, accept and drafter traces, ONE synchronize, then read ids, the device commit and the draft ids, and finish the
+        propose bookkeeping from the device commit. Else the argmax verify + host walk (no drafts).
+        ``sampling`` (stage S2, engine rows, at least one non-greedy row): the sampled accept trace runs instead of the greedy
+        one (_verify_fused_sampled); an ineligible sampled step walks the FULL logits on the host (never the greedy walk).
+        """
+        B, T, K = self.B, self.T, self.K
+        nv = torch.as_tensor(num_valid).to(torch.int64).reshape(B)
+        reason, aux = self._fused_ineligible(start_pos, nv, active)
+        if sampling is not None:
+            reason = reason or self._sampled_ineligible(sampling)
+            if reason is not None:
+                ids, vfeed, lt = self.model.verify_traced(*args, **dict(kw, read_logits=True))
+                self._vfeed = vfeed
+                ids = torch.tensor(ids, dtype=torch.int32).reshape(B, T)
+                return self._fused_fallback_result(ids, tokens, nv, reason, logits=lt, sampling=sampling)
+            return self._verify_fused_sampled(tokens, start_pos, pt, active, nv, args, kw, sampling, aux)
+        if reason is not None:
+            ids, vfeed, _ = self.model.verify_traced(*args, **kw)
+            self._vfeed = vfeed
+            return self._fused_fallback_result(torch.tensor(ids, dtype=torch.int32).reshape(B, T), tokens, nv, reason)
+        if self._def_ctx is not None:  # decode_forward(defer_read=True): enqueue, no synchronize
+            return None, None, self._def_enqueue("g", tokens, start_pos, pt, active, nv, args, kw, None, aux)
+        fa, model = self._fa, self.model
+        self._check_scratch(pt)
+        declined = aux[2, :B].bool()
+        chain = self._chain_plan(tokens, start_pos, active, nv, args)
+        if chain is None:
+            fa.stage_aux(aux)
+        else:  # QWEN36_SPEC_CHAIN: the overlay replaces the aux copy; the chain trace writes aux_in, the token and aux buffers
+            expect = self._chain_stage(chain, tokens, start_pos, active, aux, args)
+        if self._fa_pt_host is None or not torch.equal(self._fa_pt_host, pt):
+            fa.stage_pt_rows(pt.repeat_interleave(T, dim=0))
+            self._fa_pt_host = pt.clone()
+        dpt = pt
+        if bool(declined.any()):  # declined rows draft over an all-scratch table (as the propose path stages it)
+            dpt = pt.clone()
+            dpt[declined] = self._scratch_block
+        self._stage_table(dpt, self._mtp_pt, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
+        if chain is None:
+            handle = model.verify_stage_and_enqueue(*args, **kw)
+        else:
+            self._chain_exec(chain)
+            handle = model.verify_stage_and_enqueue(*args, **kw, skip_tokens_h2d=True, skip_aux_h2d=True)
+        ttnn.execute_trace(self.mesh, self._fa_trace, cq_id=0, blocking=False)
+        ttnn.execute_trace(self.mesh, self._dr_trace, cq_id=0, blocking=False)
+        # Every non-blocking D2H read is enqueued BEFORE the single synchronize (a from_device(blocking=False) issued
+        # after it is never waited on: its host tensor is unfilled). The reads below it are blocking to_torch.
+        dr_handles = self._ids_enqueue_reads(self._dr_outs)
+        ttnn.synchronize_device(self.mesh)  # the only one of the step
+        ids, vfeed, _ = model.verify_after_external_sync(handle)
+        self._vfeed = vfeed
+        self._dr_rs_dirty = True  # the accept trace rewrote the reseed page table (and the pack)
+        res = ttnn.to_torch(ttnn.get_device_tensors(fa.result_out)[0]).reshape(2, -1).to(torch.int64)
+        steps = self._ids_from_handles(dr_handles)
+        ids = torch.tensor(ids, dtype=torch.int32).reshape(B, T)
+        committed, counts = res[0, : B * T].reshape(B, T), res[1, :B]
+        if chain is not None:
+            self._chain_audit(expect)
+        # debug check (always on in S1): the device commit is the host greedy walk of the ids it read
+        w_c, w_n = fused_greedy_walk(ids, tokens, nv, K)
+        if not (torch.equal(w_c, committed) and torch.equal(w_n, counts)):
+            raise RuntimeError(
+                f"fused accept != host greedy walk: device committed {committed.tolist()} counts {counts.tolist()}; "
+                f"host committed {w_c.tolist()} counts {w_n.tolist()}; ids {ids.tolist()} tokens {tokens.tolist()}"
+            )
+        self._chain_note_step("g", committed, counts, steps, start_pos, active)
+        return self._fused_finish(ids, committed, counts, steps, start_pos, active, declined)
+
+    def _fused_finish(self, ids, committed, counts, steps, start_pos, active, declined):
+        """Tail shared by the greedy and the sampled fused step: the propose bookkeeping from the device commit."""
+        K = self.K
+        committed, counts = committed.to(torch.int32), counts.to(torch.int32)
+        cpos = self._committed_positions(start_pos, active, committed, counts)
+        sl = self._to_slots(committed, cpos, counts)  # the plan maps runner slots back to rows
+        plan = self._propose_plan(K, *sl, None, build_core=False)
+        if plan.skip_all or list(plan.decline) != declined.tolist():
+            raise RuntimeError(f"fused aux declined {declined.tolist()} != propose plan {plan.decline}")
+        drafts = self._drafts_from_steps(steps)
+        if bool(declined.any()):
+            drafts[declined] = 0
+        if any(int(c) > 1 for c in counts):
+            self.mtp_extra_steps += 1
+        out = self._propose_finish(plan, drafts)
+        self._fused_note(None)
+        return ids, None, FusedStep(committed, counts, out)
+
+    # --------------------------------------------------------------------- #
+    # Chain mode (QWEN36_SPEC_CHAIN, stage S3c): the device builds the next verify's inputs
+    # --------------------------------------------------------------------- #
+    def _chain_drop(self, reason):
+        """Forget the chain state of the last fused step (something changed that the device words do not know about). The first
+        reason stands until the next fused step reads it (_chain_plan). No-op with chain mode off."""
+        if self._ch_g is None:
+            return
+        self._chain_prev = None
+        if self._chain_dropped is None:
+            self._chain_dropped = reason
+
+    def _chain_note_step(self, kind, committed, counts, steps, start_pos, active):
+        """After a fused step that ran the device accept + drafter: remember its result (engine rows) so the next step can chain.
+        It becomes ``_chain_prev`` in decode_forward when the step produced drafts, and usable once propose took the cache.
+        """
+        if self._ch_g is None:
+            return
+        self._chain_cand = dict(
+            kind=kind,
+            committed=torch.as_tensor(committed).clone().to(torch.int64),
+            counts=torch.as_tensor(counts).clone().to(torch.int64),
+            steps=[[int(x) for x in st] for st in steps],
+            p0=torch.as_tensor(start_pos).clone().to(torch.int64),
+            active=torch.as_tensor(active).clone().bool(),
+            taken=False,
+        )
+
+    def _chain_plan(self, tokens, start_pos, active, nv, args):
+        """The previous-step record when THIS fused step (already eligible for the device accept) can take its verify inputs from the
+        device, else None (reason counted in ``chain_breaks``; the step then stages tokens / aux on the host exactly as without
+        chain mode). Needs: the previous step was a fused step that ran the device accept + drafter, the plugin took its drafts,
+        no park / unpark / join / fresh row / slot change / prefill since, the live rows are a subset of the previous live rows
+        (a finished row becomes an overlay row), no 'mixed' fit row, and the plugin's counts, positions and tokens for the
+        continuing rows equal what the device derives (a plugin that capped a count or changed a draft breaks the chain).
+        """
+        if self._ch_g is None:
+            return None
+        prev, self._chain_in = self._chain_in, None
+        why, self._chain_why = self._chain_why, None
+        ev, self._chain_ev = self._chain_ev, None
+        reason = self._chain_reason(prev, why, ev, tokens, start_pos, active, nv, args)
+        if reason is not None:
+            cb = self.__dict__.setdefault("chain_breaks", {})
+            cb[reason] = cb.get(reason, 0) + 1
+            return None
+        return prev
+
+    def _chain_reason(self, prev, why, ev, tokens, start_pos, active, nv, args):
+        B, K, T = self.B, self.K, self.T
+        if prev is None:
+            return why or "first"
+        if not prev["taken"]:
+            return "no_propose"
+        if ev:
+            return ev
+        pa = prev["active"]
+        if bool((active & ~pa).any()):
+            return "row_set"
+        if (self._ch_trace_g if prev["kind"] == "g" else self._ch_trace_s) is None:
+            return "not_captured"
+        cont = active & pa
+        cap = table_capacity(self._last_cap_blocks, self.block_size)
+        modes = fused_fit_mode_range(prev["p0"], cap, pa, K)
+        if any(modes[u] == "mixed" for u in range(B) if bool(cont[u])):
+            return "mixed_fit"
+        mi = torch.as_tensor(args[2]).to(torch.int64).reshape(B)
+        cn, p0 = prev["counts"], prev["p0"]
+        if not torch.equal(mi[cont], cn[cont] - 1):
+            return "counts_differ"
+        if not torch.equal(torch.as_tensor(start_pos).to(torch.int64)[cont], (p0 + cn)[cont]):
+            return "position_differs"
+        tok0 = prev["committed"].gather(1, (cn - 1)[:, None])  # [B, 1] the bonus / correction token
+        drafts = torch.tensor(prev["steps"], dtype=torch.int64).T.reshape(B, K)
+        nvv = torch.as_tensor(nv).to(torch.int64).reshape(B)
+        cols = torch.where(torch.arange(K)[None, :] < nvv[:, None], drafts, tok0)
+        pred = torch.cat([tok0, cols], dim=1)
+        if not torch.equal(torch.as_tensor(tokens).to(torch.int64)[cont], pred[cont]):
+            return "tokens_differ"
+        return None
+
+    def _chain_stage(self, prev, tokens, start_pos, active, aux, args):
+        """Stage the overlay (ONE H2D copy) of a chain step: next-step nv / active / declined / keep, host words (tokens, p0, mi)
+        for every row that does not continue (mask = 1: finished or padding), and the GDN window parity the next verify
+        reads. Returns what today's path would stage (tokens, aux words, fused aux) when this step is audited, else None.
+        """
+        B, K, model = self.B, self.K, self.model
+        cont = active & prev["active"]
+        ovr = pack_ovr_host(
+            aux[0, :B],
+            aux[1, :B],
+            aux[2, :B],
+            aux[3, :B],
+            start_pos,
+            (~cont).to(torch.int64),
+            torch.as_tensor(tokens).to(torch.int64),
+            args[2],
+            model.vfy_gdn_parity(),
+            K=K,
+            scratch_block=int(self._scratch_block),
+            rope_delta=model.rope.rope_delta,
+            rope_rows=model.rope.max_seq_len,
+        )
+        (self._ch_g if prev["kind"] == "g" else self._ch_s).stage_ovr(ovr)
+        n = self.chain_steps
+        self.chain_steps = n + 1
+        if not (spec_chain_audit_enabled() and n % spec_chain_audit_every() == 0):
+            return None
+        exp_tok = torch.as_tensor(args[0]).to(torch.int64).reshape(-1)
+        exp_aux = model._vfy_aux_host(model._vfy_row_positions(args[1]), args[2])  # at the parity the replay reads
+        return exp_tok, exp_aux, torch.as_tensor(aux).clone()
+
+    def _chain_exec(self, prev):
+        """Enqueue the chain trace of the variant that ran the previous step; it rewrites the verify token buffer, the packed aux
+        buffer and the fused aux, so the model's host mirror of the aux words is stale from here."""
+        ttnn.execute_trace(
+            self.mesh, self._ch_trace_g if prev["kind"] == "g" else self._ch_trace_s, cq_id=0, blocking=False
+        )
+        self.model._vfy_aux_staged = None
+
+    def _chain_audit(self, expect):
+        """After the step's synchronize: the device-built token buffer, packed aux buffer and fused aux must be bit-equal to the words
+        the host staging would have copied (built before the replay). Raises RuntimeError naming the first differing row.
+        """
+        if expect is None:
+            return
+        self.chain_audits += 1
+        model, fa = self.model, self._fa
+        read = lambda t: ttnn.to_torch(ttnn.get_device_tensors(t)[0])
+        self._chain_compare(expect, read(model._vfy_token_buf), read(model._vfy_aux_buf), read(fa.aux_in))
+
+    def _chain_compare(self, expect, tok_buf, aux_buf, fa_aux):
+        """Pure half of the chain audit: host copies of the device token buffer, packed aux buffer and fused aux against the
+        expected words (exp_tok, exp_aux, exp_fa). Raises RuntimeError naming the first differing word."""
+        B, T = self.B, self.T
+        exp_tok, exp_aux, exp_fa = expect
+        mask32 = 0xFFFFFFFF
+        R = B * T
+        got = tok_buf.reshape(-1)[:R].to(torch.int64) & mask32
+        want = exp_tok & mask32
+        bad = (got != want).nonzero().reshape(-1)
+        if bad.numel():
+            i = int(bad[0])
+            raise RuntimeError(
+                f"chain audit: verify token buffer differs at engine row {i // T} column {i % T}: device {int(got[i])} "
+                f"host {int(want[i])}; device {got.tolist()} host {want.tolist()}"
+            )
+        want = exp_aux.to(torch.int64) & mask32
+        got = (aux_buf.to(torch.int64) & mask32).reshape(want.shape[0], -1)
+        if got.shape != want.shape:
+            raise RuntimeError(f"chain audit: aux buffer shape {tuple(got.shape)} != host {tuple(want.shape)}")
+        bad = (got != want).nonzero()
+        if bad.numel():
+            r, c = (int(x) for x in bad[0])
+            name = ("kv position", "rope row", "gdn ctrl word")[r]
+            raise RuntimeError(
+                f"chain audit: verify aux row {r} ({name}) differs at word {c} (engine row {c // T if r < 2 else c}): "
+                f"device {int(got[r, c])} host {int(want[r, c])}"
+            )
+        want = torch.as_tensor(exp_fa).to(torch.int64) & mask32
+        got = (fa_aux.to(torch.int64) & mask32).reshape(want.shape)
+        bad = (got != want).nonzero()
+        if bad.numel():
+            r, c = (int(x) for x in bad[0])
+            raise RuntimeError(
+                f"chain audit: fused aux row {r} differs at row/user {c}: device {int(got[r, c])} host {int(want[r, c])}"
+            )
+
+    # --------------------------------------------------------------------- #
+    # Deferred serving (QWEN36_SPEC_CHAIN + QWEN36_SPEC_FUSED, stage S4b): enqueue-only fused steps, event reads
+    # --------------------------------------------------------------------- #
+    # decode_forward(defer_read=True) on a fused_sample step ENQUEUES the whole step (the S3c chain step for rows that chain, the
+    # S1 / S2 step for the first step of a chain), enqueues the non-blocking reads, records a device event and returns a
+    # FusedHandle. There is no synchronize_device. The reader thread calls ``handle.wait()`` (event_synchronize, then host
+    # conversions and the pure debug checks); the engine thread later calls propose_draft_tokens(hidden=handle) for the engine
+    # bookkeeping that needed the commit (_deferred_finish). A step that cannot chain (see _def_pre_reason / _def_aux_for_chain)
+    # first MATERIALIZES the host inputs from the pending step (one synchronize on the engine thread) and then runs as an ordinary
+    # step. Thread rule: the reader thread touches only the handle (its lock, its read tensors, its result cache), ttnn.event_synchronize
+    # and ttnn.to_torch on host tensors, and pure functions; every other engine field is engine-thread state.
+    def _def_next_tip(self):
+        self._tip_seq += 1
+        return self._tip_seq
+
+    @staticmethod
+    def _perm_slots(x, perm):
+        return x if perm is None else x[perm[0]]
+
+    @staticmethod
+    def _perm_rows(x, perm):
+        return x if perm is None else x[perm[1]]
+
+    def _def_chain_args(self, chain_rows, chain_tip, prev):
+        """Validate ``chain_rows`` / ``chain_tip``; the bool [B] runner-order mask (None = nothing chains). The model refuses a tip
+        that is not its newest fused step."""
+        B = self.B
+        if chain_rows is None:
+            if chain_tip is not None:
+                raise ValueError("chain_tip without chain_rows")
+            return None
+        cr = torch.as_tensor(chain_rows)
+        if cr.dtype != torch.bool or tuple(cr.shape) != (B,):
+            raise ValueError(f"chain_rows must be a bool tensor of shape [{B}], got {cr.dtype} {tuple(cr.shape)}")
+        if not bool(cr.any()):
+            return None
+        if chain_tip is None or prev is None or int(chain_tip) != prev.tip_id:
+            raise ValueError(
+                f"chain_tip {chain_tip} is not the newest fused step of the engine "
+                f"({None if prev is None else prev.tip_id}); a chained step must follow its tip"
+            )
+        return cr
+
+    def _def_pre_reason(self, prev):
+        """Reason a chain step cannot take its inputs from ``prev`` that does not depend on this step's rows (None = it can)."""
+        if prev is None or not prev.device or not prev.chainable or prev.kind is None:
+            return "tip_not_chainable"
+        if self._ch_g is None or (self._ch_trace_g if prev.kind == "g" else self._ch_trace_s) is None:
+            return "not_captured"
+        return None
+
+    def _def_events(self, active):
+        """verify()'s pre-work events that need the device idle or the host state (park / unpark / fresh / unknown row)."""
+        act = [bool(a) for a in active.tolist()]
+        rows = [u for u in range(self.B) if act[u]]
+        if any(u not in self._active for u in rows):
+            return "unknown_row"
+        for u in range(self.B):
+            if not act[u] and u in self._active and u not in self._fresh and u not in self._parked:
+                return "park"
+        if any(u in self._parked for u in rows):
+            return "unpark"
+        if any(u in self._fresh for u in rows):
+            return "fresh"
+        return None
+
+    def _def_next_bounds(self, prev):
+        """(lo, hi) int64 [B]: bounds of the NEXT step's column-0 position when it chains on ``prev`` (exact once prev was finished)."""
+        if prev.exact is not None:
+            nxt = prev.exact[0] + prev.exact[1]
+            return nxt, nxt.clone()
+        return prev.lo + 1, prev.hi + self.K + 1
+
+    def _def_window_blocks_disjoint(self, pt, active, lo, hi, nv):
+        """The KV-write invariant that replaces the per-step collision check of chain rows: the blocks a row may write
+        (positions lo .. hi + nv, so every real column whatever m was) are non-null and shared with no other active row.
+        """
+        bs, nb = int(self.block_size), int(pt.shape[1])
+        seen = {}
+        act, lo_l, hi_l, nv_l = active.tolist(), lo.tolist(), hi.tolist(), nv.tolist()
+        rows = pt.tolist()
+        for u in range(self.B):
+            if not act[u]:
+                continue
+            for b in range(int(lo_l[u]) // bs, min(nb - 1, (int(hi_l[u]) + int(nv_l[u])) // bs) + 1):
+                blk = rows[u][b]
+                if blk == 0:
+                    continue
+                if seen.setdefault(blk, u) != u:
+                    return False
+        return True
+
+    def _def_aux_for_chain(self, prev, cmask, start0, active, nv, cap):
+        """(reason, aux, lo, hi): the fused aux of a chain step (host rows exact, chain rows from the bounds of their start) or the
+        reason it cannot run (the caller materializes). Same word layout as fused_accept_aux_host."""
+        B, K = self.B, self.K
+        lo_c, hi_c = self._def_next_bounds(prev)
+        lo = torch.where(cmask, lo_c, start0)
+        hi = torch.where(cmask, hi_c, start0)
+        if self._fa is None or self._fa_trace is None or not self.captured or self._dr_trace is None:
+            return "not_captured", None, lo, hi
+        if B == 1 and int(hi[0]) + K > self.eager_reseed_len:
+            return "eager_drafter", None, lo, hi
+        skip, skip_all = propose_skip_plan(self._no_draft, B)
+        if skip_all and B == 1:
+            return "skip_all", None, lo, hi
+        host_act = active & ~cmask
+        try:
+            aux = fused_accept_aux_host(
+                nv,
+                start0,
+                host_act,
+                skip,
+                cap,
+                K,
+                int(self._scratch_block),
+                self.model.rope.rope_delta,
+                self.model.rope.max_seq_len,
+            )
+        except ValueError:
+            return "mixed_fit", None, lo, hi
+        modes = fused_fit_mode_bounds(lo, hi, cap, cmask, K)
+        aux = aux.clone()
+        for u in range(B):
+            if not bool(cmask[u]):
+                continue
+            if modes[u] == "mixed" and not skip[u]:
+                return "mixed_fit", None, lo, hi
+            aux[AUX_ACTIVE, u] = 1
+            aux[AUX_DECLINED, u] = int(skip[u] or modes[u] == "fits_none")
+            aux[AUX_KEEP, u] = int(skip[u])
+            aux[AUX_P0, u] = int(hi[u])
+        if bool(aux[2, :B].all()):
+            return "all_declined", None, lo, hi
+        return None, aux, lo, hi
+
+    def _def_count_break(self, reason):
+        cb = self.__dict__.setdefault("chain_breaks", {})
+        cb[reason] = cb.get(reason, 0) + 1
+        db = self.__dict__.setdefault("def_breaks", {})
+        db[reason] = db.get(reason, 0) + 1
+
+    def _decode_forward_deferred(
+        self,
+        tokens,
+        start_pos,
+        num_valid_drafts,
+        accepted_counts,
+        page_table,
+        spec_mode,
+        slot_remap,
+        spec_sampling,
+        chain_rows,
+        chain_tip,
+        finishing_slots=None,
+    ):
+        """decode_forward(defer_read=True): see the section comment. Returns VerifyResult(spec_mode, None, handle=FusedHandle)."""
+        B, K, T = self.B, self.K, self.T
+        if spec_mode != "fused_sample":
+            raise ValueError(f"defer_read needs spec_mode 'fused_sample', got {spec_mode!r}")
+        if not self.host_slotmap:
+            raise ValueError(
+                "deferred serving (defer_read) needs QWEN36_SPEC_SLOTMAP=1 (a device slot remap would move the rows a pending step describes)"
+            )
+        self._fused_cache = None
+        if self._ch_g is not None:  # the S3c sync chain state is not used while serving deferred
+            self._chain_in = (
+                self._chain_prev
+            ) = self._chain_cand = self._chain_ev = self._chain_why = self._chain_dropped = None
+        prev = self._def_last
+        cr = self._def_chain_args(chain_rows, chain_tip, prev)
+        tok_in = _int_block(tokens, B, T, "tokens")
+        pos = _int_block(start_pos, B, T, "start_pos")
+        nv_in = _int_vec(num_valid_drafts, B, "num_valid_drafts")
+        acc = _int_vec(accepted_counts, B, "accepted_counts")
+        tok = tok_in
+        if cr is not None:
+            cr = cr & (pos[:, 0] >= 0)
+            if not bool(cr.any()):
+                cr = None
+        if cr is not None:
+            if not bool((tok_in[cr] == PLACEHOLDER_TOKEN_ID).all()) or not bool((acc[cr] == -1).all()):
+                raise ValueError("a chain row carries placeholder tokens (-1) and accepted_counts -1")
+            tok, pos, acc = tok_in.clone(), pos.clone(), acc.clone()
+            for u in torch.nonzero(cr).reshape(-1).tolist():
+                n = int(nv_in[u])
+                if not 0 <= n <= K:
+                    raise ValueError(f"chain row {u}: num_valid_drafts {n} outside [0, {K}]")
+                tok[u] = 0
+                pos[u, : n + 1] = int(pos[u, 0]) + torch.arange(n + 1)
+            acc[cr] = 1
+        pre = self._def_pre_reason(prev) if cr is not None else None
+        if pre is not None:
+            self._def_finish_any(
+                prev
+            )  # before the slot map moves: the ready handle's propose maps with the map of its own step
+        clean, start0, active = sanitize_verify_block(tok, pos, nv_in, K)
+        if clean.shape[0] != B:
+            raise ValueError(f"block has {clean.shape[0]} rows, engine has B={B}")
+        if not bool(active.any()):
+            raise ValueError("no active row in the verify block")
+        self._apply_finishing(finishing_slots)  # pre-remap slots, before the slot map moves
+        if slot_remap is not None:
+            self.remap_slots(slot_remap)
+        clean, start0, active, nv_rows, acc_rows, pt_rows = self._to_rows(clean, start0, active, nv_in, acc, page_table)
+        self._check_finishing_rows([u for u in range(B) if bool(active[u])])
+        cmask = None if cr is None else (self._to_rows(cr)[0] & active)
+        if cmask is not None and not bool(cmask.any()):
+            cmask = None
+        sampling = None
+        if spec_sampling is not None:
+            names = ("temperature", "top_k", "top_p", "greedy", "uniforms")
+            sampling = dict(zip(names, self._to_rows(*(spec_sampling[n] for n in names))))
+            if bool(torch.as_tensor(sampling["greedy"]).all()):
+                sampling = None
+        kind_s = sampling is not None
+        # ---- which rows chain
+        reason = pre
+        if cmask is not None and reason is None:
+            if bool((active & ~cmask).any()):
+                reason = "host_row"  # an active row that does not continue (a join, a seed): the host owns its inputs
+            elif bool((cmask & ~prev.active).any()):
+                reason = "row_set"
+            else:
+                reason = self._def_events(active)
+            if reason is None and kind_s:
+                reason = self._sampled_ineligible(sampling)
+        hint = nv_rows.clone()
+        if cmask is not None and reason is None:
+            nv_rows = nv_rows.clone()
+            nv_rows[cmask] = torch.minimum(hint, prev.nv_own)[cmask]
+        elif (
+            cmask is not None
+        ):  # materialize now: the tokens, positions and counts of the chain rows from the pending step
+            self._def_count_break(reason)
+            clean, start0, acc_rows, nv_rows = self._def_materialize(
+                prev, cmask, clean, start0, acc_rows, nv_rows, reason
+            )
+            cmask = None
+        self._no_draft = note_withheld_drafts(
+            self._offered, self._no_draft, self._speculated, self._withheld_streak, nv_rows, self.no_draft_streak
+        )
+        chain = None
+        if cmask is not None:
+            cap = table_capacity(int(torch.as_tensor(pt_rows).shape[-1]), self.block_size)
+            why, aux, lo, hi = self._def_aux_for_chain(prev, cmask, start0, active, nv_rows, cap)
+            if why is None:
+                pt = self._fit(pt_rows)
+                if not self._def_window_blocks_disjoint(
+                    torch.where(active[:, None], pt, torch.zeros_like(pt)), active, lo, hi, nv_rows
+                ):
+                    why = "shared_block"
+            if why is not None:
+                self._def_count_break(why)
+                clean, start0, acc_rows, nv_rows = self._def_materialize(
+                    prev, cmask, clean, start0, acc_rows, nv_rows, why
+                )
+                cmask = None
+            else:
+                chain = dict(prev=prev, cmask=cmask, lo=lo, hi=hi, aux=aux)
+        if chain is not None:
+            h = self._def_chain_step(chain, clean, start0, active, acc_rows, nv_rows, pt_rows, sampling)
+            return VerifyResult("fused_sample", None, handle=h)
+        self._def_ctx = {"sampling": sampling}
+        try:
+            ids, _, fz = self.verify(
+                clean, start0, acc_rows, pt_rows, active=active, num_valid_drafts=nv_rows, fused=True, sampling=sampling
+            )
+        finally:
+            self._def_ctx = None
+        if ids is None and isinstance(fz, FusedHandle):
+            return VerifyResult("fused_sample", None, handle=fz)
+        h = self._def_ready_handle(
+            fz, start0, active
+        )  # a fallback step ran synchronously: its result is already on the host
+        return VerifyResult("fused_sample", None, handle=h)
+
+    def _def_chain_step(self, chain, clean, start0, active, acc_rows, nv_rows, pt_rows, sampling):
+        """The chain step: verify()'s tail for rows whose positions are bounds, then the deferred enqueue."""
+        B, K, T = self.B, self.K, self.T
+        cmask, lo, hi, aux = chain["cmask"], chain["lo"], chain["hi"], chain["aux"]
+        self._last_cap_blocks = int(torch.as_tensor(pt_rows).shape[-1])
+        pt = self._fit(pt_rows)
+        mi_prev = acc_rows - 1
+        mi_prev = torch.where(active & ~cmask, mi_prev, torch.zeros_like(mi_prev))
+        assert bool(((mi_prev >= 0) & (mi_prev < T)).all()), f"accepted_counts must be in [1, {T}]"
+        pt = pt.clone()
+        pt[~active] = 0  # vLLM null block
+        self._row_active = active.clone()
+        self._last_pt = pt
+        start_hi = torch.where(cmask, hi, start0)
+        vpt = verify_write_table(pt, start_hi, nv_rows, self.block_size)
+        assert int(start_hi.max()) + T <= table_capacity(
+            self._last_cap_blocks, self.block_size
+        ), "verify window past the paged KV capacity"
+        args = (clean.tolist(), start_hi.tolist(), mi_prev.tolist())
+        kw = dict(read_logits=False, page_tables=vpt, inactive=(~active).tolist())
+        chain = dict(chain, lo=lo, hi=hi)
+        return self._def_enqueue(
+            "s" if sampling is not None else "g", clean, start_hi, pt, active, nv_rows, args, kw, sampling, aux, chain
+        )
+
+    def _def_enqueue(self, kind, tokens, start_pos, pt, active, nv, args, kw, sampling, aux, chain=None):
+        """The enqueue half of a fused step (greedy 'g' or sampled 's'; ``chain`` None = host-staged first step of a chain): the call
+        order of _verify_fused / _verify_fused_sampled up to the drafter trace, the GDN parity flipped at enqueue, then the
+        non-blocking reads and one event. NO synchronize. Returns the FusedHandle."""
+        B, T, K = self.B, self.T, self.K
+        fa, fs, model = self._fa, self._fs, self.model
+        self._check_scratch(pt)
+        declined = aux[2, :B].bool()
+        parity = model.vfy_gdn_parity()
+        do_audit = False
+        if chain is None:
+            fa.stage_aux(aux)
+            prev, cmask = None, None
+        else:
+            prev, cmask = chain["prev"], chain["cmask"]
+            ovr = pack_ovr_host(
+                aux[0, :B],
+                aux[1, :B],
+                aux[2, :B],
+                aux[3, :B],
+                start_pos,
+                (~cmask).to(torch.int64),
+                torch.as_tensor(tokens).to(torch.int64),
+                args[2],
+                parity,
+                K=K,
+                scratch_block=int(self._scratch_block),
+                rope_delta=model.rope.rope_delta,
+                rope_rows=model.rope.max_seq_len,
+            )
+            (self._ch_g if prev.kind == "g" else self._ch_s).stage_ovr(ovr)
+            n = self.chain_steps
+            self.chain_steps = n + 1
+            do_audit = spec_chain_audit_enabled() and n % spec_chain_audit_every() == 0
+        if kind == "s":
+            fs.stage_samp(
+                sampling["temperature"], sampling["top_k"], sampling["top_p"], sampling["greedy"], sampling["uniforms"]
+            )
+        if self._fa_pt_host is None or not torch.equal(self._fa_pt_host, pt):
+            fa.stage_pt_rows(pt.repeat_interleave(T, dim=0))
+            self._fa_pt_host = pt.clone()
+        dpt = pt
+        if bool(declined.any()):
+            dpt = pt.clone()
+            dpt[declined] = self._scratch_block
+        self._stage_table(dpt, self._mtp_pt, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
+        extra = {"execute_topk": True} if kind == "s" else {}
+        read = lambda t: ttnn.from_device(ttnn.get_device_tensors(t)[0], blocking=False)
+        audit = None
+        if chain is None:
+            model.verify_stage_and_enqueue(*args, **kw, **extra, flip_parity=True)
+        else:
+            ttnn.execute_trace(
+                self.mesh, self._ch_trace_g if prev.kind == "g" else self._ch_trace_s, cq_id=0, blocking=False
+            )
+            model._vfy_aux_staged = None
+            if (
+                do_audit
+            ):  # the device-built words of THIS step, copied right behind the chain trace; checked at this step's read
+                audit = dict(tok=read(model._vfy_token_buf), aux=read(model._vfy_aux_buf), fa=read(fa.aux_in))
+            model.verify_stage_and_enqueue(
+                *args, **kw, **extra, skip_tokens_h2d=True, skip_aux_h2d=True, skip_kv_check=True, flip_parity=True
+            )
+        ttnn.execute_trace(self.mesh, self._fa_trace if kind == "g" else self._fs_trace, cq_id=0, blocking=False)
+        ttnn.execute_trace(self.mesh, self._dr_trace, cq_id=0, blocking=False)
+        self._vfeed = model._vfy_rows_out
+        self._dr_rs_dirty = True  # the accept trace rewrote the reseed page table (and the pack)
+        res_t = read(fa.result_out if kind == "g" else fs.result_out)
+        aux_t = read(fa.aux_in)  # still this step's aux: the next chain trace is enqueued after these reads
+        dr_ts = [read(t) for t in self._dr_outs]
+        ids_t = union = None
+        if kind == "g":
+            n_g = self.fused_greedy_checked
+            self.fused_greedy_checked = n_g + 1
+            if spec_fused_audit_enabled() and n_g % spec_fused_audit_every() == 0:
+                ids_t = read(model._vfy_ids_out)
+        else:
+            n_s = self.fused_sampled_steps
+            self.fused_sampled_steps = n_s + 1
+            if spec_fused_audit_enabled() and n_s % spec_fused_audit_every() == 0:
+                ids_t = read(model._vfy_ids_out)
+                union = (read(fs.union_vals_in), read(fs.union_ids_in))
+        event = ttnn.record_event(self.mesh, 0)
+        h = FusedHandle(self, self._def_next_tip(), kind)
+        h.event, h.res_t, h.aux_t, h.dr_ts, h.ids_t, h.union, h.audit = event, res_t, aux_t, dr_ts, ids_t, union, audit
+        h.res_rows = 2 if kind == "g" else 3
+        h.active, h.declined, h.cmask, h.prev = active.clone(), declined.clone(), cmask, prev
+        h.nvv = torch.as_tensor(nv).to(torch.int64).reshape(B).clone()
+        h.nv_own = torch.where(declined, torch.zeros_like(h.nvv), torch.full_like(h.nvv, K))
+        h.tokens = torch.as_tensor(tokens).to(torch.int64).clone()
+        h.start_host = torch.as_tensor(start_pos).to(torch.int64).clone()
+        h.mi_host = torch.as_tensor(args[2]).to(torch.int64).clone()
+        h.parity, h.aux, h.pt, h.sampling = parity, aux.clone(), pt.clone(), sampling
+        h.lo = (chain["lo"] if chain is not None else h.start_host).clone()
+        h.hi = (chain["hi"] if chain is not None else h.start_host).clone()
+        h.skip = [bool(s) for s in propose_skip_plan(self._no_draft, B)[0]]
+        h.cap = table_capacity(self._last_cap_blocks, self.block_size)
+        h.perm = self._phys_perm
+        if prev is not None:
+            prev.succ = weakref.ref(h)
+        self._offered = {u for u in range(B) if not bool(declined[u])}
+        self._fused_note(None)
+        self._def_last = h
+        return h
+
+    def _def_ready_handle(self, fz, start0, active):
+        """A handle for a step that ran synchronously (a fallback): its result is on the host already, no drafts were made (the
+        propose of the plugin, or a chain onto it, runs the ordinary propose), and nothing can chain on it."""
+        B, T = self.B, self.T
+        h = FusedHandle(self, self._def_next_tip(), None)
+        h.device, h.ready, h.chainable = False, True, False
+        committed = torch.as_tensor(fz.committed).to(torch.int64).reshape(B, T)
+        counts = torch.as_tensor(fz.counts).to(torch.int64).reshape(B)
+        p0 = torch.as_tensor(start0).to(torch.int64).reshape(B).clone()
+        h.active, h.perm = torch.as_tensor(active).bool().clone(), self._phys_perm
+        h._data = dict(committed=committed, counts=counts, p0=p0, steps=None)
+        h.exact = (p0, counts.clone())
+        h._readout = self._def_readout(h, h._data)
+        self._def_last = h
+        return h
+
+    def _def_readout(self, h, d):
+        """(accepted_token_ids [B, 1+K] int32, accepted_counts [B] int32, p0 [B] int32; negative on padding rows), runner slots."""
+        p0 = torch.where(h.active, d["p0"], torch.full_like(d["p0"], -1))
+        return tuple(
+            self._perm_slots(x, h.perm)
+            for x in (d["committed"].to(torch.int32), d["counts"].to(torch.int32), p0.to(torch.int32))
+        )
+
+    # ---- reads (reader thread) and checks (pure)
+    def _def_wait(self, h):
+        self._def_data(h)
+        return h._readout
+
+    def _def_data(self, h, engine_thread=False):
+        """The step's host data (engine rows), after its device work finished: event_synchronize on the reader thread, or one
+        synchronize_device on the engine thread (materialize / lazy finish before the read). Cached per handle; runs the checks once.
+        """
+        with h._lock:
+            if h._data is not None:
+                return h._data
+            if engine_thread:
+                ttnn.synchronize_device(self.mesh)
+            else:
+                ttnn.event_synchronize(h.event)
+            d = self._def_parse(h)
+            self._def_check(h, d)
+            h._data = d
+            h._readout = self._def_readout(h, d)
+            h.prev = None  # the prediction needed it only for the checks
+            return d
+
+    def _def_parse(self, h):
+        B, T = self.B, self.T
+        res = ttnn.to_torch(h.res_t).reshape(h.res_rows, -1).to(torch.int64)
+        d = dict(
+            committed=res[0, : B * T].reshape(B, T).clone(),
+            counts=res[1, :B].clone(),
+            overflow=res[2, :B].clone() if h.res_rows == 3 else None,
+            p0=(ttnn.to_torch(h.aux_t).reshape(FUSED_AUX_ROWS, -1)[AUX_P0, :B].to(torch.int64) & 0xFFFFFFFF).clone(),
+            steps=[[int(v) for v in ttnn.to_torch(t).reshape(-1)[:B]] for t in h.dr_ts],
+            ids=None,
+            n_chain_audit=0,
+            n_s_audit=0,
+            boundary=0,
+        )
+        if h.ids_t is not None:
+            d["ids"] = torch.as_tensor(
+                [int(v) for v in ttnn.to_torch(h.ids_t).reshape(-1)[: B * T]], dtype=torch.int32
+            ).reshape(B, T)
+        return d
+
+    def _def_tokens(self, h, pd):
+        """The verify token block the device ran this step with: host rows as staged, chain rows from the previous step's commit."""
+        B, K = self.B, self.K
+        tok = h.tokens.clone()
+        if h.cmask is not None:
+            committed, counts = pd["committed"], pd["counts"]
+            tok0 = committed.gather(1, (counts - 1)[:, None])
+            drafts = torch.tensor(pd["steps"], dtype=torch.int64).T.reshape(B, K)
+            cols = torch.where(torch.arange(K)[None, :] < h.nvv[:, None], drafts, tok0)
+            pred = torch.cat([tok0, cols], dim=1)
+            tok[h.cmask] = pred[h.cmask]
+        return tok * h.active[:, None].to(torch.int64)
+
+    def _def_check(self, h, d):
+        """Debug checks of a deferred step, at read time: pure (host tensors only), raising RuntimeError on a mismatch.
+        S1 greedy walk, S2 sampled audit, device p0 vs bounds and vs the previous step, deferred chain audit."""
+        B, T, K = self.B, self.T, self.K
+        committed, counts, p0 = d["committed"], d["counts"], d["p0"]
+        if d["overflow"] is not None and bool(d["overflow"].any()):
+            raise RuntimeError(
+                "fused sampled step: a top-k tie group reached the last union candidate in deferred serving; the step cannot be redone "
+                f"on the host once a chained step followed it (overflow rows {d['overflow'].tolist()})"
+            )
+        bad = h.active & ((p0 < h.lo) | (p0 > h.hi))
+        if bool(bad.any()):
+            raise RuntimeError(
+                f"deferred fused step {h.tip_id}: device p0 {p0.tolist()} outside the host bounds [{h.lo.tolist()}, {h.hi.tolist()}]"
+            )
+        pd = None
+        if h.cmask is not None:
+            pd = self._def_data(h.prev)
+            want = pd["p0"] + pd["counts"]
+            if bool((h.cmask & (p0 != want)).any()):
+                raise RuntimeError(
+                    f"deferred fused step {h.tip_id}: device p0 {p0.tolist()} != previous p0 + count {want.tolist()}"
+                )
+        tokens = self._def_tokens(h, pd)
+        ids = d["ids"]
+        if ids is not None and h.kind == "g":
+            w_c, w_n = fused_greedy_walk(ids, tokens, h.nvv, K)
+            if not (torch.equal(w_c, committed) and torch.equal(w_n, counts)):
+                raise RuntimeError(
+                    f"fused accept != host greedy walk: device committed {committed.tolist()} counts {counts.tolist()}; "
+                    f"host committed {w_c.tolist()} counts {w_n.tolist()}; ids {ids.tolist()} tokens {tokens.tolist()}"
+                )
+        if ids is not None and h.kind == "s" and h.union is not None:
+            fs = self._fs
+            width = fs.TP * fs.M
+            vals = ttnn.to_torch(h.union[0]).reshape(-1, width)[: B * T]
+            idx = ttnn.to_torch(h.union[1]).reshape(-1, width)[: B * T]
+            aux = h.aux.clone()
+            aux[AUX_P0, :B] = p0.to(torch.int32)
+            d["n_s_audit"] = 1
+            d["boundary"] = self._audit_sampled_core(
+                vals, idx, ids, committed, counts, tokens, h.nvv, h.pt, aux, h.sampling
+            )
+        if h.audit is not None:
+            d["n_chain_audit"] = 1
+            self._def_chain_audit(h, d, pd)
+
+    def _def_chain_audit(self, h, d, pd):
+        """The deferred CHAIN audit: the token buffer, packed aux buffer and fused aux the chain trace wrote for THIS step (copied
+        right behind it) against the words the host predicts from the previous step's commit, tokens, counts, p0 and drafts.
+        """
+        B, T, model = self.B, self.T, self.model
+        cm, act = h.cmask, h.active
+        p0n = torch.where(cm, pd["p0"] + pd["counts"], h.start_host) * act
+        min_ = torch.where(cm, pd["counts"] - 1, h.mi_host) * act
+        exp_tok = self._def_tokens(h, pd).reshape(-1)
+        exp_aux = model._vfy_aux_host(model._vfy_row_positions(p0n.tolist()), min_.tolist(), parity=h.parity)
+        exp_fa = h.aux.clone().to(torch.int64)
+        exp_fa[AUX_P0, :B] = p0n
+        read = lambda t: ttnn.to_torch(t)
+        self._chain_compare((exp_tok, exp_aux, exp_fa), read(h.audit["tok"]), read(h.audit["aux"]), read(h.audit["fa"]))
+
+    # ---- engine-thread bookkeeping
+    def _deferred_finish(self, h):
+        """propose_draft_tokens(hidden=handle) of a device step, on the engine thread: the bookkeeping the sync path did in
+        _fused_finish (mtp_extra_steps, the decline cross-check, the DraftResult) from the handle's own data, never from state the
+        steps enqueued since then changed (page table, row map, skip set). Idempotent."""
+        if h.draft_result is not None:
+            return h.draft_result
+        B, K = self.B, self.K
+        d = self._def_data(h, engine_thread=True)
+        committed, counts, p0 = d["committed"], d["counts"], d["p0"]
+        c32, n32 = committed.to(torch.int32), counts.to(torch.int32)
+        anchor = (p0 + counts - 1).tolist()
+        fit = draft_rows_fit(anchor, K, h.cap)
+        want = [(not bool(a)) or bool(s) or (not f) for a, s, f in zip(h.active.tolist(), h.skip, fit)]
+        if want != h.declined.tolist():
+            raise RuntimeError(f"fused aux declined {h.declined.tolist()} != propose plan {want}")
+        drafts = self._drafts_from_steps(d["steps"])
+        drafts[h.declined] = 0
+        if any(int(c) > 1 for c in n32):
+            self.mtp_extra_steps += 1
+        nv = torch.tensor([0 if x else K for x in h.declined.tolist()], dtype=torch.int32)
+        h.fin = dict(committed=committed, counts=counts, p0=p0, drafts=drafts, nv=nv)
+        h.draft_result = DraftResult(self._perm_slots(drafts, h.perm), self._perm_slots(nv, h.perm))
+        h.exact = (p0.clone(), counts.clone())
+        h.finished = True
+        s = None if h.succ is None else h.succ()
+        if s is not None and s.cmask is not None:  # the step chained on this one: its start is now exact
+            nxt = p0 + counts
+            s.lo, s.hi = torch.where(s.cmask, nxt, s.lo), torch.where(s.cmask, nxt, s.hi)
+        self.chain_audits += d["n_chain_audit"]
+        self.fused_audited_steps += d["n_s_audit"]
+        self.fused_boundary_diffs += d["boundary"]
+        return h.draft_result
+
+    def _def_finish_any(self, h):
+        """Finish ``h`` whatever it is (device step: _deferred_finish; ready fallback step: the ordinary propose from its host
+        result) and return its engine-row data (committed, counts, p0, drafts, nv)."""
+        if h.device:
+            self._deferred_finish(h)
+            return h.fin
+        if h.fin is None:
+            committed, counts, p0 = h._readout
+            cpos = self._committed_positions(torch.clamp(p0, min=0), p0 >= 0, committed, counts)
+            if h.draft_result is None:
+                h.draft_result = self.propose_draft_tokens(self.K, committed, cpos, counts)
+            dr = h.draft_result
+            h.fin = dict(
+                committed=h._data["committed"],
+                counts=h._data["counts"],
+                p0=h._data["p0"],
+                drafts=self._perm_rows(dr.draft_token_ids.to(torch.int64), h.perm),
+                nv=self._perm_rows(dr.num_valid.to(torch.int64), h.perm),
+            )
+            h.finished = True
+        return h.fin
+
+    def _def_materialize(self, prev, cmask, clean, start0, acc_rows, nv_rows, why):
+        """A chain step that cannot chain: build its chain rows' host inputs from the pending step (engine thread: synchronize,
+        read, finish it) and run as an ordinary step. Returns copies of (clean, start0, acc_rows, nv_rows) in engine rows.
+        """
+        if prev is None:
+            raise RuntimeError(f"chain step cannot chain ({why}) and has no pending step to build its inputs from")
+        K, T = self.K, self.T
+        f = self._def_finish_any(prev)
+        committed, counts, p0 = f["committed"], f["counts"], f["p0"]
+        clean, start0, acc_rows, nv_rows = clean.clone(), start0.clone(), acc_rows.clone(), nv_rows.clone()
+        for u in torch.nonzero(cmask).reshape(-1).tolist():
+            c = int(counts[u])
+            n = min(int(nv_rows[u]), int(f["nv"][u]))
+            tok0 = int(committed[u, c - 1])
+            clean[u] = torch.tensor(
+                [tok0] + [int(x) for x in f["drafts"][u, :n]] + [tok0] * (T - 1 - n), dtype=torch.int64
+            )
+            start0[u] = int(p0[u]) + c
+            acc_rows[u] = c
+            nv_rows[u] = n
+        return clean, start0, acc_rows, nv_rows
+
+    def _sampled_ineligible(self, sampling):
+        """Reason a sampled fused step cannot run the sampled accept trace (None = it can), beyond _fused_ineligible's."""
+        fs = self._fs
+        if fs is None or self._fs_trace is None:
+            return "no_sampled_trace"
+        k = torch.as_tensor(sampling["top_k"]).to(torch.int64)
+        greedy = torch.as_tensor(sampling["greedy"]).bool()
+        if bool((~greedy & ((k < 1) | (k > fs.M - 1))).any()):
+            return "top_k_range"
+        return None
+
+    def _verify_fused_sampled(self, tokens, start_pos, pt, active, nv, args, kw, sampling, aux):
+        """Stage S2 step. Call order: stage aux, samp (pack_samp_host), pt rows / MTP table when changed; enqueue verify, topk
+        (execute only, no host read), sampled accept trace, drafter trace; enqueue the non-blocking drafter-id reads; ONE
+        synchronize; read ids, result [3, W] (committed, counts, overflow) and the draft ids (+ the union in audit mode).
+        An ``overflow`` flag on any user (a top-k tie group reached the last union candidate) redoes the whole step on the host:
+        the full logits (logits trace on the intact verify rows) walked by host_redo_walk with the SAME uniforms; the result
+        carries no drafts, so the propose that follows runs normally (and rewrites what the drafter trace wrote)."""
+        B, T, K = self.B, self.T, self.K
+        if self._def_ctx is not None:  # decode_forward(defer_read=True): enqueue, no synchronize
+            return None, None, self._def_enqueue("s", tokens, start_pos, pt, active, nv, args, kw, sampling, aux)
+        fa, fs, model = self._fa, self._fs, self.model
+        self._check_scratch(pt)
+        declined = aux[2, :B].bool()
+        chain = self._chain_plan(tokens, start_pos, active, nv, args)
+        if chain is None:
+            fa.stage_aux(aux)  # aux_in / pt_rows_in are shared with the S1 device
+        else:
+            expect = self._chain_stage(chain, tokens, start_pos, active, aux, args)
+        fs.stage_samp(
+            sampling["temperature"], sampling["top_k"], sampling["top_p"], sampling["greedy"], sampling["uniforms"]
+        )
+        if self._fa_pt_host is None or not torch.equal(self._fa_pt_host, pt):
+            fa.stage_pt_rows(pt.repeat_interleave(T, dim=0))
+            self._fa_pt_host = pt.clone()
+        dpt = pt
+        if bool(declined.any()):
+            dpt = pt.clone()
+            dpt[declined] = self._scratch_block
+        self._stage_table(dpt, self._mtp_pt, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
+        if chain is None:
+            handle = model.verify_stage_and_enqueue(*args, **kw, execute_topk=True)  # verify, then topk (no host read)
+        else:
+            self._chain_exec(chain)
+            handle = model.verify_stage_and_enqueue(
+                *args, **kw, execute_topk=True, skip_tokens_h2d=True, skip_aux_h2d=True
+            )
+        ttnn.execute_trace(self.mesh, self._fs_trace, cq_id=0, blocking=False)
+        ttnn.execute_trace(self.mesh, self._dr_trace, cq_id=0, blocking=False)
+        dr_handles = self._ids_enqueue_reads(self._dr_outs)
+        ttnn.synchronize_device(self.mesh)  # the only one of the step
+        ids, vfeed, _ = model.verify_after_external_sync(handle)
+        self._vfeed = vfeed
+        self._dr_rs_dirty = True  # the accept trace rewrote the reseed page table (and the pack)
+        res = ttnn.to_torch(ttnn.get_device_tensors(fs.result_out)[0]).reshape(3, -1).to(torch.int64)
+        steps = self._ids_from_handles(dr_handles)
+        ids = torch.tensor(ids, dtype=torch.int32).reshape(B, T)
+        committed, counts, overflow = res[0, : B * T].reshape(B, T), res[1, :B], res[2, :B]
+        if chain is not None:
+            self._chain_audit(expect)
+        if bool(overflow.any()):
+            self._fused_note("overflow_redo")
+            logits = model.fetch_verify_logits()  # logits trace over the intact _vfy_normed_out: one more round trip
+            return ids, None, self._host_walk_step(logits, tokens, nv, sampling)
+        n_sampled = self.fused_sampled_steps
+        self.fused_sampled_steps = n_sampled + 1
+        if spec_fused_audit_enabled() and n_sampled % spec_fused_audit_every() == 0:
+            self.fused_audited_steps += 1
+            self._audit_sampled(ids, committed, counts, tokens, nv, pt, aux, sampling)
+        self._chain_note_step("s", committed, counts, steps, start_pos, active)
+        return self._fused_finish(ids, committed, counts, steps, start_pos, active, declined)
+
+    def _audit_sampled(self, ids, committed, counts, tokens, nv, pt, aux, sampling):
+        """QWEN36_SPEC_FUSED_AUDIT (default on): read the union back (two extra reads) and recompute the step with
+        fused_sampled_reference on the same parameters and uniforms. A differing user whose difference is a float32 boundary
+        (|p_d - u| < 1e-5, or the inverse-CDF threshold within 1e-5 of a bucket edge) is counted in ``fused_boundary_diffs``;
+        any other difference raises."""
+        B, T, K = self.B, self.T, self.K
+        fs = self._fs
+        width = fs.TP * fs.M
+        vals = ttnn.to_torch(ttnn.get_device_tensors(fs.union_vals_in)[0]).reshape(-1, width)[: B * T]
+        idx = ttnn.to_torch(ttnn.get_device_tensors(fs.union_ids_in)[0]).reshape(-1, width)[: B * T]
+        n = self._audit_sampled_core(vals, idx, ids, committed, counts, tokens, nv, pt, aux, sampling)
+        if n:
+            self.fused_boundary_diffs += n
+            logger.info(
+                f"[spec_engine] fused sampled audit: float32 boundary difference users (total {self.fused_boundary_diffs})"
+            )
+
+    def _audit_sampled_core(self, vals, idx, ids, committed, counts, tokens, nv, pt, aux, sampling):
+        """The check of _audit_sampled on host tensors (also the deferred read-time audit). Returns the number of users whose
+        difference is a float32 boundary (explained); raises RuntimeError on any other difference."""
+        B, T, K = self.B, self.T, self.K
+        fs = self._fs
+        tok_flat = torch.as_tensor(tokens).reshape(-1)
+        ref = fused_sampled_reference(
+            vals,
+            idx,
+            tok_flat,
+            ids.reshape(-1),
+            aux,
+            pt,
+            B=B,
+            K=K,
+            per_shard=fs.per_shard,
+            M=fs.M,
+            greedy=sampling["greedy"],
+            temperature=sampling["temperature"],
+            top_k=sampling["top_k"],
+            top_p=sampling["top_p"],
+            uniforms=sampling["uniforms"],
+            num_valid=nv,
+        )
+        same = torch.equal(ref.committed.to(torch.int64), committed) and torch.equal(ref.counts.to(torch.int64), counts)
+        if same:
+            return 0
+        drafts = torch.as_tensor(tokens).reshape(B, T)[:, 1:]
+        explained = audit_boundary_users(ref, sampling["uniforms"], committed, counts, drafts, nv, B=B, K=K, M=fs.M)
+        bad = [
+            u
+            for u in range(B)
+            if not (
+                torch.equal(ref.committed[u].to(torch.int64), committed[u]) and int(ref.counts[u]) == int(counts[u])
+            )
+            and u not in explained
+        ]
+        if bad:
+            raise RuntimeError(
+                f"fused sampled accept != host reference for users {bad}: device committed {committed.tolist()} counts "
+                f"{counts.tolist()}; reference committed {ref.committed.tolist()} counts {ref.counts.tolist()}; "
+                f"uniforms {torch.as_tensor(sampling['uniforms']).tolist()} tokens {tokens.tolist()}"
+            )
+        return len(explained)
+
+    def _fused_cache_take(self, num_drafts, committed_tokens, committed_positions, accepted_counts, page_table):
+        """The cached DraftResult when this propose asks for the commit the last fused step made it for (active rows:
+        count, committed tokens within the count, their positions); else drop the cache and return None."""
+        cache, self._fused_cache = self._fused_cache, None
+        if cache is None or page_table is not None or int(num_drafts) != self.K:
+            return None
+        res, ctok, cpos, counts, act = cache
+        try:
+            B, T = self.B, self.T
+            tok = _int_block(committed_tokens, B, T, "committed_tokens")
+            pos = _int_block(committed_positions, B, T, "committed_positions")
+            acc = _int_vec(accepted_counts, B, "accepted_counts")
+        except ValueError:
+            return None
+        act = act.bool()
+        used = (torch.arange(T)[None, :] < counts.reshape(-1, 1)) & act.reshape(-1, 1)
+        same = (
+            torch.equal(acc[act], counts.to(acc.dtype)[act])
+            and torch.equal(tok.to(torch.int64)[used], ctok.to(torch.int64)[used])
+            and torch.equal(pos.to(torch.int64)[used], cpos[used])
+        )
+        if not same:
+            return None
+        return DraftResult(res.draft_token_ids.clone(), res.num_valid.clone())
+
+    # --------------------------------------------------------------------- #
     # Propose
     # --------------------------------------------------------------------- #
     def propose(
@@ -2013,6 +3709,24 @@ class MTPSpecEngine:
         slot's MTP KV, so a row offered drafts again later drafts from a complete history.
         ``cap_blocks``: the caller's real table width (default: page_table's).
         Returns torch.int32 [B, K]."""
+        if getattr(self, "_ch_g", None) is not None:  # QWEN36_SPEC_CHAIN
+            self._chain_drop("propose")  # the drafter replay rewrites the id outputs a chain step would read
+        core = self._propose_core_plan(
+            committed_tokens, committed_positions, accepted_counts, page_table, decline, cap_blocks, keep_kv
+        )
+        self._propose_core_enqueue(core)
+        drafts = self._propose_core_read(core)
+        return self._propose_core_zero_declined(core, drafts)
+
+    # The propose flow in pieces (propose / propose_draft_tokens are their composition; a fused step calls them apart):
+    #   _propose_core_plan    host only: accepted_plan, fit / decline / keep, page-table fit, eager-vs-recorded decision
+    #   _propose_core_enqueue table + pack H2D copies, drafter execute_trace (non-blocking), mtp_extra_steps, prestage
+    #                         (the eager fallbacks run whole here and keep their own reads)
+    #   _propose_core_read    the draft ids to host (one synchronize unless sync=False: the caller synced)
+    def _propose_core_plan(
+        self, committed_tokens, committed_positions, accepted_counts, page_table, decline, cap_blocks, keep_kv
+    ):
+        """Host planning of ``propose`` (no device call). Returns a ``_CorePlan``."""
         assert self.captured and self._vfeed is not None, "propose needs a verify first"
         B, T, K = self.B, self.T, self.K
         ctok = self._ints(committed_tokens, (B, T))
@@ -2033,43 +3747,130 @@ class MTPSpecEngine:
         pt = self._fit(page_table)
         self._check_scratch(pt)
         eager = B == 1 and p[0] > self.eager_reseed_len
-        if self.recorded_drafter and self.captured and self._dr_trace is not None and not all(decline) and not eager:
-            dpt = pt
-            if any(decline):  # declined rows draft at position 0 over an all-scratch table; their ids are discarded
-                dpt = pt.clone()
-                dpt[torch.tensor(decline)] = self._scratch_block
-                p = [0 if d else pu for d, pu in zip(decline, p)]
-                pending = [0 if d else t for d, t in zip(decline, pending)]
-            self._stage_table(dpt, self._mtp_pt, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
-            drafts = self._propose_recorded(ctok, cpos, m, pending, p, pt, m_kv)
-            if any(decline):
-                drafts[torch.tensor(decline)] = 0
-            return drafts
-        self._stage_mtp_tables(pt)
-
-        self._set_anchor(self._vfeed, m)
-        if eager:
-            self._reseed_mtp(ctok, cpos, m_kv)
-        else:
-            self._reseed_mtp_batched(ctok, cpos, m_kv, pt)
-        if all(decline):
-            return torch.zeros(B, K, dtype=torch.int32)
+        c = _CorePlan(ctok=ctok, cpos=cpos, m=m, pending=pending, p=p, pt=pt, m_kv=m_kv, decline=decline, eager=eager)
+        c.recorded = bool(
+            self.recorded_drafter and self.captured and self._dr_trace is not None and not all(decline) and not eager
+        )
+        c.dpt = pt
         if any(decline):  # declined rows draft at position 0 over an all-scratch table; their ids are discarded
-            dpt = pt.clone()
-            dpt[torch.tensor(decline)] = self._scratch_block
-            self._stage_table(dpt, self._mtp_pt, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
-            p = [0 if d else pu for d, pu in zip(decline, p)]
-            pending = [0 if d else t for d, t in zip(decline, pending)]
-        drafts = self._draft(pending, self._hp_buf, p)
-        drafts[torch.tensor(decline)] = 0
+            c.dpt = pt.clone()
+            c.dpt[torch.tensor(decline)] = self._scratch_block
+            c.p = [0 if d else pu for d, pu in zip(decline, p)]
+            c.pending = [0 if d else t for d, t in zip(decline, pending)]
+        return c
+
+    def _propose_core_enqueue(self, c):
+        """Device half of ``propose``: stage + enqueue the drafter trace (non-blocking), or run an eager fallback whole
+        (its drafts land in ``c.drafts``)."""
+        B, K = self.B, self.K
+        if c.recorded:
+            self._stage_table(c.dpt, self._mtp_pt, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
+            self._propose_recorded_enqueue(c.ctok, c.cpos, c.m, c.pending, c.p, c.pt, c.m_kv)
+            return
+        decline = c.decline
+        self._stage_mtp_tables(c.pt)
+        self._set_anchor(self._vfeed, c.m)
+        if c.eager:
+            self._reseed_mtp(c.ctok, c.cpos, c.m_kv)
+        else:
+            self._reseed_mtp_batched(c.ctok, c.cpos, c.m_kv, c.pt)
+        if all(decline):
+            c.drafts = torch.zeros(B, K, dtype=torch.int32)
+            return
+        if any(decline):
+            self._stage_table(c.dpt, self._mtp_pt, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
+        c.drafts = self._draft(c.pending, self._hp_buf, c.p)
+
+    def _propose_core_read(self, c):
+        """Draft ids int32 [B, K] (before declined rows are zeroed), with one synchronize."""
+        if not c.recorded:
+            return c.drafts
+        return self._drafts_from_steps(self._ids_to_host(self._dr_outs))
+
+    def _propose_core_enqueue_reads(self, c):
+        """Two-phase read, phase 1: enqueue the non-blocking D2H copies of the draft ids (None: nothing to read)."""
+        return self._ids_enqueue_reads(self._dr_outs) if c.recorded else None
+
+    def _propose_core_from_handles(self, c, handles):
+        """Phase 2 (after the caller's synchronize): the draft ids int32 [B, K] from the phase-1 handles."""
+        if not c.recorded:
+            return c.drafts
+        return self._drafts_from_steps(self._ids_from_handles(handles))
+
+    def _propose_core_zero_declined(self, c, drafts):
+        if any(c.decline):
+            drafts[torch.tensor(c.decline)] = 0
         return drafts
+
+    def _drafts_from_steps(self, steps):
+        B, K = self.B, self.K
+        return torch.tensor([[steps[k][u] for k in range(K)] for u in range(B)], dtype=torch.int32)
 
     def propose_draft_tokens(
         self, num_drafts, committed_tokens, committed_positions, accepted_counts, page_table=None, hidden=None
     ):
         """Runner propose contract in runner slots: committed block [B, 1+K] padded with -1 past accepted_counts;
         page_table None = the table of the last verify (already in engine rows). Rows whose
-        window would leave the paged KV decline (num_valid 0). Returns DraftResult."""
+        window would leave the paged KV decline (num_valid 0). Returns DraftResult.
+        = _propose_plan + _propose_stage_and_enqueue + _propose_read + _propose_finish (``self.propose`` is the
+        staged flow's engine-level hook). A fused step's DraftResult is returned as is when the plugin's commit equals the
+        one it was made for. ``hidden`` a FusedHandle (deferred serving): the engine bookkeeping of that step on this (engine) thread
+        and its DraftResult, whether or not a later step was already enqueued."""
+        if isinstance(hidden, FusedHandle):
+            h, hidden = hidden, None
+            if h.draft_result is not None:
+                return h.draft_result
+            if h.device:
+                return self._deferred_finish(h)
+            h.draft_result = self.propose_draft_tokens(
+                num_drafts, committed_tokens, committed_positions, accepted_counts, page_table, None
+            )
+            return h.draft_result
+        hit = self._fused_cache_take(num_drafts, committed_tokens, committed_positions, accepted_counts, page_table)
+        if (
+            self._ch_g is not None
+        ):  # QWEN36_SPEC_CHAIN: the drafter outputs the next chain step reads are good only if the plugin took them
+            if hit is not None and self._chain_prev is not None:
+                self._chain_prev["taken"] = True
+            elif hit is None:
+                self._chain_drop("cache_miss")
+        if hit is not None:
+            return hit
+        plan = self._propose_plan(
+            num_drafts,
+            committed_tokens,
+            committed_positions,
+            accepted_counts,
+            page_table,
+            hidden,
+            build_core=False,
+        )
+        if plan.skip_all:
+            return self._propose_finish(plan, None)
+        drafts = self.propose(
+            plan.ctok,
+            plan.cpos,
+            plan.acc,
+            plan.page_table,
+            decline=plan.decline,
+            cap_blocks=plan.cap_blocks,
+            keep_kv=plan.keep,
+        )
+        return self._propose_finish(plan, drafts)
+
+    def _propose_plan(
+        self,
+        num_drafts,
+        committed_tokens,
+        committed_positions,
+        accepted_counts,
+        page_table=None,
+        hidden=None,
+        build_core=True,
+    ):
+        """All host planning of ``propose_draft_tokens`` (no device call): argument validation, runner-slot to row
+        mapping, padding / fit / skip decisions and (``build_core``) the pack and table inputs. Returns a
+        ``_ProposePlan``; ``plan.skip_all`` marks the B == 1 early return (no device work at all)."""
         B, T, K = self.B, self.T, self.K
         if int(num_drafts) != K:
             raise ValueError(f"num_drafts {num_drafts} != engine K {K}")
@@ -2118,18 +3919,61 @@ class MTPSpecEngine:
         fit = draft_rows_fit(p, K, table_capacity(cap_blocks, self.block_size))
         decline = [(not f) or pd for f, pd in zip(fit, pad)]
         skip, skip_all = propose_skip_plan(self._no_draft, B)
+        plan = _ProposePlan(ctok=ctok, cpos=cpos, acc=acc, page_table=page_table, cap_blocks=cap_blocks)
         # B > 1 still writes skipped rows' MTP KV (keep_kv): a row re-offered after a release has its full history
         if skip_all and B == 1:  # the runner withholds every row's drafts: no anchor/reseed/drafter work
+            plan.skip_all = True
+            return plan
+        plan.keep = [s and not pd for s, pd in zip(skip, pad)]
+        plan.decline = [d or s for d, s in zip(decline, skip)]
+        if build_core:
+            plan.core = self._propose_core_plan(ctok, cpos, acc, page_table, plan.decline, cap_blocks, plan.keep)
+        return plan
+
+    def _propose_stage_and_enqueue(self, plan):
+        """Device half of the plan: table / pack H2D copies, drafter execute_trace (non-blocking), mtp_extra_steps and
+        the next-verify prestage, in the order ``propose`` always had. Eager fallbacks run whole here."""
+        if plan.skip_all:
+            return
+        self._propose_core_enqueue(plan.core)
+
+    def _propose_read(self, plan):
+        """Draft ids int32 [B, K] to host (_ids_to_host with its synchronize)."""
+        if plan.skip_all:
+            return None
+        return self._propose_core_read(plan.core)
+
+    def _propose_enqueue_reads(self, plan):
+        """Phase 1 of the caller-synchronized read: enqueue the D2H copies. The caller then synchronizes ONCE and calls
+        ``_propose_read_from_handles``; the copies must be enqueued before that synchronize."""
+        if plan.skip_all:
+            return None
+        return self._propose_core_enqueue_reads(plan.core)
+
+    def _propose_read_from_handles(self, plan, handles):
+        if plan.skip_all:
+            return None
+        return self._propose_core_from_handles(plan.core, handles)
+
+    def _propose_finish(self, plan, drafts):
+        """Everything after the readback: decline zeroing, num_valid, _offered bookkeeping, _to_slots -> DraftResult."""
+        B, K = self.B, self.K
+        if plan.skip_all:
             self.skipped_propose_calls += 1
             self._offered.clear()
             return DraftResult(torch.zeros(B, K, dtype=torch.int32), torch.zeros(B, dtype=torch.int32))
-        keep = [s and not pd for s, pd in zip(skip, pad)]
-        decline = [d or s for d, s in zip(decline, skip)]
-        drafts = self.propose(ctok, cpos, acc, page_table, decline=decline, cap_blocks=cap_blocks, keep_kv=keep)
+        decline = plan.decline
+        if plan.core is not None:
+            drafts = self._propose_core_zero_declined(plan.core, drafts)
         num_valid = torch.tensor([0 if d else K for d in decline], dtype=torch.int32)
         self._offered = {u for u in range(B) if decline[u] is False}
         drafts, num_valid = self._to_slots(drafts, num_valid)
         return DraftResult(drafts, num_valid)
+
+    def _propose_run_staged(self, plan):
+        """The staged flow end to end (what a fused step splits around its single synchronize)."""
+        self._propose_stage_and_enqueue(plan)
+        return self._propose_finish(plan, self._propose_read(plan))
 
     # --------------------------------------------------------------------- #
     # Draft
@@ -2314,9 +4158,14 @@ class MTPSpecEngine:
     def _propose_recorded(self, ctok, cpos, m, pending, p, pt, m_kv=None):
         """Stage the drafter trace's inputs (host->device copies only; _mtp_pt already staged), replay, read ids.
         The reseed rows always run (padding-only when every m == 0). ``m_kv``: reseed row counts (default m)."""
+        self._propose_recorded_enqueue(ctok, cpos, m, pending, p, pt, m_kv)
+        return self._drafts_from_steps(self._ids_to_host(self._dr_outs))  # steps[k][u]
+
+    def _propose_recorded_enqueue(self, ctok, cpos, m, pending, p, pt, m_kv=None):
+        """_propose_recorded up to and including the non-blocking drafter replay (and prestage): no read."""
         B, T, K, model = self.B, self.T, self.K, self.model
         if self._dr_hostset:
-            return self._propose_recorded_packed(ctok, cpos, m, pending, p, pt, m_kv)
+            return self._propose_recorded_packed_enqueue(ctok, cpos, m, pending, p, pt, m_kv)
         stage, bf, rm, tile = self._stage, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT
         stage(anchor_selector(m, B, T), self._anchor_sel, bf, tile)
         plan = reseed_row_plan(ctok, cpos, m if m_kv is None else m_kv, B, T)
@@ -2337,8 +4186,6 @@ class MTPSpecEngine:
         ttnn.execute_trace(self.mesh, self._dr_trace, cq_id=0, blocking=False)
         if any(m):
             self.mtp_extra_steps += 1
-        steps = self._ids_to_host(self._dr_outs)  # steps[k][u]
-        return torch.tensor([[steps[k][u] for k in range(K)] for u in range(B)], dtype=torch.int32)
 
     def _dr_pack_host(self, ctok, cpos, m, pending, p, m_kv):
         """The packed drafter inputs (see _dr_inputs) for one propose: (pack int32 [2K+5, W], tok [R,1], pos [R], real [R]).
@@ -2364,6 +4211,10 @@ class MTPSpecEngine:
         return pack_u32_rows(segs), rtok, rpos, real
 
     def _propose_recorded_packed(self, ctok, cpos, m, pending, p, pt, m_kv):
+        self._propose_recorded_packed_enqueue(ctok, cpos, m, pending, p, pt, m_kv)
+        return self._drafts_from_steps(self._ids_to_host(self._dr_outs))  # steps[k][u]
+
+    def _propose_recorded_packed_enqueue(self, ctok, cpos, m, pending, p, pt, m_kv):
         """_propose_recorded with the packed inputs (QWEN36_SPEC_HOSTSET): ONE pack copy + the reseed page table (skipped
         while the real-row mask and the table repeat, which is most steps of a steady batch). _mtp_pt was staged by
         the caller. After the replay is enqueued the host would only wait for the first id read, so the next verify's
@@ -2385,8 +4236,6 @@ class MTPSpecEngine:
         if any(m):
             self.mtp_extra_steps += 1
         self._prestage_next_verify(cpos, m)
-        steps = self._ids_to_host(self._dr_outs)  # steps[k][u]
-        return torch.tensor([[steps[k][u] for k in range(K)] for u in range(B)], dtype=torch.int32)
 
     def _dr_rs_table(self, real, pt):
         """The reseed page table [R, nb] the drafter trace must see for this step, or None when the device buffer already
@@ -2397,6 +4246,14 @@ class MTPSpecEngine:
         T, R = self.T, self.B * self.T
         cached_real, cached_pt, host = self._dr_rs_cache
         anyreal = bool(real.any())
+        if self._dr_rs_dirty:  # the device rewrote the buffer: restage it whole, whatever the mirror says
+            self._dr_rs_dirty = False
+            host.fill_(int(self._scratch_block))
+            ridx = real.nonzero().reshape(-1)
+            if ridx.numel():
+                host[ridx] = pt[ridx // T].to(torch.int32)
+            self._dr_rs_cache = (real.clone(), pt.clone() if anyreal else None, host)
+            return host.clone()
         same_pt = cached_pt is not None and torch.equal(pt, cached_pt)
         if torch.equal(real, cached_real) and (same_pt or (not anyreal)):
             return None
@@ -2429,6 +4286,10 @@ class MTPSpecEngine:
         model = self.model
         if not getattr(model, "_vfy_hostset", False):
             return
+        if (
+            self._ch_g is not None
+        ):  # chain mode: the next verify's words come from the chain trace (they need m), nothing to prestage
+            return
         act = [True] * self.B if self._row_active is None else [bool(a) for a in self._row_active]
         cp = torch.as_tensor(cpos).tolist()
         pos = [int(cp[u][int(m[u])]) if act[u] else 0 for u in range(self.B)]
@@ -2448,14 +4309,27 @@ class MTPSpecEngine:
         t = ttnn.to_torch(ttnn.get_device_tensors(id_tt)[0])
         return [int(v) for v in t.reshape(-1)[: self.B]]
 
+    def _ids_enqueue_reads(self, id_tts):
+        """Phase 1 of a two-phase read. QWEN36_SPEC_HOSTFIX (default 1): enqueue every device-0 copy without
+        blocking and return the host tensors. They are filled only by a synchronize that comes AFTER this call. Off:
+        return the device-0 tensors (``_ids_from_handles`` then reads them blocking)."""
+        devs = [ttnn.get_device_tensors(t)[0] for t in id_tts]
+        if not spec_hostfix_enabled():
+            return devs
+        return [ttnn.from_device(d, blocking=False) for d in devs]
+
+    def _ids_from_handles(self, handles):
+        """Phase 2: handles from ``_ids_enqueue_reads`` -> B ints per tensor. Call after the synchronize."""
+        return [[int(v) for v in ttnn.to_torch(h).reshape(-1)[: self.B]] for h in handles]
+
     def _ids_to_host(self, id_tts):
         """_id_to_host for several tensors. QWEN36_SPEC_HOSTFIX (default 1): all device-0 copies are enqueued
         without blocking, then one synchronize, instead of one blocking read round trip per tensor."""
         if not spec_hostfix_enabled():
             return [self._id_to_host(t) for t in id_tts]
-        hosts = [ttnn.from_device(ttnn.get_device_tensors(t)[0], blocking=False) for t in id_tts]
+        handles = self._ids_enqueue_reads(id_tts)
         ttnn.synchronize_device(self.mesh)
-        return [[int(v) for v in ttnn.to_torch(h).reshape(-1)[: self.B]] for h in hosts]
+        return self._ids_from_handles(handles)
 
     # --------------------------------------------------------------------- #
     # MTP KV maintenance
