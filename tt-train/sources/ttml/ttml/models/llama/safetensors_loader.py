@@ -13,7 +13,6 @@ import os
 from pathlib import Path
 from typing import Dict
 
-import ml_dtypes
 import numpy as np
 
 import ttnn
@@ -66,21 +65,6 @@ def _pad_and_resize(arr: np.ndarray, tgt_rows: int, tgt_cols: int) -> np.ndarray
         if tgt_cols > src_cols:
             out[:cr, cc:] = rng.normal(0.0, 0.02, (cr, tgt_cols - cc)).astype(arr.dtype)
     return out
-
-
-def _to_bf16_4d(arr: np.ndarray) -> np.ndarray:
-    """Convert to bfloat16 and reshape to 4D [1, 1, *, *]."""
-    if arr.ndim == 1:
-        arr = arr.reshape(1, 1, 1, -1)
-    elif arr.ndim == 2:
-        arr = arr.reshape(1, 1, arr.shape[0], arr.shape[1])
-    return arr.astype(ml_dtypes.bfloat16)
-
-
-def _assign_tensor(param, arr_4d: np.ndarray, mapper=None) -> None:
-    """Overwrite *param* with a TTML tensor built from *arr_4d*, optionally sharded via *mapper*."""
-    restored = ttml.autograd.Tensor.from_numpy(arr_4d, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, mapper=mapper)
-    param.assign(restored)
 
 
 def _make_tp_mapper(shard_type):
@@ -226,7 +210,7 @@ def load_from_safetensors(
             )
 
         mapper = _make_tp_mapper(shard_type)
-        _assign_tensor(param, _to_bf16_4d(combined), mapper=mapper)
+        ttml.autograd.assign_numpy(param, combined, mapper=mapper)
         print(f"  Combined k_proj + v_proj -> kv_linear (per-shard interleave, tp={tp_size}) for layer {layer_idx}")
 
     weight_tying = config.weight_tying
@@ -253,7 +237,7 @@ def load_from_safetensors(
             full_cols = tgt[-1] * tp_size if shard_type == "row_w" else tgt[-1]
             resized = _pad_and_resize(hf_arr, full_rows, full_cols)
             mapper = _make_tp_mapper(shard_type)
-            _assign_tensor(param, _to_bf16_4d(resized), mapper=mapper)
+            ttml.autograd.assign_numpy(param, resized, mapper=mapper)
             continue
 
         # ── LM head ──
@@ -267,13 +251,13 @@ def load_from_safetensors(
                 full_rows = tgt[-2] * tp_size if shard_type == "col_w" else tgt[-2]
                 resized = _pad_and_resize(hf_arr, full_rows, tgt[-1])
                 mapper = _make_tp_mapper(shard_type)
-                _assign_tensor(param, _to_bf16_4d(resized), mapper=mapper)
+                ttml.autograd.assign_numpy(param, resized, mapper=mapper)
             continue
 
         # ── Final RMSNorm ──
         if hf_name in ("model.norm.weight", "norm.weight"):
             param = get_param("Llama/ln_fc/gamma")
-            _assign_tensor(param, _to_bf16_4d(hf_arr))
+            ttml.autograd.assign_numpy(param, hf_arr)
             continue
 
         # ── Per-layer weights ──
@@ -288,7 +272,7 @@ def load_from_safetensors(
                 f"{pfx2}.input_layernorm.weight",
             ):
                 param = get_param(f"Llama/blocks/{i}/attention_norm/gamma")
-                _assign_tensor(param, _to_bf16_4d(hf_arr))
+                ttml.autograd.assign_numpy(param, hf_arr)
                 matched = True
                 break
 
@@ -298,7 +282,7 @@ def load_from_safetensors(
                 f"{pfx2}.post_attention_layernorm.weight",
             ):
                 param = get_param(f"Llama/blocks/{i}/mlp_norm/gamma")
-                _assign_tensor(param, _to_bf16_4d(hf_arr))
+                ttml.autograd.assign_numpy(param, hf_arr)
                 matched = True
                 break
 
@@ -321,7 +305,7 @@ def load_from_safetensors(
                 else:
                     raise RuntimeError(f"q_proj shape mismatch layer {i}: ({r}x{c}) vs ({tr}x{tc})")
                 mapper = _make_tp_mapper(shard_type)
-                _assign_tensor(param, _to_bf16_4d(w), mapper=mapper)
+                ttml.autograd.assign_numpy(param, w, mapper=mapper)
                 matched = True
                 break
 
@@ -364,7 +348,7 @@ def load_from_safetensors(
                 else:
                     raise RuntimeError(f"o_proj shape mismatch layer {i}: ({r}x{c}) vs ({tr}x{tc})")
                 mapper = _make_tp_mapper(shard_type)
-                _assign_tensor(param, _to_bf16_4d(w), mapper=mapper)
+                ttml.autograd.assign_numpy(param, w, mapper=mapper)
                 matched = True
                 break
 
@@ -387,7 +371,7 @@ def load_from_safetensors(
                 else:
                     raise RuntimeError(f"gate_proj shape mismatch layer {i}: ({r}x{c}) vs ({tr}x{tc})")
                 mapper = _make_tp_mapper(shard_type)
-                _assign_tensor(param, _to_bf16_4d(w), mapper=mapper)
+                ttml.autograd.assign_numpy(param, w, mapper=mapper)
                 matched = True
                 break
 
@@ -410,7 +394,7 @@ def load_from_safetensors(
                 else:
                     raise RuntimeError(f"up_proj shape mismatch layer {i}: ({r}x{c}) vs ({tr}x{tc})")
                 mapper = _make_tp_mapper(shard_type)
-                _assign_tensor(param, _to_bf16_4d(w), mapper=mapper)
+                ttml.autograd.assign_numpy(param, w, mapper=mapper)
                 matched = True
                 break
 
@@ -433,7 +417,7 @@ def load_from_safetensors(
                 else:
                     raise RuntimeError(f"down_proj shape mismatch layer {i}: ({r}x{c}) vs ({tr}x{tc})")
                 mapper = _make_tp_mapper(shard_type)
-                _assign_tensor(param, _to_bf16_4d(w), mapper=mapper)
+                ttml.autograd.assign_numpy(param, w, mapper=mapper)
                 matched = True
                 break
 
