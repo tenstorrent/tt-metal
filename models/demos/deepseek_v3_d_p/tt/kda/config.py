@@ -227,8 +227,13 @@ def tuned_projection_matmul_configs(
 KIMI_K3_PROJECTION_DTYPE = ttnn.bfloat8_b
 
 
-def kimi_k3_program_config(*, active_seq_len_local: int, tp_ccl_topology: ttnn.Topology) -> KDAProgramConfig:
-    """Return the production K3 program configuration with caller-owned per-axis CCL topology."""
+def kimi_k3_program_config(
+    *, active_seq_len_local: int, tp_ccl_topology: ttnn.Topology, bf16_projections: bool = False
+) -> KDAProgramConfig:
+    """Return the production K3 program configuration with caller-owned per-axis CCL topology.
+
+    ``bf16_projections`` keeps the projection weights in BF16: layer-1 real-weights output NRMSE 1.70e-2 instead of
+    2.37e-2 (bar 2e-2), at a 24% longer Galaxy SP8xTP4 T=5120 period (the input projection becomes DRAM-bound)."""
     # Fixed production/proxy geometries; native worker capacity is validated by
     # the recurrence constructor for the actual TP-local head count and device.
     group_chunks = {32: 1, 64: 2, 128: 4, 256: 8, 320: 10, 640: 20, 1280: 20, 2560: 20, 5120: 20}
@@ -253,13 +258,14 @@ def kimi_k3_program_config(*, active_seq_len_local: int, tp_ccl_topology: ttnn.T
         gated_rms_output_dtype=ttnn.bfloat16,
         input_projection_math_fidelity=ttnn.MathFidelity.HiFi2,
         output_projection_math_fidelity=ttnn.MathFidelity.HiFi2,
-        projection_dtype=KIMI_K3_PROJECTION_DTYPE,
+        projection_dtype=ttnn.bfloat16 if bf16_projections else KIMI_K3_PROJECTION_DTYPE,
         # Galaxy SP8xTP4 at T=5120; other geometries keep the auto-selected projection configs.
         tuned_projection_matmuls=active_seq_len_local == _TUNED_PROJECTION_ROWS,
         # Tuned at T=5120 on the 110-core matmul grid with bfloat8_b weights: 8-tile K blocks, and the input
         # projection takes 5 gate tile columns per core past its width, 32 tiles per core (1 x 4 subblocks; 29 or
         # 31 leave only 2 x 1), so the gate beside the relay gets 37 tiles on 8 columns.
-        input_projection_k_block=8,
+        # BF16 weights double the streamed weight block; 4-tile K blocks keep it in L1.
+        input_projection_k_block=4 if bf16_projections else 8,
         output_projection_k_block=8,
         input_projection_extra_gate_tiles=5,
         fused_output_reduce_scatter=active_seq_len_local == _TUNED_PROJECTION_ROWS,
