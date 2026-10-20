@@ -2,7 +2,6 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""The C++ GPT-2 and Llama models accept mask=None, so the fused SDPA can apply the causal mask itself."""
 
 import numpy as np
 import pytest

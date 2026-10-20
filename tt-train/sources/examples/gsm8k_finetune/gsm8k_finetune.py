@@ -425,8 +425,6 @@ def train():
 
     sched = SpeedrunScheduler(scheduler_config)
 
-    # Without TP the model is the single-device GPT-2 or Llama, whose fused SDPA applies the causal mask itself when
-    # given no mask. A dense [1, 1, T, T] mask would select its arbitrary-mask path, which reads every key block.
     causal_mask = None
     if device_config.enable_tp:
         mask_np = build_causal_mask(max_sequence_length)
