@@ -69,7 +69,8 @@ conv_op_l1_usage calculate_L1_usage(
     bool is_1d_depthwise_conv,
     uint32_t input_channels_padded,
     bool skip_act_cb_create = false,
-    std::optional<uint32_t> reader_indices_actual_page_size = std::nullopt);
+    std::optional<uint32_t> reader_indices_actual_page_size = std::nullopt,
+    bool fp32_partials = false);
 
 Tensor conv2d(
     const Tensor& a,
