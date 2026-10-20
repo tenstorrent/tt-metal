@@ -69,6 +69,7 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAPushFusedFactory:
     const auto& table = *t.push_table;
     const auto& out = *t.push_output;
     const auto& progress = *t.push_progress;
+    const bool batch_from_meta = t.push_batch_index_tensor.has_value();
     auto* mesh_device = t.q.device();
     const auto& mesh_view = mesh_device->get_view();
     const auto mesh_shape = mesh_view.shape();
@@ -153,7 +154,7 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAPushFusedFactory:
         pages_per_packet,
         banks,
         pages_per_slot,
-        0u,  // slot from a host scalar
+        batch_from_meta ? 1u : 0u,  // slot from a device tensor (trace-safe) or a host scalar
         num_devices,
         push.stripe_chunk,
         layout.num_blocks,
@@ -168,6 +169,9 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAPushFusedFactory:
     };
     tt::tt_metal::TensorAccessorArgs(input.buffer()).append_to(reader_ct);
     tt::tt_metal::TensorAccessorArgs(table.buffer()).append_to(reader_ct);
+    if (batch_from_meta) {
+        tt::tt_metal::TensorAccessorArgs(t.push_batch_index_tensor->buffer()).append_to(reader_ct);
+    }
     tt::tt_metal::TensorAccessorArgs(progress.buffer()).append_to(reader_ct);
     std::vector<uint32_t> writer_ct = {page_bytes, num_devices, my_rank, workers, packet_bytes, links};
     tt::tt_metal::TensorAccessorArgs(out.buffer()).append_to(writer_ct);
@@ -195,7 +199,13 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAPushFusedFactory:
     reader.defines = defines;
     reader.config = tt::tt_metal::ReaderConfigDescriptor{};
     reader.emplace_common_runtime_args(
-        {input.buffer(), table.buffer(), 0u, 1u, 0u, push.input_batch_index, progress.buffer()});
+        {input.buffer(),
+         table.buffer(),
+         batch_from_meta ? t.push_batch_index_tensor->buffer()->address() : 0u,
+         push.batch_slot_num_layers,
+         push.batch_slot_layer_idx,
+         push.input_batch_index,
+         progress.buffer()});
 
     tt::tt_metal::KernelDescriptor writer;
     writer.kernel_source = kdir + "sparse_push_writer.cpp";
@@ -270,6 +280,10 @@ void SparseSDPAOperation::SparseSDPAPushFusedFactory::override_runtime_arguments
     auto& reader = tt::tt_metal::GetCommonRuntimeArgs(program, kPushReaderKernel);
     reader[0] = tensor_args.push_input->buffer()->address();
     reader[1] = tensor_args.push_table->buffer()->address();
+    reader[2] = tensor_args.push_batch_index_tensor.has_value() ? tensor_args.push_batch_index_tensor->buffer()->address()
+                                                                : 0u;
+    reader[3] = push.batch_slot_num_layers;
+    reader[4] = push.batch_slot_layer_idx;
     reader[5] = push.input_batch_index;
     reader[6] = tensor_args.push_progress->buffer()->address();
     auto& writer = tt::tt_metal::GetCommonRuntimeArgs(program, kPushWriterKernel);

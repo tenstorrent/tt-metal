@@ -22,6 +22,10 @@ struct SparseSDPAFusedPush {
     uint32_t max_rows = 0;
     uint32_t num_links = 2;
     uint32_t input_batch_index = 0;  // cache slot pushed; a runtime arg (not hashed)
+    // With push_batch_index_tensor (trace-safe), the slot is read on device as
+    // tensor[0] * batch_slot_num_layers + batch_slot_layer_idx instead; both are runtime args (not hashed).
+    uint32_t batch_slot_num_layers = 1;
+    uint32_t batch_slot_layer_idx = 0;
     std::optional<GlobalSemaphore> ready_semaphore;
     std::optional<GlobalSemaphore> data_valid_semaphore;
     tt::tt_metal::CoreRangeSet push_core_grid;
@@ -61,6 +65,8 @@ struct SparseSDPAInputs {
     std::optional<Tensor> push_table;
     std::optional<Tensor> push_output;
     std::optional<Tensor> push_progress;
+    // 1-element uint32 user-slot tensor (the runner's metadata[0]); replaces input_batch_index when set.
+    std::optional<Tensor> push_batch_index_tensor;
 };
 
 }  // namespace ttnn::prim

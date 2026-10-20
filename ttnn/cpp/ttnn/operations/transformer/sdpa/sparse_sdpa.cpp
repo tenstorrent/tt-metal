@@ -35,7 +35,10 @@ ttnn::Tensor sparse_sdpa(
     uint32_t push_num_links,
     const std::optional<GlobalSemaphore>& push_ready_semaphore,
     const std::optional<GlobalSemaphore>& push_data_valid_semaphore,
-    const std::optional<tt::tt_metal::CoreRangeSet>& push_core_grid) {
+    const std::optional<tt::tt_metal::CoreRangeSet>& push_core_grid,
+    const std::optional<ttnn::Tensor>& push_batch_index_tensor,
+    uint32_t push_batch_slot_num_layers,
+    uint32_t push_batch_slot_layer_idx) {
     const uint32_t k_dim = q.logical_shape()[3];  // head dim, from the tensor
     const float resolved_scale = scale.value_or(1.0f / std::sqrt(static_cast<float>(k_dim)));
 
@@ -105,6 +108,8 @@ ttnn::Tensor sparse_sdpa(
             .max_rows = push_max_rows,
             .num_links = push_num_links,
             .input_batch_index = push_batch_index,
+            .batch_slot_num_layers = push_batch_slot_num_layers,
+            .batch_slot_layer_idx = push_batch_slot_layer_idx,
             .ready_semaphore = push_ready_semaphore,
             .data_valid_semaphore = push_data_valid_semaphore,
             .push_core_grid = *push_core_grid};
@@ -127,7 +132,8 @@ ttnn::Tensor sparse_sdpa(
         push_input,
         push_table,
         push_output,
-        push_progress);
+        push_progress,
+        push_batch_index_tensor);
 }
 
 }  // namespace ttnn::transformer

@@ -1887,8 +1887,10 @@ class ttMLA:
         actual_end=None,
         metadata=None,
     ):
-        """Sparse attention over only the KV rows `indices` reference, pushed by their owners into a compact buffer."""
-        assert metadata is None, "sparse KV push (prototype) plans on the host and is not trace-safe yet"
+        """Sparse attention over only the KV rows `indices` reference, pushed by their owners into a compact buffer.
+
+        Trace-safe on the metadata path: the KV write, the plan's chunk start and the pushed cache slot are all read
+        on device from the metadata tensors, so a captured replay serves any chunk start and any user slot."""
         cache_batch_idx, _ = self._prepare_sparse_kv_prefix(
             tt_kvpe=tt_kvpe,
             kvpe_cache=kvpe_cache,
@@ -1897,10 +1899,14 @@ class ttMLA:
             kv_actual_isl=kv_actual_isl,
             seq_len_local=seq_len_local,
             actual_end=actual_end,
+            # Without it a captured replay writes every chunk at the captured kv_actual_isl.
+            metadata=metadata,
         )
         planner, ready_sem, done_sem = self.tt_ccl.get_sparse_kv_push(self.ccl_num_links)
         storage = kvpe_cache.storage
-        plan, push_buffer = self._sparse_push_plan(indices, kvpe_cache, seq_len_local, kv_actual_isl, self.layer_idx)
+        plan, push_buffer = self._sparse_push_plan(
+            indices, kvpe_cache, seq_len_local, kv_actual_isl, self.layer_idx, metadata=metadata
+        )
         # The previous layer's sparse_sdpa pushed (some of) the prefix rows when it holds the same plan: resume from
         # its progress (the rest of the prefix, if it stopped early, then the current chunk's rows).
         prefetched = planner.prefetched.pop(self.layer_idx, None) is plan
@@ -1911,7 +1917,7 @@ class ttMLA:
             output_tensor=push_buffer,
             cluster_axis=None,
             num_links=self.ccl_num_links,
-            input_batch_index=cache_batch_idx if storage.shape[0] > 1 else None,
+            **self._sparse_push_slot_kwargs(storage, cache_batch_idx, metadata),
             push_runs_tensor=plan.streams,
             **plan.push_kwargs,
             push_part=part,
@@ -1927,11 +1933,26 @@ class ttMLA:
             indices=plan.compact_indices,
             kvpe_cache=kvpe_cache,
             seq_len_local=seq_len_local,
-            overlap=self._next_layer_prefetch(plan, kvpe_cache, cache_batch_idx),
+            overlap=self._next_layer_prefetch(plan, kvpe_cache, cache_batch_idx, metadata=metadata),
             compact=True,
         )
 
-    def _sparse_push_plan_args(self, kvpe_cache, seq_len_local, kv_actual_isl, layer_idx):
+    def _sparse_push_slot_kwargs(self, storage, cache_batch_idx, metadata, prefix=""):
+        """Cache-slot arguments of a push. On the metadata path the slot is the USER id tensor (metadata[0]),
+        recomposed on device as user * layer_num + layer: a host scalar would be frozen at capture time, so every
+        replay would push the captured slot while the metadata-driven KV write lands in the live one."""
+        if storage.shape[0] <= 1:
+            return {f"{prefix}batch_index": 0} if prefix else {"input_batch_index": None}
+        if metadata is not None:
+            names = (
+                ("push_batch_index_tensor", "push_batch_slot_num_layers", "push_batch_slot_layer_idx")
+                if prefix
+                else ("input_batch_index_tensor", "batch_slot_num_layers", "batch_slot_layer_idx")
+            )
+            return dict(zip(names, (metadata[0], self.layer_num, cache_batch_idx % self.layer_num)))
+        return {f"{prefix}batch_index": cache_batch_idx} if prefix else {"input_batch_index": cache_batch_idx}
+
+    def _sparse_push_plan_args(self, kvpe_cache, seq_len_local, kv_actual_isl, layer_idx, metadata=None):
         """Planner, the compact buffer of `layer_idx`'s parity, and the plan arguments for this chunk."""
         planner = self.tt_ccl.get_sparse_kv_push(self.ccl_num_links)[0]
         storage = kvpe_cache.storage
@@ -1945,15 +1966,19 @@ class ttMLA:
             page_bytes=page_bytes,
             max_rows=dense.shape[2],
             chunk_start=kv_actual_isl or 0,
+            # Metadata path: the chunk start (global, = kv_actual_global) is read on device, not frozen at capture.
+            chunk_start_tensor=metadata[1] if metadata is not None else None,
         )
         return planner, push_buffer, args
 
-    def _sparse_push_plan(self, indices, kvpe_cache, seq_len_local, kv_actual_isl, layer_idx):
+    def _sparse_push_plan(self, indices, kvpe_cache, seq_len_local, kv_actual_isl, layer_idx, metadata=None):
         """The (cached) push plan for `indices` and the compact buffer of `layer_idx`'s parity."""
-        planner, push_buffer, args = self._sparse_push_plan_args(kvpe_cache, seq_len_local, kv_actual_isl, layer_idx)
+        planner, push_buffer, args = self._sparse_push_plan_args(
+            kvpe_cache, seq_len_local, kv_actual_isl, layer_idx, metadata=metadata
+        )
         return planner.plan(indices, **args), push_buffer
 
-    def _next_layer_prefetch(self, plan, kvpe_cache, cache_batch_idx):
+    def _next_layer_prefetch(self, plan, kvpe_cache, cache_batch_idx, metadata=None):
         """sparse_sdpa arguments that fuse the next layer's prefix push into this layer's attention, or None."""
         resources = self._push_prefetch
         if resources is None or not self._sparse_kv_push or not plan.split_prefix:
@@ -1975,7 +2000,8 @@ class ttMLA:
             push_progress=planner.progress(),
             push_stripe_chunk=plan.push_kwargs["push_stripe_chunk"],
             push_max_rows=plan.push_kwargs["push_max_rows"],
-            push_batch_index=cache_batch_idx + 1 if storage.shape[0] > 1 else 0,
+            # The next layer's slot: cache slots are user-major, so it is this slot + 1.
+            **self._sparse_push_slot_kwargs(storage, cache_batch_idx + 1, metadata, prefix="push_"),
             push_num_links=self.ccl_num_links,
             push_ready_semaphore=resources.ready_semaphore,
             push_data_valid_semaphore=resources.data_valid_semaphore,
@@ -2174,9 +2200,11 @@ class ttMLA:
         # The first shared layer after this one reuses these indices: plan its push now and prefetch its prefix
         # rows during this layer's sparse_sdpa.
         overlap = None
-        if self._push_prefetch is not None and self._sparse_kv_push and metadata is None:
-            plan, _ = self._sparse_push_plan(indices, kvpe_cache, seq_len_local, kv_actual_isl, self.layer_idx + 1)
-            overlap = self._next_layer_prefetch(plan, kvpe_cache, cache_batch_idx)
+        if self._push_prefetch is not None and self._sparse_kv_push:
+            plan, _ = self._sparse_push_plan(
+                indices, kvpe_cache, seq_len_local, kv_actual_isl, self.layer_idx + 1, metadata=metadata
+            )
+            overlap = self._next_layer_prefetch(plan, kvpe_cache, cache_batch_idx, metadata=metadata)
         output = self._finish_sparse_chunked_attn(
             tt_q=tt_q,
             tt_kvpe=tt_kvpe,

@@ -192,9 +192,11 @@ class SparseKvPushPlanner:
         chunk_start: int | None,
         sub_core_grids: ttnn.CoreRangeSet,
         subdevice_id: ttnn.SubDeviceId,
+        chunk_start_tensor: ttnn.Tensor | None = None,
     ):
         """Run the plan op on a loaded sub-device's cores (to overlap the program on the other one); the table gather
         follows in the next plan() call with the same arguments, after the sub-devices have joined."""
+        assert chunk_start_tensor is None, "plan_in_region (TT_SPARSE_PUSH_PLAN_OVERLAP) is eager-only"
         key = (indices.buffer_address(), stripe_chunk, buffer_rows, page_bytes, chunk_start)
         start = None if chunk_start is None else self.chunk_start(chunk_start)
         table, compact = self._plan_op(
@@ -211,7 +213,14 @@ class SparseKvPushPlanner:
         page_bytes: int,
         max_rows: int,
         chunk_start: int | None = None,
+        chunk_start_tensor: ttnn.Tensor | None = None,
     ) -> SparseKvPushPlan:
+        """Trace-safe when chunk_start_tensor (the metadata's kv_actual_global) is given: the plan op reads the chunk
+        start on device and nothing here depends on its value, so the cache key leaves it out. Every full layer
+        invalidate()s, so the key only ever has to tell apart calls within one forward."""
+        if chunk_start_tensor is not None:
+            assert self.on_device, "the host planner reads indices back and cannot run under trace capture"
+            chunk_start = ("tensor", chunk_start_tensor.buffer_address())
         key = (indices.buffer_address(), stripe_chunk, buffer_rows, page_bytes, chunk_start)
         if self._last is not None and self._key == key:
             return self._last
@@ -220,7 +229,10 @@ class SparseKvPushPlanner:
             self._key, self._last = key, self._gather_table(*pending[1:])
             return self._last
         if self.on_device:
-            start = None if chunk_start is None else self.chunk_start(chunk_start)
+            if chunk_start_tensor is not None:
+                start = chunk_start_tensor
+            else:
+                start = None if chunk_start is None else self.chunk_start(chunk_start)
             self._key, self._last = key, self._plan_device(indices, stripe_chunk, page_bytes, max_rows, start)
             return self._last
         memo_key = (self.memo_tag, self.generation, key[1:])

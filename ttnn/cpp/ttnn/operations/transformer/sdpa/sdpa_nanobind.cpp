@@ -427,6 +427,8 @@ void bind_sdpa(nb::module_& mod) {
                 stop once every attention core is done and record packets sent in push_progress
                 ([1, 1, workers, 16] uint32) for the resume (push_part 3). push_input is the KVPE cache,
                 push_batch_index its slot, push_table the all-gathered plan tables, push_output the compact buffer.
+                push_batch_index_tensor (trace-safe) replaces push_batch_index with the slot read on device as
+                push_batch_index_tensor[0] * push_batch_slot_num_layers + push_batch_slot_layer_idx.
         Returns:
             ttnn.Tensor: [1, H, S, v_dim] ROW-MAJOR, DRAM interleaved; dtype matches q (bf16->bf16, fp8->fp8).
         )doc",
@@ -457,7 +459,10 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("push_num_links") = 2,
         nb::arg("push_ready_semaphore") = nb::none(),
         nb::arg("push_data_valid_semaphore") = nb::none(),
-        nb::arg("push_core_grid") = nb::none());
+        nb::arg("push_core_grid") = nb::none(),
+        nb::arg("push_batch_index_tensor") = nb::none(),
+        nb::arg("push_batch_slot_num_layers") = 1,
+        nb::arg("push_batch_slot_layer_idx") = 0);
 
     ttnn::bind_function<"sparse_sdpa_msa", "ttnn.transformer.">(
         mod,
