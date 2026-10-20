@@ -135,11 +135,12 @@ std::optional<MatmulUnifiedPlan> plan_unified_matmul(
         TT_THROW("MatmulUnifiedProgramConfig does not support {}", *unsupported);
     }
     const tt::tt_metal::IDevice& device = *A.device();
+    const bool is_quasar = device.arch() == tt::ARCH::QUASAR;
 
-    // ---- GEMM size ----
+    // ---- 1. GEMM size ----
     MatmulUnifiedPlan base = plan_gemm_size(A, B, attributes);
 
-    // ---- Cores ----
+    // ---- 2. Config checks ----
     const CoreCoord grid = device.compute_with_storage_grid_size();
     const CoreRange bounding_box = config.cores.bounding_box();
     TT_FATAL(
@@ -148,44 +149,14 @@ std::optional<MatmulUnifiedPlan> plan_unified_matmul(
         config.cores.str(),
         grid.x,
         grid.y);
-    base.orientation = config.orientation;
-    const std::vector<CoreCoord> all_cores =
-        corerange_to_cores(config.cores, std::nullopt, config.orientation == ShardOrientation::ROW_MAJOR);
-
-    // ---- Compute threads ----
-    const bool is_quasar = device.arch() == tt::ARCH::QUASAR;
     const std::size_t requested_threads = config.num_compute_threads;  // checked before it narrows to uint32_t
     TT_FATAL(
         requested_threads == 0 || requested_threads == 1 ||
             (is_quasar && (requested_threads == 2 || requested_threads == 4)),
         "MatmulUnifiedProgramConfig.num_compute_threads must be 0 (auto), 1, 2 or 4, and above 1 needs Quasar; got {}",
         requested_threads);
-    base.num_compute_threads = requested_threads != 0 ? static_cast<uint32_t>(requested_threads) : (is_quasar ? 4 : 1);
-
-    // ---- Writer threads: thread t writes the shares of compute threads t, t + num_writer_threads, ... ----
-    base.num_writer_threads =
-        is_quasar && base.num_compute_threads % QUASAR_NUM_WRITER_THREADS == 0 ? QUASAR_NUM_WRITER_THREADS : 1;
-
-    // ---- Accumulation mode, formats, L1 budget ----
     const bool fp32_dest_acc_en = get_fp32_dest_acc_en(attributes.compute_kernel_config);
-    base.fp32_dest_acc_en = fp32_dest_acc_en;
-    TT_FATAL(
-        !(bias_tile_bytes > 0 && fp32_dest_acc_en),
-        "MatmulUnifiedProgramConfig fuses bias only with a 16-bit DST (fp32_dest_acc_en = false); ttnn.linear adds it "
-        "separately otherwise");
-    const bool packer_l1_acc =
-        std::get<3>(get_compute_kernel_config_args(device.arch(), attributes.compute_kernel_config.value()));
     const uint32_t dst_capacity_tiles = fp32_dest_acc_en ? 4 : 8;
-    base.A_format = tt::tt_metal::datatype_to_dataformat_converter(A.dtype());
-    base.B_format = tt::tt_metal::datatype_to_dataformat_converter(B.dtype());
-    base.C_format = tt::tt_metal::datatype_to_dataformat_converter(attributes.output_dtype.value());
-    // Shape, layout and batch of the bias are checked by the op; it is one tile row of C's columns.
-    base.has_bias = bias_tile_bytes > 0;
-    base.bias_entry_bytes = bias_tile_bytes;
-    const uint32_t l1_base = device.allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
-    const uint32_t l1_ceiling = device.lowest_occupied_compute_l1_address().value_or(device.l1_size_per_core());
-    const uint64_t l1_budget = l1_ceiling - l1_base;
-
     TT_FATAL(
         (config.subblock_M_tiles == 0) == (config.subblock_N_tiles == 0),
         "subblock_M_tiles and subblock_N_tiles must both be set or both be 0 (auto), got {}x{}",
@@ -204,7 +175,44 @@ std::optional<MatmulUnifiedPlan> plan_unified_matmul(
         "K_chunk_tiles ({}) must divide K_tiles ({})",
         config.K_chunk_tiles,
         base.K_tiles);
+    TT_FATAL(
+        !(bias_tile_bytes > 0 && fp32_dest_acc_en),
+        "MatmulUnifiedProgramConfig fuses bias only with a 16-bit DST (fp32_dest_acc_en = false); ttnn.linear adds it "
+        "separately otherwise");
+    const std::optional<tt::tt_metal::ShardSpec>& C_shard =
+        output.has_value() ? output->memory_config().shard_spec() : attributes.output_mem_config.shard_spec();
+    if (C_shard.has_value()) {
+        const uint32_t C_shard_height = C_shard->shape[0];
+        const uint32_t C_shard_width = C_shard->shape[1];
+        TT_FATAL(
+            C_shard_height % TILE_HEIGHT == 0 && C_shard_width % TILE_WIDTH == 0,
+            "A sharded C needs a tile-multiple shard shape, got {}x{}",
+            C_shard_height,
+            C_shard_width);
+    }
 
+    // ---- 3. Fixed for every candidate: cores, threads, formats, L1 budget ----
+    base.orientation = config.orientation;
+    const std::vector<CoreCoord> all_cores =
+        corerange_to_cores(config.cores, std::nullopt, config.orientation == ShardOrientation::ROW_MAJOR);
+    base.num_compute_threads = requested_threads != 0 ? static_cast<uint32_t>(requested_threads) : (is_quasar ? 4 : 1);
+    // Writer thread t writes the shares of compute threads t, t + num_writer_threads, ...
+    base.num_writer_threads =
+        is_quasar && base.num_compute_threads % QUASAR_NUM_WRITER_THREADS == 0 ? QUASAR_NUM_WRITER_THREADS : 1;
+    base.fp32_dest_acc_en = fp32_dest_acc_en;
+    const bool packer_l1_acc =
+        std::get<3>(get_compute_kernel_config_args(device.arch(), attributes.compute_kernel_config.value()));
+    base.A_format = tt::tt_metal::datatype_to_dataformat_converter(A.dtype());
+    base.B_format = tt::tt_metal::datatype_to_dataformat_converter(B.dtype());
+    base.C_format = tt::tt_metal::datatype_to_dataformat_converter(attributes.output_dtype.value());
+    // Shape, layout and batch of the bias are checked by the op; it is one tile row of C's columns.
+    base.has_bias = bias_tile_bytes > 0;
+    base.bias_entry_bytes = bias_tile_bytes;
+    const uint32_t l1_base = device.allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+    const uint32_t l1_ceiling = device.lowest_occupied_compute_l1_address().value_or(device.l1_size_per_core());
+    const uint64_t l1_budget = l1_ceiling - l1_base;
+
+    // ---- 4. Plan builders ----
     // A shard matches when the tensor is L1-sharded with that shard shape and its grid lists the active
     // cores in assignment order (so shard i lives on the core that produces C slice i).
     const auto shard_matches = [&](const ttnn::Tensor& tensor,
@@ -443,25 +451,12 @@ std::optional<MatmulUnifiedPlan> plan_unified_matmul(
         return plan;
     };
 
-    // ---- C slice ----
+    // ---- 5. C slice, with its subblock and K chunk ----
     // Each core's share of C: the output shard when C is sharded, else M / N split over the bounding box of
     // the cores. A C slice dim the config or the shard gives is fixed; an auto one is searched (#57884).
-    const std::optional<tt::tt_metal::ShardSpec>& C_shard =
-        output.has_value() ? output->memory_config().shard_spec() : attributes.output_mem_config.shard_spec();
     const bool C_slice_from_shard = C_shard.has_value() && (config.C_slice_M_tiles == 0 || config.C_slice_N_tiles == 0);
-    uint32_t C_shard_M_tiles = 0;
-    uint32_t C_shard_N_tiles = 0;
-    if (C_slice_from_shard) {
-        const uint32_t C_shard_height = C_shard->shape[0];
-        const uint32_t C_shard_width = C_shard->shape[1];
-        TT_FATAL(
-            C_shard_height % TILE_HEIGHT == 0 && C_shard_width % TILE_WIDTH == 0,
-            "A sharded C needs a tile-multiple shard shape to derive the C slice from, got {}x{}",
-            C_shard_height,
-            C_shard_width);
-        C_shard_M_tiles = C_shard_height / TILE_HEIGHT;
-        C_shard_N_tiles = C_shard_width / TILE_WIDTH;
-    }
+    const uint32_t C_shard_M_tiles = C_shard.has_value() ? C_shard->shape[0] / TILE_HEIGHT : 0;
+    const uint32_t C_shard_N_tiles = C_shard.has_value() ? C_shard->shape[1] / TILE_WIDTH : 0;
     const uint32_t core_rows = bounding_box.grid_size().y;
     const uint32_t core_columns = bounding_box.grid_size().x;
     const uint32_t share_M_tiles = config.C_slice_M_tiles != 0 ? config.C_slice_M_tiles
@@ -514,9 +509,8 @@ std::optional<MatmulUnifiedPlan> plan_unified_matmul(
             const MatmulUnifiedPlan smallest = plan_C_slice(h, w);
             TT_THROW(
                 "MatmulUnifiedProgramConfig: the DFBs do not fit for any C slice; the smallest tried, {}x{} tiles with "
-                "K_chunk_tiles={}, needs {} B (budget {} B; max DFB extent {} B: A slice {} B, B slice {} B, C slice "
-                "{} "
-                "B, C partials {} B, bias {} B)",
+                "K_chunk_tiles={}, needs {} B (budget {} B; max DFB extent {} B: A slice {} B, B slice {} B, "
+                "C slice {} B, C partials {} B, bias {} B)",
                 h,
                 w,
                 smallest.K_chunk_tiles,
@@ -533,7 +527,33 @@ std::optional<MatmulUnifiedPlan> plan_unified_matmul(
     }
     MatmulUnifiedPlan plan = std::move(*best);
 
-    // ---- Reader threads, then C slices in flight, each in the L1 the C slice, subblock and K chunk leave ----
+    // ---- 6. Sharded output: one C slice per core, batch 1, and a grid the accessor maps the same way ----
+    if (attributes.output_mem_config.is_sharded()) {
+        const bool one_C_slice_per_core = plan.max_C_slices_per_core == 1;
+        const uint32_t C_slices_down_M = tt::div_up(plan.M_tiles, plan.C_slice_M_tiles);
+        const std::vector<CoreRange>& ranges = config.cores.ranges();
+        const bool block_grid_matches = plan.sharded_output_layout != tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED ||
+                                        (ranges.size() == 1 && ranges[0].grid_size().x == plan.C_slices_across_N &&
+                                         ranges[0].grid_size().y == C_slices_down_M);
+        if (!must_fit && (plan.batch_size != 1 || !one_C_slice_per_core || !block_grid_matches)) {
+            return std::nullopt;
+        }
+        TT_FATAL(plan.batch_size == 1, "Sharded output needs batch 1 (a core's C slices would not form one shard)");
+        TT_FATAL(
+            one_C_slice_per_core,
+            "Sharded output needs exactly one C slice per core ({} C slices, {} active cores)",
+            plan.C_slices_per_batch,
+            plan.cores.size());
+        TT_FATAL(
+            block_grid_matches,
+            "Block-sharded output needs cores to be one {}x{} rectangle (one core per C slice, laid out as "
+            "the C slices tile C), got {}",
+            plan.C_slices_across_N,
+            C_slices_down_M,
+            config.cores.str());
+    }
+
+    // ---- 7. Reader threads, then C slices in flight, each in the L1 the C slice, subblock and K chunk leave ----
     // Several reader threads each own part of the A and B DFBs, which a borrowed shard cannot be split into, and
     // reader threads beyond the K chunks of a C slice would only carry padding. Four are tried, then two, whose A and B
     // DFBs take no more L1 than one's: an operand DFB holds at least MIN_OPERAND_BUFFER_DEPTH (two) slices.
@@ -565,32 +585,6 @@ std::optional<MatmulUnifiedPlan> plan_unified_matmul(
         if (dfbs_fit(candidate, l1_budget)) {
             plan = candidate;
         }
-    }
-
-    // ---- Sharded output: one C slice per core, batch 1, and a grid the accessor maps the same way ----
-    if (attributes.output_mem_config.is_sharded()) {
-        const bool one_C_slice_per_core = plan.max_C_slices_per_core == 1;
-        const uint32_t C_slices_down_M = tt::div_up(plan.M_tiles, plan.C_slice_M_tiles);
-        const std::vector<CoreRange>& ranges = config.cores.ranges();
-        const bool block_grid_matches = plan.sharded_output_layout != tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED ||
-                                        (ranges.size() == 1 && ranges[0].grid_size().x == plan.C_slices_across_N &&
-                                         ranges[0].grid_size().y == C_slices_down_M);
-        if (!must_fit && (plan.batch_size != 1 || !one_C_slice_per_core || !block_grid_matches)) {
-            return std::nullopt;
-        }
-        TT_FATAL(plan.batch_size == 1, "Sharded output needs batch 1 (a core's C slices would not form one shard)");
-        TT_FATAL(
-            one_C_slice_per_core,
-            "Sharded output needs exactly one C slice per core ({} C slices, {} active cores)",
-            plan.C_slices_per_batch,
-            plan.cores.size());
-        TT_FATAL(
-            block_grid_matches,
-            "Block-sharded output needs cores to be one {}x{} rectangle (one core per C slice, laid out as "
-            "the C slices tile C), got {}",
-            plan.C_slices_across_N,
-            C_slices_down_M,
-            config.cores.str());
     }
     return plan;
 }
