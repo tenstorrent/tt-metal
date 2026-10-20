@@ -51,10 +51,9 @@ public:
     vector_aligned<uint32_t> cmd_vector() const;
 
     void add_dispatch_wait(
-        uint32_t flags, uint32_t address, uint32_t stream, uint32_t count, uint8_t cq_id, uint8_t dispatcher_type = 0);
+        uint32_t flags, uint32_t address, uint32_t stream, uint32_t count, uint8_t dispatcher_type = 0);
 
-    void add_dispatch_wait_with_prefetch_stall(
-        uint32_t flags, uint32_t address, uint32_t stream, uint32_t count, uint8_t cq_id);
+    void add_dispatch_wait_with_prefetch_stall(uint32_t flags, uint32_t address, uint32_t stream, uint32_t count);
 
     void add_prefetch_relay_linear(uint32_t noc_xy_addr, DeviceAddr lengthB, DeviceAddr addr);
 
@@ -119,6 +118,7 @@ public:
         uint32_t go_signal,
         uint32_t wait_stream,
         uint8_t multicast_go_offset,
+        uint32_t go_ring_slot,
         DispatcherSelect dispatcher_type);
 
     void add_notify_dispatch_s_go_signal_cmd(uint8_t wait, uint16_t index_bitmask);

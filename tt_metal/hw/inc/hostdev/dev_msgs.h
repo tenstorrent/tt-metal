@@ -77,6 +77,14 @@ constexpr uint32_t PROCESSOR_COUNT = static_cast<uint32_t>(DispatchEngineProcess
 #else
 constexpr uint32_t PROCESSOR_COUNT = static_cast<uint32_t>(TensixProcessorTypes::COUNT);
 #endif
+// Go messages per sub-device: one per launch message slot on Tensix, which fast dispatch targets. Other cores are only
+// slow-dispatched and keep one.
+#if defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC) || defined(COMPILE_FOR_DRISC) || \
+    defined(COMPILE_FOR_DISPATCH_ENGINE)
+constexpr uint32_t GO_RING_DEPTH = 1;
+#else
+constexpr uint32_t GO_RING_DEPTH = 8;
+#endif
 #else
 #error "Host code is not allowed to include dev_msgs.h, please use HAL interface instead."
 #endif
@@ -232,6 +240,11 @@ struct go_msg_t {
         };
     };
 } __attribute__((packed));
+
+// One sub-device's go messages, indexed by launch message slot.
+struct go_ring_t {
+    struct go_msg_t slot[GO_RING_DEPTH];
+};
 
 struct launch_msg_t {  // must be cacheline aligned
     kernel_config_msg_t kernel_config;
@@ -431,6 +444,7 @@ constexpr uint32_t launch_msg_buffer_num_entries = 8;
 // Equal to the maximum number of subdevices + 1. This allows all workers that aren't assigned to a subdevice to receive
 // a dummy entry.
 constexpr uint32_t go_message_num_entries = 9;
+static_assert(GO_RING_DEPTH == 1 || GO_RING_DEPTH == launch_msg_buffer_num_entries);
 
 struct mailboxes_t {
     struct ncrisc_halt_msg_t ncrisc_halt;
@@ -438,9 +452,10 @@ struct mailboxes_t {
     volatile uint32_t launch_msg_rd_ptr;  // Volatile so this can be manually reset by host. TODO: remove volatile when
                                           // dispatch init moves to one-shot.
     alignas(TT_ARCH_MAX_NOC_WRITE_ALIGNMENT) struct launch_msg_t launch[launch_msg_buffer_num_entries];
-    volatile struct go_msg_t go_messages[go_message_num_entries];
+    volatile struct go_ring_t go_messages[go_message_num_entries];
     uint64_t link_status_check_timestamp;  // Next timestamp to check link status (active erisc)
-    volatile uint32_t go_message_index;    // Index into go_messages to use. Always 0 on unicast cores.
+    // Index into go_messages to use. Always 0 on unicast cores.
+    alignas(TT_ARCH_MAX_NOC_WRITE_ALIGNMENT) volatile uint32_t go_message_index;
     volatile uint8_t shared_globals_ready[MaxNumKernels];  // WAIT/GO per processor (Quasar DM kernel startup). +4 for
                                                            // the 4 TRISCs per engine.
     volatile uint8_t fw_shared_globals_ready[MaxNumKernels];  // WAIT/GO per processor (Quasar DM kernel startup). +4

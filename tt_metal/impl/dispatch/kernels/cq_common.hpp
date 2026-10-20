@@ -135,6 +135,19 @@ FORCE_INLINE volatile uint32_t* worker_completion_sem_addr(
 }
 #endif
 
+// Fills in where workers report done for a go: the dispatcher sending it (at NOC 0 virtual coordinates noc_x, noc_y)
+// and this CQ's completion counters, offset by completion_counter_offset. The host leaves both out of the go, so a go
+// recorded in a trace replays on any CQ.
+FORCE_INLINE uint32_t add_go_signal_done_target(
+    uint32_t go_signal_value, uint32_t noc_x, uint32_t noc_y, uint32_t completion_counter_offset) {
+    go_msg_t go_msg;
+    go_msg.all = go_signal_value;
+    go_msg.master_x = noc_x;
+    go_msg.master_y = noc_y;
+    go_msg.dispatch_message_offset += completion_counter_offset;
+    return go_msg.all;
+}
+
 constexpr bool use_fabric(uint64_t fabric_router_xy) { return fabric_router_xy != 0; }
 
 #ifdef ARCH_BLACKHOLE
