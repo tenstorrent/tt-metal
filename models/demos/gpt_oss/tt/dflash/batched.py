@@ -580,6 +580,14 @@ class BatchedDraft:
         from ..fused_decode.config import width_sharded_memory_config
 
         self.res_mc = width_sharded_memory_config(mesh, self.hidden, _TPAllReduce.CORES, rows=self.rows)
+        # (B32_DRAFT_RES_BLOCK: block sharded on 10 x 8 cores, one 32-row tile x 9 column tiles each, as the verify's
+        # residual: the sharded norm reduces over 10 cores per row tile; the all-reduces' outputs resharded to it)
+        self.res_block = os.environ.get("B32_DRAFT_RES_BLOCK", "1") == "1"
+        if self.res_block:
+            self.res_mc = ttnn.create_sharded_memory_config(
+                (TILE, self.hidden // 10), ttnn.CoreGrid(x=10, y=self.rows // TILE), ttnn.ShardStrategy.BLOCK,
+                ttnn.ShardOrientation.ROW_MAJOR, use_height_and_width_as_shard_shape=True,
+            )  # fmt: skip
         self.norm_pc = sharded_norm_program_config(self.res_mc)
         self.kv_write = BatchedKVWrite(mesh, users, self.block, nkv, hd, block_size)
         # (the context pass's 8-layer write: one core per (user, kv head))
@@ -826,7 +834,7 @@ class BatchedDraft:
             q_rows.deallocate(True)
             partial = self._linear(heads, L["o"])
             heads.deallocate(True)
-            o = _all_reduce(partial, None)  # (the residual's shards)
+            o = _all_reduce(partial, self.res_mc if self.res_block else None)  # (the residual's shards)
             partial.deallocate(True)
             o = ttnn.add(o, L["o_b"], output_tensor=o)
             h2 = ttnn.add(h, o, memory_config=self.res_mc, dtype=ttnn.float32)
@@ -841,7 +849,7 @@ class BatchedDraft:
             u.deallocate(True)
             partial = self._linear(act, L["down"])
             act.deallocate(True)
-            mlp = _all_reduce(partial, None)
+            mlp = _all_reduce(partial, self.res_mc if self.res_block else None)
             partial.deallocate(True)
             h2 = ttnn.add(h, mlp, memory_config=self.res_mc, dtype=ttnn.float32)
             h.deallocate(True)
