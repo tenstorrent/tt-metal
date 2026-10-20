@@ -49,6 +49,17 @@ LAYERS = os.environ.get("DSV41_LAYERS", "0-24")
 @pytest.mark.timeout(14400)
 @torch.no_grad()
 def test_paged_prefill(mesh_device):
+    try:
+        _run(mesh_device)
+    except BaseException:
+        import traceback
+
+        traceback.print_exc()
+        print("PP FAILED with the traceback above", flush=True)
+        raise
+
+
+def _run(mesh_device):
     os.environ.setdefault("DSV41_PF_UMASK", "1")
     os.environ.setdefault("DSV41_PREFILL_UP", "1")
     md = mesh_device
