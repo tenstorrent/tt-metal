@@ -132,6 +132,10 @@ def glm_layer_state_dict(config, model_dir: str, layer_idx: int, num_routed_expe
     }
 
 
+# The last layer loaded, 256 bf16 experts, kept for the next test: no test may mutate it.
+_LAYER_STATE_DICTS: dict = {}
+
+
 @pytest.fixture
 def mtp_layer_state_dict(use_pretrained, mtp_cfg, config_only) -> dict | None:
     """The MTP layer's own DECODER-block weights: MLA + indexer, both norms, the 256-expert MoE.
@@ -144,7 +148,13 @@ def mtp_layer_state_dict(use_pretrained, mtp_cfg, config_only) -> dict | None:
     path = glm53_checkpoint_path()
     if path is None:
         pytest.skip(f"set {HF_ENV}=/path/to/GLM-5.3 (dir with config.json + MTP weights)")
-    return glm_layer_state_dict(config_only, path, mtp_cfg.mtp_layer_idx, GLM53Config.NUM_ROUTED_EXPERTS)
+    key = (path, mtp_cfg.mtp_layer_idx)
+    if key not in _LAYER_STATE_DICTS:
+        _LAYER_STATE_DICTS.clear()
+        _LAYER_STATE_DICTS[key] = glm_layer_state_dict(
+            config_only, path, mtp_cfg.mtp_layer_idx, GLM53Config.NUM_ROUTED_EXPERTS
+        )
+    return _LAYER_STATE_DICTS[key]
 
 
 @pytest.fixture
