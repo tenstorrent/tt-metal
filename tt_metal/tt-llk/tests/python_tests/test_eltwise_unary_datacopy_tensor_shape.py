@@ -140,7 +140,7 @@ def test_eltwise_unary_datacopy_tensor_shape(
 
     num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
         DestSync.Half,
-        DestAccumulation.No,
+        dest_acc,
         formats,
         input_dimensions,
         tile_dimensions,
@@ -207,3 +207,9 @@ def test_eltwise_unary_datacopy_tensor_shape(
         formats.output_format,
         tile_shape=construct_tile_shape(tile_dimensions),
     )
+
+    # Datacopy/bcast should be bit-exact for float formats (no compute loss)
+    if formats.input_format in (DataFormat.Float32, DataFormat.Float16_b):
+        assert torch.equal(
+            golden_tensor, res_tensor
+        ), "Datacopy/bcast should be exact for float formats"
