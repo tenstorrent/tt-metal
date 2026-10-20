@@ -19,7 +19,7 @@ Modes
 
 import ttnn
 
-from models.experimental.hpcg.tt.layout import TILE, u32_rows
+from models.experimental.hpcg.tt.layout import TILE, allocate, u32_rows
 
 KERNEL_ROOT = "models/experimental/hpcg/tt/custom_ops/sparse_rows/kernels"
 
@@ -86,8 +86,7 @@ def debug_buffer(device, zeros=True):
     (for runs without kernel_debug, which never write or read it)."""
     g = device.compute_with_storage_grid_size()
     if not zeros:
-        shape = ttnn.Shape([2 * g.x * g.y, 16])
-        return ttnn.empty(shape, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+        return allocate(device, (2 * g.x * g.y, 16), ttnn.ROW_MAJOR_LAYOUT)
     return u32_rows(device, [[0] * 16] * (2 * g.x * g.y))
 
 

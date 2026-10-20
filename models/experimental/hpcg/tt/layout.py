@@ -29,6 +29,18 @@ def word_of_flat(k):
 _WORD_OF_FLAT = word_of_flat(np.arange(TILE))
 
 
+def allocate(device, shape, layout):
+    """A new fp32 DRAM tensor, not filled: ttnn.allocate_tensor_on_device, 3.0 us per call on the P150's host
+    against 6.3 to 7.5 for ttnn.empty, whose Python wrapper costs the difference (a setup allocates about 40)."""
+    return ttnn.allocate_tensor_on_device(ttnn.TensorSpec(tuple(shape), ttnn.float32, layout), device)
+
+
+def upload_f32(device, a, layout=ttnn.ROW_MAJOR_LAYOUT):
+    """A C-contiguous float32 numpy array -> a device tensor of its bytes: the ttnn.Tensor constructor that
+    ttnn.from_torch ends in, without from_torch's Python argument checks (about 2 us per upload)."""
+    return ttnn.Tensor(tensor=torch.from_numpy(a), data_type=ttnn.float32, device=device, layout=layout)
+
+
 def to_device(device, data):
     """q-ordered numpy vector (length a multiple of 1024) -> fp32 TILE tensor [P / 32, 32] on device."""
     data = np.ascontiguousarray(data, np.float32).reshape(-1)
@@ -57,7 +69,7 @@ def u32_rows(device, a):
     go up under an fp32 label, a plain copy (the kernels read raw bytes; TT-NN's uint32 upload converts element by
     element: 0.056 against 0.021 ms for a 130 x 1024 table). Values stay below 2^31 - 2^23, so no word is a NaN."""
     a = np.ascontiguousarray(a, np.int32)
-    return ttnn.from_torch(torch.from_numpy(a.view(np.float32)), dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    return upload_f32(device, a.view(np.float32))
 
 
 def rows_to_device(device, a):
@@ -69,26 +81,25 @@ def rows_to_device(device, a):
     if a.dtype == np.int32:
         a = a.view(np.float32)
     a = np.ascontiguousarray(a, np.float32).reshape(-1, TILE)
-    return ttnn.from_torch(torch.from_numpy(a), dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    return upload_f32(device, a)
 
 
 def empty_device(device, P):
     """An fp32 TILE vector of length P, allocated on the device and not filled (its first user writes it)."""
-    return ttnn.empty(ttnn.Shape([P // 32, 32]), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    return allocate(device, (P // 32, 32), ttnn.TILE_LAYOUT)
 
 
 def upload_zeros(device, P):
     """A small zero vector of length P as ROW_MAJOR [P / 1024, 1024] (the kernels read raw 4 KB pages, so the layout
     does not matter), uploaded from the host: no device program, so no kernel binary to load; and a plain copy, where a
     TILE upload tilizes on the host (0.6 ms the first time in a process)."""
-    z = torch.from_numpy(np.zeros((P // TILE, TILE), np.float32))  # numpy: torch.zeros' first call costs ~0.5 ms
-    return ttnn.from_torch(z, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    return upload_f32(device, np.zeros((P // TILE, TILE), np.float32))  # numpy: torch.zeros' first call costs ~0.5 ms
 
 
 def empty_page(device):
     """One fp32 4 KB page on the device (ROW_MAJOR [1, 1024]), not filled: a CG scalar the device writes before it
     reads it. An allocation, not an upload."""
-    return ttnn.empty(ttnn.Shape([1, TILE]), dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    return allocate(device, (1, TILE), ttnn.ROW_MAJOR_LAYOUT)
 
 
 def scalar_device(device, value, only_first=False):
@@ -97,4 +108,4 @@ def scalar_device(device, value, only_first=False):
     slot that DotFinishOp adds to exactly value)."""
     t = np.zeros((1, TILE), np.float32) if only_first else np.full((1, TILE), value, np.float32)
     t[0, 0] = value
-    return ttnn.from_torch(torch.from_numpy(t), dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    return upload_f32(device, t)

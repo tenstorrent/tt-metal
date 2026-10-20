@@ -18,7 +18,7 @@ import numpy as np
 import ttnn
 
 from models.experimental.hpcg.host import native
-from models.experimental.hpcg.tt.layout import TILE, u32_rows
+from models.experimental.hpcg.tt.layout import TILE, allocate, u32_rows
 from models.experimental.hpcg.tt.custom_ops.sparse_rows.op import core_ranges
 
 KERNEL = "models/experimental/hpcg/tt/custom_ops/stencil_matrix/kernels/generate.cpp"
@@ -53,7 +53,7 @@ MIN_META_PAGES = 8  # META circular buffer pages per RISC at least (a program's 
 
 def _rows(device, n):
     """A new fp32 ROW_MAJOR [n, 1024] device tensor (not filled)."""
-    return ttnn.empty(ttnn.Shape([n, TILE]), dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    return allocate(device, (n, TILE), ttnn.ROW_MAJOR_LAYOUT)
 
 
 def _tables(L):
