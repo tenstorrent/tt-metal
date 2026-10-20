@@ -36,14 +36,208 @@ constexpr uint32_t cb_meta_writer = get_compile_time_arg_val(metadata_args_base 
 
 constexpr uint32_t frag_bytes = tt::constants::TILE_WIDTH * sizeof(uint16_t);  // one bf16 tile row
 
+#ifdef INDEXER_SCORE_BLOCK_EPILOGUE
+// ---- bring-up fork: block epilogue (opt-in; the define is absent in the default program) ---------------------
+// Blocks of ep_block_keys adjacent LOGICAL keys (block b = keys [b bk, (b + 1) bk), 32 / bk blocks per score tile).
+// block_bias [Sq, NB] bf16 TILE: a block whose bias is nonzero (-inf) has its scores written -inf (0 keeps them); a
+// strip (32 query rows) reads the bias tile(s) of its row block, one 2 KB read each, cached while the next strip
+// needs the same tile. block_max_out [Sq, NBm] fp32 ROW_MAJOR: the max of each block's (biased) bf16 scores,
+// widened exactly to fp32; ep_pin stamps +inf on each query's own block (the block of its newest visible key). Both
+// work on the untilized strip in L1 before its rows go out, per fragment of consecutive logical tiles.
+constexpr uint32_t ep_base = metadata_args_base + 2;
+constexpr uint32_t ep_block_keys = get_compile_time_arg_val(ep_base);
+constexpr bool ep_bias = get_compile_time_arg_val(ep_base + 1) != 0;
+constexpr bool ep_max = get_compile_time_arg_val(ep_base + 2) != 0;
+constexpr bool ep_pin = get_compile_time_arg_val(ep_base + 3) != 0;
+constexpr uint32_t cb_ep_bias = get_compile_time_arg_val(ep_base + 4);
+constexpr uint32_t cb_ep_max = get_compile_time_arg_val(ep_base + 5);
+constexpr uint32_t ep_bias_row_tiles = get_compile_time_arg_val(ep_base + 6);  // NB / 32 bias tiles per row block
+constexpr uint32_t ep_max_page_bytes = get_compile_time_arg_val(ep_base + 7);
+constexpr auto ep_bias_args = TensorAccessorArgs<ep_base + 8>();
+constexpr auto ep_max_args = TensorAccessorArgs<ep_bias_args.next_compile_time_args_offset()>();
+static_assert(ep_block_keys > 0 && tt::constants::TILE_WIDTH % ep_block_keys == 0, "block_keys must divide 32");
+constexpr uint32_t ep_blocks_per_tile = tt::constants::TILE_WIDTH / ep_block_keys;
+constexpr uint32_t ep_max_tile_bytes = ep_blocks_per_tile * sizeof(uint32_t);  // a tile's max run (fp32)
+static_assert(!ep_max || ep_max_tile_bytes % NOC_DRAM_WRITE_ALIGNMENT_BYTES == 0, "block max run not write-aligned");
+constexpr uint32_t ep_bias_tile_bytes = tt::constants::TILE_HW * sizeof(uint16_t);  // one bf16 bias tile
+// Bias tiles a strip can touch: per fragment its blocks' tile span (+1 for a straddle), KC fragments at most.
+constexpr uint32_t ep_bias_slots =
+    k_tiles_per_unit *
+    ((k_tiles_per_unit * ep_blocks_per_tile + tt::constants::TILE_WIDTH - 1) / tt::constants::TILE_WIDTH + 1);
+uint32_t ep_bias_tag[ep_bias_slots];  // the bias tile id each scratch slot holds (0xFFFFFFFF: none)
+constexpr uint16_t EP_NEG_INF_BF16 = 0xFF80;
+constexpr uint32_t EP_POS_INF_FP32 = 0x7F800000u;
+#define EP_PARAM , const EpCtx &ep, uint32_t q_seq_row0
+#define EP_ARG , ep, q_seq_row0
+
+struct EpFragments {
+    uint32_t col[k_tiles_per_unit];      // first physical strip column
+    uint32_t logical[k_tiles_per_unit];  // its logical K tile
+    uint32_t width[k_tiles_per_unit];    // consecutive tiles
+    uint32_t n = 0;
+};
+
+/** Block epilogue of one strip (32 query rows from Sq row q_seq_row0; logical tiles per fragment). Issues the bias
+ *  reads before waiting for compute's strip (overlap), applies the bias, then writes the block maxes (async: the
+ *  caller's write barrier drains them with the score rows). Leaves the strip waited (front). */
+struct EpCtx {
+    decltype(TensorAccessor(ep_bias_args, 0, ep_bias_tile_bytes)) bias_acc;
+    decltype(TensorAccessor(ep_max_args, 0, ep_max_page_bytes)) max_acc;
+    uint32_t chunk_start_keys;
+    uint32_t straddle_q_keys;
+    uint32_t straddle_jump_keys;
+};
+
+/** A bf16 tile's element (r, c) (four 16x16 faces, row-major within a face). */
+inline uint32_t ep_tile_offset(uint32_t r, uint32_t c) {
+    return ((r >> 4) * 2 + (c >> 4)) * (tt::constants::FACE_HEIGHT * tt::constants::FACE_WIDTH) + (r & 15) * 16 +
+           (c & 15);
+}
+
+inline void block_epilogue(Noc noc, CircularBuffer& cb, const EpCtx& ep, const EpFragments& fr, uint32_t q_seq_row0) {
+    const auto& bias_acc = ep.bias_acc;
+    const auto& max_acc = ep.max_acc;
+    uint32_t bias_base = 0;
+    uint32_t slot0[k_tiles_per_unit];  // per fragment: its first bias slot
+    uint32_t bt0[k_tiles_per_unit];    // per fragment: its first bias tile column
+    if constexpr (ep_bias) {
+        bias_base = CircularBuffer(cb_ep_bias).get_write_ptr();
+        const uint32_t row_tile = q_seq_row0 / tt::constants::TILE_HEIGHT;
+        uint32_t slot = 0;
+        for (uint32_t f = 0; f < fr.n; ++f) {
+            const uint32_t b0 = fr.logical[f] * ep_blocks_per_tile;
+            const uint32_t b1 = (fr.logical[f] + fr.width[f]) * ep_blocks_per_tile;  // exclusive
+            bt0[f] = b0 / tt::constants::TILE_WIDTH;
+            slot0[f] = slot;
+            for (uint32_t bt = bt0[f]; bt <= (b1 - 1) / tt::constants::TILE_WIDTH; ++bt, ++slot) {
+                const uint32_t page = row_tile * ep_bias_row_tiles + bt;
+                if (ep_bias_tag[slot] != page) {  // the previous strip read another tile into this slot
+                    noc.async_read(
+                        bias_acc,
+                        CoreLocalMem<uint32_t>(bias_base + slot * ep_bias_tile_bytes),
+                        ep_bias_tile_bytes,
+                        {.page_id = page},
+                        {});
+                    ep_bias_tag[slot] = page;
+                }
+            }
+        }
+    }
+    cb.wait_front(k_tiles_per_unit);
+    const uint32_t strip = cb.get_read_ptr();
+    const uint32_t row_pitch = k_tiles_per_unit * frag_bytes;
+    if constexpr (ep_bias) {
+        noc.async_read_barrier();
+        for (uint32_t f = 0; f < fr.n; ++f) {
+            for (uint32_t t = 0; t < fr.width[f]; ++t) {
+                const uint32_t b = (fr.logical[f] + t) * ep_blocks_per_tile;  // the tile's first block
+                const uint32_t col = b % tt::constants::TILE_WIDTH;           // within its bias tile
+                const uint16_t* bias = reinterpret_cast<const uint16_t*>(
+                    bias_base + (slot0[f] + b / tt::constants::TILE_WIDTH - bt0[f]) * ep_bias_tile_bytes);
+                for (uint32_t rr = 0; rr < tt::constants::TILE_HEIGHT; ++rr) {
+                    uint16_t* vals = reinterpret_cast<uint16_t*>(strip + rr * row_pitch + (fr.col[f] + t) * frag_bytes);
+#pragma GCC unroll 8
+                    for (uint32_t j = 0; j < ep_blocks_per_tile; ++j) {
+                        if ((bias[ep_tile_offset(rr, col + j)] & 0x7FFFu) != 0) {
+                            if constexpr (ep_block_keys % 2 == 0) {  // word stores of two -inf
+                                uint32_t* w = reinterpret_cast<uint32_t*>(vals + j * ep_block_keys);
+#pragma GCC unroll 16
+                                for (uint32_t e = 0; e < ep_block_keys / 2; ++e) {
+                                    w[e] = (uint32_t(EP_NEG_INF_BF16) << 16) | EP_NEG_INF_BF16;
+                                }
+                            } else {
+                                vals[j] = EP_NEG_INF_BF16;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if constexpr (ep_max) {
+        const uint32_t max_base = CircularBuffer(cb_ep_max).get_write_ptr();
+        constexpr uint32_t max_row = k_tiles_per_unit * ep_max_tile_bytes;
+        for (uint32_t rr = 0; rr < tt::constants::TILE_HEIGHT; ++rr) {
+            uint32_t pin_block = 0xFFFFFFFFu;
+            if constexpr (ep_pin) {
+                // the query's newest visible key (compressed units) -> its block
+                const uint32_t q_pos = iscore::causal_diag_tile(
+                    q_seq_row0 + rr, ep.chunk_start_keys, ep.straddle_q_keys, ep.straddle_jump_keys);
+                const uint32_t visible = (q_pos + 1) / key_compression_ratio;
+                pin_block = visible ? (visible - 1) / ep_block_keys : 0xFFFFFFFFu;
+            }
+            uint32_t* out = reinterpret_cast<uint32_t*>(max_base + rr * max_row);
+            for (uint32_t f = 0; f < fr.n; ++f) {
+                for (uint32_t t = 0; t < fr.width[f]; ++t) {
+                    // 32-bit loads: two bf16 per word, each widened to fp32 bits in place (<< 16 / the high half)
+                    const uint32_t* words =
+                        reinterpret_cast<const uint32_t*>(strip + rr * row_pitch + (fr.col[f] + t) * frag_bytes);
+                    uint32_t* o = out + (fr.col[f] + t) * ep_blocks_per_tile;
+                    const uint32_t block0 = (fr.logical[f] + t) * ep_blocks_per_tile;
+#pragma GCC unroll 8
+                    for (uint32_t j = 0; j < ep_blocks_per_tile; ++j) {
+                        uint32_t best;
+                        if constexpr (ep_block_keys == 1) {
+                            const uint32_t w = words[j / 2];
+                            best = (j & 1) ? (w & 0xFFFF0000u) : (w << 16);
+                        } else {
+                            // fp32 bits as int32: the largest float is the signed max when it is >= 0, else (every
+                            // value negative: magnitudes order the other way) the signed min (Zbb max / min)
+                            const uint32_t* bw = words + j * (ep_block_keys / 2);
+                            int32_t mx = static_cast<int32_t>(bw[0] << 16), mn = mx;
+#pragma GCC unroll 16
+                            for (uint32_t e = 0; e < ep_block_keys / 2; ++e) {
+                                const uint32_t w = bw[e];
+                                const int32_t lo = static_cast<int32_t>(w << 16);
+                                const int32_t hi = static_cast<int32_t>(w & 0xFFFF0000u);
+                                mx = mx > lo ? mx : lo;
+                                mx = mx > hi ? mx : hi;
+                                mn = mn < lo ? mn : lo;
+                                mn = mn < hi ? mn : hi;
+                            }
+                            best = static_cast<uint32_t>(mx >= 0 ? mx : mn);
+                        }
+                        o[j] = (block0 + j == pin_block) ? EP_POS_INF_FP32 : best;
+                    }
+                }
+            }
+            for (uint32_t f = 0; f < fr.n; ++f) {
+                noc.async_write(
+                    CoreLocalMem<uint32_t>(max_base + rr * max_row + fr.col[f] * ep_max_tile_bytes),
+                    max_acc,
+                    fr.width[f] * ep_max_tile_bytes,
+                    {},
+                    {.page_id = q_seq_row0 + rr, .offset_bytes = fr.logical[f] * ep_max_tile_bytes});
+            }
+        }
+    }
+}
+#else
+#define EP_PARAM
+#define EP_ARG
+#endif
+
 /** Scatter one KC-wide strip into 32 output rows from page `page_row_start`, col tile k_tile_start (1
  *  async_write/row). `valid_w` = in-bounds tiles (< KC on a partial last unit); the CB always pops full KC. */
 template <typename OutAcc>
 inline void write_strip(
-    Noc noc, const OutAcc& out_acc, uint32_t page_row_start, uint32_t k_tile_start, uint32_t valid_w) {
+    Noc noc, const OutAcc& out_acc, uint32_t page_row_start, uint32_t k_tile_start, uint32_t valid_w EP_PARAM) {
     CircularBuffer cb(cb_out_strip);
+#ifdef INDEXER_SCORE_BLOCK_EPILOGUE
+    if (valid_w != 0) {  // bring-up fork: one fragment (this path's logical tiles are contiguous)
+        EpFragments fr;
+        fr.col[0] = 0;
+        fr.logical[0] = k_tile_start;
+        fr.width[0] = valid_w;
+        fr.n = 1;
+        block_epilogue(noc, cb, ep, fr, q_seq_row0);  // waits for the strip
+    } else {
+        cb.wait_front(k_tiles_per_unit);
+    }
+#else
     cb.wait_front(k_tiles_per_unit);  // always pop the full KC strip
-    if (valid_w != 0) {               // 0 when the cell is entirely past valid kv_len
+#endif
+    if (valid_w != 0) {  // 0 when the cell is entirely past valid kv_len
         uint32_t src = cb.get_read_ptr();
         const uint32_t row_pitch = k_tiles_per_unit * frag_bytes;  // strip row stride (full KC)
         const uint32_t write_bytes = valid_w * frag_bytes;         // only in-bounds columns
@@ -71,9 +265,11 @@ inline void write_shard_major_strip(
     uint32_t page_row_start,
     const ShardMajorWorkUnitSpan<shard_block_cyclic, shard_chunk_local, shard_key_stripes, shard_physical_sp>&
         shard_span,
-    uint32_t valid_w) {
+    uint32_t valid_w EP_PARAM) {
     CircularBuffer cb(cb_out_strip);
+#ifndef INDEXER_SCORE_BLOCK_EPILOGUE
     cb.wait_front(k_tiles_per_unit);
+#endif
     if (valid_w != 0) {
         uint32_t fragment_col[k_tiles_per_unit];
         uint32_t fragment_logical[k_tiles_per_unit];
@@ -105,6 +301,18 @@ inline void write_shard_major_strip(
             ++num_fragments;
             col += width;
         }
+#ifdef INDEXER_SCORE_BLOCK_EPILOGUE
+        {  // bring-up fork: bias / block max on the strip (the fragments above), waits for it
+            EpFragments fr;
+            for (uint32_t f = 0; f < num_fragments; ++f) {
+                fr.col[f] = fragment_col[f];
+                fr.logical[f] = fragment_logical[f];
+                fr.width[f] = fragment_width[f];
+            }
+            fr.n = num_fragments;
+            block_epilogue(noc, cb, ep, fr, q_seq_row0);
+        }
+#endif
 
         uint32_t src = cb.get_read_ptr();
         const uint32_t row_pitch = k_tiles_per_unit * frag_bytes;
@@ -121,6 +329,11 @@ inline void write_shard_major_strip(
         }
         noc.async_write_barrier();
     }
+#ifdef INDEXER_SCORE_BLOCK_EPILOGUE
+    else {
+        cb.wait_front(k_tiles_per_unit);
+    }
+#endif
     cb.pop_front(k_tiles_per_unit);
 }
 
@@ -267,6 +480,24 @@ void kernel_main() {
 
     constexpr auto out_args = TensorAccessorArgs<num_common_ct_args + 6>();
     const auto out_acc = TensorAccessor(out_args, out_addr, page_bytes);
+#ifdef INDEXER_SCORE_BLOCK_EPILOGUE
+    // bring-up fork: the epilogue tensors' addresses follow the shard order in the common args
+    const EpCtx ep{
+        TensorAccessor(
+            ep_bias_args,
+            get_common_arg_val<uint32_t>(indexer_common::writer::Count + shard_physical_sp),
+            ep_bias_tile_bytes),
+        TensorAccessor(
+            ep_max_args,
+            get_common_arg_val<uint32_t>(indexer_common::writer::Count + shard_physical_sp + 1),
+            ep_max_page_bytes),
+        chunk_start_keys,
+        straddle_q_keys,
+        straddle_jump_keys};
+    for (uint32_t i = 0; i < ep_bias_slots; ++i) {
+        ep_bias_tag[i] = 0xFFFFFFFFu;
+    }
+#endif
 
     Noc noc;
 
@@ -328,9 +559,9 @@ void kernel_main() {
                             straddle_jump_keys);
                     } else {
                         if constexpr (fused_ring_enabled && shard_block_cyclic) {
-                            write_shard_major_strip(noc, out_acc, page_row_start, shard_span, valid_w);
+                            write_shard_major_strip(noc, out_acc, page_row_start, shard_span, valid_w EP_ARG);
                         } else {
-                            write_strip(noc, out_acc, page_row_start, k_tile0, valid_w);
+                            write_strip(noc, out_acc, page_row_start, k_tile0, valid_w EP_ARG);
                         }
                     }
                 }

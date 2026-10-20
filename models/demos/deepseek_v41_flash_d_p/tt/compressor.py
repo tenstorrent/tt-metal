@@ -52,7 +52,7 @@ from . import ccl
 from .common import DRAM, SP_AXIS, TP_AXIS, attn_compute_config, tp_sum
 from .norm import TtDistributedRmsNorm
 from .quant import fp4_q, native, round_tf32
-from .rope import PairPerm, deinterleave_perm, glue, rope_deinterleaved, rope_deinterleaved_bf16
+from .rope import PairPerm, RowsMemo, deinterleave_perm, glue, indexer_glue, rope_deinterleaved, rope_deinterleaved_bf16
 from .served import CacheSlab, alloc_served
 from .settings import settings
 
@@ -91,8 +91,17 @@ class CompressRope:
         self.cos = _upload(mesh, rot.real.float().reshape(1, 1, j, self.half), ttnn.float32, ttnn.ROW_MAJOR_LAYOUT)
         self.sin = _upload(mesh, rot.imag.float().reshape(1, 1, j, self.half), ttnn.float32, ttnn.ROW_MAJOR_LAYOUT)
         self.pairs = PairPerm(mesh, self.half) if glue() else None  # ATTN_GLUE=on (P.15)
+        self.memo = RowsMemo(indexer_glue())  # INDEXER_GLUE=on (P.16): once per (g0, n) for every source layer
+
+    def free(self, *ts) -> None:
+        """Release rows from ``rows``: freed unless memoized (INDEXER_GLUE=on)."""
+        self.memo.free(*ts)
 
     def rows(self, g0: int, n: int) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """cos, sin of compressed rows [g0, g0 + n), the mesh row's natural block. Release them with ``free``."""
+        return self.memo.get((g0, n), lambda: self._rows(g0, n))
+
+    def _rows(self, g0: int, n: int) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         sp = self.mesh.shape[SP_AXIS]
         assert n % (32 * sp) == 0 and g0 + n <= self.rows_max, (g0, n, sp, self.rows_max)
         out = []
@@ -139,6 +148,7 @@ class TtServedRows:
             slab = CacheSlab(alloc_served(mesh, width, self.crows, 32 // ratio, 1, dedup=dedup), owned=True)
         assert (slab.rows, slab.width) == (self.crows, width), (slab.rows, slab.width, self.crows, width)
         self.slab = slab
+        self.version = 0  # bumped by every write (INDEXER_GLUE=on: tt/sparse_attention.ChunkMemo keys on it)
         if ratio > 1:  # metadata-path values (load time): starts / valid ends in compressed rows, slot ids
             self._pos = tables.scalars(32 // ratio, max_seq // 32 + 1)
             self._slot = tables.scalars(1, slab.slots)
@@ -147,6 +157,7 @@ class TtServedRows:
     def _put(self, slab: ttnn.Tensor, start: int, end: int) -> None:
         """slab [1, 1, W / r, width] bf16 ROW_MAJOR per SP row (the server's order) -> token positions [start, end) of
         the cache, the last record whole (its rows past the complete groups are zero in ``slab``)."""
+        self.version += 1
         args = dict(layer_idx=self.slab.row, num_layers=self.slab.layers, cluster_axis=SP_AXIS, tp_axis=self.tp_axis)
         if self.ratio == 1:
             ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
@@ -278,11 +289,12 @@ class TtCompressor:
         assert torch.equal(wk.bfloat16().float(), wk), "wk must be bf16-exact (as stored)"
         self.wk = _upload(mesh, wk.reshape(1, 1, self.hd, self.idx), ttnn.bfloat16, ttnn.TILE_LAYOUT)
         self.k_norm = TtDistributedRmsNorm(mesh, w["k_norm"].float()[permk], cfg.eps, split=False)
+        self.glue_partial = indexer_glue() and settings.get("HC_TP_SUM") == "gather_add"  # P.16 (tt/ccl.tp_sum)
 
-    def _mm(self, a: ttnn.Tensor, b: ttnn.Tensor) -> ttnn.Tensor:
+    def _mm(self, a: ttnn.Tensor, b: ttnn.Tensor, dtype=ttnn.float32) -> ttnn.Tensor:
         if self.round_x:  # the FPU reads fp32 in0 at TF32 by truncation: round it to nearest first (DS41-31)
             a = round_tf32(a)
-        return ttnn.linear(a, b, dtype=ttnn.float32, compute_kernel_config=self.ckc, memory_config=DRAM)
+        return ttnn.linear(a, b, dtype=dtype, compute_kernel_config=self.ckc, memory_config=DRAM)
 
     def _pool(self, p: ttnn.Tensor) -> ttnn.Tensor:
         """[1, 1, R, 2 hd] = [kv | gate] per token -> the pair-pooled latent [1, 1, R / 2, hd] fp32."""
@@ -322,7 +334,10 @@ class TtCompressor:
         r = self.ratio
         rows = x.shape[-2]
         assert start % 32 == 0 and rows % r == 0, (start, rows, r)
-        part = self._mm(x, self.proj_w)
+        # INDEXER_GLUE=on (P.16): the TP partial written in the CCL's partial dtype (bf16 under fabric_bf16: the RS's
+        # input, q_a's choice, P.6), not fp32 + a typecast in tt/ccl.py
+        pdt = ccl.partial_dtype(self.mesh) if self.glue_partial else ttnn.float32
+        part = self._mm(x, self.proj_w, dtype=pdt)
         p = tp_sum(self.mesh, part)
         ttnn.deallocate(part)
         if r > 1:
@@ -349,12 +364,12 @@ class TtCompressor:
         ttnn.deallocate(kp)
         if fold:
             k = rope_deinterleaved_bf16(kn, cos, sin, self.rope.pairs)
-            for t in (kn, cos, sin):
-                ttnn.deallocate(t)
+            ttnn.deallocate(kn)
+            self.rope.free(cos, sin)
             return ckv, k
         kr = rope_deinterleaved(kn, cos, sin)
-        for t in (kn, cos, sin):
-            ttnn.deallocate(t)
+        ttnn.deallocate(kn)
+        self.rope.free(cos, sin)
         k = fp4_q(kr, K_BLOCK, dtype=ttnn.bfloat16)
         ttnn.deallocate(kr)
         return ckv, k

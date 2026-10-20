@@ -184,6 +184,14 @@ ttnn::Tensor ring_indexer_score_dsa(
     uint32_t index_cache_layer_idx = 0,
     // Bring-up fork option: natural (contiguous) query blocks with a block-cyclic key cache; see
     // operation_attributes_t::natural_query_blocks. Default false = the source's rotation-exact geometry.
-    bool natural_query_blocks = false);
+    bool natural_query_blocks = false,
+    // Bring-up fork block epilogue (opt-in; default 0 / nullopt / false = the program unchanged): blocks of
+    // block_keys adjacent logical keys; block_bias [1, 1, Sq, NB] bf16 TILE (nonzero -> the block's scores -inf);
+    // block_max_out [1, 1, Sq, NBm] fp32 RM written with each block's max; block_max_pin: +inf at each query's own
+    // block. See operation_attributes_t::block_keys / tensor_args_t::block_bias.
+    uint32_t block_keys = 0,
+    const std::optional<ttnn::Tensor>& block_bias = std::nullopt,
+    const std::optional<ttnn::Tensor>& block_max_out = std::nullopt,
+    bool block_max_pin = false);
 
 }  // namespace ttnn::experimental::bringup

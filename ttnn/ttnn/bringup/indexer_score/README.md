@@ -11,6 +11,9 @@ Fork of `ttnn.experimental.indexer_score_dsa` / `ring_indexer_score_dsa` / `inde
 - `ring_indexer_score_dsa(natural_query_blocks=True)`: queries are natural contiguous blocks at any tile-aligned
   start while the keys stay in the block-cyclic cache layout (linear causal diagonal).
 - `IndexerScoreProgramConfig.__repr__` prints its values (stable fork-call capture signatures).
+- `ring_indexer_score_dsa` block epilogue (`block_keys`, `block_bias`, `block_max_out`, `block_max_pin`): the writer
+  masks blocks of adjacent keys with a 0 / -inf bias and / or writes each block's max (+inf at each query's own block)
+  from the untilized scores, before they go out.
 Everything else as `ttnn.experimental.<same name>` / `ttnn.IndexerScoreProgramConfig`.
 
 ## Consider it instead of
@@ -21,7 +24,10 @@ Everything else as `ttnn.experimental.<same name>` / `ttnn.IndexerScoreProgramCo
 - Precision only (rule 7), not a reason to fork: fp32 DEST when the bf16-DEST logits are too coarse for the top-k
   selection (the source scores ~1.7% low per row and fails a 0.99 top-k overlap gate on Hy4's indexer; CHANGELOG.md),
   for per-step checks or a measured end-to-end gap.
-With fp32 DEST off, ratio 1 / 4 and `natural_query_blocks=False` the fork is the source program; prefer the source op then.
+- `ttnn.slice` (strided) + `ttnn.maximum` block max-pools of the scores, and `ttnn.repeat_interleave` + `ttnn.add` of a
+  per-block bias (DeepSeek-V4.1's candidate pool and re-index restriction): the block epilogue.
+With fp32 DEST off, ratio 1 / 4, `natural_query_blocks=False` and no block epilogue the fork is the source program;
+prefer the source op then.
 
 ## Options
 Fork additions marked; the rest as the source (`indexer_score_nanobind.cpp`).
@@ -43,6 +49,14 @@ Realistic (use by default):
 - `natural_query_blocks=False` (fork, opt-in, ring only): needs `block_cyclic_sp_axis` / `block_cyclic_chunk_local`,
   an axis ring (`cluster_axis` set) and the host-scalar `chunk_start_idx` (refused with `chunk_start_idx_tensor`).
 
+- Block epilogue (fork, opt-in, ring only, batch 1): `block_keys=0` (> 0, a divisor of 32, exactly when a tensor
+  below is given: blocks of `block_keys` adjacent logical keys); `block_bias=None` ([1, 1, Sq, NB] bf16 TILE DRAM,
+  NB * block_keys >= T, NB % 32 == 0: nonzero (-inf) -> every score of the block written -inf, 0 keeps it);
+  `block_max_out=None` ([1, 1, Sq, NBm] fp32 ROW_MAJOR DRAM, NBm * block_keys >= T, NBm % 4 == 0, block_keys <= 8;
+  written in place: each block's max of the written bf16 scores as fp32, blocks of the first kv_len keys only);
+  `block_max_pin=False` (needs block_max_out: +inf at each query's own block, its newest visible key
+  (pos + 1) // ratio - 1). Exact (data selection on the op's own bf16 scores).
+
 Precision only: per-step checks or a measured end-to-end gap (rule 7):
 - `compute_kernel_config.fp32_dest_acc_en` (fork, opt-in, default False): fp32 DEST for DSA scoring. Use
   `k_chunk_size=32`: above 32 the head reduction uses a blocked multiply that runs at LoFi-like precision whatever the
@@ -57,11 +71,17 @@ Precision only: per-step checks or a measured end-to-end gap (rule 7):
   torch; DeepSeek-V4.1 component gate C.enc_source.indexer err 0.0174 <= 0.0329 (CHANGELOG.md).
 - Model cases, 2x2, 4 chips: hy4 ring SP2 x TP2 and glm53 full-mesh ring ratio 4: pcc 0.9999985, rel 0.00186
   (`tests/cases.py`).
-- Speed: not measured.
+- Block epilogue: exact vs the plain call's scores (`tests/unit/test_block_epilogue.py`). Speed, 2x2 p150, Sq 512 x 32
+  heads x 128, T 55296, HiFi2 + fp32 DEST, q 64 x k 32 (probe in CHANGELOG.md): plain 1.68 ms, + block max and pin
+  1.96 ms, + bias 1.69 ms; deepseek_v41_flash_d_p P.16: indexer section 25.15 -> 12.94 ms a chunk.
+- Speed: not measured for the plain op.
 
 ## Limits
 - fp32 DEST: DSA only (not MSA, not block pooling); `dst_full_sync_en` must stay False.
 - `natural_query_blocks`: axis ring only, block-cyclic layout required, no metadata (`chunk_start_idx_tensor`) path.
+- Block epilogue: `ring_indexer_score_dsa` only, batch 1, one head-summed plane; the bias values are a mask (any
+  nonzero bias masks the block; no general additive bias); block_max_out needs block_keys <= 8 (16-byte aligned fp32
+  runs per score tile); the writer does the block max on its RISC-V core (scalar, about 1 compare per score).
 - Source multi-device tests are not carried (they open FABRIC_1D / torus meshes); the ring op is covered by the
   fork's own 2x2 FABRIC_2D tests. `tests/unit/test_key_stride_ring.py` has a 2x4 case skipped on a 2x2 box.
 - Known source-test divergence: `test_indexer_score_rejects_fp32_dest_acc` fails on the fork by design (`tests/source.yaml`).
@@ -88,7 +108,8 @@ source tests via `tests/source.yaml`.
 - glm53_flash_d_p: `tt/indexer.py`, ring op over the full-mesh snake, key_compression_ratio 4, and `indexer_score_dsa`
   (`GLM_INDEXER_SCORE`, default `bringup`), HiFi4 + fp32 DEST, q 64 x k 32; O.1.
 - deepseek_v41_flash_d_p: `tt/indexer.py`, ring op over axis 0 + TP query sub-shard, key_compression_ratio 2 / 1,
-  `natural_query_blocks`; C.enc_source.indexer.
+  `natural_query_blocks`; C.enc_source.indexer. P.16 (INDEXER_GLUE=on): layer 20 `block_keys=8, block_max_out,
+  block_max_pin=True` (the candidate pool), layers 24-36 `block_keys=8, block_bias` (the candidate restriction).
 
 ## History
 CHANGELOG.md
