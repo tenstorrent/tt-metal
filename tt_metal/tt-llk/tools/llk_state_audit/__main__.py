@@ -23,14 +23,70 @@ def main() -> int:
     )
     parser.add_argument(
         "command",
-        choices=("inventory", "check", "effects", "audit", "generate", "verify"),
+        choices=(
+            "inventory",
+            "check",
+            "effects",
+            "audit",
+            "generate",
+            "verify",
+            "bh-effects",
+            "bh-hazards",
+        ),
         nargs="?",
         default="inventory",
     )
     parser.add_argument("--root", type=Path, default=Path("."))
     parser.add_argument("--effects", type=Path, default=None)
     parser.add_argument("--output-dir", type=Path, default=None)
+    # Blackhole state-hazard audit (bh-effects / bh-hazards); no git required.
+    parser.add_argument(
+        "--arch",
+        choices=("blackhole",),
+        default="blackhole",
+        help="architecture for bh-* commands",
+    )
+    parser.add_argument(
+        "--repo-root",
+        type=Path,
+        default=None,
+        help="tt-metal tree root for bh-* commands",
+    )
+    parser.add_argument(
+        "--out", type=Path, default=None, help="output JSON file for bh-* commands"
+    )
+    parser.add_argument(
+        "--families",
+        default=None,
+        help="comma-separated subset of bh/families modules to load (default: all)",
+    )
     args = parser.parse_args()
+    if args.command in ("bh-effects", "bh-hazards"):
+        if args.repo_root is None or args.out is None:
+            parser.error(f"{args.command} requires --repo-root and --out")
+        from .bh import effects_db
+
+        families = (
+            None
+            if args.families is None
+            else [f for f in args.families.split(",") if f]
+        )
+        if args.command == "bh-effects":
+            data = effects_db.write_effects(args.repo_root, args.out, families=families)
+            summary = {
+                "arch": args.arch,
+                "counts": data["counts"],
+                "tree_fingerprint": data["tree_fingerprint"],
+            }
+        else:
+            data = effects_db.write_hazards(args.repo_root, args.out, families=families)
+            summary = {
+                "arch": args.arch,
+                "findings": len(data["findings"]),
+                "tree_fingerprint": data["tree_fingerprint"],
+            }
+        print(json.dumps(summary, sort_keys=True))
+        return 0
     try:
         if args.command == "check":
             model = load_effect_model(args.effects, root=args.root)
