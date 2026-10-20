@@ -19,6 +19,7 @@
 // The prep kernel stays per-tile (its Ct=2 binary is at the kernel-config-buffer limit).
 #define GDN_DST_TILES 4
 #include "chunk_gdn_math.hpp"
+#include "../dataflow/chunk_gdn_handoff.hpp"
 
 namespace {
 
@@ -32,6 +33,11 @@ constexpr uint32_t cb_vbeta = 14, cb_nkd = 18, cb_qdecay = 19, cb_intra = 20;
 constexpr uint32_t cb_s2 = 21, cb_vnew = 11, cb_ointer = 23, cb_kdec_t = 24;
 constexpr uint32_t cb_final = 27;
 constexpr uint32_t cb_eye = 5;  // one 32x32 identity tile, written by the reader (scan_step's I @ v_beta operand)
+static_assert(
+    cb_Tinv == gdn_handoff::kCbTinv && cb_vbeta == gdn_handoff::kCbVbeta && cb_nkd == gdn_handoff::kCbNkd &&
+        cb_qdecay == gdn_handoff::kCbQdecay && cb_intra == gdn_handoff::kCbIntra &&
+        cb_kdec_t == gdn_handoff::kCbKdecT && cb_dl == gdn_handoff::kCbDl,
+    "scan input CB indices drifted from ../dataflow/chunk_gdn_handoff.hpp");
 constexpr uint32_t cb_s3 = 31;
 
 constexpr GdnScanCbs CBS{

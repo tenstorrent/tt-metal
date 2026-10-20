@@ -20,8 +20,12 @@
 #include "api/compute/experimental/custom_mm.h"
 #include "api/compute/pack.h"
 
-// SFPU ops over the result rows only: a 1x32 matmul result occupies the first rows of DST faces 0 and 1.
-constexpr uint32_t kRowIters = 2;
+// SFPU ops over the result rows only: a [ROWS, 32] matmul result occupies the first ROWS rows of DST faces 0 and 1
+// (one SFPU iteration covers two face rows; ROWS = 1: 2 iterations as for tile heights <= 4).
+#ifndef ROWS
+#define ROWS 1
+#endif
+constexpr uint32_t kRowIters = ROWS <= 4 ? 2 : ROWS / 2;
 ALWI void mul_rows(uint32_t a, uint32_t b, uint32_t out) {
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
