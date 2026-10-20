@@ -12,7 +12,7 @@ from models.demos.gemma4_26b_a4b_qb2.tt.generator import Gemma4Generator
 
 class Gemma4ForCausalLM:
     model_capabilities = {
-        "supports_prefix_caching": False,
+        "supports_prefix_caching": os.environ.get("GEMMA4_PREFIX_CACHING") == "1",
         "supports_sample_on_device": True,
         "supports_async_decode": True,
         "max_device_top_k": 32,
@@ -255,8 +255,7 @@ class Gemma4ForCausalLM:
         output_token_counts=None,
     ):
         on_host = self._select_sampling_mode(sampling_params)
-        if start_pos is not None and torch.any(torch.as_tensor(start_pos) != 0):
-            raise ValueError("Scheduler chunked prefill needs the low-level continuation contract")
+        continuation = start_pos is not None and bool(torch.any(torch.as_tensor(start_pos) != 0))
         gen = self.generator
         counts = None
         if not on_host:
@@ -267,6 +266,7 @@ class Gemma4ForCausalLM:
         tables = self._tables(page_table, page_tables_per_layer)
         trace_prefill = (
             not on_host
+            and not continuation
             and getattr(gen, "prefill_trace_enabled", False)
             and gen.serving_prefill_eligible(sampling_params)
         )
@@ -278,7 +278,11 @@ class Gemma4ForCausalLM:
         reuse_prefill = trace_prefill and gen.can_reuse_serving_prefill(
             tokens, page_table=tables, kv_cache=kv_cache, prompt_lens=prompt_lens
         )
-        eager_key = self._eager_prefill_signature(tokens, tables, kv_cache, prompt_lens, sampling_params, counts)
+        eager_key = (
+            None
+            if continuation
+            else self._eager_prefill_signature(tokens, tables, kv_cache, prompt_lens, sampling_params, counts)
+        )
         reuse_eager = (
             eager_key is not None
             and eager_key == self._eager_prefill_key
@@ -324,6 +328,7 @@ class Gemma4ForCausalLM:
             page_table=tables,
             kv_cache=kv_cache,
             prompt_lens=prompt_lens,
+            start_pos=start_pos,
             # vLLM attention tables use compact request rows. empty_slots
             # addresses persistent recurrent state, which this model lacks.
         )

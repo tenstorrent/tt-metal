@@ -215,7 +215,7 @@ class Gemma4Model:
         self.precision_observations["logits_output"] = dtype_name(logits.dtype)
         return logits
 
-    def prefill_forward(self, tokens, *, page_table, kv_cache, user_id=0, return_all_logits=False):
+    def prefill_forward(self, tokens, *, page_table, kv_cache, user_id=0, return_all_logits=False, start_pos=0):
         if len(kv_cache) != len(self.layers):
             raise ValueError("KV cache must contain one pair per model layer")
         hidden = self.embed(tokens)
@@ -227,6 +227,7 @@ class Gemma4Model:
                 page_table=layer_table,
                 kv_cache=cache,
                 user_id=user_id,
+                start_pos=start_pos,
             )
         if not return_all_logits:
             hidden = hidden[:, :, -1:, :]

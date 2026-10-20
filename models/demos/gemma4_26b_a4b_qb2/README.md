@@ -10,7 +10,9 @@ vLLM serving. The implementation is independent of the canonical
 - Maximum supported context: 262,144 tokens.
 - Up to 32 concurrent users.
 - Hybrid sliding-window and full-attention KV caches use 32-token pages.
-- Prefix caching and chunked prefill are not supported.
+- Prefix caching is validated at batch one. Enable `GEMMA4_PREFIX_CACHING=1`
+  and `GEMMA4_PREFIX_TRACE_SUFFIX=1` with vLLM prefix caching.
+- Chunked prefill is not supported.
 
 ## Validation
 
@@ -18,6 +20,12 @@ The Tier-3 Agentic Research job runs the pinned 10-question GPQA subset,
 request-isolation checks, and fixed-length serving measurements on P300X2.
 The accuracy gate is defined in `models/model_targets.yaml`; release evidence
 and exact source revisions are linked from the publication pull request.
+
+[Shield release](https://github.com/tenstorrent/tt-shield/actions/runs/39384889094)
+passed as **FUNCTIONAL**: GPQA 9/10, Terminal-Bench 2/5, and SWE-bench 2/5.
+The release used prefix caching at batch one and the selected precision policy.
+Cached continuation uses decode arithmetic; its logits need not match full
+prefill under the different precision paths.
 
 ## vLLM serving
 

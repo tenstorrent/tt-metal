@@ -437,30 +437,71 @@ class Gemma4Generator:
         self.cache = self.owned_cache
         return self.owned_table
 
-    def prefill_forward(self, tokens, *, page_table, kv_cache, prompt_lens, return_all_logits=False, slots=None):
+    def prefill_forward(
+        self, tokens, *, page_table, kv_cache, prompt_lens, return_all_logits=False, slots=None, start_pos=None
+    ):
         if getattr(self, "prefill_prepared", None) is not None:
             self._release_trace()
             self.prefill_prepared = None
         slots = list(range(len(prompt_lens))) if slots is None else list(slots)
         if len(slots) != len(prompt_lens) or tokens.shape[0] != len(slots):
             raise ValueError("Prompt, slot and batch dimensions differ")
+        starts = [0] * len(slots) if start_pos is None else torch.as_tensor(start_pos).reshape(-1).tolist()
+        if len(starts) != len(slots):
+            raise ValueError("Start-position and batch dimensions differ")
+        for start, length in zip(starts, prompt_lens):
+            if int(start) != start or not 0 <= start < length <= min(tokens.shape[1], self.model.max_seq_len):
+                raise ValueError("Invalid logical prefill interval")
         table = self._upload_page_tables(page_table)
         outputs = []
-        for row, (slot, length) in enumerate(zip(slots, prompt_lens)):
-            if not 1 <= length <= min(tokens.shape[1], self.model.max_seq_len):
-                raise ValueError("Invalid logical prompt length")
-            ids = self.model.upload(
-                tokens[row : row + 1, :length].reshape(1, 1, 1, length).int(), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT
+        suffix_lengths = []
+        for row, (slot, start, length) in enumerate(zip(slots, starts, prompt_lens)):
+            start = int(start)
+            suffix_length = int(length) - start
+            suffix_lengths.append(suffix_length)
+            trace_suffix = (
+                os.getenv("GEMMA4_PREFIX_TRACE_SUFFIX") == "1"
+                and len(slots) == 1
+                and slot == 0
+                and start > 0
+                and suffix_length >= 8
+                and not return_all_logits
+                and all(isinstance(t, torch.Tensor) and t.shape[0] == 1 for t in self._tables(page_table))
             )
-            logits = self.model.prefill_forward(
-                ids, page_table=table, kv_cache=kv_cache, user_id=slot, return_all_logits=return_all_logits
-            )
+            if trace_suffix:
+                # Reuse the canonical logits-only trace: explicit input tokens
+                # and absolute positions, with no sampling or RNG advancement.
+                for position in range(start, int(length)):
+                    traced = self.decode_forward(
+                        tokens[:, position : position + 1],
+                        torch.tensor([position]),
+                        page_table=page_table,
+                        kv_cache=kv_cache,
+                        return_logits=True,
+                    )
+                # The trace owns padded output storage; retain an independent
+                # logical row across subsequent trace release/rebinding.
+                logits = ttnn.clone(traced[:, :, :1, :])
+            else:
+                ids = self.model.upload(
+                    tokens[row : row + 1, start:length].reshape(1, 1, 1, suffix_length).int(),
+                    ttnn.uint32,
+                    ttnn.ROW_MAJOR_LAYOUT,
+                )
+                logits = self.model.prefill_forward(
+                    ids,
+                    page_table=table,
+                    kv_cache=kv_cache,
+                    user_id=slot,
+                    return_all_logits=return_all_logits,
+                    start_pos=start,
+                )
             outputs.append(logits)
         if return_all_logits:
             # Logit compatibility boundary is explicit; token-out never uses it.
-            max_length = max(prompt_lens)
+            max_length = max(suffix_lengths)
             result = torch.zeros(len(outputs), max_length, self.model.config.vocab_size)
-            for row, (logits, length) in enumerate(zip(outputs, prompt_lens)):
+            for row, (logits, length) in enumerate(zip(outputs, suffix_lengths)):
                 result[row, :length] = self._read_logits(logits).reshape(length, -1)
             return result
         logits = outputs[0] if len(outputs) == 1 else ttnn.concat(outputs, dim=2)

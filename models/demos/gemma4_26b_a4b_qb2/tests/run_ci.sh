@@ -63,6 +63,7 @@ popd
 
 mark_phase host_tests
 python -m pytest "$model_dir/tests/test_precision_policy.py" "$model_dir/tests/test_benchmark.py" \
+    "$model_dir/tests/test_prefix_caching.py" \
     --timeout 300 --junitxml "$results/host.xml"
 mark_phase host_tests_complete
 
