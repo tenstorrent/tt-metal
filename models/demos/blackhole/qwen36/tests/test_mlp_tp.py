@@ -109,7 +109,8 @@ def test_mlp_tp_prefill(mesh_device, reset_seeds, ensure_gc, request):
 @parametrize_mesh_tp()
 def test_mlp_tp_decode_dshard(mesh_device, batch, monkeypatch, reset_seeds, ensure_gc, request):
     """QWEN36_MLP_DECODE_DSHARD=1 (DRAM-sharded 3-reader gate/up, padded N) vs the interleaved 1D-mcast decode path (flag set explicitly for both arms):
-    same module inputs, outputs must agree to PCC >= 0.9999 (and both match torch)."""
+    same module inputs, outputs must agree to PCC >= 0.9999 (and both match torch). The DRAM-sharded layout is TP=4
+    only (mlp_decode_dshard_active): at any other TP the flag must leave the interleaved layout, so both arms match."""
     os.environ.setdefault("HF_MODEL", model_path())
     nd = mesh_device.get_num_devices()
     if nd < 2:
@@ -131,8 +132,8 @@ def test_mlp_tp_decode_dshard(mesh_device, batch, monkeypatch, reset_seeds, ensu
     for flag in ("0", "1"):
         monkeypatch.setenv("QWEN36_MLP_DECODE_DSHARD", flag)
         mlp = Qwen36MLP(mesh_device, mlp_state, None, args=args, tt_ccl=tt_ccl)
-        assert mlp._dsh_decode == (flag == "1")
-        if flag == "1":
+        assert mlp._dsh_decode == (flag == "1" and nd == 4)
+        if mlp._dsh_decode:
             assert mlp.weights.w1.memory_config().memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED
             assert mlp.weights.w1.shape[-1] == args.mlp_dsh_n_padded
         out = mlp.forward(replicate_to_device(mesh_device, x))

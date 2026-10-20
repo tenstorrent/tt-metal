@@ -250,7 +250,8 @@ def test_batched_multimodal_serving(mesh_device, reset_seeds, ensure_gc):
         failures.append(f"image output not on topic: {texts_a['image']!r}")
     if not any(w in low["video"] for w in ("ball", "circle", "red", "move", "left", "right")):
         failures.append(f"video output not on topic: {texts_a['video']!r}")
-    if not any(w in low["text"] for w in ("red", "blue", "yellow", "green")):
+    # STEPS tokens may end inside a preamble ("Here are three primary colors (based on ...") before any colour name.
+    if not any(w in low["text"] for w in ("red", "blue", "yellow", "green", "primary color", "primary colour")):
         failures.append(f"text output not on topic: {texts_a['text']!r}")
 
     # ---- (b) the same MM requests again into other slots: same first-token logits
