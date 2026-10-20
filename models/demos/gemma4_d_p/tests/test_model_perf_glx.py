@@ -20,8 +20,8 @@ import torch
 from loguru import logger
 
 from models.demos.gemma4_d_p.demo.text_demo_prefill import (
+    DEVICE_PARAMS,
     REPORT_CONTEXT_KS,
-    TRACE_REGION_SIZE,
     _build_prefill_model,
     _hf_model_id,
     _measure_traced,
@@ -84,7 +84,7 @@ RESULT_HEADER = (
 
 @torch.no_grad()
 @pytest.mark.timeout(540)
-@parametrize_mesh_with_fabric([(8, 4)], device_params_extra={"trace_region_size": TRACE_REGION_SIZE})
+@parametrize_mesh_with_fabric([(8, 4)], device_params_extra=DEVICE_PARAMS)
 def test_model_perf_glx(mesh_device, reset_seeds):
     """Check the 1k/10k/100k/256k device times and 10k/100k/256k wall times of a traced 256k prefill
     against their baselines.

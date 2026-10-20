@@ -22,6 +22,7 @@ from models.demos.gemma4_d_p.tests.test_factory import find_layer_idx, parametri
 from models.demos.gemma4_d_p.tt.common import create_tt_model
 from models.demos.gemma4_d_p.tt.model import prefill_chunk_geometry_error
 from models.demos.gemma4_d_p.tt.model_config import Gemma4ModelArgs
+from models.demos.gemma4_d_p.tt.runners.adapters.gemma4 import Gemma4ServiceConfig
 
 try:
     from tracy import signpost
@@ -39,6 +40,7 @@ LAYER_PERF_CONTEXT_LENGTHS = (262144,)
 # Contexts (in units of 1024 tokens) reported in the wall-time table.
 REPORT_CONTEXT_KS = (1, 10, 100, 256)
 TRACE_REGION_SIZE = int(os.environ.get("GEMMA4_PREFILL_TRACE_REGION_SIZE", 256_000_000))
+DEVICE_PARAMS = {"trace_region_size": TRACE_REGION_SIZE, "l1_small_size": Gemma4ServiceConfig.L1_SMALL_SIZE}
 
 
 def _hf_model_id():
@@ -338,7 +340,7 @@ def _measure_traced(mesh_device, mesh_config, model_args, model, hf_model_id, co
 
 
 @torch.no_grad()
-@parametrize_mesh_with_fabric([(8, 4), (4, 8)], device_params_extra={"trace_region_size": TRACE_REGION_SIZE})
+@parametrize_mesh_with_fabric([(8, 4), (4, 8)], device_params_extra=DEVICE_PARAMS)
 @pytest.mark.parametrize("token_source", ["text"], ids=lambda t: t)
 @pytest.mark.parametrize("chunk_size", PREFILL_CHUNK_SIZES, ids=lambda c: f"chunk{c}")
 @pytest.mark.parametrize("context_len", [32768, 65536, 131072, 262144], ids=lambda c: f"ctx_{c // 1024}k")
@@ -387,7 +389,7 @@ def _shared_device_weights():
 
 @torch.no_grad()
 @pytest.mark.timeout(3600)
-@parametrize_mesh_with_fabric([(8, 4), (4, 8)], device_params_extra={"trace_region_size": TRACE_REGION_SIZE})
+@parametrize_mesh_with_fabric([(8, 4), (4, 8)], device_params_extra=DEVICE_PARAMS)
 @pytest.mark.parametrize("token_source", ["text"], ids=lambda t: t)
 @pytest.mark.parametrize("context_len", [32768, 65536, 131072, 262144], ids=lambda c: f"ctx_{c // 1024}k")
 def test_prefill_chunk_sweep_traced(mesh_device, context_len, token_source, reset_seeds, request):
@@ -450,7 +452,7 @@ def _perf_signposts(layer_type, chunk_size, chunk_idx):
 
 @torch.no_grad()
 @pytest.mark.timeout(7200)
-@parametrize_mesh_with_fabric([(8, 4), (4, 8)], device_params_extra={"trace_region_size": TRACE_REGION_SIZE})
+@parametrize_mesh_with_fabric([(8, 4), (4, 8)], device_params_extra=DEVICE_PARAMS)
 @pytest.mark.parametrize("context_len", LAYER_PERF_CONTEXT_LENGTHS, ids=lambda c: f"ctx_{c // 1024}k")
 @pytest.mark.parametrize("chunk_size", PREFILL_CHUNK_SIZES, ids=lambda c: f"sz{c}")
 @pytest.mark.parametrize("layer_type", ["global", "local", "both"])

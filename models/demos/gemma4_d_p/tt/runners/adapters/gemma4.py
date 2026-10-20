@@ -16,6 +16,10 @@ class Gemma4ServiceConfig:
     CHUNK_SIZE = int(os.environ.get("GEMMA4_TEST_CHUNK_SIZE", 8192))
     MAX_SEQ_LEN = 262144
     MAX_USER_SLOTS = 6
+    # L1_SMALL carve-out at mesh open. Without it the all-gather ops allocate their semaphores in main L1, where
+    # they can land below a freed transient buffer and pin the circular-buffer ceiling ~120 KB low (it blocked
+    # the chunk-2048 global ring SDPA config). The semaphores use 256 B.
+    L1_SMALL_SIZE = 1024
 
 
 def is_global_layer_by_index(layer_idx):
@@ -50,6 +54,7 @@ class Gemma4PrefillAdapter(PrefillModelAdapter):
     ttnn_cache_default = ""
     prefill_trace_default = "/mnt/models/huggingface/gpu_traces/gemma4_d_p/gutenberg-135"
     pipeline_activation_emb_tp_sharded = False
+    l1_small_size = Gemma4ServiceConfig.L1_SMALL_SIZE
 
     @property
     def hf_model_id(self):

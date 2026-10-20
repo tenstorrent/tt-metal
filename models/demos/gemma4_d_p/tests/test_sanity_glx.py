@@ -13,13 +13,13 @@ fast sanity check that these paths still execute end to end on a Galaxy box.
 
 import torch
 
-from models.demos.gemma4_d_p.demo.text_demo_prefill import TRACE_REGION_SIZE
+from models.demos.gemma4_d_p.demo.text_demo_prefill import DEVICE_PARAMS
 from models.demos.gemma4_d_p.demo.text_demo_prefill import test_prefill_long_context_traced as _run_long_context_traced
 from models.demos.gemma4_d_p.tests.test_factory import parametrize_mesh_with_fabric
 
 
 @torch.no_grad()
-@parametrize_mesh_with_fabric([(8, 4)], device_params_extra={"trace_region_size": TRACE_REGION_SIZE})
+@parametrize_mesh_with_fabric([(8, 4)], device_params_extra=DEVICE_PARAMS)
 def test_sanity_glx(mesh_device, reset_seeds, request):
     """Equivalent to test_prefill_long_context_traced[blackhole-ctx_256k-chunk8192-text-8x4]."""
     _run_long_context_traced(
@@ -33,7 +33,7 @@ def test_sanity_glx(mesh_device, reset_seeds, request):
 
 
 @torch.no_grad()
-@parametrize_mesh_with_fabric([(8, 4)], device_params_extra={"trace_region_size": TRACE_REGION_SIZE})
+@parametrize_mesh_with_fabric([(8, 4)], device_params_extra=DEVICE_PARAMS)
 def test_sanity_glx_short_slab(mesh_device, reset_seeds, request):
     """Equivalent to test_prefill_long_context_traced[blackhole-ctx_32k-chunk2048-text-8x4]."""
     _run_long_context_traced(
