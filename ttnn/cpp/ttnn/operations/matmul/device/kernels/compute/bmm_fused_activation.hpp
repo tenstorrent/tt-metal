@@ -41,8 +41,8 @@ struct ActivationInitHelper {
         } else if constexpr (ACT == KernelActivation::RELU6) {
             relu_max_tile_init_pack();
         } else if constexpr (ACT == KernelActivation::SIGMOID) {
-            // Enhanced: PARAM1 is fast_approximate flag
-            sigmoid_tile_init_pack<PARAM1 != 0>();
+            // PARAM1: 0 = accurate, 1 = fast approximate, 2 = BF16-grade (accurate at BF16 precision)
+            sigmoid_tile_init_pack<PARAM1 == 1>();
         } else if constexpr (ACT == KernelActivation::HARDSIGMOID) {
             hardsigmoid_tile_init_pack();
         } else if constexpr (ACT == KernelActivation::HARDTANH) {
@@ -88,11 +88,16 @@ struct ActivationApplyHelper {
             constexpr uint32_t max = (PARAM0 != 0) ? PARAM0 : 0x40c00000u;
             relu_max_tile_pack(tile_index, max);
         } else if constexpr (ACT == KernelActivation::SIGMOID) {
-            // Enhanced: PARAM0 is vector mode, PARAM1 is fast_approximate
+            // PARAM0 is vector mode; PARAM1: 0 = accurate, 1 = fast approximate, 2 = BF16-grade (the exp_21f
+            // exponential and one Newton step even with an FP32 destination)
             constexpr VectorMode vec_mode = (PARAM0 == 1)   ? VectorMode::R
                                             : (PARAM0 == 2) ? VectorMode::C
                                                             : VectorMode::RC;
-            sigmoid_tile_pack<vec_mode, PARAM1 != 0>(tile_index);
+            if constexpr (PARAM1 == 2) {
+                sigmoid_tile_pack<vec_mode, false, false>(tile_index);
+            } else {
+                sigmoid_tile_pack<vec_mode, PARAM1 != 0>(tile_index);
+            }
         } else if constexpr (ACT == KernelActivation::HARDSIGMOID) {
             hardsigmoid_tile_pack(tile_index);
         } else if constexpr (ACT == KernelActivation::HARDTANH) {
