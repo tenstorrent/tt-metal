@@ -32,13 +32,15 @@ dispatched row's own fp32 weight. Dispatch carries only the row, so the row carr
          EXPERTS_SUM), keep the chip's hidden columns -> experts_out [S/SP, H/TP] fp32
 
 Weights (setting EXPERTS_IMPL, DS41-10 / DS41-35):
-  bfp8 (default)  every routed expert's w1 / w3 / w2 converted ONCE at load: the checkpoint's e2m1 x e8m0 values
-                  (reference/weights.py:fp4_dequant, exact in bf16) uploaded as bfloat8_b in the stored [N, K]
-                  orientation (ttnn.linear transpose_b), w1 | w3 fused to one [2I, H] matrix per expert. bfp8 holds
-                  every value exactly there (one exponent per 16 values along K, inside one e8m0 block; asserted per
-                  tensor at load, `_bfp8_exact`); W^T would not (DS41-35). 1.06 B per value: 0.84 GiB per layer per
-                  chip at 24 experts per chip (this run's scaled 2x2 and galaxy_4x4). No per-chunk weight work.
-  bfp4            (owner pick, P.1) the bfp8 path with bfloat4_b weights: same [N, K] orientation, transpose_b,
+  bfp8            (max precision) every routed expert's w1 / w3 / w2 converted ONCE at load: the checkpoint's
+                  e2m1 x e8m0 values (reference/weights.py:fp4_dequant, exact in bf16) uploaded as bfloat8_b in the
+                  stored [N, K] orientation (ttnn.linear transpose_b), w1 | w3 fused to one [2I, H] matrix per expert.
+                  bfp8 holds every value exactly there (one exponent per 16 values along K, inside one e8m0 block;
+                  asserted per tensor at load, `_bfp8_exact`); W^T would not (DS41-35). 1.06 B per value: 0.84 GiB
+                  per layer per chip at 24 experts per chip (this run's scaled 2x2 and galaxy_4x4). No per-chunk
+                  weight work.
+  bfp4 (default)  (P.1; the default since P.10: the checkpoint's fp4 width, agent rule 7) the bfp8 path with
+                  bfloat4_b weights: same [N, K] orientation, transpose_b,
                   fused w1 | w3, converted once at load. Lossy: bfloat4_b keeps 3 magnitude bits under the group's
                   exponent (round to nearest even, saturating; `_bfp4_round` = ttnn's host packing), so an e2m1 value
                   more than 2 binades below its group's largest, or needing its 2nd bit there, moves. The fraction of

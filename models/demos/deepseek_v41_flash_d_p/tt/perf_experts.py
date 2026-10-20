@@ -11,6 +11,10 @@ has no host sync, so this is the device time of one layer per chunk).
 
 test_unified_vs_loop: EXPERTS_KERNEL=unified vs loop on the same inputs (P.2: layer 0, 2x2, chunk 2048: bfp8 317.7 vs
 20.4 ms, bfp4 315.1 vs 20.0 ms per call; unified vs loop rel 6e-5).
+
+test_weights_bfp4: EXPERTS_IMPL bfp8 vs bfp4 on the default path (P.10: flat + weighted combine, bf16 sums, glm;
+layers 0 / 24, 2x2, chunk 2048: 4.47 vs 3.47 ms per call; vs float64 bfp8 rel 0.020, bfp4 0.18-0.20, bfp4 vs
+float64 with bfp4-rounded weights 0.020).
 """
 
 from __future__ import annotations
@@ -448,7 +452,7 @@ def test_weighted_vs_separate(mesh_device, combines, prof):
     for e in sorted(set(torch.nonzero(ds)[:, 1].tolist())):
         rows = torch.nonzero(ds[:, e]).flatten()
         p = ck.expert(LAYER, e)
-        w1, w3, w2 = (E.fp4_dequant(*p[nm]).double() for nm in E.NAMES)
+        w1, w3, w2 = ((wround or (lambda t: t))(E.fp4_dequant(*p[nm])).double() for nm in E.NAMES)
         g_, u_ = xq[rows] @ w1.T, xq[rows] @ w3.T
         h = torch.nn.functional.silu(g_.clamp(max=lim)) * u_.clamp(-lim, lim)
         ref[rows] += ds[rows, e : e + 1] * (h @ w2.T)
@@ -606,9 +610,10 @@ def test_weighted_combine_routes_bf16(mesh_device, route, S):
     print(f"WC_ROUTES_BF16 route={route} S={S} out {tuple(o.shape)} finite {bool(torch.isfinite(o).all())}")
 
 
-def _ref64(ck, cfg, layer, x, dense, sel, xdt, numerics):
+def _ref64(ck, cfg, layer, x, dense, sel, xdt, numerics, wround=None):
     """float64 y = sum_k w_k w2(silu(min(w1 q, lim)) clamp(w3 q, +-lim)) on the rows ``sel``, q = x as the device reads it
-    (bf16 cast natively, fp8 q-dq officially), no rounding of h."""
+    (bf16 cast natively, fp8 q-dq officially), no rounding of h. wround: the stored [N, K] weights as the device holds
+    them (None: the checkpoint's exact fp4 values; E._bfp4_round: bfloat4_b's)."""
     xq = x[sel].double()
     if xdt == ttnn.bfloat16:
         xq = xq.to(torch.bfloat16).double()
@@ -624,7 +629,7 @@ def _ref64(ck, cfg, layer, x, dense, sel, xdt, numerics):
     for e in sorted(set(torch.nonzero(ds)[:, 1].tolist())):
         rows = torch.nonzero(ds[:, e]).flatten()
         p = ck.expert(layer, e)
-        w1, w3, w2 = (E.fp4_dequant(*p[nm]).double() for nm in E.NAMES)
+        w1, w3, w2 = ((wround or (lambda t: t))(E.fp4_dequant(*p[nm])).double() for nm in E.NAMES)
         g_, u_ = xq[rows] @ w1.T, xq[rows] @ w3.T
         h = torch.nn.functional.silu(g_.clamp(max=lim)) * u_.clamp(-lim, lim)
         ref[rows] += ds[rows, e : e + 1] * (h @ w2.T)
@@ -776,3 +781,113 @@ def test_weighted_refuses_small_arena(mesh_device):
     with pytest.raises(ValueError, match="home tokens over 9 accumulators") as e:
         wc(fe, xg, ids_g, wts_g, 4)
     print(f"WC_REFUSE {e.value}")
+
+
+@pytest.mark.timeout(3600)
+@pytest.mark.parametrize("device_params", [_weighted_params()], indirect=True, ids=["box_payload"])
+@pytest.mark.parametrize("mesh_device", [tuple(spec().mesh)], indirect=True, ids=["x".join(map(str, spec().mesh))])
+@pytest.mark.parametrize("layer", [0, 24], ids=["L00", "L24"])
+@pytest.mark.parametrize("prof", [False, True], ids=["time", "ops"])
+def test_weights_bfp4(mesh_device, layer, prof):
+    """EXPERTS_IMPL A/B (P.10) on the same random inputs, the current default path otherwise (EXPERTS_KERNEL /
+    EXPERTS_COMBINE / COMBINE_ACC / EXPERTS_PRECISION / NUMERICS / FFN_NORM_DTYPE / CCL_IMPL settings): the routed
+    experts' weights bfp8 (exact) vs bfp4 (the checkpoint's fp4 width, rule 7 / F117). Per side the flat plan and the
+    weighted combine's passes (logged: the plan may change with the smaller weights), the mean wall time of a whole
+    synchronized experts call (one layer's experts per chunk) and, with prof (ids "ops"; the profiler env of
+    testing/profiler.py), the device time per op of one more call. Precision: each vs a float64 reference with the
+    checkpoint's exact fp4 weights on N_REF tokens, bfp4 vs bfp8 on every row, bfp4 twice (bit-identical)."""
+    from models.demos.deepseek_v41_flash_d_p.tt.settings import settings
+
+    S = spec()
+    ck, cfg = hooks._checkpoint(S), hooks._config(S)
+    chunk = hooks._chunk(S)
+    g = torch.Generator().manual_seed(0)
+    x = torch.randn(chunk, cfg.dim, generator=g)
+    sc = torch.rand(chunk, cfg.n_experts, generator=g)
+    top = sc.topk(cfg.topk_experts, dim=-1)
+    dense = torch.zeros(chunk, cfg.n_experts)
+    dense.scatter_(1, top.indices, 1.5 * top.values / top.values.sum(-1, keepdim=True))
+    xdt = ttnn.bfloat16 if settings.get("FFN_NORM_DTYPE") == "bf16" else ttnn.float32
+    keys = ("EXPERTS_KERNEL", "EXPERTS_COMBINE", "COMBINE_ACC", "EXPERTS_PRECISION", "NUMERICS", "FFN_NORM_DTYPE")
+    tag = " ".join(f"{k}={settings.get(k)}" for k in keys + ("CCL_IMPL",))
+    outs, again = {}, None
+    for impl in ("bfp8", "bfp4"):
+        t0 = time.time()
+        mod = E.build_experts(mesh_device, ck, cfg, layer, chunk, impl=impl)
+        load = time.time() - t0
+        plan = ""
+        if getattr(mod, "fe", None) is not None:
+            p = mod.fe.plan
+            plan = f"plan nu={p['nu']} np={p['np']} mt={p['mt']} gu={len(p['gu'])} down={p['nd']} arena={p['arena_tiles'] * 2} KB"
+        if getattr(mod, "wc", None) is not None:
+            plan += f" passes={mod.wc.P} x {mod.wc.S_pass} accumulators={mod.wc.A} free_cells={len(mod.wc.cells)}"
+        print(f"BFP4_PLAN L{layer:02d} impl={impl} {plan}")
+        xd = row_split_to_device(mesh_device, x, dtype=xdt)
+        rd = row_split_to_device(mesh_device, dense)
+        for _ in range(2):
+            ttnn.deallocate(mod(xd, rd))
+        ttnn.synchronize_device(mesh_device)
+        t0 = time.time()
+        for _ in range(N_CALLS):
+            ttnn.deallocate(mod(xd, rd))
+        ttnn.synchronize_device(mesh_device)
+        dt = (time.time() - t0) / N_CALLS
+        od = mod(xd, rd)
+        outs[impl] = _host(mesh_device, od)
+        ttnn.deallocate(od)
+        if impl == "bfp4":
+            od = mod(xd, rd)
+            again = _host(mesh_device, od)
+            ttnn.deallocate(od)
+        if prof:
+            from models.demos.common.bringup.testing import profiler
+
+            profiler.enable(mesh_device, ops=True)
+            profiler.signpost(f"experts_{impl}")
+            ttnn.deallocate(mod(xd, rd))
+            profiler.signpost("end")
+            res = profiler.result()
+            profiler.disable()
+            tot = 0.0
+            for key, rows_ in res["op_ns"].items():
+                if not key.startswith("experts_"):
+                    continue
+                for r_ in rows_:
+                    tot += r_["ns"]
+                    print(
+                        f"BFP4_OPS L{layer:02d} {impl} {r_['op'][:60]:60s} calls {r_['calls']:3d} "
+                        f"{r_['ns'] / 1e3:9.1f} us  {r_['shape'][:70]}"
+                    )
+            print(f"BFP4_OPS L{layer:02d} {impl} total {tot / 1e3:.1f} us (device, slowest chip per op)")
+        print(f"BFP4_TIME L{layer:02d} impl={impl} chunk={chunk} call_ms={dt * 1e3:.2f} load_s={load:.1f} {tag}")
+        for t in (xd, rd):
+            ttnn.deallocate(t)
+        mod.free()
+        del mod
+    sel = torch.arange(0, chunk, chunk // N_REF)
+    ref = _ref64(ck, cfg, layer, x, dense, sel, xdt, settings.get("NUMERICS"))
+    for impl, o in outs.items():
+        rel, bias, row = _cmp(o[sel], ref)
+        print(
+            f"BFP4_REF L{layer:02d} {impl} vs float64 ({len(sel)} tokens, exact fp4 weights): rel {rel:.6f} "
+            f"bias {bias:+.6f} worst_row {row:.5f} {tag}"
+        )
+    # bfp4 against what its weights hold (the same float64 math with bfloat4_b-rounded weights): the device error of
+    # the bfp4 path alone, comparable with bfp8 vs the exact weights
+    ref4 = _ref64(ck, cfg, layer, x, dense, sel, xdt, settings.get("NUMERICS"), wround=E._bfp4_round)
+    rel, bias, row = _cmp(outs["bfp4"][sel], ref4)
+    print(
+        f"BFP4_REF L{layer:02d} bfp4 vs float64 with bfp4-rounded weights ({len(sel)} tokens): rel {rel:.6f} "
+        f"bias {bias:+.6f} worst_row {row:.5f}"
+    )
+    rel, bias, row = _cmp(ref4, ref)
+    print(
+        f"BFP4_REF L{layer:02d} float64: bfp4-rounded vs exact weights: rel {rel:.6f} bias {bias:+.6f} worst_row {row:.5f}"
+    )
+    rel, bias, row = _cmp(outs["bfp4"], outs["bfp8"])
+    print(f"BFP4_CMP L{layer:02d} bfp4 vs bfp8 (all {chunk} rows): rel {rel:.6f} bias {bias:+.6f} worst_row {row:.5f}")
+    b = outs["bfp4"]
+    nd = int((again != b).sum().item())
+    print(f"BFP4_DETERMINISM L{layer:02d} bfp4 twice: {nd} of {b.numel()} elements differ")
+    assert bool(torch.isfinite(b).all())
+    assert nd == 0, f"bfp4 experts not bit-identical between calls ({nd} values)"
