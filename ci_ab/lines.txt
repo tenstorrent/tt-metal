@@ -1,0 +1,10 @@
+perf_eltwise_bcast_col_custom X L1_TO_L1
+perf_eltwise_binary X L1_TO_L1
+perf_eltwise_binary_broadcast X L1_TO_L1
+perf_eltwise_binary_sfpu X L1_TO_L1
+perf_eltwise_unary_datacopy X L1_TO_L1
+perf_eltwise_unary_sfpu X L1_TO_L1
+perf_eltwise_unary_typecast X L1_TO_L1
+perf_fused X L1_TO_L1
+perf_reduce X L1_TO_L1
+perf_transpose_dest X L1_TO_L1
