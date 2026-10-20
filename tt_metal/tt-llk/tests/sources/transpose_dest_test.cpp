@@ -73,6 +73,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // tiles than fit in DEST exercise DEST bank switching. Each block datacopies
     // its tiles into DEST, transposes them in place, then hands the bank to the
     // packer via the wait/section_done pair.
+    const ckernel::TensorShape tensor_shape = ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, params.num_faces);
     for (int block = 0; block < params.NUM_BLOCKS; ++block)
     {
         _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
@@ -84,14 +85,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
             is_fp32_dest_acc_en,
             BroadcastType::NONE,
             false /* is_int_fpu_en */,
-            PackMode::Default>(ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, params.num_faces), formats.math);
+            PackMode::Default>(tensor_shape, formats.math);
         for (std::uint32_t tile = 0; tile < params.NUM_TILES_IN_BLOCK; ++tile)
         {
             LLK_ASSERT(
                 (tile < get_dest_max_tiles<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
                 "Block tile index exceeds maximum destination tiles");
             _llk_math_eltwise_unary_datacopy_wrapper_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
-                tile, formats.math, formats.math);
+                tile, formats.math, formats.math, tensor_shape);
         }
 
         _llk_math_transpose_dest_init_<MATH_TRANSPOSE_FACES, is32>();

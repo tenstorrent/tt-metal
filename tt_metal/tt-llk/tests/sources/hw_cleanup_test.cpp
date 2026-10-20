@@ -100,19 +100,21 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
 
+    const ckernel::TensorShape tensor_shape = ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, HW_CLEANUP_NUM_FACES);
+
     // Identity datacopy: SrcA -> Dest.
     _llk_math_eltwise_unary_datacopy_init_wrapper_<
         DataCopyType::A2D,
         is_fp32_dest_acc_en,
         BroadcastType::NONE,
         false /* is_int_fpu_en */,
-        ckernel::PackMode::Default>(ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, HW_CLEANUP_NUM_FACES), formats.math);
+        ckernel::PackMode::Default>(tensor_shape, formats.math);
     _llk_math_pack_sync_init_<HW_CLEANUP_DST_SYNC, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
 
     _llk_math_wait_for_dest_available_<HW_CLEANUP_DST_SYNC>();
     _llk_math_eltwise_unary_datacopy_wrapper_<DataCopyType::A2D, HW_CLEANUP_DST_SYNC, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
-        0 /* dst_index */, formats.math, formats.math, ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, HW_CLEANUP_NUM_FACES));
+        0 /* dst_index */, formats.math, formats.math, tensor_shape);
     _llk_math_dest_section_done_<HW_CLEANUP_DST_SYNC, is_fp32_dest_acc_en>();
 
     // Hardware teardown: math thread's canonical cleanup. Math owns the

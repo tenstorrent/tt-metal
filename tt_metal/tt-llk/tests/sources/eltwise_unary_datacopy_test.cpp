@@ -149,6 +149,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t num_tiles           = NUM_BLOCKS * NUM_TILES_IN_BLOCK;
     const std::uint32_t src_handshake_iters = LOOP_FACTOR * _perf_src_handshake_iters_(tilize_en, num_tiles, num_faces);
 
+    const ckernel::TensorShape tensor_shape = ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, num_faces);
+
     {
         START_PERF_MEASURE("INIT")
         _llk_math_eltwise_unary_datacopy_init_wrapper_<
@@ -156,7 +158,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             is_fp32_dest_acc_en,
             BroadcastType::NONE,
             is_int_fpu_en,
-            llk_test_pack_mode_v<false, tilize_en>>(ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, num_faces), formats.math);
+            llk_test_pack_mode_v<false, tilize_en>>(tensor_shape, formats.math);
         _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
         PROFILER_SYNC();
@@ -181,8 +183,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                                 DstSync::SyncHalf,
                                 is_fp32_dest_acc_en,
                                 BroadcastType::NONE,
-                                unpack_to_dest>(
-                                DST_INDEX + tile_num, formats.math, formats.math, ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, num_faces));
+                                unpack_to_dest>(DST_INDEX + tile_num, formats.math, formats.math, tensor_shape);
                         }
                     }
                 }
@@ -212,8 +213,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                                 DstSync::SyncHalf,
                                 is_fp32_dest_acc_en,
                                 BroadcastType::NONE,
-                                unpack_to_dest>(
-                                DST_INDEX + tile_num, formats.math, formats.math, ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, num_faces));
+                                unpack_to_dest>(DST_INDEX + tile_num, formats.math, formats.math, tensor_shape);
                         }
                     }
                 }
@@ -236,7 +236,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             DstSync::SyncHalf,
                             is_fp32_dest_acc_en,
                             BroadcastType::NONE,
-                            unpack_to_dest>(DST_INDEX + tile_num, formats.math, formats.math, ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, num_faces));
+                            unpack_to_dest>(DST_INDEX + tile_num, formats.math, formats.math, tensor_shape);
                     }
                     _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
                 }
