@@ -26,6 +26,7 @@ void BandwidthProfiler::profile_results(
     latest_result_ = BandwidthResult{};
     latest_summary_ = BandwidthResultSummary{};
     outgoing_traffic_.clear();
+    outgoing_load_.clear();
     device_direction_cycles_.clear();
     device_core_cycles_.clear();
 
@@ -46,6 +47,7 @@ void BandwidthProfiler::reset() {
     latest_summary_ = BandwidthResultSummary{};
     latest_results_.clear();
     outgoing_traffic_.clear();
+    outgoing_load_.clear();
     device_direction_cycles_.clear();
     device_core_cycles_.clear();
     telemetry_bw_min_.reset();
@@ -57,6 +59,7 @@ std::map<FabricNodeId, std::map<RoutingDirection, uint32_t>>
 BandwidthProfiler::calculate_outgoing_traffics_through_device_boundaries(
     const std::unordered_map<MeshCoordinate, TestDevice>& test_devices) {
     outgoing_traffic_.clear();  // Clear previous data
+    outgoing_load_.clear();
 
     log_debug(tt::LogTest, "Calculating outgoing traffic through device boundaries");
 
@@ -119,6 +122,9 @@ void BandwidthProfiler::trace_ring_traffic_path(
         FabricNodeId source_node = src_node_id;
         for (const auto& [destination_node, direction] : ring_path) {
             outgoing_traffic_[source_node][direction]++;
+            auto& load = outgoing_load_[source_node][direction];
+            load.bytes += static_cast<uint64_t>(config.parameters.payload_size_bytes) * config.parameters.num_packets;
+            load.packets += config.parameters.num_packets;
             source_node = destination_node;  // Move to next source for the next hop
         }
     }
@@ -136,6 +142,10 @@ void BandwidthProfiler::trace_line_or_mesh_traffic_path(
     for (const auto& [device_id, direction_map] : traffic) {
         for (const auto& [direction, count] : direction_map) {
             outgoing_traffic_[device_id][direction] += count;
+            auto& load = outgoing_load_[device_id][direction];
+            load.bytes +=
+                static_cast<uint64_t>(config.parameters.payload_size_bytes) * config.parameters.num_packets * count;
+            load.packets += static_cast<uint64_t>(config.parameters.num_packets) * count;
         }
     }
 }
@@ -208,6 +218,46 @@ void BandwidthProfiler::read_performance_results(
                 uint64_t total_cycles = static_cast<uint64_t>(cycles_high) << 32 | cycles_low;
 
                 device_core_cycles_[device.device_node_id][core] = total_cycles;
+
+                // Every benchmark send loop counts the packets that wrote a header into their router slot,
+                // the packets that found the router's slots full, and its own busy cycles outside those
+                // waits. If the worker almost never found the slots full, the router kept up with it, so
+                // the run measured the worker rather than the router.
+                const auto& sender = test_devices.at(device.device_coord).get_senders().at(core);
+                const uint64_t packets = static_cast<uint64_t>(core_data[TT_FABRIC_WORD_CNT_INDEX + 1]) << 32 |
+                                         core_data[TT_FABRIC_WORD_CNT_INDEX];
+                const uint32_t header_writes = core_data[tt::tt_fabric::fabric_tests::STREAM_HEADER_COPIES_WORD_INDEX];
+                const uint32_t waits = core_data[tt::tt_fabric::fabric_tests::STREAM_SLOT_WAITS_WORD_INDEX];
+                constexpr uint32_t busy_index = tt::tt_fabric::fabric_tests::STREAM_BUSY_CYCLES_WORD_INDEX;
+                const uint64_t busy_cycles =
+                    static_cast<uint64_t>(core_data[busy_index + 1]) << 32 | core_data[busy_index];
+                const auto percent = [&](uint64_t count) {
+                    return packets == 0 ? 0.0 : 100.0 * static_cast<double>(count) / static_cast<double>(packets);
+                };
+                const std::string counters = fmt::format(
+                    "Sender on device {} core {}: {} of {} packets wrote a header into their router slot ({:.1f}%), "
+                    "{} found the router's slots full ({:.1f}%), worker busy {:.1f} cycles/packet outside slot waits",
+                    device.device_node_id,
+                    core,
+                    header_writes,
+                    packets,
+                    percent(header_writes),
+                    waits,
+                    percent(waits),
+                    packets == 0 ? 0.0 : static_cast<double>(busy_cycles) / static_cast<double>(packets));
+                if (sender.stream_.has_value()) {
+                    log_info(tt::LogTest, "{}", counters);
+                } else {
+                    log_debug(tt::LogTest, "{}", counters);
+                }
+                if (packets > 0 && waits * 100 < packets) {
+                    log_warning(
+                        tt::LogTest,
+                        "Sender on device {} core {} was worker-bound: fewer than 1% of its packets found the "
+                        "router's slots full, so this test's bandwidth measures the sending worker, not the router",
+                        device.device_node_id,
+                        core);
+                }
             }
         }
     }
@@ -266,11 +316,14 @@ void BandwidthProfiler::calculate_bandwidth(
     latest_results_.clear();
 
     uint64_t max_cycles = 0;
-    uint32_t max_traffic_count = 0;
     // Calculate total bytes and packets sent in this direction from this device
     uint64_t total_bytes = 0;
-    uint32_t total_packets = 0;
+    uint64_t total_packets = 0;
     uint32_t total_traffic_count = 0;
+    // The summary reports the busiest link: most bytes, then most packets, then most cycles.
+    uint64_t busiest_bytes = 0;
+    uint64_t busiest_packets = 0;
+    uint64_t busiest_cycles = 0;
     uint32_t packet_size = 0;
     uint32_t num_packets = 0;
     uint32_t device_freq = std::numeric_limits<uint32_t>::max();
@@ -332,7 +385,6 @@ void BandwidthProfiler::calculate_bandwidth(
 
                 // calculate the max for summary info
                 max_cycles = std::max(max_cycles, cycles);
-                max_traffic_count = std::max(max_traffic_count, total_traffic_count);
 
                 // Use cache lookup instead of triply nested loop (O(1) vs O(n³))
                 std::string cache_key = std::to_string(device_id.chip_id) + "_" +
@@ -349,6 +401,28 @@ void BandwidthProfiler::calculate_bandwidth(
                 packet_size = packet_size_val;
                 total_bytes = static_cast<uint64_t>(payload_size_bytes) * num_packets * total_traffic_count;
                 total_packets = static_cast<uint64_t>(num_packets) * total_traffic_count;
+
+                // Total over every flow that crosses this boundary. For a link whose flows all share
+                // one size and count this equals the product above; for mixed flows it is the true sum.
+                // num_packets is then the mean per flow and packet_size the mean payload per packet.
+                if (outgoing_load_.contains(device_id) && outgoing_load_[device_id].contains(direction)) {
+                    const auto& load = outgoing_load_[device_id][direction];
+                    total_bytes = load.bytes;
+                    total_packets = load.packets;
+                    if (total_traffic_count > 0) {
+                        num_packets = static_cast<uint32_t>(total_packets / total_traffic_count);
+                    }
+                    if (total_packets > 0) {
+                        packet_size = static_cast<uint32_t>((total_bytes + total_packets / 2) / total_packets);
+                    }
+                }
+
+                if (std::tie(total_bytes, total_packets, cycles) >
+                    std::tie(busiest_bytes, busiest_packets, busiest_cycles)) {
+                    busiest_bytes = total_bytes;
+                    busiest_packets = total_packets;
+                    busiest_cycles = cycles;
+                }
 
                 // Calculate bandwidth in Bytes/cycle and convert to GB/s
                 const auto device_frequency_mhz = device_info_.get_device_frequency_mhz(device_id);
@@ -392,21 +466,18 @@ void BandwidthProfiler::calculate_bandwidth(
         latest_result_ = latest_results_.back();
     }
 
-    // Calculate and store a summary of this test
-    total_bytes = static_cast<uint64_t>(packet_size) * num_packets * max_traffic_count;
-    double bandwidth_bytes_per_cycle = static_cast<double>(total_bytes) / static_cast<double>(max_cycles);
+    // Calculate and store a summary of this test: the busiest link's load over the slowest sender's
+    // time. For tests whose flows all share one size and count, the busiest link is the one crossed
+    // by the most flows.
+    double bandwidth_bytes_per_cycle = static_cast<double>(busiest_bytes) / static_cast<double>(max_cycles);
     double bandwidth_GB_s = (bandwidth_bytes_per_cycle * device_freq) / 1e9;
 
     // Calculate packets per second
     double duration_seconds = static_cast<double>(max_cycles) / static_cast<double>(device_freq);
-    double packets_per_second = static_cast<double>(max_traffic_count * num_packets) / duration_seconds;
+    double packets_per_second = static_cast<double>(busiest_packets) / duration_seconds;
 
     // Build summary entry
-    const TrafficPatternConfig& first_pattern = fetch_first_traffic_pattern(config);
-    std::string ftype_str = fetch_pattern_ftype(first_pattern);
-    std::string ntype_str = fetch_pattern_ntype(first_pattern);
-    uint32_t num_packets_first_pattern = fetch_pattern_num_packets(first_pattern);
-    uint32_t packet_size_first_pattern = fetch_pattern_packet_size(first_pattern);
+    const TrafficSummaryLabel label = fetch_traffic_summary_label(config);
 
     // Create a new entry that represents all iterations of the same test (per call we handle single iteration)
     // Get max_packet_size from FabricContext (already accounts for user override and topology)
@@ -418,13 +489,13 @@ void BandwidthProfiler::calculate_bandwidth(
     latest_summary_ = BandwidthResultSummary{
         .test_name = config.name,
         .num_iterations = 1,
-        .ftype = ftype_str,
-        .ntype = ntype_str,
+        .ftype = label.ftype,
+        .ntype = label.ntype,
         .topology = std::string(enchantum::to_string(config.fabric_setup.topology)),
         .num_links = config.fabric_setup.num_links,
-        .num_packets = num_packets_first_pattern,
+        .num_packets = label.num_packets,
         .num_devices = std::vector<uint32_t>(num_devices_set.begin(), num_devices_set.end()),
-        .packet_size = packet_size_first_pattern,
+        .packet_size = label.packet_size,
         .cycles_vector = {static_cast<double>(max_cycles)},
         .bandwidth_vector_GB_s = {bandwidth_GB_s},
         .packets_per_second_vector = {packets_per_second},

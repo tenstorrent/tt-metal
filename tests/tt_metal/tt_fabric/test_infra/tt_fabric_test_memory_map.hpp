@@ -21,6 +21,13 @@ struct PerConfigResult {
 // Words 0-31 are reserved for existing aggregate fields (status, word_cnt, cycles, iter, etc.).
 static constexpr uint32_t PER_CONFIG_RESULT_BASE_WORD_INDEX = 32;
 
+// Word indices of a benchmark stream sender's counters: packets that copied a header into their
+// router slot, packets that found no free router slot, and the send loop's cycles minus its slot waits. Must match the
+// kernel-side definitions in kernels/tt_fabric_test_kernels_utils.hpp.
+static constexpr uint32_t STREAM_HEADER_COPIES_WORD_INDEX = 8;
+static constexpr uint32_t STREAM_SLOT_WAITS_WORD_INDEX = 10;
+static constexpr uint32_t STREAM_BUSY_CYCLES_WORD_INDEX = 12;  // two words
+
 static_assert(sizeof(PerConfigResult) == 8, "PerConfigResult must be 8 bytes (2 words)");
 
 struct BaseMemoryRegion {

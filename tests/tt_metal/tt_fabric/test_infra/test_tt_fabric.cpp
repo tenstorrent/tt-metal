@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdlib>
 #include <tt_stl/reflection.hpp>
 #include <vector>
 #include <string>
@@ -202,7 +203,9 @@ int main(int argc, char** argv) {
 
         const auto& topology = test_config.fabric_setup.topology;
         const auto& fabric_tensix_config = test_config.fabric_setup.fabric_tensix_config.value();
-        if (test_config.performance_test_mode != PerformanceTestMode::NONE) {
+        // MEASUREMENT-ONLY (drop before PR): TT_FABRIC_NO_BW_TELEMETRY=1 keeps router bandwidth telemetry off.
+        const bool no_bw_telemetry = std::getenv("TT_FABRIC_NO_BW_TELEMETRY") != nullptr;
+        if (test_config.performance_test_mode != PerformanceTestMode::NONE && !no_bw_telemetry) {
             tt::tt_metal::MetalContext::instance().rtoptions().set_enable_fabric_bw_telemetry(true);
         }
 
@@ -254,7 +257,8 @@ int main(int argc, char** argv) {
             auto built_tests = builder.build_tests({test_config}, cmdline_parser);
 
             // Enable telemetry for both benchmark and latency modes to ensure buffer clearing
-            test_context.set_telemetry_enabled(test_config.performance_test_mode != PerformanceTestMode::NONE);
+            test_context.set_telemetry_enabled(
+                test_config.performance_test_mode != PerformanceTestMode::NONE && !no_bw_telemetry);
             // Set skip_packet_validation flag
             test_context.set_skip_packet_validation(test_config.skip_packet_validation);
 

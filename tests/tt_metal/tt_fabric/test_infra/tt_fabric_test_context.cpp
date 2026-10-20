@@ -685,6 +685,13 @@ void TestContext::process_traffic_config(TestConfig& config) {
             }
             this->add_traffic_config(traffic_config);
         }
+
+        // The sender core's traffic configs are this sender's patterns, in order, so the stream
+        // program indexes them directly.
+        if (sender.stream.has_value() && fixture_->is_local_fabric_node_id(sender.device)) {
+            const auto& src_coord = this->fixture_->get_device_coord(sender.device);
+            this->test_devices_.at(src_coord).set_sender_stream(sender.core.value(), sender.stream.value());
+        }
     }
 }
 

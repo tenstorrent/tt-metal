@@ -6,7 +6,9 @@
 #include "tt_fabric_test_config.hpp"
 #include "tt_fabric_test_constants.hpp"
 #include <algorithm>
+#include <limits>
 #include <optional>
+#include <set>
 #include <variant>
 #include "tt_fabric_test_common_types.hpp"
 #include "tt-metalium/core_coord.hpp"
@@ -148,8 +150,60 @@ ParsedTrafficPatternConfig YamlConfigParser::parse_traffic_pattern_config(const 
             "vc_id must be 0 or 2, got {}",
             config.vc_id.value());
     }
+    if (pattern_yaml["stream"]) {
+        config.stream = parse_stream(pattern_yaml["stream"]);
+    }
+    if (pattern_yaml["repeat"]) {
+        config.repeat = parse_scalar<uint32_t>(pattern_yaml["repeat"]);
+        TT_FATAL(config.repeat.value() > 0, "'repeat' must be at least 1");
+    }
 
     return config;
+}
+
+std::vector<ParsedStreamSegment> YamlConfigParser::parse_stream(const YAML::Node& stream_yaml) {
+    TT_FATAL(stream_yaml.IsSequence(), "Expected 'stream' to be a sequence of segments");
+    TT_FATAL(stream_yaml.size() > 0, "'stream' needs at least one segment");
+    TT_FATAL(
+        stream_yaml.size() <= kMaxStreamSegments,
+        "'stream' has {} segments; at most {} are supported",
+        stream_yaml.size(),
+        kMaxStreamSegments);
+
+    std::vector<ParsedStreamSegment> segments;
+    segments.reserve(stream_yaml.size());
+    for (const auto& segment_yaml : stream_yaml) {
+        ParsedStreamSegment segment;
+        if (segment_yaml.IsScalar()) {
+            // A bare string is shorthand for {ntype: <string>}
+            segment.ntype = detail::noc_send_type_mapper.from_string(parse_scalar<std::string>(segment_yaml), "ntype");
+            segments.push_back(segment);
+            continue;
+        }
+
+        TT_FATAL(segment_yaml.IsMap(), "Expected each stream segment to be an ntype string or a map");
+        for (const auto& field : segment_yaml) {
+            const auto key = parse_scalar<std::string>(field.first);
+            if (key == "ntype") {
+                segment.ntype =
+                    detail::noc_send_type_mapper.from_string(parse_scalar<std::string>(field.second), "ntype");
+            } else if (key == "size") {
+                segment.size = parse_scalar<uint32_t>(field.second);
+            } else if (key == "atomic_inc_val") {
+                segment.atomic_inc_val = parse_scalar<uint32_t>(field.second);
+            } else if (key == "count") {
+                segment.count = parse_scalar<uint32_t>(field.second);
+                TT_FATAL(segment.count > 0, "A stream segment's 'count' must be at least 1");
+            } else {
+                TT_THROW(
+                    "Unsupported stream segment field '{}'. A segment sets ntype, size, atomic_inc_val and count; "
+                    "ftype, destination, mcast_start_hops and the packet count (repeat) apply to the whole stream",
+                    key);
+            }
+        }
+        segments.push_back(segment);
+    }
+    return segments;
 }
 
 ParsedSenderConfig YamlConfigParser::parse_sender_config(
@@ -635,6 +689,37 @@ static bool check_num_links_filter(
     return test_config.fabric_setup.num_links == stoi(filter_value.value());
 }
 
+// A stream pattern takes ntype and size per segment, falling back to the pattern's own value. These
+// helpers apply a field filter to every segment, so a stream matches when any segment does.
+template <typename GetField>
+static auto pattern_field_values(const ParsedTrafficPatternConfig& pattern, GetField get_field) {
+    std::vector<decltype(get_field(pattern))> values;
+    if (!pattern.stream.has_value()) {
+        values.push_back(get_field(pattern));
+        return values;
+    }
+    for (const auto& segment : pattern.stream.value()) {
+        const auto value = get_field(segment);
+        values.push_back(value.has_value() ? value : get_field(pattern));
+    }
+    return values;
+}
+
+template <typename GetField, typename T>
+static bool pattern_field_matches(const ParsedTrafficPatternConfig& pattern, GetField get_field, const T& wanted) {
+    const auto values = pattern_field_values(pattern, get_field);
+    return std::any_of(
+        values.begin(), values.end(), [&](const auto& value) { return value.has_value() && value.value() == wanted; });
+}
+
+// True when every value is known and none matches, so the pattern can be dropped by the filter.
+template <typename GetField, typename T>
+static bool pattern_field_excludes(const ParsedTrafficPatternConfig& pattern, GetField get_field, const T& wanted) {
+    const auto values = pattern_field_values(pattern, get_field);
+    return std::all_of(
+        values.begin(), values.end(), [&](const auto& value) { return value.has_value() && value.value() != wanted; });
+}
+
 static bool check_ntype_filter(
     ParsedTestConfig& test_config, const std::optional<std::string>& filter_value, bool fine_grained) {
     if (fine_grained && fine_grained_contains_string(test_config, "ntype", filter_value.value())) {
@@ -643,10 +728,11 @@ static bool check_ntype_filter(
     // soft filter
     std::optional<tt::tt_fabric::NocSendType> ntype =
         detail::noc_send_type_mapper.from_string(filter_value.value(), "ntype");
+    const auto get_ntype = [](const auto& shape) { return shape.ntype; };
     bool checker = false;
     for (const auto& sender : test_config.senders) {
         for (const auto& pattern : sender.patterns) {
-            if (pattern.ntype.has_value() && pattern.ntype.value() == ntype.value()) {
+            if (pattern_field_matches(pattern, get_ntype, ntype.value())) {
                 checker = true;
                 break;
             }
@@ -658,12 +744,12 @@ static bool check_ntype_filter(
                 std::remove_if(
                     sender.patterns.begin(),
                     sender.patterns.end(),
-                    [&](const auto& pattern) { return pattern.ntype.has_value() && pattern.ntype.value() != ntype; }),
+                    [&](const auto& pattern) { return pattern_field_excludes(pattern, get_ntype, ntype.value()); }),
                 sender.patterns.end());
         }
     }
-    if (!checker && test_config.defaults.has_value() && test_config.defaults.value().ntype.has_value()) {
-        checker = test_config.defaults.value().ntype.value() == ntype.value();
+    if (!checker && test_config.defaults.has_value()) {
+        checker = pattern_field_matches(test_config.defaults.value(), get_ntype, ntype.value());
     }
     return checker;
 }
@@ -743,10 +829,11 @@ static bool check_size_filter(
     if (fine_grained && fine_grained_contains_uint(test_config, "size", size)) {
         return true;
     }
+    const auto get_size = [](const auto& shape) { return shape.size; };
     bool checker = false;
     for (const auto& sender : test_config.senders) {
         for (const auto& pattern : sender.patterns) {
-            if (pattern.size.has_value() && pattern.size.value() == size) {
+            if (pattern_field_matches(pattern, get_size, size)) {
                 checker = true;
                 break;
             }
@@ -758,12 +845,12 @@ static bool check_size_filter(
                 std::remove_if(
                     sender.patterns.begin(),
                     sender.patterns.end(),
-                    [&](const auto& pattern) { return pattern.size.has_value() && pattern.size.value() != size; }),
+                    [&](const auto& pattern) { return pattern_field_excludes(pattern, get_size, size); }),
                 sender.patterns.end());
         }
     }
-    if (!checker && test_config.defaults.has_value() && test_config.defaults.value().size.has_value()) {
-        checker = test_config.defaults.value().size.value() == size;
+    if (!checker && test_config.defaults.has_value()) {
+        checker = pattern_field_matches(test_config.defaults.value(), get_size, size);
     }
     return checker;
 }
@@ -1263,6 +1350,7 @@ SenderConfig TestConfigBuilder::resolve_sender_config(const ParsedSenderConfig& 
     resolved_sender.noc_id = parsed_sender.noc_id;
     resolved_sender.link_id = parsed_sender.link_id.value_or(0);
     resolved_sender.vc_id = parsed_sender.vc_id;
+    resolved_sender.stream = parsed_sender.stream;
 
     resolve_core_config(parsed_sender, resolved_sender);
 
@@ -1481,6 +1569,9 @@ std::vector<TestConfig> TestConfigBuilder::expand_high_level_patterns(ParsedTest
 
         // After patterns are expanded, resolve any missing params based on policy
         resolve_missing_params(iteration_test);
+
+        // Streams become one ordinary pattern per segment, so every later pass sees plain patterns.
+        expand_streams(iteration_test);
 
         // After expansion and resolution, apply universal transformations like mcast splitting.
         split_all_unicast_or_multicast_patterns(iteration_test);
@@ -1859,6 +1950,88 @@ void TestConfigBuilder::validate_test(const TestConfig& test) const {
                         "{}",
                         test.name);
                 }
+            }
+        }
+    }
+
+    validate_stream_senders(test);
+}
+
+void TestConfigBuilder::validate_stream_senders(const TestConfig& test) const {
+    const bool has_stream = std::any_of(
+        test.senders.begin(), test.senders.end(), [](const auto& sender) { return sender.stream.has_value(); });
+    if (!has_stream) {
+        return;
+    }
+
+    TT_FATAL(
+        test.performance_test_mode != PerformanceTestMode::LATENCY,
+        "Test '{}': streams don't support latency_test_mode",
+        test.name);
+
+    for (const auto& sender : test.senders) {
+        if (sender.stream.has_value()) {
+            TT_FATAL(
+                sender.stream->counts.size() == sender.patterns.size(),
+                "Test '{}': stream program has {} entries for {} patterns",
+                test.name,
+                sender.stream->counts.size(),
+                sender.patterns.size());
+        }
+    }
+
+    // The benchmark send path drives the router adapter directly, so it can't go through a mux.
+    const bool benchmark_mode =
+        test.performance_test_mode == PerformanceTestMode::BANDWIDTH || test.skip_packet_validation;
+    if (!benchmark_mode) {
+        return;
+    }
+    TT_FATAL(
+        !test.enable_flow_control,
+        "Test '{}': streams can't combine benchmark mode with enable_flow_control, because flow control puts a mux "
+        "in front of the router",
+        test.name);
+
+    // A router has one worker channel, and without a mux only one sender core can feed it.
+    const auto routers_of = [&](const SenderConfig& sender) {
+        std::set<std::pair<RoutingDirection, uint32_t>> routers;
+        for (const auto& pattern : sender.patterns) {
+            const auto& dest = pattern.destination.value();
+            const RoutingDirection direction =
+                dest.hops.has_value() ? route_manager_.get_forwarding_direction(dest.hops.value())
+                                      : route_manager_.get_forwarding_direction(sender.device, dest.device.value());
+            routers.insert({direction, sender.link_id});
+        }
+        return routers;
+    };
+    for (size_t i = 0; i < test.senders.size(); ++i) {
+        const auto& stream_sender = test.senders[i];
+        if (!stream_sender.stream.has_value()) {
+            continue;
+        }
+        const auto stream_routers = routers_of(stream_sender);
+        for (size_t j = 0; j < test.senders.size(); ++j) {
+            const auto& other = test.senders[j];
+            if (j == i || other.device != stream_sender.device) {
+                continue;
+            }
+            const bool same_core = stream_sender.core.has_value() && other.core == stream_sender.core;
+            TT_FATAL(
+                !same_core,
+                "Test '{}': a stream sender on device {} shares core {} with another sender",
+                test.name,
+                stream_sender.device,
+                stream_sender.core.value());
+            for (const auto& router : routers_of(other)) {
+                TT_FATAL(
+                    !stream_routers.contains(router),
+                    "Test '{}': in benchmark mode two senders on device {} use the same router (direction {}, link "
+                    "{}). A router has one worker channel; load it from one sender, or add forwarded traffic from "
+                    "another chip.",
+                    test.name,
+                    stream_sender.device,
+                    router.first,
+                    router.second);
             }
         }
     }
@@ -2654,7 +2827,9 @@ void TestConfigBuilder::resolve_missing_params(ParsedTestConfig& test) {
                 if (!pattern.size.has_value()) {
                     pattern.size = get_random_in_range(64, 2048);
                 }
-                if (!pattern.num_packets.has_value()) {
+                // A stream's packet count comes from repeat, so expand_streams can tell a user-set
+                // num_packets apart from a default.
+                if (!pattern.num_packets.has_value() && !pattern.stream.has_value()) {
                     pattern.num_packets = get_random_in_range(10, 1000);
                 }
 
@@ -2687,11 +2862,111 @@ void TestConfigBuilder::resolve_missing_params(ParsedTestConfig& test) {
                 if (!pattern.size.has_value()) {
                     pattern.size = 1024;  // Default from cmdline parser
                 }
-                if (!pattern.num_packets.has_value()) {
+                if (!pattern.num_packets.has_value() && !pattern.stream.has_value()) {
                     pattern.num_packets = 10;  // A reasonable default
                 }
             }
         }
+    }
+}
+
+void TestConfigBuilder::expand_streams(ParsedTestConfig& test) {
+    for (auto& sender : test.senders) {
+        const bool has_stream = std::any_of(sender.patterns.begin(), sender.patterns.end(), [](const auto& pattern) {
+            return pattern.stream.has_value();
+        });
+        if (!has_stream) {
+            continue;
+        }
+
+        TT_FATAL(
+            sender.patterns.size() == 1,
+            "Test '{}': a sender with a stream can't have other patterns (found {}). High-level patterns that give "
+            "a sender several flows, such as all-to-all, can't carry a stream yet.",
+            test.name,
+            sender.patterns.size());
+
+        const ParsedTrafficPatternConfig stream_pattern = sender.patterns[0];
+        TT_FATAL(
+            !stream_pattern.num_packets.has_value(),
+            "Test '{}': a stream pattern can't have num_packets ({}); its packet count is repeat x the lap length. "
+            "num_packets may come from the pattern, 'defaults' or parametrization; in a test that mixes stream and "
+            "plain senders, set num_packets on the plain patterns instead of in 'defaults'.",
+            test.name,
+            stream_pattern.num_packets.value());
+
+        // One stream feeds one router. A multicast whose hops name several directions needs a
+        // connection per direction.
+        if (stream_pattern.ftype == ChipSendType::CHIP_MULTICAST && stream_pattern.destination.has_value() &&
+            stream_pattern.destination->hops.has_value()) {
+            TT_FATAL(
+                route_manager_.split_multicast_hops(stream_pattern.destination->hops.value()).size() == 1,
+                "Test '{}': a stream's multicast hops must name one direction, since a stream uses one router. Use "
+                "one sender per direction.",
+                test.name);
+        }
+
+        const uint32_t repeat = stream_pattern.repeat.value_or(1);
+        StreamProgram program{.repeat = repeat};
+        std::vector<ParsedTrafficPatternConfig> segment_patterns;
+        segment_patterns.reserve(stream_pattern.stream->size());
+        for (const auto& segment : stream_pattern.stream.value()) {
+            ParsedTrafficPatternConfig pattern = stream_pattern;
+            pattern.stream.reset();
+            pattern.repeat.reset();
+
+            if (segment.ntype.has_value()) {
+                pattern.ntype = segment.ntype;
+            }
+            if (segment.size.has_value()) {
+                pattern.size = segment.size;
+            }
+
+            const bool is_write_only = pattern.ntype == NocSendType::NOC_UNICAST_WRITE ||
+                                       pattern.ntype == NocSendType::NOC_UNICAST_SCATTER_WRITE;
+            if (segment.atomic_inc_val.has_value()) {
+                TT_FATAL(
+                    !is_write_only,
+                    "Test '{}': a stream segment sets atomic_inc_val but its ntype sends no atomic increment",
+                    test.name);
+                pattern.atomic_inc_val = segment.atomic_inc_val;
+            } else if (is_write_only) {
+                // An atomic_inc_val set on the pattern is meant for the stream's atomic segments.
+                pattern.atomic_inc_val.reset();
+            }
+
+            // atomic_inc carries no payload, so it counts as zero bytes in bandwidth results.
+            if (pattern.ntype == NocSendType::NOC_UNICAST_ATOMIC_INC) {
+                pattern.size = 0;
+            }
+
+            const uint64_t num_packets = static_cast<uint64_t>(repeat) * segment.count;
+            TT_FATAL(
+                num_packets <= std::numeric_limits<uint32_t>::max(),
+                "Test '{}': repeat {} x count {} overflows a segment's packet count",
+                test.name,
+                repeat,
+                segment.count);
+            pattern.num_packets = static_cast<uint32_t>(num_packets);
+
+            segment_patterns.push_back(std::move(pattern));
+            program.counts.push_back(segment.count);
+        }
+
+        // The sender kernel counts a stream's packets in 32 bits.
+        uint64_t lap_length = 0;
+        for (const uint32_t count : program.counts) {
+            lap_length += count;
+        }
+        TT_FATAL(
+            lap_length * repeat <= std::numeric_limits<uint32_t>::max(),
+            "Test '{}': a stream sends {} x {} packets, more than the sender kernel can count",
+            test.name,
+            repeat,
+            lap_length);
+
+        sender.patterns = std::move(segment_patterns);
+        sender.stream = std::move(program);
     }
 }
 
@@ -2877,6 +3152,15 @@ void YamlTestConfigSerializer::to_yaml(YAML::Emitter& out, const SenderConfig& c
         to_yaml(out, pattern);
     }
     out << YAML::EndSeq;
+
+    if (config.stream.has_value()) {
+        // Send order built from a stream: each lap sends counts[i] packets of patterns[i].
+        out << YAML::Key << "stream_program";
+        out << YAML::Value << YAML::BeginMap;
+        out << YAML::Key << "repeat" << YAML::Value << config.stream->repeat;
+        out << YAML::Key << "counts" << YAML::Value << YAML::Flow << config.stream->counts;
+        out << YAML::EndMap;
+    }
 
     out << YAML::EndMap;
 }

@@ -64,4 +64,33 @@ uint32_t fetch_pattern_packet_size(const TrafficPatternConfig& pattern) {
     return fetch_pattern_int(pattern, [](const auto& pattern) { return pattern.size; });
 }
 
+TrafficSummaryLabel fetch_traffic_summary_label(const TestConfig& config) {
+    const TrafficPatternConfig first_pattern = fetch_first_traffic_pattern(config);
+    TrafficSummaryLabel label{
+        .ftype = fetch_pattern_ftype(first_pattern),
+        .ntype = fetch_pattern_ntype(first_pattern),
+        .num_packets = fetch_pattern_num_packets(first_pattern),
+        .packet_size = fetch_pattern_packet_size(first_pattern)};
+
+    const auto& first_sender = config.senders[0];
+    if (!first_sender.stream.has_value()) {
+        return label;
+    }
+
+    uint64_t total_packets = 0;
+    uint64_t total_bytes = 0;
+    for (const auto& pattern : first_sender.patterns) {
+        if (pattern.ntype != first_pattern.ntype) {
+            label.ntype = "STREAM";
+        }
+        const uint32_t num_packets = fetch_pattern_num_packets(pattern);
+        total_packets += num_packets;
+        total_bytes += static_cast<uint64_t>(fetch_pattern_packet_size(pattern)) * num_packets;
+    }
+    label.num_packets = static_cast<uint32_t>(total_packets);
+    label.packet_size =
+        total_packets == 0 ? 0 : static_cast<uint32_t>((total_bytes + total_packets / 2) / total_packets);
+    return label;
+}
+
 }  // namespace tt::tt_fabric::fabric_tests
