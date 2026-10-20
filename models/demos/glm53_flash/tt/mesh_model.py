@@ -3,7 +3,7 @@
 """Resident multi-layer GLM-5.3-Flash decode model on a mesh: embedding -> N decoder layers -> head, one
 traced decode step for ``rows * users_per_row`` users (design section 5: TP over the columns, one user group per
 row, hybrid experts). Every layer is a stage-1 ``FunctionalDecoder`` built on the mesh; the embedding table and
-the head are replicated on every chip (the head's vocab split over the columns is a later optimization).
+the head: embedding replicated on every chip, the head vocab split over the TP columns (all-gathered logits).
 
 Memory per chip at 8x4: experts 42 layers x 7.7 GB / 32 ~ 10 GB, non-expert weights / 4 ~ 2.2 GB, embedding
 1.27 GB, head 0.63 GB (bfp8), caches and states per layer.
@@ -53,7 +53,9 @@ class GLM53MeshModel:
         headers = shard_headers(snapshot)
         t0 = time.time()
         self.embedding = TtEmbedding.from_checkpoint(mesh_device, cfg, snapshot, headers)
-        self.head = TtModelHead.from_checkpoint(mesh_device, cfg, snapshot, headers) if build_head else None
+        self.head = (
+            TtModelHead.from_checkpoint(mesh_device, cfg, snapshot, headers, mesh=self.mesh) if build_head else None
+        )
         logger.info(f"mesh model: embedding + head built in {time.time() - t0:.1f} s")
         self.layers: list[FunctionalDecoder] = []
         self.build_times: dict[int, float] = {}

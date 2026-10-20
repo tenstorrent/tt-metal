@@ -37,6 +37,7 @@ Cache: ``[max_blocks, 1, block_size, 512]`` bf16, paged; page_table ``[B, max_bl
 
 from __future__ import annotations
 
+import os
 import time
 
 import torch
@@ -45,6 +46,7 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.glm53_flash.tt.config import GLM53FlashConfig
 from models.demos.glm53_flash.tt.indexer import TtDSAIndexer, TtIndexCache, height_shard_rows
+from models.demos.glm53_flash.tt.matmul_configs import DecodeLinear
 from models.demos.glm53_flash.tt.mesh import GLMMesh, single_chip
 
 TILE = 32
@@ -259,12 +261,46 @@ class TtDSA(LightweightModule):
         self.indexer = TtDSAIndexer(
             device, cfg, {k[len("indexer.") :]: v for k, v in sd.items() if k.startswith("indexer.")}
         )
+        # Decode stem: the five narrow projections of x (q_a 1536 | kv_a 512 | indexer k 128 | pool gate 128 |
+        # indexer head weights Hi) as ONE [4096 x 2336] matmul (74 column blocks on 74 cores; the separate
+        # matmuls sat on 4-48 cores for ~170 us) followed by tile-aligned column slices. bf16 weights keep
+        # the indexer's numerics (its weights are bf16; GLM53_DSA_STEM_DTYPE=bfloat8_b halves the read).
+        Lq, Hi, Di = cfg.q_lora_rank, self.indexer.Hi, self.indexer.D
+        stem = torch.cat(
+            [
+                sd["q_a_proj.weight"].t().float(),
+                sd["kv_a_proj_with_mqa.weight"].t().float(),
+                sd["indexer.wk.weight"].t().float(),
+                sd["indexer.index_kpool_compress_gate"].t().float(),
+                sd["indexer.weights_proj.weight"].float().t() * Hi**-0.5,
+            ],
+            dim=-1,
+        )
+        stem_dtype = {"bfloat16": ttnn.bfloat16, "bfloat8_b": ttnn.bfloat8_b}[
+            os.environ.get("GLM53_DSA_STEM_DTYPE", "bfloat16")
+        ]
+        self.w_stem = up(stem, stem_dtype)  # [4096, Lq + L + Di + Di + Hi], replicated
+        b = [0, Lq, Lq + L, Lq + L + Di, Lq + L + 2 * Di, Lq + L + 2 * Di + Hi]
+        assert all(v % 32 == 0 for v in b), b
+        self.stem_bounds = {
+            "qa": (b[0], b[1]),
+            "kva": (b[1], b[2]),
+            "k": (b[2], b[3]),
+            "g": (b[3], b[4]),
+            "w": (b[4], b[5]),
+        }
         # prefill rows from here on use the sparse path (they see >= 2048 pooled tokens: full index rows)
         self.sparse_row_start = cfg.index_topk  # 2048
         # decode: dense attention is HF-exact while floor((a+1)/4) <= index_topk/4, i.e. a <= 2050
         self.dense_exact_max_pos = cfg.index_topk + cfg.index_kpool - 2  # 2050
         self.hifi2 = _compute(device)
         self.hifi4 = _compute(device, ttnn.MathFidelity.HiFi4, packer_l1_acc=False)
+        # decode-shaped (M <= 32) projections use the 1D mcast configs of tt/matmul_configs.py
+        self.lin_qa = DecodeLinear(device, self.w_qa)
+        self.lin_stem = DecodeLinear(device, self.w_stem)
+        self.lin_qb = DecodeLinear(device, self.w_qb)
+        self.lin_kva = DecodeLinear(device, self.w_kva)
+        self.lin_o = DecodeLinear(device, self.w_o)
         grid = device.compute_with_storage_grid_size()
         self.sdpa_prefill_cfg = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=grid, q_chunk_size=128, k_chunk_size=128, exp_approx_mode=False
@@ -310,34 +346,51 @@ class TtDSA(LightweightModule):
     # ---------------------------------------------------------------- shared stems
     def _q_resid(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """x [1,1,T,4096] -> q_resid [1,1,T,1536] bf16 (q_a -> rmsnorm)."""
-        qa = ttnn.linear(x, self.w_qa, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)
+        qa = self.lin_qa(x, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)
         return ttnn.rms_norm(qa, epsilon=self.cfg.rms_norm_eps, weight=self.qa_norm, compute_kernel_config=self.hifi4)
 
     def _q(self, q_resid: ttnn.Tensor) -> ttnn.Tensor:
         """q_resid [1,1,T,1536] -> q [1,1,T,H*256] bf16 (q_b)."""
-        return ttnn.linear(q_resid, self.w_qb, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)
+        return self.lin_qb(q_resid, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)
 
     def _latent(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """x [1,1,T,4096] -> c [1,1,T,512] bf16 (kv_a -> rmsnorm)."""
-        c = ttnn.linear(x, self.w_kva, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)
+        c = self.lin_kva(x, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)
         return ttnn.rms_norm(c, epsilon=self.cfg.rms_norm_eps, weight=self.kva_norm, compute_kernel_config=self.hifi4)
+
+    def _absorb_bmm_config(self, N: int, in0_block_w: int):
+        """Decode-shaped per-head batched matmul: one core per head (H <= 24 blocks on a 12x2 grid), the
+        whole [32 x N] output block per core. tests/test_bmm_sweep.py (chip 0): absorb_q 65.8 -> 24.1 us,
+        absorb_o 106.4 -> 23.2 us (default dispatch puts them on 16 / 8 cores)."""
+        return ttnn.MatmulMultiCoreReuseProgramConfig(
+            compute_with_storage_grid_size=(12, 2),
+            in0_block_w=in0_block_w,
+            out_subblock_h=1,
+            out_subblock_w=4,
+            per_core_M=1,
+            per_core_N=N // 32,
+        )
 
     def _absorb_q(self, q: ttnn.Tensor) -> ttnn.Tensor:
         """q [1,1,T,H*Dq] -> q_lat [1,H,T,L] bf16 (per-head q @ Wkb1)."""
         T = q.shape[-2]
         qh = ttnn.transpose(ttnn.reshape(q, [1, T, self.H, self.Dq]), 1, 2)  # [1,H,T,Dq]
-        q_lat = ttnn.matmul(qh, self.w_absorb_q, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)
+        kw = {"program_config": self._absorb_bmm_config(self.L, 1)} if T <= 32 and self.H <= 24 else {}
+        q_lat = ttnn.matmul(qh, self.w_absorb_q, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2, **kw)
         ttnn.deallocate(qh)
         return q_lat
 
     def _o_lat_to_heads(self, o_lat: ttnn.Tensor) -> ttnn.Tensor:
         """o_lat [1,H,T,L] -> concat-heads v-space [1,1,T,H*Dv] (per-head @ Wkb2^T)."""
         T = o_lat.shape[-2]
-        o = ttnn.matmul(o_lat, self.w_absorb_o, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)  # [1,H,T,Dv]
+        kw = {"program_config": self._absorb_bmm_config(self.Dv, 4)} if T <= 32 and self.H <= 24 else {}
+        o = ttnn.matmul(
+            o_lat, self.w_absorb_o, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2, **kw
+        )  # [1,H,T,Dv]
         return ttnn.reshape(ttnn.transpose(o, 1, 2), [1, 1, T, self.H * self.Dv])
 
     def _o_proj(self, o_heads: ttnn.Tensor) -> ttnn.Tensor:
-        y = ttnn.linear(o_heads, self.w_o, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)
+        y = self.lin_o(o_heads, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)
         return self.mesh.all_reduce_cols(y)  # TP partial -> replicated over the row's columns
 
     def _cu_window(self, n_keys: int) -> ttnn.Tensor:
@@ -512,12 +565,22 @@ class TtDSA(LightweightModule):
         B = x.shape[-2]
         if self.stage_timer is not None:
             self.stage_timer.start()
-        q_resid = self._q_resid(x)
+        stem = self.lin_stem(x, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)  # [1,1,B,2336]
+        parts = {k: ttnn.slice(stem, [0, 0, 0, a], [1, 1, B, b]) for k, (a, b) in self.stem_bounds.items()}
+        ttnn.deallocate(stem)
+        q_resid = ttnn.rms_norm(
+            parts["qa"], epsilon=self.cfg.rms_norm_eps, weight=self.qa_norm, compute_kernel_config=self.hifi4
+        )
+        ttnn.deallocate(parts["qa"])
         q = self._q(q_resid)  # [1,1,B,H*Dq]
-        c = self._latent(x)  # [1,1,B,L]
+        c = ttnn.rms_norm(
+            parts["kva"], epsilon=self.cfg.rms_norm_eps, weight=self.kva_norm, compute_kernel_config=self.hifi4
+        )
+        ttnn.deallocate(parts["kva"])
         cache.update(ttnn.reshape(c, [1, B, 1, self.L]), positions)
         ttnn.deallocate(c)
-        self.indexer.maintain_decode(x, cache.index, pool_ids, ring_slots)
+        self.indexer.maintain_decode(x, cache.index, pool_ids, ring_slots, kg=(parts["k"], parts["g"]))
+        w_idx = parts["w"]  # [1,1,B,Hi] indexer head weights (sparse rows only)
         self._mark("stems+append+index_maintain")
         q_lat = self._absorb_q(q)  # [1,H,B,L]
         ttnn.deallocate(q)
@@ -542,7 +605,7 @@ class TtDSA(LightweightModule):
             [u for u, a in enumerate(host_positions) if a > self.dense_exact_max_pos] if host_positions else []
         )
         if sparse_users:
-            sparse_rows = self._decode_sparse_rows(x, q_resid, q_lat, cache, host_positions, sparse_users)
+            sparse_rows = self._decode_sparse_rows(x, q_resid, q_lat, cache, host_positions, sparse_users, w=w_idx)
             rows = [
                 sparse_rows[u] if u in sparse_rows else ttnn.slice(oh, [0, 0, u, 0], [1, self.H, u + 1, self.L])
                 for u in range(B)
@@ -552,16 +615,20 @@ class TtDSA(LightweightModule):
             oh = oh_new
         ttnn.deallocate(q_resid)
         ttnn.deallocate(q_lat)
+        ttnn.deallocate(w_idx)
         y = self._o_proj(self._o_lat_to_heads(oh))
         self._mark("out_proj")
         return y
 
-    def _decode_sparse_rows(self, x, q_resid, q_lat, cache: TtLatentCache, positions: list[int], users: list[int]):
+    def _decode_sparse_rows(
+        self, x, q_resid, q_lat, cache: TtLatentCache, positions: list[int], users: list[int], w=None
+    ):
         """Per-user indexer selection + sparse_sdpa rows {u: [1,H,1,L]} for the listed users (positions
-        > dense_exact_max_pos, so every index row is a full valid prefix)."""
+        > dense_exact_max_pos, so every index row is a full valid prefix). ``w``: the indexer head
+        weights [1,1,B,Hi] when the caller already has them (the fused decode stem)."""
         idx = self.indexer
         D = idx.D
-        q_i, w_i = idx.queries_and_weights(x, q_resid)  # [1,Hi,B,D], [1,1,B,Hi]
+        q_i, w_i = idx.queries_and_weights(x, q_resid, w=w)  # [1,Hi,B,D], [1,1,B,Hi]
         out = {}
         for u in users:
             a = positions[u]

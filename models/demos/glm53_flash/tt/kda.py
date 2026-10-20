@@ -34,6 +34,7 @@ from models.demos.deepseek_v3_d_p.tt.kda.config import KDAProgramConfig, KDARecu
 from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState, ttKDA
 from models.demos.deepseek_v3_d_p.tt.kda.weights import KDAWeights, load_kda_weights
 from models.demos.glm53_flash.tt.config import GLM53FlashConfig
+from models.demos.glm53_flash.tt.matmul_configs import DecodeLinear
 from models.demos.glm53_flash.tt.mesh import GLMMesh, interleave_blocks, single_chip
 
 L2_NORM_EPS = 1e-6  # FLA l2norm: x / sqrt(sum(x^2) + 1e-6)
@@ -156,6 +157,14 @@ class TtKDA(LightweightModule):
         self.w_o = up(raw["o_proj.weight"].t(), weight_dtype, cols=-2)
         self.fp32 = _fp32_compute(device)
         self.hifi2 = _hifi2_compute(device)
+        # decode-shaped (M <= 32) projections use the 1D mcast configs of tt/matmul_configs.py
+        self.lin_qkv = DecodeLinear(device, self.w_qkv)
+        self.lin_o = DecodeLinear(device, self.w_o)
+        self.lin_fa = DecodeLinear(device, self.w_fa)
+        self.lin_fb = DecodeLinear(device, self.w_fb)
+        self.lin_ga = DecodeLinear(device, self.w_ga)
+        self.lin_gb = DecodeLinear(device, self.w_gb)
+        self.lin_b = DecodeLinear(device, self.w_b)
         self.gate_lower_bound = float(self.kcfg.gate_lower_bound)
         self._scalars: dict[int, ttnn.Tensor] = {}
 
@@ -254,7 +263,7 @@ class TtKDA(LightweightModule):
             raise ValueError(f"state batch {state.recurrent.shape[0]} != input batch {B}")
 
         # --- projections + causal conv (kernel 4) over the 3-row history + current token
-        qkv = ttnn.linear(x, self.w_qkv, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)  # [1,1,B,3*QKV]
+        qkv = self.lin_qkv(x, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)  # [1,1,B,3*QKV]
         hist = ttnn.to_layout(state.convolution, ttnn.TILE_LAYOUT)  # [B, 3, W]
         hist4 = ttnn.reshape(hist, [1, B, self.kcfg.conv_kernel_size - 1, self.conv_width])
         conv = ttnn.multiply(qkv, self.taps[3])
@@ -276,16 +285,16 @@ class TtKDA(LightweightModule):
         ttnn.deallocate(conv)
 
         # --- gates (fp32, as HF)
-        f = ttnn.linear(x, self.w_fa, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)
-        f = ttnn.linear(f, self.w_fb, dtype=ttnn.float32, compute_kernel_config=self.fp32)  # [1,1,B,H*K]
+        f = self.lin_fa(x, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)
+        f = self.lin_fb(f, dtype=ttnn.float32, compute_kernel_config=self.fp32)  # [1,1,B,H*K]
         f = ttnn.add(f, self.dt_bias, output_tensor=f)
         f = ttnn.multiply(f, self.a_exp, output_tensor=f)
         g = ttnn.sigmoid(f, output_tensor=f)
         g = ttnn.multiply(g, self.gate_lower_bound, output_tensor=g)
         decay = ttnn.exp(g, output_tensor=g)  # [1,1,B,H*K] fp32
-        beta = ttnn.sigmoid(ttnn.linear(x, self.w_b, dtype=ttnn.float32, compute_kernel_config=self.fp32))  # [1,1,B,H]
-        og = ttnn.linear(x, self.w_ga, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)
-        og = ttnn.linear(og, self.w_gb, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)  # [1,1,B,H*V]
+        beta = ttnn.sigmoid(self.lin_b(x, dtype=ttnn.float32, compute_kernel_config=self.fp32))  # [1,1,B,H]
+        og = self.lin_ga(x, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)
+        og = self.lin_gb(og, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)  # [1,1,B,H*V]
 
         # --- per-head L2 norm of q, k (FLA: x / sqrt(sum x^2 + 1e-6)); q also scaled by K^-0.5
         qh = ttnn.reshape(ttnn.typecast(q, ttnn.float32), [1, B, H, K])
@@ -315,7 +324,7 @@ class TtKDA(LightweightModule):
         gate = ttnn.sigmoid(ttnn.reshape(ttnn.typecast(og, ttnn.float32), [1, B, H, V]))
         oh = ttnn.multiply(oh, gate, output_tensor=oh)
         o_flat = ttnn.typecast(ttnn.reshape(oh, [1, 1, B, H * V]), ttnn.bfloat16)
-        y = ttnn.linear(o_flat, self.w_o, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)  # [1,1,B,hidden]
+        y = self.lin_o(o_flat, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)  # [1,1,B,hidden]
         y = self.mesh.all_reduce_cols(y)  # TP partial -> replicated over the row's columns
         if inplace:
             # write the new carries back into the caller's persistent tensors so a captured decode
