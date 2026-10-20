@@ -10,7 +10,8 @@ chunk-local KDA terms for `recurrent_chunk_scan`).
 
 ## Consider it instead of
 - `ttnn.experimental.kda.prepare_chunk_recurrence` when the gate has a large negative scale (|G| ~ 150 per 32-token
-  chunk at gate_scale -5) and the anchored exponents' TF32 bias shows up in the KDA state.
+  chunk at gate_scale -5) and the anchored exponents' TF32 bias shows up in the KDA state (a bias fix, not precision
+  only).
 - the source op followed by a ttnn-op recompute of k_dec_t (GLM's former 14-op path, +1.44 ms per layer; CHANGELOG.md):
   the fork is exact and faster than the source op.
 
@@ -18,10 +19,15 @@ chunk-local KDA terms for `recurrent_chunk_scan`).
 `prepare_chunk_recurrence(q, k, v, g, beta, num_heads, *, memory_config=None, compute_kernel_config=None,
 output_bf16_mask=0, actual_start=None, actual_end=None, sequence_parallel_axis=0, gate_scale=1.0,
 beta_logits_column_offset=None, precise_gate_factors=False)` (`prepare_chunk_recurrence_nanobind.cpp`).
-- `precise_gate_factors=False` (fork, opt-in): exact anchored gate exponents. False = the source program.
+
+Realistic (use by default):
+- `precise_gate_factors=False` (fork, opt-in): exact anchored gate exponents. False = the source program. Realistic:
+  it removes the source's TF32 bias near the -5 gate bound.
 - All other arguments as the source: `output_bf16_mask` bits 0, 1, 2, 4, 5 select bf16 outputs; `gate_scale` multiplies
   g before the cumulative sum; `beta_logits_column_offset` reads pre-sigmoid bf16 beta logits in place;
   `actual_start` / `actual_end` device UINT32 bounds; default compute config HiFi4, approx math, fp32 DEST.
+
+Precision only: per-step checks or a measured end-to-end gap (rule 7): none.
 
 ## Measured
 - GLM layer, LoudBox 2x4, 2560 rows per chip: op 0.471 ms (fork, precise_gate_factors) vs 0.586 ms (source)

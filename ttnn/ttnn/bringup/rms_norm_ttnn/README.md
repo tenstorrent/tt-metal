@@ -11,13 +11,16 @@ Adds over `ttnn.rms_norm`:
 Cores: rows split over the full compute grid; where rows under-fill the grid the width is also split across a core group and partials are gathered / finalized / multicast back. Single device, no CCL.
 
 ## Consider it instead of
-- `ttnn.rms_norm` on any placement, when you want its speed or the fp32-DEST precision fixes.
+- `ttnn.rms_norm` on any placement, for its speed; where a step already runs fp32 DEST it also carries the fp32-DEST
+  precision fixes (no option of their own).
 - `ttnn.add` + `ttnn.rms_norm` on a residual stream: one call with `residual_input_tensor` + `return_residual_sum=True`.
 - Distributed norm (`ttnn.rms_norm_pre_all_gather` / `post_all_gather`): only via all_gather the full row first, then this (hy4_preview_d_p `tt/norm.py:TtGatheredRmsNorm`).
 - Not for an exact fp32 RMS statistic: see Limits (DS41-44); use `ttnn.bringup.mhc_pre_xing_pack` for that.
 
 ## Options
 (from `rms_norm_ttnn_nanobind.cpp`)
+
+Realistic (use by default): every option below.
 - `input_tensor`: on device, rank 0..5, TILE or ROW_MAJOR, INTERLEAVED or any *_SHARDED; fp32 / bf16 / bfp8_b.
 - `epsilon=1e-12`: 0.0 accepted.
 - `weight=None`: per-channel scale, flat `(1,1,1,Wg>=W)` or blocked `(Wt, 32)` ROW_MAJOR; fp32 / bf16 / bfp8_b.
@@ -28,6 +31,8 @@ Cores: rows split over the full compute grid; where rows under-fill the grid the
 - `compute_kernel_config=None`: `ttnn.ComputeConfigDescriptor` or a device compute-kernel config; default HiFi4 / approx / `fp32_dest_acc_en=False`.
 - `return_residual_sum=False` (opt-in fork addition): return `(y, t)`; needs `residual_input_tensor` and a TILE input; C++ op only (the Python builder has no such argument).
 - `residual_sum_memory_config=None` (opt-in fork addition): t's placement (any TILE placement); default the input's; only with `return_residual_sum=True`.
+
+Precision only: per-step checks or a measured end-to-end gap (rule 7): none (fp32 DEST is the stock `compute_kernel_config` choice).
 
 ## Measured
 - MiMo shape, input [1,1,5120,4096] bf16 per chip, bf16 weight, HiFi4 + fp32 DEST, 1x4 mesh, 20 calls device max: norm 0.230 ms, fused residual 0.429 ms (CHANGELOG.md change 5).

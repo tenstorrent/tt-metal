@@ -22,6 +22,8 @@ Everything else as `ttnn.experimental.deepseek_prefill.offset_cumsum`.
   `unified_routed_expert_moe` and `combine`.
 
 ## Options
+Realistic (use by default): every option below.
+
 - `input_tensor`: 1D UINT32 [E] histogram.
 - `cluster_axis`: required, dispatch axis.
 - `num_links`: required, links for the all_gather.
@@ -30,6 +32,8 @@ Everything else as `ttnn.experimental.deepseek_prefill.offset_cumsum`.
 - `use_l1_small_for_semaphores=False`: all_gather semaphores in L1_SMALL.
 No fork-only option: the fork change is automatic on a 1-device axis. Returns 4 tensors (callers unpack
 `offsets, counts, region_offsets, _`).
+
+Precision only: per-step checks or a measured end-to-end gap (rule 7): none.
 
 ## Measured
 - Accuracy: exact on all outputs (every model case in `tests/cases.py` is `"exact": True`; reported exact on 2x2 in

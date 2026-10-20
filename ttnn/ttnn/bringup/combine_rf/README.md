@@ -65,6 +65,7 @@ New ops (Marko Staletovic's; no TTNN source). Each is a host builder that emits 
 - l1_zero: re-allocating or `ttnn.zeros` for kernel scratch.
 
 ## Options
+Realistic (use by default):
 - `sparse_combine_rf_prepare(mesh_device, S, W, rows_by_chip, *, num_links=2, torus=(False, False), n_acc=16, depth=8,
   cells=None, arena=None, writers=0, counts_off=None, l1=None, devplan=None, deterministic=False,
   ports_per_direction=False, acc_on_ports=False, piece_max=None, axis=None, out_dtype=None, out_row0=None,
@@ -75,12 +76,12 @@ New ops (Marko Staletovic's; no TTNN source). Each is a host builder that emits 
   l1 + devplan with "dord"); ports_per_direction = one port core per direction; acc_on_ports = ports on accumulator
   cells; piece_max = row bytes per fabric packet (env SPC_PIECE, default 7168). axis=0 (default None: the whole
   mesh) = the combine within each mesh column (chip r of an R-chip group, Y ports, R - 1 rings; with
-  combine_planner_prepare(axis=0)); out_dtype ttnn.float32 (default bf16) = the fp32 sums written; out_row0 (default
-  None) = home token t at output row out_row0 + t; acc_unpack_fp32 (default False) = the sums' final copy through
-  UnpackToDestFp32 (else srcA: TF32); zero_unseen (default False, with l1) = a home token with no row writes zeros;
+  combine_planner_prepare(axis=0)); out_row0 (default
+  None) = home token t at output row out_row0 + t; zero_unseen (default False, with l1) = a home token with no row writes zeros;
   acc_dtype (default None = ttnn.float32, the original program) = ttnn.bfloat16: the running sums in bf16 (W x 2 B a
   token; the packer's L1 accumulation adds each weighted fp32 DEST row onto the bf16 sum, one round-to-nearest per
-  added row; same kernels, same order, only CB_ACC's format / size change).
+  added row; same kernels, same order, only CB_ACC's format / size change). bf16 sums are rule 7's cross-chip-sum precision
+  (deepseek_v41_flash_d_p ships COMBINE_ACC=bf16, `tt/settings.py`); fp32, the default, is that setting's max_precision value.
   `accumulator_bytes(N, A, W, S, depth=1, out_dtype=None, local_slots=2, acc_dtype=None)`: an accumulator's L1 for S
   home tokens (a caller sizes passes / the arena with it); `acc_page(acc_dtype)`: bytes of one sum tile.
 - `sparse_combine_l1_prepare(mesh_device, S, W, rows_by_chip, *, num_links=2, torus=(False, False), n_acc=16, qc=64,
@@ -117,6 +118,11 @@ New ops (Marko Staletovic's; no TTNN source). Each is a host builder that emits 
   kind "tilize" / "untilize"; cw tile columns per unit.
 - `l1_zero_program(mesh_device, runs_by_core)`: runs (address, bytes, stride, count) per logical core.
 Many env knobs (SPC_*, FC_*, L2D_*, SUM_SPLIT) change behaviour; read the module before setting them.
+
+Precision only: per-step checks or a measured end-to-end gap (rule 7):
+- `sparse_combine_rf_prepare(out_dtype=ttnn.float32)` (default bf16): the fp32 sums written.
+- `sparse_combine_rf_prepare(acc_unpack_fp32=True)` (default False): the sums' final copy through UnpackToDestFp32
+  (else srcA: TF32).
 
 ## Measured
 All from ../flat_routed_expert_ttnn/FLAT_COMBINE_OVERLAP_WORKLOG.md (LoudBox 2 x 4, bh-lb-09, 12 x 10 grid):
