@@ -119,6 +119,7 @@ def _run(
     k_chunk=K_CHUNK,
     want_dense=True,
     seed=0,
+    upload_bias=False,
 ):
     """Prepass + sparse ring SDPA for one (mode, tau), and optionally the dense op on the same inputs.
 
@@ -189,12 +190,16 @@ def _run(
 
     dense = launch() if want_dense else None
     capfd.readouterr()  # discard dense-run output so the mode log below is only the sparse launch
-    sparse = launch(
+    sol_kw = dict(
         sol_block_mask=sol["block_mask"],
         sol_pooled_k=sol["pooled_k"],
         sol_pooled_v=sol["pooled_v"],
         sol_mode=mode,
     )
+    if upload_bias and sol.get("bias") is not None:
+        # Use the pre-pass's Python-computed bias instead of the op's on-device generator (sol_bias_gen).
+        sol_kw["sol_bias"] = sol["bias"]
+    sparse = launch(**sol_kw)
     modes = _drain_mode_log(capfd)
     logger.info(f"[sol] mode={mode} tau={tau} density={pre.last_density:.4f} factory_logged={sorted(modes)}")
     return Result(dense=dense, sol=sparse, density=float(pre.last_density), modes_logged=modes)
@@ -468,12 +473,14 @@ def test_production_5s_geometry(mesh_device, sp_axis, tp_axis, num_links, topolo
 @pytest.mark.parametrize(
     "rows,what",
     [
-        (1024, "neither"),            # 16 full blocks, 4 full Q chunks
-        (1152, "partial Q chunk"),    # 18 full blocks, 1152/256 = 4.5 -> last Q chunk holds 128 rows
-        (1184, "both"),               # 18 full + 32-token block, and a 160-row last Q chunk
+        (1024, "neither"),  # 16 full blocks, 4 full Q chunks
+        (1152, "partial Q chunk"),  # 18 full blocks, 1152/256 = 4.5 -> last Q chunk holds 128 rows
+        (1184, "both"),  # 18 full + 32-token block, and a 160-row last Q chunk
     ],
 )
-def test_ragged_bisect(mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, mode, rows, what, reset_seeds, capfd):
+def test_ragged_bisect(
+    mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, mode, rows, what, reset_seeds, capfd
+):
     """Which raggedness breaks the block-form path: the partial K block, or the partial Q chunk?
 
     Device (packing off, pre-existing): rows=1184 gives PCC ~0.855 for gather/compact while chunk mode passes.
@@ -487,9 +494,51 @@ def test_ragged_bisect(mesh_device, sp_axis, tp_axis, num_links, topology, is_fs
       1152 passes -> the partial K block is the trigger on device, despite the reference tolerating it.
     """
     r = _run(
-        mesh_device, sp_axis, num_links, topology, capfd,
-        mode=mode, tau=1.0, rows=rows, logical_n=8 * rows,
+        mesh_device,
+        sp_axis,
+        num_links,
+        topology,
+        capfd,
+        mode=mode,
+        tau=1.0,
+        rows=rows,
+        logical_n=8 * rows,
     )
     pcc = _pcc(r.dense, r.sol, logical_n=8 * rows)
     logger.info(f"[ragged] mode={mode} rows={rows} ({what}) pcc={pcc:.5f}")
     assert pcc > 0.99, f"{mode} rows={rows} ({what}): pcc {pcc:.5f}"
+
+
+@GALAXY_RING
+@pytest.mark.parametrize("upload_bias", [False, True], ids=["gen_bias", "uploaded_bias"])
+def test_partial_block_bias_source(
+    mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, upload_bias, reset_seeds, capfd
+):
+    """Splits the rows=1184 accuracy bug: is it the on-device bias generator, or something else?
+
+    Block-form modes lose 0.145 PCC when the tail K block is partial (32 of 64 tokens). gather fails too, and
+    gather does no compaction, so the fault is in the bias/pooled path the two share -- not in packing. Reading
+    sol_bias_gen found nothing: block_len returns 32 correctly, the table holds ln(len)/scale, full_row zeroes
+    the mask bit, and the pooled K-bar/V-bar use 1/len.
+
+    gen_bias=False  -> the op generates the bias on device (today's production path for compact).
+    gen_bias=True   -> the op consumes the pre-pass's Python bias instead.
+
+    uploaded_bias passes and gen_bias fails -> the defect is in sol_bias_gen.
+    both fail                               -> the bias is fine; look at the pooled chunk or the mask instead.
+    """
+    r = _run(
+        mesh_device,
+        sp_axis,
+        num_links,
+        topology,
+        capfd,
+        mode="compact",
+        tau=1.0,
+        rows=1184,
+        logical_n=8 * 1184,
+        upload_bias=upload_bias,
+    )
+    pcc = _pcc(r.dense, r.sol, logical_n=8 * 1184)
+    logger.info(f"[bias] upload_bias={upload_bias} rows=1184 pcc={pcc:.5f}")
+    assert pcc > 0.99, f"upload_bias={upload_bias}: pcc {pcc:.5f}"

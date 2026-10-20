@@ -24,7 +24,7 @@
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/dataflow/circular_buffer.h"
 #ifdef SOL_PACK_DEBUG
-#include "debug/dprint.h"
+#include "api/debug/dprint.h"
 #endif
 #include "api/debug/kernel_profiler.hpp"
 

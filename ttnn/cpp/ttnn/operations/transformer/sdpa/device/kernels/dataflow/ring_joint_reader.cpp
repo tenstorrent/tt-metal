@@ -7,7 +7,7 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #ifdef SOL_PACK_DEBUG
-#include "debug/dprint.h"
+#include "api/debug/dprint.h"
 #endif
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
