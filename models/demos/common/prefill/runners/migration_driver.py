@@ -1286,7 +1286,9 @@ def _serve_requests(port: int, args, cfg, **kw):
                 try:
                     stats, _triples, migrate_ok, migration_ok, verify_ok, _st = _run_one_request_set(args, cfg, **kw)
                     last = (migration_ok, verify_ok, migrate_ok)
-                    prefill_ms, migrate_ms = int(stats.wall_s * 1000), int(driver_ms(kw["driver"]))
+                    # stats.wall_s covers the chunk pushes only; the reply's prefill time is the round's less the migrate
+                    migrate_ms = int(driver_ms(kw["driver"]))
+                    prefill_ms = max(0, int((time.perf_counter() - t0) * 1000) - migrate_ms)
                     if not migrate_ok:
                         err = "migration failed"
                 except Exception as e:  # noqa: BLE001 -- reported to the engine, which prefills locally instead
