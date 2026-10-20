@@ -35,8 +35,8 @@ constexpr bool bmm_reload_every_block = get_arg(args::num_blocks_inner_dim) > 1;
 #if defined(UCK_CHLKC_PACK)
 constexpr bool bmm_main_form = false;
 #else
-// HiFi2 on one-tile sub blocks of 16-bit operands over many inner blocks reads slower on the row MOP and the unpack
-// forms than on main's per-row path; with 8-bit operands or few inner blocks the forms gain
+// HiFi2 on one-tile sub blocks of 16-bit and Float32 operands over many inner blocks reads slower on the row MOP and
+// the unpack forms than on main's per-row path; with 8-bit operands or few inner blocks the forms gain
 constexpr bool bmm_main_form =
     MATH_FIDELITY == ckernel::MathFidelity::HiFi2 &&
     get_arg(args::out_subblock_w) * get_arg(args::out_subblock_h) == 1 && get_arg(args::num_blocks_inner_dim) >= 32 &&
@@ -256,8 +256,8 @@ void kernel_main() {
     constexpr uint32_t out_dfb_id = dfb::out;
     constexpr uint32_t mm_partials_dfb_id = dfb::intermed0;
 #ifdef ARCH_BLACKHOLE
-    // MATH_FIDELITY exists on the math thread only, the one thread that reads row_mop; a Float32 pack from a 16-bit
-    // DEST needs the DEST read cycles the tile MOP leaves free
+    // MATH_FIDELITY exists on the math and unpack threads but not on pack, so only math tests it here; a Float32
+    // pack from a 16-bit DEST needs the DEST read cycles the tile MOP leaves free
 #if defined(UCK_CHLKC_MATH)
     constexpr bool row_mop_fidelity = MATH_FIDELITY != ckernel::MathFidelity::LoFi;
 #else
