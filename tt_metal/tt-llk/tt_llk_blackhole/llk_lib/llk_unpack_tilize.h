@@ -55,6 +55,58 @@ inline void unpack_to_dest_run(const std::uint32_t num_tiles)
         ckernel::ckernel_template::run();
     }
 }
+
+// The 8-bit block body issues one tile per replay: its face UNPACRs, the SrcB handshake, and the base address advance to the next
+// tile through SCRATCH_SEC1 (four faces: back from the bottom face pair, which SCRATCH_SEC0 adds, then one tile on).
+constexpr std::uint32_t BLOCK8_HALF_LEN_4 = 9;
+constexpr std::uint32_t BLOCK8_HALF_LEN_2 = 5;
+
+template <std::uint32_t base_address_reg, std::uint32_t start, bool four_faces>
+inline void load_block8_half()
+{
+    load_replay_buf(
+        start,
+        four_faces ? BLOCK8_HALF_LEN_4 : BLOCK8_HALF_LEN_2,
+        []
+        {
+            TTI_SETADCZW(0b001, 0, 0, 0, 0, 0b1111);
+            TTI_UNPACR(SrcA, 0b00010001, 0, 0, 0, 1, 0, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+            TTI_UNPACR(SrcA, 0b00010001, 0, 0, 0, 1, four_faces ? 0 : 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+            if constexpr (four_faces)
+            {
+                TTI_CFGSHIFTMASK(1, 0b011, 32 - 1, 0, 0b11, base_address_reg);
+                TTI_NOP;
+                TTI_UNPACR(SrcA, 0b00010001, 0, 0, 0, 1, 0, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+                TTI_UNPACR(SrcA, 0b00010001, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+            }
+            TTI_UNPACR_NOP(SrcB, 0, 0, p_unpacr_nop::SET_DVALID, 0, p_unpacr_nop::WAIT_LIKE_UNPACR, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
+            TTI_CFGSHIFTMASK(1, 0b011, 32 - 1, 0, 1, base_address_reg);
+        });
+}
+
+// Records the replay halves and the SCRATCH_SEC1 advance of the 8-bit block body
+inline void record_block8_body(const std::uint32_t num_faces, const std::uint32_t shift_amount, const std::uint32_t face_r_dim)
+{
+    const std::uint32_t tile_advance = 2;
+    // Back from the bottom face pair (SCRATCH_SEC0 = shift_amount * face_r_dim - 2), then one tile on
+    const std::uint32_t advance = (num_faces == 4) ? tile_advance - (shift_amount * face_r_dim - 2) : tile_advance;
+    TT_SETDMAREG(0, LOWER_HALFWORD(advance), 0, LO_16(p_gpr_unpack::TMP0));
+    TT_SETDMAREG(0, UPPER_HALFWORD(advance), 0, HI_16(p_gpr_unpack::TMP0));
+    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
+    TTI_WRCFG(p_gpr_unpack::TMP0, p_cfg::WRCFG_32b, SCRATCH_SEC1_val_ADDR32);
+    if (num_faces == 4)
+    {
+        load_block8_half<THCON_SEC0_REG3_Base_address_ADDR32, 0, true>();
+        load_block8_half<THCON_SEC0_REG3_Base_cntx1_address_ADDR32, BLOCK8_HALF_LEN_4, true>();
+        block_replay_body() = BlockReplayBody::Tilize8Faces4;
+    }
+    else
+    {
+        load_block8_half<THCON_SEC0_REG3_Base_address_ADDR32, 0, false>();
+        load_block8_half<THCON_SEC0_REG3_Base_cntx1_address_ADDR32, BLOCK8_HALF_LEN_2, false>();
+        block_replay_body() = BlockReplayBody::Tilize8Faces2;
+    }
+}
 } // namespace llk_unpack_tilize_detail
 
 /**
@@ -191,6 +243,10 @@ inline void _llk_unpack_tilize_init_(
             TT_SETDMAREG(0, UPPER_HALFWORD(base_address_increment), 0, HI_16(p_gpr_unpack::TMP0));
             TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
             TTI_WRCFG(p_gpr_unpack::TMP0, p_cfg::WRCFG_32b, SCRATCH_SEC0_val_ADDR32);
+        }
+        if (record_block_body)
+        {
+            llk_unpack_tilize_detail::record_block8_body(num_faces, shift_amount, face_r_dim);
         }
     }
     else
@@ -442,6 +498,50 @@ inline void _llk_unpack_tilize_block_(
 
     const bool unpack_to_dest =
         (unpack_source_format == DataFormat::UInt32) || (unpack_source_format == DataFormat::Int32) || (unpack_dest_format == DataFormat::Float32);
+
+    if (IS_8BIT_FORMAT(unpack_src_format))
+    {
+        const bool body_held = block_replay_body() == (num_faces == 4 ? BlockReplayBody::Tilize8Faces4 : BlockReplayBody::Tilize8Faces2);
+        if (!body_held || narrow_tile)
+        {
+            for (std::uint32_t tile = 0; tile < num_tiles; ++tile)
+            {
+                _llk_unpack_tilize_(base_address, first_tile_index + tile, unpack_src_format, unpack_dst_format, face_r_dim, num_faces, narrow_tile);
+            }
+            return;
+        }
+        // Two tiles per context acquire keep the other config context free for the next chunk
+        constexpr std::uint32_t chunk_tiles = 2;
+        const std::uint32_t half_len        = num_faces == 4 ? llk_unpack_tilize_detail::BLOCK8_HALF_LEN_4 : llk_unpack_tilize_detail::BLOCK8_HALF_LEN_2;
+        const std::uint32_t tile_words      = SCALE_DATUM_SIZE(unpack_src_format, 1) << 1;
+        volatile std::uint32_t tt_reg_ptr* cfg = get_cfg_pointer();
+        for (std::uint32_t done = 0; done < num_tiles; done += chunk_tiles)
+        {
+            const std::uint32_t tiles   = (num_tiles - done < chunk_tiles) ? num_tiles - done : chunk_tiles;
+            const std::uint32_t address = base_address + (first_tile_index + done) * tile_words;
+            LLK_ASSERT(is_valid_L1_address(address), "L1 base_address must be in valid L1 memory region");
+            LLK_ASSERT(is_valid_L1_address(address + (tiles - 1) * tile_words), "L1 address of the last tile must be in valid L1 memory region");
+
+            std::uint32_t contexts_in_use = semaphore_read(semaphore::UNPACK_SYNC);
+            const std::uint32_t context   = unp_cfg_context;
+            while (__builtin_expect(contexts_in_use >= 2, 0))
+            {
+                contexts_in_use = semaphore_read(semaphore::UNPACK_SYNC);
+            }
+            cfg[(0 == context) ? THCON_SEC0_REG3_Base_address_ADDR32 : THCON_SEC0_REG3_Base_cntx1_address_ADDR32] = address;
+            semaphore_post(semaphore::UNPACK_SYNC);
+            TTI_STALLWAIT(p_stall::STALL_UNPACK | p_stall::STALL_CFG, p_stall::TRISC_CFG);
+
+            const std::uint32_t start = (0 == context) ? 0 : half_len;
+            for (std::uint32_t tile = 0; tile < tiles; ++tile)
+            {
+                TT_REPLAY(start, half_len, 0, 0);
+            }
+            t6_semaphore_get(semaphore::UNPACK_SYNC);
+            switch_config_context_from(context);
+        }
+        return;
+    }
 
     const BlockReplayBody record = block_replay_body();
     const bool block_path        = !IS_8BIT_FORMAT(unpack_src_format) && !unpack_to_dest;

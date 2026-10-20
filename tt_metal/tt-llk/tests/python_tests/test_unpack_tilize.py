@@ -140,6 +140,29 @@ def test_unpack_tilize_block(
 
 
 @parametrize(
+    formats=[InputOutputFormat(DataFormat.Fp8_e4m3, DataFormat.Float16_b)]
+    + input_output_formats([DataFormat.Int8]),
+    num_faces=[2, 4],
+    input_dimensions=[[128, 64], [256, 96], [256, 160], [256, 288], [32, 256]],
+)
+def test_unpack_tilize_8bit_block(
+    formats,
+    num_faces,
+    input_dimensions,
+):
+    # Rows of 2, 3, 5, 9 and 8 tiles: the 8-bit block call replays one body per tile
+    unpack_tilize(
+        formats,
+        dest_acc=(
+            DestAccumulation.Yes if formats.input_format == DataFormat.Int8 else None
+        ),
+        num_faces=num_faces,
+        unpack_block=True,
+        input_dimensions=input_dimensions,
+    )
+
+
+@parametrize(
     formats=input_output_formats([DataFormat.Float32], same=True),
     dest_acc=[DestAccumulation.Yes],
     num_faces=[2, 4],

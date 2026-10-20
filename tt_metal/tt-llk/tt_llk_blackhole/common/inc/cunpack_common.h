@@ -214,6 +214,9 @@ enum class BlockReplayBody : std::uint8_t
     Tilize    = 8,
     // The tilize init ran without recording the body
     TilizeInit = 0x40,
+    // The 8-bit tilize body of a four-face or a two-face tile
+    Tilize8Faces4 = 0x80,
+    Tilize8Faces2 = 0x81,
 };
 constexpr std::uint8_t BLOCK_REPLAY_HALF_0 = 0x10;
 constexpr std::uint8_t BLOCK_REPLAY_HALF_1 = 0x20;
