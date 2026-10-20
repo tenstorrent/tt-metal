@@ -91,7 +91,8 @@ class TransferJob:
         NB = len(plan.out_blocks)
         pad = np.zeros(NB, np.int64)
         native.lib().hpcg_transfer_pad(self.kind, *F.geo(), *C.geo(), NB, pad)
-        ftab, ctab = [F.line_band, F.band_y0, F.band_ny, F.band_start], [C.line_band, C.band_y0, C.band_ny, C.band_start]
+        ftab = [F.line_band, F.band_y0, F.band_ny, F.band_start]
+        ctab = [C.line_band, C.band_y0, C.band_ny, C.band_start]
         self.seg = _segment(51, ftab + ctab, plan)
         self.seg[:, :4] = [F.nx, F.nb, F.nl, self.ntlv]
         ob = range(8) if self.kind == 1 else [0]

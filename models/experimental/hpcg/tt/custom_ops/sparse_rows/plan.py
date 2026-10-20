@@ -37,6 +37,32 @@ def _scratch(n):
     return _SCRATCH[0][:n]
 
 
+def _no_neighbours(nc):
+    """Neighbour lists (sorted index array, per-core starts) of a launch without exchange: none."""
+    return np.zeros(0, np.int64), np.zeros(nc + 1, np.int64)
+
+
+_PIECES = [0, ()]
+
+
+def _piece_buffers(n):
+    """Three int64 buffers of n words for a compiled planner's window pieces (lo, words, L1 offset; max_pieces per
+    core), reused by every plan: _compact copies out the used part, so no fresh memory is faulted in per plan."""
+    if _PIECES[0] < n:
+        _PIECES[:] = [n, tuple(np.empty(n, np.int64) for _ in range(3))]
+    return tuple(b[:n] for b in _PIECES[1])
+
+
+def _compact(nc, maxp, bufs, npc):
+    """[nc, maxp] piece buffers -> [nc, R] copies (R = the most pieces of a core), zero past each core's count."""
+    R = max(1, int(npc.max()))
+    out = [b.reshape(nc, maxp)[:, :R].copy() for b in bufs]
+    unused = np.arange(R)[None, :] >= npc[:, None]
+    for o in out:
+        o[unused] = 0
+    return out
+
+
 class SparseRowPlan:
     """Ownership, x windows, offsets and exchange lists of one persistent sparse-row launch.
     A core's x window is a list of pieces (DRAM q range -> L1 byte offset): the granules its rows' columns touch
@@ -206,16 +232,15 @@ class SparseRowPlan:
         own_f = np.ascontiguousarray(own.reshape(-1), np.int64)
         own_l1 = np.zeros((nc, NB), np.int64)  # L1 byte offset of each block's own rows, from the compiled planner
         for maxp in MAX_PIECES:
-            plo, pln, pl1 = (np.zeros(nc * maxp, np.int64) for _ in range(3))
+            plo, pln, pl1 = _piece_buffers(nc * maxp)
             npc = np.zeros(nc, np.int64)
             args = (*L.geo(), nc, NB, own_f, GRAN, WGAP, ng, empty_lo, maxp, plo, pln, pl1, npc, own_l1)
             if lib.hpcg_plan_windows_stencil(*args) >= 0:
                 break
         else:
             raise ValueError(f"a core needs more than {maxp} window pieces")
-        lo2, ln2, l12 = (x.reshape(nc, maxp) for x in (plo, pln, pl1))
         ents = SparseRowPlan._exchange_native(lib, nc, NB, own_f, maxp, plo, pln, pl1, npc, noc_xy)
-        return (lo2, ln2, l12, npc), None, own_l1, ents
+        return (*_compact(nc, maxp, (plo, pln, pl1), npc), npc), None, own_l1, ents
 
     @staticmethod
     def _plan_transfer(lib, transfer, own, ng, empty_lo, pout, host_tables=True):
@@ -227,7 +252,7 @@ class SparseRowPlan:
         nc, NB = own.shape[:2]
         own_f = np.ascontiguousarray(own.reshape(-1), np.int64)
         for maxp in MAX_PIECES:
-            plo, pln, pl1 = (np.zeros(nc * maxp, np.int64) for _ in range(3))
+            plo, pln, pl1 = _piece_buffers(nc * maxp)
             npc = np.zeros(nc, np.int64)
             args = (k, *F.geo(), *C.geo(), nc, NB, own_f, GRAN, WGAP, ng, empty_lo, maxp, plo, pln, pl1, npc)
             if lib.hpcg_plan_windows_transfer(*args) >= 0:
@@ -240,8 +265,8 @@ class SparseRowPlan:
             w = native.zeros((1, pout), np.float32)
             bad = lib.hpcg_transfer_tables(k, *F.geo(), *C.geo(), nc, NB, own_f, maxp, plo, pln, pl1, npc, off, w)
             assert bad == 0, "column outside its window piece"
-        pieces = tuple(x.reshape(nc, maxp) for x in (plo, pln, pl1)) + (npc,)
-        ents = (np.zeros((0, 5), np.int64), np.zeros(nc * NB + 1, np.int64), (np.zeros(0, np.int64), np.zeros(nc + 1, np.int64)))
+        pieces = (*_compact(nc, maxp, (plo, pln, pl1), npc), npc)
+        ents = (np.zeros((0, 5), np.int64), np.zeros(nc * NB + 1, np.int64), _no_neighbours(nc))
         return pieces, off, np.zeros((nc, NB), np.int64), ents, w
 
     @staticmethod
@@ -279,7 +304,7 @@ class SparseRowPlan:
         )
         assert bad == 0, "column outside its window piece, or own rows split over pieces"
         pieces = tuple(x.reshape(nc, maxp) for x in (plo, pln, pl1)) + (npc,)
-        ents = (np.zeros((0, 5), np.int64), np.zeros(nc * NB + 1, np.int64), (np.zeros(0, np.int64), np.zeros(nc + 1, np.int64)))
+        ents = (np.zeros((0, 5), np.int64), np.zeros(nc * NB + 1, np.int64), _no_neighbours(nc))
         if exchange:
             ents = SparseRowPlan._exchange_native(lib, nc, NB, own_f, maxp, plo, pln, pl1, npc, noc_xy)
         return pieces, off, own_l1.reshape(nc, NB), ents
