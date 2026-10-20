@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 import torch
 from tqdm import tqdm
 
@@ -167,7 +169,11 @@ class TtTransformer(LightweightModule):
             self.tt_ccl = self.tt_ccl_prefill
             # Reset physical semaphores on both prefill and decode CCL objects to
             # clear any stale state left by the previous request's decode phase.
-            if getattr(self.args, "is_olmo", False):
+            if getattr(self.args, "is_olmo", False) and os.environ.get("OLMO_FULL_PREFILL_RESET") == "1":
+                ttnn.synchronize_device(self.mesh_device)
+                self.tt_ccl.reset_gather_and_buffer_idx()
+                ttnn.synchronize_device(self.mesh_device)
+            elif getattr(self.args, "is_olmo", False):
                 self.tt_ccl.reset_gather_semaphores()
             else:
                 self.tt_ccl.reset_gather_and_buffer_idx()

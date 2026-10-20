@@ -176,7 +176,7 @@ def run_olmo_demo(
         mesh_device,
         max_batch_size=batch_size,
         max_seq_len=max_seq_len,
-        num_layers=layers,
+        num_layers=int(os.environ.get("OLMO_DEMO_LAYERS", layers)),
         page_params=page_params,
         dtype=ttnn.bfloat8_b,
         use_paged_kv_cache=paged_attention,
@@ -988,6 +988,7 @@ def run_olmo_demo(
             "num_command_queues": 1,
             "worker_l1_size": 1345000,
             "fabric_config": True,
+            **({"l1_small_size": int(os.environ["OLMO_L1_SMALL"])} if os.environ.get("OLMO_L1_SMALL") else {}),
         }
     ],
     indirect=True,

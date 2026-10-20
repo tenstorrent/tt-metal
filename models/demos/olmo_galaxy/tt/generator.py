@@ -138,6 +138,8 @@ class Generator(WarmupForwardMixin):
             self.model.tt_ccl.support_seqlens
         )  # caching because running prefill can switch mode to decode
         for supported_length in supported_seqlens:
+            if supported_length in self.model.tt_ccl.eager_seqlens:
+                continue  # persistent buffers only, never traced
             logger.info(f"Creating warmup tensor for sequence length: {supported_length}")
             # Capture B1 traces for all supported lengths and B32 only for the short
             # throughput path. Long B32 prefill stays sequential to avoid DRAM OOM.
@@ -316,8 +318,13 @@ class Generator(WarmupForwardMixin):
                 last_token_idx = seq_len - 1
                 prefill_seq_len = prefill_seq_lens[id]
 
-                if prefill_seq_len not in self.model.tt_ccl.support_seqlens:
+                if (
+                    prefill_seq_len not in self.model.tt_ccl.support_seqlens
+                    or prefill_seq_len in self.model.tt_ccl.eager_seqlens
+                ):
                     enable_trace = False
+                if os.environ.get("OLMO_FORCE_EAGER_PREFILL") == "1":
+                    enable_trace = False  # debug: run the traced lengths eagerly to test eager-mode behaviour
 
             padded_batch = 32
             if use_batched_prefill:
@@ -377,7 +384,7 @@ class Generator(WarmupForwardMixin):
                     self.tt_logits_accumulated_batched = []
                 tt_tok = self._easy_trace_prefill(**prefill_kwargs, prefill_seq_len=prefill_seq_len)
             else:
-                with _long_prefill_matmul_throttle(prefill_seq_len > max(self.model.tt_ccl.support_seqlens)):
+                with _long_prefill_matmul_throttle(prefill_seq_len > 4096):
                     tt_tok = self.prefill_forward_single_user_text(**prefill_kwargs)
 
             if not do_device_sampling:

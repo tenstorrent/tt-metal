@@ -124,6 +124,7 @@ class TT_CCL:
             else:
                 self.agmm_ff2_intermediate_buffers = None
                 self.agmm_ff2_buffer_idx = 0
+        self.eager_seqlens = []
         if mode == "prefill":
             # For some prefill seqlens we always allocate CCL buffers. Otherwise they will require barrier syncing
             # 256 and 512 added to support short prompts (128-256, 257-512 tokens) so they don't pad
@@ -136,6 +137,11 @@ class TT_CCL:
             if os.environ.get("OLMO_TRACE_8K") == "1":
                 extra.append(8192)
             self.support_seqlens = sorted(set(extra), reverse=True) + self.support_seqlens
+            # Lengths that get persistent CCL buffers (like the traced ones) but still run eagerly: no prefill trace is captured.
+            self.eager_seqlens = sorted(
+                {int(x) for x in os.environ.get("OLMO_PERSISTENT_EAGER_SEQLENS", "").split(",") if x}, reverse=True
+            )
+            self.support_seqlens = self.eager_seqlens + self.support_seqlens
             if allocate_prefill_buffers:
                 self.persistent_buffers = (
                     self.get_ring_prefill_reduce_scatter_buffers()
