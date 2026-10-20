@@ -412,13 +412,6 @@ void AllocatorImpl::mirror_lockstep_allocation(DeviceAddr address, DeviceAddr si
     l1_manager_->mark_allocated(AllocatorID{0}, address, size);
 }
 
-std::vector<std::pair<DeviceAddr, DeviceAddr>> AllocatorImpl::get_l1_available_ranges(
-    BankManager::AllocatorDependencies::AllocatorID allocator_id,
-    const std::vector<std::pair<DeviceAddr, DeviceAddr>>& additional_occupied_ranges) const {
-    std::lock_guard<std::mutex> lock(mutex_);
-    return l1_manager_->get_available_ranges(allocator_id, additional_occupied_ranges);
-}
-
 void AllocatorImpl::unmirror_lockstep_allocation(DeviceAddr address) {
     std::lock_guard<std::mutex> lock(mutex_);
     using AllocatorID = BankManager::AllocatorDependencies::AllocatorID;
@@ -535,10 +528,6 @@ uint32_t AllocatorImpl::get_alignment(BufferType buffer_type) const {
 }
 
 size_t AllocatorImpl::get_worker_l1_size() const { return config_->worker_l1_size; }
-
-uint32_t AllocatorImpl::get_l1_allocation_alignment() const {
-    return config_->allocator_mode == AllocatorMode::HYBRID ? config_->dram_alignment : config_->l1_alignment;
-}
 
 DeviceAddr AllocatorImpl::get_base_allocator_addr(const HalMemType& mem_type) const {
     switch (mem_type) {
@@ -814,8 +803,6 @@ DeviceAddr Allocator::get_base_allocator_addr(const HalMemType& mem_type) const 
 }
 
 uint32_t Allocator::get_alignment(BufferType buffer_type) const { return impl_->get_alignment(buffer_type); }
-
-uint32_t Allocator::get_l1_allocation_alignment() const { return impl_->get_l1_allocation_alignment(); }
 
 Statistics Allocator::get_statistics(const BufferType& buffer_type) const { return impl_->get_statistics(buffer_type); }
 

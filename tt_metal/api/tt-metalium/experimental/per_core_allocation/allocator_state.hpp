@@ -16,12 +16,6 @@ namespace tt::tt_metal::experimental::per_core_allocation {
 
 using AddressRanges = std::vector<std::pair<DeviceAddr, DeviceAddr>>;
 
-// Exact allocator-managed free intervals, clipped to the allocator's current bounds.
-AddressRanges get_l1_free_ranges(const distributed::MeshDevice&, const distributed::MeshCoordinate&, const CoreCoord&);
-
-// Allocator-ID-0 reservations (including range-lockstep), for physical ownership diagnostics.
-AddressRanges get_l1_lockstep_occupied_ranges(const distributed::MeshDevice&, const distributed::MeshCoordinate&);
-
 // Occupied L1 [start, end) ranges on one core of one device: lockstep, this core's per-core
 // allocations and persistent L1, sorted and coalesced. Requires AllocatorMode::HYBRID.
 AddressRanges get_l1_occupied_ranges(
