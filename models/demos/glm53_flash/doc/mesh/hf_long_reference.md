@@ -34,12 +34,17 @@ Validation against the existing host reference `FULLMODEL_G16` (13-token prompt,
 top-5 logits, produced layer-by-layer by `hf_layer_reference.py --generate 16` with eager attention): see the
 results table.
 
-Prompt: `build_needle_ids` from the test (same seeds, text and chat template). Under transformers 5
-`apply_chat_template(tokenize=True)` returns a `BatchEncoding`, so the test's `len(ids)` was 2 and the filler
-length exploded (the call hangs); the test now passes `return_dict=False` and the reference script shims the
-same. The chat template prepends `<|system|>Reasoning Effort: Max` and ends the generation prompt with
-`<think>`, so the greedy tokens are the start of the model's reasoning, not the bare passphrase: the `needle_found`
-flag is only meaningful for runs long enough to leave the thinking block.
+Prompt: `build_needle_ids` from the test (same seeds, text and chat template; wt_mesh 8c5a3cb5902). Under
+transformers 5 `apply_chat_template(tokenize=True)` returns a `BatchEncoding` (the original test's `len(ids)` was 2
+and the filler length exploded); the builder now takes `input_ids` and appends `</think>` after the generation
+prompt (`<|assistant|><think></think>`), so the greedy continuation is the answer itself. Prompt lengths and the
+sha256 of `json.dumps(ids)` (also in each `prompt_ids.json` / `reference.json`):
+
+| N | ids | sha256 |
+|---|---|---|
+| 4096 | 4079 | 3e4b9cd2cf96e5df99b628a96a286d5c57b22a8d19fa7be6173297f8f52af932 |
+| 16384 | 16359 | f7110fd30b4f493e02a15277cfa5860b5cf7d434102b4240b06a1ea029d45db4 |
+| 65536 | 65493 | 8574d55f4456f1ef7991990638bf85d385e41415e4e137e0fc4f426d61dfe7dc |
 
 ## Commands
 
