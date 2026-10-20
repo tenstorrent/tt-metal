@@ -16,6 +16,7 @@ REPO = Path(__file__).resolve().parents[3]
 SCRIPT = REPO / "tt_metal/tt-llk/tests/run_ttsim_regression.sh"
 LLK_PREFIX = "tt_metal/tt-llk/tests/python_tests/"
 VECTOR_ADD = "quasar/test_vector_add_l1_quasar.py::test_vector_add_l1_quasar"
+RAND = "quasar/test_rand_quasar.py::test_rand_quasar"
 
 
 def _run(*args, ignore_file=None):
@@ -25,13 +26,13 @@ def _run(*args, ignore_file=None):
     return subprocess.run(cmd, capture_output=True, text=True, check=False)
 
 
-def test_default_list_selects_quasar_vector_add_only():
+def test_default_list_selects_quasar_llk_entries():
     quasar = _run("-a", "quasar")
     blackhole = _run("-a", "blackhole")
     wormhole = _run("-a", "wormhole")
 
     assert quasar.returncode == 0, quasar.stderr
-    assert quasar.stdout.splitlines() == [VECTOR_ADD]
+    assert quasar.stdout.splitlines() == [VECTOR_ADD, RAND]
     assert blackhole.returncode == 0, blackhole.stderr
     assert blackhole.stdout == ""
     assert wormhole.returncode == 0, wormhole.stderr

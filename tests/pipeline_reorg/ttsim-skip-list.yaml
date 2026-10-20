@@ -51,3 +51,4 @@ blackhole:
 quasar:
   # ttsim: rv32_v_alu baby-RISC V extension is out of scope.
   - tt_metal/tt-llk/tests/python_tests/quasar/test_vector_add_l1_quasar.py::test_vector_add_l1_quasar
+  - tt_metal/tt-llk/tests/python_tests/quasar/test_rand_quasar.py::test_rand_quasar
