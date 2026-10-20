@@ -4,8 +4,6 @@
 
 #pragma once
 
-#include <tt-metalium/tensor/mesh_tensor.hpp>
-
 #include <memory>
 
 namespace tt::tt_metal::experimental {
@@ -27,22 +25,6 @@ struct RawAllocation {
     // Internal constructor
     explicit RawAllocation(RawAllocationImpl&& impl);
     ~RawAllocation();
-
-    // Take ownership of the tensor's allocation.
-    // This is currently the only means of constructing an RawAllocation.
-    //
-    // Tensor must be backed by an owning and allocated MeshBuffer in L1.
-    // The backed buffer can be allocated lockstep, per-node or node-range.
-    static RawAllocation adopt_from_meshtensor(MeshTensor tensor);
-
-    // Release the MeshTensor that was used to create the RawAllocation class
-    // The MeshTensor returned will be the same as the one supplied in
-    // `adopt_from_meshtensor` memory footprint wise,
-    // but it's data maybe overwritten.
-    //
-    // Precondition: allocation is not default initialized
-    // Postcondition: MeshTensor is associated with a MeshBuffer that is owning and allocated on L1.
-    static MeshTensor release_as_meshtensor(RawAllocation allocation);
 
     // General RAII resource semantics
 
