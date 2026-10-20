@@ -87,7 +87,14 @@ of the dump chain `L45_S128` are the reference of the output after the last buil
 |---|---|---|---|---|---|---|---|
 | (1,4) row-6 ring, TP4 | 0-5 (3 dense + 3 MoE) | 2 | 0.999253 (through 6 layers) | 100 % | 32.55 ms -> 30.7 tok/s per user, 61 aggregate | 5.43 ms (single chip: 10.8 ms per MoE layer) | `test_mesh_model_ring_l0-5.log` |
 | (2,4) rows-6-7 block, bfp4 experts (gate/up AND down; the only way 45 layers fit 8 chips), cumsum router | 0-44 | 4 (8 users) | 0.829 (16 tokens, through 45 layers; see the chain note) | 100 % | 318.3 ms -> 3.1 tok/s per user, 25 aggregate | 7.07 ms | `test_mesh_model_rows67_45L_bfp4_2.log` (45 min incl. 40 min of weight loading) |
-| 8x4, all 45 layers, bfp8 | 0-44 | 4 and 32 | pending (needs the whole Galaxy free + the board reset) | | | | |
+| **8x4 Galaxy, all 45 layers, bfp8 experts, rank router** | 0-44 | 4 (32 users) | 0.850-0.898 per user (16 tokens; chaos regime, see the chain note; rows differ because the 8-row bf16 reduce-scatter associates the expert partials differently per destination row) | 75 % of users at position 15 | **203.35 ms -> 4.9 tok/s per user, 157 tok/s aggregate** | 4.52 ms | `test_8x4_45L_bfp8_B4.log` (32 min incl. ~27 min weight loading) |
+| 8x4 Galaxy, all 45 layers, bfp8 | 0-44 | 32 (256 users) | pending | | | | `test_8x4_45L_bfp8_B32.log` |
+
+**TTFT on the 8x4** (same run): 128-token prompt through the sequence-parallel prefill v1 of all 45 layers + head:
+warm 2587 ms, cold 36.3 s (compiles); first greedy token 102647 == host head. Slower than the 2x4 block (1301 ms)
+because v1 splits 128 tokens into 16-token slabs per row and is latency-bound (eager, ~55 ms per layer of small
+ops: full-chunk gathers for the DSA layers, 8-row expert gathers); a prefill-specific pass (batched rows, fewer
+collectives, trace) is the next TTFT step.
 
 **TTFT, full model** (same run, `_ttft`): 128-token prompt through the sequence-parallel prefill of all 45 layers +
 head: warm 1301 ms, cold 2660 ms (first-call compiles); first greedy token 102647 == host head on the HF rows.
