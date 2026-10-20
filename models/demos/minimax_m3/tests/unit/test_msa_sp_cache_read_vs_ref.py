@@ -69,7 +69,6 @@ def reference_msa_block_cyclic(
         num_groups=num_groups,
         block_size=block_size,
         topk_blocks=topk_blocks,
-        device=ccl_manager.mesh_device,
         cluster_axis=sp_axis,
         block_cyclic_sp_axis=sp_axis,
         block_cyclic_chunk_local=chunk_local,

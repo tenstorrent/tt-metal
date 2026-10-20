@@ -248,7 +248,7 @@ class TtPrefillRuntime:
         self.compiled = False
 
     def release_sub_device_managers(self) -> None:
-        """Remove the MoE overlap sub-device manager before the mesh is closed. Idempotent."""
+        """Remove the MoE and MSA overlap sub-device managers (tt/model.py) before the mesh is closed. Idempotent."""
         if self.model_built:
             self.model.release_sub_device_managers()
 
@@ -332,18 +332,23 @@ class TtPrefillRuntime:
     def compile(self, kv_cache) -> None:
         """Warm the program cache so no served forward pays a first-run JIT.
 
-        For a fixed cache capacity a chunk runs one of exactly THREE program sets per layer, so three warm-up
-        forwards cover the served loop: (i) the FIRST chunk (start == 0: no-cache attention variants,
+        For a fixed cache capacity a chunk runs one of THREE program sets per layer, and a packed forward with two
+        or more warm chunks adds the MSA layers' pipelined chain, so four warm-up forwards cover the served loop:
+        (i) the FIRST chunk (start == 0: no-cache attention variants,
         exact-size gathers), followed by cache-read chunks when forward_tokens_budget > chunk_size, (ii) a full
         CACHE-READ chunk (start > 0), (iii) a RAGGED chunk (end < start + chunk_size: the MoE padding-config
-        variant). (ii) and (iii) fill the rest of the forward with empty chunks (zero rows). Every
-        per-chunk offset — kv_actual / cached_len, logical_n, kv_len, chunk_start_idx, gathered_dim_size,
-        slot — is a runtime argument excluded from the op hashes (update_padded_kv_cache, ring_joint SDPA with
-        kv_actual_isl, indexer_score_msa, topk_large_indices valid_length, sparse_sdpa_msa,
-        high_bw_all_gather), so sweeping every KV-length bucket (the previous behaviour: max_seq_len /
-        chunk_size chunks, 196 at 1M) re-ran the same programs and still missed variant (iii). What IS hashed
-        is the cache capacity itself (gather buffer shapes, sparse_sdpa T), which is why reconfigure_capacity()
-        invalidates this warm-up. The warm-up writes slots the real run overwrites."""
+        variant), (iv) two consecutive warm chunks of one slot: the pipelined gather/compute window of the MSA
+        layers (msa_chunks_pipelined, sub-device-pinned programs and the manager it creates on first use), when
+        two warm chunks fit: three chunks of one slot, or two slots of a two-chunk cache (a one-chunk cache, or one
+        slot of a two-chunk cache, holds no two warm chunks and pipelines no served forward either). (ii)-(iv)
+        fill the rest of the forward with empty chunks (zero rows). Every per-chunk offset — kv_actual /
+        cached_len, logical_n, kv_len, chunk_start_idx, gathered_dim_size, slot — is a runtime argument excluded
+        from the op hashes (update_padded_kv_cache, ring_joint SDPA with kv_actual_isl, indexer_score_msa,
+        topk_large_indices valid_length, sparse_sdpa_msa, high_bw_all_gather), so sweeping every KV-length
+        bucket (the previous behaviour: max_seq_len / chunk_size chunks, 196 at 1M) re-ran the same programs and
+        still missed variant (iii). What IS hashed is the cache capacity itself (gather buffer shapes,
+        sparse_sdpa T), which is why reconfigure_capacity() invalidates this warm-up. The warm-up writes slots
+        the real run overwrites."""
         assert self.model_built
         cfg = self.config
         chunk, n_chunks = cfg.chunk_size, cfg.forward_chunks
@@ -360,9 +365,19 @@ class TtPrefillRuntime:
             [PrefillChunk(0, cache_read_start, cache_read_start + chunk)] + [empty] * (n_chunks - 1),
             [PrefillChunk(0, cache_read_start, cache_read_start + chunk // 2)] + [empty] * (n_chunks - 1),
         ]
+        if n_chunks >= 2 and per_slot >= 3:
+            pipelined = [PrefillChunk(0, chunk, 2 * chunk), PrefillChunk(0, 2 * chunk, 3 * chunk)]
+        elif (
+            n_chunks >= 2 and per_slot >= 2 and cfg.num_users >= 2
+        ):  # a two-chunk cache: two slots at their second chunk
+            pipelined = [PrefillChunk(0, chunk, 2 * chunk), PrefillChunk(1, chunk, 2 * chunk)]
+        else:
+            pipelined = None
+        if pipelined:
+            plan.append(pipelined + [empty] * (n_chunks - 2))
         logger.info(
-            f"TtPrefillRuntime.compile() — warming first / cache-read / ragged forwards ({n_chunks} x {chunk}-token "
-            f"chunks, capacity {cfg.max_seq_len})"
+            "TtPrefillRuntime.compile() — warming first / cache-read / ragged / pipelined forwards "
+            f"({n_chunks} x {chunk}-token chunks, capacity {cfg.max_seq_len})"
         )
         t0 = time.perf_counter()
         for chunks in plan:
@@ -532,6 +547,12 @@ class TtPrefillRuntime:
     def set_d2h_ack_service(self, service) -> None:
         """The runner calls this only for traced runtimes; this one takes the service per forward in prefill_forward."""
         raise NotImplementedError("MiniMax-M3 prefill does not trace")
+
+    def set_on_layer_complete(self, fn) -> None:
+        """Harness hook: ``fn(layer_idx)`` after each layer (rank-local index), when neither a completion sink nor a
+        D2H ack service is set. Needs no compile(): a harness warms up with its own forwards and wants those counted
+        too."""
+        self._on_layer_complete = fn
 
     def gather_layer(self, kv_cache, slot_id: int, layer_idx: int, n_tokens: int):
         """Read one layer's device cache back to NATURAL token order (un-rotating the block-cyclic SP

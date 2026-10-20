@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+from dataclasses import dataclass
+
 import ttnn
 from models.demos.common.prefill.prefill_chunk import PrefillChunk
 from models.demos.minimax_m3.utils.profiler_utils import FINE, zone
@@ -10,7 +12,14 @@ from ..residual import use_sharded_residual
 from .config import AttentionConfig, ProgramConfig
 from .dense_sp import dense_sp_attention, dense_sp_attention_nocache
 from .kv_cache import write_index_k_chunk, write_kv_chunk
-from .msa import index_branch_forward, msa_sp_attention_cache_read, msa_sp_attention_nocache
+from .msa import (
+    MsaChunk,
+    index_branch_forward,
+    msa_chunks_pipelined,
+    msa_overlap_chunks,
+    msa_sp_attention_cache_read,
+    msa_sp_attention_nocache,
+)
 from .operations import (
     apply_allgather_and_slice,
     apply_allreduce,
@@ -92,10 +101,11 @@ def attention_forward(
     # head_dim (qk_norm_type="per_head"). See the post-split block below (matches
     # transformers minimax_m3_vl: view-to-heads → q_norm/k_norm → RoPE).
 
-    def core(xqkv, hidden, chunk, rows):
-        return _attention_core(
-            xqkv,
-            hidden,
+    chunks = chunks or [PrefillChunk(slot_id=0, actual_start=0, actual_end=seq_len)]
+    if len(chunks) == 1:
+        tt_sdpa_out = _attention_core(
+            xqkv_fused,
+            hidden_states,
             rope_mats,
             weights,
             kv_cache,
@@ -105,39 +115,48 @@ def attention_forward(
             program_config,
             transformation_mat,
             ccl_manager,
-            slot_id=chunk.slot_id,
+            slot_id=chunks[0].slot_id,
             layer_idx=layer_idx,
-            cached_len=chunk.actual_start,
+            cached_len=chunks[0].actual_start,
             indexed_rope=indexed_rope,
-            seq_len=rows,
+            s_local=seq_len,
         )
-
-    chunks = chunks or [PrefillChunk(slot_id=0, actual_start=0, actual_end=seq_len)]
-    if len(chunks) == 1:
-        tt_sdpa_out = core(xqkv_fused, hidden_states, chunks[0], seq_len)
     else:
         assert indexed_rope, "a packed forward needs the whole-cache indexed RoPE"
-        rows = seq_len // len(chunks)
-        real = [c for c in chunks if not c.is_empty]
-
-        def chunk_rows(t, k):
-            return ttnn.slice(t, (0, 0, k * rows, 0), (1, 1, (k + 1) * rows, t.shape[-1]))
-
-        outs = [
-            core(chunk_rows(xqkv_fused, k), chunk_rows(hidden_states, k) if config.is_sparse else None, c, rows)
-            for k, c in enumerate(real)
-        ]
-        xqkv_fused.deallocate(True)
-        if config.is_sparse:
-            hidden_states.deallocate(True)
-        # Empty chunks (the tail) get zero rows; concatenating all chunks keeps one concat program per forward width.
-        empties = len(chunks) - len(real)
-        zeros = ttnn.zeros_like(outs[0]) if empties else None
-        tt_sdpa_out = ttnn.concat(outs + [zeros] * empties, dim=2)
-        for o in outs + ([zeros] if empties else []):
-            o.deallocate(True)
+        tt_sdpa_out = _attention_packed(
+            xqkv_fused,
+            hidden_states,
+            chunks,
+            rope_mats,
+            weights,
+            kv_cache,
+            config,
+            mesh_config,
+            mesh_device,
+            program_config,
+            transformation_mat,
+            ccl_manager,
+            layer_idx=layer_idx,
+            indexed_rope=indexed_rope,
+            total_seq_len=seq_len,
+        )
 
     return _output_projection(tt_sdpa_out, weights, mesh_config, ccl_manager, hidden_size, activation_dtype)
+
+
+@dataclass
+class _PreAttn(MsaChunk):
+    """One chunk's post-RoPE heads, written to the cache, waiting for its attention op: the MsaChunk the pipelined
+    MSA chain reads, plus the K / V / index_k heads the serial paths need (index heads on MSA layers only)."""
+
+    k: ttnn.Tensor = None
+    v: ttnn.Tensor = None
+    index_k: ttnn.Tensor = None
+
+    def release(self):
+        for t in (self.q, self.k, self.v, self.index_q, self.index_k):
+            if t is not None:
+                t.deallocate(True)
 
 
 def _attention_core(
@@ -152,16 +171,152 @@ def _attention_core(
     program_config,
     transformation_mat,
     ccl_manager,
+    *,
     slot_id,
     layer_idx,
     cached_len,
     indexed_rope,
-    seq_len,
+    s_local,
 ):
-    """One chunk's rows, slot ``slot_id`` at position ``cached_len`` (the chunk's actual_start: the prefix already
-    cached): split heads -> QK-norm -> RoPE -> KV write -> attention -> concat heads. Consumes xqkv_fused (and
+    """Split heads -> QK-norm -> RoPE -> KV write -> attention -> concat heads, for ONE chunk's rows
+    (one cache slot, one cached_len). Consumes xqkv_fused (and hidden_states on MSA layers)."""
+    pre = _attention_pre(
+        xqkv_fused,
+        hidden_states,
+        rope_mats,
+        weights,
+        kv_cache,
+        config,
+        mesh_config,
+        transformation_mat,
+        slot_id=slot_id,
+        layer_idx=layer_idx,
+        cached_len=cached_len,
+        indexed_rope=indexed_rope,
+        s_local=s_local,
+    )
+    tt_sdpa_out = _attention_attend(
+        pre, kv_cache, config, mesh_config, mesh_device, program_config, ccl_manager, layer_idx
+    )
+    pre.release()
+    return _attention_post(tt_sdpa_out)
+
+
+def _msa_op_kwargs(config, mesh_config):
+    """The MSA chain's op parameters: the attention scale, the block size, the top-k and the local KV heads
+    (one GQA group per KV head)."""
+    return dict(
+        scale=config.head_dim**-0.5,
+        block_size=config.msa_block_size,
+        topk_blocks=config.msa_topk_blocks,
+        num_groups=mesh_config.shard_size(config.num_kv_heads),
+    )
+
+
+def _chunk_rows(t, k, s_local):
+    """Chunk k's rows of a packed [1, 1, N*s_local, D] activation."""
+    return ttnn.slice(t, (0, 0, k * s_local, 0), (1, 1, (k + 1) * s_local, t.shape[-1]))
+
+
+def _attention_packed(
+    xqkv_fused,
+    hidden_states,
+    chunks,
+    rope_mats,
+    weights,
+    kv_cache,
+    config,
+    mesh_config,
+    mesh_device,
+    program_config,
+    transformation_mat,
+    ccl_manager,
+    *,
+    layer_idx,
+    indexed_rope,
+    total_seq_len,
+):
+    """The attention of a packed forward: each non-empty chunk's rows go through the per-chunk chain with its own
+    slot and actual_start, and the outputs are concatenated back in chunk order (empty chunks, the tail, get zero rows).
+    The head split, norms, RoPE and cache writes of every chunk come first, so the MSA layers can then overlap one
+    chunk's cache gather with another's attention (msa_chunks_pipelined);
+    cold chunks (no cache prefix) run their serial chain before that window. Consumes xqkv_fused (and
     hidden_states on MSA layers)."""
-    # Split into Q, K, V heads
+    assert total_seq_len % len(chunks) == 0, f"{total_seq_len} packed rows do not split into {len(chunks)} chunks"
+    s_local = total_seq_len // len(chunks)
+    real = [c for c in chunks if not c.is_empty]
+    pres = []
+    for k, c in enumerate(real):
+        pres.append(
+            _attention_pre(
+                _chunk_rows(xqkv_fused, k, s_local),
+                _chunk_rows(hidden_states, k, s_local) if config.is_sparse else None,
+                rope_mats,
+                weights,
+                kv_cache,
+                config,
+                mesh_config,
+                transformation_mat,
+                slot_id=c.slot_id,
+                layer_idx=layer_idx,
+                cached_len=c.actual_start,
+                indexed_rope=indexed_rope,
+                s_local=s_local,
+            )
+        )
+    xqkv_fused.deallocate(True)
+    if config.is_sparse:
+        hidden_states.deallocate(True)
+    outs = [None] * len(pres)
+    warm = (
+        msa_overlap_chunks([p.cached_len for p in pres], kv_cache, mesh_config, ccl_manager) if config.is_sparse else []
+    )
+    for i, pre in enumerate(pres):
+        if i not in warm:
+            outs[i] = _attention_attend(
+                pre, kv_cache, config, mesh_config, mesh_device, program_config, ccl_manager, layer_idx
+            )
+    if warm:
+        pipelined = msa_chunks_pipelined(
+            [pres[i] for i in warm],
+            kv_cache=kv_cache,
+            layer_idx=layer_idx,
+            mesh_config=mesh_config,
+            ccl_manager=ccl_manager,
+            **_msa_op_kwargs(config, mesh_config),
+        )
+        for i, out in zip(warm, pipelined):
+            outs[i] = out
+    for i, pre in enumerate(pres):
+        pre.release()
+        outs[i] = _attention_post(outs[i])
+    # Empty chunks (the tail) get zero rows; concatenating all chunks keeps one concat program per forward width.
+    empties = len(chunks) - len(real)
+    zeros = ttnn.zeros_like(outs[0]) if empties else None
+    tt_sdpa_out = ttnn.concat(outs + [zeros] * empties, dim=2)
+    for o in outs + ([zeros] if empties else []):
+        o.deallocate(True)
+    return tt_sdpa_out
+
+
+def _attention_pre(
+    xqkv_fused,
+    hidden_states,
+    rope_mats,
+    weights,
+    kv_cache,
+    config,
+    mesh_config,
+    transformation_mat,
+    *,
+    slot_id,
+    layer_idx,
+    cached_len,
+    indexed_rope,
+    s_local,
+):
+    """Head split -> QK-norm -> RoPE -> KV write (+ the MSA index branch and index_k write). Consumes xqkv_fused
+    (and hidden_states on MSA layers); returns the heads the attention op needs."""
     num_local_heads = mesh_config.shard_size(config.num_heads)
     num_local_kv_heads = mesh_config.shard_size(config.num_kv_heads)
 
@@ -209,7 +364,7 @@ def _attention_core(
 
     # Per-layer KV cache write: post-RoPE K + raw V into the packed SP cache, at this chunk's offset
     # (cached_len). Single write point for ALL layer types and ALL chunks (the MSA index_k write is in
-    # the is_sparse branch below); the cache-read attention paths below then read the accumulated prefix.
+    # the is_sparse branch below); the cache-read attention paths then read the accumulated prefix.
     if kv_cache is not None:
         with zone("kv_write", FINE):
             write_kv_chunk(
@@ -222,14 +377,7 @@ def _attention_core(
                 sp_axis=mesh_config.sp_axis,
             )
 
-    # Attention core — per-layer gate (config.is_sparse from M3 sparse_attention_freq):
-    #   MSA layers (3-59): index branch (index_q/k proj -> norm -> RoPE) + block-sparse SP attention
-    #     (msa_sp_attention_nocache): AllGather K/V/index_k across SP, keep q/index_q SP-sharded
-    #     (S/sp rows/device), per-device causality via mesh-coord cluster_axis (cached_len + rank*S_local) -> SP-sharded
-    #     output. num_groups = local KV heads (1 GQA group/KV head; 1 at TP=4). Degenerates to the
-    #     full-context path at sp=1. cached_len is 0 for the first chunk (multi-chunk cache: TODO).
-    #   Dense layers (0-2): plain causal GQA SDPA (exact at sp=1). SP dense via dense_sp_attention
-    #     (ring_joint, dense_sp.py) + the per-layer KV cache lifecycle is the remaining model-level wiring.
+    tt_iq = tt_ik = None
     if config.is_sparse:
         with zone("index_branch"):
             tt_iq, tt_ik = index_branch_forward(
@@ -255,9 +403,27 @@ def _attention_core(
                     kv_actual=cached_len,
                     sp_axis=mesh_config.sp_axis,
                 )
+    return _PreAttn(
+        q=tt_q, index_q=tt_iq, slot_id=slot_id, cached_len=cached_len, s_local=s_local, k=tt_k, v=tt_v, index_k=tt_ik
+    )
+
+
+def _attention_attend(pre, kv_cache, config, mesh_config, mesh_device, program_config, ccl_manager, layer_idx):
+    """The attention op for one chunk's heads -> [1, Hq_local, s_local, head_dim] (tiled)."""
+    tt_q, tt_k, tt_v, tt_iq, tt_ik = pre.q, pre.k, pre.v, pre.index_q, pre.index_k
+    slot_id, cached_len, s_local = pre.slot_id, pre.cached_len, pre.s_local
+
+    # Per-layer gate (config.is_sparse from M3 sparse_attention_freq):
+    #   MSA layers: block-sparse SP attention over the gathered K/V/index_k, q/index_q SP-sharded (s_local rows
+    #     per device), per-device causality from the mesh coordinate. cached_len > 0 reads the prefix out of the
+    #     cache slot (msa_sp_attention_cache_read); a first chunk gathers its own K/V (msa_sp_attention_nocache).
+    #     num_groups = local KV heads (1 GQA group per KV head; 1 at TP=4).
+    #   Dense layers: ring_joint SDPA over the cache (cached_len > 0) or the chunk's own K/V under SP; plain
+    #     causal GQA SDPA at sp=1.
+    if config.is_sparse:
         # The exact-size path's top-k needs at least topk_blocks block columns, so a cold chunk shorter than the
         # top-k window also takes the cache-read path, whose top-k is bounded by kv_len.
-        chunk_global = seq_len * mesh_device.shape[mesh_config.sp_axis]
+        chunk_global = s_local * mesh_device.shape[mesh_config.sp_axis]
         topk_window = config.msa_topk_blocks * config.msa_block_size
         if cached_len > 0 or chunk_global < topk_window:
             assert kv_cache is not None, (
@@ -267,8 +433,8 @@ def _attention_core(
             # Cache-read: the current chunk attends the accumulated prefix, gathered across SP straight
             # from this (slot_id, layer) row of the packed cache (msa_sp_attention_cache_read). cached_len may be
             # mid-slab (a 32-aligned multi-turn resume); the read sizes the gather for the fullest rank.
-            cache_row = slot_id * kv_cache.num_layers + layer_idx
-            tt_sdpa_out = msa_sp_attention_cache_read(
+            cache_row = kv_cache.cache_row(slot_id, layer_idx)
+            return msa_sp_attention_cache_read(
                 tt_q,
                 tt_iq,
                 kv_cache,
@@ -276,32 +442,25 @@ def _attention_core(
                 mesh_config=mesh_config,
                 ccl_manager=ccl_manager,
                 cached_len=cached_len,
-                chunk_local=seq_len,  # current chunk per-chip rows
-                scale=config.head_dim**-0.5,
-                block_size=config.msa_block_size,
-                topk_blocks=config.msa_topk_blocks,
-                num_groups=num_local_kv_heads,
+                chunk_local=s_local,  # current chunk per-chip rows
+                **_msa_op_kwargs(config, mesh_config),
             )
-        else:
-            tt_sdpa_out = msa_sp_attention_nocache(
-                tt_q,
-                tt_k,
-                tt_v,
-                tt_iq,
-                tt_ik,
-                mesh_config=mesh_config,
-                ccl_manager=ccl_manager,
-                cached_len=0,
-                s_local=seq_len,
-                scale=config.head_dim**-0.5,
-                block_size=config.msa_block_size,
-                topk_blocks=config.msa_topk_blocks,
-                num_groups=num_local_kv_heads,
-            )
-    elif config.sequence_parallel:
+        return msa_sp_attention_nocache(
+            tt_q,
+            tt_k,
+            tt_v,
+            tt_iq,
+            tt_ik,
+            mesh_config=mesh_config,
+            ccl_manager=ccl_manager,
+            cached_len=0,
+            s_local=s_local,
+            **_msa_op_kwargs(config, mesh_config),
+        )
+    if config.sequence_parallel:
         # SP dense (first chunk, no prior cache): ring_joint over the chunk's own SP-sharded K/V, each
         # device's query shard attending the full sequence reconstructed across the SP ring. q/k/v are
-        # the per-device shards (seq_len = S/sp rows). logical_n = full sequence = seq_len * sp.
+        # the per-device shards (s_local = S/sp rows). logical_n = full sequence = s_local * sp.
         sp = mesh_device.shape[mesh_config.sp_axis]
         grid = mesh_device.compute_with_storage_grid_size()
         sp_prog = ttnn.SDPAProgramConfig(
@@ -316,9 +475,9 @@ def _attention_core(
         if cached_len > 0:
             # Cache-read: ring_joint over the accumulated prefix in the cache (the seam already wrote this
             # chunk -> write_chunk=False). logical_n = full valid prefix = cached_len + this chunk.
-            logical_n = cached_len + seq_len * sp
+            logical_n = cached_len + s_local * sp
             with zone("ring_joint_sdpa"):
-                tt_sdpa_out = dense_sp_attention(
+                return dense_sp_attention(
                     tt_q,
                     kv_cache.k,
                     kv_cache.v,
@@ -343,36 +502,33 @@ def _attention_core(
                     num_layers=kv_cache.num_layers,
                     write_chunk=False,
                 )
-        else:
-            with zone("ring_joint_sdpa"):
-                tt_sdpa_out = dense_sp_attention_nocache(
-                    tt_q,
-                    tt_k,
-                    tt_v,
-                    mesh_config=mesh_config,
-                    ccl_manager=ccl_manager,
-                    logical_n=seq_len * sp,
-                    n_kv=config.num_kv_heads,
-                    head_dim=config.head_dim,
-                    scale=config.head_dim**-0.5,
-                    program_config=sp_prog,
-                    compute_kernel_config=sp_kcfg,
-                )
-    else:
-        with zone("sdpa"):
-            tt_sdpa_out = ttnn.transformer.scaled_dot_product_attention(
+        with zone("ring_joint_sdpa"):
+            return dense_sp_attention_nocache(
                 tt_q,
                 tt_k,
                 tt_v,
-                is_causal=True,
-                program_config=program_config.get_prefill_sdpa_config(mesh_device, seq_len),
-                compute_kernel_config=program_config.get_compute_kernel_config(),
+                mesh_config=mesh_config,
+                ccl_manager=ccl_manager,
+                logical_n=s_local * sp,
+                n_kv=config.num_kv_heads,
+                head_dim=config.head_dim,
+                scale=config.head_dim**-0.5,
+                program_config=sp_prog,
+                compute_kernel_config=sp_kcfg,
             )
-    tt_q.deallocate(True)
-    tt_k.deallocate(True)
-    tt_v.deallocate(True)
+    with zone("sdpa"):
+        return ttnn.transformer.scaled_dot_product_attention(
+            tt_q,
+            tt_k,
+            tt_v,
+            is_causal=True,
+            program_config=program_config.get_prefill_sdpa_config(mesh_device, s_local),
+            compute_kernel_config=program_config.get_compute_kernel_config(),
+        )
 
-    # Concat heads and apply output projection
+
+def _attention_post(tt_sdpa_out):
+    """Concat heads -> [1, 1, s_local, Hq_local * head_dim]."""
     tt_sdpa_out_pre_concat = tt_sdpa_out
     with zone("concat_heads", FINE):
         tt_sdpa_out = concat_heads(tt_sdpa_out)

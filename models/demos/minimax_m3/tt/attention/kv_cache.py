@@ -48,6 +48,10 @@ class MiniMaxKVCache(KvCaches):
     sp: int
     index_k_tp_axis: Optional[int] = None  # None = index_k TP-replicated; else the mesh axis it is deduped over
 
+    def cache_row(self, slot_id: int, layer_idx: int) -> int:
+        """Batch index of (slot_id, layer) in the three caches, the ``cache_row`` msa.py's cache reads take."""
+        return slot_id * self.num_layers + layer_idx
+
     def deallocate(self) -> None:
         """Free the three device caches (e.g. to re-allocate at a different ``max_seq_len`` while the
         model stays resident). The handle is dead afterwards; do not pass it into the runtime again."""
