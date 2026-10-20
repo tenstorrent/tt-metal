@@ -15,12 +15,12 @@
 
 namespace tt::tt_metal::experimental {
 
-// For an Allocation that do not own any resource
+// For an RawAllocation that do not own any resource
 struct NoAlloc {};
 
-// Utiltiy struct for holding resource token assocaited with current Allocation.
-// The depdency here should be inverted once we formalizes Allocation,
-// Allocation should be part of MeshTensor, not the other way around.
+// Utiltiy struct for holding resource token assocaited with current RawAllocation.
+// The depdency here should be inverted once we formalizes RawAllocation,
+// RawAllocation should be part of MeshTensor, not the other way around.
 struct TensorBackedResource {
     explicit TensorBackedResource(MeshTensor tensor) : resource(std::move(tensor)) {}
 
@@ -58,14 +58,14 @@ struct RangeLockstepAllocation : TensorBackedResource {
     CoreRangeSet allocated_nodes;
 };
 
-struct AllocationImpl {
+struct RawAllocationImpl {
     // invariant:
     // - _detail, unless in NoAlloc, is always backed by a tensor in L1.
 
     using Detail = std::variant<NoAlloc, LockstepAllocation, PerNodeAllocation, RangeLockstepAllocation>;
 
-    AllocationImpl() = default;
-    explicit AllocationImpl(Detail detail) : _detail(std::move(detail)) {}
+    RawAllocationImpl() = default;
+    explicit RawAllocationImpl(Detail detail) : _detail(std::move(detail)) {}
 
     Detail _detail;
 };

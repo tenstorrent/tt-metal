@@ -5,8 +5,8 @@
 #pragma once
 
 #include <string>
-// #include <header with RawAllocationProperties/Spec/Config whatever definitions>
 
+#include <tt-metalium/experimental/allocation/raw_allocation_properties.hpp>
 #include <tt_stl/strong_type.hpp>
 
 namespace tt::tt_metal::experimental {
