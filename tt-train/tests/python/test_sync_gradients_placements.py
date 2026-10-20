@@ -4,37 +4,28 @@
 
 """Gradient synchronisation trusts TensorTopology placements: this module pins what it reads.
 
-``ttml.core.distributed.synchronize_gradients`` decides per (parameter, mesh axis) whether to all-reduce the gradient
-along that axis by reading the *parameter's* TensorTopology through ``is_sharded_on_axis``: a parameter sharded on an
-axis (TP, FSDP) already holds a per-shard-correct gradient there, a replicated one must be averaged. The reader takes
-an N-D label (one placement per mesh axis) as is, expands the collapsed 1-D ``{N}, [placement]`` of the default
-mappers per axis (a whole-mesh Shard is Shard on every axis of size > 1, a whole-mesh Replicate is Replicate
-everywhere) and refuses a label it cannot read; every tensor created without a mapper carries one Replicate per mesh
-axis, and the all_reduce result carries its own per-axis label.
+``synchronize_gradients`` decides per (parameter, mesh axis) whether to all-reduce the gradient along that axis by
+reading the parameter's label through ``is_sharded_on_axis``: sharded there (TP, FSDP) means the gradient is already
+per-shard-correct, replicated means it must be averaged. The reader takes an N-D label as is, expands the default
+mappers' collapsed 1-D label per axis, and refuses a label it cannot read.
 
-For tiny TP / DDP / FSDP / HSDP models after one backward this module asserts:
+For tiny TP / DDP / FSDP / HSDP models after one backward, the tests assert that every parameter label has one
+placement per mesh axis, which axes ``is_sharded_on_axis`` reports per parameter, and that after
+``synchronize_gradients`` each gradient reads Replicate on the reduced axis, keeps its Shard on the other axis and
+holds the mean of the per-device gradients. Negative controls: a collapsed Shard label reads as Shard on the
+non-trivial axis, and a label that does not cover the mesh raises instead of being guessed.
 
-  * every parameter label has one placement per mesh axis (tensors created without a mapper included);
-  * ``is_sharded_on_axis`` per (parameter, axis), hence the set of axes each gradient is reduced along;
-  * after ``synchronize_gradients`` the gradient reads Replicate on the reduced axis, keeps its Shard on the other
-    axis, and holds the mean of the per-device gradients read before the reduction;
-  * negative controls: a collapsed Shard label reads as Shard on the non-trivial axis, and a label that does not
-    cover the mesh raises instead of being guessed.
+The ParallelismContext overload of ``synchronize_gradients`` cannot be exercised for several layouts in one process
+(the context is a one-shot singleton), so its axis filter is checked through the reader and the collectives through
+the explicit-axes overload.
 
-The ParallelismContext-driven overload of ``synchronize_gradients`` cannot be exercised for several layouts in one
-process (the context is a one-shot singleton), so its axis filter is checked through the reader it uses and the
-collectives through the explicit-axes overload.
+Meshes: the conftest's ``tp_mesh`` / ``fsdp_mesh`` ``[1, 2]`` fixtures, a local ``[1, 2]`` with the data-parallel
+axis on axis 1, and ``[2, 2]`` meshes for DP x TP and HSDP that open or skip like ``test_ccl_topology.py``. Every
+fixture is module-scoped and reopens the device, so each mesh has its own class, in fixture order.
 
-Meshes: the shared ``tp_mesh`` / ``fsdp_mesh`` ``[1, 2]`` fixtures (conftest), a local ``[1, 2]`` mesh with the
-data-parallel axis on axis 1 so a DDP reduction really runs over two devices, and ``[2, 2]`` meshes for DP x TP and
-HSDP that open-or-skip like test_ccl_topology.py (4 devices and a bundled MGD needed). Every fixture is module-scoped
-and reopens the device, so each mesh's tests live in their own class, in fixture order: TestTP, TestFSDP, TestDDP,
-TestDPxTP, TestHSDP.
-
-Test-only knobs for a box whose two-axis mesh is not ``[2, 2]`` (the eight-p150 loudbox opens 2x4, not 2x2):
-``TTML_TEST_TWO_AXIS_MESH=2x4`` sets the DP x TP / HSDP shape and opens it with the runtime's default descriptor; the
-sharded role (tp / fsdp) goes on the smaller axis unless ``TTML_TEST_DP_AXIS=0`` puts dp first (the galaxy layout);
-``TTML_TEST_DIM=128`` widens the model so a 4-way shard stays tile-aligned.
+Knobs for a box whose two-axis mesh is not ``[2, 2]``: ``TTML_TEST_TWO_AXIS_MESH=2x4`` sets the DP x TP / HSDP shape
+(the sharded role goes on the smaller axis unless ``TTML_TEST_DP_AXIS=0`` puts dp first) and ``TTML_TEST_DIM=128``
+widens the model so a 4-way shard stays tile-aligned.
 """
 
 from __future__ import annotations
@@ -121,19 +112,15 @@ def _two_axis_mesh(role: str) -> tuple[tuple[int, int], tuple[str, str]]:
 
 @contextlib.contextmanager
 def _named_mesh_or_skip(fresh_device_mesh, shape: tuple[int, ...], axis_names: tuple[str, ...]):
-    """Open ``shape`` with ``axis_names`` on a fresh ``MetalEnv`` (the conftest's ``fresh_device_mesh``, which
-    releases the live one first: a ``MetalEnv`` reads ``TT_MESH_GRAPH_DESC_PATH`` only when it is created, and one
-    created for a line cannot hand out a 2x2) for a module-scoped fixture, or skip its tests.
+    """Open ``shape`` with ``axis_names`` on a fresh ``MetalEnv`` for a module-scoped fixture, or skip its tests.
 
-    The conftest installs the arch's bundled descriptor only when ``TT_MESH_GRAPH_DESC_PATH`` is unset, and this
-    module's conftest-provided 1x2 fixtures leave their path set until module teardown, so a shape larger than a line
-    installs its own bundled descriptor here first (a path set for a line does not describe it); a 2-device shape
-    keeps whatever is set (the bench box runs its own descriptor). With no descriptor at all, a shape that is the
-    whole host is tried with the runtime's default descriptor; anything else skips.
+    The host is sized by its chips before any descriptor is installed. A shape larger than a line then installs its
+    bundled descriptor (a path left set by the 1x2 fixtures describes a line, not a 2x2); a 2-device shape keeps
+    whatever is set; with no descriptor at all, a shape that is the whole host is tried with the runtime's default
+    and anything else skips. The ``MetalEnv`` is released so the next one reads the descriptor just set.
 
-    Skips come only from here (too few chips, or no descriptor) and from the conftest (too few devices): any other
-    failure to open the mesh propagates, so a fabric timeout or a descriptor that does not describe the host fails the tests instead of
-    skipping them."""
+    Skips come only from too few chips or no descriptor; any other failure to open the mesh propagates, so a fabric
+    timeout or a descriptor that does not describe the host fails the tests rather than skipping them."""
     needed = int(np.prod(shape))
     what = f"{axis_names} placements tests"
     # The conftest's host-size check reads the system mesh descriptor, and the descriptor installed below makes that
