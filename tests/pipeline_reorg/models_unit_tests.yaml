@@ -2371,6 +2371,6 @@
     bh_p150:
       timeout: 5
       tier: 3
-  owner_id: U09B1UE301K # Abror Shopulatov
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz (external bring-up by murodbecks)
   team: models
   budget_type: unit
