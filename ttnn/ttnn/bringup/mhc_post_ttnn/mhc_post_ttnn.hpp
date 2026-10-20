@@ -5,6 +5,8 @@
 #pragma once
 
 #include <optional>
+#include <tuple>
+#include <variant>
 
 #include <tt-metalium/program_descriptors.hpp>
 
@@ -26,5 +28,31 @@ Tensor mhc_post(
     const Tensor& comb,
     const std::optional<tt::tt_metal::ComputeConfigDescriptor>& compute_kernel_config = std::nullopt,
     bool comb_transposed = true);
+
+}  // namespace ttnn::operations::bringup::mhc_post_ttnn
+
+namespace ttnn::operations::bringup::mhc_post_ttnn {
+
+// ttnn.bringup.mhc_post(..., stats_weight=W) (deepseek_v41_flash_d_p P.14): the mix above AND, from the same pass,
+// the next hc step's partial row stats (..., T, 32) fp32 = [X' @ W | ...] with column n (n + 2) = sum_c X'^2
+// (= mhc_pre_xing_pack(X' @ W, X')). W (..., n*C, 32) fp32 TILE (leading dims 1). Needs fp32 F / X, n <= 4.
+std::tuple<Tensor, Tensor> mhc_post_with_stats(
+    const Tensor& input_tensor,
+    const Tensor& residual,
+    const Tensor& post,
+    const Tensor& comb,
+    const Tensor& stats_weight,
+    const std::optional<tt::tt_metal::ComputeConfigDescriptor>& compute_kernel_config = std::nullopt,
+    bool comb_transposed = true);
+
+// The Python entry: X' without stats_weight (the op as it was), (X', stats) with it.
+std::variant<Tensor, std::tuple<Tensor, Tensor>> mhc_post_py(
+    const Tensor& input_tensor,
+    const Tensor& residual,
+    const Tensor& post,
+    const Tensor& comb,
+    const std::optional<tt::tt_metal::ComputeConfigDescriptor>& compute_kernel_config,
+    bool comb_transposed,
+    const std::optional<Tensor>& stats_weight);
 
 }  // namespace ttnn::operations::bringup::mhc_post_ttnn

@@ -1,0 +1,128 @@
+{
+ "used": [
+  {
+   "id": "DS41-3",
+   "how": "single-pass mHC: a sublayer collapses with the PREVIOUS sublayer's pre, so mhc_pre_xing got collapse_pre (collapse with a given pre while computing the new hc) instead of collapsing with the pre it computes",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-42",
+   "how": "kept X' as matmul in0 (srcB) and the 9-bit-rounded fn_t as in1 (srcA) in mhc_post's stats matmul, so the projection's truncation is the unfused ttnn.matmul's (tests: equal float64 error)",
+   "traced": null,
+   "cited": false
+  },
+  {
+   "id": "K-30",
+   "how": "kept the sum of squares and the partial-row combine on the SFPU (exact fp32), not an FPU ones-matmul row sum (TF32 read)",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-27",
+   "how": "the engram mode replaces the exact SFPU ttnn.sum chain; tested within 1e-6 of it and of float64 (exact sums kept)",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-40",
+   "how": "MHC_FUSED=on asserts HC_SINKHORN=sfpu_fp32: the fused hc call is mhc_pre_xing(deepseek=True)",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "K-20",
+   "how": "kept comb_transposed=True (mhc_post default) for DeepSeek's residual in the stats program; built its coefficient expansion for both orders and tested comb as stored at HiFi4",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "K-56",
+   "how": "deleted tests/ttnn/unit_tests/operations/p14_mhcpost (tt-probe scripts) before finishing",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "K-52",
+   "how": "ran the model profile / quick tests with --no-precompile",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "K-53",
+   "how": "PYTHONPATH=$PWD for every run",
+   "traced": false,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "whether an unpack-to-DEST copy may overwrite DEST tiles an SFPU pass of the same window just read (it may: WAIT_SFPU stall in math_unpack_to_dest_math_ready; added DS41-81)",
+  "mhc_post / mhc_pre take a ttnn.ComputeConfigDescriptor, not ttnn.init_device_compute_kernel_config's config (TypeError 'incompatible function arguments'; DS41-82)",
+  "fused passes over the fp32 streams are DRAM-bound: batch the reads per unit; per-unit overhead makes narrow work units lose (DS41-80)"
+ ],
+ "overseer": [],
+ "cited_only": [
+  "DS41-80",
+  "DS41-82"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "P.14",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-20T15:59:00",
+  "head": "4d8c67406f6",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/P.14.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tt/ccl.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/collapse.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/common.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/engram_add.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/mhc.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/model.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/residual.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py",
+   "ttnn/ttnn/bringup/INDEX.md",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/CHANGELOG.md",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/README.md",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/device/mhc_post_stats_device_operation.cpp",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/device/mhc_post_stats_device_operation.hpp",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/device/mhc_post_stats_program_factory.cpp",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/kernels/mhc_post_stats_common.hpp",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/kernels/mhc_post_stats_compute.cpp",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/kernels/mhc_post_stats_reader.cpp",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/kernels/mhc_post_stats_writer.cpp",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/mhc_post_ttnn.cpp",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/mhc_post_ttnn.hpp",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/mhc_post_ttnn_nanobind.cpp",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/sources.cmake",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/tests/unit/test_mhc_post_stats.py",
+   "ttnn/ttnn/bringup/mhc_pre_ttnn/CHANGELOG.md",
+   "ttnn/ttnn/bringup/mhc_pre_ttnn/README.md",
+   "ttnn/ttnn/bringup/mhc_pre_ttnn/device/mhc_engram_pack_device_operation.cpp",
+   "ttnn/ttnn/bringup/mhc_pre_ttnn/device/mhc_engram_pack_device_operation.hpp",
+   "ttnn/ttnn/bringup/mhc_pre_ttnn/device/mhc_engram_pack_program_factory.cpp",
+   "ttnn/ttnn/bringup/mhc_pre_ttnn/device/mhc_pre_xing_device_operation.cpp",
+   "ttnn/ttnn/bringup/mhc_pre_ttnn/device/mhc_pre_xing_device_operation.hpp",
+   "ttnn/ttnn/bringup/mhc_pre_ttnn/device/mhc_pre_xing_program_factory.cpp",
+   "ttnn/ttnn/bringup/mhc_pre_ttnn/kernels/mhc_engram_pack_common.hpp",
+   "ttnn/ttnn/bringup/mhc_pre_ttnn/kernels/mhc_engram_pack_compute.cpp",
+   "ttnn/ttnn/bringup/mhc_pre_ttnn/kernels/mhc_engram_pack_reader.cpp",
+   "ttnn/ttnn/bringup/mhc_pre_ttnn/kernels/mhc_engram_pack_writer.cpp",
+   "ttnn/ttnn/bringup/mhc_pre_ttnn/kernels/mhc_pre_xing_reader.cpp",
+   "ttnn/ttnn/bringup/mhc_pre_ttnn/kernels/mhc_pre_xing_writer.cpp",
+   "ttnn/ttnn/bringup/mhc_pre_ttnn/mhc_pre_ttnn_nanobind.cpp",
+   "ttnn/ttnn/bringup/mhc_pre_ttnn/mhc_pre_xing.cpp",
+   "ttnn/ttnn/bringup/mhc_pre_ttnn/mhc_pre_xing.hpp",
+   "ttnn/ttnn/bringup/mhc_pre_ttnn/sources.cmake",
+   "ttnn/ttnn/bringup/mhc_pre_ttnn/tests/unit/test_engram_pack.py",
+   "ttnn/ttnn/bringup/mhc_pre_ttnn/tests/unit/test_xing_collapse_pre.py"
+  ]
+ }
+}

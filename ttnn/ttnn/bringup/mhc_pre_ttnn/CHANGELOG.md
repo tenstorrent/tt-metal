@@ -138,3 +138,55 @@ two perf-tournament rounds); its golden suite is `eval/golden_tests/mhc_pre` on 
    - Files: `kernels/mhc_pre_xing_compute.cpp`, `device/mhc_pre_xing_device_operation.{hpp,cpp}`,
      `device/mhc_pre_xing_program_factory.cpp`, `mhc_pre_xing.{hpp,cpp}`, `mhc_pre_ttnn_nanobind.cpp`,
      `tests/{reference.py,xing_cases.py,test_mhc_pre_xing.py}`.
+
+8. `mhc_pre_xing(..., collapse_pre=)`: the coefficients AND a collapse with a given pre in one program
+   (deepseek_v41_flash_d_p P.14, owner's fused-mHC comparison).
+   - What: an optional tensor `collapse_pre` (default None). Given (with streams, coefficients_given=False), the
+     program computes hc from the reduced row as before and collapses the streams with collapse_pre's columns 0..n-1
+     (y = sum_i collapse_pre_i x_i) instead of the pre it just computed; hc is still returned. Single-pass mHC
+     (DeepSeek-V4: a sublayer collapses with the PREVIOUS sublayer's pre) then needs one program per hc step, not a
+     coefficient program plus a separate collapse. The reader reads the pre row tile per segment (cb 7) and the writer
+     builds the pre-block tile from it; both behind the data-movement define `MHC_XING_GIVEN_PRE` (absent when off),
+     the extra CT / RT args are appended only when on, and the program hash takes `given_pre` + the pre's spec only
+     when on, so every existing program (xing40, glm53, deepseek coefficients) is the one it was. collapse_pre may be
+     (..., T, n..32) fp32 TILE (only columns 0..n-1 are read). Refused without streams, with coefficients_given, or
+     wider than one tile.
+   - Why: deepseek_v41_flash_d_p's attn_collapse / ffn_collapse were 4 slices + multiply + 3 addcmul each (5.0 + 5.0 ms
+     a chunk on 2x2); the coefficient program already walks the streams' columns for its own collapse.
+     2x2 p150, [1024, 4 x 2560] fp32 a chip (wall, 30 synced calls): coef + collapse_pre 0.164 ms vs coef 0.028 +
+     the multiply / addcmul collapse 0.765 ms. Model (MHC_FUSED=on, chunk 53248-55296): attn / ffn_collapse
+     5.0 + 5.0 -> 0 ms, attn / ffn_hc 3.2 -> 4.35 ms each before the residual stats (mhc_post_ttnn change 7).
+   - Tests: `tests/unit/test_xing_collapse_pre.py` (DS41 2x2 / 4x4 shapes and a small one: hc bit-identical to the
+     plain coefficient call, y bit-identical to the coefficients_given collapse and within 1e-6 of float64 (measured
+     4e-8), negative control (the computed pre), a 32-column pre, refusals). Regression, option off (2026-10-20, 2x2):
+     unit + golden 332 passed / 1 skipped (= the recorded 321 / 1 + the 11 new tests of changes 8-9), model cases 103
+     passed (= recorded).
+   - Needed by: deepseek_v41_flash_d_p P.14 (tt/mhc.py:TtHcMixes.fused, setting MHC_FUSED).
+   - Files: `mhc_pre_xing.{hpp,cpp}`, `mhc_pre_ttnn_nanobind.cpp`, `device/mhc_pre_xing_device_operation.{hpp,cpp}`,
+     `device/mhc_pre_xing_program_factory.cpp`, `kernels/mhc_pre_xing_{reader,writer}.cpp`,
+     `tests/unit/test_xing_collapse_pre.py`.
+
+9. `mhc_pre_xing_pack(None, streams, n=, engram_keys=, engram_weight=)`: the engram gate's partial sums in one pass
+   (deepseek_v41_flash_d_p P.14).
+   - What: keyword options `engram_keys` / `engram_weight` (default None; `mix` becomes Optional and must be None in
+     this mode). A separate program (`device/mhc_engram_pack_*`, `kernels/mhc_engram_pack_*`): from the streams h
+     (..., T, n C), the keys k (..., T, >= n C; columns 0..n C-1) and the weight w (..., 32, n C: the weight row on all
+     32 rows of a tile) it writes a new row (..., T, 32) fp32 = [sum_c h_i w_i k_i | sum_c h_i^2 | sum_c k_i^2 | 0 ..]
+     (i < n) of the chip's columns: per unit (stream, column block, token tile-row) one DEST window accumulates the
+     three lane-wise in fp32 on the SFPU (UnpackToDestFp32 copies; (h w) rounded, then fused multiply-adds), the writer
+     re-lays them coefficient-major, the compute sums the 32 column slots in order, the unit's 3 totals go into a zero
+     partial row in a DRAM scratch, and the row's root core (semaphore count) sums its n G partials in unit order.
+     Units are stream / block-major so a core keeps its weight block in L1. The plain mix + sum x^2 mode, its program
+     and hash are unchanged.
+   - Why: deepseek_v41_flash_d_p's engram_add computed these 12 sums with a weight multiply, 12 slices, 12 multiplies
+     and 12 ttnn.sum (exact SFPU) + a concat: 2.51 ms vs 0.424 ms for this op (2x2, [1024, 4 x 2560] h, [1024,
+     5 x 2560] k, wall, 30 synced calls). The model's engram_add section (2 layers, with the mhc_post identity-comb add):
+     7.0 -> 1.78 ms a chunk.
+   - Tests: `tests/unit/test_engram_pack.py` (DS41 2x2 / 4x4, small, ragged Ct = 13, n = 2: every column within 1e-6
+     of float64 sums of the fp32 inputs (measured <= 1.4e-7), the dot within 1e-6 of the op chain (2.2e-7), the other
+     columns exactly 0, negative controls (a dropped column tile, the weight ignored), a program-cache hit on fresh
+     buffers, refusals). Regression: as change 8.
+   - Needed by: deepseek_v41_flash_d_p P.14 (tt/engram_add.py:TtEngramAdd._partials_fused, setting MHC_FUSED).
+   - Files: `mhc_pre_xing.{hpp,cpp}`, `mhc_pre_ttnn_nanobind.cpp`, `sources.cmake`,
+     `device/mhc_engram_pack_device_operation.{hpp,cpp}`, `device/mhc_engram_pack_program_factory.cpp`,
+     `kernels/mhc_engram_pack_{common.hpp,reader.cpp,writer.cpp,compute.cpp}`, `tests/unit/test_engram_pack.py`.
