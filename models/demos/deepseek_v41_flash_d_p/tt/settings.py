@@ -259,6 +259,28 @@ TABLE = {
         "ttnn.gather from the 16-entry table (4.0 ms per [2304, 5120] matrix); arith = composed float arithmetic "
         "(6.4 ms); both bit-exact",
     ),
+    "SHARED_EXPERT_IMPL": Setting(
+        "flat",
+        ("linear", "flat"),
+        "the shared expert (tt/shared_expert.py; TP by the intermediate over the mesh row, 2304 / TP columns a chip): "
+        "linear = today's ttnn.linear chain (bf16 weights, exact fp8 values: [W1 | W3] column-parallel at "
+        "MATMUL_FIDELITY + fp32 accumulation, SFPU clamped SwiGLU, q(h), W2 row-parallel, fp32 partial); flat (P.12, "
+        "owner comparison 2026-10-20, Marko Staletovic's K3_SE=flat) = the chip's slice run by the flat routed expert "
+        "(ttnn.bringup.flat_routed_expert) as SE_PARTS always-on experts every own token goes to, weights bfloat8_b "
+        "(the checkpoint's fp8 width, agent rule 7) laid out once at load from the stored [N, K] matrices, the routed "
+        "experts' precision (EXPERTS_PRECISION: glm = LoFi + bfp8 x / h tiles, full = MATMUL_FIDELITY + bf16 tiles), "
+        "fp32 DEST, bf16 y = the partial moe_add sums with the routed experts' before their one reduce-scatter. Under "
+        "EXPERTS_COMBINE=weighted + NUMERICS=native its x is the routed experts' row-major gathered q(x), read by token "
+        "index (no layout conversion of its own); NUMERICS=official: own q(x) rows, the op's fp8_act_quant (q(h)) with "
+        "unit routing weights. max precision: linear (exact weights). Not hidden: folding into the routed experts' program "
+        "needs one weight dtype for both (routed bfp4, shared bfp8), overlapping the dispatch needs sub-devices; its x "
+        "costs nothing. P.12, 2x2, chunk 2048, plain profile (8 layers): shared_expert 11.41 -> 2.01 ms a chunk (1.43 -> "
+        "0.25 ms a layer, 288 -> 32 programs), moe_add 1.78 -> 1.58, MoE block (router + experts + shared + moe_add) "
+        "4.05 -> 2.84 ms a layer, device total 230.28 -> 220.61; quick A/B: chunk wall 232.1 ms either way, worst layer "
+        "L03 0.99519 (linear, P.11: 0.99530). shared_out vs float64 with the exact fp8 weights (layers 0 / 24, 256 rows): "
+        "linear rel 0.0030, bias +0.09 %; flat 0.020 / 0.022, bias +1.3 / +1.4 % (bfp8 x / h tiles; the bfp8 weights "
+        "alone 0.005-0.006; LoFi + bf16 tiles 0.011, bias -0.8 %; HiFi4 + bf16 tiles 0.006: DS41-77)",
+    ),
     "EXPERTS_SUM": Setting(
         "gather_add",
         ("gather_add", "reduce_scatter"),
@@ -343,6 +365,7 @@ MAX_PRECISION = {
     # and multiplies by bf16 routing weights (the planner's / combine's format), so the max-precision path is separate
     "EXPERTS_COMBINE": "separate",
     "COMBINE_ACC": "fp32",  # P.9: bf16 running sums (one pass) are judged end to end only
+    "SHARED_EXPERT_IMPL": "linear",  # P.12: the exact bf16 weights; flat (bfp8 weights) is judged end to end only
 }
 
 settings = Settings("DS41_", TABLE, max_precision=MAX_PRECISION)

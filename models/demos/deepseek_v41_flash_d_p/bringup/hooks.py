@@ -989,7 +989,7 @@ def _device_step_fn(mesh, spec, layer, step, ck, cfg, shared=None):
     if step == "shared_expert":
         from models.demos.deepseek_v41_flash_d_p.tt.shared_expert import build_shared_expert
 
-        return _rows_to_hidden_host_fn(mesh, build_shared_expert(mesh, ck, cfg, layer))
+        return _rows_to_hidden_host_fn(mesh, build_shared_expert(mesh, ck, cfg, layer, chunk=_chunk(spec)))
     if step == "moe_add":
         from models.demos.deepseek_v41_flash_d_p.tt.moe_add import build_moe_add
 
