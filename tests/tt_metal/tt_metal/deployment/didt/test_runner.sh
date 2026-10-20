@@ -67,6 +67,24 @@ mkdir -p "$LOGDIR"
 log="$LOGDIR/didt_all_chips.log"
 junit="$LOGDIR/didt_all_chips_junit.xml"
 
+# tray_for_device <id>: Blackhole Galaxy tray mapping (bus 0x00/0x40/0x80/0xc0 -> tray 1/2/4/3)
+tray_for_device() {
+	case $(( $1 / 8 )) in
+	0) echo 1 ;;
+	1) echo 2 ;;
+	2) echo 4 ;;
+	3) echo 3 ;;
+	esac
+}
+
+print_nd_devices() {
+	awk '/Number of non-deterministic outputs on device [0-9]+ is [0-9]+/ {
+		dev = $0; sub(/.*on device /, "", dev); sub(/ is.*/, "", dev)
+		count = $0; sub(/.* is /, "", count)
+		if (count + 0 > 0) { print dev+0 }
+	}' "$1"
+}
+
 # Carries pytest's exit status out of the tee pipeline
 RCFILE="$(mktemp)"
 echo 0 > "$RCFILE"
@@ -116,6 +134,18 @@ then
 	echo "DIDT (all chips): PASSED (log: $log)"
 else
 	echo "DIDT (all chips): FAILED, exit code $rc (log: $log)"
+	nd_devices="$(print_nd_devices "$log")"
+	if [ -n "$nd_devices" ]
+	then
+		nd_summary=""
+		for dev in $nd_devices
+		do
+			tray="$(tray_for_device "$dev")"
+			nd_summary="${nd_summary:+$nd_summary, }device $dev (tray $tray)"
+		done
+		echo "DIDT (all chips): non-deterministic output on $nd_summary"
+		echo "$nd_summary" > "$LOGDIR/nd_devices.txt"
+	fi
 fi
 
 exit "$rc"

@@ -318,6 +318,8 @@ then
 	then
 		didt_reset_ok=0
 	fi
+	# Devices aren't always visible immediately
+	sleep 5
 fi
 failures=0
 passes=0
@@ -341,6 +343,10 @@ emit "$(printf '%-20s %s' 'PCIe read test:'  "$pcie_read_pass/$iterations_run it
 emit "$(printf '%-20s %s' 'PCIe write test:' "$pcie_write_pass/$iterations_run iterations passed")"
 emit "$(printf '%-20s %s' 'DIDT tests:'      "$([ "$didt_ok" -eq 1 ] && echo passed || echo failed)")"
 emit "$RULE_LIGHT"
+if [ "$didt_ok" -eq 0 ] && [ -s "$LOGDIR/didt/nd_devices.txt" ]
+then
+	emit "$(printf '%-20s %s' 'DIDT ND devices:' "$(cat "$LOGDIR/didt/nd_devices.txt")")"
+fi
 if [ "$iteration_failures" -gt 0 ] || [ "$didt_ok" -eq 0 ]
 then
 	emit_bold "$(printf '%-20s %s' 'Overall:' "$((iterations_run - iteration_failures))/$iterations_run iterations passed, DIDT $([ "$didt_ok" -eq 1 ] && echo passed || echo failed)")"
