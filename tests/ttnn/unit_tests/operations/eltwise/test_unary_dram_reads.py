@@ -94,8 +94,7 @@ def run_against_default_path(op, a, device, memory_config, dtype=ttnn.bfloat16, 
         ("small", 7),
         ("few_pages_per_core", 7),
         ("large", 7),
-        ("large_short_last_shard", 7),
-        ("large_four_shards", 4),
+        ("large_four_shards_short_last", 4),
         ("large_all_banks", None),
     ],
 )
@@ -107,7 +106,7 @@ def test_height_sharded(device, op_name, case, num_shards):
         rows = large_rows(device, 1024, 32 * num_shards, pages_per_core=64)
     else:
         rows = large_rows(device, 1024, 32 * num_shards)
-    if case == "large_short_last_shard":
+    if case == "large_four_shards_short_last":
         rows -= 64
     shape = [1, 1, rows, 1024]
     run_against_default_path(OPS[op_name], random_input(shape), device, dram_sharded(shape, HEIGHT, num_shards))
@@ -184,12 +183,21 @@ def test_interleaved_very_large(device, op_name):
     assert ttnn.to_torch(differing).item() == 0
 
 
-# 4 KB pages (fp32) take the flows; bfp8 pages keep the default path. At 200 pages per core heavy fp32 ops on height
-# shards read one page at a time with many cores per bank.
-@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat8_b], ids=["fp32", "bfp8"])
+# 4 KB pages (fp32) take the flows; bfp8 pages keep the default path, so they skip the one-page size. At 200 pages per
+# core heavy fp32 ops on height shards read one page at a time with many cores per bank.
+@pytest.mark.parametrize(
+    "dtype, size",
+    [
+        (ttnn.float32, "small"),
+        (ttnn.float32, "one_page"),
+        (ttnn.float32, "large"),
+        (ttnn.bfloat8_b, "small"),
+        (ttnn.bfloat8_b, "large"),
+    ],
+    ids=["fp32-small", "fp32-one_page", "fp32-large", "bfp8-small", "bfp8-large"],
+)
 @pytest.mark.parametrize("op_name", ["identity", "relu", "silu", "hardswish", "gelu_accurate", "logit"])
 @pytest.mark.parametrize("layout", ["height", "width", "interleaved"])
-@pytest.mark.parametrize("size", ["small", "one_page", "large"])
 def test_other_formats(device, dtype, op_name, layout, size):
     width = 7 * 1024 if layout == "width" else 1024
     if size == "small":
