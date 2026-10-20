@@ -127,6 +127,12 @@ inline void _llk_unpack_unary_operand_mop_config_(const std::uint32_t buf_desc_i
         // reads it through the packed path and adds non-zero garbage. Unpack one row into the cleared register first
         // (no dvalid, no index increment) so its bank takes that unpacker's output format, then clear it.
         // Cost: one extra single-row unpack per tile, issued on the otherwise idle unpacker, and only in 32-bit Dest mode.
+        // _llk_unpack_unary_operand_ only sets UNP_SEL's counters, so point the other unpacker at tile 0 of this buffer
+        // here; the retag never increments them, so its read stays inside this op's buffer instead of following counters
+        // left by an earlier op.
+        constexpr std::uint32_t retag_unp = (UNP_SEL == p_unpacr::UNP_A) ? p_unpacr::UNP_B : p_unpacr::UNP_A;
+        TTI_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, retag_unp, 0 /*Value*/);
+        TTI_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, retag_unp, 0 /*Value*/);
         std::uint32_t retag_instrn;
         if constexpr (UNP_SEL == p_unpacr::UNP_A)
         {
