@@ -187,13 +187,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
         is_fp32_dest_acc_en,
         BroadcastType::NONE,
         is_int_fpu_en,
-        llk_test_pack_mode_v<false, TILIZE>>(g0_num_faces, formats_array[0].math);
+        llk_test_pack_mode_v<false, TILIZE>>(ckernel::make_tensor_shape_from_legacy(params.TEST_FACE_R_DIM, g0_num_faces), formats_array[0].math);
     _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats_array[0].math, formats_array[0].math);
 
     _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
     _llk_math_eltwise_unary_datacopy_wrapper_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
-        res_dst_idx, formats_array[0].math, formats_array[0].math, g0_num_faces);
+        res_dst_idx, formats_array[0].math, formats_array[0].math, ckernel::make_tensor_shape_from_legacy(params.TEST_FACE_R_DIM, g0_num_faces));
     _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 }
 

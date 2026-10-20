@@ -108,8 +108,7 @@ inline void sdpa_fw_op(const std::uint32_t dst_index)
     }
     else
     {
-        _llk_math_eltwise_unary_sfpu_params_(
-            sfpu::calculate_exponential_first_column<EXP_SCALE_BF16, is_fp32_dest_acc_en>, dst_index, VectorMode::C);
+        _llk_math_eltwise_unary_sfpu_params_(sfpu::calculate_exponential_first_column<EXP_SCALE_BF16, is_fp32_dest_acc_en>, dst_index, VectorMode::C);
     }
 }
 
@@ -119,7 +118,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
     _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false /* is_int_fpu_en */, PackMode::Default>(
-        TILE_NUM_FACES, formats.math);
+        ckernel::DEFAULT_TENSOR_SHAPE, formats.math);
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
     _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
 

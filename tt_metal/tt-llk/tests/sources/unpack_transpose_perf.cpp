@@ -95,7 +95,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             is_fp32_dest_acc_en,
             BroadcastType::NONE,
             false /* is_int_fpu_en */,
-            PackMode::Default>(TILE_NUM_FACES, formats.math);
+            PackMode::Default>(ckernel::DEFAULT_TENSOR_SHAPE, formats.math);
         PROFILER_SYNC();
     }
 

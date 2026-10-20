@@ -65,7 +65,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t NUM_TILES_IN_BLOCK = params.NUM_TILES_IN_BLOCK;
 
     _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false /* is_int_fpu_en */, PackMode::Default>(
-        num_faces, formats.math);
+        ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, num_faces), formats.math);
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
 
     for (int block_num = 0; block_num < NUM_BLOCKS; ++block_num)
@@ -77,7 +77,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         for (std::uint32_t tile_num = 0; tile_num < NUM_TILES_IN_BLOCK; ++tile_num)
         {
             _llk_math_eltwise_unary_datacopy_wrapper_<DataCopyType::A2D, dest_sync, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
-                DST_INDEX + tile_num /* dst_index */, formats.math, formats.math, num_faces);
+                DST_INDEX + tile_num /* dst_index */, formats.math, formats.math, ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, num_faces));
         }
         _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
     }

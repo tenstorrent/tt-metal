@@ -79,7 +79,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         is_fp32_dest_acc_en,
         BroadcastType::NONE,
         is_int_fpu_en,
-        llk_test_pack_mode_v<false, TILIZE>>(num_faces, formats.math);
+        llk_test_pack_mode_v<false, TILIZE>>(ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, num_faces), formats.math);
     _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 
     const std::uint32_t tiles_in_block = params.NUM_TILES_IN_BLOCK;
@@ -94,7 +94,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 (tile < get_dest_max_tiles<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
                 "Block tile index exceeds maximum destination tiles");
             _llk_math_eltwise_unary_datacopy_wrapper_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
-                tile, formats.math, formats.math, num_faces);
+                tile, formats.math, formats.math, ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, num_faces));
         }
         _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     }
