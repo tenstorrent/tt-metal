@@ -564,8 +564,6 @@ public:
                 additional_padded_width);
 
             output_slice_width += additional_padded_width;
-            // Each extra output needs stride[1] more input columns, added after the right (or ceil) padding so the
-            // real windows and the ceil-mode divisor stay; the extra outputs are dropped on write-back.
             if (this_ceil_pad[1] > 0) {
                 this_ceil_pad[1] += additional_padded_width * stride[1];
             } else {
@@ -598,8 +596,6 @@ public:
         // Get the memory config for this slice
         auto sliced_input_memory_config = get_input_memory_config(output_slice_start, output_slice_end);
 
-        // Size the halo with this slice's own ceil padding, as run_L1_op passes it to pool2d_L1 (it can include
-        // width-rounding columns). Otherwise it is recomputed from the slice's size and padding, missing those columns.
         auto slice_sliding_window_config = sliding_window_config;
         slice_sliding_window_config.ceil_pad_hw = sliding_window::uint32_pair_t{this_ceil_pad[0], this_ceil_pad[1]};
         slice_sliding_window_config.ceil_mode = ceil_mode || this_ceil_pad[0] > 0 || this_ceil_pad[1] > 0;
