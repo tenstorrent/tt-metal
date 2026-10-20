@@ -20,6 +20,7 @@ from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.nightly.test_all_gath
     "num_devices, ag_output_shape, dim, layout",
     [
         (2, [1, 1, 128, 128], 3, ttnn.TILE_LAYOUT),
+        (4, [1, 1, 512, 512], 3, ttnn.TILE_LAYOUT),
     ],
 )
 @pytest.mark.parametrize(
