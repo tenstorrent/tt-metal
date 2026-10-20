@@ -560,7 +560,7 @@ def _clamp_mx_tensors(
 def _mask_tile(
     tile: torch.Tensor,
     num_faces: int,
-    is_matrix_B: bool,
+    wide_tile: bool,
     face_r_dim: int = MAX_FACE_R_DIM,
 ) -> torch.Tensor:
     masked = tile.clone()
@@ -569,8 +569,8 @@ def _mask_tile(
         masked[:MAX_FACE_R_DIM, FACE_C_DIM:] = 0  # Zero f1
         masked[face_r_dim:, :] = 0  # Zero f2, f3 and part of f0
     elif num_faces == 2:
-        if is_matrix_B:
-            # matrix B (In1/SrcA): keep partial f0, f2
+        if not wide_tile:
+            # 16-wide tile (e.g. 32x16): keep partial f0, f2
             if face_r_dim < MAX_FACE_R_DIM:
                 masked[face_r_dim:MAX_FACE_R_DIM, :FACE_C_DIM] = 0  # Zero part of f0
                 masked[MAX_FACE_R_DIM + face_r_dim :, :FACE_C_DIM] = (
@@ -579,7 +579,7 @@ def _mask_tile(
             masked[:MAX_FACE_R_DIM, FACE_C_DIM:] = 0  # Zero f1
             masked[MAX_FACE_R_DIM:, FACE_C_DIM:] = 0  # Zero f3
         else:
-            # matrix A (In0/SrcB): keep f0, f1
+            # 32-wide tile (e.g. 16x32, 8x32): keep f0, f1
             masked[face_r_dim:, :] = 0  # Zero part of f0 and f1
     return masked
 
@@ -588,7 +588,7 @@ def generate_face_matmul_data(
     num_faces: int,
     stimuli_format: DataFormat,
     input_dimensions=[DEFAULT_TILE_R_DIM, DEFAULT_TILE_C_DIM],
-    is_matrix_A=True,  # True for matrix A (SrcB), False for matrix B (SrcA)
+    wide_tile=True,  # 2-face layout only: True for a 32-wide tile (f0,f1), False for a 16-wide one (f0,f2)
     face_r_dim=MAX_FACE_R_DIM,
 ) -> torch.Tensor:
 
@@ -611,7 +611,7 @@ def generate_face_matmul_data(
     mask = _mask_tile(
         torch.ones(DEFAULT_TILE_R_DIM, DEFAULT_TILE_C_DIM, dtype=dtype),
         num_faces,
-        not is_matrix_A,
+        wide_tile,
         face_r_dim,
     )
     out *= mask
