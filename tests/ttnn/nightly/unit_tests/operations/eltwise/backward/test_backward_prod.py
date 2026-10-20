@@ -92,7 +92,6 @@ def test_bw_prod_default_both(input_shapes, device):
 
 @pytest.mark.parametrize("dim", [-1, -2])
 def test_prod_bw_logical_shape_not_tile_aligned(device, dim):
-    # prod_bw sliced the gradient with padded bounds, so non-tile-aligned shapes got the wrong gradient (#53284).
     torch.manual_seed(0)
     x = (1.0 + 0.05 * torch.randn((1, 1, 40, 50))).bfloat16().float().requires_grad_(True)
     y = torch.prod(x, dim=dim, keepdim=True)

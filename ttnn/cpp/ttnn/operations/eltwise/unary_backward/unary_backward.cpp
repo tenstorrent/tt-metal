@@ -1723,8 +1723,6 @@ std::vector<Tensor> prod_bw(
     // all_dimensions = False
     Tensor reciprocal_input = ttnn::reciprocal(input, output_memory_config);
     if (*dim == 3 || *dim == -1 || *dim == 2 || *dim == -2) {
-        // grad_input = prod(x) * grad / x; binary_ng broadcasts prod(x) and grad by logical shape, so
-        // non-tile-aligned shapes need no padded slicing (#53284).
         Tensor temp = ttnn::multiply(prod_result, grad, std::nullopt, output_memory_config);
         grad_tensor.emplace_back(ttnn::multiply(reciprocal_input, temp, std::nullopt, output_memory_config));
         return grad_tensor;
