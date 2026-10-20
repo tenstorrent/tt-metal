@@ -12,6 +12,9 @@
 //     making every slot's entries serially was slower: 96 vs 66 us);
 //   phase 2 (every core = slot s): the plan from the rows' expert masks (counts, slots), slot s's stripes of P1T
 //     (one-hot rows) and Pw (the routing weights), core 0 the slot table.
+// GMOE_BIAS_SLOT (the last slot: never a routed one, at most (ROWS K_IDS + 31 E) / 32 = 71 slots are): phase 1 writes
+//   the rows of W into Pw's columns of that slot instead of W, and its core leaves them; Y_g's rows of that slot hold
+//   the experts' down biases, so the combine (Pw Y_g) adds each row's routing-weighted down bias.
 //
 // common runtime args: [logits, w, p1t, pw, table, hub_x, hub_y, mc_x0, mc_y0, mc_x1, mc_y1]
 // compile-time args: [cb_scr, RW, MAX_SLOTS, NCORES, SEM_ARRIVE, SEM_GO, accessors (logits, w, p1t, pw, table)]
@@ -214,10 +217,14 @@ void kernel_main() {
                 }
                 rw[k] = wb;
             }
-            // W row rr of tile t: its two face rows
+            // W row rr of tile t: its two face rows (GMOE_BIAS_SLOT: into Pw's bias slot columns instead)
+#ifdef GMOE_BIAS_SLOT
+            const uint64_t w_dst = s_pw.get_noc_addr(t * MAX_SLOTS + GMOE_BIAS_SLOT);
+#else
+            const uint64_t w_dst = s_w.get_noc_addr(t);
+#endif
             for (uint32_t f = 0; f < 2; ++f) {
-                noc_async_write(
-                    wrow_l1 + i * 64 + f * 32, s_w.get_noc_addr(t) + ((rr / 16) * 2 + f) * 512 + (rr % 16) * 32, 32);
+                noc_async_write(wrow_l1 + i * 64 + f * 32, w_dst + ((rr / 16) * 2 + f) * 512 + (rr % 16) * 32, 32);
             }
         }
         // the rows to the hub, then its arrival count
@@ -293,6 +300,11 @@ void kernel_main() {
     }
     for (uint32_t t = 0; t < RT; ++t) {
         noc_async_write(p1t_l1 + t * tile, s_p1t.get_noc_addr(s * RT + t), tile);
+#ifdef GMOE_BIAS_SLOT
+        if (s == GMOE_BIAS_SLOT) {
+            continue;  // (phase 1 wrote the W rows there)
+        }
+#endif
         noc_async_write(pw_l1 + t * tile, s_pw.get_noc_addr(t * MAX_SLOTS + s), tile);
     }
     noc_async_write_barrier();

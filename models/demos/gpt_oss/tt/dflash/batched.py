@@ -932,6 +932,9 @@ class BatchedVerify:
             w = self.grouped.route(logits)
             logits.deallocate(True)
             down = self.grouped(li, x)
+            if self.grouped.bias_slot:  # (the combine added the down bias)
+                w.deallocate(True)
+                return down
         else:
             w, ids = self._router(layer, x, with_ids=True)
             down = self.grouped(li, x, ids, w)

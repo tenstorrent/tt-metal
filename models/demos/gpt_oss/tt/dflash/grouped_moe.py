@@ -25,6 +25,8 @@ per-slot compute); their weights are relaid at init so a unit's tiles are one DR
 several units in flight). Per layer at 256 rows: ~570 us vs ~900 us for the dense MoE.
 """
 
+import os
+
 import torch
 
 import ttnn
@@ -98,6 +100,9 @@ class GroupedMoE:
         keep[1::2, ..., 16:, :] = 1  # e odd: the last 16 of its first tile
         keep_t = [ttnn.from_torch(keep[e], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh, mesh_mapper=rep)
                   for e in range(E)]  # fmt: skip
+        # the down bias through the combine (gmoe_route.cpp GMOE_BIAS_SLOT): the last slot of each layer's own Y_g holds
+        # the experts' down bias rows, Pw's columns of it the routing weights (no bias matmul and add per layer)
+        self.bias_slot = os.environ.get("B32_GMOE_BIAS", "1") == "1"
         self.layers = []
         for W in moe:
 
@@ -120,6 +125,13 @@ class GroupedMoE:
             self.layers.append(
                 dict(gate_bias=rows32(W["gate_bias"]), up_bias=rows32(W["up_bias"]), gate_up=gu, down=dn)
             )
+            if self.bias_slot:
+                assert W["down_bias"].shape[-2] == E
+                pad = zeros([1, 1, S - TILE, hidden], ttnn.bfloat8_b)
+                b8 = ttnn.typecast(W["down_bias"], ttnn.bfloat8_b)
+                self.layers[-1]["yg"] = ttnn.concat([pad, b8], dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                pad.deallocate(True)
+                b8.deallocate(True)
         for t in keep_t:
             t.deallocate(True)
         self.ck_hifi2 = ttnn.init_device_compute_kernel_config(
@@ -200,7 +212,8 @@ class GroupedMoE:
     def route(self, logits):
         """The routing and the plan in one program (fused_decode/kernels/gmoe_route.cpp): logits [1, 1, rows, E] (BF16
         tiles, the router matmul's) -> the dense routing weights W [1, 1, rows, E] (BF16, L1; the down bias's), and
-        self.p1t / self.pw / self.table as plan(). Replaces the router's top-k / softmax ops and the plan op."""
+        self.p1t / self.pw / self.table as plan(). Replaces the router's top-k / softmax ops and the plan op. With
+        bias_slot, W goes into Pw's last slot instead (the returned W is not written)."""
         RW, RH = 9, MAX_SLOTS // 9
         c0, c1 = ttnn.CoreCoord(0, 0), ttnn.CoreCoord(RW - 1, RH - 1)
         cores = ttnn.CoreRangeSet([ttnn.CoreRange(c0, c1)])
@@ -209,12 +222,14 @@ class GroupedMoE:
                        memory_config=ttnn.L1_MEMORY_CONFIG)  # fmt: skip
         io = [logits, w, self.p1t, self.pw, self.table]
         ct = [0, RW, MAX_SLOTS, RW * RH, 0, 1]
+        defines = [("GMOE_BIAS_SLOT", str(MAX_SLOTS - 1))] if self.bias_slot else []
         for t in io:
             ct += ttnn.TensorAccessorArgs(t).get_compile_time_args()
         k = ttnn.KernelDescriptor(
             kernel_source=str(KERNEL_DIR / "gmoe_route.cpp"), core_ranges=cores, compile_time_args=ct,
             runtime_args=[], common_runtime_args=[t.buffer_address() for t in io] + [a_.x, a_.y, a_.x, a_.y, b_.x, b_.y],
             config=ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.NOC_0),
+            defines=defines,
         )  # fmt: skip
         scr = self.rows * 32 + 4 * 32 + 2048 + 4 * 64 + 2 * (self.rows // TILE) * 2048 + 8 * E
         cbs = [self._cb(0, ttnn.bfloat16, scr, 1, cores)]
@@ -272,16 +287,21 @@ class GroupedMoE:
         ]
         ttnn.generic_op(io + [self.ag], ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs))
 
+    def _yg(self, li):
+        return self.layers[li]["yg"] if self.bias_slot else self.yg
+
     def down(self, li, wc=4, cc=1):
-        """Y_g = A_g's slots x their expert's down rows (self.yg)."""
+        """Y_g = A_g's slots x their expert's down rows (self.yg; with bias_slot the layer's own, its last slot the
+        down biases)."""
         L = self.layers[li]
+        yg = self._yg(li)
         cores = self.cores_all
         cb_scr, cb_mc, cb_mw, cb_a, cb_w, cb_out = range(6)
         io = [self.table, self.ag, L["down"]]
         rct = [cb_scr, cb_mc, cb_mw, cb_a, cb_w, self.nc, self.gx, self.ku, self.nu_down, wc, cc, MAXS]
         for t in io:
             rct += ttnn.TensorAccessorArgs(t).get_compile_time_args()
-        wct = [cb_mw, cb_out, self.nu_down] + ttnn.TensorAccessorArgs(self.yg).get_compile_time_args()
+        wct = [cb_mw, cb_out, self.nu_down] + ttnn.TensorAccessorArgs(yg).get_compile_time_args()
         cct = [cb_mc, cb_a, cb_w, cb_out, self.ku, self.nu_down, MAXS]
         dm = ttnn.DataMovementConfigDescriptor
         kernels = [
@@ -292,7 +312,7 @@ class GroupedMoE:
             ),
             ttnn.KernelDescriptor(
                 kernel_source=str(KERNEL_DIR / "gmoe_writer.cpp"), core_ranges=cores, compile_time_args=wct,
-                runtime_args=[], common_runtime_args=[self.yg.buffer_address()],
+                runtime_args=[], common_runtime_args=[yg.buffer_address()],
                 config=dm(processor=ttnn.DataMovementProcessor.RISCV_1, noc=ttnn.NOC.NOC_1, noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC),
             ),
             ttnn.KernelDescriptor(
@@ -309,11 +329,12 @@ class GroupedMoE:
             self._cb(cb_w, ttnn.bfloat4_b, 576, self.dn_depth * self.ku, cores),
             self._cb(cb_out, ttnn.bfloat8_b, 1088, 8, cores),
         ]
-        ttnn.generic_op(io + [self.yg], ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs))
+        ttnn.generic_op(io + [yg], ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs))
 
-    def combine(self):
-        """[1, 1, rows, hidden] BF16: every row's routed experts' outputs weighted by its routing weights."""
-        return ttnn.matmul(self.pw, self.yg, program_config=self.combine_pc, compute_kernel_config=self.ck_combine,
+    def combine(self, li):
+        """[1, 1, rows, hidden] BF16: every row's routed experts' outputs weighted by its routing weights (with
+        bias_slot after route(): plus the weighted down biases)."""
+        return ttnn.matmul(self.pw, self._yg(li), program_config=self.combine_pc, compute_kernel_config=self.ck_combine,
                            dtype=ttnn.bfloat16)  # fmt: skip
 
     def __call__(self, li, x, ids=None, w=None):
@@ -328,4 +349,4 @@ class GroupedMoE:
         self.gate_up(li, xg)
         xg.deallocate(True)
         self.down(li)
-        return self.combine()
+        return self.combine(li)
