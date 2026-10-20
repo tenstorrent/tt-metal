@@ -53,8 +53,10 @@ pass of 286 tokens ~10-20 min, each decode pass ~8-10 min.
 
 ## Open issues
 
-- The single-chip test shows 3 matching tokens (the device-job cap, not a model limit): the 16-token
-  comparison is the mesh test's job (resident model, traced decode in seconds).
+- The single-chip test yields 3 tokens per ~20-min device job (the 1500 s job cap, not a model limit); it
+  checkpoints its ids (`GLM53_MM_CKPT`) and a later run prefills prompt + those ids (teacher-forced on the
+  device's own tokens) and continues, so the 16-token comparison accumulates over jobs; the mesh test does
+  the 16 tokens in one job (resident model, traced decode in seconds).
 
 - The sample image (flat shapes on white) is a moderately ill-conditioned input for the tower: HF itself in
   bf16 scores PCC 0.9909 against its fp32 run (test_vision.py documents the gradient image at 0.86). The
