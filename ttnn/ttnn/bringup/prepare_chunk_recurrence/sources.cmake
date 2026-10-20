@@ -6,6 +6,4 @@ set(TTNN_OP_BRINGUP_PREPARE_CHUNK_RECURRENCE_SRCS
     device/prepare_chunk_recurrence_program_factory.cpp
 )
 
-set(TTNN_OP_BRINGUP_PREPARE_CHUNK_RECURRENCE_NANOBIND_SRCS
-    prepare_chunk_recurrence_nanobind.cpp
-)
+set(TTNN_OP_BRINGUP_PREPARE_CHUNK_RECURRENCE_NANOBIND_SRCS prepare_chunk_recurrence_nanobind.cpp)

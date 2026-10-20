@@ -1,0 +1,94 @@
+{
+ "used": [
+  {
+   "id": "DS41-35",
+   "how": "checked [N, K] vs W^T bfp8 rounding of every fp8 dense matrix on the host before choosing the layout (kept W^T: equal except engram wkv)",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-27",
+   "how": "engram_add's fp32 ttnn.sum keeps fp32 DEST under FP32_ACC=needed (the exact SFPU path needs it)",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-40",
+   "how": "mHC hc_fn + Sinkhorn are fp32 SFPU data: listed as needed, kept on",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "K-13",
+   "how": "the indexer ring score keeps fp32 DEST (head sum in DEST) under FP32_ACC=needed",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "K-31",
+   "how": "measured the stock sparse_sdpa vs the high_precision fork against float64 before making source the default",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "K-25",
+   "how": "read the -0.28 % bias of every fp32-DEST HiFi2 matmul in perf_precision.py as HiFi2's truncation, not a bug",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "K-58",
+   "how": "read the hand-run profile / quick metrics from generated/bringup_adhoc/P.13*.json",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "K-56",
+   "how": "deleted the tt-probe directory tests/ttnn/unit_tests/operations/ds41_p13_acc before finishing",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "K-53",
+   "how": "PYTHONPATH=$PWD on every hand run",
+   "traced": false,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "matmuls with fp32_dest_acc_en=False bias high with K (spilled partials re-added in 16 bits); packer_l1_acc fixes the bias only (now DS41-78)",
+  "bfp8 dense weights give no device time at ~1024 rows a chip (compute-bound); memory only (now DS41-79)"
+ ],
+ "overseer": [],
+ "cited_only": [
+  "DS41-78",
+  "DS41-79"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "P.13",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-20T13:03:11",
+  "head": "5d24ea3f8dd",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/P.13.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tt/attention.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/common.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/engram_kv.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/experts.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/indexer.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/model.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/perf_precision.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/q_a.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/shared_expert.py"
+  ]
+ }
+}
