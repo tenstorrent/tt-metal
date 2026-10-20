@@ -6,6 +6,7 @@
 
 #include <optional>
 #include <variant>
+#include <vector>
 
 #include "ttnn/tensor/tensor.hpp"
 #include "outbound_socket_service_sync_device_operation_types.hpp"
@@ -49,6 +50,13 @@ namespace ttnn::prim {
 ttnn::Tensor outbound_socket_service_sync(
     const ttnn::D2DStreamServiceSender& service,
     const ttnn::Tensor& input,
+    const std::optional<ttnn::Tensor>& metadata = std::nullopt);
+
+// D2D multi-tensor: inputs[i] fills service.get_backing_tensors()[i]; all are forwarded
+// in one handshake. Returns the backing tensors.
+std::vector<ttnn::Tensor> outbound_socket_service_sync(
+    const ttnn::D2DStreamServiceSender& service,
+    const std::vector<ttnn::Tensor>& inputs,
     const std::optional<ttnn::Tensor>& metadata = std::nullopt);
 
 // D2H service: {backing+metadata, backing-only, metadata-only}. `input` is the payload to

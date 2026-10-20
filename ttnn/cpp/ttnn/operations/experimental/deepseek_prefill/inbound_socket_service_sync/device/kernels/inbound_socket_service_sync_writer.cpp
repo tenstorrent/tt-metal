@@ -76,6 +76,39 @@ inline void copy_pages(
     }
 }
 
+// Drain this worker's slice of each extra segment backing into its output, same scheme
+// as the unsplit primary tensor.
+template <uint32_t Remaining, uint32_t CtOffset>
+inline void copy_extra_segments(const Noc& noc, CircularBuffer& scratch_cb, uint32_t rt_idx) {
+    if constexpr (Remaining > 0) {
+        constexpr uint32_t seg_page_size = get_compile_time_arg_val(CtOffset);
+        constexpr auto seg_backing_args = TensorAccessorArgs<CtOffset + 1>();
+        constexpr auto seg_output_args = TensorAccessorArgs<seg_backing_args.next_compile_time_args_offset()>();
+        auto seg_backing = TensorAccessor(seg_backing_args, get_arg_val<uint32_t>(rt_idx));
+        auto seg_output = TensorAccessor(seg_output_args, get_arg_val<uint32_t>(rt_idx + 1));
+        const uint32_t seg_start = get_arg_val<uint32_t>(rt_idx + 2);
+        const uint32_t seg_end = get_arg_val<uint32_t>(rt_idx + 3);
+        for (uint32_t p = seg_start; p < seg_end; ++p) {
+            noc.async_read(seg_backing, scratch_cb, seg_page_size, {.page_id = p}, {.offset_bytes = 0});
+            noc.async_read_barrier();
+            noc.async_write(scratch_cb, seg_output, seg_page_size, {.offset_bytes = 0}, {.page_id = p});
+            noc.async_write_barrier();
+        }
+        copy_extra_segments<Remaining - 1, seg_output_args.next_compile_time_args_offset()>(
+            noc, scratch_cb, rt_idx + 4);
+    }
+}
+
+template <uint32_t Remaining, uint32_t CtOffset>
+constexpr uint32_t extra_segments_ct_end() {
+    if constexpr (Remaining == 0) {
+        return CtOffset;
+    } else {
+        constexpr uint32_t output_offset = TensorAccessorArgs<CtOffset + 1>::next_compile_time_args_offset();
+        return extra_segments_ct_end<Remaining - 1, TensorAccessorArgs<output_offset>::next_compile_time_args_offset()>();
+    }
+}
+
 // Metadata snapshot, factored into a template so the metadata-disabled case
 // (MetadataSize == 0) is never instantiated. In a plain `if constexpr` inside
 // the non-template kernel_main, the discarded branch is still fully checked, so
@@ -111,8 +144,11 @@ void kernel_main() {
     constexpr auto backing_accessor_args = TensorAccessorArgs<7>();
     constexpr auto output_accessor_args = TensorAccessorArgs<backing_accessor_args.next_compile_time_args_offset()>();
     constexpr uint32_t overhang_accessor_offset = output_accessor_args.next_compile_time_args_offset();
-    constexpr uint32_t metadata_accessor_offset =
+    constexpr uint32_t num_extra_segments_ct_offset =
         TensorAccessorArgs<overhang_accessor_offset>().next_compile_time_args_offset();
+    constexpr uint32_t num_extra_segments = get_compile_time_arg_val(num_extra_segments_ct_offset);
+    constexpr uint32_t metadata_accessor_offset =
+        extra_segments_ct_end<num_extra_segments, num_extra_segments_ct_offset + 1>();
 
     auto backing = TensorAccessor(backing_accessor_args, backing_tensor_addr);
     auto output = TensorAccessor(output_accessor_args, output_tensor_addr);
@@ -138,6 +174,7 @@ void kernel_main() {
 
     // 3. Copy this worker's slice of the backing tensor into the output(s).
     copy_pages<overhang_size_bytes, overhang_accessor_offset>(noc, backing, output, scratch_cb, start_page, end_page);
+    copy_extra_segments<num_extra_segments, num_extra_segments_ct_offset + 1>(noc, scratch_cb, /*rt_idx=*/9);
 
     // 4. Ack the service core. Exactly one inc per worker per transfer; the
     //    service core's poll checks (cur - last_consumed) == num_workers.

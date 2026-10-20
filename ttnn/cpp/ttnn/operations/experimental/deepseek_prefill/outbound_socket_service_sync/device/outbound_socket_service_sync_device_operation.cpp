@@ -40,6 +40,29 @@ void OutboundSocketServiceSyncOperation::validate_on_program_cache_miss(
         "outbound_socket_service_sync: per-coord sender-service state is missing or inconsistent (was the service "
         "built with "
         "sender_worker_cores?)");
+    TT_FATAL(
+        tensor_args.extra_inputs.size() == tensor_args.extra_backings.size() &&
+            args.extra_page_sizes.size() == tensor_args.extra_inputs.size() &&
+            args.extra_num_pages.size() == tensor_args.extra_inputs.size(),
+        "outbound_socket_service_sync: extra input / backing counts are inconsistent");
+    uint32_t max_page_size = args.page_size;
+    for (size_t i = 0; i < tensor_args.extra_inputs.size(); ++i) {
+        const auto& extra_input = tensor_args.extra_inputs[i];
+        const auto& extra_backing = tensor_args.extra_backings[i];
+        TT_FATAL(
+            extra_input.storage_type() == StorageType::DEVICE && extra_input.buffer() != nullptr,
+            "outbound_socket_service_sync: input tensor {} must be allocated on device",
+            i + 1);
+        TT_FATAL(
+            extra_input.tensor_spec() == extra_backing.tensor_spec(),
+            "outbound_socket_service_sync: input tensor {} spec must match the sender backing per-shard spec",
+            i + 1);
+        TT_FATAL(
+            args.extra_page_sizes[i] > 0 && args.extra_num_pages[i] > 0,
+            "outbound_socket_service_sync: backing tensor {} has no pages",
+            i + 1);
+        max_page_size = std::max(max_page_size, args.extra_page_sizes[i]);
+    }
     if (args.metadata_only) {
         TT_FATAL(args.metadata_size_bytes > 0, "outbound_socket_service_sync: metadata_only requires metadata");
     }
@@ -49,11 +72,11 @@ void OutboundSocketServiceSyncOperation::validate_on_program_cache_miss(
             "outbound_socket_service_sync: metadata_size_bytes must be a multiple of 4 (uint32-aligned), got {}",
             args.metadata_size_bytes);
         TT_FATAL(
-            args.metadata_size_bytes <= args.page_size,
-            "outbound_socket_service_sync: metadata_size_bytes ({}) exceeds the per-shard page_size ({}); the metadata "
-            "blob is staged through the page-sized scratch CB and would overrun it",
+            args.metadata_size_bytes <= max_page_size,
+            "outbound_socket_service_sync: metadata_size_bytes ({}) exceeds the largest per-shard page_size ({}); the "
+            "metadata blob is staged through the page-sized scratch CB and would overrun it",
             args.metadata_size_bytes,
-            args.page_size);
+            max_page_size);
         TT_FATAL(
             tensor_args.metadata.has_value() && tensor_args.metadata->buffer() != nullptr,
             "outbound_socket_service_sync: metadata_size_bytes > 0 requires an allocated metadata tensor");
@@ -88,7 +111,10 @@ namespace ttnn::prim {
 //   * metadata only    : no backing/DRAM payload (D2H global_spec=None); forward the record.
 template <typename ServiceT>
 ttnn::Tensor outbound_socket_service_sync_impl(
-    const ServiceT& service, const std::optional<ttnn::Tensor>& input, const std::optional<ttnn::Tensor>& metadata) {
+    const ServiceT& service,
+    const std::optional<ttnn::Tensor>& input,
+    const std::optional<ttnn::Tensor>& metadata,
+    const std::vector<ttnn::Tensor>& extra_inputs = {}) {
     using OperationType = ttnn::experimental::prim::OutboundSocketServiceSyncOperation;
     TT_FATAL(
         input.has_value() || metadata.has_value(),
@@ -107,6 +133,22 @@ ttnn::Tensor outbound_socket_service_sync_impl(
     OperationType::operation_attributes_t attrs;
     attrs.page_size = static_cast<uint32_t>(backing.buffer()->page_size());
     attrs.num_pages = static_cast<uint32_t>(backing.buffer()->num_pages());
+    std::vector<ttnn::Tensor> extra_backings;
+    if constexpr (std::is_same_v<ServiceT, ttnn::D2DStreamServiceSender>) {
+        const auto& backings = service.get_backing_tensors();
+        TT_FATAL(
+            extra_inputs.size() + 1 == backings.size(),
+            "outbound_socket_service_sync: the sender streams {} tensors but {} inputs were passed",
+            backings.size(),
+            extra_inputs.size() + 1);
+        extra_backings.assign(backings.begin() + 1, backings.end());
+        for (const auto& extra_backing : extra_backings) {
+            attrs.extra_page_sizes.push_back(static_cast<uint32_t>(extra_backing.buffer()->page_size()));
+            attrs.extra_num_pages.push_back(static_cast<uint32_t>(extra_backing.buffer()->num_pages()));
+        }
+    } else {
+        TT_FATAL(extra_inputs.empty(), "outbound_socket_service_sync: extra inputs are D2D-only");
+    }
     attrs.scratch_cb_index = 0;
     attrs.metadata_size_bytes =
         metadata.has_value() ? static_cast<uint32_t>(metadata->logical_shape()[-1] * sizeof(uint32_t)) : 0;
@@ -145,7 +187,7 @@ ttnn::Tensor outbound_socket_service_sync_impl(
         }
     }
     return ttnn::device_operation::launch<OperationType>(
-        attrs, OperationType::tensor_args_t{input_t, backing, metadata});
+        attrs, OperationType::tensor_args_t{input_t, backing, metadata, extra_inputs, std::move(extra_backings)});
 }
 
 ttnn::Tensor outbound_socket_service_sync(
@@ -153,6 +195,15 @@ ttnn::Tensor outbound_socket_service_sync(
     const ttnn::Tensor& input,
     const std::optional<ttnn::Tensor>& metadata) {
     return outbound_socket_service_sync_impl(service, input, metadata);
+}
+std::vector<ttnn::Tensor> outbound_socket_service_sync(
+    const ttnn::D2DStreamServiceSender& service,
+    const std::vector<ttnn::Tensor>& inputs,
+    const std::optional<ttnn::Tensor>& metadata) {
+    TT_FATAL(!inputs.empty(), "outbound_socket_service_sync: inputs must not be empty");
+    outbound_socket_service_sync_impl(
+        service, inputs.front(), metadata, std::vector<ttnn::Tensor>(inputs.begin() + 1, inputs.end()));
+    return service.get_backing_tensors();
 }
 ttnn::Tensor outbound_socket_service_sync(
     const tt::tt_metal::D2HStreamService& service,

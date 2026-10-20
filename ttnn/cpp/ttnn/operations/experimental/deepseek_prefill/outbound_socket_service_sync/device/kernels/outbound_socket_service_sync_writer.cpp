@@ -48,9 +48,44 @@ constexpr uint32_t metadata_only = get_compile_time_arg_val(3);        // 1 no t
 constexpr uint32_t metadata_ring_slots = get_compile_time_arg_val(4);
 constexpr uint32_t metadata_slot_stride = get_compile_time_arg_val(5);
 constexpr uint32_t metadata_data_offset = get_compile_time_arg_val(6);
-// Shared input/backing TensorAccessorArgs (same per-shard spec); metadata accessor,
-// when enabled, is packed immediately after.
+// Shared input/backing TensorAccessorArgs (same per-shard spec). Then the extra-segment
+// count and, per extra segment, [page_size] + its shared input/backing accessor. The
+// metadata accessor, when enabled, is packed last.
 constexpr auto tensor_accessor_args = TensorAccessorArgs<7>();
+constexpr uint32_t num_extra_segments_ct_offset = tensor_accessor_args.next_compile_time_args_offset();
+constexpr uint32_t num_extra_segments = get_compile_time_arg_val(num_extra_segments_ct_offset);
+constexpr uint32_t kExtraSegmentsRtBase = 10;
+
+template <uint32_t Remaining, uint32_t CtOffset>
+constexpr uint32_t extra_segments_ct_end() {
+    if constexpr (Remaining == 0) {
+        return CtOffset;
+    } else {
+        return extra_segments_ct_end<Remaining - 1, TensorAccessorArgs<CtOffset + 1>::next_compile_time_args_offset()>();
+    }
+}
+
+// Copy this worker's slice of each extra segment input -> backing, same scheme as the
+// primary tensor.
+template <uint32_t Remaining, uint32_t CtOffset>
+inline void copy_extra_segments(const Noc& noc, CircularBuffer& scratch_cb, uint32_t rt_idx) {
+    if constexpr (Remaining > 0) {
+        constexpr uint32_t seg_page_size = get_compile_time_arg_val(CtOffset);
+        constexpr auto seg_accessor_args = TensorAccessorArgs<CtOffset + 1>();
+        auto input = TensorAccessor(seg_accessor_args, get_arg_val<uint32_t>(rt_idx));
+        auto backing = TensorAccessor(seg_accessor_args, get_arg_val<uint32_t>(rt_idx + 1));
+        const uint32_t start_page = get_arg_val<uint32_t>(rt_idx + 2);
+        const uint32_t end_page = get_arg_val<uint32_t>(rt_idx + 3);
+        for (uint32_t p = start_page; p < end_page; ++p) {
+            noc.async_read(input, scratch_cb, seg_page_size, {.page_id = p}, {.offset_bytes = 0});
+            noc.async_read_barrier();
+            noc.async_write(scratch_cb, backing, seg_page_size, {.offset_bytes = 0}, {.page_id = p});
+            noc.async_write_barrier();
+        }
+        copy_extra_segments<Remaining - 1, seg_accessor_args.next_compile_time_args_offset()>(
+            noc, scratch_cb, rt_idx + 4);
+    }
+}
 
 // One L1-aligned word of the service core, read through the scratch page.
 inline uint32_t read_service_word(
@@ -163,10 +198,12 @@ void kernel_main() {
             noc.async_write(scratch_cb, backing, page_size, {.offset_bytes = 0}, {.page_id = p});
             noc.async_write_barrier();
         }
+        copy_extra_segments<num_extra_segments, num_extra_segments_ct_offset + 1>(
+            noc, scratch_cb, kExtraSegmentsRtBase);
     }
 
     // 2. (Optional) forward inline metadata to the sender service core.
-    forward_metadata<metadata_size_bytes, tensor_accessor_args.next_compile_time_args_offset()>(
+    forward_metadata<metadata_size_bytes, extra_segments_ct_end<num_extra_segments, num_extra_segments_ct_offset + 1>()>(
         noc, scratch_cb, start_page, service_noc_x, service_noc_y);
 
     // 3. Ack into data_ready_counter -- the service forwards once it has num_workers of

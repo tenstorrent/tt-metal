@@ -21,7 +21,8 @@ namespace ttnn::experimental::prim {
 struct InboundSocketServiceSyncOperation {
     using operation_attributes_t = InboundSocketServiceSyncParams;
     using tensor_args_t = InboundSocketServiceSyncInputs;
-    // tokens (always) + overhang (overhang_size_bytes > 0) + metadata (metadata_size_bytes > 0), in that order.
+    // tokens (always) + overhang (overhang_size_bytes > 0) + one per extra segment + metadata
+    // (metadata_size_bytes > 0), in that order.
     using spec_return_value_t = std::vector<tt::tt_metal::TensorSpec>;
     using tensor_return_value_t = std::vector<Tensor>;
     using program_factory_t = std::variant<InboundSocketServiceSyncProgramFactory>;

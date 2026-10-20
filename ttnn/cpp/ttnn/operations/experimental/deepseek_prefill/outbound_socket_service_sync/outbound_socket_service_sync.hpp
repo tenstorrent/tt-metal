@@ -5,6 +5,7 @@
 #pragma once
 
 #include <optional>
+#include <vector>
 
 #include "ttnn/tensor/tensor.hpp"
 
@@ -35,6 +36,12 @@ namespace ttnn::experimental {
 Tensor outbound_socket_service_sync(
     const ttnn::D2DStreamServiceSender& service,
     const Tensor& input,
+    const std::optional<Tensor>& metadata = std::nullopt);
+// Multi-tensor D2D: inputs[i] must match service.get_backing_tensors()[i]; every tensor
+// is forwarded in the same handshake. Returns the (now-filled) backing tensors.
+std::vector<Tensor> outbound_socket_service_sync(
+    const ttnn::D2DStreamServiceSender& service,
+    const std::vector<Tensor>& inputs,
     const std::optional<Tensor>& metadata = std::nullopt);
 Tensor outbound_socket_service_sync(
     const tt::tt_metal::D2HStreamService& service,
