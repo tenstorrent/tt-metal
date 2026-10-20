@@ -58,7 +58,7 @@ import torch
 import ttnn
 
 from . import ccl
-from .common import DRAM, SP_AXIS, TP_AXIS, attn_compute_config, compute_config, sum_cols
+from .common import DRAM, SP_AXIS, TP_AXIS, attn_compute_config, compute_config, dense_dtype, sum_cols
 from .quant import act_q, tf32_q
 from .rope import RopeTable, deinterleave_perm, deinterleave_tail, rope_heads
 from .served import CacheSlab, DeviceScalars, alloc_served
@@ -363,17 +363,19 @@ class TtWindowAttention:
         # over TP (chip c: heads [c H/TP, (c+1) H/TP)); bf16 exact (e4m3 x 2^k)
         wq_b = w["wq_b"].float().view(self.heads, self.d, -1)[:, perm].reshape(self.heads * self.d, -1)
         assert torch.equal(wq_b.bfloat16().float(), wq_b), "wq_b must be bf16-exact"
-        self.wq_b = _upload(
-            mesh, wq_b.t().reshape(1, 1, -1, self.heads * self.d), ttnn.bfloat16, ttnn.TILE_LAYOUT, (None, 3)
-        )
+        wq_b_t = wq_b.t().reshape(1, 1, -1, self.heads * self.d).contiguous()
+        # DENSE_WEIGHTS (P.13): bf16 (exact fp8 values) or bfloat8_b (the checkpoint's 8-bit width)
+        self.wq_b = _upload(mesh, wq_b_t, dense_dtype(wq_b_t, "attn.wq_b"), ttnn.TILE_LAYOUT, (None, 3))
         # wo_a [groups * rank, hpg * 512] -> [1, groups, hpg * 512, rank], groups split over TP; bf16-exact
         wo_a = w["wo_a"].float().view(self.groups, self.rank, -1)
         assert torch.equal(wo_a.bfloat16().float(), wo_a), "wo_a must be bf16-exact"
-        self.wo_a = _upload(mesh, wo_a.transpose(1, 2).unsqueeze(0), ttnn.bfloat16, ttnn.TILE_LAYOUT, (None, 1))
+        wo_a_t = wo_a.transpose(1, 2).unsqueeze(0).contiguous()
+        self.wo_a = _upload(mesh, wo_a_t, dense_dtype(wo_a_t, "attn.wo_a"), ttnn.TILE_LAYOUT, (None, 1))
         # wo_b [H, groups * rank] -> [groups * rank, H], K (the chip's groups) split over TP
         wo_b = w["wo_b"].float()
         assert torch.equal(wo_b.bfloat16().float(), wo_b), "wo_b must be bf16-exact"
-        self.wo_b = _upload(mesh, wo_b.t().reshape(1, 1, -1, wo_b.shape[0]), ttnn.bfloat16, ttnn.TILE_LAYOUT, (None, 2))
+        wo_b_t = wo_b.t().reshape(1, 1, -1, wo_b.shape[0]).contiguous()
+        self.wo_b = _upload(mesh, wo_b_t, dense_dtype(wo_b_t, "attn.wo_b"), ttnn.TILE_LAYOUT, (None, 2))
         self.hidden = wo_b.shape[0]
         # the sink in sparse_sdpa's units (it multiplies by the op's scale, 1 here): every head on every chip
         sink = w["attn_sink"].float().reshape(1, 1, 1, self.heads)

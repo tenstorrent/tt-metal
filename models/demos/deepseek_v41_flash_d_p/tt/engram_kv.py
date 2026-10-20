@@ -25,7 +25,7 @@ import torch
 
 import ttnn
 
-from .common import DRAM, TP_AXIS, compute_config
+from .common import DRAM, TP_AXIS, compute_config, dense_dtype
 from .layout import streams_cols_to_chip_major
 from .quant import fp8_qdq, native
 from .settings import settings
@@ -52,9 +52,10 @@ class TtEngramKv:
         assert torch.equal(w_t.bfloat16().float(), w_t), "fp8 weights must be bf16-exact"
         w_t = streams_cols_to_chip_major(w_t, hidden, tp, BLOCKS)  # [K, tp x 5 x H/TP]: chip column c's block
         dims = (None, 3) if TP_AXIS == 1 else (3, None)
+        w_t = w_t.reshape(1, 1, k, BLOCKS * hidden).contiguous()
         self.weight = ttnn.from_torch(
-            w_t.reshape(1, 1, k, BLOCKS * hidden).contiguous(),
-            dtype=ttnn.bfloat16,
+            w_t,
+            dtype=dense_dtype(w_t, "engram.wkv"),  # DENSE_WEIGHTS (P.13): bf16 (exact) or bfloat8_b
             layout=ttnn.TILE_LAYOUT,
             device=mesh,
             memory_config=DRAM,

@@ -51,7 +51,7 @@ from loguru import logger
 import ttnn
 
 from . import ccl
-from .common import DRAM, TP_AXIS, compute_config, sum_cols
+from .common import DRAM, TP_AXIS, compute_config, dense_dtype, fp32_acc, sum_cols
 from .quant import GROUP, act_q, native
 from .settings import settings
 
@@ -110,17 +110,19 @@ class TtSharedExpert:
         w1t = w1.float().t().reshape(hidden, tp, self.ip)
         w3t = w3.float().t().reshape(hidden, tp, self.ip)
         w13 = torch.stack([w1t, w3t], dim=2).reshape(1, 1, hidden, 2 * self.I)
+        w13 = w13.contiguous()
         self.w13 = ttnn.from_torch(
-            w13.contiguous(),
-            dtype=ttnn.bfloat16,
+            w13,
+            dtype=dense_dtype(w13, "shared_experts.w1|w3"),  # DENSE_WEIGHTS (P.13)
             layout=ttnn.TILE_LAYOUT,
             device=mesh,
             memory_config=DRAM,
             mesh_mapper=_mapper(mesh, (None, 3)),  # columns over axis 1, replicated over axis 0
         )
+        w2t = w2.float().t().reshape(1, 1, inter, hidden).contiguous()
         self.w2 = ttnn.from_torch(
-            w2.float().t().reshape(1, 1, inter, hidden).contiguous(),
-            dtype=ttnn.bfloat16,
+            w2t,
+            dtype=dense_dtype(w2t, "shared_experts.w2"),
             layout=ttnn.TILE_LAYOUT,
             device=mesh,
             memory_config=DRAM,
@@ -150,7 +152,7 @@ class TtSharedExpert:
         self.fidelity = int(
             (ttnn.MathFidelity.LoFi if not full else getattr(ttnn.MathFidelity, settings.get("MATMUL_FIDELITY"))).value
         )
-        self.down_fp32 = True if not full else bool(settings.get("FP32_DEST_ACC"))
+        self.down_fp32 = fp32_acc(needed=True)  # the routed experts' choice (P.13: their down keeps fp32 DEST)
         x_bf16 = h_bf16 = full
         self.stochastic = False
         # (comparison only, tt/perf_shared_expert.py: other tile formats / fidelity / packer rounding than the setting's)

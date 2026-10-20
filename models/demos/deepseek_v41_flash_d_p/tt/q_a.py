@@ -32,7 +32,7 @@ import torch
 import ttnn
 
 from . import ccl
-from .common import DRAM, TP_AXIS, attn_compute_config, compute_config, tp_sum
+from .common import DRAM, TP_AXIS, attn_compute_config, compute_config, dense_dtype, tp_sum
 from .exact_mm import ExactMatmul
 from .norm import TtDistributedRmsNorm
 from .quant import act_q
@@ -69,9 +69,11 @@ class TtAttnInProj:
         # K (dim 2) split over the TP axis: chip column c holds rows [c H/TP, (c+1) H/TP), its attn_norm columns;
         # replicated over the SP axis.
         dims = (None, 2) if TP_AXIS == 1 else (2, None)
+        # DENSE_WEIGHTS (P.13): bf16 (exact) or bfloat8_b (the checkpoint's 8-bit width; the exact path keeps bf16)
+        wdt = ttnn.bfloat16 if self.exact else dense_dtype(w_t, "attn." + " | ".join(cols))
         self.weight = ttnn.from_torch(
             w_t.reshape(1, 1, hidden, self.width),
-            dtype=ttnn.bfloat16,
+            dtype=wdt,
             layout=ttnn.TILE_LAYOUT,
             device=mesh,
             memory_config=DRAM,

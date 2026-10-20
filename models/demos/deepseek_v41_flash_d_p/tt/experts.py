@@ -97,7 +97,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch import TtDispatchModule
 from models.demos.deepseek_v41_flash_d_p.reference.weights import fp4_dequant
 
 from . import ccl
-from .common import DRAM, SP_AXIS, TP_AXIS, compute_config, sum_cols
+from .common import DRAM, SP_AXIS, TP_AXIS, compute_config, fp32_acc, sum_cols
 from .quant import act_q, native
 from .settings import settings
 
@@ -260,7 +260,7 @@ class TtExperts:
                 mesh.arch(),
                 math_fidelity=ttnn.MathFidelity.LoFi,
                 math_approx_mode=False,
-                fp32_dest_acc_en=bool(settings.get("FP32_DEST_ACC")),
+                fp32_dest_acc_en=fp32_acc(needed=True),  # the experts keep fp32 DEST (P.13)
                 packer_l1_acc=False,
             )
             if self.precision == "glm"
@@ -788,7 +788,7 @@ class TtExperts:
             region_offsets,
             # glm: bfp8 y TILE (combine reads it), fp32 DEST down as GLM_AG_DOWN_FP32's default, LoFi
             y_bf16=self.precision == "full",
-            down_fp32=True if self.precision == "glm" else bool(settings.get("FP32_DEST_ACC")),
+            down_fp32=fp32_acc(needed=True),  # the experts' down keeps fp32 DEST (P.13, as GLM-5.3)
             math_fidelity=int(self.fidelity.value),
             routing_weights=rw,
             fp8_act_quant=self.qdq,
