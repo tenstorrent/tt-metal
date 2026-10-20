@@ -23,18 +23,51 @@ constexpr bool kSquaredAbsDenominatorTtiReplay =
 // reciprocal helper's immutable 2.0 (Prgm0/L12) is consumed.
 inline void squared_abs_denominator_tti_lm_init()
 {
+#if !defined(DISABLE_SFPLOADMACRO)
     TTI_SFP_STOCH_RND(SFPSTOCHRND_RND_EVEN, 0, 0, ckernel::p_sfpu::LREG0, 13, SFPSTOCHRND_MOD1_FP32_TO_FP16B);
     TTI_SFPLOADI(0, SFPLOADI_MOD0_LOWER, 0x0000); // mad | simple idle
     TTI_SFPLOADI(0, SFPLOADI_MOD0_UPPER, 0x1385); // store | round
     TTI_SFPCONFIG(0, 4, 0);
     TTI_SFPCONFIG(0x110, 8, 1);
+#endif
 }
+
+inline void squared_abs_denominator_tti_row();
 
 inline void squared_abs_denominator_tti_replay_tile()
 {
     constexpr std::uint32_t kBodySlots = kSquaredAbsDenominatorBodySlots;
     static_assert(kSquaredAbsDenominatorTtiReplay);
-    TT_REPLAY_RECORD(kBodySlots);                                   // record + execute element 0
+    // Each row stores through the hold mode; the DEST counter steps after it, outside the record. A
+    // load-macro's store keeps the row its issue computed.
+#if defined(DISABLE_SFPLOADMACRO)
+    // The same rows without the load macro or the replay buffer: identical results.
+#pragma GCC unroll 1
+    for (int row = 0; row < 32; ++row)
+    {
+        squared_abs_denominator_tti_row();
+        TTI_INCRWC(0, 2, 0, 0);
+    }
+#endif
+#if !defined(DISABLE_SFPLOADMACRO)
+    TT_REPLAY_ADDRMOD_ENTER();
+    ckernel::load_replay_buf<ckernel::Exec>(0, (kBodySlots), [&] {  // record + execute element 0
+        squared_abs_denominator_tti_row();
+        TTI_INCRWC(0, 2, 0, 0);
+    });
+#pragma GCC unroll 32
+    for (int row = 1; row < 32; ++row)
+    {
+        TTI_REPLAY(0, kBodySlots, 0, 0);
+        TTI_INCRWC(0, 2, 0, 0);
+    }
+#endif
+    TT_REPLAY_TILE_EPILOGUE();
+}
+
+// One row: the body the replay records.
+inline void squared_abs_denominator_tti_row()
+{
     TTI_SFPLOAD(ckernel::p_sfpu::LREG0, 0, TT_ADDRMOD_DST_HOLD, 0); // x
     TTI_SFPNOP;                                                     // conservative replay load-consumer gap
     TTI_SFPSETSGN(0, ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LREG1,
@@ -70,10 +103,15 @@ inline void squared_abs_denominator_tti_replay_tile()
     TTI_SFPENCC(3, 0, 0, 10);                                                 // CC-balanced replay body
     TTI_SFPMUL(ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LREG2, ckernel::p_sfpu::LCONST_0, ckernel::p_sfpu::LREG0,
                0); // grad * reciprocal * reciprocal
+#if defined(DISABLE_SFPLOADMACRO)
+    TTI_SFPNOP; // result-MUL hazard gap
+    TTI_SFP_STOCH_RND(SFPSTOCHRND_RND_EVEN, 0, ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LREG4, SFPSTOCHRND_MOD1_FP32_TO_FP16B);
+    TTI_SFPSTORE(ckernel::p_sfpu::LREG4, 0, TT_ADDRMOD_DST_HOLD, 0);
+#endif
+#if !defined(DISABLE_SFPLOADMACRO)
     // The load-macro itself is the result-MUL hazard gap.  Captured T1 RNE
-    // fires at issue+1, then the fixed store advances the same destination
+    // fires at issue+1, then the fixed store writes the same destination
     // row at issue+3. L4 is dead after the second Newton update.
-    TTI_SFPLOADMACRO((0 << 2) | (ckernel::p_sfpu::LREG4 & 3), 0, TT_ADDRMOD_DST_ADV, (ckernel::p_sfpu::LREG4 >> 2));
-    TT_REPLAY_REST(kBodySlots, 31); // elements 1..31
-    TT_REPLAY_TILE_EPILOGUE();
+    TTI_SFPLOADMACRO((0 << 2) | (ckernel::p_sfpu::LREG4 & 3), 0, TT_ADDRMOD_DST_HOLD, (ckernel::p_sfpu::LREG4 >> 2));
+#endif
 }

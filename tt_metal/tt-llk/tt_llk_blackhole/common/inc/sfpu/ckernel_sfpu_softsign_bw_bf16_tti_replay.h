@@ -51,9 +51,8 @@
 
 // Replay operands: section 7 holds the dest address and section 6 advances it.
 #define TT_ADDRMOD_DST_HOLD ckernel::ADDR_MOD_7
-#define TT_ADDRMOD_DST_ADV  ckernel::ADDR_MOD_6
 
-namespace ckernel::sfpu::ttpoly
+namespace ckernel::sfpu::ttpoly::softsign_bw
 {
 using namespace ::sfpi;
 using ::sfpi::DataLayout;
@@ -63,27 +62,7 @@ constexpr bool tti_replay_fits(std::uint32_t body_slots)
 {
     return body_slots >= 1 && body_slots <= kTtiReplaySlots;
 }
-} // namespace ckernel::sfpu::ttpoly
-
-// Record the next BODY_SLOTS instructions into replay slot 0 AND execute them.
-// ENTER is folded in (and EXIT into TT_REPLAY_TILE_EPILOGUE) so the pairing
-// cannot drift as bodies are added: every recorded body gets the board's
-// section base, and every per-tile sequence must already end with the epilogue.
-#define TT_REPLAY_RECORD(BODY_SLOTS)       \
-    do                                     \
-    {                                      \
-        TT_REPLAY_ADDRMOD_ENTER();         \
-        TTI_REPLAY(0, (BODY_SLOTS), 1, 1); \
-    } while (0)
-// Re-issue the recorded body N_REST more times (one vector / pair each).
-#define TT_REPLAY_REST(BODY_SLOTS, N_REST)                                  \
-    do                                                                      \
-    {                                                                       \
-        _Pragma("GCC unroll 32") for (int _r = 0; _r < (int)(N_REST); _r++) \
-        {                                                                   \
-            TTI_REPLAY(0, (BODY_SLOTS), 0, 0);                              \
-        }                                                                   \
-    } while (0)
+} // namespace ckernel::sfpu::ttpoly::softsign_bw
 
 // Re-issue a recorded core, then execute a non-recorded terminal on the SAME
 // destination row before the next replay. This is the capacity escape hatch

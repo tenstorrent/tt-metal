@@ -131,8 +131,9 @@ def run_topk_test(N, C, H, W, k, dtype, dim, sorted, largest, device, sub_core_g
         (1, 1, 32, 64, 3, 4),
         (1, 1, 32, 8192, 3, 6),
         (1, 2048, 1, 64, 1, 8),
-        (1, 1, 32, 32768, 3, 3000),
-        (1, 1, 32, 18992, 3, 3000),
+        # Kt = 94 output tiles, Wt = 97: fills the whole insertion cascade, then merges the last
+        # three tiles in steady state. The wide k=3000 shapes are in the reduction nightly.
+        (1, 1, 32, 3100, 3, 3000),
         (1, 1, 32, 18992, 3, 32),
         (1, 1, 32, 10000, 3, 32),
         (1, 1, 32, 64128, 3, 32),
@@ -229,8 +230,8 @@ def test_topk_sub_core_grids(N, C, H, W, dim, k, dtype, sorted, largest, device,
 @pytest.mark.parametrize(
     "N, C, H, W, dim, k",
     (
-        (1, 1, 32, 151936, 3, 50),
-        (1, 1, 32, 128256, 3, 50),
+        # Narrowest width needing 32-bit indices; the 151936 / 128256 vocab widths are in the reduction nightly.
+        (1, 1, 32, W_NEEDS_UINT32, 3, 50),
         (1, 1, 16, 20, 3, 16),
     ),
 )
@@ -918,7 +919,7 @@ def test_topk_multicore_values_beyond_first_tile_row(num_rows, largest, device):
 # (input[index] == value, in-range, unique), never index-order equality.
 # ---------------------------------------------------------------------------
 
-from models.common.utility_functions import is_blackhole
+from tt_py_test_utils_common.utility_functions import is_blackhole
 
 
 def run_topk_large_k_routed_test(N, C, H, W, k, device):
