@@ -833,6 +833,8 @@ async def main():
 
         env = os.environ.copy()
         env["ETH_TEST_EXPECTED_LINKS"] = os.environ.get("ETH_TEST_EXPECTED_LINKS", str(10))
+        # These tests GTEST_SKIP unless slow dispatch is on
+        env["TT_METAL_SLOW_DISPATCH_MODE"] = "1"
         if not opts.v:
             env["TT_LOGGER_TYPES"] = "Test"
 
@@ -857,6 +859,10 @@ async def main():
 
     if logf:
         logf.close()
+
+    if runs and all(r.status == "SKIPPED" for r in runs):
+        print("All tests were SKIPPED; nothing was actually validated.")
+        exit_status = exit_status or 1
 
     exit(exit_status)
 
