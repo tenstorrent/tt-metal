@@ -90,8 +90,16 @@ def filler_sentences(n: int, seed: int = 0) -> str:
 def build_needle_ids(tok, n_tokens: int, depth: float) -> tuple[list[int], str]:
     """Chat-templated prompt of about ``n_tokens`` tokens: filler with the needle at ``depth``, then the question."""
 
+    # the generation prompt ends with ``<|assistant|><think>`` (this template has no no-think switch); closing the
+    # think block right away makes the greedy continuation the answer itself, so a short generation can contain the
+    # needle (the HF reference builds its prompt through this same function)
+    close_think = tok.encode("</think>", add_special_tokens=False)
+
     def ids_of(text: str) -> list[int]:
-        return tok.apply_chat_template([{"role": "user", "content": text}], add_generation_prompt=True, tokenize=True)
+        ids = tok.apply_chat_template([{"role": "user", "content": text}], add_generation_prompt=True, tokenize=True)
+        if hasattr(ids, "input_ids"):  # transformers >= 5 returns a BatchEncoding
+            ids = ids["input_ids"]
+        return [int(t) for t in ids] + close_think
 
     def prompt(n_sent: int) -> str:
         a = filler_sentences(max(1, int(n_sent * depth)), seed=1)
