@@ -23,6 +23,7 @@ Passes (device tensors throughout; the host writes the per-round inputs and read
 """
 
 import math
+import os
 import time
 
 import torch
@@ -146,11 +147,81 @@ class _Argmax:
     """Row argmax over a vocabulary split over the mesh columns: each device's best (value, index) on device; the host
     combines the devices (read after the pass)."""
 
-    def __init__(self, per_dev, vocab):
+    NCH = 13  # vocabulary chunks per 32-row tile row (8 x 13 = 104 cores)
+
+    def __init__(self, per_dev, vocab, custom=None):
         self.per_dev, self.vocab = per_dev, vocab
+        # custom: the per-row max / index kernels (fused_decode/kernels/b32_argmax_*: one pass over the logits, BFP8 or
+        # BF16 read as stored) instead of ttnn.topk k = 1 (its prep + large-indices passes: ~1.0 ms at 256 rows)
+        self.custom = os.environ.get("B32_ARGMAX_TOPK", "0") != "1" if custom is None else custom
 
     def device(self, logits):
-        return ttnn.topk(logits, k=1, dim=-1, sorted=True)
+        if not self.custom:
+            return ttnn.topk(logits, k=1, dim=-1, sorted=True)
+        return self._device_custom(logits)
+
+    def _device_custom(self, logits):
+        """(values, indices) [1, 1, rows, 1] FLOAT32: each row's maximum over this device's columns and its first
+        column index."""
+        from ..fused_decode.boundary import KERNEL_DIR
+
+        mesh = logits.device()
+        rows, width = logits.shape[-2], logits.shape[-1]
+        RT, NT, NCH = rows // TILE, width // TILE, self.NCH
+        grid = mesh.compute_with_storage_grid_size()
+        core_list = [ttnn.CoreCoord(x, y) for y in range(grid.y) for x in range(grid.x)][: RT * NCH]
+        cores = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in core_list])
+        f32 = ttnn.float32
+        vals = ttnn.empty([1, 1, rows, 1], dtype=f32, layout=ttnn.TILE_LAYOUT, device=mesh,
+                          memory_config=ttnn.DRAM_MEMORY_CONFIG)  # fmt: skip
+        idx = ttnn.empty([1, 1, rows, 1], dtype=f32, layout=ttnn.TILE_LAYOUT, device=mesh,
+                         memory_config=ttnn.DRAM_MEMORY_CONFIG)  # fmt: skip
+        bounds = [NT * c // NCH for c in range(NCH + 1)]
+        rd, wr, cp = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
+        noc = [mesh.worker_core_from_logical_core(c) for c in core_list]
+        for i, c in enumerate(core_list):
+            ch, rt = i // RT, i % RT
+            col0, ncol = bounds[ch], bounds[ch + 1] - bounds[ch]
+            rd[c.x][c.y] = [rt, col0, ncol]
+            wr[c.x][c.y] = [rt, ch, (noc[rt].x << 8) | noc[rt].y]
+            cp[c.x][c.y] = [col0, ncol]
+        B, SEM = 8, 0
+        cb_in, cb_part, cb_recv = 0, 1, 2
+        tile = 2048 if logits.dtype == ttnn.bfloat16 else 1088
+        rct = [cb_in, NT, B] + ttnn.TensorAccessorArgs(logits).get_compile_time_args()
+        wct = [cb_part, cb_recv, NCH, SEM]
+        for t in (vals, idx):
+            wct += ttnn.TensorAccessorArgs(t).get_compile_time_args()
+        dm = ttnn.DataMovementConfigDescriptor
+        kernels = [
+            ttnn.KernelDescriptor(
+                kernel_source=str(KERNEL_DIR / "b32_argmax_reader.cpp"), core_ranges=cores, compile_time_args=rct,
+                runtime_args=rd, common_runtime_args=[logits.buffer_address()],
+                config=dm(processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.NOC_0),
+            ),
+            ttnn.KernelDescriptor(
+                kernel_source=str(KERNEL_DIR / "b32_argmax_writer.cpp"), core_ranges=cores, compile_time_args=wct,
+                runtime_args=wr, common_runtime_args=[vals.buffer_address(), idx.buffer_address()],
+                config=dm(processor=ttnn.DataMovementProcessor.RISCV_1, noc=ttnn.NOC.NOC_1),
+            ),
+            ttnn.KernelDescriptor(
+                kernel_source=str(KERNEL_DIR / "b32_argmax_compute.cpp"), core_ranges=cores,
+                compile_time_args=[cb_in, cb_part], runtime_args=cp,
+                config=ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True,
+                                                    math_approx_mode=False),
+            ),
+        ]  # fmt: skip
+
+        def cb(i, dtype, page, pages):
+            return ttnn.CBDescriptor(total_size=page * pages, core_ranges=cores,
+                                     format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=i, data_format=dtype,
+                                                                                 page_size=page)])  # fmt: skip
+
+        recv = NCH * 256 + 256 + 2 * 4096
+        cbs = [cb(cb_in, logits.dtype, tile, 2 * B), cb(cb_part, f32, 4096, 4), cb(cb_recv, f32, recv, 1)]
+        sems = [ttnn.SemaphoreDescriptor(SEM, ttnn.CoreType.WORKER, cores, 0)]
+        ttnn.generic_op([logits, vals, idx], ttnn.ProgramDescriptor(kernels=kernels, semaphores=sems, cbs=cbs))
+        return vals, idx
 
     def combine(self, out, mesh):
         """The devices' (value, index) combined on device: [1, 1, rows, 1] FLOAT32 global token ids, the same on every
@@ -165,7 +236,7 @@ class _Argmax:
         vals, idxs = out
         g = []
         for t in (vals, idxs):
-            f = ttnn.typecast(t, ttnn.float32)
+            f = ttnn.typecast(t, ttnn.float32) if t.dtype != ttnn.float32 else ttnn.clone(t)
             g.append(
                 ttnn.all_gather(
                     f, dim=3, cluster_axis=1, num_links=1, topology=ttnn.Topology.Linear,
@@ -209,11 +280,15 @@ class BatchedKVWrite:
     the users' paged BF16 (drafter) or BFP8_b (target) caches, one core per user (fused_decode/kernels/b32_kv_write.cpp: K on BRISC, V on NCRISC),
     one or several layers per program: replaces the 8 per-step head splits + paged_fused_update_cache calls."""
 
-    def __init__(self, mesh, users, block, kv_heads, head_dim, block_size):
+    def __init__(self, mesh, users, block, kv_heads, head_dim, block_size, head_split=False):
+        """head_split: one core per (user, kv head) (the BFP8 path's row packing is RISC-bound: 35 us per layer on one
+        core per user)."""
         self.mesh, self.users, self.block = mesh, users, block
         self.kv_heads, self.head_tiles, self.block_size = kv_heads, head_dim // TILE, block_size
+        self.hpc = 1 if head_split else kv_heads  # kv heads per core
         grid = mesh.compute_with_storage_grid_size()
-        self.core_list = [ttnn.CoreCoord(x, y) for y in range(grid.y) for x in range(grid.x)][:users]
+        n = users * kv_heads // self.hpc
+        self.core_list = [ttnn.CoreCoord(x, y) for y in range(grid.y) for x in range(grid.x)][:n]
         self.cores = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in self.core_list])
 
     def __call__(self, ks, vs, caches, pos_ui, page_table):
@@ -228,8 +303,11 @@ class BatchedKVWrite:
         rt = ttnn.RuntimeArgs()
         more = [a for l in range(1, n) for a in (caches[l][0].buffer_address(), caches[l][1].buffer_address(),
                                                   ks[l].buffer_address(), vs[l].buffer_address())]  # fmt: skip
-        for u, c in enumerate(self.core_list):
-            rt[c.x][c.y] = [u, ks[0].buffer_address(), vs[0].buffer_address(), k0.buffer_address(),
+        for i, c in enumerate(self.core_list):
+            per = self.kv_heads // self.hpc
+            u, h0 = i // per, (i % per) * self.hpc
+            arg0 = u | (h0 << 8) | ((h0 + self.hpc) << 16)
+            rt[c.x][c.y] = [arg0, ks[0].buffer_address(), vs[0].buffer_address(), k0.buffer_address(),
                             v0.buffer_address(), pos_ui.buffer_address(), page_table.buffer_address()] + more  # fmt: skip
         defines = [("KV_LAYERS", str(n))] if n > 1 else []
         bf8 = k0.dtype == ttnn.bfloat8_b  # the target's cache: rows packed to BFP8_b in the kernel
@@ -745,6 +823,8 @@ class BatchedVerify:
             packer_l1_acc=True,
         )
         self.argmax = _Argmax(model.lm_head_weight.shape[-1], model.vocab_size)
+        # grouped MoE (dflash/grouped_moe.py): only the routed (row, expert) pairs; None: the dense MoE
+        self.grouped = None
         from ..fused_decode.config import RESIDUAL_CORES, sdpa_decode_program_config, width_sharded_memory_config
 
         attn0 = model.layers[0].self_attn
@@ -775,11 +855,12 @@ class BatchedVerify:
         # one BFP8 step larger in magnitude (tests/_scratch_b32_verify.py test_kvwrite). trans_rows (the prefill RoPE
         # transformation matrix of the target's RoPE) is set by the runner.
         self.trans_rows = None
-        self.kv_write = BatchedKVWrite(self.mesh, users, block, self.local_kv_heads, hd, kv_cache[1][0].shape[2])
+        self.kv_write = BatchedKVWrite(self.mesh, users, block, self.local_kv_heads, hd, kv_cache[1][0].shape[2],
+                                       head_split=True)  # fmt: skip
 
-    def _router(self, layer, x):
+    def _router(self, layer, x, with_ids=False):
         """Dense [rows, experts] routing weights: each row's softmax over its top-k logits, zeros elsewhere (as
-        TopKRouter.dense_decode, for any number of rows)."""
+        TopKRouter.dense_decode, for any number of rows); with_ids: also the top-k expert ids (UINT16)."""
         r = layer.mlp.router
         logits = ttnn.linear(
             x,
@@ -790,8 +871,15 @@ class BatchedVerify:
             memory_config=ttnn.L1_MEMORY_CONFIG,
             dtype=ttnn.bfloat16,
         )
-        values, indices = ttnn.topk(logits, k=self.top_k, dim=-1, sorted=True)
-        indices.deallocate(True)
+        # (with_ids: top-(k + 1) ids, for the grouped MoE, which routes the (k + 1)-th expert on a BF16 tie as the dense
+        # weights below do)
+        values, indices = ttnn.topk(logits, k=self.top_k + int(with_ids), dim=-1, sorted=True)
+        if not with_ids:
+            indices.deallocate(True)
+        if with_ids:  # the k-th largest logit
+            v4 = ttnn.slice(values, [0, 0, 0, 0], [1, 1, values.shape[-2], self.top_k])
+            values.deallocate(True)
+            values = v4
         kth = ttnn.min(values, dim=-1, keepdim=True)
         values.deallocate(True)
         top = ttnn.max(logits, dim=-1, keepdim=True)
@@ -805,11 +893,30 @@ class BatchedVerify:
         w = ttnn.divide(e, total)
         total.deallocate(True)
         e.deallocate(True)
-        return w
+        return (w, indices) if with_ids else w
 
     def _moe(self, li, layer, x):
-        """All experts for all rows ([rows, E * I_local] matmuls), unrouted experts zeroed by the routing weights; then
-        the TP all-reduce. x: [1, 1, rows, hidden] normed (DRAM)."""
+        """The MoE (this device's TP share, _moe_dense or _moe_grouped) and the TP all-reduce. x: [1, 1, rows, hidden]
+        normed (DRAM)."""
+        down = (self._moe_grouped if self.grouped is not None else self._moe_dense)(li, layer, x)
+        out = _all_reduce(down)
+        down.deallocate(True)
+        return out
+
+    def _moe_grouped(self, li, layer, x):
+        """Only the routed (row, expert) pairs (dflash/grouped_moe.py), plus the routing-weighted down bias."""
+        W = self.moe[li]
+        w, ids = self._router(layer, x, with_ids=True)
+        down = self.grouped(li, x, ids, w)
+        ids.deallocate(True)
+        bias = ttnn.matmul(w, W["down_bias"], dtype=ttnn.bfloat16)
+        w.deallocate(True)
+        down = ttnn.add(down, bias, output_tensor=down)
+        bias.deallocate(True)
+        return down
+
+    def _moe_dense(self, li, layer, x):
+        """All experts for all rows ([rows, E * I_local] matmuls), unrouted experts zeroed by the routing weights."""
         UWP, U = ttnn.UnaryWithParam, ttnn.UnaryOpType
         # gate / up / expand / SwiGLU in L1 interleaved (the elementwise ops run faster there than on the matmuls'
         # width shards: SwiGLU 228 -> 160 us; BF8 gate / up outputs broke the verify: agreement 0.31)
@@ -860,9 +967,7 @@ class BatchedVerify:
         w.deallocate(True)
         down = ttnn.add(down, bias, output_tensor=down)
         bias.deallocate(True)
-        out = _all_reduce(down)
-        down.deallocate(True)
-        return out
+        return down
 
     def _attention(self, li, layer, res, pos, rot):
         """The layer's attention for all rows: input norm, QKV, the attention core (_attention_rows) and o_proj (+
@@ -1017,6 +1122,10 @@ class BatchedVerify:
         normed.deallocate(True)
         logits8 = ttnn.matmul(normed8, model.lm_head_weight, dtype=ttnn.bfloat8_b)  # as the batched decode's LM head
         normed8.deallocate(True)
+        if self.argmax.custom:  # (reads the BFP8 logits as stored)
+            out = self.argmax.device(logits8)
+            logits8.deallocate(True)
+            return out, features
         logits = ttnn.typecast(logits8, ttnn.bfloat16)
         logits8.deallocate(True)
         out = self.argmax.device(logits)
@@ -1046,6 +1155,11 @@ class BatchedDFlashRunner:
         kv = kv_cache[0] if isinstance(kv_cache[0][0], list) else kv_cache
         self.verify = BatchedVerify(model, self.page_table, kv, users, B, self.draft.target_layer_ids)
         self.verify.trans_rows = self.draft.rope.get_both_trans_mats()["prefill"]  # (the target's RoPE)
+        if os.environ.get("B32_DENSE_MOE", "0") != "1":
+            from .grouped_moe import GroupedMoE
+
+            # only the routed (row, expert) pairs (the dense verify MoE computes all 32 experts for all 256 rows)
+            self.verify.grouped = GroupedMoE(mesh, self.verify.moe, self.verify.hidden)
         # persistent per-round inputs (the traces' inputs)
         z = torch.zeros(users, dtype=torch.int32)
         self.d_tokens = _replicate(mesh, torch.zeros(1, self.rows, dtype=torch.int32), ttnn.uint32)

@@ -434,6 +434,10 @@ void kernel_main() {
     }
     noc_async_atomic_barrier();
 
+    // the global read barrier too: the loops above wait on per-transaction-id counts only, and a read response still
+    // to be counted in the NOC's received count at kernel exit leaves the next kernel's global read barrier waiting
+    // forever (the same race hung the grouped MoE, gmoe_gu_reader.cpp)
+    noc_async_read_barrier();
     // the children's partials (their writers fill slot r of cb_recv and set bit r of the tree semaphore)
     volatile tt_l1_ptr uint32_t* tree_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(BA_TREE_SEM));
     for (uint32_t i = 0; i < sl.recv_rounds; ++i) {

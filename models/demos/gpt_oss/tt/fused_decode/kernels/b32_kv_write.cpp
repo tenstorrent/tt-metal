@@ -29,7 +29,10 @@
 #endif
 
 void kernel_main() {
-    const uint32_t user = get_arg_val<uint32_t>(0);
+    // arg 0: user | head range [h_lo, h_hi) << 8 / << 16 (h_hi 0: every head; the BFP8 path splits users over cores
+    // by kv head)
+    const uint32_t arg0 = get_arg_val<uint32_t>(0);
+    const uint32_t user = arg0 & 0xFF;
     const uint32_t k_src = get_arg_val<uint32_t>(1);
     const uint32_t v_src = get_arg_val<uint32_t>(2);
     const uint32_t k_cache = get_arg_val<uint32_t>(3);
@@ -49,6 +52,7 @@ void kernel_main() {
     constexpr auto pos_args = TensorAccessorArgs<vc_args.next_compile_time_args_offset()>();
     constexpr auto pt_args = TensorAccessorArgs<pos_args.next_compile_time_args_offset()>();
     constexpr auto src_args = TensorAccessorArgs<pt_args.next_compile_time_args_offset()>();
+    const uint32_t h_lo = (arg0 >> 8) & 0xFF, h_hi = (arg0 >> 16) ? (arg0 >> 16) : kv_heads;
 #ifdef KV_LAYERS
     constexpr uint32_t n_layers = KV_LAYERS;
 #else
@@ -128,7 +132,7 @@ void kernel_main() {
         for (uint32_t kv = kv_lo; kv < kv_hi; ++kv) {
             const auto s_c = TensorAccessor(kc_args, cache_addr(l, kv), tile);
             for (uint32_t g = 0; g < groups; ++g) {
-                for (uint32_t h = 0; h < kv_heads; ++h) {
+                for (uint32_t h = h_lo; h < h_hi; ++h) {
                     for (uint32_t t = 0; t < head_tiles; ++t) {
                         noc_async_read(s_c.get_noc_addr(cache_tile(g, h, t)), dst_l1(l, kv, g, h, t), tile);
                     }
@@ -152,7 +156,7 @@ void kernel_main() {
                 const uint32_t R = r * users + user;  // the source row
                 const uint32_t sr = R % 32;
                 const uint32_t src_off = (sr < 16 ? 0 : 1024) + (sr % 16) * 32;
-                for (uint32_t h = 0; h < kv_heads; ++h) {
+                for (uint32_t h = h_lo; h < h_hi; ++h) {
                     for (uint32_t t = 0; t < head_tiles; ++t) {
                         const uint64_t s_ = s_s.get_noc_addr((h * row_tiles + R / 32) * head_tiles + t) + src_off;
 #ifdef KV_BF8
@@ -183,7 +187,7 @@ void kernel_main() {
                 }
                 const uint32_t p = pos[r];
                 const uint32_t g = (p / block == bi0 && (p % block) / 32 == tr0) ? 0 : 1;
-                for (uint32_t h = 0; h < kv_heads; ++h) {
+                for (uint32_t h = h_lo; h < h_hi; ++h) {
                     for (uint32_t t = 0; t < head_tiles; ++t) {
                         for (uint32_t f = 0; f < 2; ++f) {
                             uint32_t shared, man[4];
@@ -203,7 +207,7 @@ void kernel_main() {
         for (uint32_t kv = kv_lo; kv < kv_hi; ++kv) {
             const auto s_c = TensorAccessor(kc_args, cache_addr(l, kv), tile);
             for (uint32_t g = 0; g < groups; ++g) {
-                for (uint32_t h = 0; h < kv_heads; ++h) {
+                for (uint32_t h = h_lo; h < h_hi; ++h) {
                     for (uint32_t t = 0; t < head_tiles; ++t) {
                         noc_async_write(dst_l1(l, kv, g, h, t), s_c.get_noc_addr(cache_tile(g, h, t)), tile);
                     }
