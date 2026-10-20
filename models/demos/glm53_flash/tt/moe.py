@@ -877,6 +877,7 @@ class TtEPExperts(LightweightModule):
                 down_readers=int(os.environ.get("GLM53_DISPATCH_DOWN_READERS", "8")),
                 ep=True,
                 w13_dtype=self.expert_dtype,
+                units=os.environ.get("GLM53_STREAM_UNITS", "0") == "1",  # pair-parallel units (36-expert chips)
             )
         return self.ops[T]
 

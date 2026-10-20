@@ -50,13 +50,16 @@ with the multiply it replaces). ``golden`` is the torch reference on the bfp8-ro
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import torch
 
 import ttnn
 
-KERNEL_DIR = Path(__file__).parent / "kernels"
+KERNEL_DIR = Path(
+    os.environ.get("GLM53_STREAM_KERNEL_DIR", "") or Path(__file__).parent / "kernels"
+)  # A/B of kernel sets
 TILE = 32
 BF16_TILE_BYTES = 2048
 BFP8_TILE_BYTES = 1088
@@ -525,12 +528,16 @@ class ExpertGateUpDispatch(_BankStreamOp):
         ep: bool = False,
         picks: int = MAX_PICKS,
         w_dtype=ttnn.bfloat8_b,
+        units: bool = False,
     ):
         super().__init__(device, groups)
         assert T % TILE == 0 and T <= 256, T  # counts are exact BF16 integers up to 256
         assert groups <= 32, groups
         self.E, self.K, self.I, self.T = E, K, I, T
         self.ep, self.picks = ep, picks  # EP: routing = top-k index / weight tiles + the chip's expert base
+        # units: the (expert, column pair) work units (`*_gate_up_dispatch_units.cpp`) instead of whole experts per
+        # core: 11-12 % faster with many active full-width experts (36 per chip), 2x SLOWER with few (the 8x4's 9)
+        self.units = units
         self.kt = K // TILE
         self.i_tiles = I // TILE
         assert (
@@ -615,8 +622,16 @@ class ExpertGateUpDispatch(_BankStreamOp):
         ]
         for t in (x_rm, routing, counts, act, table, base if self.ep else counts):
             writer_ct += ttnn.TensorAccessorArgs(t).get_compile_time_args()
-        compute_ct = [cb_xrm, cb_x, cb_w, cb_d, cb_h, cb_out, self.kt]
-        program = self._program("gate_up_dispatch", cbs, reader_ct, reader_rt, writer_ct, writer_rt, compute_ct)
+        compute_ct = [cb_xrm, cb_x, cb_w, cb_d, cb_h, cb_out, self.kt, self.ppb]
+        program = self._program(
+            "gate_up_dispatch_units" if self.units else "gate_up_dispatch",
+            cbs,
+            reader_ct,
+            reader_rt,
+            writer_ct,
+            writer_rt,
+            compute_ct,
+        )
         ttnn.generic_op([w13, x_rm, routing, counts, act, table] + ([base] if self.ep else []), program)
         return act
 
@@ -763,8 +778,9 @@ class ExpertDispatch:
         down_readers: int = 8,
         ep: bool = False,
         w13_dtype=ttnn.bfloat8_b,
+        units: bool = False,
     ):
-        self.gate_up = ExpertGateUpDispatch(device, E, K, I, T, groups, ep=ep, w_dtype=w13_dtype)
+        self.gate_up = ExpertGateUpDispatch(device, E, K, I, T, groups, ep=ep, w_dtype=w13_dtype, units=units)
         self.down = ExpertDownDispatch(device, E, I, H, T, down_readers, ep=ep)
         self.E, self.K, self.I, self.H, self.T, self.ep = E, K, I, H, T, ep
         self.P = self.gate_up.P
