@@ -26,7 +26,7 @@
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/math.hpp>
 #include <tt_stl/small_vector.hpp>
 
 #include "tt_metal/tt_metal/common/multi_device_fixture.hpp"

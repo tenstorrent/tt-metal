@@ -21,7 +21,7 @@
 #include "emulated_program_runner.hpp"  // emule::pump_device
 #endif
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/math.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "impl/dispatch/system_memory_manager.hpp"
 #include "impl/threading/thread_pool.hpp"

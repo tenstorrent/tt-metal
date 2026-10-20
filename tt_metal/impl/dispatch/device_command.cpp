@@ -15,7 +15,7 @@
 #include "dispatch/kernels/cq_commands.hpp"
 #include "dispatch/memcpy.hpp"
 #include "dispatch_settings.hpp"
-#include "tt_align.hpp"
+#include <tt-metalium/math.hpp>
 
 namespace tt::tt_metal {
 

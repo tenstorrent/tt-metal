@@ -11,7 +11,7 @@
 #include "hal_types.hpp"
 #include <bit>
 #include <tt-logger/tt-logger.hpp>
-#include "tt_align.hpp"
+#include <tt-metalium/math.hpp>
 #include "tt_metal.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 #include <algorithm>
