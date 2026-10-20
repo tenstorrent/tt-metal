@@ -21,12 +21,12 @@ inline const uint32_t get_output_num_faces(const std::uint32_t output_id) {
     return (uint32_t)pack_tile_num_faces[output_id];
 }
 
-inline const uint32_t get_output_partial_face(const std::uint32_t output_id) {
-    return (uint32_t)pack_partial_face[output_id];
-}
-
 inline const uint32_t get_output_face_r_dim(const std::uint32_t output_id) {
     return (uint32_t)pack_tile_face_r_dim[output_id];
+}
+
+inline const uint32_t get_output_partial_face(const std::uint32_t output_id) {
+    return get_output_face_r_dim(output_id) < ckernel::FACE_R_DIM;
 }
 
 inline const uint32_t get_output_narrow_tile(const std::uint32_t output_id) {
