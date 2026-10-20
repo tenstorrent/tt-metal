@@ -804,13 +804,8 @@ std::optional<MatmulUnifiedProgramConfig> choose_unified_placement(
                                       uint32_t share_width_tiles,
                                       bool share_is_columns) {
         const uint32_t share_length_tiles = share_is_columns ? M_tiles : N_tiles;
-        uint32_t previous_C_slice_length_tiles = 0;
         for (uint32_t C_slices_per_share = 1; C_slices_per_share <= share_length_tiles; ++C_slices_per_share) {
             const uint32_t C_slice_length_tiles = tt::div_up(share_length_tiles, C_slices_per_share);
-            if (C_slice_length_tiles == previous_C_slice_length_tiles) {
-                continue;  // the C slice that just did not fit
-            }
-            previous_C_slice_length_tiles = C_slice_length_tiles;
             const bool fits = share_is_columns
                                   ? try_placement(cores, orientation, C_slice_length_tiles, share_width_tiles)
                                   : try_placement(cores, orientation, share_width_tiles, C_slice_length_tiles);
