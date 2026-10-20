@@ -374,3 +374,32 @@ carried most of it.
 | vLLM, c=16 (64 x 128 / 128, DP=4 x 4) | 1005.4, 1023.4, 1004.7 tok/s; TPOT 13.2-13.5 ms; TTFT median 317-322 ms |
 | vLLM, c=1 | TTFT 176 ms, TPOT 13.1 ms |
 | vLLM, other checks | HTTP suite 78 passed, 1 skipped; served greedy == standalone 16/16; 0 decode-trace recaptures |
+
+## Long context, 2026-10-20 (#61416, on `mimo-v2.6/dev`, MOPD)
+
+Chunked prefill stays correct at 32K and 128K on the decode cache layout (128-wide global V, SWA paged by absolute
+position). Measured on one BH Galaxy with the default MSE experts:
+
+| Test | What it runs | Result |
+|---|---|---|
+| `test_chunked_prefill_tp8_dp4.py` short (layers 0, 1, 5) | 4 prompts of 200-1333 tokens, chunks of 64-512 | chunked vs reference >= 0.99892 (delta >= 0.9937), vs one shot >= 0.99932, written K / V >= 0.99993, decode >= 0.99978 (delta >= 0.9981) |
+| `test_chunked_prefill_tp8_dp4.py` 32k (layers 0, 1, 5) | one 32768-token prompt per row, chunks of 1024 / 2048 / 4096 / 8192, vs the fp32 reference (attention in query blocks); 32 decode steps | chunked vs reference >= 0.99843 (delta >= 0.9969), vs one shot >= 0.99973 (delta >= 0.9993), written K / V >= 0.99993, decode >= 0.99997 (delta >= 0.9990) |
+| `test_model_long_tp8_dp4.py` 32k | 48 layers, 4 users per row; per row a passkey prompt one shot and in chunks of 1K-8K, plus a shared prompt | same next token for both cuts on every row, logits PCC 0.9948-0.9972; pass key found at 10 / 35 / 65 / 90% depth by both cuts; shared prompt identical on all 4 rows (PCC 1.000000) |
+| `test_model_long_tp8_dp4.py` 128k | as 32k, baseline in 16K chunks | same next token everywhere, logits PCC 0.9930-0.9948; every pass key found; shared prompt identical on all 4 rows |
+
+| | 32K | 128K |
+|---|---|---|
+| Prefill, 3 prompts per row on 4 rows at once | 63 s | 372 s |
+| DRAM per chip: weights / + KV for 4 users / total | 24.24 / 24.50 / 34.18 GB | 24.24 / 25.10 / 34.18 GB |
+| Largest prefill chunk that runs after decode | 32768 (the whole prompt) | 16384 |
+
+Two fixes came out of these runs:
+
+- **MoE prefill over 8K tokens.** The router's prefill program blocks a whole chunk per core, so a 32K chunk needed
+  ~4.9 MB of L1 (the expert plan's row buffers pass L1 a little above 8K too). `TtMiMoMoE.forward` now runs chunks
+  longer than 8192 tokens in 8K slices; each token's output is unchanged. vLLM sends at most 4K and was not affected.
+- **Page table width.** `SwaDecodeQkv` reads a page table row in 64 B pieces, so `setup_kv_cache` now pads the width to
+  16 blocks. A `max_seq_len` that was not a multiple of 1024 tokens failed on the first decode step.
+
+At 128K a 32K-token chunk no longer fits once decode has run: its static circular buffers reach into L1 that decode
+keeps allocated. Prefill chunks up to 16K fit; vLLM runs 4K.
