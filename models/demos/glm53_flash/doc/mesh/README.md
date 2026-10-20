@@ -86,7 +86,16 @@ of the dump chain `L45_S128` are the reference of the output after the last buil
 | mesh | layers | users/row | chain vs HF (per-user pcc, 32 tokens) | greedy id vs host head | traced step | per layer | log |
 |---|---|---|---|---|---|---|---|
 | (1,4) row-6 ring, TP4 | 0-5 (3 dense + 3 MoE) | 2 | 0.999253 (through 6 layers) | 100 % | 32.55 ms -> 30.7 tok/s per user, 61 aggregate | 5.43 ms (single chip: 10.8 ms per MoE layer) | `test_mesh_model_ring_l0-5.log` |
-| 8x4, all 45 layers | 0-44 | 4 and 32 | pending (needs the whole Galaxy free) | | | | |
+| (2,4) rows-6-7 block, bfp4 experts (gate/up AND down; the only way 45 layers fit 8 chips), cumsum router | 0-44 | 4 (8 users) | 0.829 (16 tokens, through 45 layers; see the chain note) | 100 % | 318.3 ms -> 3.1 tok/s per user, 25 aggregate | 7.07 ms | `test_mesh_model_rows67_45L_bfp4_2.log` (45 min incl. 40 min of weight loading) |
+| 8x4, all 45 layers, bfp8 | 0-44 | 4 and 32 | pending (needs the whole Galaxy free + the board reset) | | | | |
+
+**TTFT, full model** (same run, `_ttft`): 128-token prompt through the sequence-parallel prefill of all 45 layers +
+head: warm 1301 ms, cold 2660 ms (first-call compiles); first greedy token 102647 == host head on the HF rows.
+
+**Chain note:** the chain PCC vs HF after many layers drops (6 layers 0.9993, 24 layers bfp8 0.876, 45 layers bfp4
+0.80-0.83) while the greedy token stays identical; whether this is precision accumulation over the 42 MoE layers
+(near-tie expert flips compound) or a chain-level defect is being separated with the single-chip streaming full
+model (`arg/glm53_fullmodel`, true prefill path, per-layer chain PCC).
 
 Build cost: dense layer 2.7 s, MoE layer 43-48 s on the (1,4) mesh (host fp8 -> bf16 dequant 3-7 s, the rest
 is the bfp8 conversion + upload), i.e. ~32 min for 45 layers.
