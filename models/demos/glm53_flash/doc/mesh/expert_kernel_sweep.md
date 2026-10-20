@@ -464,3 +464,10 @@ Expected at the 8x4 EP shape: 3 active experts = 24 units per bank = 2 per core 
 9 active -> bank-bound ~310 us as before. The (2,4) share (36 experts) is bank-bound either way.
 To measure after the reset: `pytest tests/custom_ops/test_expert_dispatch.py -k ep` (correctness, 4 shapes +
 bfp4) then `tests/test_moe_ep.py` (the table of section 11 again).
+
+Why not the expert-parallel down split first (section 10's lever): at the 8x4 EP shape a chip has 2-9 active
+experts, so a split by expert over a bank's 8 down cores would leave most of them idle (the column split balances
+whatever the active count), and the measured EP time was dominated by the gate|up's one-expert-per-core
+streaming. The down op's activation traffic (every core reads every pass's 128 KB block at full width) stays the
+secondary item: a NOC multicast of each pass's block to the bank's 8 cores (one read per bank instead of eight)
+once the (2,4) numbers show the down op above ~200 us.
