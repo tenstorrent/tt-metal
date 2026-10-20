@@ -36,6 +36,8 @@ DTYPES = {"bf16": ttnn.bfloat16, "bfp8": ttnn.bfloat8_b, "bfp4": ttnn.bfloat4_b}
 # The optional last field is the num_workers_per_dram_bank the model hands main's program (without
 # use_multicore_pipeline): left out it is 1, the single-reader program; 2 is main's 2-reader variant, which
 # splits each bank's columns over two readers (the stock arm of a model that passes 2 readers runs that).
+# On a 7-bank Blackhole part (P100) the pipeline arm still runs; a record whose stock readers do not divide the
+# per-bank weight width skips its stock comparison (main's program requires that division).
 # A grid is ("rect", x, y) from (0, 0) or ("rm", n): n cores row-major over the worker grid.
 # fmt: off
 BH_SHAPES = [
@@ -327,6 +329,14 @@ def _bh_case(device, case, cores_per_bank, in0_block_w=2, fp32=None):
 def _stock(x, w, case, kw):
     """main's program as the model calls it: the recorded stock in0_block_w and stock readers, no pipeline."""
     readers = case[13] if len(case) > 13 else 1
+    if readers > 1:
+        banks = w.device().dram_grid_size().x
+        per_bank = math.ceil(case[1] // 32 / banks)  # tiles per bank, as padded in _operands
+        if per_bank % readers != 0:
+            pytest.skip(
+                f"main's {readers}-reader program needs the {per_bank}-tile weight shard per bank to split evenly; "
+                f"this part has {banks} DRAM banks (QB2 record, 8 banks)"
+            )
     out = _matmul(
         x,
         w,
@@ -369,7 +379,7 @@ def _cases(shapes, representative=_REPRESENTATIVE):
 DEST = pytest.mark.parametrize("fp32", [True, False], ids=["fp32_dest", "bf16_dest"])
 
 
-@pytest.mark.skipif(not is_blackhole(), reason="Blackhole shapes (8 DRAM banks)")
+@pytest.mark.skipif(not is_blackhole(), reason="Blackhole shapes")
 @pytest.mark.parametrize("case", _cases(BH_SHAPES))
 @DEST
 def test_served_shapes_blackhole(device, case, fp32):
@@ -384,7 +394,7 @@ def test_served_shapes_blackhole(device, case, fp32):
 _QB2 = [c for c in BH_SHAPES if len(c) > 13 and c[13] == 2]
 
 
-@pytest.mark.skipif(not is_blackhole(), reason="Blackhole shapes (8 DRAM banks)")
+@pytest.mark.skipif(not is_blackhole(), reason="Blackhole shapes")
 @pytest.mark.parametrize("case", [pytest.param(c, id=_id(c)) for c in _QB2])
 def test_qb2_demo_block_width(device, case):
     """The QB2 Llama-3.1-8B demo passes the same in0_block_w (8 for gate_up, 4 for the LM head) to the multi-core
