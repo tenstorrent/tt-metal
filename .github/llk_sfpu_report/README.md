@@ -90,8 +90,8 @@ python3 .github/llk_sfpu_report/report.py /tmp/llk-sfpu-report/summary-*.json   
 `--base <ref>` sets the baseline (default: the merge-base with `origin/main`), `--work`
 the scratch directory (default `/tmp/llk-sfpu-report`), `--formats Float16_b,Float32`
 narrows perf and accuracy to those input formats, and `--check` makes the run a
-pass/fail test: it exits 1 when the report lists a regression, and 2 when nothing could
-be measured (see below). Every PR comment ends
+pass/fail test: it exits 1 when the report has a ⚠️ (a regression, or an op that did
+not run on the PR side), and 2 when nothing could be measured (see below). Every PR comment ends
 with these commands, pinned to the SHAs it measured, so anyone can reproduce a row.
 
 ## Reading the report
@@ -112,6 +112,17 @@ show only rows that changed, regressions first, and fold everything else into
   unpacker and the Dest: for NaN, -0 and subnormal inputs it is not an IEEE answer, so
   there any change of kind counts.
 
+Above the regressions, an op that **did not run on the PR side** gets its own ⚠️ line,
+and its numbers are left out: they are not the PR's kernel. On the PR side it hands
+back an input unchanged on every lane, where the base side computed something; an op
+without accuracy results instead takes under a cycle per row there, and at least 10
+times fewer cycles than before. Either main's harness asks for the op in a way the PR's
+device code no longer runs (#54080 moved logsigmoid from the binary to the unary
+harness, in its Python and in `sfpu_operations.h`), or the PR's kernel stopped
+computing. The line says which is likely: when the PR also changes the op in the
+harness's Python, it names the files. For an op that ran, those files are listed under
+the measured ops, since its numbers use main's tests and reference, not the PR's.
+
 ## How it works
 
 **Two sides, one harness.** `overlay.py` builds two sparse worktrees. By default
@@ -123,7 +134,10 @@ the harness at a side's tree. A PR can change what runs on the Tensix, never wha
 on the runner. If the merge-base is too old for the current harness, the run falls
 back to rebase mode and the report says so. Rebase mode needs the PR's device diff to
 apply to main (`git apply --3way`); when main has changed the same lines since, nothing
-is measured, and the report names the conflicting files and asks for a rebase.
+is measured, and the report names the conflicting files and asks for a rebase. The
+PR's harness Python never runs, so `overlay.harness_changes()` finds where the PR
+changes a measured op in it: a changed line naming the op (`MathOperation.Tanh`, its
+`OpSpec` entry), or a change inside the golden method the op dispatches to.
 
 **Which chips.** With no `--arch`, the plan job runs only the chips whose device code
 the PR changes (`overlay.archs_built()`): a device file in one architecture's tree

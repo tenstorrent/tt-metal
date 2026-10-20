@@ -921,3 +921,203 @@ def test_a_small_drift_is_not_a_regression():
     rec["worse"], rec["better"] = 3, 1  # 2 net of 65,279 lanes
     rec["specials"] = {"changed": [], "nan_propagates": {"base": True, "head": True}}
     assert not report._acc_regressed(rec)
+
+
+def test_a_result_that_is_its_input_unchanged_names_the_operand():
+    import torch
+
+    a = torch.linspace(-60, 60, 256, dtype=torch.float32)
+    b = torch.exp(-a)
+    assert accuracy._returns_input({"src": a, "result": a.clone()}) == "first"
+    # Rounded to a coarser output format, it is still the input.
+    assert accuracy._returns_input({"src": a, "result": a.to(torch.bfloat16)}) == "first"
+    assert accuracy._returns_input({"src": a, "src_b": b, "result": b.clone()}) == "second"
+    logsigmoid = -torch.nn.functional.softplus(-a)
+    assert accuracy._returns_input({"src": a, "src_b": b, "result": logsigmoid}) is None
+    # An exact op off by one is not its input.
+    ints = torch.arange(256, dtype=torch.int32)
+    assert accuracy._returns_input({"src": ints, "result": ints + 1}, exact=True) is None
+    assert accuracy._returns_input({"src": ints, "result": ints.clone()}, exact=True) == "first"
+    # Only the compared lanes count, and a handful of them say nothing about a tile.
+    positive = a > 0
+    assert accuracy._returns_input({"src": a, "result": torch.where(positive, a, 0 * a)}, positive) == "first"
+    assert accuracy._returns_input({"src": a[:8], "result": a[:8]}) is None
+
+
+def test_the_comparison_records_which_side_hands_back_its_input(tmp_path):
+    import torch
+
+    x = torch.linspace(0.5, 4.0, 1024).to(torch.bfloat16)
+    base = {"op": "Square", "in": "Float16_b", "out": "Float16_b", "approx": "No", "dest_acc": "No"}
+    base.update(src=x, golden=x * x, result=x * x)
+    for side, d in (("base", base), ("head", dict(base, result=x.clone()))):
+        (tmp_path / side).mkdir()
+        torch.save(d, tmp_path / side / "Square__Float16_b-Float16_b__No__No__sweep.pt")
+    (rec,) = accuracy.compare(tmp_path / "base", tmp_path / "head")
+    assert rec["returns_input"] == {"base": None, "head": "first"}
+
+
+def _did_not_run(**changes):
+    """_summary() with Square handing back its input on the PR side, in 16 cycles per tile."""
+    summary = _summary()
+    for rows in summary["perf"]["unary"].values():
+        rows[0]["MATH_ISOLATE"] = dict(rows[0]["MATH_ISOLATE"], base=793.0, head=16.0)
+    summary["accuracy"][0]["returns_input"] = {"base": None, "head": "first"}
+    return dict(summary, **changes)
+
+
+def test_an_op_that_hands_back_its_input_did_not_run_and_its_numbers_are_left_out():
+    # #54080: main's harness asked for binary logsigmoid, which the PR's device code no
+    # longer ran. The report showed a 49x speedup and 12 accuracy regressions.
+    text = report.render([_did_not_run()])
+    assert (
+        "**⚠️ `Square` did not run on the PR side** (Wormhole). There it returns its first input "
+        "unchanged on every lane and takes 16 math cycles per tile (793 before)." in text
+    )
+    assert "a regression, unless the PR meant that. Its numbers are left out of this report." in text
+    assert "### Performance" not in text and "regression(s)" not in text and "49.56x" not in text
+    assert [f["kind"] for f in report.findings([_did_not_run()])] == ["not run"]
+    assert "--ops Square --formats Float16,Float16_b --check" in text
+
+
+def test_a_harness_change_to_the_op_is_named_as_the_likely_cause():
+    files = [
+        "tt_metal/tt-llk/tests/python_tests/helpers/llk_params.py",
+        "tt_metal/tt-llk/tests/python_tests/test_eltwise_unary_sfpu.py",
+    ]
+    text = report.render([_did_not_run(harness_changed={"Square": files}, not_applied=files)])
+    assert (
+        "This PR also changes `Square` in the test harness's Python (`helpers/llk_params.py`, "
+        "`test_eltwise_unary_sfpu.py`), which the report runs from main" in text
+    )
+    assert "a regression, unless" not in text
+    # A harness change that could not be tied to the op leaves both causes open.
+    text = report.render([_did_not_run(not_applied=files)])
+    assert "This PR also changes the test harness's Python (see the notes)" in text
+    assert "If that is not why, the PR's kernel" in text
+
+
+def test_an_op_that_hands_back_its_input_on_both_sides_ran():
+    # SfpuCopyDest copies an input by design.
+    summary = _did_not_run()
+    summary["accuracy"][0]["returns_input"] = {"base": "first", "head": "first"}
+    assert "did not run" not in report.render([summary])
+
+
+def test_an_op_ran_when_one_of_its_variants_computed():
+    summary = _did_not_run()
+    rec = summary["accuracy"][0]
+    summary["accuracy"].append(
+        dict(rec, key=["Square", "Float32", "Float32", "No", "Yes"], returns_input={"base": None, "head": None})
+    )
+    assert "did not run" not in report.render([summary])
+
+
+@pytest.mark.parametrize(
+    "base, head, not_run",
+    [
+        (793.0, 16.0, True),
+        (781.0, 0.2, True),
+        (15.0, 15.0, False),  # a kernel over a few rows, like SfpuAddTopRow's
+        (800.0, 40.0, False),  # over a cycle per row
+        (100.0, 16.0, False),  # under ten times faster
+    ],
+)
+def test_an_op_without_accuracy_results_goes_by_its_cycles(base, head, not_run):
+    summary = _did_not_run(accuracy=[])
+    for rows in summary["perf"]["unary"].values():
+        rows[0]["MATH_ISOLATE"] = dict(rows[0]["MATH_ISOLATE"], base=base, head=head)
+    assert ("did not run on the PR side" in report.render([summary])) is not_run
+
+
+def test_the_ops_that_ran_are_reported_as_usual():
+    summary = _did_not_run()
+    same = {"delta": 0.0, "regression": False, "improvement": False}
+    tanh = dict(
+        summary["perf"]["unary"]["loadmacro"][0],
+        op="Tanh",
+        MATH_ISOLATE=dict(same, base=300.0, head=300.0),
+        L1_TO_L1=dict(same, base=320.0, head=320.0),
+    )
+    for rows in summary["perf"]["unary"].values():
+        rows.append(dict(tanh))
+    rec = summary["accuracy"][0]
+    summary["accuracy"].append(
+        dict(
+            rec,
+            key=["Tanh", *rec["key"][1:]],
+            head=dict(rec["base"]),
+            worse=0,
+            better=0,
+            returns_input={"base": None, "head": None},
+            specials={"changed": [], "nan_propagates": {"base": True, "head": True}},
+        )
+    )
+    summary["ops"] = dict(summary["ops"], measured=["Square", "Tanh"])
+    text = report.render([summary])
+    assert "**⚠️ `Square` did not run on the PR side**" in text
+    assert "**No regressions in the other ops.**" in text
+    assert "| Wormhole | Tanh |" in text and "| Wormhole | Square |" not in text
+
+
+def test_harness_changes_to_an_op_that_ran_are_named_under_the_ops():
+    files = ["tt_metal/tt-llk/tests/python_tests/helpers/golden_generators.py"]
+    text = report.render([dict(_summary(), harness_changed={"Square": files}, not_applied=files)])
+    assert (
+        "**Harness changes left out:** this PR also changes the test harness's Python for `Square` "
+        "(`helpers/golden_generators.py`), which the report runs from main: the numbers for that op "
+        "use main's tests and reference, not the PR's." in text
+    )
+
+
+def test_harness_changes_are_found_by_name_and_by_golden_method(tmp_path):
+    def git(*args):
+        return subprocess.run(["git", "-C", str(tmp_path), *args], check=True, capture_output=True, text=True).stdout
+
+    def write(files):
+        for path, text in files.items():
+            (tmp_path / path).parent.mkdir(parents=True, exist_ok=True)
+            (tmp_path / path).write_text(text)
+        git("add", "-A")
+        git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "c")
+        return git("rev-parse", "HEAD").strip()
+
+    py = "tt_metal/tt-llk/tests/python_tests/"
+    golden = (
+        "class UnarySFPUGolden:\n"
+        "    def __init__(self):\n"
+        "        self.ops = {\n"
+        "            MathOperation.Tanh: self._tanh,\n"
+        "            MathOperation.Abs: self._abs,\n"
+        "        }\n"
+        "\n"
+        "    def _tanh(self, x):\n"
+        "        return torch.tanh(x)\n"
+        "\n"
+        "    def _abs(self, x):\n"
+        "        return abs(x)\n"
+    )
+    params = 'class MathOperation(Enum):\n    Exp = OpSpec("exponential")\n    SfpuLogsigmoid = OpSpec("LOGSIGMOID")\n'
+    git("init", "-q")
+    base = write(
+        {
+            py + "helpers/golden_generators.py": golden,
+            py + "helpers/llk_params.py": params,
+            py + "test_eltwise_unary_sfpu.py": "OPS = [MathOperation.Abs]\n",
+        }
+    )
+    # Tanh's golden changes; a method added after Abs's does not change Abs.
+    new_golden = golden.replace("tanh(x)", "tanh(x.double())") + "\n    def _sign(self, x):\n        return x.sign()\n"
+    write(
+        {
+            py + "helpers/golden_generators.py": new_golden,
+            py + "helpers/llk_params.py": params.replace('    SfpuLogsigmoid = OpSpec("LOGSIGMOID")\n', ""),
+            py + "test_eltwise_unary_sfpu.py": "OPS = [MathOperation.Abs]\nOPS += [MathOperation.Exp]\n",
+        }
+    )
+    plan = overlay.make_plan(tmp_path, "HEAD", base)
+    assert overlay.harness_changes(plan, ["SfpuLogsigmoid", "Tanh", "Abs", "Exp", "Typecast"]) == {
+        "SfpuLogsigmoid": [py + "helpers/llk_params.py"],
+        "Tanh": [py + "helpers/golden_generators.py"],
+        "Exp": [py + "test_eltwise_unary_sfpu.py"],
+    }
