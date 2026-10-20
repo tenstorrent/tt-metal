@@ -34,7 +34,7 @@ from regression_compare import (  # noqa: E402
 )
 
 POSITIONS = ("p0", "p4", "p20", "p36", "p52")
-DEFAULT_CAP = 500
+DEFAULT_CAP = 1000
 _STATS = ("current", "baseline", "delta_pct", "delta_cycles", "marker", "run_type")
 
 
