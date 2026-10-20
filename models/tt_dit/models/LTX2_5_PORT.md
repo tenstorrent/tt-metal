@@ -384,6 +384,8 @@ text stack). Remove them unless a use appears.
 - **Ancestral branch pins the conditioning (landed).** The `ancestral` path in
   `_denoise_no_guidance` passes `_post_process_latent_tt` as the x0 pin to
   `_euler_ancestral_step_tt`, like upstream's `post_process_latent` before every sampler step.
+  It re-pins after the alpha rescale and re-noise too, so pinned tokens stay clean where their
+  per-token timestep says clean.
   Without it an image-conditioned stage 1 dropped its image and stage 2's re-pin crossfaded back
   over frames 1-8 (task #346, 1080p-portrait sulphur25 i2v on cs04).
 - **`use_prompt_adaln_single`.** Absent from the 2.5 config, so it defaults true — same as
