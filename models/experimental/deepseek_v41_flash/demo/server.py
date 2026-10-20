@@ -3,9 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """OpenAI-compatible HTTP server on the full ttnn ``DeepSeekV41Model``.
 
-The V4.1 twin of ``models/experimental/deepseek_v4_flash/demo/server.py``, which it runs unchanged -- the same
-endpoints, OpenAI request and response shapes, tool calling, thinking mode, scheduler, live console and traced
-prefill (read that docstring) -- on the V4.1 decode model and :class:`DeepSeekV41PrefillModel` instead:
+The V4.1 twin of ``models/experimental/deepseek_v4_flash/demo/server.py``. Chat, completions, sessions, tool
+calling, thinking mode, the scheduler, the live console and traced prefill are that server's (read that
+docstring), on the V4.1 decode model and :class:`DeepSeekV41PrefillModel` instead:
 
 * the engine (:class:`V41ChatEngine`) builds :class:`DeepSeekV41Model` and its ``lm_head``; its layers are split
   evenly over the stages in contiguous runs (five per stage at the default eight), a placement the prefill model
@@ -13,6 +13,8 @@ prefill (read that docstring) -- on the V4.1 decode model and :class:`DeepSeekV4
   ``DEEPSEEK_V4_NUM_STAGES`` (default 8) is how many ``1 x 4`` submeshes are carved from it;
 * the prefill (:class:`_V41Prefiller`) is :meth:`DeepSeekV41Model.build_prefill` (sharing the routed experts,
   embedding, ``lm_head``, sockets and the Engram host lookup) with no CSA position bias to commit.
+
+``GET /models`` and ``GET /v1/models`` return DeepSeek's list-models record (:func:`model_record`).
 
 What V4.1 imposes on the serving side:
 
@@ -39,6 +41,8 @@ Then talk to it as to the V4 server (``models/experimental/deepseek_v4_flash/dem
     curl -s --no-buffer -X POST http://127.0.0.1:8000/v1/chat/completions \\
         -H "Content-Type: application/json" \\
         -d '{"messages": [{"role": "user", "content": "Hello"}], "stream": true}'
+
+    curl -s http://127.0.0.1:8000/models
 """
 
 from __future__ import annotations
@@ -49,6 +53,7 @@ import queue
 import sys
 import threading
 from collections import deque
+from urllib.parse import urlparse
 
 from loguru import logger
 
@@ -71,7 +76,7 @@ from models.experimental.deepseek_v41_flash.tt.config import (
 )
 from models.experimental.deepseek_v41_flash.tt.model import DeepSeekV41Model
 from models.experimental.deepseek_v4_flash.demo.chat_cli import ChatEngine, ChatFormat, UserSession
-from models.experimental.deepseek_v4_flash.demo.server import _Prefiller, build_parser, check_args, serve
+from models.experimental.deepseek_v4_flash.demo.server import _Handler, _Prefiller, build_parser, check_args, serve
 from models.experimental.deepseek_v4_flash.tt.layers import Linear
 from models.experimental.deepseek_v4_flash.tt.model import plan_layer_placement
 from models.experimental.deepseek_v4_flash.tt.system_config import load_system_config
@@ -95,6 +100,56 @@ V41_CHAT_FORMAT = ChatFormat(
     parameter_tag=encoding_dsv41.tool_parameter_tag_name,
     effort_aliases={"medium": "high"},
 )
+
+# Display name from https://api-docs.deepseek.com/api/list-models . The served ``id`` stays ``--model-id``
+# (default ``deepseek-v4.1-flash``); the published catalog id is ``deepseek-flash``.
+_MODEL_NAME = "DeepSeek-V4.1-Flash"
+_MODEL_OWNER = "deepseek"
+
+
+def model_record(api) -> dict:
+    """One model object for `GET /models <https://api-docs.deepseek.com/api/list-models>`_.
+
+    Limits are this process's, not the published 1,048,576 / 393,216 cloud numbers: ``context_window`` is
+    the live prompt-plus-reply cap, and ``max_output_tokens`` is the smaller of that and ``--max-new-tokens``.
+    ``input_modalities`` is text only (an image part is refused). ``effort.supported_levels`` omits ``medium``
+    (accepted, then rendered as ``high``) and ``none`` (thinking off). ``system_prompt_update`` is
+    ``in-history`` because a system message after the first turn is rendered; it is kept beside the leading
+    one rather than replacing it. There is no Anthropic Messages route.
+    """
+    engine = api.engine
+    aliases = engine.chat_format.effort_aliases
+    levels = [level for level in engine.chat_format.reasoning_efforts if level not in aliases]
+    effort = {"supported_levels": levels}
+    if encoding_dsv41.DEFAULT_REASONING_EFFORT in levels:
+        effort["default_level"] = encoding_dsv41.DEFAULT_REASONING_EFFORT
+    return {
+        "id": api.model_id,
+        "object": "model",
+        "created": api._created,
+        "owned_by": _MODEL_OWNER,
+        "name": _MODEL_NAME,
+        "context_window": engine.max_seq,
+        "max_output_tokens": min(engine.max_new_tokens, engine.max_seq),
+        "input_modalities": ["text"],
+        "output_modalities": ["text"],
+        "effort": effort,
+        "api_capabilities": {"anthropic_messages": {"system_prompt_update": "in-history"}},
+    }
+
+
+class _V41Handler(_Handler):
+    """:class:`_Handler` plus DeepSeek ``GET /models`` (``GET /v1/models`` returns the same body)."""
+
+    def do_GET(self) -> None:
+        path = urlparse(self.path).path
+        if path not in ("/models", "/v1/models"):
+            super().do_GET()
+            return
+        try:
+            self._send_json({"object": "list", "data": [model_record(self.api)]})
+        except Exception as e:
+            self._send_error_json(e)
 
 
 class V41ChatEngine(ChatEngine):
@@ -307,7 +362,15 @@ def parse_args(argv: list[str] | None = None):
         # None means "no reply cap": a request runs until EOS or the context is full.
         # ``--max-new-tokens N`` still caps a reply at N.
         max_new_tokens=None,
+        # Requests that omit temperature sample at 1. 0, or a request's own temperature, still wins.
+        temperature=1.0,
     )
+    for action in p._actions:
+        if action.dest == "temperature":
+            action.help = (
+                "sampling temperature for requests that send none (default: 1); "
+                "a request's own temperature overrides it, and 0 asks for greedy"
+            )
     args = p.parse_args(argv)
     if args.max_new_tokens is None:
         args.max_new_tokens = args.max_context
@@ -320,6 +383,7 @@ def main(argv: list[str] | None = None) -> int:
         engine_cls=V41ChatEngine,
         prefiller_cls=_V41Prefiller,
         num_stages=pipeline_stage_count(),
+        handler_cls=_V41Handler,
     )
 
 

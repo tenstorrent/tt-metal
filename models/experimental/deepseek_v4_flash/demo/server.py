@@ -92,12 +92,15 @@ snippet), ``p`` pauses the scroll,
   keeps its own full history always stays consistent with the server.
 * ``max_tokens`` caps the reply (default: the engine-wide ``--max-new-tokens``);
   ``temperature`` / ``top_p`` sample from the per-step logits (default: the
-  server's ``--temperature``, unset = greedy argmax). ``thinking: true`` and ``reasoning_effort`` are DeepSeek-V4 extensions
-  that switch that session to the thinking template. ``reasoning_effort`` is
+  server's ``--temperature``, unset = greedy argmax). ``thinking`` and ``reasoning_effort`` are DeepSeek extensions
+  that switch that session to the thinking template. ``thinking`` is ``true`` / ``false`` or
+  ``{"type": "enabled"}`` / ``{"type": "disabled"}``. ``reasoning_effort`` is
   ``low``, ``medium``, ``high``, or ``max`` (``medium`` uses the same template
   as ``high``). In thinking mode the reply
   carries the reasoning block in the ``reasoning_content`` field, exactly like the
-  DeepSeek reasoner API, while ``content`` holds the answer. ``stop`` sequences
+  DeepSeek reasoner API, while ``content`` holds the answer. The prompt already
+  opens ``<think>``, so a completion is split on ``</think>`` even when the
+  generated text never repeats the opening tag. ``stop`` sequences
   are not supported.
 * Tool calling works the OpenAI way round-trip. ``tools`` on the request are rendered
   into the system turn so the model knows what it may call; when it calls one it writes
@@ -193,6 +196,20 @@ class RequestError(Exception):
         self.status = status
         self.message = message
         self.err_type = err_type or ("invalid_request_error" if status < 500 else "server_error")
+
+
+def _thinking_requested(value) -> bool:
+    """Whether a request's ``thinking`` field turns the thinking template on.
+
+    A boolean is the server's own form. DeepSeek and DeepSeek Harness send
+    ``{"type": "enabled"}`` or ``{"type": "disabled"}``; both objects are truthy,
+    so the ``type`` field is what decides.
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, dict) and value.get("type") in ("enabled", "disabled"):
+        return value["type"] == "enabled"
+    raise RequestError(400, 'thinking must be a boolean or {"type": "enabled"|"disabled"}')
 
 
 class _ClientGone(Exception):
@@ -523,15 +540,21 @@ class _Streamer:
     tag. The reasoning block and the answer are emitted as tag-free strings, ready
     for the ``reasoning_content`` / ``content`` fields of the OpenAI response.
 
+    The thinking template already ends the prompt with ``<think>``, so the completion
+    starts inside the block and the opening tag is not generated again. With
+    ``thinking``, text up to ``</think>`` is reasoning; an opening tag in the
+    completion itself still wins, which is the same split as a reply that repeats it.
+
     A DSML tool-call block is held back the same way and never streamed as content: it
     is markup addressed to the client's tool runner, not prose for the reader. What it
     describes is parsed into OpenAI ``tool_calls`` and left on :attr:`tool_calls`.
     """
 
-    def __init__(self, tokenizer, on_chunk, chat_format: ChatFormat):
+    def __init__(self, tokenizer, on_chunk, chat_format: ChatFormat, thinking: bool = False):
         self.tokenizer = tokenizer
         self.on_chunk = on_chunk
         self.chat_format = chat_format
+        self.thinking = thinking
         self.text = ""  # raw decoded reply, tags included, no escapes
         self.reasoning = ""
         self.content = ""
@@ -576,7 +599,16 @@ class _Streamer:
         """``text`` as (reasoning, answer, tool-call block), each without its tags."""
         start = text.find(_THINK_OPEN)
         if start == -1:
-            reasoning, answer = "", text
+            end = text.find(_THINK_CLOSE)
+            # The prompt already opened the block, so the completion begins with reasoning
+            # and the first ``</think>`` is the boundary. Without that mode, a stray close
+            # tag is ordinary answer text.
+            if self.thinking and end != -1:
+                reasoning, answer = text[:end], text[end + len(_THINK_CLOSE) :]
+            elif self.thinking:
+                reasoning, answer = text, ""
+            else:
+                reasoning, answer = "", text
         else:
             after = text[start + len(_THINK_OPEN) :]
             end = after.find(_THINK_CLOSE)
@@ -1369,7 +1401,10 @@ class _Scheduler:
         user._next_render = len(user.messages)
         turn.t_replay = turn.t_admit
         turn.stream = _Streamer(
-            self.engine.tokenizer, lambda r, c: turn.events.put(("delta", r, c)), self.engine.chat_format
+            self.engine.tokenizer,
+            lambda r, c: turn.events.put(("delta", r, c)),
+            self.engine.chat_format,
+            thinking=user.thinking_mode == "thinking",
         )
         self._active.append(turn)
         if turn.resumed_from:
@@ -2206,7 +2241,7 @@ class GenerationServer:
     @staticmethod
     def _apply_options(user: UserSession, body: dict) -> None:
         if "thinking" in body:
-            user.thinking_mode = "thinking" if body.get("thinking") else "chat"
+            user.thinking_mode = "thinking" if _thinking_requested(body.get("thinking")) else "chat"
         effort = body.get("reasoning_effort")
         if effort is not None:
             efforts = user.engine.chat_format.reasoning_efforts
@@ -2760,14 +2795,18 @@ def main(argv: list[str] | None = None) -> int:
 
 @torch.no_grad()
 def serve(
-    args: argparse.Namespace, engine_cls=ChatEngine, prefiller_cls=_Prefiller, num_stages: int | None = None
+    args: argparse.Namespace,
+    engine_cls=ChatEngine,
+    prefiller_cls=_Prefiller,
+    num_stages: int | None = None,
+    handler_cls=_Handler,
 ) -> int:
     """Build the engine (``engine_cls``, a :class:`ChatEngine`) and the prefill (``prefiller_cls``, a
     :class:`_Prefiller`) on the opened mesh and serve until interrupted.
 
     ``num_stages`` is how many ``1 x TP`` submeshes to carve out of the full mesh. Unset, prefill
     takes every row. The mesh itself stays the whole system either way. The V4.1 server passes
-    ``DEEPSEEK_V4_NUM_STAGES``.
+    ``DEEPSEEK_V4_NUM_STAGES`` and its own ``handler_cls`` (DeepSeek ``GET /models``).
     """
     # The model emits plenty of non-ASCII (CJK, emoji, typographic punctuation), which
     # an ASCII/POSIX locale would turn into a UnicodeEncodeError mid-reply.
@@ -2853,7 +2892,7 @@ def serve(
             # traces it replays were captured by the warmup above, which a pipelined
             # caller cannot do mid-flight.
             api.start()
-            httpd = _ModelHTTPServer((args.host, args.port), _Handler, api)
+            httpd = _ModelHTTPServer((args.host, args.port), handler_cls, api)
             # The live console owns the logger from here on, so it is opened after the
             # (long, chatty) model build and warmup have printed normally. ``shutdown``
             # has to come from another thread than ``serve_forever``, which the console's
