@@ -75,9 +75,6 @@ class QuasarDataTransferBlocks(DataTransferBlocks):
 
     EDGE_MASK_MASKED_WHEN_SET: ClassVar[bool] = True
 
-    #: Quasar is the only modelled architecture with a SrcS register.
-    HAS_SRCS: ClassVar[bool] = True
-
     #: Narrow floats and Tf32 are the src targets for every float-ish input;
     #: integers stay in their own width. Int32 is deliberately absent: it
     #: unpacks to Dest or SrcS only, never SrcA/SrcB.
