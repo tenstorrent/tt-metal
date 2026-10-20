@@ -22,7 +22,29 @@ from models.experimental.hpcg.tt.layout import TILE, u32_rows
 from models.experimental.hpcg.tt.custom_ops.sparse_rows.op import core_ranges
 
 KERNEL = "models/experimental/hpcg/tt/custom_ops/stencil_matrix/kernels/generate.cpp"
-CB = dict(CB_S0=0, CB_S1=1, CB_M0=2, CB_M1=3, CB_Z=4, CB_X0=5, CB_X1=6)
+CB = dict(CB_S0=0, CB_S1=1, CB_M0=2, CB_M1=3, CB_Z=4, CB_X0=5, CB_X1=6, CB_W=7)
+KERNEL_TRISC = "models/experimental/hpcg/tt/custom_ops/stencil_matrix/kernels/generate_trisc.cpp"
+DM_SLOTS = 6  # offset slots each data-movement RISC writes itself; the three TRISCs write the other 21 (7 each)
+MB_BYTES = 4 * (512 + 4 * 96 * (4 + 3 * 27))  # the work mailbox (kernels/fill.h's MB_WORDS)
+_LAUNCH = [0]
+# of every 8 chunks, the writer RISC's (NoC 1) share. Its NoC writes stall less: on the P150 the reader RISC's (NoC 0)
+# writes from the top core rows wait on congested routes. Generation A + B (ms) for shares 4 / 5 / 6, median of 3:
+# 192^3 8.60 / 6.84 / 7.41, 288^3 24.55 / 22.40 / 25.42, 104^3 2.39 / 2.66 / 2.81 (104^3 setup waits on the host)
+CHUNKS_RISC1_DEFAULT = 5
+CHUNKS_RISC1 = {}  # per core row y
+
+
+def _chunk_shares(rows):
+    """Per core row, how many of every 8 chunks the writer RISC (NoC 1) takes, packed a nibble per row in 2 words."""
+    shares = [CHUNKS_RISC1.get(y, CHUNKS_RISC1_DEFAULT) for y in range(rows)]
+    return [sum(v << (4 * i) for i, v in enumerate(shares[k : k + 8])) for k in (0, 8)]
+
+
+def _launch_id():
+    """A new id in 1 .. 65535 for each generation launch: the TRISCs tell this launch's messages from words an
+    earlier launch left in L1 by it (kernels/fill.h)."""
+    _LAUNCH[0] = _LAUNCH[0] % 65535 + 1
+    return _LAUNCH[0]
 XCAP = 2048  # value exceptions per staging set (generate.cpp)
 SET_PAGES = 55  # staging set per RISC: 27 offset pages, 27 value pages, one b page (generate.cpp's SET)
 JOB_ARGS = 10  # common arguments per job (generate.cpp)
@@ -146,7 +168,8 @@ class StencilMatrixOp:
         self.meta = u32_rows(device, meta.reshape(-1, TILE))
         shared_pages, meta_pages = S // TILE, w // TILE
         cores = core_ranges(nc, g.x)
-        defs = [(k, str(v)) for k, v in CB.items()]  # nothing grid-dependent: one binary for every job list and size
+        # nothing grid-dependent: one binary for every job list and size
+        defs = [(k, str(v)) for k, v in CB.items()] + [("DMSLOTS", str(DM_SLOTS))]
         # one accessor serves every table and vector (interleaved DRAM, the same arguments for both layouts used)
         ct = ttnn.TensorAccessorArgs(jobs[0].values if jobs else self.meta).get_compile_time_args()
         vec = next((t for j in jobs for t in j.tensors()[2:]), None)  # a TILE vector (b or a zero vector), if any
@@ -171,23 +194,44 @@ class StencilMatrixOp:
         cbs += [cb(CB[f"CB_M{h}"], meta_cb, 4096) for h in (0, 1)]
         cbs.append(cb(CB["CB_Z"], 4096, 4096))
         cbs += [cb(CB[f"CB_X{h}"], 2 * XCAP * 4, 2 * XCAP * 4) for h in (0, 1)]
-        kernels = []
-        for half, cfg in ((0, ttnn.ReaderConfigDescriptor()), (1, ttnn.WriterConfigDescriptor())):
-            kernels.append(
+        cbs.append(cb(CB["CB_W"], MB_BYTES, MB_BYTES))
+
+        def program(launch):
+            # data-movement kernels on both RISCs (a core's row: its logical position), and the TRISCs' share of the
+            # offset stores (kernels/generate_trisc.cpp)
+            kernels = [
                 ttnn.KernelDescriptor(
                     kernel_source=KERNEL,
                     source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
                     core_ranges=cores,
                     compile_time_args=ct,
                     defines=defs,
-                    common_runtime_args=[g.x, half] + args,  # a core's row: its logical position
+                    common_runtime_args=[g.x, half] + args[:4] + [launch] + _chunk_shares(g.y) + args[4:],
                     config=cfg,
                 )
+                for half, cfg in ((0, ttnn.ReaderConfigDescriptor()), (1, ttnn.WriterConfigDescriptor()))
+            ]
+            kernels.append(
+                ttnn.KernelDescriptor(
+                    kernel_source=KERNEL_TRISC,
+                    source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+                    core_ranges=cores,
+                    compile_time_args=[],
+                    defines=defs,
+                    common_runtime_args=[launch],
+                    config=ttnn.ComputeConfigDescriptor(),
+                )
             )
-        self.prog = ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs)
+            return ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs)
+
+        self._program, self._called = program, False
+        self.prog = program(_launch_id())
         self.io = [self.meta] + ([t for j in jobs for t in j.tensors()] or [self.meta])  # generic_op takes >= 2
 
     def __call__(self):
+        if self._called:  # every launch needs its own id (kernels/fill.h)
+            self.prog = self._program(_launch_id())
+        self._called = True
         return ttnn.generic_op(self.io, self.prog)
 
 

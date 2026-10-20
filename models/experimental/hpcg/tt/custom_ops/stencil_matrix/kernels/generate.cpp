@@ -18,9 +18,13 @@
 // Both data-movement RISCs run this kernel; RISC h takes the page-sized chunks of the core's rows with index % 2 == h.
 // Everything that depends on the grid comes in runtime arguments, so one compiled binary serves every job and grid
 // size (setup then only loads it from the kernel cache).
-// Common arguments: [0] grid width [1] h [2] META address [3] META shared pages [4] META pages per core [5] jobs,
-//   then per job (10 words): kind, cores in the job, word offset of the job's META segment, V, OFF, b, has_b, zero
-//   vectors, zero 0, zero 1.
+// The offsets of most slots are written by the core's TRISCs (generate_trisc.cpp, fill.h): this RISC describes each
+// run of a chunk, hands slots DMSLOTS .. 26 to them, writes slots 0 .. DMSLOTS - 1 and the rest of the chunk itself,
+// and waits for them before its NoC writes read the pages.
+// Common arguments: [0] grid width [1] h [2] META address [3] META shared pages [4] META pages per core [5] jobs
+//   [6] launch id [7], [8] per core row y, a nibble: how many of every 8 chunks RISC 1 takes, then per job
+//   (10 words): kind, cores in the job, word offset of the job's META segment, V, OFF,
+//   b, has_b, zero vectors, zero 0, zero 1.
 // META: shared pages (every level's storage-order tables, read by every core), then each core's row of segments; a
 //   core reads both into one L1 buffer, and every word offset below counts from its start.
 // A job's META segment per core (uint32): [0] nx [1] nbands [2] nl [3] pages per slot [4] R window pieces [5] unused
@@ -30,6 +34,7 @@
 //   [36 .. 39) the coarse level's nx, nbands, nl, [39 .. 43) its table offsets, [43 .. 51) each block's padding
 //   column.
 #include "api/dataflow/dataflow_api.h"
+#include "fill.h"
 #include <cstdint>
 
 namespace {
@@ -138,27 +143,6 @@ struct Geo {
     }
 };
 
-// o[0 .. n) = v, v + 4, v + 8, ...: a pointer walk, 8 stores per step with immediate offsets. Written as o[t] = v + 4 t
-// the compiler rebuilt each address from the value (5 instructions per store, about 5.7 cycles on a data-movement RISC
-// here); this takes about 1.4 instructions per store (a plain L1 store loop measured 4.0 cycles per store, unrolled
-// by 8 2.3)
-inline void ramp(uint32_t* o, int32_t n, uint32_t v) {
-    uint32_t* p = o;
-    for (uint32_t* pe = o + (n & ~7); p < pe; p += 8, v += 32) {
-        p[0] = v;
-        p[1] = v + 4;
-        p[2] = v + 8;
-        p[3] = v + 12;
-        p[4] = v + 16;
-        p[5] = v + 20;
-        p[6] = v + 24;
-        p[7] = v + 28;
-    }
-    for (uint32_t* pe = o + n; p < pe; ++p, v += 4) {
-        *p = v;
-    }
-}
-
 // rows [q, q + len) of colour block c: one run along x at line (iy, iz), x index i0 .. i0 + len - 1 in the block
 void fill_run(
     const Geo& g,
@@ -171,7 +155,8 @@ void fill_run(
     uint32_t* O,
     uint32_t* Vv,
     uint32_t* Bw,
-    Exc& x) {
+    Exc& x,
+    uint32_t* desc) {  // the run's description for the TRISCs (fill.h), or nullptr: write every slot here
     const int32_t px = c & 1, nx = (int32_t)g.nx;
     const uint32_t sb = g.piece_base(q);  // the core's own rows sit in one window piece
     uint32_t K[27];                       // offset of slot j at x index i: K[j] + 4 i
@@ -219,21 +204,29 @@ void fill_run(
     // slot by slot over the whole run: straight stores, then the rows at the run's ends whose neighbour is missing
     const uint32_t w0 = q & 1023;
     const uint32_t self0 = sb + 4 * q;  // offset of the run's first row; row t: self0 + 4 t
+    if (desc) {
+        desc[0] = w0;
+        desc[1] = (uint32_t)i0;
+        desc[2] = (uint32_t)len;
+        desc[3] = self0;
+    }
     for (int32_t j = 0; j < 27; ++j) {
-        uint32_t* o = O + j * 1024 + w0;
         uint32_t* v = Vv + j * 1024 + w0;
         int32_t a = ilo[j] - i0, e = ihi[j] - i0 + 1;  // rows [a, e) of the run have this neighbour
         a = a < 0 ? 0 : (a > len ? len : a);
         e = e < a ? a : (e > len ? len : e);
-        uint32_t off = K[j] + 4 * (i0 + a), self = self0 + 4 * a;
-        ramp(o + a, e - a, off);  // the value is the template's
-        for (int32_t t = 0; t < a; ++t) {  // missing neighbour: a zero entry on the row itself
-            o[t] = self0 + 4 * t;
+        if (desc) {
+            desc[4 + 3 * j] = K[j];
+            desc[5 + 3 * j] = (uint32_t)a;
+            desc[6 + 3 * j] = (uint32_t)e;
+        } else {
+            slot_offsets(O + j * 1024 + w0, K[j], a, e, len, i0, self0);
+        }
+        // the values are the template's, except a zero entry where the neighbour is missing (the column is the row)
+        for (int32_t t = 0; t < a; ++t) {
             v[t] = 0;
         }
-        self = self0 + 4 * e;
-        for (int32_t t = e; t < len; ++t, self += 4) {
-            o[t] = self;
+        for (int32_t t = e; t < len; ++t) {
             v[t] = 0;
         }
         x.add(j, w0, a);
@@ -251,8 +244,11 @@ void fill_run(
     }
 }
 
-// rows [q0, q1) of colour block c (one DRAM page at most) into the staging set at base
-void fill_chunk(const Geo& g, uint32_t c, uint32_t q0, uint32_t q1, uint32_t real_end, uint32_t base, Exc& x) {
+// rows [q0, q1) of colour block c (one DRAM page at most) into the staging set at base: everything but the offsets of
+// the first MAX_RUNS runs, which it describes in runs[] instead (fill.h) for own_slots and the TRISCs. Returns the
+// number of runs described.
+uint32_t fill_chunk(
+    const Geo& g, uint32_t c, uint32_t q0, uint32_t q1, uint32_t real_end, uint32_t base, Exc& x, uint32_t* runs) {
     // plain (not volatile) stores so the compiler can schedule the fill loops; kernel_main puts a compiler memory
     // barrier between the fill and the NoC writes that read these pages
     uint32_t* O = (uint32_t*)base;
@@ -260,7 +256,7 @@ void fill_chunk(const Geo& g, uint32_t c, uint32_t q0, uint32_t q1, uint32_t rea
     uint32_t* Bw = O + 54 * 1024;
     const uint32_t py = (c >> 1) & 1, pz = c >> 2, cxn = g.cx(c & 1), k0 = c * g.nb;
     const uint32_t end = q1 < real_end ? q1 : real_end;
-    uint32_t jb = 0;
+    uint32_t jb = 0, nr = 0;
     for (uint32_t q = q0; q < end;) {
         while (jb + 1 < g.nb && g.bst[k0 + jb + 1] <= q) {
             ++jb;  // the last band starting at or before q (bands without lines share the next band's start)
@@ -268,7 +264,8 @@ void fill_chunk(const Geo& g, uint32_t c, uint32_t q0, uint32_t q1, uint32_t rea
         const uint32_t k = k0 + jb, l = q - g.bst[k], line = l / cxn, i0 = l % cxn;
         const uint32_t len = (cxn - i0) < (end - q) ? (cxn - i0) : (end - q);
         const uint32_t iy = 2 * (g.by0[k] + line % g.bny[k]) + py, iz = 2 * (line / g.bny[k]) + pz;
-        fill_run(g, c, q, (int32_t)i0, (int32_t)len, (int32_t)iy, (int32_t)iz, O, Vv, Bw, x);
+        uint32_t* desc = nr < MAX_RUNS ? runs + nr++ * RUN_WORDS : nullptr;
+        fill_run(g, c, q, (int32_t)i0, (int32_t)len, (int32_t)iy, (int32_t)iz, O, Vv, Bw, x, desc);
         q += len;
     }
     const uint32_t p0 = q0 > real_end ? q0 : real_end;
@@ -284,6 +281,18 @@ void fill_chunk(const Geo& g, uint32_t c, uint32_t q0, uint32_t q1, uint32_t rea
         }
         for (uint32_t j = 0; j < 27; ++j) {
             x.add(j, p0 & 1023, q1 - p0);
+        }
+    }
+    return nr;
+}
+
+// this RISC's share of the described runs' offsets: slots 0 .. DMSLOTS - 1 (the TRISCs write the rest)
+void own_slots(uint32_t* O, const uint32_t* runs, uint32_t nr) {
+    for (uint32_t r = 0; r < nr; ++r) {
+        const uint32_t* d = runs + r * RUN_WORDS;
+        for (uint32_t j = 0; j < DMSLOTS; ++j) {
+            slot_offsets(O + j * 1024 + d[0], d[4 + 3 * j], (int32_t)d[5 + 3 * j], (int32_t)d[6 + 3 * j], (int32_t)d[2],
+                         (int32_t)d[1], d[3]);
         }
     }
 }
@@ -356,7 +365,12 @@ void kernel_main() {
     const uint32_t row = get_absolute_logical_y() * get_common_arg_val<uint32_t>(0) + get_absolute_logical_x();
     const uint32_t half = get_common_arg_val<uint32_t>(1), meta_addr = get_common_arg_val<uint32_t>(2);
     const uint32_t shared_pages = get_common_arg_val<uint32_t>(3), meta_pages = get_common_arg_val<uint32_t>(4);
-    const uint32_t njobs = get_common_arg_val<uint32_t>(5);
+    const uint32_t njobs = get_common_arg_val<uint32_t>(5), launch = get_common_arg_val<uint32_t>(6);
+    // chunks the writer RISC (NoC 1) takes out of every 8, for this core's row: a nibble per row y in args 7, 8
+    const uint32_t y = get_absolute_logical_y();
+    const uint32_t share1 = (get_common_arg_val<uint32_t>(7 + (y >> 3)) >> (4 * (y & 7))) & 15;
+    volatile tt_l1_ptr uint32_t* mb = (volatile tt_l1_ptr uint32_t*)get_write_ptr(CB_W);  // fill.h's work mailbox
+    uint32_t sent[2] = {0, 0};  // messages sent per staging set
     constexpr auto ad = TensorAccessorArgs<0>();  // every table and vector: interleaved DRAM, 4 KB pages
     constexpr auto am = TensorAccessorArgs<ad.next_compile_time_args_offset()>();
     const auto META = TensorAccessor(am, meta_addr, 4096);  // shared pages, then this core's row of meta_pages
@@ -383,7 +397,7 @@ void kernel_main() {
     fill_template((uint32_t*)(stage + SET + 27 * 4096));
     uint32_t set = 0, chunk = 0;
     for (uint32_t job = 0; job < njobs; ++job) {
-        const uint32_t J = 6 + 10 * job;
+        const uint32_t J = 9 + 10 * job;
         const uint32_t kind = get_common_arg_val<uint32_t>(J), ncj = get_common_arg_val<uint32_t>(J + 1);
         if (row >= ncj) {
             continue;  // this core has no rows in this job
@@ -406,14 +420,32 @@ void kernel_main() {
             const uint32_t a = m[6 + 2 * c], e = m[7 + 2 * c], real_end = m[22 + c];
             for (uint32_t q0 = a; q0 < e;) {
                 const uint32_t q1 = (q0 / 1024 + 1) * 1024 < e ? (q0 / 1024 + 1) * 1024 : e;
-                if ((chunk++ & 1) == half) {
+                const uint32_t mine = ((chunk + 1) * share1 / 8 != chunk * share1 / 8) == (half == 1);
+                ++chunk;
+                if (mine) {
                     const uint32_t base = stage + set * SET;
                     // this set's previous chunk was written out before the last barrier: restore its value template
                     restore((uint32_t*)(base + 27 * 4096), xs[set]);
                     if (kind) {
                         fill_transfer(g, gc, kind, c, q0, q1, real_end, m[43 + c], base, xs[set]);
                     } else {
-                        fill_chunk(g, c, q0, q1, real_end, base, xs[set]);
+                        // describe the runs, hand the offsets of slots DMSLOTS .. 26 to the TRISCs, write the rest
+                        // here meanwhile, then wait for the TRISCs before the NoC reads the pages
+                        const uint32_t i = 2 * half + set;
+                        uint32_t* runs = (uint32_t*)(get_write_ptr(CB_W) + 4 * (MB_RUNS + i * MAX_RUNS * RUN_WORDS));
+                        const uint32_t nr = fill_chunk(g, c, q0, q1, real_end, base, xs[set], runs);
+                        const uint32_t seq = (launch << 16) | (++sent[set] & 0xFFFF);
+                        mb[16 * i + 1] = nr;
+                        mb[16 * i + 2] = base;
+                        mb[16 * i + 3] = (uint32_t)runs;
+                        asm volatile("fence" ::: "memory");  // the run list and fields are in L1 before the number
+                        mb[16 * i] = seq;
+                        own_slots((uint32_t*)base, runs, nr);
+                        for (uint32_t t = 0; t < 3; ++t) {
+                            while (mb[MB_DONE + 16 * (4 * t + i)] != seq) {
+                                invalidate_l1_cache();
+                            }
+                        }
                     }
                     asm volatile("" ::: "memory");  // every staging store is issued before the NoC reads the pages
                     noc_async_write_barrier();       // the other set's writes have left L1 before it is filled again
@@ -438,4 +470,5 @@ void kernel_main() {
         }
     }
     noc_async_write_barrier();
+    mb[MB_END + 16 * half] = launch;  // no more messages from this RISC: the TRISCs stop once both have said so
 }
