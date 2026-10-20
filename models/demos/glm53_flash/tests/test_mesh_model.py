@@ -119,30 +119,18 @@ def test_mesh_model_chain_and_perf(mesh_device):
         f"(per layer {ms / len(layers):.2f} ms; the prompt loop above averaged {sum(step_times) / len(step_times) * 1e3:.2f} ms/step blocking)"
     )
     ttnn.release_trace(mesh_device, trace_id)
+    if os.environ.get("GLM53_MODEL_TTFT", "1") == "1":
+        _ttft(model, layers, cfg)
 
 
-@pytest.mark.timeout(10800)
-@pytest.mark.parametrize("device_params", [mesh_device_params(*MESH, trace_region_size=200_000_000)], indirect=True)
-@pytest.mark.parametrize("mesh_device", [MESH], indirect=True)
-def test_mesh_model_ttft(mesh_device):
-    """Prefill of the dump prompt through every built layer + head (TTFT, cold and warm), first greedy
-    token vs the host head on the HF chain rows; then the traced decode step from that state."""
-    layers = _layer_range()
-    cfg = GLM53FlashConfig.from_hf_config_json(default_snapshot_dir() / "config.json")
-    model = GLM53MeshModel(
-        mesh_device,
-        cfg,
-        layers,
-        max_batch=B,
-        max_seq_len=512,
-        expert_dtype=EXPERT_DTYPE,
-        expert_down_dtype=EXPERT_DOWN_DTYPE,
-    )
+def _ttft(model, layers, cfg):
+    """Prompt -> first token through every built layer (cold + warm), first greedy id vs the host head."""
+    from models.demos.glm53_flash.reference.checkpoint import FINAL_NORM_KEY, LM_HEAD_KEY, load_tensors, shard_headers
+
+    mesh_device = model.device
     prompt = torch.load(DUMP / "prefill_input.pt")["prompt_ids"].reshape(-1)
     S_p = int(prompt.numel())
     ref = torch.load(DUMP / f"layer{layers[-1]}_prefill.pt")["x_out"][0]  # [128, 4, 4096]
-    from models.demos.glm53_flash.reference.checkpoint import FINAL_NORM_KEY, LM_HEAD_KEY, load_tensors, shard_headers
-
     snapshot = default_snapshot_dir()
     w = load_tensors(snapshot, [FINAL_NORM_KEY, LM_HEAD_KEY], shard_headers(snapshot))
     h = ref.float().mean(1)
@@ -170,3 +158,22 @@ def test_mesh_model_ttft(mesh_device):
     logger.info(
         f"PERF-TTFT mesh {MESH} layers {len(layers)} S={S_p}: warm {walls[-1] * 1e3:.0f} ms (cold {walls[0] * 1e3:.0f} ms)"
     )
+
+
+@pytest.mark.timeout(10800)
+@pytest.mark.parametrize("device_params", [mesh_device_params(*MESH, trace_region_size=200_000_000)], indirect=True)
+@pytest.mark.parametrize("mesh_device", [MESH], indirect=True)
+def test_mesh_model_ttft(mesh_device):
+    """Prefill-only variant (no decode trace): the prompt -> first token time through every built layer."""
+    layers = _layer_range()
+    cfg = GLM53FlashConfig.from_hf_config_json(default_snapshot_dir() / "config.json")
+    model = GLM53MeshModel(
+        mesh_device,
+        cfg,
+        layers,
+        max_batch=B,
+        max_seq_len=512,
+        expert_dtype=EXPERT_DTYPE,
+        expert_down_dtype=EXPERT_DOWN_DTYPE,
+    )
+    _ttft(model, layers, cfg)
