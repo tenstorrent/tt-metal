@@ -36,6 +36,7 @@ from .weight_bridge import (
     TTT_RANK,
     WeightBridge,
     _require_distributed_context,
+    _validate_source_tensor,
 )
 
 OP_GENERATE: int = 22001
@@ -185,6 +186,8 @@ class MPIRolloutClient:
         version = int(version)
         if not 0 <= version < 2**32:
             raise ValueError(f"weight version {version} must be in [0, 2**32) to fit the u32 header field")
+        for k in sorted(hf_dict):
+            _validate_source_tensor(k, hf_dict[k])
         hdr = struct.pack(_HEADER_FMT, OP_REQUEST_TRANSFER, 0, version)
         with exit_on_error():
             _mpi_send_bytes(hdr, self.peer_rank, _INFER_REQ_HDR_TAG)
