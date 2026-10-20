@@ -17,4 +17,8 @@ constexpr auto to_underlying(T value) noexcept
     return static_cast<std::underlying_type_t<T>>(value);
 }
 
+/** @brief Dependent false value for rejecting a template instantiation with static_assert. */
+template <auto>
+inline constexpr bool always_false = false;
+
 } // namespace hal
