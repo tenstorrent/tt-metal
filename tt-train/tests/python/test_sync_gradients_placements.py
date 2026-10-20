@@ -252,11 +252,10 @@ def _reduce_set(value, data_axes) -> set:
     return {axis for axis in data_axes if not is_sharded_on_axis(value, axis)}
 
 
-def _links_per_axis() -> dict:
-    """Ethernet links the collectives use on each mesh axis, as the fabric control plane reports them."""
-    get = getattr(ttnn, "get_num_links", None) or ttnn._ttnn.operations.ccl.get_num_links
+def _links_per_axis(mesh) -> dict:
+    """Ethernet links the collectives use on each axis of ``mesh``, as the fabric control plane reports them."""
     device = _device()
-    return {axis: int(get(device, axis)) for axis in range(len(device.shape))}
+    return {axis: int(ttnn.get_num_links(device, axis)) for axis in range(len(tuple(mesh.shape)))}
 
 
 def _assert_mean_over_axis(before: list, after: list, mesh_shape, axis: int, what: str) -> None:
@@ -499,7 +498,7 @@ class TestDPxTP:
 
         ttml.core.distributed.synchronize_gradients(params, [dp])
 
-        links = _links_per_axis()
+        links = _links_per_axis(dp_tp_mesh)
         for name, t in params.items():
             grad = t.get_grad()
             assert not is_sharded_on_axis(grad, dp), name
@@ -549,7 +548,7 @@ class TestHSDP:
 
         ttml.core.distributed.synchronize_gradients(params, [dp])
 
-        links = _links_per_axis()
+        links = _links_per_axis(hsdp_mesh)
         for name, t in params.items():
             grad = t.get_grad()
             assert not is_sharded_on_axis(grad, dp), name
