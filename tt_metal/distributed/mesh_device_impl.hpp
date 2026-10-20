@@ -154,7 +154,7 @@ private:
     MetalEnvImpl* metal_env_ = nullptr;
     // Legacy path (MeshDevice::create): the MetalContext instance is managed externally and is
     // not destroyed when the MeshDevice closes.
-    // New path (MetalEnv::create_mesh_device): a MetalContext instance is created for the
+    // New path (MeshDevice::create_mesh_device): a MetalContext instance is created for the
     // MeshDevice, and when the MeshDevice closes it also destroys the associated MetalContext.
     bool destroy_metal_context_instance_on_close_ = false;
     std::shared_ptr<ScopedDevices> scoped_devices_;

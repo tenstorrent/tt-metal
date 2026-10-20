@@ -707,6 +707,109 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create_unit_mesh(
         .at(device_id);
 }
 
+namespace {
+
+// Destroys a context created here if it never reaches the mesh device that takes ownership of it.
+// Inert when the env owns the context. https://github.com/tenstorrent/tt-metal/issues/57286
+class TransitContextGuard {
+public:
+    TransitContextGuard(ContextId context_id, bool env_owns_context) {
+        if (!env_owns_context) {
+            context_id_ = context_id;
+        }
+    }
+    TransitContextGuard(const TransitContextGuard&) = delete;
+    TransitContextGuard& operator=(const TransitContextGuard&) = delete;
+    ~TransitContextGuard() {
+        if (context_id_.has_value()) {
+            MetalContext::destroy_instance(/*check_device_count=*/false, *context_id_);
+        }
+    }
+    bool holds_context() const { return context_id_.has_value(); }
+    void release() { context_id_.reset(); }
+
+private:
+    std::optional<ContextId> context_id_;
+};
+
+// If the control plane / system mesh was already accessed, the env owns a registered context; reuse it
+// (its lifetime is tied to the env). Otherwise create one here and let the mesh device tear it down on
+// close, preserving the legacy create-only behavior.
+ContextId context_id_for_mesh_device(MetalEnv& env, bool& env_owns_context) {
+    auto& env_impl = MetalEnvAccessor(env).impl();
+    env_owns_context = env_impl.has_registered_context();
+    return env_owns_context ? ContextId{env_impl.ensure_context_registered(env)} : MetalContext::create_instance(env);
+}
+
+}  // namespace
+
+std::shared_ptr<MeshDevice> MeshDevice::create_mesh_device(
+    MetalEnv& env, const MeshDeviceConfig& config, const CreateMeshDeviceOptions& options) {
+    // Associate a context ID for the mesh device's dependencies to easily access the MetalContext::instance(contextId)
+    // TODO: Remove this and directly pass in the MetalEnv reference
+    bool env_owns_context = false;
+    const ContextId context_id = context_id_for_mesh_device(env, env_owns_context);
+    TransitContextGuard context_guard(context_id, env_owns_context);
+    auto mesh_device = MeshDeviceImpl::create(
+        context_id,
+        config,
+        options.l1_small_size,
+        options.trace_region_size,
+        options.num_command_queues,
+        options.dispatch_core_config,
+        /*l1_bank_remap=*/{},
+        options.worker_l1_size);
+    if (context_guard.holds_context()) {
+        mesh_device->impl().set_destroy_metal_context_instance_on_close(true);
+        context_guard.release();
+    }
+    return mesh_device;
+}
+
+std::shared_ptr<MeshDevice> MeshDevice::create_unit_mesh(
+    MetalEnv& env, ChipId device_id, const CreateMeshDeviceOptions& options) {
+    bool env_owns_context = false;
+    const ContextId context_id = context_id_for_mesh_device(env, env_owns_context);
+    TransitContextGuard context_guard(context_id, env_owns_context);
+    auto mesh_device = MeshDeviceImpl::create_unit_mesh(
+        context_id,
+        device_id,
+        options.l1_small_size,
+        options.trace_region_size,
+        options.num_command_queues,
+        options.dispatch_core_config,
+        /*l1_bank_remap=*/{},
+        options.worker_l1_size);
+    if (context_guard.holds_context()) {
+        mesh_device->impl().set_destroy_metal_context_instance_on_close(true);
+        context_guard.release();
+    }
+    return mesh_device;
+}
+
+std::map<ChipId, std::shared_ptr<MeshDevice>> MeshDevice::create_unit_meshes(
+    MetalEnv& env, ttsl::Span<const ChipId> device_ids, const CreateMeshDeviceOptions& options) {
+    bool env_owns_context = false;
+    const ContextId context_id = context_id_for_mesh_device(env, env_owns_context);
+    TransitContextGuard context_guard(context_id, env_owns_context);
+    auto result = MeshDeviceImpl::create_unit_meshes(
+        context_id,
+        std::vector<ChipId>(device_ids.begin(), device_ids.end()),
+        options.l1_small_size,
+        options.trace_region_size,
+        options.num_command_queues,
+        options.dispatch_core_config,
+        /*l1_bank_remap=*/{},
+        options.worker_l1_size);
+    if (context_guard.holds_context() && !result.empty()) {
+        const auto& parent = result.begin()->second->get_parent_mesh();
+        TT_FATAL(parent != nullptr, "Unit meshes are submeshes, so they always have a parent to own the context");
+        parent->impl().set_destroy_metal_context_instance_on_close(true);
+        context_guard.release();
+    }
+    return result;
+}
+
 std::shared_ptr<MeshDevice> MeshDeviceImpl::create_submesh(
     const std::shared_ptr<MeshDevice>& parent_mesh,
     const MeshShape& submesh_shape,
