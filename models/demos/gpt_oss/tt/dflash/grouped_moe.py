@@ -92,7 +92,9 @@ class GroupedMoE:
         self.table = ttnn.from_torch(torch.zeros(1, 1, 1, 2 * E, dtype=torch.int32), dtype=ttnn.uint32,
                                      layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh, memory_config=ttnn.DRAM_MEMORY_CONFIG,
                                      mesh_mapper=rep)  # fmt: skip
-        self.ag = zeros([1, 1, S, self.ku * TILE], ttnn.bfloat8_b)
+        # A_g in L1 (the down reader's single-tile reads skip DRAM: round 23.8 -> 23.3 ms at ISL 256; B32_GMOE_AG_L1=0)
+        ag_mc = ttnn.L1_MEMORY_CONFIG if os.environ.get("B32_GMOE_AG_L1", "1") == "1" else ttnn.DRAM_MEMORY_CONFIG
+        self.ag = zeros([1, 1, S, self.ku * TILE], ttnn.bfloat8_b, ag_mc)
         # Y_g: the down outputs per slot row (the combine's K side), BFP8: down + combine 28 us faster per layer than
         # BF16, output PCC vs the float reference 0.99991 (BF16 0.99995)
         # (B32_GMOE_YG_L1, with bias_slot: one Y_g in L1 for all layers, the route op copies the layer's down bias rows

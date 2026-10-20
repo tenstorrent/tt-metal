@@ -507,6 +507,9 @@ class BatchedDraft:
         # (_even_lm_head)
         lm8 = _even_lm_head(target) if os.environ.get("B32_LM_EVEN", "1") == "1" else target.lm_head_weight
         self.lm_head = ttnn.typecast(lm8, ttnn.bfloat4_b)
+        # BFP8 logits (the argmax reads them as stored; half the 26 MB BF16 write and read): round 23.3 -> 23.2 ms at
+        # ISL 256, acceptance in its spread (B32_DRAFT_LOGITS=bf16: BF16)
+        self.logits_dt = {"bf16": ttnn.bfloat16, "bf8": ttnn.bfloat8_b}[os.environ.get("B32_DRAFT_LOGITS", "bf8")]
         self.argmax = _Argmax(lm8.shape[-1], target.vocab_size)
 
     # -- pieces ----------------------------------------------------------------------------------------------------
@@ -678,7 +681,7 @@ class BatchedDraft:
         h.deallocate(True)
         x8 = ttnn.typecast(x, ttnn.bfloat8_b)
         x.deallocate(True)
-        logits = ttnn.matmul(x8, self.lm_head, dtype=ttnn.bfloat16)
+        logits = ttnn.matmul(x8, self.lm_head, dtype=self.logits_dt)
         x8.deallocate(True)
         out = self.argmax.device(logits)
         logits.deallocate(True)
