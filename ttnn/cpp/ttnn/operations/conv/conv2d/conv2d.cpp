@@ -101,6 +101,7 @@ Result conv2d_L1(
     DataType weight_dtype = conv_config.weights_dtype.value_or(weight_tensor_.dtype());
     DeviceComputeKernelConfig compute_config =
         compute_config_.value_or(get_conv_default_compute_kernel_config(device, input_tensor_.dtype(), weight_dtype));
+    verify_numerical_configuration(device->arch(), compute_config_);
 
     const auto compute_grid_size = device->compute_with_storage_grid_size();
 
@@ -748,6 +749,7 @@ Result conv2d_DRAM(
     DataType weight_dtype = conv_config.weights_dtype.value_or(weight_tensor.dtype());
     DeviceComputeKernelConfig compute_config =
         compute_config_.value_or(get_conv_default_compute_kernel_config(device, input_tensor.dtype(), weight_dtype));
+    verify_numerical_configuration(device->arch(), compute_config_);
     TT_FATAL(
         !conv_config.override_output_sharding_config,
         "Conv2D DRAM slicing doesn't support override_output_sharding_config.");
