@@ -156,3 +156,152 @@ needs the halves as tensors), `clamped_silu_glu`, `permute`, `multiply`, `sparse
 `sum` over the experts (the accumulate-over-experts mode is a kernel change). On a multi-column mesh both paths
 have one more matmul (the expert selector) unless the router emits the local columns directly.
 `test_moe.py` (single chip, sparse path, bf16 router matrix): router sets 32/32 and 255/256 identical to HF, MoE PCC 0.999930 (T = 32) / 0.999946 (T = 256), unchanged (`_logs/optexperts_test_moe_minops.log`).
+
+## 8. Sparse matmul kernel changes (2026-10-20, own tt-metal build on the worktree) -- EVIDENCE ONLY, NOT ADOPTED
+
+Superseded by the user rule of 2026-10-20 14:50 (`_agents/COMMON.md`: model-local generic ops only, no edits under
+`ttnn/cpp`): the factory / kernel changes below were measured and then dropped from the branch (nothing under
+`ttnn/cpp` is committed); the numbers stay as the evidence behind the custom op of section 9 (contiguous per-bank
+column streams at ~70 % of DRAM peak, the expert sum as a K reduction, no slabs / fills).
+
+Budget: at 32 users (4/row) the design gives the experts 0.41 ms per layer per chip; the sparse block stood at
+683 us (gate|up 369 us at 38 % of DRAM peak on 16 cores, down 144 us + 94 us slab zero-fill + 55 us expert sum).
+Three changes to `sparse_matmul` (factory `sparse_matmul_multicore_reuse_mcast_1d_optimized.cpp`, the shared
+reader/writer/compute kernels behind `#ifdef`s, so the dense matmul factories are untouched; the regression suite
+`test_sparse_matmul.py` + `_indexed.py` passes 88/88):
+
+| change | what it does | how it is selected |
+|---|---|---|
+| batch groups | a grid of `G x (Nt / per_core_N)` cores runs `G` identical 1D-mcast pipelines side by side (own sender, multicast rectangle and receivers per group); group `g` streams the sparse slots `g, g+G, ...` (the validity scan stays per slot) | a program-config grid that is a multiple of the output-width blocks and tiles into rectangles (`nnz=None`, no `indices`); `moe.py::sparse_matmul_config(groups=)` / `group_grid` |
+| in0 reuse | the in0 buffer holds the whole broadcast activation (`per_core_M x Kt` tiles); the sender reads + multicasts it on the first active expert, later experts replay it with buffer credits on the sender and every receiver (no DRAM re-read, no multicast) | automatic when `[1,1,M,K]` is broadcast, `batchA == 1` and it fits 640 KB per core |
+| accumulate mode (`accumulate_batch=True`) | both-sparse (down projection): the valid experts are one K stream, every block reloads the fp32 running sum from the partials buffer and packs it back, the block is packed to the output once after the last expert and written once; output `[1, G, M, N]` (one sum per group), no per-expert slab, no reduce op; a block with no active expert keeps its zeros (`packer_l1_acc` off in this mode) | `ttnn.sparse_matmul(..., accumulate_batch=True)` |
+| no zero-fill (`zero_fill_output=False`) | skips the `zeros_like` of the expanded gate\|up output (12.6 us; its inactive slots are never read: the accumulate-mode down skips them) | `ttnn.sparse_matmul(..., zero_fill_output=False)` |
+| transposed weights (`in1_transposed=True`) | the weight stored `[1, E, N, K]` with transposed tiles (the matmul's `transpose_b` strides + `IN1_TRANSPOSE_TILE`), so a core's output-width column is a contiguous run of tiles, sequential per DRAM bank | measured below; not adopted unless it wins |
+
+Two bugs found by the regression suite on the way: the receiver/compute loop count must be `batchA x slots`
+(an in0-batched call deadlocked), and in0 reuse must require `batchA == 1`.
+
+### Measured (chip 2, device time per call, M = 32, Tracy, `_logs/optexperts_report_kernel2*`)
+
+| call | before (plain kernel, best config) | in0 reuse, G=1 | G=4 (64 cores) | G=6 (96 cores) |
+|---|---|---|---|---|
+| gate\|up N=512, 28 active (real routing) | 369 x 28/32 = ~323 us (38 %) | 261 us (47 %) | 222 us (55 %) | **204 us (60 %)**, ibw 16 |
+| gate\|up N=512, 72 active | 761 us (41 %) | 666 us (47 %) | 554 us (57 %) | **497 us (63 %)** |
+
+| down I=256 | slab kernel + fill | accumulate G=1 (32 cores) | accumulate G=2 | accumulate G=3 (96 cores) |
+|---|---|---|---|---|
+| 28 active | 129 + 94 us (47 %) | 104 + 2 us (59 %) | 99 + 4 us (61 %) | **92.5 + 4.4 us (66 %)** |
+| 72 active | 322 + 94 us (49 %) | 233 + 2 us (67 %) | 242 + 4 us | **217 + 5 us (72 %)** |
+
+Accumulate-mode output vs the slab summed in fp32: PCC 0.999995-0.999998 (one bf16 rounding of the fp32 sum
+instead of a bf16 sum of bf16 slabs). Larger K blocks no longer help once every core of the chip streams: the
+1-tile-wide column streams (one DRAM bank per core, 2 KB strides) plateau at ~300-330 GB/s; that is what the
+transposed layout targets.
+
+### The sparse block with the kernel features (`tests/test_moe_block.py`, real layer-4 tokens, traced replay)
+
+| M | active | path | us/call | us per 32-token block | device ops | PCC vs torch | PCC vs the pre-change block |
+|---|---|---|---|---|---|---|---|
+| 32 | 28/72 | sparse, new config + kernel features (G=6 gate\|up, accumulate down G=1) | **393.5** | 393.5 | 11 | 0.999917 | 0.999996 |
+| 32 | 28/72 | sparse, legacy config + kernel features | 448.8 | 448.8 | 11 | 0.999917 | 0.999996 |
+| 256 | 31/72 | sparse, new config + kernel features | 2729.7 | 341.2 x 8 | 105 | 0.999905 | 0.999988 |
+(dense unchanged: 720.7 / 1230.8 us.) Remaining ops: pad-fill + sum + untilize (mask), sparse_matmul, 2 slices,
+clamped_silu_glu, permute, multiply, sparse_matmul (accumulate) + its 2 us output fill. With G=3 on the down
+(`GLM53_SPARSE_W2_GROUPS=3`, now the default) the block is ~11 us shorter. `test_moe.py` (single chip):
+32/32, 255/256, PCC 0.999931 / 0.999946. `GLM53_SPARSE_KERNEL=0` disables the features (plain kernel A/B).
+Transposed weights (`in1_transposed`: a core's column = contiguous tiles, sequential per DRAM bank) on top of the
+groups: gate|up N=512 at 28 active **177 us = 69 %** (G=6, 96 cores; 204 us row-major), at 72 active 425 us = 74 %
+(`_logs/optexperts_report_kernel3_transposed.txt`), PCC 0.99997 vs torch: the per-bank contiguous stream is what
+the custom op below is built on.
+
+## 9. Custom op `custom_ops/expert_stream` (2026-10-20): the expert block as DRAM-bank-streaming generic ops
+
+Per the user rule, the expert block is rebuilt as two model-local `ttnn.generic_op` programs after
+`models/demos/gpt_oss/tt/fused_decode/stream.py` (README: `custom_ops/expert_stream/README.md`): weights stored
+width-sharded over the 8 DRAM banks, bank-major and column-major (an expert's columns for a core = one contiguous
+range, 8.7 KB NOC packets, one column in flight ahead of compute), the routing matrix scanned in every kernel (the
+active set is data-dependent at runtime: trace-safe, no host counts), 96 cores (12 per bank, round-robin over the
+active experts) for gate|up with `clamped_silu_glu` in DST and the routing weight as an exact diagonal-tile matmul,
+16 cores (2 per bank, 8 output columns each) for the down projection with the expert sum accumulated in fp32 DST
+and written once. Three device ops per 32-token block (the block's tokens copied to L1, gate|up, down; plus the
+selector matmul on a multi-column mesh), no slab, no zero-fill, no reduce, no activation ops.
+
+`tests/custom_ops/test_expert_stream.py` (random weights at the chip shapes, torch golden on bfp8-rounded weights,
+`_logs/optexperts_stream_v3.log`):
+
+| tokens | routed experts per token | active of 72 | act PCC | out PCC |
+|---|---|---|---|---|
+| 8 | 2 | 16 | 0.999980 | 0.999973 |
+| 32 | 2 | 45 | 0.999982 | 0.999980 |
+| 32 | 8 | 71 | 0.999982 | 0.999978 |
+| 256 (8 blocks) | 2 | 40-45 per block | >= 0.999980 | >= 0.999973 |
+
+### Variant sweep (`test_expert_stream_trace`, random weights, 43 of 72 active, 20 traced replays, `_logs/optexperts_stream_trace*_*.log`)
+
+| gate\|up groups (cores) | down readers (cores) | x | act | us per block | eager gate\|up / down (us) |
+|---|---|---|---|---|---|
+| 12 (96) | 2 (16) | DRAM | DRAM | 516 | 380 / 158 |
+| 12 (96) | 2 (16) | L1 | DRAM | 485 | 351 / 159 |
+| 6 (48) | 2 (16) | L1 | DRAM | 609 | 459 / 159 |
+| 12 (96) | 4 (32) | L1 | DRAM | 510 | 354 / 185 |
+| **12 (96)** | **2 (16)** | **L1** | **L1** | **476** | 346 / 155 |
+| 12 (96) | 4 (32) | L1 | L1 | 612 | 568 / 161 |
+| 15 (120) | 2 (16) | L1 | L1 | 486 | 489 / 160 |
+| 15 (120) | 4 (32) | L1 | L1 | 495 | 382 / 447 |
+
+The eager per-call numbers are single host-dispatched samples (noisy); the traced block is the measure. 96 gate|up
+cores are the knee (48 cores 1.28x slower, 120 cores no gain: the 8 banks are the limit), 2 down readers per bank
+beat 4 (4 readers halve the contiguous segment per core to 4.3 KB packets), x and act in L1 are worth ~8 % together
+(the `moe.py` defaults: `GLM53_STREAM_X_L1` / `GLM53_STREAM_ACT_L1` = 1). With 69 of 72 active (8 routed experts
+per token): 707 us per block (gate|up 523 us, down 214 us).
+
+Bandwidth: an expert's chip slice is 3.34 MB (gate|up 2.23 MB + down 1.11 MB, bfp8); 43 active = 144 MB in 476 us
+= 302 GB/s (59 % of the 512 GB/s DRAM peak), 69 active = 231 MB in 707 us = 326 GB/s (64 %).
+
+### The expert block (`tests/test_moe_block.py`, real layer-4 weights and routing, traced, `_logs/optexperts_moe_block_stream{,_l1}.log`)
+
+| M | active | path | us per call | us per 32-token block | device ops | PCC vs torch | PCC vs sparse-legacy |
+|---|---|---|---|---|---|---|---|
+| 32 | 28 | sparse legacy | 1342 | 1342 | 13 | 0.999916 | 1 |
+| 32 | 28 | sparse tuned | 683 | 683 | 13 | 0.999916 | 1 |
+| 32 | 28 | dense | 720 | 720 | 6 | 0.999917 | 0.999996 |
+| 32 | 28 | stream, x and act in DRAM | 372 | 372 | 2 | 0.999926 | 0.999972 |
+| 32 | 28 | **stream (default: x and act in L1)** | **341** | **341** | 3 | 0.999926 | 0.999972 |
+| 256 | 31 | sparse legacy | 9629 | 1204 x 8 | 121 | 0.999904 | 1 |
+| 256 | 31 | sparse tuned | 5036 | 630 x 8 | 121 | 0.999904 | 1 |
+| 256 | 31 | dense | 1256 | 1256 x 1 | 6 | 0.999905 | 0.999988 |
+| 256 | 31 | stream, DRAM | 2561 | 320 x 8 | 33 | 0.999911 | 0.999952 |
+| 256 | 31 | stream (default) | 2410 | 301 x 8 | 41 | 0.999911 | 0.999952 |
+
+Targets: M = 32 real routing <= 400 us: **met** (341 us: 2.0x the tuned sparse block, 2.1x dense, 3.9x the block
+before this item; 28 active = 93.6 MB in 341 us = 274 GB/s, 54 % of peak -- the rest is the fixed per-block cost:
+program launch x 2, the x copy and load, the routing scans, the DST fill / pack / reconfig per expert, ~110 us).
+M = 256 <= 1.0 ms: **not met** -- the block op streams the weights once per 32-token block, so 8 blocks re-stream
+the 31 active experts 8x (2.41 ms vs 1.26 ms for the dense layout, which reads each expert once); the dense layout
+stays the path at >= 8 users/row until the dispatch form below exists.
+
+### Phase 2 (design, not built): the per-expert dispatch form for M = 256
+
+To read every active expert once at 256 gathered tokens the op has to process, per expert, the rows routed to it
+(T x 8 / 288 rows per expert on average, ~7 at 256 tokens; a 32-row DST pass per expert, several passes for an
+expert with more rows):
+1. on-device dispatch: the writer scans the [T, E] routing matrix once per expert and gathers the routed rows of x
+   (<= 32 per pass, T/32 routing tiles scanned) into one x_e tile row in L1 with 64 B row-segment reads (128 per
+   row, ~5 us per expert) -- no host-side counts, trace-safe as today;
+2. gate|up as now on x_e (K = 4096, one [32, 32] tile per core), `clamped_silu_glu`, the routing weight as
+   `diag(w[rows_e, e])` -- act_e [32, 256] per expert, L1 resident;
+3. down: `act_e @ W2[e]` [32, 4096] per expert, scattered back as fp32 row partials into an L1-interleaved
+   [T, 4096] fp32 accumulator owned by output column: 16 cores x 16 tile columns x T rows is 512 KB fp32 per core
+   at T = 256 (too big), so 64 cores x 4 tile columns (128 KB per core; 4-column weight segments = the 4-reader
+   packet penalty above, ~+10 %), or bf16 partials per block with one fp32 sum at the end;
+4. a last pass packs the accumulator to bf16 [T, 4096].
+Expected: weights once (31 active = 104 MB, ~350 us at 300 GB/s) + the gathers (~150 us) + the compute of 256 x ~2
+routed rows per chip at HiFi2 (~100 us): ~0.6-0.8 ms per layer per chip, against 1.26 ms dense / 2.41 ms blocks.
+
+### Knobs
+
+`GLM53_STREAM_EXPERTS=1` (the stream block in `TtRoutedExperts` / `TtMoE`, cache tag `_stream`),
+`GLM53_STREAM_GROUPS` (12), `GLM53_STREAM_DOWN_READERS` (2), `GLM53_STREAM_X_L1` / `GLM53_STREAM_ACT_L1` (1).
+The mesh variants of the unit test ((1,4) / (2,4): per-chip expert slices, replicated tokens) are written but
+gated on `GLM53_STREAM_MESH_TESTS=1`: multi-chip meshes were not opened in this pass (board note), so they are not
+yet run.

@@ -188,6 +188,18 @@ Op-count pass (`expert_kernel_sweep.md` section 7): dense block 11 -> 6 device o
 `clamped_silu_glu`, one routing-weight matmul from the router's bf16 matrix, the multiply, W2), 1475 -> 1231 us at
 256 real tokens; sparse block 18 -> 13 device ops (`clamped_silu_glu`, one `permute` for the routing weights, no
 typecasts), bit-identical output.
+Kernel pass (`expert_kernel_sweep.md` section 8, evidence only, not adopted): a local tt-metal build of
+`sparse_matmul` with batch groups, in0 reuse, an accumulate-over-experts down mode and no zero-fill reached 394 us
+per 32-token block at 28 real active experts (gate|up 204 us at 60 % of DRAM peak, down 92.5 us at 66 %); reverted
+under the "model-local generic ops only" rule and kept as the bound for the custom op.
+Custom op (`custom_ops/expert_stream/`, section 9): the expert block as two `ttnn.generic_op` DRAM-bank-streaming
+programs after `gpt_oss/tt/fused_decode/stream.py` (weights width-sharded over the 8 banks, bank-major
+column-major; 96 gate|up cores with `clamped_silu_glu` in DST and the routing weight as a diagonal-tile matmul,
+16 down cores accumulating the expert sum in fp32 DST and writing once), trace-safe (every kernel scans the routing
+matrix on device, no host counts). Block at 4 users/row (28 real active): 683 -> 341 us (3 device ops, PCC
+0.99997 vs the sparse block, 54 % of DRAM peak), `GLM53_STREAM_EXPERTS=1`; at 256 tokens the block form
+re-streams the weights per 32-token block (2.41 ms vs 1.26 ms dense), the per-expert dispatch form that reads each
+expert once is the phase-2 design in section 9 (expected 0.6-0.8 ms).
 
 ## Optimization 1: router tie-break (2026-10-20)
 
