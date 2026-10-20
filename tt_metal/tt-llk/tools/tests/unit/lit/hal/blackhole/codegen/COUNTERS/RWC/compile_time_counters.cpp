@@ -105,6 +105,18 @@ extern "C" __attribute__((noinline, used)) void set_and_increment()
 // CHECK-NEXT: ttincrwc 0,2,0,0
 // CHECK-NEXT: ret
 
+// With both instructions issued, AdvanceAndReset is encoded only in SETRWC.
+extern "C" __attribute__((noinline, used)) void set_increment_and_advance()
+{
+    constexpr auto mixed = rwc::MathCounter {.src_a = rwc::Set(1), .src_b = rwc::Increment(2), .dest = rwc::AdvanceAndReset(8)};
+    counters::set<mixed>();
+}
+
+// CHECK-LABEL: <set_increment_and_advance>:
+// CHECK-NEXT: ttsetrwc 0,4,8,0,1,5
+// CHECK-NEXT: ttincrwc 0,0,2,0
+// CHECK-NEXT: ret
+
 // operation() returns the encoded word; issuing it shows which instruction it encodes.
 extern "C" __attribute__((noinline, used)) void issue_encoded_operations()
 {
