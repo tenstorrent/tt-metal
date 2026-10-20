@@ -687,7 +687,6 @@ class TestLoraTrainingStep:
         loss_np = loss.to_numpy(ttnn.DataType.FLOAT32)
         assert np.isfinite(loss_np).all(), "Loss should be finite"
 
-    @pytest.mark.skip(reason="Tracking: #41657 (AutocastTensor stale FULL view after BF16 updates)")
     def test_only_lora_params_updated_llama(self, toy_llama_config):
         """Frozen params must not change; at least some LoRA params must change."""
         model = Llama(toy_llama_config)
@@ -738,7 +737,6 @@ class TestLoraTrainingStep:
                 break
         assert any_changed, "At least some LoRA params should change after training"
 
-    @pytest.mark.skip(reason="Tracking: #41657 (AutocastTensor stale FULL view after BF16 updates)")
     def test_only_lora_params_updated_nanogpt(self, toy_gpt_config):
         """Frozen params must not change; at least some LoRA params must change."""
         model = create_nanogpt(toy_gpt_config)
