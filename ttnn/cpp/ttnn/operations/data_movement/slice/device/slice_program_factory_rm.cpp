@@ -44,7 +44,7 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
     const CoreRangeSet& core_group_2,
     uint32_t num_sticks_per_core_group_1,
     uint32_t num_sticks_per_core_group_2,
-    uint32_t max_read_size,
+    uint32_t batch_size,
     const ChunkingParams& chunking) {
     auto input_shape = input_tensor.padded_shape();
     auto output_shape = output_tensor.padded_shape();
@@ -124,10 +124,10 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
                 // Match `compute_dfb_size`: nrpb=2 only when num_chunks is even, else 1 to avoid ring-wrap straddle.
                 num_read_per_barrier = (chunking.num_chunks_per_stick % 2 == 0) ? 2 : 1;
             } else {
-                auto num_sticks_per_core_pad32 = round_up_to_mul32(num_sticks_per_core);
-                num_sticks_per_core_read = tt::tt_metal::merge_num_sticks_to_read(
-                    num_sticks_per_core_pad32, unpadded_row_size_bytes_offset, max_read_size);
-                num_read_per_barrier = num_sticks_per_core_pad32 / num_sticks_per_core_read;
+                // Every core shares the same DFB capacity. Its reserve/push batch must
+                // divide that capacity even when the work split produces two group sizes.
+                num_read_per_barrier = batch_size;
+                num_sticks_per_core_read = tt::div_up(num_sticks_per_core, batch_size);
             }
         }
 
@@ -460,7 +460,7 @@ ttnn::device_operation::ProgramArtifacts SliceRmProgramFactory::create_program_a
         core_group_2,
         num_sticks_per_core_group_1,
         num_sticks_per_core_group_2,
-        ttnn::operations::data_movement::MAX_READ_SIZE,
+        sizing.num_read_per_barrier,
         sizing.chunking);
 
     KernelRunArgs reader_run_args{.kernel = RM_READER};
