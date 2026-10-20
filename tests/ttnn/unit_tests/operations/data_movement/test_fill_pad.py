@@ -530,13 +530,12 @@ def test_fill_pad_rank_gt3_sharded(device, fill_value, shape, shard_shape, dtype
 @pytest.mark.parametrize(
     "shape, grid_end, shard_shape",
     [
-        ((1, 1, 100, 256), (1, 1), (64, 128)),  # the repro from #53110
-        ((1, 1, 100, 288), (1, 2), (64, 96)),  # non-square grid: 2 block rows along x, 3 block columns along y
+        ((1, 1, 100, 256), (1, 1), (64, 128)),
+        ((1, 1, 100, 288), (1, 2), (64, 96)),
     ],
 )
 @pytest.mark.parametrize("orientation", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR])
 def test_fill_implicit_tile_padding_block_sharded_orientations(device, shape, grid_end, shard_shape, orientation):
-    # BLOCK_SHARDED + COL_MAJOR used to write the padding fill over the logical region (#53110).
     if orientation == ttnn.ShardOrientation.ROW_MAJOR:
         grid_end = (grid_end[1], grid_end[0])
     torch.manual_seed(0)

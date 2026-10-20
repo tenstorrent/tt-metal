@@ -426,8 +426,6 @@ ttnn::device_operation::ProgramArtifacts FillPadL1ShardedProgramFactory::create_
                 row = i / num_cols;
                 col = i % num_cols;
             } else {
-                // COL_MAJOR: cores are listed column by column and tensor rows run along the grid x axis,
-                // so core i holds block row i / num_rows and block column i % num_rows (#53110).
                 row = i / num_rows;
                 col = i % num_rows;
             }
