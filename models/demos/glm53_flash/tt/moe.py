@@ -849,13 +849,19 @@ class TtEPExperts(LightweightModule):
         self._pad = {}
         self.act_l1 = os.environ.get("GLM53_STREAM_ACT_L1", "1") == "1"
         # the DeepSeek-V3 decode call pattern (models/demos/deepseek_v3/tt/moe.py, its decode config): dispatch and
-        # combine along the mesh rows, L1 outputs, the links chosen by the op, linear topology
-        self.a2a_kwargs = dict(
-            cluster_axis=0,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-            num_links=None,
-            topology=ttnn.Topology.Ring if os.environ.get("USE_TORUS_MODE", "0") != "0" else ttnn.Topology.Linear,
-        )
+        # combine along the mesh rows, L1 outputs, the links chosen by the op. The topology is derived from the
+        # active fabric by the op (``topology=None``: FABRIC_1D -> Linear, FABRIC_2D -> Mesh, the torus -> Ring on a
+        # wrapped axis): the writer kernel picks its 1D or 2D fabric send from it, and a Linear topology under a 2D
+        # fabric (the first mesh run) sends 1D packets into 2D routers and hangs. GLM53_A2A_TOPOLOGY=linear|ring|mesh|torus
+        # overrides for experiments.
+        topo = {
+            "linear": ttnn.Topology.Linear,
+            "ring": ttnn.Topology.Ring,
+            "mesh": ttnn.Topology.Mesh,
+            "torus": ttnn.Topology.Torus,
+            "": None,
+        }[os.environ.get("GLM53_A2A_TOPOLOGY", "").lower()]
+        self.a2a_kwargs = dict(cluster_axis=0, memory_config=ttnn.L1_MEMORY_CONFIG, num_links=None, topology=topo)
         # GLM53_EP_FORCE_A2A=1: run the dispatch / combine even on one chip (D = 1: the identity) to exercise the
         # mesh plumbing before a block is available
         self.force_a2a = os.environ.get("GLM53_EP_FORCE_A2A", "0") == "1"

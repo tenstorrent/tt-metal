@@ -35,7 +35,11 @@ TRACE_MB = int(os.environ.get("GLM53_MODEL_TRACE_MB", "256"))  # 45 layers x 32 
 _DT = {"bfp8": ttnn.bfloat8_b, "bfp4": ttnn.bfloat4_b}
 EXPERT_DTYPE = _DT[os.environ.get("GLM53_MODEL_EXPERT_DTYPE", "bfp8")]  # routed gate/up
 EXPERT_DOWN_DTYPE = _DT[os.environ.get("GLM53_MODEL_EXPERT_DOWN_DTYPE", "bfp8")]  # routed down
-PCC_BAR = float(os.environ.get("GLM53_MODEL_PCC_BAR", "0.99"))  # chain bar (bfp4 experts over 45 layers drift)
+PCC_BAR = float(os.environ.get("GLM53_MODEL_PCC_BAR", "0.99"))
+# tensorbin weight cache (per layer, file names carry mesh shape / layout / dtype): the first build writes it, later
+# builds load ~2.6 s per MoE layer instead of ~60 s of host conversion on the 8x4; "none" disables
+_cache_env = os.environ.get("GLM53_MESH_CACHE", "/home/ttuser/ashai/glm53/_cache/mesh")
+CACHE_ROOT = None if _cache_env.lower() == "none" else Path(_cache_env)  # chain bar (bfp4 experts over 45 layers drift)
 
 
 def _layer_range() -> list[int]:
@@ -60,6 +64,7 @@ def test_mesh_model_chain_and_perf(mesh_device):
         layers,
         max_batch=B,
         max_seq_len=256,
+        weight_cache_path=CACHE_ROOT,
         expert_dtype=EXPERT_DTYPE,
         expert_down_dtype=EXPERT_DOWN_DTYPE,
     )
@@ -205,6 +210,7 @@ def test_mesh_model_ttft(mesh_device):
         layers,
         max_batch=B,
         max_seq_len=512,
+        weight_cache_path=CACHE_ROOT,
         expert_dtype=EXPERT_DTYPE,
         expert_down_dtype=EXPERT_DOWN_DTYPE,
     )
