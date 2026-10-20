@@ -23,7 +23,7 @@ from models.common.utils import block_cyclic_reorder
 from models.demos.common.prefill.chunk_layout import pack_forward_tokens
 from models.demos.common.prefill.prefill_chunk import PrefillChunk, validate_chunks
 from models.demos.minimax_m3.config import MeshConfig
-from models.demos.minimax_m3.tt.attention import Attention, AttentionConfig, allocate_kv_caches
+from models.demos.minimax_m3.tt.attention import Attention, AttentionConfig, allocate_kv_caches, msa, prefill
 from models.demos.minimax_m3.tt.attention_configs import MiniMaxM3AttentionProgramConfig
 from models.demos.minimax_m3.tt.ccl import CCLManager
 from models.demos.minimax_m3.tt.model import create_rope_setup
@@ -88,15 +88,13 @@ CASES = {
 }
 
 
-@pytest.mark.timeout(1800)
-@parametrize_mesh_with_fabric(mesh_shapes=[(8, 4)], linear_fabric=True)
-@pytest.mark.parametrize("layer_kind", ["dense", "sparse"])
-def test_attention_packed_vs_alone(mesh_device, device_params, layer_kind, reset_seeds):
+def _attention_fixture(mesh_device, is_sparse, global_layer_idx=0):
+    """A random-weight attention layer on the 8x4 mesh with the runtime's whole-cache indexed RoPE, and two helpers:
+    ``run(x_chunks, chunks, kvc)`` (one forward over ``chunks``, natural-order [C, H] rows per chunk -> output rows per
+    chunk) and ``read_cache(kvc)`` (the three caches as host tensors, cache-row-major)."""
     rows, cols = tuple(mesh_device.shape)
     assert (rows, cols) == (8, 4)
     sp, s = rows, C // rows
-    is_sparse = layer_kind == "sparse"
-
     torch.manual_seed(0)
     hf_state = {
         "q_proj.weight": torch.rand(NQ * HEAD_DIM, HIDDEN) * 0.02,
@@ -151,7 +149,7 @@ def test_attention_packed_vs_alone(mesh_device, device_params, layer_kind, reset
         ccl_manager=ccl,
         mesh_config=mesh_config,
         program_config=MiniMaxM3AttentionProgramConfig(),
-        global_layer_idx=0,
+        global_layer_idx=global_layer_idx,
         transformation_mats=rope_setup.get_both_trans_mats(),
     )
     seq_mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(rows, cols), dims=(2, None))
@@ -191,6 +189,15 @@ def test_attention_packed_vs_alone(mesh_device, device_params, layer_kind, reset
             ttnn.deallocate(sl)
         return out
 
+    return attn, run, read_cache
+
+
+@pytest.mark.timeout(1800)
+@parametrize_mesh_with_fabric(mesh_shapes=[(8, 4)], linear_fabric=True)
+@pytest.mark.parametrize("layer_kind", ["dense", "sparse"])
+def test_attention_packed_vs_alone(mesh_device, device_params, layer_kind, reset_seeds):
+    is_sparse = layer_kind == "sparse"
+    attn, run, read_cache = _attention_fixture(mesh_device, is_sparse)
     gen = torch.Generator().manual_seed(1)
     rand_rows = lambda: torch.randn(C, HIDDEN, generator=gen) * 0.1
     failures, worst = [], 1.0
@@ -242,3 +249,49 @@ def test_attention_packed_vs_alone(mesh_device, device_params, layer_kind, reset
 
     logger.info(f"[{layer_kind}] worst pcc={worst:.6f}")
     assert not failures, f"{layer_kind} packed vs alone: {failures}"
+
+
+@pytest.mark.timeout(1800)
+@parametrize_mesh_with_fabric(mesh_shapes=[(8, 4)], linear_fabric=True)
+def test_attention_packed_overlap_vs_serial(mesh_device, device_params, reset_seeds, monkeypatch):
+    """The sparse packed forward with the MSA gather/compute overlap (msa_chunks_pipelined) against the same forward
+    with the overlap off: outputs and caches bit for bit. Two cache layers and the attention on the second, so a
+    slot-for-row mix-up in the pipelined gather lands on layer 0's untouched row instead of passing."""
+    rows, cols = tuple(mesh_device.shape)
+    assert (rows, cols) == (8, 4)
+    layers, layer = 2, 1
+    attn, run, read_cache = _attention_fixture(mesh_device, True, global_layer_idx=layer)
+    prefixes, chunks = CASES["mixed_depths"]  # three warm chunks and one cold
+    gen = torch.Generator().manual_seed(1)
+    rand_rows = lambda: torch.randn(C, HIDDEN, generator=gen) * 0.1
+    fills = {slot: [(a, b, rand_rows()) for a, b in f] for slot, f in prefixes.items()}
+    xs = [rand_rows() for _ in chunks]
+    calls = []  # prefill.py binds the name at import: the counter wraps its reference, not msa's
+    pipelined = prefill.msa_chunks_pipelined
+    monkeypatch.setattr(prefill, "msa_chunks_pipelined", lambda cs, **kw: calls.append(len(cs)) or pipelined(cs, **kw))
+    results = {}
+    for overlap in (True, False):
+        monkeypatch.setattr(msa, "MSA_CHUNK_OVERLAP", overlap)
+        kvc = allocate_kv_caches(mesh_device, num_layers=layers, max_seq_len=CAP, num_users=USERS)
+        try:
+            for slot, f in fills.items():
+                for a, b, x in f:
+                    run([x], [PrefillChunk(slot, a, b)], kvc)
+            calls.clear()
+            out = run(xs, chunks, kvc)
+            ttnn.synchronize_device(mesh_device)
+            results[overlap] = (out, read_cache(kvc), list(calls))
+        finally:
+            kvc.deallocate()
+    (on, on_cache, on_calls), (off, off_cache, off_calls) = results[True], results[False]
+    n_warm = sum(1 for c in chunks if c.actual_start > 0)
+    assert on_calls == [n_warm], f"overlap on: pipelined calls {on_calls}, expected one over {n_warm} warm chunks"
+    assert off_calls == [], f"overlap off took the pipelined path: {off_calls}"
+    for k, (a, b) in enumerate(zip(on, off)):
+        assert torch.equal(a, b), f"chunk {k} output differs with the overlap on"
+    for cache in ("k", "v", "index_k"):
+        for c in chunks:
+            row = layers * c.slot_id + layer
+            assert torch.equal(
+                on_cache[cache][row], off_cache[cache][row]
+            ), f"{cache} row {row} differs with the overlap on"

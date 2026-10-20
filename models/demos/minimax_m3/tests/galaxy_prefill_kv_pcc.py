@@ -843,7 +843,7 @@ def main():
                 print(f"[prefill-pcc]   {_fmt_result(r)}", flush=True)
         print("[prefill-pcc] DONE", flush=True)
     finally:
-        shared_overlap.release_all()
+        shared_overlap.release_all()  # every sub-device manager (the MSA overlap registers its own there)
         ttnn.close_mesh_device(mesh)
     ok = all(r["status"] == "ok" for r in results)
     return 0 if ok and (results or clean_exit) else 1
