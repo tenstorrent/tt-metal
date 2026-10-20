@@ -727,36 +727,10 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
     // documents as the expected srcB scaler layout, which validates with the assert enabled. (srcA keeps its
     // full 32x32 4-face geometry below -- that operand genuinely needs it.)
     const auto scalar_tile = tt::tt_metal::Tile::from_face_grid(1, 1, {1, tt::constants::FACE_WIDTH});
-    const uint32_t window_size_hw = kernel_h * kernel_w;
-    // WORKAROUND (Quasar): the input-CB tile's face_r_dim feeds both the reduce tensor-shape and the
-    // TDMA buffer-descriptor y_dim, and Quasar LLK restricts both to powers of 2 <= 16
-    // (validate_tensor_shape_tile_dependent_ops_ in common/tensor_shape.h, validate_buffer_desc in
-    // tt_llk_quasar/common/inc/ckernel_trisc_common.h). WH/BH accept the raw window size directly
-    // (e.g. 9 for a 3x3 window) since they don't run those validators; Quasar asserts. Round the
-    // packed face_r_dim up to the next power of 2 so the tile shape validates (9 -> 16, giving the
-    // valid 16x16 tile: x=16,y=16,z=1). The input CB page is already padded to a full tile
-    // (round_up(in_cb_sz, TILE_HW) in pool_utils.cpp) so the larger face_r_dim reads no OOB.
-    // NOTE: this is a bring-up workaround. For correct results the padded rows [window_size, pow2)
-    // must hold the pool identity (-inf max / 0 avg) via clear_value_cb; otherwise stale L1 leaks
-    // into the reduce. Remove once Quasar reduce/buffer-descriptor supports non-pow2 face_r_dim.
-    const uint32_t raw_face_r_unpadded = std::min(window_size_hw, 16u);
-    uint32_t raw_face_r_pow2 = 1;
-    while (raw_face_r_pow2 < raw_face_r_unpadded) {
-        raw_face_r_pow2 <<= 1;
-    }
-    const uint32_t raw_face_r = raw_face_r_pow2;
-    const std::array<uint32_t, 2> raw_face_shape = {raw_face_r, tt::constants::FACE_WIDTH};
-    // QSR: the reduce-col strided tilize (_llk_unpack_reduce_col_tilizeA_strided_) only supports a full
-    // 32x32 (4-face) SrcA tile (LLK_ASSERT total_row_dim()==32 && total_col_dim()==32 at
-    // llk_unpack_reduce_col_tilizeA_strided.h). The WH/BH 2-face small-window optimization feeds it a
-    // 16x32 (num_faces=2) tile, which (a) violates that requirement -> wrong tilized data, and (b) makes
-    // the always-4-face strided unpack over-produce SrcA vs the 2-GMPOOL reduce -> SrcA double-buffer
-    // overflow -> deadlock (unpacker spins UPTW, math stalls on SrcB). Always describe the (already
-    // full-tile-padded, round_up(in_cb_sz, TILE_HW)) in_cb page as 4 faces; the padding rows
-    // [window_size, 32) hold the pool identity (-inf max / 0 avg via force_max_clear + clear_value_cb,
-    // AVG scalar = 1/true_window), so reducing the extra rows is a no-op.
-    const auto input_tile =
-        return_indices ? std::nullopt : std::optional{tt::tt_metal::Tile::from_face_grid(2, 2, raw_face_shape)};
+    // Quasar's 4-face reduce-col strided tilize assumes 16-row faces (llk_unpack_reduce_col_tilizeA_strided.h),
+    // so the in_cb page is a full 32x32 tile for every window size; the reader fills rows [window, 32)
+    // with the pool identity, so reducing them is a no-op.
+    const auto input_tile = return_indices ? std::nullopt : std::optional{tt::tt_metal::Tile()};
 
     // Single-row faces: one 1x16 face, or two of them side by side (a 1x32 tile).
     const bool last_tile_is_partial = in_c % tt::constants::TILE_WIDTH != 0;
