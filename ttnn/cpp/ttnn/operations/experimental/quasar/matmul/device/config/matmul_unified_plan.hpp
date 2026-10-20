@@ -155,11 +155,14 @@ std::pair<uint32_t, uint32_t> maximize_subblock_size(
             // Padding included; 0 with one thread, which leaves the volume-then-padding rule.
             const uint64_t busiest_thread_tiles =
                 num_compute_threads > 1 ? tt::div_up(num_subblocks, (uint64_t)num_compute_threads) * volume : 0;
-            bool better = padded_area < best_padded_area;
+            // Least work on the busiest thread, then the largest volume (fullest DST), then the least padding.
+            bool better = false;
             if (busiest_thread_tiles != best_busiest_thread_tiles) {
                 better = busiest_thread_tiles < best_busiest_thread_tiles;
             } else if (volume != best_volume) {
                 better = volume > best_volume;
+            } else {
+                better = padded_area < best_padded_area;
             }
             if (better && fits(h, w)) {
                 best = {h, w};
