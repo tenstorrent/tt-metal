@@ -102,6 +102,62 @@ TEST_F(RouterWiringRulesTest, BoundaryChipMeshRouter_VC1HasExtraFromBoundarySlot
     EXPECT_EQ(shape.flat_sender_id(1, 3), 7);
 }
 
+// ============ VC0-only intermesh (no VC1) ============
+
+TEST_F(RouterWiringRulesTest, Vc0Only_MeshRouterHasNoVC1) {
+    // An ordinary mesh router is the plain non-express VC0 family: VC0-only adds nothing to it.
+    auto config = IntermeshVCConfig::vc0_only();
+    const auto shape = router_vc_shape(
+        Topology::Mesh, RoutingDirection::N, chip_with_z(std::nullopt), /*express_routing_enabled=*/false, &config);
+    EXPECT_EQ(shape.num_vcs, 1);
+    EXPECT_EQ(shape.sender_counts[0], 4);
+    EXPECT_EQ(shape.sender_counts[1], 0);
+    EXPECT_EQ(shape.receiver_counts[1], 0);
+}
+
+TEST_F(RouterWiringRulesTest, Vc0Only_BoundaryChipMeshRouter_VC0HasExtraFromBoundarySlot) {
+    // The from-boundary slot VC1 would carry sits on VC0: worker + 3 cardinals + the boundary producer.
+    auto config = IntermeshVCConfig::vc0_only();
+    const auto shape = router_vc_shape(
+        Topology::Mesh,
+        RoutingDirection::N,
+        chip_with_z(EdgeCapability::INTERMESH),
+        /*express_routing_enabled=*/false,
+        &config);
+    EXPECT_EQ(shape.num_vcs, 1);
+    EXPECT_EQ(shape.sender_counts[0], 5) << "worker + 3 cardinals + the from-boundary producer";
+    EXPECT_EQ(shape.sender_counts[1], 0);
+    EXPECT_EQ(shape.flat_sender_id(0, 4), 4);
+
+    // The express family already carries the Z producer slot on VC0; VC0-only does not widen it again.
+    const auto express_shape = router_vc_shape(
+        Topology::Mesh,
+        RoutingDirection::N,
+        chip_with_z(EdgeCapability::INTERMESH),
+        /*express_routing_enabled=*/true,
+        &config);
+    EXPECT_EQ(express_shape.sender_counts[0], express_vc0_sender_count());
+}
+
+TEST_F(RouterWiringRulesTest, Vc0Only_IntermeshBoundaryRouter_IsVC0OnlyWithFullFanout) {
+    auto config = IntermeshVCConfig::vc0_only();
+    const auto shape = router_vc_shape(
+        Topology::Mesh,
+        RoutingDirection::Z,
+        chip_with_z(EdgeCapability::INTERMESH),
+        /*express_routing_enabled=*/false,
+        &config);
+
+    EXPECT_EQ(shape.num_vcs, 1);
+    EXPECT_EQ(shape.sender_counts[0], 5);
+    EXPECT_EQ(shape.sender_counts[1], 0);
+    EXPECT_EQ(shape.receiver_counts[0], 1);
+    EXPECT_EQ(shape.receiver_counts[1], 0);
+    for (uint32_t i = 0; i < 5; ++i) {
+        EXPECT_EQ(shape.flat_sender_id(0, i), i);
+    }
+}
+
 // ============ The intermesh boundary router ============
 
 TEST_F(RouterWiringRulesTest, IntermeshBoundaryRouter_CompleteLayout) {
@@ -206,8 +262,12 @@ TEST_F(RouterWiringRulesTest, IntermeshVCConfig_FactoryFlags) {
         {IntermeshVCConfig::edge_only(), {true, false, false}},
         {IntermeshVCConfig::full_mesh(), {true, true, false}},
         {IntermeshVCConfig::full_mesh_with_pass_through(), {true, true, true}},
+        {IntermeshVCConfig::vc0_only(), {false, false, false}},  // intermesh present, carried on VC0
         {IntermeshVCConfig{}, {false, false, false}},  // default-constructed is DISABLED
     };
+    EXPECT_TRUE(IntermeshVCConfig::vc0_only().intermesh_on_vc0());
+    EXPECT_FALSE(IntermeshVCConfig::disabled().intermesh_on_vc0());
+    EXPECT_FALSE(IntermeshVCConfig::full_mesh().intermesh_on_vc0());
 
     for (const auto& [config, expected] : cases) {
         EXPECT_EQ(config.requires_vc1, expected.vc1) << "mode " << enchantum::to_string(config.mode);

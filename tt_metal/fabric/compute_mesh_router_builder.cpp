@@ -372,7 +372,8 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
         chip_facts.per_direction_capabilities,
         chip_z_role,
         location.direction,
-        edge_capability);
+        edge_capability,
+        intermesh_config.intermesh_on_vc0());
     const InjectionPolicy& injection_policy = express_enabled ? static_cast<const InjectionPolicy&>(express_policy)
                                                               : static_cast<const InjectionPolicy&>(non_express_policy);
 

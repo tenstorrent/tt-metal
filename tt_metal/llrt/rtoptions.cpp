@@ -107,6 +107,7 @@ enum class EnvVarID {
     TT_METAL_FABRIC_TRIMMING_OVERRIDE,                  // Path to channel trimming global override YAML
     TT_METAL_ENABLE_FABRIC_VC2,                         // Enable fabric VC2 (neighbour exchange)
     TT_METAL_ENABLE_FABRIC_MESH_PASS_THROUGH,           // Enable experimental VC1 inter-mesh pass-through
+    TT_METAL_FABRIC_INTERMESH_ON_VC0,                   // Carry inter-mesh traffic on VC0 only (no VC1)
     TT_METAL_FORCE_REINIT,                              // Force context reinitialization
     TT_METAL_DISABLE_FABRIC_TWO_ERISC,                  // Disable fabric 2-ERISC mode
     TT_METAL_LOG_KERNELS_COMPILE_COMMANDS,              // Log kernel compilation commands
@@ -844,6 +845,19 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: false
         // Usage: export TT_METAL_ENABLE_FABRIC_MESH_PASS_THROUGH=1
         case EnvVarID::TT_METAL_ENABLE_FABRIC_MESH_PASS_THROUGH: this->enable_fabric_mesh_pass_through = true; break;
+
+        // TT_METAL_FABRIC_INTERMESH_ON_VC0
+        // Opt-in: carry inter-mesh traffic on VC0 and do not build VC1. A landed inter-mesh packet is
+        // forwarded on the boundary router's VC0 downstream senders and shares VC0 with intra-mesh
+        // traffic for the rest of its route. Saves the VC1 channels, their per-iteration servicing
+        // and the -Os build of VC1-bearing routers.
+        // WARNING: VC1 exists to break the intra-mesh / inter-mesh dependency cycle. Without it the
+        // fabric is NOT deadlock-safe for arbitrary cross-mesh traffic; use only for workloads whose
+        // inter-mesh traffic cannot form a cycle (e.g. a one-directional pipeline). Cannot be combined
+        // with TT_METAL_ENABLE_FABRIC_MESH_PASS_THROUGH.
+        // Default: false
+        // Usage: export TT_METAL_FABRIC_INTERMESH_ON_VC0=1
+        case EnvVarID::TT_METAL_FABRIC_INTERMESH_ON_VC0: this->enable_fabric_intermesh_on_vc0 = true; break;
 
         // RELIABILITY_MODE
         // Sets the fabric reliability mode (STRICT, RELAXED, or DYNAMIC).

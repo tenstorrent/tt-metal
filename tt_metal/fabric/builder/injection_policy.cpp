@@ -52,12 +52,14 @@ ExpressInjectionPolicy::ExpressInjectionPolicy(
     const PerDirectionCapabilities& capabilities,
     ZPortRole chip_z_role,
     RoutingDirection egress,
-    EdgeCapability egress_capability) :
+    EdgeCapability egress_capability,
+    bool intermesh_on_vc0) :
     queries_(queries),
     capabilities_(capabilities),
     chip_z_role_(chip_z_role),
     egress_(egress),
-    egress_capability_(egress_capability) {}
+    egress_capability_(egress_capability),
+    intermesh_on_vc0_(intermesh_on_vc0) {}
 
 bool ExpressInjectionPolicy::participates(uint32_t vc) const {
     // VC2 stays out of the derivation: the optional existing VC2 behavior is separate from the
@@ -90,7 +92,8 @@ bool ExpressInjectionPolicy::producer_is_injection(uint32_t vc, eth_chan_directi
             egress_capability_,
             chip_z_role_,
             /*express_routing_enabled=*/true,
-            vc)) {
+            vc,
+            intermesh_on_vc0_)) {
         return false;
     }
     return is_injection_effect(

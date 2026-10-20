@@ -33,8 +33,8 @@ struct IntermeshVCConfig;
  * Turn sets, producer arity, and injection guards all use this relation. U-turns are never wired.
  * In express mode, a same-mesh X producer cannot turn into a protected Y egress, while an intermesh
  * landing can begin Y. Z egress requires a local Z role. Non-express mode preserves cardinal wiring
- * and targets Z only for an intermesh boundary. Boundary producers wire only on VC1; all other
- * producer roles are VC-independent.
+ * and targets Z only for an intermesh boundary. Boundary producers wire only on the intermesh
+ * carrier VC (VC1, or VC0 when `intermesh_on_vc0`); all other producer roles are VC-independent.
  */
 bool wires_into(
     RoutingDirection producer_direction,
@@ -43,7 +43,8 @@ bool wires_into(
     std::optional<EdgeCapability> egress_capability,
     ZPortRole chip_z_role,
     bool express_routing_enabled,
-    uint32_t vc);
+    uint32_t vc,
+    bool intermesh_on_vc0 = false);
 
 // Opposite direction for mesh routers (N<->S, E<->W). Z has no opposite.
 RoutingDirection get_opposite_direction(RoutingDirection dir);

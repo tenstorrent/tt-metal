@@ -129,7 +129,8 @@ bool wires_into(
     std::optional<EdgeCapability> egress_capability,
     ZPortRole chip_z_role,
     bool express_routing_enabled,
-    uint32_t vc) {
+    uint32_t vc,
+    bool intermesh_on_vc0) {
     // A U-turn is a property of the turn, not of its ports: no router wires back over its own link
     // whatever they are. It needs no classification, so it answers first.
     if (producer_direction == egress_direction) {
@@ -148,10 +149,12 @@ bool wires_into(
             egress_is_z ? EdgeCapability::INTRAMESH_EXPRESS : EdgeCapability::INTRAMESH_CARDINAL);
     };
 
-    // A boundary producer's VC1 receiver fans out to non-self VC1 senders; its VC0 receiver crosses
-    // over to downstream VC1 and feeds nothing on VC0. This is the only VC-sensitive producer role.
+    // A boundary producer fans out on the intermesh carrier VC only. With VC1 its VC1 receiver
+    // fans out to non-self VC1 senders and its VC0 receiver crosses over to downstream VC1, feeding
+    // nothing on VC0. In VC0-only mode there is no VC1 and the fanout lands on VC0 instead. This is
+    // the only VC-sensitive producer role.
     if (producer_role == TurnRole::BOUNDARY) {
-        return vc == 1;
+        return vc == (intermesh_on_vc0 ? 0u : 1u);
     }
 
     // Non-express is producer-blind: every non-self cardinal wires in, and Z is a target only as
@@ -242,6 +245,7 @@ RouterVcShape router_vc_shape(
 
     const bool requires_vc1 = vc_config && vc_config->requires_vc1;
     const bool requires_vc2 = vc_config && vc_config->requires_vc2;
+    const bool intermesh_on_vc0 = vc_config && vc_config->intermesh_on_vc0();
     // Evaluated once per router: is this the chip's Z-facing intermesh boundary?
     const bool z_boundary_router = is_z_boundary_router(facing, edge_capability);
 
@@ -249,9 +253,11 @@ RouterVcShape router_vc_shape(
     // configuration error, not a silently five-wide router.
     TT_FATAL(
         !z_boundary_router || is_2D_topology(topology), "A Z-facing intermesh boundary router requires a 2D topology");
-    // And it cannot exist without VC1: its whole shape is the from-boundary VC1 fanout.
+    // And it cannot exist without an intermesh carrier VC: its whole shape is the from-boundary
+    // fanout on VC1, or on VC0 in VC0-only mode.
     TT_FATAL(
-        !z_boundary_router || requires_vc1, "A Z-facing intermesh boundary router cannot be constructed without VC1");
+        !z_boundary_router || requires_vc1 || intermesh_on_vc0,
+        "A Z-facing intermesh boundary router cannot be constructed without an intermesh carrier VC");
 
     RouterVcShape shape{};
 
@@ -289,6 +295,11 @@ RouterVcShape router_vc_shape(
         } else {
             // Frozen by standing decision: worker + every non-self cardinal.
             vc0_senders = non_express_vc0_sender_count();
+            // VC0-only intermesh: the from-boundary slot VC1 would carry sits on VC0 instead. (The
+            // express family's VC0 already has the Z producer slot.)
+            if (intermesh_on_vc0 && chip_z_role == ZPortRole::INTERMESH_BOUNDARY) {
+                vc0_senders += 1;
+            }
         }
 
         // VC1: wired producers, by family, when the VC exists (zero by default).
@@ -335,6 +346,7 @@ RouterTurnSet turn_set_for_router(
     // The VC facts are read off the same config the shape derivation consumes.
     const bool enable_vc1 = vc_config && vc_config->requires_vc1;
     const bool enable_mesh_pass_through = vc_config && vc_config->requires_vc1_mesh_pass_through;
+    const bool intermesh_on_vc0 = vc_config && vc_config->intermesh_on_vc0();
     // Evaluated once per router: is this the chip's Z-facing intermesh boundary?
     const bool z_boundary_router = is_z_boundary_router(facing, edge_capability);
 
@@ -342,11 +354,12 @@ RouterTurnSet turn_set_for_router(
     // configuration error, not a silently five-wide router.
     TT_FATAL(
         !z_boundary_router || is_2D_topology(topology), "A Z-facing intermesh boundary router requires a 2D topology");
-    // And it cannot exist without VC1: its whole shape is the from-boundary VC1 fanout.
+    // And it cannot exist without an intermesh carrier VC: its whole shape is the from-boundary
+    // fanout on VC1, or on VC0 in VC0-only mode.
     TT_FATAL(
-        !z_boundary_router || enable_vc1,
-        "A Z-facing intermesh boundary router cannot be constructed without VC1: its entire "
-        "shape is the from-boundary VC1 fanout");
+        !z_boundary_router || enable_vc1 || intermesh_on_vc0,
+        "A Z-facing intermesh boundary router cannot be constructed without an intermesh carrier VC: its "
+        "entire shape is the from-boundary fanout");
 
     // One emission rule for every ordinary target: VC0 always, VC1 when the VC exists.
     const auto emit_on_enabled_vcs = [&turn_set, enable_vc1](RoutingDirection dir) {
@@ -356,14 +369,17 @@ RouterTurnSet turn_set_for_router(
         }
     };
 
-    // The boundary template: the full non-self set on VC1, typed from-boundary. Its VC0 senders
-    // are fed by the mesh routers' boundary targets on their own turn sets, so there is no VC0
-    // arm here -- traffic arriving on its VC0 receiver crosses over onto these same VC1
-    // downstream senders instead. Nothing in the turn matrix applies to it, which is why the
-    // set is the full set: not a special case, a consequence.
+    // The boundary template: the full non-self set on the intermesh carrier VC, typed
+    // from-boundary. With VC1 that is VC1: the boundary's VC0 senders are fed by the mesh routers'
+    // boundary targets on their own turn sets, so there is no VC0 arm -- traffic arriving on its
+    // VC0 receiver crosses over onto these same VC1 downstream senders instead. In VC0-only mode
+    // the same fanout is emitted on VC0 and the VC0 receiver forwards onto it directly. Nothing in
+    // the turn matrix applies to it, which is why the set is the full set: not a special case, a
+    // consequence.
     if (z_boundary_router) {
+        const uint32_t carrier_vc = enable_vc1 ? 1 : 0;
         for (const auto dir : k_cardinal_directions) {
-            turn_set[1].push_back(ConnectionTarget(1, dir));
+            turn_set[carrier_vc].push_back(ConnectionTarget(carrier_vc, dir));
         }
         return turn_set;
     }

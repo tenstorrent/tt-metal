@@ -111,7 +111,8 @@ void FabricBuilderContext::compute_max_channel_counts() {
     };
 
     // Always have MESH routers
-    bool intermesh_vc_config_active = intermesh_vc_config_.requires_vc1 || intermesh_vc_config_.requires_vc2;
+    bool intermesh_vc_config_active = intermesh_vc_config_.requires_vc1 || intermesh_vc_config_.requires_vc2 ||
+                                      intermesh_vc_config_.intermesh_on_vc0();
     possible_shapes.push_back(router_vc_shape(
         topology,
         RoutingDirection::N,
@@ -120,10 +121,12 @@ void FabricBuilderContext::compute_max_channel_counts() {
         intermesh_vc_config_active ? &intermesh_vc_config_ : nullptr));
 
     // A Z-facing intermesh boundary introduces the boundary family (5 VC0 / 4 VC1) and mesh routers
-    // on the same chips (4 VC0 / 4 VC1 when non-express); enumerate both. VC1 is required because
-    // the boundary shape is defined by its from-boundary VC1 fanout.
+    // on the same chips (4 VC0 / 4 VC1 when non-express, 5 VC0 in VC0-only mode); enumerate both.
+    // The boundary shape is its from-boundary fanout on the intermesh carrier VC: VC1, or VC0 in
+    // VC0-only mode.
     const bool has_intermesh_z_boundary =
-        intermesh_vc_config_.requires_vc1 && fabric_has_intermesh_z_edge(control_plane.get_mesh_graph());
+        (intermesh_vc_config_.requires_vc1 || intermesh_vc_config_.intermesh_on_vc0()) &&
+        fabric_has_intermesh_z_edge(control_plane.get_mesh_graph());
     if (has_intermesh_z_boundary) {
         const auto boundary_chip = chip_with_z(EdgeCapability::INTERMESH);
         possible_shapes.push_back(router_vc_shape(
@@ -371,10 +374,25 @@ IntermeshVCConfig FabricBuilderContext::compute_intermesh_vc_config() const {
             // EXPERIMENTAL: pass-through (A->B->C inter-mesh routing) is currently opt-in via env var.
             // It reuses VC1 for both in-mesh delivery and cross-mesh pass-through and is NOT guaranteed
             // deadlock-free (a fully deadlock-free implementation requires a dedicated pass-through VC).
-            const bool needs_mesh_pass_through = fabric_context_.get_rtoptions().get_enable_fabric_mesh_pass_through();
+            const auto& rtoptions = fabric_context_.get_rtoptions();
+            const bool needs_mesh_pass_through = rtoptions.get_enable_fabric_mesh_pass_through();
 
-            config = needs_mesh_pass_through ? IntermeshVCConfig::full_mesh_with_pass_through()
-                                             : IntermeshVCConfig::full_mesh();
+            if (rtoptions.get_enable_fabric_intermesh_on_vc0()) {
+                // Opt-in: no VC1 at all; intermesh traffic shares VC0 with intramesh traffic.
+                TT_FATAL(
+                    !needs_mesh_pass_through,
+                    "TT_METAL_FABRIC_INTERMESH_ON_VC0 cannot be combined with "
+                    "TT_METAL_ENABLE_FABRIC_MESH_PASS_THROUGH: inter-mesh pass-through has no deadlock argument "
+                    "without a dedicated VC");
+                log_warning(
+                    tt::LogFabric,
+                    "Fabric: inter-mesh traffic will be carried on VC0 (TT_METAL_FABRIC_INTERMESH_ON_VC0); no VC1 "
+                    "is built. This is not deadlock-safe for arbitrary cross-mesh traffic patterns.");
+                config = IntermeshVCConfig::vc0_only();
+            } else {
+                config = needs_mesh_pass_through ? IntermeshVCConfig::full_mesh_with_pass_through()
+                                                 : IntermeshVCConfig::full_mesh();
+            }
         }
     }
 

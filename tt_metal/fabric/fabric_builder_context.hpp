@@ -29,7 +29,8 @@ class FabricContext;
     DISABLED,                      // No intermesh VC (single mesh or no intermesh connectivity)
     EDGE_ONLY,                     // Intermesh VC on edge nodes only (traffic sinks at mesh boundary)
     FULL_MESH,                     // Intermesh VC throughout mesh (traffic can traverse nodes within mesh)
-    FULL_MESH_WITH_PASS_THROUGH    // Intermesh VC with inter-mesh pass-through (e.g., A→B→C routing)
+    FULL_MESH_WITH_PASS_THROUGH,   // Intermesh VC with inter-mesh pass-through (e.g., A→B→C routing)
+    VC0_ONLY                       // Intermesh traffic shares VC0 with intramesh traffic; no VC1 is built
 };
 
 /**
@@ -45,6 +46,7 @@ class FabricContext;
  * - EDGE_ONLY: VC1 on edge nodes only, traffic sinks at mesh boundary
  * - FULL_MESH: VC1 throughout mesh, traffic can traverse nodes within target mesh
  * - FULL_MESH_WITH_PASS_THROUGH: VC1 with inter-mesh routing (A→B→C)
+ * - VC0_ONLY: opt-in, no VC1; intermesh traffic rides VC0 end to end (not deadlock-safe in general)
  */
 struct IntermeshVCConfig {
     IntermeshVCMode mode = IntermeshVCMode::DISABLED;
@@ -82,6 +84,19 @@ struct IntermeshVCConfig {
         config.requires_vc1_mesh_pass_through = true;
         return config;
     }
+
+    // Opt-in (TT_METAL_FABRIC_INTERMESH_ON_VC0): intermesh traffic rides VC0 end to end and no VC1
+    // is built. A boundary router fans a landed packet out on its VC0 downstream senders, and the
+    // from-boundary slot on the mesh routers of a boundary chip sits on VC0. Not deadlock-safe for
+    // arbitrary cross-mesh traffic: only for workloads whose inter-mesh traffic cannot form a cycle.
+    static IntermeshVCConfig vc0_only() {
+        IntermeshVCConfig config;
+        config.mode = IntermeshVCMode::VC0_ONLY;
+        return config;
+    }
+
+    // True when intermesh traffic exists but is carried on VC0 (no VC1).
+    bool intermesh_on_vc0() const { return mode == IntermeshVCMode::VC0_ONLY; }
 };
 
 /**

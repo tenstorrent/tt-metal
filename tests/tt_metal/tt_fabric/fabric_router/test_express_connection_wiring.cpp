@@ -135,6 +135,35 @@ TEST(ExpressConnectionWiringTest, BoundaryProducerFeedsNothingOnVC0InEitherMode)
     }
 }
 
+TEST(ExpressConnectionWiringTest, BoundaryProducerWiresOnVC0WhenIntermeshIsOnVC0) {
+    // VC0-only intermesh moves the boundary producer's one carrier VC from VC1 to VC0; the egress
+    // set is unchanged.
+    for (const bool express : {false, true}) {
+        for (const auto egress : {RoutingDirection::N, RoutingDirection::E, RoutingDirection::S, RoutingDirection::W}) {
+            EXPECT_TRUE(wires_into(
+                RoutingDirection::Z,
+                EdgeCapability::INTERMESH,
+                egress,
+                EdgeCapability::INTRAMESH_CARDINAL,
+                ZPortRole::INTERMESH_BOUNDARY,
+                express,
+                /*vc=*/0,
+                /*intermesh_on_vc0=*/true))
+                << "express=" << express << " egress " << enchantum::to_string(egress);
+            EXPECT_FALSE(wires_into(
+                RoutingDirection::Z,
+                EdgeCapability::INTERMESH,
+                egress,
+                EdgeCapability::INTRAMESH_CARDINAL,
+                ZPortRole::INTERMESH_BOUNDARY,
+                express,
+                /*vc=*/1,
+                /*intermesh_on_vc0=*/true))
+                << "express=" << express << " egress " << enchantum::to_string(egress);
+        }
+    }
+}
+
 TEST(ExpressConnectionWiringTest, IntrameshXWiresIntoAnIntermeshEgressOnAnyLetter) {
     // Leaving the mesh is exempt from the intramesh X-to-Y restriction, regardless of seam letter.
     for (const auto x : {RoutingDirection::E, RoutingDirection::W}) {

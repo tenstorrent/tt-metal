@@ -26,6 +26,7 @@ namespace {
 // booleans -- the same objects the shape derivation takes.
 const IntermeshVCConfig k_full_mesh = IntermeshVCConfig::full_mesh();
 const IntermeshVCConfig k_full_mesh_pass_through = IntermeshVCConfig::full_mesh_with_pass_through();
+const IntermeshVCConfig k_vc0_only = IntermeshVCConfig::vc0_only();
 
 // The set of directions a router's receiver forwards to on one VC.
 std::set<RoutingDirection> target_directions(const RouterTurnSet& turn_set, uint32_t vc) {
@@ -195,9 +196,40 @@ TEST_F(RouterTurnSetTest, BoundaryTemplate_FansOutToEveryMeshDirectionOnVC1) {
     }
 }
 
+TEST_F(RouterTurnSetTest, BoundaryTemplate_Vc0Only_FansOutToEveryMeshDirectionOnVC0) {
+    // Without VC1 the same from-boundary fanout is emitted on VC0, and the VC0 receiver forwards
+    // onto it directly: no crossover.
+    const auto turn_set = turn_set_for_router(
+        Topology::Mesh,
+        RoutingDirection::Z,
+        chip_with_z(EdgeCapability::INTERMESH),
+        /*express_routing_enabled=*/false,
+        &k_vc0_only);
+
+    EXPECT_TRUE(turn_set[1].empty());
+    EXPECT_EQ(target_directions(turn_set, 0), k_all_cardinals);
+    expect_all_targets_on_vc(turn_set, 0, 0);
+}
+
+TEST_F(RouterTurnSetTest, Vc0Only_MeshRouterKeepsTheBoundaryTargetOnVC0AndNoVC1) {
+    // A mesh router on a boundary chip reaches the boundary on VC0 as before, and emits no VC1 turns.
+    const auto turn_set = turn_set_for_router(
+        Topology::Mesh,
+        RoutingDirection::N,
+        chip_with_z(EdgeCapability::INTERMESH),
+        /*express_routing_enabled=*/false,
+        &k_vc0_only);
+
+    auto expected = non_self_cardinals(RoutingDirection::N);
+    expected.insert(RoutingDirection::Z);
+    EXPECT_EQ(target_directions(turn_set, 0), expected);
+    expect_all_targets_on_vc(turn_set, 0, 0);
+    EXPECT_TRUE(turn_set[1].empty());
+}
+
 TEST_F(RouterTurnSetTest, BoundaryTemplate_Requires2DAndVC1) {
-    // Its entire shape is the from-boundary VC1 fanout, so without VC1 or on 1D the boundary
-    // router cannot be constructed.
+    // Its entire shape is the from-boundary fanout on an intermesh carrier VC, so without one (no
+    // VC1 and not VC0-only) or on 1D the boundary router cannot be constructed.
     EXPECT_ANY_THROW(turn_set_for_router(
         Topology::Mesh,
         RoutingDirection::Z,

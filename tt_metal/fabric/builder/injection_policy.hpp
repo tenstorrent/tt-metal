@@ -61,7 +61,8 @@ public:
         const PerDirectionCapabilities& capabilities,
         ZPortRole chip_z_role,
         RoutingDirection egress,
-        EdgeCapability egress_capability);
+        EdgeCapability egress_capability,
+        bool intermesh_on_vc0 = false);
 
     bool participates(uint32_t vc) const override;
     bool worker_is_injection(uint32_t vc) const override;
@@ -73,6 +74,7 @@ private:
     ZPortRole chip_z_role_;
     RoutingDirection egress_;
     EdgeCapability egress_capability_;
+    bool intermesh_on_vc0_;  // the boundary producer wires on VC0 instead of VC1
 };
 
 // One slot walk for every family: size from the mapping, worker from the policy, producers from
