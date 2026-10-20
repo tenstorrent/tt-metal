@@ -52,7 +52,7 @@
 #include "tt_metal/llrt/tt_cluster.hpp"
 #include "hostdevcommon/fabric_common.h"
 
-#include "umd/device/types/core_coordinates.hpp"
+#include <tt-umd/types/core_coordinates.hpp>
 
 namespace tt::tt_fabric {
 
