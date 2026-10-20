@@ -169,8 +169,8 @@ def _walk_sampling_the_pool(mesh_device, op_class, samples=None, **op_kwargs):
     return samples, pcc
 
 
-@pytest.mark.parametrize("mesh_device, device_params", PLACEMENTS, indirect=["mesh_device", "device_params"])
-def test_l1_small_stays_empty_as_the_sealed_set_grows(mesh_device, device_params):
+@pytest.mark.parametrize("mesh_device, device_params, sp_axis", PLACEMENTS, indirect=["mesh_device", "device_params"])
+def test_l1_small_stays_empty_as_the_sealed_set_grows(mesh_device, device_params, sp_axis):
     """The op's share of the shared pool has to be nothing, at every depth.
 
     The mesh opens with the tightest pool a K3 config gives it, which is what makes this
@@ -178,7 +178,7 @@ def test_l1_small_stays_empty_as_the_sealed_set_grows(mesh_device, device_params
     lands them here, and at an empty one it would fall back to main L1 and this would
     pass on an op that still grows without bound.
     """
-    samples, pcc = _walk_sampling_the_pool(mesh_device, TtAttnRes)
+    samples, pcc = _walk_sampling_the_pool(mesh_device, TtAttnRes, sp_axis=sp_axis, tp_axis=1 - sp_axis)
 
     footprints = sorted({footprint for _, footprint, _ in samples})
     assert footprints == [0], (
@@ -188,8 +188,8 @@ def test_l1_small_stays_empty_as_the_sealed_set_grows(mesh_device, device_params
     logger.info(f"{SEALS} seals, {2 * SEALS} reads, 0 B/bank of L1_SMALL: PCC {pcc:.7f}")
 
 
-@pytest.mark.parametrize("mesh_device, device_params", PLACEMENTS, indirect=["mesh_device", "device_params"])
-def test_implicit_semaphores_grow_the_pool_with_the_sealed_set(mesh_device, device_params):
+@pytest.mark.parametrize("mesh_device, device_params, sp_axis", PLACEMENTS, indirect=["mesh_device", "device_params"])
+def test_implicit_semaphores_grow_the_pool_with_the_sealed_set(mesh_device, device_params, sp_axis):
     """The control: the same walk, letting the collective allocate, has to cost the pool.
 
     This is what the pool being AttnRes's problem looks like, and it is the reason the
@@ -205,7 +205,7 @@ def test_implicit_semaphores_grow_the_pool_with_the_sealed_set(mesh_device, devi
     """
     samples = []
     try:
-        _walk_sampling_the_pool(mesh_device, TtAttnResImplicitSemaphores, samples)
+        _walk_sampling_the_pool(mesh_device, TtAttnResImplicitSemaphores, samples, sp_axis=sp_axis, tp_axis=1 - sp_axis)
     except RuntimeError as error:
         if not _exhausted_the_pool(error):
             raise
@@ -224,8 +224,8 @@ def test_implicit_semaphores_grow_the_pool_with_the_sealed_set(mesh_device, devi
     logger.info(f"{SEALS} seals, {2 * SEALS} reads, L1_SMALL {footprints[0]} -> {footprints[-1]} B/bank")
 
 
-@pytest.mark.parametrize("mesh_device, device_params", PLACEMENTS, indirect=["mesh_device", "device_params"])
-def test_a_shared_ccl_pool_costs_the_shared_l1_small_nothing_either(mesh_device, device_params):
+@pytest.mark.parametrize("mesh_device, device_params, sp_axis", PLACEMENTS, indirect=["mesh_device", "device_params"])
+def test_a_shared_ccl_pool_costs_the_shared_l1_small_nothing_either(mesh_device, device_params, sp_axis):
     """The same gate for the caller that hands the op the model's own semaphore pool.
 
     A model that already has a `TT_CCL` should pass it rather than let the op keep a
@@ -234,7 +234,9 @@ def test_a_shared_ccl_pool_costs_the_shared_l1_small_nothing_either(mesh_device,
     is only advice worth giving if it costs the pool the same nothing, and the handles
     reach a different code path to get there, so it is measured rather than assumed.
     """
-    samples, pcc = _walk_sampling_the_pool(mesh_device, TtAttnRes, tt_ccl=TT_CCL(mesh_device))
+    samples, pcc = _walk_sampling_the_pool(
+        mesh_device, TtAttnRes, tt_ccl=TT_CCL(mesh_device), sp_axis=sp_axis, tp_axis=1 - sp_axis
+    )
 
     footprints = sorted({footprint for _, footprint, _ in samples})
     assert footprints == [0], (

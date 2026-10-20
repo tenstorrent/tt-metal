@@ -66,10 +66,6 @@ READ_SITES = 24
 # per-layer part of the name lives inside it.
 CACHE_PREFIX = "attn_res"
 
-# The mesh axis `d` splits over. Named here and passed to the op, because a query sharded
-# on one axis and reduced on another is a mismatch nothing downstream can detect.
-TP_AXIS = 1
-
 # Layer 0 has no sealed snapshot so its pre-attention read is skipped, which is why 93
 # layers hold 187 queries and take 186 reads: 92 pre, 93 post, and one model-level read
 # after the stack.
@@ -77,8 +73,11 @@ LAYERS = 93
 
 PLACEMENTS = placements()
 
+# Each placement names its sequence axis; `d` splits over the other one. Both are passed to
+# the op, because a query sharded on one axis and reduced on another is a mismatch nothing
+# downstream can detect.
 on_placements = pytest.mark.parametrize(
-    "mesh_device, device_params", PLACEMENTS, indirect=["mesh_device", "device_params"]
+    "mesh_device, device_params, sp_axis", PLACEMENTS, indirect=["mesh_device", "device_params"]
 )
 
 pytestmark = blackhole_only
@@ -114,7 +113,7 @@ def _queries(op, checkpoint_dir, seed=0):
     return random_queries(rng, LAYERS), random_queries(rng, LAYERS), random_queries(rng, 1)[0]
 
 
-def _make_op(mesh_device, checkpoint_dir):
+def _make_op(mesh_device, checkpoint_dir, sp_axis):
     """The op, holding real queries whenever anything on the box names some.
 
     A complete tensorbin cache is enough on its own — that is the state a brought-up model
@@ -123,9 +122,12 @@ def _make_op(mesh_device, checkpoint_dir):
     real-weight path is the one the block hands every other module, rather than one this op
     alone would need special-casing for.
     """
-    build = lambda **kwargs: TtAttnRes(mesh_device, hidden_size=HIDDEN_SIZE, eps=EPS, tp_axis=TP_AXIS, **kwargs)
-    cache_path = attn_res_tensor_cache_path(mesh_device, TP_AXIS, checkpoint_dir)
-    cache_args = dict(num_layers=LAYERS, tensor_parallel_axis=TP_AXIS)
+    tp_axis = 1 - sp_axis
+    build = lambda **kwargs: TtAttnRes(
+        mesh_device, hidden_size=HIDDEN_SIZE, eps=EPS, sp_axis=sp_axis, tp_axis=tp_axis, **kwargs
+    )
+    cache_path = attn_res_tensor_cache_path(mesh_device, tp_axis, checkpoint_dir)
+    cache_args = dict(num_layers=LAYERS, tensor_parallel_axis=tp_axis)
 
     if not AttnResWeights.check_cache_complete(cache_path, CACHE_PREFIX, num_layers=LAYERS):
         if checkpoint_dir is None:
@@ -152,14 +154,14 @@ def _device_queries(op, queries):
 
 @on_placements
 @pytest.mark.parametrize("num_sealed", [1, 8], ids=["S1", "S8"])
-def test_read_matches_reference(mesh_device, num_sealed, device_params, kimi_k3_checkpoint_dir):
+def test_read_matches_reference(mesh_device, num_sealed, device_params, sp_axis, kimi_k3_checkpoint_dir):
     """A whole 12-layer block's reads at 640 rows per chip — production's schedule.
 
     `S = 1` is the narrowest sealed set the walk ever reads, and the one where the
     statistics cross unfolded; `S = 8` is where every candidate-axis kernel appears. Each
     site carries its own query and is scored against its own oracle, so a `merge` that
     read the wrong site's statistics would fail here rather than agree with itself."""
-    op = _make_op(mesh_device, kimi_k3_checkpoint_dir)
+    op = _make_op(mesh_device, kimi_k3_checkpoint_dir, sp_axis)
     num_tokens = PER_CHIP_TOKENS * op.sp_factor
     assert op.shard_width == HIDDEN_SIZE // op.tp_factor
 
@@ -184,7 +186,7 @@ def test_read_matches_reference(mesh_device, num_sealed, device_params, kimi_k3_
 
 
 @on_placements
-def test_sequence_axis_communicates_nothing(mesh_device, device_params, kimi_k3_checkpoint_dir):
+def test_sequence_axis_communicates_nothing(mesh_device, device_params, sp_axis, kimi_k3_checkpoint_dir):
     """The exact gate: same tokens, two placements, bit-identical outputs.
 
     Run A shards `640 * sp` tokens over the SP rows, so row 0 holds the first 640. Run B
@@ -196,7 +198,7 @@ def test_sequence_axis_communicates_nothing(mesh_device, device_params, kimi_k3_
     collective pointed at the SP axis mixes different tokens in run A and multiplies the
     statistics in run B; either way the two disagree. PCC against torch cannot see it,
     because both runs stay self-consistent within their own placement."""
-    op = _make_op(mesh_device, kimi_k3_checkpoint_dir)
+    op = _make_op(mesh_device, kimi_k3_checkpoint_dir, sp_axis)
     num_tokens = PER_CHIP_TOKENS * op.sp_factor
     running_sum, block_residual = random_case(generator(), num_tokens, 8)
     host = _queries(op, kimi_k3_checkpoint_dir)
