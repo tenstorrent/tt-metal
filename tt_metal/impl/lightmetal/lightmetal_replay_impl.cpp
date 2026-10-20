@@ -531,7 +531,16 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::FinishCommand
 
 void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::ProgramConstructorCommand* cmd) {
     log_debug(tt::LogMetalTrace, "LightMetalReplay(ProgramConstructor) global_id: {} ", cmd->global_id());
-    add_program_to_map(cmd->global_id(), std::make_shared<Program>());
+    // Bind the replayed program to the context of the device being replayed on (either the replay-owned unit mesh or
+    // the caller-provided device). Fall back to the default context only if no device has been set up.
+    std::shared_ptr<Program> program;
+    if (device_ != nullptr) {
+        const auto context_id = tt::tt_metal::extract_context_id(device_);
+        program = std::make_shared<Program>(std::make_shared<tt::tt_metal::detail::ProgramImpl>(context_id));
+    } else {
+        program = std::make_shared<Program>();
+    }
+    add_program_to_map(cmd->global_id(), std::move(program));
 }
 
 void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::CreateKernelCommand* cmd) {
