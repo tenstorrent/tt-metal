@@ -1,0 +1,10 @@
+[
+    {"prompt": "What is the capital of France, and what is one famous landmark there?"},
+    {"prompt": "Explain in two sentences why the sky is blue."},
+    {"prompt": "Write a haiku about a quiet morning by the sea."},
+    {"prompt": "List three differences between TCP and UDP."},
+    {"prompt": "What does the Python expression sorted(set('mississippi')) return, and why?"},
+    {"prompt": "Give a one-paragraph summary of how photosynthesis works."},
+    {"prompt": "A train leaves at 9:15 and arrives at 11:45. How long is the journey?"},
+    {"prompt": "Suggest a name for a coffee shop that also sells books, and explain the choice."}
+]

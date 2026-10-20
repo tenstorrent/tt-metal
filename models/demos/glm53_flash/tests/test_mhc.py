@@ -288,3 +288,39 @@ def test_decoder_collapse(mesh_device):
     h = dec.decode_forward(host_streams_to_device(x_in, mesh_device, pad_to=B), positions=dp, collapse=True)
     assert tuple(h.shape) == (1, 1, B, cfg.hidden_size), h.shape
     _cmp("decode_forward(collapse=True) vs head.collapse(streams)", ref_h, _down(h)[0, 0], PCC_BAR)
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+def test_mhc_exact_residual(mesh_device):
+    """``GLM53_MHC_EXACT`` (TtMHCFast(exact=)): the residual update ``new_j = post_j y + sum_i comb[i,j] x_i``
+    on fp32 streams that are NOT bf16-exact (the dump rows perturbed by 1e-3 relative noise, like the
+    residual after layer 0) vs the composite path's exact fp32 chain: exact=0 (one HiFi4 matmul) ~1e-3
+    rel rms, exact=2 (2-way bf16 split, 3 products) ~3e-6, exact=3 (3-way, 6 products) <= 1e-6."""
+    snapshot = default_snapshot_dir()
+    cfg = GLM53FlashConfig.from_hf_config_json(snapshot / "config.json")
+    kcfg = mhc_kernel_config(cfg)
+    raw = load_layer_raw(snapshot, LAYER, shard_headers(snapshot))
+    fn, base, scale = raw["hc_ffn_fn"].float(), raw["hc_ffn_base"].float(), raw["hc_ffn_scale"].float()
+    wrap = TtMHCWrap(mesh_device, kcfg, fn, base, scale)
+    fasts = {e: TtMHCFast(mesh_device, kcfg, fn, base, scale, exact=e) for e in (0, 2, 3)}
+    n, C = kcfg.n, kcfg.dim
+    g = torch.Generator().manual_seed(2)
+    bars = {0: 5e-3, 2: 1e-5, 3: 1e-6}
+    for T in (4, 32):
+        x = _streams(T, offset=300)
+        x = x + torch.randn(x.shape, generator=g) * 1e-3 * x.abs()  # fp32, not bf16-exact
+        xd = _up(mesh_device, x.reshape(1, 1, T, n * C))
+        _, post_w, comb_w = wrap.hc_pre(xd)
+        y = (_streams(T, offset=900)[:, :C] * 0.5).to(torch.bfloat16).float()
+        yd = _up(mesh_device, y.reshape(1, 1, T, C))
+        o_w = _down(wrap.hc_post(yd, xd, post_w, comb_w))[0, 0]
+        c_w = o_w.reshape(T, n, C).mean(1)
+        for e, fast in fasts.items():
+            o_f = _down(fast.hc_post(yd, xd, post_w, comb_w))[0, 0]
+            d = (o_w.double() - o_f.double()).norm() / o_w.double().norm()
+            logger.info(f"T={T} exact={e}: residual update vs composite rel rms {d:.3e}")
+            assert d <= bars[e], (e, d)
+            c_f = _down(fast.hc_post(yd, xd, post_w, comb_w, collapse=True))[0, 0]
+            dc = (c_w.double() - c_f.double()).norm() / c_w.double().norm()
+            logger.info(f"T={T} exact={e}: collapse vs composite mean rel rms {dc:.3e}")
+            assert dc <= bars[e], (e, dc)
