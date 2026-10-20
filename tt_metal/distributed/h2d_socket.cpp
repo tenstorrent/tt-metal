@@ -366,27 +366,33 @@ void H2DSocketImpl::init_receiver_tlb(const std::shared_ptr<MeshDevice>& mesh_de
     }
 
     // Write through a window of our own only when our actual write target lives inside one — ask for
-    // the window and test it rather than assuming based on core type. Anchored at 0, it maps a
-    // Tensix/Eth core's L1, so those writes land inside it; for a DRAM receiver the writes target
-    // device_addr + l1_offset (a high DRAM-L1 NOC address, e.g. 0x2000000000+…) which a window
-    // anchored at 0 does not reach, so the range test below fails, the window is released
-    // immediately, and we fall through to cluster.write_core. Also gated on a real device and
-    // Blackhole — on Wormhole B0 the device address space isn't fully mapped this way and a write
-    // may still need a per-write driver reconfig.
-    const uint64_t addr = static_cast<uint64_t>(aligned_data_buf_start_) + l1_offset;
+    // the window and test it rather than assuming based on core type. The window is anchored where
+    // the receiver's L1 starts in its NOC address space: 0 for a Tensix/Eth core, l1_offset (a high
+    // DRAM-L1 NOC address, e.g. 0x2000000000) for a DRAM core. Writes through it are plain stores;
+    // cluster.write_core may reconfigure a driver window on every write, which costs the Tensor
+    // prefetcher's request sockets microseconds per page. Gated on a real device and Blackhole — on
+    // Wormhole B0 the device address space isn't fully mapped this way and a write may still need a
+    // per-write driver reconfig.
     if (!cluster.is_mock_or_emulated() && env.get_hal().get_arch() == tt::ARCH::BLACKHOLE) {
         std::unique_ptr<tt::umd::IoWindow> window = cluster.get_driver()->create_io_window(
             recv_device_id,
             cluster.get_soc_desc(recv_device_id).get_coord_at(recv_virtual_core, tt::CoordSystem::TRANSLATED),
-            /*addr=*/0);
-        if (window != nullptr && addr + fifo_size_ <= window->get_size()) {
-            receiver_core_window_ = std::move(window);
+            /*addr=*/l1_offset);
+        if (window != nullptr) {
+            const uint64_t window_base = window->get_target_config().addr;
+            const uint64_t fifo_end = static_cast<uint64_t>(aligned_data_buf_start_) + l1_offset + fifo_size_;
+            const uint64_t config_end =
+                static_cast<uint64_t>(config_buffer_address_) + l1_offset + sizeof(receiver_socket_md);
+            if (window_base <= l1_offset && std::max(fifo_end, config_end) - window_base <= window->get_size()) {
+                receiver_core_window_ = std::move(window);
+            }
         }
     }
 
     if (receiver_core_window_ != nullptr) {
-        pcie_writer = [this, l1_offset](void* data, uint32_t num_bytes, uint64_t device_addr) {
-            receiver_core_window_->write_block(device_addr + l1_offset, data, num_bytes);
+        const uint64_t window_base = receiver_core_window_->get_target_config().addr;
+        pcie_writer = [this, l1_offset, window_base](void* data, uint32_t num_bytes, uint64_t device_addr) {
+            receiver_core_window_->write_block(device_addr + l1_offset - window_base, data, num_bytes);
         };
     } else {
         // Non-Blackhole, or no window reaches the target: write through UMD instead
@@ -789,9 +795,13 @@ void H2DSocketImpl::push_bytes(uint32_t num_bytes) {
     }
 }
 
-void H2DSocketImpl::notify_receiver() {
+void H2DSocketImpl::notify_receiver_unfenced() {
     uint32_t bytes_sent_addr = config_buffer_address_ + offsetof(receiver_socket_md, bytes_sent);
     pcie_writer(&bytes_sent_, sizeof(bytes_sent_), bytes_sent_addr);
+}
+
+void H2DSocketImpl::notify_receiver() {
+    notify_receiver_unfenced();
     tt_driver_atomics::sfence();
 }
 
@@ -879,6 +889,15 @@ void H2DSocketImpl::write(void* data, uint32_t num_pages) {
 }
 
 bool H2DSocketImpl::try_write(void* data, uint32_t num_pages) {
+    if (!try_stage(data, num_pages)) {
+        return false;
+    }
+    tt_driver_atomics::sfence();
+    this->notify_receiver();
+    return true;
+}
+
+bool H2DSocketImpl::try_stage(void* data, uint32_t num_pages) {
     validate_host_socket_access(rank_owns_endpoint_, recv_core_);
     TT_FATAL(page_size_ > 0, "Page size must be set before writing.");
     uint32_t num_bytes = num_pages * page_size_;
@@ -900,13 +919,11 @@ bool H2DSocketImpl::try_write(void* data, uint32_t num_pages) {
     auto data_addr = aligned_data_buf_start_ + write_ptr_;
     if (h2d_mode_ == H2DMode::HOST_PUSH) {
         pcie_writer(data, num_bytes, data_addr);
-        tt_driver_atomics::sfence();
     } else {
         uint32_t* data_ptr = host_buffer_.get() + (write_ptr_ / sizeof(uint32_t));
         std::memcpy(data_ptr, data, num_bytes);
     }
     this->push_bytes(num_bytes);
-    this->notify_receiver();
     return true;
 }
 
@@ -1074,6 +1091,10 @@ void H2DSocket::write(void* data, uint32_t num_pages) { pimpl_->write(data, num_
 
 bool H2DSocket::try_write_impl(void* data, uint32_t num_pages) { return pimpl_->try_write(data, num_pages); }
 
+bool H2DSocket::try_stage_impl(void* data, uint32_t num_pages) { return pimpl_->try_stage(data, num_pages); }
+
+void H2DSocket::notify_receiver_unfenced() { pimpl_->notify_receiver_unfenced(); }
+
 void H2DSocket::barrier(std::optional<uint32_t> timeout_ms) { pimpl_->barrier(timeout_ms); }
 
 std::vector<MeshCoreCoord> H2DSocket::get_active_cores() const { return {pimpl_->get_recv_core()}; }
@@ -1088,6 +1109,19 @@ namespace tt::tt_metal::experimental::detail {
 
 bool H2DSocketTryWriteAccess::try_write(distributed::H2DSocket& socket, void* data, uint32_t num_pages) {
     return socket.try_write_impl(data, num_pages);
+}
+
+bool H2DSocketTryWriteAccess::try_stage(distributed::H2DSocket& socket, void* data, uint32_t num_pages) {
+    return socket.try_stage_impl(data, num_pages);
+}
+
+void H2DSocketTryWriteAccess::publish_staged(ttsl::Span<distributed::H2DSocket* const> sockets) {
+    // The pages land before any receiver can see them counted.
+    tt_driver_atomics::sfence();
+    for (distributed::H2DSocket* socket : sockets) {
+        socket->notify_receiver_unfenced();
+    }
+    tt_driver_atomics::sfence();
 }
 
 std::unique_ptr<distributed::H2DSocket> H2DSocketDramRecvAccess::create(

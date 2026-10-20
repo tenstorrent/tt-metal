@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <memory>
 
+#include <tt_stl/span.hpp>
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
 
 namespace tt::tt_metal::distributed {
@@ -21,6 +22,8 @@ namespace tt::tt_metal::experimental::detail {
 // without exposing it on the public H2DSocket surface.
 struct H2DSocketTryWriteAccess {
     static bool try_write(distributed::H2DSocket& socket, void* data, uint32_t num_pages);
+    static bool try_stage(distributed::H2DSocket& socket, void* data, uint32_t num_pages);
+    static void publish_staged(ttsl::Span<distributed::H2DSocket* const> sockets);
 };
 
 // Non-blocking H2DSocket write. Returns true if `num_pages` were successfully
@@ -29,6 +32,18 @@ struct H2DSocketTryWriteAccess {
 // without blocking.
 inline bool try_write(distributed::H2DSocket& socket, void* data, uint32_t num_pages) {
     return H2DSocketTryWriteAccess::try_write(socket, data, num_pages);
+}
+
+// try_write split in two, for writing to many sockets at once: try_stage writes `num_pages` into one
+// socket (false, writing nothing, if its FIFO lacks room), and publish_staged makes everything staged
+// on `sockets` visible to their receivers. A staged write reaches its receiver only through
+// publish_staged. try_write fences each socket twice; a batch shares publish_staged's two fences.
+inline bool try_stage(distributed::H2DSocket& socket, void* data, uint32_t num_pages) {
+    return H2DSocketTryWriteAccess::try_stage(socket, data, num_pages);
+}
+
+inline void publish_staged(ttsl::Span<distributed::H2DSocket* const> sockets) {
+    H2DSocketTryWriteAccess::publish_staged(sockets);
 }
 
 // Friend access struct: lets this translation unit construct an H2DSocket that
@@ -48,8 +63,8 @@ struct H2DSocketDramRecvAccess {
 // Construct an H2DSocket for a DRAM-core recv. The caller owns the L1 layout
 // and passes pre-computed local L1 offsets for the socket's config buffer
 // (sizeof(receiver_socket_md) bytes) and data FIFO (fifo_size bytes plus PCIe
-// alignment slack). Host writes go via cluster.write_core with
-// dram_l1_noc_offset added to the local address. Always uses HOST_PUSH mode.
+// alignment slack). Host writes land at dram_l1_noc_offset plus the local address, through a
+// window anchored there on Blackhole silicon. Always uses HOST_PUSH mode.
 inline std::unique_ptr<distributed::H2DSocket> create_h2d_socket_for_dram_recv(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const distributed::MeshCoreCoord& recv_core,

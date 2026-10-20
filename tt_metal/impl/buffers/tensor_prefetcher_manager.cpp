@@ -1792,18 +1792,25 @@ void TensorPrefetcherManager::worker_loop() {
             }
         }
 
-        // Round-robin try_write with non-blocking attempts.
+        // Round-robin non-blocking writes: stage what fits, publish it, retry the rest.
         std::vector<TargetSocket> still_pending = std::move(remaining_target_sockets);
+        std::vector<distributed::H2DSocket*> staged;
+        staged.reserve(still_pending.size());
         while (!still_pending.empty()) {
             std::vector<TargetSocket> next_pending;
             next_pending.reserve(still_pending.size());
             for (const TargetSocket& target : still_pending) {
                 std::vector<uint8_t>& page = req.sender_pages[target.page_index];
-                if (experimental::detail::try_write(*sockets_[target.socket_index], page.data(), 1)) {
-                    // Wrote successfully.
+                if (experimental::detail::try_stage(*sockets_[target.socket_index], page.data(), 1)) {
+                    staged.push_back(sockets_[target.socket_index].get());
                 } else {
                     next_pending.push_back(target);
                 }
+            }
+            // One pair of fences publishes every page this pass wrote.
+            if (!staged.empty()) {
+                experimental::detail::publish_staged(staged);
+                staged.clear();
             }
             // If no socket drained this pass, every remaining target is back-pressured;
             // yield rather than busy-spinning at 100% CPU until a receiver frees a page.

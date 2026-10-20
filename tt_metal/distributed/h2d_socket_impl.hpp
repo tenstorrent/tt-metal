@@ -92,6 +92,10 @@ public:
     void write(void* data, uint32_t num_pages);
     // Non-blocking write; false when the FIFO cannot take `num_pages` right now.
     bool try_write(void* data, uint32_t num_pages);
+    // try_write without its store fences or receiver notification; see H2DSocket::try_stage_impl.
+    bool try_stage(void* data, uint32_t num_pages);
+    // notify_receiver without its store fence; publish_staged fences a batch of sockets once.
+    void notify_receiver_unfenced();
     void barrier(std::optional<uint32_t> timeout_ms);
 
 private:
