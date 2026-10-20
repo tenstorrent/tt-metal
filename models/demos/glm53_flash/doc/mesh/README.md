@@ -73,6 +73,19 @@ of the dump chain `L45_S128` are the reference of the output after the last buil
 Build cost: dense layer 2.7 s, MoE layer 43-48 s on the (1,4) mesh (host fp8 -> bf16 dequant 3-7 s, the rest
 is the bfp8 conversion + upload), i.e. ~32 min for 45 layers.
 
+## TP4 prefill timing per layer (`tests/test_mesh_prefill_perf.py`, (1,4) row-2 ring, S=1024, warmed wall)
+
+| layer | kind | TP4 prefill | single chip (README stage 1) | TP4 eager decode at 1024 |
+|---|---|---|---|---|
+| 0 | KDA+dense | 16.9 ms (60.7 K tok/s) | - | 17.0 ms/step |
+| 3 | DSA+MoE | 169.4 ms (6.0 K tok/s) | 325.7 ms | 19.8 ms/step |
+| 4 | KDA+MoE | 168.3 ms (6.1 K tok/s) | 297.8 ms | 18.6 ms/step |
+
+A single-row TTFT for a 1K prompt through all 45 layers would be ~7.1 s (3 x 17 + 42 x 169 ms), i.e. the MoE
+prefill dominates; the design's prefill engine (SP8 x TP4, dispatch-based experts) is what brings it down,
+and it is not wired yet (ttKDA is sequence-parallel on multi-row meshes). Eager decode steps carry host
+overhead; the traced step is 5.4 ms/layer (resident-model row above). Log `test_tp4_prefill_perf_row2.log`.
+
 ## Root cause of the TP4 sparse-row gap (2026-10-20)
 
 `test_tp4_sparse_prefill_layer3` first gave rows >= 2048 at 0.99777 (single chip 0.99990) while the

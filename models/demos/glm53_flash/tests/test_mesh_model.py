@@ -31,6 +31,10 @@ MESH = tuple(int(v) for v in os.environ.get("GLM53_MESH_SHAPE", "1,4").split(","
 B = int(os.environ.get("GLM53_MODEL_B", "2"))  # users per row
 S = int(os.environ.get("GLM53_MODEL_S", "32"))  # prompt tokens through the decode step (<= 128)
 N_PERF = int(os.environ.get("GLM53_MODEL_PERF_STEPS", "20"))
+_DT = {"bfp8": ttnn.bfloat8_b, "bfp4": ttnn.bfloat4_b}
+EXPERT_DTYPE = _DT[os.environ.get("GLM53_MODEL_EXPERT_DTYPE", "bfp8")]  # routed gate/up
+EXPERT_DOWN_DTYPE = _DT[os.environ.get("GLM53_MODEL_EXPERT_DOWN_DTYPE", "bfp8")]  # routed down
+PCC_BAR = float(os.environ.get("GLM53_MODEL_PCC_BAR", "0.99"))  # chain bar (bfp4 experts over 45 layers drift)
 
 
 def _layer_range() -> list[int]:
@@ -47,7 +51,18 @@ def _layer_range() -> list[int]:
 def test_mesh_model_chain_and_perf(mesh_device):
     layers = _layer_range()
     cfg = GLM53FlashConfig.from_hf_config_json(default_snapshot_dir() / "config.json")
-    model = GLM53MeshModel(mesh_device, cfg, layers, max_batch=B, max_seq_len=256)
+    model = GLM53MeshModel(
+        mesh_device,
+        cfg,
+        layers,
+        max_batch=B,
+        max_seq_len=256,
+        expert_dtype=EXPERT_DTYPE,
+        expert_down_dtype=EXPERT_DOWN_DTYPE,
+    )
+    logger.info(
+        f"model: mesh {MESH} layers {layers[0]}..{layers[-1]} B/row {B} experts {EXPERT_DTYPE}/{EXPERT_DOWN_DTYPE}"
+    )
     U = model.total_users
     prompt = torch.load(DUMP / "prefill_input.pt")["prompt_ids"].reshape(-1)[:S]  # the dump's random prompt
     ref = torch.load(DUMP / f"layer{layers[-1]}_prefill.pt")["x_out"][0, :S]  # HF chain rows [S, 4, 4096]
@@ -87,7 +102,7 @@ def test_mesh_model_chain_and_perf(mesh_device):
         f"prefill rows (S={S}): per-user pcc min {per_user[0]:.6f} median {per_user[len(per_user) // 2]:.6f} max {per_user[-1]:.6f}; "
         f"greedy id at position {S - 1} == host head argmax for {agree_last * 100:.0f} % of users (host id {int(host_top1[S - 1])})"
     )
-    assert per_user[0] > 0.99
+    assert per_user[0] > PCC_BAR
     # traced e2e decode perf: steady-state replays at a fixed position
     model.set_positions([S] * U)
     for _ in range(3):
