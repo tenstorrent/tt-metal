@@ -124,9 +124,12 @@ def ref_with_frame0(ref_latent: torch.Tensor, image_conds, stage: str = "s1") ->
     (sky; ex2 frames 1-8 on every seed, ex6 faint specks; task #135). Putting the first frame's own
     latent at reference frame 0 (sheet kept in frames 1..R-1) removes them (ex2 s45/s46, ex6 s45) with
     the same frame-0 fidelity. ``image_conds`` are (latent_frame, latent, strength); the cached
-    reference is never modified. LTX_REF_IMG0=0 keeps the sheet in every reference frame; s1 or s2 applies it
-    in that stage only (``stage`` names the caller's stage)."""
-    mode = os.environ.get("LTX_REF_IMG0", "1").strip()
+    reference is never modified. It applies in stage 2 only by default (LTX_REF_IMG0=s2): in both stages
+    (=1) the stage-1 reference goes scene -> sheet and the video copies that cut, the sheet filling most of
+    the clip (ltx25-ic ex4, 4 of 8 seeds; stage 2 only: 0 of 8, ex2 patches still gone; task #157).
+    LTX_REF_IMG0=0 keeps the sheet in every reference frame; s1 applies it in stage 1 only (``stage`` names
+    the caller's stage)."""
+    mode = os.environ.get("LTX_REF_IMG0", "s2").strip()
     if mode not in ("1", "true", "True", "s1", "s2") or mode in ("s1", "s2") and mode != stage:
         return ref_latent
     first = next((lat for idx, lat, *_ in image_conds or () if idx == 0), None)

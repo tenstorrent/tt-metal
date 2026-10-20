@@ -1653,14 +1653,16 @@ def test_keyframe_s1_sigmas_differ_between_tiers(monkeypatch):
 
 def test_ref_with_frame0_puts_the_first_frame_at_reference_frame_0(monkeypatch):
     """A sheet plus a frame-0 image: reference frame 0 becomes the image's latent, frames 1..R-1 keep the
-    sheet, and the cached reference is left alone. No frame-0 image or LTX_REF_IMG0=0: the sheet as is."""
+    sheet, and the cached reference is left alone; stage 2 only by default (s1, s2, 1 = both stages). No frame-0
+    image or LTX_REF_IMG0=0: the sheet as is."""
     from models.tt_dit.pipelines.ltx.pipeline_ltx_distilled import ref_with_frame0
 
     monkeypatch.delenv("LTX_REF_IMG0", raising=False)
     ref = torch.ones(1, 4, 3, 2, 2, dtype=torch.bfloat16)
     img0 = torch.full((1, 4, 1, 2, 2), 5.0)
     kf = torch.full((1, 4, 1, 2, 2), 7.0)
-    out = ref_with_frame0(ref, [(2, kf, 1.0), (0, img0, 1.0)])
+    assert ref_with_frame0(ref, [(2, kf, 1.0), (0, img0, 1.0)], "s1") is ref, "stage 2 only by default"
+    out = ref_with_frame0(ref, [(2, kf, 1.0), (0, img0, 1.0)], "s2")
     assert out.dtype == ref.dtype and out.shape == ref.shape
     assert torch.equal(out[:, :, 0:1], img0.to(ref.dtype))
     assert torch.equal(out[:, :, 1:], ref[:, :, 1:])
@@ -1674,6 +1676,9 @@ def test_ref_with_frame0_puts_the_first_frame_at_reference_frame_0(monkeypatch):
     assert torch.equal(ref_with_frame0(ref, [(0, img0, 1.0)], "s2")[:, :, 0:1], img0.to(ref.dtype))
     monkeypatch.setenv("LTX_REF_IMG0", "s1")
     assert ref_with_frame0(ref, [(0, img0, 1.0)], "s2") is ref
+    monkeypatch.setenv("LTX_REF_IMG0", "1")
+    for stage in ("s1", "s2"):
+        assert torch.equal(ref_with_frame0(ref, [(0, img0, 1.0)], stage)[:, :, 0:1], img0.to(ref.dtype))
     assert torch.equal(ref_with_frame0(ref, [(0, img0, 1.0)], "s1")[:, :, 0:1], img0.to(ref.dtype))
 
 # --- full coverage matrix: every model x tier x resolution, t2v AND i2v ---------------------------
