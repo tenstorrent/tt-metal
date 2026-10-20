@@ -37,6 +37,12 @@ namespace ttnn::operations::experimental::deepseek_prefill::update_padded_kv_cac
 // directly. Tiled RoPE is untilized with LLK inside the cache update.
 // No packed intermediate is allocated.
 //
+// Optional `page_table` + `page_size` (both forms): a paged cache. `cache` is a pool of page-sized entries
+// [num_pages * num_layers, heads, page_size, head_dim] and `page_table` is a uint32 ROW_MAJOR DRAM tensor
+// [rows, pages] (pages a multiple of 16) replicated across the mesh; `slot_idx` picks the request's row, whose entry q
+// is the physical page holding global positions [q * page_size, (q + 1) * page_size) on the chip that owns them
+// (0xFFFFFFFF = unmapped, not written). See device/kernels/paged_kv_table.hpp. Plain copy path only.
+//
 // In-place: returns a handle to `cache`. Two call forms (identical results):
 
 // `valid_global` (optional, both forms): the end of this chunk's REAL tokens. Given it, only the rows
@@ -57,7 +63,9 @@ ttnn::Tensor update_padded_kv_cache(
     std::optional<uint32_t> valid_global = std::nullopt,
     std::optional<uint32_t> tp_axis = std::nullopt,
     const std::optional<ttnn::Tensor>& rope = std::nullopt,
-    const std::optional<ttnn::Tensor>& scales = std::nullopt);
+    const std::optional<ttnn::Tensor>& scales = std::nullopt,
+    const std::optional<ttnn::Tensor>& page_table = std::nullopt,
+    std::optional<uint32_t> page_size = std::nullopt);
 
 // (2) Per-element-tensor form (traceable): `slot_idx`/`kv_actual_global` are read on-device by the
 //     writer kernel from two 1-element uint32 DRAM tensors ([1,1,1,1], ROW_MAJOR, replicated across
@@ -76,7 +84,9 @@ ttnn::Tensor update_padded_kv_cache(
     const std::optional<ttnn::Tensor>& valid_global = std::nullopt,
     std::optional<uint32_t> tp_axis = std::nullopt,
     const std::optional<ttnn::Tensor>& rope = std::nullopt,
-    const std::optional<ttnn::Tensor>& scales = std::nullopt);
+    const std::optional<ttnn::Tensor>& scales = std::nullopt,
+    const std::optional<ttnn::Tensor>& page_table = std::nullopt,
+    std::optional<uint32_t> page_size = std::nullopt);
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::update_padded_kv_cache
 

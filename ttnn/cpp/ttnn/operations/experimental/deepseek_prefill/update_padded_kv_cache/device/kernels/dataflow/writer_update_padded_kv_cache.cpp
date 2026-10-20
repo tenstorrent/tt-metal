@@ -2,14 +2,17 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "api/core_local_mem.h"
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/update_padded_kv_cache/device/kernels/dataflow/cache_dataflow_helpers.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/update_padded_kv_cache/device/kernels/paged_kv_table.hpp"
 #include "api/tensor/noc_traits.h"
 #include "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/pack_scaled_fp8_kv_cache/shared_with_host/packed_kv_layout.hpp"
 
 namespace packed = ttnn::operations::experimental::deepseek_prefill::pack_scaled_fp8_kv_cache;
+namespace paged = ttnn::operations::experimental::deepseek_prefill::paged_kv_table;
 
 namespace {
 
@@ -19,6 +22,62 @@ inline uint32_t local_cache_offset(uint32_t prefix, uint32_t coordinate, uint32_
     const uint32_t boundary = (prefix / chunk) % factor;
     const uint32_t offset = prefix % chunk;
     return slab * chunk + (coordinate < boundary ? chunk : (coordinate == boundary ? offset : 0));
+}
+
+// Inverse of the block-cyclic placement: the global page-row a chip-local cache row holds.
+inline uint32_t global_row_of_local(uint32_t local_row, uint32_t coordinate, uint32_t factor, uint32_t chunk) {
+    return ((local_row / chunk) * factor + coordinate) * chunk + local_row % chunk;
+}
+
+// The two runs of the request's page-table row one write can touch, loaded into L1. A chip writes one contiguous
+// run of local rows, which crosses at most one slab boundary; each slab is one contiguous run of logical pages.
+struct PageWindows {
+    uint32_t base[2] = {0, 0};
+    uint32_t count[2] = {0, 0};
+    uint32_t l1[2] = {0, 0};
+
+    uint32_t lookup(uint32_t page) const {
+        for (uint32_t w = 0; w < 2; ++w) {
+            if (page - base[w] < count[w]) {
+                return CoreLocalMem<volatile uint32_t>(l1[w])[page - base[w]];
+            }
+        }
+        return paged::kUnmappedPage;
+    }
+};
+
+// Loads the logical pages [first, last) of `row` into window `w`. Reads start on a DRAM-aligned entry and cover
+// whole aligned groups, which stay inside the row because the host requires its width to be a whole number of groups.
+template <typename TableAccessor>
+inline void load_page_window(
+    Noc& noc,
+    const TableAccessor& table,
+    PageWindows& windows,
+    uint32_t w,
+    uint32_t row,
+    uint32_t first,
+    uint32_t last) {
+    constexpr uint32_t align = paged::kTableEntriesPerRead;
+    const uint32_t aligned_first = first - first % align;
+    const uint32_t entries = (last - aligned_first + align - 1) / align * align;
+    noc.async_read(
+        table,
+        CoreLocalMem<uint32_t>(windows.l1[w]),
+        entries * sizeof(uint32_t),
+        {.page_id = row, .offset_bytes = aligned_first * static_cast<uint32_t>(sizeof(uint32_t))},
+        {});
+    windows.base[w] = aligned_first;
+    windows.count[w] = entries;
+}
+
+// The page-table accessor follows the cache accessor and, on the metadata path, the metadata accessor.
+template <bool HasMeta, uint32_t AfterCache>
+constexpr uint32_t page_table_args_offset() {
+    if constexpr (HasMeta) {
+        return TensorAccessorArgs<AfterCache>().next_compile_time_args_offset();
+    } else {
+        return AfterCache;
+    }
 }
 
 }  // namespace
@@ -39,16 +98,20 @@ inline uint32_t local_cache_offset(uint32_t prefix, uint32_t coordinate, uint32_
 // Set, the chip writes only the page-rows holding real tokens; unset, the whole padded slab.
 //
 // Compile args: [0]=cb_id_out, [1]=has_metadata, [2]=cb_id_meta, [3]=tile_height, [4]=has_valid,
-// [5]=untilize, [6]=block_pages, [7]=scaled-FP8 packing, [8]=tiled RoPE CB, [9..]=cache accessor, then (metadata path
-// only) ONE metadata accessor (the 1-element tensors share an identical layout, so the same accessor serves every
-// read). tile_height divides kv tokens into the page-row unit (TILE_HEIGHT for TILE, 1 for ROW_MAJOR), so one kernel
-// handles both layouts.
+// [5]=untilize, [6]=block_pages, [7]=scaled-FP8 packing, [8]=tiled RoPE CB, [9]=paged, [10]=page-table CB,
+// [11..]=cache accessor, then (metadata path only) ONE metadata accessor (the 1-element tensors share an identical
+// layout, so the same accessor serves every read), then (paged only) the page-table accessor. tile_height divides kv
+// tokens into the page-row unit (TILE_HEIGHT for TILE, 1 for ROW_MAJOR), so one kernel handles both layouts.
+//
+// Paged: `cache` is a pool of page-sized entries (paged_kv_table.hpp) and `slot_idx` selects the request's page-table
+// row. Common args [12]=page-table binding, [13]=page-rows per page, [14]=row width in pages, [15]=pool pages. A row
+// whose page is unmapped (or outside the pool) is not written.
 //
 // The body lives in a template on `HasMeta` so the `if constexpr` below actually DISCARDS (does not
 // instantiate) the unused branch — `kernel_main` is not a template, so an `if constexpr` there would
 // still instantiate the metadata branch's TensorAccessor and fail to compile the scalar program.
 // `HasValid` is a template param so the no-clamp program keeps the original loop.
-template <bool HasMeta, bool HasValid, bool HasRope, bool HasScaled, bool TiledRope>
+template <bool HasMeta, bool HasValid, bool HasRope, bool HasScaled, bool TiledRope, bool Paged>
 static void run_writer() {
     // Index 11 follows the eleven common args in update_padded_kv_cache_device_operation.cpp,
     // where writer_kernel.emplace_common_runtime_args({dst_buffer}) appends the destination binding.
@@ -70,7 +133,7 @@ static void run_writer() {
     constexpr uint32_t cb_id_out = get_compile_time_arg_val(0);
     constexpr uint32_t tile_height = get_compile_time_arg_val(3);
     // [4] is has_valid, consumed as the HasValid template param.
-    constexpr auto cache_args = TensorAccessorArgs<9>();
+    constexpr auto cache_args = TensorAccessorArgs<11>();
 
     Noc noc;
 
@@ -138,6 +201,58 @@ static void run_writer() {
 
     const uint32_t start_idx = batch_idx * cache_CHtWt + update_idxt * Wt;
 
+    static_assert(!(Paged && (HasRope || HasScaled || TiledRope)), "a paged cache takes the plain copy path only");
+    PageWindows windows;
+    uint32_t page_rows = 1;
+    uint32_t pool_pages = 0;
+    if constexpr (Paged) {
+        constexpr auto table_args =
+            TensorAccessorArgs<page_table_args_offset<HasMeta, cache_args.next_compile_time_args_offset()>()>();
+        const auto table = TensorAccessor(table_args, get_common_arg_val<uint32_t>(12));
+        page_rows = get_common_arg_val<uint32_t>(13);
+        const uint32_t table_width = get_common_arg_val<uint32_t>(14);
+        pool_pages = get_common_arg_val<uint32_t>(15);
+
+        // DRAM reads need a DRAM-aligned L1 destination; the host pads the CB by one alignment unit.
+        CircularBuffer cb_table(get_compile_time_arg_val(10));
+        cb_table.reserve_back(1);
+        constexpr uint32_t align_bytes = paged::kTableEntriesPerRead * sizeof(uint32_t);
+        windows.l1[0] = (cb_table.get_write_ptr() + align_bytes - 1) / align_bytes * align_bytes;
+        windows.l1[1] = windows.l1[0] + paged::window_capacity(chunk_local_t, page_rows) * sizeof(uint32_t);
+
+        if (rows_to_write > 0) {
+            const auto page_of = [&](uint32_t local_row) {
+                return global_row_of_local(local_row, my_sp_coord, sp_factor, chunk_local_t) / page_rows;
+            };
+            // Local rows [lo, hi] of one slab -> one window; pages past the row's width stay unmapped.
+            const auto load = [&](uint32_t w, uint32_t lo, uint32_t hi) {
+                const uint32_t first_page = page_of(lo);
+                const uint32_t end_page = page_of(hi) + 1 < table_width ? page_of(hi) + 1 : table_width;
+                if (first_page < end_page) {
+                    load_page_window(noc, table, windows, w, slot_idx, first_page, end_page);
+                }
+            };
+            const uint32_t first = update_idxt;
+            const uint32_t last = update_idxt + rows_to_write - 1;
+            const uint32_t slab_last = (first / chunk_local_t + 1) * chunk_local_t - 1;
+            load(0, first, last < slab_last ? last : slab_last);
+            if (last > slab_last) {
+                load(1, slab_last + 1, last);
+            }
+            // Completed once the first input page is in, so the table read hides under the reader's.
+        }
+        cb_table.push_back(1);
+    }
+    bool table_pending = Paged && rows_to_write > 0;
+    // Paged rows are mapped incrementally: a core walks consecutive local rows, so the divisions run only when a
+    // run starts (or wraps to the next head), and a slab boundary jumps over the other chips' pages.
+    uint32_t next_row = 0;
+    uint32_t row_in_chunk = 0;
+    uint32_t row_in_page = 0;
+    uint32_t logical_page = 0;
+    uint32_t physical = paged::kUnmappedPage;
+    const uint32_t slab_page_jump = Paged ? 1 + (sp_factor - 1) * (chunk_local_t / page_rows) : 0;
+
     const uint32_t page_bytes = get_local_cb_interface(cb_id_out).fifo_page_size;
     CircularBuffer cb(cb_id_out);
 
@@ -155,8 +270,39 @@ static void run_writer() {
     for (uint32_t blk = 0; blk < num_blocks; ++blk) {
         const uint32_t block = core_blocks_written + blk;
         const uint32_t row = block % input_Ht;
-        const uint32_t page0 = start_idx + (block / input_Ht) * cache_HtWt + row * Wt;
-        const bool keep = !HasValid || row < rows_to_write;
+        uint32_t page0;
+        bool mapped = true;
+        if constexpr (Paged) {
+            if (table_pending) {
+                cb.wait_front(1);
+                noc.async_read_barrier();
+                invalidate_l1_cache();
+                table_pending = false;
+            }
+            if (blk == 0 || row != next_row) {
+                const uint32_t local_row = update_idxt + row;
+                const uint32_t global_row = global_row_of_local(local_row, my_sp_coord, sp_factor, chunk_local_t);
+                row_in_chunk = local_row % chunk_local_t;
+                row_in_page = global_row % page_rows;
+                logical_page = global_row / page_rows;
+                physical = windows.lookup(logical_page);
+            } else if (++row_in_chunk == chunk_local_t) {
+                row_in_chunk = 0;
+                row_in_page = 0;
+                logical_page += slab_page_jump;
+                physical = windows.lookup(logical_page);
+            } else if (++row_in_page == page_rows) {
+                row_in_page = 0;
+                physical = windows.lookup(++logical_page);
+            }
+            next_row = row + 1;
+            mapped = physical < pool_pages;
+            page0 =
+                (physical * num_layers + layer_idx) * cache_CHtWt + (block / input_Ht) * cache_HtWt + row_in_page * Wt;
+        } else {
+            page0 = start_idx + (block / input_Ht) * cache_HtWt + row * Wt;
+        }
+        const bool keep = (!HasValid || row < rows_to_write) && mapped;
         // The copy path consumes one page at a time; untilize publishes a complete tile-row block.
         constexpr uint32_t pages_per_batch = (HasRope || HasScaled) ? get_compile_time_arg_val(6) : onepage;
         constexpr uint32_t rows_per_batch = (HasRope || TiledRope) ? tile_height : 1;
@@ -235,5 +381,6 @@ void kernel_main() {
     constexpr bool has_rope = get_compile_time_arg_val(5);
     constexpr bool has_scaled = get_compile_time_arg_val(7) != 0;
     constexpr bool tiled_rope = get_compile_time_arg_val(8) != 0;
-    run_writer<has_metadata, has_valid, has_rope, has_scaled, tiled_rope>();
+    constexpr bool paged = get_compile_time_arg_val(9) != 0;
+    run_writer<has_metadata, has_valid, has_rope, has_scaled, tiled_rope, paged>();
 }
