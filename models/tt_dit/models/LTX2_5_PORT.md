@@ -381,9 +381,11 @@ text stack). Remove them unless a use appears.
   uploads it, and the result is `ttnn.copy`'d back into the latent so the address-baked
   `inner_step` trace stays valid. No parity test yet for the tt step vs the host reference
   `_euler_ancestral_step` — worth adding.
-- **Ancestral branch ignores frame-0 pinning.** The `ancestral` path in `_denoise_no_guidance`
-  does not call `_post_process_latent_tt`, so an image-conditioned stage 1 would silently drop
-  its conditioning. T2V is unaffected; wire the pin (or assert) when 2.5 I2V is brought up.
+- **Ancestral branch pins the conditioning (landed).** The `ancestral` path in
+  `_denoise_no_guidance` passes `_post_process_latent_tt` as the x0 pin to
+  `_euler_ancestral_step_tt`, like upstream's `post_process_latent` before every sampler step.
+  Without it an image-conditioned stage 1 dropped its image and stage 2's re-pin crossfaded back
+  over frames 1-8 (task #346, 1080p-portrait sulphur25 i2v on cs04).
 - **`use_prompt_adaln_single`.** Absent from the 2.5 config, so it defaults true — same as
   2.3, no work. Separately, our `None` branch skips the static `prompt_scale_shift_table`,
   which is not upstream's `false` behaviour.

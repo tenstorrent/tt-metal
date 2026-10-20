@@ -217,16 +217,21 @@ def _euler_ancestral_step(
     *,
     eta: float = ANCESTRAL_ETA,
     s_noise: float = ANCESTRAL_S_NOISE,
+    pin=None,
 ) -> torch.Tensor:
     """Rectified-flow ancestral Euler step (ltx_core ``EulerAncestralDiffusionStep``).
 
-    ``velocity`` is the flow-matching velocity; ``denoised = sample - sigma * velocity``.
+    ``velocity`` is the flow-matching velocity; ``denoised = sample - sigma * velocity``. ``pin``
+    (conditioned gens) maps the denoised estimate onto the clean conditioning latent before the
+    step, as upstream's ``post_process_latent`` does for every sampler.
     Host float32 in/out; caller owns dtype cast. Kept for parity checks; the denoise loop
     uses ``_euler_ancestral_step_tt`` on device.
     """
     x = sample.float()
     vel = velocity.float()
     denoised = x - sigma * vel
+    if pin is not None:
+        denoised = pin(denoised)
     if sigma_next == 0.0:
         return denoised
     if eta > 0.0 and noise is None:
@@ -270,17 +275,27 @@ def _euler_ancestral_step_tt(
     sigma: float,
     sigma_next: float,
     tt_noise: ttnn.Tensor | None,
+    pin=None,
 ) -> None:
-    """In-place ancestral Euler into ``tt_x`` (SP-sharded). Matches ``_euler_ancestral_step``."""
+    """In-place ancestral Euler into ``tt_x`` (SP-sharded). Matches ``_euler_ancestral_step``,
+    ``pin`` included: an image-conditioned gen pins the x0 estimate before the step."""
     vel = ttnn.typecast(tt_vel, ttnn.bfloat16)
     ttnn.multiply_(vel, pad_mask)
     coeffs = _ancestral_step_coeffs(sigma, sigma_next)
     if coeffs is None:
         # x0 estimate: x - sigma * vel
         x_next = ttnn.subtract(tt_x, ttnn.multiply(vel, sigma))
+        if pin is not None:
+            pinned = pin(x_next)
+            ttnn.deallocate(x_next)
+            x_next = pinned
     else:
         sigma_down_ratio, alpha_scale, noise_scale = coeffs
         denoised = ttnn.subtract(tt_x, ttnn.multiply(vel, sigma))
+        if pin is not None:
+            pinned = pin(denoised)
+            ttnn.deallocate(denoised)
+            denoised = pinned
         x_next = ttnn.add(
             ttnn.multiply(tt_x, sigma_down_ratio),
             ttnn.multiply(denoised, 1.0 - sigma_down_ratio),
@@ -1711,8 +1726,14 @@ class LTXDistilledPipeline(LTXPipeline):
                         noise_a[:, :, audio_N_real:, :] = 0.0
                     tt_noise_v = bf16_tensor(noise_v, device=self.mesh_device, mesh_axis=sp_axis, shard_dim=2)
                     tt_noise_a = bf16_tensor(noise_a, device=self.mesh_device, mesh_axis=sp_axis, shard_dim=2)
+                # A conditioned gen (i2v frame, keyframe, reference sheet) pins the x0 estimate before the
+                # ancestral step, as the deterministic branch below does. Unpinned, stage 1 drifted off the
+                # image into its own scene and stage 2's re-pin crossfaded back over frames 1-8 (task #346).
+                video_pin = (
+                    (lambda x0: self._post_process_latent_tt(x0, tt_i2v_mask, tt_i2v_clean)) if image_cond else None
+                )
                 _euler_ancestral_step_tt(
-                    state.tt_video_lat, v_out, state.tt_video_pad_mask, sigma, sigma_next, tt_noise_v
+                    state.tt_video_lat, v_out, state.tt_video_pad_mask, sigma, sigma_next, tt_noise_v, pin=video_pin
                 )
                 _euler_ancestral_step_tt(
                     state.tt_audio_lat, a_out, state.tt_audio_pad_mask, sigma, sigma_next, tt_noise_a
