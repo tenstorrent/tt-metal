@@ -33,7 +33,13 @@ Tensor high_bw_all_gather(
     const std::optional<Tensor>& gathered_prefix_tensor = std::nullopt,
     uint32_t gathered_slab_global = 0,
     const std::optional<GlobalSemaphore>& ready_semaphore = std::nullopt,
-    const std::optional<GlobalSemaphore>& data_valid_semaphore = std::nullopt);
+    const std::optional<GlobalSemaphore>& data_valid_semaphore = std::nullopt,
+    // Paged source: `input_tensor` is a pool of page-sized entries [num_pages * batch_slot_num_layers, 1,
+    // page_size, D] and the request's row of `page_table` (selected by input_batch_index or
+    // input_batch_index_tensor) maps each global logical page to its physical page on the owning rank.
+    // gathered_slab_global (chunk_local * ranks) is required; the output keeps its contiguous layout.
+    const std::optional<Tensor>& page_table = std::nullopt,
+    uint32_t page_size = 0);
 
 }  // namespace ttnn::operations::experimental::high_bw_all_gather
 

@@ -102,6 +102,15 @@ void bind_experimental_high_bw_all_gather_operation(nb::module_& mod) {
                 data_valid_semaphore: Optional caller-owned persistent relay/completion semaphore.
                     Supplying both semaphore handles selects the allocation-free, no-internal-sync
                     dispatch path intended for sub-device overlap.
+                page_table: Selects a paged source. ``input_tensor`` is then a pool of page-sized
+                    entries ``[num_pages * batch_slot_num_layers, 1, page_size, D]`` and ``page_table``
+                    a uint32 ROW_MAJOR DRAM tensor ``[rows, pages]`` (``pages`` a multiple of 16),
+                    replicated. The request's row (``input_batch_index`` or ``input_batch_index_tensor``)
+                    maps global logical page ``q`` (positions ``[q * page_size, (q + 1) * page_size)``)
+                    to the physical page holding it on the rank that owns it; 0xFFFFFFFF is unmapped and
+                    is not read. ``batch_slot_layer_idx`` selects the layer and ``gathered_slab_global``
+                    is required. The output keeps the contiguous layout of a slot gather.
+                page_size: Tokens per page, with ``page_table``. A multiple of 32.
         )doc",
         &high_bw_all_gather,
         nb::arg("input_tensor").noconvert(),
@@ -120,7 +129,9 @@ void bind_experimental_high_bw_all_gather_operation(nb::module_& mod) {
         nb::arg("gathered_prefix_tensor") = nb::none(),
         nb::arg("gathered_slab_global") = 0,
         nb::arg("ready_semaphore") = nb::none(),
-        nb::arg("data_valid_semaphore") = nb::none());
+        nb::arg("data_valid_semaphore") = nb::none(),
+        nb::arg("page_table").noconvert() = nb::none(),
+        nb::arg("page_size") = 0);
 }
 
 }  // namespace ttnn::operations::experimental::high_bw_all_gather::detail

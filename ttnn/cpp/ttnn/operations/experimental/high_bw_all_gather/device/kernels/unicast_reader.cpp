@@ -15,9 +15,76 @@
 #include "unicast_common.hpp"
 #include "high_bw_all_gather_metadata.hpp"
 #include "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/metadata_scalar_read.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/update_padded_kv_cache/device/kernels/paged_kv_table.hpp"
 #include "high_bw_all_gather_partition.hpp"
 
 using address_t = uint32_t;
+
+namespace paged_kv = ttnn::operations::experimental::deepseek_prefill::paged_kv_table;
+
+// Logical source page -> physical pool page of a paged source. A worker visits its pages in increasing order, so
+// the request's page-table row is streamed through one L1 window that is refilled when a page falls past it.
+template <uint32_t PageRows, uint32_t RowPages, uint32_t ChunkRows, uint32_t TableWidth, uint32_t WindowEntries>
+struct PagedSource {
+    uint32_t window_l1 = 0;
+    uint32_t row = 0;
+    uint32_t rank = 0;
+    uint32_t num_ranks = 1;
+    uint32_t pool_pages = 0;
+    uint32_t layer = 0;
+    uint32_t num_layers = 1;
+    uint32_t base = 0;
+    uint32_t count = 0;
+
+    // Returns kUnmappedPage for a page the row does not map (or one outside the pool).
+    template <typename Table>
+    uint32_t physical_page(Noc& noc, const Table& table, uint32_t logical_page) {
+        const uint32_t local_row = logical_page / RowPages;
+        const uint32_t global_row = ((local_row / ChunkRows) * num_ranks + rank) * ChunkRows + local_row % ChunkRows;
+        const uint32_t q = global_row / PageRows;
+        if (q >= TableWidth) {
+            return paged_kv::kUnmappedPage;
+        }
+        if (q - base >= count) {
+            base = q - q % paged_kv::kTableEntriesPerRead;
+            count = TableWidth - base < WindowEntries ? TableWidth - base : WindowEntries;
+            noc.async_read(
+                table,
+                CoreLocalMem<uint32_t>(window_l1),
+                count * sizeof(uint32_t),
+                {.page_id = row, .offset_bytes = base * static_cast<uint32_t>(sizeof(uint32_t))},
+                {});
+            noc.async_read_barrier();
+            invalidate_l1_cache();
+        }
+        const uint32_t physical = CoreLocalMem<volatile uint32_t>(window_l1)[q - base];
+        if (physical >= pool_pages) {
+            return paged_kv::kUnmappedPage;
+        }
+        return ((physical * num_layers + layer) * PageRows + global_row % PageRows) * RowPages +
+               logical_page % RowPages;
+    }
+};
+
+// A contiguous source builds no page-table accessor: its guarded accessor arguments are not a table's.
+template <bool Paged, typename Args>
+inline auto make_page_table(const Args& args, uint32_t address) {
+    if constexpr (Paged) {
+        return TensorAccessor(args, address);
+    } else {
+        return 0u;
+    }
+}
+
+// Templated so the paged translation is not instantiated for a contiguous source.
+template <bool Paged, typename PagedT, typename Table>
+inline uint32_t source_page_of(PagedT& paged, Noc& noc, const Table& table, uint32_t page) {
+    if constexpr (Paged) {
+        return paged.physical_page(noc, table, page);
+    } else {
+        return page;
+    }
+}
 
 // Device 2.0 Semaphore only constructs from a fixed semaphore ID. Global
 // semaphores are allocated dynamically and arrive as an L1 address, for which
@@ -96,6 +163,18 @@ void kernel_main() {
     constexpr uint32_t ext_packet_size = get_compile_time_arg_val(ext_base + 13);
     constexpr uint32_t cb_meta_writer_id = get_compile_time_arg_val(ext_base + 14);
     constexpr auto gathered_prefix_meta_args = TensorAccessorArgs<extent_from_metadata ? ext_ct_base + 16 : 0>();
+    // Paged-source block. Same guarded-index convention.
+    constexpr uint32_t paged_ct_base =
+        extent_from_metadata ? gathered_prefix_meta_args.next_compile_time_args_offset() : ext_ct_base + 16;
+    constexpr bool paged_source = get_compile_time_arg_val(paged_ct_base) != 0;
+    constexpr uint32_t paged_base = paged_source ? paged_ct_base + 1 : 0;
+    constexpr uint32_t cb_page_table_id = get_compile_time_arg_val(paged_base + 0);
+    constexpr uint32_t page_rows = get_compile_time_arg_val(paged_base + 1);
+    constexpr uint32_t row_pages = get_compile_time_arg_val(paged_base + 2);
+    constexpr uint32_t chunk_rows = get_compile_time_arg_val(paged_base + 3);
+    constexpr uint32_t table_width = get_compile_time_arg_val(paged_base + 4);
+    constexpr uint32_t window_entries = get_compile_time_arg_val(paged_base + 5);
+    constexpr auto page_table_args = TensorAccessorArgs<paged_source ? paged_ct_base + 7 : 0>();
 
     constexpr uint32_t inputs_per_cb_page = cb_page_size / input_page_size;
     constexpr uint32_t outputs_per_cb_page = cb_page_size / output_chunk_size;
@@ -149,14 +228,21 @@ void kernel_main() {
     //   user_id * batch_slot_num_layers + batch_slot_layer_idx
     // where the layer terms are RUNTIME args (see above): they are layer-constant, and making them
     // compile-time would fork the program per layer and exhaust L1_SMALL on the semaphores.
+    // A paged source selects the request's page-table row instead: the user id (or the scalar row) indexes
+    // the table and every page is translated below, so its page base stays 0.
     uint32_t input_page_base = 0;
+    uint32_t page_table_row = get_common_arg_val<uint32_t>(7);
     if constexpr (batch_index_from_metadata) {
         CircularBuffer cb_meta(cb_meta_id);
         cb_meta.reserve_back(1);
         const uint32_t meta_l1 = cb_meta.get_write_ptr();
         const uint32_t user_id =
             trace_metadata::read_metadata_scalar_u32(noc, batch_index_meta_args, batch_index_meta_addr, meta_l1);
-        input_page_base = (user_id * batch_slot_num_layers + batch_slot_layer_idx) * pages_per_batch_slot;
+        if constexpr (paged_source) {
+            page_table_row = user_id;
+        } else {
+            input_page_base = (user_id * batch_slot_num_layers + batch_slot_layer_idx) * pages_per_batch_slot;
+        }
     }
     // Active-extent derivation. The host built this program for the WORST-CASE extent (so worker
     // selection, CB depth, schedule choice and semaphores are all fixed and capturable) and left every
@@ -247,6 +333,22 @@ void kernel_main() {
         ready_sem.consume(1);
     }
 
+    // Paged source: [6] page table, [8] this rank, [9] pool pages (common args).
+    PagedSource<page_rows, row_pages, chunk_rows, table_width, window_entries> paged{};
+    if constexpr (paged_source) {
+        CircularBuffer cb_table(cb_page_table_id);
+        cb_table.reserve_back(1);
+        constexpr uint32_t align_bytes = paged_kv::kTableEntriesPerRead * sizeof(uint32_t);
+        paged.window_l1 = (cb_table.get_write_ptr() + align_bytes - 1) / align_bytes * align_bytes;
+        paged.row = page_table_row;
+        paged.rank = get_common_arg_val<uint32_t>(8);
+        paged.num_ranks = num_devices;
+        paged.pool_pages = get_common_arg_val<uint32_t>(9);
+        paged.layer = batch_slot_layer_idx;
+        paged.num_layers = batch_slot_num_layers;
+    }
+    const auto page_table = make_page_table<paged_source>(page_table_args, get_common_arg_val<uint32_t>(6));
+
     uint32_t stripe = initial_stripe;
     for (uint32_t iter = 0; iter < num_iters; ++iter) {
         if (iter == 0) {
@@ -257,13 +359,18 @@ void kernel_main() {
                 cb.reserve_back(1);
                 uint32_t l1_write_addr = cb.get_write_ptr();
                 for (uint32_t i = 0; i < inputs_per_cb_page && page < page_end; ++i) {
-                    noc.async_read(
-                        input_tensor_accessor,
-                        CoreLocalMem<uint32_t>(l1_write_addr),
-                        input_page_size,
-                        {.page_id = page},
-                        {},
-                        {});
+                    const uint32_t source_page = source_page_of<paged_source>(paged, noc, page_table, page);
+                    // An unmapped page is not read, but its CB slot is still produced: the relay and
+                    // data_valid counts are page counts, and a short count would hang the ring.
+                    if (!paged_source || source_page != paged_kv::kUnmappedPage) {
+                        noc.async_read(
+                            input_tensor_accessor,
+                            CoreLocalMem<uint32_t>(l1_write_addr),
+                            input_page_size,
+                            {.page_id = source_page},
+                            {},
+                            {});
+                    }
                     l1_write_addr += input_page_size;
                     page += slice_step;
                 }

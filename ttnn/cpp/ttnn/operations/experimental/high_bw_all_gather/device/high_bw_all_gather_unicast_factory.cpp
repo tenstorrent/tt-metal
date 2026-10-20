@@ -14,6 +14,7 @@
 #include <optional>
 #include <string_view>
 
+#include <tt-metalium/constants.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt_stl/small_vector.hpp>
 #include "ttnn/global_semaphore.hpp"
@@ -102,7 +103,10 @@ PageGeometry derive_page_geometry(
     // Metadata active-extent also makes this a PARTIAL gather (singleton dims between batch and dim,
     // per-stripe page sizing) even though the host keeps sizing for the worst case: the kernels narrow
     // the range at runtime, so the program must be built for the maximum.
-    bool extent_from_metadata = false) {
+    bool extent_from_metadata = false,
+    // A paged source reads logical pages of one request through its page table: its per-rank extent is
+    // the output stripe's, and its page base is 0 (the reader translates every page).
+    bool paged = false) {
     const uint32_t input_page_size = input_tensor.buffer()->aligned_page_size();
     const uint32_t input_unaligned_page_size = input_tensor.buffer()->page_size();
     const uint32_t output_unaligned_page_size = output_tensor.buffer()->page_size();
@@ -121,10 +125,12 @@ PageGeometry derive_page_geometry(
         gather_dim += rank;
     }
 
+    const uint32_t source_dim_size =
+        paged ? output_tensor.padded_shape()[gather_dim] / operation_attributes.num_devices : input_shape[gather_dim];
     const bool has_runtime_extent = operation_attributes.gathered_dim_size.has_value();
     const uint32_t active_dim_size = has_runtime_extent
                                          ? *operation_attributes.gathered_dim_size / operation_attributes.num_devices
-                                         : input_shape[gather_dim];
+                                         : source_dim_size;
 
     const auto tile_spec =
         input_tensor.layout() == Layout::TILE ? input_tensor.tensor_spec().tile() : tt::tt_metal::Tile();
@@ -162,7 +168,7 @@ PageGeometry derive_page_geometry(
     // (such as sparse MLA's block-cyclic KV cache) at their stable physical offsets.
     uint32_t max_input_pages_per_stripe = 1;
     for (int32_t i = gather_dim; i < rank; i++) {
-        uint32_t extent = input_shape[i];
+        uint32_t extent = i == gather_dim ? source_dim_size : input_shape[i];
         if (i == rank - 1) {
             extent = input_tensor.layout() == Layout::TILE
                          ? extent / tile_spec.get_width()
@@ -195,7 +201,7 @@ PageGeometry derive_page_geometry(
                 "high_bw_all_gather input batch slots must occupy equal page ranges");
             // Metadata form: base stays 0 here and the reader adds slot * pages_per_slot on-device.
             input_page_base =
-                operation_attributes.input_batch_index.has_value()
+                operation_attributes.input_batch_index.has_value() && !paged
                     ? *operation_attributes.input_batch_index * (input_tensor.buffer()->num_pages() / input_shape[0])
                     : 0;
         } else {
@@ -206,7 +212,7 @@ PageGeometry derive_page_geometry(
         }
         num_input_pages = input_pages_per_stripe;
         TT_FATAL(
-            input_page_base + num_input_pages <= input_tensor.buffer()->num_pages(),
+            paged || input_page_base + num_input_pages <= input_tensor.buffer()->num_pages(),
             "high_bw_all_gather selected range exceeds input allocation");
     }
     const uint32_t num_output_chunks = num_input_pages * split_factor;
@@ -219,6 +225,16 @@ PageGeometry derive_page_geometry(
         num_output_chunks,
         output_chunks_per_stripe,
         input_page_base};
+}
+
+// Entries of the request's page-table row a paged reader keeps in L1, refilled as it walks the prefix in
+// increasing order; reads start on a DRAM-aligned (64 B) entry.
+constexpr uint32_t kPageTableWindowEntries = 512;
+constexpr uint32_t kPageTableAlignBytes = 64;
+
+// Physical pages in a paged source's pool: one entry per (page, layer).
+uint32_t paged_pool_pages(const Tensor& input_tensor, const HighBwAllGatherParams& operation_attributes) {
+    return input_tensor.padded_shape()[0] / operation_attributes.batch_slot_num_layers;
 }
 
 uint32_t derive_data_valid_granularity(const PageGeometry& geometry, uint32_t packet_size, uint32_t total_slices) {
@@ -501,7 +517,8 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
         output_tensor,
         operation_attributes,
         tensor_args.has_batch_index_metadata(),
-        tensor_args.has_gathered_prefix_metadata());
+        tensor_args.has_gathered_prefix_metadata(),
+        tensor_args.is_paged());
     // gathered_dim_size is deliberately cache-key-independent. Runtime controls reuse the compiled
     // schedule and patch its selected page base and active ranges below from page_geometry.
     const uint32_t input_page_size = page_geometry.input_page_size;
@@ -795,6 +812,15 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
                 .set_page_size(cb_meta_writer_id, kMetaCbPageSize);
         CreateCircularBuffer(program, worker_core_range, cb_meta_writer_config);
     }
+    // Paged source only: a window of the request's page-table row, plus one DRAM-alignment unit.
+    uint32_t cb_page_table_id = tt::CB::c_in3;
+    if (tensor_args.is_paged()) {
+        constexpr uint32_t table_cb_bytes = kPageTableWindowEntries * sizeof(uint32_t) + kPageTableAlignBytes;
+        tt::tt_metal::CircularBufferConfig cb_table_config =
+            tt::tt_metal::CircularBufferConfig(table_cb_bytes, {{cb_page_table_id, tt::DataFormat::UInt32}})
+                .set_page_size(cb_page_table_id, table_cb_bytes);
+        CreateCircularBuffer(program, worker_core_range, cb_table_config);
+    }
     if (batch_index_from_metadata || extent_from_metadata) {
         tt::tt_metal::CircularBufferConfig cb_meta_config =
             tt::tt_metal::CircularBufferConfig(kMetaCbPageSize, {{cb_meta_id, tt::DataFormat::UInt32}})
@@ -917,6 +943,22 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
                 .append_to(reader_compile_args);
         }
     }
+    // Paged-source block, appended after the extent block. The flag is always pushed; the geometry and the
+    // page-table accessor follow only when it is set (the kernel guards their index the same way).
+    const bool paged = tensor_args.is_paged();
+    reader_compile_args.push_back(paged ? 1u : 0u);
+    if (paged) {
+        const bool tiled = input_tensor.layout() == Layout::TILE;
+        const uint32_t row_height = tiled ? tt::constants::TILE_HEIGHT : 1u;
+        reader_compile_args.push_back(cb_page_table_id);
+        reader_compile_args.push_back(operation_attributes.page_size / row_height);  // page-rows per page
+        reader_compile_args.push_back(tiled ? input_tensor.padded_shape()[-1] / tt::constants::TILE_WIDTH : 1u);
+        reader_compile_args.push_back(
+            operation_attributes.gathered_slab_global / operation_attributes.num_devices / row_height);
+        reader_compile_args.push_back(tensor_args.page_table->logical_shape()[-1]);
+        reader_compile_args.push_back(kPageTableWindowEntries);
+        tt::tt_metal::TensorAccessorArgs(tensor_args.page_table->buffer()).append_to(reader_compile_args);
+    }
 
     // Writer
     std::vector<uint32_t> writer_compile_args = {
@@ -985,7 +1027,9 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
         extent_from_metadata ? tensor_args.gathered_prefix_tensor->buffer()->address() : 0u;
     const uint32_t batch_metadata_address =
         batch_index_from_metadata ? tensor_args.input_batch_index_tensor->buffer()->address() : 0u;
-    // Slot recomposition stays runtime so layers and cache depths share one cached program.
+    // Slot recomposition stays runtime so layers and cache depths share one cached program. The paged
+    // source's terms follow (zeros otherwise): [6] page table, [7] scalar request row, [8] this rank,
+    // [9] pool pages.
     tt::tt_metal::SetCommonRuntimeArgs(
         program,
         reader_kernel_id,
@@ -994,7 +1038,11 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
          prefix_metadata_address,
          batch_metadata_address,
          operation_attributes.batch_slot_num_layers,
-         operation_attributes.batch_slot_layer_idx});
+         operation_attributes.batch_slot_layer_idx,
+         paged ? tensor_args.page_table->buffer()->address() : 0u,
+         paged ? operation_attributes.input_batch_index.value_or(0) : 0u,
+         paged ? device_idx : 0u,
+         paged ? paged_pool_pages(input_tensor, operation_attributes) : 0u});
     tt::tt_metal::SetCommonRuntimeArgs(program, writer_kernel_id, {output_addr, data_valid_granularity});
 
     // Mux runtime args: one fabric connection per active direction per link, to that direction's neighbor. The
@@ -1268,6 +1316,11 @@ void HighBwAllGatherUnicastFactory::override_runtime_arguments(
         reader_common.at(3) = batch_metadata_address;
         reader_common.at(4) = operation_attributes.batch_slot_num_layers;
         reader_common.at(5) = operation_attributes.batch_slot_layer_idx;
+        if (tensor_args.is_paged()) {
+            reader_common.at(6) = tensor_args.page_table->buffer()->address();
+            reader_common.at(7) = operation_attributes.input_batch_index.value_or(0);
+            reader_common.at(9) = paged_pool_pages(tensor_args.input_tensor, operation_attributes);
+        }
         auto& writer_common = GetCommonRuntimeArgs(program, shared_vars.writer_kernel_id);
         writer_common.at(0) = output_addr;
 
@@ -1279,7 +1332,12 @@ void HighBwAllGatherUnicastFactory::override_runtime_arguments(
         }
         if (!updated_page_geometry.has_value()) {
             updated_page_geometry = derive_page_geometry(
-                tensor_args.input_tensor, output_tensor, operation_attributes, has_batch_metadata, has_prefix_metadata);
+                tensor_args.input_tensor,
+                output_tensor,
+                operation_attributes,
+                has_batch_metadata,
+                has_prefix_metadata,
+                tensor_args.is_paged());
         }
         const auto& page_geometry = *updated_page_geometry;
         auto& reader_args_by_core = GetRuntimeArgs(program, shared_vars.reader_kernel_id);

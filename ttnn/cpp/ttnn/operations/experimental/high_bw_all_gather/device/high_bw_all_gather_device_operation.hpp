@@ -59,6 +59,10 @@ Tensor high_bw_all_gather(
     const std::optional<Tensor>& gathered_prefix_tensor = std::nullopt,
     uint32_t gathered_slab_global = 0,
     const std::optional<GlobalSemaphore>& ready_semaphore = std::nullopt,
-    const std::optional<GlobalSemaphore>& data_valid_semaphore = std::nullopt);
+    const std::optional<GlobalSemaphore>& data_valid_semaphore = std::nullopt,
+    // Paged source: the input is a page pool and the request's page-table row locates each page
+    // (HighBwAllGatherParams::page_size).
+    const std::optional<Tensor>& page_table = std::nullopt,
+    uint32_t page_size = 0);
 
 }  // namespace ttnn::prim

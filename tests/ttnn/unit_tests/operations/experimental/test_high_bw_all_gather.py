@@ -2450,3 +2450,254 @@ def test_high_bw_all_gather_cached_link_discovery(mesh_device, num_links, expect
                 rows_per_device=32,
                 num_links=invalid_links,
             )
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Paged source: the input is a pool of page-sized entries and a page-table row per request maps each global logical
+# page to the physical page holding it on the rank that owns it (update_padded_kv_cache's paged_kv_table.hpp).
+
+_PAGE_UNMAPPED = 0xFFFFFFFF
+
+
+def _page_table_tensor(mesh_device, table):
+    """[rows, width] uint32 page table, ROW_MAJOR in DRAM, replicated."""
+    return ttnn.from_torch(
+        table.to(torch.int64),
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        device=mesh_device,
+    )
+
+
+def _global_row(local_row, rank, ranks, chunk_local):
+    """Block-cyclic SP placement: the global position a rank's local cache row holds."""
+    return ((local_row // chunk_local) * ranks + rank) * chunk_local + local_row % chunk_local
+
+
+def _shuffled_page_table(*, rows, ranks, local_rows, chunk_local, page_size, num_pages, seed):
+    """Rows mapping every global page to a shuffled physical page in the pool of the rank that owns it."""
+    pages = local_rows * ranks // page_size
+    owner = [(q * page_size // chunk_local) % ranks for q in range(pages)]
+    gen = torch.Generator().manual_seed(seed)
+    free = {rank: torch.randperm(num_pages, generator=gen).tolist() for rank in range(ranks)}
+    table = torch.full((rows, -(-pages // 16) * 16), _PAGE_UNMAPPED, dtype=torch.int64)
+    for row in range(rows):
+        for q in range(pages):
+            table[row, q] = free[owner[q]].pop()
+    return table
+
+
+@pytest.mark.parametrize("device_params", _SELECTED_BATCH_PREFIX_DEVICE_PARAMS, indirect=True)
+@run_for_blackhole("high_bw_all_gather paged-source coverage requires Blackhole")
+@_AG_TRACED_AXIS
+@pytest.mark.parametrize(
+    "dtype, layout, width",
+    [(ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, 576), (ttnn.bfloat8_b, ttnn.TILE_LAYOUT, 128)],
+    ids=["bf16_rm", "bfp8_tile"],
+)
+@pytest.mark.parametrize("page_size", [32, 64], ids=["page32", "page64"])
+def test_high_bw_all_gather_paged_source(mesh_device, ag_traced, dtype, layout, width, page_size):
+    """A paged source gathers into the same contiguous output a slot cache would.
+
+    Each rank's pages sit shuffled in its own pool, for two requests of two layers; the request, the layer and the
+    extent change between calls on one cached program (one trace per layer when traced). Every rank's active prefix
+    must byte-match what the pool holds at the request's pages. A last call whose row is unmapped past the first
+    slab must complete: unmapped pages are skipped without starving the relay."""
+    rank_line, cluster_axis = _rank_line_mesh(mesh_device)
+    ranks = rank_line.shape[cluster_axis]
+    local_rows, chunk_local, num_users, num_layers = 1024, 256, 2, 2
+    slab_global = chunk_local * ranks
+    num_pages = num_users * (local_rows // page_size) + 3
+    table = _shuffled_page_table(
+        rows=num_users,
+        ranks=ranks,
+        local_rows=local_rows,
+        chunk_local=chunk_local,
+        page_size=page_size,
+        num_pages=num_pages,
+        seed=5,
+    )
+    torch.manual_seed(0)
+    shard_dims = (2, None) if cluster_axis == 0 else (None, 2)
+    device_pool = _make_tensor(
+        rank_line,
+        torch.rand((num_pages * num_layers, 1, page_size * ranks, width), dtype=torch.bfloat16),
+        dtype,
+        layout,
+        ttnn.ShardTensor2dMesh(rank_line, dims=shard_dims, mesh_shape=tuple(rank_line.shape)),
+    )
+    # The pool as each rank holds it ([pages * layers, 1, page, width]; bfloat8_b rounds on the way in).
+    pool_by_rank = [ttnn.to_torch(shard).to(torch.bfloat16) for shard in ttnn.get_device_tensors(device_pool)]
+    tt_table = _page_table_tensor(rank_line, table)
+    output = _make_tensor(
+        rank_line,
+        torch.zeros((1, 1, local_rows * ranks, width), dtype=torch.bfloat16),
+        dtype,
+        layout,
+        ttnn.ReplicateTensorToMesh(rank_line),
+    )
+
+    def expected_prefix(page_table, user, layer, rank, rows):
+        out = torch.empty((rows, width), dtype=torch.bfloat16)
+        for local_row in range(0, rows, page_size):
+            g = _global_row(local_row, rank, ranks, chunk_local)
+            phys = int(page_table[user, g // page_size])
+            out[local_row : local_row + page_size] = pool_by_rank[rank][phys * num_layers + layer, 0][:page_size]
+        return out
+
+    def check(page_table, user, layer, rows):
+        for output_shard in ttnn.get_device_tensors(output):
+            actual = ttnn.to_torch(output_shard).to(torch.bfloat16)[0, 0]
+            for rank in range(ranks):
+                got = actual[rank * local_rows : rank * local_rows + rows]
+                want = expected_prefix(page_table, user, layer, rank, rows)
+                assert torch.equal(got, want), f"user {user} layer {layer} rank {rank} rows {rows}: prefix differs"
+
+    # (user, layer, rows per rank): grow, switch request and layer, shrink. Extents are whole slabs.
+    cases = ((0, 0, 512), (1, 1, 1024), (0, 1, 256), (1, 0, 768))
+    paging = dict(page_table=tt_table, page_size=page_size, gathered_slab_global=slab_global)
+    traces = {}
+    if ag_traced:
+        user_meta = _meta_scalar(rank_line, 0)
+        prefix_meta = _meta_scalar(rank_line, 0)
+
+        def _issue(layer):
+            ttnn.experimental.high_bw_all_gather(
+                device_pool,
+                dim=2,
+                output_tensor=output,
+                cluster_axis=cluster_axis,
+                num_links=_NUM_LINKS,
+                input_batch_index_tensor=user_meta,
+                batch_slot_num_layers=num_layers,
+                batch_slot_layer_idx=layer,
+                gathered_prefix_tensor=prefix_meta,
+                **paging,
+            )
+
+        for layer in range(num_layers):
+            _issue(layer)  # a capture records already-built programs; it cannot compile them
+            ttnn.synchronize_device(rank_line)
+            traces[layer] = ttnn.begin_trace_capture(rank_line, cq_id=0)
+            _issue(layer)
+            ttnn.end_trace_capture(rank_line, traces[layer], cq_id=0)
+
+    entries = None
+    for user, layer, rows in cases:
+        if ag_traced:
+            _write_meta_scalar(user_meta, user)
+            _write_meta_scalar(prefix_meta, rows * ranks - slab_global)
+            ttnn.execute_trace(rank_line, traces[layer], cq_id=0, blocking=True)
+        else:
+            ttnn.experimental.high_bw_all_gather(
+                device_pool,
+                dim=2,
+                output_tensor=output,
+                cluster_axis=cluster_axis,
+                num_links=_NUM_LINKS,
+                input_batch_index=user,
+                gathered_dim_size=rows * ranks,
+                batch_slot_num_layers=num_layers,
+                batch_slot_layer_idx=layer,
+                **paging,
+            )
+        ttnn.synchronize_device(rank_line)
+        if entries is None:
+            entries = rank_line.num_program_cache_entries()
+        else:
+            assert rank_line.num_program_cache_entries() == entries, "requests, layers and extents share one program"
+        check(table, user, layer, rows)
+    for trace in traces.values():
+        ttnn.release_trace(rank_line, trace)
+
+    # Pages past the first slab unmapped: the gather must complete and land the mapped slab.
+    sparse = table.clone()
+    sparse[:, slab_global // page_size :] = _PAGE_UNMAPPED
+    ttnn.experimental.high_bw_all_gather(
+        device_pool,
+        dim=2,
+        output_tensor=output,
+        cluster_axis=cluster_axis,
+        num_links=_NUM_LINKS,
+        input_batch_index=0,
+        gathered_dim_size=local_rows * ranks,
+        batch_slot_num_layers=num_layers,
+        batch_slot_layer_idx=0,
+        page_table=_page_table_tensor(rank_line, sparse),
+        page_size=page_size,
+        gathered_slab_global=slab_global,
+    )
+    ttnn.synchronize_device(rank_line)
+    check(sparse, 0, 0, chunk_local)
+
+
+@pytest.mark.parametrize("device_params", [_FABRIC_2D_LINE_DEVICE_PARAMS], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+@run_for_blackhole("high_bw_all_gather paged-source perf requires Blackhole")
+@pytest.mark.parametrize("page_size", [64, 256], ids=["page64", "page256"])
+def test_high_bw_all_gather_paged_source_perf(mesh_device, page_size):
+    """MiniMax-M3's prefix gather on its (2,4) stage: K of one layer, bfloat8_b, 71680 rows per rank (143k tokens at
+    SP=2), from a slot cache vs from a shuffled page pool. Device time is the slowest chip's, median of 7."""
+    stage = mesh_device.create_submesh(ttnn.MeshShape(2, 4))
+    cluster_axis, ranks = 0, 2
+    local_rows, chunk_local, width, num_layers = 71680, 1024, 128, 2
+    shard = ttnn.ShardTensor2dMesh(stage, dims=(2, None), mesh_shape=(2, 4))
+    contiguous = _make_tensor(
+        stage, torch.rand((num_layers, 1, local_rows * ranks, width)), ttnn.bfloat8_b, ttnn.TILE_LAYOUT, shard
+    )
+    num_pages = local_rows // page_size + 3
+    table = _shuffled_page_table(
+        rows=1,
+        ranks=ranks,
+        local_rows=local_rows,
+        chunk_local=chunk_local,
+        page_size=page_size,
+        num_pages=num_pages,
+        seed=9,
+    )
+    pool = _make_tensor(
+        stage,
+        torch.rand((num_pages * num_layers, 1, page_size * ranks, width)),
+        ttnn.bfloat8_b,
+        ttnn.TILE_LAYOUT,
+        shard,
+    )
+    tt_table = _page_table_tensor(stage, table)
+    output = _make_tensor(
+        stage,
+        torch.zeros((1, 1, local_rows * ranks, width)),
+        ttnn.bfloat8_b,
+        ttnn.TILE_LAYOUT,
+        ttnn.ReplicateTensorToMesh(stage),
+    )
+
+    def gather(paged):
+        common = dict(dim=2, output_tensor=output, cluster_axis=cluster_axis, gathered_dim_size=local_rows * ranks)
+        if paged:
+            return ttnn.experimental.high_bw_all_gather(
+                pool,
+                input_batch_index=0,
+                batch_slot_num_layers=num_layers,
+                batch_slot_layer_idx=1,
+                page_table=tt_table,
+                page_size=page_size,
+                gathered_slab_global=chunk_local * ranks,
+                **common,
+            )
+        return ttnn.experimental.high_bw_all_gather(contiguous, input_batch_index=1, **common)
+
+    gather(False)
+    gather(True)
+    ttnn.synchronize_device(stage)
+    times = {False: [], True: []}
+    for _ in range(7):
+        for paged in (False, True):
+            _, records = profile_realtime_program(stage, lambda: gather(paged), collect_all=True)
+            times[paged].append(max(r["duration_ns"] for r in records))
+    contiguous_us = sorted(times[False])[3] / 1e3
+    paged_us = sorted(times[True])[3] / 1e3
+    ratio = paged_us / contiguous_us
+    print(f"PAGED_GATHER page={page_size} contiguous={contiguous_us:.1f}us paged={paged_us:.1f}us ratio={ratio:.3f}")
+    assert ratio <= 1.05, f"a paged prefix gather costs {ratio:.3f}x a contiguous one"
