@@ -26,7 +26,7 @@
 #include "prefetch.hpp"
 #include "context/context_descriptor.hpp"
 #include "debug/inspector/inspector.hpp"
-#include <umd/device/types/xy_pair.hpp>
+#include <tt-umd/types/xy_pair.hpp>
 #include "dispatch/system_memory_manager.hpp"
 
 #include "device/device_manager.hpp"
@@ -502,6 +502,12 @@ void DispatchKernel::CreateKernel() {
         {"DISPATCH_S_SYNC_SEM_BASE_ADDR", std::to_string(static_config_.dispatch_s_sync_sem_base_addr.value())},
         {"MAX_NUM_WORKER_SEMS", std::to_string(static_config_.max_num_worker_sems.value())},
         {"MCAST_GO_SIGNAL_ADDR", std::to_string(static_config_.mcast_go_signal_addr.value())},
+        // Workers report done for a go to the dispatcher that sent it.
+        {"GO_DONE_NOC_X", std::to_string(my_virtual_core.x)},
+        {"GO_DONE_NOC_Y", std::to_string(my_virtual_core.y)},
+        {"MCAST_GO_RING_SIZE",
+         std::to_string(
+             descriptor_.hal().get_dev_msgs_factory(HalProgrammableCoreType::TENSIX).size_of<dev_msgs::go_ring_t>())},
         {"DISTRIBUTED_DISPATCHER", std::to_string(static_config_.distributed_dispatcher.value())},
         {"HOST_COMPLETION_Q_WR_PTR", std::to_string(static_config_.host_completion_q_wr_ptr.value())},
         {"DEV_COMPLETION_Q_WR_PTR", std::to_string(static_config_.dev_completion_q_wr_ptr.value())},

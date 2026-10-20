@@ -311,7 +311,8 @@ void kernel_main() {
 #ifndef IS_PAGE_TABLE_SHARDED
         // Non-sharded: read one page-table stick from DRAM into a node-local scratchpad (Gen2 forbids the
         // self-loop DFB the legacy path used). Pass the scratchpad object so the NoC writes its cached L1
-        // view, then read back through its base address (coherent, no fence — same pattern as fill_cache).
+        // view, then read back through a pointer to its first element (coherent, no fence — same pattern as
+        // fill_cache).
         Scratchpad<uint32_t> page_table_scratch(scratch::page_table);
         noc.async_read(
             TensorAccessor(tensor::page_table),
@@ -320,7 +321,7 @@ void kernel_main() {
             {.page_id = cur_batch / q_heads_parallel_factor},
             {});
         noc.async_read_barrier();
-        page_table_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page_table_scratch.get_base_address());
+        page_table_ptr = &page_table_scratch[0];
         page_table_ptr_u32 = page_table_ptr;
 #else
         // Sharded: read the page table from the borrowed sharded L1 buffer (the DFB backs the resident shard).
