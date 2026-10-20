@@ -278,12 +278,15 @@ class LoRAMixin:
         self._realize_active()
 
     def deallocate_weights(self) -> None:  # type: ignore[override]
+        self._forget_device_lora_state()
+        super().deallocate_weights()
+
+    def _forget_device_lora_state(self) -> None:
         # Weights about to be freed → any merged delta goes with them
         # and runtime A/B are tied to the layer being resident.
         self._delta_applied = False
         if self._runtime_A is not None or self._runtime_B is not None:
             self._free_runtime_ab()
-        super().deallocate_weights()
 
     def deallocate_lora(self) -> None:
         if self.active_idx is not None:

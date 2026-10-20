@@ -465,6 +465,18 @@ def test_admit_request_accepts_served_requests(overrides):
         ({"references": [_ref("image"), _ref("audio")]}, "has no audio stream"),
         ({"references": [_ref("image"), _ref("audio", audio_channels=6)]}, "6 audio channels"),
         ({"references": [_ref("video", fps=24.0, audio_channels=0)]}, "mono or stereo"),
+        ({"references": []}, "at least one reference"),
+        ({"references": [_ref("image")] * 10}, "at most 9 image references"),
+        ({"references": [_ref("video", fps=24.0)] * 4}, "at most 3 video references"),
+        (
+            {"references": [_ref("image")] * 9 + [_ref("video", fps=24.0)] * 3 + [_ref("audio", audio_channels=1)]},
+            "at most 12 references",
+        ),
+        ({"references": [_ref("audio", audio_channels=1)]}, "paired with at least one image or video"),
+        (
+            {"references": [_ref("image")], "keyframe_sizes": {"image_prompts[0]": (1024, 576)}},
+            "references .* and keyframes .* are different tasks",
+        ),
     ],
 )
 def test_admit_request_rejects_unserved_requests(overrides, match, expect_error):

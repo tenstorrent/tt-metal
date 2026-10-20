@@ -15,7 +15,7 @@ from safetensors.torch import save_file
 
 from models.tt_dit.experimental.lora.h3_adapter_loader import h3_host_deltas
 from models.tt_dit.pipelines.minimax_h3.hyperflow_minimax_h3 import MARKER_KEY, MiniMaxH3HyperFlow, validate_sigmas
-from models.tt_dit.pipelines.minimax_h3.pipeline_minimax_h3 import AUDIO_SHIFT, VIDEO_SHIFT
+from models.tt_dit.pipelines.minimax_h3.pipeline_minimax_h3 import AUDIO_SHIFT, VIDEO_SHIFT, MiniMaxH3Pipeline
 from models.tt_dit.pipelines.minimax_h3.pipeline_minimax_h3_turbo import HYPERFLOW_HOST_PREFIXES, MiniMaxH3TurboPipeline
 from models.tt_dit.pipelines.minimax_h3.scheduler import shift_sigmas
 
@@ -147,6 +147,28 @@ def test_the_endpoint_of_a_step_is_the_next_steps_timestep(warming):
         assert endpoint.numel() == scheduler.num_inference_steps
         assert torch.equal(endpoint[:-1], scheduler.timesteps[1:])
         assert float(endpoint[-1]) == 1.0
+
+
+@pytest.mark.parametrize(
+    ("contract", "passed", "forwarded"),
+    [
+        (_contract(), None, len(GRID_8STEP)),
+        (_contract(), len(GRID_8STEP), len(GRID_8STEP)),
+        (_contract(), 50, 50),
+        (None, None, "default"),
+        (None, 5, 5),
+    ],
+    ids=["hyperflow-omitted", "hyperflow-own-grid", "hyperflow-other", "turbo-omitted", "turbo-explicit"],
+)
+def test_an_omitted_step_count_defers_to_the_adapter(monkeypatch, contract, passed, forwarded):
+    """A HyperFlow request may leave the step count out; a mismatch still reaches `_build_schedulers`,
+    which refuses it."""
+    seen = {}
+    monkeypatch.setattr(MiniMaxH3Pipeline, "__call__", lambda self, prompt, **kwargs: seen.update(kwargs))
+    pipeline = _pipeline(warming=False, contract=contract)
+    pipeline("a prompt", num_inference_steps=passed, seed=3)
+    assert seen.get("num_inference_steps", "default") == forwarded
+    assert seen["seed"] == 3
 
 
 def test_a_turbo_adapter_stays_single_time():

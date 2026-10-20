@@ -154,6 +154,12 @@ MESH_4X8_RING_WH = pytest.param((4, 8), _ring_4k, id="4x8_WH", marks=_WH_ONLY)
 GALAXY_MESHES = [MESH_4X8_RING, MESH_4X8_LINE, MESH_4X32_RING_TRACED, MESH_4X8_RING_WH]
 
 
+def fabric_topology() -> ttnn.Topology:
+    """The CCL topology the open fabric supports, for a test that builds its own `CCLManager` on a
+    `GALAXY_MESHES` row: a ring collective on a `FABRIC_1D` line has no forwarding direction."""
+    return ttnn.Topology.Linear if ttnn.get_fabric_config() == ttnn.FabricConfig.FABRIC_1D else ttnn.Topology.Ring
+
+
 def randomize_norm_weights(module: torch.nn.Module, *, scale: float = 0.5) -> torch.nn.Module:
     """Randomize every `nn.RMSNorm` affine in place, BEFORE taking `state_dict`: all-ones norms make norm-weight loading invisible to PCC."""
     for submodule in module.modules():

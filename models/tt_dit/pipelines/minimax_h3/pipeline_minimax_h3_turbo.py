@@ -121,6 +121,15 @@ class MiniMaxH3TurboPipeline(MiniMaxH3Pipeline):
             **kwargs,
         )
 
+    def __call__(self, prompt: str, *, num_inference_steps: int | None = None, **kwargs):
+        """`num_inference_steps=None` takes a HyperFlow adapter's own grid; a plain Turbo adapter
+        publishes none, so it keeps the base pipeline's default."""
+        if num_inference_steps is None and self.hyperflow is not None:
+            num_inference_steps = self.hyperflow.num_grid_points
+        if num_inference_steps is not None:
+            kwargs["num_inference_steps"] = num_inference_steps
+        return super().__call__(prompt, **kwargs)
+
     @property
     def adapter(self) -> H3AdapterHandle | None:
         """What is bound on the transformer, or None before its first residency."""

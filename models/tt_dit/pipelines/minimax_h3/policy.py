@@ -29,6 +29,7 @@ from .packing_ref2va import (
     MINIMAX_H3_MAX_REFERENCE_VIDEOS,
     MiniMaxH3Reference,
     check_reference_aspect_ratio,
+    check_reference_kinds,
     resolve_reference_image_size,
     sample_reference_video_frames,
 )
@@ -274,6 +275,10 @@ def admit_request(
         _validate_explicit_canvas(height, width)
     for name, size in (keyframe_sizes or {}).items():
         _validate_keyframe_aspect_ratio(name, *size)
+    if references is not None:
+        if keyframe_sizes:
+            raise ValueError("references (ref2va) and keyframes (fl2va) are different tasks")
+        check_reference_kinds([reference.kind for reference in references])
     for reference in references or ():
         if reference.size is not None:
             check_reference_aspect_ratio(reference.name, *reference.size)
