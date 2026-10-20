@@ -46,9 +46,7 @@ class TestLocalConfig(unittest.TestCase):
 
     def test_explicit_kv_channels_allows_distinct_attention_width(self):
         self.component.update(hidden_dim=1025, kv_channels=64)
-        self.assertEqual(
-            make_local_config(self.base, self.component)["kv_channels"], 64
-        )
+        self.assertEqual(make_local_config(self.base, self.component)["kv_channels"], 64)
 
     def test_rejects_boolean_as_layer_count(self):
         self.component["num_layers"] = True

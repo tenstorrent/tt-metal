@@ -42,11 +42,7 @@ def validate_capture(
             max_relative_rms=max_relative_rms,
             max_abs=max_abs,
         ).to_dict()
-    extra = (
-        sorted(set(candidate["tensors"]) - reference["tensors"].keys())
-        if tensor_names is None
-        else []
-    )
+    extra = sorted(set(candidate["tensors"]) - reference["tensors"].keys()) if tensor_names is None else []
     return {
         "passed": all(r["passed"] for r in results.values()) and not extra,
         "thresholds": {

@@ -67,9 +67,7 @@ class TestCaptureManifest(unittest.TestCase):
         manifest = make_capture(tmp_path)
         load_manifest(tmp_path)
         key = next(iter(manifest["tensors"]))
-        self.assertTrue(
-            load_tensor(tmp_path, manifest, key).equal(torch.arange(4).float())
-        )
+        self.assertTrue(load_tensor(tmp_path, manifest, key).equal(torch.arange(4).float()))
         (tmp_path / manifest["tensors"][key]["file"]).write_bytes(b"corrupt")
         with self.assertRaisesRegex(ValueError, "checksum"):
             load_manifest(tmp_path)

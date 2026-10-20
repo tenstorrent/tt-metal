@@ -39,9 +39,7 @@ class TtLinear:
 
     def __call__(self, hidden):
         if hidden.shape[-1] != self.in_features:
-            raise ValueError(
-                f"Linear input width {hidden.shape[-1]} != {self.in_features}"
-            )
+            raise ValueError(f"Linear input width {hidden.shape[-1]} != {self.in_features}")
         return ttnn.linear(
             hidden,
             self.weight,

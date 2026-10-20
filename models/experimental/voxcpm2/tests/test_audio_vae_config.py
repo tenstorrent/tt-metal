@@ -50,10 +50,7 @@ class AudioVAEConfigTests(unittest.TestCase):
 
     def test_sample_rate_bucket_boundary_matches_torch_default(self):
         config = AudioVAEConfig()
-        buckets = [
-            config.sample_rate_bucket(rate)
-            for rate in (16000, 20000, 20001, 30000, 30001, 40000, 48000)
-        ]
+        buckets = [config.sample_rate_bucket(rate) for rate in (16000, 20000, 20001, 30000, 30001, 40000, 48000)]
         self.assertEqual(buckets, [0, 0, 1, 1, 2, 2, 3])
 
     def test_unimplemented_options_rejected(self):
@@ -81,23 +78,17 @@ class AudioVAEConfigTests(unittest.TestCase):
         try:
             import torch
         except ImportError:
-            self.skipTest(
-                "Torch not installed: checkpoint materialization test unavailable"
-            )
+            self.skipTest("Torch not installed: checkpoint materialization test unavailable")
         from models.experimental.voxcpm2.tt.audio_vae import materialize_weight
 
         for cls in (torch.nn.Conv1d, torch.nn.ConvTranspose1d):
             with self.subTest(convolution=cls.__name__):
                 module = torch.nn.utils.weight_norm(cls(3, 5, 7))
-                state = {
-                    f"conv.{name}": value for name, value in module.state_dict().items()
-                }
+                state = {f"conv.{name}": value for name, value in module.state_dict().items()}
                 # Checkpoint conversion only: no reference activation inference
                 # or Tenstorrent correctness claim is made here.
                 actual = materialize_weight(state, "conv")
-                torch.testing.assert_close(
-                    actual, module.weight.detach(), rtol=1e-6, atol=1e-7
-                )
+                torch.testing.assert_close(actual, module.weight.detach(), rtol=1e-6, atol=1e-7)
 
 
 if __name__ == "__main__":

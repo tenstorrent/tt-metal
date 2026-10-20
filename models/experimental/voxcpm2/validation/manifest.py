@@ -73,13 +73,9 @@ def load_manifest(directory, *, require_cuda=True):
     if manifest.get("complete") is not True:
         raise ValueError("Incomplete capture")
     if require_cuda:
-        if manifest.get("oracle") != "official_voxcpm2_cuda" or not manifest.get(
-            "cuda", {}
-        ).get("device_name"):
+        if manifest.get("oracle") != "official_voxcpm2_cuda" or not manifest.get("cuda", {}).get("device_name"):
             raise ValueError("Reference must be an official CUDA capture")
-        if not manifest.get("source", {}).get("revision") or not manifest.get(
-            "checkpoint", {}
-        ).get("revision"):
+        if not manifest.get("source", {}).get("revision") or not manifest.get("checkpoint", {}).get("revision"):
             raise ValueError("Reference revisions are missing")
     for name, record in manifest["tensors"].items():
         path = directory / record["file"]
@@ -92,9 +88,7 @@ def load_manifest(directory, *, require_cuda=True):
 
 def load_tensor(directory, manifest, name):
     record = manifest["tensors"][name]
-    value = torch.load(
-        Path(directory) / record["file"], map_location="cpu", weights_only=True
-    )
+    value = torch.load(Path(directory) / record["file"], map_location="cpu", weights_only=True)
     if list(value.shape) != record["shape"] or str(value.dtype) != record["dtype"]:
         raise ValueError(f"Tensor metadata mismatch: {name}")
     return value
@@ -106,17 +100,11 @@ def materialize_snapshot(directory, manifest, value):
         if set(value) == {"tensor"}:
             return load_tensor(directory, manifest, value["tensor"])
         if set(value) == {"sequence_type", "items"}:
-            items = [
-                materialize_snapshot(directory, manifest, item)
-                for item in value["items"]
-            ]
+            items = [materialize_snapshot(directory, manifest, item) for item in value["items"]]
             if value["sequence_type"] == "tuple":
                 return tuple(items)
             if value["sequence_type"] == "list":
                 return items
             raise ValueError("Unsupported captured sequence type")
-        return {
-            key: materialize_snapshot(directory, manifest, item)
-            for key, item in value.items()
-        }
+        return {key: materialize_snapshot(directory, manifest, item) for key, item in value.items()}
     return value

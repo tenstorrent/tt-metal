@@ -50,29 +50,19 @@ def _wrap_method(recorder, component, method, module=None):
         event = recorder.begin(component, args, kwargs)
         position = None
         if component.endswith(".forward_step") and module is not None:
-            position_tensor = kwargs.get(
-                "position_id", args[1] if len(args) > 1 else None
-            )
+            position_tensor = kwargs.get("position_id", args[1] if len(args) > 1 else None)
             position = int(position_tensor.item())
-            caches = [
-                module.kv_cache.get_layer_cache(i) for i in range(len(module.layers))
-            ]
+            caches = [module.kv_cache.get_layer_cache(i) for i in range(len(module.layers))]
             event["kv_cache_capacity"] = int(caches[0][0].shape[2])
             event["state_before"] = recorder.snapshot(
-                [
-                    (key[:, :, :position, :], val[:, :, :position, :])
-                    for key, val in caches
-                ],
+                [(key[:, :, :position, :], val[:, :, :position, :]) for key, val in caches],
                 event["key"] + "/state_before",
             )
         output = method(*args, **kwargs)
         recorder.end(event, output)
         if position is not None:
             event["state_after"] = recorder.snapshot(
-                [
-                    (key[:, :, : position + 1, :], val[:, :, : position + 1, :])
-                    for key, val in caches
-                ],
+                [(key[:, :, : position + 1, :], val[:, :, : position + 1, :]) for key, val in caches],
                 event["key"] + "/state_after",
             )
         return output
@@ -103,8 +93,7 @@ def install_capture(stack, model, recorder):
         "audio_vae.encoder.fc_mu",
     ]
     codec_components.extend(
-        "audio_vae.decoder.model." + name
-        for name, _ in model.audio_vae.decoder.model.named_children()
+        "audio_vae.decoder.model." + name for name, _ in model.audio_vae.decoder.model.named_children()
     )
     for name in (*FORWARD_COMPONENTS, *codec_components):
         module = _resolve(model, name)
@@ -132,15 +121,11 @@ def install_capture(stack, model, recorder):
         # Upstream reseeds immediately before this call. Save the state that
         # produced diffusion noise, rather than merely the process initial seed.
         recorder.snapshot(torch.get_rng_state(), event["key"] + "/rng/cpu")
-        recorder.snapshot(
-            torch.cuda.get_rng_state(model.device), event["key"] + "/rng/cuda"
-        )
+        recorder.snapshot(torch.cuda.get_rng_state(model.device), event["key"] + "/rng/cuda")
         generator = original(*args, **kwargs)
         try:
             for index, output in enumerate(generator):
-                event.setdefault("yields", []).append(
-                    recorder.snapshot(output, event["key"] + f"/yield/{index}")
-                )
+                event.setdefault("yields", []).append(recorder.snapshot(output, event["key"] + f"/yield/{index}"))
                 yield output
         finally:
             generator.close()
@@ -167,16 +152,12 @@ def _official_source():
 
 def capture_reference(args):
     if not re.fullmatch(r"[0-9a-f]{40}", args.checkpoint_revision):
-        raise ValueError(
-            "--checkpoint-revision must be an exact 40-character commit SHA"
-        )
+        raise ValueError("--checkpoint-revision must be an exact 40-character commit SHA")
     if not args.text.strip():
         raise ValueError("--text must be nonempty")
     device = torch.device(args.device)
     if device.type != "cuda" or not torch.cuda.is_available():
-        raise RuntimeError(
-            "CUDA is required for the official reference; CPU/MPS fallback is disabled"
-        )
+        raise RuntimeError("CUDA is required for the official reference; CPU/MPS fallback is disabled")
     torch.cuda.set_device(device)
     device = torch.device("cuda", torch.cuda.current_device())
     source = _official_source()
@@ -208,9 +189,7 @@ def capture_reference(args):
         target_text=args.text,
         prompt_text=args.prompt_text or "",
         prompt_wav_path=str(args.prompt_wav.resolve()) if args.prompt_wav else "",
-        reference_wav_path=str(args.reference_wav.resolve())
-        if args.reference_wav
-        else "",
+        reference_wav_path=str(args.reference_wav.resolve()) if args.reference_wav else "",
         min_len=args.min_len,
         max_len=args.max_len,
         inference_timesteps=args.inference_timesteps,
@@ -270,9 +249,7 @@ def capture_reference(args):
             "device_name": torch.cuda.get_device_name(device),
             "capability": list(torch.cuda.get_device_capability(device)),
             "runtime": torch.version.cuda,
-            "uuid": str(
-                getattr(torch.cuda.get_device_properties(device), "uuid", "unavailable")
-            ),
+            "uuid": str(getattr(torch.cuda.get_device_properties(device), "uuid", "unavailable")),
             "cudnn": torch.backends.cudnn.version(),
         },
         "versions": versions,
@@ -295,9 +272,7 @@ def capture_reference(args):
         "events": recorder.events,
         "tensors": recorder.tensors,
     }
-    (output / "manifest.json").write_text(
-        json.dumps(manifest, indent=2, allow_nan=False) + "\n"
-    )
+    (output / "manifest.json").write_text(json.dumps(manifest, indent=2, allow_nan=False) + "\n")
     return manifest
 
 
