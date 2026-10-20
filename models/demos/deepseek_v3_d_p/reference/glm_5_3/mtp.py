@@ -58,6 +58,7 @@ def glm_mtp_module_reference(
     mla_ref=None,
     actual_start: int = 0,
     actual_end: int | None = None,
+    rows: torch.Tensor | None = None,
 ):
     """One complete MTP module on CPU, matching ``TtMTPModule.forward``.
 
@@ -87,6 +88,7 @@ def glm_mtp_module_reference(
         mla_ref=mla_ref,
         actual_start=actual_start,
         actual_end=actual_end,
+        rows=rows,
     )
     out, kvpe_cache = layer_out[0], layer_out[1]
 
@@ -114,6 +116,7 @@ def glm_mtp_predictor_reference(
     mla_refs=None,
     actual_start: int = 0,
     actual_end: int | None = None,
+    rows: torch.Tensor | None = None,
 ):
     """K MTP levels on CPU, matching ``TtMTPPredictor.forward``.
 
@@ -131,6 +134,7 @@ def glm_mtp_predictor_reference(
     if mla_refs is not None:
         mla_refs = list(mla_refs)
         assert num_levels == len(mla_refs), f"num_levels={num_levels} but got {len(mla_refs)} MLA references"
+    assert rows is None or hiddens is not None or num_levels == 1, "rows past level 1 needs teacher-forced hiddens"
 
     xs, outs, normeds, kvpes = [], [], [], []
     shared_topk = None
@@ -154,6 +158,7 @@ def glm_mtp_predictor_reference(
             mla_ref=None if mla_refs is None else mla_refs[k],
             actual_start=actual_start,
             actual_end=actual_end,
+            rows=rows,
         )
         x, out, out_head_normed, kvpe = result[0], result[1], result[2], result[3]
         if want_topk:
