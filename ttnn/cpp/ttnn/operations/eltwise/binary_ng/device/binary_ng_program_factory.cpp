@@ -449,10 +449,10 @@ void for_each_core_runtime_args(
         b.has_value() ? CMAKE_UNIQUE_NAMESPACE::get_shape_dims(*b) : std::tuple{1u, 1u, 1u, 1u, 1u};
     const auto [cD, cN, cC, cHt, cWt] = CMAKE_UNIQUE_NAMESPACE::get_shape_dims(c);
 
-    // get_shard_specs() is nullopt unless some operand is sharded; testing that first skips copying b's
-    // TensorSpec into an optional on the all-interleaved path.
-    const bool any_sharded = a.memory_config().is_sharded() || (b.has_value() && b->memory_config().is_sharded()) ||
-                             c.memory_config().is_sharded();
+    // get_shard_specs() is nullopt unless some operand is sharded. Testing that first avoids copying
+    // b's TensorSpec into an optional when every operand is interleaved.
+    const bool any_sharded = any_memory_config_sharded(
+        {&a.memory_config(), b.has_value() ? &b->memory_config() : nullptr, &c.memory_config()});
     const auto shard_specs = any_sharded
                                  ? CMAKE_UNIQUE_NAMESPACE::get_shard_specs(
                                        a.tensor_spec(),
@@ -636,9 +636,9 @@ void for_each_core_runtime_args(
     RuntimeArgList reader_runtime_args;
     RuntimeArgList writer_runtime_args;
     RuntimeArgList compute_runtime_args;
-    reader_runtime_args.reserve(26);
-    writer_runtime_args.reserve(14);
-    compute_runtime_args.reserve(5);
+    reader_runtime_args.reserve(noop_reader_len);
+    writer_runtime_args.reserve(noop_writer_len);
+    compute_runtime_args.reserve(noop_compute_len);
 
     uint32_t current_block = 0;
     for (uint32_t i = 0, start_tile_id = 0; i < num_cores_total; i++) {
@@ -1254,7 +1254,8 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     uint32_t src0interim_cb_index = tt::CBIndex::c_3;
     uint32_t src1interim_cb_index = tt::CBIndex::c_4;
 
-    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
+        NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
 
     if (is_sfpu_op) {
         if (op_type != BinaryOpType::POWER) {
@@ -1265,18 +1266,24 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
             unpack_to_dest_mode[tt::CBIndex::c_5] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
             unpack_to_dest_mode[tt::CBIndex::c_6] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
         } else {
-            unpack_to_dest_mode[src0_cb_index] =
-                (a_dtype == DataType::FLOAT32) ? tt::tt_metal::UnpackToDestMode::UnpackToDestFp32 : tt::tt_metal::UnpackToDestMode::Default;
-            unpack_to_dest_mode[src1_cb_index] =
-                (b_dtype == DataType::FLOAT32) ? tt::tt_metal::UnpackToDestMode::UnpackToDestFp32 : tt::tt_metal::UnpackToDestMode::Default;
-            unpack_to_dest_mode[src0interim_cb_index] =
-                (a_dtype == DataType::FLOAT32) ? tt::tt_metal::UnpackToDestMode::UnpackToDestFp32 : tt::tt_metal::UnpackToDestMode::Default;
-            unpack_to_dest_mode[src1interim_cb_index] =
-                (b_dtype == DataType::FLOAT32) ? tt::tt_metal::UnpackToDestMode::UnpackToDestFp32 : tt::tt_metal::UnpackToDestMode::Default;
-            unpack_to_dest_mode[tt::CBIndex::c_5] =
-                (a_dtype == DataType::FLOAT32) ? tt::tt_metal::UnpackToDestMode::UnpackToDestFp32 : tt::tt_metal::UnpackToDestMode::Default;
-            unpack_to_dest_mode[tt::CBIndex::c_6] =
-                (b_dtype == DataType::FLOAT32) ? tt::tt_metal::UnpackToDestMode::UnpackToDestFp32 : tt::tt_metal::UnpackToDestMode::Default;
+            unpack_to_dest_mode[src0_cb_index] = (a_dtype == DataType::FLOAT32)
+                                                     ? tt::tt_metal::UnpackToDestMode::UnpackToDestFp32
+                                                     : tt::tt_metal::UnpackToDestMode::Default;
+            unpack_to_dest_mode[src1_cb_index] = (b_dtype == DataType::FLOAT32)
+                                                     ? tt::tt_metal::UnpackToDestMode::UnpackToDestFp32
+                                                     : tt::tt_metal::UnpackToDestMode::Default;
+            unpack_to_dest_mode[src0interim_cb_index] = (a_dtype == DataType::FLOAT32)
+                                                            ? tt::tt_metal::UnpackToDestMode::UnpackToDestFp32
+                                                            : tt::tt_metal::UnpackToDestMode::Default;
+            unpack_to_dest_mode[src1interim_cb_index] = (b_dtype == DataType::FLOAT32)
+                                                            ? tt::tt_metal::UnpackToDestMode::UnpackToDestFp32
+                                                            : tt::tt_metal::UnpackToDestMode::Default;
+            unpack_to_dest_mode[tt::CBIndex::c_5] = (a_dtype == DataType::FLOAT32)
+                                                        ? tt::tt_metal::UnpackToDestMode::UnpackToDestFp32
+                                                        : tt::tt_metal::UnpackToDestMode::Default;
+            unpack_to_dest_mode[tt::CBIndex::c_6] = (b_dtype == DataType::FLOAT32)
+                                                        ? tt::tt_metal::UnpackToDestMode::UnpackToDestFp32
+                                                        : tt::tt_metal::UnpackToDestMode::Default;
         }
     }
 
@@ -1463,12 +1470,21 @@ void BinaryNgDeviceOperation::ProgramFactory::override_runtime_arguments(
     constexpr uint32_t kWriterKernelIdx = 1;
     constexpr uint32_t kComputeKernelIdx = 2;
 
-    // Fetch each kernel's per-core runtime-arg table once and index it [x][y], instead of a
-    // GetRuntimeArgs(program, kernel, core) lookup per kernel per core.  Every core the builder emits
-    // comes from operation_attributes.worker_grid, which is the kernels' core range (and in the hash).
+    // One table per kernel, addressed by logical core. The per-core GetRuntimeArgs overload checks this
+    // bound before returning a slot; indexing the table has to do it itself.
     auto& reader_args_by_core = tt::tt_metal::GetRuntimeArgs(program, kReaderKernelIdx);
     auto& writer_args_by_core = tt::tt_metal::GetRuntimeArgs(program, kWriterKernelIdx);
     auto& compute_args_by_core = tt::tt_metal::GetRuntimeArgs(program, kComputeKernelIdx);
+
+    auto core_args = [](std::vector<std::vector<tt::tt_metal::RuntimeArgsData>>& table,
+                        const CoreCoord& core) -> tt::tt_metal::RuntimeArgsData& {
+        TT_FATAL(
+            core.x < table.size() && core.y < table[core.x].size(),
+            "Cannot get runtime args for a binary_ng kernel that is not placed on core ({}, {})",
+            core.x,
+            core.y);
+        return table[core.x][core.y];
+    };
 
     auto apply = [](tt::tt_metal::RuntimeArgsData& data, const RuntimeArgList& args) {
         for (uint32_t arg_idx = 0; arg_idx < static_cast<uint32_t>(args.size()); ++arg_idx) {
@@ -1488,9 +1504,9 @@ void BinaryNgDeviceOperation::ProgramFactory::override_runtime_arguments(
             const RuntimeArgList& reader_args,
             const RuntimeArgList& writer_args,
             const RuntimeArgList& compute_args) {
-            apply(reader_args_by_core[core.x][core.y], reader_args);
-            apply(writer_args_by_core[core.x][core.y], writer_args);
-            apply(compute_args_by_core[core.x][core.y], compute_args);
+            apply(core_args(reader_args_by_core, core), reader_args);
+            apply(core_args(writer_args_by_core, core), writer_args);
+            apply(core_args(compute_args_by_core, core), compute_args);
         });
 
     // Re-point tensor-backed (globally-allocated) circular buffers at the CURRENT buffers, by CBIndex.
