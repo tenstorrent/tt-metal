@@ -3,6 +3,7 @@
 
 # Quasar copy of ../multi_pack.yaml, still on Float16: the Wormhole/Blackhole copy's plain output
 # moved to Float16_b.
+# Temporary: remove with #60920.
 supported_archs: [quasar]
 
 dest_acc: true

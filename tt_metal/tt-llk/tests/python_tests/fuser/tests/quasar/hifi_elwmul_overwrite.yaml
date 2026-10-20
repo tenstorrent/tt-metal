@@ -1,5 +1,7 @@
-# Quasar copy of ../hifi_elwmul_overwrite.yaml, still on Float16: Quasar allows HiFi fidelities
-# only for a Float16 input, so the Wormhole copy's Float16_b cannot run here.
+# Quasar copy of ../hifi_elwmul_overwrite.yaml, still on Float16: Quasar allows HiFi4 only when
+# SrcA and SrcB are both wide (Float16, Tf32 or Float32), so the Wormhole copy's Float16_b cannot
+# run here.
+# Temporary: remove with #60920.
 supported_archs: [quasar]
 
 operands:

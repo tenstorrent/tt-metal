@@ -47,7 +47,7 @@
   "perf_pack": 34.6,
   "perf_pack_dest_bank": 1.3,
   "perf_pack_untilize": 79.8,
-  "perf_reduce": 4.5,
+  "perf_reduce": 9.7,
   "perf_sfpu_binop_scalar": 10.6,
   "perf_sfpu_ema": 0.2,
   "perf_sfpu_reduce": 1.0,

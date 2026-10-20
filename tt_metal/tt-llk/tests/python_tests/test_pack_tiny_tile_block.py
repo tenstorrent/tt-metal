@@ -38,6 +38,8 @@ from helpers.test_variant_parameters import (
 from helpers.tile_constants import calculate_tile_size_bytes, get_tile_params
 from helpers.utils import passed_test
 
+FORMATS = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
+
 
 def _make_config(
     tile_dims,
@@ -128,7 +130,7 @@ def _make_config(
 
 @skip_for_wormhole
 @parametrize(
-    formats=InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
+    formats=FORMATS,
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     tile_dims=[
         (1, 32),  # face_r_dim=1,  num_faces=2
@@ -166,7 +168,7 @@ def test_pack_tiny_tile_block(
 
 @skip_for_wormhole
 @parametrize(
-    formats=InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
+    formats=FORMATS,
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     tile_dims=[
         (1, 32),  # face_r_dim=1,  num_faces=2
