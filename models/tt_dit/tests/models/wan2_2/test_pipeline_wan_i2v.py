@@ -13,7 +13,7 @@ from loguru import logger
 from PIL import Image
 
 import ttnn
-from models.tt_dit.parallel.config import DiTParallelConfig, EncoderParallelConfig, VaeHWParallelConfig
+from models.tt_dit.parallel.config import DiTParallelConfig, VaeHWParallelConfig
 from models.tt_dit.pipelines.wan.pipeline_wan import WanPipelineConfig
 from models.tt_dit.pipelines.wan.pipeline_wan_i2v import ImagePrompt, WanPipelineI2V
 from models.tt_dit.utils.vbench import assert_vbench_quality
@@ -107,7 +107,7 @@ def test_pipeline_inference(
     w_factor = tuple(mesh_device.shape)[sp_axis]
     parallel_config = DiTParallelConfig.from_tuples(cfg=(1, 0), sp=(w_factor, sp_axis), tp=(h_factor, tp_axis))
     vae_parallel_config = VaeHWParallelConfig.from_tuples(height=(h_factor, tp_axis), width=(w_factor, sp_axis))
-    encoder_parallel_config = EncoderParallelConfig.from_tuple((h_factor, tp_axis))
+    # The text encoder placement comes from the mesh preset (WH 4x8 puts it on the SP axis).
 
     pipeline = WanPipelineI2V(
         device=mesh_device,
@@ -115,7 +115,6 @@ def test_pipeline_inference(
             mesh_shape=mesh_device.shape,
             dit_parallel_config=parallel_config,
             vae_parallel_config=vae_parallel_config,
-            encoder_parallel_config=encoder_parallel_config,
             num_links=num_links,
             dynamic_load=dynamic_load,
             topology=topology,

@@ -54,6 +54,10 @@ _PRESETS_WH: dict[tuple[int, ...], dict] = {
         "is_fsdp": True,
         "cfg_batch": True,
         "cross_kv_cache": True,
+        "encoder_on_sp_axis": True,
+        "shard_text_embeddings": True,
+        # resident FFN weights fit next to the activations of 480p, not of 720p
+        "ffn_resident": {(480, 832): True},
     },
 }
 
@@ -105,6 +109,14 @@ _PRESETS_BH: dict[tuple[int, ...], dict] = {
 }
 
 
+def _preset_value(preset: dict, key: str, height: int, width: int, default=False):
+    """A preset setting; one that holds only at some resolutions is given as {(height, width): value}."""
+    value = preset.get(key, default)
+    if isinstance(value, dict):
+        return value.get((height, width), default)
+    return value
+
+
 @dataclass(frozen=True, kw_only=True)
 class WanPipelineConfig:
     topology: ttnn.Topology
@@ -133,6 +145,8 @@ class WanPipelineConfig:
 
     cfg_batch: bool = False
     cross_kv_cache: bool = False
+    shard_text_embeddings: bool = False
+    ffn_resident: bool = False
 
     @classmethod
     def default(
@@ -160,6 +174,8 @@ class WanPipelineConfig:
         checkpoint_name: str = _DEFAULT_CHECKPOINT,
         cfg_batch: bool | None = None,
         cross_kv_cache: bool | None = None,
+        shard_text_embeddings: bool | None = None,
+        ffn_resident: bool | None = None,
     ) -> WanPipelineConfig:
         preset_dict = _PRESETS_BH if ttnn.device.is_blackhole() else _PRESETS_WH
         preset = preset_dict.get(tuple(mesh_shape), {})
@@ -178,7 +194,14 @@ class WanPipelineConfig:
                     height=(h_factor, tp_axis), width=(w_factor, sp_axis)
                 )
             if encoder_parallel_config is None:
-                encoder_parallel_config = EncoderParallelConfig.from_tuple((h_factor, tp_axis))
+                # On the DiT's TP axis, or on its SP axis where the preset says so: on WH 4x8 that shards the text
+                # encoder over 8 devices instead of 4, which leaves room for resident FFN weights in the transformers.
+                axis = (
+                    dit_parallel_config.sequence_parallel
+                    if preset.get("encoder_on_sp_axis", False)
+                    else dit_parallel_config.tensor_parallel
+                )
+                encoder_parallel_config = EncoderParallelConfig.from_tuple((axis.factor, axis.mesh_axis))
 
         if vae_t_chunk_size is _UNSET:
             vae_t_chunk_size = preset.get("vae_t_chunk_size", 1)
@@ -209,6 +232,18 @@ class WanPipelineConfig:
             checkpoint_name=checkpoint_name,
             cfg_batch=cfg_batch if cfg_batch is not None else preset.get("cfg_batch", False),
             cross_kv_cache=cross_kv_cache if cross_kv_cache is not None else preset.get("cross_kv_cache", False),
+            shard_text_embeddings=(
+                shard_text_embeddings
+                if shard_text_embeddings is not None
+                else preset.get("shard_text_embeddings", False)
+            ),
+            # The preset's resident FFN weights are for T2V: I2V also keeps its VAE encoder on the devices, and next
+            # to resident FFN weights its 480p VAE decode runs out of DRAM.
+            ffn_resident=(
+                ffn_resident
+                if ffn_resident is not None
+                else model_type == "t2v" and _preset_value(preset, "ffn_resident", height, width)
+            ),
         )
 
 
@@ -267,6 +302,14 @@ class WanPipeline(PipelineAPIMixin):
         cross_kv_cache (`bool`, *optional*, defaults to `False`):
             Whether to compute the cross-attention K/V of each prompt once per generation instead of in every
             denoising step. Costs the DRAM of the cached K/V; off while tracing. On in the WH Galaxy 4x8 preset.
+        shard_text_embeddings (`bool`, *optional*, defaults to `False`):
+            Whether to shard the text encoder's token embedding table over its tensor parallel axis instead of
+            replicating it (saves DRAM). On in the WH Galaxy 4x8 preset, which also places the text encoder on
+            the SP axis.
+        ffn_resident (`bool`, *optional*, defaults to `False`):
+            With ``is_fsdp``, whether to keep the FFN weights of both transformers resident (TP-sharded only)
+            instead of all-gathering them in every block. Costs ~2.3 GiB of DRAM per device per transformer at
+            14B. On in the WH Galaxy 4x8 preset for T2V at 480p (at 720p, and for I2V, it runs out of DRAM).
     """
 
     @classmethod
@@ -400,6 +443,7 @@ class WanPipeline(PipelineAPIMixin):
             encoder_parallel_config=self.encoder_parallel_config,
             dit_parallel_config=self.parallel_config,
             max_sequence_length=config.max_sequence_length,
+            shard_token_embeddings=config.shard_text_embeddings,
         )
 
         self.lora_enabled = lora_enabled
@@ -411,6 +455,7 @@ class WanPipeline(PipelineAPIMixin):
             model_type=self.model_type,
             lora_enabled=lora_enabled,
             cfg_batch=config.cfg_batch,
+            ffn_resident=config.ffn_resident,
         )
 
         self.transformer_2 = self._checkpoint_2.build(
@@ -420,6 +465,7 @@ class WanPipeline(PipelineAPIMixin):
             model_type=self.model_type,
             lora_enabled=lora_enabled,
             cfg_batch=config.cfg_batch,
+            ffn_resident=config.ffn_resident,
         )
 
         self._vae = WanVAEDecoderAdapter(

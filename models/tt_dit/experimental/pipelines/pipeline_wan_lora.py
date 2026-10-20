@@ -404,7 +404,7 @@ class WanPipelineI2VLora(WanPipelineI2V):
         cache.load_model(
             state.model,
             model_name=self._cache_namespace,
-            subfolder=state.checkpoint.subfolder,
+            subfolder=state.checkpoint.cache_subfolder(state.model),
             parallel_config=self.parallel_config,
             mesh_shape=tuple(self.mesh_device.shape),
             mesh_device=self.mesh_device,
