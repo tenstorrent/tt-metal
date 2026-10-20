@@ -117,7 +117,7 @@ inline void generate_windowed_mask_for_q_chunk(
         Sq_chunk_t,
         valid_Sqt,
         q_tok_offset,
-        cu_window.local_mem().get_unsafe_ptr(),  // the shared helper takes a raw pointer; covered by cu_lock
+        &cu_window[0],  // the shared helper takes a raw element pointer; covered by cu_lock
         cu_window_seqlens_eles,
         Sk_chunk_t,
         k_num_chunks,
