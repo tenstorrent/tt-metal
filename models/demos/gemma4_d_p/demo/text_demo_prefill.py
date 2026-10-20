@@ -7,6 +7,7 @@ import contextlib
 import functools
 import gc
 import hashlib
+import json
 import os
 import pathlib
 import time
@@ -18,6 +19,7 @@ from loguru import logger
 
 import ttnn
 from models.demos.gemma4_d_p.config import MeshConfig
+from models.demos.gemma4_d_p.scripts.layer_perf_report import is_primary_rank, summaries_root
 from models.demos.gemma4_d_p.tests.test_factory import find_layer_idx, parametrize_mesh_with_fabric
 from models.demos.gemma4_d_p.tt.common import create_tt_model
 from models.demos.gemma4_d_p.tt.model import prefill_chunk_geometry_error
@@ -184,8 +186,22 @@ def _build_prefill_model(mesh_config, hf_model_id, chunk_size, context_len=None)
 # ── Traced long-context chunked prefill (production shape) ────────────────────
 
 
-def _measure_traced(mesh_device, mesh_config, model_args, model, hf_model_id, context_len, chunk_size, token_source):
+def _measure_traced(
+    mesh_device,
+    mesh_config,
+    model_args,
+    model,
+    hf_model_id,
+    context_len,
+    chunk_size,
+    token_source,
+    traced=True,
+    run_id=None,
+):
     """Compile, capture and replay one ring-attention trace over every chunk of ``context_len``.
+
+    With ``traced=False`` every chunk is dispatched eagerly instead, after the same warm-up and with the same
+    per-chunk staging. With ``run_id`` the per-chunk timings are also written as JSON under PREFILL_SUMMARIES.
 
     Returns ({context_k: wall ms}, {context_k: device ms}) for each of REPORT_CONTEXT_KS. Wall is the
     elapsed time from the first chunk's staging to the end of the last chunk that context needs; device
@@ -264,18 +280,25 @@ def _measure_traced(mesh_device, mesh_config, model_args, model, hf_model_id, co
     out.deallocate(True)
     compile_s = time.time() - t0
 
+    tag = "traced_perf" if traced else "eager_perf"
+
     # ── Capture ───────────────────────────────────────────────────────────────
-    t0 = time.time()
-    cap_start = _stage(0)
-    tid_ring = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-    _out_ring = _forward(cap_start)  # Keep the captured output alive for trace replay.
-    ttnn.end_trace_capture(mesh_device, tid_ring, cq_id=0)
-    ttnn.synchronize_device(mesh_device)
-    capture_s = time.time() - t0
-    logger.info(f"[traced] compile={compile_s:.1f}s capture={capture_s:.1f}s for 1 trace")
+    tid_ring = None
+    capture_s = 0.0
+    if traced:
+        t0 = time.time()
+        cap_start = _stage(0)
+        tid_ring = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+        _out_ring = _forward(cap_start)  # Keep the captured output alive for trace replay.
+        ttnn.end_trace_capture(mesh_device, tid_ring, cq_id=0)
+        ttnn.synchronize_device(mesh_device)
+        capture_s = time.time() - t0
+    logger.info(f"[{tag}] compile={compile_s:.1f}s capture={capture_s:.1f}s")
 
     try:
         per_chunk_ms = []
+        # Eager only: time for _forward to return, i.e. host dispatch of every op before the sync.
+        dispatch_ms = []
         cumulative_wall_ms = []
         stage_ms = 0.0
         t_run = time.time()
@@ -284,38 +307,44 @@ def _measure_traced(mesh_device, mesh_config, model_args, model, hf_model_id, co
             chunk_start = _stage(chunk_idx)
             stage_ms += (time.time() - t_stage) * 1000
             t_c = time.time()
-            ttnn.execute_trace(mesh_device, tid_ring, cq_id=0, blocking=False)
+            if traced:
+                ttnn.execute_trace(mesh_device, tid_ring, cq_id=0, blocking=False)
+            else:
+                out = _forward(chunk_start)
+                dispatch_ms.append((time.time() - t_c) * 1000)
             ttnn.synchronize_device(mesh_device)
             per_chunk_ms.append((time.time() - t_c) * 1000)
             cumulative_wall_ms.append((time.time() - t_run) * 1000)
+            if not traced:
+                out.deallocate(True)
             # Report per-chunk latency and cumulative device and wall time.
             logger.info(
-                f"[traced_perf] chunk {chunk_idx + 1}/{n_chunks} [{chunk_start}, {chunk_start + chunk_size}) "
-                f"device={per_chunk_ms[-1]:.1f}ms ({chunk_size * 1000 / per_chunk_ms[-1]:.0f} tok/s) | "
-                f"total device={sum(per_chunk_ms):.1f}ms wall={cumulative_wall_ms[-1]:.1f}ms"
+                f"[{tag}] chunk {chunk_idx + 1}/{n_chunks} [{chunk_start}, {chunk_start + chunk_size}) "
+                f"device={per_chunk_ms[-1]:.1f}ms ({chunk_size * 1000 / per_chunk_ms[-1]:.0f} tok/s)"
+                + (f" dispatch={dispatch_ms[-1]:.1f}ms" if dispatch_ms else "")
+                + f" | total device={sum(per_chunk_ms):.1f}ms wall={cumulative_wall_ms[-1]:.1f}ms"
             )
         total_ms = (time.time() - t_run) * 1000
     finally:
-        ttnn.release_trace(mesh_device, tid_ring)
+        if tid_ring is not None:
+            ttnn.release_trace(mesh_device, tid_ring)
 
     device_ms = sum(per_chunk_ms)
     # Separate device execution from host-side staging in the wall time.
-    #   device   — execute_trace + synchronize. What the hardware spends on prefill.
+    #   device   — execute_trace (or eager dispatch) + synchronize. What the hardware spends on prefill.
     #   staging  — token upload, ring metadata, pinned RoPE refresh. Real work a
     #              deployment also pays, though it should overlap rather than serialize.
     logger.info(
-        f"[traced_perf] DEVICE {context_len} tokens in {device_ms:.1f}ms "
+        f"[{tag}] DEVICE {context_len} tokens in {device_ms:.1f}ms "
         f"({context_len * 1000 / device_ms:.0f} tok/s) | staging {stage_ms:.1f}ms | wall {total_ms:.1f}ms"
     )
     logger.info(
-        f"[traced_perf] staging breakdown: "
+        f"[{tag}] staging breakdown: "
         + ", ".join(f"{k}={v:.1f}ms ({v / n_chunks:.0f}ms/chunk)" for k, v in stage_breakdown_ms.items())
     )
+    logger.info(f"[{tag}] TOTAL {context_len} tokens in {total_ms:.1f}ms ({context_len * 1000 / total_ms:.0f} tok/s)")
     logger.info(
-        f"[traced_perf] TOTAL {context_len} tokens in {total_ms:.1f}ms ({context_len * 1000 / total_ms:.0f} tok/s)"
-    )
-    logger.info(
-        f"[traced_perf] ring-depth cost: first={per_chunk_ms[0]:.1f}ms -> last={per_chunk_ms[-1]:.1f}ms "
+        f"[{tag}] ring-depth cost: first={per_chunk_ms[0]:.1f}ms -> last={per_chunk_ms[-1]:.1f}ms "
         f"= {per_chunk_ms[-1] / per_chunk_ms[0]:.2f}x over {len(per_chunk_ms) - 1} extra chunks of history"
     )
 
@@ -331,9 +360,40 @@ def _measure_traced(mesh_device, mesh_config, model_args, model, hf_model_id, co
         dev_ms = f"{context_device_ms[context_k]:.1f}" if reached else "N/A"
         context_rows.append(f"{str(context_k) + 'k':>8} | {required_chunks:>6} | {wall_ms:>12} | {dev_ms:>12}")
     logger.info(
-        f"[traced_perf] context wall and device times (chunk_size={chunk_size}, 1k=1024 tokens; "
+        f"[{tag}] context wall and device times (chunk_size={chunk_size}, 1k=1024 tokens; "
         "rounded up to whole chunks; N/A = context not reached):\n" + "\n".join(context_rows)
     )
+
+    # LOGURU_LEVEL=ERROR hides the lines above, so keep the measurement on disk as well.
+    if run_id is not None and is_primary_rank():
+        out_dir = summaries_root() / "prefill_trace"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        path = out_dir / f"{tag}_{run_id.replace('/', '_')}_{int(time.time())}.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "run_id": run_id,
+                    "traced": traced,
+                    "mesh_shape": list(mesh_device.shape),
+                    "context_len": context_len,
+                    "chunk_size": chunk_size,
+                    "token_source": token_source,
+                    "compile_s": compile_s,
+                    "capture_s": capture_s,
+                    "per_chunk_ms": per_chunk_ms,
+                    "dispatch_ms": dispatch_ms,
+                    "cumulative_wall_ms": cumulative_wall_ms,
+                    "stage_ms": stage_ms,
+                    "stage_breakdown_ms": stage_breakdown_ms,
+                    "total_ms": total_ms,
+                },
+                indent=2,
+            )
+        )
+        print(
+            f"[{tag}] {run_id}: device={device_ms:.1f}ms wall={total_ms:.1f}ms "
+            f"first={per_chunk_ms[0]:.1f}ms last={per_chunk_ms[-1]:.1f}ms -> {path}"
+        )
     return context_wall_ms, context_device_ms
 
 
@@ -360,7 +420,55 @@ def test_prefill_long_context_traced(mesh_device, context_len, chunk_size, token
         context_len=context_len,
     )
 
-    _measure_traced(mesh_device, mesh_config, model_args, model, hf_model_id, context_len, chunk_size, token_source)
+    _measure_traced(
+        mesh_device,
+        mesh_config,
+        model_args,
+        model,
+        hf_model_id,
+        context_len,
+        chunk_size,
+        token_source,
+        traced=True,
+        run_id=request.node.callspec.id,
+    )
+
+
+@torch.no_grad()
+@parametrize_mesh_with_fabric([(8, 4), (4, 8)], device_params_extra={"trace_region_size": TRACE_REGION_SIZE})
+@pytest.mark.parametrize("token_source", ["text"], ids=lambda t: t)
+@pytest.mark.parametrize("chunk_size", PREFILL_CHUNK_SIZES, ids=lambda c: f"chunk{c}")
+@pytest.mark.parametrize("context_len", [32768, 65536, 131072, 262144], ids=lambda c: f"ctx_{c // 1024}k")
+def test_prefill_long_context_untraced(mesh_device, context_len, chunk_size, token_source, reset_seeds, request):
+    """``test_prefill_long_context_traced`` with every chunk dispatched eagerly instead of replayed."""
+
+    mesh_config = _mesh_config(mesh_device)
+    cp = mesh_config.cp_degree
+    if cp <= 1:
+        pytest.skip(f"targets CP>1; mesh {tuple(mesh_device.shape)} gives CP={cp}")
+    if geometry_error := prefill_chunk_geometry_error(chunk_size, cp, context_len, tp_degree=mesh_config.tp_degree):
+        pytest.skip(geometry_error)
+
+    hf_model_id = _hf_model_id()
+    model_args, model, _kv_cache = _build_prefill_model(
+        mesh_config=mesh_config,
+        hf_model_id=hf_model_id,
+        chunk_size=chunk_size,
+        context_len=context_len,
+    )
+
+    _measure_traced(
+        mesh_device,
+        mesh_config,
+        model_args,
+        model,
+        hf_model_id,
+        context_len,
+        chunk_size,
+        token_source,
+        traced=False,
+        run_id=request.node.callspec.id,
+    )
 
 
 @contextlib.contextmanager
