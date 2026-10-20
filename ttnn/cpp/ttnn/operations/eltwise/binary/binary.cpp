@@ -756,6 +756,36 @@ inline auto invoke_binary_ng_impl(
             }
         }
     }
+    const std::optional<DataType> requested_dtype =
+        output_preallocated ? std::optional<DataType>{output->dtype()} : std::optional<DataType>{dtype};
+    const bool widen_uint16 = [&] {
+        using enum operations::binary::BinaryOpType;
+        switch (binary_op_type) {
+            case ADD:
+            case SUB:
+            case MUL:
+            case EQ:
+            case NE:
+            case GT:
+            case GE:
+            case LT:
+            case LE:
+            case LOGICAL_AND:
+            case LOGICAL_OR:
+            case LOGICAL_XOR:
+            case MAXIMUM:
+            case MINIMUM: return true;
+            default: return false;
+        }
+    }();
+    if (widen_uint16 && a_dtype == DataType::UINT16 && b_dtype == DataType::UINT16 && requested_dtype.has_value() &&
+        (is_32bit_int(*requested_dtype) || *requested_dtype == DataType::FLOAT32)) {
+        const auto wide = *requested_dtype == DataType::UINT32 ? DataType::UINT32 : DataType::INT32;
+        lhs_promoted = ttnn::typecast(lhs, wide);
+        if constexpr (requires { rhs.dtype(); }) {
+            rhs_promoted = ttnn::typecast(rhs, wide);
+        }
+    }
     const Tensor& lhs_eff = lhs_promoted.has_value() ? *lhs_promoted : lhs;
     decltype(auto) rhs_eff = [&]() -> decltype(auto) {
         if constexpr (requires { rhs.dtype(); }) {
