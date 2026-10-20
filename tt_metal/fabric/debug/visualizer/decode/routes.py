@@ -13,6 +13,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import Enum
 
+from tt_metal.fabric.debug.visualizer.common.manifest_lookup import ManifestError, lookup
+
 # Route words are uint32, little-endian as on the device. The loader checks that the manifest's 1D hops fill one.
 WORD_BYTES = 4
 
@@ -64,10 +66,6 @@ class ChunkEncoding(str, Enum):
 
 # A chip's place in its mesh, (y, x), as its mesh_coord.
 Coord = tuple[int, int]
-
-
-class ManifestError(ValueError):
-    """The manifest lacks a value the route rules need, or holds one they can't use."""
 
 
 @dataclass(frozen=True)
@@ -131,61 +129,10 @@ class Encodings:
     scatter: EncodingsScatter
 
 
-# JSON's name for each type json.load returns. bool comes first: a JSON true or false is also a Python int.
-_JSON_TYPES = (
-    (bool, "boolean"),
-    (int, "integer"),
-    (float, "number"),
-    (str, "string"),
-    (type(None), "null"),
-    (list, "array"),
-    (dict, "object"),
-)
-
-
-def _json_type(value) -> str:
-    return next((name for cls, name in _JSON_TYPES if isinstance(value, cls)), type(value).__name__)
-
-
-def _a(json_type: str) -> str:
-    """A JSON type's name with its article, such as "an integer"."""
-    if json_type == "null":
-        return json_type
-    return f"{'an' if json_type[0] in 'aeiou' else 'a'} {json_type}"
-
-
-def _lookup(manifest: dict, path: str, kind: str | tuple[str, ...], of: str | None = None):
-    """
-    The manifest's value at a dotted path, such as "routing_encodings.1d.hop". `kind` is the JSON type the value must
-    have, or a tuple of them, and `of` the type of each item of an array or each value of an object.
-    """
-    value = manifest
-    keys = path.split(".")
-    for depth, key in enumerate(keys):
-        if not isinstance(value, dict):
-            parent = ".".join(keys[:depth]) or "the manifest"
-            raise ManifestError(f"{parent} is {_a(_json_type(value))}; the route rules need an object")
-        if key not in value:
-            raise ManifestError(f"manifest has no {path}")
-        value = value[key]
-
-    kinds = (kind,) if isinstance(kind, str) else kind
-    need = " or ".join(_a(name) for name in kinds) + (f" of {of}s" if of else "")
-    if _json_type(value) not in kinds:
-        raise ManifestError(f"{path} is {_a(_json_type(value))}; the route rules need {need}")
-    if of is not None:
-        items = value.items() if isinstance(value, dict) else enumerate(value)
-        for item_key, item in items:
-            if _json_type(item) != of:
-                where = f"{path}.{item_key}" if isinstance(value, dict) else f"{path}[{item_key}]"
-                raise ManifestError(f"{where} is {_a(_json_type(item))}; the route rules need {path} to be {need}")
-    return value
-
-
 def _encodings_1d(manifest: dict) -> Encodings1D:
-    bits_per_hop = _lookup(manifest, "routing_encodings.1d.bits_per_hop", "integer")
-    hops_per_word = _lookup(manifest, "routing_encodings.1d.hops_per_word", "integer")
-    hop = _lookup(manifest, "routing_encodings.1d.hop", "object", of="integer")
+    bits_per_hop = lookup(manifest, "routing_encodings.1d.bits_per_hop", "integer")
+    hops_per_word = lookup(manifest, "routing_encodings.1d.hops_per_word", "integer")
+    hop = lookup(manifest, "routing_encodings.1d.hop", "object", of="integer")
     if bits_per_hop * hops_per_word != 8 * WORD_BYTES:
         raise ManifestError(
             f"routing_encodings.1d: {hops_per_word} hops of {bits_per_hop} bits don't fill a {WORD_BYTES}-byte word"
@@ -201,16 +148,16 @@ def _encodings_1d(manifest: dict) -> Encodings1D:
 
 
 def _encodings_2d(manifest: dict) -> Encodings2D:
-    action_bits = _lookup(manifest, "routing_encodings.2d.action_bits", "object", of="integer")
-    table_entry_bits = _lookup(manifest, "routing_encodings.2d.table_entry_bits", "integer")
-    table_entries_per_byte = _lookup(manifest, "routing_encodings.2d.table_entries_per_byte", "integer")
-    y_code_action = _lookup(manifest, "routing_encodings.2d.y_code_action", "array", of="integer")
-    x_code_action = _lookup(manifest, "routing_encodings.2d.x_code_action", "array", of="integer")
+    action_bits = lookup(manifest, "routing_encodings.2d.action_bits", "object", of="integer")
+    table_entry_bits = lookup(manifest, "routing_encodings.2d.table_entry_bits", "integer")
+    table_entries_per_byte = lookup(manifest, "routing_encodings.2d.table_entries_per_byte", "integer")
+    y_code_action = lookup(manifest, "routing_encodings.2d.y_code_action", "array", of="integer")
+    x_code_action = lookup(manifest, "routing_encodings.2d.x_code_action", "array", of="integer")
     edge = "routing_encodings.2d.mcast_tree_edge"
-    tree_edge_bytes = _lookup(manifest, f"{edge}.bytes", "integer")
+    tree_edge_bytes = lookup(manifest, f"{edge}.bytes", "integer")
     tree_edge_fields = {
         name: BitField(
-            _lookup(manifest, f"{edge}.{name}.shift", "integer"), _lookup(manifest, f"{edge}.{name}.bits", "integer")
+            lookup(manifest, f"{edge}.{name}.shift", "integer"), lookup(manifest, f"{edge}.{name}.bits", "integer")
         )
         for name in ("child", "parent", "output")
     }
@@ -269,9 +216,9 @@ def _encodings_2d(manifest: dict) -> Encodings2D:
 
 
 def _encodings_scatter(manifest: dict) -> EncodingsScatter:
-    chunk_type_bits = _lookup(manifest, "routing_encodings.scatter.chunk_encoding_bits", "integer")
-    max_chunks = _lookup(manifest, "routing_encodings.scatter.max_chunks", "integer")
-    types = _lookup(manifest, "enums.NocScatterWriteChunkEncoding.values", "object", of="integer")
+    chunk_type_bits = lookup(manifest, "routing_encodings.scatter.chunk_encoding_bits", "integer")
+    max_chunks = lookup(manifest, "routing_encodings.scatter.max_chunks", "integer")
+    types = lookup(manifest, "enums.NocScatterWriteChunkEncoding.values", "object", of="integer")
     known = {encoding.value for encoding in ChunkEncoding}
     if set(types) != known:
         raise ManifestError(
@@ -370,30 +317,30 @@ def get_mesh_view(manifest: dict, mesh_key: str) -> MeshView:
     if not (mesh_key.startswith("M") and mesh_key[1:].isdigit()):
         raise ManifestError(f"mesh key {mesh_key!r} isn't M<mesh id>")
     path = f"meshes.{mesh_key}"
-    shape = _lookup(manifest, f"{path}.shape", "array", of="integer")
+    shape = lookup(manifest, f"{path}.shape", "array", of="integer")
     if len(shape) != 2:
         raise ManifestError(f"{path}.shape is {shape}; the 2D rules need [y, x]")
-    torus = (_lookup(manifest, f"{path}.torus.y", "boolean"), _lookup(manifest, f"{path}.torus.x", "boolean"))
-    chips = _lookup(manifest, f"{path}.chips", "object")
-    coord_of = {key: tuple(_lookup(manifest, f"{path}.chips.{key}.mesh_coord", "array", of="integer")) for key in chips}
+    torus = (lookup(manifest, f"{path}.torus.y", "boolean"), lookup(manifest, f"{path}.torus.x", "boolean"))
+    chips = lookup(manifest, f"{path}.chips", "object")
+    coord_of = {key: tuple(lookup(manifest, f"{path}.chips.{key}.mesh_coord", "array", of="integer")) for key in chips}
 
-    roles = _lookup(manifest, "vocabulary.z_port_roles", "array", of="string")
+    roles = lookup(manifest, "vocabulary.z_port_roles", "array", of="string")
     if set(roles) != Z_PORT_ROLES:
         raise ManifestError(f"vocabulary.z_port_roles names {sorted(roles)}; the 2D rules know {sorted(Z_PORT_ROLES)}")
     z_peers = {}
     for key in chips:
         chip_path = f"{path}.chips.{key}"
-        if not _lookup(manifest, f"{chip_path}.is_local", "boolean"):
+        if not lookup(manifest, f"{chip_path}.is_local", "boolean"):
             continue
-        role = _lookup(manifest, f"{chip_path}.z_port_role", "string")
+        role = lookup(manifest, f"{chip_path}.z_port_role", "string")
         if role not in Z_PORT_ROLES:
             raise ManifestError(f"{chip_path}.z_port_role is {role!r}; the 2D rules know {sorted(Z_PORT_ROLES)}")
         if role != "express_chord":
             continue
         # A peer is a router path, such as "M0/C5/Z0"; an unconnected link has none.
         links = [
-            _lookup(manifest, f"{chip_path}.routers.{router_key}.link.peer", ("string", "null"))
-            for router_key in _lookup(manifest, f"{chip_path}.routers", "object")
+            lookup(manifest, f"{chip_path}.routers.{router_key}.link.peer", ("string", "null"))
+            for router_key in lookup(manifest, f"{chip_path}.routers", "object")
             if router_key.startswith("Z")
         ]
         peers = {None if link is None else tuple(link.split("/")[:2]) for link in links}

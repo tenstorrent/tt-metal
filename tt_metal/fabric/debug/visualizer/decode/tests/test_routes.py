@@ -277,16 +277,16 @@ class ManifestTypesTest(unittest.TestCase):
         c0 = "meshes.M0.chips.C0"
         cases = [
             ("routing_encodings.1d.hop", [0, 1, 2, 3], r"1d\.hop is an array; .* an object of integers"),
-            ("routing_encodings.1d.bits_per_hop", True, r"bits_per_hop is a boolean; the route rules need an integer"),
+            ("routing_encodings.1d.bits_per_hop", True, r"bits_per_hop is a boolean; expected an integer"),
             ("routing_encodings.2d.y_code_action", {"0": 0}, r"y_code_action is an object; .* an array of integers"),
             ("routing_encodings.2d.y_code_action", [0, 4, "8", 16], r"y_code_action\[2\] is a string"),
             ("routing_encodings.2d.mcast_tree_edge.bytes", 2.0, r"mcast_tree_edge\.bytes is a number"),
             ("meshes.M0.shape", {"y": 4, "x": 1}, r"meshes\.M0\.shape is an object; .* an array of integers"),
-            ("meshes.M0.torus", [True, False], r"meshes\.M0\.torus is an array; the route rules need an object"),
+            ("meshes.M0.torus", [True, False], r"meshes\.M0\.torus is an array; expected an object"),
             ("vocabulary.z_port_roles", "none", r"z_port_roles is a string; .* an array of strings"),
             (f"{c0}.mesh_coord", 0, r"C0\.mesh_coord is an integer; .* an array of integers"),
-            (f"{c0}.is_local", "true", r"C0\.is_local is a string; the route rules need a boolean"),
-            (f"{c0}.routers.Z0.link.peer", 2, r"Z0\.link\.peer is an integer; the route rules need a string or null"),
+            (f"{c0}.is_local", "true", r"C0\.is_local is a string; expected a boolean"),
+            (f"{c0}.routers.Z0.link.peer", 2, r"Z0\.link\.peer is an integer; expected a string or null"),
         ]
         for path, value, named in cases:
             with self.subTest(path=path, value=value), self.assertRaisesRegex(ManifestError, named):
