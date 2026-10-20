@@ -150,7 +150,6 @@ Tensor post_gather_transform_tensor(
     const auto orig_rank = input_shape.rank();
 
     if (orig_rank == 1) {
-        // squeeze_from_4D cannot drop the tile-padded height of (1, 1, 32, W); the only dim is the last one.
         output_tensor = ttnn::reshape(output_tensor, input_shape);
     } else if (orig_rank <= 4) {
         // For tensors of rank 4 and below: first transform back to original representation,
@@ -253,7 +252,6 @@ Tensor gather_dispatch(
     const auto& original_index_tensor_lshape = input_index_tensor.logical_shape();
     const auto index_tensor_rank = input_index_tensor.logical_shape().rank();
 
-    // Checked before the early exits and transforms: the device op only ever sees 4D operands.
     TT_FATAL(
         input_tensor_rank == index_tensor_rank,
         "Input and index tensor must have the same number of dimensions. Got input dim: {} and index dim: {}",
