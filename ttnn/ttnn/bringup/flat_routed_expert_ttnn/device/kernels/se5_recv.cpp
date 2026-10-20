@@ -401,6 +401,10 @@ void kernel_main() {
                 write_trid(x_ring + off, s_ring[k] + off, piece, trid0 + x_iss[k] % x_depth);
                 ++x_iss[k];
             }
+            // (the write command buffer drained first: an id's outstanding count only covers requests the NIU has
+            // taken - right after issuing, the last write can still sit in the command buffer and the id reads "done")
+            while (x_fwd[k] < x_iss[k] && !noc_cmd_buf_ready(noc_index, write_cmd_buf)) {
+            }
             while (x_fwd[k] < x_iss[k] &&
                    ncrisc_noc_nonposted_write_with_transaction_id_flushed(noc_index, trid0 + x_fwd[k] % x_depth)) {
                 noc_semaphore_inc(s_xarr[k], 1);
@@ -463,6 +467,8 @@ void kernel_main() {
             const uint32_t off = (h_iss % h_pieces) * h_piece_bytes;  // the successor has freed its previous h
             write_trid(h_all_addr + off, succ_hall + off, h_piece_bytes, 1 + link_depth + h_iss % link_depth);
             ++h_iss;
+        }
+        while (h_fwd < h_iss && !noc_cmd_buf_ready(noc_index, write_cmd_buf)) {  // (as for x above)
         }
         while (h_fwd < h_iss &&
                ncrisc_noc_nonposted_write_with_transaction_id_flushed(noc_index, 1 + link_depth + h_fwd % link_depth)) {
