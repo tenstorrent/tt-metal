@@ -7,30 +7,13 @@
 #include <cstdint>
 
 #include "ckernel.h"
-#include "ckernel_code_sequence.h"
 #include "ckernel_defs.h"
 #include "ckernel_globals.h"
 #include "ckernel_ops.h"
-#include "ckernel_template.h"
 #include "cunpack_common.h"
 
 using namespace ckernel;
 using namespace ckernel::unpacker;
-
-// The unpack code sequence: one character is one instruction, recorded into the replay buffer at init (see
-// instr_for_code in _llk_unpack_AB_face_compressed_mm_mop_config_ for the encodings):
-//
-//   0   unpack the next weight face through the bfp2 context (UNPACR into SrcA, Ch0Y += 1)
-//   1   the same through the bfp4 context
-//   S   CLR_SRC, which has to precede any face whose format differs from the one before it
-//   B   unpack the next activation block into SrcB (Ch0Y += 2, Ch0Z += 2)
-//
-// The header table asks for 0, 1, S0, S1, B0 and B1, issuing SB0 and SB1 through the MOP instead; the
-// pairs table asks for the sixteen three-transition concatenations its four face bits can produce, from
-// 000 up to S1S0S1. All twenty-three fragments are substrings of the thirty-two characters below, which is
-// the entire replay buffer -- on this thread nothing else uses it, so it starts at offset 0.
-static constexpr auto _llk_unpack_AB_face_compressed_mm_seq_ =
-    ckernel::code_seq::make_sequence<0 /* replay_base */, ckernel::REPLAY_BUF_SIZE>("SB0B1S0S1S0S111S00S1S000S11S0S11");
 
 // Unpack meta layout, in the index-word section of the meta buffer.
 //
@@ -44,141 +27,13 @@ static constexpr auto _llk_unpack_AB_face_compressed_mm_seq_ =
 //             a meta holds either one first-in-block face or none, never two
 //   bits 2-5  formats of this meta's four faces, 0 bfp2 and 1 bfp4
 //
-// The two tables below decode overlapping slices of it: the header table takes bits 0-2 and issues the
-// transition into face 1 plus the optional B, the pairs table takes bits 2-5 as three sliding 2-bit windows
-// and issues faces 2-4. Bit 5 therefore belongs to meta k+1 as much as to meta k, so masking the window
-// with 0b11111 would silently unpack every fourth face as bfp2.
-//
 // The shared bit is a producer invariant nothing on this side can check: word w bit 0 must equal word w-1
 // bit 30, the two spellings of that one face format. encode_meta in test_matmul_face_compressed.py upholds
 // it; a hand-built meta that does not corrupts silently.
 
-static constexpr auto _llk_unpack_AB_face_compressed_mm_header_table_ = ckernel::code_seq::make_table<_llk_unpack_AB_face_compressed_mm_seq_, 64>(
-    [](const std::uint32_t m, auto find) -> std::uint32_t
-    {
-        // A face's bit is its unpacker context: 0 bfp2, 1 bfp4. The previous face rides along so the
-        // two can be compared -- when the format changes, an S (CLR_SRC) has to be issued first to
-        // stall the unpacker before the context switches. The header bit adds the group's SrcB unpack.
-        const std::uint32_t face0  = m & 0b1;        // previous face
-        const std::uint32_t header = (m >> 1) & 0b1; // also unpack SrcB
-        const std::uint32_t face1  = (m >> 2) & 0b1; // this face
-        switch ((header << 2) | (face1 << 1) | face0)
-        {
-            case 0b000:
-                return find("0"); // bfp2 -> bfp2
-            case 0b001:
-                return find("S0"); // bfp4 -> bfp2
-            case 0b010:
-                return find("S1"); // bfp2 -> bfp4
-            case 0b011:
-                return find("1"); // bfp4 -> bfp4
-            case 0b100:
-                return find("B0"); // bfp2 -> bfp2, with B
-            case 0b101:
-                return TT_OP_MOP(p_mop::MASK_LOOP, 0, 0x0); // bfp4 -> bfp2, with B (SB0)
-            case 0b110:
-                return TT_OP_MOP(p_mop::MASK_LOOP, 0, 0x1); // bfp2 -> bfp4, with B (SB1)
-            case 0b111:
-                return find("B1"); // bfp4 -> bfp4, with B
-            default:
-                return 0;
-        }
-    });
-
-static constexpr auto _llk_unpack_AB_face_compressed_mm_pairs_table_ = ckernel::code_seq::make_table<_llk_unpack_AB_face_compressed_mm_seq_, 64>(
-    [](const std::uint32_t m, auto find) -> std::uint32_t
-    {
-        // faces1234 holds the group's four face formats, same encoding as the header table. That table
-        // issued face1, so this one issues faces 2..4 and concatenates their fragments into a single
-        // handle. Every transition needs its predecessor to decide the stall, so the 2-bit windows
-        // overlap -- low bit the previous face, high bit this face -- and the shift is by one, not two.
-        auto pair_frag = [](std::uint32_t transition) -> const char*
-        {
-            switch (transition)
-            {
-                case 0b00:
-                    return "0"; // bfp2 -> bfp2
-                case 0b01:
-                    return "S0"; // bfp4 -> bfp2
-                case 0b10:
-                    return "S1"; // bfp2 -> bfp4
-                case 0b11:
-                    return "1"; // bfp4 -> bfp4
-                default:
-                    return "";
-            }
-        };
-        std::uint32_t faces1234 = m >> 2;
-        char needle[8]          = {};
-        std::uint32_t len       = 0;
-        for (std::uint32_t i = 0; i < 3; ++i)
-        {
-            for (const char* p = pair_frag(faces1234 & 0x3); *p != '\0'; ++p)
-            {
-                needle[len++] = *p;
-            }
-            faces1234 >>= 1;
-        }
-        return find(needle);
-    });
-
-/**
- * @brief Record the unpack code sequence into the replay buffer and program the MOP that replays it.
- *
- * One instruction per character: '0' and '1' unpack a bfp2 or bfp4 face into SrcA, 'S' is the CLR_SRC stall
- * a format switch needs first, and 'B' unpacks the activation block into SrcB. The decode tables hand the
- * execute loop replay handles naming runs of these.
- *
- * @note Called from @ref _llk_unpack_AB_face_compressed_mm_init_ rather than directly.
- */
-inline void _llk_unpack_AB_face_compressed_mm_mop_config_()
-{
-    auto instr_for_code = [](char code)
-    {
-        switch (code)
-        {
-            case '0':
-                TTI_UNPACR_COMMON_EXPLICIT_CONTEXT_AND_COUNTER(SrcA, 0b00'00'01'00, 0, 1, 1);
-                break; // Ch0Y += 1
-            case '1':
-                TTI_UNPACR_COMMON_EXPLICIT_CONTEXT_AND_COUNTER(SrcA, 0b00'00'01'00, 1, 2, 1);
-                break; // Ch0Y += 1
-            case 'S':
-                TTI_UNPACR_NOP(SrcA, 0, 0, 0, 0, 1, 0, 0, p_unpacr_nop::CLR_SRC);
-                break;
-            case 'B':
-                TTI_UNPACR_COMMON(SrcB, 0b00'00'10'10, 1);
-                break; // Ch0Y += 2 Ch0Z += 2
-            default:
-                LLK_ASSERT(false, "Invalid code for unpack instruction");
-                break;
-        }
-    };
-
-    _llk_unpack_AB_face_compressed_mm_seq_.load(instr_for_code);
-
-    constexpr std::uint32_t SB  = _llk_unpack_AB_face_compressed_mm_seq_.fragment("SB");
-    constexpr std::uint32_t op0 = _llk_unpack_AB_face_compressed_mm_seq_.fragment("0");
-    constexpr std::uint32_t op1 = _llk_unpack_AB_face_compressed_mm_seq_.fragment("1");
-
-    ckernel_unpack_template tmp = ckernel_unpack_template(
-        true,      // unpackB    = true
-        false,     // unpackHalo = false
-        SB,        // A
-        TT_OP_NOP, // A1 (unused)
-        TT_OP_NOP, // A2 (unused)
-        TT_OP_NOP, // A3 (unused)
-        SB,        // skipA
-        op0,       // B
-        op1        // skipB
-    );
-    tmp.program();
-}
-
-// The two BFP precisions need their own address counters so one instruction stream can alternate format
-// face to face, and the unpacker has only one set of its own. It borrows other threads' ADC sets via the
-// SETADC thread-id override: bfp2 counts in the math thread's set, bfp4 in the pack thread's. That is why
-// every SETADC* site below holds mutex::THREAD2_ADC -- see ckernel_common_ops.h for the override macros.
+// The two BFP precisions need their own row counters so one instruction stream can alternate format face to
+// face, and the unpacker has only one set of its own. The RISC keeps both row positions and, whenever the
+// format changes, writes the new format's row into the single Ch0 Y counter before the face is unpacked.
 
 /**
  * @brief Configure the unpack thread for a face-granular compressed matmul.
@@ -220,23 +75,13 @@ inline void _llk_unpack_AB_face_compressed_mm_init_(const std::uint32_t unpB_fac
     // override z dim
     cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1, 16, 0xFF0000>(1);
 
-    _llk_unpack_AB_face_compressed_mm_mop_config_();
-
     constexpr std::uint32_t unpA_x_end = FACE_R_DIM * FACE_C_DIM - 1;
     const std::uint32_t unpB_x_end     = 4 * unpB_face_r_dim * FACE_C_DIM - 1;
 
-    t6_mutex_acquire(mutex::THREAD2_ADC);
-    // the thread override covers CH0 XY and CH1 X, CH0 ZW stays shared
-    // reset the borrowed counters, bfp2's in the math set and bfp4's in the pack set
-    TTI_SETADCXY_THREAD_OVERRIDE(p_setadc::UNP_AB, p_setadc::THREAD_OVRD_MATH, 0, 0, 0, 0, SETADC_CH01(p_setadc::XY));
-    TTI_SETADCXY_THREAD_OVERRIDE(p_setadc::UNP_AB, p_setadc::THREAD_OVRD_PACK, 0, 0, 0, 0, SETADC_CH01(p_setadc::XY));
-    TTI_SETADCXY(p_setadc::UNP_AB, 0, 0, 0, 0, SETADC_CH01(p_setadc::XY)); // unp1's own set, unp0's rides along
-    TTI_SETADCZW(p_setadc::UNP_AB, 0, 0, 0, 0, SETADC_CH01(p_setadc::ZW)); // ZW has no override, both formats share it
-    // set CH1 X for both unpackers; bfp4 and bfp2 sit in different thread overrides, so both get set
-    TTI_SETADC_THREAD_OVERRIDE(p_setadc::UNP0, p_setadc::CH_1, p_setadc::SET_X, p_setadc::THREAD_OVRD_MATH, unpA_x_end);
-    TTI_SETADC_THREAD_OVERRIDE(p_setadc::UNP0, p_setadc::CH_1, p_setadc::SET_X, p_setadc::THREAD_OVRD_PACK, unpA_x_end);
+    TTI_SETADCXY(p_setadc::UNP_AB, 0, 0, 0, 0, SETADC_CH01(p_setadc::XY));
+    TTI_SETADCZW(p_setadc::UNP_AB, 0, 0, 0, 0, SETADC_CH01(p_setadc::ZW));
+    TTI_SETADCXX(p_setadc::UNP_A, unpA_x_end, 0x0);
     TT_SETADCXX(p_setadc::UNP_B, unpB_x_end, 0x0);
-    t6_mutex_release(mutex::THREAD2_ADC);
 }
 
 /**
@@ -252,16 +97,14 @@ inline void _llk_unpack_AB_face_compressed_mm_uninit_(const std::uint32_t unpA_n
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Ovrd_data_format_RMW>(0);
     cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1, 16, 0xFF0000>(unpA_num_faces);
 
-    t6_mutex_acquire(mutex::THREAD2_ADC);
     // reset CH0 XY counters for both unpackers to leave them in a clean state
     TTI_SETADCXY(p_setadc::UNP_AB, 0, 0, 0, 0, SETADC_CH01(p_setadc::XY));
-    t6_mutex_release(mutex::THREAD2_ADC);
 }
 
 /**
  * @brief Unpack the activation block into SrcB and the compressed weight faces into SrcA.
  *
- * Streams the meta buffer's index words, pushing one replay handle pair per meta, and reloads the
+ * Streams the meta buffer's index words, unpacking each meta's faces, and reloads the
  * double-buffered unpacker contexts with the next chunk's weight base addresses as it goes.
  *
  * @tparam ct_dim: Output width in tiles, 1 to 16.
@@ -282,11 +125,11 @@ inline void _llk_unpack_AB_face_compressed_mm_(const std::uint32_t base_address_
     LLK_ASSERT(kt_dim >= 2 && kt_dim <= 256 && kt_dim % 2 == 0, "face_compressed_mm (unpack): kt_dim must be an even number in [2, 256]");
 
     // A meta address word packs two fields: the low 24 bits are a 16B-word base address, written to one
-    // unpacker context's Base_address, and the top byte is a Y offset, applied as that context's SET_Y.
+    // unpacker context's Base_address, and the top byte is a Y offset, the first row of that format in the chunk.
     constexpr std::uint32_t meta_addr_base_mask   = 0x00FFFFFF;
     constexpr std::uint32_t meta_addr_y_off_shift = 24;
 
-    // Geometry of the index words, per the layout block above the decode tables. The stride is narrower
+    // Geometry of the index words, per the layout block above. The stride is narrower
     // than the meta because consecutive metas share a bit, which is what fits six of them in one word.
     constexpr std::uint32_t meta_index_bits      = 6;
     constexpr std::uint32_t meta_stride_bits     = 5;
@@ -300,40 +143,56 @@ inline void _llk_unpack_AB_face_compressed_mm_(const std::uint32_t base_address_
     constexpr std::uint32_t unp_cfg_ctxt_offset_base = 0x0000; // cntx0 / cntx1
     constexpr std::uint32_t unp_cfg_ctxt_offset_alt  = 0x0002; // cntx2 / cntx3
 
-    // Apply the Y offsets of a consecutive bfp2/bfp4 pair of meta address words to the two borrowed Y
-    // counters, so each context reads from the right row of its base. bfp2 counts in the math thread's ADC
-    // set and bfp4 in the pack thread's, so each needs its own write. Caller holds the mutex.
-    auto set_y_off = [](const std::uint32_t tt_l1_ptr* addr_pair)
+    // Row position of the next face of each format, in the Ch0 Y counter's units.
+    std::uint32_t row[2];
+
+    // Take the Y offsets of a consecutive bfp2/bfp4 pair of meta address words as the two row positions, and
+    // point the Y counter at the one of the face format the stream is in, which is bit 0 of the next index word.
+    auto set_y_off = [&row](const std::uint32_t tt_l1_ptr* addr_pair, const std::uint32_t next_index_word)
     {
-        const std::uint32_t bfp2_y = addr_pair[0] >> meta_addr_y_off_shift;
-        const std::uint32_t bfp4_y = addr_pair[1] >> meta_addr_y_off_shift;
-        TT_SETADC_THREAD_OVERRIDE(p_setadc::UNP0, p_setadc::CH_0, p_setadc::SET_Y, p_setadc::THREAD_OVRD_MATH, bfp2_y);
-        TT_SETADC_THREAD_OVERRIDE(p_setadc::UNP0, p_setadc::CH_0, p_setadc::SET_Y, p_setadc::THREAD_OVRD_PACK, bfp4_y);
+        row[0] = addr_pair[0] >> meta_addr_y_off_shift;
+        row[1] = addr_pair[1] >> meta_addr_y_off_shift;
+        TT_SETADC(p_setadc::UNP0, p_setadc::CH_0, p_setadc::SET_Y, row[next_index_word & 1]);
     };
 
-    // A table entry is a whole instruction word and the entries are not all the same instruction
-    // (MOP and REPLAY), so these have no intrinsic form: the opcode is data here.
-    auto emit_word = [](std::uint32_t meta)
+    // Unpack one meta's faces. A face of another format than the one before it needs the CLR_SRC stall ahead
+    // of it and its own row in the Y counter, which then advances by one per face of that format.
+    auto emit_meta = [&row](std::uint32_t meta)
     {
-        std::uint32_t idx0 = (meta >> (0 * meta_stride_bits)) & meta_index_mask;
-        std::uint32_t idx1 = (meta >> (1 * meta_stride_bits)) & meta_index_mask;
-        std::uint32_t idx2 = (meta >> (2 * meta_stride_bits)) & meta_index_mask;
-        std::uint32_t idx3 = (meta >> (3 * meta_stride_bits)) & meta_index_mask;
-        std::uint32_t idx4 = (meta >> (4 * meta_stride_bits)) & meta_index_mask;
-        std::uint32_t idx5 = (meta >> (5 * meta_stride_bits)) & meta_index_mask;
+        const bool block        = (meta >> 1) & 1;
+        std::uint32_t prev_face = meta & 1;
+#pragma GCC unroll 4
+        for (std::uint32_t i = 0; i < 4; ++i)
+        {
+            const std::uint32_t face = (meta >> (2 + i)) & 1;
+            if (face != prev_face)
+            {
+                TTI_UNPACR_NOP(SrcA, 0, 0, 0, 0, 1, 0, 0, p_unpacr_nop::CLR_SRC);
+                TT_SETADC(p_setadc::UNP0, p_setadc::CH_0, p_setadc::SET_Y, row[face]);
+            }
+            if (i == 0 && block)
+            {
+                TTI_UNPACR_COMMON(SrcB, 0b00'00'10'10, 1); // Ch0Y += 2 Ch0Z += 2
+            }
+            if (face)
+            {
+                TTI_UNPACR_COMMON_EXPLICIT_CONTEXT(SrcA, 0b00'00'01'00, 1, 1); // Ch0Y += 1
+            }
+            else
+            {
+                TTI_UNPACR_COMMON_EXPLICIT_CONTEXT(SrcA, 0b00'00'01'00, 0, 1); // Ch0Y += 1
+            }
+            ++row[face];
+            prev_face = face;
+        }
+    };
 
-        TT_INSN(_llk_unpack_AB_face_compressed_mm_header_table_[idx0]);
-        TT_INSN(_llk_unpack_AB_face_compressed_mm_pairs_table_[idx0]);
-        TT_INSN(_llk_unpack_AB_face_compressed_mm_header_table_[idx1]);
-        TT_INSN(_llk_unpack_AB_face_compressed_mm_pairs_table_[idx1]);
-        TT_INSN(_llk_unpack_AB_face_compressed_mm_header_table_[idx2]);
-        TT_INSN(_llk_unpack_AB_face_compressed_mm_pairs_table_[idx2]);
-        TT_INSN(_llk_unpack_AB_face_compressed_mm_header_table_[idx3]);
-        TT_INSN(_llk_unpack_AB_face_compressed_mm_pairs_table_[idx3]);
-        TT_INSN(_llk_unpack_AB_face_compressed_mm_header_table_[idx4]);
-        TT_INSN(_llk_unpack_AB_face_compressed_mm_pairs_table_[idx4]);
-        TT_INSN(_llk_unpack_AB_face_compressed_mm_header_table_[idx5]);
-        TT_INSN(_llk_unpack_AB_face_compressed_mm_pairs_table_[idx5]);
+    auto emit_word = [&emit_meta](std::uint32_t word) __attribute__((noinline))
+    {
+        for (std::uint32_t k = 0; k < metas_per_index_word; ++k)
+        {
+            emit_meta((word >> (k * meta_stride_bits)) & meta_index_mask);
+        }
     };
 
     volatile std::uint32_t* cfg = get_cfg_pointer();
@@ -357,9 +216,7 @@ inline void _llk_unpack_AB_face_compressed_mm_(const std::uint32_t base_address_
     }
     TT_CFG_STORE(cfg, THCON_SEC0_REG3_Base_address_ADDR32, pre_meta_ptr[1] & meta_addr_base_mask);
     TT_CFG_STORE(cfg, THCON_SEC0_REG3_Base_cntx1_address_ADDR32, pre_meta_ptr[2] & meta_addr_base_mask);
-    t6_mutex_acquire(mutex::THREAD2_ADC);
-    set_y_off(pre_meta_ptr + 1);
-    t6_mutex_release(mutex::THREAD2_ADC);
+    set_y_off(pre_meta_ptr + 1, meta_ptr[0]);
     TT_CFG_STORE(cfg, THCON_SEC1_REG3_Base_address_ADDR32, base_address_b);
 
     semaphore_post(semaphore::UNPACK_SYNC);
@@ -381,9 +238,7 @@ inline void _llk_unpack_AB_face_compressed_mm_(const std::uint32_t base_address_
             emit_word(meta_ptr[c]);
         }
         TTI_SETC16(UNPACK_MISC_CFG_CfgContextOffset_0_ADDR32, unp_cfg_ctxt_offset_alt);
-        t6_mutex_acquire(mutex::THREAD2_ADC);
-        set_y_off(pre_meta_ptr + 3 + 4 * b);
-        t6_mutex_release(mutex::THREAD2_ADC);
+        set_y_off(pre_meta_ptr + 3 + 4 * b, meta_ptr[c]);
         for (std::uint32_t i = 0; i < 4; ++i, ++c)
         {
             emit_word(meta_ptr[c]);
@@ -395,9 +250,7 @@ inline void _llk_unpack_AB_face_compressed_mm_(const std::uint32_t base_address_
             emit_word(meta_ptr[c]);
         }
         TTI_SETC16(UNPACK_MISC_CFG_CfgContextOffset_0_ADDR32, unp_cfg_ctxt_offset_base);
-        t6_mutex_acquire(mutex::THREAD2_ADC);
-        set_y_off(pre_meta_ptr + 5 + 4 * b);
-        t6_mutex_release(mutex::THREAD2_ADC);
+        set_y_off(pre_meta_ptr + 5 + 4 * b, meta_ptr[c]);
     }
 
     if (odd_block)
@@ -413,9 +266,7 @@ inline void _llk_unpack_AB_face_compressed_mm_(const std::uint32_t base_address_
             emit_word(meta_ptr[c]);
         }
         TTI_SETC16(UNPACK_MISC_CFG_CfgContextOffset_0_ADDR32, unp_cfg_ctxt_offset_alt);
-        t6_mutex_acquire(mutex::THREAD2_ADC);
-        set_y_off(pre_meta_ptr + 3 + 4 * full_blocks);
-        t6_mutex_release(mutex::THREAD2_ADC);
+        set_y_off(pre_meta_ptr + 3 + 4 * full_blocks, meta_ptr[c]);
     }
 
     for (; c < full_iters; ++c)
@@ -425,9 +276,7 @@ inline void _llk_unpack_AB_face_compressed_mm_(const std::uint32_t base_address_
     std::uint32_t meta = meta_ptr[full_iters];
     for (std::uint32_t j = 0; j < rem_iters; ++j)
     {
-        std::uint32_t idx0        = meta & meta_index_mask;
-        TT_INSN(_llk_unpack_AB_face_compressed_mm_header_table_[idx0]);
-        TT_INSN(_llk_unpack_AB_face_compressed_mm_pairs_table_[idx0]);
+        emit_meta(meta & meta_index_mask);
         meta >>= meta_stride_bits;
     }
 
@@ -443,11 +292,8 @@ inline void _llk_unpack_AB_face_compressed_mm_(const std::uint32_t base_address_
     wait_for_next_context(1);
     reset_config_context();
 
-    // Put the counters back the way init left them, ready for the next call: zero the Y counters the
-    // per-face SET_Y writes moved and the shared ZW pair, but not X, so init's CH1 X ends survive.
-    t6_mutex_acquire(mutex::THREAD2_ADC);
-    TTI_SETADCXY_THREAD_OVERRIDE(p_setadc::UNP_AB, p_setadc::THREAD_OVRD_MATH, 0, 0, 0, 0, SETADC_CH01(p_setadc::Y));
-    TTI_SETADCXY_THREAD_OVERRIDE(p_setadc::UNP_AB, p_setadc::THREAD_OVRD_PACK, 0, 0, 0, 0, SETADC_CH01(p_setadc::Y));
+    // Put the counters back the way init left them, ready for the next call: zero the Y counter the
+    // per-face SET_Y writes moved and the ZW pair, but not X, so init's CH1 X ends survive.
+    TTI_SETADCXY(p_setadc::UNP_A, 0, 0, 0, 0, SETADC_CH01(p_setadc::Y));
     TTI_SETADCZW(p_setadc::UNP_AB, 0, 0, 0, 0, SETADC_CH01(p_setadc::ZW));
-    t6_mutex_release(mutex::THREAD2_ADC);
 }
