@@ -59,7 +59,8 @@ def _build():
     lib.hpcg_plan_meta.restype = I64
     # raw pointers (SparseRowPlan.meta caches them): called for every launch, where ndpointer checks of 17 arrays
     # cost more than the call
-    lib.hpcg_plan_meta.argtypes = [I32, I32, I32] + [ctypes.c_void_p] * 12 + [I64, I64] + [ctypes.c_void_p] * 4
+    vp = ctypes.c_void_p
+    lib.hpcg_plan_meta.argtypes = [I32, I32, I32, vp, I64] + [vp] * 11 + [I64, I64] + [vp] * 4
     lib.hpcg_plan_windows_transfer.restype = I64
     lib.hpcg_plan_windows_transfer.argtypes = [I32] + geo + geo + [I32, I32, i64p, I32, I32, I64, I64, I64] + [i64p] * 4
     lib.hpcg_transfer_tables.restype = I64
@@ -67,7 +68,7 @@ def _build():
     lib.hpcg_transfer_pad.restype = None
     lib.hpcg_transfer_pad.argtypes = [I32] + geo + geo + [I32, i64p]
     lib.hpcg_plan_windows_stencil.restype = I64
-    lib.hpcg_plan_windows_stencil.argtypes = geo + [I32, I32, i64p, I32, I32, I64, I64, I64, i64p, i64p, i64p, i64p]
+    lib.hpcg_plan_windows_stencil.argtypes = geo + [I32, I32, i64p, I32, I32, I64, I64, I64] + [i64p] * 5
     lib.hpcg_tile_permute.restype = None
     lib.hpcg_tile_permute.argtypes = [f32p, f32p, I64]
     lib.hpcg_plan_windows.restype = I64

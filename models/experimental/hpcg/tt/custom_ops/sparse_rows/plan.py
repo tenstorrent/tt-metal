@@ -204,26 +204,16 @@ class SparseRowPlan:
         offsets and the exchange entries; no offsets table (the device generates it)."""
         nc, NB = own.shape[:2]
         own_f = np.ascontiguousarray(own.reshape(-1), np.int64)
+        own_l1 = np.zeros((nc, NB), np.int64)  # L1 byte offset of each block's own rows, from the compiled planner
         for maxp in MAX_PIECES:
             plo, pln, pl1 = (np.zeros(nc * maxp, np.int64) for _ in range(3))
             npc = np.zeros(nc, np.int64)
-            args = (*L.geo(), nc, NB, own_f, GRAN, WGAP, ng, empty_lo, maxp, plo, pln, pl1, npc)
+            args = (*L.geo(), nc, NB, own_f, GRAN, WGAP, ng, empty_lo, maxp, plo, pln, pl1, npc, own_l1)
             if lib.hpcg_plan_windows_stencil(*args) >= 0:
                 break
         else:
             raise ValueError(f"a core needs more than {maxp} window pieces")
         lo2, ln2, l12 = (x.reshape(nc, maxp) for x in (plo, pln, pl1))
-        # the window piece holding each block's own rows, for every core at once: each core's pieces are sorted by
-        # lo, so (core, lo) keys are sorted over all cores (unused slots sort last within their core)
-        big = 1 << 40
-        used = np.arange(maxp)[None, :] < npc[:, None]
-        keys = (np.arange(nc)[:, None] * big + np.where(used, lo2, big - 1)).reshape(-1)
-        a, e = own[:, :, 0], own[:, :, 1]
-        f = np.searchsorted(keys, (np.arange(nc)[:, None] * big + a).reshape(-1), side="right").reshape(nc, NB) - 1
-        has = e > a
-        plo_f, pln_f, pl1_f = (x.reshape(-1)[f] for x in (lo2, ln2, l12))
-        assert np.all((e <= plo_f + pln_f)[has]), "own rows split over window pieces"
-        own_l1 = np.where(has, pl1_f + (a - plo_f) * 4, 0)
         ents = SparseRowPlan._exchange_native(lib, nc, NB, own_f, maxp, plo, pln, pl1, npc, noc_xy)
         return (lo2, ln2, l12, npc), None, own_l1, ents
 
@@ -406,17 +396,15 @@ class SparseRowPlan:
     def _native_args(self, key, noc_xy):
         """The plan's arrays for hpcg_plan_meta, as raw pointers (kept alive with them in self._tables[key])."""
         NB = len(self.out_blocks)
-        a2, ln2, l12, npc = self.piece_arrays
-        pat = np.concatenate([[0], np.cumsum(npc)]).astype(np.int64)
-        used = np.arange(a2.shape[1])[None, :] < npc[:, None]  # each core's pieces, core after core
-        plo, pln, pl1 = (np.ascontiguousarray(x[used], np.int64) for x in (a2, ln2, l12))
+        plo, pln, pl1, npc = (np.ascontiguousarray(x, np.int64) for x in self.piece_arrays)  # [nc, maxp], counts
         nbr, nat = (np.ascontiguousarray(x, np.int64) for x in self._nbr_csr)  # sorted per core
         own = np.ascontiguousarray(self.own.reshape(-1), np.int64)
         own_l1 = np.ascontiguousarray(self.own_l1.reshape(-1), np.int64)
         xat = np.ascontiguousarray(self._exch_at, np.int64)
         xrows = np.ascontiguousarray(self._exch_rows.reshape(-1), np.int64)
-        arrays = [pat, plo, pln, pl1, nat, nbr, _noc_array(noc_xy), own, own_l1, xat, xrows]
-        self._tables[key] = (NB, arrays, [a.ctypes.data for a in arrays])  # arrays kept alive with their pointers
+        arrays = [plo, pln, pl1, npc, nat, nbr, _noc_array(noc_xy), own, own_l1, xat, xrows]
+        # arrays kept alive with their pointers; max_pieces: the piece arrays' row stride
+        self._tables[key] = (NB, arrays, [plo.shape[1]] + [a.ctypes.data for a in arrays])
 
     def meta_tensor(self, device, phases, noc_xy, tpw=TILE):
         """meta(..., align=TILE) uploaded as a ROW_MAJOR [nc * pages, 1024] device tensor (u32_rows), and the rest of

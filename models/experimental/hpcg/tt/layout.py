@@ -81,13 +81,14 @@ def upload_zeros(device, P):
     """A small zero vector of length P as ROW_MAJOR [P / 1024, 1024] (the kernels read raw 4 KB pages, so the layout
     does not matter), uploaded from the host: no device program, so no kernel binary to load; and a plain copy, where a
     TILE upload tilizes on the host (0.6 ms the first time in a process)."""
-    return ttnn.from_torch(torch.zeros(P // TILE, TILE), dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    z = torch.from_numpy(np.zeros((P // TILE, TILE), np.float32))  # numpy: torch.zeros' first call costs ~0.5 ms
+    return ttnn.from_torch(z, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
 
 
 def scalar_device(device, value, only_first=False):
     """One 4 KB page holding value in every word (a CG scalar is word 0: element (0, 0) of a tile), uploaded from the
     host as ROW_MAJOR [1, 1024] (a plain copy). only_first: value in word 0 and zeros elsewhere (a per-core partial
     slot that DotFinishOp adds to exactly value)."""
-    t = torch.zeros((1, TILE)) if only_first else torch.full((1, TILE), float(value))
-    t[0, 0] = float(value)
-    return ttnn.from_torch(t, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    t = np.zeros((1, TILE), np.float32) if only_first else np.full((1, TILE), value, np.float32)
+    t[0, 0] = value
+    return ttnn.from_torch(torch.from_numpy(t), dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)

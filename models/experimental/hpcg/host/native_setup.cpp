@@ -405,7 +405,8 @@ int64_t hpcg_link(
 
 // Window pieces of every core of a Gauss-Seidel launch on the 27-point matrix of one level, from the storage-order
 // formula instead of the column table: the same pieces hpcg_plan_windows computes from COL with exchange = 1 (the
-// columns of a run of rows along x, for one neighbour line, are a contiguous range of q).
+// columns of a run of rows along x, for one neighbour line, are a contiguous range of q), and own_l1[k * NB + b]: the
+// L1 byte offset of core k's own rows of block b in its window.
 int64_t hpcg_plan_windows_stencil(
     int32_t nx,
     int32_t nbands,
@@ -425,7 +426,8 @@ int64_t hpcg_plan_windows_stencil(
     int64_t* piece_lo,
     int64_t* piece_ln,
     int64_t* piece_l1,
-    int64_t* npieces) {
+    int64_t* npieces,
+    int64_t* own_l1) {
     const Geo G{nx, nbands, nl, line_band, band_y0, band_ny, band_start};
     int64_t bad = 0;
 #pragma omp parallel
@@ -564,6 +566,22 @@ int64_t hpcg_plan_windows_stencil(
             npieces[k] = np;
             if (np > max_pieces) {
                 bad += 1;
+                continue;
+            }
+            // L1 byte offset of each block's own rows: inside the last piece starting at or before them
+            const int64_t* lo = piece_lo + k * max_pieces;
+            for (int32_t b = 0; b < NB; ++b) {
+                const int64_t a = own[(k * NB + b) * 2], e = own[(k * NB + b) * 2 + 1];
+                own_l1[k * NB + b] = 0;
+                if (e <= a) {
+                    continue;
+                }
+                const int64_t p = std::upper_bound(lo, lo + np, a) - lo - 1;
+                if (p < 0 || e > lo[p] + piece_ln[k * max_pieces + p]) {
+                    bad += 1;  // own rows split over window pieces (cannot happen: they are marked as one range)
+                    continue;
+                }
+                own_l1[k * NB + b] = piece_l1[k * max_pieces + p] + (a - lo[p]) * 4;
             }
         }
     }
@@ -828,7 +846,7 @@ int64_t hpcg_plan_exchange(
 }
 
 // Per-core metadata rows of one sparse-row launch (layout in tt/custom_ops/sparse_rows/kernels/common.h), the
-// same rows as SparseRowPlan.meta's Python version. Inputs per core k: window pieces plo/pln/pl1[pat[k] .. pat[k+1]),
+// same rows as SparseRowPlan.meta's Python version. Inputs per core k: window pieces plo/pln/pl1[k * max_pieces + i], i < npieces[k],
 // neighbours nbr[nat[k] .. nat[k+1]) (sorted), own (a, e) and own_l1 per block, exchange rows (5 words each)
 // xrows[xat[k * NB + b] .. xat[k * NB + b + 1]). With m == nullptr, returns the longest row; otherwise writes rows
 // into m ([nc][w] 32-bit words, each row's padding zeroed here: the table as uploaded) and the segment counts (all phases,
@@ -838,10 +856,11 @@ int64_t hpcg_plan_meta(
     int32_t NB,
     int32_t nph,
     const int64_t* phases,
-    const int64_t* pat,
+    int64_t max_pieces,
     const int64_t* plo,
     const int64_t* pln,
     const int64_t* pl1,
+    const int64_t* npieces,
     const int64_t* nat,
     const int64_t* nbr,
     const int64_t* noc_xy,
@@ -857,7 +876,7 @@ int64_t hpcg_plan_meta(
     int64_t* nseg_r) {
     int64_t longest = 0;
     for (int32_t k = 0; k < nc; ++k) {
-        const int64_t R = pat[k + 1] - pat[k], nnb = nat[k + 1] - nat[k];
+        const int64_t R = npieces[k], nnb = nat[k + 1] - nat[k];
         std::vector<int64_t> segs_in(NB);
         int64_t nsegs = 0, nx = 0;
         for (int32_t b = 0; b < NB; ++b) {
@@ -880,9 +899,9 @@ int64_t hpcg_plan_meta(
         r[3] = (int32_t)(nnb);
         r[4] = (int32_t)(NB);
         for (int64_t i = 0; i < R; ++i) {
-            r[5 + 3 * i] = (int32_t)(plo[pat[k] + i]);
-            r[6 + 3 * i] = (int32_t)(pln[pat[k] + i]);
-            r[7 + 3 * i] = (int32_t)(pl1[pat[k] + i]);
+            r[5 + 3 * i] = (int32_t)(plo[k * max_pieces + i]);
+            r[6 + 3 * i] = (int32_t)(pln[k * max_pieces + i]);
+            r[7 + 3 * i] = (int32_t)(pl1[k * max_pieces + i]);
         }
         int32_t* blk = r + 5 + 3 * R;
         int32_t* nbw = blk + 7 * NB;
