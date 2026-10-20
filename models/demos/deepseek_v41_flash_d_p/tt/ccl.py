@@ -226,14 +226,16 @@ def tp_sum(mesh, t: ttnn.Tensor, exact: bool = False) -> ttnn.Tensor:
     return out
 
 
-def sum_cols(mesh, t: ttnn.Tensor) -> ttnn.Tensor:
+def sum_cols(mesh, t: ttnn.Tensor, fp32: bool = True) -> ttnn.Tensor:
     """The exact fp32 sum of ``t`` ([1, 1, R, H] fp32 TILE) over the TP axis, the chip's hidden columns
     [1, 1, R, H/TP] (mesh column c: [c H/TP, (c+1) H/TP)). Does not consume ``t``. stock: _gather_add +
     mesh_partition. fabric: ONE fabric_reduce_scatter by column blocks (dim 3, exact SFPU add). fabric_bf16 (P.6):
-    the same RS in bf16 (FPU add), the result typecast to fp32 (mhc_post takes fp32); ``t`` may be bf16."""
+    the same RS in bf16 (FPU add), the result typecast to fp32 (mhc_post takes fp32); ``t`` may be bf16. ``fp32``
+    False (ATTN_GLUE=on, P.15): that bf16 result as is (the caller's consumer takes bf16)."""
     tp = mesh.shape[TP_AXIS]
     if fabric() and _rs_ok(t, 3, tp) and bf16_sums():  # CCL_IMPL=fabric_bf16 (P.6)
-        return _to_fp32(_rs_bf16(mesh, t, 3))
+        out = _rs_bf16(mesh, t, 3)
+        return _to_fp32(out) if fp32 else out
     if fabric() and _rs_ok(t, 3, tp):
         return ttnn.bringup.fabric_reduce_scatter(
             t, cluster_axis=TP_AXIS, num_links=rs_links(mesh), dim=3, exact_fp32_add=True, cache_descriptors=True

@@ -2205,3 +2205,39 @@ Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deeps
 - Re-run: fork tests `scripts/run_safe_pytest.sh --run-all ttnn/ttnn/bringup/mhc_post_ttnn/tests/unit/test_mhc_post_stats.py`
   and `.../mhc_pre_ttnn/tests/unit/test_{xing_collapse_pre,engram_pack}.py`; profile `DS41_MHC_FUSED=on|off` + the gate's
   profile command; final `python -m models.demos.common.bringup.orchestrator measure --task P.14`.
+
+## P.15 perf (attempt 1): attention / RoPE glue folded into ops (ATTN_GLUE on / off)
+- Setting ATTN_GLUE (tt/settings.py), default on (the change; the orchestrator pins both sides). Not a precision switch
+  (no MAX_PRECISION entry): every fold is a data move or a cast moved into the op before it.
+- (1) Pair interleave / de-interleave: tt/rope.py:PairPerm, a 0/1 [64, 64] bf16 matmul on the bf16 tail (data in in0),
+  HiFi4 + fp32 DEST (DS41-83: HiFi2 / LoFi drop in0's last bit; DS41-16's one-product-per-dot idea, K-30: never on
+  fp32 data). Sites: attention q (after the scale's bf16 multiply), attention output (bf16 sdpa output -> to_de, fp32
+  out), indexer q, kv and compressor (rope_deinterleaved_bf16: the rope's add / subtract write bf16 = act_q / fp4_q's
+  cast under native, DS41-84). Window layers now read the table as stored (instance INTERLEAVED=True when the q fold is
+  on): no per-chunk table transform (glue report A17). Output re-interleave dropped: wo_a's input rows permuted at load
+  to [nope | re | ro] (bfp8 groups run along N, so the weight rounds the same). NUMERICS=official keeps the fp32
+  interleave before an fp8 / fp4 block (q has no block: its fold runs in both numerics).
+- (2) q heads: ttnn.experimental.nlp_create_q_heads_split (attention: 16 heads, split 448; indexer: 32 heads, split
+  64): bit-identical to reshape + transpose / permute (probe ds41_attn_glue/probe_001); RoPE then on the 64-wide tail only.
+- (6) Output: the 448 nope columns stay bf16 (no bf16 -> fp32 -> bf16); after wo_a nlp_concat_heads (native: on the bf16
+  act_q, K-19: 2 x 1024 columns fit; g_l = 2 on every listed box) instead of slices + concat; sum_cols(fp32=False) returns
+  the bf16 reduce-scatter result. mhc_post takes bf16 F only without stats_weight (README limits), so under MHC_FUSED=on
+  (default) tt/residual.py casts it to fp32 before the stats pass: the A12 cast moved, not removed (attn_residual +0.36
+  ms); it is gone only under MHC_FUSED=off. Removing it needs a bf16 F CB in mhc_post's stats program (not done).
+- Exactness (probes ds41_attn_glue/probe_001..010): q bf16 bit-identical after reordering the tail; rope_deinterleaved_bf16
+  == typecast(rope_deinterleaved) (widths 512, 128); rope_heads(bf16) + PairPerm == typecast(rope_heads(interleave=True));
+  PairPerm to_de == deinterleave_tail. Window attention L0 output path vs float64 (bf16 o input): rel 0.00736 off and
+  on (DENSE_WEIGHTS / ATTN_FIDELITY / CCL max precision: 0.00136 both); on vs off 0.0019 (rounding order: permuted wo_a
+  K rows, table order in sdpa). Whole window layer on random inputs: 11.00 -> 4.74 ms a call (wall, synced).
+- Plain profile, 2x2, chunk 53248-55296 (profiles P.15_20261020T165333 off, P.15_20261020T164559 on), device ms a
+  chunk off -> on: attention 114.36 -> 43.01, indexer 34.97 -> 25.15, kv 2.11 -> 1.24, compressor 2.38 -> 1.90,
+  attn_residual 2.93 -> 3.29; device sum 202.19 -> 119.82 (-82.4 ms, -41 %). Programs (all chips) 9772 -> 8892:
+  attention 3296 -> 2648, indexer 756 -> 660, kv 1024 -> 928, compressor 1120 -> 1048, attn_residual 224 -> 256.
+- Quick A/B, on (`measure --task P.15`, rc 0): min layer L03 0.99489 (P.14: 0.99488), pcc_chunk_out 0.99941, chunk
+  wall 201.8 ms (spread 13.6; P.14 213.7), host_transfers_per_layer 0; final run after the doc edits: chunk wall 196.0
+  ms (spread 8.9), same PCCs. The wall falls far less than the device: the
+  chunk is host-bound now (device ~120 ms vs 202 ms wall), so op count is the next lever.
+- Frozen swap tests run by hand with ATTN_GLUE=on: test_swap_enc_source_14, swa_12, dec_reindex_13 pass (official
+  numerics, device attention / indexer / compressor / kv in the block; swa_12's ffn_hc WAIVED as before).
+- Re-run: probes `tests/ttnn/unit_tests/operations/ds41_attn_glue/probes/`; profile `DS41_ATTN_GLUE=on|off` + the gate's
+  profile command; final `python -m models.demos.common.bringup.orchestrator measure --task P.15`.
