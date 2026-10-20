@@ -308,6 +308,9 @@ llk:
   pr_gate:
     wh_n150_civ2: 40
     bh_p150b_civ2_viommu: 45
+    # Two 15-minute ttsim shards in llk_pr_gate_tests.yaml. The per-entry ceiling
+    # for pr_gate is 15, so the allowance is 2 * 15.
+    sim_quasar_xl: 30
   sanity:
     wh_n150_civ2: 40
     bh_p150b_civ2_viommu: 45

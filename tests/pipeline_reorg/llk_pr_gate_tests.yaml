@@ -101,3 +101,31 @@
     bh_p150b_civ2_viommu:
       timeout: 15
   owner_id: U09UC143684 # Nemanja Divnic
+
+- name: llk_smoke_quasar group 1/2
+  split_group: 1
+  team: llk
+  budget_type: pr_gate
+  coverage: false
+  cmd: |
+    set -euo pipefail
+    cd tests
+    ./run_ttsim_regression.sh -a quasar -n 8 -t 60 -- --splits 2 --group 1
+  skus:
+    sim_quasar_xl:
+      timeout: 15
+  owner_id: U09UC143684 # Nemanja Divnic
+
+- name: llk_smoke_quasar group 2/2
+  split_group: 2
+  team: llk
+  budget_type: pr_gate
+  coverage: false
+  cmd: |
+    set -euo pipefail
+    cd tests
+    ./run_ttsim_regression.sh -a quasar -n 8 -t 60 -- --splits 2 --group 2
+  skus:
+    sim_quasar_xl:
+      timeout: 15
+  owner_id: U09UC143684 # Nemanja Divnic

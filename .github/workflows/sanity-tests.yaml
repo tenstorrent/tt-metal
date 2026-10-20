@@ -661,8 +661,9 @@ jobs:
     uses: ./.github/workflows/llk-smoke-impl.yaml
     with:
       docker-image: ${{ needs.resolve-docker-pull-refs.outputs.llk-ci-docker-image }}
-      # sanity-skus, same as ttnn-sanity-tests. llk_pr_gate_tests.yaml references only
-      # wh_n150_civ2 and bh_p150b_civ2_viommu, so every other SKU in the list produces no
+      # sanity-skus, same as ttnn-sanity-tests. llk_pr_gate_tests.yaml's hardware rows
+      # are wh_n150_civ2 and bh_p150b_civ2_viommu; sim_quasar_xl is the PR-gate ttsim
+      # shards and is absent from sanity-skus, so every other SKU in the list produces no
       # matrix row, and a sim-only run yields none at all (the arch gate above also stops
       # that case before the impl is reached).
       enabled-skus: ${{ needs.generate-sku-matrix.outputs.sanity-skus }}
