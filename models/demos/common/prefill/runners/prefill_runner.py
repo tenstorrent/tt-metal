@@ -213,6 +213,10 @@ def _decode_metadata(metadata_msg: ttnn.Tensor, with_provided_levels: bool = Fal
     return meta
 
 
+def _chunks_in(meta: dict) -> int:
+    return 1 if FORWARD_CHUNKS == 1 else sum(not e.is_empty for e in meta["entries"])
+
+
 def _entries_str(meta: dict) -> str:
     if FORWARD_CHUNKS == 1:
         return ""
@@ -712,7 +716,9 @@ def _compute_and_send(
     return t_start
 
 
-def _drain_and_log_e2e(runtime, rank: int, d2d_out, first_compute_start, n_done: int, t0: float, idx_out=None) -> None:
+def _drain_and_log_e2e(
+    runtime, rank: int, d2d_out, first_compute_start, n_chunks: int, n_forwards: int, t0: float, idx_out=None
+) -> None:
     if d2d_out is not None:
         d2d_out.wait_for_fabric_links()
     if idx_out is not None:
@@ -720,8 +726,10 @@ def _drain_and_log_e2e(runtime, rank: int, d2d_out, first_compute_start, n_done:
     ttnn.synchronize_device(runtime.mesh_device)
     fcs = f"{first_compute_start:.6f}" if first_compute_start is not None else "n/a"
     logger.info(f"[pp rank {rank}] E2E_CLOCK first_compute_start={fcs} last_compute_end={time.time():.6f}")
-    unit = "chunks" if FORWARD_CHUNKS == 1 else "forwards"
-    logger.info(f"[pp rank {rank}] processed {n_done} {unit} in {(time.perf_counter() - t0) * 1000.0:.2f} ms")
+    forwards = f" ({n_forwards} forwards)" if FORWARD_CHUNKS > 1 else ""
+    logger.info(
+        f"[pp rank {rank}] processed {n_chunks} chunks{forwards} in {(time.perf_counter() - t0) * 1000.0:.2f} ms"
+    )
 
 
 def run_request_loop(
@@ -753,7 +761,8 @@ def run_request_loop(
         f"(is_first={cfg.is_first_rank} is_last={cfg.is_last_rank} input={'h2d' if cfg.is_first_rank else 'd2d'})"
     )
     t0 = time.perf_counter()
-    c = 0
+    c = 0  # chunks
+    n_forwards = 0
     first = None
     while not _shutdown:
         _lease_reclaim(d2d_in, d2d_out, idx_in, idx_out)
@@ -823,10 +832,11 @@ def run_request_loop(
         )
         if first is None:
             first = t
-        c += 1
+        c += _chunks_in(meta)
+        n_forwards += 1
         if layer_ack_service is not None:
             layer_ack_service.check()  # a lost D2H record is fatal for the run; surface it here, not at exit
-    _drain_and_log_e2e(runtime, rank, d2d_out, first, c, t0, idx_out)
+    _drain_and_log_e2e(runtime, rank, d2d_out, first, c, n_forwards, t0, idx_out)
 
 
 def _print_config() -> None:
