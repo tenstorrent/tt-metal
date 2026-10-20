@@ -285,32 +285,19 @@ def test_save_rejects_collapsed_replicate_label_over_different_data(tp_mesh, tmp
     assert tuple(record.shape) == (1, 1, 32, 32)
 
 
-def test_replica_check_can_be_disabled(tp_mesh, tmp_path, expect_error, monkeypatch):
-    """The replica check is on by default; ``TTML_CHECKPOINT_VERIFY_REPLICAS=0`` turns it off for every save in the
-    process (the label-trusting gather, which keeps one copy), and an explicit ``verify_replicas=`` overrides the
-    variable either way. Checked on a parameter whose ``Replicate`` label hides different data, saved alone so the
-    shape cross-check has nothing to compare it with."""
+def test_replica_check_can_be_disabled(tp_mesh, tmp_path, expect_error):
+    """The replica check is on by default, and ``verify_replicas=False`` restores the label-trusting gather, which
+    keeps one copy. Checked on a parameter whose ``Replicate`` label hides different data, saved alone so the shape
+    cross-check has nothing to compare it with."""
     params, _ = _trained_tp()
     name = _sharded_param_name(params)
     _forge_replicate(params[name])
     path = str(tmp_path / "toggle.ckpt")
 
-    monkeypatch.delenv(checkpointing.VERIFY_REPLICAS_ENV, raising=False)
     with expect_error(ReplicaMismatchError, rf"model\[{name}\] is labelled"):
         checkpointing.save_checkpoint(path, header={}, model_params=params)
     _assert_nothing_written(path)
 
-    for off in ("0", "false", "OFF"):
-        monkeypatch.setenv(checkpointing.VERIFY_REPLICAS_ENV, off)
-        checkpointing.save_checkpoint(path, header={}, model_params=params)
-        assert os.path.exists(path), off
-        os.remove(path)
-
-    with expect_error(ReplicaMismatchError, rf"model\[{name}\] is labelled"):
-        checkpointing.save_checkpoint(path, header={}, model_params=params, verify_replicas=True)
-    _assert_nothing_written(path)
-
-    monkeypatch.setenv(checkpointing.VERIFY_REPLICAS_ENV, "1")
     checkpointing.save_checkpoint(path, header={}, model_params=params, verify_replicas=False)
     assert os.path.exists(path)
 
