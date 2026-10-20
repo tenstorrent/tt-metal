@@ -5,9 +5,9 @@
 import torch
 
 import ttnn
+from models.common.layernorm import LayerNorm
 from models.common.lightweightmodule import LightweightModule
-from models.common.rmsnorm import RMSNorm
-from models.tt_transformers.tt.common import Mode
+from models.tt_transformers.tt.common import LayerNormTypes, Mode
 from models.tt_transformers.tt.distributed_norm import DistributedNorm
 from models.tt_transformers.tt.mlp import MLP
 from models.tt_transformers.tt.multimodal.llama_cross_attention import TtLlamaCrossAttention
@@ -55,13 +55,14 @@ class TtLlamaCrossAttentionTransformerBlock(LightweightModule):
         )
 
         self.attention_norm = DistributedNorm(
-            RMSNorm(
+            LayerNorm(
                 device=mesh_device,
                 dim=self.hidden_size,
                 state_dict=state_dict,
                 state_dict_prefix=state_dict_prefix,
                 weight_cache_path=None if configuration.dummy_weights else weight_cache_path,
                 weight_key="attention_norm",
+                norm_type=LayerNormTypes.RMSNORM,
                 is_distributed=configuration.is_distributed_norm,
                 tt_ccl=self.tt_ccl,
             ),
@@ -94,13 +95,14 @@ class TtLlamaCrossAttentionTransformerBlock(LightweightModule):
         )
 
         self.ffn_norm = DistributedNorm(
-            RMSNorm(
+            LayerNorm(
                 device=mesh_device,
                 dim=self.hidden_size,
                 state_dict=state_dict,
                 state_dict_prefix=state_dict_prefix,
                 weight_cache_path=None if configuration.dummy_weights else weight_cache_path,
                 weight_key="ffn_norm",
+                norm_type=LayerNormTypes.RMSNORM,
                 is_distributed=configuration.is_distributed_norm,
                 tt_ccl=self.tt_ccl,
             ),

@@ -8,7 +8,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.rmsnorm import RMSNorm as RMSNorm
+from models.common.layernorm import LayerNorm
 from models.common.utility_functions import comp_allclose, comp_pcc
 from models.demos.multimodal.gemma3.tt.model_config import ModelArgs as Gemma3ModelArgs
 from models.tt_transformers.tt.ccl import TT_CCL
@@ -60,12 +60,13 @@ def test_rms_norm_inference(
 
     # Create the inner RMSNormxw
     tt_ccl = TT_CCL(mesh_device)
-    tt_inner_norm = RMSNorm(
+    tt_inner_norm = LayerNorm(
         device=mesh_device,
         dim=model_args.dim,
         state_dict=state_dict,
         state_dict_prefix=state_dict_prefix,
         weight_key="attention_norm",
+        norm_type="RMSNorm",
         weight_dtype=dtype,
         add_unit_offset=model_args.rms_norm_add_unit_offset,
         is_distributed=model_args.is_distributed_norm,

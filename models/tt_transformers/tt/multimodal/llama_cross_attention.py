@@ -3,9 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
+from models.common.layernorm import LayerNorm
 from models.common.lightweightmodule import LightweightModule
-from models.common.rmsnorm import RMSNorm
-from models.tt_transformers.tt.common import Mode
+from models.tt_transformers.tt.common import LayerNormTypes, Mode
 
 
 class TtLlamaCrossAttention(LightweightModule):
@@ -107,24 +107,26 @@ class TtLlamaCrossAttention(LightweightModule):
 
         self.scale = self.head_dim**-0.5
 
-        self.q_norm = RMSNorm(
+        self.q_norm = LayerNorm(
             device=mesh_device,
             dim=self.head_dim,
             state_dict=state_dict,
             state_dict_prefix=f"{state_dict_prefix}",
             weight_cache_path=None if configuration.dummy_weights else weight_cache_path,
             weight_key="q_norm",
+            norm_type=LayerNormTypes.RMSNORM,
             eps=self.norm_eps,
             tt_ccl=self.tt_ccl,
         )
 
-        self.k_norm = RMSNorm(
+        self.k_norm = LayerNorm(
             device=mesh_device,
             dim=self.head_dim,
             state_dict=state_dict,
             state_dict_prefix=f"{state_dict_prefix}",
             weight_cache_path=None if configuration.dummy_weights else weight_cache_path,
             weight_key="k_norm",
+            norm_type=LayerNormTypes.RMSNORM,
             eps=self.norm_eps,
             tt_ccl=self.tt_ccl,
         )

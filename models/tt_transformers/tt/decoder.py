@@ -5,9 +5,8 @@
 import ttnn
 from models.common.layernorm import LayerNorm
 from models.common.lightweightmodule import LightweightModule
-from models.common.rmsnorm import RMSNorm
 from models.tt_transformers.tt.attention import Attention as DefaultAttention
-from models.tt_transformers.tt.common import Mode
+from models.tt_transformers.tt.common import LayerNormTypes, Mode
 from models.tt_transformers.tt.distributed_norm import DistributedNorm
 from models.tt_transformers.tt.mixtral_mlp import TtMixtralMLP
 from models.tt_transformers.tt.mixtral_moe import TtMoeLayer
@@ -129,11 +128,11 @@ class TransformerBlock(LightweightModule):
         assert not (
             self.use_parallel_residual and self.use_post_norm
         ), "use_parallel_residual and use_post_norm are mutually exclusive residual topologies"
-        NormClass = LayerNorm if getattr(args, "use_layernorm", False) else RMSNorm
+        norm_type = LayerNormTypes.LAYERNORM if getattr(args, "use_layernorm") else LayerNormTypes.RMSNORM
         self.attention_norm = DistributedNorm(
             None
             if self.use_post_norm
-            else NormClass(
+            else LayerNorm(
                 device=mesh_device,
                 dim=args.dim,
                 eps=args.norm_eps,
@@ -142,6 +141,7 @@ class TransformerBlock(LightweightModule):
                 weight_cache_path=None if args.dummy_weights else weight_cache_path,
                 weight_dtype=ttnn.bfloat16,
                 weight_key="attention_norm",
+                norm_type=norm_type,
                 is_distributed=self.args.is_distributed_norm,
                 add_unit_offset=self.args.rms_norm_add_unit_offset,
                 ccl_topology=self.args.ccl_topology(),
@@ -182,7 +182,7 @@ class TransformerBlock(LightweightModule):
             )
         if f"layers.{layer_num}.pre_feedforward_layernorm.weight" in state_dict:
             self.pre_ff_norm = DistributedNorm(  # pre_feedforward_layernorm
-                RMSNorm(
+                LayerNorm(
                     device=mesh_device,
                     dim=args.dim,
                     eps=args.norm_eps,
@@ -192,6 +192,7 @@ class TransformerBlock(LightweightModule):
                     weight_cache_path=None if args.dummy_weights else weight_cache_path,
                     weight_dtype=ttnn.bfloat16,
                     weight_key="pre_feedforward_layernorm",
+                    norm_type=LayerNormTypes.RMSNORM,
                     is_distributed=self.args.is_distributed_norm,
                     ccl_topology=self.args.ccl_topology(),
                     tt_ccl=self.tt_ccl,
@@ -225,7 +226,7 @@ class TransformerBlock(LightweightModule):
 
         if f"layers.{layer_num}.post_feedforward_layernorm.weight" in state_dict:
             self.post_ff_norm = DistributedNorm(  # post_feedforward_layernorm
-                RMSNorm(
+                LayerNorm(
                     device=mesh_device,
                     dim=args.dim,
                     eps=args.norm_eps,
@@ -235,6 +236,7 @@ class TransformerBlock(LightweightModule):
                     weight_cache_path=None if args.dummy_weights else weight_cache_path,
                     weight_dtype=ttnn.bfloat16,
                     weight_key="post_feedforward_layernorm",
+                    norm_type=LayerNormTypes.RMSNORM,
                     is_distributed=self.args.is_distributed_norm,
                     ccl_topology=self.args.ccl_topology(),
                     tt_ccl=self.tt_ccl,

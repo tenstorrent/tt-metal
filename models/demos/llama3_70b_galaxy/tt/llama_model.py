@@ -7,7 +7,6 @@ from ttnn.tools import trace_allocation_tracker
 import torch
 from tqdm import tqdm
 from models.demos.llama3_70b_galaxy.tt.llama_decoder import TtTransformerBlock
-from models.common.rmsnorm import RMSNorm
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.llama3_70b_galaxy.tt.distributed_norm import DistributedNorm

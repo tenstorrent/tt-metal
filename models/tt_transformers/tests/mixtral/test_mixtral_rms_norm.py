@@ -9,9 +9,9 @@ from loguru import logger
 from transformers.models.mixtral.modeling_mixtral import MixtralRMSNorm as RefRMSNorm
 
 import ttnn
-from models.common.rmsnorm import RMSNorm as RMSNorm
+from models.common.layernorm import LayerNorm
 from models.common.utility_functions import comp_allclose, comp_pcc
-from models.tt_transformers.tt.common import Mode
+from models.tt_transformers.tt.common import LayerNormTypes, Mode
 from models.tt_transformers.tt.load_checkpoints import HF_LAYER_NORM_KEYS, load_hf_state_dict_filtered
 from models.tt_transformers.tt.model_config import ModelArgs
 from ttnn import ConcatMeshToTensor, ReplicateTensorToMesh
@@ -70,12 +70,13 @@ def test_rms_norm_inference(
     reference_model.load_state_dict({"weight": norm_weight})
 
     # Create the inner RMSNormxw
-    tt_inner_norm = RMSNorm(
+    tt_inner_norm = LayerNorm(
         device=mesh_device,
         dim=model_args.dim,
         state_dict=state_dict,
         state_dict_prefix=state_dict_prefix,
         weight_key=f"{norm_type}_norm",
+        norm_type=LayerNormTypes.RMSNORM,
         weight_dtype=dtype,
         is_distributed=model_args.is_distributed_norm,
     )
