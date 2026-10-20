@@ -117,8 +117,11 @@ void check_compute_config(const DeviceComputeKernelConfig& config, std::string_v
         operation_name);
 }
 
-KdaPrepWorkDist distribute_prep(tt::tt_metal::CoreCoord grid, uint32_t total, uint32_t core_cap) {
-    const uint32_t max_cores = std::min<uint32_t>(grid.x * grid.y, core_cap);
+KdaPrepWorkDist distribute_prep(
+    tt::tt_metal::CoreCoord grid, uint32_t total, uint32_t core_cap, std::optional<tt::tt_metal::CoreCoord> excluded) {
+    const uint32_t grid_cores = grid.x * grid.y;
+    const bool skips = excluded.has_value() && excluded->x < grid.x && excluded->y < grid.y;
+    const uint32_t max_cores = std::min<uint32_t>(grid_cores - (skips ? 1u : 0u), core_cap);
     const uint32_t count = std::min(total, max_cores);
     TT_FATAL(count > 0, "KDA work distribution needs at least one item (total={})", total);
     const uint32_t base = total / count;
@@ -128,16 +131,28 @@ KdaPrepWorkDist distribute_prep(tt::tt_metal::CoreCoord grid, uint32_t total, ui
     distribution.cores.reserve(count);
     distribution.wi_start.reserve(count);
     distribution.wi_count.reserve(count);
+    std::vector<tt::tt_metal::CoreRange> ranges;
     uint32_t offset = 0;
-    for (uint32_t index = 0; index < count; ++index) {
-        const tt::tt_metal::CoreCoord core{index % grid.x, index / grid.x};
+    for (uint32_t position = 0; distribution.cores.size() < count; ++position) {
+        const tt::tt_metal::CoreCoord core{position % grid.x, position / grid.x};
+        if (skips && core == *excluded) {
+            continue;
+        }
+        const uint32_t index = distribution.cores.size();
         const uint32_t item_count = base + (index < remainder ? 1u : 0u);
         distribution.cores.push_back(core);
         distribution.wi_start.push_back(offset);
         distribution.wi_count.push_back(item_count);
         offset += item_count;
+        // Extend the row's current run, or start a new one.
+        if (!ranges.empty() && ranges.back().end_coord.y == core.y && ranges.back().end_coord.x + 1 == core.x) {
+            ranges.back().end_coord = core;
+        } else {
+            ranges.emplace_back(core, core);
+        }
     }
-    distribution.core_set = tt::tt_metal::num_cores_to_corerangeset(count, grid, true);
+    distribution.core_set = skips ? tt::tt_metal::CoreRangeSet(ranges).merge_ranges()
+                                  : tt::tt_metal::num_cores_to_corerangeset(count, grid, true);
     return distribution;
 }
 

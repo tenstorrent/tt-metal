@@ -25,6 +25,7 @@ from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
 )
 from models.demos.deepseek_v3_d_p.tests.kda.reference_cache import load_or_compute_cpu_reference
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
+    KIMI_K3_CONVOLUTION_NRMSE,
     KimiK3TestCase,
     LayerNrmseThresholds,
     check_kimi_k3_accuracy,
@@ -48,16 +49,15 @@ _TIMING_SAMPLES = 5
 _PCC_THRESHOLD = 0.9995
 _PERF_SKU = "bh_loudbox"
 _PERF_MARGIN = 0.03
-# LoudBox targets.
 _PERF_REFERENCE_MS = {
-    "SP1xTP8": 7.379,
-    "SP2xTP4": 7.436,
-    "SP4xTP2": 6.755,
+    "SP1xTP8": 6.785,
+    "SP2xTP4": 7.022,
+    "SP4xTP2": 6.114,
 }
 # Galaxy target: a full chunk whose start falls mid-device. A resumed request starts at an arbitrary aligned
 # prefix, and every full chunk of it then wraps onto its first rank, which adds the final-carry barrier and
 # broadcast that a rank-aligned start skips. Production always passes actual_end, so the gate does too.
-_GALAXY_PERF_REFERENCE_MS = 2.015
+_GALAXY_PERF_REFERENCE_MS = 1.456
 _GALAXY_ACTUAL_START = 4 * 640 + 320
 # Like the model's prefill tests, give CCL semaphores their own L1_SMALL region: allocated in L1 on the first call,
 # they would land between the chunk terms and fragment L1, so the traced call would plan ops on less free L1 than
@@ -154,7 +154,9 @@ def _trace_wall_samples_ms(
         ttnn.synchronize_device(mesh_device)
         validation = (
             validate_first_replay(
-                next_state, output, nrmse=LayerNrmseThresholds(output=0.03, recurrent=0.04, convolution=0.007)
+                next_state,
+                output,
+                nrmse=LayerNrmseThresholds(output=0.03, recurrent=0.04, convolution=KIMI_K3_CONVOLUTION_NRMSE),
             )
             if validate_first_replay is not None
             else None
@@ -243,7 +245,7 @@ def test_kimi_k3_layer_1_perf(
             mesh_device,
             tensor_parallel_axis,
             pcc_threshold=_PCC_THRESHOLD,
-            nrmse=LayerNrmseThresholds(output=0.03, recurrent=0.04, convolution=0.007),
+            nrmse=LayerNrmseThresholds(output=0.03, recurrent=0.04, convolution=KIMI_K3_CONVOLUTION_NRMSE),
         )
     finally:
         ttnn.deallocate(output)
