@@ -306,13 +306,28 @@ class AudioTraceControlTest(unittest.TestCase):
             self.assertFalse(resolve(True, False))
 
     def test_stage_opt_outs_and_legacy_flags(self):
-        for traced in (True, False):
+        for traced, independent in ((True, True), (True, False), (False, False)):
             for name, stage in [("LTX_VAE_TRACE", "mel"), ("LTX_VOC_TRACE", "vocoder"), ("LTX_BWE_TRACE", "bwe")]:
-                with self.subTest(traced=traced, stage=stage):
-                    a, _, _, _ = fixture(traced=traced, independent=False, env={name: "0"})
+                with self.subTest(traced=traced, independent=independent, stage=stage):
+                    a, _, _, _ = fixture(traced=traced, independent=independent, env={name: "0"})
+                    decode(a, Tensor())
+                    decode(a, Tensor())
                     stages = a.trace_status()["stages"]
                     self.assertFalse(stages[stage]["enabled"])
+                    self.assertEqual(stages[stage]["captures"], 0)
+                    self.assertEqual(stages[stage]["replays"], 0)
                     self.assertEqual(stages["bwe" if stage != "bwe" else "mel"]["enabled"], traced)
+
+    def test_independent_request_with_all_stages_disabled_stays_eager(self):
+        a, native, _, _ = fixture(env={name: "0" for name in ("LTX_VAE_TRACE", "LTX_VOC_TRACE", "LTX_BWE_TRACE")})
+        for value in (5, 9):
+            self.assertEqual(decode(a, Tensor(value)).value, value + 3)
+        self.assertTrue(a.trace_status()["requested"])
+        self.assertIsNone(a._warm_trace_identity)
+        self.assertEqual(a.mel_decoder.eager_calls, 2)
+        self.assertEqual(native.serial, 0)
+        for stage in a.trace_status()["stages"].values():
+            self.assertEqual(stage, dict(enabled=False, captured=0, captures=0, replays=0))
 
     def test_capacity_zero_unknown_and_exhausted_rejected(self):
         a, native, ns, _ = fixture()
@@ -442,6 +457,20 @@ class AudioTraceControlTest(unittest.TestCase):
         decode(a, Tensor())
         self.assertEqual(a.trace_status()["stages"]["mel"]["captures"], 0)
         self.assertEqual(a.trace_status()["stages"]["mel"]["replays"], 0)
+
+    def test_failed_capture_can_retry_only_after_cleanup_and_eager_warmup(self):
+        a, native, _, _ = fixture()
+        native.fail_end = True
+        with self.assertRaisesRegex(RuntimeError, "trace reservation exhausted"):
+            decode(a, Tensor())
+        self.assertEqual(native.traces, {})
+        self.assertIsNone(a._warm_trace_identity)
+        native.fail_end = False
+        self.assertEqual(decode(a, Tensor(5)).value, 8)
+        self.assertEqual(a.mel_decoder.eager_calls, 2)
+        self.assertEqual(a.trace_status()["stages"]["mel"], dict(enabled=True, captured=1, captures=1, replays=0))
+        self.assertEqual(decode(a, Tensor(9)).value, 12)
+        self.assertEqual(a.trace_status()["stages"]["mel"]["replays"], 1)
 
     def test_reload_invalidates_traces_before_loading_new_weight_addresses(self):
         a, native, ns, _ = fixture()

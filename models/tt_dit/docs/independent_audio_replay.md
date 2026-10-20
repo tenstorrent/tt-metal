@@ -81,6 +81,9 @@ compare deltas and live counts. A failed first execution may follow a successful
 capture, so a capture count alone is not execution evidence. Exceptions release
 partial independent captures and their held input/output references. These
 counters are control-flow evidence, not output correctness or hardware timing.
+If all stage flags opt out, `requested` remains true but every stage stays eager
+with zero captures/replays. A retry after failed capture eagerly warms again;
+its first successful capture still has zero replays.
 
 ## CPU regression checks
 
