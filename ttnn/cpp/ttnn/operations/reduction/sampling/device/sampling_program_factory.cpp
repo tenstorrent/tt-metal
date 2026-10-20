@@ -214,7 +214,6 @@ ttnn::device_operation::ProgramArtifacts SamplingProgramFactory::create_program_
     const uint32_t bf16_bytes = 2;
     uint32_t k_chunk_size = num_cores * uint32_bytes;
     uint32_t p_chunk_size = num_cores * bf16_bytes;
-    // Compute counts buffer pages in 16-byte units, so a smaller page (fewer than 8 users) would be empty.
     uint32_t temp_chunk_size = tt::round_up(num_cores * bf16_bytes, hal::get_l1_alignment());
 
     Group<DataflowBufferSpec> dataflow_buffers{
