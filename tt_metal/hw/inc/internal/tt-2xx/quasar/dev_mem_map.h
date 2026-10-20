@@ -481,9 +481,8 @@
 #define MEM_CCE_L1_BASE 0x0
 #define MEM_CCE_L1_SIZE (4 * 1024 * 1024)
 #define MEM_CCE_RESERVED_SIZE 128
-// Cached soft semaphores. Give each a dedicated cache line: host-visible mailbox state is updated
+// Cached watcher semaphore. Give it a dedicated cache line: host-visible mailbox state is updated
 // through the uncached alias, and a cached writeback must not overwrite neighboring fields.
-#define MEM_CCE_DEVICE_PRINT_LOCK 0
 #define MEM_CCE_WATCHER_RING_BUFFER_LOCK 64
 #define MEM_CCE_MAILBOX_BASE MEM_CCE_RESERVED_SIZE
 // Must hold mailboxes_t as instantiated for CCE (COMPILE_FOR_DRISC, PROCESSOR_COUNT == 8):

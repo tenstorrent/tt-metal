@@ -154,9 +154,7 @@ uint32_t firmware_config_init(
 #if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
     // TODO: Remove MEM_L1_UNCACHED_BASE here and invalidate cache lines when cache invalidating
     // functionality is ready for Quasar
-    // The host writes runtime args over the NOC/AXI, which does not go through the hart's data
-    // cache, so a cached read here returns the previous program's args when only an arg value
-    // changed. CCE SRAM aliases the same way as worker L1, so DRISC takes this path too.
+    // Note that the uncached address range is only valid for Quasar DM cores.
     rta_l1_base = (uint32_t tt_l1_ptr*)(kernel_config_base[core_type_index] +
                                         launch_msg_address->kernel_config.rta_offset[processor_index].rta_offset +
                                         MEM_L1_UNCACHED_BASE);
