@@ -420,5 +420,5 @@ Decode at 1M is bandwidth-bound: each chip reads its own user's global KV, 9 lay
 step, which takes 7.1 ms at this Galaxy's 448 GB/s (GDDR6 at 14 Gbps). The SDPA reads it at ~330 GB/s (9.7 ms).
 With the 12.2 ms rest of the step, 70 tok/s per user (14.3 ms) holds up to ~350K context; at 1M the ceiling is
 ~1000 / (12.2 + 7.1) = 52 tok/s, and the step is ~21-23 ms (43-48 tok/s) today. Prefill of a 1M prompt is the other
-limit: the chunked MLA prefill makes a 2048-token chunk at context C cost roughly 0.25 s + 12.5 us x C / 1K, ~1 hour
+limit: the chunked MLA prefill makes a 2048-token chunk at context C cost roughly 0.25 s + 12.5 ms x C / 1K, ~1 hour
 per 1M prompt.
