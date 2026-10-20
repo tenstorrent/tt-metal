@@ -14,6 +14,7 @@
 #include <utility>
 
 #include "../utils/gpr.h"
+#include "../utils/helpers.h"
 #include "ckernel.h"
 #include "llk_assert.h"
 
@@ -72,7 +73,7 @@ public:
     template <std::uint32_t Index>
     constexpr Value(const hal::Gpr<Index>)
     {
-        static_assert(Index != Index, "Blackhole does not handle REG2FLOP properly. GPR address-counter writes are unsupported");
+        static_assert(hal::always_false<Index>, "Blackhole does not handle REG2FLOP properly. GPR address-counter writes are unsupported");
     }
 };
 
