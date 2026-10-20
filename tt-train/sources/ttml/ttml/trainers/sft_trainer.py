@@ -260,10 +260,15 @@ class SFTTrainer:
         # marker fires on resume too, not only when self.step happens to equal 1.
         start_step = self.step
         # self.step (restored by load_checkpoint) is the step count of record, so the scheduler is not checkpointed:
-        # it is rebuilt here, offset to start at self.step. lr_lambda gets the 0-based step index.
-        scheduler = LambdaScheduler(self._optimizer, lambda step: self._lr_lambda(start_step + step))
+        # it is built on the first step, offset to start at self.step. lr_lambda gets the 0-based step index.
+        scheduler = None
         bar = tqdm(range(self.step, cfg.max_steps), desc="SFTTrainer", disable=cfg.disable_progress_bar)
         for _ in bar:
+            # LR for the step about to run: applied when the scheduler is built, then by each step().
+            if scheduler is None:
+                scheduler = LambdaScheduler(self._optimizer, lambda step: self._lr_lambda(start_step + step))
+            else:
+                scheduler.step()
             lr = scheduler.get_last_lrs()[0]  # logged, like HF's ``lr_scheduler.get_last_lr()[0]``
             self._optimizer.zero_grad()
 
@@ -299,7 +304,6 @@ class SFTTrainer:
             profiler_marker(None, "gradient_sync_done")
 
             self._optimizer.step()
-            scheduler.step()
             self.step += 1
 
             profiler_marker(None, "optimizer_step_done")

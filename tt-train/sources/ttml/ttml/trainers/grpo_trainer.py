@@ -735,6 +735,7 @@ def save_checkpoint(
     grpo_config: Optional[GRPOConfig] = None,
     optimizer: Any = None,
     model_source: Optional[str] = None,
+    scheduler: Any = None,
 ) -> None:
     ckpt_dir = os.path.join(output_dir, "checkpoints", f"grpo_step_{step}")
     os.makedirs(ckpt_dir, exist_ok=True)
@@ -771,12 +772,8 @@ def save_checkpoint(
     with open(os.path.join(ckpt_dir, "trainer_state.json"), "w") as f:
         json.dump(trainer_state, f, indent=2)
 
-    scheduler_state = {
-        "base_lrs": optimizer.get_initial_group_lrs() if optimizer else None,
-        "warmup_steps": grpo_config.warmup_steps if grpo_config else 0,
-        "last_step": step,
-    }
-    torch.save(scheduler_state, os.path.join(ckpt_dir, "scheduler.pt"))
+    if scheduler is not None:
+        torch.save(scheduler.get_state_dict(), os.path.join(ckpt_dir, "scheduler.pt"))
 
     rng_state = {
         "python": random.getstate(),
@@ -958,7 +955,7 @@ class GRPOTrainer:
         self.model = tt_model
 
         optimizer = create_optimizer(tt_model, self.optimizer_dict)
-        scheduler = LambdaScheduler(optimizer, linear_warmup_lambda(grpo_cfg.warmup_steps))
+        scheduler = None
 
         # Device-parallelism state. The trainer currently only handles either
         # single-device or DDP; tensor parallelism is not supported here. We
@@ -1206,12 +1203,16 @@ class GRPOTrainer:
                 # ``self._callback_times`` so a callback's cost lands in the row
                 # for the step in which it ran, not the row after.
                 self._callback_times = {}
+                # LR for the step about to run: applied when the scheduler is built, then by each step().
+                if scheduler is None:
+                    scheduler = LambdaScheduler(optimizer, linear_warmup_lambda(grpo_cfg.warmup_steps))
+                else:
+                    scheduler.step()
+                lr = scheduler.get_last_lrs()[0]  # logged like HF's lr_scheduler.get_last_lr()[0]
                 for cb in self.callbacks:
                     self._time_callback(cb, "on_before_optimizer_step", self)
                 optimizer.step()
                 optimizer.zero_grad()
-                lr = scheduler.get_last_lrs()[0]  # this step's LR, logged like HF's lr_scheduler.get_last_lr()[0]
-                scheduler.step()
 
                 # Generation runs once per effective batch; attribute its cost to
                 # the first mini-epoch's step only.
@@ -1271,6 +1272,7 @@ class GRPOTrainer:
                         grpo_config=grpo_cfg,
                         optimizer=optimizer,
                         model_source=self.model_source,
+                        scheduler=scheduler,
                     )
                     for cb in self.callbacks:
                         if cb is monitor_cb:

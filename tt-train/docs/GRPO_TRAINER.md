@@ -581,8 +581,8 @@ Each checkpoint directory contains:
 | `tokenizer_config.json` | Tokenizer configuration | `tokenizer.save_pretrained()` |
 | `tokenizer.json` | Full tokenizer (vocabulary, merges, etc.) | `tokenizer.save_pretrained()` |
 | `generation_config.json` | Generation parameters (temperature, max tokens, special token IDs) | Built from `GRPOConfig` and tokenizer |
-| `trainer_state.json` | Training progress (global step, learning rate) | Current optimizer step and LR |
-| `scheduler.pt` | Learning rate scheduler state (base LR, warmup config, step) | `torch.save()` |
+| `trainer_state.json` | Training progress (global step, learning rate of each param group) | Current optimizer step and the per-group LRs the last step trained with |
+| `scheduler.pt` | Learning rate scheduler state (step, per-group base and last LRs) | `torch.save(scheduler.get_state_dict())` |
 | `rng_state.pth` | Python, NumPy, and PyTorch RNG states for reproducibility | `torch.save()` |
 | `training_args.bin` | Full `GRPOConfig` dataclass serialized as a dict | `torch.save(dataclasses.asdict(grpo_config))` |
 | `timestamp.txt` | UTC timestamp of when the checkpoint was saved | `datetime.now(timezone.utc)` |

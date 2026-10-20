@@ -6,8 +6,6 @@
 
 #include <fmt/format.h>
 
-#include <stdexcept>
-
 #include "autograd/auto_context.hpp"
 #include "autograd/autocast_tensor.hpp"
 #include "core/debug.hpp"

@@ -14,6 +14,10 @@
 
 namespace ttml::optimizers {
 
+// beta1^t and beta2^t for each param group (AdamW's bias correction).
+//
+// - advance(): once per group in every step(), after m_steps++.
+// - reset(): whenever the step count, a group's beta1/beta2, or the param groups change.
 class BetaPowers {
 public:
     void reset(const std::vector<ParamGroup>& groups, size_t steps) {

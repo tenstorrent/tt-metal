@@ -187,9 +187,7 @@ std::vector<ParamGroup> param_groups_from_py(const nb::list& groups) {
         for (auto [key, value] : group_dict) {
             const auto key_str = nb::cast<std::string>(key);
             if (key_str == "params") {
-                for (auto name : value) {
-                    group.params.push_back(nb::cast<std::string>(name));
-                }
+                group.params = nb::cast<std::vector<std::string>>(value);
             } else {
                 group.options[key_str] = nb::cast<float>(value);
             }
@@ -203,11 +201,7 @@ nb::list param_groups_to_py(const std::vector<ParamGroup>& groups) {
     nb::list result;
     for (const auto& group : groups) {
         nb::dict group_dict;
-        nb::list params;
-        for (const auto& name : group.params) {
-            params.append(name);
-        }
-        group_dict["params"] = params;
+        group_dict["params"] = nb::cast(group.params);
         for (const auto& [key, value] : group.options) {
             group_dict[key.c_str()] = value;
         }

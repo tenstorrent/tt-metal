@@ -361,3 +361,17 @@ def test_muon_with_adamw_group_options_cover_both_inner_optimizers(expect_error)
     opt.set_param_group_option(1, "weight_decay", 0.05)  # AdamW's group
     assert opt.muon_optimizer().get_param_groups()[0]["momentum"] == pytest.approx(0.9)
     assert opt.adamw_optimizer().get_param_groups()[0]["weight_decay"] == pytest.approx(0.05)
+
+
+def test_registry_reads_variant_only_adamw_options():
+    """Stochastic Rounding (AdamW) and Kahan Summation (AdamWComposite) are parsed only for the config that has the
+    field, so a renamed field would silently drop its YAML key."""
+    params = _make_stage_model().parameters()
+
+    for stochastic_rounding in (True, False):
+        opt = ttml.optimizers.create_optimizer({"type": "AdamW", "stochastic_rounding": stochastic_rounding}, params)
+        assert opt.get_state_dict()["stochastic_rounding"] == stochastic_rounding
+
+    for kahan_summation, num_buffers in ((True, len(params)), (False, 0)):
+        opt = ttml.optimizers.create_optimizer({"type": "AdamWComposite", "kahan_summation": kahan_summation}, params)
+        assert len(opt.get_state_dict()["kahan_compensation"]) == num_buffers

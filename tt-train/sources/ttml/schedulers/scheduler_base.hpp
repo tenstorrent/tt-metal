@@ -15,15 +15,14 @@ class OptimizerBase;
 
 namespace ttml::schedulers {
 
-// LRScheduler holds a base learning rate per optimizer param group and on every step computes
-// the new learning rate for each group.
+// Base of all LR schedulers.
 class LRSchedulerBase {
 public:
     explicit LRSchedulerBase(optimizers::OptimizerBase *optimizer);
 
     virtual ~LRSchedulerBase() = default;
 
-    // Advances the step count and applies the new LR of every param group.
+    // Called once per training step.
     virtual void step() = 0;
 
     // LRs this scheduler last computed, one per param group.
@@ -53,6 +52,8 @@ protected:
     // Per-group LRs this scheduler last wrote. Initialized to the base LRs.
     std::vector<float> m_last_lrs;
     size_t m_last_step = 0;
+    // m_base_lrs and m_last_step are used by ClosedFormLRScheduler only. SequentialScheduler leaves them at their
+    // initial values but still checkpoints them, which keeps its state-dict keys unchanged.
 };
 
 // Scheduler whose LR for each group is a function of that group's base LR and the step count.
@@ -60,6 +61,7 @@ class ClosedFormLRScheduler : public LRSchedulerBase {
 public:
     explicit ClosedFormLRScheduler(optimizers::OptimizerBase *optimizer);
 
+    // Advances the step count and applies the new LR of every param group.
     void step() override;
 
 protected:

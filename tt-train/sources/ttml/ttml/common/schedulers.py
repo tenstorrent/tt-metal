@@ -53,8 +53,8 @@ class SpeedrunScheduler:
 class _SchedulerBase:
     """Base class for stateful LR schedulers (mirrors the C++ ``LRSchedulerBase``).
 
-    Scheduler keeps one base LR per optimizer param group and, every step, updates
-    each group's LR. Subclasses implement ``step``.
+    Schedulers set the LR of each optimizer param group as training goes on.
+    Subclasses implement ``step``, called once per training step.
 
     ``optimizer`` must expose ``get_initial_group_lrs()``, ``get_group_lrs()``
     and ``set_group_lrs()`` (every subclass of ``ttml.optimizers.OptimizerBase``
@@ -123,11 +123,8 @@ class _ClosedFormScheduler(_SchedulerBase):
     def _apply_lrs(self):
         """Set every group's LR to ``_compute_lr`` of its base LR and record them as the last LRs.
 
-        The only place a scheduler writes to the optimizer (same contract as
-        the C++ ``ClosedFormLRScheduler::apply_lrs``): step() calls it after
-        advancing the step, and constructors call it once, mirroring PyTorch's
-        construction-time initial step (each scheduler applies its step-0 LRs
-        at construction).
+        step() calls it after advancing the step, and constructors call it once, mirroring PyTorch's
+        construction-time initial step (each scheduler applies its step-0 LRs at construction).
         """
         lrs = [self._compute_lr(base_lr) for base_lr in self._base_lrs]
         self._optimizer.set_group_lrs(lrs)
@@ -305,8 +302,7 @@ class SequentialScheduler(_SchedulerBase):
     def _apply_lrs(self):
         """Write the current child's last LRs to the optimizer and record them.
 
-        Every call site (constructor, set_state_dict) runs right after the current
-        child computed its LRs, so its last LRs are up to date.
+        Called by the constructor, right after the current child computed its LRs, so its last LRs are up to date.
         """
         self._last_lrs = self._schedulers[self._current_scheduler_index].get_last_lrs()
         self._optimizer.set_group_lrs(self._last_lrs)
