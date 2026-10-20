@@ -2188,7 +2188,8 @@ def _acknowledges(key, cell) -> bool:
 #: Empty: every enrolled op covers every cell the sweep drives. The emitter writes whole
 #: grids, so a hole can only open where it keeps a block verbatim (an op-wide
 #: `atol`/`rtol` anchor) and the sweep's format set then grows -- the cell is measured,
-#: resolves to the global default, and nothing holds it. A cell listed here is a decision, with its reason, not a gap.
+#: resolves to the global default, and nothing holds it. A cell listed here is a
+#: decision, with its reason, not a gap.
 _UNRESOLVED_SWEPT_CELLS: dict = {}
 
 
