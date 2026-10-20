@@ -28,12 +28,17 @@ add/sub/mul/div — fp32 add/sub now route the ported SFPU primitives, see _run)
         pytest tests/ttnn/nightly/unit_tests/operations/experimental/quasar/test_binary_ng_no_bcast.py
 """
 
+import itertools
+
 import pytest
 
 import ttnn
 from tests.ttnn.nightly.unit_tests.operations.experimental.quasar.binary_ng_quasar_test_utils import (
+    _DIVIDE_NOT_NAN,
+    _SPECIAL,
     _on_quasar,
     _run,
+    _run_special,
     _run_mixed,
     _act,
     _height_sharded_config,
@@ -257,6 +262,31 @@ def test_no_bcast_activation_supported(device, act, position, layout):
         shape = _HEIGHT_SHAPE
     act_kwarg = {"post_act": act} if position == "post" else {"lhs_act": act}
     _run(device, "multiply", mem_config, ttnn.bfloat16, shape, **act_kwarg)
+
+
+# Special values: every pair of 1.5, -2, +0, -0, +inf, -inf and NaN, as production's test_div_fp32 checks them, so inf
+# and NaN must sit where torch puts them. Quasar only: Wormhole's bf16 has no NaN (a NaN operand comes out as inf or a
+# finite number), and its fp32 divide gives NaN for the pairs that Quasar's does not.
+_SPECIAL_SKIP = pytest.mark.skipif(not _on_quasar(), reason="Quasar's special values; Wormhole's bf16 has no NaN")
+
+
+@_SPECIAL_SKIP
+@pytest.mark.parametrize("op_name", ["add", "subtract", "multiply", "divide"])
+@pytest.mark.parametrize("dtype_tt", [ttnn.bfloat16, ttnn.float32])
+def test_no_bcast_special_values(device, op_name, dtype_tt):
+    pairs = [p for p in itertools.product(_SPECIAL, repeat=2) if op_name != "divide" or p not in _DIVIDE_NOT_NAN]
+    _run_special(device, op_name, dtype_tt, pairs)
+
+
+# Quasar's SFPU divide gives a number where IEEE gives NaN for these six pairs. Strict, so that the test fails as soon
+# as the divide gives NaN for them.
+@_SPECIAL_SKIP
+@pytest.mark.xfail(
+    strict=True, raises=AssertionError, reason="Quasar's divide gives a number, not NaN, for these pairs"
+)
+@pytest.mark.parametrize("dtype_tt", [ttnn.bfloat16, ttnn.float32])
+def test_no_bcast_divide_special_values_known_difference(device, dtype_tt):
+    _run_special(device, "divide", dtype_tt, _DIVIDE_NOT_NAN)
 
 
 @pytest.mark.parametrize("dtype_tt", [ttnn.bfloat16, ttnn.float32])

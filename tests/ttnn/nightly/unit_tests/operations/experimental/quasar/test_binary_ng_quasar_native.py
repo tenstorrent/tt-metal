@@ -38,6 +38,7 @@ import pytest
 import torch
 
 import ttnn
+from tests.ttnn.utils_for_testing import ulp_distance
 from tests.ttnn.nightly.unit_tests.operations.experimental.quasar.binary_ng_quasar_test_utils import _run
 
 # Resolve the inspector output the way the runtime does: <logs_dir>/generated/inspector, where
@@ -148,8 +149,8 @@ def _noc_split(tiles, clusters=_CLUSTERS):
 
 
 def _wrong_tiles(got, golden):
-    """The 32x32 tiles of a 2D output in which any element differs from the oracle, compared as int16."""
-    differ = got.contiguous().view(torch.int16) != golden.contiguous().view(torch.int16)
+    """The 32x32 tiles of a 2D output in which any element differs from the oracle by at least one ULP."""
+    differ = ulp_distance(got, golden) > 0
     height, width = differ.shape[-2:]
     return int(differ.reshape(-1, height // 32, 32, width // 32, 32).any(dim=4).any(dim=2).sum())
 
@@ -341,6 +342,7 @@ _NATIVE_ARMS = [(1, 1, 1), (4, 4, 2), (1, 4, 4), (4, 4, 1), (2, 4, 2)]
 _ARM_SRC = """
 import json, os, pathlib, sys
 import torch, ttnn
+from tests.ttnn.utils_for_testing import ulp_distance
 
 TILE_COUNTS = json.loads(os.environ["ARM_TILE_COUNTS"])
 
@@ -357,7 +359,7 @@ try:
                                            dtype=ttnn.bfloat16)
         golden = (ttnn.to_torch(ta).float() + ttnn.to_torch(tb).float()).to(torch.bfloat16)
         got = ttnn.to_torch(out)
-        differ = got.contiguous().view(torch.int16) != golden.contiguous().view(torch.int16)
+        differ = ulp_distance(got, golden) > 0
         if differ.any():
             h, w = differ.shape[-2:]
             wrong = int(differ.reshape(-1, h // 32, 32, w // 32, 32).any(dim=4).any(dim=2).sum())
@@ -853,6 +855,8 @@ def _config_params(configs, cases):
 _SHARD_ARM_SRC = """
 import collections, csv, json, os, pathlib, sys
 import torch, ttnn
+from tests.ttnn.utils_for_testing import ulp_distance
+from tests.ttnn.nightly.unit_tests.operations.experimental.quasar.binary_ng_quasar_test_utils import _ULP
 
 SHARDS = json.loads(os.environ["ARM_SHARDS"])
 EXPECT = os.environ["ARM_EXPECT"]
@@ -876,14 +880,8 @@ def round_to_bf16(x):
 
 def truncate_to_bf16(x):
     # Quasar's SFPU multiply drops the low 16 bits of the fp32 result today, where the Wormhole and Blackhole LLKs
-    # round to nearest even, and a zero product comes out as +0.0: adding 0.0 turns -0.0 into +0.0 and keeps every
-    # other value.
-    return ((x.contiguous().view(torch.int32) & -65536).view(torch.float32) + 0.0).to(torch.bfloat16)
-
-
-def round_to_bf16_zero_positive(x):
-    # Quasar's SFPU divide rounds to nearest even, and a zero quotient comes out as +0.0, as a zero product does.
-    return (x.to(torch.bfloat16).float() + 0.0).to(torch.bfloat16)
+    # round to nearest even.
+    return (x.contiguous().view(torch.int32) & -65536).view(torch.float32).to(torch.bfloat16)
 
 
 # op -> (the op, its extra arguments, the exact result, the kernel's rounding of it to bf16). The FPU kernel
@@ -894,7 +892,7 @@ OPS = {"add": (ttnn.experimental.quasar.add, {}, torch.add, round_to_bf16),
        "multiply": (ttnn.experimental.quasar.multiply, {}, torch.multiply, truncate_to_bf16),
        "multiply_fast": (ttnn.experimental.quasar.multiply, {"fast_and_approximate_mode": True}, torch.multiply,
                          round_to_bf16),
-       "divide": (ttnn.experimental.quasar.divide, {}, torch.divide, round_to_bf16_zero_positive)}
+       "divide": (ttnn.experimental.quasar.divide, {}, torch.divide, round_to_bf16)}
 
 
 def square(x):
@@ -902,12 +900,7 @@ def square(x):
     return truncate_to_bf16(x * x).float()
 
 
-def relu(x):
-    # RELU on the SFPU gives +0.0 for a negative input.
-    return torch.where(x > 0, x, torch.zeros_like(x))
-
-
-# act -> (the op's activation arguments, the output from the operands, the exact op and its rounding). SQUARE
+# act ->(the op's activation arguments, the output from the operands, the exact op and its rounding). SQUARE
 # chains on a, on b, on both or on the result; a lone RELU on the result runs in the packer, on the rounded result.
 # RELU on a, and RELU on the result beside a chain, run on the SFPU.
 SQUARE, RELU = ttnn.UnaryWithParam(ttnn.UnaryOpType.SQUARE), ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)
@@ -922,24 +915,17 @@ ACTS = {None: ({}, lambda a, b, exact, rounding: rounding(exact(a, b))),
                  lambda a, b, exact, rounding: square(rounding(exact(a, b)).float()).to(torch.bfloat16)),
         "relu": ({"activations": [RELU]}, lambda a, b, exact, rounding: torch.relu(rounding(exact(a, b)))),
         "relu_lhs": ({"input_tensor_a_activations": [RELU]},
-                     lambda a, b, exact, rounding: rounding(exact(relu(a), b))),
+                     lambda a, b, exact, rounding: rounding(exact(torch.relu(a), b))),
         "relu_chain": ({"input_tensor_a_activations": [SQUARE], "activations": [RELU]},
-                       lambda a, b, exact, rounding: relu(rounding(exact(square(a), b)).float()).to(torch.bfloat16))}
+                       lambda a, b, exact, rounding: torch.relu(rounding(exact(square(a), b))))}
 
 
-def zero_positive(x):
-    # A zero product or quotient of the SFPU comes out as +0.0: adding 0.0 turns -0.0 into +0.0 and keeps every other
-    # value.
-    return x + 0.0
-
-
-# On fp32 operands every op runs on the SFPU kernel and keeps the fp32 result. Divide is within one fp32 step of
-# torch's fp32 quotient (FP32_STEPS); the others match torch bit for bit.
+# On fp32 operands every op runs on the SFPU kernel and keeps the fp32 result: within _ULP of torch's, the bound the
+# suites check too.
 OPS_FP32 = {"add": (ttnn.experimental.quasar.add, {}, torch.add, lambda x: x),
             "subtract": (ttnn.experimental.quasar.subtract, {}, torch.subtract, lambda x: x),
-            "multiply": (ttnn.experimental.quasar.multiply, {}, torch.multiply, zero_positive),
-            "divide": (ttnn.experimental.quasar.divide, {}, torch.divide, zero_positive)}
-FP32_STEPS = {"divide": 1}
+            "multiply": (ttnn.experimental.quasar.multiply, {}, torch.multiply, lambda x: x),
+            "divide": (ttnn.experimental.quasar.divide, {}, torch.divide, lambda x: x)}
 ACTS_FP32 = {None: ACTS[None],
              "lhs": ({"input_tensor_a_activations": [SQUARE]},
                      lambda a, b, exact, rounding: rounding(exact(a * a, b))),
@@ -1022,12 +1008,10 @@ try:
         if spec in specs[i + 1:]:
             keep.extend([ta, tb, out])
         got = ttnn.to_torch(out)
-        if fp32:
-            # Distance in fp32 steps: adjacent floats of one sign are adjacent integers.
-            steps = (got.contiguous().view(torch.int32).long() - golden.contiguous().view(torch.int32).long()).abs()
-            differ = steps > FP32_STEPS.get(opts.get("op", "add"), 0)
-        else:
-            differ = got.contiguous().view(torch.int16) != golden.contiguous().view(torch.int16)
+        # Integer ULP distance per element, as production measures it: the sign of a zero does not count. A bf16
+        # model is the kernel's exact rounding; fp32 allows the op's measured bound.
+        bound = _ULP[ttnn.float32][opts.get("op", "add")] if fp32 else 0
+        differ = ulp_distance(got, golden) > bound
         if differ.any():
             # Pad a partial last tile row or column with matches, so that the mask holds whole tiles.
             differ = torch.nn.functional.pad(differ, (0, -differ.shape[-1] % 32, 0, -differ.shape[-2] % 32))
@@ -1863,8 +1847,8 @@ def test_native_other_ops_on_the_tail_rings_are_bit_exact(name, knobs):
 # borrowed; the inputs borrowed beside an output that moves; the output borrowed beside inputs that move. SQUARE on both
 # inputs runs two self-loop rings on each Neo. block_6's shards hold 6 tiles, which 4 does not divide. The tail rings
 # carry no activation, so at the rule's compute count block_6 takes the NoC path.
-# SQUARE and RELU have exact models. GELU and TANH do not, and on craq-sim they change the SFPU results of the later
-# programs in the same process, on both factories.
+# SQUARE and RELU have exact models; GELU and TANH do not. GELU also shifts the SFPU results of the later programs on
+# the same device, on both factories.
 _ACTIVATIONS = ("lhs", "rhs", "post", "relu", "relu_lhs", "relu_chain")
 _ACT_MIXES = ("I.I.I_partial", "B.B.B_partial", "B32.B32.I", "I.I.W32")
 _BLOCK_6 = next(entry for entry in _SMALL_SHARDS if entry[0] == "block_6")

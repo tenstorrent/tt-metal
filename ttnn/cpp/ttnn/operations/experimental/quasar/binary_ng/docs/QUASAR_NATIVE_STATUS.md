@@ -102,9 +102,13 @@ less accessible, so it is spent deliberately and rarely. **Never mix numbers fro
   SQUARE and SIGMOID suite cases and the 2 SiLU SwiGLU cases, one process each at both settings: 36 of 36 runs, each
   on `kernels_qsr` only; clang-tidy 0 findings on the two files.
 - **Found** (reported, not investigated):
-  - GELU or TANH change the SFPU results of the later programs in the same process, on both factories. Likely
-    cause, by code reading: GELU's fast init loads its lookup table into LREG9, which the SFPU multiply, divide and
-    SQUARE add as their zero, and no init restores it. That would be an LLK hazard, which silicon shows too.
+  - GELU shifts the SFPU results of the later programs on the same device, on both factories: each multiply,
+    SQUARE and divide gains about +2.76e-5. Measured 10-20 bit for bit before and after one GELU program: 8192 of
+    8192 fp32 products changed, and 3507 of 8192 bf16 products. TANH and SIGMOID change nothing, and later TANH,
+    SIGMOID or SQUARE programs do not clear it; closing and opening the device does. Cause, by code reading: GELU's
+    approximate init loads its lookup table into LREG9 to LREG14, the SFPU multiply adds LREG9 as its zero, and
+    `_init_sfpu_config_reg_` restores only SFPU_CTRL and LREG11. The suites open a new device for each test, so
+    they do not see it.
   - This base's fallback hangs on a lone post RELU beside L1-interleaved operands, and beside `I.I.W32`, with
     main's fixed `kernels_dfb` copied in. The native factory runs both.
   - Killed simulator runs had filled `/dev/shm` with 671 segments since July.
