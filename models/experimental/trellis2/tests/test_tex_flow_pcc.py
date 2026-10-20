@@ -25,6 +25,7 @@ from loguru import logger
 from models.experimental.trellis2.reference import slat_flow_host as slat
 from models.experimental.trellis2.reference import structure_flow_host as host
 from models.experimental.trellis2.tests import goldens
+from models.experimental.trellis2.tests.test_structure_flow_pcc import precision_from_env
 from models.experimental.trellis2.tt.slat_flow import TtSLatFlow
 from models.experimental.trellis2.tt.structure_flow import Precision
 
@@ -35,7 +36,9 @@ FINAL_LATENT_PCC = 0.9999
 pytestmark = pytest.mark.skipif(goldens.missing_reason() is not None, reason=goldens.missing_reason() or "")
 
 
-def _model(mesh_device, precision: Precision = Precision()) -> TtSLatFlow:
+def _model(mesh_device, precision: Precision | None = None) -> TtSLatFlow:
+    precision = precision or precision_from_env()
+    logger.info(f"precision {precision}")
     model = TtSLatFlow(mesh_device=mesh_device, in_channels=64, precision=precision)
     model.load_torch_state_dict(host.load_state_dict(f"{goldens.weights_dir()}/{slat.TEX_CKPT}"))
     return model

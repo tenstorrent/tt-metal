@@ -22,6 +22,7 @@ import os
 import time
 
 import pytest
+import torch
 from loguru import logger
 
 from models.experimental.trellis2.reference import structure_flow_host as host
@@ -69,11 +70,12 @@ def _save(name: str, result: dict) -> None:
 @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
 def test_structure_flow_single_pass(mesh_device):
     model = _model(mesh_device)
-    rows = []
+    rows, outs = [], []
     for i in range(len(goldens.structure_calls())):
         x, t, cond, gold, branch = goldens.call_inputs(i)
         start = time.time()
         out = model(x, t, cond)
+        outs.append(out)
         p = goldens.pcc(out, gold)
         rows.append(
             {
@@ -88,6 +90,9 @@ def test_structure_flow_single_pass(mesh_device):
         logger.info(f"call {i:2d} ({branch}) t={rows[-1]['t']:.3f} pcc={p:.6f} {rows[-1]['seconds']:.2f} s")
     result = {"min_pcc": min(r["pcc"] for r in rows), "threshold": SINGLE_PASS_PCC, "rows": rows}
     _save("structure_flow_single_pass", result)
+    if os.environ.get("TRELLIS2_RESULTS_DIR"):
+        # per-call outputs for signed-error analysis against the golden and the CPU bf16 model
+        torch.save(outs, f"{os.environ['TRELLIS2_RESULTS_DIR']}/structure_flow_single_pass_outputs.pt")
     logger.info(f"min single-pass PCC {result['min_pcc']:.6f}")
     assert result["min_pcc"] >= SINGLE_PASS_PCC
 

@@ -26,7 +26,7 @@ from models.experimental.trellis2.reference import structure_flow_host as ss
 SHAPE_CKPT = "TRELLIS.2-4B/ckpts/slat_flow_img2shape_dit_1_3B_512_bf16.safetensors"
 TEX_CKPT = "TRELLIS.2-4B/ckpts/slat_flow_imgshape2tex_dit_1_3B_512_bf16.safetensors"
 OUT_CHANNELS = 32
-BUCKET_MULTIPLE = 128  # SDPA q/k chunk size
+BUCKET_MULTIPLE = 512  # the windowed SDPA's largest key chunk (Precision.sdpa_large_k_chunk); fewer distinct buckets
 
 
 def bucket_len(n: int, multiple: int = BUCKET_MULTIPLE) -> int:
