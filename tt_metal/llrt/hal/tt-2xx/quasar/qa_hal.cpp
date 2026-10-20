@@ -497,6 +497,14 @@ void Hal::initialize_qa(std::uint32_t profiler_dram_bank_size_per_risc_bytes, bo
     this->core_info_.push_back(quasar::create_idle_eth_mem_map());
     ensure_hal_core_info_slots(this->core_info_, this->core_info_.front());
     this->core_info_[static_cast<std::size_t>(HalProgrammableCoreType::DISPATCH)] = quasar::create_dispatch_mem_map();
+    this->core_info_[static_cast<std::size_t>(HalProgrammableCoreType::TENSIX)].num_physical_riscs_ =
+        static_cast<uint32_t>(TensixProcessorTypes::COUNT);
+    this->core_info_[static_cast<std::size_t>(HalProgrammableCoreType::ACTIVE_ETH)].num_physical_riscs_ =
+        static_cast<uint32_t>(EthProcessorTypes::COUNT);
+    this->core_info_[static_cast<std::size_t>(HalProgrammableCoreType::IDLE_ETH)].num_physical_riscs_ =
+        static_cast<uint32_t>(EthProcessorTypes::COUNT);
+    this->core_info_[static_cast<std::size_t>(HalProgrammableCoreType::DISPATCH)].num_physical_riscs_ =
+        static_cast<uint32_t>(DispatchEngineProcessorTypes::COUNT);
 
     this->dram_bases_.resize(static_cast<std::size_t>(HalDramMemAddrType::COUNT));
     this->dram_sizes_.resize(static_cast<std::size_t>(HalDramMemAddrType::COUNT));
@@ -608,7 +616,11 @@ void Hal::initialize_qa(std::uint32_t profiler_dram_bank_size_per_risc_bytes, bo
     this->noc_stream_remote_dest_buf_start_reg_index_ = 0;                   // TODO: add correct value
     this->noc_stream_remote_dest_buf_space_available_reg_index_ = 0;         // TODO: add correct value
     this->noc_stream_remote_dest_buf_space_available_update_reg_index_ = 0;  // TODO: add correct value
+    this->noc_stream_remote_src_reg_index_ = 0;                              // TODO: add correct value
     this->has_stream_registers_ = false;
+    this->risc_soft_reset_addr_ = 0;                                         // TODO: add correct value
+    this->wall_clock_low_addr_ = 0;                                          // TODO: add correct value
+    this->wall_clock_high_addr_ = 0;                                         // TODO: add correct value
     this->supports_fds_ = true;
     this->noc_topology_ = NoCTopologyType::MESH;
     this->coordinate_virtualization_enabled_ = COORDINATE_VIRTUALIZATION_ENABLED;

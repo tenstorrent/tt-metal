@@ -7,6 +7,7 @@
 #include <tt_stl/assert.hpp>
 
 #include <cstdint>
+#include <enchantum/enchantum.hpp>
 #include <enchantum/iostream.hpp>
 
 #include "hal_types.hpp"
@@ -140,6 +141,15 @@ uint32_t Hal::get_total_num_risc_processors() const {
         num_riscs += this->get_num_risc_processors(this->core_info_[core_idx].programmable_core_type_);
     }
     return num_riscs;
+}
+
+uint32_t Hal::get_num_physical_risc_processors(HalProgrammableCoreType programmable_core_type) const {
+    const uint32_t index = ttsl::as_underlying_type<HalProgrammableCoreType>(programmable_core_type);
+    TT_FATAL(
+        index < core_info_.size() && core_info_[index].num_physical_riscs_.has_value(),
+        "The HAL gives no RISC count for {} cores on this arch",
+        enchantum::to_string(programmable_core_type));
+    return *core_info_[index].num_physical_riscs_;
 }
 
 uint32_t HalCoreInfoType::get_processor_index(
