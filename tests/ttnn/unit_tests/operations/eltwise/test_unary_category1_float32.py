@@ -459,9 +459,6 @@ def test_erfc_tail(device):
 )
 @pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16])
 def test_erf_erfc_i1_nan_input(device, ttnn_op, dtype):
-    """#59184, #59185, #59186: the input clamp must not turn a NaN into a finite result. A BF16 Dest reads
-    a NaN back as an infinity (tenstorrent/tt-llk#675), so for bfloat16 any non-finite output passes."""
-    # NaNs of both signs and payloads, built from bit patterns (a float32 -> bfloat16 cast would rewrite them).
     nan_bits = [0x7FC0, 0x7F81, 0x7FFF, 0xFFC0, 0xFF81, 0xFFFF]
     nans = torch.tensor([b - (1 << 16) if b & 0x8000 else b for b in nan_bits], dtype=torch.int16)
     finite = torch.tensor([0.0, 0.5, -0.5, 4.0, -4.0, 6.0, -6.0, 20.0, -20.0], dtype=torch.bfloat16)

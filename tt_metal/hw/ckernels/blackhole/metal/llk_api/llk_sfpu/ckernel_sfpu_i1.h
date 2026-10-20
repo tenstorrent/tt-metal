@@ -92,7 +92,6 @@ inline void calculate_i1() {
         sfpi::vFloat x = sfpi::dst_reg[0];
 
         // Clamp to [-88.5, 88.5] — exp() saturates near ±88.7 in FP32.
-        // setsgn before abs turns a NaN into -NaN, which min keeps.
         const sfpi::vFloat abs_x = sfpi::min(sfpi::abs(sfpi::setsgn(x, 1)), I1_MAX_INPUT);
         x = sfpi::copysgn(abs_x, x);
 

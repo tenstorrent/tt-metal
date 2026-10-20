@@ -65,7 +65,7 @@ template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_erf() {
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat x = sfpi::dst_reg[0];
-        // Clamp |x| to 10.0; setsgn before abs turns a NaN into -NaN, which min keeps.
+        // Clamp |x| to 10.0 before evaluation (erf is odd, rational is exact at boundary)
         sfpi::vFloat ax = sfpi::min(sfpi::abs(sfpi::setsgn(x, 1)), 10.0f);
         sfpi::vFloat result = piecewise_rational_eval<
             ERF_NUM_DEGREE,
@@ -77,7 +77,6 @@ inline void calculate_erf() {
         // Saturate to [-1, 1]: rational fit is not bounded and overshoots by
         // up to ~3e-8 (FP32) / ~2e-4 (BF16 LUT) in the tail. Persists in FP32
         // dest register and biases downstream ops (e.g. decomposed GELU in CLIP).
-        // For a NaN input the rational returns -NaN on Wormhole (measured), which min keeps; x is re-read from Dest.
         const sfpi::vFloat x_in = sfpi::dst_reg[0];
         result = sfpi::copysgn(sfpi::min(result, 1.0f), x_in);
         sfpi::dst_reg[0] = result;
