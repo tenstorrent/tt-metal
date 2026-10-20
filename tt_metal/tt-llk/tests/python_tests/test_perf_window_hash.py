@@ -59,3 +59,19 @@ def test_other_zone_ids_are_not_a_window():
     )
 
     assert _window(insns, _ELF) is None
+
+
+def test_paths_that_leave_without_the_zone_end_are_not_in_the_window():
+    insns = _insns(
+        [
+            ("lui", f"a5,{hex(0xA0000 | _ID)}"),
+            ("beqz", "a0,114 <run_kernel+0x14>"),
+            ("addi", "a4,a4,1"),
+            ("lui", f"a5,{hex(0xB0000 | _ID)}"),
+            ("ret", ""),
+            ("lw", "s10,52(sp)"),
+            ("ret", ""),
+        ]
+    )
+
+    assert _window(insns, _ELF) == [0, 1, 2, 3]

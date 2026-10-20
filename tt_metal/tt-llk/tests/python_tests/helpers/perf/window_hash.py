@@ -95,8 +95,12 @@ def _ends(insns, k, ids):
 
 
 def _region(insns, start, ids):
+    """Instructions on a path from the zone start to its end, in walk order.
+
+    Paths that leave the zone without its end (for example to the function's epilogue) are not part of it.
+    """
     index = {a: k for k, (a, _, _) in enumerate(insns)}
-    order, seen, todo = [], set(), [start]
+    order, seen, todo, succ, ends = [], set(), [start], {}, set()
     while todo:
         k = todo.pop()
         while k < len(insns) and k not in seen:
@@ -104,7 +108,9 @@ def _region(insns, start, ids):
                 break
             seen.add(k)
             order.append(k)
+            succ[k] = []
             if _ends(insns, k, ids):
+                ends.add(k)
                 break
             _, mnemonic, operands = insns[k]
             target = _TARGET.search(operands)
@@ -112,12 +118,24 @@ def _region(insns, start, ids):
             if mnemonic in _ENDS or (mnemonic in ("j", "c.j", "tail") and t is None):
                 break
             if _BRANCH.match(mnemonic) and t is not None:
+                succ[k].append(t)
                 if mnemonic in ("j", "c.j"):
                     k = t
                     continue
                 todo.append(t)
+            succ[k].append(k + 1)
             k += 1
-    return order
+    pred = {}
+    for k, targets in succ.items():
+        for t in targets:
+            pred.setdefault(t, []).append(k)
+    keep, todo = set(ends), list(ends)
+    while todo:
+        for p in pred.get(todo.pop(), []):
+            if p not in keep:
+                keep.add(p)
+                todo.append(p)
+    return [k for k in order if k in keep]
 
 
 def _window(insns, elf_bytes):
