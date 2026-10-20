@@ -245,7 +245,7 @@ _GLOBAL_Q_CHUNKS = (96, 128)
 
 # What each chunk size gets at CP8 / TP4:
 #                  q_chunk  k_chunk  K-split bands  segmented accumulation
-#   global  2048        64      256              3  yes
+#   global  2048       128      256              5  yes
 #   global  4096       128      256              3  yes
 #   global  8192        96      256              1  yes
 #   global 16384        96      256              1  no (too many Q chunks for the cores)
@@ -262,6 +262,11 @@ def ring_sdpa_chunk_sizes(q_slab_tokens, sliding, num_heads=8, num_cores=110):
         q_chunk = 128
         k_splits = 3 if num_heads * -(-q_slab_tokens // q_chunk) * 3 <= num_cores else 1
         return q_chunk, 128, k_splits, False
+    # Chunk 2048: q128 gives 16 (head, Q chunk) units, two grid rows per band, so five bands (80 cores). Each K
+    # chunk then carries twice q64's math for the same K/V traffic: q64 over three bands waits on the K/V reader,
+    # q128 is compute-bound and faster once the prefix is past ~25k tokens.
+    if q_slab_tokens == 256:
+        return 128, 256, 5, True
     # Short slabs: 4 Q chunks per head are too few to fill the grid, so K is split over 3 bands.
     if q_slab_tokens <= 512:
         q_chunk = q_slab_tokens // 4
