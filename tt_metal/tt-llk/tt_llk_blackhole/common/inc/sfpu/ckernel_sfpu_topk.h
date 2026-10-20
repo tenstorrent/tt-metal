@@ -1837,6 +1837,7 @@ constexpr std::uint32_t topk_merge_walk_mask(const int kq)
     return mask;
 }
 
+// k from 32 up keeps the head's loop structure, which production kernels run faster than the restructured walk.
 template <
     bool APPROXIMATION_MODE,
     bool is_fp32_dest_acc_en,
@@ -1845,11 +1846,163 @@ template <
     bool FUSED             = false,
     bool RANK_STAMPED      = false,
     TopkTieOrder TIE_ORDER = TopkTieOrder::Unset,
-    std::uint32_t TAG_BITS = 16,
-    std::uint32_t K>
-inline void _bitonic_topk_merge(const int m_iter)
+    std::uint32_t TAG_BITS = 16>
+__attribute__((always_inline)) inline void _bitonic_topk_merge_rt_(const int m_iter, const int k)
 {
-    static_assert(K > 0, "K is the merge's run length");
+    static_assert(RANK_STAMPED || TAG_BITS == 16, "TAG_BITS applies to the rank-stamped mode only");
+    // UInt16-in-32b-DEST: clear garbage high bits before compare-swap (#50215).
+    topk_uint16_clear_value_tiles_high_bits();
+
+    topk_validate_mode_combo<is_fp32_dest_acc_en, STABLE_SORT, FUSED, RANK_STAMPED, TIE_ORDER>();
+
+    if constexpr (STABLE_SORT)
+    {
+        // Establish the lanes-on/flags-true CC entry invariant once, before the quadrant
+        // loops, so it dominates every per-iteration comparator execution; each comparator
+        // body re-establishes it via its trailing SFPENCC, and the intervening loads/stores
+        // preserve CC state.
+        TOPK_SFPENCC_ALL_LANES_ON();
+    }
+
+    if constexpr (RANK_STAMPED)
+    {
+        // Lanes-on FIRST -- the constant programming below goes through the lane-PREDICATED
+        // SFPCONFIG path and transiently clobbers LREG0 (see _topk_fuse_tile_), so it must
+        // run before any load and under fully enabled lanes.
+        constexpr std::uint32_t TAG_MASK = topk_tag_mask<TAG_BITS>();
+        TOPK_SFPENCC_ALL_LANES_ON();
+        sfpi::vConstIntPrgm0 = TAG_MASK; // LREG12: tag complement operand
+        _topk_load_tag_clear_mask_<TAG_BITS>();
+        const std::uint32_t rank_span = 2 * static_cast<std::uint32_t>(k) - 1;
+        LLK_ASSERT(rank_span <= TAG_MASK, "merge rank span 2K-1 exceeds the tag field");
+        _sfpu_load_config32_(p_sfpu::LREG13, rank_span >> 16, rank_span & 0xFFFF); // right-run complement (2K-1)
+    }
+
+    constexpr bool merge_macros = TOPK_STEP_LOADMACRO && !STABLE_SORT && !RANK_STAMPED;
+    if constexpr (merge_macros)
+    {
+        _topk_merge_macros_init_<FUSED>();
+    }
+    [[maybe_unused]] std::uint32_t macro_set = 0;
+    auto merge_group        = [&macro_set](const std::uint32_t offset, const std::uint32_t ld_dist, [[maybe_unused]] const bool first_in_block)
+    {
+        if constexpr (merge_macros)
+        {
+            const std::uint32_t lo = (offset & 0xF) + (offset >> 4) * 32;
+            const std::uint32_t a  = top_min ? lo + ld_dist : lo;
+            const std::uint32_t b  = top_min ? lo : lo + ld_dist;
+            if (macro_set == 0)
+            {
+                bitonic_topk_merge_group_macro<is_fp32_dest_acc_en, FUSED, 0>(a, b);
+            }
+            else if (macro_set == 1)
+            {
+                bitonic_topk_merge_group_macro<is_fp32_dest_acc_en, FUSED, 1>(a, b);
+            }
+            else if constexpr (FUSED)
+            {
+                bitonic_topk_merge_group_macro<is_fp32_dest_acc_en, FUSED, 2>(a, b);
+            }
+            macro_set = (macro_set + 1 == topk_merge_macro_sets<FUSED>()) ? 0 : macro_set + 1;
+        }
+        else
+        {
+            bitonic_topk_merge_group<is_fp32_dest_acc_en, top_min, STABLE_SORT, FUSED, RANK_STAMPED, TIE_ORDER>(offset, ld_dist, first_in_block);
+        }
+    };
+
+    std::uint32_t dst_addr_offset = 0;
+    for (int face = 0; face < 2; face++)
+    {
+        for (int col = 0; col < 2; col++)
+        {
+            TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+            int k_max             = k > 32 ? 32 : k;
+            std::uint32_t inner_d = k_max >> 2; // inner loop comparisons to sort len=K sequence;
+            std::uint32_t total_datums_to_compare =
+                ((64 >> m_iter) < 2 * k_max) ? 2 * k_max
+                                             : (64 >> m_iter); // max(2, max(64, 64/(2^m))) total datums to compare; there's always at least 2*K datums
+            std::uint32_t dist            = (k_max << m_iter) > 32 ? 32 : (k_max << m_iter); // min(32, k*2^k)
+            std::uint32_t ld_dist         = (dist < 16) ? dist : 2 * dist;                   // Accounts for face offsets within a tile
+            std::uint32_t datums_compared = 0;
+            constexpr std::uint32_t group_words = FUSED ? 4 : 8;
+
+            // With 16 group words or fewer per quadrant (a group per 8 datums), the counter walk's increments cost more than they save.
+            if (((dist & 7) == 0) && (total_datums_to_compare * group_words > 128))
+            {
+                // Blocks start on a face row: the dest counter walks a block's fixed group words, 4 rows on (20 into the next face).
+                std::uint32_t blk_offset = 0;
+                while (datums_compared < total_datums_to_compare)
+                {
+                    if (blk_offset > 0)
+                    {
+                        TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+                    }
+#pragma GCC unroll 8
+                    for (std::uint32_t ii = 0; ii < inner_d; ii++)
+                    {
+                        if ((ii & 3) == 0 && ii > 0)
+                        {
+                            TTI_INCRWC(0, 10, 0, 0);
+                            TTI_INCRWC(0, 10, 0, 0);
+                        }
+                        else if (ii > 0)
+                        {
+                            TTI_INCRWC(0, 4, 0, 0);
+                        }
+                        merge_group(blk_offset, ld_dist, ii == 0);
+                        datums_compared += 8;
+                    }
+                    blk_offset += 2 * dist;
+                }
+            }
+            else
+            {
+                std::uint32_t dst_offset = 0;
+                std::uint32_t dst_cr     = 0;
+                while (datums_compared < total_datums_to_compare)
+                {
+                    for (std::uint32_t ii = 0; ii < inner_d; ii++)
+                    {
+                        merge_group(dst_offset, ld_dist, ii == 0);
+                        datums_compared += 8;
+                        if (ii == (inner_d - 1))
+                        {
+                            dst_cr += 2 * dist;
+                            dst_offset = dst_cr;
+                        }
+                        else
+                        {
+                            dst_offset += 4;
+                        }
+                    }
+                }
+            }
+            dst_addr_offset += 2;
+            set_dst_write_addr(dst_addr_offset);
+        }
+        dst_addr_offset = 16;
+        set_dst_write_addr(dst_addr_offset);
+    }
+    if constexpr (merge_macros)
+    {
+        bitonic_topk_step_macro_drain<FUSED>();
+    }
+}
+
+template <
+    bool APPROXIMATION_MODE,
+    bool is_fp32_dest_acc_en,
+    bool top_min,
+    bool STABLE_SORT       = false,
+    bool FUSED             = false,
+    bool RANK_STAMPED      = false,
+    TopkTieOrder TIE_ORDER = TopkTieOrder::Unset,
+    std::uint32_t TAG_BITS,
+    std::uint32_t K,
+    int MODE>
+inline void _bitonic_topk_merge_impl_(const int m_iter)
+{
     constexpr int k = static_cast<int>(K);
     static_assert(RANK_STAMPED || TAG_BITS == 16, "TAG_BITS applies to the rank-stamped mode only");
     // UInt16-in-32b-DEST: clear garbage high bits before compare-swap (#50215).
@@ -1884,8 +2037,9 @@ inline void _bitonic_topk_merge(const int m_iter)
     // elsewhere each group is addressed on its own, which costs the RISC less.
     constexpr int kq = k > 32 ? 32 : k;
     constexpr std::uint32_t walk_mask = topk_merge_walk_mask<FUSED>(kq);
-    constexpr bool walk_none          = walk_mask == 0;
-    constexpr bool walk_all           = walk_mask == 0xFF;
+    // MODE 0 chooses by m_iter at run time where k needs both forms, 1 is the per-group form, 2 the counter walk.
+    constexpr bool walk_none          = MODE == 1 || (MODE == 0 && walk_mask == 0);
+    constexpr bool walk_all           = MODE == 2 || (MODE == 0 && walk_mask == 0xFF);
     auto merge_per_group              = [&]()
     {
         std::uint32_t dst_addr_offset = 0;
@@ -2023,6 +2177,58 @@ inline void _bitonic_topk_merge(const int m_iter)
     if constexpr (merge_macros)
     {
         bitonic_topk_step_macro_drain<FUSED>();
+    }
+}
+
+template <
+    bool APPROXIMATION_MODE,
+    bool is_fp32_dest_acc_en,
+    bool top_min,
+    bool STABLE_SORT,
+    bool FUSED,
+    bool RANK_STAMPED,
+    TopkTieOrder TIE_ORDER,
+    std::uint32_t TAG_BITS,
+    std::uint32_t K,
+    int MODE>
+__attribute__((noinline)) void _bitonic_topk_merge_form_(const int m_iter)
+{
+    _bitonic_topk_merge_impl_<APPROXIMATION_MODE, is_fp32_dest_acc_en, top_min, STABLE_SORT, FUSED, RANK_STAMPED, TIE_ORDER, TAG_BITS, K, MODE>(m_iter);
+}
+
+template <
+    bool APPROXIMATION_MODE,
+    bool is_fp32_dest_acc_en,
+    bool top_min,
+    bool STABLE_SORT       = false,
+    bool FUSED             = false,
+    bool RANK_STAMPED      = false,
+    TopkTieOrder TIE_ORDER = TopkTieOrder::Unset,
+    std::uint32_t TAG_BITS = 16,
+    std::uint32_t K>
+inline void _bitonic_topk_merge(const int m_iter)
+{
+    static_assert(K > 0, "K is the merge's run length");
+    constexpr std::uint32_t walk_mask = topk_merge_walk_mask<FUSED>(K > 32 ? 32 : static_cast<int>(K));
+    if constexpr (K >= 32)
+    {
+        _bitonic_topk_merge_rt_<APPROXIMATION_MODE, is_fp32_dest_acc_en, top_min, STABLE_SORT, FUSED, RANK_STAMPED, TIE_ORDER, TAG_BITS>(m_iter, static_cast<int>(K));
+    }
+    else if constexpr (walk_mask != 0 && walk_mask != 0xFF)
+    {
+        // Each form out of line so the one not taken adds no set-up to the other.
+        if (((walk_mask >> (m_iter > 7 ? 7 : m_iter)) & 1) == 0)
+        {
+            _bitonic_topk_merge_form_<APPROXIMATION_MODE, is_fp32_dest_acc_en, top_min, STABLE_SORT, FUSED, RANK_STAMPED, TIE_ORDER, TAG_BITS, K, 1>(m_iter);
+        }
+        else
+        {
+            _bitonic_topk_merge_form_<APPROXIMATION_MODE, is_fp32_dest_acc_en, top_min, STABLE_SORT, FUSED, RANK_STAMPED, TIE_ORDER, TAG_BITS, K, 2>(m_iter);
+        }
+    }
+    else
+    {
+        _bitonic_topk_merge_impl_<APPROXIMATION_MODE, is_fp32_dest_acc_en, top_min, STABLE_SORT, FUSED, RANK_STAMPED, TIE_ORDER, TAG_BITS, K, 0>(m_iter);
     }
 }
 
