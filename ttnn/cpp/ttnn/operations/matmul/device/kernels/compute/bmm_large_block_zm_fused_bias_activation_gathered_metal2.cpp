@@ -34,7 +34,8 @@
 
 // Moves in1's front past num_blocks K-blocks without reading them, once they are published. One K-block
 // at a time: in1's ring holds whole K-blocks, so no single pop then runs past its end.
-FORCE_INLINE void step_over_in1_blocks(DataflowBuffer& in1_dfb, uint32_t num_blocks, uint32_t in1_block_num_tiles) {
+template <typename DFB0>
+FORCE_INLINE void step_over_in1_blocks(DFB0& in1_dfb, uint32_t num_blocks, uint32_t in1_block_num_tiles) {
     for (uint32_t block = 0; block < num_blocks; ++block) {
         in1_dfb.wait_front(in1_block_num_tiles);
         in1_dfb.pop_front(in1_block_num_tiles);

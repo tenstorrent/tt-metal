@@ -120,7 +120,7 @@ struct ErfBwBf16Config {
 
 namespace ckernel::sfpu {
 
-template <int ITERATIONS = 8>
+template <int ITERATIONS = 32>
 inline void calculate_erf_bw_bf16() {
     ckernel::sfpu::bf16::erf_bw::calculate_config_tile<ckernel::sfpu::ErfBwBf16Config, ITERATIONS>();
 }
