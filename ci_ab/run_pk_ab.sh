@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Scratch, not for merge. Pack stack 4e60eb8f2e4 on main: the device files of arm S (ci_ab/v/S) against arm M (main, ci_ab/v/M) copied into the checkout and the installed package before each run, fresh JIT cache per arm; M2 is an A/A copy of M; order M S M2 then reversed. Guard: M stable, M == M2, S != M.
 set +e +o pipefail
-cd /work; export TT_METAL_HOME=/work TRACY_NO_WEB_SERVER=1 MM_N=${MM_N:-12}
+cd /work; export TT_METAL_HOME=/work TRACY_NO_WEB_SERVER=1 MM_N=${MM_N:-30} MM_CASES=${MM_CASES:-^(p2d_4x4_ibw2_full|s_384x1024x1024_hifi2_full|big_lofi_full_bfp8|big_hifi4_full_bf16|s_256x1024x4096_lofi_half)\$}
 S=/work/ci_ab; OUT=/work/generated/mm_pk; rm -rf $OUT; mkdir -p $OUT
 python3 -c "import tracy" 2>/dev/null || export PYTHONPATH=/work:/work/tools
 SP=$(cd /tmp && env -u PYTHONPATH python3 -c "import ttnn, os; print(os.path.dirname(os.path.dirname(os.path.abspath(ttnn.__file__))))")
@@ -25,7 +25,7 @@ elfsum() {
   done | sort | md5sum | cut -c1-12
 }
 declare -A ES; r=0; fail=0
-for a in M S M2 M2 S M; do
+for a in M S S M M2 M2 M S S M M2 M2 M S S M M2 M2; do
   r=$((r+1)); src=${a%2}; use $a $src
   o=$OUT/${a}_r$r; mkdir -p $o; t0=$(date +%s)
   timeout -s INT -k 60 1800 python3 -m tracy -r -p --no-web-server -o $o $S/mm_pk.py > $o.log 2>&1; rc=$?

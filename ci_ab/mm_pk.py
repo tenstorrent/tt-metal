@@ -23,7 +23,13 @@ def tt(shape, dt=ttnn.bfloat16):
     return ttnn.from_torch(torch.randn(shape), dtype=dt, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=D)
 
 
+import re
+SEL = re.compile(os.environ.get("MM_CASES", "."))
+
+
 def case(name, f):
+    if not SEL.search(name):
+        return
     try:
         for _ in range(2):
             o = f()
