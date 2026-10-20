@@ -36,6 +36,9 @@ CACHE_VERSION = 1
 # A cache hit up to this many bytes of tensorbins is scanned for NaN/inf before it is served
 # (TT_DIT_CACHE_VERIFY=1): connectors and VAEs, not a transformer, whose publish-time verify covers it.
 SCAN_MAX_BYTES_DEFAULT = 8 << 30
+# A clean scan leaves this stamp, keyed on the tensorbins' names, sizes and mtimes, so the next process
+# skips the scan (it costs ~90 s of a cs04 worker start) until a tensorbin is rewritten.
+SCAN_OK_FILE = ".nonfinite-scan-ok"
 _scanned_cache_dirs: set[str] = set()
 
 
@@ -375,6 +378,11 @@ def nonfinite_tensorbins(tt_model: Module, cache_dir: str | Path) -> list[str]:
     return bad
 
 
+def _scan_signature(cache_dir: Path) -> str:
+    entries = sorted((f.name, st.st_size, st.st_mtime_ns) for f in cache_dir.glob("*.tensorbin") for st in [f.stat()])
+    return hashlib.sha256(json.dumps(entries).encode()).hexdigest()
+
+
 def _set_aside_if_nonfinite(tt_model: Module, cache_dir: Path) -> bool:
     """Whether a cache hit holds NaN or inf; if so it is moved aside, so `load_model` rebuilds it.
 
@@ -390,10 +398,22 @@ def _set_aside_if_nonfinite(tt_model: Module, cache_dir: Path) -> bool:
     size = sum(f.stat().st_size for f in cache_dir.glob("*.tensorbin"))
     if size > int(os.environ.get("TT_DIT_CACHE_SCAN_MAX_BYTES", SCAN_MAX_BYTES_DEFAULT)):
         return False
+    stamp = _scan_signature(cache_dir)
+    try:
+        if (cache_dir / SCAN_OK_FILE).read_text() == stamp:
+            return False
+    except OSError:
+        pass
     t0 = time.time()
     bad = nonfinite_tensorbins(tt_model, cache_dir)
     logger.info(f"scanned cache at '{cache_dir}' ({size / 2**30:.2f} GiB) for NaN/inf in {time.time() - t0:.1f}s")
     if not bad:
+        try:
+            tmp = cache_dir / f"{SCAN_OK_FILE}.{os.getpid()}"
+            tmp.write_text(stamp)
+            tmp.replace(cache_dir / SCAN_OK_FILE)
+        except OSError as err:
+            logger.debug(f"cannot stamp the clean scan of '{cache_dir}' ({err}); the next load scans it again")
         return False
     aside = cache_dir.with_name(f"{cache_dir.name}.bad-nonfinite-{time.strftime('%Y%m%d-%H%M%S')}-{os.getpid()}")
     logger.warning(

@@ -114,3 +114,24 @@ def test_load_model_rebuilds_a_nonfinite_cache(mesh_device, tmp_path, monkeypatc
     assert torch.allclose(
         ttnn.to_torch(ttnn.get_device_tensors(model.weight.data)[0]).float(), good["weight"], atol=0.1
     )
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+def test_a_clean_scan_is_stamped_and_skipped_until_a_tensorbin_changes(mesh_device, tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("TT_DIT_CACHE_VERIFY", "1")
+    model = _saved_model(mesh_device, tmp_path)
+    scans = []
+    real = cache_module.nonfinite_tensorbins
+    monkeypatch.setattr(cache_module, "nonfinite_tensorbins", lambda m, d: scans.append(d) or real(m, d))
+
+    for _ in range(2):  # a new process each time: the in-process set is empty again
+        monkeypatch.setattr(cache_module, "_scanned_cache_dirs", set())
+        assert not cache_module._set_aside_if_nonfinite(model, tmp_path)
+    assert len(scans) == 1 and (tmp_path / cache_module.SCAN_OK_FILE).is_file()
+
+    poisoned = TinyModel(device=mesh_device)
+    poisoned.load_torch_state_dict({"weight": torch.full([32, 64], float("nan")), "bias": torch.randn([64])})
+    poisoned.save(tmp_path)  # same sizes, new mtimes: the stamp no longer matches
+    monkeypatch.setattr(cache_module, "_scanned_cache_dirs", set())
+    assert cache_module._set_aside_if_nonfinite(model, tmp_path)
+    assert len(scans) == 2
