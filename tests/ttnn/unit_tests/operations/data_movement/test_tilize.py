@@ -1288,7 +1288,6 @@ def test_tilize_uint8_tall_narrow_program_cache_addr_change(device, shape):
     device.disable_and_clear_program_cache()
 
 
-# Wide row-major tensors with a few hundred to a few thousand rows, where both multicore factories can take them.
 @pytest.mark.parametrize(
     "dtype, shape",
     [
