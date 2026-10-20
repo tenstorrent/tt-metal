@@ -8,7 +8,6 @@
 #include "ttnn/tensor/tensor.hpp"
 #include <tt-metalium/buffer_distribution_spec.hpp>
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
-#include <array>
 #include <optional>
 #include <vector>
 
@@ -33,7 +32,7 @@ bool is_uneven(const tt::tt_metal::TensorSpec& t);
 
 // How a unary op on a DRAM sharded or interleaved TILE tensor reads its pages. The flow is part of the program hash.
 enum class DramReadFlow : uint8_t {
-    None,           // main's path: each core reads a contiguous range, one page per barrier
+    None,           // the default path: each core reads a contiguous range, one page per barrier
     StaticBurst,    // even split, rotated order, several pages per barrier
     StaticOnePage,  // even split, rotated order, one page per barrier
     WorkQueue,      // cores pull chunks of pages from a scheduler core
@@ -51,14 +50,10 @@ struct DramReadPlan {
     uint32_t read_burst = 1;
     uint32_t write_burst = 1;
     uint32_t chunk_pages = 0;  // WorkQueue only
-
-    std::array<uint32_t, 5> page_order() const {
-        return {shard_stride, num_shards, last_shard_pages, shard_width, row_pages};
-    }
 };
 
-// Picks the read flow from the op chain's compute cost, the tensor layout and the pages per core. num_cores counts the
-// op's worker grid, num_device_cores the device's whole compute grid.
+// Picks the read flow from the op chain's compute cost, the tensor layout and the pages per core; flow None for every
+// other tensor. num_cores counts the op's worker grid, num_device_cores the device's whole compute grid.
 DramReadPlan get_dram_read_plan(
     const std::vector<EltwiseUnaryWithParam>& op_chain,
     const tt::tt_metal::TensorSpec& input_spec,

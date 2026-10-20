@@ -46,7 +46,8 @@ struct RotatedPages {
             .row_pages = get_arg(args::row_pages)};
     }
 
-    // Moves the cursor to position pos of the order. Past the last shard's slots, the slots have one shard fewer.
+    // Moves the cursor to position pos < the page count. Once slot reaches last_shard_pages the short last shard drops
+    // out, and each slot spans num_shards - 1 shards.
     void seek(uint32_t pos) {
         const uint32_t full = last_shard_pages * num_shards;
         if (pos < full) {
@@ -63,6 +64,7 @@ struct RotatedPages {
 
     // Returns the page at the cursor and moves the cursor on.
     uint32_t next() {
+        // The short last shard has no page at this slot.
         if (shard == num_shards - 1 && slot >= last_shard_pages) {
             next_slot();
         }
@@ -100,6 +102,39 @@ struct DfbGroups {
     }
 };
 
+// Calls move(n) for groups covering positions first to first + count of the order, with the order's cursor on each
+// group's first page. A group has at most max_pages() pages and stops at the end of the DFB.
+template <typename MaxPages, typename Move>
+void for_each_group(
+    RotatedPages& order, DfbGroups& groups, uint32_t first, uint32_t count, MaxPages max_pages, Move move) {
+    order.seek(first);
+    for (uint32_t done = 0; done < count;) {
+        const uint32_t n = groups.next(std::min(count - done, max_pages()));
+        move(n);
+        done += n;
+    }
+}
+
+// Static split: the core's own range, as one chunk. It has the interface of QueueReader and QueueWriter, so the
+// kernels take their work from WorkSource whichever flow they were built for.
+struct StaticRange {
+    uint32_t first;
+    uint32_t count;
+
+    static StaticRange from_args(const Noc&) {
+        return {.first = get_arg(args::start_id), .count = get_arg(args::num_pages)};
+    }
+
+    template <typename Process>
+    void for_each_chunk(Process process) const {
+        process(first, count);
+    }
+
+    // Only the work queue's scheduler has requests to answer.
+    template <typename Ready>
+    void serve_until(Ready) const {}
+};
+
 #if WORK_QUEUE
 // Work queue. Every core is a worker; the scheduler core's writer also hands out chunks.
 //   request  worker -> its word in the scheduler's request table: seq | x << 12 | y << 22, the worker's NoC
@@ -128,7 +163,8 @@ struct QueueReader {
     uint32_t total_pages;
     uint32_t chunk_pages;
     uint32_t scheduler_xy;
-    // This worker's NoC coordinates, shifted into place; on these chips they are the same on both NoCs.
+    // This worker's NoC coordinates, shifted into place. Tensix coordinates are translated, so they are the same on
+    // both NoCs.
     uint32_t request_coords = ((my_x[noc_index] & 0x3FF) | ((my_y[noc_index] & 0x3FF) << 10)) << 12;
     uint32_t table_slot = DataflowBuffer(dfb::requests).get_write_ptr() + sizeof(uint32_t) * worker_id;
     Semaphore<> reply{sem::reply};
@@ -159,8 +195,9 @@ struct QueueReader {
                 read(first, count);
             }
         }
-        noc.async_write_barrier();  // the requests are NoC writes
-        hand_on(0, 0);              // tells compute and the writer that this worker is done
+        noc.async_write_barrier();   // the requests are NoC writes
+        noc.async_atomic_barrier();  // the cleared signal is a non-posted increment
+        hand_on(0, 0);               // tells compute and the writer that this worker is done
     }
 
     void request() {
@@ -235,6 +272,7 @@ struct QueueWriter {
             write(first, count);
         }
         serve_until([&] { return workers_done >= num_workers; });
+        noc.async_atomic_barrier();  // the replies are non-posted increments
     }
 
     // On the scheduler core, answers requests until ready() holds; elsewhere returns at once.
@@ -270,5 +308,14 @@ struct QueueWriter {
 };
 #endif  // WRITE_BURST
 #endif  // WORK_QUEUE
+
+// Where the kernel's chunks come from: the work queue, or the core's own range of the static split.
+#if !WORK_QUEUE
+using WorkSource = StaticRange;
+#elif defined(READ_BURST)
+using WorkSource = QueueReader;
+#else
+using WorkSource = QueueWriter;
+#endif
 
 }  // namespace dram_read

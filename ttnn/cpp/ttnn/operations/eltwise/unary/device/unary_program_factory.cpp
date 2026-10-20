@@ -6,7 +6,6 @@
 
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_utils.hpp"
-#include "ttnn/operations/eltwise/unary/device/kernels/dram_read_common.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include <algorithm>
 #include <tt-metalium/bfloat16.hpp>
@@ -120,7 +119,6 @@ struct CoreRtArgs {
     uint32_t out_units = 0;
     uint32_t start_id = 0;
     uint32_t compute_units = 0;
-    uint32_t scheduler_xy = 0;  // DRAM read work queue: the scheduler's NoC coordinates
 };
 
 // NoC coordinates packed as x | (y << 16).
@@ -129,10 +127,30 @@ uint32_t noc_xy(const Tensor& tensor, const tt::tt_metal::CoreCoord& core) {
     return static_cast<uint32_t>(noc.x) | (static_cast<uint32_t>(noc.y) << 16);
 }
 
-// Reader and writer common runtime args of the DRAM read flows: the same on every core, so set once per dispatch.
-const std::vector<std::string> kPageOrderArgNames = {
-    "shard_stride", "num_shards", "last_shard_pages", "shard_width", "row_pages"};
-const std::vector<std::string> kQueueArgNames = {"chunk_pages", "scheduler_xy", "num_workers"};
+// Reader and writer common runtime args of the DRAM read flows, the same on every core: the page order (see
+// dram_read::RotatedPages) and, for the work queue, its chunk size, scheduler and worker count. Empty for flow None.
+std::vector<std::pair<std::string, uint32_t>> dram_read_args(
+    const DramReadPlan& plan, const Tensor& input, const tt::tt_metal::CoreRangeSet& worker_grid) {
+    if (plan.flow == DramReadFlow::None) {
+        return {};
+    }
+    std::vector<std::pair<std::string, uint32_t>> args = {
+        {"shard_stride", plan.shard_stride},
+        {"num_shards", plan.num_shards},
+        {"last_shard_pages", plan.last_shard_pages},
+        {"shard_width", plan.shard_width},
+        {"row_pages", plan.row_pages}};
+    if (plan.flow == DramReadFlow::WorkQueue) {
+        // Every core is a worker; the middle one also schedules, to keep request round trips short.
+        const auto workers = corerange_to_cores(worker_grid, {}, true);  // row-wise, as enumerate_core_rt_args
+        args.insert(
+            args.end(),
+            {{"chunk_pages", plan.chunk_pages},
+             {"scheduler_xy", noc_xy(input, workers[workers.size() / 2])},
+             {"num_workers", static_cast<uint32_t>(workers.size())}});
+    }
+    return args;
+}
 
 // Core-invariant ROW_MAJOR-interleaved chunk constants, passed as the reader/writer args
 // chunks_per_row, chunk_size, last_chunk_size, rows_per_tile and total_rows. All shape-derived.
@@ -324,20 +342,11 @@ void enumerate_core_rt_args(
     }
 
     if (plan.flow == DramReadFlow::WorkQueue) {
-        // No split: every core is a worker; the middle one also schedules, to keep request round trips short.
+        // No split: every core is a worker (see dram_read_args for the scheduler).
         cores = corerange_to_cores(all_device_cores, {}, row_major);
-        const auto num_workers = static_cast<uint32_t>(cores.size());
-        const uint32_t scheduler_xy = noc_xy(input, cores[num_workers / 2]);
-        for (uint32_t i = 0; i < num_workers; ++i) {
+        for (uint32_t i = 0; i < cores.size(); ++i) {
             // A worker's num_pages and start_id are the tensor's pages and its index; compute counts chunks instead.
-            fn(
-                CoreRtArgs{
-                    .core = cores[i],
-                    .in_units = out_num_tiles,
-                    .out_units = out_num_tiles,
-                    .start_id = i,
-                    .scheduler_xy = scheduler_xy},
-                k);
+            fn(CoreRtArgs{.core = cores[i], .in_units = out_num_tiles, .out_units = out_num_tiles, .start_id = i}, k);
         }
         return;
     }
@@ -407,25 +416,17 @@ tt::tt_metal::experimental::ProgramRunArgs make_run_args(
 
     // Per node only the work split; the chunk fields (zero unless ROW_MAJOR) and the scalars are the same on every
     // core, so they go once as common args. A changed split can flip a core between noop and active, so every
-    // node's slots are written on every dispatch, noop cores zero-filled.
-    auto add_dm_args = [](KernelRunArgs& kra, const CoreCoord& core, uint32_t num_pages, uint32_t start_id) {
-        AddRuntimeArgsForNode(kra.runtime_arg_values, core, {{"num_pages", num_pages}, {"start_id", start_id}});
-    };
-
-    uint32_t scheduler_xy = 0;
+    // node's slots are written on every dispatch; noop cores carry all-zero CoreRtArgs.
     RmChunkConstants chunks{};
     enumerate_core_rt_args(
         operation_attributes, tensor_args, output, plan, [&](const CoreRtArgs& w, const RmChunkConstants& kc) {
-            if (w.noop) {
-                add_dm_args(reader_run_args, w.core, 0, 0);
-                add_dm_args(writer_run_args, w.core, 0, 0);
-                AddRuntimeArgsForNode(compute_run_args.runtime_arg_values, w.core, {{"num_tiles", 0}});
-                return;
+            if (!w.noop) {
+                chunks = kc;  // the same on every core
             }
-            chunks = kc;  // the same on every core
-            add_dm_args(reader_run_args, w.core, w.in_units, w.start_id);
-            add_dm_args(writer_run_args, w.core, w.out_units, w.start_id);
-            scheduler_xy = std::max(scheduler_xy, w.scheduler_xy);
+            AddRuntimeArgsForNode(
+                reader_run_args.runtime_arg_values, w.core, {{"num_pages", w.in_units}, {"start_id", w.start_id}});
+            AddRuntimeArgsForNode(
+                writer_run_args.runtime_arg_values, w.core, {{"num_pages", w.out_units}, {"start_id", w.start_id}});
             AddRuntimeArgsForNode(compute_run_args.runtime_arg_values, w.core, {{"num_tiles", w.compute_units}});
         });
     if (!has_sharding) {
@@ -443,19 +444,9 @@ tt::tt_metal::experimental::ProgramRunArgs make_run_args(
     compute_run_args.common_runtime_arg_values["packed_scalar1"] = packed_scalar1;
     compute_run_args.common_runtime_arg_values["packed_scalar2"] = packed_scalar2;
 
-    if (plan.flow != DramReadFlow::None) {
-        const auto page_order = plan.page_order();
-        for (auto* kra : {&reader_run_args, &writer_run_args}) {
-            auto& common = kra->common_runtime_arg_values;
-            for (size_t i = 0; i < kPageOrderArgNames.size(); ++i) {
-                common[kPageOrderArgNames[i]] = page_order[i];
-            }
-            if (plan.flow == DramReadFlow::WorkQueue) {
-                common["chunk_pages"] = plan.chunk_pages;
-                common["scheduler_xy"] = scheduler_xy;
-                common["num_workers"] = operation_attributes.worker_grid.num_cores();
-            }
-        }
+    for (const auto& [name, value] : dram_read_args(plan, input, operation_attributes.worker_grid)) {
+        reader_run_args.common_runtime_arg_values[name] = value;
+        writer_run_args.common_runtime_arg_values[name] = value;
     }
 
     ProgramRunArgs run_args;
@@ -620,13 +611,8 @@ ttnn::device_operation::ProgramArtifacts UnaryDeviceOperation::ProgramFactory::c
             dm_common_runtime_arg_names.end(),
             {"chunks_per_row", "chunk_size", "last_chunk_size", "rows_per_tile", "total_rows"});
     }
-    if (dram_flow) {
-        dm_common_runtime_arg_names.insert(
-            dm_common_runtime_arg_names.end(), kPageOrderArgNames.begin(), kPageOrderArgNames.end());
-    }
-    if (work_queue) {
-        dm_common_runtime_arg_names.insert(
-            dm_common_runtime_arg_names.end(), kQueueArgNames.begin(), kQueueArgNames.end());
+    for (const auto& [name, value] : dram_read_args(plan, input, all_device_cores)) {  // values are set per dispatch
+        dm_common_runtime_arg_names.push_back(name);
     }
 
     const auto arch = input.device()->arch();

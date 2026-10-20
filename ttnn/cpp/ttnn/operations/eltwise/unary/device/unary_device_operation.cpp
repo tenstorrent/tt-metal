@@ -393,7 +393,7 @@ ttsl::hash::hash_t UnaryDeviceOperation::compute_program_hash(
             output_spec, tensor_args.output_tensor.has_value() ? &*tensor_args.output_tensor : nullptr, "output"),
         src_shard_vol,
         dst_shard_vol,
-        // The DRAM read flow changes defines, CBs and semaphores.
+        // The DRAM read flow selects kernel defines, dataflow buffers and semaphores.
         get_dram_read_plan(attributes.op_chain, input_tensor, output_spec, attributes.worker_grid).flow);
 }
 
