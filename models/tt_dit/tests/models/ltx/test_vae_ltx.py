@@ -1241,10 +1241,11 @@ def _shard_corner_mask(lat_h, lat_w, height, width, h_factor, w_factor, stride=3
     return mask
 
 
-def _assert_no_shard_corner_error(ref_out, tt_out, height, width, h_factor, w_factor, ratio=2.0):
+def _assert_no_shard_corner_error(ref_out, tt_out, height, width, h_factor, w_factor, ratio=1.25):
     """Mean |TT - ref| at the latent cells next to the pixel-shard corners must stay within ``ratio`` x
     the mean elsewhere. The 2D halo-only exchange broke exactly there (dots at the tile corners of
-    first-frame clips) while the overall PCC stayed at 0.998."""
+    first-frame clips) while the overall PCC stayed at 0.998. On 4x8 the halo-only encoder gives
+    ratio 1.36 (544x960) and 1.79 (1088x1920), the full exchange 1.01-1.02."""
     err = (tt_out.float() - ref_out.float()).abs().mean(dim=(0, 1, 2))  # (H', W')
     mask = _shard_corner_mask(err.shape[0], err.shape[1], height, width, h_factor, w_factor)
     if not mask.any() or mask.all():
