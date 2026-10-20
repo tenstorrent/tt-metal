@@ -4,6 +4,7 @@
 
 #define ELTWISE_BINARY_PER_TILE_HANDOFF true
 #define ELTWISE_BINARY_PER_TILE_HANDOFF_BCAST true
+#define ELTWISE_BINARY_BCAST_BLOCK_UNPACK true
 #define CKL_ELTWISE_CHAIN_PACK_BLOCK
 #define CKL_ELTWISE_CHAIN_PACK_BLOCK_IF (get_compile_time_arg_val(13) >= 4)  // CT arg 13: per_core_N
 
@@ -346,16 +347,29 @@ void kernel_main() {
                 index_subblock_w_offset = 0;
                 for (uint32_t j = 0; j < num_subblocks_w; ++j) {
                     tile_regs_acquire();
-                    for (uint32_t w = 0; w < subblock_w; ++w) {
-                        uint32_t index = w + index_subblock_w_offset + index_h_offset;
-                        // When the last group spans fewer than block_w tiles, the index can
-                        // exceed the CB tile count. Clamp it so the read stays in bounds;
-                        // the input mask guarantees the result from the clamped tile is zeroed.
-                        if (index >= per_core_MN) {
-                            index = per_core_MN - 1;
+#if defined(ARCH_BLACKHOLE)
+                    if (index_subblock_w_offset + index_h_offset + subblock_w <= per_core_MN) {
+                        any_tiles_bcast_block<EltwiseBinaryType::ELWMUL, BroadcastType::ROW>(
+                            dfb_pass1_src_id,
+                            dfb_input_mask_id,
+                            index_subblock_w_offset + index_h_offset,
+                            index_subblock_w_offset,
+                            0,
+                            subblock_w);
+                    } else
+#endif
+                    {
+                        for (uint32_t w = 0; w < subblock_w; ++w) {
+                            uint32_t index = w + index_subblock_w_offset + index_h_offset;
+                            // When the last group spans fewer than block_w tiles, the index can
+                            // exceed the CB tile count. Clamp it so the read stays in bounds;
+                            // the input mask guarantees the result from the clamped tile is zeroed.
+                            if (index >= per_core_MN) {
+                                index = per_core_MN - 1;
+                            }
+                            mul_tiles_bcast_rows(
+                                dfb_pass1_src_id, dfb_input_mask_id, index, w + index_subblock_w_offset, w);
                         }
-                        mul_tiles_bcast_rows(
-                            dfb_pass1_src_id, dfb_input_mask_id, index, w + index_subblock_w_offset, w);
                     }
                     tile_regs_commit();
                     tile_regs_wait();

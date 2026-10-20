@@ -4,6 +4,7 @@
 
 #define ELTWISE_BINARY_PER_TILE_HANDOFF true
 #define ELTWISE_BINARY_PER_TILE_HANDOFF_BCAST true
+#define ELTWISE_BINARY_BCAST_BLOCK_UNPACK true
 #include <cstdint>
 
 #define BCAST_LLKOP EltwiseBinaryType::ELWMUL
@@ -447,19 +448,34 @@ void kernel_main() {
                     index_subblock_w_offset = 0;
                     for (std::uint32_t j = 0; j < num_subblocks_w; ++j) {
                         tile_regs_acquire();
-                        for (std::uint32_t w = 0; w < subblock_w; ++w) {
-                            const std::uint32_t index = w + index_subblock_w_offset + index_h_offset + out_block_base;
-                            if constexpr (has_row_mask) {
+                        if constexpr (has_row_mask) {
+                            for (std::uint32_t w = 0; w < subblock_w; ++w) {
                                 mul_tiles(
                                     dfb_input_id,
                                     dfb_input_mask_id,
-                                    index,
+                                    w + index_subblock_w_offset + index_h_offset + out_block_base,
                                     w + index_subblock_w_offset + mask_set_offset,
                                     w);
-                            } else {
-                                mul_tiles_bcast_rows(
-                                    dfb_input_id, dfb_input_mask_id, index, w + index_subblock_w_offset, w);
                             }
+                        } else {
+#if defined(ARCH_BLACKHOLE)
+                            any_tiles_bcast_block<EltwiseBinaryType::ELWMUL, BroadcastType::ROW>(
+                                dfb_input_id,
+                                dfb_input_mask_id,
+                                index_subblock_w_offset + index_h_offset + out_block_base,
+                                index_subblock_w_offset,
+                                0,
+                                subblock_w);
+#else
+                            for (std::uint32_t w = 0; w < subblock_w; ++w) {
+                                mul_tiles_bcast_rows(
+                                    dfb_input_id,
+                                    dfb_input_mask_id,
+                                    w + index_subblock_w_offset + index_h_offset + out_block_base,
+                                    w + index_subblock_w_offset,
+                                    w);
+                            }
+#endif
                         }
                         tile_regs_commit();
                         tile_regs_wait();
@@ -597,13 +613,29 @@ void kernel_main() {
                     index_subblock_w_offset = 0;
                     for (std::uint32_t j = 0; j < num_subblocks_w; ++j) {
                         tile_regs_acquire();
-                        for (std::uint32_t w = 0; w < subblock_w; ++w) {
-                            const std::uint32_t index = w + index_subblock_w_offset;
-                            if constexpr (has_row_mask) {
-                                mul_tiles(dfb_xmm_id, dfb_input_mask_id, index, index + mask_set_offset, w);
-                            } else {
-                                mul_tiles_bcast_rows(dfb_xmm_id, dfb_input_mask_id, index, index, w);
+                        if constexpr (has_row_mask) {
+                            for (std::uint32_t w = 0; w < subblock_w; ++w) {
+                                mul_tiles(
+                                    dfb_xmm_id,
+                                    dfb_input_mask_id,
+                                    w + index_subblock_w_offset,
+                                    w + index_subblock_w_offset + mask_set_offset,
+                                    w);
                             }
+                        } else {
+#if defined(ARCH_BLACKHOLE)
+                            any_tiles_bcast_block<EltwiseBinaryType::ELWMUL, BroadcastType::ROW>(
+                                dfb_xmm_id, dfb_input_mask_id, index_subblock_w_offset, index_subblock_w_offset, 0, subblock_w);
+#else
+                            for (std::uint32_t w = 0; w < subblock_w; ++w) {
+                                mul_tiles_bcast_rows(
+                                    dfb_xmm_id,
+                                    dfb_input_mask_id,
+                                    w + index_subblock_w_offset,
+                                    w + index_subblock_w_offset,
+                                    w);
+                            }
+#endif
                         }
                         tile_regs_commit();
                         tile_regs_wait();
