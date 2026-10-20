@@ -13,7 +13,8 @@
 // 4. on bank 0 writes the pass table row [n_rows, e, t_0 .. t_31] (uint16) that the down op dispatches from.
 // The compute learns each expert's pass count through the BRISC mailboxes (0 = done).
 //
-// runtime args: [x_addr, routing_addr, counts_addr, act_addr, table_addr, bank_id, group]
+// runtime args: [x_addr, routing_addr (EP: weights), counts_addr (EP: idx), act_addr, table_addr, bank_id, group,
+//                (EP) base_addr]
 
 #include <stdint.h>
 
@@ -45,11 +46,14 @@ void kernel_main() {
     constexpr uint32_t row_bytes = get_compile_time_arg_val(11);
     constexpr uint32_t table_bytes = get_compile_time_arg_val(12);
     constexpr uint32_t ppb = get_compile_time_arg_val(13);  // column pairs per bank = output tiles per pass
-    constexpr auto x_args = TensorAccessorArgs<14>();
-    constexpr auto routing_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
-    constexpr auto counts_args = TensorAccessorArgs<routing_args.next_compile_time_args_offset()>();
+    constexpr uint32_t EP = get_compile_time_arg_val(14);   // 1: routing from the top-k index list + weights + base
+    constexpr uint32_t K = get_compile_time_arg_val(15);
+    constexpr auto x_args = TensorAccessorArgs<16>();
+    constexpr auto routing_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();       // EP: weights
+    constexpr auto counts_args = TensorAccessorArgs<routing_args.next_compile_time_args_offset()>();  // EP: idx
     constexpr auto act_args = TensorAccessorArgs<counts_args.next_compile_time_args_offset()>();
     constexpr auto table_args = TensorAccessorArgs<act_args.next_compile_time_args_offset()>();
+    constexpr auto base_args = TensorAccessorArgs<table_args.next_compile_time_args_offset()>();
 
     constexpr uint32_t E_TILES = (E + 31) / 32;
     constexpr uint32_t RT = T / 32;
@@ -62,34 +66,54 @@ void kernel_main() {
     const auto s_act = TensorAccessor(act_args, act_addr, tile_page);
     const auto s_tab = TensorAccessor(table_args, table_addr, table_bytes);
 
-    cb_reserve_back(cb_c, E_TILES);
+    constexpr uint32_t c_tiles = EP ? RT : E_TILES;       // EP: the index tiles
+    constexpr uint32_t r_tiles = EP ? RT : RT * E_TILES;  // EP: the weight tiles
+    cb_reserve_back(cb_c, c_tiles);
     const uint32_t c_l1 = get_write_ptr(cb_c);
-    for (uint32_t i = 0; i < E_TILES; ++i) {
+    for (uint32_t i = 0; i < c_tiles; ++i) {
         noc_async_read(s_c.get_noc_addr(i), c_l1 + i * tile_page, tile_page);
     }
-    cb_reserve_back(cb_r, RT * E_TILES);
+    cb_reserve_back(cb_r, r_tiles);
     const uint32_t r_l1 = get_write_ptr(cb_r);
-    for (uint32_t i = 0; i < RT * E_TILES; ++i) {
+    for (uint32_t i = 0; i < r_tiles; ++i) {
         noc_async_read(s_r.get_noc_addr(i), r_l1 + i * tile_page, tile_page);
     }
-    noc_async_read_barrier();
-
+    uint32_t expert_base = 0;
     uint16_t n_tok[E], passes[E], base[E], mine[E];
-    read_counts<E>(reinterpret_cast<volatile tt_l1_ptr uint16_t*>(c_l1), n_tok);
+    if constexpr (EP) {
+        const uint32_t base_addr = get_arg_val<uint32_t>(7);
+        const auto s_b = TensorAccessor(base_args, base_addr, 32);
+        cb_reserve_back(cb_c, 1);
+        const uint32_t b_l1 = c_l1 + c_tiles * tile_page;
+        noc_async_read(s_b.get_noc_addr(0), b_l1, 32);
+        noc_async_read_barrier();
+        expert_base = *reinterpret_cast<volatile tt_l1_ptr uint16_t*>(b_l1);
+        count_from_indices<E, T, K>(reinterpret_cast<volatile tt_l1_ptr uint16_t*>(c_l1), expert_base, n_tok);
+    } else {
+        noc_async_read_barrier();
+        read_counts<E>(reinterpret_cast<volatile tt_l1_ptr uint16_t*>(c_l1), n_tok);
+    }
     pass_bases<E>(n_tok, passes, base);
     const uint32_t n_mine = assign_group<E, 32>(passes, groups, group, mine);
     const volatile tt_l1_ptr uint16_t* routing = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(r_l1);
 
     uint16_t rows[T];
+    uint16_t wbits[T];
     bool first_pass = true;
     for (uint32_t i = 0; i < n_mine; ++i) {
         const uint32_t e = mine[i];
-        // the tokens routed to e, ascending
+        // the tokens routed to e, ascending, and their routing weights
         uint32_t nr = 0;
-        for (uint32_t t = 0; t < T; ++t) {
-            const volatile tt_l1_ptr uint16_t* tile = routing + ((t >> 5) * E_TILES + (e >> 5)) * 1024;
-            if (tile[tile_elem(t & 31, e & 31)] != 0) {
-                rows[nr++] = static_cast<uint16_t>(t);
+        if constexpr (EP) {
+            nr = rows_from_indices<T, K>(
+                reinterpret_cast<volatile tt_l1_ptr uint16_t*>(c_l1), routing, expert_base + e, rows, wbits);
+        } else {
+            for (uint32_t t = 0; t < T; ++t) {
+                const volatile tt_l1_ptr uint16_t* tile = routing + ((t >> 5) * E_TILES + (e >> 5)) * 1024;
+                if (tile[tile_elem(t & 31, e & 31)] != 0) {
+                    wbits[nr] = tile[tile_elem(t & 31, e & 31)];
+                    rows[nr++] = static_cast<uint16_t>(t);
+                }
             }
         }
         ckernel::mailbox_write(ckernel::ThreadId::UnpackThreadId, passes[e]);
@@ -132,9 +156,7 @@ void kernel_main() {
             }
             volatile tt_l1_ptr uint16_t* d16 = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(d_l1);
             for (uint32_t j = 0; j < nr_p; ++j) {
-                const uint32_t t = rows[i0 + j];
-                const volatile tt_l1_ptr uint16_t* tile = routing + ((t >> 5) * E_TILES + (e >> 5)) * 1024;
-                d16[tile_elem(j, j)] = tile[tile_elem(t & 31, e & 31)];
+                d16[tile_elem(j, j)] = wbits[i0 + j];
             }
             noc_async_read_barrier();
             cb_push_back(cb_xrm, kt);

@@ -372,3 +372,73 @@ readers do at 310 GB/s, then reduces its [T, 16-column] partial into the bank ow
 inefficiency and cut the activation traffic 8x; estimated down ~150-200 us, layer ~550-600 us at real routing.
 Transaction-id pipelining of the activation reads (`noc_async_read_set_trid` + plain reads) did not synchronize
 on the writer's NOC (stale slots); the reads are batched three passes per barrier instead.
+
+## 11. EP32 expert path (2026-10-20, orchestration v2: `TtEPExperts`, `GLM53_MOE_LAYOUT=ep`)
+
+Direction change (doc/mesh/orchestration_v2.md, DeepSeek-V3 Galaxy reference): every chip owns
+`E / D` FULL-width experts (9 on the 8x4, 36 on a (2,4) block), the rows' tokens reach their column's experts
+through `all_to_all_dispatch` along the mesh rows, the expert compute is the dispatch op in **EP mode**, and
+`all_to_all_combine` (local reduce) brings the weighted sums back; the column all-reduce stays.
+
+EP mode of the dispatch ops (`custom_ops/expert_stream`, compile-time `EP`): the routing arrives as the top-k
+lists (index tiles `[T, 32]` BF16 = global expert ids, weight tiles, both exact BF16) plus the chip's expert base
+(one uint16 page per chip, sharded over the mesh); every kernel counts the chip's experts' rows from the index list
+(T x K checks: no `ne` / `sum` helper ops), the writer gathers the rows and builds `D` from the weights directly.
+The 288-expert id space is untouched (ids outside `[base, base + E_local)` are other chips' experts, as after a
+dispatch). Unit test `test_expert_dispatch_ep` (random weights, Zipf lists over 288 experts, I = 2048 = 8 pairs
+per bank, `_logs/optexperts_ep*_*.log`):
+
+| T | experts owned | routed rows | passes | act PCC | out PCC | pass table |
+|---|---|---|---|---|---|---|
+| 64 | [9, 18) | 18 | 5 | 0.999981 | 0.999978 | exact |
+| 256 | [27, 36) | 31 | 8 | 0.999982 | 0.999978 | exact |
+| 64 | [36, 72) | 81 | 15 | 0.999983 | 0.999979 | exact |
+| 256 | [72, 108) | 244 | 35 | 0.999986 | 0.999991 | exact |
+| 64 (bfp4 gate\|up) | [9, 18) | 18 | 5 | 0.999983 | 0.999978 (vs the bfp4-rounded golden) | - |
+
+(The down op's L1 budget shrinks its activation / weight slots to 2 + 2 at the (T = 256, E = 36) corner: the
+resident per-pass h buffer is 400 KB there.)
+
+Single-chip path (`tests/test_moe_ep.py`, D = 1: dispatch / combine are the identity; real layer-4 weights and
+routing, the chip's share = the first `E_loc` experts at full width, the tokens' top-8 lists over all 288 experts;
+the hybrid stream path on the same experts as the reference; `_logs/optexperts_ep6_1.log`, traced, 20 replays):
+
+| experts owned | T | active | routed rows | hybrid stream us | EP us | EP device ops | EP vs torch | hybrid vs torch | EP vs hybrid |
+|---|---|---|---|---|---|---|---|---|---|
+| 9 (the 8x4 share) | 32 | 2 | 10 | 306.5 | 297.2 | 7 | 0.999922 | 0.999919 | 0.999994 |
+| 9 | 256 | 3 | 81 | 489.0 | 589.6 | 7 | 0.999918 | 0.999918 | 1.000000 |
+| 36 (a (2,4) share) | 32 | 11 | 37 | 1225.8 | 1377.5 | 7 | 0.999925 | 0.999923 | 0.999992 |
+| 36 | 256 | 12 | 329 | 2079.0 | 2069.4 | 7 | 0.999925 | 0.999925 | 1.000000 |
+
+Exact vs the hybrid block (>= 0.99999; bit-identical at T = 256 where both run the dispatch op). The EP path is the
+same two generic ops plus the index-tile prep (typecast + concat x 2, the row-major copy): 7 device ops, no counts
+ops. Per-chip expert time is weight-bound at full width: 9 experts x 26.7 MB = 240 MB when all are active -- at
+T = 256 only 3 of this chip's 9 were active (81 rows): 590 us; 12 of 36 active: 2.07 ms (320 MB). The 8x4 EP
+layer time at 32 users per row is then ~0.6 ms + the dispatch / combine pair + the column all-reduce.
+
+Dispatched-row imbalance of the real routing (layer 4, rows per device, chip d owns experts `[d E/D, (d+1) E/D)`):
+
+| tokens | D | rows per device max / mean / min | max / mean | active experts |
+|---|---|---|---|---|
+| 32 | 32 (the 8x4) | 17 / 8.0 / 1 | 2.12 | 92 of 288 |
+| 256 | 32 | 155 / 64.0 / 2 | 2.42 | 112 of 288 |
+| 32 | 8 (a (2,4) block) | 49 / 32.0 / 15 | 1.53 | 92 of 288 |
+| 256 | 8 | 342 / 256.0 / 85 | 1.34 | 112 of 288 |
+
+The busiest chip of the 8x4 sees 2.4x the mean rows at 256 tokens (the step time follows the max); the streaming
+kernels pad nothing, so the imbalance costs only the busiest chip's extra passes (155 rows = ~9 passes over its
+active experts).
+
+Gate|up bfp4 knob (`GLM53_EXPERT_W13_DTYPE=bfp4`, 576 B tiles through the same kernels, `w13_dtype` of the ops):
+unit test `test_expert_dispatch_ep_bfp4` PCC 0.999983 / 0.999978 vs the bfp4-rounded golden (the kernels are
+format-agnostic; the block-level PCC vs the bfp8 reference on real weights is the next run of
+`tests/test_moe_ep.py` with the knob set -- not run before the board reset).
+
+Mesh path (`TtEPExperts.forward` on D > 1: `all_to_all_dispatch` of the row-major tokens and of the weight lists
+along axis 0, the EP op on the dispatched rows, `all_to_all_combine(local_reduce=True)`): written, UNTESTED until
+a (2,4) block is available; the (2,4) numbers (per-layer time at 4 / 32 tokens per device, dispatch / combine
+times) are the coordinator's follow-up.
+
+Down-op note for the EP shapes: every down core reads every pass's full [32, I] activation block (I = 2048:
+128 KB per pass per core, 64 cores); at the 8x4 shape (<= ~20 passes) that is ~2.6 MB per core, on a (2,4)
+chip (36 experts, ~36 passes) ~4.6 MB: the expert-parallel down split (section 10) would cut it 8x.

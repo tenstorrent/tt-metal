@@ -13,7 +13,7 @@
 // (mailbox) and writes its summed output tiles out[r, col0 ..]. The pass rows come from the table the gate|up op wrote
 // (uint16 rows [n, e, t_0 ..]).
 //
-// runtime args: [counts_addr, table_addr, act_addr, out_addr, col0]
+// runtime args: [counts_addr (EP: idx_addr), table_addr, act_addr, out_addr, col0, (EP) base_addr]
 
 #include <stdint.h>
 
@@ -32,6 +32,8 @@ void kernel_main() {
     constexpr uint32_t cb_c = get_compile_time_arg_val(0);
     constexpr uint32_t cb_t = get_compile_time_arg_val(1);
     constexpr uint32_t cb_m = get_compile_time_arg_val(15);  // metadata page: [n_active, passes per active expert]
+    constexpr uint32_t EP = get_compile_time_arg_val(16);    // 1: counts from the top-k index list + expert base
+    constexpr uint32_t K = get_compile_time_arg_val(17);
     constexpr uint32_t cb_a = get_compile_time_arg_val(2);
     constexpr uint32_t cb_id = get_compile_time_arg_val(3);
     constexpr uint32_t cb_h = get_compile_time_arg_val(4);
@@ -45,10 +47,11 @@ void kernel_main() {
     constexpr uint32_t P_MAX = get_compile_time_arg_val(12);
     constexpr uint32_t h_tiles = get_compile_time_arg_val(13);  // output tile columns of the whole row (H / 32)
     constexpr uint32_t table_bytes = get_compile_time_arg_val(14);
-    constexpr auto counts_args = TensorAccessorArgs<16>();
+    constexpr auto counts_args = TensorAccessorArgs<18>();  // EP: the index tiles
     constexpr auto table_args = TensorAccessorArgs<counts_args.next_compile_time_args_offset()>();
     constexpr auto act_args = TensorAccessorArgs<table_args.next_compile_time_args_offset()>();
     constexpr auto out_args = TensorAccessorArgs<act_args.next_compile_time_args_offset()>();
+    constexpr auto base_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
 
     constexpr uint32_t E_TILES = (E + 31) / 32;
     constexpr uint32_t RT = T / 32;
@@ -62,14 +65,26 @@ void kernel_main() {
     const auto s_out = TensorAccessor(out_args, out_addr, tile_page);
 
     // counts -> passes
-    cb_reserve_back(cb_c, E_TILES);
+    constexpr uint32_t c_tiles = EP ? RT : E_TILES;
+    cb_reserve_back(cb_c, c_tiles);
     const uint32_t c_l1 = get_write_ptr(cb_c);
-    for (uint32_t i = 0; i < E_TILES; ++i) {
+    for (uint32_t i = 0; i < c_tiles; ++i) {
         noc_async_read(s_c.get_noc_addr(i), c_l1 + i * tile_page, tile_page);
     }
-    noc_async_read_barrier();
     uint16_t n_tok[E], passes[E], base[E];
-    read_counts<E>(reinterpret_cast<volatile tt_l1_ptr uint16_t*>(c_l1), n_tok);
+    if constexpr (EP) {
+        const uint32_t base_addr = get_arg_val<uint32_t>(5);
+        const auto s_b = TensorAccessor(base_args, base_addr, 32);
+        cb_reserve_back(cb_c, 1);
+        const uint32_t b_l1 = c_l1 + c_tiles * tile_page;
+        noc_async_read(s_b.get_noc_addr(0), b_l1, 32);
+        noc_async_read_barrier();
+        const uint32_t expert_base = *reinterpret_cast<volatile tt_l1_ptr uint16_t*>(b_l1);
+        count_from_indices<E, T, K>(reinterpret_cast<volatile tt_l1_ptr uint16_t*>(c_l1), expert_base, n_tok);
+    } else {
+        noc_async_read_barrier();
+        read_counts<E>(reinterpret_cast<volatile tt_l1_ptr uint16_t*>(c_l1), n_tok);
+    }
     uint32_t n_pass = pass_bases<E>(n_tok, passes, base);
     if (n_pass > P_MAX) {
         n_pass = P_MAX;  // never with <= 8 routed experts per token (op.py's P_MAX); keeps the kernel from hanging

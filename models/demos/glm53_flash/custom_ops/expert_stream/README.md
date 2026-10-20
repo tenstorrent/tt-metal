@@ -41,6 +41,16 @@ phase 1 = `h_k = act[k] @ W2[e][:, cols]` per pass into a resident BF16 buffer, 
 contributions (<= 8 per token) gathered into slot tiles and summed in fp32 DST (identity-tile matmuls, HiFi4).
 Numbers: `doc/mesh/expert_kernel_sweep.md` section 10.
 
+### EP mode (`ep=True`: orchestration v2, every chip owns `E / D` full-width experts)
+
+The routing arrives as the top-k lists instead of a dense matrix: `routing` = the weight tiles `[1, 1, T, 32]` BF16
+TILE, `counts` = the index tiles `[1, 1, T, 32]` BF16 TILE (global expert ids as exact BF16 integers, columns >= K
+padded with `IDX_PAD`; `ep_index_tiles`), plus `base` = the chip's expert base id as a `[1, 1, 1, 16]` UINT16
+ROW_MAJOR page (`ep_base_tensor`; sharded per chip on a mesh). Every kernel counts the rows of the chip's experts
+`[base, base + E)` from the index list itself (no `ne` / `sum` helper ops), the writer gathers the rows and builds
+`D` from the weights. `w13_dtype` selects bfp8 (1088 B tiles) or bfp4 (576 B) gate|up weights; the down weights
+stay bfp8. `tt/moe.py` `TtEPExperts` (`GLM53_MOE_LAYOUT=ep`) wraps it with the mesh dispatch / combine.
+
 ## Kernels and core assignment
 
 `ExpertGateUpStream(device, E, K, I, groups)`: `groups` worker cores per DRAM bank (default 12 -> 96 cores), placed
@@ -108,7 +118,8 @@ row partials in L1): the design is in section 9 of the sweep doc, expected 0.6-0
 
 ## Knobs
 
-`GLM53_STREAM_DISPATCH` (1: 32 < T <= 256 gathered tokens go through the dispatch ops, 0: 32-token blocks),
+`GLM53_MOE_LAYOUT=ep` (the EP32 expert path, `TtEPExperts`), `GLM53_EXPERT_W13_DTYPE=bfp4` (tests: the gate|up
+bfp4 knob), `GLM53_STREAM_DISPATCH` (1: 32 < T <= 256 gathered tokens go through the dispatch ops, 0: 32-token blocks),
 `GLM53_DISPATCH_DOWN_READERS` (8). `GLM53_STREAM_EXPERTS=1` selects the stream block in `tt/moe.py` (`TtRoutedExperts(stream=True)`, weight cache tag
 `_stream`: the bank-major layouts are built once from the per-chip slices and uploaded width-sharded over the DRAM
 banks through `upload_cached(..., rows=0, cols=1, memory_config=stream_memory_config(rows))`); `GLM53_STREAM_GROUPS`

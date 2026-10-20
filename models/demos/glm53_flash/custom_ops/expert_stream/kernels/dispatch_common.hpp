@@ -85,5 +85,48 @@ inline uint32_t assign_group(const uint16_t* passes, uint32_t groups, uint32_t g
     return n_mine;
 }
 
+// EP mode: the routing comes as the top-k index list idx [T, K] (BF16 integers, global expert ids, TILE layout:
+// T/32 tiles of 32x32 with columns 0..K-1 valid) and the weights w [T, K] (BF16, same layout); this chip owns the
+// experts [base, base + E). Per-expert token counts:
+template <uint32_t E, uint32_t T, uint32_t K>
+inline void count_from_indices(const volatile tt_l1_ptr uint16_t* idx, uint32_t base, uint16_t* n) {
+    for (uint32_t e = 0; e < E; ++e) {
+        n[e] = 0;
+    }
+    for (uint32_t t = 0; t < T; ++t) {
+        const volatile tt_l1_ptr uint16_t* tile = idx + (t >> 5) * 1024;
+        for (uint32_t k = 0; k < K; ++k) {
+            const uint32_t e = bf16_to_uint(tile[tile_elem(t & 31, k)]);
+            if (e >= base && e < base + E) {
+                ++n[e - base];
+            }
+        }
+    }
+}
+
+// The tokens routed to local expert e (ascending) and their weights (raw BF16 bits); returns the count.
+template <uint32_t T, uint32_t K>
+inline uint32_t rows_from_indices(
+    const volatile tt_l1_ptr uint16_t* idx,
+    const volatile tt_l1_ptr uint16_t* w,
+    uint32_t global_e,
+    uint16_t* rows,
+    uint16_t* wbits) {
+    uint32_t nr = 0;
+    for (uint32_t t = 0; t < T; ++t) {
+        const uint32_t off = (t >> 5) * 1024;
+        for (uint32_t k = 0; k < K; ++k) {
+            const uint32_t el = off + tile_elem(t & 31, k);
+            if (bf16_to_uint(idx[el]) == global_e) {
+                rows[nr] = static_cast<uint16_t>(t);
+                wbits[nr] = w[el];
+                ++nr;
+                break;  // one slot per (token, expert)
+            }
+        }
+    }
+    return nr;
+}
+
 // Byte offset of row `row` (its first 16 columns) inside a BF16 32x32 tile; the next 16 columns are 512 B further.
 inline uint32_t tile_row_bytes(uint32_t row) { return ((row >> 4) * 2) * 512 + (row & 15) * 32; }

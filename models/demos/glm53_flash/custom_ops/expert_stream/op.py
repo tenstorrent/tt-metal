@@ -60,18 +60,17 @@ KERNEL_DIR = Path(__file__).parent / "kernels"
 TILE = 32
 BF16_TILE_BYTES = 2048
 BFP8_TILE_BYTES = 1088
+BFP4_TILE_BYTES = 576
+WEIGHT_TILE_BYTES = {ttnn.bfloat8_b: BFP8_TILE_BYTES, ttnn.bfloat4_b: BFP4_TILE_BYTES}
 MAX_PACKET_BYTES = 16384  # Blackhole NOC max burst
 SWIGLU_LIMIT = 10.0  # the fused clamped_silu_glu SFPU op's compile-time limit (GLM-5.3-Flash swiglu_limit)
 MAX_PICKS = 8  # routed experts per token (top-8): bounds the passes and the gather slots of the dispatch ops
 TABLE_WIDTH = 64  # uint16 entries per pass-table row: [n_rows, e, t_0 .. t_31, pad]
 
 
-def _packet_bytes(tiles: int) -> int:
-    """The largest NOC packet (a divisor of `tiles` bfp8 tiles) that fits the max burst."""
-    return (
-        max(d for d in range(1, tiles + 1) if tiles % d == 0 and d * BFP8_TILE_BYTES <= MAX_PACKET_BYTES)
-        * BFP8_TILE_BYTES
-    )
+def _packet_bytes(tiles: int, tile_bytes: int = BFP8_TILE_BYTES) -> int:
+    """The largest NOC packet (a divisor of `tiles` weight tiles) that fits the max burst."""
+    return max(d for d in range(1, tiles + 1) if tiles % d == 0 and d * tile_bytes <= MAX_PACKET_BYTES) * tile_bytes
 
 
 # ---------------------------------------------------------------------------------------------------- layouts
@@ -145,6 +144,10 @@ def bfp8_round(w: torch.Tensor) -> torch.Tensor:
     return ttnn.to_torch(ttnn.from_torch(w, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)).float()
 
 
+def bfp4_round(w: torch.Tensor) -> torch.Tensor:
+    return ttnn.to_torch(ttnn.from_torch(w, dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT)).float()
+
+
 def expert_stream_golden(
     x: torch.Tensor, routing: torch.Tensor, w13: torch.Tensor, w2: torch.Tensor, limit=SWIGLU_LIMIT
 ):
@@ -196,6 +199,47 @@ def expert_dispatch_golden(
 def routing_counts(routing: ttnn.Tensor) -> ttnn.Tensor:
     """[1, 1, T, E] BF16 routing matrix -> [1, 1, 1, E] BF16 per-expert token counts (exact up to T = 256)."""
     return ttnn.sum(ttnn.ne(routing, 0.0), dim=2, keepdim=True)
+
+
+IDX_PAD = 4096  # index padding value (an expert id no chip owns; exact in BF16)
+
+
+def ep_routing_matrix(idx: torch.Tensor, wts: torch.Tensor, base: int, E_local: int) -> torch.Tensor:
+    """Host: the top-k lists idx [T, K] (global expert ids) / wts [T, K] -> this chip's [T, E_local] routing
+    matrix (zero where the expert is not the chip's)."""
+    T = idx.shape[0]
+    r = torch.zeros(T, E_local)
+    for t in range(T):
+        for k in range(idx.shape[1]):
+            e = int(idx[t, k]) - base
+            if 0 <= e < E_local:
+                r[t, e] = float(wts[t, k])
+    return r.bfloat16()
+
+
+def expert_dispatch_golden_ep(x, idx, wts, base, E_local, w13, w2, limit=SWIGLU_LIMIT):
+    """As ``expert_dispatch_golden`` with the routing given as top-k lists (EP mode)."""
+    return expert_dispatch_golden(x, ep_routing_matrix(idx, wts, base, E_local), w13, w2, limit)
+
+
+def ep_index_tiles(idx: torch.Tensor, wts: torch.Tensor, device, K: int = MAX_PICKS):
+    """Host -> device: idx [T, K] (ints), wts [T, K] -> the [1, 1, T, 32] BF16 TILE index and weight tensors the EP
+    ops read (columns >= K padded with IDX_PAD / 0)."""
+    T = idx.shape[0]
+    it = torch.full((1, 1, T, TILE), float(IDX_PAD))
+    it[0, 0, :, :K] = idx.float()
+    wt = torch.zeros(1, 1, T, TILE)
+    wt[0, 0, :, :K] = wts.float()
+    mk = lambda t: ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    return mk(it), mk(wt)
+
+
+def ep_base_tensor(base: int, device, mesh_mapper=None):
+    """The per-chip expert base id as a [1, 1, 1, 16] UINT16 ROW_MAJOR page (on a mesh: [D, 1, 1, 16] sharded)."""
+    t = torch.zeros(1, 1, 1, 16, dtype=torch.int32) if isinstance(base, int) else base
+    if isinstance(base, int):
+        t[0, 0, 0, 0] = base
+    return ttnn.from_torch(t, dtype=ttnn.uint16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, mesh_mapper=mesh_mapper)
 
 
 # ---------------------------------------------------------------------------------------------------- placement
@@ -302,7 +346,7 @@ class ExpertGateUpStream(_BankStreamOp):
     TILE (written at the active experts' tiles). ``groups`` = cores per bank = how many experts stream in
     parallel; the activation (K / 32 tiles, 256 KB at K = 4096) stays resident on every core."""
 
-    def __init__(self, device, E: int, K: int, I: int, groups: int = 12):
+    def __init__(self, device, E: int, K: int, I: int, groups: int = 12, w_dtype=ttnn.bfloat8_b):
         super().__init__(device, groups)
         self.E, self.K, self.I = E, K, I
         self.kt = K // TILE
@@ -312,16 +356,17 @@ class ExpertGateUpStream(_BankStreamOp):
         ), f"I / 32 = {self.i_tiles} tile columns do not split over {self.banks} banks"
         self.ppb = self.i_tiles // self.banks  # column pairs per bank
         self.groups = groups
-        self.col_bytes = self.kt * BFP8_TILE_BYTES
+        self.w_dtype, self.w_tile = w_dtype, WEIGHT_TILE_BYTES[w_dtype]  # bfp8 or bfp4 gate|up weights
+        self.col_bytes = self.kt * self.w_tile
         self.expert_stride = 2 * self.ppb * self.col_bytes
-        self.page_bytes = _packet_bytes(self.kt)
+        self.page_bytes = _packet_bytes(self.kt, self.w_tile)
 
     def __call__(self, x, routing, w13, act):
         cb_x, cb_w, cb_r0, cb_r1, cb_d, cb_h, cb_out = 0, 1, 2, 3, 4, 5, 16
         e_tiles = -(-self.E // TILE)
         cbs = [
             self._cb(cb_x, ttnn.bfloat16, BF16_TILE_BYTES, self.kt),
-            self._cb(cb_w, ttnn.bfloat8_b, BFP8_TILE_BYTES, 3 * self.kt),
+            self._cb(cb_w, self.w_dtype, self.w_tile, 3 * self.kt),
             self._cb(cb_r0, ttnn.bfloat16, BF16_TILE_BYTES, e_tiles),
             self._cb(cb_r1, ttnn.bfloat16, BF16_TILE_BYTES, e_tiles),
             self._cb(cb_d, ttnn.bfloat16, BF16_TILE_BYTES, 2),
@@ -340,7 +385,7 @@ class ExpertGateUpStream(_BankStreamOp):
             TILE,
             self.groups,
             self.expert_stride,
-            BFP8_TILE_BYTES,
+            self.w_tile,
             self.page_bytes,
             self.ppb,
         ]
@@ -419,8 +464,18 @@ class ExpertDownStream(_BankStreamOp):
 class ExpertStream:
     """The chip's routed-expert block as the two streaming ops: ``forward(x, routing, act, out)``."""
 
-    def __init__(self, device, E: int, K: int, I: int, H: int, groups: int = 12, down_readers: int | None = None):
-        self.gate_up = ExpertGateUpStream(device, E, K, I, groups)
+    def __init__(
+        self,
+        device,
+        E: int,
+        K: int,
+        I: int,
+        H: int,
+        groups: int = 12,
+        down_readers: int | None = None,
+        w13_dtype=ttnn.bfloat8_b,
+    ):
+        self.gate_up = ExpertGateUpStream(device, E, K, I, groups, w_dtype=w13_dtype)
         self.down = ExpertDownStream(device, E, I, H, down_readers)
         self.E, self.K, self.I, self.H = E, K, I, H
 
@@ -459,11 +514,23 @@ class ExpertGateUpDispatch(_BankStreamOp):
     [1, 1, T, E] BF16 TILE; counts = ``routing_counts(routing)``; w13 as the block op; act [1, P, 32, I] BF16 TILE
     (the per-pass activations, P = ``max_passes``); table [1, 1, P, 64] UINT16 ROW_MAJOR (the pass rows)."""
 
-    def __init__(self, device, E: int, K: int, I: int, T: int, groups: int = 12):
+    def __init__(
+        self,
+        device,
+        E: int,
+        K: int,
+        I: int,
+        T: int,
+        groups: int = 12,
+        ep: bool = False,
+        picks: int = MAX_PICKS,
+        w_dtype=ttnn.bfloat8_b,
+    ):
         super().__init__(device, groups)
         assert T % TILE == 0 and T <= 256, T  # counts are exact BF16 integers up to 256
         assert groups <= 32, groups
         self.E, self.K, self.I, self.T = E, K, I, T
+        self.ep, self.picks = ep, picks  # EP: routing = top-k index / weight tiles + the chip's expert base
         self.kt = K // TILE
         self.i_tiles = I // TILE
         assert (
@@ -471,31 +538,38 @@ class ExpertGateUpDispatch(_BankStreamOp):
         ), f"I / 32 = {self.i_tiles} tile columns do not split over {self.banks} banks"
         self.ppb = self.i_tiles // self.banks
         self.groups = groups
-        self.col_bytes = self.kt * BFP8_TILE_BYTES
+        self.w_dtype, self.w_tile = w_dtype, WEIGHT_TILE_BYTES[w_dtype]  # bfp8 or bfp4 gate|up weights
+        self.col_bytes = self.kt * self.w_tile
         self.expert_stride = 2 * self.ppb * self.col_bytes
-        self.page_bytes = _packet_bytes(self.kt)
+        self.page_bytes = _packet_bytes(self.kt, self.w_tile)
         self.row_bytes = K * 2
         self.P = max_passes(T, E)
 
-    def __call__(self, x_rm, routing, counts, w13, act, table):
+    def __call__(self, x_rm, routing, counts, w13, act, table, base=None):
+        """Non-EP: routing [1,1,T,E] BF16 TILE, counts [1,1,1,E]. EP: routing = the weight tiles [1,1,T,32],
+        counts = the index tiles [1,1,T,32] (``ep_index_tiles``), base = ``ep_base_tensor``."""
         cb_xrm, cb_x, cb_w, cb_r, cb_c0, cb_c1, cb_d, cb_h, cb_t, cb_out = 0, 1, 2, 3, 4, 5, 6, 7, 8, 16
         e_tiles = -(-self.E // TILE)
         rt = self.T // TILE
+        c_tiles = rt + 1 if self.ep else e_tiles  # EP: the index tiles + the expert base page
+        r_tiles = rt if self.ep else rt * e_tiles  # EP: the weight tiles
         cbs = [
             self._cb(cb_xrm, ttnn.bfloat16, BF16_TILE_BYTES, self.kt),  # 32 row-major rows of K: kt tile-sized pages
             self._cb(cb_x, ttnn.bfloat16, BF16_TILE_BYTES, self.kt),
-            self._cb(cb_w, ttnn.bfloat8_b, BFP8_TILE_BYTES, 4 * self.kt),  # two (gate, up) pair slots
-            self._cb(cb_r, ttnn.bfloat16, BF16_TILE_BYTES, rt * e_tiles),
-            self._cb(cb_c0, ttnn.bfloat16, BF16_TILE_BYTES, e_tiles),
-            self._cb(cb_c1, ttnn.bfloat16, BF16_TILE_BYTES, e_tiles),
+            self._cb(cb_w, self.w_dtype, self.w_tile, 4 * self.kt),  # two (gate, up) pair slots
+            self._cb(cb_r, ttnn.bfloat16, BF16_TILE_BYTES, r_tiles),
+            self._cb(cb_c0, ttnn.bfloat16, BF16_TILE_BYTES, c_tiles),
+            self._cb(cb_c1, ttnn.bfloat16, BF16_TILE_BYTES, c_tiles),
             self._cb(cb_d, ttnn.bfloat16, BF16_TILE_BYTES, 2),
             self._cb(cb_h, ttnn.bfloat16, BF16_TILE_BYTES, 2),
             self._cb(cb_t, ttnn.uint16, TABLE_WIDTH * 2, 2),
             self._cb(cb_out, ttnn.bfloat16, BF16_TILE_BYTES, 2),
         ]
+        assert (base is not None) == self.ep, "EP mode takes the expert base tensor"
+        extra_rt = [base.buffer_address()] if self.ep else []
         reader_rt, writer_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
         for core, bank, r, vc in self.assignments:
-            reader_rt[core.x][core.y] = [w13.buffer_address(), counts.buffer_address(), bank, vc, r]
+            reader_rt[core.x][core.y] = [w13.buffer_address(), counts.buffer_address(), bank, vc, r] + extra_rt
             writer_rt[core.x][core.y] = [
                 x_rm.buffer_address(),
                 routing.buffer_address(),
@@ -504,7 +578,7 @@ class ExpertGateUpDispatch(_BankStreamOp):
                 table.buffer_address(),
                 bank,
                 r,
-            ]
+            ] + extra_rt
         reader_ct = [
             cb_w,
             cb_c0,
@@ -512,11 +586,15 @@ class ExpertGateUpDispatch(_BankStreamOp):
             self.E,
             self.groups,
             self.expert_stride,
-            BFP8_TILE_BYTES,
+            self.w_tile,
             self.page_bytes,
             self.ppb,
+            int(self.ep),
+            self.T,
+            self.picks,
         ]
         reader_ct += ttnn.TensorAccessorArgs(counts).get_compile_time_args()
+        reader_ct += ttnn.TensorAccessorArgs(base if self.ep else counts).get_compile_time_args()  # unused if not EP
         writer_ct = [
             cb_xrm,
             cb_r,
@@ -532,12 +610,14 @@ class ExpertGateUpDispatch(_BankStreamOp):
             self.row_bytes,
             TABLE_WIDTH * 2,
             self.ppb,
+            int(self.ep),
+            self.picks,
         ]
-        for t in (x_rm, routing, counts, act, table):
+        for t in (x_rm, routing, counts, act, table, base if self.ep else counts):
             writer_ct += ttnn.TensorAccessorArgs(t).get_compile_time_args()
         compute_ct = [cb_xrm, cb_x, cb_w, cb_d, cb_h, cb_out, self.kt, self.ppb]
         program = self._program("gate_up_dispatch", cbs, reader_ct, reader_rt, writer_ct, writer_rt, compute_ct)
-        ttnn.generic_op([w13, x_rm, routing, counts, act, table], program)
+        ttnn.generic_op([w13, x_rm, routing, counts, act, table] + ([base] if self.ep else []), program)
         return act
 
 
@@ -546,10 +626,13 @@ class ExpertDownDispatch(_BankStreamOp):
     op, out [1, 1, T, H] BF16 TILE. ``readers`` cores per bank (default 8: 2 output columns each; the resident
     per-pass h buffer is P x cols tiles)."""
 
-    def __init__(self, device, E: int, I: int, H: int, T: int, readers: int = 8):
+    def __init__(
+        self, device, E: int, I: int, H: int, T: int, readers: int = 8, ep: bool = False, picks: int = MAX_PICKS
+    ):
         super().__init__(device, readers)
         assert T % TILE == 0 and T <= 256, T
         self.E, self.I, self.H, self.T = E, I, H, T
+        self.ep, self.picks = ep, picks
         self.seg_tiles = I // TILE
         self.C = H // TILE // self.banks
         assert self.C % readers == 0, (self.C, readers)
@@ -562,15 +645,32 @@ class ExpertDownDispatch(_BankStreamOp):
         self.bank_expert_stride = self.C * self.seg_bytes
         self.P = max_passes(T, E)
         self.J = MAX_PICKS
+        # L1 budget: the resident h buffer (P x cols tiles) grows with T and E; the activation / weight slots give way
+        self.a_slots, self.w_slots = 6, 3
+        fixed = (self.P * self.cols + 2 * self.J * self.cols + 2 * self.cols + 1) * BF16_TILE_BYTES + self.P * 128
+        fixed += (2 * (T // TILE + 1)) * BF16_TILE_BYTES
+        while (
+            fixed + self.a_slots * self.seg_tiles * BF16_TILE_BYTES + self.w_slots * self.block_tiles * BFP8_TILE_BYTES
+            > 1_150_000
+        ):
+            if self.a_slots > 2:
+                self.a_slots -= 1
+            elif self.w_slots > 2:
+                self.w_slots -= 1
+            else:
+                raise ValueError(f"down dispatch does not fit L1 at T = {T}, E = {E}, I = {I}")
 
-    def __call__(self, act, table, counts, w2, out):
+    def __call__(self, act, table, counts, w2, out, base=None):
         cb_a, cb_w, cb_c0, cb_c1, cb_t, cb_id, cb_h, cb_g, cb_m, cb_out = 0, 1, 2, 3, 4, 5, 6, 7, 8, 16
         e_tiles = -(-self.E // TILE)
+        c_tiles = self.T // TILE + 1 if self.ep else e_tiles
+        assert (base is not None) == self.ep, "EP mode takes the expert base tensor"
+        extra_rt = [base.buffer_address()] if self.ep else []
         cbs = [
-            self._cb(cb_a, ttnn.bfloat16, BF16_TILE_BYTES, 6 * self.seg_tiles),  # two batches of three pass slots
-            self._cb(cb_w, ttnn.bfloat8_b, BFP8_TILE_BYTES, 3 * self.block_tiles),
-            self._cb(cb_c0, ttnn.bfloat16, BF16_TILE_BYTES, e_tiles),
-            self._cb(cb_c1, ttnn.bfloat16, BF16_TILE_BYTES, e_tiles),
+            self._cb(cb_a, ttnn.bfloat16, BF16_TILE_BYTES, self.a_slots * self.seg_tiles),
+            self._cb(cb_w, ttnn.bfloat8_b, BFP8_TILE_BYTES, self.w_slots * self.block_tiles),
+            self._cb(cb_c0, ttnn.bfloat16, BF16_TILE_BYTES, c_tiles),
+            self._cb(cb_c1, ttnn.bfloat16, BF16_TILE_BYTES, c_tiles),
             self._cb(cb_t, ttnn.uint16, TABLE_WIDTH * 2, self.P),
             self._cb(cb_id, ttnn.bfloat16, BF16_TILE_BYTES, 1),
             self._cb(cb_h, ttnn.bfloat16, BF16_TILE_BYTES, self.P * self.cols),
@@ -580,14 +680,20 @@ class ExpertDownDispatch(_BankStreamOp):
         ]
         reader_rt, writer_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
         for core, bank, r, vc in self.assignments:
-            reader_rt[core.x][core.y] = [w2.buffer_address(), counts.buffer_address(), bank, vc, r * self.cols]
+            reader_rt[core.x][core.y] = [
+                w2.buffer_address(),
+                counts.buffer_address(),
+                bank,
+                vc,
+                r * self.cols,
+            ] + extra_rt
             writer_rt[core.x][core.y] = [
                 counts.buffer_address(),
                 table.buffer_address(),
                 act.buffer_address(),
                 out.buffer_address(),
                 bank * self.C + r * self.cols,
-            ]
+            ] + extra_rt
         reader_ct = [
             cb_w,
             cb_c0,
@@ -597,8 +703,13 @@ class ExpertDownDispatch(_BankStreamOp):
             self.bank_expert_stride,
             BFP8_TILE_BYTES,
             self.page_bytes,
+            int(self.ep),
+            self.T,
+            self.picks,
+            self.w_slots,
         ]
         reader_ct += ttnn.TensorAccessorArgs(counts).get_compile_time_args()
+        reader_ct += ttnn.TensorAccessorArgs(base if self.ep else counts).get_compile_time_args()  # unused if not EP
         writer_ct = [
             cb_c1,
             cb_t,
@@ -616,8 +727,10 @@ class ExpertDownDispatch(_BankStreamOp):
             self.H // TILE,
             TABLE_WIDTH * 2,
             cb_m,
+            int(self.ep),
+            self.picks,
         ]
-        for t in (counts, table, act, out):
+        for t in (counts, table, act, out, base if self.ep else counts):
             writer_ct += ttnn.TensorAccessorArgs(t).get_compile_time_args()
         compute_ct = [cb_a, cb_w, cb_id, cb_h, cb_g, cb_out, self.seg_tiles, self.cols, self.J, self.T // TILE, cb_m]
         program = self._program(
@@ -630,7 +743,7 @@ class ExpertDownDispatch(_BankStreamOp):
             compute_ct,
             fidelity=ttnn.MathFidelity.HiFi4,
         )
-        ttnn.generic_op([w2, act, table, counts, out], program)
+        ttnn.generic_op([w2, act, table, counts, out] + ([base] if self.ep else []), program)
         return out
 
 
@@ -638,10 +751,22 @@ class ExpertDispatch:
     """The chip's routed experts for T gathered tokens as the two dispatch ops (weights read once):
     ``forward(x_rm, routing, counts, w13, w2, act, table, out)``."""
 
-    def __init__(self, device, E: int, K: int, I: int, H: int, T: int, groups: int = 12, down_readers: int = 8):
-        self.gate_up = ExpertGateUpDispatch(device, E, K, I, T, groups)
-        self.down = ExpertDownDispatch(device, E, I, H, T, down_readers)
-        self.E, self.K, self.I, self.H, self.T = E, K, I, H, T
+    def __init__(
+        self,
+        device,
+        E: int,
+        K: int,
+        I: int,
+        H: int,
+        T: int,
+        groups: int = 12,
+        down_readers: int = 8,
+        ep: bool = False,
+        w13_dtype=ttnn.bfloat8_b,
+    ):
+        self.gate_up = ExpertGateUpDispatch(device, E, K, I, T, groups, ep=ep, w_dtype=w13_dtype)
+        self.down = ExpertDownDispatch(device, E, I, H, T, down_readers, ep=ep)
+        self.E, self.K, self.I, self.H, self.T, self.ep = E, K, I, H, T, ep
         self.P = self.gate_up.P
 
     def alloc(self, device, act_l1: bool = True):
@@ -666,10 +791,13 @@ class ExpertDispatch:
         x_rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
         return x_rm, routing_counts(routing)
 
-    def forward(self, x_rm, routing, counts, w13, w2, act, table, out):
-        self.gate_up(x_rm, routing, counts, w13, act, table)
-        self.down(act, table, counts, w2, out)
+    def forward(self, x_rm, routing, counts, w13, w2, act, table, out, base=None):
+        """Non-EP: (x_rm, routing, counts). EP: routing = weight tiles, counts = index tiles, base = the chip's
+        expert base page (``ep_index_tiles`` / ``ep_base_tensor``)."""
+        self.gate_up(x_rm, routing, counts, w13, act, table, base=base)
+        self.down(act, table, counts, w2, out, base=base)
         return out
 
     __call__ = forward
     golden = staticmethod(expert_dispatch_golden)
+    golden_ep = staticmethod(expert_dispatch_golden_ep)

@@ -205,6 +205,13 @@ in L1 and summed in fp32 DST), every active expert read once, three small ttnn o
 M = 256: 0.78 ms per layer per chip, 6 device ops, PCC 0.99995 vs the sparse block (dense 1.26 ms, blocks 2.41 ms), `GLM53_STREAM_DISPATCH=1` default above 32
 tokens. The op is also generalized to the wider per-chip slices of the smaller meshes (I = 1024 on a (2,4) block:
 4 column pairs per bank, 4 down readers; 2048 on one chip), 8x4 unchanged.
+EP32 path (orchestration v2, `expert_kernel_sweep.md` section 11): `TtEPExperts` / `GLM53_MOE_LAYOUT=ep`: every
+chip owns `E / D` full-width experts, the dispatch op in EP mode (routing from the router's top-k lists + the chip's
+expert base, bfp8 or bfp4 gate|up), `all_to_all_dispatch` / `all_to_all_combine` along the rows on a mesh
+(written, untested until a block is free); single-chip path validated vs the hybrid stream path on real layer-4
+routing (`tests/test_moe_ep.py`): exact vs the hybrid stream path (PCC >= 0.99999), 9 full experts 297 us at 32 tokens /
+590 us at 256 (3 of 9 active), 36 experts 1.38 / 2.07 ms; real-routing dispatched-row imbalance max/mean 2.1-2.4 on the 8x4,
+1.3-1.5 on a (2,4) block.
 
 ## Optimization 1: router tie-break (2026-10-20)
 
