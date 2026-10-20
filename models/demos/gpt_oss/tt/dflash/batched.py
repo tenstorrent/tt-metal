@@ -496,6 +496,8 @@ class BatchedDraft:
             math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=False
         )
         # (with BF16 weights HiFi2 / LoFi were no faster; with the BFP8 ones HiFi2 is: 26.8 -> 26.6 ms, LoFi as HiFi2)
+        # the pass activations between ops in L1 (B32_DRAFT_L1)
+        self.act_mc = ttnn.L1_MEMORY_CONFIG if os.environ.get("B32_DRAFT_L1", "1") == "1" else ttnn.DRAM_MEMORY_CONFIG
         self.mm_ck = ttnn.WormholeComputeKernelConfig(
             math_fidelity=getattr(ttnn.MathFidelity, os.environ.get("B32_DRAFT_MMFID", "HiFi2")), math_approx_mode=False,
             fp32_dest_acc_en=True, packer_l1_acc=True,
@@ -510,6 +512,8 @@ class BatchedDraft:
     # -- pieces ----------------------------------------------------------------------------------------------------
     def _linear(self, x, w, bias=None):
         pc = _mm_config_256(w.shape[-2], w.shape[-1]) if x.shape[-2] == self.rows else None
+        # (a pass's 256-row activations in L1; the prompt context's chunks in DRAM)
+        mc = self.act_mc if x.shape[-2] == self.rows else ttnn.DRAM_MEMORY_CONFIG
         return ttnn.linear(
             x,
             w,
@@ -517,7 +521,7 @@ class BatchedDraft:
             program_config=pc,
             dtype=ttnn.bfloat16,
             compute_kernel_config=self.mm_ck,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=mc,
         )
 
     def rows_cos_sin(self, pos_rows):
@@ -627,7 +631,7 @@ class BatchedDraft:
                 h, epsilon=self.eps, weight=w, program_config=self.norm_pc, memory_config=self.res_mc,
                 compute_kernel_config=self.ck,
             )  # fmt: skip
-            x = ttnn.to_memory_config(n, ttnn.DRAM_MEMORY_CONFIG)
+            x = ttnn.to_memory_config(n, self.act_mc)
             n.deallocate(True)
             return x
 
@@ -659,7 +663,7 @@ class BatchedDraft:
             x = norm(h, L["ln2"])
             g, u = self._linear(x, L["g"]), self._linear(x, L["u"])
             x.deallocate(True)
-            act = ttnn.multiply(g, u, input_tensor_a_activations=[ttnn.UnaryOpType.SILU])
+            act = ttnn.multiply(g, u, input_tensor_a_activations=[ttnn.UnaryOpType.SILU], memory_config=self.act_mc)
             g.deallocate(True)
             u.deallocate(True)
             partial = self._linear(act, L["down"])
@@ -1194,7 +1198,7 @@ class BatchedVerify:
             t.deallocate(True)
         normed_s = model.norm.forward_sharded(res)
         res.deallocate(True)
-        normed = ttnn.to_memory_config(normed_s, ttnn.DRAM_MEMORY_CONFIG)
+        normed = ttnn.to_memory_config(normed_s, self.attn_mc)
         normed_s.deallocate(True)
         normed8 = ttnn.typecast(normed, ttnn.bfloat8_b)  # (to_memory_config to the same layout returns its input)
         normed.deallocate(True)

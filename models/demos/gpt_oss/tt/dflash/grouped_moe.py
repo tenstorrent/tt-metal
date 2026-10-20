@@ -369,7 +369,7 @@ class GroupedMoE:
         """[1, 1, rows, hidden] BF16: every row's routed experts' outputs weighted by its routing weights (with
         bias_slot after route(): plus the weighted down biases)."""
         return ttnn.matmul(self.pw, self._yg(li), program_config=self.combine_pc, compute_kernel_config=self.ck_combine,
-                           dtype=ttnn.bfloat16)  # fmt: skip
+                           dtype=ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)  # fmt: skip
 
     def __call__(self, li, x, ids=None, w=None):
         """The routed experts' down outputs summed with their routing weights (no down bias, no all-reduce). x: the
