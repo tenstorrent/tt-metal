@@ -748,6 +748,8 @@ template <bool neginf_srcA = false, std::uint32_t reload_srcB = false, bool zero
 inline void _llk_unpack_tilizeA_B_mop_config_(const std::uint32_t num_faces = 4)
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
+    block_replay_body() = BlockReplayBody::None;
+
     const std::uint32_t replay_buf_run_len  = 6;
     const std::uint32_t replay_buf_half_len = replay_buf_run_len >> 1;
 

@@ -51,6 +51,7 @@ template <std::uint32_t kernel_broadcast_a = 0, std::uint32_t kernel_broadcast_b
 inline void _llk_unpack_AB_matmul_mop_config_(
     const std::uint32_t ct_dim, const std::uint32_t rt_dim, const bool unpA_partial_face, const bool unpB_partial_face)
 {
+    block_replay_body() = BlockReplayBody::None;
     // in0/inA - loaded to SrcB
     // in1/inB - loaded to SrcA
 

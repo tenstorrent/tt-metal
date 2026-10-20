@@ -75,6 +75,7 @@ inline void _llk_unpack_AB_custom_mm_iter_insns(const bool post1)
 
 inline void _llk_unpack_AB_custom_mm_mop_config_(const std::uint32_t ct_dim, const bool post1)
 {
+    block_replay_body() = BlockReplayBody::None;
     load_replay_buf(
         0,
         32,
