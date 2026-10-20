@@ -58,16 +58,12 @@ class MiniMaxKVCache(KvCaches):
     sp: int
     index_k_tp_axis: Optional[int] = None  # None = index_k TP-replicated; else the mesh axis it is deduped over
     page_table: Optional[ttnn.Tensor] = None  # None = slot cache
+    num_pages: int = 0  # pages in each chip's pool when paged
 
     @property
     def page_size(self) -> int:
         """Tokens per page (paged caches only): the pool's seq dim."""
         return self.k.shape[2]
-
-    @property
-    def num_pages(self) -> int:
-        """Pages in each chip's pool (paged caches only)."""
-        return self.k.shape[0] // self.num_layers
 
     def paging_kwargs(self) -> dict:
         """The page-table argument of the KV write and gather ops; empty for a slot cache."""
@@ -286,6 +282,7 @@ def allocate_kv_caches(
         sp=sp,
         index_k_tp_axis=index_k_tp_axis,
         page_table=page_table,
+        num_pages=num_pages or 0,
     )
 
 
