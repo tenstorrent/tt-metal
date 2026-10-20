@@ -8,6 +8,7 @@
 // are identical. Loops over grid planes and over cores run in parallel with OpenMP.
 
 #include <algorithm>
+#include <climits>
 #include <cstdint>
 #include <vector>
 
@@ -68,24 +69,31 @@ struct Geo {
     }
 };
 
-// The granules a core's window must hold, one bit each: a core marks about 1% of the vector's granules, so
-// merging scans 64 granules per word and skips the empty words.
+// The granules a core's window must hold, one bit each, and the words holding any (a core marks about 1% of the
+// vector's granules, so merging visits only those words, in order, instead of scanning the vector).
 struct Granules {
     std::vector<uint64_t> w;
+    std::vector<int64_t> used;  // indices of the nonzero words, unsorted
     explicit Granules(int64_t ng) : w((ng + 63) / 64 + 1, 0) {}
-    void set(int64_t g) { w[g >> 6] |= 1ull << (g & 63); }
+    void put(int64_t i, uint64_t bits) {
+        if (w[i] == 0) {
+            used.push_back(i);
+        }
+        w[i] |= bits;
+    }
+    void set(int64_t g) { put(g >> 6, 1ull << (g & 63)); }
     void set_range(int64_t a, int64_t b) {  // granules a .. b, inclusive
         const int64_t wa = a >> 6, wb = b >> 6;
         const uint64_t lo = ~0ull << (a & 63), hi = ~0ull >> (63 - (b & 63));
         if (wa == wb) {
-            w[wa] |= lo & hi;
+            put(wa, lo & hi);
             return;
         }
-        w[wa] |= lo;
+        put(wa, lo);
         for (int64_t i = wa + 1; i < wb; ++i) {
-            w[i] = ~0ull;
+            put(i, ~0ull);
         }
-        w[wb] |= hi;
+        put(wb, hi);
     }
 };
 
@@ -102,7 +110,8 @@ int64_t merge_pieces(
     int64_t* pln,
     int64_t* pl1) {
     int64_t np = 0, l1 = 0, start = -1, last = -1;
-    for (int64_t wi = gmin >> 6; gmax >= 0 && wi <= (gmax >> 6); ++wi) {
+    std::sort(mask.used.begin(), mask.used.end());
+    for (const int64_t wi : mask.used) {
         uint64_t bits = mask.w[wi];
         mask.w[wi] = 0;
         while (bits) {  // marked granules in increasing order
@@ -123,6 +132,7 @@ int64_t merge_pieces(
             last = g;
         }
     }
+    mask.used.clear();
     if (start >= 0) {
         if (np < max_pieces) {
             plo[np] = start * gran;
@@ -161,6 +171,38 @@ void for_each_transfer_row(int kind, const Geo& F, const Geo& C, int b, int64_t 
         for (int64_t q = std::max(a, real_end); q < e; ++q) {
             f(q, pad, false);
         }
+    }
+}
+
+// The columns of for_each_transfer_row as ranges: f(slot, lo, hi) for each run of out rows in [a, e) of out block b
+// (restriction: the run's columns lo, lo + 2, ..., hi, slot 0; prolongation: for each x parity p of the coarse
+// point, the contiguous columns lo .. hi, slot p), then f(2, pad, pad) when [a, e) holds padding rows. Every granule
+// a range spans holds one of its columns (they are at most 2 apart), so marking ranges marks the same granules.
+template <typename Fn>
+void for_each_transfer_range(int kind, const Geo& F, const Geo& C, int b, int64_t a, int64_t e, Fn f) {
+    const Geo& O = kind == 1 ? C : F;
+    const int ob = kind == 1 ? b : 0;
+    const int64_t real_end = O.band_start[(int64_t)ob * O.nbands] + O.count(ob);
+    O.for_each_run(ob, a, e, [&](int64_t, int32_t i0, int32_t len, int32_t y, int32_t z) {
+        if (kind == 1) {  // coarse x = 2 (i0 + t) + px -> fine (2x, 2y, 2z): column F.line_q(0, 2y, 2z) + x
+            const int64_t c0 = F.line_q(0, 2 * y, 2 * z) + 2 * i0 + (ob & 1);
+            f(0, c0, c0 + 2 * (int64_t)(len - 1));
+        } else {  // fine x = 2 (i0 + t) -> coarse (i0 + t, y / 2, z / 2): two x parities, each contiguous
+            for (int p = 0; p < 2; ++p) {
+                const int32_t t0 = ((i0 & 1) == p) ? 0 : 1;  // first t with (i0 + t) & 1 == p
+                if (t0 >= len) {
+                    continue;
+                }
+                const int32_t t1 = len - 1 - (((i0 + len - 1) & 1) == p ? 0 : 1);  // last such t
+                const int64_t lq = C.line_q(p + 2 * ((y / 2) & 1) + 4 * ((z / 2) & 1), y / 2, z / 2);
+                f(p, lq + ((i0 + t0) >> 1), lq + ((i0 + t1) >> 1));
+            }
+        }
+    });
+    if (std::max(a, real_end) < e) {
+        int64_t pad = 0;
+        for_each_transfer_row(kind, F, C, b, real_end - 1, real_end, [&](int64_t, int64_t col, bool) { pad = col; });
+        f(2, pad, pad);
     }
 }
 
@@ -397,6 +439,21 @@ int64_t hpcg_plan_windows_stencil(
                 gmin = std::min(gmin, lo / gran);
                 gmax = std::max(gmax, hi / gran);
             };
+            // one pending q range per neighbour slot (line offset sy, sz; same or other x parity): consecutive runs of
+            // a band-plane have consecutive neighbour lines, whose ranges join up, so a range is marked once per
+            // band-plane instead of once per grid line
+            int64_t plo[18], phi[18];
+            auto add = [&](int slot, int64_t lo, int64_t hi) {
+                if (lo >= plo[slot] && lo <= phi[slot] + 1) {
+                    phi[slot] = std::max(phi[slot], hi);
+                    return;
+                }
+                if (phi[slot] >= plo[slot]) {
+                    mark(plo[slot], phi[slot]);
+                }
+                plo[slot] = lo;
+                phi[slot] = hi;
+            };
             bool used = false;
             for (int32_t b = 0; b < NB; ++b) {
                 const int64_t a = own[(k * NB + b) * 2], e = own[(k * NB + b) * 2 + 1];
@@ -405,26 +462,91 @@ int64_t hpcg_plan_windows_stencil(
                 }
                 used = true;
                 mark(a, e - 1);  // own rows (padding rows' columns are themselves)
-                G.for_each_run(b, a, e, [&](int64_t, int32_t i0, int32_t len, int32_t iy, int32_t iz) {
-                    const int px = b & 1;
+                for (int i = 0; i < 18; ++i) {
+                    plo[i] = 0;
+                    phi[i] = -2;
+                }
+                const int px = b & 1, py = (b >> 1) & 1, pz = b >> 2;
+                // a partial grid line: rows i0 .. i0 + len - 1 of line (iy, iz)
+                auto run = [&](int32_t i0, int32_t len, int32_t iy, int32_t iz) {
                     for (int sz = -1; sz <= 1; ++sz) {
                         for (int sy = -1; sy <= 1; ++sy) {
                             const int32_t jy = iy + sy, jz = iz + sz;
                             if (jy < 0 || jy >= nx || jz < 0 || jz >= nx) {
                                 continue;  // missing neighbours: columns on the row itself
                             }
+                            const int slot = 2 * ((sz + 1) * 3 + (sy + 1));
                             const int cs = px + 2 * (jy & 1) + 4 * (jz & 1), co = cs ^ 1;
                             const int64_t bs = G.line_q(cs, jy, jz), bo = G.line_q(co, jy, jz);
-                            mark(bs + i0, bs + i0 + len - 1);  // sx = 0
+                            add(slot, bs + i0, bs + i0 + len - 1);  // sx = 0
                             // sx = -1 and +1 (the other x parity): x index ix2 - 1 .. ix2 (px = 0) or ix2 .. ix2 + 1
                             const int32_t cxo = G.cx(co & 1);
                             const int32_t lo = std::max(0, i0 - (1 - px)), hi = std::min(cxo - 1, i0 + len - 1 + px);
                             if (lo <= hi) {
-                                mark(bo + lo, bo + hi);
+                                add(slot + 1, bo + lo, bo + hi);
                             }
                         }
                     }
-                });
+                };
+                // whole grid lines iy, iy + 2, ..., iy + 2 (n - 1) of plane iz: every neighbour line is wholly a
+                // column range of both x parities (x neighbours reach both ends), so each slot gets whole lines of
+                // block B, one q range per band of B the lines fall in
+                auto lines = [&](int slot, int B, int32_t jy0, int32_t jy1, int32_t jz) {
+                    const int32_t cxb = G.cx(B & 1);
+                    const int64_t pl = jz >> 1;
+                    for (int32_t yl = jy0 >> 1; yl <= (jy1 >> 1);) {
+                        const int64_t kk = (int64_t)B * G.nbands + G.line_band[(jy0 & 1) * G.nl + yl];
+                        const int32_t y0 = G.band_y0[kk], ny = G.band_ny[kk], ye = std::min(jy1 >> 1, y0 + ny - 1);
+                        const int64_t base = G.band_start[kk] + pl * ny * cxb;
+                        add(slot, base + (int64_t)(yl - y0) * cxb, base + (int64_t)(ye - y0 + 1) * cxb - 1);
+                        yl = ye + 1;
+                    }
+                };
+                auto group = [&](int32_t iy, int32_t n, int32_t iz) {
+                    for (int sz = -1; sz <= 1; ++sz) {
+                        const int32_t jz = iz + sz;
+                        if (jz < 0 || jz >= nx) {
+                            continue;
+                        }
+                        for (int sy = -1; sy <= 1; ++sy) {
+                            int32_t jy0 = iy + sy, jy1 = iy + 2 * (n - 1) + sy;
+                            jy0 += jy0 < 0 ? 2 : 0;  // lines outside the grid: only the first or the last
+                            jy1 -= jy1 >= nx ? 2 : 0;
+                            if (jy0 > jy1) {
+                                continue;
+                            }
+                            const int slot = 2 * ((sz + 1) * 3 + (sy + 1));
+                            const int cs = px + 2 * (jy0 & 1) + 4 * (jz & 1);
+                            lines(slot, cs, jy0, jy1, jz);
+                            lines(slot + 1, cs ^ 1, jy0, jy1, jz);
+                        }
+                    }
+                };
+                const int64_t k0 = (int64_t)b * G.nbands, end = std::min(e, G.band_start[k0] + G.count(b));
+                const int32_t cxn = G.cx(px);
+                int jb = 0;
+                for (int64_t q = a; q < end;) {  // G.for_each_run's walk, whole lines of a band-plane at once
+                    while (jb + 1 < G.nbands && G.band_start[k0 + jb + 1] <= q) {
+                        ++jb;
+                    }
+                    const int64_t kk = k0 + jb, l = q - G.band_start[kk], line = l / cxn;
+                    const int32_t i0 = (int32_t)(l % cxn), ny = G.band_ny[kk];
+                    const int32_t iy = 2 * (G.band_y0[kk] + (int32_t)(line % ny)) + py, iz = 2 * (int32_t)(line / ny) + pz;
+                    if (i0 == 0 && end - q >= cxn) {
+                        const int32_t n = (int32_t)std::min<int64_t>(ny - line % ny, (end - q) / cxn);
+                        group(iy, n, iz);
+                        q += (int64_t)n * cxn;
+                    } else {
+                        const int32_t len = (int32_t)std::min<int64_t>(cxn - i0, end - q);
+                        run(i0, len, iy, iz);
+                        q += len;
+                    }
+                }
+                for (int i = 0; i < 18; ++i) {
+                    if (phi[i] >= plo[i]) {
+                        mark(plo[i], phi[i]);
+                    }
+                }
             }
             if (!used) {
                 mark(empty_lo, empty_lo);
@@ -640,14 +762,28 @@ int64_t hpcg_plan_exchange(
             E[(size_t)b * nc + k] = own[(k * NB + b) * 2 + 1];
         }
     }
+    // the q span of block b's own rows: only window pieces that reach into it can overlap them
+    std::vector<int64_t> span_lo(NB, INT64_MAX), span_hi(NB, INT64_MIN);
+    for (int32_t b = 0; b < NB; ++b) {
+        for (int32_t k = 0; k < nc; ++k) {
+            const int64_t A = own[(k * NB + b) * 2], Ek = own[(k * NB + b) * 2 + 1];
+            if (Ek > A) {
+                span_lo[b] = std::min(span_lo[b], A);
+                span_hi[b] = std::max(span_hi[b], Ek);
+            }
+        }
+    }
     // entries of pair (b, m), written from out (counted only when out == nullptr)
     auto pair = [&](int32_t b, int32_t m, int64_t* out) {
         int64_t n = 0;
-        if (!has_rows[m]) {
+        if (!has_rows[m] || span_hi[b] <= span_lo[b]) {
             return n;  // a core without rows reads no window: its placeholder piece gets nothing
         }
         const int64_t* Eb = E.data() + (size_t)b * nc;
-        for (int64_t p = 0; p < npieces[m]; ++p) {
+        const int64_t* lo_m = piece_lo + m * max_pieces;
+        // pieces are sorted by lo and disjoint: the first that can reach span_lo is the last starting at or before it
+        int64_t p0 = std::upper_bound(lo_m, lo_m + npieces[m], span_lo[b]) - lo_m - 1;
+        for (int64_t p = std::max<int64_t>(p0, 0); p < npieces[m] && lo_m[p] < span_hi[b]; ++p) {
             const int64_t plo = piece_lo[m * max_pieces + p], phi = plo + piece_ln[m * max_pieces + p];
             int32_t k = (int32_t)(std::upper_bound(Eb, Eb + nc, plo) - Eb);  // first core with E > plo
             for (; k < nc; ++k) {
@@ -695,7 +831,7 @@ int64_t hpcg_plan_exchange(
 // same rows as SparseRowPlan.meta's Python version. Inputs per core k: window pieces plo/pln/pl1[pat[k] .. pat[k+1]),
 // neighbours nbr[nat[k] .. nat[k+1]) (sorted), own (a, e) and own_l1 per block, exchange rows (5 words each)
 // xrows[xat[k * NB + b] .. xat[k * NB + b + 1]). With m == nullptr, returns the longest row; otherwise writes rows
-// into m ([nc][w] 32-bit words, zero-filled: the table as uploaded) and the segment counts (all phases,
+// into m ([nc][w] 32-bit words, each row's padding zeroed here: the table as uploaded) and the segment counts (all phases,
 // Gauss-Seidel phases, phase 8) per core.
 int64_t hpcg_plan_meta(
     int32_t nc,
@@ -737,6 +873,7 @@ int64_t hpcg_plan_meta(
             continue;
         }
         int32_t* r = m + (int64_t)k * w;
+        std::fill(r, r + w, 0);  // m may be reused memory: the reserved words and the padding read as 0
         r[0] = (int32_t)(R);
         r[1] = (int32_t)(nph);
         r[2] = (int32_t)(nnb + 1);
@@ -844,11 +981,29 @@ int64_t hpcg_plan_windows_transfer(
                     continue;
                 }
                 used = true;
-                for_each_transfer_row(kind, F, C, b, a, e, [&](int64_t, int64_t col, bool) {
-                    mask.set(col / gran);
-                    gmin = std::min(gmin, col / gran);
-                    gmax = std::max(gmax, col / gran);
+                // pending range per slot: consecutive runs' ranges join up (marked once per band-plane, not per line)
+                int64_t plo[3] = {0, 0, 0}, phi[3] = {-2, -2, -2};
+                auto mark = [&](int64_t lo, int64_t hi) {
+                    mask.set_range(lo / gran, hi / gran);
+                    gmin = std::min(gmin, lo / gran);
+                    gmax = std::max(gmax, hi / gran);
+                };
+                for_each_transfer_range(kind, F, C, b, a, e, [&](int slot, int64_t lo, int64_t hi) {
+                    if (lo >= plo[slot] && lo <= phi[slot] + 2) {  // + 2: restriction columns step by 2
+                        phi[slot] = std::max(phi[slot], hi);
+                        return;
+                    }
+                    if (phi[slot] >= plo[slot]) {
+                        mark(plo[slot], phi[slot]);
+                    }
+                    plo[slot] = lo;
+                    phi[slot] = hi;
                 });
+                for (int i = 0; i < 3; ++i) {
+                    if (phi[i] >= plo[i]) {
+                        mark(plo[i], phi[i]);
+                    }
+                }
             }
             if (!used) {
                 mask.set(empty_lo / gran);

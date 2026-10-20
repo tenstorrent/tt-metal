@@ -94,13 +94,13 @@ class Level:
         for c in range(8):
             py = (c >> 1) & 1
             cy = (nx - py + 1) // 2
-            lb = np.arange(cy) * bands // h
+            lb = np.arange(cy) * bands // h  # nondecreasing: band j's lines are one run
+            nbc = len(bstarts[c]) - 1
+            ny = np.bincount(lb, minlength=nbc)[:nbc]
+            band_y0[c * nb : c * nb + nbc] = np.where(ny > 0, np.searchsorted(lb, np.arange(nbc)), 0)
+            band_ny[c * nb : c * nb + nbc] = ny
             band_start[c * nb : (c + 1) * nb] = bstarts[c][-1]  # bands a colour lacks: empty, at the block's end
-            for j in range(len(bstarts[c]) - 1):
-                sel = np.flatnonzero(lb == j)
-                band_y0[c * nb + j] = sel[0] if sel.size else 0
-                band_ny[c * nb + j] = sel.size
-                band_start[c * nb + j] = bstarts[c][j]
+            band_start[c * nb : c * nb + nbc] = bstarts[c][:-1]
         self.nb, self.nl = nb, nl
         self.line_band, self.band_y0, self.band_ny, self.band_start = line_band, band_y0, band_ny, band_start
 
@@ -112,13 +112,17 @@ class Level:
         """Colour-block and band starts (q), from the per-colour counts alone (no per-point work)."""
         nx, bands = self.nx, self.bands
         h = max(1, nx // 2)
+        # lines per band for each y parity (the colours share these two)
+        lines = [np.bincount(np.arange((nx - py + 1) // 2) * bands // h, minlength=bands).tolist() for py in (0, 1)]
         starts, bstarts, p = [], [], 0
         for c in range(8):
             px, py, pz = c & 1, (c >> 1) & 1, c >> 2
             cx, cy, cz = (nx - px + 1) // 2, (nx - py + 1) // 2, (nx - pz + 1) // 2
-            cnt = np.bincount(np.arange(cy) * bands // h, minlength=bands) * cx * cz
             starts.append(p)
-            bstarts.append([int(v) for v in p + np.concatenate([[0], np.cumsum(cnt)])])
+            bs = [p]
+            for n in lines[py]:
+                bs.append(bs[-1] + n * cx * cz)
+            bstarts.append(bs)
             p = _ceil(p + cx * cy * cz, TILE)
         starts.append(p)
         return p, starts, bstarts

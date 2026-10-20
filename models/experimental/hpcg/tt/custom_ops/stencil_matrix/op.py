@@ -35,19 +35,18 @@ def _rows(device, n):
 
 def _segment(head_words, tables, plan):
     """A job's META segment for every core of its plan: head_words header words, then the tables (the same for every
-    core), then each core's window piece lo and l1 tables; [30 .. 34) and [34], [35] get their word offsets."""
-    tab = np.concatenate([np.asarray(t, np.int64) for t in tables])
+    core), then the window piece lo and l1 tables (R words each, R = the most pieces of a core; a core reads its own
+    count, [4]); [30 .. 34) and [34], [35] get their word offsets."""
+    tab = np.concatenate(tables, dtype=np.int32)
     plo, _, pl1, npc = plan.piece_arrays
-    nc, w0 = plan.nc, head_words + len(tab)  # w0: word offset of the piece lo table (then the piece l1 table)
-    seg = np.zeros((nc, w0 + 2 * int(npc.max())), np.int32)  # the uploaded word type: no conversion
+    nc, w0, R = plan.nc, head_words + len(tab), int(npc.max())  # w0: word offset of the piece lo table
+    seg = np.zeros((nc, w0 + 2 * R), np.int32)  # the uploaded word type: no conversion
     seg[:, 4] = npc
     seg[:, 6 : 6 + plan.own[0].size] = plan.own.reshape(nc, -1)
-    seg[:, 34] = w0
-    seg[:, 35] = w0 + npc
+    seg[:, 34:36] = [w0, w0 + R]
     seg[:, head_words:w0] = tab
-    k, i = np.nonzero(np.arange(plo.shape[1])[None, :] < npc[:, None])  # core k's piece i: lo at w0 + i, l1 after
-    seg[k, w0 + i] = plo[k, i]  # its npc[k] lo words
-    seg[k, w0 + npc[k] + i] = pl1[k, i]
+    seg[:, w0 : w0 + R] = plo[:, :R]  # zero past a core's own count
+    seg[:, w0 + R :] = pl1[:, :R]
     return seg
 
 

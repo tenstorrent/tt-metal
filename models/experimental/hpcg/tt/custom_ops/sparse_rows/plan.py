@@ -7,13 +7,34 @@
 import numpy as np
 
 from models.experimental.hpcg.host import native
-from models.experimental.hpcg.tt.layout import TILE
+from models.experimental.hpcg.tt.layout import TILE, u32_rows
 
 ALIGN = 32  # rows per ownership unit (128 B of fp32 values)
 MAX_PIECES = (256, 4096)  # window pieces per core the planner first makes room for, then retries with
 MAX_NB = 14  # 16 semaphores per core: 1 ready flag + 1 own progress slot + up to 14 neighbour slots
 GRAN = 16  # window granule (words) = 64 B: every window piece is NoC-aligned in DRAM and in L1
 WGAP = 8  # column runs at most this many granules apart share one window piece
+
+
+_NOC = {}
+
+
+def _noc_array(noc_xy):
+    """noc_xy (the device's cached list of NoC (x, y)) as a flat int64 array, made once per list."""
+    if id(noc_xy) not in _NOC:
+        _NOC[id(noc_xy)] = (noc_xy, np.ascontiguousarray(np.asarray(noc_xy, np.int64).reshape(-1)))
+    return _NOC[id(noc_xy)][1]
+
+
+_SCRATCH = [np.zeros(0, np.int32)]
+
+
+def _scratch(n):
+    """n int32 words of a host buffer reused by every meta_tensor call (grown as needed, huge pages when large):
+    TT-NN copies the rows when it uploads them, so the buffer is free again once u32_rows returns."""
+    if _SCRATCH[0].size < n:
+        _SCRATCH[0] = native.zeros(max(n, 2 * _SCRATCH[0].size), np.int32)
+    return _SCRATCH[0][:n]
 
 
 class SparseRowPlan:
@@ -55,7 +76,7 @@ class SparseRowPlan:
         while True:
             p = object.__new__(cls)
             p._init(COL, out_blocks, src_regions, nc, noc_xy, exchange, bands, pout, stencil, transfer, host_tables)
-            if not exchange or max((len(x) for x in p.nbr), default=0) <= MAX_NB or nc == 1:
+            if not exchange or int(np.diff(p._nbr_csr[1]).max(initial=0)) <= MAX_NB or nc == 1:
                 return p
             nc = max(1, int(nc * 0.75))
 
@@ -132,10 +153,16 @@ class SparseRowPlan:
         # exchange lists (GS): rows [s, f) of block b owned by k that sit in a window piece of m -> (m's NoC x, y,
         # s, f, L1 byte offset of s in m's window), grouped by (k, b) in their original order, and each core's
         # neighbours (sorted)
-        self._exch_rows, self._exch_at, nbr = ents
-        self.nc, self.own, self.own_l1, self.nbr = nc, own, own_l1, nbr
+        self._exch_rows, self._exch_at, self._nbr_csr = ents  # neighbours of core k: nbr[nat[k] .. nat[k + 1])
+        self.nc, self.own, self.own_l1 = nc, own, own_l1
         self.out_blocks = out_blocks
         self._tables = {}  # _core_tables cache
+
+    @property
+    def nbr(self):
+        """Each core's neighbours (the cores it pushes rows to or receives rows from), sorted, as lists."""
+        nbr, nat = self._nbr_csr
+        return [nbr[nat[k] : nat[k + 1]].tolist() for k in range(self.nc)]
 
     @property
     def pieces(self):
@@ -156,8 +183,7 @@ class SparseRowPlan:
         rows = np.column_stack([nxy[E[:, 2], 0], nxy[E[:, 2], 1], E[:, 3], E[:, 4], E[:, 5]])
         at = np.searchsorted(key, np.arange(nc * NB + 1))
         pairs = np.unique(np.concatenate([E[:, 0] * nc + E[:, 2], E[:, 2] * nc + E[:, 0]]))
-        nbr = [x.tolist() for x in np.split(pairs % nc, np.searchsorted(pairs // nc, np.arange(1, nc)))]
-        return rows, at, nbr
+        return rows, at, (pairs % nc, np.searchsorted(pairs // nc, np.arange(nc + 1)))
 
     def exch_rows(self, k, b):
         """Exchange entries of core k, block b: an [n, 5] array of (NoC x, NoC y, s, f, L1 byte offset)."""
@@ -225,20 +251,20 @@ class SparseRowPlan:
             bad = lib.hpcg_transfer_tables(k, *F.geo(), *C.geo(), nc, NB, own_f, maxp, plo, pln, pl1, npc, off, w)
             assert bad == 0, "column outside its window piece"
         pieces = tuple(x.reshape(nc, maxp) for x in (plo, pln, pl1)) + (npc,)
-        ents = (np.zeros((0, 5), np.int64), np.zeros(nc * NB + 1, np.int64), [[] for _ in range(nc)])
+        ents = (np.zeros((0, 5), np.int64), np.zeros(nc * NB + 1, np.int64), (np.zeros(0, np.int64), np.zeros(nc + 1, np.int64)))
         return pieces, off, np.zeros((nc, NB), np.int64), ents, w
 
     @staticmethod
     def _exchange_native(lib, nc, NB, own_f, maxp, plo, pln, pl1, npc, noc_xy):
         """Exchange entries grouped by (core, block), and each core's sorted neighbours (host/native_setup.cpp)."""
-        noc = np.ascontiguousarray(np.asarray(noc_xy, np.int64).reshape(-1))
+        noc = _noc_array(noc_xy)
         cap = 64 * nc * NB
         while True:
             rows, at = np.empty((cap, 5), np.int64), np.empty(nc * NB + 1, np.int64)
             nbr, nat = np.empty(nc * nc, np.int64), np.empty(nc + 1, np.int64)
             n = lib.hpcg_plan_exchange_grouped(nc, NB, own_f, maxp, plo, pln, pl1, npc, noc, cap, rows, at, nbr, nat)
             if n >= 0:
-                return rows[:n], at, [nbr[nat[k] : nat[k + 1]].tolist() for k in range(nc)]
+                return rows[:n], at, (nbr[: nat[nc]], nat)
             cap = -n
 
     @staticmethod
@@ -263,7 +289,7 @@ class SparseRowPlan:
         )
         assert bad == 0, "column outside its window piece, or own rows split over pieces"
         pieces = tuple(x.reshape(nc, maxp) for x in (plo, pln, pl1)) + (npc,)
-        ents = (np.zeros((0, 5), np.int64), np.zeros(nc * NB + 1, np.int64), [[] for _ in range(nc)])
+        ents = (np.zeros((0, 5), np.int64), np.zeros(nc * NB + 1, np.int64), (np.zeros(0, np.int64), np.zeros(nc + 1, np.int64)))
         if exchange:
             ents = SparseRowPlan._exchange_native(lib, nc, NB, own_f, maxp, plo, pln, pl1, npc, noc_xy)
         return pieces, off, own_l1.reshape(nc, NB), ents
@@ -372,29 +398,54 @@ class SparseRowPlan:
         lib = native.lib()
         if lib is None:
             return self._meta_python(phases, noc_xy, tpw, align)
+        done = ("rows", id(noc_xy), tuple(phases), tpw, align)
+        if done not in self._tables:  # launches with the same phases (CG start and CG SpMV) share the rows
+            self._tables[done] = self._meta_native(lib, phases, noc_xy, tpw, align, None)
+        return self._tables[done]
+
+    def _native_args(self, key, noc_xy):
+        """The plan's arrays for hpcg_plan_meta, as raw pointers (kept alive with them in self._tables[key])."""
+        NB = len(self.out_blocks)
+        a2, ln2, l12, npc = self.piece_arrays
+        pat = np.concatenate([[0], np.cumsum(npc)]).astype(np.int64)
+        used = np.arange(a2.shape[1])[None, :] < npc[:, None]  # each core's pieces, core after core
+        plo, pln, pl1 = (np.ascontiguousarray(x[used], np.int64) for x in (a2, ln2, l12))
+        nbr, nat = (np.ascontiguousarray(x, np.int64) for x in self._nbr_csr)  # sorted per core
+        own = np.ascontiguousarray(self.own.reshape(-1), np.int64)
+        own_l1 = np.ascontiguousarray(self.own_l1.reshape(-1), np.int64)
+        xat = np.ascontiguousarray(self._exch_at, np.int64)
+        xrows = np.ascontiguousarray(self._exch_rows.reshape(-1), np.int64)
+        arrays = [pat, plo, pln, pl1, nat, nbr, _noc_array(noc_xy), own, own_l1, xat, xrows]
+        self._tables[key] = (NB, arrays, [a.ctypes.data for a in arrays])  # arrays kept alive with their pointers
+
+    def meta_tensor(self, device, phases, noc_xy, tpw=TILE):
+        """meta(..., align=TILE) uploaded as a ROW_MAJOR [nc * pages, 1024] device tensor (u32_rows), and the rest of
+        meta's result: (tensor, nseg, nseg_gs, nseg_r, longest). The rows are built in a reused host buffer (TT-NN
+        copies them on upload), so no fresh memory is faulted in per launch; launches with the same phases (CG start
+        and CG SpMV) share one upload."""
+        lib = native.lib()
+        key = ("tensor", id(device), id(noc_xy), tuple(phases), tpw)
+        if key not in self._tables:
+            if lib is None:
+                m, *rest = self._meta_python(phases, noc_xy, tpw, TILE)
+                self._tables[key] = (u32_rows(device, m.reshape(-1, TILE)), *rest)
+            else:
+                m, *rest = self._meta_native(lib, phases, noc_xy, tpw, TILE, _scratch)
+                self._tables[key] = (u32_rows(device, m.reshape(-1, TILE)), *rest)
+        return self._tables[key]
+
+    def _meta_native(self, lib, phases, noc_xy, tpw, align, scratch):
+        """meta() by the compiled helper; scratch(n) returns n reusable int32 words for the rows (None: new memory)."""
         key = ("native", id(noc_xy))  # noc_xy: the device's cached list (sparse_rows.op.noc_coords)
         if key not in self._tables:
-            NB = len(self.out_blocks)
-            a2, ln2, l12, npc = self.piece_arrays
-            pat = np.concatenate([[0], np.cumsum(npc)]).astype(np.int64)
-            used = np.arange(a2.shape[1])[None, :] < npc[:, None]  # each core's pieces, core after core
-            plo, pln, pl1 = (np.ascontiguousarray(x[used], np.int64) for x in (a2, ln2, l12))
-            slot = [sorted(self.nbr[k]) for k in range(self.nc)]
-            nat = np.cumsum([0] + [len(s) for s in slot]).astype(np.int64)
-            nbr = np.asarray([m for s in slot for m in s], np.int64)
-            own = np.ascontiguousarray(self.own.reshape(-1), np.int64)
-            own_l1 = np.ascontiguousarray(self.own_l1.reshape(-1), np.int64)
-            xat = np.ascontiguousarray(self._exch_at, np.int64)
-            xrows = np.ascontiguousarray(self._exch_rows.reshape(-1), np.int64)
-            noc = np.ascontiguousarray(np.asarray(noc_xy, np.int64).reshape(-1))
-            arrays = [pat, plo, pln, pl1, nat, nbr, noc, own, own_l1, xat, xrows]
-            self._tables[key] = (NB, arrays, [a.ctypes.data for a in arrays])  # arrays kept alive with their pointers
+            self._native_args(key, noc_xy)
         NB, _, args = self._tables[key]
         ph = np.asarray(list(phases), np.int64)
         counts = np.zeros((3, self.nc), np.int64)
         cp = [counts.ctypes.data + 8 * self.nc * i for i in range(3)]
         longest = lib.hpcg_plan_meta(self.nc, NB, ph.size, ph.ctypes.data, *args, tpw, 0, None, *cp)
-        m = np.zeros((self.nc, -(-longest // align) * align), np.int32)
+        shape = (self.nc, -(-longest // align) * align)
+        m = np.empty(shape, np.int32) if scratch is None else scratch(shape[0] * shape[1]).reshape(shape)
         lib.hpcg_plan_meta(self.nc, NB, ph.size, ph.ctypes.data, *args, tpw, m.shape[1], m.ctypes.data, *cp)
         return (m,) + tuple(counts.tolist()) + (int(longest),)
 

@@ -58,7 +58,8 @@ def test_plan_matches_numpy(nx, bands, exchange):
     assert np.array_equal(got[1], want[1]), "offsets"
     assert np.array_equal(got[2], want[2]), "own L1 offsets"
     w_rows, w_at, w_nbr = SparseRowPlan._group_exchange(want[3], p.nc, 8, noc)
-    assert np.array_equal(got[3][0], w_rows) and np.array_equal(got[3][1], w_at) and got[3][2] == w_nbr, "exchange"
+    assert np.array_equal(got[3][0], w_rows) and np.array_equal(got[3][1], w_at), "exchange"
+    assert all(np.array_equal(g, w) for g, w in zip(got[3][2], w_nbr)), "neighbours"
 
 
 @pytest.mark.parametrize("nx, bands", CASES)

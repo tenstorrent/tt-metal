@@ -185,10 +185,9 @@ class SparseRowOp:
         # rows of whole 4 KB pages, and the grid-dependent sizes (table pages, pages per slot, window bytes) as
         # runtime arguments: the kernel binaries then do not depend on the level or the grid size, so a process
         # loads each binary once (about 2-3 ms per binary)
-        meta, nseg, nseg_gs, nseg_r, used = plan.meta(phases, noc_xy, tpw, align=TILE)
-        meta_pages = meta.shape[1] // TILE
+        meta_t, nseg, nseg_gs, nseg_r, used = plan.meta_tensor(device, phases, noc_xy, tpw)
+        meta_pages = meta_t.shape[0] // plan.nc
         meta_bytes = -(-used * 4 // 64) * 64  # the rows' used length, read at launch
-        meta_t = u32_rows(device, meta.reshape(-1, TILE))
         self.keep = [meta_t]
         meta_b = meta_pages * 4096
         ntlv = slot_pages(plan.pout // TILE) if plan.nslot == 27 else plan.pout // TILE

@@ -14,7 +14,7 @@ The scalar quotient s1 / s2 is computed on chip (IEEE fp32 division in the reade
 import ttnn
 
 from models.experimental.hpcg.tt.layout import TILE
-from models.experimental.hpcg.tt.custom_ops.sparse_rows.op import core_ranges
+from models.experimental.hpcg.tt.custom_ops.sparse_rows.op import core_ranges, logical_coords
 
 KERNEL_ROOT = "models/experimental/hpcg/tt/custom_ops/cg_vector/kernels"
 CB = dict(CB_A=0, CB_B=1, CB_C=2, CB_D=3, CB_S=4, CB_ACC=5, CB_OUT=16, CB_OUT2=17, CB_OUT3=18)
@@ -23,7 +23,8 @@ VB = 2  # tiles per read batch (1-8 measured within 3%)
 
 class CgVectorOp:
     """mode dot: (a, b, part). axpy: (a, b, s1, s2), writes b. xr: (a=x, b=p, c=r, d=Ap, s1, s2, part), writes x
-    and r. All vectors are fp32 TILE [P / 32, 32] with the same P; s1 and s2 are 1x1-element fp32 tiles."""
+    and r. All vectors are fp32 TILE [P / 32, 32] with the same P; s1 and s2 are one 4 KB page each, the value in
+    word 0 (element (0, 0) of a tile)."""
 
     def __init__(self, device, mode, a, b, c=None, d=None, s1=None, s2=None, part=None):
         if mode not in ("dot", "axpy", "xr"):
@@ -54,9 +55,7 @@ class CgVectorOp:
         # kernel keeps its per-core tile count
         reader_common = [x.buffer_address() for x in (a, b, c, d, s1, s2)] + [base, rem, g.x, mcode]
         writer_common = [x.buffer_address() for x in (o1, o2, part)] + [base, rem, g.x, d.buffer_address(), mcode]
-        ca = ttnn.RuntimeArgs()
-        for i in range(nc):
-            ca[i % g.x][i // g.x] = [base + (1 if i < rem else 0), mcode]
+        ca = [(xy, [base + (1 if i < rem else 0), mcode]) for i, xy in enumerate(logical_coords(device)[:nc])]
         defs = [(k, str(v)) for k, v in CB.items()] + [("VB", str(VB))]
 
         def accessors(*ts):
@@ -123,9 +122,8 @@ class CgVectorOp:
 
 class DotFinishOp:
     """Finishes a dot product on one core: adds the per-core values in the first nparts pages of `part` (64-byte slots,
-    zero elsewhere), reduces the 1024 lanes, and
-    writes the value to element (0, 0) of `out` (an fp32 32x32 tile). keep_old: first copies out's current tile to
-    `old` (CG's previous r.z). sqrt: writes the square root (the residual norm). Replaces two ttnn.sum calls and a
+    zero elsewhere), reduces the 1024 lanes, and writes the value to word 0 of `out` (one fp32 4 KB page: element
+    (0, 0) of a tile). keep_old: first copies out's current page to `old` (CG's previous r.z). sqrt: writes the square root (the residual norm). Replaces two ttnn.sum calls and a
     ttnn.copy (or ttnn.sqrt) with one launch."""
 
     def __init__(self, device, part, nparts, out, old=None, keep_old=False, sqrt=False):
