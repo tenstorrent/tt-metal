@@ -2755,7 +2755,7 @@ def test_high_bw_all_gather_paged_source_rejects(mesh_device, expect_error):
         ttnn.ROW_MAJOR_LAYOUT,
         ttnn.ShardTensor2dMesh(rank_line, dims=shard_dims, mesh_shape=tuple(rank_line.shape)),
     )
-    with expect_error(RuntimeError, "must be a multiple of 32"):
+    with expect_error(RuntimeError, "must be a positive multiple of 32"):
         gather(source=half_page_pool)
 
 
