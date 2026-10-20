@@ -39,7 +39,8 @@ run() {
   local tag=$1 side=$2 form=$3 rts=$4; shift 4
   RUNNER_TEMP=$B/${side}_$form TMPDIR=$B/${side}_$form LLK_PERF_RUN_TYPES=$rts PERF_RUN_TAG=$tag timeout -s INT -k 60 2400 \
     python -m pytest --compile-consumer -p no:cacheprovider -q -o timeout_method=thread --timeout 120 "$@" "${IDS[@]}" > /tmp/r_$tag.txt 2>&1
-  echo "== run $tag rc=$? $(date -u +%T) $(grep -aE '[0-9]+ (passed|failed)' /tmp/r_$tag.txt | tail -1)"
+  local rc=$?; echo "== run $tag rc=$rc $(date -u +%T) $(grep -aE '[0-9]+ (passed|failed)' /tmp/r_$tag.txt | tail -1)"
+  [[ $rc != 0 && -n $DIAG ]] && { echo "== diag begin"; grep -aE "^E |Error|TIMED|Timeout|hang|No such" /tmp/r_$tag.txt | sort | uniq -c | sort -rn | head -15 | cut -c1-300; echo "== diag end"; [[ $DIAG == 2 ]] && exit 0; }
 }
 REV=$(echo $SIDES | tr ' ' '\n' | tac | tr '\n' ' ')
 j=0
