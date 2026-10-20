@@ -305,9 +305,13 @@ inline void _llk_math_eltwise_unary_datacopy_(
         {
             if constexpr (src_b_bcast_type == BroadcastType::COL)
             {
-                // Mop for col broadcast only does 2 outerloops.  Needs to clear B manually and call twice
-                ckernel_template::run();
-                TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, 0);
+                // The mop covers one face row and unpack gives one SrcB face per face row:
+                // run it once per face row and clear B in between. The last run also clears A.
+                for (std::uint32_t face_row = 1; face_row < tensor_shape.num_faces_r_dim; face_row++)
+                {
+                    ckernel_template::run();
+                    TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, 0);
+                }
                 ckernel_template::run();
                 TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, 0);
             }
@@ -433,7 +437,7 @@ inline void eltwise_unary_configure_addrmod(const std::uint32_t dst_format)
  * @tparam is_int_fpu_en: Enable integer FPU datapath (forces the ELWADD move path like FP32 dest).
  * @param rows_per_inst: Rows moved per instruction (selects single-row vs. multi-row addr mode and loop count).
  * @param total_rows: Total rows to move across the inner loop.
- * @param tensor_shape: Tile geometry; only the total face count is used today.
+ * @param tensor_shape: Tile geometry; the total face count, plus the face grid for B2D COL broadcast.
  * @param dst_format: Destination data format (DataFormat enum underlying value); selects UInt16 special-casing.
  */
 template <DataCopyType type, bool is_fp32_dest_acc_en, BroadcastType bcast_type = BroadcastType::NONE, bool tilize = false, bool is_int_fpu_en = false>
@@ -481,8 +485,9 @@ inline void eltwise_unary_configure_mop(
         if constexpr (bcast_type == BroadcastType::COL)
         {
             innerloop = 16 >> 3; // elwadd produces 8 rows per op
-            // The mop only runs for 2 outer loops and mop is called twice for col broadcast
-            outerloop = 2;
+            // One face row per mop run: one outer iteration per face in the row, each reusing the
+            // same SrcB face. _llk_math_eltwise_unary_datacopy_ runs the mop once per face row.
+            outerloop = tensor_shape.num_faces_c_dim;
             // ELWADD with zeros will be used for non UInt16 case, since it moves 8 rows per cycle
             broadcast_type = p_elwise::SRCB_BCAST_COL;
             if (dst_format == to_underlying(DataFormat::UInt16))
@@ -572,22 +577,6 @@ inline void _llk_math_eltwise_unary_datacopy_init_(
     LLK_VALIDATE_TENSOR_SHAPE_MATH("_llk_math_eltwise_unary_datacopy_init_", tensor_shape);
     const std::uint32_t num_faces = tensor_shape.total_num_faces();
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
-    if constexpr (src_b_bcast_type == BroadcastType::COL)
-    {
-        // The COL MOP covers two faces and the execute runs it twice, so it needs a full 32x32 tile
-        // (4 faces of 16 rows). A 1x32 tile was seen to hang on Wormhole.
-        LLK_ASSERT(
-            tensor_shape.face_r_dim == MAX_FACE_R_DIM && tensor_shape.num_faces_r_dim == MAX_NUM_FACES_R_DIM &&
-                tensor_shape.num_faces_c_dim == MAX_NUM_FACES_C_DIM,
-            "Column broadcast datacopy supports only 32x32 tiles");
-    }
-    if constexpr (type == DataCopyType::B2D && src_b_bcast_type == BroadcastType::ROW)
-    {
-        // The ROW MOP runs one pass per face. A 32x16 tile (2x1 face grid) gave wrong results on ttsim
-        // and is not covered on silicon, so it is blocked until a test proves it.
-        LLK_ASSERT(
-            !(tensor_shape.num_faces_r_dim == MAX_NUM_FACES_R_DIM && tensor_shape.num_faces_c_dim == 1), "Row broadcast datacopy does not support 32x16 tiles");
-    }
     eltwise_unary_configure_addrmod<type, src_b_bcast_type>(dst_format);
 
     if constexpr (type == DataCopyType::A2D && src_b_bcast_type == BroadcastType::NONE)
