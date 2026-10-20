@@ -13,6 +13,9 @@
 
 namespace tt::tt_metal::experimental::per_core_allocation {
 
+// Reservation alignment for tensor geometry; HYBRID banks use DRAM alignment for SRAM too.
+uint32_t l1_tensor_allocation_alignment(const IDevice& device);
+
 // Half-open physical storage owned (or logically exposed by a view) on one core.
 struct L1TensorExtent {
     distributed::MeshCoordinate device_coord;
