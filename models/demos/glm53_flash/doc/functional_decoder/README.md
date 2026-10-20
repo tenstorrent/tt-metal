@@ -12,7 +12,7 @@ tt-metal main `8cfcaf754d3` + the commits on `arg/glm53_flash`.
 |---|---|---|---|
 | `from_state_dict(state_dict, hf_config=cfg_or_config_json, layer_idx, mesh_device, max_batch, max_seq_len)` | raw checkpoint tensors of `model.language_model.layers.{i}.` (prefix stripped, fp8 groups dequantized by `reference/checkpoint.load_layer_raw`) | decoder | allocates the KDA user slots / the DSA paged latent + pooled-key index caches |
 | `prefill_forward(streams, user, seq_len, start=0)` | packed mHC streams `[1,1,T_pad,4*4096]` fp32 of one chunk (row i = position `start + i`), `T_pad % 32 == 0`, `start % 32 == 0`, rows past `seq_len` padding | `[1,1,T_pad,4*4096]` fp32 | KDA: `start == 0` resets slot `user`, else continues from its carries and writes them back; DSA: fills the user's cache pages `[start, start + T_pad)`, pooled keys, tail ring |
-| `decode_forward(streams, positions)` | `[1,1,B,4*4096]` fp32 (B == max_batch user slots); `positions` = `DecodePositions` from `make_decode_positions(host_positions)` / `update_decode_positions` (persistent `[B]` int32: position, position // 4, position % 4, + host values) | `[1,1,B,4*4096]` | KDA state updated in place; DSA latent appended and the pooled-key index maintained; dense flash-MLA for every slot (HF-exact through position 2050 = index_topk + index_kpool - 2), then the rows of the users whose host position is > 2050 are overwritten by the per-user indexer + `sparse_sdpa` result (eager, host chunk geometry) |
+| `decode_forward(streams, positions)` | `[1,1,B,4*4096]` fp32 (B == max_batch user slots); `positions` = `DecodePositions` from `make_decode_positions(host_positions)` / `update_decode_positions` (persistent `[B]` int32: position, position // 4, position % 4, min(position, 2050) = the dense flash-MLA bound, + host values) | `[1,1,B,4*4096]` | KDA state updated in place; DSA latent appended and the pooled-key index maintained; dense flash-MLA for every slot (HF-exact through position 2050 = index_topk + index_kpool - 2), then the rows of the users whose host position is > 2050 are overwritten by the per-user indexer + `sparse_sdpa` result (eager, host chunk geometry) |
 | `capture_decode_trace(streams, positions)` / `replay_decode(trace_id)` | persistent device inputs | `(trace_id, output tensor, warm-up output)` | the dense decode graph is trace-replayable (state and pooled-key index updated inside the captured graph, HF-exact through position 2050); refused for DSA decoders with max_seq_len > 2051 unless `allow_sparse_range` (the sparse rows are never captured) |
 
 Residual convention: HF `[B, S, 4, 4096]` <-> packed `[1, 1, B*S, 16384]` (`host_streams_to_device` /
@@ -85,6 +85,8 @@ prefill of the whole prompt (same kernels, same row classes):
 | `test_all_layers.py` | every layer 0..44 on its own HF input (`L45_S128` dump: 128 random tokens + 2 decode steps through the full HF stack, produced layer by layer with `hf_layer_reference.py --stream`), prefill S=128 + 2 decode vs the live HF layer, router top-8 sets with near-tie margins, attention / FFN sub-block PCCs | 45/45 pass: prefill 0.99886 (layer 23) .. 1.0, decode >= 0.99786 (layer 27, one 4e-4-margin expert flip), per-row prefill min 0.9755 (layer 23 row 125); router sets 109-126/128 identical, every flipped prefill row below the median 8th-9th margin except 3 rows of layer 43; sub-blocks: attention >= 0.99915, FFN >= 0.99589 (prefill); HF live == dump (1.000000) for all 45 layers; 4 chips, ~2 min/layer |
 | `test_perf_layer.py` | warmed prefill S=1024 (wall), traced decode B=1 (one replay, tt-perf-report `Device Time`) | prefill: layer 3 325.7 ms wall (re-measured 2026-10-20 at 5c5122ccf3a + the review-3 fixes, `GLM53_PERF_PHASE=prefill`, no tracy, `_logs/fix3_perf_layer3_prefill.log`; host load average 60-110 on 64 cores from other sessions' CPU jobs during the run; the earlier 314 ms predates eca757b2ffc and 4cd5f8fe829, which added the prefill index maintenance), layer 4 297.8 ms wall from the tt-perf-report run that predates the cached-scalars fix 4cd5f8fe829 (its device-time table, 293.4 ms over 1002 ops, is unaffected: the fix removed host-side uploads, not device ops); decode: layer 3 10.87 ms/step device (435 ops, wall 11.31), layer 4 10.76 ms/step device (471 ops, wall 11.2) |
 
+| `test_cache_1m.py` | 1 M-position cache test (one user): layer 3 `FunctionalDecoder` at `max_seq_len = 1 048 640`, context seeded synthetically through `TtDSA.prefill_state` in 32 K chunks (realistic-statistics random attention inputs; device latent / pooled-key rows checked against the HF module's own stems per chunk), decode steps at N, N+1 (dense op unbounded) and N+2, N+3 (bounded) for N = 16384 / 131072 / 1048576 with real R4097 decode rows vs the genuine HF `Glm5NextTextAttention` forward on a `DynamicCache` holding the host rows (130 GiB of host K/V at 1 M) and its restricted form (same ops over the HF-selected keys; proven identical by `test_host_reference_matches_hf`), selected-id overlap, per-stage eager wall (`StageTimer`), DRAM view (`_logs/cache1m_final.log`) | builds in 61-77 s: 8.42 GiB resident (7.35 weights + 1.000 GiB latent pages + 64 MiB pooled keys; x 11 DSA layers = 11.69 GiB), 23.4 GiB free; seeding: latent rows PCC >= 0.99983, pooled keys >= 0.99999 on all 33 chunks (state-only prefill 1.5 M tok/s per 32 K chunk warm); decode vs HF-full 0.999820 / 0.999788 / 0.999694 at 16 K / 131 K / 1 M (restricted 0.9996-0.9998 at every step, full == restricted to 1 bf16 ulp, HF ids identical); id overlap 0.92-0.94 / 0.85-0.92 / 0.84-0.88 (synthetic Gaussian context: dense near-ties at the top-512 boundary, see Known limits); eager sparse attention step at 1 M: 26-44 ms warm with the dense op bounded vs 120-131 ms unbounded (the discarded dense flash-MLA row over the 1 M prefix = 94.5 ms; 131 K: 13-15 vs 46 ms; 16 K: 7-9 ms); whole layer eager step at 1 M 26.5 ms bounded vs 119.9 ms (131 K 20.0 vs 26.7, 16 K 25 ms); DRAM at stage boundaries peaks at 9.44 GiB (+1 GiB inside the kv untilize) |
+
 Context contract: `doc/context_contract.json`. Full log: `doc/functional_decoder/work_log.md`.
 Expert dtype gate evidence (knobs `expert_dtype` / `expert_down_dtype`, default bfp8): `doc/functional_decoder/dtype_gate.md`.
 Profiler note: Tracy device zones of the SDPA prefill kernels (dense and sparse share `compute_streaming.hpp`: `:632` vs
@@ -115,12 +117,24 @@ TT_VISIBLE_DEVICES=0 GLM53_LAYERS=0-11 pytest models/demos/glm53_flash/tests/tes
   `_logs/fix3_perf_layer3_prefill.log`), two different answers:
   (i) decode is not capacity-bound at the advertised 1 M positions for one user: 11 DSA layers x 1,048,576 x 512 x 2 B
   = 11 GiB of latent pages + pooled keys (one [128] bf16 row per 4 tokens = 64 B/token: 0.69 GiB) + 2 x 32 x 128 x 2 B
-  ring rows per user and layer; the single-chip decode bound is validation time of the v1 composite paths.
+  ring rows per user and layer. Validated for one layer at 1 048 576 positions (`test_cache_1m.py`, synthetic context,
+  one user): no kernel limit is hit (`topk_large_indices` rows up to 2^30 elements, `indexer_score_dsa` kv_len 262 176
+  pools, the whole-prefix slice + untilize of 1 GiB, `sparse_sdpa` over 1 048 608 row-major rows, the flash-MLA decode
+  page table of 32 770 blocks). Per-step costs of the eager sparse decode that grow with the user's context (one layer,
+  warm, `_logs/cache1m_final.log`): the user's whole latent prefix is copied and untilized for `sparse_sdpa`'s row-major
+  kv contract (kv_slice + kv_untilize: 12-21 ms at 1 M, 1.8 ms at 131 K, 0.5 ms at 16 K; +2 GiB of transient DRAM at
+  1 M), the pooled-score pass (index scoring 1.6-2.2 ms at 1 M, top-512 pools over 262 176 scores 2.5 ms + 1 ms id expansion; before the pool-level top-k the 4x token-level expansion + top-2048 cost 13 + 9 ms); the dense
+  flash-MLA row computed for every slot reads the whole prefix (94.5 ms at 1 M, 12 ms at 131 K) unless its position is
+  bounded with `DecodePositions.dense_positions` = min(position, 2050) (0.4 ms; the row of a sparse user is discarded,
+  so this is exact). A paged / tiled kv read in `sparse_sdpa` (Phase 3 fusion) removes the untilize.
   (ii) single-shot prefill IS capacity-bound: for a prompt of T tokens (S = T - 2048 sparse query rows,
-  W = 32 * ceil(max_seq_len / 128) pooled-key columns, about T/4) the peak is inside `TtDSAIndexer.select` at the 4x
-  `repeat_interleave` of the scores (ttnn implements it along the last dim as transpose, 4x concat, transpose back):
-  the TILE scores `[S, W]` bf16, their ROW_MAJOR copy, the transposed copy, the repeated `[4W, S]` and the result
-  `[S, 4W]` are live together = 22 * S * W bytes (about 5.5 * T^2), plus the tensors held across the call (fp32 streams
+  W = 32 * ceil(max_seq_len / 128) pooled-key columns, about T/4) the peak is inside `TtDSAIndexer.select`. Until
+  the pool-level top-k (selection of the top-512 pools over `[S, W]` with the token ids expanded on device) it sat at
+  the 4x `repeat_interleave` of the scores (ttnn implements it along the last dim as transpose, 4x concat, transpose
+  back): the TILE scores `[S, W]` bf16, their ROW_MAJOR copy, the transposed copy, the repeated `[4W, S]` and the result
+  `[S, 4W]` were live together = 22 * S * W bytes (about 5.5 * T^2); now the quadratic term is the three `[S, W]`
+  copies (TILE, the kv_len slice, ROW_MAJOR) = 6 * S * W bytes, and the figures below (kept as measured before the
+  change) are upper bounds, plus the tensors held across the call (fp32 streams
   64 KiB/row, pre-norm + normalized input 16 KiB/row, q 32 KiB/row, q_resid 3 KiB/row, the sparse-row slices and
   indexer queries 19 KiB/row, the dense-row output 64 MiB, the caches 1 KiB + 64 B per token). The next-highest point,
   `sparse_sdpa` (q_rm + o_rm `[64, S, 512]` bf16 = 128 KiB/row, kv_rm, indices `[S, 2176]` u32), is linear in T.
@@ -137,7 +151,11 @@ TT_VISIBLE_DEVICES=0 GLM53_LAYERS=0-11 pytest models/demos/glm53_flash/tests/tes
   the pooled-key index is nevertheless maintained inside the traced dense graph (checked against a host
   recomputation in `test_decode_trace.py`), so a user can cross 2050 and continue on the eager sparse rows.
 - Indexer scores are ranked at bf16 resolution (`indexer_score_dsa` + `topk_large_indices`): 98-99 % of the
-  HF-selected ids per step on a random prompt, layer PCC >= 0.9997.
+  HF-selected ids per step on a random-token prompt (4 K), layer PCC >= 0.9997. On the synthetic Gaussian context of
+  `test_cache_1m.py` (no structure, so the top-512 pool boundary is dense with near-ties) the overlap falls to 92-94 %
+  at 16 K, 86-92 % at 131 K and 85-88 % at 1 M while the attention output stays at PCC >= 0.9996 vs HF: the swapped
+  boundary pools carry little attention weight. An fp32 scoring path is the Phase 2/3 option if token-level accuracy
+  at long context shows a gap.
 - `moe_grouped_topk` is not used (bf16 ranking swaps near-tied experts); the exact fp32 composite costs ~8x5 ops.
 - Per-row PCC tail of the MoE layers = near-tie routed-expert swaps: when the 8th and 9th biased router scores are
   within ~3e-3 (18 % of tokens are < 1e-3 apart, 39 % < 3e-3), the exact fp32 router on the device's bf16
