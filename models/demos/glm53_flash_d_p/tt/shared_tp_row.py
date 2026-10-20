@@ -110,7 +110,9 @@ class TtSharedTpRow:
 
     def __call__(self, x: ttnn.Tensor, l1_budget: int | None = None) -> ttnn.Tensor:
         """x: [1, 1, M, H] bf16 TILE (rows of the row's tokens) -> the chip's partial [1, 1, M, H] bf16 TILE.
-        l1_budget: the circular-buffer bytes per core the matmuls may take (default: the constructor's)."""
+        l1_budget: the circular-buffer bytes per core the matmuls may take (default: the constructor's).
+        (A row-major down output - the 1D config's untilize_out into y_se - writes rows but labels the tensor TILE and
+        gives NaNs in an interleaved row-major buffer: not used.)"""
         budget = l1_budget or self.l1_budget
         mc = ttnn.DRAM_MEMORY_CONFIG
         gu = ttnn.linear(
@@ -133,3 +135,92 @@ class TtSharedTpRow:
         )
         ttnn.deallocate(h)
         return o
+
+
+class TtSharedFlat:
+    """The same split shared expert on the flat expert op (one expert: this chip's I / G slice, bf8, clamped SiLU,
+    HiFi2): it reads the group's rows straight from the row-major dispatch buffer by a fixed token index (the block's,
+    own block first) and writes the partial row-major bf16 into the block's y_se, with no tilize / untilize. Runs
+    before the block allocates its arena (the op allocates its own)."""
+
+    def __init__(
+        self,
+        mesh,
+        w_gate: torch.Tensor,
+        w_up: torch.Tensor,
+        w_down: torch.Tensor,
+        limit: float = 10.0,
+        axis: int = 1,
+        max_rows: int = 8192,
+        fidelity: int = 2,
+        done=None,
+        x_bf16: bool = True,
+        layout=None,
+    ):
+        """max_rows: the most rows a call takes (G S); fidelity: the flat op's math_fidelity (2 = HiFi2). done: another
+        TtSharedFlat's done words to share (persistent L1, one set for every layer)."""
+        from ttnn.bringup.flat_routed_expert_ttnn.flat_expert import FlatRoutedExpert
+
+        assert float(limit) == 10.0, f"the flat op's clamped SiLU has the limit 10 compiled in, got {limit}"
+        self.mesh, self.axis, self.fidelity = mesh, axis, fidelity
+        R, C = tuple(mesh.shape)
+        G = C if axis == 1 else R
+        inter, hidden = w_gate.shape
+        assert inter % (G * 32) == 0
+        self.per = per = inter // G
+        pos = [(d % C) if axis == 1 else (d // C) for d in range(R * C)]  # (chip d's slice)
+
+        def weights():
+            sl = lambda i: slice(i * per, (i + 1) * per)  # noqa: E731
+            return [
+                [(w_gate[sl(p)].T.contiguous(), w_up[sl(p)].T.contiguous(), w_down[:, sl(p)].T.contiguous())]
+                for p in pos
+            ]
+
+        self.flat = FlatRoutedExpert(
+            mesh,
+            weights,
+            m=max_rows,
+            H=hidden,
+            I=per,
+            gids=[[0] for _ in range(R * C)],
+            n_global=1,
+            wdtype="bf8",
+            act="clamped_silu",
+            pin=1,
+            x_bf16=x_bf16,
+            # (I / G <= 1024 is <= 32 tile columns: the plan's 2-3 subgrids are not built any more; one subgrid)
+            layout=dict(single_subgrid=True) if layout is None else layout,
+        )
+        if done is not None:
+            ttnn.deallocate(self.flat.done)
+            self.flat.done = done
+        self._rows = {}
+
+    def _counts(self, n):
+        if n not in self._rows:
+            row = lambda v: ttnn.from_torch(  # noqa: E731
+                torch.tensor([v], dtype=torch.int32),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.mesh,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
+            )
+            self._rows[n] = (row([n]), row([0]))
+        return self._rows[n]
+
+    def partials(self, xg, token_index, out):
+        """xg: the dispatch buffer [N S, H] bf16 row-major; token_index [1, G S] uint32 per chip (its rows, in the
+        partial's order); out: [G S, H] bf16 row-major (written)."""
+        counts, regions = self._counts(int(token_index.shape[-1]))
+        return self.flat(
+            xg,
+            counts,
+            regions,
+            token_index=token_index,
+            y_row_major=True,
+            down_fp32=True,
+            math_fidelity=self.fidelity,
+            output=out,
+        )

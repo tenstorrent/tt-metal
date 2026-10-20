@@ -39,6 +39,9 @@ struct FlatLayoutOptions {
     bool x_once = false;         // x read from DRAM once: rectangle 0's primary multicasts into both rectangles
     int32_t dw_batch = -1;       // down-weight blocks per read barrier (-1: DW_BATCH)
     uint32_t pin_ratio = 8;      // pin only an expert this many times the next one's rows (0: always pin)
+    // one subgrid (one M group of gate/up cores) also for small I (It <= 32 tiles takes 2 or 3 subgrids by default,
+    // which the overlap-era program factory no longer builds): with 16-column units, e.g. a split shared expert's slice
+    bool single_subgrid = false;
 
     // every field, for the plan cache key and the program hashes
     std::vector<uint32_t> key() const;

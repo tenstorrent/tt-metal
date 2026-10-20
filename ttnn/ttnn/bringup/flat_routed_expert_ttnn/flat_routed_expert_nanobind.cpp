@@ -191,6 +191,7 @@ void bind_flat_routed_expert(nb::module_& mod) {
         .def_rw("x_helpers", &fre::FlatLayoutOptions::x_helpers)
         .def_rw("half_width", &fre::FlatLayoutOptions::half_width)
         .def_rw("hg_units", &fre::FlatLayoutOptions::hg_units)
+        .def_rw("single_subgrid", &fre::FlatLayoutOptions::single_subgrid)
         .def_rw("row0", &fre::FlatLayoutOptions::row0)
         .def_rw("row1", &fre::FlatLayoutOptions::row1)
         .def_rw("x_path", &fre::FlatLayoutOptions::x_path)
@@ -276,7 +277,8 @@ void bind_flat_routed_expert(nb::module_& mod) {
         nb::arg("h_bf16") = false,
         nb::arg("y_bf16") = false,
         nb::arg("math_fidelity") = 0,
-        nb::arg("layout") = fre::FlatLayoutOptions{});
+        nb::arg("layout") = fre::FlatLayoutOptions{},
+        nb::arg("output") = nb::none());
 
     ttnn::bind_function<"flat_combine_overlap", "ttnn.bringup.">(
         mod,

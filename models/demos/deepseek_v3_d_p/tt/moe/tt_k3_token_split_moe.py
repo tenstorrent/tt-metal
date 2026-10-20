@@ -192,7 +192,7 @@ class TtK3TokenSplitMoE:
         tw = lambda t, dt: ttnn.from_torch(  # noqa: E731  (a [in, out] weight, replicated)
             t.contiguous(), dtype=dt, layout=ttnn.TILE_LAYOUT, device=mesh_device, memory_config=dram, mesh_mapper=rep
         )
-        self.tilize = layout_op_prepare(mesh_device, "tilize")
+        self.tilize = layout_op_prepare(mesh_device, "tilize", cw=16)  # (1 KB row pieces: GLM [640, 4096] 35 -> 26 us)
         self.untilize = layout_op_prepare(mesh_device, "untilize")
         self.untilize7 = layout_op_prepare(mesh_device, "untilize", pages_per_row=7)
         self.topk_custom = os.environ.get("K3_TOPK", "custom") == "custom" and not routed_only
@@ -542,10 +542,24 @@ class TtK3TokenSplitMoE:
             G, ax = self.G, self.shared_axis
             mate = lambda ch, j: ch[0] * C + (ch[1] + j) % C if ax == 1 else ((ch[0] + j) % R) * C + ch[1]  # noqa: E731
             ST = S // 32
+            cw = 16  # (1 KB row pieces: the gather-tilize 72 -> 50 us at 1280 x 4096; 32: no better)
             self.se_tilize = layout_op_prepare(
-                mesh_device, "tilize", src_tile_of=lambda ch, tr: mate(ch, tr // ST) * ST + tr % ST
+                mesh_device, "tilize", cw=cw, src_tile_of=lambda ch, tr: mate(ch, tr // ST) * ST + tr % ST
             )
-            self.se_untilize = layout_op_prepare(mesh_device, "untilize")
+            self.se_untilize = layout_op_prepare(mesh_device, "untilize", cw=cw)
+            # (the flat-op shared expert: its rows by a token index into the dispatch buffer, the same order)
+            tix = torch.zeros(R, C, 1, G * S, dtype=torch.int32)
+            for r_ in range(R):
+                for c_ in range(C):
+                    tix[r_, c_, 0] = torch.tensor([mate((r_, c_), j) * S + t for j in range(G) for t in range(S)])
+            self.se_tidx = ttnn.from_torch(
+                tix,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=mesh_device,
+                memory_config=dram,
+                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(R, C), dims=(0, 1)),
+            )
             self.y_se = ttnn.allocate_tensor_on_device(
                 ttnn.Shape([self.G * S, d.H]), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, mesh_device, dram
             )
@@ -1223,11 +1237,14 @@ class TtK3TokenSplitMoE:
             xg = self.dispatch(x, prep)
             mark("dispatch")
             GS = self.G * self.S
-            xs = self.se_tilize(xg, rows=GS)
-            o = shared(ttnn.reshape(xs, [1, 1, GS, self.d.H]))
-            ttnn.deallocate(xs)
-            self.se_untilize(ttnn.reshape(o, [GS, self.d.H]), self.y_se)
-            ttnn.deallocate(o)
+            if hasattr(shared, "partials"):  # (the flat op: rows straight from the dispatch buffer into y_se)
+                shared.partials(xg, ttnn.reshape(self.se_tidx, [1, GS]), self.y_se)
+            else:
+                xs = self.se_tilize(xg, rows=GS)
+                o = shared(ttnn.reshape(xs, [1, 1, GS, self.d.H]))
+                ttnn.deallocate(xs)
+                self.se_untilize(ttnn.reshape(o, [GS, self.d.H]), self.y_se)
+                ttnn.deallocate(o)
             mark("shared")
             arena = self.alloc_arena()
             mark("arena_zero")

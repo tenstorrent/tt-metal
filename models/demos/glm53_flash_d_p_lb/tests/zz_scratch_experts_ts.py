@@ -112,7 +112,8 @@ def test_experts_ts(mesh_device):
         else None
     )
     ax = int(os.environ.get("GLM_TS_SHARED_AXIS", "1"))  # (the shared expert's group: mesh rows 1, columns 0)
-    ts = TtExpertsTs(mesh_device, 4, tw, num_links=2, shared_weights=se, shared_axis=ax, **kw)  # (first: plan options)
+    impl = os.environ.get("GLM_TS_SHARED_IMPL", "ttnn")
+    ts = TtExpertsTs(mesh_device, 4, tw, num_links=2, shared_weights=se, shared_axis=ax, shared_impl=impl, **kw)
     ag = TtExpertsAg(mesh_device, 4, tw, num_links=2, **kw) if not SHARED else None
     # (shared: the same routed experts without it, to isolate the shared expert's part: folded - routed only)
     tr = TtExpertsTs(mesh_device, 4, tw, num_links=2, **kw) if SHARED else None

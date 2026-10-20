@@ -56,6 +56,8 @@ class CombineProbes:
     credthr: str = "8"  # SPC_CREDTHR: credit return threshold
     noyread: str = "0"  # SPC_NOYREAD: rows not read from y (garbage)
     nodrain: bool = False  # SPC_NODRAIN=1: no end-of-call credit drain
+    se: str = ""  # SPC_SE: shared_rows probes - off (no rows, both sides: wrong sums) / noread (no DRAM reads: garbage)
+    # / noown (the accumulators skip the own block)
 
     @staticmethod
     def from_env(env=None):
@@ -69,6 +71,7 @@ class CombineProbes:
             credthr=env.get("SPC_CREDTHR", "8"),
             noyread=env.get("SPC_NOYREAD", "0"),
             nodrain=env.get("SPC_NODRAIN") == "1",
+            se=env.get("SPC_SE", ""),
         )
 
 
@@ -646,7 +649,7 @@ void kernel_main() {
                     se_t = 0;
                 }
                 const uint32_t sl = se_stage + (se_rd % NSE) * ISLOT;
-                noc_async_read(get_noc_addr(row, se_g), sl, row_bytes);
+                if constexpr (!__SENOREAD__) noc_async_read(get_noc_addr(row, se_g), sl, row_bytes);
                 volatile tt_l1_ptr uint32_t* tr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sl + LASTPB);
                 tr[0] = hdr;
                 tr[1] = 0x3F80;  // (gate weight 1.0, bf16 bits)
@@ -1248,7 +1251,7 @@ def sparse_combine_rf_prepare(
     se_axis = int(shared_rows.get("axis", 1)) if SE_ON else 1
     se_g = C if se_axis == 1 else R
     se_owner = lambda ch, j: (ch[0], (ch[1] + j) % C) if se_axis == 1 else ((ch[0] + j) % R, ch[1])  # noqa: E731
-    if SE_ON:
+    if SE_ON and pr.se != "off":
         for ch in chips:
             for j in range(1, se_g):
                 h = se_owner(ch, j)
@@ -1440,7 +1443,8 @@ def sparse_combine_rf_prepare(
         "__SE__": str(int(SE_ON)),
         "__NSE__": str(max(NSE, 1)),
         "__BAR__": str(int(barrier is not None)),
-        "__SOWN__": str(S if SE_ON else 0),
+        "__SOWN__": str(S if SE_ON and pr.se not in ("off", "noown") else 0),
+        "__SENOREAD__": str(int(pr.se == "noread")),
         "__OWNADDR__": str(int(shared_rows["tensor"].buffer_address()) if SE_ON else 0),
     }
     dbg_t = ttnn.from_torch(

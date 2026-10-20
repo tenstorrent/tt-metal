@@ -36,6 +36,7 @@ FIELDS = (
     "x_once",
     "dw_batch",
     "pin_ratio",
+    "single_subgrid",
 )
 
 # DRAM-core (DRISC) gate/up weight readers only: no Tensix weight readers, no per-call Tensix fallback, inside the

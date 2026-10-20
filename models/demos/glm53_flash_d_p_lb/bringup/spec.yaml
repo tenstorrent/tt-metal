@@ -245,3 +245,4 @@ device:
   experts_fidelity: LoFi           # owner: bfp4 weights need no more; 56k prefill -10%, and more accurate than HiFi4
   attn_fidelity: HiFi2             # owner: MLA / SDPA / indexer / q_a / KDA; -2% time, more accurate than HiFi4 at 56k
   moe_links: 2                     # LoudBox has 2 links per axis (was 1, a default from the MiMo 2x2 port); -12%
+  shared_expert: folded_sp         # owner: the shared expert folded into the token-split MoE block (GLM_EXPERTS_MODE=ts), split over SP pairs (the LoudBox's TP line carries the combine); L4 MoE block 4058 -> 2884 us at chunk 5120

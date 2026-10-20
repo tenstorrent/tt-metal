@@ -2001,8 +2001,10 @@ class FlatRoutedExpert:
         pack_stochastic_rounding=False,
         y_bf16=False,
         math_fidelity=0,
+        output=None,
     ):
         """x: the row-major bf16 dispatch buffer [rows, H]; counts / regions: the routing's [1, n_global] uint32 rows.
+        output: a caller's y tensor (its spec as the returned y's), e.g. a persistent buffer read at a fixed address.
         token_index ([1, rows] uint32): indexed mode, x is then e.g. the all-gathered tokens and flat row r reads x row
         token_index[r]. x_pages_per_row P: x is [rows * P, H / P] (P = 8: every row spread over the 8 DRAM banks).
         Returns y [rows, H] bfp8 TILE (the active experts' rows); ``y_row_major``: bf16 ROW_MAJOR (pack-untilized on
@@ -2032,4 +2034,5 @@ class FlatRoutedExpert:
             y_bf16=y_bf16,
             math_fidelity=math_fidelity,
             layout=self.layout,
+            output=output,
         )

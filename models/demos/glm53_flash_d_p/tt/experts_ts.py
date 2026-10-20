@@ -64,10 +64,14 @@ class TtExpertsTs:
         num_links: int = 2,
         shared_weights=None,
         shared_axis: int = 1,
+        shared_impl: str = "ttnn",
     ):
         """shared_weights (gate, up [I_s, H], down [H, I_s] torch, HF layout): the shared expert folded into the block
         (split over each mesh row's chips, its partials summed by the combine): the call then returns routed + shared
-        and gathers no x for a separate shared expert. shared_axis: its group is each mesh row (1) or column (0)."""
+        and gathers no x for a separate shared expert. shared_axis: its group is each mesh row (1) or column (0).
+        shared_impl: ttnn (matmuls + glu_act; default) or flat (the flat expert op, one expert, rows from the dispatch
+        buffer, no tilize / untilize: slower - L4 chunk 5120 424 vs 338 us, too few gate/up cores for one I 1024 expert).
+        """
         from ttnn.bringup.flat_routed_expert_ttnn.flat_expert import FlatRoutedExpert
 
         assert float(limit) == 10.0, f"clamped_silu is fixed at limit 10, got {limit}"
@@ -82,9 +86,23 @@ class TtExpertsTs:
         self.gathered_x = None
         self.shared = None
         if shared_weights is not None:
-            from models.demos.glm53_flash_d_p.tt.shared_tp_row import TtSharedTpRow
+            from models.demos.glm53_flash_d_p.tt.shared_tp_row import TtSharedFlat, TtSharedTpRow
 
-            self.shared = TtSharedTpRow(mesh, *shared_weights, limit=limit, axis=shared_axis)
+            if shared_impl == "flat":  # (one set of done words for every layer's shared expert)
+                d0 = _DONE.get(("se", id(mesh)))
+                self.shared = TtSharedFlat(
+                    mesh,
+                    *shared_weights,
+                    limit=limit,
+                    axis=shared_axis,
+                    max_rows=max_seq_len,
+                    done=d0,
+                    **json.loads(os.environ.get("GLM_SE_FLAT_OPTS", "{}")),  # (layout probes: x_bf16, layout)
+                )
+                if d0 is None:
+                    _DONE[("se", id(mesh))] = self.shared.flat.done
+            else:
+                self.shared = TtSharedTpRow(mesh, *shared_weights, limit=limit, axis=shared_axis)
         wdtype = {ttnn.bfloat4_b: "bf4", ttnn.bfloat8_b: "bf8"}[weights_dtype]
         fake = isinstance(torch_weights, str)
         prefix = None

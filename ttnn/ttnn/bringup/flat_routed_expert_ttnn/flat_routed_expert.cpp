@@ -109,7 +109,8 @@ ttnn::Tensor flat_routed_expert(
     bool h_bf16,
     bool y_bf16,
     uint32_t math_fidelity,
-    const FlatLayoutOptions& layout) {
+    const FlatLayoutOptions& layout,
+    const std::optional<ttnn::Tensor>& output_tensor) {
     using namespace tt::tt_metal;
     TT_FATAL(!(y_bf16 && y_row_major), "flat_routed_expert: y_bf16 is for tiled y (row-major y is bf16 already)");
     FlatRoutedExpertConfig cfg{
@@ -134,13 +135,18 @@ ttnn::Tensor flat_routed_expert(
     TT_FATAL(
         plan->rdown == reader_down_weights.has_value(),
         "flat_routed_expert: reader_down_weights iff the plan has reader tails");
-    const ttnn::Tensor output = ttnn::empty(
-        ttnn::Shape(
-            {token_index ? token_index->logical_shape()[-1] : x.logical_shape()[-2] / x_pages_per_row, cfg.hidden}),
-        y_row_major || y_bf16 ? DataType::BFLOAT16 : DataType::BFLOAT8_B,
-        y_row_major ? Layout::ROW_MAJOR : Layout::TILE,
-        device,
-        MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM});
+    // (output: a caller's tensor, e.g. a persistent buffer another program reads at a fixed address; validated)
+    const ttnn::Tensor output =
+        output_tensor
+            ? *output_tensor
+            : ttnn::empty(
+                  ttnn::Shape(
+                      {token_index ? token_index->logical_shape()[-1] : x.logical_shape()[-2] / x_pages_per_row,
+                       cfg.hidden}),
+                  y_row_major || y_bf16 ? DataType::BFLOAT16 : DataType::BFLOAT8_B,
+                  y_row_major ? Layout::ROW_MAJOR : Layout::TILE,
+                  device,
+                  MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM});
     // per-launch scratch: the arena (every role's buffers) and the relays' freed words; freed right after the launch
     // (the device reads them in order), so they never pin L1 against the next op's circular buffers
     const auto& [arena_spec, words_spec] = scratch_specs(*plan);  // plans live in the (never freed) plan cache

@@ -270,7 +270,7 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
     const auto phys = [device](const Core& c) { return device->worker_core_from_logical_core(c); };
 
     // subgrids: 2 for It <= 16 (TP4-like), 3 for It <= 32 (TP2-like), else 1
-    p.nsg = p.It <= 16 ? 2 : (p.It <= 32 ? 3 : 1);
+    p.nsg = lo.single_subgrid ? 1 : (p.It <= 16 ? 2 : (p.It <= 32 ? 3 : 1));
     p.n_rd_sg = p.nsg > 1 ? (p.nsg == 2 ? 8 : 4) : 16;
     // layout rows [row0, row1] (probe): plan on grid rows [y0, y1] only, leaving the rest of the chip to another op
     // (e.g. combine_fabric2d's senders / untilizers on rows 0-1, next to the eth cores). One subgrid only. A grid of
