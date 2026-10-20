@@ -465,19 +465,25 @@ inline void _topk_strip_rank_tags_(std::uint32_t dst_tile_index)
     set_dst_write_addr(0);
 }
 
+template <std::uint32_t N, std::uint32_t I = 0>
+[[gnu::always_inline]] inline void topk_finalize_vectors()
+{
+    if constexpr (I < N)
+    {
+        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 2 * I);
+        TTI_SFPSTORE(p_sfpu::LREG0, TOPK_SFPSTORE_MODE_PACK_UINT16, ADDR_MOD_7, 2 * I);
+        topk_finalize_vectors<N, I + 1>();
+    }
+}
+
 // uint16 index tile in 32-bit DEST: rotate the [0|idx] integer into the high half the packer reads.
 inline void _topk_finalize_hi16_index_tile_(std::uint32_t dst_tile_index)
 {
     // The SFPENCC, SETC16 and SETRWC before the first SFPLOAD are the three instructions an FPU write to Dst needs.
     TOPK_SFPENCC_ALL_LANES_ON();
-    set_dst_write_addr(0);
+    set_dst_write_addr(dst_tile_index * 64);
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
-    const std::uint32_t base = dst_tile_index * 64;
-    for (std::uint32_t off = base; off < base + 64; off += 2)
-    {
-        TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, off);
-        TT_SFPSTORE(p_sfpu::LREG0, TOPK_SFPSTORE_MODE_PACK_UINT16, ADDR_MOD_7, off);
-    }
+    topk_finalize_vectors<32>(); // straight-line: per-instruction issue from a loop starves the SFPU
     set_dst_write_addr(0);
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
 }
@@ -1188,22 +1194,35 @@ inline void bitonic_topk_ph3_group_first_swaps(const bool dir, bool &init_replay
 // fused packed keys never take the comparator-stable path (their bf16 slab is widened into
 // 32-bit DEST by the same SrcA datacopy, which canonicalizes +-0 before the fuse -- silicon-probed).
 // Predicate: (x & 0x7FFFFFFF) == 0 (zero magnitude); action: x &= 0x7FFFFFFF (-> +0.0).
+template <std::uint32_t N, std::uint32_t I = 0>
+[[gnu::always_inline]] inline void topk_negzero_vectors()
+{
+    if constexpr (I < N)
+    {
+        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 2 * I);
+        TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);
+        TTI_SFPAND(0, p_sfpu::LREG12, p_sfpu::LREG1, 0);
+        TTI_SFPSETCC(0, p_sfpu::LREG1, 0, sfpi::SFPSETCC_MOD1_LREG_EQ0);
+        TTI_SFPAND(0, p_sfpu::LREG12, p_sfpu::LREG0, 0);
+        TOPK_SFPENCC_ALL_LANES_ON();
+        TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 2 * I);
+        topk_negzero_vectors<N, I + 1>();
+    }
+}
+
 inline void _topk_canonicalize_negzero_value_tiles_()
 {
     TOPK_SFPENCC_ALL_LANES_ON();
     sfpi::vConstIntPrgm0 = 0x7FFFFFFF;
     set_dst_write_addr(0);
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
-    for (std::uint32_t off = 0; off < 128; off += 2)
+    // Four vectors and one INCRWC a replay; the RISC only issues the replays.
+    load_replay_buf<Exec>(0, 29, [] { topk_negzero_vectors<4>(); TTI_INCRWC(0, 8, 0, 0); });
+    for (std::uint32_t i = 1; i < 16; i++)
     {
-        TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, off);
-        TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);
-        TTI_SFPAND(0, p_sfpu::LREG12, p_sfpu::LREG1, 0);
-        TTI_SFPSETCC(0, p_sfpu::LREG1, 0, sfpi::SFPSETCC_MOD1_LREG_EQ0);
-        TTI_SFPAND(0, p_sfpu::LREG12, p_sfpu::LREG0, 0);
-        TOPK_SFPENCC_ALL_LANES_ON();
-        TT_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, off);
+        lltt::replay(0, 29);
     }
+    topk_replay_init = 0;
     set_dst_write_addr(0);
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
 }
