@@ -263,6 +263,24 @@ class TopKRouter:
             )
             ttnn.deallocate(router_logits)
             return expert_indices, expert_weights
+        if (
+            batch_size == 1
+            and 32 < actual_tokens <= 128
+            and actual_tokens % ttnn.TILE_SIZE == 0
+            and self.num_experts == ttnn.TILE_SIZE
+            and ttnn.device.is_blackhole(hidden_states.device())
+        ):
+            # Batch-1 prefill of up to 128 tokens: the same full-K program as the batched path above, bit-identical to
+            # the default linear (one K block summed in dest) and reading the K tiles in one block instead of one by
+            # one (measured 77.5 -> 12.3 us at 128 tokens). Not at 256 rows: there the default linear sums K in more
+            # than one block and the logits differ.
+            x4 = ttnn.reshape(hidden_states, (1, 1, actual_tokens, self.hidden_dim))
+            router_logits = ttnn.reshape(self._batched_router_linear(x4), (actual_tokens, self.num_experts))
+            expert_indices, expert_weights = topk_router(
+                router_logits, self.top_k, use_throughput_experts, self.softmax_compute_config
+            )
+            ttnn.deallocate(router_logits)
+            return expert_indices, expert_weights
         hidden_states = ttnn.reshape(hidden_states, (-1, self.hidden_dim))
 
         # Fused op only supports decode mode (B=32, seq_len=1 → shape [32, hidden_dim])

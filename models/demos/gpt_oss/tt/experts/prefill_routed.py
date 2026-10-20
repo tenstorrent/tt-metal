@@ -83,21 +83,14 @@ ROUTED_PREFILL_SEQ_MULTIPLE = 64
 # on separate cores into their own copy of the buffer, then a max over the copies merges them.
 ROUTED_SCATTER_SPLIT_MIN_C = 1024
 ROUTED_SCATTER_GROUPS = 32
-# The combine gather writes k rows per token ([Cs, k, H] bf16) that post_combine_reduce reads straight back. It runs on
-# token blocks of at most this many tokens so that intermediate (71 MB at 3072) and the reduced block live in L1 instead
-# of a DRAM round trip; at C = 8192 this measured 2.39 -> 1.91 ms per layer for gather + reduce + bf8 cast (one device,
-# 2048-token blocks). 3072 vs 2048 measured b32 TTFT 512 -1.2%, 1K -0.5%, 2K -0.7% (fewer blocks per 16K chunk);
-# 3584 is slower and 4096 overflows L1 (static circular buffers clash with the L1 buffers).
+# The combine reduces token blocks of at most this many tokens, so that the reduced [Cs, H] bf16 block (17 MiB at 3072)
+# lives in L1 and only its bf8 cast goes to DRAM. (Sized when the combine still gathered a [Cs, k, H] copy into L1:
+# 3072 vs 2048 measured b32 TTFT 512 -1.2%, 1K -0.5%, 2K -0.7%.)
 ROUTED_COMBINE_BLOCK = 3072
 # Largest chunk-size-dependent transient this module places in L1 (per device, interleaved). Above it the tensor goes
-# to DRAM, so a larger GPT_OSS_ROUTED_PREFILL_CHUNK still runs instead of overflowing L1 (the dispatch-gather input
-# x_rm has its own cap, ROUTED_XRM_L1_CAP_BYTES); the combine block is bounded by ROUTED_COMBINE_BLOCK (3072 tokens:
-# [Cs, k, H] bf16 = 67.5 MiB, the reduced block 17 MiB), which is also under it.
+# to DRAM, so a larger GPT_OSS_ROUTED_PREFILL_CHUNK still runs instead of overflowing L1; the reduced combine block is
+# bounded by ROUTED_COMBINE_BLOCK (3072 tokens: 17 MiB), which is under it.
 ROUTED_L1_CAP_BYTES = 72 << 20
-# Cap for the dispatch-gather input x_rm alone (C*H*2 bytes): it is the only large transient live in L1 while it
-# exists (tok_of_row is small; the gather output goes to DRAM), so the default 16384 chunk (90 MiB) fits. Measured on
-# one BH device at C = 16384: untilize + dispatch gather 1.86 ms (x_rm in DRAM) -> 1.52 ms (L1), bit-identical.
-ROUTED_XRM_L1_CAP_BYTES = 96 << 20
 # Version of the cached routed-expert weights; the weight-cache completion marker records it (model_config.py).
 ROUTED_PREFILL_WEIGHTS_VERSION = 1
 ROUTED_CACHE_SUBDIR = "experts_routed_ep"
@@ -747,28 +740,6 @@ class RoutedPrefillExperts:
             # Token ids < 2^24 are exact in fp32; group g holds pairs [g*k*C/G, (g+1)*k*C/G) of the slot-major order.
             consts["pair_token_g"] = ttnn.from_torch(pair_token.reshape(G, k * C // G).to(torch.float32), **fp32_rm)
             consts["row_init_g"] = ttnn.from_torch(torch.zeros(G, rows, dtype=torch.float32), **fp32_rm)
-        # The expert op writes a fresh bf8 buffer when fed the row-major dispatch (_chunk) and leaves rows outside the
-        # occupied expert regions uninitialized. The spare tile is the one such region the combine reads (non-local
-        # pairs, weighted 0 for a token with no local expert), so it is zeroed with one tile-row insert: zeros at
-        # start[idx[0]] = spare, ceil_tile(counts[idx[0]]) = 32 rows. 16-wide uint32 rows keep the pages 64 B aligned.
-        u32_row = dict(
-            device=self.mesh_device,
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-        )
-        consts["spare_start"] = ttnn.from_torch(torch.full((1, 16), spare, dtype=torch.int32), **u32_row)
-        consts["spare_count"] = ttnn.from_torch(torch.full((1, 16), ttnn.TILE_SIZE, dtype=torch.int32), **u32_row)
-        consts["spare_idx"] = ttnn.from_torch(torch.zeros((1, 16), dtype=torch.int32), **u32_row)
-        consts["spare_zeros"] = ttnn.from_torch(
-            torch.zeros((ttnn.TILE_SIZE, self.hidden_size)),
-            device=self.mesh_device,
-            dtype=ttnn.bfloat8_b,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-        )
         # Region start of the non-local experts: the spare tile, [1, E] fp32 per device ((1 - local) * spare).
         nonlocal_f32 = ttnn.rsub(self.local_mask_f32, 1.0)
         consts["nonlocal_spare"] = ttnn.mul(nonlocal_f32, float(spare))
@@ -888,19 +859,6 @@ class RoutedPrefillExperts:
         ttnn.deallocate(pos)
         return pos_tm, pos_sm
 
-    def _combine_block(self, k):
-        """Tokens per combine block: ROUTED_COMBINE_BLOCK, or with L1 held by a caller (l1_held) the largest of
-        2048 / 1024 / 512 whose [Cs, k, H] bf16 gather output fits the L1 left (the block's circular buffers and its
-        L1 gather output must not meet the held buffers)."""
-        if not self.l1_held:
-            return ROUTED_COMBINE_BLOCK
-        # 3584-token blocks still fit without held L1 (4096 overflows, see ROUTED_COMBINE_BLOCK)
-        room = 3584 * k * self.hidden_size * 2 - self.l1_held
-        for cs in (ROUTED_COMBINE_BLOCK, 2048, 1024, 512):
-            if cs * k * self.hidden_size * 2 <= room:
-                return cs
-        return 512
-
     def _chunk(self, x, indices, weights, out=None, out_start=0):
         """Partial MoE output of this device's experts for one chunk.
 
@@ -921,16 +879,15 @@ class RoutedPrefillExperts:
         w_rm = ttnn.to_layout(weights, ttnn.ROW_MAJOR_LAYOUT)
         if w_rm.dtype != ttnn.bfloat16:
             w_rm = ttnn.typecast(w_rm, ttnn.bfloat16)
-        w_5d = ttnn.reshape(w_rm, (1, 1, C, k, 1))
 
         # Buffer row of every (token, slot) pair: its expert's region start + its rank among that expert's pairs
         # (token order); pairs whose expert is on another device point at the spare tile past all regions.
         consts = self._chunk_constants(C)
         pos_tm, pos_sm = self._pair_positions(indices, region_offsets, consts)  # [C, k] and [1, k*C] uint32 RM
 
-        # Dispatch: buffer row -> source token (scatter of the pair's token index to its row), then gather the rows.
-        # Rows no pair writes (region padding, the spare tile) read token 0 (the split path: the spare row reads another
-        # valid token): finite and never consumed.
+        # Dispatch: buffer row -> source token (scatter of the pair's token index to its row); the expert op reads x
+        # through it. Rows no pair writes (region padding, the spare tile) read token 0 (the split path: the spare row
+        # reads another valid token): finite and never consumed.
         if consts["scatter_groups"] == 1:
             tok_of_row = ttnn.scatter(consts["row_init"], -1, pos_sm, consts["pair_token"])
             ttnn.deallocate(pos_sm)
@@ -951,26 +908,16 @@ class RoutedPrefillExperts:
             ttnn.deallocate(tok_max)
             tok_of_row = ttnn.to_layout(tok_u, ttnn.ROW_MAJOR_LAYOUT)
             ttnn.deallocate(tok_u)
-        # The row-major copy of x lives in L1 (47 MB at C = 8192) only for the gather: the untilize skips a DRAM write
-        # and the gather reads the local pairs' rows from L1 (measured 0.94 -> 0.77 ms per layer at 8K, one device).
-        # A chunk whose copy exceeds ROUTED_XRM_L1_CAP_BYTES (C > 17476) keeps it in DRAM.
-        x_rm_mem = (
-            ttnn.L1_MEMORY_CONFIG if C * H * 2 <= ROUTED_XRM_L1_CAP_BYTES - self.l1_held else ttnn.DRAM_MEMORY_CONFIG
-        )
-        x_rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, memory_config=x_rm_mem)
+        # The expert op reads each buffer row's x row through tok_of_row (x_row_index), straight from the token-ordered
+        # row-major x: no dispatch gather writes the [k*C + pad, H] buffer (k copies of every token, 3/4 of its rows
+        # never read). Measured at 8K: 230.7 -> 216.5 ms TTFT; x stays in DRAM (the op's contract) for the op.
+        x_rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         x_rm = ttnn.reshape(x_rm, (C, H))
-        # padding_idx=0: every row that reads token 0 (about 3/4 of the k*C buffer rows on each of the N devices are
-        # unwritten and read token 0) is served from a per-core L1 copy of x[0] instead of DRAM; same values.
-        # Row-major bf16 output: the expert op tilizes and packs its regions to bf8 itself, so the gather does no
-        # tilize and the k*C-row bf8 typecast is gone.
-        dispatched = ttnn.embedding(tok_of_row, x_rm, padding_idx=0, layout=ttnn.ROW_MAJOR_LAYOUT)
-        ttnn.deallocate(tok_of_row)
-        ttnn.deallocate(x_rm)
-        dispatched = ttnn.reshape(dispatched, (consts["rows"], H))
-
-        # Row-major bf16 buffer in, fresh TILE bf8 buffer out: the op computes every local expert on its region.
-        expert_out = ttnn.experimental.deepseek_prefill.unified_routed_expert_moe(
-            dispatched,
+        # Fresh ROW_MAJOR bf16 buffer out (output_row_major): the op untilizes its down-matmul output itself, so the
+        # combine reads rows with no untilize of the whole buffer. Rows outside the expert regions stay uninitialized
+        # except the spare row (zero_output_row), the row every non-local pair points at.
+        out_rm = ttnn.experimental.deepseek_prefill.unified_routed_expert_moe(
+            x_rm,
             region_offsets,
             counts,
             self.global_expert_idx_table,
@@ -983,65 +930,46 @@ class RoutedPrefillExperts:
             up_biases=self.up_biases,
             down_biases=self.down_biases,
             l1_end=self.l1_end,
-        )
-        ttnn.deallocate(dispatched)
+            x_row_index=tok_of_row,
+            output_row_major=True,
+            zero_output_row=consts["spare"],
+        )  # [rows, H] bf16 ROW_MAJOR
+        ttnn.deallocate(x_rm)
+        ttnn.deallocate(tok_of_row)
         ttnn.deallocate(counts)
         ttnn.deallocate(region_offsets)
-        expert_out = ttnn.experimental.deepseek_prefill.insert(
-            expert_out,
-            consts["spare_zeros"],
-            consts["spare_start"],
-            consts["spare_count"],
-            consts["spare_idx"],
-            local_expert_id=0,
-        )
-
-        # Combine: gather each pair's expert output row back to [Cs, k, H]; post_combine_reduce weights the slots and
-        # skips the non-local ones (dispatch table -1), so the spare-tile rows they point at never contribute.
-        out_rm = ttnn.to_layout(expert_out, ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16)
-        if out_rm is not expert_out:
-            ttnn.deallocate(expert_out)
-        # One token block (ROUTED_COMBINE_BLOCK) at a time: the [Cs, k, H] gather output and the reduced [Cs, H] block
-        # stay in L1 (interleaved), so only the bf8 block is written to DRAM. Bit-identical to one DRAM-resident pass.
-        Cs = min(C, self._combine_block(k))
-        # Bounded by the combine block, not by C; the cap only guards a larger block constant.
-        combined_mem = _l1_if_fits(Cs * k * H * 2, self.l1_held)
+        # Combine, one token block (ROUTED_COMBINE_BLOCK) at a time: post_combine_reduce reads slot j of token t straight
+        # from out_rm row pos[t, j] (no [Cs, k, H] gather copy), weights it and skips the non-local slots (dispatch
+        # table -1; the spare row they point at is never read). The reduced [Cs, H] block stays in L1, so only its bf8
+        # cast is written to DRAM.
+        Cs = min(C, ROUTED_COMBINE_BLOCK)
         part_mem = _l1_if_fits(Cs * H * 2, self.l1_held)
         pieces = []
         for s in range(0, C, Cs):
             e = min(s + Cs, C)
             if s == 0 and e == C:
-                block = [(pos_tm, False), (w_5d, False), (idx_rm, False)]
+                block = [(pos_tm, False), (w_rm, False), (idx_rm, False)]
             else:
                 # Zero-copy row views where the block starts on DRAM bank 0 (every block start at the default size).
-                block = [_row_view(pos_tm, 0, s, e - s), _row_view(w_5d, 2, s, e - s), _row_view(idx_rm, 1, s, e - s)]
+                block = [_row_view(pos_tm, 0, s, e - s), _row_view(w_rm, 0, s, e - s), _row_view(idx_rm, 1, s, e - s)]
             (pos_s, _), (w_s, _), (idx_s, _) = block
-            # padding_idx=spare: the non-local pairs (about (N-1)/N of them) all point at the spare row and are served
-            # from a per-core L1 copy of it instead of DRAM; same values, and post_combine_reduce skips them anyway.
-            combined = ttnn.embedding(
-                pos_s,
-                out_rm,
-                padding_idx=consts["spare"],
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                memory_config=combined_mem,
-            )  # [Cs, k, H]
-            combined = ttnn.reshape(combined, (1, 1, e - s, k, H))
             part = ttnn.experimental.deepseek_prefill.post_combine_reduce(
-                combined,
+                out_rm,
                 w_s,
                 idx_s,
                 self.dispatch_table,
-                expert_dim=3,
+                expert_dim=1,
                 output_memory_config=part_mem,
-            )
-            ttnn.deallocate(combined)
+                combine_row_index=pos_s,
+                skip_row=consts["spare"],
+            )  # [Cs, H]
+            part = ttnn.reshape(part, (1, 1, e - s, H))
             for t, owned in block:
                 if owned:
                     ttnn.deallocate(t)
             if out is not None:
                 # Cast straight into this block's rows of the preallocated output (a narrow view): no concat.
-                dst = ttnn.narrow(out, 2, out_start + s, e - s)
-                ttnn.typecast(part, ttnn.bfloat8_b, output_tensor=dst)
+                ttnn.typecast(part, ttnn.bfloat8_b, output_tensor=ttnn.narrow(out, 2, out_start + s, e - s))
             else:
                 pieces.append(ttnn.typecast(part, ttnn.bfloat8_b, memory_config=ttnn.DRAM_MEMORY_CONFIG))
             ttnn.deallocate(part)
@@ -1071,7 +999,7 @@ class RoutedPrefillExperts:
         if len(x.shape) != 4:
             x = ttnn.reshape(x, (1, 1, seq_len, self.hidden_size))
         C = min(self.chunk_size, seq_len)
-        Cs = min(C, self._combine_block(self.top_k))
+        Cs = min(C, ROUTED_COMBINE_BLOCK)
         # More than one combine block: cast every block into its rows of one preallocated output (narrow views)
         # instead of concatenating the blocks afterwards (a full read + write of the [S, H] bf8 output), when every
         # block start is a view start.
