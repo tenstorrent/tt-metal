@@ -87,14 +87,7 @@ class MeshPlan:
             x.deallocate(True)
             return ttnn.reshape(out, (1, 1, users * padded, out.shape[-1]))
         if mode is not None and mode[0] == "ordered":
-            gathered = ttnn.all_gather(
-                x,
-                dim=0,
-                cluster_axis=self.tp_axis,
-                num_links=self.num_links,
-                topology=self.topology,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
+            gathered = ttnn.all_gather(x, dim=0, cluster_axis=self.tp_axis, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             x.deallocate(True)
             out = ttnn.sum(
                 gathered,
@@ -118,13 +111,10 @@ class MeshPlan:
     def all_gather(self, x, dim, memory_config=None):
         if self.tp == 1:
             return x
+        # ttnn.all_gather picks its links and topology itself; passing num_links / topology only logs a deprecation
+        # warning on every call (thousands of lines per serving run).
         return ttnn.all_gather(
-            x,
-            dim=dim,
-            cluster_axis=self.tp_axis,
-            num_links=self.num_links,
-            topology=self.topology,
-            memory_config=memory_config or ttnn.DRAM_MEMORY_CONFIG,
+            x, dim=dim, cluster_axis=self.tp_axis, memory_config=memory_config or ttnn.DRAM_MEMORY_CONFIG
         )
 
     def to_torch_tp_concat(self, x, dim):
