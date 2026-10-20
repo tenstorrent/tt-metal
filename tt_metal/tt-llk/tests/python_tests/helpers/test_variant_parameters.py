@@ -322,6 +322,35 @@ class SFPU_UNARY_SCALAR(TemplateParameter):
 
 
 @dataclass
+class SFPU_UNARY_SCALAR_AT_RUNTIME(TemplateParameter):
+    """Read the scalar from the runtime parameters (:class:`SFPU_UNARY_SCALAR_RUNTIME`) instead
+    of the constexpr ``SFPU_UNARY_SCALAR``, so whatever the kernel decides from the scalar's
+    value is decided on the RISC at run time rather than folded per variant. Honoured by
+    ``sfpu_comp_unary_threshold_test.cpp``; other harnesses ignore it.
+    """
+
+    def convert_to_cpp(self) -> str:
+        return "#define SFPU_UNARY_SCALAR_AT_RUNTIME"
+
+
+@dataclass
+class SFPU_UNARY_SCALAR_RUNTIME(RuntimeParameter):
+    """The :class:`SFPU_UNARY_SCALAR` fp32 bit pattern as a runtime parameter, read as
+    ``params.SFPU_UNARY_SCALAR`` by a driver that sets :class:`SFPU_UNARY_SCALAR_AT_RUNTIME`.
+    Variants that differ only in it share one ELF. --speed-of-light emits it as the constexpr
+    ``SFPU_UNARY_SCALAR`` and the driver folds it like the template form.
+    """
+
+    unary_scalar_runtime_bits: int = 0x40000000  # 2.0f
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr std::uint32_t SFPU_UNARY_SCALAR = {self.unary_scalar_runtime_bits}u;"
+
+    def convert_to_struct_fields(self) -> tuple[str, str]:
+        return "std::uint32_t SFPU_UNARY_SCALAR;", "I"
+
+
+@dataclass
 class SFPU_UNARY_THRESHOLD(TemplateParameter):
     """Threshold operand for a unary op that clamps against a scalar, as raw fp32 bits.
 

@@ -6,7 +6,10 @@
 //
 // Drives the uint32 entry point _calculate_comp_unary_<APPROX, unary_*>(value) over one tile. Like the other
 // float-scalar kernels (metal calculate_unary_*, tt-llk relu/threshold), `value` carries the fp32 bit pattern
-// of the threshold (SFPU_UNARY_SCALAR), e.g. 0x3F000000 for 0.5f.
+// of the threshold (SFPU_UNARY_SCALAR), e.g. 0x3F000000 for 0.5f. With SFPU_UNARY_SCALAR_AT_RUNTIME the
+// threshold is read from the runtime parameters instead, so nothing the kernel decides from the threshold's
+// value can fold at compile time: the same ELF serves every threshold, as it does for a caller that passes a
+// runtime scalar.
 
 #include <cstdint>
 
@@ -74,9 +77,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
         DST_INDEX, formats.math, formats.math);
     _llk_math_eltwise_unary_datacopy_uninit_<BroadcastType::NONE, unpack_to_dest>();
 
+#if defined(SFPU_UNARY_SCALAR_AT_RUNTIME) && !defined(SPEED_OF_LIGHT)
+    const std::uint32_t threshold = params.SFPU_UNARY_SCALAR;
+#else
+    constexpr std::uint32_t threshold = SFPU_UNARY_SCALAR;
+#endif
+
     // ITERATIONS=8 per face at VectorMode::RC covers the whole tile.
     _llk_math_eltwise_unary_sfpu_params_(
-        [] { ckernel::sfpu::_calculate_comp_unary_<APPROX_MODE, SFPU_UNARY_OPERATION, 8 /* ITERATIONS */>(SFPU_UNARY_SCALAR); }, DST_INDEX, VECTOR_MODE);
+        [](std::uint32_t value) { ckernel::sfpu::_calculate_comp_unary_<APPROX_MODE, SFPU_UNARY_OPERATION, 8 /* ITERATIONS */>(value); },
+        DST_INDEX,
+        VECTOR_MODE,
+        threshold);
 
     _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
 }
