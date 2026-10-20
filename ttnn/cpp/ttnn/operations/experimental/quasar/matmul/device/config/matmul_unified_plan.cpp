@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <optional>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -413,7 +414,6 @@ std::optional<MatmulUnifiedPlan> plan_unified_matmul(
                                          : config.C_slice_N_tiles.has_value() ? *config.C_slice_N_tiles
                                                                               : tt::div_up(base.N_tiles, core_columns);
 
-    // Largest area first, then wider (no two candidates tie on both).
     std::vector<std::pair<uint32_t, uint32_t>> C_slice_shapes;
     for (uint32_t h = max_C_slice_M_tiles; h >= 1; --h) {
         for (uint32_t w = max_C_slice_N_tiles; w >= 1; --w) {
@@ -424,20 +424,23 @@ std::optional<MatmulUnifiedPlan> plan_unified_matmul(
             }
         }
     }
-    std::sort(C_slice_shapes.begin(), C_slice_shapes.end(), [](const auto& a, const auto& b) {
-        const uint64_t area_a = (uint64_t)a.first * a.second;
-        const uint64_t area_b = (uint64_t)b.first * b.second;
-        return area_a != area_b ? area_a > area_b : a.second > b.second;
-    });
-    // ---- 5. Search: each C slice's subblock, then its K chunk ----
-    // The first C slice that fits wins, except one that fits only with K_chunk_tiles == 1 yields to a smaller C slice
-    // with a longer K chunk and more work per L1 fill (C slice tiles x K chunk); the largest C slice is never shrunk if
-    // it fits (#57884).
+    // ---- 5. Search: each C slice's subblock, then its K chunk, then the best C slice ----
+    // Of the C slices that fit L1, the best is, in priority order (#57884):
+    //   1. the largest, the whole of each core's block of C (one C slice per core: multicast, shards used in place, no
+    //      per-C-slice overhead);
+    //   2. one with a K chunk of at least two tiles (with one, every tile product spills and reloads the partial sums);
+    //   3. the one with the most tiles (each A and B tile read is reused across more of them), then the wider.
     const uint32_t K_chunk_floor = config.K_chunk_tiles.value_or(1);  // the shortest K chunk tried
     const uint32_t min_K_chunks = is_quasar ? QUASAR_NUM_READER_THREADS : MIN_OPERAND_BUFFER_DEPTH;
+    const auto priority = [&](const MatmulUnifiedPlan& plan) {
+        return std::tuple(
+            plan.C_slice_M_tiles == max_C_slice_M_tiles && plan.C_slice_N_tiles == max_C_slice_N_tiles,
+            plan.K_chunk_tiles >= 2,
+            (uint64_t)plan.C_slice_M_tiles * plan.C_slice_N_tiles,
+            plan.C_slice_N_tiles);
+    };
     std::optional<MatmulUnifiedPlan> best;
-    uint64_t best_work = 0;
-    MatmulUnifiedPlan candidate;  // after the loop, the last plan tried: the L1 error reports it
+    MatmulUnifiedPlan candidate;  // after the loop, the last and smallest C slice tried: the L1 error reports it
     for (const std::pair<uint32_t, uint32_t>& C_slice_shape : C_slice_shapes) {
         const uint32_t C_slice_M_tiles = C_slice_shape.first;
         const uint32_t C_slice_N_tiles = C_slice_shape.second;
@@ -521,18 +524,8 @@ std::optional<MatmulUnifiedPlan> plan_unified_matmul(
             }
         }
 
-        // Keep the C slice with the most work per L1 fill.
-        if (!dfbs_fit(candidate, l1_budget)) {
-            continue;
-        }
-        const uint64_t work = (uint64_t)C_slice_M_tiles * C_slice_N_tiles * candidate.K_chunk_tiles;
-        if (work > best_work) {
+        if (dfbs_fit(candidate, l1_budget) && (!best.has_value() || priority(candidate) > priority(*best))) {
             best = candidate;
-            best_work = work;
-        }
-        const bool is_largest = C_slice_M_tiles == max_C_slice_M_tiles && C_slice_N_tiles == max_C_slice_N_tiles;
-        if (best->K_chunk_tiles > 1 || is_largest) {
-            break;
         }
     }
     if (!best.has_value()) {
