@@ -21,7 +21,6 @@ constexpr auto kDataFormatReconfig = ckl::DataFormatReconfig::Enabled;
 constexpr auto kDataFormatReconfig = ckl::DataFormatReconfig::Disabled;
 #endif
 
-// Adds a tile into a Float32 running sum unpacked to Dest; with reduce_each_tile the tile is reduced first.
 template <bool reduce_each_tile, uint32_t DfbIn, uint32_t DfbAcc>
 ALWI void accumulate_tile(DataflowBuffer& dfb_in, DataflowBuffer& dfb_acc, uint32_t iteration) {
     dfb_in.wait_front(1);
@@ -197,7 +196,6 @@ void kernel_main() {
             dfb_dycopy_obj.pop_front(onetile);
         }  // inner_idx loop
 
-        // dgamma = Sum[y * dy], dbeta = Sum[dy]: already reduced when reduce_each_tile.
 #ifdef GAMMA_GRAD_HAS_VALUE
         copy_tile_to_dfb<dfb::ydyadd, dfb::dgamma>(dfb_ydyadd_obj, dfb_dgamma_obj);
 #endif  // GAMMA_GRAD_HAS_VALUE

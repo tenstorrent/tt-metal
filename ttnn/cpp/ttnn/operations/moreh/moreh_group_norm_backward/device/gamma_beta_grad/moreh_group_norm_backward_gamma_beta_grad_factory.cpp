@@ -158,24 +158,23 @@ MorehGroupNormBackwardGammaBetaGradOperation::MorehGroupNormBackwardGammaBetaGra
             .data_format_metadata = fmt,
         });
     };
-    // Float32 running sums for dgamma / dbeta: a bfloat16 sum stops growing after a few hundred tiles.
     const auto accum_format = tt::DataFormat::Float32;
 
-    add_dfb(DY, in0_t, data_format);        // output_grad(==dy)
-    add_dfb(X, in1_t, data_format);         // input(==x)
-    add_dfb(MEAN, in2_t, data_format);      // mean
-    add_dfb(RSTD, in3_t, data_format);      // rstd
-    add_dfb(SCALER, in4_t, data_format);    // one
-    add_dfb(MASK_H, in5_t, data_format);    // mask_h
-    add_dfb(MASK_W, in6_t, data_format);    // mask_w
-    add_dfb(DGAMMA, out0_t, data_format);   // gamma_grad(==dgamma)
-    add_dfb(DBETA, out1_t, data_format);    // beta_grad(==dbeta)
-    add_dfb(Y, im0_t, data_format);         // output(==y)
-    add_dfb(YDY, im1_t, data_format);       // y * dy
-    add_dfb(DYADD, im2_t, accum_format);    // Add[dy]
-    add_dfb(YDYADD, im3_t, accum_format);   // Add[y * dy]
-    add_dfb(XMM, im4_t, data_format);       // x - mean
-    add_dfb(DYCOPY, im5_t, data_format);    // dycopy
+    add_dfb(DY, in0_t, data_format);
+    add_dfb(X, in1_t, data_format);
+    add_dfb(MEAN, in2_t, data_format);
+    add_dfb(RSTD, in3_t, data_format);
+    add_dfb(SCALER, in4_t, data_format);
+    add_dfb(MASK_H, in5_t, data_format);
+    add_dfb(MASK_W, in6_t, data_format);
+    add_dfb(DGAMMA, out0_t, data_format);
+    add_dfb(DBETA, out1_t, data_format);
+    add_dfb(Y, im0_t, data_format);
+    add_dfb(YDY, im1_t, data_format);
+    add_dfb(DYADD, im2_t, accum_format);
+    add_dfb(YDYADD, im3_t, accum_format);
+    add_dfb(XMM, im4_t, data_format);
+    add_dfb(DYCOPY, im5_t, data_format);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      DataMovementKernel SetUp
@@ -196,7 +195,6 @@ MorehGroupNormBackwardGammaBetaGradOperation::MorehGroupNormBackwardGammaBetaGra
     KernelSpec::CompilerOptions::Defines compute_defines{
         {"REDUCE_OP", "PoolType::SUM"},
         {"REDUCE_DIM", "ReduceDim::REDUCE_SCALAR"},
-        // Dest is 32-bit (see compute_hw below).
         {"FP32_DEST_ACC_EN", "1"},
     };
     if (gamma_grad_has_value) {
@@ -334,7 +332,7 @@ MorehGroupNormBackwardGammaBetaGradOperation::MorehGroupNormBackwardGammaBetaGra
     // The descriptor factory set an all-default ComputeConfigDescriptor{}, so the hardware config is
     // built directly and left at its own defaults. Routing this through the TTNN ComputeKernelConfig helper
     // would silently flip every field, because that helper's defaults favor performance while the
-    // Metal struct's favor precision; only Dest is made 32-bit, for the Float32 running sums.
+    // Metal struct's favor precision.
     ComputeHardwareConfig compute_hw{};
     compute_hw.enable_32_bit_dest = true;
     for (const auto& dfb : dfbs) {

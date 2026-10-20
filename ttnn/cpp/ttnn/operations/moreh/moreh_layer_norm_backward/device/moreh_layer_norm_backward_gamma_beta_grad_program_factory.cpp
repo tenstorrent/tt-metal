@@ -147,7 +147,6 @@ MorehLayerNormBackwardGammaBetaGradOperation::MorehLayerNormBackwardGammaBetaGra
 
     const auto data_format = tt::tt_metal::datatype_to_dataformat_converter(output_grad.dtype());
     auto intermed_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format;
-    // Float32 running sums for dgamma / dbeta: a bfloat16 sum stops growing after a few hundred rows.
     const auto accum_format = tt::DataFormat::Float32;
 
     Group<DataflowBufferSpec> dfbs;
@@ -191,7 +190,6 @@ MorehLayerNormBackwardGammaBetaGradOperation::MorehLayerNormBackwardGammaBetaGra
     KernelSpec::CompilerOptions::Defines compute_defines{
         {"REDUCE_OP", "PoolType::SUM"},
         {"REDUCE_DIM", "ReduceDim::REDUCE_COL"},
-        // Dest is always 32-bit here (see compute_hw below).
         {"FP32_DEST_ACC_EN", "1"},
     };
     if (fp32_dest_acc_en) {
@@ -323,7 +321,6 @@ MorehLayerNormBackwardGammaBetaGradOperation::MorehLayerNormBackwardGammaBetaGra
     }
 
     auto compute_hw = ttnn::to_compute_hardware_config(compute_kernel_config);
-    // The Float32 running sums are unpacked straight to Dest, other Float32 buffers into SrcA/B as before.
     compute_hw.enable_32_bit_dest = true;
     auto& modes = compute_hw.unpack_modes;
     for (const auto& dfb : dfbs) {

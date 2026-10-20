@@ -932,7 +932,6 @@ def test_moreh_layer_norm_backward_large_algorithm(
 def test_moreh_layer_norm_backward_gamma_beta_grad_long_sum(
     input_shape_normalized_dims, compute_kernel_options, device
 ):
-    # Unit dy and columns of -1 / +1 (y = x): dgamma / dbeta are exact sums of 98304 / 3072 same-sign terms.
     input_shape, normalized_dims = input_shape_normalized_dims
     normalized_shape = input_shape[-normalized_dims:]
 

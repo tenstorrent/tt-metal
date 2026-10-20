@@ -689,7 +689,6 @@ def test_moreh_group_norm_backward_gamma_grad_group_index(N, C_num_groups, HW, d
 
 
 def test_moreh_group_norm_backward_gamma_beta_grad_long_sum(device):
-    # Unit dy and channels of -1 / +1 (y = x): dgamma / dbeta are exact sums of 6 * 256 * 256 same-sign terms.
     N, C, num_groups, H, W = 6, 4, 2, 256, 256
 
     cpu_input = torch.tensor([-1.0, 1.0]).repeat(C // 2).view(1, C, 1, 1).expand(N, C, H, W).contiguous()
