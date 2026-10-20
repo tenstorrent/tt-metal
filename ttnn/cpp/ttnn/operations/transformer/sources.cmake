@@ -40,12 +40,6 @@ set(TTNN_OP_TRANSFORMER_SRCS
     fused_recurrent_gated_delta_rule/device/fused_recurrent_gated_delta_rule_device_operation.cpp
     fused_recurrent_gated_delta_rule/device/fused_recurrent_gated_delta_rule_program_factory.cpp
     fused_recurrent_gated_delta_rule/fused_recurrent_gated_delta_rule.cpp
-    kda_decode/device/kda_decode_device_operation.cpp
-    kda_decode/device/kda_decode_program_factory.cpp
-    kda_decode/kda_decode.cpp
-    dsa_decode_state/device/dsa_decode_state_device_operation.cpp
-    dsa_decode_state/device/dsa_decode_state_program_factory.cpp
-    dsa_decode_state/dsa_decode_state.cpp
 )
 
 # Registered on the shared `ttnn` Python module target from
@@ -62,7 +56,5 @@ set(TTNN_OP_TRANSFORMER_NANOBIND_SRCS
     gated_delta_attn/gated_delta_attn_nanobind.cpp
     chunk_gated_delta_rule/chunk_gated_delta_rule_nanobind.cpp
     fused_recurrent_gated_delta_rule/fused_recurrent_gated_delta_rule_nanobind.cpp
-    kda_decode/kda_decode_nanobind.cpp
-    dsa_decode_state/dsa_decode_state_nanobind.cpp
     transformer_nanobind.cpp
 )

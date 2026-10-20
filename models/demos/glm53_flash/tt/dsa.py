@@ -45,13 +45,15 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.demos.glm53_flash.custom_ops.dsa_decode_state.op import DsaDecodeState
 from models.demos.glm53_flash.custom_ops.index_score_decode.op import IndexScoreDecode
+from models.demos.glm53_flash.custom_ops.kda_decode.op import selector_tiles
 from models.demos.glm53_flash.custom_ops.paged_pool_gather.op import PagedPoolGather
 from models.demos.glm53_flash.custom_ops.topk_rows.op import TopkRows
 from models.demos.glm53_flash.tt.config import GLM53FlashConfig
 from models.demos.glm53_flash.tt.indexer import TtDSAIndexer, TtIndexCache, height_shard_rows
 from models.demos.glm53_flash.tt.matmul_configs import DecodeLinear
-from models.demos.glm53_flash.tt.mesh import GLMMesh, selector_tiles, single_chip
+from models.demos.glm53_flash.tt.mesh import GLMMesh, single_chip
 
 TILE = 32
 CORES_PER_USER_DECODE = 4
@@ -550,6 +552,20 @@ class TtDSA(LightweightModule):
             ape[0, 0, : idx.P] = sd["indexer.index_kpool_compress_ape"].float().reshape(idx.P, idx.D)
             self.ape_block = up(ape, ttnn.float32)
             self.selectors = up(selector_tiles(), ttnn.bfloat16)
+            b = self.stem_bounds
+            self.state_op = DsaDecodeState(
+                q_lora_rank=Lq,
+                latent_dim=L,
+                index_dim=idx.D,
+                pool_size=idx.P,
+                pool_blocks=1,  # set from the cache at call time
+                qa_offset=b["qa"][0],
+                kva_offset=b["kva"][0],
+                k_offset=b["k"][0],
+                g_offset=b["g"][0],
+                eps_rms=cfg.rms_norm_eps,
+                eps_ln=1e-6,
+            )
             wqb = sd["q_b_proj.weight"].t().float().reshape(Lq, H, Dq)  # [Lq, H, Dq]
             w_qb1 = torch.einsum("lhd,hdm->lhm", wqb, wkb1.float()).reshape(Lq, H * L)  # [Lq, H*L]
             self.w_qb1 = up(w_qb1, weight_dtype, cols=-1)
@@ -939,7 +955,16 @@ class TtDSA(LightweightModule):
         idx = cache.index
         b = self.stem_bounds
         stem = self.lin_stem(x, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)  # [1,1,B,Ws]
-        q_resid = ttnn.transformer.dsa_decode_state(
+        if self.state_op.pool_blocks != idx.pool_blocks:
+            self.state_op.pool_blocks = idx.pool_blocks  # the pool cache geometry of this cache
+        q_resid = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([1, 1, B, self.cfg.q_lora_rank]),
+            ttnn.bfloat16,
+            ttnn.TILE_LAYOUT,
+            self.device,
+            ttnn.DRAM_MEMORY_CONFIG,
+        )  # the program's pre-allocated output
+        self.state_op(
             stem,
             cache.cache,
             cache.page_table,
@@ -953,17 +978,7 @@ class TtDSA(LightweightModule):
             self.knorm_b32,
             self.ape_block,
             self.selectors,
-            b["qa"][0],
-            b["kva"][0],
-            b["k"][0],
-            b["g"][0],
-            self.cfg.q_lora_rank,
-            L,
-            idx.D,
-            idx.P,
-            idx.pool_blocks,
-            eps_rms=self.cfg.rms_norm_eps,
-            eps_ln=1e-6,
+            q_resid,
         )  # [1,1,B,Lq]
         self._mark("stem+state")
         if DSA_FOLD in ("both", "q"):
