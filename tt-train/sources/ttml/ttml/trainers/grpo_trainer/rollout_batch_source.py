@@ -167,7 +167,7 @@ def build_rollout_batch_source(
     config: Any,
     *,
     sampler: Optional[RolloutSampler],
-    mesh_device: Any,
+    client: Any,
     prompts: List[List[int]],
     extra_columns: Dict[str, list],
     batch_prompts: int,
@@ -188,7 +188,5 @@ def build_rollout_batch_source(
     if config.backend.sync:
         from .remote_rollout.sync_remote_rollout_batch_source import SyncRemoteRolloutBatchSource
 
-        return SyncRemoteRolloutBatchSource(
-            mesh_device=mesh_device, weight_sync_every=config.weight_sync_every, **common
-        )
+        return SyncRemoteRolloutBatchSource(client=client, weight_sync_every=config.weight_sync_every, **common)
     raise ValueError(f"unsupported rollout_backend {config.rollout_backend!r}")

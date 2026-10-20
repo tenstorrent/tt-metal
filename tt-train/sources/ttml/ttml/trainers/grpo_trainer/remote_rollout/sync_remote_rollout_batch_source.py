@@ -18,7 +18,6 @@ from ..rollout_batch_source import (
     validate_rollout_batch,
 )
 from .mpi_rollout import MPIRolloutClient
-from .weight_bridge import TTT_RANK, HostWeightBridge
 
 
 class SyncRemoteRolloutBatchSource(RolloutBatchSource):
@@ -31,7 +30,7 @@ class SyncRemoteRolloutBatchSource(RolloutBatchSource):
     def __init__(
         self,
         *,
-        mesh_device: Any,
+        client: MPIRolloutClient,
         prompts: List[List[int]],
         extra_columns: Dict[str, list],
         batch_prompts: int,
@@ -50,9 +49,7 @@ class SyncRemoteRolloutBatchSource(RolloutBatchSource):
         self._max_completion_length = max_completion_length
         self._weight_sync_every = int(weight_sync_every)
         self._pushed_version: Optional[int] = None
-        self._closed = False
-        bridge = HostWeightBridge.init_sender(mesh=mesh_device, peer_rank=TTT_RANK)
-        self._client = MPIRolloutClient(peer_rank=TTT_RANK, bridge=bridge)
+        self._client = client
 
     def __iter__(self) -> Iterator[ScoredRolloutBatch]:
         n, g = self._batch_prompts, self._num_generations
@@ -97,6 +94,4 @@ class SyncRemoteRolloutBatchSource(RolloutBatchSource):
         self._pushed_version = step
 
     def close(self) -> None:
-        if not self._closed:
-            self._closed = True
-            self._client.shutdown()
+        self._client.shutdown()

@@ -4,7 +4,11 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+import contextlib
+import os
+import sys
+import traceback
+from typing import TYPE_CHECKING, Iterator
 
 import ttnn
 
@@ -35,3 +39,18 @@ def init_distributed_training(config: "GRPOConfig") -> None:
 
 def is_rollout_rank(config: "GRPOConfig") -> bool:
     return not config.backend.in_process and int(ttnn.distributed_context_get_rank()) == TTT_RANK
+
+
+@contextlib.contextmanager
+def exit_on_error() -> Iterator[None]:
+    """Print the traceback and ``os._exit(1)`` on any exception.
+
+    A Python exception exits through ``MPI_Finalize``, which waits for the peer rank; ``os._exit`` ends the job.
+    """
+    try:
+        yield
+    except BaseException:
+        traceback.print_exc()
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os._exit(1)

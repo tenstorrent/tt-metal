@@ -37,7 +37,7 @@ from ttml.common.utils import (
 from ttml.modules import RunMode
 
 from ..callback import TrainerCallback
-from .distributed import init_distributed_training, is_rollout_rank
+from .distributed import exit_on_error, init_distributed_training, is_rollout_rank
 from .grpo_ttml_model import CHECKPOINT_FILE, setup_ttml_model
 
 if TYPE_CHECKING:
@@ -1089,29 +1089,20 @@ class GRPOTrainer:
         self._grad_sync_world_size: int = 1
         self._completions_per_microbatch: int = 0
         self.rollout_batch_source: Optional[RolloutBatchSource] = None
+        self._rollout_client: Any = None
         self._rollout_mesh: Any = None
         self._rollout_server: Any = None
 
         init_distributed_training(config)
         if is_rollout_rank(config):
-            self._init_remote_rollout()
+            # Rank 0 is blocked waiting for the handshake, terminating processes on a failure before handshake.
+            with exit_on_error():
+                self._init_remote_rollout()
         else:
             self._build_policy(transformer_config, device_config, dataset_func)
 
     def _build_policy(self, transformer_config: Any, device_config: Any, dataset_func: Callable[[], Any]) -> None:
         cfg = self.config
-        if not cfg.backend.in_process:
-            ttml.autograd.AutoContext.get_instance().initialize_distributed_context(*sys.argv)
-        self.model, self.tokenizer = setup_ttml_model(transformer_config, device_config, self.model_source)
-        if cfg.backend.in_process:
-            self.rollout_sampler = build_rollout_sampler(
-                cfg.backend.sampler,
-                model=self.model,
-                tokenizer=self.tokenizer,
-                max_completion_length=cfg.max_completion_length,
-                temperature=cfg.temperature,
-                completions_per_prompt=cfg.num_generations,
-            )
 
         # Auto-append the framework's default GRPOMonitor unless the config
         # opts out. Placed last so any user-supplied callbacks (e.g. eval)
@@ -1125,7 +1116,33 @@ class GRPOTrainer:
             if not any(isinstance(cb, GRPOMonitor) or type(cb).__name__ == "GRPOMonitor" for cb in self.callbacks):
                 self.callbacks.append(GRPOMonitor(cfg))
 
-        self._setup(dataset_func())
+        if cfg.backend.in_process:
+            self.model, self.tokenizer = setup_ttml_model(transformer_config, device_config, self.model_source)
+            self.rollout_sampler = build_rollout_sampler(
+                cfg.backend.sampler,
+                model=self.model,
+                tokenizer=self.tokenizer,
+                max_completion_length=cfg.max_completion_length,
+                temperature=cfg.temperature,
+                completions_per_prompt=cfg.num_generations,
+            )
+            self._setup(dataset_func())
+        else:
+            from .remote_rollout.mpi_rollout import MPIRolloutClient
+            from .remote_rollout.weight_bridge import TTT_RANK, HostWeightBridge
+
+            # Rank 1 is blocked waiting for the handshake, terminating processes on a failure before handshake.
+            with exit_on_error():
+                autograd_ctx = ttml.autograd.AutoContext.get_instance()
+                autograd_ctx.initialize_distributed_context(*sys.argv)
+                self.model, self.tokenizer = setup_ttml_model(transformer_config, device_config, self.model_source)
+                bridge = HostWeightBridge.init_sender(mesh=autograd_ctx.get_device(), peer_rank=TTT_RANK)
+                self._rollout_client = MPIRolloutClient(peer_rank=TTT_RANK, bridge=bridge)
+            try:
+                self._setup(dataset_func())
+            except BaseException:
+                self._rollout_client.shutdown()
+                raise
 
     def _init_remote_rollout(self) -> None:
         from .remote_rollout.mpi_rollout import MPIRolloutServer
@@ -1406,7 +1423,7 @@ class GRPOTrainer:
         self.rollout_batch_source = build_rollout_batch_source(
             grpo_cfg,
             sampler=self.rollout_sampler,
-            mesh_device=device,
+            client=self._rollout_client,
             prompts=prompts,
             extra_columns=extra_columns,
             batch_prompts=generation_batch_prompts,
@@ -1669,10 +1686,9 @@ class GRPOTrainer:
             self._rollout_mesh = None
 
     def _train_policy(self) -> None:
-        for cb in self.callbacks:
-            cb.on_train_begin(self)
-
         try:
+            for cb in self.callbacks:
+                cb.on_train_begin(self)
             if self.config.backend.weight_push_before_training:
                 self.rollout_batch_source.update_weights(self.model, 0)
             for scored in self._iter_scored_batches():

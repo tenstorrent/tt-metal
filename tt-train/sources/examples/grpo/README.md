@@ -188,10 +188,9 @@ directory.
 
 ### Limitations
 
-Cross-rank calls are blocking MPI sends and receives without deadlines. An
-exception on either rank ends the tt-run job, but a rank that exits cleanly
-without reaching its peer's matching call, or a stuck peer, hangs the other
-rank.
+A failure on either rank ends the tt-run job and logs its traceback. Cross-rank
+calls are blocking MPI sends and receives without deadlines, so a stuck peer
+still hangs the other rank.
 
 ---
 
