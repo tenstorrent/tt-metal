@@ -1512,3 +1512,16 @@ weights 996 + x 33 / 84 + y 33 / 84. Recipe: /localdev/mstaletovic/flat90/run.sh
   tile), and the 65 us tail (the last experts' gate/up -> down after their weights).
 Options: UB chosen per call from the rows (runtime, like the ALT_MAXCNT switch), or UB 2 with the slot room kept; the
 bank's third tile as a forwarder (if free); the tail / x port at M 145.
+
+### Block layouts re-costed with measured efficiencies: 2D vs 1D, shared expert placement (2026-10-20, model only)
+Why: decide whether to go 1D (x all-gather over TP, column dispatch / combine along SP, one reduce-scatter shared with
+the TP-split shared expert) before more combine work. Model `/localdev/mstaletovic/moe_model/global_block.py`: link
+loads from a uniform-routing simulation per stage, every op at its LoudBox-measured efficiency (combine 0.70-0.81 of
+link rate with the full-L1 arena, sparse dispatch 0.82, TP AG / RS 0.87 / 0.74, lin2d SE 338 GB/s); K3 block check
+~3.5 ms modelled vs 3.32 ms traced. Results (Residual Layouts page, "With measured efficiencies"):
+- 1D loses everywhere (3-39% behind the best 2D): combine no cheaper (8x4 equal once ties are split; 4x4 both hot
+  links mid-SP-line), dispatch 1.4-2x link load, AG + RS on the critical path. Stay 2D.
+- Shared expert: replicated = TP-split while dispatch precedes the experts (the SE fits under router / gather /
+  planner / dispatch); running it there instead of serially: K3 block -11%. Under full overlap with a DRAM-bound
+  middle, TP-split wins K3 -7% (4x4) / -12% (8x4), V4.1 / K2.7 -4 / -7%.
+- Combine levers at 16K (link-bound nearly everywhere): ties split -11..-16% on 8x4, fp8 rows -34..-43%.
