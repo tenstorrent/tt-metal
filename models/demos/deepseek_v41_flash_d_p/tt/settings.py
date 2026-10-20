@@ -125,7 +125,7 @@ TABLE = {
     ),
     # ---- routed experts (tt/experts.py)
     "EXPERTS_IMPL": Setting(
-        "bfp8",
+        "bfp4",
         ("bfp8", "bfp4", "fp4_decode"),
         "routed experts (tt/experts.py), per local expert extract -> ttnn.linear SwiGLU with the routing weight and "
         "fp8 q(h) before w2 -> insert, on: bfp8 = every expert's w1 | w3 and w2 converted to bfloat8_b ONCE at load, "
@@ -142,7 +142,14 @@ TABLE = {
         "value: 0.44 GiB per layer per chip (17.8 GiB at 40 layers on 4x4, 8.9 on 8x4; bfp8 33.6 / 16.8); "
         "stats logged at load. P.1, 2x2, chunk 53248-55296, plain profile: experts 312.7 vs 315.3 ms per layer "
         "(no speed gain, DS41-56); ladder last worst layer L03 0.9954 vs 0.9967. Component and swap tests stay at "
-        "bfp8 (max precision)",
+        "bfp8 (max precision). P.10 (owner, 2026-10-20; agent rule 7 / F117: the shipped default stores a weight in "
+        "the checkpoint's own width, fp4 -> bfp4; bfp8 = the exact max_precision value): bfp4 is the DEFAULT. On the "
+        "default path (flat + weighted combine, bf16 sums, glm precision) the flat plan keeps its cores (48 gate/up, "
+        "32 down, 10 free cells, 9 accumulators, one pass) with mt 1 -> 2 and a 1156 -> 948 KB flat arena; synced "
+        "experts call, 2x2, chunk 2048, random inputs (tt/perf_experts.py::test_weights_bfp4): 4.47 -> 3.47 ms at layers "
+        "0 and 24; vs float64 with the exact fp4 weights bfp8 rel 0.0202 / 0.0206, bfp4 0.184 / 0.205 (bias +0.037 / "
+        "+0.040), bfp4 vs float64 with bfp4-rounded weights 0.0202 (the device path as exact as bfp8's; the rest is "
+        "bfloat4_b's rounding of the weights, DS41-74)",
     ),
     "EXPERTS_KERNEL": Setting(
         "flat",
@@ -316,7 +323,7 @@ MAX_PRECISION = {
     "WINDOW_PIECES": 3,
     "ATTN_O_SUM": "gather_add",
     "EXPERTS_SUM": "gather_add",
-    "EXPERTS_IMPL": "bfp8",  # exact fp4 values (DS41-10); bfp4 is the owner's lossy memory pick (P.1)
+    "EXPERTS_IMPL": "bfp8",  # exact fp4 values (DS41-10); bfp4 (the checkpoint's width, rule 7) is the default (P.10)
     "CCL_IMPL": "fabric",  # exact fp32 sums (P.5); fabric_bf16 (P.6) is judged end to end only
     "EXPERTS_PRECISION": "full",  # P.4: glm (LoFi, bfp8 x / h / y) is judged end to end only
     "NUMERICS": "official",  # P.8: the component / swap tests check the official arithmetic (rule 17's native: end to end)

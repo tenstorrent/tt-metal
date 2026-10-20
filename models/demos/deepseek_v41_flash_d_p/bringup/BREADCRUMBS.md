@@ -2000,3 +2000,30 @@ Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deeps
   `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all --no-precompile
   "models/demos/deepseek_v41_flash_d_p/tt/perf_experts.py::test_combine_acc" -k "not ops"` (ops: profiler env);
   fork: `scripts/run_safe_pytest.sh --run-all --no-precompile ttnn/ttnn/bringup/combine_rf/tests/unit`.
+
+## P.10 perf (attempt 1): routed expert weights in bfp4 (the checkpoint's fp4 width) vs bfp8 (owner comparison)
+- Setting EXPERTS_IMPL: default bfp8 -> bfp4 (agent rule 7 / F117: fp4 -> bfp4), MAX_PRECISION stays bfp8 (exact), so
+  the component / swap tests are unchanged (they run bfp8). Description in tt/settings.py and tt/experts.py updated.
+- What bfp4 broke: nothing on the model's path. The flat plan changes with bf4 tiles: `nu=3 np=0 mt=1 -> mt=2`,
+  flat arena 1156 -> 948 KB, same 48 gate/up + 32 down cores, same 10 free cells / 9 accumulators, weighted combine
+  still ONE pass x 1024 (arena 1314 KB, set by the bf16 accumulators). Logged per layer (EXPERTS_FLAT,
+  EXPERTS_WEIGHTED). One latent bug fixed: tt/weighted_combine.py:weighted_combine cached its state by (mesh, kwargs)
+  only, so a process building bfp8 then bfp4 experts (an A/B) would reuse the bfp8 plan's core layout; the key now
+  includes the flat plan.
+- Measured, tt/perf_experts.py::test_weights_bfp4 (new; synced whole experts call, random inputs, default path:
+  flat + weighted + COMBINE_ACC bf16 + glm + native + ffn_norm bf16 + fabric_bf16; 2x2, chunk 2048):
+  L00 bfp8 4.47 ms, bfp4 3.47 ms; L24 4.47 / 3.48 ms (-22 %). Load 37-44 s a layer either way.
+  vs float64 with the exact fp4 weights (128 tokens): L00 bfp8 rel 0.0202 bias +0.0132, bfp4 rel 0.1843 bias +0.0373;
+  L24 bfp8 0.0206 / +0.0133, bfp4 0.2050 / +0.0399. bfp4 vs float64 with bfp4-rounded weights (`_bfp4_round`)
+  L00 rel 0.0202 bias +0.0131: the device path is as exact as bfp8's; the rest is bfloat4_b's rounding of the weights
+  (float64 alone: bfp4-rounded vs exact weights rel 0.179, bias +0.024). bfp4 vs bfp8 all rows rel 0.180 / 0.200.
+  Determinism: bfp4 twice 0 of 10.5M values differ. Per layer at load: 16.4-16.6 % of values changed, worst matrix
+  rel 0.118-0.124.
+- Final check `python -m models.demos.common.bringup.orchestrator measure --task P.10` (quick, change on): rc 0, worst
+  layer PCC 0.99530 (L03; P.9 on 0.9968), pcc_chunk_out 0.99943, chunk_wall_ms 238.3 (P.9 237.1: the wall did not move),
+  host_transfers_per_layer 0. Layer PCCs L00 0.99937, L01 0.99903, L02 0.99787, L03 0.99530, L14 0.99617, L20 0.99929,
+  L21 0.99689, L24 0.99943. Not run by me: the plain profile (device_ms_experts gate < 38.9; P.9 38.91; expected about
+  -1 ms a layer x 8 from the timed call) and the frozen tests (pinned to bfp8 by MAX_PRECISION).
+- Re-run: on `DS41_EXPERTS_IMPL=bfp4`, off `DS41_EXPERTS_IMPL=bfp8`; A/B: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh
+  --run-all --no-precompile "models/demos/deepseek_v41_flash_d_p/tt/perf_experts.py::test_weights_bfp4" -k "time"`
+  (ops: with the profiler env of testing/profiler.py).

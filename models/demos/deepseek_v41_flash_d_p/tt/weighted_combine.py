@@ -504,8 +504,10 @@ class WeightedCombine:
 
 
 def weighted_combine(mesh, plan, **kw) -> WeightedCombine:
-    """The shared state for (mesh, chunk rows per chip, ...), built once."""
-    key = (id(mesh), tuple(sorted((k, str(v)) for k, v in kw.items())))
+    """The shared state for (mesh, the flat expert's plan, chunk rows per chip, ...), built once. The plan is part of
+    the key: it depends on the weights' format (bfp8 / bfp4 weights give another core layout, P.10), and a state built
+    for another plan places the combine's cells on the flat expert's cores."""
+    key = (id(mesh), repr(sorted(plan.items())), tuple(sorted((k, str(v)) for k, v in kw.items())))
     hit = _STATES.get(key)
     if hit is None or hit[0] is not mesh:
         hit = _STATES[key] = (mesh, WeightedCombine(mesh, plan, **kw))
