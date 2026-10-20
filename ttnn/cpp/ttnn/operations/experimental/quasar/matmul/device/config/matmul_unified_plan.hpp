@@ -125,8 +125,10 @@ struct MatmulUnifiedPlan {
     uint32_t bias_entries = 0;
     uint64_t l1_bytes = 0;  // total DFB footprint per core
 
-    // Only meaningful for a sharded output: the layout implied by how the C slices tile C.
-    tt::tt_metal::TensorMemoryLayout sharded_output_layout{};
+    // C is sharded and each active core's shard is its one C slice (C's own shard spec, or for a C the op allocates,
+    // C_slice_shard_spec's), so every core writes its own shard. Otherwise the writer reaches C's shards through the
+    // tensor accessor wherever they are.
+    bool C_slices_are_C_shards = false;
 
     // Estimated cycles (the lowest of every C slice, subblock and K chunk tried), and the busiest core's pipeline
     // alone, which breaks ties between plans that DRAM bandwidth bounds equally. See ArchCostModel.
@@ -134,9 +136,10 @@ struct MatmulUnifiedPlan {
 };
 
 // `output` is the C tensor when the caller supplied one (or the op already created it); it decides whether
-// C can be packed in place. Without it the op allocates C from the plan, which matches by construction.
-// must_fit FATALs with the breakdown when nothing fits L1 or a sharded output's constraints fail; without it those
-// return nullopt (choose_unified_placement's candidate search). Other config errors always FATAL.
+// C can be packed in place. Without it the op allocates C, a sharded C without a shard spec with C_slice_shard_spec's.
+// Of the auto choices, those whose C slices are a sharded C's shards come first, then the lowest estimate.
+// must_fit FATALs with the breakdown when nothing fits L1; without it that returns nullopt (choose_unified_placement's
+// candidate search). Other config errors always FATAL.
 std::optional<MatmulUnifiedPlan> plan_unified_matmul(
     const ttnn::Tensor& input_tensor_a,
     const ttnn::Tensor& input_tensor_b,
@@ -145,6 +148,12 @@ std::optional<MatmulUnifiedPlan> plan_unified_matmul(
     const MatmulParams& attributes,
     const std::optional<ttnn::Tensor>& output,
     bool must_fit);
+
+// The shard spec of C whose shards are the plan's C slices, each on the core that produces it, in C_memory's layout;
+// nullopt when they do not form one: C not L1-sharded, batches with their own B, several C slices per core, or for
+// block sharding cores that are not one rectangle laid out as the C slices tile C.
+std::optional<tt::tt_metal::ShardSpec> C_slice_shard_spec(
+    const MatmulUnifiedPlan& plan, const tt::tt_metal::MemoryConfig& C_memory);
 
 // The machine the plan's cycle estimate assumes, per arch, fitted to measured kernel times: Wormhole on an n150,
 // Quasar on craq-sim (which models no DRAM bandwidth, so Quasar's DRAM figure is unmeasured). Blackhole is
@@ -238,9 +247,9 @@ constexpr ArchCostModel QUASAR_COST_MODEL{
 // A config is what the caller asks for, its placement is the cores, C slice and orientation, and the plan
 // (MatmulUnifiedPlan) is everything derived from a config with a placement.
 // Returns `requested` with the placement whose plan has the lowest estimated cycles, and that plan's C slice, subblock
-// and K chunk, among: a sharded output's shard grid (then the only one), else a 2D rectangle, 1D across N and across
-// M, and the cores of a height-sharded A or a width-sharded B. nullopt when the unified matmul cannot run the case or
-// no placement fits.
+// and K chunk, among: a sharded output's shard grid, a 2D rectangle, 1D across N and across M, and the cores of a
+// height-sharded A or a width-sharded B. A sharded C prefers placements whose C slices are its shards (written in
+// place), but takes any. nullopt when the unified matmul cannot run the case or no placement fits.
 std::optional<operations::experimental::quasar::matmul::MatmulUnifiedProgramConfig> choose_unified_placement(
     const ttnn::Tensor& input_tensor_a,
     const ttnn::Tensor& input_tensor_b,

@@ -212,8 +212,8 @@ def test_auto_C_slice_from_core_grid(device, name, cores):
 
 
 def test_auto_C_slice_from_output_shard(device):
-    """With a sharded output the C slice is the output shard: width-sharded over a 2x2 rectangle gives
-    M x N/4 slices, which the grid split (M/2 x N/2) would not."""
+    """With a sharded output the auto C slice is the output shard, so each core writes its own: width-sharded over a
+    2x2 rectangle gives M x N/4 slices, which the grid split (M/2 x N/2) would not."""
     gx, gy = _grid(device)
     if gx < 2 or gy < 2:
         pytest.skip("needs a 2x2 grid")
@@ -540,6 +540,115 @@ def test_height_sharded_A_with_padded_K_takes_the_copy_path(device):
     config = qsr.MatmulUnifiedProgramConfig(cores=cores, C_slice_M_tiles=2, C_slice_N_tiles=3)
     out = _run(device, a, b, config, in0_mem=in0_mem)
     _check(out, _golden(a, b))
+
+
+@pytest.mark.parametrize(
+    "batch,M_tiles,N_tiles,cores,C_slice,extra,out_layout,shard_cores,shard_tiles,orientation",
+    [
+        # The C slices (2x2 on a 2x2 rectangle) are not the shards (1x4).
+        (
+            1,
+            4,
+            4,
+            (0, 0, 1, 1),
+            (2, 2),
+            {},
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            (0, 0, 1, 1),
+            (1, 4),
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+        # Shards of the C slices' shape, on other cores than the ones producing them.
+        (
+            1,
+            4,
+            4,
+            (0, 0, 1, 0),
+            (4, 2),
+            {},
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            (0, 1, 1, 1),
+            (4, 2),
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+        # Batches with their own B: each core produces its C slice in both batches, which are different shards.
+        (
+            2,
+            4,
+            4,
+            (0, 0, 1, 1),
+            (2, 2),
+            {},
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            (0, 0, 1, 1),
+            (2, 4),
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+        # COL_MAJOR block sharding puts shard (row, column) on core (x=row, y=column): a 2x3 rectangle for 2x3 C
+        # slices. They are the shards, packed in place (one compute thread, subblocks as wide as the C slice).
+        (
+            1,
+            4,
+            6,
+            (0, 0, 1, 2),
+            (2, 2),
+            dict(num_compute_threads=1, subblock_M_tiles=1, subblock_N_tiles=2),
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            (0, 0, 1, 2),
+            (2, 2),
+            ttnn.ShardOrientation.COL_MAJOR,
+        ),
+    ],
+    ids=["C_slices_not_the_shards", "shards_on_other_cores", "batched_B", "block_col_major_in_place"],
+)
+def test_sharded_C_takes_any_placement(
+    device, batch, M_tiles, N_tiles, cores, C_slice, extra, out_layout, shard_cores, shard_tiles, orientation
+):
+    """A sharded C does not limit the placement: each core writes its tiles wherever C's shards are."""
+    gx, gy = _grid(device)
+    if max(cores[2], shard_cores[2]) >= gx or max(cores[3], shard_cores[3]) >= gy:
+        pytest.skip("grid too small")
+    M, K, N = M_tiles * TILE, 3 * TILE, N_tiles * TILE
+    out_mem = ttnn.MemoryConfig(
+        out_layout,
+        ttnn.BufferType.L1,
+        _shard(_rect(*shard_cores), [shard_tiles[0] * TILE, shard_tiles[1] * TILE], orientation),
+    )
+    config = qsr.MatmulUnifiedProgramConfig(
+        cores=_rect(*cores), C_slice_M_tiles=C_slice[0], C_slice_N_tiles=C_slice[1], orientation=orientation, **extra
+    )
+    torch.manual_seed(16)
+    a, b = _randn(batch, 1, M, K), _randn(batch, 1, K, N)
+    _check(_run(device, a, b, config, out_mem=out_mem), _golden(a, b))
+
+
+@pytest.mark.parametrize("buffer_type", [ttnn.BufferType.L1, ttnn.BufferType.DRAM], ids=["l1", "dram"])
+@pytest.mark.parametrize(
+    "out_layout",
+    [ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.TensorMemoryLayout.WIDTH_SHARDED],
+    ids=["height", "width"],
+)
+def test_specless_sharded_C_keeps_the_layout_asked_for(device, out_layout, buffer_type):
+    """C slices that tile C as blocks (2x2 on a 2x2 rectangle) and a height- or width-sharded C without a shard spec:
+    C gets the layout asked for, split over the grid, and each core writes its tiles where their shards are."""
+    gx, gy = _grid(device)
+    if gx < 2 or gy < 2:
+        pytest.skip("needs a 2x2 grid")
+    M, K, N = 4 * TILE, 3 * TILE, 4 * TILE
+    torch.manual_seed(17)
+    a, b = _randn(1, 1, M, K), _randn(1, 1, K, N)
+    a_t = ttnn.from_torch(a, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
+    b_t = ttnn.from_torch(b, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
+    out = ttnn.experimental.quasar.matmul(
+        a_t,
+        b_t,
+        program_config=qsr.MatmulUnifiedProgramConfig(cores=_rect(0, 0, 1, 1), C_slice_M_tiles=2, C_slice_N_tiles=2),
+        memory_config=ttnn.MemoryConfig(out_layout, buffer_type),
+        compute_kernel_config=_hifi4(device),
+    )
+    assert out.memory_config().memory_layout == out_layout
+    assert out.memory_config().buffer_type == buffer_type
+    _check(ttnn.to_torch(out), _golden(a, b))
 
 
 def test_sharded_C_with_narrow_subblock_takes_the_copy_path(device):
@@ -1091,6 +1200,37 @@ def test_auto_placement_sharded_output(device, out_layout):
     _check(ttnn.to_torch(out), _golden(a, b))
 
 
+@pytest.mark.parametrize("auto", ["empty_unified_config", "none"])
+@pytest.mark.parametrize(
+    "out_layout",
+    [
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+    ],
+    ids=["height", "width", "block"],
+)
+def test_auto_placement_sharded_output_batched_B(device, out_layout, auto):
+    """Batches with their own B and a sharded output without a shard spec: each core produces its C slice in every
+    batch, so the C slices cannot be the shards; C is split over the grid and each tile written where its shard is."""
+    if auto == "none" and device.arch() != ttnn.device.Arch.QUASAR:
+        pytest.skip("without a program config only Quasar takes the unified matmul")
+    M, K, N = 4 * TILE, 4 * TILE, 8 * TILE
+    torch.manual_seed(35)
+    a, b = _randn(2, 1, M, K), _randn(2, 1, K, N)
+    a_t = ttnn.from_torch(a, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
+    b_t = ttnn.from_torch(b, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
+    out = ttnn.experimental.quasar.matmul(
+        a_t,
+        b_t,
+        program_config=_auto_config(device, auto),
+        memory_config=ttnn.MemoryConfig(out_layout, ttnn.BufferType.L1),
+        compute_kernel_config=_hifi4(device),
+    )
+    assert out.memory_config().memory_layout == out_layout
+    _check(ttnn.to_torch(out), _golden(a, b))
+
+
 def test_auto_placement_keeps_explicit_fields(device):
     # K chunk and subblock stay as given; only the cores, C slice and orientation are chosen.
     M, K, N = 4 * TILE, 6 * TILE, 4 * TILE
@@ -1260,22 +1400,6 @@ def test_auto_placement_rejects_a_C_slice(device, expect_error):
             None,
             "do not fit",
         ),
-        (
-            lambda: qsr.MatmulUnifiedProgramConfig(cores=_rect(0, 0, 0, 0), C_slice_M_tiles=2, C_slice_N_tiles=2),
-            ttnn.MemoryConfig(
-                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-                ttnn.BufferType.L1,
-                _shard(_rect(0, 0, 0, 0), [2 * TILE, 4 * TILE]),
-            ),
-            "is the C slice",
-        ),
-        # Auto-config (no program_config), batched A and batched B: batch cannot be fused, so a block-sharded
-        # output must be rejected with the actionable batch message.
-        (
-            None,
-            ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
-            "Block-sharded output is incompatible with batch > 1",
-        ),
     ],
     ids=[
         "cores_off_grid",
@@ -1284,24 +1408,18 @@ def test_auto_placement_rejects_a_C_slice(device, expect_error):
         "subblock_too_big",
         "slice_does_not_fit_l1",
         "explicit_K_chunk_does_not_fit",
-        "C_slice_not_the_shard",
-        "auto_config_batched_a_and_b_block_sharded_out",
     ],
 )
 def test_rejections(device, expect_error, make_config, out_mem, pattern):
     M = K = N = 4 * TILE
-    batch = 1
-    if make_config is None:  # auto-config case: batched A and B
-        M = K = N = 1024
-        batch = 2
-    a, b = _randn(batch, 1, M, K), _randn(batch, 1, K, N)
+    a, b = _randn(1, 1, M, K), _randn(1, 1, K, N)
     a_t = ttnn.from_torch(a, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
     b_t = ttnn.from_torch(b, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
     with expect_error(RuntimeError, pattern):
         ttnn.experimental.quasar.matmul(
             a_t,
             b_t,
-            program_config=make_config() if make_config is not None else None,
+            program_config=make_config(),
             memory_config=out_mem or ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=_hifi4(device),
         )

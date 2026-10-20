@@ -7,6 +7,7 @@
 #include <string_view>
 
 #include "ttnn/tensor/tensor_ops.hpp"
+#include "ttnn/operations/data_movement/common/synthesize_output_shard_spec.hpp"
 #include "ttnn/operations/experimental/quasar/matmul/device/config/matmul_program_config.hpp"
 #include "ttnn/operations/experimental/quasar/matmul/device/config/matmul_unified_plan.hpp"
 #include "ttnn/operations/experimental/quasar/matmul/device/utilities/matmul_utilities.hpp"
@@ -2210,27 +2211,34 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
                 } else if constexpr (std::is_same_v<
                                          ProgramConfigType,
                                          operations::experimental::quasar::matmul::MatmulUnifiedProgramConfig>) {
-                    // One C slice of C per core; the shard grid is the active cores in assignment order, so
-                    // the accessor's shard -> core mapping is the factory's C slice -> core mapping and every
-                    // core writes its own shard.
-                    // Reached only when no output tensor was supplied, so C is allocated from this plan.
-                    const MatmulUnifiedPlan plan = plan_unified_matmul(
-                                                       input_tensor_a,
-                                                       input_tensor_b,
-                                                       bias_single_tile_size,
-                                                       program_config,
-                                                       attributes,
-                                                       std::nullopt,
-                                                       /*must_fit=*/true)
-                                                       .value();
-                    const CoreRangeSet grid(ttsl::Span<const CoreCoord>(plan.cores));
-                    const ShardOrientation orientation = plan.orientation;
-                    ShardSpec shard_spec = ShardSpec{
-                        grid,
-                        {plan.C_slice_M_tiles * in0_tile.get_height(), plan.C_slice_N_tiles * in1_tile.get_width()},
-                        orientation};
-                    const tt::tt_metal::MemoryConfig mem_config(
-                        plan.sharded_output_layout, attributes.output_mem_config.buffer_type(), shard_spec);
+                    // Reached only when no output tensor was supplied. A shard spec given in the memory config is
+                    // kept; without one, C's shards are the C slices when they form a shard spec in the layout asked
+                    // for (each core writes its own), else C split over the grid as other ops do (the writer reaches
+                    // any shard through the tensor accessor).
+                    tt::tt_metal::MemoryConfig mem_config = attributes.output_mem_config;
+                    if (!mem_config.shard_spec().has_value()) {
+                        const MatmulUnifiedPlan plan = plan_unified_matmul(
+                                                           input_tensor_a,
+                                                           input_tensor_b,
+                                                           bias_single_tile_size,
+                                                           program_config,
+                                                           attributes,
+                                                           std::nullopt,
+                                                           /*must_fit=*/true)
+                                                           .value();
+                        std::optional<ShardSpec> shard_spec = C_slice_shard_spec(plan, mem_config);
+                        if (!shard_spec.has_value()) {
+                            shard_spec = ttnn::operations::data_movement::common::synthesize_output_shard_spec(
+                                mem_config.is_dram() ? input_tensor_a.device()->dram_grid_size()
+                                                     : input_tensor_a.device()->compute_with_storage_grid_size(),
+                                (uint64_t)plan.batch_size * plan.M_tiles * TILE_HEIGHT,
+                                (uint64_t)plan.N_tiles * TILE_WIDTH,
+                                mem_config.memory_layout(),
+                                {.orientation_hint = plan.orientation, .caller_tag = "QuasarMatmulUnified"});
+                        }
+                        mem_config = tt::tt_metal::MemoryConfig(
+                            mem_config.memory_layout(), mem_config.buffer_type(), *shard_spec);
+                    }
                     return {tt::tt_metal::TensorSpec(
                         output_shape,
                         TensorLayout(

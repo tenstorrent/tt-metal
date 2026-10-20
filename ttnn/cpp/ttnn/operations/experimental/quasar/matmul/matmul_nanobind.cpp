@@ -666,8 +666,10 @@ void py_module(nb::module_& mod) {
         Batches of A that multiply one unbatched B are stacked into a single [batch * M x N] GEMM, so their C
         slices spread over the cores like any other rows.
 
-        Limits: no untilize, 32x32 tiles only; a sharded output needs exactly one C slice per core (and batch 1
-        with a batched B).
+        A sharded output takes any placement: each core writes its tiles wherever the output's shards are. Auto
+        placement prefers placements whose C slices are the output's shards, so each core writes its own.
+
+        Limits: no untilize, 32x32 tiles only.
     )doc");
 
     matmul_unified_program_config
@@ -699,15 +701,14 @@ void py_module(nb::module_& mod) {
             fields are kept. ttnn.experimental.quasar.matmul without a program config does the same on Quasar.
         )doc")
         .def_rw("C_slice_M_tiles", &MatmulUnifiedProgramConfig::C_slice_M_tiles, R"doc(
-            Height of the C slice each core produces, in tiles. A sharded C's shard height is the C slice height
-            (a value given here must match it). None = auto, chosen with the other auto sizes: the C slice, subblock
-            and K chunk whose plan has the lowest estimated cycles, the C slice height dividing M in tiles over the
-            rows of the bounding box of `cores`.
+            Height of the C slice each core produces, in tiles. None = auto, chosen with the other auto sizes: the
+            C slice, subblock and K chunk whose plan has the lowest estimated cycles, the C slice height dividing M
+            in tiles over the rows of the bounding box of `cores` (or a sharded C's shard height, which comes first
+            when its shards can be the C slices).
         )doc")
         .def_rw("C_slice_N_tiles", &MatmulUnifiedProgramConfig::C_slice_N_tiles, R"doc(
-            Width of the C slice each core produces, in tiles. A sharded C's shard width is the C slice width (a
-            value given here must match it). None = auto (see C_slice_M_tiles), dividing N in tiles over the
-            columns of the bounding box of `cores`.
+            Width of the C slice each core produces, in tiles. None = auto (see C_slice_M_tiles), dividing N in
+            tiles over the columns of the bounding box of `cores`.
         )doc")
         .def_rw("K_chunk_tiles", &MatmulUnifiedProgramConfig::K_chunk_tiles, R"doc(
             K tiles multiplied per accumulation step. One A slice (C_slice_M_tiles x K_chunk_tiles tiles) and
@@ -725,7 +726,7 @@ void py_module(nb::module_& mod) {
         )doc")
         .def_rw("orientation", &MatmulUnifiedProgramConfig::orientation, R"doc(
             Order the cores are walked when handing out C slices: ROW_MAJOR is x fastest, COL_MAJOR is y
-            fastest. A sharded C gets this shard orientation.
+            fastest. A sharded C allocated without a shard spec gets this shard orientation.
         )doc")
         .def_rw("num_compute_threads", &MatmulUnifiedProgramConfig::num_compute_threads, R"doc(
             Compute threads per core (Quasar NEOs running the compute kernel): 1, 2 or 4. The C slice's

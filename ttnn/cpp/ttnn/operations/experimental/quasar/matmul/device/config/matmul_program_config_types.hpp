@@ -93,14 +93,15 @@ struct MatmulMultiCoreProgramConfig {
 // cluster the C slice's subblocks are assigned round-robin to the compute threads (NEOs). A bias row and the
 // activation are applied in DST before the final pack.
 // Batches of A that use one B are stacked into one [batch * M x N] GEMM.
-// Limits: no untilize, 32x32 tiles only; sharded output needs one C slice per core (and batch 1 with a batched B).
+// A sharded C takes any placement (the writer reaches its shards through the tensor accessor); auto prefers placements
+// whose C slices are its shards. Limits: no untilize, 32x32 tiles only.
 struct MatmulUnifiedProgramConfig {
     // Empty = auto placement: the cores, C slice and orientation are chosen by a cost estimate over the natural
     // placements (the other fields are kept).
     tt::tt_metal::CoreRangeSet cores;
-    // C slice (in tiles) each core produces in one go. A sharded C's shard is the C slice (a C slice given here must
-    // match it). Unset = auto: of the C slices whose dims divide M / N split over the bounding box of `cores`, the one
-    // whose plan has the lowest estimated cycles (auto fields are chosen together, see plan_unified_matmul).
+    // C slice (in tiles) each core produces in one go. Unset = auto: of a sharded C's shard shape and the C slices
+    // whose dims divide M / N split over the bounding box of `cores`, the one whose plan has the lowest estimated
+    // cycles (auto fields are chosen together, see plan_unified_matmul).
     std::optional<std::size_t> C_slice_M_tiles;
     std::optional<std::size_t> C_slice_N_tiles;
     // K tiles multiplied per accumulation step: one A slice and one B slice are resident in L1 at a time and
@@ -112,7 +113,7 @@ struct MatmulUnifiedProgramConfig {
     std::optional<std::size_t> subblock_M_tiles;
     std::optional<std::size_t> subblock_N_tiles;
     // Order `cores` are walked when handing out C slices: ROW_MAJOR x fastest, COL_MAJOR y fastest. A
-    // sharded C gets this shard orientation.
+    // sharded C allocated without a shard spec gets this shard orientation.
     tt::tt_metal::ShardOrientation orientation = tt::tt_metal::ShardOrientation::ROW_MAJOR;
     // Compute threads per core (Quasar NEOs running the compute kernel); 1, 2 or 4. Unset = auto: 4 on Quasar,
     // 1 elsewhere (Wormhole / Blackhole have one compute engine per core).
