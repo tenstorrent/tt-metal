@@ -125,8 +125,8 @@ void merge_pass_keys(
             ckernel::topk_local_sort</*stable_sort=*/false, /*is_fp32_dest_acc_en=*/true, /*fused=*/true>(
                 0, (int)dir, /*i_end_phase=*/5);
         } else {
-            ckernel::topk_merge</*idir=*/false, /*stable_sort=*/false, /*is_fp32_dest_acc_en=*/true, /*fused=*/true>(
-                0, stage - 1, /*k=*/64);
+            ckernel::topk_merge<64, /*idir=*/false, /*stable_sort=*/false, /*is_fp32_dest_acc_en=*/true, /*fused=*/true>(
+                0, stage - 1);
             if (dir) {
                 // The merge leaves the smaller keys in DEST 0 and the larger in DEST 1.
                 low = 1;
