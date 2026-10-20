@@ -100,7 +100,7 @@ std::optional<std::string> find_unsupported_feature(
     return std::nullopt;
 }
 
-// The GEMM a plan runs, with only its size fields set. Batches of A that share one B are one [batch * M x N] GEMM:
+// The GEMM a plan runs, with only its size fields set. Batches of A that use one B are one [batch * M x N] GEMM:
 // A's and C's batches are stacked tile rows, so its C slices spread over the cores like any other rows.
 MatmulUnifiedPlan plan_gemm_size(const ttnn::Tensor& A, const ttnn::Tensor& B, const MatmulParams& attributes) {
     const tt::tt_metal::Shape& A_shape = A.padded_shape();
@@ -138,7 +138,7 @@ bool shard_matches(
 }
 
 // Every field of the plan for one set of choices: C slice, subblock and K chunk. `base`
-// holds the fields every candidate shares; `cores` are the config's cores, of which the first C_slices_per_batch are
+// holds the fields common to every candidate; `cores` are the config's cores, of which the first C_slices_per_batch are
 // active.
 MatmulUnifiedPlan make_plan(
     const MatmulUnifiedPlan& base,
@@ -253,7 +253,7 @@ MatmulUnifiedPlan make_plan(
         std::max(plan.num_reader_threads, C_slices_per_core == 1 ? 1u : MIN_OPERAND_BUFFER_DEPTH);
 
     // DFB sizes.
-    // A thread's share of the C slice (its subblocks back to back, padded to the busiest thread's) is
+    // A thread's subblocks of the C slice (back to back, padded to the busiest thread's) take
     // C_entries_per_thread one-tile entries of C_slice and C_partials, pushed and popped as one batch per K chunk:
     // every thread then moves the same credits, and its C_partials entries come back to the same addresses every
     // K chunk, where the packer's L1 accumulation needs them.
@@ -276,7 +276,7 @@ MatmulUnifiedPlan make_plan(
     const bool partials_ever_written = plan.K_chunks_per_C_slice > 1;
     plan.alias_C_partials_onto_C_slice = (plan.C_partials_format == plan.C_format) && plan.C_buffer_depth == 1 &&
                                          (!partials_ever_written || C_slices_per_core == 1);
-    // Partials that are never written need one entry per thread when they cannot share C_slice's L1.
+    // Partials that are never written need one entry per thread when they cannot reuse C_slice's L1.
     plan.C_partials_entries = (partials_ever_written || plan.alias_C_partials_onto_C_slice)
                                   ? plan.C_entries_per_thread * plan.num_compute_threads
                                   : plan.num_compute_threads;
@@ -366,7 +366,7 @@ std::optional<MatmulUnifiedPlan> plan_unified_matmul(
     // ---- 3. Fixed for every candidate: cores, threads, formats, L1 budget ----
     base.orientation = config.orientation;
     base.num_compute_threads = requested_threads != 0 ? static_cast<uint32_t>(requested_threads) : (is_quasar ? 4 : 1);
-    // Writer thread t writes the shares of compute threads t, t + num_writer_threads, ...
+    // Writer thread t writes the entries of compute threads t, t + num_writer_threads, ...
     base.num_writer_threads =
         is_quasar && base.num_compute_threads % QUASAR_NUM_WRITER_THREADS == 0 ? QUASAR_NUM_WRITER_THREADS : 1;
     base.fp32_dest_acc_en = fp32_dest_acc_en;
@@ -381,28 +381,28 @@ std::optional<MatmulUnifiedPlan> plan_unified_matmul(
     const uint64_t l1_budget = l1_ceiling - l1_base;
 
     // ---- 4. C slice candidates ----
-    // Each core's share of C: the output shard when C is sharded, else M / N split over the bounding box of
-    // the cores. A C slice dim the config or the shard gives is fixed; an auto one is any divisor of the share's.
+    // The largest C slice: the output shard when C is sharded, else M / N split over the bounding box of the cores
+    // (one C slice per core). A C slice dim the config or the shard gives is fixed; an auto one divides the largest's.
     const bool C_slice_from_shard = C_shard.has_value() && (config.C_slice_M_tiles == 0 || config.C_slice_N_tiles == 0);
     const uint32_t C_shard_M_tiles = C_shard.has_value() ? C_shard->shape[0] / TILE_HEIGHT : 0;
     const uint32_t C_shard_N_tiles = C_shard.has_value() ? C_shard->shape[1] / TILE_WIDTH : 0;
     const uint32_t core_rows = bounding_box.grid_size().y;
     const uint32_t core_columns = bounding_box.grid_size().x;
-    const uint32_t share_M_tiles = config.C_slice_M_tiles != 0 ? config.C_slice_M_tiles
-                                   : C_slice_from_shard        ? C_shard_M_tiles
-                                                               : tt::div_up(base.M_tiles, core_rows);
-    const uint32_t share_N_tiles = config.C_slice_N_tiles != 0 ? config.C_slice_N_tiles
-                                   : C_slice_from_shard        ? C_shard_N_tiles
-                                                               : tt::div_up(base.N_tiles, core_columns);
+    const uint32_t max_C_slice_M_tiles = config.C_slice_M_tiles != 0 ? config.C_slice_M_tiles
+                                         : C_slice_from_shard        ? C_shard_M_tiles
+                                                                     : tt::div_up(base.M_tiles, core_rows);
+    const uint32_t max_C_slice_N_tiles = config.C_slice_N_tiles != 0 ? config.C_slice_N_tiles
+                                         : C_slice_from_shard        ? C_shard_N_tiles
+                                                                     : tt::div_up(base.N_tiles, core_columns);
     const bool M_fixed = config.C_slice_M_tiles != 0 || C_slice_from_shard;
     const bool N_fixed = config.C_slice_N_tiles != 0 || C_slice_from_shard;
 
     // Largest area first (ties: wider).
     std::vector<std::pair<uint32_t, uint32_t>> C_slice_shapes;
-    for (uint32_t h = share_M_tiles; h >= 1; --h) {
-        for (uint32_t w = share_N_tiles; w >= 1; --w) {
-            const bool h_allowed = M_fixed ? h == share_M_tiles : share_M_tiles % h == 0;
-            const bool w_allowed = N_fixed ? w == share_N_tiles : share_N_tiles % w == 0;
+    for (uint32_t h = max_C_slice_M_tiles; h >= 1; --h) {
+        for (uint32_t w = max_C_slice_N_tiles; w >= 1; --w) {
+            const bool h_allowed = M_fixed ? h == max_C_slice_M_tiles : max_C_slice_M_tiles % h == 0;
+            const bool w_allowed = N_fixed ? w == max_C_slice_N_tiles : max_C_slice_N_tiles % w == 0;
             if (h_allowed && w_allowed) {
                 C_slice_shapes.emplace_back(h, w);
             }
@@ -415,8 +415,8 @@ std::optional<MatmulUnifiedPlan> plan_unified_matmul(
     });
     // ---- 5. Search: each C slice's subblock, then its K chunk ----
     // The first C slice that fits wins, except one that fits only with K_chunk_tiles == 1 yields to a smaller C slice
-    // with a longer K chunk and more work per L1 fill (C slice tiles x K chunk); the whole share is never shrunk if it
-    // fits (#57884).
+    // with a longer K chunk and more work per L1 fill (C slice tiles x K chunk); the largest C slice is never shrunk if
+    // it fits (#57884).
     const uint32_t K_chunk_floor = config.K_chunk_tiles == 0 ? 1 : config.K_chunk_tiles;  // the shortest K chunk tried
     const uint32_t min_K_chunks = is_quasar ? QUASAR_NUM_READER_THREADS : MIN_OPERAND_BUFFER_DEPTH;
     std::optional<MatmulUnifiedPlan> best;
@@ -516,8 +516,8 @@ std::optional<MatmulUnifiedPlan> plan_unified_matmul(
             best = candidate;
             best_work = work;
         }
-        const bool whole_share = C_slice_M_tiles == share_M_tiles && C_slice_N_tiles == share_N_tiles;
-        if (best->K_chunk_tiles > 1 || whole_share) {
+        const bool is_largest = C_slice_M_tiles == max_C_slice_M_tiles && C_slice_N_tiles == max_C_slice_N_tiles;
+        if (best->K_chunk_tiles > 1 || is_largest) {
             break;
         }
     }
@@ -594,7 +594,7 @@ std::pair<double, double> estimate_plan_cycles(
     const double C_slices_on_busiest_core = (double)plan.max_C_slices_per_core * plan.batch_size;
     const double total_C_slices = (double)plan.C_slices_per_batch * plan.batch_size;
 
-    // Compute: the busiest thread's share of each C slice over all of K, plus its packs and partial reloads.
+    // Compute: the busiest thread's subblocks of each C slice over all of K, plus its packs and partial reloads.
     const uint32_t reloads_per_C_slice =
         plan.packer_l1_acc_en ? 1 : plan.K_chunks_per_C_slice - 1;  // with L1 accumulation only the last K chunk
     const double compute_cycles = C_slices_on_busiest_core * plan.C_entries_per_thread *
@@ -713,19 +713,19 @@ std::optional<MatmulUnifiedProgramConfig> choose_unified_placement(
         return true;
     };
 
-    // A 1D placement gives each core a share of C: share_width_tiles of its columns (share_is_columns) over all of M,
-    // or of its rows over all of N. The C slice is the first that fits of the whole share, then the share cut into
-    // 2, 3, ... C slices along its length, the last possibly shorter (13 tiles in 4: 4, 4, 4, 1).
+    // A 1D placement's C slices are columns (C_slices_are_columns) or rows of C, C_slice_width_tiles wide and as long
+    // as all of C's other dimension, or if that does not fit L1, 1/2, 1/3, ... of it, rounded up (13 tiles in 4 C
+    // slices: 4, 4, 4 and 1).
     const auto try_1D_placement = [&](const CoreRangeSet& cores,
                                       tt::tt_metal::ShardOrientation orientation,
-                                      uint32_t share_width_tiles,
-                                      bool share_is_columns) {
-        const uint32_t share_length_tiles = share_is_columns ? M_tiles : N_tiles;
-        for (uint32_t C_slices_per_share = 1; C_slices_per_share <= share_length_tiles; ++C_slices_per_share) {
-            const uint32_t C_slice_length_tiles = tt::div_up(share_length_tiles, C_slices_per_share);
-            const bool fits = share_is_columns
-                                  ? try_placement(cores, orientation, C_slice_length_tiles, share_width_tiles)
-                                  : try_placement(cores, orientation, share_width_tiles, C_slice_length_tiles);
+                                      uint32_t C_slice_width_tiles,
+                                      bool C_slices_are_columns) {
+        const uint32_t C_length_tiles = C_slices_are_columns ? M_tiles : N_tiles;
+        for (uint32_t C_slices_along_length = 1; C_slices_along_length <= C_length_tiles; ++C_slices_along_length) {
+            const uint32_t C_slice_length_tiles = tt::div_up(C_length_tiles, C_slices_along_length);
+            const bool fits = C_slices_are_columns
+                                  ? try_placement(cores, orientation, C_slice_length_tiles, C_slice_width_tiles)
+                                  : try_placement(cores, orientation, C_slice_width_tiles, C_slice_length_tiles);
             if (fits) {
                 return;
             }
@@ -753,9 +753,9 @@ std::optional<MatmulUnifiedProgramConfig> choose_unified_placement(
     const CoreRangeSet across_M_cores(CoreRange(
         {0, 0}, {std::min(grid_columns, M_tiles) - 1, std::clamp(M_tiles / grid_columns, 1u, grid_rows) - 1}));
     try_1D_placement(
-        across_N_cores, ROW_MAJOR, tt::div_up(N_tiles, across_N_cores.num_cores()), /*share_is_columns=*/true);
+        across_N_cores, ROW_MAJOR, tt::div_up(N_tiles, across_N_cores.num_cores()), /*C_slices_are_columns=*/true);
     try_1D_placement(
-        across_M_cores, ROW_MAJOR, tt::div_up(M_tiles, across_M_cores.num_cores()), /*share_is_columns=*/false);
+        across_M_cores, ROW_MAJOR, tt::div_up(M_tiles, across_M_cores.num_cores()), /*C_slices_are_columns=*/false);
 
     // 1D on a sharded operand's cores, which keeps it where it is: an L1 shard can then be bound in place, and a DRAM
     // shard is read by the core next to its bank.
@@ -764,14 +764,14 @@ std::optional<MatmulUnifiedProgramConfig> choose_unified_placement(
             A.memory_config().is_dram() ? dram_bank_cores(device) : A.shard_spec()->grid,
             A.shard_spec()->orientation,
             A.shard_spec()->shape[0] / TILE_HEIGHT,
-            /*share_is_columns=*/false);
+            /*C_slices_are_columns=*/false);
     }
     if (B.is_sharded() && B.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED) {
         try_1D_placement(
             B.memory_config().is_dram() ? dram_bank_cores(device) : B.shard_spec()->grid,
             B.shard_spec()->orientation,
             B.shard_spec()->shape[1] / TILE_WIDTH,
-            /*share_is_columns=*/true);
+            /*C_slices_are_columns=*/true);
     }
     return best;
 }

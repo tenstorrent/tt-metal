@@ -7,8 +7,8 @@
 // accumulate there via packer_l1_acc) and the last K chunk packs into C_slice for the writer.
 // Loop order matches the reader and the writer: batch, MN chunk, K chunk, subblocks, k_tile.
 // Compute threads (Quasar NEOs; one thread elsewhere) take the subblocks round-robin in walk order
-// and all see the whole A and B slices; a thread's subblocks sit back to back in its share of
-// C_slice / C_partials (C_entries_per_thread entries), reserved and pushed once per K chunk.
+// and all see the whole A and B slices; a thread's subblocks sit back to back in its C_entries_per_thread
+// entries of C_slice / C_partials, reserved and pushed once per K chunk.
 // FUSE_BIAS: K chunk 0 starts DST at the bias row instead of zero, so the partials carry it and the sum gets it
 // once. SFPU_OP_*_ACTIVATION: the activation runs on the finished sum in DST before the last K chunk's pack.
 // Compile-time args are the template parameters, runtime args the function parameters.
@@ -37,7 +37,7 @@ template <
     uint32_t subblock_M_tiles,
     uint32_t subblock_N_tiles,
     uint32_t num_compute_threads,
-    uint32_t C_entries_per_thread,  // C_slice / C_partials entries in one thread's share of the C slice
+    uint32_t C_entries_per_thread,  // C_slice / C_partials entries one thread's subblocks of the C slice take
     uint32_t packer_l1_acc,
     uint32_t partials_format_differs>            // C_partials and C_slice hold different formats
 TT_KERNEL void compute(uint32_t num_C_slices) {  // num_C_slices: this core's C slices, per batch
@@ -106,10 +106,11 @@ TT_KERNEL void compute(uint32_t num_C_slices) {  // num_C_slices: this core's C 
                 pack_init(pack_target_id);
 #endif
 
-                // Release the previous K chunk's partials credits so the reserve below gets this thread's share
-                // back. The reloads below still read them: a thread's part of C_partials is exactly one share, so
-                // the cursor returns to it, and this NEO is its only writer (each subblock is reloaded before it
-                // is overwritten). dummy_unpack orders the pop after the wait on Quasar (a no-op elsewhere).
+                // Release the previous K chunk's partials credits so the reserve below gets this thread's entries
+                // back. The reloads below still read them: a thread's part of C_partials is exactly those
+                // C_entries_per_thread entries, so the cursor returns to them, and this NEO is its only writer (each
+                // subblock is reloaded before it is overwritten). dummy_unpack orders the pop after the wait on Quasar
+                // (a no-op elsewhere).
                 if (K_chunk > 0) {
                     C_partials.wait_front(C_entries_per_thread);
                     dummy_unpack(dfb::C_partials);
@@ -118,7 +119,7 @@ TT_KERNEL void compute(uint32_t num_C_slices) {  // num_C_slices: this core's C 
                 pack_target.reserve_back(C_entries_per_thread);
 
                 // (m_tile, n_tile) is the subblock's first tile within the C slice; entry_tile is where this
-                // thread's next subblock sits in its share.
+                // thread's next subblock sits in its entries.
                 uint32_t subblock = 0;
                 uint32_t entry_tile = 0;
                 for (uint32_t m_tile = 0; m_tile < C_slice_M_padded_tiles; m_tile += subblock_M_tiles) {
@@ -207,7 +208,7 @@ TT_KERNEL void compute(uint32_t num_C_slices) {  // num_C_slices: this core's C 
 #endif
                         tile_regs_commit();
 
-                        // Packs continue where the previous subblock's pack left off in the share.
+                        // Packs continue where the previous subblock's pack left off in the thread's entries.
                         tile_regs_wait();
                         pack_block(/*ifrom_dst=*/0, pack_target_id, subblock_tiles);
                         tile_regs_release();

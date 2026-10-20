@@ -16,9 +16,9 @@ tests that set num_compute_threads > 1 are skipped.
 
 DM threads and buffering: on Quasar up to four reader threads, no more than a C slice's K chunks, take each C
 slice's K chunks round-robin (padded to a multiple of the reader threads with credit-only K chunks) and two writer
-threads take the compute threads' shares of C; Wormhole / Blackhole have one reader and one writer. Cores with
-several C slices keep two in flight. Extra reader threads and the second C slice in flight only use L1 that the
-C slice, subblock and K chunk leave. When each
+threads take the compute threads' entries of C; Wormhole / Blackhole have one reader and one writer. Cores with
+several C slices keep two in flight. These are fixed; the C slice, subblock and K chunk are sized to fit L1 with
+them. When each
 core produces one C slice on a rectangle laid out like the C slices, A is multicast along rows of cores and B down
 columns, each reader thread multicasting its own K chunks; when C is one row (column) of C slices, A (B) is multicast
 to every core.
@@ -144,7 +144,7 @@ ROW_MAJOR, COL_MAJOR = ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.CO
 PLACEMENTS = [
     # name,            cores (x0,y0,x1,y1) or list, C_slice_M_tiles, C_slice_N_tiles, orientation
     ("single_core", (0, 0, 0, 0), 16, 16, ROW_MAJOR),  # 1 block
-    ("row_1d_mcast_in0_shape", (0, 0, 7, 0), 16, 2, ROW_MAJOR),  # 8 blocks, one per core, all share in0 rows
+    ("row_1d_mcast_in0_shape", (0, 0, 7, 0), 16, 2, ROW_MAJOR),  # 8 blocks, one per core, all read the same in0 rows
     ("col_1d_transposed", (0, 0, 0, 7), 2, 16, ROW_MAJOR),  # 8 blocks along M on a column of cores
     ("grid_2d", (0, 0, 3, 3), 4, 4, ROW_MAJOR),  # 16 blocks on a 4x4 rectangle
     ("grid_2d_col_major", (0, 0, 3, 3), 4, 4, COL_MAJOR),  # same blocks, y-fastest core order
@@ -284,8 +284,8 @@ def test_auto_K_chunk_falls_back_to_one(device):
 
 
 def test_auto_C_slice_shrinks_to_fit_l1(device):
-    """One core, 64x64-tile C: the whole share does not fit L1, so the auto C slice is the largest divisor
-    piece of it that does."""
+    """One core, 64x64-tile C: the largest C slice (all of C) does not fit L1, so the auto C slice is the largest
+    one whose dims divide it that does."""
     M, K, N = 64 * TILE, 2 * TILE, 64 * TILE
     torch.manual_seed(13)
     a, b = _randn(1, 1, M, K), _randn(1, 1, K, N)
@@ -862,7 +862,7 @@ def test_explicit_compute_threads(device, num_compute_threads):
 @pytest.mark.parametrize("num_compute_threads", [1, 2, 4])
 def test_K_spill_over_several_C_slices_per_core(device, num_compute_threads):
     """M = 4, K = 4, N = 2 tiles on one core: two 2x2-tile C slices of two 1x2 subblocks each, two K chunks
-    of 2 tiles. With two C slices per core, C_partials does not share L1 with C_slice, so the last K chunk
+    of 2 tiles. With two C slices per core, C_partials does not reuse C_slice's L1, so the last K chunk
     lands in C only if the packer is re-pointed at C_slice (on Quasar it otherwise keeps the C_partials base).
     One thread does both subblocks of a slice, two threads do one each, and with four, threads 2 and 3 are
     idle. Ones as input, so every element of C must equal K = 128."""
@@ -909,7 +909,7 @@ def test_compute_threads_rejections(device, expect_error):
 # ----------------------------------------------------------------------------------------------------
 # DM threads and buffering: on Quasar up to four reader threads take each C slice's K chunks round-robin, padded
 # with credit-only K chunks to a multiple of the reader threads, and two writer threads take the compute threads'
-# shares
+# entries
 # ----------------------------------------------------------------------------------------------------
 
 K_CHUNK_SPLITS = [

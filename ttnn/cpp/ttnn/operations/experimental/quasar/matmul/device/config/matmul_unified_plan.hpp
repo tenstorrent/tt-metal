@@ -20,13 +20,13 @@ namespace ttnn::prim::qsr {
 // Most reader threads a core runs (Quasar's DM cores); the factory binds a set of multicast semaphores for each.
 constexpr uint32_t QUASAR_NUM_READER_THREADS = 4;
 
-// Derived from a MatmulUnifiedProgramConfig + operand shapes by one function shared by validation, output-spec
+// Derived from a MatmulUnifiedProgramConfig + operand shapes by one function used by validation, output-spec
 // derivation, the placement chooser and the factory, so they cannot disagree (all config constraints TT_FATAL there).
 struct MatmulUnifiedPlan {
     uint32_t M_tiles = 0;
     uint32_t K_tiles = 0;
     uint32_t N_tiles = 0;
-    // Batches of A (and of C), each with its own B; batches that share one B are folded into M_tiles.
+    // Batches of A (and of C), each with its own B; batches that use one B are folded into M_tiles.
     uint32_t batch_size = 0;
     // Tiles from one batch of B to the next: K_tiles * N_tiles when B has a [K x N] per batch, 0 when B is a
     // single [K x N] (or [1 x K x N]) that every batch of A multiplies. A's stride is always M_tiles * K_tiles.
@@ -55,8 +55,8 @@ struct MatmulUnifiedPlan {
     uint32_t C_slice_N_padded_tiles = 0;
 
     // Compute threads per core (NEOs). The C slice's subblocks, numbered across N then down M, are assigned
-    // round-robin to the threads, which all see the whole A and B slices. A thread's share of the C slice
-    // (ceil(subblocks / threads) subblocks, back to back) is C_entries_per_thread one-tile entries of C_slice and
+    // round-robin to the threads, which all see the whole A and B slices. A thread's subblocks of the C slice
+    // (ceil(subblocks / threads) of them, back to back) take C_entries_per_thread one-tile entries of C_slice and
     // C_partials, the credits it moves per K chunk. With several threads each owns every num_compute_threads-th
     // entry, which the packer steps through (a whole stride per tile, #56195) and the writer reads by stride.
     uint32_t num_compute_threads = 1;
@@ -65,11 +65,11 @@ struct MatmulUnifiedPlan {
     // DM threads per core (Quasar DM cores; one each elsewhere). Reader thread t reads the A and B slices of K
     // chunks t, t + num_reader_threads, ... of every C slice into its own part of the A and B DFBs, which the
     // compute threads' waits take in turn. Writer thread t writes the
-    // shares of compute threads t, t + num_writer_threads, ... (num_writer_threads divides num_compute_threads).
+    // entries of compute threads t, t + num_writer_threads, ... (num_writer_threads divides num_compute_threads).
     uint32_t num_reader_threads = 0;
     uint32_t num_writer_threads = 0;
-    // A and B slices each operand DFB holds, and C slices in flight (C_slice holds C_buffer_depth of every compute
-    // thread's shares).
+    // A and B slices each operand DFB holds, and C slices in flight (C_slice holds C_buffer_depth C slices of every
+    // compute thread's entries).
     uint32_t operand_buffer_depth = 0;
     uint32_t C_buffer_depth = 0;
     // Multicast, when each core produces one C slice per batch on a rectangle laid out as the C slices tile C: the
@@ -115,7 +115,7 @@ struct MatmulUnifiedPlan {
     uint32_t B_slice_entries = 0;
     uint32_t C_slice_entries = 0;
     uint32_t C_partials_entries = 0;
-    // C_partials shares C_slice's L1; only safe when partials are never live while C_slice holds unread data.
+    // C_partials reuses C_slice's L1; only safe when partials are never live while C_slice holds unread data.
     bool alias_C_partials_onto_C_slice = false;
     // Fused bias: one tile row of the C slice's columns per C slice, loaded into DST before K chunk 0 so the
     // sum carries it once. Reader thread t pushes the bias of every num_reader_threads-th C slice into its own

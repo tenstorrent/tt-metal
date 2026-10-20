@@ -7,10 +7,10 @@
 // maps every tile back to its position in C and writes it by tile index through the tensor accessor.
 // Tiles past the true C slice (subblock padding) or past M_tiles / N_tiles are popped but not
 // written; padding overshoot may overlap a neighbouring core's C slice, so both clips are needed.
-// Each compute thread's share of C_slice (C_entries_per_thread one-tile entries) holds the subblocks that
-// thread took (every num_compute_threads-th one, in walk order) back to back; each wait/pop here consumes one
-// thread's share, whose consecutive entries are the DFB's stride apart. Writer thread t (Quasar DM cores; one
-// thread elsewhere) writes the shares of compute threads t, t + num_writer_threads, ...
+// Each compute thread's C_entries_per_thread one-tile entries of C_slice hold the subblocks that thread took
+// (every num_compute_threads-th one, in walk order) back to back; each wait/pop here consumes one thread's
+// entries, which are the DFB's stride apart. Writer thread t (Quasar DM cores; one thread elsewhere) writes the
+// entries of compute threads t, t + num_writer_threads, ...
 // Compile-time args are the template parameters, runtime args the function parameters.
 
 #include <stdint.h>
@@ -35,7 +35,7 @@ template <
     uint32_t subblock_N_tiles,
     uint32_t num_compute_threads,   // producers of C_slice
     uint32_t num_writer_threads,    // consumers of C_slice; divides num_compute_threads
-    uint32_t C_entries_per_thread,  // entries in one thread's share of the C slice
+    uint32_t C_entries_per_thread,  // entries one thread's subblocks of the C slice take
     uint32_t C_borrowed>            // C's L1 shard is the C_slice DFB: the compute packs in place, nothing is written
 TT_KERNEL void writer(uint32_t first_C_slice, uint32_t num_C_slices) {
     // first_C_slice: this core's first C slice in the row-major walk over C (across N, then down M);
@@ -53,8 +53,8 @@ TT_KERNEL void writer(uint32_t first_C_slice, uint32_t num_C_slices) {
     }
     const auto C = TensorAccessor(tensor::C);
     Noc noc;
-    // A subblock sits in the share row-major in tiles, as the compute packs it, one tile per entry. With several
-    // compute threads each owns every num_compute_threads-th entry, so a share's entries are a stride apart.
+    // A subblock sits in its thread's entries row-major in tiles, as the compute packs it, one tile per entry. With
+    // several compute threads each owns every num_compute_threads-th entry, so a thread's entries are a stride apart.
     const uint32_t C_tile_bytes = get_tile_size(dfb::C_slice);
     const uint32_t C_entry_stride_bytes = C_slice.get_stride_size();
 
@@ -70,7 +70,7 @@ TT_KERNEL void writer(uint32_t first_C_slice, uint32_t num_C_slices) {
                  compute_thread += num_writer_threads) {
                 C_slice.wait_front(C_entries_per_thread);
                 // Same subblock walk as the compute kernel: (m_tile, n_tile) is the subblock's first tile within
-                // the C slice; entry_tile is where this compute thread's next subblock sits in its share.
+                // the C slice; entry_tile is where this compute thread's next subblock sits in its entries.
                 uint32_t subblock = 0;
                 uint32_t entry_tile = 0;
                 for (uint32_t m_tile = 0; m_tile < C_slice_M_padded_tiles; m_tile += subblock_M_tiles) {
