@@ -17,20 +17,31 @@ Everything else as `ttnn.transformer.<same name>`.
 - `ttnn.transformer.scaled_dot_product_attention` / `chunked_scaled_dot_product_attention` with V zero-padded to K's
   head dim (e.g. K 192 / V 128): the fork skips the padding and its compute; output equals the padded run's first V
   columns bit for bit (CHANGELOG.md).
-- `ttnn.transformer.sparse_sdpa` when its bf16 running state / approximate exp / bf16 scores cost too much accuracy
-  (DSA / MLA sparse attention, DeepSeek window attention with a sink).
-- `ttnn.transformer.ring_mla` when bf16 DEST accumulation is too coarse (sharp softmax over many K tiles), or when a
-  single-chunk cache is called with `kv_actual_isl=0`.
+- `ttnn.transformer.ring_mla` / `ring_joint_scaled_dot_product_attention` when a single-chunk cache is called with
+  `kv_actual_isl=0` (the source raises TT_FATAL).
+- Not `ttnn.transformer.sparse_sdpa`: the stock op is the realistic choice for sparse attention (DSA / MLA, DeepSeek-V4.1's
+  window attention with its sink). The fork's sparse_sdpa options are precision only (its bf16 running state /
+  approximate exp / bf16 scores): per-step checks or a measured end-to-end gap (rule 7).
+- Precision only, likewise: `ring_mla` at fp32 DEST when bf16 DEST accumulation is too coarse (sharp softmax over
+  many K tiles).
 For any other SDPA call the fork is the source op; prefer `ttnn.transformer.*`.
 
 ## Options
 Fork additions only; every other argument as the stock op (see `sdpa_nanobind.cpp` for the full signatures).
+
+Realistic (use by default):
 - `scaled_dot_product_attention(q, k, v, ...)`, `chunked_scaled_dot_product_attention(q, k, v, page_table, ...)`: V
   narrower than K is the switch (fork addition, no argument). Refused: V not a multiple of 32, V > K's head dim, with
   `paged_cache_geometry`, in windowed mode (`cu_window_seqlens`).
 - `sparse_sdpa(q, kv, indices, v_dim, *, kv_format, scale=None, k_chunk_size=128, compute_kernel_config=None,
   cache_batch_idx=None, block_cyclic_sp_axis=None, block_cyclic_chunk_local=None, block_cyclic_cache_tp_sharded=False,
-  attention_sink=None, ...)` plus:
+  attention_sink=None, ...)`: the stock arguments; with the precision options off the program is the source's.
+- `ring_mla(..., kv_actual_isl=0)` on a non-chunked causal input accepted (fork bug fix, no new argument).
+- `SparseKVFormat`: `BF16`, `FP8_E4M3`, `SCALED_FP8` (the source enum, re-bound under `ttnn.bringup`; pass this one to
+  `ttnn.bringup.sparse_sdpa`).
+
+Precision only: per-step checks or a measured end-to-end gap (rule 7):
+- `sparse_sdpa(...)` plus:
   - `high_precision=False` (fork, opt-in): Float32 running output / row-sum / 1/sum CBs, exact exp. Needs
     `fp32_dest_acc_en`, bf16 q, `kv_format=SparseKVFormat.BF16`. Takes `attention_sink`.
   - `fp32_output=False` (fork, opt-in): Float32 output. Needs `high_precision`.
@@ -38,10 +49,7 @@ Fork additions only; every other argument as the stock op (see `sdpa_nanobind.cp
     Needs `high_precision` and `fp32_output` (unless `bf16_probs`).
   - `bf16_probs=False` (fork, opt-in): Float32 running max, probabilities rounded to bf16 before P@V; `fp32_output` may
     then be False. Needs `fp32_scores` and a bf16 q.
-- `ring_mla(..., compute_kernel_config)`: `fp32_dest_acc_en=True` accepted (fork, no new argument); `kv_actual_isl=0`
-  on a non-chunked causal input accepted (fork bug fix, no new argument).
-- `SparseKVFormat`: `BF16`, `FP8_E4M3`, `SCALED_FP8` (the source enum, re-bound under `ttnn.bringup`; pass this one to
-  `ttnn.bringup.sparse_sdpa`).
+- `ring_mla(..., compute_kernel_config)`: `fp32_dest_acc_en=True` accepted (fork, no new argument; the source refuses it).
 
 ## Measured
 - Narrow V, MiMo full-attention chunk (Q 16x5120x192, paged cache, 51200-token prefix, q512/k128, HiFi2, approx exp,

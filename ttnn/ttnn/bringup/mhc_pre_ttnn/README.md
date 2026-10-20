@@ -23,6 +23,8 @@ Single device; the caller does the mesh reduction (all_reduce / all_gather + add
 - `mhc_pre_xing_pack(n=1)` alone: instead of `ttnn.rms_norm_pre_all_gather` / a `ttnn.pow` + `ttnn.sum` chain for an exact fp32 per-chip sum of x^2.
 
 ## Options
+Realistic (use by default): every option below.
+
 `mhc_pre` (from `mhc_pre_ttnn_nanobind.cpp`):
 - `input_tensor`: X (..., T, n*C), fp32 or bf16, TILE, C % 32 == 0, rank 2..4.
 - `proj_weight`: W (n*C, n(n+2)), fp32 or bf16, TILE. n is derived from its last dim.
@@ -38,11 +40,13 @@ Single device; the caller does the mesh reduction (all_reduce / all_gather + add
 - `norm_eps=1e-6`, `hc_eps=1e-6`, `sinkhorn_iters=20`, `clamp_min=-30.0`, `clamp_max=30.0`.
 - `coefficients_given=False`: only collapse from a given hc (needs streams).
 - `compute_kernel_config=None`: `fp32_dest_acc_en` must be True.
-- `deepseek=False` (opt-in, CHANGELOG 7): DeepSeek-V4 `hc_split_sinkhorn` math: pre + hc_eps, no clamp (clamp_min / clamp_max ignored), softmax + eps, column norm, then iters - 1 pairs. Refused with `coefficients_given=True`.
+- `deepseek=False` (opt-in, CHANGELOG 7): DeepSeek-V4 `hc_split_sinkhorn` math: pre + hc_eps, no clamp (clamp_min / clamp_max ignored), softmax + eps, column norm, then iters - 1 pairs. Refused with `coefficients_given=True`. Realistic: the reference's own fp32 math, where the source `mhc_split_sinkhorn` is TF32-grade and biased (CHANGELOG 7).
 - Returns `(hc or None, y or None)`.
 
 `mhc_pre_xing_pack` (fork addition, CHANGELOG 4):
 - `mix`: (..., T, 32) fp32 TILE; `streams`: (..., T, n*C) fp32 TILE; `n=4` (1..4). Returns mix with column n(n+2) = sum streams^2.
+
+Precision only: per-step checks or a measured end-to-end gap (rule 7): none (fp32 DEST is required, not an option).
 
 ## Measured
 - `mhc_pre` C++ host side, GLM-5.3 shape (T 5120, n*C 16384, bf16 X and W): host 2.037 -> 0.043 ms per call, wall 2.067 -> 0.597 ms per call vs the Python builder (CHANGELOG.md change 2).

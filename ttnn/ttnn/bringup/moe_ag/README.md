@@ -36,6 +36,8 @@ Only useful together with `flat_routed_expert` (indexed mode) and the fabric col
 row layout.
 
 ## Options
+Realistic (use by default): every option below.
+
 `moe_ag_route_plan(topk_indices, local_slot_map, experts_per_chip, num_rows, *, outputs=None)`
 - `experts_per_chip`: required, <= 64.
 - `num_rows`: required, multiple of 32, >= roundup(P, 32) + 32 (min(P, experts_per_chip) - 1), P = T min(K,
@@ -62,6 +64,8 @@ num_blocks >= 2.
 `moe_ag_untilize_x(x, *, output=None)`: H a multiple of 1024.
 
 No fork options: CHANGELOG.md lists no changes (mechanical import only).
+
+Precision only: per-step checks or a measured end-to-end gap (rule 7): none.
 
 ## Measured
 Device ns per call, one BH p150 (QuietBox chip), median of 3, 2026-09-29; perf baselines in

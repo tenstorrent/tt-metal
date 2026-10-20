@@ -20,6 +20,8 @@ Everything else as `ttnn.experimental.deepseek_prefill.dispatch`.
   the routed rows, sized by device-resident offsets.
 
 ## Options
+Realistic (use by default): every option below.
+
 Positional: `input_tensor` (1, S, H) BFLOAT16 or FP8_E4M3 (Blackhole), TILE (packer converts) or ROW_MAJOR (byte copy,
 dtype must equal output); `indices_tensor` (1, S, K); `expert_offsets_tensor` (1, E); `expert_dispatch_table_tensor`
 (1, E), chip id or -1.
@@ -38,6 +40,8 @@ Keyword (optional):
 - `num_workers_per_sender=2`: worker cores per sender (TILE and ROW_MAJOR input).
 No fork-only option: the fork change is automatic on a 1-device axis.
 Returns `(dispatched_buffer (1, 1, max_dispatch_buffer_token_size, H), metadata (1, 1, max_..., metadata_len))`.
+
+Precision only: per-step checks or a measured end-to-end gap (rule 7): none.
 
 ## Measured
 - Accuracy: exact. Every model case (`tests/cases.py`, `"exact": True`) compares bit for bit; reported exact on 2x2
