@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <filesystem>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -300,9 +301,17 @@ public:
         includes.reserve(14);
 
         // Common includes for all core types
-        // A Quasar IP variant goes first so its headers shadow the base ones under tt_llk_quasar.
-        if (const auto& variant = params.rtoptions.get_quasar_arch_variant(); !variant.empty()) {
-            includes.push_back("tt_metal/tt-llk/tt_llk_quasar/arch/" + variant);
+        // A Quasar IP variant's LLK headers go first so they shadow the base ones under tt_llk_quasar.
+        // defaults to Grendel if no variant is set
+        auto variant = hal_.get_quasar_arch_variant().value_or(IpVariant::GRENDEL);
+        const std::string lower_variant = [&]() {
+            std::string result = std::string(enchantum::to_string(variant));
+            std::transform(result.begin(), result.end(), result.begin(), ::tolower);
+            return result;
+        }();
+        const std::string variant_llk_dir = "tt_metal/tt-llk/tt_llk_quasar/arch/" + lower_variant;
+        if (std::filesystem::is_directory(params.rtoptions.get_root_dir() + variant_llk_dir)) {
+            includes.push_back(variant_llk_dir);
         }
         includes.push_back("tt_metal/hw/ckernels/quasar/metal/common");
         includes.push_back("tt_metal/hw/ckernels/quasar/metal/llk_io");
@@ -311,8 +320,6 @@ public:
         includes.push_back("tt_metal/hw/inc/internal/tt-2xx/quasar");
         includes.push_back("tt_metal/hw/inc/internal/tt-2xx/quasar/quasar_defines");
         includes.push_back("tt_metal/hw/inc/internal/tt-2xx/quasar/noc");
-        // defaults to Grendel if no variant is set
-        auto variant = hal_.get_quasar_arch_variant().value_or(IpVariant::GRENDEL);
         if (variant == IpVariant::GRENDEL) {
             includes.push_back("tt_metal/hw/inc/internal/tt-2xx/tt-2.0.0/meta");
         } else if (variant == IpVariant::HORIZON) {
