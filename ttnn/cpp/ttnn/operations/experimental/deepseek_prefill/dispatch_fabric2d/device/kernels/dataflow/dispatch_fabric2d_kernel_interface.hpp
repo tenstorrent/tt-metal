@@ -43,6 +43,7 @@ struct KernelPlan {
     uint32_t queue_filled_addr = 0;
     uint32_t queue_freed_addr = 0;
     uint32_t fwd_arrived_addr = 0;
+    uint32_t launch_credit_addr = 0;
     // Tile rows the untilizer pool must deliver to this core before it may read a token, and the counter
     // it signals them on. Zero tile rows means the input is row-major and there is no pool.
     uint32_t untilize_sem_addr = 0;
