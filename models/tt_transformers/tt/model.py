@@ -394,13 +394,6 @@ class Transformer(LightweightModule):
     ):
         """Extract each user's last-token hidden state from batched prefill output.
 
-        Gathers the rows on device with a one-hot selection matmul
-        ``sel[1, 1, target_batch, padded_batch * prefill_seq_len] @ hidden[1, 1, padded_batch * prefill_seq_len, dim]``,
-        so only the small selection matrix is uploaded instead of reading the whole batch of hidden
-        states back to host. Each device multiplies its own column shard of the hidden states, so the
-        result keeps the column-sharded (dim=-1) layout the DistributedNorm all-gather expects. With a
-        single 1.0 per row, HiFi4 and fp32 accumulation, every finite gathered value equals the source value.
-
         Args:
             hidden_states: [padded_batch, 1, prefill_seq_len, dim_per_device] on device (column-sharded, TILE_LAYOUT)
             last_token_idx_list: list of length padded_batch with per-user last token positions

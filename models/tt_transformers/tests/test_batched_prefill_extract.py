@@ -1,10 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Batched prefill hands each user's last-token hidden state to norm + lm_head (and the
-on-device sampler) through ``Transformer.extract_last_tokens_batched_prefill``. The gather
-must return exactly the source rows, column-sharded the same way as the hidden states."""
-
 from types import SimpleNamespace
 
 import pytest
