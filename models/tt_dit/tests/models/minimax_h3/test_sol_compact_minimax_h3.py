@@ -584,3 +584,46 @@ def test_partial_block_isolate(
     pcc = _pcc(r.dense, r.sol, logical_n=8 * rows)
     logger.info(f"[isolate] rows={rows} tau={tau} ({what}) density={r.density:.4f} pcc={pcc:.5f}")
     assert pcc > 0.99, f"rows={rows} tau={tau} ({what}): pcc {pcc:.5f}"
+
+
+@GALAXY_RING
+def test_partial_block_is_dropped_not_pooled(
+    mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, reset_seeds, capfd
+):
+    """Is the partial tail block being DROPPED entirely rather than pooled?
+
+    rows=1184 loses 0.145 PCC from one 32-token block per shard, and the loss is identical at tau=-1e4 (where
+    that block is the only approximation in the whole op) and tau=1.0. 2.7 % of keys cannot cost that much if
+    they are merely approximated -- the reference prices it at 0.007.
+
+    So compare the device output against a dense reference computed WITHOUT those tokens: K/V truncated to the
+    1152 full-block tokens per shard, queries unchanged. If sol matches that truncated reference closely, the
+    partial block contributes nothing at all -- excluded from the exact path by full_row and never picked up by
+    the pooled correction either. That is a dropped-keys bug, not an approximation-quality one.
+    """
+    rows, full_rows = 1184, 1152  # 18 full 64-token blocks = 1152; the 19th holds 32
+    r = _run(
+        mesh_device,
+        sp_axis,
+        num_links,
+        topology,
+        capfd,
+        mode="compact",
+        tau=-1e4,
+        rows=rows,
+        logical_n=8 * rows,
+    )
+    S = tuple(mesh_device.shape)[sp_axis]
+    q, k, v = _qkv(S, rows)
+    kt = torch.cat([k[s, :, :full_rows] for s in range(S)], dim=1).float()  # tail tokens removed
+    vt = torch.cat([v[s, :, :full_rows] for s in range(S)], dim=1).float()
+    trunc = torch.cat(
+        [torch.softmax(q[s].float() @ kt.transpose(1, 2) * (D**-0.5), dim=-1) @ vt for s in range(S)], dim=1
+    )
+    pcc_full = _pcc(r.dense, r.sol, logical_n=8 * rows)
+    pcc_trunc = _pcc(trunc, r.sol, logical_n=8 * rows)
+    logger.info(f"[drop] sol vs dense={pcc_full:.5f}   sol vs dense-without-tail-tokens={pcc_trunc:.5f}")
+    assert pcc_trunc < 0.999, (
+        f"sol matches the truncated reference at {pcc_trunc:.5f}: the partial block is being dropped entirely, "
+        f"not pooled"
+    )
