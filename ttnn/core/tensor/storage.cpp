@@ -77,8 +77,6 @@ struct DeviceStorage::MeshTensorHolder {
     struct DeallocatedDefaultConstructed {};
 
     struct Allocated {
-        // Destroy the view before releasing references to its backing.
-        std::vector<DeviceStorage> backing_;
         MeshTensor mesh_tensor_;
     };
 
@@ -93,7 +91,7 @@ struct DeviceStorage::MeshTensorHolder {
     MeshTensorHolder() : state_(DeallocatedDefaultConstructed{}) {}
     MeshTensorHolder(MeshTensor mesh_tensor) {
         TT_FATAL(!mesh_tensor.is_valueless_after_move(), "MeshTensor must not be in a moved-from state.");
-        state_ = Allocated{{}, std::move(mesh_tensor)};
+        state_ = Allocated{std::move(mesh_tensor)};
     }
 
     bool is_allocated() const { return std::holds_alternative<Allocated>(state_); }
@@ -213,34 +211,6 @@ MeshTensor& DeviceStorage::get_mesh_tensor() {
 
 const std::shared_ptr<DeviceStorage::MeshTensorHolder>& DeviceStorage::get_root_mesh_tensor() const {
     return root_mesh_tensor_holder_ ? root_mesh_tensor_holder_ : mesh_tensor_holder_;
-}
-
-void DeviceStorage::retain_backing_storage(std::vector<DeviceStorage> backing) {
-    auto* allocated = std::get_if<MeshTensorHolder::Allocated>(&mesh_tensor_holder_->state_);
-    TT_FATAL(allocated != nullptr && allocated->backing_.empty(), "Backing may only be attached once to live storage");
-    // Reject cycles before changing references; copied and reinterpreted tensors share these holders.
-    std::set<const MeshTensorHolder*> visited;
-    std::vector<const MeshTensorHolder*> pending;
-    for (const auto& owner : backing) {
-        TT_FATAL(owner.is_allocated() && owner.is_root_allocated(), "Backing storage is deallocated");
-        pending.push_back(owner.get_root_mesh_tensor().get());
-        pending.push_back(owner.mesh_tensor_holder_.get());
-    }
-    while (!pending.empty()) {
-        const auto* holder = pending.back();
-        pending.pop_back();
-        TT_FATAL(holder != mesh_tensor_holder_.get(), "Backing storage would form an ownership cycle");
-        if (!visited.insert(holder).second) {
-            continue;
-        }
-        if (const auto* state = std::get_if<MeshTensorHolder::Allocated>(&holder->state_)) {
-            for (const auto& owner : state->backing_) {
-                pending.push_back(owner.get_root_mesh_tensor().get());
-                pending.push_back(owner.mesh_tensor_holder_.get());
-            }
-        }
-    }
-    allocated->backing_ = std::move(backing);
 }
 
 void DeviceStorage::deallocate() {

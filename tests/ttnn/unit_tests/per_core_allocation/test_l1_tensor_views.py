@@ -51,7 +51,8 @@ def _view(mesh, spec, owner, placements):
 
 
 @pytest.mark.parametrize("per_core", [True, False])
-def test_view_retains_owner_and_preserves_neighbor_bytes(per_core_mesh_device, per_core):
+def test_caller_owned_views_preserve_neighbor_bytes(per_core_mesh_device, per_core):
+    """Keep backing alive explicitly; destroying views must not release its bytes."""
     mesh = per_core_mesh_device
     coord, core = ttnn.MeshCoordinate(0, 0), ttnn.CoreCoord(0, 0)
     baseline = ttnn.experimental_get_l1_occupied_ranges(mesh, coord, core)
@@ -60,17 +61,15 @@ def test_view_retains_owner_and_preserves_neighbor_bytes(per_core_mesh_device, p
     before = ttnn.experimental_get_l1_occupied_ranges(mesh, coord, core)
     views = [_view(mesh, spec, owner, [(coord, core, offset)]) for offset in (0, 256, 512)]
     assert ttnn.experimental_get_l1_occupied_ranges(mesh, coord, core) == before
-    for view in views:
-        ttnn.experimental_retain_tensor_backing(view, [owner])
-    del owner
-    gc.collect()
-    assert ttnn.experimental_get_l1_occupied_ranges(mesh, coord, core) == before
     values = [torch.full((1, 256), value, dtype=torch.uint8) for value in (17, 23, 29)]
     for view, value in zip(views, values):
         ttnn.copy_host_to_device_tensor(ttnn.from_torch(value, dtype=ttnn.uint8), view)
     for view, value in zip(views, values):
         torch.testing.assert_close(_read(view), value)
     del view, views
+    gc.collect()
+    assert ttnn.experimental_get_l1_occupied_ranges(mesh, coord, core) == before
+    del owner
     gc.collect()
     assert ttnn.experimental_get_l1_occupied_ranges(mesh, coord, core) == baseline
 
@@ -131,11 +130,8 @@ def test_view_preserves_selected_device_coverage(mesh_device):
     host = ttnn.from_torch(torch.arange(256, dtype=torch.uint8).reshape(1, 256), dtype=ttnn.uint8)
     owner = ttnn.experimental_to_single_device(host, mesh, coord, spec.memory_config)
     view = _view(mesh, spec, owner, [(coord, core, 0)])
-    ttnn.experimental_retain_tensor_backing(view, [owner])
     assert view.device_coords() == [coord]
     assert all(extent.device_coord == coord for extent in ttnn.experimental_l1_tensor_owned_extents(view))
-    del owner
-    gc.collect()
     torch.testing.assert_close(_read(view), torch.arange(256, dtype=torch.uint8).reshape(1, 256))
     value = torch.full((1, 256), 41, dtype=torch.uint8)
     mapper = ttnn.create_mesh_mapper(
@@ -152,7 +148,7 @@ def test_view_preserves_selected_device_coverage(mesh_device):
 
 
 def test_allocation_only_views_narrow_writes_and_lifetime(mesh_device):
-    """Exercise selected-device allocation, padded writes, semaphore storage and native-copy lifetime."""
+    """Exercise selected-device allocation, narrow writes and caller-owned backing for native copies."""
     mesh, core = mesh_device, ttnn.CoreCoord(0, 0)
     coord = ttnn.MeshCoordinate(0, 1)
     baseline = ttnn.experimental_get_l1_occupied_ranges(mesh, coord, core)
@@ -190,12 +186,14 @@ def test_allocation_only_views_narrow_writes_and_lifetime(mesh_device):
     assert data[512:516].tolist() == [37, 0, 0, 0]
     assert torch.all(data[528:] == 91)
     assert ttnn.experimental_get_l1_occupied_ranges(mesh, coord, core) == occupied
-    ttnn.experimental_retain_tensor_backing(view, [owner])
     copied = ttnn.get_device_tensors(view)[0]
-    del owner, view
+    del view
     gc.collect()
     torch.testing.assert_close(ttnn.to_torch(copied), torch.full((1, 17), 7, dtype=torch.uint8))
     del copied
+    gc.collect()
+    assert ttnn.experimental_get_l1_occupied_ranges(mesh, coord, core) == occupied
+    del owner
     gc.collect()
     assert ttnn.experimental_get_l1_occupied_ranges(mesh, coord, core) == baseline
 

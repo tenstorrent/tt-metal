@@ -148,9 +148,6 @@ struct DeviceStorage {
     // report allocated after the root was force-deallocated; root accessors throw in that state.
     bool is_root_allocated() const;
 
-    // Retain caller-validated backing for this storage and all native copies, without owning its addresses.
-    void retain_backing_storage(std::vector<DeviceStorage> backing);
-
     ////////////////////////////////////////////////////////////////////////////////////////////////////////////
     // Begin internal functions:
 
