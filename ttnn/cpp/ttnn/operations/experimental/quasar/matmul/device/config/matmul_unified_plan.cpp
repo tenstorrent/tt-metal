@@ -102,7 +102,6 @@ std::optional<std::string> find_unsupported_feature(
 // The GEMM a plan runs, with only its size fields set. Batches of A that share one B are one [batch * M x N] GEMM:
 // A's and C's batches are stacked tile rows, so its C slices spread over the cores like any other rows.
 MatmulUnifiedPlan plan_gemm_size(const ttnn::Tensor& A, const ttnn::Tensor& B, const MatmulParams& attributes) {
-    TT_FATAL(attributes.bcast_batch.has_value(), "bcast_batch should have been populated");
     const tt::tt_metal::Shape& A_shape = A.padded_shape();
     const tt::tt_metal::Shape& B_shape = B.padded_shape();
     MatmulUnifiedPlan plan{};
@@ -112,11 +111,6 @@ MatmulUnifiedPlan plan_gemm_size(const ttnn::Tensor& A, const ttnn::Tensor& B, c
     plan.N_tiles = B_shape[-1] / TILE_WIDTH;
     const bool B_has_one_batch = attributes.bcast_batch.value();  // the op sets bcast_batch iff batch_size(B) == 1
     plan.B_batch_stride_tiles = B_has_one_batch ? 0 : plan.K_tiles * plan.N_tiles;
-    TT_FATAL(
-        B_has_one_batch || get_batch_size(B_shape) == plan.batch_size,
-        "Batched B must match A's batch ({} vs {})",
-        get_batch_size(B_shape),
-        plan.batch_size);
     if (B_has_one_batch) {
         plan.M_tiles *= plan.batch_size;
         plan.batch_size = 1;
@@ -140,15 +134,12 @@ std::optional<MatmulUnifiedPlan> plan_unified_matmul(
     if (const std::optional<std::string> unsupported = find_unsupported_feature(A, B, attributes)) {
         TT_THROW("MatmulUnifiedProgramConfig does not support {}", *unsupported);
     }
-    TT_FATAL(attributes.compute_kernel_config.has_value(), "compute_kernel_config should have been populated");
-    TT_FATAL(attributes.output_dtype.has_value(), "output_dtype should have been populated");
     const tt::tt_metal::IDevice& device = *A.device();
 
     // ---- GEMM size ----
     MatmulUnifiedPlan base = plan_gemm_size(A, B, attributes);
 
     // ---- Cores ----
-    TT_FATAL(config.cores.num_cores() > 0, "MatmulUnifiedProgramConfig.cores is empty");
     const CoreCoord grid = device.compute_with_storage_grid_size();
     const CoreRange bounding_box = config.cores.bounding_box();
     TT_FATAL(
@@ -165,15 +156,11 @@ std::optional<MatmulUnifiedPlan> plan_unified_matmul(
     const bool is_quasar = device.arch() == tt::ARCH::QUASAR;
     const std::size_t requested_threads = config.num_compute_threads;  // checked before it narrows to uint32_t
     TT_FATAL(
-        requested_threads == 0 || requested_threads == 1 || requested_threads == 2 || requested_threads == 4,
-        "MatmulUnifiedProgramConfig.num_compute_threads must be 0 (auto), 1, 2 or 4, got {}",
+        requested_threads == 0 || requested_threads == 1 ||
+            (is_quasar && (requested_threads == 2 || requested_threads == 4)),
+        "MatmulUnifiedProgramConfig.num_compute_threads must be 0 (auto), 1, 2 or 4, and above 1 needs Quasar; got {}",
         requested_threads);
     base.num_compute_threads = requested_threads != 0 ? static_cast<uint32_t>(requested_threads) : (is_quasar ? 4 : 1);
-    TT_FATAL(
-        base.num_compute_threads == 1 || is_quasar,
-        "MatmulUnifiedProgramConfig.num_compute_threads = {} needs Quasar; this device has one compute engine per "
-        "core",
-        base.num_compute_threads);
 
     // ---- Writer threads: thread t writes the shares of compute threads t, t + num_writer_threads, ... ----
     base.num_writer_threads =
@@ -197,7 +184,6 @@ std::optional<MatmulUnifiedPlan> plan_unified_matmul(
     base.bias_entry_bytes = bias_tile_bytes;
     const uint32_t l1_base = device.allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
     const uint32_t l1_ceiling = device.lowest_occupied_compute_l1_address().value_or(device.l1_size_per_core());
-    TT_FATAL(l1_ceiling > l1_base, "L1 ceiling ({}) must exceed base ({})", l1_ceiling, l1_base);
     const uint64_t l1_budget = l1_ceiling - l1_base;
 
     TT_FATAL(
@@ -205,6 +191,14 @@ std::optional<MatmulUnifiedPlan> plan_unified_matmul(
         "subblock_M_tiles and subblock_N_tiles must both be set or both be 0 (auto), got {}x{}",
         config.subblock_M_tiles,
         config.subblock_N_tiles);
+    TT_FATAL(
+        config.subblock_M_tiles * config.subblock_N_tiles <= dst_capacity_tiles,
+        "subblock {}x{} holds {} tiles; DST fits {} (fp32 accumulation: {})",
+        config.subblock_M_tiles,
+        config.subblock_N_tiles,
+        config.subblock_M_tiles * config.subblock_N_tiles,
+        dst_capacity_tiles,
+        fp32_dest_acc_en);
     TT_FATAL(
         config.K_chunk_tiles == 0 || base.K_tiles % config.K_chunk_tiles == 0,
         "K_chunk_tiles ({}) must divide K_tiles ({})",
@@ -404,14 +398,6 @@ std::optional<MatmulUnifiedPlan> plan_unified_matmul(
             std::tie(subblock_M_tiles, subblock_N_tiles) = detail::maximize_subblock_size(
                 C_slice_M_tiles, C_slice_N_tiles, dst_capacity_tiles, base.num_compute_threads, subblock_viable);
         }
-        TT_FATAL(
-            subblock_M_tiles * subblock_N_tiles <= dst_capacity_tiles,
-            "subblock {}x{} holds {} tiles; DST fits {} (fp32 accumulation: {})",
-            subblock_M_tiles,
-            subblock_N_tiles,
-            subblock_M_tiles * subblock_N_tiles,
-            dst_capacity_tiles,
-            fp32_dest_acc_en);
 
         // ---- K chunk: the config's, else the longest divisor of K_tiles that fits, walking down from a cap ----
         if (config.K_chunk_tiles == 0) {
