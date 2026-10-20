@@ -141,9 +141,13 @@ inline void _llk_unpack_A_mop_config_(
         }
         else if (BType == BroadcastType::ROW || BType == BroadcastType::SCALAR)
         {
+            // Row 0 of the top faces goes to row 0 of dest faces 0 and 1; math broadcasts them.
+            // A tile with one face column reads face 0 for both, so the source face does not step.
+            static constexpr std::uint32_t unpack_srca_to_dest_same_face =
+                TT_OP_UNPACR(SrcA, 0b00010000 /*CH1 Z inc*/, 0, 0, 0, 1 /* Set OvrdThreadId*/, 0 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
             constexpr std::uint32_t outerloop = BType == BroadcastType::ROW ? 2 : 1;
             constexpr std::uint32_t innerloop = 1;
-            ckernel_template tmp(outerloop, innerloop, unpack_srca_to_dest);
+            ckernel_template tmp(outerloop, innerloop, (num_faces_c_dim == 1) ? unpack_srca_to_dest_same_face : unpack_srca_to_dest);
             tmp.program();
         }
         else if (BType == BroadcastType::COL)
