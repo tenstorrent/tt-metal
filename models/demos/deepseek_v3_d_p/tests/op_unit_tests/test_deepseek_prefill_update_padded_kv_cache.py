@@ -2263,8 +2263,9 @@ def test_update_padded_kv_cache_paged_rejects(mesh_device, expect_error):
 @pytest.mark.timeout(0)
 def test_update_padded_kv_cache_paged_perf(mesh_device, page_size, is_ci_env, is_ci_v2_env):
     """A paged write of MiniMax-M3's per-chip K chunk (1024 rows of 128, bfloat8_b) against a contiguous one. Device
-    time is the slowest chip's, median of 7. The bound is absolute: paging adds a fixed cost per write (a table read per
-    slab a core's rows touch, a lookup per page), and a ratio on so short an op would gate on noise."""
+    time is the slowest chip's, median of 7. The bound is absolute: paging adds a fixed cost per write (on every core, a
+    table read per slab its chip's rows touch, and a lookup per page), and a ratio on so short an op would gate on
+    noise."""
     if is_ci_env or is_ci_v2_env:
         pytest.skip("a timing gate: it needs the realtime profiler, which a CI runner need not have")
     require_realtime_profiler("update_padded_kv_cache paged perf")
