@@ -37,6 +37,8 @@ Cache: ``[max_blocks, 1, block_size, 512]`` bf16, paged; page_table ``[B, max_bl
 
 from __future__ import annotations
 
+import os
+
 import torch
 
 import ttnn
@@ -529,9 +531,10 @@ class TtDSA(LightweightModule):
         """sparse_sdpa wants H % 32 == 0: pad a row-major [1, H, T, L] query with zero heads (their
         outputs are discarded by ``_unpad_heads``); a no-op when the local head count is tile-aligned."""
         H = q_rm.shape[1]
-        if H % TILE == 0:
+        force = os.environ.get("GLM53_FORCE_HEAD_PAD") == "1"  # debug: pad a tile-aligned H by one tile too
+        if H % TILE == 0 and not force:
             return q_rm
-        pad = TILE - H % TILE
+        pad = (TILE - H % TILE) if H % TILE else TILE
         key = ("qpad", pad, q_rm.shape[-2], q_rm.shape[-1])
         if key not in self._pad_cache:
             self._pad_cache[key] = ttnn.zeros(
