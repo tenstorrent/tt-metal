@@ -75,7 +75,7 @@ def _stage_layouts():
     return layouts
 
 
-def _stub_cache(num_layers, seq_len=SEQ_LEN, index_k_tp_axis=None, num_users=NUM_USERS):
+def _stub_cache(num_layers, num_users, seq_len=SEQ_LEN, index_k_tp_axis=None):
     def t(dtype, rows):
         return SimpleNamespace(shape=(num_users * num_layers, 1, rows, HEAD_DIM), dtype=dtype)
 
@@ -104,7 +104,7 @@ def _build(
     # num_layers is THIS rank's stage count (rank 0 builds), used only for the local shape assert.
     return build_and_serialize_kv_chunk_table(
         mesh_device=None,
-        kv_cache=_stub_cache(STAGE_COUNTS[0], seq_len=seq_len, index_k_tp_axis=index_k_tp_axis, num_users=num_users),
+        kv_cache=_stub_cache(STAGE_COUNTS[0], num_users, seq_len=seq_len, index_k_tp_axis=index_k_tp_axis),
         seq_len=seq_len,
         num_layers=STAGE_COUNTS[0],
         mesh_shape=(SP, COLS),
@@ -416,13 +416,10 @@ def test_fixed_page_table_is_one_to_one():
         assert sorted(table[:, owned].flatten().tolist()) == list(range(num_pages)), f"rank {rank}"
 
 
-def _hf_config(msa_layers, num_layers=6):
-    return SimpleNamespace(
-        sparse_attention_config={
-            "use_sparse_attention": True,
-            "sparse_attention_freq": [int(i in msa_layers) for i in range(num_layers)],
-        }
-    )
+# Six layers, MSA on 3-5 (dense 0-2, as on M3).
+_HF_CONFIG = SimpleNamespace(
+    sparse_attention_config={"use_sparse_attention": True, "sparse_attention_freq": [0, 0, 0, 1, 1, 1]}
+)
 
 
 @pytest.mark.parametrize(
@@ -433,13 +430,13 @@ def _hf_config(msa_layers, num_layers=6):
 def test_stage_is_paged(monkeypatch, enabled, first, count, paged):
     """Only a stage of MSA layers is paged, and only with PAGED_KV_CACHE on."""
     monkeypatch.setattr(tt_prefill_runtime, "PAGED_KV_CACHE", enabled)
-    assert tt_prefill_runtime.stage_is_paged(_hf_config({3, 4, 5}), first, count) == paged
+    assert tt_prefill_runtime.stage_is_paged(_HF_CONFIG, first, count) == paged
 
 
 def test_paging_mismatch_raises(monkeypatch, expect_error):
     """A stage whose cache disagrees with stage_is_paged would publish a wrong migration table: it raises."""
     monkeypatch.setattr(tt_prefill_runtime, "PAGED_KV_CACHE", True)
-    runtime = SimpleNamespace(hf_config=_hf_config({3, 4, 5}))
+    runtime = SimpleNamespace(hf_config=_HF_CONFIG)
     check = tt_prefill_runtime.TtPrefillRuntime._check_paging
     with expect_error(ValueError, "slot KV cache"):
         check(runtime, SimpleNamespace(page_table=None), 3, 2)
