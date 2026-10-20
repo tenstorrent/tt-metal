@@ -1011,6 +1011,7 @@ def test_eltwise_unary_sfpu_polygamma_order(
         # and 1.4% for bfloat16, against 32.6 float32 ULP and 0.74 bfloat16 ULP above 2^-100.
         custom_rtol=0.05 if formats.output_format == DataFormat.Float32 else 0.02,
         polygamma_order=polygamma_order,
+        return_golden=True,
     )
 
 
