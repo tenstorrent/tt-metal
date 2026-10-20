@@ -210,7 +210,6 @@ Tensor exp(
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<CoreRangeSet>& sub_core_grids) {
     using namespace operations::unary;
-    // Fast mode passes 2 so the define saturates overflow to +inf; see get_op_init_and_func_parameterized.
     return operations::unary::detail::unary_impl(
         input_tensor,
         {UnaryWithParam{UnaryOpType::EXP, fast_and_approximate_mode ? 2.0f : 0.0f}},

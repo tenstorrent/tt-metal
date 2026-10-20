@@ -17,8 +17,7 @@ namespace ckernel {
  * ClampToNegative (default): Inputs below ~-88.5 are clamped to -88.5. Safer but slightly slower.
  * None: No input clamping. Faster, but inputs below ~-88.5 will produce incorrect outputs. They
  *     will be guaranteed to be negative, so consider enabling packer ReLU when using this mode.
- * ClampBoth: As ClampToNegative, and on an fp32 Dest inputs that overflow (above ~88.75) return +inf instead of NaN.
- *     Slower on an fp32 Dest; used by ttnn.exp in fast mode. Unscaled only; Wormhole and Blackhole only.
+ * ClampBoth: As ClampToNegative, and overflow returns +inf. Used by ttnn.exp in fast mode.
  */
 enum class InputClamping : uint8_t {
     ClampBoth = 2,
@@ -56,7 +55,7 @@ ALWI void exp_tile_init() {
  * |-------------------------|----------------------------------------------------------------|----------|------------------|---------|
  * | approx                  | Enable approximate mode.                                       | bool     | true, false      | false   |
  * | scale_en                | Enable input scaling by a constant factor in approximate or non-approximate mode | bool     | true, false      | false   |
- * | input_clamping          | If approx, controls whether very negative inputs are clamped to prevent incorrect outputs | InputClamping | ClampBoth, ClampToNegative, None | ClampToNegative |
+ * | input_clamping          | If approx, which inputs are clamped                            | InputClamping | ClampBoth, ClampToNegative, None | ClampToNegative |
  * | iterations              | Number of iterations over 32-SFPU lanes to run                 | int      | Positive integer | 8       |
  *
  * | Argument    | Description                                                                | Type     | Valid Range                                           | Required |

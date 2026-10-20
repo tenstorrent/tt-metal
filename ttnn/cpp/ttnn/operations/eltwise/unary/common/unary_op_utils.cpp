@@ -368,7 +368,7 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                     std::bit_cast<uint32_t>(1.0f / param0)),
                 fmt::format("fmod_tile({});", idst)};
         case UnaryOpType::EXP:
-            // 2 is ttnn.exp's fast mode, where overflow returns +inf (#60792); other fast callers pass 1.
+            // 2: ttnn.exp in fast mode
             if ((uint32_t)param0 == 2) {
                 return {
                     "exp_tile_init<1u, 0x3F800000, InputClamping::ClampBoth>();",

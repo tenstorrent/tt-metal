@@ -234,15 +234,6 @@ def test_exp_overflow(device, fast):
 
 
 def test_exp_fast_overflow_edge(device):
-    """Fast mode at its own overflow point (#60792), spread over every row and face of a tile.
-
-    | Input            | Check  | Reason                                               |
-    |------------------|--------|------------------------------------------------------|
-    | 88.7             | finite | below the fast kernel's overflow point               |
-    | 88.76 to 88.99   | +inf   | overflow below the 89 where the binade samples start |
-    | +inf             | +inf   | main returns NaN here too                            |
-    | NaN              | NaN    | the overflow fix must not turn NaN into +inf         |
-    """
     values = torch.tensor([88.7, 88.76, 88.8, 88.9, 88.99, float("inf"), float("nan")], dtype=torch.float32)
     index = torch.arange(32 * 32) % len(values)
     input_tensor = values[index].reshape(32, 32)
