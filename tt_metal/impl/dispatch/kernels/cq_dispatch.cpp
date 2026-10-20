@@ -152,9 +152,8 @@ constexpr uint32_t downstream_cb_end = downstream_cb_base + downstream_cb_size;
 constexpr uint32_t programmable_core_type_idx = static_cast<uint32_t>(programmable_core_type);
 
 constexpr bool dispatch_s_enabled = dispatch_d_shutdown_sem_id != 0;
-#ifdef ARCH_QUASAR
-constexpr bool publish_noc_count = false;
-#else
+// Quasar's NoC barriers don't use the software counters, so there is no write count to hand over to dispatch_s.
+#ifndef ARCH_QUASAR
 constexpr bool publish_noc_count = !distributed_dispatcher && dispatch_s_enabled;
 #endif
 
@@ -377,8 +376,8 @@ void process_write_host_h() {
                 cq_noc_async_write_with_state_any_len(
                     static_cast<uint32_t>(data_ptr), completion_queue_write_addr, last_chunk_size);
                 uint32_t num_noc_packets_written = div_up(last_chunk_size, NOC_MAX_BURST_SIZE);
-                noc_nonposted_writes_num_issued[noc_index] += num_noc_packets_written;
-                noc_nonposted_writes_acked[noc_index] += num_noc_packets_written;
+                noc_increment_nonposted_writes_issued(noc_index, num_noc_packets_written);
+                noc_increment_nonposted_writes_acked(noc_index, num_noc_packets_written);
 #endif
                 completion_queue_write_addr = completion_queue_base_addr;
                 data_ptr += last_chunk_size;
@@ -396,8 +395,8 @@ void process_write_host_h() {
             // completion_queue_push_back below will do a write to host, so we add 1 to the number of data packets
             // written
             uint32_t num_noc_packets_written = div_up(xfer_size, NOC_MAX_BURST_SIZE) + 1;
-            noc_nonposted_writes_num_issued[noc_index] += num_noc_packets_written;
-            noc_nonposted_writes_acked[noc_index] += num_noc_packets_written;
+            noc_increment_nonposted_writes_issued(noc_index, num_noc_packets_written);
+            noc_increment_nonposted_writes_acked(noc_index, num_noc_packets_written);
 #endif
 
             // This will update the write ptr on device and host
@@ -585,8 +584,8 @@ void process_write_linear(uint32_t num_mcast_dests) {
             /*set_ret_mid=*/true>(static_cast<uint32_t>(data_ptr), dst_addr, xfer_size, num_mcast_dests, noc_index);
         // Increment counters based on the number of packets that were written
         uint32_t num_noc_packets_written = div_up(xfer_size, NOC_MAX_BURST_SIZE);
-        noc_nonposted_writes_num_issued[noc_index] += num_noc_packets_written;
-        noc_nonposted_writes_acked[noc_index] += num_mcast_dests * num_noc_packets_written;
+        noc_increment_nonposted_writes_issued(noc_index, num_noc_packets_written);
+        noc_increment_nonposted_writes_acked(noc_index, num_mcast_dests * num_noc_packets_written);
         length -= xfer_size;
         data_ptr += xfer_size;
         dst_addr += xfer_size;
@@ -758,8 +757,8 @@ void process_write_packed(uint32_t flags, uint32_t* l1_cache) {
         if (!mcast) {
             return;
         }
-        noc_nonposted_writes_num_issued[noc_index] += writes;
-        noc_nonposted_writes_acked[noc_index] += mcasts;
+        noc_increment_nonposted_writes_issued(noc_index, writes);
+        noc_increment_nonposted_writes_acked(noc_index, mcasts);
         writes = 0;
         mcasts = 0;
         // Workaround mcast path reservation hangs by always waiting for a write
@@ -797,8 +796,8 @@ void process_write_packed(uint32_t flags, uint32_t* l1_cache) {
                         data_ptr += orphan_size;
                     }
                 }
-                noc_nonposted_writes_num_issued[noc_index] += writes;
-                noc_nonposted_writes_acked[noc_index] += mcasts;
+                noc_increment_nonposted_writes_issued(noc_index, writes);
+                noc_increment_nonposted_writes_acked(noc_index, mcasts);
                 writes = 0;
                 mcasts = 0;
             });
@@ -835,8 +834,8 @@ void process_write_packed(uint32_t flags, uint32_t* l1_cache) {
         data_ptr += stride;
     }
 
-    noc_nonposted_writes_num_issued[noc_index] += writes;
-    noc_nonposted_writes_acked[noc_index] += mcasts;
+    noc_increment_nonposted_writes_issued(noc_index, writes);
+    noc_increment_nonposted_writes_acked(noc_index, mcasts);
 
     cmd_ptr = data_ptr;
 }
@@ -873,7 +872,8 @@ void process_write_packed_large(uint32_t* l1_cache) {
         l1_cache);
 
     uint32_t writes = 0;
-    uint32_t mcasts = noc_nonposted_writes_acked[noc_index];
+    // Acks for writes already counted as issued but not yet added to the acked counter.
+    uint32_t mcasts = 0;
     CQDispatchWritePackedLargeSubCmd* sub_cmd_ptr = (CQDispatchWritePackedLargeSubCmd*)l1_cache;
 
     bool init_state = true;
@@ -890,10 +890,9 @@ void process_write_packed_large(uint32_t* l1_cache) {
             if (!must_barrier) {
                 return;
             }
-            noc_nonposted_writes_num_issued[noc_index] += writes;
-
-            mcasts += num_dests * writes;
-            noc_nonposted_writes_acked[noc_index] = mcasts;
+            noc_increment_nonposted_writes_issued(noc_index, writes);
+            noc_increment_nonposted_writes_acked(noc_index, mcasts + num_dests * writes);
+            mcasts = 0;
             writes = 0;
             // Workaround mcast path reservation hangs by always waiting for a write
             // barrier before doing an mcast that isn't linked to a previous mcast.
@@ -920,7 +919,7 @@ void process_write_packed_large(uint32_t* l1_cache) {
             if (dispatch_cb_reader.available_bytes(data_ptr) == 0) {
                 dispatch_cb_reader.get_cb_page_and_release_pages(data_ptr, [&](bool /*will_wrap*/) {
                     // Block completion - account for all writes issued for this block before moving to next
-                    noc_nonposted_writes_num_issued[noc_index] += writes;
+                    noc_increment_nonposted_writes_issued(noc_index, writes);
                     mcasts += num_dests * writes;
                     writes = 0;
                 });
@@ -964,7 +963,7 @@ void process_write_packed_large(uint32_t* l1_cache) {
 
         init_state = unlink;
 
-        noc_nonposted_writes_num_issued[noc_index] += writes;
+        noc_increment_nonposted_writes_issued(noc_index, writes);
         mcasts += num_dests * writes;
         writes = 0;
 
@@ -981,7 +980,7 @@ void process_write_packed_large(uint32_t* l1_cache) {
 
         count--;
     }
-    noc_nonposted_writes_acked[noc_index] = mcasts;
+    noc_increment_nonposted_writes_acked(noc_index, mcasts);
 
     cmd_ptr = data_ptr;
 }
@@ -1225,13 +1224,13 @@ void process_go_signal_mcast_cmd() {
             sizeof(uint32_t),
             num_dests,
             noc_index);
-        noc_nonposted_writes_acked[noc_index] += num_dests;
+        noc_increment_nonposted_writes_acked(noc_index, num_dests);
 
         WAYPOINT("WCW");
         wait_worker_completion(stream, wait_count);
         WAYPOINT("WCD");
         cq_noc_async_write_with_state<CQ_NOC_sndl, CQ_NOC_wait>(0, 0, 0, num_dests);
-        noc_nonposted_writes_num_issued[noc_index] += 1;
+        noc_increment_nonposted_writes_issued(noc_index, 1);
     } else {
         WAYPOINT("WCW");
         wait_worker_completion(stream, wait_count);
@@ -1532,6 +1531,7 @@ static inline bool process_cmd_h(uintptr_t& cmd_ptr) {
     return done;
 }
 
+#ifndef ARCH_QUASAR
 struct NocCounterSnapshot {
     uint32_t reads_num_issued;
     uint32_t nonposted_writes_num_issued;
@@ -1584,6 +1584,7 @@ void publish_dispatch_d_noc_count(const NocCounterSnapshot& snapshot) {
 
     Semaphore<programmable_core_type>(dispatch_d_shutdown_sem_id).set(1);
 }
+#endif
 
 void kernel_main() {
 #if defined(NOC_ATT_ENABLED)
@@ -1608,10 +1609,12 @@ void kernel_main() {
         noc_local_state_init(upstream_noc_index);
     }
 
+#ifndef ARCH_QUASAR
     [[maybe_unused]] NocCounterSnapshot dispatch_d_noc_counter_start = {};
     if constexpr (publish_noc_count) {
         dispatch_d_noc_counter_start = snapshot_dispatch_d_noc_counters<upstream_noc_index>();
     }
+#endif
 
     for (size_t i = 0; i < max_num_worker_sems; i++) {
         const uint32_t index = i + first_stream_used;
@@ -1710,9 +1713,11 @@ void kernel_main() {
 
     noc_async_full_barrier();
 
+#ifndef ARCH_QUASAR
     if constexpr (publish_noc_count) {
         publish_dispatch_d_noc_count(dispatch_d_noc_counter_start);
     }
+#endif
 
     if (is_h_variant && !is_d_variant) {
         relay_client.template teardown<upstream_noc_index, upstream_noc_xy, upstream_dispatch_cb_sem_id>();

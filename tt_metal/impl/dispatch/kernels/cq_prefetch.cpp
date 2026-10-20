@@ -1560,12 +1560,12 @@ uint32_t process_relay_paged_cmd(uintptr_t cmd_ptr, uint32_t& downstream__data_p
     // Writes are fast, reads are slow
     uint32_t db_cur = 0;
     uint32_t scratch_write_addr;
-    // Value of the nonposted-writes-issued counter right after the write that last sourced from each buffer.
+    // Checkpoint of the nonposted writes issued right after the write that last sourced from each buffer.
     // Waiting on it before refilling that buffer replaces the global flush. At depth two the buffer being
     // refilled always sourced the immediately preceding write, so there is nothing to be gained over a flush
     // and the bookkeeping is compiled out.
     constexpr bool track_writes_per_buf = scratch_db_max_nbuf > 2;
-    [[maybe_unused]] uint32_t buf_writes_issued[scratch_db_max_nbuf] = {};
+    [[maybe_unused]] uint32_t buf_writes_checkpoint[scratch_db_max_nbuf] = {};
     [[maybe_unused]] uint32_t buf_written_mask = 0;
     read_wlength -= amt_read;
     while (read_wlength != 0) {
@@ -1582,7 +1582,7 @@ uint32_t process_relay_paged_cmd(uintptr_t cmd_ptr, uint32_t& downstream__data_p
             if constexpr (track_writes_per_buf) {
                 if (buf_written_mask & (1u << db_next)) {
                     WAYPOINT("RPBW");
-                    while (!noc_nonposted_writes_sent_at_count(noc_index, buf_writes_issued[db_next]));
+                    while (!noc_nonposted_writes_sent_since(noc_index, buf_writes_checkpoint[db_next]));
                     WAYPOINT("RPBD");
                 }
             } else {
@@ -1602,7 +1602,7 @@ uint32_t process_relay_paged_cmd(uintptr_t cmd_ptr, uint32_t& downstream__data_p
                 write_pages_to_dispatcher<0, false>(downstream_data_ptr, scratch_write_addr, amt_to_write);
             DispatchRelayInlineState::cb_writer.release_pages(npages, downstream_data_ptr, /*round_to_page_size*/ true);
             if constexpr (track_writes_per_buf) {
-                buf_writes_issued[db_cur] = noc_get_nonposted_writes_issued(noc_index);
+                buf_writes_checkpoint[db_cur] = noc_nonposted_writes_checkpoint(noc_index);
                 buf_written_mask |= (1u << db_cur);
             }
 
