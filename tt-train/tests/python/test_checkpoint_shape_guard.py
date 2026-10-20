@@ -91,8 +91,9 @@ def _trained_tp():
 
 
 def _gathered_shape(tensor) -> tuple:
-    """The shape the tensor gathers to by its label, trusting the label (forged labels are gathered here too)."""
-    return tuple(ttml.Sharding.from_tensor(tensor).gather(tensor, verify_replicas=False).shape)
+    """The shape the tensor gathers to by its label, trusting the label as `gather` does by default (forged labels are
+    gathered here too)."""
+    return tuple(ttml.Sharding.from_tensor(tensor).gather(tensor).shape)
 
 
 def _sharded_param_name(params) -> str:

@@ -82,17 +82,17 @@ class Sharding:
         )
         return ttnn.create_mesh_mapper(_mesh_device(), config)
 
-    def gather(self, tensor: ttml.autograd.Tensor, verify_replicas: bool = True):
+    def gather(self, tensor: ttml.autograd.Tensor, verify_replicas: bool = False):
         """Full host array for ``tensor`` in its native dtype, gathered into a single copy.
 
         On a single device the tensor is one host buffer, read directly. Otherwise a composer keyed on the
         tensor's own topology rebuilds it (cf. ``auto_compose._compose_nd_sharded``): a Shard axis
         concatenates its shards along the sharded dim, and a Replicate axis contributes one copy.
 
-        ``verify_replicas`` (default): every copy along each Replicate axis is read and byte-compared before one is
-        kept, and ``ReplicaMismatchError`` is raised if they differ, i.e. the label does not describe the data. This
-        holds the whole replicated extent on the host for a moment (one copy per replica). With ``False``, only the
-        first copy is read, trusting the label."""
+        With ``verify_replicas`` (off by default; ``save_checkpoint`` turns it on), every copy along each Replicate axis
+        is read and byte-compared before one is kept, and ``ReplicaMismatchError`` is raised if they differ, i.e. the
+        label does not describe the data. This holds the whole replicated extent on the host for a moment (one copy
+        per replica). Otherwise only the first copy is read, trusting the label."""
         dtype = tensor.get_value(ttml.autograd.PreferredPrecision.NATIVE).dtype
         if self._is_single_device():
             return tensor.to_numpy(dtype, precision=ttml.autograd.PreferredPrecision.NATIVE)
