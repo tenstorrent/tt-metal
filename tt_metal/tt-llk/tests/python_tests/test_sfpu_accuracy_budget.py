@@ -1729,9 +1729,9 @@ def _measured_budget_rows(path=_TABLE_PATH):
     and whether the sweep measured it (``run``) or a sample did (``sampled``).
 
     Deciding that by "the row has a number" once read every emitted row as a sampled
-    one, and the exhaustive audit below then covered 10 of the table's 1,614 budgets:
-    Acosh's ``max_ulp: 7`` measured at 6 raised to 12 with its measurement untouched
-    passed."""
+    one, and the exhaustive audit below then covered only the handful of rows that
+    carried their own exhaustive label: Acosh's ``max_ulp: 7`` measured at 6 raised to
+    12 with its measurement untouched passed."""
     return [
         (row, row.provenance.measured, row.provenance.swept)
         for row in BudgetTable.load(path).rows
@@ -1904,8 +1904,6 @@ def test_a_demoted_row_measured_past_the_ceiling():
     figure, so the budget it would have needed is derived, never written down to go
     stale (Gelu's kept-verbatim 31406 from the old float ceil, where 28550 x 1.1 is
     exactly 31405, once was). One inside the ceiling should have been enrolled."""
-    from helpers.ulp_sweep import _is_exact, _verdict
-
     wrong = []
     for row in BudgetTable.load(_TABLE_PATH).rows:
         p, fields = row.provenance, row.pinned
@@ -2157,16 +2155,26 @@ def test_the_table_fits_the_repos_file_size_limit():
     )
 
 
+#: Rows whose every claimed lane disagreed with the golden about being finite: there
+#: is no rest of the cell to measure, so `nonfinite_verdict` records no `measured` (a 0
+#: would claim it bit-exact). The table cannot tell such a row from one that lost its
+#: figure, so each is listed by hand after reading the emit. Empty today.
+_EVERY_CLAIMED_LANE_NONFINITE: frozenset = frozenset()
+
+
 def test_a_row_parked_by_disagreeing_lanes_records_the_rest_of_its_cell():
     """`nonfinite_verdict` keeps the step count over the measurable lanes beside the
     lanes that park a cell, so a cell parked by four lanes still says what the other
     tens of thousands measure, and the headroom report (from #57527) has a figure to
     hold it to. A row written before the emitter kept that figure records nothing for
-    them; re-emit its op."""
+    them; re-emit its op. A cell with no measurable lane left is listed in
+    `_EVERY_CLAIMED_LANE_NONFINITE` instead."""
     bare = [
         row.describe()
         for row in BudgetTable.load(_TABLE_PATH).rows
-        if row.provenance.nonfinite is not None and row.provenance.measured is None
+        if row.provenance.nonfinite is not None
+        and row.provenance.measured is None
+        and row.describe() not in _EVERY_CLAIMED_LANE_NONFINITE
     ]
     assert not bare, (
         f"{len(bare)} row(s) name the lanes that park their cell but not the maximum "

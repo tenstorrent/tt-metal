@@ -27,9 +27,6 @@ import yaml
 #: The key dimensions of a row, in the order a cell is named.
 KEY_FIELDS = ("in", "out", "approx", "dest", "arch")
 
-#: The provenance fields of a row, in the order the emitter writes them.
-PROVENANCE_FIELDS = ("measured", "measured_all", "nonfinite", "run", "sampled")
-
 
 def _is_int(value: Any) -> bool:
     return isinstance(value, int) and not isinstance(value, bool)
@@ -38,6 +35,9 @@ def _is_int(value: Any) -> bool:
 #: libyaml's loader when PyYAML was built with it: the table is parsed twice per load,
 #: and the pure-Python loader takes over a second for each.
 _LOADER = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
+
+#: The tag PyYAML gives a ``<<`` merge key, which each walker below treats apart.
+_MERGE_TAG = "tag:yaml.org,2002:merge"
 
 
 def refuse_duplicate_keys(node: yaml.Node, where: str) -> None:
@@ -48,11 +48,12 @@ def refuse_duplicate_keys(node: yaml.Node, where: str) -> None:
     if isinstance(node, yaml.MappingNode):
         seen = set()
         for key, value in node.value:
-            if key.tag == "tag:yaml.org,2002:merge":
+            if key.tag == _MERGE_TAG:
                 continue
             if key.value in seen:
                 raise ValueError(
-                    f"{where}: duplicate entry for {key.value!r}. YAML keeps only the "
+                    f"{where} line {key.start_mark.line + 1}: duplicate entry for "
+                    f"{key.value!r}. YAML keeps only the "
                     "last, so the earlier one would vanish with nothing to catch it."
                 )
             seen.add(key.value)
@@ -71,7 +72,7 @@ def _merged_keys(node: yaml.Node) -> set:
         return set()
     keys = set()
     for key, value in node.value:
-        if key.tag == "tag:yaml.org,2002:merge":
+        if key.tag == _MERGE_TAG:
             keys |= _merged_keys(value)
         else:
             keys.add(key.value)
@@ -87,7 +88,7 @@ def refuse_merged_provenance(node: yaml.Node, where: str) -> None:
     if isinstance(node, yaml.MappingNode):
         own, merged = set(), set()
         for key, value in node.value:
-            if key.tag == "tag:yaml.org,2002:merge":
+            if key.tag == _MERGE_TAG:
                 merged |= _merged_keys(value)
             else:
                 own.add(key.value)
@@ -95,7 +96,8 @@ def refuse_merged_provenance(node: yaml.Node, where: str) -> None:
         borrowed = sorted((merged - own) & set(PROVENANCE_FIELDS))
         if borrowed:
             raise ValueError(
-                f"{where}: {', '.join(f'`{k}`' for k in borrowed)} reaches a row only "
+                f"{where} line {node.start_mark.line + 1}: "
+                f"{', '.join(f'`{k}`' for k in borrowed)} reaches a row only "
                 "through a `<<` merge key. A merged row is a cell of its own and needs "
                 "its own measurement fields; a plain `*alias` shares the anchor's."
             )
@@ -105,13 +107,22 @@ def refuse_merged_provenance(node: yaml.Node, where: str) -> None:
 
 
 def load_yaml(text: str, where: str) -> Any:
-    """*text* as PyYAML's safe loader reads it, refusing a repeated mapping key and
-    provenance borrowed through a merge key."""
+    """*text* as PyYAML's safe loader reads it, refusing a repeated mapping key, a
+    top-level ``<<`` merge, and provenance borrowed through a merge key."""
     loader = _LOADER(text)
     try:
         node = loader.get_single_node()
         if node is None:
             return None
+        if isinstance(node, yaml.MappingNode) and any(
+            key.tag == _MERGE_TAG for key, _ in node.value
+        ):
+            # Its ops would load with no key line of their own: every row walk (the
+            # guard's, the emitter's) would miss them, and the borrowed-provenance check
+            # below never looks inside a merge value.
+            raise ValueError(
+                f"{where}: a top-level `<<` merge key. Give each op its own key line."
+            )
         refuse_duplicate_keys(node, where)
         refuse_merged_provenance(node, where)
         return loader.construct_document(node)
@@ -209,12 +220,17 @@ class Provenance:
         return found
 
 
+#: The provenance fields of a row, in the order the emitter writes them: the
+#: :class:`Provenance` fields, so the two cannot drift.
+PROVENANCE_FIELDS = tuple(f.name for f in fields(Provenance))
+
+
 def check_provenance(where: str, row: Dict[str, Any], *, tolerance: bool) -> None:
     """A row's provenance fields, against themselves and its contract; *tolerance* is
     whether the row's resolved metric is the tolerance one. The figure a budget came
     from is part of the row: a step budget without one is a guess, and the table's rule
     is that no number in it is. The registry's loader and the PR guard both call this,
-    so the guard cannot pass a table the registry refuses to load."""
+    so the two cannot disagree about provenance."""
     provenance = Provenance.of(row)
     problems = provenance.problems()
     if not tolerance and "max_ulp" in row and provenance.measured is None:
@@ -336,6 +352,8 @@ class BudgetTable:
         self.text = text
         self.lines = text.splitlines(keepends=True)
         self.blocks: Dict[str, OpBlock] = {}
+        #: The file as :func:`load_yaml` reads it, for a reader that checks the values.
+        self.loaded: Any = None
         self._parse()
 
     @classmethod
@@ -377,7 +395,7 @@ class BudgetTable:
         return comment.strip() if sep else ""
 
     def _parse(self) -> None:
-        loaded = load_yaml(self.text, "budget table") or {}
+        loaded = self.loaded = load_yaml(self.text, "budget table")
         if not isinstance(loaded, dict):
             return
         events = list(yaml.parse(self.text, Loader=_LOADER))
@@ -452,6 +470,11 @@ class BudgetTable:
                 rows=tuple(rows),
                 header=self._comment_after(key_event.end_mark),
             )
+        # Fail closed: an op the loader resolves but the walk cannot place would read as
+        # no rows on both sides of a diff, and a raised budget in it would compare clean.
+        missing = sorted(str(op) for op in loaded if str(op) not in self.blocks)
+        if missing:
+            raise ValueError(f"budget table: cannot locate op(s) {missing}")
 
 
 def _skip_node(events: list, i: int) -> int:

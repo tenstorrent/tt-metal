@@ -8,7 +8,9 @@ worth pinning is about what it must *not* touch. The table's rows are contracts,
 regeneration that quietly drops one weakens a gate with nothing to notice.
 
 Assertions read the table back through ``BudgetTable`` and compare rows and their
-``Provenance`` fields, never comment text: a row's comment is prose for people.
+``Provenance`` fields: no verdict depends on a comment, which is prose for people. The
+prose the emitter keeps -- key-line headers, the comments of rows it does not supersede
+-- is checked to survive.
 """
 
 import math
@@ -99,6 +101,14 @@ def table(tmp_path):
     MEASURED.clear()
 
 
+def _assert_kept(before, after, op, *keys):
+    """Each row of *op* that *keys* name is in *after* as it was in *before*: its fields
+    and its comment, which the emitter copies rather than re-renders."""
+    for key in keys:
+        assert after.row(op, **key).fields == before.row(op, **key).fields, key
+        assert after.row(op, **key).comment == before.row(op, **key).comment, key
+
+
 def _record_grid(op, in_fmt, out_fmt, value, **kw):
     """Every approx x dest cell of one ``(in, out)``, so the emitter collapses them."""
     for approx in ("No", "Yes"):
@@ -110,7 +120,7 @@ def test_only_the_cells_this_run_measured_are_replaced(table):
     """`MEASURED`, not the static SWEEP_FORMATS cross-product. A `-k` run, an interrupt
     or a driver skip must leave every cell it did not measure alone rather than render a
     whole op block from a partial session."""
-    record("Gelu", ("Float16", "Float16", "No", "No"), 5)
+    record("Gelu", _CELL, 5)
     report = write_table(table, _RUN)
     assert (set(report.written), report.kept, report.unplaced) == ({"Gelu"}, {}, [])
 
@@ -121,12 +131,13 @@ def test_only_the_cells_this_run_measured_are_replaced(table):
     assert after.blocks["Gelu"].header == "header provenance, ungeneratable"
     # The same op's other (in, out) cell and the other arch's row: kept as they were.
     before = BudgetTable(_TABLE)
-    for key in (
+    _assert_kept(
+        before,
+        after,
+        "Gelu",
         dict(in_="Float16_b", out="Float32"),
         dict(in_="Float16_b", out="Float16_b", arch="BLACKHOLE"),
-    ):
-        assert after.row("Gelu", **key).fields == before.row("Gelu", **key).fields
-        assert after.row("Gelu", **key).comment == before.row("Gelu", **key).comment
+    )
     assert len(after.rows_of("Gelu")) == 3
     # The op this run never measured: untouched, key line and row alike.
     assert after.blocks["Log1p"].header == ""
@@ -138,10 +149,10 @@ def test_only_the_cells_this_run_measured_are_replaced(table):
 def test_a_second_regeneration_credits_the_new_run(table):
     """Each written row names the run that measured it, so a re-emit of the same cell
     replaces the date with its own."""
-    record("Gelu", ("Float16", "Float16", "No", "No"), 5)
+    record("Gelu", _CELL, 5)
     write_table(table, _RUN)
     MEASURED.clear()
-    record("Gelu", ("Float16", "Float16", "No", "No"), 5)
+    record("Gelu", _CELL, 5)
     write_table(table, _RUN_B)
     after = BudgetTable.load(table)
     assert after.row("Gelu", in_="Float16", out="Float16").provenance.run == _RUN_B
@@ -194,13 +205,14 @@ def test_a_re_emit_leaves_a_hand_written_row_and_an_arch_row_alone(table):
         _record_grid("Gelu", in_fmt, in_fmt, 1)
         write_table(table, run)
     after = BudgetTable.load(table)
-    for key in (
+    _assert_kept(
+        before,
+        after,
+        "Gelu",
         dict(in_="Float16_b", out="Float32"),
         dict(out="Float16"),
         dict(in_="Float16_b", out="Float16_b", arch="BLACKHOLE"),
-    ):
-        assert after.row("Gelu", **key).fields == before.row("Gelu", **key).fields
-        assert after.row("Gelu", **key).comment == before.row("Gelu", **key).comment
+    )
     assert not after.row("Gelu", in_="Float16_b", out="Float32").provenance.swept
     # And the first run's emitted rows still name it.
     assert after.row("Gelu", in_="Float16", out="Float16").provenance == Provenance(
@@ -378,12 +390,15 @@ def test_a_measurement_with_nowhere_to_go_is_refused_after_writing_the_rest(tabl
 
     Refused only *after* every op that has a key line is written: a whole-table emit
     measures every sweepable op, and one unenrolled op must not throw the rest away."""
-    record("Sqrt", ("Float16", "Float16", "No", "No"), 1)
-    record("Gelu", ("Float16", "Float16", "No", "No"), 5)
+    record("Sqrt", _CELL, 1)
+    record("Gelu", _CELL, 5)
     with _refuses(UnplacedMeasurements) as caught:
         write_table(table, _RUN)
     assert caught.value.missing == ["Sqrt"]
     assert set(caught.value.report.written) == {"Gelu"}
+    # The plugin prefixes `--ulp-emit: ` itself, so the message must not carry one.
+    message = str(caught.value)
+    assert message.startswith("rewrote 1 op block(s) in budget.yaml; but measured Sqrt")
     assert (
         BudgetTable.load(table).row("Gelu", in_="Float16", out="Float16").max_ulp == 6
     )
@@ -411,8 +426,9 @@ def test_an_incomplete_grid_is_refused_rather_than_collapsed(table):
     before = table.read_text()
     with _refuses(AmbiguousCollapse) as caught:
         write_table(table, _RUN)
-    assert caught.value.cells == ("Float16", "Float16")
+    assert caught.value.key == ("Float16", "Float16")
     assert {measured for _, measured, _ in caught.value.values} == {4, 9}
+    assert "measurements onto ('Float16', 'Float16')" in str(caught.value)
     assert table.read_text() == before
 
 
@@ -958,14 +974,14 @@ def test_xdist_workers_measurements_merge_worst_lane_first(table):
     merge_measured(worker_b)
     assert MEASURED == {
         "Gelu": {
-            ("Float16", "Float16", "No", "No"): 9,
+            _CELL: 9,
             ("Float16", "Float16", "Yes", "No"): 2,
         }
     }
 
 
 @pytest.mark.parametrize(
-    "unmeasurable_first", [True, False], ids=["str,int", "int,str"]
+    "unmeasurable_first", [True, False], ids=["verdict,int", "int,verdict"]
 )
 def test_an_unmeasurable_cell_survives_the_xdist_merge_in_either_order(
     table, unmeasurable_first
@@ -978,13 +994,13 @@ def test_an_unmeasurable_cell_survives_the_xdist_merge_in_either_order(
     key = _CELL
     verdict = Unmeasurable(why="lanes disagreeing", nonfinite=3, measured=2)
     record_unmeasurable("Gelu", key, verdict)
-    with_reason = export_measured()
+    with_verdict = export_measured()
     MEASURED.clear()
     record("Gelu", key, 4)
     with_number = export_measured()
     MEASURED.clear()
 
-    for export in [with_reason, with_number][:: 1 if unmeasurable_first else -1]:
+    for export in [with_verdict, with_number][:: 1 if unmeasurable_first else -1]:
         merge_measured(export)
     assert MEASURED == {
         "Gelu": {key: Unmeasurable(**{**asdict(verdict), "measured": 4})}
@@ -1005,18 +1021,31 @@ def test_two_unmeasurable_readings_merge_to_the_worst_of_both(table, order):
 
 
 @pytest.mark.parametrize(
-    "arch, failed, exitstatus, refusal",
+    "arch, failed, exitstatus, refusal, says",
     [
-        (ChipArchitecture.BLACKHOLE, 0, 0, WrongArch),
-        (ChipArchitecture.WORMHOLE, 3, pytest.ExitCode.TESTS_FAILED, SessionNotClean),
-        (ChipArchitecture.WORMHOLE, 0, pytest.ExitCode.INTERRUPTED, SessionNotClean),
+        (ChipArchitecture.BLACKHOLE, 0, 0, WrongArch, "ran on blackhole"),
+        (
+            ChipArchitecture.WORMHOLE,
+            3,
+            pytest.ExitCode.TESTS_FAILED,
+            SessionNotClean,
+            "saw 3 failure(s)",
+        ),
+        (
+            ChipArchitecture.WORMHOLE,
+            0,
+            pytest.ExitCode.INTERRUPTED,
+            SessionNotClean,
+            "exit status INTERRUPTED",
+        ),
         (
             ChipArchitecture.WORMHOLE,
             0,
             int(pytest.ExitCode.INTERRUPTED),
             SessionNotClean,
+            "exit status INTERRUPTED",  # the int is named as the enum
         ),
-        (ChipArchitecture.WORMHOLE, 0, 17, SessionNotClean),
+        (ChipArchitecture.WORMHOLE, 0, 17, SessionNotClean, "exit status 17,"),
     ],
     ids=[
         "other-arch",
@@ -1027,7 +1056,7 @@ def test_two_unmeasurable_readings_merge_to_the_worst_of_both(table, order):
     ],
 )
 def test_emit_refuses_what_the_session_cannot_vouch_for(
-    table, arch, failed, exitstatus, refusal
+    table, arch, failed, exitstatus, refusal, says
 ):
     """Each case as pytest hands it to ``pytest_sessionfinish``. A failing run arrives
     with ``TESTS_FAILED`` already in the exit status, so the failure count is what names
@@ -1042,6 +1071,7 @@ def test_emit_refuses_what_the_session_cannot_vouch_for(
         assert caught.value.arch == arch
     else:
         assert (caught.value.failures, caught.value.exitstatus) == (failed, exitstatus)
+    assert says in str(caught.value) and "Nothing written" in str(caught.value)
     assert table.read_text() == before
 
 
@@ -1457,6 +1487,7 @@ def test_emit_refuses_a_partly_measured_grid(table):
     with _refuses(IncompleteGrid) as caught:
         finish_emit(ChipArchitecture.WORMHOLE, 0, table)
     assert caught.value.gaps == [("Gelu", "Float16", "Float16", 3)]
+    assert "Gelu Float16->Float16: 3 cell(s) unmeasured" in str(caught.value)
     assert table.read_text() == before
 
 
@@ -1474,8 +1505,8 @@ def test_an_op_with_an_unregenerable_row_is_kept_while_the_rest_are_written(tmp_
         encoding="utf-8",
     )
     MEASURED.clear()
-    record("Erfinv", ("Float16", "Float16", "No", "No"), 5)
-    record("Gelu", ("Float16", "Float16", "No", "No"), 5)
+    record("Erfinv", _CELL, 5)
+    record("Gelu", _CELL, 5)
     report = write_table(path, _RUN)
     MEASURED.clear()
     assert (set(report.written), report.kept) == ({"Gelu"}, {"Erfinv": "atol"})
@@ -1486,7 +1517,7 @@ def test_an_op_with_an_unregenerable_row_is_kept_while_the_rest_are_written(tmp_
 
 
 def test_a_rewritten_block_keeps_one_blank_line_before_the_next(table):
-    record("Gelu", ("Float16", "Float16", "No", "No"), 5)
+    record("Gelu", _CELL, 5)
     write_table(table, _RUN)
     assert "\n\n\n" not in table.read_text()
 
@@ -1766,7 +1797,7 @@ def test_floored_measurements_survive_the_xdist_merge():
     from helpers.ulp_sweep import Floored
 
     MEASURED.clear()
-    key = ("Float16", "Float16", "No", "No")
+    key = _CELL
     record("Gelu", key, _WORST, floor=_FLOOR)
     exported = export_measured()
     MEASURED.clear()
@@ -1791,8 +1822,97 @@ def test_differing_readings_of_a_floored_cell_drop_the_floor(first, second):
     reject a plain 5 the other reading measured. Either order keeps the worst lane
     unfloored."""
     MEASURED.clear()
-    key = ("Float16", "Float16", "No", "No")
+    key = _CELL
     for max_ulp, floor in (first, second):
         record("Gelu", key, max_ulp, floor=floor)
     assert MEASURED["Gelu"][key] == _WORST
     MEASURED.clear()
+
+
+def test_an_anchored_key_line_keeps_its_anchor_when_its_op_is_emitted(table):
+    """`Abs: &low` with `Neg: *low` elsewhere: rebuilding Abs's key line from its name
+    and header dropped `&low`, and the rewritten table no longer loaded. The key line is
+    copied as it was, so Neg follows Abs's new rows."""
+    from helpers.sfpu_accuracy_budget import _load_table
+
+    table.write_text(
+        "Abs: &low  # shared with Neg\n"
+        "  - {in: Float16, out: Float16, max_ulp: 7, measured: 6, run: 2026-09-01}\n"
+        "\n"
+        "Neg: *low\n",
+        encoding="utf-8",
+    )
+    _record_grid("Abs", "Float16", "Float16", 2)
+    write_table(table, _RUN)
+    assert table.read_text(encoding="utf-8").startswith(
+        "Abs: &low  # shared with Neg\n"
+    )
+    loaded = _load_table(table)
+    assert loaded[MathOperation.Neg] == loaded[MathOperation.Abs]
+    assert BudgetTable.load(table).rows_of("Neg")[0].max_ulp == 3
+
+
+def test_a_cell_that_ranked_no_lane_stays_without_a_figure_when_a_number_arrives(table):
+    """A no-lane verdict (`nonfinite == 0`) given a later reading's figure was written as
+    `{metric: tolerance, measured: N}` with no `nonfinite`: an ordinary demotion to every
+    reader, held to N by the headroom report. It stays not measurable, with no figure.
+    """
+    from helpers.ulp_sweep import Unmeasurable, record_unmeasurable
+
+    for order in (1, -1):
+        MEASURED.clear()
+        steps = [
+            lambda: record_unmeasurable("Gelu", _CELL, Unmeasurable(why="no lane")),
+            lambda: record("Gelu", _CELL, 5),
+        ]
+        for step in steps[::order]:
+            step()
+        assert MEASURED["Gelu"][_CELL] == Unmeasurable(why="no lane"), order
+
+
+def test_a_cell_whose_every_claimed_lane_is_non_finite_records_no_figure():
+    """Over no ranked lane `ulp_stats` reads `max: 0`, which written as `measured: 0`
+    would claim the rest of the cell bit-exact; there is no rest."""
+    from helpers.ulp import ulp_distance, ulp_stats
+    from helpers.ulp_sweep import nonfinite_verdict
+
+    src = torch.tensor([1.0, 2.0], dtype=torch.bfloat16)
+    golden = torch.tensor([1.0, 2.0], dtype=torch.bfloat16)
+    result = torch.tensor([float("inf"), float("inf")], dtype=torch.bfloat16)
+    overflowed = torch.tensor([True, True])
+    stats = ulp_stats(ulp_distance(golden, result), ~overflowed)
+    verdict = nonfinite_verdict(overflowed, src, golden, result, stats)
+    assert (verdict.nonfinite, verdict.measured) == (2, None)
+
+
+def test_the_plugin_prints_the_emit_summary_on_a_clean_session(
+    table, monkeypatch, capsys
+):
+    """The success path `--ulp-emit` ends on: `finish_emit(...).summary()`, printed
+    once with its own prefix, and the session left as it was."""
+    from types import SimpleNamespace
+
+    import helpers.sfpu_accuracy_budget as registry
+    from helpers import llk_pytest_plugin, ulp_sweep
+
+    monkeypatch.setattr(ulp_sweep, "EMIT", True)
+    monkeypatch.setattr(registry, "_TABLE_PATH", table)
+    monkeypatch.setattr(
+        llk_pytest_plugin, "get_chip_architecture", lambda: ChipArchitecture.WORMHOLE
+    )
+    _record_grid("Gelu", "Float16", "Float16", 5)
+    session = SimpleNamespace(
+        config=SimpleNamespace(
+            option=SimpleNamespace(collectonly=False),
+            pluginmanager=SimpleNamespace(get_plugin=lambda name: None),
+        ),
+        testsfailed=0,
+        exitstatus=pytest.ExitCode.OK,
+    )
+    llk_pytest_plugin._finish_ulp_emit(session)
+    out = capsys.readouterr().out
+    assert out == "--ulp-emit: rewrote 1 op block(s) in budget.yaml\n"
+    assert session.exitstatus == pytest.ExitCode.OK
+    assert (
+        BudgetTable.load(table).row("Gelu", in_="Float16", out="Float16").max_ulp == 6
+    )

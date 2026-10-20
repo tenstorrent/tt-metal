@@ -417,7 +417,7 @@ def _enum_member(enum_cls: Type[E], value: Any, where: str) -> E:
 
 
 def _read_yaml(path: Path) -> Dict[str, Any]:
-    """*path* through PyYAML's safe loader, refusing duplicate keys."""
+    """*path* through :func:`ulp_provenance.load_yaml` and the refusals it makes."""
     loaded = load_yaml(path.read_text(encoding="utf-8"), path.name)
     if loaded is None:
         return {}

@@ -4,12 +4,14 @@
 """Host-side guards for ``helpers/ulp_provenance.py``: the budget table read as rows,
 and each row's provenance as fields of its own.
 
-No code reads a row's comment, so nothing here pins one: the provenance is
-``measured``, ``measured_all``, ``nonfinite`` and ``run`` / ``sampled``, which PyYAML
-loads and the registry loader validates.
+No verdict depends on a row's comment: the provenance is ``measured``,
+``measured_all``, ``nonfinite`` and ``run`` / ``sampled``, which PyYAML loads and the
+registry loader validates. Where a comment is asserted, it is to check that the prose
+is read back as written.
 """
 
-from datetime import date
+from dataclasses import fields
+from datetime import date, datetime
 
 import pytest
 from helpers.sfpu_accuracy_budget import _SFPU_ACCURACY_BUDGET, _TABLE_PATH
@@ -57,6 +59,8 @@ def test_a_written_row_reads_back_as_the_provenance_it_was_written_with(provenan
         (dict(measured=-1, run=_DAY), "integer >= 0"),
         (dict(nonfinite=0, run=_DAY), "integer >= 1"),
         (dict(measured=1, run="2026-10-05"), "must be a date"),
+        # An unquoted `2026-10-05 12:00:00` loads as a datetime, which is a date too.
+        (dict(measured=1, run=datetime(2026, 10, 5, 12, 0)), "must be a date"),
         (dict(sampled=_DAY), "without the `measured` figure"),
         (dict(measured_all=3, run=_DAY), "needs `measured`"),
         (dict(measured=5, measured_all=3, run=_DAY), "cannot be below it"),
@@ -69,6 +73,7 @@ def test_a_written_row_reads_back_as_the_provenance_it_was_written_with(provenan
         "negative",
         "nonfinite-zero",
         "string-date",
+        "datetime",
         "sampled-alone",
         "measured-all-alone",
         "measured-all-below",
@@ -195,11 +200,23 @@ def test_no_key_line_carries_a_run_clause(live):
     assert not [op for op, b in live.blocks.items() if "measured by:" in b.header]
 
 
-def test_the_provenance_fields_are_the_loaders():
-    """The loader accepts exactly these as non-contract, non-key fields."""
-    from helpers.sfpu_accuracy_budget import _CONTRACT_FIELDS, _KEY_FIELDS
+def test_the_provenance_fields_are_the_loaders(tmp_path):
+    """The fields are the :class:`Provenance` dataclass's, none of them a contract or key
+    field, and the loader accepts each one on a row."""
+    from helpers.sfpu_accuracy_budget import _CONTRACT_FIELDS, _KEY_FIELDS, _load_table
 
+    assert PROVENANCE_FIELDS == tuple(f.name for f in fields(Provenance))
     assert not set(PROVENANCE_FIELDS) & (set(_CONTRACT_FIELDS) | set(_KEY_FIELDS))
+    path = tmp_path / "budget.yaml"
+    path.write_text(
+        "Abs:\n"
+        "  - {out: Float16_b, max_ulp: 2, near_zero_atol: 1.0e-3, measured: 1,"
+        " measured_all: 9, run: 2026-10-05}\n"
+        "  - {out: Float16, metric: tolerance, measured: 3, nonfinite: 2,"
+        " sampled: 2026-10-05}\n",
+        encoding="utf-8",
+    )
+    assert len(_load_table(path)[next(iter(_load_table(path)))]) == 2
 
 
 def test_a_block_style_row_reads_its_own_fields_not_the_next_rows():
@@ -228,7 +245,7 @@ def test_an_arch_is_keyed_by_its_enum_name_whichever_way_it_is_spelt():
     [
         (
             "Abs:\n  - {max_ulp: 0}\nAbs:\n  - {max_ulp: 1}\n",
-            "duplicate entry for 'Abs'",
+            "line 3: duplicate entry for 'Abs'",
         ),
         ("Abs:\n  - {out: Float16_b, out: Float32, max_ulp: 1}\n", "for 'out'"),
     ],
@@ -246,3 +263,47 @@ def test_a_merge_key_may_override_what_it_merges():
         "Abs:\n  - {<<: *base, atol: 0.2}\n"
     ).rows_of("Abs")
     assert row.values["atol"] == 0.2
+
+
+def test_a_borrowed_measurement_is_refused_with_its_line():
+    """On a 4,000-row table the author needs to know which `<<` row it was."""
+    with pytest.raises(  # allow-pytest.raises: host-only test
+        ValueError, match="line 4: `measured`, `run` reaches a row only through"
+    ):
+        BudgetTable(
+            "Abs:\n"
+            "  - &b {out: Float16_b, max_ulp: 2, measured: 2, run: 2026-10-05}\n"
+            "Neg:\n"
+            "  - {<<: *b, out: Float32, max_ulp: 5}\n"
+        )
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "<<: {Abs: [{out: Float16_b, max_ulp: 2, measured: 2, run: 2026-10-05}]}\n",
+        "x: &x {measured: 2, run: 2026-10-05}\n"
+        "<<: {Abs: [{<<: *x, out: Float16, max_ulp: 2}]}\n",
+    ],
+    ids=["op-through-a-root-merge", "borrowed-inside-a-root-merge"],
+)
+def test_a_top_level_merge_key_is_refused(text):
+    """Ops arriving through a root `<<` had no key line, so every row walk read them
+    as nothing -- a raised budget there compared clean -- and the borrowed-provenance
+    check never looked inside the merge value."""
+    with pytest.raises(  # allow-pytest.raises: host-only test
+        ValueError, match="a top-level `<<` merge key"
+    ):
+        BudgetTable(text)
+
+
+def test_an_op_the_walk_cannot_place_is_refused():
+    """Fail closed: an op the loader resolves but the walk cannot locate would read as
+    no rows on both sides of a diff. A YAML boolean key is one: the walk sees `true`,
+    the loader `True`."""
+    with pytest.raises(  # allow-pytest.raises: host-only test
+        ValueError, match=r"cannot locate op\(s\) \['True'\]"
+    ):
+        BudgetTable(
+            "true:\n  - {out: Float16_b, max_ulp: 2, measured: 2, run: 2026-10-05}\n"
+        )

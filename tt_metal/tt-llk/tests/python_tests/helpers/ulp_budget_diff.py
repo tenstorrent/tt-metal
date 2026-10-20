@@ -39,7 +39,6 @@ if __package__:
         Provenance,
         check_provenance,
         key_value,
-        load_yaml,
     )
 else:  # run by path on the slim runner, where `helpers/__init__.py` cannot import
     from ulp_provenance import (
@@ -49,7 +48,6 @@ else:  # run by path on the slim runner, where `helpers/__init__.py` cannot impo
         Provenance,
         check_provenance,
         key_value,
-        load_yaml,
     )
 
 #: ``sfpu_accuracy_budget.MEASURED_ARCH``, by enum name. A ULP row that does not name an
@@ -146,7 +144,9 @@ class Change:
     differs from the same row's in the base table -- the table's rule for raising a
     budget. Read off that one row, not off the two rows the cell resolves to: when a
     deleted row hands its cells to a broader one, those two rows' fields differ although
-    neither was re-measured.
+    neither was re-measured. ``None`` -- reported "n/a" -- for a widened ``atol``/``rtol``
+    bound whose row has no provenance in either revision: ``measured`` is a step count,
+    which such a row cannot record, so the rule cannot apply to it.
     """
 
     cell: Cell
@@ -156,7 +156,7 @@ class Change:
     variants: int = 1
     held_before: str = "—"
     held_after: str = "—"
-    remeasured: bool = False
+    remeasured: Optional[bool] = False
 
     #: The kinds that weaken a gate. Everything else is neutral or an improvement.
     REGRESSIONS = frozenset(
@@ -245,8 +245,10 @@ def parse_table(text: str) -> Dict[Cell, Row]:
     """Every row of the table, keyed by the cell it governs, read through
     :class:`BudgetTable`: values as PyYAML loads them, so anchors and ``<<`` merge keys
     mean what they mean, and a YAML boolean names the cell the registry would. Refuses,
-    as the registry does, a table it could not load."""
-    loaded = load_yaml(text, "budget table") or {}
+    as the registry does, a table it could not load. The file is loaded once, by
+    :class:`BudgetTable`, and its rows are checked on that load."""
+    table = BudgetTable(text)
+    loaded = table.loaded or {}
     if not isinstance(loaded, dict):
         raise ValueError("expected a mapping of op names at the top level")
     for op, entries in loaded.items():
@@ -254,7 +256,6 @@ def parse_table(text: str) -> Dict[Cell, Row]:
             if not isinstance(fields, dict):
                 raise ValueError(f"{op}: row {index + 1} is not a mapping")
             _check_row(f"{op} row {index + 1}", fields)
-    table = BudgetTable(text)
     rows: Dict[Cell, Row] = {}
     for row in table.rows:
         cell: Cell = (row.op, row.key)
@@ -548,20 +549,30 @@ def compare(base: Dict[Cell, Row], head: Dict[Cell, Row]) -> List[Change]:
                 variants=found.variants + 1 if found else 1,
                 held_before=was.describe(),
                 held_after=now.describe(),
-                remeasured=_remeasured(base, now.row),
+                remeasured=_remeasured(base, now.row, kind),
             )
     return sorted(grouped.values(), key=lambda c: (_KIND_ORDER.index(c.kind), c.cell))
 
 
-def _remeasured(base: Dict[Cell, Row], row: Optional[Row]) -> bool:
+def _remeasured(
+    base: Dict[Cell, Row], row: Optional[Row], kind: str = ""
+) -> Optional[bool]:
     """Whether *row*, the head row deciding a cell, carries provenance the base table's
-    same row did not. A new row counts only with provenance fields of its own."""
+    same row did not; a row counts only with provenance fields of its own. ``None``
+    for a widened bound on a row that records no measurement on either side (see
+    :class:`Change`); any other loosening is held to the rule, an ungating one too."""
     if row is None:
         return False
     was = base.get((row.op, row.key))
-    if was is None:
-        return row.provenance != Provenance()
-    return was.provenance != row.provenance
+    unrecorded = row.provenance == Provenance() and (
+        was is None or was.provenance == Provenance()
+    )
+    if kind == "tolerance_widened" and row.declares_tolerance and unrecorded:
+        return None
+    # Dropping a measurement is not taking one: the head row needs fields of its own.
+    if row.provenance == Provenance():
+        return False
+    return was is None or was.provenance != row.provenance
 
 
 _KIND_TEXT = {
@@ -605,7 +616,8 @@ def _change_row(c: Change, *, with_provenance: bool) -> str:
     cells = f"| `{_describe(c)}` | {_KIND_TEXT[c.kind]} | {c.held_before} | "
     cells += f"{c.held_after} |"
     if with_provenance:
-        cells += f" {'yes' if c.remeasured else '**no**'} |"
+        text = {True: "yes", False: "**no**", None: "n/a"}[c.remeasured]
+        cells += f" {text} |"
     return cells
 
 
@@ -656,7 +668,8 @@ def _allowed_note(regressions: List[Change]) -> str:
         f"\n_Advisory: {len(regressions)} loosened gate(s) reported, not blocked; "
         "approving them is the table's code owners' review._\n"
     )
-    unmeasured = [c for c in regressions if not c.remeasured]
+    # A bound that cannot record a measurement ("n/a") was not edited instead of one.
+    unmeasured = [c for c in regressions if c.remeasured is False]
     if unmeasured:
         note += (
             f"\n**{len(unmeasured)} of them carry no fresh measurement** -- the row's "

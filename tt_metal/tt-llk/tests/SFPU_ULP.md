@@ -238,8 +238,8 @@ instead). Those fields are the provenance; the comment is for people. Five verdi
   against a finite golden, or a finite answer to an infinite one), or the cell had no
   lane a step count could describe (no `measured`). No budget buys that; the row says
   why instead of leaving a hole the next emit would paper over, and `measured` is the
-  worst of the lanes that *were* measurable, so the rest of the cell is not thrown away
-  with the demotion. On a
+  worst of the lanes that *were* measurable (absent when none was), so the rest of the
+  cell is not thrown away with the demotion. On a
   gateable output such a row must also be acknowledged, with its cause, in
   `test_sfpu_accuracy_budget._UNMEASURABLE_CELLS_ACKNOWLEDGED` — and if the cause is a
   tracked defect on a handful of inputs, it belongs in `_KNOWN_NONFINITE_LANES` instead,

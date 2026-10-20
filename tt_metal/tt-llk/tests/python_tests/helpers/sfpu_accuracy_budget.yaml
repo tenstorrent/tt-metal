@@ -33,9 +33,11 @@
 # floor a demotion tried, the lanes an unmeasurable cell named, a hand note); no code
 # reads it.
 #
-# A `metric: tolerance` row with a `measured` figure on a gateable output was demoted:
-# the measurement is past `usable_budget_ceiling` (one inside it is enrolled, its 1.1x
-# headroom capped at the ceiling). Past the ceiling a step budget is no longer *tighter*
+# A `metric: tolerance` row the sweep measured (`run`, no `nonfinite`) on a gateable
+# output was demoted: the measurement is past `usable_budget_ceiling` (one inside it is
+# enrolled, its 1.1x headroom capped at the ceiling). A `nonfinite` row is parked by
+# those lanes whatever its `measured` says, and a `sampled` hand row is a judgement of
+# its own. Past the ceiling a step budget is no longer *tighter*
 # than the tolerance it replaces, and since the ULP arm of `passed_test` returns before
 # both isclose and PCC, such a budget would be the whole gate.
 #

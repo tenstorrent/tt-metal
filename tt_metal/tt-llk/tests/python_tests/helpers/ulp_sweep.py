@@ -957,7 +957,8 @@ def nonfinite_verdict(
         why="lanes disagreeing with the golden about being finite "
         f"(golden -> result: {named})",
         nonfinite=int(overflowed.sum()),
-        measured=int(stats["max"]),
+        # Over no lane at all `ulp_stats` reads 0, which would claim the rest bit-exact.
+        measured=int(stats["max"]) if stats["lanes"] else None,
     )
 
 
@@ -1140,9 +1141,13 @@ def record_unmeasurable(
 
 def _with_measured(verdict: Unmeasurable, measured: Optional[int]) -> Unmeasurable:
     """*verdict* with *measured* as its finite-lane figure, if that is worse."""
-    if measured is None or (
-        verdict.measured is not None and verdict.measured >= measured
+    if (
+        measured is None
+        or verdict.nonfinite == 0
+        or (verdict.measured is not None and verdict.measured >= measured)
     ):
+        # A verdict that ranked no lane records no figure: one attached here would be
+        # written without `nonfinite`, and the row would read as an ordinary demotion.
         return verdict
     return replace(verdict, measured=measured)
 
@@ -1194,9 +1199,11 @@ def _incomplete_grids() -> List[Tuple[str, str, str, int]]:
 
 def finish_emit(arch, testsfailed: int, path=None, exitstatus=0) -> WriteReport:
     """Write this session's measurements into the table (:func:`write_table`), or raise
-    an :class:`EmitRefused` subclass naming why nothing was written. *exitstatus* is
-    pytest's, which already says ``TESTS_FAILED`` on a failure, so *testsfailed* is read
-    first to give that run its own message."""
+    an :class:`EmitRefused` subclass naming why nothing was written -- except
+    :class:`UnplacedMeasurements`, raised after every other op is written, so a red emit
+    is not an untouched table. *exitstatus* is pytest's, which already says
+    ``TESTS_FAILED`` on a failure, so *testsfailed* is read first to give that run its
+    own message."""
     import pytest
     from helpers.sfpu_accuracy_budget import _TABLE_PATH, MEASURED_ARCH
 
@@ -1452,13 +1459,13 @@ class IncompleteGrid(EmitRefused):
 
 class AmbiguousCollapse(EmitRefused):
     """Collapsing the recorded cells would merge two different measurements onto one
-    row: *cells* is the collapsed key, and *values* the two decisions it would hold."""
+    row: *key* is the collapsed key, and *values* the two decisions it would hold."""
 
-    def __init__(self, axes, kept_axes, cells, values):
-        self.cells, self.values = cells, values
+    def __init__(self, axes, kept_axes, key, values):
+        self.key, self.values = key, values
         super().__init__(
             f"collapsing {list(axes)} to {list(kept_axes)} merges two different "
-            f"measurements onto {cells}: {values[0]} and {values[1]}. The recorded "
+            f"measurements onto {key}: {values[0]} and {values[1]}. The recorded "
             "cells do not form a full grid -- emit from a complete run."
         )
 
@@ -1518,11 +1525,12 @@ def _written_row(row: dict, run: date) -> Tuple[Dict[str, object], str]:
     return fields, comment
 
 
-def _render(op: str, header: str, rows: List[dict], run: date) -> List[str]:
-    """One op's block: its key line as it was, and each row with its verdict and the
-    measurement behind it, credited to *run*. The key line's header -- `Fill:  # 0 ULP,
-    115 variants` -- is a person's prose and is kept."""
-    out = [f"{op}:" + (f"  # {header}" if header else "") + "\n"]
+def _render(key_line: str, rows: List[dict], run: date) -> List[str]:
+    """One op's block: its key line exactly as it was, and each row with its verdict and
+    the measurement behind it, credited to *run*. Rebuilding the key line from the op's
+    name and header dropped anything between the two -- an ``&anchor`` another op's
+    ``*alias`` names, after which the table no longer loads."""
+    out = [key_line if key_line.endswith("\n") else key_line + "\n"]
     for row in rows:
         out.append(render_row(*_written_row(row, run)))
     return out
@@ -1704,14 +1712,7 @@ def write_table(path, run: date) -> WriteReport:
             kept_verbatim[name] = ", ".join(why)
             i = end
             continue
-        out.extend(
-            _render(
-                name,
-                block.header,
-                _collapse(_decide(cells, name)),
-                run,
-            )
-        )
+        out.extend(_render(lines[i], _collapse(_decide(cells, name)), run))
         # Rows this run did not supersede -- a format it does not reach, an arch-keyed
         # entry -- are the measurement of a different run and stay as they are, naming
         # it. Replacing a whole op block deleted them.

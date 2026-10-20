@@ -1372,3 +1372,57 @@ def test_an_unreadable_input_is_named_not_blamed_on_the_table(
     assert main(argv) == 2
     out = capsys.readouterr().out
     assert says in out and "cannot load" not in out
+
+
+def test_a_widened_bound_that_cannot_record_a_measurement_reads_n_a(tmp_path, capsys):
+    """An `atol`/`rtol` row records no step count, so neither side has provenance and
+    "re-measured: **no**" -- and the advisory's "edited rather than re-measured" -- would
+    hold it to a rule it cannot meet. It reads "n/a" and stays out of that list; a bound
+    that *ungates* a cell is still held to the rule."""
+    base = _head(
+        "{in: Float16_b, out: Float16_b, max_ulp: 1, measured: 1, run: 2026-01-01}",
+        "{in: Bfp8_b, out: Bfp8_b, metric: tolerance, atol: 0.13}",
+    )
+    head = _head(
+        "{in: Float16_b, out: Float16_b, max_ulp: 1, measured: 1, run: 2026-01-01}",
+        "{in: Bfp8_b, out: Bfp8_b, metric: tolerance, atol: 0.5}",
+    )
+    (change,) = _changes(base, head)
+    assert (change.kind, change.remeasured) == ("tolerance_widened", None)
+    argv = [
+        "diff",
+        "--base",
+        _write(tmp_path, "base.yaml", base),
+        "--head",
+        _write(tmp_path, "head.yaml", head),
+        "--allow-raises",
+    ]
+    assert main(argv) == 0
+    out = capsys.readouterr().out
+    assert "| n/a |" in out and "carry no fresh measurement" not in out
+    ungated = _head(
+        "{in: Float16_b, out: Float16_b, metric: tolerance, atol: 0.5}",
+        "{in: Bfp8_b, out: Bfp8_b, metric: tolerance, atol: 0.13}",
+    )
+    assert [c.remeasured for c in _changes(base, ungated)] == [False]
+
+
+def test_a_budget_raised_inside_a_root_merge_is_refused_not_compared_clean(tmp_path):
+    """Ops arriving through a top-level `<<` had no key line, so both sides read as no
+    rows and a raise inside them diffed clean."""
+
+    def merged(budget):
+        return (
+            "<<: {Abs: [{out: Float16_b, max_ulp: "
+            f"{budget}, measured: 2, run: 2026-01-01}}]}}\n"
+        )
+
+    argv = [
+        "diff",
+        "--base",
+        _write(tmp_path, "base.yaml", merged(2)),
+        "--head",
+        _write(tmp_path, "head.yaml", merged(9)),
+        "--allow-raises",
+    ]
+    assert main(argv) == 2

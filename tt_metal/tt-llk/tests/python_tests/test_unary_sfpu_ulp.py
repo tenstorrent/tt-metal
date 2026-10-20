@@ -280,7 +280,7 @@ def test_unary_sfpu_ulp_sweep(mathop, in_fmt, out_fmt, approx_mode, dest_acc):
 
     # Before the emit return, or an empty mask is recorded as bit-exact `max: 0`. The
     # overflow first: an all-non-finite cell also has `lanes == 0`, and only this
-    # reason carries the lane count the headroom report reads back.
+    # verdict carries the lane count the headroom report reads back (`nonfinite`).
     if overflowed.any():
         verdict = ulp_sweep.nonfinite_verdict(overflowed, src, golden, result, stats)
         reason = nonfinite_reason(verdict, lanes)
