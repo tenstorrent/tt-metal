@@ -334,7 +334,10 @@ class TtDS41Block:
         # MoE
         self.router = build_router(mesh, ck, cfg, i, model.chunk)
         self.experts = build_experts(mesh, ck, cfg, i, model.chunk)
-        self.shared = build_shared_expert(mesh, ck, cfg, i)
+        self.shared = build_shared_expert(mesh, ck, cfg, i, chunk=model.chunk)
+        # SHARED_EXPERT_IMPL=flat + EXPERTS_COMBINE=weighted (P.12): the shared expert reads its x rows from the routed
+        # experts' gathered row-major q(x) (experts runs first in the block graph)
+        self.experts.keep_rows = bool(self.shared.reads_rows and self.experts.weighted)
         self.fns = self._fns()
         # boundaries freed after their last reader (never "in": the caller owns it; never "out")
         last = {}
@@ -431,7 +434,8 @@ class TtDS41Block:
             return self.experts.partial(x, dense, idx)  # this dispatch group's fp32 partial [S/SP, H]
 
         def shared_expert(ctx, x):
-            return self.shared.partial(x)  # this chip's intermediate share, fp32 partial [S/SP, H]
+            # this chip's intermediate share, fp32 partial [S/SP, H] (flat: bf16 under CCL_IMPL=fabric_bf16)
+            return self.shared.partial(x, rows=self.experts.take_rows())
 
         def moe_add(ctx, a, b):
             # the two partials summed before the one exchange over TP (components.yaml moe_add notes)

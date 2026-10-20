@@ -321,6 +321,9 @@ class TtExperts:
                 memory_config=DRAM,
                 mesh_mapper=_mapper(mesh, (0, None)),
             )
+        # SHARED_EXPERT_IMPL=flat (P.12): the weighted path keeps its gathered row-major q(x) for the shared expert,
+        # which reads its own rows from it by token index (take_rows); set by the assembled model's block
+        self.keep_rows, self._rows = False, None
         self._seq = {}
         if not self.weighted:
             self._modules(self.max_chunk // rows)  # the serving chunk's dispatch / combine sizes, built at load
@@ -819,9 +822,21 @@ class TtExperts:
             if t is not idx:
                 ttnn.deallocate(t)
         out = wc(self.fe, xg, ids_g, wts_g, int(self.fidelity.value))
-        for t in (xg, ids_g, wts_g):
+        for t in (ids_g, wts_g):
             ttnn.deallocate(t)
+        if self.keep_rows:  # (the shared expert's x: take_rows hands it over, the shared expert frees it)
+            if self._rows is not None:
+                ttnn.deallocate(self._rows)
+            self._rows = xg
+        else:
+            ttnn.deallocate(xg)
         return out
+
+    def take_rows(self) -> ttnn.Tensor | None:
+        """The last weighted call's gathered row-major q(x) of the column [R s, H] bf16 (keep_rows), handed over once
+        (the caller frees it); None when there is none."""
+        rows, self._rows = self._rows, None
+        return rows
 
     def partial(self, x: ttnn.Tensor, dense: ttnn.Tensor, idx: ttnn.Tensor | None = None) -> ttnn.Tensor:
         """This column group's experts over the chip's rows. x: ffn_norm [1, 1, s, H] fp32 TILE (rows split over axis

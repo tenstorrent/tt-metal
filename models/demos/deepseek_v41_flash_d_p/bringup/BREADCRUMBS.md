@@ -2067,3 +2067,57 @@ Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deeps
   test_combine_planner" -k time` (ops: with TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1
   TT_METAL_PROFILER_CPP_POST_PROCESS=1 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=10000, -k ops); fork:
   `scripts/run_safe_pytest.sh --run-all --no-precompile ttnn/ttnn/bringup/combine_rf/tests/unit`.
+
+## P.12 perf (attempt 1): the shared expert on the flat routed expert (bfp8, always-on) vs the ttnn.linear chain
+- Setting SHARED_EXPERT_IMPL {linear, flat} (tt/settings.py). Default kept `linear` as the owner's text says (P.9 /
+  P.11 precedent; the orchestrator sets both sides, F104 flips it on accept). MAX_PRECISION: linear (exact bf16 weights),
+  so the component / swap tests are unchanged.
+- flat (tt/shared_expert.py `_load_flat`, `_flat_partial`): Marko's K3_SE=flat with our TP layout: the chip's
+  intermediate slice (2x2: 1152 columns of 2304) as SE_PARTS = 1 always-on expert of ttnn.bringup.flat_routed_expert
+  (counts [1024], regions [0]), every own token routed to it; weights bfp8 as stored [N, K] (weights_nk, DS41-35), laid
+  out once at load. The op refused I = 1152: se6_dcompute.cpp static_assert `kt_d % 8 == 0` (down K in blocks of 8
+  tiles), so the slice is zero-padded to 1280 (DS41-76; 4x4 / 8x4 / 2x4: 576 -> 768). Precision follows the routed
+  experts' EXPERTS_PRECISION (glm: LoFi, bfp8 x / h tiles; full: MATMUL_FIDELITY, bf16 tiles), fp32 DEST in gate/up and
+  down, y bf16 TILE written in ccl.partial_dtype (bf16 under fabric_bf16, DS41-67: no typecast before moe_add).
+  The down coordinators' done words are shared by every layer's shared expert (one L1 tensor, `_DONE`).
+- x: under EXPERTS_COMBINE=weighted + NUMERICS=native the shared expert reads its own rows (r S + t) by a load-time token
+  index from the routed experts' gathered row-major q(x) [R S, H] (TtExperts.keep_rows / take_rows; the block sets
+  keep_rows, the shared_expert step takes and frees it): no layout conversion of its own (bit-identical to the own-x
+  path, SHARED_ROWS). Without rows: own to_layout (56 us). NUMERICS=official: own q(x) rows + the op's fp8_act_quant
+  with unit routing weights (that option refuses a token index); runs (7.9 ms, the composed fp8_qdq of x dominates).
+- Hidden? Not folded, not overlapped (owner asked to prefer it only when no more work): folding into the routed
+  experts' program needs one weight dtype for both (routed bfp4 since P.10, shared bfp8; the op takes one) and the
+  combine planner to place extra ids; overlapping with the dispatch needs sub-devices. What K3 hides under the dispatch
+  (the x untilize) costs nothing here: the gathered rows are reused.
+- Measured, tt/perf_shared_expert.py::test_shared_flat_vs_linear (2x2, chunk 2048, real weights, random x, default
+  path otherwise: native, glm, ffn_norm bf16, fabric_bf16, weighted, bfp4 routed; L00 / L24 identical to 0.01 ms):
+  shared partial wall 1.449 -> 0.356 ms (own x) / 0.274 ms (rows); device per op (ops mode, L00): linear 1430.9 us
+  (linear 801.7 + 445.1, slices, clamps, silu, multiply, typecast), flat 252.6 us (one op; + to_layout 55.9 own x).
+  MoE block device (router .. reduce-scatter) 3727 -> 2529 us. Determinism: flat twice 0 values differ.
+- Plain profile, by hand (gate env, BRINGUP defaults, K-58: generated/bringup_adhoc/P.12.json), per chunk of 8 layers:
+  shared_expert linear 11.41 -> flat 2.01 ms (gate < 11.4: pass; programs 288 -> 32), moe_add 1.78 -> 1.58,
+  experts 17.38 / 17.33, router 1.83 / 1.83; MoE block per layer 4.05 -> 2.84 ms; device total 230.28 -> 220.61 ms
+  (-4.2 %); every other section within 0.06 ms.
+- Accuracy, shared_out vs float64 with the exact fp8 weights (256 rows, native numerics): linear rel 0.00297 / 0.00301
+  (L00 / L24), bias +0.0009; flat 0.02048 / 0.02177, bias +0.0132 / +0.0140, worst row 0.023 / 0.026; flat vs float64
+  with bfp8-rounded weights 0.0197 / 0.0208 (the device path; the bfp8 weights alone: rel 0.0052 / 0.0062, bias 0;
+  bfp8 changes 10.2-11.1 % of the fp8 values, ||dW||/||W|| 0.0035-0.0040). Variants (test_flat_variants, L00 / L24):
+  LoFi + bf16 x / h 0.377 ms, rel 0.011 / 0.012, bias -0.8 %; LoFi x bfp8 h bf16 0.34 ms, 0.015 / 0.016, +0.9 %;
+  LoFi x bf16 h bfp8 0.38 ms, 0.013 / 0.014, -0.4 %; stochastic packer 0.36 ms, bias +0.2-0.3 % but worst row
+  0.05-0.075; HiFi2 + bf16 = LoFi + bf16 bit for bit (0.45 ms); HiFi4 + bf16 0.68 ms, rel 0.0060 / 0.0069, bias +0.1 %
+  (DS41-77). Shipped flat = EXPERTS_PRECISION's glm choice (as the routed experts, which carry the same +1.3 % bfp8
+  bias, DS41-74); the owner may prefer bf16 tiles (+15 us) or HiFi4.
+- Final check `python -m models.demos.common.bringup.orchestrator measure --task P.12` (quick, change on): rc 0, worst
+  layer L03 0.99519 (P.11 0.99530), pcc_chunk_out 0.99943, host_transfers_per_layer 0; chunk_wall_ms 232.1 (spread
+  7.5; P.11 232.1) on the first run, 255.6 (spread 51.3, values 228-280: a noisy box) on the rerun after the last
+  description edits. The device saves ~9.7 ms a chunk; the clean wall did not move by it (not isolated; the wall
+  seems host-bound near 230 ms). Odd, not chased: in the perf test the linear side's MoE block wall is 8.0 ms vs 3.7
+  ms device (flat 2.75 vs 2.53; routed alone 2.40 either way).
+- Frozen tests not run (quick A/B; they run SHARED_EXPERT_IMPL=linear under MAX_PRECISION). Sanity:
+  test_c_swa_shared_expert PASS (err 0.01754 <= 0.06646) after the hooks change (build_shared_expert gets the chunk).
+- stock ttnn.to_layout instead of ttnn.bringup.combine_rf's untilize (layout_ops): only on the fallback own-x path (no
+  gathered rows, or NUMERICS=official); the shipped path converts nothing. stock ttnn.add for the parts' sum instead
+  of combine_rf sum_parts: only when SE_PARTS > 1 (it is 1).
+- Re-run: on `DS41_SHARED_EXPERT_IMPL=flat`, off `DS41_SHARED_EXPERT_IMPL=linear`; A/B: `PYTHONPATH=$PWD
+  scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tt/perf_shared_expert.py -k
+  "not ops"` (ops: with the profiler env, -k ops).
