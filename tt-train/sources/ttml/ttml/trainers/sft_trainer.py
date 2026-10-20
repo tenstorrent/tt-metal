@@ -121,14 +121,15 @@ class SFTTrainer:
         config: SFTConfig,
         optimizer: Any = None,
         peft_config: Optional[LoraConfig] = None,
-        lr_lambda: Optional[Callable[[int], float]] = None,
+        lr_schedule: Optional[Callable[[int], float]] = None,
         callbacks: Optional[list[TrainerCallback]] = None,
         compute_loss_func: Optional[Callable] = None,
         loss_composer: Any = None,
         attention_mask: Any = None,
         checkpoint_saver: Optional[Callable[["SFTTrainer", str], None]] = None,
         checkpoint_loader: Optional[Callable[["SFTTrainer", str], int]] = None,
-        lr_schedule: Optional[Callable[[int], float]] = None,
+        *,
+        lr_lambda: Optional[Callable[[int], float]] = None,
     ) -> None:
         """
         Args:
@@ -145,11 +146,9 @@ class SFTTrainer:
             peft_config: Optional PEFT configuration (e.g. :class:`LoraConfig`).
                 When provided the model is automatically wrapped with the
                 appropriate adapter (currently :class:`LoraModel`).
-            lr_lambda: Optional callable ``step -> factor``. Every step, each
-                param group's LR is set to ``factor`` times that group's initial
-                LR (PyTorch's ``LambdaLR``), so param groups keep their ratios.
-                ``None`` (default) -- linear warmup over
-                ``config.warmup_steps``, then a constant factor of 1.
+            lr_schedule: Deprecated, use ``lr_lambda``. Callable ``step -> LR``:
+                the first param group's LR, with the other groups keeping their
+                ratio to it (like the deprecated ``optimizer.set_lr``).
             callbacks: Optional list of :class:`TrainerCallback` instances.
             compute_loss_func: Optional callable ``(model_output, batch) -> loss``
                 that replaces the default masked cross-entropy.  Must return a
@@ -173,9 +172,11 @@ class SFTTrainer:
                 restores ``model.parameters()`` from ``path`` and returns
                 the step the checkpoint was taken at.  Called by
                 :meth:`load_checkpoint` to support resume.
-            lr_schedule: Deprecated, use ``lr_lambda``. Callable ``step -> LR``:
-                the first param group's LR, with the other groups keeping their
-                ratio to it (like the deprecated ``optimizer.set_lr``).
+            lr_lambda: Optional callable ``step -> factor``. Every step, each
+                param group's LR is set to ``factor`` times that group's initial
+                LR (PyTorch's ``LambdaLR``), so param groups keep their ratios.
+                ``None`` (default) -- linear warmup over
+                ``config.warmup_steps``, then a constant factor of 1.
 
         Note:
             When ``config.gradient_checkpointing`` is ``True`` the model's

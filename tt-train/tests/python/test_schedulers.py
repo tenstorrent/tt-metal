@@ -1670,3 +1670,12 @@ def test_linear_warmup_lambda(warmup_steps):
     for step in range(8):
         expected = 1.0 if warmup_steps == 0 else min(1.0, (step + 1) / warmup_steps)
         assert lr_lambda(step) == pytest.approx(expected)
+
+
+def test_set_lr_before_attaching_does_not_fix_the_scheduler_base():
+    """set_lr must not record the initial LRs: a scheduler attached afterwards takes the LR set_lr left
+    as its base."""
+    opt = _make_opt(1e-3)
+    opt.set_lr(3e-4)
+    LambdaScheduler(opt, lambda step: 1.0)
+    assert opt.get_group_lrs() == pytest.approx([3e-4])

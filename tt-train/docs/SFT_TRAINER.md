@@ -76,11 +76,13 @@ SFTTrainer(
     config,
     optimizer=None,
     peft_config=None,
-    lr_lambda=None,
+    lr_schedule=None,  # deprecated, use lr_lambda
     callbacks=None,
     compute_loss_func=None,
     loss_composer=None,
     attention_mask=None,
+    *,
+    lr_lambda=None,
 )
 ```
 
@@ -92,11 +94,12 @@ SFTTrainer(
 | `config` | `SFTConfig` | Trainer configuration. |
 | `optimizer` | `OptimizerBase \| dict \| None` | Optimizer instance, config dict (see [Optimizer](#optimizer)), or `None` for default AdamW. |
 | `peft_config` | `LoraConfig \| None` | When provided, wraps the model with `LoraModel` automatically (see [LoRA / PEFT](#lora--peft)). |
-| `lr_lambda` | `Callable[[int], float] \| None` | Custom `step -> factor` schedule: every step, each param group's LR is set to `factor` times its initial LR, so param groups keep their ratios. Overrides the default linear-warmup-then-constant. |
+| `lr_schedule` | `Callable[[int], float] \| None` | Deprecated, use `lr_lambda`. |
 | `callbacks` | `list[TrainerCallback] \| None` | Hooks into the training loop (see [Callbacks](#callbacks)). |
 | `compute_loss_func` | `Callable \| None` | Custom `(logits, batch) -> loss` replacing the default masked cross-entropy. |
 | `loss_composer` | `Any \| None` | Mesh composer for multi-device loss aggregation. Defaults to `concat_mesh_to_tensor_composer(device, 0)` which works for both single-device and DDP. Pass a custom composer to override. |
 | `attention_mask` | `Any \| None` | Attention mask passed as the second argument to `model(input_ids, mask)`. `None` (default) lets the model generate a causal mask on the fly. |
+| `lr_lambda` | `Callable[[int], float] \| None` | Keyword argument. Custom `step -> factor` schedule: every step, each param group's LR is set to `factor` times its initial LR, so param groups keep their ratios. Overrides the default linear-warmup-then-constant. |
 
 ### Methods
 

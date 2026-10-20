@@ -61,7 +61,7 @@ ttml::serialization::StateDict state_dict_from_py(const nb::dict& py_dict) {
 }  // namespace
 
 class OptimizerBaseTrampoline : public ttml::optimizers::OptimizerBase {
-    NB_TRAMPOLINE(OptimizerBase, 11);
+    NB_TRAMPOLINE(OptimizerBase, 13);
 
 public:
     std::string get_name() const override {
@@ -88,6 +88,7 @@ public:
         NB_OVERRIDE_PURE(set_steps, steps);
     }
     std::vector<float> get_group_lrs() const override {
+        // Fallback for Python optimizers that only implement the deprecated get_lr; goes away with the shims.
         {
             nb::detail::ticket nb_ticket(nb_trampoline, "get_group_lrs", /*pure=*/false);
             if (!nb_ticket.key.is_valid()) {
@@ -100,6 +101,7 @@ public:
         NB_OVERRIDE_PURE(get_group_lrs);
     }
     void set_group_lrs(const std::vector<float>& lrs) override {
+        // Fallback for Python optimizers that only implement the deprecated set_lr; goes away with the shims.
         {
             nb::detail::ticket nb_ticket(nb_trampoline, "set_group_lrs", /*pure=*/false);
             if (!nb_ticket.key.is_valid()) {
