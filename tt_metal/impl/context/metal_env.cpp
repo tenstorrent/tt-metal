@@ -469,8 +469,13 @@ void MetalEnvImpl::teardown_fabric_config() {
     if (!devices_still_open) {
         if (this->control_plane_) {
             this->control_plane_->clear_fabric_context();
+            // Keep the control plane's resolved config in sync with the env's DISABLED state so
+            // get_fabric_config() (which reads through to the control plane) does not keep reporting a
+            // stale config after teardown. Re-adopt preserves an MGD's explicit per-mesh config.
+            this->control_plane_->reset_fabric_config_after_disable();
         } else if (!rtoptions_->has_factory_system_descriptor_path()) {
             this->get_control_plane().clear_fabric_context();
+            this->get_control_plane().reset_fabric_config_after_disable();
         }
     }
 }
