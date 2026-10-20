@@ -74,6 +74,18 @@ extern "C" __attribute__((noinline, used)) void reference_runtime_set_and_increm
     TT_INCRWC(0, d, 0, 0);
 }
 
+extern "C" __attribute__((noinline, used)) void runtime_flip_increment_and_advance(std::uint32_t a, std::uint32_t d)
+{
+    const auto face = rwc::MathCounter {.src_a = rwc::Increment(a), .dest = rwc::AdvanceAndReset(d), .flip = rwc::Src::A | rwc::Src::B};
+    counters::set(face);
+}
+
+extern "C" __attribute__((noinline, used)) void reference_runtime_flip_increment_and_advance(std::uint32_t a, std::uint32_t d)
+{
+    TT_SETRWC(ckernel::p_setrwc::CLR_AB, ckernel::p_setrwc::CR_D, d, 0, 0, ckernel::p_setrwc::SET_D);
+    TT_INCRWC(0, 0, 0, a);
+}
+
 extern "C" __attribute__((noinline, used)) std::uint32_t runtime_encoded_increment_src_a(std::uint32_t a)
 {
     const auto counter = rwc::MathCounter {.src_a = rwc::Increment(a)};
