@@ -68,10 +68,22 @@
 #   --dev    - Debug mode with watcher, asserts, and triage (see above).
 #   --profile - Tracy device profiling with per-op CSV report (see above).
 #
+# Fabric bring-up guard (hardware only; environment knobs):
+#   SAFE_PYTEST_FABRIC_INIT_STALL_S  Seconds of silence after "Initializing Fabric" (with no "Fabric
+#                    Initialized" yet) before the run is declared hung in fabric init: native stacks go
+#                    to generated/tt-triage/fabric_init_stall_bt.txt, pytest is killed, the board is
+#                    reset and the run ends as a HANG (exit 2). Default 240; 0 disables.
+#   SAFE_PYTEST_MESH_OPEN_RETRIES  A crash inside open_mesh_device or a fabric-init stall happens before
+#                    any test runs; the wrapper resets the board and reruns pytest this many times.
+#                    Default 1; 0 disables. Any other host crash (exit 134/135/139) resets the board.
+#   SAFE_PYTEST_NATIVE_BT  1 (default): pytest runs with scripts/safe_pytest_segv_bt.c preloaded (built
+#                    once with gcc), so a host segfault also leaves the faulting thread's native backtrace
+#                    in generated/tt-triage/native_bt_<pid>_attempt<N>.txt. 0 disables.
+#
 # Exit codes:
 #   0 - All tests passed
 #   1 - Test failure (normal pytest failure, no hang)
-#   2 - Hang detected (dispatch timeout fired)
+#   2 - Hang detected (dispatch timeout fired, or fabric init stalled)
 #   3 - Setup error (missing args, etc.)
 #
 # Total runtime:
@@ -736,12 +748,122 @@ trap '_signal_cleanup INT'  SIGINT
 # grep for the libttsim watchdog message after a sim hang. Process substitution
 # leaves $! pointing at pytest itself (not tee), so the signal trap still kills
 # the right process tree.
-"${PYTEST_CMD[@]}" > >(tee "$PYTEST_STDOUT_LOG") 2>&1 &
-CHILD_PID=$!
-wait "$CHILD_PID"
-EXIT_CODE=$?
-wait 2>/dev/null  # let tee flush before we grep
-CHILD_PID=
+#
+# Fabric bring-up guard. Opening a fabric mesh can fail in two ways that no test ever sees:
+#   * a hang inside FabricFirmwareInitializer (the host blocks forever in compile_and_configure_fabric
+#     or in the router handshake; the dispatch timeout does not cover fabric init, and pytest-timeout's
+#     signal method never fires while the main thread is inside C++), and
+#   * a segfault in open_mesh_device, before any test body runs.
+# Both leave the board half-initialised. The watchdog below declares a stall when the log shows a
+# fabric init that started ("Initializing Fabric") but has not finished ("Fabric Initialized") and
+# the log has been silent for FABRIC_INIT_STALL_S seconds: it records native stacks (gdb, when
+# installed), kills pytest and feeds the hang path (reset, exit 2). A crash or stall during the
+# mesh open is retried MESH_OPEN_RETRIES times after a board reset, since nothing ran yet.
+FABRIC_INIT_STALL_S="${SAFE_PYTEST_FABRIC_INIT_STALL_S:-240}"
+MESH_OPEN_RETRIES="${SAFE_PYTEST_MESH_OPEN_RETRIES:-1}"
+FABRIC_STALL_FLAG="/tmp/safe-pytest-fabric-stall-$$"
+FABRIC_STALL_BT="${TRIAGE_OUT_DIR}/fabric_init_stall_bt.txt"
+
+_fabric_init_watchdog() {
+    local pid=$1 inits dones age
+    while kill -0 "$pid" 2>/dev/null; do
+        sleep 5
+        [[ -f "$PYTEST_STDOUT_LOG" ]] || continue
+        inits=$(grep -ac "Initializing Fabric (" "$PYTEST_STDOUT_LOG" 2>/dev/null)
+        dones=$(grep -ac "Fabric Initialized with config" "$PYTEST_STDOUT_LOG" 2>/dev/null)
+        (( ${inits:-0} > ${dones:-0} )) || continue
+        age=$(( $(date +%s) - $(stat -c %Y "$PYTEST_STDOUT_LOG" 2>/dev/null || date +%s) ))
+        (( age >= FABRIC_INIT_STALL_S )) || continue
+        {
+            echo "SAFE_PYTEST: fabric init stalled: \"Initializing Fabric\" with no \"Fabric Initialized\" and no output for ${age}s (pid $pid)"
+            echo "SAFE_PYTEST: last log line: $(tail -n 1 "$PYTEST_STDOUT_LOG" | cut -c1-300)"
+        } > "$FABRIC_STALL_FLAG"
+        if command -v gdb >/dev/null 2>&1; then
+            mkdir -p "$TRIAGE_OUT_DIR"
+            timeout 120 gdb -q -batch -nx -p "$pid" -ex "set pagination off" -ex "info threads" \
+                -ex "thread apply all bt 40" > "$FABRIC_STALL_BT" 2>&1
+            echo "SAFE_PYTEST: native stacks: $FABRIC_STALL_BT" >> "$FABRIC_STALL_FLAG"
+        fi
+        cat "$FABRIC_STALL_FLAG" >&2
+        pkill -KILL -P "$pid" 2>/dev/null || true
+        kill -KILL "$pid" 2>/dev/null || true
+        return
+    done
+}
+
+# A crash (SIGSEGV/SIGBUS/SIGABRT) whose Python stack is inside open_mesh_device: the mesh never opened.
+_crashed_in_mesh_open() {
+    [[ $EXIT_CODE -eq 139 || $EXIT_CODE -eq 135 || $EXIT_CODE -eq 134 ]] || return 1
+    grep -aq "Fatal Python error: \(Segmentation fault\|Bus error\|Aborted\)" "$PYTEST_STDOUT_LOG" 2>/dev/null || return 1
+    grep -aq "in open_mesh_device" "$PYTEST_STDOUT_LOG" 2>/dev/null
+}
+
+# Native stack of a host crash. Python's faulthandler shows only the Python frames ("in open_mesh_device"),
+# so a crash in C++ (e.g. a fabric or dispatch bring-up worker thread) left no clue. The preloaded helper
+# adds the faulting thread's native backtrace; SAFE_PYTEST_NATIVE_BT=0 turns it off.
+NATIVE_BT_ENV=()
+NATIVE_BT_FILE="${TRIAGE_OUT_DIR}/native_bt_$$.txt"
+if [[ "$SIM_MODE" == false && "${SAFE_PYTEST_NATIVE_BT:-1}" != 0 ]] && command -v gcc >/dev/null 2>&1; then
+    _bt_src="${REPO_DIR}/scripts/safe_pytest_segv_bt.c"
+    _bt_so="/tmp/safe-pytest-segv-bt-$(id -u)-$(sha1sum "$_bt_src" 2>/dev/null | cut -c1-12).so"
+    if [[ -f "$_bt_src" && ! -f "$_bt_so" ]]; then
+        gcc -O1 -fPIC -shared -o "$_bt_so.$$" "$_bt_src" 2>/dev/null && mv -f "$_bt_so.$$" "$_bt_so"
+    fi
+    if [[ -f "$_bt_so" ]]; then
+        mkdir -p "$TRIAGE_OUT_DIR"
+        NATIVE_BT_ENV=(LD_PRELOAD="${_bt_so}${LD_PRELOAD:+:$LD_PRELOAD}" SEGV_BT_FILE="$NATIVE_BT_FILE")
+    fi
+fi
+
+ATTEMPT=0
+while true; do
+    ATTEMPT=$((ATTEMPT + 1))
+    rm -f "$FABRIC_STALL_FLAG" "$NATIVE_BT_FILE"
+    env "${NATIVE_BT_ENV[@]}" "${PYTEST_CMD[@]}" > >(tee "$PYTEST_STDOUT_LOG") 2>&1 &
+    CHILD_PID=$!
+    WATCHDOG_PID=
+    if [[ "$SIM_MODE" == false && "$FABRIC_INIT_STALL_S" -gt 0 ]]; then
+        _fabric_init_watchdog "$CHILD_PID" &
+        WATCHDOG_PID=$!
+    fi
+    wait "$CHILD_PID"
+    EXIT_CODE=$?
+    [[ -n "$WATCHDOG_PID" ]] && { kill "$WATCHDOG_PID" 2>/dev/null; wait "$WATCHDOG_PID" 2>/dev/null; }
+    wait 2>/dev/null  # let tee flush before we grep
+    CHILD_PID=
+
+    if [[ -s "$NATIVE_BT_FILE" ]]; then
+        _bt_keep="${NATIVE_BT_FILE%.txt}_attempt${ATTEMPT}.txt"
+        mv -f "$NATIVE_BT_FILE" "$_bt_keep"
+        echo "SAFE_PYTEST: native backtrace of the crash (full, with /proc/self/maps for addr2line): $_bt_keep"
+        sed -n '/^SEGV_BT: maps/q;p' "$_bt_keep" | head -40
+    fi
+    rm -f "$NATIVE_BT_FILE"
+
+    MESH_OPEN_FAILURE=""
+    if [[ -f "$FABRIC_STALL_FLAG" ]]; then
+        MESH_OPEN_FAILURE="fabric init stall"
+    elif [[ "$SIM_MODE" == false ]] && _crashed_in_mesh_open; then
+        MESH_OPEN_FAILURE="crash (exit $EXIT_CODE) in open_mesh_device"
+    fi
+    if [[ -z "$MESH_OPEN_FAILURE" || $ATTEMPT -gt $MESH_OPEN_RETRIES ]]; then
+        break
+    fi
+    echo "========================================"
+    echo "SAFE_PYTEST: mesh open failed before any test ran (${MESH_OPEN_FAILURE}); resetting the board and retrying (attempt $((ATTEMPT + 1)) of $((MESH_OPEN_RETRIES + 1)))"
+    if ! tt-smi -r; then
+        echo "SAFE_PYTEST: Device reset FAILED; not retrying"
+        break
+    fi
+    sleep 2
+    rm -f "$TRIAGE_LOG" "$TRIAGE_REPORT"
+    echo "========================================"
+done
+if [[ -f "$FABRIC_STALL_FLAG" ]]; then
+    # Feed the hang path below: reset, HANG result, exit 2.
+    cat "$FABRIC_STALL_FLAG" >> "$TRIAGE_LOG"
+    rm -f "$FABRIC_STALL_FLAG"
+fi
 
 echo "========================================"
 
@@ -780,11 +902,21 @@ if [[ "$SIM_MODE" == false ]] && grep -aqE \
     "$PYTEST_STDOUT_LOG" 2>/dev/null; then
     ETH_STUCK=true
 fi
+# A host crash (SIGSEGV/SIGBUS/SIGABRT) can stop the process anywhere, including halfway through fabric
+# router programming or dispatch bring-up; the board is not known-clean afterwards, so reset it too.
+HOST_CRASHED=false
+if [[ "$SIM_MODE" == false ]] && [[ $EXIT_CODE -eq 139 || $EXIT_CODE -eq 135 || $EXIT_CODE -eq 134 ]]; then
+    HOST_CRASHED=true
+fi
 
-# Clear the dirty flag, resetting first if the run left Ethernet cores stuck.
+# Clear the dirty flag, resetting first if the run left Ethernet cores stuck or crashed.
 _clear_dirty_flag() {
-    if [[ "$ETH_STUCK" == true ]]; then
-        echo "SAFE_PYTEST: Active Ethernet cores stuck after the run, resetting device..."
+    if [[ "$ETH_STUCK" == true || "$HOST_CRASHED" == true ]]; then
+        if [[ "$HOST_CRASHED" == true ]]; then
+            echo "SAFE_PYTEST: pytest crashed (exit $EXIT_CODE), resetting device..."
+        else
+            echo "SAFE_PYTEST: Active Ethernet cores stuck after the run, resetting device..."
+        fi
         if tt-smi -r; then
             sleep 2
             rm -f "$DIRTY_FLAG"
