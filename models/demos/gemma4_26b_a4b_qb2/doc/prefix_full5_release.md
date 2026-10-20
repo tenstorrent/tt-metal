@@ -129,3 +129,10 @@ Registry metadata lookup with the existing read credentials returned 403
 (`read:packages` unavailable); no broader credentials were requested. Runtime
 pull confirmation and precision identity remain pending. Release test job
 `118525081608` queued after the successful build.
+
+The release job subsequently acquired `qb2-120-p05t09` (not the known faulty
+`qb2-120-p02t02`). Runner setup, inference checkout, and image determination
+passed; the `Run tests` step was active at 08:52 UTC. The job-log API still
+returned `BlobNotFound`, and no evaluation artifact had been published.
+Therefore runtime image/precision confirmation, model readiness, and suite
+scores remain unverified at this checkpoint.
