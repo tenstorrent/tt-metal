@@ -12,7 +12,7 @@ declare -A PK
 while read -r rel; do PK[$rel]=$(find "$SP" -path "*/$(suffix $rel)" -type f 2>/dev/null); echo "== file $rel package copies: $(echo ${PK[$rel]} | wc -w)"; done < $S/files.txt
 # a file only the stack adds goes next to a sibling's package copy
 while read -r rel; do
-  [[ -z ${PK[$rel]} ]] && { sib=$(grep -m1 "^$(dirname $rel)/" $S/files.txt | grep -v "^$rel\$"); for p in ${PK[$sib]}; do PK[$rel]+=" $(dirname $p)/$(basename $rel)"; done; echo "== new file $rel -> ${PK[$rel]}"; }
+  [[ -z ${PK[$rel]} ]] && { sib=$(grep "^$(dirname $rel)/" $S/files.txt | grep -v "^$rel\$" | head -1); for p in ${PK[$sib]}; do PK[$rel]+=" $(dirname $p)/$(basename $rel)"; done; echo "== new file $rel -> ${PK[$rel]}"; }
 done < $S/files.txt
 use() {
   while read -r rel; do [[ -e "$S/v/$2/$rel" ]] || continue; cp "$S/v/$2/$rel" "/work/$rel"; for p in ${PK[$rel]}; do cp "$S/v/$2/$rel" "$p"; done; done < $S/files.txt
