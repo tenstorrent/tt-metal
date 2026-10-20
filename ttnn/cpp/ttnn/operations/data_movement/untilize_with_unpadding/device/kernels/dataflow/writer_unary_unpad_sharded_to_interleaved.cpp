@@ -10,7 +10,7 @@
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
 
-// Writer for HEIGHT_SHARDED (tiled) -> ROW_MAJOR INTERLEAVED untilize-with-unpadding.
+// Writer for HEIGHT_SHARDED (tiled) -> ROW_MAJOR untilize-with-unpadding.
 //
 // The height-sharded input flattens to a [global_batch * H_padded, W_padded] row space that is
 // split into contiguous per-core row ranges. Every H_padded-tall band is one logical matrix whose
@@ -19,7 +19,7 @@
 //
 // The compute kernel streams the untilized rows into the output DFB one tile-row (32 rows) at a
 // time. For each row this kernel derives, from its absolute position, which matrix it belongs to
-// (m) and the row within that matrix (rr). Real rows (rr < H_logical) are written to interleaved
+// (m) and the row within that matrix (rr). Real rows (rr < H_logical) are written to
 // output page m * H_logical + rr; padding rows are skipped. Column padding is dropped by writing
 // only row_size_unpadded bytes while advancing the DFB read pointer by the full padded
 // block_row_size.
