@@ -168,7 +168,6 @@ TEST(InspectorSessionTest, HardwareSessionDoesNotRecordMockObjects) {
     auto mock = distributed::MeshDevice::open_mesh_device(
         mock_env, distributed::MeshDeviceConfig(mock_env.get_system_mesh().shape()));
     EXPECT_FALSE(experimental::inspector::IsEnabled(*mock));
-    EXPECT_FALSE(experimental::inspector::ShouldCaptureTensorSpecs(*mock));
 
     // Programs are dropped from the session when destroyed, so keep the workloads alive until the query.
     auto silicon_workload = run_no_op_workload(*silicon);

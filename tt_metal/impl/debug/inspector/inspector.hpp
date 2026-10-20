@@ -38,8 +38,6 @@ public:
         MetalContext& context, std::optional<int> rank, uint64_t fw_compile_hash);
     // Whether `context` has an inspector session.
     static bool is_enabled(const MetalContext& context);
-    // Whether `context` has an inspector session that captures tensor specs on op dispatch.
-    static bool capture_tensor_specs(const MetalContext& context);
     static void serialize_rpc(const MetalContext& context);
 
     static void program_created(const detail::ProgramImpl* program) noexcept;

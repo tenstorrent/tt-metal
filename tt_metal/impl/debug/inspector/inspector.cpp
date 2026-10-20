@@ -74,11 +74,6 @@ std::unique_ptr<inspector::Data> Inspector::initialize(
 
 bool Inspector::is_enabled(const MetalContext& context) { return context.get_inspector_data() != nullptr; }
 
-bool Inspector::capture_tensor_specs(const MetalContext& context) {
-    const auto* data = context.get_inspector_data();
-    return data != nullptr && data->capture_tensor_specs();
-}
-
 void Inspector::serialize_rpc(const MetalContext& context) {
     auto* data = context.get_inspector_data();
     if (!data) {
@@ -608,7 +603,7 @@ bool IsEnabled(const tt::tt_metal::distributed::MeshDevice& mesh_device) {
 }
 
 bool ShouldCaptureTensorSpecs(const tt::tt_metal::distributed::MeshDevice& mesh_device) {
-    return tt::tt_metal::Inspector::capture_tensor_specs(mesh_device.impl().metal_context());
+    return mesh_device.impl().metal_env().get_rtoptions().get_inspector_capture_tensor_specs();
 }
 
 std::optional<tt::tt_metal::distributed::MeshTraceId> GetCurrentMeshTraceId(
