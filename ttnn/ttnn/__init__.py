@@ -402,7 +402,6 @@ L1TensorGeometry = ttnn._ttnn.tensor.L1TensorGeometry
 experimental_l1_tensor_geometry = ttnn._ttnn.tensor.experimental_l1_tensor_geometry
 experimental_l1_tensor_owned_extents = ttnn._ttnn.tensor.experimental_l1_tensor_owned_extents
 experimental_create_l1_tensor_view = ttnn._ttnn.tensor.experimental_create_l1_tensor_view
-experimental_retain_tensor_backing = ttnn._ttnn.tensor.experimental_retain_tensor_backing
 experimental_to_single_device = ttnn._ttnn.tensor.experimental_to_single_device
 experimental_allocate_single_device_tensor = ttnn._ttnn.tensor.experimental_allocate_single_device_tensor
 element_size = ttnn._ttnn.tensor.element_size
