@@ -185,12 +185,15 @@ class _Argmax:
         # BF16 read as stored) instead of ttnn.topk k = 1 (its prep + large-indices passes: ~1.0 ms at 256 rows)
         self.custom = os.environ.get("B32_ARGMAX_TOPK", "0") != "1" if custom is None else custom
 
-    def device(self, logits):
+    def device(self, logits, out_rows=None):
+        """out_rows (custom only): the outputs have out_rows rows, the logits being their last rows (the first ones
+        left unwritten)."""
         if not self.custom:
+            assert out_rows is None
             return ttnn.topk(logits, k=1, dim=-1, sorted=True)
-        return self._device_custom(logits)
+        return self._device_custom(logits, out_rows)
 
-    def _device_custom(self, logits):
+    def _device_custom(self, logits, out_rows=None):
         """(values, indices) [1, 1, rows, 1] FLOAT32: each row's maximum over this device's columns and its first
         column index."""
         from ..fused_decode.boundary import KERNEL_DIR
@@ -198,13 +201,15 @@ class _Argmax:
         mesh = logits.device()
         rows, width = logits.shape[-2], logits.shape[-1]
         RT, NT, NCH = rows // TILE, width // TILE, self.NCH
+        out_rows = out_rows or rows
+        r0 = out_rows // TILE - RT  # the output row tile of logits row tile 0
         grid = mesh.compute_with_storage_grid_size()
         core_list = [ttnn.CoreCoord(x, y) for y in range(grid.y) for x in range(grid.x)][: RT * NCH]
         cores = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in core_list])
         f32 = ttnn.float32
-        vals = ttnn.empty([1, 1, rows, 1], dtype=f32, layout=ttnn.TILE_LAYOUT, device=mesh,
+        vals = ttnn.empty([1, 1, out_rows, 1], dtype=f32, layout=ttnn.TILE_LAYOUT, device=mesh,
                           memory_config=ttnn.DRAM_MEMORY_CONFIG)  # fmt: skip
-        idx = ttnn.empty([1, 1, rows, 1], dtype=f32, layout=ttnn.TILE_LAYOUT, device=mesh,
+        idx = ttnn.empty([1, 1, out_rows, 1], dtype=f32, layout=ttnn.TILE_LAYOUT, device=mesh,
                          memory_config=ttnn.DRAM_MEMORY_CONFIG)  # fmt: skip
         bounds = [NT * c // NCH for c in range(NCH + 1)]
         rd, wr, cp = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
@@ -213,7 +218,7 @@ class _Argmax:
             ch, rt = i // RT, i % RT
             col0, ncol = bounds[ch], bounds[ch + 1] - bounds[ch]
             rd[c.x][c.y] = [rt, col0, ncol]
-            wr[c.x][c.y] = [rt, ch, (noc[rt].x << 8) | noc[rt].y]
+            wr[c.x][c.y] = [rt + r0, ch, (noc[rt].x << 8) | noc[rt].y]
             cp[c.x][c.y] = [col0, ncol]
         B, SEM = 8, 0
         cb_in, cb_part, cb_recv = 0, 1, 2
@@ -510,7 +515,6 @@ class BatchedDraft:
         self.ck = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=False
         )
-        # (with BF16 weights HiFi2 / LoFi were no faster; with the BFP8 ones HiFi2 is: 26.8 -> 26.6 ms, LoFi as HiFi2)
         # the context pass's fc (compute-bound: 21 GFLOP per pass) at LoFi: round 23.0 -> 22.9 ms at ISL 256, acceptance
         # 5.02 / 5.01 tokens per round (in its spread); B32_CTX_FC_FID=HiFi2: the other matmuls' fidelity
         self.fc_ck = ttnn.WormholeComputeKernelConfig(
@@ -519,6 +523,7 @@ class BatchedDraft:
         )  # fmt: skip
         # the pass activations between ops in L1 (B32_DRAFT_L1)
         self.act_mc = ttnn.L1_MEMORY_CONFIG if os.environ.get("B32_DRAFT_L1", "1") == "1" else ttnn.DRAM_MEMORY_CONFIG
+        # (with BF16 weights HiFi2 / LoFi were no faster; with the BFP8 ones HiFi2 is: 26.8 -> 26.6 ms, LoFi as HiFi2)
         self.mm_ck = ttnn.WormholeComputeKernelConfig(
             math_fidelity=getattr(ttnn.MathFidelity, os.environ.get("B32_DRAFT_MMFID", "HiFi2")), math_approx_mode=False,
             fp32_dest_acc_en=True, packer_l1_acc=True,
@@ -709,9 +714,14 @@ class BatchedDraft:
         h.deallocate(True)
         x8 = ttnn.typecast(x, ttnn.bfloat8_b)
         x.deallocate(True)
+        skip = self.argmax.custom and os.environ.get("B32_DRAFT_SKIP_ROW0", "1") == "1"
+        if skip:  # rows 0 .. 31 (each user's last token, i = 0) draft nothing: the LM head on rows 32 .. 255 only
+            x8r = ttnn.slice(x8, [0, 0, U32, 0], [1, 1, self.rows, self.hidden])
+            x8.deallocate(True)
+            x8 = x8r
         logits = ttnn.matmul(x8, self.lm_head, dtype=self.logits_dt)
         x8.deallocate(True)
-        out = self.argmax.device(logits)
+        out = self.argmax.device(logits, self.rows if skip else None)
         logits.deallocate(True)
         return out
 
