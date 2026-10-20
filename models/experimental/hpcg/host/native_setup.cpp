@@ -241,6 +241,10 @@ void fill_from_previous(T* v, int64_t n, M mapped) {
 
 extern "C" {
 
+// OpenMP threads of the calling thread's parallel regions (host/native.py: half the logical CPUs, so a Python thread
+// working beside the planners, such as the generation warm-up, never preempts one of their threads)
+void hpcg_set_threads(int32_t n) { omp_set_num_threads(n); }
+
 // Matrix of one level, in the storage order of reference/problem.py (colour blocks, y-bands, natural order).
 // line_band[py * nl + yl]: band of colour-line yl (= iy >> 1) for y parity py; band_y0 / band_ny [(c * nbands + j)]:
 // first colour-line and number of lines of band j in colour c; band_start[c * nbands + j]: q of band j's first row.

@@ -12,15 +12,17 @@ Every matrix and vector pass is a custom op (tt/custom_ops), including the final
 start (start()) and every iteration run on the device only and are trace-capturable; the CG scalars stay on device.
 """
 
+import threading
+
 import numpy as np
 import ttnn
 
-from models.experimental.hpcg.reference.problem import COLOUR_ORDER, build
+from models.experimental.hpcg.reference.problem import COLOUR_ORDER, Level, build
 from models.experimental.hpcg.tt.custom_ops.cg_vector import CgVectorOp, DotFinishOp
 from models.experimental.hpcg.tt.custom_ops.sparse_rows import SparseRowOp, SparseRowPlan, slot_pages
 from models.experimental.hpcg.tt.custom_ops.sparse_rows.op import debug_buffer, noc_coords
 from models.experimental.hpcg.tt.custom_ops.stencil_matrix import StencilMatrixOp
-from models.experimental.hpcg.tt.custom_ops.stencil_matrix.op import StencilJob, TransferJob
+from models.experimental.hpcg.tt.custom_ops.stencil_matrix.op import StencilJob, TransferJob, warm_up
 from models.experimental.hpcg.tt.layout import (
     TILE,
     empty_device,
@@ -51,7 +53,7 @@ class DeviceLevel:
     it, StencilMatrixOp); None on the host-tables path.
     Work vectors are allocated without a fill: every launch writes them before any launch reads them."""
 
-    def __init__(self, device, L, ncores, noc_xy, r=None, b=None, zeros=()):
+    def __init__(self, device, L, ncores, noc_xy, r=None, b=None, zeros=(), plan=None):
         self.L, self.P = L, L.P
         blocks = [(L.starts[c], L.starts[c + 1]) for c in range(8)]
         plan_args = (blocks, blocks, ncores, noc_xy, True)
@@ -67,11 +69,18 @@ class DeviceLevel:
                 ttnn.copy(to_device(device, np.zeros(L.P, np.float32)), t)
             self.job = None
         else:  # the device writes the values, the offsets, b and the zero vectors; the host plans the windows only
-            self.plan = SparseRowPlan(None, *plan_args, bands=bands, pout=L.P, stencil=L)
+            self.plan = plan if plan is not None else DeviceLevel.stencil_plan(L, ncores, noc_xy)
             self.job = StencilJob(device, L, self.plan, b=b, zeros=zeros)
             self.values, self.offsets = self.job.values, self.job.offsets
         self.z, self.Az = (empty_device(device, L.P) for _ in range(2))
         self.r = r if r is not None else empty_device(device, L.P)  # the fine level shares CG's r
+
+    @staticmethod
+    def stencil_plan(L, ncores, noc_xy):
+        """The Gauss-Seidel plan of level L from its storage-order formula (host work only: no device calls)."""
+        blocks = [(L.starts[c], L.starts[c + 1]) for c in range(8)]
+        bands = L.bstarts if L.bands > 1 else None
+        return SparseRowPlan(None, blocks, blocks, ncores, noc_xy, True, bands=bands, pout=L.P, stencil=L)
 
 
 class HPCG:
@@ -94,18 +103,29 @@ class HPCG:
         g = device.compute_with_storage_grid_size()
         nc = g.x * g.y
         bands = list(bands) if bands is not None else [default_bands(nx >> l) for l in range(4)]
-        self.levels = build(nx, bands, slot_stride, tables=host_tables)
-        self.order = list(order)
         noc_xy = noc_coords(device)
+        # the generation kernel's binaries load in a thread (TT-NN releases the GIL meanwhile) while this thread
+        # builds the levels and plans the fine one, host work only; the first generation launch then starts at once
+        warm = None if host_tables else threading.Thread(target=warm_up, args=(device,))
+        if warm is not None:
+            warm.start()
+        self.order = list(order)
         lc = list(level_cores or []) + [nc] * 4  # cores per level for the smoothers (default: all)
-        L0 = self.levels[0]
+        if host_tables:
+            self.levels = build(nx, bands, slot_stride, tables=True)
+            L0, plan0 = self.levels[0], None
+        else:  # the fine level first: the coarser ones are built after its generation launch
+            L0 = Level(nx, bands[0], slot_stride, tables=False)
+            plan0 = DeviceLevel.stencil_plan(L0, min(nc, lc[0]), noc_xy)
+            warm.join()
         self.r, self.b, self.x, self.p, self.Ap = (empty_device(device, L0.P) for _ in range(5))
         fine = dict(r=self.r, b=self.b, zeros=(self.x, self.p))  # x = 0 (initial guess) and p = 0 on the fine level
         # matrix generation in two launches: the fine level's as soon as it is planned (the device writes it while
         # the host plans the rest), then the coarser levels' and the grid transfers' together
-        self.lv = [DeviceLevel(device, L0, min(nc, lc[0]), noc_xy, **fine)]
+        self.lv = [DeviceLevel(device, L0, min(nc, lc[0]), noc_xy, plan=plan0, **fine)]
         if self.lv[0].job is not None:
             StencilMatrixOp(device, [self.lv[0].job])()
+            self.levels = build(nx, bands, slot_stride, tables=False, finest=L0)
         self.lv += [DeviceLevel(device, L, min(nc, lc[l]), noc_xy) for l, L in enumerate(self.levels) if l > 0]
         jobs = [d.job for d in self.lv[1:] if d.job is not None]
         # grid transfers l -> l + 1: restriction rc[qc] = Rw * t[R[qc]] (t = r - A z = block 0 of Az, written by the

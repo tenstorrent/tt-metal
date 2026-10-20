@@ -240,11 +240,12 @@ class Level:
         self.Pm, self.Pw = Pm.astype(np.int32), Pw.astype(np.float32)
 
 
-def build(nx, bands=None, slot_stride=None, tables=True):
+def build(nx, bands=None, slot_stride=None, tables=True, finest=None):
     """The 4 multigrid levels nx, nx/2, nx/4, nx/8 (bands: y-bands per level, default 1), linked fine to coarse.
-    slot_stride, tables: see Level."""
+    slot_stride, tables: see Level. finest: the nx level, already built with the same arguments (or None)."""
     bands = list(bands or []) + [1] * NLEV
-    levels = [Level(nx >> l, bands[l], slot_stride, tables) for l in range(NLEV)]
+    levels = [finest] if finest is not None else []
+    levels += [Level(nx >> l, bands[l], slot_stride, tables) for l in range(len(levels), NLEV)]
     for l in range(NLEV - 1):
         if levels[l].tables:
             levels[l].link(levels[l + 1])  # R / Pm; without tables, transfers are planned from the formulas

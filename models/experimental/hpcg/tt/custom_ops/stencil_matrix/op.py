@@ -95,8 +95,9 @@ class StencilMatrixOp:
     Every job's tables are written once the launch completes."""
 
     def __init__(self, device, jobs):
+        """jobs: StencilJob / TransferJob list; empty: a launch that only loads the kernel binaries (warm_up)."""
         g = device.compute_with_storage_grid_size()
-        nc = max(j.plan.nc for j in jobs)
+        nc = max((j.plan.nc for j in jobs), default=1)
         # META: a shared region read by every core (each level's storage-order tables, once), then one row per core
         # (the jobs' segments one after another, 16-word aligned: header, then the core's window piece lo and l1
         # tables). Both are whole 4 KB pages: the tensor's page size is then the same for every launch, and so is the
@@ -109,14 +110,15 @@ class StencilMatrixOp:
                     toff[id(L)] = sw + np.cumsum([0] + [len(t) for t in _tables(L)[:-1]])
                     shared += _tables(L)
                     sw += sum(len(t) for t in _tables(L))
-        S = -(-sw // TILE) * TILE
+        S = -(-sw // TILE) * TILE if jobs else TILE  # a tensor holds at least one page
         at, w = [], 0
         for j in jobs:
             at.append(S + w)  # the segment's first word in L1
             w += -(-(j.hw + 2 * j.plan.piece_arrays[0].shape[1]) // 16) * 16
         w = -(-w // TILE) * TILE
         meta = np.zeros(S + nc * w, np.int32)  # the uploaded word type: no conversion
-        meta[:sw] = np.concatenate(shared, dtype=np.int32)
+        if shared:
+            meta[:sw] = np.concatenate(shared, dtype=np.int32)
         rows = meta[S:].reshape(nc, w)
         for j, a in zip(jobs, at):
             plo, _, pl1, npc = j.plan.piece_arrays
@@ -137,11 +139,11 @@ class StencilMatrixOp:
         cores = core_ranges(nc, g.x)
         defs = [(k, str(v)) for k, v in CB.items()]  # nothing grid-dependent: one binary for every job list and size
         # one accessor serves every table and vector (interleaved DRAM, the same arguments for both layouts used)
-        ct = ttnn.TensorAccessorArgs(jobs[0].values).get_compile_time_args()
+        ct = ttnn.TensorAccessorArgs(jobs[0].values if jobs else self.meta).get_compile_time_args()
         vec = next((t for j in jobs for t in j.tensors()[2:]), None)  # a TILE vector (b or a zero vector), if any
         assert vec is None or ttnn.TensorAccessorArgs(vec).get_compile_time_args() == ct, "one accessor layout"
         ct = list(ct) + list(ttnn.TensorAccessorArgs(self.meta).get_compile_time_args())
-        args = [self.meta.buffer_address(), shared_pages, meta_pages, len(jobs)]
+        args = [self.meta.buffer_address(), shared_pages if jobs else 0, meta_pages, len(jobs)]
         for j, a in zip(jobs, at):
             bt = j.b if j.b is not None else j.values  # unused slots point at the values (never written)
             zt = j.zeros + [j.values] * (2 - len(j.zeros))
@@ -171,7 +173,14 @@ class StencilMatrixOp:
                 )
             )
         self.prog = ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs)
-        self.io = [self.meta] + [t for j in jobs for t in j.tensors()]
+        self.io = [self.meta] + ([t for j in jobs for t in j.tensors()] or [self.meta])  # generic_op takes >= 2
 
     def __call__(self):
         return ttnn.generic_op(self.io, self.prog)
+
+
+def warm_up(device):
+    """A launch with no jobs on one core: the process loads the kernel binaries (about 1.7 ms on the P150's host the
+    first time) while the caller plans the fine level, so the first real launch starts that much sooner. TT-NN
+    releases the Python GIL while it builds and enqueues a program, so this can run in a thread."""
+    StencilMatrixOp(device, [])()
