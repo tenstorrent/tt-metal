@@ -842,6 +842,8 @@ void jit_build_genfiles_triscs_src(
     if (!gen_defines_file) {
         throw std::runtime_error("Cannot create file: " + generated_defines_fname);
     }
+    // trisck.cc includes this ahead of the firmware headers, and chlkc_*.cpp include it again.
+    gen_defines_file << "#pragma once\n";
     settings.process_defines([&gen_defines_file](const string& define, const string& value) {
         gen_defines_file << "#define " << define << " " << value << endl;
     });

@@ -442,10 +442,13 @@ def test_pipeline_performance(
             (4, 8): "BH_GLX" if is_blackhole() else "WH_GLX",
             (4, 32): "BH_QG",
         }
+        benchmark_profiler.start("inference")
+        benchmark_profiler.end("inference")
+        benchmark_data.add_measurement(benchmark_profiler, 0, "inference", "fps", num_frames / total_times[-1])
         benchmark_data.save_partial_run_json(
             benchmark_profiler,
             run_type=device_name_map[mesh_shape] + ("_quant" if quant_config_name else ""),
-            ml_model_name="Wan2.2",
+            ml_model_name="wan-2.2-i2v" if model_type == "i2v" else "wan-2.2-t2v",
             batch_size=1,
             config_params={
                 "width": width,
