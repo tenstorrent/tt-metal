@@ -158,6 +158,12 @@ std::map<std::string, std::string> initialize_device_kernel_defines(const JitDev
     device_kernel_defines.emplace("PCIE_NOC_X", std::to_string(config.pcie_core.x));
     device_kernel_defines.emplace("PCIE_NOC_Y", std::to_string(config.pcie_core.y));
 
+    // Quasar: interleaved L1 TensorAccessor transfers use software addresses where the L1 banks are not one ascending
+    // ATT selector run (internal/tt-2xx/quasar/tensor/addrgen_sequencer.h).
+    if (!config.l1_banks_form_selector_run) {
+        device_kernel_defines.emplace("TT_TA_ADDRGEN_INTERLEAVED_L1_SW", "1");
+    }
+
     return device_kernel_defines;
 }
 
@@ -179,6 +185,8 @@ uint64_t compute_build_key(const JitDeviceConfig& config, const llrt::RunTimeOpt
         // devices with different cores harvested.
         hasher.update(config.harvesting_mask);
     }
+
+    hasher.update(static_cast<uint32_t>(config.l1_banks_form_selector_run));
 
     hasher.update(rtoptions.get_compile_hash_string());
 
