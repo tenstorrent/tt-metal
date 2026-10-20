@@ -1633,6 +1633,58 @@ class BatchedVerify:
         summed_s.deallocate(True)
         return out
 
+    def _qkv_rope_heads(self, qkv, cos, sin, rope_heads, hd):
+        """qkv [1, 1, rows, (rope_heads + 2) hd] -> (the rotated Q and K heads [1, rope_heads, rows, hd], V heads 0 / 1
+        [1, 1, rows, hd]), as nlp_create_qkv_heads(num_heads = rope_heads, num_kv_heads = 1) + rotary_embedding_llama
+        (prefill mode, self.trans_rows), in one program: one core per (32-row tile, 2 heads)."""
+        from ..fused_decode.boundary import KERNEL_DIR
+
+        rows, nt = qkv.shape[-2], qkv.shape[-1] // TILE
+        heads = nt // 2
+        hpc = 2
+        gx, gy = heads // hpc, rows // TILE
+        assert gx * hpc == heads and gx <= 11 and hd == 2 * TILE
+        mk = lambda shp: ttnn.empty(shp, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.mesh,
+                                    memory_config=ttnn.L1_MEMORY_CONFIG)  # fmt: skip
+        qk, v0, v1 = mk([1, rope_heads, rows, hd]), mk([1, 1, rows, hd]), mk([1, 1, rows, hd])
+        cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(gx - 1, gy - 1))])
+        cb_x, cb_cos, cb_sin, cb_t, cb_out = range(5)
+        rct = [cb_x, cb_cos, cb_sin, cb_t, hpc, nt]
+        for t in (qkv, cos, sin, self.trans_rows):
+            rct += ttnn.TensorAccessorArgs(t).get_compile_time_args()
+        wct = [cb_out, hpc, rope_heads, gy]
+        for t in (qk, v0, v1):
+            wct += ttnn.TensorAccessorArgs(t).get_compile_time_args()
+        dm = ttnn.DataMovementConfigDescriptor
+        kernels = [
+            ttnn.KernelDescriptor(
+                kernel_source=str(KERNEL_DIR / "qkv_rope_reader.cpp"), core_ranges=cores, compile_time_args=rct,
+                runtime_args=[], common_runtime_args=[t.buffer_address() for t in (qkv, cos, sin, self.trans_rows)],
+                config=dm(processor=ttnn.DataMovementProcessor.RISCV_1, noc=ttnn.NOC.NOC_0),
+            ),
+            ttnn.KernelDescriptor(
+                kernel_source=str(KERNEL_DIR / "qkv_rope_writer.cpp"), core_ranges=cores, compile_time_args=wct,
+                runtime_args=[], common_runtime_args=[t.buffer_address() for t in (qk, v0, v1)],
+                config=dm(processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.NOC_1),
+            ),
+            ttnn.KernelDescriptor(
+                kernel_source=str(KERNEL_DIR / "qkv_rope_compute.cpp"), core_ranges=cores,
+                compile_time_args=[cb_x, cb_cos, cb_sin, cb_t, cb_out, hpc, rope_heads], runtime_args=[],
+                config=ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True,
+                                                    math_approx_mode=False),
+            ),
+        ]  # fmt: skip
+
+        def cb(i, pages):
+            return ttnn.CBDescriptor(total_size=2048 * pages, core_ranges=cores,
+                                     format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=i, data_format=ttnn.bfloat16,
+                                                                                 page_size=2048)])  # fmt: skip
+
+        cbs = [cb(cb_x, 2 * hpc), cb(cb_cos, 2), cb(cb_sin, 2), cb(cb_t, 1), cb(cb_out, 2)]
+        ttnn.generic_op([qkv, cos, sin, self.trans_rows, qk, v0, v1],
+                        ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs))  # fmt: skip
+        return qk, v0, v1
+
     def _attention_rows(self, li, attn_mod, qkv, pos, cos_sin):
         """The attention core for all 256 rows at once: QKV -> prefill-layout heads [1, heads, rows, hd], Q and K rotated
         per row, K / V into the BFP8_b caches by one multi-user kernel, then block attention (full layers; windowed on
@@ -1648,12 +1700,20 @@ class BatchedVerify:
             # Q and K in one tensor (nlp_create_qkv_heads with nh + nkv "q" heads and one "kv" head: the QKV columns
             # [q | k | v] split as [q k | v0 | v1]), one RoPE op for both; the cache write reads K from heads nh .. and
             # V from the two one-head tensors, the block attention Q from heads 0 .. nh - 1
-            qk, v0, v1 = ttnn.experimental.nlp_create_qkv_heads(
-                qkv, num_heads=nh + nkv, num_kv_heads=1, transpose_k_heads=False, memory_config=ttnn.L1_MEMORY_CONFIG
-            )
-            qk2 = ttnn.experimental.rotary_embedding_llama(qk, cos, sin, self.trans_rows, is_decode_mode=False,
-                                                           memory_config=ttnn.L1_MEMORY_CONFIG)  # fmt: skip
-            qk.deallocate(True)
+            if os.environ.get("B32_QKV_ROPE", "1") == "1":
+                # the heads split and the Q / K RoPE in one program (fused_decode/kernels/qkv_rope_*.cpp)
+                qk2, v0, v1 = self._qkv_rope_heads(qkv, cos, sin, nh + nkv, hd)
+            else:
+                qk, v0, v1 = ttnn.experimental.nlp_create_qkv_heads(
+                    qkv,
+                    num_heads=nh + nkv,
+                    num_kv_heads=1,
+                    transpose_k_heads=False,
+                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                )
+                qk2 = ttnn.experimental.rotary_embedding_llama(qk, cos, sin, self.trans_rows, is_decode_mode=False,
+                                                               memory_config=ttnn.L1_MEMORY_CONFIG)  # fmt: skip
+                qk.deallocate(True)
             self.kv_write.joint(qk2, v0, v1, (k_cache, v_cache), pos[self.block], self.page_table, nh)
             v0.deallocate(True)
             v1.deallocate(True)
