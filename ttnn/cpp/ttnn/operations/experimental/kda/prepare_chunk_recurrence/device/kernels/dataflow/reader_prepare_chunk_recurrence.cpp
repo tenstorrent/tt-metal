@@ -287,6 +287,7 @@ TT_KERNEL void reader(uint32_t work_item_start, uint32_t work_item_count, uint32
             }
         };
 
+    // Every work item's q and k first: compute L2-normalizes them for all of the core's items in one pass.
     for (uint32_t index = 0; index < work_item_count; ++index) {
         const uint32_t head_chunk_index = work_item_start + index;
         if (head_chunk_index % num_chunks >= valid_chunks) {
@@ -294,6 +295,19 @@ TT_KERNEL void reader(uint32_t work_item_start, uint32_t work_item_count, uint32
         }
         enqueue_head_chunk_read(q_accessor, q, head_chunk_index, Kt);
         enqueue_head_chunk_read(k_accessor, k, head_chunk_index, Kt);
+        noc.async_read_barrier();
+        if (partial_rows != 0 && head_chunk_index % num_chunks == partial_chunk) {
+            zero_rows_from(noc, k, chunk_key_tiles, partial_rows);
+            noc.write_zeros_l1_barrier();
+        }
+        q.push_back(chunk_key_tiles);
+        k.push_back(chunk_key_tiles);
+    }
+    for (uint32_t index = 0; index < work_item_count; ++index) {
+        const uint32_t head_chunk_index = work_item_start + index;
+        if (head_chunk_index % num_chunks >= valid_chunks) {
+            continue;
+        }
         enqueue_head_chunk_read(v_accessor, v, head_chunk_index, Vt);
         enqueue_head_chunk_read(g_accessor, g, head_chunk_index, Kt);
         // Token-major beta logits: the chunk's tile holds 32 heads' logits as columns.
@@ -302,7 +316,7 @@ TT_KERNEL void reader(uint32_t work_item_start, uint32_t work_item_count, uint32
         const uint32_t chunk = head_chunk_index % num_chunks;
         enqueue_contiguous_read(
             beta_accessor, beta, chunk * beta_width_tiles + beta_offset_tiles + head / tt::constants::TILE_WIDTH, 1);
-        // All five inputs are independent reads on the same NoC. One barrier lets them overlap, then publishes
+        // The three inputs are independent reads on the same NoC. One barrier lets them overlap, then publishes
         // the complete work item atomically to compute.
         noc.async_read_barrier();
         // Zero G, beta, K, and V past the valid end: zero decay and zero K and V make
@@ -311,7 +325,6 @@ TT_KERNEL void reader(uint32_t work_item_start, uint32_t work_item_count, uint32
         // Beta logits zero to sigmoid(0) = 0.5, which is harmless: beta only scales K and V.
         // Zero before moving the head column, so column 0 takes the zeroed rows.
         if (partial_rows != 0 && head_chunk_index % num_chunks == partial_chunk) {
-            zero_rows_from(noc, k, chunk_key_tiles, partial_rows);
             zero_rows_from(noc, v, chunk_value_tiles, partial_rows);
             zero_rows_from(noc, g, chunk_key_tiles, partial_rows);
             zero_rows_from(noc, beta, Ct, partial_rows);
@@ -332,8 +345,6 @@ TT_KERNEL void reader(uint32_t work_item_start, uint32_t work_item_count, uint32
                 tile[face_row * 2 * tt::constants::FACE_HW + row_base] = tile[source];
             }
         }
-        q.push_back(chunk_key_tiles);
-        k.push_back(chunk_key_tiles);
         v.push_back(chunk_value_tiles);
         g.push_back(chunk_key_tiles);
         beta.push_back(Ct);

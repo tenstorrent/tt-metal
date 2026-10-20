@@ -123,8 +123,9 @@ ttnn::device_operation::MeshWorkloadArtifacts PrepareChunkRecurrenceProgramFacto
             .data_format_metadata = format};
     };
     m2::Group<m2::DataflowBufferSpec> dfb_specs = {
-        make_dfb(q_dfb, 2 * ck, bf16),
-        make_dfb(k_dfb, 2 * ck, bf16),
+        // Every work item's q and k at once: compute normalizes them in one pass per core.
+        make_dfb(q_dfb, max_items * ck, bf16),
+        make_dfb(k_dfb, max_items * ck, bf16),
         make_dfb(v_dfb, 2 * cv, bf16),
         make_dfb(g_dfb, 2 * ck, gate_format),
         make_dfb(beta_dfb, 2 * Ct, bf16),
@@ -147,8 +148,8 @@ ttnn::device_operation::MeshWorkloadArtifacts PrepareChunkRecurrenceProgramFacto
         make_dfb(final_decay_dfb, 2 * Kt, output_formats[5]),
         make_dfb(k_decay_transposed_dfb, 2 * kc, output_formats[4]),
         make_dfb(anchor_decay_dfb, kv, fp32),
-        make_dfb(normalized_q_dfb, ck, fp32),
-        make_dfb(normalized_k_dfb, ck, fp32),
+        make_dfb(normalized_q_dfb, max_items * ck, fp32),
+        make_dfb(normalized_k_dfb, max_items * ck, fp32),
         // Row workspaces publish whole Kt-tile rows. Keep one-tile reductions and
         // inverse intermediates separate so no transaction can cross a ring end.
         make_dfb(tile_workspace_0_dfb, max_items, fp32),
@@ -156,7 +157,7 @@ ttnn::device_operation::MeshWorkloadArtifacts PrepareChunkRecurrenceProgramFacto
         make_dfb(tile_workspace_1_dfb, 2 * max_items, fp32),
         make_dfb(tile_workspace_2_dfb, max_items, fp32),
 
-        make_dfb(workspace_3_dfb, scratch, fp32),
+        make_dfb(workspace_3_dfb, std::max(scratch, max_items * ck), fp32),
         make_dfb(workspace_2_dfb, ck, fp32),
     };
     m2::KernelSpec reader{

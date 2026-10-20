@@ -488,7 +488,6 @@ KDA_PREP_HELPER void reduce_squared_rows_to_inverse_norms(
 }
 
 template <
-    uint32_t RowTiles,
     uint32_t ColumnTiles,
     bool Scale,
     uint32_t SquaredDfb,
@@ -500,13 +499,14 @@ template <
 KDA_PREP_HELPER void normalize_l2_rows(
     DFB0& input,
     DFB1& normalized,
+    uint32_t RowTiles,
     uint32_t eps_bits,
     uint32_t scale_bits,
 
     // intermediate
     DFB2& squared,
     DFB3& inverse_norms) {
-    constexpr uint32_t matrix_tiles = RowTiles * ColumnTiles;
+    const uint32_t matrix_tiles = RowTiles * ColumnTiles;
 
     square_tiles(input, squared, matrix_tiles);
 
@@ -785,34 +785,43 @@ TT_KERNEL void compute(uint32_t work_item_start, uint32_t work_item_count, uint3
     gate_ones.wait_front(chunk_matrix_tiles);
     tril.wait_front(chunk_matrix_tiles);
 
+    // q and k of every valid work item arrive first and are L2-normalized in one pass each, so the per-stage
+    // setup is paid once per core instead of once per item; the item loop then takes them in order.
+    uint32_t valid_items = 0;
+    for (uint32_t work_item = 0; work_item < work_item_count; ++work_item) {
+        valid_items += (work_item_start + work_item) % num_chunks < valid_chunks ? 1 : 0;
+    }
+    if (valid_items != 0) {
+        q.wait_front(valid_items * chunk_key_tiles);
+        k.wait_front(valid_items * chunk_key_tiles);
+        normalize_l2_rows<Kt, true, dfb::workspace_3, dfb::tile_workspace_0>(
+            q,
+            normalized_q,
+            valid_items * Ct,
+            EPS_BITS,
+            SCALE_BITS,
+            /*squared=*/workspace_3,
+            /*inverse_norms=*/tile_workspace_0);
+        normalize_l2_rows<Kt, false, dfb::workspace_3, dfb::tile_workspace_0>(
+            k,
+            normalized_k,
+            valid_items * Ct,
+            EPS_BITS,
+            SCALE_BITS,
+            /*squared=*/workspace_3,
+            /*inverse_norms=*/tile_workspace_0);
+    }
+
     uint32_t inverse_items = 0;
     for (uint32_t work_item = 0; work_item < work_item_count; ++work_item) {
         if ((work_item_start + work_item) % num_chunks >= valid_chunks) {
             continue;
         }
-        q.wait_front(chunk_key_tiles);
-        k.wait_front(chunk_key_tiles);
         v.wait_front(chunk_value_tiles);
         g.wait_front(chunk_key_tiles);
         beta_logits.wait_front(Ct);
         activate_beta<Ct>(beta_logits, beta);
         beta.wait_front(Ct);
-
-        normalize_l2_rows<Ct, Kt, true, dfb::workspace_3, dfb::tile_workspace_0>(
-            q,
-            normalized_q,
-            EPS_BITS,
-            SCALE_BITS,
-            /*squared=*/workspace_3,
-            /*inverse_norms=*/tile_workspace_0);
-
-        normalize_l2_rows<Ct, Kt, false, dfb::workspace_3, dfb::tile_workspace_0>(
-            k,
-            normalized_k,
-            EPS_BITS,
-            SCALE_BITS,
-            /*squared=*/workspace_3,
-            /*inverse_norms=*/tile_workspace_0);
 
         // PACK state persists across helpers. Reconfigure only at actual destination-format transitions.
         pack_reconfig_data_format(normalized_k.get_id(), v_beta.get_id());
