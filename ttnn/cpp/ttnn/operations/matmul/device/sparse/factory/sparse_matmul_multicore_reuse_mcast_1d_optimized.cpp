@@ -197,6 +197,7 @@ ttnn::device_operation::ProgramArtifacts SparseMatmulMultiCoreReuseMcast1DProgra
     const auto Nt = get_N_dim(bshape, in1_tile);
 
     TT_FATAL(Kt % in0_block_w == 0, "Kt ({}) must be divisible by in0_block_w ({})", Kt, in0_block_w);
+    TT_FATAL(per_core_M <= Mt, "sparse_matmul requires per_core_M ({}) <= Mt ({})", per_core_M, Mt);
 
     // This should allocate a DRAM buffer on the device
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
