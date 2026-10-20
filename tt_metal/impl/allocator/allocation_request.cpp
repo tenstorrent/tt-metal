@@ -28,12 +28,21 @@ BankRequest compute_bank_request(
     const CoreRangeSet& compute_grid,
     std::optional<uint32_t> num_shards) {
     if (num_shards.has_value()) {
-        const auto num_compute_banks = compute_grid.num_cores();
-        TT_FATAL(
-            num_shards.value() <= num_compute_banks,
-            "Expected number of shards {} to be less than or equal to total number of L1 banks {} in compute cores",
-            num_shards.value(),
-            num_compute_banks);
+        if (buffer_type == BufferType::DRAM) {
+            TT_FATAL(
+                num_shards.value() <= num_banks,
+                "Expected number of shards {} to be less than or equal to total number of DRAM banks {}",
+                num_shards.value(),
+                num_banks);
+        } else {
+            const uint32_t num_compute_banks = compute_grid.num_cores();
+            TT_FATAL(
+                num_shards.value() <= num_compute_banks,
+                "Expected number of shards {} to be less than or equal to total number of L1 banks {} in compute "
+                "cores",
+                num_shards.value(),
+                num_compute_banks);
+        }
         num_banks = num_shards.value();
     }
     const DeviceAddr size_per_bank =
