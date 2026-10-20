@@ -307,9 +307,7 @@ inline __attribute__((always_inline)) constexpr std::uint32_t single(
  * @param clients: Destination client bitmask.
  * @param group: X/Y group supplying channel 0 X and channel 1 X; Y fields are ignored.
  * @return The encoded SETADCXX instruction.
- * @note Select both X counters and supply each value in [0, 1023].
- *       SETADCXX also writes both X CR shadows, as modeled by the
- *       [Blackhole simulator](https://github.com/tenstorrent/ttsim/blob/464814f86583af9def3cf1643e58236ead759ae9/src/tensix.cpp#L3501-L3512).
+ * @note Select both X counters and supply each value in [0, 1023]. SETADCXX also writes both X CR shadows.
  */
 inline __attribute__((always_inline)) constexpr std::uint32_t xx(const std::uint8_t clients, const Group& group)
 {
@@ -566,21 +564,10 @@ inline __attribute__((always_inline)) void set()
 }
 
 /**
- * @brief Issue a runtime-valued descriptor through the instruction buffer.
+ * @brief Issue a runtime-valued descriptor.
  *
- * @param descriptor: Sparse assignments and client mask, with values fitting the selected instructions.
- * @note Prefer set<Descriptor>() when values are constant: it validates and splits updates at compile time.
- *       For example, channel0 = {.x = 10, .y = 2} needs two instructions and is rejected by this overload's
- *       LLK_ASSERT checks, whereas set<Descriptor>() issues both instructions.
- * @note Select at least one valid client and one counter, and supply a valid action. Within each
- *       X/Y or Z/W group, supply singleton Set values in [0, 65535] for X or [0, 8191] for Y/Z/W,
- *       a Set of X0+X1 alone in [0, 1023] per X, and other Set selections in [0, 7] per value.
- *       Supply Increment and AdvanceAndReset values in [0, 7].
- * @note Issues one instruction per nonempty group, X/Y before Z/W. Supply constant action, clients,
- *       and field presence to let selection fold away. Values do not trigger instruction splitting:
- *       wider assignments requiring SETADC must be supplied as separate singleton descriptors.
- *       Validation uses LLK_ASSERT; the preconditions still apply when assertions are disabled.
- *       Thread overrides are not supported.
+ * @param descriptor: Address-counter update whose X/Y and Z/W groups each fit one instruction.
+ * @note Prefer set<Descriptor>() for constant values; only it splits a group into several instructions.
  */
 inline __attribute__((always_inline)) void set(const AddrCounter descriptor)
 {
