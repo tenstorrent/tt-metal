@@ -180,9 +180,9 @@ def test_placements(device, name, cores, C_slice_M_tiles, C_slice_N_tiles, orien
 def test_repr_and_fields():
     cfg = qsr.MatmulUnifiedProgramConfig(cores=_rect(0, 0, 1, 1), C_slice_M_tiles=2, C_slice_N_tiles=3, K_chunk_tiles=4)
     assert cfg.C_slice_M_tiles == 2 and cfg.C_slice_N_tiles == 3 and cfg.K_chunk_tiles == 4
-    assert cfg.subblock_M_tiles == 0 and cfg.subblock_N_tiles == 0 and cfg.orientation == ROW_MAJOR
-    assert cfg.num_compute_threads == 0
-    assert "MatmulUnifiedProgramConfig(" in repr(cfg) and "num_compute_threads=0" in repr(cfg)
+    assert cfg.subblock_M_tiles is None and cfg.subblock_N_tiles is None and cfg.orientation == ROW_MAJOR
+    assert cfg.num_compute_threads is None
+    assert "MatmulUnifiedProgramConfig(" in repr(cfg) and "num_compute_threads=" in repr(cfg)
     cfg.num_compute_threads = 2
     assert cfg.num_compute_threads == 2
     assert cfg.fused_activation is None
@@ -1220,7 +1220,7 @@ def test_auto_placement_rejects_a_C_slice(device, expect_error):
         ),
         (
             lambda: qsr.MatmulUnifiedProgramConfig(
-                cores=_rect(0, 0, 0, 0), C_slice_M_tiles=2, C_slice_N_tiles=2, subblock_M_tiles=2, subblock_N_tiles=0
+                cores=_rect(0, 0, 0, 0), C_slice_M_tiles=2, C_slice_N_tiles=2, subblock_M_tiles=2
             ),
             None,
             "both be set",

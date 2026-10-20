@@ -649,15 +649,15 @@ void py_module(nb::module_& mod) {
         Placement-first program config (Quasar-native matmul).
 
         GEMM vocabulary, all sizes in 32x32 tiles: C[M x N] = A[M x K] x B[K x N]. Every field defaults to
-        auto; with no cores the placement is chosen too. Each core produces C slices of C_slice_M_tiles x C_slice_N_tiles tiles:
+        auto (None, or empty cores); with no cores the placement is chosen too. Each core produces C slices of C_slice_M_tiles x C_slice_N_tiles tiles:
         the factory walks the C slices of a batch (across N, then down M) and hands that walk to the cores
         in enumeration order as contiguous runs (a core may produce several, for every batch; surplus cores
         idle). Edge C slices are clipped on read and write, so any M / N works. Every operand is addressed
         through the tensor accessor, so interleaved, L1-sharded and DRAM-sharded inputs and outputs all take
         the same kernels. The 1D, 2D and DRAM-sharded strategies are particular choices of
         (cores, C_slice_M_tiles, C_slice_N_tiles). Within a core the C slice's subblocks are assigned
-        round-robin to the compute threads (Quasar NEOs), which share the resident A and B slices; on Quasar the
-        K chunks are assigned round-robin to the reader threads and the compute threads' shares of C to the
+        round-robin to the compute threads (Quasar NEOs), which all read the resident A and B slices; on Quasar the
+        K chunks are assigned round-robin to the reader threads and the compute threads' entries of C to the
         writer threads (DM cores).
 
         A bias row (ttnn.experimental.quasar.linear's bias) and fused_activation are applied to the finished
@@ -674,51 +674,51 @@ void py_module(nb::module_& mod) {
         .def(
             nb::init<
                 CoreRangeSet,
-                std::size_t,
-                std::size_t,
-                std::size_t,
-                std::size_t,
-                std::size_t,
+                std::optional<std::size_t>,
+                std::optional<std::size_t>,
+                std::optional<std::size_t>,
+                std::optional<std::size_t>,
+                std::optional<std::size_t>,
                 tt::tt_metal::ShardOrientation,
-                std::size_t,
+                std::optional<std::size_t>,
                 std::optional<UnaryWithParam>>(),
             nb::kw_only(),
             nb::arg("cores") = CoreRangeSet(),
-            nb::arg("C_slice_M_tiles").noconvert() = 0,
-            nb::arg("C_slice_N_tiles").noconvert() = 0,
-            nb::arg("K_chunk_tiles").noconvert() = 0,
-            nb::arg("subblock_M_tiles").noconvert() = 0,
-            nb::arg("subblock_N_tiles").noconvert() = 0,
+            nb::arg("C_slice_M_tiles").noconvert() = nb::none(),
+            nb::arg("C_slice_N_tiles").noconvert() = nb::none(),
+            nb::arg("K_chunk_tiles").noconvert() = nb::none(),
+            nb::arg("subblock_M_tiles").noconvert() = nb::none(),
+            nb::arg("subblock_N_tiles").noconvert() = nb::none(),
             nb::arg("orientation") = tt::tt_metal::ShardOrientation::ROW_MAJOR,
-            nb::arg("num_compute_threads").noconvert() = 0,
+            nb::arg("num_compute_threads").noconvert() = nb::none(),
             nb::arg("fused_activation") = nb::none())
         .def_rw("cores", &MatmulUnifiedProgramConfig::cores, R"doc(
             Cores (clusters) that take part, as a CoreRangeSet. Empty (the default) = auto placement: the cores, C
-            slice and orientation are chosen by a cost estimate over the natural placements (2D, 1D along a row or
-            column of cores, 1D across N or M, and placements that keep a sharded operand where it is); the other
+            slice and orientation are chosen by a cost estimate over the natural placements (2D, 1D across N or M,
+            and placements that keep a sharded operand where it is); the other
             fields are kept. ttnn.experimental.quasar.matmul without a program config does the same on Quasar.
         )doc")
         .def_rw("C_slice_M_tiles", &MatmulUnifiedProgramConfig::C_slice_M_tiles, R"doc(
-            Height of the C slice each core produces, in tiles. 0 = auto: the output shard height when C is
-            sharded, else the core's share of M (M in tiles over the rows of the bounding box of `cores`),
-            shrunk along its divisors only if the share does not fit L1.
+            Height of the C slice each core produces, in tiles. A sharded C's shard height is the C slice height
+            (a value given here must match it). None = auto: M in tiles over the rows of the bounding box of
+            `cores`, shrunk along its divisors only if that does not fit L1.
         )doc")
         .def_rw("C_slice_N_tiles", &MatmulUnifiedProgramConfig::C_slice_N_tiles, R"doc(
-            Width of the C slice each core produces, in tiles. 0 = auto: the output shard width when C is
-            sharded, else the core's share of N (N in tiles over the columns of the bounding box of `cores`),
-            shrunk along its divisors only if the share does not fit L1.
+            Width of the C slice each core produces, in tiles. A sharded C's shard width is the C slice width (a
+            value given here must match it). None = auto: N in tiles over the columns of the bounding box of
+            `cores`, shrunk along its divisors only if that does not fit L1.
         )doc")
         .def_rw("K_chunk_tiles", &MatmulUnifiedProgramConfig::K_chunk_tiles, R"doc(
             K tiles multiplied per accumulation step. One A slice (C_slice_M_tiles x K_chunk_tiles tiles) and
             one B slice (K_chunk_tiles x C_slice_N_tiles tiles) are resident in L1 at a time, and the partial
-            sums round-trip L1 between steps. Must divide K in tiles. 0 = auto: the largest divisor of K in
+            sums round-trip L1 between steps. Must divide K in tiles. None = auto: the largest divisor of K in
             tiles whose buffers fit L1, capped at 8 unless the C slice is 4 tiles or fewer, which still leaves a
             K chunk per reader thread (4 on Quasar, 2 elsewhere).
         )doc")
         .def_rw("subblock_M_tiles", &MatmulUnifiedProgramConfig::subblock_M_tiles, R"doc(
             Subblock height in tiles (the C slice's tiles accumulated in DST at once). Need not divide
             C_slice_M_tiles: the C slice is padded up to a subblock multiple and the overshoot is clipped on
-            write. 0 with subblock_N_tiles = 0 means auto.
+            write. Set both subblock dims or neither; None = auto.
         )doc")
         .def_rw("subblock_N_tiles", &MatmulUnifiedProgramConfig::subblock_N_tiles, R"doc(
             Subblock width in tiles; need not divide C_slice_N_tiles (padded and clipped like the height). A
@@ -730,8 +730,8 @@ void py_module(nb::module_& mod) {
         )doc")
         .def_rw("num_compute_threads", &MatmulUnifiedProgramConfig::num_compute_threads, R"doc(
             Compute threads per core (Quasar NEOs running the compute kernel): 1, 2 or 4. The C slice's
-            subblocks are assigned round-robin to the threads, which share the resident A and B slices.
-            0 = auto: 4 on Quasar, 1 elsewhere (Wormhole / Blackhole have one compute engine per core).
+            subblocks are assigned round-robin to the threads, which all read the resident A and B slices.
+            None = auto: 4 on Quasar, 1 elsewhere (Wormhole / Blackhole have one compute engine per core).
         )doc")
         .def_rw("fused_activation", &MatmulUnifiedProgramConfig::fused_activation, R"doc(
             Optional activation applied to the finished sum in DST, after the bias and before the final pack.
