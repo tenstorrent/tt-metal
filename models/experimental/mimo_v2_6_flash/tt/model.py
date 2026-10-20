@@ -712,7 +712,7 @@ class TtMiMoModel:
             "rope": {name: setup.get_prefill_rot_mats(0, padded) for name, setup in self.rope_setups.items()},
             "logits": ttnn.allocate_tensor_on_device(
                 ttnn.Shape([1, 1, num, self.vocab_local]),
-                ttnn.bfloat16,
+                self.logits_dtype,
                 ttnn.ROW_MAJOR_LAYOUT,
                 self.mesh_device,
                 ttnn.DRAM_MEMORY_CONFIG,
