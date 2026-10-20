@@ -102,6 +102,13 @@ def test_model_tp8_dp4(mesh_device):
         f"vs fp32 reference over {len(top1)} logits rows (4 replicas): top-1 {top1_rate:.3f}, "
         f"PCC min {min(pccs):.4f} mean {sum(pccs) / len(pccs):.4f}"
     )
+    # Rows whose reference top-2 margin is under ~0.2 logits are near coin flips with bfloat4_b experts (measured on
+    # thousands of positions: test_model_decode_eval_tp8_dp4.py), so the raw top-1 above moves by a row or two between
+    # equivalent builds; the rows with a clear reference answer show real errors.
+    clear = [r for r in rows if r["ref_margin"] >= 0.2]
+    logger.info(
+        f"top-1 on the {len(clear)} rows with a reference margin >= 0.2: {sum(r['match'] for r in clear)}/{len(clear)}"
+    )
     for r in sorted(rows, key=lambda r: r["ref_margin"]):
         if not r["match"] or r["ref_margin"] < 0.25:
             logger.info(
