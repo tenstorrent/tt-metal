@@ -112,3 +112,20 @@ Initial validation and SHA-resolution jobs passed. The inference-server
 image build started; image tag/digest and final model results are pending.
 If the known faulty worker is selected and fails fabric initialization,
 preserve that infrastructure evidence and do not blindly repeat the run.
+
+Build job `118502411741` succeeded from 07:11:47 to 08:13:39 UTC (61m52s).
+The build log confirms checkout of the exact Metal commit and successful
+image publication. Reuse this image rather than rebuilding:
+
+`ghcr.io/tenstorrent/tt-shield/vllm-tt-metal-src-dev-ubuntu-22.04-amd64:0.25.0-84dd77aacd5c992700d2643add54e3f3e6c5a82f-0a76258-118502411741`
+
+Build-export identities:
+
+- Manifest list: `sha256:2f65a018484c4dc527cdd37e47919b31ce6064e0f90a32766b5e8ea2018172b4`.
+- Image manifest: `sha256:57bf823a4e0003cc3b5b5096e3accadccf4aefc5ba6974bf939a1ee78d092718`.
+- Image config: `sha256:c5165fe88ca88421d12c2e1a5b8de189920cb3e83de9816fcabc3e07da78e39e`.
+
+Registry metadata lookup with the existing read credentials returned 403
+(`read:packages` unavailable); no broader credentials were requested. Runtime
+pull confirmation and precision identity remain pending. Release test job
+`118525081608` queued after the successful build.
