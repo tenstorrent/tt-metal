@@ -1604,8 +1604,6 @@ def _l1_dram_mem_config(scheme, buffer_type, height, width, device):
     if scheme in (ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.TensorMemoryLayout.WIDTH_SHARDED):
         num_shards = 8
         if buffer_type == ttnn.BufferType.DRAM:
-            # A DRAM shard grid has one core per bank, and DRAM-harvested parts (e.g. P100a) expose fewer than 8
-            # banks; halve the shard count until it fits (#53264).
             while num_shards > device.dram_grid_size().x:
                 num_shards //= 2
         elif grid_size.x < num_shards:
