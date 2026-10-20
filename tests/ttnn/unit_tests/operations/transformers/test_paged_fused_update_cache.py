@@ -471,7 +471,6 @@ def test_paged_fused_update_cache_rejects_mixed_dtypes(cache_dtypes, input_dtype
 
 
 def _bf16_neighbours(x):
-    """The bfloat16 values on either side of each float32 in x (both equal x when it is representable)."""
     bits = x.contiguous().view(torch.int32)
     toward_zero = bits & -65536
     away_from_zero = torch.where(bits == toward_zero, toward_zero, toward_zero + 65536)
@@ -486,14 +485,12 @@ def _bf16_neighbours(x):
 def test_paged_fused_update_cache_full_precision_values(
     layout, input_dtype, cache_dtype, fp32_dest_acc_en, use_index_tensor, device
 ):
-    """Untouched cache rows keep their bits; the updated row holds the input, rounded only to the cache dtype."""
     num_users, num_heads, seq_len, head_dim = 2, 8, 64, 128
     torch.manual_seed(0)
     cache = torch.randn(num_users, num_heads, seq_len, head_dim)
     caches = [ttnn.from_torch(c, dtype=cache_dtype, layout=ttnn.TILE_LAYOUT, device=device) for c in (cache, -cache)]
     expected = [ttnn.to_torch(c).float() for c in caches]
 
-    # Row-major inputs carry the 8 heads unpadded; tile inputs pad them to a full tile.
     padded_heads = num_heads if layout == ttnn.ROW_MAJOR_LAYOUT else 32
     inputs, values = [], []
     for row in range(2):

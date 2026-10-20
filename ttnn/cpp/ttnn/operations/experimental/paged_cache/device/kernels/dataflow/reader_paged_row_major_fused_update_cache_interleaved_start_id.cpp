@@ -26,13 +26,11 @@ constexpr bool page_table_is_dram = false;
 #endif
 
 #ifdef CONVERT_INPUT
-// Converts one input row to the format of the untilized cache block. BFLOAT16 -> FLOAT32 is exact: the bfloat16
-// bits become the upper half of the float32. FLOAT32 -> BFLOAT16 keeps the upper half (rounds toward zero).
 template <uint32_t src_bytes, uint32_t dst_bytes>
 void convert_row(uint32_t src_addr, uint32_t dst_addr) {
     invalidate_l1_cache();
 #if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
-    // Quasar DM: drop any stale L2 line for the input row before the RISC reads it.
+    // Quasar DM: invalidate L2 before reading the row.
     invalidate_l2_cache_range(static_cast<uintptr_t>(src_addr), static_cast<size_t>(src_bytes));
 #endif
     if constexpr (dst_bytes == 2 * src_bytes) {
@@ -68,7 +66,7 @@ void convert_row(uint32_t src_addr, uint32_t dst_addr) {
         }
     }
 #if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
-    // Quasar DM: the stores above land in L2; flush them so the NoC copy in the writer sees the row.
+    // Quasar DM: flush L2 before the writer copies the row.
     flush_l2_cache_range(static_cast<uintptr_t>(dst_addr), static_cast<size_t>(dst_bytes));
 #endif
 }
@@ -124,7 +122,6 @@ void kernel_main() {
     // Kick off compute
     dfb_input.reserve_back(1);
 #ifdef CONVERT_INPUT
-    // The input shard stays valid after the push: the writer pops it only after its last converted row.
     uint32_t input_l1_read_addr = dfb_input.get_write_ptr();
 #endif
     dfb_input.push_back(1);
@@ -233,7 +230,6 @@ void kernel_main() {
             }
         }
 #ifdef CONVERT_INPUT
-        // Convert this head's input row while the cache reads are in flight; the writer copies it from here.
         dfb_converted_input.reserve_back(1);
         convert_row<input_Wbytes, Wbytes>(input_l1_read_addr, dfb_converted_input.get_write_ptr());
         dfb_converted_input.push_back(1);
