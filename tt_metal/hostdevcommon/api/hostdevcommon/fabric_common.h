@@ -164,6 +164,10 @@ constexpr Routing2DRouteTableCapacity derive_2d_route_table_capacity(
 
 }  // namespace routing_2d_detail
 
+// The two mesh axes. Values match the control plane's axis_dim and the FABRIC_EXPRESS_AXIS define:
+// 0 is the Y axis (N/S travel), 1 is the X axis (E/W travel).
+enum class Fabric2DAxis : std::uint8_t { Y = 0, X = 1 };
+
 struct Routing2DCodec {
     // ---- Packet action byte -------------------------------------------------
     // One-hot per output port; bits 0..4 intentionally match eth_chan_directions so the action bit
@@ -180,18 +184,26 @@ struct Routing2DCodec {
     static constexpr uint8_t action_bit(eth_chan_directions dir) { return static_cast<uint8_t>(1u << dir); }
 
     // ---- 2-bit L1 vector encodings ------------------------------------------
-    // Y axis: STOP means the destination Y is reached (or the row is not traversed); Z is the
-    // intra-mesh express (skip) link.
-    static constexpr uint8_t Y2_STOP = 0;
-    static constexpr uint8_t Y2_NORTH = 1;
-    static constexpr uint8_t Y2_SOUTH = 2;
-    static constexpr uint8_t Y2_Z = 3;
-    // X axis: same layout as Y. Z is the intra-mesh express link when the mesh's chords run along X;
-    // a mesh carries chords on one axis only, so at most one of Y2_Z / X2_Z is ever populated.
-    static constexpr uint8_t X2_STOP = 0;
-    static constexpr uint8_t X2_EAST = 1;
-    static constexpr uint8_t X2_WEST = 2;
-    static constexpr uint8_t X2_Z = 3;
+    // One code set serves both axes; the axis a row belongs to gives each code its direction.
+    // STOP means the destination coordinate on this axis is reached (or the row is not traversed).
+    // DECREASING is north on Y and west on X; INCREASING is south on Y and east on X. Z is the
+    // intra-mesh express (skip) link. A mesh carries chords on one axis only, so only that axis's
+    // rows ever hold CODE_Z.
+    static constexpr uint8_t CODE_STOP = 0;
+    static constexpr uint8_t CODE_DECREASING = 1;
+    static constexpr uint8_t CODE_INCREASING = 2;
+    static constexpr uint8_t CODE_Z = 3;
+
+    // The cardinal pair that travels along an axis.
+    static constexpr eth_chan_directions decreasing_direction(Fabric2DAxis axis) {
+        return axis == Fabric2DAxis::Y ? eth_chan_directions::NORTH : eth_chan_directions::WEST;
+    }
+    static constexpr eth_chan_directions increasing_direction(Fabric2DAxis axis) {
+        return axis == Fabric2DAxis::Y ? eth_chan_directions::SOUTH : eth_chan_directions::EAST;
+    }
+    static constexpr uint8_t cardinal_actions(Fabric2DAxis axis) {
+        return action_bit(decreasing_direction(axis)) | action_bit(increasing_direction(axis));
+    }
 
     // ---- Packed-row helpers ---------------------------------------------------
     // Rows hold ceil(axis/4) bytes, 4 entries per byte, entry 0 at the LSBs of byte 0.
@@ -212,21 +224,29 @@ struct Routing2DCodec {
 
     // ---- Widen (2-bit -> one-hot action byte) -----------------------------------
     // STOP widens to 0; the caller pokes ACTION_LOCAL_DELIVER at its own coordinate afterwards.
-    static constexpr uint8_t widen_y(uint8_t action_2bit) {
-        switch (action_2bit) {
-            case Y2_NORTH: return ACTION_NORTH;
-            case Y2_SOUTH: return ACTION_SOUTH;
-            case Y2_Z: return ACTION_Z;
+    // Format-level: Z widens on either axis. Device code that knows the express axis at compile time
+    // goes through Fabric2DRoutingConfig::widen, which masks Z off the other axis.
+    static constexpr uint8_t widen(Fabric2DAxis axis, uint8_t code) {
+        switch (code) {
+            case CODE_DECREASING: return action_bit(decreasing_direction(axis));
+            case CODE_INCREASING: return action_bit(increasing_direction(axis));
+            case CODE_Z: return ACTION_Z;
             default: return 0;
         }
     }
-    static constexpr uint8_t widen_x(uint8_t action_2bit) {
-        switch (action_2bit) {
-            case X2_EAST: return ACTION_EAST;
-            case X2_WEST: return ACTION_WEST;
-            case X2_Z: return ACTION_Z;
-            default: return 0;
+    // Inverse of widen for the directions an axis can encode; INVALID_CODE for any other direction.
+    static constexpr uint8_t INVALID_CODE = 0xFF;
+    static constexpr uint8_t encode(Fabric2DAxis axis, eth_chan_directions dir) {
+        if (dir == eth_chan_directions::Z) {
+            return CODE_Z;
         }
+        if (dir == decreasing_direction(axis)) {
+            return CODE_DECREASING;
+        }
+        if (dir == increasing_direction(axis)) {
+            return CODE_INCREASING;
+        }
+        return INVALID_CODE;
     }
 
     // ---- L1 region sizing -------------------------------------------------------
@@ -253,7 +273,7 @@ struct Routing2DCodec {
     }
 
     // Packed edge fields: two 6-bit row indices, fixed by the Y <= 64 bound, plus a parent_output
-    // holding this axis's 2-bit vector code, so it widens through widen_y / widen_x.
+    // holding this axis's 2-bit vector code, so it widens through widen(axis, code).
     static constexpr int mcast_edge_child(std::uint16_t packed) { return packed & 0x3F; }
     static constexpr int mcast_edge_parent(std::uint16_t packed) { return (packed >> 6) & 0x3F; }
     static constexpr std::uint8_t mcast_edge_output(std::uint16_t packed) {
@@ -374,41 +394,42 @@ static_assert(
     "The 4x64 maximum must fill both fixed route-table regions exactly");
 
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
-// Compile-time express-routing configuration. FabricContext injects FABRIC_EXPRESS_ENABLED together
-// with FABRIC_EXPRESS_AXIS (0 = N/S, 1 = E/W) when any locally bound mesh declares express links;
-// neither is defined without express routing. Device-only: host code must query the ControlPlane,
-// never this struct.
-struct FabricExpressConfig {
+// What the device build knows about 2D routing at compile time. The answers hold with or without
+// express links; express is one input. FabricContext injects FABRIC_EXPRESS_ENABLED together with
+// FABRIC_EXPRESS_AXIS (0 = N/S, 1 = E/W) when any locally bound mesh declares express links; neither
+// is defined without express routing. Device-only: host code must query the ControlPlane, never
+// this struct.
+struct Fabric2DRoutingConfig {
 #if defined(FABRIC_EXPRESS_ENABLED)
 #if !defined(FABRIC_EXPRESS_AXIS)
 #error "FABRIC_EXPRESS_ENABLED requires FABRIC_EXPRESS_AXIS"
 #endif
-    static constexpr bool ENABLED = true;
-    static constexpr std::uint32_t AXIS = FABRIC_EXPRESS_AXIS;
+    static constexpr bool EXPRESS_ENABLED = true;
+    static_assert(FABRIC_EXPRESS_AXIS <= 1, "FABRIC_EXPRESS_AXIS must be 0 (N/S) or 1 (E/W)");
+    static constexpr Fabric2DAxis EXPRESS_AXIS = static_cast<Fabric2DAxis>(FABRIC_EXPRESS_AXIS);
 #elif defined(FABRIC_EXPRESS_AXIS)
 #error "FABRIC_EXPRESS_AXIS requires FABRIC_EXPRESS_ENABLED"
 #else
-    static constexpr bool ENABLED = false;
-    static constexpr std::uint32_t AXIS = 0;  // meaningless when !ENABLED
+    static constexpr bool EXPRESS_ENABLED = false;
+    static constexpr Fabric2DAxis EXPRESS_AXIS = Fabric2DAxis::Y;  // meaningless when !EXPRESS_ENABLED
 #endif
-    static_assert(AXIS <= 1, "FABRIC_EXPRESS_AXIS must be 0 (N/S) or 1 (E/W)");
+
+    // True when express chords run along `axis` in this build.
+    static constexpr bool express_on(Fabric2DAxis axis) { return EXPRESS_ENABLED && axis == EXPRESS_AXIS; }
 
     // A chord arrives moving along the express axis, so a Z-facing router decodes like the cardinal
     // routers on that axis. Passed to Routing2DCodec::decode_action as its template argument.
-    static constexpr bool z_decodes_x_only() { return ENABLED && AXIS == 1; }
+    static constexpr bool z_decodes_x_only() { return express_on(Fabric2DAxis::X); }
 
     // The one-hot action bits that travel on the given axis; Z joins the express axis.
-    static constexpr std::uint8_t axis_actions(bool y_axis) {
-        std::uint8_t actions = Routing2DCodec::ACTION_EAST | Routing2DCodec::ACTION_WEST;
-        std::uint32_t axis = 1;
-        if (y_axis) {
-            actions = Routing2DCodec::ACTION_NORTH | Routing2DCodec::ACTION_SOUTH;
-            axis = 0;
-        }
-        if (ENABLED && AXIS == axis) {
-            actions |= Routing2DCodec::ACTION_Z;
-        }
-        return actions;
+    static constexpr std::uint8_t axis_actions(Fabric2DAxis axis) {
+        return Routing2DCodec::cardinal_actions(axis) | (express_on(axis) ? Routing2DCodec::ACTION_Z : 0);
+    }
+
+    // Routing2DCodec::widen with Z masked off the axis that carries no chords in this build. The
+    // mask folds at compile time, so the inactive axis's CODE_Z can never reach a packet map.
+    static constexpr std::uint8_t widen(Fabric2DAxis axis, std::uint8_t code) {
+        return Routing2DCodec::widen(axis, code) & axis_actions(axis);
     }
 };
 #endif
@@ -438,12 +459,11 @@ struct McastTreeEdgeByteReader {
 // True when this axis's tree contains a transit chord, i.e. the mesh's express links run along it.
 // A chord is a real second output of one branch and must stay on the canonical tree.
 template <typename EdgeReader>
-inline bool mcast_axis_has_transit_chord(const std::uint8_t* tree_region, std::uint32_t axis_len, bool is_y_axis) {
-    const std::uint8_t z_code = is_y_axis ? Routing2DCodec::Y2_Z : Routing2DCodec::X2_Z;
+inline bool mcast_axis_has_transit_chord(const std::uint8_t* tree_region, std::uint32_t axis_len) {
     const std::uint32_t edge_count = Routing2DCodec::mcast_tree_edge_count(axis_len);
     for (std::uint32_t i = 0; i < edge_count; ++i) {
         const std::uint16_t edge = EdgeReader::get(tree_region, i);
-        if (Routing2DCodec::mcast_edge_output(edge) == z_code) {
+        if (Routing2DCodec::mcast_edge_output(edge) == Routing2DCodec::CODE_Z) {
             return true;
         }
     }
@@ -485,7 +505,7 @@ inline void mcast_prune_axis(
     const std::uint8_t* tree_region,
     std::uint32_t axis_len,
     std::uint32_t* needed,
-    bool is_y_axis) {
+    Fabric2DAxis axis) {
     const std::uint32_t edge_count = Routing2DCodec::mcast_tree_edge_count(axis_len);
     for (std::uint32_t i = 0; i < edge_count; ++i) {
         const std::uint16_t edge = EdgeReader::get(tree_region, i);
@@ -495,7 +515,7 @@ inline void mcast_prune_axis(
         }
         const std::uint32_t parent = static_cast<std::uint32_t>(Routing2DCodec::mcast_edge_parent(edge));
         const std::uint8_t code = Routing2DCodec::mcast_edge_output(edge);
-        out_actions[parent] |= is_y_axis ? Routing2DCodec::widen_y(code) : Routing2DCodec::widen_x(code);
+        out_actions[parent] |= Routing2DCodec::widen(axis, code);
         mcast_set_row_bit(needed, parent);
     }
 }
@@ -556,9 +576,9 @@ inline void encode_2d_mcast_maps(
     const bool y_one_direction = (n_hops == 0) != (s_hops == 0);
     const bool x_one_direction = (e_hops == 0) != (w_hops == 0);
     const bool y_directional =
-        y_one_direction && y_size > 1 && !mcast_axis_has_transit_chord<EdgeReader>(tree_y, y_size, /*is_y_axis=*/true);
+        y_one_direction && y_size > 1 && !mcast_axis_has_transit_chord<EdgeReader>(tree_y, y_size);
     const bool x_directional =
-        x_one_direction && x_size > 1 && !mcast_axis_has_transit_chord<EdgeReader>(tree_x, x_size, /*is_y_axis=*/false);
+        x_one_direction && x_size > 1 && !mcast_axis_has_transit_chord<EdgeReader>(tree_x, x_size);
 
     if (n_hops == 0 && s_hops == 0) {
         mcast_set_row_bit(y_targets, root_y);
@@ -600,7 +620,7 @@ inline void encode_2d_mcast_maps(
 
     if (!x_directional) {
         std::uint32_t needed_x[MCAST_ROW_BITS_WORDS] = {x_targets[0], x_targets[1]};
-        mcast_prune_axis<EdgeReader>(out_x, tree_x, x_size, needed_x, /*is_y_axis=*/false);
+        mcast_prune_axis<EdgeReader>(out_x, tree_x, x_size, needed_x, Fabric2DAxis::X);
     }
     for (std::uint32_t x = 0; x < x_size; ++x) {
         if (mcast_test_row_bit(x_targets, x)) {
@@ -610,7 +630,7 @@ inline void encode_2d_mcast_maps(
 
     if (!y_directional) {
         std::uint32_t needed_y[MCAST_ROW_BITS_WORDS] = {y_targets[0], y_targets[1]};
-        mcast_prune_axis<EdgeReader>(out_y, tree_y, y_size, needed_y, /*is_y_axis=*/true);
+        mcast_prune_axis<EdgeReader>(out_y, tree_y, y_size, needed_y, Fabric2DAxis::Y);
     }
 
     // Every target row carries the encode root column's X teeth (E/W, plus Z when the chords run along

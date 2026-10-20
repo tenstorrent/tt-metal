@@ -359,7 +359,7 @@ std::map<std::string, std::string> FabricContext::get_fabric_kernel_defines(cons
         // Express routing is a compile-time choice on the device. When any locally bound mesh uses
         // express routing, compile every local kernel for it: FABRIC_EXPRESS_ENABLED gates express
         // support (e.g. worker connection-manager capacity), and FABRIC_EXPRESS_AXIS names the axis the
-        // chords run along (0 = N/S, 1 = E/W) for FabricExpressConfig. The defines serve the whole
+        // chords run along (0 = N/S, 1 = E/W) for Fabric2DRoutingConfig. The defines serve the whole
         // configuration, so the local meshes must agree on the axis; exact mesh shape remains
         // per-device runtime metadata in routing_l1_info_t.
         std::optional<int> express_axis;

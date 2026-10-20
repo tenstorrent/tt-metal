@@ -83,9 +83,9 @@ TEST(Routing2DCodec, PackDecodeRoundTripsOnAPlainMesh) {
             for (uint32_t cur = 0; cur < s.y; ++cur) {
                 const uint8_t got = Codec::get_action_2bit(row, cur);
                 if (cur == dst) {
-                    EXPECT_EQ(got, Codec::Y2_STOP) << s.name << " y[" << dst << "][" << cur << "]";
+                    EXPECT_EQ(got, Codec::CODE_STOP) << s.name << " y[" << dst << "][" << cur << "]";
                 } else {
-                    EXPECT_EQ(got, cur < dst ? Codec::Y2_SOUTH : Codec::Y2_NORTH)
+                    EXPECT_EQ(got, cur < dst ? Codec::CODE_INCREASING : Codec::CODE_DECREASING)
                         << s.name << " y[" << dst << "][" << cur << "]";
                 }
             }
@@ -95,9 +95,9 @@ TEST(Routing2DCodec, PackDecodeRoundTripsOnAPlainMesh) {
             for (uint32_t cur = 0; cur < s.x; ++cur) {
                 const uint8_t got = Codec::get_action_2bit(row, cur);
                 if (cur == dst) {
-                    EXPECT_EQ(got, Codec::X2_STOP) << s.name << " x[" << dst << "][" << cur << "]";
+                    EXPECT_EQ(got, Codec::CODE_STOP) << s.name << " x[" << dst << "][" << cur << "]";
                 } else {
-                    EXPECT_EQ(got, cur < dst ? Codec::X2_EAST : Codec::X2_WEST)
+                    EXPECT_EQ(got, cur < dst ? Codec::CODE_INCREASING : Codec::CODE_DECREASING)
                         << s.name << " x[" << dst << "][" << cur << "]";
                 }
             }
@@ -144,27 +144,48 @@ TEST(Routing2DCodec, PackRejectsOffAxisActions) {
     EXPECT_FALSE(pack_2d_route_vectors(table.data(), table.size(), 8, 4, dor_y, north_on_x));
 }
 
-// Z is legal on whichever axis carries the express chords: Y2_Z on the Y leg, X2_Z on the X leg.
+// Z is legal on whichever axis carries the express chords; the same CODE_Z packs on either leg.
 TEST(Routing2DCodec, ZPacksOnEitherAxis) {
     std::vector<std::uint8_t> table(Codec::ACTION_VECTOR_CAPACITY_BYTES, 0);
     auto z_on_any = [](uint32_t, uint32_t) { return eth_chan_directions::Z; };
 
     ASSERT_TRUE(pack_2d_route_vectors(table.data(), table.size(), 8, 4, z_on_any, dor_x));
-    EXPECT_EQ(Codec::get_action_2bit(Codec::y_row(table.data(), 8, /*dst_y=*/5), /*index=*/0), Codec::Y2_Z);
+    EXPECT_EQ(Codec::get_action_2bit(Codec::y_row(table.data(), 8, /*dst_y=*/5), /*index=*/0), Codec::CODE_Z);
 
     ASSERT_TRUE(pack_2d_route_vectors(table.data(), table.size(), 8, 4, dor_y, z_on_any));
-    EXPECT_EQ(Codec::get_action_2bit(Codec::x_row(table.data(), 8, 4, /*dst_x=*/3), /*index=*/0), Codec::X2_Z);
+    EXPECT_EQ(Codec::get_action_2bit(Codec::x_row(table.data(), 8, 4, /*dst_x=*/3), /*index=*/0), Codec::CODE_Z);
 }
 
 TEST(Routing2DCodec, WidenMapsEveryTwoBitCode) {
-    EXPECT_EQ(Codec::widen_y(Codec::Y2_NORTH), Codec::ACTION_NORTH);
-    EXPECT_EQ(Codec::widen_y(Codec::Y2_SOUTH), Codec::ACTION_SOUTH);
-    EXPECT_EQ(Codec::widen_y(Codec::Y2_Z), Codec::ACTION_Z);
-    EXPECT_EQ(Codec::widen_y(Codec::Y2_STOP), 0);
-    EXPECT_EQ(Codec::widen_x(Codec::X2_EAST), Codec::ACTION_EAST);
-    EXPECT_EQ(Codec::widen_x(Codec::X2_WEST), Codec::ACTION_WEST);
-    EXPECT_EQ(Codec::widen_x(Codec::X2_Z), Codec::ACTION_Z);
-    EXPECT_EQ(Codec::widen_x(Codec::X2_STOP), 0);
+    EXPECT_EQ(Codec::widen(Fabric2DAxis::Y, Codec::CODE_DECREASING), Codec::ACTION_NORTH);
+    EXPECT_EQ(Codec::widen(Fabric2DAxis::Y, Codec::CODE_INCREASING), Codec::ACTION_SOUTH);
+    EXPECT_EQ(Codec::widen(Fabric2DAxis::Y, Codec::CODE_Z), Codec::ACTION_Z);
+    EXPECT_EQ(Codec::widen(Fabric2DAxis::Y, Codec::CODE_STOP), 0);
+    EXPECT_EQ(Codec::widen(Fabric2DAxis::X, Codec::CODE_DECREASING), Codec::ACTION_WEST);
+    EXPECT_EQ(Codec::widen(Fabric2DAxis::X, Codec::CODE_INCREASING), Codec::ACTION_EAST);
+    EXPECT_EQ(Codec::widen(Fabric2DAxis::X, Codec::CODE_Z), Codec::ACTION_Z);
+    EXPECT_EQ(Codec::widen(Fabric2DAxis::X, Codec::CODE_STOP), 0);
+}
+
+// encode is the inverse of widen on each axis and rejects the other axis's cardinals.
+TEST(Routing2DCodec, EncodeInvertsWidenPerAxis) {
+    for (const Fabric2DAxis axis : {Fabric2DAxis::Y, Fabric2DAxis::X}) {
+        for (const std::uint8_t code : {Codec::CODE_DECREASING, Codec::CODE_INCREASING, Codec::CODE_Z}) {
+            const std::uint8_t action = Codec::widen(axis, code);
+            eth_chan_directions dir = eth_chan_directions::COUNT;
+            for (int d = 0; d < static_cast<int>(eth_chan_directions::COUNT); ++d) {
+                if (Codec::action_bit(static_cast<eth_chan_directions>(d)) == action) {
+                    dir = static_cast<eth_chan_directions>(d);
+                }
+            }
+            ASSERT_NE(dir, eth_chan_directions::COUNT);
+            EXPECT_EQ(Codec::encode(axis, dir), code);
+        }
+    }
+    EXPECT_EQ(Codec::encode(Fabric2DAxis::Y, eth_chan_directions::EAST), Codec::INVALID_CODE);
+    EXPECT_EQ(Codec::encode(Fabric2DAxis::Y, eth_chan_directions::WEST), Codec::INVALID_CODE);
+    EXPECT_EQ(Codec::encode(Fabric2DAxis::X, eth_chan_directions::NORTH), Codec::INVALID_CODE);
+    EXPECT_EQ(Codec::encode(Fabric2DAxis::X, eth_chan_directions::SOUTH), Codec::INVALID_CODE);
 }
 
 // ---------------------------------------------------------------------------------------------

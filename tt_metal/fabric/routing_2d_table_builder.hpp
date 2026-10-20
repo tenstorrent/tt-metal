@@ -88,13 +88,11 @@ inline bool pack_2d_route_vectors(
     for (std::uint32_t dst = 0; dst < y_size; ++dst) {
         std::uint8_t* row = routing_2d_table_builder_detail::y_row(out, y_size, dst);
         for (std::uint32_t cur = 0; cur < y_size; ++cur) {
-            std::uint8_t action = Routing2DCodec::Y2_STOP;
+            std::uint8_t action = Routing2DCodec::CODE_STOP;
             if (cur != dst) {
-                switch (y_action(cur, dst)) {
-                    case eth_chan_directions::NORTH: action = Routing2DCodec::Y2_NORTH; break;
-                    case eth_chan_directions::SOUTH: action = Routing2DCodec::Y2_SOUTH; break;
-                    case eth_chan_directions::Z: action = Routing2DCodec::Y2_Z; break;
-                    default: return false;
+                action = Routing2DCodec::encode(Fabric2DAxis::Y, y_action(cur, dst));
+                if (action == Routing2DCodec::INVALID_CODE) {
+                    return false;
                 }
             }
             routing_2d_table_builder_detail::set_action_2bit(row, cur, action);
@@ -104,13 +102,11 @@ inline bool pack_2d_route_vectors(
     for (std::uint32_t dst = 0; dst < x_size; ++dst) {
         std::uint8_t* row = routing_2d_table_builder_detail::x_row(out, y_size, x_size, dst);
         for (std::uint32_t cur = 0; cur < x_size; ++cur) {
-            std::uint8_t action = Routing2DCodec::X2_STOP;
+            std::uint8_t action = Routing2DCodec::CODE_STOP;
             if (cur != dst) {
-                switch (x_action(cur, dst)) {
-                    case eth_chan_directions::EAST: action = Routing2DCodec::X2_EAST; break;
-                    case eth_chan_directions::WEST: action = Routing2DCodec::X2_WEST; break;
-                    case eth_chan_directions::Z: action = Routing2DCodec::X2_Z; break;
-                    default: return false;
+                action = Routing2DCodec::encode(Fabric2DAxis::X, x_action(cur, dst));
+                if (action == Routing2DCodec::INVALID_CODE) {
+                    return false;
                 }
             }
             routing_2d_table_builder_detail::set_action_2bit(row, cur, action);

@@ -105,18 +105,12 @@ std::vector<std::uint8_t> expected_actions(
 
 // The action bit a packed 2-bit output code stands for, resolved independently of the packer.
 std::uint8_t expected_action_for_code(int axis_dim, std::uint8_t code) {
-    if (axis_dim == 0) {
-        switch (code) {
-            case Routing2DCodec::Y2_NORTH: return Routing2DCodec::ACTION_NORTH;
-            case Routing2DCodec::Y2_SOUTH: return Routing2DCodec::ACTION_SOUTH;
-            case Routing2DCodec::Y2_Z: return Routing2DCodec::ACTION_Z;
-            default: return 0;
-        }
-    }
     switch (code) {
-        case Routing2DCodec::X2_EAST: return Routing2DCodec::ACTION_EAST;
-        case Routing2DCodec::X2_WEST: return Routing2DCodec::ACTION_WEST;
-        case Routing2DCodec::X2_Z: return Routing2DCodec::ACTION_Z;
+        case Routing2DCodec::CODE_DECREASING:
+            return axis_dim == 0 ? Routing2DCodec::ACTION_NORTH : Routing2DCodec::ACTION_WEST;
+        case Routing2DCodec::CODE_INCREASING:
+            return axis_dim == 0 ? Routing2DCodec::ACTION_SOUTH : Routing2DCodec::ACTION_EAST;
+        case Routing2DCodec::CODE_Z: return Routing2DCodec::ACTION_Z;
         default: return 0;
     }
 }
@@ -447,7 +441,7 @@ void check_encode(const std::string& fixture, bool expect_multi_output_roots) {
                     const std::uint8_t* x_tree = trees.data() + Routing2DCodec::mcast_tree_x_offset(y_size);
                     const std::uint8_t* y_tree = trees.data();
                     auto want_x = (x_one_direction && x_len > 1 &&
-                                   !axis_tree_has_transit_chord(x_tree, x_size, Routing2DCodec::X2_Z))
+                                   !axis_tree_has_transit_chord(x_tree, x_size, Routing2DCodec::CODE_Z))
                                       ? directional_axis_actions(
                                             x_len,
                                             root_x,
@@ -462,7 +456,7 @@ void check_encode(const std::string& fixture, bool expect_multi_output_roots) {
                         }
                     }
                     auto want_y = (y_one_direction && y_len > 1 &&
-                                   !axis_tree_has_transit_chord(y_tree, y_size, Routing2DCodec::Y2_Z))
+                                   !axis_tree_has_transit_chord(y_tree, y_size, Routing2DCodec::CODE_Z))
                                       ? directional_axis_actions(
                                             y_len,
                                             root_y,
