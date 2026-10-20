@@ -862,6 +862,37 @@ inline bool topology_sat_max_groups_cap_capacity_feasible(
     return reachable_capacity >= n_target;
 }
 
+// Forbid placing any target on an UNLABELLED global (one with no same-rank-group label: its ASICs span
+// several hosts, e.g. a *_hostedge seat). The host-group cap counts occupied groups, so an unlabelled
+// global raises no occupancy literal and is a free pass around the cap -- two cross-host seats read as
+// zero occupied hosts, so a k=1 solve could return a multi-host placement, and even with one reachable
+// labelled group and k=1 an unlabelled seat slips the cap. The DFS engine refuses unlabelled globals
+// unconditionally while the cap is active; this mirrors that for SAT. `extra_lit` guards the clauses so
+// the SOFT minimize can retract them; pass 0 for an unconditional (HARD-cap) exclusion.
+inline void topology_sat_exclude_unlabelled_globals(
+    TopologySatSolver& solver,
+    const TopologySatConstraintView& constraint_data,
+    const TopologySatHardEncoding& enc,
+    int extra_lit = 0) {
+    const auto& label_of = constraint_data.global_to_same_rank_group;
+    for (size_t t = 0; t < enc.assign_lit.size(); ++t) {
+        const auto& globs = enc.allowed_global_idx[t];
+        const auto& lits = enc.assign_lit[t];
+        for (size_t i = 0; i < globs.size(); ++i) {
+            const size_t g = globs[i];
+            const bool unlabelled = g >= label_of.size() || label_of[g] < 0;
+            if (!unlabelled) {
+                continue;
+            }
+            if (extra_lit != 0) {
+                solver.add(extra_lit);  // guard: clause is active only while the cap / minimize is asserted
+            }
+            solver.add(-lits[i]);
+            solver.add(0);
+        }
+    }
+}
+
 // HARD: at most k_hosts same-rank global groups occupied. Returns true if encoded (or non-binding); false only if the
 // underlying cardinality is trivially impossible. `full_packing` == true additionally applies the all-or-nothing
 // occupancy tightening (a used host must be completely filled), which lets tight packings propagate by unit
@@ -881,33 +912,9 @@ inline bool topology_sat_encode_at_most_k_groups(
     std::vector<int> occ;
     topology_sat_build_group_occupancy(solver, constraint_data, enc, /*all_or_nothing=*/full_packing, occ, extra_lit);
     const size_t num_present = occ.size();
-    // The cap counts host groups, so while it is asserted every chosen global must belong to one. A global with
-    // no group label (its ASICs span several hosts, e.g. a *_hostedge seat in the master placement) raises no
-    // occupancy literal, so without this rule "at most k groups" is satisfied vacuously by choosing it: two
-    // cross-host seats read as zero occupied hosts and a k=1 solve returned a three-host placement. Forbid the
-    // assign literals of unlabelled globals under the same guard as the cap itself: the HARD cap's drop-cap
-    // re-encode and the SOFT minimize's retracted assumption both re-admit them, so a mesh that only exists as
-    // a cross-host seat still places once the cap is relaxed. This runs BEFORE the not-binding early return
-    // below: the cardinality clause is pointless when at most k labelled groups are reachable, but the
-    // exclusion is not -- with one reachable labelled group and k=1 an unlabelled seat is still a free pass
-    // around the cap (and the DFS engine already refuses it unconditionally while the cap is active).
-    const auto& label_of = constraint_data.global_to_same_rank_group;
-    for (size_t t = 0; t < enc.assign_lit.size(); ++t) {
-        const auto& globs = enc.allowed_global_idx[t];
-        const auto& lits = enc.assign_lit[t];
-        for (size_t i = 0; i < globs.size(); ++i) {
-            const size_t g = globs[i];
-            const bool unlabelled = g >= label_of.size() || label_of[g] < 0;
-            if (!unlabelled) {
-                continue;
-            }
-            if (extra_lit != 0) {
-                solver.add(extra_lit);  // guard: clause is active only while the cap / minimize is asserted
-            }
-            solver.add(-lits[i]);
-            solver.add(0);
-        }
-    }
+    // Forbid unlabelled globals while the cap is asserted (see topology_sat_exclude_unlabelled_globals): this
+    // runs even when the cardinality below is non-binding, because an unlabelled seat slips the cap regardless.
+    topology_sat_exclude_unlabelled_globals(solver, constraint_data, enc, extra_lit);
     if (num_present == 0 || k_hosts >= num_present) {
         return true;  // cardinality not binding (the unlabelled exclusion above still applies)
     }
@@ -1857,27 +1864,33 @@ bool SatSearchBackend::start(
             }
         }
         // A host-group cap of K is NON-BINDING when K >= the number of available host groups: "use at most
-        // K of num_host_groups" is vacuously true. Encoding it anyway still runs topology_sat_build_group_occupancy
-        // (~O(assign-lits) of used<=>OR and, under all_or_nothing, full-packing clauses), which only bloats the
-        // CNF -- for the exactly-full case (e.g. a 144-stage ring on a 36-host cluster, k_min == hosts) the
-        // occupancy merely restates a packing the bijection already forces. Skip it entirely; the solution still
-        // respects the cap trivially. Mirrors the SOFT path guard below (k_floor < num_host_groups).
-        if (num_host_groups >= 1 && max_group_capacity > 0 &&
-            constraint_data.max_same_rank_groups_used < num_host_groups) {
+        // K of num_host_groups" is vacuously true, so the at-most-k CARDINALITY is skipped (encoding it only
+        // bloats the CNF -- e.g. a 144-stage ring on a 36-host cluster where k_min == hosts). But the
+        // UNLABELLED EXCLUSION must still run even when non-binding: an unlabelled (cross-host) seat raises no
+        // occupancy literal and so slips the cap even with one reachable labelled group and k=1 (issue:
+        // CapNotBindingStillExcludesUnlabelled; DFS refuses unlabelled unconditionally while the cap is active).
+        if (num_host_groups >= 1 && max_group_capacity > 0) {
             const size_t K = constraint_data.max_same_rank_groups_used;
-            const bool uniform_capacity = (min_group_capacity == max_group_capacity);
-            const bool full_packing = uniform_capacity && (graph_data.n_target == K * max_group_capacity);
-            if (!topology_sat_max_groups_cap_capacity_feasible(constraint_data, graph_data.n_target, K) ||
-                !topology_sat_encode_at_most_k_groups(s.solver, constraint_data, s.enc, K, full_packing)) {
-                impl_.reset();
-                return false;
+            if (K < num_host_groups) {
+                // BINDING: at-most-k cardinality (which also excludes unlabelled globals internally).
+                const bool uniform_capacity = (min_group_capacity == max_group_capacity);
+                const bool full_packing = uniform_capacity && (graph_data.n_target == K * max_group_capacity);
+                if (!topology_sat_max_groups_cap_capacity_feasible(constraint_data, graph_data.n_target, K) ||
+                    !topology_sat_encode_at_most_k_groups(s.solver, constraint_data, s.enc, K, full_packing)) {
+                    impl_.reset();
+                    return false;
+                }
+                // Stash the binding host-cap geometry for the tightness-aware conflict budget: packing into exactly
+                // K of num_host_groups hosts with slack (num_host_groups-K) is the hard regime that downgrades.
+                s.num_host_groups = num_host_groups;
+                s.host_cap_k = K;
+                s.host_cap_binding = true;
+            } else {
+                // NON-BINDING: the cardinality is vacuous, but unlabelled seats still slip the cap. Apply just
+                // the exclusion, unconditionally (the hard cap is asserted; a drop-cap re-encodes without it).
+                topology_sat_exclude_unlabelled_globals(s.solver, constraint_data, s.enc, /*extra_lit=*/0);
             }
             s.cap_active = true;
-            // Stash the binding host-cap geometry for the tightness-aware conflict budget: packing into exactly K of
-            // num_host_groups hosts with slack (num_host_groups-K) is the hard regime that silently downgrades.
-            s.num_host_groups = num_host_groups;
-            s.host_cap_k = K;
-            s.host_cap_binding = true;
         }
     }
 
