@@ -144,6 +144,19 @@ void kernel_main() {
     constexpr bool fuse_op_all_gather = static_cast<bool>(get_compile_time_arg_val(26));
     constexpr bool fuse_op_reduce_scatter = static_cast<bool>(get_compile_time_arg_val(27));
 
+    MatmulOpReceiver fused_op_receiver;
+    OpSignaler op_signaler;
+    if constexpr (fuse_op_all_gather) {
+        fused_op_receiver = MatmulOpReceiver(
+            false, /* wait_for_op_signal */
+            rt_args_idx,
+            num_blocks_inner_dim,
+            in1_block_h /* tiles_per_block (in the same dimension */
+        );
+    } else if constexpr (fuse_op_reduce_scatter) {
+        op_signaler = OpSignaler(rt_args_idx);
+    }
+
     constexpr auto in1_args = TensorAccessorArgs<29>();
     constexpr auto sparsity_args = TensorAccessorArgs<decltype(in1_args)::next_compile_time_args_offset()>();
     constexpr auto out_args = TensorAccessorArgs<decltype(sparsity_args)::next_compile_time_args_offset()>();
@@ -175,19 +188,6 @@ void kernel_main() {
         reinterpret_cast<tt_l1_ptr uint32_t*>(get_arg_addr(static_cast<int>(rt_args_idx + 1)));
     rt_args_idx += 2 * num_dram_shards_to_read;
 #endif  // IN1_DRAM_WIDTH_SHARDED
-
-    MatmulOpReceiver fused_op_receiver;
-    OpSignaler op_signaler;
-    if constexpr (fuse_op_all_gather) {
-        fused_op_receiver = MatmulOpReceiver(
-            false, /* wait_for_op_signal */
-            rt_args_idx,
-            num_blocks_inner_dim,
-            in1_block_h /* tiles_per_block (in the same dimension */
-        );
-    } else if constexpr (fuse_op_reduce_scatter) {
-        op_signaler = OpSignaler(rt_args_idx);
-    }
 
 #ifdef FUSE_BIAS
 #ifndef BIAS_SHARDED
