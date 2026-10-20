@@ -287,10 +287,14 @@ class BatchedDraft:
                 )
             )
         self.block_size = block_size
-        self.num_blocks = -(-(max_positions + self.block) // block_size)
+        self.num_blocks = -(-(-(-(max_positions + self.block) // block_size)) // 8) * 8  # (32-byte page-table rows)
         user_tables = torch.arange(users * self.num_blocks, dtype=torch.int32).reshape(users, self.num_blocks)
         self.user_tables = user_tables
         self.page_table = _replicate(mesh, user_tables, ttnn.int32)  # row u: user u (each 32-row step)
+        # attention: block attention (b1's kernels, uniform), 8 users per program on 4 x 3 cores each
+        self.ba = _UserBlockAttention(
+            mesh, users, self.block, nq, nkv, hd, block_size, 8, 3, uniform=True, window=window or 0
+        )
         heads_split = ttnn.ShardTensorToMesh(mesh, dim=1)
         self.caches = []
         for _ in range(self.layers):
@@ -479,32 +483,15 @@ class BatchedDraft:
                 self._step_write(li, qkv2, i, pos[i]).deallocate(True)
             qkv2.deallocate(True)
             kc, vc = self.caches[li]
-            # block attention: a user's 8 rows see the same positions (start .. start + 7, not causal), so they go in as
-            # 8 x heads query heads of one decode SDPA (order [head, row]: each K/V head's queries stay contiguous) and
-            # every user's K/V is read once per layer, not once per row
-            t = ttnn.reshape(q_rows, [self.nq, self.block, U32, self.hd])
-            packed = ttnn.permute(t, (2, 0, 1, 3))  # [user, head, row, hd]
+            # block attention (b1's kernels, one instance per user, uniform): a user's 8 rows see the same positions
+            # (start .. start + 7, not causal), every user's K/V read once per layer
+            q = ttnn.permute(q_rows, (0, 2, 1, 3))  # [1, rows, heads, hd]
             q_rows.deallocate(True)
-            attn = ttnn.transformer.paged_scaled_dot_product_attention_decode(
-                ttnn.reshape(packed, [1, U32, self.nq * self.block, self.hd]),
-                kc,
-                vc,
-                cur_pos_tensor=bound,
-                page_table_tensor=self.page_table,
-                scale=self.hd**-0.5,
-                sliding_window_size=self.window,
-                program_config=self.sdpa_pc,
-                compute_kernel_config=self.ck,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-            packed.deallocate(True)
-            perm = ttnn.permute(
-                ttnn.reshape(attn, [U32, self.nq, self.block, self.hd]), (1, 2, 0, 3)
-            )  # [head, row, user]
+            attn = self.ba(q, kc, vc, pos[self.block], self.page_table, None, self.hd**-0.5)
+            q.deallocate(True)
+            perm = ttnn.permute(attn, (0, 2, 1, 3))
             attn.deallocate(True)
-            heads = ttnn.experimental.nlp_concat_heads(
-                ttnn.reshape(perm, [1, self.nq, self.rows, self.hd]), memory_config=ttnn.DRAM_MEMORY_CONFIG
-            )
+            heads = ttnn.experimental.nlp_concat_heads(perm, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             perm.deallocate(True)
             partial = self._linear(heads, L["o"])
             heads.deallocate(True)
@@ -540,7 +527,7 @@ class BatchedDraft:
         return out
 
 
-class _VerifyBlockAttention:
+class _UserBlockAttention:
     """Block attention for the verify's full-attention layers (b1's dflash/block_attention.py kernels, one instance per
     user): each user's K / V history is read once for its 8 block rows (causal within the block, sinks), not once per
     row as 8 decode-SDPA steps do. `per_program` users run side by side in one program, each on its own
@@ -548,7 +535,9 @@ class _VerifyBlockAttention:
 
     WAIT_SEM = 8  # the kernels' wait semaphore (count 0: Q and the block's K / V are written by earlier ops)
 
-    def __init__(self, mesh, users, block, n_heads, n_kv, head_dim, block_size, per_program, slices, min_chunks=4):
+    def __init__(self, mesh, users, block, n_heads, n_kv, head_dim, block_size, per_program, slices, min_chunks=4, uniform=False, window=0,):  # fmt: skip
+        """uniform (the drafter): every row of a block attends [start, start + 7]'s history up to start + 7 (no causal
+        mask inside the block, no sinks), within the last `window` positions."""
         from .block_attention import BlockAttention
 
         self.mesh, self.users, self.block, self.P = mesh, users, block, per_program
@@ -568,6 +557,8 @@ class _VerifyBlockAttention:
                 slices,
                 q_rows=True,
                 min_chunks=min_chunks,
+                uniform=uniform,
+                window=window,
             )
             for j in range(per_program)
         ]
@@ -756,7 +747,7 @@ class BatchedVerify:
         # full-attention layers: block attention (each user's K / V read once for its 8 rows), 8 users per program on 3
         # history slices each (96 cores): 24 layers' attention at 16K context 47.9 -> 18.1 ms (16 x 1: 20.3, 4 x 6:
         # 20.6), at 300 11.3 -> 10.9 ms
-        self.block_attn = _VerifyBlockAttention(
+        self.block_attn = _UserBlockAttention(
             self.mesh, users, block, self.local_heads, self.local_kv_heads, hd, kv_cache[1][0].shape[2], 8, 3
         )
         # the QKV head input's width-sharded cores (interleaved_to_sharded_partial takes a rectangle)
