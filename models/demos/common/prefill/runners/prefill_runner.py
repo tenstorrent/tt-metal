@@ -45,6 +45,7 @@ from models.demos.common.prefill.runners.runner_utils import (
 from models.demos.common.prefill.runners.runner_utils import d2d_activation_rows as d2d_rows_for
 from models.demos.common.prefill.runners.runner_utils import d2d_activation_width as d2d_width
 from models.demos.common.prefill.runners.runner_utils import (
+    export_d2d_pipeline_descriptor,
     indexer_indices_global_spec,
     make_h2d_spec,
     num_mtp_tokens,
@@ -438,18 +439,6 @@ def _d2d_send_indices(
     backing_cfg = idx_out.get_backing_tensor().memory_config()
     staged = indices if indices.memory_config() == backing_cfg else ttnn.to_memory_config(indices, backing_cfg)
     _d2d_send(idx_out, staged, rank, meta, deallocate=staged is not indices, metadata_msg=metadata_msg)
-
-
-def export_d2d_pipeline_descriptor(receivers, rank: int, service_id: str, master_rank: int):
-    """Collective: the master writes every rank's D2D receivers to one file for the engine.
-
-    `receivers` lists this rank's receivers, one per pipeline stage it receives into. Returns the
-    file on the master (it removes the file when dropped) and None elsewhere.
-    """
-    descriptor = ttnn.D2DStreamService.export_pipeline_descriptor(service_id, receivers, root=master_rank)
-    if descriptor is not None:
-        logger.info(f"[pp rank {rank}] [d2d] pipeline descriptor service_id={service_id!r} -> {descriptor.path}")
-    return descriptor
 
 
 def _d2d_drain_op(inbound, sockets):
