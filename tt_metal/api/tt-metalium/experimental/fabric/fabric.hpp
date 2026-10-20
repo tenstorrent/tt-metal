@@ -35,7 +35,8 @@ class ControlPlane;
 class FabricNodeId;
 enum class RoutingDirection;
 struct FabricEriscDatamoverConfig;
-size_t get_tt_fabric_channel_buffer_size_bytes();
+// Maximum buffer size of one full-size fabric channel in `mesh_device`'s context.
+size_t get_tt_fabric_channel_buffer_size_bytes(const tt::tt_metal::distributed::MeshDevice& mesh_device);
 size_t get_tt_fabric_packet_header_size_bytes();
 size_t get_tt_fabric_max_payload_size_bytes();
 
@@ -122,8 +123,11 @@ uint32_t append_routing_plane_connection_manager_rt_args(
 
 // returns which links on a given src chip are available for forwarding the data to a dst chip
 // these link indices can then be used to establish connection with the fabric routers
+// `mesh_device` selects the context the fabric is resolved in; src and dst need not belong to it.
 std::vector<uint32_t> get_forwarding_link_indices(
-    const FabricNodeId& src_fabric_node_id, const FabricNodeId& dst_fabric_node_id);
+    const tt::tt_metal::distributed::MeshDevice& mesh_device,
+    const FabricNodeId& src_fabric_node_id,
+    const FabricNodeId& dst_fabric_node_id);
 
 // returns the logical ethernet core on src that link_idx forwards through toward dst, for a link index
 // from get_forwarding_link_indices. Resolved in the mesh device's context.
@@ -137,7 +141,8 @@ std::unordered_map<MeshId, tt::tt_metal::distributed::MeshShape> get_physical_me
 
 std::vector<FabricType> get_all_mgd_fabric_types();
 
-tt::tt_fabric::Topology get_fabric_topology();
+// The fabric topology of `mesh_device`'s context.
+tt::tt_fabric::Topology get_fabric_topology(const tt::tt_metal::distributed::MeshDevice& mesh_device);
 
 struct FabricEriscDatamoverKernelConfig {
     tt::tt_metal::Program& program;

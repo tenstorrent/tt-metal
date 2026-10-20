@@ -84,8 +84,8 @@ SendAsyncMeshWorkloadFactory::create_at(
     if (num_cores > 0) {
         const auto& receiver_fabric_node_id = receiver_fabric_node_ids[0];
         const auto& sender_fabric_node_id = sender_fabric_node_ids[0];
-        auto available_link_indices =
-            tt::tt_fabric::get_forwarding_link_indices(receiver_fabric_node_id, sender_fabric_node_id);
+        auto available_link_indices = tt::tt_fabric::get_forwarding_link_indices(
+            *socket_mesh_device, receiver_fabric_node_id, sender_fabric_node_id);
         uint32_t num_available_links = available_link_indices.size();
 
         TT_FATAL(
@@ -239,7 +239,8 @@ SendAsyncMeshWorkloadFactory::create_at(
 
         const auto& sender_fabric_node_id = sender_fabric_node_ids[core_idx];
         const auto& receiver_fabric_node_id = receiver_fabric_node_ids[core_idx];
-        auto link_indices = tt::tt_fabric::get_forwarding_link_indices(sender_fabric_node_id, receiver_fabric_node_id);
+        auto link_indices = tt::tt_fabric::get_forwarding_link_indices(
+            *socket_mesh_device, sender_fabric_node_id, receiver_fabric_node_id);
 
         uint32_t selected_link_index = link_indices[core_idx % link_indices.size()];
         tt::tt_fabric::append_fabric_connection_rt_args(
