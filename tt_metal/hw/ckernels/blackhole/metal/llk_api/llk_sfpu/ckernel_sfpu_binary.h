@@ -219,7 +219,7 @@ inline void calculate_sfpu_binary_mul(
         sfpi::vFloat in0 = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
         sfpi::vFloat in1 = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
 
-        sfpi::vFloat result = in0 * in1;
+        sfpi::vFloat result = in0 * in1 - 0.0f;
 
         if constexpr (!is_fp32_dest_acc_en) {
             // software RNE approach:
@@ -264,7 +264,7 @@ inline void calculate_sfpu_binary_div(
             // scaling is exact for normal results.
             sfpi::vInt exponent = ea - eb + sfpi::exexp(q, sfpi::ExponentMode::Biased);
             sfpi::vInt half = sfpi::as<sfpi::vInt>(sfpi::as<sfpi::vUInt>(exponent) >> 1);
-            result = sfpi::setexp(q, half) * sfpi::setexp(sfpi::vFloat(1.0f), exponent - half);
+            result = sfpi::setexp(q, half) * sfpi::setexp(sfpi::vFloat(1.0f), exponent - half) - 0.0f;
 
             // For exceptional inputs only the reciprocal's sign and zero/Inf
             // classification matter. Inverting its exponent gives Inf for zero,
@@ -279,7 +279,7 @@ inline void calculate_sfpu_binary_div(
                 sfpi::vFloat nan_divisor = sfpi::vFloat(__builtin_rvtt_sfpgt(
                     sfpi::setsgn(in1, 0).get(), sfpi::vFloat(std::numeric_limits<float>::infinity()).get(), 8));
                 // Inverting in1 also inverts the scale's sign, so negate the product.
-                result = nan_divisor - in0 * scale;
+                result = -nan_divisor - in0 * scale;
             }
             v_endif;
         } else {

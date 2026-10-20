@@ -11,6 +11,7 @@ from tests.ttnn.nightly.unit_tests.operations.eltwise.backward.utility_funcs imp
     compare_pcc,
 )
 from tests.ttnn.utils_for_testing import assert_with_ulp, assert_allclose
+from tt_py_test_utils_common.utility_functions import is_blackhole
 
 pytestmark = pytest.mark.use_module_device
 
@@ -938,3 +939,29 @@ def test_logaddexp_ops_block_float(device, ttnn_function, ttnn_dtype, pcc):
 
     assert torch.isfinite(tt_out).all(), f"{ttnn_function.__name__} on {ttnn_dtype} returned a non-finite value"
     assert ttnn.pearson_correlation_coefficient(z_torch, tt_out) >= pcc
+
+
+@pytest.mark.parametrize(
+    "ttnn_function, x, y",
+    [
+        (ttnn.multiply, [-3.0, 3.0, -0.0, 0.0, -0.0, 0.0, 1e-30], [0.0, -0.0, 1.5, -1.5, -1.5, 0.0, -1e-30]),
+        (
+            ttnn.divide,
+            [0.0, -0.0, 0.0, -0.0, 1.5, -1.5, -0.0, 1.5, 1e-30],
+            [-1.5, 1.5, -float("inf"), float("inf"), -float("inf"), float("inf"), -1.5, float("inf"), -1e30],
+        ),
+    ],
+    ids=["multiply", "divide"],
+)
+def test_mul_div_fp32_signed_zero(device, ttnn_function, x, y):
+    if not is_blackhole():
+        pytest.skip("the sign of a zero product is kept on Blackhole only")
+    x_torch = torch.tensor([x], dtype=torch.float32)
+    y_torch = torch.tensor([y], dtype=torch.float32)
+    expected = ttnn.get_golden_function(ttnn_function)(x_torch, y_torch)
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    y_tt = ttnn.from_torch(y_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    actual = ttnn.to_torch(ttnn_function(x_tt, y_tt))
+
+    assert torch.equal(actual, expected), f"{actual} != {expected}"
+    assert torch.equal(torch.signbit(actual), torch.signbit(expected)), f"signs of {actual} != signs of {expected}"
