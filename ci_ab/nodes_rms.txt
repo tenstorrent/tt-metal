@@ -1,0 +1,7 @@
+ci_ab/test_ln_ab.py::test_ln_post[dec_hf2]
+ci_ab/test_ln_ab.py::test_ln_post[p_hf2]
+ci_ab/test_ln_ab.py::test_ln_post[p_lofi]
+ci_ab/test_ln_ab.py::test_ln_post[p_hf4]
+ci_ab/test_ln_ab.py::test_ln_post[p32_hf2]
+ci_ab/test_ln_ab.py::test_ln_post[p_hf2_f32]
+ci_ab/test_ln_ab.py::test_ln_post[p_hf2_nobeta]
