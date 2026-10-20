@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <optional>
 #include <type_traits>
+#include <variant>
 
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt_stl/reflection.hpp>
@@ -218,7 +219,9 @@ TEST(AggregateSpecTypes, CPU_DataflowBufferSpecDesignatedInitializers) {
         .borrowed_from = TensorParamName{"input_tensor"},
     };
 
-    EXPECT_EQ(borrowed_dfb.borrowed_from, std::optional<TensorParamName>{TensorParamName{"input_tensor"}});
+    ASSERT_TRUE(borrowed_dfb.borrowed_from.has_value());
+    ASSERT_TRUE(std::holds_alternative<TensorParamName>(*borrowed_dfb.borrowed_from));
+    EXPECT_EQ(std::get<TensorParamName>(*borrowed_dfb.borrowed_from), TensorParamName{"input_tensor"});
 }
 
 TEST(AggregateSpecTypes, ScratchpadSpecDesignatedInitializers) {

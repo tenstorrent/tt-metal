@@ -7,7 +7,7 @@
 #include <utility>
 
 #include <gtest/gtest.h>
-#include <tt-metalium/experimental/allocation/allocation.hpp>
+#include <tt-metalium/experimental/allocation/raw_allocation.hpp>
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 #include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
 #include <tt-metalium/experimental/range_lockstep_allocation/memory_config.hpp>
@@ -20,13 +20,13 @@ namespace {
 
 enum class AllocationMode { Lockstep, PerCore, RangeLockstep };
 
-TEST(AllocationTest, CannotReleaseEmptyOrMovedFromAllocation) {
-    EXPECT_ANY_THROW(experimental::Allocation::release_as_meshtensor(experimental::Allocation{}));
+TEST(RawAllocationTest, CannotReleaseEmptyOrMovedFromAllocation) {
+    EXPECT_ANY_THROW(experimental::RawAllocation::release_as_meshtensor(experimental::RawAllocation{}));
 
-    experimental::Allocation allocation;
-    experimental::Allocation moved(std::move(allocation));
-    EXPECT_ANY_THROW(experimental::Allocation::release_as_meshtensor(std::move(allocation)));
-    EXPECT_ANY_THROW(experimental::Allocation::release_as_meshtensor(std::move(moved)));
+    experimental::RawAllocation allocation;
+    experimental::RawAllocation moved(std::move(allocation));
+    EXPECT_ANY_THROW(experimental::RawAllocation::release_as_meshtensor(std::move(allocation)));
+    EXPECT_ANY_THROW(experimental::RawAllocation::release_as_meshtensor(std::move(moved)));
 }
 
 void check_tensor_adoption(distributed::MeshDevice& device, AllocationMode mode) {
@@ -52,17 +52,17 @@ void check_tensor_adoption(distributed::MeshDevice& device, AllocationMode mode)
 
     std::optional<MeshTensor> released;
     {
-        auto allocation = experimental::Allocation::adopt_from_meshtensor(std::move(tensor));
+        auto allocation = experimental::RawAllocation::adopt_from_meshtensor(std::move(tensor));
         EXPECT_TRUE(tensor.is_valueless_after_move());
         ASSERT_FALSE(owner.expired());
         EXPECT_TRUE(owner.lock()->is_allocated());
 
-        experimental::Allocation moved(std::move(allocation));
+        experimental::RawAllocation moved(std::move(allocation));
         EXPECT_FALSE(owner.expired());
         allocation = std::move(moved);
         EXPECT_FALSE(owner.expired());
 
-        released.emplace(experimental::Allocation::release_as_meshtensor(std::move(allocation)));
+        released.emplace(experimental::RawAllocation::release_as_meshtensor(std::move(allocation)));
         EXPECT_EQ(&released->mesh_buffer(), owner.lock().get());
         EXPECT_EQ(released->logical_shape(), Shape({1, 64}));
         EXPECT_EQ(released->dtype(), DataType::BFLOAT16);
@@ -71,12 +71,12 @@ void check_tensor_adoption(distributed::MeshDevice& device, AllocationMode mode)
         EXPECT_EQ(released_buffer->aligned_size_per_bank(), expected_size);
         EXPECT_EQ(experimental::per_core_allocation::get_shard_base_address(*released_buffer, first), first_address);
         EXPECT_EQ(experimental::per_core_allocation::get_shard_base_address(*released_buffer, second), second_address);
-        EXPECT_ANY_THROW(experimental::Allocation::release_as_meshtensor(std::move(allocation)));
+        EXPECT_ANY_THROW(experimental::RawAllocation::release_as_meshtensor(std::move(allocation)));
     }
     ASSERT_FALSE(owner.expired());
     EXPECT_TRUE(released->mesh_buffer().is_allocated());
     {
-        auto readopted = experimental::Allocation::adopt_from_meshtensor(std::move(*released));
+        auto readopted = experimental::RawAllocation::adopt_from_meshtensor(std::move(*released));
         released.reset();
         EXPECT_FALSE(owner.expired());
     }
@@ -103,37 +103,37 @@ TensorSpec interleaved_tensor_spec(BufferType buffer_type = BufferType::L1) {
 TEST_F(HybridAllocatorTest, AdoptDramMeshTensorFails) {
     auto tensor = MeshTensor::allocate_on_device(*devices_[0], interleaved_tensor_spec(BufferType::DRAM));
 
-    EXPECT_ANY_THROW(experimental::Allocation::adopt_from_meshtensor(std::move(tensor)));
+    EXPECT_ANY_THROW(experimental::RawAllocation::adopt_from_meshtensor(std::move(tensor)));
 }
 
-TEST_F(HybridAllocatorTest, AllocationMoveAssignmentReleasesPreviousOwner) {
+TEST_F(HybridAllocatorTest, RawAllocationMoveAssignmentReleasesPreviousOwner) {
     auto first = MeshTensor::allocate_on_device(*devices_[0], interleaved_tensor_spec());
     auto second = MeshTensor::allocate_on_device(*devices_[0], interleaved_tensor_spec());
     std::weak_ptr<distributed::MeshBuffer> first_owner = first.impl().raw_mesh_buffer();
     std::weak_ptr<distributed::MeshBuffer> second_owner = second.impl().raw_mesh_buffer();
 
-    auto destination = experimental::Allocation::adopt_from_meshtensor(std::move(first));
-    auto source = experimental::Allocation::adopt_from_meshtensor(std::move(second));
+    auto destination = experimental::RawAllocation::adopt_from_meshtensor(std::move(first));
+    auto source = experimental::RawAllocation::adopt_from_meshtensor(std::move(second));
     destination = std::move(source);
 
     EXPECT_TRUE(first_owner.expired());
     ASSERT_FALSE(second_owner.expired());
     EXPECT_TRUE(second_owner.lock()->is_allocated());
-    EXPECT_ANY_THROW(experimental::Allocation::release_as_meshtensor(std::move(source)));
+    EXPECT_ANY_THROW(experimental::RawAllocation::release_as_meshtensor(std::move(source)));
 
-    destination = experimental::Allocation{};
+    destination = experimental::RawAllocation{};
     EXPECT_TRUE(second_owner.expired());
-    EXPECT_ANY_THROW(experimental::Allocation::release_as_meshtensor(std::move(destination)));
+    EXPECT_ANY_THROW(experimental::RawAllocation::release_as_meshtensor(std::move(destination)));
 }
 
 TEST_F(HybridAllocatorTest, AdoptMovedFromMeshTensorFails) {
     auto tensor = MeshTensor::allocate_on_device(*devices_[0], interleaved_tensor_spec());
     const auto* original_buffer = &tensor.mesh_buffer();
-    auto allocation = experimental::Allocation::adopt_from_meshtensor(std::move(tensor));
+    auto allocation = experimental::RawAllocation::adopt_from_meshtensor(std::move(tensor));
 
-    EXPECT_ANY_THROW(experimental::Allocation::adopt_from_meshtensor(std::move(tensor)));
+    EXPECT_ANY_THROW(experimental::RawAllocation::adopt_from_meshtensor(std::move(tensor)));
 
-    auto released = experimental::Allocation::release_as_meshtensor(std::move(allocation));
+    auto released = experimental::RawAllocation::release_as_meshtensor(std::move(allocation));
     EXPECT_EQ(&released.mesh_buffer(), original_buffer);
     EXPECT_TRUE(released.mesh_buffer().is_allocated());
 }
@@ -147,11 +147,11 @@ TEST_F(HybridAllocatorTest, AdoptNonOwningMeshTensorFails) {
     ASSERT_EQ(view->get_backing_buffer(), nullptr);
     auto tensor = MeshTensor::from_buffer(std::move(*view), spec);
 
-    EXPECT_ANY_THROW(experimental::Allocation::adopt_from_meshtensor(std::move(tensor)));
+    EXPECT_ANY_THROW(experimental::RawAllocation::adopt_from_meshtensor(std::move(tensor)));
 
     EXPECT_TRUE(owner.mesh_buffer().is_allocated());
-    auto allocation = experimental::Allocation::adopt_from_meshtensor(std::move(owner));
-    auto released = experimental::Allocation::release_as_meshtensor(std::move(allocation));
+    auto allocation = experimental::RawAllocation::adopt_from_meshtensor(std::move(owner));
+    auto released = experimental::RawAllocation::release_as_meshtensor(std::move(allocation));
     EXPECT_EQ(&released.mesh_buffer(), &buffer);
     EXPECT_TRUE(released.mesh_buffer().is_allocated());
 }

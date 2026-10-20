@@ -43,7 +43,7 @@
 //       These class names will need to retain an explicit experimental:: name scope.
 namespace tt::tt_metal::experimental {
 class PrefetcherPipe;
-class RawAllocation;
+struct RawAllocation;
 }  // namespace tt::tt_metal::experimental
 
 namespace tt::tt_metal::experimental {

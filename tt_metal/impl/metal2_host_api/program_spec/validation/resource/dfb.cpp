@@ -8,6 +8,7 @@
 #include <string_view>
 #include <unordered_map>
 #include <unordered_set>
+#include <variant>
 #include <vector>
 
 #include <tt_stl/assert.hpp>
@@ -39,7 +40,9 @@ void ValidateBorrowedMemory(
     if (!dfb.borrowed_from.has_value()) {
         return;
     }
-    const TensorParamName& tp_name = *dfb.borrowed_from;
+    const auto* tensor_name = std::get_if<TensorParamName>(&*dfb.borrowed_from);
+    TT_FATAL(tensor_name != nullptr, "DFB '{}' borrowing from RawAllocation is not implemented", dfb.unique_id);
+    const TensorParamName& tp_name = *tensor_name;
     auto it = collected.tensor_parameter_by_name.find(tp_name);
     TT_FATAL(
         it != collected.tensor_parameter_by_name.end(),
