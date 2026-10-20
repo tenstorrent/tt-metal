@@ -26,6 +26,7 @@
 #include "tt_metal/fabric/erisc_datamover_builder.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_interface.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
+#include "distributed/mesh_device_impl.hpp"
 
 namespace tt::tt_fabric::bench {
 
@@ -538,7 +539,7 @@ void FabricMuxV2BenchmarkContext::initialize() {
     TT_FATAL(mesh_device_ != nullptr, "Failed to create full mesh device for mux-v2 standalone benchmark");
 
     device_ = nullptr;
-    for (auto* device : mesh_device_->get_devices()) {
+    for (auto* device : mesh_device_->impl().get_devices()) {
         if (device != nullptr && device->id() == 0) {
             device_ = device;
             break;

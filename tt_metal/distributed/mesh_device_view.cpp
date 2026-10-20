@@ -448,17 +448,7 @@ MeshCoordinateRange MeshDeviceViewImpl::get_local_mesh_coord_range() const {
 
 // MeshDeviceView implementations
 
-MeshDeviceView::MeshDeviceView(
-    const MeshShape& shape,
-    const std::vector<IDevice*>& devices,
-    const std::vector<tt::tt_fabric::FabricNodeId>& fabric_node_ids) :
-    pimpl_(std::make_unique<MeshDeviceViewImpl>(shape, devices, fabric_node_ids)) {}
-
-MeshDeviceView::MeshDeviceView(
-    const MeshShape& shape,
-    const std::vector<MaybeRemote<IDevice*>>& devices,
-    const std::vector<tt::tt_fabric::FabricNodeId>& fabric_node_ids) :
-    pimpl_(std::make_unique<MeshDeviceViewImpl>(shape, devices, fabric_node_ids)) {}
+MeshDeviceView::MeshDeviceView(std::unique_ptr<MeshDeviceViewImpl> impl) : pimpl_(std::move(impl)) {}
 
 MeshDeviceView::~MeshDeviceView() = default;
 

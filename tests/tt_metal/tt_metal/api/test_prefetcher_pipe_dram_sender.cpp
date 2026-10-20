@@ -131,7 +131,7 @@ uint64_t drisc_noc_addr(distributed::MeshDevice& mesh_device, DeviceAddr local_a
 }
 
 tt_cxy_pair drisc_cxy(distributed::MeshDevice& mesh_device, const CoreCoord& sender_logical) {
-    IDevice* device = mesh_device.get_devices().at(0);
+    auto* device = mesh_device.impl().get_devices().at(0);
     return tt_cxy_pair(device->id(), device->virtual_core_from_logical_core(sender_logical, CoreType::DRAM));
 }
 
@@ -262,7 +262,7 @@ std::vector<uint32_t> read_ring_slot(
     uint32_t entry_size) {
     std::vector<uint32_t> out;
     detail::ReadFromDeviceL1(
-        mesh_device.get_devices().at(0),
+        mesh_device.impl().get_devices().at(0),
         receiver_logical,
         pipe.buffer_address() + slot * entry_size,
         entry_size,

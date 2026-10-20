@@ -25,6 +25,7 @@
 #include "impl/kernels/kernel.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 #include "impl/debug/debug_helpers.hpp"
+#include "distributed/mesh_device_impl.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // A test for checking debug ring buffer feature.
@@ -81,7 +82,7 @@ void RunTest(
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program program = Program();
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->impl().get_devices()[0];
 
     // Depending on riscv type, choose one core to run the test on
     // and set up the kernel on the correct risc

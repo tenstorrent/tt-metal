@@ -169,7 +169,7 @@ void verify_cb_config(
 void clear_cb_config_report(
     const std::shared_ptr<MeshDevice>& mesh_device, const CoreRangeSet& crs, uint32_t report_addr) {
     std::vector<uint32_t> cleared_report = {0, 0, 0};
-    for (auto* device : mesh_device->get_devices()) {
+    for (auto* device : mesh_device->impl().get_devices()) {
         for (const auto& core_range : crs.ranges()) {
             for (const auto& core : core_range) {
                 ::tt::tt_metal::detail::WriteToDeviceL1(device, core, report_addr, cleared_report);
@@ -184,7 +184,7 @@ void verify_cb_config_report(
     uint32_t report_addr,
     const CBConfig& expected_config,
     std::optional<uint32_t> expected_address = std::nullopt) {
-    for (auto* device : mesh_device->get_devices()) {
+    for (auto* device : mesh_device->impl().get_devices()) {
         for (const auto& core_range : crs.ranges()) {
             for (const auto& core : core_range) {
                 std::vector<uint32_t> report;
@@ -1180,7 +1180,7 @@ TEST_F(MeshWorkloadTestSuite, MeshWorkloadSemaphoreSanity) {
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), mesh_workload, false);
     Finish(mesh_device_->mesh_command_queue());
 
-    for (auto* const device : mesh_device_->get_devices()) {
+    for (auto* const device : mesh_device_->impl().get_devices()) {
         validate_sems(mesh_device_, device, full_grid, mesh_workload, expected_semaphore_values);
     }
 }

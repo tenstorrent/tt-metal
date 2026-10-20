@@ -36,6 +36,7 @@
 #include <tt-metalium/experimental/sockets/hd_socket_descriptor.hpp>
 #include "tt_metal/hw/inc/hostdev/socket.h"
 #include "tt_metal/llrt/tt_cluster.hpp"
+#include "distributed/mesh_device_impl.hpp"
 
 namespace tt::tt_metal {
 
@@ -48,7 +49,7 @@ using PerCoreAllocationTest = HybridAllocatorTest;
 static constexpr DeviceAddr PAGE_SIZE = HYBRID_TEST_PAGE_SIZE;
 
 TEST_F(PerCoreAllocationTest, BasicPerCoreAllocation) {
-    auto* device = this->devices_[0]->get_devices()[0];
+    auto* device = this->devices_[0]->impl().get_devices()[0];
     auto compute_grid = device->compute_with_storage_grid_size();
     uint32_t num_cores = static_cast<uint32_t>(std::min<size_t>(4, compute_grid.x));
     ASSERT_GE(num_cores, 2u) << "Need at least 2 compute cores";
@@ -80,7 +81,7 @@ TEST_F(PerCoreAllocationTest, BasicPerCoreAllocation) {
 }
 
 TEST_F(PerCoreAllocationTest, PerCoreAndLockstepCoexist) {
-    auto* device = this->devices_[0]->get_devices()[0];
+    auto* device = this->devices_[0]->impl().get_devices()[0];
     auto compute_grid = device->compute_with_storage_grid_size();
     uint32_t num_cores = static_cast<uint32_t>(std::min<size_t>(4, compute_grid.x));
     ASSERT_GE(num_cores, 2u);
@@ -158,7 +159,7 @@ TEST_F(PerCoreAllocationTest, PerCoreSkipsPersistentL1OnSameCore) {
 }
 
 TEST_F(PerCoreAllocationTest, DeallocationFreesPerCoreSpace) {
-    auto* device = this->devices_[0]->get_devices()[0];
+    auto* device = this->devices_[0]->impl().get_devices()[0];
     auto compute_grid = device->compute_with_storage_grid_size();
     uint32_t num_cores = static_cast<uint32_t>(std::min<size_t>(4, compute_grid.x));
     ASSERT_GE(num_cores, 2u);
@@ -240,7 +241,7 @@ TEST_F(PerCoreAllocationTest, PerCoreSocketDataBufferPlacement) {
 
 TEST_F(PerCoreAllocationTest, PerCoreSocketCoexistsWithLockstep) {
     auto md = this->devices_[0];
-    auto* device = md->get_devices()[0];
+    auto* device = md->impl().get_devices()[0];
 
     const CoreCoord sender_core(0, 0);
     const CoreCoord receiver_core(0, 1);
@@ -385,7 +386,7 @@ TEST_F(PerCoreAllocationTest, H2DSocketPerCoreFifoDoesNotAliasLockstep) {
     if (auto reason = per_core_h2d_skip_reason(md)) {
         GTEST_SKIP() << *reason;
     }
-    auto* device = md->get_devices()[0];
+    auto* device = md->impl().get_devices()[0];
 
     const uint32_t fifo_size = 4 * h2d_host_alignment();
     const distributed::MeshCoreCoord recv_core(distributed::MeshCoordinate(0, 0), CoreCoord(0, 1));
