@@ -670,7 +670,7 @@ class KDARecurrence:
         self._gate_scale = gate_scale
         preparation = ttnn.init_device_compute_kernel_config(
             device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_fidelity=program_config.preparation_math_fidelity,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=False,

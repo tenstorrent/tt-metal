@@ -82,6 +82,8 @@ class KDARecurrenceProgramConfig:
     # Exact number of chunks per group. Construction validates divisibility and
     # worker capacity; execution never silently changes an explicit configuration.
     summary_group_chunks: int = 20
+    # Chunk preparation and the chunk summary (its pairwise products and the summary's state products).
+    preparation_math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.HiFi4
     affine_prefix_math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.HiFi2
     scan_math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.HiFi2
     # Gather the SP prefix summaries with high_bw_all_gather into a persistent DRAM buffer. The recurrence takes it only
@@ -243,6 +245,8 @@ def kimi_k3_program_config(*, active_seq_len_local: int, tp_ccl_topology: ttnn.T
             high_bw_prefix_gather=active_seq_len_local == _TUNED_PROJECTION_ROWS,
             ring_relay_prefix=True,
             entry_correction=True,
+            # HiFi3: preparation and summary -10 us at T=5120, output NRMSE unchanged (HiFi2 reaches 2.1e-2).
+            preparation_math_fidelity=ttnn.MathFidelity.HiFi3,
         ),
         qkv_channel_chunk_size=64,
         tp_ccl_topology=tp_ccl_topology,
