@@ -11,6 +11,7 @@ import torch
 import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.reference.kda.ops import kda_recurrent_reference
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_x_device_params
 from models.demos.deepseek_v3_d_p.tests.kda.chronology_oracle import chronological_topology
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     collect_mesh_accuracy_and_determinism_results,
@@ -27,6 +28,27 @@ from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
 )
 
 pytestmark = run_for_blackhole()
+
+# The distributed recurrence on LoudBox, and on one 4x4 prefill stage (a Galaxy tray half), where SP=4
+# runs on the axis-1 ring and TP=4 on the axis-0 line.
+_ON_DISTRIBUTED_MESHES = pytest.mark.parametrize(
+    "mesh_device,device_params",
+    [
+        pytest.param((2, 4), {"fabric_config": ttnn.FabricConfig.FABRIC_1D}, id="2x4"),
+        pytest.param(
+            (4, 4),
+            torus_x_device_params(),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+            id="4x4-torus-x",
+        ),
+    ],
+    indirect=True,
+)
+
+
+def _not_the_4x4_stage_layout(**params):
+    """On the 4x4 stage only TP on axis 0 is the deployed layout; SP's ring is axis 1."""
+    return params["mesh_device"] == (4, 4) and params["tensor_parallel_axis"] != 0
 
 
 def _to_device(tensor: torch.Tensor, device: ttnn.Device, dtype: ttnn.DataType) -> ttnn.Tensor:
@@ -329,12 +351,8 @@ def _run_distributed_recurrence(
     return result.output, result.final_state
 
 
-@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
-@pytest.mark.parametrize(
-    "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
-    indirect=True,
-)
+@_ON_DISTRIBUTED_MESHES
+@pytest.mark.uncollect_if(pred=_not_the_4x4_stage_layout)
 @pytest.mark.parametrize("tensor_parallel_axis", [0, 1])
 def test_distributed_recurrence_matches_serial_and_is_deterministic(
     mesh_device: ttnn.MeshDevice,
@@ -365,12 +383,8 @@ def test_distributed_recurrence_matches_serial_and_is_deterministic(
     assert_accurate(expected_state, actual_state, name=f"{label} state", nrmse_threshold=0.01)
 
 
-@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
-@pytest.mark.parametrize(
-    "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
-    indirect=True,
-)
+@_ON_DISTRIBUTED_MESHES
+@pytest.mark.uncollect_if(pred=_not_the_4x4_stage_layout)
 @pytest.mark.parametrize("tensor_parallel_axis", [0, 1])
 def test_distributed_recurrence_trace_replay_matches_eager(
     mesh_device: ttnn.MeshDevice,

@@ -189,6 +189,18 @@ ALL_MESH_CONFIGS = [
         "fabric2d-torus-x-1x8-2link",
         reliability_mode=ttnn.FabricReliabilityMode.RELAXED_INIT,
     ),
+    # One 4x4 prefill stage: a single Galaxy tray half, Ring on mesh axis 1 only. Runs only when the
+    # half is pinned with TT_VISIBLE_DEVICES and TT_MESH_GRAPH_DESC_PATH names a [LINE, RING] 4x4
+    # descriptor (single_4x4_sp1_mgd.textproto).
+    _mesh_param(
+        (4, 4),
+        ttnn.FabricConfig.FABRIC_2D_TORUS_X,
+        get_max_payload_size(),
+        2,
+        "mesh-4x4",
+        "fabric2d-torus-x-4x4-2link",
+        reliability_mode=ttnn.FabricReliabilityMode.RELAXED_INIT,
+    ),
     # Galaxy production policy: existing full 8x4 TorusXY, Ring on the exercised SP axis.
     _mesh_param(
         (8, 4),

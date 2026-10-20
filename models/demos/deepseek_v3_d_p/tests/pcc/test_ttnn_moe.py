@@ -37,6 +37,7 @@ from models.demos.deepseek_v3_d_p.reference.tt.moe.moe import TorchMoe
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     fabric2d_device_params,
     moe_fabric_payload,
+    torus_x_device_params,
     torus_xy_device_params,
     torus_y_device_params,
 )
@@ -1330,6 +1331,16 @@ def test_kimi_moe_fabric2d(variant, config_only, mesh_device, device_params, num
             1,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="torus-xy-8x4-sp1",
+        ),
+        # One 4x4 prefill stage (a Galaxy tray half): SP=4 on the axis-1 ring (4 dispatch groups), TP=4
+        # on the axis-0 line.
+        pytest.param(
+            (4, 4),
+            torus_x_device_params(fabric_payload_size=moe_fabric_payload(KimiK3Config)),
+            2,
+            1,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+            id="torus-x-4x4-sp1",
         ),
     ],
     indirect=["mesh_device", "device_params"],
