@@ -199,7 +199,6 @@ def upsample_multicore_common(
             ncores = (nshards_h, nshards_w)
         grid_ncores = ncores
         if shard_strategy == ttnn.ShardStrategy.BLOCK and shard_orientation == ttnn.ShardOrientation.COL_MAJOR:
-            # COL_MAJOR block shards put the NHW shards along X and the channel shards along Y.
             grid_ncores = (ncores[1], ncores[0])
         shard_grid = get_shard_grid_from_num_cores(device, grid_ncores)
 

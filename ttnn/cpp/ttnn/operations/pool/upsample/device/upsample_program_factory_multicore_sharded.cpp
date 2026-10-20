@@ -182,8 +182,6 @@ Tensor create_config_tensor(
             for (; j < dst_core_end_idx_map[ind]; ++j) {
                 CoreCoord src_core(logical_core_to_stick_map[j].core_x, logical_core_to_stick_map[j].core_y);
                 if (!is_height_sharded) {
-                    // Block sharding: i is the channel core and core_y holds the NHW core. Channels run along X for
-                    // ROW_MAJOR shards and along Y for COL_MAJOR shards (see ch_start_core / nhw_start_core above).
                     const std::uint16_t nhw_core = logical_core_to_stick_map[j].core_y;
                     src_core = shard_spec.orientation == ShardOrientation::ROW_MAJOR ? CoreCoord(i, nhw_core)
                                                                                      : CoreCoord(nhw_core, i);
@@ -314,7 +312,6 @@ ttnn::device_operation::ProgramArtifacts UpsampleMultiCoreShardedProgramFactory:
 
     // extra limitation to avoid post upsample step of resharding
     if (input.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
-        // Number of cores the channels are split across: along X for ROW_MAJOR shards, along Y for COL_MAJOR shards.
         const auto& range = *all_cores.ranges().begin();
         ncores_x = shard_spec.orientation == ShardOrientation::ROW_MAJOR ? range.end_coord.x - range.start_coord.x + 1
                                                                          : range.end_coord.y - range.start_coord.y + 1;
@@ -337,8 +334,6 @@ ttnn::device_operation::ProgramArtifacts UpsampleMultiCoreShardedProgramFactory:
 
     const auto shard_shape =
         std::array<std::uint32_t, 2>({1, static_cast<std::uint32_t>(config_tensor.logical_shape()[-1])});
-    // Block sharding: config rows go channel core by channel core, NHW cores innermost, so spread them along NHW:
-    // Y for ROW_MAJOR shards (config sharded COL_MAJOR), X for COL_MAJOR shards (config sharded ROW_MAJOR).
     const auto config_tensor_shard_orientation =
         input.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED
             ? (shard_spec.orientation == ShardOrientation::ROW_MAJOR ? ShardOrientation::COL_MAJOR
