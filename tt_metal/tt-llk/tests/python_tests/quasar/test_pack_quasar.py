@@ -96,7 +96,7 @@ def generate_qsr_pack_combinations(
             and dest_acc == DestAccumulation.No
         ):
             return False
-        # Int8<->UInt8 conversion requires dest_acc enabled. Int4/UInt4 are unpacked as Int8/UInt8.
+        # Int8<->UInt8 conversion requires dest_acc enabled.
         src_reg_fmt = {
             DataFormat.Int4: DataFormat.Int8,
             DataFormat.UInt4: DataFormat.UInt8,

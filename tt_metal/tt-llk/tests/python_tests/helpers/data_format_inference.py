@@ -211,7 +211,7 @@ def infer_unpack_out(
             )
         return register_format_hint
 
-    # Int4/UInt4 can only exist in L1. The unpacker widens Int4 to Int8 and UInt4 to UInt8.
+    # Int4/UInt4 are L1-only; the unpacker widens them to Int8/UInt8.
     if input_format == DataFormat.Int4:
         return DataFormat.Int8
     if input_format == DataFormat.UInt4:
@@ -688,18 +688,6 @@ def data_formats(
             unpack_dst = DataFormat.Fp8_e4m3
             math_format = DataFormat.Float16
             pack_src_format = DataFormat.Float16
-        elif input_format.is_4bit_integer():
-            # Int4/UInt4 can't exist in registers; the unpacker widens Int4 to Int8 and UInt4 to UInt8.
-            unpack_dst = (
-                DataFormat.Int8 if input_format == DataFormat.Int4 else DataFormat.UInt8
-            )
-            math_format = unpack_dst
-            # A 32-bit dest holds Int32, so the packer reads it as Int32.
-            pack_src_format = (
-                DataFormat.Int32
-                if is_fp32_dest_acc_en == DestAccumulation.Yes
-                else output_format
-            )
         else:
             unpack_dst = input_format
             math_format = input_format
@@ -744,10 +732,6 @@ def data_formats(
 
         if input_format_B is not None and input_format_B == DataFormat.Fp8_e4m3:
             unpack_B_dst_val = DataFormat.Fp8_e4m3
-        elif input_format_B == DataFormat.Int4:
-            unpack_B_dst_val = DataFormat.Int8
-        elif input_format_B == DataFormat.UInt4:
-            unpack_B_dst_val = DataFormat.UInt8
         elif input_format_B is not None:
             unpack_B_dst_val = input_format_B
         else:

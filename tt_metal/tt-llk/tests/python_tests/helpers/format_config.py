@@ -66,12 +66,8 @@ class DataFormat(Enum):
     UInt16 = DataFormatInfo("UInt16", 2)  # WH/BH specific
     Int8 = DataFormatInfo("Int8", 1)
     UInt8 = DataFormatInfo("UInt8", 1)
-    Int4 = DataFormatInfo(
-        "Int4", Fraction(1, 2)
-    )  # QSR specific - L1-only, sign-magnitude (1b sign + 3b magnitude), 2 datums per byte
-    UInt4 = DataFormatInfo(
-        "UInt4", Fraction(1, 2)
-    )  # QSR specific - L1-only, 4b magnitude, 2 datums per byte
+    Int4 = DataFormatInfo("Int4", Fraction(1, 2))  # QSR specific
+    UInt4 = DataFormatInfo("UInt4", Fraction(1, 2))  # QSR specific
     MxFp8R = DataFormatInfo("MxFp8R", 1)  # QSR specific
     MxFp8P = DataFormatInfo("MxFp8P", 1)  # QSR specific
     MxFp4 = DataFormatInfo(
@@ -130,16 +126,10 @@ class DataFormat(Enum):
 
     def needs_int8_math_config(self) -> bool:
         """Checks if the format requires int8 math mode in the ALU."""
-        return self in {
-            DataFormat.Int8,
-            DataFormat.UInt8,
-            DataFormat.Int32,
-            DataFormat.Int4,
-            DataFormat.UInt4,
-        }
+        return self in {DataFormat.Int8, DataFormat.UInt8, DataFormat.Int32}
 
     def is_4bit_integer(self) -> bool:
-        """Checks if the data format is a 4-bit integer format (L1-only, packer cannot output it)."""
+        """Checks if the data format is Int4 or UInt4."""
         return self in {DataFormat.Int4, DataFormat.UInt4}
 
     def is_32_bit(self) -> bool:
@@ -245,8 +235,6 @@ class DataFormat(Enum):
         }
 
 
-# Representable range of the 4-bit integer formats: Int4 is sign-magnitude
-# (1b sign + 3b magnitude), UInt4 is a 4b magnitude.
 FOUR_BIT_INTEGER_RANGE = {
     DataFormat.Int4: (-7, 7),
     DataFormat.UInt4: (0, 15),
@@ -573,8 +561,6 @@ class FormatConfig:
                 "the ALU SrcA/SrcB formats must be the formats the unpackers wrote."
             )
 
-        # Int4/UInt4 exist only as L1 input formats: the unpacker widens them to 8-bit
-        # register formats and the packer cannot produce them.
         for field_name, value in (
             ("unpack_A_dst", self.unpack_A_dst),
             ("unpack_B_dst", self.unpack_B_dst),

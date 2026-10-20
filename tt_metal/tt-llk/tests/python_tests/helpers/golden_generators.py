@@ -1107,7 +1107,6 @@ class TransposeGolden:
     def _to_format(self, operand, data_format):
         """Convert to data_format, saturating integers like the packer does instead of wrapping."""
         if operand.dtype == torch.int8:
-            # Sign-magnitude Int8 cannot represent -128; pack_int8 writes it to L1 as -127.
             operand = torch.clamp(operand, min=-127)
         if data_format.is_integer() and operand.dtype != format_dict[data_format]:
             return saturate_integer(operand, data_format)

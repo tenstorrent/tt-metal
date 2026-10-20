@@ -118,7 +118,7 @@ def generate_unpack_unary_operand_combinations(
                 # Skip if input format is not 32-bit and output format is 32-bit and dest_acc is No
                 # This combination is not supported in the Quasar Packer format conversions
                 continue
-            # Int8<->UInt8 conversion requires dest_acc enabled. Int4/UInt4 are unpacked as Int8/UInt8.
+            # Int8<->UInt8 conversion requires dest_acc enabled.
             src_reg_fmt = {
                 DataFormat.Int4: DataFormat.Int8,
                 DataFormat.UInt4: DataFormat.UInt8,
