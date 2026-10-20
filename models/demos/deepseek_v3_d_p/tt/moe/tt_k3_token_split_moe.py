@@ -162,6 +162,7 @@ class TtK3TokenSplitMoE:
         x_once=None,
         dw_batch=None,
         layout_overrides=None,
+        shared_tp=False,
     ):
         """routed_only (GLM-5.3-Flash hack): only the routed experts and their combine - no router (the caller's top-k
         goes to routed()), no latent projections (d.latent = d.H: the dispatch rows are x), no shared expert; the
@@ -169,10 +170,15 @@ class TtK3TokenSplitMoE:
         experts' layout (flat_layouts.py preset) instead of K3's (gu64: flat_layouts.k3_gu64, else the plan's
         defaults). combine_depth: the combine's rings per source chip. x_once / dw_batch / layout_overrides: the routed
         experts' program options for the fused call only (x read from DRAM once - default off with gu64 / routed_only;
-        down-weight blocks per read barrier; any other FlatLayoutOptions fields)."""
+        down-weight blocks per read barrier; any other FlatLayoutOptions fields). shared_tp (routed_only): the shared
+        expert folded in, split over each mesh row's chips - the dispatch also sends every token to its row-mates,
+        routed(shared=) runs the chip's slice on the row's tokens between the dispatch and the experts, and the combine
+        carries the partials to their owners (its shared_rows); the chip's own partial is added to the output."""
         self.mesh, self.d, self.S, self.torus = mesh_device, d, S, tuple(torus)
         self.routed_only = routed_only
         assert not routed_only or d.latent == d.H, "routed_only: no latent projections (d.latent = d.H)"
+        self.shared_tp = bool(shared_tp)
+        assert not shared_tp or routed_only, "shared_tp: the routed_only block (the shared expert per call)"
         R, C = tuple(mesh_device.shape)
         self.R, self.C, self.N = R, C, R * C
         assert d.E % self.N == 0
@@ -423,6 +429,7 @@ class TtK3TokenSplitMoE:
                 tokens_per_page=self.rows_pt,
                 copy=not self.lat_direct,
                 torus=self.torus,
+                row_mates=self.shared_tp,
             )
             if self.sparse_dispatch
             else None
@@ -505,6 +512,33 @@ class TtK3TokenSplitMoE:
                 pin=1,
                 pin_ratio=str(self.op.layout.pin_ratio),
             )
+        if self.shared_tp:
+            # the shared expert's input: the row's C S tokens from the dispatch buffer as tiles, the chip's own block
+            # first (block j = column (c + j) % C: the order of the partial's blocks the combine sends), and its
+            # partial row-major (the combine's shared_rows; persistent: the combine bakes its address)
+            # (per piece of SB rows of owner block j: the shared expert's matmuls fit beside the arena at one row tile a
+            # core in M; the own block's partial goes to y_se's block 0, tilized for the final add)
+            grid_ = mesh_device.compute_with_storage_grid_size()
+            ST, SB = S // 32, min(S, 32 * grid_.y)
+            while S % SB:
+                SB -= 32
+            self.se_pieces = [(j, k * SB, SB) for j in list(range(1, C)) + [0] for k in range(S // SB)]
+            self.se_tilize = {
+                (j, r0): layout_op_prepare(
+                    mesh_device,
+                    "tilize",
+                    src_tile_of=lambda ch, tr, j=j, r0=r0: (ch[0] * C + (ch[1] + j) % C) * ST + r0 // 32 + tr,
+                )
+                for j, r0, _ in self.se_pieces
+            }
+            self.se_own_tilize = layout_op_prepare(mesh_device, "tilize")
+            self.se_untilize = {
+                (j, r0): layout_op_prepare(mesh_device, "untilize", row0_of=lambda r, c, j=j, r0=r0: j * S + r0)
+                for j, r0, _ in self.se_pieces
+            }
+            self.y_se = ttnn.allocate_tensor_on_device(
+                ttnn.Shape([C * S, d.H]), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, mesh_device, dram
+            )
         probe = combine_planner_prepare(mesh_device, A=15, **self._planner_args)  # (outputs only: their addresses)
         self.combine = sparse_combine_rf_prepare(
             mesh_device,
@@ -523,6 +557,7 @@ class TtK3TokenSplitMoE:
             deterministic=deterministic,
             acc_on_ports=acc_on_ports,
             piece_max=max(7168, 2 * d.latent),  # (the L1 hand-off: one piece a row; a fabric payload >= row + 32 B)
+            shared_rows=dict(tensor=self.y_se) if self.shared_tp else None,
         )
         self.acc_on_ports = acc_on_ports
         self.A = len(self.combine.cells["accs"])
@@ -1130,10 +1165,12 @@ class TtK3TokenSplitMoE:
         ttnn.deallocate(a)
         return y
 
-    def routed(self, x, ids, wts, op, hook=None):
+    def routed(self, x, ids, wts, op, hook=None, shared=None):
         """routed_only: x [S, H] bf16 TILE (this chip's own tokens), ids uint16 / wts bf16 [S, K] (the caller's top-k;
         weights already normalized / scaled) and op (a FlatRoutedExpert of this block's plan: the layer's weights) ->
-        the routed experts' sum [S, H] bf16 TILE (a fresh tensor)."""
+        the routed experts' sum [S, H] bf16 TILE (a fresh tensor). shared (shared_tp: the layer's TtSharedTpRow): plus
+        the shared expert's output."""
+        assert (shared is not None) == self.shared_tp, "shared_tp blocks take the layer's shared expert, others none"
         mark = hook or (lambda _: None)
         if os.environ.get("K3_HOST_LOG") == "1":  # (host time per stage, no syncs: dispatch cost)
             import time as _t
@@ -1166,6 +1203,18 @@ class TtK3TokenSplitMoE:
         mark("arena_zero")
         xg = self.dispatch(x, prep)  # (also the barrier: every chip zeroed its arena before any chip's experts start)
         mark("dispatch")
+        own_se = None
+        if shared is not None:  # (the chip's slice on its row's tokens; the row-mates' partials go out in the combine)
+            # (block j: the owner in column (mine + j) % C, 0: my own tokens, last; the matmuls' circular buffers sit
+            # below the arena: L1's static region starts at ~61 KB, ~100 KB slack for what mm2d_fit does not count)
+            for j, r0, nr in self.se_pieces:
+                xs = self.se_tilize[(j, r0)](xg, rows=nr)
+                o = shared(ttnn.reshape(xs, [1, 1, nr, self.d.H]), l1_budget=self.arena_addr - 160 * 1024)
+                ttnn.deallocate(xs)
+                self.se_untilize[(j, r0)](ttnn.reshape(o, [nr, self.d.H]), self.y_se)
+                ttnn.deallocate(o)
+            own_se = self.se_own_tilize(self.y_se, rows=self.S)  # (block 0's rows: the own tokens' partial)
+            mark("shared")
         n0 = self.mesh.num_program_cache_entries() if os.environ.get("K3_CACHE_LOG") == "1" else None
         self.experts_combine(xg, pl, arena, op)
         if n0 is not None and self.mesh.num_program_cache_entries() > n0:
@@ -1178,6 +1227,11 @@ class TtK3TokenSplitMoE:
         mark("experts_combine")
         y = self.tilize(ttnn.reshape(self.out, [self.S, self.d.H]))
         mark("tilize")
+        if own_se is not None:
+            y2 = ttnn.add(y, own_se)
+            ttnn.deallocate(y)
+            ttnn.deallocate(own_se)
+            y = y2
         return y
 
     def __call__(self, x, keep=False, hook=None):

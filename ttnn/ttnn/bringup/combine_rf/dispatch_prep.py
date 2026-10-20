@@ -23,6 +23,7 @@ _ROUTE = (
     + r"""
 constexpr uint32_t K = __K__;
 constexpr uint32_t ME = __ME__;
+constexpr uint32_t ROWMATES = __ROWMATES__;
 constexpr uint8_t CHIP_OF[__E__] = {__CHIPS__};
 constexpr auto ids_args = TensorAccessorArgs<0>();
 constexpr auto route_args = TensorAccessorArgs<ids_args.next_compile_time_args_offset()>();
@@ -66,6 +67,7 @@ void kernel_main() {
             const uint32_t v = id2[k];
             m |= (1u << CHIP_OF[v & 0xFFFF]) | (1u << CHIP_OF[v >> 16]);
         }
+        m |= ROWMATES;  // (shared_rows: every token also to the other chips of my mesh row - the TP shared expert's x)
         m &= ~(1u << ME);
         if (m == 0) {
             put(t, 0, 0);
@@ -135,12 +137,15 @@ def dispatch_prep_prepare(
     rows=(8, 9),
     tokens_per_page=1,
     copy=True,
+    row_mates=False,
 ):
     """Returns run(joint_routing, own_rows, xbuf, route) (one generic_op: route words + own-row copy).
     joint_routing [N S, 2 K] uint16 row-major (replicated), own_rows [S, W] bf16 row-major, xbuf [1, 1, N S, W]
     row-major, route [1, 1, 1, RW S] uint32 (RW = route_words(N); outputs written in place). Cores (logical): n_route route cores on row
     rows[0] (each a token range: 8-word multiples, 32-byte aligned route writes), n_copy copy cores on row rows[1].
     copy=False: route words only (the own rows already in xbuf, e.g. layout_ops' untilize with a row offset; own None).
+    row_mates: every own token also goes to the other chips of this chip's mesh row (the TP shared expert's input: after
+    the dispatch each chip holds its row's tokens at slots (r C + c) S + t).
     """
     R, C = tuple(mesh_device.shape)
     N = R * C
@@ -185,6 +190,7 @@ def dispatch_prep_prepare(
                 .replace("__RW__", str(RW))
                 .replace("__K__", str(K))
                 .replace("__ME__", str(me))
+                .replace("__ROWMATES__", str(((1 << C) - 1) << (r * C) if row_mates else 0) + "u")
                 .replace("__E__", str(E))
                 .replace("__CHIPS__", chips_of)
                 .replace("__PT__", str(tokens_per_page))

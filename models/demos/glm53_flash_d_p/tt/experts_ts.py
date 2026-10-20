@@ -62,7 +62,11 @@ class TtExpertsTs:
         weights_dtype=ttnn.bfloat4_b,
         cache: bool = True,
         num_links: int = 2,
+        shared_weights=None,
     ):
+        """shared_weights (gate, up [I_s, H], down [H, I_s] torch, HF layout): the shared expert folded into the block
+        (split over each mesh row's chips, its partials summed by the combine): the call then returns routed + shared
+        and gathers no x for a separate shared expert."""
         from ttnn.bringup.flat_routed_expert_ttnn.flat_expert import FlatRoutedExpert
 
         assert float(limit) == 10.0, f"clamped_silu is fixed at limit 10, got {limit}"
@@ -75,6 +79,11 @@ class TtExpertsTs:
         self.max_seq_len = max_seq_len
         self.gids = default_gids(n, self.epc)
         self.gathered_x = None
+        self.shared = None
+        if shared_weights is not None:
+            from models.demos.glm53_flash_d_p.tt.shared_tp_row import TtSharedTpRow
+
+            self.shared = TtSharedTpRow(mesh, *shared_weights, limit=limit)
         wdtype = {ttnn.bfloat4_b: "bf4", ttnn.bfloat8_b: "bf8"}[weights_dtype]
         fake = isinstance(torch_weights, str)
         prefix = None
@@ -121,7 +130,7 @@ class TtExpertsTs:
     def _block(self, s):
         from models.demos.deepseek_v3_d_p.tt.moe.tt_k3_token_split_moe import K3Dims, TtK3TokenSplitMoE
 
-        key = (id(self.mesh), s, self.H, self.K, self.E)
+        key = (id(self.mesh), s, self.H, self.K, self.E, self.shared is not None)
         hit = _BLOCKS.get(key)
         # (built at the first call; rebuilt if L1 the model allocated since - e.g. a later op's first-call semaphores -
         # moved the arena: its address is baked into the kernels)
@@ -143,6 +152,7 @@ class TtExpertsTs:
                 rows_cap=-(-n * s * min(self.K, self.epc) // 32) * 32 + 32 * self.epc,
                 routed_only=True,
                 flat_layout=FLAT_LAYOUT,
+                shared_tp=self.shared is not None,
                 # (hang hunting: block variants, e.g. {"acc_on_ports": false} or {"deterministic": true})
                 **json.loads(os.environ.get("GLM_TS_BLOCK_OPTS", "{}")),
             )
@@ -194,7 +204,7 @@ class TtExpertsTs:
         import time as _t
 
         t0 = _t.perf_counter()
-        self.gathered_x = self._gather_x(x, n * s)
+        self.gathered_x = self._gather_x(x, n * s) if self.shared is None else None
         t1 = _t.perf_counter()
         blk = self._block(s)
         x2 = ttnn.reshape(x, [s, self.H])
@@ -204,7 +214,9 @@ class TtExpertsTs:
         if hk and hasattr(hk, "before_moe"):  # (hang hunting: GLM_HANG_HOOKS)
             hk.before_moe(ctx)
         op0 = ttnn._ttnn.get_device_operation_id()
-        y = blk.routed(x2, ttnn.reshape(idx, [s, self.K]), ttnn.reshape(wts, [s, self.K]), self.flat)
+        y = blk.routed(
+            x2, ttnn.reshape(idx, [s, self.K]), ttnn.reshape(wts, [s, self.K]), self.flat, shared=self.shared
+        )
         if hk and hasattr(hk, "after_moe"):
             hk.after_moe(ctx, y)
         if (
@@ -230,6 +242,20 @@ class TtExpertsTs:
 
 
 def build_experts_ts(mesh, loader, cfg, layer: int, max_chunk: int, weights_dtype=ttnn.bfloat4_b) -> TtExpertsTs:
+    """GLM_SHARED_EXPERT=folded (spec device.shared_expert): the layer's shared expert folded into the block."""
+    shared = None
+    mode = os.environ.get("GLM_SHARED_EXPERT", "separate")
+    assert mode in ("separate", "folded"), f"device.shared_expert: separate or folded, got {mode}"
+    if mode == "folded":
+        from models.demos.glm53_flash_d_p.reference.weights import PREFIX
+
+        p = f"{PREFIX}layers.{layer}.mlp.shared_experts."
+        shared = tuple(loader.weight(p + f"{n}_proj.weight") for n in ("gate", "up", "down"))
+    if not _HOST.get("logged_shared"):  # (the resolved option, once)
+        from loguru import logger
+
+        logger.info(f"GLM experts ts: shared expert {mode} (device.shared_expert)")
+        _HOST["logged_shared"] = True
     return TtExpertsTs(
         mesh,
         layer,
@@ -243,4 +269,5 @@ def build_experts_ts(mesh, loader, cfg, layer: int, max_chunk: int, weights_dtyp
         weights_dtype=weights_dtype,
         num_links=int(os.environ.get("GLM_MOE_LINKS", "1")),
         cache=os.environ.get("GLM_EXPERTS_CACHE", "1") != "0",
+        shared_weights=shared,
     )

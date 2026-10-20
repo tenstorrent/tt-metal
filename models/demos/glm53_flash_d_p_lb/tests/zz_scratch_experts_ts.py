@@ -11,7 +11,9 @@ a token subset, and ts against ag on all tokens.
     BRINGUP_SPEC=models/demos/glm53_flash_d_p_lb/bringup/spec.yaml \\
     scripts/run_safe_pytest.sh --mesh --no-precompile models/demos/glm53_flash_d_p_lb/tests/zz_scratch_experts_ts.py -s
 
-GLM_TS_CHUNK (default 5120), GLM_TS_POOL (default 4), GLM_TS_ROUTINGS (default uniform,hot)."""
+GLM_TS_CHUNK (default 5120), GLM_TS_POOL (default 4), GLM_TS_ROUTINGS (default uniform,hot). GLM_TS_SHARED=1: the
+shared expert (random, I_s 2048) folded into the ts block (TP over each mesh row, partials through the combine); the
+reference then includes it, and ag (routed only) is not compared."""
 
 import os
 
@@ -24,6 +26,8 @@ S_ = spec()
 pytestmark = device_timeout(S_)
 H, I, E, K = 4096, 2048, 288, 8
 T = int(os.environ.get("GLM_TS_CHUNK", "5120"))
+SHARED = os.environ.get("GLM_TS_SHARED") == "1"
+IS = 2048
 P = int(os.environ.get("GLM_TS_POOL", "4"))
 
 
@@ -60,6 +64,13 @@ def _reference(x, ids, w, pool, rows):
     return out
 
 
+def _shared_ref(x, se, rows):
+    gw, uw, dw = se
+    xs = x[rows]
+    a = torch.nn.functional.silu((xs @ gw.T).clamp(max=10.0)) * (xs @ uw.T).clamp(-10.0, 10.0)
+    return a @ dw.T
+
+
 def _rel(got, want):
     d = (got.double() - want.double()).norm(dim=-1) / want.double().norm(dim=-1).clamp(min=1e-30)
     return d.mean().item(), d.max().item()
@@ -91,13 +102,24 @@ def test_experts_ts(mesh_device):
     ]
     tw = _Pool(pool)
     kw = dict(num_experts=E, emb_dim=H, hidden_dim=I, top_k=K, max_seq_len=T, weights_dtype=ttnn.bfloat4_b, cache=False)
-    ts = TtExpertsTs(mesh_device, 4, tw, num_links=2, **kw)  # (first: its plan options are process-wide)
-    ag = TtExpertsAg(mesh_device, 4, tw, num_links=2, **kw)
+    se = (
+        (
+            torch.randn(IS, H, generator=g) * 0.02,
+            torch.randn(IS, H, generator=g) * 0.02,
+            torch.randn(H, IS, generator=g) * 0.02,
+        )
+        if SHARED
+        else None
+    )
+    ts = TtExpertsTs(mesh_device, 4, tw, num_links=2, shared_weights=se, **kw)  # (first: plan options process-wide)
+    ag = TtExpertsAg(mesh_device, 4, tw, num_links=2, **kw) if not SHARED else None
+    # (shared: the same routed experts without it, to isolate the shared expert's part: folded - routed only)
+    tr = TtExpertsTs(mesh_device, 4, tw, num_links=2, **kw) if SHARED else None
     for routing in os.environ.get("GLM_TS_ROUTINGS", "uniform,hot").split(","):
         x = (torch.randn(T, H, generator=g)).to(torch.bfloat16)
         ids, w = _routing(routing, g)
         outs = {}
-        for name, mod in (("ts", ts), ("ag", ag)):
+        for name, mod in (("ts", ts), ("ag", ag)) if not SHARED else (("ts", ts), ("tr", tr)):
             xd = split_from_host(mesh_device, x.view(1, 1, T, H))
             idd = split_from_host(mesh_device, ids.view(1, 1, T, K).to(torch.int32), dtype=ttnn.uint16)
             wd = split_from_host(mesh_device, w.view(1, 1, T, K).to(torch.bfloat16))
@@ -108,16 +130,29 @@ def test_experts_ts(mesh_device):
                 ttnn.deallocate(t_)
         rows = list(range(0, T, T // 256))
         ref = _reference(x.float(), ids, w, pool, rows)
-        for name in ("ts", "ag"):
+        if SHARED:
+            sref = _shared_ref(x.float(), se, rows)
+            ref = ref + sref
+            m, mx = _rel(outs["ts"][rows] - outs["tr"][rows], sref)
+            logger.info(
+                f"TS {routing}: shared part (folded - routed only) vs CPU fp32 on {len(rows)} tokens: rel L2 mean "
+                f"{m:.5f} max {mx:.5f}, PCC {_pcc(outs['ts'][rows] - outs['tr'][rows], sref):.6f}"
+            )
+            own = [t for t in rows if (t // (T // 8)) % 4 == 0]  # (tokens of column-0 chips: their own partial)
+            m2, _ = _rel(outs["ts"][own] - outs["tr"][own], _shared_ref(x.float(), se, own))
+            logger.info(f"TS {routing}: shared part on column-0 chips' tokens: rel L2 mean {m2:.5f}")
+        for name in ("ts", "ag") if not SHARED else ("ts",):
             m, mx = _rel(outs[name][rows], ref)
             logger.info(
                 f"TS {routing}: {name} vs CPU fp32 on {len(rows)} tokens: rel L2 mean {m:.4f} max {mx:.4f}, "
                 f"PCC {_pcc(outs[name][rows], ref):.6f}, finite {bool(torch.isfinite(outs[name]).all())}"
             )
-        m, mx = _rel(outs["ts"], outs["ag"])
-        logger.info(
-            f"TS {routing}: ts vs ag on {T} tokens: rel L2 mean {m:.4f} max {mx:.4f}, PCC {_pcc(outs['ts'], outs['ag']):.6f}"
-        )
+        if not SHARED:
+            m, mx = _rel(outs["ts"], outs["ag"])
+            logger.info(
+                f"TS {routing}: ts vs ag on {T} tokens: rel L2 mean {m:.4f} max {mx:.4f}, "
+                f"PCC {_pcc(outs['ts'], outs['ag']):.6f}"
+            )
         if os.environ.get("GLM_TS_PROF") == "1":  # (host time of the ts call, no syncs: where it goes)
             import cProfile
             import pstats

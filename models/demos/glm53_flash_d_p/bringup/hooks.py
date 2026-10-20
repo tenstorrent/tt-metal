@@ -590,6 +590,9 @@ DEVICE_SETTINGS = {
     "experts_fidelity": "GLM_EXPERTS_FIDELITY",  # routed experts math fidelity (default HiFi4)
     "attn_fidelity": "GLM_ATTN_FIDELITY",  # MLA, sparse SDPA, indexer, q_a, KDA (default HiFi4)
     "moe_links": "GLM_MOE_LINKS",  # fabric links for dispatch / combine / offset_cumsum (default 1)
+    # the shared expert: separate (default; its own gather / reduce-scatter) or folded into the token-split block
+    # (GLM_EXPERTS_MODE=ts: split over each mesh row, its x in the dispatch, its partials in the combine)
+    "shared_expert": "GLM_SHARED_EXPERT",
 }
 
 

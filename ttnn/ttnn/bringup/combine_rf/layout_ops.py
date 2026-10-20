@@ -112,10 +112,14 @@ void kernel_main() {
 """
 
 
-def layout_op_prepare(mesh_device, kind, *, cw=8, pages_per_row=1, out_memory_config=None, row0_of=None, exclude=()):
+def layout_op_prepare(
+    mesh_device, kind, *, cw=8, pages_per_row=1, out_memory_config=None, row0_of=None, exclude=(), src_tile_of=None
+):
     """kind "tilize": run(src [rows, W] bf16 ROW_MAJOR) -> [rows, W] bf16 TILE; "untilize": the reverse. DRAM
     interleaved in and out; rows % 32 == 0, W % (32 * cw) == 0. pages_per_row P: the row-major side stores each row as
-    P pages ([rows * P, W / P], e.g. P 2 at W 7168: pages that fit a fabric packet)."""
+    P pages ([rows * P, W / P], e.g. P 2 at W 7168: pages that fit a fabric packet). src_tile_of (tilize):
+    ((mesh row, column), output row tile) -> the source row tile on that chip (a per-chip gather of 32-row blocks;
+    run(src, rows=) then gives the output's row count)."""
     assert kind in ("tilize", "untilize")
     grid = mesh_device.compute_with_storage_grid_size()
     ex = {(c.x, c.y) for c in exclude}  # (cores left to another op merged into the same program)
@@ -145,11 +149,12 @@ def layout_op_prepare(mesh_device, kind, *, cw=8, pages_per_row=1, out_memory_co
         used = [i for i in range(len(cores)) if per[i]]
         crs = ttnn.CoreRangeSet([ttnn.CoreRange(cores[i], cores[i]) for i in used])
 
-        def args(row0):
+        def args(row0, chip=None):
             rd_rt, wr_rt, cp_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
+            remap = (lambda u: (src_tile_of(chip, u >> 16) << 16) | (u & 0xFFFF)) if src_tile_of else (lambda u: u)
             for i in used:
                 c_ = cores[i]
-                rd_rt[c_.x][c_.y] = [int(src.buffer_address()), len(per[i])] + per[i]
+                rd_rt[c_.x][c_.y] = [int(src.buffer_address()), len(per[i])] + [remap(u) for u in per[i]]
                 wr_rt[c_.x][c_.y] = (
                     [int(dst.buffer_address()), len(per[i])] + ([row0] if kind == "untilize" else []) + per[i]
                 )
@@ -166,8 +171,8 @@ def layout_op_prepare(mesh_device, kind, *, cw=8, pages_per_row=1, out_memory_co
 
         swap = os.environ.get("LAYOUT_NOC", "swap") == "swap"  # (reads on NOC0, writes on NOC1)
 
-        def program_for(row0):
-            rd_rt, wr_rt, cp_rt = args(row0)
+        def program_for(row0, chip=None):
+            rd_rt, wr_rt, cp_rt = args(row0, chip)
             program = ttnn.ProgramDescriptor()
             program.cbs = [
                 ttnn.CBDescriptor(
@@ -213,7 +218,13 @@ def layout_op_prepare(mesh_device, kind, *, cw=8, pages_per_row=1, out_memory_co
         if per_chip:  # ((r, c) -> its program: for merging with another op's)
             return {(r, c): program_for(row0_of(r, c) if row0_of else 0) for r in range(R) for c in range(C)}
         mesh_desc = ttnn.MeshProgramDescriptor()
-        if row0_of is None:
+        if src_tile_of is not None:  # (a program per chip: its gather)
+            for r in range(R):
+                for c in range(C):
+                    mesh_desc[
+                        ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(r, c), ttnn.MeshCoordinate(r, c))
+                    ] = program_for(0, (r, c))
+        elif row0_of is None:
             mesh_desc[
                 ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(0, 0), ttnn.MeshCoordinate(R - 1, C - 1))
             ] = program_for(0)
@@ -225,14 +236,18 @@ def layout_op_prepare(mesh_device, kind, *, cw=8, pages_per_row=1, out_memory_co
                     ] = program_for(row0_of(r, c))
         return mesh_desc
 
-    def run(src, dst=None):
-        """dst (untilize): an existing row-major [>= row0 + rows, W] tensor (rows from row0_of), else a new one."""
+    def run(src, dst=None, rows=None):
+        """dst (untilize): an existing row-major [>= row0 + rows, W] tensor (rows from row0_of), else a new one; dst
+        (tilize): an existing TILE [rows, W] tensor (kept: e.g. a persistent buffer), else a new one. rows (tilize
+        with src_tile_of): the output's rows."""
+        rows_out = rows
         rows, W = int(src.shape[-2]), int(src.shape[-1])
         if kind == "tilize":  # (src [rows * P, W / P])
-            rows, W = rows // P, W * P
-            dst = ttnn.allocate_tensor_on_device(
-                ttnn.Shape([rows, W]), ttnn.bfloat16, ttnn.TILE_LAYOUT, mesh_device, out_mc
-            )
+            rows, W = (rows_out if rows_out is not None else rows // P), W * P
+            if dst is None:
+                dst = ttnn.allocate_tensor_on_device(
+                    ttnn.Shape([rows, W]), ttnn.bfloat16, ttnn.TILE_LAYOUT, mesh_device, out_mc
+                )
         elif dst is None:
             dst = ttnn.allocate_tensor_on_device(
                 ttnn.Shape([rows * P, W // P]),

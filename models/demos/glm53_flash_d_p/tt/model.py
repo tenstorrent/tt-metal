@@ -237,8 +237,11 @@ class TtGlmBlock:
             self.experts = build_experts(
                 mesh, loader, cfg, layer, max(chunks), weights_dtype=experts_dtype or ttnn.bfloat8_b
             )
-            self.shared = build_mlp(mesh, loader, cfg, layer, name="mlp.shared_experts")
-            add = build_moe_add(cfg)
+            # (the token-split block with the shared expert folded in returns routed + shared: no separate one, the add
+            # passes the experts' output through)
+            folded = getattr(self.experts, "shared", None) is not None
+            self.shared = None if folded else build_mlp(mesh, loader, cfg, layer, name="mlp.shared_experts")
+            add = (lambda a, b: a) if folded else build_moe_add(cfg)
 
             from models.demos.glm53_flash_d_p.tt.experts_ag import TtExpertsAg
             from models.demos.glm53_flash_d_p.tt.experts_ts import TtExpertsTs
@@ -276,6 +279,8 @@ class TtGlmBlock:
                 # idx and weights over the whole mesh in one call each (MiMo's gather_full); the shared expert reuses
                 # the gathered x as before
                 def shared_full(ctx, x):
+                    if self.shared is None:  # (folded into the experts' block)
+                        return None
                     return self.shared(self.experts.gathered_x, split=True)
 
                 steps.update(
@@ -385,8 +390,8 @@ def _freeing(fn, inputs, dead):
 
     def wrapped(ctx, *args):
         y = fn(ctx, *args)
-        for p in pos:
-            if args[p].is_allocated():
+        for p in pos:  # (not a pass-through output, nor a step that returned nothing)
+            if args[p] is not None and args[p] is not y and args[p].is_allocated():
                 ttnn.deallocate(args[p])
         return y
 
