@@ -165,7 +165,8 @@ tt::tt_metal::ProgramDescriptor MoEGateMMDeviceOperation::create_descriptor(
         bank2tile_id[ring_pos2bank_id[core_id]] = tile_id++;
     }
 
-    const auto& collector_core = device->worker_core_from_logical_core(dram_bank2core_coords[ring_pos2bank_id[11]]);
+    const auto collector_logical = dram_bank2core_coords[ring_pos2bank_id[11]];
+    const auto& collector_core = device->worker_core_from_logical_core(collector_logical);
     const auto& first_core = device->worker_core_from_logical_core(dram_bank2core_coords[ring_pos2bank_id[0]]);
 
     const KernelDescriptor::NamedCompileTimeArgs named_compile_time_args = {
@@ -276,6 +277,18 @@ tt::tt_metal::ProgramDescriptor MoEGateMMDeviceOperation::create_descriptor(
         runtime_args.push_back(is_sender ? neighbors[4] : 0u);
         runtime_args.push_back(core_id);
         runtime_args.push_back(kCollectorSemaphoreId);
+        // Unicast targets: a dispatch core inside the ring rectangle would consume one multicast slot.
+        if (core == collector_logical) {
+            for (uint32_t ring_pos = 1; ring_pos < num_cores; ++ring_pos) {
+                if ((ring_pos % 3) == 0 || ring_pos + 1 == num_cores) {
+                    continue;
+                }
+                const auto& receiver =
+                    device->worker_core_from_logical_core(dram_bank2core_coords[ring_pos2bank_id[ring_pos]]);
+                runtime_args.push_back(receiver.x);
+                runtime_args.push_back(receiver.y);
+            }
+        }
 
         dm0_kernel.emplace_runtime_args(core, runtime_args);
         dm1_kernel.emplace_runtime_args(core, runtime_args);

@@ -141,8 +141,6 @@ void kernel_main() {
     //-------------------------------------------------------------------------
     uint32_t semaphore_addr = get_semaphore(partial_semaphore);
     volatile tt_l1_ptr uint32_t* my_semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(semaphore_addr);
-    Semaphore<> partial_sem(partial_semaphore);
-    Noc noc_obj(1);
 
     const uint64_t partial_semaphore_noc_addr1 =
         get_noc_addr(neighbor1_physical_x, neighbor1_physical_y, semaphore_addr);
@@ -197,8 +195,6 @@ void kernel_main() {
     // Group masks (1 collector core -> 7 cores)
     //-------------------------------------------------------------------------
     const uint32_t local_group_masks_addr = cb_w2c_in5.get_write_ptr();
-    const uint64_t group_masks_noc_addr = get_noc_multicast_addr(
-        first_physical_x, first_physical_y, collector_physical_x, collector_physical_y, local_group_masks_addr);
     //-------------------------------------------------------------------------
     // Top8 partials (7 cores -> 1 collector core)
     //-------------------------------------------------------------------------
@@ -375,23 +371,25 @@ void kernel_main() {
         // Get the group masks
         //-----------------------------------------------------------------
         cb_w2c_in5.wait_front(1);
-        // Multicast this data to all the cores
-        noc_async_write_multicast_one_packet(
-            local_group_masks_addr, group_masks_noc_addr, /*size=*/2048, /*num_dests=*/7);
-        // Free the multicast path before the partial-semaphore set, or a destination can miss it.
-        noc_async_write_barrier();
-
-        // Set the semaphore to let the clients know they got the data
+        // Unicast each worker. The ring rectangle includes a dispatch core when dispatch is on a row.
         *my_semaphore_ptr = 1;
-        partial_sem.set_multicast(
-            noc_obj,
-            first_physical_x,
-            first_physical_y,
-            collector_physical_x,
-            collector_physical_y,
-            /*num_dests=*/7,
-            /*linked=*/false);
+        constexpr uint32_t num_mask_receivers = 7;
+        for (uint32_t receiver = 0; receiver < num_mask_receivers; ++receiver) {
+            const uint32_t receiver_x = get_arg_val<uint32_t>(argidx + (receiver * 2));
+            const uint32_t receiver_y = get_arg_val<uint32_t>(argidx + (receiver * 2) + 1);
+            noc_async_write(
+                local_group_masks_addr,
+                get_noc_addr(receiver_x, receiver_y, local_group_masks_addr),
+                /*size=*/2048,
+                /*noc=*/1,
+                vchannel);
+        }
         noc_async_write_barrier();
+        for (uint32_t receiver = 0; receiver < num_mask_receivers; ++receiver) {
+            const uint32_t receiver_x = get_arg_val<uint32_t>(argidx + (receiver * 2));
+            const uint32_t receiver_y = get_arg_val<uint32_t>(argidx + (receiver * 2) + 1);
+            noc_semaphore_set_remote(semaphore_addr, get_noc_addr(receiver_x, receiver_y, semaphore_addr), /*noc=*/1);
+        }
 
         cb_w2c_in5.pop_front(1);
 
