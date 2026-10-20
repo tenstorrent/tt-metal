@@ -13,6 +13,8 @@
 #include "cmath_common.h"
 #include "llk_assert.h"
 #include "llk_math_common.h"
+#include "tensor_shape.h"
+#include "tensor_shape_coverage_math.h"
 
 using namespace ckernel;
 
@@ -33,13 +35,20 @@ inline void eltwise_unary_configure_addrmod(const std::uint32_t dst_format);
  * @param dst_index: Tile index into the destination register.
  * @param src_format: Source data format (DataFormat enum underlying value).
  * @param dst_format: Destination data format (DataFormat enum underlying value).
+ * @param tensor_shape: Tile geometry; must match the one passed to @ref _llk_math_eltwise_unary_datacopy_init_.
  * @note Call @ref _llk_math_eltwise_unary_datacopy_init_ with matching template args before this function, and
  *       @ref _llk_math_eltwise_unary_datacopy_uninit_ after it to restore modified state.
  * @note On the unpack thread, @ref _llk_unpack_A_ must feed the tile into SrcA/SrcB (or dest for unpack-to-dest).
  */
 template <DataCopyType type, DstSync Dst, bool is_fp32_dest_acc_en, BroadcastType src_b_bcast_type = BroadcastType::NONE, bool unpack_to_dest = false>
-inline void _llk_math_eltwise_unary_datacopy_(const std::uint32_t dst_index, const std::uint32_t src_format, const std::uint32_t dst_format)
+inline void _llk_math_eltwise_unary_datacopy_(
+    const std::uint32_t dst_index,
+    const std::uint32_t src_format,
+    const std::uint32_t dst_format,
+    const ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE)
 {
+    LLK_VALIDATE_TENSOR_SHAPE_MATH("_llk_math_eltwise_unary_datacopy_", tensor_shape);
+
     if (unpack_to_dest && is_32bit_input(src_format, dst_format))
     {
         math_unpack_to_dest_math_ready();
@@ -351,12 +360,16 @@ inline void eltwise_unary_configure_addrmod(const std::uint32_t dst_format)
  * @tparam is_int_fpu_en: Enable integer FPU datapath (forces the ELWADD move path like FP32 dest).
  * @param rows_per_inst: Rows moved per instruction (selects single-row vs. multi-row addr mode and loop count).
  * @param total_rows: Total rows to move across the inner loop.
- * @param num_faces: Number of faces in the tile.
+ * @param tensor_shape: Tile geometry; only the total face count is used today.
  * @param dst_format: Destination data format (DataFormat enum underlying value); selects UInt16 special-casing.
  */
 template <DataCopyType type, bool is_fp32_dest_acc_en, BroadcastType bcast_type = BroadcastType::NONE, bool is_int_fpu_en = false>
-inline void eltwise_unary_configure_mop(std::uint32_t rows_per_inst, std::uint32_t total_rows, const std::uint32_t num_faces, const std::uint32_t dst_format)
+inline void eltwise_unary_configure_mop(
+    std::uint32_t rows_per_inst, std::uint32_t total_rows, const ckernel::TensorShape tensor_shape, const std::uint32_t dst_format)
 {
+    LLK_VALIDATE_TENSOR_SHAPE_MATH("eltwise_unary_configure_mop", tensor_shape);
+    const std::uint32_t num_faces = tensor_shape.total_num_faces();
+
     // always move 32x32 tile, packed as 16x16x4
 
     if constexpr (type == DataCopyType::A2D)
@@ -475,25 +488,28 @@ inline void eltwise_unary_configure_mop(std::uint32_t rows_per_inst, std::uint32
  * @tparam is_fp32_dest_acc_en: Enable FP32 accumulation in the destination register.
  * @tparam src_b_bcast_type: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>
  * @tparam is_int_fpu_en: Enable integer FPU datapath.
- * @param num_faces: Number of faces in the tile (must be 1, 2, or 4).
+ * @param tensor_shape: Tile geometry (face_r_dim, face grid). Total face count must be 1, 2, or 4.
  * @param dst_format: Destination data format (DataFormat enum underlying value); 255 means unset.
  * @note On the unpack thread, pair with @ref _llk_unpack_A_init_ which feeds the tile.
  * @note @ref _llk_math_eltwise_unary_datacopy_ runs the configured op with matching template args.
  */
 template <DataCopyType type, bool is_fp32_dest_acc_en, BroadcastType src_b_bcast_type = BroadcastType::NONE, bool is_int_fpu_en = false>
-inline void _llk_math_eltwise_unary_datacopy_init_(const std::uint32_t num_faces = 4, const std::uint32_t dst_format = 255)
+inline void _llk_math_eltwise_unary_datacopy_init_(
+    const ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE, const std::uint32_t dst_format = 255)
 {
-    LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
+    LLK_VALIDATE_TENSOR_SHAPE_MATH("_llk_math_eltwise_unary_datacopy_init_", tensor_shape);
+    LLK_ASSERT(
+        tensor_shape.total_num_faces() == 1 || tensor_shape.total_num_faces() == 2 || tensor_shape.total_num_faces() == 4, "num_faces must be 1, 2, or 4");
 
     eltwise_unary_configure_addrmod<type, src_b_bcast_type>(dst_format);
 
     if constexpr (type == DataCopyType::A2D && src_b_bcast_type == BroadcastType::NONE)
     {
-        eltwise_unary_configure_mop<type, is_fp32_dest_acc_en, src_b_bcast_type, is_int_fpu_en>(p_mova2d::MOV_8_ROWS, 16, num_faces, dst_format);
+        eltwise_unary_configure_mop<type, is_fp32_dest_acc_en, src_b_bcast_type, is_int_fpu_en>(p_mova2d::MOV_8_ROWS, 16, tensor_shape, dst_format);
     }
     else if constexpr (type == DataCopyType::B2D)
     {
-        eltwise_unary_configure_mop<type, false, src_b_bcast_type>(p_movb2d::MOV_4_ROWS, 16, num_faces, dst_format);
+        eltwise_unary_configure_mop<type, false, src_b_bcast_type>(p_movb2d::MOV_4_ROWS, 16, tensor_shape, dst_format);
     }
 
     TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0);
