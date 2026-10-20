@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ast
+import importlib
 import inspect
 from pathlib import Path
 from types import SimpleNamespace
@@ -17,6 +18,7 @@ from models.common.sampling.generator import (
 )
 from models.common.warmup.warmup_utils import WarmupForwardMixin
 from models.tt_transformers.tt.common import Mode
+from models.tt_transformers.tt.generator import Generator
 
 
 def _fake_sampling_generator():
@@ -402,10 +404,6 @@ def test_shared_generator_rejects_cross_lane_sampling_remap(expect_error):
 def test_adapter_forwards_deferred_decode(adapter_path, forwarded_width, monkeypatch):
     """A device grammar adapter hands the deferred decode to the shared Generator."""
     pytest.importorskip("vllm")
-    import importlib
-
-    from models.tt_transformers.tt.generator import Generator
-
     module_name, class_name = adapter_path.split(":")
     adapter = getattr(importlib.import_module(module_name), class_name)
     forwarded = []
@@ -422,9 +420,10 @@ def test_adapter_forwards_deferred_decode(adapter_path, forwarded_width, monkeyp
     sampling = SimpleNamespace(set_trace_bucket=buckets.append)
     wrapper.model = [SimpleNamespace(num_devices=4, args=SimpleNamespace(max_batch_size=8), sampling=sampling)]
     wrapper.data_parallel = 1  # read by Generator.__del__
-    # Three active rows; the runner marks padded rows with position -1.
-    tokens = torch.zeros(8, 1, dtype=torch.int32)
-    start_pos = torch.tensor([7, 7, 7, -1, -1, -1, -1, -1], dtype=torch.int32)
+    # Distinct rows, so a forwarded row can be matched to its source. Three are active;
+    # the runner marks padded rows with position -1.
+    tokens = torch.arange(100, 108, dtype=torch.int32).reshape(8, 1)
+    start_pos = torch.tensor([10, 11, 12, -1, -1, -1, -1, -1], dtype=torch.int32)
 
     result = adapter.decode_forward(
         wrapper,
