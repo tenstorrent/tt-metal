@@ -30,7 +30,7 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.deepseek_v3_d_p.reference.kda import KDAConfig
 from models.demos.deepseek_v3_d_p.reference.kda.weights import normalize_kda_state_dict
-from models.demos.deepseek_v3_d_p.tt.kda.config import KDAProgramConfig
+from models.demos.deepseek_v3_d_p.tt.kda.config import KDAProgramConfig, KDARecurrenceProgramConfig
 from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState, ttKDA
 from models.demos.deepseek_v3_d_p.tt.kda.weights import KDAWeights, load_kda_weights
 from models.demos.glm53_flash.tt.config import GLM53FlashConfig
@@ -194,10 +194,18 @@ class TtKDA(LightweightModule):
             raise ValueError(f"active_seq_len must be a multiple of {ttnn.TILE_SIZE}, got {active_seq_len}")
         layer = self._prefill_layers.get(active_seq_len)
         if layer is None:
+            kw = {}
+            if self.mesh.rows > 1:
+                # sequence-parallel over the rows: the grouped scan needs summary_group_chunks to divide the
+                # LOCAL chunk count (active_seq_len / rows / 32); largest divisor <= the default 20
+                local_chunks = active_seq_len // self.mesh.rows // ttnn.TILE_SIZE
+                g = max(d for d in range(1, min(20, local_chunks) + 1) if local_chunks % d == 0)
+                kw["recurrence"] = KDARecurrenceProgramConfig(summary_group_chunks=g)
             program_config = KDAProgramConfig(
                 gated_rms_output_dtype=ttnn.bfloat16,
                 input_projection_math_fidelity=ttnn.MathFidelity.HiFi2,
                 output_projection_math_fidelity=ttnn.MathFidelity.HiFi2,
+                **kw,
             )
             tt_ccl = None
             if self.mesh.tp > 1:
