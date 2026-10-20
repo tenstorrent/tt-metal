@@ -110,17 +110,18 @@ def fixed_pool_pages(*, num_users, max_seq_len, sp) -> int:
 
 
 def fixed_page_table(*, num_users, max_seq_len, sp, chunk_size) -> torch.Tensor:
-    """The page table a runner installs while it, not the engine, places the pages: each row (slot) owns pages for
-    its whole capacity in a pool of fixed_pool_pages, shuffled within each rank's pool by a fixed seed. Every
-    pipeline rank derives the same table, so rank 0 can address every stage's pages, and a read that skipped the
-    translation would not pass for a slot cache."""
-    pages = page_table_width(max_seq_len)
-    owner = [page_owner(q, chunk_local=chunk_size // sp, sp=sp) for q in range(pages)]
-    num_pages = fixed_pool_pages(num_users=num_users, max_seq_len=max_seq_len, sp=sp)
-    assert all(num_users * owner.count(rank) == num_pages for rank in range(sp)), "slots must split evenly over ranks"
-    gen = torch.Generator().manual_seed(0)
-    free = [torch.randperm(num_pages, generator=gen).tolist() for _ in range(sp)]
-    return torch.tensor([[free[owner[q]].pop() for q in range(pages)] for _ in range(num_users)], dtype=torch.int32)
+    """The page table a runner installs while it, not the engine, places the pages: row (slot) r owns the r-th run
+    of each rank's pool (fixed_pool_pages / num_users pages), in position order, so every slot keeps its whole
+    capacity. Every pipeline rank derives the same table, so rank 0 can address every stage's pages; the addresses
+    repeat with the slot, so the KV chunk table published for migration stays compact."""
+    chunk_local = chunk_size // sp
+    assert chunk_local % PAGE_SIZE == 0, f"a chunk's per-chip run ({chunk_local}) must be whole {PAGE_SIZE}-token pages"
+    assert max_seq_len % chunk_size == 0, f"max_seq_len ({max_seq_len}) must be whole {chunk_size}-token chunks"
+    per_run = chunk_local // PAGE_SIZE  # pages per rank per chunk
+    q = torch.arange(page_table_width(max_seq_len))
+    local = q // (per_run * sp) * per_run + q % per_run  # q's index among its rank's pages
+    per_slot = fixed_pool_pages(num_users=1, max_seq_len=max_seq_len, sp=sp)
+    return (torch.arange(num_users)[:, None] * per_slot + local).to(torch.int32)
 
 
 def set_page_table(kv_cache: MiniMaxKVCache, table: torch.Tensor) -> None:
