@@ -1392,6 +1392,7 @@ struct detail::BinaryFpuImpl : BinaryFpuTag {
             (Op == BinaryFpuOp::Add)   ? ckernel::EltwiseBinaryType::ELWADD
             : (Op == BinaryFpuOp::Sub) ? ckernel::EltwiseBinaryType::ELWSUB
                                        : ckernel::EltwiseBinaryType::ELWMUL> &&
+        !ckernel::detail::BCAST_F32_OFF<static_cast<ckernel::BroadcastType>(static_cast<uint8_t>(Bcast))> &&
         Bcast != BroadcastDim::None && Accumulation == DestAccumulation::Disabled && !same_dfb &&
         (AMapping == InputTileMapping::Block || AMapping == InputTileMapping::Row);
 

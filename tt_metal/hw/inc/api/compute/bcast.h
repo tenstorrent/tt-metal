@@ -59,6 +59,17 @@ constexpr SrcDvalid bcast_src_dvalid =
     op == EltwiseBinaryType::ELWMUL && !(dim == BroadcastType::COL && BCAST_COL_PER_FACE) ? BCAST_MUL_SRC_DVALID
                                                                                          : SrcDvalid::PerFace;
 // ELTWISE_BINARY_BCAST_BLOCK_UNPACK true (seen by all three threads): any_tiles_bcast_block unpacks its tile pairs with one call.
+constexpr bool any_float32_buffer() {
+    for (std::uint32_t i = 0; i < sizeof(unpack_src_format) / sizeof(unpack_src_format[0]); ++i) {
+        if (unpack_src_format[i] == static_cast<std::uint8_t>(DataFormat::Float32)) {
+            return true;
+        }
+    }
+    return false;
+}
+// A Float32 buffer reads slower with the block unpack in the broadcasts below (harness, per tile pipeline fill).
+template <BroadcastType dim>
+constexpr bool BCAST_F32_OFF = any_float32_buffer() && (dim == BroadcastType::SCALAR || dim == BroadcastType::ROW);
 #if defined(ELTWISE_BINARY_BCAST_BLOCK_UNPACK)
 constexpr bool BCAST_BLOCK_UNPACK = (ELTWISE_BINARY_BCAST_BLOCK_UNPACK);
 #else
@@ -373,7 +384,7 @@ template <
 ALWI void any_tiles_bcast_block(
     uint32_t icb0, uint32_t icb1, uint32_t start_itile0, uint32_t start_itile1, uint32_t start_idst, uint32_t ntiles) {
 #if defined(ARCH_BLACKHOLE)
-    if constexpr (detail::bcast_block_unpack<tBcastOp>) {
+    if constexpr (detail::bcast_block_unpack<tBcastOp> && !detail::BCAST_F32_OFF<tBcastDim>) {
         UNPACK((llk_unpack_AB_block<false, fixed_b, tBcastDim>(icb0, icb1, start_itile0, start_itile1, ntiles)));
 #ifdef TRISC_MATH
         // As binary_block: above LoFi the math thread binds, so the tiles run as one call
