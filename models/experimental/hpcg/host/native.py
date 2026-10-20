@@ -55,7 +55,7 @@ def _build():
     lib.hpcg_build_level.argtypes = [I32, I32, I32, i32p, i32p, i32p, i64p, I64, I64, i64p, i64p, f32p, i32p, f32p]
     lib.hpcg_link.restype = I64
     geo = [I32, I32, I32, i32p, i32p, i32p, i64p]  # nx, nbands, nl, line_band, band_y0, band_ny, band_start
-    lib.hpcg_link.argtypes = geo + [I64] + geo + [I64, i64p, f64p, i64p, f64p]
+    lib.hpcg_link.argtypes = geo + [I64] + geo + [I64, i32p, f32p, i32p, f32p]
     lib.hpcg_plan_meta.restype = I64
     lib.hpcg_plan_meta.argtypes = [I32, I32, I32] + [i64p] * 12 + [I64, I64, ctypes.c_void_p] + [i64p] * 3
     lib.hpcg_plan_windows_stencil.restype = I64

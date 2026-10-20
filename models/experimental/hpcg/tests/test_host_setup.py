@@ -47,8 +47,13 @@ def test_plan_matches_numpy(nx, bands, exchange):
     ng = L.P // 16 + 2
     got = SparseRowPlan._plan_native(native.lib(), L.COL_rows, p.own, exchange, ng, 0)
     want = SparseRowPlan._plan_numpy(L.COL_rows, L.P, p.own, exchange, ng, 0)
-    assert len(got[0]) == len(want[0])
-    for (gl, gn, g1), (wl, wn, w1) in zip(got[0], want[0]):
+
+    def per_core(f):  # ([nc, maxp] lo, len, l1, pieces per core) -> per-core (lo, len, l1)
+        lo, ln, l1, n = f
+        return [(lo[k, : n[k]], ln[k, : n[k]], l1[k, : n[k]]) for k in range(len(n))]
+
+    assert np.array_equal(got[0][3], want[0][3])
+    for (gl, gn, g1), (wl, wn, w1) in zip(per_core(got[0]), per_core(want[0])):
         assert np.array_equal(gl, wl) and np.array_equal(gn, wn) and np.array_equal(g1, w1)
     assert np.array_equal(got[1], want[1]), "offsets"
     assert np.array_equal(got[2], want[2]), "own L1 offsets"

@@ -82,10 +82,13 @@ class SparseRowPlan:
             pieces, off, own_l1, ents = self._plan_native(lib, COL, own, exchange, ng, src_regions[0][0])
         else:
             pieces, off, own_l1, ents = self._plan_numpy(COL, pout, own, exchange, ng, src_regions[0][0])
+        plo, pln, pl1, npc = pieces  # [nc, maxp] each (zero past npc[k]), and pieces per core
+        pieces = [(plo[k, : npc[k]], pln[k, : npc[k]], pl1[k, : npc[k]]) for k in range(nc)]  # views, no copies
+        words = pln.sum(axis=1)
         # window CB bytes: a multiple of 512 (ZEROX clears it in 512-B pieces from the hardware zero region)
-        self.win_b = -(-int(max(int(p[1].sum()) for p in pieces)) * 4 // 512) * 512
-        self.win_words = [int(p[1].sum()) for p in pieces]
-        self.R = max(len(p[0]) for p in pieces)
+        self.win_b = -(-int(words.max()) * 4 // 512) * 512
+        self.win_words = words.tolist()
+        self.R = int(npc.max())
         self.off = off
         # exchange lists (GS): rows [s, f) of block b owned by k that sit in a window piece of m -> (m's NoC x, y,
         # s, f, L1 byte offset of s in m's window), grouped by (k, b) in their original order
@@ -130,26 +133,22 @@ class SparseRowPlan:
                 break
         else:
             raise ValueError(f"a core needs more than {maxp} window pieces")
-        pieces = [
-            (
-                plo[k * maxp : k * maxp + npc[k]].copy(),
-                pln[k * maxp : k * maxp + npc[k]].copy(),
-                pl1[k * maxp : k * maxp + npc[k]].copy(),
-            )
-            for k in range(nc)
-        ]
-        own_l1 = np.zeros((nc, NB), np.int64)
-        for k in range(nc):  # the window piece holding each block's own rows
-            lo, ln, l1 = pieces[k]
-            a, e = own[k, :, 0], own[k, :, 1]
-            p0 = np.searchsorted(lo, a, side="right") - 1
-            has = e > a
-            assert np.all(e[has] <= lo[p0[has]] + ln[p0[has]]), "own rows split over window pieces"
-            own_l1[k, has] = l1[p0[has]] + (a[has] - lo[p0[has]]) * 4
+        lo2, ln2, l12 = (x.reshape(nc, maxp) for x in (plo, pln, pl1))
+        # the window piece holding each block's own rows, for every core at once: each core's pieces are sorted by
+        # lo, so (core, lo) keys are sorted over all cores (unused slots sort last within their core)
+        big = 1 << 40
+        used = np.arange(maxp)[None, :] < npc[:, None]
+        keys = (np.arange(nc)[:, None] * big + np.where(used, lo2, big - 1)).reshape(-1)
+        a, e = own[:, :, 0], own[:, :, 1]
+        f = np.searchsorted(keys, (np.arange(nc)[:, None] * big + a).reshape(-1), side="right").reshape(nc, NB) - 1
+        has = e > a
+        plo_f, pln_f, pl1_f = (x.reshape(-1)[f] for x in (lo2, ln2, l12))
+        assert np.all((e <= plo_f + pln_f)[has]), "own rows split over window pieces"
+        own_l1 = np.where(has, pl1_f + (a - plo_f) * 4, 0)
         n = lib.hpcg_plan_exchange(nc, NB, own_f, maxp, plo, pln, pl1, npc, None)
         ents = np.zeros((n, 6), np.int64)
         lib.hpcg_plan_exchange(nc, NB, own_f, maxp, plo, pln, pl1, npc, ents.ctypes.data)
-        return pieces, None, own_l1, ents
+        return (lo2, ln2, l12, npc), None, own_l1, ents
 
     @staticmethod
     def _plan_native(lib, COL, own, exchange, ng, empty_lo):
@@ -172,14 +171,7 @@ class SparseRowPlan:
             nslot, stride, COL, nc, NB, own_f, int(exchange), GRAN, ng, maxp, plo, pln, pl1, npc, stride, off, own_l1
         )
         assert bad == 0, "column outside its window piece, or own rows split over pieces"
-        pieces = [
-            (
-                plo[k * maxp : k * maxp + npc[k]].copy(),
-                pln[k * maxp : k * maxp + npc[k]].copy(),
-                pl1[k * maxp : k * maxp + npc[k]].copy(),
-            )
-            for k in range(nc)
-        ]
+        pieces = tuple(x.reshape(nc, maxp) for x in (plo, pln, pl1)) + (npc,)
         ents = np.zeros((0, 6), np.int64)
         if exchange:
             n = lib.hpcg_plan_exchange(nc, NB, own_f, maxp, plo, pln, pl1, npc, None)
@@ -241,7 +233,12 @@ class SparseRowPlan:
                                 continue
                             s, f = max(int(A[k]), plo), min(int(E[k]), phi)
                             ents.append((int(k), b, m, s, f, int(l1[p]) + (s - plo) * 4))
-        return pieces, off, own_l1, ents
+        npc = np.asarray([len(p[0]) for p in pieces], np.int64)
+        flat = [np.zeros((nc, int(npc.max())), np.int64) for _ in range(3)]
+        for k, p in enumerate(pieces):
+            for i in range(3):
+                flat[i][k, : npc[k]] = p[i]
+        return (*flat, npc), off, own_l1, ents
 
     def _core_tables(self, noc_xy, tpw):
         """The parts of each core's metadata row that do not depend on the launch's phases, computed once per tpw

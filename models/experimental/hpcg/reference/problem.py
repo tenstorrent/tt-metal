@@ -206,8 +206,10 @@ class Level:
     def _link_native(self, lib, C):
         """The same tables from the storage-order formula of both levels (no per-point tables)."""
         nb0 = self.starts[1]
-        self.R, self.Rw = np.empty(C.P, np.int64), np.empty(C.P)
-        self.Pm, self.Pw = np.empty(nb0, np.int64), np.empty(nb0)
+        from models.experimental.hpcg.host.native import zeros  # huge pages: 4 x 7 MB at 192^3, written once
+
+        self.R, self.Rw = zeros(C.P, np.int32), zeros(C.P, np.float32)
+        self.Pm, self.Pw = zeros(nb0, np.int32), zeros(nb0, np.float32)
         rmax = lib.hpcg_link(*self.geo(), nb0, *C.geo(), C.P, self.R, self.Rw, self.Pm, self.Pw)
         assert rmax < nb0
 
@@ -223,7 +225,7 @@ class Level:
         idx = np.where(real, np.arange(C.P), 0)
         R = R[np.maximum.accumulate(idx)]
         assert R[real].max() < self.starts[1]
-        self.R, self.Rw = R, real.astype(np.float64)
+        self.R, self.Rw = R.astype(np.int32), real.astype(np.float32)
         nb0 = self.starts[1]
         Pm = np.zeros(nb0, np.int64)
         Pw = np.zeros(nb0)
@@ -231,7 +233,7 @@ class Level:
         Pw[R[real]] = 1.0
         idx = np.where(Pw > 0, np.arange(nb0), 0)  # zero-weight entries: previous real entry's column
         Pm = Pm[np.maximum.accumulate(idx)]
-        self.Pm, self.Pw = Pm, Pw
+        self.Pm, self.Pw = Pm.astype(np.int32), Pw.astype(np.float32)
 
 
 def build(nx, bands=None, slot_stride=None, tables=True):

@@ -50,20 +50,14 @@ class CgVectorOp:
         o2 = b if mode == "dot" else c  # dot: the writer reads b
         ra, wa, ca = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
         t = 0
+        r_head = [x.buffer_address() for x in (a, b, c, d, s1, s2)]
+        w_head = [x.buffer_address() for x in (o1, o2, part)]
+        ad = d.buffer_address()
         for i in range(nc):
             k = base + (1 if i < rem else 0)
             cx, cy = i % g.x, i // g.x
-            ra[cx][cy] = [
-                a.buffer_address(),
-                b.buffer_address(),
-                c.buffer_address(),
-                d.buffer_address(),
-                s1.buffer_address(),
-                s2.buffer_address(),
-                t,
-                k,
-            ]
-            wa[cx][cy] = [o1.buffer_address(), o2.buffer_address(), part.buffer_address(), t, k, i, d.buffer_address()]
+            ra[cx][cy] = r_head + [t, k]
+            wa[cx][cy] = w_head + [t, k, i, ad]
             ca[cx][cy] = [k]
             t += k
         defs = [(k, str(v)) for k, v in CB.items()] + [("MODE_" + mode.upper(), "1"), ("VB", str(VB))]

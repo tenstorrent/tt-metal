@@ -75,22 +75,12 @@ class StencilMatrixOp:
         cbs += [cb(CB[f"CB_M{h}"], meta_pages * 4096, 4096) for h in (0, 1)]
         cbs.append(cb(CB["CB_Z"], 4096, 4096))
         kernels = []
+        head = [t.buffer_address() for t in (self.values, self.offsets, self.meta, bt)]
+        tail = [meta_pages, int(b is not None), len(zeros), zt[0].buffer_address(), zt[1].buffer_address()]
         for half, cfg in ((0, ttnn.ReaderConfigDescriptor()), (1, ttnn.WriterConfigDescriptor())):
             ra = ttnn.RuntimeArgs()
             for k in range(plan.nc):
-                ra[k % g.x][k // g.x] = [
-                    self.values.buffer_address(),
-                    self.offsets.buffer_address(),
-                    self.meta.buffer_address(),
-                    bt.buffer_address(),
-                    k,
-                    half,
-                    meta_pages,
-                    int(b is not None),
-                    len(zeros),
-                    zt[0].buffer_address(),
-                    zt[1].buffer_address(),
-                ]
+                ra[k % g.x][k // g.x] = head + [k, half] + tail
             kernels.append(
                 ttnn.KernelDescriptor(
                     kernel_source=KERNEL,

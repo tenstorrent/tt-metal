@@ -66,10 +66,31 @@ struct Geo {
     }
 };
 
+// The granules a core's window must hold, one bit each: a core marks about 1% of the vector's granules, so
+// merging scans 64 granules per word and skips the empty words.
+struct Granules {
+    std::vector<uint64_t> w;
+    explicit Granules(int64_t ng) : w((ng + 63) / 64 + 1, 0) {}
+    void set(int64_t g) { w[g >> 6] |= 1ull << (g & 63); }
+    void set_range(int64_t a, int64_t b) {  // granules a .. b, inclusive
+        const int64_t wa = a >> 6, wb = b >> 6;
+        const uint64_t lo = ~0ull << (a & 63), hi = ~0ull >> (63 - (b & 63));
+        if (wa == wb) {
+            w[wa] |= lo & hi;
+            return;
+        }
+        w[wa] |= lo;
+        for (int64_t i = wa + 1; i < wb; ++i) {
+            w[i] = ~0ull;
+        }
+        w[wb] |= hi;
+    }
+};
+
 // Runs of marked granules in [gmin, gmax] whose gaps are at most wgap granules -> window pieces (q lo, words, L1
-// byte offset), the first max_pieces of them stored; clears the mask. Returns the number of pieces.
+// byte offset), the first max_pieces of them stored; clears the marks. Returns the number of pieces.
 int64_t merge_pieces(
-    std::vector<uint8_t>& mask,
+    Granules& mask,
     int64_t gmin,
     int64_t gmax,
     int32_t gran,
@@ -79,9 +100,12 @@ int64_t merge_pieces(
     int64_t* pln,
     int64_t* pl1) {
     int64_t np = 0, l1 = 0, start = -1, last = -1;
-    for (int64_t g = gmin; g <= gmax + 1; ++g) {
-        const bool on = g <= gmax && mask[g];
-        if (on) {
+    for (int64_t wi = gmin >> 6; gmax >= 0 && wi <= (gmax >> 6); ++wi) {
+        uint64_t bits = mask.w[wi];
+        mask.w[wi] = 0;
+        while (bits) {  // marked granules in increasing order
+            const int64_t g = wi * 64 + __builtin_ctzll(bits);
+            bits &= bits - 1;
             if (start < 0) {
                 start = g;
             } else if (g - last > wgap) {  // close the previous run
@@ -95,7 +119,6 @@ int64_t merge_pieces(
                 start = g;
             }
             last = g;
-            mask[g] = 0;
         }
     }
     if (start >= 0) {
@@ -209,7 +232,8 @@ int64_t hpcg_build_level(
 // per-point tables), as Level.link in reference/problem.py. nb0: rows of F's colour block 0. R[qc]: q of coarse
 // point qc's fine point (2x, 2y, 2z) (a padding row takes the previous real row's R); Rw[qc]: 1 on real rows.
 // Pm[q] (q < nb0): coarse q of fine point q (a fine row without a coarse point takes the previous mapped row's Pm);
-// Pw[q]: 1 on mapped rows. Returns the largest R of a real row.
+// Pw[q]: 1 on mapped rows. 32-bit outputs: the plans read the indices as int32 and the weights go up as fp32.
+// Returns the largest R of a real row.
 int64_t hpcg_link(
     int32_t nx,
     int32_t nbands,
@@ -227,43 +251,46 @@ int64_t hpcg_link(
     const int32_t* cband_ny,
     const int64_t* cband_start,
     int64_t CP,
-    int64_t* R,
-    double* Rw,
-    int64_t* Pm,
-    double* Pw) {
+    int32_t* R,
+    float* Rw,
+    int32_t* Pm,
+    float* Pw) {
     const Geo F{nx, nbands, nl, line_band, band_y0, band_ny, band_start};
     const Geo C{cnx, cnbands, cnl, cline_band, cband_y0, cband_ny, cband_start};
+#pragma omp parallel for schedule(static)
     for (int64_t qc = 0; qc < CP; ++qc) {
-        Rw[qc] = 0.0;
+        Rw[qc] = 0.0f;
     }
 #pragma omp parallel for schedule(dynamic, 1)
     for (int c = 0; c < 8; ++c) {  // the coarse colour blocks in parallel
         const int64_t a = C.band_start[(int64_t)c * C.nbands];
         C.for_each_run(c, a, a + C.count(c), [&](int64_t q, int32_t i0, int32_t len, int32_t y, int32_t z) {
             for (int32_t i = 0; i < len; ++i) {
-                R[q + i] = F.q_of(2 * (2 * (i0 + i) + (c & 1)), 2 * y, 2 * z);
-                Rw[q + i] = 1.0;
+                R[q + i] = (int32_t)F.q_of(2 * (2 * (i0 + i) + (c & 1)), 2 * y, 2 * z);
+                Rw[q + i] = 1.0f;
             }
         });
     }
     int64_t rmax = -1, last = 0;
     for (int64_t qc = 0; qc < CP; ++qc) {
         if (Rw[qc] > 0.0) {
-            rmax = std::max(rmax, R[qc]);
+            rmax = std::max(rmax, (int64_t)R[qc]);
             last = qc;
         } else {
             // R[last] is final (last < qc); with no real row yet, last = 0 and R[0] = 0, as in numpy
             R[qc] = qc == 0 ? 0 : R[last];
         }
     }
+#pragma omp parallel for schedule(static)
     for (int64_t q = 0; q < nb0; ++q) {
         Pm[q] = 0;
-        Pw[q] = 0.0;
+        Pw[q] = 0.0f;
     }
-    for (int64_t qc = 0; qc < CP; ++qc) {
+#pragma omp parallel for schedule(static)
+    for (int64_t qc = 0; qc < CP; ++qc) {  // distinct real rows have distinct fine points
         if (Rw[qc] > 0.0 && R[qc] < nb0) {
-            Pm[R[qc]] = qc;
-            Pw[R[qc]] = 1.0;
+            Pm[R[qc]] = (int32_t)qc;
+            Pw[R[qc]] = 1.0f;
         }
     }
     int64_t lastm = 0;
@@ -304,14 +331,12 @@ int64_t hpcg_plan_windows_stencil(
     int64_t bad = 0;
 #pragma omp parallel
     {
-        std::vector<uint8_t> mask(ng, 0);
+        Granules mask(ng);
 #pragma omp for schedule(dynamic, 1) reduction(+ : bad)
         for (int32_t k = 0; k < nc; ++k) {
             int64_t gmin = ng, gmax = -1;
             auto mark = [&](int64_t lo, int64_t hi) {  // granules of q range [lo, hi]
-                for (int64_t g = lo / gran; g <= hi / gran; ++g) {
-                    mask[g] = 1;
-                }
+                mask.set_range(lo / gran, hi / gran);
                 gmin = std::min(gmin, lo / gran);
                 gmax = std::max(gmax, hi / gran);
             };
@@ -404,12 +429,12 @@ int64_t hpcg_plan_windows(
     int64_t bad = 0;
 #pragma omp parallel
     {
-        std::vector<uint8_t> mask(ng, 0);
+        Granules mask(ng);
 #pragma omp for schedule(dynamic, 1) reduction(+ : bad)
         for (int32_t k = 0; k < nc; ++k) {
             int64_t gmin = ng, gmax = -1;
             auto mark = [&](int64_t g) {
-                mask[g] = 1;
+                mask.set(g);
                 gmin = std::min(gmin, g);
                 gmax = std::max(gmax, g);
             };

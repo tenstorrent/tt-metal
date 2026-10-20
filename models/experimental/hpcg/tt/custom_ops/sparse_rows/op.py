@@ -189,38 +189,14 @@ class SparseRowOp:
         self.keep.append(dbg)
         cores = core_ranges(plan.nc, g.x)
         reader_args, writer_args, compute_args = {}, {}, {}
+        ax, av, aoff, ameta, ab, adbg = (t.buffer_address() for t in (x, values, offsets, meta_t, b, dbg))
+        aout, ao2 = out.buffer_address(), o2.buffer_address()
+        r_head, r_tail = [ax, av, aoff, ameta, ab], [adbg, meta_pages, ntlv, plan.win_b, flags, meta_bytes]
+        w_tail = [adbg, av, ao2, ax, meta_pages, ntlv, flags, meta_bytes]
         for i in range(plan.nc):
             c = (i % g.x, i // g.x)
-            reader_args[c] = [
-                x.buffer_address(),
-                values.buffer_address(),
-                offsets.buffer_address(),
-                meta_t.buffer_address(),
-                b.buffer_address(),
-                i,
-                dbg.buffer_address(),
-                meta_pages,
-                ntlv,
-                plan.win_b,
-                flags,
-                meta_bytes,
-            ]
-            writer_args[c] = [
-                out.buffer_address(),
-                meta_t.buffer_address(),
-                i,
-                offsets.buffer_address(),
-                noc_xy[i][0],
-                noc_xy[i][1],
-                dbg.buffer_address(),
-                values.buffer_address(),
-                o2.buffer_address(),
-                x.buffer_address(),
-                meta_pages,
-                ntlv,
-                flags,
-                meta_bytes,
-            ]
+            reader_args[c] = r_head + [i] + r_tail
+            writer_args[c] = [aout, ameta, i, aoff, noc_xy[i][0], noc_xy[i][1]] + w_tail
             compute_args[c] = [nseg[i], nseg_gs[i], nseg_r[i], flags]
 
         def accessors(*ts):
