@@ -38,10 +38,10 @@ namespace {
 
 // Whether one UnaryBackwardDeviceOperation program with a generated BF16 kernel computes this call
 // as the composite does. The kernels exist for Blackhole and Wormhole and read 32x32 tiles of BF16
-// operands with one shape, interleaved or sharded in L1 or DRAM: the device operation binds each
-// operand's shard in place or addresses its pages. Every other call, including a broadcast
-// gradient, a host operand, or a call whose output placement the composite chooses, keeps the
-// composite.
+// operands in untransposed 16x16 faces, with one shape, interleaved or sharded in L1 or DRAM: the
+// device operation binds each operand's shard in place or addresses its pages. Every other call,
+// including a broadcast gradient, a host operand, or a call whose output placement the composite
+// chooses, keeps the composite.
 bool generated_bf16_kernel_applies(
     const Tensor& grad,
     const Tensor& input,
@@ -55,6 +55,9 @@ bool generated_bf16_kernel_applies(
         const auto tile = tensor.tensor_spec().tile();
         return tensor.device() == device && tensor.dtype() == DataType::BFLOAT16 && tensor.layout() == Layout::TILE &&
                tile.get_height() == tt::constants::TILE_HEIGHT && tile.get_width() == tt::constants::TILE_WIDTH &&
+               tile.get_face_shape() ==
+                   tt::tt_metal::Tile::FaceShape{tt::constants::FACE_HEIGHT, tt::constants::FACE_WIDTH} &&
+               !tile.get_transpose_within_face() && !tile.get_transpose_of_faces() &&
                tensor.logical_shape() == input.logical_shape() && tensor.padded_shape() == input.padded_shape();
     };
     if (!bf16_tiles(grad) || !bf16_tiles(input)) {

@@ -374,4 +374,8 @@ void kernel_main() {
     route_info[2] = 0;
     route_info[3] = 0;
     cb_push_back(cb_route_info_id, 1);
+
+    // The untilizer credit returns ask for posted atomics, but Blackhole issues every atomic as non-posted. Their
+    // responses must land before exit, or they leak into the next kernel's atomic counter.
+    noc_async_atomic_barrier();
 }

@@ -6,12 +6,13 @@
 Device kernel time of ttnn.relu_bw's fused program against the composite it replaces.
 
 Both run in one profiled process on the same BF16 operands, a gradient in L1 beside an input in
-DRAM: without an output placement that call keeps the composite, and with a DRAM output it runs
-the fused program. A call's time is the device kernel duration summed over the programs it
-launches, the median of REPEATS calls. The fused program must be faster by more than MARGIN.
+DRAM: without an output placement that call keeps the composite, and with the composite's output
+placement it runs the fused program, so both write the same memory. A call's time is the device
+kernel duration summed over the programs it launches, the median of REPEATS calls. The fused
+program must be faster by more than MARGIN.
 
 The fused program serves the other memory layouts too, where no call of this build runs the
-composite; the layout test times each one, and the same file at the merge-base times the composite.
+composite; the layout test times each one.
 """
 
 import pandas as pd
@@ -32,10 +33,17 @@ PATH = "tests/ttnn/perf_tests/operations/eltwise/test_relu_bw_device_perf.py"
 
 
 def _calls(tt_g, tt_x):
+    composite = ttnn.relu_bw(tt_g, tt_x)[0]
+    placement = composite.memory_config()
+    ttnn.deallocate(composite)
     return {
         "composite": lambda: ttnn.relu_bw(tt_g, tt_x)[0],
-        "fused": lambda: ttnn.relu_bw(tt_g, tt_x, memory_config=ttnn.DRAM_MEMORY_CONFIG)[0],
+        "fused": lambda: ttnn.relu_bw(tt_g, tt_x, memory_config=placement)[0],
     }
+
+
+def _bits(tensor):
+    return ttnn.to_torch(tensor).to(torch.bfloat16).view(torch.int16)
 
 
 def _runs_fused(call):
@@ -65,7 +73,14 @@ def test_relu_bw_profiled_calls(device):
         tt_x = ttnn.from_torch(
             x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
-        for path, call in _calls(tt_g, tt_x).items():
+        calls = _calls(tt_g, tt_x)
+        # The mixed-placement call returns the bits of the call with both operands in DRAM.
+        tt_g_dram = ttnn.from_torch(
+            g, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        assert torch.equal(_bits(calls["fused"]()), _bits(ttnn.relu_bw(tt_g_dram, tt_x)[0]))
+        ttnn.deallocate(tt_g_dram)
+        for path, call in calls.items():
             # Graph capture runs the call once, which also compiles its programs.
             assert _runs_fused(call) == (path == "fused"), f"the {path} call ran the other path"
             for repeat in range(REPEATS):
@@ -95,7 +110,7 @@ def test_relu_bw_device_perf():
     from tracy.common import clear_profiler_runtime_artifacts
     from tracy.process_model_log import get_latest_ops_log_filename, run_device_profiler
 
-    board = "blackhole" if ttnn.device.is_blackhole() else "wormhole_b0"
+    board = "blackhole" if ttnn.device.is_blackhole() else "wormhole_b0" if ttnn.device.is_wormhole_b0() else None
     if board not in FUSED_BOARDS:
         pytest.skip("this board keeps the composite")
     subdir = "relu_bw_device_perf"
@@ -172,7 +187,7 @@ LAYOUTS = (
 @pytest.mark.parametrize("name", LAYOUTS)
 def test_relu_bw_layout_profiled_calls(name, device):
     """A layout's call, both operands in it, between signposts that name it. This build runs every layout on
-    the fused program; the same file at the merge-base times the composite on the same operands."""
+    the fused program."""
     from tracy import signpost
 
     board = "blackhole" if ttnn.device.is_blackhole(device) else "wormhole_b0"
@@ -202,17 +217,22 @@ def test_relu_bw_layout_device_perf():
     from tracy.common import clear_profiler_runtime_artifacts
     from tracy.process_model_log import get_latest_ops_log_filename, run_device_profiler
 
-    board = "blackhole" if ttnn.device.is_blackhole() else "wormhole_b0"
+    board = "blackhole" if ttnn.device.is_blackhole() else "wormhole_b0" if ttnn.device.is_wormhole_b0() else None
     if board not in FUSED_BOARDS:
         pytest.skip("this board keeps the composite")
     subdir = "relu_bw_layout_device_perf"
     clear_profiler_runtime_artifacts()
+    # Every layout runs on the fused program in this build: a failed or missing call fails the test.
     run_device_profiler(
-        f"pytest {PATH}::test_relu_bw_layout_profiled_calls", subdir, device_analysis_types=["device_kernel_duration"]
+        f"pytest {PATH}::test_relu_bw_layout_profiled_calls",
+        subdir,
+        check_test_return_code=True,
+        device_analysis_types=["device_kernel_duration"],
     )
     regions = _kernel_ns_per_region(get_latest_ops_log_filename(subdir))
     for height, width in SHAPES:
         for name in LAYOUTS:
+            assert f"{name}-{height}x{width}-0" in regions, f"no {name} call at {height}x{width} was timed"
             measured = [regions[f"{name}-{height}x{width}-{repeat}"] for repeat in range(REPEATS)]
             assert all(programs for _, programs in measured), f"a {name} call at {height}x{width} launched no program"
             ns = sorted(ns for ns, _ in measured)[REPEATS // 2]

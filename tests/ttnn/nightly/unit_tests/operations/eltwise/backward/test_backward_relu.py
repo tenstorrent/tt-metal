@@ -212,6 +212,13 @@ RELU_BW_FUSED_CALLS = (
     "mixed_placements",
 )
 
+# Calls whose composite differs from torch on main itself, on silicon: expected to fail until main
+# fixes them, and a pass fails, so the entry is dropped then.
+RELU_BW_COMPOSITE_DIVERGES = {
+    "blackhole": ("mixed_layouts",),
+    "wormhole_b0": ("mixed_layouts",),
+}
+
 
 def _relu_bw_torch_gradient(grad, x):
     """Torch autograd in float32."""
@@ -324,14 +331,27 @@ def test_relu_bw_runs_the_fused_program_only_where_it_applies(call, device):
 
     assert ("UnaryBackwardDeviceOperation" in trace) == (call in RELU_BW_FUSED_CALLS), trace
     if call not in RELU_BW_FUSED_CALLS:
-        # The composite's own results, or its refusal of a call (some refuse row-major operands), are
-        # its tests' to judge; here it only has to be the program that ran.
-        assert error is not None or list(result.shape) == list(shape)
+        # The composite's refusal of a call (some refuse row-major operands) is its tests' to judge; a result it
+        # returns is held to torch as the fused program's is.
+        if error is None:
+            assert list(result.shape) == list(shape)
+            # Only where torch's result is finite: at NaN inputs and poles the composite stores its own values.
+            expected = _relu_bw_torch_gradient(g.expand(shape), x)
+            finite = torch.isfinite(expected)
+            board_name = "blackhole" if ttnn.device.is_blackhole(device) else "wormhole_b0"
+            diverges = call in RELU_BW_COMPOSITE_DIVERGES.get(board_name, ())
+            try:
+                assert_with_pcc(expected[finite], ttnn.to_torch(result).float()[finite], 0.999)
+            except AssertionError:
+                if diverges:
+                    pytest.xfail(f"main's composite differs from torch here on {board_name}")
+                raise
+            assert not diverges, f"main's composite now matches torch here on {board_name}: drop the entry"
         return
     assert error is None, error
     expected = _relu_bw_torch_gradient(g, x)
     assert_with_pcc(expected, ttnn.to_torch(result).float(), 0.999)
-    if call != "interleaved_tiles":
+    if call != "interleaved_tiles" and call in RELU_BW_FUSED_CALLS:
         # A layout moves tiles, not arithmetic: the result is where the call asks for it, and is the
         # interleaved call's bit for bit, so the exhaustive test's accuracy holds in every layout.
         placement = tt_x.memory_config()
