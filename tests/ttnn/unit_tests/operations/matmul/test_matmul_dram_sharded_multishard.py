@@ -16,7 +16,7 @@ import pytest
 import torch
 
 import ttnn
-from models.common.utility_functions import comp_pcc
+from tt_py_test_utils_common.utility_functions import comp_pcc
 
 
 def _dram_sharded_matmul(device, k, n, in1_dtype, num_storage_cores, in0_block_w, fp32_acc, k_logical=None):
