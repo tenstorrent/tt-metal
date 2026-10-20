@@ -54,11 +54,15 @@ static void run_reader() {
     const uint32_t src_addr = get_common_arg_val<uint32_t>(8);
     const uint32_t num_pages = get_arg_val<uint32_t>(0);
     const uint32_t core_blocks_written = get_arg_val<uint32_t>(1);
+#ifdef INPUT_ROW_STRIDE_T
+    // Window's first page-row in every head. A windowed call has no rope / scales bindings, so it follows src.
+    const uint32_t input_row_offset_t = get_common_arg_val<uint32_t>(9);
+#endif
 
     const uint32_t linear_coord = get_common_arg_val<uint32_t>(0);
     const uint32_t linear_factor = get_common_arg_val<uint32_t>(1);
     const uint32_t chunk_local_t = get_common_arg_val<uint32_t>(2);  // stripe: page-rows THIS chip writes
-    const uint32_t input_Ht = get_common_arg_val<uint32_t>(3);       // window: page-rows the input holds
+    const uint32_t input_Ht = get_common_arg_val<uint32_t>(3);       // page-rows per head this call writes
     const uint32_t sp_factor = get_common_arg_val<uint32_t>(4);
     const uint32_t tp_factor = get_common_arg_val<uint32_t>(5);
     const uint32_t Wt = get_common_arg_val<uint32_t>(6);
@@ -135,7 +139,13 @@ static void run_reader() {
     const uint32_t num_blocks = HasRope ? num_pages : num_pages / Wt;
     for (uint32_t block = 0; block < num_blocks; ++block) {
         const uint32_t j = core_blocks_written + block;
+#ifdef INPUT_ROW_STRIDE_T
+        const uint32_t window_row = base + j + (j + start_in_stripe >= chunk_local_t ? jump : 0);
+        const uint32_t source_row =
+            (window_row / input_Ht) * INPUT_ROW_STRIDE_T + input_row_offset_t + window_row % input_Ht;
+#else
         const uint32_t source_row = base + j + (j + start_in_stripe >= chunk_local_t ? jump : 0);
+#endif
         if constexpr (HasScaled) {
             constexpr auto rope_args = TensorAccessorArgs<HasScaled ? src_args.next_compile_time_args_offset() : 0>();
             constexpr auto scale_args = TensorAccessorArgs<HasScaled ? rope_args.next_compile_time_args_offset() : 0>();
