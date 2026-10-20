@@ -1,5 +1,4 @@
 set(TT_METAL_PUBLIC_API
-    api/internal/service/inter_process_counter_channel.hpp
     api/internal/service/service_core_manager.hpp
     api/internal/disaggregation/layer_ack_decoder.hpp
     api/internal/disaggregation/layer_completion_message.hpp
