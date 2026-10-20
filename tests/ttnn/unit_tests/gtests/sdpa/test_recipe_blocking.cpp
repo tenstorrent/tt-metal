@@ -320,6 +320,27 @@ TEST(SDPARecipeBlocking, MlaRingProgramsFitTheKernelConfigBuffer) {
     EXPECT_TRUE(recipe_program_fits(ring, 5, 8));
 }
 
+TEST(SDPARecipeBlocking, LatentVRingsFitUpToQ160) {
+    // ring_mla's latent V on STANDARD / FAST has no V CB or V stream: Kimi K3 (D576, V512) runs Q160 at K384/K448.
+    for (const auto selection : {RecipeSelection{Recipe::B, KVStorage::BFP8}, RecipeSelection{Recipe::E}}) {
+        auto ring = problem(RecipeOp::Ring, selection, 24, 640, 640, 18);
+        ring.vd_tiles = 16;
+        ring.latent_v = true;
+        EXPECT_TRUE(recipe_program_fits(ring, 5, 12));
+        EXPECT_FALSE(recipe_program_fits(ring, 10, 12));
+        const auto latent =
+            recipe_l1_bytes(RecipeOp::Ring, ring.policy, 5, 12, 18, RecipeL1Context{.vd_tiles = 16, .latent_v = true});
+        const auto separate = recipe_l1_bytes(RecipeOp::Ring, ring.policy, 5, 12, 18, RecipeL1Context{.vd_tiles = 16});
+        EXPECT_LT(latent.preferred, separate.preferred);
+        EXPECT_LE(latent.minimum, kDeviceL1);
+    }
+    // The FP32-state recipes stream V separately: the MLA exclusion still applies.
+    auto accurate = problem(RecipeOp::Ring, RecipeSelection{Recipe::D, KVStorage::BFP8}, 24, 640, 640, 18);
+    accurate.vd_tiles = 16;
+    accurate.latent_v = true;
+    EXPECT_FALSE(recipe_program_fits(accurate, 5, 12));
+}
+
 TEST(SDPARecipeBlocking, FeatureCombinationsFitTheKernelConfigBuffer) {
     // Measured (one P150b) over feature combinations the single-feature exclusions admitted.
     const auto bfp8 = RecipeSelection{Recipe::B, KVStorage::BFP8};

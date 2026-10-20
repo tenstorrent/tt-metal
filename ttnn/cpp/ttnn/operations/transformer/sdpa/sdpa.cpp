@@ -16,6 +16,7 @@
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
+#include "ttnn/operations/ccl/common/host/mesh_ring_plan.hpp"
 #include "ttnn/operations/transformer/sdpa/device/sdpa_device_operation.hpp"
 #include "ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_device_operation.hpp"
 #include "ttnn/operations/transformer/sdpa/device/exp_ring_joint_sdpa_device_operation.hpp"
@@ -977,6 +978,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> ring_mla(
     ttnn::Tensor query = input_tensor_q;
     const auto caller_program_config = program_config;
     bool streaming_recipe = false;
+    std::optional<numeric::LatentRingBlocking> latent_blocking;
     if (precision.has_value()) {
         TT_FATAL(
             !compute_kernel_config.has_value() || routes_fp32_dest(input_tensor_q, compute_kernel_config),
@@ -988,15 +990,32 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> ring_mla(
         const bool chunked = input_tensor_q.logical_shape()[2] < input_tensor_kv.logical_shape()[2];
         streaming_recipe = input_tensor_kv.logical_shape()[3] != head_dim || kv_actual_isl.has_value() ||
                            (chunked && (slot_id.has_value() || kv_actual_isl_tensor.has_value()));
-        const bool chunks_fit = numeric::named_ring_recipe_chunks_fit(
-            numeric::resolve_precision_policy(numeric::select_recipe(*precision, input_tensor_kv.dtype())),
-            program_config.q_chunk_size,
-            program_config.k_chunk_size,
-            head_dim,
-            head_dim_v,
-            numeric::recipe_free_l1(*input_tensor_q.device()),
-            /*causal=*/true);
-        if (!streaming_recipe && !chunks_fit) {
+        const auto selected_policy =
+            numeric::resolve_precision_policy(numeric::select_recipe(*precision, input_tensor_kv.dtype()));
+        // STANDARD / FAST read the latent V in place: the caller's chunk pair (tuned for the legacy kernels) is a
+        // hint, and the recipe takes one Q block per core with the widest K that fits (Kimi K3 50k+5k, caller
+        // Q32/K640: the named kernels at Q32/K640 6.26 ms, at Q160/K384 4.41 ms; legacy 4.58 ms).
+        // Split KV (a full-mesh gather with Q sharded on fewer devices than K/V) runs on the streaming kernel.
+        const bool split_kv =
+            !cluster_axis.has_value() && ttnn::operations::ccl::common::tensor_dim_shard_factor(input_tensor_q, 2) !=
+                                             ttnn::operations::ccl::common::tensor_dim_shard_factor(input_tensor_kv, 2);
+        if (!streaming_recipe && !split_kv) {
+            latent_blocking = numeric::choose_latent_ring_recipe_blocking(
+                selected_policy, input_tensor_q, input_tensor_kv, head_dim_v, program_config, is_balanced);
+        }
+        const bool chunks_fit = latent_blocking.has_value() || numeric::named_ring_recipe_chunks_fit(
+                                                                   selected_policy,
+                                                                   program_config.q_chunk_size,
+                                                                   program_config.k_chunk_size,
+                                                                   head_dim,
+                                                                   head_dim_v,
+                                                                   numeric::recipe_free_l1(*input_tensor_q.device()),
+                                                                   /*causal=*/true,
+                                                                   /*latent_v=*/true);
+        if (latent_blocking) {
+            program_config.q_chunk_size = latent_blocking->q_chunk_size;
+            program_config.k_chunk_size = latent_blocking->k_chunk_sizes.front();
+        } else if (!streaming_recipe && !chunks_fit) {
             // The caller's chunk pair does not fit the named kernels (Kimi's Q32/K640 at D576): let the recipe pick.
             program_config.q_chunk_size = 0;
             program_config.k_chunk_size = 0;
@@ -1038,10 +1057,12 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> ring_mla(
             query = numeric::recipe_bf16_query(input_tensor_q);
             log_info(
                 tt::LogOp,
-                "ring_mla {} recipe on the named kernels at Q{}/K{}",
+                "ring_mla {} recipe on the named kernels at Q{}/K{} (caller Q{}/K{})",
                 *precision,
                 program_config.q_chunk_size,
-                program_config.k_chunk_size);
+                program_config.k_chunk_size,
+                caller_program_config.q_chunk_size,
+                caller_program_config.k_chunk_size);
         }
     }
     auto topology_1d = ttnn::ccl::convert_2d_to_1d_topology(topology);
@@ -1094,32 +1115,53 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> ring_mla(
             on_streaming_kernel);
     };
     std::vector<ttnn::Tensor> output_tensors;
-    try {
-        output_tensors = run(query, program_config, compute_kernel_config, streaming_recipe);
-    } catch (const std::exception& e) {
-        // As on ring_joint_scaled_dot_product_attention: a named program that does not fit at dispatch reruns on the
-        // streaming kernel.
-        const std::string_view what = e.what();
-        const bool does_not_fit = what.find("state.offset <= max_size") != std::string_view::npos ||
-                                  what.find("Named ring SDPA recipe needs") != std::string_view::npos ||
-                                  what.find("beyond max L1 size") != std::string_view::npos;
-        if (!precision || streaming_recipe || !does_not_fit) {
-            throw;
+    // As on ring_joint_scaled_dot_product_attention, a named program that does not fit at dispatch reruns on the
+    // streaming kernel; the latent-V blocking first steps K down through its candidates on the named kernels.
+    for (std::size_t k_candidate = 0;; ++k_candidate) {
+        try {
+            output_tensors = run(query, program_config, compute_kernel_config, streaming_recipe);
+            break;
+        } catch (const std::exception& e) {
+            const std::string_view what = e.what();
+            const bool does_not_fit = what.find("state.offset <= max_size") != std::string_view::npos ||
+                                      what.find("Named ring SDPA recipe needs") != std::string_view::npos ||
+                                      what.find("beyond max L1 size") != std::string_view::npos;
+            if (!precision || streaming_recipe || !does_not_fit) {
+                throw;
+            }
+            if (latent_blocking && k_candidate + 1 < latent_blocking->k_chunk_sizes.size()) {
+                const uint32_t next_k = latent_blocking->k_chunk_sizes[k_candidate + 1];
+                log_warning(
+                    tt::LogOp,
+                    "ring_mla {} recipe: the named kernels' program does not fit at Q{}/K{}; retrying at Q{}/K{}",
+                    *precision,
+                    program_config.q_chunk_size,
+                    program_config.k_chunk_size,
+                    program_config.q_chunk_size,
+                    next_k);
+                program_config.k_chunk_size = next_k;
+                continue;
+            }
+            log_warning(
+                tt::LogOp,
+                "ring_mla {} recipe: the named kernels' program does not fit at Q{}/K{}; running it on the streaming "
+                "kernel at Q{}/K{}",
+                *precision,
+                program_config.q_chunk_size,
+                program_config.k_chunk_size,
+                caller_program_config.q_chunk_size != 0 ? caller_program_config.q_chunk_size
+                                                        : program_config.q_chunk_size,
+                caller_program_config.k_chunk_size != 0 ? caller_program_config.k_chunk_size
+                                                        : program_config.k_chunk_size);
+            auto streaming_config = caller_program_config;
+            streaming_config.exp_approx_mode = std::nullopt;
+            if (streaming_config.q_chunk_size == 0 || streaming_config.k_chunk_size == 0) {
+                streaming_config.q_chunk_size = program_config.q_chunk_size;
+                streaming_config.k_chunk_size = program_config.k_chunk_size;
+            }
+            output_tensors = run(input_tensor_q, streaming_config, std::nullopt, true);
+            break;
         }
-        log_warning(
-            tt::LogOp,
-            "ring_mla {} recipe: the named kernels' program does not fit at Q{}/K{}; running it on the streaming "
-            "kernel",
-            *precision,
-            program_config.q_chunk_size,
-            program_config.k_chunk_size);
-        auto streaming_config = caller_program_config;
-        streaming_config.exp_approx_mode = std::nullopt;
-        if (streaming_config.q_chunk_size == 0 || streaming_config.k_chunk_size == 0) {
-            streaming_config.q_chunk_size = program_config.q_chunk_size;
-            streaming_config.k_chunk_size = program_config.k_chunk_size;
-        }
-        output_tensors = run(input_tensor_q, streaming_config, std::nullopt, true);
     }
     return {output_tensors[prim::RING_JOINT_SDPA_OUTPUT_IDX], output_tensors[prim::RING_JOINT_SDPA_STATS_OUTPUT_IDX]};
 }

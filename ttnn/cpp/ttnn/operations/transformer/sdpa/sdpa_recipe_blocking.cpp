@@ -9,6 +9,7 @@
 #include <cmath>
 #include <functional>
 #include <map>
+#include <numeric>
 #include <mutex>
 #include <tuple>
 #include <vector>
@@ -184,6 +185,16 @@ RecipeBuild recipe_build(
 // unconditionally, so this can only over-estimate.
 constexpr uint64_t kRingRecipeExtraBytes = 3 * kBf16Tile + kBf16Tile + 2 * 4096 + 16 + 64;
 
+// ring_mla latent-V blockings (choose_latent_ring_recipe_blocking): the widest measured Q and K.
+constexpr uint32_t kLatentRingMaxQTiles = 5;
+constexpr uint32_t kLatentRingMaxKTiles = 20;
+
+// Order of a latent-V ring's K candidates (lower first): whole QK/PV subblocks of 4 tiles first (Kimi K3 50k+5k Q160,
+// STANDARD / FAST: K384 4.41 / 2.87 ms, K448 5.09 / 4.19 ms), then the larger K.
+std::pair<int, int64_t> latent_ring_k_rank(uint32_t k_tiles) {
+    return {recipe_subblock_width(k_tiles) == 4 ? 0 : 1, -static_cast<int64_t>(k_tiles)};
+}
+
 // The dense / joint circular-buffer facts of a problem.
 RecipeL1Context dense_l1_context(const RecipeBlockingProblem& p) {
     return {
@@ -274,26 +285,25 @@ RecipeL1Estimate recipe_l1_bytes(
                 build.cb_bytes - droppable_fused(rows, build) + mask_group + context.extra_bytes};
         }
         case RecipeOp::Ring: {
-            // EXPERIMENT (TT_SDPA_RECIPE_RING_WIDE_Q=1): an MLA ring on a BF16-state recipe is ring_mla's latent V,
-            // which has no V CB (RingJointSDPARecipeProgramFactory) and a V-wide O.
-            static const bool wide_q = [] {
-                const char* v = std::getenv("TT_SDPA_RECIPE_RING_WIDE_Q");
-                return v != nullptr && v[0] == '1';
-            }();
-            const bool latent =
-                wide_q && context.vd_tiles != 0 && context.vd_tiles < d_tiles && !policy.fp32_destination;
+            // ring_mla's latent V on a BF16-state recipe (RingJointSDPARecipeProgramFactory): PV reads V in place
+            // from the K chunk, so there is no V CB, and O is V-wide.
+            const bool latent = latent_ring_recipe(policy, d_tiles, context.vd_tiles, context.latent_v);
             const auto build = recipe_build(policy, q_tiles, k_tiles, d_tiles, latent ? context.vd_tiles : 0);
             const uint64_t v_cb =
                 latent
                     ? uint64_t{k_tiles} * context.vd_tiles * 2 *
                           tt::tile_size(datatype_to_dataformat_converter(recipe_kv_dtype(policy.selection.kv_storage)))
                     : 0;
-            // Fused BF16-state rings keep O in one plane (RingJointSDPARecipeProgramFactory: SDPA_RECIPE_O_ONE_PLANE).
+            // Fused BF16-state rings keep O in one plane (SDPA_RECIPE_O_ONE_PLANE); the unfused fallback restores the
+            // second plane.
             const bool one_plane = latent && build.fused_cb_bytes > 0;
             const uint64_t o_plane = one_plane ? uint64_t{q_tiles} * context.vd_tiles * 4096 : 0;
             const uint64_t bytes = build.cb_bytes - v_cb - o_plane + kRingRecipeExtraBytes;
-            // The factory's fallbacks: drop the fused chunks' CBs, then single-slot Q.
-            return {bytes, bytes - droppable_fused(q_tiles, build) - q_slot};
+            // The factory's fallbacks, each only while the layout does not fit: single-slot Q, then drop the fused
+            // chunks' CBs (which restores O's second plane, so it only shrinks the layout when they outweigh it).
+            const uint64_t fused = droppable_fused(q_tiles, build);
+            const uint64_t unfused_saving = fused > o_plane ? fused - o_plane : 0;
+            return {bytes, bytes - q_slot - unfused_saving};
         }
         case RecipeOp::ExpRing: {
             // The exp-ring factory keeps the recipe layout with a single Q slot, plus the 64 B live-length
@@ -315,13 +325,12 @@ bool recipe_program_fits(const RecipeBlockingProblem& p, uint32_t q_tiles, uint3
         // buffer from Q160 up: causal balanced ACCURATE with BFP8 K/V on a 2x2 P150b mesh measured 70672 B at
         // Q160/K192 and K448, 70688 at Q160/K256, 70720 at Q160/K384 (K160, K224, K288, K320 and K512 fit by a few
         // bytes) and 71184-71696 B at Q320; every Q32 and Q64 blocking fits.
-        // EXPERIMENT: TT_SDPA_RECIPE_RING_WIDE_Q=1 lets wide-Q MLA rings try the named kernels (a program that does
-        // not fit still falls back to the streaming kernel at dispatch).
-        static const bool wide_q = [] {
-            const char* v = std::getenv("TT_SDPA_RECIPE_RING_WIDE_Q");
-            return v != nullptr && v[0] == '1';
-        }();
-        if (!wide_q && p.vd_tiles != 0 && p.vd_tiles < p.d_tiles && p.d_tiles >= 16 && q_tiles >= 5) {
+        // ring_mla's latent V on STANDARD / FAST (no V CB, no V stream in the reader) fits up to Q160: Kimi K3
+        // (D576, V512, BFP8 latent, 2x2 P150b mesh) measured Q160 at K384 and K448 on both recipes.
+        if (latent_ring_recipe(p.policy, p.d_tiles, p.vd_tiles, p.latent_v)) {
+            return q_tiles <= kLatentRingMaxQTiles;
+        }
+        if (p.vd_tiles != 0 && p.vd_tiles < p.d_tiles && p.d_tiles >= 16 && q_tiles >= 5) {
             return false;
         }
         return true;
@@ -843,6 +852,86 @@ SDPAProgramConfig resolve_ring_recipe_blocking(
     problem.l1_bytes = recipe_free_l1(*q.device());
     const auto choice = invalid_fixed(program_config) ? std::nullopt : choose_recipe_blocking(problem);
     return apply_choice(program_config, choice, problem, "ring");
+}
+
+std::optional<LatentRingBlocking> choose_latent_ring_recipe_blocking(
+    const PrecisionPolicy& policy,
+    const Tensor& q,
+    const Tensor& k,
+    uint32_t v_head_dim,
+    const SDPAProgramConfig& program_config,
+    bool is_balanced) {
+    const uint32_t d_tiles = div_up(q.logical_shape()[3], kTile);
+    const uint32_t vd_tiles = div_up(v_head_dim, kTile);
+    if (q.storage_type() != StorageType::DEVICE || !latent_ring_recipe(policy, d_tiles, vd_tiles, true)) {
+        return std::nullopt;
+    }
+    RecipeBlockingProblem ring;
+    ring.op = RecipeOp::Ring;
+    ring.policy = policy;
+    ring.d_tiles = d_tiles;
+    ring.vd_tiles = vd_tiles;
+    ring.latent_v = true;
+    const uint32_t slab_tiles = q.padded_shape()[2] / kTile;
+    // A balanced ring's Q chunks must not straddle the two halves of a device's sequence.
+    const uint32_t span_tiles = is_balanced ? slab_tiles / 2 : slab_tiles;
+    const CoreCoord grid = program_config.compute_with_storage_grid_size;
+    const uint64_t cores = uint64_t{grid.x} * grid.y;
+    const uint64_t heads = uint64_t{q.logical_shape()[0]} * q.logical_shape()[1];
+    if (span_tiles == 0 || cores == 0 || heads == 0) {
+        return std::nullopt;
+    }
+    const uint64_t free_l1 = recipe_free_l1(*q.device());
+    const uint32_t k_tiles_total = std::max(1u, div_up(k.padded_shape()[2], kTile));
+    // K: tile multiples up to K640 (Kimi K3's 640-row device shard), whole subblocks of 4 first (QK/PV subblock
+    // width 4; Kimi K3 50k+5k STANDARD Q160: K384 4.41 ms, K448 5.09 ms).
+    const uint32_t k_cap = std::min(kLatentRingMaxKTiles, k_tiles_total);
+    auto k_candidates = [&](uint32_t qt) {
+        std::vector<uint32_t> ks;
+        std::vector<bool> fallback;
+        for (uint32_t kt = k_cap; kt >= 1; --kt) {
+            // An odd unfused STANDARD Q chunk would be rounded up to the next even one (finalize_ring_recipe_config).
+            if (!recipe_geometry_supported(qt, kt, d_tiles) || recipe_compute_q_tiles(policy, qt, kt) != qt ||
+                !recipe_program_fits(ring, qt, kt)) {
+                continue;
+            }
+            const auto l1 = recipe_l1_bytes(
+                RecipeOp::Ring, policy, qt, kt, d_tiles, RecipeL1Context{.vd_tiles = vd_tiles, .latent_v = true});
+            if (l1.minimum <= free_l1) {
+                ks.push_back(kt);
+                // One Q block per core gives up nothing with a single Q slot; unfused chunks are slower.
+                fallback.push_back(l1.preferred - uint64_t{qt} * d_tiles * kBf16Tile > free_l1);
+            }
+        }
+        // Fused chunks before the factory's unfused L1 fallback.
+        std::vector<std::size_t> order(ks.size());
+        std::iota(order.begin(), order.end(), 0);
+        std::stable_sort(order.begin(), order.end(), [&](std::size_t a, std::size_t b) {
+            return std::pair{fallback[a], latent_ring_k_rank(ks[a])} <
+                   std::pair{fallback[b], latent_ring_k_rank(ks[b])};
+        });
+        std::vector<uint32_t> sorted;
+        for (const std::size_t i : order) {
+            sorted.push_back(ks[i]);
+        }
+        return sorted;
+    };
+    const uint32_t q_min = static_cast<uint32_t>(std::max<uint64_t>(1, (heads * slab_tiles + cores - 1) / cores));
+    for (uint32_t qt = q_min; qt <= std::min(span_tiles, 32u); ++qt) {
+        if (span_tiles % qt != 0) {
+            continue;
+        }
+        auto ks = k_candidates(qt);
+        if (ks.empty()) {
+            continue;
+        }
+        LatentRingBlocking choice{.q_chunk_size = qt * kTile};
+        for (const uint32_t kt : ks) {
+            choice.k_chunk_sizes.push_back(kt * kTile);
+        }
+        return choice;
+    }
+    return std::nullopt;
 }
 
 SDPAProgramConfig resolve_exp_ring_recipe_blocking(

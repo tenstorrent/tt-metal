@@ -59,7 +59,16 @@ struct RecipeL1Context {
     uint32_t extra_bytes = 0;            // dense key ranges: control pages, template tile, scratch; the sink page
     uint32_t vd_tiles = 0;               // dense MLA: V / output head dim in tiles (0: d_tiles)
     std::optional<KVStorage> v_storage;  // V's storage when it differs from K's (nullopt: K's)
+    // Ring: V is K's leading vd_tiles columns (ring_mla's latent V). The BF16-state recipes (STANDARD, FAST) read it
+    // in place from the K chunk (no V CB) and keep O in one plane (RingJointSDPARecipeProgramFactory).
+    bool latent_v = false;
 };
+
+// Whether a ring runs ring_mla's latent-V layout: V is K's leading vd_tiles columns and the recipe keeps a BF16 state
+// (STANDARD, FAST). The FP32-state recipes (BALANCED, ACCURATE) stream V as a separate CB.
+inline bool latent_ring_recipe(const PrecisionPolicy& policy, uint32_t d_tiles, uint32_t vd_tiles, bool latent_v) {
+    return latent_v && vd_tiles != 0 && vd_tiles < d_tiles && !policy.fp32_destination;
+}
 
 // Dense attn_mask circular buffer: one QK row group of mask tiles per buffer slot (the factory
 // double-buffers when L1 allows, else single). Mirrors run_recipe_segments in sdpa_recipe.cpp.
@@ -121,6 +130,8 @@ struct RecipeBlockingProblem {
     // joint K rows that are not tile multiples (a K tail at every K chunk size).
     bool attention_sink = false;
     bool k_rows_unaligned = false;
+    // Ring: V is K's leading vd_tiles columns (ring_mla's latent V; RecipeL1Context::latent_v).
+    bool latent_v = false;
     // Orders problems for the chooser's memo.
     std::strong_ordering operator<=>(const RecipeBlockingProblem&) const = default;
 };
@@ -142,7 +153,8 @@ bool recipe_program_fits(const RecipeBlockingProblem& problem, uint32_t q_tiles,
 // Whether the named ring recipe kernels take a caller-chosen chunk pair: a supported geometry whose program is not
 // known to exceed the kernel config buffer. Op-chosen chunks (0) always do, since the chooser only emits fitting ones.
 // Ring calls outside this run the recipe as a configuration of the streaming kernel instead (named_ring_recipe_gap).
-// free_l1 (0: not checked) is the device's unreserved L1; the recipe's smallest CB layout must fit it.
+// free_l1 (0: not checked) is the device's unreserved L1; the recipe's smallest CB layout must fit it. latent_v: V is
+// K's leading v_head_dim columns (ring_mla).
 inline bool named_ring_recipe_chunks_fit(
     const PrecisionPolicy& policy,
     uint32_t q_chunk,
@@ -150,7 +162,8 @@ inline bool named_ring_recipe_chunks_fit(
     uint32_t head_dim,
     uint32_t v_head_dim,
     uint64_t free_l1 = 0,
-    bool causal = false) {
+    bool causal = false,
+    bool latent_v = false) {
     if (q_chunk == 0 || k_chunk == 0) {
         return true;
     }
@@ -163,6 +176,7 @@ inline bool named_ring_recipe_chunks_fit(
     ring.d_tiles = head_dim / 32;
     ring.vd_tiles = v_head_dim != head_dim ? v_head_dim / 32 : 0;
     ring.causal = causal;
+    ring.latent_v = latent_v;
     if (!recipe_geometry_supported(q_chunk / 32, k_chunk / 32, head_dim / 32) ||
         !recipe_program_fits(ring, q_chunk / 32, k_chunk / 32)) {
         return false;
@@ -173,7 +187,7 @@ inline bool named_ring_recipe_chunks_fit(
                                q_chunk / 32,
                                k_chunk / 32,
                                head_dim / 32,
-                               RecipeL1Context{.vd_tiles = ring.vd_tiles})
+                               RecipeL1Context{.vd_tiles = ring.vd_tiles, .latent_v = latent_v})
                                    .minimum <= free_l1;
 }
 
@@ -218,6 +232,24 @@ SDPAProgramConfig resolve_ring_recipe_blocking(
     uint32_t ring_size,
     const SDPAProgramConfig& program_config,
     uint32_t v_head_dim = 0);  // 0: Q's
+
+// ring_mla on a BF16-state recipe with latent V (latent_ring_recipe): the caller's chunk pair is a hint. Q is the
+// smallest tile multiple that gives every worker core at most one Q block (all heads' Q chunks of the device's Q slab
+// over the program config's grid; the state then stays resident, SDPA_RECIPE_RING_SINGLE_Q) and divides the slab, or
+// each half of it when balanced. Then every K (up to K640) that fits L1 and the kernel config buffer, in the order to
+// try at dispatch: fused before the unfused L1 fallback, whole 4-tile subblocks first, larger first.
+// Nullopt when no such Q exists (a long local Q slab, or not that recipe); the caller keeps its usual blocking then.
+struct LatentRingBlocking {
+    uint32_t q_chunk_size = 0;
+    std::vector<uint32_t> k_chunk_sizes;  // preferred first
+};
+std::optional<LatentRingBlocking> choose_latent_ring_recipe_blocking(
+    const PrecisionPolicy& policy,
+    const Tensor& q,
+    const Tensor& k,
+    uint32_t v_head_dim,
+    const SDPAProgramConfig& program_config,
+    bool is_balanced);
 
 SDPAProgramConfig resolve_exp_ring_recipe_blocking(
     const PrecisionPolicy& policy,

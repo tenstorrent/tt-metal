@@ -182,10 +182,7 @@ ProgramDescriptor recipe_compute_program(
         // CB 29: QK-subblock-width copies of -e0 in K's format (the fused chunks subtract m_ref in the QK).
         add_cb(29, recipe_subblock_width(k_tiles), kv_bytes, kv_format);
     }
-    // EXPERIMENT: TT_SDPA_RECIPE_OUT_ROWS=<n> overrides the output CB's Q tile rows (default 2 FP32, 4 BF16).
-    const char* out_rows_env = std::getenv("TT_SDPA_RECIPE_OUT_ROWS");
-    const uint32_t out_rows = out_rows_env ? static_cast<uint32_t>(std::atoi(out_rows_env)) : (fp32 ? 2u : 4u);
-    add_cb(16, out_rows * vd, 2048, tt::DataFormat::Float16_b);
+    add_cb(16, (fp32 ? 2 : 4) * vd, 2048, tt::DataFormat::Float16_b);
     ComputeConfigDescriptor compute_config{
         .math_fidelity = policy.pv_fidelity,
         .fp32_dest_acc_en = fp32,

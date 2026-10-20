@@ -436,7 +436,8 @@ std::optional<std::string_view> named_ring_recipe_gap(
             head_dim,
             v_head_dim,
             recipes::recipe_free_l1(*tensor_args.input_q.device()),
-            args.is_causal)) {
+            args.is_causal,
+            tensor_args.v_shares_k_buffer())) {
         return "chunk geometry / program size";
     }
     return std::nullopt;
