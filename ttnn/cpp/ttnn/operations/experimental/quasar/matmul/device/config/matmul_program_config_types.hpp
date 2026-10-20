@@ -92,15 +92,14 @@ struct MatmulMultiCoreProgramConfig {
 // `cores` as contiguous runs. Edge C slices are clipped on read/write, so any M / N works. Within a
 // cluster the C slice's subblocks are assigned round-robin to the compute threads (NEOs). A bias row and the
 // activation are applied in DST before the final pack.
-// Batches of A that share one B are stacked into one [batch * M x N] GEMM.
+// Batches of A that use one B are stacked into one [batch * M x N] GEMM.
 // Limits: no untilize, 32x32 tiles only; sharded output needs one C slice per core (and batch 1 with a batched B).
 struct MatmulUnifiedProgramConfig {
     // Empty = auto placement: the cores, C slice and orientation are chosen by a cost estimate over the natural
     // placements (the other fields are kept).
     tt::tt_metal::CoreRangeSet cores;
     // C slice (in tiles) each core produces in one go. 0 = auto: the output shard when C is sharded, else the
-    // largest divisor piece of the core's share of C (M / N split over the bounding box of `cores`) that fits
-    // L1 (#57884).
+    // largest C slice whose dims divide M / N split over the bounding box of `cores` that fits L1 (#57884).
     std::size_t C_slice_M_tiles = 0;
     std::size_t C_slice_N_tiles = 0;
     // K tiles multiplied per accumulation step: one A slice and one B slice are resident in L1 at a time and
