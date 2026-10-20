@@ -37,6 +37,8 @@ set(UNIT_TESTS_TTNN_BASIC_SOURCES
     test_normalization.cpp
     test_reduction.cpp
     test_relational_int.cpp
+    test_unary_comparison_specials.cpp
+    test_unary_comparison_coverage.cpp
     test_rsub_int.cpp
     test_sort_prim_validation.cpp
     test_sub_int.cpp
