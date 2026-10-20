@@ -9,12 +9,6 @@
 #include "internal/llk_metadata.h"
 #include "api/tensor/tensor_accessor_args.h"
 
-// Support for LLKOperandFrom.
-namespace binding_details {
-template <const auto& Token>
-struct LLKOperandExtractor;
-}
-
 namespace tensor_accessor {
 
 // TensorBindingToken:
@@ -94,9 +88,6 @@ struct TensorBindingToken {
     }
 
 private:
-    template <const auto& Token>
-    friend struct binding_details::LLKOperandExtractor;
-
     binding_details::LLKMetadata llk_metadata_;
 };
 

@@ -28,12 +28,6 @@
 // api/dataflow/dataflow_buffer.h for the DataflowBuffer class these tokens construct.
 //
 
-// Support for LLKOperandFrom.
-namespace binding_details {
-template <const auto& Token>
-struct LLKOperandExtractor;
-}
-
 // The token's template arguments are the producer and consumer access patterns, so the
 // DataflowBuffer built from it is specialized at compile time while the kernel still writes
 // `DataflowBuffer dfb(dfb::name)`. A plain `DFBBindingToken t{id}` is <UNKNOWN, UNKNOWN>; a
@@ -110,9 +104,6 @@ struct DFBBindingToken {
     }
 
 private:
-    template <const auto& Token>
-    friend struct binding_details::LLKOperandExtractor;
-
     uint16_t id_;
     binding_details::LLKMetadata llk_metadata_{};
 };

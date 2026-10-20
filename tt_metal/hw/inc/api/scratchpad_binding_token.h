@@ -33,12 +33,6 @@ class Scratchpad;
 // See api/scratchpad.h for the Scratchpad class this token constructs.
 //
 
-// Support for LLKOperandFrom.
-namespace binding_details {
-template <const auto& Token>
-struct LLKOperandExtractor;
-}
-
 class ScratchpadBindingToken {
 public:
     // Construct a Scratchpad from the offset and size supplied by the host.
@@ -111,9 +105,6 @@ public:
 private:
     template <typename T>
     friend class Scratchpad;
-
-    template <const auto& Token>
-    friend struct binding_details::LLKOperandExtractor;
 
     uint32_t crta_offset_;    // word index of the base-address slot in the CRTA buffer
     uint32_t size_in_bytes_;  // static per-node size
