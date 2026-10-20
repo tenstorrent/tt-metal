@@ -1441,13 +1441,12 @@ class GRPOTrainer:
             rewards_np = self._compute_rewards(prompts_x, completions, cols_x)
             advantages_np = self._compute_advantages(rewards_np)
             ref_logprobs = self._compute_ref_logprobs(prompts_x, completions)
+            batch_metrics = dict(self.metrics)
             try:
                 for mini_epoch in range(self.config.num_iterations):
                     if mini_epoch > 0:
                         # Metrics are averaged over steps; later mini-epochs don't generate, so they report 0.
-                        self.metrics["generation_time_s"] = 0.0
-                        for cb in self.callbacks:
-                            self.metrics.pop(f"{type(cb).__name__}_time_s", None)
+                        self.metrics = {**batch_metrics, "generation_time_s": 0.0}
                         self._step_start_time = time.perf_counter()
                     self._optimize(prompts_x, completions, advantages_np, ref_logprobs)
                     self._apply_gradients()
