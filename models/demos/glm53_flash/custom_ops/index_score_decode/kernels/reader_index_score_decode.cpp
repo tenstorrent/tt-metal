@@ -6,7 +6,7 @@
 // weights, the rest zero) and then the band's pooled-key tiles streamed d-major per chunk of KC k-tiles
 // (CB slot i*KC + c = d-tile i of k-tile c: the layout matmul_block wants for a kt x ct B block).
 //
-// compile-time args: [Dt, KC, Tt, w_tile_row_bytes(32)] + TensorAccessorArgs(q, k, w)
+// compile-time args: [Dt, KC, Tt, k_tile_bytes (2048 bf16 / 1088 bfp8_b)] + TensorAccessorArgs(q, k, w)
 // runtime args: [item0, n_items, stride, q_addr, k_addr, w_addr, n_bands, band_chunks, total_chunks]
 
 #include <stdint.h>
@@ -17,10 +17,11 @@ void kernel_main() {
     constexpr uint32_t Dt = get_compile_time_arg_val(0);
     constexpr uint32_t KC = get_compile_time_arg_val(1);
     constexpr uint32_t Tt = get_compile_time_arg_val(2);
-    constexpr auto q_args = TensorAccessorArgs<3>();
+    constexpr uint32_t k_tile_bytes = get_compile_time_arg_val(3);
+    constexpr auto q_args = TensorAccessorArgs<4>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto w_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
-    constexpr uint32_t cb_q = 0, cb_k = 1, cb_w = 2;
+    constexpr uint32_t cb_q = 0, cb_k = 1, cb_w = 2, cb_wfaces = 6;
     constexpr uint32_t tile_bytes = 2048;  // bf16 32x32
     constexpr uint32_t face_bytes = 512;
     constexpr uint32_t row_bytes = 32;  // 16 bf16 of one face row
@@ -36,7 +37,7 @@ void kernel_main() {
     const uint32_t total_chunks = get_arg_val<uint32_t>(8);
 
     const auto q_acc = TensorAccessor(q_args, q_addr, tile_bytes);
-    const auto k_acc = TensorAccessor(k_args, k_addr, tile_bytes);
+    const auto k_acc = TensorAccessor(k_args, k_addr, k_tile_bytes);
     const auto w_acc = TensorAccessor(w_args, w_addr, tile_bytes);
 
     for (uint32_t it = 0; it < n_items; ++it) {
@@ -57,19 +58,26 @@ void kernel_main() {
             }
         }
         // the w-row tile: zero, then row 0 of each face column = row b of the w tile (w [1,1,B,Hi] TILE, B <= 32 per
-        // tile page: page b/32, face row-group (b%32)/16, row b%16)
+        // tile page: page b/32, face row-group (b%32)/16, row b%16). DRAM reads are 64-byte aligned, so the row's two
+        // faces (1 KB, contiguous) land in a scratch CB and the two 32-byte row pieces are copied by the RISC.
         cb_reserve_back(cb_w, 1);
         {
             const uint32_t l1 = get_write_ptr(cb_w);
+            const uint32_t faces = get_write_ptr(cb_wfaces);
             volatile tt_l1_ptr uint32_t* z = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1);
             for (uint32_t i = 0; i < tile_bytes / 4; ++i) {
                 z[i] = 0;
             }
             const uint32_t page = b / 32;
             const uint32_t r = b % 32;
-            const uint32_t src_off = (r / 16) * 2 * face_bytes + (r % 16) * row_bytes;
-            noc_async_read(w_acc.get_noc_addr(page, src_off), l1, row_bytes);
-            noc_async_read(w_acc.get_noc_addr(page, src_off + face_bytes), l1 + face_bytes, row_bytes);
+            noc_async_read(w_acc.get_noc_addr(page, (r / 16) * 2 * face_bytes), faces, 2 * face_bytes);
+            noc_async_read_barrier();
+            volatile tt_l1_ptr uint32_t* f = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(faces);
+            const uint32_t rw = (r % 16) * (row_bytes / 4);  // the row's first word inside a face
+            for (uint32_t i = 0; i < row_bytes / 4; ++i) {
+                z[i] = f[rw + i];                                    // face 0 row 0 <- face (r/16)*2, row r%16
+                z[face_bytes / 4 + i] = f[face_bytes / 4 + rw + i];  // face 1 row 0 <- face (r/16)*2 + 1, row r%16
+            }
         }
         noc_async_read_barrier();
         cb_push_back(cb_q, Dt);
@@ -83,7 +91,7 @@ void kernel_main() {
                 const uint32_t kt = c0 * KC + c;
                 for (uint32_t i = 0; i < Dt; ++i) {
                     noc_async_read(
-                        k_acc.get_noc_addr(k_base + kt * Dt + i), l1 + (i * KC + c) * tile_bytes, tile_bytes);
+                        k_acc.get_noc_addr(k_base + kt * Dt + i), l1 + (i * KC + c) * k_tile_bytes, k_tile_bytes);
                 }
             }
             noc_async_read_barrier();

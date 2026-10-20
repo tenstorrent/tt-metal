@@ -73,6 +73,34 @@ def test_index_score_decode_vs_golden(mesh_device, W, B):
 
 
 @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+@pytest.mark.parametrize("B", [1, 8])
+def test_index_score_decode_bfp8_keys(mesh_device, B):
+    """bfp8_b pooled keys (GLM53_POOL_DTYPE=bfloat8_b: half the bytes of the budget's floor term) vs the bf16 run on the
+    same keys: per-user PCC of the scores and the top-512 selected-set overlap bf16 -> bfp8 (and both vs the golden)."""
+    W = 262400
+    op = IndexScoreDecode(mesh_device)
+    q, k, w = _inputs(B, W, 17)
+    ref = op.golden(q, k, w)
+    q_t, w_t, k16, o16 = _device(mesh_device, q, k, w)
+    op(q_t, w_t, k16, o16)
+    got16 = ttnn.to_torch(o16).float().reshape(B, W)
+    k8 = ttnn.typecast(k16, ttnn.bfloat8_b)
+    o8 = ttnn.zeros((B, 1, 1, W), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device)
+    op(q_t, w_t, k8, o8)
+    got8 = ttnn.to_torch(o8).float().reshape(B, W)
+    p16, ov16 = _compare(ref, got16, B)
+    p8, ov8 = _compare(ref, got8, B)
+    p88, ov88 = _compare(got16, got8, B)
+    logger.info(
+        f"bfp8 keys B={B}: vs golden pcc {p8:.6f} / top-512 overlap {ov8:.4f} (bf16 keys: {p16:.6f} / {ov16:.4f}); "
+        f"bfp8 vs bf16 run pcc {p88:.6f}, selected-set overlap {ov88:.4f}"
+    )
+    assert p8 > 0.995 and ov8 > 0.95
+    for t in (q_t, w_t, k16, o16, k8, o8):
+        ttnn.deallocate(t)
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
 @pytest.mark.parametrize(
     "device_params", [{"trace_region_size": 16 * 1024 * 1024, "l1_small_size": 32768}], indirect=True
 )

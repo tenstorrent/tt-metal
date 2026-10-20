@@ -49,10 +49,13 @@ class IndexScoreDecode:
         for t, lay, dt in (
             (q, ttnn.TILE_LAYOUT, ttnn.bfloat16),
             (w, ttnn.TILE_LAYOUT, ttnn.bfloat16),
-            (pools, ttnn.TILE_LAYOUT, ttnn.bfloat16),
             (out, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16),
         ):
             assert t.layout == lay and t.dtype == dt, (t.layout, t.dtype)
+        assert pools.layout == ttnn.TILE_LAYOUT and pools.dtype in (ttnn.bfloat16, ttnn.bfloat8_b), (
+            pools.layout,
+            pools.dtype,
+        )
         assert D % TILE == 0 and W % (TILE * self.KC) == 0, (D, W, self.KC)
         Dt, KC = D // TILE, self.KC
         Tt = W // TILE
@@ -68,26 +71,27 @@ class IndexScoreDecode:
         out_row_bytes = out.buffer_page_size()
         assert out_row_bytes == W * 2, (out_row_bytes, W)
         tile_bytes = 2048
+        k_tile_bytes = pools.buffer_page_size()  # 2048 bf16 / 1088 bfp8_b
+        assert pools.buffer_aligned_page_size() == k_tile_bytes, (k_tile_bytes, pools.buffer_aligned_page_size())
 
-        def cb(index, page, pages):
+        def cb(index, page, pages, fmt=ttnn.bfloat16):
             return ttnn.CBDescriptor(
                 total_size=page * pages,
                 core_ranges=core_set,
-                format_descriptors=[
-                    ttnn.CBFormatDescriptor(buffer_index=index, data_format=ttnn.bfloat16, page_size=page)
-                ],
+                format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=index, data_format=fmt, page_size=page)],
             )
 
         cbs = [
             cb(0, tile_bytes, Dt),  # q block
-            cb(1, tile_bytes, 2 * KC * Dt),  # k chunks, double-buffered
+            cb(1, k_tile_bytes, 2 * KC * Dt, pools.dtype),  # k chunks, double-buffered (the cache dtype)
             cb(2, tile_bytes, 1),  # w-row tile
             cb(3, tile_bytes, KC),  # S tiles
             cb(4, tile_bytes, 2 * KC),  # out tiles (row 0 valid), double-buffered
             cb(5, 64 * KC, 2),  # writer lines (scratch)
+            cb(6, 1024, 1),  # the w row's two faces (reader scratch)
         ]
         acc = lambda t: ttnn.TensorAccessorArgs(t).get_compile_time_args()
-        reader_ct = [Dt, KC, Tt, 32] + acc(q) + acc(pools) + acc(w)
+        reader_ct = [Dt, KC, Tt, k_tile_bytes] + acc(q) + acc(pools) + acc(w)
         compute_ct = [Dt, KC]
         writer_ct = [KC] + acc(out)
         reader_rt, compute_rt, writer_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()

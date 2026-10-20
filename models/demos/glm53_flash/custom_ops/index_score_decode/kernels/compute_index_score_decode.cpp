@@ -18,9 +18,9 @@
 #include "api/compute/matmul.h"
 #include "api/compute/pack.h"
 #include "api/compute/cb_api.h"
+#include "api/compute/reconfig_data_format.h"
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     constexpr uint32_t Dt = get_compile_time_arg_val(0);
     constexpr uint32_t KC = get_compile_time_arg_val(1);
     constexpr uint32_t cb_q = 0, cb_k = 1, cb_w = 2, cb_s = 3, cb_out = 4;
@@ -32,7 +32,7 @@ void MAIN {
     const uint32_t band_chunks = get_arg_val<uint32_t>(4);
     const uint32_t total_chunks = get_arg_val<uint32_t>(5);
 
-    compute_kernel_hw_startup(cb_q, cb_k, cb_s);
+    compute_kernel_hw_startup<SrcOrder::Reverse>(cb_q, cb_k, cb_s);  // matmul: in1 -> srcA, in0 -> srcB
 
     for (uint32_t it = 0; it < n_items; ++it) {
         const uint32_t item = item0 + it * stride;
@@ -46,11 +46,17 @@ void MAIN {
         cb_wait_front(cb_w, 1);
         for (uint32_t c0 = c_begin; c0 < c_end; ++c0) {
             cb_wait_front(cb_k, KC * Dt);
-            // phase 1: S = relu(Q K^T) for the chunk's KC k-tiles (one block: rt 1, ct KC, kt Dt)
+            // phase 1: S = relu(Q K^T) for the chunk's KC k-tiles: one block (rt 1 x ct KC output tiles) per inner
+            // d-tile, accumulated in DEST over the Dt inner tiles (matmul_block multiplies ONE inner tile per call;
+            // the CB holds the chunk d-major: d-tile i of k-tile c at slot i*KC + c)
+            // unpack formats: srcA <- k (bf16 or bfp8_b), srcB <- q (phase 2 left srcA on cb_s, srcB on cb_w)
+            reconfig_data_format(cb_s, cb_k, cb_w, cb_q);
             matmul_block_init(cb_q, cb_k, 1 /*transpose k*/, KC /*ct*/, 1 /*rt*/, Dt /*kt*/);
             pack_relu_config(ReluConfig::zero());
             tile_regs_acquire();
-            matmul_block(cb_q, cb_k, 0, 0, 0, 1 /*transpose*/, KC, 1, Dt);
+            for (uint32_t i = 0; i < Dt; ++i) {
+                matmul_block(cb_q, cb_k, i, i * KC, 0, 1 /*transpose*/, KC, 1, Dt);
+            }
             tile_regs_commit();
             cb_reserve_back(cb_s, KC);
             tile_regs_wait();
@@ -62,6 +68,7 @@ void MAIN {
             cb_pop_front(cb_k, KC * Dt);
             // phase 2: out_j = Wrow @ S_j (row 0 = the head-weighted scores of k-tile j)
             pack_relu_config(ReluConfig::none());
+            reconfig_data_format(cb_k, cb_s, cb_q, cb_w);  // srcA <- S (bf16), srcB <- the w-row tile
             matmul_block_init(cb_w, cb_s, 0, 1, 1, 1);
             cb_wait_front(cb_s, KC);
             tile_regs_acquire();
@@ -82,4 +89,3 @@ void MAIN {
         cb_pop_front(cb_w, 1);
     }
 }
-}  // namespace NAMESPACE

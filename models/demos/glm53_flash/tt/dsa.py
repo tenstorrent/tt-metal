@@ -1081,10 +1081,11 @@ class TtDSA(LightweightModule):
         B = q_lat.shape[-2]
         Hi, D, P, K = idx.Hi, idx.D, idx.P, self.cfg.index_select_pools
         q_i, w_i = idx.queries_and_weights(q_resid, q_resid, w=w)  # [1,Hi,B,D], [1,1,B,Hi]
-        # GLM53_SCORER_BATCHED=1: ONE index_score_decode program scores every user's query (its 32 heads as the
-        # rows of one query tile row) against its pooled keys -> [B,1,1,W] score rows, no per-user calls, no
-        # 32-row score blocks (needs pools_per_user % 256 == 0: TtIndexCache rounds to 256)
-        scorer_batched = os.environ.get("GLM53_SCORER_BATCHED", "0") == "1"
+        # GLM53_SCORER_BATCHED=1 (default): ONE index_score_decode program scores every user's query (its 32 heads
+        # as the rows of one query tile row) against its pooled keys -> [B,1,1,W] score rows, no per-user calls,
+        # no 32-row score blocks (needs pools_per_user % 256 == 0: TtIndexCache rounds to 256); 0 = one shared
+        # indexer_score_dsa call per user
+        scorer_batched = os.environ.get("GLM53_SCORER_BATCHED", "1") == "1"
         batched = meta.valid_len_rows is not None and os.environ.get("GLM53_TOPK_BATCHED", "1") == "1"
         if scorer_batched:
             assert batched, "GLM53_SCORER_BATCHED needs the batched top-k (GLM53_TOPK_BATCHED=1)"

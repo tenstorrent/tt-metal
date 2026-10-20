@@ -249,12 +249,56 @@ The per-user term left at 1 M is the scorer call (0.38 ms + the 32-row output an
 `custom_ops/index_score_decode` (section 5, item 1) scores all users in one program with the 32 heads as the rows
 of one query tile row (behind `GLM53_SCORER_BATCHED=1` until validated).
 
+### 4.6 `custom_ops/index_score_decode` (the batched decode scorer; `GLM53_SCORER_BATCHED`)
+
+One generic-op program scores every user's single query against its pooled keys: the user's 32 index heads are
+the 32 ROWS of one query tile row, so per 8-k-tile chunk the compute runs Dt = 4 `matmul_block` calls (rt 1 x
+ct 8, K transposed, ReLU in the packer) accumulated in DEST and then 8 single-tile matmuls with a "w-row tile"
+(row 0 = the head weights) whose row 0 is the head-weighted score of 32 pools; the writer keeps row 0 of each
+out tile (two 32-byte face pieces) and writes one 512-byte line per chunk into the user's `[B,1,1,W]` bf16 score
+row. Items (user, k-band of whole chunks) are dealt over the grid (~grid / B bands per user). No causal mask (the
+per-row top-k bound of `topk_rows` applies it). Versus the shared op's per-user calls: no 32-row query block
+with one real row (32x less matmul work per key tile), no 32-row score output (16 MB per user) and no row slice.
+
+`tests/custom_ops/test_index_score_decode.py` vs the fp32 golden (random bf16 q / k / w, W 1280 and 262 400, B 1 /
+4 / 8 / 32): per-user PCC 0.99995-0.99997, top-512 overlap 0.97-0.998 (bf16 ranking, as the shared scorer);
+trace replay with refreshed queries; streaming 64 MiB of bf16 keys per user in 0.49 / 0.76 / 1.40 ms for 1 / 4 / 8
+users (128 / 328 / 359 GB/s; the 1-user call is latency-bound on 130 items of 8 chunks). bfp8_b keys
+(`ttnn.typecast` of the same keys): PCC 0.99991 vs the golden, top-512 overlap 0.967-0.971 vs the golden and
+0.957-0.959 vs the bf16 run (`sparse1m_scorer_op_6.log`). Pitfalls met: compute kernels use `void kernel_main()`
+(not the `NAMESPACE`/`MAIN` form); `matmul_block` multiplies ONE inner tile per call (the caller loops the inner
+dimension in DEST); a 32-byte DRAM read at a 32-byte offset lands wrong on Blackhole (64-byte alignment: read the
+whole face and copy the row); switching the srcA operand between a bfp8 and a bf16 CB needs an explicit
+`reconfig_data_format` (the matmul init alone leaves the old unpack format).
+
+The decode path with it (`GLM53_SCORER_BATCHED=1`, now the default; `sparse1m_scorer_{traced,1m,1m_bfp8}.log`):
+
+| what | bf16 pooled keys | bfp8_b pooled keys (`GLM53_POOL_DTYPE=bfloat8_b`) |
+|---|---|---|
+| `test_dsa_sparse_traced.py` | 26/26 samples > 0.9995 (worst 0.999596); ids 97.9-99.0 % of HF | (not run) |
+| `test_sparse_1m.py`, PCC vs HF-restricted at 16 K / 131 K / 1 M | 0.999834 / 0.999852, 0.999813 / 0.999808, 0.999782 / 0.999796 (the per-user shared scorer: 0.999803 / 0.999838, 0.999767 / 0.999757, 0.999680 / 0.999706: the 32-head reduction now accumulates in DEST) | 0.999839 / 0.999813, 0.999824 / 0.999810, 0.999789 / 0.999772 |
+| id overlap vs HF (synthetic context) | 0.941 / 0.943, 0.912 / 0.922, 0.865 / 0.883 | 0.945 / 0.943, 0.912 / 0.906, 0.881 / 0.871 |
+| attention step, 1 / 4 / 8 users, 16 K | 1.65 / 2.38 / 3.23 ms | 1.60 / 2.10 / 2.68 ms |
+| 131 K | 1.78 / 2.49 / 3.35 ms | 1.72 / 2.23 / 2.80 ms |
+| **1 M** | **2.76 / 3.48 / 4.34 ms** (per-user scorer + batched top-k: 3.01 / 4.53 / 6.41; per-user both: 2.99 / 7.88 / 14.25) | **2.71 / 3.21 / 3.79 ms** |
+
+Whole layer 3 (`test_sparse_perf.py`, `sparse1m_scorer_perf.log`): 5.69 / 7.98 / 11.21 ms at 4 K, 5.83 / 8.11 /
+11.29 at 131 K, **6.90 / 9.09 / 12.26 ms at 1 M** for 1 / 4 / 8 users (per-user scorer: 7.05 / 10.26 / 14.23; the
+first traced path: 7.05 / 13.59 / 21.86); the DSA block is 52 / 55 / 55 device ops (96-103 ttnn ops), no longer
+growing with the user count. Regression under the default (`sparse1m_scorer_regress.log`): `test_dsa_sparse_traced`
+(2), `test_decode_trace` l3, `test_batch8` B=8 l3, `test_dsa_long` (4): 9/9 passed.
+
+At 8 users x 1 M the attention block is now 4.3 ms (bf16) / 3.8 ms (bfp8) against the 0.7 ms budget: the scorer
+read (1.4 / 0.7 ms at 359 GB/s), the top-k (1.26 ms per call, serial per row on one core) and ~45 fixed small ops
+(stems, index maintenance, blends, gather 0.5 ms, compact attention 0.5 ms) are what is left. The bfp8 pool cache
+is a knob (default bf16): the selected sets move by ~4 % vs bf16 on random keys while the layer output vs HF is
+unchanged; the real-prompt accuracy gate (eval set) decides it, as for the experts.
+
 ## 5. What remains
 
-1. The per-user scorer: `custom_ops/index_score_decode` (one program for all users, heads as the rows of one
-   query tile row, keys streamed once, one output row per user; `GLM53_SCORER_BATCHED=1`) takes the per-user
-   scorer calls out; then bfp8 pooled keys halve the bytes (the budget is that read's floor; selected-set
-   exactness check vs bf16).
+1. Done: `custom_ops/index_score_decode` (section 4.6) and the bfp8 pool-cache knob. Next on the scorer: the
+   1-user latency (0.49 ms for 64 MiB: fewer, longer bands), multi-core top-k rows (1.26 ms per call), and
+   folding the metadata blend + tail into the gather kernel.
 2. The op count: 4 ops per user (slice q, slice w, score, row slice) + ~45 fixed; the batched scorer removes
    the per-user part; the metadata blend (5 ops) can fold into the gather kernel (dense users = pools in order,
    tail slot) once it takes the positions tensor. A multi-core top-k row (the 512-window chain is serial on one
