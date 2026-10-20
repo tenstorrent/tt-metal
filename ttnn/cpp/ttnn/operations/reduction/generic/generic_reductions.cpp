@@ -572,8 +572,14 @@ Tensor reduce(
     const ttnn::PadValue fill_pad_value = input_tensor_arg.dtype() == tt::tt_metal::DataType::INT32
                                               ? ttnn::PadValue{std::bit_cast<uint32_t>(pad_value)}
                                               : ttnn::PadValue{pad_value};
-    auto input_tensor =
-        is_tiled ? ttnn::fill_implicit_tile_padding(input_tensor_arg, fill_pad_value) : input_tensor_arg;
+    auto input_tensor = input_tensor_arg;
+    if (is_tiled &&
+        (input_tensor.logical_shape()[-2] % tt::constants::TILE_HEIGHT != 0 ||
+         input_tensor.logical_shape()[-1] % tt::constants::TILE_WIDTH != 0)) {
+        // fill_pad writes in place. A reduction must not rewrite its caller's tensor.
+        input_tensor = ttnn::clone(input_tensor, std::nullopt, std::nullopt, std::nullopt);
+        input_tensor = ttnn::fill_implicit_tile_padding(input_tensor, fill_pad_value);
+    }
 
     // bf16 multi-axis Sum/Mean precision chain: carry FP32 between stages and pack bf16
     // only on the final stage. Skipped for full-tensor reductions (dim covers every
