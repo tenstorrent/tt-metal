@@ -2457,8 +2457,13 @@ def test_high_bw_all_gather_cached_link_discovery(mesh_device, num_links, expect
 # page to the physical page holding it on the rank that owns it (update_padded_kv_cache's paged_kv_table.hpp).
 
 _PAGE_UNMAPPED = -1
-# Spare physical pages past the ones the tables use, so a pool entry no row maps is part of every pool.
+# Unused pages in every rank's pool: the table swap below moves a page onto one.
 _SPARE_POOL_PAGES = 3
+# The reader's table window (kPageTableWindowEntries, high_bw_all_gather_unicast_factory.cpp).
+_READER_TABLE_WINDOW = 512
+# The page-table rows of the two requests: the second is past one row per DRAM bank, so its address depends on the
+# compiled row stride.
+_REQUEST_ROWS = (0, 9)
 
 
 def _page_table_tensor(mesh_device, table):
@@ -2496,27 +2501,28 @@ def _shuffled_page_table(*, rows, ranks, local_rows, chunk_local, page_size, num
 @run_for_blackhole("high_bw_all_gather paged-source coverage requires Blackhole")
 @_AG_TRACED_AXIS
 @pytest.mark.parametrize(
-    "dtype, layout, width",
-    [(ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, 576), (ttnn.bfloat8_b, ttnn.TILE_LAYOUT, 128)],
+    "dtype, layout, width, local_rows",
+    [(ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, 576, 4608), (ttnn.bfloat8_b, ttnn.TILE_LAYOUT, 128, 9216)],
     ids=["bf16_rm", "bfp8_tile"],
 )
 @pytest.mark.parametrize("page_size", [32, 64], ids=["page32", "page64"])
-def test_high_bw_all_gather_paged_source(mesh_device, ag_traced, dtype, layout, width, page_size):
+def test_high_bw_all_gather_paged_source(mesh_device, ag_traced, dtype, layout, width, local_rows, page_size):
     """A paged source gathers into the same contiguous output a slot cache would.
 
     Each rank's pages sit shuffled in its own pool, for two requests of two layers; the request, the layer and the
     extent change between calls on one cached program (one trace per layer when traced), including extents that end
-    mid-page (eager only: the traced extent is whole slabs). The table's width is not a whole number of DRAM-aligned
-    entry groups, so the last window read is short. Every rank's active prefix must byte-match what the pool holds at
-    the request's pages. Then, eagerly and on the same cached program, a new table with one page moved, one entry just
-    past the pool and everything past the first slab unmapped: the mapped slab lands from its new pages and every
-    other row gathers as zeros."""
+    mid-slab (mid-page at page 64; eager only: the traced extent is whole slabs). The requests use table rows 0 and 9.
+    The table's width is not a whole number of DRAM-aligned entry groups, so the last window read is short. Every
+    rank's active prefix must byte-match what the pool holds at the request's pages. Then, eagerly and on the same
+    cached program, the same request through a new table with one page moved, one entry just past the pool and
+    everything past the first slab unmapped: the mapped slab lands from its new pages and every other row gathers as
+    zeros."""
     rank_line, cluster_axis = _rank_line_mesh(mesh_device)
     ranks = rank_line.shape[cluster_axis]
-    local_rows, chunk_local, num_users, num_layers = 4608, 256, 2, 2
+    chunk_local, num_users, num_layers = 256, 2, 2
     slab_global = chunk_local * ranks
     num_pages = num_users * (local_rows // page_size) + _SPARE_POOL_PAGES
-    table = _shuffled_page_table(
+    requests = _shuffled_page_table(
         rows=num_users,
         ranks=ranks,
         local_rows=local_rows,
@@ -2525,12 +2531,15 @@ def test_high_bw_all_gather_paged_source(mesh_device, ag_traced, dtype, layout, 
         num_pages=num_pages,
         seed=5,
     )
-    # A row-major worker reads one DRAM bank's pages, which span the whole row: at page 32 the row is longer than the
-    # reader's 512-entry table window, so the window refills. A tiled worker reads a contiguous run of pages and does
-    # not refill.
-    if page_size == 32:
-        assert table.shape[1] > 512
-    table = torch.cat([table, torch.full((num_users, 5), _PAGE_UNMAPPED, dtype=torch.int32)], dim=1)
+    # A worker on the bank-owned schedule reads one DRAM bank's pages, which span the whole row. bf16 rows (one worker
+    # per bank) and the tiled case's message size (4 workers per direction) take that schedule, so where the row is
+    # longer than the reader's table window, the window refills.
+    if page_size == 32 or layout == ttnn.TILE_LAYOUT:
+        assert requests.shape[1] > _READER_TABLE_WINDOW
+    # Rows between the requests are unmapped; 5 unmapped columns make the width not a whole 16-entry DRAM group.
+    table = torch.full((_REQUEST_ROWS[-1] + 1, requests.shape[1] + 5), _PAGE_UNMAPPED, dtype=torch.int32)
+    for user, row in enumerate(_REQUEST_ROWS):
+        table[row, : requests.shape[1]] = requests[user]
     torch.manual_seed(0)
     shard_dims = (2, None) if cluster_axis == 0 else (None, 2)
     device_pool = _make_tensor(
@@ -2555,7 +2564,7 @@ def test_high_bw_all_gather_paged_source(mesh_device, ag_traced, dtype, layout, 
         out = torch.zeros((rows, width), dtype=torch.bfloat16)
         for local_row in range(0, rows, page_size):
             n = min(page_size, rows - local_row)
-            phys = int(page_table[user, _global_row(local_row, rank, ranks, chunk_local) // page_size])
+            phys = int(page_table[_REQUEST_ROWS[user], _global_row(local_row, rank, ranks, chunk_local) // page_size])
             if 0 <= phys < num_pages:
                 out[local_row : local_row + n] = pool_by_rank[rank][phys * num_layers + layer, 0][:n]
         return out
@@ -2606,7 +2615,7 @@ def test_high_bw_all_gather_paged_source(mesh_device, ag_traced, dtype, layout, 
             output_tensor=output,
             cluster_axis=cluster_axis,
             num_links=_NUM_LINKS,
-            input_batch_index=user * num_layers + layer,
+            input_batch_index=_REQUEST_ROWS[user] * num_layers + layer,
             gathered_dim_size=rows * ranks,
             **(paging | overrides),
         )
@@ -2614,7 +2623,7 @@ def test_high_bw_all_gather_paged_source(mesh_device, ag_traced, dtype, layout, 
     entries = None
     for user, layer, rows in cases:
         if ag_traced:
-            _write_meta_scalar(user_meta, user)
+            _write_meta_scalar(user_meta, _REQUEST_ROWS[user])
             # The traced extent is min(round_up(start + slab, slab), full): a start one slab short of the end.
             _write_meta_scalar(prefix_meta, rows * ranks - slab_global)
             ttnn.execute_trace(rank_line, traces[layer], cq_id=0, blocking=True)
@@ -2632,8 +2641,12 @@ def test_high_bw_all_gather_paged_source(mesh_device, ag_traced, dtype, layout, 
     if ag_traced:
         return
     # A new table on the cached program: page 0 of user 0 moved to a spare pool page, page 1 one past the pool, the
-    # rest past the first slab unmapped. The first table stays allocated, so the new one sits at another address and
-    # a program still bound to the first cannot pass this check.
+    # rest past the first slab unmapped. The first table stays allocated, so the new one sits at another address, and
+    # the call before it is the same request through the first table, so only the table changes: a program still bound
+    # to the first table cannot pass this check.
+    gather_eager(0, 0, local_rows)
+    ttnn.synchronize_device(rank_line)
+    check(table, 0, 0, local_rows)
     sparse = table.clone()
     owned_by_rank0 = [q for q in range(table.shape[1]) if (q * page_size // chunk_local) % ranks == 0]
     sparse[0, 0] = min(set(range(num_pages)) - set(table[:, owned_by_rank0].flatten().tolist()))
@@ -2724,6 +2737,17 @@ def test_high_bw_all_gather_paged_source_rejects(mesh_device, expect_error):
     )
     with expect_error(RuntimeError, "ranks x whole pages"):
         gather(output_tensor=uneven)
+    # Whole pages per rank but not whole slabs: the last half slab would map to pages another rank owns.
+    half_slab = _make_tensor(
+        rank_line,
+        torch.zeros((1, 1, (local_rows + chunk_local // 2) * ranks, width), dtype=torch.bfloat16),
+        ttnn.bfloat16,
+        ttnn.ROW_MAJOR_LAYOUT,
+        ttnn.ReplicateTensorToMesh(rank_line),
+    )
+    wide = _page_table_tensor(rank_line, torch.zeros((2, pages + ranks), dtype=torch.int32))
+    with expect_error(RuntimeError, "whole slabs of gathered_slab_global"):
+        gather(output_tensor=half_slab, page_table=wide)
     half_page_pool = _make_tensor(
         rank_line,
         torch.zeros((num_layers, 1, page_size // 2 * ranks, width), dtype=torch.bfloat16),
