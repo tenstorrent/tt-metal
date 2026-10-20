@@ -30,8 +30,9 @@ sender tensix           relay poll loop             relay poll loop        recv 
       +---- bytes_acked --  pop() on local completion   post_credit <-- bytes_acked
 ```
 
-Legs 1 and 3 are `D2HSocket` and `H2DSocket` (in `DEVICE_PULL` mode) unchanged. Only the
-host-to-host leg is new. It sits behind the `HostTransport` interface
+Legs 1 and 3 are `D2HSocket` and `H2DSocket` (in `DEVICE_PULL` mode by default;
+`TransportConfig::h2d_mode = H2DMode::HOST_DMA` moves leg 3 to the PCIe DMA engine, see §7)
+unchanged. Only the host-to-host leg is new. It sits behind the `HostTransport` interface
 (`host_transport/host_transport.hpp`), implemented by `MpiTransport`: two-sided
 point-to-point through `DistributedContext`.
 
@@ -452,3 +453,89 @@ Reading it:
 
 Same shape as §4's TCP result (~2.2 GB/s, flat from 2 cores): the host hop is the limit and the
 target of 7 – 11 GB/s needs the RDMA-capable transport, not more sender cores.
+
+### Receiver leg over PCIe DMA (`H2DMode::HOST_DMA`, jobs 138650 + 138834 vs 138496)
+
+`DEVICE_PULL` has the receiver core NOC-read each page out of the pinned host ring. `HOST_DMA`
+keeps the ring in L1 like D2D does, stages each page in the pinned ring at the same offset as
+its L1 slot, and moves it with the chip's PCIe DMA engine (`TTDevice::dma_write_zero_copy`),
+then writes the doorbell over MMIO. The device side is the `HOST_PUSH` kernel path. Measured in
+isolation the DMA costs ~5 µs fixed per call plus ~15 GB/s, so it is the better push mode above
+~2 KiB pages; `HOST_PUSH` (MMIO, ~0.3 GB/s) is only kept for comparison.
+
+Two things to know before reading the numbers:
+
+- **It costs L1.** The ring is an L1 buffer that the lockstep allocator charges to every bank,
+  and `HostMeshSocket` allocates a second, ring-sized receiver data buffer on top of it, so a
+  64 × 14336 B ring (917 KB) does not fit twice in a 1.43 MB bank. The tests clamp the ring to
+  a 1.1 MB budget (`fit_fifo_to_l1`, `TT_HOST_SOCKET_L1_RING_BUDGET`): 37 – 38 pages at 14336 B,
+  33 at 16 KiB, 8 at 64 KiB. That is why the burst table has no 64-page column for this leg and
+  why the throughput row ran with a 37-page ring.
+- **Not every chip's DMA engine reaches L1.** On `bh-glx-120-a08u08`, x8 chips 13
+  (`0000:46:00.0`) and 29 (`0000:86:00.0`) never deliver PCIe-DMA writes to L1, while chips 5 and
+  21 do and NOC-initiated reads of the same pinned ring work on all four; the IOVA value is not
+  the discriminator (chip 5 works from an IOVA above 2^58, 13 and 29 fail from 0x3fbc0000).
+  `H2DSocket` therefore DMAs a 256 B pattern at construction, reads it back, and falls back to
+  MMIO for the payload with a warning when it did not land. `dmesg` is not readable on the nodes,
+  so whether the engine's reads fault at the IOMMU is still open. Every number below is from
+  chip 5 with the DMA engine in use (zero fallbacks in the logs).
+
+Same hosts and chip as job 138496 (`DEVICE_PULL`), same binary apart from the mode. The
+host-to-host rows have no device in them and still differ by up to 120 µs between the two jobs,
+which is the TCP hop's run-to-run bimodality again: it is larger than anything the receiver leg
+adds, so the idle rows cannot rank the two legs. Microseconds, p50 (min / p99).
+
+| label | page | DEVICE_PULL (138496) | HOST_DMA (138650) |
+|---|---|---|---|
+| host-to-host put → credit | 64 B | 146.5 (78.2 / 223.1) | 268.3 (91.4 / 293.1) |
+| host-to-host put → credit | 14336 B | 88.9 (82.9 / 96.6) | 88.0 (82.4 / 146.8) |
+| host-to-host put → credit | 64 KiB | 198.9 (192.7 / 318.7) | 311.8 (192.4 / 445.8) |
+| D2D round trip, idle | 64 B | 180.5 (71.6 / 347.2) | 366.4 (229.9 / 423.8) |
+| D2D round trip, idle | 1 KiB | 165.7 (106.1 / 260.6) | 302.2 (287.5 / 322.3) |
+| D2D round trip, idle | 4 KiB | 267.7 (251.5 / 341.9) | 378.5 (302.5 / 429.2) |
+| D2D round trip, idle | 14336 B | 91.5 (80.5 / 352.2) | 165.7 (103.9 / 237.7) |
+| D2D round trip, idle | 64 KiB | 673.3 (486.1 / 845.1) | 551.0 (521.8 / 675.4) |
+| stream: send → peer credit | 14336 B | 503.4 (318.2 / 1063.7) | 464.0 (210.7 / 735.4) |
+| stream: published → drained | 14336 B | 23.1 (2.5 / 50782.7) | 21.4 (1.4 / 227.9) |
+| stream: forward path under load | 14336 B | 455.9 (272.4 / 1006.9) | 378.5 (127.8 / 617.5) |
+
+Burst to the last credit, p50 µs, local / remote, same layout as the table above (ring = 64
+pages for `DEVICE_PULL`, L1-clamped for `HOST_DMA`; bursts larger than the ring are dropped):
+
+| page | leg | 1 | 2 | 4 | 8 | 16 | 32 | 64 |
+|---|---|---|---|---|---|---|---|---|
+| 64 B | pull | 16 / 296 | 18 / 297 | 22 / 298 | 26 / 323 | 47 / 276 | 78 / 292 | 174 / 344 |
+| 64 B | dma | 33 / 136 | 36 / 201 | 29 / 176 | 33 / 265 | 50 / 253 | 91 / 221 | 210 / 347 |
+| 1 KiB | pull | 27 / 487 | 20 / 493 | 27 / 496 | 39 / 394 | 56 / 370 | 95 / 378 | 229 / 417 |
+| 1 KiB | dma | 35 / 205 | 30 / 332 | 23 / 381 | 38 / 337 | 56 / 240 | 115 / 274 | 246 / 396 |
+| 4 KiB | pull | 38 / 294 | 33 / 307 | 30 / 206 | 47 / 183 | 71 / 226 | 145 / 307 | 304 / 486 |
+| 4 KiB | dma | 13 / 356 | 20 / 238 | 27 / 243 | 43 / 261 | 65 / 274 | 118 / 368 | 315 / 476 |
+| 14336 B | pull | 40 / 302 | 45 / 315 | 35 / 293 | 56 / 340 | 100 / 272 | 200 / 410 | 359 / 702 |
+| 14336 B | dma | 14 / 105 | 27 / 143 | 37 / 198 | 58 / 199 | 105 / 281 | 182 / 427 | — |
+| 16 KiB | pull | 21 / 287 | 37 / 219 | 39 / 223 | 57 / 219 | 99 / 326 | 219 / 438 | 377 / 763 |
+| 16 KiB | dma | 19 / 310 | 25 / 176 | 42 / 183 | 60 / 222 | 118 / 287 | 220 / 440 | — |
+| 64 KiB | pull | 174 / 280 | 227 / 393 | 207 / 354 | 289 / 483 | 526 / 808 | — | — |
+| 64 KiB | dma | 204 / 427 | 210 / 398 | 216 / 391 | 310 / 513 | — | — | — |
+
+The local column is the sender's own D2H leg and is the same for both modes, as it should be.
+The remote column tracks the pull leg within the TCP noise at every size and burst: the DMA
+engine's ~5 µs per commit is not visible against a 100 – 400 µs host hop, and at 64 KiB pages
+`HOST_DMA` sits ~30 – 100 µs above `DEVICE_PULL` at small bursts, which is the one place the
+synchronous DMA call (UMD busy-polls the engine; there is no submit/wait pair) shows up: the
+relay thread is stuck in it instead of posting the next receive.
+
+Throughput, 14336 B, one core, 16 × 56 MB:
+
+| leg | ring | GB/s | job |
+|---|---|---|---|
+| DEVICE_PULL | 64 pages (917 KB) | 1.71 | 138496 |
+| HOST_DMA | 37 pages (530 KB, L1 budget) | 1.10 | 138834 |
+| DEVICE_PULL | 37 pages | 0.82, 1.17 (two runs) | 138837 |
+| HOST_DMA | 37 pages | 1.09, 1.08 (two runs) | 138837 |
+
+At the same ring depth the two legs are indistinguishable: a 530 KB ring over the ~460 µs ack
+round trip measured under load is 1.15 GB/s of bandwidth-delay product, and both land there.
+The 1.71 GB/s `DEVICE_PULL` figure is the deeper ring, not the faster leg. So on this transport
+`HOST_DMA` buys nothing and costs L1 (which caps the ring, which caps the bandwidth), and
+`DEVICE_PULL` stays the default. It becomes interesting when the host hop is RDMA (§4) and
+the receiver core's NOC reads of host memory are what is left on the critical path.
