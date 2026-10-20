@@ -402,10 +402,22 @@ std::vector<DramBankReaderAssignment> get_dram_bank_reader_assignments(
     tt::tt_metal::distributed::MeshDevice& device,
     tt::tt_metal::NOC noc,
     uint32_t workers_per_bank,
-    const tt::tt_metal::CoreRangeSet& secondary_reader_excluded_cores) {
+    const tt::tt_metal::CoreRangeSet& secondary_reader_excluded_cores,
+    const tt::tt_metal::distributed::MeshCoordinate* coord) {
     validate_num_workers_per_dram_bank(workers_per_bank);
 
-    const auto primary_workers = device.get_optimal_dram_bank_to_logical_worker_assignment(noc);
+    std::vector<tt::tt_metal::CoreCoord> primary_workers;
+    if (coord != nullptr) {
+        // this chip's own placement (a mesh's chips can differ in harvesting and in where each bank's best reader is)
+        const auto per_bank = device.get_optimal_dram_bank_to_logical_worker_assignment(noc, *coord);
+        primary_workers.resize(per_bank.size());
+        for (const auto& [bank, core] : per_bank) {
+            TT_FATAL(bank < primary_workers.size(), "DRAM bank id {} out of range", bank);
+            primary_workers[bank] = core;
+        }
+    } else {
+        primary_workers = device.get_optimal_dram_bank_to_logical_worker_assignment(noc);
+    }
     std::vector<DramBankReaderAssignment> assignments;
     assignments.reserve(primary_workers.size() * workers_per_bank);
 
@@ -445,7 +457,9 @@ std::vector<DramBankReaderAssignment> get_dram_bank_reader_assignments(
                     // heuristic; bank addressing still uses each executing chip's allocator table.
                     const uint32_t cost = tt::tt_metal::experimental::Device::get_worker_noc_hop_distance(
                         &device,
-                        tt::tt_metal::distributed::MeshCoordinate::zero_coordinate(device.shape().dims()),
+                        coord != nullptr
+                            ? *coord
+                            : tt::tt_metal::distributed::MeshCoordinate::zero_coordinate(device.shape().dims()),
                         candidate,
                         primary_workers[bank],
                         noc);

@@ -403,10 +403,13 @@ void get_optimal_dram_bank_to_reader_assignment(
     tt::tt_metal::CoreRangeSet& all_worker_cores,
     tt::tt_metal::NOC noc);
 
+// coord: the mesh coordinate of the chip the readers run on (its own bank-to-worker placement: chips of one mesh can
+// be harvested differently); nullptr: the mesh-wide placement (the first local chip's).
 std::vector<DramBankReaderAssignment> get_dram_bank_reader_assignments(
     tt::tt_metal::distributed::MeshDevice& device,
     tt::tt_metal::NOC noc,
     uint32_t workers_per_bank,
-    const tt::tt_metal::CoreRangeSet& secondary_reader_excluded_cores);
+    const tt::tt_metal::CoreRangeSet& secondary_reader_excluded_cores,
+    const tt::tt_metal::distributed::MeshCoordinate* coord = nullptr);
 
 }  // namespace ttnn::prim::dram_sharded_helpers
