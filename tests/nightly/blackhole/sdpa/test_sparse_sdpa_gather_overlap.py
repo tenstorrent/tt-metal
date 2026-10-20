@@ -10,6 +10,7 @@ neither the realtime profiler nor the Tracy device profiler reports traced sub-d
 
 import os
 import time
+from functools import partial
 from pathlib import Path
 
 import numpy as np
@@ -1660,7 +1661,10 @@ def test_sparse_push_tree(mesh_device):
         t_routed = timed(routed)
 
         t0 = time.perf_counter()
-        streams_host, slot_maps, stats = _tree_plan(
+        planner = {"local": _tree_plan_local, "level": partial(_tree_plan_local, per_packet=False)}.get(
+            os.environ.get("TREE_PLAN"), _tree_plan
+        )
+        streams_host, slot_maps, stats = planner(
             natural, n_dev, mesh_shape, stripe_chunk, pages_per_packet, buffer_rows, links=links, k_per=k_per
         )
         t_host = time.perf_counter() - t0
@@ -1677,8 +1681,7 @@ def test_sparse_push_tree(mesh_device):
         t_tree = timed(tree)
         lines.append(
             f"  layer {layer}: routed {t_routed:6.0f} us, tree {t_tree:6.0f} us ({t_routed / t_tree:.2f}x); "
-            f"tree depth {stats['depth']}, busiest direction {stats['busiest_dir_mb']:.1f} MB, "
-            f"staged {stats['staged_rows']} rows/chip, {stats['packets']} packets, plan {t_host:.0f} s on host"
+            f"tree depth {stats['depth']}, {stats['packets']} packets, plan {t_host:.0f} s on host"
         )
         logger.info(lines[-1])
 
@@ -1704,3 +1707,160 @@ def test_sparse_push_tree(mesh_device):
         for t in (idx_natural, table, tables, streams, idx_tree):
             ttnn.deallocate(t)
     logger.info("\n" + "\n".join(lines))
+
+
+def _tree_order(x, rel_dests, mesh_shape):
+    """Device-computable tree order for row x: fewer edges, row parity on ties."""
+    ny, nx = (len(_tree_edges(rel_dests, o, mesh_shape)) for o in ("yx", "xy"))
+    return "yx" if ny < nx or (ny == nx and x & 1) else "xy"
+
+
+_TREE_STAGE_ROWS = 65536  # staging rows per incoming direction
+
+
+def _tree_plan_local(
+    natural, n_dev, mesh_shape, stripe_chunk, pages_per_packet, buffer_rows, links=2, k_per=2, per_packet=True
+):
+    """Same contract as _tree_plan, with rules each chip can evaluate on its own (the device planner's):
+    per-row tree order (_tree_order); requester b's buffer = [own rows | rows arriving from each direction] in
+    regions of R_b pages, then fixed staging regions per direction; on each edge rows ordered by (depth, keep
+    first, row) and packets dealt round-robin over the direction's senders; level h waits for every incoming
+    stream to have delivered all of its packets of levels < h. With per_packet, a packet instead waits only for the
+    packets that carried its rows here: the n-th packet of an edge is packet n // senders_per_dir of sender n % it."""
+    R, C = mesh_shape
+    B, P = _DRAM_BANKS, pages_per_packet
+    unit = P * B
+    per_dir = links * k_per
+    senders = 4 * per_dir
+    needed = [np.unique(v[v >= 0]) for v in natural.reshape(n_dev, -1)]
+    req_of = np.concatenate([np.full(len(v), d) for d, v in enumerate(needed)])
+    uniq, inv = np.unique(np.concatenate(needed), return_inverse=True)
+    masks = np.zeros(len(uniq), dtype=np.int64)
+    np.bitwise_or.at(masks, inv, np.left_shift(1, req_of).astype(np.int64))
+    owners, local = _owner_local(uniq, stripe_chunk, n_dev)
+    remote = masks & ~np.left_shift(1, owners).astype(np.int64)
+    lane_rel = lambda j: (j % B) + (j // B) * unit
+    region = [-(-(-(-(len(needed[b]) + 8 * P) // P)) // B) * unit for b in range(n_dev)]  # pages
+    stage_pages = -(-(-(-_TREE_STAGE_ROWS // P)) // B) * unit
+    keep_base = lambda b, dr: (1 + dr) * region[b]
+    stage_base = lambda b, dr: 5 * region[b] + dr * stage_pages
+    assert max(5 * r + 4 * stage_pages for r in region) <= buffer_rows, "tree regions exceed the buffer"
+    neighbour = lambda a, dr: ((a // C + (dr == _S) - (dr == _N)) % R) * C + (a % C + (dr == _E) - (dr == _W)) % C
+
+    # Edge records: (from a, dir, depth, keep, row id).
+    recs = []
+    max_depth = 0
+    cache = {}
+    for u in np.flatnonzero(remote):
+        o, m = int(owners[u]), int(remote[u])
+        ro, co = divmod(o, C)
+        key = (o, m, int(uniq[u]) & 1)
+        if key not in cache:
+            rel = [(((d // C) - ro) % R, ((d % C) - co) % C) for d in range(n_dev) if m >> d & 1]
+            order = _tree_order(int(uniq[u]), rel, mesh_shape)
+            cache[key] = [
+                (((a[0] + ro) % R) * C + (a[1] + co) % C, dr, ((b[0] + ro) % R) * C + (b[1] + co) % C, h)
+                for a, dr, b, h in _tree_edges(rel, order, mesh_shape)
+            ]
+        for a, dr, b, h in cache[key]:
+            recs.append((a, dr, h, 0 if m >> b & 1 else 1, int(uniq[u]), u))
+            max_depth = max(max_depth, h)
+    recs.sort()
+
+    slot = np.full((n_dev, len(uniq)), -1, dtype=np.int64)  # where each row sits on each chip (page)
+    packets = {}  # (a, dr) -> [(h, keep, target, row ids)]
+    lanes = {}  # (b, dr, keep) -> lanes used
+    for b in range(n_dev):  # requester's own rows
+        ids = np.flatnonzero((owners == b) & (masks >> b & 1).astype(bool))
+        for k, u in enumerate(ids):
+            slot[b, u] = lane_rel(k // P) + (k % P) * B
+    i = 0
+    while i < len(recs):
+        a, dr, h, keep = recs[i][:4]
+        j = i
+        while j < len(recs) and recs[j][:4] == (a, dr, h, keep):
+            j += 1
+        b = neighbour(a, dr)
+        ids = [r[5] for r in recs[i:j]]
+        base = keep_base(b, dr) if keep == 0 else stage_base(b, dr)
+        for s0 in range(0, len(ids), P):
+            lane = lanes.get((b, dr, keep), 0)
+            lanes[(b, dr, keep)] = lane + 1
+            target = base + lane_rel(lane)
+            chunk = ids[s0 : s0 + P]
+            for k, u in enumerate(chunk):
+                slot[b, u] = target + k * B
+            packets.setdefault((a, dr), []).append((h, keep, target, chunk))
+        i = j
+    assert max(lanes.get((b, dr, 1), 0) for b in range(n_dev) for dr in range(4)) * P <= _TREE_STAGE_ROWS
+
+    items = [[[] for _ in range(senders)] for _ in range(n_dev)]
+    sent = np.zeros((n_dev, senders, max_depth + 1), dtype=np.int64)  # packets per (stream, level)
+    arrived = {}  # (chip, row id) -> (stream, packets of that stream up to and including the row's)
+    for (a, dr), pk in packets.items():
+        b = neighbour(a, dr)
+        for n, (h, keep, target, chunk) in enumerate(pk):
+            pick = n % per_dir
+            w = ((pick // k_per) * 4 + dr) * k_per + pick % k_per
+            for u in chunk:
+                arrived[(b, u)] = (w, n // per_dir + 1)
+    for (a, dr), pk in packets.items():
+        for n, (h, keep, target, chunk) in enumerate(pk):
+            pick = n % per_dir
+            w = ((pick // k_per) * 4 + dr) * k_per + pick % k_per
+            srcs = local[chunk] if h == 0 else slot[a, chunk]
+            waits = {}
+            if h and per_packet:
+                for u in chunk:
+                    s_, k_ = arrived[(a, u)]
+                    waits[s_] = max(waits.get(s_, 0), k_)
+            items[a][w].append((h, 1 if h == 0 else 2, target, srcs, waits))
+            sent[a, w, h] += 1
+    for b in range(n_dev):
+        ids = np.flatnonzero((owners == b) & (masks >> b & 1).astype(bool))
+        for p, s0 in enumerate(range(0, len(ids), P)):
+            items[b][p % senders].append((0, 3, lane_rel(s0 // P), local[ids[s0 : s0 + P]], {}))
+
+    # Incoming per (stream, level) at chip c: sent by the neighbour whose direction points at c.
+    incoming = np.zeros((n_dev, senders, max_depth + 1), dtype=np.int64)
+    for a in range(n_dev):
+        for w in range(senders):
+            incoming[neighbour(a, (w // k_per) % 4), w] += sent[a, w]
+    pages = []
+    for c in range(n_dev):
+        cum = np.cumsum(incoming[c], axis=1)
+        for w in range(senders):
+            words = [0] + [int(x) for x in cum[:, -1]] + [0] * (31 - senders)
+            its = sorted(items[c][w], key=lambda it: it[0])
+            level = 0
+            waited = {}
+            for h, kind, target, srcs, waits in its:
+                while level < h:
+                    words.append(6)
+                    level += 1
+                    if not per_packet:
+                        for s in range(senders):
+                            if cum[s, level - 1]:
+                                words += [4, s, int(cum[s, level - 1])]
+                for s, k in sorted(waits.items()):
+                    if k > waited.get(s, 0):
+                        words += [4, s, k]
+                        waited[s] = k
+                words += [kind, int(target), len(srcs)] + [int(x) for x in srcs]
+            while level < max_depth:
+                words.append(6)
+                level += 1
+            words.append(0)
+            pages.append(words)
+    width = max(len(w) for w in pages)
+    width += -width % 16
+    host = np.zeros((n_dev * senders, width), dtype=np.int64)
+    for k, w in enumerate(pages):
+        host[k, : len(w)] = w
+    slot_maps = np.full((n_dev, natural.max() + 1), -1, dtype=np.int64)
+    for d in range(n_dev):
+        ids = np.searchsorted(uniq, needed[d])
+        assert (slot[d, ids] >= 0).all(), "requester row without a slot"
+        slot_maps[d, needed[d]] = slot[d, ids]
+    stats = dict(depth=max_depth + 1, packets=int(sent.sum()), stream_words=width)
+    return torch.from_numpy(host.reshape(n_dev, 1, senders, width).astype(np.int32)), slot_maps, stats
