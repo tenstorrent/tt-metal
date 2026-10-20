@@ -151,9 +151,10 @@ def routed_expert_order(layer_idx, num_experts, num_devices):
     return list(order)
 
 
-def _l1_if_fits(nbytes):
-    """L1 for a transient of nbytes per device when it fits under ROUTED_L1_CAP_BYTES, else DRAM."""
-    return ttnn.L1_MEMORY_CONFIG if nbytes <= ROUTED_L1_CAP_BYTES else ttnn.DRAM_MEMORY_CONFIG
+def _l1_if_fits(nbytes, held=0):
+    """L1 for a transient of nbytes per device when it fits under ROUTED_L1_CAP_BYTES (less `held` bytes of L1 a caller
+    keeps resident), else DRAM."""
+    return ttnn.L1_MEMORY_CONFIG if nbytes <= ROUTED_L1_CAP_BYTES - held else ttnn.DRAM_MEMORY_CONFIG
 
 
 def _narrowable(t, dim, start):
@@ -351,6 +352,9 @@ class RoutedPrefillExperts:
         # L1 address the expert op's circular buffers must end below (0: the whole L1); set by Model.set_prefill_l1_end
         # when buffers stay resident in L1 (DFlash), so the op fits its blocking around them.
         self.l1_end = 0
+        # Bytes of L1 per device a caller keeps resident below the model's own buffers (DFlash; set_prefill_l1_end):
+        # the L1 transient caps below (ROUTED_*_L1_CAP_BYTES, the combine block) were sized without it and shrink by it.
+        self.l1_held = 0
         self.min_seq = routed_prefill_min_seq()
         self.num_links = 1
         self.weights_dtype = routed_weights_dtype(layer_idx)
@@ -869,6 +873,19 @@ class RoutedPrefillExperts:
         ttnn.deallocate(pos)
         return pos_tm, pos_sm
 
+    def _combine_block(self, k):
+        """Tokens per combine block: ROUTED_COMBINE_BLOCK, or with L1 held by a caller (l1_held) the largest of
+        2048 / 1024 / 512 whose [Cs, k, H] bf16 gather output fits the L1 left (the block's circular buffers and its
+        L1 gather output must not meet the held buffers)."""
+        if not self.l1_held:
+            return ROUTED_COMBINE_BLOCK
+        # 3584-token blocks still fit without held L1 (4096 overflows, see ROUTED_COMBINE_BLOCK)
+        room = 3584 * k * self.hidden_size * 2 - self.l1_held
+        for cs in (ROUTED_COMBINE_BLOCK, 2048, 1024, 512):
+            if cs * k * self.hidden_size * 2 <= room:
+                return cs
+        return 512
+
     def _chunk(self, x, indices, weights, out=None, out_start=0):
         """Partial MoE output of this device's experts for one chunk.
 
@@ -922,7 +939,9 @@ class RoutedPrefillExperts:
         # The row-major copy of x lives in L1 (47 MB at C = 8192) only for the gather: the untilize skips a DRAM write
         # and the gather reads the local pairs' rows from L1 (measured 0.94 -> 0.77 ms per layer at 8K, one device).
         # A chunk whose copy exceeds ROUTED_XRM_L1_CAP_BYTES (C > 17476) keeps it in DRAM.
-        x_rm_mem = ttnn.L1_MEMORY_CONFIG if C * H * 2 <= ROUTED_XRM_L1_CAP_BYTES else ttnn.DRAM_MEMORY_CONFIG
+        x_rm_mem = (
+            ttnn.L1_MEMORY_CONFIG if C * H * 2 <= ROUTED_XRM_L1_CAP_BYTES - self.l1_held else ttnn.DRAM_MEMORY_CONFIG
+        )
         x_rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, memory_config=x_rm_mem)
         x_rm = ttnn.reshape(x_rm, (C, H))
         # padding_idx=0: every row that reads token 0 (about 3/4 of the k*C buffer rows on each of the N devices are
@@ -969,10 +988,10 @@ class RoutedPrefillExperts:
             ttnn.deallocate(expert_out)
         # One token block (ROUTED_COMBINE_BLOCK) at a time: the [Cs, k, H] gather output and the reduced [Cs, H] block
         # stay in L1 (interleaved), so only the bf8 block is written to DRAM. Bit-identical to one DRAM-resident pass.
-        Cs = min(C, ROUTED_COMBINE_BLOCK)
-        # Bounded by ROUTED_COMBINE_BLOCK, not by C; the cap only guards a larger block constant.
-        combined_mem = _l1_if_fits(Cs * k * H * 2)
-        part_mem = _l1_if_fits(Cs * H * 2)
+        Cs = min(C, self._combine_block(k))
+        # Bounded by the combine block, not by C; the cap only guards a larger block constant.
+        combined_mem = _l1_if_fits(Cs * k * H * 2, self.l1_held)
+        part_mem = _l1_if_fits(Cs * H * 2, self.l1_held)
         pieces = []
         for s in range(0, C, Cs):
             e = min(s + Cs, C)
@@ -1037,7 +1056,7 @@ class RoutedPrefillExperts:
         if len(x.shape) != 4:
             x = ttnn.reshape(x, (1, 1, seq_len, self.hidden_size))
         C = min(self.chunk_size, seq_len)
-        Cs = min(C, ROUTED_COMBINE_BLOCK)
+        Cs = min(C, self._combine_block(self.top_k))
         # More than one combine block: cast every block into its rows of one preallocated output (narrow views)
         # instead of concatenating the blocks afterwards (a full read + write of the [S, H] bf8 output), when every
         # block start is a view start.

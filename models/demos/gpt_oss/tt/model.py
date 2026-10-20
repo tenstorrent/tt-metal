@@ -325,6 +325,9 @@ class Model:
             per_device_padded,
             mesh_device.get_num_devices() // decode_tp if users_row_sharded else 1,
         )
+        # The model's own resident L1 (its persistent decode buffers) starts here: the prefill L1 budgets (the routed
+        # experts' L1 transient caps) are sized with this much L1 held (see set_prefill_l1_end).
+        self._resident_l1_low = mesh_device.lowest_occupied_compute_l1_address() or 0
 
     def _make_sampling_args(self, hf_config, mesh_device):
         """Create a minimal args object for SamplingGenerator/TTSampling."""
@@ -571,10 +574,15 @@ class Model:
         """Prefill ops whose circular buffers would otherwise claim nearly all of L1 (the routed-expert MoE, the 2D
         QKV / o_proj configs) fit them below l1_end instead (0: the whole L1). Called by a caller that keeps buffers
         resident in L1 across prefills (DFlash: dflash/runner.py) with the lowest resident address."""
+        grid = self.mesh_device.compute_with_storage_grid_size()
+        # L1 the caller holds below the model's own resident buffers, over all L1 banks of a device: the routed
+        # experts' interleaved L1 transients get that much less room
+        held = max(0, self._resident_l1_low - l1_end) * grid.x * grid.y if l1_end and self._resident_l1_low else 0
         for layer in self.layers:
             layer.self_attn.program_config.prefill_l1_end = l1_end
             if layer.mlp.routed_prefill is not None:
                 layer.mlp.routed_prefill.l1_end = l1_end
+                layer.mlp.routed_prefill.l1_held = held
 
     def _apply_norm_and_lm_head(self, x):
         """Final norm + vocab-sharded LM head (logits [..., vocab / TP] per device, bf8). x: replicated [..., H].
