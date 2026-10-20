@@ -140,6 +140,7 @@ def run_model(
     gate_up_scale=1.0,
     score_func=None,
     skip_upstream_reference=False,
+    sp_axis=0,
 ):
     """TtMoe PCC body — shared by every per-model test in this file.
 
@@ -199,10 +200,10 @@ def run_model(
     torch.manual_seed(42)
 
     num_devices = mesh_device.get_num_devices()
-    mesh_config = extract_mesh_config(mesh_device)
+    mesh_config = extract_mesh_config(mesh_device, sp_axis)
     dispatch_group_size = mesh_config.dispatch_group_size
     num_dispatch_groups = mesh_config.num_dispatch_groups
-    n_sp_devices, n_tp_devices = mesh_device.shape
+    n_sp_devices, n_tp_devices = mesh_device.shape[sp_axis], mesh_device.shape[1 - sp_axis]
     layer_idx = 0
 
     logger.debug(f"\n{'='*60}")
@@ -333,6 +334,7 @@ def run_model(
                 routed_emb_dim=routed_emb,
                 latent_weights=latent_weights,
                 latent_use_norm=latent_use_norm,
+                sp_axis=sp_axis,
             )
             profiler.end("ttnn_cache_build")
 
@@ -386,7 +388,10 @@ def run_model(
     def upload_tt_x():
         return ttnn.from_torch(
             x,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_device.shape, dims=(0, -1)),
+            # Tokens over the SP axis, emb dim over the TP axis.
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                mesh_device, mesh_shape=mesh_device.shape, dims=(0, -1) if sp_axis == 0 else (-1, 0)
+            ),
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
             dtype=ttnn.bfloat16,
@@ -559,6 +564,7 @@ def run_model(
         latent_weights=latent_weights,
         latent_use_norm=latent_use_norm,
         rms_norm_eps=rms_norm_eps,
+        sp_axis=sp_axis,
     )
     ttnn.synchronize_device(mesh_device)
     profiler.end("tt_moe_creation")
@@ -616,7 +622,7 @@ def run_model(
     # Gate recall: compare TtMoe gate indices vs TorchMoe gate indices
     tt_indices = ttnn.to_torch(
         tt_intermediates.gate_indices,
-        mesh_composer=get_sp_mesh_composer(mesh_device),
+        mesh_composer=get_sp_mesh_composer(mesh_device, sp_axis),
         dtype=torch.int32,
     )
 
@@ -656,9 +662,9 @@ def run_model(
     # Dense tensor checks with PCC
     # fmt: off
     dense_checks = [
-        ("shared_output", tt_intermediates.shared_output, torch_intermediates.shared_output, get_tp_mesh_composer(mesh_device), shared_output_pcc),
-        ("routed_output", tt_intermediates.routed_output, torch_intermediates.routed_output, get_tp_mesh_composer(mesh_device), routed_output_pcc),
-        ("final_output", tt_output, torch_output, get_tp_mesh_composer(mesh_device), final_output_pcc),
+        ("shared_output", tt_intermediates.shared_output, torch_intermediates.shared_output, get_tp_mesh_composer(mesh_device, sp_axis), shared_output_pcc),
+        ("routed_output", tt_intermediates.routed_output, torch_intermediates.routed_output, get_tp_mesh_composer(mesh_device, sp_axis), routed_output_pcc),
+        ("final_output", tt_output, torch_output, get_tp_mesh_composer(mesh_device, sp_axis), final_output_pcc),
     ]
     if use_latent:
         # Checked before routed_output, which bundles the reduce, the latent norm and the
@@ -666,13 +672,13 @@ def run_model(
         # under K3's measured 0.969778.
         dense_checks.insert(1, (
             "latent_routed_output", tt_intermediates.latent_routed_output,
-            torch_intermediates.latent_routed_output, get_tp_mesh_composer(mesh_device), 0.965,
+            torch_intermediates.latent_routed_output, get_tp_mesh_composer(mesh_device, sp_axis), 0.965,
         ))
         # Post down-projection, pre-dispatch. Composed with the SP composer: to_latent() all-gathers
         # on the TP axis, so this tensor is replicated across columns rather than sharded.
         dense_checks.insert(1, (
             "latent_input", tt_intermediates.latent_input,
-            torch_intermediates.latent_input, get_sp_mesh_composer(mesh_device), 0.998,
+            torch_intermediates.latent_input, get_sp_mesh_composer(mesh_device, sp_axis), 0.998,
         ))
     # fmt: on
 
@@ -696,11 +702,11 @@ def run_model(
         # fmt: off
         sparse_checks = [
             ("dispatched_buffer", "dispatched_buffer", tt_intermediates.dispatched_buffer, torch_intermediates.dispatched_buffer,
-            get_ep_mesh_composer(mesh_device), torch.bfloat16, validate_dispatch_buffer, {}),
+            get_ep_mesh_composer(mesh_device, sp_axis), torch.bfloat16, validate_dispatch_buffer, {}),
             ("dispatch_metadata", "metadata", tt_intermediates.metadata, torch_intermediates.metadata,
-            get_ep_mesh_composer(mesh_device), None, validate_dispatch_metadata, {}),
+            get_ep_mesh_composer(mesh_device, sp_axis), None, validate_dispatch_metadata, {}),
             ("expert_outputs", "expert_outputs", tt_intermediates.expert_outputs, torch_intermediates.expert_outputs,
-            get_ep_mesh_composer(mesh_device), torch.bfloat16, validate_dispatch_buffer_pcc, {"pcc_threshold": 0.95}),
+            get_ep_mesh_composer(mesh_device, sp_axis), torch.bfloat16, validate_dispatch_buffer_pcc, {"pcc_threshold": 0.95}),
         ]
         # fmt: on
 
@@ -753,7 +759,7 @@ def run_model(
 
             tt_combined_torch = ttnn.to_torch(
                 tt_intermediates.combined_output,
-                mesh_composer=get_ep_mesh_composer(mesh_device),
+                mesh_composer=get_ep_mesh_composer(mesh_device, sp_axis),
                 dtype=torch.bfloat16,
             )
 
@@ -826,7 +832,9 @@ def run_model(
         )
     if ref_out is not None and tt_output is not None:
         logger.info("Running upstream MoE reference")
-        tt_final_host = ttnn.to_torch(tt_output, mesh_composer=get_tp_mesh_composer(mesh_device), dtype=torch.bfloat16)
+        tt_final_host = ttnn.to_torch(
+            tt_output, mesh_composer=get_tp_mesh_composer(mesh_device, sp_axis), dtype=torch.bfloat16
+        )
         _, ref_pcc = comp_pcc(ref_out.float(), tt_final_host.float())
         threshold = variant.moe_pcc_threshold
         if ref_pcc >= threshold:
@@ -1193,7 +1201,7 @@ def test_kimi_moe(
     ],
 )
 @pytest.mark.parametrize(
-    "mesh_device, device_params, num_links",
+    "mesh_device, device_params, num_links, sp_axis",
     [
         # Loudbox proxy for local bring-up; no pipeline selects it. TP stays 4 as on the 8x4 anchor:
         # at TP=1 the shared expert is unsharded and its gate matmul's CBs exceed L1.
@@ -1201,13 +1209,25 @@ def test_kimi_moe(
             (2, 4),
             fabric2d_device_params(fabric_payload_size=moe_fabric_payload(KimiK3Config)),
             2,
+            0,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
             id="fabric2d-mesh-2x4",
+        ),
+        # The same Loudbox transposed: SP on mesh axis 1 and TP=4 on axis 0, the layout of the 4x4
+        # prefill stages. Weights, caches and every collective follow sp_axis.
+        pytest.param(
+            (4, 2),
+            fabric2d_device_params(fabric_payload_size=moe_fabric_payload(KimiK3Config)),
+            2,
+            1,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
+            id="fabric2d-mesh-4x2-sp1",
         ),
         pytest.param(
             (8, 4),
             torus_xy_device_params(fabric_payload_size=moe_fabric_payload(KimiK3Config)),
             2,
+            0,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="torus-xy-8x4",
         ),
@@ -1220,6 +1240,7 @@ def test_kimi_k3_moe(
     config_only,
     mesh_device,
     device_params,
+    sp_axis,
     seq_len_per_chip,
     emb_dim,
     hidden_dim,
@@ -1277,6 +1298,7 @@ def test_kimi_k3_moe(
         final_output_pcc=0.965,
         routed_activation=ROUTED_EXPERT_ACTIVATION_BY_NAME[KimiK3Config.ROUTED_EXPERT_ACTIVATION],
         shared_activation=KimiK3Config.SHARED_EXPERT_ACTIVATION,
+        sp_axis=sp_axis,
     )
 
 
