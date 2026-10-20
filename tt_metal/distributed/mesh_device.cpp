@@ -1219,7 +1219,7 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
                 tt::LogMetal,
                 "Tensor prefetcher was active at MeshDevice close; auto-stopping. Call "
                 "tt::tt_metal::experimental::StopTensorPrefetcher before close to avoid this.");
-            tensor_prefetcher_->stop();
+            tensor_prefetcher_->stop_without_throwing();
         }
         tensor_prefetcher_.reset();
     }

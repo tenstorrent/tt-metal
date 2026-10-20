@@ -377,6 +377,7 @@ class CMakeBuild(build_ext):
             "impl/buffers/kernels/**/*",
             "impl/buffers/dram_receiver_config_page.hpp",
             "impl/buffers/dram_sender_state_block.hpp",
+            "impl/buffers/tensor_prefetcher_cce_abi.hpp",
             "impl/buffers/tensor_prefetcher_request.hpp",
             "impl/dispatch/kernels/**/*",
             "impl/streaming_profiler/kernels/**/*",

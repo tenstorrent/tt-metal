@@ -16,6 +16,7 @@
 #include <cstdint>
 #include <cstring>
 #include <exception>
+#include <functional>
 #include <memory>
 #include <map>
 #include <optional>
@@ -29,13 +30,25 @@
 #include "impl/buffers/dram_sender_state_block.hpp"
 #include "impl/buffers/drisc_l1_arena.hpp"
 #include "impl/buffers/global_circular_buffer_dram_sender_internal.hpp"
+#include "impl/buffers/tensor_prefetcher_cce_abi.hpp"
 #include "impl/buffers/tensor_prefetcher_manager.hpp"
+#include "impl/buffers/tensor_prefetcher_transport.hpp"
 #include "impl/context/metal_context.hpp"
 #include "llrt/hal.hpp"
 #include "llrt/tt_cluster.hpp"
+#include <tt-metalium/distributed_host_buffer.hpp>
+#include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
+#include <tt-metalium/experimental/distributed_tensor/topology/tensor_topology.hpp>
 #include <tt-metalium/experimental/global_circular_buffer.hpp>
 #include <tt-metalium/experimental/tensor_prefetcher.hpp>
+#include <tt-metalium/host_buffer.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/mesh_command_queue.hpp>
 #include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/tensor/host_tensor.hpp>
+#include <tt-metalium/tensor/mesh_tensor.hpp>
+#include <tt-metalium/tensor/spec/layout/tensor_layout.hpp>
+#include <tt-metalium/tensor/spec/tensor_spec.hpp>
 #include "tt_metal/tt_metal/dram/mimir_access.hpp"
 #include "tt_metal/tt_metal/dram/mimir_hw_state.hpp"
 #include "tt_metal/tt_metal/dram/mimir_prefetcher_common.hpp"
@@ -113,7 +126,7 @@ TEST(MimirPrefetcher, MM7GatePreconditionsHold) {
     const distributed::TensorPrefetcherPreconditions preconditions =
         distributed::tensor_prefetcher_preconditions(*mesh);
     EXPECT_TRUE(preconditions.ok) << preconditions.reason;
-    EXPECT_FALSE(experimental::IsTensorPrefetcherSupported(*mesh));
+    EXPECT_TRUE(experimental::IsTensorPrefetcherSupported(*mesh));
 
     IDevice* device = mesh->get_devices().front();
     const metal_SocDescriptor& soc_desc = soc_desc_of(device);
@@ -553,7 +566,7 @@ uint32_t gcb_smoke_total_pages(const std::vector<GcbSmokeRequest>& schedule) {
 std::string gcb_status_string(const std::vector<uint32_t>& status) {
     return fmt::format(
         "magic 0x{:08x} code {} requests {} pages {} mismatched words {} first mismatch request {} page {} word {} "
-        "observed 0x{:08x} expected 0x{:08x}; waited on receiver {} sent {} acked {}",
+        "observed 0x{:08x} expected 0x{:08x} rechecked 0x{:08x}; waited on receiver {} sent {} acked {}",
         status[gcb_abi::kStatusMagic],
         status[gcb_abi::kStatusCode],
         status[gcb_abi::kStatusRequestsDone],
@@ -564,20 +577,27 @@ std::string gcb_status_string(const std::vector<uint32_t>& status) {
         status[gcb_abi::kStatusFirstMismatchWord],
         status[gcb_abi::kStatusObserved],
         status[gcb_abi::kStatusExpected],
+        status[gcb_abi::kStatusRechecked],
         status[gcb_abi::kStatusWaitReceiver],
         status[gcb_abi::kStatusWaitPagesSent],
         status[gcb_abi::kStatusWaitPagesAcked]);
 }
 
-// One DRAM-receiver GCB from bank 0's sender CCE to `receiver_cces` (in receiver-table order), plus a kernel block
-// (cce_gcb_receiver_abi.h) carved from the receiver zone at one offset on every CCE. Declare it after the ScopedMesh
-// and before any CceReceiverProgram.
+// One DRAM-receiver GCB of `fifo_bytes` per receiver from `sender_bank`'s sender CCE to `receiver_cces` (in
+// receiver-table order), plus a kernel block (cce_gcb_receiver_abi.h) carved from the receiver zone at one offset on
+// every CCE. Declare it after the ScopedMesh and before any CceReceiverProgram.
 class GcbSmoke {
 public:
-    GcbSmoke(distributed::MeshDevice& mesh, std::vector<uint32_t> receiver_cces) :
+    GcbSmoke(
+        distributed::MeshDevice& mesh,
+        uint32_t sender_bank,
+        std::vector<uint32_t> receiver_cces,
+        uint32_t fifo_bytes = kGcbSmokeFifoBytes) :
         device_(mesh.get_devices().front()),
-        sender_cce_(gcb_layout_sender_cce(device_, mesh, 0)),
+        sender_bank_(sender_bank),
+        sender_cce_(gcb_layout_sender_cce(device_, mesh, sender_bank_)),
         receiver_cces_(std::move(receiver_cces)),
+        fifo_bytes_(fifo_bytes),
         gcb_(create_gcb(mesh)),
         block_(mesh.impl().drisc_l1_arena().allocate_receiver(gcb_abi::kBlockBytes, gcb_abi::kLineBytes)) {
         reset_kernel_blocks();
@@ -588,12 +608,14 @@ public:
             fmt::join(receiver_cces_, ","),
             gcb_.config_address(),
             gcb_.buffer_address(),
-            kGcbSmokeFifoBytes,
+            fifo_bytes_,
             block_->addr());
     }
 
     IDevice* device() const { return device_; }
+    uint32_t fifo_bytes() const { return fifo_bytes_; }
     uint32_t receiver_cce(uint32_t slot) const { return receiver_cces_.at(slot); }
+    const experimental::GlobalCircularBuffer& gcb() const { return gcb_; }
 
     // Zeroes the command and holding lines and poisons the status line on the sender and every receiver, so a status
     // read after the next run cannot see an earlier run's.
@@ -734,7 +756,7 @@ private:
             receivers.push_back(logical_cce_core(soc_desc, receiver_cce));
         }
         return experimental::CreateGlobalCircularBufferForTensorPrefetcher(
-            mesh, BankToDramReceivers{{0, receivers}}, kGcbSmokeFifoBytes);
+            mesh, BankToDramReceivers{{sender_bank_, receivers}}, fifo_bytes_);
     }
 
     std::vector<uint32_t> kernel_args(
@@ -767,8 +789,10 @@ private:
     }
 
     IDevice* device_;
+    uint32_t sender_bank_;
     uint32_t sender_cce_;
     std::vector<uint32_t> receiver_cces_;
+    uint32_t fifo_bytes_;
     experimental::GlobalCircularBuffer gcb_;
     std::shared_ptr<DriscL1Allocation> block_;
 };
@@ -796,7 +820,7 @@ TEST(MimirPrefetcher, MM7GcbSmokeDiscardDrain) {
     }
     std::shared_ptr<distributed::MeshDevice> mesh = distributed::MeshDevice::create_unit_mesh(0);
     ScopedMesh mesh_closer(mesh);
-    GcbSmoke smoke(*mesh, {gcb_smoke_local_receiver(*mesh)});
+    GcbSmoke smoke(*mesh, 0, {gcb_smoke_local_receiver(*mesh)});
     const std::vector<GcbSmokeRequest> schedule = {{.tensor_id = 1, .slab = 0, .page_bytes = 512, .num_pages = 20}};
     const uint32_t seed = mimir_test_seed();
     CceReceiverProgram receivers(
@@ -822,7 +846,7 @@ void run_gcb_smoke_validation(
     uint32_t receiver_cce,
     const std::vector<GcbSmokeRequest>& schedule,
     uint32_t validator_seed) {
-    GcbSmoke smoke(mesh, {receiver_cce});
+    GcbSmoke smoke(mesh, 0, {receiver_cce});
     CceReceiverProgram receivers(
         smoke.device(),
         {smoke.receiver_launch(
@@ -835,7 +859,6 @@ void run_gcb_smoke_validation(
     EXPECT_EQ(receiver_status[gcb_abi::kStatusPagesDone], gcb_smoke_total_pages(schedule));
     if (validator_seed == mimir_test_seed()) {
         EXPECT_EQ(receiver_status[gcb_abi::kStatusCode], gcb_abi::kCodeOk);
-        EXPECT_EQ(receiver_status[gcb_abi::kStatusMismatchedWords], 0u);
     } else {
         EXPECT_EQ(receiver_status[gcb_abi::kStatusCode], gcb_abi::kCodeMismatch);
         EXPECT_GT(receiver_status[gcb_abi::kStatusMismatchedWords], 0u);
@@ -918,7 +941,7 @@ TEST(MimirPrefetcher, MM7GcbSmokeDrainUntilStopped) {
     }
     std::shared_ptr<distributed::MeshDevice> mesh = distributed::MeshDevice::create_unit_mesh(0);
     ScopedMesh mesh_closer(mesh);
-    GcbSmoke smoke(*mesh, {gcb_smoke_local_receiver(*mesh)});
+    GcbSmoke smoke(*mesh, 0, {gcb_smoke_local_receiver(*mesh)});
     const std::vector<GcbSmokeRequest> schedule = {{.tensor_id = 8, .slab = 0, .page_bytes = 512, .num_pages = 12}};
     const uint32_t seed = mimir_test_seed();
     CceReceiverProgram receivers(
@@ -954,7 +977,7 @@ TEST(MimirPrefetcher, MM7GcbSmokeStallUntilReleased) {
     }
     std::shared_ptr<distributed::MeshDevice> mesh = distributed::MeshDevice::create_unit_mesh(0);
     ScopedMesh mesh_closer(mesh);
-    GcbSmoke smoke(*mesh, {gcb_smoke_local_receiver(*mesh)});
+    GcbSmoke smoke(*mesh, 0, {gcb_smoke_local_receiver(*mesh)});
     constexpr uint32_t kPageBytes = 256;
     constexpr uint32_t kPoppedPages = 4;
     constexpr uint32_t kFifoPages = kGcbSmokeFifoBytes / kPageBytes;
@@ -1001,7 +1024,7 @@ TEST(MimirPrefetcher, MM7GcbSmokeDrainTimeout) {
     }
     std::shared_ptr<distributed::MeshDevice> mesh = distributed::MeshDevice::create_unit_mesh(0);
     ScopedMesh mesh_closer(mesh);
-    GcbSmoke smoke(*mesh, {gcb_smoke_local_receiver(*mesh)});
+    GcbSmoke smoke(*mesh, 0, {gcb_smoke_local_receiver(*mesh)});
     constexpr uint32_t kPageBytes = 256;
     constexpr uint32_t kSentPages = 8;
     const std::vector<GcbSmokeRequest> sender_schedule = {
@@ -1035,7 +1058,7 @@ TEST(MimirPrefetcher, MM7GcbSmokeReceiverWaitTimeout) {
     }
     std::shared_ptr<distributed::MeshDevice> mesh = distributed::MeshDevice::create_unit_mesh(0);
     ScopedMesh mesh_closer(mesh);
-    GcbSmoke smoke(*mesh, {gcb_smoke_local_receiver(*mesh)});
+    GcbSmoke smoke(*mesh, 0, {gcb_smoke_local_receiver(*mesh)});
     constexpr uint32_t kPageBytes = 256;
     constexpr uint32_t kCreditedPages = 4;
     const GcbFifoEndState credited = expected_gcb_fifo_end_state(
@@ -1069,7 +1092,7 @@ TEST(MimirPrefetcher, MM7GcbSmokeRelaunchResumes) {
     }
     std::shared_ptr<distributed::MeshDevice> mesh = distributed::MeshDevice::create_unit_mesh(0);
     ScopedMesh mesh_closer(mesh);
-    GcbSmoke smoke(*mesh, {gcb_smoke_local_receiver(*mesh)});
+    GcbSmoke smoke(*mesh, 0, {gcb_smoke_local_receiver(*mesh)});
     const std::vector<GcbSmokeRequest> first_schedule = {
         {.tensor_id = 11, .slab = 0, .page_bytes = 256, .num_pages = 5}};
     const std::vector<GcbSmokeRequest> second_schedule = {
@@ -1120,7 +1143,7 @@ TEST(MimirPrefetcher, MM7GcbSmokePreconditionsWithReceiverRunning) {
     }
     ASSERT_TRUE(other_sender_cce.has_value()) << "no DRAM view has a sender CCE other than bank 0's";
 
-    GcbSmoke smoke(*mesh, {*other_sender_cce});
+    GcbSmoke smoke(*mesh, 0, {*other_sender_cce});
     const std::vector<GcbSmokeRequest> schedule = {{.tensor_id = 10, .slab = 0, .page_bytes = 256, .num_pages = 0}};
     CceReceiverProgram receivers(
         smoke.device(),
@@ -1134,6 +1157,1357 @@ TEST(MimirPrefetcher, MM7GcbSmokePreconditionsWithReceiverRunning) {
     receivers.stop_and_wait();
     const std::vector<uint32_t> receiver_status = smoke.read_receiver_status(0);
     EXPECT_EQ(receiver_status[gcb_abi::kStatusCode], gcb_abi::kCodeStopped);
+}
+
+// A Tensor prefetcher session on the CCE senders of `sender_banks`. The default stage ring's third holds the widest
+// K-row the MM7 tensors use. Declare it after any CceReceiverProgram it serves, so it stops first and Stop's DRAIN sees
+// live receivers. The destructor stops through the no-throw path, which only logs a failure; call stop() to check the
+// outcome.
+class PrefetcherSession {
+public:
+    PrefetcherSession(
+        distributed::MeshDevice& mesh,
+        std::vector<uint32_t> sender_banks,
+        uint64_t wait_budget_cycles = kGcbSmokeWaitBudgetCycles,
+        uint32_t stage_ring_bytes = experimental::QuasarTensorPrefetcherConfig{}.stage_ring_bytes) :
+        mesh_(mesh) {
+        experimental::StartTensorPrefetcher(
+            mesh_,
+            experimental::TensorPrefetcherConfig{
+                .quasar = experimental::QuasarTensorPrefetcherConfig{
+                    .dram_sender_banks = std::move(sender_banks),
+                    .wait_budget_cycles = wait_budget_cycles,
+                    .stage_ring_bytes = stage_ring_bytes}});
+        active_ = true;
+    }
+    PrefetcherSession(const PrefetcherSession&) = delete;
+    PrefetcherSession& operator=(const PrefetcherSession&) = delete;
+
+    ~PrefetcherSession() {
+        if (!active_) {
+            return;
+        }
+        mesh_.impl().tensor_prefetcher(&mesh_).stop_without_throwing();
+    }
+
+    void stop() {
+        active_ = false;
+        experimental::StopTensorPrefetcher(mesh_);
+    }
+
+private:
+    distributed::MeshDevice& mesh_;
+    bool active_ = false;
+};
+
+// Status of the CCE sender on `cce_index`, from its TL1 control block.
+CceSenderStatus lifecycle_sender_status(distributed::MeshDevice& mesh, uint32_t cce_index) {
+    const std::vector<uint32_t> words = read_cce_tl1(
+        mesh.get_devices().front(),
+        cce_index,
+        distributed::cce_sender_control_base(mesh) + kCceSenderStatusOffset,
+        sizeof(CceSenderStatus));
+    CceSenderStatus status{};
+    std::memcpy(&status, words.data(), sizeof(status));
+    log_info(tt::LogTest, "MM7Lifecycle sender CCE {}: {}", cce_index, distributed::format_cce_sender_status(status));
+    return status;
+}
+
+uint32_t lifecycle_bytes_acked(distributed::MeshDevice& mesh, uint32_t cce_index) {
+    return read_cce_tl1(
+               mesh.get_devices().front(),
+               cce_index,
+               distributed::cce_sender_control_base(mesh) + kCceRingMetaOffset + offsetof(RingMeta, bytes_acked),
+               sizeof(uint32_t))
+        .front();
+}
+
+// A sender that took `requests` pages, the last a STOP, and exited cleanly.
+void expect_lifecycle_sender_stopped(distributed::MeshDevice& mesh, uint32_t cce_index, uint32_t requests) {
+    const CceSenderStatus status = lifecycle_sender_status(mesh, cce_index);
+    EXPECT_EQ(status.state, static_cast<uint32_t>(CceSenderState::Stopped)) << "sender CCE " << cce_index;
+    EXPECT_EQ(status.code, static_cast<uint32_t>(CceSenderStatusCode::Ok)) << "sender CCE " << cce_index;
+    EXPECT_EQ(status.request_index, requests - 1) << "sender CCE " << cce_index;
+    EXPECT_EQ(lifecycle_bytes_acked(mesh, cce_index), requests * kRequestPageBytes) << "sender CCE " << cce_index;
+}
+
+// Writes a non-zero pattern over the part of `cce_index`'s control block Start zeroes, and returns it.
+std::vector<uint32_t> fill_lifecycle_control_block(distributed::MeshDevice& mesh, uint32_t cce_index) {
+    std::vector<uint32_t> pattern(kCceSenderZeroedBytes / sizeof(uint32_t));
+    for (uint32_t word = 0; word < pattern.size(); ++word) {
+        pattern[word] = kGcbLayoutFillPattern | word;
+    }
+    write_cce_tl1(mesh.get_devices().front(), cce_index, distributed::cce_sender_control_base(mesh), pattern);
+    return pattern;
+}
+
+// A bank other than 0 whose sender is another CCE than bank 0's.
+std::optional<uint32_t> lifecycle_other_sender_bank(distributed::MeshDevice& mesh) {
+    IDevice* device = mesh.get_devices().front();
+    const uint32_t bank_zero_sender_cce = gcb_layout_sender_cce(device, mesh, 0);
+    for (uint32_t bank = 1; bank < soc_desc_of(device).get_num_dram_views(); ++bank) {
+        if (gcb_layout_sender_cce(device, mesh, bank) != bank_zero_sender_cce) {
+            return bank;
+        }
+    }
+    return std::nullopt;
+}
+
+// The message `action` throws, or "did not throw".
+template <typename Action>
+std::string lifecycle_error(Action action) {
+    try {
+        action();
+    } catch (const std::exception& error) {
+        return error.what();
+    }
+    return "did not throw";
+}
+
+// Deferred from MM7Gate: IsTensorPrefetcherSupported reports the port supported, and Start and Stop work.
+TEST(MimirPrefetcher, MM7GateStartStopWorks) {
+    MIMIR_SKIP_UNLESS_EMU();
+    if (const std::string skip_reason = mimir_watcher_skip_reason(); !skip_reason.empty()) {
+        GTEST_SKIP() << skip_reason;
+    }
+    std::shared_ptr<distributed::MeshDevice> mesh = distributed::MeshDevice::create_unit_mesh(0);
+    ScopedMesh mesh_closer(mesh);
+    ASSERT_TRUE(experimental::IsTensorPrefetcherSupported(*mesh));
+    PrefetcherSession session(*mesh, {0});
+    session.stop();
+}
+
+// Start with no requests: the sender runs until STOP, then reports Stopped with OK.
+TEST(MimirPrefetcher, MM7LifecycleStartStop) {
+    MIMIR_SKIP_UNLESS_EMU();
+    if (const std::string skip_reason = mimir_watcher_skip_reason(); !skip_reason.empty()) {
+        GTEST_SKIP() << skip_reason;
+    }
+    std::shared_ptr<distributed::MeshDevice> mesh = distributed::MeshDevice::create_unit_mesh(0);
+    ScopedMesh mesh_closer(mesh);
+    IDevice* device = mesh->get_devices().front();
+    const uint32_t sender_cce = gcb_layout_sender_cce(device, *mesh, 0);
+    log_info(
+        tt::LogTest,
+        "MM7Lifecycle sender CCE {} control block 0x{:x}",
+        sender_cce,
+        distributed::cce_sender_control_base(*mesh));
+
+    PrefetcherSession session(*mesh, {0});
+    EXPECT_EQ(read_go_signal(device, sender_cce), dev_msgs::RUN_MSG_GO) << "CCE " << sender_cce;
+    session.stop();
+    expect_lifecycle_sender_stopped(*mesh, sender_cce, 1);
+}
+
+// Two sessions in one mesh. Between them the CQ slots, ring meta and status get a non-zero pattern; the second Start
+// zeroes them again, so its sender reads like a fresh one: one request, CQ slots still zero, bytes_sent one page.
+TEST(MimirPrefetcher, MM7LifecycleStartStopTwice) {
+    MIMIR_SKIP_UNLESS_EMU();
+    if (const std::string skip_reason = mimir_watcher_skip_reason(); !skip_reason.empty()) {
+        GTEST_SKIP() << skip_reason;
+    }
+    std::shared_ptr<distributed::MeshDevice> mesh = distributed::MeshDevice::create_unit_mesh(0);
+    ScopedMesh mesh_closer(mesh);
+    IDevice* device = mesh->get_devices().front();
+    const uint32_t sender_cce = gcb_layout_sender_cce(device, *mesh, 0);
+    const uint32_t control_base = distributed::cce_sender_control_base(*mesh);
+
+    PrefetcherSession first_session(*mesh, {0});
+    first_session.stop();
+    expect_lifecycle_sender_stopped(*mesh, sender_cce, 1);
+
+    fill_lifecycle_control_block(*mesh, sender_cce);
+    PrefetcherSession second_session(*mesh, {0});
+    second_session.stop();
+    expect_lifecycle_sender_stopped(*mesh, sender_cce, 1);
+    EXPECT_EQ(
+        read_cce_tl1(
+            device, sender_cce, control_base + kCceRingMetaOffset + offsetof(RingMeta, bytes_sent), sizeof(uint32_t))
+            .front(),
+        kRequestPageBytes);
+    const std::vector<uint32_t> cq_slots = read_cce_tl1(
+        device, sender_cce, control_base + kCceCqSignalSlotsOffset, kNumCqSignalSlots * kCceCqSignalSlotStrideBytes);
+    EXPECT_EQ(cq_slots, std::vector<uint32_t>(cq_slots.size(), 0u));
+}
+
+// A receiver Program runs on another bank's sender CCE. Start over both banks fails on that CCE before it launches or
+// zeroes anything: both control blocks keep the pattern written before, and bank 0's CCE stays idle.
+TEST(MimirPrefetcher, MM7LifecycleBusySenderFailsStart) {
+    MIMIR_SKIP_UNLESS_EMU();
+    if (const std::string skip_reason = mimir_watcher_skip_reason(); !skip_reason.empty()) {
+        GTEST_SKIP() << skip_reason;
+    }
+    std::shared_ptr<distributed::MeshDevice> mesh = distributed::MeshDevice::create_unit_mesh(0);
+    ScopedMesh mesh_closer(mesh);
+    IDevice* device = mesh->get_devices().front();
+    const std::optional<uint32_t> busy_bank = lifecycle_other_sender_bank(*mesh);
+    if (!busy_bank.has_value()) {
+        GTEST_SKIP();
+    }
+    const uint32_t idle_sender_cce = gcb_layout_sender_cce(device, *mesh, 0);
+    const uint32_t busy_sender_cce = gcb_layout_sender_cce(device, *mesh, *busy_bank);
+
+    const uint32_t control_base = distributed::cce_sender_control_base(*mesh);
+    const std::vector<uint32_t> pattern = fill_lifecycle_control_block(*mesh, idle_sender_cce);
+    fill_lifecycle_control_block(*mesh, busy_sender_cce);
+
+    GcbSmoke smoke(*mesh, 0, {busy_sender_cce});
+    CceReceiverProgram receivers(
+        smoke.device(),
+        {smoke.receiver_launch(
+            0,
+            kGcbDiscardReceiverKernel,
+            0,
+            gcb_abi::kModeDrainUntilStopped,
+            0,
+            kGcbSmokeWaitBudgetCycles,
+            {{.tensor_id = 15, .slab = 0, .page_bytes = 256, .num_pages = 0}})});
+
+    const std::string start_error =
+        lifecycle_error([&mesh, &busy_bank]() { PrefetcherSession(*mesh, {0, *busy_bank}); });
+    log_info(tt::LogTest, "MM7Lifecycle Start with CCE {} busy: {}", busy_sender_cce, start_error);
+    EXPECT_NE(start_error.find(fmt::format("sender CCE {} ", busy_sender_cce)), std::string::npos) << start_error;
+    EXPECT_FALSE(mesh->impl().tensor_prefetcher(mesh.get()).is_active());
+    EXPECT_EQ(read_go_signal(device, idle_sender_cce), dev_msgs::RUN_MSG_DONE) << "CCE " << idle_sender_cce;
+    for (const uint32_t cce_index : {idle_sender_cce, busy_sender_cce}) {
+        EXPECT_EQ(read_cce_tl1(device, cce_index, control_base, kCceSenderZeroedBytes), pattern)
+            << "CCE " << cce_index << " control block changed";
+    }
+
+    receivers.stop_and_wait();
+    EXPECT_EQ(smoke.read_receiver_status(0)[gcb_abi::kStatusCode], gcb_abi::kCodeStopped);
+}
+
+// Bank 0's GCB delivers to the CCE that is the other provisioned bank's sender, so Queue fails before anything is
+// queued. The tensor list is empty: the receiver check comes first, so no PREFETCH data is needed.
+TEST(MimirPrefetcher, MM7LifecycleQueueRejectsReceiverOnSender) {
+    MIMIR_SKIP_UNLESS_EMU();
+    if (const std::string skip_reason = mimir_watcher_skip_reason(); !skip_reason.empty()) {
+        GTEST_SKIP() << skip_reason;
+    }
+    std::shared_ptr<distributed::MeshDevice> mesh = distributed::MeshDevice::create_unit_mesh(0);
+    ScopedMesh mesh_closer(mesh);
+    IDevice* device = mesh->get_devices().front();
+    const std::optional<uint32_t> other_bank = lifecycle_other_sender_bank(*mesh);
+    if (!other_bank.has_value()) {
+        GTEST_SKIP();
+    }
+    const uint32_t other_sender_cce = gcb_layout_sender_cce(device, *mesh, *other_bank);
+    GcbSmoke smoke(*mesh, 0, {other_sender_cce});
+
+    PrefetcherSession session(*mesh, {0, *other_bank});
+    const std::string queue_error = lifecycle_error(
+        [&mesh, &smoke]() { experimental::QueueTensorPrefetcherRequest(*mesh, smoke.gcb(), std::nullopt, {}); });
+    log_info(tt::LogTest, "MM7Lifecycle Queue to CCE {}: {}", other_sender_cce, queue_error);
+    EXPECT_NE(queue_error.find(fmt::format("receiver CCE {} ", other_sender_cce)), std::string::npos) << queue_error;
+    EXPECT_NE(queue_error.find("provisioned sender CCEs"), std::string::npos) << queue_error;
+
+    session.stop();
+    expect_lifecycle_sender_stopped(*mesh, gcb_layout_sender_cce(device, *mesh, 0), 1);
+    expect_lifecycle_sender_stopped(*mesh, other_sender_cce, 1);
+}
+
+// WaitForCqOnTensorPrefetcher writes the CQ signal slot through the command queue, then queues a WAIT_CQ for that
+// value. The sender passes it only if host and kernel agree on the slot's address, and reports the STOP after it as its
+// second request.
+TEST(MimirPrefetcher, MM7LifecycleWaitCq) {
+    MIMIR_SKIP_UNLESS_EMU();
+    if (const std::string skip_reason = mimir_watcher_skip_reason(); !skip_reason.empty()) {
+        GTEST_SKIP() << skip_reason;
+    }
+    std::shared_ptr<distributed::MeshDevice> mesh = distributed::MeshDevice::create_unit_mesh(0);
+    ScopedMesh mesh_closer(mesh);
+    const uint32_t sender_cce = gcb_layout_sender_cce(mesh->get_devices().front(), *mesh, 0);
+    distributed::MeshCommandQueue& command_queue = mesh->mesh_command_queue(0);
+
+    PrefetcherSession session(*mesh, {0});
+    experimental::WaitForCqOnTensorPrefetcher(command_queue, std::nullopt);
+    session.stop();
+    expect_lifecycle_sender_stopped(*mesh, sender_cce, 2);
+    EXPECT_EQ(
+        read_cce_tl1(
+            mesh->get_devices().front(),
+            sender_cce,
+            distributed::cce_sender_control_base(*mesh) + kCceCqSignalSlotsOffset +
+                (command_queue.id() * kCceCqSignalSlotStrideBytes),
+            sizeof(uint32_t))
+            .front(),
+        1u);
+}
+
+// A live GCB whose receiver is draining: Stop sends DRAIN, which nothing outstanding lets finish at once, then STOP.
+// The sender reports the STOP as its second request.
+TEST(MimirPrefetcher, MM7LifecycleDrainAtStop) {
+    MIMIR_SKIP_UNLESS_EMU();
+    if (const std::string skip_reason = mimir_watcher_skip_reason(); !skip_reason.empty()) {
+        GTEST_SKIP() << skip_reason;
+    }
+    std::shared_ptr<distributed::MeshDevice> mesh = distributed::MeshDevice::create_unit_mesh(0);
+    ScopedMesh mesh_closer(mesh);
+    GcbSmoke smoke(*mesh, 0, {gcb_smoke_local_receiver(*mesh)});
+    CceReceiverProgram receivers(
+        smoke.device(),
+        {smoke.receiver_launch(
+            0,
+            kGcbDiscardReceiverKernel,
+            0,
+            gcb_abi::kModeDrainUntilStopped,
+            0,
+            kGcbSmokeWaitBudgetCycles,
+            {{.tensor_id = 16, .slab = 0, .page_bytes = 256, .num_pages = 0}})});
+    PrefetcherSession session(*mesh, {0});
+    mesh->impl().tensor_prefetcher(mesh.get()).register_drain_target(smoke.gcb());
+
+    session.stop();
+    expect_lifecycle_sender_stopped(*mesh, gcb_layout_sender_cce(smoke.device(), *mesh, 0), 2);
+    receivers.stop_and_wait();
+    const std::vector<uint32_t> receiver_status = smoke.read_receiver_status(0);
+    EXPECT_EQ(receiver_status[gcb_abi::kStatusCode], gcb_abi::kCodeStopped);
+    EXPECT_EQ(receiver_status[gcb_abi::kStatusPagesDone], 0u);
+}
+
+// T1: one PREFETCH route per test. A sender CCE streams one 4 KiB page of a tensor on its own DRAM view into a
+// validator receiver, then a second session in the same mesh streams another tensor's page into the same GCB.
+
+inline constexpr uint32_t kUint32TileWords = 32 * 32;
+inline constexpr uint32_t kUint32TilePageBytes = kUint32TileWords * sizeof(uint32_t);
+inline constexpr uint32_t kT1Sessions = 2;
+// One PREFETCH page, then Stop's DRAIN and STOP.
+inline constexpr uint32_t kRequestsForOnePrefetch = 3;
+
+// The DRAM bank whose prefetcher sender is CCE `cce_index`, if any.
+std::optional<uint32_t> bank_with_sender_cce(distributed::MeshDevice& mesh, uint32_t cce_index) {
+    IDevice* device = mesh.get_devices().front();
+    for (uint32_t bank = 0; bank < soc_desc_of(device).get_num_dram_views(); ++bank) {
+        if (gcb_layout_sender_cce(device, mesh, bank) == cce_index) {
+            return bank;
+        }
+    }
+    return std::nullopt;
+}
+
+// Why a test whose senders and receivers are `route_cces` cannot run on this descriptor, or empty. A route that spans
+// Mimirs also needs the remote preflight.
+std::string route_skip_reason(const std::vector<uint32_t>& route_cces) {
+    if (std::string skip_reason = mimir_watcher_skip_reason(); !skip_reason.empty()) {
+        return skip_reason;
+    }
+    const uint32_t num_cces = topology_from(cluster_soc_desc()).num_cces;
+    const uint32_t highest_cce = *std::max_element(route_cces.begin(), route_cces.end());
+    if (highest_cce >= num_cces) {
+        return fmt::format("Descriptor exposes {} CCEs; this route needs CCE {}.", num_cces, highest_cce);
+    }
+    for (const uint32_t cce_index : route_cces) {
+        if (mimir_index_for_cce(cce_index) != mimir_index_for_cce(route_cces.front())) {
+            return mimir_remote_preflight_result();
+        }
+    }
+    return "";
+}
+
+// A UINT32 TILE tensor one tile wide on one DRAM bank: `num_slabs` receiver slabs, each `blocks` blocks of
+// `block_tiles` tiles. Slab s is shard s, so tile t of slab s is page s * slab_tiles() + t. A block is one validator
+// page.
+struct SlabTensorGeometry {
+    uint32_t num_slabs = 1;
+    uint32_t blocks = 1;
+    uint32_t block_tiles = 1;
+
+    uint32_t slab_tiles() const { return blocks * block_tiles; }
+    uint32_t block_bytes() const { return block_tiles * kUint32TilePageBytes; }
+};
+
+TensorSpec single_bank_tensor_spec(uint32_t bank, const SlabTensorGeometry& geometry) {
+    const CoreRangeSet bank_cores(CoreRange(CoreCoord{bank, 0}, CoreCoord{bank, 0}));
+    const Shape shard_shape{32 * geometry.slab_tiles(), 32};
+    const Shape tensor_shape{32 * geometry.slab_tiles() * geometry.num_slabs, 32};
+    const MemoryConfig memory_config(
+        BufferType::DRAM, NdShardSpec{shard_shape, bank_cores, ShardOrientation::ROW_MAJOR});
+    return TensorSpec(tensor_shape, TensorLayout(DataType::UINT32, Layout::TILE, memory_config));
+}
+
+// A single_bank_tensor_spec tensor holding the validator's words for page p of slab s of `tensor_id` in block p of slab
+// s.
+MeshTensor write_single_bank_tensor(
+    distributed::MeshDevice& mesh, uint32_t bank, uint32_t tensor_id, const SlabTensorGeometry& geometry) {
+    const TensorSpec spec = single_bank_tensor_spec(bank, geometry);
+    const uint32_t seed = mimir_test_seed();
+    const uint32_t slab_words = geometry.slab_tiles() * kUint32TileWords;
+    const uint32_t block_words = geometry.block_bytes() / sizeof(uint32_t);
+    std::vector<uint32_t> words(geometry.num_slabs * slab_words);
+    for (uint32_t slab = 0; slab < geometry.num_slabs; ++slab) {
+        for (uint32_t word = 0; word < slab_words; ++word) {
+            words[(slab * slab_words) + word] =
+                gcb_abi::gcb_page_word(seed, tensor_id, slab, word / block_words, word % block_words);
+        }
+    }
+    DistributedHostBuffer host_buffer = DistributedHostBuffer::create(mesh.shape());
+    const distributed::MeshCoordinate first_coord = *distributed::MeshCoordinateRange(mesh.shape()).begin();
+    host_buffer.emplace_shard(first_coord, [&words]() { return HostBuffer(std::vector<uint32_t>(words)); });
+    const HostTensor host_tensor = host_tensor_from_buffer_with_topology(
+        std::move(host_buffer), spec, TensorTopology::create_sharded_tensor_topology(mesh.shape()));
+    distributed::MeshCommandQueue& command_queue = mesh.mesh_command_queue();
+    MeshTensor tensor = command_queue.enqueue_write_tensor(host_tensor);
+    command_queue.finish();
+    log_info(
+        tt::LogTest,
+        "MM7 tensor {} on DRAM bank {}: {} slabs of {} blocks of {} tiles, bank-local address 0x{:x}",
+        tensor_id,
+        bank,
+        geometry.num_slabs,
+        geometry.blocks,
+        geometry.block_tiles,
+        tensor.mesh_buffer().address());
+    return tensor;
+}
+
+// The validator schedule entry for slab 0 of a write_single_bank_tensor tensor; receiver_launch moves it to the
+// receiver's slab.
+GcbSmokeRequest slab_tensor_request(uint32_t tensor_id, const SlabTensorGeometry& geometry) {
+    return {.tensor_id = tensor_id, .slab = 0, .page_bytes = geometry.block_bytes(), .num_pages = geometry.blocks};
+}
+
+// A validator on receiver table slot `slot` of `smoke` that consumed `schedule`: OK, every page, and both ends'
+// counters and pointers where the schedule leaves them.
+void expect_validated_delivery(const GcbSmoke& smoke, uint32_t slot, const std::vector<GcbSmokeRequest>& schedule) {
+    const std::vector<uint32_t> receiver_status = smoke.read_receiver_status(slot);
+    EXPECT_EQ(receiver_status[gcb_abi::kStatusCode], gcb_abi::kCodeOk) << "receiver CCE " << smoke.receiver_cce(slot);
+    EXPECT_EQ(receiver_status[gcb_abi::kStatusPagesDone], gcb_smoke_total_pages(schedule))
+        << "receiver CCE " << smoke.receiver_cce(slot);
+    const GcbFifoEndState end_state = expected_gcb_fifo_end_state(schedule, smoke.fifo_bytes());
+    smoke.expect_fifo_state(slot, end_state, end_state.credit_units, end_state.fifo_offset);
+}
+
+// Writes one tensor per session, then runs kT1Sessions sessions of Start, one PREFETCH and Stop into one validator
+// receiver Program that spans them all.
+void run_t1_route(uint32_t sender_cce, uint32_t receiver_cce) {
+    std::shared_ptr<distributed::MeshDevice> mesh = distributed::MeshDevice::create_unit_mesh(0);
+    ScopedMesh mesh_closer(mesh);
+    IDevice* device = mesh->get_devices().front();
+    if (mimir_index_for_cce(sender_cce) != mimir_index_for_cce(receiver_cce)) {
+        EXPECT_TRUE(mimir_remote_remap_result().empty()) << mimir_remote_remap_result();
+    }
+    const std::optional<uint32_t> sender_bank = bank_with_sender_cce(*mesh, sender_cce);
+    ASSERT_TRUE(sender_bank.has_value()) << "no DRAM view's prefetcher sender is CCE " << sender_cce;
+    log_info(tt::LogTest, "MM7T1 route CCE {} (bank {}) -> CCE {}", sender_cce, *sender_bank, receiver_cce);
+
+    const uint32_t seed = mimir_test_seed();
+    std::vector<MeshTensor> tensors;
+    std::vector<GcbSmokeRequest> schedule;
+    for (uint32_t session_index = 0; session_index < kT1Sessions; ++session_index) {
+        tensors.push_back(write_single_bank_tensor(*mesh, *sender_bank, session_index, {}));
+        schedule.push_back({.tensor_id = session_index, .slab = 0, .page_bytes = kUint32TilePageBytes, .num_pages = 1});
+    }
+    GcbSmoke smoke(*mesh, *sender_bank, {receiver_cce});
+    CceReceiverProgram receivers(
+        device,
+        {smoke.receiver_launch(0, kGcbValidatorReceiverKernel, seed, 0, 0, kGcbSmokeWaitBudgetCycles, schedule)});
+
+    for (uint32_t session_index = 0; session_index < kT1Sessions; ++session_index) {
+        PrefetcherSession session(*mesh, {*sender_bank});
+        experimental::QueueTensorPrefetcherRequest(
+            *mesh,
+            smoke.gcb(),
+            std::nullopt,
+            {experimental::TensorPrefetcherInput{.tensor = tensors[session_index], .block_count = 1}});
+        session.stop();
+        expect_lifecycle_sender_stopped(*mesh, sender_cce, kRequestsForOnePrefetch);
+    }
+    EXPECT_EQ(read_go_signal(device, sender_cce), dev_msgs::RUN_MSG_DONE) << "sender CCE " << sender_cce;
+
+    receivers.stop_and_wait();
+    expect_validated_delivery(smoke, 0, schedule);
+}
+
+TEST(MimirPrefetcher, MM7T1Local0To1) {
+    MIMIR_SKIP_UNLESS_EMU();
+    if (const std::string skip_reason = route_skip_reason({0, 1}); !skip_reason.empty()) {
+        GTEST_SKIP() << skip_reason;
+    }
+    run_t1_route(0, 1);
+}
+
+TEST(MimirPrefetcher, MM7T1Local3To2) {
+    MIMIR_SKIP_UNLESS_EMU();
+    if (const std::string skip_reason = route_skip_reason({3, 2}); !skip_reason.empty()) {
+        GTEST_SKIP() << skip_reason;
+    }
+    run_t1_route(3, 2);
+}
+
+TEST(MimirPrefetcher, MM7T1D2d0To2) {
+    MIMIR_SKIP_UNLESS_EMU();
+    if (const std::string skip_reason = route_skip_reason({0, 2}); !skip_reason.empty()) {
+        GTEST_SKIP() << skip_reason;
+    }
+    run_t1_route(0, 2);
+}
+
+TEST(MimirPrefetcher, MM7T1D2d3To1) {
+    MIMIR_SKIP_UNLESS_EMU();
+    if (const std::string skip_reason = route_skip_reason({3, 1}); !skip_reason.empty()) {
+        GTEST_SKIP() << skip_reason;
+    }
+    run_t1_route(3, 1);
+}
+
+// Reads the sender's status back to back, which is what advances the emulated chip clock, until `reached` holds for it
+// or `limit` passes. Returns the last status read.
+CceSenderStatus poll_sender_status(
+    distributed::MeshDevice& mesh,
+    uint32_t cce_index,
+    const std::function<bool(const CceSenderStatus&)>& reached,
+    std::chrono::steady_clock::duration limit) {
+    IDevice* device = mesh.get_devices().front();
+    const uint64_t status_address = distributed::cce_sender_control_base(mesh) + kCceSenderStatusOffset;
+    const std::chrono::steady_clock::time_point deadline = std::chrono::steady_clock::now() + limit;
+    CceSenderStatus status{};
+    do {
+        const std::vector<uint32_t> words = read_cce_tl1(device, cce_index, status_address, sizeof(CceSenderStatus));
+        std::memcpy(&status, words.data(), sizeof(status));
+    } while (!reached(status) && std::chrono::steady_clock::now() < deadline);
+    log_info(tt::LogTest, "MM7 sender CCE {}: {}", cce_index, distributed::format_cce_sender_status(status));
+    return status;
+}
+
+bool sender_exited(const CceSenderStatus& status) {
+    return status.state == static_cast<uint32_t>(CceSenderState::Stopped) ||
+           status.state == static_cast<uint32_t>(CceSenderState::Failed);
+}
+
+// The validator Program of `smoke`'s receiver table slot `slot` for `schedule`.
+CceKernelLaunch validator_launch(const GcbSmoke& smoke, uint32_t slot, const std::vector<GcbSmokeRequest>& schedule) {
+    return smoke.receiver_launch(
+        slot, kGcbValidatorReceiverKernel, mimir_test_seed(), 0, 0, kGcbSmokeWaitBudgetCycles, schedule);
+}
+
+void queue_tensor(distributed::MeshDevice& mesh, const GcbSmoke& smoke, const MeshTensor& tensor, uint32_t blocks) {
+    experimental::QueueTensorPrefetcherRequest(
+        mesh,
+        smoke.gcb(),
+        std::nullopt,
+        {experimental::TensorPrefetcherInput{.tensor = tensor, .block_count = blocks}});
+}
+
+// T2: one sender to several receivers, and two senders to one receiver CCE, on 2x routes. Each slab is two one-tile
+// blocks against a one-tile FIFO, so the sender's second round waits for every receiver of the GCB to ack the first.
+
+inline constexpr uint32_t kT2BlocksPerSlab = 2;
+inline constexpr uint32_t kT2FanOutTensorId = 40;
+inline constexpr uint32_t kT2FirstTensorId = 41;
+inline constexpr uint32_t kT2SecondTensorId = 42;
+// The hart of the second GCB's validator on a receiver CCE that serves two GCBs.
+inline constexpr uint32_t kSecondGcbReceiverHart = 1;
+
+// One GCB from `sender_cce` to every CCE of `receiver_cces`, each reading its own slab of one tensor.
+void run_t2_fan_out(uint32_t sender_cce, const std::vector<uint32_t>& receiver_cces) {
+    std::shared_ptr<distributed::MeshDevice> mesh = distributed::MeshDevice::create_unit_mesh(0);
+    ScopedMesh mesh_closer(mesh);
+    EXPECT_TRUE(mimir_remote_remap_result().empty()) << mimir_remote_remap_result();
+    const std::optional<uint32_t> sender_bank = bank_with_sender_cce(*mesh, sender_cce);
+    ASSERT_TRUE(sender_bank.has_value()) << "no DRAM view's prefetcher sender is CCE " << sender_cce;
+    log_info(
+        tt::LogTest,
+        "MM7T2 fan-out CCE {} (bank {}) -> CCEs {}",
+        sender_cce,
+        *sender_bank,
+        fmt::join(receiver_cces, ","));
+
+    const SlabTensorGeometry geometry{
+        .num_slabs = static_cast<uint32_t>(receiver_cces.size()), .blocks = kT2BlocksPerSlab};
+    const MeshTensor tensor = write_single_bank_tensor(*mesh, *sender_bank, kT2FanOutTensorId, geometry);
+    const std::vector<GcbSmokeRequest> schedule = {slab_tensor_request(kT2FanOutTensorId, geometry)};
+    GcbSmoke smoke(*mesh, *sender_bank, receiver_cces);
+    std::vector<CceKernelLaunch> launches;
+    for (uint32_t slot = 0; slot < receiver_cces.size(); ++slot) {
+        launches.push_back(validator_launch(smoke, slot, schedule));
+    }
+    CceReceiverProgram receivers(smoke.device(), launches);
+    PrefetcherSession session(*mesh, {*sender_bank});
+    queue_tensor(*mesh, smoke, tensor, geometry.blocks);
+    session.stop();
+    expect_lifecycle_sender_stopped(*mesh, sender_cce, kRequestsForOnePrefetch);
+
+    receivers.stop_and_wait();
+    for (uint32_t slot = 0; slot < receiver_cces.size(); ++slot) {
+        expect_validated_delivery(smoke, slot, schedule);
+    }
+}
+
+// Two senders in one session, each with its own GCB to `receiver_cce`, deliver concurrently. The GCBs hold disjoint
+// windows of the receiver zone, and their validators run on two harts of the receiver CCE in one Program.
+void run_t2_two_senders(uint32_t first_sender_cce, uint32_t second_sender_cce, uint32_t receiver_cce) {
+    std::shared_ptr<distributed::MeshDevice> mesh = distributed::MeshDevice::create_unit_mesh(0);
+    ScopedMesh mesh_closer(mesh);
+    EXPECT_TRUE(mimir_remote_remap_result().empty()) << mimir_remote_remap_result();
+    const std::optional<uint32_t> first_bank = bank_with_sender_cce(*mesh, first_sender_cce);
+    const std::optional<uint32_t> second_bank = bank_with_sender_cce(*mesh, second_sender_cce);
+    ASSERT_TRUE(first_bank.has_value()) << "no DRAM view's prefetcher sender is CCE " << first_sender_cce;
+    ASSERT_TRUE(second_bank.has_value()) << "no DRAM view's prefetcher sender is CCE " << second_sender_cce;
+    log_info(
+        tt::LogTest,
+        "MM7T2 CCE {} (bank {}) and CCE {} (bank {}) -> CCE {}",
+        first_sender_cce,
+        *first_bank,
+        second_sender_cce,
+        *second_bank,
+        receiver_cce);
+
+    const SlabTensorGeometry geometry{.blocks = kT2BlocksPerSlab};
+    const MeshTensor first_tensor = write_single_bank_tensor(*mesh, *first_bank, kT2FirstTensorId, geometry);
+    const MeshTensor second_tensor = write_single_bank_tensor(*mesh, *second_bank, kT2SecondTensorId, geometry);
+    const std::vector<GcbSmokeRequest> first_schedule = {slab_tensor_request(kT2FirstTensorId, geometry)};
+    const std::vector<GcbSmokeRequest> second_schedule = {slab_tensor_request(kT2SecondTensorId, geometry)};
+    GcbSmoke first_smoke(*mesh, *first_bank, {receiver_cce});
+    GcbSmoke second_smoke(*mesh, *second_bank, {receiver_cce});
+    expect_gcb_layout_ranges_disjoint(first_smoke.gcb(), second_smoke.gcb());
+    CceKernelLaunch second_launch = validator_launch(second_smoke, 0, second_schedule);
+    second_launch.hart = kSecondGcbReceiverHart;
+    CceReceiverProgram receivers(
+        first_smoke.device(), {validator_launch(first_smoke, 0, first_schedule), second_launch});
+    PrefetcherSession session(*mesh, {*first_bank, *second_bank});
+    queue_tensor(*mesh, first_smoke, first_tensor, geometry.blocks);
+    queue_tensor(*mesh, second_smoke, second_tensor, geometry.blocks);
+    session.stop();
+    expect_lifecycle_sender_stopped(*mesh, first_sender_cce, kRequestsForOnePrefetch);
+    expect_lifecycle_sender_stopped(*mesh, second_sender_cce, kRequestsForOnePrefetch);
+
+    receivers.stop_and_wait();
+    expect_validated_delivery(first_smoke, 0, first_schedule);
+    expect_validated_delivery(second_smoke, 0, second_schedule);
+}
+
+TEST(MimirPrefetcher, MM7T2FanOut0To123) {
+    MIMIR_SKIP_UNLESS_EMU();
+    if (const std::string skip_reason = route_skip_reason({0, 1, 2, 3}); !skip_reason.empty()) {
+        GTEST_SKIP() << skip_reason;
+    }
+    run_t2_fan_out(0, {1, 2, 3});
+}
+
+TEST(MimirPrefetcher, MM7T2FanOut3To012) {
+    MIMIR_SKIP_UNLESS_EMU();
+    if (const std::string skip_reason = route_skip_reason({3, 0, 1, 2}); !skip_reason.empty()) {
+        GTEST_SKIP() << skip_reason;
+    }
+    run_t2_fan_out(3, {0, 1, 2});
+}
+
+TEST(MimirPrefetcher, MM7T2TwoSenders01To2) {
+    MIMIR_SKIP_UNLESS_EMU();
+    if (const std::string skip_reason = route_skip_reason({0, 1, 2}); !skip_reason.empty()) {
+        GTEST_SKIP() << skip_reason;
+    }
+    run_t2_two_senders(0, 1, 2);
+}
+
+TEST(MimirPrefetcher, MM7T2TwoSenders02To3) {
+    MIMIR_SKIP_UNLESS_EMU();
+    if (const std::string skip_reason = route_skip_reason({0, 2, 3}); !skip_reason.empty()) {
+        GTEST_SKIP() << skip_reason;
+    }
+    run_t2_two_senders(0, 2, 3);
+}
+
+// T3: what one sender delivers into one GCB, on the local route 0 -> 1 and the D2D route 0 -> 2. A tile is 4 KiB, and
+// the default stage ring's third is 4 KiB. Each case writes its tensors before any receiver runs and never rewrites
+// them. A repeated request gets its own tensor of the same geometry, so the validator checks bytes that request
+// delivered, not ones an earlier request left in the FIFO.
+
+inline constexpr uint32_t kT3SenderCce = 0;
+inline constexpr uint32_t kT3LocalReceiverCce = 1;
+inline constexpr uint32_t kT3D2dReceiverCce = 2;
+
+struct CaseTensor {
+    uint32_t tensor_id = 0;
+    SlabTensorGeometry geometry;
+};
+
+struct SingleGcbCase {
+    uint32_t fifo_bytes = kGcbSmokeFifoBytes;
+    uint32_t stage_ring_bytes = experimental::QuasarTensorPrefetcherConfig{}.stage_ring_bytes;
+    std::vector<CaseTensor> tensors;
+    // One entry per Queue call: positions in `tensors`, in order.
+    std::vector<std::vector<uint32_t>> queue_calls;
+    // The PREFETCH pages the Queue calls make, plus Stop's DRAIN and STOP.
+    uint32_t sender_requests = 0;
+};
+
+// The bank of kT3SenderCce; checks the remote remap first when `receiver_cce` is on another Mimir.
+std::optional<uint32_t> t3_sender_bank(distributed::MeshDevice& mesh, uint32_t receiver_cce) {
+    if (mimir_index_for_cce(kT3SenderCce) != mimir_index_for_cce(receiver_cce)) {
+        EXPECT_TRUE(mimir_remote_remap_result().empty()) << mimir_remote_remap_result();
+    }
+    return bank_with_sender_cce(mesh, kT3SenderCce);
+}
+
+// Writes the case's tensors, makes each Queue call from kT3SenderCce in one session, and checks the validator on
+// `receiver_cce` saw every tensor in order.
+void run_single_gcb_case(uint32_t receiver_cce, const SingleGcbCase& test_case) {
+    std::shared_ptr<distributed::MeshDevice> mesh = distributed::MeshDevice::create_unit_mesh(0);
+    ScopedMesh mesh_closer(mesh);
+    const std::optional<uint32_t> sender_bank = t3_sender_bank(*mesh, receiver_cce);
+    ASSERT_TRUE(sender_bank.has_value()) << "no DRAM view's prefetcher sender is CCE " << kT3SenderCce;
+    log_info(
+        tt::LogTest,
+        "MM7T3 route CCE {} (bank {}) -> CCE {}, FIFO {} B, stage ring {} B",
+        kT3SenderCce,
+        *sender_bank,
+        receiver_cce,
+        test_case.fifo_bytes,
+        test_case.stage_ring_bytes);
+
+    std::vector<MeshTensor> tensors;
+    for (const CaseTensor& case_tensor : test_case.tensors) {
+        tensors.push_back(write_single_bank_tensor(*mesh, *sender_bank, case_tensor.tensor_id, case_tensor.geometry));
+    }
+    std::vector<GcbSmokeRequest> schedule;
+    for (const std::vector<uint32_t>& queue_call : test_case.queue_calls) {
+        for (const uint32_t position : queue_call) {
+            const CaseTensor& case_tensor = test_case.tensors.at(position);
+            schedule.push_back(slab_tensor_request(case_tensor.tensor_id, case_tensor.geometry));
+        }
+    }
+    GcbSmoke smoke(*mesh, *sender_bank, {receiver_cce}, test_case.fifo_bytes);
+    CceReceiverProgram receivers(smoke.device(), {validator_launch(smoke, 0, schedule)});
+    PrefetcherSession session(*mesh, {*sender_bank}, kGcbSmokeWaitBudgetCycles, test_case.stage_ring_bytes);
+    for (const std::vector<uint32_t>& queue_call : test_case.queue_calls) {
+        std::vector<experimental::TensorPrefetcherInput> inputs;
+        for (const uint32_t position : queue_call) {
+            inputs.push_back(experimental::TensorPrefetcherInput{
+                .tensor = tensors.at(position), .block_count = test_case.tensors.at(position).geometry.blocks});
+        }
+        experimental::QueueTensorPrefetcherRequest(*mesh, smoke.gcb(), std::nullopt, inputs);
+    }
+    session.stop();
+    expect_lifecycle_sender_stopped(*mesh, kT3SenderCce, test_case.sender_requests);
+
+    receivers.stop_and_wait();
+    expect_validated_delivery(smoke, 0, schedule);
+}
+
+// One 16 KiB block against a 12 KiB stage third: the fit ladder takes 2-tile (8 KiB) sub-chunks, which do not divide
+// the third, so each stage slot carries 8 KiB and the block passes through two slots.
+SingleGcbCase t3_sub_chunk_case() {
+    return {
+        .fifo_bytes = 16 * kKiB,
+        .stage_ring_bytes = 36 * kKiB,
+        .tensors = {{.tensor_id = 50, .geometry = {.block_tiles = 4}}},
+        .queue_calls = {{0}},
+        .sender_requests = kRequestsForOnePrefetch};
+}
+
+// Four 4 KiB blocks against an 8 KiB stage third and a 16 KiB FIFO: one round moves all four blocks, two per stage
+// slot.
+SingleGcbCase t3_below_stage_third_case() {
+    return {
+        .fifo_bytes = 16 * kKiB,
+        .stage_ring_bytes = 24 * kKiB,
+        .tensors = {{.tensor_id = 51, .geometry = {.blocks = 4}}},
+        .queue_calls = {{0}},
+        .sender_requests = kRequestsForOnePrefetch};
+}
+
+// Three 4 KiB blocks against an 8 KiB stage third and a 12 KiB FIFO: one 12 KiB round, an 8 KiB stage chunk and then a
+// 4 KiB tail chunk.
+SingleGcbCase t3_partial_stage_chunk_case() {
+    return {
+        .fifo_bytes = 12 * kKiB,
+        .stage_ring_bytes = 24 * kKiB,
+        .tensors = {{.tensor_id = 66, .geometry = {.blocks = 3}}},
+        .queue_calls = {{0}},
+        .sender_requests = kRequestsForOnePrefetch};
+}
+
+// One 8 KiB block against the default 4 KiB stage third: one-tile sub-chunks, two stage slots per block.
+SingleGcbCase t3_above_stage_third_case() {
+    return {
+        .fifo_bytes = 8 * kKiB,
+        .tensors = {{.tensor_id = 52, .geometry = {.block_tiles = 2}}},
+        .queue_calls = {{0}},
+        .sender_requests = kRequestsForOnePrefetch};
+}
+
+// One Queue call with two tensors whose layouts differ (one block, then two). A page holds the 12 B header and one
+// 64 B layout slot with its 8 B entry, and the second slot does not fit, so the call becomes two PREFETCH pages.
+SingleGcbCase t3_page_split_case() {
+    return {
+        .tensors = {{.tensor_id = 53, .geometry = {}}, {.tensor_id = 54, .geometry = {.blocks = 2}}},
+        .queue_calls = {{0, 1}},
+        .sender_requests = 4};
+}
+
+// Tensor A (4 KiB pages), tensor B (8 KiB pages), then a second tensor of A's geometry, as three requests into a
+// 16 KiB FIFO. B's resize pads wr_ptr from 4 KiB to 8 KiB on both ends, B wraps the FIFO, and the third request
+// resumes at the FIFO start.
+SingleGcbCase t3_aba_case() {
+    return {
+        .fifo_bytes = 16 * kKiB,
+        .tensors =
+            {{.tensor_id = 55, .geometry = {}},
+             {.tensor_id = 56, .geometry = {.block_tiles = 2}},
+             {.tensor_id = 62, .geometry = {}}},
+        .queue_calls = {{0}, {1}, {2}},
+        .sender_requests = 5};
+}
+
+// 4 KiB pages, 8 KiB pages twice, then 4 KiB pages, as four requests of four tensors into a 12 KiB FIFO that 8 KiB does
+// not divide. The first 8 KiB request's resize wraps wr_ptr from 4 KiB to the start with 8 KiB of padding; every 8 KiB
+// page then ends at the 8 KiB page-aligned limit and wraps with the 4 KiB gap credited; the last request resizes back
+// with no padding.
+SingleGcbCase t3_wrap_and_resize_case() {
+    return {
+        .fifo_bytes = 12 * kKiB,
+        .tensors =
+            {{.tensor_id = 57, .geometry = {}},
+             {.tensor_id = 58, .geometry = {.block_tiles = 2}},
+             {.tensor_id = 63, .geometry = {.block_tiles = 2}},
+             {.tensor_id = 64, .geometry = {}}},
+        .queue_calls = {{0}, {1}, {2}, {3}},
+        .sender_requests = 6};
+}
+
+TEST(MimirPrefetcher, MM7T3SubChunkLocal0To1) {
+    MIMIR_SKIP_UNLESS_EMU();
+    if (const std::string skip_reason = route_skip_reason({kT3SenderCce, kT3LocalReceiverCce}); !skip_reason.empty()) {
+        GTEST_SKIP() << skip_reason;
+    }
+    run_single_gcb_case(kT3LocalReceiverCce, t3_sub_chunk_case());
+}
+
+TEST(MimirPrefetcher, MM7T3SubChunkD2d0To2) {
+    MIMIR_SKIP_UNLESS_EMU();
+    if (const std::string skip_reason = route_skip_reason({kT3SenderCce, kT3D2dReceiverCce}); !skip_reason.empty()) {
+        GTEST_SKIP() << skip_reason;
+    }
+    run_single_gcb_case(kT3D2dReceiverCce, t3_sub_chunk_case());
+}
+
+TEST(MimirPrefetcher, MM7T3BelowStageThirdLocal0To1) {
+    MIMIR_SKIP_UNLESS_EMU();
+    if (const std::string skip_reason = route_skip_reason({kT3SenderCce, kT3LocalReceiverCce}); !skip_reason.empty()) {
+        GTEST_SKIP() << skip_reason;
+    }
+    run_single_gcb_case(kT3LocalReceiverCce, t3_below_stage_third_case());
+}
+
+TEST(MimirPrefetcher, MM7T3BelowStageThirdD2d0To2) {
+    MIMIR_SKIP_UNLESS_EMU();
+    if (const std::string skip_reason = route_skip_reason({kT3SenderCce, kT3D2dReceiverCce}); !skip_reason.empty()) {
+        GTEST_SKIP() << skip_reason;
+    }
+    run_single_gcb_case(kT3D2dReceiverCce, t3_below_stage_third_case());
+}
+
+TEST(MimirPrefetcher, MM7T3PartialStageChunkLocal0To1) {
+    MIMIR_SKIP_UNLESS_EMU();
+    if (const std::string skip_reason = route_skip_reason({kT3SenderCce, kT3LocalReceiverCce}); !skip_reason.empty()) {
+        GTEST_SKIP() << skip_reason;
+    }
+    run_single_gcb_case(kT3LocalReceiverCce, t3_partial_stage_chunk_case());
+}
+
+TEST(MimirPrefetcher, MM7T3AboveStageThirdLocal0To1) {
+    MIMIR_SKIP_UNLESS_EMU();
+    if (const std::string skip_reason = route_skip_reason({kT3SenderCce, kT3LocalReceiverCce}); !skip_reason.empty()) {
+        GTEST_SKIP() << skip_reason;
+    }
+    run_single_gcb_case(kT3LocalReceiverCce, t3_above_stage_third_case());
+}
+
+TEST(MimirPrefetcher, MM7T3AboveStageThirdD2d0To2) {
+    MIMIR_SKIP_UNLESS_EMU();
+    if (const std::string skip_reason = route_skip_reason({kT3SenderCce, kT3D2dReceiverCce}); !skip_reason.empty()) {
+        GTEST_SKIP() << skip_reason;
+    }
+    run_single_gcb_case(kT3D2dReceiverCce, t3_above_stage_third_case());
+}
+
+// Local only: the split happens in host serialization, before any page reaches the route.
+TEST(MimirPrefetcher, MM7T3PageSplitLocal0To1) {
+    MIMIR_SKIP_UNLESS_EMU();
+    if (const std::string skip_reason = route_skip_reason({kT3SenderCce, kT3LocalReceiverCce}); !skip_reason.empty()) {
+        GTEST_SKIP() << skip_reason;
+    }
+    run_single_gcb_case(kT3LocalReceiverCce, t3_page_split_case());
+}
+
+TEST(MimirPrefetcher, MM7T3AbaLocal0To1) {
+    MIMIR_SKIP_UNLESS_EMU();
+    if (const std::string skip_reason = route_skip_reason({kT3SenderCce, kT3LocalReceiverCce}); !skip_reason.empty()) {
+        GTEST_SKIP() << skip_reason;
+    }
+    run_single_gcb_case(kT3LocalReceiverCce, t3_aba_case());
+}
+
+TEST(MimirPrefetcher, MM7T3AbaD2d0To2) {
+    MIMIR_SKIP_UNLESS_EMU();
+    if (const std::string skip_reason = route_skip_reason({kT3SenderCce, kT3D2dReceiverCce}); !skip_reason.empty()) {
+        GTEST_SKIP() << skip_reason;
+    }
+    run_single_gcb_case(kT3D2dReceiverCce, t3_aba_case());
+}
+
+TEST(MimirPrefetcher, MM7T3WrapAndResizeLocal0To1) {
+    MIMIR_SKIP_UNLESS_EMU();
+    if (const std::string skip_reason = route_skip_reason({kT3SenderCce, kT3LocalReceiverCce}); !skip_reason.empty()) {
+        GTEST_SKIP() << skip_reason;
+    }
+    run_single_gcb_case(kT3LocalReceiverCce, t3_wrap_and_resize_case());
+}
+
+TEST(MimirPrefetcher, MM7T3WrapAndResizeD2d0To2) {
+    MIMIR_SKIP_UNLESS_EMU();
+    if (const std::string skip_reason = route_skip_reason({kT3SenderCce, kT3D2dReceiverCce}); !skip_reason.empty()) {
+        GTEST_SKIP() << skip_reason;
+    }
+    run_single_gcb_case(kT3D2dReceiverCce, t3_wrap_and_resize_case());
+}
+
+inline constexpr uint32_t kT3SwitchFirstTensorId = 59;
+inline constexpr uint32_t kT3SwitchSecondTensorId = 60;
+inline constexpr uint32_t kT3SwitchThirdTensorId = 65;
+// Two pages of one tile, so GCB1's first request leaves wr_ptr mid-FIFO for its second to resume from.
+inline constexpr uint32_t kT3SwitchFifoBytes = 8 * kKiB;
+inline constexpr uint32_t kT3FenceTensorId = 61;
+// How long the fence case watches a sender held in WAIT_CQ. The status reads in that time advance the emulated chip
+// clock by about 400,000 cycles (S5), far more than a WAIT_CQ the slot already satisfied takes to pass.
+inline constexpr std::chrono::seconds kT3FenceHoldTime{5};
+
+// GCB1, then GCB2, then GCB1 again, each with its own tensor, from kT3SenderCce to `receiver_cce`, whose validators run
+// on two of its harts. GCB1's first request leaves wr_ptr halfway through its FIFO, and the second resumes there from
+// GCB1's state block. Stop's one DRAIN page names both GCBs: three PREFETCH pages, the DRAIN and STOP.
+void run_t3_gcb_switch(uint32_t receiver_cce) {
+    std::shared_ptr<distributed::MeshDevice> mesh = distributed::MeshDevice::create_unit_mesh(0);
+    ScopedMesh mesh_closer(mesh);
+    const std::optional<uint32_t> sender_bank = t3_sender_bank(*mesh, receiver_cce);
+    ASSERT_TRUE(sender_bank.has_value()) << "no DRAM view's prefetcher sender is CCE " << kT3SenderCce;
+    const SlabTensorGeometry geometry{};
+    const MeshTensor first_tensor = write_single_bank_tensor(*mesh, *sender_bank, kT3SwitchFirstTensorId, geometry);
+    const MeshTensor second_tensor = write_single_bank_tensor(*mesh, *sender_bank, kT3SwitchSecondTensorId, geometry);
+    const MeshTensor third_tensor = write_single_bank_tensor(*mesh, *sender_bank, kT3SwitchThirdTensorId, geometry);
+    const std::vector<GcbSmokeRequest> first_schedule = {
+        slab_tensor_request(kT3SwitchFirstTensorId, geometry), slab_tensor_request(kT3SwitchThirdTensorId, geometry)};
+    const std::vector<GcbSmokeRequest> second_schedule = {slab_tensor_request(kT3SwitchSecondTensorId, geometry)};
+    GcbSmoke first_smoke(*mesh, *sender_bank, {receiver_cce}, kT3SwitchFifoBytes);
+    GcbSmoke second_smoke(*mesh, *sender_bank, {receiver_cce}, kT3SwitchFifoBytes);
+    expect_gcb_layout_ranges_disjoint(first_smoke.gcb(), second_smoke.gcb());
+    CceKernelLaunch second_launch = validator_launch(second_smoke, 0, second_schedule);
+    second_launch.hart = kSecondGcbReceiverHart;
+    CceReceiverProgram receivers(
+        first_smoke.device(), {validator_launch(first_smoke, 0, first_schedule), second_launch});
+    PrefetcherSession session(*mesh, {*sender_bank});
+    queue_tensor(*mesh, first_smoke, first_tensor, geometry.blocks);
+    queue_tensor(*mesh, second_smoke, second_tensor, geometry.blocks);
+    queue_tensor(*mesh, first_smoke, third_tensor, geometry.blocks);
+    session.stop();
+    expect_lifecycle_sender_stopped(*mesh, kT3SenderCce, 5);
+
+    receivers.stop_and_wait();
+    expect_validated_delivery(first_smoke, 0, first_schedule);
+    expect_validated_delivery(second_smoke, 0, second_schedule);
+}
+
+TEST(MimirPrefetcher, MM7T3GcbSwitchLocal0To1) {
+    MIMIR_SKIP_UNLESS_EMU();
+    if (const std::string skip_reason = route_skip_reason({kT3SenderCce, kT3LocalReceiverCce}); !skip_reason.empty()) {
+        GTEST_SKIP() << skip_reason;
+    }
+    run_t3_gcb_switch(kT3LocalReceiverCce);
+}
+
+TEST(MimirPrefetcher, MM7T3GcbSwitchD2d0To2) {
+    MIMIR_SKIP_UNLESS_EMU();
+    if (const std::string skip_reason = route_skip_reason({kT3SenderCce, kT3D2dReceiverCce}); !skip_reason.empty()) {
+        GTEST_SKIP() << skip_reason;
+    }
+    run_t3_gcb_switch(kT3D2dReceiverCce);
+}
+
+// The fence: a WAIT_CQ for a value the CQ signal slot does not hold yet, queued through the manager's test hook, then a
+// PREFETCH. The sender waits in WAIT_CQ and delivers nothing until the test writes the value into the slot. The session
+// has the success budget, so a CQ_TIMEOUT cannot end the wait while the test watches it. Local only: the wait is on the
+// sender, before anything crosses the route.
+TEST(MimirPrefetcher, MM7T3FenceLocal0To1) {
+    MIMIR_SKIP_UNLESS_EMU();
+    if (const std::string skip_reason = route_skip_reason({kT3SenderCce, kT3LocalReceiverCce}); !skip_reason.empty()) {
+        GTEST_SKIP() << skip_reason;
+    }
+    std::shared_ptr<distributed::MeshDevice> mesh = distributed::MeshDevice::create_unit_mesh(0);
+    ScopedMesh mesh_closer(mesh);
+    const std::optional<uint32_t> sender_bank = t3_sender_bank(*mesh, kT3LocalReceiverCce);
+    ASSERT_TRUE(sender_bank.has_value()) << "no DRAM view's prefetcher sender is CCE " << kT3SenderCce;
+    const SlabTensorGeometry geometry{};
+    const MeshTensor tensor = write_single_bank_tensor(*mesh, *sender_bank, kT3FenceTensorId, geometry);
+    const std::vector<GcbSmokeRequest> schedule = {slab_tensor_request(kT3FenceTensorId, geometry)};
+    GcbSmoke smoke(*mesh, *sender_bank, {kT3LocalReceiverCce});
+    CceReceiverProgram receivers(smoke.device(), {validator_launch(smoke, 0, schedule)});
+    PrefetcherSession session(*mesh, {*sender_bank});
+
+    const distributed::TensorPrefetcherManager::UnsignaledCqWait fence =
+        mesh->impl().tensor_prefetcher(mesh.get()).queue_cq_wait_without_signal();
+    queue_tensor(*mesh, smoke, tensor, geometry.blocks);
+    const CceSenderStatus waiting = poll_sender_status(
+        *mesh,
+        kT3SenderCce,
+        [](const CceSenderStatus& status) {
+            return status.request_index != 0 || (status.state != static_cast<uint32_t>(CceSenderState::NotStarted) &&
+                                                 status.state != static_cast<uint32_t>(CceSenderState::Running));
+        },
+        kGcbSmokeHostWaitLimit);
+    ASSERT_EQ(waiting.state, static_cast<uint32_t>(CceSenderState::WaitingCq));
+    const CceSenderStatus held = poll_sender_status(
+        *mesh,
+        kT3SenderCce,
+        [](const CceSenderStatus& status) { return status.state != static_cast<uint32_t>(CceSenderState::WaitingCq); },
+        kT3FenceHoldTime);
+    EXPECT_EQ(held.state, static_cast<uint32_t>(CceSenderState::WaitingCq));
+    EXPECT_EQ(lifecycle_bytes_acked(*mesh, kT3SenderCce), 0u);
+    EXPECT_EQ(smoke.read_status(smoke.receiver_cce(0))[gcb_abi::kStatusMagic], gcb_abi::kStatusPoison);
+    smoke.expect_fifo_state(0, {.credit_units = 0, .fifo_offset = 0}, 0, 0);
+
+    log_info(tt::LogTest, "MM7T3 fence: writing {} to CQ signal slot 0x{:x}", fence.value, fence.slot_address);
+    write_cce_tl1(smoke.device(), kT3SenderCce, fence.slot_address, {fence.value});
+    session.stop();
+    expect_lifecycle_sender_stopped(*mesh, kT3SenderCce, 4);
+    receivers.stop_and_wait();
+    expect_validated_delivery(smoke, 0, schedule);
+}
+
+// T4: failures a CCE sender reports and recovers from, on D2D routes. Each failure is torn down in this order: Stop,
+// release the receivers and wait for them, destroy the GCB. Then a fresh GCB, receivers and Start deliver one valid
+// page. A session whose sender should time out gets the stall budget, so the expiry takes seconds of host polling.
+
+inline constexpr uint32_t kT4FailureTensorId = 20;
+inline constexpr uint32_t kT4RecoveryTensorId = 21;
+// One page more than the FIFO holds.
+inline constexpr uint32_t kT4OverflowPages = (kGcbSmokeFifoBytes / kUint32TilePageBytes) + 1;
+
+// The credit units one T1 page puts on a fresh GCB.
+uint32_t t4_one_page_credit_units() {
+    return expected_gcb_fifo_end_state(
+               {{.tensor_id = kT4FailureTensorId, .slab = 0, .page_bytes = kUint32TilePageBytes, .num_pages = 1}},
+               kGcbSmokeFifoBytes)
+        .credit_units;
+}
+
+// A stalling receiver that holds the first page it gets until released.
+CceKernelLaunch t4_stalling_receiver(const GcbSmoke& smoke) {
+    return smoke.receiver_launch(
+        0,
+        kGcbDiscardReceiverKernel,
+        0,
+        gcb_abi::kModeStallUntilReleased,
+        1,
+        kGcbSmokeWaitBudgetCycles,
+        {{.tensor_id = kT4FailureTensorId, .slab = 0, .page_bytes = kUint32TilePageBytes, .num_pages = 0}});
+}
+
+// The recovery after a failure: a fresh GCB to `receiver_cce` with a validator, a fresh Start, and `tensor`'s one page.
+void expect_t4_recovery(
+    distributed::MeshDevice& mesh,
+    uint32_t sender_bank,
+    uint32_t sender_cce,
+    uint32_t receiver_cce,
+    const MeshTensor& tensor) {
+    const std::vector<GcbSmokeRequest> schedule = {
+        {.tensor_id = kT4RecoveryTensorId, .slab = 0, .page_bytes = kUint32TilePageBytes, .num_pages = 1}};
+    GcbSmoke smoke(mesh, sender_bank, {receiver_cce});
+    CceReceiverProgram receivers(
+        smoke.device(),
+        {smoke.receiver_launch(
+            0, kGcbValidatorReceiverKernel, mimir_test_seed(), 0, 0, kGcbSmokeWaitBudgetCycles, schedule)});
+    PrefetcherSession session(mesh, {sender_bank});
+    experimental::QueueTensorPrefetcherRequest(
+        mesh, smoke.gcb(), std::nullopt, {experimental::TensorPrefetcherInput{.tensor = tensor, .block_count = 1}});
+    session.stop();
+    expect_lifecycle_sender_stopped(mesh, sender_cce, kRequestsForOnePrefetch);
+    receivers.stop_and_wait();
+    const std::vector<uint32_t> receiver_status = smoke.read_receiver_status(0);
+    EXPECT_EQ(receiver_status[gcb_abi::kStatusCode], gcb_abi::kCodeOk);
+    EXPECT_EQ(receiver_status[gcb_abi::kStatusPagesDone], 1u);
+}
+
+// Trace capture and replay of prefetch requests needs fast dispatch, and Mimir runs slow dispatch only.
+TEST(MimirPrefetcher, MM7T5TraceCaptureReplay) { GTEST_SKIP(); }
+
+// The validator recomputes the page with a wrong seed: it reports MISMATCH and keeps acking, so the sender stops OK.
+TEST(MimirPrefetcher, MM7T4MismatchD2d2To0) {
+    MIMIR_SKIP_UNLESS_EMU();
+    if (const std::string skip_reason = route_skip_reason({2, 0}); !skip_reason.empty()) {
+        GTEST_SKIP() << skip_reason;
+    }
+    std::shared_ptr<distributed::MeshDevice> mesh = distributed::MeshDevice::create_unit_mesh(0);
+    ScopedMesh mesh_closer(mesh);
+    EXPECT_TRUE(mimir_remote_remap_result().empty()) << mimir_remote_remap_result();
+    const std::optional<uint32_t> sender_bank_of_cce = bank_with_sender_cce(*mesh, 2);
+    ASSERT_TRUE(sender_bank_of_cce.has_value()) << "no DRAM view's prefetcher sender is CCE 2";
+    const uint32_t sender_bank = *sender_bank_of_cce;
+    const uint32_t seed = mimir_test_seed();
+    const MeshTensor failure_tensor = write_single_bank_tensor(*mesh, sender_bank, kT4FailureTensorId, {});
+    const MeshTensor recovery_tensor = write_single_bank_tensor(*mesh, sender_bank, kT4RecoveryTensorId, {});
+    {
+        GcbSmoke smoke(*mesh, sender_bank, {0});
+        CceReceiverProgram receivers(
+            smoke.device(),
+            {smoke.receiver_launch(
+                0,
+                kGcbValidatorReceiverKernel,
+                seed ^ 0x1u,
+                0,
+                0,
+                kGcbSmokeWaitBudgetCycles,
+                {{.tensor_id = kT4FailureTensorId, .slab = 0, .page_bytes = kUint32TilePageBytes, .num_pages = 1}})});
+        PrefetcherSession session(*mesh, {sender_bank});
+        experimental::QueueTensorPrefetcherRequest(
+            *mesh,
+            smoke.gcb(),
+            std::nullopt,
+            {experimental::TensorPrefetcherInput{.tensor = failure_tensor, .block_count = 1}});
+        session.stop();
+        expect_lifecycle_sender_stopped(*mesh, 2, kRequestsForOnePrefetch);
+        receivers.stop_and_wait();
+        const std::vector<uint32_t> receiver_status = smoke.read_receiver_status(0);
+        EXPECT_EQ(receiver_status[gcb_abi::kStatusCode], gcb_abi::kCodeMismatch);
+        EXPECT_EQ(receiver_status[gcb_abi::kStatusPagesDone], 1u);
+    }
+    expect_t4_recovery(*mesh, sender_bank, 2, 0, recovery_tensor);
+}
+
+// A request one page larger than the FIFO into a receiver that holds the first page: the sender's free-space wait
+// expires with CREDIT_TIMEOUT and the sender exits. The worker then fills its ring with one ring of further requests
+// and drops the rest, Stop's DRAIN and STOP among them, because the sender has exited; Stop still returns.
+TEST(MimirPrefetcher, MM7T4CreditTimeoutD2d1To3) {
+    MIMIR_SKIP_UNLESS_EMU();
+    if (const std::string skip_reason = route_skip_reason({1, 3}); !skip_reason.empty()) {
+        GTEST_SKIP() << skip_reason;
+    }
+    std::shared_ptr<distributed::MeshDevice> mesh = distributed::MeshDevice::create_unit_mesh(0);
+    ScopedMesh mesh_closer(mesh);
+    IDevice* device = mesh->get_devices().front();
+    EXPECT_TRUE(mimir_remote_remap_result().empty()) << mimir_remote_remap_result();
+    const std::optional<uint32_t> sender_bank_of_cce = bank_with_sender_cce(*mesh, 1);
+    ASSERT_TRUE(sender_bank_of_cce.has_value()) << "no DRAM view's prefetcher sender is CCE 1";
+    const uint32_t sender_bank = *sender_bank_of_cce;
+    const MeshTensor failure_tensor =
+        write_single_bank_tensor(*mesh, sender_bank, kT4FailureTensorId, {.blocks = kT4OverflowPages});
+    const MeshTensor recovery_tensor = write_single_bank_tensor(*mesh, sender_bank, kT4RecoveryTensorId, {});
+    {
+        GcbSmoke smoke(*mesh, sender_bank, {3});
+        CceReceiverProgram receivers(smoke.device(), {t4_stalling_receiver(smoke)});
+        PrefetcherSession session(*mesh, {sender_bank}, kGcbSmokeStallBudgetCycles);
+        experimental::QueueTensorPrefetcherRequest(
+            *mesh,
+            smoke.gcb(),
+            std::nullopt,
+            {experimental::TensorPrefetcherInput{.tensor = failure_tensor, .block_count = kT4OverflowPages}});
+        const CceSenderStatus failure = poll_sender_status(*mesh, 1, sender_exited, kGcbSmokeHostWaitLimit);
+        EXPECT_EQ(failure.state, static_cast<uint32_t>(CceSenderState::Failed));
+        EXPECT_EQ(failure.code, static_cast<uint32_t>(CceSenderStatusCode::CreditTimeout));
+        EXPECT_EQ(failure.request_index, 0u);
+        EXPECT_EQ(failure.receiver, 0u);
+        EXPECT_EQ(failure.sent, t4_one_page_credit_units());
+        EXPECT_EQ(failure.acked, 0u);
+        ASSERT_TRUE(smoke.wait_for_holding(0, 1));
+
+        for (uint32_t request = 0; request <= kCceRequestRingSlots; ++request) {
+            experimental::QueueTensorPrefetcherRequest(
+                *mesh,
+                smoke.gcb(),
+                std::nullopt,
+                {experimental::TensorPrefetcherInput{.tensor = recovery_tensor, .block_count = 1}});
+        }
+        session.stop();
+        const uint64_t ring_meta_address = distributed::cce_sender_control_base(*mesh) + kCceRingMetaOffset;
+        const uint32_t bytes_sent =
+            read_cce_tl1(device, 1, ring_meta_address + offsetof(RingMeta, bytes_sent), sizeof(uint32_t)).front();
+        EXPECT_EQ(bytes_sent - lifecycle_bytes_acked(*mesh, 1), kCceRequestRingBytes);
+        receivers.stop_and_wait();
+        EXPECT_EQ(smoke.read_receiver_status(0)[gcb_abi::kStatusCode], gcb_abi::kCodeReleased);
+    }
+    expect_t4_recovery(*mesh, sender_bank, 1, 3, recovery_tensor);
+}
+
+// A request that fits into a receiver that holds it: Stop's DRAIN barrier expires with DRAIN_TIMEOUT.
+TEST(MimirPrefetcher, MM7T4DrainTimeoutD2d1To3) {
+    MIMIR_SKIP_UNLESS_EMU();
+    if (const std::string skip_reason = route_skip_reason({1, 3}); !skip_reason.empty()) {
+        GTEST_SKIP() << skip_reason;
+    }
+    std::shared_ptr<distributed::MeshDevice> mesh = distributed::MeshDevice::create_unit_mesh(0);
+    ScopedMesh mesh_closer(mesh);
+    EXPECT_TRUE(mimir_remote_remap_result().empty()) << mimir_remote_remap_result();
+    const std::optional<uint32_t> sender_bank_of_cce = bank_with_sender_cce(*mesh, 1);
+    ASSERT_TRUE(sender_bank_of_cce.has_value()) << "no DRAM view's prefetcher sender is CCE 1";
+    const uint32_t sender_bank = *sender_bank_of_cce;
+    const MeshTensor failure_tensor = write_single_bank_tensor(*mesh, sender_bank, kT4FailureTensorId, {});
+    const MeshTensor recovery_tensor = write_single_bank_tensor(*mesh, sender_bank, kT4RecoveryTensorId, {});
+    {
+        GcbSmoke smoke(*mesh, sender_bank, {3});
+        CceReceiverProgram receivers(smoke.device(), {t4_stalling_receiver(smoke)});
+        PrefetcherSession session(*mesh, {sender_bank}, kGcbSmokeStallBudgetCycles);
+        experimental::QueueTensorPrefetcherRequest(
+            *mesh,
+            smoke.gcb(),
+            std::nullopt,
+            {experimental::TensorPrefetcherInput{.tensor = failure_tensor, .block_count = 1}});
+        session.stop();
+        ASSERT_TRUE(smoke.wait_for_holding(0, 1));
+        const CceSenderStatus failure = lifecycle_sender_status(*mesh, 1);
+        EXPECT_EQ(failure.state, static_cast<uint32_t>(CceSenderState::Failed));
+        EXPECT_EQ(failure.code, static_cast<uint32_t>(CceSenderStatusCode::DrainTimeout));
+        EXPECT_EQ(failure.request_index, 1u);
+        EXPECT_EQ(failure.target_state_addr, experimental::sender_state_drisc_l1_base(smoke.gcb()));
+        EXPECT_EQ(failure.receiver, 0u);
+        EXPECT_EQ(failure.sent, t4_one_page_credit_units());
+        EXPECT_EQ(failure.acked, 0u);
+        receivers.stop_and_wait();
+        EXPECT_EQ(smoke.read_receiver_status(0)[gcb_abi::kStatusCode], gcb_abi::kCodeReleased);
+    }
+    expect_t4_recovery(*mesh, sender_bank, 1, 3, recovery_tensor);
+}
+
+// MM7Reject: Queue on Quasar refuses a request a CCE sender cannot deliver, before any page reaches the sender. Each
+// case runs in a session from bank 0's sender to a local validator; after the rejection one valid page still goes
+// through, and the sender takes only that PREFETCH, Stop's DRAIN and STOP.
+
+inline constexpr uint32_t kRejectTensorId = 30;
+
+// `queue_rejected_request` queues the case's request to the GCB and returns the error it throws.
+using RejectedQueue = std::function<std::string(
+    distributed::MeshDevice& mesh, const experimental::GlobalCircularBuffer& gcb, const MeshTensor& valid_tensor)>;
+
+void run_rejected_queue_case(const RejectedQueue& queue_rejected_request, const std::string& expected_error) {
+    std::shared_ptr<distributed::MeshDevice> mesh = distributed::MeshDevice::create_unit_mesh(0);
+    ScopedMesh mesh_closer(mesh);
+    IDevice* device = mesh->get_devices().front();
+    const uint32_t sender_cce = gcb_layout_sender_cce(device, *mesh, 0);
+    const MeshTensor valid_tensor = write_single_bank_tensor(*mesh, 0, kRejectTensorId, {});
+    GcbSmoke smoke(*mesh, 0, {gcb_smoke_local_receiver(*mesh)});
+    CceReceiverProgram receivers(
+        device,
+        {smoke.receiver_launch(
+            0,
+            kGcbValidatorReceiverKernel,
+            mimir_test_seed(),
+            0,
+            0,
+            kGcbSmokeWaitBudgetCycles,
+            {{.tensor_id = kRejectTensorId, .slab = 0, .page_bytes = kUint32TilePageBytes, .num_pages = 1}})});
+    PrefetcherSession session(*mesh, {0});
+
+    const std::string queue_error = queue_rejected_request(*mesh, smoke.gcb(), valid_tensor);
+    log_info(tt::LogTest, "MM7Reject Queue: {}", queue_error);
+    EXPECT_NE(queue_error.find(expected_error), std::string::npos) << queue_error;
+
+    experimental::QueueTensorPrefetcherRequest(
+        *mesh,
+        smoke.gcb(),
+        std::nullopt,
+        {experimental::TensorPrefetcherInput{.tensor = valid_tensor, .block_count = 1}});
+    session.stop();
+    expect_lifecycle_sender_stopped(*mesh, sender_cce, kRequestsForOnePrefetch);
+    receivers.stop_and_wait();
+    const std::vector<uint32_t> receiver_status = smoke.read_receiver_status(0);
+    EXPECT_EQ(receiver_status[gcb_abi::kStatusCode], gcb_abi::kCodeOk);
+    EXPECT_EQ(receiver_status[gcb_abi::kStatusPagesDone], 1u);
+}
+
+// An interleaved DRAM tensor has neither shard spec, so it resolves to the K-row-major layout.
+TEST(MimirPrefetcher, MM7RejectKRowMajorTensor) {
+    MIMIR_SKIP_UNLESS_EMU();
+    if (const std::string skip_reason = mimir_watcher_skip_reason(); !skip_reason.empty()) {
+        GTEST_SKIP() << skip_reason;
+    }
+    run_rejected_queue_case(
+        [](distributed::MeshDevice& mesh, const experimental::GlobalCircularBuffer& gcb, const MeshTensor&) {
+            const MeshTensor interleaved_tensor = MeshTensor::allocate_on_device(
+                mesh,
+                TensorSpec(
+                    Shape{32, 32}, TensorLayout(DataType::UINT32, Layout::TILE, MemoryConfig(BufferType::DRAM))));
+            return lifecycle_error([&mesh, &gcb, &interleaved_tensor]() {
+                experimental::QueueTensorPrefetcherRequest(
+                    mesh,
+                    gcb,
+                    std::nullopt,
+                    {experimental::TensorPrefetcherInput{.tensor = interleaved_tensor, .block_count = 1}});
+            });
+        },
+        "resolves to the K-row-major layout");
+}
+
+TEST(MimirPrefetcher, MM7RejectStreamingTensor) {
+    MIMIR_SKIP_UNLESS_EMU();
+    if (const std::string skip_reason = mimir_watcher_skip_reason(); !skip_reason.empty()) {
+        GTEST_SKIP() << skip_reason;
+    }
+    run_rejected_queue_case(
+        [](distributed::MeshDevice& mesh,
+           const experimental::GlobalCircularBuffer& gcb,
+           const MeshTensor& valid_tensor) {
+            return lifecycle_error([&mesh, &gcb, &valid_tensor]() {
+                experimental::QueueTensorPrefetcherRequest(
+                    mesh,
+                    gcb,
+                    std::nullopt,
+                    {experimental::TensorPrefetcherInput{.tensor = valid_tensor, .block_count = 1, .rotation = {0}}});
+            });
+        },
+        "has a streaming rotation");
+}
+
+// The tensor sits on DRAM bank 1, so bank 0's sender would read a slab the tensor does not have there.
+TEST(MimirPrefetcher, MM7RejectRangePastTensor) {
+    MIMIR_SKIP_UNLESS_EMU();
+    if (const std::string skip_reason = mimir_watcher_skip_reason(); !skip_reason.empty()) {
+        GTEST_SKIP() << skip_reason;
+    }
+    if (topology_from(cluster_soc_desc()).num_views < 2) {
+        GTEST_SKIP();
+    }
+    run_rejected_queue_case(
+        [](distributed::MeshDevice& mesh, const experimental::GlobalCircularBuffer& gcb, const MeshTensor&) {
+            const MeshTensor other_bank_tensor = MeshTensor::allocate_on_device(mesh, single_bank_tensor_spec(1, {}));
+            return lifecycle_error([&mesh, &gcb, &other_bank_tensor]() {
+                experimental::QueueTensorPrefetcherRequest(
+                    mesh,
+                    gcb,
+                    std::nullopt,
+                    {experimental::TensorPrefetcherInput{.tensor = other_bank_tensor, .block_count = 1}});
+            });
+        },
+        "so the request runs past the tensor");
+}
+
+// The allocator never places a tensor past its view, so this one wraps a buffer at an explicit bank-local address half
+// a page before the view's end. Nothing reads or writes it.
+TEST(MimirPrefetcher, MM7RejectRangePastView) {
+    MIMIR_SKIP_UNLESS_EMU();
+    if (const std::string skip_reason = mimir_watcher_skip_reason(); !skip_reason.empty()) {
+        GTEST_SKIP() << skip_reason;
+    }
+    run_rejected_queue_case(
+        [](distributed::MeshDevice& mesh, const experimental::GlobalCircularBuffer& gcb, const MeshTensor&) {
+            const TensorSpec spec = single_bank_tensor_spec(0, {});
+            const DeviceAddr view_bytes = soc_desc_of(mesh.get_devices().front()).dram_view_size;
+            std::shared_ptr<distributed::MeshBuffer> buffer = distributed::MeshBuffer::create(
+                distributed::ReplicatedBufferConfig{.size = spec.compute_packed_buffer_size_bytes()},
+                distributed::DeviceLocalBufferConfig{
+                    .page_size = spec.compute_page_size_bytes(),
+                    .buffer_type = BufferType::DRAM,
+                    .sharding_args = spec.compute_buffer_sharding_args()},
+                &mesh,
+                view_bytes - (kUint32TilePageBytes / 2));
+            const MeshTensor past_view_tensor = MeshTensor::from_buffer(std::move(*buffer), spec);
+            return lifecycle_error([&mesh, &gcb, &past_view_tensor]() {
+                experimental::QueueTensorPrefetcherRequest(
+                    mesh,
+                    gcb,
+                    std::nullopt,
+                    {experimental::TensorPrefetcherInput{.tensor = past_view_tensor, .block_count = 1}});
+            });
+        },
+        "B DRAM view");
 }
 
 }  // namespace tt::tt_metal::mimir_test::prefetcher

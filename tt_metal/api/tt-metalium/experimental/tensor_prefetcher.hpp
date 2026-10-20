@@ -72,8 +72,9 @@ struct QuasarTensorPrefetcherConfig {
     uint64_t wait_budget_cycles = 0;
 
     // Caps the sender's TL1 staging ring. A multiple of 384 B keeps each third of the ring on
-    // whole 64 B lines.
-    uint32_t stage_ring_bytes = 4608;
+    // whole 64 B lines. The default's third holds one K-row of a UINT32 tensor one tile wide per
+    // receiver (4 KiB).
+    uint32_t stage_ring_bytes = 12288;
 };
 
 // Architectures apply their default config when arch specific configs are unset.
@@ -87,7 +88,7 @@ struct TensorPrefetcherConfig {
 //   - the streaming profiler is off. TT_METAL_STREAMING_PROFILER=1 parks a resident relay
 //     on the same free DRAM subchannel a bank's first prefetch sender uses, with both of
 //     that DRISC's NIUs in stream mode, so the two cannot coexist.
-// On Quasar it is false until the CCE port is complete.
+// On Quasar, slow dispatch must be on and every sender CCE must have initialized firmware.
 // When this returns false, StartTensorPrefetcher TT_FATALs, so callers (e.g. tests) can
 // use this to skip rather than fail.
 bool IsTensorPrefetcherSupported(const distributed::MeshDevice& mesh_device);
