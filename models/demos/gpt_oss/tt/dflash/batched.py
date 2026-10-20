@@ -918,6 +918,7 @@ class BatchedVerify:
         self.moe_in_mc = (
             ttnn.L1_MEMORY_CONFIG if os.environ.get("B32_MOE_IN_L1", "1") == "1" else ttnn.DRAM_MEMORY_CONFIG
         )
+        self.attn_mc = ttnn.L1_MEMORY_CONFIG if os.environ.get("B32_ATTN_L1", "1") == "1" else ttnn.DRAM_MEMORY_CONFIG
         self.kv_write = BatchedKVWrite(self.mesh, users, block, self.local_kv_heads, hd, kv_cache[1][0].shape[2],
                                        head_split=True)  # fmt: skip
 
@@ -1051,8 +1052,10 @@ class BatchedVerify:
         attn_mod, model = layer.self_attn, self.model
         w, cfg = attn_mod.weights, attn_mod.config
         nh, nkv, hd = self.local_heads, self.local_kv_heads, cfg.head_dim
+        # (the activations between the attention's ops in L1, B32_ATTN_L1)
+        amc = self.attn_mc
         normed = layer.input_layernorm.forward_sharded(res)
-        x = ttnn.to_memory_config(normed, ttnn.DRAM_MEMORY_CONFIG)
+        x = ttnn.to_memory_config(normed, amc)
         normed.deallocate(True)
         qkv = ttnn.linear(
             x,
@@ -1061,6 +1064,7 @@ class BatchedVerify:
             program_config=_mm_config_256(w.wqkv.shape[-2], w.wqkv.shape[-1]),
             dtype=ttnn.bfloat16,
             compute_kernel_config=self.qkv_ck,
+            memory_config=amc,
         )
         x.deallocate(True)
         heads = self._attention_rows(li, attn_mod, qkv, pos, rot)
@@ -1072,10 +1076,11 @@ class BatchedVerify:
             program_config=_mm_config_256(heads.shape[-1], self.oproj_w[li].shape[-1]),
             dtype=ttnn.bfloat16,
             compute_kernel_config=self.qkv_ck,
+            memory_config=amc,
         )
         heads.deallocate(True)
         # the decode's BF8 partial sum (the bias inside the matmul with a BF8 output: top-1 vs HF 0.08)
-        partial = ttnn.add(o, op.bias, dtype=ttnn.bfloat8_b)
+        partial = ttnn.add(o, op.bias, dtype=ttnn.bfloat8_b, memory_config=amc)
         o.deallocate(True)
         summed_s = _all_reduce(partial, self.residual_mc)
         partial.deallocate(True)
