@@ -269,7 +269,7 @@ inline void calculate_sfpu_binary_div(
             // For exceptional inputs only the reciprocal's sign and zero/Inf
             // classification matter. Inverting its exponent gives Inf for zero,
             // zero for Inf/NaN, and a finite nonzero scale for every normal divisor.
-            // Zero scales would hide NaN divisors, so add an all-ones NaN bit
+            // Zero scales would hide NaN divisors, so subtract an all-ones NaN bit
             // pattern where |in1| > +Inf in sign-magnitude order, and +0 elsewhere.
             // Normal inputs have biased exponents in [1, 254], or unbiased exponents
             // in [-126, 127]; zero/subnormal and Inf/NaN fall outside. Each bound is a
