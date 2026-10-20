@@ -70,11 +70,19 @@ inline void _calculate_unary_comp_strict_(uint value) {
         sfpi::dst_reg[0] = 0.0f;
         const sfpi::vFloat sum = sfpi::setsgn(v, 0) + abs_s;
 
-        // abs(v) + abs(s) != 0 rejects both zero or ±subnormal, <= inf rejects NaN
-        v_if((IS_GREATER ? v > s : v < s) && sum != 0.0f && sfpi::as<sfpi::vInt>(sum) <= inf) {
-            sfpi::dst_reg[0].mode(ADDR_MOD_6) = 1.0f;
+        // abs(v) + abs(s) != 0 rejects both zero or ±subnormal, <= inf rejects NaN;
+        // the two comparisons are distinct types, so the arm is chosen at compile time
+        if constexpr (IS_GREATER) {
+            v_if(v > s && sum != 0.0f && sfpi::as<sfpi::vInt>(sum) <= inf) {
+                sfpi::dst_reg[0].mode(ADDR_MOD_6) = 1.0f;
+            }
+            v_endif;
+        } else {
+            v_if(v < s && sum != 0.0f && sfpi::as<sfpi::vInt>(sum) <= inf) {
+                sfpi::dst_reg[0].mode(ADDR_MOD_6) = 1.0f;
+            }
+            v_endif;
         }
-        v_endif;
     }
 }
 
@@ -93,8 +101,13 @@ inline void _calculate_unary_comp_weak_(uint value) {
 
         // the strict comparison the other way: v < s for >=, v > s for <=;
         // abs(v) + abs(s) != 0 keeps every ±subnormal equal to zero
-        v_if((IS_GREATER ? v < s : v > s) && sum != 0.0f) { sfpi::dst_reg[0] = 0.0f; }
-        v_endif;
+        if constexpr (IS_GREATER) {
+            v_if(v < s && sum != 0.0f) { sfpi::dst_reg[0] = 0.0f; }
+            v_endif;
+        } else {
+            v_if(v > s && sum != 0.0f) { sfpi::dst_reg[0] = 0.0f; }
+            v_endif;
+        }
         // abs(v) + abs(s) > inf: v or s is NaN
         v_if(sfpi::as<sfpi::vInt>(sum) > inf) { sfpi::dst_reg[0].mode(ADDR_MOD_6) = 0.0f; }
         v_endif;
