@@ -201,8 +201,7 @@ void bind_reduce_planner(nb::module_& mod) {
             nb::arg("runtime_args"),
             nb::arg("use_tail") = true)
         .def_ro("input_row_stride_tiles", &host::ReducePlan::input_row_stride_tiles)
-        .def_ro("reduce_factor", &host::ReducePlan::reduce_factor)
-        .def_ro("post_scale", &host::ReducePlan::post_scale)
+        .def_ro("scale", &host::ReducePlan::scale)
         .def_ro("partial_mode", &host::ReducePlan::partial_mode)
         .def_ro("auxiliary_tiles", &host::ReducePlan::auxiliary_tiles)
         .def_ro("partial_reduce_axis_elements", &host::ReducePlan::partial_reduce_axis_elements)

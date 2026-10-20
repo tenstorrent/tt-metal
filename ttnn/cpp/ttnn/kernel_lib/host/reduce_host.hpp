@@ -131,7 +131,6 @@ struct ReducePlan {
     std::uint32_t batches = 0;
     // Zero means the ordinary contiguous Wt pitch.
     std::uint32_t input_row_stride_tiles = 0;
-    std::uint32_t reduce_factor = 1;
     std::optional<ReduceTailConfig> tail;
     // The ordinary case is stored in this plan; the alternative is selected
     // at runtime. auxiliary_tiles contains the union of both recipes.
@@ -143,13 +142,12 @@ struct ReducePlan {
     std::uint32_t logical_h = 0;
     std::uint32_t logical_w = 0;
 
-    // post_scale is applied once, after reduction finalization and before any
-    // caller callback. The auxiliary recipe is already lowered to physical tile
-    // specifications in the order consumed by compute. SFPU reductions apply the
-    // caller's scalar here because they do not consume scaler tiles. A non-unit
-    // INT32 scale converts the reduced value to FLOAT32, multiplies, then converts
-    // back to INT32 with truncation toward zero (matching reduce_post_mul_tile).
-    float post_scale = 1.0F;
+    // Multiplies each finished output before any caller callback on the TileSum and
+    // SFPU paths: 1/N for an AVG, or the caller's explicit scalar. Native carries its
+    // scale in the scaler tile and keeps 1. A non-unit INT32 scale converts the
+    // reduced value to FLOAT32, multiplies, then converts back to INT32 with
+    // truncation toward zero.
+    float scale = 1.0F;
     compute_kernel_lib::ReducePartialMode partial_mode = compute_kernel_lib::ReducePartialMode::None;
     std::vector<ReduceAuxiliaryTileSpec> auxiliary_tiles;
     std::uint32_t partial_reduce_axis_elements = 0;

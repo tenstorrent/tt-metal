@@ -80,7 +80,7 @@ ttnn::device_operation::ProgramArtifacts MorehMeanOperation::MorehMeanHFactory::
         reduce_block,
         ReduceOpMath::AVG,
         ReduceOpDim::H,
-        1.0F / origin_H,
+        std::nullopt,
         ReduceFp32Mode::Fast,
         {.arch = device->arch(),
          .fp32_dest_acc_en = fp32_dest_acc_en,

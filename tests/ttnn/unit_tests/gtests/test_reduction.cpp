@@ -486,7 +486,7 @@ TEST(ReduceHostPlanner, TailPlanningResolvesExactScalersAndMasks) {
             const bool add = algorithm == compute_kernel_lib::ReduceAlgorithm::TileSum;
             ASSERT_EQ(tail.auxiliary_tiles.size(), 2U);
             EXPECT_EQ(full.auxiliary_cb.page_count, sequence.auxiliary.tiles.size());
-            EXPECT_EQ(full.reduce_factor, add ? 256U : 1U);
+            EXPECT_EQ(full.scale, add ? 1.0F / 256 : 1.0F);
             EXPECT_EQ(full.logical_h, 256U);
             EXPECT_EQ(full.logical_w, 256U);
             EXPECT_EQ(full.batches, 2U);
@@ -496,8 +496,7 @@ TEST(ReduceHostPlanner, TailPlanningResolvesExactScalersAndMasks) {
             }
             EXPECT_EQ(tail.partial_reduce_axis_elements, 7U);
             EXPECT_EQ(tail.auxiliary_tiles[add ? 0 : 1].num_valid_elements, 7U);
-            EXPECT_EQ(tail.reduce_factor, add ? 135U : 1U);
-            EXPECT_NEAR(tail.post_scale, 1.0F, 1e-6F);
+            EXPECT_EQ(tail.scale, add ? 1.0F / 135 : 1.0F);
             if (!add) {
                 EXPECT_FLOAT_EQ(tail.auxiliary_tiles[0].value, static_cast<float>(bfloat16(1.0F / 135)));
                 EXPECT_FLOAT_EQ(tail.auxiliary_tiles[1].value, static_cast<float>(bfloat16(1.0F / 135)));
@@ -546,9 +545,9 @@ TEST(ReduceHostPlanner, AlignedTailNeedsNoEdgeMasks) {
         hardware,
         compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop);
     EXPECT_EQ(add.algorithm, compute_kernel_lib::ReduceAlgorithm::TileSum);
-    EXPECT_EQ(add.reduce_factor, 512U);
+    EXPECT_EQ(add.scale, 1.0F / 512);
     ASSERT_NE(add.tail_plan, nullptr);
-    EXPECT_EQ(add.tail_plan->reduce_factor, 448U);
+    EXPECT_EQ(add.tail_plan->scale, 1.0F / 448);
     ASSERT_EQ(add.auxiliary_tiles.size(), 1U);
     EXPECT_EQ(add.auxiliary_tiles[0].type, ReduceAuxiliaryTileType::Zero);
     EXPECT_ANY_THROW(ReduceCallArgs(add, {0, no_cb_id, 16}));
@@ -603,11 +602,10 @@ TEST(ReduceHostPlanner, ExplicitAverageScalarBypassesGeometry) {
                             ASSERT_NE(call.plan.tail_plan, nullptr);
                             for (const auto* variant :
                                  {&call.plan, static_cast<const ReducePlan*>(call.plan.tail_plan.get())}) {
-                                EXPECT_EQ(variant->reduce_factor, 1U);
                                 if (algorithm == compute_kernel_lib::ReduceAlgorithm::TileSum) {
-                                    EXPECT_EQ(
-                                        std::bit_cast<uint32_t>(variant->post_scale), std::bit_cast<uint32_t>(scalar));
+                                    EXPECT_EQ(std::bit_cast<uint32_t>(variant->scale), std::bit_cast<uint32_t>(scalar));
                                 } else {
+                                    EXPECT_EQ(variant->scale, 1.0F);
                                     const auto scalers = variant->tail_plan ? variant->full_auxiliary_tile_count
                                                                             : variant->auxiliary_tiles.size();
                                     for (std::size_t i = 0; i < scalers; ++i) {
@@ -649,8 +647,7 @@ TEST(ReduceHostPlanner, OmittedScalarUsesValidGeometryOnlyForAverage) {
                 hardware,
                 compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop);
             if (plan.algorithm == compute_kernel_lib::ReduceAlgorithm::TileSum) {
-                EXPECT_EQ(plan.reduce_factor, math == ReduceOpMath::AVG ? extent : 1U);
-                EXPECT_FLOAT_EQ(plan.post_scale, 1.0F);
+                EXPECT_EQ(plan.scale, math == ReduceOpMath::AVG ? 1.0F / extent : 1.0F);
             } else {
                 const float scale = math == ReduceOpMath::AVG ? 1.0F / extent : 1.0F;
                 EXPECT_FLOAT_EQ(plan.auxiliary_tiles[0].value, dim == ReduceOpDim::HW ? std::sqrt(scale) : scale);
@@ -673,14 +670,13 @@ TEST(ReduceHostPlanner, AccumulatedScalarSettingsMustAgree) {
     auto partial = full;
     partial.block = whole_input(ReduceBlockSpec::tiled(32, 135, DataType::BFLOAT16, DataType::FLOAT32));
     const auto automatic = make_reduce_sequence_plan({{0, full}, {3, partial}}, {1, 2, 16, 64}, hardware);
-    EXPECT_EQ(automatic.calls.back().plan.reduce_factor, 288U + 135U);
+    EXPECT_EQ(automatic.calls.back().plan.scale, 1.0F / (288 + 135));
     partial.scalar = 1.0F / 1024;
     EXPECT_ANY_THROW(make_reduce_sequence_plan({{0, full}, {3, partial}}, {1, 2, 16, 64}, hardware));
     auto explicit_full = full;
     explicit_full.scalar = partial.scalar;
     const auto explicit_plan = make_reduce_sequence_plan({{0, explicit_full}, {3, partial}}, {1, 2, 16, 64}, hardware);
-    EXPECT_EQ(explicit_plan.calls.back().plan.reduce_factor, 1U);
-    EXPECT_FLOAT_EQ(explicit_plan.calls.back().plan.post_scale, 1.0F / 1024);
+    EXPECT_EQ(explicit_plan.calls.back().plan.scale, 1.0F / 1024);
     partial.scalar = 1.0F / 512;
     EXPECT_ANY_THROW(make_reduce_sequence_plan({{0, explicit_full}, {3, partial}}, {1, 2, 16, 64}, hardware));
 }
@@ -807,9 +803,8 @@ TEST(ReduceHostPlanner, FullAndTailAverageUsesTheirCombinedValidExtent) {
             for (const auto& call : sequence.calls) {
                 ASSERT_NE(call.plan.tail_plan, nullptr);
                 if (algorithm == compute_kernel_lib::ReduceAlgorithm::TileSum) {
-                    EXPECT_EQ(call.plan.reduce_factor, 256U + 256U);
-                    EXPECT_EQ(call.plan.tail_plan->reduce_factor, 256U + 135U);
-                    EXPECT_FLOAT_EQ(call.plan.post_scale, 1.0F);
+                    EXPECT_EQ(call.plan.scale, 1.0F / (256 + 256));
+                    EXPECT_EQ(call.plan.tail_plan->scale, 1.0F / (256 + 135));
                 } else {
                     EXPECT_FLOAT_EQ(call.plan.auxiliary_tiles[0].value, 1.0F / (256 + 256));
                     EXPECT_FLOAT_EQ(
@@ -867,8 +862,8 @@ TEST(ReduceHostPlanner, RetainedWholeRowHWTailsUseTheirOwnNormalization) {
             EXPECT_FLOAT_EQ(full.auxiliary_tiles[0].value, static_cast<float>(bfloat16(std::sqrt(1.0F / (160 * 64)))));
             EXPECT_FLOAT_EQ(tail.auxiliary_tiles[0].value, std::sqrt(1.0F / (64 * 64)));
         } else {
-            EXPECT_EQ(full.reduce_factor, 160U * 64);
-            EXPECT_EQ(tail.reduce_factor, 64U * 64);
+            EXPECT_EQ(full.scale, 1.0F / (160 * 64));
+            EXPECT_EQ(tail.scale, 1.0F / (64 * 64));
         }
     }
     block.tail->shape.height = 63;
@@ -1290,12 +1285,11 @@ TEST(ReduceHostPlanner, SfpuScalarSurvivesSingleAndSequenceSerialization) {
                         mode,
                         hardware,
                         compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop);
-                    EXPECT_FLOAT_EQ(plan.post_scale, scalar);
+                    EXPECT_FLOAT_EQ(plan.scale, scalar);
                     ASSERT_EQ(plan.auxiliary_tiles.size(), 1U);
                     EXPECT_EQ(plan.auxiliary_tiles[0].type, ReduceAuxiliaryTileType::Placeholder);
                     const auto words = ReduceCallArgs(plan, {0U, 1U, 2U}).get_compile_time_args();
-                    EXPECT_EQ(
-                        words[static_cast<uint32_t>(args::CallWord::PostScaleBits)], std::bit_cast<uint32_t>(scalar));
+                    EXPECT_EQ(words[static_cast<uint32_t>(args::CallWord::ScaleBits)], std::bit_cast<uint32_t>(scalar));
 
                     const ReduceCallConfig config{
                         input,
@@ -1312,8 +1306,7 @@ TEST(ReduceHostPlanner, SfpuScalarSurvivesSingleAndSequenceSerialization) {
                     EXPECT_EQ(sequence.calls[1].accumulation_mode, ttnn::kernel_lib::ReduceAccumulationMode::Final);
                     const auto final_words = ReduceCallArgs(sequence.calls.back()).get_compile_time_args();
                     EXPECT_EQ(
-                        final_words[static_cast<uint32_t>(args::CallWord::PostScaleBits)],
-                        std::bit_cast<uint32_t>(scalar));
+                        final_words[static_cast<uint32_t>(args::CallWord::ScaleBits)], std::bit_cast<uint32_t>(scalar));
                     ASSERT_EQ(sequence.auxiliary.tiles.size(), 1U);
                     EXPECT_EQ(sequence.auxiliary.tiles[0].type, ReduceAuxiliaryTileType::Placeholder);
                 }
@@ -1330,7 +1323,7 @@ TEST(ReduceHostPlanner, CallerPreparedSfpuTilesKeepPostScale) {
         const auto input = local_reduce_block(Shape{64, 64}, DataType::FLOAT32);
         const auto plan = make_reduce_plan(input, ReduceOpMath::SUM, dim, 0.5F, ReduceFp32Mode::Accurate, hardware);
         EXPECT_EQ(plan.partial_mode, compute_kernel_lib::ReducePartialMode::None);
-        EXPECT_FLOAT_EQ(plan.post_scale, 0.5F);
+        EXPECT_FLOAT_EQ(plan.scale, 0.5F);
     }
 }
 
@@ -1364,7 +1357,7 @@ TEST(ReduceHostPlanner, BasicAlgorithmAndChunkSanity) {
         hardware,
         compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop);
     EXPECT_EQ(threshold_plan.algorithm, compute_kernel_lib::ReduceAlgorithm::TileSum);
-    EXPECT_FLOAT_EQ(threshold_plan.post_scale, 0.25F);
+    EXPECT_FLOAT_EQ(threshold_plan.scale, 0.25F);
 
     auto streaming_block = make_block(Shape{1, 1, 32, 10 * 32});
     streaming_block.input_cb_tiles = 2;

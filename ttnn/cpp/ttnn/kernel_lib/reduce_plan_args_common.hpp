@@ -20,7 +20,6 @@ inline constexpr std::uint32_t call_count_word_count = 1;
 inline constexpr std::uint32_t auxiliary_header_word_count = 1;
 inline constexpr std::uint32_t no_cb_id = compute_kernel_lib::REDUCE_NO_AUXILIARY_CB;
 inline constexpr std::uint32_t no_runtime_arg = 0xFFFFFFFF;
-inline constexpr std::uint32_t float_one_bits = 0x3F800000;
 
 // Calls carry an offset and count into the sequence-level auxiliary recipe;
 // physical tile descriptions never appear in the compute payload.
@@ -31,9 +30,8 @@ enum class CallWord : std::uint32_t {
     Columns,
     Batches,
     RowStride,
-    ReduceFactor,
+    ScaleBits,
     ChunkAndAuxiliary,
-    PostScaleBits,
     AccumulationIndex,
     TailRuntimeArgOffset,
     LogicalHeight,

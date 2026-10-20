@@ -1330,14 +1330,6 @@ ALWI void reduce_planned_variant(PostReduceOp post_reduce_op) {
                                                         : shape.batches;
         UNPACK(ASSERT(get_dfb_num_pages(Call::accumulator_cb_id) >= outputs));
     }
-    auto post_scale = [&](uint32_t dst_index) {
-        if constexpr (Call::post_scale_bits != ttnn::kernel_lib::reduce_plan_args::float_one_bits) {
-            constexpr DataFormat input_format = static_cast<DataFormat>(unpack_src_format[Call::input_cb_id]);
-            reduce_post_mul_tile<input_format>(dst_index, Call::post_scale_bits);
-        }
-        post_reduce_op(dst_index);
-    };
-
     // Out of line, the call keeps its shape and accumulation as runtime values and compiles the generic
     // reduce body, several times the inlined size per call. TODO: forcing it inline grows kernel_main past
     // GCC's large-function limits, which then stops inlining further down; find a structure that keeps
@@ -1354,7 +1346,7 @@ ALWI void reduce_planned_variant(PostReduceOp post_reduce_op) {
             Call::fp32_mode,
             Call::algorithm,
             Call::within_tile,
-            Call::reduce_factor>(
+            Call::scale_bits>(
             shape,
             layout,
             accumulate,
@@ -1364,23 +1356,12 @@ ALWI void reduce_planned_variant(PostReduceOp post_reduce_op) {
             Call::auxiliary_tile_offset);
     };
 
-    // A NoOp post operation lets TileSum keep its SFPU reduction state across outputs.
-    constexpr bool trivial_post_op = Call::post_scale_bits == ttnn::kernel_lib::reduce_plan_args::float_one_bits &&
-                                     std::is_same_v<PostReduceOp, NoOp>;
-    auto final_post_op = [&]() {
-        if constexpr (trivial_post_op) {
-            return NoOp{};
-        } else {
-            return post_scale;
-        }
-    };
-
     if constexpr (Call::accumulation_mode == ttnn::kernel_lib::ReduceAccumulationMode::None) {
-        issue(NoAccumulation{}, final_post_op());
+        issue(NoAccumulation{}, post_reduce_op);
     } else if constexpr (Call::accumulation_mode == ttnn::kernel_lib::ReduceAccumulationMode::Final) {
         issue(
             Accumulate::at_last(Call::accumulator_cb_id, Call::accumulation_index).with_reload(Call::reload_mode),
-            final_post_op());
+            post_reduce_op);
     } else {
         static_assert(
             Call::accumulation_mode == ttnn::kernel_lib::ReduceAccumulationMode::Intermediate,
