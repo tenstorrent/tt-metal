@@ -1,0 +1,74 @@
+{
+ "used": [
+  {
+   "id": "DS41-56",
+   "how": "bfp4 was measured at HiFi4 on the loop path; re-measured on today's LoFi flat + weighted path instead of assuming no gain",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-62",
+   "how": "flat op HiFi4-bound (bfp4 +3 %): expected the LoFi glm path to be weight-stream bound and measured the A/B there",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-73",
+   "how": "checked that bfp4's smaller flat arena keeps COMBINE_ACC=bf16 in one pass (9 accumulators, 1314 KB arena)",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-10",
+   "how": "kept bfp8 as MAX_PRECISION (exact fp4) while bfp4 became the default",
+   "traced": null,
+   "cited": false
+  },
+  {
+   "id": "K-53",
+   "how": "PYTHONPATH=$PWD for every run",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "K-52",
+   "how": "--no-precompile on the model-sized perf test",
+   "traced": true,
+   "cited": false
+  }
+ ],
+ "contradicted": [
+  {
+   "id": "DS41-56",
+   "evidence": "'bfp4 halve memory but not time' holds only for the HiFi4 loop path: on the default flat + weighted path at LoFi (glm) the experts call is 4.47 -> 3.47 ms a layer (tt/perf_experts.py::test_weights_bfp4, L00 / L24, P.10); DS41-74",
+   "cited": true
+  }
+ ],
+ "missing": [
+  "weighted_combine's cached state was keyed without the flat plan, so a second weight format in one process would reuse the first's core layout (fixed in P.10)"
+ ],
+ "overseer": [],
+ "cited_only": [
+  "DS41-74"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "P.10",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-20T08:17:41",
+  "head": "903201afbd4",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/P.10.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tt/experts.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/perf_experts.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/weighted_combine.py"
+  ]
+ }
+}
