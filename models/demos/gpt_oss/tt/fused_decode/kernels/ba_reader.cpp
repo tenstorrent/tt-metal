@@ -25,6 +25,8 @@
 // pos[M u .. M u + M - 1], its page table row u, its Q rows (rows layout, BA_Q_ROWS) row r = q row r BA_Q_RSTRIDE + u.
 // BA_UNIFORM: every row attends [0, pos[M - 1]] (the drafter's block; [pos[M - 1] + 1 - BA_WINDOW, ..] with a window),
 // no sinks.
+// BA_SWIN: row r attends the sliding window [pos[r] + 1 - BA_SWIN, pos[r]] (and the sinks): 2 more mask tiles in cb_aux
+// (tiles 3, 4: the window's first 2 chunks), the sink-column mask, sink and zero tiles after them.
 // The slices of each tile group are their own merge tree.
 
 #include <stdint.h>
@@ -127,11 +129,23 @@ void kernel_main() {
 #endif
     const BaSlice sl = ba_slice(hi, hi, s, S, min_chunks, lo / 32);
     constexpr bool has_sink = false;
+#elif defined(BA_SWIN)
+    // BA_SWIN (the verify's sliding-window layers): row r attends [lo(r), pos[r]], lo(r) = pos[r] + 1 - BA_SWIN (0 at
+    // most): causal masks on the block's chunks, window masks (tiles 3, 4: row group i keeps the columns at positions
+    // >= lo(4 t + i)) on the window's first 2 chunks lo(0) / 32 + e; the history starts at chunk lo(0) / 32
+    static_assert(BA_SWIN >= 128, "the window's first 2 chunks lie before the block's chunks");
+    const uint32_t w_lo = static_cast<uint32_t>(pos[0]) + 1 >= BA_SWIN ? pos[0] + 1 - BA_SWIN : 0;
+    const BaSlice sl = ba_slice(p0, static_cast<uint32_t>(pos[M - 1]), s, S, min_chunks, w_lo / 32);
+    constexpr bool has_sink = true;
 #else
     const BaSlice sl = ba_slice(p0, static_cast<uint32_t>(pos[M - 1]), s, S, min_chunks);
     constexpr bool has_sink = true;
 #endif
+#ifdef BA_SWIN
+    constexpr uint32_t NM = 4;
+#else
     constexpr uint32_t NM = 2;
+#endif
     volatile tt_l1_ptr uint32_t* qkv_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(BA_WAIT_SEM));
     auto kv_ready = [&]() {
         invalidate_l1_cache();
@@ -182,10 +196,12 @@ void kernel_main() {
     // columns) copied from the mask library (segment (a, b, f) = half f of a row group keeping columns [a, b), a, b in
     // 0 .. 32)
     const uint64_t lib = s_lib.get_noc_addr(0);
-    auto mask = [&](uint32_t a, const uint32_t* keep, uint32_t from = 0) {
+    // (from_i: per row group, overriding from)
+    auto mask = [&](uint32_t a, const uint32_t* keep, uint32_t from = 0, const uint32_t* from_i = nullptr) {
         for (uint32_t i = 0; i < 4; ++i) {
+            const uint32_t fr = from_i ? from_i[i] : from;
             for (uint32_t f = 0; f < 2; ++f) {
-                noc_async_read(lib + ((from * 33 + keep[i]) * 2 + f) * 256, aux + a * tile + rows8(i, f), 256);
+                noc_async_read(lib + ((fr * 33 + keep[i]) * 2 + f) * 256, aux + a * tile + rows8(i, f), 256);
             }
         }
     };
@@ -217,6 +233,23 @@ void kernel_main() {
     if (sl.c_lo == lo / 32 && (lo % 32) && lo / 32 != hi / 32) {
         const uint32_t keep32[4] = {32, 32, 32, 32};
         mask(1 + 1, keep32, lo % 32);
+    }
+#endif
+#ifdef BA_SWIN
+    // the window masks of chunks w_lo / 32 + e this slice holds: row group i keeps [lo(4 t + i) - c0, 32)
+    for (uint32_t e = 0; e < 2; ++e) {
+        const uint32_t c = w_lo / 32 + e;
+        if (c < sl.c_lo || c >= sl.c_hi) {
+            continue;
+        }
+        const uint32_t keep32[4] = {32, 32, 32, 32};
+        uint32_t from[4];
+        for (uint32_t i = 0; i < 4; ++i) {
+            const int32_t lo_i = pos[4 * t + i] + 1 - static_cast<int32_t>(BA_SWIN);
+            const int32_t a = lo_i - static_cast<int32_t>(c * 32);
+            from[i] = a < 0 ? 0 : (a > 32 ? 32 : static_cast<uint32_t>(a));
+        }
+        mask(3 + e, keep32, 0, from);
     }
 #endif
     if (has_sink && s == 0) {

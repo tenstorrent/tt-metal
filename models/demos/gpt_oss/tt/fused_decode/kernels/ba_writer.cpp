@@ -58,12 +58,30 @@ void kernel_main() {
     constexpr bool has_sink = false;
     // bit 13 (no sink here): chunk 0 of this slice is the window's first chunk with a cut start (mask e = 1)
     const bool win_first = sl.c_lo == lo / 32 && (lo % 32) && lo / 32 != hi / 32;  // (the window's first slice)
+#elif defined(BA_SWIN)
+    const uint32_t w_lo = static_cast<uint32_t>(pos[0]) + 1 >= BA_SWIN ? pos[0] + 1 - BA_SWIN : 0;
+    const BaSlice sl =
+        ba_slice(static_cast<uint32_t>(pos[0]), static_cast<uint32_t>(pos[M - 1]), s, S, min_chunks, w_lo / 32);
+    constexpr bool has_sink = true;
+    constexpr bool win_first = false;
 #else
     const BaSlice sl = ba_slice(static_cast<uint32_t>(pos[0]), static_cast<uint32_t>(pos[M - 1]), s, S, min_chunks);
     constexpr bool has_sink = true;
     constexpr bool win_first = false;
 #endif
     const uint32_t nc = sl.c_hi - sl.c_lo;
+#ifdef BA_SWIN
+    // the window's history is short: bits 18..24 the causal mask offset + 1 (as below, clamped to [-1, 125]), 25..31
+    // the window mask offset + 1 (w_lo / 32 - c_lo: chunk j takes window mask e = j - offset when 0 <= e <= 1; 127:
+    // none, the slice starts past the window's first 2 chunks)
+    static_assert(BA_SWIN / 32 + 2 < 126, "the window's chunks fit the 7-bit offsets");
+    int32_t off = static_cast<int32_t>(sl.c_block) - static_cast<int32_t>(sl.c_lo);
+    off = off < -1 ? -1 : (off > 125 ? 125 : off);
+    const int32_t woff = static_cast<int32_t>(w_lo / 32) - static_cast<int32_t>(sl.c_lo);
+    const uint32_t woff_bits = woff < -1 ? 127u : static_cast<uint32_t>(woff + 1);
+    const uint32_t info = nc | (s == 0 ? 1u << 13 : 0u) | (sl.send_round < 0 ? 1u << 14 : 0u) | (sl.recv_rounds << 15) |
+                          (static_cast<uint32_t>(off + 1) << 18) | (woff_bits << 25);
+#else
     // one word: bits 0..12 chunks, 13 sink, 14 root, 15..17 receive rounds, 18..31 mask offset + 1 (c_block - c_lo
     // clamped to [-1, 8190]: chunk j of the slice takes causal mask e = j - offset when 0 <= e <= 1)
     int32_t off = static_cast<int32_t>(sl.c_block) - static_cast<int32_t>(sl.c_lo);
@@ -71,6 +89,7 @@ void kernel_main() {
     const uint32_t info = nc | ((has_sink && s == 0) || win_first ? 1u << 13 : 0u) |
                           (sl.send_round < 0 ? 1u << 14 : 0u) | (sl.recv_rounds << 15) |
                           (static_cast<uint32_t>(off + 1) << 18);
+#endif
     ckernel::mailbox_write(ckernel::ThreadId::UnpackThreadId, info);
     ckernel::mailbox_write(ckernel::ThreadId::MathThreadId, info);
     ckernel::mailbox_write(ckernel::ThreadId::PackThreadId, info);

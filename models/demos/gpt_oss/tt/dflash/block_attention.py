@@ -56,18 +56,21 @@ class BlockAttention:
         window=0,
         q_rows=False,
         min_chunks=None,
+        swin=0,
     ):
         """cores: cores_needed(n_kv, rows, slices) logical cores: (kv head g, tile group t, slice s) = cores[(g Tt + t)
         slices + s], each tile group (packed Q tile t, one per core) with its own slices and merge tree.
         uniform: every row attends [0, pos[M - 1]] (the drafter's block: no causal mask inside it), no sinks; window
         (uniform only): the rows attend the last `window` positions [pos[M - 1] + 1 - window, pos[M - 1]].
         q_rows: q comes in the rows layout [1, M, heads, 64] (the reader gathers the packed tiles: no repacking op).
+        swin (not uniform): a sliding window, row r attends [pos[r] + 1 - swin, pos[r]] (with the sinks).
         """
         assert head_dim == 64 and n_heads // n_kv == 8 and rows == 8
         assert uniform or not window
+        assert not (uniform and swin) and (not swin or swin >= 128)
         self.mesh, self.M, self.nq, self.nkv, self.hd = mesh_device, rows, n_heads, n_kv, head_dim
         self.block, self.S, self.Tt = block_size, slices, rows // 4
-        self.uniform, self.window, self.q_rows = uniform, window, q_rows
+        self.uniform, self.window, self.q_rows, self.swin = uniform, window, q_rows, swin
         # one DRAM read of each K / V group per (kv head, slice): the tile-group-1 core copies it from the tile-group-0
         # core's L1
         assert len(cores) == self.cores_needed(n_kv, rows, slices)
@@ -160,7 +163,7 @@ class BlockAttention:
             cb(cb_q, bf16, 2048, 2),
             cb(cb_k, kv_dtype, kv_tile, 2 * G * cap),
             cb(cb_v, kv_dtype, kv_tile, 2 * G * cap),
-            cb(cb_aux, bf16, 2048, 6),
+            cb(cb_aux, bf16, 2048, 8 if self.swin else 6),  # [scaler, NM masks, sink mask, sink, zero]
             cb(cb_scr, bf16, 256 + max(pt_page, 64), 1),
             cb(cb_qs, bf16, 2048, 2),
             cb(cb_s, f32, 4096, 2 * (G + 1)),  # 2 groups: the next group's scores while P of this one runs
@@ -257,6 +260,8 @@ class BlockAttention:
             writer_common.append(user[0])
         if self.window:  # one window for all rows
             defines.append(("BA_WINDOW", str(self.window)))
+        if self.swin:
+            defines.append(("BA_SWIN", str(self.swin)))
         dm = ttnn.DataMovementConfigDescriptor
         kernels = [
             ttnn.KernelDescriptor(
@@ -282,7 +287,7 @@ class BlockAttention:
                 core_ranges=self.cores,
                 compile_time_args=compute_ct,
                 runtime_args=[],
-                defines=[(k, v) for k, v in defines if k == "BA_UNIFORM"],
+                defines=[(k, v) for k, v in defines if k in ("BA_UNIFORM", "BA_SWIN")],
                 config=ttnn.ComputeConfigDescriptor(
                     math_fidelity=ttnn.MathFidelity.HiFi2,
                     fp32_dest_acc_en=True,

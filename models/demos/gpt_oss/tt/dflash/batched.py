@@ -656,9 +656,10 @@ class _UserBlockAttention:
 
     WAIT_SEM = 8  # the kernels' wait semaphore (count 0: Q and the block's K / V are written by earlier ops)
 
-    def __init__(self, mesh, users, block, n_heads, n_kv, head_dim, block_size, per_program, slices, min_chunks=4, uniform=False, window=0,):  # fmt: skip
+    def __init__(self, mesh, users, block, n_heads, n_kv, head_dim, block_size, per_program, slices, min_chunks=4, uniform=False, window=0, swin=0):  # fmt: skip
         """uniform (the drafter): every row of a block attends [start, start + 7]'s history up to start + 7 (no causal
-        mask inside the block, no sinks), within the last `window` positions."""
+        mask inside the block, no sinks), within the last `window` positions. swin (the verify's sliding-window layers):
+        row r attends [pos_r + 1 - swin, pos_r] (causal, with the sinks)."""
         from .block_attention import BlockAttention
 
         self.mesh, self.users, self.block, self.P = mesh, users, block, per_program
@@ -680,6 +681,7 @@ class _UserBlockAttention:
                 min_chunks=min_chunks,
                 uniform=uniform,
                 window=window,
+                swin=swin,
             )
             for j in range(per_program)
         ]
@@ -849,6 +851,17 @@ class BatchedVerify:
         self.block_attn = _UserBlockAttention(
             self.mesh, users, block, self.local_heads, self.local_kv_heads, hd, kv_cache[1][0].shape[2], 8, 3
         )
+        # sliding-window layers: the same block attention, windowed (row r attends [pos_r + 1 - window, pos_r]: at most
+        # 6 chunks), 16 users per program on 1 slice each (64 cores), instead of one decode SDPA per 32-row step (8
+        # SDPA calls + 8 Q slices + the concat per layer). B32_SWIN=0: the per-step decode SDPA.
+        windows = {l.self_attn.config.sliding_window for l in model.layers if l.self_attn.config.sliding_window}
+        self.swin_attn = None
+        if os.environ.get("B32_SWIN", "1") == "1" and windows:
+            (window,) = windows
+            self.swin_attn = _UserBlockAttention(
+                self.mesh, users, block, self.local_heads, self.local_kv_heads, hd, kv_cache[0][0].shape[2],
+                int(os.environ.get("B32_SWIN_P", "16")), int(os.environ.get("B32_SWIN_S", "1")), swin=window,
+            )  # fmt: skip
         # heads, RoPE and the K / V cache writes once per layer for all 256 rows (prefill-layout heads, per-row cos / sin,
         # the multi-user BFP8_b write kernel) instead of per 32-row step (interleaved_to_sharded_partial, decode heads,
         # fused-QK RoPE, paged_fused_update_cache: 4 x 8 ops per layer): round 42.2 -> 41.0 ms at ISL 256. The kernel
@@ -1044,9 +1057,9 @@ class BatchedVerify:
         v.deallocate(True)
         q_rows = ttnn.permute(q2, (0, 2, 1, 3), memory_config=ttnn.DRAM_MEMORY_CONFIG)
         q2.deallocate(True)
-        if block_attn:
-            out = self.block_attn(q_rows, k_cache, v_cache, pos[self.block], self.page_table, w.decode_sinks,
-                                  cfg.scaling)  # fmt: skip
+        if block_attn or self.swin_attn is not None:
+            ba = self.block_attn if block_attn else self.swin_attn
+            out = ba(q_rows, k_cache, v_cache, pos[self.block], self.page_table, w.decode_sinks, cfg.scaling)
             q_rows.deallocate(True)
             return out
         outs = []
