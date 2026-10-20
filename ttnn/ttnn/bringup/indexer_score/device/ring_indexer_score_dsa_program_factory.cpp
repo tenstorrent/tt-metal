@@ -311,6 +311,34 @@ ProgramDescriptor build_ring_program_descriptor(
         }
     }
 
+    // Bring-up fork block epilogue (opt-in): the writer's bias-window and block-max scratch, after every other CB so
+    // the default program's CB indices and sizes are unchanged.
+    const bool has_ep = tensors.has_block_epilogue();
+    uint32_t cb_ep_bias = 0, cb_ep_max = 0;
+    if (has_ep) {
+        const uint32_t bk = args.block_keys;
+        const uint32_t blocks_per_tile = tt::constants::TILE_WIDTH / bk;
+        // the writer's bias tile slots (writer_indexer_score.cpp ep_bias_slots): per fragment its blocks' tile span + 1
+        const uint32_t bias_slots =
+            KC * ((KC * blocks_per_tile + tt::constants::TILE_WIDTH - 1) / tt::constants::TILE_WIDTH + 1);
+        const auto make_scratch = [&](uint32_t& slot, uint32_t bytes) {
+            slot = next_cb_index++;
+            desc.cbs.push_back(CBDescriptor{
+                .total_size = bytes,
+                .core_ranges = core_ranges,
+                .format_descriptors = {{CBFormatDescriptor{
+                    .buffer_index = static_cast<uint8_t>(slot),
+                    .data_format = tt::DataFormat::UInt32,
+                    .page_size = bytes}}}});
+        };
+        if (tensors.block_bias.has_value()) {
+            make_scratch(cb_ep_bias, bias_slots * bf16_tile);
+        }
+        if (tensors.block_max_out.has_value()) {
+            make_scratch(cb_ep_max, tt::constants::TILE_HEIGHT * KC * blocks_per_tile * 4);
+        }
+    }
+
     // Fused-op signal semaphores + consumer signaler (inlined init_fused_op against desc; MULTI). ring_size / rw
     // are computed above (hoisted for the readiness-balanced band assignment).
     ttnn::prim::RingSDPAFusedOpSignaler sdpa_sig;
@@ -450,6 +478,20 @@ ProgramDescriptor build_ring_program_descriptor(
     // Metadata flag and reader-to-writer mailbox.
     writer_ct.push_back(has_meta ? 1u : 0u);
     writer_ct.push_back(has_meta ? cb_meta_writer : 0u);
+    if (has_ep) {  // bring-up fork block epilogue (INDEXER_SCORE_BLOCK_EPILOGUE): appended, absent by default
+        const auto& bias = tensors.block_bias;
+        const auto& bmax = tensors.block_max_out;
+        writer_ct.push_back(args.block_keys);
+        writer_ct.push_back(bias.has_value() ? 1u : 0u);
+        writer_ct.push_back(bmax.has_value() ? 1u : 0u);
+        writer_ct.push_back(args.block_max_pin ? 1u : 0u);
+        writer_ct.push_back(cb_ep_bias);
+        writer_ct.push_back(cb_ep_max);
+        writer_ct.push_back(bias.has_value() ? bias->logical_shape()[-1] / tt::constants::TILE_WIDTH : 0u);
+        writer_ct.push_back(bmax.has_value() ? bmax->logical_shape()[-1] * 4u : 0u);
+        tt::tt_metal::TensorAccessorArgs(bias.has_value() ? *bias->buffer() : *out.buffer()).append_to(writer_ct);
+        tt::tt_metal::TensorAccessorArgs(bmax.has_value() ? *bmax->buffer() : *out.buffer()).append_to(writer_ct);
+    }
 
     std::vector<uint32_t> compute_ct = common_ct;
     compute_ct.push_back(qk_subblock_h);
@@ -480,6 +522,10 @@ ProgramDescriptor build_ring_program_descriptor(
     writer_kernel.core_ranges = core_ranges;
     writer_kernel.compile_time_args = writer_ct;
     writer_kernel.config = WriterConfigDescriptor{};
+    if (has_ep) {
+        // Bring-up fork block epilogue (opt-in). The define is absent in the default program.
+        writer_kernel.defines.emplace_back("INDEXER_SCORE_BLOCK_EPILOGUE", "1");
+    }
 
     KernelDescriptor compute_kernel{};
     compute_kernel.kernel_source = kdir + "compute_indexer_score.cpp";
@@ -595,6 +641,19 @@ ProgramDescriptor build_ring_program_descriptor(
     writer_common.push_back(out.buffer());
     append_scalars(writer_common, std::array{kv_len_tiles, chunk_t, geom.straddle_q_tile, geom.straddle_jump_tiles});
     writer_common.append(shard_order);
+    if (has_ep) {  // bring-up fork block epilogue: addresses after the shard order (writer: Count + ring size)
+        TT_FATAL(shard_order.size() == ring_size, "indexer_score: the shard order must hold every ring shard");
+        if (tensors.block_bias.has_value()) {
+            writer_common.push_back(tensors.block_bias->buffer());
+        } else {
+            writer_common.push_back(0u);
+        }
+        if (tensors.block_max_out.has_value()) {
+            writer_common.push_back(tensors.block_max_out->buffer());
+        } else {
+            writer_common.push_back(0u);
+        }
+    }
     writer_kernel.emplace_common_runtime_args(writer_common);
     KernelDescriptor::RTArgList compute_common;
     append_scalars(compute_common, std::array{kv_len_tiles, chunk_t, geom.straddle_q_tile, geom.straddle_jump_tiles});

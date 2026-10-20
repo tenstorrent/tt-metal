@@ -2241,3 +2241,60 @@ Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deeps
   numerics, device attention / indexer / compressor / kv in the block; swa_12's ffn_hc WAIVED as before).
 - Re-run: probes `tests/ttnn/unit_tests/operations/ds41_attn_glue/probes/`; profile `DS41_ATTN_GLUE=on|off` + the gate's
   profile command; final `python -m models.demos.common.bringup.orchestrator measure --task P.15`.
+
+## P.16 perf (attempt 1): indexer / shared-source glue (INDEXER_GLUE on / off; glue report items 3, 7, 8, 9, 10)
+- Setting INDEXER_GLUE (tt/settings.py), default on (the change; the orchestrator pins both sides; the brief's
+  "off (default)" vs "make the change the default": as P.14 / P.15). Not a precision switch: data moves, and the bf16
+  partials q_a already writes under CCL_IMPL=fabric_bf16 (P.6).
+- (3) Candidate block max (L20): fork option on ttnn.bringup.ring_indexer_score_dsa (indexer_score CHANGELOG "Block
+  epilogue"): `block_keys=8, block_max_out=<load-time [1, 1, Sq, ceil32(T / 8)] fp32 RM buffer>, block_max_pin=True`;
+  the writer takes the max of each 8 bf16 scores of its untilized strip (exact, widened to fp32) and stamps +inf at the
+  query's own block (old: +1e30 in bf16; same selection). Then typecast to bf16 (exact) + topk_large_indices(2048,
+  valid_length = kv_len / 8); below 2048 blocks a slice + -inf pad as before (DS41-52: the full-range slice is a
+  wrapper over the persistent buffer, never freed). Replaces 8 strided slices, 7 maximum, to_layout, the 9 pin ops.
+- (8) Re-index bias (L24): the same scatter (ROW_MAJOR, width ceil32(T / 8)) + to_layout TILE -> `block_bias` of the
+  score op: the writer writes -inf over every key of a block whose bias is nonzero; no repeat_interleave, slices, add.
+- Fork tests: tests/unit/test_block_epilogue.py (2x2, ratio 1, natural blocks, block-cyclic keys, T 6144, 6 starts,
+  block_keys 8 / 4: bias, max, pin bit-exact vs the plain call; sentinel past kv_len; 7 refusals); negative controls by
+  hand (corrupted max, a bias that skips a key) fail. Regression with the option off: unit + model cases 22 passed / 1
+  skipped (= 17 / 1 + 2 recorded + 3 new); fork_source 134 tests, 0 regressions (the recorded
+  test_indexer_score_rejects_fp32_dest_acc divergence only).
+- Score op alone, L20 shapes (Sq 512 x 32 x 128, T 55296, HiFi2 + fp32 DEST, 30 synced calls; probe
+  ds41_p16_epilogue, deleted): plain 1.68 ms; + max / pin 1.96 (first version 3.07; in the model's per-op profile
+  6.68: DS41-85); + bias 1.69 (first, ROW_MAJOR bias rows: 2.16; DS41-86).
+- (7) tt/sparse_attention.ChunkMemo on DS41DeviceState (memo): ("comp", kv source) the gathered compressed history
+  and nb, ("index", idx source) the [window | top-k rows] index list, ("keys", kv source) the indexer's tiled index
+  keys; each keyed by (start, cache id, TtServedRows.version: bumped by every _put); a new top-k of a layer drops its
+  "index" slot (DS41DeviceState.put); TtDS41Model.memo_last drops each slot after its last loaded reader of the chunk
+  (here: comp 2 after L3, 20 after L24; index 2 after L3, 20 after L21; keys 20 after L24). L3 / L21 / L24 no longer
+  slice + tile + all_gather x 2 + untilize the history; L3 / L21 skip _topk_rows (~25 ops); L24 skips the key retile.
+- (9) tt/rope.RowsMemo: RopeTable.rows(start, S[, tp_split]) and CompressRope.rows once per (start, length); callers
+  release through `rope.free` (memoized rows stay; the latest start only). The indexer's TP split of the rows is a
+  memo entry too. Router weights: with EXPERTS_COMBINE=weighted the router returns (None, idx, wts) (no zeros slice /
+  2 to_layout / scatter) and experts._weighted takes wts (no to_layout + gather); bit-identical (dense was their
+  scatter).
+- (10) Indexer gates: linear writes ccl.partial_dtype (bf16 under fabric_bf16) -> tt/ccl.sum_rows = ONE
+  fabric_reduce_scatter by row blocks: chip c's block is rows [c Sq, (c+1) Sq), what tp_sum + mesh_partition kept
+  (no all_gather, mesh_partition, 3 typecasts). Compressor: its [wkv | wgate] partial written in partial_dtype (C1).
+  Both only with HC_TP_SUM=gather_add; stock / untiled fall back to the old path.
+- stock ttnn.slice instead of ttnn.bringup.ring_indexer_score_dsa: the first nbv < 2048 columns of the op's own
+  block-max output before the -inf pad (a column slice, not a block pool).
+- Plain profile, 2x2, chunk 53248-55296 (profiles P.15_20261020T164559 = off, P.16_20261020T183616 = on), device ms a
+  chunk off -> on: indexer 25.15 -> 12.94, attention 43.01 -> 40.56, experts 17.18 -> 16.82, router 1.82 -> 1.47,
+  compressor 1.90 -> 1.79, kv 1.24 -> 1.18; device sum 119.82 -> 104.28 (-15.5 ms, -13 %). Programs (4 chips) 8892
+  -> 7800: indexer 660 -> 376, attention 2648 -> 2244, kv 928 -> 800, compressor 1048 -> 964, router 480 -> 384,
+  experts 480 -> 384. Wall with the profiler on 367.1 -> 329.0 ms.
+- Quick runs by hand: on: chunk wall 171.9 / 175.7 ms, L00 0.99933 L01 0.99892 L02 0.99769 L03 0.99490 L14 0.99612
+  L20 0.99928 L21 0.99682 L24 0.99941; off: 197.0 ms, L03 0.99489 (P.15 196.0); host_transfers_per_layer 0.
+  Ladder last (on, by hand): pcc_state_min 0.99712, overlap candidates L20 0.99757, top-k L24 0.99291.
+- Frozen tests run by hand with INDEXER_GLUE=on (sanity, max precision): test_c_dec_candidate_indexer (failed first:
+  DS41-52, the block-max buffer freed by a full-range slice; fixed), test_c_dec_reindex_indexer, enc_source_indexer,
+  enc_source_compressor, dec_reuse_attention, swa_attention, dec_reindex_experts, test_swap_dec_reindex_13_experts:
+  pass.
+- Final `measure --task P.16` (on, rc 0): min layer L03 0.99490, pcc_chunk_out 0.99941, chunk wall 174.9 ms (spread
+  6.9; P.15 196.0), host_transfers_per_layer 0.
+- Not done: the 56 MiB concat [window | comp] per sparse layer (needs a two-KV sparse_sdpa option); a persistent
+  natural-order history mirror (report item 7b).
+- Re-run: fork `scripts/run_safe_pytest.sh --run-all ttnn/ttnn/bringup/indexer_score/tests/unit/test_block_epilogue.py`;
+  profile `DS41_INDEXER_GLUE=on|off` + the gate's profile command; final `python -m
+  models.demos.common.bringup.orchestrator measure --task P.16`.

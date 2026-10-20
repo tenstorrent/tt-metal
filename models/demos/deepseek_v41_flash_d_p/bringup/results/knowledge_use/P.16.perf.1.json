@@ -1,0 +1,127 @@
+{
+ "used": [
+  {
+   "id": "DS41-52",
+   "how": "the candidate path's full-range slice of the persistent block-max buffer is a wrapper over it: freed only when its buffer differs (tt/indexer.py:_candidates_glue, _same); the first version freed the buffer (component test failure)",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "K-1",
+   "how": "same buffer-alias rule as DS41-52 for the block-max slice",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-84",
+   "how": "bf16 partials written by the matmul (indexer gates, compressor) only where the CCL already sums bf16 (partial_dtype, the P.6 practice); checked end to end (layers equal to 1e-5 on / off)",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-67",
+   "how": "the producer writes the bf16 partial (ccl.partial_dtype) instead of fp32 + typecast for the gates and the compressor partial",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-53",
+   "how": "kept the scatter of the candidate ids (0xFFFFFFFF skipped) into the -inf row as the bias source; only its consumer moved into the score op",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "K-4",
+   "how": "bias built by scatter in ROW_MAJOR bf16 then tiled (0.82 ms) instead of a TILE scatter (0.89 ms; a TILE uint32 index > 256 wide is refused)",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "K-56",
+   "how": "deleted the tt-probe directory tests/ttnn/unit_tests/operations/ds41_p16_epilogue before finishing",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "K-58",
+   "how": "read the hand runs' metrics from generated/bringup_adhoc/P.16*.json",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "K-57",
+   "how": "after the killed background per-op run the cards were marked dirty; the next run_safe_pytest reset them",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "K-53",
+   "how": "PYTHONPATH=$PWD on every hand run",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "K-52",
+   "how": "--no-precompile on the model-sized runs",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "K-13",
+   "how": "kept k_chunk 32 (fidelity-honouring head reduction) for the score op, so the epilogue works on KC = 1 tile strips (block max runs 16 bytes a tile row: fp32 output)",
+   "traced": true,
+   "cited": true
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "how fast a scalar per-value loop on a data-movement RISC-V is (L20's block max made the score op 4x slower until rewritten branchless with 32-bit loads and Zbb max / min: DS41-85)",
+  "that the Blackhole baby RISC-V compiler (-mcpu=tt-bh) has Zbb (max / min / maxu) and M",
+  "NoC DRAM read alignment 64 B / write alignment 16 B on Blackhole (noc_parameters.h) and its effect on small side outputs written by many cores (fp32 block maxes so each tile row is 16 B)",
+  "a per-op profile of two layers takes about 12 min, beyond an agent's 10-minute foreground call (DS41-87)"
+ ],
+ "overseer": [],
+ "cited_only": [
+  "DS41-85",
+  "DS41-86",
+  "DS41-87"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "P.16",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-20T19:12:49",
+  "head": "38e7fe81ef8",
+  "touched": [
+   "models/demos/common/bringup/knowledge/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/P.16.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tt/attention.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/ccl.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/compressor.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/experts.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/indexer.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/kv.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/model.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/rope.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/router.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/sparse_attention.py",
+   "ttnn/ttnn/bringup/INDEX.md",
+   "ttnn/ttnn/bringup/indexer_score/CHANGELOG.md",
+   "ttnn/ttnn/bringup/indexer_score/README.md",
+   "ttnn/ttnn/bringup/indexer_score/device/indexer_score_device_operation.cpp",
+   "ttnn/ttnn/bringup/indexer_score/device/indexer_score_device_operation.hpp",
+   "ttnn/ttnn/bringup/indexer_score/device/indexer_score_device_operation_types.hpp",
+   "ttnn/ttnn/bringup/indexer_score/device/kernels/writer_indexer_score.cpp",
+   "ttnn/ttnn/bringup/indexer_score/device/ring_indexer_score_dsa_program_factory.cpp",
+   "ttnn/ttnn/bringup/indexer_score/indexer_score_nanobind.cpp",
+   "ttnn/ttnn/bringup/indexer_score/tests/unit/test_block_epilogue.py"
+  ]
+ }
+}

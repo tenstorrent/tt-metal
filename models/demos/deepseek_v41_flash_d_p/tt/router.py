@@ -70,6 +70,7 @@ class TtRouter:
         self.bias = _replicate(mesh, b - b.mean(), ttnn.float32)
         self.zeros = _replicate(mesh, torch.zeros(1, 1, self.max_rows, E), ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT)
         self.cfg = compute_config(mesh)
+        self.dense = True  # the dense [S/SP, E] routing; tt/model.py turns it off when its only reader takes wts
 
     def _rows(self, t, s):
         if s == self.max_rows:
@@ -102,6 +103,8 @@ class TtRouter:
         wts = ttnn.div(top, tsum_s, memory_config=DRAM)
         ttnn.deallocate(top)
         ttnn.deallocate(tsum_s)
+        if not self.dense:  # INDEXER_GLUE=on + weighted experts (P.16): they take wts itself; no dense scatter
+            return None, idx, wts
         zeros = self._rows(self.zeros, s)
         idx_rm = ttnn.to_layout(idx, ttnn.ROW_MAJOR_LAYOUT, memory_config=DRAM)
         wts_rm = ttnn.to_layout(wts, ttnn.ROW_MAJOR_LAYOUT, memory_config=DRAM)

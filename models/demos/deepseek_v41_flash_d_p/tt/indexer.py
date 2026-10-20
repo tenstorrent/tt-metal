@@ -19,7 +19,9 @@ positions start + r W + c Sq + [0, Sq) (natural blocks, any 32-aligned start):
 
     w   attn_norm (rounded to TF32, setting COMPRESSOR_X: the compressor's fused fp32 projection reads it the same
         way) @ the chip's K rows of (weights_proj / 64)^T (bf16, exact: 1/64 = 2^-6) -> tt/common.tp_sum (exact
-        fp32, K-30) -> the chip's Sq rows (mesh_partition over axis 1) -> bf16 (the score op's gate dtype)
+        fp32, K-30) -> the chip's Sq rows (mesh_partition over axis 1) -> bf16 (the score op's gate dtype);
+        INDEXER_GLUE=on (P.16): the linear writes the CCL's partial dtype and ONE reduce-scatter by row blocks
+        (tt/ccl.sum_rows) gives the chip's Sq rows of the sum directly
     q   the chip's Sq rows of q_resid -> tt/quant.fp8_qdq (bf16, exact) @ wq_b^T (replicated, all 32 heads; bf16:
         e4m3 x 2^k is bf16-exact; every head's rope rows de-interleaved at load, tt/rope.deinterleave_perm) at
         HiFi4 + fp32 acc -> [1, 32, Sq, 128] fp32 -> tt/rope.rope_heads (fp32 SFPU, the reference's interleaved
@@ -50,7 +52,7 @@ import ttnn
 from . import ccl
 from .common import DRAM, SP_AXIS, TP_AXIS, attn_compute_config, dense_dtype, tp_sum
 from .quant import act_q, fp4_q, native, round_tf32
-from .rope import RopeTable, deinterleave_perm, rope_heads
+from .rope import RopeTable, deinterleave_perm, indexer_glue, rope_heads
 from .settings import settings
 
 Q_CHUNK, K_CHUNK = 64, 32  # score work unit: k 32 is the fork's fidelity-honouring head reduction (K-13 / K-14)
@@ -120,6 +122,13 @@ class TtIndexer:
         )
         self.score_ckc = attn_compute_config(mesh)  # the ring score: ATTN_FIDELITY (P.7)
         self._kbuf = {}  # compressed capacity T -> the ring's persistent gathered-key buffer [1, 1, T, hd]
+        self.glue = indexer_glue()  # INDEXER_GLUE=on (P.16)
+        self._memo = None  # (tt/sparse_attention.ChunkMemo, KV source layer): ``share``
+
+    def share(self, memo, kv_src: int | None) -> None:
+        """INDEXER_GLUE=on (P.16): the chunk's ChunkMemo and this layer's KV source (the tiled index keys are made once
+        per (source, start, cache version)); ``share(None, None)``: every call tiles its own."""
+        self._memo = (memo, kv_src) if memo is not None else None
 
     # ------------------------------------------------------------------ load time
     def setup(self, cache) -> None:
@@ -161,9 +170,25 @@ class TtIndexer:
     def gates(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """attn_norm [1, 1, W, H/TP] fp32 -> the chip's per-head gates [1, 1, Sq, nh] bf16."""
         xa = round_tf32(x) if self.round_x else x
-        part = ttnn.linear(xa, self.wproj, dtype=ttnn.float32, compute_kernel_config=self.ckc, memory_config=DRAM)
+        # INDEXER_GLUE=on (P.16): the partial in the CCL's partial dtype (bf16 under fabric_bf16, as q_a's) and ONE
+        # reduce-scatter by row blocks: its block is the chip's Sq query rows (no all_gather, mesh_partition, casts)
+        rs = self.glue and settings.get("HC_TP_SUM") == "gather_add"
+        pdt = ccl.partial_dtype(self.mesh) if rs else ttnn.float32
+        part = ttnn.linear(xa, self.wproj, dtype=pdt, compute_kernel_config=self.ckc, memory_config=DRAM)
         if xa is not x:
             ttnn.deallocate(xa)
+        sub = ccl.sum_rows(self.mesh, part) if rs else None
+        if sub is not None:
+            ttnn.deallocate(part)
+            if sub.dtype == ttnn.bfloat16:
+                return sub
+            out = ttnn.typecast(sub, ttnn.bfloat16, memory_config=DRAM)
+            ttnn.deallocate(sub)
+            return out
+        if part.dtype != ttnn.float32:  # (tp_sum's stock / untiled path sums fp32)
+            pf = ttnn.typecast(part, ttnn.float32, memory_config=DRAM)
+            ttnn.deallocate(part)
+            part = pf
         full = tp_sum(self.mesh, part)
         ttnn.deallocate(part)
         sub = self._sub(full)
@@ -184,13 +209,10 @@ class TtIndexer:
         q4 = ttnn.reshape(q, [1, self.sq, self.nh, self.hd])
         qh = ttnn.permute(q4, (0, 2, 1, 3), memory_config=DRAM)  # [1, nh, Sq, hd]
         ttnn.deallocate(q)
-        cos_r, sin_r = self.rope.rows(start, self.chunk)  # the row's W positions
-        cos, sin = self._sub(cos_r), self._sub(sin_r)
-        for t in (cos_r, sin_r):
-            ttnn.deallocate(t)
+        cos, sin = self.rope.rows(start, self.chunk, tp_split=True)  # the chip's Sq positions
         qr_ = rope_heads(qh, cos, sin, interleave=True)
-        for t in (qh, cos, sin):
-            ttnn.deallocate(t)
+        ttnn.deallocate(qh)
+        self.rope.free(cos, sin)  # INDEXER_GLUE=on: the chunk's memoized rows stay
         out = fp4_q(qr_, Q_BLOCK, dtype=ttnn.bfloat16)
         ttnn.deallocate(qr_)
         return out
@@ -204,14 +226,11 @@ class TtIndexer:
             q, num_heads=self.nh, split_head_dim=self.hd - self.rd, memory_config=DRAM
         )
         ttnn.deallocate(q)
-        cos_r, sin_r = self.rope.rows(start, self.chunk)  # the row's W positions
-        cos, sin = self._sub(cos_r), self._sub(sin_r)
-        for t in (cos_r, sin_r):
-            ttnn.deallocate(t)
+        cos, sin = self.rope.rows(start, self.chunk, tp_split=True)  # the chip's Sq positions
         if native():
             tb = rope_heads(qt, cos, sin, dtype=ttnn.bfloat16)  # [re | ro] bf16
-            for t in (qt, cos, sin):
-                ttnn.deallocate(t)
+            ttnn.deallocate(qt)
+            self.rope.free(cos, sin)
             ti = self.rope.pairs(tb, self.rope.pairs.to_inter)
             ttnn.deallocate(tb)
             nb = ttnn.typecast(qn, ttnn.bfloat16, memory_config=DRAM)
@@ -221,8 +240,8 @@ class TtIndexer:
             ttnn.deallocate(ti)
             return out
         tr = rope_heads(qt, cos, sin, interleave=True)
-        for t in (qt, cos, sin):
-            ttnn.deallocate(t)
+        ttnn.deallocate(qt)
+        self.rope.free(cos, sin)
         full = ttnn.concat([qn, tr], dim=-1, memory_config=DRAM)
         ttnn.deallocate(qn)
         ttnn.deallocate(tr)
@@ -230,9 +249,10 @@ class TtIndexer:
         ttnn.deallocate(full)
         return out
 
-    def scores(self, x: ttnn.Tensor, qr: ttnn.Tensor, start: int, cache) -> tuple[ttnn.Tensor, int]:
+    def scores(self, x: ttnn.Tensor, qr: ttnn.Tensor, start: int, cache, **epilogue) -> tuple[ttnn.Tensor, int]:
         """The chip's index scores [1, 1, Sq, T] bf16 ROW_MAJOR (future columns -inf, columns >= kv_len unwritten)
-        and kv_len (the written width, a multiple of 32)."""
+        and kv_len (the written width, a multiple of 32). ``epilogue`` (INDEXER_GLUE=on, P.16): the score op's block
+        epilogue options (block_keys, block_bias, block_max_out, block_max_pin), passed through."""
         assert start % 32 == 0, start
         t = self._capacity(cache)
         kbuf = self._kbuf[t]  # setup(cache) at load
@@ -241,7 +261,13 @@ class TtIndexer:
         assert kv_len >= self.topk and start < kv_len * self.ratio, (start, kv_len, self.topk)
         w = self.gates(x)
         q = self.query(qr, start)
-        k_local = self._keys(cache)
+        shared = self._memo is not None
+        kkey = (start, id(cache), cache.version)
+        k_local = self._memo[0].get(("keys", self._memo[1]), kkey) if shared else None
+        if k_local is None:
+            k_local = self._keys(cache)
+            if shared:  # INDEXER_GLUE=on (P.16): the re-index layers score the same tiled keys (L24 = L20's)
+                self._memo[0].put(("keys", self._memo[1]), kkey, k_local)
         logits = ttnn.bringup.ring_indexer_score_dsa(
             q,
             kbuf,
@@ -260,8 +286,9 @@ class TtIndexer:
             block_cyclic_sp_axis=SP_AXIS,
             block_cyclic_chunk_local=self.w_rows,
             natural_query_blocks=True,
+            **epilogue,
         )  # [1, 1, Sq, T] bf16 ROW_MAJOR; future columns -inf, columns >= kv_len unwritten
-        for u in (q, w, k_local):
+        for u in (q, w) + (() if shared else (k_local,)):
             ttnn.deallocate(u)
         return logits, kv_len
 
@@ -304,7 +331,12 @@ class TtCandidateIndexer(TtIndexer):
 
     ``forward`` returns (top-k [1, 1, W, 512] uint32 gathered over TP, candidates [1, 1, Sq, 2048] uint32 of the chip's
     own query rows, not gathered: the dec_reindex layers 24-36 score the same rows of the same chunk). The order
-    within a row is free (index sets; ties: bf16 scores, K-42)."""
+    within a row is free (index sets; ties: bf16 scores, K-42).
+
+    INDEXER_GLUE=on (P.16): the block max and the pin come out of the score op itself (ttnn.bringup
+    ring_indexer_score_dsa's block epilogue: block_keys 8, block_max_out = a load-time [1, 1, Sq, ceil32(T / 8)] fp32
+    buffer, block_max_pin = +inf at each query's own block), then a bf16 cast (exact) and the same top blocks: the
+    same candidate sets as the slices + maximum + pin ops."""
 
     def __init__(self, mesh, w, cfg, ratio: int, rope: RopeTable, chunk: int):
         super().__init__(mesh, w, cfg, ratio, rope, chunk)
@@ -320,13 +352,41 @@ class TtCandidateIndexer(TtIndexer):
         dims = (0, 1) if SP_AXIS == 0 else (1, 0)
         self.row_pos = _upload(mesh, rows.float().reshape(sp, tp, sq, 1), ttnn.float32, dims=dims)  # [1, 1, Sq, 1]
         self._cols = {}  # capacity T -> block-column iota [1, 1, 1, ceil32(T / block)] fp32
+        self._bmax = {}  # INDEXER_GLUE=on: capacity T -> the score op's block-max buffer [1, 1, Sq, ceil32(T / 8)] fp32
 
     def setup(self, cache) -> None:
         super().setup(cache)
         t = self._capacity(cache)
+        nb = -(-(t // self.block) // 32) * 32
+        if self.glue:
+            if t not in self._bmax:  # written by every call's score op (block_max_out), read by the top blocks
+                self._bmax[t] = ttnn.allocate_tensor_on_device(
+                    ttnn.Shape([1, 1, self.sq, nb]), ttnn.float32, ttnn.ROW_MAJOR_LAYOUT, self.mesh, DRAM
+                )
+            return
         if t not in self._cols:
-            nb = -(-(t // self.block) // 32) * 32
             self._cols[t] = _upload(self.mesh, torch.arange(nb, dtype=torch.float32).reshape(1, 1, 1, nb), ttnn.float32)
+
+    def _candidates_glue(self, kv_len: int, t: int) -> ttnn.Tensor:
+        """INDEXER_GLUE=on (P.16): the candidate pool from the block maxes the score op wrote (its block epilogue:
+        max over each block's 8 bf16 scores as fp32, +inf at each query's own block; the old path's pin was +1e30
+        in bf16: the same selection) -> bf16 (exact) -> top ctopk blocks of the first kv_len / 8."""
+        nbv = kv_len // self.block
+        bm = self._bmax[t]
+        if nbv >= self.ctopk:
+            rm = ttnn.typecast(bm, ttnn.bfloat16, memory_config=DRAM)
+            out = ttnn.experimental.topk_large_indices(rm, k=self.ctopk, valid_length=nbv)
+            ttnn.deallocate(rm)
+            return out
+        sl = ttnn.slice(bm, [0, 0, 0, 0], [1, 1, self.sq, nbv], memory_config=DRAM)  # fewer blocks than k: pad -inf
+        rm = ttnn.typecast(sl, ttnn.bfloat16, memory_config=DRAM)
+        if not _same(sl, bm):  # DS41-52: a full-range slice is a wrapper over the persistent buffer
+            ttnn.deallocate(sl)
+        padded = ttnn.pad(rm, [(0, 0), (0, 0), (0, 0), (0, self.ctopk - nbv)], value=float("-inf"))
+        ttnn.deallocate(rm)
+        out = ttnn.experimental.topk_large_indices(padded, k=self.ctopk)
+        ttnn.deallocate(padded)
+        return out
 
     def candidates_of(self, logits: ttnn.Tensor, kv_len: int, start: int, t: int) -> ttnn.Tensor:
         """The chip's candidate blocks [1, 1, Sq, ctopk] uint32 from its scores (does not consume them)."""
@@ -380,6 +440,14 @@ class TtCandidateIndexer(TtIndexer):
         return out
 
     def forward(self, x: ttnn.Tensor, qr: ttnn.Tensor, start: int, cache) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        if self.glue:  # INDEXER_GLUE=on (P.16): the block maxes come out of the score op (fork block epilogue)
+            t = self._capacity(cache)
+            ep = dict(block_keys=self.block, block_max_out=self._bmax[t], block_max_pin=True)
+            logits, kv_len = self.scores(x, qr, start, cache, **ep)
+            cands = self._candidates_glue(kv_len, t)
+            out = self.topk_of(logits, kv_len)
+            ttnn.deallocate(logits)
+            return out, cands
         logits, kv_len = self.scores(x, qr, start, cache)
         cands = self.candidates_of(logits, kv_len, start, self._capacity(cache))
         out = self.topk_of(logits, kv_len)
@@ -407,7 +475,11 @@ class TtReindexer(TtIndexer):
         top-k    topk_large_indices(k 512) -> all_gather over axis 1 -> [1, 1, W, 512] uint32 (-inf -> 0xFFFFFFFF)
 
     A query sees at least min(pos + 1, 2047 x 8 + 1) candidate keys, so -inf never fills the 512 where the
-    reference would count a masked key (its ``idx < lens`` keeps them) except below 512 visible keys, where both pad."""
+    reference would count a masked key (its ``idx < lens`` keeps them) except below 512 visible keys, where both pad.
+
+    INDEXER_GLUE=on (P.16): the bias (the same scatter, then tiled) goes into the score op (ring_indexer_score_dsa's
+    block epilogue: block_keys 8, block_bias): its writer writes -inf over every key of a non-candidate block, so the
+    scores come out masked (no repeat_interleave, slice or add)."""
 
     def __init__(self, mesh, w, cfg, ratio: int, rope: RopeTable, chunk: int):
         super().__init__(mesh, w, cfg, ratio, rope, chunk)
@@ -421,7 +493,9 @@ class TtReindexer(TtIndexer):
         super().setup(cache)
         t = self._capacity(cache)
         if t not in self._neg:
-            nb = -(-(t // self.block) // 16) * 16  # 32-byte ROW_MAJOR pages
+            # 32-byte ROW_MAJOR pages; INDEXER_GLUE=on: 64-byte (the score op reads the bias in DRAM-aligned windows)
+            al = 32 if self.glue else 16
+            nb = -(-(t // self.block) // al) * al
             self._neg[t] = _upload(
                 self.mesh, torch.full((1, 1, self.sq, nb), float("-inf")), ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT
             )
@@ -447,6 +521,15 @@ class TtReindexer(TtIndexer):
         """attn_norm, q_resid as TtIndexer; ``cands`` the candidate source's pool of the chip's Sq query rows
         [1, 1, Sq, 2048] uint32 ROW_MAJOR (read, not consumed) -> top-k [1, 1, W, 512] uint32, gathered over TP."""
         t = self._capacity(cache)
+        if self.glue:  # INDEXER_GLUE=on (P.16): the score op applies the block bias itself (fork block epilogue)
+            brm = ttnn.scatter(self._neg[t], -1, cands, self.src, memory_config=DRAM)  # [1, 1, Sq, NB]: 0 / -inf
+            bias = ttnn.to_layout(brm, ttnn.TILE_LAYOUT, memory_config=DRAM)  # the op reads it by tiles
+            ttnn.deallocate(brm)
+            logits, kv_len = self.scores(x, qr, start, cache, block_keys=self.block, block_bias=bias)
+            ttnn.deallocate(bias)
+            out = self.topk_of(logits, kv_len)
+            ttnn.deallocate(logits)
+            return out
         logits, kv_len = self.scores(x, qr, start, cache)
         lg = ttnn.slice(logits, [0, 0, 0, 0], [1, 1, self.sq, kv_len], memory_config=DRAM)
         bias = self.bias_of(cands, kv_len, t)
