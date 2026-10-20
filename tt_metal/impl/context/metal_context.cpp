@@ -163,6 +163,10 @@ void MetalContext::initialize(
     if (MetalEnvAccessor(*env_).impl().consume_force_reinit()) {
         force_reinit_ = true;
     }
+    // After an L1 ECC halt, tear down so the dispatch cores stuck on the halted worker are reset.
+    if (l1_ecc_halt_detected()) {
+        force_reinit_ = true;
+    }
 
     const size_t fw_compile_hash = std::hash<std::string>{}(rtoptions().get_compile_hash_string());
     validate_worker_l1_size(worker_l1_size, hal());
@@ -205,6 +209,9 @@ void MetalContext::initialize(
             }
         }
     }
+    // Firmware init either fails (a BRISC still halted, which needs tt-smi -r) or re-arms every core with a zeroed
+    // record.
+    set_l1_ecc_halt_detected(false);
 
     initialized_ = true;
 

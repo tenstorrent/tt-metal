@@ -150,6 +150,15 @@ HalCoreInfoType create_tensix_mem_map() {
     };
     std::vector<uint8_t> processor_classes_num_fw_binaries = {/*DM*/ 2, /*COMPUTE*/ 3};
 
+    std::vector<uint32_t> tensix_debug_regs(static_cast<std::size_t>(TensixDebugReg::COUNT), 0);
+    tensix_debug_regs[ttsl::as_underlying_type<TensixDebugReg>(TensixDebugReg::L1_ECC_CTRL)] = RISCV_DEBUG_REG_ECC_CTRL;
+    tensix_debug_regs[ttsl::as_underlying_type<TensixDebugReg>(TensixDebugReg::L1_ECC_STATUS)] =
+        RISCV_DEBUG_REG_ECC_STATUS;
+    tensix_debug_regs[ttsl::as_underlying_type<TensixDebugReg>(TensixDebugReg::BRISC_INT_NO)] =
+        static_cast<uint32_t>(reinterpret_cast<uintptr_t>(RISC_PIC_BRISC_INT_NO));
+    tensix_debug_regs[ttsl::as_underlying_type<TensixDebugReg>(TensixDebugReg::PIC_HW_INT_3)] =
+        static_cast<uint32_t>(reinterpret_cast<uintptr_t>(RISC_PIC_HW_INTS + 3));
+
     static_assert(sizeof(mailboxes_t) <= MEM_MAILBOX_SIZE);
     return {
         HalProgrammableCoreType::TENSIX,
@@ -165,7 +174,9 @@ HalCoreInfoType create_tensix_mem_map() {
         true /*supports_receiving_multicast_cmds*/,
         tensix_dev_msgs::create_factory(),
         tensix_fabric_telemetry::create_factory(),
-        tensix_realtime_profiler_msgs::create_factory()};
+        tensix_realtime_profiler_msgs::create_factory(),
+        {} /*eth_debug_regs*/,
+        std::move(tensix_debug_regs)};
 }
 
 }  // namespace tt::tt_metal::blackhole

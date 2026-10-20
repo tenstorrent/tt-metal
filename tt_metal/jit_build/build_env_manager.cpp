@@ -193,6 +193,11 @@ uint64_t compute_build_key(const JitDeviceConfig& config, const llrt::RunTimeOpt
 
     hasher.update(rtoptions.get_compile_hash_string());
 
+    // -DL1_ECC_HALT changes Blackhole firmware, and pre-compiled firmware is found by key alone.
+    if (config.arch == tt::ARCH::BLACKHOLE) {
+        hasher.update(static_cast<uint32_t>(rtoptions.get_l1_ecc_halt_enabled()));
+    }
+
     return hasher.digest();
 }
 

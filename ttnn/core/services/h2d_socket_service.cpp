@@ -25,6 +25,7 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/host_buffer.hpp>
+#include <internal/l1_ecc_halt.hpp>
 #include <internal/service/service_core_manager.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/memory_pin.hpp>
@@ -1075,12 +1076,14 @@ void H2DStreamService::barrier() {
     TT_FATAL(completion_issued_ != nullptr, "H2DStreamService::barrier: completion issued counter unavailable");
     tt_driver_atomics::mfence();
     const uint32_t target = *completion_issued_;
+    tt::tt_metal::internal::L1EccHaltWatch ecc_watch(mesh_device_.get());
     for (auto* counter : completion_counters_) {
         while (true) {
             tt_driver_atomics::mfence();
             if (static_cast<uint32_t>(target - *counter) == 0) {
                 break;
             }
+            ecc_watch.stalled();
         }
     }
 }

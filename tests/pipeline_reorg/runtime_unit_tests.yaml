@@ -153,6 +153,7 @@
     ./tests/scripts/run_tools_tests.sh
     ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter='-{disabled_debug_tools_filter}'
     ./build/test/tt_metal/unit_tests_inspector --gtest_filter='*'
+    ./tests/scripts/run_l1_ecc_halt_watchdog_test.sh
   skus:
     wh_n150_civ2:
       timeout: 12

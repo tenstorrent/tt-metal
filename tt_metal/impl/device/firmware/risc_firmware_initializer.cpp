@@ -17,6 +17,7 @@
 #include <tt_stl/assert.hpp>
 
 #include "context/metal_context.hpp"
+#include "debug/l1_ecc_halt.hpp"
 #include "impl/context/context_descriptor.hpp"
 #include "core_coord.hpp"
 #include "hal_types.hpp"
@@ -236,6 +237,8 @@ void RiscFirmwareInitializer::run_launch_phase(const std::set<tt::ChipId>& devic
                         virtual_core.y);
                 }
             }
+            internal::check_no_halted_brisc_at_init(descriptor_->metal_context(), device_id);
+            internal::clear_l1_ecc_halt_records(descriptor_->metal_context(), device_id);
             reset_cores(device_id);
             initialize_and_launch_firmware(device_id);
         }
@@ -281,6 +284,12 @@ void RiscFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& /*ini
             } catch (const std::runtime_error& e) {
                 log_warning(
                     tt::LogMetal, "Skipping RISC reset on device {} during teardown: {}", device_id, e.what());
+            }
+            try {
+                internal::report_l1_ecc_at_close(descriptor_->metal_context(), device_id);
+            } catch (const std::runtime_error& e) {
+                log_warning(
+                    tt::LogMetal, "Skipping L1 ECC report on device {} during teardown: {}", device_id, e.what());
             }
         }
         // Set internal routing to false to exit active ethernet FW & go back to base FW

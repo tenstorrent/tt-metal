@@ -385,6 +385,18 @@ struct watcher_msg_t {
     struct debug_ring_buf_msg_t debug_ring_buf;
 };
 
+// Written by the Blackhole BRISC L1 ECC interrupt handler before it halts the core; reason values are in
+// hostdev/l1_ecc_halt_constants.h.
+struct l1_ecc_halt_msg_t {
+    volatile uint32_t reason;
+    volatile uint32_t ecc_ctrl;
+    volatile uint32_t l1_and_local_mem_counts;             // ECC_STATUS view 1
+    volatile uint32_t icache_and_ncrisc_local_mem_counts;  // ECC_STATUS view 5
+    volatile uint32_t last_l1_error;                       // ECC_STATUS view 3
+    volatile uint32_t last_l1_error_banks_16_31;           // ECC_STATUS view 6
+    volatile uint32_t program_id;
+};
+
 // NOC alignment max from BH
 constexpr uint32_t TT_ARCH_MAX_NOC_WRITE_ALIGNMENT = 16;
 
@@ -474,6 +486,7 @@ struct mailboxes_t {
     struct DevicePrintMemoryLayout dprint_buf;  // CODEGEN:skip
     struct core_info_msg_t core_info;
     uint32_t aerisc_run_flag;  // 1: run active ethernet firmware, 0: return to base firmware (active erisc)
+    struct l1_ecc_halt_msg_t l1_ecc_halt;
     alignas(TT_ARCH_MAX_NOC_WRITE_ALIGNMENT)  // CODEGEN:skip
         profiler_msg_t profiler;
 };
