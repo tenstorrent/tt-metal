@@ -351,10 +351,17 @@ uint32_t finalize_cbs(
 }
 
 void finalize_dfb_masks(
+    const MetalContext& metal_ctx,
     std::vector<std::shared_ptr<KernelGroup>>& kernel_groups,
     const std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>>& dataflow_buffers) {
     for (auto& kg : kernel_groups) {
         auto kernel_config = kg->launch_msg.view().kernel_config();
+        if (metal_ctx.hal().has_tile_counter_registers()) {
+            if (kg->num_local_dfbs != 0) {
+                kernel_config.local_cb_mask() = kg->num_local_dfbs;
+            }
+            continue;
+        }
         uint64_t kg_dfb_mask = 0;
         for (const auto& dfb : dataflow_buffers) {
             for (const CoreRange& kg_range : kg->core_ranges.ranges()) {
@@ -1682,6 +1689,16 @@ public:
                         device->virtual_core_from_logical_core(core_range.end_coord, CoreType::WORKER);
                     CoreRange virtual_range(virtual_start, virtual_end);
                     auto noc_xy_addr = device->get_noc_multicast_encoding(constants.noc_index, virtual_range);
+                    LOG_TRACE_LAZY(
+                        tt::LogDispatch,
+                        "CrossNodeDFB Index (MCAST): logical_range={}, virtual_range={}, noc_xy=0x{:x}, num_dests={}, "
+                        "L1_addr=0x{:x}, size={} bytes",
+                        core_range,
+                        virtual_range,
+                        noc_xy_addr,
+                        core_range.size(),
+                        start_addr,
+                        payload_bytes);
 
                     batched_transfers[std::make_pair(noc_xy_addr, core_range.size())][start_addr] =
                         std::vector<Transfer>{
@@ -1711,6 +1728,15 @@ public:
                             page_bytes,
                             gdfb.config_buffer().page_size());
                         const uint32_t page_addr = participant.config_page_addr;
+                        LOG_TRACE_LAZY(
+                            tt::LogDispatch,
+                            "CrossNodeDFB Config Page (UNICAST): logical_core={}, virtual_core={}, noc_xy=0x{:x}, "
+                            "L1_addr=0x{:x}, size={} bytes",
+                            logical_core,
+                            virtual_core,
+                            noc_xy_addr,
+                            page_addr,
+                            page_bytes);
                         absolute_config_transfers[std::make_pair(noc_xy_addr, /*num_dests=*/1u)][page_addr] =
                             std::vector<Transfer>{
                                 {.start = page_addr,
@@ -1766,6 +1792,16 @@ public:
                         device->virtual_core_from_logical_core(core_range.end_coord, CoreType::WORKER);
                     CoreRange virtual_range(virtual_start, virtual_end);
                     auto noc_xy_addr = device->get_noc_multicast_encoding(constants.noc_index, virtual_range);
+                    LOG_TRACE_LAZY(
+                        tt::LogDispatch,
+                        "PrefetcherPipe Index (MCAST): logical_range={}, virtual_range={}, noc_xy=0x{:x}, "
+                        "num_dests={}, L1_addr=0x{:x}, size={} bytes",
+                        core_range,
+                        virtual_range,
+                        noc_xy_addr,
+                        core_range.size(),
+                        start_addr,
+                        payload_bytes);
 
                     batched_transfers[std::make_pair(noc_xy_addr, core_range.size())][start_addr] =
                         std::vector<Transfer>{

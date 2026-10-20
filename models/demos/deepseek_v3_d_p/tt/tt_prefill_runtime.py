@@ -13,10 +13,11 @@ from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
+from models.demos.common.prefill.runners.layer_completion_ring_writer import NullLayerCompletionSink
 from models.demos.common.prefill.runners.runner_utils import (
+    MTP_ID_ROWS,
     d2d_activation_rows,
     d2d_activation_width,
-    mtp_union_rows,
     num_mtp_tokens,
 )
 from models.demos.deepseek_v3_d_p.tt.dflash_prefill.dflash_drafter_config import DFlashDrafterConfig
@@ -26,6 +27,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.rope import ChunkMetadata, _llama4_scal
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE
 from models.demos.deepseek_v3_d_p.tt.mtp_prefill.device_windows import MTPUnionEmbedding
+from models.demos.deepseek_v3_d_p.tt.mtp_prefill.id_transport import pack_ids, unpack_ids
 from models.demos.deepseek_v3_d_p.tt.mtp_prefill.mtp_config import MTPConfig
 from models.demos.deepseek_v3_d_p.tt.mtp_prefill.trace_geometry import MTPTraceGeometry
 from models.demos.deepseek_v3_d_p.tt.mtp_prefill.tt_mtp import TtMTPPredictor
@@ -147,10 +149,7 @@ class TtPrefillRuntime:
         self.config = config
         assert config.model_cfg is not None, "TtPrefillRuntimeConfig.model_cfg must be set by the model adapter"
         self._on_layer_complete = None
-        # Per-layer completion sink (pipelined mode), set by set_layer_completion_sink().
-        # Signature: sink(layer_idx, request_id). prefill() binds the current request_id into
-        # a fresh per-call closure, so there is no shared mutable chunk-index for the callback
-        # to race on (immune even if the threading model changes).
+        # Completion sink for pipelined mode (set_layer_completion_sink), fired from prefill_chunk's per-call closure.
         self._layer_completion_sink = None
         # DFlash drafter, built in _build_model when config.dflash_enabled (else all None and prefill_chunk's
         # dflash branches are inert). Its tap closure + last-rank K/V caches are set there.
@@ -182,10 +181,9 @@ class TtPrefillRuntime:
         #   _trace_output     — persistent output activation (non-last rank only; read by the D2D send)
         #   _trace_captured   — flips True once capture_trace() records the segmented capture (single-shot)
         #   _kv_cache         — the engine cache handle from compile(), used by capture_trace()
-        #   _trace_request_id — the request/chunk id of the replay in flight. The controller's per-layer
-        #                       callback is fixed at capture time, so a traced run cannot bind request_id
-        #                       into a fresh closure per call (the eager path does); prefill_chunk()
-        #                       publishes it here and set_layer_completion_sink()'s callback reads it.
+        #   _trace_slot_id / _trace_pos_* — the chunk of the replay in flight. The controller's callback is
+        #                       fixed at capture time, so prefill_chunk() publishes the fields here and the
+        #                       captured callback reads them.
         self._controller = None
         self._trace_input = None
         self._trace_metadata = None
@@ -198,10 +196,12 @@ class TtPrefillRuntime:
         self._send_warmup_activation = None
         self._trace_captured = False
         self._kv_cache = None
-        self._trace_request_id = 0
         #   _llama4_scale_by_offset — Mistral only: one pre-built query-scale buffer per chunk offset,
         #                       device-to-device copied into _trace_metadata's buffer each chunk
         self._llama4_scale_by_offset: dict[int, ttnn.Tensor] = {}
+        self._trace_slot_id = 0
+        self._trace_pos_start = 0
+        self._trace_pos_end = 0
 
         self._build_model(state_dict)
 
@@ -483,38 +483,50 @@ class TtPrefillRuntime:
         partial = ttnn.slice(packed, [0, 0, 0, half], [s0, s1, s2, s3])
         return hidden, partial
 
-    def _mtp_pack_activation(self, hidden: ttnn.Tensor, union_parts: list) -> ttnn.Tensor:
-        """Fuse this rank's output hidden and the chunk's union embedding into one D2D activation,
-        stacking them on the row axis. Consumes the hidden, not the union's blocks.
-        """
-        packed = ttnn.concat([hidden, *union_parts], dim=2)
+    def _mtp_pack_activation(self, hidden: ttnn.Tensor, ids_block: ttnn.Tensor) -> ttnn.Tensor:
+        """Fuse this rank's output hidden and the chunk's MTP id block into one D2D activation, stacking
+        them on the row axis. Consumes the hidden, not the block."""
+        packed = ttnn.concat([hidden, ids_block], dim=2)
         ttnn.deallocate(hidden)
         return packed
 
     def _mtp_unpack_activation(self, packed: ttnn.Tensor) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
-        """Inverse of :meth:`_mtp_pack_activation`. Does not free ``packed`` -- the caller does.
-
-        The split point comes from the config rather than from halving the height.
-        """
+        """Inverse of :meth:`_mtp_pack_activation`: ``(hidden, id block)``. Does not free ``packed``."""
         rows = self.config.chunk_size // self.config.sp_factor
-        union_rows = mtp_union_rows(self.config.chunk_size, self.config.sp_factor, self.config.mtp_levels)
         s0, s1, s2, s3 = packed.shape
-        assert s2 == rows + union_rows, (
-            f"D2D activation is {s2} rows per chip, expected L + (L + num_mtp_tokens) = {rows} + {union_rows}. "
+        assert s2 == rows + MTP_ID_ROWS, (
+            f"D2D activation is {s2} rows per chip, expected L + {MTP_ID_ROWS} id rows = {rows + MTP_ID_ROWS}. "
             "The sending rank and this one disagree on PREFILL_MTP_LEVELS, or the socket was built "
             "without it."
         )
         hidden = ttnn.slice(packed, [0, 0, 0, 0], [s0, s1, rows, s3])
-        union = ttnn.slice(packed, [0, 0, rows, 0], [s0, s1, s2, s3])
-        return hidden, union
+        ids_block = ttnn.slice(packed, [0, 0, rows, 0], [s0, s1, s2, s3])
+        return hidden, ids_block
 
-    def _mtp_prepare_input(
-        self, input_tensor: ttnn.Tensor, mtp_tokens: Optional[ttnn.Tensor]
-    ) -> Tuple[MTPUnionEmbedding, ttnn.Tensor]:
-        """Turn what arrived into ``(union embedding, model input)``.
+    def _mtp_ids_block(self, chunk_ids: ttnn.Tensor, mtp_ids: ttnn.Tensor) -> ttnn.Tensor:
+        """Pack the first rank's ids for the next rank."""
+        width = d2d_activation_width(self.hf_config.hidden_size) // self.config.tp_factor
+        return pack_ids(chunk_ids, mtp_ids, vocab_size=self.hf_config.vocab_size, width=width)
 
-        First rank: gather the two id tensors the H2D row was cut into, and hand the trunk gather back
-        as the model input so the transformer skips its own. Downstream: unpack it off the hidden.
+    def _mtp_union_from_ids_block(self, ids_block: ttnn.Tensor) -> MTPUnionEmbedding:
+        """Gather the last rank's union from the id block. Does not free the block."""
+        chunk_ids, mtp_ids = unpack_ids(
+            ids_block,
+            num_chunk_ids=self.config.chunk_size // self.config.sp_factor,
+            num_mtp_ids=self._num_mtp_tokens(),
+        )
+        union = MTPUnionEmbedding.from_ids(
+            chunk_ids, mtp_ids, self.model.mtp_embed_ids, num_levels=self.config.mtp_levels
+        )
+        ttnn.deallocate(chunk_ids)
+        ttnn.deallocate(mtp_ids)
+        return union
+
+    def _mtp_prepare_input(self, input_tensor: ttnn.Tensor, mtp_tokens: Optional[ttnn.Tensor]) -> tuple:
+        """Return ``(union or None, model input, id block to forward or None)``.
+
+        First rank: gather the union from the H2D ids and use its trunk as the model input. Downstream:
+        unpack the id block; only the last rank gathers the union from it.
         """
         k = self.config.mtp_levels
         if self.config.is_first_rank:
@@ -523,14 +535,18 @@ class TtPrefillRuntime:
                 "both out of one H2D row (see runner_utils.make_h2d_spec)"
             )
             union = MTPUnionEmbedding.from_ids(input_tensor, mtp_tokens, self.model.mtp_embed_ids, num_levels=k)
+            ids_block = None if self.config.is_last_rank else self._mtp_ids_block(input_tensor, mtp_tokens)
             ttnn.deallocate(input_tensor)
             ttnn.deallocate(mtp_tokens)
-            return union, union.trunk
+            return union, union.trunk, ids_block
         assert mtp_tokens is None, "only the first rank receives H2D MTP ids"
-        hidden, union = self._mtp_unpack_activation(input_tensor)
+        hidden, ids_block = self._mtp_unpack_activation(input_tensor)
         ttnn.deallocate(input_tensor)
-        window_len = self.config.chunk_size // self.config.sp_factor
-        return MTPUnionEmbedding.from_embedding(union, k, window_len), hidden
+        if not self.config.is_last_rank:
+            return None, hidden, ids_block
+        union = self._mtp_union_from_ids_block(ids_block)
+        ttnn.deallocate(ids_block)
+        return union, hidden, None
 
     def make_placeholder_activation(self, dflash_packed: bool = True) -> ttnn.Tensor:
         """Allocate a zero activation matching what the D2D socket delivers, per chip.
@@ -630,7 +646,7 @@ class TtPrefillRuntime:
             # KV-writing layer on every model. That is bounded, once per process, and buys back
             # the 5.8 s above.
             prev_sink = self._layer_completion_sink
-            self._layer_completion_sink = lambda *_args, **_kwargs: None
+            self._layer_completion_sink = NullLayerCompletionSink()
             try:
                 self.prefill_chunk(
                     tt_input, kv_caches, slot_id=0, actual_start=0, actual_end=chunk, mtp_tokens=tt_mtp_tokens
@@ -793,17 +809,23 @@ class TtPrefillRuntime:
             if not self.config.is_first_rank:
                 self.drafter.import_partial(self._trace_partial_in, owned=False)
         model_input = self._trace_input
-        union = None
-        if self.config.mtp_levels:
+        union = ids_block = None
+        mtp = bool(self.config.mtp_levels)
+        if mtp:
             k = self.config.mtp_levels
             if self.config.is_first_rank:
                 union = MTPUnionEmbedding.from_ids(
                     self._trace_input, self._trace_mtp_tokens, self.model.mtp_embed_ids, num_levels=k
                 )
                 model_input = union.trunk
+                if not self.config.is_last_rank:
+                    ids_block = self._mtp_ids_block(self._trace_input, self._trace_mtp_tokens)
             else:
-                model_input, received = self._mtp_unpack_activation(self._trace_input)
-                union = MTPUnionEmbedding.from_embedding(received, k, self.config.chunk_size // self.config.sp_factor)
+                model_input, ids_block = self._mtp_unpack_activation(self._trace_input)
+                if self.config.is_last_rank:
+                    union = self._mtp_union_from_ids_block(ids_block)
+                    ttnn.deallocate(ids_block)
+                    ids_block = None
         out = self.model.forward(
             model_input,
             kv_caches.kvpe,  # unwrap the engine-owned container to the primary MLA cache (mirrors prefill_chunk)
@@ -826,14 +848,15 @@ class TtPrefillRuntime:
             mtp_geometry=self._trace_mtp_geometry,
             input_is_embedded=union is not None and self.config.is_first_rank,
         )
-        if union is not None:
+        if mtp:
             if not self.config.is_first_rank:
                 ttnn.deallocate(model_input)
-            if self.config.is_last_rank:
+            if union is not None:
                 union.deallocate()
+            if self.config.is_last_rank:
                 return None
-            packed = self._mtp_pack_activation(out, union.parts)
-            union.deallocate()
+            packed = self._mtp_pack_activation(out, ids_block)
+            ttnn.deallocate(ids_block)
             return packed
         if not dflash:
             return out
@@ -948,13 +971,14 @@ class TtPrefillRuntime:
         self._send_warmup_activation = self._forward_traced(kv_caches)
         ttnn.synchronize_device(self.mesh_device)
 
-    def _layer_complete_cb(self, request_id: int):
+    def _layer_complete_cb(self, slot_id, actual_start, actual_end):
+        """Fresh per-call closure so the synchronously fired sink reads no shared state; this model fires per layer."""
         if self._layer_completion_sink is None:
             return self._on_layer_complete
         sink = self._layer_completion_sink
 
         def on_layer_complete(layer_idx: int) -> None:
-            sink(layer_idx, request_id)
+            sink.layers_completed(layer_idx, layer_idx + 1, slot_id, actual_start, actual_end)
 
         return on_layer_complete
 
@@ -1007,8 +1031,7 @@ class TtPrefillRuntime:
             actual_start: absolute KV pos of the chunk's first real token (the cache write offset). None
                 on the traced path.
             actual_end: absolute KV pos past the chunk's last real token. None on the traced path.
-            request_id: this chunk's request/chunk id. Only the pipelined layer-completion sink uses it
-                (to build the globally-dense ordering key); the single-host layer-ack paths ignore it.
+            request_id: the engine's chunk counter, part of the runner's call contract; unused here.
             d2h_service: optional service used to send a layer-ack completion signal back to host once
                 each layer's KV cache has been populated on device. When set, each block zeros the cache
                 pad window and enqueues the ack via the outbound_socket_service_sync device op on the same
@@ -1067,20 +1090,19 @@ class TtPrefillRuntime:
                 "use_trace: pass the D2H layer-ack service to set_d2h_ack_service() before capture_trace(); "
                 "the per-call argument cannot reach a recorded device op"
             )
-            # Per-layer completion callbacks live on the CONTROLLER, registered once at capture time (a
-            # host-side callback cannot execute inside a trace, so the capture splits at each ack point).
-            # That means the pipelined sink's request_id cannot be re-bound per call the way the eager
-            # path does below — publish this chunk's id instead; the captured callback built by
-            # set_layer_completion_sink() reads it at replay time.
+            # Under trace the completion callback is registered on the controller at capture time, so the
+            # per-chunk fields are published for it here instead of bound per call as the eager path does.
             assert on_mtp_complete is None, (
                 "use_trace: on_mtp_complete is a host callback and cannot fire from a replay; the MTP "
                 "outputs stay on device"
             )
-            self._trace_request_id = request_id
             assert metadata_msg is not None, (
                 "use_trace: prefill_chunk needs the packed metadata_msg to populate the per-chunk metadata "
                 "on-device (the traced serving loop always carries it; the eager warm-up passes host ints)"
             )
+            self._trace_slot_id = slot_id
+            self._trace_pos_start = actual_start
+            self._trace_pos_end = actual_end
 
             if self._trace_mtp_geometry is not None:
                 # The geometry is still built on host, so the last rank needs the chunk's host scalars.
@@ -1089,7 +1111,12 @@ class TtPrefillRuntime:
                     actual_end,
                 ), "traced MTP needs actual_start/actual_end on host to build the level geometry"
                 self._trace_mtp_geometry.write(actual_start, actual_end, provided_levels)
-                mtp_variant = "provided" if provided_levels == self.config.mtp_levels else "generate"
+                if provided_levels < self.config.mtp_levels:
+                    mtp_variant = "generate"
+                elif self._trace_mtp_geometry.has_split_chip and self._trace_mtp_geometry.split is None:
+                    mtp_variant = "provided_aligned"
+                else:
+                    mtp_variant = "provided"
             else:
                 mtp_variant = None
             # The scalars are consumed on-device from metadata_msg; the host ints are not read for
@@ -1126,10 +1153,10 @@ class TtPrefillRuntime:
             # driver to forward downstream over D2D. Last/single rank: the populated KV cache is the output.
             return None if self.config.is_last_rank else self._trace_output
 
-        on_layer_complete = self._layer_complete_cb(request_id)
+        on_layer_complete = self._layer_complete_cb(slot_id, actual_start, actual_end)
 
         model_input = input_tensor
-        mtp_union = None
+        mtp_union = mtp_ids_block = None
         mtp_owns_input = False
         if self.config.dflash_enabled:
             self.drafter.reset()
@@ -1138,7 +1165,7 @@ class TtPrefillRuntime:
                 ttnn.deallocate(input_tensor)
                 self.drafter.import_partial(partial)
         elif self.config.mtp_levels:
-            mtp_union, model_input = self._mtp_prepare_input(input_tensor, mtp_tokens)
+            mtp_union, model_input, mtp_ids_block = self._mtp_prepare_input(input_tensor, mtp_tokens)
             mtp_owns_input = self.config.is_first_rank
 
         out = self.model.forward(
@@ -1183,12 +1210,13 @@ class TtPrefillRuntime:
             # Non-last rank: pack this rank's finalized FC partial alongside the hidden for the next rank.
             return self._pack_activation(out, self.drafter.export_partial())
 
-        if mtp_union is not None:
-            if self.config.is_last_rank:
+        if self.config.mtp_levels:
+            if mtp_union is not None:
                 mtp_union.deallocate()
+            if self.config.is_last_rank:
                 return None
-            packed = self._mtp_pack_activation(out, mtp_union.parts)
-            mtp_union.deallocate()
+            packed = self._mtp_pack_activation(out, mtp_ids_block)
+            ttnn.deallocate(mtp_ids_block)
             return packed
 
         # Non-last rank: forward returns the hidden-state activation to forward downstream.
@@ -1283,8 +1311,8 @@ class TtPrefillRuntime:
         layers emit.
 
         Under DFlash the drafter's context K/V are further caches the migration consumer must see filled, so
-        they ack as layers past the verifier's last one. Every rank must agree on the GLOBAL count — the
-        master router's reorder buffer keys on ``chunk * global + layer`` and demands a dense sequence — but
+        they ack as layers past the verifier's last one. Every rank must agree on the GLOBAL count — it is the
+        per-chunk record count the router publishes in the ring header and the consumer retires a chunk on — but
         only the KV-tail rank writes those layers, so only its LOCAL count grows.
 
         MTP widens it the same way: ``kv_migration_stages`` puts its K slots in the last rank's stage, so
@@ -1610,31 +1638,19 @@ class TtPrefillRuntime:
         )
 
     def set_layer_completion_sink(self, sink) -> None:
-        """Register a per-layer completion sink for pipelined prefill.
-
-        `sink` is called once per layer as `sink(layer_idx, request_id)` — the
-        global layer index plus the current request/chunk id, which prefill()
-        binds per call (so the sink need not read any mutable runtime state). It
-        replaces the direct counter-channel inject used in single-host mode:
-        instead of bumping a counter, the runner pushes a full completion
-        {seq, source_rank, layer_idx, request_id} into the host-local
-        LayerCompletionQueue, and the LayerCompletionRouter routes it to the
-        master host and re-emits it (in seq order) into the scheduler-facing
-        counter channel (see ttnn._experimental.layer_completion).
-
-        use_trace: the callback must be known at CAPTURE time (a host push cannot live inside a
-        trace), so it is registered on the controller and the eager capture is re-recorded to split at
-        each ack point. The per-call request_id closure the eager path uses is not available there, so
-        the captured callback reads _trace_request_id, which prefill_chunk() publishes before each
-        replay.
-        """
+        """Register the completion sink for pipelined prefill. Once per completion event the runtime fires
+        `sink.layers_completed(layer_start, layer_end, slot_id, actual_start, actual_end)`, one
+        layer at a time here, with the chunk's fields bound per prefill_chunk() call. Under trace the captured
+        callback reads the published `_trace_*` fields instead."""
         assert self.compiled or self.config.use_trace, "Call compile() before set_layer_completion_sink()"
         self._layer_completion_sink = sink
         if not self.config.use_trace:
             return
 
         def on_layer_complete(layer_idx: int) -> None:
-            sink(layer_idx, self._trace_request_id)
+            sink.layers_completed(
+                layer_idx, layer_idx + 1, self._trace_slot_id, self._trace_pos_start, self._trace_pos_end
+            )
 
         # Route the traced path through the same controller hook the LayerAck channel uses, so the
         # capture is segmented at every completion point.

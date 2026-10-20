@@ -1793,7 +1793,7 @@
 
 
 # Single-galaxy (SC1) GLM-5.3 MTP1 prefill KV accuracy, same launcher as the SC4 entry above and the
-# control for it: one rank skips the D2D union-embedding transport, so a failure here is MTP1 itself.
+# control for it: one rank skips the D2D union-id transport, so a failure here is MTP1 itself.
 - name: "(GLM-5.3-744B) MTP1 prefill KV accuracy + perf 55k@5k, SC1"
   cmd: |
     set -euo pipefail
