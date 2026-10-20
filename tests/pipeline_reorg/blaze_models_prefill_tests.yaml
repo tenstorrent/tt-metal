@@ -2059,6 +2059,31 @@
   sp_config: sc4
 
 
+# The multi-user counterpart of the leg above, as Kimi-K2.7's DFlash leg allocates 68 slots: traced K3 holds one
+# KDA slot, so this one runs eager. 64 slots are allocated (measured to fit at 256k); slot 0 is PCC'd.
+- name: "(Kimi-K3-2.8T) DSpark drafter KV accuracy, eager 64 users, 55k@5k + perf 250k@5k, SC4"
+  cmd: |
+    set -euo pipefail
+    export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
+    if [ ! -f "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" ]; then
+      cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
+    fi
+    cd "${TT_METAL_HOME}"
+    exec bash models/demos/common/prefill/runners/ci/run_multirank_dflash_pcc.sh kimi_k3_eager sc4
+  test_type: k3_dspark_eager_runner
+  test_tags: [kimi_k3, runner, kv_cache, dflash, dspark]
+  test_group: disagg_prefill
+  skus:
+    bh_sc4:
+      timeout: 200
+      tier: 1
+      release_ready: false
+  owner_id: U0ACLAM77PS  # Kosta Grujcic
+  team: shield
+  budget_type: demo
+  sp_config: sc4
+
+
 # 4-galaxy (SC4) GLM-5.3 MTP KV share prefill KV accuracy and throughput: prefill computes MTP level 1 and
 # publishes its KV for all 4 of decode's MTP levels. Shares a launcher with the SC1 entry below. MTP is gated
 # against its own tail-trace golden, not the manifest golden the entries above use.
