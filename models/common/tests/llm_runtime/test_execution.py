@@ -9,7 +9,7 @@ import torch
 
 import models.common.llm_runtime.execution as execution_module
 import ttnn
-from models.common.llm_runtime.decode import DecodeRuntime
+from models.common.llm_runtime.decode import DecodeCapturePlan, DecodeRuntime
 from models.common.llm_runtime.decode import InvocationResult as DecodeInvocationResult
 from models.common.llm_runtime.execution import EagerExecutor, TracedExecutor
 from models.common.llm_runtime.prefill.result_collector import InvocationResult as PrefillInvocationResult
@@ -317,6 +317,41 @@ def test_traced_prefill_recompile_reuses_existing_trace_association(monkeypatch)
     traced = TracedExecutor(eager=eager, trace_compiler=trace_compiler)
 
     traced.compile_prefill(tokens=torch.zeros(1, 1), page_table=torch.zeros(1, 1))
+
+
+def test_traced_decode_registers_the_capture_plan_before_capture_hook(monkeypatch):
+    prepared = _prepared_decode()
+
+    def before_capture(persistent):
+        return None
+
+    def prepare(*, tokens, start_pos, page_table, sampling_params=None, reset_batch=False):
+        return prepared
+
+    decode = _runtime(
+        DecodeRuntime,
+        prepare=prepare,
+        program_signature=lambda prepared: _Signature("decode", 1),
+        trace_signature=lambda prepared: _Signature("decode-trace", 1),
+        invoke=lambda prepared, *, device_feedback=False, count_tokens=True: DecodeInvocationResult(
+            torch.zeros(1), (), False
+        ),
+        capture_plan=lambda prepared: DecodeCapturePlan(
+            prepare_inputs=lambda: (),
+            capture=lambda persistent: torch.zeros(1),
+            before_capture=before_capture,
+        ),
+    )
+    program_compiler = _compiler(monkeypatch)
+    eager = EagerExecutor(prefill=_runtime(PrefillRuntime), decode=decode, program_compiler=program_compiler)
+    trace_compiler = _trace_compiler(program_compiler)
+    registered = []
+    trace_compiler.register_capture_plan = registered.append
+    traced = TracedExecutor(eager=eager, trace_compiler=trace_compiler)
+
+    traced.compile_decode(tokens=torch.zeros(1), start_pos=torch.zeros(1), page_table=torch.zeros(1, 1))
+
+    assert [plan.before_capture for plan in registered] == [before_capture]
 
 
 def test_traced_decode_recompile_reuses_existing_trace_association(monkeypatch):
