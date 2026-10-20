@@ -6,7 +6,6 @@ import pytest
 import torch
 
 import ttnn
-from tt_py_test_utils_common.utility_functions import is_wormhole_b0
 
 pytestmark = pytest.mark.use_module_device
 
@@ -47,7 +46,6 @@ def _cases(with_nan):
     return torch.tensor(a).reshape(1, 1, -1, 32), torch.tensor(b).reshape(1, 1, -1, 32)
 
 
-@pytest.mark.xfail(is_wormhole_b0(), reason="Wormhole fix in a separate PR")
 @pytest.mark.parametrize("op", ["remainder", "fmod"])
 @pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16])
 def test_binary_remainder_fmod_exact_multiples_and_infinite_divisor(op, dtype, device):
