@@ -8830,8 +8830,9 @@ EXPANDED_K_CHUNKED_PERF_CHECK_CONFIGS = [
     # (model_name, ring_size, expected_util, margin)
     # q320 k256 in 2 bands, 96 cores: run-to-run spread 35.9-36.5% (4.76-4.84 ms), so +/-1.5%.
     ("kimi_k3_expanded_k", 8, 36.2, 0.015),
-    # q320 k256 in 3 bands, 96 cores: median of 3 runs, 3.44 ms.
-    ("kimi_k2_7_expanded_k", 8, 33.69, DEFAULT_PERF_MARGIN),
+    # q320 k256 in 3 bands, 96 cores: 3.44 ms local median, 3.48 ms (33.26%) on the CI host (Blaze run 39441830514),
+    # so centre between the two and widen to +/-1.5% like K3.
+    ("kimi_k2_7_expanded_k", 8, 33.48, 0.015),
 ]
 
 
