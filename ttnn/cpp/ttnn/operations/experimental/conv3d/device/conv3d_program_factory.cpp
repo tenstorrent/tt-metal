@@ -34,6 +34,224 @@ static uint32_t largest_divisor_up_to(uint32_t n, uint32_t cap) {
     return 1;
 }
 
+Conv3dCbGeometry derive_cb_geometry(const Conv3dParams& operation_attributes, const Conv3dInputs& tensor_args) {
+    const auto& input_tensor = tensor_args.input_tensor;
+    const auto& config = operation_attributes.config;
+    Conv3dCbGeometry g;
+
+    const uint32_t C_in = input_tensor.logical_shape()[4];
+    const uint32_t padded_C_out = tt::round_up(operation_attributes.output_channels, tt::constants::TILE_WIDTH);
+    const uint32_t C_out_block = config.C_out_block > 0 ? config.C_out_block : padded_C_out;
+    const uint32_t C_in_block = config.C_in_block > 0 ? config.C_in_block : C_in;
+    const uint32_t patch_size = operation_attributes.kernel_size[0] * operation_attributes.kernel_size[1] *
+                                operation_attributes.kernel_size[2] * C_in_block;
+    const uint32_t num_patches = config.T_out_block * config.H_out_block * config.W_out_block;
+    g.C_in_num_blocks = tt::div_up(C_in, C_in_block);
+    g.matmul_M_t = tt::div_up(num_patches, tt::constants::TILE_HEIGHT);
+    g.matmul_K_t = tt::div_up(patch_size, tt::constants::TILE_WIDTH);
+    g.matmul_N_t = tt::div_up(C_out_block, tt::constants::TILE_WIDTH);
+
+    const auto data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
+    const uint32_t dtype_bytes = input_tensor.element_size();
+    g.tile_size = tt::tile_size(data_format);
+    const auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
+        get_compute_kernel_config_args(input_tensor.device()->arch(), operation_attributes.compute_kernel_config);
+    // fp32-exact output path: whenever the conv computes in fp32 with fp32 dest, the tail (bias add, untilize,
+    // and -- with multiple C_in blocks -- the partial reduction) reads its fp32 tiles back through
+    // UnpackToDestFp32 + SFPU instead of the TF32-rounding Src path.
+    g.use_fp32_exact = fp32_dest_acc_en && data_format == tt::DataFormat::Float32;
+    // fp32 partials whenever there are multiple C_in blocks and fp32 dest is enabled: no bf16 truncation
+    // between C_in block partial sums.
+    g.use_fp32_partials = fp32_dest_acc_en && g.C_in_num_blocks > 1;
+    g.partial_tile_size = tt::tile_size(g.use_fp32_partials ? tt::DataFormat::Float32 : data_format);
+    g.use_bias = tensor_args.bias_tensor.has_value();
+    g.operand_split = config.enable_fp32_operand_split;
+
+    g.padded_patch_size_bytes = tt::round_up(patch_size, tt::constants::TILE_WIDTH) * dtype_bytes;
+    g.C_in_block_bytes = C_in_block * dtype_bytes;
+    // vol2col_rm only needs TILE_HEIGHT pages since tilize consumes each row before the next is pushed;
+    // double-buffered when num_patches is not tile-aligned, so reader pushes and compute tilize pops cannot
+    // deadlock on the partial last row.
+    g.vol2col_rm_pages = (num_patches % tt::constants::TILE_HEIGHT == 0)
+                             ? std::min(num_patches, (uint32_t)tt::constants::TILE_HEIGHT)
+                             : std::min(num_patches, 2 * tt::constants::TILE_HEIGHT);
+
+    // Matmul subblock sizing. out_subblock_w fills the dst register row; out_subblock_h batches multiple
+    // tile-rows per matmul call for weight reuse. On Wormhole B0 the matmul unit benefits from sub_h > 1
+    // (preferred 2x4 subblock). On Blackhole the row-by-row fused tilize+matmul is faster with the current
+    // row-major subblock layout, so keep sub_h = 1 with optimized blockings.
+    const uint32_t dst_size = ttnn::get_dest_reg_count(operation_attributes.compute_kernel_config);
+    const uint32_t out_subblock_w = std::min(g.matmul_N_t, dst_size);
+    const bool scale_subblock_h =
+        input_tensor.device()->arch() == tt::ARCH::WORMHOLE_B0 && out_subblock_w == g.matmul_N_t;
+    g.out_subblock_h = scale_subblock_h ? largest_divisor_up_to(g.matmul_M_t, dst_size / out_subblock_w) : 1;
+
+    g.in_row_size_bytes = input_tensor.buffer()->aligned_page_size();
+    g.num_dram_banks = static_cast<uint32_t>(input_tensor.device()->num_dram_channels());
+    TT_FATAL(g.num_dram_banks > 0, "Device must report at least one DRAM channel");
+    g.input_is_dram_interleaved =
+        input_tensor.buffer()->is_dram() &&
+        input_tensor.buffer()->buffer_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED &&
+        !input_tensor.buffer()->buffer_distribution_spec().has_value();
+    g.dram_read_alignment = tt::tt_metal::hal::get_dram_alignment();
+    const bool input_pages_are_dram_read_aligned = g.in_row_size_bytes % g.dram_read_alignment == 0;
+    const bool c_in_slice_is_dram_read_aligned = g.C_in_block_bytes % g.dram_read_alignment == 0;
+    g.enable_dram_read_staging =
+        g.input_is_dram_interleaved && input_pages_are_dram_read_aligned && !c_in_slice_is_dram_read_aligned;
+    // The staged reader rounds the DRAM source down by at most alignment - 1 bytes and reads a full aligned
+    // window. The scratch CB itself may only be L1-aligned, so reserve one extra alignment chunk to let the
+    // kernel round its scratch base up safely.
+    const uint32_t max_staged_dram_window_bytes =
+        tt::round_up(g.C_in_block_bytes + g.dram_read_alignment - 1, g.dram_read_alignment);
+    g.dram_read_scratch_page_bytes =
+        g.enable_dram_read_staging ? max_staged_dram_window_bytes + g.dram_read_alignment : 0;
+    // Logical-pad masking: opt-in. The per-device [h_start, w_start] offset page lands in a tiny CB.
+    g.mask_mode = tensor_args.pad_offset_tensor.has_value() &&
+                  (operation_attributes.logical_h_mask != 0 || operation_attributes.logical_w_mask != 0);
+    g.pad_offset_page_bytes =
+        g.mask_mode ? tt::round_up(2u * static_cast<uint32_t>(sizeof(uint32_t)), g.dram_read_alignment) : 0;
+
+    // The prefetch shard covers the full receptive field span for one spatial block, including padding
+    // positions: not capped at T_in/H_in/W_in, since padding positions outside the input are stored in the
+    // shard (zero-filled or clamped) so that the gather can index without boundary checks.
+    const auto& kernel = operation_attributes.kernel_size;
+    const auto& stride = operation_attributes.stride;
+    const auto& dilation = operation_attributes.dilation;
+    const bool has_spatial_reuse = kernel[0] > 1 || kernel[1] > 1 || kernel[2] > 1;
+    const bool has_no_dilation = dilation[0] == 1 && dilation[1] == 1 && dilation[2] == 1;
+    const uint32_t W_shard_full = (config.W_out_block - 1) * stride[2] + kernel[2];
+    if (has_spatial_reuse && has_no_dilation) {
+        g.T_shard = (config.T_out_block - 1) * stride[0] + kernel[0];
+        g.H_shard = (config.H_out_block - 1) * stride[1] + kernel[1];
+        g.W_shard = W_shard_full;
+        g.shard_positions = g.T_shard * g.H_shard * g.W_shard;
+        g.shard_rows = g.T_shard * g.H_shard;
+    }
+    // Coalescing pays for a scratch L1 reorder pass; require enough columns to give each DRAM bank multiple
+    // pages so the larger bank-local bursts amortize the extra L1 traffic.
+    g.coalesced_candidate = g.input_is_dram_interleaved && g.C_in_num_blocks == 1 &&
+                            g.C_in_block_bytes == g.in_row_size_bytes && W_shard_full >= 2 * g.num_dram_banks;
+    return g;
+}
+
+Conv3dL1Plan plan_l1(const Conv3dCbGeometry& g, const Conv3dL1Budget& budget) {
+    // The static circular buffers at a given out_subblock_h: every CB but the prefetch shard.
+    auto static_cb_bytes_for = [&](uint32_t sub_h) -> uint32_t {
+        uint32_t bytes = g.vol2col_rm_pages * g.padded_patch_size_bytes +     // vol2col_rm
+                         sub_h * g.matmul_K_t * g.tile_size +                 // vol2col_tiled
+                         g.matmul_K_t * g.matmul_N_t * g.tile_size +          // weight_tiled
+                         g.matmul_M_t * g.matmul_N_t * g.partial_tile_size +  // matmul_interm (may be fp32)
+                         g.matmul_M_t * g.matmul_N_t * g.tile_size +          // matmul_result_rm
+                         g.dram_read_scratch_page_bytes + g.pad_offset_page_bytes;
+        if (g.C_in_num_blocks > 1) {
+            bytes += g.matmul_M_t * g.matmul_N_t * g.partial_tile_size + g.tile_size;  // reduction + worker_ack
+            if (g.use_fp32_partials && g.use_fp32_exact) {
+                bytes += g.matmul_M_t * g.matmul_N_t * g.partial_tile_size;  // reduction_acc
+            }
+        }
+        if (g.use_bias) {
+            bytes += g.matmul_N_t * g.tile_size;
+        }
+        if (g.operand_split) {
+            bytes += 2 * sub_h * g.matmul_K_t * g.tile_size +
+                     g.matmul_K_t * g.matmul_N_t * g.tile_size;  // x_hi, x_lo, weight_lo
+        }
+        return bytes;
+    };
+
+    Conv3dL1Plan plan;
+    // Wormhole's sub_h scaling multiplies vol2col_tiled and, with the fp32 operand split, the x_hi/x_lo CBs by
+    // out_subblock_h; blockings swept on Blackhole's larger L1 can overrun Wormhole's. Shrink sub_h toward 1
+    // until the static CBs fit the planning budget; the prefetch shard below is budgeted from whatever is left.
+    plan.out_subblock_h = g.out_subblock_h;
+    while (plan.out_subblock_h > 1 && static_cb_bytes_for(plan.out_subblock_h) > budget.planning) {
+        const uint32_t shrunk = largest_divisor_up_to(g.matmul_M_t, plan.out_subblock_h - 1);
+        log_debug(
+            tt::LogOp,
+            "conv3d: static CBs at out_subblock_h={} ({} B) do not fit the {} B budget; trying {}",
+            plan.out_subblock_h,
+            static_cb_bytes_for(plan.out_subblock_h),
+            budget.planning,
+            shrunk);
+        plan.out_subblock_h = shrunk;
+    }
+
+    // The loop stops at out_subblock_h=1 whether or not the CBs fit. A blocking whose static CBs cannot be
+    // placed below the top of L1 at all fails here, where the message can say what was asked for, rather than at
+    // enqueue where only the region clash is reported. One that fits the span but not the planning budget runs
+    // with less than the headroom left for L1 buffers; nothing warns, and a clash with a live L1 buffer is
+    // reported by the enqueue-time region check.
+    plan.static_cb_bytes = static_cb_bytes_for(plan.out_subblock_h);
+    TT_FATAL(
+        plan.static_cb_bytes <= budget.span,
+        "conv3d: the static circular buffers need {} B at out_subblock_h={} (M_t={}, K_t={}, N_t={}, C_in blocks={}) "
+        "but only {} B of L1 lie above the allocator base; shrink the blocking (C_in_block, C_out_block, "
+        "T/H/W_out_block)",
+        plan.static_cb_bytes,
+        plan.out_subblock_h,
+        g.matmul_M_t,
+        g.matmul_K_t,
+        g.matmul_N_t,
+        g.C_in_num_blocks,
+        budget.span);
+
+    // L1 pre-fetch buffer for kernels > 1x1x1 with no dilation: gathers the spatial receptive field from DRAM
+    // once per spatial block, then vol2col reads from L1. Budget: what the static CBs leave of the planning
+    // budget, capped; none when the static CBs already exceed it.
+    constexpr uint32_t L1_PREFETCH_HARD_CAP = 500 * 1024;
+    plan.l1_prefetch_max_bytes = plan.static_cb_bytes < budget.planning
+                                     ? std::min(budget.planning - plan.static_cb_bytes, L1_PREFETCH_HARD_CAP)
+                                     : 0;
+    if (g.shard_positions == 0) {
+        return plan;
+    }
+    const uint32_t shard_bytes = g.shard_positions * g.C_in_block_bytes;
+    const uint32_t coalesced_scratch_row_bytes = g.W_shard * g.C_in_block_bytes;
+    const uint32_t coalesced_scratch_rows_fit =
+        (coalesced_scratch_row_bytes > 0 && shard_bytes < plan.l1_prefetch_max_bytes)
+            ? (plan.l1_prefetch_max_bytes - shard_bytes) / coalesced_scratch_row_bytes
+            : 0;
+    const uint32_t coalesced_scratch_rows_candidate =
+        g.coalesced_candidate ? std::min(g.shard_rows, coalesced_scratch_rows_fit) : 0;
+    // Keep at least one row per DRAM bank in scratch when possible; smaller batches underfill the coalesced
+    // gather and tend to lose to the direct reader after the L1 reorder cost.
+    const uint32_t coalesced_scratch_rows_min = g.coalesced_candidate ? std::min(g.shard_rows, g.num_dram_banks) : 0;
+    const uint32_t shard_bytes_with_coalesced_scratch =
+        (g.shard_positions + coalesced_scratch_rows_candidate * g.W_shard) * g.C_in_block_bytes;
+    if (shard_bytes <= plan.l1_prefetch_max_bytes) {
+        plan.prefetch_shard = true;
+        const bool coalesced = g.coalesced_candidate &&
+                               coalesced_scratch_rows_candidate >= coalesced_scratch_rows_min &&
+                               shard_bytes_with_coalesced_scratch <= plan.l1_prefetch_max_bytes;
+        plan.coalesced_scratch_rows = coalesced ? coalesced_scratch_rows_candidate : 0;
+    }
+    return plan;
+}
+
+Conv3dL1Budget conv3d_l1_cb_budget(const tt::tt_metal::IDevice* device) {
+    // Circular buffers are placed upward from the allocator's L1 base and L1 buffers are allocated downward
+    // from the top of L1. The plan keeps a fixed headroom below the top for the L1 buffers that are live when
+    // the program runs (sharded operands of neighbouring ops, CCL and semaphore buffers). The budget is a
+    // function of the device configuration only: the program cache keys on the attributes and the tensor
+    // specs, and a traced program replays under whatever L1 state exists then, so a plan drawn from the live
+    // allocator frontier at create time would describe neither.
+    Conv3dL1Budget budget;
+    budget.span = static_cast<uint32_t>(
+        device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1));
+    TT_FATAL(
+        budget.span > L1_TENSOR_HEADROOM,
+        "conv3d: {} B of L1 above the allocator base cannot hold the {} B headroom for L1 buffers",
+        budget.span,
+        L1_TENSOR_HEADROOM);
+    budget.planning = budget.span - L1_TENSOR_HEADROOM;
+    return budget;
+}
+
+Conv3dL1Plan select_l1_plan(const Conv3dParams& operation_attributes, const Conv3dInputs& tensor_args) {
+    return plan_l1(
+        derive_cb_geometry(operation_attributes, tensor_args), conv3d_l1_cb_budget(tensor_args.input_tensor.device()));
+}
+
 tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
     const Conv3dParams& operation_attributes, const Conv3dInputs& tensor_args, Tensor& tensor_return_value) {
     using tt::tt_metal::CBDescriptor;
@@ -55,6 +273,11 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
     const auto& config = operation_attributes.config;
     const auto& compute_kernel_config = operation_attributes.compute_kernel_config;
     ProgramDescriptor desc;
+
+    // The CB sizes and the L1 plan. Both follow from the attributes, the tensor specs and the device
+    // configuration, like the program cache key, so a cached program is the one this call would build.
+    const Conv3dCbGeometry geometry = derive_cb_geometry(operation_attributes, tensor_args);
+    const Conv3dL1Plan plan = plan_l1(geometry, conv3d_l1_cb_budget(input_tensor.device()));
 
     auto grid_size = config.compute_with_storage_grid_size;
     auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
@@ -123,20 +346,14 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
         C_out_num_blocks,
         C_out_block);
 
-    uint32_t matmul_M_t = tt::div_up(num_patches, tt::constants::TILE_HEIGHT);
-    uint32_t matmul_K_t = tt::div_up(patch_size, tt::constants::TILE_WIDTH);
-    uint32_t matmul_N_t = tt::div_up(C_out_block, tt::constants::TILE_WIDTH);
+    const uint32_t matmul_M_t = geometry.matmul_M_t;
+    const uint32_t matmul_K_t = geometry.matmul_K_t;
+    const uint32_t matmul_N_t = geometry.matmul_N_t;
 
-    // Matmul subblock sizing. out_subblock_w fills the dst register row; out_subblock_h
-    // batches multiple tile-rows per matmul call for weight reuse.
-    // On Wormhole B0 the matmul unit benefits from sub_h > 1 (preferred 2x4 subblock).
-    // On Blackhole the row-by-row fused tilize+matmul is faster with the current
-    // row-major subblock layout, so keep sub_h = 1 with optimized blockings.
+    // Matmul subblock sizing is derive_cb_geometry's; out_subblock_h is the plan's, after the L1 shrink.
     const uint32_t dst_size = ttnn::get_dest_reg_count(compute_kernel_config);
     const uint32_t out_subblock_w = std::min(matmul_N_t, dst_size);
-    const auto arch = input_tensor.device()->arch();
-    const bool scale_subblock_h = arch == tt::ARCH::WORMHOLE_B0 && out_subblock_w == matmul_N_t;
-    const uint32_t out_subblock_h = scale_subblock_h ? largest_divisor_up_to(matmul_M_t, dst_size / out_subblock_w) : 1;
+    const uint32_t out_subblock_h = plan.out_subblock_h;
     const uint32_t output_write_bytes_per_transaction = C_out_block * dtype_bytes;
     const bool small_output_write_transactions =
         output_write_bytes_per_transaction <= tt::constants::TILE_WIDTH * dtype_bytes;
@@ -167,16 +384,15 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
     // Create circular buffers for vol2col, weights, bias and matmul intermediates
     uint32_t next_cb_index = tt::CBIndex::c_0;
 
-    // Fused tilize+matmul: compute tilizes row-by-row but batches out_subblock_h
-    // tile-rows before each matmul call, so vol2col_tiled needs out_subblock_h*K_t
-    // tiles instead of the full M_t*K_t.
-    // vol2col_rm only needs TILE_HEIGHT pages since tilize consumes each row before
-    // the next is pushed.
-    // Double-buffer (2x) when num_patches isn't tile-aligned to avoid CB deadlock
-    // between reader pushes and compute tilize pops on the partial last row.
-    uint32_t vol2col_rm_pages = (num_patches % tt::constants::TILE_HEIGHT == 0)
-                                    ? std::min(num_patches, (uint32_t)tt::constants::TILE_HEIGHT)
-                                    : std::min(num_patches, 2 * tt::constants::TILE_HEIGHT);
+    // Fused tilize+matmul: compute tilizes row-by-row but batches out_subblock_h tile-rows before each matmul
+    // call, so vol2col_tiled needs out_subblock_h*K_t tiles instead of the full M_t*K_t. The page counts, the
+    // fp32 flags and the sub_h shrink that keeps the static CBs inside L1 are derive_cb_geometry's / plan_l1's.
+    const uint32_t vol2col_rm_pages = geometry.vol2col_rm_pages;
+    const bool use_fp32_exact = geometry.use_fp32_exact;
+    const bool use_fp32_partials = geometry.use_fp32_partials;
+    auto partial_data_format = use_fp32_partials ? tt::DataFormat::Float32 : data_format;
+    const uint32_t partial_tile_size = geometry.partial_tile_size;
+
     uint32_t cb_vol2col_rm_id = next_cb_index++;
     desc.cbs.push_back(CBDescriptor{
         .total_size = vol2col_rm_pages * padded_patch_size_bytes,
@@ -209,16 +425,6 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
             .page_size = tile_size,
         }}},
     });
-
-    // fp32-exact output path: whenever the conv computes in fp32 with fp32 dest, the tail
-    // (bias add, untilize, and -- with multiple C_in blocks -- the partial reduction) reads its
-    // fp32 tiles back through UnpackToDestFp32 + SFPU instead of the TF32-rounding Src path.
-    bool use_fp32_exact = fp32_dest_acc_en && data_format == tt::DataFormat::Float32;
-    // Use fp32 partials whenever we have multiple C_in blocks and fp32 dest is enabled.
-    // This eliminates bf16 truncation between C_in block partial sums.
-    bool use_fp32_partials = fp32_dest_acc_en && C_in_num_blocks > 1;
-    auto partial_data_format = use_fp32_partials ? tt::DataFormat::Float32 : data_format;
-    auto partial_tile_size = tt::tile_size(partial_data_format);
 
     uint32_t cb_matmul_interm_tiled_id = next_cb_index++;
     desc.cbs.push_back(CBDescriptor{
@@ -353,31 +559,16 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
     bool is_padding_zeros = operation_attributes.padding_mode == "zeros";
     // validate() fatals on a halo buffer with any other padding mode, so presence is the whole test.
     const bool halo_mode = tensor_args.halo_buffer.has_value();
-    // Logical-pad masking: opt-in.
-    const bool mask_mode = tensor_args.pad_offset_tensor.has_value() &&
-                           (operation_attributes.logical_h_mask != 0 || operation_attributes.logical_w_mask != 0);
+    // Logical-pad masking (opt-in) and the reader's DRAM read staging are derive_cb_geometry's.
+    const bool mask_mode = geometry.mask_mode;
 
-    uint32_t in_row_size_bytes = input_tensor.buffer()->aligned_page_size();
+    const uint32_t in_row_size_bytes = geometry.in_row_size_bytes;
     uint32_t out_row_size_bytes = output_tensor.buffer()->aligned_page_size();
 
-    const uint32_t device_num_dram_banks = static_cast<uint32_t>(input_tensor.device()->num_dram_channels());
-    TT_FATAL(device_num_dram_banks > 0, "Device must report at least one DRAM channel");
-    const bool input_is_dram_interleaved =
-        input_tensor.buffer()->is_dram() &&
-        input_tensor.buffer()->buffer_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED &&
-        !input_tensor.buffer()->buffer_distribution_spec().has_value();
-    const uint32_t dram_read_alignment = tt::tt_metal::hal::get_dram_alignment();
-    const bool input_pages_are_dram_read_aligned = in_row_size_bytes % dram_read_alignment == 0;
-    const bool c_in_slice_is_dram_read_aligned = C_in_block_bytes % dram_read_alignment == 0;
-    const bool enable_dram_read_staging =
-        input_is_dram_interleaved && input_pages_are_dram_read_aligned && !c_in_slice_is_dram_read_aligned;
-    // The staged reader rounds the DRAM source down by at most alignment - 1 bytes and reads
-    // a full aligned window.  The scratch CB itself may only be L1-aligned, so reserve one
-    // extra alignment chunk to let the kernel round its scratch base up safely.
-    const uint32_t max_staged_dram_window_bytes =
-        tt::round_up(C_in_block_bytes + dram_read_alignment - 1, dram_read_alignment);
-    const uint32_t dram_read_scratch_page_bytes =
-        enable_dram_read_staging ? max_staged_dram_window_bytes + dram_read_alignment : 0;
+    const uint32_t device_num_dram_banks = geometry.num_dram_banks;
+    const uint32_t dram_read_alignment = geometry.dram_read_alignment;
+    const bool enable_dram_read_staging = geometry.enable_dram_read_staging;
+    const uint32_t dram_read_scratch_page_bytes = geometry.dram_read_scratch_page_bytes;
     uint32_t cb_dram_read_scratch_id = 32;  // Invalid; set below if DRAM read staging is needed
     if (enable_dram_read_staging) {
         cb_dram_read_scratch_id = next_cb_index++;
@@ -395,8 +586,7 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
     // Tiny landing CB for the per-device [h_start, w_start] offset page (mask mode only).
     uint32_t cb_pad_offset_id = 32;  // Invalid; set below if masking is enabled
     if (mask_mode) {
-        const uint32_t pad_offset_page_bytes =
-            tt::round_up(2u * static_cast<uint32_t>(sizeof(uint32_t)), dram_read_alignment);
+        const uint32_t pad_offset_page_bytes = geometry.pad_offset_page_bytes;
         cb_pad_offset_id = next_cb_index++;
         desc.cbs.push_back(CBDescriptor{
             .total_size = pad_offset_page_bytes,
@@ -409,52 +599,12 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
         });
     }
 
-    // L1 pre-fetch buffer for kernels > 1x1x1 with no dilation.
-    // Gathers the spatial receptive field from DRAM once per spatial block, then vol2col reads from L1.
-    // Budget: remaining L1 after other CBs and kernel code/stack, capped at 500 KB.
-    // hal::get_max_worker_l1_unreserved_size() gives total L1 for CBs + kernel code;
-    // subtract a conservative 200 KB reserve for kernel code/stack.
-    constexpr uint32_t L1_KERNEL_CODE_RESERVE = 200 * 1024;
-    constexpr uint32_t L1_PREFETCH_HARD_CAP = 500 * 1024;
-    const uint32_t l1_usable_for_cbs = tt::tt_metal::hal::get_max_worker_l1_unreserved_size() - L1_KERNEL_CODE_RESERVE;
-
-    uint32_t other_cbs_bytes = (padded_patch_size_bytes * vol2col_rm_pages) +   // vol2col_rm
-                               (tile_size * out_subblock_h * matmul_K_t) +      // vol2col_tiled
-                               (tile_size * matmul_K_t * matmul_N_t) +          // weight_tiled
-                               (partial_tile_size * matmul_M_t * matmul_N_t) +  // matmul_interm (may be fp32)
-                               (tile_size * matmul_M_t * matmul_N_t);           // matmul_result_rm
-    if (enable_dram_read_staging) {
-        other_cbs_bytes += dram_read_scratch_page_bytes;
-    }
-    if (C_in_num_blocks > 1) {
-        other_cbs_bytes += partial_tile_size * matmul_M_t * matmul_N_t;  // reduction (same format as partials)
-        other_cbs_bytes += tile_size;                                    // worker_ack
-        if (use_fp32_partials && use_fp32_exact) {
-            other_cbs_bytes += partial_tile_size * matmul_M_t * matmul_N_t;  // reduction_acc
-        }
-    }
-    if (use_bias) {
-        other_cbs_bytes += tile_size * matmul_N_t;  // bias
-    }
-    if (operand_split) {
-        other_cbs_bytes += 2 * tile_size * out_subblock_h * matmul_K_t;
-        other_cbs_bytes += tile_size * matmul_K_t * matmul_N_t;
-    }
-    uint32_t l1_prefetch_max_bytes =
-        (other_cbs_bytes < l1_usable_for_cbs) ? std::min(l1_usable_for_cbs - other_cbs_bytes, L1_PREFETCH_HARD_CAP) : 0;
-
-    const uint32_t kT = operation_attributes.kernel_size[0];
-    const uint32_t kH = operation_attributes.kernel_size[1];
-    const uint32_t kW = operation_attributes.kernel_size[2];
+    // L1 pre-fetch buffer for kernels > 1x1x1 with no dilation: gathers the spatial receptive field from DRAM
+    // once per spatial block, then vol2col reads from L1. Whether it exists, and how many rows of
+    // coalesced-read scratch it carries, is the plan's decision (plan_l1).
     const uint32_t W_shard_full_for_coalesce =
         (config.W_out_block - 1) * operation_attributes.stride[2] + operation_attributes.kernel_size[2];
     const uint32_t coalesced_read_row_bytes = C_in_block_bytes;
-    // Coalescing pays for a scratch L1 reorder pass; require enough columns to give each
-    // DRAM bank multiple pages so the larger bank-local bursts amortize the extra L1 traffic.
-    const uint32_t coalesced_min_w_shard = 2 * device_num_dram_banks;
-    const bool coalesced_shard_reads_candidate = input_is_dram_interleaved && C_in_num_blocks == 1 &&
-                                                 C_in_block_bytes == in_row_size_bytes &&
-                                                 W_shard_full_for_coalesce >= coalesced_min_w_shard;
 
     uint32_t cb_input_shard_id = 32;  // Invalid; set below if using L1 prefetch
     uint32_t T_shard_max = 0;
@@ -463,47 +613,19 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
     bool enable_coalesced_shard_reads = false;
     uint32_t coalesced_scratch_rows = 0;
 
-    const bool has_spatial_reuse = (kT > 1 || kH > 1 || kW > 1);
-    const bool has_no_dilation =
-        (operation_attributes.dilation[0] == 1 && operation_attributes.dilation[1] == 1 &&
-         operation_attributes.dilation[2] == 1);
-
-    if (has_spatial_reuse && has_no_dilation) {
-        // Shard covers the full receptive field span for one spatial block, including padding positions.
-        // Do NOT cap at T_in/H_in/W_in — padding positions outside input bounds are stored in the shard
-        // (zero-filled or clamped) so that Phase 2 can index without boundary checks.
-        T_shard_max = (config.T_out_block - 1) * operation_attributes.stride[0] + kT;
-        H_shard_max = (config.H_out_block - 1) * operation_attributes.stride[1] + kH;
-        W_shard_max = (config.W_out_block - 1) * operation_attributes.stride[2] + kW;
-        uint32_t shard_positions_max = T_shard_max * H_shard_max * W_shard_max;
-        uint32_t shard_bytes = shard_positions_max * C_in_block_bytes;
-        uint32_t shard_rows_max = T_shard_max * H_shard_max;
-        uint32_t coalesced_scratch_pages_per_row = W_shard_max;
-        uint32_t coalesced_scratch_row_bytes = coalesced_scratch_pages_per_row * C_in_block_bytes;
-        uint32_t coalesced_scratch_rows_fit = (coalesced_scratch_row_bytes > 0 && shard_bytes < l1_prefetch_max_bytes)
-                                                  ? (l1_prefetch_max_bytes - shard_bytes) / coalesced_scratch_row_bytes
-                                                  : 0;
-        uint32_t coalesced_scratch_rows_candidate =
-            coalesced_shard_reads_candidate ? std::min(shard_rows_max, coalesced_scratch_rows_fit) : 0;
-        // Keep at least one row per DRAM bank in scratch when possible; smaller batches underfill the
-        // coalesced gather and tend to lose to the direct reader after the L1 reorder cost.
-        uint32_t coalesced_scratch_rows_min =
-            coalesced_shard_reads_candidate ? std::min(shard_rows_max, device_num_dram_banks) : 0;
-        uint32_t coalesced_scratch_positions = coalesced_scratch_rows_candidate * coalesced_scratch_pages_per_row;
-        uint32_t shard_positions_with_coalesced_scratch = shard_positions_max + coalesced_scratch_positions;
-        uint32_t shard_bytes_with_coalesced_scratch = shard_positions_with_coalesced_scratch * C_in_block_bytes;
-
-        if (shard_bytes <= l1_prefetch_max_bytes) {
-            enable_coalesced_shard_reads = coalesced_shard_reads_candidate &&
-                                           coalesced_scratch_rows_candidate >= coalesced_scratch_rows_min &&
-                                           shard_bytes_with_coalesced_scratch <= l1_prefetch_max_bytes;
-            coalesced_scratch_rows = enable_coalesced_shard_reads ? coalesced_scratch_rows_candidate : 0;
-            const uint32_t shard_positions_alloc =
-                shard_positions_max + coalesced_scratch_rows * coalesced_scratch_pages_per_row;
+    if (geometry.shard_positions > 0) {
+        T_shard_max = geometry.T_shard;
+        H_shard_max = geometry.H_shard;
+        W_shard_max = geometry.W_shard;
+        const uint32_t shard_bytes = geometry.shard_positions * C_in_block_bytes;
+        if (plan.prefetch_shard) {
+            coalesced_scratch_rows = plan.coalesced_scratch_rows;
+            enable_coalesced_shard_reads = coalesced_scratch_rows > 0;
+            const uint32_t shard_positions_alloc = geometry.shard_positions + coalesced_scratch_rows * W_shard_max;
             const uint32_t shard_bytes_alloc = shard_positions_alloc * C_in_block_bytes;
             cb_input_shard_id = next_cb_index++;
             desc.cbs.push_back(CBDescriptor{
-                .total_size = shard_positions_alloc * C_in_block_bytes,
+                .total_size = shard_bytes_alloc,
                 .core_ranges = CoreRangeSet(core_grid),
                 .format_descriptors = {{CBFormatDescriptor{
                     .buffer_index = static_cast<uint8_t>(cb_input_shard_id),
@@ -519,8 +641,8 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
                 T_shard_max,
                 H_shard_max,
                 W_shard_max,
-                shard_positions_max,
-                coalesced_scratch_rows * coalesced_scratch_pages_per_row,
+                geometry.shard_positions,
+                coalesced_scratch_rows * W_shard_max,
                 shard_bytes_alloc,
                 cb_input_shard_id);
         } else {
@@ -528,7 +650,7 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
                 tt::LogOp,
                 "L1 prefetch shard ({} bytes) exceeds limit ({} bytes), falling back to direct reader",
                 shard_bytes,
-                l1_prefetch_max_bytes);
+                plan.l1_prefetch_max_bytes);
             T_shard_max = 0;
             H_shard_max = 0;
             W_shard_max = 0;
