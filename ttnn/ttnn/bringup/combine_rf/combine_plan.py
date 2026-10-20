@@ -1153,6 +1153,492 @@ def _mc2_l1_bytes(M, CH, HS, EPC, NG, rows_cap, home_rows=0, idb=None):
     )
 
 
+# Column multi-core planner (deepseek_v41_flash_d_p P.11): the V2 multi-core planner's structure (counting sort into
+# per-chunk buckets, count exchange, per-expert chunk bases, row-tile slices pulled by every core, atomics into core 0's
+# plan) for the one-core planner's column / pass options (axis=0: chip r of its column, id_offset, tokens / token_base,
+# ids_uint32, tile_in, det) - every output bit-identical to the one-core planner's (tests/unit/test_column_planner_mc.py).
+# M = N HCH cores, core p plans chunk p: home p / HCH, tokens [(p % HCH) CT, + CT) of the pass (chunks never straddle a
+# home, so chunk order = the one-core planner's (home, token, k) scan order and an expert's rows land in that order).
+# Per chunk: its tiles' faces 0 / 2 read (ids, weights; tile_in), the column's ids (id - EOFF, others' skipped) counted
+# per local expert and listed; the home-token counts (n_local / want / n_ret) of this chip's chunks as atomics onto core
+# 0's plan; det: every chunk's rows per column expert travel with the counts, so a chunk of this chip's home tokens knows
+# each row's place in its expert's list (rows of the chunks before it) and builds its tokens' order lists itself; the
+# accumulators' owners (core a % M) collect them into the order pages. The token index / table tails past the planned
+# rows are written as zeros (the one-core planner writes its whole page).
+_PLANNER_MCC = r"""
+#include <cstdint>
+#include <type_traits>
+#include "api/dataflow/dataflow_api.h"
+__DETINC__
+constexpr uint32_t ME = get_compile_time_arg_val(0), N = get_compile_time_arg_val(1), S = get_compile_time_arg_val(2);
+constexpr uint32_t K = get_compile_time_arg_val(3), EPC = get_compile_time_arg_val(4), NG = get_compile_time_arg_val(5);
+constexpr uint32_t A = get_compile_time_arg_val(6), L = get_compile_time_arg_val(7), P = get_compile_time_arg_val(8);
+constexpr uint32_t ROWS_CAP = get_compile_time_arg_val(9), M = get_compile_time_arg_val(10);
+constexpr uint32_t CT = get_compile_time_arg_val(11), EOFF = get_compile_time_arg_val(12);
+constexpr uint32_t SF = get_compile_time_arg_val(13), T0 = get_compile_time_arg_val(14);
+constexpr uint32_t STG = get_compile_time_arg_val(15), CBB = get_compile_time_arg_val(16);
+constexpr uint32_t IDW = __IDW__;  // bytes per id: 2 (uint16 tiles) or 4 (uint32)
+using id_t = std::conditional_t<IDW == 4, uint32_t, uint16_t>;
+constexpr uint32_t R = N, C = 1;  // (the planned group: the column)
+constexpr uint32_t SV = (T0 + S < SF ? T0 + S : SF) - T0;  // tokens of a home this pass plans (the last pass: fewer)
+constexpr uint32_t HCH = (S + CT - 1) / CT, CE = CT * K;
+static_assert(M == N * HCH && CT % 32 == 0, "chunks: whole homes, 32-token multiples");
+constexpr uint32_t al64(uint32_t v) { return (v + 63) / 64 * 64; }
+// a staged tile: ids faces 0 and 2 (rows 0-15 / 16-31, columns 0-15: a token's K <= 16 values), weights faces 0 and 2
+constexpr uint32_t FI = 256 * IDW, FW = 512, TBC = 2 * FI + 2 * FW, NTC = CT / 32 + 2;
+constexpr uint32_t DET = __DET__, VM = __VM__, DPG = __DPG__, WR = __WR__;
+constexpr uint32_t NGP = (NG + 1) / 2 * 2;
+constexpr uint32_t MSG = al64(2 * EPC * 4 + (DET ? NGP * 2 : 0));  // counts, bucket starts per expert; det: rows per g
+constexpr uint32_t XP = al64((M + 2) * 4);
+constexpr uint32_t RC32 = ROWS_CAP / 32, RPC = (RC32 + M - 1) / M * 32 + 32;  // rows one core places at most
+constexpr uint32_t OWN = (A + M - 1) / M, NOWN = A < M ? A : M, ZB = 2048, MAXSL = 512;
+constexpr uint32_t O_STC = 0, O_LST = O_STC + NTC * TBC, O_BUCK = O_LST + al64(CE * 8), O_MSG = O_BUCK + al64(CE * 8);
+constexpr uint32_t O_CIN = O_MSG + MSG, O_XP = O_CIN + M * MSG, O_STG = O_XP + EPC * XP;
+constexpr uint32_t O_SL = O_STG + al64(STG), O_PART = O_SL + al64(MAXSL * 12);
+constexpr uint32_t O_TIDX = O_PART + al64(544 * 4), O_TAB = O_TIDX + al64(RPC * 4), O_ZERO = O_TAB + al64(RPC * 8);
+constexpr uint32_t O_PLAN = O_ZERO + ZB, O_CNT = O_PLAN + 4096, O_REG = O_CNT + al64(NG * 4);
+constexpr uint32_t O_DBG = O_REG + al64(NG * 4);
+constexpr uint32_t O_GS = O_DBG + 64, O_SCH = O_GS + al64(2 * NG * 4), O_SEID = O_SCH + al64(N * VM * 8);
+constexpr uint32_t O_NACT = O_SEID + al64(N * VM), O_TF = O_NACT + al64(N * 4), O_DYN = O_TF + al64(N * VM * 4);
+constexpr uint32_t O_ORDL = O_DYN + 4096, O_ORDT = O_ORDL + al64(CE), O_PG = O_ORDT + al64(HCH * CE);
+constexpr uint32_t O_FF = O_PG + OWN * DPG;  // (det owners: ZB bytes of 0xFF, a page's tail)
+constexpr uint32_t O_END = DET ? O_FF + ZB : O_GS;
+static_assert(O_END + 64 <= CBB, "the planner's L1 (host: _mcc_l1_bytes)");
+constexpr uint32_t WX = __WX__, WY = __WY__;  // torus axes (rings: the shorter way, ties Y- / X+ as the fabric)
+FORCE_INLINE uint32_t first_hop(uint32_t src, uint32_t dst) {
+    const uint32_t sr = src / C, sc = src % C, dr = dst / C, dc = dst % C;
+    if (sr != dr) {
+        if constexpr (WY) return 2 * ((dr + R - sr) % R) < R ? 2 : 3;
+        return dr > sr ? 2 : 3;
+    }
+    if constexpr (WX) return 2 * ((dc + C - sc) % C) <= C ? 0 : 1;
+    return dc > sc ? 0 : 1;
+}
+void kernel_main() {
+    size_t a = 0;
+    const uint32_t ids_addr = get_arg_val<uint32_t>(a++), w_addr = get_arg_val<uint32_t>(a++);
+    const uint32_t cnt_addr = get_arg_val<uint32_t>(a++), reg_addr = get_arg_val<uint32_t>(a++);
+    const uint32_t tidx_addr = get_arg_val<uint32_t>(a++), tab_addr = get_arg_val<uint32_t>(a++);
+    const uint32_t plan_addr = get_arg_val<uint32_t>(a++);
+    uint32_t lut[8];
+    for (uint32_t i = 0; i < 8; ++i) lut[i] = get_arg_val<uint32_t>(a++);
+    const uint32_t p = get_arg_val<uint32_t>(a++);
+    uint32_t px[M], py[M];
+    for (uint32_t i = 0; i < M; ++i) {
+        px[i] = get_arg_val<uint32_t>(a++);
+        py[i] = get_arg_val<uint32_t>(a++);
+    }
+    const uint32_t tdbg = get_arg_val<uint32_t>(a++);
+    const uint32_t dord_addr = DET ? get_arg_val<uint32_t>(a++) : 0;
+    uint32_t ts[16];
+    for (uint32_t i = 0; i < 16; ++i) ts[i] = 0;
+    ts[0] = get_timestamp_32b();
+    cb_reserve_back(0, 1);
+    const uint32_t B = (get_write_ptr(0) + 63) & ~63u;
+    const uint32_t sem_l = get_semaphore(0), sem_c = get_semaphore(1), sem_x = get_semaphore(2);
+    uint32_t* plan = reinterpret_cast<uint32_t*>(B + O_PLAN);
+    // my chunk: home mo, its pass-local tokens [ta, ta + nt), gathered rows from row0
+    const uint32_t mo = p / HCH, ta = (p % HCH) * CT;
+    const uint32_t nt = ta < SV ? (SV - ta < CT ? SV - ta : CT) : 0;
+    const bool home_me = mo == ME;
+    const uint32_t row0 = mo * SF + T0 + ta, tile0 = row0 / 32;
+    const uint32_t ntl = nt ? (row0 + nt - 1) / 32 - tile0 + 1 : 0;
+    {
+        const InterleavedAddrGen<true> ig = {.bank_base_address = ids_addr, .page_size = 1024 * IDW};
+        const InterleavedAddrGen<true> wg = {.bank_base_address = w_addr, .page_size = 2048};
+        for (uint32_t i = 0; i < ntl; ++i) {
+            const uint32_t slot = B + O_STC + i * TBC;
+            const uint64_t si = get_noc_addr(tile0 + i, ig), sw = get_noc_addr(tile0 + i, wg);
+            noc_async_read(si, slot, FI);
+            noc_async_read(si + 2 * FI, slot + FI, FI);
+            noc_async_read(sw, slot + 2 * FI, FW);
+            noc_async_read(sw + 2 * FW, slot + 2 * FI + FW, FW);
+        }
+    }
+    uint32_t* zero = reinterpret_cast<uint32_t*>(B + O_ZERO);
+    for (uint32_t i = 0; i < ZB / 4; ++i) zero[i] = 0;
+    // (counters in local memory: an L1 read-modify-write costs ~10x)
+    static_assert(NG <= 256 && N <= 8 && A <= 16 && N * S < 65536, "local counters");
+    uint32_t nret[8], nloc[16], want[A * N];  // my home tokens' plan words (n_ret, n_local, want)
+    for (uint32_t i = 0; i < 8; ++i) nret[i] = 0;
+    for (uint32_t i = 0; i < 16; ++i) nloc[i] = 0;
+    for (uint32_t i = 0; i < A * N; ++i) want[i] = 0;
+    uint32_t* myc = reinterpret_cast<uint32_t*>(B + O_MSG);
+    uint16_t gall[DET ? NGP : 2];  // (det) my chunk's rows per column expert
+    for (uint32_t i = 0; i < (DET ? NGP : 2); ++i) gall[i] = 0;
+    static_assert(!DET || (NG < 255 && CE <= 2048), "(det) a row's column expert in a byte, local");
+    uint8_t grow[DET ? CE : 4];  // (det, my home's chunks) each row's column expert (0xFF: another column's)
+    uint8_t hop[N * L];
+    for (uint32_t o = 0; o < N; ++o) {
+        for (uint32_t l = 0; l < L; ++l) hop[o * L + l] = o == ME ? 0xFF : lut[first_hop(ME, o) * 2 + l];
+    }
+    noc_async_read_barrier();
+    invalidate_l1_cache();
+    ts[1] = get_timestamp_32b();
+    // a token's ids / weights in the staged tiles
+    auto tok = [&](uint32_t lt, const id_t*& ip, const uint16_t*& wp) __attribute__((always_inline)) {
+        const uint32_t row = row0 + lt, rr = row % 32, slot = B + O_STC + (row / 32 - tile0) * TBC;
+        ip = reinterpret_cast<const id_t*>(slot + (rr >= 16 ? FI : 0) + (rr % 16) * 16 * IDW);
+        wp = reinterpret_cast<const uint16_t*>(slot + 2 * FI + (rr >= 16 ? FW : 0) + (rr % 16) * 32);
+    };
+    // (1) my chunk's column rows: local experts listed (header, weight), counts per expert; my home tokens' plan words
+    constexpr uint32_t E0 = ME * EPC;
+    uint32_t cnt[EPC], bo[EPC];
+    for (uint32_t e = 0; e < EPC; ++e) cnt[e] = 0;
+    uint32_t* lst = reinterpret_cast<uint32_t*>(B + O_LST);
+    uint32_t nl = 0;
+    for (uint32_t lt = 0; lt < nt; ++lt) {
+        const id_t* ip;
+        const uint16_t* wp;
+        tok(lt, ip, wp);
+        const uint32_t t = ta + lt, ac = t % A;
+        for (uint32_t k = 0; k < K; ++k) {
+            const uint32_t g = static_cast<uint32_t>(ip[k]) - EOFF;
+            if constexpr (DET) grow[lt * K + k] = g < NG ? static_cast<uint8_t>(g) : 0xFF;
+            if (g >= NG) continue;  // (another column's expert)
+            if constexpr (DET) ++gall[g];
+            const uint32_t e = g - E0;
+            if (e < EPC) {
+                ++cnt[e];
+                lst[2 * nl] = mo | (t << 8) | (e << 24);
+                lst[2 * nl + 1] = wp[k];
+                ++nl;
+            }
+            if (home_me) {  // (a row for my token)
+                const uint32_t src = g / EPC;
+                if (src == ME) {
+                    ++nloc[ac];
+                } else {
+                    ++want[ac * N + src];
+                    ++nret[hop[src * L + (ac + src + ME) % L]];
+                }
+            }
+        }
+    }
+    for (uint32_t e = 0, o_ = 0; e < EPC; ++e) {
+        bo[e] = o_;
+        myc[EPC + e] = o_;
+        o_ += cnt[e];
+        myc[e] = cnt[e];
+    }
+    if constexpr (DET) {  // (two counts a word into the message)
+        uint32_t* mg = reinterpret_cast<uint32_t*>(B + O_MSG + 2 * EPC * 4);
+        for (uint32_t i = 0; i < NGP / 2; ++i) mg[i] = gall[2 * i] | (static_cast<uint32_t>(gall[2 * i + 1]) << 16);
+    }
+    uint32_t* buck = reinterpret_cast<uint32_t*>(B + O_BUCK);
+    uint32_t ninj[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+    for (uint32_t x = 0; x < nl; ++x) {
+        const uint32_t h = lst[2 * x], e = h >> 24, t = (h >> 8) & 0xFFFF, pos = bo[e]++;
+        uint32_t dest;
+        if (home_me) {
+            dest = P + t % A;
+        } else {
+            dest = hop[mo * L + (t % A + ME + mo) % L];  // (fixed per (accumulator, source, home): one ring each)
+            ++ninj[dest];
+        }
+        buck[2 * pos] = dest | (lst[2 * x + 1] << 16);
+        buck[2 * pos + 1] = h;
+    }
+    ts[2] = get_timestamp_32b();
+    for (uint32_t q = 0; q < M; ++q) {
+        noc_async_write(B + O_MSG, get_noc_addr(px[q], py[q], B + O_CIN + p * MSG), MSG);
+    }
+    noc_async_write_barrier();
+    for (uint32_t q = 0; q < M; ++q) noc_semaphore_inc(get_noc_addr(px[q], py[q], sem_l), 1);
+    ts[3] = get_timestamp_32b();
+    uint32_t* cg_ = reinterpret_cast<uint32_t*>(B + O_CNT);
+    uint32_t* rg_ = reinterpret_cast<uint32_t*>(B + O_REG);
+    if (p == 0) {  // (while the others sort: their atomics onto the plan follow the xp barrier, after this; local NoC
+                   // copies of the zero buffer: a store loop over the 4 KB page costs ~4K cycles)
+        static_assert(O_CNT == O_PLAN + 4096 && O_REG == O_CNT + al64(NG * 4), "plan, counts, regions in a row");
+        const uint32_t zb = 4096 + 2 * al64(NG * 4);
+        for (uint32_t b = 0; b < zb; b += ZB) {
+            noc_async_write(B + O_ZERO, get_noc_addr(B + O_PLAN + b), zb - b < ZB ? zb - b : ZB);
+        }
+        noc_async_write_barrier();
+    }
+    // (2) all counts in; expert e's owner (core e % M) totals it and each chunk's first row, sends that to all
+    noc_semaphore_wait(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_l), M);
+    invalidate_l1_cache();
+    ts[4] = get_timestamp_32b();
+    const uint32_t* cin = reinterpret_cast<const uint32_t*>(B + O_CIN);
+    for (uint32_t e = p; e < EPC; e += M) {
+        uint32_t* xp = reinterpret_cast<uint32_t*>(B + O_XP + e * XP);
+        uint32_t s_ = 0;
+        for (uint32_t j = 0; j < M; ++j) {
+            xp[2 + j] = s_;
+            s_ += cin[j * (MSG / 4) + e];
+        }
+        xp[0] = s_;
+        for (uint32_t q = 0; q < M; ++q) {
+            if (q != p) noc_async_write(B + O_XP + e * XP, get_noc_addr(px[q], py[q], B + O_XP + e * XP), XP);
+        }
+    }
+    noc_async_write_barrier();
+    for (uint32_t q = 0; q < M; ++q) noc_semaphore_inc(get_noc_addr(px[q], py[q], sem_x), 1);
+    noc_semaphore_wait(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_x), M);
+    invalidate_l1_cache();
+    uint32_t tot[EPC], reg[EPC], off = 0;
+    for (uint32_t e = 0; e < EPC; ++e) {
+        const uint32_t s_ = reinterpret_cast<const uint32_t*>(B + O_XP + e * XP)[0];
+        tot[e] = s_;
+        reg[e] = off;
+        off += (s_ + 31) / 32 * 32;
+    }
+    // (rows past ROWS_CAP are dropped, as the one-core planner does: NTC tiles at most)
+    const uint32_t NT = off / 32, NTC_ = NT < RC32 ? NT : RC32;
+    const uint32_t R0 = (p * NTC_ / M) * 32, R1 = ((p + 1) * NTC_ / M) * 32;
+    uint32_t* tidx = reinterpret_cast<uint32_t*>(B + O_TIDX);
+    uint32_t* tab = reinterpret_cast<uint32_t*>(B + O_TAB);
+    struct Sl {
+        uint32_t lo, n, stg;
+    };
+    Sl* sl = reinterpret_cast<Sl*>(B + O_SL);
+    uint32_t nsl = 0, sp = 0;
+    auto drain = [&]() {
+        noc_async_read_barrier();
+        invalidate_l1_cache();
+        for (uint32_t q = 0; q < nsl; ++q) {
+            const uint32_t* st = reinterpret_cast<const uint32_t*>(sl[q].stg);
+            for (uint32_t x = 0; x < sl[q].n; ++x) {
+                const uint32_t r = sl[q].lo + x - R0, w0 = st[2 * x], w1 = st[2 * x + 1];
+                tab[2 * r] = w0;
+                tab[2 * r + 1] = w1;
+                tidx[r] = (w1 & 0xFF) * SF + T0 + ((w1 >> 8) & 0xFFFF);  // (home x tokens + token: the gathered x row)
+            }
+        }
+        nsl = sp = 0;
+    };
+    for (uint32_t e = 0; e < EPC && R1 > R0; ++e) {
+        const uint32_t e_lo = reg[e], e_end = reg[e] + tot[e], e_pad = reg[e] + (tot[e] + 31) / 32 * 32;
+        if (e_pad <= R0 || e_lo >= R1) continue;
+        for (uint32_t r = (e_end > R0 ? e_end : R0); r < (e_pad < R1 ? e_pad : R1); ++r) {  // padding rows
+            tidx[r - R0] = 0;
+            tab[2 * (r - R0)] = tab[2 * (r - R0) + 1] = 0;
+        }
+        const uint32_t* xp = reinterpret_cast<const uint32_t*>(B + O_XP + e * XP);
+        for (uint32_t j = 0; j < M; ++j) {
+            const uint32_t* cj = cin + j * (MSG / 4);
+            const uint32_t base = e_lo + xp[2 + j], n = (j + 1 < M ? xp[3 + j] : tot[e]) - xp[2 + j];
+            const uint32_t lo = base > R0 ? base : R0, hi = base + n < R1 ? base + n : R1;
+            if (lo < hi) {
+                const uint32_t src = B + O_BUCK + (cj[EPC + e] + (lo - base)) * 8, cnt_ = hi - lo;
+                const uint32_t bytes = ((src & 15) + cnt_ * 8 + 15) & ~15u;
+                if (nsl == MAXSL || sp + bytes > STG) drain();  // (staging full)
+                noc_async_read(get_noc_addr(px[j], py[j], src & ~15u), B + O_STG + sp, bytes);
+                sl[nsl++] = Sl{lo, cnt_, B + O_STG + sp + (src & 15)};
+                sp += bytes;
+            }
+        }
+    }
+    drain();
+    ts[5] = get_timestamp_32b();
+    const InterleavedAddrGen<true> ig = {.bank_base_address = tidx_addr, .page_size = ROWS_CAP * 4};
+    const InterleavedAddrGen<true> tg = {.bank_base_address = tab_addr, .page_size = 256};
+    const uint32_t W1 = R1 < ROWS_CAP ? R1 : ROWS_CAP;
+    if (W1 > R0) {
+        noc_async_write(B + O_TIDX, get_noc_addr(0, ig) + R0 * 4, (W1 - R0) * 4);
+        for (uint32_t pg = R0 / 32; pg < W1 / 32; ++pg) {
+            noc_async_write(B + O_TAB + (pg - R0 / 32) * 256, get_noc_addr(pg, tg), 256);
+        }
+    }
+    if (NT < RC32) {  // (the rows past the plan: zeros, a 1/M share each)
+        const uint32_t z0 = NT + p * (RC32 - NT) / M, z1 = NT + (p + 1) * (RC32 - NT) / M;
+        for (uint32_t b = z0 * 128; b < z1 * 128; b += ZB) {
+            noc_async_write(B + O_ZERO, get_noc_addr(0, ig) + b, z1 * 128 - b < ZB ? z1 * 128 - b : ZB);
+        }
+        for (uint32_t pg = z0; pg < z1; ++pg) noc_async_write(B + O_ZERO, get_noc_addr(pg, tg), 256);
+    }
+    // (3) n_inj and my home tokens' words onto core 0's plan (atomic increments; core 0 zeroed it before its counts
+    // went out)
+    const uint32_t pl0 = B + O_PLAN;
+    for (uint32_t d = 0; d < 8; ++d) {
+        if (ninj[d]) noc_semaphore_inc(get_noc_addr(px[0], py[0], pl0 + 4 * d), ninj[d]);
+    }
+    if (home_me && nt) {
+        for (uint32_t d = 0; d < 8; ++d) {
+            if (nret[d]) noc_semaphore_inc(get_noc_addr(px[0], py[0], pl0 + 4 * (8 + d)), nret[d]);
+        }
+        for (uint32_t ac = 0; ac < A; ++ac) {
+            if (nloc[ac]) noc_semaphore_inc(get_noc_addr(px[0], py[0], pl0 + 4 * (16 + ac)), nloc[ac]);
+            for (uint32_t s = 0; s < N; ++s) {
+                const uint32_t v = want[ac * N + s];
+                if (v) noc_semaphore_inc(get_noc_addr(px[0], py[0], pl0 + 4 * (32 + ac * 32 + s)), v);
+            }
+        }
+    }
+    ts[6] = get_timestamp_32b();
+#if __DET__  // (preprocessor: SeDyn / SE_RPS exist only with det's include)
+    {
+        const uint32_t sem_d = get_semaphore(3);
+        if (home_me) {
+            // rows per column expert: all chunks (every source's schedule), and the chunks before mine (each of my rows'
+            // place in its expert's row list: homes before mine, then my home's earlier tokens)
+            // (two counts a word, summed packed: < 65536 rows an expert, no carry between the halves)
+            uint32_t gsp[NGP / 2], bsp[NGP / 2];
+            for (uint32_t i = 0; i < NGP / 2; ++i) gsp[i] = bsp[i] = 0;
+            for (uint32_t j = 0; j < M; ++j) {
+                const uint32_t* gj = reinterpret_cast<const uint32_t*>(B + O_CIN + j * MSG + 2 * EPC * 4);
+                if (j == p) {
+                    for (uint32_t i = 0; i < NGP / 2; ++i) bsp[i] = gsp[i];
+                }
+                for (uint32_t i = 0; i < NGP / 2; ++i) gsp[i] += gj[i];
+            }
+            ts[8] = get_timestamp_32b();
+            uint32_t* sch = reinterpret_cast<uint32_t*>(B + O_SCH);
+            uint32_t* tf = reinterpret_cast<uint32_t*>(B + O_TF);
+            static_assert(VM < 255 && EPC < 256, "entry lists in bytes");
+            uint8_t vfirst[N * EPC], vnext[N * VM];  // (each expert's entries in schedule order)
+            static_assert(sizeof(SeDyn) <= 4096, "the schedule scratch");
+            SeDyn& dy = *reinterpret_cast<SeDyn*>(B + O_DYN);
+            for (uint32_t s = 0; s < N; ++s) {
+                se_dyn_from_counts(dy, EPC, SE_RPS, [&](uint32_t e) {
+                    const uint32_t g = s * EPC + e;
+                    return (gsp[g / 2] >> (16 * (g & 1))) & 0xFFFF;
+                });
+                for (uint32_t e = 0; e < EPC; ++e) vfirst[s * EPC + e] = 0xFF;
+                for (uint32_t v = dy.n_act; v-- > 0;) {
+                    vnext[s * VM + v] = vfirst[s * EPC + dy.eid[v]];
+                    vfirst[s * EPC + dy.eid[v]] = static_cast<uint8_t>(v);
+                }
+                uint32_t fin = 0;
+                for (uint32_t v = 0; v < dy.n_act; ++v) {  // (first row | rows << 16: < 65536 rows a source)
+                    sch[s * VM + v] = dy.off[v] | (dy.cnt[v] << 16);
+                    fin += dy.cnt[v] > WR ? dy.cnt[v] : WR;
+                    tf[s * VM + v] = fin;
+                }
+            }
+            ts[9] = get_timestamp_32b();
+            uint16_t base[NGP];  // (each expert's rows in the chunks before mine)
+            for (uint32_t g = 0; g < NGP; ++g) base[g] = (bsp[g / 2] >> (16 * (g & 1))) & 0xFFFF;
+            uint8_t* ordl = reinterpret_cast<uint8_t*>(B + O_ORDL);
+            for (uint32_t i = 0; i < CE; ++i) ordl[i] = 0xFF;
+            for (uint32_t lt = 0; lt < nt; ++lt) {
+                uint32_t kt[K], nk = 0;
+                uint8_t ks[K];
+                for (uint32_t k = 0; k < K; ++k) {
+                    const uint32_t g = grow[lt * K + k];
+                    if (g == 0xFF) continue;
+                    const uint32_t r = base[g]++, s = g / EPC;
+                    for (uint32_t v = vfirst[g]; v != 0xFF; v = vnext[s * VM + v]) {
+                        const uint32_t w_ = sch[s * VM + v], o_ = w_ & 0xFFFF;
+                        if (r >= o_ && r < o_ + (w_ >> 16)) {
+                            const uint32_t key = tf[s * VM + v];
+                            uint32_t i = nk++;
+                            for (; i > 0 && (kt[i - 1] > key || (kt[i - 1] == key && ks[i - 1] > s)); --i) {
+                                kt[i] = kt[i - 1];
+                                ks[i] = ks[i - 1];
+                            }
+                            kt[i] = key;
+                            ks[i] = static_cast<uint8_t>(s);
+                            break;
+                        }
+                    }
+                }
+                for (uint32_t i = 0; i < nk; ++i) ordl[lt * K + i] = ks[i];
+            }
+            ts[10] = get_timestamp_32b();
+            // my tokens' order lists to every accumulator owner (its copy of this chip's home tokens, token-major)
+            for (uint32_t q = 0; q < NOWN; ++q) {
+                noc_async_write(B + O_ORDL, get_noc_addr(px[q], py[q], B + O_ORDT + (p % HCH) * CE), CE);
+            }
+            noc_async_write_barrier();
+            for (uint32_t q = 0; q < NOWN; ++q) noc_semaphore_inc(get_noc_addr(px[q], py[q], sem_d), 1);
+        }
+        if (p < NOWN) {  // an accumulator's page: its tokens t = a + j A in order, K sources each (0xFF: none)
+            noc_semaphore_wait(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_d), HCH);
+            invalidate_l1_cache();
+            ts[11] = get_timestamp_32b();
+            const uint8_t* ordt = reinterpret_cast<const uint8_t*>(B + O_ORDT);
+            uint32_t* ff = reinterpret_cast<uint32_t*>(B + O_FF);
+            for (uint32_t i = 0; i < ZB / 4; ++i) ff[i] = 0xFFFFFFFFu;
+            const InterleavedAddrGen<true> og = {.bank_base_address = dord_addr, .page_size = DPG};
+            uint32_t own = 0;
+            for (uint32_t ac = p; ac < A; ac += M, ++own) {
+                uint8_t* pg = reinterpret_cast<uint8_t*>(B + O_PG + own * DPG);
+                uint32_t j = 0;
+                if constexpr (K % 2 == 0) {  // (records 2-byte aligned: halfwords)
+                    uint16_t* d16 = reinterpret_cast<uint16_t*>(pg);
+                    const uint16_t* s16 = reinterpret_cast<const uint16_t*>(ordt);
+                    for (uint32_t t = ac; t < SV; t += A, ++j) {
+                        for (uint32_t k = 0; k < K / 2; ++k) d16[j * (K / 2) + k] = s16[t * (K / 2) + k];
+                    }
+                } else {
+                    for (uint32_t t = ac; t < SV; t += A, ++j) {
+                        for (uint32_t k = 0; k < K; ++k) pg[j * K + k] = ordt[t * K + k];
+                    }
+                }
+                // the records, then 0xFF to the page end: up to the next 64 B here, the rest from the 0xFF buffer
+                const uint32_t b0 = j * K, b1 = (b0 + 63) / 64 * 64 < DPG ? (b0 + 63) / 64 * 64 : DPG;
+                for (uint32_t b = b0; b < b1; ++b) pg[b] = 0xFF;
+                noc_async_write(B + O_PG + own * DPG, get_noc_addr(ac, og), b1);
+                for (uint32_t b = b1; b < DPG; b += ZB) {
+                    noc_async_write(B + O_FF, get_noc_addr(ac, og) + b, DPG - b < ZB ? DPG - b : ZB);
+                }
+            }
+        }
+    }
+#endif
+    noc_async_write_barrier();
+    noc_async_atomic_barrier();
+    noc_semaphore_inc(get_noc_addr(px[0], py[0], sem_c), 1);
+    if (p == 0) {
+        noc_semaphore_wait(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_c), M);
+        invalidate_l1_cache();
+        plan[600] = off;
+        plan[601] = off > ROWS_CAP ? 1 : 0;
+        for (uint32_t e = 0; e < EPC; ++e) {
+            cg_[E0 + e] = tot[e];
+            rg_[E0 + e] = reg[e];
+        }
+        const InterleavedAddrGen<true> cg = {.bank_base_address = cnt_addr, .page_size = NG * 4};
+        const InterleavedAddrGen<true> rg = {.bank_base_address = reg_addr, .page_size = NG * 4};
+        const InterleavedAddrGen<true> pg = {.bank_base_address = plan_addr, .page_size = 4096};
+        noc_async_write(B + O_CNT, get_noc_addr(0, cg), NG * 4);
+        noc_async_write(B + O_REG, get_noc_addr(0, rg), NG * 4);
+        noc_async_write(B + O_PLAN, get_noc_addr(0, pg), 4096);
+        noc_async_write_barrier();
+    }
+    ts[7] = get_timestamp_32b();
+    if (tdbg) {  // (phase timestamps: start, read, sort, counts out, counts in, placed, rows out + atomics, end)
+        uint32_t* d = reinterpret_cast<uint32_t*>(B + O_DBG);
+        for (uint32_t i = 0; i < 16; ++i) d[i] = ts[i];
+        const InterleavedAddrGen<true> dg = {.bank_base_address = tdbg, .page_size = 64};
+        noc_async_write(B + O_DBG, get_noc_addr(p, dg), 64);
+        noc_async_write_barrier();
+    }
+    noc_async_atomic_barrier();
+}
+"""
+
+
+def _mcc_geometry(S, N, cores):
+    """(M, CT): the column multi-core planner's core count and tokens per chunk for ``cores`` requested cores (chunks
+    of 32-token multiples inside one home each; M = N ceil(S / CT) <= cores, >= N)."""
+    hch = max(1, cores // N)
+    ct = -(-(-(-S // hch)) // 32) * 32
+    return N * -(-S // ct), ct
+
+
+def _mcc_l1_bytes(M, CT, N, S, K, EPC, NG, A, rows_cap, idw, det, VM):
+    """L1 of the column multi-core planner (the kernel's layout; it static_asserts against this)."""
+    al = lambda v: (v + 63) // 64 * 64  # noqa: E731
+    hch, ce = -(-S // CT), CT * K
+    ngp = (NG + 1) // 2 * 2
+    msg = al(2 * EPC * 4 + (ngp * 2 if det else 0))
+    rc32 = rows_cap // 32
+    rpc = -(-rc32 // M) * 32 + 32
+    own = -(-A // M)
+    tbc = 2 * 256 * idw + 2 * 512
+    b = (CT // 32 + 2) * tbc + 2 * al(ce * 8) + msg + M * msg + EPC * al((M + 2) * 4)
+    b += al(_mc2_stg(M, EPC, rows_cap)) + al(512 * 12) + al(544 * 4) + al(rpc * 4) + al(rpc * 8) + 2048 + 4096
+    b += 2 * al(NG * 4) + 64
+    if det:
+        b += al(2 * NG * 4) + al(N * VM * 8) + al(N * VM) + al(N * 4) + al(N * VM * 4) + 4096 + al(ce) + al(hch * ce)
+        b += own * det_page_bytes(S, K) + 2048
+    return b + 64
+
+
 def first_hop_idx(src, dst, C, R=None, wrap=(False, False)):
     """DIRS index (0 X+, 1 X-, 2 Y+, 3 Y-) of the first hop src -> dst: Y first, then X; wrap = (X, Y) rings, the
     shorter way, ties Y- / X+ (the fabric's routing tables)."""
@@ -1315,7 +1801,8 @@ def combine_planner_prepare(
     or with joint (and row_pages) one [N S, 2 K] uint16 row-major tensor, each token's ids then its weights' bits
     (run(t, t)).
 
-    Column / pass options (the one-core planner only; defaults = the whole-mesh plan above, unchanged):
+    Column / pass options (defaults = the whole-mesh plan above, unchanged); the one-core planner, or with ``cores``
+    (and tile_in) the column multi-core planner (P.11), whose outputs are bit-identical to the one-core planner's:
       axis=0       the combine along each mesh column (sparse_combine_rf_prepare axis=0): chip (r, c) plans as chip r
                    of an R x 1 mesh (its column), homes and sources are the column's chips (header home = r), ids /
                    wts hold the column's tokens [R tokens S K] (e.g. all-gathered over axis 0), expert ids are the
@@ -1330,18 +1817,24 @@ def combine_planner_prepare(
       ids_uint32   the ids page holds uint32 ids (default uint16; ttnn.reshape refuses uint16 row-major tensors).
       tile_in      ids / wts are TILE [tokens, K] tensors (K <= 16; e.g. the router's top-k gathered as tiles), read
                    tile by tile: no untilize and no reshape to one page (a ttnn.reshape of [2048, 6] to one page took
-                   ~1 ms on the device)."""
+                   ~1 ms on the device).
+      cores        with axis=0 (default None: the one-core planner on ``core``): the column multi-core planner on these
+                   logical cores (the first M = N ceil(S / CT) of them, CT the 32-token-multiple chunk of a home's
+                   tokens that spreads S over cores // N chunks): chunk counting sorts, count exchange, row slices,
+                   det order lists per chunk; needs tile_in. run.mcc = (M, CT)."""
     from .sparse_all_gather_2d import mesh_plan
 
     R, C = tuple(mesh_device.shape)
     R_m, C_m = R, C  # (the mesh; R, C below: the planned group's shape)
     if axis is not None:
-        assert axis == 0 and cores is None, "axis=0: the one-core planner"
+        assert axis == 0, "axis=0 only (the column)"
+        assert cores is None or tile_in, "axis=0 with cores (the column multi-core planner): tile_in only"
         C = 1
     SF = S if tokens is None else int(tokens)
     T0 = int(token_base)
     skipf = axis is not None or id_offset is not None or SF != S or T0 != 0
-    assert cores is None or not skipf, "id_offset / tokens / token_base: the one-core planner"
+    colmc = cores is not None and axis is not None  # (the column multi-core planner)
+    assert cores is None or not skipf or colmc, "id_offset / tokens / token_base: the one-core / column planners"
     N = R * C
     NG = N * EPC
     assert rows_cap % 32 == 0 and N * S * K < (1 << 16) * 64 and N <= 32 and A <= 16
@@ -1412,8 +1905,8 @@ def combine_planner_prepare(
             + ['#include "ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/kernels/se_dyn.hpp"']
         )
     T = N * SF * K
-    assert not ids_uint32 or cores is None, "ids_uint32: the one-core planner"
-    assert not tile_in or (cores is None and K <= 16 and rows_cap * 8 >= 6144), "tile_in: one core, K <= 16"
+    assert not ids_uint32 or cores is None or colmc, "ids_uint32: the one-core / column planners"
+    assert not tile_in or ((cores is None or colmc) and K <= 16 and rows_cap * 8 >= 6144), "tile_in: K <= 16"
     in_bytes = ((T * (4 if ids_uint32 else 2) + 63) // 64) * 64 + ((T * 2 + 63) // 64) * 64 + 64
     stage_bytes = ((T // K + 31) // 32) * (1024 * (4 if ids_uint32 else 2) + 2048) + 64
     out_bytes = 2 * ((NG * 4 + 63) // 64) * 64 + rows_cap * 12 + 4096 + 64
@@ -1426,7 +1919,25 @@ def combine_planner_prepare(
     )
     c = ttnn.CoreCoord(*core)
     cs = ttnn.CoreRangeSet([ttnn.CoreRange(c, c)])
-    if cores is not None:  # the multi-core planner
+    if colmc:  # the column multi-core planner (P.11)
+        M, CT = _mcc_geometry(S, N, len(cores))
+        assert M <= len(cores) and N <= 32 and A <= 16 and K <= 16
+        assert S < (1 << 16) and EPC < 256
+        mcores = list(cores)[:M]
+        mcs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(*x), ttnn.CoreCoord(*x)) for x in mcores])
+        vv = [mesh_device.worker_core_from_logical_core(ttnn.CoreCoord(*x)) for x in mcores]
+        pxy = [w for v in vv for w in (v.x, v.y)]
+        idw = 4 if ids_uint32 else 2
+        mcc_bytes = _mcc_l1_bytes(M, CT, N, S, K, EPC, NG, A, rows_cap, idw, det is not None, VM)
+        tdbg_t = ttnn.from_torch(
+            torch.zeros(R_m, C_m, M, 16, dtype=torch.int32),
+            device=mesh_device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=shard,
+        )
+    elif cores is not None:  # the multi-core planner
         M = len(cores)
         CH = (T + M - 1) // M
         GS = (EPC + M - 1) // M
@@ -1524,7 +2035,67 @@ def combine_planner_prepare(
                 progs[(r, cc)] = pd
         return progs if per_chip else mesh_desc
 
+    def build_mcc(ids, wts, per_chip=False):
+        mesh_desc, progs = ttnn.MeshProgramDescriptor(), {}
+        for r in range(R_m):
+            for cc in range(C_m):
+                eoff = int(id_offset(r, cc)) if id_offset is not None else 0
+                pd = ttnn.ProgramDescriptor()
+                pd.cbs = [
+                    ttnn.CBDescriptor(
+                        total_size=mcc_bytes,
+                        core_ranges=mcs,
+                        format_descriptors=[ttnn.CBFormatDescriptor(0, ttnn.uint32, mcc_bytes)],
+                    )
+                ]
+                pd.semaphores = [
+                    ttnn.SemaphoreDescriptor(id=i, core_ranges=mcs, initial_value=0)
+                    for i in ((0, 1, 2, 3) if det is not None else (0, 1, 2))
+                ]
+                head = [
+                    int(ids.buffer_address()),
+                    int(wts.buffer_address()),
+                    int(outs["counts"].buffer_address()),
+                    int(outs["regions"].buffer_address()),
+                    int(outs["token_index"].buffer_address()),
+                    int(outs["table"].buffer_address()),
+                    int(outs["plan"].buffer_address()),
+                ] + list(port_luts[(r, cc)])
+                rt = ttnn.RuntimeArgs()
+                for pi, x in enumerate(mcores):
+                    rt[x[0]][x[1]] = (
+                        head
+                        + [pi]
+                        + pxy
+                        + [int(tdbg_t.buffer_address())]
+                        + ([int(outs["dord"].buffer_address())] if det is not None else [])
+                    )
+                pd.kernels = [
+                    ttnn.KernelDescriptor(
+                        kernel_source=wsub(_PLANNER_MCC)
+                        .replace("__IDW__", str(idw))
+                        .replace("__DET__", str(int(det is not None)))
+                        .replace("__DPG__", str(det_page_bytes(S, K)))
+                        .replace("__WR__", str(int(det.get("w_rows", 160)) if det is not None else 1))
+                        .replace("__VM__", str(VM))
+                        .replace("__DETINC__", detinc if det is not None else ""),
+                        source_type=ttnn.KernelDescriptor.SourceType.SOURCE_CODE,
+                        core_ranges=mcs,
+                        compile_time_args=[r, N, S, K, EPC, NG, A, L, n_ports[(r, cc)], rows_cap, M, CT, eoff, SF, T0]
+                        + [_mc2_stg(M, EPC, rows_cap), mcc_bytes],
+                        runtime_args=rt,
+                        config=ttnn.DataMovementConfigDescriptor(
+                            processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.RISCV_0_default
+                        ),
+                    )
+                ]
+                mesh_desc[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(r, cc), ttnn.MeshCoordinate(r, cc))] = pd
+                progs[(r, cc)] = pd
+        return progs if per_chip else mesh_desc
+
     def build(ids, wts, per_chip=False):
+        if colmc:
+            return build_mcc(ids, wts, per_chip=per_chip)
         if cores is not None:
             return build_mc(ids, wts, per_chip=per_chip)
         mesh_desc, progs = ttnn.MeshProgramDescriptor(), {}
@@ -1615,15 +2186,21 @@ def combine_planner_prepare(
             state["key"], state["desc"] = k, build(ids, wts)
         ttnn.generic_op(
             [ids, wts, outs["counts"], outs["regions"], outs["token_index"], outs["table"], outs["plan"]]
-            + ([outs["dord"]] if "dord" in outs and cores is None else []),
+            + ([outs["dord"]] if "dord" in outs and (cores is None or colmc) else []),
             state["desc"],
         )
         return outs
 
     run.outs = outs
     run.tdbg = tdbg_t if cores is not None else None
-    run.token_major = bool(cores is not None and TM)
-    if cores is not None:  # (the per-chip programs, for merging another op onto the cores it leaves)
+    run.token_major = bool(cores is not None and not colmc and TM)
+    run.mcc = (M, CT) if colmc else None
+    if colmc:  # (the per-chip programs: several passes' planners in one op, each on its own cores)
+        run.programs = lambda ids, wts: build_mcc(ids, wts, per_chip=True)
+        run.cores = [ttnn.CoreCoord(*x) for x in mcores]
+        run.tensors = [outs["counts"], outs["regions"], outs["token_index"], outs["table"], outs["plan"]]
+        run.tensors += [outs["dord"]] if "dord" in outs else []
+    elif cores is not None:  # (the per-chip programs, for merging another op onto the cores it leaves)
         run.programs = lambda ids, wts: build_mc(ids, wts, per_chip=True)
         run.cores = [ttnn.CoreCoord(*x) for x in cores]
         run.tensors = [outs["counts"], outs["regions"], outs["token_index"], outs["table"], outs["plan"]]

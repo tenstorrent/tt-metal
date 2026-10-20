@@ -10,8 +10,9 @@ column options (combine_planner_prepare / sparse_combine_rf_prepare axis=0): per
     q(x) rows of the chip's mesh row  -> all_gather over axis 0 -> xg [R S, H] bf16 ROW_MAJOR   (the column's tokens:
                                                                  the flat expert reads its rows by token index)
     top-k ids (uint16) / weights (bf16) of the column's tokens -> all_gather over axis 0 -> one page each
-    planner (one core, per pass)       counts / regions [1, Eg] (the column's experts, ids local to the column), the
-                                       token index, the y writers' L1 hand-off table, the combine's per-call counts
+    planner (one core per pass, or     counts / regions [1, Eg] (the column's experts, ids local to the column), the
+    COMBINE_PLANNER=multi: up to 32    token index, the y writers' L1 hand-off table, the combine's per-call counts,
+    cores per pass, P.11)              the det order table (both planners: bit-identical tables)
     arena (per call, L1 on every core: the flat expert's buffers and the combine's state / rings / accumulators),
     its combine state and the writers' words zeroed, a tiny all_gather over axis 0 (cross-chip barrier: no chip of
     the column writes into another's arena before that one is zeroed)
@@ -55,6 +56,9 @@ FABRIC_PAYLOAD = 10880  # B: one 10240 B expert row + its 32 B trailer per packe
 # the arena may grow past what the flat expert needs, for the accumulators (Marko's FC_ARENA_KB): up to the largest
 # arena the flat op itself uses on this grid (bf16 x / h plan: 1356 KB per core, 2x2 p300c, l1_small 24 KB)
 ARENA_MAX = 1356 * 1024
+# COMBINE_PLANNER=multi (P.11): cores a pass's column multi-core planner asks for (it uses N ceil(S / CT) <= this, CT
+# the 32-token chunk of a home's tokens: 2x2, 1024 home tokens: 32 cores of 64 tokens). Marko's K3 default (32).
+PLANNER_CORES = 32
 _STATES: dict = {}
 
 
@@ -211,11 +215,15 @@ class WeightedCombine:
         arena_bytes: int | None = None,
         passes: int | None = None,
         acc_dtype=None,
+        planner: str = "one",
+        planner_cores: int = PLANNER_CORES,
     ):
         """arena_bytes: the per-core arena (None: the flat expert's, grown for the accumulators up to ARENA_MAX; a
         test override). passes: the pass count (None: the fewest that fit; a test override, >= that). acc_dtype: the
         combine's running sums per home token in L1 (setting COMBINE_ACC, P.9): ttnn.float32 (None: 20 KB a token,
-        2x2: 2 passes of 512) or ttnn.bfloat16 (10 KB a token: the 1024 home tokens in one pass)."""
+        2x2: 2 passes of 512) or ttnn.bfloat16 (10 KB a token: the 1024 home tokens in one pass). planner (setting
+        COMBINE_PLANNER, P.11): "one" = each pass's planner on one core; "multi" = the column multi-core planner on
+        up to planner_cores cores per pass (disjoint per pass: the passes' planners run in one program)."""
         from ttnn.bringup.combine_rf.combine_plan import axis_ports, combine_planner_prepare, port_luts
         from ttnn.bringup.combine_rf.sparse_all_gather_2d import mesh_plan, place_ports
         from ttnn.bringup.combine_rf.sparse_combine_rf import accumulator_bytes
@@ -280,11 +288,17 @@ class WeightedCombine:
             f"EXPERTS_WEIGHTED S={S} passes={P} x {self.S_pass} acc={acc_name} accumulators={self.A} "
             f"port cells={sorted(port_cells)} "
             f"free cells={len(self.cells)} rows_cap={self.rows_cap} arena={arena_bytes >> 10} KB "
-            f"flat arena={flat_bytes >> 10} KB acc={need >> 10} KB (ring depth 4, local ring 8)"
+            f"flat arena={flat_bytes >> 10} KB acc={need >> 10} KB (ring depth 4, local ring 8) planner={planner}"
         )
         # per-pass planners (one core, column axis), outputs allocated once
         self.luts, self.nps = port_luts(mesh, links, per_direction=True, axis=0)
         Eg = self.Eg
+        assert planner in ("one", "multi"), planner
+        self.planner = planner
+        ncore = grid.x * grid.y
+        per = min(int(planner_cores), ncore // P)  # (multi: each pass's planner on its own cores)
+        assert planner == "one" or per >= R, f"{P} passes x {R} planner cores do not fit the {ncore}-core grid"
+        all_xy = [(i % grid.x, i // grid.x) for i in range(ncore)]
         self.planners = [
             combine_planner_prepare(
                 mesh,
@@ -303,6 +317,7 @@ class WeightedCombine:
                 ids_uint32=True,
                 tile_in=True,  # (the gathered top-k tiles as they are: no untilize / reshape to one page)
                 core=(p % grid.x, p // grid.x),  # (every pass's planner on its own core: one program, in parallel)
+                cores=all_xy[p * per : (p + 1) * per] if planner == "multi" else None,
                 # the deterministic combine's order table: every source chip's flat schedule (the plan's schedule
                 # parameters, pin 1 and the op's default pin ratio 8), a token's rows summed in a fixed order
                 det=dict(
@@ -311,6 +326,11 @@ class WeightedCombine:
             )
             for p in range(P)
         ]
+        if planner == "multi":
+            M, CT = self.planners[0].mcc
+            self.planner_desc = f"multi: {M} cores x {CT} tokens a pass"
+        else:
+            self.planner_desc = "one core a pass"
         self._plan_desc = {}  # (ids, wts) addresses -> the passes' planners merged into one program per chip
         # y (the flat expert's row buffer: unused with the L1 hand-off, the op checks its shape) and the combine output
         self.y = ttnn.allocate_tensor_on_device(
@@ -400,6 +420,7 @@ class WeightedCombine:
                 pd = ttnn.ProgramDescriptor()
                 pd.cbs = [cb for pg in progs for cb in pg[ch].cbs]
                 pd.kernels = [k for pg in progs for k in pg[ch].kernels]
+                pd.semaphores = [sm for pg in progs for sm in pg[ch].semaphores]  # (multi: per pass, disjoint cores)
                 desc[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(*ch), ttnn.MeshCoordinate(*ch))] = pd
             self._plan_desc = {key: desc}  # (the latest addresses only)
         ttnn.generic_op([ids, wts] + [t for pl in self.planners for t in pl.tensors], desc)
