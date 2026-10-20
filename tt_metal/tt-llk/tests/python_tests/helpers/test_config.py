@@ -120,7 +120,7 @@ class TestOutcome:
     device_print_lines: list = field(default_factory=list)
 
 
-LLK_CODE_SHIFT = int(os.environ.get("LLK_CODE_SHIFT", "0"))
+LLK_CODE_SHIFT = int(os.environ.get("LLK_CODE_SHIFT", "52"))
 
 
 class TestConfig:
