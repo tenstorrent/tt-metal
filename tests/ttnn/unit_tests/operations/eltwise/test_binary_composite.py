@@ -16,7 +16,7 @@ from tests.ttnn.utils_for_testing import (
     assert_with_ulp,
     assert_equal,
 )
-from models.common.utility_functions import is_blackhole, is_slow_dispatch
+from tt_py_test_utils_common.utility_functions import is_blackhole, is_slow_dispatch
 
 
 @pytest.mark.parametrize(
