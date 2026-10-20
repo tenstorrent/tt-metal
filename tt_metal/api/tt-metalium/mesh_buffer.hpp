@@ -204,8 +204,7 @@ private:
     };
     struct ExternallyOwnedState {};
     struct DeallocatedState {};
-    using MeshBufferState =
-        std::variant<OwnedBufferState, ExternallyOwnedState, DeallocatedState>;
+    using MeshBufferState = std::variant<OwnedBufferState, ExternallyOwnedState, DeallocatedState>;
     MeshBufferState state_;
 
     friend std::vector<experimental::per_core_allocation::L1TensorExtent>

@@ -101,9 +101,7 @@ std::shared_ptr<distributed::MeshBuffer> create_l1_tensor_view(
             if (placement.device_coord != coord) {
                 continue;
             }
-            TT_FATAL(
-                addresses.emplace(placement.core_coord, placement.address).second,
-                "Duplicate L1 view placement");
+            TT_FATAL(addresses.emplace(placement.core_coord, placement.address).second, "Duplicate L1 view placement");
         }
         TT_FATAL(addresses.size() == cores.size(), "L1 view requires complete shard coverage");
         for (const auto& core : cores) {
