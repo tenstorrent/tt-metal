@@ -24,7 +24,9 @@ class SparseRowPlan:
     ghost lines from the neighbouring bands. A GS launch whose cores would have more than MAX_NB neighbours is
     planned on fewer cores."""
 
-    def __new__(cls, COL, out_blocks, src_regions, ncores, noc_xy, exchange, bands=None, pout=None, stencil=None):
+    def __new__(
+        cls, COL, out_blocks, src_regions, ncores, noc_xy, exchange, bands=None, pout=None, stencil=None, transfer=None
+    ):
         """COL: [nslot, P] column indices (q order). out_blocks: (start, end) q ranges of the output rows, one per
         phase block (GS: one colour each). src_regions: q ranges of the input vector the columns fall in.
         exchange: True for Gauss-Seidel launches (cores push updated rows into each other's windows).
@@ -33,11 +35,14 @@ class SparseRowPlan:
         COL's row length too, so it can be uploaded as is.
         stencil: a reference.problem.Level whose 27-point matrix the launch uses, with COL = None: the windows are
         planned from the level's storage-order formula (no column table) and off is None, because the device
-        generates the offsets (tt/custom_ops/stencil_matrix). Gauss-Seidel plans only (exchange=True)."""
+        generates the offsets (tt/custom_ops/stencil_matrix). Gauss-Seidel plans only (exchange=True).
+        transfer: (kind, F, C) with COL = None: a grid transfer launch between fine level F and coarse level C (kind
+        "restrict" or "prolong"), planned from their storage-order formulas without Level.link's tables; off holds the
+        1-slot window offsets and weights the 1-slot values (exchange=False, pout = the out rows' vector length)."""
         nc = ncores
         while True:
             p = object.__new__(cls)
-            p._init(COL, out_blocks, src_regions, nc, noc_xy, exchange, bands=bands, pout=pout, stencil=stencil)
+            p._init(COL, out_blocks, src_regions, nc, noc_xy, exchange, bands, pout, stencil, transfer)
             if not exchange or max((len(x) for x in p.nbr), default=0) <= MAX_NB or nc == 1:
                 return p
             nc = max(1, int(nc * 0.75))
@@ -45,8 +50,15 @@ class SparseRowPlan:
     def __init__(self, *a, **k):
         pass
 
-    def _init(self, COL, out_blocks, src_regions, ncores, noc_xy, exchange, bands=None, pout=None, stencil=None):
-        nslot, stride = COL.shape if stencil is None else (27, stencil.stride)
+    def _init(
+        self, COL, out_blocks, src_regions, ncores, noc_xy, exchange, bands=None, pout=None, stencil=None, transfer=None
+    ):
+        if stencil is not None:
+            nslot, stride = 27, stencil.stride
+        elif transfer is not None:
+            nslot, stride = 1, pout
+        else:
+            nslot, stride = COL.shape
         pout = stride if pout is None else pout
         self.nslot, self.pout = nslot, pout
         NB = len(out_blocks)
@@ -72,7 +84,11 @@ class SparseRowPlan:
                 own[:, b, 0], own[:, b, 1] = a, np.minimum(e, a + per)
         ng = max(e for _, e in src_regions) // GRAN + 2  # granules of the input vector
         lib = native.lib()
-        if stencil is not None:
+        self.weights = None
+        if transfer is not None:
+            assert not exchange and lib is not None
+            pieces, off, own_l1, ents, self.weights = self._plan_transfer(lib, transfer, own, ng, src_regions[0][0], stride)
+        elif stencil is not None:
             assert exchange and lib is not None
             pieces, off, own_l1, ents = self._plan_stencil(lib, stencil, own, ng, src_regions[0][0], noc_xy)
         elif lib is not None:
@@ -154,6 +170,30 @@ class SparseRowPlan:
         own_l1 = np.where(has, pl1_f + (a - plo_f) * 4, 0)
         ents = SparseRowPlan._exchange_native(lib, nc, NB, own_f, maxp, plo, pln, pl1, npc, noc_xy)
         return (lo2, ln2, l12, npc), None, own_l1, ents
+
+    @staticmethod
+    def _plan_transfer(lib, transfer, own, ng, empty_lo, pout):
+        """Window pieces, 1-slot offsets and weights of a grid transfer launch, from the storage-order formulas of its
+        two levels (host/native_setup.cpp's hpcg_plan_windows_transfer / hpcg_transfer_tables)."""
+        kind, F, C = transfer
+        k = {"restrict": 1, "prolong": 2}[kind]
+        nc, NB = own.shape[:2]
+        own_f = np.ascontiguousarray(own.reshape(-1), np.int64)
+        for maxp in MAX_PIECES:
+            plo, pln, pl1 = (np.zeros(nc * maxp, np.int64) for _ in range(3))
+            npc = np.zeros(nc, np.int64)
+            args = (k, *F.geo(), *C.geo(), nc, NB, own_f, GRAN, WGAP, ng, empty_lo, maxp, plo, pln, pl1, npc)
+            if lib.hpcg_plan_windows_transfer(*args) >= 0:
+                break
+        else:
+            raise ValueError(f"a core needs more than {maxp} window pieces")
+        off = native.zeros((1, pout), np.int32)
+        w = native.zeros((1, pout), np.float32)
+        bad = lib.hpcg_transfer_tables(k, *F.geo(), *C.geo(), nc, NB, own_f, maxp, plo, pln, pl1, npc, off, w)
+        assert bad == 0, "column outside its window piece"
+        pieces = tuple(x.reshape(nc, maxp) for x in (plo, pln, pl1)) + (npc,)
+        ents = (np.zeros((0, 5), np.int64), np.zeros(nc * NB + 1, np.int64), [[] for _ in range(nc)])
+        return pieces, off, np.zeros((nc, NB), np.int64), ents, w
 
     @staticmethod
     def _exchange_native(lib, nc, NB, own_f, maxp, plo, pln, pl1, npc, noc_xy):

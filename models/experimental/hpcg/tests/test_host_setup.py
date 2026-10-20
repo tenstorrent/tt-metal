@@ -101,3 +101,28 @@ def test_meta_matches_python(nx, bands):
         for tpw, align in ((1024, 16), (256, 16), (1024, 1024)):
             got, want = p.meta(phases, noc, tpw, align), p._meta_python(phases, noc, tpw, align)
             assert np.array_equal(got[0], want[0]) and list(got[1:]) == list(want[1:]), (phases[:3], tpw, align)
+
+
+@pytest.mark.parametrize("nx, bands", [(16, 1), (26, 1), (48, 5), (64, 10), (60, 5)])
+def test_transfer_plans_match_link(nx, bands):
+    """Restriction and prolongation planned from the storage-order formulas equal the plans built from Level.link's
+    R / Pm tables: window pieces, offsets and weights."""
+    if native.lib() is None:
+        pytest.skip("no C++ compiler")
+    F, C = Level(nx, bands, slot_stride), Level(nx // 2, max(1, bands // 2), slot_stride)
+    F.link(C)
+    noc = [(i % 13, i // 13) for i in range(130)]
+    nb0 = F.starts[1]
+    cblocks = [(C.starts[c], C.starts[c + 1]) for c in range(8)]
+    cases = [
+        ("restrict", F.R, F.Rw, cblocks, [(0, nb0)], C.bstarts if C.bands > 1 else None, C.P),
+        ("prolong", F.Pm, F.Pw, [(0, nb0)], cblocks, [F.bstarts[0]] if F.bands > 1 else None, nb0),
+    ]
+    for kind, table, weights, out_blocks, src, bs, pout in cases:
+        want = SparseRowPlan(table[None, :], out_blocks, src, 130, noc, False, bands=bs)
+        got = SparseRowPlan(None, out_blocks, src, 130, noc, False, bands=bs, pout=pout, transfer=(kind, F, C))
+        assert got.nc == want.nc and np.array_equal(got.own, want.own), kind
+        for (gl, gn, g1), (wl, wn, w1) in zip(got.pieces, want.pieces):
+            assert np.array_equal(gl, wl) and np.array_equal(gn, wn) and np.array_equal(g1, w1), kind
+        assert np.array_equal(got.off, want.off), f"{kind} offsets"
+        assert np.array_equal(got.weights.reshape(-1), weights), f"{kind} weights"

@@ -242,7 +242,10 @@ def build(nx, bands=None, slot_stride=None, tables=True):
     bands = list(bands or []) + [1] * NLEV
     levels = [Level(nx >> l, bands[l], slot_stride, tables) for l in range(NLEV)]
     for l in range(NLEV - 1):
-        levels[l].link(levels[l + 1])
+        if levels[l].tables:
+            levels[l].link(levels[l + 1])  # R / Pm; without tables, transfers are planned from the formulas
+        else:
+            levels[l].coarse = levels[l + 1]
     return levels
 
 

@@ -137,32 +137,32 @@ class HPCG:
                 C, dc = self.levels[l + 1], self.lv[l + 1]
                 nb0 = L.starts[1]
                 cblocks = [(C.starts[c], C.starts[c + 1]) for c in range(8)]
-                # restriction: rc[qc] = Rw * t[R[qc]], t = r - A z = block 0 of Az (written by the pre-smoother)
-                rp = SparseRowPlan(
-                    L.R[None, :],
-                    cblocks,
-                    [(0, nb0)],
-                    nc,
-                    noc_xy,
-                    exchange=False,
-                    bands=C.bstarts if C.bands > 1 else None,
-                )
-                d.Rt = rows_to_device(device, L.Rw)
+                # restriction: rc[qc] = Rw * t[R[qc]], t = r - A z = block 0 of Az (written by the pre-smoother).
+                # Planned from the two levels' storage-order formulas (no R / Pm tables), or from Level.link's
+                # tables on the host-tables path
+                cb = C.bstarts if C.bands > 1 else None
+                if L.tables:
+                    rp = SparseRowPlan(L.R[None, :], cblocks, [(0, nb0)], nc, noc_xy, False, bands=cb)
+                    rw = L.Rw
+                else:
+                    tr = ("restrict", L, C)
+                    rp = SparseRowPlan(None, cblocks, [(0, nb0)], nc, noc_xy, False, bands=cb, pout=C.P, transfer=tr)
+                    rw = rp.weights
+                d.Rt = rows_to_device(device, rw)
                 d.Roff = rows_to_device(device, rp.off)
                 self.ops[("restrict", l)] = SparseRowOp(
                     device, rp, d.Rt, d.Roff, "spmv", list(range(8)), d.Az, dc.r, **dbg
                 )
                 # prolongation: z[block 0] = z[block 0] + Pw * zc[Pm], gather and add in one launch
-                pp = SparseRowPlan(
-                    L.Pm[None, :],
-                    [(0, nb0)],
-                    cblocks,
-                    nc,
-                    noc_xy,
-                    exchange=False,
-                    bands=[L.bstarts[0]] if L.bands > 1 else None,
-                )
-                d.Pt = rows_to_device(device, L.Pw)
+                fb = [L.bstarts[0]] if L.bands > 1 else None
+                if L.tables:
+                    pp = SparseRowPlan(L.Pm[None, :], [(0, nb0)], cblocks, nc, noc_xy, False, bands=fb)
+                    pw = L.Pw
+                else:
+                    tr = ("prolong", L, C)
+                    pp = SparseRowPlan(None, [(0, nb0)], cblocks, nc, noc_xy, False, bands=fb, pout=nb0, transfer=tr)
+                    pw = pp.weights
+                d.Pt = rows_to_device(device, pw)
                 d.Poff = rows_to_device(device, pp.off)
                 self.ops[("prolong", l)] = SparseRowOp(
                     device, pp, d.Pt, d.Poff, "spmv", [0], dc.z, d.z, b=d.z, addb=True, **dbg

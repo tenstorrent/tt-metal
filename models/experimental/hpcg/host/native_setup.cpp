@@ -134,6 +134,36 @@ int64_t merge_pieces(
     return np;
 }
 
+// The grid transfer of HPCG's multigrid as a 1-slot matrix, from the storage-order formula of the fine level F and the
+// coarse level C (the tables Level.link builds as R / Pm, without building them). kind 1, restriction: out rows are C's
+// rows (blocks = C's colour blocks), the column of coarse point (x, y, z) is F's point (2x, 2y, 2z). kind 2,
+// prolongation: out rows are F's colour block 0, the column of fine point (2x, 2y, 2z) is C's point (x, y, z).
+// Real rows have weight 1; padding rows (the tail of a block) take the column of the block's last real row, weight 0.
+// f(q, col, real) for every out row q in [a, e) of out block b.
+template <typename Fn>
+void for_each_transfer_row(int kind, const Geo& F, const Geo& C, int b, int64_t a, int64_t e, Fn f) {
+    const Geo& O = kind == 1 ? C : F;  // the level whose rows are the out rows
+    const int ob = kind == 1 ? b : 0;  // their colour block
+    const int64_t real_end = O.band_start[(int64_t)ob * O.nbands] + O.count(ob);
+    auto run = [&](int64_t q, int32_t i0, int32_t len, int32_t y, int32_t z) {
+        for (int32_t i = 0; i < len; ++i) {
+            const int32_t x = 2 * (i0 + i) + (ob & 1);
+            f(q + i, kind == 1 ? F.q_of(2 * x, 2 * y, 2 * z) : C.q_of(x / 2, y / 2, z / 2), true);
+        }
+    };
+    O.for_each_run(ob, a, e, run);
+    if (std::max(a, real_end) < e) {  // padding rows: the column of the block's last real row
+        int64_t pad = 0;
+        O.for_each_run(ob, real_end - 1, real_end, [&](int64_t, int32_t i0, int32_t, int32_t y, int32_t z) {
+            const int32_t x = 2 * i0 + (ob & 1);
+            pad = kind == 1 ? F.q_of(2 * x, 2 * y, 2 * z) : C.q_of(x / 2, y / 2, z / 2);
+        });
+        for (int64_t q = std::max(a, real_end); q < e; ++q) {
+            f(q, pad, false);
+        }
+    }
+}
+
 // v[i] = v[the last mapped index before i] for every unmapped i (v[0] when there is none), in parallel: each thread
 // finds its chunk's last mapped index, a short serial pass carries it into the next chunks, then each thread fills
 // its chunk. Mapped entries are only read, so threads never race.
@@ -746,6 +776,144 @@ int64_t hpcg_plan_meta(
         nseg_r[k] = sr;
     }
     return longest;
+}
+
+// Window pieces of every core of a grid transfer launch (kind 1 restriction, 2 prolongation; see
+// for_each_transfer_row), without the column table: the same pieces hpcg_plan_windows computes from Level.link's
+// R / Pm with exchange = 0. Columns of consecutive out rows are evenly spaced (at most 2 apart) per x parity, so a
+// run of rows marks whole granule ranges.
+int64_t hpcg_plan_windows_transfer(
+    int32_t kind,
+    int32_t nx,
+    int32_t nbands,
+    int32_t nl,
+    const int32_t* line_band,
+    const int32_t* band_y0,
+    const int32_t* band_ny,
+    const int64_t* band_start,
+    int32_t cnx,
+    int32_t cnbands,
+    int32_t cnl,
+    const int32_t* cline_band,
+    const int32_t* cband_y0,
+    const int32_t* cband_ny,
+    const int64_t* cband_start,
+    int32_t nc,
+    int32_t NB,
+    const int64_t* own,
+    int32_t gran,
+    int32_t wgap,
+    int64_t ng,
+    int64_t empty_lo,
+    int64_t max_pieces,
+    int64_t* piece_lo,
+    int64_t* piece_ln,
+    int64_t* piece_l1,
+    int64_t* npieces) {
+    const Geo F{nx, nbands, nl, line_band, band_y0, band_ny, band_start};
+    const Geo C{cnx, cnbands, cnl, cline_band, cband_y0, cband_ny, cband_start};
+    int64_t bad = 0;
+#pragma omp parallel
+    {
+        Granules mask(ng);
+#pragma omp for schedule(dynamic, 1) reduction(+ : bad)
+        for (int32_t k = 0; k < nc; ++k) {
+            int64_t gmin = ng, gmax = -1;
+            bool used = false;
+            for (int32_t b = 0; b < NB; ++b) {
+                const int64_t a = own[(k * NB + b) * 2], e = own[(k * NB + b) * 2 + 1];
+                if (e <= a) {
+                    continue;
+                }
+                used = true;
+                for_each_transfer_row(kind, F, C, b, a, e, [&](int64_t, int64_t col, bool) {
+                    mask.set(col / gran);
+                    gmin = std::min(gmin, col / gran);
+                    gmax = std::max(gmax, col / gran);
+                });
+            }
+            if (!used) {
+                mask.set(empty_lo / gran);
+                gmin = gmax = empty_lo / gran;
+            }
+            const int64_t np = merge_pieces(
+                mask,
+                gmin,
+                gmax,
+                gran,
+                wgap,
+                max_pieces,
+                piece_lo + k * max_pieces,
+                piece_ln + k * max_pieces,
+                piece_l1 + k * max_pieces);
+            npieces[k] = np;
+            if (np > max_pieces) {
+                bad += 1;
+            }
+        }
+    }
+    return bad ? -1 : 0;
+}
+
+// The 1-slot tables of a grid transfer launch: off[q] = window byte offset of row q's column in its core's window,
+// w[q] = 1 on real rows, 0 on padding rows (Level.link's Rw / Pw). Returns the number of columns found outside their
+// core's pieces (0 when the plan is valid).
+int64_t hpcg_transfer_tables(
+    int32_t kind,
+    int32_t nx,
+    int32_t nbands,
+    int32_t nl,
+    const int32_t* line_band,
+    const int32_t* band_y0,
+    const int32_t* band_ny,
+    const int64_t* band_start,
+    int32_t cnx,
+    int32_t cnbands,
+    int32_t cnl,
+    const int32_t* cline_band,
+    const int32_t* cband_y0,
+    const int32_t* cband_ny,
+    const int64_t* cband_start,
+    int32_t nc,
+    int32_t NB,
+    const int64_t* own,
+    int64_t max_pieces,
+    const int64_t* piece_lo,
+    const int64_t* piece_ln,
+    const int64_t* piece_l1,
+    const int64_t* npieces,
+    int32_t* off,
+    float* w) {
+    const Geo F{nx, nbands, nl, line_band, band_y0, band_ny, band_start};
+    const Geo C{cnx, cnbands, cnl, cline_band, cband_y0, cband_ny, cband_start};
+    int64_t bad = 0;
+#pragma omp parallel for schedule(dynamic, 1) reduction(+ : bad)
+    for (int32_t k = 0; k < nc; ++k) {
+        const int64_t* lo = piece_lo + k * max_pieces;
+        const int64_t* ln = piece_ln + k * max_pieces;
+        const int64_t* l1 = piece_l1 + k * max_pieces;
+        const int64_t np = npieces[k];
+        int64_t p = 0;
+        for (int32_t b = 0; b < NB; ++b) {
+            const int64_t a = own[(k * NB + b) * 2], e = own[(k * NB + b) * 2 + 1];
+            if (e <= a) {
+                continue;
+            }
+            for_each_transfer_row(kind, F, C, b, a, e, [&](int64_t q, int64_t col, bool real) {
+                if (!(p < np && lo[p] <= col && col < lo[p] + ln[p])) {  // the piece holding col (pieces sorted)
+                    p = std::upper_bound(lo, lo + np, col) - lo - 1;
+                    if (p < 0 || col >= lo[p] + ln[p]) {
+                        ++bad;
+                        p = 0;
+                        return;
+                    }
+                }
+                off[q] = (int32_t)(l1[p] + (col - lo[p]) * 4);
+                w[q] = real ? 1.0f : 0.0f;
+            });
+        }
+    }
+    return bad;
 }
 
 // hpcg_plan_exchange's entries, already as SparseRowPlan uses them: grouped by (k, b) in their original order (a
