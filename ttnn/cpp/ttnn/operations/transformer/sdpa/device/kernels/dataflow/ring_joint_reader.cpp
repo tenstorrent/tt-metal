@@ -965,6 +965,12 @@ void kernel_main() {
             const uint32_t v_block_bytes = kSolBlockTiles * vDHt * v_tile_bytes;
             const uint32_t k_row_stride = Sk_chunk_t * k_tile_bytes;
             bool moved = false;
+            // Only LOCAL chunks are packed. plan word 5 sums row_chunk_kept over [0, num_local_k_chunks), so a
+            // joint chunk packed here would create pages the plan never counted -- and its block index
+            // k_chunk * blocks_per_page + j runs past the row's valid range, reading whatever follows.
+            if (k_chunk >= num_local_k_chunks) {
+                return fill;
+            }
             for (uint32_t j = 0; j < sol_blocks_per_page; ++j) {
                 const uint32_t b = k_chunk * sol_blocks_per_page + j;
                 if (!sol_block_exact(row, s, b)) {
