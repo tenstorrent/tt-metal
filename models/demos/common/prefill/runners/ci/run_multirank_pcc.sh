@@ -26,6 +26,17 @@ manifest_env() {
   python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["env"][sys.argv[2]])' "${MANIFEST}" "$1"
 }
 
+# Chunk indices ending at each context length, in 1024-token units ("255" -> the chunk that fills
+# 255k = 261,120 tok). Every length must be a whole number of chunks, or the label would lie.
+ktok_chunks() {
+  local k out=""
+  for k in "$@"; do
+    (( k * 1024 % CHUNK_SIZE == 0 )) || { echo "${k}k is not a whole number of ${CHUNK_SIZE}-tok chunks" >&2; exit 2; }
+    out+="${out:+,}$(( k * 1024 / CHUNK_SIZE - 1 ))"
+  done
+  printf '%s' "${out}"
+}
+
 MGD="${MGD_DIR}/${CONFIG}_mgd.textproto"
 
 CHUNK_SIZE=5120
@@ -44,6 +55,8 @@ PRODUCER_USERS="${PREFILL_PRODUCER_NUM_USERS:-1}"
 TCP_INTERFACE="${PREFILL_TCP_INTERFACE:-ens5f0np0}"
 # Non-zero for a pipeline-parallel model: the rank count its binding fixes. Set in the case block.
 PP_RANKS=0
+# Per-model probe chunks; empty = the derived default below.
+MODEL_PROBE_CHUNKS=""
 # PCC verdicts, rank logs and any rank binding, kept for the run's artifact upload.
 EVIDENCE_DIR="${PREFILL_SUMMARIES}/pcc/${MODEL}"
 # sc1 runs a single galaxy, so both of these exist to shrink the sc4 model down to what one fits.
@@ -66,6 +79,9 @@ case "${MODEL}" in
     MANIFEST="${MANIFEST_DIR}/glm53.json"
     RUNNER_ENV="export TT_METAL_SHM_TRACKING_DISABLED=1; export LOGURU_LEVEL=ERROR;"
     PCC_THRESHOLD=0.83
+    # chunk_time, ttft and throughput at each length. sc1 and sc4 share the 1020k window, so both
+    # legs report every length and the scaling job compares them all.
+    MODEL_PROBE_CHUNKS=$(ktok_chunks 5 50 100 255 510 1020)
     PRODUCER_ENV="export PREFILL_PRODUCER_MANIFEST='${MANIFEST}'; \
         export PREFILL_TRACE_DIR=/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/golden_traces/glm53-1020k-last5120;"
     ;;
@@ -149,8 +165,8 @@ SC1_CHUNKS=$((SC1_MAX_SEQ_LEN / CHUNK_SIZE))
 SC4_CHUNKS=$((SC4_MAX_SEQ_LEN / CHUNK_SIZE))
 # Start, ~50k, and the midpoint + tail of each config's window. Deduped: a model with one config
 # yields the same chunk twice.
-PROBE_CHUNKS="${PROBE_CHUNKS:-$(printf '%s\n' 0 "$((50000 / CHUNK_SIZE))" "$((SC1_CHUNKS / 2 - 1))" \
-  "$((SC1_CHUNKS - 1))" "$((SC4_CHUNKS / 2 - 1))" "$((SC4_CHUNKS - 1))" | sort -n -u | paste -sd,)}"
+PROBE_CHUNKS="${PROBE_CHUNKS:-${MODEL_PROBE_CHUNKS:-$(printf '%s\n' 0 "$((50000 / CHUNK_SIZE))" "$((SC1_CHUNKS / 2 - 1))" \
+  "$((SC1_CHUNKS - 1))" "$((SC4_CHUNKS / 2 - 1))" "$((SC4_CHUNKS - 1))" | sort -n -u | paste -sd,)}}"
 
 
 mkdir -p "${PIPELINE_DIR}"
