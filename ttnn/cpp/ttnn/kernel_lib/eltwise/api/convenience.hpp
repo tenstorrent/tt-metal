@@ -42,14 +42,14 @@ namespace compute_kernel_lib {
 // Defaults: no broadcast, both operands per-tile streaming.
 // ---------------------------------------------------------------------------
 
-template <InputSpec AInput, BroadcastInputSpec BInput, OutputSpec Output>
-ALWI void add(IterationShape shape, DataflowBuffer& a, DataflowBuffer& b, DataflowBuffer& out);
+template <InputSpec AInput, BroadcastInputSpec BInput, OutputSpec Output, class DFBA, class DFBB, class DFBOut>
+ALWI void add(IterationShape shape, DFBA& a, DFBB& b, DFBOut& out);
 
-template <InputSpec AInput, BroadcastInputSpec BInput, OutputSpec Output>
-ALWI void sub(IterationShape shape, DataflowBuffer& a, DataflowBuffer& b, DataflowBuffer& out);
+template <InputSpec AInput, BroadcastInputSpec BInput, OutputSpec Output, class DFBA, class DFBB, class DFBOut>
+ALWI void sub(IterationShape shape, DFBA& a, DFBB& b, DFBOut& out);
 
-template <InputSpec AInput, BroadcastInputSpec BInput, OutputSpec Output>
-ALWI void mul(IterationShape shape, DataflowBuffer& a, DataflowBuffer& b, DataflowBuffer& out);
+template <InputSpec AInput, BroadcastInputSpec BInput, OutputSpec Output, class DFBA, class DFBB, class DFBOut>
+ALWI void mul(IterationShape shape, DFBA& a, DFBB& b, DFBOut& out);
 
 // ---------------------------------------------------------------------------
 // FPU square — x * x, via BinaryFpu reading the one input buffer for both operands
@@ -58,34 +58,34 @@ ALWI void mul(IterationShape shape, DataflowBuffer& a, DataflowBuffer& b, Datafl
 // operand lifecycle / index instead of separate A/B.
 // ---------------------------------------------------------------------------
 
-template <InputSpec Input, OutputSpec Output>
-ALWI void square(IterationShape shape, DataflowBuffer& in, DataflowBuffer& out);
+template <InputSpec Input, OutputSpec Output, class DFBIn, class DFBOut>
+ALWI void square(IterationShape shape, DFBIn& in, DFBOut& out);
 
 // ---------------------------------------------------------------------------
 // SFPU unary — CopyTile(D0) -> SfpuOp -> PackTile(D0). SfpuOp is the (DEST-only) op type.
 // ---------------------------------------------------------------------------
 
-template <class SfpuOp, InputSpec Input, OutputSpec Output>
-ALWI void unary(IterationShape shape, DataflowBuffer& in, DataflowBuffer& out);
+template <class SfpuOp, InputSpec Input, OutputSpec Output, class DFBIn, class DFBOut>
+ALWI void unary(IterationShape shape, DFBIn& in, DFBOut& out);
 
 // Typecast — derives the LLK input/output formats from the bound buffers.
-template <InputSpec Input, OutputSpec Output>
-ALWI void typecast(IterationShape shape, DataflowBuffer& in, DataflowBuffer& out);
+template <InputSpec Input, OutputSpec Output, class DFBIn, class DFBOut>
+ALWI void typecast(IterationShape shape, DFBIn& in, DFBOut& out);
 
 // ---------------------------------------------------------------------------
 // SFPU binary — two CopyTile loads (D0, D1) -> SfpuBinOp -> PackTile(D0).
 // SfpuBinOp is a DEST-only SFPU binary op type (e.g. DivBinary<>, BinaryMax<>).
 // ---------------------------------------------------------------------------
 
-template <class SfpuBinOp, InputSpec AInput, InputSpec BInput, OutputSpec Output>
-ALWI void binary_sfpu(IterationShape shape, DataflowBuffer& a, DataflowBuffer& b, DataflowBuffer& out);
+template <class SfpuBinOp, InputSpec AInput, InputSpec BInput, OutputSpec Output, class DFBA, class DFBB, class DFBOut>
+ALWI void binary_sfpu(IterationShape shape, DFBA& a, DFBB& b, DFBOut& out);
 
 // ---------------------------------------------------------------------------
 // Pure copy — CopyTile(D0) -> PackTile(D0).
 // ---------------------------------------------------------------------------
 
-template <InputSpec Input, OutputSpec Output>
-ALWI void copy(IterationShape shape, DataflowBuffer& in, DataflowBuffer& out);
+template <InputSpec Input, OutputSpec Output, class DFBIn, class DFBOut>
+ALWI void copy(IterationShape shape, DFBIn& in, DFBOut& out);
 
 }  // namespace compute_kernel_lib
 

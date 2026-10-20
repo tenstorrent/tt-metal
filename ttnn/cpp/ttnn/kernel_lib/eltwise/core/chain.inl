@@ -252,6 +252,60 @@ constexpr OutputSpec output(
     PackRelu relu) noexcept {
     return {cb_id, reserve, push, reconfig, addressing, dest_accumulation, l1_accumulation, relu};
 }
+template <dfb::AccessPattern Pap, dfb::AccessPattern Cap>
+constexpr InputSpec input(
+    DFBBindingToken<Pap, Cap> token,
+    WaitPolicy wait,
+    PopPolicy pop,
+    InputTileMapping mapping,
+    DataFormatReconfig reconfig,
+    TileAddressing addressing) noexcept {
+    InputSpec spec = input(static_cast<uint32_t>(token), wait, pop, mapping, reconfig, addressing);
+    spec.pap = Pap;
+    spec.cap = Cap;
+    return spec;
+}
+template <dfb::AccessPattern Pap, dfb::AccessPattern Cap>
+constexpr InputSpec input(
+    DFBBindingToken<Pap, Cap> token, WaitPolicy wait, PopPolicy pop, DataFormatReconfig reconfig) noexcept {
+    return input(token, wait, pop, InputTileMapping::Scalar, reconfig);
+}
+template <dfb::AccessPattern Pap, dfb::AccessPattern Cap>
+constexpr BroadcastInputSpec input(
+    DFBBindingToken<Pap, Cap> token,
+    BroadcastDim broadcast,
+    WaitPolicy wait,
+    PopPolicy pop,
+    InputTileMapping mapping,
+    DataFormatReconfig reconfig,
+    TileAddressing addressing) noexcept {
+    return {input(token, wait, pop, mapping, reconfig, addressing), broadcast};
+}
+template <dfb::AccessPattern Pap, dfb::AccessPattern Cap>
+constexpr BroadcastInputSpec input(
+    DFBBindingToken<Pap, Cap> token,
+    BroadcastDim broadcast,
+    WaitPolicy wait,
+    PopPolicy pop,
+    DataFormatReconfig reconfig) noexcept {
+    return input(input(token, wait, pop, reconfig), broadcast);
+}
+template <dfb::AccessPattern Pap, dfb::AccessPattern Cap>
+constexpr OutputSpec output(
+    DFBBindingToken<Pap, Cap> token,
+    ReservePolicy reserve,
+    PushPolicy push,
+    DataFormatReconfig reconfig,
+    TileAddressing addressing,
+    DestAccumulation dest_accumulation,
+    L1Accumulation l1_accumulation,
+    PackRelu relu) noexcept {
+    OutputSpec spec = output(
+        static_cast<uint32_t>(token), reserve, push, reconfig, addressing, dest_accumulation, l1_accumulation, relu);
+    spec.pap = Pap;
+    spec.cap = Cap;
+    return spec;
+}
 
 
 namespace detail {
@@ -835,9 +889,9 @@ constexpr bool chain_requests_no_reconfig() {
 // `DataflowBuffer`, bound by reference when the element is constructed: the chain issues every
 // wait/pop/reserve/push through that object and never constructs a DataflowBuffer of its own.
 //
-// Single-stream elements (CopyTile / DestReuseBinary / UnaryBcast) inherit the
-// non-template `InputStream` state; BinaryFpu holds two and the driver handles its
-// second input explicitly; PackTile inherits `OutputStream`.
+// Single-stream elements (CopyTile / DestReuseBinary / UnaryBcast) inherit the `InputStream<DFB>`
+// state (DFB = the DataflowBuffer type their spec names); BinaryFpu holds two, one per input, and the
+// driver handles its second input explicitly; PackTile inherits `OutputStream<DFB>`.
 //
 // All policy gates below are a verbatim transcription of the per-element bodies —
 // a wrong gate is a hang or a PCC failure, never benign.
@@ -848,8 +902,8 @@ namespace detail {
 // Checks (under the watcher) that `buffer` is the buffer named by the element's spec. A
 // compile-time check is not possible: GCC cannot prove a DataflowBuffer's id constant early enough
 // for __builtin_constant_p under the kernels' LTO pipeline.
-template <uint32_t Cb>
-ALWI void check_bound_dataflow_buffer([[maybe_unused]] const DataflowBuffer& buffer) {
+template <uint32_t Cb, class DFB>
+ALWI void check_bound_dataflow_buffer([[maybe_unused]] const DFB& buffer) {
     ASSERT(buffer.get_id() == Cb);
 }
 
@@ -861,7 +915,7 @@ struct MissingDataflowBuffer {};
 
 template <class T>
 inline constexpr bool is_dataflow_buffer_lvalue_v =
-    std::is_lvalue_reference_v<T> && std::is_same_v<std::remove_reference_t<T>, DataflowBuffer>;
+    std::is_lvalue_reference_v<T> && ::is_dataflow_buffer_v<std::remove_cv_t<std::remove_reference_t<T>>>;
 
 template <std::size_t N, class... Args>
 constexpr bool leading_dataflow_buffers() {
@@ -901,29 +955,31 @@ constexpr void require_bound_dataflow_buffers() {
 
 }  // namespace detail
 
+template <class DFB>
 struct InputStream {
-    DataflowBuffer* buffer;
+    DFB* buffer;
     uint32_t tile_base = 0;
     uint32_t row_stride = 0;
 
     // Only for an element's rejecting default constructor (see require_bound_dataflow_buffers).
     constexpr explicit InputStream(detail::MissingDataflowBuffer) noexcept : buffer(nullptr) {}
-    constexpr explicit InputStream(DataflowBuffer& dfb) noexcept : buffer(&dfb) {}
-    constexpr InputStream(DataflowBuffer& dfb, uint32_t base) noexcept : buffer(&dfb), tile_base(base) {}
-    constexpr InputStream(DataflowBuffer& dfb, StridedTileRange range) noexcept :
+    constexpr explicit InputStream(DFB& dfb) noexcept : buffer(&dfb) {}
+    constexpr InputStream(DFB& dfb, uint32_t base) noexcept : buffer(&dfb), tile_base(base) {}
+    constexpr InputStream(DFB& dfb, StridedTileRange range) noexcept :
         buffer(&dfb), tile_base(range.base), row_stride(range.row_stride) {}
 };
 
+template <class DFB>
 struct OutputStream {
-    DataflowBuffer* buffer;
+    DFB* buffer;
     uint32_t tile_base = 0;
     uint32_t row_stride = 0;
 
     // Only for an element's rejecting default constructor (see require_bound_dataflow_buffers).
     constexpr explicit OutputStream(detail::MissingDataflowBuffer) noexcept : buffer(nullptr) {}
-    constexpr explicit OutputStream(DataflowBuffer& dfb) noexcept : buffer(&dfb) {}
-    constexpr OutputStream(DataflowBuffer& dfb, uint32_t base) noexcept : buffer(&dfb), tile_base(base) {}
-    constexpr OutputStream(DataflowBuffer& dfb, StridedTileRange range) noexcept :
+    constexpr explicit OutputStream(DFB& dfb) noexcept : buffer(&dfb) {}
+    constexpr OutputStream(DFB& dfb, uint32_t base) noexcept : buffer(&dfb), tile_base(base) {}
+    constexpr OutputStream(DFB& dfb, StridedTileRange range) noexcept :
         buffer(&dfb), tile_base(range.base), row_stride(range.row_stride) {}
 };
 
@@ -931,8 +987,8 @@ struct OutputStream {
 // 1. CopyTile chain element
 // =============================================================================
 
-template <uint32_t Cb, uint32_t ConfigBits>
-struct detail::CopyTileImpl : InputStream, CopyTileTag {
+template <uint32_t Cb, uint32_t ConfigBits, class DFB>
+struct detail::CopyTileImpl : InputStream<DFB>, CopyTileTag {
     static constexpr CopyTileConfig Config{ConfigBits};
     static constexpr InputSpec Input = Config.input_spec(Cb);
     static constexpr Dst DstSlot = Config.dst();
@@ -941,8 +997,9 @@ struct detail::CopyTileImpl : InputStream, CopyTileTag {
     static constexpr DataFormatReconfig Reconfig = Input.reconfig;
     static constexpr InputTileMapping Mapping = Input.mapping;
     static constexpr TileAddressing Addressing = Input.addressing;
-    using Base = InputStream;
+    using Base = InputStream<DFB>;
     using Base::tile_base;
+    using Base::row_stride;
 
     // ---- compile-time validation ----
     static_assert(to_u32(DstSlot) < DEST_AUTO_LIMIT, "CopyTile: DEST slot exceeds DEST_AUTO_LIMIT");
@@ -973,11 +1030,11 @@ struct detail::CopyTileImpl : InputStream, CopyTileTag {
     CopyTileImpl(Args&&...) noexcept : Base(MissingDataflowBuffer{}) {
         require_bound_dataflow_buffers<rejects_constructor_args<CopyTileImpl, 1, Args...>()>();
     }
-    ALWI explicit CopyTileImpl(DataflowBuffer& in) noexcept : Base(in) { check_bound_dataflow_buffer<Cb>(in); }
-    ALWI CopyTileImpl(DataflowBuffer& in, uint32_t base) noexcept : Base(in, base) {
+    ALWI explicit CopyTileImpl(DFB& in) noexcept : Base(in) { check_bound_dataflow_buffer<Cb>(in); }
+    ALWI CopyTileImpl(DFB& in, uint32_t base) noexcept : Base(in, base) {
         check_bound_dataflow_buffer<Cb>(in);
     }
-    ALWI CopyTileImpl(DataflowBuffer& in, StridedTileRange range) noexcept : Base(in, range) {
+    ALWI CopyTileImpl(DFB& in, StridedTileRange range) noexcept : Base(in, range) {
         check_bound_dataflow_buffer<Cb>(in);
     }
 
@@ -1000,8 +1057,8 @@ struct detail::CopyTileImpl : InputStream, CopyTileTag {
 // 2. PackTile chain element
 // =============================================================================
 
-template <uint32_t Cb, uint32_t ConfigBits>
-struct detail::PackTileImpl : OutputStream, PackTileTag {
+template <uint32_t Cb, uint32_t ConfigBits, class DFB>
+struct detail::PackTileImpl : OutputStream<DFB>, PackTileTag {
     static constexpr PackTileConfig Config{ConfigBits};
     static constexpr OutputSpec Output = Config.output_spec(Cb);
     static constexpr ReservePolicy Reserve = Output.reserve;
@@ -1012,8 +1069,9 @@ struct detail::PackTileImpl : OutputStream, PackTileTag {
     static constexpr DestAccumulation DestAccumulationMode = Output.dest_accumulation;
     static constexpr Dst DstSlot = Config.dst();
     static constexpr TileAddressing Addressing = Output.addressing;
-    using Base = OutputStream;
+    using Base = OutputStream<DFB>;
     using Base::tile_base;
+    using Base::row_stride;
     // Walk vs pinned output addressing is derived from reserve policy: upfront-reserve
     // policies and caller-pre-reserved windows write distinct tiles; front-advancing policies stay pinned.
     // `walk` emits `base + i_flat`, and out-of-order pack adds that to `fifo_wr_ptr` — the start of the
@@ -1094,11 +1152,11 @@ struct detail::PackTileImpl : OutputStream, PackTileTag {
     PackTileImpl(Args&&...) noexcept : Base(MissingDataflowBuffer{}) {
         require_bound_dataflow_buffers<rejects_constructor_args<PackTileImpl, 1, Args...>()>();
     }
-    ALWI explicit PackTileImpl(DataflowBuffer& out) noexcept : Base(out) { check_bound_dataflow_buffer<Cb>(out); }
-    ALWI PackTileImpl(DataflowBuffer& out, uint32_t base) noexcept : Base(out, base) {
+    ALWI explicit PackTileImpl(DFB& out) noexcept : Base(out) { check_bound_dataflow_buffer<Cb>(out); }
+    ALWI PackTileImpl(DFB& out, uint32_t base) noexcept : Base(out, base) {
         check_bound_dataflow_buffer<Cb>(out);
     }
-    ALWI PackTileImpl(DataflowBuffer& out, StridedTileRange range) noexcept : Base(out, range) {
+    ALWI PackTileImpl(DFB& out, StridedTileRange range) noexcept : Base(out, range) {
         check_bound_dataflow_buffer<Cb>(out);
     }
 
@@ -1148,7 +1206,7 @@ struct detail::PackTileImpl : OutputStream, PackTileTag {
 // 3. BinaryFpu chain element
 // =============================================================================
 
-template <uint32_t CbA, uint32_t CbB, uint32_t ConfigBits>
+template <uint32_t CbA, uint32_t CbB, uint32_t ConfigBits, class DFBA, class DFBB>
 struct detail::BinaryFpuImpl : BinaryFpuTag {
     static constexpr BinaryFpuConfig Config{ConfigBits};
     static constexpr InputSpec AInput = Config.a_input_spec(CbA);
@@ -1233,8 +1291,8 @@ struct detail::BinaryFpuImpl : BinaryFpuTag {
     static constexpr uint32_t reconfig_srcb_dfb = (BInput.reconfig == DataFormatReconfig::Enabled) ? CbB : NO_PREV_DFB;
     // pack side absent -> dfb_for_side defaults to NO_PREV_DFB (downstream PackTile owns pack).
 
-    InputStream a;
-    InputStream b;
+    InputStream<DFBA> a;
+    InputStream<DFBB> b;
 
     // Leading arguments: the DataflowBuffers of AInput and BInput, in that order (pass the same
     // object twice when both specs name one buffer). Optional per-side tile bases follow.
@@ -1242,36 +1300,36 @@ struct detail::BinaryFpuImpl : BinaryFpuTag {
     BinaryFpuImpl(Args&&...) noexcept : a(MissingDataflowBuffer{}), b(MissingDataflowBuffer{}) {
         require_bound_dataflow_buffers<rejects_constructor_args<BinaryFpuImpl, 2, Args...>()>();
     }
-    ALWI BinaryFpuImpl(DataflowBuffer& in_a, DataflowBuffer& in_b) noexcept : a(in_a), b(in_b) {
+    ALWI BinaryFpuImpl(DFBA& in_a, DFBB& in_b) noexcept : a(in_a), b(in_b) {
         check_bound(in_a, in_b);
     }
-    ALWI BinaryFpuImpl(DataflowBuffer& in_a, DataflowBuffer& in_b, uint32_t base_a, uint32_t base_b) noexcept :
+    ALWI BinaryFpuImpl(DFBA& in_a, DFBB& in_b, uint32_t base_a, uint32_t base_b) noexcept :
         a(in_a, base_a), b(in_b, base_b) {
         check_bound(in_a, in_b);
     }
-    ALWI BinaryFpuImpl(DataflowBuffer& in_a, DataflowBuffer& in_b, uint32_t base_a) noexcept :
+    ALWI BinaryFpuImpl(DFBA& in_a, DFBB& in_b, uint32_t base_a) noexcept :
         a(in_a, base_a), b(in_b) {
         check_bound(in_a, in_b);
     }
     ALWI BinaryFpuImpl(
-        DataflowBuffer& in_a, DataflowBuffer& in_b, StridedTileRange range_a, StridedTileRange range_b) noexcept :
+        DFBA& in_a, DFBB& in_b, StridedTileRange range_a, StridedTileRange range_b) noexcept :
         a(in_a, range_a), b(in_b, range_b) {
         check_bound(in_a, in_b);
     }
-    ALWI BinaryFpuImpl(DataflowBuffer& in_a, DataflowBuffer& in_b, StridedTileRange range_a, uint32_t base_b) noexcept :
+    ALWI BinaryFpuImpl(DFBA& in_a, DFBB& in_b, StridedTileRange range_a, uint32_t base_b) noexcept :
         a(in_a, range_a), b(in_b, base_b) {
         check_bound(in_a, in_b);
     }
-    ALWI BinaryFpuImpl(DataflowBuffer& in_a, DataflowBuffer& in_b, uint32_t base_a, StridedTileRange range_b) noexcept :
+    ALWI BinaryFpuImpl(DFBA& in_a, DFBB& in_b, uint32_t base_a, StridedTileRange range_b) noexcept :
         a(in_a, base_a), b(in_b, range_b) {
         check_bound(in_a, in_b);
     }
-    ALWI BinaryFpuImpl(DataflowBuffer& in_a, DataflowBuffer& in_b, StridedTileRange range_a) noexcept :
+    ALWI BinaryFpuImpl(DFBA& in_a, DFBB& in_b, StridedTileRange range_a) noexcept :
         a(in_a, range_a), b(in_b) {
         check_bound(in_a, in_b);
     }
 
-    static ALWI void check_bound(const DataflowBuffer& in_a, const DataflowBuffer& in_b) {
+    static ALWI void check_bound(const DFBA& in_a, const DFBB& in_b) {
         check_bound_dataflow_buffer<CbA>(in_a);
         check_bound_dataflow_buffer<CbB>(in_b);
     }
@@ -1374,8 +1432,8 @@ struct detail::BinaryFpuImpl : BinaryFpuTag {
 // 5. DestReuseBinary chain element
 // =============================================================================
 
-template <uint32_t Cb, uint32_t ConfigBits>
-struct detail::DestReuseBinaryImpl : InputStream, DestReuseBinaryTag {
+template <uint32_t Cb, uint32_t ConfigBits, class DFB>
+struct detail::DestReuseBinaryImpl : InputStream<DFB>, DestReuseBinaryTag {
     static constexpr DestReuseBinaryConfig Config{ConfigBits};
     static constexpr BinaryFpuOp Op = Config.op();
     static constexpr DestReuseType ReuseType = Config.reuse();
@@ -1385,8 +1443,9 @@ struct detail::DestReuseBinaryImpl : InputStream, DestReuseBinaryTag {
     static constexpr PopPolicy Pop = InputConfig.pop;
     static constexpr InputTileMapping Mapping = InputConfig.mapping;
     static constexpr TileAddressing Addressing = InputConfig.addressing;
-    using Base = InputStream;
+    using Base = InputStream<DFB>;
     using Base::tile_base;
+    using Base::row_stride;
 
     static_assert(to_u32(DstSlot) < DEST_AUTO_LIMIT, "DestReuseBinary: DEST slot exceeds DEST_AUTO_LIMIT");
     static_assert(
@@ -1444,11 +1503,11 @@ struct detail::DestReuseBinaryImpl : InputStream, DestReuseBinaryTag {
     DestReuseBinaryImpl(Args&&...) noexcept : Base(MissingDataflowBuffer{}) {
         require_bound_dataflow_buffers<rejects_constructor_args<DestReuseBinaryImpl, 1, Args...>()>();
     }
-    ALWI explicit DestReuseBinaryImpl(DataflowBuffer& in) noexcept : Base(in) { check_bound_dataflow_buffer<Cb>(in); }
-    ALWI DestReuseBinaryImpl(DataflowBuffer& in, uint32_t base) noexcept : Base(in, base) {
+    ALWI explicit DestReuseBinaryImpl(DFB& in) noexcept : Base(in) { check_bound_dataflow_buffer<Cb>(in); }
+    ALWI DestReuseBinaryImpl(DFB& in, uint32_t base) noexcept : Base(in, base) {
         check_bound_dataflow_buffer<Cb>(in);
     }
-    ALWI DestReuseBinaryImpl(DataflowBuffer& in, StridedTileRange range) noexcept : Base(in, range) {
+    ALWI DestReuseBinaryImpl(DFB& in, StridedTileRange range) noexcept : Base(in, range) {
         check_bound_dataflow_buffer<Cb>(in);
     }
 
@@ -2508,29 +2567,29 @@ constexpr bool pushes_at_end() {
 // All CB lifecycle operations terminate in one of these four emitters, each issued on the
 // DataflowBuffer the caller bound to the element. `Enabled` is a compile-time policy fact, so
 // disabled actions disappear without a runtime sentinel check.
-template <bool Enabled>
-ALWI void emit_wait(DataflowBuffer& buffer, uint32_t count) {
+template <bool Enabled, class DFB>
+ALWI void emit_wait(DFB& buffer, uint32_t count) {
     if constexpr (Enabled) {
         buffer.wait_front(count);
     }
 }
 
-template <bool Enabled>
-ALWI void emit_pop(DataflowBuffer& buffer, uint32_t count) {
+template <bool Enabled, class DFB>
+ALWI void emit_pop(DFB& buffer, uint32_t count) {
     if constexpr (Enabled) {
         buffer.pop_front(count);
     }
 }
 
-template <bool Enabled>
-ALWI void emit_reserve(DataflowBuffer& buffer, uint32_t count) {
+template <bool Enabled, class DFB>
+ALWI void emit_reserve(DFB& buffer, uint32_t count) {
     if constexpr (Enabled) {
         buffer.reserve_back(count);
     }
 }
 
-template <bool Enabled>
-ALWI void emit_push(DataflowBuffer& buffer, uint32_t count) {
+template <bool Enabled, class DFB>
+ALWI void emit_push(DFB& buffer, uint32_t count) {
     if constexpr (Enabled) {
         buffer.push_back(count);
     }
@@ -2539,7 +2598,7 @@ ALWI void emit_push(DataflowBuffer& buffer, uint32_t count) {
 // The bound DataflowBuffer behind an element's srcA-side input (the only input of a single-stream
 // reader), its BinaryFpu srcB input, and a PackTile's output.
 template <class E>
-ALWI DataflowBuffer& input_a_buffer(const E& elem) {
+ALWI auto& input_a_buffer(const E& elem) {
     if constexpr (is_binary_fpu_op_v<E>) {
         return *elem.a.buffer;
     } else {
@@ -2548,12 +2607,12 @@ ALWI DataflowBuffer& input_a_buffer(const E& elem) {
 }
 
 template <class E>
-ALWI DataflowBuffer& input_b_buffer(const E& elem) {
+ALWI auto& input_b_buffer(const E& elem) {
     return *elem.b.buffer;
 }
 
 template <class E>
-ALWI DataflowBuffer& output_buffer(const E& elem) {
+ALWI auto& output_buffer(const E& elem) {
     return *elem.buffer;
 }
 

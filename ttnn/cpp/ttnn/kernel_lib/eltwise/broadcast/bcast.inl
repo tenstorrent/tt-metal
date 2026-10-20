@@ -33,8 +33,8 @@ constexpr uint32_t unary_bcast_config_bits(BroadcastDim dim, InputSpec input_spe
 
 }  // namespace detail
 
-template <uint32_t Cb, uint32_t ConfigBits>
-struct detail::UnaryBcastImpl : InputStream, UnaryBcastTag {
+template <uint32_t Cb, uint32_t ConfigBits, class DFB>
+struct detail::UnaryBcastImpl : InputStream<DFB>, UnaryBcastTag {
     static constexpr UnaryBcastConfig Config{ConfigBits};
     static constexpr BroadcastDim Dim = Config.dim();
     static constexpr InputSpec Input = Config.input_spec(Cb);
@@ -43,8 +43,9 @@ struct detail::UnaryBcastImpl : InputStream, UnaryBcastTag {
     static constexpr PopPolicy Pop = Input.pop;
     static constexpr InputTileMapping Mapping = Input.mapping;
     static constexpr TileAddressing Addressing = Input.addressing;
-    using Base = InputStream;
+    using Base = InputStream<DFB>;
     using Base::tile_base;
+    using Base::row_stride;
 
     static_assert(to_u32(DstSlot) < DEST_AUTO_LIMIT, "UnaryBcast: DEST slot exceeds DEST_AUTO_LIMIT");
     static_assert(
@@ -68,11 +69,11 @@ struct detail::UnaryBcastImpl : InputStream, UnaryBcastTag {
     UnaryBcastImpl(Args&&...) noexcept : Base(MissingDataflowBuffer{}) {
         require_bound_dataflow_buffers<rejects_constructor_args<UnaryBcastImpl, 1, Args...>()>();
     }
-    ALWI explicit UnaryBcastImpl(DataflowBuffer& in) noexcept : Base(in) { check_bound_dataflow_buffer<Cb>(in); }
-    ALWI UnaryBcastImpl(DataflowBuffer& in, uint32_t base) noexcept : Base(in, base) {
+    ALWI explicit UnaryBcastImpl(DFB& in) noexcept : Base(in) { check_bound_dataflow_buffer<Cb>(in); }
+    ALWI UnaryBcastImpl(DFB& in, uint32_t base) noexcept : Base(in, base) {
         check_bound_dataflow_buffer<Cb>(in);
     }
-    ALWI UnaryBcastImpl(DataflowBuffer& in, StridedTileRange range) noexcept : Base(in, range) {
+    ALWI UnaryBcastImpl(DFB& in, StridedTileRange range) noexcept : Base(in, range) {
         check_bound_dataflow_buffer<Cb>(in);
     }
 
@@ -91,8 +92,8 @@ struct detail::UnaryBcastImpl : InputStream, UnaryBcastTag {
     static constexpr uint32_t lane_width = to_u32(DstSlot) + 1;
 };
 
-template <BroadcastDim Dim, InputSpec Input, OutputSpec Output>
-ALWI void unary_bcast(IterationShape shape, DataflowBuffer& in, DataflowBuffer& out) {
+template <BroadcastDim Dim, InputSpec Input, OutputSpec Output, class DFBIn, class DFBOut>
+ALWI void unary_bcast(IterationShape shape, DFBIn& in, DFBOut& out) {
     eltwise_chain(shape, UnaryBcast<Dim, Input>{in}, PackTile<Output>{out});
 }
 
