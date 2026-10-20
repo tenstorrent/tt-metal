@@ -43,6 +43,7 @@ the `sparse_sdpa` kernel wants H % 32 == 0 (TT_FATAL at 16 local heads): the que
 | layer 4 | (2,4), B=2/row | per-user 0.99994-0.99999 (worst row 0.99789); traced steps: 0.99996-0.99999 | `test_mesh_decoder_l4_1.log` |
 | `test_mesh_tp_prefill.py` layer 0 | (1,4) | TP4 prefill S=200 vs HF 0.999853 (replicated across the 4 chips); decode 200-202: 0.99990-0.99992 | `test_tp4_prefill_l0_3.log` |
 | layers 3, 4 | (1,4) | layer 3: prefill 0.999878, decode 200-202: 0.99994-0.99997; layer 4: prefill 0.999978, decode 0.999995-0.999996 | `test_tp4_prefill_l34_1.log` |
+| `test_mesh_tp_prefill.py::test_tp4_sparse_prefill_layer3` | (1,4) | layer 3 R4097 single-shot prefill at TP4 after the `seq_shard_axes` fix: all 0.999935, rows < 2048 0.999878, rows >= 2048 0.999859 (before: 0.998949 / 0.999878 / 0.997769); attention sublayer vs HF hook: rows >= 2048 0.999749 (single chip 0.999755) | `test_tp4_sparse_fixed.log`, before: `test_tp4_sparse_l3_2.log`, `test_tp4_attn_level.log` |
 | `test_mesh_decoder.py` B=32/row (`GLM53_MESH_B=32 GLM53_MESH_S=12`) | (2,4), 64 users | layer 3: per-user min 0.997864 / p10 0.999176 / median 0.999766 over 12 traced steps, HF-cache traced steps min 0.99650-0.99746 median 0.99993; layer 4: per-user min 0.999909 p10 0.999973 median 0.999991 | `test_mesh_decoder_b32_1.log` (layer 4), `test_mesh_decoder_b32_l3_2.log` |
 
 Method note: the mesh has no prefill path on multi-row meshes yet, so the decode test feeds each
@@ -50,6 +51,26 @@ user's prompt through the decode step token by token; HF's prefill output row t 
 reference of the decode output at step t (same recurrence / causal attention), then HF decode
 steps with a live cache follow. Every step after the warm-up runs through the captured trace (one
 eager step in the middle), and the outputs are checked byte-equal across the four columns of a row.
+
+## Root cause of the TP4 sparse-row gap (2026-10-20)
+
+`test_tp4_sparse_prefill_layer3` first gave rows >= 2048 at 0.99777 (single chip 0.99990) while the
+dense rows matched. Bisected with per-chip dumps of the sparse path (`_logs/mesh/sparse_tp4.pt` vs
+`sparse_single.pt`): q, latent K/V and the sparse_sdpa kernel are bit-identical per head (the kernel is
+exact with 16 real + 16 zero heads, `_logs/mesh/sparse_sdpa_heads_probe*.log`), fp32 all-reduce partials
+change nothing, but the **index rows differ on chips 1-3** while chip 0 equals the single chip. The
+selection intermediates (`select_tp4.pt`) show identical q / gates / pooled keys and identical finite
+score VALUES on every chip; only the causal `-inf` mask differs: chip c scores as if its queries started
+at `chunk_start + c * Sq`. `ttnn.experimental.indexer_score_dsa` treats every device of a mesh as a
+sequence-parallel rank by default (`seq_shard_axes` unset = whole-mesh ring; documented in its nanobind
+doc), so on the TP-replicated layout the non-origin chips saw FUTURE pools (non-causal selection ->
+0.980 at the attention level, `test_tp4_attn_level.log`). The op-level repro on the (1,4) ring
+(`_logs/mesh/indexer_score_mesh_probe2.log`): rows 0 visible pools per chip 512/576/640/704 with the
+default or `[]`, 512/512/512/512 with `seq_shard_axes=[0]`. Fix: `TtDSAIndexer.select` passes
+`seq_shard_axes=[0]` (the row axis, extent 1 on single-row meshes and on one chip) and refuses multi-row
+meshes (those are the Phase-3 sequence-parallel engine, where rows ARE SP ranks). Note for the decode
+path: the decode-mode selection happened to agree across chips because the not-yet-written future pools
+score 0 against positive real scores; prefill fills the whole prompt before selecting.
 
 ## Next
 
