@@ -44,6 +44,12 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.demos.glm53_flash.custom_ops.expert_stream.op import (
+    ExpertStream,
+    down_stream_layout,
+    gate_up_stream_layout,
+    stream_memory_config,
+)
 from models.demos.glm53_flash.tt.config import GLM53FlashConfig
 from models.demos.glm53_flash.tt.matmul_configs import DecodeLinear
 from models.demos.glm53_flash.tt.mesh import GLMMesh, interleave_blocks, single_chip
@@ -126,7 +132,12 @@ def dense_matmul_config(device_grid, m: int, n: int, k: int):
 
 
 def sparse_matmul_config(
-    device_grid, m: int, n: int, k: int, in0_block_w: int | None = None, out_subblock_w: int | None = None
+    device_grid,
+    m: int,
+    n: int,
+    k: int,
+    in0_block_w: int | None = None,
+    out_subblock_w: int | None = None,
 ):
     """MatmulMultiCoreReuseMultiCast1DProgramConfig for sparse_matmul (mcast_in0=True), the
     gpt_oss builder's rules plus the measured block sizes: per_core_N = ceil(Nt / cores); in0_block_w
@@ -309,10 +320,10 @@ class TtRouter(LightweightModule):
 class TtRoutedExperts(LightweightModule):
     @staticmethod
     def cache_files(
-        cache_dir: Path | str, mesh: GLMMesh, expert_dtype, expert_down_dtype, dense: bool = False
+        cache_dir: Path | str, mesh: GLMMesh, expert_dtype, expert_down_dtype, dense: bool = False, stream: bool = False
     ) -> dict[str, Path]:
         """Tensorbin paths of the routed-expert device tensors for this placement / format / layout."""
-        tag = f"mesh{mesh.rows}x{mesh.cols}" + ("_dense" if dense else "")
+        tag = f"mesh{mesh.rows}x{mesh.cols}" + ("_dense" if dense else "") + ("_stream" if stream else "")
         cache_dir = Path(cache_dir)
         files = {
             "w13": cache_dir / f"experts_w13_{expert_dtype.name}_{tag}.tensorbin",
@@ -324,13 +335,20 @@ class TtRoutedExperts(LightweightModule):
 
     @classmethod
     def cache_complete(
-        cls, cache_dir: Path | str | None, mesh: GLMMesh, expert_dtype, expert_down_dtype, dense: bool = False
+        cls,
+        cache_dir: Path | str | None,
+        mesh: GLMMesh,
+        expert_dtype,
+        expert_down_dtype,
+        dense: bool = False,
+        stream: bool = False,
     ) -> bool:
         """True when both expert tensorbins exist (the constructor then needs no expert host tensors)."""
         if cache_dir is None:
             return False
         return all(
-            f.is_file() for f in cls.cache_files(cache_dir, mesh, expert_dtype, expert_down_dtype, dense).values()
+            f.is_file()
+            for f in cls.cache_files(cache_dir, mesh, expert_dtype, expert_down_dtype, dense, stream).values()
         )
 
     def __init__(
@@ -346,6 +364,7 @@ class TtRoutedExperts(LightweightModule):
         mesh: GLMMesh | None = None,
         weight_cache_path: Path | str | None = None,
         dense: bool = False,
+        stream: bool = False,
     ):
         """Hybrid placement (design 5.4): the experts are split over the mesh columns (chip column
         ``c`` holds experts ``[c*E/cols, (c+1)*E/cols)``) and every expert's intermediate over the mesh
@@ -370,16 +389,18 @@ class TtRoutedExperts(LightweightModule):
         self.expert_dtype = expert_dtype
         self.expert_down_dtype = expert_down_dtype
         self.dense = dense
+        self.stream = stream
+        assert not (dense and stream), "dense and stream are alternatives"
         ep, tpr = self.mesh.cols, self.mesh.rows
         assert self.E % ep == 0 and self.I % (tpr * TILE) == 0, (self.E, self.I, ep, tpr)
         self.E_local, self.I_local = self.E // ep, self.I // tpr
         files = (
-            self.cache_files(weight_cache_path, self.mesh, expert_dtype, expert_down_dtype, dense)
+            self.cache_files(weight_cache_path, self.mesh, expert_dtype, expert_down_dtype, dense, stream)
             if weight_cache_path is not None
             else {"w13": None, "w2": None, "w13_up": None}
         )
         if gate_up is None or down is None:
-            if not self.cache_complete(weight_cache_path, self.mesh, expert_dtype, expert_down_dtype, dense):
+            if not self.cache_complete(weight_cache_path, self.mesh, expert_dtype, expert_down_dtype, dense, stream):
                 raise ValueError("routed experts without host tensors need a complete weight cache")
         else:
             assert tuple(gate_up.shape) == (self.E, 2 * self.I, self.H) and tuple(down.shape) == (
@@ -419,7 +440,58 @@ class TtRoutedExperts(LightweightModule):
             w2 = down.transpose(1, 2).reshape(ep, E_loc, tpr, I_loc, H).permute(0, 2, 1, 3, 4)
             return w2.reshape(1, ep, tpr * E_loc * I_loc, H).contiguous()
 
-        if dense:
+        def chip_slices(r: int, c: int):
+            """Chip (r, c)'s gate|up [E_loc, H, 2 I_loc] ([gate_r | up_r] columns) and down [E_loc, I_loc, H]."""
+            es, isl = slice(c * E_loc, (c + 1) * E_loc), slice(r * I_loc, (r + 1) * I_loc)
+            g = gate_up[es, :I, :][:, isl, :].transpose(1, 2)  # [E_loc, H, I_loc]
+            u = gate_up[es, I:, :][:, isl, :].transpose(1, 2)
+            w13c = torch.cat([g, u], dim=-1).float()
+            w2c = down[es][:, :, isl].transpose(1, 2).float()  # [E_loc, I_loc, H]
+            return w13c, w2c
+
+        def make_w13_stream() -> torch.Tensor:  # [rows_m, cols_m, rows13, 256]: a (0, 1) mesh split
+            return torch.stack(
+                [torch.stack([gate_up_stream_layout(chip_slices(r, c)[0]) for c in range(ep)]) for r in range(tpr)]
+            ).contiguous()
+
+        def make_w2_stream() -> torch.Tensor:
+            return torch.stack(
+                [torch.stack([down_stream_layout(chip_slices(r, c)[1]) for c in range(ep)]) for r in range(tpr)]
+            ).contiguous()
+
+        if stream:
+            rows13 = E_loc * 2 * (H // TILE) * TILE
+            rows2 = E_loc * (H // TILE // 8) * (I_loc // TILE) * TILE
+            self.w13 = self.mesh.upload_cached(
+                make_w13_stream,
+                expert_dtype,
+                files["w13"],
+                rows=0,
+                cols=1,
+                memory_config=stream_memory_config(rows13),
+                expect_shape=(tpr, ep, rows13, 256),
+            )
+            self.w2 = self.mesh.upload_cached(
+                make_w2_stream,
+                expert_down_dtype,
+                files["w2"],
+                rows=0,
+                cols=1,
+                memory_config=stream_memory_config(rows2),
+                expect_shape=(tpr, ep, rows2, 256),
+            )
+            self.stream_x_l1 = os.environ.get("GLM53_STREAM_X_L1", "1") == "1"
+            self.stream_act_l1 = os.environ.get("GLM53_STREAM_ACT_L1", "1") == "1"
+            self.stream_op = ExpertStream(
+                device,
+                E_loc,
+                H,
+                I_loc,
+                H,
+                groups=int(os.environ.get("GLM53_STREAM_GROUPS", "12")),
+                down_readers=int(os.environ.get("GLM53_STREAM_DOWN_READERS", "2")),
+            )
+        elif dense:
             shape13 = (1, ep, H, tpr * E_loc * I_loc)
             self.w13 = self.mesh.upload_cached(
                 make_w13_gate_dense, expert_dtype, files["w13"], rows=3, cols=1, expect_shape=shape13
@@ -570,6 +642,21 @@ class TtRoutedExperts(LightweightModule):
         ttnn.deallocate(h)
         return y
 
+    def _block_stream(self, xb: ttnn.Tensor, dense_w: ttnn.Tensor) -> ttnn.Tensor:
+        """One token block (<= 32 rows) through the streaming generic ops: the column selector matmul (on a
+        multi-column mesh), the gate|up stream, the down stream. xb [1,1,M,H] bf16 (M = 32: a tile row),
+        dense_w [1,1,M,E] -> [1,1,32,H]."""
+        if self.select is not None:
+            dense_w = ttnn.matmul(dense_w, self.select_bf16, dtype=ttnn.bfloat16, compute_kernel_config=self.fp32)
+        elif dense_w.dtype != ttnn.bfloat16:
+            dense_w = ttnn.typecast(dense_w, ttnn.bfloat16)
+        if self.stream_x_l1 and not xb.is_sharded() and xb.memory_config().buffer_type != ttnn.BufferType.L1:
+            xb = ttnn.to_memory_config(xb, ttnn.L1_MEMORY_CONFIG)  # the 96 gate|up cores re-read x: L1 is cheaper
+        act, out = self.stream_op.alloc(self.device, act_l1=self.stream_act_l1)
+        self.stream_op.forward(xb, dense_w, self.w13, self.w2, act, out)
+        ttnn.deallocate(act)
+        return out
+
     def forward(self, x: ttnn.Tensor, dense_w: ttnn.Tensor) -> ttnn.Tensor:
         """x [1,1,T,H] bf16, dense_w [1,1,T,E] fp32 (this row's tokens) -> [1,1,T,H] TP partial over
         the columns. Sparse layout: processed in 32-token blocks; a short last block (or T < 32, e.g.
@@ -580,17 +667,20 @@ class TtRoutedExperts(LightweightModule):
             x = self.mesh.all_gather_rows(x, dim=2)
             dense_w = self.mesh.all_gather_rows(dense_w, dim=2)
         T = x.shape[-2]
+        block = self._block_stream if self.stream else self._block
         if self.dense:
             y = self._block_dense(x, dense_w)
         elif T <= TILE:
-            y = self._block(x, dense_w)
+            y = block(x, dense_w)
+            if self.stream and T < TILE:
+                y = ttnn.slice(y, [0, 0, 0, 0], [1, 1, T, self.H])
         else:
             outs = []
             for t0 in range(0, T, TILE):
                 t1 = min(t0 + TILE, T)
                 xb = ttnn.slice(x, [0, 0, t0, 0], [1, 1, t1, self.H])
                 wb = ttnn.slice(dense_w, [0, 0, t0, 0], [1, 1, t1, self.E])
-                outs.append(self._block(xb, wb))
+                outs.append(block(xb, wb))
             y = ttnn.concat(outs, dim=-2)
             for o in outs:
                 ttnn.deallocate(o)
@@ -616,6 +706,7 @@ class TtMoE(LightweightModule):
         mesh: GLMMesh | None = None,
         weight_cache_path: Path | str | None = None,
         dense_experts: bool | None = None,
+        stream_experts: bool | None = None,
     ):
         """``mlp_state_dict``: raw checkpoint tensors of ``mlp.`` (prefix stripped), experts as
         ``experts.N.{gate,up,down}_proj.weight`` or pre-stacked ``experts.gate_up_proj/down_proj``,
@@ -628,6 +719,8 @@ class TtMoE(LightweightModule):
         self.cfg = cfg
         if dense_experts is None:
             dense_experts = os.environ.get("GLM53_DENSE_EXPERTS", "0") == "1"
+        if stream_experts is None:
+            stream_experts = os.environ.get("GLM53_STREAM_EXPERTS", "0") == "1"
         self.mesh = mesh if mesh is not None else single_chip(device)
         E, I, H = cfg.n_routed_experts, cfg.moe_intermediate_size, cfg.hidden_size
         if "experts.gate_up_proj" in mlp_state_dict:
@@ -661,6 +754,7 @@ class TtMoE(LightweightModule):
             mesh=self.mesh,
             weight_cache_path=weight_cache_path,
             dense=dense_experts,
+            stream=stream_experts,
         )
         self.shared = TtClampedSwiGLU(
             device,
@@ -674,11 +768,20 @@ class TtMoE(LightweightModule):
 
     @staticmethod
     def expert_cache_complete(
-        cache_dir, mesh: GLMMesh, expert_dtype=ttnn.bfloat8_b, expert_down_dtype=ttnn.bfloat8_b, dense_experts=None
+        cache_dir,
+        mesh: GLMMesh,
+        expert_dtype=ttnn.bfloat8_b,
+        expert_down_dtype=ttnn.bfloat8_b,
+        dense_experts=None,
+        stream_experts=None,
     ):
         if dense_experts is None:
             dense_experts = os.environ.get("GLM53_DENSE_EXPERTS", "0") == "1"
-        return TtRoutedExperts.cache_complete(cache_dir, mesh, expert_dtype, expert_down_dtype, dense_experts)
+        if stream_experts is None:
+            stream_experts = os.environ.get("GLM53_STREAM_EXPERTS", "0") == "1"
+        return TtRoutedExperts.cache_complete(
+            cache_dir, mesh, expert_dtype, expert_down_dtype, dense_experts, stream_experts
+        )
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """x [1,1,T,H] bf16 (T multiple of 32; replicated over the TP columns) -> [1,1,T,H] replicated."""
