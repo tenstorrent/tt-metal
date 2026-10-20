@@ -56,7 +56,7 @@ prefill of the whole prompt (same kernels, same row classes):
 | `tt/config.py` | frozen config from `config.json` | |
 | `tt/mhc.py` | mHC hyper-connection (fused Sinkhorn parametrization, fp32) | `deepseek_v3_d_p/tt/mhc/TtMHCWrap` |
 | `tt/kda.py` | KDA: prefill via `ttKDA` (chunked kernels); decode = the 6-op fused block with `GLM53_KDA_FUSED=1` (qkv matmul, 2 gate matmuls, ONE `ttnn.transformer.kda_decode` program, tilize, o_proj; state + conv history in place) or the default ~75-op composite recurrence on `[B*H,128,128]` fp32 (see the KDA decode block section) | `deepseek_v3_d_p/tt/kda`, `ttnn/.../transformer/kda_decode` |
-| `tt/dsa.py` | MLA (NoPE): dense causal SDPA for prefill rows [0, 2048), paged latent cache, absorbed `paged_flash_multi_latent_attention_decode` for every decode slot; prefill rows >= 2048 and decode users at position > 2050 via the indexer + `sparse_sdpa` | paged cache ops, flash MLA decode, sparse SDPA |
+| `tt/dsa.py` | MLA (NoPE): dense causal SDPA for prefill rows [0, 2048), paged latent cache, absorbed `paged_flash_multi_latent_attention_decode` for every decode slot (decode = the 7-op fused block with `GLM53_DSA_FUSED=1`, see the DSA decode block section); prefill rows >= 2048 and decode users at position > 2050 via the indexer + `sparse_sdpa` | paged cache ops, flash MLA decode, sparse SDPA |
 | `tt/indexer.py` | GLM k-pool indexer: pooled-key cache, `indexer_score_dsa(key_compression_ratio=4)`, `topk_large_indices` over 4x-expanded pool scores, tail ids | |
 | `tt/moe.py` | router (exact fp32 composite top-8) + `sparse_matmul` experts per 32-token block + shared expert | gpt_oss sparse-matmul pattern |
 | `tt/mlp.py` | clamped SwiGLU (dense layers, shared expert) | |
@@ -137,6 +137,50 @@ the extended recurrence op). Logs: `_logs/optkda_*.log`, `_logs/optkda_ops_*.txt
 Limits: K = V = 128 and conv kernel 4 are hard-wired in the program; the TP-mesh placement of the block path
 (`w_g1` per-chip columns) is written but not run on a mesh (single chip only here); padding rows of `qkv`/`gates`
 must be finite (ttnn matmuls on zero-padded inputs keep them zero).
+
+## DSA decode block (fused, `GLM53_DSA_FUSED=1`)
+
+Same directive as the KDA block (every data-movement op merged or removed). One chip (chip 3, 64 heads), real
+layer-3 weights, traced decode of the DSA layer alone at position 1024 (`tests/test_dsa_perf.py`), ms per step:
+
+| users | composite (ops) | fused block (ops) | fused device us: matmuls / MLA decode / state op / transposes |
+|---|---|---|---|
+| 4 | 1.327 (41) | **0.859 (7)** | 614 / 158 / 42 / 27 (840 total) |
+| 32 | 1.892 (41) | **0.971 (7)** | 621 / 185 / 62 / 96 (964 total) |
+
+Full layer 3 (DSA+MoE, `test_perf_layer.py`, `GLM53_PERF_B`): B=4 7.05 -> 6.51 ms/step, B=32 10.94 -> 9.94 ms/step.
+The composite's 41 ops were 5 stem slices, 3 single-core norms, 4 x (InterleavedToSharded + PagedUpdateCache),
+2 ring slices, the 7-op pooling, 5 ReshapeViews (455 us at B=32) and 4 transposes around the absorb bmms.
+
+The block: `stem = x W_stem` (one [4096 x 2336] matmul) -> **one `ttnn.transformer.dsa_decode_state` program**
+(role-A cores: the q_a RMSNorm of each 32-user tile row, returned as q_resid; one role-B core per user: its
+RMSNorm'd kv_a row placed at row a % 32 of its latent page, its LayerNorm'd indexer k row and raw gate row placed at
+ring slot a % 4, the pooled key of pool a // 4 = softmax-weighted mean over the ring (ape added, unused ring rows
+masked, shift by the first in-pool row) placed in the pool cache -- all read-modify-written in place, rows moved by
+one-hot selector matmuls) -> `q_lat = q_resid W_qb1` with `W_qb1[h] = W_qb[h] W_kb1[h]` (the absorb folded into the
+projection: one [1536 x H*512] matmul) -> `transpose(1, 2)` of the free head-major view (for B <= 32 the packed
+tiled rows are the [1, H, B, 512] tile sequence; a logical reshape would shuffle rows at ~5 GB/s, 448 us at B=32)
+-> `paged_flash_multi_latent_attention_decode` -> `transpose` -> `y = o_lat W_o2` with
+`W_o2[h] = W_kb2[h]^T W_o[h]` stacked over heads (one [H*512 x 4096] matmul, the head sum inside the K dim)
+(+ the TP all-reduce on a mesh). Users at positions > 2050 keep the per-user indexer + `sparse_sdpa` row
+replacement on the head-major view (`test_dsa_sparse.py`, `test_dsa_long.py` pass on the block).
+
+Correctness (real layer-3 weights): block vs HF decode PCC 0.99991 / 0.99991 / 0.99989 (3 steps after a 96-token
+prefill; the composite 0.99991 / 0.99991 / 0.99989); `test_dsa_fused_vs_composite` (B=4 and 32, 10 steps on one
+evolving cache set): latent cache, pools and both rings bit-exact between the paths, worst output PCC 0.99983
+(the state program alone, `GLM53_DSA_FOLD=none`: 0.99990; q fold only 0.99989; o fold only 0.99985) -- the bfp8
+products round differently from the composite's two bfp8 matmuls with a bf16 intermediate; vs HF the folded block
+is at or above the composite (worst step 0.99954 vs 0.99946 at B=4). `test_decoder_layer.py` / `test_decode_trace.py`
+(layers 0, 3, 4; traced; two users) pass on the block path. The program's own test:
+`tests/ttnn/unit_tests/operations/transformers/test_dsa_decode_state.py` (torch reference, B=1/4/32/40, permuted
+page tables, 6-step evolution). On the Galaxy (TP4, 16 local heads) the folded weights read 46 MB per layer-step
+instead of the composite's 27 MB (+50 us) and remove the per-head bmms (160 us) and all relayouts; on this 64-head
+chip they read 184 MB (the matmul share above).
+
+Limits: K/V-lora widths 1536 / 512 and index dim 128 are wired into the program (D = 128, L and Lq multiples of
+128); the latent cache must be bf16 (the program read-modify-writes bf16 tiles); B + ceil(B / 32) cores; the
+TP-mesh placement of the folded weights (`cols=-1` / `cols=-2`, head-major) is written but not run on a mesh here;
+`GLM53_DSA_FUSED` defaults to off. Logs: `_logs/optkda_dsa*.log`, `_logs/optkda_dsaops_*.txt`.
 
 ## Running
 

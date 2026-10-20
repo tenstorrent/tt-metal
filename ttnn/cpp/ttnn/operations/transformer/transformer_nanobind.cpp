@@ -18,6 +18,7 @@
 #include "chunk_gated_delta_rule/chunk_gated_delta_rule_nanobind.hpp"
 #include "fused_recurrent_gated_delta_rule/fused_recurrent_gated_delta_rule_nanobind.hpp"
 #include "kda_decode/kda_decode_nanobind.hpp"
+#include "dsa_decode_state/dsa_decode_state_nanobind.hpp"
 #include "sdpa/sdpa_nanobind.hpp"
 #include "sdpa_config.hpp"
 #include "sdpa_decode/sdpa_decode_nanobind.hpp"
@@ -94,6 +95,7 @@ void py_module(nb::module_& mod) {
     bind_chunk_gated_delta_rule(mod);
     bind_fused_recurrent_gated_delta_rule(mod);
     bind_kda_decode(mod);
+    bind_dsa_decode_state(mod);
 }
 
 }  // namespace ttnn::operations::transformer
