@@ -43,7 +43,7 @@ from models.demos.common.bringup.reference.interface import Ctx, run_block
 from . import ccl
 from .attention import TtWindowAttention, TtWindowCache, WindowTables, attention_weights
 from .collapse import TtHcCollapse
-from .common import DRAM, SP_AXIS, TP_AXIS
+from .common import DRAM, SP_AXIS, TP_AXIS, set_load_layer
 from .compressor import CompressRope, TtCompressCaches, TtCompressor, compressor_weights
 from .engram import TtEngramRows
 from .engram_add import build_engram_add
@@ -295,6 +295,7 @@ class TtDS41Block:
 
         cfg, mesh, ck, i = model.cfg, model.mesh, model.ck, layer
         self.model, self.cfg, self.mesh, self.layer = model, cfg, mesh, i
+        set_load_layer(i)  # (DENSE_WEIGHTS=bfp8: the per-matrix log names the layer)
         self.steps = block_steps(cfg, i)
         r = cfg.ratio(i)
         self.kv_src, self.idx_src = cfg.kv_source_of(i), cfg.index_source_of(i)

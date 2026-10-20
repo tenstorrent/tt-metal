@@ -2121,3 +2121,44 @@ Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deeps
 - Re-run: on `DS41_SHARED_EXPERT_IMPL=flat`, off `DS41_SHARED_EXPERT_IMPL=linear`; A/B: `PYTHONPATH=$PWD
   scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tt/perf_shared_expert.py -k
   "not ops"` (ops: with the profiler env, -k ops).
+
+## P.13 perf (attempt 1): realistic defaults (fp8 weights bfp8, HiFi2, fp32 accumulation where needed, stock window attention)
+- Settings (tt/settings.py), defaults = change on: DENSE_WEIGHTS bfp8 (new), MATMUL_FIDELITY HiFi2, FP32_ACC needed (new;
+  replaces the boolean FP32_DEST_ACC), WINDOW_SDPA source. MAX_PRECISION: bf16 / HiFi4 / all / high_precision, so the
+  component / swap tests run the old path (test_c_swa_experts re-run: PASS).
+- DENSE_WEIGHTS (tt/common.py:dense_dtype): the checkpoint's fp8 matrices (attn wq_a | wkv, wq_b, wo_a, wo_b, indexer
+  wq_b, engram wkv, the shared expert's linear path) uploaded as bfloat8_b; the per-matrix change is logged at load
+  (DENSE_BFP8, ttnn's own host packing round-trip): 10.0-10.3 % of values, ||dW||/||W|| 0.0034-0.0035 for attention;
+  indexer wq_b up to 13.8 % / 0.0046 (L14); engram wkv 12.9 % / 0.0045 (L1), 21.9 % / 0.0051 (L14). Layout kept (W^T,
+  groups along N): a host check of [N, K] vs [K, N] gives the same rounding except the engram wkv (0.0035 vs 0.0045).
+  The compressor's wkv / wgate / wk and the indexer's weights_proj are BF16 in the checkpoint: kept bf16 (rule 7).
+  The shared expert's default (flat) path was already bfp8 (P.12).
+- FP32_ACC (tt/common.py:fp32_acc, compute_config(needed=), attn_compute_config(needed=)): measured every dense projection
+  at its per-chip shape (tt/perf_precision.py::test_fp32_acc_matmuls, layers 0 / 1 / 2 / 20, real bfp8 weights, HiFi2,
+  random inputs vs float64 with the same weights). A 16-bit DEST: q_a rel 0.0044 -> 0.034 (bias +2.6 %), wq_b 0.0041 ->
+  0.018, wo_a 0.0041 -> 0.056 (+4.5 %), wo_b 0.0044 -> 0.026, indexer wq_b 0.0041 -> 0.018, weights_proj / compressor
+  0.0066 -> 0.045, engram wkv 0.0041 -> 0.084 (+6.8 %), router 0.0041 -> 0.084; time 45-55 % less per matmul (wo_b
+  0.60 -> 0.28 ms, engram 2.48 -> 1.39 ms). Probe (1 chip, bf16 W): the bias comes from the spilled K-block partials
+  (DS41-78); packer_l1_acc=True makes it unbiased but still 2-3.5x fp32's error (K 1024 0.0086, K 4096 0.0144 vs
+  0.0041). Where fp32 stays (all of it): the long-K projections above; the stock sparse_sdpa (softmax statistics: rel
+  0.019-0.024 with vs 0.026-0.042 without, worst row 0.064 vs 0.278 at x4 spread); the indexer ring score (K-13); mHC
+  hc_fn + Sinkhorn, norms, engram gate sums (fp32 SFPU data, DS41-27 / DS41-40); routed + shared experts (as today,
+  GLM-5.3). So FP32_ACC=needed == all on today's code (no program differs); no site was turned off.
+- WINDOW_SDPA=source: ttnn.transformer.sparse_sdpa with the attention config (HiFi2, fp32 DEST) for the window and the
+  compressed layers. Op alone (perf_precision.py::test_window_sdpa): 0.355 -> 0.334 ms, rel vs float64 0.0073 -> 0.024
+  (bias -0.45 % -> -1.1 %); x4 spread 0.0086 -> 0.019.
+- stock ttnn.transformer.sparse_sdpa instead of ttnn.bringup.sparse_sdpa: owner rule F123 / the P.13 brief (the stock op
+  at its normal settings; the fork's high_precision stays the max-precision value, WINDOW_SDPA=high_precision).
+- Plain profile, 2x2, chunk 53248-55296, by hand (gate env + DS41_ overrides; K-58: generated/bringup_adhoc/P.13*.json),
+  device total per chunk: off 220.79; DENSE_WEIGHTS=bfp8 alone 220.90 (no section moves: compute-bound at 1024 rows,
+  DS41-79); MATMUL_FIDELITY=HiFi2 alone 219.52 (engram_kv 6.02 -> 4.87); WINDOW_SDPA=source alone 220.30 (attention
+  114.93 -> 114.39); FP32_ACC=needed alone: same programs; all on 219.17 (-1.62 ms, -0.7 %: attention 114.40, engram_kv
+  4.93, q_a 4.75, indexer 34.99, experts 17.34).
+- Quick A/B (last chunk vs golden + clean wall): off L00 0.99936 L01 0.99899 L02 0.99782 L03 0.99519 L14 0.99614 L20
+  0.99928 L21 0.99688 L24 0.99943, wall 231.7 ms; on (final `measure --task P.13`, rc 0) L00 0.99932 L01 0.99892 L02
+  0.99768 L03 0.99486 L14 0.99612 L20 0.99927 L21 0.99682 L24 0.99941, pcc_chunk_out 0.99941, wall 243.0 (spread 27.6;
+  first run 236.7), host_transfers_per_layer 0; WINDOW_SDPA=source alone: L03 0.99487 (all of the drop).
+- Re-run: on `DS41_DENSE_WEIGHTS=bfp8 DS41_MATMUL_FIDELITY=HiFi2 DS41_FP32_ACC=needed DS41_WINDOW_SDPA=source`, off
+  `bf16 HiFi4 all high_precision`; measurements `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all --no-precompile
+  models/demos/deepseek_v41_flash_d_p/tt/perf_precision.py -s`; final `python -m models.demos.common.bringup.orchestrator
+  measure --task P.13`.
