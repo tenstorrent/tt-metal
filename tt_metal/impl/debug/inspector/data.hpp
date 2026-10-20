@@ -32,9 +32,6 @@ private:
 
     const llrt::RunTimeOptions& rtoptions() const;
 
-    // Whether tensor specs should be captured on op dispatch.
-    bool capture_tensor_specs() const;
-
     void serialize_rpc();
     RpcServer& get_rpc_server();
     void rpc_get_programs(rpc::Inspector::GetProgramsResults::Builder& results);
