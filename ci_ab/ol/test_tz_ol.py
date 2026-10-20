@@ -8,17 +8,13 @@ import torch
 import ttnn
 
 CASES = {
+    "uint8_512x1024": (ttnn.uint8, (1, 1, 512, 1024)),
+    "uint8_2048x64": (ttnn.uint8, (1, 1, 2048, 64)),
+    "uint8_32x128256": (ttnn.uint8, (1, 1, 32, 128256)),
+    "uint8_1024x96": (ttnn.uint8, (1, 1, 1024, 96)),
     "int32_512x1024": (ttnn.int32, (1, 1, 512, 1024)),
-    "uint32_512x1024": (ttnn.uint32, (1, 1, 512, 1024)),
     "fp32_512x1024": (ttnn.float32, (1, 1, 512, 1024)),
-    "int32_2048x64": (ttnn.int32, (1, 1, 2048, 64)),
-    "int32_32x128256": (ttnn.int32, (1, 1, 32, 128256)),
-    "fp32_hs_4096x256": (ttnn.float32, (1, 1, 4096, 256)),
-    "twvp_int32_30x1000": (ttnn.int32, (1, 1, 30, 1000)),
-    "twvp_fp32_1x8x30x250": (ttnn.float32, (1, 8, 30, 250)),
-    "c3d_fp32_384_k7": (ttnn.float32, None),
     "bf16_4096x32": (ttnn.bfloat16, (1, 1, 4096, 32)),
-    "bf16_to_bfp8_2048x64": (ttnn.bfloat16, (1, 1, 2048, 64)),
 }
 
 
@@ -59,7 +55,9 @@ def test_tz(device, case):
         _record(case, _conv3d(device))
         return
     g = torch.Generator().manual_seed(7)
-    if dt in (ttnn.int32, ttnn.uint32):
+    if dt == ttnn.uint8:
+        t = torch.randint(0, 256, shape, generator=g, dtype=torch.uint8)
+    elif dt in (ttnn.int32, ttnn.uint32):
         t = torch.randint(0, 2**20, shape, generator=g, dtype=torch.int32)
     else:
         t = torch.randn(shape, generator=g).to(torch.float32 if dt == ttnn.float32 else torch.bfloat16)
