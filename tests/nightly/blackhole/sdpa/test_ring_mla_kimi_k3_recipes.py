@@ -8,6 +8,7 @@
 #   * ttnn.transformer.ring_mla: for a recipe, drops compute_kernel_config, passes precision=, and for FAST runs
 #     prepare_sdpa_input on Q (7 bits) and the BF16 latent (5 bits, BFP8), and casts the gather buffer to BFP8.
 import csv
+import hashlib
 import math
 import os
 import traceback
@@ -20,11 +21,12 @@ import ttnn
 
 from tests.nightly.blackhole.sdpa import test_ring_joint_sdpa as T
 
+REF_CACHE = os.environ.get("KIMI_REF_CACHE", "generated/sdpa_recipe_sweep/ref_cache")
 OUT = os.path.join("generated/sdpa_recipe_sweep", os.environ.get("KIMI_OUT", "kimi_k3_recipes.csv"))
 MODEL = T.RING_MLA_CHUNKED_MODEL_CONFIGS["kimi_k3"]
 MC = T.MESH_CONFIG
 CHUNK = T.CHUNKED_PREFILL_CHUNK_SIZE  # 2560 on QB (640 rows per device)
-QC, KC = 32, 640
+QC, KC = int(os.environ.get("KIMI_QC", 32)), int(os.environ.get("KIMI_KC", 640))
 REF_UTIL = 71.0  # QB perf-check reference (kimi_k3, q32/k640, 28160 tokens)
 
 VARIANTS = {
@@ -65,12 +67,25 @@ def patches(final_rows, precision, approx=False):
     def reference(q, k, v, is_causal=False, attention_sink=None):
         assert is_causal and attention_sink is None
         out = torch.zeros(q.shape[0], q.shape[1], q.shape[2], v.shape[-1])
+        # The FP64 reference of the measured rows is computed once per input set and kept on disk (it dominates the
+        # run time at 500k+5k); the key covers the shapes, the rows and a strided sample of the inputs.
+        digest = hashlib.sha256()
+        for t in (q, k, v):
+            digest.update(str(tuple(t.shape)).encode())
+            digest.update(t.flatten()[:: max(1, t.numel() // 65536)].contiguous().numpy().tobytes())
+        digest.update(f"{s}:{e}".encode())
+        cache = os.path.join(REF_CACHE, digest.hexdigest()[:32] + ".pt")
+        if os.path.exists(cache):
+            out[0, :, s:e] = torch.load(cache)
+            return out
         kk, vv = k[0, 0, :e].double(), v[0, 0, :e].double()
         keep = torch.arange(e)[None, :] <= torch.arange(s, e)[:, None]
         for h in range(q.shape[1]):
             sc = q[0, h, s:e].double() @ kk.T / math.sqrt(q.shape[-1])
             sc.masked_fill_(~keep, -math.inf)
             out[0, h, s:e] = (torch.softmax(sc, -1) @ vv).float()
+        os.makedirs(REF_CACHE, exist_ok=True)
+        torch.save(out[0, :, s:e].clone(), cache)
         return out
 
     def pcc(expected, actual):
