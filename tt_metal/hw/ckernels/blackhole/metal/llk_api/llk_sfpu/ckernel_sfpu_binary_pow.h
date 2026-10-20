@@ -45,7 +45,6 @@ namespace sfpu {
  * @note This function assumes that the programmable constants are set to the following values:
  * - vConstFloatPrgm0 = 1.4426950408889634f;
  * - vConstFloatPrgm1 = -127.0f;
- * - vConstFloatPrgm2 = 8388608.0f; (2**23)
  *
  * @see Moroz et al. 2022 - "Simple Multiple Precision Algorithms for Exponential Functions"
  *      ( https://doi.org/10.1109/MSP.2022.3157460 )
@@ -87,9 +86,8 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_21f_(sfpi::vFloat base, sfpi::vFloat
     // In this case, we transform the formula to:
     // z = (bias) * N_m + (x * log2(a)) * N_m
     // where (bias + N_m) = 0x3f800000
-    // and (x * log2(a)) * N_m = z_f32 * 2**23, a multiply-add that saturates (addexp wraps once z_f32 >= 2^106)
     z_f32 = z_f32 * sfpi::vConstFloatPrgm2 + sfpi::vFloat(0x3f800000);
-    v_if(z_f32 < 0.0f) { z_f32 = 0.0f; }  // negative exactly when z_f32 < -127; 0 is what -127 maps to
+    v_if(z_f32 < 0.0f) { z_f32 = 0.0f; }
     v_endif;
     sfpi::vInt z = _float_to_int32_positive_(z_f32);
 
@@ -397,7 +395,7 @@ inline void sfpu_binary_pow_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
     sfpi::vConstFloatPrgm0 = 1.442695f;
     sfpi::vConstFloatPrgm1 = -127.0f;
-    sfpi::vConstFloatPrgm2 = 8388608.0f;  // 2**23
+    sfpi::vConstFloatPrgm2 = 8388608.0f;
 }
 
 }  // namespace sfpu

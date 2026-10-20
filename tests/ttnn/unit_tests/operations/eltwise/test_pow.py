@@ -604,7 +604,6 @@ def test_binary_pow_fp32_overflow_to_inf(exponent, device):
     assert (result > 0).all(), "overflow produced -inf/NaN instead of +inf"
 
 
-# bf16 Dest: y * log2(x) >= 2**106 must give +inf, not 1.0; every normal base on the overflowing side of 1.
 @pytest.mark.parametrize("exponent", [1e30, 1e32, 3e38, -1e30, -1e32, -3e38])
 @pytest.mark.parametrize("binary", [True, False], ids=["tensor_exponent", "scalar_exponent"])
 def test_pow_bf16_huge_exponent_overflows_to_inf(exponent, binary, device):

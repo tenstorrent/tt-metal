@@ -364,7 +364,6 @@ def test_softcap_op(device, beta):
 # rpow — PCC ≥ 0.99 + allclose(atol=1e-2, rtol=0.1)
 # ─────────────────────────────────────────────────────────────────────────────
 
-# rpow evaluates exponent ** x as exp2(x * log2(exponent)); every lane is asserted, including the overflowing ones.
 
 
 @pytest.mark.parametrize("exponent", [0.5, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.5, 8.0, 9.0, 10.0])

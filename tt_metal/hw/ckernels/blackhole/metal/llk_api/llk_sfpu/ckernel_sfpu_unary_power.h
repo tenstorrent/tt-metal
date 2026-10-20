@@ -24,7 +24,6 @@ namespace sfpu {
  * More specifically, it is the implementation of the `exp_21f` algorithm described in Section 5
  *
  * @param base The base value (sfpi::vFloat vector), can be any floating point number
- * @param pow_scaled The exponent/power value times 2**23 (see _sfpu_unary_power_bf16_)
  * @tparam IS_POSITIVE_EXPONENT If true, assumes exponent >= 0 (zero base maps to 0 rather than NaN)
  *
  * @return sfpi::vFloat Result of base**pow
@@ -38,7 +37,6 @@ namespace sfpu {
  *
  * @note This function assumes that the programmable constants are set to the following values:
  * - vConstFloatPrgm0 = 1.4426950408889634f;
- * - vConstFloatPrgm1 = -127.0f * 2**23;
  * - vConstFloatPrgm2 = std::numeric_limits<float>::quiet_NaN();
  *
  * @see Moroz et al. 2022 - "Simple Multiple Precision Algorithms for Exponential Functions"
@@ -83,7 +81,6 @@ sfpi_inline sfpi::vFloat _sfpu_unary_power_21f_(sfpi::vFloat base, sfpi::vFloat 
     // In this case, we transform the formula to:
     // z = (bias) * N_m + (x * log2(a)) * N_m
     // where (bias + N_m) = 0x3f800000
-    // and (x * log2(a)) * N_m = z_f32: pow_scaled carries N_m (addexp would wrap once z_f32 >= 2^106)
     const sfpi::vFloat bias = sfpi::vFloat(0x3f800000);
     sfpi::vInt z = _float_to_int32_positive_(z_f32 + bias);
 
@@ -108,7 +105,7 @@ sfpi_inline sfpi::vFloat _sfpu_unary_power_21f_(sfpi::vFloat base, sfpi::vFloat 
     v_if(base < 0.0f) {
         // Post-processing: ensure that special values (e.g. 0**0, -1**0.5, ...) are handled correctly
         // Check valid base range
-        sfpi::vFloat pow = sfpi::addexp(pow_scaled, -23);  // pow == 0 is handled in _sfpu_unary_power_bf16_
+        sfpi::vFloat pow = sfpi::addexp(pow_scaled, -23);
         auto pow_int = sfpi::convert<sfpi::vSMag16>(
             pow, sfpi::RoundMode::Nearest);  // int16 should be plenty, since large powers will approach 0/Inf
         auto pow_rounded = sfpi::convert<sfpi::vFloat>(pow_int, sfpi::RoundMode::Nearest);
@@ -331,18 +328,24 @@ sfpi_inline sfpi::vFloat _sfpu_unary_power_61f_updated_(const sfpi::vFloat& base
 
 template <int ITERATIONS>
 inline void _sfpu_unary_power_bf16_(const uint32_t exponent) {
-    // Convert exponent to float
-    const float pow_scalar = Converter::as_float(exponent);
-    const float pow_clamped = pow_scalar > 0x1p104f ? 0x1p104f : (pow_scalar < -0x1p104f ? -0x1p104f : pow_scalar);
-    const sfpi::vFloat pow_scaled = pow_clamped * 0x1p23f;  // finite, so pow(1, huge) stays 1
+    const std::uint32_t magnitude = exponent & 0x7fffffffu;
+    std::uint32_t pow_scaled_bits;
+    if (magnitude - 0x00800000u < 0x73800000u - 0x00800000u) {
+        pow_scaled_bits = exponent + (23u << 23);
+    } else if (magnitude >= 0x73800000u && magnitude <= 0x7f800000u) {
+        pow_scaled_bits = (exponent & 0x80000000u) | 0x7f000000u;
+    } else {
+        pow_scaled_bits = __builtin_bit_cast(std::uint32_t, Converter::as_float(exponent) * 0x1p23f);
+    }
+    const sfpi::vFloat pow_scaled = Converter::as_float(pow_scaled_bits);
 
-    if (pow_scalar == 0.0f) {  // x**0 is 1 for every x; also keeps pow_scaled away from the addexp(-23) above
+    if (magnitude == 0) {
 #pragma GCC unroll 8
         for (int d = 0; d < ITERATIONS; d++) {
             sfpi::dst_reg[0] = 1.0f;
             sfpi::dst_reg++;
         }
-    } else if (pow_scalar > 0.0f) {
+    } else if (exponent <= 0x7f800000u) {
 #pragma GCC unroll 8
         for (int d = 0; d < ITERATIONS; d++) {
             sfpi::vFloat base = sfpi::dst_reg[0];
@@ -430,7 +433,7 @@ inline void calculate_unary_power_iterative(const uint32_t exponent) {
 
 inline void sfpu_unary_pow_init() {
     sfpi::vConstFloatPrgm0 = 1.4426950408889634f;
-    sfpi::vConstFloatPrgm1 = -1065353216.0f;  // -127 * 2**23
+    sfpi::vConstFloatPrgm1 = -1065353216.0f;
     sfpi::vConstFloatPrgm2 = std::numeric_limits<float>::quiet_NaN();
 }
 
