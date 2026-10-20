@@ -169,22 +169,20 @@ rounding differs from the round-to-nearest-even with saturation in `prepare_bfp4
 | `streaming/recipe_sfpu.hpp`, `recipe_tail.hpp` | Exp variants, key-tail masking |
 | `streaming/recipe_checkpoint.hpp`, `dataflow/recipe_state_transfer.hpp` | Ring multi-Q state checkpoints (compute side, writer side) |
 | `dataflow/reader_recipe.cpp`, `ring_joint_*_impl.hpp`, `exp_ring_joint_*_impl.hpp` | Readers / writers; the ring and exp ring bodies are shared with the legacy kernels through a `Policy` struct (the legacy kernels compile unchanged) |
-| `sdpa_recipe.cpp`, `sdpa_recipe_blocking.cpp` | Host: recipe → CB layout and compile-time arguments; chunk chooser |
+| `sdpa_recipe.cpp`, `sdpa_recipe_blocking.cpp` | Host: recipe → CB layout and defines; chunk chooser |
 
-Named compile-time arguments set by the host (kernel side: `streaming/recipe_config.hpp`; the kernels branch on
-them with `if constexpr`):
+Compile-time defines set by the host:
 
-| Argument | Set for | Meaning |
+| Define | Set for | Meaning |
 |---|---|---|
-| `recipe_fp32` | BALANCED, ACCURATE | FP32 scores and state (DEST in FP32) |
-| `recipe_accurate` | ACCURATE | HiFi4 QK and PV, the cubic exp fit |
-| `recipe_lofi` | FAST | LoFi matmuls (prepared inputs) |
-| `recipe_fused` | STANDARD, FAST with QK width ≥ 2 | fused K chunks (inactive with `recipe_mask`) |
-| `recipe_mask` | an attn_mask | additive mask on the reduce path |
-| `recipe_qk_w`, `recipe_pv_w` | all | matmul subblock widths |
-| `recipe_k_primary_rows`, `recipe_k_joint_rows` | joint with unaligned keys | key-tail masking |
-| `recipe_ring` | ring, exp ring | key-tail masking, resident state |
-| `recipe_ring_stream_state` | ring STANDARD and FAST with fused chunks | streamed multi-Q checkpoints |
+| `SDPA_RECIPE_FP32` | BALANCED, ACCURATE | FP32 scores and state (DEST in FP32) |
+| `SDPA_RECIPE_ACCURATE` | ACCURATE | HiFi4 QK and PV, the cubic exp fit |
+| `SDPA_RECIPE_LOFI` | FAST | LoFi matmuls (prepared inputs) |
+| `SDPA_RECIPE_FUSED` | STANDARD, FAST with QK width ≥ 2 | fused K chunks (inactive with `SDPA_RECIPE_MASK`) |
+| `SDPA_RECIPE_MASK` | an attn_mask | additive mask on the reduce path |
+| `SDPA_RECIPE_QK_W`, `SDPA_RECIPE_PV_W` | all | matmul subblock widths |
+| `SDPA_RECIPE_RING` (in the ring kernels) | ring, exp ring | key-tail masking, resident state |
+| `SDPA_RING_STREAM_STATE` | ring STANDARD and FAST with fused chunks | streamed multi-Q checkpoints |
 
 **Code size.** Each program must fit the 70656 B kernel config buffer; the ring and exp ring FAST kernels sit
 within a few hundred bytes of it (see the size notes in `streaming/recipe_fused_chunk.hpp`). Check changes on the

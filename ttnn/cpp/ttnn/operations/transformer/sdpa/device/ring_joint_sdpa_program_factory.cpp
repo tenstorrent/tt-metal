@@ -3165,7 +3165,6 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
     };
     for (auto* kernel : {&reader_kernel, &writer_kernel, &compute_kernel}) {
         kernel->named_compile_time_args = ksplit_named_args;
-        variant.append_named_compile_time_args(kernel->named_compile_time_args);
     }
     reader_kernel.named_compile_time_args.emplace_back(
         "k_row_Wt", input_tensor_k.padded_shape()[3] / tt::constants::TILE_WIDTH);
@@ -3181,9 +3180,6 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
         // Code size, not correctness: at O3 the merge epilogue grows the q128 compute binaries past the 70,656 B
         // kernel config buffer ("Program size too large"). O2 cuts the three TRISC binaries by ~30%.
         compute_kernel.opt_level = tt::tt_metal::KernelBuildOptLevel::O2;
-    }
-    if (auto opt_level = variant.compute_opt_level()) {
-        compute_kernel.opt_level = opt_level;
     }
     if (auto config = variant.compute_config()) {
         compute_kernel.config = std::move(*config);

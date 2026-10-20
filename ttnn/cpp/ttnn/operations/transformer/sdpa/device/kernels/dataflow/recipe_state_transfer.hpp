@@ -75,12 +75,12 @@ void transfer_recipe_state(Noc& noc, const Accessor& backing) {
     ack.push_back(1);
 }
 
-// Streamed checkpoints (BF16 recipes with fused chunks only): see StateTransfer. Services one
-// Save/Restore/RestoreStream request, or a run of SaveRows requests through their SaveTail. Save and Restore (compute
-// without fused chunks) move the same pages as transfer_recipe_state, through the streamed paths so the writer carries
-// one copy of them. Compute never waits for a save: a restore first flushes this core's outstanding save writes out of
-// the state banks it overwrites, and drain_resident_ring_iter's end-of-iteration write barrier lands every save before
-// the next iteration restores it.
+#ifdef SDPA_RING_STREAM_STATE
+// Streamed checkpoints (BF16 recipes only): see StateTransfer. Services one Save/Restore/RestoreStream request,
+// or a run of SaveRows requests through their SaveTail. Save and Restore (compute without fused chunks) move the
+// same pages as transfer_recipe_state, through the streamed paths so the writer carries one copy of them. Compute never waits for a save: a restore first flushes
+// this core's outstanding save writes out of the state banks it overwrites, and drain_resident_ring_iter's
+// end-of-iteration write barrier lands every save before the next iteration restores it.
 template <uint32_t q_tiles, uint32_t request_cb, uint32_t ack_cb, uint32_t d_tiles = 4, typename Accessor>
 void stream_recipe_state(Noc& noc, const Accessor& backing) {
     using Transfer = sdpa::streaming::StateTransfer;
@@ -173,3 +173,4 @@ void stream_recipe_state(Noc& noc, const Accessor& backing) {
         ack.push_back(1);
     }
 }
+#endif

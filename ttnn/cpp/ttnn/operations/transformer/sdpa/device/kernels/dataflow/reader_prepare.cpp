@@ -8,9 +8,6 @@
 #include "tile_padding.hpp"
 void kernel_main() {
     constexpr uint32_t batch = get_compile_time_arg_val(0);
-    // The tensor's sequence length and head dim in tiles (host: prepare_sdpa_input).
-    constexpr uint32_t seq_rows = get_named_compile_time_arg_val("seq_rows");
-    constexpr uint32_t d_tiles = get_named_compile_time_arg_val("d_tiles");
     constexpr auto accessor_args = TensorAccessorArgs<1>();
     auto src = TensorAccessor(accessor_args, get_common_arg_val<uint32_t>(0));
     const auto [start, count] = prepare_range(
@@ -29,15 +26,14 @@ void kernel_main() {
             noc.async_read(src, cb, bytes, {.page_id = start + i + j}, {.offset_bytes = j * bytes});
         }
         noc.async_read_barrier();
-        if constexpr (seq_rows % 32 != 0) {
-            // Zero the padding rows of each head's last sequence tile.
-            constexpr uint32_t rows = (seq_rows + 31) / 32;
-            for (uint32_t j = 0; j < batch; ++j) {
-                if (((start + i + j) / d_tiles) % rows == rows - 1) {
-                    zero_tile_padding<2048>(cb.get_write_ptr() + j * bytes, seq_rows % 32);
-                }
+#ifdef SDPA_PREPARE_ROWS
+        constexpr uint32_t rows = (SDPA_PREPARE_ROWS + 31) / 32;
+        for (uint32_t j = 0; j < batch; ++j) {
+            if (((start + i + j) / SDPA_PREPARE_DHT) % rows == rows - 1) {
+                zero_tile_padding<2048>(cb.get_write_ptr() + j * bytes, SDPA_PREPARE_ROWS % 32);
             }
         }
+#endif
         cb.push_back(batch);
     }
 }

@@ -45,7 +45,7 @@ public:
     // Recipe matmul subblocks are fixed by the recipe schedule: (FP32 ? 1 : 2) x 4.
     std::optional<uint32_t> fixed_subblock_h() const override { return policy_->fp32_destination ? 1u : 2u; }
 
-    // The dense recipe's host rule (recipe_qk_w / recipe_pv_w come from the same helper).
+    // The dense recipe's host rule (SDPA_RECIPE_QK_W / SDPA_RECIPE_PV_W come from the same helper).
     uint32_t fixed_subblock_w(uint32_t tiles) const override { return exp_recipes::recipe_subblock_width(tiles); }
 
     bool replace_cbs(
@@ -90,21 +90,19 @@ public:
         for (const auto& [name, value] : recipe_compute.defines) {
             defines[name] = value;
         }
-        recipe_args_ = exp_recipes::recipe_named_args(recipe_compute.named_compile_time_args);
-        exp_recipes::set_named_arg(recipe_args_, "recipe_ring", 1);
         compute_config_ = recipe_compute.config;
         return true;
     }
 
     uint64_t check_l1(
         tt::tt_metal::ProgramDescriptor& desc,
+        std::map<std::string, std::string>& defines,
         uint64_t cb_bytes,
         uint64_t usable_l1,
         uint32_t q_chunk_size) const override {
         if (cb_bytes > usable_l1) {
             // Fused chunks' CBs first: without them every K chunk runs on the reduce path.
-            cb_bytes -=
-                exp_recipes::recipe_drop_fused(desc.cbs, recipe_args_, q_chunk_size / tt::constants::TILE_HEIGHT);
+            cb_bytes -= exp_recipes::recipe_drop_fused(desc.cbs, defines, q_chunk_size / tt::constants::TILE_HEIGHT);
         }
         TT_FATAL(
             cb_bytes <= usable_l1,
@@ -121,25 +119,11 @@ public:
         return compute_config_;
     }
 
-    void append_compute_named_compile_time_args(
-        tt::tt_metal::KernelDescriptor::NamedCompileTimeArgs& args) const override {
-        args.insert(args.end(), recipe_args_.begin(), recipe_args_.end());
-    }
-
-    // Math builds at -O2 (exp_ring_joint_sdpa_recipe.cpp); fused chunks' and ACCURATE's code overflows the kernel
-    // config buffer at -O3, so their unpack and pack build at -O2 as well.
-    std::optional<tt::tt_metal::KernelBuildOptLevel> compute_opt_level() const override {
-        const bool fused = exp_recipes::named_arg(recipe_args_, "recipe_fused") != 0;
-        const bool accurate = exp_recipes::named_arg(recipe_args_, "recipe_accurate") != 0;
-        return fused || accurate ? exp_recipes::recipe_opt_level(tt::tt_metal::KernelBuildOptLevel::O2) : std::nullopt;
-    }
-
 private:
     std::optional<exp_recipes::PrecisionPolicy> policy_;
     uint32_t k_chunk_tiles_ = 0;
     bool has_logical_n_tensor_ = false;
     std::optional<tt::tt_metal::KernelDescriptor::ConfigDescriptor> compute_config_;
-    mutable exp_recipes::NamedCompileTimeArgs recipe_args_;  // check_l1 may drop the fused chunks
 };
 
 }  // namespace
