@@ -10,6 +10,7 @@
 
 #include <tt_stl/aligned_allocator.hpp>
 #include <tt_stl/assert.hpp>
+#include "device_command_calculator.hpp"
 #include "dispatch/dispatch_core_manager.hpp"
 #include "dispatch/dispatch_mem_map.hpp"
 #include "dispatch/kernels/cq_commands.hpp"
@@ -18,6 +19,34 @@
 #include "tt_align.hpp"
 
 namespace tt::tt_metal {
+
+namespace {
+
+// process_write_packed requires each data copy to fit in one dispatch page, and with NO_STRIDE it rereads the single
+// copy in place, so the command up to the end of that copy must fit in one page.
+template <typename PackedSubCmd>
+void validate_write_packed_fits_dispatch_page(
+    uint32_t num_sub_cmds, uint32_t packed_data_sizeB, bool no_stride, uint32_t l1_alignment) {
+    constexpr uint32_t dispatch_page_size = 1u << DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE;
+    TT_FATAL(
+        packed_data_sizeB <= dispatch_page_size,
+        "Packed write data size {} B exceeds the dispatch page size {} B",
+        packed_data_sizeB,
+        dispatch_page_size);
+    if (no_stride) {
+        const uint32_t first_data_end =
+            get_write_packed_first_data_end<PackedSubCmd>(num_sub_cmds, packed_data_sizeB, l1_alignment);
+        TT_FATAL(
+            first_data_end <= dispatch_page_size,
+            "Packed write with no stride ({} sub cmds, {} B data) needs {} B but must fit in one {} B dispatch page",
+            num_sub_cmds,
+            packed_data_sizeB,
+            first_data_end,
+            dispatch_page_size);
+    }
+}
+
+}  // namespace
 
 template <bool hugepage_write>
 void DeviceCommand<hugepage_write>::init_from_context(MetalContext& ctx) {
@@ -947,6 +976,8 @@ void DeviceCommand<hugepage_write>::add_dispatch_write_packed(
         num_sub_cmds);
 
     TT_ASSERT((type & ~CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_TYPE_MASK) == 0, "Invalid type {}", type);
+    validate_write_packed_fits_dispatch_page<PackedSubCmd>(
+        num_sub_cmds, packed_data_sizeB, no_stride, this->l1_alignment);
 
     constexpr bool flush_prefetch = true;
     this->add_prefetch_relay_inline(flush_prefetch, payload_sizeB);
@@ -1026,6 +1057,8 @@ void DeviceCommand<hugepage_write>::add_dispatch_write_packed(
         max_num_packed_sub_cmds,
         num_sub_cmds);
     TT_ASSERT((type & ~CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_TYPE_MASK) == 0, "Invalid type {}", type);
+    validate_write_packed_fits_dispatch_page<PackedSubCmd>(
+        num_sub_cmds, packed_data_sizeB, no_stride, this->l1_alignment);
 
     constexpr bool flush_prefetch = true;
     this->add_prefetch_relay_inline(flush_prefetch, payload_sizeB);

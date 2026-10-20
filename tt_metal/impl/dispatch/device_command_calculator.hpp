@@ -18,6 +18,13 @@ namespace tt::tt_metal {
 
 class MetalContext;
 
+// Bytes from the start of a CQ_DISPATCH_CMD_WRITE_PACKED to the end of its first data copy, laid out as
+// process_write_packed reads it. With NO_STRIDE, this must fit in one dispatch page.
+template <typename PackedSubCmd>
+uint32_t get_write_packed_first_data_end(uint32_t num_sub_cmds, uint32_t packed_data_sizeB, uint32_t l1_alignment) {
+    return tt::align(sizeof(CQDispatchCmd) + (num_sub_cmds * sizeof(PackedSubCmd)), l1_alignment) + packed_data_sizeB;
+}
+
 class DeviceCommandCalculator {
 public:
     explicit DeviceCommandCalculator(MetalContext& ctx);
