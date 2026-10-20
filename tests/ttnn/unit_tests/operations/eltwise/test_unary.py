@@ -2767,7 +2767,6 @@ def test_unary_chain_rejects_bitcast_with_other_ops(device, bitcast_first, expec
         ttnn.unary_chain(x, chain)
 
 
-# A parameterless GELU / ERF activation must match the accurate (0.0) form, as ttnn.gelu / ttnn.erf do (#59663).
 @pytest.mark.parametrize("op_type", [ttnn.UnaryOpType.GELU, ttnn.UnaryOpType.ERF], ids=lambda op: op.name)
 @pytest.mark.parametrize("surface", ["unary_chain", "binary_activation", "linear"])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32], ids=["bfloat16", "float32"])
