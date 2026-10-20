@@ -12,7 +12,7 @@
 
 namespace ckernel {
 
-// odst = idst0 * 2^idst1, as torch.ldexp
+// odst = idst0 * 2^idst1
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void ldexp_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
     MATH((SFPU_BINARY_CALL(

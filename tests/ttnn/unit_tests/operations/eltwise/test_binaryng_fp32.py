@@ -282,6 +282,10 @@ def test_ldexp_fp32_special_values(device):
         (1.0, -inf),
         (inf, -inf),
         (1.0, nan),
+        (1.0, -nan),
+        (nan, 3.0),
+        (0.0, inf),
+        (-0.0, 3.0),
     ]
     x_torch = torch.tensor([[p[0] for p in pairs]], dtype=torch.float32)
     y_torch = torch.tensor([[p[1] for p in pairs]], dtype=torch.float32)
