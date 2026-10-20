@@ -16,7 +16,12 @@ Device design (section 5.3 of the design doc, single chip = Phase 1):
   * prefill: the latent is written to the paged cache with ``paged_fill_cache`` and the pooled-key
     index is maintained. Query rows [0, 2048) run the dense causal SDPA on materialized K/V; rows
     from 2048 on (they always see >= 2048 pooled tokens, so the top-k row is a full valid prefix)
-    run the indexer selection + ``sparse_sdpa`` on the absorbed q.
+    run the indexer selection + ``sparse_sdpa`` on the absorbed q. A prompt may arrive in
+    consecutive chunks (``start`` = the chunk's first absolute position, a block multiple): the
+    chunk's latent fills the pages from block ``start // 32``, the index continues from ``start``
+    (the ring holds the previous chunk's tail) and the chunk rows attend over the full prefix, the
+    dense rows through the windowed causal SDPA (K/V from the cached latent of [0, start) + the
+    chunk's, Q offset ``start``) and the sparse rows exactly as in the single-shot path.
   * decode: absorbed MLA. q_lat[h] = q[h] @ Wkb1[h] (256 -> 512), then
     ``paged_flash_multi_latent_attention_decode`` over the latent cache for every user slot
     (exact through position 2050), then o[h] = o_lat[h] @ Wkb2[h]^T (512 -> 256), concat heads,
@@ -111,10 +116,19 @@ class TtLatentCache:
             self.page_table_host, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device
         )
 
-    def fill(self, latent: ttnn.Tensor, user: int):
-        """latent [1, 1, T_pad, 512] (T_pad % block_size == 0) -> pages of ``user`` from position 0."""
+    def fill(self, latent: ttnn.Tensor, user: int, start: int = 0):
+        """latent [1, 1, T_pad, 512] (T_pad % block_size == 0) -> pages of ``user`` from position
+        ``start`` (a block multiple): page-table view from block ``start // block_size`` on."""
         src = latent if latent.dtype == self.dtype else ttnn.typecast(latent, self.dtype)
-        ttnn.experimental.paged_fill_cache(self.cache, src, self.page_table, batch_idx=user)
+        if start == 0:
+            ttnn.experimental.paged_fill_cache(self.cache, src, self.page_table, batch_idx=user)
+            return
+        if start % self.block_size:
+            raise ValueError(f"fill start {start} must be a multiple of the block size {self.block_size}")
+        b0 = start // self.block_size
+        view = ttnn.slice(self.page_table, [user, b0], [user + 1, self.blocks_per_seq])  # device slice, no upload
+        ttnn.experimental.paged_fill_cache(self.cache, src, view, batch_idx=0)
+        ttnn.deallocate(view)
 
     def update(self, latent_rows: ttnn.Tensor, positions: ttnn.Tensor):
         """latent_rows [1, B, 1, 512] (one token per user), positions [B] int32 row-major."""
@@ -122,9 +136,9 @@ class TtLatentCache:
         ttnn.experimental.paged_update_cache(self.cache, sh, update_idxs_tensor=positions, page_table=self.page_table)
         ttnn.deallocate(sh)
 
-    def user_rows_rm(self, user: int, n_rows: int) -> ttnn.Tensor:
+    def user_rows(self, user: int, n_rows: int) -> ttnn.Tensor:
         """The first ``n_rows`` (rounded up to whole blocks) latent rows of ``user`` in page-table
-        order as a fresh ROW_MAJOR [1, 1, rows, 512] tensor."""
+        order as a fresh TILE [1, 1, rows, 512] tensor."""
         n_blocks = min(self.blocks_per_seq, -(-n_rows // self.block_size))
         ids = self.page_table_host[user, :n_blocks].tolist()
         if ids == list(range(ids[0], ids[0] + n_blocks)):  # contiguous (identity-like) fast path
@@ -134,9 +148,13 @@ class TtLatentCache:
             blocks = ttnn.concat(parts, dim=0)
             for p in parts:
                 ttnn.deallocate(p)
-        rows = ttnn.reshape(blocks, [1, 1, n_blocks * self.block_size, self.latent_dim])
+        return ttnn.reshape(blocks, [1, 1, n_blocks * self.block_size, self.latent_dim])
+
+    def user_rows_rm(self, user: int, n_rows: int) -> ttnn.Tensor:
+        """``user_rows`` as a fresh ROW_MAJOR [1, 1, rows, 512] tensor (the sparse_sdpa kv contract)."""
+        rows = self.user_rows(user, n_rows)
         rm = ttnn.to_layout(rows, ttnn.ROW_MAJOR_LAYOUT)
-        ttnn.deallocate(blocks)
+        ttnn.deallocate(rows)
         return rm
 
 
@@ -190,6 +208,7 @@ class TtDSA(LightweightModule):
         )
         self.full_grid = grid
         self._decode_cfgs: dict[int, ttnn.SDPAProgramConfig] = {}
+        self._cu_windows: dict[int, ttnn.Tensor] = {}  # chunked-prefill SDPA window bounds per key length
         self.sdpa_compute = ttnn.init_device_compute_kernel_config(
             device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi4,
@@ -246,18 +265,42 @@ class TtDSA(LightweightModule):
     def _o_proj(self, o_heads: ttnn.Tensor) -> ttnn.Tensor:
         return ttnn.linear(o_heads, self.w_o, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)
 
-    def _dense_attention(self, q: ttnn.Tensor, c: ttnn.Tensor) -> ttnn.Tensor:
-        """Causal attention of q [1,1,T,H*Dq] over the latent c [1,1,T,L] (K/V materialized);
-        returns concat-heads v-space [1,1,T,H*Dv]."""
+    def _cu_window(self, n_keys: int) -> ttnn.Tensor:
+        """``cu_window_seqlens`` = [0, n_keys] for the windowed (prefix-aware) causal SDPA: one window
+        over the whole prefix. Chunk geometry, not data: built once per key length and cached."""
+        if n_keys not in self._cu_windows:
+            self._cu_windows[n_keys] = ttnn.from_torch(
+                torch.tensor([0, n_keys], dtype=torch.int32),
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.device,
+            )
+        return self._cu_windows[n_keys]
+
+    def _dense_attention(
+        self, q: ttnn.Tensor, c: ttnn.Tensor, prefix: ttnn.Tensor | None = None, start: int = 0
+    ) -> ttnn.Tensor:
+        """Causal attention of q [1,1,T,H*Dq] (rows at absolute positions ``start + i``) over the latent
+        of the full prefix: ``prefix`` [1,1,start,L] (the user's cached rows before this chunk, None
+        when start == 0) followed by this chunk's c [1,1,T,L]; K/V are materialized from the latent.
+        With a prefix the SDPA runs in windowed mode (one window over all keys, Q offset ``start``),
+        which builds the causal mask on device at the global positions and is bit-identical to the
+        plain causal kernel's rows [start, start + T). Returns concat-heads v-space [1,1,T,H*Dv]."""
         T = q.shape[-2]
         H, Dq, Dv = self.H, self.Dq, self.Dv
-        k = ttnn.linear(c, self.w_k_all, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)  # [1,1,T,H*Dq]
-        v = ttnn.linear(c, self.w_v_all, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)  # [1,1,T,H*Dv]
+        if prefix is not None:
+            c = ttnn.concat([prefix, c], dim=-2)  # [1,1,start+T,L]
+        S = c.shape[-2]
+        k = ttnn.linear(c, self.w_k_all, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)  # [1,1,S,H*Dq]
+        v = ttnn.linear(c, self.w_v_all, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)  # [1,1,S,H*Dv]
+        if prefix is not None:
+            ttnn.deallocate(c)
         qh = ttnn.transpose(ttnn.reshape(q, [1, T, H, Dq]), 1, 2)
-        kh = ttnn.transpose(ttnn.reshape(k, [1, T, H, Dq]), 1, 2)
-        vh = ttnn.transpose(ttnn.reshape(v, [1, T, H, Dv]), 1, 2)
+        kh = ttnn.transpose(ttnn.reshape(k, [1, S, H, Dq]), 1, 2)
+        vh = ttnn.transpose(ttnn.reshape(v, [1, S, H, Dv]), 1, 2)
         ttnn.deallocate(k)
         ttnn.deallocate(v)
+        windowed = {} if start == 0 else {"cu_window_seqlens": self._cu_window(S), "windowed_q_token_offset": start}
         o = ttnn.transformer.scaled_dot_product_attention(
             qh,
             kh,
@@ -266,6 +309,7 @@ class TtDSA(LightweightModule):
             scale=self.scale,
             program_config=self.sdpa_prefill_cfg,
             compute_kernel_config=self.sdpa_compute,
+            **windowed,
         )  # [1,H,T,Dv]
         ttnn.deallocate(qh)
         ttnn.deallocate(kh)
@@ -273,44 +317,64 @@ class TtDSA(LightweightModule):
         return ttnn.reshape(ttnn.transpose(o, 1, 2), [1, 1, T, H * Dv])
 
     # --------------------------------------------------------------------- prefill
-    def prefill_forward(self, x: ttnn.Tensor, cache: TtLatentCache, user: int, seq_len: int) -> ttnn.Tensor:
-        """One user, chunk from position 0. x [1,1,T_pad,4096] with T_pad % block_size == 0 and the
-        logical ``seq_len`` <= T_pad; returns [1,1,T_pad,4096] (rows past seq_len are garbage).
-        Fills the user's latent pages [0, T_pad) and the pooled-key index. Rows [0, 2048) are the
-        dense causal attention (exact); rows from 2048 use the indexer + sparse_sdpa."""
+    def prefill_forward(
+        self, x: ttnn.Tensor, cache: TtLatentCache, user: int, seq_len: int, start: int = 0
+    ) -> ttnn.Tensor:
+        """One user, one chunk: x row i is the token at absolute position ``start + i``
+        (``start % block_size == 0``; ``start == 0`` = a new prompt). x [1,1,T_pad,4096] with
+        T_pad % block_size == 0 and the logical ``seq_len`` <= T_pad; returns [1,1,T_pad,4096] (rows
+        past seq_len are garbage). Fills the user's latent pages [start, start + T_pad) and maintains
+        the pooled-key index for positions [start, start + seq_len) (the ring must hold the previous
+        chunk's tail rows, i.e. chunks of a prompt are prefilled in order). Rows at absolute positions
+        < 2048 run the dense causal attention over the full prefix (K/V from the cached latent rows +
+        this chunk's); rows from 2048 on use the indexer + sparse_sdpa, exactly as the single-shot path."""
         T = x.shape[-2]
-        split = self.sparse_row_start
+        if start % cache.block_size:
+            raise ValueError(f"start {start} must be a multiple of the cache block size {cache.block_size}")
+        end = start + seq_len
+        split = min(T, max(0, self.sparse_row_start - start))  # chunk rows [0, split) are dense
         q_resid = self._q_resid(x)
         q = self._q(q_resid)  # [1,1,T,H*Dq]
         c = self._latent(x)  # [1,1,T,L]
-        cache.fill(c, user)
-        self.indexer.maintain_prefill(x, cache.index, user, seq_len)
-        if T <= split:
+        cache.fill(c, user, start=start)
+        self.indexer.maintain_prefill(x, cache.index, user, seq_len, start=start)
+        prefix = cache.user_rows(user, start) if start and split else None  # [1,1,start,L]
+        if split == T:
             ttnn.deallocate(q_resid)
-            o = self._dense_attention(q, c)
+            o = self._dense_attention(q, c, prefix, start)
             ttnn.deallocate(q)
             ttnn.deallocate(c)
+            if prefix is not None:
+                ttnn.deallocate(prefix)
             return self._o_proj(o)
-        # dense rows [0, split)
-        o_dense = self._dense_attention(
-            ttnn.slice(q, [0, 0, 0, 0], [1, 1, split, self.H * self.Dq]),
-            ttnn.slice(c, [0, 0, 0, 0], [1, 1, split, self.L]),
-        )
+        # dense rows [0, split) (absolute positions [start, 2048))
+        o_dense = None
+        if split:
+            o_dense = self._dense_attention(
+                ttnn.slice(q, [0, 0, 0, 0], [1, 1, split, self.H * self.Dq]),
+                ttnn.slice(c, [0, 0, 0, 0], [1, 1, split, self.L]),
+                prefix,
+                start,
+            )
+            if prefix is not None:
+                ttnn.deallocate(prefix)
         ttnn.deallocate(c)
-        # sparse rows [split, T)
+        # sparse rows [split, T) (absolute positions from max(start, 2048))
         idx = self.indexer
-        x_s = ttnn.slice(x, [0, 0, split, 0], [1, 1, T, x.shape[-1]])
-        qr_s = ttnn.slice(q_resid, [0, 0, split, 0], [1, 1, T, q_resid.shape[-1]])
+        x_s = ttnn.slice(x, [0, 0, split, 0], [1, 1, T, x.shape[-1]]) if split else x
+        qr_s = ttnn.slice(q_resid, [0, 0, split, 0], [1, 1, T, q_resid.shape[-1]]) if split else q_resid
         q_i, w_i = idx.queries_and_weights(x_s, qr_s)
         ttnn.deallocate(q_resid)
-        indices = idx.select(q_i, w_i, cache.index, user, query_start=split, num_pools_valid=seq_len // idx.P)
+        indices = idx.select(q_i, w_i, cache.index, user, query_start=start + split, num_pools_valid=end // idx.P)
         ttnn.deallocate(q_i)
         ttnn.deallocate(w_i)
-        q_lat = self._absorb_q(ttnn.slice(q, [0, 0, split, 0], [1, 1, T, self.H * self.Dq]))  # [1,H,T-split,L]
+        q_lat = self._absorb_q(
+            ttnn.slice(q, [0, 0, split, 0], [1, 1, T, self.H * self.Dq]) if split else q
+        )  # [1,H,T-split,L]
         ttnn.deallocate(q)
         q_rm = ttnn.to_layout(q_lat, ttnn.ROW_MAJOR_LAYOUT)
         ttnn.deallocate(q_lat)
-        kv_rm = cache.user_rows_rm(user, T)
+        kv_rm = cache.user_rows_rm(user, start + T)
         o_rm = ttnn.transformer.sparse_sdpa(
             q_rm,
             kv_rm,
@@ -327,6 +391,8 @@ class TtDSA(LightweightModule):
         ttnn.deallocate(o_rm)
         o_sparse = self._o_lat_to_heads(o_lat)  # [1,1,T-split,H*Dv]
         ttnn.deallocate(o_lat)
+        if o_dense is None:  # the whole chunk lies in the sparse region
+            return self._o_proj(o_sparse)
         o = ttnn.concat([o_dense, o_sparse], dim=-2)  # [1,1,T,H*Dv]
         ttnn.deallocate(o_dense)
         ttnn.deallocate(o_sparse)

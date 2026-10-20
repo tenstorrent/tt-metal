@@ -124,26 +124,33 @@ class TtDecoderLayer(LightweightModule):
         *,
         user: int,
         seq_len: int,
+        start: int = 0,
         actual_start: ttnn.Tensor | None = None,
         actual_end: ttnn.Tensor | None = None,
     ) -> tuple[ttnn.Tensor, LayerState]:
-        """streams [1,1,T_pad,4*hidden] fp32 for one user; T_pad % 32 == 0 and rows past
-        ``seq_len`` are padding. Returns the new streams and the layer state after the chunk."""
+        """streams [1,1,T_pad,4*hidden] fp32 for one user: row i is the token at absolute position
+        ``start + i`` (``start % 32 == 0``), T_pad % 32 == 0 and rows past ``seq_len`` are padding.
+        KDA: ``state.kda`` is the carry after position ``start`` (zeros for a new prompt); DSA: the
+        user's cache holds [0, start). Returns the new streams and the layer state after the chunk.
+        ``actual_start`` / ``actual_end`` override the KDA device scalars derived from ``start`` and
+        ``seq_len`` (global positions, as ttKDA defines them)."""
         T = streams.shape[-2]
         new_state = LayerState(kda=state.kda, cache=state.cache)
 
         def attention(h):
             h = self._norm(h, self.input_norm_w)  # [1,1,T,hidden] bf16
             if self.is_kda:
-                start = actual_start if actual_start is not None else self.attn.scalar(0)
+                start_t = actual_start if actual_start is not None else self.attn.scalar(start)
                 end = actual_end
-                if end is None and seq_len != T:
-                    end = self.attn.scalar(seq_len)
+                # the exclusive global valid end; a chunk at start > 0 always carries it so the kernels'
+                # chronology is the clipped interval [start, start + seq_len) (derive_interval)
+                if end is None and (seq_len != T or start):
+                    end = self.attn.scalar(start + seq_len)
                 y, new_state.kda = self.attn.prefill_forward(
-                    ttnn.reshape(h, [1, T, self.hidden]), state.kda, start, end
+                    ttnn.reshape(h, [1, T, self.hidden]), state.kda, start_t, end
                 )
                 return ttnn.reshape(y, [1, 1, T, self.hidden])
-            return self.attn.prefill_forward(h, state.cache, user, seq_len)
+            return self.attn.prefill_forward(h, state.cache, user, seq_len, start=start)
 
         streams = self.attn_hc.forward(streams, attention, sublayer_dtype=ttnn.bfloat16)
 
