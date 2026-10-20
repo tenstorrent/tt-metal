@@ -44,10 +44,10 @@ def _ensure_dram(t):
     return t
 
 
-def high_bw_sp_gather(t, mesh_config, ccl_manager, out_buf, *, input_batch_index=None, gathered_dim_size=None):
+def high_bw_sp_gather(t, mesh_config, ccl_manager, out_buf, *, gathered_dim_size=None, **source):
     """SP all-gather of ``t`` on dim 2 with ``ttnn.experimental.high_bw_all_gather`` into the persistent
     ``out_buf`` (CCLManager.get_high_bw_gather_buffer); the returned tensor aliases it, do not deallocate.
-    ``input_batch_index`` selects one slot of a multi-slot [B, 1, rows, D] cache; ``gathered_dim_size``
+    ``source`` selects one row of a cache (``MiniMaxKVCache.gather_source``); ``gathered_dim_size``
     bounds the rows moved per rank (rank r still lands at its fixed slot r*rows)."""
     return ttnn.experimental.high_bw_all_gather(
         t,
@@ -55,8 +55,8 @@ def high_bw_sp_gather(t, mesh_config, ccl_manager, out_buf, *, input_batch_index
         output_tensor=out_buf,
         cluster_axis=mesh_config.sp_axis,
         num_links=ccl_manager.num_links,
-        input_batch_index=input_batch_index,
         gathered_dim_size=gathered_dim_size,
+        **source,
     )
 
 
@@ -429,6 +429,7 @@ def msa_sp_attention_cache_read(
     seq_local); ``kv_len`` bounds them to the written prefix. Returns the chunk's SP-sharded attention out
     ``[1, Hq_local, s_local, hd]``. The gathered tensors alias the persistent buffers: never deallocate.
     A TP-deduped index_k cache (``kv_cache.index_k_tp_axis``) is rebuilt by ``_gather_tp_sharded_index_k``.
+    A paged cache gathers the same buffer from the slot's pages (``MiniMaxKVCache.gather_source``).
     """
     sp_axis = mesh_config.sp_axis
     device = ccl_manager.mesh_device
@@ -437,18 +438,18 @@ def msa_sp_attention_cache_read(
     # The replicated cache tensors carry a 1-D tensor topology, and high_bw_all_gather requires
     # cluster_axis < that rank, so the SP gather only works with SP on mesh axis 0.
     assert sp_axis == 0, f"msa_sp_attention_cache_read needs sp_axis == 0 (got {sp_axis})"
-    seq_local = kv_cache.k.shape[2]  # per-device cache capacity (rows)
+    seq_local = kv_cache.max_seq_len // sp  # per-device capacity (rows) of one slot or paged request
     kv_len, n_rows = msa_cache_read_extent(cached_len, chunk_local, sp, block_size)
     assert (
         n_rows <= seq_local and kv_len <= seq_local * sp
     ), f"cache read past capacity: {n_rows} rows / kv_len {kv_len} > {seq_local} rows x {sp}"
     index_k_tp_axis = kv_cache.index_k_tp_axis
 
+    source = kv_cache.gather_source(cache_row, chunk_local)
+
     def gather(key, cache_t):
         buf = ccl_manager.get_high_bw_gather_buffer(key, (1, 1, seq_local * sp, cache_t.shape[3]), cache_t.dtype)
-        return high_bw_sp_gather(
-            cache_t, mesh_config, ccl_manager, buf, input_batch_index=cache_row, gathered_dim_size=n_rows * sp
-        )
+        return high_bw_sp_gather(cache_t, mesh_config, ccl_manager, buf, gathered_dim_size=n_rows * sp, **source)
 
     # ag_kv feeds sparse_sdpa_msa; ag_index_k feeds the indexer — split so the two AG costs are
     # attributable to their consumer (see tests/perf/profile_prefill.py).
