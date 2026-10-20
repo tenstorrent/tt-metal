@@ -1,15 +1,17 @@
-# GPT-OSS 120B 4x2 P/D performance reproduction
+# GPT-OSS 120B 4x2 prefill-only and P/D performance reproduction
 
-This reproduces the two-Galaxy GPT-OSS 120B prefill/decode setup used to
-measure prefill throughput and overlapped KV migration over RDMA.
+This reproduces both the one-Galaxy standalone prefill baseline and the
+two-Galaxy GPT-OSS 120B prefill/decode setup used to measure prefill
+throughput and overlapped KV migration over RDMA.
 
 ## Expected result
 
 After one warm-up request, a 65,536-token prompt with 32K prefill chunks
 should produce approximately:
 
+- standalone prefill: 25.1K tokens/s
 - TTFT: 3.14 s
-- prefill service throughput: 21.8K tokens/s
+- P/D prefill service throughput: 21.8K tokens/s
 - decode: about 330 tokens/s/user
 - KV transfers: 72 successful, zero failures
 - summed transfer time: 1.8-1.9 s
@@ -19,6 +21,7 @@ should produce approximately:
 The sum of transfer durations is not added to TTFT because transfers overlap
 prefill. They still contend with prefill resources: compute-only throughput is
 about 25.1K tokens/s, versus about 21.8K tokens/s with migration enabled.
+That is approximately a 13% reduction in prefill throughput.
 
 ## Revisions
 
@@ -162,7 +165,84 @@ Use endpoint ID 1 for prefill and endpoint ID 0 for decode. Configure each
 worker's peer to the other host's RDMA IP. Use all 36 layers and set
 `chunk_size=32768`, `max_seq_len=131072`, and `max_slots=2`.
 
-## Launch order
+## Standalone prefill baseline
+
+Run this before bringing up the P/D services, or on a separate healthy
+Galaxy. It opens all 32 devices itself, so no model owner, KV manager, or
+worker may be using that Galaxy.
+
+Use a compatible 65,536-token golden trace containing `metadata.json` and all
+36 `kv_cache/layer_N.safetensors` files. This makes the standalone and P/D
+runs process the same aligned token count. If only a shorter trace is
+available, report the harness's `processed` rate and use the same aligned
+length for the P/D request; do not compare different denominators.
+
+If no 65,536-token trace exists, generate one on a host with enough RAM:
+
+```bash
+python3 - <<'PY'
+import json
+from pathlib import Path
+
+Path("/tmp/gptoss-64k-prompt.json").write_text(
+    json.dumps({"prompt": "hello " * 70000 + "Briefly summarize the preceding text."})
+)
+PY
+
+export HF_MODEL=$MODEL
+cd "$TT_METAL_HOME"
+python models/demos/gpt_oss_d_p/scripts/generate_golden_kv_cache.py \
+  --prompt-json /tmp/gptoss-64k-prompt.json \
+  --chat-template \
+  --max-tokens 65536 \
+  --num-layers 36 \
+  --attn-mode tiled \
+  --out "$ROOT/golden/gptoss-65536"
+```
+
+Confirm `metadata.json` reports `n_tokens: 65536` before using it.
+
+```bash
+export TT_METAL_HOME=$ROOT/tt-metal
+export TT_METAL_RUNTIME_ROOT=$TT_METAL_HOME
+export PYTHONPATH=$TT_METAL_HOME:$TT_METAL_HOME/ttnn
+export ARCH_NAME=blackhole
+export HF_MODEL=$MODEL
+export PREFILL_HF_MODEL=$MODEL
+export PREFILL_TRACE_DIR=$ROOT/golden/gptoss-65536
+export PREFILL_TTNN_CACHE=$ROOT/cache/prefill-weights
+export GPT_OSS_WEIGHTS_FROM_CACHE=1
+export GPT_OSS_BOUNDED_SLIDING_KV=0
+export PREFILL_CHUNKED=1
+export PREFILL_CHUNK_SIZE=32768
+export PREFILL_TPS_ITERS=3
+export PREFILL_NUM_LAYERS=36
+export PREFILL_NUM_USERS=1
+export PREFILL_TOPOLOGY=linear
+export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto
+
+cd "$TT_METAL_HOME"
+python models/demos/gpt_oss_d_p/tests/galaxy_prefill_kv_pcc.py \
+  2>&1 | tee "$RUN/prefill-only.log"
+```
+
+For a first launch without a populated TTNN cache, set
+`GPT_OSS_WEIGHTS_FROM_CACHE=0`. Use `1` for the measured launch after the
+cache has been populated.
+
+Require:
+
+```text
+[prefill-pcc] THROUGHPUT over 3 iters: median ...
+[prefill-pcc] min KV PCC across 36 layers = ...
+[prefill-pcc] DONE
+```
+
+The baseline is the reported median `processed` tokens/s. The validated
+measurement was approximately 25.1K tokens/s. Preserve the full log because
+it records chunking, wall time, real/padded rates, and PCC.
+
+## P/D launch order
 
 ### 1. Start etcd and the OpenAI frontend on the prefill host
 
@@ -349,6 +429,28 @@ templated input tokens / prefill worker service duration
 Do not calculate it from TTFT; TTFT also includes routing and frontend
 overhead. For the expected run, TTFT is about 3.14 s while the prefill service
 rate is about 21.8K tokens/s.
+
+## Compare standalone with P/D
+
+Use the same aligned input token count and chunk size for both measurements:
+
+```text
+standalone throughput = processed tokens / standalone median wall time
+P/D throughput        = processed tokens / prefill worker service duration
+slowdown               = 1 - (P/D throughput / standalone throughput)
+```
+
+Expected comparison:
+
+```text
+standalone prefill: about 25.1K tokens/s
+P/D prefill:       about 21.8K tokens/s
+slowdown:          about 13%
+```
+
+Compare against P/D prefill service duration, not end-to-end TTFT. The
+standalone harness does not include frontend, routing, decode, or network
+handoff latency. TTFT remains useful as a separate user-visible metric.
 
 ## Validity checks
 
