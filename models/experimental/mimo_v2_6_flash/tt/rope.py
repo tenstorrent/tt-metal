@@ -62,6 +62,8 @@ class MiMoRotarySetup(RotarySetup):
         self.rope_dim = rope_dim
         self.theta = rope_theta
         self.datatype = datatype
+        self.prefill_cache = None  # {(start, seq_len): [cos, sin]} while a prefill chunk is enqueued
+        self.prefill_pinned = set()  # its keys the caller owns
 
     def _host(self, t, device):
         return ttnn.from_torch(
@@ -73,10 +75,40 @@ class MiMoRotarySetup(RotarySetup):
         )
 
     def get_prefill_rot_mats(self, start_pos, seq_len):
-        """Device cos/sin [1, 1, seq_len, head_dim] for positions start_pos .. start_pos + seq_len - 1."""
+        """Device cos/sin [1, 1, seq_len, head_dim] for positions start_pos .. start_pos + seq_len - 1. Inside
+        ``begin_prefill_chunk`` / ``end_prefill_chunk`` they are made once and shared by every caller (who must not
+        free them: ``owns_prefill_rot_mats`` is False); outside, every call makes its own pair for the caller."""
+        key = (start_pos, seq_len)
+        if self.prefill_cache is not None and key in self.prefill_cache:
+            return self.prefill_cache[key]
         pos = torch.arange(start_pos, start_pos + seq_len)
         cos, sin = partial_rope_cos_sin(pos, self.head_dim, self.rope_dim, self.theta)
-        return [self._host(cos, True), self._host(sin, True)]
+        mats = [self._host(cos, True), self._host(sin, True)]
+        if self.prefill_cache is not None:
+            self.prefill_cache[key] = mats
+        return mats
+
+    @property
+    def owns_prefill_rot_mats(self):
+        """Whether a caller of ``get_prefill_rot_mats`` frees what it got."""
+        return self.prefill_cache is None
+
+    def begin_prefill_chunk(self, pinned=None):
+        """Share each (start, length)'s prefill cos/sin among the layers of one chunk (one upload, not one a layer).
+        ``pinned``: {(start, length): [cos, sin]} the caller owns (a traced prefill's persistent inputs)."""
+        assert self.prefill_cache is None, "prefill chunks do not nest"
+        self.prefill_cache = dict(pinned or {})
+        self.prefill_pinned = set(self.prefill_cache)
+
+    def end_prefill_chunk(self):
+        """Free the chunk's shared cos/sin (enqueued: freeing is ordered with the work that reads them). Nothing
+        made for a prefill outlives it, so no buffer allocated after a decode capture stays alive over a replay."""
+        for key, mats in self.prefill_cache.items():
+            if key not in self.prefill_pinned:
+                for t in mats:
+                    t.deallocate(True)
+        self.prefill_cache = None
+        self.prefill_pinned = set()
 
     def decode_host_inputs(self, positions):
         """Host cos/sin [1, 1, B, head_dim] for one decode step (copied into trace inputs)."""

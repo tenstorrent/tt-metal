@@ -490,12 +490,18 @@ ttnn::Tensor chunked_flash_mla_prefill(
     const ttnn::Tensor& input_tensor_k,
     const uint32_t head_dim_v,
     const ttnn::Tensor& page_table_tensor,
-    int64_t chunk_start_idx,
+    std::optional<int64_t> chunk_start_idx,
     std::optional<float> scale,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config,
-    const std::optional<ttnn::Tensor>& input_tensor_v) {
+    const std::optional<ttnn::Tensor>& input_tensor_v,
+    const std::optional<ttnn::Tensor>& chunk_start_idx_tensor) {
+    TT_FATAL(
+        chunk_start_idx.has_value() != chunk_start_idx_tensor.has_value(),
+        "chunked_flash_mla_prefill takes exactly one of chunk_start_idx and chunk_start_idx_tensor (got {} and {})",
+        chunk_start_idx.has_value(),
+        chunk_start_idx_tensor.has_value());
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor_q.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi2, true, false, false);
 
@@ -510,8 +516,8 @@ ttnn::Tensor chunked_flash_mla_prefill(
         scale,
         std::nullopt,  // sliding_window_size (not supported yet)
         chunk_start_idx,
-        std::nullopt,  // chunk_start_idx_tensor
-        true,          // use_mla
+        chunk_start_idx_tensor,
+        true,  // use_mla
         head_dim_v,
         memory_config.value_or(tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
         std::move(program_config),

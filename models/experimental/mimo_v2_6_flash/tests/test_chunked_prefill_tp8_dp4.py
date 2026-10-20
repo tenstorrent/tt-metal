@@ -38,7 +38,7 @@ from models.experimental.mimo_v2_6_flash.tests.common import (
 )
 from models.experimental.mimo_v2_6_flash.tt import kv as kv_lib
 from models.experimental.mimo_v2_6_flash.tt.attention import kv_heads_for_chip
-from models.experimental.mimo_v2_6_flash.tt.common import MeshPlan
+from models.experimental.mimo_v2_6_flash.tt.common import MeshPlan, pad_to
 from models.experimental.mimo_v2_6_flash.tt.decoder import TtMiMoDecoderLayer
 from models.experimental.mimo_v2_6_flash.tt.model import prefill_padded_len
 from models.experimental.mimo_v2_6_flash.tt.rope import MiMoRotarySetup, meta_rope_permutation
@@ -47,6 +47,7 @@ MAX_SEQ = 2048
 MAX_BATCH = 32
 BLOCK = 64
 LOGICAL_BLOCKS = MAX_SEQ // BLOCK
+CONTEXT_BLOCKS = pad_to(-(-(MAX_SEQ + kv_lib.PREFILL_MAX_PAD) // BLOCK), 8)  # as TtMiMoModel.prefill_context_blocks
 PROMPT_LENS = (200, 517, 960, 1333)
 CHUNKS = (64, 128, 256, 512)  # chunk size on replica rows 0..3
 DECODE_STEPS = 3
@@ -111,9 +112,11 @@ class Row:
                     min_blocks=LOGICAL_BLOCKS,  # decode here runs paged_update_cache (no SwaDecodeQkv)
                 )
                 self.tables[mode], num_blocks = self.swa[mode].host_table(TP), self.swa[mode].num_blocks
+                self.scratch = 0
             else:
                 self.swa[mode] = None
                 self.tables[mode], num_blocks = kv_lib.page_tables(n, MAX_BATCH, LOGICAL_BLOCKS, TP, attn.rep, seed=r)
+                self.scratch = num_blocks - 1  # the chip pair's scratch block (kv.page_tables)
         v_dim = attn.v_head_dim if attn.split_users else attn.head_dim
         self.kv = {
             mode: garbage_cache(plan, num_blocks, (attn.head_dim, v_dim), seed=100 * r + i)
@@ -136,26 +139,37 @@ class Row:
             tbl.dirty = False
 
     def prefill(self, mode, x, slot, start_pos):
+        """One chunk through the layer with its kv.PrefillTables, as TtMiMoModel._prefill_chunk builds them."""
         n = x.shape[0]
         padded = prefill_padded_len(n)
-        window_blocks = None
         tbl = self.swa[mode]
         if tbl is not None:
             tbl.prefill(slot, start_pos, start_pos + n, start_pos + padded)
             self.sync(mode)
-            if start_pos > 0:
-                window_blocks = tbl.window_blocks(slot, start_pos)
+        later = start_pos > 0
+        start = (
+            kv_lib.replicated(self.plan, torch.tensor([start_pos], dtype=torch.int32), ttnn.int32) if later else None
+        )
+        tables = kv_lib.PrefillTables(
+            self.plan,
+            self.tables[mode],
+            slot,
+            start_pos,
+            padded,
+            BLOCK,
+            self.scratch,
+            context_blocks=CONTEXT_BLOCKS if later and tbl is None else None,
+            window=tbl.window_blocks(slot, start_pos) if later and tbl is not None else None,
+            start_tensor=start,
+        )
         x_tt = to_tt(torch.nn.functional.pad(x, (0, 0, 0, padded - n)), self.plan)
         out = self.layer.forward_prefill(
-            x_tt,
-            slot,
-            self.tables_tt[mode],
-            self.kv[mode],
-            real_len=n,
-            start_pos=start_pos,
-            window_blocks=window_blocks,
+            x_tt, slot, self.tables_tt[mode], self.kv[mode], real_len=n, start_pos=start_pos, tables=tables
         )
         x_tt.deallocate(True)
+        tables.release()
+        if start is not None:
+            start.deallocate(True)
         return out, n
 
     def read_kv(self, slot, length, ref_k, ref_v, num_kv_heads):
@@ -307,3 +321,32 @@ def test_chunked_prefill_tp8_dp4(mesh_device, layer_idx):
     assert worst["vs_oneshot"] > 0.995 and worst["vs_oneshot_delta"] > 0.99, worst
     assert worst_kv["k"] > 0.999 and worst_kv["v"] > 0.999, worst_kv
     assert worst_kv["v_pad"] == 0.0, "V padding columns must stay zero"
+
+
+@pytest.mark.parametrize("device_params", [GALAXY_DEVICE_PARAMS], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
+@pytest.mark.parametrize("layer_idx", [1, 5])
+def test_prefill_programs_do_not_key_on_start(mesh_device, layer_idx):
+    """Chunks of one padded length at new starts, in a new slot and on new blocks compile no new program: what lets
+    vLLM serving prefill between decode trace replays (a program compiled after a capture keeps buffers the replays
+    overwrite). The first user's chunks cover every start alignment of a 128-token chunk (window blocks and SDPA chunk
+    size); the second user's chunks reach starts the first never did."""
+    cfg, ckpt = load_config_and_ckpt()
+    dims = cfg.attention_dims(layer_idx)
+    weights = ref.load_layer_weights(ckpt, cfg, layer_idx)
+    row = Row(dp_submeshes(mesh_device)[0], cfg, layer_idx, weights, dims, 0)
+    device = row.plan.mesh_device
+
+    def prefill_user(slot, length, chunk=128):
+        x = (torch.randn(length, cfg.hidden_size) * HIDDEN_STD).bfloat16().float()
+        for s in range(0, length, chunk):
+            out, _ = row.prefill("chunked", x[s : s + chunk], slot, s)
+            out.deallocate(True)
+        ttnn.synchronize_device(device)
+
+    prefill_user(0, 640)
+    entries = device.num_program_cache_entries()
+    prefill_user(1, 1536)
+    new = device.num_program_cache_entries() - entries
+    logger.info(f"layer {layer_idx}: {entries} programs after the first user, {new} new for the second")
+    assert new == 0, f"{new} prefill programs keyed on the start, slot or blocks"

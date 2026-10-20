@@ -48,8 +48,11 @@ class MiMoGalaxyGenerator:
         num_layers=None,
         max_batch=32,
         block_size=64,
+        setup_kv=True,
         **model_kwargs,
     ):
+        """``setup_kv``: allocate each replica's own paged KV cache (False when vLLM owns the KV blocks: the vLLM
+        adapter, generator_vllm.py, hands each replica its caches and page tables)."""
         self.cfg = cfg
         self.dp = dp
         self.users_per_replica = users_per_replica
@@ -70,7 +73,8 @@ class MiMoGalaxyGenerator:
                 block_size=block_size,
                 **model_kwargs,
             )
-            model.setup_kv_cache(users_per_replica)
+            if setup_kv:
+                model.setup_kv_cache(users_per_replica)
             self.models.append(model)
             logger.info(f"replica {r} (row {r} of the Galaxy) ready in {time.time() - t0:.0f}s")
 

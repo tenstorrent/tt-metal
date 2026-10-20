@@ -81,6 +81,89 @@ def per_chip(plan, t, dtype, layout, device=True):
     )
 
 
+def replicated(plan, t, dtype, device=True):
+    """Row-major ``t`` on every chip of the replica (``device`` False: the host tensor, to copy into one)."""
+    return ttnn.from_torch(
+        t,
+        device=plan.mesh_device if device else None,
+        dtype=dtype,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        mesh_mapper=plan.replicate(),
+    )
+
+
+def block_rows(table, slot, first, count, scratch):
+    """table int32 [tp, max_batch, W] -> [tp, 1, count]: blocks first .. first + count - 1 of ``slot`` on every chip,
+    ``scratch`` past the end of the table (None: the table has no scratch block, so nothing may run past it)."""
+    n = max(0, min(count, table.shape[2] - first))
+    assert scratch is not None or n == count, f"blocks {first}.. {first + count} run past a table with no scratch block"
+    out = torch.full((table.shape[0], 1, count), 0 if scratch is None else scratch, dtype=torch.int32)
+    out[:, 0, :n] = table[:, slot, first : first + n]
+    return out
+
+
+class PrefillTables:
+    """The block tables one prefill chunk of one user reads through one page table, as small device tensors made per
+    chunk (and released once it is enqueued). Their shapes depend only on the chunk's padded length, so no prefill
+    program keys on the user, the chunk's start or a block id (attention.py):
+
+    * ``fill`` int32 [1, ceil(padded / block_size)] per chip: the blocks of positions start .. start + padded - 1;
+    * ``context`` (a later chunk through a global layer's table) int32 [1, context_blocks] per chip: every block from
+      position 0, for chunked MLA prefill, whose kernel reads only those before the chunk's end;
+    * ``window`` (a later chunk through a SWA table): one uint32 [4] slice start (block, 0, 0, 0) per block of
+      positions [window_start, start) (kv.SwaBlockTable.window_blocks), in position order;
+    * ``start`` (a later chunk): int32 [1], the chunk's start position, shared by every table of the chunk.
+
+    ``table``: the host copy of the page table, int32 [tp, max_batch, W]. Entries past its width point at ``scratch``
+    (a block nothing reads: the padding of a chunk at the end of the context lands there)."""
+
+    def __init__(
+        self, plan, table, slot, start, padded, block_size, scratch, context_blocks=None, window=None, start_tensor=None
+    ):
+        assert start % block_size == 0
+        first = start // block_size
+        self.fill = per_chip(
+            plan, block_rows(table, slot, first, -(-padded // block_size), scratch), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT
+        )
+        self.context = None
+        if context_blocks is not None:
+            assert context_blocks * block_size >= start + padded, (context_blocks, start, padded)
+            self.context = per_chip(
+                plan, block_rows(table, slot, 0, context_blocks, scratch), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT
+            )
+        self.window = [
+            replicated(plan, torch.tensor([b, 0, 0, 0], dtype=torch.int32), ttnn.uint32) for b in (window or [])
+        ]
+        self.start = start_tensor
+
+    def release(self):
+        """Free the tensors this object made (``start`` belongs to the caller)."""
+        for t in [self.fill, self.context, *self.window]:
+            if t is not None:
+                t.deallocate(True)
+
+
+class BatchFillTables:
+    """The KV blocks a batch of first chunks writes through one page table (TtMiMoAttention.forward_prefill with
+    ``users`` R: R users, each from position 0 and padded to the same length S): ``fill`` int32 [R, ceil(S /
+    block_size)] per chip, row r the blocks of user r's positions 0 .. S - 1 (``batch_fill_rows``), and ``rows``
+    uint32 [R] = 0 .. R - 1 (shared by the batch's tables; the caller frees it), the row of ``fill`` each input
+    batch entry of the batched ``paged_fill_cache`` writes through. The shapes depend only on R and S."""
+
+    def __init__(self, fill, rows):
+        self.fill = fill
+        self.rows = rows
+
+    def release(self):
+        self.fill.deallocate(True)
+
+
+def batch_fill_rows(table, slots, padded, block_size, scratch):
+    """table int32 [tp, max_batch, W] -> [tp, R, ceil(padded / block_size)]: the first blocks of each slot's row."""
+    count = -(-padded // block_size)
+    return torch.cat([block_rows(table, slot, 0, count, scratch) for slot in slots], dim=1)
+
+
 # Most padding a prefill chunk gets (model.prefill_padded_len rounds up to 32, then to 128 or 256 tokens).
 PREFILL_MAX_PAD = 255
 
@@ -147,14 +230,15 @@ class SwaBlockTable:
         """Before a prefill chunk of ``slot`` writes positions [start, padded_end), real up to ``real_end``. Only
         [real_end - window, padded_end) can be read after it (the next chunk's or decode step's window), so only
         those blocks become real. A chunk at ``start`` 0 begins a new user; a later chunk keeps the window before
-        ``start``, which it reads (``window_blocks``)."""
+        ``start``, which it reads (``window_blocks``). Padding past the end of the table stays in the scratch block
+        (PrefillTables maps those positions there)."""
         if start == 0:
             self.release_all(slot)  # the slot's previous user
         else:
             self._release_below(slot, start)
             missing = [b for b in self.window_blocks(slot, start) if b == 0]
             assert not missing, f"slot {slot}: the window before position {start} is not in the cache"
-        self._take(slot, max(0, real_end - self.window), padded_end)
+        self._take(slot, max(0, real_end - self.window), min(padded_end, self.table.shape[1] * self.block_size))
 
     def window_start(self, start):
         """First position of the block-aligned keys a chunk at ``start`` reads from the cache."""

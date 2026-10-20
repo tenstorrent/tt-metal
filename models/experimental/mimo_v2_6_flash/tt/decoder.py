@@ -13,6 +13,7 @@ import ttnn
 from .attention import TtMiMoAttention
 from .common import TILE, DramShardedMatmul, as_weight, cache_name, compute_config
 from .moe import TtMiMoMoE
+from .moe_stream import ReduceExpand, is_dram_interleaved
 
 
 class TtRMSNorm:
@@ -21,6 +22,11 @@ class TtRMSNorm:
         if weight is not None:
             w = weight.float().reshape(1, 1, -1, TILE).bfloat16()
         self.weight = as_weight(w, plan, plan.replicate(), ttnn.bfloat16, cache_file, layout=ttnn.ROW_MAJOR_LAYOUT)
+        # Prefill (many tile rows) reads a tiled copy: with a row-major weight the interleaved rms_norm cannot fall back
+        # to its streaming large-tensor kernel, so once decode's persistent L1 buffers exist (a prefill after decode)
+        # its whole-row circular buffers clash with them.
+        hidden = self.weight.shape[-2] * self.weight.shape[-1]
+        self.weight_tiled = ttnn.to_layout(ttnn.reshape(self.weight, (1, 1, 1, hidden)), ttnn.TILE_LAYOUT)
         self.eps = eps
         self.config = compute_config(ttnn.MathFidelity.HiFi4, fp32_acc=True, packer_l1_acc=False)
         # Decode (one tile row): an interleaved rms_norm runs on a single core (67 us); width-shard the
@@ -51,9 +57,11 @@ class TtRMSNorm:
         """The weight as a torch [hidden] tensor (read back from chip 0; it is replicated)."""
         return ttnn.to_torch(ttnn.get_device_tensors(self.weight)[0]).float().reshape(-1)
 
-    def __call__(self, x, memory_config=None):
-        """``memory_config``: where the decode (one tile row) output goes; DRAM interleaved by default."""
-        if x.shape[-2] == TILE:
+    def __call__(self, x, memory_config=None, prefill=False):
+        """``memory_config``: where the decode (one tile row) output goes; DRAM interleaved by default. ``prefill``
+        takes the interleaved norm for any row count, whose rows do not depend on the other rows (a prefill row in a
+        batch equals the same row alone); a decode tile row takes the width-sharded norm."""
+        if x.shape[-2] == TILE and not prefill:
             mem, program = self._decode_configs(x.shape[-1])
             x_sharded = ttnn.to_memory_config(x, mem)
             y = ttnn.rms_norm(
@@ -71,7 +79,7 @@ class TtRMSNorm:
         return ttnn.rms_norm(
             x,
             epsilon=self.eps,
-            weight=self.weight,
+            weight=self.weight_tiled,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.config,
         )
@@ -105,8 +113,11 @@ class TtMiMoDenseMLP:
         for w in (w_gate, w_up, w_down):
             w.deallocate(True)
 
-    def forward(self, x, token_mask=None):
-        if x.shape[-2] == TILE:
+    def forward(self, x, token_mask=None, decode=False):
+        """``decode``: a decode step (32 rows), through the DRAM-sharded matmuls. Prefill always takes the
+        interleaved linears, whose rows do not depend on the other rows (a prefill row computed in a batch equals
+        the same row computed alone)."""
+        if decode and x.shape[-2] == TILE:
             gate = self.up_mm(x, self.w_gate)
             up = self.up_mm(x, self.w_up)
             act = ttnn.mul(
@@ -171,6 +182,8 @@ class TtMiMoDecoderLayer:
         else:
             self.mlp = TtMiMoDenseMLP(plan, layer_idx, w.get("mlp"), cache_dir=cache_dir, weight_dtype=mlp_dtype)
         self.fused_norm = None
+        self.hidden = cfg.hidden_size
+        self.attn_reduce = None  # set_compact_attention
 
     def can_fuse_norms(self):
         return self._compact_decode() and self.mlp.reduce_expand.can_norm
@@ -189,12 +202,31 @@ class TtMiMoDecoderLayer:
             "next": (red.compact_gamma(plan, next_norm.torch_weight()), buffers[0], next_norm.eps),
         }
 
+    def can_compact_attention(self):
+        """A global layer that does not decode compactly (the dense layer 0) can still reduce its attention block on
+        the users' rows (see set_compact_attention)."""
+        return not self._compact_decode() and self.attn.split_users and self.attn.o_stream is not None
+
+    def set_compact_attention(self, plan):
+        """Decode users in rows 0-3: the attention block reduces like a compact layer's (o stream into compact rows, row
+        all-gather, ReduceExpand: chip-ordered fp32 sum, one bf16 rounding, plus the residual) instead of the o linear,
+        all_reduce and add. The chip pair splits the users by slot parity, so only one chip of each pair has a user's
+        row. The all_reduce's ring adds those rows with bf16 partial sums in an order that depends on the parity, so a
+        user's logits depended on its slot; the chip-ordered sum adds them in the same order for both parities."""
+        cfg = ttnn.ComputeConfigDescriptor(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            dst_full_sync_en=False,
+        )
+        self.attn_reduce = ReduceExpand(plan, self.hidden, plan.tp, cfg)
+
     def _ffn(self, x, token_mask, decode=False):
-        h = self.post_norm(x)
+        h = self.post_norm(x, prefill=not decode)
         if decode and self.is_moe and self.mlp.decode_users is not None:
             out = self.mlp.forward_decode(h, token_mask)
         else:
-            out = self.mlp.forward(h, token_mask)
+            out = self.mlp.forward(h, token_mask, decode=decode)
         h.deallocate(True)
         y = ttnn.add(x, out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         out.deallocate(True)
@@ -205,10 +237,11 @@ class TtMiMoDecoderLayer:
         return page_table[self.is_swa] if isinstance(page_table, dict) else page_table
 
     def forward_prefill(
-        self, x, user_id, page_table, kv_cache, token_mask=None, real_len=None, start_pos=0, window_blocks=None
+        self, x, user_id, page_table, kv_cache, token_mask=None, real_len=None, start_pos=0, tables=None, users=1
     ):
-        """One prefill chunk at ``start_pos``; ``window_blocks``: see TtMiMoAttention.forward_prefill (SWA only)."""
-        h = self.input_norm(x)
+        """One prefill chunk at ``start_pos``; ``tables``: this layer's kv.PrefillTables (see
+        TtMiMoAttention.forward_prefill). ``users`` R > 1: the first chunks of R users, rows user after user."""
+        h = self.input_norm(x, prefill=True)
         attn = self.attn.forward_prefill(
             h,
             user_id,
@@ -216,7 +249,8 @@ class TtMiMoDecoderLayer:
             kv_cache,
             start_pos=start_pos,
             real_len=real_len,
-            window_blocks=window_blocks if self.is_swa else None,
+            tables=tables,
+            users=users,
         )
         h.deallocate(True)
         x2 = ttnn.add(x, attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -229,8 +263,26 @@ class TtMiMoDecoderLayer:
         """Decode attention block: input norm, attention (with its row all-reduce), residual add."""
         # The normed row only feeds the qkv matmul's L1 reshard: keep it in L1.
         h = self.input_norm(x, memory_config=ttnn.L1_MEMORY_CONFIG)
-        attn = self.attn.forward_decode(h, rot_mats[self.is_swa], cur_pos, self._page_table(page_table), kv_cache)
+        compact = self.attn_reduce is not None
+        attn = self.attn.forward_decode(
+            h, rot_mats[self.is_swa], cur_pos, self._page_table(page_table), kv_cache, compact=compact
+        )
         h.deallocate(True)
+        if compact:
+            # attn: the chips' compact rows, all-gathered; x2 = x + their chip-ordered sum.
+            x2 = ttnn.allocate_tensor_on_device(
+                ttnn.Shape([1, 1, TILE, self.hidden]),
+                ttnn.bfloat16,
+                ttnn.TILE_LAYOUT,
+                self.attn.plan.mesh_device,
+                ttnn.DRAM_MEMORY_CONFIG,
+            )
+            res = x if is_dram_interleaved(x) else ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+            self.attn_reduce(attn, x2, residual=res)
+            if res is not x:
+                res.deallocate(True)
+            attn.deallocate(True)
+            return x2
         x2 = ttnn.add(x, attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         attn.deallocate(True)
         return x2

@@ -16,6 +16,7 @@ Routed experts are tensor-parallel too: every chip holds all 256 experts with 1/
 ``moe_intermediate_size`` (2048 / 8 = 256), and the expert output is all-reduced across the row.
 """
 
+import contextlib
 import math
 import os
 
@@ -36,6 +37,9 @@ class MeshPlan:
         self.tp = self.mesh_shape[tp_axis]
         self.num_links = num_links
         self.topology = topology if self.tp > 2 else ttnn.Topology.Linear
+        # ``prefill_reduce``: how all_reduce reduces a prefill pass's rows (see there).
+        self.reduce_mode = None
+        self.sum_config = compute_config(ttnn.MathFidelity.HiFi4, fp32_acc=True, packer_l1_acc=False)
 
     def shard(self, dim):
         """Shard tensor ``dim`` across the TP axis, replicate across the other axis."""
@@ -46,9 +50,61 @@ class MeshPlan:
     def replicate(self):
         return ttnn.ReplicateTensorToMesh(self.mesh_device)
 
+    @contextlib.contextmanager
+    def prefill_reduce(self, users, padded):
+        """Inside: ``all_reduce`` of a prefill pass's rows [1, 1, users * padded, hidden] (``users`` chunks padded to
+        ``padded``, user after user) gives every user's rows the sum the same chunk would get alone, bit for bit, so a
+        user's prefill does not depend on what it was batched with. ``ttnn.all_reduce``'s order of adding a row's chips
+        changes with the rows around it. For padded >= 96 reducing the pass as a batch of ``users`` [1, 1, padded,
+        hidden] tensors already matches each chunk alone (checked for 2-4 users, padded 96-512); shorter chunks
+        all-gather the chips and sum them in chip order in fp32, alone or batched (8x the input's memory while it
+        runs)."""
+        assert self.reduce_mode is None, "prefill_reduce does not nest"
+        if padded <= 64:
+            self.reduce_mode = ("ordered", users, padded)
+        elif users > 1:
+            self.reduce_mode = ("users", users, padded)
+        try:
+            yield
+        finally:
+            self.reduce_mode = None
+
     def all_reduce(self, x, memory_config=None):
         if self.tp == 1:
             return x
+        mode = self.reduce_mode
+        if mode is not None and mode[0] == "users":
+            users, padded = mode[1], mode[2]
+            assert x.shape[-2] == users * padded, (x.shape, mode)
+            batch = ttnn.reshape(x, (users, 1, padded, x.shape[-1]))  # the same tiles, user after user
+            out = ttnn.all_reduce(
+                batch,
+                cluster_axis=self.tp_axis,
+                num_links=self.num_links,
+                topology=self.topology,
+                memory_config=memory_config or ttnn.DRAM_MEMORY_CONFIG,
+            )
+            x.deallocate(True)
+            return ttnn.reshape(out, (1, 1, users * padded, out.shape[-1]))
+        if mode is not None and mode[0] == "ordered":
+            gathered = ttnn.all_gather(
+                x,
+                dim=0,
+                cluster_axis=self.tp_axis,
+                num_links=self.num_links,
+                topology=self.topology,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            x.deallocate(True)
+            out = ttnn.sum(
+                gathered,
+                dim=0,
+                keepdim=True,
+                memory_config=memory_config or ttnn.DRAM_MEMORY_CONFIG,
+                compute_kernel_config=self.sum_config,
+            )
+            gathered.deallocate(True)
+            return out
         out = ttnn.all_reduce(
             x,
             cluster_axis=self.tp_axis,
@@ -92,6 +148,56 @@ def cache_exists(cache_file, dtype, layout=ttnn.TILE_LAYOUT):
     if cache_file is None:
         return False
     return os.path.exists(f"{cache_file}_dtype_{dtype.name}_layout_{layout.name}.tensorbin")
+
+
+BFP_MANTISSA_BITS = {ttnn.bfloat8_b: 7, ttnn.bfloat4_b: 3}
+
+
+def bfp_project_blocks(x, bits, offsets=(0, -1, 1)):
+    """Round [n, 16] fp32 blocks onto the BFP grid with ``bits`` mantissa bits; each block takes the shared exponent
+    ``e + offset`` (``e``: its largest element exponent, the stock packer's) of least squared error, ties to the
+    earlier offset. Returns fp32 values the stock packer reproduces exactly (no signed zeros)."""
+    max_code, scale_offset = float((1 << bits) - 1), 126 + bits
+    a = x.abs()
+    e = ((x.view(torch.int32) >> 23) & 0xFF).amax(-1, keepdim=True)
+    best_err = best_step = None
+    for offset in offsets:
+        cand = e + offset
+        # Power-of-two scaling and round-half-even are exact in fp32 for these magnitudes.
+        step = torch.ldexp(torch.ones_like(a[:, :1]), (cand - scale_offset).float())
+        err = (torch.round(a / step).clamp_(max=max_code) * step - a).square_().sum(-1, keepdim=True)
+        if offset:
+            err = torch.where((cand >= bits) & (cand <= 254), err, torch.full_like(err, float("inf")))
+        if best_err is None:
+            best_err, best_step = err, step
+        else:
+            better = err < best_err
+            best_err = torch.where(better, err, best_err)
+            best_step = torch.where(better, step, best_step)
+    q = torch.round(a / best_step).clamp_(max=max_code) * best_step
+    return torch.where(q > 0, torch.copysign(q, x), torch.zeros_like(x))
+
+
+def bfp_mse_prepare(w, dtype, chunk=1 << 24):
+    """Values on the ``dtype`` (bfloat8_b / bfloat4_b) grid with each block's shared exponent chosen for least error.
+
+    ``w`` [..., N] is in its stored layout: the 16-value blocks of a tile face row run along the last dim, so blocks
+    are 16 consecutive columns. The stock host packer gives every block the largest element exponent ``e`` and
+    rounds; here each block takes the best of ``{e, e - 1, e + 1}`` (``e - 1`` clips the largest elements) under
+    squared error, with ties to ``e``. The result is exactly representable in bf16, and the stock packer reproduces
+    it bit for bit, so the device format, memory and speed are unchanged (tt-quant's ``mse`` policy,
+    github.com/tenstorrent/tt-quant). On MiMo's MXFP4 experts in bfloat4_b it raises the weight SQNR from ~18.3 to
+    ~20.9 dB.
+    """
+    bits = BFP_MANTISSA_BITS[dtype]
+    shape = w.shape
+    assert shape[-1] % 16 == 0, shape
+    flat = w.reshape(-1, 16)
+    out = torch.empty(flat.shape, dtype=torch.bfloat16)
+    rows = chunk // 16
+    for s in range(0, flat.shape[0], rows):
+        out[s : s + rows] = bfp_project_blocks(flat[s : s + rows].float(), bits).to(torch.bfloat16)
+    return out.reshape(shape)
 
 
 def as_weight(torch_tensor, plan, mapper, dtype, cache_file, layout=ttnn.TILE_LAYOUT, memory_config=None):

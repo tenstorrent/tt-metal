@@ -15,11 +15,22 @@ streams the selected experts (moe_stream.py). The weighted sum over experts is a
 chip and is all-reduced across the row.
 """
 
+import os
+
 import torch
 
 import ttnn
 
-from .common import TILE, DramShardedMatmul, as_weight, cache_exists, cache_name, compute_config, mcast_1d_config
+from .common import (
+    TILE,
+    DramShardedMatmul,
+    as_weight,
+    bfp_mse_prepare,
+    cache_exists,
+    cache_name,
+    compute_config,
+    mcast_1d_config,
+)
 from .moe_stream import (
     DownStream,
     GateUpStream,
@@ -31,6 +42,47 @@ from .moe_stream import (
 )
 from .moe_prefill import PrefillExperts
 from .proj_stream import RouterScoreStream
+
+
+def expert_quant(expert_dtype):
+    """How bfloat4_b experts are prepared: "mse" (default, bfp_mse_prepare), "gptq" (tests/perf/gptq_experts.py,
+    read from MIMO_EXPERT_PREP_DIR) or "" (the stock packer). MIMO_EXPERT_QUANT picks it; MIMO_EXPERT_MSE=0 is
+    "" (older switch). Other dtypes always use the stock packer."""
+    if expert_dtype != ttnn.bfloat4_b or os.environ.get("MIMO_EXPERT_MSE", "1") == "0":
+        return ""
+    quant = os.environ.get("MIMO_EXPERT_QUANT", "mse")
+    assert quant in ("", "stock", "mse", "gptq"), quant
+    return "" if quant == "stock" else quant
+
+
+def expert_weights_host(experts, tp, inter_local, expert_dtype, layer_idx=None, mse=True, quant=None):
+    """Host expert weights in device layout: (w_gate_up [1, E, H, tp * 2 * I_local], w_down [1, E, I, H]).
+
+    gate/up [E, I, H] -> one tensor whose chip-c slice holds [gate_c | up_c], so one matmul makes both; down
+    [E, H, I] -> [1, E, I, H] with I sharded over TP. bfloat4_b weights are MSE-prepared (bfp_mse_prepare); a
+    precomputed copy is taken from MIMO_EXPERT_PREP_DIR/layer<i>.pt when present (tests/perf/prep_experts.py).
+    """
+    prep_dir = os.environ.get("MIMO_EXPERT_PREP_DIR")
+    path = os.path.join(prep_dir, f"layer{layer_idx}.pt") if prep_dir and layer_idx is not None else None
+    mse = mse and expert_dtype == ttnn.bfloat4_b
+    if quant == "gptq":
+        assert path and os.path.exists(path), f"gptq experts need tests/perf/gptq_experts.py output at {path}"
+    if (mse or quant == "gptq") and path and os.path.exists(path):
+        saved = torch.load(path)
+        return saved["w_gate_up"], saved["w_down"]
+    g = experts["gate_proj"].transpose(1, 2)
+    u = experts["up_proj"].transpose(1, 2)
+    il = inter_local
+    w_gate_up = torch.cat(
+        [torch.cat([g[..., c * il : (c + 1) * il], u[..., c * il : (c + 1) * il]], dim=-1) for c in range(tp)],
+        dim=-1,
+    ).unsqueeze(0)
+    del g, u
+    w_down = experts["down_proj"].transpose(1, 2).unsqueeze(0)
+    if mse:
+        w_gate_up = bfp_mse_prepare(w_gate_up, expert_dtype)
+        w_down = bfp_mse_prepare(w_down, expert_dtype)
+    return w_gate_up, w_down
 
 
 class TtMiMoMoE:
@@ -51,7 +103,10 @@ class TtMiMoMoE:
         self.router_mm = DramShardedMatmul(
             plan, self.hidden, self.num_experts, out_dtype=ttnn.float32, compute_kernel_config=self.router_config
         )
-        expert_cache = [cache_name(cache_dir, prefix, n) for n in ("w_gate_up", "w_down")]
+        # bfloat4_b experts are stored prepared (expert_quant): same format and speed, lower error.
+        self.expert_quant = expert_quant(expert_dtype)
+        tag = f"_{self.expert_quant}" if self.expert_quant else ""
+        expert_cache = [cache_name(cache_dir, prefix, n + tag) for n in ("w_gate_up", "w_down")]
         if all(cache_exists(f, expert_dtype) for f in expert_cache):
             experts = None  # already converted: skip dequantizing 256 experts on the host
         w_router = bias = w_gate_up = w_down = None
@@ -60,18 +115,9 @@ class TtMiMoMoE:
             w_router = self.router_mm.pad_chip_blocks(w_router, 1)
             bias = router["e_score_correction_bias"].float().reshape(1, 1, 1, -1)
         if experts is not None:
-            # gate/up [E, I, H] -> one [1, E, H, tp * 2 * I_local] tensor: chip c's slice holds
-            # [gate_c | up_c], so one sparse_matmul makes both (twice the N width, twice the cores).
-            # down [E, H, I] -> [1, E, I, H]: TP shards I.
-            g = experts["gate_proj"].transpose(1, 2)
-            u = experts["up_proj"].transpose(1, 2)
-            il = self.inter_local
-            w_gate_up = torch.cat(
-                [torch.cat([g[..., c * il : (c + 1) * il], u[..., c * il : (c + 1) * il]], dim=-1) for c in range(tp)],
-                dim=-1,
-            ).unsqueeze(0)
-            del g, u
-            w_down = experts["down_proj"].transpose(1, 2).unsqueeze(0)
+            w_gate_up, w_down = expert_weights_host(
+                experts, tp, self.inter_local, expert_dtype, layer_idx, self.expert_quant == "mse", self.expert_quant
+            )
 
         rep = plan.replicate()
         self.w_router = as_weight(
@@ -83,13 +129,10 @@ class TtMiMoMoE:
             memory_config=self.router_mm.weight_memory_config,
         )
         self.score_bias = as_weight(bias, plan, rep, ttnn.float32, cache_name(cache_dir, prefix, "score_bias"))
-        self.w_gate_up = as_weight(
-            w_gate_up, plan, plan.shard(-1), expert_dtype, cache_name(cache_dir, prefix, "w_gate_up")
-        )
+        self.w_gate_up = as_weight(w_gate_up, plan, plan.shard(-1), expert_dtype, expert_cache[0])
         del w_gate_up
-        self.w_down = as_weight(w_down, plan, plan.shard(-2), expert_dtype, cache_name(cache_dir, prefix, "w_down"))
+        self.w_down = as_weight(w_down, plan, plan.shard(-2), expert_dtype, expert_cache[1])
 
-        self._zero_cache = {}
         self.expert_config = compute_config(ttnn.MathFidelity.HiFi2, fp32_acc=True)
         # Measured on BH (decode, 32 experts): wider K blocks cut the per-expert handshakes; down over 8x8 cores.
         self.gate_up_program = mcast_1d_config((8, 2), TILE, 2 * self.inter_local, self.hidden, in0_block_w=64)
@@ -101,19 +144,6 @@ class TtMiMoMoE:
         self.down_stream = None
         self.ids_buf = None
         self.prefill_experts = PrefillExperts(self)  # forward (prefill): the experts of T tokens
-
-    def _zeros(self, num_tokens):
-        """Cached [1, 1, T, E] zeros. ``ttnn.zeros`` writes from the host, which a trace capture cannot do,
-        so the tensor is made on first use (warm-up) and reused."""
-        if num_tokens not in self._zero_cache:
-            self._zero_cache[num_tokens] = ttnn.zeros(
-                ttnn.Shape((1, 1, num_tokens, self.num_experts)),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=self.plan.mesh_device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-        return self._zero_cache[num_tokens]
 
     def _topk(self, logits):
         """fp32 router logits [1, 1, T, E] -> (top-k indices uint32, normalized unbiased weights fp32), [1, 1, T, k]."""
@@ -133,9 +163,11 @@ class TtMiMoMoE:
             weights = ttnn.mul(weights, self.cfg.routed_scaling_factor)
         return indices, weights
 
-    def _router_logits(self, x):
-        """fp32 logits [1, 1, T, E]: DRAM-sharded matmul for one tile row, else linear on an interleaved copy."""
-        if x.shape[-2] == TILE:
+    def _router_logits(self, x, prefill=False):
+        """fp32 logits [1, 1, T, E]: DRAM-sharded matmul for a decode tile row, else linear on an interleaved copy.
+        Prefill always takes the linear, with a program config whose K blocking does not change with T, so a row's
+        logits do not depend on the other rows (a prefill row in a batch equals the same row alone)."""
+        if x.shape[-2] == TILE and not prefill:
             return self.router_mm(x, self.w_router)
         weight = ttnn.to_memory_config(self.w_router, ttnn.DRAM_MEMORY_CONFIG)
         logits = ttnn.linear(
@@ -144,21 +176,44 @@ class TtMiMoMoE:
             dtype=ttnn.float32,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.router_config,
+            program_config=self._router_program(x.shape[-2]) if prefill else None,
         )
         weight.deallocate(True)
         return logits
 
+    def _router_program(self, rows):
+        """2D multicast matmul: the experts' 8 tile columns over 8 core columns, the row tiles over up to 8 core
+        rows, a fixed K block of 8 tiles (every row's K sum is added in the same order for any T)."""
+        mt, nt = rows // TILE, self.num_experts // TILE
+        ny = max(d for d in range(1, 9) if mt % d == 0)
+        return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(nt, ny),
+            in0_block_w=8,
+            out_subblock_h=1,
+            out_subblock_w=1,
+            out_block_h=mt // ny,
+            out_block_w=1,
+            per_core_M=mt // ny,
+            per_core_N=1,
+            transpose_mcast=False,
+            fused_activation=None,
+            fuse_batch=False,
+        )
+
     def route(self, x, token_mask=None):
         """x [1, 1, T, hidden] -> dense routing weights [1, 1, T, E] (bf16; zero off the top-8)."""
-        num_tokens = x.shape[-2]
         logits = self._router_logits(x)
         indices, weights = self._topk(logits)
+        # Zeros filled on device for every call. A zero tensor cached per T and first made after a decode trace capture
+        # (a prefill length first seen while serving) would sit in memory the trace's replays write to.
+        zeros32 = ttnn.zeros_like(logits)
         logits.deallocate(True)
+        zeros = ttnn.typecast(zeros32, ttnn.bfloat16)
+        zeros32.deallocate(True)
         weights_bf16 = ttnn.typecast(weights, ttnn.bfloat16)
         weights.deallocate(True)
-        zeros = self._zeros(num_tokens)  # scatter is out of place, so one cached zero tensor per T is safe
         dense = ttnn.scatter(zeros, dim=-1, index=indices, src=weights_bf16)
-        for t in (weights_bf16, indices):
+        for t in (zeros, weights_bf16, indices):
             t.deallocate(True)
         if token_mask is not None:
             masked = ttnn.mul(dense, token_mask)
@@ -396,10 +451,10 @@ class TtMiMoMoE:
         out.deallocate(True)
         return y
 
-    def forward(self, x, token_mask=None):
+    def forward(self, x, token_mask=None, decode=False):
         """x [1, 1, T, hidden] replicated across the row -> [1, 1, T, hidden] replicated."""
         assert x.shape[-2] % TILE == 0, "pad tokens to a multiple of 32"
-        logits = self._router_logits(x)
+        logits = self._router_logits(x, prefill=not decode)
         indices, weights = self._topk(logits)
         logits.deallocate(True)
         if token_mask is not None:
