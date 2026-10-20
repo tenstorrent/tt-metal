@@ -385,7 +385,12 @@ FORCE_INLINE ReceiverPipeImpl<
     noc_(noc),
     data_ready_(detail::make_mcast_semaphore<DataReadyBinding{}>()),
     consumer_ready_(detail::make_mcast_semaphore<ConsumerReadyBinding{}>()),
-    coords_(sender_coords) {}
+    coords_(sender_coords) {
+    if constexpr (NUM_SENDERS == 1) {
+        fixed_sender_x_ = coords_[mcast_wire::SENDER_X];
+        fixed_sender_y_ = coords_[mcast_wire::SENDER_Y];
+    }
+}
 
 template <
     typename DataReadyBinding,
@@ -404,12 +409,18 @@ FORCE_INLINE void ReceiverPipeImpl<
     // `round` is the caller's ABSOLUTE work round, not an index into the coord table: sender
     // selection wraps every NUM_SENDERS rounds, so a rotating receiver just forwards its loop
     // counter and never has to reduce it at the call site.
-    const uint32_t sender_index = round % NUM_SENDERS;
-    const uint32_t sender_x = coords_[mcast_wire::SENDER_COORD_WORDS * sender_index + mcast_wire::SENDER_X];
-    const uint32_t sender_y = coords_[mcast_wire::SENDER_COORD_WORDS * sender_index + mcast_wire::SENDER_Y];
     if constexpr (PRE_HANDSHAKE) {
         // tell the sender "my dest is free / I am ready" (remote atomic inc on its counter)
-        consumer_ready_.up(noc_, sender_x, sender_y, 1);
+        if constexpr (NUM_SENDERS == 1) {
+            consumer_ready_.up(noc_, fixed_sender_x_, fixed_sender_y_, 1);
+        } else {
+            const uint32_t sender_index = round % NUM_SENDERS;
+            consumer_ready_.up(
+                noc_,
+                coords_[mcast_wire::SENDER_COORD_WORDS * sender_index + mcast_wire::SENDER_X],
+                coords_[mcast_wire::SENDER_COORD_WORDS * sender_index + mcast_wire::SENDER_Y],
+                1);
+        }
     }
     if constexpr (DATA_READY_SIGNAL == DataReadySignal::Counter) {
         data_ready_.wait_min(round + 1);
@@ -435,12 +446,16 @@ FORCE_INLINE uint32_t ReceiverPipeImpl<
     SenderCoordinates>::receive_signal(uint32_t round) {
     if constexpr (PRE_HANDSHAKE) {
         // tell the round-th sender "I am ready" (remote atomic inc on its counter)
-        const uint32_t sender_index = round % NUM_SENDERS;
-        consumer_ready_.up(
-            noc_,
-            coords_[mcast_wire::SENDER_COORD_WORDS * sender_index + mcast_wire::SENDER_X],
-            coords_[mcast_wire::SENDER_COORD_WORDS * sender_index + mcast_wire::SENDER_Y],
-            1);
+        if constexpr (NUM_SENDERS == 1) {
+            consumer_ready_.up(noc_, fixed_sender_x_, fixed_sender_y_, 1);
+        } else {
+            const uint32_t sender_index = round % NUM_SENDERS;
+            consumer_ready_.up(
+                noc_,
+                coords_[mcast_wire::SENDER_COORD_WORDS * sender_index + mcast_wire::SENDER_X],
+                coords_[mcast_wire::SENDER_COORD_WORDS * sender_index + mcast_wire::SENDER_Y],
+                1);
+        }
     }
     if constexpr (DATA_READY_SIGNAL == DataReadySignal::Counter) {
         data_ready_.wait_min(round + 1);
