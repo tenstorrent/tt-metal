@@ -71,7 +71,7 @@ int main(void)
 #endif
     device_setup();
 #if defined(ARCH_QUASAR)
-    // No BRISC on Quasar: unpack configures and arms the counters while the other TRISCs are still held in reset.
+    // No BRISC on Quasar: unpack configures the counters (a counting launch) while the other TRISCs are still held in reset.
     llk_perf::configure_and_arm();
 #endif
     clear_trisc_soft_reset(); // Release the rest of the triscs
@@ -88,6 +88,7 @@ int main(void)
 #endif
 
 #if defined(LLK_PROFILER)
+    llk_perf::load_counted_zones();
     llk_profiler::reset();
     llk_profiler::sync_threads();
 #endif

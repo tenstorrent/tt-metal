@@ -11,13 +11,8 @@
 // START_PERF_MEASURE expands to ZONE_SCOPED, so the zone layer must be in scope here; self-guarded on LLK_PROFILER.
 #include "profiler.h"
 
-// One code path for both builds: the counters off build runs the same startup, entry, exit and readout and writes
-// STOP where the counters on build writes START. Any divergence shows up as a fake on minus off delta.
-#ifdef PERF_COUNTERS_COMPILED
-constexpr bool COUNTERS_ON = true;
-#else
-constexpr bool COUNTERS_ON = false;
-#endif
+// One program for both builds: the host names the zones a launch counts (counted_zones), so counters off runs no
+// counter work and both builds compile to the same ELFs.
 
 // BRISC builds the config only; the per-zone measurement layer below also needs LLK_PROFILER.
 
@@ -64,7 +59,7 @@ constexpr std::uint32_t PERF_COUNTERS_VALID_COUNT_ADDR  = PERF_COUNTERS_BANK_MAS
 constexpr std::uint32_t PERF_COUNTERS_LAYOUT_END        = PERF_COUNTERS_VALID_COUNT_ADDR + PERF_COUNTERS_MAX_ZONES * 4;
 
 // A literal because BRISC has no llk_profiler namespace; the LLK_PROFILER section asserts it symbolically.
-static_assert(PERF_COUNTERS_LAYOUT_END <= 0x16AFF0u, "Perf counter L1 layout overflows into the profiler region");
+static_assert(PERF_COUNTERS_LAYOUT_END + 4 <= 0x16AFF0u, "Perf counter L1 layout (and Quasar's counted zones word) overflows into the profiler region");
 
 // On-wire bank IDs are llk::perf::Bank; the order is a contract with the host.
 constexpr std::uint32_t COUNTER_BANK_COUNT = llk::perf::NUM_BANKS;
@@ -111,15 +106,6 @@ using BankRegsRef = llk::perf::BankRegs;
 #else
 using BankRegsRef = const llk::perf::BankRegs&;
 #endif
-
-// The volatile index stops GCC emitting a CSWTCH table, which shifts GP offsets and breaks NC/WC .text equality.
-inline BankRegsRef get_bank_regs(Bank bank)
-{
-    static_assert(static_cast<std::uint32_t>(Bank::TDMA_PACK) == COUNTER_BANK_COUNT - 1, "Bank enumerators must be contiguous 0..COUNTER_BANK_COUNT-1");
-    static constexpr llk::perf::BankRegs none {};
-    volatile auto b = static_cast<std::uint32_t>(bank);
-    return b < COUNTER_BANK_COUNT ? llk::perf::bank_regs(static_cast<Bank>(b)) : none;
-}
 
 // Only 8 physical L1 counters exist, and the mux selects which group feeds them while they count,
 // not at read time, so a run sees one group and the groups have to be swept across runs.
@@ -184,172 +170,108 @@ constexpr std::uint32_t BUILTIN_COUNTER_COUNT = BUILTIN_COUNTER_CONFIG.size();
 
 static_assert(BUILTIN_COUNTER_COUNT <= COUNTER_SLOT_COUNT, "Counter inventory overflows the shared config region into zone 0 data");
 
-// The counters off build writes STOP wherever the counters on build writes START, from the same code.
-// Loaded from memory, not an immediate: the compiler folded the immediate into an unrelated store in one build only.
+// The host's word for a launch, written before it: the zones it counts (a bit per zone id, 0 with counters off), and above
+// them a token the readouts store with the results.
+#if defined(ARCH_QUASAR)
+constexpr std::uint32_t COUNTED_ZONES_REG = PERF_COUNTERS_LAYOUT_END; // an L1 word: no overlay stream registers here
+#elif defined(ARCH_WORMHOLE)
+constexpr std::uint32_t COUNTED_ZONES_REG = 0xFFB40000 + 249 * 4; // STREAM_SCRATCH_1 of overlay stream 0
+#else
+constexpr std::uint32_t COUNTED_ZONES_REG = 0xFFB40000 + 37 * 4; // STREAM_SCRATCH_1 of overlay stream 0
+#endif
+
+inline __attribute__((always_inline)) std::uint32_t launch_word()
+{
+#if defined(TT_METAL_TTSIM) // ttsim models no counter registers
+    return 0;
+#else
+    return *reinterpret_cast<volatile std::uint32_t*>(COUNTED_ZONES_REG) & 0xFFFFFFu; // 24 bit stream registers
+#endif
+}
+
+inline __attribute__((always_inline)) std::uint32_t counted_zones()
+{
+    return launch_word() & 0xFFu;
+}
+
 namespace detail
 {
-inline const volatile std::uint32_t arm_cmd = COUNTERS_ON ? llk::perf::START : llk::perf::STOP;
+// The launch's counted zones and each zone's arm command (START if counted, 0 = no command if not), copied once per
+// kernel by load_counted_zones: every launch runs the same arm and freeze instructions.
+inline std::uint32_t counted                                    = 0;
+inline std::uint32_t token                                      = 0;
+inline volatile std::uint32_t arm_cmds[PERF_COUNTERS_MAX_ZONES] = {};
 #if defined(ARCH_QUASAR)
-// Both builds route the selection; only the counters on build sets the enable bit.
-inline const volatile std::uint32_t l1_client_cmd =
-    COUNTERS_ON ? llk::perf::l1_client_ctrl_word(static_cast<std::uint32_t>(L1_CLIENT_SEL))
-                : (llk::perf::l1_client_ctrl_word(static_cast<std::uint32_t>(L1_CLIENT_SEL)) & ~llk::perf::L1_CLIENT_ENABLE);
+// The l1_client selection per zone, with the enable bit only when the zone is counted.
+inline volatile std::uint32_t l1_client_cmds[PERF_COUNTERS_MAX_ZONES] = {};
 #endif
+
+// value if bit, else 0, without a branch: a branch on launch data would leave launches with different predictor state.
+__attribute__((always_inline)) inline std::uint32_t when(bool bit, std::uint32_t value)
+{
+    return value & (0u - static_cast<std::uint32_t>(bit));
+}
 } // namespace detail
+
+inline __attribute__((always_inline)) bool counts(std::uint32_t zone_id)
+{
+    return (detail::counted >> zone_id) & 1u;
+}
+
+// Before the kernel (trisc.cpp), in every launch.
+inline void load_counted_zones()
+{
+    const std::uint32_t word = launch_word();
+    detail::counted          = word & 0xFFu;
+    detail::token            = word >> 8;
+    for (std::uint32_t zone = 0; zone < PERF_COUNTERS_MAX_ZONES; ++zone)
+    {
+        detail::arm_cmds[zone] = detail::when(counts(zone), llk::perf::START);
+#if defined(ARCH_QUASAR)
+        const std::uint32_t word     = llk::perf::l1_client_ctrl_word(static_cast<std::uint32_t>(L1_CLIENT_SEL));
+        detail::l1_client_cmds[zone] = (word & ~llk::perf::L1_CLIENT_ENABLE) | detail::when(counts(zone), llk::perf::L1_CLIENT_ENABLE);
+#endif
+    }
+}
 
 #if defined(ARCH_QUASAR)
 // Route the selection and clear the counter: the l1_client CSR is clear-on-read.
-inline __attribute__((always_inline)) void route_l1_client()
+inline __attribute__((always_inline)) void route_l1_client(std::uint32_t cmd)
 {
-    llk::perf::write(llk::perf::l1_client_regs().ctrl, detail::l1_client_cmd);
+    llk::perf::write(llk::perf::l1_client_regs().ctrl, cmd);
     (void)llk::perf::l1_client_read(llk::perf::l1_client_regs());
 }
 #endif
 
-inline std::uint32_t get_active_bank_mask()
-{
-    return *reinterpret_cast<volatile std::uint32_t*>(PERF_COUNTERS_BANK_MASK_ADDR);
-}
-
+// The bank registers the readout needs: reference period, continuous mode and the L1 mux group. Registers only: BRISC's
+// reads of an L1 config before the release alone moved the TRISCs' timing.
 inline void configure_hardware()
 {
 #if defined(TT_METAL_TTSIM) // ttsim models no counter registers
     return;
 #endif
-    const volatile std::uint32_t* config_mem = reinterpret_cast<volatile std::uint32_t*>(PERF_COUNTERS_SHARED_CONFIG_ADDR);
-    std::uint32_t configured_mask            = 0;
-
-    for (std::uint32_t i = 0; i < COUNTER_SLOT_COUNT; i++)
-    {
-        const std::uint32_t metadata = config_mem[i];
-        if ((metadata & PERF_CFG_VALID_BIT) == 0)
-        {
-            continue;
-        }
-        const std::uint8_t bank_id   = static_cast<std::uint8_t>(metadata & PERF_CFG_BANK_MASK);
-        const std::uint32_t bank_bit = 1u << bank_id;
-        if (configured_mask & bank_bit)
-        {
-            continue;
-        }
-        const Bank bank = static_cast<Bank>(bank_id);
-#if defined(ARCH_QUASAR)
-        if (bank == Bank::L1)
-        {
-            // No bank registers behind slot 3; routing the CSR is its whole configuration.
-            if constexpr (L1_CLIENT_ENABLED)
-            {
-                route_l1_client();
-            }
-            configured_mask |= bank_bit;
-            continue;
-        }
-#else
-        if (bank == Bank::L1)
-        {
-            const std::uint8_t l1_mux = (metadata >> PERF_CFG_L1_MUX_SHIFT) & PERF_CFG_L1_MUX_MASK;
-            llk::perf::set_l1_mux(l1_mux);
-        }
+    llk::perf::configure(llk::perf::bank_regs(Bank::INSTRN_THREAD));
+    llk::perf::configure(llk::perf::bank_regs(Bank::FPU));
+    llk::perf::configure(llk::perf::bank_regs(Bank::TDMA_UNPACK));
+    llk::perf::configure(llk::perf::bank_regs(Bank::TDMA_PACK));
+#if !defined(ARCH_QUASAR) // no L1 counter bank on Quasar
+    llk::perf::set_l1_mux(L1_MUX_GROUP);
+    llk::perf::configure(llk::perf::bank_regs(Bank::L1));
 #endif
-        llk::perf::configure(get_bank_regs(bank));
-        configured_mask |= bank_bit;
-    }
 }
 
-inline void arm_hardware()
-{
-#if defined(TT_METAL_TTSIM)
-    return;
-#endif
-    const std::uint32_t arm_cmd = detail::arm_cmd;
-    for (std::uint32_t b = 0; b < COUNTER_BANK_COUNT; ++b)
-    {
-        if (!(get_active_bank_mask() & (1u << b)))
-        {
-            continue;
-        }
-        const BankRegsRef regs = get_bank_regs(static_cast<Bank>(b));
-#if defined(ARCH_QUASAR)
-        if (regs.control == 0)
-        {
-            continue; // slot 3: the l1_client CSR has no start/stop register
-        }
-#endif
-        llk::perf::write(regs.control, arm_cmd);
-        llk::perf::write(regs.control, 0);
-    }
-    llk::perf::write(llk::perf::PERF_CNT_ALL, arm_cmd);
-    llk::perf::write(llk::perf::PERF_CNT_ALL, 0);
-}
-
-inline void configure_all_zones()
-{
-    // One config covers every zone, so scan once: the per-zone scan re-read it 8 times on BRISC.
-    bool found_valid        = false;
-    std::uint32_t bank_mask = 0;
-    std::uint32_t count     = 0;
-
-    const volatile std::uint32_t* config_mem = reinterpret_cast<volatile std::uint32_t*>(PERF_COUNTERS_SHARED_CONFIG_ADDR);
-    for (std::uint32_t i = 0; i < COUNTER_SLOT_COUNT; i++)
-    {
-        const std::uint32_t metadata = config_mem[i];
-        if (metadata & PERF_CFG_VALID_BIT)
-        {
-            found_valid = true;
-            count++;
-            bank_mask |= (1u << (metadata & PERF_CFG_BANK_MASK));
-        }
-    }
-
-    *reinterpret_cast<volatile std::uint32_t*>(PERF_COUNTERS_ENABLED_FLAG_ADDR) = found_valid ? 1u : 0u;
-    *reinterpret_cast<volatile std::uint32_t*>(PERF_COUNTERS_BANK_MASK_ADDR)    = bank_mask;
-    volatile std::uint32_t* valid_count_ptr                                     = reinterpret_cast<volatile std::uint32_t*>(PERF_COUNTERS_VALID_COUNT_ADDR);
-    for (std::uint32_t zone = 0; zone < PERF_COUNTERS_MAX_ZONES; ++zone)
-    {
-        valid_count_ptr[zone] = count;
-    }
-
-    if (found_valid)
-    {
-        // Both builds run all three: neither the scrub nor configure starts anything and the arm writes STOP in the
-        // counters off build. Skipping any of it moves the release of the other threads.
-#if !defined(TT_METAL_TTSIM)
-        llk::perf::clear_debug_feature_disable();
-#endif
-        configure_hardware();
-        arm_hardware();
-    }
-}
-
-// Write shared config to L1, clear per-zone data, then configure + arm hw. Runs on BRISC on tt-1xx and on the
-// unpack TRISC on Quasar, in both cases before the other TRISCs are released.
+// Runs on BRISC before it releases the TRISCs, on Quasar on the unpack TRISC before it releases the others. The zone arms
+// start the counters and the readouts write the results and the config they used.
 inline void configure_and_arm()
 {
-    volatile std::uint32_t* shared_config = reinterpret_cast<volatile std::uint32_t*>(PERF_COUNTERS_SHARED_CONFIG_ADDR);
-    for (std::uint32_t i = 0; i < BUILTIN_COUNTER_COUNT; i++)
+    // Not counter work, so every launch does it: it zeroes the debug feature chicken bits (L1 arbitration among them).
+#if !defined(TT_METAL_TTSIM)
+    llk::perf::clear_debug_feature_disable();
+#endif
+    if (counted_zones() != 0)
     {
-        shared_config[i] = BUILTIN_COUNTER_CONFIG[i];
+        configure_hardware();
     }
-    for (std::uint32_t i = BUILTIN_COUNTER_COUNT; i < COUNTER_SLOT_COUNT; i++)
-    {
-        shared_config[i] = 0;
-    }
-
-    for (std::uint32_t zone = 0; zone < PERF_COUNTERS_MAX_ZONES; ++zone)
-    {
-        volatile std::uint32_t* data_mem = reinterpret_cast<volatile std::uint32_t*>(perf_counters_zone_data_addr(zone));
-        for (std::uint32_t i = 0; i < PERF_COUNTERS_BANK_CYCLES_WORDS + PERF_COUNTERS_DATA_WORDS; i++)
-        {
-            data_mem[i] = 0;
-        }
-        volatile std::uint32_t* sync_mem = reinterpret_cast<volatile std::uint32_t*>(perf_counters_sync_ctrl_addr(zone));
-        for (std::uint32_t i = 0; i < 10; i++)
-        {
-            sync_mem[i] = 0;
-        }
-    }
-
-    configure_all_zones();
 }
 
 inline void configure_and_arm_from_brisc()
@@ -415,22 +337,22 @@ __attribute__((always_inline)) inline std::uint32_t get_zone_id(std::uint32_t ha
 
 #if defined(LLK_PROFILER)
 
-static_assert(PERF_COUNTERS_LAYOUT_END <= llk_profiler::EPOCH_ADDR, "Perf counter L1 layout overflows into the profiler region");
+static_assert(PERF_COUNTERS_LAYOUT_END + 4 <= llk_profiler::EPOCH_ADDR, "Perf counter L1 layout overflows into the profiler region");
 
 // PERF_CNT_ALL reaches only INSTRN_THREAD and FPU; the other banks take the pulse on their own control register.
-inline __attribute__((always_inline)) void arm_all_counters()
+inline __attribute__((always_inline)) void arm_all_counters(std::uint32_t zone_id)
 {
 #if defined(TT_METAL_TTSIM)
     return;
 #endif
     ckernel::fence_compiler();
-    const std::uint32_t arm_cmd = detail::arm_cmd;
+    const std::uint32_t arm_cmd = detail::arm_cmds[zone_id];
     llk::perf::write(llk::perf::PERF_CNT_ALL, arm_cmd);
     llk::perf::write(llk::perf::bank_regs(Bank::TDMA_UNPACK).control, arm_cmd);
 #if defined(ARCH_QUASAR)
     if constexpr (L1_CLIENT_ENABLED)
     {
-        route_l1_client();
+        route_l1_client(detail::l1_client_cmds[zone_id]);
     }
 #else
     llk::perf::write(llk::perf::bank_regs(Bank::L1).control, arm_cmd);
@@ -482,12 +404,14 @@ inline __attribute__((always_inline)) void read_all_counters([[maybe_unused]] st
 #endif
     }
 
-    const volatile std::uint32_t* cfg = reinterpret_cast<volatile std::uint32_t*>(PERF_COUNTERS_SHARED_CONFIG_ADDR);
-    std::uint32_t out_idx             = 0;
+    volatile std::uint32_t* cfg = reinterpret_cast<volatile std::uint32_t*>(PERF_COUNTERS_SHARED_CONFIG_ADDR);
+    std::uint32_t out_idx       = 0;
 #pragma GCC unroll 0
     for (std::uint32_t i = 0; i < COUNTER_SLOT_COUNT; ++i)
     {
-        std::uint32_t cw = cfg[i];
+        // The built-in config, stored for the host's decode next to the counts it describes.
+        const std::uint32_t cw = i < BUILTIN_COUNTER_COUNT ? BUILTIN_COUNTER_CONFIG[i] : 0;
+        cfg[i]                 = cw;
         if (!(cw & PERF_CFG_VALID_BIT))
         {
             continue;
@@ -515,7 +439,7 @@ inline __attribute__((always_inline)) void read_all_counters([[maybe_unused]] st
     }
 
     std::uint32_t sync_addr                               = perf_counters_sync_ctrl_addr(zone_id);
-    *reinterpret_cast<volatile std::uint32_t*>(sync_addr) = SYNC_ZONE_COMPLETE;
+    *reinterpret_cast<volatile std::uint32_t*>(sync_addr) = SYNC_ZONE_COMPLETE | (detail::token << 8); // this launch's
     ckernel::fence_compiler();
 }
 
@@ -567,26 +491,12 @@ constexpr bool is_measured_thread(PerfRunType run_type)
 #endif
 }
 
-// The idle peer that reads the last zone of a single thread run type after run_kernel: pack, or unpack when pack is
-// the measured thread. Math and sfpu never read, and span run types read inside their exit rendezvous.
+// The thread that reads the last zone of a single thread run type after run_kernel: the measured thread itself, whose
+// window has ended, so no peer polls for it. Span run types read in their exit rendezvous.
 constexpr bool is_reader_thread(PerfRunType run_type)
 {
-    if (!is_single_thread_runtype(run_type))
-    {
-        return false;
-    }
-#if defined(LLK_TRISC_PACK)
-    return run_type != PerfRunType::PACK_ISOLATE;
-#elif defined(LLK_TRISC_UNPACK)
-    return run_type == PerfRunType::PACK_ISOLATE;
-#else
-    return false;
-#endif
+    return is_single_thread_runtype(run_type) && is_measured_thread(run_type);
 }
-
-// The backoff keeps the reader off L1 during the measured loop; the limit bounds a kernel that never freezes a zone.
-constexpr std::uint32_t READER_POLL_LIMIT   = 1u << 15;
-constexpr std::uint32_t READER_POLL_BACKOFF = 2048;
 
 namespace detail
 {
@@ -594,18 +504,11 @@ namespace detail
 static bool reader_here;
 } // namespace detail
 
-// After run_kernel on the reader thread: wait for the measured thread to freeze its last zone, then read it back.
+// After run_kernel on the measured thread: read back the zone it froze last, if the launch counts it.
 inline void read_last_zone()
 {
-    if (detail::reader_here)
+    if (detail::reader_here && counts(ZONE_ID_TILE_LOOP))
     {
-        volatile std::uint32_t* pending = reinterpret_cast<volatile std::uint32_t*>(PERF_COUNTERS_PENDING_ZONE_ADDR);
-        for (std::uint32_t polls = 0; *pending == 0 && polls < READER_POLL_LIMIT; ++polls)
-        {
-            for (volatile std::uint32_t i = 0; i < READER_POLL_BACKOFF; ++i)
-            {
-            }
-        }
         read_pending_zone();
     }
 }
@@ -629,15 +532,19 @@ struct perf_counter_scoped
         }
         llk_barrier::rendezvous(
             llk_barrier::is_action_thread(),
-            []
+            [zid]
             {
                 // Span run types read at their exit rendezvous, so this read would be dead for them, and not
                 // harmless: an L1 read here hung every Wormhole L1_CONGESTION kernel in the math thread.
                 if constexpr (is_single_thread_runtype(RUN_TYPE))
                 {
-                    read_pending_zone();
+                    // An earlier zone's readout: only a launch that counts one (INIT's own launch) takes it.
+                    if (detail::counted & ((1u << zid) - 1u))
+                    {
+                        read_pending_zone();
+                    }
                 }
-                arm_all_counters();
+                arm_all_counters(zid); // START, or 0 (no command) when the zone is not counted
             });
         ckernel::fence_compiler();
     }
@@ -646,7 +553,6 @@ struct perf_counter_scoped
     {
         ckernel::fence_compiler();
         const std::uint32_t zid = zone_id;
-        static_assert(!(is_reader_thread(RUN_TYPE) && is_measured_thread(RUN_TYPE)), "the measured thread must not read its own zone");
         static_assert(
             exit_barrier_for(RUN_TYPE) || is_single_thread_runtype(RUN_TYPE),
             "a run type that skips the exit barrier needs a measured thread in is_measured_thread() to freeze the counters");
@@ -654,6 +560,7 @@ struct perf_counter_scoped
         {
             if constexpr (is_measured_thread(RUN_TYPE))
             {
+                // Every launch: STOP to counters that never started changes nothing.
                 freeze_zone(zid);
             }
         }
@@ -664,7 +571,10 @@ struct perf_counter_scoped
                 [zid]
                 {
                     freeze_all_counters();
-                    read_all_counters(zid);
+                    if (counts(zid))
+                    {
+                        read_all_counters(zid);
+                    }
                 });
         }
         ckernel::fence_compiler();
@@ -690,7 +600,7 @@ inline void read_last_zone()
 #define MEASURE_PERF_COUNTERS(zone_name)
 #endif
 
-// One measured scope: NC activates timing only, WC both. Without the profiler there is no zone to open.
+// One measured scope: the zone's timing and its counter window. Without the profiler there is no zone to open.
 #if defined(LLK_PROFILER)
 #define START_PERF_MEASURE(zone_name) \
     MEASURE_PERF_COUNTERS(zone_name)  \

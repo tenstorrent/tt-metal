@@ -48,6 +48,8 @@ from .test_schemas import PERF_TEST_SCHEMAS, PERF_TEST_SCHEMAS_QSR
 # TILE_LOOP mask in postprocess_tile_loop (no KeyError raised).
 INIT_MARKER = "INIT"
 TILE_LOOP_MARKER = "TILE_LOOP"
+# counters.h counted_zones: a bit per fixed zone id (ZONE_ID_INIT 0, ZONE_ID_TILE_LOOP 1)
+COUNT_INIT, COUNT_TILE_LOOP = 1 << 0, 1 << 1
 
 
 def read_perf_zone_names_from_elf(elf_dir: Path) -> list[str] | None:
@@ -975,6 +977,19 @@ class PerfConfig(TestConfig):
                 f"zone handshakes."
             )
 
+    def _read_counters_of_launch(self, variant_counter_results, run_index):
+        try:
+            counter_results = read_counters(
+                location=TestConfig.TENSIX_LOCATION,
+                zones=self.counted_zones,
+                token=self.launch_token,
+            )
+            if counter_results is not None and not counter_results.empty:
+                counter_results["run_index"] = run_index
+                variant_counter_results.append(counter_results)
+        except Exception as e:
+            logger.warning("Error reading counters: {}", e)
+
     def run(self, perf_report: PerfReport, run_count=1):
         if not self.run_configs:
             pytest.skip("LLK_PERF_RUN_TYPES selects none of this test's run types")
@@ -1033,6 +1048,10 @@ class PerfConfig(TestConfig):
 
             variant_raw_data = []
             variant_counter_results = []
+            # The measured launches count TILE_LOOP only: INIT's readout would sit between INIT and TILE_LOOP.
+            self.counted_zones = (
+                COUNT_TILE_LOOP if TestConfig.ENABLE_PERF_COUNTERS else 0
+            )
             for run_index in range(run_count):
                 self.write_runtimes_to_L1()
                 self.run_elf_files()
@@ -1047,19 +1066,21 @@ class PerfConfig(TestConfig):
                 assert_zones_dont_overlap(profiler_data)
 
                 if TestConfig.ENABLE_PERF_COUNTERS:
-                    try:
-                        counter_results = read_counters(
-                            location=TestConfig.TENSIX_LOCATION
-                        )
-                        if counter_results is not None and not counter_results.empty:
-                            counter_results["run_index"] = run_index
-                            variant_counter_results.append(counter_results)
-                    except Exception as e:
-                        logger.warning("Error reading counters: {}", e)
+                    self._read_counters_of_launch(variant_counter_results, run_index)
 
                 # Tag profiler data with run index for proper L1-to-L1 pairing
                 profiler_data.df["run_index"] = run_index
                 variant_raw_data.append(profiler_data)
+
+            if TestConfig.ENABLE_PERF_COUNTERS:
+                # INIT counts in launches of its own, the same code up to INIT's end; their timing is not used.
+                self.counted_zones = COUNT_INIT
+                for run_index in range(run_count):
+                    self.write_runtimes_to_L1()
+                    self.run_elf_files()
+                    self.wait_for_tensix_operations_finished()
+                    self._read_counters_of_launch(variant_counter_results, run_index)
+            self.counted_zones = 0
 
             get_stats = Profiler.STATS_FUNCTION[run_type]
             stats_df = get_stats(ProfilerData.concat(variant_raw_data))

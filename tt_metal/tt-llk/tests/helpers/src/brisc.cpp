@@ -130,7 +130,7 @@ int main()
 
                 device_setup();
 
-                // Configure + arm counters before releasing TRISCs (no-op in NC builds).
+                // Configure + arm counters before releasing TRISCs (only when the launch counts a zone).
                 llk_perf::configure_and_arm_from_brisc();
 
                 clear_trisc_soft_reset();
