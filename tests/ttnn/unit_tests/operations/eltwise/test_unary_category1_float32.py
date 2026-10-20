@@ -1074,7 +1074,6 @@ def test_lgamma_poles(device):
 
 
 def test_lgamma_large_negative(device):
-    """Every float32 at or below -2^24 is a negative integer (a pole), so lgamma is +inf down to -FLT_MAX."""
     exponents = torch.arange(24 + 127, 255, dtype=torch.int32)
     mantissas = torch.tensor([0, 1, 0x2AAAAA, 0x400000, 0x7FFFFF], dtype=torch.int32)
     magnitudes = ((exponents[:, None] << 23) | mantissas[None, :]).flatten().view(torch.float32)
