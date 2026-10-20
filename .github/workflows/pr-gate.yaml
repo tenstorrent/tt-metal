@@ -649,6 +649,38 @@ jobs:
         with:
           pytest-markers: "quasar and not perf"
 
+  # LLK perf no counter code (compile-only, no hardware needed): counters off must compile no counter code
+  llk-perf-no-counter-code:
+    needs: [resolve-docker-pull-refs, build-docker-images, find-changed-files]
+    if: ${{
+        github.event.action != 'destroyed' &&
+        (github.event_name != 'pull_request' || !github.event.pull_request.draft) &&
+        (github.ref_name == 'main' ||
+         needs.find-changed-files.outputs.llk-wormhole-changed == 'true' ||
+         needs.find-changed-files.outputs.llk-blackhole-changed == 'true' ||
+         needs.find-changed-files.outputs.llk-quasar-changed == 'true' ||
+         needs.find-changed-files.outputs.llk-common-changed == 'true' ||
+         needs.find-changed-files.outputs.llk-sfpi-changed == 'true' ||
+         needs.find-changed-files.outputs.llk-tests-changed == 'true' ||
+         needs.find-changed-files.outputs.llk-perf-changed == 'true' ||
+         needs.find-changed-files.outputs.llk-ci-changed == 'true')
+      }}
+    strategy:
+      fail-fast: false
+      matrix:
+        chip-arch: [wormhole, blackhole, quasar]
+    name: llk-perf-no-counter-code (${{ matrix.chip-arch }})
+    runs-on: tt-ubuntu-2204-xlarge-stable
+    timeout-minutes: 30
+    container:
+      image: ${{ needs.resolve-docker-pull-refs.outputs.llk-ci-docker-image }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+      - uses: ./.github/actions/llk-perf-no-counter-code
+        with:
+          chip-arch: ${{ matrix.chip-arch }}
+
   # GitHub has so many design limitations it's not even funny.
   # This job is purely so we can capture the essence of the workflow as a whole in our status checks.
   workflow-status:
@@ -673,6 +705,7 @@ jobs:
       - build-docs
       - llk-smoke-tests
       - llk-build-quasar
+      - llk-perf-no-counter-code
       - verify-time-budgets
     runs-on: ubuntu-slim
     steps:
@@ -690,6 +723,6 @@ jobs:
             asan-build, code-analysis,
             runtime-smoke-tests, ttnn-smoke-tests, runtime-examples, ttnn-examples,
             model-charts-sync, build-docs,
-            llk-smoke-tests, llk-build-quasar
+            llk-smoke-tests, llk-build-quasar, llk-perf-no-counter-code
         env:
           NEEDS_CONTEXT: "${{ toJSON(needs) }}"
