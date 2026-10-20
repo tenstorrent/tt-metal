@@ -47,11 +47,17 @@ def logical_length_tensor(mesh_device: ttnn.MeshDevice, value: int) -> ttnn.Tens
         layout=ttnn.Layout.ROW_MAJOR,
         mesh_axes=[..., None, None],
     )
+
+
 _MODE_LINE = "RingJointSDPA sol mode resolved: "
 
 # Default geometry: small enough to run every parameter in one sitting, large enough that a K chunk holds
 # TK = k_chunk / 64 = 8 routing blocks, which is the ratio that makes the sparse path interesting at all.
 ROWS, LOGICAL_N, Q_CHUNK, K_CHUNK = 1024, 8192, 256, 512
+# Q1 compute unit = the 64-token query block. Q2's staging CBs (~256 KB) only fit L1 at this size: measured
+# 2026-10-20, packing at q_chunk=256 overflows by 105 KB (1,680,896 B vs 1,572,864 B). Dropping Sq from 8 to 2
+# tiles shrinks every Sq-dependent CB 4x, freeing ~222 tiles. Q2 therefore REQUIRES Q1 -- they ship together.
+Q1_CHUNK = 64
 H, D = 14, 128
 SLOW = pytest.mark.skipif(os.environ.get("SOL_COMPACT_FULL") != "1", reason="set SOL_COMPACT_FULL=1")
 
@@ -64,7 +70,16 @@ class Result:
     modes_logged: set  # what the program factory said it compiled
 
 
-def _pcc(a, b):
+def _pcc(a, b, logical_n=None):
+    """PCC over the LOGICAL rows only.
+
+    Rows at or beyond logical_n are padding: the op leaves them undefined, and dense and sparse leave different
+    garbage there. Comparing them made test_ragged_logical_n and test_small_k_chunk read 0.84 when the real
+    sequence agreed closely -- at rows=1184 on 8 shards the padded extent is 9472, so a default logical_n of
+    8192 makes 13.5 % of the compared rows meaningless.
+    """
+    if logical_n is not None:
+        a, b = a[:, :logical_n], b[:, :logical_n]
     a, b = a.flatten().float(), b.flatten().float()
     return torch.corrcoef(torch.stack([a, b]))[0, 1].item()
 
@@ -251,12 +266,21 @@ def test_determinism(mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp
 def test_density_falls_as_tau_rises(
     mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, mode, reset_seeds, capfd
 ):
-    """tau is the sparsity knob; if it stops biting, every perf number taken with it is meaningless."""
+    """tau is the sparsity knob; if it stops biting, every perf number taken with it is meaningless.
+
+    Non-increasing, not strictly decreasing. Measured 2026-10-20: tau 0.5 and 1.0 give identical density
+    (0.5835 gather/compact) because the forcing rules -- band, sink columns, dense-prefix rows, forced block 0 --
+    keep a floor of blocks no threshold can drop, and low tau sits on that floor. Chunk mode is flat across the
+    whole range (0.8086) because its density is CHUNK occupancy: a chunk survives if any of its 8 blocks does,
+    which saturates long before the block mask does. The wide end of the range is where tau has to bite.
+    """
     d = [
         _run(mesh_device, sp_axis, num_links, topology, capfd, mode=mode, tau=t, want_dense=False).density
-        for t in (0.5, 1.0, 2.0)
+        for t in (0.5, 2.0, 4.0)
     ]
-    assert d[0] > d[1] > d[2], f"densities {d} are not decreasing in tau"
+    logger.info(f"[tau] {mode}: densities {d}")
+    assert d[0] >= d[1] >= d[2] - 1e-9, f"densities {d} increase with tau"
+    assert d[0] > d[2], f"tau has no effect at all between 0.5 and 4.0: {d}"
 
 
 @GALAXY_RING
@@ -264,15 +288,20 @@ def test_density_falls_as_tau_rises(
 def test_ragged_logical_n(mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, mode, reset_seeds, capfd):
     """logical_n off a block boundary leaves a partial tail block, which the kernel must pool rather than compute."""
     r = _run(mesh_device, sp_axis, num_links, topology, capfd, mode=mode, tau=1.0, rows=1184, logical_n=9000)
-    assert _pcc(r.dense, r.sol) > 0.99
+    assert _pcc(r.dense, r.sol, logical_n=9000) > 0.99
 
 
 @GALAXY_RING
 @pytest.mark.parametrize("mode", MODES)
 def test_small_k_chunk(mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, mode, reset_seeds, capfd):
-    """k_chunk 256 gives TK = 4 blocks per chunk instead of 8, changing every kept-count in the plan."""
-    r = _run(mesh_device, sp_axis, num_links, topology, capfd, mode=mode, tau=1.0, rows=1184, k_chunk=256)
-    assert _pcc(r.dense, r.sol) > 0.99
+    """k_chunk 256 gives TK = 4 blocks per chunk instead of 8, changing every kept-count in the plan.
+
+    logical_n must match the padded extent (8 shards x 1184) or most of the tail is undefined padding.
+    """
+    r = _run(
+        mesh_device, sp_axis, num_links, topology, capfd, mode=mode, tau=1.0, rows=1184, logical_n=9472, k_chunk=256
+    )
+    assert _pcc(r.dense, r.sol, logical_n=9472) > 0.99
 
 
 @GALAXY_RING
@@ -337,13 +366,19 @@ def test_q2_packing_matches_unpacked(mesh_device, sp_axis, tp_axis, num_links, t
     program is created with packing on -- unlike the reader's, where sol_pack is a plain constexpr bool and the
     discarded branch is still checked.
     """
+    kw = dict(mode="compact", tau=1.0, want_dense=False, q_chunk=Q1_CHUNK)
     prev = _pack_env(False)
     try:
-        base = _run(mesh_device, sp_axis, num_links, topology, capfd, mode="compact", tau=1.0, want_dense=False)
+        base = _run(mesh_device, sp_axis, num_links, topology, capfd, **kw)
+        # TT_SOL_PACK is read in the program factory, which a cache hit never calls: without this the second
+        # run silently reuses the pack-off program and the comparison is vacuous. That is exactly what happened
+        # on 2026-10-20 -- this test passed while every other packed test OOM'd at the same geometry.
+        mesh_device.disable_and_clear_program_cache()
         _pack_env(True)
-        packed = _run(mesh_device, sp_axis, num_links, topology, capfd, mode="compact", tau=1.0, want_dense=False)
+        packed = _run(mesh_device, sp_axis, num_links, topology, capfd, **kw)
     finally:
         _pack_env_restore(prev)
+        mesh_device.disable_and_clear_program_cache()
     logger.info(f"[q2] density {base.density:.4f}; pcc(packed, unpacked) {_pcc(base.sol, packed.sol):.6f}")
     assert base.density == packed.density, "packing changed the mask; it must only change delivery"
     assert _pcc(base.sol, packed.sol) > 0.9999
@@ -360,9 +395,11 @@ def test_q2_packing_across_densities(
     """
     prev = _pack_env(True)
     try:
-        r = _run(mesh_device, sp_axis, num_links, topology, capfd, mode="compact", tau=tau)
+        mesh_device.disable_and_clear_program_cache()
+        r = _run(mesh_device, sp_axis, num_links, topology, capfd, mode="compact", tau=tau, q_chunk=Q1_CHUNK)
     finally:
         _pack_env_restore(prev)
+        mesh_device.disable_and_clear_program_cache()
     logger.info(f"[q2] tau={tau} density {r.density:.4f} pcc vs dense {_pcc(r.dense, r.sol):.5f}")
     assert _pcc(r.dense, r.sol) > 0.99
 
@@ -377,9 +414,11 @@ def test_q2_zero_kept_iteration(mesh_device, sp_axis, tp_axis, num_links, topolo
     """
     prev = _pack_env(True)
     try:
-        r = _run(mesh_device, sp_axis, num_links, topology, capfd, mode="compact", tau=6.0)
+        mesh_device.disable_and_clear_program_cache()
+        r = _run(mesh_device, sp_axis, num_links, topology, capfd, mode="compact", tau=6.0, q_chunk=Q1_CHUNK)
     finally:
         _pack_env_restore(prev)
+        mesh_device.disable_and_clear_program_cache()
     logger.info(f"[q2] tau=6 density {r.density:.4f} pcc vs dense {_pcc(r.dense, r.sol):.5f}")
     assert torch.isfinite(r.sol).all(), "non-finite output: the pooled correction did not carry a near-empty mask"
 
