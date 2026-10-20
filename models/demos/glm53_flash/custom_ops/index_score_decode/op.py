@@ -35,17 +35,32 @@ class IndexScoreDecode:
         s = torch.relu(torch.einsum("bhd,bpd->bhp", q.float(), k.float()))
         return torch.einsum("bhp,bh->bp", s, w.float())
 
-    def __call__(self, q: ttnn.Tensor, w: ttnn.Tensor, pools: ttnn.Tensor, out: ttnn.Tensor) -> ttnn.Tensor:
+    def __call__(
+        self,
+        q: ttnn.Tensor,
+        w: ttnn.Tensor,
+        pools: ttnn.Tensor,
+        out: ttnn.Tensor,
+        valid_rows: ttnn.Tensor | None = None,
+        segments: int = 1,
+    ) -> ttnn.Tensor:
         """q [1, B, 32, D] bf16 TILE (user b's 32 index heads as rows); w [1, 1, B, 32] bf16 TILE (B <= 32 per tile
-        row, the head weights with the n_heads^-0.5 folded); pools [slots, 1, W, D] bf16 TILE (the pooled-key cache
-        view, slots >= B, user b = slot b, W % (32*KC) == 0); out [B, 1, 1, W] bf16 ROW_MAJOR, pre-allocated. Returns
-        ``out``."""
+        row, the head weights with the n_heads^-0.5 folded); pools [slots, 1, W, D] bf16 / bfp8_b TILE (the pooled-key
+        cache view, slots >= B, user b = slot b, W % (32*KC) == 0); out bf16 ROW_MAJOR, pre-allocated: [B, 1, 1, W], or
+        [B*segments, 1, 1, W/segments] with ``segments`` > 1 (the two-stage top-k's per-segment rows; W/segments %
+        (32*KC) == 0). ``valid_rows`` [B, 1] uint32 (the per-user bound in pools): columns at and beyond it are written
+        as -inf, so the top-k needs no per-row bound. Returns ``out``."""
         B, Hi, D = q.shape[1], q.shape[2], q.shape[3]
         W = pools.shape[2]
         assert list(q.shape) == [1, B, TILE, D] and Hi == TILE, q.shape
         assert list(w.shape) == [1, 1, B, TILE], w.shape
         assert list(pools.shape)[1:] == [1, W, D] and pools.shape[0] >= B, (pools.shape, B)
-        assert list(out.shape) == [B, 1, 1, W], out.shape
+        assert segments >= 1 and W % segments == 0, (W, segments)
+        seg_cols = W // segments
+        assert list(out.shape) == [B * segments, 1, 1, seg_cols], (out.shape, B, segments, seg_cols)
+        v2 = valid_rows is not None or segments > 1
+        if valid_rows is not None:
+            assert list(valid_rows.shape) == [B, 1] and valid_rows.dtype == ttnn.uint32, valid_rows.shape
         for t, lay, dt in (
             (q, ttnn.TILE_LAYOUT, ttnn.bfloat16),
             (w, ttnn.TILE_LAYOUT, ttnn.bfloat16),
@@ -56,7 +71,7 @@ class IndexScoreDecode:
             pools.layout,
             pools.dtype,
         )
-        assert D % TILE == 0 and W % (TILE * self.KC) == 0, (D, W, self.KC)
+        assert D % TILE == 0 and seg_cols % (TILE * self.KC) == 0, (D, W, segments, self.KC)
         Dt, KC = D // TILE, self.KC
         Tt = W // TILE
         total_chunks = Tt // KC
@@ -69,7 +84,7 @@ class IndexScoreDecode:
         cores = [ttnn.CoreCoord(c // self.grid_y, c % self.grid_y) for c in range(n_cores)]
         core_set = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in cores])
         out_row_bytes = out.buffer_page_size()
-        assert out_row_bytes == W * 2, (out_row_bytes, W)
+        assert out_row_bytes == seg_cols * 2, (out_row_bytes, seg_cols)
         tile_bytes = 2048
         k_tile_bytes = pools.buffer_page_size()  # 2048 bf16 / 1088 bfp8_b
         assert pools.buffer_aligned_page_size() == k_tile_bytes, (k_tile_bytes, pools.buffer_aligned_page_size())
@@ -89,11 +104,15 @@ class IndexScoreDecode:
             cb(4, tile_bytes, 2 * KC),  # out tiles (row 0 valid), double-buffered
             cb(5, 64 * KC, 2),  # writer lines (scratch)
             cb(6, 1024, 1),  # the w row's two faces (reader scratch)
+            cb(7, 64, 1),  # the user's bound page (writer v2 scratch)
         ]
         acc = lambda t: ttnn.TensorAccessorArgs(t).get_compile_time_args()
         reader_ct = [Dt, KC, Tt, k_tile_bytes] + acc(q) + acc(pools) + acc(w)
         compute_ct = [Dt, KC]
         writer_ct = [KC] + acc(out)
+        if v2:
+            vt = valid_rows if valid_rows is not None else out  # placeholder accessor when unmasked
+            writer_ct += [seg_cols, segments] + acc(vt)
         reader_rt, compute_rt, writer_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
         for c, core in enumerate(cores):
             n_items = (items - c + n_cores - 1) // n_cores
@@ -118,7 +137,14 @@ class IndexScoreDecode:
                 n_bands,
                 band_chunks,
                 total_chunks,
-            ]
+            ] + (
+                [
+                    valid_rows.buffer_address() if valid_rows is not None else 0,
+                    valid_rows.buffer_aligned_page_size() if valid_rows is not None else 64,
+                ]
+                if v2
+                else []
+            )
         kernels = [
             ttnn.KernelDescriptor(
                 kernel_source=str(KERNELS / "reader_index_score_decode.cpp"),
@@ -137,7 +163,9 @@ class IndexScoreDecode:
                 ),
             ),
             ttnn.KernelDescriptor(
-                kernel_source=str(KERNELS / "writer_index_score_decode.cpp"),
+                kernel_source=str(
+                    KERNELS / ("writer_index_score_decode_v2.cpp" if v2 else "writer_index_score_decode.cpp")
+                ),
                 core_ranges=core_set,
                 compile_time_args=writer_ct,
                 runtime_args=writer_rt,
@@ -145,4 +173,4 @@ class IndexScoreDecode:
             ),
         ]
         program = ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs)
-        return ttnn.generic_op([q, w, pools, out], program)
+        return ttnn.generic_op([q, w, pools, out] + ([valid_rows] if valid_rows is not None else []), program)

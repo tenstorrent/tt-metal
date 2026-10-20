@@ -294,11 +294,25 @@ read (1.4 / 0.7 ms at 359 GB/s), the top-k (1.26 ms per call, serial per row on 
 is a knob (default bf16): the selected sets move by ~4 % vs bf16 on random keys while the layer output vs HF is
 unchanged; the real-prompt accuracy gate (eval set) decides it, as for the experts.
 
+### 4.7 The pool-list blend folded into the gather (`paged_pool_gather` takes the top-k output + the tail pool)
+
+`PagedPoolGather(cache, page_table, top_ids [B,1,1,512], tail_pool [B,1,1,1], out)`: the slot -> pool mapping
+(the ranked pools; the pools in order for a dense user, `n < 512`; the tail pool at slot 512) is done in the
+kernel, so the 5 blend ops (concat, typecast, multiply, add, typecast) and the host `keep` / `dense_term`
+tensors are gone; `SparseDecodeMeta` carries `valid_len_rows`, `tail_pool`, `cur_pos` (+ the per-user
+`valid_len` list for the eager fallback). Main build, `sparse1m_fold_{gather,traced,1m,perf}.log`: the op bit-exact vs
+its golden (B 1/4/32, K 512/16, sentinels, out-of-range, dense and sparse users, trace replay); the decode path
+unchanged in PCC (two-user worst 0.999598; 1 M 0.999782 / 0.999796); DSA block **45 / 48 / 48 device ops** at
+1 / 4 / 8 users (was 52 / 55 / 55); attention step at 1 M 2.73 / 3.42 / 4.28 ms. The whole-layer sweep in that run
+(8.24 / 10.62 / 13.27 ms at 1 M, 7.12 ms at 4 K for 1 user) came out 1.1-1.5 ms ABOVE the previous run at every
+point including 4 K, against a faster traced attention step: host load during that sweep (other agents' jobs);
+to be re-measured.
+
 ## 5. What remains
 
-1. Done: `custom_ops/index_score_decode` (section 4.6) and the bfp8 pool-cache knob. Next on the scorer: the
-   1-user latency (0.49 ms for 64 MiB: fewer, longer bands), multi-core top-k rows (1.26 ms per call), and
-   folding the metadata blend + tail into the gather kernel.
+1. Done: `custom_ops/index_score_decode` (section 4.6), the bfp8 pool-cache knob, and the metadata blend + tail
+   folded into the gather kernel (section 4.7). Next: multi-core top-k rows (section 4.8, `GLM53_TOPK_SEGMENTS`),
+   the 1-user scorer latency (0.49 ms for 64 MiB: fewer, longer bands).
 2. The op count: 4 ops per user (slice q, slice w, score, row slice) + ~45 fixed; the batched scorer removes
    the per-user part; the metadata blend (5 ops) can fold into the gather kernel (dense users = pools in order,
    tail slot) once it takes the positions tensor. A multi-core top-k row (the 512-window chain is serial on one

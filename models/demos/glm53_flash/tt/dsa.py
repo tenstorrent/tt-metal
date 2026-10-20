@@ -172,11 +172,12 @@ class SparseDecodeMeta:
 
     * ``valid_len[u]`` [1] uint32: the top-k's search width in pools, ``max(n, K)``: a sparse user ranks its
       ``n >= K`` complete pools only (the incomplete pool ``n`` and the stale rows beyond are never looked
-      at); a dense user (``n < K``) gets a throw-away top-k over ``K`` columns that ``keep`` discards.
+      at); a dense user (``n < K``) gets a throw-away top-k over ``K`` columns that the gather ignores (it lists the
+      user's pools in order).
     * ``tail_pool`` [B,1,1,1] uint32: ``n``, the user's incomplete pool, gathered into compact slot ``K``.
-    * ``keep`` / ``dense_term`` [B,1,1,K+1] fp32: the compact pool list is ``keep * [top-K ids | n] +
-      dense_term`` = the ranked pools for a sparse user (keep 1, dense_term 0) and the pools ``0 .. K`` in
-      order for a dense user (keep 0, dense_term = iota), whose tail pool ``n`` then lands at slot ``n``.
+    * (the compact pool list itself is built by the gather kernel from the ranked ids and ``tail_pool``: the
+      ranked pools for a sparse user, the pools ``0 .. K-1`` in order for a dense user (``n < K``, whose tail
+      pool ``n`` then sits at slot ``n``), the tail pool at slot ``K``)
     * ``cur_pos`` [B] int32: the last attended row of the compact cache for the flash-MLA decode: ``a`` for a
       dense user (rows 0..a = tokens 0..a, exact dense attention) and ``P*K - 1 + t`` for a sparse user (the
       2048 selected tokens then the ``t`` tail tokens; the tail slot's other rows and the padding are hidden).
@@ -185,8 +186,6 @@ class SparseDecodeMeta:
 
     valid_len: list[ttnn.Tensor]
     tail_pool: ttnn.Tensor
-    keep: ttnn.Tensor
-    dense_term: ttnn.Tensor
     cur_pos: ttnn.Tensor
     host: list[int]
     users_per_chip: int
@@ -196,27 +195,19 @@ class SparseDecodeMeta:
 
     @staticmethod
     def host_values(positions: list[int], cfg: GLM53FlashConfig):
-        """(valid [B], tail [B], keep [B, K+1], dense_term [B, K+1], cur_pos [B]) as host tensors."""
+        """(valid [B], tail [B,1,1,1], cur_pos [B]) as host tensors."""
         P, K = cfg.index_kpool, cfg.index_select_pools
         B = len(positions)
         valid, tail, cur = [], [], []
-        keep = torch.ones(B, K + 1, dtype=torch.float32)
-        dense_term = torch.zeros(B, K + 1, dtype=torch.float32)
-        iota = torch.arange(K + 1, dtype=torch.float32)
         for u, a in enumerate(positions):
             n, t = (a + 1) // P, (a + 1) % P
             dense = n < K
             valid.append(max(n, K))
             tail.append(n)
             cur.append(a if dense else P * K - 1 + t)
-            if dense:
-                keep[u] = 0.0
-                dense_term[u] = iota
         return (
             torch.tensor(valid, dtype=torch.int64),
             torch.tensor(tail, dtype=torch.int64).reshape(B, 1, 1, 1),
-            keep.reshape(B, 1, 1, K + 1),
-            dense_term.reshape(B, 1, 1, K + 1),
             torch.tensor(cur, dtype=torch.int32),
         )
 
@@ -235,7 +226,7 @@ class SparseDecodeMeta:
         user-partitioned cache (``partition``) chip (r, c) owns users ``[c*B/cols, (c+1)*B/cols)`` of row r)."""
         R, C = cls._chips(mesh, partition)
         B = len(positions) // (R * C)
-        valid, tail, keep, dense_term, cur = cls.host_values(positions, cfg)
+        valid, tail, cur = cls.host_values(positions, cfg)
         # per local user u: a [R, C] tensor (chip (r, c)'s user u), sharded to one element per chip
         vl = valid.reshape(R, C, B)
         valid_t = [
@@ -251,8 +242,6 @@ class SparseDecodeMeta:
         return cls(
             valid_len=valid_t,
             tail_pool=_meta_upload(device, tail, ttnn.uint32, mesh, partition),
-            keep=_meta_upload(device, keep, ttnn.float32, mesh, partition),
-            dense_term=_meta_upload(device, dense_term, ttnn.float32, mesh, partition),
             cur_pos=_meta_upload(device, cur, ttnn.int32, mesh, partition),
             host=list(positions),
             users_per_chip=B,
@@ -264,7 +253,7 @@ class SparseDecodeMeta:
         R, C = self._chips(mesh, partition)
         B = self.users_per_chip
         assert len(positions) == R * C * B, (len(positions), R, C, B)
-        valid, tail, keep, dense_term, cur = self.host_values(positions, cfg)
+        valid, tail, cur = self.host_values(positions, cfg)
         mapper = _meta_mapper(mesh, partition)
         vmapper = mesh.shard_2d(0, 1 if C > 1 else None) if mesh is not None and (R > 1 or C > 1) else None
 
@@ -284,8 +273,6 @@ class SparseDecodeMeta:
         put(tail, ttnn.uint32, self.tail_pool)
         if self.valid_len_rows is not None:
             put(valid.reshape(-1, 1).contiguous(), ttnn.uint32, self.valid_len_rows)
-        put(keep, ttnn.float32, self.keep)
-        put(dense_term, ttnn.float32, self.dense_term)
         put(cur, ttnn.int32, self.cur_pos)
         self.host = list(positions)
 
@@ -1092,6 +1079,38 @@ class TtDSA(LightweightModule):
             q4 = ttnn.transpose(q_i, 1, 2)  # [1,B,Hi,D]
             ttnn.deallocate(q_i)
             W = cache.index.pools_per_user
+            # GLM53_TOPK_SEGMENTS=1: the scorer masks the columns beyond each user's bound (-inf) and writes S segment
+            # rows per user; the top-k runs in two stages (S cores per user, then the S*512 candidates) instead of one
+            # serial row per core (1.26 ms at 262 K pools)
+            S = self.topk_rows.segments_for(W) if os.environ.get("GLM53_TOPK_SEGMENTS", "0") == "1" else 1
+            if B not in self._top_buf:
+                self._top_buf[B] = ttnn.zeros(
+                    (B, 1, 1, K), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device
+                )
+            if S > 1:
+                key = (B, S)
+                if key not in self._score_buf:
+                    self._score_buf[key] = (
+                        ttnn.zeros(
+                            (B * S, 1, 1, W // S), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device
+                        ),
+                        ttnn.zeros(
+                            (B, 1, 1, S * K), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device
+                        ),
+                        ttnn.zeros(
+                            (B, 1, 1, S * K), dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device
+                        ),
+                    )
+                seg_buf, ids1, vals1 = self._score_buf[key]
+                self.index_scorer(
+                    q4, w_i, cache.index.pools_batched(), seg_buf, valid_rows=meta.valid_len_rows, segments=S
+                )
+                ttnn.deallocate(q4)
+                ttnn.deallocate(w_i)
+                self._mark("index_score")
+                top = self.topk_rows.segmented(seg_buf, S, ids1, vals1, self._top_buf[B])  # [B,1,1,K] uint32
+                self._mark("topk")
+                return self._gather_and_attend(top, q_lat, cache, meta, B, P, out_persistent=True)
             if B not in self._score_buf:
                 self._score_buf[B] = ttnn.zeros(
                     (B, 1, 1, W), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device
@@ -1100,10 +1119,6 @@ class TtDSA(LightweightModule):
             ttnn.deallocate(q4)
             ttnn.deallocate(w_i)
             self._mark("index_score")
-            if B not in self._top_buf:
-                self._top_buf[B] = ttnn.zeros(
-                    (B, 1, 1, K), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device
-                )
             top = self.topk_rows(rows, meta.valid_len_rows, self._top_buf[B])  # [B,1,1,K] uint32, per-row bounds
             self._mark("topk")
             return self._gather_and_attend(top, q_lat, cache, meta, B, P, out_persistent=True)
@@ -1159,29 +1174,19 @@ class TtDSA(LightweightModule):
         """The batched tail of ``_decode_unified``: complete the ranked pool lists with the tail pool and the dense
         users' in-order lists, gather the pools into the compact cache, attend. ``top`` [B,1,1,K] uint32
         (``out_persistent``: a persistent generic-op output, not deallocated)."""
-        ext = ttnn.concat([top, meta.tail_pool], dim=-1)  # [B,1,1,K+1] uint32: ranked pools | tail pool
-        if not out_persistent:
-            ttnn.deallocate(top)
-        ext_f = ttnn.typecast(ext, ttnn.float32)  # exact: pool ids < 2^24
-        ttnn.deallocate(ext)
-        ids_f = ttnn.multiply(ext_f, meta.keep)
-        ttnn.deallocate(ext_f)
-        ids_f2 = ttnn.add(ids_f, meta.dense_term)  # dense users: pools 0..K in order
-        ttnn.deallocate(ids_f)
-        ids = ttnn.typecast(ids_f2, ttnn.uint32)
-        ttnn.deallocate(ids_f2)
-        self._mark("ids")
+        # the slot -> pool mapping (ranked pools, dense users' pools in order, the tail pool) is done by the gather
         if (
             B not in self._compact
         ):  # persistent output of the gather (the generic op's io tensors keep their addresses under trace)
             self._compact[B] = ttnn.zeros(
-                self.pool_gather.output_shape(ids, self.L),
+                self.pool_gather.output_shape(top, self.L),
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
                 device=self.device,
             )
-        compact = self.pool_gather(cache.cache, cache.page_table, ids, self._compact[B])
-        ttnn.deallocate(ids)
+        compact = self.pool_gather(cache.cache, cache.page_table, top, meta.tail_pool, self._compact[B])
+        if not out_persistent:
+            ttnn.deallocate(top)
         out_blocks = compact.shape[0] // B
         self._mark("pool_gather")
         q_dec = ttnn.transpose(q_lat, 1, 2)  # [1,B,H,L]
