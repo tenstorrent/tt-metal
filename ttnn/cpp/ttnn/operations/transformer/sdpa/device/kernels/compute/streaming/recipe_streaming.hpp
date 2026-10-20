@@ -1630,7 +1630,9 @@ static SDPA_RECIPE_COLD bool sdpa_inner_loop_step(
         q_wait_tiles += q_subblock_num_tiles;
     }
 
-    {
+    // Latent V aliasing K (cb_v_in == cb_kt_in) keeps the K chunk until its PV is done.
+    constexpr bool v_from_k = cb_v_in == cb_kt_in;
+    if constexpr (!v_from_k) {
         CircularBuffer(cb_kt_in).pop_front(DHt * KT_stride);
     }
 
@@ -1894,11 +1896,15 @@ static SDPA_RECIPE_COLD bool sdpa_inner_loop_step(
                         // narrower logical width. Keep unpack init on the physical stride; inner_dim below
                         // still limits how many V rows are multiplied.
                         recipe_mm_reinit(cb_qkt_im, cb_v_in, false, qktv_subblock_w, first_h, KT_stride);
+                        if constexpr (v_from_k) {
+                            matmul_set_in1_column_stride(cb_kt_in, KT_stride);
+                        }
                         configure_row_pack_width(out_cb, qktv_subblock_w);
                         for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
                             const uint32_t pv_inner_offset = kt_sub * matmul_inner;
-                            const uint32_t qktv_in1_index = pv_inner_offset * vDHt + v_index_offset;
-                            blocked_matmul_and_pack<false, vDHt, vDHt>(
+                            const uint32_t qktv_in1_index = v_from_k ? v_index_offset * KT_stride + pv_inner_offset
+                                                                     : pv_inner_offset * vDHt + v_index_offset;
+                            blocked_matmul_and_pack<false, v_from_k ? 1 : vDHt, vDHt>(
                                 cb_qkt_im,
                                 cb_v_in,
                                 out_cb,
@@ -1927,6 +1933,9 @@ static SDPA_RECIPE_COLD bool sdpa_inner_loop_step(
                             })
 #endif
                             v_index_offset += qktv_subblock_w;
+                        }
+                        if constexpr (v_from_k) {
+                            matmul_set_in1_column_stride(cb_kt_in, 1);
                         }
                         sdpa_maybe_reconfig_data_format<cb_v_in, cb_qkt_im, cb_qkt_im, cb_qkt_im>();
                     }
@@ -2125,11 +2134,14 @@ static SDPA_RECIPE_COLD bool sdpa_inner_loop_step(
                 // See the q_subblock-0 V matmul above: active_Sk can be narrower than the physical
                 // cb_qkt_im row stride, but the unpacker is configured for the physical layout.
                 recipe_mm_reinit(cb_qkt_im, cb_v_in, false, qktv_subblock_w, cur_h, KT_stride);
+                if constexpr (v_from_k) {
+                    matmul_set_in1_column_stride(cb_kt_in, KT_stride);
+                }
                 // Configure once before v_subblock loop; skip inside.
                 configure_row_pack_width(out_cb, qktv_subblock_w);
                 for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
-                    const uint32_t qktv_in1_index = v_index_offset;
-                    blocked_matmul_and_pack<false, vDHt, vDHt>(
+                    const uint32_t qktv_in1_index = v_from_k ? v_index_offset * KT_stride : v_index_offset;
+                    blocked_matmul_and_pack<false, v_from_k ? 1 : vDHt, vDHt>(
                         cb_qkt_im,
                         cb_v_in,
                         out_cb,
@@ -2147,6 +2159,9 @@ static SDPA_RECIPE_COLD bool sdpa_inner_loop_step(
                         KT_stride,
                         /*skip_pack_configure=*/true RECIPE_WH_PV_L1_ACC(inplace_numerator));
                     v_index_offset += qktv_subblock_w;
+                }
+                if constexpr (v_from_k) {
+                    matmul_set_in1_column_stride(cb_kt_in, 1);
                 }
                 sdpa_maybe_reconfig_data_format<cb_v_in, cb_qkt_im, cb_qkt_im, cb_qkt_im>();
 #ifndef SDPA_RECIPE_FP32
@@ -2265,7 +2280,11 @@ static SDPA_RECIPE_COLD bool sdpa_inner_loop_step(
             }
         }
 
-        CircularBuffer(cb_v_in).pop_front(KT_stride * vDHt);
+        if constexpr (v_from_k) {
+            CircularBuffer(cb_kt_in).pop_front(DHt * KT_stride);
+        } else {
+            CircularBuffer(cb_v_in).pop_front(KT_stride * vDHt);
+        }
         CircularBuffer(cb_qkt_im).pop_front(Sq_chunk_t * KT_stride);
     }
     return false;

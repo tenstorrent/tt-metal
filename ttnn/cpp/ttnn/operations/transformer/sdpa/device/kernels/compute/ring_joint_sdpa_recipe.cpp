@@ -17,6 +17,11 @@
 #define LLK_ZEROFLAG_OUTLINE 1
 // The recipe headers key their ring hooks (valid-row key tail masking) on SDPA_RECIPE_RING.
 #define SDPA_RECIPE_RING 1
+// At most one Q chunk per core (host: max_q_per_core == 1): the state stays resident across ring steps, so the
+// streamed checkpoint code is compiled out.
+#ifdef SDPA_RECIPE_RING_SINGLE_Q
+#undef SDPA_RING_STREAM_STATE
+#endif
 
 // Optimization: unpack and pack at -O3, math at -O2. Even-row Q chunks (the host rounds a paired recipe's odd Q
 // chunk up) keep every recipe inside the kernel config buffer (70656 B at the default Blackhole worker L1).

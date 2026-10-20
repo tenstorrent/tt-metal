@@ -127,6 +127,8 @@ template <
 static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
     AccumulatorHalf& prev, AccumulatorHalf& cur, bool is_last_iter, bool release_q) {
     constexpr uint32_t KT = Sk_chunk_t;
+    // Latent V aliasing the K chunk (cb_v_in == cb_kt_in): PV reads V's tiles out of K in place.
+    constexpr bool v_from_k = cb_v_in == cb_kt_in;
     // Rows per group. Dense STANDARD (math-bound) runs a short Q chunk in one-row groups, so the lagged QK / check /
     // PV pipeline has enough groups to overlap. FAST is pack-bound and keeps two-row groups (one-row groups double
     // its per-group pack work), and so do the ring kernels and Wormhole STANDARD.
@@ -257,16 +259,10 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
             qk_setup_h = h;
         }
         tile_regs_acquire();
-        uint32_t in0_index = row0 * DHt;
-        uint32_t in1_index = col0;
-        for (uint32_t inner = 0; inner < DHt; ++inner) {
-            matmul_block_no_mop(cb_q_in, cb_kt_in, in0_index, in1_index, 0, true, sbw, h, DHt);
-            in0_index++;
-            in1_index += KT;
-        }
-        // - m_ref: M (row r's m in column 0) x (-e0 transposed: -1 in row 0). Both operands are exact in one
+        // - m_ref first: M (row r's m in column 0) x (-e0 transposed: -1 in row 0). Both operands are exact in one
         // fidelity phase (m_ref has 7 significant bits for srcB, -1 has one for srcA), so a HiFi build replays
-        // its image once here, and only its inner 0-15 half (the rest multiplies zeros).
+        // its image once here, and only its inner 0-15 half (the rest multiplies zeros). Seeding DEST with -m_ref
+        // keeps the BF16 DEST partial sums near s - m_ref instead of s (smaller rounding steps).
         UNPACK((llk_unpack_AB_matmul(prev.max, neg_unit_cb, row0, 0, sbw, h, 1)));
 #ifdef SDPA_RECIPE_LOFI
         // A LoFi image has no halves; this keeps FAST's matmul instantiations (and code size) as they were.
@@ -275,6 +271,13 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
         constexpr bool m_inner_half = true;
 #endif
         MATH((llk_math_matmul_no_mop<MATH_FIDELITY, MM_THROTTLE, 1, m_inner_half>(prev.max, neg_unit_cb, 0, sbw, h)));
+        uint32_t in0_index = row0 * DHt;
+        uint32_t in1_index = col0;
+        for (uint32_t inner = 0; inner < DHt; ++inner) {
+            matmul_block_no_mop(cb_q_in, cb_kt_in, in0_index, in1_index, 0, true, sbw, h, DHt);
+            in0_index++;
+            in1_index += KT;
+        }
         tile_regs_commit();
         tile_regs_wait();
 #if defined(SDPA_RECIPE_K_PRIMARY_ROWS) || defined(SDPA_RECIPE_RING)
@@ -412,16 +415,20 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
         CircularBuffer(cb_qkt_im).wait_front((row0 + h) * KT);
         set_srca(cb_v_in);
         recipe_mm_reinit(cb_qkt_im, cb_v_in, false, pv_w, h, KT);
+        if constexpr (v_from_k) {
+            // Latent V read in place from the K chunk: V tile (k, v) is K tile (k, v), stored at v * KT + k.
+            matmul_set_in1_column_stride(cb_kt_in, KT);
+        }
         set_pack(out_cb);
         PACK((llk_pack_reconfig_l1_acc(accumulate ? 1 : 0)));
         configure_row_pack_width(out_cb, pv_w);
         for (uint32_t v = 0; v < n_pv; ++v) {
-            blocked_matmul_and_pack<false, vDHt, vDHt>(
+            blocked_matmul_and_pack<false, v_from_k ? 1 : vDHt, vDHt>(
                 cb_qkt_im,
                 cb_v_in,
                 out_cb,
                 row0 * KT + k0,
-                k0 * vDHt + v * pv_w,
+                v_from_k ? v * pv_w * KT + k0 : k0 * vDHt + v * pv_w,
                 0,
                 v * pv_w + plane,
                 pv_w,
@@ -429,6 +436,9 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
                 k_len,
                 KT,
                 /*skip_pack_configure=*/true);
+        }
+        if constexpr (v_from_k) {
+            matmul_set_in1_column_stride(cb_kt_in, 1);
         }
         PACK((llk_pack_reconfig_l1_acc(0)));
     };
@@ -711,7 +721,9 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
     CircularBuffer(psum_cb).push_back(Sq_chunk_t * sbw);
     CircularBuffer(psum_cb).wait_front(Sq_chunk_t * sbw);
     CircularBuffer(psum_cb).pop_front(Sq_chunk_t * sbw);
-    CircularBuffer(cb_v_in).pop_front(KT * vDHt);
+    if constexpr (!v_from_k) {
+        CircularBuffer(cb_v_in).pop_front(KT * vDHt);
+    }
     CircularBuffer(cb_qkt_im).pop_front(Sq_chunk_t * KT);
     // Leave the unpack/pack formats where the step expects them.
     set_srca(cb_qkt_im);

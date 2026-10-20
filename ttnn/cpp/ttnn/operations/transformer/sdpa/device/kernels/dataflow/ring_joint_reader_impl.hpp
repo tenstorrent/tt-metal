@@ -303,6 +303,13 @@ void kernel_main() {
     // In-place latent-V (single-tile Q): the compute kernel reads V straight from K^T, so the
     // reader never materializes V. Shared with the program factory and compute kernel.
     constexpr bool kt_inplace_v = kt_inplace_v_enabled(v_shares_k_buffer, Sq_chunk_t);
+    // Named STANDARD / FAST ring_mla recipe kernels read latent V out of the K chunk (SDPA_RECIPE_LATENT_V,
+    // streaming/recipe_ring.hpp), so no V entry is read or pushed.
+#ifdef SDPA_RECIPE_LATENT_V
+    constexpr bool recipe_v_from_k = true;
+#else
+    constexpr bool recipe_v_from_k = false;
+#endif
     constexpr uint32_t q_heads_per_v = NH / NHV;
     // Slots 33-35: sharded-joint scalars appended by the factory after upstream's attention-sink /
     // sliding-window / metadata fields (slots 28-32 above).
@@ -1333,7 +1340,9 @@ void kernel_main() {
                     // (GQA multicast) or empty, so both CBs keep the same phase as the real path.
                     cb_k.push_back(k_chunk_tiles);
                     KV_chunks_processed_in_iter++;
-                    if constexpr (gqa_grouped_kv && gqa_mcast_enabled) {
+                    if constexpr (recipe_v_from_k) {
+                        // Latent V: no V entry at all.
+                    } else if constexpr (gqa_grouped_kv && gqa_mcast_enabled) {
                         const uint32_t nv = nq / q_heads_per_v;
                         CircularBuffer cb_v(cb_v_in);
                         cb_v.reserve_back(v_cb_entry_tiles);
@@ -1341,7 +1350,7 @@ void kernel_main() {
                             v_chain.receive(noc);
                         }
                         cb_v.push_back(v_cb_entry_tiles);
-                    } else if constexpr (!kt_inplace_v) {
+                    } else if constexpr (!kt_inplace_v && !recipe_v_from_k) {
                         CircularBuffer cb_v(cb_v_in);
                         cb_v.reserve_back(v_cb_entry_tiles);
                         cb_v.push_back(v_cb_entry_tiles);
@@ -1425,7 +1434,7 @@ void kernel_main() {
                         materialize_v_prefix_from_k<cb_v_in, v_cb_entry_tiles, Sk_chunk_t, vDHt, k_tile_bytes>(
                             noc, cb_k_start_address, v_rows_to_materialize);
                     }
-                } else if constexpr (!v_shares_k_buffer) {
+                } else if constexpr (!v_shares_k_buffer && !recipe_v_from_k) {
                     // V: either read locally (injector or not participant) or receive from chain.
                     const uint32_t nv = nq / q_heads_per_v;
                     const Slice v_slice(
@@ -1490,7 +1499,7 @@ void kernel_main() {
                 CircularBuffer cb_k_dummy(cb_k_in);
                 cb_k_dummy.reserve_back(k_chunk_tiles);
                 cb_k_dummy.push_back(k_chunk_tiles);
-                if constexpr (!kt_inplace_v) {
+                if constexpr (!kt_inplace_v && !recipe_v_from_k) {
                     CircularBuffer cb_v_dummy(cb_v_in);
                     cb_v_dummy.reserve_back(v_cb_entry_tiles);
                     cb_v_dummy.push_back(v_cb_entry_tiles);

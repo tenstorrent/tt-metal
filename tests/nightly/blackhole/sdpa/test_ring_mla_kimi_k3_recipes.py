@@ -117,7 +117,19 @@ def patches(final_rows, precision, approx=False):
                     kw["persistent_output_buffer_kv"] = ttnn.typecast(buf, ttnn.bfloat8_b)
         return _orig_ring_mla(q, kv, *args, **kw)
 
-    return [
+    patches_ = []
+    # KIMI_WORKER_L1=<bytes>: open the mesh with a smaller worker L1, which grows the kernel config buffer by the
+    # difference (LLK_ASSERT_WORKER_L1_SIZE = 1444992 gives 16 KiB more program space).
+    worker_l1 = os.environ.get("KIMI_WORKER_L1")
+    if worker_l1:
+        _orig_open = ttnn.open_mesh_device
+
+        def open_mesh_device(*a, **kw):
+            kw.setdefault("worker_l1_size", int(worker_l1))
+            return _orig_open(*a, **kw)
+
+        patches_.append(mock.patch.object(ttnn, "open_mesh_device", open_mesh_device))
+    return patches_ + [
         mock.patch.object(T, "fa_rand", fa_rand),
         mock.patch.object(T, "torch_sdpa_reference", reference),
         mock.patch.object(T, "compute_pcc_rmse", pcc),

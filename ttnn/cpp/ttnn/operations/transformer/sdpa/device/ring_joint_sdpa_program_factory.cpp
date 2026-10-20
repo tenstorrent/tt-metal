@@ -1952,6 +1952,10 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
         Sq_chunk_t * tt::constants::TILE_HEIGHT,
         kt_inplace_v ? "in-place" : (v_shares_k_buffer ? "materialized" : "separate"));
     defines["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
+    // Recipe ring kernels with at most one Q chunk per core keep their state resident: no checkpoint code.
+    if (variant.resident_ring_state() && max_q_per_core == 1) {
+        defines["SDPA_RECIPE_RING_SINGLE_Q"] = "1";
+    }
     if (streaming_recipe == SDPAPrecision::FAST) {
         defines["SDPA_MATMUL_FIDELITY"] = std::to_string(static_cast<uint32_t>(MathFidelity::LoFi));
     } else if (args.program_config.has_value() && args.program_config->matmul_math_fidelity.has_value()) {

@@ -32,13 +32,24 @@ struct RecipeRingCausal {
 };
 #endif
 
+// Latent V (SDPA_RECIPE_LATENT_V, ring_mla: V is K's leading columns) is read by PV straight out of the K chunk
+// (CB 1); the reader sends no V entries (ring_joint_reader_impl.hpp) and the host allocates no CB 2.
+#ifdef SDPA_RECIPE_LATENT_V
+#define SDPA_RECIPE_RING_V_FROM_K 1
+constexpr uint32_t kRecipeRingVCb = 1;
+#else
+constexpr uint32_t kRecipeRingVCb = 2;
+#endif
+
 // A K/V chunk the reader sent that compute does not read (fully masked, or phase-alignment padding).
 template <uint32_t k_chunk_tiles, uint32_t v_chunk_tiles>
 ALWI void recipe_ring_pop_chunk() {
     CircularBuffer(1).wait_front(k_chunk_tiles);
     CircularBuffer(1).pop_front(k_chunk_tiles);
+#ifndef SDPA_RECIPE_RING_V_FROM_K
     CircularBuffer(2).wait_front(v_chunk_tiles);
     CircularBuffer(2).pop_front(v_chunk_tiles);
+#endif
 }
 
 #ifdef SDPA_RECIPE_RING_CHUNKED
@@ -74,7 +85,11 @@ void sdpa_recipe_ring_segment(
 #endif
 ) {
     static_assert(k_tiles % SDPA_RECIPE_QK_W == 0 && vd_tiles % SDPA_RECIPE_PV_W == 0);
+#ifdef SDPA_RECIPE_RING_SINGLE_Q
+    constexpr bool staged = false;
+#else
     const bool staged = q_end - q_begin > 1;
+#endif
     constexpr uint32_t chunk_rows = k_tiles * 32;
     recipe_k_chunk_rows = chunk_rows;
     const uint32_t valid_chunks =
@@ -170,7 +185,7 @@ void sdpa_recipe_ring_segment(
                 SDPA_RECIPE_PV_W,
                 0,
                 1,
-                2,
+                kRecipeRingVCb,
                 6,
                 3,
                 14,

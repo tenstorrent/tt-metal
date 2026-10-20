@@ -4,6 +4,7 @@
 #include "sdpa_recipe_blocking.hpp"
 
 #include <algorithm>
+#include <cstdlib>
 #include <array>
 #include <cmath>
 #include <functional>
@@ -273,8 +274,21 @@ RecipeL1Estimate recipe_l1_bytes(
                 build.cb_bytes - droppable_fused(rows, build) + mask_group + context.extra_bytes};
         }
         case RecipeOp::Ring: {
-            const auto build = recipe_build(policy, q_tiles, k_tiles, d_tiles);
-            const uint64_t bytes = build.cb_bytes + kRingRecipeExtraBytes;
+            // EXPERIMENT (TT_SDPA_RECIPE_RING_WIDE_Q=1): an MLA ring on a BF16-state recipe is ring_mla's latent V,
+            // which has no V CB (RingJointSDPARecipeProgramFactory) and a V-wide O.
+            static const bool wide_q = [] {
+                const char* v = std::getenv("TT_SDPA_RECIPE_RING_WIDE_Q");
+                return v != nullptr && v[0] == '1';
+            }();
+            const bool latent =
+                wide_q && context.vd_tiles != 0 && context.vd_tiles < d_tiles && !policy.fp32_destination;
+            const auto build = recipe_build(policy, q_tiles, k_tiles, d_tiles, latent ? context.vd_tiles : 0);
+            const uint64_t v_cb =
+                latent
+                    ? uint64_t{k_tiles} * context.vd_tiles * 2 *
+                          tt::tile_size(datatype_to_dataformat_converter(recipe_kv_dtype(policy.selection.kv_storage)))
+                    : 0;
+            const uint64_t bytes = build.cb_bytes - v_cb + kRingRecipeExtraBytes;
             // The factory's fallbacks: drop the fused chunks' CBs, then single-slot Q.
             return {bytes, bytes - droppable_fused(q_tiles, build) - q_slot};
         }
@@ -298,7 +312,13 @@ bool recipe_program_fits(const RecipeBlockingProblem& p, uint32_t q_tiles, uint3
         // buffer from Q160 up: causal balanced ACCURATE with BFP8 K/V on a 2x2 P150b mesh measured 70672 B at
         // Q160/K192 and K448, 70688 at Q160/K256, 70720 at Q160/K384 (K160, K224, K288, K320 and K512 fit by a few
         // bytes) and 71184-71696 B at Q320; every Q32 and Q64 blocking fits.
-        if (p.vd_tiles != 0 && p.vd_tiles < p.d_tiles && p.d_tiles >= 16 && q_tiles >= 5) {
+        // EXPERIMENT: TT_SDPA_RECIPE_RING_WIDE_Q=1 lets wide-Q MLA rings try the named kernels (a program that does
+        // not fit still falls back to the streaming kernel at dispatch).
+        static const bool wide_q = [] {
+            const char* v = std::getenv("TT_SDPA_RECIPE_RING_WIDE_Q");
+            return v != nullptr && v[0] == '1';
+        }();
+        if (!wide_q && p.vd_tiles != 0 && p.vd_tiles < p.d_tiles && p.d_tiles >= 16 && q_tiles >= 5) {
             return false;
         }
         return true;

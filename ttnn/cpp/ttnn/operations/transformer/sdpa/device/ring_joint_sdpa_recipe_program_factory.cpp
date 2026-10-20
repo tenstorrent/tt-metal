@@ -7,6 +7,7 @@
 #include "ttnn/operations/transformer/sdpa/sdpa_recipe.hpp"
 
 #include <algorithm>
+#include <cstdlib>
 #include <cstdint>
 #include <optional>
 
@@ -57,6 +58,25 @@ public:
             DHt,
             std::nullopt,
             tensor_args.v_head_dim(args.latent_v_head_dim) / tt::constants::TILE_WIDTH);
+        // Latent V (ring_mla: V is K's leading columns) on the BF16-state recipes (STANDARD, FAST): PV reads V's tiles
+        // in place from the K chunk, so neither CB 2 nor the reader's V stream exists (SDPA_RECIPE_LATENT_V).
+        // EXPERIMENT: TT_SDPA_RECIPE_NO_LATENT_V=1 keeps the separate V stream (A/B).
+        const char* no_latent = std::getenv("TT_SDPA_RECIPE_NO_LATENT_V");
+        latent_v_ = !(no_latent && no_latent[0] == '1') && tensor_args.v_shares_k_buffer() &&
+                    !ring_recipes::resolve_precision_policy(
+                         ring_recipes::select_recipe(*args.precision, tensor_args.input_k.dtype()))
+                         .fp32_destination;
+        if (latent_v_) {
+            auto& cbs = program_.cbs;
+            cbs.erase(
+                std::remove_if(
+                    cbs.begin(),
+                    cbs.end(),
+                    [](const tt::tt_metal::CBDescriptor& cb) {
+                        return !cb.format_descriptors.empty() && cb.format_descriptors.front().buffer_index == 2;
+                    }),
+                cbs.end());
+        }
         desc.cbs = program_.cbs;
         causal_ = args.is_causal;
         // Chunked prefill (Q shorter than the K/V shard): the device's Q slab and the chunk group, in tiles.
@@ -170,6 +190,9 @@ public:
         if (has("SDPA_RECIPE_FUSED") && !has("SDPA_RECIPE_FP32")) {
             defines.emplace_back("SDPA_RING_STREAM_STATE", "1");
         }
+        if (latent_v_) {
+            defines.emplace_back("SDPA_RECIPE_LATENT_V", "1");
+        }
         // Causal (and balanced) rings: diagonal masking, skipped K chunks and Q chunks (streaming/recipe_ring.hpp).
         if (causal_ || chunked_q_tiles_) {
             defines.emplace_back("SDPA_RECIPE_RING_CAUSAL", "1");
@@ -189,6 +212,7 @@ private:
     mutable tt::tt_metal::ProgramDescriptor program_;  // finalize_cbs may drop the fused chunks
     tt::tt_metal::CoreRangeSet grid_;
     bool causal_ = false;
+    bool latent_v_ = false;
     uint32_t chunked_q_tiles_ = 0;
     uint32_t chunk_group_tiles_ = 0;
     uint32_t Sq_chunk_t_ = 0;
