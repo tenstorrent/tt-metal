@@ -160,7 +160,13 @@ score 0 against positive real scores; prefill fills the whole prompt before sele
 
 ## Next
 
-1. B=32/row and the (1,4) TP prefill for layers 3/4 (running).
-2. Full 8x4 mesh (needs all 32 chips free) with FABRIC_2D_TORUS_XY; A/B TP4 vs TP8.
-3. Mesh prefill: ttKDA sequence-parallel over the rows + chunked DSA (after the chunked-prefill branch lands), user-partitioned latent/index cache, sparse decode through metadata tensors, 1 M-position cache test.
-4. ~~`tt-perf-report` of the mesh decode step~~ (done, `tracy/README.md`); hybrid vs `TTMoEDecode`, expert dtype under the eval gate; the router composite / mHC / KDA-decode targets listed there.
+1. E2E on the whole Galaxy: all 45 layers resident on the 8x4 (bfp8 experts, ~12 GB/chip), traced decode at 4 and
+   32 users/row + TTFT through the sequence-parallel prefill (needs a board reset first: the chips of two blocks whose
+   jobs were killed mid-flight have stuck ethernet cores, `llrt.cpp` "waiting for active ethernet core").
+2. Per-row ownership for the SP prefill (KDA carry masks, scratch page tables for the DSA cache/index of non-owner rows).
+3. Next decode targets from the perf report: mHC composite (1.9-2.2 ms/layer: single-core column slices with their
+   tilize/untilize pairs, two single-core 32x16384x32 matmuls), KDA decode recurrence at 32 users/row (3.2 ms/layer),
+   expert bfp4 gate/up under the eval gate, DSA small grids.
+4. Sparse decode on multi-row meshes through the metadata-tensor variants (`chunk_start_idx_tensor` /
+   `valid_end_tensor` of `indexer_score_dsa`); user-partitioned latent/index cache (design 5.3) and a paged/tiled kv
+   read for `sparse_sdpa` (the 1 M untilize cost); hybrid vs `TTMoEDecode` A/B.
