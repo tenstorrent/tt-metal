@@ -61,7 +61,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             num_faces_B,
             TILE_SIZE_UNPACK_A,
             TILE_SIZE_UNPACK_B);
-        _llk_unpack_AB_matmul_init_<>(UNPACK_TRANSPOSE_FACES, CT_DIM, RT_DIM, KT_DIM, FACE_R_DIM, FACE_R_DIM, num_faces_A, num_faces_B, false, false);
+        _llk_unpack_AB_matmul_init_<>(UNPACK_TRANSPOSE_FACES, CT_DIM, RT_DIM, KT_DIM, ckernel::DEFAULT_TENSOR_SHAPE, ckernel::DEFAULT_TENSOR_SHAPE);
         PROFILER_SYNC();
     }
     {
@@ -110,8 +110,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         tile_b,
                         TILE_SIZE_UNPACK_A,
                         TILE_SIZE_UNPACK_B,
-                        /* partial face */ false,
-                        /* partial face */ false,
+                        ckernel::DEFAULT_TENSOR_SHAPE /* in0 */,
+                        ckernel::DEFAULT_TENSOR_SHAPE /* in1 */,
                         CT_DIM,
                         RT_DIM,
                         KT_DIM);
@@ -147,14 +147,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         START_PERF_MEASURE("INIT")
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
         _llk_math_matmul_init_<MATH_FIDELITY, THROTTLE_LEVEL>(
-            /* tile A */ TILE_R_DIM,
-            /* tile A */ TILE_C_DIM,
-            /* tile B */ TILE_R_DIM,
-            /* tile B */ TILE_C_DIM,
-            /* partial face */ false,
-            UNPACK_TRANSPOSE_FACES,
-            CT_DIM,
-            RT_DIM);
+            ckernel::DEFAULT_TENSOR_SHAPE /* in0 */, ckernel::DEFAULT_TENSOR_SHAPE /* in1 */, UNPACK_TRANSPOSE_FACES, CT_DIM, RT_DIM);
         _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
         PROFILER_SYNC();
     }

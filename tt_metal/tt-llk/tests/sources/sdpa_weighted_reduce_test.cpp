@@ -105,16 +105,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         4 /* unpA_num_faces */,
         4 /* unpB_num_faces */);
     _llk_unpack_AB_matmul_init_<>(
-        0 /* transpose */,
-        WR_CT_DIM,
-        WR_RT_DIM,
-        WR_KT_DIM,
-        FACE_R_DIM,
-        FACE_R_DIM,
-        4 /* unpA_num_faces */,
-        4 /* unpB_num_faces */,
-        false /* unpA_partial_face */,
-        false /* unpB_partial_face */);
+        0 /* transpose */, WR_CT_DIM, WR_RT_DIM, WR_KT_DIM, ckernel::DEFAULT_TENSOR_SHAPE /* in0 */, ckernel::DEFAULT_TENSOR_SHAPE /* in1 */);
     // buffer_A = weights (-> SrcB), buffer_B = qk (-> SrcA). Single k-tile.
     _llk_unpack_AB_matmul_<>(
         L1_ADDRESS(params.buffer_A[0]),
@@ -123,8 +114,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         0 /* tile_index_b */,
         0 /* tile_size_a (default) */,
         0 /* tile_size_b (default) */,
-        false /* unpA_partial_face */,
-        false /* unpB_partial_face */,
+        ckernel::DEFAULT_TENSOR_SHAPE /* in0 */,
+        ckernel::DEFAULT_TENSOR_SHAPE /* in1 */,
         WR_CT_DIM,
         WR_RT_DIM,
         WR_KT_DIM);
