@@ -165,8 +165,6 @@ ttnn::device_operation::ProgramArtifacts InterleavedToShardedProgramFactory::cre
     uint32_t dram_alignment = hal::get_dram_alignment();
     uint32_t l1_alignment = hal::get_l1_alignment();
     uint32_t num_trids = 4;
-    // Blackhole, height-sharded row-major from DRAM: read one run of pages per DRAM bank instead of one per stick.
-    // Wider pages, fewer pages per bank or (aligned pages) fewer cores are slower this way; N150 models gained nothing.
     constexpr uint32_t bank_runs_stage_bytes = 16 * 1024;
     constexpr uint32_t bank_runs_max_page_bytes = 256;
     constexpr uint32_t bank_runs_min_pages_per_bank = 8;

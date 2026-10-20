@@ -14,7 +14,7 @@ def _bits(t):
         return t.view(torch.int16)
     if t.dtype == torch.float32:
         return t.view(torch.int32)
-    return t.to(torch.int64)  # uint32 comes back as torch.uint32, which torch.equal cannot compare with int32
+    return t.to(torch.int64)
 
 
 def _make(shape, dtype, seed):
@@ -35,20 +35,17 @@ ELEMENT_BYTES = {ttnn.bfloat16: 2, ttnn.float32: 4, ttnn.uint32: 4}
 @pytest.mark.parametrize("row_bytes", [32, 48, 128, 240, 256, 512])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32, ttnn.uint32])
 def test_interleaved_to_sharded_row_major_dram(device, dtype, row_bytes, rows_per_core, grid, orientation):
-    # Row-major DRAM-interleaved -> height-sharded L1, bit for bit, with a partly filled last shard. On Blackhole,
-    # rows <= 256 B at 100 / 513 rows per core take I2S_BANK_RUNS (on one row of cores only unaligned rows do).
     width = row_bytes // ELEMENT_BYTES[dtype]
     g = device.compute_with_storage_grid_size()
     grid_y = 1 if grid == "one_row" else g.y
     num_cores = g.x * grid_y
-    rows = num_cores * rows_per_core - rows_per_core // 2  # the last shard is only partly filled
+    rows = num_cores * rows_per_core - rows_per_core // 2
     shape = (1, 1, rows, width)
 
     torch_input = _make(shape, dtype, seed=row_bytes * 1000 + rows_per_core)
     tt_input = ttnn.from_torch(
         torch_input, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
-    # Explicit shard shape: create_sharded_memory_config requires the height to divide evenly by the core count.
     shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(g.x - 1, grid_y - 1))})
     sharded_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED,

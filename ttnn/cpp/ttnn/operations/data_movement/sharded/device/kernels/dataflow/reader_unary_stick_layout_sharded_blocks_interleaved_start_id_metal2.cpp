@@ -9,7 +9,6 @@
 // pair becomes the tensor::src binding, the positional runtime args become named ones, and the scratch
 // page size is reconstructed from the scratchpad's total size (size_in_bytes / num_trids). The
 // TRID-tagged transfer pipeline and its slot state machine are untouched.
-// Exception: with I2S_BANK_RUNS the shard is read one run of pages per DRAM bank into the scratchpad.
 // Forked rather than converted in place because the legacy file is still bound by factories on the
 // legacy positional-arg API.
 //
@@ -57,10 +56,7 @@ void kernel_main() {
 #ifdef I2S_BANK_RUNS
     {
         constexpr uint32_t page_stride = I2S_BANK_RUNS_PAGE_STRIDE;
-        // One DRAM read per bank per pass (a bank's pages of this shard sit back to back, page_stride apart), then
-        // each stick is placed with a local L1->L1 read.
         constexpr uint32_t num_banks = NUM_DRAM_BANKS;
-        // The scratchpad base is DRAM-aligned (the allocator aligns it), as DRAM reads need.
         const uint32_t scratch_base = scratch_pad.get_base_address();
         const uint32_t pass_sticks = scratch_pad.size_in_bytes() / page_stride;
 
@@ -76,7 +72,6 @@ void kernel_main() {
                 first_stick + ((block_height - done < pass_sticks) ? (block_height - done) : pass_sticks);
             uint32_t off = 0;
             for (uint32_t b = 0; b < num_banks; ++b) {
-                // First stick of this pass in bank b; every num_banks-th stick after it is in the same bank.
                 const uint32_t f = first_stick + (b + num_banks - first_stick % num_banks) % num_banks;
                 const uint32_t c = (f < end_stick) ? (end_stick - 1 - f) / num_banks + 1 : 0;
                 first[b] = f;
@@ -102,7 +97,6 @@ void kernel_main() {
                     dest_off += num_banks * padded_block_width_bytes;
                 }
             }
-            // The next pass overwrites the scratchpad, so the local reads out of it must land first.
             noc.async_read_barrier();
         }
     }
