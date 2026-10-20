@@ -3,6 +3,8 @@
 
 """Decode forward pass for experts (seq_len=1)."""
 
+import os
+
 import ttnn
 from models.demos.gpt_oss.config import Mode
 
@@ -265,7 +267,77 @@ class DenseDecodePlan:
         )
 
 
-def decode_forward_dense(hidden_states, routing_weights, weights, plan: DenseDecodePlan, config: ExpertConfig):
+_FUSED_SWIGLU = os.environ.get("GPT_OSS_DENSE_FUSED_SWIGLU", "1") == "1"
+
+
+def _dense_swiglu(gate, up, w, weights, plan):
+    """act = SwiGLU(gate + gate_bias, up + up_bias) * (w @ expand) on gate / up's own width shards
+    (fused_decode/kernels/dense_swiglu_*.cpp): the act shards land where the down matmul reads them."""
+    from ..fused_decode.boundary import KERNEL_DIR
+
+    cache = plan.__dict__.setdefault("_swiglu", {})
+    act = ttnn.empty(list(gate.shape), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=gate.device(),
+                     memory_config=plan.act_memory_config)  # fmt: skip
+    spec = gate.memory_config().shard_spec
+    cores = spec.grid
+    NT = spec.shape[1] // ttnn.TILE_SIZE
+    assert NT % 8 == 0
+    mesh = gate.device()
+    gx = mesh.compute_with_storage_grid_size().x
+    gy = mesh.compute_with_storage_grid_size().y
+    if "table" not in cache:
+        first = [0] * (gx * gy)
+        i = 0
+        for r in cores.ranges():
+            for y in range(r.start.y, r.end.y + 1):
+                for x in range(r.start.x, r.end.x + 1):
+                    first[y * gx + x] = i * NT // 8
+                    i += 1
+        first += [0] * (-len(first) % 4)
+        cache["table"] = [sum(first[k + j] << (8 * j) for j in range(4)) for k in range(0, len(first), 4)]
+    cb_gate, cb_up, cb_e, cb_w, cb_bg, cb_ub, cb_act = range(7)
+    rct = [cb_gate, cb_up, cb_e, cb_w, cb_bg, cb_ub, NT, gx, weights.intermediate_local]
+    for t in (w, weights.gate_bias, weights.up_bias):
+        rct += ttnn.TensorAccessorArgs(t).get_compile_time_args()
+    kernels = [
+        ttnn.KernelDescriptor(
+            kernel_source=str(KERNEL_DIR / "dense_swiglu_reader.cpp"), core_ranges=cores, compile_time_args=rct,
+            runtime_args=[],
+            common_runtime_args=[w.buffer_address(), weights.gate_bias.buffer_address(),
+                                 weights.up_bias.buffer_address()] + cache["table"],
+            config=ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_0,
+                                                     noc=ttnn.NOC.NOC_0),
+        ),
+        ttnn.KernelDescriptor(
+            kernel_source=str(KERNEL_DIR / "dense_swiglu_compute.cpp"), core_ranges=cores,
+            compile_time_args=[cb_gate, cb_up, cb_e, cb_w, cb_bg, cb_ub, cb_act, NT], runtime_args=[],
+            config=ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True,
+                                                math_approx_mode=False),
+        ),
+    ]  # fmt: skip
+
+    def cb(i, page, pages):
+        return ttnn.CBDescriptor(total_size=page * pages, core_ranges=cores,
+                                 format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=i, data_format=ttnn.bfloat16,
+                                                                             page_size=page)])  # fmt: skip
+
+    cbs = [
+        ttnn.cb_descriptor_from_sharded_tensor(cb_gate, gate),
+        ttnn.cb_descriptor_from_sharded_tensor(cb_up, up),
+        cb(cb_e, 2048, 2),
+        ttnn.cb_descriptor_from_sharded_tensor(cb_act, act),
+        cb(cb_w, 2048, 1),
+        cb(cb_bg, 2048, 2),
+        cb(cb_ub, 2048, 2),
+    ]
+    io = [gate, up, w, weights.gate_bias, weights.up_bias, act]
+    ttnn.generic_op(io, ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs))
+    return act
+
+
+def decode_forward_dense(
+    hidden_states, routing_weights, weights, plan: DenseDecodePlan, config: ExpertConfig, fused_swiglu=True
+):
     """Decode MoE for one 32-token tile per device over every expert (gpt-oss-20b batch 32, TP over the intermediate
     dimension, no expert parallelism).
 
@@ -301,6 +373,15 @@ def decode_forward_dense(hidden_states, routing_weights, weights, plan: DenseDec
         compute_kernel_config=ck,
     )
     x.deallocate(True)
+    if fused_swiglu and _FUSED_SWIGLU and abs(limit - 7.0) < 1e-6 and abs(alpha - 1.702) < 1e-6:
+        # biases, SwiGLU and the routing weights in one program on the gate / up shards (_dense_swiglu): 7 ops
+        # (2 reshards, 2 bias adds, the expand matmul, 2 multiplies, a reshard back) in one
+        w = ttnn.to_memory_config(routing_weights, ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16)
+        w = ttnn.reshape(w, (1, 1, w.shape[-2], w.shape[-1]))
+        act = _dense_swiglu(gate, up, w, weights, plan)
+        gate.deallocate(True)
+        up.deallocate(True)
+        return _dense_down(act, w, weights, plan, ck)
     # The elementwise steps run on twice the matmul's cores (plan.eltwise_memory_config).
     ew = plan.eltwise_memory_config
     gate_ew = ttnn.to_memory_config(gate, ew)
@@ -338,6 +419,11 @@ def decode_forward_dense(hidden_states, routing_weights, weights, plan: DenseDec
     act_ew = act
     act = ttnn.to_memory_config(act_ew, plan.act_memory_config)
     act_ew.deallocate(True)
+    return _dense_down(act, w, weights, plan, ck)
+
+
+def _dense_down(act, w, weights, plan, ck):
+    """down over every expert (the routing-weighted act), + routing_weights @ down_bias -> the BF8 partial sum."""
     down = ttnn.matmul(
         act,
         weights.down,

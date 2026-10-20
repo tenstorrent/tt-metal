@@ -259,7 +259,8 @@ class Experts:
         for start in range(0, seq_len, tokens):
             x = ttnn.slice(hidden_states, [0, 0, start, 0], [1, 1, start + tokens, hidden])
             w = ttnn.slice(routing_weights, [start, 0], [start + tokens, experts])
-            parts.append(decode_forward_dense(x, w, self.dense_decode_weights, plan, self.config))
+            # (prefill keeps the separate elementwise ops: the decode's fused SwiGLU rounds differently)
+            parts.append(decode_forward_dense(x, w, self.dense_decode_weights, plan, self.config, fused_swiglu=False))
             x.deallocate(True)
             if len(parts) == 64:
                 groups.append(ttnn.concat(parts, dim=2))
