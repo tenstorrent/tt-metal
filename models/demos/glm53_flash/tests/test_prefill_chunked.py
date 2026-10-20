@@ -164,7 +164,8 @@ def snapshot_dsa(cache: TtLatentCache, user: int, n_pos: int):
     return lat, pools, rk, rg
 
 
-def compare_dsa_state(cache: TtLatentCache, n_pos: int, u_ref: int = 0, u_got: int = 1) -> str:
+def compare_dsa_state(cache: TtLatentCache, n_pos: int, u_ref: int = 0, u_got: int = 1) -> tuple[str, bool]:
+    """(text, all equal) for the latent rows, complete pools and ring tail of the two slots."""
     a, b = snapshot_dsa(cache, u_ref, n_pos), snapshot_dsa(cache, u_got, n_pos)
     names = ("latent", "pools", "ring_k", "ring_g")
     parts, ok = [], True
@@ -174,11 +175,15 @@ def compare_dsa_state(cache: TtLatentCache, n_pos: int, u_ref: int = 0, u_got: i
             continue
         eq = torch.equal(x, y)
         ok &= eq
-        parts.append(
-            f"{name} {tuple(x.shape)} {'equal' if eq else f'DIFFER max|diff| {(x - y).abs().max():.3g} pcc {pcc(x, y):.6f}'}"
-        )
-    assert ok, "; ".join(parts)
-    return "; ".join(parts)
+        if eq:
+            parts.append(f"{name} {tuple(x.shape)} equal")
+        else:
+            d = (x - y).abs()
+            parts.append(
+                f"{name} {tuple(x.shape)} DIFFER: {int((d > 0).sum())} of {d.numel()} elements, max|diff| {d.max():.3g} "
+                f"(|ref| max {x.abs().max():.3g}), pcc {pcc(x, y):.7f}"
+            )
+    return "; ".join(parts), ok
 
 
 def attn_prefill(attn: TtDSA, cache: TtLatentCache, device, rows, user: int, chunks, start0: int, qblock: int, env):
@@ -263,11 +268,11 @@ def test_dsa_attention_r4097(mesh_device, monkeypatch):
         got, got_idx, dt = attn_prefill(attn, cache, mesh_device, rows, 1, chunks, 0, qb, monkeypatch)
         txt, pmin, below = row_report(ref, got)
         itxt, n_sparse, n_diff = compare_indices(ref_idx.rows, got_idx.rows)
-        state = compare_dsa_state(cache, S)
+        state, state_ok = compare_dsa_state(cache, S)
         logger.info(f"chunks {list(chunks)} x sub-block {qb} (slot 1, {dt:.2f} s): output {txt}")
         logger.info(f"    selections: {itxt}")
         logger.info(f"    state slot 0 vs slot 1: {state}")
-        results.append((chunk, qb, pmin, below, n_diff, n_sparse))
+        results.append((chunk, qb, pmin, below, n_diff, n_sparse, state_ok, state))
         _record(
             "dsa_attention_r4097",
             chunk=chunk,
@@ -276,10 +281,17 @@ def test_dsa_attention_r4097(mesh_device, monkeypatch):
             rows_below=below,
             sel_diff=n_diff,
             sel_rows=n_sparse,
+            state_ok=state_ok,
         )
-    for chunk, qb, pmin, below, n_diff, n_sparse in results:
-        assert below == 0, f"chunk {chunk} sub-block {qb}: {below} rows below {ROW_PCC_BAR} (min {pmin:.6f})"
-        assert n_diff == 0, f"chunk {chunk} sub-block {qb}: {n_diff} of {n_sparse} sparse rows select differently"
+    failures = []
+    for chunk, qb, pmin, below, n_diff, n_sparse, state_ok, state in results:
+        if below:
+            failures.append(f"chunk {chunk} sub-block {qb}: {below} rows below {ROW_PCC_BAR} (min {pmin:.6f})")
+        if n_diff:
+            failures.append(f"chunk {chunk} sub-block {qb}: {n_diff} of {n_sparse} sparse rows select differently")
+        if not state_ok:
+            failures.append(f"chunk {chunk} sub-block {qb}: state differs: {state}")
+    assert not failures, "\n".join(failures)
 
 
 @pytest.mark.timeout(1500)
@@ -303,7 +315,7 @@ def test_dsa_layer_r4097(mesh_device, monkeypatch):
         got, got_idx, dt = layer_prefill(dec, mesh_device, x_in, 1, chunks, qb, monkeypatch)
         txt, pmin, below = row_report(r2(ref), r2(got))
         itxt, n_sparse, n_diff = compare_indices(ref_idx.rows, got_idx.rows)
-        state = compare_dsa_state(dec.cache, S)
+        state, state_ok = compare_dsa_state(dec.cache, S)
         logger.info(
             f"layer 3 chunks {list(chunks)} x sub-block {qb} (slot 1, {dt:.1f} s): pcc vs HF {pcc(x_out, got):.6f}; "
             f"vs single-shot {txt}"
@@ -318,10 +330,12 @@ def test_dsa_layer_r4097(mesh_device, monkeypatch):
             rows_below=below,
             sel_diff=n_diff,
             sel_rows=n_sparse,
+            state_ok=state_ok,
         )
-        if below or n_diff:
+        if below or n_diff or not state_ok:
             failures.append(
-                f"chunk {chunk} sub-block {qb}: rows below bar {below} (min {pmin:.6f}), differing selections {n_diff}"
+                f"chunk {chunk} sub-block {qb}: rows below bar {below} (min {pmin:.6f}), differing selections {n_diff}, "
+                f"state {state}"
             )
     # decode on both slots (the same token at the same position: slot 0 = single-shot state, slot 1 = chunked)
     for step in range(2):
@@ -380,7 +394,7 @@ def test_dsa_attention_long(mesh_device, monkeypatch, n_pos):
         got, got_idx, dt = attn_prefill(attn, cache, mesh_device, rows, 1, chunks, start0, qb, monkeypatch)
         txt, pmin, below = row_report(ref, got)
         itxt, n_sparse, n_diff = compare_indices(ref_idx.rows, got_idx.rows)
-        state = compare_dsa_state(cache, n_pos)
+        state, state_ok = compare_dsa_state(cache, n_pos)
         logger.info(f"chunks {list(chunks)} x sub-block {qb} (slot 1, {dt:.2f} s): output {txt}")
         logger.info(f"    selections: {itxt}")
         logger.info(f"    state slot 0 vs slot 1 over [0, {n_pos}): {state}")
@@ -393,10 +407,12 @@ def test_dsa_attention_long(mesh_device, monkeypatch, n_pos):
             rows_below=below,
             sel_diff=n_diff,
             sel_rows=n_sparse,
+            state_ok=state_ok,
         )
-        if below or n_diff:
+        if below or n_diff or not state_ok:
             failures.append(
-                f"N={n_pos} chunk {chunk} sub-block {qb}: rows below bar {below} (min {pmin:.6f}), differing selections {n_diff}"
+                f"N={n_pos} chunk {chunk} sub-block {qb}: rows below bar {below} (min {pmin:.6f}), differing selections "
+                f"{n_diff}, state {state}"
             )
     log_dram(mesh_device, f"N={n_pos} done")
     assert not failures, "\n".join(failures)

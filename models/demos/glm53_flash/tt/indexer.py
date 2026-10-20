@@ -40,6 +40,7 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.glm53_flash.custom_ops.index_score_decode.op import IndexScoreDecode
 from models.demos.glm53_flash.tt.config import GLM53FlashConfig
+from models.demos.glm53_flash.tt.matmul_configs import prefill_linear
 
 TILE = 32
 SENTINEL = 0xFFFFFFFF
@@ -292,6 +293,7 @@ class TtDSAIndexer(LightweightModule):
         self.hifi2 = _compute(device, ttnn.MathFidelity.HiFi2, packer_l1_acc=True)
         self.fp32 = _compute(device)
         self.score_cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=32, k_chunk_size=32, head_group_size=0)
+        self._grid = device.compute_with_storage_grid_size()
         self._mesh_rows = tuple(device.shape)[0] if isinstance(device, ttnn.MeshDevice) else 1
         self._prefill_scorer: IndexScoreDecode | None = None
         self._const_cache: dict[tuple, ttnn.Tensor] = {}
@@ -303,10 +305,12 @@ class TtDSAIndexer(LightweightModule):
 
     # ------------------------------------------------------------- stems
     def keys_and_gates(self, x: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        """x [1,1,T,4096] bf16 -> (k [1,1,T,D] bf16 (LayerNorm'd), g [1,1,T,D] bf16 gate logits)."""
-        k = ttnn.linear(x, self.w_k, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)
+        """x [1,1,T,4096] bf16 -> (k [1,1,T,D] bf16 (LayerNorm'd), g [1,1,T,D] bf16 gate logits). The narrow
+        stems run through ``prefill_linear`` (fixed K blocking) so a position's pooled key is the same whatever the
+        chunk length it was prefilled in (the single-shot / chunked equality; decode rows keep the default)."""
+        k = prefill_linear(x, self.w_k, self._grid, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)
         k = ttnn.layer_norm(k, weight=self.knorm_w, bias=self.knorm_b, epsilon=1e-6, compute_kernel_config=self.fp32)
-        g = ttnn.linear(x, self.w_gate, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)
+        g = prefill_linear(x, self.w_gate, self._grid, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)
         return k, g
 
     def _pool_groups(self, kp: ttnn.Tensor, gp: ttnn.Tensor) -> ttnn.Tensor:
@@ -339,8 +343,8 @@ class TtDSAIndexer(LightweightModule):
         q = ttnn.reshape(q, [1, T, self.Hi, self.D])  # [1,T,Hi,D]
         if not rows_form:
             q = ttnn.transpose(q, 1, 2)  # [1,Hi,T,D]
-        if w is None:
-            w = ttnn.linear(x, self.w_weights, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)  # [1,1,T,Hi]
+        if w is None:  # [1,1,T,Hi]; fixed K blocking for prefill rows (see keys_and_gates)
+            w = prefill_linear(x, self.w_weights, self._grid, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)
         return q, w
 
     # ------------------------------------------------------- maintenance

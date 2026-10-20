@@ -114,6 +114,63 @@ class DecodeLinear:
         return ttnn.linear(x, self.w, **kw)
 
 
+# ------------------------------------------------------------------------ M-independent prefill matmuls
+PREFILL_ROW_BLOCK = 2048  # rows per call of ``prefill_linear`` (bounds per_core_M, i.e. the per-core L1 blocks)
+
+
+def prefill_linear_config(M: int, K: int, N: int, grid, in0_block_w: int = 4):
+    """2D mcast program config for ``[1, 1, M, K] x [K, N]`` (narrow N) whose K blocking is fixed, so a row's
+    result is bit-identical for any M: the default dispatch picks ``in0_block_w`` per shape, and a 4096 x 128
+    weight then gives rows that differ by one bf16 ulp between a 4128-row and a 1024-row call of the same
+    rows (measured 2026-10-20, chip 2), which made the pooled-key index of a chunked prefill differ from
+    the single-shot one. Grid: the N tiles over the columns (one per core), the M tiles over the rows."""
+    assert M % TILE == 0 and K % TILE == 0 and N % TILE == 0, (M, K, N)
+    Mt, Kt, Nt = M // TILE, K // TILE, N // TILE
+    assert Kt % in0_block_w == 0, (K, in0_block_w)
+    gx, gy = int(grid.x), int(grid.y)
+    pcn = 1
+    while math.ceil(Nt / pcn) > gx:
+        pcn += 1
+    assert Nt % pcn == 0, (N, pcn)  # narrow stems only (no ragged column block)
+    cx = Nt // pcn
+    cy = min(gy, Mt)
+    pcm = math.ceil(Mt / cy)
+    sub_w = max(d for d in (1, 2, 4) if pcn % d == 0)
+    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=(cx, cy),
+        in0_block_w=in0_block_w,
+        out_subblock_h=1,
+        out_subblock_w=sub_w,
+        per_core_M=pcm,
+        per_core_N=pcn,
+        transpose_mcast=False,
+        fused_activation=None,
+    )
+
+
+def prefill_linear(x: ttnn.Tensor, w: ttnn.Tensor, grid, *, row_block: int = PREFILL_ROW_BLOCK, **kw) -> ttnn.Tensor:
+    """``ttnn.linear(x, w)`` for a prefill-shaped ``x`` [1, 1, M, K] (M % 32 == 0) through
+    ``prefill_linear_config`` in row blocks of ``row_block`` rows: every row's result is independent of M and
+    of the blocking (the chunked-prefill equality needs the index stems to be). Decode-shaped inputs (M <= 32)
+    keep the default dispatch."""
+    M, K, N = int(x.shape[-2]), int(x.shape[-1]), int(w.shape[-1])
+    if M <= TILE or "program_config" in kw:
+        return ttnn.linear(x, w, **kw)
+    parts = []
+    for r0 in range(0, M, row_block):
+        r1 = min(M, r0 + row_block)
+        xs = x if (r0, r1) == (0, M) else ttnn.slice(x, [0, 0, r0, 0], [1, 1, r1, K])
+        parts.append(ttnn.linear(xs, w, program_config=prefill_linear_config(r1 - r0, K, N, grid), **kw))
+        if xs is not x:
+            ttnn.deallocate(xs)
+    if len(parts) == 1:
+        return parts[0]
+    out = ttnn.concat(parts, dim=-2)
+    for t in parts:
+        ttnn.deallocate(t)
+    return out
+
+
 def decode_linear(x: ttnn.Tensor, w: ttnn.Tensor, device, **kw) -> ttnn.Tensor:
     """Uncached form of ``DecodeLinear`` (config built per call; use ``DecodeLinear`` in hot paths)."""
     shape = x.shape
