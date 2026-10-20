@@ -13,10 +13,22 @@ autoregressive state:
   (``TtIndexCache``), both maintained on every prefill/decode call.
 
 Tensor contract (the HF residual is the mHC stream tensor ``[B, S, 4, 4096]``):
-* ``prefill_forward(streams, user, seq_len)``: one user; ``streams`` is the packed fp32 device
-  tensor ``[1, 1, T_pad, 4*4096]`` (stream i at columns [i*4096, (i+1)*4096), T_pad % 32 == 0,
-  rows past ``seq_len`` are padding and come back unspecified). Fills that user's cache/state
-  from position 0. Returns the packed output streams.
+* ``prefill_forward(streams, user, seq_len, start=0)``: one user, one chunk; ``streams`` is the
+  packed fp32 device tensor ``[1, 1, T_pad, 4*4096]`` (stream i at columns [i*4096, (i+1)*4096),
+  T_pad % 32 == 0, rows past ``seq_len`` are padding and come back unspecified). Row i is the
+  token at absolute position ``start + i``. Returns the packed output streams.
+  Chunked prefill: a prompt may be prefilled in consecutive chunks. ``start == 0`` begins a new
+  prompt (the user's KDA state is reset / the DSA cache is refilled from 0); every later chunk
+  must satisfy ``start % 32 == 0``, ``start == next_start[user]`` (the previous chunk's
+  ``start + seq_len``, so chunks are contiguous and a non-32-aligned ``seq_len`` is only possible
+  in the last chunk of a prompt) and ``start + seq_len <= max_seq_len``. The chunk continues from
+  the device-owned state: KDA reads the user's recurrent + conv carries out of the batched state
+  and writes the new ones back; DSA writes the chunk's latent into the user's pages from block
+  ``start // 32``, maintains the pooled-key index from position ``start`` (the ring holds the
+  previous chunk's tail rows) and attends every chunk row over the full prefix [0, start + T_pad):
+  rows at absolute positions < 2048 with the dense causal SDPA (K/V from the cached latent of
+  [0, start) plus the chunk's), rows from 2048 on with the indexer + sparse_sdpa, so the result
+  equals the single-shot prefill of the whole prompt (same kernels, same row classes).
 * ``decode_forward(streams, positions)``: ``streams`` ``[1, 1, B, 4*4096]`` fp32, one token for
   each of the B == max_batch user slots (user b = row b); ``positions`` is a ``DecodePositions``
   built by ``make_decode_positions(host_positions)`` and refreshed in place by
@@ -122,6 +134,8 @@ class FunctionalDecoder(LightweightModule):
         self.kda_batched: KdaState | None = None
         if layer.is_kda:
             self.kda_batched = layer.attn.allocate_state(max_batch)
+        # chunked prefill bookkeeping: the position the next chunk of each user must start at
+        self.next_start: list[int] = [0] * max_batch
 
     @classmethod
     def from_state_dict(
@@ -158,10 +172,20 @@ class FunctionalDecoder(LightweightModule):
         return cls(layer, max_batch=max_batch, max_seq_len=max_seq_len, **kwargs)
 
     # ------------------------------------------------------------------ state
-    def _state_for_prefill(self, user: int) -> LayerState:
-        if self.layer.is_kda:
-            return LayerState(kda=self.layer.attn.allocate_state(1))
-        return LayerState(cache=self.cache)
+    def _state_for_prefill(self, user: int, start: int = 0) -> tuple[LayerState, list[ttnn.Tensor]]:
+        """The layer state a prefill chunk of ``user`` starts from, plus the temporaries to release
+        after the chunk. KDA: a zero state for a new prompt (start == 0), otherwise the user's
+        current carries read out of the persistent batched state (slot ``user``)."""
+        if not self.layer.is_kda:
+            return LayerState(cache=self.cache), []
+        if start == 0:
+            return LayerState(kda=self.layer.attn.allocate_state(1)), []
+        src = self.kda_batched
+        if self.max_batch == 1:  # ttKDA only reads its input state; the new carries are fresh tensors
+            return LayerState(kda=src), []
+        rec = ttnn.slice(src.recurrent, [user, 0, 0, 0], [user + 1] + list(src.recurrent.shape)[1:])
+        conv = ttnn.slice(src.convolution, [user, 0, 0], [user + 1] + list(src.convolution.shape)[1:])
+        return LayerState(kda=KdaState(recurrent=rec, convolution=conv)), [rec, conv]
 
     def _write_user_kda_state(self, user: int, new: KdaState):
         """Copy a freshly prefilled single-user state into slot ``user`` of the persistent batched state."""
@@ -227,20 +251,37 @@ class FunctionalDecoder(LightweightModule):
         dp.host = list(host_positions)
 
     # ---------------------------------------------------------------- forwards
-    def prefill_forward(self, streams: ttnn.Tensor, *, user: int = 0, seq_len: int | None = None) -> ttnn.Tensor:
+    def prefill_forward(
+        self, streams: ttnn.Tensor, *, user: int = 0, seq_len: int | None = None, start: int = 0
+    ) -> ttnn.Tensor:
+        """One chunk of one user's prompt: row i of ``streams`` is the token at absolute position
+        ``start + i``. ``start == 0`` starts a new prompt; a later chunk must start where the previous
+        one ended (``next_start[user]``), on a 32-row boundary, and end within ``max_seq_len`` (see
+        the module docstring for the full chunked-prefill contract)."""
         T = streams.shape[-2]
         seq_len = T if seq_len is None else seq_len
         if T % TILE or seq_len > T or seq_len <= 0:
             raise ValueError(f"T_pad={T} must be a multiple of {TILE} and 0 < seq_len={seq_len} <= T_pad")
         if user >= self.max_batch:
             raise ValueError(f"user {user} >= max_batch {self.max_batch}")
-        if seq_len > self.max_seq_len:
-            raise ValueError(f"seq_len {seq_len} > max_seq_len {self.max_seq_len}")
+        if start < 0 or start % TILE:
+            raise ValueError(f"chunk start {start} must be a non-negative multiple of {TILE}")
+        if start + seq_len > self.max_seq_len:
+            raise ValueError(f"start {start} + seq_len {seq_len} > max_seq_len {self.max_seq_len}")
+        if start and start != self.next_start[user]:
+            raise ValueError(
+                f"user {user}: chunk start {start} is not contiguous with the previous chunk "
+                f"(expected {self.next_start[user]}; a chunk with a non-{TILE}-aligned seq_len must be the last)"
+            )
         if self.mesh.rows > 1:
             raise NotImplementedError("prefill on a multi-row mesh is not wired yet (single-row / single-chip only)")
-        out, new_state = self.layer.prefill_forward(streams, self._state_for_prefill(user), user=user, seq_len=seq_len)
+        state, temporaries = self._state_for_prefill(user, start)
+        out, new_state = self.layer.prefill_forward(streams, state, user=user, seq_len=seq_len, start=start)
+        for t in temporaries:
+            ttnn.deallocate(t)
         if self.layer.is_kda:
             self._write_user_kda_state(user, new_state.kda)
+        self.next_start[user] = start + seq_len
         return out
 
     def decode_forward(self, streams: ttnn.Tensor, *, positions: DecodePositions) -> ttnn.Tensor:
@@ -258,6 +299,7 @@ class FunctionalDecoder(LightweightModule):
         out, new_state = self.layer.decode_forward(streams, self._state_for_decode(B), positions=positions)
         if self.layer.is_kda:
             assert new_state.kda is self.kda_batched, "KDA decode must update the persistent state in place"
+        self.next_start = [p + 1 for p in positions.host]  # a prefill chunk may continue after decode
         return out
 
     # ------------------------------------------------------------------- trace

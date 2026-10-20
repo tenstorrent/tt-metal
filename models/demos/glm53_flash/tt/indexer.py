@@ -115,9 +115,31 @@ class TtIndexCache:
         """[max_batch, 1, pools_per_user, D] view for scoring (taken after the latest writes)."""
         return ttnn.reshape(self.pool_cache, [self.max_batch, 1, self.pools_per_user, self.D])
 
-    def write_pools(self, pooled: ttnn.Tensor, user: int):
-        """pooled [1,1,n_pad,D] bf16 (n_pad % 32 == 0) -> pools [0, n_pad) of ``user``."""
-        ttnn.experimental.paged_fill_cache(self.pool_cache, pooled, self.page_table, batch_idx=user)
+    def write_pools(self, pooled: ttnn.Tensor, user: int, start_pool: int = 0):
+        """pooled [1,1,n,D] bf16 -> pools [start_pool, start_pool + n) of ``user``. The write is
+        tile-granular (paged_fill_cache copies whole 32-pool tiles from the block ``start_pool // 32``
+        on), so a start inside a tile first re-reads that tile's earlier pools from the cache and the
+        rows past ``n`` are zero-padded (they are pools not yet complete, never selectable)."""
+        n = pooled.shape[-2]
+        b0, r0 = start_pool // TILE, start_pool % TILE
+        if r0:
+            blk = user * self.pool_blocks + b0  # identity page table: user u's pool blocks are contiguous
+            prefix = ttnn.reshape(
+                ttnn.slice(self.pool_cache, [blk, 0, 0, 0], [blk + 1, 1, r0, self.D]), [1, 1, r0, self.D]
+            )
+            pooled = ttnn.concat([prefix, pooled], dim=-2)
+            ttnn.deallocate(prefix)
+            n += r0
+        n_pad = -(-n // TILE) * TILE
+        if n_pad != n:
+            pooled = ttnn.pad(pooled, [(0, 0), (0, 0), (0, n_pad - n), (0, 0)], value=0.0)
+        if b0 == 0:
+            ttnn.experimental.paged_fill_cache(self.pool_cache, pooled, self.page_table, batch_idx=user)
+        else:
+            # page-table view of this user's blocks from b0 on (a device slice: no host upload in the pass)
+            view = ttnn.slice(self.page_table, [user, b0], [user + 1, self.pool_blocks])
+            ttnn.experimental.paged_fill_cache(self.pool_cache, pooled, view, batch_idx=0)
+            ttnn.deallocate(view)
 
     def update_pools(self, pooled_rows: ttnn.Tensor, pool_ids: ttnn.Tensor):
         """pooled_rows [1,B,1,D] (one row per user slot), pool_ids [B] int32 -> pool rows (all users)."""
@@ -209,31 +231,68 @@ class TtDSAIndexer(LightweightModule):
         return q, w
 
     # ------------------------------------------------------- maintenance
-    def maintain_prefill(self, x: ttnn.Tensor, cache: TtIndexCache, user: int, seq_len: int):
-        """Write the complete pools of a chunk from position 0 and the current pool's tail rows."""
+    def maintain_prefill(self, x: ttnn.Tensor, cache: TtIndexCache, user: int, seq_len: int, start: int = 0):
+        """Maintain the index for a prefill chunk holding positions ``[start, start + seq_len)`` of
+        ``user`` (x row i = position start + i; rows past ``seq_len`` are padding): write every pool
+        that becomes complete and leave the rows of the still-incomplete last pool in the ring.
+
+        The chunk boundary may fall inside a pool (``start % P != 0``): that pool's earlier rows are in
+        the ring (written as the previous chunk's tail), so it is completed from the ring rows plus
+        this chunk's first ``P - start % P`` rows; a chunk that ends inside it only extends the ring.
+        With ``start == 0`` this is the single-shot maintenance (pools from 0, tail rows to slots 0..)."""
         P, D = self.P, self.D
         k_idx, g_idx = self.keys_and_gates(x)  # [1,1,T_pad,D]
-        n_pools = seq_len // P
+        end = start + seq_len
+        r = start % P  # rows of pool start // P already in the ring
+        lead = min((P - r) % P, seq_len)  # this chunk's rows of that straddling pool
+        pools, first_pool = [], None
+        if r and lead < P - r:
+            # the chunk ends inside the straddling pool: extend the ring at slots r .. r+lead-1
+            self._write_tail_rows(cache, user, k_idx, g_idx, row0=0, n=lead, slot0=r)
+            ttnn.deallocate(k_idx)
+            ttnn.deallocate(g_idx)
+            return
+        if r:
+            # complete the straddling pool start // P from the ring rows [0, r) + the chunk rows [0, lead)
+            rk = ttnn.reshape(ttnn.slice(cache.ring_k, [user, 0, 0, 0], [user + 1, 1, r, D]), [1, 1, r, D])
+            rg = ttnn.reshape(ttnn.slice(cache.ring_g, [user, 0, 0, 0], [user + 1, 1, r, D]), [1, 1, r, D])
+            kp = ttnn.concat([rk, ttnn.slice(k_idx, [0, 0, 0, 0], [1, 1, lead, D])], dim=-2)
+            gp = ttnn.concat([rg, ttnn.slice(g_idx, [0, 0, 0, 0], [1, 1, lead, D])], dim=-2)
+            pools.append(self.pool(kp, gp))  # [1,1,1,D]
+            first_pool = start // P
+            for t in (rk, rg, kp, gp):
+                ttnn.deallocate(t)
+        a0 = start + lead  # first pool-aligned position of the chunk (== end when nothing follows)
+        n_pools = (end - a0) // P
         if n_pools > 0:
-            n_pad = -(-n_pools // TILE) * TILE
-            pooled = self.pool(
-                ttnn.slice(k_idx, [0, 0, 0, 0], [1, 1, n_pools * P, D]),
-                ttnn.slice(g_idx, [0, 0, 0, 0], [1, 1, n_pools * P, D]),
+            pools.append(
+                self.pool(
+                    ttnn.slice(k_idx, [0, 0, lead, 0], [1, 1, lead + n_pools * P, D]),
+                    ttnn.slice(g_idx, [0, 0, lead, 0], [1, 1, lead + n_pools * P, D]),
+                )
             )
-            if n_pad != n_pools:
-                pooled = ttnn.pad(pooled, [(0, 0), (0, 0), (0, n_pad - n_pools), (0, 0)], value=0.0)
-            cache.write_pools(pooled, user)
-        tail = seq_len - n_pools * P
-        # rows n_pools*P .. seq_len-1 -> ring block of `user`, slot (pos % P) = 0..tail-1, written ONE row per
-        # call: paged_update_cache gives every batch entry its own core and each core read-modify-writes the
-        # whole 32-row tile of the block, so two rows of the same block in one call would race
-        for j in range(tail):
-            row = n_pools * P + j
-            k_row = ttnn.reshape(ttnn.slice(k_idx, [0, 0, row, 0], [1, 1, row + 1, D]), [1, 1, 1, D])
-            g_row = ttnn.reshape(ttnn.slice(g_idx, [0, 0, row, 0], [1, 1, row + 1, D]), [1, 1, 1, D])
-            cache.write_ring_rows(k_row, g_row, cache._slot_ids[j], page_table=cache._user_pts[user])
+            if first_pool is None:
+                first_pool = a0 // P
+        if pools:
+            pooled = pools[0] if len(pools) == 1 else ttnn.concat(pools, dim=-2)
+            cache.write_pools(pooled, user, start_pool=first_pool)
+        # rows of the incomplete last pool [a0 + n_pools*P, end) -> ring slots 0..tail-1 (pos % P == slot)
+        tail = end - (a0 + n_pools * P)
+        self._write_tail_rows(cache, user, k_idx, g_idx, row0=lead + n_pools * P, n=tail, slot0=0)
         ttnn.deallocate(k_idx)
         ttnn.deallocate(g_idx)
+
+    def _write_tail_rows(self, cache: TtIndexCache, user: int, k_idx, g_idx, *, row0: int, n: int, slot0: int):
+        """Chunk rows row0 .. row0+n-1 -> ring block of ``user``, slots slot0 .. slot0+n-1, written ONE
+        row per call: paged_update_cache gives every batch entry its own core and each core
+        read-modify-writes the whole 32-row tile of the block, so two rows of the same block in one
+        call would race."""
+        D = self.D
+        for j in range(n):
+            row = row0 + j
+            k_row = ttnn.reshape(ttnn.slice(k_idx, [0, 0, row, 0], [1, 1, row + 1, D]), [1, 1, 1, D])
+            g_row = ttnn.reshape(ttnn.slice(g_idx, [0, 0, row, 0], [1, 1, row + 1, D]), [1, 1, 1, D])
+            cache.write_ring_rows(k_row, g_row, cache._slot_ids[slot0 + j], page_table=cache._user_pts[user])
 
     def maintain_decode(self, x: ttnn.Tensor, cache: TtIndexCache, pool_ids: ttnn.Tensor, ring_slots: ttnn.Tensor):
         """Batched, trace-safe: x [1,1,B,4096] (token at position a per user), pool_ids = a // P,
