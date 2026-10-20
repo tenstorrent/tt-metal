@@ -1,12 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""The row-sharded batched prefill returns <|channel|> without running the LM head.
-
-That token is only the next token after the harmony assistant header, so the dispatch must keep
-every other prompt (raw completions, prefixes already ending in <|channel|>) on the ordinary path.
-Pure host predicate, no device execution.
-"""
 
 from types import SimpleNamespace
 
@@ -41,9 +35,9 @@ def test_chat_prompts_ending_in_the_assistant_header_take_the_row_sharded_path()
 @pytest.mark.parametrize(
     "second",
     [
-        CHAT + [CHANNEL],  # raw prefix that already contains the channel delimiter
-        CHAT[:-1],  # incomplete header: <|start|> without the assistant role
-        [1, 2, 3, START, ASSISTANT],  # raw completion that is not a harmony prompt
+        CHAT + [CHANNEL],
+        CHAT[:-1],
+        [1, 2, 3, START, ASSISTANT],
     ],
     ids=["ends_in_channel", "no_assistant_role", "not_harmony"],
 )
