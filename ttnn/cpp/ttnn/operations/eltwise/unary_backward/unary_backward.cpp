@@ -37,12 +37,11 @@ namespace ttnn {
 namespace {
 
 // Whether one UnaryBackwardDeviceOperation program with a generated BF16 kernel computes this call
-// as the composite does, and faster. The kernels exist for Blackhole and Wormhole and read 32x32
-// tiles of BF16 operands with one shape, interleaved or sharded in DRAM. A tensor sharded in L1
-// keeps the composite: where every tensor is, the device operation computes in the shards in place,
-// and there the composite's sharded programs measured faster. Every other call, including a
-// broadcast gradient, a host operand, or a call whose output placement the composite chooses, keeps
-// the composite.
+// as the composite does. The kernels exist for Blackhole and Wormhole and read 32x32 tiles of BF16
+// operands in untransposed 16x16 faces, with one shape, interleaved or sharded in L1 or DRAM: the
+// device operation binds each operand's shard in place or addresses its pages. Every other call,
+// including a broadcast gradient, a host operand, or a call whose output placement the composite
+// chooses, keeps the composite.
 bool generated_bf16_kernel_applies(
     const Tensor& grad,
     const Tensor& input,
@@ -52,15 +51,14 @@ bool generated_bf16_kernel_applies(
     if (device == nullptr || (device->arch() != tt::ARCH::BLACKHOLE && device->arch() != tt::ARCH::WORMHOLE_B0)) {
         return false;
     }
-    const auto sharded_in_l1 = [](const MemoryConfig& memory) {
-        return memory.is_sharded() && memory.buffer_type() == tt::tt_metal::BufferType::L1;
-    };
     const auto bf16_tiles = [&](const Tensor& tensor) {
         const auto tile = tensor.tensor_spec().tile();
         return tensor.device() == device && tensor.dtype() == DataType::BFLOAT16 && tensor.layout() == Layout::TILE &&
                tile.get_height() == tt::constants::TILE_HEIGHT && tile.get_width() == tt::constants::TILE_WIDTH &&
-               !sharded_in_l1(tensor.memory_config()) && tensor.logical_shape() == input.logical_shape() &&
-               tensor.padded_shape() == input.padded_shape();
+               tile.get_face_shape() ==
+                   tt::tt_metal::Tile::FaceShape{tt::constants::FACE_HEIGHT, tt::constants::FACE_WIDTH} &&
+               !tile.get_transpose_within_face() && !tile.get_transpose_of_faces() &&
+               tensor.logical_shape() == input.logical_shape() && tensor.padded_shape() == input.padded_shape();
     };
     if (!bf16_tiles(grad) || !bf16_tiles(input)) {
         return false;
@@ -72,9 +70,8 @@ bool generated_bf16_kernel_applies(
     // only when both operands share one. A sharded output config without a shard spec leaves the
     // composite's ops to derive one from their operands, which the program does not do.
     return output_mem_config.has_value()
-               ? !sharded_in_l1(*output_mem_config) &&
-                     (!output_mem_config->is_sharded() || output_mem_config->shard_spec().has_value() ||
-                      output_mem_config->nd_shard_spec().has_value())
+               ? !output_mem_config->is_sharded() || output_mem_config->shard_spec().has_value() ||
+                     output_mem_config->nd_shard_spec().has_value()
                : grad.memory_config() == input.memory_config();
 }
 
