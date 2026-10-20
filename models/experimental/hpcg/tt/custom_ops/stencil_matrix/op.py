@@ -19,7 +19,8 @@ from models.experimental.hpcg.tt.layout import TILE, u32_rows
 from models.experimental.hpcg.tt.custom_ops.sparse_rows.op import core_ranges
 
 KERNEL = "models/experimental/hpcg/tt/custom_ops/stencil_matrix/kernels/generate.cpp"
-CB = dict(CB_S0=0, CB_S1=1, CB_M0=2, CB_M1=3, CB_Z=4)
+CB = dict(CB_S0=0, CB_S1=1, CB_M0=2, CB_M1=3, CB_Z=4, CB_X0=5, CB_X1=6)
+XCAP = 2048  # value exceptions per staging set (generate.cpp)
 SET_PAGES = 55  # staging set per RISC: 27 offset pages, 27 value pages, one b page (generate.cpp's SET)
 
 
@@ -79,6 +80,7 @@ class StencilMatrixOp:
         cbs = [cb(CB[f"CB_S{h}"], 2 * SET_PAGES * 4096, 4096) for h in (0, 1)]
         cbs += [cb(CB[f"CB_M{h}"], meta_pages * 4096, 4096) for h in (0, 1)]
         cbs.append(cb(CB["CB_Z"], 4096, 4096))
+        cbs += [cb(CB[f"CB_X{h}"], 2 * XCAP * 4, 2 * XCAP * 4) for h in (0, 1)]
         kernels = []
         head = [t.buffer_address() for t in (self.values, self.offsets, self.meta, bt)]
         tail = [meta_pages, int(b is not None), len(zeros), zt[0].buffer_address(), zt[1].buffer_address()]

@@ -23,6 +23,50 @@
 namespace {
 constexpr uint32_t F_MINUS1 = 0xBF800000u, F_26 = 0x41D00000u, F_1 = 0x3F800000u;
 constexpr uint32_t SET = 55 * 4096;  // one staging set: 27 offset pages, 27 value pages, one b page
+constexpr uint32_t XCAP = 2048;      // value exceptions recorded per staging set (CB_X0 / CB_X1: 2 x 8 KB)
+
+// The value pages of a staging set hold the interior template (-1, and 26 in slot 13) between chunks; a chunk writes
+// only its exceptions (0 for a missing neighbour; padding rows' 0 / 1) and records them as (slot, word, count), so
+// they are put back to the template once the chunk's writes have left L1. Most rows have no exception, so this halves
+// the stores per row. Past XCAP exceptions the whole template is rewritten instead.
+struct Exc {
+    uint32_t* e;
+    uint32_t n;
+    bool full;
+    void add(uint32_t j, uint32_t w0, uint32_t cnt) {
+        if (cnt == 0) {
+            return;
+        }
+        if (n < XCAP) {
+            e[n++] = (j << 22) | (w0 << 11) | cnt;
+        } else {
+            full = true;
+        }
+    }
+};
+inline uint32_t tmpl(uint32_t j) { return j == 13 ? F_26 : F_MINUS1; }
+void fill_template(uint32_t* Vv) {
+    for (uint32_t j = 0; j < 27; ++j) {
+        const uint32_t v = tmpl(j);
+        for (uint32_t w = 0; w < 1024; ++w) {
+            Vv[j * 1024 + w] = v;
+        }
+    }
+}
+void restore(uint32_t* Vv, Exc& x) {  // the set's previous chunk has left L1: put its exceptions back
+    if (x.full) {
+        fill_template(Vv);
+    } else {
+        for (uint32_t i = 0; i < x.n; ++i) {
+            const uint32_t j = x.e[i] >> 22, w0 = (x.e[i] >> 11) & 2047, cnt = x.e[i] & 2047, v = tmpl(j);
+            for (uint32_t t = 0; t < cnt; ++t) {
+                Vv[j * 1024 + w0 + t] = v;
+            }
+        }
+    }
+    x.n = 0;
+    x.full = false;
+}
 
 uint32_t f32_bits(uint32_t n) {  // fp32 bits of a small non-negative integer (exact)
     if (n == 0) {
@@ -81,7 +125,8 @@ void fill_run(
     int32_t iz,
     uint32_t* O,
     uint32_t* Vv,
-    uint32_t* Bw) {
+    uint32_t* Bw,
+    Exc& x) {
     const int32_t px = c & 1, nx = (int32_t)g.nx;
     const uint32_t sb = g.piece_base(q);  // the core's own rows sit in one window piece
     uint32_t K[27];                       // offset of slot j at x index i: K[j] + 4 i
@@ -122,11 +167,9 @@ void fill_run(
         int32_t a = ilo[j] - i0, e = ihi[j] - i0 + 1;  // rows [a, e) of the run have this neighbour
         a = a < 0 ? 0 : (a > len ? len : a);
         e = e < a ? a : (e > len ? len : e);
-        const uint32_t vj = j == 13 ? F_26 : F_MINUS1;
         uint32_t off = K[j] + 4 * (i0 + a), self = self0 + 4 * a;
         for (int32_t t = a; t < e; ++t, off += 4) {
-            o[t] = off;
-            v[t] = vj;
+            o[t] = off;  // the value is the template's
         }
         for (int32_t t = 0; t < a; ++t) {  // missing neighbour: a zero entry on the row itself
             o[t] = self0 + 4 * t;
@@ -137,6 +180,8 @@ void fill_run(
             o[t] = self;
             v[t] = 0;
         }
+        x.add(j, w0, a);
+        x.add(j, w0 + e, len - e);
     }
     // b = 26 - (neighbours - 1): lines inside the grid times x neighbours inside the grid
     int32_t lines = 0;
@@ -151,7 +196,7 @@ void fill_run(
 }
 
 // rows [q0, q1) of colour block c (one DRAM page at most) into the staging set at base
-void fill_chunk(const Geo& g, uint32_t c, uint32_t q0, uint32_t q1, uint32_t real_end, uint32_t base) {
+void fill_chunk(const Geo& g, uint32_t c, uint32_t q0, uint32_t q1, uint32_t real_end, uint32_t base, Exc& x) {
     // plain (not volatile) stores so the compiler can schedule the fill loops; kernel_main puts a compiler memory
     // barrier between the fill and the NoC writes that read these pages
     uint32_t* O = (uint32_t*)base;
@@ -167,7 +212,7 @@ void fill_chunk(const Geo& g, uint32_t c, uint32_t q0, uint32_t q1, uint32_t rea
         const uint32_t k = k0 + jb, l = q - g.bst[k], line = l / cxn, i0 = l % cxn;
         const uint32_t len = (cxn - i0) < (end - q) ? (cxn - i0) : (end - q);
         const uint32_t iy = 2 * (g.by0[k] + line % g.bny[k]) + py, iz = 2 * (line / g.bny[k]) + pz;
-        fill_run(g, c, q, (int32_t)i0, (int32_t)len, (int32_t)iy, (int32_t)iz, O, Vv, Bw);
+        fill_run(g, c, q, (int32_t)i0, (int32_t)len, (int32_t)iy, (int32_t)iz, O, Vv, Bw, x);
         q += len;
     }
     const uint32_t p0 = q0 > real_end ? q0 : real_end;
@@ -180,6 +225,9 @@ void fill_chunk(const Geo& g, uint32_t c, uint32_t q0, uint32_t q1, uint32_t rea
                 Vv[j * 1024 + w] = j == 13 ? F_1 : 0;
             }
             Bw[w] = 0;
+        }
+        for (uint32_t j = 0; j < 27; ++j) {
+            x.add(j, p0 & 1023, q1 - p0);
         }
     }
 }
@@ -222,6 +270,10 @@ void kernel_main() {
     const uint32_t* m = g.m;
     const uint32_t ntlv = m[3];
     const uint32_t stage = get_write_ptr(half ? CB_S1 : CB_S0);
+    const uint32_t xbuf = get_write_ptr(half ? CB_X1 : CB_X0);
+    Exc xs[2] = {{(uint32_t*)xbuf, 0, false}, {(uint32_t*)xbuf + XCAP, 0, false}};
+    fill_template((uint32_t*)(stage + 27 * 4096));
+    fill_template((uint32_t*)(stage + SET + 27 * 4096));
     uint32_t set = 0, chunk = 0;
     for (uint32_t c = 0; c < 8; ++c) {
         const uint32_t a = m[6 + 2 * c], e = m[7 + 2 * c], real_end = m[22 + c];
@@ -229,7 +281,9 @@ void kernel_main() {
             const uint32_t q1 = (q0 / 1024 + 1) * 1024 < e ? (q0 / 1024 + 1) * 1024 : e;
             if ((chunk++ & 1) == half) {
                 const uint32_t base = stage + set * SET;
-                fill_chunk(g, c, q0, q1, real_end, base);
+                // this set's previous chunk was written out before the last barrier: restore its value template
+                restore((uint32_t*)(base + 27 * 4096), xs[set]);
+                fill_chunk(g, c, q0, q1, real_end, base, xs[set]);
                 asm volatile("" ::: "memory");  // every staging store is issued before the NoC reads the pages
                 noc_async_write_barrier();  // the other set's writes have left L1 before it is filled again
                 const uint32_t t = q0 >> 10, wb = (q0 & 1023) * 4, nb = (q1 - q0) * 4;
