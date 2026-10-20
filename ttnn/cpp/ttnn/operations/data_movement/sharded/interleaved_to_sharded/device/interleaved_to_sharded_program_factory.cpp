@@ -325,7 +325,7 @@ ttnn::device_operation::ProgramArtifacts InterleavedToShardedProgramFactory::cre
             // Metal 2.0 ComputeHardwareConfig defaults match those field for field (HiFi4; math_approx_mode
             // false = Precise SFPU; bfp8_pack_precise false = Approximate pack; fp32_dest_acc_en
             // false; dst_full_sync_en false = double_buffer_dest true), so an all-default config
-            // reproduces the legacy settings exactly, except for the Float32 -> BFloat16 rounding above.
+            // reproduces the legacy settings exactly, except for Float32 -> BFloat16.
             .hw_config = compute_hw,
         });
         work_unit_kernels.push_back(COMPUTE);

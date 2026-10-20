@@ -2,8 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-# Data-movement ops that convert FLOAT32 to BFLOAT16 on device must round to nearest even, like ttnn.typecast
-# and torch.Tensor.to(torch.bfloat16), instead of truncating (#58371).
 
 import pytest
 import torch

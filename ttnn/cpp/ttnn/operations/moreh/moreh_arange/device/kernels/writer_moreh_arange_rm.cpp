@@ -12,7 +12,6 @@
 
 #define TILE_WIDTH 32
 
-// Round a float32 bit pattern to the nearest bfloat16, ties to even, as the host conversion does.
 inline uint16_t float_to_bfloat16_rne(uint32_t u) { return uint16_t((u + 0x7FFF + ((u >> 16) & 1)) >> 16); }
 
 void kernel_main() {
