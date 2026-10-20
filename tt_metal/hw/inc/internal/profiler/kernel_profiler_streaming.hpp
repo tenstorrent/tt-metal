@@ -105,13 +105,16 @@ static_assert(myRiscID < PROFILER_SPSC_MAX_RISC, "this processor has no slot in 
 
 constexpr uint32_t PROFILER_STALL_ZONE_ID = TT_ZONE_STALL_ID;
 
-// Last high half emitted in a STICKY_TIMER; ~0 forces a fresh sticky on a launch's first marker.
-[[maybe_unused]] static uint32_t g_prev_timer_hi = 0xFFFFFFFFu;
-[[maybe_unused]] static uint32_t g_prog_pending =
-    0xFFFFFFFFu;  // validators: the runtime id awaiting the launch's publish
+// A value no clock high half or runtime id takes, which these words hold when they have none: no timer word yet this
+// launch, no runtime id awaiting publish, no cursor, no pending stall.
+constexpr uint32_t kUnset = 0xFFFFFFFFu;
+
+// Last high half emitted in a STICKY_TIMER; kUnset forces a fresh sticky on a launch's first marker.
+[[maybe_unused]] static uint32_t g_prev_timer_hi = kUnset;
+[[maybe_unused]] static uint32_t g_prog_pending = kUnset;  // validators: the runtime id awaiting the launch's publish
 
 struct PendingStall {
-    uint32_t start_hi = 0xFFFFFFFFu, start_lo = 0, end_hi = 0, end_lo = 0;
+    uint32_t start_hi = kUnset, start_lo = 0, end_hi = 0, end_lo = 0;
 };
 
 // The write index past which the smallest reservation no longer fits, from a cached copy of the relay's head. The head
@@ -201,12 +204,11 @@ __attribute__((noinline, cold)) void ring_copy_words(const AliasingWord* from, u
 
 // The high half moves about once per 3.2 s, so test before storing; every caller's room reservation already
 // covers the sticky word.
-FORCE_INLINE void ring_write_sticky_timer(uint32_t hi) {
-    if (__builtin_expect(hi != g_prev_timer_hi, 0)) {
-        profiler_data_buffer[myRiscID].data[wIndex % RING_CAPACITY] = ppfmt::w0(ppfmt::T_STICKY_TIMER, hi);
-        wIndex++;
-        g_prev_timer_hi = hi;
-        publish_state(STATE_TIMER_INDEX, hi);
+FORCE_INLINE void ring_write_sticky_timer(uint32_t time_hi) {
+    if (__builtin_expect(time_hi != g_prev_timer_hi, 0)) {
+        ring_write_word(ppfmt::w0(ppfmt::T_STICKY_TIMER, time_hi));
+        g_prev_timer_hi = time_hi;
+        publish_state(STATE_TIMER_INDEX, time_hi);
     }
 }
 
@@ -214,7 +216,7 @@ FORCE_INLINE void ring_write_sticky_timer(uint32_t hi) {
 // (internal/debug/device_publish.h), which the decoder keeps too. A high word of kUnset is no cursor, which no short
 // record matches.
 [[maybe_unused]] static uint32_t g_cursor_lo = 0;
-[[maybe_unused]] static uint32_t g_cursor_hi = 0xFFFFFFFFu;
+[[maybe_unused]] static uint32_t g_cursor_hi = kUnset;
 
 // A stall writes into a ring that is by definition full, so its words come from a reserve ordinary records may not fill
 // into: the timer's high word, word 0 and the stall's body.
@@ -237,15 +239,15 @@ constexpr uint32_t MIN_RESERVE_WORDS = 5;
 // the start a 32-bit distance back. A stall of 2^32 cycles or more saturates it, because the reserve has no room for a
 // full record. A 3.2 s wait is a wedged relay, not a measurement.
 FORCE_INLINE void write_pending_stall() {
-    const uint32_t hi = g_stall.end_hi, lo = g_stall.end_lo;
-    const uint32_t lo_d = lo - g_stall.start_lo;
-    const uint32_t hi_d = hi - g_stall.start_hi - (lo < g_stall.start_lo);
-    const uint32_t duration = lo_d | (0u - static_cast<uint32_t>(hi_d != 0));
-    ring_write_sticky_timer(hi);
+    const uint32_t end_hi = g_stall.end_hi, end_lo = g_stall.end_lo;
+    const uint32_t duration_lo = end_lo - g_stall.start_lo;
+    const uint32_t duration_hi = end_hi - g_stall.start_hi - (end_lo < g_stall.start_lo);
+    const uint32_t duration = duration_lo | (0u - static_cast<uint32_t>(duration_hi != 0));
+    ring_write_sticky_timer(end_hi);
     ring_write_word(ppfmt::record_w0(ppfmt::STALL_BODY_WORDS) | PROFILER_STALL_ZONE_ID);
-    ring_write_word(lo);
+    ring_write_word(end_lo);
     ring_write_word(duration);
-    g_stall.start_hi = 0xFFFFFFFFu;
+    g_stall.start_hi = kUnset;
     // The stall is the back-pressure signal and its wait already cost a full stall, so it publishes at once.
     publish_tail();
 }
@@ -253,16 +255,16 @@ FORCE_INLINE void write_pending_stall() {
 // The caller read its time first, so its record goes into the stream before the stall, and a stall never sits inside
 // the zone it interrupted. After a wait the cached head looks full, so the next record's room check comes back here and
 // writes the stall first.
-__attribute__((noinline, cold)) void ring_ensure_room_slow(uint32_t nwords) {
+__attribute__((noinline, cold)) void ring_ensure_room_slow(uint32_t reserve) {
     // Invalidate before the refresh: the relay's head write-back arrives over the NoC, which the core's L1 read cache
     // does not observe.
     invalidate_l1_cache();
     const uint32_t head = profiler_control_buffer[HEAD_INDEX];
     g_room_end = head + (RING_USABLE - MIN_RESERVE_WORDS);
-    if (g_stall.start_hi != 0xFFFFFFFFu) {
+    if (g_stall.start_hi != kUnset) {
         write_pending_stall();
     }
-    if ((wIndex - head) <= (RING_USABLE - nwords)) {
+    if ((wIndex - head) <= (RING_USABLE - reserve)) {
         return;
     }
     if constexpr (myRiscID < SPSC_STALL_COUNT_MAX) {
@@ -271,7 +273,7 @@ __attribute__((noinline, cold)) void ring_ensure_room_slow(uint32_t nwords) {
     read_wall_clock(g_stall.start_hi, g_stall.start_lo);
     // The relay can only free words up to the published tail, so waiting on unpublished words deadlocks.
     publish_tail();
-    while ((wIndex - profiler_control_buffer[HEAD_INDEX]) > (RING_USABLE - nwords - STALL_RESERVE_WORDS)) {
+    while ((wIndex - profiler_control_buffer[HEAD_INDEX]) > (RING_USABLE - reserve - STALL_RESERVE_WORDS)) {
         invalidate_l1_cache();  // re-read the relay-updated head (and the arm flag)
         if (!profiler_control_buffer[PROFILER_ARMED]) {
             break;  // nobody drains this ring (or teardown disarmed it): overwrite rather than wait
@@ -282,8 +284,8 @@ __attribute__((noinline, cold)) void ring_ensure_room_slow(uint32_t nwords) {
 }
 
 // One local compare against the cached room end, signed because wIndex can pass it by a record.
-FORCE_INLINE void ring_ensure_room(uint32_t nwords) {
-    const uint32_t reserve = std::max(nwords, MIN_RESERVE_WORDS);
+FORCE_INLINE void ring_ensure_room(uint32_t words) {
+    const uint32_t reserve = std::max(words, MIN_RESERVE_WORDS);
     if (__builtin_expect(static_cast<int32_t>(wIndex + (reserve - MIN_RESERVE_WORDS) - g_room_end) > 0, 0)) {
         ring_ensure_room_slow(reserve);
     }
@@ -309,7 +311,8 @@ PROFILER_INLINE_ATTR void publish_with(uint32_t header, Inputs... inputs) {
 // this lane's following markers. Every RISC emits one at its own launch point; a sweep-granular id
 // misassigns about twice as many zones on back-to-back launches.
 FORCE_INLINE void set_host_counter(uint32_t counter_value) {
-    if (counter_value >> 27) {
+    // An id that reaches the type field takes the two-word sticky.
+    if (counter_value >> ppfmt::TYPE_SHIFT) {
         ring_ensure_room(2);
         ring_write_word(ppfmt::w0(ppfmt::T_STICKY_PROG_EXT, 0));
         ring_write_word(counter_value);
@@ -328,19 +331,19 @@ FORCE_INLINE void set_profiler_zone_valid(bool condition) {
     if (condition) {
         publish_tail();
         asm volatile("fence" ::: "memory");
-        if (g_prev_timer_hi != 0xFFFFFFFFu) {
+        if (g_prev_timer_hi != kUnset) {
             profiler_control_buffer[STATE_TIMER_INDEX] = g_prev_timer_hi;
         }
-        if (g_prog_pending != 0xFFFFFFFFu) {
+        if (g_prog_pending != kUnset) {
             profiler_control_buffer[STATE_PROG_INDEX] = g_prog_pending;
-            g_prog_pending = 0xFFFFFFFFu;
+            g_prog_pending = kUnset;
         }
     } else {
         // Idle launch: rewind to the last committed tail; the rewound words may have moved our cursor past anything
         // the decoder sees, so invalidate it.
         wIndex = profiler_control_buffer[TAIL_INDEX];
-        g_cursor_hi = 0xFFFFFFFFu;
-        g_stall.start_hi = 0xFFFFFFFFu;
+        g_cursor_hi = kUnset;
+        g_stall.start_hi = kUnset;
     }
 }
 
@@ -355,9 +358,9 @@ __attribute__((noinline)) void init_profiler(
     }
 
     // Fresh STICKY_TIMER on this launch's first marker (guards the idle-launch rewind).
-    g_prev_timer_hi = 0xFFFFFFFFu;
+    g_prev_timer_hi = kUnset;
     // After a rewind the decoder's cursor is not where ours is; drop ours so the first record isn't short.
-    g_cursor_hi = 0xFFFFFFFFu;
+    g_cursor_hi = kUnset;
 
     // Validators defer publishing until DeviceValidateProfiler resolves the launch.
     if constexpr (PROFILER_VALIDATES_ZONE) {
