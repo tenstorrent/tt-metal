@@ -624,6 +624,19 @@ class BatchedKVWrite:
         ttnn.generic_op(io, ttnn.ProgramDescriptor(kernels=dm + [comp], semaphores=[], cbs=cbs))
 
 
+_DRAFT_GU = os.environ.get("B32_DRAFT_GU", "1") == "1"
+
+
+def _gu_joint(gT, uT, D, gx):
+    """[K, D I] gate / up weights -> [K, 2 D I], per device d and core column j the gate columns of block j then the up
+    ones (I / gx columns each)."""
+    I = gT.shape[1] // D
+    w = I // gx
+    return torch.cat(
+        [torch.cat([gT[:, d * I + j * w : d * I + (j + 1) * w], uT[:, d * I + j * w : d * I + (j + 1) * w]], dim=1)
+         for d in range(D) for j in range(gx)], dim=1)  # fmt: skip
+
+
 class BatchedDraft:
     """The z-lab drafter (8 layers, TP like a dense target layer) for `users` sequences, each with its own paged BF16
     K/V cache; draft and context passes over all users' rows at once."""
@@ -720,6 +733,9 @@ class BatchedDraft:
                     o_b=put(w[a + "o_proj.bias"].reshape(1, -1)),
                     g=put(g.T, cols, dtype=wdt),  # gate and up as two matmuls: no slices of a joint output
                     u=put(u.T, cols, dtype=wdt),
+                    # (B32_DRAFT_GU: one joint matmul, its columns interleaved per core column of the 10 x 8 grid: core
+                    # column j's 2 x 6 output tiles = gate tiles 6 j .. 6 j + 5, then the up ones of the same columns)
+                    gu=put(_gu_joint(g.T, u.T, D, 10), cols, dtype=wdt) if _DRAFT_GU else None,
                     down=put(w[m + "down_proj.weight"].T, rows, dtype=wdt),
                 )
             )
@@ -860,6 +876,59 @@ class BatchedDraft:
             compute_kernel_config=ck or self.mm_ck,
             memory_config=mc,
         )
+
+    def _gate_up(self, x, L):
+        """act = silu(x W_gate) * (x W_up) [rows, I] BF16 (L1 interleaved): with B32_DRAFT_GU one joint matmul into
+        10 x 8 block shards and one silu * up program on them (fused_decode/kernels/draft_silu_mul_*.cpp); else two
+        matmuls and a multiply."""
+        if L.get("gu") is None:
+            g, u = self._linear(x, L["g"]), self._linear(x, L["u"])
+            act = ttnn.multiply(g, u, input_tensor_a_activations=[ttnn.UnaryOpType.SILU], memory_config=self.act_mc)
+            g.deallocate(True)
+            u.deallocate(True)
+            return act
+        from ..fused_decode.boundary import KERNEL_DIR
+
+        K, N2 = L["gu"].shape[-2], L["gu"].shape[-1]
+        gx, gy = 10, self.rows // TILE
+        nh = N2 // 2 // TILE // gx
+        gu_mc = ttnn.create_sharded_memory_config((TILE, N2 // gx), ttnn.CoreGrid(x=gx, y=gy), ttnn.ShardStrategy.BLOCK,
+                                                  ttnn.ShardOrientation.ROW_MAJOR, use_height_and_width_as_shard_shape=True)  # fmt: skip
+        gu = ttnn.linear(x, L["gu"], program_config=_mm_config_256(K, N2), dtype=ttnn.bfloat16,
+                         compute_kernel_config=self.mm_ck, memory_config=gu_mc)  # fmt: skip
+        act = ttnn.empty([1, 1, self.rows, N2 // 2], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.mesh_device,
+                         memory_config=ttnn.L1_MEMORY_CONFIG)  # fmt: skip
+        cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(gx - 1, gy - 1))])
+        cb_gu, cb_act = 0, 1
+        dm = ttnn.DataMovementConfigDescriptor
+        kernels = [
+            ttnn.KernelDescriptor(
+                kernel_source=str(KERNEL_DIR / "draft_silu_mul_reader.cpp"), core_ranges=cores,
+                compile_time_args=[cb_gu, nh], runtime_args=[],
+                config=dm(processor=ttnn.DataMovementProcessor.RISCV_1, noc=ttnn.NOC.NOC_0),
+            ),
+            ttnn.KernelDescriptor(
+                kernel_source=str(KERNEL_DIR / "draft_silu_mul_writer.cpp"), core_ranges=cores,
+                compile_time_args=[cb_act, nh, N2 // 2 // TILE] + ttnn.TensorAccessorArgs(act).get_compile_time_args(),
+                runtime_args=[], common_runtime_args=[act.buffer_address()],
+                config=dm(processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.NOC_1),
+            ),
+            ttnn.KernelDescriptor(
+                kernel_source=str(KERNEL_DIR / "draft_silu_mul_compute.cpp"), core_ranges=cores,
+                compile_time_args=[cb_gu, cb_act, nh], runtime_args=[],
+                config=ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True,
+                                                    math_approx_mode=False),
+            ),
+        ]  # fmt: skip
+        cbs = [
+            ttnn.cb_descriptor_from_sharded_tensor(cb_gu, gu),
+            ttnn.CBDescriptor(total_size=2048 * 2, core_ranges=cores,
+                              format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=cb_act, data_format=ttnn.bfloat16,
+                                                                          page_size=2048)]),
+        ]  # fmt: skip
+        ttnn.generic_op([gu, act], ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs))
+        gu.deallocate(True)
+        return act
 
     def rows_cos_sin(self, pos_rows):
         """Per-row cos / sin [1, 1, rows, hd] for positions pos_rows (device [1, rows] UINT32)."""
@@ -1020,11 +1089,8 @@ class BatchedDraft:
             h2, x = rn(o, h, L["ln2"], eps=self.eps, bias=L["o_b"], out_dtype=f32)
             o.deallocate(True)
             h.deallocate(True)
-            g, u = self._linear(x, L["g"]), self._linear(x, L["u"])
+            act = self._gate_up(x, L)
             x.deallocate(True)
-            act = ttnn.multiply(g, u, input_tensor_a_activations=[ttnn.UnaryOpType.SILU], memory_config=self.act_mc)
-            g.deallocate(True)
-            u.deallocate(True)
             partial = self._linear(act, L["down"])
             act.deallocate(True)
             mlp = _all_reduce(partial, None)
@@ -1094,11 +1160,8 @@ class BatchedDraft:
             o.deallocate(True)
             h = h2
             x = norm(h, L["ln2"])
-            g, u = self._linear(x, L["g"]), self._linear(x, L["u"])
+            act = self._gate_up(x, L)
             x.deallocate(True)
-            act = ttnn.multiply(g, u, input_tensor_a_activations=[ttnn.UnaryOpType.SILU], memory_config=self.act_mc)
-            g.deallocate(True)
-            u.deallocate(True)
             partial = self._linear(act, L["down"])
             act.deallocate(True)
             mlp = _all_reduce(partial, self.res_mc if self.res_block else None)
