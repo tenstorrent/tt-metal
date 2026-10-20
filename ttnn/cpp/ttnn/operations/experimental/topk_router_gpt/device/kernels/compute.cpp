@@ -199,21 +199,21 @@ void kernel_main() {
 
     // Sort first pair + merge → top-32 from 64 elements in DST[0,2]
     ckernel::topk_local_sort(0, /*idir=*/0, /*i_end_phase=*/4);
-    ckernel::topk_merge(0, /*idir=*/0, /*k=*/32);
+    ckernel::topk_merge<32>(0, /*m_iter=*/0);
 
     // Insert tile 2
     transpose_tile(cb_gathered_val_id, 2, 1);
     transpose_tile(cb_gathered_ind_id, 2, 3);
 
     ckernel::topk_local_sort(0, /*idir=*/0, /*i_end_phase=*/4);
-    ckernel::topk_merge(0, /*idir=*/0, /*k=*/32);
+    ckernel::topk_merge<32>(0, /*m_iter=*/0);
 
     // Insert tile 3
     transpose_tile(cb_gathered_val_id, 3, 1);
     transpose_tile(cb_gathered_ind_id, 3, 3);
 
     ckernel::topk_local_sort(0, /*idir=*/0, /*i_end_phase=*/4);
-    ckernel::topk_merge(0, /*idir=*/0, /*k=*/32);
+    ckernel::topk_merge<32>(0, /*m_iter=*/0);
 
     // Rebuild final sorted order
     ckernel::topk_rebuild(0, /*idir=*/0, /*m_iter=*/0, /*k=*/32, /*logk=*/5, /*skip_second=*/true);

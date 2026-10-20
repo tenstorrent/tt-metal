@@ -178,13 +178,13 @@ void kernel_main() {
                                     /*rank_stamped=*/false,
                                     tie_order>(/*idst=*/0, (int)dir, /*end_phase(log2(K))=*/5);
                             } else {
-                                ckernel::topk_merge<
+                                ckernel::topk_merge<32,
                                     /*idir=*/false,
                                     stable,
                                     DST_ACCUM_MODE,
                                     /*fused=*/false,
                                     /*rank_stamped=*/false,
-                                    tie_order>(/*idst=*/0, m_iter, /*k=*/32);
+                                    tie_order>(/*idst=*/0, m_iter);
 
                                 // topk_merge puts smallest values in DEST[0] and largest in DEST[1]
                                 // We swap their indices when using descending order
@@ -296,13 +296,13 @@ void kernel_main() {
 
                         value_tensor_peer_dfb.pop_front(one_tile);
 
-                        ckernel::topk_merge<
+                        ckernel::topk_merge<32,
                             /*idir=*/false,
                             stable,
                             DST_ACCUM_MODE,
                             /*fused=*/false,
                             /*rank_stamped=*/false,
-                            tie_order>(0, m_iter, 32);
+                            tie_order>(0, m_iter);
 
                         // topk_merge puts smallest values in DEST[0] and largest in DEST[1]
                         // If core must keep smallest values, then keep DEST[1] instead of DEST[0]
