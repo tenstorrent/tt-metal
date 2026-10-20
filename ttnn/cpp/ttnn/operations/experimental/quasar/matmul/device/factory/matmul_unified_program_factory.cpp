@@ -99,9 +99,12 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
     const tt::tt_metal::Tile C_tile = C.tensor_spec().tile();
     log_debug(
         tt::LogOp,
-        "MatmulUnifiedProgramConfig: borrow A={} B={} C={} (C slice {}x{}, subblock {}x{}, K chunk {} of {} tiles, "
-        "{} compute threads, {} reader threads, {} writer threads, {} A / B slices and {} C slices in flight, A / B "
-        "multicast to {} / {} cores)",
+        "MatmulUnifiedProgramConfig: {} cores in {} batch groups, borrow A={} B={} C={} (C slice {}x{}, subblock "
+        "{}x{}, "
+        "K chunk {} of {} tiles, {} compute threads, {} reader threads, {} writer threads, {} A / B slices and {} C "
+        "slices in flight, A / B multicast to {} / {} cores)",
+        plan.cores.size(),
+        plan.num_batch_groups,
         plan.borrow_A,
         plan.borrow_B,
         plan.borrow_C,
@@ -235,7 +238,9 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
             },
         .runtime_arg_schema =
             {.runtime_arg_names =
-                 {"first_C_slice",
+                 {"first_batch",
+                  "num_batches",
+                  "first_C_slice",
                   "num_C_slices",
                   "A_mcast_receiver",
                   "A_mcast_sender_x",
@@ -274,7 +279,7 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
                 {"C_entries_per_thread", plan.C_entries_per_thread},
                 {"C_borrowed", plan.borrow_C ? 1u : 0u},
             },
-        .runtime_arg_schema = {.runtime_arg_names = {"first_C_slice", "num_C_slices"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"first_batch", "num_batches", "first_C_slice", "num_C_slices"}},
         .hw_config = ttnn::create_writer_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
     };
 
@@ -346,7 +351,6 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
             },
         .compile_time_args =
             {
-                {"batch_size", plan.batch_size},
                 {"K_chunk_tiles", plan.K_chunk_tiles},
                 {"K_chunks_per_C_slice", plan.K_chunks_per_C_slice},
                 {"K_chunks_per_C_slice_padded", plan.K_chunks_per_C_slice_padded},
@@ -375,21 +379,31 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
     }};
 
     // ---- Per-core runtime args ----
-    // Each core takes a contiguous run of the C slice walk, the first (C_slices_per_batch % cores)
-    // cores one slice longer; starts are in tile coordinates, which is what the kernels step in.
+    // Batch group g (cores_per_batch_group consecutive cores) takes a contiguous run of the batches, the first
+    // (batch_size % num_batch_groups) groups one batch longer. Within a group each core takes a contiguous run of one
+    // batch's C slice walk, the first (C_slices_per_batch % cores_per_batch_group) cores one C slice longer.
     ProgramRunArgs::KernelRunArgs reader_run_args{.kernel = READER_KERNEL};
     ProgramRunArgs::KernelRunArgs compute_run_args{.kernel = COMPUTE_KERNEL};
     ProgramRunArgs::KernelRunArgs writer_run_args{.kernel = WRITER_KERNEL};
     const uint32_t num_active_cores = plan.cores.size();
-    const uint32_t C_slices_per_core_floor = plan.C_slices_per_batch / num_active_cores;
-    const uint32_t cores_with_extra_C_slice = plan.C_slices_per_batch % num_active_cores;
-    uint32_t next_C_slice = 0;  // position in the walk of the next unassigned C slice
+    const uint32_t cores_per_batch_group = num_active_cores / plan.num_batch_groups;
+    const uint32_t batches_per_group_floor = plan.batch_size / plan.num_batch_groups;
+    const uint32_t groups_with_extra_batch = plan.batch_size % plan.num_batch_groups;
+    const uint32_t C_slices_per_core_floor = plan.C_slices_per_batch / cores_per_batch_group;
+    const uint32_t cores_with_extra_C_slice = plan.C_slices_per_batch % cores_per_batch_group;
     // A is multicast along a core's row of the core rectangle and B down its column, each led by its first core, or
     // over the whole rectangle from its first core. The reader is on NOC_0 (Quasar has one NoC), which takes a
     // multicast rectangle from its lowest coordinates, the first core's, to its highest.
     const CoreRange core_grid = config.cores.bounding_box();
     for (uint32_t core = 0; core < num_active_cores; ++core) {
-        const uint32_t num_C_slices = C_slices_per_core_floor + (core < cores_with_extra_C_slice ? 1 : 0);
+        const uint32_t batch_group = core / cores_per_batch_group;
+        const uint32_t core_in_group = core % cores_per_batch_group;
+        const uint32_t first_batch =
+            batch_group * batches_per_group_floor + std::min(batch_group, groups_with_extra_batch);
+        const uint32_t num_batches = batches_per_group_floor + (batch_group < groups_with_extra_batch ? 1 : 0);
+        const uint32_t first_C_slice =
+            core_in_group * C_slices_per_core_floor + std::min(core_in_group, cores_with_extra_C_slice);
+        const uint32_t num_C_slices = C_slices_per_core_floor + (core_in_group < cores_with_extra_C_slice ? 1 : 0);
         const CoreCoord logical = plan.cores[core];
         const CoreCoord A_first =
             plan.A_mcast_to_all_cores ? core_grid.start_coord : CoreCoord{core_grid.start_coord.x, logical.y};
@@ -410,7 +424,9 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
         AddRuntimeArgsForNode(
             reader_run_args.runtime_arg_values,
             logical,
-            {{"first_C_slice", next_C_slice},
+            {{"first_batch", first_batch},
+             {"num_batches", num_batches},
+             {"first_C_slice", first_C_slice},
              {"num_C_slices", num_C_slices},
              {"A_mcast_receiver", plan.A_mcast_num_dests > 0 && logical != A_first ? 1u : 0u},
              {"A_mcast_sender_x", static_cast<uint32_t>(A_sender.x)},
@@ -425,9 +441,12 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
         AddRuntimeArgsForNode(
             writer_run_args.runtime_arg_values,
             logical,
-            {{"first_C_slice", next_C_slice}, {"num_C_slices", num_C_slices}});
-        next_C_slice += num_C_slices;
-        AddRuntimeArgsForNode(compute_run_args.runtime_arg_values, plan.cores[core], {{"num_C_slices", num_C_slices}});
+            {{"first_batch", first_batch},
+             {"num_batches", num_batches},
+             {"first_C_slice", first_C_slice},
+             {"num_C_slices", num_C_slices}});
+        AddRuntimeArgsForNode(
+            compute_run_args.runtime_arg_values, logical, {{"num_C_slices", num_batches * num_C_slices}});
     }
 
     Group<SemaphoreSpec> semaphores;
