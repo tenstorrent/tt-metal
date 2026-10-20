@@ -282,9 +282,8 @@ ProgramDescriptor build_tile(const rcg::TilePlan& p, const Tensor& input, Tensor
     writer.kernel_source = common_kernel("writer_interleaved.cpp");
     writer.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer.core_ranges = all_cores;
-    writer.compile_time_args = {kCbOut, p.out_page_bytes};
+    writer.compile_time_args = {kCbOut, p.out_page_bytes, p.write_batch};
     TensorAccessorArgs(*out_buf).append_to(writer.compile_time_args);
-    writer.compile_time_args.push_back(p.write_batch);
     writer.config = WriterConfigDescriptor{};
 
     KernelDescriptor compute;
