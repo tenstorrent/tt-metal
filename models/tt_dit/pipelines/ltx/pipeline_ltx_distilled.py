@@ -246,6 +246,10 @@ def _euler_ancestral_step(
         renoise_coeff = sigma_next**2 - sigma_down**2 * (alpha_next / alpha_down) ** 2
         renoise_coeff = max(0.0, renoise_coeff) ** 0.5
         x_next = (alpha_next / alpha_down) * x_next + noise.float() * s_noise * renoise_coeff
+    if pin is not None:
+        # The re-noise and alpha rescale hit every token; put the conditioned tokens back so the next
+        # step sees the clean image where its per-token timestep says clean.
+        x_next = pin(x_next)
     return x_next
 
 
@@ -308,6 +312,11 @@ def _euler_ancestral_step_tt(
             ttnn.deallocate(scaled)
         else:
             x_next = scaled
+        if pin is not None:
+            # As in _euler_ancestral_step: re-pin after the re-noise so conditioned tokens stay clean.
+            pinned = pin(x_next)
+            ttnn.deallocate(x_next)
+            x_next = pinned
     ttnn.multiply_(x_next, pad_mask)
     ttnn.copy(x_next, tt_x)
     ttnn.deallocate(x_next)

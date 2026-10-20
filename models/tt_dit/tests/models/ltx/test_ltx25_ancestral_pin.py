@@ -95,6 +95,24 @@ def test_ancestral_step_pins_x0_on_device_and_host():
     assert not torch.equal(tt_x[:, :, 4:], clean[:, :, 4:])
 
 
+def test_ancestral_step_keeps_pinned_rows_clean_through_renoise():
+    """A mid-schedule step re-noises every token; the pinned rows must come out as the clean image
+    (their per-token timestep is 0), not clean + noise. Pinning only x0 left them noisy, and the
+    next step read that noise as image content (#346 e2e_p: still a crossfade over frames 3-8)."""
+    ns = _step_namespace()
+    x, vel, noise, clean, mask, pad = _pinned_case(seed=2)
+    x[:, :, :4] = clean[:, :, :4]  # the stage starts with the image in place
+    pin = lambda x0: ns["_post_process_latent_tt"](x0, mask, clean)  # noqa: E731
+    for sigma, sigma_next in ((1.0, 0.9), (0.9, 0.7), (0.7, 0.4)):
+        tt_x = x.clone()
+        ns["_euler_ancestral_step_tt"](tt_x, vel, pad, sigma, sigma_next, noise, pin=pin)
+        host = ns["_euler_ancestral_step"](x, vel, sigma, sigma_next, noise, pin=pin)
+        torch.testing.assert_close(tt_x, host)
+        assert torch.equal(tt_x[:, :, :4], clean[:, :, :4]), f"pinned rows re-noised at sigma {sigma}->{sigma_next}"
+        assert not torch.equal(tt_x[:, :, 4:], x[:, :, 4:])
+        x = tt_x
+
+
 def test_ancestral_step_unpinned_is_unchanged():
     """No pin (T2V): the step is the plain ancestral Euler, host and device alike."""
     ns = _step_namespace()
