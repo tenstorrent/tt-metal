@@ -22,11 +22,14 @@ import os
 from pathlib import Path
 from typing import Callable, Optional
 
+from loguru import logger
+
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res import TtAttnRes
 from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res_stream import BLOCK_SIZE, TtAttnResWalk
 from models.demos.deepseek_v3_d_p.tt.attn_res.weights import CHECKPOINT_PREFIX, load_attn_res_weights
+from models.demos.deepseek_v3_d_p.tt.kda.config import KIMI_K3_PROJECTION_DTYPE
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.attention import K3AttnContext, K3KdaChunk, build_attention
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.block import TtKimiK3Block
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.kda_state import KdaStateCache
@@ -64,11 +67,20 @@ class TtKimiK3Transformer(LightweightModule):
         but a silently wrong model, because `ttnn.as_tensor` writes whatever tensor it is handed when
         a file is absent and `TtDistributedRmsNorm` hands it `torch.empty` (#54841).
         """
-        from models.demos.deepseek_v3_d_p.tt.kimi_k3.weights import layer_is_cached
+        from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
+        from models.demos.deepseek_v3_d_p.tt.kimi_k3.weights import layer_is_cached, layer_is_stale
 
         if cache_path is None:
             return False
-        return all(layer_is_cached(Path(cache_path), first_layer_idx + i) for i in range(num_layers))
+        model_cfg = model_cfg if model_cfg is not None else KimiK3Config
+        layers = range(first_layer_idx, first_layer_idx + num_layers)
+        stale = [idx for idx in layers if layer_is_stale(Path(cache_path), idx, model_cfg)]
+        if stale:
+            logger.warning(
+                f"Kimi-K3 cache at {cache_path}: layers {stale} lack {KIMI_K3_PROJECTION_DTYPE.name} KDA projections; "
+                f"rebuild them from the checkpoint (test_transformer_depth does this, rebuilding only the projections)"
+            )
+        return all(layer_is_cached(Path(cache_path), idx, model_cfg) for idx in layers)
 
     def __init__(
         self,
@@ -441,6 +453,7 @@ class TtKimiK3Transformer(LightweightModule):
         on_mtp_complete: Optional[Callable] = None,
         input_is_embedded: bool = False,
         provided_levels: int = 0,
+        mtp_geometry=None,
     ):
         """Run this rank's layers. Returns the post-norm hidden state, or the raw one mid-pipeline.
 
@@ -460,7 +473,13 @@ class TtKimiK3Transformer(LightweightModule):
             raise ValueError("Kimi-K3 has no DSA indexer; index_kv_cache must be None")
         if return_intermediates:
             raise NotImplementedError("Kimi-K3 does not implement return_intermediates")
-        if mtp_union is not None or on_mtp_complete is not None or input_is_embedded or provided_levels:
+        if (
+            mtp_union is not None
+            or on_mtp_complete is not None
+            or input_is_embedded
+            or provided_levels
+            or mtp_geometry is not None
+        ):
             raise ValueError("Kimi-K3 has no MTP predictor; MTP forward arguments must be left at their defaults")
         # The constructor argument is the channel `TtPrefillTransformer` uses (it reads
         # `self.padding_side` and takes no per-call value), so defaulting the keyword to "right"
@@ -482,7 +501,7 @@ class TtKimiK3Transformer(LightweightModule):
             f"snapshots, expected {self.inbound_planes - 1}"
         )
 
-        # Eager chunks build the KDA bounds and selection table once and share them across the KDA layers.
+        # Eager chunks build the KDA bounds once and share them across the KDA layers.
         kda_chunk = K3KdaChunk(actual_start, actual_end) if metadata is None else None
         try:
             for local_idx, layer in enumerate(self.layers):

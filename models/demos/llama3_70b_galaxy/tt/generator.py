@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import contextlib
 from collections import defaultdict
 from dataclasses import fields, replace
 from typing import List

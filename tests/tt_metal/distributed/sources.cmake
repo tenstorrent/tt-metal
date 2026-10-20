@@ -16,6 +16,7 @@ set(DISTRIBUTED_UNIT_TEST_SOURCES
     test_mesh_workload.cpp
     test_mesh_socket.cpp
     test_hd_sockets.cpp
+    test_host_region.cpp
     test_mesh_sub_device.cpp
     test_mesh_allocator.cpp
     test_mesh_command_list.cpp
@@ -31,3 +32,12 @@ if(ENABLE_DISTRIBUTED)
 else()
     list(APPEND DISTRIBUTED_UNIT_TEST_SOURCES test_single_host_context.cpp)
 endif()
+
+# Layer completion (host-only): ring, router, D2H ack decoder.
+list(
+    APPEND
+    DISTRIBUTED_UNIT_TEST_SOURCES
+    test_layer_completion_ring.cpp
+    test_layer_completion_router.cpp
+    test_layer_ack_decoder.cpp
+)
