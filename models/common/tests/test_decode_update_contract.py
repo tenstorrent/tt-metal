@@ -6,6 +6,7 @@ import inspect
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 import torch
 
 from models.common.sampling.generator import (
@@ -383,6 +384,60 @@ def test_shared_generator_rejects_cross_lane_sampling_remap(expect_error):
 
     with expect_error(ValueError, "outside its global range"):
         Generator._apply_sampling_slot_remap(fake, torch.tensor([0, 2, 2, 3]))
+
+
+@pytest.mark.parametrize(
+    "adapter_path",
+    [
+        "models.tt_transformers.tt.generator_vllm:Mistral3ForConditionalGeneration",
+        "models.tt_transformers.tt.generator_vllm:Gemma3ForConditionalGeneration",
+        "models.demos.blackhole.qwen36.tt.qwen36_vllm:Qwen36ForCausalLM",
+    ],
+    ids=lambda path: path.rsplit(":", 1)[1],
+)
+def test_adapter_forwards_deferred_decode_to_shared_generator(adapter_path, monkeypatch):
+    """A device grammar adapter must hand the deferred decode to Generator unchanged."""
+    pytest.importorskip("vllm")
+    import importlib
+
+    from models.tt_transformers.tt.generator import Generator
+
+    module_name, class_name = adapter_path.split(":")
+    adapter = getattr(importlib.import_module(module_name), class_name)
+    forwarded = []
+    payload = object()
+
+    def fake_decode(self, *args, **kwargs):
+        forwarded.append((args, kwargs))
+        return payload
+
+    monkeypatch.setattr(Generator, "decode_forward", fake_decode)
+    monkeypatch.setenv("TT_DECODE_BUCKETING", "1")
+    wrapper = adapter.__new__(adapter)
+    wrapper.model = [SimpleNamespace(num_devices=1, args=SimpleNamespace(max_batch_size=32), sampling=None)]
+    wrapper.data_parallel = 1  # read by Generator.__del__
+    # Every row is active, so Qwen3.6 decode bucketing keeps the full width.
+    tokens = torch.zeros(32, 1, dtype=torch.int32)
+    start_pos = torch.zeros(32, dtype=torch.int32)
+
+    result = adapter.decode_forward(
+        wrapper,
+        tokens,
+        start_pos,
+        read_from_device=False,
+        defer_device_sampling=True,
+        reload_inputs=True,
+        reload_page_table=False,
+        reload_sampling_params=False,
+        reset_sampling_state=False,
+    )
+
+    assert result is payload
+    args, kwargs = forwarded[0]
+    assert args[0] is tokens and args[1] is start_pos
+    assert kwargs["defer_device_sampling"] is True
+    assert kwargs["read_from_device"] is False
+    assert "sampling_params" not in kwargs
 
 
 def test_sglang_bridge_explicitly_requests_host_authoritative_decode(monkeypatch):
