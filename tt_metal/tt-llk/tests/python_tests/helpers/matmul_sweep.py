@@ -609,3 +609,88 @@ def sweep_tiny_tiles_matmul(
                 )
 
     return combinations
+
+
+# (in0 tile, in1 tile) shape pairs, as (rows, cols), that the two sweeps above do not cover:
+# - in1 32x16, used by TTNN tiny-tile matmuls for a 16-wide output (in0 1/2/4/8/16/32 x 32);
+# - K = 16: in0 32x16 or 16x16 by in1 16x32.
+# Pairs that _llk_math_matmul_init_ rejects (see matmul_supports_tensor_shapes) are not listed.
+MATMUL_TILE_SHAPE_PAIRS = [((r, 32), (32, 16)) for r in (1, 2, 4, 8, 16, 32)] + [
+    ((32, 16), (16, 32)),
+    ((16, 16), (16, 32)),
+]
+
+# Tiny in0 by in1 32x32; the tiny-tile sweep above only runs kt_dim = 1, so use these with kt_dim > 1.
+MATMUL_TINY_IN0_PAIRS = [((r, 32), (32, 32)) for r in (1, 2, 4, 8, 16)]
+
+
+def _tile_num_faces(tile: Tuple[int, int]) -> int:
+    rows, cols = tile
+    return (2 if rows > 16 else 1) * (2 if cols > 16 else 1)
+
+
+def sweep_matmul_tile_shape_pairs(
+    formats_list: List[FormatConfig],
+    dest_acc_modes: List[DestAccumulation],
+    tile_pairs: List[Tuple[Tuple[int, int], Tuple[int, int]]],
+    ct_dims: Iterable[int] = (1, 2, 4),
+    kt_dims: Iterable[int] = (1, 2),
+    dest_sync: DestSync = DestSync.Half,
+) -> List[MatmulConfig]:
+    """Matmul configs for explicit (in0 tile, in1 tile) shape pairs, with rt_dim = 1.
+
+    Each tile sits at the top-left of its own 32x32 slot of the stimuli (the rest is zero),
+    the same way the tiny-tile sweep models in0 tiles shorter than 32 rows.
+    """
+    combinations = []
+    for fmt in formats_list:
+        for dest_acc in dest_acc_modes:
+            if is_dest_acc_needed(fmt) and dest_acc == DestAccumulation.No:
+                continue
+            # Same invalid format combination the sweeps above skip.
+            if (
+                dest_acc == DestAccumulation.No
+                and fmt.input_format == DataFormat.Float16_b
+                and fmt.output_format == DataFormat.Float16
+            ):
+                continue
+            for in0_tile, in1_tile in tile_pairs:
+                assert (
+                    in0_tile[1] == in1_tile[0]
+                ), "in0 tile cols must match in1 tile rows"
+                out_tile = (in0_tile[0], in1_tile[1])
+                face = FaceLayoutConfig(
+                    num_faces_in0=_tile_num_faces(in0_tile),
+                    num_faces_in1=_tile_num_faces(in1_tile),
+                    num_faces=_tile_num_faces(out_tile),
+                    unpack_transpose_faces=Transpose.No,
+                    unpack_transpose_within_face=Transpose.No,
+                    partial_face_in0=in0_tile[0] < TILE_DIM,
+                    partial_face_in1=in1_tile[0] < TILE_DIM,
+                    partial_face_math=in0_tile[0] < 16,
+                    partial_face_pack=out_tile[0] < TILE_DIM,
+                )
+                for ct_dim in ct_dims:
+                    for kt_dim in kt_dims:
+                        tile_dims = generate_tile_dims(
+                            (
+                                [TILE_DIM, kt_dim * TILE_DIM],
+                                [kt_dim * TILE_DIM, ct_dim * TILE_DIM],
+                            ),
+                            in0_tile_r_dim=in0_tile[0],
+                            in1_tile_c_dim=in1_tile[1],
+                        )
+                        tile_dims.in0_tile_c_dim = in0_tile[1]
+                        tile_dims.in1_tile_r_dim = in1_tile[0]
+                        combinations.append(
+                            MatmulConfig(
+                                tile_dimensions=tile_dims,
+                                face_layout_config=face,
+                                formats=fmt,
+                                stochastic_rnd=StochasticRounding.No,
+                                dst_index=0,
+                                dest_sync=dest_sync,
+                                dest_acc=dest_acc,
+                            )
+                        )
+    return combinations
