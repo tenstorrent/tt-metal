@@ -157,6 +157,15 @@ _PREFIX_CHUNKS = {2: (3, 0), 4: (3, 0, 1, 2)}
 _DEEP_PREFIX_CHUNKS = {2: (16, 4), 4: (16, 4, 8, 12)}
 
 
+def _poison(runner, slot, n_chunks, chunk, vocab_size):
+    """Overwrite chunks 0..n_chunks-1 of slot with another prompt's KV, so a batched write that never lands leaves KV
+    that fails the comparison instead of the reference KV it would have rewritten."""
+    generator = torch.Generator().manual_seed(4321 + slot)
+    tokens = torch.randint(0, vocab_size, (n_chunks * chunk,), dtype=torch.int32, generator=generator)
+    for idx in range(n_chunks):
+        runner.step([(slot, idx * chunk, tokens[idx * chunk : (idx + 1) * chunk])])
+
+
 def _prompts(num_lanes, n_tokens, vocab_size):
     """Different prompt per slot: slot 0 the GPU golden prompt, then windows of the token stream, then random."""
     golden = json.loads((GOLDEN_DIR / "metadata.json").read_text())["token_ids"]
@@ -215,6 +224,8 @@ def test_batched_kv_matches_unbatched(mesh_device, num_lanes, reset_seeds):
     untouched_before = _read_slot(model, untouched, 2 * chunk, chunk)
     logger.info(f"[batching] reference run + readback {time.time() - t0:.0f}s")
 
+    for slot in range(num_lanes):
+        _poison(runner, slot, n_chunks[slot], chunk, model_args.vocab_size)
     failures = []
     t0 = time.time()
     batched()
@@ -350,6 +361,8 @@ def test_same_request_lanes(mesh_device, reset_seeds):
 
     failures = []
     for name, steps in _SAME_SLOT_SCENARIOS.items():
+        for slot, n in n_chunks[name].items():
+            _poison(runner, slot, n, chunk, model_args.vocab_size)
         for step in steps:
             runner.step([lane(slot, idx) for slot, idx in step])
         for slot, n in n_chunks[name].items():
