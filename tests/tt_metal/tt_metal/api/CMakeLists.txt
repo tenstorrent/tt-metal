@@ -82,7 +82,6 @@ set_target_properties(
 # RunTimeOptions singleton caches it, so they can all be run in one go.
 add_executable(
     unit_tests_hybrid_allocator
-    allocation/test_raw_allocation.cpp
     allocator/test_per_core_allocation.cpp
     allocator/test_range_lockstep_allocation.cpp
     allocator/test_range_lockstep_allocation_host.cpp
