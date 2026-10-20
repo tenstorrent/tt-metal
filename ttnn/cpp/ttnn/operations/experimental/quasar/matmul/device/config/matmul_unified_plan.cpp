@@ -412,7 +412,7 @@ std::optional<MatmulUnifiedPlan> plan_unified_matmul(
                                          : config.C_slice_N_tiles.has_value() ? *config.C_slice_N_tiles
                                                                               : tt::div_up(base.N_tiles, core_columns);
 
-    // Largest area first (ties: wider).
+    // Largest area first, then wider (no two candidates tie on both).
     std::vector<std::pair<uint32_t, uint32_t>> C_slice_shapes;
     for (uint32_t h = max_C_slice_M_tiles; h >= 1; --h) {
         for (uint32_t w = max_C_slice_N_tiles; w >= 1; --w) {
@@ -423,7 +423,7 @@ std::optional<MatmulUnifiedPlan> plan_unified_matmul(
             }
         }
     }
-    std::stable_sort(C_slice_shapes.begin(), C_slice_shapes.end(), [](const auto& a, const auto& b) {
+    std::sort(C_slice_shapes.begin(), C_slice_shapes.end(), [](const auto& a, const auto& b) {
         const uint64_t area_a = (uint64_t)a.first * a.second;
         const uint64_t area_b = (uint64_t)b.first * b.second;
         return area_a != area_b ? area_a > area_b : a.second > b.second;
@@ -436,7 +436,7 @@ std::optional<MatmulUnifiedPlan> plan_unified_matmul(
     const uint32_t min_K_chunks = is_quasar ? QUASAR_NUM_READER_THREADS : MIN_OPERAND_BUFFER_DEPTH;
     std::optional<MatmulUnifiedPlan> best;
     uint64_t best_work = 0;
-    MatmulUnifiedPlan last_tried;
+    MatmulUnifiedPlan candidate;  // after the loop, the last plan tried: the L1 error reports it
     for (const std::pair<uint32_t, uint32_t>& C_slice_shape : C_slice_shapes) {
         const uint32_t C_slice_M_tiles = C_slice_shape.first;
         const uint32_t C_slice_N_tiles = C_slice_shape.second;
@@ -479,7 +479,7 @@ std::optional<MatmulUnifiedPlan> plan_unified_matmul(
         // height-sharded in0 for the same reason), else the config's, else the longest divisor of K_tiles that fits,
         // walking down from a cap. A small C slice makes the A and B slices cheap, so its K chunk is not capped, but
         // keeps the readers busy.
-        MatmulUnifiedPlan candidate = make_plan(
+        candidate = make_plan(
             base,
             config.cores,
             A,
@@ -522,7 +522,6 @@ std::optional<MatmulUnifiedPlan> plan_unified_matmul(
         }
 
         // Keep the C slice with the most work per L1 fill.
-        last_tried = candidate;
         if (!dfbs_fit(candidate, l1_budget)) {
             continue;
         }
@@ -542,17 +541,17 @@ std::optional<MatmulUnifiedPlan> plan_unified_matmul(
             "MatmulUnifiedProgramConfig: the DFBs do not fit for any C slice; the smallest tried, {}x{} tiles with "
             "K_chunk_tiles={}, needs {} B (budget {} B; max DFB extent {} B: A slice {} B, B slice {} B, "
             "C slice {} B, C partials {} B, bias {} B)",
-            last_tried.C_slice_M_tiles,
-            last_tried.C_slice_N_tiles,
-            last_tried.K_chunk_tiles,
-            last_tried.l1_bytes,
+            candidate.C_slice_M_tiles,
+            candidate.C_slice_N_tiles,
+            candidate.K_chunk_tiles,
+            candidate.l1_bytes,
             l1_budget,
             MAX_DFB_EXTENT_BYTES,
-            (uint64_t)last_tried.A_slice_entries * last_tried.A_entry_bytes,
-            (uint64_t)last_tried.B_slice_entries * last_tried.B_entry_bytes,
-            (uint64_t)last_tried.C_slice_entries * last_tried.C_entry_bytes,
-            (uint64_t)last_tried.C_partials_entries * last_tried.C_partials_entry_bytes,
-            (uint64_t)last_tried.bias_entries * last_tried.bias_entry_bytes);
+            (uint64_t)candidate.A_slice_entries * candidate.A_entry_bytes,
+            (uint64_t)candidate.B_slice_entries * candidate.B_entry_bytes,
+            (uint64_t)candidate.C_slice_entries * candidate.C_entry_bytes,
+            (uint64_t)candidate.C_partials_entries * candidate.C_partials_entry_bytes,
+            (uint64_t)candidate.bias_entries * candidate.bias_entry_bytes);
         return std::nullopt;
     }
     MatmulUnifiedPlan plan = std::move(*best);
