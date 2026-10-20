@@ -286,8 +286,6 @@ def test_xielu_large_negative(alpha_p, alpha_n, dtype, device):
 
 @pytest.mark.parametrize("dtype", ["float32", "bfloat16"])
 def test_xielu_below_underflow(dtype, device):
-    # The exp term must underflow to 0 far below the threshold too; it came back as up to -4 before.
-    # alpha_n = 0.5 cancels the linear terms, so the result is exactly -alpha_n * (1 - exp(x)) = -0.5.
     torch_dtype = getattr(torch, dtype)
     ttnn_dtype = getattr(ttnn, dtype)
     near = torch.arange(-200.0, -95.0, 0.5)
