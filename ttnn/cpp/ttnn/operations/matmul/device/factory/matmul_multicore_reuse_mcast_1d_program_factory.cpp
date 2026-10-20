@@ -63,6 +63,38 @@ namespace ttnn::prim {
 
 namespace reuse_mcast_1d_optimized_helpers {
 
+// A rectangular multicast also reaches the unused tail of the final core row.
+// Bind the multicast DFB there so its L1 storage is reserved for this program.
+// These kernels perform no work and do not join the receiver handshake.
+static void reserve_multicast_tail(
+    Group<KernelSpec>& kernels,
+    Group<WorkUnitSpec>& work_units,
+    const CoreRangeSet& idle_cores,
+    const DFBSpecName& dfb,
+    const DataMovementHardwareConfig& dm_config) {
+    if (idle_cores.num_cores() == 0) {
+        return;
+    }
+    const KernelSpecName producer{"mcast_tail_producer"};
+    const KernelSpecName consumer{"mcast_tail_consumer"};
+    kernels.push_back(KernelSpec{
+        .unique_id = producer,
+        .source = "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/mcast_tail_reservation.cpp",
+        .dfb_bindings = {DFBBinding{
+            .dfb_spec_name = dfb, .accessor_name = "reserved", .endpoint_type = DFBEndpointType::PRODUCER}},
+        .hw_config = dm_config,
+    });
+    kernels.push_back(KernelSpec{
+        .unique_id = consumer,
+        .source = "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/mcast_tail_reservation.cpp",
+        .dfb_bindings = {DFBBinding{
+            .dfb_spec_name = dfb, .accessor_name = "reserved", .endpoint_type = DFBEndpointType::CONSUMER}},
+        .hw_config = tt::tt_metal::experimental::ComputeHardwareConfig{},
+    });
+    work_units.push_back(WorkUnitSpec{
+        .name = "multicast_tail_storage", .kernels = {producer, consumer}, .target_nodes = idle_cores});
+}
+
 uint32_t get_preferred_noc(
     const ttnn::CoreCoord src,
     const ttnn::CoreCoord dst,
@@ -296,6 +328,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
             all_cores_with_work);
     }
     CoreRange in0_mcast_receiver_cores_bounding_box = all_cores_with_work.bounding_box();
+    const CoreRangeSet mcast_storage_cores = all_cores.merge(CoreRangeSet(in0_mcast_receiver_cores_bounding_box));
     uint32_t in0_mcast_receiver_num_cores = in0_mcast_receiver_cores_bounding_box.size();  // always mcast to full grid
     uint32_t in0_mcast_receiver_num_dests = std::min(
         in0_mcast_receiver_num_cores,
@@ -356,8 +389,8 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
     }
 
     // Mcast args
-    auto in0_mcast_sender_semaphore_id = tt_metal::CreateSemaphore(program, all_cores, INVALID);
-    auto in0_mcast_receiver_semaphore_id = tt_metal::CreateSemaphore(program, all_cores, INVALID);
+    auto in0_mcast_sender_semaphore_id = tt_metal::CreateSemaphore(program, mcast_storage_cores, INVALID);
+    auto in0_mcast_receiver_semaphore_id = tt_metal::CreateSemaphore(program, mcast_storage_cores, INVALID);
 
     CoreCoord top_left_core = in0_mcast_receiver_cores_bounding_box.start_coord;
     CoreCoord bottom_right_core = in0_mcast_receiver_cores_bounding_box.end_coord;
@@ -837,7 +870,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
         tt_metal::CircularBufferConfig(in0_CB_size, {{src0_cb_index, in0_data_format}})
             .set_page_size(src0_cb_index, in0_aligned_tile_size)
             .set_tile_dims(src0_cb_index, in0_tile);
-    tt_metal::CreateCircularBuffer(program, all_cores, src0_cb_config);
+    tt_metal::CreateCircularBuffer(program, mcast_storage_cores, src0_cb_config);
     log_debug(
         LogOp,
         "CB {} :: PS = {}, NP = {}, TOTAL = {}",
@@ -1434,6 +1467,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
     CoreRangeSet all_cores =
         tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids(start_core, num_cores, matmul_core_rect, row_major);
     CoreRange in1_mcast_receiver_cores_bounding_box = all_cores.bounding_box();
+    const CoreRangeSet mcast_storage_cores = all_cores.merge(CoreRangeSet(in1_mcast_receiver_cores_bounding_box));
     uint32_t in1_mcast_receiver_num_cores = in1_mcast_receiver_cores_bounding_box.size();  // always mcast to full grid
 
     CoreRange in1_mcast_sender(start_core, start_core);
@@ -1448,8 +1482,8 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
     }
 
     // Mcast args
-    auto in1_mcast_sender_semaphore_id = tt_metal::CreateSemaphore(program, all_cores, INVALID);
-    auto in1_mcast_receiver_semaphore_id = tt_metal::CreateSemaphore(program, all_cores, INVALID);
+    auto in1_mcast_sender_semaphore_id = tt_metal::CreateSemaphore(program, mcast_storage_cores, INVALID);
+    auto in1_mcast_receiver_semaphore_id = tt_metal::CreateSemaphore(program, mcast_storage_cores, INVALID);
 
     CoreCoord top_left_core = in1_mcast_receiver_cores_bounding_box.start_coord;
     CoreCoord bottom_right_core = in1_mcast_receiver_cores_bounding_box.end_coord;
@@ -1842,6 +1876,21 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
             .named_compile_args = compute_named_compile_args});
 
     // Create circular buffers
+    // Place the multicast buffer first: its tail cores may have a higher persistent L1 floor.
+    uint32_t src1_cb_index = tt::CBIndex::c_1;
+    tt_metal::CircularBufferConfig src1_cb_config =
+        tt_metal::CircularBufferConfig(in1_CB_size, {{src1_cb_index, in1_data_format}})
+            .set_page_size(src1_cb_index, in1_aligned_tile_size)
+            .set_tile_dims(src1_cb_index, in1_tile);
+    tt_metal::CreateCircularBuffer(program, mcast_storage_cores, src1_cb_config);
+    log_debug(
+        LogOp,
+        "CB {} :: PS = {}, NP = {}, TOTAL = {}",
+        src1_cb_index,
+        in1_single_tile_size,
+        in1_CB_size / in1_single_tile_size,
+        in1_CB_size);
+
     uint32_t src0_cb_index = tt::CBIndex::c_0;
     tt_metal::CircularBufferConfig src0_cb_config =
         tt_metal::CircularBufferConfig(in0_CB_size, {{src0_cb_index, in0_data_format}})
@@ -1876,20 +1925,6 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
             in2_CB_size / in0_single_tile_size,
             in2_CB_size);
     }
-
-    uint32_t src1_cb_index = tt::CBIndex::c_1;
-    tt_metal::CircularBufferConfig src1_cb_config =
-        tt_metal::CircularBufferConfig(in1_CB_size, {{src1_cb_index, in1_data_format}})
-            .set_page_size(src1_cb_index, in1_aligned_tile_size)
-            .set_tile_dims(src1_cb_index, in1_tile);
-    tt_metal::CreateCircularBuffer(program, all_cores, src1_cb_config);
-    log_debug(
-        LogOp,
-        "CB {} :: PS = {}, NP = {}, TOTAL = {}",
-        src1_cb_index,
-        in1_single_tile_size,
-        in1_CB_size / in1_single_tile_size,
-        in1_CB_size);
 
     uint32_t output_cb_index = tt::CBIndex::c_4;
     uint32_t interm0_cb_index = tt::CBIndex::c_5;
@@ -3512,6 +3547,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
     CoreRangeSet all_cores_with_work =
         num_cores_to_corerangeset_in_subcoregrids(start_core, num_cores_with_work, matmul_core_rect, row_major);
     CoreRange in0_mcast_receiver_cores_bounding_box = all_cores_with_work.bounding_box();
+    const CoreRangeSet mcast_storage_cores = all_cores.merge(CoreRangeSet(in0_mcast_receiver_cores_bounding_box));
     uint32_t in0_mcast_receiver_num_cores = in0_mcast_receiver_cores_bounding_box.size();  // always mcast to full grid
     uint32_t in0_mcast_receiver_num_dests = std::min(
         in0_mcast_receiver_num_cores,
@@ -3936,8 +3972,8 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
     //                      Semaphores
     ////////////////////////////////////////////////////////////////////////////
     Group<SemaphoreSpec> semaphores = {
-        SemaphoreSpec{.unique_id = SENDER_SEM, .target_nodes = all_cores},
-        SemaphoreSpec{.unique_id = RECEIVER_SEM, .target_nodes = all_cores},
+        SemaphoreSpec{.unique_id = SENDER_SEM, .target_nodes = mcast_storage_cores},
+        SemaphoreSpec{.unique_id = RECEIVER_SEM, .target_nodes = mcast_storage_cores},
     };
 
     ////////////////////////////////////////////////////////////////////////////
@@ -4484,6 +4520,9 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
             .target_nodes = in0_mcast_receivers,
         });
     }
+
+    reserve_multicast_tail(
+        kernels, work_units, mcast_storage_cores.subtract(all_cores), IN0_DFB, in0_sender_hw_config);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Tensor parameters
@@ -5320,6 +5359,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifac
     CoreRangeSet all_cores =
         tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids(start_core, num_cores, matmul_core_rect, row_major);
     CoreRange in1_mcast_receiver_cores_bounding_box = all_cores.bounding_box();
+    const CoreRangeSet mcast_storage_cores = all_cores.merge(CoreRangeSet(in1_mcast_receiver_cores_bounding_box));
     uint32_t in1_mcast_receiver_num_cores = in1_mcast_receiver_cores_bounding_box.size();  // always mcast to full grid
 
     CoreRange in1_mcast_sender(start_core, start_core);
@@ -5515,6 +5555,16 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifac
         return others;
     };
 
+    // Place the multicast buffer first: its tail cores may have a higher persistent L1 floor.
+    // in1
+    dataflow_buffers.push_back(DataflowBufferSpec{
+        .unique_id = IN1_DFB,
+        .entry_size = in1_aligned_tile_size,
+        .num_entries = in1_dfb_size / in1_aligned_tile_size,
+        .data_format_metadata = in1_data_format,
+        .tile_format_metadata = in1_tile,
+    });
+
     // in0. When in0 is sharded and the sender does NOT extract sub-blocks, the sender multicasts
     // straight out of the resident shard, so this buffer is borrowed onto the in0 tensor.
     dataflow_buffers.push_back(DataflowBufferSpec{
@@ -5538,15 +5588,6 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifac
             .borrowed_from = IN0,
         });
     }
-
-    // in1
-    dataflow_buffers.push_back(DataflowBufferSpec{
-        .unique_id = IN1_DFB,
-        .entry_size = in1_aligned_tile_size,
-        .num_entries = in1_dfb_size / in1_aligned_tile_size,
-        .data_format_metadata = in1_data_format,
-        .tile_format_metadata = in1_tile,
-    });
 
     // output
     dataflow_buffers.push_back(DataflowBufferSpec{
@@ -5608,8 +5649,8 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifac
     //                      Semaphores
     ////////////////////////////////////////////////////////////////////////////
     Group<SemaphoreSpec> semaphores = {
-        SemaphoreSpec{.unique_id = SENDER_SEM, .target_nodes = all_cores},
-        SemaphoreSpec{.unique_id = RECEIVER_SEM, .target_nodes = all_cores},
+        SemaphoreSpec{.unique_id = SENDER_SEM, .target_nodes = mcast_storage_cores},
+        SemaphoreSpec{.unique_id = RECEIVER_SEM, .target_nodes = mcast_storage_cores},
     };
 
     ////////////////////////////////////////////////////////////////////////////
@@ -6082,6 +6123,9 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifac
             .target_nodes = in1_mcast_receivers,
         });
     }
+
+    reserve_multicast_tail(
+        kernels, work_units, mcast_storage_cores.subtract(all_cores), IN1_DFB, in1_writer_hw_config);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Tensor parameters
