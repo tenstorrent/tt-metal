@@ -535,8 +535,6 @@ def test_untilize_multi_core_interleaved_to_interleaved(device, dtype, tensor_sh
 
 
 def _untilize_falls_back_to_single_core(grid_area, height_tiles, width_tiles):
-    # True when an interleaved row of tiles over get_pf_type's CB budget is not taken by the block rule
-    # (compute_ncores / compute_ncores_wh) and the tensor is taller than one tile, i.e. it reaches pf_option == 1.
     def ncores(nblocks):
         return math.ceil(nblocks / math.ceil(nblocks / grid_area))
 
@@ -556,8 +554,6 @@ def _untilize_falls_back_to_single_core(grid_area, height_tiles, width_tiles):
 
 @pytest.mark.parametrize("dtype, width", [(ttnn.bfloat16, 7168), (ttnn.float32, 4096)])
 def test_untilize_multi_core_interleaved_wide_rows(device, dtype, width):
-    # These rows don't fit get_pf_type's CB budget on Wormhole or Blackhole: untilize the row counts that reach
-    # pf_option == 1 on this device's grid, and one that the block rule takes.
     grid = device.compute_with_storage_grid_size()
     heights = range(2048, 8192 + 1, 64)
     fallback = [h for h in heights if _untilize_falls_back_to_single_core(grid.x * grid.y, h // 32, width // 32)]

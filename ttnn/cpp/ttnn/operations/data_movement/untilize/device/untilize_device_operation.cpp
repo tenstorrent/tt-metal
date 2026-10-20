@@ -375,8 +375,6 @@ UntilizeDeviceOperation::program_factory_t UntilizeDeviceOperation::select_progr
         return UntilizeMultiCoreParallelizeColumnProgramFactory{};
     }
     if (pf_option == 1) {
-        // A row of tiles doesn't fit the CB budget: split interleaved tensors into blocks across the grid, as the
-        // block rule above does for wider tensors; a sharded output keeps the single-core factory.
         if (!input_is_sharded && !output_is_sharded) {
             return UntilizeMultiCoreBlockProgramFactory{};
         }
