@@ -43,6 +43,20 @@ def _read_profiler(device):
         pass
 
 
+def _log_dram(device, when: str):
+    """Allocator view of the device DRAM (capacity evidence for the context contract)."""
+    try:
+        mv = ttnn.device.get_memory_view(device, ttnn.BufferType.DRAM)
+        n, gib = mv.num_banks, 2**30
+        logger.info(
+            f"DRAM {when}: {n} banks x {mv.total_bytes_per_bank / gib:.3f} GiB = "
+            f"{n * mv.total_bytes_per_bank / gib:.2f} GiB allocatable, {n * mv.total_bytes_allocated_per_bank / gib:.2f} GiB "
+            f"allocated, {n * mv.total_bytes_free_per_bank / gib:.2f} GiB free"
+        )
+    except Exception as e:  # pragma: no cover - informational only
+        logger.info(f"DRAM memory view unavailable ({when}): {e}")
+
+
 LAYER = int(os.environ.get("GLM53_PERF_LAYER", "3"))
 PREFILL_LEN = int(os.environ.get("GLM53_PERF_PREFILL", "1024"))
 DECODE_STEPS = int(os.environ.get("GLM53_PERF_DECODE_STEPS", "3"))
@@ -69,6 +83,7 @@ def test_layer_perf(mesh_device):
         raw, hf_config=cfg, layer_idx=LAYER, mesh_device=mesh_device, max_batch=1, max_seq_len=S + 64
     )
     kind = f"{'KDA' if dec.layer.is_kda else 'DSA'}+{'MoE' if dec.layer.is_moe else 'dense'}"
+    _log_dram(mesh_device, f"layer {LAYER} ({kind}) built, max_seq_len={S + 64}")
     if SEED_ONLY:
         if dec.cache is not None:
             g = torch.Generator().manual_seed(0)

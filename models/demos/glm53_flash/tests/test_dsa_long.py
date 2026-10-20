@@ -9,8 +9,8 @@
   (``index_ids`` recorded by the reference runner) per step.
 * ``test_dense_to_sparse_transition``: prefill 2040 tokens on the dense path (user slot 1 of 2 with
   a permuted page table), then decode positions 2040..2063 (dump ``R2040``): the index must have
-  been maintained by the dense path so the switch at 2048 and the HF-exact region up to 2050 and
-  the tails 0/1/2/3 all match.
+  been maintained by the dense path so the HF-exact dense region through position 2050, the
+  per-user switch to the sparse rows at 2051 and the tails 0/1/2/3 all match.
 
     TT_VISIBLE_DEVICES=0 pytest models/demos/glm53_flash/tests/test_dsa_long.py -s
 """
@@ -25,7 +25,7 @@ from loguru import logger
 
 import ttnn
 from models.demos.glm53_flash.reference.checkpoint import default_snapshot_dir, load_layer_raw, shard_headers
-from models.demos.glm53_flash.tests.utils import pcc
+from models.demos.glm53_flash.tests.utils import attention_input, hf_index_stems, hf_pool, pcc, per_row_stats
 from models.demos.glm53_flash.tt.config import GLM53FlashConfig
 from models.demos.glm53_flash.tt.functional_decoder import (
     FunctionalDecoder,
@@ -50,61 +50,6 @@ def row_pcc_split(ref: torch.Tensor, out: torch.Tensor, P: int) -> dict[str, flo
 
 def row_pcc_report(ref, out, P) -> str:
     return " ".join(f"{k} {v:.5f}" for k, v in row_pcc_split(ref, out, P).items()) + "  " + per_row_stats(ref, out)
-
-
-def per_row_stats(ref: torch.Tensor, out: torch.Tensor) -> str:
-    """Distribution of the per-token PCC (each token row = 4 streams x 4096 values): a single-token
-    prefill is one sample of this distribution, which is why its PCC is noisier than an aggregate."""
-    S = ref.shape[1]
-    r = ref[0].reshape(S, -1).float()
-    o = out[0].reshape(S, -1).float()
-    rc = r - r.mean(1, keepdim=True)
-    oc = o - o.mean(1, keepdim=True)
-    per = (rc * oc).sum(1) / (rc.norm(dim=1) * oc.norm(dim=1) + 1e-12)
-    q = torch.quantile(per, torch.tensor([0.0, 0.05, 0.5]))
-    return f"per-row pcc min {q[0]:.5f} p5 {q[1]:.5f} median {q[2]:.5f} rows<0.997 {int((per < 0.997).sum())}/{S}"
-
-
-def _hf_index_stems(raw, cfg, x_normed: torch.Tensor):
-    """Host k (LayerNorm'd) and gate logits of the indexer for normalized attention inputs [S, 4096]."""
-    sd = {k[len("self_attn.indexer.") :]: v for k, v in raw.items() if k.startswith("self_attn.indexer.")}
-    k = torch.nn.functional.layer_norm(
-        x_normed.float() @ sd["wk.weight"].float().t(),
-        (cfg.index_head_dim,),
-        sd["k_norm.weight"].float(),
-        sd["k_norm.bias"].float(),
-        1e-6,
-    )
-    g = x_normed.float() @ sd["index_kpool_compress_gate"].float().t()
-    return k, g, sd["index_kpool_compress_ape"].float()
-
-
-def _hf_pool(k, g, ape, P):
-    """[n*P, D] -> [n, D] HF k-pool compression over complete pools."""
-    n = k.shape[0] // P
-    kp, gp = k[: n * P].reshape(n, P, -1), g[: n * P].reshape(n, P, -1)
-    prob = torch.softmax(gp + ape[None], dim=1)
-    return (prob * kp).sum(1)
-
-
-def _attention_input(raw, cfg, streams: torch.Tensor) -> torch.Tensor:
-    """HF attn_hc collapse + input_layernorm on mHC streams [1, S, 4, 4096] -> [S, 4096] (bf16 as the model)."""
-    from transformers.models.glm5_next.modeling_glm5_next import Glm5NextTextHyperConnection, Glm5NextTextRMSNorm
-
-    from models.demos.glm53_flash.reference.hf_layer_reference import load_config
-
-    _, text = load_config(default_snapshot_dir())
-    hc = Glm5NextTextHyperConnection(text)
-    hc.fn.data, hc.base.data, hc.scale.data = (
-        raw["hc_attn_fn"].float(),
-        raw["hc_attn_base"].float(),
-        raw["hc_attn_scale"].float(),
-    )
-    norm = Glm5NextTextRMSNorm(cfg.hidden_size, cfg.rms_norm_eps)
-    norm.weight.data = raw["input_layernorm.weight"]
-    with torch.no_grad():
-        _, _, collapsed = hc(streams)
-        return norm(collapsed)[0].to(torch.bfloat16)
 
 
 @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
@@ -132,13 +77,13 @@ def test_sparse_selection_vs_hf(mesh_device):
     # HF selection for the prefill queries vs TT: compare the *selected id sets* of the last 32 queries
     # by re-running the indexer selection on device is implicit in the layer output; here we check the
     # cache contents and the per-step selection explicitly.
-    attn_inputs = [_attention_input(raw, cfg, x_in)]
+    attn_inputs = [attention_input(raw, cfg, x_in)]
     for step in range(n_steps):
         d = torch.load(R4097 / f"layer{LAYER}_decode{step}.pt")
         dp = dec.make_decode_positions([d["position"]])
         yd = dec.decode_forward(host_streams_to_device(d["x_in"], mesh_device, pad_to=1), positions=dp)
         p_d = pcc(d["x_out"], device_streams_to_host(yd, 4, 1))
-        attn_inputs.append(_attention_input(raw, cfg, d["x_in"]))
+        attn_inputs.append(attention_input(raw, cfg, d["x_in"]))
         # TT selection for this query vs HF's index_ids (sets of valid token ids)
         hf_ids = d["index_ids"][0, 0]
         hf_set = set(int(i) for i in hf_ids.tolist() if i >= 0)
@@ -159,8 +104,8 @@ def test_sparse_selection_vs_hf(mesh_device):
 
     # pooled-key cache rows after the steps vs host recomputation over all tokens seen so far
     x_all = torch.cat(attn_inputs, dim=0)  # [S + n_steps, 4096]
-    k, g, ape = _hf_index_stems(raw, cfg, x_all)
-    pools_ref = _hf_pool(k, g, ape, P)  # [n_complete, D]
+    k, g, ape = hf_index_stems(raw, cfg, x_all)
+    pools_ref = hf_pool(k, g, ape, P)  # [n_complete, D]
     n_complete = pools_ref.shape[0]
     cache_rows = ttnn.to_torch(dec.cache.index.pools_batched())[0, 0, :n_complete].float()
     p_pool = pcc(pools_ref, cache_rows)
@@ -173,7 +118,7 @@ def test_sparse_selection_vs_hf(mesh_device):
 
 def _tt_selected_ids(dec: FunctionalDecoder, raw, x_in_streams: torch.Tensor, position: int, device) -> list[int]:
     """The indexer's selected token ids for one decode query on the current device index cache."""
-    x = _attention_input(raw, dec.cfg, x_in_streams).reshape(1, 1, 1, -1)
+    x = attention_input(raw, dec.cfg, x_in_streams).reshape(1, 1, 1, -1)
     x_tt = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     return dec.layer.attn.selected_ids(x_tt, dec.cache, 0, position)
 
@@ -289,18 +234,18 @@ def test_prefill_tail_2_3_then_decode(mesh_device, seq_len):
     p = pcc(x_out, device_streams_to_host(y, 4, S))
     logger.info(f"layer 3 dense prefill S={S} (tail {S % P}): pcc {p:.6f}")
     assert p > 0.995
-    attn_inputs = [_attention_input(raw, cfg, x_in)]
+    attn_inputs = [attention_input(raw, cfg, x_in)]
     for step in range(12):
         d = torch.load(R / f"layer{LAYER}_decode{step}.pt")
         dp = dec.make_decode_positions([d["position"]])
         yd = dec.decode_forward(host_streams_to_device(d["x_in"], mesh_device, pad_to=1), positions=dp)
         p_d = pcc(d["x_out"], device_streams_to_host(yd, 4, 1))
-        attn_inputs.append(_attention_input(raw, cfg, d["x_in"]))
+        attn_inputs.append(attention_input(raw, cfg, d["x_in"]))
         logger.info(f"  decode pos {d['position']} (tail {(d['position'] + 1) % P}): pcc {p_d:.6f}")
         assert p_d > 0.995
     x_all = torch.cat(attn_inputs, dim=0)
-    k, g, ape = _hf_index_stems(raw, cfg, x_all)
-    pools_ref = _hf_pool(k, g, ape, P)
+    k, g, ape = hf_index_stems(raw, cfg, x_all)
+    pools_ref = hf_pool(k, g, ape, P)
     n_complete = pools_ref.shape[0]
     cache_rows = ttnn.to_torch(dec.cache.index.pools_batched())[0, 0, :n_complete].float()
     worst = min(pcc(pools_ref[i], cache_rows[i]) for i in range(n_complete))
