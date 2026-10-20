@@ -257,6 +257,10 @@ inline void _llk_pack_untilize_(
     }
     else
     {
+        volatile std::uint32_t *mop_cfg = reinterpret_cast<volatile std::uint32_t *>(TENSIX_MOP_CFG_BASE);
+        mop_sync();
+        mop_cfg[0] = block_ct_dim;
+
         const std::uint32_t num_rows = (face_r_dim < FACE_R_DIM) ? face_r_dim : TILE_R_DIM / 4;
 
         for (std::uint32_t row = 0; row < num_rows; row++)
