@@ -471,6 +471,7 @@ inline void reduce_configure_addrmod(const ckernel::TensorShape& tensor_shape)
 template <PoolType type, ReduceDim dim, bool is_fp32_dest_acc_en, MathFidelity math_fidelity>
 inline void _llk_math_reduce_init_(const ckernel::TensorShape& tensor_shape)
 {
+    asm volatile(".rept 1\n\tnop\n\t.endr");
     // There is no min-pool instruction - the FPU has GMPOOL (max) and GAPOOL (average/sum).
     static_assert(
         type != PoolType::MIN,
