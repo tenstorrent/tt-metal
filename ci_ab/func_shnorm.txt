@@ -1,0 +1,1 @@
+tests/ttnn/unit_tests/operations/fused/test_layer_norm_sharded.py
