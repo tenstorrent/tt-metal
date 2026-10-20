@@ -652,6 +652,67 @@ def test_ng_scalar_interleaved_memcfg_with_sharded_output_cache_miss(device, iso
     assert device.cache_entries_counter.total == 2
 
 
+def test_ng_tensor_interleaved_memcfg_with_sharded_output_cache_miss(device, isolate_program_cache):
+    """Tensor-tensor form of the scalar guard above.
+
+    An explicit INTERLEAVED memory_config plus a SHARDED preallocated output leaves mem_config_actual
+    interleaved, while the real output is sharded. The fast path must still record that output's shape
+    in pages, or two shapes that share a shard spec collide on one cache entry."""
+    core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))})
+    shard_spec = ttnn.ShardSpec(core_grid, [32, 128], ttnn.ShardOrientation.ROW_MAJOR)
+    sharded = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
+
+    def add_into(shape, seed):
+        torch.manual_seed(seed)
+        a = torch.rand(shape, dtype=torch.bfloat16)
+        b = torch.rand(shape, dtype=torch.bfloat16)
+        tt_a = ttnn.from_torch(a, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        tt_b = ttnn.from_torch(b, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        tt_out = ttnn.from_torch(
+            torch.zeros(shape, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device, memory_config=sharded
+        )
+        with device.cache_entries_counter.measure():
+            tt_c = ttnn.add(tt_a, tt_b, memory_config=ttnn.DRAM_MEMORY_CONFIG, output_tensor=tt_out)
+        return a + b, ttnn.to_torch(tt_c)
+
+    ref_small, out_small = add_into([1, 1, 64, 128], 0)
+    assert_with_pcc(ref_small, out_small, 0.999)
+
+    ref_big, out_big = add_into([1, 1, 128, 128], 1)
+    assert_with_pcc(ref_big, out_big, 0.999)
+
+    assert device.cache_entries_counter.total == 2
+
+
+def test_ng_interleaved_a_sharded_b_cache_miss_across_page_counts(device, isolate_program_cache):
+    """Interleaved DRAM A with L1-sharded B, two shapes that share a shard spec.
+
+    The second call misses because B's shape in pages is in the tensor hash, and because the
+    output config is taken from B. This checks that mixed layout stays correct across that miss.
+    It does not isolate the sharded-config guard: that guard is already true from the output config."""
+    core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))})
+    shard_spec = ttnn.ShardSpec(core_grid, [32, 128], ttnn.ShardOrientation.ROW_MAJOR)
+    sharded = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
+
+    def add_mixed(shape, seed):
+        torch.manual_seed(seed)
+        a = torch.rand(shape, dtype=torch.bfloat16)
+        b = torch.rand(shape, dtype=torch.bfloat16)
+        tt_a = ttnn.from_torch(a, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        tt_b = ttnn.from_torch(b, layout=ttnn.TILE_LAYOUT, device=device, memory_config=sharded)
+        with device.cache_entries_counter.measure():
+            tt_c = ttnn.add(tt_a, tt_b)
+        return a + b, ttnn.to_torch(tt_c)
+
+    ref_small, out_small = add_mixed([1, 1, 64, 128], 0)
+    assert_with_pcc(ref_small, out_small, 0.999)
+
+    ref_big, out_big = add_mixed([1, 1, 128, 128], 1)
+    assert_with_pcc(ref_big, out_big, 0.999)
+
+    assert device.cache_entries_counter.total == 2
+
+
 def test_ng_scalar_dram_sharded_cache_miss_across_page_counts(device, isolate_program_cache):
     """REGRESSION: on the accessor path the cache key must carry each sharded operand's shape in pages.
 
