@@ -45,7 +45,7 @@ The types at L1 addresses come from the struct layouts in `fabric_struct_layouts
 | `run` | Architecture, fabric, reliability, tensix and UDM configs, host rank, MPI rank and world size, `written_at` |
 | `fabric_context` | Topology, packet header, payload and channel buffer sizes, the route buffer size, `multi_txq` |
 | `vocabulary` | Every field `category` and `kind`, and every chip `z_port_role` |
-| `archs.<arch>.areas` | L1 areas the architecture fixes: heartbeat, telemetry, routing table, go and launch messages, Ethernet firmware mailbox |
+| `archs.<arch>.areas` | L1 areas the architecture fixes: heartbeat, telemetry, routing table, go and launch messages, Ethernet firmware mailbox, base firmware link status |
 | `archs.<arch>.stream_registers` | Where the stream registers are: `base`, `stride`, `count` and `register_offsets`, from the HAL |
 | `archs.<arch>.core_registers` | The soft reset and wall clock registers, in the order they are read, with each physical ERISC's reset bit |
 | `archs.<arch>.types` | Every struct a schema names, with its size and members in order |
@@ -145,7 +145,11 @@ entries.
 - **Leftover L1** (`leftover_l1`): the L1 from the end of the channel buffers to the end of loadable L1, or null when
   there is none.
 - **Architecture areas** (`archs.<arch>.areas`): the heartbeat word with its magic, mask and period, and the HAL's
-  areas, typed from the HAL.
+  areas, typed from the HAL. On Blackhole the heartbeat word is base firmware's own heartbeat, which the router
+  writes over while it runs.
+- **Base firmware link status** (`base_fw_port_status`, `base_fw_train_status`, `base_fw_retrain_count`,
+  `base_fw_rx_link_up` and `base_fw_postcode` in `archs.<arch>.areas`): the words base firmware keeps about its
+  Ethernet link, each a `u32` at the address the HAL gives. Each is null where the HAL gives none, as on Wormhole.
 - **Core registers** (`archs.<arch>.core_registers`): `soft_reset`, `wall_clock_low` and `wall_clock_high`, each a
   `u32` at its HAL address. The array keeps the read order: reading the low word latches the high word.
   `soft_reset.reset_masks` is UMD's reset bit for each of the HAL's physical ERISCs on the Ethernet core, one on
