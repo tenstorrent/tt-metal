@@ -34,7 +34,6 @@ def _bad_fraction(device, op, bcast, in_dtype, out_dtype, shape):
         torch_b = torch.where(torch_b >= 0, 0.5 + torch_b.abs(), -(0.5 + torch_b.abs()))
     a = ttnn.from_torch(torch_a, dtype=in_dtype, layout=ttnn.TILE_LAYOUT, device=device)
     b = ttnn.from_torch(torch_b, dtype=in_dtype, layout=ttnn.TILE_LAYOUT, device=device)
-    # Reference on the values the device holds, so block-float input quantization is not counted.
     expected = torch_fn(ttnn.to_torch(a).float(), ttnn.to_torch(b).float())
     kwargs = {} if out_dtype is None else {"dtype": out_dtype}
     out = ttnn.to_torch(ttnn_fn(a, b, **kwargs)).float()
@@ -43,7 +42,6 @@ def _bad_fraction(device, op, bcast, in_dtype, out_dtype, shape):
     return bad.float().mean().item()
 
 
-# A float32 output with 16-bit inputs runs the op with a 32-bit DEST.
 @pytest.mark.parametrize("shape", [(1, 1, 64, 128), (1, 3, 50, 70)], ids=["64x128", "3x50x70"])
 @pytest.mark.parametrize("in_dtype", [ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b], ids=["bf16", "bfp8", "bfp4"])
 @pytest.mark.parametrize("bcast", ["row_b", "row_a", "row_a_col_b", "row_b_col_a"])
