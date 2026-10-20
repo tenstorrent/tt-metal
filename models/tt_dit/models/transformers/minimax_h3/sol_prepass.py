@@ -258,7 +258,8 @@ class SolPrepass:
         # "compact": the gather-form block mask (full blocks only; block 0 of every shard forced kept so every
         #          (Q chunk, shard) computes at least one block), streamed through the chains like chunk mode; the
         #          reader compacts each core's kept blocks in L1 (DESIGN_BLOCK_COMPACT.md). Pass sol_mode="compact".
-        assert mode in ("gather", "chunk", "compact"), mode
+        # "pack" is compact plus the ring op's Q2 cross-chunk packing; the pre-pass output is identical to compact.
+        assert mode in ("gather", "chunk", "compact", "pack"), mode
         self.mode = mode
         # emit_bias=False: the ring op generates the pooled-column bias on device (production path once the
         # kernel build carries sol_bias_gen.hpp). TT_SOL_EMIT_BIAS flips the default for A/B runs.

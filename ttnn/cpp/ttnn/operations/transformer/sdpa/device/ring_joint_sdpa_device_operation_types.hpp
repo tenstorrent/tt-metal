@@ -225,7 +225,12 @@ struct RingJointSDPAInputs {
     bool sol_chunk_mode(const std::string& mode) const {
         return sol_enabled() && (mode == "chunk" || (mode == "auto" && sol_mask_is_chunk_width()));
     }
-    bool sol_compact_mode(const std::string& mode) const { return sol_enabled() && mode == "compact"; }
+    // "pack": compact plus Q2 cross-chunk packing (kept blocks appended into full pages). A mode rather than an
+    // env var so it participates in the program hash and the kernels' named compile-time args.
+    bool sol_pack_mode(const std::string& mode) const { return sol_enabled() && mode == "pack"; }
+    bool sol_compact_mode(const std::string& mode) const {
+        return sol_enabled() && (mode == "compact" || sol_pack_mode(mode));
+    }
     bool sol_gather_mode(const std::string& mode) const {
         return sol_enabled() && !sol_chunk_mode(mode) && !sol_compact_mode(mode);
     }

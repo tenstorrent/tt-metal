@@ -1010,7 +1010,7 @@ void kernel_main() {
 #ifdef SOL_PACK_DEBUG
                     // Printed before the reserve: reserve_back is where the reader blocks, so the last PUSH
                     // line names the page it could not get space for.
-                    DPRINT("SOLPUSH k={} n={}\n", k_chunk, pages_pushed + 1);
+                    DPRINT("SP {} {}\n", k_chunk, pages_pushed + 1);
 #endif
                     cb_kp.reserve_back(k_chunk_tiles);
                     cb_vp.reserve_back(v_cb_entry_tiles);
@@ -1362,9 +1362,12 @@ void kernel_main() {
                 noc.async_read_barrier();
                 CoreLocalMem<volatile uint32_t> mask_row(mask_row_addr);
                 const uint32_t shard_mask_base = ring_id * sol_nb_pad;
+                // Only FULL blocks are gathered, matching compact mode and the bias generator (block_bit_full): a set
+                // bit on a partial tail block would otherwise be computed here AND pooled by the bias -- counted
+                // twice. The producer zeroes such bits (full_row), so this is defence in depth.
                 uint32_t n_kept = 0;
                 for (uint32_t b = 0; b < sol_nb; ++b) {
-                    n_kept += mask_row[shard_mask_base + b] != 0 ? 1u : 0u;
+                    n_kept += (mask_row[shard_mask_base + b] != 0 && sol_block_is_full(ring_id, b)) ? 1u : 0u;
                 }
                 constexpr uint32_t blocks_per_chunk = Sk_chunk_t / kSolBlockTiles;
                 const bool force_block0 = n_kept == 0;  // never leave an iteration without a chunk
@@ -1397,7 +1400,7 @@ void kernel_main() {
                             block_ids[slot] = 0;
                             continue;
                         }
-                        while (mask_row[shard_mask_base + scan_b] == 0) {
+                        while (mask_row[shard_mask_base + scan_b] == 0 || !sol_block_is_full(ring_id, scan_b)) {
                             ++scan_b;
                         }
                         block_ids[slot] = scan_b++;
@@ -1637,6 +1640,12 @@ void kernel_main() {
                                         return;
                                     }
                                 }
+                                // Only a FULL block can be exact. A shard whose live tail is 1..63 tokens has none,
+                                // so this iteration streams nothing and compute runs no step for it -- and with
+                                // q_per_core > 1 the writer then waits forever for the per-Q-chunk signal. The host
+                                // rejects that geometry for a static logical_n (ring_joint_sdpa_device_operation.cpp);
+                                // a live logical_n tensor cannot be checked there, so trap it under the watcher.
+                                ASSERT(sol_block_is_full(ring_id, 0));
                                 mask_row[0] = 1u;
                             }
                         };
@@ -1684,7 +1693,7 @@ void kernel_main() {
                             plan_words[5] = sol_total_kept;
 #ifdef SOL_PACK_DEBUG
                             DPRINT(
-                                "SOLPLAN r={} q={} kept={} expect={}\n",
+                                "SX {} {} {} {}\n",
                                 ring_id,
                                 q_chunk,
                                 sol_total_kept,
@@ -1692,7 +1701,17 @@ void kernel_main() {
 #endif
                         }
                         uint32_t ulo = lo, uhi = hi;
-                        if (sol_n_members > 0 && head_chain.is_participant && nq == head_chain.chain_head) {
+                        if constexpr (sol_pack) {
+                            // Q2 streams every in-range chunk through the chain and drops the chain-wide union.
+                            // Compute never sees a raw chunk under packing (pages only), so nothing on its side
+                            // depends on which chunks were streamed, and the reader packs from its own row
+                            // regardless. What the union bought was skipping chunks no member needs; at the
+                            // densities this path targets (~0.15 per block, 8 blocks per chunk, 9-12 members)
+                            // the union is ~1.0 anyway, while computing it cost one DRAM read and a bitmask scan
+                            // per member per (ring iter, Q chunk) -- 4x more of them at the 64-row Q chunk.
+                            ulo = 0xffffffffu;
+                            uhi = 0xffffffffu;
+                        } else if (sol_n_members > 0 && head_chain.is_participant && nq == head_chain.chain_head) {
                             const uint32_t j = q_chunk - sol_my_start;  // stream position along the chain
                             for (uint32_t m = 0; m < sol_n_members; ++m) {
                                 const uint32_t m_start = get_arg_val<uint32_t>(sol_members_base + 2 * m);
@@ -1748,6 +1767,36 @@ void kernel_main() {
                 // stays fronted in L1" optimization never applies -- compute derives its q_per_core from
                 // the fixed slot count and would wait on a Q chunk the reader never re-pushed.
                 const bool need_q_read = rotated_q_split_enabled || (q_per_core > 1) || !q_pushed;
+                // Q download, one subblock at a time when the chunk has several so compute can start QK^T early.
+                // Called from the first K chunk actually processed (after K is forwarded, so no outstanding NoC
+                // writes remain -- the read barrier inside would deadlock with in-flight writes), and from the
+                // Sol fallback after the loop when nothing was streamed.
+                const auto read_q = [&](const auto& q_gen) {
+                    if constexpr (use_q_subblock_push) {
+                        for (uint32_t q_sub = 0; q_sub < q_num_subblocks; ++q_sub) {
+                            const uint32_t sb_row_start = q_slice.d2_start + q_sub * qk_subblock_h;
+                            const uint32_t sb_row_end = sb_row_start + qk_subblock_h;
+                            Slice q_sub_slice(q_slice.d0, q_slice.d1, sb_row_start, sb_row_end, 0, DHt);
+                            read_block(
+                                q_gen,
+                                q_sub_slice,
+                                q_end_seq_tile,
+                                cb_q_in,
+                                q_tile_bytes,
+                                false /*transpose*/,
+                                q_barrier_threshold);
+                        }
+                    } else {
+                        read_block(
+                            q_gen,
+                            q_slice,
+                            q_end_seq_tile,
+                            cb_q_in,
+                            q_tile_bytes,
+                            false /*transpose*/,
+                            q_barrier_threshold);
+                    }
+                };
 
                 ring_joint::SlidingQWorkPlan<SLIDING_MAX_SOURCE_RANGES> sliding_q_plan;
                 if constexpr (has_sliding_window) {
@@ -2086,42 +2135,22 @@ void kernel_main() {
                     }
                     // Make K available to compute. Under sol_pack the unit of delivery is the packed page, pushed
                     // above when it filled and after the loop when partial -- a raw chunk is never handed over.
+                    //
+                    // The per-iteration K/V push count feeds dummy_kv_chunks_for_phase_alignment below, and compute
+                    // runs the same function on ITS count. Compute counts pages under sol_pack (raw chunks never
+                    // reach it), so the reader must count pages too -- see the trailing flush -- or the two sides
+                    // push and pop different numbers of dummy pages and the 2-page CBs desync on the next ring
+                    // iteration.
                     if constexpr (!sol_pack) {
                         cb_k.push_back(k_chunk_tiles);
+                        KV_chunks_processed_in_iter++;
                     }
-                    KV_chunks_processed_in_iter++;
 
                     // Download Q on the first K iteration — after K is downloaded and forwarded.
                     // Push Q one subblock at a time so compute can start QK matmul incrementally.
                     // Placed after K forward so no outstanding NOC writes remain
                     // (noc_async_read_barrier inside subblock read would deadlock with in-flight writes).
                     if (first_k_for_q && need_q_read) {
-                        const auto read_q = [&](const auto& q_gen) {
-                            if constexpr (use_q_subblock_push) {
-                                for (uint32_t q_sub = 0; q_sub < q_num_subblocks; ++q_sub) {
-                                    const uint32_t sb_row_start = q_slice.d2_start + q_sub * qk_subblock_h;
-                                    const uint32_t sb_row_end = sb_row_start + qk_subblock_h;
-                                    Slice q_sub_slice(q_slice.d0, q_slice.d1, sb_row_start, sb_row_end, 0, DHt);
-                                    read_block(
-                                        q_gen,
-                                        q_sub_slice,
-                                        q_end_seq_tile,
-                                        cb_q_in,
-                                        q_tile_bytes,
-                                        false /*transpose*/,
-                                        q_barrier_threshold);
-                                }
-                            } else {
-                                read_block(
-                                    q_gen,
-                                    q_slice,
-                                    q_end_seq_tile,
-                                    cb_q_in,
-                                    q_tile_bytes,
-                                    false /*transpose*/,
-                                    q_barrier_threshold);
-                            }
-                        };
                         read_q_from_source<has_joint_q, joint_tensor_args_offset>(
                             is_joint_q, joint_q_addr, q_generator, joint_q_input_tile_logical, read_q);
                         q_pushed = true;
@@ -2261,14 +2290,26 @@ void kernel_main() {
                         ++sol_pages_pushed;
                         sol_pack_fill = 0;
                     }
-#ifdef SOL_PACK_DEBUG
-                    if (!is_padded_iter) {
-                        DPRINT("SOLDONE r={} q={} pushed={}\n", ring_id, q_chunk, sol_pages_pushed);
-                    }
-#endif
+                    // Pages are the unit compute counts (one per inner step), so they are what the phase
+                    // alignment at the end of the ring iteration must see. See the note at the K push site.
+                    KV_chunks_processed_in_iter += sol_pages_pushed;
+
                     // The trailing reserve_back (from the loop, or the pre-loop one when nothing was kept) is
                     // left un-pushed: the write pointer does not advance, so the next iteration's reserve returns
                     // the same address. Same staging-area idiom the padded-mcast path uses above.
+                }
+                if constexpr (sol_chunk_mode) {
+                    // Nothing was streamed for this (ring iter, Q chunk), so the in-loop Q push never ran. Push Q
+                    // here: compute still waits for it (the pooled step on the first active iteration, and the
+                    // per-Q-chunk Q pop when q_per_core > 1). Reachable only when the shard holds no full kept
+                    // block, which force_block0_if_empty cannot repair (see its ASSERT); the host rejects that
+                    // geometry when logical_n is static, and this keeps the dynamic-length path from wedging on Q.
+                    if (!is_padded_iter && first_k_for_q && need_q_read) {
+                        read_q_from_source<has_joint_q, joint_tensor_args_offset>(
+                            is_joint_q, joint_q_addr, q_generator, joint_q_input_tile_logical, read_q);
+                        q_pushed = true;
+                        first_k_for_q = false;
+                    }
                 }
                 if constexpr (sol_chunk_mode) {
                     if (!is_padded_iter && do_pooled) {

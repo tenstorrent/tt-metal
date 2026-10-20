@@ -292,40 +292,91 @@ def test_density_falls_as_tau_rises(
         assert d[0] > d[2], f"tau has no effect between 0.5 and 4.0 in {mode} mode: {d}"
 
 
-PARTIAL_TAIL_XFAIL = pytest.mark.xfail(
-    reason=(
-        "rows=1184 is not a multiple of the 64-token block, so the last block of every shard is partial and is "
-        "pooled rather than computed exactly. Block-form modes (gather, compact) land at PCC ~0.855; chunk mode "
-        "passes. Reproduced before any Q1/Q2 change and with packing off, so this is a pre-existing accuracy "
-        "question in the sol path at non-block-aligned row counts, not a regression. Left failing deliberately "
-        "rather than relaxing the gate -- 2.7 % of keys going through the zeroth-order correction should not "
-        "cost 0.14 of PCC, and that discrepancy is worth running down."
-    ),
-    strict=False,
-)
+def _pooled_tail_reference(S, rows, logical_n, seed=0):
+    """fp32 attention that mirrors the kernel's treatment of a partial tail block.
+
+    Every full 64-token block inside logical_n is attended exactly. Every partial block (0 < len < 64, from a
+    shard end or from logical_n) is replaced by the kernel's zeroth-order column: key = mean K, value = mean V,
+    logit bias ln(len), so its softmax weight is len * exp(q . kbar). Keys at/after logical_n are dropped.
+    Returns [H, S*rows, D]; query rows at/after logical_n are zero and must be excluded from the comparison.
+
+    This is what block-form modes compute at tau = -1e4, where nothing else is approximated. On this file's ramp
+    data the tail block carries ~88 % of the softmax mass for the tail queries, so pooling it alone costs PCC
+    ~0.14 against dense (measured 0.855 on device, 0.864 in a numpy model). That is the correction working as
+    designed on adversarial data, not a kernel defect; the reference below is the right yardstick.
+    """
+    q, k, v = _qkv(S, rows, seed)
+    Hh = q.shape[1]
+    scale = D**-0.5
+    qf = q.permute(1, 0, 2, 3).reshape(Hh, S * rows, D).float()
+    kf = k.permute(1, 0, 2, 3).reshape(Hh, S * rows, D).float()
+    vf = v.permute(1, 0, 2, 3).reshape(Hh, S * rows, D).float()
+    block = 64
+    nb = -(-rows // block)
+    keep = torch.zeros(S * rows, dtype=torch.bool)
+    pooled_k, pooled_v, pooled_bias = [], [], []
+    for s in range(S):
+        for b in range(nb):
+            start = s * rows + b * block
+            end = min(start + block, s * rows + rows, logical_n)
+            length = end - start
+            if length <= 0:
+                continue
+            if length == block:
+                keep[start:end] = True
+            else:
+                pooled_k.append(kf[:, start:end].mean(1))
+                pooled_v.append(vf[:, start:end].mean(1))
+                pooled_bias.append(float(torch.log(torch.tensor(float(length)))))
+    k_all = kf[:, keep]
+    v_all = vf[:, keep]
+    bias = torch.zeros(int(keep.sum()))
+    if pooled_k:
+        k_all = torch.cat([k_all, torch.stack(pooled_k, 1)], 1)
+        v_all = torch.cat([v_all, torch.stack(pooled_v, 1)], 1)
+        bias = torch.cat([bias, torch.tensor(pooled_bias)])
+    out = torch.zeros(Hh, S * rows, D)
+    for h in range(Hh):
+        logits = (qf[h, :logical_n] @ k_all[h].T) * scale + bias[None, :]
+        out[h, :logical_n] = torch.softmax(logits, dim=-1) @ v_all[h]
+    return out
 
 
-@PARTIAL_TAIL_XFAIL
+def _check_partial_tail(r: Result, mode, S, rows, logical_n):
+    """Block-form modes must match the pooled-tail reference; chunk mode computes the tail chunk densely and must
+    match dense. Both are logged against both yardsticks so a regression in either direction is visible."""
+    ref = _pooled_tail_reference(S, rows, logical_n)
+    pcc_ref = _pcc(r.sol, ref, logical_n=logical_n)
+    pcc_dense = _pcc(r.dense, r.sol, logical_n=logical_n)
+    logger.info(
+        f"[tail] mode={mode} rows={rows} logical_n={logical_n}: pcc vs pooled-tail ref {pcc_ref:.5f}, vs dense {pcc_dense:.5f}"
+    )
+    if mode == "chunk":
+        assert pcc_dense > 0.999, f"chunk mode computes the tail chunk exactly; pcc vs dense {pcc_dense:.5f}"
+    else:
+        assert pcc_ref > 0.995, f"{mode}: pcc vs pooled-tail reference {pcc_ref:.5f}"
+
+
 @GALAXY_RING
 @pytest.mark.parametrize("mode", MODES)
 def test_ragged_logical_n(mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, mode, reset_seeds, capfd):
-    """logical_n off a block boundary leaves a partial tail block, which the kernel must pool rather than compute."""
-    r = _run(mesh_device, sp_axis, num_links, topology, capfd, mode=mode, tau=1.0, rows=1184, logical_n=9000)
-    assert _pcc(r.dense, r.sol, logical_n=9000) > 0.99
+    """logical_n off a block boundary leaves partial tail blocks (32 tokens on shards 0-6, 8 tokens on shard 7),
+    which block-form modes pool rather than compute. tau = -1e4 makes that the only approximation."""
+    S = tuple(mesh_device.shape)[sp_axis]
+    r = _run(mesh_device, sp_axis, num_links, topology, capfd, mode=mode, tau=-1e4, rows=1184, logical_n=9000)
+    _check_partial_tail(r, mode, S, 1184, 9000)
 
 
-@PARTIAL_TAIL_XFAIL
 @GALAXY_RING
 @pytest.mark.parametrize("mode", MODES)
 def test_small_k_chunk(mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, mode, reset_seeds, capfd):
-    """k_chunk 256 gives TK = 4 blocks per chunk instead of 8, changing every kept-count in the plan.
-
-    logical_n must match the padded extent (8 shards x 1184) or most of the tail is undefined padding.
-    """
+    """k_chunk 256 gives TK = 4 blocks per chunk instead of 8, changing every kept-count in the plan, with a
+    32-token partial tail block on every shard (logical_n = 8 x 1184)."""
+    S = tuple(mesh_device.shape)[sp_axis]
     r = _run(
-        mesh_device, sp_axis, num_links, topology, capfd, mode=mode, tau=1.0, rows=1184, logical_n=9472, k_chunk=256
+        mesh_device, sp_axis, num_links, topology, capfd, mode=mode, tau=-1e4, rows=1184, logical_n=9472, k_chunk=256
     )
-    assert _pcc(r.dense, r.sol, logical_n=9472) > 0.99
+    _check_partial_tail(r, mode, S, 1184, 9472)
 
 
 @GALAXY_RING
@@ -363,86 +414,48 @@ def test_qblock_is_sparser_than_qchunk(mesh_device, sp_axis, tp_axis, num_links,
     assert coarse >= fine - 1e-6, "the OR over query blocks cannot reduce density"
 
 
-def _pack_env(on):
-    """TT_SOL_PACK gates Q2 in the program factory; it is read at program creation, so set it before the run."""
-    prev = os.environ.get("TT_SOL_PACK")
-    os.environ["TT_SOL_PACK"] = "1" if on else "0"
-    return prev
-
-
-def _pack_env_restore(prev):
-    if prev is None:
-        os.environ.pop("TT_SOL_PACK", None)
-    else:
-        os.environ["TT_SOL_PACK"] = prev
-
-
 @GALAXY_RING
 def test_q2_packing_matches_unpacked(mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, reset_seeds, capfd):
     """Q2's correctness gate: packing regroups blocks into full pages and must not change the math.
 
-    Same inputs, same mask, same tau -- only the delivery unit differs (kept chunks vs packed pages). Any
-    disagreement means the page accounting diverged between reader and compute: the two derive page boundaries
-    independently from the kept bitmask, so a mismatch shows up as wrong output or a hang rather than a warning.
-
-    This is also the first run that compiles the sol_pack branches of compute_streaming.hpp. Those live behind
-    `if constexpr (sol_pack)` with sol_pack a TEMPLATE parameter, so they are not type-checked at all until a
-    program is created with packing on -- unlike the reader's, where sol_pack is a plain constexpr bool and the
-    discarded branch is still checked.
+    Same inputs, same mask, same tau -- only the delivery unit differs (kept chunks vs packed pages). Q2 is
+    selected with sol_mode="pack" (compact plus packing), which is part of the program hash, so the two runs
+    below compile and cache separate programs without clearing the cache. The pre-pass output for "pack" is
+    identical to "compact", so the densities must match exactly.
     """
-    kw = dict(mode="compact", tau=1.0, want_dense=False, q_chunk=Q1_CHUNK)
-    prev = _pack_env(False)
-    try:
-        base = _run(mesh_device, sp_axis, num_links, topology, capfd, **kw)
-        # TT_SOL_PACK is read in the program factory, which a cache hit never calls: without this the second
-        # run silently reuses the pack-off program and the comparison is vacuous. That is exactly what happened
-        # on 2026-10-20 -- this test passed while every other packed test OOM'd at the same geometry.
-        mesh_device.disable_and_clear_program_cache()
-        _pack_env(True)
-        packed = _run(mesh_device, sp_axis, num_links, topology, capfd, **kw)
-    finally:
-        _pack_env_restore(prev)
-        mesh_device.disable_and_clear_program_cache()
+    kw = dict(tau=1.0, want_dense=False, q_chunk=Q1_CHUNK)
+    base = _run(mesh_device, sp_axis, num_links, topology, capfd, mode="compact", **kw)
+    packed = _run(mesh_device, sp_axis, num_links, topology, capfd, mode="pack", **kw)
     logger.info(f"[q2] density {base.density:.4f}; pcc(packed, unpacked) {_pcc(base.sol, packed.sol):.6f}")
+    assert packed.modes_logged == {"pack"}, f"factory compiled {sorted(packed.modes_logged)}"
     assert base.density == packed.density, "packing changed the mask; it must only change delivery"
     assert _pcc(base.sol, packed.sol) > 0.9999
 
 
 @GALAXY_RING
-@pytest.mark.parametrize("tau", [0.5, 1.0, 2.0])
+@pytest.mark.parametrize("tau", [-1e4, 0.5, 1.0, 2.0])
 def test_q2_packing_across_densities(
     mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, tau, reset_seeds, capfd
 ):
     """Sweeps the page-fill pattern. tau sets how many blocks are kept, which sets how chunks straddle page
-    boundaries and how big the trailing partial page is -- the two cases most likely to desynchronise the
-    reader's `push at sol_blocks_per_page` from compute's `ceil(total / sol_blocks_per_page)`.
+    boundaries and how big the trailing partial page is. tau = -1e4 keeps everything, so every page but the
+    last is full and the output must reproduce dense almost exactly.
     """
-    prev = _pack_env(True)
-    try:
-        mesh_device.disable_and_clear_program_cache()
-        r = _run(mesh_device, sp_axis, num_links, topology, capfd, mode="compact", tau=tau, q_chunk=Q1_CHUNK)
-    finally:
-        _pack_env_restore(prev)
-        mesh_device.disable_and_clear_program_cache()
-    logger.info(f"[q2] tau={tau} density {r.density:.4f} pcc vs dense {_pcc(r.dense, r.sol):.5f}")
-    assert _pcc(r.dense, r.sol) > 0.99
+    r = _run(mesh_device, sp_axis, num_links, topology, capfd, mode="pack", tau=tau, q_chunk=Q1_CHUNK)
+    pcc = _pcc(r.dense, r.sol)
+    logger.info(f"[q2] tau={tau} density {r.density:.4f} pcc vs dense {pcc:.5f}")
+    assert pcc > (0.9995 if tau < 0 else 0.99)
 
 
 @GALAXY_RING
 def test_q2_zero_kept_iteration(mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, reset_seeds, capfd):
-    """The degenerate page case: a very high tau leaves ring iterations with no kept blocks at all.
+    """The degenerate page case: a very high tau leaves ring iterations with (almost) no kept blocks.
 
-    Then no page is ever filled, the partial flush has nothing to push, and compute's page count is 0 for that
-    iteration -- it must fall straight through to the pooled chunks. This is the path that deadlocks if the
-    reader's trailing un-pushed reserve and compute's loop bound disagree.
+    Block 0 of every shard is still forced, so each iteration carries one partial page; the reader's trailing
+    flush and compute's page count both have to agree on that single page, and the pooled correction carries
+    the rest.
     """
-    prev = _pack_env(True)
-    try:
-        mesh_device.disable_and_clear_program_cache()
-        r = _run(mesh_device, sp_axis, num_links, topology, capfd, mode="compact", tau=6.0, q_chunk=Q1_CHUNK)
-    finally:
-        _pack_env_restore(prev)
-        mesh_device.disable_and_clear_program_cache()
+    r = _run(mesh_device, sp_axis, num_links, topology, capfd, mode="pack", tau=6.0, q_chunk=Q1_CHUNK)
     logger.info(f"[q2] tau=6 density {r.density:.4f} pcc vs dense {_pcc(r.dense, r.sol):.5f}")
     assert torch.isfinite(r.sol).all(), "non-finite output: the pooled correction did not carry a near-empty mask"
 
@@ -469,213 +482,63 @@ def test_production_5s_geometry(mesh_device, sp_axis, tp_axis, num_links, topolo
 
 
 @GALAXY_RING
-@pytest.mark.parametrize("mode", ["chunk", "compact"])
-@pytest.mark.parametrize(
-    "rows,what",
-    [
-        (1024, "neither"),  # 16 full blocks, 4 full Q chunks
-        (1152, "partial Q chunk"),  # 18 full blocks, 1152/256 = 4.5 -> last Q chunk holds 128 rows
-        (1184, "both"),  # 18 full + 32-token block, and a 160-row last Q chunk
-    ],
-)
-def test_ragged_bisect(
-    mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, mode, rows, what, reset_seeds, capfd
+@pytest.mark.parametrize("mode", ["gather", "compact"])
+def test_partial_tail_block_is_pooled_not_dropped(
+    mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, mode, reset_seeds, capfd
 ):
-    """Which raggedness breaks the block-form path: the partial K block, or the partial Q chunk?
+    """Closes the rows=1184 investigation (2026-10-20).
 
-    Device (packing off, pre-existing): rows=1184 gives PCC ~0.855 for gather/compact while chunk mode passes.
-    The torch reference says pooling a partial K block costs only 0.007 PCC (0.98134 -> 0.97446), so that is not
-    it. But rows=1184 at q_chunk=256 also leaves 160 of 1184 rows in a partial final Q chunk -- 13.5 % of the
-    output, which matches a PCC of 0.855 almost exactly.
+    Block-form modes read PCC ~0.855 against dense at rows=1184 regardless of tau. The bisection tests that used
+    to live here ruled out the bias generator, the partial Q chunk, nb parity and a dropped block. The cause is
+    the data: this file's positional ramp makes the 32-token tail block of every shard carry ~88 % of the softmax
+    mass for the tail queries, so the zeroth-order correction on that one block costs ~0.14 PCC by itself (0.864
+    in a numpy model of the kernel's correction, 0.999 on randn -- which is where the CPU suite's "0.007" came
+    from). The kernel does what the algorithm specifies; the right yardstick is _pooled_tail_reference.
 
-    1024 isolates neither, 1152 isolates the partial Q chunk alone (all K blocks full), 1184 has both.
-      1152 fails  -> the partial Q chunk is the trigger, and production is exposed: 4736/320, 9184/256 and
-                     13664/256 all leave a partial final Q chunk.
-      1152 passes -> the partial K block is the trigger on device, despite the reference tolerating it.
-    """
-    r = _run(
-        mesh_device,
-        sp_axis,
-        num_links,
-        topology,
-        capfd,
-        mode=mode,
-        tau=1.0,
-        rows=rows,
-        logical_n=8 * rows,
-    )
-    pcc = _pcc(r.dense, r.sol, logical_n=8 * rows)
-    logger.info(f"[ragged] mode={mode} rows={rows} ({what}) pcc={pcc:.5f}")
-    assert pcc > 0.99, f"{mode} rows={rows} ({what}): pcc {pcc:.5f}"
-
-
-@GALAXY_RING
-@pytest.mark.parametrize("upload_bias", [False, True], ids=["gen_bias", "uploaded_bias"])
-def test_partial_block_bias_source(
-    mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, upload_bias, reset_seeds, capfd
-):
-    """Splits the rows=1184 accuracy bug: is it the on-device bias generator, or something else?
-
-    Block-form modes lose 0.145 PCC when the tail K block is partial (32 of 64 tokens). gather fails too, and
-    gather does no compaction, so the fault is in the bias/pooled path the two share -- not in packing. Reading
-    sol_bias_gen found nothing: block_len returns 32 correctly, the table holds ln(len)/scale, full_row zeroes
-    the mask bit, and the pooled K-bar/V-bar use 1/len.
-
-    Run in GATHER, not compact: ring_joint_sdpa_device_operation.cpp:576 asserts
-    `!sol_compact_mode || sol_bias_generated()`, so compact mode cannot accept an uploaded bias at all -- it has
-    no escape hatch from sol_bias_gen. Gather fails identically (0.855) and does allow one, so it is the probe.
-
-    gen_bias       -> the op generates the bias on device (compact's only option, and gather's default here).
-    uploaded_bias  -> the op consumes the pre-pass's Python bias instead.
-
-    uploaded_bias passes and gen_bias fails -> the defect is in sol_bias_gen.
-    both fail                               -> the bias is fine; look at the pooled chunk or the mask instead.
-    """
-    r = _run(
-        mesh_device,
-        sp_axis,
-        num_links,
-        topology,
-        capfd,
-        mode="gather",
-        tau=1.0,
-        rows=1184,
-        logical_n=8 * 1184,
-        upload_bias=upload_bias,
-    )
-    pcc = _pcc(r.dense, r.sol, logical_n=8 * 1184)
-    logger.info(f"[bias] upload_bias={upload_bias} rows=1184 pcc={pcc:.5f}")
-    assert pcc > 0.99, f"upload_bias={upload_bias}: pcc {pcc:.5f}"
-
-
-@GALAXY_RING
-@pytest.mark.parametrize(
-    "rows,tau,what",
-    [
-        (1216, 1.0, "19 FULL blocks, no partial"),      # 1216 = 19*64 exactly
-        (1184, -1e4, "partial block is the ONLY approximation"),
-        (1184, 1.0, "partial block + normal sparsity"),  # the known failure, as control
-    ],
-)
-def test_partial_block_isolate(
-    mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, rows, tau, what, reset_seeds, capfd
-):
-    """Narrows the rows=1184 bug after bias was exonerated (both bias sources gave bit-identical 0.85523).
-
-    rows=1216 -- 19 full blocks, so nb is still odd and the padded tile count is still 38, but NOTHING is
-      partial. Fails => the trigger is nb/geometry, not partialness. Passes => partialness it is.
-
-    rows=1184 at tau=-1e4 -- every FULL block is exact, so the partial tail block is the only thing the pooled
-      correction approximates: 32 of 1184 tokens, 2.7 %. The reference puts that at 0.007 PCC. If this still
-      reads 0.855 then the partial block's pooled contribution is badly wrong on its own, which is as narrow as
-      this gets without a kernel dump.
-    """
-    r = _run(
-        mesh_device,
-        sp_axis,
-        num_links,
-        topology,
-        capfd,
-        mode="compact",
-        tau=tau,
-        rows=rows,
-        logical_n=8 * rows,
-    )
-    pcc = _pcc(r.dense, r.sol, logical_n=8 * rows)
-    logger.info(f"[isolate] rows={rows} tau={tau} ({what}) density={r.density:.4f} pcc={pcc:.5f}")
-    assert pcc > 0.99, f"rows={rows} tau={tau} ({what}): pcc {pcc:.5f}"
-
-
-@GALAXY_RING
-def test_partial_block_is_dropped_not_pooled(
-    mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, reset_seeds, capfd
-):
-    """Is the partial tail block being DROPPED entirely rather than pooled?
-
-    rows=1184 loses 0.145 PCC from one 32-token block per shard, and the loss is identical at tau=-1e4 (where
-    that block is the only approximation in the whole op) and tau=1.0. 2.7 % of keys cannot cost that much if
-    they are merely approximated -- the reference prices it at 0.007.
-
-    So compare the device output against a dense reference computed WITHOUT those tokens: K/V truncated to the
-    1152 full-block tokens per shard, queries unchanged. If sol matches that truncated reference closely, the
-    partial block contributes nothing at all -- excluded from the exact path by full_row and never picked up by
-    the pooled correction either. That is a dropped-keys bug, not an approximation-quality one.
+    Pinned here: sol matches that reference, and sits closer to dense than to the tail-dropped reference, which
+    is the signature of a pooled, not dropped, block.
     """
     rows, full_rows = 1184, 1152  # 18 full 64-token blocks = 1152; the 19th holds 32
-    r = _run(
-        mesh_device,
-        sp_axis,
-        num_links,
-        topology,
-        capfd,
-        mode="compact",
-        tau=-1e4,
-        rows=rows,
-        logical_n=8 * rows,
-    )
     S = tuple(mesh_device.shape)[sp_axis]
+    r = _run(mesh_device, sp_axis, num_links, topology, capfd, mode=mode, tau=-1e4, rows=rows, logical_n=8 * rows)
+    ref = _pooled_tail_reference(S, rows, 8 * rows)
     q, k, v = _qkv(S, rows)
     kt = torch.cat([k[s, :, :full_rows] for s in range(S)], dim=1).float()  # tail tokens removed
     vt = torch.cat([v[s, :, :full_rows] for s in range(S)], dim=1).float()
     trunc = torch.cat(
         [torch.softmax(q[s].float() @ kt.transpose(1, 2) * (D**-0.5), dim=-1) @ vt for s in range(S)], dim=1
     )
-    pcc_full = _pcc(r.dense, r.sol, logical_n=8 * rows)
+    pcc_ref = _pcc(ref, r.sol, logical_n=8 * rows)
+    pcc_dense = _pcc(r.dense, r.sol, logical_n=8 * rows)
     pcc_trunc = _pcc(trunc, r.sol, logical_n=8 * rows)
-    logger.info(f"[drop] sol vs dense={pcc_full:.5f}   sol vs dense-without-tail-tokens={pcc_trunc:.5f}")
-    assert pcc_trunc < 0.999, (
-        f"sol matches the truncated reference at {pcc_trunc:.5f}: the partial block is being dropped entirely, "
-        f"not pooled"
+    logger.info(
+        f"[tail] mode={mode}: sol vs pooled-tail ref {pcc_ref:.5f}, vs dense {pcc_dense:.5f}, vs truncated {pcc_trunc:.5f}"
     )
+    assert pcc_ref > 0.995, f"{mode}: sol vs pooled-tail reference {pcc_ref:.5f}"
+    assert pcc_trunc < pcc_dense, "sol is closer to the tail-dropped reference than to dense: the tail block is dropped"
 
 
+@SLOW
 @GALAXY_RING
-@pytest.mark.parametrize("pad_keys", [0, 32], ids=["no_pad", "pad32"])
-def test_partial_block_padding_hypothesis(
-    mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, pad_keys, reset_seeds, capfd
-):
-    """Are unmasked padding keys entering the softmax at rows=1184?
-
-    Established so far: partialness is the trigger (1216 with 19 FULL blocks passes), the bias is exonerated
-    (both sources bit-identical), sparsity is irrelevant (tau=-1e4 == tau=1.0), compaction is exonerated
-    (gather fails too), and the tail tokens are NOT dropped (sol is further from the truncated reference,
-    0.744, than from dense, 0.855).
-
-    Hypothesis: kv_local_padded_Nt = 37 tiles is ODD, but sol_nb = div_up(37, 2) = 19 blocks spans 38 tiles --
-    block 18's second tile is past the end of the tensor. Compact forces apply_mask = false, so nothing masks
-    it. Zero-valued padding keys give QK = 0, hence exp(0) = 1: full softmax weight against a zero value,
-    inflating the denominator for EVERY query by a constant. Uniform, moderate, tau-independent -- fits.
-
-    The reference here appends `pad_keys` zero keys/values per shard. If sol matches the padded reference much
-    better than the clean one, the padding is being attended and the fix is to mask it (or to pad
-    kv_local_padded_Nt up to an even tile count so no half-block exists).
+def test_production_5s_pack(mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, reset_seeds, capfd):
+    """Q1 + Q2 at the 5 s shape: 64-row Q chunks (TQ = 1, no OR) with kept blocks packed across the 384-token K
+    chunks (6 blocks per page). The correctness gate for the production geometry; perf comes from the profiler.
+    logical_n is the full padded extent so no shard has a partial tail block and the dense comparison is clean.
     """
-    rows = 1184
     r = _run(
         mesh_device,
         sp_axis,
         num_links,
         topology,
         capfd,
-        mode="compact",
-        tau=-1e4,
-        rows=rows,
-        logical_n=8 * rows,
+        mode="pack",
+        tau=1.0,
+        rows=4736,
+        logical_n=8 * 4736,
+        q_chunk=Q1_CHUNK,
+        k_chunk=384,
     )
-    S = tuple(mesh_device.shape)[sp_axis]
-    q, k, v = _qkv(S, rows)
-    ks, vs = [], []
-    for sh in range(S):
-        kk, vv = k[sh].float(), v[sh].float()
-        if pad_keys:
-            z = torch.zeros(kk.shape[0], pad_keys, kk.shape[2])
-            kk, vv = torch.cat([kk, z], dim=1), torch.cat([vv, z], dim=1)
-        ks.append(kk)
-        vs.append(vv)
-    kg, vg = torch.cat(ks, dim=1), torch.cat(vs, dim=1)
-    ref = torch.cat(
-        [torch.softmax(q[sh].float() @ kg.transpose(1, 2) * (D**-0.5), dim=-1) @ vg for sh in range(S)], dim=1
-    )
-    pcc = _pcc(ref, r.sol, logical_n=8 * rows)
-    logger.info(f"[pad] pad_keys={pad_keys}/shard  sol vs reference pcc={pcc:.5f}")
-    assert pcc > 0.99, f"pad_keys={pad_keys}: pcc {pcc:.5f}"
+    pcc = _pcc(r.dense, r.sol)
+    logger.info(f"[5s pack] density {r.density:.4f} pcc vs dense {pcc:.5f} factory_logged={sorted(r.modes_logged)}")
+    assert r.modes_logged == {"pack"}
+    assert pcc > 0.99

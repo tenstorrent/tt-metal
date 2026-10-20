@@ -1116,9 +1116,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // iteration the reader sees blocks in chunk order, so it fills a page and flushes a partial one at the end.
     // Both sides walk the same kept bitmask, so no plan words are added -- compute derives page count and fill
     // exactly as the reader does.
-    // OPT-IN until the compute-side page step is wired. The reader half is complete: with sol_pack on, it pushes
-    // packed pages that nothing consumes yet, so the CB fills and the op hangs. Do not default this on.
-    const bool sol_pack = sol_compact && std::getenv("TT_SOL_PACK") && std::string(std::getenv("TT_SOL_PACK")) == "1";
+    // Selected with sol_mode="pack" (implies compact). It used to be the TT_SOL_PACK env var, which the program
+    // hash could not see: a cache hit silently reused the pack-off program.
+    const bool sol_pack = tensor_args.sol_pack_mode(args.sol_mode);
     if (tensor_args.sol_enabled()) {
         // Emitted once per program creation (the kernels are created with these named args). The Sol tests read this
         // line back from stderr and fail when a requested mode did not resolve (a docstring-gated keyword once made
@@ -1127,7 +1127,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             tt::LogOp,
             "RingJointSDPA sol mode resolved: {} (requested '{}', compact={}, chunk={}, even_up={}, even_up_all={}, "
             "gen_bias={})",
-            sol_compact ? "compact" : (sol_chunk_mode ? "chunk" : "gather"),
+            sol_pack ? "pack" : (sol_compact ? "compact" : (sol_chunk_mode ? "chunk" : "gather")),
             args.sol_mode,
             sol_compact ? 1 : 0,
             sol_chunk_mode && !sol_compact ? 1 : 0,
@@ -2953,7 +2953,10 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         };
         std::vector<McastCandidate> candidates;
         candidates.reserve(head_segments.size());
-        bool all_eligible = sol_chain_len == 0;  // split chains are never multicast
+        // Split chains are never multicast. Neither are the Sol streaming modes (chunk / compact / pack): the
+        // chain-wide kept union that keeps every member streaming the same chunks is only built for unicast
+        // chains (sol_members below), so a multicast injector would wait for a receiver that skipped the chunk.
+        bool all_eligible = sol_chain_len == 0 && !sol_chunk_mode;
 
         for (uint32_t head_id = 0; head_id < head_segments.size(); ++head_id) {
             const auto& segments = head_segments[head_id];

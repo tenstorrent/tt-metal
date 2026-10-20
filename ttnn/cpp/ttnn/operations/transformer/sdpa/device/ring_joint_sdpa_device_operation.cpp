@@ -568,8 +568,8 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(args.get_k_chunk_size() % 64 == 0, "Sol-Attn mode needs k_chunk_size to be a multiple of 64 (block)");
         TT_FATAL(
             args.sol_mode == "auto" || args.sol_mode == "gather" || args.sol_mode == "chunk" ||
-                args.sol_mode == "compact",
-            "sol_mode must be auto | gather | chunk | compact, got {}",
+                args.sol_mode == "compact" || args.sol_mode == "pack",
+            "sol_mode must be auto | gather | chunk | compact | pack, got {}",
             args.sol_mode);
         TT_FATAL(
             !tensor_args.sol_compact_mode(args.sol_mode) || tensor_args.sol_bias_generated(),
@@ -624,6 +624,24 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
             !tensor_args.sol_streams_chunks(args.sol_mode) || nkc_local <= 64,
             "sol chunk/compact mode: at most 64 K chunks per shard ({} given)",
             nkc_local);
+        // Every shard inside logical_n must hold at least one full 64-token block. Only full blocks are ever
+        // computed exactly; a shard with a 1..63-token live tail has none, so its ring iteration streams nothing,
+        // compute runs no step for it, and with more than one Q chunk per core the writer waits forever for the
+        // per-Q-chunk signal. A live logical_n tensor cannot be checked here (the reader ASSERTs it under the
+        // watcher instead); pad logical_n up or re-shard so no shard is left with a sub-block tail.
+        if (!tensor_args.has_logical_n_tensor() && args.logical_n > 0) {
+            const int64_t shard_rows = static_cast<int64_t>(k_shape[2]);
+            for (uint32_t s = 0; s < args.ring_size; ++s) {
+                const int64_t valid = std::min<int64_t>(
+                    shard_rows, static_cast<int64_t>(args.logical_n) - static_cast<int64_t>(s) * shard_rows);
+                TT_FATAL(
+                    valid <= 0 || valid >= 64,
+                    "Sol-Attn: shard {} holds {} valid tokens; every shard inside logical_n needs a full 64-token "
+                    "block",
+                    s,
+                    valid);
+            }
+        }
         if (tensor_args.sol_bias.has_value()) {
             const auto& bias = tensor_args.sol_bias.value();
             TT_FATAL(
@@ -1286,6 +1304,7 @@ ttsl::hash::hash_t RingJointSDPADeviceOperation::compute_program_hash(
         tensor_args.sol_enabled(),
         tensor_args.sol_chunk_mode(args.sol_mode),
         tensor_args.sol_compact_mode(args.sol_mode),
+        tensor_args.sol_pack_mode(args.sol_mode),
         tensor_args.sol_bias_generated(),
         args.joint_strategy,
         args.scale,
