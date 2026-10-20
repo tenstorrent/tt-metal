@@ -4,7 +4,8 @@
 """CI digest: report the current state of watched workflows.
 
 Thin aggregator. For each watched workflow it finds the latest completed
-scheduled run and reads that run's machine-readable ``ai_run_summary[_<scope>]_r<run>_a<attempt>``
+scheduled run — or, with ``--window-hours``, every scheduled run that completed
+inside that window — and reads each run's machine-readable ``ai_run_summary[_<scope>]_r<run>_a<attempt>``
 artifact — a factual JSON the ai_summary/run action already produces (succeeded
 / failed / infra_failure jobs). The digest does no classification of its own; it
 collects those per-run summaries and renders them at one point so a team can
@@ -27,7 +28,7 @@ import unittest.mock
 import zipfile
 from dataclasses import dataclass
 from types import SimpleNamespace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 
 def _gh_json(args: list[str]) -> object:
@@ -63,6 +64,65 @@ def latest_run(repo: str, workflow: str, branch: str) -> dict | None:
         ]
     )
     return runs[0] if runs else None
+
+
+# Enough for a week of a workflow scheduled a few times a day; runs_in_window
+# warns when the window reaches past it.
+_WINDOW_RUN_LIMIT = 100
+
+
+def runs_in_window(repo: str, workflow: str, branch: str, since: datetime) -> list[dict]:
+    """Completed scheduled runs of a workflow that finished at or after ``since``, newest first.
+
+    Same ``--event schedule`` restriction as latest_run. Fetched by count and
+    filtered here rather than with ``gh run list --created``, which older gh
+    releases lack.
+    """
+    runs = (
+        _gh_json(
+            [
+                "run",
+                "list",
+                "-R",
+                repo,
+                "--workflow",
+                workflow,
+                "--branch",
+                branch,
+                "--event",
+                "schedule",
+                "--status",
+                "completed",
+                "--limit",
+                str(_WINDOW_RUN_LIMIT),
+                "--json",
+                "databaseId,conclusion,createdAt,updatedAt,headSha,url,workflowName",
+            ]
+        )
+        or []
+    )
+    if len(runs) == _WINDOW_RUN_LIMIT and _completed_since(runs[-1:], since):
+        print(
+            f"{workflow}: the {_WINDOW_RUN_LIMIT} newest runs all fall inside the window; older ones are not reported",
+            file=sys.stderr,
+        )
+    return _completed_since(runs, since)
+
+
+def _completed_since(runs: list[dict], since: datetime) -> list[dict]:
+    """The runs that completed at or after ``since``.
+
+    Filtered on completion (``updatedAt``), not start: a run can take many
+    hours, and a start-time window would drop a run still going when one digest
+    fires and already outside the next one's window. With
+    back-to-back windows each run is reported exactly once, by the digest after
+    it finishes. A re-run moves ``updatedAt``, so its new attempt is reported again.
+    """
+    return [r for r in runs if _parse_ts(r.get("updatedAt") or r["createdAt"]) >= since]
+
+
+def _parse_ts(iso: str) -> datetime:
+    return datetime.fromisoformat(iso.replace("Z", "+00:00"))
 
 
 def _summary_name_re(run_id: int) -> "re.Pattern[str]":
@@ -245,12 +305,12 @@ def _error_cell(row: dict) -> str:
 
 
 def all_green(results: list[dict]) -> bool:
-    """True when every watched workflow's latest run is fully green."""
+    """True when every reported run is fully green."""
     return all(r["outcome"] == "GREEN" for r in results)
 
 
 def _fmt_ts(iso: str) -> str:
-    return datetime.fromisoformat(iso.replace("Z", "+00:00")).strftime("%Y-%m-%d %H:%M")
+    return _parse_ts(iso).strftime("%Y-%m-%d %H:%M")
 
 
 def _health_bar(counts: dict, width: int = 20) -> str:
@@ -267,11 +327,11 @@ def _link(r: dict) -> str:
     return f"[{name}]({r['latest_url']})" if r.get("latest_url") else name
 
 
-def _section(r: dict) -> list[str]:
-    """One section per workflow — same shape for green and broken: name, health
+def _section(r: dict, list_passing: bool = False) -> list[str]:
+    """One section per run — same shape for green and broken: name, health
     bar, and the 🔴/🟣/🟢 + date line. Broken/infra runs add a collapsible
     failed-jobs table; a green run stops at the counts line (it's enough to see
-    it's green)."""
+    it's green). ``list_passing`` adds a collapsible list of the passed jobs."""
     when = f" · {_fmt_ts(r['latest_ts'])} UTC" if r.get("latest_ts") else ""
     attempt = r.get("run_attempt")
     hdr = _link(r) + (f" (attempt {attempt})" if attempt and attempt > 1 else "")
@@ -308,19 +368,52 @@ def _section(r: dict) -> list[str]:
             "",
             "</details>",
         ]
+    passed = r.get("passing_jobs") or []
+    if list_passing and passed:
+        out += ["", f"<details><summary>Passed jobs ({len(passed)})</summary>", ""]
+        out += [f"- {_job_link(j)}" for j in passed]
+        out += ["", "</details>"]
     out.append("")
     return out
 
 
-def render_markdown(name: str, results: list[dict]) -> str:
+_TALLY = (("REAL_FAIL", "🔴"), ("INFRA", "🟣"), ("GREEN", "🟢"))
+
+
+def _window_tally(results: list[dict]) -> list[str]:
+    """Run outcomes per workflow, so a window holding several runs of one
+    workflow reads at a glance before the per-run sections."""
+    by_wf: dict[str, list[dict]] = {}
+    for r in results:
+        by_wf.setdefault(r["workflow"], []).append(r)
+    rows = []
+    for runs in by_wf.values():
+        reported = [r for r in runs if r.get("latest_url")]  # a no-data placeholder is not a run
+        cells = [str(sum(r["outcome"] == o for r in reported)) for o, _ in _TALLY]
+        other = len(reported) - sum(int(c) for c in cells)
+        rows.append(
+            f"| {runs[0].get('label') or runs[0]['workflow']} | {len(reported)} | {' | '.join(cells)} | {other} |"
+        )
+    return [
+        "| Workflow | Runs | " + " | ".join(e for _, e in _TALLY) + " | ⚠️ |",
+        "|--|--|--|--|--|--|",
+        *rows,
+        "",
+    ]
+
+
+def render_markdown(name: str, results: list[dict], window_hours: int = 0, list_passing: bool = False) -> str:
     broken = [r for r in results if r["outcome"] == "REAL_FAIL"]
     infra = [r for r in results if r["outcome"] == "INFRA"]
     healthy = [r for r in results if r["outcome"] == "GREEN"]
     nodata = [r for r in results if r["outcome"] in ("UNKNOWN", "ERROR")]
 
-    lines = [f"## CI Digest: {name}", "", "Legend: 🔴 broken · 🟣 infra · 🟢 success", ""]
+    lines = [f"## CI Digest: {name}", ""]
+    if window_hours:
+        lines += [f"Scheduled runs that completed in the last {window_hours}h.", "", *_window_tally(results)]
+    lines += ["Legend: 🔴 broken · 🟣 infra · 🟢 success", ""]
     for r in broken + infra + healthy:  # failures first, then green — same section shape
-        lines += _section(r)
+        lines += _section(r, list_passing)
     if nodata:
         lines += [
             "**⚠️ No data:** " + ", ".join(f"{_link(r)} ({r.get('note') or r['outcome'].lower()})" for r in nodata),
@@ -334,49 +427,87 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--self-test", action="store_true", help="run embedded unit tests and exit")
     p.add_argument("--name", help="name of this digest")
     p.add_argument("--workflows", nargs="+", default=[], help="workflow file names to check")
+    p.add_argument(
+        "--window-hours",
+        type=int,
+        default=0,
+        help="report every scheduled run that completed in the last N hours (0 = only the latest run)",
+    )
+    p.add_argument("--list-passing", action="store_true", help="also list each run's passed jobs")
     p.add_argument("--branch", default="main")
     p.add_argument("--repo", default=os.environ.get("GITHUB_REPOSITORY", "tenstorrent/tt-metal"))
     p.add_argument("--out-dir", default=".")
     return p
 
 
-def check_workflow(repo: str, branch: str, workflow: str) -> dict:
-    base = {"workflow": workflow, "label": workflow, "latest_url": "", "real_jobs": [], "infra_jobs": [], "counts": {}}
+# Failures one gh call or one artifact can raise. Each marks only the workflow
+# or run it came from ERROR and never aborts the others' reports.
+_FETCH_ERRORS = (subprocess.CalledProcessError, json.JSONDecodeError, ValueError, OSError, zipfile.BadZipFile)
+
+
+def _error_note(exc: Exception) -> str:
+    if isinstance(exc, subprocess.CalledProcessError):
+        return ((exc.stderr or "").strip().splitlines() or ["gh command failed"])[-1][:200]
+    return str(exc)[:200]
+
+
+def _base(workflow: str) -> dict:
+    return {
+        "workflow": workflow,
+        "label": workflow,
+        "latest_url": "",
+        "real_jobs": [],
+        "infra_jobs": [],
+        "passing_jobs": [],
+        "counts": {},
+    }
+
+
+def check_workflow(repo: str, branch: str, workflow: str, since: datetime | None = None) -> list[dict]:
+    """One result per reported run: the latest run, or with ``since`` every run completed since then."""
+    base = _base(workflow)
     try:
-        run = latest_run(repo, workflow, branch)
-        if run is None:  # never ran / renamed / typo'd — not the same as "passing"
-            return {**base, "outcome": "UNKNOWN", "note": "no completed run found"}
-        label = run.get("workflowName") or workflow
-        meta = {"label": label, "latest_url": run["url"], "latest_ts": run["createdAt"]}
-        conclusion = run.get("conclusion") or ""
+        if since is None:
+            run = latest_run(repo, workflow, branch)
+            if run is None:  # never ran / renamed / typo'd — not the same as "passing"
+                return [{**base, "outcome": "UNKNOWN", "note": "no completed run found"}]
+            runs = [run]
+        else:
+            runs = runs_in_window(repo, workflow, branch, since)
+            if not runs:
+                return [{**base, "outcome": "UNKNOWN", "note": "no run completed in the window"}]
+    except _FETCH_ERRORS as exc:
+        return [{**base, "outcome": "ERROR", "note": _error_note(exc)}]
+    return [check_run(repo, workflow, run) for run in runs]
+
+
+def check_run(repo: str, workflow: str, run: dict) -> dict:
+    meta = {"label": run.get("workflowName") or workflow, "latest_url": run["url"], "latest_ts": run["createdAt"]}
+    base = {**_base(workflow), **meta}
+    conclusion = run.get("conclusion") or ""
+    try:
         data = fetch_run_summary(repo, run["databaseId"])
-        if data is None:
-            # No machine-readable summary (uninstrumented workflow, or the run
-            # predates JSON output); classify from the conclusion alone, the same
-            # rule a present-but-empty summary gets.
-            outcome = RunReport(conclusion, [], [], 0).outcome
-            result = {**base, **meta, "outcome": outcome}
-            if outcome == "UNKNOWN":
-                result["note"] = "no ai_run_summary artifact"
-            return result
-        report = summarize_run(data, conclusion)
-        return {
-            **base,
-            **meta,
-            "outcome": report.outcome,
-            "run_attempt": data.get("run_attempt"),
-            "real_jobs": report.failed,
-            "infra_jobs": report.infra,
-            "counts": {"broken": len(report.failed), "infra": len(report.infra), "passing": report.passing},
-        }
-    except subprocess.CalledProcessError as exc:
-        # One flaky gh call must not discard the other workflows' results.
-        err = ((exc.stderr or "").strip().splitlines() or ["gh command failed"])[-1]
-        return {**base, "outcome": "ERROR", "note": err[:200]}
-    except (json.JSONDecodeError, ValueError, OSError, zipfile.BadZipFile) as exc:
-        # A corrupt/truncated artifact, or any parse error, marks only this
-        # workflow ERROR and never aborts the others' reports.
-        return {**base, "outcome": "ERROR", "note": str(exc)[:200]}
+    except _FETCH_ERRORS as exc:
+        return {**base, "outcome": "ERROR", "note": _error_note(exc)}
+    if data is None:
+        # No machine-readable summary (uninstrumented workflow, or the run
+        # predates JSON output); classify from the conclusion alone, the same
+        # rule a present-but-empty summary gets.
+        outcome = RunReport(conclusion, [], [], 0).outcome
+        result = {**base, "outcome": outcome}
+        if outcome == "UNKNOWN":
+            result["note"] = "no ai_run_summary artifact"
+        return result
+    report = summarize_run(data, conclusion)
+    return {
+        **base,
+        "outcome": report.outcome,
+        "run_attempt": data.get("run_attempt"),
+        "real_jobs": report.failed,
+        "infra_jobs": report.infra,
+        "passing_jobs": data.get("succeeded") or [],
+        "counts": {"broken": len(report.failed), "infra": len(report.infra), "passing": report.passing},
+    }
 
 
 def main(argv: list[str]) -> int:
@@ -388,16 +519,24 @@ def main(argv: list[str]) -> int:
     if not args.name:
         raise SystemExit("no --name provided")
 
+    if args.window_hours < 0:
+        raise SystemExit("--window-hours must be >= 0")
+
     now = datetime.now(timezone.utc)
-    results = [check_workflow(args.repo, args.branch, wf) for wf in args.workflows]
-    md = render_markdown(args.name, results)
+    since = now - timedelta(hours=args.window_hours) if args.window_hours else None
+    results = [r for wf in args.workflows for r in check_workflow(args.repo, args.branch, wf, since)]
+    md = render_markdown(args.name, results, args.window_hours, args.list_passing)
     os.makedirs(args.out_dir, exist_ok=True)
     stamp = now.strftime("%Y%m%dT%H%M%SZ")  # colon-free so the file name is portable/shareable
     stem = os.path.join(args.out_dir, f"ci-digest-{args.name}-{stamp}")
     with open(f"{stem}.md", "w", encoding="utf-8") as f:
         f.write(md)
     with open(f"{stem}.json", "w", encoding="utf-8") as f:
-        json.dump({"name": args.name, "all_green": all_green(results), "results": results}, f, indent=2)
+        json.dump(
+            {"name": args.name, "window_hours": args.window_hours, "all_green": all_green(results), "results": results},
+            f,
+            indent=2,
+        )
     print(md)
     return 0
 
@@ -757,6 +896,138 @@ class TestSevEmoji(unittest.TestCase):
         self.assertEqual(_sev_emoji({"status": "FAILED", "log_complete": True}), "🔴")
         self.assertEqual(_sev_emoji({"status": "CRASHED"}), "🔴")  # absent (None) → 🔴
         self.assertEqual(_sev_emoji({"status": "FAILED", "log_complete": None}), "🔴")
+
+
+class TestWindow(unittest.TestCase):
+    SINCE = datetime(2026, 10, 19, 16, 0, tzinfo=timezone.utc)
+
+    def _run(self, run_id, created, updated):
+        return {
+            "databaseId": run_id,
+            "conclusion": "success",
+            "createdAt": created,
+            "updatedAt": updated,
+            "url": f"http://run/{run_id}",
+            "workflowName": "WF",
+        }
+
+    def test_filters_on_completion_not_start(self):
+        # A run that started before the window but finished inside it is
+        # reported; one that finished before the window opened is not.
+        runs = [
+            self._run(3, "2026-10-20T04:00:00Z", "2026-10-20T19:00:00Z"),
+            self._run(2, "2026-10-19T04:00:00Z", "2026-10-19T19:00:00Z"),
+            self._run(1, "2026-10-19T04:00:00Z", "2026-10-19T08:00:00Z"),
+        ]
+        self.assertEqual([r["databaseId"] for r in _completed_since(runs, self.SINCE)], [3, 2])
+
+    def test_boundary_is_inclusive(self):
+        runs = [self._run(1, "2026-10-19T04:00:00Z", "2026-10-19T16:00:00Z")]
+        self.assertEqual(len(_completed_since(runs, self.SINCE)), 1)
+
+    def test_missing_updated_at_falls_back_to_created_at(self):
+        run = self._run(1, "2026-10-20T01:00:00Z", "")
+        self.assertEqual(len(_completed_since([run], self.SINCE)), 1)
+
+    def test_warns_when_the_limit_cuts_the_window_short(self):
+        runs = [self._run(i, "2026-10-20T01:00:00Z", "2026-10-20T02:00:00Z") for i in range(_WINDOW_RUN_LIMIT)]
+        buf = io.StringIO()
+        with unittest.mock.patch(f"{__name__}._gh_json", return_value=runs), contextlib.redirect_stderr(buf):
+            got = runs_in_window("o/r", "wf.yaml", "main", self.SINCE)
+        self.assertEqual(len(got), _WINDOW_RUN_LIMIT)
+        self.assertIn("older ones are not reported", buf.getvalue())
+
+    def test_one_result_per_run_in_the_window(self):
+        runs = [
+            self._run(2, "2026-10-20T04:00:00Z", "2026-10-20T19:00:00Z"),
+            self._run(1, "2026-10-19T20:00:00Z", "2026-10-20T07:00:00Z"),
+        ]
+        summaries = {
+            2: {"succeeded": [{"job_name": "a"}], "failed": [{"job_name": "b"}]},
+            1: {"succeeded": [{"job_name": "a"}, {"job_name": "b"}]},
+        }
+        with (
+            unittest.mock.patch(f"{__name__}.runs_in_window", return_value=runs),
+            unittest.mock.patch(f"{__name__}.fetch_run_summary", side_effect=lambda repo, rid: summaries[rid]),
+        ):
+            got = check_workflow("o/r", "main", "wf.yaml", self.SINCE)
+        self.assertEqual(
+            [(r["latest_url"], r["outcome"]) for r in got], [("http://run/2", "REAL_FAIL"), ("http://run/1", "GREEN")]
+        )
+        self.assertEqual(got[1]["passing_jobs"], [{"job_name": "a"}, {"job_name": "b"}])
+
+    def test_empty_window_is_unknown_not_green(self):
+        with unittest.mock.patch(f"{__name__}.runs_in_window", return_value=[]):
+            (got,) = check_workflow("o/r", "main", "wf.yaml", self.SINCE)
+        self.assertEqual((got["outcome"], got["note"]), ("UNKNOWN", "no run completed in the window"))
+
+    def test_one_broken_artifact_marks_only_its_run(self):
+        runs = [
+            self._run(2, "2026-10-20T04:00:00Z", "2026-10-20T19:00:00Z"),
+            self._run(1, "2026-10-19T20:00:00Z", "2026-10-20T07:00:00Z"),
+        ]
+
+        def fetch(repo, rid):
+            if rid == 2:
+                raise zipfile.BadZipFile("truncated")
+            return {"succeeded": [{}]}
+
+        with (
+            unittest.mock.patch(f"{__name__}.runs_in_window", return_value=runs),
+            unittest.mock.patch(f"{__name__}.fetch_run_summary", side_effect=fetch),
+        ):
+            got = check_workflow("o/r", "main", "wf.yaml", self.SINCE)
+        self.assertEqual([r["outcome"] for r in got], ["ERROR", "GREEN"])
+        self.assertEqual(got[0]["latest_url"], "http://run/2")  # the error still links its run
+
+    def test_latest_mode_is_unchanged(self):
+        run = self._run(7, "2026-10-20T04:00:00Z", "2026-10-20T19:00:00Z")
+        with (
+            unittest.mock.patch(f"{__name__}.latest_run", return_value=run),
+            unittest.mock.patch(f"{__name__}.runs_in_window") as window,
+            unittest.mock.patch(f"{__name__}.fetch_run_summary", return_value=None),
+        ):
+            (got,) = check_workflow("o/r", "main", "wf.yaml")
+        window.assert_not_called()
+        self.assertEqual((got["outcome"], got["latest_url"]), ("GREEN", "http://run/7"))
+
+
+class TestWindowRender(unittest.TestCase):
+    def _r(self, wf, outcome, url="u", **kw):
+        return {"workflow": wf, "label": wf, "outcome": outcome, "latest_url": url, **kw}
+
+    def test_tally_counts_runs_per_workflow(self):
+        md = render_markdown(
+            "m",
+            [
+                self._r("WF-A", "REAL_FAIL"),
+                self._r("WF-A", "GREEN"),
+                self._r("WF-B", "INFRA"),
+                self._r("WF-C", "UNKNOWN", url="", note="no run completed in the window"),
+            ],
+            window_hours=24,
+        )
+        self.assertIn("last 24h", md)
+        self.assertIn("| WF-A | 2 | 1 | 0 | 1 | 0 |", md)
+        self.assertIn("| WF-B | 1 | 0 | 1 | 0 | 0 |", md)
+        self.assertIn("| WF-C | 0 | 0 | 0 | 0 | 0 |", md)  # placeholder is not a run
+
+    def test_no_tally_without_a_window(self):
+        md = render_markdown("m", [self._r("WF-A", "GREEN")])
+        self.assertNotIn("| Workflow |", md)
+        self.assertNotIn("last", md)
+
+    def test_passed_jobs_listed_only_on_request(self):
+        r = self._r(
+            "WF-A",
+            "GREEN",
+            counts={"broken": 0, "infra": 0, "passing": 1},
+            passing_jobs=[{"job_name": "ok-job", "job_url": "http://job/ok"}],
+        )
+        self.assertNotIn("Passed jobs", render_markdown("m", [r]))
+        md = render_markdown("m", [r], list_passing=True)
+        self.assertIn("Passed jobs (1)", md)
+        self.assertIn("- [ok-job](http://job/ok)", md)
 
 
 if __name__ == "__main__":
