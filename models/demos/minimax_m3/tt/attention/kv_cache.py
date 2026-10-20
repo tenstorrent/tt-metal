@@ -55,9 +55,10 @@ class MiniMaxKVCache(KvCaches):
     shared prefix's) and PAGE_UNMAPPED everywhere else. A chunk writes its pad rows too, and a resume restarts at the
     32-aligned position below the previous end, rewriting that partial tile, so a page the row maps from another
     request (a shared prefix) must lie wholly below the row's first write: the shared prefix ends on a page boundary.
-    A stale entry would put pad rows into another request's page. Not
-    paged: ring_joint reads (a stage holding a dense layer, M3's layers 0-2, keeps slot caches), index_k TP
-    dedup, KV migration.
+    A stale entry would put pad rows into another request's page. Not paged: ring_joint reads (a stage holding a dense
+    layer, M3's layers 0-2, keeps slot caches) and index_k TP dedup. KV migration addresses a paged pool through
+    ``fixed_page_table``, which the adapter installs once at allocation and which gives every slot its own pages; the
+    KV chunk table published from it assumes it stays installed.
     """
 
     k: ttnn.Tensor
@@ -110,16 +111,19 @@ def fixed_pool_pages(*, num_users, max_seq_len, sp) -> int:
 
 
 def fixed_page_table(*, num_users, max_seq_len, sp, chunk_size) -> torch.Tensor:
-    """The page table a runner installs while it, not the engine, places the pages: row (slot) r owns the r-th run
-    of each rank's pool (fixed_pool_pages / num_users pages), in position order, so every slot keeps its whole
-    capacity. Every pipeline rank derives the same table, so rank 0 can address every stage's pages; the addresses
-    repeat with the slot, so the KV chunk table published for migration stays compact."""
+    """The page table when no page allocator supplies one: row (slot) r owns pages [r * n, (r + 1) * n) of every
+    rank's pool (n = fixed_pool_pages / num_users) in position order, so every slot keeps its whole capacity. Every
+    pipeline rank derives the same table, so rank 0 can address every stage's pages. Position order keeps each
+    (slot, layer) row of the published KV chunk table periodic, so it serializes strided (STRIDED_ROWS); a scattered
+    table would export unrolled."""
     chunk_local = chunk_size // sp
-    assert chunk_local % PAGE_SIZE == 0, f"a chunk's per-chip run ({chunk_local}) must be whole {PAGE_SIZE}-token pages"
+    assert (
+        chunk_local % PAGE_SIZE == 0
+    ), f"a chunk's per-chip slab ({chunk_local}) must be whole {PAGE_SIZE}-token pages"
     assert max_seq_len % chunk_size == 0, f"max_seq_len ({max_seq_len}) must be whole {chunk_size}-token chunks"
-    per_run = chunk_local // PAGE_SIZE  # pages per rank per chunk
+    pages_per_slab = chunk_local // PAGE_SIZE
     q = torch.arange(page_table_width(max_seq_len))
-    local = q // (per_run * sp) * per_run + q % per_run  # q's index among its rank's pages
+    local = q // (pages_per_slab * sp) * pages_per_slab + q % pages_per_slab  # q's index among its rank's pages
     per_slot = fixed_pool_pages(num_users=1, max_seq_len=max_seq_len, sp=sp)
     return (torch.arange(num_users)[:, None] * per_slot + local).to(torch.int32)
 

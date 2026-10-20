@@ -30,9 +30,9 @@ The per-chip DRAM addressing (32-token blocks round-robin across the DRAM banks,
 user-major ``slot*num_layers+layer`` fold) matches DeepSeek's ``create_kv_chunk_address_table_block_cyclic``, just
 repeated per config with each tensor's own ``buffer_address()`` / ``chunk_size_bytes`` and column set.
 
-A stage holding a paged pool (``paged_stage``) folds page-major instead: the 32-token block of a position lives in
-pool entry ``page_id * count + local_layer``, the page id coming from the runner's fixed page table, in the same
-round-robin walk.
+A stage holding a paged pool (``stage_page_table``) folds page-major instead, ``page_id*num_layers+layer`` with
+``num_layers`` the stage's layers: the 32-token block of a position lives in the entry of the page its slot's table
+row maps it to, in the same round-robin walk.
 """
 
 import socket
@@ -45,7 +45,6 @@ from models.demos.minimax_m3.tt.attention.kv_cache import (
     NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK,
     PAGE_SIZE,
     PAGE_UNMAPPED,
-    fixed_page_table,
 )
 
 # bf8_b / bf16 TILE byte sizes (32x32 tile). bf8_b = 1024 mantissa + 64 exponent bytes; bf16 = 2048.
@@ -95,7 +94,7 @@ def build_and_serialize_kv_chunk_table(
     path,
     stage_layouts=None,
     index_k_layers=None,
-    paged_stage=None,
+    stage_page_table=None,
 ) -> str:
     """Build the M3 multi-config block-cyclic KV chunk address table and serialize it to ``path`` for the
     inference server's SET_TABLE. Returns the path on success.
@@ -116,9 +115,10 @@ def build_and_serialize_kv_chunk_table(
     it, and the decode peer has no index_k on dense layers; a row published on one side only makes the KV
     Manager reject the whole migration ("covered by only one side"). None publishes every layer.
 
-    ``paged_stage(first_layer, count)`` says which stages hold a paged pool. Their chunks are addressed through the
-    slot's page in the runner's ``fixed_page_table``, which every paged stage installed and which is rebuilt here
-    from the same sizes (the gathered layouts carry no table). Their entries keep the (layer, position, slot) keys.
+    ``stage_page_table(first_layer, count)`` returns the host page table (rows of page ids, ``[num_users][width]``) of
+    the stage holding those layers when it holds a paged pool, else None; None for the argument: no stage is paged.
+    The gathered layouts carry no table, so the caller supplies the one each paged stage installed. A paged stage's
+    chunks are addressed through their slot's page and keep the (layer, position, slot) keys.
     """
     tp_axis = 1 - sp_axis
     sp = mesh_shape[sp_axis]
@@ -136,9 +136,9 @@ def build_and_serialize_kv_chunk_table(
         f"M3 KV chunk table maps head h -> TP column h, so num_key_value_heads ({num_kv_heads}) must equal "
         f"the TP column count ({cols}). A different head:column ratio needs a generalized column map."
     )
-    # Only THIS rank's cache is inspectable; in a pipeline every stage allocates the same way (same
-    # model/env), so its dtypes generalize to the gathered stages. Its fold does not: a stage of MSA layers may hold
-    # a paged pool, which only the adapter's fixed_pool_pages / fixed_page_table make addressable from here.
+    # Only THIS rank's cache is inspectable; in a pipeline every stage allocates the same dtypes (same model/env), so
+    # they generalize to the gathered stages. The fold does not: a stage of MSA layers may hold a paged pool, which only
+    # its page table, from stage_page_table, makes addressable from here.
     # The migration worker copies raw chunk bytes and blaze's decode index_k is bfp8 (DsaIndexerDirectKCacheUpdate
     # only supports bfp8 tiles): a bf16 source would overrun its rows.
     if kv_cache.index_k.dtype != ttnn.bfloat8_b:
@@ -153,7 +153,6 @@ def build_and_serialize_kv_chunk_table(
         assert t.shape[0] == entries, f"{name} cache batch dim {t.shape[0]} != {entries} (slots or pages x layers)"
 
     num_chunks_per_seq_len = seq_len // chunk_size
-    page_table = None  # fixed_page_table rows as lists, built for the first paged stage
 
     # Config layout (id order is the src<->dst migration contract): k_h0..k_hN-1, v_h0..v_hN-1, index_k.
     # Each entry: (label, cache index into stage_layouts, device groups per SP row as lists of TP columns,
@@ -241,12 +240,8 @@ def build_and_serialize_kv_chunk_table(
             host_name = stage.get("host_name") or f"host-{stage['host_tag']:08x}"
             first = stage["first_layer"]
             filter_layers = label == "index_k" and index_k_layers is not None
-            stage_paged = paged_stage is not None and paged_stage(first, stage["count"])
-            assert not (stage_paged and len(row_groups) > 1), "a paged stage has no TP-deduped index_k"
-            if stage_paged and page_table is None:
-                page_table = fixed_page_table(
-                    num_users=num_users, max_seq_len=seq_len, sp=sp, chunk_size=chunk_size
-                ).tolist()
+            page_table = None if stage_page_table is None else stage_page_table(first, stage["count"])
+            assert page_table is None or len(row_groups) == 1, "a paged stage has no TP-deduped index_k"
             for global_row in range(sp):
                 for stripe, group_cols in enumerate(row_groups):
                     fabric_node_ids = [stage["fnids"][global_row][c] for c in group_cols]
@@ -257,7 +252,7 @@ def build_and_serialize_kv_chunk_table(
                             table.set_fabric_node_host(fid, host_name=host_name)
                             hosts_set.add(key)
 
-                    if stage_paged:
+                    if page_table is not None:
                         # Pool entry page_id * count + local_layer holds that page as PAGE_SIZE/32 consecutive
                         # blocks of the same round-robin walk, so a block's bank and offset follow from its index.
                         blocks_per_page = PAGE_SIZE // NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
@@ -272,7 +267,9 @@ def build_and_serialize_kv_chunk_table(
                                         start, start + tokens_per_chunk_local, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
                                     ):
                                         page_id = page_table[slot][position // PAGE_SIZE]
-                                        assert page_id != PAGE_UNMAPPED, "the fixed page table maps every page"
+                                        assert (
+                                            page_id != PAGE_UNMAPPED
+                                        ), "a paged stage's table maps every page it publishes"
                                         block = (page_id * stage["count"] + local_layer) * blocks_per_page + (
                                             position % PAGE_SIZE
                                         ) // NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK

@@ -11,8 +11,8 @@ chunk. The runtime is STATELESS w.r.t. the KV cache — the engine allocates it 
 slice (first_layer_idx / is_first_rank / is_last_rank); the config defaults make a single-rank runtime
 own the whole model. For pipeline-parallel prefill the engine ships the cross-rank hidden state over the
 D2D socket: a non-first rank receives an activation (not tokens) and a non-last rank returns its hidden
-state instead of filling the LM head. KV-chunk-table migration is supported (single-rank) via
-``build_kv_chunk_table`` (a multi-config table; see ``tt/runners/kv_chunk_table.py``).
+state instead of filling the LM head. KV-chunk-table migration is supported single-rank and pipeline-parallel (rank 0
+merges every stage's layout) via ``build_kv_chunk_table`` (a multi-config table; see ``tt/runners/kv_chunk_table.py``).
 
 Input convention (shared with the engine's H2D socket): ``make_forward_input`` returns the forward's
 token IDs as an SP-sharded uint32 tensor — the SAME per-chip layout the request-mode socket delivers.
@@ -30,6 +30,7 @@ Reference: models/demos/deepseek_v3_d_p/tt/tt_prefill_runtime.py (interface) and
 tests/galaxy_prefill_kv_pcc.py (cache readback + RoPE swizzle convention).
 """
 
+import functools
 import time
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -40,13 +41,14 @@ from loguru import logger
 
 import ttnn
 from models.common.utils import block_cyclic_reorder
-from models.demos.minimax_m3.tt.attention.kv_cache import read_paged_slot_block
+from models.demos.minimax_m3.tt.attention.kv_cache import fixed_page_table, fixed_pool_pages, read_paged_slot_block
 from models.demos.minimax_m3.tt.prefill_chunk import PrefillChunk, pack_forward_tokens, validate_chunks
 from models.demos.minimax_m3.utils.general_utils import is_sparse_attention_layer, sparse_attention_freq
 
-# When on, a pipeline stage of MSA layers only holds a paged KV pool instead of slot caches (stage_is_paged, the one
-# reader), mapped by the runner's fixed page table (kv_cache.fixed_page_table). Off by default: that table reserves
-# every slot's whole capacity, so the pool takes the slots' memory and saves none until the engine places pages.
+# When on, a pipeline stage whose layers are all MSA holds a paged KV pool instead of slot caches; stage_is_paged is the
+# one place that decides it. Off by default: the fixed page table the adapter installs (attention.kv_cache.
+# fixed_page_table) maps every slot's whole capacity, so the pool takes as much memory as slot caches; paging saves
+# memory only with a table that maps fewer pages, and nothing in this tree installs one.
 PAGED_KV_CACHE = False
 
 
@@ -221,8 +223,8 @@ class TtPrefillRuntime:
         """Re-target the resident model at a different per-user KV-cache capacity WITHOUT rebuilding it.
 
         Everything sized by ``max_seq_len`` lives outside the weights: the engine-owned KV cache (the
-        caller re-allocates it the way the adapter's ``allocate_kv_cache`` does, a paged pool and its fixed page table
-        on a stage_is_paged stage, and passes the new handle into ``compile`` /
+        caller re-allocates it with the adapter's ``allocate_kv_cache``, which picks slot caches or a paged pool per
+        stage, and passes the new handle into ``compile`` /
         ``prefill_chunk``), the indexed RoPE tables (rebuilt here) and the config the asserts / compile
         sweep / ``gather_layer`` un-rotation read (swapped here). The CCL scratch buffers are keyed by
         shape, so a new capacity just adds an entry. ``forward_tokens_budget`` stays fixed: it is baked into the
@@ -567,12 +569,12 @@ class TtPrefillRuntime:
     def kv_migration_stages(self, kv_cache, first_layer_idx=None, num_my_layers=None):
         """One ``KvCacheStage`` per migratable device cache, in the order ``build_kv_chunk_table``
         consumes their gathered layouts: k, v, index_k. All three share one layer-index space (index_k
-        allocates a slot for every layer, zeros on dense ones), so every stage carries the same range."""
+        allocates every layer, zeros on dense ones), so every stage carries the same range."""
         from models.demos.common.prefill.runners.migration import KvCacheStage
 
         first_layer_idx = self.config.first_layer_idx if first_layer_idx is None else int(first_layer_idx)
         num_my_layers = self.config.num_layers if num_my_layers is None else int(num_my_layers)
-        self._check_paging(kv_cache, first_layer_idx, num_my_layers)
+        check_stage_paging(self.hf_config, self.config, kv_cache, first_layer_idx, num_my_layers)
         return [
             KvCacheStage(int(t.buffer_address()), first_layer_idx, num_my_layers)
             for t in (kv_cache.k, kv_cache.v, kv_cache.index_k)
@@ -583,7 +585,7 @@ class TtPrefillRuntime:
         kv_cache,
         path: str,
         *,
-        first_layer_idx: int = 0,
+        first_layer_idx: Optional[int] = None,
         num_my_layers: Optional[int] = None,
         stage_layouts=None,
     ) -> str:
@@ -599,7 +601,17 @@ class TtPrefillRuntime:
         from models.demos.minimax_m3.tt.runners.kv_chunk_table import build_and_serialize_kv_chunk_table
 
         c = self.config
-        self._check_paging(kv_cache, first_layer_idx, c.num_layers if num_my_layers is None else num_my_layers)
+        first_layer_idx = c.first_layer_idx if first_layer_idx is None else first_layer_idx
+        check_stage_paging(
+            self.hf_config, c, kv_cache, first_layer_idx, c.num_layers if num_my_layers is None else num_my_layers
+        )
+
+        @functools.cache
+        def fixed_table():
+            return fixed_page_table(
+                num_users=c.num_users, max_seq_len=c.max_seq_len, sp=c.sp_factor, chunk_size=c.chunk_size
+            ).tolist()
+
         return build_and_serialize_kv_chunk_table(
             mesh_device=self.mesh_device,
             kv_cache=kv_cache,
@@ -614,18 +626,10 @@ class TtPrefillRuntime:
             path=path,
             stage_layouts=stage_layouts,
             index_k_layers=self.msa_layer_ids(),
-            paged_stage=lambda first, count: stage_is_paged(self.hf_config, first, count),
+            stage_page_table=lambda first, count: fixed_table()
+            if stage_is_paged(self.hf_config, first, count)
+            else None,
         )
-
-    def _check_paging(self, kv_cache, first_layer_idx, num_layers) -> None:
-        """Rank 0 addresses every stage's pool from stage_is_paged alone, so the cache this stage holds must agree
-        with it: a cache allocated outside the adapter would otherwise publish a wrong migration table."""
-        paged = kv_cache.page_table is not None
-        if paged != stage_is_paged(self.hf_config, first_layer_idx, num_layers):
-            raise ValueError(
-                f"layers [{first_layer_idx}, {first_layer_idx + num_layers}) hold a {'paged' if paged else 'slot'} KV "
-                f"cache, but PAGED_KV_CACHE={PAGED_KV_CACHE} gives them the other kind (see stage_is_paged)"
-            )
 
     def msa_layer_ids(self) -> set[int]:
         """Global ids of the MSA (block-sparse) layers — the only layers that write an index_k (layers 3-59 on
@@ -767,6 +771,26 @@ class TtPrefillRuntime:
             first_layer_idx=first_layer_idx,
             real_len=real_len,
         )
+
+
+def check_stage_paging(hf_config, config, kv_cache, first_layer_idx, num_layers) -> None:
+    """Rank 0 addresses every paged stage's pool through fixed_page_table, from stage_is_paged and the config's sizes
+    alone, so the cache a stage holds must be of the kind stage_is_paged gives it and, when paged, hold
+    fixed_pool_pages pages. This catches a cache of the wrong kind or size, not a paged cache holding another table."""
+    layers = f"layers [{first_layer_idx}, {first_layer_idx + num_layers})"
+    paged = kv_cache.page_table is not None
+    if paged != stage_is_paged(hf_config, first_layer_idx, num_layers):
+        raise ValueError(
+            f"{layers} hold a {'paged' if paged else 'slot'} KV cache where stage_is_paged gives the other kind; "
+            "allocate it with the adapter's allocate_kv_cache"
+        )
+    if paged:
+        pages = fixed_pool_pages(num_users=config.num_users, max_seq_len=config.max_seq_len, sp=config.sp_factor)
+        if kv_cache.num_pages != pages:
+            raise ValueError(
+                f"{layers} hold a pool of {kv_cache.num_pages} pages where the fixed page table addresses {pages}; "
+                "allocate it with the adapter's allocate_kv_cache"
+            )
 
 
 def stage_is_paged(hf_config, first_layer_idx, num_layers) -> bool:
