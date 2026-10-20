@@ -501,3 +501,11 @@ section "With measured efficiencies".
 - **Gather -> 2D owners** costs about the same as token-split once overlapped: the residual layout can follow attention.
 - **Combine at 16K is the bottleneck almost everywhere**: tie-splitting -11..-16% on the 8x4 torus where link-bound
   (0 on 4x4), fp8/bfp8 rows -34..-43% at 16K, source pre-reduce (K3 2.3x fewer rows).
+- **Implemented (2026-10-20, GLM-5.3-Flash token-split block, LoudBox)**: the TP-split shared expert folded into the
+  block with no collectives of its own - dispatch_prep ORs the group-mates into every token's mask (x lands in the
+  dispatch buffer), the slice runs between the dispatch and the fused op (stock matmuls + one clamped-SiLU-GLU op,
+  bf8 / HiFi2), the combine carries the partials home (static per-port rows, credits and expected counts on top of
+  the device plan; the own block added by the accumulators). The fused op starts with its own cross-chip barrier,
+  so the arena is zeroed after the shared expert and the shared expert has all of L1. Group: mesh rows on Galaxy
+  (TP), SP pairs on the LoudBox (its TP line carries the combine). Router: one fused top-k writing the block's routing
+  rows. L4 MoE block 4058 -> 2811 us (chunk 5120), 2423 -> 1791 (2048). Details: FLAT_COMBINE_OVERLAP_WORKLOG.md.
