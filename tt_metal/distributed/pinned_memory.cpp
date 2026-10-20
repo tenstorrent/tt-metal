@@ -19,8 +19,8 @@
 #include "mesh_event_impl.hpp"
 #include <tt-metalium/distributed.hpp>
 #include "impl/context/metal_env_impl.hpp"
-#include <umd/device/chip_helpers/sysmem_manager.hpp>
-#include <umd/device/chip_helpers/sysmem_buffer.hpp>
+#include <tt-umd/chip_helpers/sysmem_manager.hpp>
+#include <tt-umd/chip_helpers/sysmem_buffer.hpp>
 #include "impl/dispatch/system_memory_manager.hpp"
 #include "llrt/tt_cluster.hpp"
 #include <distributed/mesh_device_impl.hpp>
