@@ -42,9 +42,10 @@ constexpr uint64_t MAX_DFB_EXTENT_BYTES = 65535ull * 16ull;
 // compute. Tuning points, not hardware limits.
 constexpr uint32_t MAX_AUTO_K_CHUNK_TILES = 8;
 constexpr uint32_t SMALL_C_SLICE_TILES = 4;
-// DM threads and buffering per core. Quasar runs up to four reader and two writer threads (its six user DM cores);
-// Wormhole / Blackhole one of each. A and B slices in flight: one per reader thread, at least two; C slices in flight
-// on cores that produce several.
+// DM threads and buffering per core, fixed so the readers and writers keep the NoC busy rather than sized to the L1
+// left over. Quasar runs four reader and two writer threads (of its six user DM cores); Wormhole / Blackhole one of
+// each. The A and B DFBs hold a slice per reader thread and at least two; C_slice holds two C slices on cores that
+// produce several.
 constexpr uint32_t QUASAR_NUM_USER_DM_CORES = 6;
 constexpr uint32_t QUASAR_NUM_WRITER_THREADS = 2;
 constexpr uint32_t MIN_OPERAND_BUFFER_DEPTH = 2;
@@ -136,7 +137,7 @@ bool shard_matches(
     return shard_cores == cores;
 }
 
-// Every field of the plan for one set of choices: C slice, subblock, K chunk, reader threads and C buffer depth. `base`
+// Every field of the plan for one set of choices: C slice, subblock and K chunk. `base`
 // holds the fields every candidate shares; `cores` are the config's cores, of which the first C_slices_per_batch are
 // active.
 MatmulUnifiedPlan make_plan(
@@ -150,12 +151,11 @@ MatmulUnifiedPlan make_plan(
     uint32_t C_slice_N_tiles,
     uint32_t subblock_M_tiles,
     uint32_t subblock_N_tiles,
-    uint32_t K_chunk_tiles,
-    uint32_t num_reader_threads,
-    uint32_t C_buffer_depth) {
+    uint32_t K_chunk_tiles) {
     MatmulUnifiedPlan plan = base;
     const std::vector<CoreCoord> all_cores =
         corerange_to_cores(cores, std::nullopt, base.orientation == ShardOrientation::ROW_MAJOR);
+    const bool is_quasar = A.device()->arch() == tt::ARCH::QUASAR;
     const bool packer_l1_acc =
         std::get<3>(get_compute_kernel_config_args(A.device()->arch(), attributes.compute_kernel_config.value()));
     plan.C_slice_M_tiles = C_slice_M_tiles;
@@ -222,8 +222,6 @@ MatmulUnifiedPlan make_plan(
     // K chunk.
     plan.K_chunk_tiles = K_chunk_tiles;
     plan.K_chunks_per_C_slice = plan.K_tiles / K_chunk_tiles;
-    plan.num_reader_threads = num_reader_threads;
-    plan.K_chunks_per_C_slice_padded = tt::round_up(plan.K_chunks_per_C_slice, num_reader_threads);
     // The packer accumulates partials in L1 only when there are enough K chunks for the reconfig overhead
     // to pay off (the last K chunk spills and reloads either way, so more than two).
     plan.packer_l1_acc_en = packer_l1_acc && plan.K_chunks_per_C_slice > 2;
@@ -238,6 +236,22 @@ MatmulUnifiedPlan make_plan(
     plan.borrow_B = plan.B_shard_borrowable && !N_padded;
     plan.borrow_C = plan.C_shard_borrowable && subblock_N_tiles == C_slice_N_tiles && !M_padded;
 
+    // DM threads and buffering (fixed; see the constants). Quasar's reader threads each read every
+    // QUASAR_NUM_READER_THREADS-th K chunk into their own part of the A and B DFBs, which a borrowed shard cannot be
+    // split into; reader threads beyond the K chunks of a C slice would only carry padding. A DFB that only one slice
+    // ever passes through holds one.
+    plan.num_reader_threads = is_quasar && !plan.borrow_A && !plan.borrow_B
+                                  ? std::min(QUASAR_NUM_READER_THREADS, plan.K_chunks_per_C_slice)
+                                  : 1;
+    plan.K_chunks_per_C_slice_padded = tt::round_up(plan.K_chunks_per_C_slice, plan.num_reader_threads);
+    const bool more_than_one_slice = C_slices_per_core * plan.K_chunks_per_C_slice_padded > 1;
+    plan.operand_buffer_depth = more_than_one_slice ? std::max(MIN_OPERAND_BUFFER_DEPTH, plan.num_reader_threads) : 1;
+    plan.C_buffer_depth = C_slices_per_core > 1 ? C_BUFFER_DEPTH : 1;
+    // One C slice's bias per reader thread, and at least two when the core has several, so a single reader reads
+    // the next C slice's bias (and the A and B slices behind it) while compute uses this one.
+    const uint32_t bias_buffer_depth =
+        std::max(plan.num_reader_threads, C_slices_per_core == 1 ? 1u : MIN_OPERAND_BUFFER_DEPTH);
+
     // DFB sizes.
     // A thread's share of the C slice (its subblocks back to back, padded to the busiest thread's) is
     // C_entries_per_thread one-tile entries of C_slice and C_partials, pushed and popped as one batch per K chunk:
@@ -249,12 +263,8 @@ MatmulUnifiedPlan make_plan(
         tt::div_up(num_subblocks, plan.num_compute_threads) * subblock_M_tiles * subblock_N_tiles;
     plan.C_entry_bytes = tt::tile_size(plan.C_format);
     plan.C_partials_entry_bytes = tt::tile_size(plan.C_partials_format);
-    plan.C_buffer_depth = C_buffer_depth;
-    plan.C_slice_entries = plan.C_entries_per_thread * plan.num_compute_threads * C_buffer_depth;
-    // A copied operand's DFB holds operand_buffer_depth slices, one when a single slice passes through; a borrowed
-    // DFB is the resident shard itself.
-    const bool more_than_one_slice = C_slices_per_core * plan.K_chunks_per_C_slice_padded > 1;
-    plan.operand_buffer_depth = more_than_one_slice ? std::max(MIN_OPERAND_BUFFER_DEPTH, num_reader_threads) : 1;
+    plan.C_slice_entries = plan.C_entries_per_thread * plan.num_compute_threads * plan.C_buffer_depth;
+    // A copied operand's DFB holds operand_buffer_depth slices; a borrowed DFB is the resident shard itself.
     plan.A_entry_bytes = tt::tile_size(plan.A_format);
     plan.B_entry_bytes = tt::tile_size(plan.B_format);
     plan.A_slice_entries = plan.borrow_A ? C_slice_M_tiles * plan.K_tiles
@@ -264,16 +274,12 @@ MatmulUnifiedPlan make_plan(
     // Alias C_partials onto C_slice only when partials are never live while C_slice holds unread data
     // (else compute packs slice i+1's partials over slice i before the writer drains it).
     const bool partials_ever_written = plan.K_chunks_per_C_slice > 1;
-    plan.alias_C_partials_onto_C_slice = (plan.C_partials_format == plan.C_format) && C_buffer_depth == 1 &&
+    plan.alias_C_partials_onto_C_slice = (plan.C_partials_format == plan.C_format) && plan.C_buffer_depth == 1 &&
                                          (!partials_ever_written || C_slices_per_core == 1);
     // Partials that are never written need one entry per thread when they cannot share C_slice's L1.
     plan.C_partials_entries = (partials_ever_written || plan.alias_C_partials_onto_C_slice)
                                   ? plan.C_entries_per_thread * plan.num_compute_threads
                                   : plan.num_compute_threads;
-    // One C slice's bias per reader thread, and at least two when the core has several, so a single reader reads
-    // the next C slice's bias (and the A and B slices behind it) while compute uses this one.
-    const uint32_t bias_buffer_depth =
-        std::max(num_reader_threads, C_slices_per_core == 1 ? 1u : MIN_OPERAND_BUFFER_DEPTH);
     plan.bias_entries = plan.has_bias ? plan.C_slice_N_padded_tiles * bias_buffer_depth : 0;
     // Borrowed DFBs are the tensors' own memory and cost nothing here.
     plan.l1_bytes =
@@ -407,7 +413,7 @@ std::optional<MatmulUnifiedPlan> plan_unified_matmul(
         const uint64_t area_b = (uint64_t)b.first * b.second;
         return area_a != area_b ? area_a > area_b : a.second > b.second;
     });
-    // ---- 5. Search: each C slice's subblock, then its K chunk, with one reader thread and one C slice in flight ----
+    // ---- 5. Search: each C slice's subblock, then its K chunk ----
     // The first C slice that fits wins, except one that fits only with K_chunk_tiles == 1 yields to a smaller C slice
     // with a longer K chunk and more work per L1 fill (C slice tiles x K chunk); the whole share is never shrunk if it
     // fits (#57884).
@@ -439,9 +445,7 @@ std::optional<MatmulUnifiedPlan> plan_unified_matmul(
                     C_slice_N_tiles,
                     candidate_M_tiles,
                     candidate_N_tiles,
-                    K_chunk_floor,
-                    /*num_reader_threads=*/1,
-                    /*C_buffer_depth=*/1);
+                    K_chunk_floor);
                 const bool M_padded = at_shortest_K_chunk.C_slice_M_padded_tiles != C_slice_M_tiles;
                 const bool N_padded = at_shortest_K_chunk.C_slice_N_padded_tiles != C_slice_N_tiles;
                 const bool C_borrow_achievable =
@@ -471,9 +475,7 @@ std::optional<MatmulUnifiedPlan> plan_unified_matmul(
             C_slice_N_tiles,
             subblock_M_tiles,
             subblock_N_tiles,
-            base.K_tiles,
-            /*num_reader_threads=*/1,
-            /*C_buffer_depth=*/1);
+            base.K_tiles);
         const bool borrows_A_with_one_K_chunk =
             config.K_chunk_tiles == 0 && candidate.borrow_A && dfbs_fit(candidate, l1_budget);
         if (!borrows_A_with_one_K_chunk) {
@@ -497,9 +499,7 @@ std::optional<MatmulUnifiedPlan> plan_unified_matmul(
                     C_slice_N_tiles,
                     subblock_M_tiles,
                     subblock_N_tiles,
-                    K_chunk_tiles,
-                    /*num_reader_threads=*/1,
-                    /*C_buffer_depth=*/1);
+                    K_chunk_tiles);
                 if (dfbs_fit(candidate, l1_budget)) {
                     break;
                 }
@@ -568,54 +568,6 @@ std::optional<MatmulUnifiedPlan> plan_unified_matmul(
             config.cores.str());
     }
 
-    // ---- 7. Overlap in the L1 left over: more reader threads, then a second C slice in flight ----
-    // The search planned the leanest buffering (one reader thread, one C slice in flight), so buffering never costs a
-    // larger C slice or K chunk. Each step re-plans, since the DFB sizes change, and is kept only if it still fits.
-    // Reader threads: four, or else as many as an operand DFB holds anyway (two), which cost no more A and B L1 than
-    // one. Each owns part of the A and B DFBs, which a borrowed shard cannot be split into; reader threads beyond the
-    // K chunks of a C slice would only carry padding.
-    if (is_quasar && !plan.borrow_A && !plan.borrow_B) {
-        for (uint32_t num_reader_threads : {QUASAR_NUM_READER_THREADS, MIN_OPERAND_BUFFER_DEPTH}) {
-            const MatmulUnifiedPlan candidate = make_plan(
-                base,
-                config.cores,
-                A,
-                B,
-                output,
-                attributes,
-                plan.C_slice_M_tiles,
-                plan.C_slice_N_tiles,
-                plan.subblock_M_tiles,
-                plan.subblock_N_tiles,
-                plan.K_chunk_tiles,
-                std::min(num_reader_threads, plan.K_chunks_per_C_slice),
-                plan.C_buffer_depth);
-            if (dfbs_fit(candidate, l1_budget)) {
-                plan = candidate;
-                break;
-            }
-        }
-    }
-    // A second C slice in flight, on cores that produce several.
-    if ((uint64_t)plan.batch_size * plan.max_C_slices_per_core > 1) {
-        const MatmulUnifiedPlan candidate = make_plan(
-            base,
-            config.cores,
-            A,
-            B,
-            output,
-            attributes,
-            plan.C_slice_M_tiles,
-            plan.C_slice_N_tiles,
-            plan.subblock_M_tiles,
-            plan.subblock_N_tiles,
-            plan.K_chunk_tiles,
-            plan.num_reader_threads,
-            C_BUFFER_DEPTH);
-        if (dfbs_fit(candidate, l1_budget)) {
-            plan = candidate;
-        }
-    }
     return plan;
 }
 
