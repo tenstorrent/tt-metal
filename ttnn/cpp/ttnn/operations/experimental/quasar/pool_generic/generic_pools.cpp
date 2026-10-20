@@ -14,6 +14,7 @@
 #include "ttnn/operations/experimental/quasar/to_layout/to_layout_op.hpp"
 #include "ttnn/operations/pool/pool_utils.hpp"
 #include "ttnn/operations/experimental/quasar/halo/halo.hpp"
+#include "ttnn/operations/experimental/quasar/op_slicing/op_slicing.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/operations/data_movement/move/move.hpp"
@@ -909,10 +910,18 @@ static std::vector<Tensor> pool2d_DRAM(
     const auto unflattened_input_shape = ttnn::Shape{batch_size, input_h, input_w, channels};
     Tensor input_tensor_for_slicing = input_tensor;
 
+    // padded_slice (run_sliced_op's per-slice input gather) only has a ROW_MAJOR program factory on
+    // Quasar; its TILE factory still builds legacy kernels. The pool reads ROW_MAJOR sticks either way,
+    // so untilize a TILE source first, as conv2d_DRAM does.
+    if (input_tensor_for_slicing.layout() != Layout::ROW_MAJOR) {
+        input_tensor_for_slicing =
+            ttnn::operations::experimental::quasar::to_layout(input_tensor_for_slicing, Layout::ROW_MAJOR);
+    }
+
     // Only reshape if the current shape doesn't match what we need
-    if (input_tensor.logical_shape() != unflattened_input_shape) {
+    if (input_tensor_for_slicing.logical_shape() != unflattened_input_shape) {
         input_tensor_for_slicing = ttnn::operations::experimental::quasar::reshape(
-            input_tensor, unflattened_input_shape, unflattened_input_shape);
+            input_tensor_for_slicing, unflattened_input_shape, unflattened_input_shape);
     }
 
     // Create output tensors for DRAM slicing
@@ -929,7 +938,9 @@ static std::vector<Tensor> pool2d_DRAM(
         input_tensor_for_slicing.device());
     std::vector<std::reference_wrapper<Tensor>> output_tensors = {std::ref(dram_output_tensor)};
 
-    ttnn::operations::op_slicing::run_sliced_op(
+    // The quasar run_sliced_op: its per-slice padded_slice / slice_write are the quasar Metal-2 ops
+    // (the shared one builds legacy kernels that Quasar rejects).
+    ttnn::operations::experimental::quasar::op_slicing::run_sliced_op(
         input_tensor_for_slicing, output_tensors, &pool_slice_attr, dram_slice_config);
 
     return {dram_output_tensor};
