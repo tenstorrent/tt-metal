@@ -171,6 +171,10 @@ that reviewer, so:
 - No headings, no bullet lists, no restating their comment back at them.
 - **Never cite a commit sha.** A sha you write is routinely the wrong one (an
   earlier round's), and reviewers see the push.
+- **Never cite another PR or issue** by number or link (`#1234`, a GitHub URL),
+  even when the reviewer did. Each one posts a cross-reference on that PR or
+  issue. Name the change by what it does instead ("the `test_bcast.py`
+  rewrite"), unless the reply cannot be understood without the number.
 - **Never mention** this agent, the session, the host, the checkout, whether a
   card is attached, this round's test results (what ran, how many passed), or
   what you could not run. A reply that explains your tooling or the round to a
@@ -205,7 +209,7 @@ does. Leave it out otherwise.
   `[LLK]` or category tag and no issue number: the dashboard writes the title as
   `[LLK][<category>] <title>`.
 - `summary`: the whole PR as it now stands, not just this round. The dashboard
-  puts it in the PR template, with the issue link.
+  puts it in the PR template, with the issue link. Cite no other PR or issue.
 - The reply to the thread that asked for it says what changed.
 
 ### 3. `$LOG_DIR/agent_review_addresser.md`
