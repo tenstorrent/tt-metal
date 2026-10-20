@@ -69,8 +69,9 @@ template <
     bool FUSED = false,
     bool RANK_STAMPED = false,
     ckernel::sfpu::TopkTieOrder TIE_ORDER = ckernel::sfpu::TopkTieOrder::Unset,
-    std::uint32_t TAG_BITS = 16>
-inline void calculate_bitonic_topk_merge(std::uint32_t m_iter, std::uint32_t k) {
+    std::uint32_t TAG_BITS = 16,
+    std::uint32_t K = 0>
+inline void calculate_bitonic_topk_merge(std::uint32_t m_iter) {
     _bitonic_topk_merge<
         APPROXIMATION_MODE,
         is_fp32_dest_acc_en,
@@ -79,7 +80,8 @@ inline void calculate_bitonic_topk_merge(std::uint32_t m_iter, std::uint32_t k) 
         FUSED,
         RANK_STAMPED,
         TIE_ORDER,
-        TAG_BITS>(m_iter, k);
+        TAG_BITS,
+        K>(m_iter);
 }
 
 template <
