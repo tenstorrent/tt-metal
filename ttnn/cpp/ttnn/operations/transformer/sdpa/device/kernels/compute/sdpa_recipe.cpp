@@ -2,20 +2,17 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Dense and joint SDPA precision recipes (host: sdpa_recipe.cpp): STANDARD, BALANCED, ACCURATE and FAST
-// (B-E) run recipe_streaming.hpp. The host selects the recipe with SDPA_RECIPE_FP32 / _ACCURATE / _LOFI.
+// (B-E) run recipe_streaming.hpp. The host selects the recipe through named compile-time arguments
+// (streaming/recipe_config.hpp).
 //
-// Optimization: the default level (-O3), except ACCURATE at -O2 and, on Wormhole, BALANCED, fused and FAST builds at
-// -O2: Wormhole images are larger (SFPU launcher, four packers), and at -O3 these overflow the kernel config buffer
-// (BALANCED: its chunked prefill build with a sink and a device-tensor start, 70768 B). The host disables the SFPI
-// compiler's replay optimization (tenstorrent/tt-metal#58433). Watcher builds are size-optimized.
+// Optimization: the default level (-O3), except ACCURATE on Blackhole at -O2 (the host's kernel opt level) and every
+// Wormhole build at -O2 (the per-architecture level below): Wormhole images are larger (SFPU launcher, four packers),
+// and at -O3 they overflow the kernel config buffer (BALANCED: its chunked prefill build with a sink and a
+// device-tensor start, 70768 B). The host disables the SFPI compiler's replay optimization
+// (tenstorrent/tt-metal#58433). Watcher builds are size-optimized.
 #if defined(WATCHER_ENABLED)
-#define SDPA_RECIPE_OPTIMIZE_PUSHED
-#pragma GCC push_options
 #pragma GCC optimize("Os")
-#elif defined(SDPA_RECIPE_ACCURATE) || \
-    (defined(ARCH_WORMHOLE) && (defined(SDPA_RECIPE_FP32) || defined(SDPA_RECIPE_FUSED) || defined(SDPA_RECIPE_LOFI)))
-#define SDPA_RECIPE_OPTIMIZE_PUSHED
-#pragma GCC push_options
+#elif defined(ARCH_WORMHOLE)
 #pragma GCC optimize("O2")
 #endif
 
@@ -33,14 +30,10 @@ constexpr uint32_t q_tiles = get_named_compile_time_arg_val("q_tiles");
 constexpr uint32_t k_tiles = get_named_compile_time_arg_val("k_tiles");
 constexpr uint32_t d_tiles = get_named_compile_time_arg_val("d_tiles");
 // V and output head dim: narrower than Q/K's for MLA.
-#ifdef SDPA_RECIPE_V_DHT
-constexpr uint32_t vd_tiles = SDPA_RECIPE_V_DHT;
-#else
-constexpr uint32_t vd_tiles = d_tiles;
-#endif
+constexpr uint32_t vd_tiles = get_named_compile_time_arg_val("vd_tiles");
 // QK and PV matmul subblock widths: the largest of 4, 2, 1 dividing the K chunk and V head dim.
-constexpr uint32_t qk_subblock_w = SDPA_RECIPE_QK_W;
-constexpr uint32_t pv_subblock_w = SDPA_RECIPE_PV_W;
+constexpr uint32_t qk_subblock_w = recipe::qk_w;
+constexpr uint32_t pv_subblock_w = recipe::pv_w;
 static_assert(q_tiles >= 1 && k_tiles >= 1 && d_tiles >= 1 && vd_tiles >= 1 && vd_tiles <= d_tiles);
 static_assert(k_tiles % qk_subblock_w == 0 && vd_tiles % pv_subblock_w == 0);
 
@@ -51,11 +44,7 @@ constexpr uint32_t cb_qk = 6, cb_out_a = 8, cb_out_b = 9, cb_max_a = 10, cb_max_
 
 // B-E: FP32 recipes process one Q tile row per group; paired BF16 recipes two (the host pads odd chunks).
 void recipe_run(uint32_t jobs) {
-#ifdef SDPA_RECIPE_FP32
-    constexpr uint32_t subblock_h = 1;
-#else
-    constexpr uint32_t subblock_h = 2;
-#endif
+    constexpr uint32_t subblock_h = recipe::fp32 ? 1 : 2;
     sdpa_standard_v2<
         q_tiles,
         k_tiles,
@@ -88,7 +77,3 @@ void kernel_main() {
     DeviceZoneScopedN("SDPA_RECIPE");
     recipe_run(jobs);
 }
-
-#ifdef SDPA_RECIPE_OPTIMIZE_PUSHED
-#pragma GCC pop_options
-#endif

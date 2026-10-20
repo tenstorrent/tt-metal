@@ -7,38 +7,38 @@
 #include "api/compute/pack.h"
 #include "api/dataflow/circular_buffer.h"
 #include "fp32_state_sfpu.hpp"
+#include "recipe_config.hpp"
 
 #if !defined(ARCH_BLACKHOLE) && !defined(ARCH_WORMHOLE)
 #error "SDPA FP32 streaming state supports Blackhole and Wormhole only"
 #endif
-static_assert(DST_ACCUM_MODE, "SDPA FP32 streaming state requires FP32 destination registers");
+static_assert(!recipe::fp32 || DST_ACCUM_MODE, "SDPA FP32 streaming state requires FP32 destination registers");
 
 namespace sdpa::streaming {
 
 // The owner must invalidate this cache after any pack configuration performed
 // outside this object. It assumes the BALANCED/ACCURATE single-tile pack setup and its
 // skip-addrmod/skip-strides contract: full 32x32 tiles, initialized at startup.
+// PACK state (pack_src_format / pack_dst_format exist in the PACK build only).
 struct Fp32PackConfig {
-#ifdef TRISC_PACK
     uint32_t format_cb = 32;
     uint32_t width = 0;
-#endif
 
     ALWI void invalidate() { PACK(format_cb = 32; width = 0;) }
 
     ALWI void single_tile(uint32_t cb) {
-#ifdef TRISC_PACK
-        if (format_cb == 32 || pack_src_format[format_cb] != pack_src_format[cb] ||
-            pack_dst_format[format_cb] != pack_dst_format[cb]) {
-            pack_reconfig_data_format(cb);
-        }
-        format_cb = cb;
-        if (width == 1) {
-            return;
-        }
-        width = 1;
-        llk_pack_init<ckernel::PackMode::Default, false, true, true>(cb, 1);
-#endif
+        PACK({
+            if (format_cb == 32 || pack_src_format[format_cb] != pack_src_format[cb] ||
+                pack_dst_format[format_cb] != pack_dst_format[cb]) {
+                pack_reconfig_data_format(cb);
+            }
+            format_cb = cb;
+            if (width == 1) {
+                return;
+            }
+            width = 1;
+            llk_pack_init<ckernel::PackMode::Default, false, true, true>(cb, 1);
+        })
     }
 };
 
@@ -78,6 +78,7 @@ ALWI void rescale_and_accumulate(
     if constexpr (pairs > 1) {
         state_unpack_mop(4 * pairs);
         unary_bcast<BroadcastType::NONE>(old_cb, old_index, 0);
+        // Blackhole's unpack-to-DST workaround (TT_ZEROACC takes Blackhole's five operands; Wormhole's has three).
 #ifdef ARCH_BLACKHOLE
         MATH(for (uint32_t tile = 1; tile < pairs; ++tile) {
             for (uint32_t face = 0; face < 4; ++face) {

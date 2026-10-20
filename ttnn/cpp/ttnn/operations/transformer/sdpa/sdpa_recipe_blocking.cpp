@@ -86,8 +86,8 @@ BlockCostModel block_cost_model(const PrecisionPolicy& policy) {
 struct RecipeBuild {
     uint64_t cb_bytes = 0;
     uint64_t fused_cb_bytes = 0;  // CBs 29-31 of fused chunks, which a factory drops when they do not fit
-    uint32_t qk_width = 4;        // SDPA_RECIPE_QK_W
-    uint32_t pv_width = 4;        // SDPA_RECIPE_PV_W
+    uint32_t qk_width = 4;        // recipe_qk_w
+    uint32_t pv_width = 4;        // recipe_pv_w
 };
 
 // Compute slowdown not in the fitted model: narrower matmul subblocks.
@@ -162,13 +162,9 @@ RecipeBuild recipe_build(
     for (const auto& cb : program.cbs) {
         build.fused_cb_bytes += recipe_fused_cb(cb) ? cb.total_size : 0;
     }
-    for (const auto& [name, value] : program.kernels.front().defines) {
-        if (name == "SDPA_RECIPE_QK_W") {
-            build.qk_width = std::stoul(value);
-        } else if (name == "SDPA_RECIPE_PV_W") {
-            build.pv_width = std::stoul(value);
-        }
-    }
+    const auto& args = program.kernels.front().named_compile_time_args;
+    build.qk_width = named_arg(args, "recipe_qk_w");
+    build.pv_width = named_arg(args, "recipe_pv_w");
     std::lock_guard lock(mutex);
     if (memo.size() > 65536) {
         memo.clear();
