@@ -1,0 +1,7 @@
+ci_ab/test_rms_ab.py::test_rms_post[dec16_hf2]
+ci_ab/test_rms_ab.py::test_rms_post[p16_hf2]
+ci_ab/test_rms_ab.py::test_rms_post[p16_lofi]
+ci_ab/test_rms_ab.py::test_rms_post[p16_hf4]
+ci_ab/test_rms_ab.py::test_rms_post[p32_hf2]
+ci_ab/test_rms_ab.py::test_rms_post[p16_hf2_f32]
+ci_ab/test_rms_ab.py::test_rms_post[p16_hf2_nog]
