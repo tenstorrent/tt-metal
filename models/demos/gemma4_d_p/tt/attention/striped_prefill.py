@@ -14,7 +14,10 @@ def striped_prefill_attention(attention, q, k, v, requests, compute_config):
     cache_k = cache.kv if global_attention else cache.k
     keys = k if k.dtype == cache_k.dtype else ttnn.typecast(k, cache_k.dtype)
     values = None if global_attention else (v if v.dtype == cache.v.dtype else ttnn.typecast(v, cache.v.dtype))
-    output = ttnn.zeros_like(q, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    allocate_output = (
+        ttnn.empty_like if sum(length for length, _ in requests) == q.shape[2] * mesh.cp_degree else ttnn.zeros_like
+    )
+    output = allocate_output(q, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     stats = ttnn.empty(
         (q.shape[0], q.shape[1], 2 * max(length for length, _ in requests) // mesh.cp_degree, 1),
         dtype=ttnn.bfloat16,
