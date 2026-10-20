@@ -9,6 +9,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -316,10 +317,21 @@ struct ArchAreas {
     std::optional<content::L1> eth_fw_mailbox;
 };
 
+// Where a router core's stream registers are.
+struct StreamRegisters {
+    uint32_t base = 0;
+    uint32_t stride = 0;
+    // Stream ids are below count.
+    uint32_t count = 0;
+    // Each register's byte offset in a stream's block.
+    std::vector<std::pair<StreamRegister, uint32_t>> register_offsets;
+};
+
 // What the manifest describes of the architecture the routers run on.
 struct Arch {
     tt::ARCH arch = tt::ARCH::Invalid;
     ArchAreas areas;
+    StreamRegisters stream_registers;
     // Every struct a schema names, as laid out on this architecture.
     std::vector<layout::StructType> types;
 };
