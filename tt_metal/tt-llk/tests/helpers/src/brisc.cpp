@@ -140,10 +140,11 @@ int main()
                 // The counter bank registers, when the launch counts a zone.
                 llk_perf::configure_from_brisc();
 
-                clear_trisc_soft_reset();
-
+                // Acknowledge before the release: these stores and readbacks would otherwise run during the TRISCs' startup.
                 reset_state(counter);
                 commit_store(brisc_bread0, counter);
+
+                clear_trisc_soft_reset();
                 break;
 
             case BriscCommandState::RESET_TRISCS:
