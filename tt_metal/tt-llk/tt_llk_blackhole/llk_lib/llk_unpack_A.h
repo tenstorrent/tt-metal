@@ -104,7 +104,12 @@ inline void _llk_unpack_A_mop_config_(
         !(((acc_to_dest) || (binary_reuse_dest != EltwiseBinaryReuseDestType::NONE)) && (unpack_to_dest)),
         "Not supported configuration when unpacking to dest!");
     LLK_VALIDATE_TENSOR_SHAPE_UNPACK("_llk_unpack_A_mop_config_", tensor_shape);
-    const std::uint8_t num_faces = tensor_shape.total_num_faces();
+    const std::uint8_t num_faces       = tensor_shape.total_num_faces();
+    const std::uint8_t num_faces_r_dim = tensor_shape.num_faces_r_dim;
+    const std::uint8_t num_faces_c_dim = tensor_shape.num_faces_c_dim;
+    // Transpose of faces reads input face (j, i) for output face (i, j). Only a 2x2 grid changes the
+    // order; 1x1, 1x2 and 2x1 keep the L1 face order (1x2 becomes 2x1 and the reverse).
+    const bool reorder_faces = transpose_of_faces && (num_faces_r_dim == 2) && (num_faces_c_dim == 2);
 
     static constexpr std::uint32_t unpack_srca =
         TT_OP_UNPACR(SrcA, 0b1 /*Z inc*/, 0, 0, 0, 1 /* Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
@@ -120,15 +125,16 @@ inline void _llk_unpack_A_mop_config_(
         TT_OP_UNPACR(SrcB, 0b1 /*Z inc*/, 0, 0, 0, 1 /* Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
     static constexpr std::uint32_t unpack_srcb_inc_z_0 =
         TT_OP_UNPACR(SrcB, 0b0 /*Z inc*/, 0, 0, 0, 1 /* Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+    static constexpr std::uint32_t unpack_srcb_inc_z_2 =
+        TT_OP_UNPACR(SrcB, 0b10 /*Z inc*/, 0, 0, 0, 1 /* Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
     static constexpr std::uint32_t unpack_srcb_set_dvalid =
         TT_OP_UNPACR_NOP(SrcB, 0, 0, p_unpacr_nop::SET_DVALID, 0, p_unpacr_nop::WAIT_LIKE_UNPACR, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
     static constexpr std::uint32_t srca_set_z_1 = TT_OP_SETADCZW(p_setadc::UNP_A, 0, 0, 0, 1, 0b0001); // set srcA ch0_z = 1
-    static constexpr std::uint32_t srcb_set_z_2 = TT_OP_SETADCZW(p_setadc::UNP_B, 0, 0, 0, 2, 0b0001); // set srcB ch0_z = 2
     static constexpr std::uint32_t srcb_clear_z = TT_OP_SETADCZW(p_setadc::UNP_B, 0, 0, 0, 0, 0b0001); // set srcB ch0_z = 0
 
     if (should_unpack_to_dest(unpack_to_dest, unpack_src_format, unpack_dst_format))
     {
-        if (transpose_of_faces && num_faces == 4)
+        if (reorder_faces)
         {
             const std::uint32_t outerloop = 2;
             const std::uint32_t innerloop = 2;
@@ -160,30 +166,35 @@ inline void _llk_unpack_A_mop_config_(
     }
     else if constexpr (BType == BroadcastType::COL)
     {
+        // One SrcB face per face row: the left face of each face row holds the column to broadcast.
+        // Faces are stored row-major, so step the SrcB face counter by num_faces_c_dim.
+        const std::uint32_t unpack_srcb_next_face_row = (num_faces_c_dim == 2) ? unpack_srcb_inc_z_2 : unpack_srcb;
         if constexpr (acc_to_dest)
         {
+            // Per face row: one SrcB face, then one dummy SrcA DVALID per face in the row.
             // The dummy SrcA publication is the same word whether or not dest is reused as SrcA.
-            constexpr std::uint32_t innerloop = 1;
-            constexpr std::uint32_t outerloop = 2; // TODO: add support for num_faces, add support for dest to srcB
-            ckernel_template tmp(outerloop, innerloop, unpack_srca_set_dvalid, unpack_srca_set_dvalid);
-            tmp.set_start_op(unpack_srcb);
-            tmp.set_end_op(srcb_set_z_2);
+            // TODO: add support for dest to srcB
+            const std::uint32_t outerloop = num_faces_r_dim;
+            const std::uint32_t innerloop = num_faces_c_dim;
+            ckernel_template tmp(outerloop, innerloop, unpack_srca_set_dvalid);
+            tmp.set_start_op(unpack_srcb_next_face_row);
             tmp.program();
         }
         else
         {
-            constexpr std::uint32_t innerloop = 1;
-            constexpr std::uint32_t outerloop = 1; // TODO: add support for num_faces
-            ckernel_template tmp(outerloop, innerloop, unpack_srcb, srcb_set_z_2);
+            const std::uint32_t outerloop = 1;
+            const std::uint32_t innerloop = num_faces_r_dim;
+            ckernel_template tmp(outerloop, innerloop, unpack_srcb_next_face_row);
             tmp.set_start_op(unpack_srca_set_dvalid);
-            tmp.set_end_op(unpack_srcb);
             tmp.program();
         }
     }
     else if constexpr (BType == BroadcastType::ROW)
     {
-        const std::uint32_t outerloop = tensor_shape.num_faces_r_dim;
-        const std::uint32_t innerloop = tensor_shape.num_faces_c_dim;
+        // One SrcB face per tile face: every face in face column c takes row 0 of face (0, c),
+        // so unpack the first face row once per face row.
+        const std::uint32_t outerloop = num_faces_r_dim;
+        const std::uint32_t innerloop = num_faces_c_dim;
         if constexpr (acc_to_dest)
         {
             // Publish one dummy SrcA DVALID per tensor face; the word is the same whether or not
@@ -216,10 +227,10 @@ inline void _llk_unpack_A_mop_config_(
             load_replay_buf(
                 0,
                 replay_buf_len,
-                [num_faces]
+                [reorder_faces]
                 {
                     TTI_UNPACR_NOP(SrcB, 0, 0, p_unpacr_nop::SET_DVALID, 0, p_unpacr_nop::WAIT_LIKE_UNPACR, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
-                    if (num_faces > 2)
+                    if (reorder_faces)
                     {
                         TTI_UNPACR(SrcA, 0b10, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1); // inc srcA ch0_z+=2
                     }
@@ -229,11 +240,11 @@ inline void _llk_unpack_A_mop_config_(
                     }
                 });
 
-            const std::uint32_t outerloop = num_faces < 4 ? 1 : 2;
-            const std::uint32_t innerloop = num_faces < 2 ? 1 : 2;
-            ckernel_template tmp(outerloop, innerloop, lltt::replay_insn(0, replay_buf_len)); // Unpack faces 0/2 && 1/3 to srcA
-                                                                                              // or 0/1 for 2 face tile
-            if (num_faces > 2)
+            // 2x2: unpack faces 0/2, then 1/3. Other grids: unpack the faces in L1 order.
+            const std::uint32_t outerloop = reorder_faces ? num_faces_c_dim : 1;
+            const std::uint32_t innerloop = reorder_faces ? num_faces_r_dim : num_faces;
+            ckernel_template tmp(outerloop, innerloop, lltt::replay_insn(0, replay_buf_len));
+            if (reorder_faces)
             {
                 tmp.set_end_op(srca_set_z_1);
             }
@@ -309,7 +320,6 @@ inline void _llk_unpack_A_init_(
     const std::uint8_t num_faces  = tensor_shape.total_num_faces();
     LLK_ASSERT(BType != BroadcastType::COL || num_faces == 4, "Unary Broadcast Column requires num_faces == 4 (32x32 only)");
     LLK_ASSERT(transpose_of_faces == 0 || face_r_dim == 16, "Partial faces are not supported for transpose datacopy, face_r_dim must be 16 rows");
-    LLK_ASSERT(transpose_of_faces == 0 || num_faces == 4 || num_faces == 1, "Transpose requires num_faces == 4 or 1 (32x32 and 16x16 only)");
     LLK_ASSERT(
         is_unpacker_format_conversion_supported_dest(static_cast<DataFormat>(unpack_src_format), static_cast<DataFormat>(unpack_dst_format), unpack_to_dest),
         "Unsupported unpacker format conversion.");
