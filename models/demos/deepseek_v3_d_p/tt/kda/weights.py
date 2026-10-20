@@ -18,6 +18,8 @@ from models.demos.deepseek_v3_d_p.reference.kda.weights import normalize_kda_sta
 from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import FastCacheChecker
 
 _CACHE_SCHEMA_VERSION = 2
+# Stored at the caller's `projection_dtype`; every other KDA weight stays bfloat16.
+PROJECTION_ARTIFACTS = ("input_projection_head_major", "decay_output_projection", "output_projection")
 
 
 def _parallel_geometry(device: ttnn.Device | ttnn.MeshDevice, tensor_parallel_axis: int) -> tuple[tuple[int, int], int]:
@@ -88,6 +90,7 @@ class KDAWeights:
         mesh_device: ttnn.Device | ttnn.MeshDevice,
         *,
         tensor_parallel_axis: int = 1,
+        projection_dtype: ttnn.DataType = ttnn.bfloat16,
     ) -> bool:
         """Return whether every dtype/layout/placement-specific KDA tensorbin exists."""
         if cache_path is None:
@@ -99,7 +102,8 @@ class KDAWeights:
         mesh_shape, _ = _parallel_geometry(mesh_device, tensor_parallel_axis)
         for name in _cache_artifact_names(config):
             stem = _cache_stem(cache_name_prefix, name, config, mesh_shape, tensor_parallel_axis)
-            pattern = f"{stem}_dtype_{ttnn.bfloat16.name}_layout_{ttnn.TILE_LAYOUT.name}.tensorbin"
+            dtype = projection_dtype if name in PROJECTION_ARTIFACTS else ttnn.bfloat16
+            pattern = f"{stem}_dtype_{dtype.name}_layout_{ttnn.TILE_LAYOUT.name}.tensorbin"
             if not checker.pattern_exists(pattern, "KDA"):
                 return False
         return True
@@ -114,6 +118,7 @@ class KDAWeights:
         mesh_device: ttnn.Device | ttnn.MeshDevice,
         *,
         tensor_parallel_axis: int = 1,
+        projection_dtype: ttnn.DataType = ttnn.bfloat16,
     ) -> None:
         """Build all KDA tensorbins without copying weights to device memory."""
         if not state_dict:
@@ -133,6 +138,7 @@ class KDAWeights:
             mesh_shape=mesh_shape,
             tensor_parallel_size=tensor_parallel_size,
             tensor_parallel_axis=tensor_parallel_axis,
+            projection_dtype=projection_dtype,
             place_on_device=False,
         )
 
@@ -145,6 +151,7 @@ class KDAWeights:
         mesh_device: ttnn.Device | ttnn.MeshDevice,
         *,
         tensor_parallel_axis: int = 1,
+        projection_dtype: ttnn.DataType = ttnn.bfloat16,
     ) -> "KDAWeights":
         """Construct device weights exclusively from a complete TTNN cache."""
         return load_kda_weights(
@@ -154,6 +161,7 @@ class KDAWeights:
             cache_path,
             cache_name_prefix=cache_name_prefix,
             tensor_parallel_axis=tensor_parallel_axis,
+            projection_dtype=projection_dtype,
         )
 
 
@@ -281,6 +289,7 @@ def _materialize_kda_tensor(
     tensor_parallel_size: int,
     tensor_parallel_axis: int,
     shard_dim: int | None = None,
+    dtype: ttnn.DataType = ttnn.bfloat16,
     place_on_device: bool,
 ) -> ttnn.Tensor:
     cache_name = _cache_stem(cache_name_prefix, name, config, mesh_shape, tensor_parallel_axis)
@@ -288,14 +297,12 @@ def _materialize_kda_tensor(
     if host_tensor is None:
         if cache_file is None:
             raise ValueError("cache-only KDA weight loading requires tensor_cache_path")
-        serialized_cache_file = Path(
-            f"{cache_file}_dtype_{ttnn.bfloat16.name}_layout_{ttnn.TILE_LAYOUT.name}.tensorbin"
-        )
+        serialized_cache_file = Path(f"{cache_file}_dtype_{dtype.name}_layout_{ttnn.TILE_LAYOUT.name}.tensorbin")
         return ttnn.load_tensor(serialized_cache_file, device=device)
 
     return ttnn.as_tensor(
         host_tensor.contiguous(),
-        dtype=ttnn.bfloat16,
+        dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
         device=device if place_on_device else None,
         mesh_mapper=_mesh_mapper(
@@ -320,6 +327,7 @@ def _materialize_kda_weights(
     mesh_shape: tuple[int, int],
     tensor_parallel_size: int,
     tensor_parallel_axis: int,
+    projection_dtype: ttnn.DataType,
     place_on_device: bool,
 ) -> tuple[dict[str, ttnn.Tensor], tuple[ttnn.Tensor, ...]]:
     if tensor_cache_path is not None:
@@ -337,6 +345,7 @@ def _materialize_kda_weights(
             tensor_parallel_size=tensor_parallel_size,
             tensor_parallel_axis=tensor_parallel_axis,
             shard_dim=-1,
+            dtype=projection_dtype,
             place_on_device=place_on_device,
         ),
         "decay_output_projection": _materialize_kda_tensor(
@@ -350,6 +359,7 @@ def _materialize_kda_weights(
             tensor_parallel_size=tensor_parallel_size,
             tensor_parallel_axis=tensor_parallel_axis,
             shard_dim=-1,
+            dtype=projection_dtype,
             place_on_device=place_on_device,
         ),
         "output_projection": _materialize_kda_tensor(
@@ -363,6 +373,7 @@ def _materialize_kda_weights(
             tensor_parallel_size=tensor_parallel_size,
             tensor_parallel_axis=tensor_parallel_axis,
             shard_dim=-2,
+            dtype=projection_dtype,
             place_on_device=place_on_device,
         ),
         "decay_scale_flat": _materialize_kda_tensor(
@@ -456,6 +467,7 @@ def load_kda_weights(
     *,
     cache_name_prefix: str = "kda",
     tensor_parallel_axis: int = 1,
+    projection_dtype: ttnn.DataType = ttnn.bfloat16,
 ) -> KDAWeights:
     """Prepare KDA weights and materialize them on the target device."""
     if state_dict is not None and not state_dict:
@@ -469,6 +481,7 @@ def load_kda_weights(
             config,
             device,
             tensor_parallel_axis=tensor_parallel_axis,
+            projection_dtype=projection_dtype,
         ):
             raise FileNotFoundError(f"incomplete KDA TTNN cache for {cache_name_prefix!r} at {cache_path!r}")
         host_weights = None
@@ -484,6 +497,7 @@ def load_kda_weights(
         mesh_shape=mesh_shape,
         tensor_parallel_size=tensor_parallel_size,
         tensor_parallel_axis=tensor_parallel_axis,
+        projection_dtype=projection_dtype,
         place_on_device=True,
     )
     if config.gate_lower_bound is not None:

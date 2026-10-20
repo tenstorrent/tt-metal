@@ -201,7 +201,6 @@ std::vector<Tensor> strided_all_gather_minimal_matmul_async(
     }
 
     std::vector<std::optional<const Tensor>> optional_input_tensors = {};
-    std::vector<IDevice*> devices = ttnn::ccl::get_active_physical_devices(input_tensor);
     if (bias.has_value()) {
         optional_input_tensors.push_back(bias);
     } else {
@@ -212,7 +211,6 @@ std::vector<Tensor> strided_all_gather_minimal_matmul_async(
     uint32_t num_devices = ::ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis);
     ttnn::experimental::prim::StridedAllGatherAsyncParams strided_all_gather_async_struct =
         ttnn::experimental::prim::StridedAllGatherAsyncParams(
-            devices,
             dim,
             num_links,
             num_devices,
@@ -244,7 +242,6 @@ std::vector<Tensor> strided_all_gather_minimal_matmul_async(
         matmul_struct,
         strided_all_gather_core_grid_offset,
         read_local_from_input,
-        devices,
         ag_op,
         mm_signal_aggregator_mode};
     auto tensor_args = OperationType::tensor_args_t{

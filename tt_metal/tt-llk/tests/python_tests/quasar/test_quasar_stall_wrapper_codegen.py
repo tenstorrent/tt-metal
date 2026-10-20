@@ -22,7 +22,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from helpers.chip_architecture import quasar_arch_variant
+from helpers.chip_architecture import quasar_variant
 
 # The Quasar compile job selects on this marker; without it the guard would not run
 # on a change to the header it guards.
@@ -35,7 +35,7 @@ _QUASAR_LLK = _TT_METAL / "tt-llk/tt_llk_quasar"
 
 
 def _quasar_variant_include():
-    variant = quasar_arch_variant()
+    variant = quasar_variant()
     return [f"-I{_QUASAR_LLK / 'arch' / variant}"] if variant else []
 
 
@@ -119,6 +119,7 @@ def emitted(tmp_path_factory):
             "-DCOMPILE_FOR_TRISC=0",
             "-DTENSIX_FIRMWARE",
             *_quasar_variant_include(),
+            f"-I{_QUASAR_LLK}",
             f"-I{_QUASAR_LLK / 'common/inc'}",
             f"-I{_QUASAR_LLK / 'common/inc/sfpu'}",
             f"-I{_QUASAR_LLK / 'llk_lib'}",

@@ -32,6 +32,16 @@
 #define TILE_HEIGHT 32
 #define TILE_WIDTH 32
 
+// out_cb is the borrowed output shard and compute is its only producer and consumer (self-loop): the result
+// stays resident, so pop each block right after it is pushed to leave the buffer balanced. dummy_unpack
+// orders the pop after the wait on Quasar (nothing unpacks this buffer, and a bare wait_front -> pop_front
+// traps the unpacker).
+ALWI void release_out_pages(DataflowBuffer& out_cb, uint32_t num_pages) {
+    out_cb.wait_front(num_pages);
+    dummy_unpack(out_cb.get_id());
+    out_cb.pop_front(num_pages);
+}
+
 void kernel_main() {
     // NOTE: here it is assumed that in_ntiles_hw == 1. General cases not handled yet. When ntiles_hw > 1 the large
     // kernel is called
@@ -259,6 +269,7 @@ void kernel_main() {
                     fast_tilize_uninit(fast_tilize_cb_id, out_cb_id, in_ntiles_c);
 
                     out_cb.push_back(in_ntiles_c);
+                    release_out_pages(out_cb, in_ntiles_c);
                     fast_tilize_cb.pop_front(in_ntiles_c);
                     fast_tilize_cb.reserve_back(in_ntiles_c);
                     pre_tilize_cb.pop_front(TILE_HEIGHT * in_ntiles_c);
@@ -313,11 +324,19 @@ void kernel_main() {
                 }
                 tile_regs_release();
                 out_cb.push_back(output_faces);
+                release_out_pages(out_cb, output_faces);
 #endif
             }
         }
         if constexpr (!one_scalar_per_core) {
             curr_scalar_cb.pop_front(1);
         }
+    }
+    if constexpr (one_scalar_per_core) {
+        // The single scalar tile was waited once up front and reused for every stick; pop it now so the
+        // buffer is left balanced. dummy_unpack orders the pop after the wait on Quasar when no stick was
+        // processed (a bare wait_front -> pop_front traps the unpacker).
+        dummy_unpack(in_scalar_cb_id_0);
+        in_scalar_cb_0.pop_front(1);
     }
 }

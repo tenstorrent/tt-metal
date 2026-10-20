@@ -10,8 +10,8 @@
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>  // FabricType
 #include <tt-metalium/experimental/fabric/physical_grouping_descriptor.hpp>
-#include <umd/device/types/cluster_descriptor_types.hpp>  // ChipId
-#include <umd/device/types/core_coordinates.hpp>          // CoreType
+#include <tt-umd/types/cluster_descriptor_types.hpp>  // ChipId
+#include <tt-umd/types/core_coordinates.hpp>          // CoreType
 #include <llrt/tt_cluster.hpp>
 #include <tt_stl/assert.hpp>
 #include <map>

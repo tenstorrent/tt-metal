@@ -136,8 +136,11 @@ ttnn::device_operation::ProgramArtifacts AccumulationProgramFactory::create_prog
     // path: its output rounding dominates any accumulation error and bf16 cumsum already matches
     // torch (the compensated path costs ~2x on long thin bf16 scans for no accuracy gain).
     // disable_compensation is the deprecated opt-out exposed on the cumsum binding (parity/debug/CI).
+    // The input has to be Float32 too: the kernel unpacks in, acc and comp with one configuration.
+    // ttnn.cumsum typecasts the input to the output dtype before it gets here.
+    const auto input_dataformat = datatype_to_dataformat_converter(input_tensor.dtype());
     const bool compensated_sum = operation_attributes.op == AccumulationOp::CUMSUM &&
-                                 dst_cb_data_format == DataFormat::Float32 &&
+                                 dst_cb_data_format == DataFormat::Float32 && input_dataformat == DataFormat::Float32 &&
                                  !operation_attributes.disable_compensation;
 
     auto acc_dataformat = datatype_to_dataformat_converter(output_tensor.dtype());
@@ -146,7 +149,6 @@ ttnn::device_operation::ProgramArtifacts AccumulationProgramFactory::create_prog
     }
     auto acc_dataformat_name = fmt::format("DataFormat::{}", acc_dataformat);
 
-    const auto input_dataformat = datatype_to_dataformat_converter(input_tensor.dtype());
     const auto output_dataformat = datatype_to_dataformat_converter(output_tensor.dtype());
 
     auto make_dfb = [](const DFBSpecName& unique_id, const tt::DataFormat& data_format, uint32_t num_entries) {
