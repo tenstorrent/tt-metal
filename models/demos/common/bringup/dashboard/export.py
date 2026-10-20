@@ -320,6 +320,12 @@ def build(spec) -> dict:
         thresholds, thr_note = resolve_thresholds(
             t["gate"].get("metrics") or {}, s.get("metrics", {}), M.load(tid, res), s.get("status", "TODO")
         )
+        if s.get("full_pending"):  # F122: accepted on a quick A/B; the other thresholds wait for its full gate
+            import fnmatch
+
+            have = s.get("metrics", {})
+            thresholds = {g: c for g, c in thresholds.items() if any(fnmatch.fnmatchcase(k, g) for k in have)}
+            thr_note = ((thr_note + "; ") if thr_note else "") + "quick A/B: the full gate runs before the final task"
         fr = t.get("frozen") or {}
         runs = s.get("agent_runs") or []
         tasks.append(
