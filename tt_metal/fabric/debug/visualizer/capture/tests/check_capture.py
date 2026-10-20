@@ -44,7 +44,7 @@ class RecordingDevice:
     def __init__(self):
         self.opened = 0
 
-    def open_router(self, router):
+    def open_router(self, router, arch):
         self.opened += 1
         return OpenedRouter(handle=self.opened - 1, ttexalens_id=self.opened - 1)
 

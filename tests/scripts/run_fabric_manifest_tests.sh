@@ -5,6 +5,8 @@
 #   - the schema check on every manifest the above runs write
 #   - the route decoder's unit tests
 #   - the route decoder's check on the same manifests, and that it finds Z peers on the express mesh's
+#   - capture's unit tests
+#   - capture's check, which takes a snapshot of each of the same manifests with a fake device
 # CI runs it on a CPU runner, as fabric-cpu-manifest in tests/pipeline_reorg/fabric_cpu_only_unit_tests.yaml. The 1D
 # and 2D manifest fixtures also run on hardware, through run_cpp_fabric_tests.sh's Fabric1D/2D fixture filters; the
 # express one runs only here.
@@ -27,6 +29,8 @@ CHECK_SCHEMA=tests/tt_metal/tt_fabric/fabric_manifest/check_manifest_schema.py
 DECODE_TESTS=tt_metal/fabric/debug/visualizer/decode/tests
 # A module, run with python3 -m: it imports the route decoder by its package path.
 CHECK_ROUTES=tt_metal.fabric.debug.visualizer.decode.tests.check_manifest_routes
+CAPTURE_TESTS=tt_metal/fabric/debug/visualizer/capture/tests
+CHECK_CAPTURE=tt_metal.fabric.debug.visualizer.capture.tests.check_capture
 # tt-run, without needing it installed.
 TT_RUN=ttnn/ttnn/distributed/ttrun.py
 
@@ -91,3 +95,13 @@ fi
 echo "== Route decoder check"
 python3 -m "$CHECK_ROUTES" "$OUT_DIR"
 python3 -m "$CHECK_ROUTES" --expect-z-peers "$OUT_DIR/express_32x4"
+
+echo "== Capture unit tests"
+python3 -m unittest discover -s "$CAPTURE_TESTS" -t . 2>&1 | tee "$OUT_DIR/capture_unit_tests.log"
+if ! grep -q '^Ran [1-9]' "$OUT_DIR/capture_unit_tests.log"; then
+    echo "Fabric manifest: found no capture unit tests under $CAPTURE_TESTS"
+    exit 1
+fi
+
+echo "== Capture check"
+python3 -m "$CHECK_CAPTURE" "$OUT_DIR"
