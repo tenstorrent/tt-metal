@@ -26,11 +26,18 @@ Expert dtype knobs (design section 9): ``expert_dtype`` is the routed W13 (gate/
 the candidate that halves the dominant expert-streaming term and is adopted only if the eval-set
 accuracy is unchanged (``tests/test_expert_dtype.py`` carries the single-layer evidence). The shared
 expert stays on ``weight_dtype`` like the dense MLP.
+
+Expert weight cache (``weight_cache_path``, a per-layer directory): the routed W13 / W2 device
+tensors are dumped as tensorbins on first construction and ``ttnn.load_tensor``-ed afterwards
+(``GLMMesh.upload_cached``), which is what makes streaming all 45 layers through one chip practical
+(``tt/model.py``). When the cache is complete the constructor accepts a state dict WITHOUT the
+expert tensors (``TtRoutedExperts.cache_complete``), so the caller can skip dequantizing them.
 """
 
 from __future__ import annotations
 
 import math
+from pathlib import Path
 
 import torch
 
@@ -158,23 +165,43 @@ class TtRouter(LightweightModule):
 
 
 class TtRoutedExperts(LightweightModule):
+    @staticmethod
+    def cache_files(cache_dir: Path | str, mesh: GLMMesh, expert_dtype, expert_down_dtype) -> dict[str, Path]:
+        """Tensorbin paths of the routed-expert device tensors for this placement / format."""
+        tag = f"mesh{mesh.rows}x{mesh.cols}"
+        cache_dir = Path(cache_dir)
+        return {
+            "w13": cache_dir / f"experts_w13_{expert_dtype.name}_{tag}.tensorbin",
+            "w2": cache_dir / f"experts_w2_{expert_down_dtype.name}_{tag}.tensorbin",
+        }
+
+    @classmethod
+    def cache_complete(cls, cache_dir: Path | str | None, mesh: GLMMesh, expert_dtype, expert_down_dtype) -> bool:
+        """True when both expert tensorbins exist (the constructor then needs no expert host tensors)."""
+        if cache_dir is None:
+            return False
+        return all(f.is_file() for f in cls.cache_files(cache_dir, mesh, expert_dtype, expert_down_dtype).values())
+
     def __init__(
         self,
         device,
         cfg: GLM53FlashConfig,
-        gate_up: torch.Tensor,  # [E, 2I, H] (HF stacked: gate rows then up rows)
-        down: torch.Tensor,  # [E, H, I]
+        gate_up: torch.Tensor | None,  # [E, 2I, H] (HF stacked: gate rows then up rows); None = from the cache
+        down: torch.Tensor | None,  # [E, H, I]
         *,
         expert_dtype=ttnn.bfloat8_b,  # W13 (gate/up) format
         expert_down_dtype=ttnn.bfloat8_b,  # W2 (down) format
         activation_dtype=ttnn.bfloat16,
         mesh: GLMMesh | None = None,
+        weight_cache_path: Path | str | None = None,
     ):
         """Hybrid placement (design 5.4): the experts are split over the mesh columns (chip column
         ``c`` holds experts ``[c*E/cols, (c+1)*E/cols)``) and every expert's intermediate over the mesh
         rows (row ``r`` holds the slice ``[r*I/rows, (r+1)*I/rows)``). ``forward`` gathers the rows'
         tokens, runs the local expert slices and reduce-scatters the partials back to the token's row;
-        the result is still a TP partial over the columns (the caller all-reduces once)."""
+        the result is still a TP partial over the columns (the caller all-reduces once).
+        ``weight_cache_path``: per-layer tensorbin directory (``cache_files``); ``gate_up`` / ``down``
+        may be ``None`` when ``cache_complete`` (the host tensors are then never needed)."""
         self.device = device
         self.mesh = mesh if mesh is not None else single_chip(device)
         self.cfg = cfg
@@ -183,17 +210,40 @@ class TtRoutedExperts(LightweightModule):
         self.activation_dtype = activation_dtype
         self.expert_dtype = expert_dtype
         self.expert_down_dtype = expert_down_dtype
-        assert tuple(gate_up.shape) == (self.E, 2 * self.I, self.H) and tuple(down.shape) == (self.E, self.H, self.I)
         ep, tpr = self.mesh.cols, self.mesh.rows
         assert self.E % ep == 0 and self.I % (tpr * TILE) == 0, (self.E, self.I, ep, tpr)
         self.E_local, self.I_local = self.E // ep, self.I // tpr
-        gate = gate_up[:, : self.I, :].transpose(1, 2)  # [E, H, I]
-        up = gate_up[:, self.I :, :].transpose(1, 2)
-        # [1,E,H,2I] in tpr blocks of [gate_r | up_r] so a row split of the last dim keeps the pairs
-        w13 = interleave_blocks([gate, up], tpr, dim=-1).reshape(1, self.E, self.H, 2 * self.I)
-        w2 = down.transpose(1, 2).contiguous().reshape(1, self.E, self.I, self.H)  # [1,E,I,H]
-        self.w13 = self.mesh.upload(w13, expert_dtype, rows=3, cols=1)
-        self.w2 = self.mesh.upload(w2, expert_down_dtype, rows=2, cols=1)
+        files = (
+            self.cache_files(weight_cache_path, self.mesh, expert_dtype, expert_down_dtype)
+            if weight_cache_path is not None
+            else {"w13": None, "w2": None}
+        )
+        if gate_up is None or down is None:
+            if not self.cache_complete(weight_cache_path, self.mesh, expert_dtype, expert_down_dtype):
+                raise ValueError("routed experts without host tensors need a complete weight cache")
+        else:
+            assert tuple(gate_up.shape) == (self.E, 2 * self.I, self.H) and tuple(down.shape) == (
+                self.E,
+                self.H,
+                self.I,
+            ), (gate_up.shape, down.shape)
+        E, H, I = self.E, self.H, self.I
+
+        def make_w13() -> torch.Tensor:
+            gate = gate_up[:, :I, :].transpose(1, 2)  # [E, H, I]
+            up = gate_up[:, I:, :].transpose(1, 2)
+            # [1,E,H,2I] in tpr blocks of [gate_r | up_r] so a row split of the last dim keeps the pairs
+            return interleave_blocks([gate, up], tpr, dim=-1).reshape(1, E, H, 2 * I)
+
+        def make_w2() -> torch.Tensor:
+            return down.transpose(1, 2).contiguous().reshape(1, E, I, H)  # [1,E,I,H]
+
+        self.w13 = self.mesh.upload_cached(
+            make_w13, expert_dtype, files["w13"], rows=3, cols=1, expect_shape=(1, E, H, 2 * I)
+        )
+        self.w2 = self.mesh.upload_cached(
+            make_w2, expert_down_dtype, files["w2"], rows=2, cols=1, expect_shape=(1, E, I, H)
+        )
         # column c's expert selector: the [E, E_local] block of the identity for its experts
         self.select = (
             None if ep == 1 else self.mesh.upload(torch.eye(self.E, dtype=torch.float32), ttnn.float32, cols=-1)
@@ -298,9 +348,11 @@ class TtMoE(LightweightModule):
         expert_dtype=ttnn.bfloat8_b,
         expert_down_dtype=ttnn.bfloat8_b,
         mesh: GLMMesh | None = None,
+        weight_cache_path: Path | str | None = None,
     ):
         """``mlp_state_dict``: raw checkpoint tensors of ``mlp.`` (prefix stripped), experts as
-        ``experts.N.{gate,up,down}_proj.weight`` or pre-stacked ``experts.gate_up_proj/down_proj``.
+        ``experts.N.{gate,up,down}_proj.weight`` or pre-stacked ``experts.gate_up_proj/down_proj``,
+        or absent when the expert cache under ``weight_cache_path`` is complete (``expert_cache_complete``).
         ``weight_dtype`` is the shared expert's format; the routed experts take ``expert_dtype``
         (gate/up) and ``expert_down_dtype`` (down). On a mesh (``tt/mesh.py``) the routed experts
         use the hybrid placement, the shared expert is TP over the columns and the two partials
@@ -310,6 +362,8 @@ class TtMoE(LightweightModule):
         E, I, H = cfg.n_routed_experts, cfg.moe_intermediate_size, cfg.hidden_size
         if "experts.gate_up_proj" in mlp_state_dict:
             gate_up, down = mlp_state_dict["experts.gate_up_proj"], mlp_state_dict["experts.down_proj"]
+        elif "experts.0.gate_proj.weight" not in mlp_state_dict:
+            gate_up = down = None  # cached experts (TtRoutedExperts checks the cache is complete)
         else:
             gate_up = torch.stack(
                 [
@@ -335,6 +389,7 @@ class TtMoE(LightweightModule):
             expert_dtype=expert_dtype,
             expert_down_dtype=expert_down_dtype,
             mesh=self.mesh,
+            weight_cache_path=weight_cache_path,
         )
         self.shared = TtClampedSwiGLU(
             device,
@@ -345,6 +400,10 @@ class TtMoE(LightweightModule):
             weight_dtype=weight_dtype,
             mesh=self.mesh,
         )
+
+    @staticmethod
+    def expert_cache_complete(cache_dir, mesh: GLMMesh, expert_dtype=ttnn.bfloat8_b, expert_down_dtype=ttnn.bfloat8_b):
+        return TtRoutedExperts.cache_complete(cache_dir, mesh, expert_dtype, expert_down_dtype)
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """x [1,1,T,H] bf16 (T multiple of 32; replicated over the TP columns) -> [1,1,T,H] replicated."""

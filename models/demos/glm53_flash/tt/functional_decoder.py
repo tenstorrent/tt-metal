@@ -44,6 +44,12 @@ Tensor contract (the HF residual is the mHC stream tensor ``[B, S, 4, 4096]``):
   place. Capturing a DSA layer whose ``max_seq_len`` exceeds 2051 is refused unless the caller opts
   in (``allow_sparse_range``), because a replay at a position > 2050 would attend densely, which is
   not HF semantics there (the sparse rows are never part of the captured graph).
+* ``release_weights`` / ``attach_layer``: weight streaming. ``release_weights`` deallocates every
+  device tensor the layer module holds (weights, folded constants, cached geometry scalars) and
+  detaches it, while the decoder keeps the autoregressive state (KDA slots / DSA latent cache +
+  pooled-key index) and ``next_start``; ``attach_layer`` re-arms it with a freshly built
+  ``TtDecoderLayer`` of the same layer. ``tt/model.py`` runs all 45 layers through one chip this
+  way (build -> run -> release per layer, the states persist across the passes).
 Use ``host_streams_to_device`` / ``device_streams_to_host`` at the test boundary only.
 
 Multi-chip (Phase 2, ``tt/mesh.py``): on a ``(rows, cols)`` mesh the columns are the tensor-parallel
@@ -71,6 +77,35 @@ from models.demos.glm53_flash.tt.dsa import TtLatentCache, decode_position_tenso
 from models.demos.glm53_flash.tt.mesh import GLMMesh
 
 TILE = 32
+
+# objects a weight walk must not enter: devices / meshes, and the per-mesh shared KDA history
+# exchange (its buffer and semaphores outlive every layer)
+_WALK_SKIP_TYPES = ("_HistoryExchange", "GlobalSemaphore", "MeshDevice", "Device", "GLMMesh")
+
+
+def device_tensors_of(obj, *, _seen: set | None = None, _out: list | None = None, _depth: int = 0) -> list[ttnn.Tensor]:
+    """Every ``ttnn.Tensor`` reachable from ``obj`` through attributes of the model's own objects
+    (``models.*`` classes: modules, dataclasses) and plain containers, deduplicated. Used by
+    ``FunctionalDecoder.release_weights``; the shared / device-level objects are not entered."""
+    seen = set() if _seen is None else _seen
+    out = [] if _out is None else _out
+    if id(obj) in seen or _depth > 16:
+        return out
+    seen.add(id(obj))
+    if isinstance(obj, ttnn.Tensor):
+        out.append(obj)
+    elif type(obj).__name__ in _WALK_SKIP_TYPES:
+        pass
+    elif isinstance(obj, (list, tuple, set)):
+        for v in obj:
+            device_tensors_of(v, _seen=seen, _out=out, _depth=_depth + 1)
+    elif isinstance(obj, dict):
+        for v in obj.values():
+            device_tensors_of(v, _seen=seen, _out=out, _depth=_depth + 1)
+    elif hasattr(obj, "__dict__") and type(obj).__module__.startswith("models."):
+        for v in vars(obj).values():
+            device_tensors_of(v, _seen=seen, _out=out, _depth=_depth + 1)
+    return out
 
 
 def host_streams_to_device(
@@ -120,11 +155,13 @@ class FunctionalDecoder(LightweightModule):
         max_seq_len: int,
         block_size: int = TILE,
     ):
-        self.layer = layer
+        self.layer: TtDecoderLayer | None = layer
         self.cfg = layer.cfg
         self.device = layer.device
         self.mesh: GLMMesh = layer.mesh
         self.layer_idx = layer.layer_idx
+        self.is_kda = layer.is_kda
+        self.is_moe = layer.is_moe
         self.max_batch = max_batch  # user slots per mesh row
         self.total_users = max_batch * self.mesh.rows
         self.max_seq_len = max_seq_len
@@ -175,15 +212,49 @@ class FunctionalDecoder(LightweightModule):
         )
         return cls(layer, max_batch=max_batch, max_seq_len=max_seq_len, **kwargs)
 
+    # ------------------------------------------------------- weight streaming
+    @property
+    def weights_attached(self) -> bool:
+        return self.layer is not None
+
+    def release_weights(self) -> int:
+        """Deallocate every device tensor of the attached layer module and detach it (the KDA slots /
+        DSA cache / index and ``next_start`` stay). Returns the number of buffers released. The
+        decoder refuses forwards until ``attach_layer``."""
+        if self.layer is None:
+            return 0
+        n = 0
+        for t in device_tensors_of(self.layer):
+            if t.is_allocated():
+                ttnn.deallocate(t)
+                n += 1
+        self.layer = None
+        return n
+
+    def attach_layer(self, layer: TtDecoderLayer):
+        """Re-arm the decoder with freshly built weights of the same layer (after ``release_weights``)."""
+        if self.layer is not None:
+            raise ValueError("release_weights first")
+        if layer.layer_idx != self.layer_idx or layer.is_kda != self.is_kda or layer.is_moe != self.is_moe:
+            raise ValueError(f"layer {layer.layer_idx} does not match this decoder (layer {self.layer_idx})")
+        if layer.device is not self.device:
+            raise ValueError("the new layer must live on the decoder's device")
+        self.layer = layer
+
+    def _require_weights(self) -> TtDecoderLayer:
+        if self.layer is None:
+            raise RuntimeError(f"layer {self.layer_idx}: weights released; attach_layer before a forward")
+        return self.layer
+
     # ------------------------------------------------------------------ state
     def _state_for_prefill(self, user: int, start: int = 0) -> tuple[LayerState, list[ttnn.Tensor]]:
         """The layer state a prefill chunk of ``user`` starts from, plus the temporaries to release
         after the chunk. KDA: a zero state for a new prompt (start == 0), otherwise the user's
         current carries read out of the persistent batched state (slot ``user``)."""
-        if not self.layer.is_kda:
+        if not self.is_kda:
             return LayerState(cache=self.cache), []
         if start == 0:
-            return LayerState(kda=self.layer.attn.allocate_state(1)), []
+            return LayerState(kda=self._require_weights().attn.allocate_state(1)), []
         src = self.kda_batched
         if self.max_batch == 1:  # ttKDA only reads its input state; the new carries are fresh tensors
             return LayerState(kda=src), []
@@ -217,7 +288,7 @@ class FunctionalDecoder(LightweightModule):
     def _state_for_decode(self, batch: int) -> LayerState:
         if batch != self.max_batch:
             raise ValueError(f"decode batch {batch} must equal max_batch {self.max_batch} (fixed user slots)")
-        if not self.layer.is_kda:
+        if not self.is_kda:
             return LayerState(cache=self.cache)
         return LayerState(kda=self.kda_batched)
 
@@ -279,11 +350,12 @@ class FunctionalDecoder(LightweightModule):
             )
         if self.mesh.rows > 1:
             raise NotImplementedError("prefill on a multi-row mesh is not wired yet (single-row / single-chip only)")
+        layer = self._require_weights()
         state, temporaries = self._state_for_prefill(user, start)
-        out, new_state = self.layer.prefill_forward(streams, state, user=user, seq_len=seq_len, start=start)
+        out, new_state = layer.prefill_forward(streams, state, user=user, seq_len=seq_len, start=start)
         for t in temporaries:
             ttnn.deallocate(t)
-        if self.layer.is_kda:
+        if self.is_kda:
             self._write_user_kda_state(user, new_state.kda)
         self.next_start[user] = start + seq_len
         return out
@@ -292,16 +364,13 @@ class FunctionalDecoder(LightweightModule):
         """One token per user slot. DSA layers pick the dense (traceable) or sparse path from the
         host positions carried by ``positions``."""
         B = streams.shape[-2]
+        layer = self._require_weights()
         if any(p >= self.max_seq_len for p in positions.host):
             raise ValueError(f"positions {positions.host} exceed max_seq_len {self.max_seq_len}")
-        if (
-            self.mesh.rows > 1
-            and not self.layer.is_kda
-            and any(p > self.layer.attn.dense_exact_max_pos for p in positions.host)
-        ):
+        if self.mesh.rows > 1 and not self.is_kda and any(p > layer.attn.dense_exact_max_pos for p in positions.host):
             raise NotImplementedError("sparse DSA decode (positions > 2050) on a multi-row mesh is not wired yet")
-        out, new_state = self.layer.decode_forward(streams, self._state_for_decode(B), positions=positions)
-        if self.layer.is_kda:
+        out, new_state = layer.decode_forward(streams, self._state_for_decode(B), positions=positions)
+        if self.is_kda:
             assert new_state.kda is self.kda_batched, "KDA decode must update the persistent state in place"
         self.next_start = [p + 1 for p in positions.host]  # a prefill chunk may continue after decode
         return out
@@ -318,13 +387,10 @@ class FunctionalDecoder(LightweightModule):
         slot + index maintenance), HF-exact through position 2050: a DSA layer whose ``max_seq_len``
         exceeds 2051 is refused unless ``allow_sparse_range`` (a replay at a position > 2050 would
         attend densely instead of taking the eager per-user sparse row, which is not HF semantics)."""
-        if (
-            not self.layer.is_kda
-            and self.max_seq_len > self.layer.attn.dense_exact_max_pos + 1
-            and not allow_sparse_range
-        ):
+        layer = self._require_weights()
+        if not self.is_kda and self.max_seq_len > layer.attn.dense_exact_max_pos + 1 and not allow_sparse_range:
             raise ValueError(
-                f"traced decode is HF-exact only through position {self.layer.attn.dense_exact_max_pos}; this decoder "
+                f"traced decode is HF-exact only through position {layer.attn.dense_exact_max_pos}; this decoder "
                 f"allows max_seq_len={self.max_seq_len}. Use eager decode_forward beyond, or pass allow_sparse_range=True"
             )
         warm = self.decode_forward(streams, positions=positions)
