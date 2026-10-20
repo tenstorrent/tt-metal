@@ -99,6 +99,14 @@ the DSA cache/index of the prefilled user land in slot ``user`` of EVERY row (pe
 scratch page tables are the next step). `tt/mesh_model.py::prefill` + `test_mesh_model.py::test_mesh_model_ttft`
 measure the prompt -> first token time.
 
+| `test_mesh_sp_prefill.py` (rows-2-3 block, S=1000, FunctionalDecoder API) | prefill vs HF rows | per row-slab | decode at 1000/1001 vs HF (both rows) |
+|---|---|---|---|
+| layer 0 KDA+dense | 0.999842 | 0.999830 / 0.999834 | 0.99995 |
+| layer 3 DSA+MoE | 0.999981 | 0.999952 / 0.999956 | 0.99995 |
+| layer 4 KDA+MoE | 1.000000 | 0.999998 / 1.000000 | 0.99999 |
+
+Log `test_sp_prefill_lb2.log` (first-call walls include compile: 15.1 / 10.8 / 0.7 s).
+
 ## Root cause of the TP4 sparse-row gap (2026-10-20)
 
 `test_tp4_sparse_prefill_layer3` first gave rows >= 2048 at 0.99777 (single chip 0.99990) while the
