@@ -30,6 +30,11 @@ static_assert(sizeof(launch_msg_t) % TT_ARCH_MAX_NOC_WRITE_ALIGNMENT == 0);
 static_assert(offsetof(subordinate_map_t, dm1) == 0);
 
 static_assert(sizeof(tt::tt_fabric::routing_l1_info_t) == MEM_ROUTING_TABLE_SIZE, "Struct size mismatch!");
+// Horizon routing table must fit within the reserved routing table region.
+// MEM_ROUTING_TABLE_SIZE is expected to be 2704 bytes.
+static_assert(
+    sizeof(tt::tt_fabric::fabric_over_noc_routing_l1_info_t) == MEM_ROUTING_TABLE_SIZE,
+    "fabric_over_noc_routing_l1_info_t struct size mismatch");
 static_assert(
     sizeof(tt::tt_fabric::tensix_fabric_connections_l1_info_t) == MEM_TENSIX_FABRIC_CONNECTIONS_SIZE,
     "Struct size mismatch!");

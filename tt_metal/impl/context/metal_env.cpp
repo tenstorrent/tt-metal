@@ -468,10 +468,17 @@ void MetalEnvImpl::initialize_fabric_config() {
         return;
     }
 
-    this->get_cluster().configure_ethernet_cores_for_fabric_routers(
-        this->fabric_config_, this->num_fabric_active_routing_planes_);
     auto& cp = this->get_control_plane();
-    cp.configure_routing_tables_for_fabric_ethernet_channels();
+    if (cp.is_fabric_over_noc()) {
+        // Horizon (QUASAR arch + HORIZON variant): no Ethernet fabric routers.
+        // Routing tables are built from crossbar flat addresses via get_flat_address().
+        cp.configure_routing_tables_for_fabric_over_noc();
+    } else {
+        // WH/BH/Quasar: Ethernet-based routing.
+        this->get_cluster().configure_ethernet_cores_for_fabric_routers(
+            this->fabric_config_, this->num_fabric_active_routing_planes_);
+        cp.configure_routing_tables_for_fabric_ethernet_channels();
+    }
 }
 
 void MetalEnvImpl::initialize_fabric_tensix_datamover_config(const tt_fabric::FabricTensixSessionInputs& inputs) {

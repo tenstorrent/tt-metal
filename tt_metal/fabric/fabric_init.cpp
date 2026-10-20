@@ -52,6 +52,10 @@ std::unique_ptr<tt::tt_metal::Program> create_and_compile_fabric_program(
     tt::tt_metal::MetalEnvImpl& env_impl,
     const tt::tt_metal::DispatchCoreConfig& dispatch_core_config,
     tt::tt_metal::IDevice* device) {
+    if (env_impl.get_control_plane().is_fabric_over_noc()) {
+        // Horizon uses NOC crossbar for inter-chip communication; no ERISC fabric firmware needed.
+        return nullptr;
+    }
     if (tt_fabric::is_tt_fabric_config(env_impl.get_fabric_config())) {
         return create_and_compile_tt_fabric_program(
             env_impl.get_control_plane().get_fabric_context(),
@@ -63,6 +67,10 @@ std::unique_ptr<tt::tt_metal::Program> create_and_compile_fabric_program(
 
 void configure_fabric_cores(tt::tt_metal::MetalEnvImpl& env_impl, tt::tt_metal::IDevice* device) {
     auto soc_desc = env_impl.get_cluster().get_soc_desc(device->id());
+    if (soc_desc.arch == tt::ARCH::QUASAR &&
+        soc_desc.get_arch_descriptor().get_ip_variant() == tt::IpVariant::HORIZON) {
+        return;  // Horizon uses crossbar; no ERISC cores to configure.
+    }
     const auto& control_plane = env_impl.get_control_plane();
     const auto fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(device->id());
     const auto router_chans_and_direction = control_plane.get_active_fabric_eth_channels(fabric_node_id);
