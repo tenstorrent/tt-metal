@@ -223,8 +223,8 @@ class TtPrefillRuntime:
         """Re-target the resident model at a different per-user KV-cache capacity WITHOUT rebuilding it.
 
         Everything sized by ``max_seq_len`` lives outside the weights: the engine-owned KV cache (the
-        caller re-allocates it with the adapter's ``allocate_kv_cache``, which picks slot caches or a paged pool per
-        stage, and passes the new handle into ``compile`` /
+        caller re-allocates it at the new capacity, of the kind stage_is_paged gives its layers (a paged pool holds
+        fixed_pool_pages pages and the fixed page table), and passes the new handle into ``compile`` /
         ``prefill_chunk``), the indexed RoPE tables (rebuilt here) and the config the asserts / compile
         sweep / ``gather_layer`` un-rotation read (swapped here). The CCL scratch buffers are keyed by
         shape, so a new capacity just adds an entry. ``forward_tokens_budget`` stays fixed: it is baked into the
