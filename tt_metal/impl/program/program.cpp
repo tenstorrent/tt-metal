@@ -2277,7 +2277,8 @@ void detail::ProgramImpl::allocate_scratchpads(const IDevice* device) {
                     continue;
                 }
 
-                DeviceAddr addr = allocate_scratchpad(this->dfb_allocation_metadata_, kernel_cores, handle.size_bytes, alignment);
+                DeviceAddr addr =
+                    allocate_scratchpad(this->dfb_allocation_metadata_, kernel_cores, handle.size_bytes, alignment);
                 set_address_on_scratchpad(addr, handle, *kernel);
             }
         }
