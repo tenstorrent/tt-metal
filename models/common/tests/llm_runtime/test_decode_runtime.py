@@ -1173,8 +1173,6 @@ def test_capture_plan_describes_full_step_refresh_and_typed_persistent_inputs(mo
 
 
 def test_capture_plan_readmits_its_own_sampling_state_before_capture(monkeypatch):
-    # The trace compiler prepares every plan before the first capture; with two
-    # sampled decode traces the lane state is left at the last one prepared.
     runtime = make_runtime()
     resets = []
     runtime._sampling_state_controller = SimpleNamespace(reset=lambda state, prepared: resets.append(prepared))

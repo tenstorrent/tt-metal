@@ -574,9 +574,6 @@ class DecodeRuntime:
                 advance_seeds=False,
             )
 
-        # The trace compiler prepares every plan before the first capture, and the
-        # lane has one sampling state: re-admit this trace's sampling identity
-        # right before its own capture, outside the recorded body.
         return DecodeCapturePlan(prepare_inputs=prepare_inputs, capture=capture, before_capture=reset_sampling_state)
 
     def refresh_trace(

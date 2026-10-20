@@ -42,10 +42,8 @@ class WarmupConfig:
     supported trace lengths, falling back to 128. Logits coverage is always
     required. Forced-top-k prefill and greedy decode coverage are added when
     dynamic warmup enables device sampling. Additional top-k decode coverage is
-    explicitly opt in. ``include_log_probs`` adds the selected-token logprob
-    variant of every sampled prefill shape and of decode on meshes that compute
-    logprobs (8 or 32 devices); requests that ask for logprobs take the top-k
-    path even when greedy, so they need it after trace activation.
+    explicitly opt in. ``include_log_probs`` adds selected-token logprob
+    variants on meshes that compute logprobs.
     """
 
     prefill_seq_lens: tuple[int, ...] | None = None

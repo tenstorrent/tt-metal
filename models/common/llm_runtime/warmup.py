@@ -70,7 +70,7 @@ class WarmupCoordinatorConfig:
     decode_trace_enabled: bool
     eager_plan: WarmupPlan
     sampled_plan: WarmupPlan
-    log_probs_supported: bool = False  # The mesh computes selected-token logprobs (8 or 32 devices).
+    log_probs_supported: bool = False
 
     def __post_init__(self) -> None:
         if not isinstance(self.warmup, WarmupConfig):
@@ -419,7 +419,6 @@ class WarmupCoordinator:
                 and (
                     case.sampling_path == "argmax"
                     or (case.sampling_path == "topk" and self.config.prime_q128_tile_ends)
-                    # Greedy requests with logprobs leave argmax for this path.
                     or (case.log_probs and self.config.allow_force_argmax)
                 )
             ):
@@ -709,9 +708,6 @@ def _build_plan(
             decode_paths.append("topk")
     decode = [WarmupCase("decode", lane_batch_size, None, sampling_path) for sampling_path in decode_paths]
     if can_sample_on_device and log_probs_supported and warmup.include_log_probs:
-        # Greedy requests with logprobs also take top-k; logprobs are part of program identity.
-        # Only meshes that compute logprobs get these variants: elsewhere they would run the
-        # same device work as plain top-k and only add traces to the reserved trace region.
         prefill.extend([replace(case, log_probs=True) for case in prefill if case.sampling_path == "topk"])
         decode.append(WarmupCase("decode", lane_batch_size, None, "topk", log_probs=True))
     return WarmupPlan(tuple(prefill), tuple(decode))

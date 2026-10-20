@@ -224,8 +224,7 @@ class Sampling1D(LightweightModule):
 
     @property
     def log_probs_supported(self) -> bool:
-        """Whether this mesh computes selected-token logprobs; known before device buffers load."""
-        from models.common.utils import LogProbsCalculator  # lazy: transitively imports torch
+        from models.common.utils import LogProbsCalculator
 
         mesh_device = self.config.mesh_device
         return mesh_device is not None and LogProbsCalculator.supports_mesh(mesh_device)

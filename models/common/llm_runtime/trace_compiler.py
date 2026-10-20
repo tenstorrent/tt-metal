@@ -94,8 +94,6 @@ class TraceCapturePlan:
     workspace_fingerprint: Any = None
     prime: Callable[[PersistentInputs], Any] | None = None
     release_prime_output: Callable[[Any], list[BaseException]] | None = None
-    # Runs right before this trace's prime / capture, after every plan's
-    # prepare_inputs: restores state that a later plan's prepare_inputs replaced.
     before_capture: Callable[[PersistentInputs], None] | None = None
 
     def __post_init__(self) -> None:

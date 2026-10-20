@@ -418,7 +418,6 @@ class LogProbsCalculator:
 
     @staticmethod
     def supports_mesh(mesh_device) -> bool:
-        """Whether a mesh of this size computes logprobs (checkable before the calculator exists)."""
         return mesh_device.get_num_devices() in (8, 32)
 
     def _is_supported(self):
