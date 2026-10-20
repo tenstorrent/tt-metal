@@ -94,6 +94,13 @@ class GroupedMoE:
                                      mesh_mapper=rep)  # fmt: skip
         # A_g in L1 (the down reader's single-tile reads skip DRAM: round 23.8 -> 23.3 ms at ISL 256; B32_GMOE_AG_L1=0)
         ag_mc = ttnn.L1_MEMORY_CONFIG if os.environ.get("B32_GMOE_AG_L1", "1") == "1" else ttnn.DRAM_MEMORY_CONFIG
+        # (height sharded one 32-row slot per core, B32_GMOE_AG_SHARDED: the down reader loads a slot in one read)
+        self.ag_sharded = os.environ.get("B32_GMOE_AG_SHARDED", "1") == "1"
+        if self.ag_sharded:
+            ag_mc = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1,
+                ttnn.ShardSpec(self._first_cores(MAX_SLOTS), [TILE, self.ku * TILE], ttnn.ShardOrientation.ROW_MAJOR),
+            )  # fmt: skip
         self.ag = zeros([1, 1, S, self.ku * TILE], ttnn.bfloat8_b, ag_mc)
         # Y_g: the down outputs per slot row (the combine's K side), BFP8: down + combine 28 us faster per layer than
         # BF16, output PCC vs the float reference 0.99991 (BF16 0.99995)
@@ -343,7 +350,8 @@ class GroupedMoE:
         kernels = [
             ttnn.KernelDescriptor(
                 kernel_source=str(KERNEL_DIR / "gmoe_down_reader.cpp"), core_ranges=cores, compile_time_args=rct,
-                runtime_args=[], common_runtime_args=[t.buffer_address() for t in io], defines=[("GMOE_DEPTH", str(self.dn_depth))],
+                runtime_args=[], common_runtime_args=[t.buffer_address() for t in io],
+                defines=[("GMOE_DEPTH", str(self.dn_depth))] + ([("GMOE_AG_SHARDED", "1")] if self.ag_sharded else []),
                 config=dm(processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.NOC_0, noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC),
             ),
             ttnn.KernelDescriptor(

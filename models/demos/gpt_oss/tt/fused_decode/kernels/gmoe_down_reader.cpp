@@ -80,10 +80,15 @@ void kernel_main() {
             // one slot's KD tiles per transaction-id wait (an id counts at most 255 outstanding requests)
             noc_async_read_set_trid(A_TRID, 0);
             for (uint32_t i = 0; i < m; ++i) {
+#ifdef GMOE_AG_SHARDED
+                // A_g height sharded one slot per core: the slot's KD tiles contiguous, one read
+                noc_async_read(s_a.get_noc_addr((p.base[e] + i) * KD, 0, 0), l1 + i * KD * a_tile, KD * a_tile, 0);
+#else
                 for (uint32_t k = 0; k < KD; ++k) {
                     noc_async_read(
                         s_a.get_noc_addr((p.base[e] + i) * KD + k, 0, 0), l1 + (i * KD + k) * a_tile, a_tile, 0);
                 }
+#endif
                 noc_async_read_barrier_with_trid(A_TRID, 0);
             }
             noc_async_read_set_trid(0, 0);
