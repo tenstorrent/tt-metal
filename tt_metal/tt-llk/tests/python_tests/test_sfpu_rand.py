@@ -11,8 +11,10 @@ mode leaves elements outside the range (issue #14213).
 
 import struct
 
+import pytest
 import torch
 from conftest import skip_for_quasar
+from helpers.chip_architecture import ChipArchitecture
 from helpers.constraints import get_valid_dest_accumulation_modes
 from helpers.format_config import DataFormat
 from helpers.golden_generators import ELEMENTS_PER_TILE, FACES_PER_TILE
@@ -22,7 +24,9 @@ from helpers.stimuli_config import StimuliConfig
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import RAND_RANGE, RAND_SEED
 
-FORMATS = input_output_formats([DataFormat.Float16_b, DataFormat.Float32])
+FORMATS = input_output_formats(
+    [DataFormat.Float16_b, DataFormat.Float16, DataFormat.Float32]
+)
 
 # (from, scale): a positive range, and a negative one where BF16 truncation moves toward
 # the upper bound. All endpoints are exact in BF16.
@@ -34,7 +38,7 @@ SENTINEL = 100.0
 FACE_ELEMENTS = ELEMENTS_PER_TILE // FACES_PER_TILE
 # Draws must reach this fraction of the values the grid can represent in the range.
 MIN_COVERAGE = 0.8
-# A face has only 256 draws, so collisions on a small grid leave fewer distinct values.
+# A face has only 256 draws, so its distinct count strays further from the expectation.
 MIN_FACE_COVERAGE = MIN_COVERAGE / 2
 
 
@@ -48,18 +52,31 @@ def _valid_dest_acc(formats):
     return get_valid_dest_accumulation_modes(formats)
 
 
-def _bf16_values_in(low: float, high: float) -> int:
-    grid = torch.arange(1 << 16, dtype=torch.int32).to(torch.int16).view(torch.bfloat16)
+def _grid_values_in(dtype, low: float, high: float) -> int:
+    grid = torch.arange(1 << 16, dtype=torch.int32).to(torch.int16).view(dtype)
     grid = grid.to(torch.float32)
     return int(((grid >= low) & (grid <= high)).sum())
 
 
+def _value_grid(formats, dest_acc):
+    """The coarsest 16-bit format the draws pass through, or None if they stay FP32."""
+    stages = [formats.output_format]
+    if dest_acc == DestAccumulation.No:
+        stages.append(formats.input_format)
+    if DataFormat.Float16_b in stages:
+        return torch.bfloat16
+    if DataFormat.Float16 in stages:
+        return torch.float16
+    return None
+
+
 def _expected_distinct(formats, dest_acc, low, high, count):
-    bf16_grid = (
-        dest_acc == DestAccumulation.No or formats.output_format == DataFormat.Float16_b
-    )
-    representable = _bf16_values_in(low, high) if bf16_grid else count
-    return min(representable, count)
+    dtype = _value_grid(formats, dest_acc)
+    if dtype is None:
+        return count
+    values = _grid_values_in(dtype, low, high)
+    # Expected distinct values among `count` uniform draws over `values` grid points.
+    return values * (1 - (1 - 1 / values) ** count)
 
 
 @skip_for_quasar
@@ -69,6 +86,15 @@ def _expected_distinct(formats, dest_acc, low, high, count):
     rand_range=RANGES,
 )
 def test_sfpu_rand(formats, dest_acc, rand_range):
+    if (
+        TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
+        and formats.input_format == DataFormat.Float16
+        and dest_acc == DestAccumulation.No
+    ):
+        pytest.skip(
+            "Blackhole SFPSTORE takes its 16-bit Dest format from ALU_FORMAT_SPEC_REG1_SrcB, "
+            "which no Blackhole configure path programs, so a Float16 Dest gets BF16 draws"
+        )
     rand_from, rand_scale = rand_range
     low, high = rand_from, rand_from + rand_scale
 
@@ -116,8 +142,8 @@ def test_sfpu_rand(formats, dest_acc, rand_range):
     expected = _expected_distinct(formats, dest_acc, low, high, ELEMENTS_PER_TILE)
     distinct = int(torch.unique(res).numel())
     assert distinct >= MIN_COVERAGE * expected, (
-        f"only {distinct} distinct draws in the tile; the grid admits {expected} "
-        f"values in [{low}, {high}]"
+        f"only {distinct} distinct draws in the tile; uniform draws on the grid of "
+        f"[{low}, {high}] give about {expected:.0f}"
     )
 
     faces = res.view(FACES_PER_TILE, FACE_ELEMENTS)
@@ -126,7 +152,7 @@ def test_sfpu_rand(formats, dest_acc, rand_range):
         face_distinct = int(torch.unique(faces[face]).numel())
         assert face_distinct >= MIN_FACE_COVERAGE * face_expected, (
             f"face {face} holds only {face_distinct} distinct draws "
-            f"(grid admits {face_expected})"
+            f"(uniform draws give about {face_expected:.0f})"
         )
         for other in range(face):
             assert not torch.equal(
