@@ -60,10 +60,37 @@ ProgramDescriptor ModulatedDeformConv2dOperation::create_descriptor(
     const uint32_t input_page_nbytes = input.buffer()->aligned_page_size();
     const uint32_t offset_mask_page_nbytes = offset_mask.buffer()->aligned_page_size();
 
-    const auto compute_grid = input.device()->compute_with_storage_grid_size();
-    auto [num_cores, all_cores, core_group_1, core_group_2, blocks_per_core_1, blocks_per_core_2] =
-        split_work_to_cores(compute_grid, num_blocks);
-    const uint32_t max_blocks = std::max(blocks_per_core_1, blocks_per_core_2);
+    // Each core's blocks, in order. A height-sharded input fixes them: a core takes the blocks of its
+    // own shard, so most corners lie in its own L1 or a neighbour's, and a core whose shard is empty
+    // still joins the weight multicast. Otherwise the blocks spread evenly over the grid.
+    const bool sharded_input = input.memory_config().is_sharded();
+    CoreRangeSet all_cores;
+    std::vector<CoreCoord> cores;
+    std::vector<uint32_t> core_blocks;
+    if (sharded_input) {
+        const auto& spec = *input.shard_spec();
+        all_cores = spec.grid;
+        cores = corerange_to_cores(
+            all_cores, all_cores.num_cores(), spec.orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR);
+        const uint32_t shard_blocks = spec.shape[0] / TILE_ROWS;
+        for (uint32_t i = 0; i < cores.size(); ++i) {
+            const uint32_t first = std::min(num_blocks, i * shard_blocks);
+            core_blocks.push_back(std::min(num_blocks, first + shard_blocks) - first);
+        }
+    } else {
+        const auto compute_grid = input.device()->compute_with_storage_grid_size();
+        auto [num_cores, grid_cores, core_group_1, core_group_2, blocks_per_core_1, blocks_per_core_2] =
+            split_work_to_cores(compute_grid, num_blocks);
+        all_cores = grid_cores;
+        cores = corerange_to_cores(all_cores, num_cores, /*row_wise=*/true);
+        for (const auto& core : cores) {
+            core_blocks.push_back(
+                core_group_1.contains(core) ? blocks_per_core_1
+                                            : (core_group_2.contains(core) ? blocks_per_core_2 : 0));
+        }
+    }
+    const uint32_t num_cores = cores.size();
+    const uint32_t max_blocks = *std::max_element(core_blocks.begin(), core_blocks.end());
 
     constexpr uint8_t offset_mask_arena_cb = tt::CBIndex::c_0;
     constexpr uint8_t corner_block_cb = tt::CBIndex::c_2;
@@ -86,13 +113,6 @@ ProgramDescriptor ModulatedDeformConv2dOperation::create_descriptor(
     constexpr uint8_t column_cb = tt::CBIndex::c_18;
     constexpr uint8_t acc_cb = tt::CBIndex::c_19;
     constexpr uint8_t bias_cb = tt::CBIndex::c_20;
-
-    const auto cores = corerange_to_cores(all_cores, num_cores, /*row_wise=*/true);
-    std::vector<uint32_t> core_blocks;
-    for (const auto& core : cores) {
-        core_blocks.push_back(
-            core_group_1.contains(core) ? blocks_per_core_1 : (core_group_2.contains(core) ? blocks_per_core_2 : 0));
-    }
 
     // A core's blocks are consecutive output rows, which sample a band of input rows: the dilated
     // kernel's rows plus the bottom corners' row, widened by a margin on each side for the offsets.
@@ -181,8 +201,10 @@ ProgramDescriptor ModulatedDeformConv2dOperation::create_descriptor(
         s.out_channels,
         max_blocks * out_tiles * tile_nbytes / 1024,
         2 * chunk_tiles * out_tiles * tile_nbytes / 1024);
-    // The band is optional: without room for it the readers fetch the corners from the input in DRAM.
-    const uint64_t band_budget = l1_free > other_cbs + kBandL1Reserve ? l1_free - other_cbs - kBandL1Reserve : 0;
+    // The band is optional: without room for it the readers fetch the corners from the input where it
+    // is. A sharded input needs none, its corners being in the core's own shard or a neighbour's.
+    const uint64_t band_budget =
+        !sharded_input && l1_free > other_cbs + kBandL1Reserve ? l1_free - other_cbs - kBandL1Reserve : 0;
     uint32_t band_margin = 0;
     uint32_t band_pages = 0;
     bool use_band = false;
@@ -257,6 +279,7 @@ ProgramDescriptor ModulatedDeformConv2dOperation::create_descriptor(
             weight_sender_sem_id,
             weight_receiver_sem_id,
             chunk_tiles,
+            sharded_input ? 1u : 0u,
         };
         TensorAccessorArgs(*input.buffer()).append_to(ct);
         TensorAccessorArgs(*offset_mask.buffer()).append_to(ct);
@@ -272,7 +295,13 @@ ProgramDescriptor ModulatedDeformConv2dOperation::create_descriptor(
     reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader_desc.core_ranges = all_cores;
     reader_desc.compile_time_args = reader_ct(true);
-    reader_desc.config = ReaderConfigDescriptor{};
+    if (sharded_input) {
+        // Both readers issue on either NoC, so each corner can take the NoC that suits its shard.
+        reader_desc.config = DataMovementConfigDescriptor{
+            .processor = DataMovementProcessor::RISCV_1, .noc = NOC::NOC_0, .noc_mode = NOC_MODE::DM_DYNAMIC_NOC};
+    } else {
+        reader_desc.config = ReaderConfigDescriptor{};
+    }
 
     KernelDescriptor odd_reader_desc;
     odd_reader_desc.kernel_source = reader_desc.kernel_source;
@@ -280,7 +309,12 @@ ProgramDescriptor ModulatedDeformConv2dOperation::create_descriptor(
     odd_reader_desc.core_ranges = all_cores;
     odd_reader_desc.compile_time_args = reader_ct(false);
     // The second copy runs on the other data-movement RISC-V and NoC, which a writer config selects.
-    odd_reader_desc.config = WriterConfigDescriptor{};
+    if (sharded_input) {
+        odd_reader_desc.config = DataMovementConfigDescriptor{
+            .processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_1, .noc_mode = NOC_MODE::DM_DYNAMIC_NOC};
+    } else {
+        odd_reader_desc.config = WriterConfigDescriptor{};
+    }
 
     KernelDescriptor compute_desc;
     compute_desc.kernel_source = std::string(kKernelDir) + "compute/compute_deform_conv.cpp";
@@ -333,9 +367,6 @@ ProgramDescriptor ModulatedDeformConv2dOperation::create_descriptor(
     for (uint32_t i = 0; i < cores.size(); ++i) {
         const auto& core = cores[i];
         const uint32_t blocks_here = core_blocks[i];
-        if (blocks_here == 0) {
-            continue;
-        }
         const auto [band_first_page, band_core_pages] =
             use_band ? band(block_cursor, blocks_here, band_margin) : std::pair<uint32_t, uint32_t>{0, 0};
         KernelDescriptor::RTArgList reader_args;

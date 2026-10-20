@@ -18,13 +18,19 @@ using tt::tt_metal::TensorMemoryLayout;
 
 constexpr std::string_view op = "modulated_deform_conv2d";
 
-void check_input_tensor(const Tensor& t, std::string_view name, const Tensor& ref) {
+void check_input_tensor(const Tensor& t, std::string_view name, const Tensor& ref, bool may_be_sharded = false) {
     TT_FATAL(t.storage_type() == StorageType::DEVICE, "{}: {} must be on device", op, name);
     TT_FATAL(t.device() == ref.device(), "{}: {} must be on the same device as input", op, name);
     TT_FATAL(t.dtype() == DataType::BFLOAT16, "{}: {} must be BFLOAT16, got {}", op, name, t.dtype());
     TT_FATAL(t.layout() == Layout::ROW_MAJOR, "{}: {} must be ROW_MAJOR, got {}", op, name, t.layout());
     TT_FATAL(
-        t.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED, "{}: {} must be INTERLEAVED", op, name);
+        t.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED ||
+            (may_be_sharded && t.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED),
+        "{}: {} must be INTERLEAVED{}, got {}",
+        op,
+        name,
+        may_be_sharded ? " or HEIGHT_SHARDED" : "",
+        t.memory_config().memory_layout());
     TT_FATAL(t.logical_shape().rank() == 4, "{}: {} must be rank 4, got {}", op, name, t.logical_shape());
     // The kernels address one page per row, its channels from the first byte, so a row must not
     // carry padding.
@@ -42,7 +48,7 @@ void check_input_tensor(const Tensor& t, std::string_view name, const Tensor& re
 DeformConvShapes derive_shapes(
     const ModulatedDeformConv2dOperation::operation_attributes_t& attrs,
     const ModulatedDeformConv2dOperation::tensor_args_t& args) {
-    check_input_tensor(args.input, "input", args.input);
+    check_input_tensor(args.input, "input", args.input, /*may_be_sharded=*/true);
     check_input_tensor(args.offset_mask, "offset_mask", args.input);
 
     const auto [k_h, k_w] = attrs.kernel_size;
@@ -104,6 +110,36 @@ DeformConvShapes derive_shapes(
         s.out_w,
         3 * s.kernel_positions,
         off);
+
+    // A height-sharded input sets the work split: each core takes the output rows of its own shard,
+    // so a shard must hold whole blocks of 32 rows and the output rows must be the input's.
+    if (args.input.memory_config().is_sharded()) {
+        const auto& spec = *args.input.shard_spec();
+        TT_FATAL(
+            args.input.buffer()->buffer_type() == tt::tt_metal::BufferType::L1,
+            "{}: a sharded input must be in L1",
+            op);
+        TT_FATAL(
+            spec.shape[1] == s.channels,
+            "{}: input shards must hold whole rows of {} channels, got {}",
+            op,
+            s.channels,
+            spec.shape[1]);
+        TT_FATAL(
+            spec.shape[0] % tt::constants::TILE_HEIGHT == 0,
+            "{}: input shard height must be a multiple of {}, got {}",
+            op,
+            tt::constants::TILE_HEIGHT,
+            spec.shape[0]);
+        TT_FATAL(
+            s.out_h == s.in_h && s.out_w == s.in_w,
+            "{}: a sharded input needs the output's height and width, got input {}x{}, output {}x{}",
+            op,
+            s.in_h,
+            s.in_w,
+            s.out_h,
+            s.out_w);
+    }
 
     const auto& w = args.weight;
     TT_FATAL(w.storage_type() == StorageType::DEVICE, "modulated_deform_conv2d: weight must be on device");
@@ -189,7 +225,9 @@ ttnn::Tensor modulated_deform_conv2d(
     const std::optional<MemoryConfig>& memory_config) {
     using OperationType = ttnn::operations::experimental::modulated_deform_conv2d::ModulatedDeformConv2dOperation;
     auto attrs = OperationType::operation_attributes_t{
-        .output_memory_config = memory_config.value_or(input.memory_config()),
+        // The output is interleaved; a sharded input's would not be, so its default is DRAM.
+        .output_memory_config = memory_config.value_or(
+            input.memory_config().is_sharded() ? ttnn::DRAM_MEMORY_CONFIG : input.memory_config()),
         .kernel_size = kernel_size,
         .stride = stride,
         .padding = padding,

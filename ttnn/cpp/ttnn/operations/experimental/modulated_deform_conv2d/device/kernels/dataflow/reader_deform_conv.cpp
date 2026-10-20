@@ -85,7 +85,10 @@ constexpr uint32_t MCAST_NUM_DESTS = get_compile_time_arg_val(33);
 constexpr uint32_t weight_sender_sem_id = get_compile_time_arg_val(34);
 constexpr uint32_t weight_receiver_sem_id = get_compile_time_arg_val(35);
 constexpr uint32_t CHUNK_TILES = get_compile_time_arg_val(36);  // input channels per pass / 32
-constexpr auto input_args = TensorAccessorArgs<37>();
+// A height-sharded input holds each core's own blocks' rows; corners outside them lie in a
+// neighbour's shard.
+constexpr bool INPUT_SHARDED = get_compile_time_arg_val(37);
+constexpr auto input_args = TensorAccessorArgs<38>();
 constexpr auto offset_mask_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
 constexpr auto output_args = TensorAccessorArgs<offset_mask_args.next_compile_time_args_offset()>();
 constexpr auto weight_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
@@ -257,8 +260,15 @@ void kernel_main() {
                      .noc_x_end = mcast_x1,
                      .noc_y_end = mcast_y1,
                      .addr = weight_slot_l1},
-                    true);
-                noc.async_writes_flushed();
+                    /*linked=*/!INPUT_SHARDED);
+                // A linked multicast holds its path until the semaphore follows it. With a sharded
+                // input the other reader issues on this NoC too, and its reads crossing a held path
+                // deadlock, so the slice goes unlinked and lands before the semaphore.
+                if constexpr (INPUT_SHARDED) {
+                    noc.async_write_barrier();
+                } else {
+                    noc.async_writes_flushed();
+                }
                 weight_receiver_sem.set_multicast(noc, mcast_x0, mcast_y0, mcast_x1, mcast_y1, MCAST_NUM_DESTS);
             }
         } else {
@@ -461,6 +471,20 @@ void kernel_main() {
                                                 ? band_a_l1 + in_band * input_page_nbytes
                                                 : band_b_l1 + (in_band - band_half) * input_page_nbytes);
                         noc_async_read(get_noc_addr(src_l1), dst_l1, STICK_NBYTES);
+                    } else if constexpr (INPUT_SHARDED) {
+                        // Corners in the previous shard go over NoC 0, in the next over NoC 1: on a
+                        // single NoC per reader, the reads toward one neighbour are up to 60% slower
+                        // than toward the other.
+                        const uint32_t shard_first = start_block * TILE_ROWS;
+                        const uint32_t shard_end = (start_block + num_blocks) * TILE_ROWS;
+                        const uint8_t read_noc = page_id < shard_first ? 0 : page_id >= shard_end ? 1 : noc_index;
+                        CoreLocalMem<uint32_t> dst(dst_l1);
+                        Noc(read_noc).async_read(
+                            input_acc,
+                            dst,
+                            STICK_NBYTES,
+                            {.page_id = page_id, .offset_bytes = chunk_offset},
+                            {.offset_bytes = 0});
                     } else {
                         CoreLocalMem<uint32_t> dst(dst_l1);
                         noc.async_read(
@@ -473,6 +497,9 @@ void kernel_main() {
                 }
             }
             noc.async_read_barrier();
+            if constexpr (INPUT_SHARDED) {
+                Noc(1 - noc_index).async_read_barrier();
+            }
             corner_block_cb.push_back(CORNERS * CHUNK_TILES);
         }
         if constexpr (LOADS_WEIGHT) {
