@@ -32,6 +32,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/buffer.hpp>
+#include <tt-metalium/experimental/byte_based_tensor_transfers.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
@@ -99,15 +100,17 @@ MeshTensor alloc(distributed::MeshDevice& md, BufferType bt) {
     return MeshTensor::allocate_on_device(md, spec);
 }
 
-void dope(const MeshTensor& t, uint32_t pattern) {
+void dope(MeshTensor& t, uint32_t pattern) {
     std::vector<uint32_t> v(kWords, pattern);
-    detail::WriteToBuffer(*t.mesh_buffer().get_reference_buffer(), v);
+    auto& cq = t.mutable_device().mesh_command_queue();
+    enqueue_write_tensor(cq, reinterpret_cast<const std::byte*>(v.data()), t);
+    distributed::Finish(cq);  // the write is non-blocking and `v` goes out of scope here
 }
 
 std::vector<uint32_t> readback(distributed::MeshCommandQueue& cq, const MeshTensor& t) {
-    std::vector<uint32_t> v;
+    std::vector<uint32_t> v(kWords);
     distributed::Finish(cq);
-    detail::ReadFromBuffer(*t.mesh_buffer().get_reference_buffer(), v);
+    enqueue_read_tensor(cq, t, reinterpret_cast<std::byte*>(v.data()));
     return v;
 }
 
