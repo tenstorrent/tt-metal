@@ -425,9 +425,6 @@ DramReadPlan get_dram_read_plan(
     constexpr uint64_t kMinPagesPerCoreFewCoresPerBank = 24;
     // Smaller pages (bfp8, bfp4) leave most ops compute-bound, and the flows were not faster for them.
     constexpr uint32_t kMinPageBytes = 2048;
-    // Pages per read barrier and per write flush.
-    constexpr uint32_t kReadBurst = 8;
-    constexpr uint32_t kWriteBurst = 2;
 
     // This runs for every unary op on every call, so the cheapest checks come first.
     if (op_chain.empty() || num_cores == 0 || num_dram_banks == 0) {
@@ -498,10 +495,6 @@ DramReadPlan get_dram_read_plan(
     if (plan.flow == DramReadFlow::None) {
         return {};
     }
-    if (plan.flow != DramReadFlow::StaticOnePage) {
-        plan.read_burst = kReadBurst;
-        plan.write_burst = kWriteBurst;
-    }
     if (plan.flow == DramReadFlow::WorkQueue) {
         plan.chunk_pages = work_queue_chunk_pages(pages_per_core, banks, many_cores_per_bank);
     }
@@ -514,6 +507,10 @@ DramReadPlan get_dram_read_plan(
     const tt::tt_metal::TensorSpec& output_spec,
     const tt::tt_metal::CoreRangeSet& worker_grid) {
     const auto* device = input.device();
+    // The work queue relies on how Wormhole and Blackhole dataflow buffers map to L1; the flows were measured there.
+    if (device->arch() != tt::ARCH::WORMHOLE_B0 && device->arch() != tt::ARCH::BLACKHOLE) {
+        return {};
+    }
     const auto grid = device->compute_with_storage_grid_size();
     return get_dram_read_plan(
         op_chain,

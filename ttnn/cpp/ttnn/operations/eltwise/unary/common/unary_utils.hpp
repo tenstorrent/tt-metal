@@ -46,11 +46,17 @@ struct DramReadPlan {
     uint32_t last_shard_pages = 0;
     uint32_t shard_width = 0;
     uint32_t row_pages = 0;
-    // Pages per read barrier and per write flush.
-    uint32_t read_burst = 1;
-    uint32_t write_burst = 1;
     uint32_t chunk_pages = 0;  // WorkQueue only
 };
+
+// Pages per read barrier and per write flush. They follow from the flow alone, so the program hash, which includes the
+// flow, covers the defines and buffer depths built from them.
+constexpr uint32_t read_burst(DramReadFlow flow) {
+    return flow == DramReadFlow::StaticBurst || flow == DramReadFlow::WorkQueue ? 8 : 1;
+}
+constexpr uint32_t write_burst(DramReadFlow flow) {
+    return flow == DramReadFlow::StaticBurst || flow == DramReadFlow::WorkQueue ? 2 : 1;
+}
 
 // Picks the read flow from the op chain's compute cost, the tensor layout and the pages per core; flow None for every
 // other tensor. num_cores counts the op's worker grid, num_device_cores the device's whole compute grid.

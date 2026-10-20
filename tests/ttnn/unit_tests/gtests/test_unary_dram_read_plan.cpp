@@ -208,8 +208,8 @@ TEST(UnaryDramReadPlan, WorkQueueChunks) {
     const DramReadPlan many = plan(UnaryOpType::RELU, interleaved(kManyCoresPerBank.cores * 15000), kManyCoresPerBank);
     ASSERT_EQ(many.flow, kQueue);
     EXPECT_EQ(many.chunk_pages, 100u);
-    EXPECT_EQ(many.read_burst, 8u);
-    EXPECT_EQ(many.write_burst, 2u);
+    EXPECT_EQ(read_burst(many.flow), 8u);
+    EXPECT_EQ(write_burst(many.flow), 2u);
     // With few cores per bank a chunk that is a multiple of the banks grows by a page: 2700 / 150 = 18 on 6 shards.
     const DramReadPlan few = plan(UnaryOpType::RELU, height_shards(6, 32400), kFewCoresPerBank);
     ASSERT_EQ(few.flow, kQueue);

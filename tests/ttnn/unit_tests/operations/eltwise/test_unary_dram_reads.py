@@ -142,7 +142,7 @@ def test_width_sharded_cores_start_in_few_shards(device, op_name):
     run_against_default_path(OPS[op_name], random_input(shape), device, dram_sharded(shape, WIDTH, num_shards))
 
 
-# A short last width shard keeps the interleaved page order.
+# A short last width shard: the flows need equal shards, so the op keeps the default path and must still be exact.
 def test_width_sharded_uneven(device):
     shape = [1, 1, 1024, 7 * 1024]
     memory_config = dram_sharded(shape, WIDTH, 7, shard_width=33 * 32)

@@ -548,7 +548,7 @@ ttnn::device_operation::ProgramArtifacts UnaryDeviceOperation::ProgramFactory::c
         .unique_id = IN_DFB,
         .entry_size = input_dfb_page_size,
         // Two bursts, so the next burst moves while compute works on the last one.
-        .num_entries = src_num_tiles_per_shard.value_or(2 * plan.read_burst),
+        .num_entries = src_num_tiles_per_shard.value_or(2 * read_burst(plan.flow)),
         .data_format_metadata = dfb_data_format_for_input,
         .borrowed_from = src_sharded ? std::optional<TensorParamName>(INPUT) : std::nullopt,
     });
@@ -565,7 +565,7 @@ ttnn::device_operation::ProgramArtifacts UnaryDeviceOperation::ProgramFactory::c
     dataflow_buffers.push_back(DataflowBufferSpec{
         .unique_id = OUT_DFB,
         .entry_size = output_dfb_page_size,
-        .num_entries = dst_num_tiles_per_shard.value_or(2 * plan.write_burst),
+        .num_entries = dst_num_tiles_per_shard.value_or(2 * write_burst(plan.flow)),
         .data_format_metadata = dfb_data_format_output,
         .borrowed_from = dst_sharded ? std::optional<TensorParamName>(OUTPUT) : std::nullopt,
     });
@@ -626,7 +626,7 @@ ttnn::device_operation::ProgramArtifacts UnaryDeviceOperation::ProgramFactory::c
                  {
                      {"SRC_SHARDED", src_sharded ? "1" : "0"},
                      {"RM_INTERLEAVED", rm_interleaved ? "1" : "0"},
-                     {"READ_BURST", std::to_string(plan.read_burst)},
+                     {"READ_BURST", std::to_string(read_burst(plan.flow))},
                      {"DRAM_FLOW", dram_flow ? "1" : "0"},
                      {"WORK_QUEUE", work_queue ? "1" : "0"},
                  }},
@@ -653,7 +653,7 @@ ttnn::device_operation::ProgramArtifacts UnaryDeviceOperation::ProgramFactory::c
                  {
                      {"DST_SHARDED", dst_sharded ? "1" : "0"},
                      {"RM_INTERLEAVED", rm_interleaved ? "1" : "0"},
-                     {"WRITE_BURST", std::to_string(plan.write_burst)},
+                     {"WRITE_BURST", std::to_string(write_burst(plan.flow))},
                      {"DRAM_FLOW", dram_flow ? "1" : "0"},
                      {"WORK_QUEUE", work_queue ? "1" : "0"},
                  }},

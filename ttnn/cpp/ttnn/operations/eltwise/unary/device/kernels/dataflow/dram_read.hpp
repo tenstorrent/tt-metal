@@ -293,6 +293,10 @@ struct QueueWriter {
         }
         serve_until([&] { return workers_done >= num_workers; });
         noc.async_atomic_barrier();  // the replies are non-posted increments
+        if (is_scheduler) {
+            // Every worker raised it before the first request, so it is complete; the next launch starts from 0.
+            Semaphore<>(sem::cleared).set(0);
+        }
     }
 
     // On the scheduler core, answers requests until ready() holds; elsewhere returns at once.
