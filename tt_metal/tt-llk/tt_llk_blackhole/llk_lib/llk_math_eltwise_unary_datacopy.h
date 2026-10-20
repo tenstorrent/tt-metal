@@ -574,6 +574,20 @@ inline void _llk_math_eltwise_unary_datacopy_init_(
     LLK_VALIDATE_TENSOR_SHAPE_MATH("_llk_math_eltwise_unary_datacopy_init_", tensor_shape);
     const std::uint32_t num_faces = tensor_shape.total_num_faces();
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
+    if constexpr (src_b_bcast_type == BroadcastType::COL)
+    {
+        // The COL MOP covers two faces and the execute runs it twice, so it needs a full 32x32 tile
+        // (4 faces of 16 rows). A 1x32 tile was seen to hang on Wormhole.
+        LLK_ASSERT(
+            tensor_shape.face_r_dim == MAX_FACE_R_DIM && tensor_shape.num_faces_r_dim == 2 && tensor_shape.num_faces_c_dim == 2,
+            "Column broadcast datacopy supports only 32x32 tiles");
+    }
+    if constexpr (type == DataCopyType::B2D && src_b_bcast_type == BroadcastType::ROW)
+    {
+        // The ROW MOP runs one pass per face. A 32x16 tile (2x1 face grid) gave wrong results on ttsim
+        // and is not covered on silicon, so it is blocked until a test proves it.
+        LLK_ASSERT(!(tensor_shape.num_faces_r_dim == 2 && tensor_shape.num_faces_c_dim == 1), "Row broadcast datacopy does not support 32x16 tiles");
+    }
     eltwise_unary_configure_addrmod<type, src_b_bcast_type>(dst_format);
 
     if constexpr (type == DataCopyType::A2D && src_b_bcast_type == BroadcastType::NONE)
