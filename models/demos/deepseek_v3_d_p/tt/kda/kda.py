@@ -9,6 +9,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 import torch
+from ttnn.operations.matmul_reduce_scatter import matmul_reduce_scatter
 
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.kda.config import KDA_SOFTPLUS_BETA, KDA_SOFTPLUS_THRESHOLD, KDAConfig
@@ -386,6 +387,13 @@ class ttKDA:
             packer_l1_acc=True,
         )
         self._history_exchange = _HistoryExchange.shared(mesh_device, self._convolution_width)
+        self.fused_output_reduce_scatter = program_config.fused_output_reduce_scatter and self.tensor_parallel_size > 1
+        if self.fused_output_reduce_scatter:
+            # The fused op reads its activation from DRAM and always accumulates in FP32 DEST.
+            self.norm_output_memory_config = ttnn.DRAM_MEMORY_CONFIG
+            self.fused_output_compute_config = ttnn.ComputeConfigDescriptor(
+                math_fidelity=program_config.output_projection_math_fidelity, fp32_dest_acc_en=True
+            )
 
     def _input_projection_gate_tiles(self, grid: ttnn.CoreCoord, program_config, width: int) -> int:
         """Output-gate tile columns the input projection keeps: its per-core width without the gate's columns plus
@@ -565,6 +573,17 @@ class ttKDA:
     ) -> ttnn.Tensor:
         """Project normalized heads and perform the required TP reduction."""
         weights = self.weights
+        if self.fused_output_reduce_scatter:
+            return matmul_reduce_scatter(
+                output,
+                weights.output_projection,
+                cluster_axis=self._tp_cluster_axis,
+                scatter_dim=-1,
+                topology=self.tp_ccl_topology,
+                num_links=self.tt_ccl.get_num_links(self._tp_cluster_axis),
+                compute_kernel_config=self.fused_output_compute_config,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
         output = ttnn.linear(
             output,
             weights.output_projection,

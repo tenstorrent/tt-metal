@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import math
+import os
 from dataclasses import dataclass, field
 from typing import Literal
 
@@ -134,6 +135,9 @@ class KDAProgramConfig:
     # Output-gate tile columns per core the tuned input projection takes past its own width: they shorten the gate
     # matmul beside the SP relay, whose window is on the critical path.
     input_projection_extra_gate_tiles: int = 2
+    # Fuse the output projection with its TP reduce-scatter (ttnn.operations.matmul_reduce_scatter): each output
+    # block's partial travels the TP ring while the next block is multiplied, and partials never touch DRAM.
+    fused_output_reduce_scatter: bool = False
 
     def __post_init__(self) -> None:
         if self.qkv_channel_chunk_size <= 0 or self.qkv_channel_chunk_size % ttnn.TILE_SIZE:
@@ -288,6 +292,7 @@ def kimi_k3_program_config(*, active_seq_len_local: int, tp_ccl_topology: ttnn.T
         # The output gate beside the relay (and the projections on the matmul program) also at T=1024, 2048 and
         # 2560: 0.752 -> 0.740 ms, 0.913 -> 0.839 ms and 1.021 -> 0.871 ms.
         overlap_output_gate=active_seq_len_local in (128, 256, 320, _TUNED_PROJECTION_ROWS),
+        fused_output_reduce_scatter=os.environ.get("KDA_FUSED_MMRS") == "1",
     )
 
 
