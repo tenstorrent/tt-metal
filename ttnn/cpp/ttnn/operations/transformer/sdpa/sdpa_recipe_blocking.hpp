@@ -235,8 +235,8 @@ SDPAProgramConfig resolve_ring_recipe_blocking(
 
 // ring_mla on a BF16-state recipe with latent V (latent_ring_recipe): the caller's chunk pair is a hint. Q is the
 // smallest tile multiple that gives every worker core at most one Q block (all heads' Q chunks of the device's Q slab
-// over the program config's grid; the state then stays resident, SDPA_RECIPE_RING_SINGLE_Q) and divides the slab, or
-// each half of it when balanced. Then every K (up to K640) that fits L1 and the kernel config buffer, in the order to
+// over the program config's grid; the state then stays resident, SDPA_RECIPE_RING_SINGLE_Q); a balanced ring's Q
+// divides each half of the slab. Then every K (up to K640) that fits L1 and the kernel config buffer, in the order to
 // try at dispatch: fused before the unfused L1 fallback, whole 4-tile subblocks first, larger first.
 // Nullopt when no such Q exists (a long local Q slab, or not that recipe); the caller keeps its usual blocking then.
 struct LatentRingBlocking {

@@ -916,9 +916,13 @@ std::optional<LatentRingBlocking> choose_latent_ring_recipe_blocking(
         }
         return sorted;
     };
+    // The smallest Q with at most one block per core: every core then runs at most Q tile rows. An unbalanced slab
+    // may end in a padded chunk (Kimi K2.7-style 14 heads on a 640-row slab: Q96, 98 blocks, 3 rows per core; Q128
+    // ran 4 rows per core at 52% util vs legacy's 69.5%); a balanced one splits into halves of whole chunks.
     const uint32_t q_min = static_cast<uint32_t>(std::max<uint64_t>(1, (heads * slab_tiles + cores - 1) / cores));
     for (uint32_t qt = q_min; qt <= std::min(span_tiles, 32u); ++qt) {
-        if (span_tiles % qt != 0) {
+        const uint64_t blocks = heads * (is_balanced ? 2 * (span_tiles / qt) : div_up(span_tiles, qt));
+        if ((is_balanced && span_tiles % qt != 0) || blocks > cores) {
             continue;
         }
         auto ks = k_candidates(qt);
