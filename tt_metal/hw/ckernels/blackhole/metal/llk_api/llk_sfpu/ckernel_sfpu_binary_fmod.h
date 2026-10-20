@@ -53,8 +53,6 @@ sfpi_inline sfpi::vFloat _sfpu_binary_fmod_(sfpi::vFloat in0, sfpi::vFloat in1) 
     // Compute fmod = a - trunc(a/b) * b
     sfpi::vFloat result = a - trunc_div * b;
 
-    // An infinite b leaves a (trunc_div * b is 0 * inf = NaN). Matched on the bits of |b| so a NaN b, whose
-    // reciprocal is also 0, stays NaN.
     constexpr int32_t kInfBits = 0x7F800000;
     v_if(sfpi::as<sfpi::vInt>(b_abs) == kInfBits) { result = a; }
     v_endif;
@@ -97,7 +95,7 @@ sfpi_inline sfpi::vFloat _sfpu_binary_fmod_(sfpi::vFloat in0, sfpi::vFloat in1) 
     v_endif;
 
     // Handle special cases using conditional assignment (NOT early return!)
-    // When a == b, fmod(a, b) = 0; a - b is that zero for a finite a and NaN for an infinite one
+    // When a == b, fmod(a, b) = 0
     v_if(a == b) { result = a - b; }
     v_endif;
 

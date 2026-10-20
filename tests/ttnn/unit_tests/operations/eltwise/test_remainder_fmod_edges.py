@@ -15,23 +15,19 @@ INF = float("inf")
 
 def _cases(with_nan):
     a, b = [], []
-    # Exact multiples, all four sign combinations.
     for divisor in (3.0, 5.0, 7.0, 11.0, 13.0):
         for k in range(1, 20):
             for sa, sb in ((1, 1), (-1, -1), (1, -1), (-1, 1)):
                 a.append(sa * k * divisor)
                 b.append(sb * divisor)
-    # Non-integer quotients.
     for x, d in ((5.625, -1.875), (-5.625, 1.875), (5.625, 1.875), (-5.625, -1.875)):
         a.append(x)
         b.append(d)
-    # Finite dividend over an infinite divisor.
     for x in (0.0, -0.0, 0.5, -0.5, 5.0, -5.0, 100.0, -100.0):
         for d in (INF, -INF):
             a.append(x)
             b.append(d)
     if with_nan:
-        # Infinite dividend over an infinite divisor, and any NaN operand, give NaN.
         nan = float("nan")
         for x, d in (
             (INF, INF),
@@ -55,7 +51,6 @@ def _cases(with_nan):
 @pytest.mark.parametrize("op", ["remainder", "fmod"])
 @pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16])
 def test_binary_remainder_fmod_exact_multiples_and_infinite_divisor(op, dtype, device):
-    # NaN is packed as inf for ttnn.bfloat16, so the NaN cases run in float32 only.
     torch_dtype = torch.float32 if dtype == ttnn.float32 else torch.bfloat16
     torch_a, torch_b = _cases(with_nan=dtype == ttnn.float32)
     torch_a, torch_b = torch_a.to(torch_dtype), torch_b.to(torch_dtype)
