@@ -292,8 +292,6 @@ def test_global_avg_pool2d_memory_config(device, input_shape, memory_config):
     ids=["2x2", "3x3_div8", "5x5_div16", "3x3", "3x3_pad1_exclude_pad"],
 )
 def test_avg_pool2d_within_one_ulp(device, kernel_size, divisor_override, padding, channels):
-    """Every output must be within one bfloat16 ulp of the exact window sum times the bfloat16 averaging scalar
-    rounded to nearest (#27672). With padding, count_include_pad=False gives the edge windows their own scalars."""
     import torch
 
     if channels > 128 and is_wormhole_b0():
@@ -332,7 +330,6 @@ def test_avg_pool2d_within_one_ulp(device, kernel_size, divisor_override, paddin
     scalar = (1.0 / divisor).float().to(torch.bfloat16).double()
     exact = (window_sum * scalar).permute(0, 2, 3, 1).reshape(-1, c)
     output = ttnn.to_torch(tt_output).double().reshape(-1, c)[: exact.shape[0]]
-    # The inputs are positive, so the bfloat16 neighbours of the exact value are one bit pattern apart.
     nearest = exact.to(torch.bfloat16)
     bits = nearest.view(torch.int16)
     below = torch.where(nearest.double() <= exact, nearest.double(), (bits - 1).view(torch.bfloat16).double())

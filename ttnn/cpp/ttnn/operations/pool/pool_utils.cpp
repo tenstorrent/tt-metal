@@ -34,7 +34,6 @@ uint32_t get_bf16_pool_scalar(
             break;
         default: TT_FATAL(false, "Unsupported pool operation type");
     }
-    // A bfloat16 DEST rounds the window's partial sums away from zero; a truncated scalar offsets that (#27672).
     const bfloat16 scalar = round_to_nearest ? bfloat16(value) : bfloat16::truncate(value);
     return std::bit_cast<uint16_t>(scalar) << 16;
 }

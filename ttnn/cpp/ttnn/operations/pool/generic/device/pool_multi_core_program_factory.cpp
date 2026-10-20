@@ -263,8 +263,6 @@ std::vector<uint32_t> generate_core_starting_indices(
     return starting_indices;
 }
 
-// fp32 DEST keeps avg pool partial sums out of bfloat16 (#27672). Half sync holds 4 fp32 tiles; reducing more at
-// once needs full sync, which slows 3x3 windows on Wormhole, so that case keeps the bfloat16 DEST there.
 static DeviceComputeKernelConfig get_pool_compute_kernel_config(
     tt::ARCH arch,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
@@ -273,17 +271,16 @@ static DeviceComputeKernelConfig get_pool_compute_kernel_config(
     const bool indexes_32_bit = return_indices && params.index_format == tt::DataFormat::UInt32;
     const bool avg_pool_fp32_dest =
         params.is_avg_pool && (params.is_large_kernel || params.in_ntiles_c <= 4 || arch != tt::ARCH::WORMHOLE_B0);
-    // Due to hardware bug (#38306), HiFi4 + fp32_dest_acc_en can sometime produce incorrect results on Wormhole.
     const bool wormhole_fp32_avg_pool = avg_pool_fp32_dest && arch == tt::ARCH::WORMHOLE_B0;
     return init_device_compute_kernel_config(
         arch,
         compute_kernel_config,
         wormhole_fp32_avg_pool ? tt::tt_metal::MathFidelity::HiFi3 : tt::tt_metal::MathFidelity::HiFi4,
-        false,                                 // math_approx_mode
-        avg_pool_fp32_dest || indexes_32_bit,  // fp32_dest_acc_en
-        false,                                 // packer_l1_acc
+        false,
+        avg_pool_fp32_dest || indexes_32_bit,
+        false,
         (avg_pool_fp32_dest && !params.is_large_kernel && params.in_ntiles_c > 4) ||
-            (params.is_large_kernel && return_indices) || indexes_32_bit  // dst_full_sync_en
+            (params.is_large_kernel && return_indices) || indexes_32_bit
     );
 }
 
