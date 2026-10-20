@@ -13,7 +13,7 @@ import pytest
 import torch
 
 import ttnn
-from models.demos.glm53_flash.custom_ops.kda_decode.op import KdaDecode, selector_tiles
+from models.demos.glm53_flash.custom_ops.kda_decode.op import KdaDecode, kda_selector_tiles
 from models.demos.glm53_flash.tests.utils import pcc
 
 K = V = 128
@@ -37,7 +37,7 @@ def make_inputs(B, H, seed):
     gates[..., H * K + H * V : H * K + H * V + H] = r(B, H) * 2.0
     conv = (r(B, 3, W) * 0.8).to(torch.bfloat16).float()
     S = 0.05 * r(B, H, K, V)
-    taps = r(4, W) * 0.5
+    taps = (r(4, W) * 0.5).to(torch.bfloat16).float()  # bf16 taps (the conv weight is bf16)
     dt_bias = r(H * K) * 0.5
     a_exp = torch.rand(H, generator=gen).repeat_interleave(K) * 4.0 + 0.5
     onw = torch.rand(V, generator=gen) * 0.5 + 0.75
@@ -48,13 +48,13 @@ def to_device(device, x, B, H):
     return dict(
         qkv=_dev(device, x["qkv"].to(torch.bfloat16), ttnn.bfloat16),
         gates=_dev(device, x["gates"]),
-        conv=_dev(device, x["conv"].to(torch.bfloat16), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
+        conv=_dev(device, x["conv"].permute(1, 0, 2).contiguous().to(torch.bfloat16), ttnn.bfloat16),  # [3, B, W] tiles
         S=_dev(device, x["S"]),
-        taps=_dev(device, x["taps"].reshape(1, 1, 4, -1)),
+        taps=_dev(device, x["taps"].reshape(1, 1, 4, -1).to(torch.bfloat16), ttnn.bfloat16),
         cc=_dev(device, torch.stack([x["dt_bias"], x["a_exp"]]).reshape(1, 1, 2, -1)),
         onw=_dev(device, x["onw"].reshape(1, 1, 1, -1)),
-        sel=_dev(device, selector_tiles().to(torch.bfloat16), ttnn.bfloat16),
-        out=_dev(device, torch.zeros(1, 1, B, H * V).to(torch.bfloat16), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
+        sel=_dev(device, kda_selector_tiles().to(torch.bfloat16), ttnn.bfloat16),
+        out=_dev(device, torch.zeros(1, 1, B, H * V).to(torch.bfloat16), ttnn.bfloat16),
     )
 
 
@@ -82,7 +82,7 @@ def golden(x, B, H):
 def check(d, x, B, H, o_ref, S_ref, conv_ref):
     o = ttnn.to_torch(d["out"]).float()[0, 0]
     S = ttnn.to_torch(d["S"])
-    conv = ttnn.to_torch(d["conv"]).float()
+    conv = ttnn.to_torch(d["conv"]).float().permute(1, 0, 2)  # tap-major tiles -> [B, 3, W]
     assert o.shape == (B, H * V)
     p_o, p_s = pcc(o_ref, o), pcc(S_ref, S)
     assert p_o > PCC and p_s > PCC, (p_o, p_s)

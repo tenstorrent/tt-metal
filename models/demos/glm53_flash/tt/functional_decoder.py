@@ -264,17 +264,23 @@ class FunctionalDecoder(LightweightModule):
         if self.max_batch == 1:  # ttKDA only reads its input state; the new carries are fresh tensors
             return LayerState(kda=src), []
         rec = ttnn.slice(src.recurrent, [user, 0, 0, 0], [user + 1] + list(src.recurrent.shape)[1:])
-        conv = ttnn.slice(src.convolution, [user, 0, 0], [user + 1] + list(src.convolution.shape)[1:])
+        conv = self._require_weights().attn.user_conv_state(src, user)  # ttKDA's [1, taps, W] row-major
         return LayerState(kda=KdaState(recurrent=rec, convolution=conv)), [rec, conv]
 
     def _write_user_kda_state(self, user: int, new: KdaState):
         """Copy a freshly prefilled single-user state into slot ``user`` of the persistent batched state."""
         dst = self.kda_batched
+        attn = self._require_weights().attn
         if self.max_batch == 1:
             ttnn.copy(new.recurrent, dst.recurrent)
             ttnn.copy(new.convolution, dst.convolution)
         else:
-            for src_t, dst_t in ((new.recurrent, dst.recurrent), (new.convolution, dst.convolution)):
+            if attn.conv_tiled:  # the tap-major tile history: a paged row write per tap
+                attn.write_user_conv_state(dst, user, new.convolution)
+                pairs = ((new.recurrent, dst.recurrent),)
+            else:
+                pairs = ((new.recurrent, dst.recurrent), (new.convolution, dst.convolution))
+            for src_t, dst_t in pairs:
                 rows = []
                 for u in range(self.max_batch):
                     if u == user:

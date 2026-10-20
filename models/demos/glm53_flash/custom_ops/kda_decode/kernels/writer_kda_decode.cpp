@@ -1,17 +1,17 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 //
-// Writer of the fused KDA decode block. Per work item (head h, user tile row tb): the raw q/k/v rows
-// of every user as the newest conv history row (bf16 RM, 256 B each, from the untilized block), the
-// updated recurrent state of every user (in place), and the head's [32, V] output block (bf16 tiles
-// of the packed [B, H*V] output).
+// Writer of the fused KDA decode block: per work item, the updated recurrent state of every user of the part
+// (in place); then the part's output block goes to the slot's part-0 core (gather CB + semaphore), where the
+// part-0 writer stores the head's normed output tiles of the tile row (bf16 TILE output).
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/tensor/noc_traits.h"
 
-constexpr uint32_t cb_out = 10, cb_state_out = 11, cb_rawrm = 12;
+constexpr uint32_t cb_out = 10, cb_state_out = 11, cb_gather = 24, cb_ofin = 31;
+constexpr uint32_t SEM_GATHER = 3;
 
 void kernel_main() {
     constexpr uint32_t Kt = get_compile_time_arg_val(0);
@@ -19,34 +19,27 @@ void kernel_main() {
     constexpr uint32_t Bt = get_compile_time_arg_val(2);
     constexpr uint32_t B = get_compile_time_arg_val(3);
     constexpr uint32_t H = get_compile_time_arg_val(4);
-    constexpr uint32_t HK_t = get_compile_time_arg_val(5);
+    constexpr uint32_t parts = get_compile_time_arg_val(5);
     constexpr uint32_t HV_t = get_compile_time_arg_val(6);
-    constexpr uint32_t parts = get_compile_time_arg_val(7);
-    constexpr uint32_t row_bytes = Kt * 32 * 2;      // one head's bf16 raw row (K elements)
-    constexpr uint32_t out_row_bytes = Vt * 32 * 2;  // one head's bf16 output row (V elements)
-    constexpr uint32_t conv_taps = 3;
 
-    constexpr auto o_a = TensorAccessorArgs<8>();
+    constexpr auto o_a = TensorAccessorArgs<7>();
     constexpr auto st_a = TensorAccessorArgs<o_a.next_compile_time_args_offset()>();
-    constexpr auto conv_a = TensorAccessorArgs<st_a.next_compile_time_args_offset()>();
 
     const uint32_t item0 = get_arg_val<uint32_t>(0);
     const uint32_t n_items = get_arg_val<uint32_t>(1);
     const uint32_t stride = get_arg_val<uint32_t>(2);
     const uint32_t o_addr = get_arg_val<uint32_t>(3);
     const uint32_t st_addr = get_arg_val<uint32_t>(4);
-    const uint32_t conv_addr = get_arg_val<uint32_t>(5);
-    const uint32_t conv_page_bytes = get_arg_val<uint32_t>(6);
-    const uint32_t o_page_bytes = get_arg_val<uint32_t>(7);  // one RM output row [H*V] bf16
+    const uint32_t p0_x = get_arg_val<uint32_t>(5);
+    const uint32_t p0_y = get_arg_val<uint32_t>(6);
 
     const uint32_t t32 = get_tile_size(cb_state_out);
-    const auto o_acc = TensorAccessor(o_a, o_addr, o_page_bytes);
+    const uint32_t t16 = get_tile_size(cb_out);
+    const auto o_acc = TensorAccessor(o_a, o_addr, t16);
     const auto st_acc = TensorAccessor(st_a, st_addr, t32);
-    const auto conv_acc = TensorAccessor(conv_a, conv_addr, conv_page_bytes);
 
     Noc noc;
-    CircularBuffer out(cb_out), st(cb_state_out), rawrm(cb_rawrm);
-
+    CircularBuffer out(cb_out), st(cb_state_out), ofin(cb_ofin), gather(cb_gather);
     for (uint32_t it = 0; it < n_items; it++) {
         const uint32_t item = item0 + it * stride;
         const uint32_t h = item / (Bt * parts);
@@ -60,24 +53,6 @@ void kernel_main() {
         if (u0 >= u1) {
             continue;
         }
-
-        // newest conv history row (row 2) of every user, per branch, from the untilized raw block
-        for (uint32_t br = 0; br < 3; br++) {
-            const uint32_t col_off = (br * HK_t + h * Kt) * 32 * 2;
-            rawrm.wait_front(Kt);
-            for (uint32_t r = u0; r < u1; r++) {
-                const uint32_t page = (tb * 32 + r) * conv_taps + (conv_taps - 1);
-                noc.async_write(
-                    rawrm,
-                    conv_acc,
-                    row_bytes,
-                    {.offset_bytes = r * row_bytes},
-                    {.page_id = page, .offset_bytes = col_off});
-            }
-            noc.async_write_barrier();
-            rawrm.pop_front(Kt);
-        }
-        // updated state of every user, in place
         for (uint32_t r = u0; r < u1; r++) {
             st.wait_front(Kt * Vt);
             const uint32_t base = ((tb * 32 + r) * H + h) * Kt * Vt;
@@ -87,17 +62,21 @@ void kernel_main() {
             noc.async_write_barrier();
             st.pop_front(Kt * Vt);
         }
-        // output rows of this part's users: row r of the untilized block -> RM output row (tb*32 + r), head slot h
-        out.wait_front(Vt);
-        for (uint32_t r = u0; r < u1; r++) {
-            noc.async_write(
-                out,
-                o_acc,
-                out_row_bytes,
-                {.offset_bytes = r * out_row_bytes},
-                {.page_id = tb * 32 + r, .offset_bytes = h * out_row_bytes});
+        if (part != 0) {
+            // this part's (masked) output block -> slot part-1 of the part-0 core's gather CB
+            ofin.wait_front(Vt);
+            const uint64_t dst = get_noc_addr(p0_x, p0_y, gather.get_write_ptr() + (part - 1) * Vt * t32);
+            noc_async_write(ofin.get_read_ptr(), dst, Vt * t32);
+            noc_async_write_barrier();
+            noc_semaphore_inc(get_noc_addr(p0_x, p0_y, get_semaphore(SEM_GATHER)), 1);
+            ofin.pop_front(Vt);
+        } else {
+            out.wait_front(Vt);
+            for (uint32_t n = 0; n < Vt; n++) {
+                noc.async_write(out, o_acc, t16, {.offset_bytes = n * t16}, {.page_id = tb * HV_t + h * Vt + n});
+            }
+            noc.async_write_barrier();
+            out.pop_front(Vt);
         }
-        noc.async_write_barrier();
-        out.pop_front(Vt);
     }
 }

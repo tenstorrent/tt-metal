@@ -4,11 +4,12 @@
 ``ttnn.generic_op`` (kernels in ``kernels/``; contract in README.md).
 
 One program does everything between the packed projection matmuls and o_proj: the causal conv (kernel 4)
-+ SiLU on the device-owned bf16 history (read, shifted in place, raw rows appended), the per-head L2
-norms, the per-key-channel forget gate ``g = lb * sigmoid(exp(A_log) (f + dt_bias))``, ``beta =
-sigmoid(b)``, the gated delta-rule step per user on the recurrent state (read once, written once, in
-place) and the gated RMSNorm ``rmsnorm(o) * w * sigmoid(og)``. Work items are (head, 32-user tile row,
-user part) dealt round-robin over the cores.
++ SiLU on the device-owned bf16 history (tap-major tiles, shifted in place, raw tiles appended), the
+per-head L2 norms, the per-key-channel forget gate ``g = lb * sigmoid(exp(A_log) (f + dt_bias))``,
+``beta = sigmoid(b)``, the gated delta-rule step per user on the recurrent state (read once, written once,
+in place) and the gated RMSNorm ``rmsnorm(o) * w * sigmoid(og)``, packed as bf16 TILE output. Work items
+are (head, 32-user tile row, user part); the parts of a (head, row) slot sit in one column of cores: the
+part-0 core reads the slot's inputs once and multicasts them, and sums the parts' output rows for the norm.
 """
 
 from __future__ import annotations
@@ -29,53 +30,41 @@ def f32_bits(v: float) -> int:
 
 
 def selector_tiles() -> torch.Tensor:
-    """[33*32, 32] constant: tile r < 32 has a 1 at (0, r) (E_r lifts row r of a block into row 0; its transpose
-    places row 0 at row r), tile 32 is all ones (row sums by matmul)."""
+    """[33*32, 32] constant (used by the DSA state op): tile r < 32 has a 1 at (0, r) (E_r lifts row r of a block
+    into row 0; its transpose places row 0 at row r), tile 32 is all ones (row sums by matmul)."""
     sel = torch.zeros(33, TILE, TILE)
     sel[torch.arange(TILE), 0, torch.arange(TILE)] = 1.0
     sel[32] = 1.0
     return sel.reshape(33 * TILE, TILE)
 
 
+def kda_selector_tiles() -> torch.Tensor:
+    """[34*32, 32] constant of ``KdaDecode``: tile r < 32 is E_r^T (a 1 at (r, 0): e_r in column 0, i.e. a row mask
+    under a column broadcast and a column picker under a matmul), tile 32 is all ones (row sums by matmul), tile
+    33 is the identity (diagonal tiles by a column broadcast)."""
+    sel = torch.zeros(34, TILE, TILE)
+    sel[torch.arange(TILE), torch.arange(TILE), 0] = 1.0
+    sel[32] = 1.0
+    sel[33] = torch.eye(TILE)
+    return sel.reshape(34 * TILE, TILE)
+
+
+ONES_PAGE = 32  # selector page of the all-ones tile (identity at 33)
+
+
 class KdaDecode:
     """Builds and launches the fused KDA decode program. All tensors interleaved (DRAM or L1); K = V = 128,
-    conv kernel 4 (3 history rows). Call ``__call__`` with a pre-allocated output."""
+    conv kernel 4 (3 history taps). Call ``__call__`` with a pre-allocated output."""
 
     # CB plan (kept in sync with the kernels)
     CB = dict(
-        raw=0,
-        hist=1,
-        taps=2,
-        gf=3,
-        gog=4,
-        gb=5,
-        cc=6,
-        onw=7,
-        sel=8,
-        S=9,
-        out=10,
-        state_out=11,
-        rawrm=12,
-        qn=13,
-        kn=14,
-        vc=15,
-        dec=16,
-        bcol=17,
-        gate=18,
-        ht=19,
-        tmp=20,
-        inv=21,
-        rows=22,
-        cols=23,
-        vread=24,
-        u=25,
-        sd=26,
-        s2=27,
-        orow=28,
-        bs=29,
-        selT=30,
-        oblk=31,
-    )
+        hist=0, taps=1, gf=2, gog=3, gb=4, cc=5, onw=6, sel=7, selT=8, S=9, out=10, state_out=11, qn=12, kn=13,
+        vc=14, dec=15, bcol=16, wg=17, tmp=18, col=19, kd=20, qd=21, kcol=22, decT=23, gather=24, dcol=25, pq=26,
+        vread=27, oq=28, u=29, oacc=30, ofin=31,
+    )  # fmt: skip
+    # per-core semaphores: parts -> part-0 "ready", part-0 -> parts "valid" (multicast of the constant "one"),
+    # parts -> part-0 "gather" (output blocks delivered)
+    SEM_READY, SEM_VALID, SEM_ONE, SEM_GATHER = 0, 1, 2, 3
 
     def __init__(
         self,
@@ -136,6 +125,26 @@ class KdaDecode:
         return o.reshape(B, H * V), Sn, new_conv
 
     # ------------------------------------------------------------------ program
+    @staticmethod
+    def placement(grid, slots: int):
+        """Cores for ``slots`` (head, tile row) items: ``parts`` cores per slot, a vertical run in one column
+        (NoC multicast rectangle); the largest ``parts`` that fits, else one core per item round-robin."""
+        gx, gy = grid.x, grid.y
+        parts = 1
+        for ry in range(min(TILE, gy), 1, -1):
+            if gx * (gy // ry) >= slots:
+                parts = ry
+                break
+        if parts == 1:
+            NC = min(slots, gx * gy)
+            return 1, [ttnn.CoreCoord(c // gy, c % gy) for c in range(NC)]
+        per_col = gy // parts
+        cores = []
+        for s in range(slots):
+            x, y0 = s // per_col, (s % per_col) * parts
+            cores += [ttnn.CoreCoord(x, y0 + p) for p in range(parts)]
+        return parts, cores
+
     def _cb(self, idx, dtype, page, pages, cores):
         return ttnn.CBDescriptor(
             total_size=page * pages,
@@ -143,11 +152,12 @@ class KdaDecode:
             format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=idx, data_format=dtype, page_size=page)],
         )
 
-    def __call__(self, qkv, gates, conv_state, recurrent, taps, chan_consts, o_norm_w, selectors, out):
-        """qkv [1,1,B,3*H*K] bf16 TILE; gates [1,1,B,H*K+H*V+Hb] fp32 TILE; conv_state [B,3,3*H*K] bf16 ROW_MAJOR
-        (updated in place); recurrent [B,H,K,V] fp32 TILE (updated in place); taps [1,1,4,3*H*K] fp32 TILE;
-        chan_consts [1,1,2,H*K] fp32 TILE (row 0 dt_bias, row 1 exp(A_log)); o_norm_w [1,1,1,V] fp32 TILE;
-        selectors [33*32,32] bf16 TILE; out [1,1,B,H*V] bf16 ROW_MAJOR (pre-allocated). Returns ``out``."""
+    def __call__(self, qkv, gates, conv_hist, recurrent, taps, chan_consts, o_norm_w, selectors, out):
+        """qkv [1,1,B,3*H*K] bf16 TILE; gates [1,1,B,H*K+H*V+Hb] fp32 TILE; conv_hist [3,B,3*H*K] bf16 TILE
+        (tap-major history, tap 0 the oldest; updated in place); recurrent [B,H,K,V] fp32 TILE (updated in place);
+        taps [1,1,4,3*H*K] bf16 TILE; chan_consts [1,1,2,H*K] fp32 TILE (row 0 dt_bias, row 1 exp(A_log)); o_norm_w
+        [1,1,1,V] fp32 TILE; selectors [34*32,32] bf16 TILE (``kda_selector_tiles``); out [1,1,B,H*V] bf16 TILE
+        (pre-allocated). Returns ``out``."""
         H, K, V = self.H, self.K, self.V
         B = recurrent.shape[0]
         Kt, Vt = K // TILE, V // TILE
@@ -157,100 +167,47 @@ class KdaDecode:
         kv = Kt * Vt
         device = qkv.device()
         grid = device.compute_with_storage_grid_size()
-        n_cores = grid.x * grid.y
-        parts = max(1, min(TILE, n_cores // (H * Bt)))
+        parts, core_of = self.placement(grid, H * Bt)
         NI = H * Bt * parts
-        NC = min(NI, n_cores)
-        core_of = [ttnn.CoreCoord(c // grid.y, c % grid.y) for c in range(NC)]
+        NC = len(core_of)
         cores = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in core_of])
 
         f32, f16 = ttnn.float32, ttnn.bfloat16
         t32, t16 = TILE * TILE * 4, TILE * TILE * 2
         cb = self.CB
-        cbs = [
-            self._cb(cb["raw"], f16, t16, 3 * Kt, cores),
-            self._cb(cb["hist"], f16, t16, 3 * 3 * Kt, cores),
-            self._cb(cb["taps"], f32, t32, 3 * Kt, cores),
-            self._cb(cb["gf"], f32, t32, Kt, cores),
-            self._cb(cb["gog"], f32, t32, Vt, cores),
-            self._cb(cb["gb"], f32, t32, 1, cores),
-            self._cb(cb["cc"], f32, t32, Kt, cores),
-            self._cb(cb["onw"], f32, t32, Vt, cores),
-            self._cb(cb["sel"], f16, t16, 33, cores),
-            self._cb(cb["S"], f32, t32, kv, cores),
-            self._cb(cb["out"], f16, t16, 2 * Vt, cores),
-            self._cb(cb["state_out"], f32, t32, 2 * kv, cores),
-            self._cb(cb["rawrm"], f16, t16, 3 * Kt, cores),
-            self._cb(cb["qn"], f32, t32, Kt, cores),
-            self._cb(cb["kn"], f32, t32, Kt, cores),
-            self._cb(cb["vc"], f32, t32, Vt, cores),
-            self._cb(cb["dec"], f32, t32, Kt, cores),
-            self._cb(cb["bcol"], f32, t32, 1, cores),
-            self._cb(cb["gate"], f32, t32, Vt, cores),
-            self._cb(cb["ht"], f32, t32, 3 * Kt, cores),
-            self._cb(cb["tmp"], f32, t32, 2 * Kt, cores),
-            self._cb(cb["inv"], f32, t32, 1, cores),
-            self._cb(cb["rows"], f32, t32, 4 * Kt, cores),
-            self._cb(cb["cols"], f32, t32, 2 * Kt, cores),
-            self._cb(cb["vread"], f32, t32, Vt, cores),
-            self._cb(cb["u"], f32, t32, Vt, cores),
-            self._cb(cb["sd"], f32, t32, kv, cores),
-            self._cb(cb["s2"], f32, t32, kv, cores),
-            self._cb(cb["orow"], f32, t32, Vt, cores),
-            self._cb(cb["bs"], f32, t32, 1, cores),
-            self._cb(cb["selT"], f32, t32, 1, cores),
-            self._cb(cb["oblk"], f32, t32, 2 * Vt, cores),
-        ]
+        plan = [
+            ("hist", f16, 12 * Kt), ("taps", f16, 3 * Kt), ("gf", f32, Kt), ("gog", f32, Vt), ("gb", f32, 1),
+            ("cc", f32, Kt), ("onw", f32, Vt), ("sel", f16, 2), ("selT", f16, 2), ("S", f32, 2 * kv),
+            ("out", f16, Vt), ("state_out", f32, 2 * kv), ("qn", f32, Kt), ("kn", f32, Kt), ("vc", f32, Vt),
+            ("dec", f32, Kt), ("bcol", f32, 1), ("wg", f32, Vt), ("tmp", f32, 2 * Kt), ("col", f32, 2),
+            ("kd", f32, Kt), ("qd", f32, Kt), ("kcol", f32, Kt), ("decT", f32, Kt),
+            ("gather", f32, max(1, parts - 1) * Vt), ("dcol", f32, Kt), ("pq", f32, 4), ("vread", f32, Vt),
+            ("oq", f32, Vt), ("u", f32, Vt), ("oacc", f32, 2 * Vt), ("ofin", f32, Vt),
+        ]  # fmt: skip
+        cbs = [self._cb(cb[name], dt, t32 if dt == f32 else t16, pages, cores) for name, dt, pages in plan]
 
-        compute_ct = [
-            Kt,
-            Vt,
-            Bt,
-            B,
-            parts,
-            f32_bits(self.lb),
-            f32_bits(self.l2_eps),
-            f32_bits(self.norm_eps),
-            f32_bits(K**-0.5),
-            f32_bits(1.0 / V),
-        ]
-        reader_ct = [Kt, Vt, Bt, B, H, Wq_t, Wg_t, HK_t, HV_t, parts]
-        for t in (qkv, conv_state, taps, gates, chan_consts, o_norm_w, selectors, recurrent):
+        it_half = max(2, -(-min(B, 16) // 2))  # SFPU iterations per face (2 rows each) for tile rows with <= 16 users
+        compute_ct = [Kt, Vt, Bt, B, parts, f32_bits(self.lb), f32_bits(self.l2_eps), f32_bits(self.norm_eps),
+                      f32_bits(K**-0.5), f32_bits(1.0 / V), it_half]  # fmt: skip
+        reader_ct = [Kt, Vt, Bt, B, H, Wq_t, Wg_t, HK_t, HV_t, parts, ONES_PAGE]
+        for t in (qkv, conv_hist, taps, gates, chan_consts, o_norm_w, selectors, recurrent):
             reader_ct += ttnn.TensorAccessorArgs(t).get_compile_time_args()
-        writer_ct = [Kt, Vt, Bt, B, H, HK_t, HV_t, parts]
-        for t in (out, recurrent, conv_state):
+        writer_ct = [Kt, Vt, Bt, B, H, parts, HV_t]
+        for t in (out, recurrent):
             writer_ct += ttnn.TensorAccessorArgs(t).get_compile_time_args()
 
-        conv_page_bytes = conv_state.padded_shape[-1] * 2  # one [b, j] row of the bf16 history (aligned page)
-        conv_page_bytes = -(-conv_page_bytes // 32) * 32
-        o_page_bytes = -(-(out.padded_shape[-1] * 2) // 32) * 32
         reader_rt, writer_rt, compute_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
         for c, core in enumerate(core_of):
-            n_items = (NI - c + NC - 1) // NC
+            n_items = (NI - c + NC - 1) // NC if parts == 1 else 1
+            s = c // parts
+            p0 = device.worker_core_from_logical_core(core_of[s * parts])
+            pe = device.worker_core_from_logical_core(core_of[s * parts + parts - 1])
             reader_rt[core.x][core.y] = [
-                c,
-                n_items,
-                NC,
-                qkv.buffer_address(),
-                conv_state.buffer_address(),
-                taps.buffer_address(),
-                gates.buffer_address(),
-                chan_consts.buffer_address(),
-                o_norm_w.buffer_address(),
-                selectors.buffer_address(),
-                recurrent.buffer_address(),
-                conv_page_bytes,
-            ]
-            writer_rt[core.x][core.y] = [
-                c,
-                n_items,
-                NC,
-                out.buffer_address(),
-                recurrent.buffer_address(),
-                conv_state.buffer_address(),
-                conv_page_bytes,
-                o_page_bytes,
-            ]
+                c, n_items, NC, qkv.buffer_address(), conv_hist.buffer_address(), taps.buffer_address(),
+                gates.buffer_address(), chan_consts.buffer_address(), o_norm_w.buffer_address(),
+                selectors.buffer_address(), recurrent.buffer_address(), p0.x, p0.y, pe.x, pe.y,
+            ]  # fmt: skip
+            writer_rt[core.x][core.y] = [c, n_items, NC, out.buffer_address(), recurrent.buffer_address(), p0.x, p0.y]
             compute_rt[core.x][core.y] = [c, n_items, NC]
 
         kernels = [
@@ -278,7 +235,9 @@ class KdaDecode:
                 ),
             ),
         ]
-        program = ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs)
-        return ttnn.generic_op(
-            [qkv, gates, conv_state, recurrent, taps, chan_consts, o_norm_w, selectors, out], program
-        )
+        sems = [
+            ttnn.SemaphoreDescriptor(sid, ttnn.CoreType.WORKER, cores, init)
+            for sid, init in ((self.SEM_READY, 0), (self.SEM_VALID, 0), (self.SEM_ONE, 1), (self.SEM_GATHER, 0))
+        ]
+        program = ttnn.ProgramDescriptor(kernels=kernels, semaphores=sems, cbs=cbs)
+        return ttnn.generic_op([qkv, gates, conv_hist, recurrent, taps, chan_consts, o_norm_w, selectors, out], program)

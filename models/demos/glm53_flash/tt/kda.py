@@ -15,12 +15,16 @@ with q, k L2-normalized per head and q additionally scaled by K^-0.5 (FLA semant
 the gated RMSNorm (sigmoid(g_b(g_a(x)))) and o_proj. Every elementwise step is a broadcast
 multiply plus a reduction so no tile padding ever enters a contraction.
 
-``GLM53_KDA_FUSED=1`` (design 8.1) runs the whole decode block as 6 ops: the packed qkv matmul,
+``GLM53_KDA_FUSED=1`` (design 8.1) runs the whole decode block as 5 ops: the packed qkv matmul,
 two gate matmuls (``[f_a | g_a | b]`` then the block-diagonal ``[f_b, g_b, I]``), ONE
 ``custom_ops.kda_decode`` program (a model-local ``ttnn.generic_op``: conv + SiLU from the
 device-owned history, L2 norms, gates, the per-key-channel delta-rule recurrence, the gated
-RMSNorm; state and conv history updated in place; row-major output so the users of a head can be
-split over cores), its tilize, then o_proj.
+RMSNorm; state and conv history updated in place; bf16 TILE output), then o_proj. The block path
+keeps the conv history as tap-major TILES ``[kernel-1, B, Q+K+V]`` bf16 (``conv_tiled``) instead
+of ttKDA's row-major ``[B, kernel-1, Q+K+V]``: the program reads whole tiles and shifts them in
+place; ``prefill_forward`` converts at its boundary and ``user_conv_state`` /
+``write_user_conv_state`` / ``conv_history_torch`` / ``upload_conv_history`` serve the per-user
+prefill hand-offs and the tests.
 """
 
 from __future__ import annotations
@@ -37,7 +41,7 @@ from models.demos.deepseek_v3_d_p.reference.kda.weights import normalize_kda_sta
 from models.demos.deepseek_v3_d_p.tt.kda.config import KDAProgramConfig, KDARecurrenceProgramConfig
 from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState, ttKDA
 from models.demos.deepseek_v3_d_p.tt.kda.weights import KDAWeights, load_kda_weights
-from models.demos.glm53_flash.custom_ops.kda_decode.op import KdaDecode, selector_tiles
+from models.demos.glm53_flash.custom_ops.kda_decode.op import KdaDecode, kda_selector_tiles
 from models.demos.glm53_flash.tt.config import GLM53FlashConfig
 from models.demos.glm53_flash.tt.matmul_configs import DecodeLinear
 from models.demos.glm53_flash.tt.mesh import GLMMesh, interleave_blocks, single_chip
@@ -178,6 +182,7 @@ class TtKDA(LightweightModule):
         self.lin_b = DecodeLinear(device, self.w_b)
         self.gate_lower_bound = float(self.kcfg.gate_lower_bound)
         self._scalars: dict[int, ttnn.Tensor] = {}
+        self._const_cache: dict = {}
         if fused_decode is None:
             self.fused_decode = KDA_FUSED_DEFAULT
         elif isinstance(fused_decode, bool):
@@ -188,15 +193,15 @@ class TtKDA(LightweightModule):
         if self.fused_decode == "block":
             # the kda_decode program's constants (its tensor contract is in the op's docstring)
             self.taps_blk = up(
-                torch.stack([t.reshape(-1).float() for t in taps]).reshape(1, 1, 4, -1), ttnn.float32, cols=-1
-            )
+                torch.stack([t.reshape(-1).float() for t in taps]).reshape(1, 1, 4, -1), ttnn.bfloat16, cols=-1
+            )  # the conv weight is bf16 in the checkpoint: exact
             self.chan_consts = up(
                 torch.stack([raw["dt_bias"].float().reshape(-1), a_exp.reshape(-1)]).reshape(1, 1, 2, -1),
                 ttnn.float32,
                 cols=-1,
             )
             self.o_norm_w32 = up(raw["o_norm.weight"].float().reshape(1, 1, 1, -1), ttnn.float32)
-            self.selectors = up(selector_tiles(), ttnn.bfloat16)
+            self.selectors = up(kda_selector_tiles(), ttnn.bfloat16)
             self.kda_decode = KdaDecode(
                 num_heads=H,
                 head_dim=K,
@@ -251,14 +256,79 @@ class TtKDA(LightweightModule):
                 device=self.device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             ),
-            convolution=ttnn.zeros(
-                (batch_size, self.kcfg.conv_kernel_size - 1, self.conv_width),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=self.device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            ),
+            convolution=self._zero_conv(batch_size),
         )
+
+    @property
+    def conv_tiled(self) -> bool:
+        """The block path keeps the conv history as tap-major tiles ``[kernel-1, B, W]`` bf16."""
+        return self.fused_decode == "block"
+
+    def _zero_conv(self, batch_size: int) -> ttnn.Tensor:
+        taps = self.kcfg.conv_kernel_size - 1
+        shape = (taps, batch_size, self.conv_width) if self.conv_tiled else (batch_size, taps, self.conv_width)
+        return ttnn.zeros(
+            shape,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT if self.conv_tiled else ttnn.ROW_MAJOR_LAYOUT,
+            device=self.device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    # ------------------------------------------------- conv history layout helpers
+    def conv_to_rm(self, conv: ttnn.Tensor) -> ttnn.Tensor:
+        """Tap-major tiles ``[taps, B, W]`` -> ttKDA's ``[B, taps, W]`` bf16 ROW_MAJOR (a fresh tensor)."""
+        rm = ttnn.to_layout(conv, ttnn.ROW_MAJOR_LAYOUT)
+        out = ttnn.permute(rm, [1, 0, 2])
+        ttnn.deallocate(rm)
+        return out
+
+    def conv_to_tiles(self, conv_rm: ttnn.Tensor) -> ttnn.Tensor:
+        """``[B, taps, W]`` bf16 ROW_MAJOR -> tap-major tiles ``[taps, B, W]`` (a fresh tensor)."""
+        t = ttnn.permute(conv_rm, [1, 0, 2])
+        out = ttnn.to_layout(t, ttnn.TILE_LAYOUT)
+        ttnn.deallocate(t)
+        return out
+
+    def conv_history_torch(self, state: KdaState) -> torch.Tensor:
+        """The conv history as ``[B, taps, W]`` on the host, whatever the device layout."""
+        t = ttnn.to_torch(state.convolution)
+        return t.permute(1, 0, 2).contiguous() if state.convolution.layout == ttnn.TILE_LAYOUT else t
+
+    def upload_conv_history(self, state: KdaState, hist: torch.Tensor):
+        """Write a host ``[B, taps, W]`` history into ``state.convolution`` (its layout)."""
+        if state.convolution.layout == ttnn.TILE_LAYOUT:
+            src = ttnn.from_torch(hist.permute(1, 0, 2).contiguous(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+        else:
+            src = ttnn.from_torch(hist, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+        ttnn.copy_host_to_device_tensor(src, state.convolution)
+
+    def user_conv_state(self, state: KdaState, user: int) -> ttnn.Tensor:
+        """One user's conv history as ttKDA's ``[1, taps, W]`` bf16 ROW_MAJOR (a fresh tensor)."""
+        taps = self.kcfg.conv_kernel_size - 1
+        if state.convolution.layout != ttnn.TILE_LAYOUT:
+            return ttnn.slice(state.convolution, [user, 0, 0], [user + 1, taps, self.conv_width])
+        rm = ttnn.to_layout(state.convolution, ttnn.ROW_MAJOR_LAYOUT)  # [taps, B, W]
+        sl = ttnn.slice(rm, [0, user, 0], [taps, user + 1, self.conv_width])  # [taps, 1, W]
+        ttnn.deallocate(rm)
+        out = ttnn.permute(sl, [1, 0, 2])
+        ttnn.deallocate(sl)
+        return out
+
+    def write_user_conv_state(self, state: KdaState, user: int, conv: ttnn.Tensor):
+        """Write one user's history (``[taps, 1, W]`` tiles, as ``prefill_forward`` returns it in block mode) into
+        slot ``user`` of the batched tap-major tile history (row-major slice / concat round trip; prefill boundary
+        only, never traced)."""
+        taps = self.kcfg.conv_kernel_size - 1
+        B = state.convolution.shape[1]
+        rm = self.conv_to_rm(state.convolution)  # [B, taps, W]
+        new_rm = self.conv_to_rm(conv)  # [1, taps, W]
+        rows = [new_rm if u == user else ttnn.slice(rm, [u, 0, 0], [u + 1, taps, self.conv_width]) for u in range(B)]
+        stacked = ttnn.concat(rows, dim=0)
+        tiles = self.conv_to_tiles(stacked)
+        ttnn.copy(tiles, state.convolution)
+        for t in rows + [stacked, tiles, rm]:
+            ttnn.deallocate(t)
 
     # ---------------------------------------------------------------- prefill
     def prefill_layer(self, active_seq_len: int) -> ttKDA:
@@ -309,7 +379,17 @@ class TtKDA(LightweightModule):
         (row r holds rows [r*T/rows, (r+1)*T/rows) of the chunk, T = rows * T_phys_local) and the
         returned carries are replicated over the rows (TP-sharded heads as in decode)."""
         layer = self.prefill_layer(x.shape[1] * self.mesh.rows)
+        tiled_in = state.convolution.layout == ttnn.TILE_LAYOUT
+        if tiled_in:  # ttKDA reads / writes the row-major [B, taps, W] history
+            conv_rm = self.conv_to_rm(state.convolution)
+            state = KdaState(recurrent=state.recurrent, convolution=conv_rm)
         y, new_state = layer.forward(x, state, actual_start, actual_end)
+        if tiled_in:
+            ttnn.deallocate(conv_rm)
+        if self.conv_tiled:  # the returned carry in the block path's layout
+            tiles = self.conv_to_tiles(new_state.convolution)
+            ttnn.deallocate(new_state.convolution)
+            new_state = KdaState(recurrent=new_state.recurrent, convolution=tiles)
         if self.mesh.tp > 1:
             # ttKDA reduce-scatters the TP partials on the hidden dim; make the output replicated
             y = self.mesh.all_gather_cols(y, dim=-1)
@@ -386,9 +466,9 @@ class TtKDA(LightweightModule):
         return self._output(x, ttnn.reshape(o, [1, B, H, V]), og, new_conv, state, new_recurrent, inplace)
 
     def _block_decode(self, x: ttnn.Tensor, state: KdaState, inplace: bool) -> tuple[ttnn.Tensor, KdaState]:
-        """The 6-op decode block: qkv matmul, two gate matmuls, ONE ``kda_decode`` program (conv, norms,
-        gates, recurrence, gated RMSNorm; state + conv history in place), its tilize, o_proj. ``inplace=False``
-        runs on copies of the state tensors (the program always updates its inputs in place)."""
+        """The 5-op decode block: qkv matmul, two gate matmuls, ONE ``kda_decode`` program (conv, norms,
+        gates, recurrence, gated RMSNorm; state + conv history in place; bf16 TILE output), o_proj.
+        ``inplace=False`` runs on copies of the state tensors (the program always updates its inputs in place)."""
         rec, conv = state.recurrent, state.convolution
         if not inplace:
             rec, conv = ttnn.clone(rec), ttnn.clone(conv)
@@ -399,18 +479,16 @@ class TtKDA(LightweightModule):
         o = ttnn.allocate_tensor_on_device(
             ttnn.Shape([1, 1, B, self.H * self.V]),
             ttnn.bfloat16,
-            ttnn.ROW_MAJOR_LAYOUT,
+            ttnn.TILE_LAYOUT,
             self.device,
             ttnn.DRAM_MEMORY_CONFIG,
-        )  # [1,1,B,H*V] bf16 ROW_MAJOR (one row per user): the program's pre-allocated output
+        )  # [1,1,B,H*V] bf16 TILE: the program's pre-allocated output (the o_proj input)
         self.kda_decode(qkv, g2, conv, rec, self.taps_blk, self.chan_consts, self.o_norm_w32, self.selectors, o)
         ttnn.deallocate(qkv)
         ttnn.deallocate(g1)
         ttnn.deallocate(g2)
-        o_t = ttnn.to_layout(o, ttnn.TILE_LAYOUT)
+        y = self.lin_o(o, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)  # [1,1,B,hidden]
         ttnn.deallocate(o)
-        y = self.lin_o(o_t, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)  # [1,1,B,hidden]
-        ttnn.deallocate(o_t)
         y = self.mesh.all_reduce_cols(y)
         if inplace:
             return y, state

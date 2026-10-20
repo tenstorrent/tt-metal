@@ -55,7 +55,7 @@ prefill of the whole prompt (same kernels, same row classes):
 |---|---|---|
 | `tt/config.py` | frozen config from `config.json` | |
 | `tt/mhc.py` | mHC hyper-connection (fused Sinkhorn parametrization, fp32) | `deepseek_v3_d_p/tt/mhc/TtMHCWrap` |
-| `tt/kda.py` | KDA: prefill via `ttKDA` (chunked kernels); decode = the 6-op fused block (default; `GLM53_KDA_FUSED=0` restores the ~75-op composite): qkv matmul, 2 gate matmuls, ONE `custom_ops/kda_decode` program (state + conv history in place), tilize, o_proj (see the KDA decode block section) | `deepseek_v3_d_p/tt/kda`, `custom_ops/kda_decode` |
+| `tt/kda.py` | KDA: prefill via `ttKDA` (chunked kernels); decode = the 5-op fused block (default; `GLM53_KDA_FUSED=0` restores the ~75-op composite): qkv matmul, 2 gate matmuls, ONE `custom_ops/kda_decode` program (state + tap-major tile conv history in place, TILE output), o_proj (see the KDA decode block section) | `deepseek_v3_d_p/tt/kda`, `custom_ops/kda_decode` |
 | `tt/dsa.py` | MLA (NoPE): dense causal SDPA for prefill rows [0, 2048), paged latent cache, absorbed `paged_flash_multi_latent_attention_decode` for every decode slot (decode = the 7-op fused block with `GLM53_DSA_FUSED=1`, see the DSA decode block section); prefill rows >= 2048 and decode users at position > 2050 via the indexer + `sparse_sdpa` | paged cache ops, flash MLA decode, sparse SDPA |
 | `tt/indexer.py` | GLM k-pool indexer: pooled-key cache, `indexer_score_dsa(key_compression_ratio=4)`, `topk_large_indices` over 4x-expanded pool scores, tail ids | |
 | `tt/moe.py` | router (exact fp32 composite top-8) + `sparse_matmul` experts per 32-token block + shared expert | gpt_oss sparse-matmul pattern |
@@ -97,47 +97,55 @@ come from one-replay runs (`GLM53_PERF_DECODE_STEPS=1`, layer 3 with `GLM53_PERF
 
 ## KDA decode block (fused, `GLM53_KDA_FUSED=1`)
 
-Design 8.1 / the 2026-10-20 directive (every data-movement op of the block merged or removed). One chip (chip 3 of
-the Galaxy, 64 heads), real layer-4 weights, traced decode of the KDA layer alone (`tests/test_kda_perf.py`), ms per step:
+Design 8.1 / the 2026-10-20 directive (every data-movement op of the block merged or removed), then the device-time
+item at the TP4 per-chip shape (16 heads). One chip (chip 3 of the Galaxy), real layer-4 weights, traced decode of
+the KDA layer alone (`tests/test_kda_perf.py`, `GLM53_PERF_B`, `GLM53_PERF_H` slices the layer to the first h heads):
 
-| users | composite (ops) | fused block (ops) | `kda_decode` device us | block device us |
-|---|---|---|---|---|
-| 1 | 1.378 (72) | 0.720 (6) | 44 (as 64 one-user items) | - |
-| 4 | 2.366 (75) | 0.794 (6) | 209 | 751 |
-| 8 | 3.546 (75) | 0.898 (6) | - | - |
-| 32 | 11.425 (75) | 1.491 (6) | 906 | 1453 |
+| heads | users | composite ms (ops) | fused block ms (ops) | `kda_decode` device us | block device us |
+|---|---|---|---|---|---|
+| 64 | 1 | 1.378 (72) | 0.720 (6, first fused block) | 44 | - |
+| 64 | 4 | 2.366 (75) | 0.794 (6) | 209 | 751 |
+| 64 | 32 | 11.425 (75) | 1.491 (6) | 906 | 1453 |
+| 16 | 4 | - | 0.343 (6) -> **0.248 (5)** | 145 -> **70.7** | 283 -> **199** |
+| 16 | 32 | - | 0.430 (6) -> **0.438 (5)** | 288 -> **257** | 430 -> **385** |
 
-Op-level (`tests/custom_ops/test_kda_decode.py::test_kda_decode_perf`, eager, C++-op dispatch): 241 us at
-B=4 / 930 us at B=32 with 64 heads; 197 us / 341 us with the TP4 shard's 16 heads (the users of a head are split over
-cores when heads x tile rows leave cores idle). Full layer 4 (KDA+MoE, `test_perf_layer.py`, `GLM53_PERF_B`): B=1
-8.23 -> 7.55 ms/step, B=32 18.15 -> 8.21 ms/step. The remaining block time is the weight-streaming matmuls (qkv 291 us
-on 110 cores, o_proj 149 us on 64 cores, the two gate matmuls 50 + 40 us -- the first runs on 10 cores) and the
-`kda_decode` program (64 items of 32 serial users at B=32 on this chip).
+(The 64-head rows are the first fused block, before the device-time rework; the 16-head rows are before -> after
+it.) With 16 heads the four matmuls are 128 us: qkv 77.5 us (325 GB/s of bfp8 weights), o_proj 27 us (310 GB/s), the
+two gate matmuls 14 + 9 us; the tilize is gone (the program packs the TILE `o_proj` input). At B=32 the program moves
+the fp32 recurrent state twice (64 MB for a 16-head shard): 257 us is 250 GB/s against the ~325 GB/s the matmuls
+reach, so ~200 us is its floor on this chip; a 150 us target at B=32 needs > 430 GB/s and is out of reach with an fp32
+state. Full layer 4 (KDA+MoE, `test_perf_layer.py`, 64 heads, first fused block): B=1 8.23 -> 7.55 ms/step, B=32
+18.15 -> 8.21 ms/step.
 
 The block: `qkv = x W_qkv` (bf16) -> `g1 = x [W_fa | W_ga | W_b]` (bf16, as HF) -> `g2 = g1 blockdiag(W_fb, W_gb, I)`
-(fp32: `[f | og | b_logits]`) -> `custom_ops.kda_decode.op.KdaDecode(...)(qkv, g2, conv_state, recurrent, taps, [dt_bias; exp(A_log)],
-o_norm_w, selectors, H)` -> tilize -> `o_proj`. The program (one Tensix core per (head, 32-user tile row, user part))
-does the causal conv + SiLU on the device-owned bf16 history (read, shifted in place, raw rows appended), the per-head
-L2 norms, `g = -5 sigmoid(exp(A_log) (f + dt_bias))`, `beta = sigmoid(b)`, the per-key-channel delta-rule step per user
-(the user's rows are lifted into tile row 0 by one-hot selector matmuls; the state is read and written once, in
-place) and the gated RMSNorm, and writes the bf16 row-major `[B, H*V]` output. Both fused programs are
-model-local `ttnn.generic_op` ops (user rule 2026-10-20: no shared-op or tt-metal changes): kernels, launcher
-(`op.py`, builds the `ProgramDescriptor` and calls `ttnn.generic_op` with a caller-allocated output), torch golden
-and a contract README live under `custom_ops/<op_name>/`, tests under `tests/custom_ops/`; the earlier C++ device
-ops and the per-key-decay extension of `fused_recurrent_gated_delta_rule` (the `GLM53_KDA_FUSED=2` path) are gone.
+(fp32: `[f | og | b_logits]`) -> `custom_ops.kda_decode.op.KdaDecode(...)(qkv, g2, conv_hist, recurrent, taps,
+[dt_bias; exp(A_log)], o_norm_w, selectors, out)` -> `o_proj`. The conv history is tap-major bf16 TILES `[3, B, W]`
+on this path (`TtKDA.conv_tiled`): the program reads whole tiles (no tilize) and shifts them in place;
+`prefill_forward` converts to / from ttKDA's row-major `[B, 3, W]` at its boundary and `user_conv_state` /
+`write_user_conv_state` serve the functional decoder's per-user prefill hand-offs (`tests/test_batch8.py`, layer 4,
+B = 8 and 32: pass). The program (see `custom_ops/kda_decode/README.md`): the parts of a (head, 32-user row) slot sit
+in one column of cores; the part-0 core reads the slot's ~172 KB of inputs once and multicasts them (L1 to L1); every
+core does the conv + SiLU, the L2 norms and the gates on the whole block (SFPU over the live rows only when the row
+has <= 16 users), then its users' delta-rule steps without any row lifting (a whole-tile op's row r is user r's
+result; the state update is one column-broadcast + rank-1 matmul accumulated in DST, one pack per state tile); the
+parts' output rows are gathered on the part-0 core for the gated RMSNorm and the bf16 TILE output. Both fused
+programs are model-local `ttnn.generic_op` ops (user rule 2026-10-20: no shared-op or tt-metal changes): kernels,
+launcher (`op.py`, builds the `ProgramDescriptor` and calls `ttnn.generic_op` with a caller-allocated output),
+torch golden and a contract README live under `custom_ops/<op_name>/`, tests under `tests/custom_ops/`; the earlier
+C++ device ops and the per-key-decay extension of `fused_recurrent_gated_delta_rule` (the `GLM53_KDA_FUSED=2` path)
+are gone.
 
-Correctness (`tests/test_kda.py`, real weights): block vs HF decode output PCC 0.99993 / 0.99991 (prefill 96 / 1000
-then 3 steps; the composite 0.99991 / 0.99991), state PCC 0.99993 / 0.99886 (composite 0.99993 / 0.99885);
-`test_kda_block_vs_composite` (layers 0 and 4, B=4 and 32, 10 steps on one evolving state): worst output PCC vs the
-composite 0.99996, state 0.99999, conv history 1.0, and vs HF (user 0) the block is at or above the composite every
-step. `test_decoder_layer.py` and `test_decode_trace.py` pass on the block path (5/5 each, worst decode PCC 0.99973,
-trace-safe: the program updates the persistent state and history in place and allocates only its output). The op's
-own test: `tests/custom_ops/test_kda_decode.py` (torch reference of the block, B=1/4/32/40,
-H=16/64, multi-step, trace replay). Logs: `_logs/optkda_*.log`, `_logs/optkda_ops_*.txt`.
+Correctness (`tests/test_kda.py`, real weights): block vs HF decode output PCC 0.99991-0.99994 (prefill 1000 then 3
+steps; the composite 0.99991), state PCC 0.99986-0.99989; `test_kda_block_vs_composite` (B=4 and 32, 10 steps on one
+evolving state): worst output PCC vs the composite 0.99997, state 0.999996 / 1.0, conv history 1.0, and vs HF (user 0)
+the block is at or above the composite every step. The op's own test: `tests/custom_ops/test_kda_decode.py` (torch
+reference of the block, B=1/4/32/40, H=16/64, multi-step, trace replay; output / state PCC >= 0.999995).
+Logs: `_logs/optkda_*.log`, `_logs/optkda_*_ops.txt`, `_logs/optkda_*_zones.txt`.
 
 Limits: K = V = 128 and conv kernel 4 are hard-wired in the program; the TP-mesh placement of the block path
 (`w_g1` per-chip columns) is written but not run on a mesh (single chip only here); padding rows of `qkv`/`gates`
-must be finite (ttnn matmuls on zero-padded inputs keep them zero).
+must be finite (ttnn matmuls on zero-padded inputs keep them zero); `write_user_conv_state` is a row-major
+slice / concat round trip of the batched history (prefill boundary only, never traced).
 
 ## DSA decode block (fused, `GLM53_DSA_FUSED=1`)
 
