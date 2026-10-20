@@ -79,7 +79,8 @@ def host_streams_to_device(
     """HF ``[1, S, n, C]`` (any dtype) -> packed ``[1, 1, T_pad, n*C]`` fp32 on device. With a
     multi-row ``mesh`` the rows (= ``rows * B`` decode users) are sharded over the mesh rows."""
     _, S, n, C = streams.shape
-    T_pad = pad_to if pad_to is not None else -(-S // TILE) * TILE
+    unit = TILE * (mesh.rows if mesh is not None else 1)  # a multi-row prefill chunk splits into row slabs
+    T_pad = pad_to if pad_to is not None else -(-S // unit) * unit
     packed = torch.zeros(1, 1, T_pad, n * C, dtype=torch.float32)
     packed[0, 0, :S] = streams.reshape(S, n * C).float()
     if mesh is not None and mesh.rows > 1:
@@ -109,6 +110,10 @@ class DecodePositions:
     pool_ids: ttnn.Tensor  # [B] int32: position // index_kpool
     ring_slots: ttnn.Tensor  # [B] int32: position % index_kpool
     host: list[int]  # the same values on the host (chunk geometry for the sparse path)
+    # [B] int32: min(position, 2050), the bound of the dense flash-MLA decode (DSA layers). A user beyond
+    # 2050 gets the sparse row instead, so its dense row is discarded: bounding the op there keeps its cost
+    # at <= 2051 keys instead of the whole prefix (1 GiB per layer at 1 M positions); identity otherwise.
+    dense_positions: ttnn.Tensor | None = None
 
 
 class FunctionalDecoder(LightweightModule):
@@ -230,7 +235,15 @@ class FunctionalDecoder(LightweightModule):
         pos, pool_ids, ring_slots = decode_position_tensors(
             self.device, host_positions, self.cfg.index_kpool, mesh=self.mesh
         )
-        return DecodePositions(pos, pool_ids, ring_slots, list(host_positions))
+        dense = None
+        if not self.layer.is_kda:
+            dense = decode_position_tensors(
+                self.device, self._dense_bound(host_positions), self.cfg.index_kpool, mesh=self.mesh
+            )[0]
+        return DecodePositions(pos, pool_ids, ring_slots, list(host_positions), dense)
+
+    def _dense_bound(self, host_positions: list[int]) -> list[int]:
+        return [min(p, self.layer.attn.dense_exact_max_pos) for p in host_positions]
 
     def update_decode_positions(self, dp: DecodePositions, host_positions: list[int]):
         """Refresh the persistent position tensors in place (trace-replay safe)."""
@@ -238,11 +251,14 @@ class FunctionalDecoder(LightweightModule):
             raise ValueError(f"{len(host_positions)} positions for {self.total_users} user slots")
         P = self.cfg.index_kpool
         mapper = self.mesh.shard_rows(0) if self.mesh.rows > 1 else None
-        for t, vals in (
+        updates = [
             (dp.positions, host_positions),
             (dp.pool_ids, [p // P for p in host_positions]),
             (dp.ring_slots, [p % P for p in host_positions]),
-        ):
+        ]
+        if dp.dense_positions is not None:
+            updates.append((dp.dense_positions, self._dense_bound(host_positions)))
+        for t, vals in updates:
             ttnn.copy_host_to_device_tensor(
                 ttnn.from_torch(
                     torch.tensor(vals, dtype=torch.int32),
@@ -262,7 +278,7 @@ class FunctionalDecoder(LightweightModule):
         ``start + i``. ``start == 0`` starts a new prompt; a later chunk must start where the previous
         one ended (``next_start[user]``), on a 32-row boundary, and end within ``max_seq_len`` (see
         the module docstring for the full chunked-prefill contract)."""
-        T = streams.shape[-2]
+        T = streams.shape[-2] * self.mesh.rows  # multi-row mesh: streams hold this row's slab of the chunk
         seq_len = T if seq_len is None else seq_len
         if T % TILE or seq_len > T or seq_len <= 0:
             raise ValueError(f"T_pad={T} must be a multiple of {TILE} and 0 < seq_len={seq_len} <= T_pad")
@@ -277,8 +293,10 @@ class FunctionalDecoder(LightweightModule):
                 f"user {user}: chunk start {start} is not contiguous with the previous chunk "
                 f"(expected {self.next_start[user]}; a chunk with a non-{TILE}-aligned seq_len must be the last)"
             )
-        if self.mesh.rows > 1:
-            raise NotImplementedError("prefill on a multi-row mesh is not wired yet (single-row / single-chip only)")
+        # multi-row mesh (sequence-parallel prefill v1): the rows hold consecutive slabs of the chunk; the
+        # KDA carries come back replicated over the rows and the DSA cache / index are written on every
+        # row, so slot ``user`` of EVERY row ends up holding this prompt (a per-row ownership mask is the
+        # next step; until then a prefilled user is decodable from any row's slot ``user``).
         state, temporaries = self._state_for_prefill(user, start)
         out, new_state = self.layer.prefill_forward(streams, state, user=user, seq_len=seq_len, start=start)
         for t in temporaries:

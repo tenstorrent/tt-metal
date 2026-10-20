@@ -31,11 +31,14 @@ def mesh_device_params(rows: int, cols: int, **overrides) -> dict:
     maximum fabric payload, an L1-small region for the composite collectives."""
     params: dict = {"l1_small_size": 32768}
     if rows * cols > 1:
+        import os
+
         from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config, get_max_payload_size
 
-        params["fabric_config"] = (
-            ttnn.FabricConfig.FABRIC_2D_TORUS_XY if (rows, cols) == (8, 4) else ttnn.FabricConfig.FABRIC_2D
-        )
+        torus = (rows, cols) == (8, 4) and os.environ.get(
+            "GLM53_FABRIC", "torus"
+        ) != "2d"  # GLM53_FABRIC=2d: mesh fabric
+        params["fabric_config"] = ttnn.FabricConfig.FABRIC_2D_TORUS_XY if torus else ttnn.FabricConfig.FABRIC_2D
         params["reliability_mode"] = ttnn.FabricReliabilityMode.RELAXED_INIT
         params["fabric_router_config"] = create_fabric_router_config(get_max_payload_size())
     params.update(overrides)
