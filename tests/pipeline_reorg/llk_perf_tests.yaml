@@ -6,11 +6,12 @@
 # ci-quiet log mode is hard-coded.
 #
 # The env below is only read by this gate, not by llk-perf-impl itself: it mirrors
-# what llk-perf.yaml's nightly non-speed-of-light job passes. SPEED_OF_LIGHT stays
-# false -- the nightly measures speed-of-light and a 2-4h leg per change is not
-# worth it, and nothing compares it. LLK_PERF_RUN_TYPES mirrors ALL_MODES, which
-# nightly uses to skip L1_CONGESTION (ungated, a fifth of the build); blank would
-# keep it. PIPELINE is "pr" since this runs on a pull_request, not the schedule.
+# what llk-perf-gate.yaml's nightly-measure job passes -- the non-speed-of-light
+# nightly (llk-perf.yaml's own schedule trigger always runs speed-of-light).
+# SPEED_OF_LIGHT stays false -- a speed-of-light leg is 2-4h per change and nothing
+# compares it. LLK_PERF_RUN_TYPES mirrors ALL_MODES, which nightly-measure uses to
+# skip L1_CONGESTION (ungated, a fifth of the build); blank would keep it. PIPELINE
+# is "pr" since this runs on a pull_request, not the schedule.
 #
 # {split_group} is substituted with each row's split_group by prepare_test_matrix.py,
 # so every group below shares one identical cmd that calls a shared runner in

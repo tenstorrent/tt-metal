@@ -1066,6 +1066,54 @@ def test_editing_a_broken_yaml_still_fails_closed(src_repo: Repo):
     assert "broken_tests.yaml" in stderr or "mappings" in stderr
 
 
+UNEDITED_BAD_PERF_YAML = """\
+- name: broken perf
+  cmd: |
+    ./tests/run_llk_perf_wormhole.sh
+    pytest tests/ttnn/unit_tests/
+  skus:
+    wh_n150_civ2:
+      timeout: 10
+  team: llk
+  owner_id: U050
+"""
+
+
+def test_unedited_missing_speed_of_light_never_fails_someone_elses_pr(src_repo: Repo):
+    """check_llk_perf_env() must tolerate a source-scanned yaml's pre-existing bad
+    data the same way entry_workdir() already does: this entry has no
+    SPEED_OF_LIGHT, in a yaml the PR below never opens."""
+    src_repo.write("tests/pipeline_reorg/broken_perf_tests.yaml", UNEDITED_BAD_PERF_YAML)
+    src_repo.commit_base()  # already on main; the PR below never opens it
+    src_repo.write("tests/ttnn/unit_tests/test_alpha.py", "def test_alpha(): assert True\n")
+    code, payload, stderr = src_repo.scope()
+    assert code == 0, stderr
+    assert "src alpha" in {leg["name"] for leg in payload["run_legs"]}
+
+
+UNEDITED_BAD_ENV_YAML = """\
+- name: bad env
+  cmd: pytest tests/ttnn/unit_tests/
+  skus:
+    wh_n150_civ2:
+      timeout: 10
+  team: llk
+  owner_id: U051
+  env:
+    "BAD-NAME": "x"
+"""
+
+
+def test_unedited_bad_env_name_never_fails_someone_elses_pr(src_repo: Repo):
+    """Same tolerance as above, but for entry_env()'s own validation."""
+    src_repo.write("tests/pipeline_reorg/bad_env_tests.yaml", UNEDITED_BAD_ENV_YAML)
+    src_repo.commit_base()  # already on main; the PR below never opens it
+    src_repo.write("tests/ttnn/unit_tests/test_alpha.py", "def test_alpha(): assert True\n")
+    code, payload, stderr = src_repo.scope()
+    assert code == 0, stderr
+    assert "src alpha" in {leg["name"] for leg in payload["run_legs"]}
+
+
 def test_untracked_source_file_is_scoped(src_repo: Repo):
     """Keeps the local pre-commit story working: a new file is untracked until added."""
     src_repo.write("tests/pipeline_reorg/untracked_tests.yaml", UNTRACKED_YAML)
@@ -1798,33 +1846,11 @@ LLK_DERIVED_YAML = """\
 """
 
 
-def test_llk_workdir_derives_image_and_setup(repo: Repo):
-    """Constant for every LLK leg, so derived from workdir rather than declared on
-    each entry -- a yaml added later would forget the declaration."""
-    repo.write("tests/pipeline_reorg/llk_derived_tests.yaml", LLK_DERIVED_YAML)
-    code, payload, stderr = repo.scope()
-    assert code == 0, stderr
-    legs = {leg["name"]: leg for leg in payload["run_legs"]}
-    assert legs["llk thing"]["llk_image"] is True
-    assert legs["llk thing"]["setup"] == "cd tests && ./setup_testing_env.sh"
-    # An entry without the workdir is untouched.
-    assert legs["plain thing"]["llk_image"] is False
-    assert legs["plain thing"]["setup"] == ""
-
-
-def test_llk_image_and_setup_reach_the_dispatched_row(repo: Repo):
-    repo.write("tests/pipeline_reorg/llk_derived_tests.yaml", LLK_DERIVED_YAML)
-    rows = [
-        matrix_row("llk thing [wh_n150_civ2]", "wh_n150_civ2", arch="wormhole_b0"),
-        matrix_row("plain thing [wh_n150_civ2]", "wh_n150_civ2", arch="wormhole_b0"),
-    ]
-    code, payload, stderr = run_with_matrices(repo, {"llk_derived_tests": rows})
-    assert code == 0, stderr
-    by_name = {r["name"].split(" [")[0]: r for r in payload["legs"]}
-    assert by_name["llk thing"]["gate_llk_image"] is True
-    assert by_name["llk thing"]["gate_setup"].startswith("cd tests &&")
-    assert by_name["plain thing"]["gate_llk_image"] is False
-    assert by_name["plain thing"]["gate_setup"] == ""
+# llk_image/setup used to be computed here and shipped as their own gate_llk_image/
+# gate_setup matrix fields; both are pure functions of gate_workdir, so the workflow
+# now derives them inline (see verify-changed-tests.yaml) instead of carrying two
+# more fields that could drift from the one that actually varies. Coverage for
+# gate_workdir itself lives in test_workdir_reaches_the_dispatched_row below.
 
 
 # --- LLK perf mode lint ------------------------------------------------------
@@ -1910,10 +1936,7 @@ def test_a_bad_env_name_fails_the_whole_gate(repo: Repo):
 GATE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "verify-changed-tests.yaml"
 
 
-@pytest.mark.parametrize("field", ["gate_env", "gate_setup", "gate_workdir"])
-def test_both_run_steps_apply_the_leg_fields(field: str):
-    """A sim leg runs the same cmd as a hardware one, so a field applied to only
-    one of them is a latent repeat of the PYTEST_MARKERS unbound-variable bug."""
+def _run_step_bodies():
     if not GATE_WORKFLOW.exists():
         pytest.skip("run from a full checkout")
     import yaml as _yaml
@@ -1926,5 +1949,22 @@ def test_both_run_steps_apply_the_leg_fields(field: str):
         if isinstance(s.get("with"), dict) and "run" in s["with"] and "matrix.leg.cmd" in s["with"]["run"]
     ]
     assert len(runs) == 2, f"expected a hardware and a simulator run step, found {len(runs)}"
+    return runs
+
+
+@pytest.mark.parametrize("field", ["gate_env", "gate_workdir"])
+def test_both_run_steps_apply_the_leg_fields(field: str):
+    """A sim leg runs the same cmd as a hardware one, so a field applied to only
+    one of them is a latent repeat of the PYTEST_MARKERS unbound-variable bug."""
+    runs = _run_step_bodies()
     missing = [i for i, body in enumerate(runs) if f"matrix.leg.{field}" not in body]
     assert not missing, f"{field} is absent from run step(s) {missing}; both must apply it"
+
+
+def test_both_run_steps_derive_the_same_llk_setup():
+    """setup is derived from gate_workdir inline rather than shipped as its own
+    matrix field (it never varies for an LLK leg), but a sim leg still runs the
+    same cmd as a hardware one, so the derivation itself must appear in both."""
+    runs = _run_step_bodies()
+    missing = [i for i, body in enumerate(runs) if "cd tests && ./setup_testing_env.sh" not in body]
+    assert not missing, f"LLK setup derivation is absent from run step(s) {missing}; both must apply it"

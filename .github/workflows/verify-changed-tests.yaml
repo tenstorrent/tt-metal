@@ -281,10 +281,13 @@ jobs:
         leg: ${{ fromJson(needs.scope.outputs.matrix) }}
     runs-on: ${{ matrix.leg.runs_on }}
     container:
-      # gate_llk_image wins outright: the generic dev image lacks LLK's pinned test
+      # An LLK workdir wins outright: the generic dev image lacks LLK's pinned test
       # deps. build-artifact already resolves that tag and builds it when missing.
+      # Mirrors entry_workdir()'s own "tree, not exact match" rule in
+      # verify_changed_tests.py, so a future entry nested under tt_metal/tt-llk
+      # still gets the LLK image.
       image: >-
-        ${{ (matrix.leg.gate_llk_image && needs.build-default.outputs.llk-ci-docker-image)
+        ${{ ((matrix.leg.gate_workdir == 'tt_metal/tt-llk' || startsWith(matrix.leg.gate_workdir, 'tt_metal/tt-llk/')) && needs.build-default.outputs.llk-ci-docker-image)
          || (matrix.leg.gate_packages && matrix.leg.gate_profile == 'profiler' && needs.build-profiler.outputs.basic-dev-docker-image)
          || (matrix.leg.gate_packages && needs.build-default.outputs.basic-dev-docker-image)
          || (matrix.leg.gate_profile == 'profiler' && needs.build-profiler.outputs.dev-docker-image)
@@ -356,7 +359,10 @@ jobs:
           path: docker-job
 
       - name: ⬇️ Setup Job
-        if: ${{ !matrix.leg.gate_packages && !matrix.leg.gate_llk_image }}
+        if: >-
+          ${{ !matrix.leg.gate_packages
+              && matrix.leg.gate_workdir != 'tt_metal/tt-llk'
+              && !startsWith(matrix.leg.gate_workdir, 'tt_metal/tt-llk/') }}
         uses: ./docker-job/.github/actions/setup-job
         timeout-minutes: 10
         with:
@@ -463,9 +469,12 @@ jobs:
               mkdir -p generated/test_reports
             fi
             # What the owning pipeline runs before testing. Subshell, so its own
-            # `cd` does not move the ground under the cmd's.
+            # `cd` does not move the ground under the cmd's. Derived from
+            # gate_workdir here rather than shipped as its own matrix field: it
+            # never varies for an LLK leg, so there is nothing for a second field
+            # to drift from the first.
             SETUP=$(cat <<'GATE_SETUP_EOF'
-            ${{ matrix.leg.gate_setup }}
+            ${{ (matrix.leg.gate_workdir == 'tt_metal/tt-llk' || startsWith(matrix.leg.gate_workdir, 'tt_metal/tt-llk/')) && 'cd tests && ./setup_testing_env.sh' || '' }}
             GATE_SETUP_EOF
             )
             if [[ -n "${SETUP//[[:space:]]/}" ]]; then
@@ -506,9 +515,12 @@ jobs:
               mkdir -p generated/test_reports
             fi
             # What the owning pipeline runs before testing. Subshell, so its own
-            # `cd` does not move the ground under the cmd's.
+            # `cd` does not move the ground under the cmd's. Derived from
+            # gate_workdir here rather than shipped as its own matrix field: it
+            # never varies for an LLK leg, so there is nothing for a second field
+            # to drift from the first.
             SETUP=$(cat <<'GATE_SETUP_EOF'
-            ${{ matrix.leg.gate_setup }}
+            ${{ (matrix.leg.gate_workdir == 'tt_metal/tt-llk' || startsWith(matrix.leg.gate_workdir, 'tt_metal/tt-llk/')) && 'cd tests && ./setup_testing_env.sh' || '' }}
             GATE_SETUP_EOF
             )
             if [[ -n "${SETUP//[[:space:]]/}" ]]; then

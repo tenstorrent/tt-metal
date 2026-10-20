@@ -89,13 +89,6 @@ PYTEST_TIMEOUT_FLAG = re.compile(r"\s+--timeout\s+\d+")
 # packages artifact rather than a build tree.
 PACKAGE_INSTALL_PREFIXES = ("/usr/share/tt-metalium", "/usr/libexec/tt-metalium")
 
-# The LLK tree, and what every leg running from it needs. Derived from the workdir
-# rather than declared per entry: these never vary, and a yaml added later would
-# forget them. The LLK CI image carries LLK's pinned test deps (pytest-xdist,
-# tt-exalens, torch); the setup installs the pinned SFPI toolchain.
-LLK_WORKDIR = "tt_metal/tt-llk"
-LLK_SETUP_CMD = "cd tests && ./setup_testing_env.sh"
-
 # An undeclared SPEED_OF_LIGHT does not crash these -- the script defaults it, so
 # the leg silently measures the wrong mode. See check_llk_perf_env.
 LLK_PERF_SCRIPT = re.compile(r"run_llk_perf_\w*\.sh")
@@ -732,9 +725,11 @@ def scope_file(
                 continue
             try:
                 workdir = entry_workdir(entry, path)
+                check_llk_perf_env(entry, path)
+                entry_env(entry, path)
             except GateError:
                 # Same "skip if unedited" rule as the parse above: this entry's
-                # workdir is broken pre-existing data in a yaml the PR never
+                # workdir/env is broken pre-existing data in a yaml the PR never
                 # touched, not something the PR introduced.
                 if edited:
                     raise
@@ -766,7 +761,6 @@ def scope_file(
         team = entry.get("team")
         workdir = entry_workdir(entry, path)
         check_llk_perf_env(entry, path)
-        llk = workdir == LLK_WORKDIR or workdir.startswith(LLK_WORKDIR + "/")
         for sku in runnable:
             run_legs.append(
                 {
@@ -780,8 +774,6 @@ def scope_file(
                     "packages": needs_packages(entry),
                     "workdir": workdir,
                     "env": entry_env(entry, path),
-                    "llk_image": llk,
-                    "setup": LLK_SETUP_CMD if llk else "",
                 }
             )
 
@@ -1014,8 +1006,6 @@ def filter_matrix(scope, matrices, skips):
             row["gate_packages"] = leg["packages"]
             row["gate_workdir"] = leg["workdir"]
             row["gate_env"] = leg["env"]
-            row["gate_llk_image"] = leg["llk_image"]
-            row["gate_setup"] = leg["setup"]
             if str(row.get("sku", "")).startswith("sim_"):
                 stripped = PYTEST_TIMEOUT_FLAG.sub("", row.get("cmd") or "")
                 if stripped != row.get("cmd"):
