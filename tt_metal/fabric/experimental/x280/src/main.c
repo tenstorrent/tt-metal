@@ -8,7 +8,8 @@
  * Runs one host-supplied value and returns through the acknowledged
  * resident-idle handoff.
  *
- * This firmware is loaded at X280_ACTIVE_FW_LOAD_ADDR (ld/x280.ld);
+ * This firmware is loaded at X280_ACTIVE_FW_LOAD_ADDR (ld/x280.ld), or at
+ * X280_ACTIVE_GDDR_LOAD_ADDR (ld/x280-gddr.ld) under X280_IMAGE_PLACEMENT=gddr;
  * the idle FW owns the lowest 4 KiB of LIM. See x280_address_map.h,
  * x280_hart_protocol.h, and x280/src/lim_idle.c.
  */

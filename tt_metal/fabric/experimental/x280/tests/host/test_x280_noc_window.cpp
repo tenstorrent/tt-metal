@@ -41,7 +41,8 @@ NocWindowWords firmware_words(const TranslatedCoord& target, const NocWindow2M& 
         window.target_addr,
         window.ordering,
         /*multicast_en=*/0,
-        /*num_destinations=*/0u);
+        /*num_destinations=*/0u,
+        NOC_VC_DYNAMIC);
     if (window.noc1) {
         tlb.noc_sel = 1;
     }
@@ -294,7 +295,8 @@ TEST(NocWindow, FillCarriesTheRectangleUnderMulticast) {
         /*addr=*/0,
         NOC_ORDER_POSTED,
         /*multicast_en=*/1,
-        /*num_destinations=*/0u);
+        /*num_destinations=*/0u,
+        NOC_VC_DYNAMIC);
     EXPECT_EQ(tlb.mcast, 1u);
     EXPECT_EQ(tlb.x_start, 2u);
     EXPECT_EQ(tlb.y_start, 3u);
@@ -314,7 +316,8 @@ TEST(NocWindow, FillCollapsesToOneTileUnderUnicast) {
         /*addr=*/0,
         NOC_ORDER_POSTED,
         /*multicast_en=*/0,
-        /*num_destinations=*/0u);
+        /*num_destinations=*/0u,
+        NOC_VC_DYNAMIC);
     EXPECT_EQ(tlb.mcast, 0u);
     EXPECT_EQ(tlb.x_start, tlb.x_end);
     EXPECT_EQ(tlb.y_start, tlb.y_end);
@@ -334,7 +337,8 @@ TEST(NocWindow, FillDoesNotReorderTheCorners) {
         /*addr=*/0,
         NOC_ORDER_POSTED,
         /*multicast_en=*/1,
-        /*num_destinations=*/0u);
+        /*num_destinations=*/0u,
+        NOC_VC_DYNAMIC);
     EXPECT_EQ(tlb.x_start, 9u);
     EXPECT_EQ(tlb.y_start, 11u);
     EXPECT_EQ(tlb.x_end, 2u);
@@ -352,7 +356,8 @@ TEST(NocWindow, FillCarriesANonZeroDestinationOverride) {
         /*addr=*/0,
         NOC_ORDER_POSTED,
         /*multicast_en=*/1,
-        /*num_destinations=*/16u);
+        /*num_destinations=*/16u,
+        NOC_VC_DYNAMIC);
     EXPECT_EQ(tlb.num_destinations_override, 16u);
 }
 
@@ -369,7 +374,8 @@ TEST(NocWindow, EachOrderingFillsItsTlbWindowsEncoding) {
     } cases[] = {{NOC_ORDER_DEFAULT, 0}, {NOC_ORDER_STRICT, 1}, {NOC_ORDER_POSTED, 2}};
     for (const auto& c : cases) {
         noc_tlb_2m_t tlb = {};
-        noc_fill_tlb_2m(&tlb, 9, 11, 9, 11, /*addr=*/0, c.ordering, /*multicast_en=*/0, /*num_destinations=*/0u);
+        noc_fill_tlb_2m(
+            &tlb, 9, 11, 9, 11, /*addr=*/0, c.ordering, /*multicast_en=*/0, /*num_destinations=*/0u, NOC_VC_DYNAMIC);
         EXPECT_EQ(tlb.ordering, c.mode) << "ordering " << c.ordering;
     }
 }
@@ -378,6 +384,40 @@ TEST(NocWindow, EachOrderingFillsItsTlbWindowsEncoding) {
 TEST(NocWindow, OrderingValidityExcludesCountedWrites) {
     EXPECT_TRUE(noc_ordering_valid(NOC_ORDER_POSTED));
     EXPECT_FALSE(noc_ordering_valid(static_cast<noc_ordering_t>(3)));
+}
+
+// A static VC lands as TLBWindows.md's static_vc bit, class and buddy; the
+// dynamic default leaves all three clear.
+TEST(NocWindow, StaticVcFillsClassAndBuddy) {
+    noc_tlb_2m_t tlb = {};
+    noc_fill_tlb_2m(&tlb, 9, 11, 9, 11, /*addr=*/0, NOC_ORDER_POSTED, /*multicast_en=*/0, /*num_destinations=*/0u, 2u);
+    EXPECT_EQ(tlb.data[2] >> 28 & 1u, 1u) << "static_vc is noc_properties_lo bit 28";
+    EXPECT_EQ(tlb.data[3] & 7u, 2u) << "buddy is noc_properties_hi bit 0, class bits 1-2";
+
+    noc_tlb_2m_t dynamic = {};
+    noc_fill_tlb_2m(
+        &dynamic,
+        9,
+        11,
+        9,
+        11,
+        /*addr=*/0,
+        NOC_ORDER_POSTED,
+        /*multicast_en=*/0,
+        /*num_destinations=*/0u,
+        NOC_VC_DYNAMIC);
+    EXPECT_EQ(dynamic.data[2] >> 28 & 1u, 0u);
+    EXPECT_EQ(dynamic.data[3] & 7u, 0u);
+}
+
+// Only unicast classes are admitted: a VC past 3, or any static VC on a
+// multicast, is refused before anything is written.
+TEST(NocWindow, CheckedEntryPointsRefuseANonUnicastStaticVc) {
+    noc_tlb_2m_t programmed = {};
+    EXPECT_EQ(noc_configure_tlb_2m_checked(16u, 9, 11, 0, NOC_ORDER_POSTED, 4u, &programmed), nullptr);
+    EXPECT_EQ(
+        noc_configure_tlb_2m_mcast(16u, 1, 1, 4, 4, 0, NOC_ORDER_POSTED, /*multicast_en=*/1, 0u, 2u, &programmed),
+        nullptr);
 }
 
 TEST(NocWindow, PairedSlotPredicateCoversExactlyThePairedRange) {

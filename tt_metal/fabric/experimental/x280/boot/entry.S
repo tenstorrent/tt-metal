@@ -42,6 +42,25 @@ _start:
     /* Enable full microarchitecture features (SiFive §5.17 step 4). */
     csrw  0x7c1, zero
 
+#if defined(X280_L2PF_BASIC) != defined(X280_L2PF_USER)
+#error "define both X280_L2PF_BASIC and X280_L2PF_USER, or neither (x280_image.cmake)"
+#endif
+#ifdef X280_L2PF_BASIC
+    /* This hart's L2 prefetcher (tt-isa-documentation
+     * BlackholeA0/L2CPUTile/Caches.md § L2 Cache), written by gddr images only.
+     * A lim image leaves it as it finds it, which is harmless: the prefetcher
+     * trains only on cacheable data accesses, and a lim image makes those only
+     * to the pinned input. */
+    csrr  t0, mhartid
+    slli  t0, t0, X280_L2PF_HART_SHIFT
+    li    t1, X280_L2PF_BASE
+    add   t0, t0, t1
+    li    t1, X280_L2PF_BASIC
+    sw    t1, X280_L2PF_BASIC_CONTROL_OFFSET(t0)
+    li    t1, X280_L2PF_USER
+    sw    t1, X280_L2PF_USER_CONTROL_OFFSET(t0)
+#endif
+
     /* mstatus.VS = bits[10:9]. At reset VS=0b00 (Off) -- any vector instruction traps. */
     /* Write bit[9] = 1 to set VS = Initial. Must precede any vector instruction. */
     /* Source: SiFive coreip_21G3.04.00 §5.8 */
@@ -50,7 +69,7 @@ _start:
 
     /* sp = _stack_top - hartid * _stack_size. The stride is the linking
      * script's own STACK_SIZE, because the regions differ by two orders of
-     * magnitude: 32 KiB per hart in the active-FW images, 256 B in
+     * magnitude: 32 KiB per hart in LIM active images, 0x21000 in GDDR ones, 256 B in
      * the 4 KiB resident idle. A fixed stride puts three of the idle image's
      * four stacks outside its region. %hi/%lo rather than `la`, since the
      * stride is an absolute value, not an address. */
@@ -249,3 +268,12 @@ _trap_ipi:
     sd    t0, 0(t1)
 
     mret
+
+#ifdef X280_ACTIVE_HARNESS
+/* The linker scripts place this last in the image, so the host reads the load
+ * address from the file it loads rather than trusting its own build. */
+.section .x280_image_tag, "a"
+.balign 8
+.dword X280_ACTIVE_IMAGE_TAG_MAGIC
+.dword _start
+#endif

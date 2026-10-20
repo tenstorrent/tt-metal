@@ -22,6 +22,7 @@
 #include <map>
 #include <mutex>
 #include <stdexcept>
+#include <string_view>
 #include <utility>
 
 namespace x280::detail {
@@ -29,6 +30,9 @@ namespace x280::detail {
 namespace {
 
 constexpr std::chrono::milliseconds kPollInterval{5};
+
+constexpr std::string_view kNoImageTag =
+    "active image carries no image tag in its last 16 bytes; rebuild it with ninja x280_images";
 
 const HartState* first_invalid(const std::array<HartState, kHartsPerTile>& hartstates) {
     for (const auto& hart : hartstates) {
@@ -41,31 +45,40 @@ const HartState* first_invalid(const std::array<HartState, kHartsPerTile>& harts
 
 }  // namespace
 
-void TileImpl::load_active_image(const std::vector<uint8_t>& image, std::optional<uint64_t> primed_bytes) {
+uint64_t TileImpl::load_active_image(const std::vector<uint8_t>& image, std::optional<uint64_t> primed_bytes) {
+    const auto load_addr = active_image_load_addr(image);
+    if (!load_addr.has_value()) {
+        fail(std::string(kNoImageTag));
+    }
+    const auto tile_check = validate_active_image_tile(*load_addr, id().hw_index);
+    if (!tile_check.ok) {
+        fail(label_chip_l2cpu(id().chip_id, id().hw_index) + ": " + tile_check.reason);
+    }
+
     std::vector<uint8_t> padded = image;
     padded.resize((padded.size() + 3) & ~static_cast<size_t>(3), 0);
 
-    const auto check =
-        validate_active_image(X280_ACTIVE_FW_LOAD_ADDR, padded.size(), primed_bytes, runtime_->lim_layout());
+    const auto check = validate_active_image(*load_addr, padded.size(), primed_bytes, runtime_->lim_layout());
     if (!check.ok) {
         fail(check.reason);
     }
 
     const auto tile = core();
-    transport().write_block(id().chip_id, tile, X280_ACTIVE_FW_LOAD_ADDR, padded.data(), padded.size());
+    transport().write_block(id().chip_id, tile, *load_addr, padded.data(), padded.size());
 
     std::vector<uint8_t> readback(padded.size(), 0);
-    transport().read_block(id().chip_id, tile, X280_ACTIVE_FW_LOAD_ADDR, readback.data(), readback.size());
+    transport().read_block(id().chip_id, tile, *load_addr, readback.data(), readback.size());
     if (readback != padded) {
         size_t first = 0;
         while (first < padded.size() && readback[first] == padded[first]) {
             first++;
         }
         fail(
-            "active image readback mismatch at LIM+" + hex(first) + ": " +
+            "active image readback mismatch at " + hex(*load_addr + first) + ": " +
             format_readback_values(padded[first], readback[first]) +
             ". The jump was not published, so resident idle is still in control.");
     }
+    return *load_addr;
 }
 
 std::array<HartState, kHartsPerTile> TileImpl::snapshot_active_run() const {
@@ -708,27 +721,38 @@ EnqueueResult RuntimeImpl::enqueue(X280Tile& tile, const ActiveRunRequest& reque
         // The rejection path must reach the release below rather than return
         // from here, so the outcome is carried in a flag.
         bool image_ready = false;
+        uint64_t entry_addr = 0;
         try {
             const auto image =
                 detail::TileImpl::read_image_file(request.image_path, "active image", "ninja x280_images");
+            const auto load_addr = active_image_load_addr(image);
+            if (!load_addr.has_value()) {
+                throw std::runtime_error("x280: " + request.image_path + ": " + std::string(kNoImageTag));
+            }
             const size_t padded_size = (image.size() + 3) & ~static_cast<size_t>(3);
             const auto image_check =
-                validate_active_image(X280_ACTIVE_FW_LOAD_ADDR, padded_size, state.ecc_primed_bytes, lim_layout());
+                validate_active_image(*load_addr, padded_size, state.ecc_primed_bytes, lim_layout());
             if (!image_check.ok) {
                 throw std::runtime_error("x280: " + image_check.reason);
             }
-            const auto reserved = target.reserved_lim();
-            if (!reserved.contains(X280_ACTIVE_FW_LOAD_ADDR, padded_size)) {
-                throw std::runtime_error("x280: active image is outside the component's reserved LIM");
+            const auto tile_check = validate_active_image_tile(*load_addr, target.id().hw_index);
+            if (!tile_check.ok) {
+                throw std::runtime_error("x280: " + tile_check.reason);
             }
-            const LimRange backed{
-                X280_IDLE_FW_LOAD_ADDR,
-                X280_IDLE_FW_LOAD_ADDR + state.lim_backed_bytes,
-            };
-            if (!backed.contains(X280_ACTIVE_FW_LOAD_ADDR, padded_size)) {
-                throw std::runtime_error("x280: active image exceeds currently backed LIM");
+            if (*load_addr == X280_ACTIVE_FW_LOAD_ADDR) {
+                const auto reserved = target.reserved_lim();
+                if (!reserved.contains(X280_ACTIVE_FW_LOAD_ADDR, padded_size)) {
+                    throw std::runtime_error("x280: active image is outside the component's reserved LIM");
+                }
+                const LimRange backed{
+                    X280_IDLE_FW_LOAD_ADDR,
+                    X280_IDLE_FW_LOAD_ADDR + state.lim_backed_bytes,
+                };
+                if (!backed.contains(X280_ACTIVE_FW_LOAD_ADDR, padded_size)) {
+                    throw std::runtime_error("x280: active image exceeds currently backed LIM");
+                }
             }
-            target.load_active_image(image, state.ecc_primed_bytes);
+            entry_addr = target.load_active_image(image, state.ecc_primed_bytes);
             image_ready = true;
         } catch (const std::exception& error) {
             result.outcome = EnqueueOutcome::ImageRejected;
@@ -743,8 +767,7 @@ EnqueueResult RuntimeImpl::enqueue(X280Tile& tile, const ActiveRunRequest& reque
             records_cleared = true;
             try {
                 target.clear_active_run_state();
-                target.publish_active_run_entry(
-                    request.run_value, X280_ACTIVE_FW_LOAD_ADDR, request.args_addr, request.args_bytes);
+                target.publish_active_run_entry(request.run_value, entry_addr, request.args_addr, request.args_bytes);
             } catch (...) {
                 // Snapshot while the chip lock is still held: this is the path
                 // that latches the tile unhealthy, and the latch is worth

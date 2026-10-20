@@ -1,0 +1,979 @@
+# Packet Injection Characterization
+
+The implementation uses core-sync for its phase boundary; measurement schema 2 owns
+the clock-evidence contract.
+
+**Scope:** characterization of
+dedicated single-producer single-consumer (SPSC) packet injection between
+Tensix workers (BRISC on NoC 0 and NCRISC on NoC 1) and an active X280 consumer
+over Blackhole NoC and LIM. Covers three compile-time measurement modes across
+five distinct image and test variants. The same producer, consumer, ABI and host
+stages also implement `packet_injection/erisc_to_x280_header`, with idle
+ERISC producers; see [ERISC Header-Ingress Member](#erisc-header-ingress-member).
+
+## Architectural Overview
+
+The benchmark establishes dedicated SPSC ring loops between Tensix producers
+and an active X280 consumer:
+
+- **Producers (Tensix):** Up to 280 concurrent workers (BRISC on NoC 0 and
+  NCRISC on NoC 1 across up to 140 physical tiles). Each worker maintains an
+  independent L1 staging buffer, credit counter, and ring pointer.
+- **Consumer (X280 Hart 0):** Services worker rings in a round-robin schedule
+  (fixed tile prefix, BRISC then NCRISC), reading arrival snapshots from LIM,
+  performing four volatile destination-ID byte loads at offsets 83..86,
+  recording timing endpoints, and returning batch credits to worker L1.
+- **Harts 1–3:** Quiescent parked participants that return success through the
+  active lifecycle harness.
+
+```text
+[Tensix Worker]                                      [X280 Hart 0]
+[one core-sync barrier after warmup credits drain]
+[Mode 2: take throughput_start once, after barrier release]
+Construct fresh 96 B header in staging slot
+Acquire space in ring (check credit / stall)
+Issue 128 B non-posted write to LIM ring
+Advance reserved progress r; pending++
+if pending==B || r-c_seen==S || issued==limit:
+  barrier(assigned_noc)
+  write stable produced word r to LIM ---------->  Poll produced[w] snapshot
+                                                    Check available <= S and <= limit
+                                                    Read 4 volatile ID bytes (83..86)
+                                                    [Mode 1: read remote timer, store sample]
+                                                    Advance consumed[w]
+                                                    if consumed - credited == C || visit_end:
+Poll local consumed mirror <------------------------- return_credit(consumed[w]), posted
+Retire requests (and record RTTs in Mode 3)
+[Mode 2: take throughput_end once, after the final measured credit]
+```
+
+The consumer's arrival observation is four steps:
+
+```text
+fence inbound
+load produced
+if work is available: fence inbound
+load the published ring slot and four destination-ID bytes
+```
+
+The second fence executes only on the work-taken path. The producer's barrier
+before publication orders the producer's writes and does not order the
+consumer's two loads: they are related by a control dependency, which RVWMO does
+not order, and the slot address derives from the consumer's own `consumed`
+counter rather than from the loaded snapshot, so no address dependency orders
+them either. That second fence is what orders the counter load against every
+slot load of the visit.
+
+## Measurement Modes and Variants
+
+The benchmark defines three compile-time modes and five build variants via
+`PACKET_INJECTION_MODE` and `PACKET_INJECTION_INCLUDE_CREATION`:
+
+| Variant | Mode | Include Creation | Measurement Semantics |
+|---|---|---|---|
+| `latency-include` | `PI_MODE_LATENCY` (1) | 1 | Tensix local timer before header construction (before ring-space wait) to X280 remote timer read after ID loads. |
+| `latency-exclude` | `PI_MODE_LATENCY` (1) | 0 | Tensix local timer after header construction and before ring-space wait, to X280 remote timer read after ID loads. |
+| `throughput` | `PI_MODE_THROUGHPUT` (2) | 0 | Each producer's own `tensix_live_timer_read` interval, from core-sync release to its final measured credit. Reported per worker. |
+| `backpressure-include` | `PI_MODE_BACKPRESSURE` (3) | 1 | Tensix producer-only credit stall durations and stall-triggered request RTTs (with creation). |
+| `backpressure-exclude` | `PI_MODE_BACKPRESSURE` (3) | 0 | Tensix producer-only credit stall durations and stall-triggered request RTTs (without creation). |
+
+### Wire Slot and Header Syntax
+
+Every ring slot is 128 bytes, aligned to 64 bytes (`pi_slot_t`):
+- Bytes 0..95: Syntactically valid Fabric shadow unicast header (`fs_hybrid_mesh_packet_header_t`).
+  Created afresh in volatile staging storage by `fs_seed_unicast_header()`: zero command union,
+  zero payload, `NOC_UNICAST_WRITE=0` at byte 42, `src_ch_id=0` at byte 43, `routing_fields=0`,
+  35 route bytes `FS_HOP_NOOP`, destination chip at 83..84, destination mesh at 85..86,
+  zero multicast parameters.
+- Bytes 96..103: 8-byte start timestamp (`uint64_t start`), populated only in latency mode.
+- Bytes 104..127: 24 bytes of padding.
+
+The X280 consumer loads four volatile destination-ID bytes at offsets 83, 84, 85, 86 in that
+exact order to assemble destination chip and mesh IDs. Values are discarded; no payload scanning
+or checksumming is performed.
+
+### Latency Measurement
+
+In latency mode, the producer samples its tile's local 64-bit timestamper (`tensix_live_timer_read`)
+either before header construction (`include_creation=1`) or immediately after header construction
+(`include_creation=0`), but in both cases strictly before `acquire_space_for_current_request()`.
+Therefore, any ring-space credit wait is included in the timed request interval. The timestamp is
+written into `slot.start`. Upon observing the arrival and loading the four destination ID bytes,
+the X280 consumer remotely samples the *same* producing tile's timestamper through an uncached
+TLB window (`X280_TLB_PACKET_INJECTION_TIMER=156`), computes the duration `end - start`,
+and stores it directly into a reserved cached way (`0x0A000000`). Timing spans from producer
+start through the remote NoC low-word read; the high2 read/response and post-bracket fence fall after
+the recorded endpoint but delay subsequent requests. Durations are cached until run completion,
+then exported to LIM outside measurement. Ring-space waiting is explicitly included in the measured interval.
+The consumer's load of `slot.start` follows the four ID bytes, so both sit after the work-taken
+fence of the publication ordering above.
+
+X280 creates the samples, so `pi_consumer_slot_t::phase_done` is the authoritative exported
+sample-prefix length. The producer's `latency_count` counts requests it has seen credited and is
+independent retirement evidence: a run that fails between the sample store and the credit
+observation leaves `latency_count` smaller than the prefix that exists, and truncating by it would
+discard valid samples. The host bounds the consumer count by the worker's export share
+(`latency_sample_stride / 8`, which is `N`) and by the worker's containment in the export region,
+and rejects a count exceeding either rather than clamping it — a rejected prefix hands back no
+length. A `latency_count` above `phase_done` is a corruption check with no reachable trigger, since
+the producer retires only on the credit X280 returns after servicing.
+
+#### Packet-creation cost
+
+`latency-include` and `latency-exclude` differ only in whether the producer's
+start timestamp is taken before or after header construction, so the difference
+between them is the cost of constructing one 96-byte header. Over 6 attempts the
+one-producer latency p50 is
+1423.210 [1388.889-1465.926] ns with creation included and
+1074.938 [1056.296-1100.000] ns with it excluded;
+the difference of the two means, 348.272 ns, is the creation cost
+([results.md](../results.md#packet_injection)).
+
+### Throughput Measurement
+
+Throughput mode disables all per-request timestamping and measures each producer
+independently. A producer reads its own tile's local timestamper twice: `throughput_start`
+immediately after core-sync releases the warmup barrier and before its first measured header,
+and `throughput_end` after its final measured request is fully credited. Both are raw reads
+of a concurrent-safe local timer, so no producer's interval depends on another's progress.
+
+Each worker record keeps that raw interval, and the host derives no rate. Its `throughput`
+object carries `start_ticks`, `end_ticks`, `requests` (N),
+`useful_bytes_per_request` (96) and `slot_bytes_per_request` (128); the offline tool derives
+one rate per worker from it and the run's clean AICLK evidence:
+
+```text
+elapsed             = end_ticks - start_ticks
+requests_per_second = requests * conversion_hz / elapsed
+```
+
+Workers are never summed or averaged into a capacity figure. The useful-header and slot byte
+rates are that one worker's rate scaled by the 96 useful header bytes and the 128 slot bytes
+respectively, so they describe a single producer, not aggregate bandwidth.
+
+Raw endpoints and the delta are retained in every case, including failure. An interval of
+zero or one at or beyond the timer half-range is rejected rather than reported: the worker's
+`throughput` carries `interval_error` `invalid_interval`, and the run fails naming the first
+offending worker and its two endpoints.
+
+**Aggregate interval.** Separately from the per-worker intervals, and in every mode, X280
+reads its own `mtime` and `rdcycle` once when the measured-phase core-sync release returns
+and again after the measured phase's final credit flush, and publishes the four raw values
+in `pi_run_result_t` (`aggregate_start_mtime`, `aggregate_end_mtime`,
+`aggregate_start_rdcycle`, `aggregate_end_rdcycle`). This is the one common clock over all
+P workers. The release is a posted write that returns once issued, not once delivered, so
+the record labels the start `release_issued`. The start sample therefore does not mark when
+the producers began: one released by an earlier write may already have published, which
+makes the rate look higher, and one whose release is still in flight starts after it, which
+makes it look lower. The error is of the order of the release's issue and delivery time.
+The end read follows the final credit flush, whose credit stores are posted, so the interval
+ends when the last credits are accepted, not when they land; the producers' own intervals
+end only after they observe them.
+The host records the raw `mtime` and `rdcycle` endpoints with the fixed 50 MHz `x280_mtime`
+clock; the offline tool derives the interval over `P*N` headers and `P*N*96` header bytes, and
+rates from it; `rdcycle` stays raw hart-0 cycles. On a successful run a zero, inverted or half-range interval in either counter fails the
+run, naming both pairs.
+
+`empty_visits` counts measured-phase round-robin visits that found the visited worker's
+ring empty. Warmup visits and visits to a worker that has already completed its phase are
+not counted.
+
+Each throughput producer also counts its measured-phase credit-stall episodes in
+`pi_producer_result_t.stall_count`: entries into the ring-full wait, the episode
+backpressure mode samples, counted with no durations and no added timer reads. A full ring
+whose credit has already returned when first checked is not an episode. The count is taken
+on entry, where it overlaps the wait; taken on exit it sits on the issue path. A failed
+run can therefore count one episode that never ended, which backpressure mode would not
+sample. Many empty visits with few stalls point at the producers or NoC ingress;
+many stalls with few empty visits point at X280 service.
+
+**Measured scaling, reported without attribution.** Per producer at S=16, B=1, C=1, K=1,
+mean [min-max] over every producer of every attempt:
+
+| P | family | T | ns/request |
+|---:|---|---:|---:|
+| 1 | brisc | 1 | 697.104 [697.094-697.124] |
+| 2 | brisc | 2 | 695.102 [694.591-695.490] |
+| 2 | paired | 1 | 695.379 [694.912-695.653] |
+| 4 | brisc | 4 | 655.696 [615.556-695.763] |
+| 4 | paired | 2 | 695.552 [694.822-696.195] |
+| 8 | paired | 4 | 838.639 [837.630-839.807] |
+
+From P=1 to P=2 the per-producer time moves by at most 2.002 ns/request, no P=4 mean
+exceeds P=1's, and at P=8 it is larger. At equal P the two topologies, two producers sharing a tile
+across both NoCs or one producer per tile on NoC 0, agree within their ranges. Within one attempt the producers of a shape differ by
+0.094 to 80.207 ns/request (P > 1).
+
+These records describe individual producer completion only. They do not establish
+aggregate X280 capacity, injection bandwidth, or NoC bandwidth, and the per-producer rates
+must not be summed; the consumer's interval per header is the X280 aggregate record
+([results.md](../results.md#packet_injection)). The T=4 capacity and C/K isolation points
+(`docs/measurement.md`) vary B and C; this configuration holds B and C at 1, so every
+request carries a publication and a credit return.
+
+### Backpressure Measurement
+
+Backpressure mode uses producer-local instrumentation exclusively:
+- The producer retains the original start time for every issued request in a ring-sized array `starts[S]`.
+- When the ring is full (`r - c_seen == S`), the producer flushes pending writes and checks for credit.
+- If credit has already arrived, requests retire immediately without a stall sample.
+- If still full, the producer starts a stall episode (`stall_start = timer()`) and spins until progress
+  is observed. Upon progress, `end = timer()` is sampled as the first action.
+- A single stall duration `end - stall_start` is recorded in L1 `stalls[stall_count++]`.
+- For each earlier request released by that observation (`jump` requests), an RTT sample
+  `end - starts[(c_seen + j) & (S - 1)]` is recorded in L1 `rtts[rtt_count++]`.
+- Warmup and final drain phases never record stall or RTT samples.
+
+**The axis produces no sample at P=1.** At S=16, B=1, C=1 with a single worker,
+both creation variants complete successfully and report `credit_stalls` and
+`stall_triggered_rtt` at count 0 with `reason="no_samples"`. **An empty
+backpressure population at P=1 is a configuration artifact and must not be read as
+"no stalls observed".**
+
+The published backpressure configurations run at P=1, so the 0 credit-stall episodes
+[results.md](../results.md#packet_injection) records for them are that artifact. A stall sample
+is one episode's spin, while an RTT sample spans a request's original start through the credit
+that released it, which includes a full ring's queueing.
+
+### Mode-specific timer code
+
+A mode's timer endpoints are absent from the linked image of every other mode, not branched around
+in it. Disassembling each variant's producer kernel and X280 firmware with
+`riscv-tt-elf-objdump -d -l --inlines` and attributing every inlined `tensix_live_timer_read`
+expansion to its call site gives:
+
+- The throughput producer holds exactly two endpoint call sites, taken once each per run:
+  `throughput_start` in `run()` and `throughput_end` in the measured `run_phase`. It is also the
+  only image holding the retry-failure path that publishes `PI_ERROR_TIMER_RETRY_EXHAUSTED` at
+  `PI_PHASE_MEASURE` for the first of them. The other four producer images reference none of the
+  three.
+- The latency producer holds only its per-request start read, before header construction in
+  `latency-include` and after it in `latency-exclude`, instantiated in both the warmup and the
+  measured `run_phase`.
+- The backpressure producer holds the stall-episode start and end reads in
+  `acquire_space_for_current_request` and the per-request start an RTT is measured from, all three
+  only in the measured instantiation: the warmup instantiation takes no sample read.
+- All five producer images retain the two safety reads, the phase-deadline origin in
+  `reset_phase_deadline()` and the amortized deadline check in `amortized_safety_check()`. Those
+  are the only timer reads in the throughput image besides its two endpoints.
+- The remote end read belongs to the X280 image rather than the producer. The object code of
+  `tensix_live_timer.h` and of `ensure_timer_window()` appears only in the two latency firmware
+  images; the throughput and both backpressure images contain neither, so outside latency mode the
+  X280 samples no Tensix timestamper and programs no timer window. Its `mtime` safety reads and
+  the aggregate `mtime`/`rdcycle` bracket remain in all five.
+
+### Results and clock evidence
+
+Per-worker records preserve the initialized `raw_ticks` arrays, and the run record carries
+no population: the offline tool pools the workers' raw samples. `latency`, `credit_stalls`,
+and `stall_triggered_rtt` are separate populations, whose statistics the offline tool
+computes from the raw samples. Empty populations contain `reason="no_samples"`. Producers retain raw ticks rather than
+nanoseconds. Each run and worker record carries the programmed maximum, four
+host-bracketed counter samples, start/end/elapsed rate bounds and CMFW throttle
+telemetry; the offline tool converts at `conversion_hz` when that evidence
+validates, and otherwise at the measured rate with a warning (`docs/measurement.md`
+"Collection and reproduction"). RTTs describe
+only requests released by observations that end a credit stall, not all requests.
+Failed or invalid-interval throughput records preserve the raw endpoints,
+counts and byte geometry with an explicit `interval_error`; rates are derived
+offline. Per-worker throughput records carry `credit_stall_episodes`, that
+worker's `stall_count`.
+
+The elapsed rate bound narrows as the run lengthens, and the Tensix member's
+warm-up is fixed rather than calibrated; `docs/measurement.md` gives the margin and
+what calibration would need. The ERISC member calibrates its warm-up (below).
+
+Every producer counts the produced-counter writes it issues in the measured phase in
+`pi_producer_result_t.measured_counter_writes`, in every mode: one per publication of a
+non-empty batch, whether a full batch, a full ring or the phase end forced it. Every
+per-worker record ends with that count as `producer_counter_writes`. A successful run
+requires each worker's count to lie in [ceil(N/D), N] with D = min(B, S), since each write
+publishes at least one and at most D headers.
+
+Each run also writes an aggregate record (`"record":"aggregate"`) to the run file, after
+the run record. It repeats the run's identity, configuration and outcome fields, so it joins
+its run by `run_value`, then carries `start_event` (`release_issued`),
+`aggregate_start_mtime`, `aggregate_end_mtime`, `aggregate_start_rdcycle`,
+`aggregate_end_rdcycle`, `empty_visits`, `aggregate_error`, `measurement_schema` 2,
+`wall_counter` `x280_mtime`, `cpu_counter` `x280_rdcycle`, and its own `clock`, the fixed
+50 MHz `x280_mtime` domain rather than the run's AICLK evidence. The interval and the P*N
+headers and bytes it covers are derived offline from those. On a failed run or an invalid
+interval `aggregate_error` is `run_failed` or `invalid_interval`, and the raw endpoints are
+kept. The campaign validator requires the aggregate record.
+
+Records include configuration, ordered tiles and selected prefix length, per-worker
+placement, memory budgets and cleanup status. Both run records carry `released_group_dests` and
+`released_endpoints`, the release X280 executed (`pi_run_result_t`): the group's receiver
+count, zero for none, and the unicast endpoint count. The run record also carries
+`release_guards`, the guard words armed (zero for a unicast release), and
+`release_guards_overwritten`. A record without `release_guards` carries
+`release_multicast_safe` instead, the flag the host passed: 1 released tiles that filled their
+bounding box by one multicast, 0 released one unicast per tile.
+
+The reported assumption mask covers inbound LIM visibility, scalar counter atomicity,
+same-address credit order on the static-VC counter window (`PI_ASSUMED_STATIC_VC_ORDER`),
+nominal mtime frequency, local timer access ordering, and (for latency) pinned export
+visibility. It does not carry bit 2 (`PI_ASSUMED_BRIDGE_COMPLETION`, mode-1 credit
+completion): no packet-injection store waits for completion.
+`PACKET_INJECTION_BRIDGE_HISTORY` defaults to `unknown`; the accepted
+`reported_no_mode3_since_reset` value is provenance, not proof of clean hardware.
+`mode3_observed` refuses reuse without initiating a reset.
+
+## Memory Contract
+
+### ABI Records
+
+Every args and result record carries an `abi_tag`: bits [31:16] `PI_ABI_MAGIC` (0x5049),
+[15:8] zero, [7:4] the mode, and [3:0] the include-creation flag, so one comparison rejects a
+mismatched firmware variant and uninitialized memory. The tag carries nothing about the layout;
+the compile-time goldens in `packet_injection_abi.h` are what reject a moved span, and nothing
+rejects a peer built against another layout.
+
+```text
+sizeof(pi_x280_args_t)       = 128
+sizeof(pi_producer_args_t)   = 72 = 18 runtime words (PI_PRODUCER_ARG_WORDS)
+sizeof(x280_noc_coord_t)     = 8, one tile-table entry
+sizeof(pi_consumer_slot_t)   = 24
+sizeof(pi_counter_slot_t)    = 64
+sizeof(pi_ready_slot_t)      = 64
+sizeof(pi_producer_result_t) = 128, filling its 128-byte L1 allocation
+sizeof(pi_run_result_t)      = 128
+```
+
+These are the terms of the arena formula below: 320 is `pi_x280_args_t` at 128 bytes,
+`pi_host_control_t` at 64 and `pi_run_result_t` at 128, `8*T` the coordinate table, `8*P` the core-sync arrival slots,
+`24*P` the consumer slots, and `128*P` the produced and completion slots.
+
+### Layout Rejection
+
+`pi_compute_layout()` returns a `pi_layout_check_t` of `code`, `value`, and `bound`, and writes its
+output layout only on success — a rejected call leaves the caller's `pi_layout_t` untouched, so no
+address can be derived from rejected input. `code` names the class of rejection and `value` and
+`bound` the offending quantity against the limit it failed, both zero where the code names neither.
+Host, X280, and producer map the code through the same `pi_layout_code_to_error()`, so one cause
+reaches a report under one name from three actors.
+
+`PI_LAYOUT_INVARIANT` is the function catching its own arithmetic against its own postcondition. No
+input can provoke it and it accuses no argument, which is why it maps to
+`PI_ERROR_LAYOUT_INVARIANT` rather than to `PI_ERROR_BAD_ARGS`: it reports an implementation
+self-check failure, and sends nobody auditing parameters that may be entirely valid.
+
+### X280 LIM Profile (`LimLayout::PacketInjection`)
+
+The benchmark requires the opt-in `LimLayout::PacketInjection` memory profile:
+- **L3 WayEnable:** Exactly 1 (`lim_ways = 14`, 2 cache ways, 14 LIM ways).
+- **Lower Arena (`0x08020000..0x080FFF80`):** 917,376 bytes dedicated to the packet injection
+  harness. Houses the X280 argument block, host control, the run result, the tile coordinate
+  table, per-worker core-sync arrivals, consumer slots, produced and completion slots, rings,
+  and latency sample export.
+- **Image and stacks:** The consumer images run from the cached local GDDR (`PLACEMENT gddr`), so
+  their code, data and stacks are outside the LIM.
+- **Upper Reserved Spans:** The LIM active-image stack span (`0x080FFF80..0x0811FF80`), unused by
+  the gddr consumer images, then trap blocks (`0x0811FF80..0x08120000`),
+  and everything above them through the socket layout's end (`0x08120000..0x08154000`, which holds the
+  runtime's reservation through the hart protocol block, ending at `0x08131B00`) remain completely untouched.
+
+Arena sizing formula:
+`F(P, T, S) = align64(align64(320 + align64(8*T) + 8*P) + 24*P) + 128*P + 128*P*S`.
+The tile-coordinate table occupies whole cache lines because a LIM write admits
+only whole cache lines, so the host writes the reserved span and leaves the tail
+beyond the `T` records zero.
+The produced and completion slots are 64 bytes each at a 64-aligned base -- the inner
+`align64` and the `128*P` term -- because the producer publishes each of them with a
+length-carrying NoC write whose Tensix L1 source is congruent to 0 mod 64, and that
+write path requires source and destination congruence. Only `value` is semantic; the
+remaining 60 bytes of each slot are padding.
+For `P=280, T=140, S=16, N=48`: base `F = 619,072` bytes; export `8*P*N = 107,520` bytes; total arena `726,592` bytes.
+Request `PACKET_INJECTION_N=48` explicitly for that maximum-worker point.
+The latency default remains N=4096 and is rejected, not clamped, when it exceeds capacity.
+The core-sync arrival table adds eight bytes per worker before alignment; every admitted
+configuration is decided by `pi_compute_layout()` against the 917,376-byte arena.
+Small tile counts, not the maximum, discriminate this arithmetic. At `P=280` the consumer
+array is a whole number of cache lines (`24*280 = 6,720 = 105*64`), so `produced_offset`'s
+`align64` rounds nothing and the coordinate table's 16 bytes of padding are absorbed; at
+`P=2` that `align64` rounds 16 bytes and the padding moves the arena by 64. A layout change
+that is wrong in the padding terms can pass at 280 workers and fail at one.
+
+### Pinned Cache Way
+
+Way 1 (`0x0A000000..0x0A020000`, 128 KiB) is reserved for writable sample storage in latency mode:
+- Initialized prior to warmup via `x280_pinned_input_prepare` with `X280_PINNED_INPUT_WRITABLE_SAMPLES`.
+- Stale cached copies are flushed using L3 `CCACHE0_FLUSH64` (`0x02010200`), lines zero-populated,
+  and active way masks updated to bit 0 alone across all 38 masters.
+- Exported to LIM after producer quiescence, and torn down via `x280_pinned_input_teardown`
+  only after host collection is acknowledged.
+
+Throughput and backpressure reserve no part of that region. They instead call
+`x280_pinned_input_check_policy(..., X280_PINNED_INPUT_BASELINE)` before warmup, so a prepared way
+mask a prior run left behind fails the run at `PI_PHASE_INIT` rather than starving the measured
+phase into a timeout. A wrong WayEnable, a wrong way mask, and a wrong region shape keep distinct
+codes — `PI_ERROR_PIN_WAYENABLE`, `PI_ERROR_PIN_WAYMASK`, `PI_ERROR_PIN_SHAPE` — and an admission
+code outside that enum names no cause and reports `PI_ERROR_PIN_POLICY`.
+
+A failed baseline check reserved nothing, so it does not set uncertain pin ownership and does not
+block the run's own teardown. Only a refused or partial preparation does, and that retains the way:
+cleanup then refuses to relinquish it rather than handing back a way whose state is unknown.
+
+### Tensix L1 Shards
+
+One height-sharded `MeshBuffer` covers every participating tile, one page per tile at a
+single device-local base `l1_tile_base`, which is the only L1 address the ABI transmits.
+Admission requires the per-tile span to be no larger than the target's L1 window, which `Capacity`
+carries as `[l1_window_base, l1_span_limit)`; the Tensix suite fills it with the allocator's L1 base
+and `l1_size_per_core()`, and `allocate_tile_l1_buffer()` checks that the allocated span ends within
+`l1_size_per_core()`:
+- The first cache line holds the tile-shared core-sync release word.
+- Worker 0 (BRISC) starts at offset 64; Worker 1 (NCRISC, if Paired) starts at offset `64 + L`.
+- Worker block: consumed mirror (64 B), control line (64 B), stable produced source (64 B),
+  stable ready source (64 B), producer result (128 B), staging (`128*D` B),
+  plus start/stall/RTT arrays in backpressure mode. The layout retains paired
+  64-bit wall/CPU start stamps and paired 32-bit stall/RTT deltas; intervals
+  exceeding UINT32_MAX ticks fail before storage, never truncate. The producer
+  result includes native CPU endpoints for throughput without enlarging its
+  reserved 128-byte slot.
+
+Page order is asserted, not assumed. The host reads the whole buffer in one transfer and
+slices it by page index, and nothing on the host can prove that page `i` is ordered tile `i`
+without silicon. Each slice therefore identifies itself: the host requires the
+`pi_producer_result_t` in page `i` to carry the expected `abi_tag` and `worker_index`, and a
+permutation is a hard failure naming both the expected and the found index. A silent
+permutation would attribute one tile's counters to another, which no later check would catch.
+
+## Outbound TLB Window Map
+
+The X280 firmware reserves:
+- **Entries 16..155:** 140 fixed uncached System Port L1 windows (one per physical tile).
+  Programmed once before warmup as counter windows (`kernels/shared/x280_counter_window.h`:
+  Mode 2, `NOC_ORDER_POSTED`, static VC 2, write-only); they carry the credit and STOP words.
+- **Entry 156:** Latency debug-timer window (`NOC_ORDER_STRICT`), mapped to page
+  `0xFFA00000` to access Debug Timestamper at `0xFFB121F0/4`.
+- **Entry 157:** Core-sync ordered release window. A selection the shared release selector
+  gives a group (its tiles fill one logical rectangle) takes one multicast rectangle; every other
+  selection takes one table-ordered unicast write per tile.
+- **Entries 192..223:** Host-owned (untouched by firmware).
+
+## Host Orchestration and Safety
+
+1. Pre-run verification: checks AICLK telemetry, validates configuration bounds, computes layout,
+   allocates L1 buffers and primes LIM.
+2. Two-phase collection:
+   - Producers signal data quiescence via the one-word `PI_READY_DONE` completion slot.
+   - X280 copies cached samples to LIM export, then sets `data_quiescent = 1`, which is the
+     host's authorization to collect: every consumer slot, producer result, and export byte
+     is final before it, and only teardown fields change after it.
+   - Host copies valid prefixes into host memory.
+   - Host writes the active `run_value` to `collect_ack_run_value` in `pi_host_control_t`;
+     zero means not acknowledged, so a run value is never zero.
+   - X280 performs cache teardown, clears touched windows, and returns through active harness.
+3. Bounded joinable collection thread:
+   Host runs `ttmd::Finish` and `EnqueueReadMeshBuffer` on an isolated joinable thread bounded
+   by the host deadline.
+4. STOP and retained-resource policy:
+   On producer failure or the host deadline, a concurrent runtime cleanup publishes host STOP.
+   X280 writes packet `PI_CONTROL_STOP`, performs a validated recovery release when the normal
+   barrier did not release, and allows a bounded recovery grace period for completion,
+   collection, ACK, and cleanup. If release, counter quiescence, or cleanup remains unproven,
+   the host invokes `retain_failed_run()` without releasing any owner. A host error raised
+   while that cleanup runs first joins it, within its grace, and then retains.
+
+The target-agnostic stages above live as free functions in
+`tests/device/suites/packet_injection/common.hpp`: run-value minting, strict number parsing and
+failure rendering; the LIM slot dump; priming the arena with the X280 args and tile table; the
+X280 launch, quiescence poll and recovery under the host deadline; consumer-slot, run-result and
+export readback; the bounded collection wait, which runs the target's readback on its own
+thread under the X280 run's host deadline; the checked X280 and producer argument builders; the
+collection ACK and cleanup checks; and per-worker count, success,
+export-accounting and throughput-interval validation plus the shared JSONL
+fragments. The aggregate-interval predicate is pure host and lives in
+`tests/device/suites/packet_injection/regions.hpp`, where the host tests reach it. The Tensix
+suite, `tensix_to_x280.hpp`, keeps its `run_axis` as a straight-line sequence over those calls and
+owns tile placement, the sharded L1 buffer, producer kernel creation and runtime args, the
+collection body (`Finish`, Tensix wall samples and the sharded L1 readback), and the
+producer-result readback and identity checks.
+
+A producer writes its identity — `abi_tag`, `worker_index`, `run_nonce` — into its L1 slice as
+soon as that slice's address is trustworthy, so every later failure carries identity plus a
+failure record. Four failures precede that point and can leave no L1 trace at all: an
+`abi_tag` mismatch, `pi_compute_layout()` rejecting the transmitted parameters, a
+worker-index/RISC parity disagreement, and an L1 span exceeding the tile's L1. None of the four
+yields a slice address. The `abi_tag`, layout and L1-span rejections are identical for every
+worker, so they present as uniform zeros across every page; a parity disagreement belongs to
+the one image that was handed another worker's args and zeroes only its own page. The host
+reports the count on that path: `N of P slices are unpublished`, with `N == P` meaning the
+launch itself was rejected before any producer could derive its slice, and `N < P` meaning
+that one producer failed before its result write. This is the first thing to read on a silent
+bring-up, since a wholly rejected launch and a single dead producer are otherwise
+indistinguishable. Of the four, the parity disagreement is the only one identifiable from the
+dump alone: it is the only launch-side rejection that yields `N < P`, so a single unpublished
+slice among written ones narrows to it or to a producer that died mid-run, while the other
+three always yield `N == P`.
+
+Every wait a producer makes for its own NoC writes to be acknowledged is bounded by
+`timeout_ticks` on the clock the deadline uses (`kernels/shared/metal_bounded_wait.hpp`, the wait
+eth_credit's ERISC kernels use). A destination that never acknowledges fails the producer with
+`PI_ERROR_TIMEOUT` in the phase it was in, recorded in L1; the failure is announced on the ready
+slot only if a later wait drains, since a source still in flight is never rewritten.
+
+A bad `worker_index` and an out-of-range peer coordinate do carry identity but deliberately
+publish no `READY_FAILED`, because the ready slot they would announce on belongs to another
+worker. These surface as an X280 timeout, or as `PI_ERROR_STOPPED` if a host STOP arrives
+first; the reason is in the collected L1 result, not in the readiness mirror.
+
+Cooperative failures export each worker's measured prefix independently only after all
+producers publish completion and the counter-distance checks prove quiescence. Warmup
+progress is not a latency sample count.
+An ACK timeout or STOP leaves the active image, export, and pinned samples intact;
+a later matching ACK permits teardown but does not erase the first failure.
+Failed cache restoration or window readback never authorizes host cleanup.
+
+### Synchronization and completion
+
+Producers run warmup immediately, drain every warmup credit, then publish one indexed
+core-sync word arrival and wait on the tile-shared release word. X280 consumes warmup,
+flushes credits, verifies `consumed == credited` for every worker, waits for all arrivals,
+and releases either the host-selected group or every tile by an ordered unicast write.
+Paired BRISC and NCRISC workers publish separate arrivals but poll the same tile release word.
+
+`pi_x280_args_t.release_num_dests` and `release_rect` carry the host release selector's group:
+a nonzero `release_num_dests` releases the virtual rectangle `release_rect` by one multicast, and
+zero releases every tile by its own unicast write, as a core-sync endpoint rather than a group.
+X280 does not choose; it checks that a group is the tile table's -- a valid rectangle containing
+every entry, `release_num_dests` equal to `tile_count` -- and that no group leaves the rectangle
+zero, and rejects anything else as `PI_ERROR_BAD_ARGS`. A singleton group would not do: the
+transport releases every group, whatever its size, through a multicast-enabled window, so a
+one-tile rectangle is still a broadcast. NoC broadcast is
+delivered only to Tensix tiles -- firmware opts every other NIU out through the broadcast
+opt-out masks (tt-isa-documentation `BlackholeA0/NoC/MemoryMap.md`, the broadcast-rectangle
+description and the column and row opt-out masks; `NoC/README.md`) -- so a rectangle of any
+other tile type, one tile included, would drop the release and leave every producer waiting until
+timeout.
+The Tensix suite passes the group the shared release selector (`select_release`) returns when its
+tiles fill one logical rectangle, and none otherwise.
+
+Whenever the executed release is a group, every run also checks that it stayed inside its
+tiles: every other compute-grid core holds a guard word at the release address, written before
+the AICLK start read and read back after the end read, and a run that overwrote any of them fails,
+naming the cores. The helpers are in `harness/regions/release_guard.hpp`, shared with the core-sync
+check (`X280CoreSyncDirector.RequiredMulticastReleasesExactlyItsSelection`).
+
+The packet control line carries only `PI_CONTROL_RUN` and `PI_CONTROL_STOP`; it is not a
+phase protocol. The completion slot carries only `PI_READY_NONE`, `PI_READY_DONE`, and
+`PI_READY_FAILED`. Failure detail remains in `pi_producer_result_t`.
+
+## Benchmark Parameters
+
+### Build-time selectors
+
+Each selector pair is one firmware image and one producer kernel build; a run
+changes it only by switching image and gtest selector.
+
+| Parameter | Values | Meaning |
+|---|---|---|
+| `PACKET_INJECTION_MODE` | 1 latency, 2 throughput, 3 backpressure | Measurement mode. A kernel define the host sets from the gtest selector, not an environment variable. |
+| `PACKET_INJECTION_INCLUDE_CREATION` | 0, 1 | Whether the timed interval includes header construction. Must be 0 in throughput. |
+| `X280_PACKET_INJECTION_FW_IMAGE` | path | X280 firmware image. Unset, each point uses the build's `firmware-packet-injection-<variant>.bin`. A set path must contain the variant name the gtest selector expects, or the test skips. |
+
+### Runtime parameters
+
+Read from the environment by `tests/device/suites/packet_injection/tensix_to_x280.hpp`,
+defaulted by `Config` in `tests/device/suites/packet_injection/regions.hpp`, and
+rejected rather than clamped at admission when out of range.
+
+| Environment variable | Symbol | Default | Admitted range | Meaning |
+|---|---|---|---|---|
+| `PACKET_INJECTION_FAMILY` | family | `brisc` | `brisc`, `paired` | Workers per tile: BRISC on NoC 0 only, or BRISC on NoC 0 plus NCRISC on NoC 1. |
+| `PACKET_INJECTION_T` | T | 1 | [1, 140] | Tile count. |
+| — | P | T, or 2·T paired | [1, 280] | Worker count, derived from family and T. |
+| `PACKET_INJECTION_TILES` | ordered tiles | `0,0` | at least T distinct entries | Logical tile list, `x,y;x,y;...`. The first T entries are the selected prefix, in service order. |
+| `PACKET_INJECTION_S` | S | 16 | power of two, < 2^31 | Ring depth per worker, in 128-byte slots. |
+| `PACKET_INJECTION_B` | B | 1 | ≥ 1 | Producer batch: requests issued between publications of `produced`. Staging depth is D = min(B, S). |
+| `PACKET_INJECTION_C` | C | 1 | [1, K] | Credit batch: the consumer returns credit once C requests are consumed since the last credit, or at visit end. |
+| `PACKET_INJECTION_K` | K | 1 | ≥ 1 | Per-visit cap: most requests the consumer takes from one worker per round-robin visit. |
+| `PACKET_INJECTION_INFLIGHT` | inflight | 1 | 1, 2 or 4; 1 in latency mode | Workers one consumer pass visits together, one header from each in flight at a time (§ Consumer). |
+| `PACKET_INJECTION_W` | W | 1000 | W + N and P·W fit in 64 bits | Warmup requests per worker, drained before the core-sync barrier and never sampled. |
+| `PACKET_INJECTION_N` | N | 100000 throughput, 4096 otherwise | ≥ 1, plus the capacity bounds below | Measured requests per worker. |
+| `PACKET_INJECTION_DST_CHIP` | dst_chip | 0 | < 256 | Destination chip ID written to header bytes 83..84. |
+| `PACKET_INJECTION_DST_MESH` | dst_mesh | 0 | < 1024 | Destination mesh ID written to header bytes 85..86. |
+| `PACKET_INJECTION_POLL_CADENCE` | poll_cadence | 1024 | power of two in [1, 2^20] | Poll iterations between amortized deadline and STOP checks, on producer and consumer. |
+| `PACKET_INJECTION_PHASE_TIMEOUT_MS` | phase_timeout_ms | 60000 | [1, 600000] | Per-phase deadline, converted to X280 mtime ticks and Tensix timer ticks. |
+| `PACKET_INJECTION_HOST_TIMEOUT_MS` | host_timeout_ms | 600000 | ≥ 9·phase_timeout_ms + 5000 | Host deadline for the whole run. |
+| `PACKET_INJECTION_BRIDGE_HISTORY` | — | `unknown` | `unknown`, `reported_no_mode3_since_reset` | Recorded provenance. `mode3_observed` refuses the run. |
+| `PACKET_INJECTION_TEST_RETAIN_UNANNOUNCED_FAILURE` | — | unset | `1` | Test only: forces an unannounced producer failure to exercise `retain_failed_run()`. |
+
+N is further bounded by capacity, which `pi_compute_layout()` decides:
+
+- Latency: the export `align64(8·P·N)` must fit the 131,072-byte pinned way, and
+  `F(P, T, S)` plus the export must fit the 917,376-byte arena.
+- Backpressure: each worker's L1 slice grows by `align64(16·S) + 2·align64(8·N)`
+  for the start, stall and RTT arrays.
+
+### Fixed and derived quantities
+
+| Quantity | Value | Source |
+|---|---|---|
+| Slot size | 128 B, of which 96 B header | `PI_SLOT_BYTES`, `pi_slot_t` |
+| Staging depth D | min(B, S) slots of 128 B per worker | `pi_compute_layout()` |
+| Tensix timer rate | pre-run AICLK | read from the device before launch |
+| X280 mtime rate | 50 MHz | `measurement::kX280MtimeHz` |
+| LIM arena | 917,376 B | `PI_ARENA_BYTES` |
+| Latency sample cache | 131,072 B (way 1) | `PI_CACHE_LIMIT_BYTES` |
+
+## Ring Protocol Semantics
+
+Each worker `w` owns one SPSC ring of `S` 128-byte slots at
+`rings_offset + w·S·128` in the LIM arena. Rings share no state; the only
+resource workers contend for is the consumer hart and the NoC path to it.
+Symbols are those of [Benchmark Parameters](#benchmark-parameters).
+
+### Counters
+
+Every counter is 32 bits, wraps modulo 2^32, and is compared only through
+`pi_counter_distance()`. None is reset at the core-sync barrier: the measured
+phase continues from the warmup's final values.
+
+| Counter | Owner | Where | Meaning |
+|---|---|---|---|
+| `r` | producer | private | Requests written into the ring. |
+| `p` | producer | private, published as `produced[w]` in LIM | Requests made visible to the consumer. |
+| `c_seen` | producer | private | Last credit the producer has observed in its consumed mirror. |
+| `consumed` | consumer | `pi_consumer_slot_t` in LIM | Requests serviced. |
+| `credited` | consumer | `pi_consumer_slot_t` in LIM | Last value written to the producer's L1 consumed mirror. |
+
+By construction `c_seen ≤ credited ≤ consumed ≤ p ≤ r ≤ c_seen + S`. The
+producer rejects an occupancy `r − c_seen` above `S` or a credit that retires
+more than is in flight; the consumer rejects `produced − consumed` above `S`
+(`PI_ERROR_COUNTER_DISTANCE`) and more available work than the phase has left
+(`PI_ERROR_PHASE_OVERRUN`).
+
+### Producer
+
+For each request:
+
+1. Build a fresh header in staging slot `pending`, where `pending < D = min(B, S)`.
+2. Acquire space. With `r − c_seen < S` it proceeds at once. With the ring full it
+   publishes what is pending and reads its consumed mirror: credit that has
+   already arrived retires requests with no stall, otherwise it spins until the
+   mirror moves. Backpressure mode records that spin as one stall episode.
+3. Write the staging slot to ring slot `r mod S` on its assigned NoC, then
+   `r++` and `pending++`.
+4. Publish when `pending == B`, the ring is full, or this is the phase's last
+   request: NoC barrier, then write `r` to `produced[w]`, and `pending = 0`.
+
+The barrier in step 4 drains every header write of the batch, which is what
+lets the next batch overwrite staging from slot 0; `D` slots suffice because a
+publication always precedes `pending` reaching `B` or `S`.
+
+The producer reads credit only with a full ring, and at phase end, where it
+drains until `c_seen == r`. `c_seen` therefore lags `credited`, and a worker
+whose ring never fills observes no credit until its phase ends.
+
+### Consumer
+
+X280 hart 0 visits workers in index order `0..P−1` — tile order from
+`PACKET_INJECTION_TILES`, BRISC before NCRISC on a paired tile — and repeats the
+round until every worker has completed the phase's count (`W`, then `N`). A
+visit to `w`:
+
+1. Skips `w` if it has finished the phase.
+2. Loads `produced[w]`; `available = produced − consumed`. Zero moves to the next
+   worker.
+3. Fences, then services `min(available, K)` slots in ring order: the four
+   destination-ID byte loads, the remote timer read in latency mode, then
+   `consumed++`.
+4. Returns credit whenever `consumed − credited` reaches `C`, and once more at
+   visit end if any is outstanding. A credit is a posted store of `consumed`
+   into the worker's L1 consumed mirror through the tile's counter window: it
+   returns once accepted, after the visit's slot loads (fence), without waiting
+   for delivery.
+
+A visit servicing `v` slots therefore issues `⌈v / C⌉` credit writes, and every
+visit ends with `credited == consumed`.
+
+With `inflight` = D above 1 the consumer visits D workers per pass, `w0 .. w0+D−1`
+for `w0` = 0, D, 2D, …: it polls and skips them as above, issues their `produced`
+loads together behind one fence, then, behind a second fence, takes one header
+from each visit that still has headers, issuing every one of those headers'
+destination-ID loads before it uses any, until each visit has serviced its
+`min(available, K)` slots. Credits, the visit-end credit and the safety polls
+stay per worker, so each worker sees the same protocol as at D = 1; only the
+order of the consumer's loads and stores across workers changes. Latency mode
+admits only D = 1: its remote timer window follows one tile at a time. D = 1 is
+the schedule above.
+
+### How the parameters shape the protocol
+
+- **`S` (ring depth):** the maximum number of outstanding requests from a worker
+  before it stalls for credit.
+- **`B` (producer batch):** requests a worker writes before publishing them to the
+  consumer. A full ring publishes early, so `B ≥ S` behaves as `B = S`.
+- **`K` (visit cap):** the most requests the consumer takes from one worker before
+  moving to the next; the consumer's scheduling quantum.
+- **`C` (credit batch):** consumed requests the consumer accumulates before
+  returning credit. A visit always ends with a credit, hence `C ≤ K`.
+- **`W` (warmup):** unmeasured requests per worker, fully drained before the
+  measured phase begins.
+- **`N` (measured):** measured requests per worker; also sizes sample storage.
+- **`T`, family, `TILES` (placement):** the number of rings and the order the
+  consumer services them.
+- **`POLL_CADENCE`:** how often both sides check for a deadline or STOP; no effect
+  on the protocol.
+- **`INFLIGHT` (workers per pass):** how many workers' counter and slot loads the
+  consumer keeps in flight together; no effect on the protocol each worker sees.
+
+Credit is visible to a producer only when its ring fills, so `C` and `K` shape
+producer behaviour only where the consumer falls behind — small `S`, or enough
+workers that a round takes longer than `S` requests.
+
+## ERISC Header-Ingress Member
+
+`packet_injection/erisc_to_x280_header` measures a receiving ERISC publishing
+ready 96-byte packet headers into the X280 forwarder, scaled across concurrent
+writers. One to all available inactive `IDLE_ETH` cores, one per Ethernet tile,
+each run the shared `Producer` against their own SPSC ring into the one shared
+X280 consumer image (the throughput variant). There is no second single-writer
+implementation: `writers=1` is the same loop, protocol and result schema as every
+larger point. § Measured operation below states what is timed.
+
+**Axes.** The GTest executable `x280_packet_injection_erisc_to_x280_header`
+registers `Axes/PacketInjectionEriscToX280Header.Run/<writers>_b<B>`:
+`writers1`, `writers2`, `writers4`, `writers8` and `writers_all` at B=1, and B=4
+and B=8 at `writers1` and at `writers4`. With the default
+S=16, B=8 is the largest batch that leaves the ring double-buffered; B=S would
+publish the whole ring and then wait for all of it. The writer count and B come
+only from the axis; the suite rejects `PACKET_INJECTION_B`, `_T`, `_TILES` and
+`_FAMILY`. `PACKET_INJECTION_S`, `_C`, `_K`, `_W` (calibrated when unset; see
+below), `_N` (default 1024), `_POLL_CADENCE` and the two timeouts are read as for
+the Tensix member.
+`characterization_manifest.json` registers all nine points as
+`packet.erisc_header.<writers>.b<B>` at N=1024, S=16, C=1, K=1, with W calibrated,
+the per-header-credit reference. The consumer settings are a manifest axis, not a
+GTest one: `packet.erisc_header.c<C>k<K>.<writers>.b1` runs the same filter at
+`writers1` and `writers_all` with (C, K) in {(1, 8), (1, 16), (4, 8), (4, 16),
+(8, 8), (8, 16)}, which with the two C=1/K=1 rows sweeps C in {1, 4, 8} by K in
+{1, 8, 16}, C <= K, at S=16. K is the X280 visit cap (slots consumed per writer
+per round-robin visit) and C the credit batch (a credit after C consumed slots,
+and at the end of every visit), so K=1 is one credit write per header. The
+campaign validator checks every packet run record's S, C, K and W against the
+configuration, since those rows share a filter; where an ERISC configuration sets
+no W, the run must record a calibrated one. At C=8, K=16, the setting with
+the highest `writers_all` aggregate in that sweep, `packet.erisc_header.c8k16.*`
+also registers `writers2`, `writers4` and `writers8` at B=1, B=4 and B=8 at
+`writers1` and `writers4`, and `writers_all.b1.n4096` (N=4096) for the N versus
+4N agreement check; `packet.throughput.brisc.T1.c8k16` runs one Tensix producer
+at the same consumer settings as the one-producer cross-check.
+At S=32 and S=64, `packet.erisc_header.s<S>.c<C>k<K>.<writers>.b<B>` registers
+`writers1` and `writers_all` at B=1 and `writers1` at B=4 for (C, K) in
+{(8, 16), (8, 32), (16, 32), (32, 32)}.
+At the Tensix load knee T=4, `packet.throughput.{brisc,paired}.T4.<setting>`
+registers `c4k8` (C=4, K=8), `c8k16` (C=8, K=16), `s4`, `s8` and `s64` (S=4, 8
+and 64) and `b4` (B=4), each changing that one setting from its `T4` point at
+S=16, B=C=K=1.
+To isolate the (C, K) gain, `packet.throughput.{brisc,paired}.T4.s64.c<C>k<K>`
+registers C in {1, 2, 4, 8, 16} at K=16 and K in {2, 4, 8} at C=1, each
+changing only C and K from its `T4.s64` point at S=64, B=C=K=1.
+Across the load sweep, `packet.throughput.paired.T1.c8k16` and
+`packet.throughput.{brisc,paired}.T{2,8}.c8k16` set C=8, K=16 on their `T<n>`
+point at S=16, B=1.
+
+**Writers.** `select_ethernet_writers()` in `tests/device/suites/packet_injection/regions.hpp`
+sorts the inactive cores by logical (x, y) and takes a prefix, so the one-writer
+core is present in every point. `writers_all` is every available core, capped at
+`kMaxEthernetWriters` (14). A point needing more cores than the device has skips
+with the requested and available counts; it never runs a smaller count. A device
+with no ERISC writer at all skips every point: when the HAL does not enable
+`IDLE_ETH` programmable cores, and when it reports no inactive Ethernet core,
+which a `writers_all` request names as such. All three are availability skips,
+raised before any launch: the device cannot host the point, and nothing was
+measured. The campaign tools draw no distinction: `run_characterization.py`
+and `tabulate_suites.py` fail every skipped point, so an availability skip
+leaves that configuration uncovered. A duplicate core fails the run. Admission uses `WorkerFamily::Ethernet`, one worker
+per tile (P == T).
+
+**Transport.** `DeviceEriscTransport` (`kernels/packet_injection/erisc_producer.hpp`)
+shares its NoC writes, barrier, cache invalidation and `rdcycle` with
+`DeviceTensixTransport` through `MetalProducerTransport`. It reads
+`eth_read_wall_clock()` as its wall counter, uses NoC 0 (asserted against
+`NOC_INDEX`), bounds the tile span by `MEM_ERISC_MAX_SIZE` (host mirror 455,264,
+asserted in the device build), records `PI_ACTOR_ERISC` on failure, and its
+`prepare_header()` does nothing: the host seeds the header. The image asserts
+`PI_MODE_THROUGHPUT` with creation excluded. The kernel compiles at `-Os`, the
+EthernetConfig default.
+
+**Placement and seeding.** Each writer's slice sits at the aligned base of the
+IDLE_ETH unreserved window (the suite requires the HAL window to end at the
+producer's `kL1SpanLimit`). The host zeroes the whole tile span through the
+cluster, writes a writer-specific header, word k = (`run_nonce` + k) XOR a
+per-writer constant, into every one of the `D = min(B, S)` staging records, and
+reads the span back before launch. The X280 tile table holds each writer's
+virtual (TRANSLATED) coordinate, which the X280 window takes; the X280 peer
+coordinate comes from `X280Runtime::virtual_core_from_tile`. `timeout_ticks` is
+converted at the programmed AICLK (CMFW `AICLK_LIMIT_MAX`), the rate the run's
+AICLK evidence checks; the run record names it `erisc_timeout_budget_hz`.
+
+**Release.** The release selector gives Ethernet writers no group, so X280
+releases every writer by its own unicast write, and the run fails unless the
+run result reports `P` endpoints and no group.
+
+**Warm-up.** With `PACKET_INJECTION_W` unset, a pilot launch at W=32 records
+nothing, and `calibrate_warmup` sizes W from writer 0's measured interval at the
+programmed AICLK so that W+N reaches the AICLK target device time
+([docs/measurement.md](../measurement.md)), refusing a W whose device time exceeds the
+host timeout. A refusal fails the case. Records carry `warmup_source`
+(`calibrated` with the pilot figures, or `explicit` for a set W, used as given).
+
+**Validation.** Counters as the Tensix member checks them, plus, before the
+collection ACK, every resident ring slot of every writer -- the first
+min(S, W+N) -- compared in full: bytes 0..95 against that writer's header and
+96..127 against the zeroed staging tail the 128-byte write carries. The 60
+padding bytes of every produced and ready slot must still be zero. Because the
+ring recycles slots and each writer re-sends one record, completeness rests on
+the counters, not on content.
+
+**Records.** The run record carries `writers_requested`,
+`inactive_eth_available`, and the resident and guard counts. The bytes the
+writers published into LIM -- 96 per header plus 4 per produced-counter write,
+P*N*96 + 4 * the workers' summed `producer_counter_writes`, which is P*N*100 at
+B=1 -- are derived offline from the worker records. As for the Tensix member,
+the X280 aggregate's raw endpoints and `empty_visits` are in the run's aggregate
+record, with the fixed 50 MHz `x280_mtime` clock. Run and
+worker records are measurement schema 2 with per-run AICLK evidence (`clock`),
+taken on writer 0's own ERISC wall clock immediately before launch and after
+`Finish` and applied to every writer, on the assumption that all idle ERISCs on
+the chip share one AICLK rate; per [docs/measurement.md](../measurement.md) that evidence
+converts the idle ERISC's `eth_read_wall_clock()`, so writer intervals convert to
+time offline when it is clean. Worker records carry logical, virtual, translated
+and NOC0 (physical) coordinates (the virtual one is what the X280 tile table
+holds, so it is where X280 aims each writer's credits and release), raw ERISC
+wall ticks (`wall_counter` `erisc_wall_clock`) and `rdcycle`,
+`credit_stall_episodes` and `producer_counter_writes`. AICLK evidence with errors
+fails the test after every record is written, and the offline tool then leaves
+those ticks raw.
+
+**Dispatch.** The executable sets `TT_METAL_SLOW_DISPATCH_MODE=1` through its
+`x280_slow_dispatch` link: fast dispatch does not launch IDLE_ETH kernels, and an
+all-zero ERISC result there is an invalid launch, not a measurement. The fixture
+fails before the device opens, naming the missing link, if the variable is not `1`.
+
+```bash
+env TT_VISIBLE_DEVICES=0 TT_METAL_RUNTIME_ROOT="$PWD" \
+  build/test/tt_metal/x280/x280_packet_injection_erisc_to_x280_header \
+  --gtest_filter='Axes/PacketInjectionEriscToX280Header.Run/writers2_b1'
+```
+
+**Silicon.** On a Blackhole p150b with tile 0 at 1750 MHz and 14 LIM ways, 8 inactive
+IDLE_ETH cores are available, so `writers_all` is 8 there and `writers8` duplicates it. The X280
+aggregate per header at S=16, B=1, mean [min-max] over attempts, at each (C, K) the manifest
+registers:
+
+| C | K | writers1 ns/header | writers4 ns/header | writers8 ns/header | writers_all ns/header |
+|---:|---:|---:|---:|---:|---:|
+| 1 | 1 | 387.995 [387.949-388.047] | 103.957 [103.877-104.019] | 104.388 [104.341-104.465] | 104.402 [104.351-104.446] |
+| 1 | 8 | 387.904 [387.793-388.008] |  |  | 48.708 [48.699-48.718] |
+| 1 | 16 | 388.001 [387.949-388.105] |  |  | 48.703 [48.689-48.721] |
+| 4 | 8 | 387.695 [387.617-387.832] |  |  | 48.691 [48.669-48.711] |
+| 4 | 16 | 387.734 [387.656-387.852] |  |  | 48.678 [48.652-48.701] |
+| 8 | 8 | 387.676 [387.500-387.793] |  |  | 48.671 [48.667-48.674] |
+| 8 | 16 | 387.871 [387.715-387.988] | 96.940 [96.919-96.963] | 48.683 [48.672-48.704] | 48.690 [48.677-48.699] |
+
+With every writer and the credit posted through the counter window, as the shipped build does,
+raising the visit cap K from 1 to 8 is the lever; from K=8 to 16, and across C at fixed K, the
+aggregate is nearly flat. At C=8, K=16 the aggregate with
+every writer is 48.690 [48.677-48.699] ns/header at N=1024 and
+48.649 [48.640-48.658] at N=4096 ([results.md](../results.md#packet_injection)).
+
+X280 releases every Ethernet writer by its own endpoint, and the suite fails a
+run whose release used a group: a broadcast, even a one-tile one, does not reach
+an Ethernet tile, and such a release fails (`PI_ERROR_STOPPED` from the
+producer, `PI_ERROR_PEER_FAILED` from X280).
+
+### Measured operation
+
+On production receive, ERISC owns two ordered destinations:
+
+```text
+Ethernet RX staging
+    |
+    +-- full packet ----------> selected DRISC slot
+    |                            wait for copy completion
+    |
+    +-- 96 B header ----------> X280 FIFO slot
+                                 drain header write
+                                 publish
+```
+
+The X280 must not observe a header before its packet is resident in DRISC SRAM.
+The benchmark starts from a backlog for which that invariant is already true;
+the timed ERISC code performs only FIFO publication. This makes the result a
+ceiling for the header-ingress operation rather than a measurement of Ethernet
+receive or the full receive-side pipeline.
+
+The unified member publishes with the packet-injection ring protocol: the slot
+write, a write barrier, then the ring-tail produced counter, which X280 polls
+with a fence before the counter load and another before the slot loads (see
+[Architectural Overview](#architectural-overview)).
+
+### Credit wait
+
+At S=16, C=1, K=1, `writers1_b1` records 0 credit-stall episodes: one writer never waits for
+credit. With all 8 writers, each records 997 to 1003 episodes per 1024 headers:
+it waits for credit on almost every header.
+
+## Running the Benchmark
+
+`x280_packet_injection_tensix_to_x280` injects fabric packet headers from
+Tensix BRISC/NCRISC producers into an X280 consumer, and
+`x280_packet_injection_erisc_to_x280_header` from 1 to 14 idle ERISCs. Both
+open the 14-way `LimLayout::PacketInjection` profile. The ERISC member links
+`x280_slow_dispatch` ([harness.md](../harness.md#running-benchmarks)). The header-ingress member, which
+runs on the packet-injection throughput image, is in
+[§ ERISC Header-Ingress Member](#erisc-header-ingress-member), with its
+contract under [§ Measured operation](#measured-operation).
+Records name no source revision. What produced a run is established by the
+campaign runner's attempt record (`attempt.json`: the executable's and each
+firmware image's SHA-256), or by inspecting the build.
+
+The host executable build is not a Tensix kernel build. BRISC/NCRISC JIT
+compilation against Metal's device-generated configuration is verified by
+`PacketInjectionCompile.BothRiscsCompileForEveryVariant`, which compiles both
+data-movement RISCs for all five mode/creation-flag variants on a live device
+without enqueue or dispatch.
+
+The figures above are measurement-schema-2 records; they do not cover the core-sync boundary.
+
+**L1 page order is confirmed ordered rather than assumed.** The strongest case is
+T=4 paired, where eight producers occupy eight pages and the host's per-page
+identity check passed on all of them, with worker `w` landing on tile `w >> 1`
+and RISC `w & 1` — four tiles, both NoCs, in ascending page order. Note that
+`family=paired` doubles the worker count, so T=4 paired is P=8, not P=4.
+
+The assumption mask (§ Results and clock evidence) remains an explicit limitation of the benchmark
+contract, not a statement about whether the benchmark runs.
+
+Build in a tt-metal tree configured with `TT_METAL_BUILD_X280` ([README](../../README.md#2-build-boot-and-run-a-benchmark)), from the repository root:
+
+```bash
+# Images (all five variants), header checks, host tests and the executable
+ninja -C build x280_images x280_abi_headers x280_bench_host_tests \
+  x280_packet_injection_tensix_to_x280
+
+# Host-only tests (admission, ABI, state-model, layout), image placement and
+# the pinned-input and packet-injection selection guards
+ctest --test-dir build -R 'x280_(bench_host_tests|image_layout|pinned_input|packet_injection)' --output-on-failure
+
+# Execution example (requires exclusive device reservation); the point's image
+# defaults to build/x280/firmware-packet-injection-latency-include.bin
+env TT_METAL_RUNTIME_ROOT="$PWD" \
+  PACKET_INJECTION_TILES="0,0" PACKET_INJECTION_T=1 \
+  PACKET_INJECTION_FAMILY=brisc PACKET_INJECTION_S=16 \
+  PACKET_INJECTION_B=1 PACKET_INJECTION_C=1 PACKET_INJECTION_K=1 \
+  PACKET_INJECTION_W=1000 PACKET_INJECTION_N=4096 \
+  build/test/tt_metal/x280/x280_packet_injection_tensix_to_x280 \
+  --gtest_filter='Config/PacketInjectionTensixToX280.Run/LatencyInclude'
+
+# Producer JIT compile gate: no firmware image, no prepared runtime, no dispatch
+env TT_VISIBLE_DEVICES=0 TT_METAL_RUNTIME_ROOT="$PWD" \
+  TT_METAL_CACHE="$PWD/build/jit-cache" TT_METAL_FORCE_JIT_COMPILE=1 \
+  TT_METAL_LOG_KERNELS_COMPILE_COMMANDS=1 \
+  build/test/tt_metal/x280/x280_packet_injection_tensix_to_x280 \
+  --gtest_filter='PacketInjectionCompile.BothRiscsCompileForEveryVariant'
+```

@@ -22,8 +22,8 @@
  * the two boundaries. Polling mtime inside the loop under-counts cycles --
  * worse after heavy DMA/NOC activity has left the fabric busy, giving
  * spuriously low readings like 800 instead of 1750. rdcycle does not advance
- * while the hart stalls; a register-only loop makes no memory access, so it
- * does not stall.
+ * while the hart stalls (docs/measurement.md "Unconfirmed hardware assumptions",
+ * item 5); a register-only loop makes no memory access, so it does not stall.
  *
  *   freq = d_rdcycle / d_mtime * 50 MHz
  *
