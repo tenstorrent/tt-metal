@@ -8,5 +8,10 @@ set(UNIT_TESTS_CONTEXT_SMOKE_SOURCES
 )
 
 if(TT_UMD_BUILD_GRENDEL_JTAG)
-    list(APPEND UNIT_TESTS_CONTEXT_SMOKE_SOURCES test_mimir_emu.cpp)
+    list(
+        APPEND
+        UNIT_TESTS_CONTEXT_SMOKE_SOURCES
+        test_mimir_emu.cpp
+        test_mimir_backend.cpp
+    )
 endif()
