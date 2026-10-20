@@ -158,3 +158,16 @@ def test_deferred_exchange_matches(nx, bands):
     got = SparseRowPlan(None, blocks, blocks, want.nc, noc, True, bands=bs, pout=L.P, stencil=L, defer_exchange=True)
     assert got.complete_exchange()
     assert got.exch == want.exch and got.nbr == want.nbr and np.array_equal(got.own_l1, want.own_l1)
+
+
+@pytest.mark.parametrize("nx, bands", CASES)
+def test_segment_counts_match_meta(nx, bands):
+    """The per-core segment counts of a launch, computed from ownership, equal the ones its metadata rows give."""
+    L, _ = _levels(nx, bands)
+    blocks = [(L.starts[c], L.starts[c + 1]) for c in range(8)]
+    noc = [(i % 13, i // 13) for i in range(130)]
+    p = SparseRowPlan(L.COL_rows, blocks, blocks, 130, noc, True, bands=L.bstarts if bands > 1 else None, pout=L.P)
+    resid = [8 + b for b in range(8)]
+    for phases in ([7, 6, 5, 4, 3, 2, 1, 0], list(range(8)) + resid, resid):
+        for tpw in (256, 1024):
+            assert list(p.meta(phases, noc, tpw)[1:4]) == list(p.segment_counts(phases, tpw)), (phases, tpw)

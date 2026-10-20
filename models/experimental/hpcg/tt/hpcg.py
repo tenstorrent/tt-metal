@@ -27,6 +27,7 @@ from models.experimental.hpcg.tt.custom_ops.stencil_matrix.op import StencilJob,
 from models.experimental.hpcg.tt.layout import (
     TILE,
     empty_device,
+    empty_page,
     rows_to_device,
     scalar_device,
     to_device,
@@ -169,7 +170,7 @@ class HPCG:
             jobs += [jr, jp]
         if jobs:
             launched.append(gen.submit(StencilMatrixOp(device, jobs)))
-        self.debug = debug_buffer(device)  # per-core cycle counters, written by kernel_debug builds
+        self.debug = debug_buffer(device, zeros=kernel_debug)  # per-core cycle counters (kernel_debug builds)
         dbg = dict(kernel_debug=kernel_debug, debug=self.debug)
         self._dbg = dbg
         phases = self.order + list(reversed(self.order))  # forward then backward sweep
@@ -180,9 +181,11 @@ class HPCG:
             # move one face instead of four; slower on the finer levels)
             tpw = d.tpw = 256 if (L.starts[1] - L.starts[0]) / d.plan.nc <= 256 else TILE
             # post-smoother; on the fine grid the writer loads half the window (6.86 -> 6.73 ms at 192^3; slower on
-            # the coarser levels)
+            # the coarser levels). It runs the first 16 phases of the pre-smoother's table (one table and upload less)
+            pre = phases + ([8 + b for b in range(8)] if l < 3 else [])
             self.ops[("gs", l)] = SparseRowOp(
-                device, d.plan, d.values, d.offsets, "gs", phases, d.z, d.z, b=d.r, tpw=tpw, wsplit=(l == 0), **dbg
+                device, d.plan, d.values, d.offsets, "gs", phases, d.z, d.z, b=d.r, tpw=tpw, wsplit=(l == 0),
+                table_phases=pre, **dbg
             )
             # pre-smoother: z = 0 on entry, then (above the coarsest level) Az = A z with block 0 = r - A z
             self.ops[("gs_pre", l)] = SparseRowOp(
@@ -191,7 +194,7 @@ class HPCG:
                 d.values,
                 d.offsets,
                 "gs",
-                phases + ([8 + b for b in range(8)] if l < 3 else []),
+                pre,
                 d.z,
                 d.z,
                 b=d.r,
@@ -238,7 +241,9 @@ class HPCG:
         # CG scalars, one 4 KB page each (the value in word 0); they never leave the device
         self._one, self._minus_one = (scalar_device(device, v) for v in (1.0, -1.0))
         self._inf_slot = scalar_device(device, float("inf"), only_first=True)  # inf in word 0, zeros elsewhere
-        self.rtz, self.rtz_old, self.pAp, self.normr, self.normr0 = (scalar_device(device, 0.0) for _ in range(5))
+        # written on the device before they are read (start() writes r.z = inf and |r0|; an iteration writes the
+        # rest before using them): allocated, not uploaded
+        self.rtz, self.rtz_old, self.pAp, self.normr, self.normr0 = (empty_page(device) for _ in range(5))
         z = self.lv[0].z
         rz = CgVectorOp(device, "dot", self.r, z, part=self.part)
         n = -(-rz.nc * 64 // (4 * TILE))  # pages holding one 64-byte slot per core

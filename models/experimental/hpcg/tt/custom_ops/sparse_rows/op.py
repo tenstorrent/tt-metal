@@ -80,10 +80,14 @@ def logical_coords(device):
     return _COORDS[id(device)]
 
 
-def debug_buffer(device):
+def debug_buffer(device, zeros=True):
     """Per-core cycle counters written by KDEBUG builds: row 2 * core = reader, 2 * core + 1 = writer, 16 words.
-    Every launch takes one as an argument (written only by kernel_debug builds)."""
+    Every launch takes one as an argument (written only by kernel_debug builds). zeros=False: allocated, not filled
+    (for runs without kernel_debug, which never write or read it)."""
     g = device.compute_with_storage_grid_size()
+    if not zeros:
+        shape = ttnn.Shape([2 * g.x * g.y, 16])
+        return ttnn.empty(shape, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
     return u32_rows(device, [[0] * 16] * (2 * g.x * g.y))
 
 
@@ -188,6 +192,7 @@ class SparseRowOp:
         noc_flip=None,
         kernel_debug=False,
         debug=None,
+        table_phases=None,
     ):
         if mode not in ("gs", "spmv"):
             raise ValueError(f"mode must be 'gs' or 'spmv', got {mode!r}")
@@ -205,7 +210,15 @@ class SparseRowOp:
         # rows of whole 4 KB pages, and the grid-dependent sizes (table pages, pages per slot, window bytes) as
         # runtime arguments: the kernel binaries then do not depend on the level or the grid size, so a process
         # loads each binary once (about 2-3 ms per binary)
-        meta_t, nseg, nseg_gs, nseg_r, used = plan.meta_tensor(device, phases, noc_xy, tpw)
+        # table_phases: phases of a table to share (another launch on the plan whose phases start with these): the
+        # kernels then run only the first len(phases) of its phases
+        meta_t, nseg, nseg_gs, nseg_r, used = plan.meta_tensor(device, table_phases or phases, noc_xy, tpw)
+        nph = 0
+        if table_phases is not None:
+            if list(table_phases[: len(phases)]) != list(phases):
+                raise ValueError("phases must be a prefix of table_phases")
+            nph = len(phases)
+            nseg, nseg_gs, nseg_r = plan.segment_counts(phases, tpw)
         meta_pages = meta_t.shape[0] // plan.nc
         meta_bytes = -(-used * 4 // 64) * 64  # the rows' used length, read at launch
         self.keep = [meta_t]
@@ -243,8 +256,8 @@ class SparseRowOp:
         # per-core lists to build); the compute kernel keeps per-core segment counts
         ax, av, aoff, ameta, ab, adbg = (t.buffer_address() for t in (x, values, offsets, meta_t, b, dbg))
         aout, ao2 = out.buffer_address(), o2.buffer_address()
-        reader_common = [ax, av, aoff, ameta, ab, g.x, adbg, meta_pages, ntlv, plan.win_b, flags, meta_bytes]
-        writer_common = [aout, ameta, g.x, aoff, 0, 0, adbg, av, ao2, ax, meta_pages, ntlv, flags, meta_bytes]
+        reader_common = [ax, av, aoff, ameta, ab, g.x, adbg, meta_pages, ntlv, plan.win_b, flags, meta_bytes, nph]
+        writer_common = [aout, ameta, g.x, aoff, 0, 0, adbg, av, ao2, ax, meta_pages, ntlv, flags, meta_bytes, nph]
         def accessors(*ts):
             return [a for t in ts for a in ttnn.TensorAccessorArgs(t).get_compile_time_args()]
 
@@ -367,7 +380,7 @@ class SparseRowOp:
         # compute kernel: per-core arguments, as (core, list) pairs on cached CoreCoords (half the cost of filling a
         # ttnn.RuntimeArgs core by core; as common arguments, one list or one per group of equal cores, they made
         # coarse launches 4 to 15 us slower). Launches with the same rows and options (CG start, CG SpMV) share it
-        ckey = ("compute", id(device), tuple(phases), tpw, flags, tuple(define_list))
+        ckey = ("compute", id(device), tuple(phases), tpw, flags, nph, tuple(define_list))
         if ckey not in plan._tables:
             plan._tables[ckey] = ttnn.KernelDescriptor(
                 kernel_source=f"{KERNEL_ROOT}/compute.cpp",
@@ -375,7 +388,7 @@ class SparseRowOp:
                 core_ranges=cores,
                 compile_time_args=[],
                 defines=define_list,
-                runtime_args=list(zip(logical_coords(device), [[*v, flags] for v in zip(nseg, nseg_gs, nseg_r)])),
+                runtime_args=list(zip(logical_coords(device), [[*v, flags, nph] for v in zip(nseg, nseg_gs, nseg_r)])),
                 config=_compute_config(),
             )
         kernels.append(plan._tables[ckey])

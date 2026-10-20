@@ -24,6 +24,7 @@ void kernel_main() {
     const uint32_t off_addr = get_common_arg_val<uint32_t>(3);
     const uint32_t meta_pages = get_common_arg_val<uint32_t>(10), ntlv = get_common_arg_val<uint32_t>(11);
     const uint32_t flags = get_common_arg_val<uint32_t>(12), meta_bytes = get_common_arg_val<uint32_t>(13);
+    const uint32_t nph = get_common_arg_val<uint32_t>(14);  // phases to run, if not 0: a prefix of the table's
     const bool wsplit = flags & F_WSPLIT;
     constexpr auto ao = TensorAccessorArgs<0>();
     constexpr auto am = TensorAccessorArgs<ao.next_compile_time_args_offset()>();
@@ -56,6 +57,9 @@ void kernel_main() {
     invalidate_l1_cache();
     Meta M;
     M.init(meta);
+    if (nph) {
+        M.NPH = nph;
+    }
     const uint32_t win = get_write_ptr(CB_WIN);
     const uint32_t offw = get_write_ptr(CB_OFF2);  // 2 x count_of(1) offset pages
     constexpr uint32_t C1 = count_of(1);

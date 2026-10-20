@@ -101,6 +101,8 @@ void kernel_main() {
     const uint32_t nseg_gs = get_arg_val<uint32_t>(1);  // the first nseg_gs segments are Gauss-Seidel updates
     const uint32_t nseg_r = get_arg_val<uint32_t>(2);   // RESTF: the next nseg_r (SpMV, block 0) output r - A z
     const uint32_t flags = get_arg_val<uint32_t>(3);
+    const uint32_t nph = get_arg_val<uint32_t>(4);  // phases to run, if not 0: a prefix of the table's
+    (void)nph;
     const uint32_t ready_n = (flags & F_WSPLIT) ? 2 : 1;  // semaphore 0 at window load: reader (+ writer, WSPLIT)
     (void)nseg_gs;
     (void)nseg_r;
@@ -109,14 +111,23 @@ void kernel_main() {
 #if NG > 2 && defined(TRISC_PACK)
     PackGather pg;
     pg.init(ready_n);
+    if (nph) {
+        pg.NPH = nph;
+    }
 #endif
 #if NG > 3 && defined(TRISC_UNPACK)
     UnpackGather ug;
     ug.init(ready_n);
+    if (nph) {
+        ug.NPH = nph;
+    }
 #endif
 #if defined(FASTMAC) && defined(TRISC_MATH)
     MathSeg ms;
     ms.init(ready_n);
+    if (nph) {
+        ms.NPH = nph;
+    }
 #endif
     for (uint32_t t = 0; t < nseg; ++t) {
 #if NG > 2 && defined(TRISC_PACK)

@@ -85,6 +85,12 @@ def upload_zeros(device, P):
     return ttnn.from_torch(z, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
 
 
+def empty_page(device):
+    """One fp32 4 KB page on the device (ROW_MAJOR [1, 1024]), not filled: a CG scalar the device writes before it
+    reads it. An allocation, not an upload."""
+    return ttnn.empty(ttnn.Shape([1, TILE]), dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+
 def scalar_device(device, value, only_first=False):
     """One 4 KB page holding value in every word (a CG scalar is word 0: element (0, 0) of a tile), uploaded from the
     host as ROW_MAJOR [1, 1024] (a plain copy). only_first: value in word 0 and zeros elsewhere (a per-core partial

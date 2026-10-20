@@ -477,6 +477,18 @@ class SparseRowPlan:
         # arrays kept alive with their pointers; max_pieces: the piece arrays' row stride
         self._tables[key] = (NB, arrays, [plo.shape[1]] + [a.ctypes.data for a in arrays])
 
+    def segment_counts(self, phases, tpw=TILE):
+        """Per-core segment counts of a launch running these phases (what meta() returns with its rows): all
+        segments, Gauss-Seidel ones (phases < 8), and RESTF ones (phase 8, block 0). Segments never cross an L1
+        page of tpw words."""
+        a, e = self.own[:, :, 0], self.own[:, :, 1]
+        segs = np.where(e > a, (e - 1) // tpw - a // tpw + 1, 0)  # [core, block]
+        ph = np.asarray(list(phases), np.int64)
+        nseg = segs[:, ph & 7].sum(axis=1)
+        nseg_gs = segs[:, ph[ph < 8]].sum(axis=1)
+        nseg_r = segs[:, 0] * int((ph == 8).sum())
+        return nseg.tolist(), nseg_gs.tolist(), nseg_r.tolist()
+
     def meta_tensor(self, device, phases, noc_xy, tpw=TILE):
         """meta(..., align=TILE) uploaded as a ROW_MAJOR [nc * pages, 1024] device tensor (u32_rows), and the rest of
         meta's result: (tensor, nseg, nseg_gs, nseg_r, longest). The rows are built in a reused host buffer (TT-NN

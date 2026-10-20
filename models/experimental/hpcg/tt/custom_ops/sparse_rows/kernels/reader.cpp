@@ -66,6 +66,7 @@ void kernel_main() {
     const uint32_t meta_pages = get_common_arg_val<uint32_t>(7), ntlv = get_common_arg_val<uint32_t>(8);
     const uint32_t winb = get_common_arg_val<uint32_t>(9), flags = get_common_arg_val<uint32_t>(10);
     const uint32_t meta_bytes = get_common_arg_val<uint32_t>(11);  // this core's row length, a multiple of 64 bytes
+    const uint32_t nph = get_common_arg_val<uint32_t>(12);  // phases to run, if not 0: a prefix of the table's
     const bool wsplit = flags & F_WSPLIT, addb = flags & F_ADDB, restf = flags & F_RESTF;
 #ifdef GS
     constexpr bool kGS = true;
@@ -99,6 +100,9 @@ void kernel_main() {
     invalidate_l1_cache();
     Meta M;
     M.init(meta);
+    if (nph) {
+        M.NPH = nph;
+    }
     const uint32_t win = get_write_ptr(CB_WIN);
     const uint32_t offr = get_write_ptr(CB_OFF);  // 2 x count_of(0) offset pages
     TIC();
