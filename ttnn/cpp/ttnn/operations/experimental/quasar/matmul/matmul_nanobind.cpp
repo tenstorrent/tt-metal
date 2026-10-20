@@ -700,25 +700,24 @@ void py_module(nb::module_& mod) {
         )doc")
         .def_rw("C_slice_M_tiles", &MatmulUnifiedProgramConfig::C_slice_M_tiles, R"doc(
             Height of the C slice each core produces, in tiles. A sharded C's shard height is the C slice height
-            (a value given here must match it). None = auto: M in tiles over the rows of the bounding box of
-            `cores`, shrunk along its divisors only if that does not fit L1.
+            (a value given here must match it). None = auto, chosen with the other auto sizes: the C slice, subblock
+            and K chunk whose plan has the lowest estimated cycles, the C slice height dividing M in tiles over the
+            rows of the bounding box of `cores`.
         )doc")
         .def_rw("C_slice_N_tiles", &MatmulUnifiedProgramConfig::C_slice_N_tiles, R"doc(
             Width of the C slice each core produces, in tiles. A sharded C's shard width is the C slice width (a
-            value given here must match it). None = auto: N in tiles over the columns of the bounding box of
-            `cores`, shrunk along its divisors only if that does not fit L1.
+            value given here must match it). None = auto (see C_slice_M_tiles), dividing N in tiles over the
+            columns of the bounding box of `cores`.
         )doc")
         .def_rw("K_chunk_tiles", &MatmulUnifiedProgramConfig::K_chunk_tiles, R"doc(
             K tiles multiplied per accumulation step. One A slice (C_slice_M_tiles x K_chunk_tiles tiles) and
             one B slice (K_chunk_tiles x C_slice_N_tiles tiles) are resident in L1 at a time, and the partial
-            sums round-trip L1 between steps. Must divide K in tiles. None = auto: the largest divisor of K in
-            tiles whose buffers fit L1, capped at 8 unless the C slice is 4 tiles or fewer, which still leaves a
-            K chunk per reader thread (4 on Quasar, 2 elsewhere).
+            sums round-trip L1 between steps. Must divide K in tiles. None = auto (see C_slice_M_tiles).
         )doc")
         .def_rw("subblock_M_tiles", &MatmulUnifiedProgramConfig::subblock_M_tiles, R"doc(
             Subblock height in tiles (the C slice's tiles accumulated in DST at once). Need not divide
             C_slice_M_tiles: the C slice is padded up to a subblock multiple and the overshoot is clipped on
-            write. Set both subblock dims or neither; None = auto.
+            write. Set both subblock dims or neither; None = auto (see C_slice_M_tiles).
         )doc")
         .def_rw("subblock_N_tiles", &MatmulUnifiedProgramConfig::subblock_N_tiles, R"doc(
             Subblock width in tiles; need not divide C_slice_N_tiles (padded and clipped like the height). A

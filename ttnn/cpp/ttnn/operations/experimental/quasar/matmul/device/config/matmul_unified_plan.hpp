@@ -127,55 +127,11 @@ struct MatmulUnifiedPlan {
 
     // Only meaningful for a sharded output: the layout implied by how the C slices tile C.
     tt::tt_metal::TensorMemoryLayout sharded_output_layout{};
+
+    // Estimated cycles (the lowest of every C slice, subblock and K chunk tried), and the busiest core's pipeline
+    // alone, which breaks ties between plans that DRAM bandwidth bounds equally. See ArchCostModel.
+    std::pair<double, double> estimated_cycles{};
 };
-
-namespace detail {
-
-// Max-volume DST-filling subblock among the shapes the caller's fits predicate accepts (L1 fit and
-// borrow preservation stay external): the C slice is rounded up to subblock multiples and the
-// overshoot is clipped on write. Ties prefer the least padding waste; 1x1 (no padding) if nothing
-// is accepted, and the caller's DFB sizing FATALs with the full breakdown. With several compute threads
-// the subblocks are assigned round-robin, so the least work on the busiest thread comes first.
-template <typename FitsSubblock>
-std::pair<uint32_t, uint32_t> maximize_subblock_size(
-    uint32_t C_slice_M_tiles,
-    uint32_t C_slice_N_tiles,
-    uint32_t dst_capacity_tiles,
-    uint32_t num_compute_threads,
-    const FitsSubblock& fits) {
-    std::pair<uint32_t, uint32_t> best{1, 1};
-    uint64_t best_busiest_thread_tiles = UINT64_MAX;
-    uint64_t best_volume = 0;
-    uint64_t best_padded_area = UINT64_MAX;
-    for (uint32_t h = 1; h <= dst_capacity_tiles; ++h) {
-        for (uint32_t w = 1; h * w <= dst_capacity_tiles; ++w) {
-            const uint64_t volume = h * w;
-            const uint64_t num_subblocks = (uint64_t)tt::div_up(C_slice_M_tiles, h) * tt::div_up(C_slice_N_tiles, w);
-            const uint64_t padded_area = num_subblocks * volume;
-            // Padding included; 0 with one thread, which leaves the volume-then-padding rule.
-            const uint64_t busiest_thread_tiles =
-                num_compute_threads > 1 ? tt::div_up(num_subblocks, (uint64_t)num_compute_threads) * volume : 0;
-            // Least work on the busiest thread, then the largest volume (fullest DST), then the least padding.
-            bool better = false;
-            if (busiest_thread_tiles != best_busiest_thread_tiles) {
-                better = busiest_thread_tiles < best_busiest_thread_tiles;
-            } else if (volume != best_volume) {
-                better = volume > best_volume;
-            } else {
-                better = padded_area < best_padded_area;
-            }
-            if (better && fits(h, w)) {
-                best = {h, w};
-                best_busiest_thread_tiles = busiest_thread_tiles;
-                best_volume = volume;
-                best_padded_area = padded_area;
-            }
-        }
-    }
-    return best;
-}
-
-}  // namespace detail
 
 // `output` is the C tensor when the caller supplied one (or the op already created it); it decides whether
 // C can be packed in place. Without it the op allocates C from the plan, which matches by construction.
@@ -190,49 +146,101 @@ std::optional<MatmulUnifiedPlan> plan_unified_matmul(
     const std::optional<ttnn::Tensor>& output,
     bool must_fit);
 
-// The machine choose_unified_placement's cycle estimate assumes, per arch. Only the ranking of placements matters;
-// Quasar's numbers are first-order until the emulator measures them.
+// The machine the plan's cycle estimate assumes, per arch, fitted to measured kernel times: Wormhole on an n150,
+// Quasar on craq-sim (which models no DRAM bandwidth, so Quasar's DRAM figure is unmeasured). Blackhole is
+// Wormhole with Blackhole's NoC and DRAM bandwidth. Costs are per compute thread or per core; a tile is 2 KB (a
+// Float16_b tile), and other formats scale by their tile size.
 struct ArchCostModel {
-    double tile_matmul_cycles;         // one 32x32x32 tile product per math fidelity phase, on one compute engine
-    double tile_pack_cycles;           // one tile packed out of DST or reloaded into it
-    double noc_read_bytes_per_cycle;   // into one core
-    double noc_write_bytes_per_cycle;  // out of one core, multicasts included
-    double dram_bytes_per_cycle;       // the whole device
-    double C_slice_cycles;             // fixed cost per C slice: handshakes and pipeline fill
+    // Compute, on one compute thread.
+    double tile_matmul_cycles;    // one 32x32x32 tile product per math fidelity phase
+    double unpack_A_tile_cycles;  // per K tile, per A tile (subblock row) unpacked; overlaps the math
+    double unpack_B_tile_cycles;  // per K tile, per B tile (subblock column) unpacked
+    double subblock_cycles;       // per subblock per K chunk: DST handshake and inits
+    double tile_pack_cycles;      // per tile packed out of DST
+    double tile_reload_cycles;    // per partial sum tile reloaded into DST
+    double K_chunk_cycles;        // per K chunk: DFB waits and pack init
+    // Data movement, on one core.
+    double tile_read_cycles;       // per tile one reader thread reads
+    double core_tile_read_cycles;  // per tile all of a core's reader threads read (its NoC bandwidth)
+    double tile_mcast_cycles;      // per tile multicast to the other cores of a row, column or rectangle
+    double tile_write_cycles;      // per C tile written
+    double K_chunk_read_cycles;    // per K chunk a reader thread reads: barrier and DFB credits
+    double K_chunk_mcast_cycles;   // more per K chunk when an operand is multicast: the semaphore round trip
+    double read_latency_cycles;    // before the first K chunk's data arrives
+    double C_slice_cycles;         // per C slice
+    // A pipeline step costs (read^p + compute^p)^(1/p) for p = overlap_exponent: large p overlaps the two fully,
+    // p = 1 not at all.
+    double overlap_exponent;
+    // The device.
+    double dram_tile_cycles;  // per tile of DRAM traffic, all cores together
 };
 
 constexpr ArchCostModel WORMHOLE_COST_MODEL{
     .tile_matmul_cycles = 16.0,
-    .tile_pack_cycles = 16.0,
-    .noc_read_bytes_per_cycle = 32.0,
-    .noc_write_bytes_per_cycle = 32.0,
-    .dram_bytes_per_cycle = 256.0,
-    .C_slice_cycles = 1000.0,
+    .unpack_A_tile_cycles = 42.3,
+    .unpack_B_tile_cycles = 32.6,
+    .subblock_cycles = 52.9,
+    .tile_pack_cycles = 29.3,
+    .tile_reload_cycles = 148.3,
+    .K_chunk_cycles = 0.0,
+    .tile_read_cycles = 70.2,
+    .core_tile_read_cycles = 91.1,
+    .tile_mcast_cycles = 92.8,
+    .tile_write_cycles = 182.0,
+    .K_chunk_read_cycles = 0.0,
+    .K_chunk_mcast_cycles = 246.0,
+    .read_latency_cycles = 0.0,
+    .C_slice_cycles = 0.0,
+    .overlap_exponent = 6.6,
+    .dram_tile_cycles = 12.3,
 };
 
 constexpr ArchCostModel BLACKHOLE_COST_MODEL{
     .tile_matmul_cycles = 16.0,
-    .tile_pack_cycles = 16.0,
-    .noc_read_bytes_per_cycle = 64.0,
-    .noc_write_bytes_per_cycle = 64.0,
-    .dram_bytes_per_cycle = 380.0,
-    .C_slice_cycles = 1000.0,
+    .unpack_A_tile_cycles = 42.3,
+    .unpack_B_tile_cycles = 32.6,
+    .subblock_cycles = 52.9,
+    .tile_pack_cycles = 29.3,
+    .tile_reload_cycles = 148.3,
+    .K_chunk_cycles = 0.0,
+    .tile_read_cycles = 35.1,
+    .core_tile_read_cycles = 45.6,
+    .tile_mcast_cycles = 46.4,
+    .tile_write_cycles = 91.0,
+    .K_chunk_read_cycles = 0.0,
+    .K_chunk_mcast_cycles = 246.0,
+    .read_latency_cycles = 0.0,
+    .C_slice_cycles = 0.0,
+    .overlap_exponent = 6.6,
+    .dram_tile_cycles = 8.3,
 };
 
 constexpr ArchCostModel QUASAR_COST_MODEL{
     .tile_matmul_cycles = 16.0,
-    .tile_pack_cycles = 16.0,
-    .noc_read_bytes_per_cycle = 128.0,
-    .noc_write_bytes_per_cycle = 128.0,
-    .dram_bytes_per_cycle = 512.0,
-    .C_slice_cycles = 2000.0,
+    .unpack_A_tile_cycles = 12.5,
+    .unpack_B_tile_cycles = 12.4,
+    .subblock_cycles = 76.8,
+    .tile_pack_cycles = 0.0,
+    .tile_reload_cycles = 8.5,
+    .K_chunk_cycles = 190.3,
+    .tile_read_cycles = 35.5,
+    .core_tile_read_cycles = 5.8,
+    .tile_mcast_cycles = 0.0,
+    .tile_write_cycles = 29.2,
+    .K_chunk_read_cycles = 0.0,
+    .K_chunk_mcast_cycles = 220.9,
+    .read_latency_cycles = 321.0,
+    .C_slice_cycles = 48.8,
+    .overlap_exponent = 9.5,
+    .dram_tile_cycles = 4.0,
 };
 
 // A config is what the caller asks for, its placement is the cores, C slice and orientation, and the plan
 // (MatmulUnifiedPlan) is everything derived from a config with a placement.
-// Returns `requested` with the placement whose plan has the lowest estimated cycles among: a sharded output's shard
-// grid (then the only one), else a 2D rectangle, 1D across N and across M, and the cores of a height-sharded A or a
-// width-sharded B. nullopt when the unified matmul cannot run the case or no placement fits.
+// Returns `requested` with the placement whose plan has the lowest estimated cycles, and that plan's C slice, subblock
+// and K chunk, among: a sharded output's shard grid (then the only one), else a 2D rectangle, 1D across N and across
+// M, and the cores of a height-sharded A or a width-sharded B. nullopt when the unified matmul cannot run the case or
+// no placement fits.
 std::optional<operations::experimental::quasar::matmul::MatmulUnifiedProgramConfig> choose_unified_placement(
     const ttnn::Tensor& input_tensor_a,
     const ttnn::Tensor& input_tensor_b,

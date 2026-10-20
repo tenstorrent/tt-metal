@@ -8,6 +8,7 @@
 #include "ttnn/operations/experimental/quasar/matmul/device/config/matmul_unified_plan.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <optional>
 #include <string>
 #include <tuple>
@@ -37,13 +38,6 @@ namespace CMAKE_UNIQUE_NAMESPACE {
 // A TRISC-visible DFB's extent is a uint16_t of 16-byte units (validate_ring_extent); enforced on
 // every arch so a Wormhole-legal config never FATALs on Quasar.
 constexpr uint64_t MAX_DFB_EXTENT_BYTES = 65535ull * 16ull;
-// Longest auto K chunk, a pipelining limit rather than an L1 one: it keeps the number of K chunks up. Compute waits
-// for the first K chunk to be read in full and the last K chunk's compute overlaps no read, so a core that produces a
-// single C slice needs several K chunks. A C slice of at most SMALL_C_SLICE_TILES tiles has A and B slices cheap enough
-// for longer K chunks: its limit is K_tiles / min_K_chunks, which still leaves one K chunk per reader thread on Quasar
-// and two to double-buffer elsewhere (#57884). Tuning points, not hardware limits.
-constexpr uint32_t MAX_AUTO_K_CHUNK_TILES = 8;
-constexpr uint32_t SMALL_C_SLICE_TILES = 4;
 // DM threads and buffering per core, fixed so the readers and writers keep the NoC busy rather than sized to the L1
 // left over. Quasar runs four reader and two writer threads (of its six user DM cores); Wormhole / Blackhole one of
 // each. The A and B DFBs hold a slice per reader thread and at least two; C_slice holds two C slices on cores that
@@ -293,6 +287,109 @@ MatmulUnifiedPlan make_plan(
     return plan;
 }
 
+// Math fidelity phases per tile product. Wormhole and Blackhole issue every phase asked for; Quasar drops the phases
+// that need low mantissa bits its source registers do not hold (only Float32 operands carry them; the Quasar LLK's
+// math_fidelity_schedule, which takes B in SrcA and A in SrcB).
+uint32_t fidelity_phases(
+    tt::ARCH arch, tt::tt_metal::MathFidelity math_fidelity, tt::DataFormat A_format, tt::DataFormat B_format) {
+    const uint32_t requested = math_fidelity == tt::tt_metal::MathFidelity::LoFi    ? 1
+                               : math_fidelity == tt::tt_metal::MathFidelity::HiFi2 ? 2
+                               : math_fidelity == tt::tt_metal::MathFidelity::HiFi3 ? 3
+                                                                                    : 4;
+    if (arch != tt::ARCH::QUASAR) {
+        return requested;
+    }
+    const bool wide_SrcA = B_format == tt::DataFormat::Float32;
+    const bool wide_SrcB = A_format == tt::DataFormat::Float32;
+    return 1 + (wide_SrcA && requested > 1) + (wide_SrcB && requested > 2) + (wide_SrcA && wide_SrcB && requested > 3);
+}
+
+// Estimated cycles of a plan, and the busiest core's pipeline alone (see MatmulUnifiedPlan::estimated_cycles). The
+// busiest core runs its C slices' K chunks as a pipeline (reader threads fetch later K chunks while compute multiplies
+// this one), and DRAM bandwidth bounds all cores together. The terms follow the kernels; ArchCostModel holds the
+// fitted costs.
+std::pair<double, double> estimate_plan_cycles(
+    const MatmulUnifiedPlan& plan,
+    const ArchCostModel& model,
+    uint32_t fidelity_phases,
+    bool A_in_dram,
+    bool B_in_dram,
+    bool C_in_dram) {
+    constexpr double TILE_BYTES = 2048.0;  // the cost model's tile
+    const double C_slices_on_busiest_core = (double)plan.batch_size * plan.max_C_slices_per_core;
+    const double K_chunks_on_busiest_core = C_slices_on_busiest_core * plan.K_chunks_per_C_slice;
+
+    // Compute, on the busiest thread: per K tile of a subblock the unpack overlaps the math, and padded tiles cost
+    // as much as real ones.
+    const uint32_t subblock_tiles = plan.subblock_M_tiles * plan.subblock_N_tiles;
+    const uint32_t num_subblocks =
+        (plan.C_slice_M_padded_tiles / plan.subblock_M_tiles) * (plan.C_slice_N_padded_tiles / plan.subblock_N_tiles);
+    const uint32_t subblocks_per_thread = tt::div_up(num_subblocks, plan.num_compute_threads);
+    const double K_tile_cycles = std::max(
+        subblock_tiles * model.tile_matmul_cycles * fidelity_phases,
+        plan.subblock_M_tiles * model.unpack_A_tile_cycles + plan.subblock_N_tiles * model.unpack_B_tile_cycles);
+    const double K_chunk_cycles = subblocks_per_thread * (model.subblock_cycles + plan.K_chunk_tiles * K_tile_cycles +
+                                                          subblock_tiles * model.tile_pack_cycles) +
+                                  model.K_chunk_cycles;
+    // With packer L1 accumulation only the last K chunk reloads the partial sums, else every K chunk after the first.
+    const uint32_t reloads_per_C_slice = plan.packer_l1_acc_en ? 1 : plan.K_chunks_per_C_slice - 1;
+    const double compute_cycles = C_slices_on_busiest_core * (plan.K_chunks_per_C_slice * K_chunk_cycles +
+                                                              reloads_per_C_slice * subblocks_per_thread *
+                                                                  subblock_tiles * model.tile_reload_cycles);
+
+    // Data movement on the busiest core, a multicast sender: per C slice its A rows and B columns over all of K, which
+    // it also multicasts, and the C slice it writes. A borrowed operand does not move.
+    const double A_tiles =
+        plan.borrow_A ? 0.0 : (double)plan.C_slice_M_tiles * plan.K_tiles * plan.A_entry_bytes / TILE_BYTES;
+    const double B_tiles =
+        plan.borrow_B ? 0.0 : (double)plan.K_tiles * plan.C_slice_N_tiles * plan.B_entry_bytes / TILE_BYTES;
+    const double bias_tiles = (double)plan.C_slice_N_tiles * plan.bias_entry_bytes / TILE_BYTES;
+    const double C_tiles = (double)plan.C_slice_M_tiles * plan.C_slice_N_tiles * plan.C_entry_bytes / TILE_BYTES;
+    const double C_write_cycles = plan.borrow_C ? 0.0 : C_tiles * model.tile_write_cycles;
+    const bool multicast = plan.A_mcast_num_dests > 0 || plan.B_mcast_num_dests > 0;
+    const double read_cycles_per_tile =
+        std::max(model.tile_read_cycles / plan.num_reader_threads, model.core_tile_read_cycles);
+    const double dm_cycles =
+        C_slices_on_busiest_core *
+            ((A_tiles + B_tiles + bias_tiles) * read_cycles_per_tile +
+             ((plan.A_mcast_num_dests > 0 ? A_tiles : 0.0) + (plan.B_mcast_num_dests > 0 ? B_tiles : 0.0)) *
+                 model.tile_mcast_cycles +
+             C_write_cycles) +
+        K_chunks_on_busiest_core * (model.K_chunk_read_cycles + (multicast ? model.K_chunk_mcast_cycles : 0.0)) /
+            plan.num_reader_threads;
+
+    // The pipeline. Its fill overlaps nothing: one reader thread fetches (and multicasts) the first K chunk, and the
+    // last C slice is written after its last K chunk. Then every later step costs about the slower of its read and its
+    // compute (they overlap imperfectly, see ArchCostModel::overlap_exponent). DRAM bandwidth can bound it all instead,
+    // the first K chunk's read included.
+    const double first_K_chunk_A_tiles =
+        (double)plan.C_slice_M_tiles * plan.K_chunk_tiles * plan.A_entry_bytes / TILE_BYTES;
+    const double first_K_chunk_B_tiles =
+        (double)plan.K_chunk_tiles * plan.C_slice_N_tiles * plan.B_entry_bytes / TILE_BYTES;
+    const double fill_cycles = (first_K_chunk_A_tiles + first_K_chunk_B_tiles) * model.tile_read_cycles +
+                               ((plan.A_mcast_num_dests > 0 ? first_K_chunk_A_tiles : 0.0) +
+                                (plan.B_mcast_num_dests > 0 ? first_K_chunk_B_tiles : 0.0)) *
+                                   model.tile_mcast_cycles +
+                               model.read_latency_cycles + C_write_cycles +
+                               C_slices_on_busiest_core * model.C_slice_cycles;
+    const double read_step_cycles = dm_cycles / K_chunks_on_busiest_core;
+    const double compute_step_cycles = compute_cycles / K_chunks_on_busiest_core;
+    const double step_cycles = std::pow(
+        std::pow(read_step_cycles, model.overlap_exponent) + std::pow(compute_step_cycles, model.overlap_exponent),
+        1.0 / model.overlap_exponent);
+    const double steady_cycles = compute_step_cycles + (K_chunks_on_busiest_core - 1) * step_cycles;
+
+    // DRAM, all cores: a multicast operand is read once per multicast group.
+    const double total_C_slices = (double)plan.batch_size * plan.C_slices_per_batch;
+    const double dram_tiles =
+        total_C_slices * ((A_in_dram ? A_tiles / (plan.A_mcast_num_dests + 1) : 0.0) +
+                          (B_in_dram ? B_tiles / (plan.B_mcast_num_dests + 1) : 0.0) + (C_in_dram ? C_tiles : 0.0));
+    const double pipeline_cycles = fill_cycles + steady_cycles;
+    return {
+        std::max(pipeline_cycles, dram_tiles * model.dram_tile_cycles + model.read_latency_cycles + C_write_cycles),
+        pipeline_cycles};
+}
+
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
@@ -424,115 +521,67 @@ std::optional<MatmulUnifiedPlan> plan_unified_matmul(
             }
         }
     }
-    // ---- 5. Search: for each C slice, (a) its subblock, then (b) its K chunk; then the best C slice ----
-    // Steps (a) and (b) are made per C slice, in that order, before and apart from the ranking:
-    //   (a) subblock: the config's, else the best that fills DST, fits L1 and keeps every shard borrow (see below);
-    //   (b) K chunk: the longest that fits L1, up to a limit that keeps enough K chunks to pipeline. The number of K
-    //       chunks and their length pull opposite ways: more K chunks overlap reads with compute (see
-    //       MAX_AUTO_K_CHUNK_TILES), longer ones move each subblock's partial sums to L1 and back less often.
-    // Then, of the C slices that fit L1, the best is, in priority order (#57884):
-    //   1. one C slice per core, the whole of each core's block of C, even with 1-tile K chunks (multicast, shards used
-    //      in place, no per-C-slice overhead);
-    //   2. otherwise one whose K chunks are at least two tiles long (1-tile K chunks move the partial sums after every
-    //      K tile);
-    //   3. then the one with the most tiles (each A and B tile read is reused across more of them), then the wider.
-    const uint32_t K_chunk_floor = config.K_chunk_tiles.value_or(1);  // the shortest K chunk tried
-    const uint32_t min_K_chunks = is_quasar ? QUASAR_NUM_READER_THREADS : MIN_OPERAND_BUFFER_DEPTH;
-    const auto priority = [&](const MatmulUnifiedPlan& plan) {
-        return std::tuple(
-            plan.C_slice_M_tiles == max_C_slice_M_tiles && plan.C_slice_N_tiles == max_C_slice_N_tiles,
-            plan.K_chunk_tiles >= 2,
-            (uint64_t)plan.C_slice_M_tiles * plan.C_slice_N_tiles,
-            plan.C_slice_N_tiles);
-    };
+    // ---- 5. Search: the C slice, subblock and K chunk with the lowest estimated cycles ----
+    // Every combination whose DFBs fit is estimated; a subblock or K chunk the config gives is the only one tried. An
+    // auto subblock may pad the C slice (the estimate charges the padded work) but is no larger than it, which would
+    // only add padding; a K chunk divides K_tiles.
+    const ArchCostModel& cost_model = device.arch() == tt::ARCH::QUASAR      ? QUASAR_COST_MODEL
+                                      : device.arch() == tt::ARCH::BLACKHOLE ? BLACKHOLE_COST_MODEL
+                                                                             : WORMHOLE_COST_MODEL;
+    const uint32_t math_fidelity_phases = fidelity_phases(
+        device.arch(),
+        std::get<0>(get_compute_kernel_config_args(device.arch(), attributes.compute_kernel_config.value())),
+        base.A_format,
+        base.B_format);
+    const bool C_in_dram =
+        output.has_value() ? output->memory_config().is_dram() : attributes.output_mem_config.is_dram();
     std::optional<MatmulUnifiedPlan> best;
-    MatmulUnifiedPlan candidate;  // after the loop, the last and smallest C slice tried: the L1 error reports it
-    for (const std::pair<uint32_t, uint32_t>& C_slice_shape : C_slice_shapes) {
-        const uint32_t C_slice_M_tiles = C_slice_shape.first;
-        const uint32_t C_slice_N_tiles = C_slice_shape.second;
-
-        // (a) Subblock: the config's, else the largest that fills DST, voids no achievable borrow and fits L1 at the
-        // shortest K chunk, so the K chunk search below always finds one. Never trade a borrow for subblock volume:
-        // a subblock that pads a borrowable shard's dims is rejected; C's borrow needs subblocks spanning the C slice
-        // width, achievable only when that width fits DST.
-        uint32_t subblock_M_tiles = config.subblock_M_tiles.value_or(0);
-        uint32_t subblock_N_tiles = config.subblock_N_tiles.value_or(0);
-        if (!config.subblock_M_tiles.has_value()) {
-            const auto subblock_viable = [&](uint32_t candidate_M_tiles, uint32_t candidate_N_tiles) {
-                const MatmulUnifiedPlan at_shortest_K_chunk = make_plan(
-                    base,
-                    config.cores,
-                    A,
-                    B,
-                    output,
-                    attributes,
-                    C_slice_M_tiles,
-                    C_slice_N_tiles,
-                    candidate_M_tiles,
-                    candidate_N_tiles,
-                    K_chunk_floor);
-                const bool M_padded = at_shortest_K_chunk.C_slice_M_padded_tiles != C_slice_M_tiles;
-                const bool N_padded = at_shortest_K_chunk.C_slice_N_padded_tiles != C_slice_N_tiles;
-                const bool C_borrow_achievable =
-                    at_shortest_K_chunk.C_shard_borrowable && C_slice_N_tiles <= dst_capacity_tiles;
-                const bool voids_A_borrow = at_shortest_K_chunk.A_shard_borrowable && M_padded;
-                const bool voids_B_borrow = at_shortest_K_chunk.B_shard_borrowable && N_padded;
-                const bool voids_C_borrow = C_borrow_achievable && !at_shortest_K_chunk.borrow_C;
-                return !voids_A_borrow && !voids_B_borrow && !voids_C_borrow &&
-                       dfbs_fit(at_shortest_K_chunk, l1_budget);
-            };
-            std::tie(subblock_M_tiles, subblock_N_tiles) = detail::maximize_subblock_size(
-                C_slice_M_tiles, C_slice_N_tiles, dst_capacity_tiles, base.num_compute_threads, subblock_viable);
-        }
-
-        // (b) K chunk: all of K when that lets a resident A shard be borrowed (main pins in0_block_w == K for
-        // height-sharded in0 for the same reason), else the config's, else the longest divisor of K_tiles that fits,
-        // walking down from the pipelining limit.
-        candidate = make_plan(
-            base,
-            config.cores,
-            A,
-            B,
-            output,
-            attributes,
-            C_slice_M_tiles,
-            C_slice_N_tiles,
-            subblock_M_tiles,
-            subblock_N_tiles,
-            base.K_tiles);
-        const bool single_K_chunk_allows_A_borrow =
-            !config.K_chunk_tiles.has_value() && candidate.borrow_A && dfbs_fit(candidate, l1_budget);
-        if (!single_K_chunk_allows_A_borrow) {
-            const uint32_t K_chunk_cap = C_slice_M_tiles * C_slice_N_tiles > SMALL_C_SLICE_TILES
-                                             ? MAX_AUTO_K_CHUNK_TILES
-                                             : std::max(MAX_AUTO_K_CHUNK_TILES, base.K_tiles / min_K_chunks);
-            const uint32_t K_chunk_start =
-                config.K_chunk_tiles.has_value() ? *config.K_chunk_tiles : std::min(base.K_tiles, K_chunk_cap);
-            for (uint32_t K_chunk_tiles = K_chunk_start; K_chunk_tiles >= K_chunk_floor; --K_chunk_tiles) {
-                if (base.K_tiles % K_chunk_tiles != 0) {
-                    continue;
-                }
-                candidate = make_plan(
-                    base,
-                    config.cores,
-                    A,
-                    B,
-                    output,
-                    attributes,
-                    C_slice_M_tiles,
-                    C_slice_N_tiles,
-                    subblock_M_tiles,
-                    subblock_N_tiles,
-                    K_chunk_tiles);
-                if (dfbs_fit(candidate, l1_budget)) {
-                    break;
+    // After the loops, the last tried (the smallest C slice, a 1x1 subblock and the shortest K chunk): the L1 error
+    // reports it.
+    MatmulUnifiedPlan candidate;
+    for (const auto& [C_slice_M_tiles, C_slice_N_tiles] : C_slice_shapes) {
+        // Widest first, so a tie keeps the wider subblock (measured slightly faster on Wormhole and Quasar).
+        for (uint32_t subblock_N_tiles =
+                 config.subblock_N_tiles.value_or(std::min(dst_capacity_tiles, C_slice_N_tiles));
+             subblock_N_tiles >= config.subblock_N_tiles.value_or(1);
+             --subblock_N_tiles) {
+            for (uint32_t subblock_M_tiles =
+                     config.subblock_M_tiles.value_or(std::min(dst_capacity_tiles / subblock_N_tiles, C_slice_M_tiles));
+                 subblock_M_tiles >= config.subblock_M_tiles.value_or(1);
+                 --subblock_M_tiles) {
+                for (uint32_t K_chunk_tiles = config.K_chunk_tiles.value_or(base.K_tiles);
+                     K_chunk_tiles >= config.K_chunk_tiles.value_or(1);
+                     --K_chunk_tiles) {
+                    if (base.K_tiles % K_chunk_tiles != 0) {
+                        continue;
+                    }
+                    candidate = make_plan(
+                        base,
+                        config.cores,
+                        A,
+                        B,
+                        output,
+                        attributes,
+                        C_slice_M_tiles,
+                        C_slice_N_tiles,
+                        subblock_M_tiles,
+                        subblock_N_tiles,
+                        K_chunk_tiles);
+                    if (!dfbs_fit(candidate, l1_budget)) {
+                        continue;
+                    }
+                    candidate.estimated_cycles = estimate_plan_cycles(
+                        candidate,
+                        cost_model,
+                        math_fidelity_phases,
+                        A.memory_config().is_dram(),
+                        B.memory_config().is_dram(),
+                        C_in_dram);
+                    if (!best.has_value() || candidate.estimated_cycles < best->estimated_cycles) {
+                        best = candidate;
+                    }
                 }
             }
-        }
-
-        // Ranking, priorities 1-3 above.
-        if (dfbs_fit(candidate, l1_budget) && (!best.has_value() || priority(candidate) > priority(*best))) {
-            best = candidate;
         }
     }
     if (!best.has_value()) {
@@ -588,56 +637,6 @@ std::optional<MatmulUnifiedPlan> plan_unified_matmul(
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 
-// Estimated cycles of a plan: the slowest of the busiest core's compute and data movement and the device's DRAM
-// traffic (the buffers overlap them), plus a fixed cost per C slice. Second, to break ties: the three summed
-// (decode reads the same DRAM bytes on 8 cores as on 32).
-std::pair<double, double> estimate_plan_cycles(
-    const MatmulUnifiedPlan& plan,
-    tt::ARCH arch,
-    tt::tt_metal::MathFidelity math_fidelity,
-    bool A_in_dram,
-    bool B_in_dram,
-    bool C_in_dram) {
-    const ArchCostModel& model = arch == tt::ARCH::QUASAR      ? QUASAR_COST_MODEL
-                                 : arch == tt::ARCH::BLACKHOLE ? BLACKHOLE_COST_MODEL
-                                                               : WORMHOLE_COST_MODEL;
-    const uint32_t fidelity_phases = math_fidelity == tt::tt_metal::MathFidelity::LoFi    ? 1
-                                     : math_fidelity == tt::tt_metal::MathFidelity::HiFi2 ? 2
-                                     : math_fidelity == tt::tt_metal::MathFidelity::HiFi3 ? 3
-                                                                                          : 4;
-    const double C_slices_on_busiest_core = (double)plan.max_C_slices_per_core * plan.batch_size;
-    const double total_C_slices = (double)plan.C_slices_per_batch * plan.batch_size;
-
-    // Compute: the busiest thread's subblocks of each C slice over all of K, plus its packs and partial reloads.
-    const uint32_t reloads_per_C_slice =
-        plan.packer_l1_acc_en ? 1 : plan.K_chunks_per_C_slice - 1;  // with L1 accumulation only the last K chunk
-    const double compute_cycles = C_slices_on_busiest_core * plan.C_entries_per_thread *
-                                  (plan.K_tiles * model.tile_matmul_cycles * fidelity_phases +
-                                   (plan.K_chunks_per_C_slice + reloads_per_C_slice) * model.tile_pack_cycles);
-
-    // Data movement on the busiest core, per C slice: its A rows and B columns over all of K. A multicast sender
-    // also writes them to its row or column once; a receiver reads nothing; a borrowed operand does not move.
-    const double A_bytes = plan.borrow_A ? 0.0 : (double)plan.C_slice_M_tiles * plan.K_tiles * plan.A_entry_bytes;
-    const double B_bytes = plan.borrow_B ? 0.0 : (double)plan.K_tiles * plan.C_slice_N_tiles * plan.B_entry_bytes;
-    const double bias_bytes = (double)plan.C_slice_N_tiles * plan.bias_entry_bytes;
-    const double C_bytes = (double)plan.C_slice_M_tiles * plan.C_slice_N_tiles * plan.C_entry_bytes;
-    const double read_bytes = C_slices_on_busiest_core * (A_bytes + B_bytes + bias_bytes);
-    const double write_bytes =
-        C_slices_on_busiest_core * ((plan.A_mcast_num_dests > 0 ? A_bytes : 0.0) +
-                                    (plan.B_mcast_num_dests > 0 ? B_bytes : 0.0) + (plan.borrow_C ? 0.0 : C_bytes));
-    const double dm_cycles =
-        read_bytes / model.noc_read_bytes_per_cycle + write_bytes / model.noc_write_bytes_per_cycle;
-
-    // DRAM over the whole device: a multicast operand is read once per row or column of cores.
-    const double dram_bytes =
-        total_C_slices * ((A_in_dram ? A_bytes / (plan.A_mcast_num_dests + 1) : 0.0) +
-                          (B_in_dram ? B_bytes / (plan.B_mcast_num_dests + 1) : 0.0) + (C_in_dram ? C_bytes : 0.0));
-    const double dram_cycles = dram_bytes / model.dram_bytes_per_cycle;
-
-    const double slowest_cycles = std::max({compute_cycles, dm_cycles, dram_cycles});
-    return {slowest_cycles + C_slices_on_busiest_core * model.C_slice_cycles, compute_cycles + dm_cycles + dram_cycles};
-}
-
 // The cores next to the DRAM banks, in bank order, which the C slice walk follows: each reads its own bank's shard.
 CoreRangeSet dram_bank_cores(const tt::tt_metal::IDevice& device) {
     std::vector<CoreRange> cores;
@@ -672,8 +671,6 @@ std::optional<MatmulUnifiedProgramConfig> choose_unified_placement(
     const uint32_t grid_rows = grid.y;
     // With a 32-bit DST ttnn.linear adds the bias separately (see the plan), so it takes no L1 here.
     const uint32_t fused_bias_tile_bytes = get_fp32_dest_acc_en(attributes.compute_kernel_config) ? 0 : bias_tile_bytes;
-    const tt::tt_metal::MathFidelity math_fidelity =
-        std::get<0>(get_compute_kernel_config_args(device.arch(), attributes.compute_kernel_config.value()));
     const MatmulUnifiedPlan gemm = plan_gemm_size(A, B, attributes);
     const uint32_t M_tiles = gemm.M_tiles;
     const uint32_t N_tiles = gemm.N_tiles;
@@ -682,9 +679,10 @@ std::optional<MatmulUnifiedProgramConfig> choose_unified_placement(
 
     std::optional<MatmulUnifiedProgramConfig> best;
     std::pair<double, double> best_estimate;
-    // Plans the placement (an unset C slice: the plan picks it) and keeps it if its estimate is the lowest so far, the
-    // first on a tie. False when it does not fit: cores beyond the device grid (a larger user_core_coord), DFBs beyond
-    // L1, or C slices that do not tile a sharded output in the layout it asks for.
+    // Plans the placement (an unset C slice: the plan picks it) and keeps it, with the plan's C slice, subblock and K
+    // chunk, if its estimate is the lowest so far, the first on a tie. False when it does not fit: cores beyond the
+    // device grid (a larger user_core_coord), DFBs beyond L1, or C slices that do not tile a sharded output in the
+    // layout it asks for.
     const auto try_placement = [&](const CoreRangeSet& cores,
                                    tt::tt_metal::ShardOrientation orientation,
                                    std::optional<uint32_t> C_slice_M_tiles,
@@ -706,13 +704,7 @@ std::optional<MatmulUnifiedProgramConfig> choose_unified_placement(
         if (C_memory.is_sharded() && !C_shard.has_value() && plan->sharded_output_layout != C_memory.memory_layout()) {
             return false;
         }
-        const std::pair<double, double> estimate = estimate_plan_cycles(
-            *plan,
-            device.arch(),
-            math_fidelity,
-            A.memory_config().is_dram(),
-            B.memory_config().is_dram(),
-            C_memory.is_dram());
+        const std::pair<double, double> estimate = plan->estimated_cycles;
         log_debug(
             tt::LogOp,
             "Unified matmul placement: {}x{}-tile C slice on {}: {:.0f} cycles",
@@ -721,6 +713,11 @@ std::optional<MatmulUnifiedProgramConfig> choose_unified_placement(
             cores.str(),
             estimate.first);
         if (!best.has_value() || estimate < best_estimate) {
+            config.C_slice_M_tiles = plan->C_slice_M_tiles;
+            config.C_slice_N_tiles = plan->C_slice_N_tiles;
+            config.subblock_M_tiles = plan->subblock_M_tiles;
+            config.subblock_N_tiles = plan->subblock_N_tiles;
+            config.K_chunk_tiles = plan->K_chunk_tiles;
             best = std::move(config);
             best_estimate = estimate;
         }
