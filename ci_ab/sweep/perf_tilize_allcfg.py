@@ -101,6 +101,13 @@ for form in ("tile", "block"):  # 8-bit source: per-face unpack, default pack
         for ct in (1, 2, 4, 8):
             CASES.append(("f8", io(F.Fp8_e4m3, F.Float16_b), NO, 1, ct, TA(ta_form=form, ta_nf=nf)))
 
+for form in ("tile", "block"):  # 8-bit source, more row widths and four rows, compile-time formats
+    for nf in (4, 2):
+        for ct in (3, 5, 6, 7, 12, 16):
+            CASES.append(("f8x", io(F.Fp8_e4m3, F.Float16_b), NO, 1, ct, TA(ta_form=form, ta_nf=nf, ta_ctf=1)))
+        for ct in (2, 8):
+            CASES.append(("f8x", io(F.Fp8_e4m3, F.Float16_b), NO, 4, ct, TA(ta_form=form, ta_nf=nf, ta_ctf=1)))
+
 for form in ("tile", "block"):  # the 2-face rows #60672 moves, with compile-time formats like production
     for nf in (2, 4):
         for name, fmt, acc in (("ctf", BF16, NO), ("ctf", FP32, YES), ("ctfu2d", FP32, YES), ("ctf", io(F.Fp8_e4m3, F.Float16_b), NO)):
