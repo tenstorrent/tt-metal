@@ -6,9 +6,9 @@
 //
 // The chip's gate|up slice [E, K, 2I] is stored per DRAM bank: bank b holds (gate column pair b, up column pair b)
 // of every expert, column-major, expert-major, so expert e's two columns for this bank are one contiguous range of
-// 2 * kt tiles at e * expert_stride. This core belongs to group g of G: it streams the active experts
-// active[g], active[g + G], ... (the active list comes from the routing matrix scanned here), one column at a time,
-// triple-buffered with transaction ids (one column in flight ahead of compute).
+// 2 * ppb * kt tiles at e * expert_stride (ppb column pairs per bank). This core belongs to group g of G: it streams
+// the active experts active[g], active[g + G], ... (the active list comes from the routing matrix scanned here), one
+// column at a time, triple-buffered with transaction ids (one column in flight ahead of compute).
 //
 // runtime args: [w_addr, routing_addr, bank_id, vc, group]
 
@@ -33,7 +33,8 @@ void kernel_main() {
     constexpr uint32_t expert_stride = get_compile_time_arg_val(6);
     constexpr uint32_t tile_bytes = get_compile_time_arg_val(7);
     constexpr uint32_t page_bytes = get_compile_time_arg_val(8);
-    constexpr auto routing_args = TensorAccessorArgs<9>();
+    constexpr uint32_t ppb = get_compile_time_arg_val(9);  // column pairs per bank
+    constexpr auto routing_args = TensorAccessorArgs<10>();
 
     constexpr uint32_t E_TILES = (E + 31) / 32;
     constexpr uint32_t col_bytes = kt * tile_bytes;
@@ -70,7 +71,7 @@ void kernel_main() {
 
     for (uint32_t i = group; i < n; i += groups) {
         uint32_t src = static_cast<uint32_t>(active[i]) * expert_stride;
-        for (uint32_t c = 0; c < 2; ++c) {  // gate column, then up column
+        for (uint32_t c = 0; c < 2 * ppb; ++c) {  // per pair: gate column, then up column
             noc_async_read_set_trid(trid);
             for (uint32_t p = 0; p < pages_per_col; ++p) {
                 noc_async_read_one_packet_with_state_with_trid(w_base, src, l1_write, trid);

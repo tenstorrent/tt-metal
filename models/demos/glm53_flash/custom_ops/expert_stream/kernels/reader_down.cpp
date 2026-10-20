@@ -7,7 +7,8 @@
 // The chip's down slice [E, I, H] is stored per DRAM bank: bank b holds output columns [b * C, (b + 1) * C) of every
 // expert, expert-major then column-major (seg_tiles K tiles per column), so expert e's `cols` columns of this core
 // are one contiguous run of cols * seg_tiles tiles at e * bank_expert_stride + c0 * seg_bytes. For every active
-// expert (the routing matrix is scanned here) that block is read in `cols` packets of one column segment each,
+// expert (the routing matrix is scanned here) that block is read in packets of page_bytes (one column segment at
+// I = 256, less for wider slices),
 // triple-buffered with transaction ids (one expert in flight ahead of compute).
 //
 // runtime args: [w_addr, routing_addr, bank_id, vc, c0]
@@ -32,13 +33,16 @@ void kernel_main() {
     constexpr uint32_t cols = get_compile_time_arg_val(5);
     constexpr uint32_t bank_expert_stride = get_compile_time_arg_val(6);
     constexpr uint32_t tile_bytes = get_compile_time_arg_val(7);
-    constexpr auto routing_args = TensorAccessorArgs<8>();
+    constexpr uint32_t page_bytes = get_compile_time_arg_val(8);  // NOC packet (divides the column segment)
+    constexpr auto routing_args = TensorAccessorArgs<9>();
 
     constexpr uint32_t E_TILES = (E + 31) / 32;
     constexpr uint32_t seg_bytes = seg_tiles * tile_bytes;
     constexpr uint32_t block_tiles = cols * seg_tiles;
     constexpr uint32_t block_bytes = cols * seg_bytes;
-    static_assert(seg_bytes <= NOC_MAX_BURST_SIZE, "one column segment must fit one NOC packet");
+    constexpr uint32_t pages_per_block = block_bytes / page_bytes;
+    static_assert(pages_per_block * page_bytes == block_bytes, "the packet must divide the expert block");
+    static_assert(page_bytes <= NOC_MAX_BURST_SIZE, "one packet must fit one NOC burst");
 
     cb_reserve_back(cb_r, E_TILES);
     const uint32_t r_l1 = get_write_ptr(cb_r);
@@ -52,7 +56,7 @@ void kernel_main() {
 
     const uint64_t w_base = get_noc_addr_from_bank_id<true>(bank_id, w_addr);
     reset_noc_trid_barrier_counter(NOC_CLEAR_OUTSTANDING_REQ_MASK, noc_index);
-    noc_async_read_one_packet_set_state<true>(w_base, seg_bytes, vc);
+    noc_async_read_one_packet_set_state<true>(w_base, page_bytes, vc);
 
     constexpr uint32_t num_buffers = 3;
     constexpr uint32_t extra_in_flight = 1;
@@ -68,10 +72,10 @@ void kernel_main() {
     for (uint32_t i = 0; i < n; ++i) {
         noc_async_read_set_trid(trid);
         uint32_t src = static_cast<uint32_t>(active[i]) * bank_expert_stride + c0 * seg_bytes;
-        for (uint32_t c = 0; c < cols; ++c) {
+        for (uint32_t c = 0; c < pages_per_block; ++c) {
             noc_async_read_one_packet_with_state_with_trid(w_base, src, l1_write, trid);
-            src += seg_bytes;
-            l1_write += seg_bytes;
+            src += page_bytes;
+            l1_write += page_bytes;
         }
         if (free_blocks == num_buffers - extra_in_flight) {
             noc_async_read_barrier_with_trid(trid_to_wait);

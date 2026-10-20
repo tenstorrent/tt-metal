@@ -29,7 +29,7 @@ from models.demos.glm53_flash.tests.utils import pcc
 
 E, K, I, H = 72, 4096, 256, 4096
 GROUPS = int(os.environ.get("GLM53_STREAM_GROUPS", "12"))
-DOWN_READERS = int(os.environ.get("GLM53_STREAM_DOWN_READERS", "2"))
+DOWN_READERS = int(os.environ["GLM53_STREAM_DOWN_READERS"]) if os.environ.get("GLM53_STREAM_DOWN_READERS") else None
 X_L1 = os.environ.get("GLM53_STREAM_X_L1", "0") == "1"  # the block's tokens in L1 (no DRAM re-reads per core)
 ACT_L1 = os.environ.get("GLM53_STREAM_ACT_L1", "0") == "1"  # the activations between the two ops in L1
 TRACE_PICKS = int(os.environ.get("GLM53_STREAM_TRACE_PICKS", "2"))  # routed experts per token in the trace test
@@ -212,3 +212,41 @@ def test_expert_stream_mesh(mesh_device, weights):
         active = int((r_d[d].abs().sum(0) > 0).sum())
         logger.info(f"mesh {tuple(mesh_device.shape)} chip {d} ({active} active): out pcc {p:.6f}")
         assert p > 0.9999, (d, p)
+
+
+@pytest.mark.timeout(2400)
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+@pytest.mark.parametrize("I_loc, E_loc", [(1024, 72), (2048, 24)])
+def test_expert_stream_widths(mesh_device, I_loc, E_loc):
+    """The wider per-chip intermediate slices of the smaller meshes ((2,4) block: 1024 = 4 column pairs per bank;
+    one chip: 2048 = 8 pairs; the down segments then span several NOC packets and more readers per bank), 32
+    tokens, 2 routed experts per token, vs the torch golden."""
+    g = torch.Generator().manual_seed(1)
+    w13_host = (torch.randn(E_loc, K, 2 * I_loc, generator=g) * 0.02).bfloat16()
+    w2_host = (torch.randn(E_loc, I_loc, H, generator=g) * 0.02).bfloat16()
+    w13 = upload_stream_weights(mesh_device, gate_up_stream_layout(w13_host.float()))
+    w2 = upload_stream_weights(mesh_device, down_stream_layout(w2_host.float()))
+    w13_q, w2_q = bfp8_round(w13_host.float()), bfp8_round(w2_host.float())
+    op = ExpertStream(mesh_device, E_loc, K, I_loc, H, groups=GROUPS, down_readers=DOWN_READERS)
+    logger.info(
+        f"I = {I_loc}: gate_up {op.gate_up.ppb} pairs per bank on {len(op.gate_up.assignments)} cores, down "
+        f"{op.down.readers} readers per bank x {op.down.cols} columns, {op.down.page_bytes} B packets"
+    )
+    x = torch.randn(32, K).bfloat16()
+    r = torch.zeros(32, E_loc)
+    for t in range(32):
+        ids = torch.randperm(E_loc, generator=g)[:2]
+        r[t, ids] = torch.rand(2, generator=g) + 0.2
+    r = r.bfloat16()
+    xd = ttnn.from_torch(x.reshape(1, 1, 32, K), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device)
+    rd = ttnn.from_torch(r.reshape(1, 1, 32, E_loc), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device)
+    act, out = op.alloc(mesh_device)
+    op.forward(xd, rd, w13, w2, act, out)
+    act_ref, y_ref = expert_stream_golden(x, r, w13_q, w2_q)
+    a = ttnn.to_torch(act).float().reshape(E_loc, 32, I_loc)
+    y = ttnn.to_torch(out).float().reshape(32, H)
+    active = [e for e in range(E_loc) if r[:, e].abs().sum() > 0]
+    p_act, p = pcc(act_ref[active], a[active]), pcc(y_ref, y)
+    logger.info(f"I = {I_loc}, E = {E_loc} ({len(active)} active): act pcc {p_act:.6f}, out pcc {p:.6f}")
+    assert p_act > 0.9999, p_act
+    assert p > 0.9999, p
