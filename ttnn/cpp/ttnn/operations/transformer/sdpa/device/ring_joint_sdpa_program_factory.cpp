@@ -1107,6 +1107,18 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // means exactly that, and "sol_compact" selects the block-mask / in-place compaction variant on top.
     const bool sol_compact = tensor_args.sol_compact_mode(args.sol_mode);
     const bool sol_chunk_mode = tensor_args.sol_streams_chunks(args.sol_mode);
+    // Q2: cross-chunk block packing. Compact mode compacts kept blocks to the front of their OWN chunk's page and
+    // still pays one visit per kept chunk, so at 33 % density a visited page carries ~2.6 of 8 blocks and the
+    // ~8 us fixed per-step cost is paid on a third-full matmul. Packing accumulates kept blocks across K-chunk
+    // boundaries into full pages, so the visit count scales with density instead of with chunk occupancy.
+    //
+    // A page cannot span ring iterations: shard r's K/V is only resident while that iteration streams. Within an
+    // iteration the reader sees blocks in chunk order, so it fills a page and flushes a partial one at the end.
+    // Both sides walk the same kept bitmask, so no plan words are added -- compute derives page count and fill
+    // exactly as the reader does.
+    // OPT-IN until the compute-side page step is wired. The reader half is complete: with sol_pack on, it pushes
+    // packed pages that nothing consumes yet, so the CB fills and the op hangs. Do not default this on.
+    const bool sol_pack = sol_compact && std::getenv("TT_SOL_PACK") && std::string(std::getenv("TT_SOL_PACK")) == "1";
     if (tensor_args.sol_enabled()) {
         // Emitted once per program creation (the kernels are created with these named args). The Sol tests read this
         // line back from stderr and fail when a requested mode did not resolve (a docstring-gated keyword once made
@@ -2157,6 +2169,20 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // One pooled chunk of bias tiles in flight (bias is read once per pooled chunk, 4 pooled chunks per Q chunk per
     // layer); 2*Sk_chunk_t pushed the static CB region past the L1 buffers at the 10 s / 15 s shapes.
     const uint32_t cb_sol_bias = sol_enabled ? allocate_tile_cb(Sk_chunk_t, mask_tile_size, mask_df) : inactive_cb;
+    // Q2 staging pages. Under sol_pack the roles invert: these hold the raw downloaded chunk and are the chain's
+    // forward source, while cb_k_in / cb_v_in carry PACKED pages to compute.
+    //
+    // The inversion is what makes Q2 pay. If compute still received every raw chunk it would have to wait_front
+    // and pop each one -- today it drains only the chunks it dropped, so draining all of them would add ~440
+    // drains per layer at 10 s against a measured 2.2 ms drain bucket, eating most of what fewer steps buys. The
+    // staging pages are never pushed (the reserve-and-reuse idiom the padded-mcast path already uses), so compute
+    // does no drains at all, and `sdpa_inner_loop_step` keeps reading cb_k_in / cb_v_in unchanged.
+    //
+    // Backpressure is preserved: the reader cannot reserve its next packed page until compute pops one.
+    // Single-buffered -- the static CB region is tight (see cb_sol_plan above), and Q1's 64-row compute unit is
+    // what affords these at all: every Sq-dependent CB shrinks 4x, freeing ~222 tiles against the ~128 here.
+    const uint32_t cb_k_stage = sol_pack ? allocate_tile_cb(Sk_chunk_t * DHt, k_tile_size, k_df) : inactive_cb;
+    const uint32_t cb_v_stage = sol_pack ? allocate_tile_cb(Sk_chunk_t * vDHt, v_tile_size, v_df) : inactive_cb;
     {
         // L1 budget line for the Sol work (Q-batching needs a second accumulator set; DESIGN_BLOCK_COMPACT.md 12).
         uint64_t cb_bytes = 0;
@@ -3246,6 +3272,15 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         {"sol_enabled", sol_enabled ? 1u : 0u},
         {"sol_chunk_mode", sol_chunk_mode ? 1u : 0u},
         {"sol_compact", sol_compact ? 1u : 0u},
+        // Q2 cross-chunk packing: kept blocks are accumulated into full pages instead of compacted per chunk, so
+        // visits scale with density rather than chunk occupancy. Raw chunks land in the staging CBs (reader-only)
+        // and compute sees only packed pages, on cb_k_in / cb_v_in as before.
+        {"sol_pack", sol_pack ? 1u : 0u},
+        {"cb_k_stage", cb_k_stage},
+        {"cb_v_stage", cb_v_stage},
+        // Blocks per packed page = blocks per K chunk, so a full page is exactly one chunk's worth of tiles and
+        // every CB stays its existing size.
+        {"sol_blocks_per_page", Sk_chunk_t / kSolBlockTiles},
         // Compact-mode even-up rule, OFF by default since 2026-10-16: measured 8-14 ms slower than plain selection at
         // 15 s (DESIGN_BLOCK_COMPACT.md 11.3) and the plain path is numerically right. TT_SOL_EVENUP=1 enables it
         // (A/B); TT_SOL_EVENUP_ALL=1 is the debug probe (every full block exact; implies the rule on).

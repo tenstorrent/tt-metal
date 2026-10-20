@@ -2593,7 +2593,19 @@ template <
     bool sol_drain_all = false,
     // Compact mode: streamed chunks hold this core's kept blocks left-justified; plan words 8..23 carry the per-chunk
     // kept-block counts (one byte each) and the step runs on the first 2 * count tile columns, no mask.
-    bool sol_compact = false>
+    bool sol_compact = false,
+    // Q2 cross-chunk packing. Compact mode compacts within a chunk, so a visited page carries only that chunk's
+    // kept blocks (~2.6 of 8 at 33 % density) while the ~8 us per-step cost is paid in full. Under sol_pack the
+    // reader appends kept blocks across K-chunk boundaries and pushes a page once it holds sol_blocks_per_page
+    // of them, flushing a partial page at the end of each ring iteration (a page cannot span iterations -- shard
+    // r's K/V is resident only while iteration r streams).
+    //
+    // Packed pages arrive on cb_k_in / cb_v_in, the same CBs chunks used to, so the inner-step call below is
+    // unchanged and compute never sees -- or drains -- a raw chunk: the reader stages those privately. No plan
+    // words are added either; reader and compute walk the same kept bitmask and derive identical page
+    // boundaries. The loop's unit becomes the page, so k_chunk is a page ordinal under sol_pack.
+    bool sol_pack = false,
+    uint32_t sol_blocks_per_page = 1>
 void sdpa_ring_v2(
     const uint32_t global_q_start,
     const uint32_t global_q_end,
@@ -2902,6 +2914,9 @@ void sdpa_ring_v2(
         };
         uint32_t per_q_valid_kv =
             packed_sources ? packed_kv.chunk_count() : (has_sliding_window ? sliding_band.end - sliding_band.begin : 0);
+        // Q2: kept blocks across this ring iteration's chunks, which the counting loop below turns into a page
+        // count. Reader and compute derive page boundaries from the same bitmask, so no plan word carries them.
+        [[maybe_unused]] uint32_t sol_total_kept_blocks = 0;
         for (uint32_t k = 0;
              !(sol_enabled && !sol_chunk_mode) && !packed_sources && !has_sliding_window && k < num_kv_chunks;
              ++k) {
@@ -2921,7 +2936,17 @@ void sdpa_ring_v2(
                     continue;
                 }
             }
+            if constexpr (sol_pack) {
+                // Q2: a kept chunk is no longer a step. Accumulate its blocks; the steps are the pages they fill.
+                sol_total_kept_blocks += sol_chunk_blocks(k);
+                continue;
+            }
             per_q_valid_kv++;
+        }
+        if constexpr (sol_pack) {
+            // ceil: the trailing partial page is a step too. Must match the reader, which pushes a page at every
+            // sol_blocks_per_page boundary and flushes the remainder at the end of the ring iteration.
+            per_q_valid_kv += (sol_total_kept_blocks + sol_blocks_per_page - 1) / sol_blocks_per_page;
         }
         if constexpr (sol_chunk_mode) {
             if (sol_do_pooled) {
@@ -2968,6 +2993,15 @@ void sdpa_ring_v2(
         uint32_t q_k_loop_count = has_sliding_window ? sliding_band.end : num_kv_chunks;
         if constexpr (sol_chunk_mode) {
             q_k_loop_count = num_kv_chunks + (sol_do_pooled ? sol_pooled_chunks : 0);
+        }
+        // Q2: under packing the loop's unit is a PAGE, not a K chunk. The reader pushed one page per
+        // sol_blocks_per_page kept blocks plus a partial at the end of the iteration, and nothing else -- raw
+        // chunks never reach compute, so there is nothing to skip and nothing to drain. Pooled chunks follow the
+        // pages exactly as they used to follow the chunks.
+        [[maybe_unused]] const uint32_t sol_n_pages =
+            (sol_total_kept_blocks + sol_blocks_per_page - 1) / sol_blocks_per_page;
+        if constexpr (sol_pack) {
+            q_k_loop_count = sol_n_pages + (sol_do_pooled ? sol_pooled_chunks : 0);
         }
         if constexpr (sol_enabled && !sol_chunk_mode) {
             // ---- Sol-Attn chunk loop (DESIGN.md §3.1b). Plan words from the reader: [n_gather, last_tiles,
@@ -3103,16 +3137,31 @@ void sdpa_ring_v2(
                 if constexpr (sol_chunk_mode) {
                     sol_is_pooled = k_chunk >= num_kv_chunks;
                 }
-                const bool kv_chunk_is_joint =
-                    !sol_is_pooled && !packed_sources && !has_sliding_window && k_chunk >= num_local_k_chunks;
-                if (!sol_is_pooled && !packed_sources && !has_sliding_window &&
+                // Q2: k_chunk indexes pages, so the pooled chunks start after the last page, not after the last
+                // K chunk. Its blocks are all kept by construction -- the reader only packed kept ones -- so the
+                // streamed/kept/causal/OOB gating below is skipped entirely for a page.
+                [[maybe_unused]] uint32_t sol_page_blocks = 0;
+                if constexpr (sol_pack) {
+                    sol_is_pooled = k_chunk >= sol_n_pages;
+                    if (!sol_is_pooled) {
+                        const uint32_t remaining = sol_total_kept_blocks - k_chunk * sol_blocks_per_page;
+                        sol_page_blocks =
+                            remaining < sol_blocks_per_page ? remaining : sol_blocks_per_page;  // tail page
+                    }
+                }
+                // Q2: a page is not a K chunk, so none of the chunk-indexed gating applies to it. Every block in
+                // a page was selected by this core, the reader already resolved out-of-range and joint chunks
+                // before packing, and k_chunk is a page ordinal that these predicates would misread.
+                const bool kv_chunk_is_joint = !sol_pack && !sol_is_pooled && !packed_sources && !has_sliding_window &&
+                                               k_chunk >= num_local_k_chunks;
+                if (!sol_pack && !sol_is_pooled && !packed_sources && !has_sliding_window &&
                     try_skip_oob_kv(source_ring_id, source_k_chunk, kv_chunk_is_joint)) {
                     continue;
                 }
-                if (!sol_is_pooled && try_skip_causal_above_diag(source_k_chunk, causal_k_limit)) {
+                if (!sol_pack && !sol_is_pooled && try_skip_causal_above_diag(source_k_chunk, causal_k_limit)) {
                     continue;
                 }
-                if constexpr (sol_chunk_mode) {
+                if constexpr (sol_chunk_mode && !sol_pack) {
                     if (!sol_is_pooled && !sol_chunk_streamed(k_chunk)) {
                         continue;  // skipped by the whole chain: nothing was pushed
                     }
@@ -3348,8 +3397,16 @@ void sdpa_ring_v2(
                     if (!sol_is_pooled) {
                         // Compacted chunk: the first 2 * kept tile columns (K^T) / rows (V) are full valid blocks; the
                         // ragged tail never reaches here (partial blocks are pooled), so no mask is applied.
+                        //
+                        // Q2: same shape, but the count is the PAGE's fill rather than one chunk's. Every page but
+                        // the last is full, so active_Sk_param == Sk_chunk_t and the subblock width is the optimal
+                        // one -- the awkward factorisations that per-chunk compaction hit on every visit now occur
+                        // at most once per ring iteration. The tail page's slack is never computed and is NOT
+                        // zero-filled: a zero K tile would give QK = 0, hence exp(0) = 1, a full-weight softmax
+                        // term against a zero V, inflating the denominator.
                         apply_mask = false;
-                        active_Sk_param = sol_chunk_blocks(k_chunk) * 2;
+                        // 2 tiles per 64-token block (kSolBlockTiles in the reader and the factory).
+                        active_Sk_param = (sol_pack ? sol_page_blocks : sol_chunk_blocks(k_chunk)) * 2;
                         chunk_sbw = active_Sk_param == Sk_chunk_t ? full_sbw
                                                                   : largest_factor_le(active_Sk_param, qkt_subblock_w);
                     }

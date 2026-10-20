@@ -568,6 +568,17 @@ void kernel_main() {
     constexpr uint32_t sol_mask_row_bytes = get_named_compile_time_arg_val("sol_mask_row_bytes");
     constexpr uint32_t cb_sol_plan = get_named_compile_time_arg_val("cb_sol_plan");
     constexpr uint32_t cb_sol_bias = get_named_compile_time_arg_val("cb_sol_bias");
+    // Q2 cross-chunk packing: kept blocks are appended into full pages instead of compacted inside their own
+    // chunk, so compute pays one visit per PAGE rather than one per kept chunk.
+    //
+    // Roles invert under sol_pack. Raw chunks are downloaded into cb_k_stage / cb_v_stage and forwarded to the
+    // chain from there; those CBs are never pushed, so compute never sees a raw chunk and never drains one. The
+    // packed pages go out on cb_k_in / cb_v_in exactly as chunks used to, which leaves compute's inner-step call
+    // site untouched.
+    constexpr bool sol_pack = get_named_compile_time_arg_val("sol_pack") == 1;
+    constexpr uint32_t cb_k_stage = get_named_compile_time_arg_val("cb_k_stage");
+    constexpr uint32_t cb_v_stage = get_named_compile_time_arg_val("cb_v_stage");
+    constexpr uint32_t sol_blocks_per_page = get_named_compile_time_arg_val("sol_blocks_per_page");
     constexpr uint32_t kSolBlockTiles = 2;  // 64-token blocks
     constexpr uint32_t sol_bias_tile_bytes = get_tile_size(cb_sol_bias);
 
@@ -928,6 +939,60 @@ void kernel_main() {
                 }
             }
         };
+    // Q2: append one chunk's kept blocks to the packed page, returning the new fill (blocks already in the page).
+    //
+    // Differs from sol_compact_blocks in two ways. Source and destination are disjoint buffers (staging page ->
+    // packed page), so the in-place overlap rule -- "a move whose destination slot is <= an earlier move's source
+    // block waits for the earlier reads first" -- cannot apply and is dropped. And the destination slot is the
+    // running fill across chunks rather than a per-chunk counter, which is the whole point: a page is filled from
+    // however many chunks it takes.
+    //
+    // The caller must flush (push) the page when the fill reaches sol_blocks_per_page, and flush a partial page at
+    // the end of the ring iteration -- a page cannot span iterations because shard r's K/V is only resident while
+    // iteration r streams.
+    [[maybe_unused]] const auto sol_pack_blocks = [&](uint32_t s,
+                                                      uint32_t k_chunk,
+                                                      uint32_t src_base,
+                                                      uint32_t dst_base,
+                                                      uint32_t fill,
+                                                      uint32_t rows,
+                                                      uint32_t src_row_stride,
+                                                      uint32_t dst_row_stride,
+                                                      uint32_t block_bytes) -> uint32_t {
+        if constexpr (sol_pack) {
+            CoreLocalMem<volatile uint32_t> row(sol_row_addr);
+            const uint8_t noc_id = noc.get_noc_id();
+            UnicastEndpoint src;
+            bool moved = false;
+            for (uint32_t j = 0; j < sol_blocks_per_page; ++j) {
+                const uint32_t b = k_chunk * sol_blocks_per_page + j;
+                if (!sol_block_exact(row, s, b)) {
+                    continue;
+                }
+                if (!moved) {
+                    // Same reason as sol_compact_blocks: the chain forward read this page, and its writes must be
+                    // flushed before we read it again.
+                    noc.async_write_barrier();
+                    moved = true;
+                }
+                for (uint32_t rr = 0; rr < rows; ++rr) {
+                    noc.async_read(
+                        src,
+                        CoreLocalMem<uint32_t>(dst_base + rr * dst_row_stride + fill * block_bytes),
+                        block_bytes,
+                        {.noc_x = my_x[noc_id],
+                         .noc_y = my_y[noc_id],
+                         .addr = src_base + rr * src_row_stride + j * block_bytes},
+                        {});
+                }
+                ++fill;
+            }
+            if (moved) {
+                noc.async_read_barrier();
+            }
+        }
+        return fill;
+    };
     // Pooled K/V chunks + this Q chunk's bias tile rows (both Sol modes; every core reads its own copy).
     [[maybe_unused]] const auto sol_push_pooled = [&](uint32_t nq, uint32_t q_chunk, uint32_t& kv_pushed) {
         if constexpr (sol_enabled) {
@@ -1650,6 +1715,22 @@ void kernel_main() {
                 // anchoring Q to k_chunk == 0 would never push Q while compute still waits on it
                 // (q_per_core > 1) -> deadlock. Reads Q exactly once per q_iter, so no extra work.
                 bool first_k_for_q = true;
+                // Q2 packed-page state. A page is filled across K chunks and flushed when full; a partial page is
+                // flushed after the loop, because shard `ring_id`'s K/V is only resident for this iteration and a
+                // page may not span iterations. K and V share one fill so their slots stay aligned: the K site
+                // appends at `sol_pack_fill` and discards its return, the V site appends at the same value and
+                // commits it.
+                [[maybe_unused]] uint32_t sol_pack_fill = 0;
+                [[maybe_unused]] uint32_t sol_packed_k_addr = 0;
+                [[maybe_unused]] uint32_t sol_packed_v_addr = 0;
+                if constexpr (sol_pack) {
+                    // Packed pages go out on the ordinary K/V CBs, so compute's inner-step call is unchanged.
+                    CircularBuffer cb_kp(cb_k_in), cb_vp(cb_v_in);
+                    cb_kp.reserve_back(k_chunk_tiles);
+                    cb_vp.reserve_back(v_cb_entry_tiles);
+                    sol_packed_k_addr = cb_kp.get_write_ptr();
+                    sol_packed_v_addr = cb_vp.get_write_ptr();
+                }
                 for (uint32_t k_chunk = has_sliding_window ? sliding_band.begin : 0; k_chunk < q_k_loop_count;
                      ++k_chunk) {
                     const auto sliding_k_chunk = sliding_q_plan.k_chunk_at(k_chunk);
@@ -1794,6 +1875,14 @@ void kernel_main() {
                         cb_k.reserve_back(k_chunk_tiles);
                     }
                     uint32_t cb_k_start_address = cb_k.get_write_ptr();
+                    if constexpr (sol_pack) {
+                        // Raw chunks land in staging, never in the page compute reads. The reserve above is left
+                        // un-pushed, so its write pointer does not advance and the packed page reserved before
+                        // the loop stays valid. Staging is reserved once and reused for every chunk.
+                        CircularBuffer cb_ks(cb_k_stage);
+                        cb_ks.reserve_back(k_chunk_tiles);
+                        cb_k_start_address = cb_ks.get_write_ptr();
+                    }
                     bool received_k_from_chain = false;
                     if constexpr (!has_sliding_window) {
                         if (k_chain.should_receive(k_chain_head)) {
@@ -1895,7 +1984,23 @@ void kernel_main() {
                         continue;
                     }
 
-                    if constexpr (sol_compact) {
+                    if constexpr (sol_pack) {
+                        if (!is_padded_iter) {
+                            // Q2: append this chunk's kept blocks to the packed page instead of compacting in
+                            // place. Return is discarded -- the V site below commits the shared fill, so both
+                            // write the same slots. Packed page has the same [DHt][Sk_chunk_t] layout.
+                            (void)sol_pack_blocks(
+                                ring_id,
+                                k_chunk,
+                                cb_k_start_address,
+                                sol_packed_k_addr,
+                                sol_pack_fill,
+                                DHt,
+                                Sk_chunk_t * k_tile_bytes,
+                                Sk_chunk_t * k_tile_bytes,
+                                kSolBlockTiles * k_tile_bytes);
+                        }
+                    } else if constexpr (sol_compact) {
                         if (!is_padded_iter) {
                             // K^T page is [DHt][Sk_chunk_t] tiles: block j = tile columns [2j, 2j+2) of every row.
                             sol_compact_blocks(
@@ -1907,8 +2012,11 @@ void kernel_main() {
                                 kSolBlockTiles * k_tile_bytes);
                         }
                     }
-                    // Make K available to compute.
-                    cb_k.push_back(k_chunk_tiles);
+                    // Make K available to compute. Under sol_pack the unit of delivery is the packed page, pushed
+                    // above when it filled and after the loop when partial -- a raw chunk is never handed over.
+                    if constexpr (!sol_pack) {
+                        cb_k.push_back(k_chunk_tiles);
+                    }
                     KV_chunks_processed_in_iter++;
 
                     // Download Q on the first K iteration — after K is downloaded and forwarded.
@@ -1991,6 +2099,11 @@ void kernel_main() {
                         CircularBuffer cb_v(cb_v_in);
                         cb_v.reserve_back(v_cb_entry_tiles);
                         uint32_t cb_v_start_address = cb_v.get_write_ptr();
+                        if constexpr (sol_pack) {
+                            CircularBuffer cb_vs(cb_v_stage);
+                            cb_vs.reserve_back(v_cb_entry_tiles);
+                            cb_v_start_address = cb_vs.get_write_ptr();
+                        }
                         bool received_v_from_chain = false;
                         if constexpr (!has_sliding_window) {
                             if (v_chain.should_receive(nv)) {
@@ -2030,7 +2143,34 @@ void kernel_main() {
                             }
                         }
 
-                        if constexpr (sol_compact) {
+                        if constexpr (sol_pack) {
+                            if (!is_padded_iter) {
+                                // Q2: same blocks, same slots as the K append above; this one commits the fill.
+                                // V page is [Sk_chunk_t][vDHt] tiles: block j = tile rows [2j, 2j+2), one run.
+                                sol_pack_fill = sol_pack_blocks(
+                                    ring_id,
+                                    k_chunk,
+                                    cb_v_start_address,
+                                    sol_packed_v_addr,
+                                    sol_pack_fill,
+                                    1,
+                                    0,
+                                    0,
+                                    kSolBlockTiles * vDHt * v_tile_bytes);
+                                if (sol_pack_fill == sol_blocks_per_page) {
+                                    // Full page: hand it to compute and open the next one. reserve_back here is
+                                    // the backpressure -- it blocks until compute has popped a page.
+                                    CircularBuffer cb_kp(cb_k_in), cb_vp(cb_v_in);
+                                    cb_kp.push_back(k_chunk_tiles);
+                                    cb_vp.push_back(v_cb_entry_tiles);
+                                    cb_kp.reserve_back(k_chunk_tiles);
+                                    cb_vp.reserve_back(v_cb_entry_tiles);
+                                    sol_packed_k_addr = cb_kp.get_write_ptr();
+                                    sol_packed_v_addr = cb_vp.get_write_ptr();
+                                    sol_pack_fill = 0;
+                                }
+                            }
+                        } else if constexpr (sol_compact) {
                             if (!is_padded_iter) {
                                 // V page is [Sk_chunk_t][vDHt] tiles: block j = tile rows [2j, 2j+2), one contiguous
                                 // run.
@@ -2038,9 +2178,28 @@ void kernel_main() {
                                     ring_id, k_chunk, cb_v_start_address, 1, 0, kSolBlockTiles * vDHt * v_tile_bytes);
                             }
                         }
-                        // Make V available to compute.
-                        cb_v.push_back(v_cb_entry_tiles);
+                        // Make V available to compute. See the K push above: under sol_pack the packed page is
+                        // the unit of delivery, so raw chunks are not pushed.
+                        if constexpr (!sol_pack) {
+                            cb_v.push_back(v_cb_entry_tiles);
+                        }
                     }
+                }
+                // Q2: flush the partial page. A page cannot span ring iterations (shard `ring_id` is resident only
+                // now), so whatever is in it goes out here. The slack slots are NOT zero-filled and must never be
+                // computed: compute derives the same fill from the kept bitmask and sets its matmul extent to
+                // exactly `fill` blocks. Zero-filling would be worse than useless -- a zero K tile gives QK = 0,
+                // hence exp(0) = 1, a full-weight softmax term against a zero V, inflating the denominator.
+                if constexpr (sol_pack) {
+                    CircularBuffer cb_kp(cb_k_in), cb_vp(cb_v_in);
+                    if (sol_pack_fill > 0) {
+                        cb_kp.push_back(k_chunk_tiles);
+                        cb_vp.push_back(v_cb_entry_tiles);
+                        sol_pack_fill = 0;
+                    }
+                    // The trailing reserve_back (from the loop, or the pre-loop one when nothing was kept) is
+                    // left un-pushed: the write pointer does not advance, so the next iteration's reserve returns
+                    // the same address. Same staging-area idiom the padded-mcast path uses above.
                 }
                 if constexpr (sol_chunk_mode) {
                     if (!is_padded_iter && do_pooled) {

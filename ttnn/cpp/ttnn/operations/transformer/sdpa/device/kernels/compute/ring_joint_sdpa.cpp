@@ -236,6 +236,12 @@ void kernel_main() {
     constexpr uint32_t sol_pooled_last_tiles = get_named_compile_time_arg_val("sol_pooled_last_tiles");
     constexpr bool sol_drain_all = get_named_compile_time_arg_val("sol_drain_all") == 1;
     constexpr bool sol_compact = get_named_compile_time_arg_val("sol_compact") == 1;
+    // Q2: kept blocks arrive packed across K-chunk boundaries on the ordinary K/V CBs, so compute pays one visit
+    // per full page instead of one per kept chunk. Raw chunks are staged privately by the reader and never
+    // reach compute, so there is nothing here to drain and no extra CB to name.
+    constexpr bool sol_pack = get_named_compile_time_arg_val("sol_pack") == 1;
+    constexpr uint32_t sol_blocks_per_page = get_named_compile_time_arg_val("sol_blocks_per_page");
+    static_assert(!sol_pack || sol_compact, "Q2 packing builds on compact-mode block selection");
     static_assert(!sol_enabled || (!ksplit_enabled && !seg_accum_enabled), "Sol-Attn excludes the K split");
     static_assert(!(ksplit_enabled && seg_accum_enabled));
     static_assert(
@@ -661,7 +667,9 @@ void kernel_main() {
                 sol_pooled_last_tiles,
                 sol_chunk_mode,
                 sol_drain_all,
-                sol_compact>(
+                sol_compact,
+                sol_pack,
+                sol_blocks_per_page>(
                 // Rotated: iterate [0, my_count) as POSITIONS, each mapped to its flat chunk id via
                 // the fixed base range or moving remainder ID. Static: [start, end) is already flat.
                 rotated_q_split_enabled ? 0u : global_q_start,
