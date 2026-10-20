@@ -36,10 +36,11 @@ namespace CMAKE_UNIQUE_NAMESPACE {
 // A TRISC-visible DFB's extent is a uint16_t of 16-byte units (validate_ring_extent); enforced on
 // every arch so a Wormhole-legal config never FATALs on Quasar.
 constexpr uint64_t MAX_DFB_EXTENT_BYTES = 65535ull * 16ull;
-// Auto K chunk search (#57884): walk down from this cap through divisors of K_tiles to the first that fits
-// L1, except a C slice of at most SMALL_C_SLICE_TILES tiles is not capped (its A and B slices are cheap,
-// so a long K chunk saves partial-sum round trips) beyond leaving a K chunk per reader thread to overlap the
-// compute. Tuning points, not hardware limits.
+// Auto K chunk cap, for pipelining rather than L1: compute waits for the first K chunk to be read in full and the last
+// K chunk's compute overlaps no read, so fewer, longer K chunks leave more of a C slice unoverlapped, which shows on
+// cores that produce a single C slice. A C slice of at most SMALL_C_SLICE_TILES tiles has A and B slices cheap enough
+// to read in longer K chunks: its cap is K_tiles / min_K_chunks (one K chunk per reader thread on Quasar, two to
+// double-buffer elsewhere), still enough K chunks to overlap (#57884). Tuning points, not hardware limits.
 constexpr uint32_t MAX_AUTO_K_CHUNK_TILES = 8;
 constexpr uint32_t SMALL_C_SLICE_TILES = 4;
 // DM threads and buffering per core, fixed so the readers and writers keep the NoC busy rather than sized to the L1
@@ -477,8 +478,7 @@ std::optional<MatmulUnifiedPlan> plan_unified_matmul(
 
         // K chunk: all of K when that lets a resident A shard be borrowed (main pins in0_block_w == K for
         // height-sharded in0 for the same reason), else the config's, else the longest divisor of K_tiles that fits,
-        // walking down from a cap. A small C slice makes the A and B slices cheap, so its K chunk is not capped, but
-        // keeps the readers busy.
+        // walking down from the cap (see MAX_AUTO_K_CHUNK_TILES).
         candidate = make_plan(
             base,
             config.cores,
