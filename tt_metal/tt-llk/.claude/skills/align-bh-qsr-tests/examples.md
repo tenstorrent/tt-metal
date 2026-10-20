@@ -12,7 +12,7 @@ On the paired float/int families, BH swept `formats` + `dest_acc` + `mathop` + `
 
 1. **Split QSR perf** into six wrappers that pair with functional: `int`, `float`, `bf16_rne`, `max_min_float`, `max_min_int32`, `quant`. Leave unmatched QSR-only families unmatched.
 
-2. **Float unbundle** — keep the three `generate_quasar_sfpu_format_variants(SfpuElwadd, …)` representatives; explode to named axes with a dest_acc constraint. Functional `approx_mode` is Yes/No for atan2 and DIV, else No. Perf copies that sweep and pins DIV back to No, leaving atan2 as the only Yes/No pair. Resolve `resolve_quasar_sfpu_variant(SfpuElwadd, formats, dest_acc)` and `binary_op = mathop.cpp_enum_value` inside the test. Keep QSR-only `implied_math_format`; the comparer ignores it. Do not add `bcast_dim`. `tile_indices` stays functional-only.
+2. **Float unbundle** — keep the three `generate_quasar_sfpu_format_variants(SfpuElwadd, …)` representatives; explode to named axes with a dest_acc constraint. Functional `approx_mode` is Yes/No for atan2 and DIV, else No. Perf copies that sweep and pins DIV back to No, leaving atan2 as the only Yes/No pair. Resolve `resolve_quasar_sfpu_variant(SfpuElwadd, formats, dest_acc)` and `binary_op = mathop.cpp_enum_value` inside the test. Do not add `bcast_dim`. `tile_indices` stays functional-only.
 
 3. **Int unbundle** — `formats` + `dest_acc=Yes` + `mathop` using `SfpuElwLt/Gt/Le/Ge`. `SfpuGtInt` / `SfpuLtInt` / `SfpuLeInt` / `SfpuGeInt` remain in `helpers/llk_params.py` as aliases; they are not sweep values. Clamp only MUL: `1000 if mathop == SfpuElwmulInt else None`. `SfpuElwmulInt` stays QSR-only on this pair; BH int MUL is `SfpuMulInt32` in `int_uniform`.
 
@@ -20,11 +20,11 @@ On the paired float/int families, BH swept `formats` + `dest_acc` + `mathop` + `
 
 ## After
 
-**QSR test vs perf:** float coverage identical except functional-only `tile_indices` and ignored `implied_math_format` (functional still sweeps No and Yes; perf pins Yes). Perf `approx_mode` is No except atan2. Functional DIV still sweeps Yes/No.
+**QSR test vs perf:** float coverage identical except functional-only `tile_indices`. Perf `approx_mode` is No except atan2. Functional DIV still sweeps Yes/No.
 
 **BH vs QSR perf** (`--cross-arch blackhole quasar --kind perf`)
 
-- Float: `dest_acc` identical. Float perf `approx_mode` is a Blackhole subset of Quasar (`[No]` versus `[No, Yes]`) because atan2 stays in the Quasar float family. `formats` QSR subset (no Bfp8; do not add Bfp8_b to DIV). `mathop` DIFFERENT (shared add/sub/mul; BH rsub/pow/xlogy; QSR div/atan2 — BH already has `div`/`atan2` as separate unmatched families). `bcast_dim` is `[B]`. `iterations` and `implied_math_format` are `[i]`.
+- Float: `dest_acc` identical. Float perf `approx_mode` is a Blackhole subset of Quasar (`[No]` versus `[No, Yes]`) because atan2 stays in the Quasar float family. `formats` QSR subset (no Bfp8; do not add Bfp8_b to DIV). `mathop` DIFFERENT (shared add/sub/mul; BH rsub/pow/xlogy; QSR div/atan2 — BH already has `div`/`atan2` as separate unmatched families). `bcast_dim` is `[B]`. `iterations` is `[i]`.
 - Int: `formats`, `dest_acc`, `approx_mode` identical (`approx_mode` No). `mathop` DIFFERENT (shared add + ElwLt/Gt/Le/Ge; BH sub/shifts; QSR `SfpuElwmulInt`).
 
 **BH vs QSR functional** is the same pairing with `--kind func`. Functional QSR DIV `approx_mode` Yes/No is then a real difference from BH, which pins DIV to No.

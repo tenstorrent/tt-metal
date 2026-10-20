@@ -45,6 +45,7 @@
 #include <umd/device/types/arch.hpp>
 #include "impl/data_format/bfloat16_utils.hpp"
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <impl/context/metal_context.hpp>
 #include <tt-metalium/tensor/mesh_tensor.hpp>
 #include <tt-metalium/mxfp4.hpp>
 #include <tt-metalium/tile.hpp>
@@ -586,6 +587,9 @@ TEST_F(LLKMeshDeviceSingleCardFixture, TensixComputeReduceH) {
         // (issue #10181: disabling due to sporadic failures in slow dispatch mode)
         GTEST_SKIP();
     }
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "disabled due to hang on Quasar (tenstorrent/tt-metal#59923)";
+    }
     std::vector<std::uint32_t> shape = {1, 3, 19 * TILE_HEIGHT, 17 * TILE_WIDTH};
     std::vector<std::uint32_t> result_shape = {shape[0], shape[1], TILE_HEIGHT, shape[3]};
     for (std::uint8_t math_fid = std::uint8_t(MathFidelity::LoFi); math_fid <= std::uint8_t(MathFidelity::HiFi4);
@@ -630,6 +634,9 @@ TEST_F(LLKMeshDeviceSingleCardFixture, TensixComputeReduceH) {
 }
 
 TEST_F(LLKMeshDeviceSingleCardFixture, TensixComputeReduceW) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "disabled due to hang on Quasar (tenstorrent/tt-metal#59923)";
+    }
     std::vector<std::uint32_t> shape = {1, 3, 17 * TILE_HEIGHT, 19 * TILE_WIDTH};
     std::vector<std::uint32_t> result_shape = {shape[0], shape[1], shape[2], 32};
     for (std::uint8_t math_fid = std::uint8_t(MathFidelity::LoFi); math_fid <= std::uint8_t(MathFidelity::HiFi4);
@@ -669,6 +676,9 @@ TEST_F(LLKMeshDeviceSingleCardFixture, TensixComputeReduceW) {
 }
 
 TEST_F(LLKMeshDeviceSingleCardFixture, TensixComputeReduceHW) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "disabled due to hang on Quasar (tenstorrent/tt-metal#59923)";
+    }
     std::vector<std::uint32_t> shape = {1, 2, 7 * TILE_HEIGHT, 5 * TILE_WIDTH};
     std::vector<std::uint32_t> result_shape = {shape[0], shape[1], 32, 32};
     for (std::uint8_t math_fid = std::uint8_t(MathFidelity::LoFi); math_fid <= std::uint8_t(MathFidelity::HiFi4);
@@ -717,6 +727,9 @@ TEST_F(LLKMeshDeviceSingleCardFixture, TensixComputeReduceHW) {
 }
 
 TEST_F(LLKMeshDeviceSingleCardFixture, TensixComputeReduceHMathOnly) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "disabled due to hang on Quasar (tenstorrent/tt-metal#59923)";
+    }
     if (this->arch_ != tt::ARCH::BLACKHOLE && this->arch_ != tt::ARCH::QUASAR) {
         // (issue #10181: disabling due to sporadic failures in slow dispatch mode)
         GTEST_SKIP();
@@ -766,6 +779,9 @@ TEST_F(LLKMeshDeviceSingleCardFixture, TensixComputeReduceHMathOnly) {
 }
 
 TEST_F(LLKMeshDeviceSingleCardFixture, TensixComputeReduceWMathOnly) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "disabled due to hang on Quasar (tenstorrent/tt-metal#59923)";
+    }
     std::vector<std::uint32_t> shape = {1, 3, 17 * TILE_HEIGHT, 19 * TILE_WIDTH};
     std::vector<std::uint32_t> result_shape = {shape[0], shape[1], shape[2], 32};
     for (std::uint8_t math_fid = std::uint8_t(MathFidelity::LoFi); math_fid <= std::uint8_t(MathFidelity::HiFi4);
@@ -811,6 +827,9 @@ TEST_F(LLKMeshDeviceSingleCardFixture, TensixComputeReduceWMathOnly) {
 }
 
 TEST_F(LLKMeshDeviceSingleCardFixture, TensixComputeReduceHWMathOnly) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "disabled due to hang on Quasar (tenstorrent/tt-metal#59923)";
+    }
     std::vector<std::uint32_t> shape = {1, 2, 7 * TILE_HEIGHT, 5 * TILE_WIDTH};
     std::vector<std::uint32_t> result_shape = {shape[0], shape[1], 32, 32};
     for (std::uint8_t math_fid = std::uint8_t(MathFidelity::LoFi); math_fid <= std::uint8_t(MathFidelity::HiFi4);
@@ -905,7 +924,11 @@ TEST_F(LLKMeshDeviceSingleCardFixture, TensixComputeReduceWTinyTiles) {
 // column (H) reduce is valid for MxFp4_2x: it issues GAPOOLs, the only op_mmul-family op (with
 // MVMUL/MVMULDI) that reads the 2x-packed SrcA correctly. Row/Scalar reduce commit per-face
 // results via ELWADDDI (not op_mmul), which reads MxFp4_2x SrcA as zero.
-TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixComputeReduceColumnMxFp4X2) {
+// Disabled due to hang: tenstorrent/tt-metal#59923
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, DISABLED_TensixComputeReduceColumnMxFp4X2) {
+    if (MetalContext::instance().rtoptions().get_quasar_arch_variant() == "quasar_4row") {
+        GTEST_SKIP() << "MxFp4_2x register formats do not exist on the 4-row Quasar variant";
+    }
     ReduceConfig test_config = {
         .shape = {1, 1, TILE_HEIGHT, TILE_WIDTH},
         .reduce_dim = ReduceDim::H,

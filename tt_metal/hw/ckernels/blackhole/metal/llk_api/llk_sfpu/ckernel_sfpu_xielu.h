@@ -131,13 +131,18 @@ sfpi_inline void _xielu_mad_(sfpi::vFloat mul_a, sfpi::vFloat mul_b, sfpi::vFloa
 bool bf16_dest_xielu();
 template <int ITERATIONS>
 void calculate_xielu_bf16();
+// The param0 the generated xielu kernel is fitted for, as FP32 bits; any other param0 runs the stock kernel.
+inline constexpr std::uint32_t xielu_bf16_param0_bits = 0x3f4ccccdu;
+// The param1 the generated xielu kernel is fitted for, as FP32 bits; any other param1 runs the stock kernel.
+inline constexpr std::uint32_t xielu_bf16_param1_bits = 0x3f4ccccdu;
 // Whether BF16 DEST runs the generated xielu kernel as one call over the whole tile.
 inline constexpr bool xielu_bf16_whole_tile = true;
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_xielu(const uint32_t param0, const uint32_t param1) {
     if constexpr (!is_fp32_dest_acc_en && ITERATIONS == 32) {
-        if (bf16_dest_xielu() && param0 == 0x3f4ccccdu && param1 == 0x3f4ccccdu) {
+        if (bf16_dest_xielu() && param0 == ckernel::sfpu::xielu_bf16_param0_bits &&
+            param1 == ckernel::sfpu::xielu_bf16_param1_bits) {
             calculate_xielu_bf16<ITERATIONS>();
             return;
         }

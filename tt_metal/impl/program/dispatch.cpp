@@ -107,6 +107,15 @@ inline bool is_watcher_assert_enabled(const MetalContext& metal_ctx) {
     return metal_ctx.rtoptions().get_watcher_enabled() && !metal_ctx.rtoptions().watcher_assert_disabled();
 }
 
+uint64_t dataflow_buffers_config_generation(
+    const std::vector<std::shared_ptr<experimental::dfb::detail::DataflowBufferImpl>>& dataflow_buffers) {
+    uint64_t config_generation = 0;
+    for (const auto& dfb : dataflow_buffers) {
+        config_generation += dfb->config_generation();
+    }
+    return config_generation;
+}
+
 struct CommandConstants {
     NOC noc_index;
     uint32_t max_prefetch_command_size;
@@ -2221,11 +2230,13 @@ public:
                         reinterpret_cast<uint32_t*>(data_collection_location[j]));
                 }
                 if (!transfer.dfbs.empty()) {
+                    const uint64_t dfb_config_generation = dataflow_buffers_config_generation(transfer.dfbs);
                     program_command_sequence.dfb_config_updates.push_back(
                         {std::move(transfer.dfbs),
                          transfer.dfb_logical_core,
                          data_collection_location[j],
-                         static_cast<uint32_t>(transfer.data.size())});
+                         static_cast<uint32_t>(transfer.data.size()),
+                         dfb_config_generation});
                 }
                 if (transfer.cross_node_config.has_value()) {
                     const auto& [logical_core, remote_dfb_id] = *transfer.cross_node_config;
@@ -3013,19 +3024,28 @@ void update_program_dispatch_commands(
 
     update_circular_buffer_configs(cached_program_command_sequence);
 
-    if (!hal.has_tile_counter_registers()) {
-        // WH/BH: overwrite the 4 uint32 words for each DFB slot in-place.
-        for (const ProgramCommandSequence::DataflowBufferConfigUpdate& update :
-             cached_program_command_sequence.dfb_config_updates) {
-            for (const auto& dfb : update.dataflow_buffers) {
-                uint32_t base_index = dfb->device_slot * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG;
-                uint32_t* words = reinterpret_cast<uint32_t*>(update.dst) + base_index;
-                words[0] = dfb->uniform_alloc_addr();
-                words[1] = dfb->config.entry_size * dfb->config.num_entries;
-                words[2] = dfb->config.num_entries;
-                words[3] = dfb->config.entry_size;
-            }
+    // Re-serialize a DFB config with the serializer that built the command when one of its DFBs changed
+    // since the payload was last written, so size overrides and borrowed-memory rebinds reach the device.
+    std::vector<uint8_t> dfb_config_payload;
+    for (ProgramCommandSequence::DataflowBufferConfigUpdate& update :
+         cached_program_command_sequence.dfb_config_updates) {
+        const uint64_t dfb_config_generation = dataflow_buffers_config_generation(update.dataflow_buffers);
+        if (update.last_config_generation == dfb_config_generation) {
+            continue;
         }
+        dfb_config_payload.assign(
+            program.get_program_config(hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX)).dfb_size,
+            uint8_t{0});
+        const size_t bytes_written = tt::tt_metal::experimental::dfb::detail::serialize_dfb_config_for_core(
+            update.logical_core, update.dataflow_buffers, dfb_config_payload);
+        TT_FATAL(
+            bytes_written == update.size,
+            "DFB config for core {} serialized to {} bytes on re-enqueue, but the command holds {} bytes",
+            update.logical_core.str(),
+            bytes_written,
+            update.size);
+        std::memcpy(update.dst, dfb_config_payload.data(), bytes_written);
+        update.last_config_generation = dfb_config_generation;
     }
 
     // Refresh launch-time writes to the dedicated CrossNode config Buffers. This
