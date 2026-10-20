@@ -1,7 +1,8 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 //
-// Writer: o [1,V] per token; state [K,V] either per-token (verify slots) or once (final).
+// Writer: for each head this core owns (h0, h0 + stride, ...): o [1,V] per token; state [K,V]
+// either per-token (verify slots) or once (final).
 // o layout [BH*T,1,V] (head-major); final state [BH,K,V]. Device 2.0 API.
 //
 // Per-token state is written TOKEN-MAJOR: slab (t*BH + h), i.e. the [BH*T,K,V] buffer reads as
@@ -26,11 +27,13 @@ void kernel_main() {
     constexpr auto o_a = TensorAccessorArgs<3>();
     constexpr auto st_a = TensorAccessorArgs<o_a.next_compile_time_args_offset()>();
 
-    const uint32_t h = get_arg_val<uint32_t>(0);
-    const uint32_t T = get_arg_val<uint32_t>(1);
-    const uint32_t o_addr = get_arg_val<uint32_t>(2);
-    const uint32_t st_addr = get_arg_val<uint32_t>(3);
-    const uint32_t BH = get_arg_val<uint32_t>(4);  // set by the program factory; token-major stride
+    const uint32_t h0 = get_arg_val<uint32_t>(0);
+    const uint32_t n_heads = get_arg_val<uint32_t>(1);
+    const uint32_t stride = get_arg_val<uint32_t>(2);
+    const uint32_t T = get_arg_val<uint32_t>(3);
+    const uint32_t o_addr = get_arg_val<uint32_t>(4);
+    const uint32_t st_addr = get_arg_val<uint32_t>(5);
+    const uint32_t BH = get_arg_val<uint32_t>(6);  // set by the program factory; token-major stride
 
     const uint32_t tb = get_tile_size(cb_out);  // fp32; o and state share it
     const auto o_acc = TensorAccessor(o_a, o_addr, tb);
@@ -53,13 +56,16 @@ void kernel_main() {
         cb.pop_front(n);
     };
 
-    for (uint32_t t = 0; t < T; t++) {
-        write_from(cbout, o_acc, (h * T + t) * cv, cv);  // o stays head-major
-        if constexpr (per_token) {
-            write_from(cbst, st_acc, (t * BH + h) * kv, kv);  // state is token-major
+    for (uint32_t hi = 0; hi < n_heads; hi++) {
+        const uint32_t h = h0 + hi * stride;
+        for (uint32_t t = 0; t < T; t++) {
+            write_from(cbout, o_acc, (h * T + t) * cv, cv);  // o stays head-major
+            if constexpr (per_token) {
+                write_from(cbst, st_acc, (t * BH + h) * kv, kv);  // state is token-major
+            }
         }
-    }
-    if constexpr (!per_token) {
-        write_from(cbst, st_acc, h * kv, kv);  // final state only
+        if constexpr (!per_token) {
+            write_from(cbst, st_acc, h * kv, kv);  // final state only
+        }
     }
 }

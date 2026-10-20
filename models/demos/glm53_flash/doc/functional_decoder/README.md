@@ -55,7 +55,7 @@ prefill of the whole prompt (same kernels, same row classes):
 |---|---|---|
 | `tt/config.py` | frozen config from `config.json` | |
 | `tt/mhc.py` | mHC hyper-connection (fused Sinkhorn parametrization, fp32) | `deepseek_v3_d_p/tt/mhc/TtMHCWrap` |
-| `tt/kda.py` | KDA: prefill via `ttKDA` (chunked kernels), decode = composite recurrence on `[B*H,128,128]` fp32 with in-place state writeback | `deepseek_v3_d_p/tt/kda` |
+| `tt/kda.py` | KDA: prefill via `ttKDA` (chunked kernels); decode = the 6-op fused block with `GLM53_KDA_FUSED=1` (qkv matmul, 2 gate matmuls, ONE `ttnn.transformer.kda_decode` program, tilize, o_proj; state + conv history in place) or the default ~75-op composite recurrence on `[B*H,128,128]` fp32 (see the KDA decode block section) | `deepseek_v3_d_p/tt/kda`, `ttnn/.../transformer/kda_decode` |
 | `tt/dsa.py` | MLA (NoPE): dense causal SDPA for prefill rows [0, 2048), paged latent cache, absorbed `paged_flash_multi_latent_attention_decode` for every decode slot; prefill rows >= 2048 and decode users at position > 2050 via the indexer + `sparse_sdpa` | paged cache ops, flash MLA decode, sparse SDPA |
 | `tt/indexer.py` | GLM k-pool indexer: pooled-key cache, `indexer_score_dsa(key_compression_ratio=4)`, `topk_large_indices` over 4x-expanded pool scores, tail ids | |
 | `tt/moe.py` | router (exact fp32 composite top-8) + `sparse_matmul` experts per 32-token block + shared expert | gpt_oss sparse-matmul pattern |
@@ -94,6 +94,49 @@ Expert dtype gate evidence (knobs `expert_dtype` / `expert_down_dtype`, default 
 Profiler note: Tracy device zones of the SDPA prefill kernels (dense and sparse share `compute_streaming.hpp`: `:632` vs
 `:1769`, hash 0x6835) collide on main 8cfcaf754d3, so prefill tables exist for layer 4 only; decode tables for both layers
 come from one-replay runs (`GLM53_PERF_DECODE_STEPS=1`, layer 3 with `GLM53_PERF_SEED_ONLY=1`), tables under `doc/functional_decoder/tracy/`.
+
+## KDA decode block (fused, `GLM53_KDA_FUSED=1`)
+
+Design 8.1 / the 2026-10-20 directive (every data-movement op of the block merged or removed). One chip (chip 3 of
+the Galaxy, 64 heads), real layer-4 weights, traced decode of the KDA layer alone (`tests/test_kda_perf.py`), ms per step:
+
+| users | composite (ops) | fused block (ops) | `kda_decode` device us | block device us |
+|---|---|---|---|---|
+| 1 | 1.378 (72) | 0.720 (6) | 44 (as 64 one-user items) | - |
+| 4 | 2.366 (75) | 0.794 (6) | 209 | 751 |
+| 8 | 3.546 (75) | 0.898 (6) | - | - |
+| 32 | 11.425 (75) | 1.491 (6) | 906 | 1453 |
+
+Op-level (`tests/ttnn/unit_tests/operations/transformers/test_kda_decode.py::test_kda_decode_perf`, eager): 241 us at
+B=4 / 930 us at B=32 with 64 heads; 197 us / 341 us with the TP4 shard's 16 heads (the users of a head are split over
+cores when heads x tile rows leave cores idle). Full layer 4 (KDA+MoE, `test_perf_layer.py`, `GLM53_PERF_B`): B=1
+8.23 -> 7.55 ms/step, B=32 18.15 -> 8.21 ms/step. The remaining block time is the weight-streaming matmuls (qkv 291 us
+on 110 cores, o_proj 149 us on 64 cores, the two gate matmuls 50 + 40 us -- the first runs on 10 cores) and the
+`kda_decode` program (64 items of 32 serial users at B=32 on this chip).
+
+The block: `qkv = x W_qkv` (bf16) -> `g1 = x [W_fa | W_ga | W_b]` (bf16, as HF) -> `g2 = g1 blockdiag(W_fb, W_gb, I)`
+(fp32: `[f | og | b_logits]`) -> `ttnn.transformer.kda_decode(qkv, g2, conv_state, recurrent, taps, [dt_bias; exp(A_log)],
+o_norm_w, selectors, H)` -> tilize -> `o_proj`. The program (one Tensix core per (head, 32-user tile row, user part))
+does the causal conv + SiLU on the device-owned bf16 history (read, shifted in place, raw rows appended), the per-head
+L2 norms, `g = -5 sigmoid(exp(A_log) (f + dt_bias))`, `beta = sigmoid(b)`, the per-key-channel delta-rule step per user
+(the user's rows are lifted into tile row 0 by one-hot selector matmuls; the state is read and written once, in
+place) and the gated RMSNorm, and writes the bf16 row-major `[B, H*V]` output. The per-key-channel decay was first
+added to `ttnn.transformer.fused_recurrent_gated_delta_rule` (rank-4 `g`, heads beyond the core count dealt
+round-robin, `GLM53_KDA_FUSED=2` keeps that path: composite conv/gates + one fused recurrence op, 63 ops).
+
+Correctness (`tests/test_kda.py`, real weights): block vs HF decode output PCC 0.99993 / 0.99991 (prefill 96 / 1000
+then 3 steps; the composite 0.99991 / 0.99991), state PCC 0.99993 / 0.99886 (composite 0.99993 / 0.99885);
+`test_kda_block_vs_composite` (layers 0 and 4, B=4 and 32, 10 steps on one evolving state): worst output PCC vs the
+composite 0.99996, state 0.99999, conv history 1.0, and vs HF (user 0) the block is at or above the composite every
+step. `test_decoder_layer.py` and `test_decode_trace.py` pass on the block path (5/5 each, worst decode PCC 0.99973,
+trace-safe: the program updates the persistent state and history in place and allocates only its output). The op's
+own tests: `tests/ttnn/unit_tests/operations/transformers/test_kda_decode.py` (torch reference of the block, B=1/4/32/40,
+H=16/64, multi-step) and `test_fused_recurrent_gdn_per_key.py` (the per-key decay / round-robin heads / ring mode of
+the extended recurrence op). Logs: `_logs/optkda_*.log`, `_logs/optkda_ops_*.txt`.
+
+Limits: K = V = 128 and conv kernel 4 are hard-wired in the program; the TP-mesh placement of the block path
+(`w_g1` per-chip columns) is written but not run on a mesh (single chip only here); padding rows of `qkv`/`gates`
+must be finite (ttnn matmuls on zero-padded inputs keep them zero).
 
 ## Running
 
@@ -147,7 +190,7 @@ TT_VISIBLE_DEVICES=0 GLM53_LAYERS=0-11 pytest models/demos/glm53_flash/tests/tes
   construction-time or first-use-cached constants only) plus `throw_exception_on_fallback=True` runs
   (`test_determinism.py`); the ring tail rows and the KDA scalars use tensors created once per geometry/value.
 
-- Performance is the design's Phase 2/3 work: the KDA decode recurrence and the per-block MoE are composites,
+- Performance is the design's Phase 2/3 work: the KDA decode block is fused behind `GLM53_KDA_FUSED=1` (default off until the integrator flips it; see below), the per-block MoE is a composite,
   the sparse decode untilizes the user's latent prefix per step, and the decode SDPA runs on 4 cores per user.
 - The sparse DSA decode path takes host positions (chunk geometry) and is therefore not captured in the trace;
   the pooled-key index is nevertheless maintained inside the traced dense graph (checked against a host

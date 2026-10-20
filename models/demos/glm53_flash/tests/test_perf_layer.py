@@ -6,6 +6,8 @@ Collect (one layer kind at a time, device profiler only, no watcher):
 
     TT_VISIBLE_DEVICES=0 GLM53_PERF_LAYER=3 python -m tracy -r -p -v -m pytest \
         models/demos/glm53_flash/tests/test_perf_layer.py -s
+    GLM53_PERF_B=32 decodes 32 user slots (slot 0 prefilled, every slot fed the same token);
+    GLM53_KDA_FUSED=1 selects the fused KDA decode recurrence (tt/kda.py).
     tt-perf-report <ops_perf_results_*.csv> --start-signpost PERF_DECODE --end-signpost PERF_DECODE_END ...
 
 Pattern: compile/warm-up, synchronize, signpost start, measured warmed pass (traced for decode),
@@ -58,6 +60,8 @@ def _log_dram(device, when: str):
 
 
 LAYER = int(os.environ.get("GLM53_PERF_LAYER", "3"))
+# decode users (user slots); only slot 0 is prefilled, the other slots decode on their initial state
+B = int(os.environ.get("GLM53_PERF_B", "1"))
 PREFILL_LEN = int(os.environ.get("GLM53_PERF_PREFILL", "1024"))
 DECODE_STEPS = int(os.environ.get("GLM53_PERF_DECODE_STEPS", "3"))
 # "both" | "prefill" | "decode": the Tracy device-zone hash table collides for the full prefill+decode kernel
@@ -88,7 +92,7 @@ def test_layer_perf(mesh_device):
         hf_config=cfg,
         layer_idx=LAYER,
         mesh_device=mesh_device,
-        max_batch=1,
+        max_batch=B,
         max_seq_len=S + 64,
         expert_dtype=_DTYPES[EXPERT_DTYPE],
         expert_down_dtype=_DTYPES[EXPERT_DOWN_DTYPE],
@@ -130,18 +134,15 @@ def test_layer_perf(mesh_device):
 
     # ---- decode: capture trace (warm-up inside), then measured replays
     streams_dev = ttnn.from_torch(
-        torch.zeros(1, 1, 1, cfg.hc_mult * cfg.hidden_size),
+        torch.zeros(1, 1, B, cfg.hc_mult * cfg.hidden_size),
         dtype=ttnn.float32,
         layout=ttnn.TILE_LAYOUT,
         device=mesh_device,
     )
-    ttnn.copy_host_to_device_tensor(
-        ttnn.from_torch(
-            pre["x_in"][:, S : S + 1].reshape(1, 1, 1, -1).float(), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT
-        ),
-        streams_dev,
-    )
-    dp = dec.make_decode_positions([S])
+    tok = torch.zeros(1, 1, B, cfg.hc_mult * cfg.hidden_size)
+    tok[0, 0, :] = pre["x_in"][:, S : S + 1].reshape(1, -1).float()  # the same token in every slot
+    ttnn.copy_host_to_device_tensor(ttnn.from_torch(tok, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT), streams_dev)
+    dp = dec.make_decode_positions([S] * B)
     trace_id, out_dev, _ = dec.capture_decode_trace(streams_dev, dp)
     dec.replay_decode(trace_id)  # one warm replay
     ttnn.synchronize_device(mesh_device)
@@ -155,7 +156,8 @@ def test_layer_perf(mesh_device):
     signpost("PERF_DECODE_END")
     _read_profiler(mesh_device)
     logger.info(
-        f"layer {LAYER} ({kind}) traced decode B=1: {t_decode*1e3:.2f} ms/step wall "
-        f"(single-layer rate {1/t_decode:.0f} tok/s/user; x45 layers -> {1/(45*t_decode):.1f} tok/s/user)"
+        f"layer {LAYER} ({kind}) traced decode B={B}: {t_decode*1e3:.2f} ms/step wall "
+        f"(single-layer rate {1/t_decode:.0f} tok/s/user, {B/t_decode:.0f} tok/s aggregate; "
+        f"x45 layers -> {1/(45*t_decode):.1f} tok/s/user)"
     )
     ttnn.release_trace(mesh_device, trace_id)

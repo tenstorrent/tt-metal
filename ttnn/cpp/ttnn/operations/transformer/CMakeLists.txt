@@ -23,6 +23,7 @@ file(
     chunk_gated_delta_rule/device/kernels/*.cpp
     chunk_gated_delta_rule/device/kernels/*.hpp
     fused_recurrent_gated_delta_rule/device/kernels/*.cpp
+    kda_decode/device/kernels/*.cpp
 )
 target_sources(
     ttnn_op_transformer

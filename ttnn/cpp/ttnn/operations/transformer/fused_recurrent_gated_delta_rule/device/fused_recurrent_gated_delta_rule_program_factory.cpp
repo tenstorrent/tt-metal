@@ -2,9 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // Program factory for fused_recurrent_gated_delta_rule.
-// Parallelism: one Tensix core per (B*HV) head; each core walks the T token axis sequentially,
-// holding the recurrent state S [K,V] on-core. All math is in the compute kernel, derived from
-// flash-linear-attention `naive_recurrent_gated_delta_rule`.
+// Parallelism: the B*HV heads are dealt round-robin over the compute cores (core c walks heads
+// c, c + NC, c + 2NC, ... one after another, so BH may exceed the core count); per head the core
+// walks the T token axis sequentially, holding the recurrent state S [K,V] on-core. All math is in
+// the compute kernel, derived from flash-linear-attention `naive_recurrent_gated_delta_rule`.
 
 #include "fused_recurrent_gated_delta_rule_program_factory.hpp"
 
@@ -30,7 +31,7 @@ namespace cb {
 constexpr uint32_t q = tt::CBIndex::c_0;          // [1,K]  one token
 constexpr uint32_t k = tt::CBIndex::c_1;          // [1,K]
 constexpr uint32_t v = tt::CBIndex::c_2;          // [1,V]
-constexpr uint32_t decay = tt::CBIndex::c_3;      // [1,1]  scalar exp(g_t)
+constexpr uint32_t decay = tt::CBIndex::c_3;      // [1,1]  scalar exp(g_t); per-channel: [1,K] row
 constexpr uint32_t beta = tt::CBIndex::c_4;       // [1,1]  scalar
 constexpr uint32_t S = tt::CBIndex::c_5;          // [K,V]  reader-produced initial state
 constexpr uint32_t out = tt::CBIndex::c_6;        // [1,V]  output o_t
@@ -41,6 +42,7 @@ constexpr uint32_t sd = tt::CBIndex::c_10;        // [K,V]  decayed state (S*dec
 constexpr uint32_t vread = tt::CBIndex::c_11;     // [1,V]  k . S'
 constexpr uint32_t u = tt::CBIndex::c_12;         // [1,V]  beta*(v - vread)
 constexpr uint32_t kcol = tt::CBIndex::c_13;      // [K,1]  transpose(k)
+constexpr uint32_t dcol = tt::CBIndex::c_14;      // [K,1]  transpose(decay row), per-channel decay only
 constexpr uint32_t blkidx = tt::CBIndex::c_16;    // [BH]   uint32 scratch, ring mode only
 }  // namespace cb
 
@@ -53,6 +55,8 @@ tt::tt_metal::ProgramDescriptor FusedRecurrentGatedDeltaRuleProgramFactory::crea
     const uint32_t Kt = attrs.key_dim / TILE_WIDTH;
     const uint32_t Vt = attrs.val_dim / TILE_WIDTH;
     const uint32_t per_token = attrs.output_per_token_state ? 1u : 0u;
+    const uint32_t per_channel = attrs.per_channel_decay ? 1u : 0u;
+    const uint32_t decay_tiles = attrs.per_channel_decay ? Kt : 1u;
     const bool ring = in.initial_state_block_idx.has_value();
     const uint32_t use_blk_idx = ring ? 1u : 0u;
     Buffer* blk_buf = ring ? in.initial_state_block_idx->buffer() : nullptr;
@@ -64,13 +68,15 @@ tt::tt_metal::ProgramDescriptor FusedRecurrentGatedDeltaRuleProgramFactory::crea
     auto* device = in.q.device();
     const CoreCoord grid = device->compute_with_storage_grid_size();
     const uint32_t grid_y = grid.y;
-    TT_FATAL(BH <= grid.x * grid_y, "num_heads {} exceeds compute cores {}", BH, grid.x * grid_y);
+    // Heads round-robin over the cores: core c owns heads c, c + NC, c + 2NC, ... (NC = cores in use).
+    const uint32_t NC = std::min<uint32_t>(BH, grid.x * grid_y);
+    TT_FATAL(NC >= 1, "fused_recurrent_gated_delta_rule: no compute cores");
 
-    std::vector<CoreCoord> head_cores(BH);
+    std::vector<CoreCoord> core_of(NC);
     std::set<CoreRange> core_set;
-    for (uint32_t h = 0; h < BH; h++) {
-        head_cores[h] = CoreCoord{h / grid_y, h % grid_y};
-        core_set.insert(CoreRange{head_cores[h], head_cores[h]});
+    for (uint32_t c = 0; c < NC; c++) {
+        core_of[c] = CoreCoord{c / grid_y, c % grid_y};
+        core_set.insert(CoreRange{core_of[c], core_of[c]});
     }
     CoreRangeSet cores{core_set};
 
@@ -85,12 +91,14 @@ tt::tt_metal::ProgramDescriptor FusedRecurrentGatedDeltaRuleProgramFactory::crea
                 {CBFormatDescriptor{.buffer_index = static_cast<uint8_t>(idx), .data_format = fmt, .page_size = ts}}}});
     };
 
-    add_cb(cb::q, Kt);
-    add_cb(cb::k, Kt);
-    add_cb(cb::v, Vt);
-    add_cb(cb::decay, 1, T > 1 ? 2 : 1);
-    add_cb(cb::beta, 1, T > 1 ? 2 : 1);
-    add_cb(cb::S, kv);
+    // Reader-fed CBs are double-buffered so the next head's (or token's) inputs stream in while the
+    // current one computes; a core walking many heads is otherwise serialized on its DRAM reads.
+    add_cb(cb::q, Kt, 2);
+    add_cb(cb::k, Kt, 2);
+    add_cb(cb::v, Vt, 2);
+    add_cb(cb::decay, decay_tiles, 2);
+    add_cb(cb::beta, 1, 2);
+    add_cb(cb::S, kv, 2);
     add_cb(cb::out, Vt, 2);
     add_cb(cb::state_out, kv, 2);
     add_cb(cb::s2, kv);
@@ -99,6 +107,9 @@ tt::tt_metal::ProgramDescriptor FusedRecurrentGatedDeltaRuleProgramFactory::crea
     add_cb(cb::vread, Vt);
     add_cb(cb::u, Vt);
     add_cb(cb::kcol, Kt);
+    if (per_channel) {
+        add_cb(cb::dcol, Kt);
+    }
     if (ring) {
         const tt::DataFormat idx_fmt = datatype_to_dataformat_converter(in.initial_state_block_idx->dtype());
         desc.cbs.push_back(CBDescriptor{
@@ -111,9 +122,9 @@ tt::tt_metal::ProgramDescriptor FusedRecurrentGatedDeltaRuleProgramFactory::crea
     }
 
     const std::string kdir = "ttnn/cpp/ttnn/operations/transformer/fused_recurrent_gated_delta_rule/device/kernels/";
-    const std::vector<uint32_t> compute_ct = {Kt, Vt, per_token};
+    const std::vector<uint32_t> compute_ct = {Kt, Vt, per_token, per_channel};
 
-    std::vector<uint32_t> reader_ct = {Kt, Vt, use_blk_idx};
+    std::vector<uint32_t> reader_ct = {Kt, Vt, use_blk_idx, per_channel};
     TensorAccessorArgs(*in.q.buffer()).append_to(reader_ct);
     TensorAccessorArgs(*in.k.buffer()).append_to(reader_ct);
     TensorAccessorArgs(*in.v.buffer()).append_to(reader_ct);
@@ -132,7 +143,7 @@ tt::tt_metal::ProgramDescriptor FusedRecurrentGatedDeltaRuleProgramFactory::crea
     reader.core_ranges = cores;
     reader.compile_time_args = reader_ct;
     reader.config = ReaderConfigDescriptor{};
-    reader.runtime_args.reserve(BH);
+    reader.runtime_args.reserve(NC);
 
     KernelDescriptor writer;
     writer.kernel_source = kdir + "dataflow/writer_fused_recurrent_gated_delta_rule.cpp";
@@ -140,7 +151,7 @@ tt::tt_metal::ProgramDescriptor FusedRecurrentGatedDeltaRuleProgramFactory::crea
     writer.core_ranges = cores;
     writer.compile_time_args = writer_ct;
     writer.config = WriterConfigDescriptor{};
-    writer.runtime_args.reserve(BH);
+    writer.runtime_args.reserve(NC);
 
     KernelDescriptor compute;
     compute.kernel_source = kdir + "compute/fused_recurrent_gated_delta_rule.cpp";
@@ -155,7 +166,7 @@ tt::tt_metal::ProgramDescriptor FusedRecurrentGatedDeltaRuleProgramFactory::crea
         .fp32_dest_acc_en = fp32_dest_acc_en,
         .dst_full_sync_en = dst_full_sync_en,
         .math_approx_mode = math_approx_mode};
-    compute.runtime_args.reserve(BH);
+    compute.runtime_args.reserve(NC);
 
     auto* q_buf = in.q.buffer();
     auto* k_buf = in.k.buffer();
@@ -166,13 +177,14 @@ tt::tt_metal::ProgramDescriptor FusedRecurrentGatedDeltaRuleProgramFactory::crea
     auto* o_buf = outputs[0].buffer();
     auto* st_buf = outputs[1].buffer();
 
-    for (uint32_t h = 0; h < BH; h++) {
-        const auto& core = head_cores[h];
+    for (uint32_t c = 0; c < NC; c++) {
+        const auto& core = core_of[c];
+        const uint32_t n_heads = (BH - c + NC - 1) / NC;  // heads c, c + NC, ...
         reader.emplace_runtime_args(
-            core, {h, T, q_buf, k_buf, v_buf, decay_buf, beta_buf, s0_buf, blk_buf, blk_page_bytes, BH});
+            core, {c, n_heads, NC, T, q_buf, k_buf, v_buf, decay_buf, beta_buf, s0_buf, blk_buf, blk_page_bytes, BH});
         // BH is needed by the writer to place per-token state token-major (page t*BH + h).
-        writer.emplace_runtime_args(core, {h, T, o_buf, st_buf, BH});
-        compute.emplace_runtime_args(core, {T});
+        writer.emplace_runtime_args(core, {c, n_heads, NC, T, o_buf, st_buf, BH});
+        compute.emplace_runtime_args(core, {T, n_heads});
     }
 
     desc.kernels.push_back(std::move(reader));

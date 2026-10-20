@@ -102,3 +102,66 @@ def test_kda_prefill_then_decode(mesh_device, weights, seq_len):
         p_rec = pcc(hf_layer.recurrent_states[0], ttnn.to_torch(state.recurrent))
         logger.info(f"  decode step {step} (pos {T + step}): pcc {p_d:.6f}  state pcc {p_rec:.6f}")
         assert p_d > 0.995 and p_rec > 0.995
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+@pytest.mark.parametrize("batch", [4, 32])
+def test_kda_block_vs_composite(mesh_device, weights, batch):
+    """The 5-op block decode (``kda_decode``) vs the composite decode on real weights: ``batch`` users, 10
+    decode steps on the same evolving recurrent state (from a random prefill-like carry), output PCC per
+    step and the final state PCC; the HF reference for user 0 as the absolute anchor."""
+    snapshot, text, raw = weights
+    cfg = GLM53FlashConfig.from_hf_config_json(snapshot / "config.json")
+    attn = {k[len("self_attn.") :]: v for k, v in raw.items()}
+    comp = TtKDA(mesh_device, cfg, attn, layer_idx=LAYER, fused_decode="composite")
+    blk = TtKDA(mesh_device, cfg, attn, layer_idx=LAYER, fused_decode="block")
+    hf = _hf_linear_attention(snapshot, text, raw)
+    torch.manual_seed(1)
+    B, H, K, V = batch, comp.H, comp.K, comp.V
+    S0 = 0.05 * torch.randn(B, H, K, V)
+    conv0 = (0.5 * torch.randn(B, 3, comp.conv_width)).to(torch.bfloat16)
+    states = []
+    for tt in (comp, blk):
+        st = tt.allocate_state(B)
+        ttnn.copy_host_to_device_tensor(ttnn.from_torch(S0, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT), st.recurrent)
+        ttnn.copy_host_to_device_tensor(
+            ttnn.from_torch(conv0, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT), st.convolution
+        )
+        states.append(st)
+    # the HF module tracks user 0 through its cache
+    from transformers import DynamicCache
+
+    cache = DynamicCache(config=text)
+    with torch.no_grad():  # seed the HF cache with the same carry (user 0)
+        x_seed = torch.zeros(1, 4, cfg.hidden_size, dtype=torch.bfloat16)
+        hf(x_seed, cache_params=cache, attention_mask=torch.ones(1, 4, dtype=torch.bool))
+    layer_cache = cache.layers[LAYER]
+    layer_cache.recurrent_states[0] = S0[:1].clone()
+    layer_cache.conv_states[0][:, :, -3:] = conv0[:1].float().transpose(1, 2)
+    n_steps = 10
+    worst_o, worst_hf = 1.0, 1.0
+    for step in range(n_steps):
+        xt = (torch.randn(1, 1, B, cfg.hidden_size) * 0.8).to(torch.bfloat16)
+        x_dev = ttnn.from_torch(xt, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device)
+        y_c, states[0] = comp.decode_forward(x_dev, states[0])
+        y_b, states[1] = blk.decode_forward(x_dev, states[1])
+        yc, yb = ttnn.to_torch(y_c).float()[0, 0], ttnn.to_torch(y_b).float()[0, 0]
+        p = pcc(yc, yb)
+        with torch.no_grad():
+            y_hf = hf(xt[:, :, 0], cache_params=cache, attention_mask=torch.ones(1, 1, dtype=torch.bool))
+        p_hf_b = pcc(y_hf[0], yb[:1])
+        p_hf_c = pcc(y_hf[0], yc[:1])
+        worst_o, worst_hf = min(worst_o, p), min(worst_hf, p_hf_b)
+        logger.info(
+            f"  step {step}: block vs composite pcc {p:.6f}; vs HF (user 0): block {p_hf_b:.6f} composite {p_hf_c:.6f}"
+        )
+    s_c, s_b = ttnn.to_torch(states[0].recurrent), ttnn.to_torch(states[1].recurrent)
+    p_state = pcc(s_c, s_b)
+    p_state_hf = pcc(layer_cache.recurrent_states[0], s_b[:1])
+    p_conv = pcc(ttnn.to_torch(states[0].convolution).float(), ttnn.to_torch(states[1].convolution).float())
+    logger.info(
+        f"KDA layer {LAYER} B={B} after {n_steps} steps: state pcc block vs composite {p_state:.6f} (vs HF user 0 "
+        f"{p_state_hf:.6f}), conv history pcc {p_conv:.6f}; worst output pcc {worst_o:.6f} (vs HF {worst_hf:.6f})"
+    )
+    assert worst_o > 0.9999 and p_state > 0.9999 and p_conv > 0.9999
+    assert worst_hf > 0.999 and p_state_hf > 0.999
