@@ -22,7 +22,13 @@ from helpers.llk_params import (
     format_dict,
 )
 from helpers.logger import logger
-from helpers.matmul_sweep import sweep_matmul, sweep_tiny_tiles_matmul
+from helpers.matmul_sweep import (
+    MATMUL_TILE_SHAPE_PAIRS,
+    MATMUL_TINY_IN0_PAIRS,
+    sweep_matmul,
+    sweep_matmul_tile_shape_pairs,
+    sweep_tiny_tiles_matmul,
+)
 from helpers.param_config import DEST_SYNC_TILE_LIMITS, input_output_formats
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import convert_to_l1_view, generate_face_matmul_data
@@ -77,6 +83,14 @@ TINY_TILES_MATMUL_COMBINATIONS = sweep_tiny_tiles_matmul(
     STOCHASTIC_ROUNDING_MODES,
     DEST_SYNC_MODES,
     math_matmul=True,
+)
+
+# Explicit in0 x in1 tile-shape pairs on top of the tiny-tile sweep (see MATMUL_TILE_SHAPE_PAIRS),
+# and tiny in0 with more than one K tile.
+TINY_TILES_MATMUL_COMBINATIONS += sweep_matmul_tile_shape_pairs(
+    MATMUL_FORMATS, DEST_ACC_MODES, MATMUL_TILE_SHAPE_PAIRS
+) + sweep_matmul_tile_shape_pairs(
+    MATMUL_FORMATS, DEST_ACC_MODES, MATMUL_TINY_IN0_PAIRS, kt_dims=(2,)
 )
 
 
@@ -182,7 +196,8 @@ def test_math_matmul(
         num_faces=num_faces_in0,
         stimuli_format=formats.input_format,
         input_dimensions=in0_dimensions,  # This will generate the right number of tiles
-        is_matrix_A=True,  # matrix A (In0/SrcB) uses f0,f1 for 2-face mode
+        # 2-face mode: a 32-wide tile keeps f0,f1, a 16-wide tile keeps f0,f2
+        is_matrix_A=in0_tile_c_dim > 16,
         face_r_dim=(
             matmul_config.tile_dimensions.in0_tile_r_dim
             if matmul_config.tile_dimensions.in0_tile_r_dim < 16
@@ -194,7 +209,8 @@ def test_math_matmul(
         num_faces=num_faces_in1,
         stimuli_format=formats.input_format,
         input_dimensions=in1_dimensions,  # This will generate the right number of tiles
-        is_matrix_A=False,  # matrix B (In1/SrcA) uses f0,f2 for 2-face mode
+        # 2-face mode: a 32-wide tile keeps f0,f1, a 16-wide tile keeps f0,f2
+        is_matrix_A=in1_tile_c_dim > 16,
     )
 
     in1_golden = in1
