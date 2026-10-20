@@ -193,6 +193,36 @@ def _ttft(model, layers, cfg):
     logger.info(
         f"PERF-TTFT mesh {MESH} layers {len(layers)} S={S_p}: warm {walls[-1] * 1e3:.0f} ms (cold {walls[0] * 1e3:.0f} ms)"
     )
+    if os.environ.get("GLM53_TRACE_PREFILL", "0") != "1":
+        return
+    # the same prompt through the per-length prefill trace (tt/trace_prefill.py): first token + chain rows vs the
+    # eager prefill above, TTFT eager vs traced
+    t0 = time.perf_counter()
+    captured = model.capture_prefill()
+    logger.info(
+        f"prefill traces {captured} (all: {sorted(model.prefill_traces)}) captured in {time.perf_counter() - t0:.0f} s"
+    )
+    traced_walls = []
+    for it in range(3):
+        ttnn.synchronize_device(mesh_device)
+        t0 = time.perf_counter()
+        streams, logits, ids, owner = model.prefill_traced(prompt, user=0)
+        tok = model.first_token(ids, owner)
+        traced_walls.append(time.perf_counter() - t0)
+        out = (
+            model.mesh.to_host(streams, rows=2 if model.mesh.rows > 1 else None).float()[0, 0, :S_p].reshape(S_p, 4, -1)
+        )
+        p = pcc(ref, out)
+        logger.info(
+            f"TTFT-TRACED mesh {MESH} layers {len(layers)} prompt {S_p} tokens (trace length "
+            f"{min(T for T in model.prefill_traces if T >= S_p)}): replay {it} {traced_walls[-1] * 1e3:.0f} ms; chain pcc vs "
+            f"HF rows {p:.6f}; first token {tok} (host head on HF rows: {host_first}, {'match' if tok == host_first else 'DIFFERENT'})"
+        )
+    logger.info(
+        f"PERF-TTFT-TRACED mesh {MESH} layers {len(layers)} S={S_p}: traced {min(traced_walls) * 1e3:.0f} ms "
+        f"(eager warm {walls[-1] * 1e3:.0f} ms, x{walls[-1] / min(traced_walls):.1f})"
+    )
+    model.release_prefill_traces()
 
 
 @pytest.mark.timeout(10800)

@@ -52,6 +52,9 @@ EXPERT_DOWN_DTYPE = _DT[os.environ.get("GLM53_MODEL_EXPERT_DOWN_DTYPE", "bfp8")]
 _cache_env = os.environ.get("GLM53_MESH_CACHE", "/home/ttuser/ashai/glm53/_cache/mesh")
 CACHE_ROOT = None if _cache_env.lower() == "none" else Path(_cache_env)
 WARMUP = int(os.environ.get("GLM53_DEMO_WARMUP", "2"))
+# GLM53_TRACE_PREFILL=1: prompts of <= 2048 tokens go through the per-length prefill traces (tt/trace_prefill.py;
+# the prompt is padded to the smallest captured length), longer ones through the eager prefill
+TRACE_PREFILL = os.environ.get("GLM53_TRACE_PREFILL", "0") == "1"
 SAMPLE_DIR = Path(__file__).parent / "sample_prompts"
 TTT_SAMPLES = Path("models/tt_transformers/demo/sample_prompts")
 
@@ -144,21 +147,33 @@ def test_text_demo(mesh_device, input_prompts, users_per_row, max_seq_len, max_g
         f"model built in {t_build:.0f} s ({len(layers)} layers resident, experts {EXPERT_DTYPE}/{EXPERT_DOWN_DTYPE})"
     )
 
-    # ---- decode trace first (compile + capture on dummy ids at position 0; the prefills below overwrite the state)
-    trace_id, (_, _, ids_tr) = model.capture(torch.zeros(U, dtype=torch.long), [0] * U)
+    # ---- persistent decode inputs + the eager decode compile first, then the prefill traces (every length compiled,
+    # then captured), then the decode trace: nothing persistent is allocated after a capture
+    dummy_ids = torch.zeros(U, dtype=torch.long)
+    model.warmup_decode(dummy_ids, [0] * U)
+    if TRACE_PREFILL:
+        t0 = time.perf_counter()
+        captured = model.capture_prefill()
+        logger.info(f"prefill traces for lengths {captured} captured in {time.perf_counter() - t0:.0f} s")
+    trace_id, (_, _, ids_tr) = model.capture(dummy_ids, [0] * U)
     model.reset_kda_states()
 
-    # ---- prefill: one prompt per user slot (TTFT per user); one untimed warm-up prefill compiles the prefill
-    # programs (the timed prefill of user 0 overwrites its slot)
-    model.prefill(torch.tensor(prompt_ids[0], dtype=torch.long), user=0)
+    # ---- prefill: one prompt per user slot (TTFT per user). Eager path: one untimed warm-up prefill compiles the
+    # prefill programs (the timed prefill of user 0 overwrites its slot); traced path: the captures warmed up
+    if not TRACE_PREFILL or not model.has_prefill_trace(isl[0]):
+        model.prefill(torch.tensor(prompt_ids[0], dtype=torch.long), user=0)
     ttnn.synchronize_device(mesh_device)
     ttft_ms, first_tokens = [], []
     for u in range(users_per_row):
         ids = torch.tensor(prompt_ids[u], dtype=torch.long)
         ttnn.synchronize_device(mesh_device)
         t0 = time.perf_counter()
-        _, logits_last, owner_row = model.prefill(ids, user=u)
-        first = model.first_token(logits_last, owner_row)
+        if TRACE_PREFILL and model.has_prefill_trace(isl[u]):
+            _, _, ids_first, owner_row = model.prefill_traced(ids, user=u)
+            first = model.first_token(ids_first, owner_row)
+        else:
+            _, logits_last, owner_row = model.prefill(ids, user=u)
+            first = model.first_token(logits_last, owner_row)
         ttft_ms.append((time.perf_counter() - t0) * 1000)
         first_tokens.append(first)
         logger.info(

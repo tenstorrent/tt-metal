@@ -210,6 +210,22 @@ class TtModelHead(LightweightModule):
         ttnn.deallocate(row)
         return out
 
+    def selected_logits(self, streams: ttnn.Tensor, selector: ttnn.Tensor) -> ttnn.Tensor:
+        """Traced prefill: logits ``[1, 1, 32, vocab]`` of the rows ``selector`` ``[1, 1, 32, T]`` (bf16
+        one-hot rows, a persistent device input) picks out of the ``T`` packed rows: the collapse and the
+        final norm run on every row (per-row ops), the selection is a HiFi4 bf16 matmul AFTER the norm
+        (one nonzero product per output: exact), then the same decode-shaped LM-head matmul
+        ``last_token_logits`` runs on its single row. Row 0 of the result is the selected token's."""
+        h = self.collapse(streams)
+        hn = self.norm(h)
+        if h is not streams:
+            ttnn.deallocate(h)
+        row = ttnn.matmul(selector, hn, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi4)  # [1,1,32,H]
+        ttnn.deallocate(hn)
+        out = self.logits(row)
+        ttnn.deallocate(row)
+        return out
+
     def forward_greedy(self, streams: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """Decode step: ``(logits [1, 1, B, vocab] bf16, ids [1, 1, B, 1] uint32)``; trace-capturable."""
         logits = self.forward(streams)

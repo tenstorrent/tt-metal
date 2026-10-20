@@ -380,10 +380,21 @@ class TtLatentCache:
                 ]
         return self._prefill_views[key]
 
-    def fill(self, latent: ttnn.Tensor, user: int, start: int = 0):
+    def fill(self, latent: ttnn.Tensor, user: int, start: int = 0, slot=None):
         """latent [1, 1, T_pad, 512] (T_pad % block_size == 0) -> pages of ``user`` from position
-        ``start`` (a block multiple): page-table view from block ``start // block_size`` on."""
+        ``start`` (a block multiple): page-table view from block ``start // block_size`` on.
+        ``slot`` (a ``trace_prefill.PrefillSlot``, start == 0 only): the slot index comes from its
+        device tensors (``batch_idx_tensor``: the same op, the user chosen on device), so the fill is
+        trace-replayable for any user; partitioned caches fill the scratch slot as well."""
         src = latent if latent.dtype == self.dtype else ttnn.typecast(latent, self.dtype)
+        if slot is not None:
+            if start:
+                raise ValueError("a device-slot fill starts a new prompt (start == 0)")
+            pt = self.page_table_full
+            ttnn.experimental.paged_fill_cache(self.cache, src, pt, batch_idx_tensor=slot.cache_idx)
+            if self.partition:
+                ttnn.experimental.paged_fill_cache(self.cache, src, pt, batch_idx_tensor=slot.scratch_idx)
+            return
         if start == 0 and not self.partition:
             ttnn.experimental.paged_fill_cache(self.cache, src, self.page_table, batch_idx=user)
             return
@@ -728,7 +739,14 @@ class TtDSA(LightweightModule):
         self.indexer.maintain_prefill(x, cache.index, user, seq_len, start=start)
 
     def prefill_forward(
-        self, x: ttnn.Tensor, cache: TtLatentCache, user: int, seq_len: int, start: int = 0
+        self,
+        x: ttnn.Tensor,
+        cache: TtLatentCache,
+        user: int,
+        seq_len: int,
+        start: int = 0,
+        slot=None,
+        ring_sel: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor:
         """One user, one chunk: x row i is the token at absolute position ``start + i``
         (``start % block_size == 0``; ``start == 0`` = a new prompt). x [1,1,T_pad,4096] with
@@ -737,21 +755,27 @@ class TtDSA(LightweightModule):
         the pooled-key index for positions [start, start + seq_len) (the ring must hold the previous
         chunk's tail rows, i.e. chunks of a prompt are prefilled in order). Rows at absolute positions
         < 2048 run the dense causal attention over the full prefix (K/V from the cached latent rows +
-        this chunk's); rows from 2048 on use the indexer + sparse_sdpa, exactly as the single-shot path."""
+        this chunk's); rows from 2048 on use the indexer + sparse_sdpa, exactly as the single-shot path.
+        ``slot`` + ``ring_sel`` (the traced prefill, tt/trace_prefill.py): the user slot and the ring
+        rows come from device tensors and the whole padded chunk is indexed (dense range only)."""
         T = x.shape[-2]
         if start % cache.block_size:
             raise ValueError(f"start {start} must be a multiple of the cache block size {cache.block_size}")
         end = start + seq_len
         split = min(T, max(0, self.sparse_row_start - start))  # chunk rows [0, split) are dense
+        if slot is not None and (start or split != T):
+            raise ValueError(
+                f"the traced prefill covers the dense range only (start == 0, T <= {self.sparse_row_start})"
+            )
         if self.stage_timer is not None:
             self.stage_timer.start()
         q_resid = self._q_resid(x)
         q = self._q(q_resid)  # [1,1,T,H*Dq]
         c = self._latent(x)  # [1,1,T,L]
         self._mark("prefill_stems")
-        cache.fill(c, user, start=start)
+        cache.fill(c, user, start=start, slot=slot)
         self._mark("cache_fill")
-        self.indexer.maintain_prefill(x, cache.index, user, seq_len, start=start)
+        self.indexer.maintain_prefill(x, cache.index, user, seq_len, start=start, slot=slot, ring_sel=ring_sel)
         self._mark("index_maintain")
         prefix = cache.user_rows(user, start) if start and split else None  # [1,1,start,L]
         if split == T:
