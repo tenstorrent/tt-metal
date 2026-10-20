@@ -1342,3 +1342,163 @@ def test_sparse_push_hop_efficiency(mesh_device):
         for t in (idx_tt, table, tables):
             ttnn.deallocate(t)
     logger.info("\n" + "\n".join(lines))
+
+
+# ---------------------------------------------------------------------------------------------------------
+# Where the resume time goes on a shared layer: fused sparse_sdpa + prefix push, then the resume push (rest of the
+# prefix, if the fused one stopped, plus the current chunk's rows), against the remainder push alone, the full push
+# alone and a push with nothing to send (launch + fences + table scan). Real 1M top-k, full grid, no sub-devices.
+# ---------------------------------------------------------------------------------------------------------
+
+
+@run_for_blackhole()
+@_PERF
+@pytest.mark.timeout(0)
+@pytest.mark.parametrize("device_params", [_TORUS_XY_GLM], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+def test_sparse_resume_breakdown(mesh_device):
+    from safetensors.numpy import load_file
+
+    from models.demos.deepseek_v3_d_p.tt.mla.sparse_kv_push import _shard_over_mesh
+
+    if not _TRACE_1M.exists():
+        pytest.skip(f"1M GLM-5.3 trace not found at {_TRACE_1M}")
+    kv_fmt, chunk_global = "fp8", 5120
+    sdpa_grid, gather_grid = _cols(0, 7), _cols(8, 11)
+    n_dev = mesh_device.get_num_devices()
+    links = 2
+    stripe_chunk = s_local = chunk_global // n_dev
+    prefix_tokens = _TRACE_1M_START
+    cache_tokens = prefix_tokens + chunk_global
+    page_bytes = 704
+    pages_per_packet = max(1, ttnn.get_tt_fabric_max_payload_size_bytes() // page_bytes)
+    buffer_rows = cache_tokens + n_dev * pages_per_packet * _DRAM_BANKS
+    layers = [int(x) for x in os.environ.get("TOPK_LAYERS", "14,58,62").split(",")]
+
+    common = dict(layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    shard_seq = ttnn.ShardTensorToMesh(mesh_device, dim=2)
+    replicate = ttnn.ReplicateTensorToMesh(mesh_device)
+    cache = _kv_cache(mesh_device, 2, cache_tokens, kv_fmt, shard_seq, seed=2)
+    compact = [_zero_kv_buffer(mesh_device, buffer_rows, kv_fmt) for _ in range(2)]
+    q = ttnn.from_torch(
+        torch.randn(1, H, n_dev * s_local, K_DIM).to(torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        mesh_mapper=shard_seq,
+        **common,
+    )
+    start = ttnn.from_torch(
+        torch.tensor([[[[prefix_tokens]]]], dtype=torch.int32), dtype=ttnn.uint32, mesh_mapper=replicate, **common
+    )
+    grid = mesh_device.compute_with_storage_grid_size()
+    full_sems = [
+        ttnn.create_global_semaphore(mesh_device, _cols(0, grid.x - 1), 0, ttnn.BufferType.L1_SMALL) for _ in range(2)
+    ]
+    progress = ttnn.from_torch(
+        torch.zeros(1, 1, 4 * links * 2, 16, dtype=torch.int32), dtype=ttnn.uint32, mesh_mapper=replicate, **common
+    )
+
+    def timed(fn, n=10):
+        fn()
+        ttnn.synchronize_device(mesh_device)
+        tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+        fn()
+        ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
+        ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=True)
+        t0 = time.perf_counter()
+        for _ in range(n):
+            ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=False)
+        ttnn.synchronize_device(mesh_device)
+        us = (time.perf_counter() - t0) / n * 1e6
+        ttnn.release_trace(mesh_device, tid)
+        return us
+
+    def plan_tables(natural):
+        idx = ttnn.from_torch(
+            torch.from_numpy(natural.reshape(1, 1, n_dev * s_local, TOPK).astype(np.int32)),
+            dtype=ttnn.uint32,
+            mesh_mapper=shard_seq,
+            **common,
+        )
+        table, compact_idx = ttnn.experimental.sparse_push_plan(
+            idx,
+            num_devices=n_dev,
+            stripe_chunk=stripe_chunk,
+            max_rows=cache_tokens,
+            pages_per_packet=pages_per_packet,
+            banks=_DRAM_BANKS,
+            chunk_start=start,
+        )
+        _shard_over_mesh(table, mesh_device)
+        tables = ttnn.from_torch(
+            torch.zeros(1, 1, table.shape[2] * n_dev, 1024, dtype=torch.int32),
+            dtype=ttnn.uint32,
+            mesh_mapper=replicate,
+            **common,
+        )
+        ttnn.experimental.high_bw_all_gather(table, dim=2, output_tensor=tables, cluster_axis=None, num_links=links)
+        return tables, compact_idx
+
+    def push(tables, part, with_progress=False):
+        return ttnn.experimental.high_bw_all_gather(
+            cache,
+            dim=2,
+            output_tensor=compact[1],
+            cluster_axis=None,
+            num_links=links,
+            input_batch_index=1,
+            push_runs_tensor=tables,
+            push_stripe_chunk=stripe_chunk,
+            push_max_rows=cache_tokens,
+            push_part=part,
+            push_progress_tensor=progress if with_progress else None,
+            ready_semaphore=full_sems[0],
+            data_valid_semaphore=full_sems[1],
+        )
+
+    empty_tables, _ = plan_tables(np.full((n_dev, s_local, TOPK), -1, dtype=np.int64))
+    t_empty = timed(lambda: push(empty_tables, 0))
+    lines = [
+        f"GLM-5.3 real top-k, fp8, 5k chunk at {prefix_tokens} tokens; push with nothing to send: {t_empty:.0f} us",
+        f"{'layer':>5} {'cur rows/req':>12} {'sdpa 120c':>9} {'fused':>7} {'resume':>7} {'fused+res':>9} "
+        f"{'rem push':>8} {'full push':>9}",
+    ]
+    for layer in layers:
+        f = _TRACE_1M / "dsa" / f"dsa_topk_indices_layer_{layer}" / "rows_00000000_00005120.safetensors"
+        natural = next(iter(load_file(str(f)).values())).astype(np.int64).reshape(n_dev, s_local, TOPK)
+        cur_rows = np.mean([len(np.unique(v[v >= prefix_tokens])) for v in natural.reshape(n_dev, -1)])
+        tables, compact_idx = plan_tables(natural)
+        fused = lambda: ttnn.transformer.sparse_sdpa(
+            q,
+            compact[0],
+            compact_idx,
+            V_DIM,
+            kv_format=_KV_FORMATS[kv_fmt][0],
+            scale=K_DIM**-0.5,
+            k_chunk_size=128,
+            sub_core_grids=sdpa_grid,
+            push_input=cache,
+            push_table=tables,
+            push_output=compact[1],
+            push_progress=progress,
+            push_stripe_chunk=stripe_chunk,
+            push_max_rows=cache_tokens,
+            push_batch_index=1,
+            push_num_links=links,
+            push_ready_semaphore=full_sems[0],
+            push_data_valid_semaphore=full_sems[1],
+            push_core_grid=gather_grid,
+        )
+        sdpa_full = lambda: ttnn.transformer.sparse_sdpa(
+            q, compact[0], compact_idx, V_DIM, kv_format=_KV_FORMATS[kv_fmt][0], scale=K_DIM**-0.5, k_chunk_size=128
+        )
+        t_sdpa = timed(sdpa_full)
+        t_fused = timed(fused)
+        t_pair = timed(lambda: (fused(), push(tables, 3, True)))
+        t_rem = timed(lambda: push(tables, 2))
+        t_full = timed(lambda: push(tables, 0))
+        lines.append(
+            f"{layer:>5} {cur_rows:>12.0f} {t_sdpa:>9.0f} {t_fused:>7.0f} {t_pair - t_fused:>7.0f} {t_pair:>9.0f} "
+            f"{t_rem:>8.0f} {t_full:>9.0f}"
+        )
+        logger.info(lines[-1])
+    logger.info("\n" + "\n".join(lines))

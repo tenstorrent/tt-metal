@@ -181,7 +181,8 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAPushFusedFactory:
         {"MESH_ROWS", std::to_string(mesh_shape[0])},
         {"MESH_COLS", std::to_string(mesh_shape[1])},
     };
-    if (const char* split = std::getenv("SPARSE_PUSH_TIE_SPLIT"); split && std::string(split) != "0") {
+    // Ring-distance ties split between both directions (sparse_push_route.hpp); SPARSE_PUSH_TIE_SPLIT=0 disables.
+    if (const char* split = std::getenv("SPARSE_PUSH_TIE_SPLIT"); !split || std::string(split) != "0") {
         defines.emplace_back("PUSH_TIE_SPLIT", "1");
     }
     const std::string kdir = "ttnn/cpp/ttnn/operations/experimental/high_bw_all_gather/device/kernels/";

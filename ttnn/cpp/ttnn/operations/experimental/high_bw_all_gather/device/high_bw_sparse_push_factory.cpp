@@ -238,9 +238,10 @@ HighBwSparsePushFactory::cached_mesh_workload_t HighBwSparsePushFactory::create_
             {"MESH_ROWS", std::to_string(mesh_rows)},
             {"MESH_COLS", std::to_string(mesh_cols)},
         };
-        // Table mode only: the run-list reader picks connections straight from the routing table.
+        // Table mode only: the run-list reader picks connections straight from the routing table. Ring-distance ties
+        // are split between both directions unless SPARSE_PUSH_TIE_SPLIT=0.
         if (const char* split = std::getenv("SPARSE_PUSH_TIE_SPLIT");
-            from_table && split && std::string(split) != "0") {
+            from_table && (!split || std::string(split) != "0")) {
             writer_defines["PUSH_TIE_SPLIT"] = "1";
         }
         // Profiling switch for the prototype: SPARSE_PUSH_SKIP=reads|sends times one side without the other.
