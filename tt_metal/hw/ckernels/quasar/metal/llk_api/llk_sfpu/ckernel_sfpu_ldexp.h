@@ -8,6 +8,7 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
+#include "ckernel_sfpu_exp.h"
 #include "sfpi.h"
 
 namespace ckernel::sfpu {
@@ -25,9 +26,8 @@ sfpi_inline sfpi::vFloat _sfpu_ldexp_(sfpi::vFloat a, sfpi::vFloat b) {
     r = 0x1.41cp-13f;
     r = r * f + 0x1.5f4p-10f;
     r = r * f + 0x1.3b4p-7f;
-    i = sfpi::abs(sfpi::as<sfpi::vInt>(sm));
+    _sfpu_round_to_nearest_int32_(j, i);
     s = r * f + sfpi::vConstFloatPrgm2;
-    i = sfpi::as<sfpi::vInt>(sfpi::copysgn(sfpi::as<sfpi::vFloat>(i), j));
     r = s * f + sfpi::vConstFloatPrgm1;
     s *= std::numeric_limits<float>::infinity();
     r = r * f + sfpi::vConstFloatPrgm0;
@@ -38,9 +38,9 @@ sfpi_inline sfpi::vFloat _sfpu_ldexp_(sfpi::vFloat a, sfpi::vFloat b) {
     v_if(abs_b >= 0.0f) {
         sfpi::vInt e = sfpi::exexp(r, sfpi::ExponentMode::Biased);
         e += i;
-        v_if(sfpi::nearby(e < 255)) {
+        v_if(e < 255) {
             s = sfpi::setexp(r, e);
-            v_if(sfpi::nearby(e < 1)) {
+            v_if(e < 1) {
                 s = sfpi::setexp(r, e + 64);
                 t = 0x1p-64f;
                 v_if(e < -63) { s = 0.0f; }
