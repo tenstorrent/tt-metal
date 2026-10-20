@@ -28,8 +28,9 @@ per replica (captured in ``warmup_model_decode``) that also computes each slot's
 the slot's position plus one, into the trace's own inputs (TtMiMoModel._feed_back). With ``sample_on_device_mode``
 the plugin samples greedy rows on device (``max_device_top_k`` 1: a row with temperature > 0 and any other top_k,
 penalties, logprobs or structured output send the whole batch to host sampling, which reads the logit rows) and
-overlaps the steps (``decode_input_update_contract`` 1, ``supports_async_decode``): a steady step copies only the
-RoPE inputs of the adapter's own position counter, and its tokens are read back without blocking. Prefill runs
+overlaps the steps (``decode_input_update_contract`` 1, ``supports_async_decode``): a steady step copies nothing
+(the trace reads its RoPE cos / sin from device tables at its own positions; past 128K context it copies those of
+the adapter's own position counter), and its tokens are read back without blocking. Prefill runs
 eagerly in chunks of up to 4096 tokens, between the replays. A program first compiled after the capture would keep buffers the replays overwrite, so
 ``warmup_model_prefill`` compiles every prefill program a served chunk can run first: they key only on the chunk's
 padded length and the alignment of its start (attention.py), a bounded set.
@@ -66,6 +67,10 @@ TIMING = os.environ.get("MIMO_VLLM_TIMING") == "1"
 PREFILL_BATCH = os.environ.get("MIMO_PREFILL_BATCH", "1") == "1"
 # MIMO_PREFILL_TRACE=0: run prefill batches eagerly instead of replaying their traces.
 PREFILL_TRACE = os.environ.get("MIMO_PREFILL_TRACE", "1") == "1"
+# Decode reads its RoPE cos / sin from device tables (TtMiMoModel.setup_decode_rope_tables) up to this context
+# (1M would cost 1.6 GB per chip); MIMO_DEVICE_ROPE=0 uploads them every step instead.
+DEVICE_ROPE = os.environ.get("MIMO_DEVICE_ROPE", "1") == "1"
+DEVICE_ROPE_MAX_LEN = 131072
 
 
 def _model_path(hf_config):
@@ -246,6 +251,8 @@ class MiMoV2ForCausalLM:
                     ]
                 )
             model.setup_vllm_kv_cache(self.per_lane, caches, groups, table_width)
+            if DEVICE_ROPE and self.max_seq_len <= DEVICE_ROPE_MAX_LEN:
+                model.setup_decode_rope_tables()
             self.kv_caches.append(caches)
         logger.info(
             f"MiMo vLLM KV: {num_blocks} blocks of {block_size} per lane, {len(buffers)} buffers per replica, "

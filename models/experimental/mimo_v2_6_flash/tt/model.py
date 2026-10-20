@@ -33,7 +33,7 @@ from .common import TILE, MeshPlan, as_weight, cache_name, compute_config, pad_t
 from .decoder import TtMiMoDecoderLayer, TtRMSNorm
 from .greedy_head import GreedyHead
 from .moe_stream import zero_output
-from .rope import MiMoRotarySetup
+from .rope import MiMoRotarySetup, partial_rope_cos_sin
 
 
 def prefill_padded_len(seq_len):
@@ -202,6 +202,7 @@ class TtMiMoModel:
         self.decode_trace = None
         self.greedy_head = None
         self.prefill_traces = {}  # (users, padded length) -> traced prefill batch (setup_prefill_batch_trace)
+        self.rope_tables = None  # decode cos / sin of every position (setup_decode_rope_tables)
         self.decode_users = None
         self.norm_buffers = None
         self.swa_table = None
@@ -785,7 +786,41 @@ class TtMiMoModel:
             kv_lib.per_chip(
                 self.plan, kv_lib.owner_mask(positions, tp, kv_rep), ttnn.bfloat16, ttnn.TILE_LAYOUT, False
             ),
+            *(
+                [host(positions.clamp(min=0).reshape(1, -1).to(torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)]
+                if self.rope_tables is not None
+                else []
+            ),
         )
+
+    def setup_decode_rope_tables(self):
+        """Device cos / sin tables of every position (both thetas), for decode steps that read the trace's own
+        positions (``rope_pos`` input, advanced by every replay) instead of uploading their cos / sin: a steady step
+        then copies nothing. Each table row is the host's ``decode_host_inputs`` value of that position, so the
+        values are bitwise the same. max_seq_len x 192 x 2 bytes x 4 tables per chip (50 MB at 32K)."""
+        assert self.decode_trace is None, "the tables must exist before the decode capture"
+        positions = torch.arange(self.max_seq_len)
+        tables = []
+        for name in ("swa", "full"):
+            setup = self.rope_setups[name]
+            cos, sin = partial_rope_cos_sin(positions, setup.head_dim, setup.rope_dim, setup.theta)
+            for t in (cos, sin):
+                tables.append(
+                    ttnn.from_torch(
+                        t,
+                        device=self.mesh_device,
+                        dtype=setup.datatype,
+                        layout=ttnn.ROW_MAJOR_LAYOUT,
+                        mesh_mapper=self.plan.replicate(),
+                    )
+                )
+        self.rope_tables = tables
+
+    def _decode_inputs(self, inputs, greedy_only=False):
+        """decode_forward_device's arguments from the trace's input list (with a ``rope_pos`` input last when the
+        decode RoPE tables are set up)."""
+        rope = {"rope_pos_tt": inputs[9]} if len(inputs) > 9 else {}
+        return self.decode_forward_device(*inputs[:9], greedy_only=greedy_only, **rope)
 
     def decode_forward_device(
         self,
@@ -798,14 +833,22 @@ class TtMiMoModel:
         mask_tt,
         pos_owned_tt,
         owner_mask_tt,
+        rope_pos_tt=None,
         greedy_only=False,
     ):
         """One decode step from device-resident inputs only (trace-capturable). Returns [1, 1, B, vocab / tp].
 
         ``greedy_only``: skip the per-chip top-k candidates; GreedyHead computes the greedy tokens and also writes
-        them into ``tokens_tt`` (the next step's input)."""
+        them into ``tokens_tt`` (the next step's input). ``rope_pos_tt`` (with ``rope_tables``): the cos / sin come
+        from the device tables at these positions, not from the cos / sin inputs."""
         x = ttnn.embedding(tokens_tt, self.embedding, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
         x = ttnn.reshape(x, (1, 1, self.max_batch, self.cfg.hidden_size))
+        made = []
+        if rope_pos_tt is not None:
+            for t in self.rope_tables:
+                row = ttnn.embedding(rope_pos_tt, t, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+                made.append(ttnn.reshape(row, (1, 1, self.max_batch, t.shape[-1])))
+            cos_swa, sin_swa, cos_full, sin_full = made
         rot_mats = {
             # SWA: the sharded mats plus the raw cos / sin rows (SwaDecodeQkv reads those).
             True: (*self.rope_setups["swa"].decode_rot_mats(cos_swa, sin_swa), cos_swa, sin_swa),
@@ -823,7 +866,7 @@ class TtMiMoModel:
             x = y
         logits = self._logits(x, h)
         x.deallocate(True)
-        for t in (*rot_mats[True][:2], *rot_mats[False]):
+        for t in (*rot_mats[True][:2], *rot_mats[False], *made):
             t.deallocate(True)
         if greedy_only:
             next_tokens = self.greedy_head(logits, token_input=tokens_tt)
@@ -866,6 +909,10 @@ class TtMiMoModel:
             ttnn.copy(output["next_tokens"], tokens_tt)
         ttnn.plus_one(cur_pos_tt, skip_negative_entries=True)
         ttnn.plus_one(pos_owned_tt, skip_negative_entries=True)
+        if len(inputs) > 9:
+            # The RoPE table index: idle slots start at 0 and advance too, at most as far as an active slot does,
+            # so the index stays inside the table until the next reload.
+            ttnn.plus_one(inputs[9])
 
     def capture_decode_trace(self, greedy_only=False):
         """Compile, then capture one decode step. Later decode calls refresh the inputs and replay it.
@@ -893,7 +940,7 @@ class TtMiMoModel:
         empty = torch.full((self.max_batch,), -1, dtype=torch.int32)
         host = self.prepare_decode_inputs_host(torch.zeros(self.max_batch, dtype=torch.int32), empty)
         inputs = [ttnn.to_device(t, self.mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG) for t in host]
-        warm = self.decode_forward_device(*inputs, greedy_only=greedy_only)
+        warm = self._decode_inputs(inputs, greedy_only=greedy_only)
         self._feed_back(inputs, warm, tokens_written=written)  # every slot is empty: positions stay -1
         for name, t in warm.items():
             if not (written and name == "next_tokens"):  # GreedyHead's buffer is persistent
@@ -902,7 +949,7 @@ class TtMiMoModel:
         fabric = getattr(self.plan, "fabric_gather", None)
         phase = fabric.phase if fabric is not None else None
         trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
-        output = self.decode_forward_device(*inputs, greedy_only=greedy_only)
+        output = self._decode_inputs(inputs, greedy_only=greedy_only)
         self._feed_back(inputs, output, tokens_written=written)
         ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
         # Every replay reuses the gather phases baked in at capture: back to back, replays only alternate the
@@ -942,7 +989,7 @@ class TtMiMoModel:
             ttnn.execute_trace(self.mesh_device, self.decode_trace["id"], cq_id=0, blocking=False)
             return self.decode_trace["output"]
         inputs = [ttnn.to_device(t, self.mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG) for t in host]
-        out = self.decode_forward_device(*inputs)
+        out = self._decode_inputs(inputs)
         for t in inputs:
             t.deallocate(True)
         return out
@@ -954,12 +1001,13 @@ class TtMiMoModel:
         assert self.decode_trace is not None, "a resident decode step replays the decode trace"
         assert int(positions.max()) < self.max_seq_len, f"position {int(positions.max())} >= {self.max_seq_len}"
         self._advance_swa(positions)
-        host = (
-            *self.rope_setups["swa"].decode_host_inputs(positions),
-            *self.rope_setups["full"].decode_host_inputs(positions),
-        )
-        for h, d in zip(host, self.decode_trace["inputs"][2:6]):
-            ttnn.copy_host_to_device_tensor(h, d)
+        if self.rope_tables is None:  # else the trace reads its cos / sin from the tables at its own positions
+            host = (
+                *self.rope_setups["swa"].decode_host_inputs(positions),
+                *self.rope_setups["full"].decode_host_inputs(positions),
+            )
+            for h, d in zip(host, self.decode_trace["inputs"][2:6]):
+                ttnn.copy_host_to_device_tensor(h, d)
         ttnn.execute_trace(self.mesh_device, self.decode_trace["id"], cq_id=0, blocking=False)
         return self.decode_trace["output"]
 
