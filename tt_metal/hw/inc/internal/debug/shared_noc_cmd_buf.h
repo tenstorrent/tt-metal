@@ -7,7 +7,7 @@
 #include <stdint.h>
 
 // Two dedicated-NOC data movement kernels that share one NOC (built with DEDICATED_NOC_SHARED, see
-// KernelAdvancedOptions::dedicated_noc_sharing) must program disjoint command buffers on it. Under the
+// DataMovement1XXConfig::dedicated_noc_sharing) must program disjoint command buffers on it. Under the
 // watcher's NoC sanitizer, every command they issue records its command buffer and checks the other RISC's
 // record. The hook sits in NOC_CMD_BUF_WRITE_REG (noc_nonblocking_api.h); the check is defined in
 // internal/debug/sanitize.h, which includes that header.

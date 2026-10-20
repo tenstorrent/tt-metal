@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Watcher check on two dedicated-NOC data movement kernels that share one NOC
-// (KernelAdvancedOptions::dedicated_noc_sharing): they must program disjoint NoC command buffers. A pair that
+// (DataMovement1XXConfig::dedicated_noc_sharing): they must program disjoint NoC command buffers. A pair that
 // keeps to its own command buffers runs clean; a pair that both write trips the check on the second writer.
 
 #include <fmt/base.h>
@@ -124,9 +124,9 @@ void RunSharedNocCmdBufTest(
                             .processor = processor,
                             .noc = NOC::NOC_0,
                             .noc_mode = NOC_MODE::DM_DEDICATED_NOC,
+                            .dedicated_noc_sharing = experimental::DedicatedNocSharing::SHARED_DISJOINT_TRAFFIC,
                         },
                 },
-            .advanced_options = {.dedicated_noc_sharing = experimental::DedicatedNocSharing::SHARED_DISJOINT_TRAFFIC},
         };
     };
     const experimental::KernelSpecName brisc_name{"brisc_writer"};

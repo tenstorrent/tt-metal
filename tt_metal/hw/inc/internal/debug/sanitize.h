@@ -409,7 +409,7 @@ void __attribute__((noinline)) debug_sanitize_post_addr_and_hang(
 
 #if defined(DEBUG_SANITIZE_SHARED_NOC_CMD_BUF)
 // This kernel shares its dedicated NOC with the other data movement kernel on the core
-// (KernelAdvancedOptions::dedicated_noc_sharing), which holds up only while the two program disjoint command
+// (DataMovement1XXConfig::dedicated_noc_sharing), which holds up only while the two program disjoint command
 // buffers: a command buffer carries the state of stateful (set_state / with_state) transactions, so a second
 // user redirects them. Called on every command issue. Records this RISC's use of cmd_buf on noc and reports
 // the other RISC having used it since the launch began (watcher_msg_t::noc_cmd_buf_usage, which BRISC

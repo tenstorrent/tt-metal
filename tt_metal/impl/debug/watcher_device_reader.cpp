@@ -933,7 +933,7 @@ void WatcherDeviceReader::Core::DumpNocSanitizeStatus(int noc) const {
             error_msg = fmt::format(
                 "{} issued a NoC command on noc{} command buffer {}, which {} has also used on it (its command "
                 "buffers: {:#x}). Two dedicated-NOC data movement kernels sharing a NOC "
-                "(KernelAdvancedOptions::dedicated_noc_sharing) must program disjoint command buffers.",
+                "(DataMovement1XXConfig::dedicated_noc_sharing) must program disjoint command buffers.",
                 get_riscv_name(reader_.env.get_hal(), programmable_core_type_, san.which_risc()),
                 noc,
                 san.l1_addr(),

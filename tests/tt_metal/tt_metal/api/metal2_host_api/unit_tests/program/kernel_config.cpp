@@ -83,8 +83,9 @@ TEST_F(ProgramSpecTestGen1, CPU_SharedDedicatedNocIsBriscNoc) {
         auto brisc_kernel = MakeMinimalGen1DMKernel("brisc_kernel", DataMovementProcessor::RISCV_0);
         auto ncrisc_kernel = MakeMinimalGen1DMKernel("ncrisc_kernel", DataMovementProcessor::RISCV_1);
         for (auto* kernel : {&brisc_kernel, &ncrisc_kernel}) {
-            (*std::get<DataMovementHardwareConfig>(kernel->hw_config).config_1xx).noc = noc;
-            kernel->advanced_options.dedicated_noc_sharing = DedicatedNocSharing::SHARED_DISJOINT_TRAFFIC;
+            auto& cfg = (*std::get<DataMovementHardwareConfig>(kernel->hw_config).config_1xx);
+            cfg.noc = noc;
+            cfg.dedicated_noc_sharing = DedicatedNocSharing::SHARED_DISJOINT_TRAFFIC;
         }
 
         ProgramSpec spec;

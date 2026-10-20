@@ -356,7 +356,7 @@ struct debug_eth_link_t {
 
 // The NoC command buffers each data movement RISC has programmed on one NOC since the current launch began,
 // a bit per command buffer. Kept by kernels built with DEDICATED_NOC_SHARED, the two dedicated-NOC kernels of
-// a core that share one NOC (KernelAdvancedOptions::dedicated_noc_sharing), which must keep to disjoint
+// a core that share one NOC (DataMovement1XXConfig::dedicated_noc_sharing), which must keep to disjoint
 // command buffers; the NoC sanitizer flags one that both have used. BRISC firmware zeroes it per launch.
 struct debug_noc_cmd_buf_usage_msg_t {
     volatile uint8_t by_risc[2];  // index 0: BRISC (DM0), 1: NCRISC (DM1)

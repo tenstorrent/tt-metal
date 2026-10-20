@@ -77,7 +77,7 @@ DataMovementConfig MakeGen1DataMovementConfig(const KernelSpec& kernel_spec) {
     auto defines = to_defines_map(kernel_spec.compiler_options.defines);
     // The watcher's NoC sanitizer checks that the two kernels sharing a dedicated NOC keep to disjoint
     // command buffers; only kernels built with this define run the check (internal/debug/sanitize.h).
-    if (kernel_spec.advanced_options.dedicated_noc_sharing == DedicatedNocSharing::SHARED_DISJOINT_TRAFFIC) {
+    if (gen1.dedicated_noc_sharing == DedicatedNocSharing::SHARED_DISJOINT_TRAFFIC) {
         defines["DEDICATED_NOC_SHARED"] = "1";
     }
 

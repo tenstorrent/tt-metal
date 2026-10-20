@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // One of the two data movement kernels of a program whose kernels share one dedicated NOC
-// (KernelAdvancedOptions::dedicated_noc_sharing). Copies `size` bytes between two L1 buffers on this core over
+// (DataMovement1XXConfig::dedicated_noc_sharing). Copies `size` bytes between two L1 buffers on this core over
 // the NOC, as a read (do_write = 0, the read command buffer) or a write (do_write = 1, the write command
 // buffer). With both kernels writing, both program the write command buffer and the watcher's shared-NOC
 // check trips.
