@@ -69,6 +69,14 @@ def _ci_unsupported_param_combos(**params):
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="ring"),
             id="torus-y-8x1-tp0",
         ),
+        # One 4x4 prefill stage (a Galaxy tray half): TP=4 on the axis-0 line, which keeps no ring.
+        pytest.param(
+            (4, 4),
+            torus_x_device_params(),
+            0,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+            id="torus-x-4x4-tp0",
+        ),
     ],
     indirect=["mesh_device", "device_params"],
 )

@@ -53,14 +53,14 @@ def _l1_small_per_bank(mesh_device):
     return ttnn.get_memory_view(mesh_device, ttnn.BufferType.L1_SMALL).total_bytes_allocated_per_bank
 
 
-def _walk_sampling_the_pool(mesh_device):
+def _walk_sampling_the_pool(mesh_device, sp_axis):
     """Walk `SEALS` depths, sampling the pool at each, and check the walk's own numbers.
 
     Returns the per-depth samples and the PCC. The accuracy check is part of the
     measurement rather than a separate gate: a walk that dies early or skips its
     gather also reports a flat footprint, so an unchecked footprint proves nothing.
     """
-    op = TtAttnRes(mesh_device, hidden_size=HIDDEN_SIZE, eps=EPS)
+    op = TtAttnRes(mesh_device, hidden_size=HIDDEN_SIZE, eps=EPS, sp_axis=sp_axis, tp_axis=1 - sp_axis)
 
     rng = generator(0)
     hidden_states = random_hidden(rng, PER_CHIP_TOKENS * op.sp_factor)
@@ -125,8 +125,8 @@ def _walk_sampling_the_pool(mesh_device):
     return samples, pcc
 
 
-@pytest.mark.parametrize("mesh_device, device_params", PLACEMENTS, indirect=["mesh_device", "device_params"])
-def test_l1_small_stays_empty_as_the_sealed_set_grows(mesh_device, device_params):
+@pytest.mark.parametrize("mesh_device, device_params, sp_axis", PLACEMENTS, indirect=["mesh_device", "device_params"])
+def test_l1_small_stays_empty_as_the_sealed_set_grows(mesh_device, device_params, sp_axis):
     """The op's share of the shared pool has to be nothing, at every depth.
 
     The mesh opens with the tightest pool a K3 config gives it, which is what makes this
@@ -134,7 +134,7 @@ def test_l1_small_stays_empty_as_the_sealed_set_grows(mesh_device, device_params
     lands them here, and at an empty one it would fall back to main L1 and this would
     pass on an op that still grows without bound.
     """
-    samples, pcc = _walk_sampling_the_pool(mesh_device)
+    samples, pcc = _walk_sampling_the_pool(mesh_device, sp_axis)
 
     footprints = sorted({footprint for _, footprint, _ in samples})
     assert footprints == [0], (
