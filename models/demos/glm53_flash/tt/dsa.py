@@ -37,8 +37,6 @@ Cache: ``[max_blocks, 1, block_size, 512]`` bf16, paged; page_table ``[B, max_bl
 
 from __future__ import annotations
 
-import os
-
 import torch
 
 import ttnn
@@ -281,12 +279,6 @@ class TtDSA(LightweightModule):
         return ttnn.reshape(ttnn.transpose(o, 1, 2), [1, 1, T, self.H * self.Dv])
 
     def _o_proj(self, o_heads: ttnn.Tensor) -> ttnn.Tensor:
-        if self.mesh.tp > 1 and os.environ.get("GLM53_FP32_REDUCE") == "1":
-            # experiment: fp32 partials through the all-reduce (bf16 partial sums lose precision when
-            # the head groups' contributions cancel)
-            y = ttnn.linear(o_heads, self.w_o, dtype=ttnn.float32, compute_kernel_config=self.hifi2)
-            y = self.mesh.all_reduce_cols(y)
-            return ttnn.typecast(y, ttnn.bfloat16)
         y = ttnn.linear(o_heads, self.w_o, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)
         return self.mesh.all_reduce_cols(y)  # TP partial -> replicated over the row's columns
 
@@ -537,10 +529,9 @@ class TtDSA(LightweightModule):
         """sparse_sdpa wants H % 32 == 0: pad a row-major [1, H, T, L] query with zero heads (their
         outputs are discarded by ``_unpad_heads``); a no-op when the local head count is tile-aligned."""
         H = q_rm.shape[1]
-        force = os.environ.get("GLM53_FORCE_HEAD_PAD") == "1"  # debug: pad a tile-aligned H by one tile too
-        if H % TILE == 0 and not force:
+        if H % TILE == 0:
             return q_rm
-        pad = (TILE - H % TILE) if H % TILE else TILE
+        pad = TILE - H % TILE
         key = ("qpad", pad, q_rm.shape[-2], q_rm.shape[-1])
         if key not in self._pad_cache:
             self._pad_cache[key] = ttnn.zeros(

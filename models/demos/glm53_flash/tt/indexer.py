@@ -193,6 +193,7 @@ class TtDSAIndexer(LightweightModule):
         self.hifi2 = _compute(device, ttnn.MathFidelity.HiFi2, packer_l1_acc=True)
         self.fp32 = _compute(device)
         self.score_cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=32, k_chunk_size=32, head_group_size=0)
+        self._mesh_rows = tuple(device.shape)[0] if isinstance(device, ttnn.MeshDevice) else 1
         self._const_cache: dict[tuple, ttnn.Tensor] = {}
 
     # ------------------------------------------------------------- stems
@@ -329,6 +330,12 @@ class TtDSAIndexer(LightweightModule):
         # kv_len*P tokens, and a decode query at position a may sit in a block starting at a - a%32 >= 4*pools.
         # The spare rows are causally invisible to the real query (pool p visible iff 4p+3 <= a).
         kv_len = min(cache.pools_per_user, max(TILE, -(-(num_pools_valid + 1) // TILE) * TILE))
+        # On a mesh the op treats every device as a sequence-parallel rank by default (device r along
+        # the whole-mesh ring scores with chunk_start + r*Sq); the queries here are REPLICATED over the
+        # tensor-parallel columns, so the SP axis is the row axis (extent 1 on a single-row mesh ->
+        # every chip uses chunk_start as-is). Multi-row meshes are the Phase-3 SP prefill engine.
+        if self._mesh_rows != 1:
+            raise NotImplementedError("sparse selection on a multi-row mesh is not wired (sequence-parallel rows)")
         scores = ttnn.experimental.indexer_score_dsa(
             q,
             cache.pools_batched(),
@@ -338,6 +345,7 @@ class TtDSAIndexer(LightweightModule):
             program_config=self.score_cfg,
             cache_batch_idx=user,
             kv_len=kv_len,
+            seq_shard_axes=[0],
         )  # [1,1,T,pools_per_user] bf16, -inf where not visible
         scores_rm = ttnn.to_layout(scores, ttnn.ROW_MAJOR_LAYOUT)
         expanded = ttnn.repeat_interleave(scores_rm, self.P, dim=-1)  # [1,1,T,4*pools] token-level scores
@@ -349,9 +357,6 @@ class TtDSAIndexer(LightweightModule):
         top = ttnn.experimental.topk_large_indices(expanded, k=k_eff, valid_length=kv_len * self.P)
         # [1,1,T,2048] uint32 token ids, 0xFFFFFFFF where -inf. (to_layout / repeat_interleave may alias
         # their inputs, so the intermediates are released together once the ids exist.)
-        for t in (scores, scores_rm, expanded):
-            if t.is_allocated():
-                ttnn.deallocate(t)
         tail = self._tail_ids(T, query_start)  # [1,1,T,P-1] uint32 (cached per geometry)
         width = k_eff + self.P - 1
         pad = (-width) % 128
@@ -360,6 +365,9 @@ class TtDSAIndexer(LightweightModule):
             parts.append(self._sentinels(T, pad))
         idx = ttnn.concat(parts, dim=-1)
         ttnn.deallocate(top)
+        for t in (scores, scores_rm, expanded):
+            if t.is_allocated():
+                ttnn.deallocate(t)
         return idx
 
     def _tail_ids(self, T: int, query_start: int) -> ttnn.Tensor:

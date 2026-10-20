@@ -126,7 +126,7 @@ def test_tp4_sparse_diagnostic_layer3(mesh_device):
     """Diagnostic for the TP4 sparse-row gap: per-row PCC distribution of the sparse rows, the
     indexer selection of every chip vs HF's index_ids (and across chips), and the sparse rows
     recomputed with the sparse path disabled (dense attention over the whole prefix)."""
-    from models.demos.glm53_flash.tests.test_dsa_long import _attention_input, per_row_stats
+    from models.demos.glm53_flash.tests.utils import attention_input, per_row_stats
 
     layer_idx = 3
     snapshot = default_snapshot_dir()
@@ -148,7 +148,7 @@ def test_tp4_sparse_diagnostic_layer3(mesh_device):
     # selection of every chip at the first decode position vs HF
     d = torch.load(DUMP / f"layer{layer_idx}_decode0.pt")
     hf_set = set(int(i) for i in d["index_ids"][0, 0].tolist() if i >= 0)
-    x_attn = _attention_input(raw, cfg, d["x_in"])
+    x_attn = attention_input(raw, cfg, d["x_in"])
     attn = dec.layer.attn
     idx = attn.indexer
     x_tt = ttnn.from_torch(
@@ -195,7 +195,7 @@ def test_tp4_sparse_attention_level_layer3(mesh_device):
     import os
 
     from models.demos.glm53_flash.reference.hf_layer_reference import build_layer, load_config
-    from models.demos.glm53_flash.tests.test_dsa_long import per_row_stats
+    from models.demos.glm53_flash.tests.utils import per_row_stats
 
     layer_idx = 3
     snapshot = default_snapshot_dir()
