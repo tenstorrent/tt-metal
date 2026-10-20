@@ -272,12 +272,19 @@ void assert_fastpath_parity(
     // Per-core and common runtime args, enumerated from the descriptor (same kernel push order in
     // both programs, so the kernel index doubles as the KernelHandle here).
     for (uint32_t k = 0; k < static_cast<uint32_t>(desc.kernels.size()); ++k) {
+        // The fast program has been enqueued, and the first enqueue pads every core's per-core args to the
+        // longest list in its kernel group (set_runtime_args_count); the rebuild never is. A fast list longer
+        // than the rebuild's, up to the kernel's longest, is that padding: compare the rebuild's slots only.
+        size_t longest = 0;
+        for (const auto& core_rt : desc.kernels[k].runtime_args) {
+            longest = std::max(longest, core_rt.second.size());
+        }
         for (const auto& core_rt : desc.kernels[k].runtime_args) {
             const CoreCoord& core = core_rt.first;
             const auto& f = GetRuntimeArgs(fast, k, core);
             const auto& r = GetRuntimeArgs(rebuilt, k, core);
             TT_FATAL(
-                f.size() == r.size(),
+                f.size() == r.size() || (f.size() > r.size() && f.size() <= longest),
                 "descriptor fast-path parity FAILED for op {}: kernel {} core ({},{}) has {} runtime args "
                 "on the cache-hit fast path but {} on a fresh rebuild.",
                 op_name,
@@ -286,7 +293,7 @@ void assert_fastpath_parity(
                 core.y,
                 f.size(),
                 r.size());
-            for (uint32_t i = 0; i < static_cast<uint32_t>(f.size()); ++i) {
+            for (uint32_t i = 0; i < static_cast<uint32_t>(r.size()); ++i) {
                 TT_FATAL(
                     f[i] == r[i],
                     "descriptor fast-path parity FAILED for op {}: kernel {} core ({},{}) arg[{}] "
