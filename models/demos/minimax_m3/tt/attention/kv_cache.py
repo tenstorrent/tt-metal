@@ -51,10 +51,11 @@ class MiniMaxKVCache(KvCaches):
     rank. ``page_table`` ``[num_users, width]`` (INT32, DRAM, replicated) maps row ``slot_id``'s global logical page
     q (positions ``[q*PAGE_SIZE, (q+1)*PAGE_SIZE)``) to a physical page in the pool of the SP rank that holds it,
     ``page_owner(q, chunk_local=chunk_size // sp, sp=sp)``, so a table is built for one chunk_size; or to
-    ``PAGE_UNMAPPED``. Before a request's first chunk its row holds the request's own pages and PAGE_UNMAPPED
-    everywhere else. A chunk writes its pad rows too, and a resume rewrites the tile below its start,
-    so a page the row maps from another request (a shared prefix) must lie wholly below the row's first write:
-    the shared prefix ends on a page boundary. A stale entry would put pad rows into another request's page. Not
+    ``PAGE_UNMAPPED``. Before a request's first chunk its row maps the pages it may read or write (its own, and any
+    shared prefix's) and PAGE_UNMAPPED everywhere else. A chunk writes its pad rows too, and a resume restarts at the
+    32-aligned position below the previous end, rewriting that partial tile, so a page the row maps from another
+    request (a shared prefix) must lie wholly below the row's first write: the shared prefix ends on a page boundary.
+    A stale entry would put pad rows into another request's page. Not
     paged: ring_joint reads (a stage holding a dense layer, M3's layers 0-2, keeps slot caches), index_k TP
     dedup, KV migration.
     """
