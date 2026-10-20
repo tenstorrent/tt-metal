@@ -72,22 +72,26 @@ struct MatmulUnifiedPlan {
     // compute thread's entries).
     uint32_t operand_buffer_depth = 0;
     uint32_t C_buffer_depth = 0;
-    // Multicast, when each core produces one C slice per batch on a rectangle laid out as the C slices tile C: the
-    // first core of each row reads the row's A slices and multicasts them along the row, and the first core of each
-    // column does the same with B down the column. When C is one row of C slices (one column) every core of the
-    // rectangle needs the same A (B), which its first core multicasts to all of them. Cores each sender multicasts
-    // to; 0 = that operand is not.
+    // Multicast, when one batch group (all the cores) produces one C slice per core and batch on a rectangle laid out
+    // as the C slices tile C: the first core of each row reads the row's A slices and multicasts them along the row,
+    // and the first core of each column does the same with B down the column. When C is one row of C slices (one
+    // column) every core of the rectangle needs the same A (B), which its first core multicasts to all of them. Cores
+    // each sender multicasts to; 0 = that operand is not.
     uint32_t A_mcast_num_dests = 0;
     uint32_t B_mcast_num_dests = 0;
     bool A_mcast_to_all_cores = false;
     bool B_mcast_to_all_cores = false;
 
-    // C slice assignment: one batch's C slices, walked across N then down M, split into contiguous
-    // runs per active core (the factory derives the per-core RTAs).
+    // C slice assignment: the active cores split into num_batch_groups groups of consecutive cores, and group g takes
+    // a contiguous run of the batches (the first batch_size % num_batch_groups groups one longer). Within a group one
+    // batch's C slices, walked across N then down M, are split into contiguous runs per core, which the core produces
+    // for each of its group's batches (the factory derives the per-core RTAs). One group unless one batch has too few
+    // C slices for the cores (batches with their own B).
     uint32_t C_slices_per_batch = 0;
+    uint32_t num_batch_groups = 1;
     tt::tt_metal::ShardOrientation orientation = tt::tt_metal::ShardOrientation::ROW_MAJOR;
     std::vector<tt::tt_metal::CoreCoord> cores;
-    uint32_t max_C_slices_per_core = 0;  // sizes the DFBs and gates partials aliasing
+    uint32_t max_C_slices_per_core = 0;  // per batch; sizes the DFBs and gates partials aliasing
 
     // Borrowable: the operand's L1 shard on each active core matches the C slice (batch 1, one C slice per core, a
     // shard grid in assignment order; C also needs one compute thread: with several, each thread owns every N-th
@@ -150,8 +154,9 @@ std::optional<MatmulUnifiedPlan> plan_unified_matmul(
     bool must_fit);
 
 // The shard spec of C whose shards are the plan's C slices, each on the core that produces it, in C_memory's layout;
-// nullopt when they do not form one: C not L1-sharded, batches with their own B, several C slices per core, or for
-// block sharding cores that are not one rectangle laid out as the C slices tile C.
+// nullopt when they do not form one: C not L1-sharded, several C slices per core (over all its batches), batches whose
+// rows the C slices do not tile exactly, or for block sharding cores that are not one rectangle laid out as the C
+// slices tile C.
 std::optional<tt::tt_metal::ShardSpec> C_slice_shard_spec(
     const MatmulUnifiedPlan& plan, const tt::tt_metal::MemoryConfig& C_memory);
 
@@ -177,6 +182,7 @@ struct ArchCostModel {
     double K_chunk_mcast_cycles;   // more per K chunk when an operand is multicast: the semaphore round trip
     double read_latency_cycles;    // before the first K chunk's data arrives
     double C_slice_cycles;         // per C slice
+    double A_pad_tile_cycles;      // per A row of a C slice whose last tile (ragged K) the reader zero-pads
     // A pipeline step costs (read^p + compute^p)^(1/p) for p = overlap_exponent: large p overlaps the two fully,
     // p = 1 not at all.
     double overlap_exponent;
@@ -186,42 +192,44 @@ struct ArchCostModel {
 
 constexpr ArchCostModel WORMHOLE_COST_MODEL{
     .tile_matmul_cycles = 16.0,
-    .unpack_A_tile_cycles = 42.3,
-    .unpack_B_tile_cycles = 32.6,
-    .subblock_cycles = 52.9,
-    .tile_pack_cycles = 29.3,
-    .tile_reload_cycles = 148.3,
-    .K_chunk_cycles = 0.0,
-    .tile_read_cycles = 70.2,
-    .core_tile_read_cycles = 91.1,
-    .tile_mcast_cycles = 92.8,
-    .tile_write_cycles = 182.0,
+    .unpack_A_tile_cycles = 47.1,
+    .unpack_B_tile_cycles = 37.5,
+    .subblock_cycles = 0.0,
+    .tile_pack_cycles = 26.2,
+    .tile_reload_cycles = 223.6,
+    .K_chunk_cycles = 538.9,
+    .tile_read_cycles = 64.5,
+    .core_tile_read_cycles = 90.0,
+    .tile_mcast_cycles = 110.6,
+    .tile_write_cycles = 62.3,
     .K_chunk_read_cycles = 0.0,
-    .K_chunk_mcast_cycles = 246.0,
-    .read_latency_cycles = 0.0,
-    .C_slice_cycles = 0.0,
-    .overlap_exponent = 6.6,
-    .dram_tile_cycles = 12.3,
+    .K_chunk_mcast_cycles = 373.3,
+    .read_latency_cycles = 1611.0,
+    .C_slice_cycles = 269.6,
+    .A_pad_tile_cycles = 8099.9,
+    .overlap_exponent = 10.0,
+    .dram_tile_cycles = 10.7,
 };
 
 constexpr ArchCostModel BLACKHOLE_COST_MODEL{
     .tile_matmul_cycles = 16.0,
-    .unpack_A_tile_cycles = 42.3,
-    .unpack_B_tile_cycles = 32.6,
-    .subblock_cycles = 52.9,
-    .tile_pack_cycles = 29.3,
-    .tile_reload_cycles = 148.3,
-    .K_chunk_cycles = 0.0,
-    .tile_read_cycles = 35.1,
-    .core_tile_read_cycles = 45.6,
-    .tile_mcast_cycles = 46.4,
-    .tile_write_cycles = 91.0,
+    .unpack_A_tile_cycles = 47.1,
+    .unpack_B_tile_cycles = 37.5,
+    .subblock_cycles = 0.0,
+    .tile_pack_cycles = 26.2,
+    .tile_reload_cycles = 223.6,
+    .K_chunk_cycles = 538.9,
+    .tile_read_cycles = 32.3,
+    .core_tile_read_cycles = 45.0,
+    .tile_mcast_cycles = 55.3,
+    .tile_write_cycles = 31.2,
     .K_chunk_read_cycles = 0.0,
-    .K_chunk_mcast_cycles = 246.0,
-    .read_latency_cycles = 0.0,
-    .C_slice_cycles = 0.0,
-    .overlap_exponent = 6.6,
-    .dram_tile_cycles = 8.3,
+    .K_chunk_mcast_cycles = 373.3,
+    .read_latency_cycles = 1611.0,
+    .C_slice_cycles = 269.6,
+    .A_pad_tile_cycles = 8099.9,
+    .overlap_exponent = 10.0,
+    .dram_tile_cycles = 7.2,
 };
 
 constexpr ArchCostModel QUASAR_COST_MODEL{
@@ -240,6 +248,7 @@ constexpr ArchCostModel QUASAR_COST_MODEL{
     .K_chunk_mcast_cycles = 220.9,
     .read_latency_cycles = 321.0,
     .C_slice_cycles = 48.8,
+    .A_pad_tile_cycles = 1000.0,
     .overlap_exponent = 9.5,
     .dram_tile_cycles = 4.0,
 };
@@ -247,9 +256,10 @@ constexpr ArchCostModel QUASAR_COST_MODEL{
 // A config is what the caller asks for, its placement is the cores, C slice and orientation, and the plan
 // (MatmulUnifiedPlan) is everything derived from a config with a placement.
 // Returns `requested` with the placement whose plan has the lowest estimated cycles, and that plan's C slice, subblock
-// and K chunk, among: a sharded output's shard grid, a 2D rectangle, 1D across N and across M, and the cores of a
-// height-sharded A or a width-sharded B. A sharded C prefers placements whose C slices are its shards (written in
-// place), but takes any. nullopt when the unified matmul cannot run the case or no placement fits.
+// and K chunk, among: a sharded output's shard grid, a 2D rectangle, the whole grid for batches with their own B, 1D
+// across N and across M, and the cores of a height-sharded A or a width-sharded B. A sharded C prefers placements whose
+// C slices are its shards (written in place), but takes any. nullopt when the unified matmul cannot run the case or no
+// placement fits.
 std::optional<operations::experimental::quasar::matmul::MatmulUnifiedProgramConfig> choose_unified_placement(
     const ttnn::Tensor& input_tensor_a,
     const ttnn::Tensor& input_tensor_b,

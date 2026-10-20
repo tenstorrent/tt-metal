@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Unified matmul reader: per batch, C slice and K chunk it pushes one A slice
+// Unified matmul reader: per batch of its batch group, C slice and K chunk it pushes one A slice
 // ([C_slice_M_tiles][K_chunk_tiles] tiles) and one B slice ([K_chunk_tiles][C_slice_N_tiles]), both
 // row-major, matching the compute kernel's loop order and indexing. Slices are sized to the
 // subblock-padded C slice dims; tiles past the true slice or past M/N are never read (their stale
@@ -49,6 +49,8 @@ template <
     uint32_t A_mcast_num_dests,   // cores an A sender multicasts to (its row minus itself); 0 = no A multicast
     uint32_t B_mcast_num_dests>   // cores a B sender multicasts to (its column minus itself); 0 = no B multicast
 TT_KERNEL void reader(
+    uint32_t first_batch,
+    uint32_t num_batches,
     uint32_t first_C_slice,
     uint32_t num_C_slices,
     uint32_t A_mcast_receiver,  // 1 when this core's A slices come from the first core of its multicast group
@@ -61,8 +63,9 @@ TT_KERNEL void reader(
     uint32_t B_mcast_sender_y,
     uint32_t B_mcast_end_x,
     uint32_t B_mcast_end_y) {
-    // first_C_slice: this core's first C slice in the row-major walk over C (across N, then down M);
-    // num_C_slices: how many consecutive ones it produces, per batch.
+    // first_batch, num_batches: the batches of this core's batch group; first_C_slice: this core's first C slice in the
+    // row-major walk over one batch's C (across N, then down M); num_C_slices: how many consecutive ones it produces,
+    // per batch.
     constexpr DataFormat A_format = get_dataformat(dfb::A_slice);
     constexpr uint32_t A_slice_tiles = C_slice_M_padded_tiles * K_chunk_tiles;
     constexpr uint32_t B_slice_tiles = K_chunk_tiles * C_slice_N_padded_tiles;
@@ -119,7 +122,9 @@ TT_KERNEL void reader(
     const uint32_t A_rows_to_read = A_mcast_receiver ? 0 : C_slice_M_tiles;
     const uint32_t B_rows_to_read = B_mcast_receiver ? 0 : K_chunk_tiles;
 
-    for (uint32_t batch = 0; batch < batch_size; ++batch) {
+    // With one batch the bounds are compile-time, so the address math folds away.
+    const uint32_t end_batch = batch_size == 1 ? 1 : first_batch + num_batches;
+    for (uint32_t batch = batch_size == 1 ? 0 : first_batch; batch < end_batch; ++batch) {
         const uint32_t A_batch_first_tile = batch * A_batch_stride_tiles;
         const uint32_t B_batch_first_tile = batch * B_batch_stride_tiles;
 
@@ -129,7 +134,7 @@ TT_KERNEL void reader(
             const uint32_t C_slice_first_N_tile = ((first_C_slice + MN_chunk) % C_slices_across_N) * C_slice_N_tiles;
 #ifdef FUSE_BIAS
             // The compute's bias waits take the reader threads' parts of the DFB in turn, one per C slice.
-            const uint32_t C_slice_on_core = batch * num_C_slices + MN_chunk;  // counted over all batches
+            const uint32_t C_slice_on_core = (batch - first_batch) * num_C_slices + MN_chunk;  // over its batches
             if (C_slice_on_core % num_reader_threads == thread) {
                 bias_row.reserve_back(C_slice_N_padded_tiles);
                 for (uint32_t n_tile = 0; n_tile < C_slice_N_tiles && C_slice_first_N_tile + n_tile < N_tiles;
@@ -181,15 +186,6 @@ TT_KERNEL void reader(
                                 {.page_id = A_row_first_tile + k_tile},
                                 {.offset_bytes = A_row_offset_bytes + k_tile * A_tile_bytes});
                         }
-                        if constexpr (A_last_K_tile_valid_columns > 0) {
-                            // K is not a tile multiple, and this row's last tile is A's last K tile: once it has
-                            // landed, zero its padding columns so they add nothing to C.
-                            if (K_chunk == K_chunks_per_C_slice - 1) {
-                                noc.async_read_barrier();
-                                pad_last_ktile<A_format, A_last_K_tile_valid_columns>(
-                                    A_slice.get_write_ptr() + A_row_offset_bytes + (K_chunk_tiles - 1) * A_tile_bytes);
-                            }
-                        }
                     }
                 }
                 if constexpr (!B_borrowed) {
@@ -216,6 +212,17 @@ TT_KERNEL void reader(
                     }
                 }
                 noc.async_read_barrier();
+                if constexpr (!A_borrowed && A_last_K_tile_valid_columns > 0) {
+                    // K is not a tile multiple: in the last K chunk each row's last tile is A's last K tile, whose
+                    // padding columns are zeroed once the reads have landed so they add nothing to C.
+                    if (K_chunk == K_chunks_per_C_slice - 1) {
+                        for (uint32_t m_tile = 0; m_tile < A_rows_to_read && C_slice_first_M_tile + m_tile < M_tiles;
+                             ++m_tile) {
+                            pad_last_ktile<A_format, A_last_K_tile_valid_columns>(
+                                A_slice.get_write_ptr() + (m_tile * K_chunk_tiles + K_chunk_tiles - 1) * A_tile_bytes);
+                        }
+                    }
+                }
 
                 if constexpr (A_mcast_num_dests > 0) {
                     if (A_mcast_receiver) {
