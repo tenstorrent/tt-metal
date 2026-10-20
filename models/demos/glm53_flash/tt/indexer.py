@@ -107,7 +107,8 @@ class TtIndexCache:
         # least index_select_pools visible pools, the width the decode top-k ranks for every user (a short
         # allocation then holds 544 pool rows = 136 KB per user)
         pools = max(pools, cfg.index_select_pools)
-        self.pools_per_user = -(-(pools + DECODE_SCORE_SLACK) // TILE) * TILE
+        # rounded to 256 pools (8 tiles): the batched decode scorer streams the keys in 8-tile chunks
+        self.pools_per_user = -(-(pools + DECODE_SCORE_SLACK) // (8 * TILE)) * (8 * TILE)
         self.pool_blocks = self.pools_per_user // TILE
         self.pool_cache = ttnn.zeros(
             (max_batch * self.pool_blocks, 1, TILE, self.D),

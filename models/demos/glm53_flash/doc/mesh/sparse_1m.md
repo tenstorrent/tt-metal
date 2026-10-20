@@ -233,14 +233,28 @@ per-user top-k calls), all green (`sparse1m_main_{customop,traced,regress,1m,per
 | `test_sparse_1m.py` | PCC vs HF-restricted 0.999803 / 0.999838 (16 K), 0.999767 / 0.999757 (131 K), 0.999680 / 0.999706 (1 M); attention step 1.89 / 3.43 / 5.38 ms (16 K), 2.15 / 3.93 / 6.36 (131 K), 2.99 / 7.88 / 14.25 (1 M) at 1 / 4 / 8 users; eager reference 2.4 / 4.0 / 13.6 ms (1 user) |
 | `test_sparse_perf.py` (layer 3, traced) | 5.92 / 9.10 / 12.78 ms (4 K), 6.06 / 9.64 / 14.15 (131 K), 7.05 / 13.59 / 21.86 (1 M) at 1 / 4 / 8 users; DSA block 60 / 93 / 129 device ops |
 
-These are the figures of the integration branch; the batched-top-k columns of 4.2 / 4.3 (1 M: 4.5 / 6.4 ms attention,
-10.2 / 14.2 ms layer at 4 / 8 users) need the per-row top-k as a custom op.
+### 4.5 `custom_ops/topk_rows` (the per-row top-k as a model-local op; default `GLM53_TOPK_BATCHED=1`)
+
+Main-tree build, `sparse1m_topkrows_{op,traced,1m,perf,regress}.log`, all green:
+
+| what | result |
+|---|---|
+| `tests/custom_ops/test_topk_rows.py` (10 cases) | every row's ids inside its own bound and score multisets equal to torch's per-prefix top-512 (W 1056 / 262 176, B 1/4/8/32), trace replay with refreshed bounds; 262 K rows: 1.33 / 1.33 / 1.26 ms for 1 / 4 / 8 rows in one call vs 1.15 / 4.70 / 9.38 ms of per-user shared-op calls |
+| `test_dsa_sparse_traced.py` | identical to 4.4 (worst 0.999847; ids 97.9-99.0 % of HF) |
+| `test_sparse_1m.py` | PCC identical to 4.4; attention step 1.89 / 3.55 / 5.31 ms (16 K), 2.00 / 3.55 / 5.43 (131 K), **3.01 / 4.53 / 6.41 ms (1 M)** at 1 / 4 / 8 users |
+| `test_sparse_perf.py` | layer-3 step 5.94 / 9.14 / 13.13 ms (4 K), 6.07 / 9.27 / 13.40 (131 K), **7.05 / 10.26 / 14.23 (1 M)**; DSA block 60 / 90 / 122 device ops |
+| regression (`test_decode_trace` l3, `test_batch8` B=8 l3, `test_dsa_long` x4) | 7/7 passed |
+
+The per-user term left at 1 M is the scorer call (0.38 ms + the 32-row output and the q / w / row slices per user):
+`custom_ops/index_score_decode` (section 5, item 1) scores all users in one program with the 32 heads as the rows
+of one query tile row (behind `GLM53_SCORER_BATCHED=1` until validated).
 
 ## 5. What remains
 
-1. The per-user scorer: a batched, DRAM-speed `indexer_score_dsa` decode mode (per-batch `cache_batch_idx` /
-   `valid_end` tensors, one output row per user) would take the 8-user attention step at 1 M from 14 ms towards
-   the ~1 ms (bf16) / ~0.5 ms (bfp8 pooled keys) floor; bfp8 pooled keys halve the bytes today (accuracy gate).
+1. The per-user scorer: `custom_ops/index_score_decode` (one program for all users, heads as the rows of one
+   query tile row, keys streamed once, one output row per user; `GLM53_SCORER_BATCHED=1`) takes the per-user
+   scorer calls out; then bfp8 pooled keys halve the bytes (the budget is that read's floor; selected-set
+   exactness check vs bf16).
 2. The op count: 4 ops per user (slice q, slice w, score, row slice) + ~45 fixed; the batched scorer removes
    the per-user part; the metadata blend (5 ops) can fold into the gather kernel (dense users = pools in order,
    tail slot) once it takes the positions tensor. A multi-core top-k row (the 512-window chain is serial on one

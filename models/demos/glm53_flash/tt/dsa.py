@@ -45,7 +45,9 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.demos.glm53_flash.custom_ops.index_score_decode.op import IndexScoreDecode
 from models.demos.glm53_flash.custom_ops.paged_pool_gather.op import PagedPoolGather
+from models.demos.glm53_flash.custom_ops.topk_rows.op import TopkRows
 from models.demos.glm53_flash.tt.config import GLM53FlashConfig
 from models.demos.glm53_flash.tt.indexer import TtDSAIndexer, TtIndexCache, height_shard_rows
 from models.demos.glm53_flash.tt.matmul_configs import DecodeLinear
@@ -572,6 +574,12 @@ class TtDSA(LightweightModule):
         # the sparse-decode latent gather (model-local generic op) and its persistent compact output per batch size
         self.pool_gather = PagedPoolGather(device, pool_size=cfg.index_kpool)
         self._compact: dict[int, ttnn.Tensor] = {}
+        # the per-row-bounded top-k over all users' score rows (model-local generic op) and its persistent output
+        self.topk_rows = TopkRows(device, k=cfg.index_select_pools)
+        self._top_buf: dict[int, ttnn.Tensor] = {}
+        # the batched one-query-per-user indexer scorer (model-local generic op) and its persistent score rows
+        self.index_scorer = IndexScoreDecode(device)
+        self._score_buf: dict[int, ttnn.Tensor] = {}
 
     def set_stage_timer(self, timer: StageTimer | None):
         """Install (or remove, ``None``) the per-stage timer on this layer and its indexer."""
@@ -1073,6 +1081,31 @@ class TtDSA(LightweightModule):
         B = q_lat.shape[-2]
         Hi, D, P, K = idx.Hi, idx.D, idx.P, self.cfg.index_select_pools
         q_i, w_i = idx.queries_and_weights(q_resid, q_resid, w=w)  # [1,Hi,B,D], [1,1,B,Hi]
+        # GLM53_SCORER_BATCHED=1: ONE index_score_decode program scores every user's query (its 32 heads as the
+        # rows of one query tile row) against its pooled keys -> [B,1,1,W] score rows, no per-user calls, no
+        # 32-row score blocks (needs pools_per_user % 256 == 0: TtIndexCache rounds to 256)
+        scorer_batched = os.environ.get("GLM53_SCORER_BATCHED", "0") == "1"
+        batched = meta.valid_len_rows is not None and os.environ.get("GLM53_TOPK_BATCHED", "1") == "1"
+        if scorer_batched:
+            assert batched, "GLM53_SCORER_BATCHED needs the batched top-k (GLM53_TOPK_BATCHED=1)"
+            q4 = ttnn.transpose(q_i, 1, 2)  # [1,B,Hi,D]
+            ttnn.deallocate(q_i)
+            W = cache.index.pools_per_user
+            if B not in self._score_buf:
+                self._score_buf[B] = ttnn.zeros(
+                    (B, 1, 1, W), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device
+                )
+            rows = self.index_scorer(q4, w_i, cache.index.pools_batched(), self._score_buf[B])  # [B,1,1,W] bf16 RM
+            ttnn.deallocate(q4)
+            ttnn.deallocate(w_i)
+            self._mark("index_score")
+            if B not in self._top_buf:
+                self._top_buf[B] = ttnn.zeros(
+                    (B, 1, 1, K), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device
+                )
+            top = self.topk_rows(rows, meta.valid_len_rows, self._top_buf[B])  # [B,1,1,K] uint32, per-row bounds
+            self._mark("topk")
+            return self._gather_and_attend(top, q_lat, cache, meta, B, P, out_persistent=True)
         # per-user 32-row query blocks with the user's query in row 0: the B rows followed by 31 zero
         # rows, sliced at [u, u + 32) (rows past the user's are other users' queries or zeros: scored and
         # dropped by the row-0 slice inside score_decode_row)
@@ -1081,10 +1114,9 @@ class TtDSA(LightweightModule):
         ttnn.deallocate(q_i)
         ttnn.deallocate(w_i)
         self._mark("index_queries")
-        # GLM53_TOPK_BATCHED=1: the top-k runs ONCE over all users' score rows with per-row bounds (``valid_len_rows``):
-        # one row costs the same as B rows in one call (1.14 ms at 262 K pools). The shared topk_large_indices takes a
-        # single bound only; the per-row variant is a pending model-local custom op, so the default is per-user calls.
-        batched = meta.valid_len_rows is not None and os.environ.get("GLM53_TOPK_BATCHED", "0") == "1"
+        # GLM53_TOPK_BATCHED=1 (default): the top-k runs ONCE over all users' score rows with per-row bounds
+        # (``valid_len_rows``) through the model-local ``topk_rows`` op: one row costs the same as B rows in one call
+        # (1.14 ms at 262 K pools); 0 = one shared topk_large_indices call per user (its single bound)
         rows_or_tops = []
         for u in range(B):
             qb = ttnn.slice(q_big, [0, 0, u, 0], [1, Hi, u + TILE, D])
@@ -1106,7 +1138,11 @@ class TtDSA(LightweightModule):
             if B > 1:
                 for t in rows_or_tops:
                     ttnn.deallocate(t)
-            top = idx.select_decode_pools(rows, meta.valid_len_rows)  # [B,1,1,K] uint32, per-row bounds
+            if B not in self._top_buf:  # persistent output of the generic op
+                self._top_buf[B] = ttnn.zeros(
+                    (B, 1, 1, K), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device
+                )
+            top = self.topk_rows(rows, meta.valid_len_rows, self._top_buf[B])  # [B,1,1,K] uint32, per-row bounds
             ttnn.deallocate(rows)
             self._mark("topk")
         else:
@@ -1114,8 +1150,17 @@ class TtDSA(LightweightModule):
             if B > 1:
                 for t in rows_or_tops:
                     ttnn.deallocate(t)
+        return self._gather_and_attend(top, q_lat, cache, meta, B, P, out_persistent=batched)
+
+    def _gather_and_attend(
+        self, top, q_lat, cache: TtLatentCache, meta: SparseDecodeMeta, B: int, P: int, *, out_persistent: bool
+    ):
+        """The batched tail of ``_decode_unified``: complete the ranked pool lists with the tail pool and the dense
+        users' in-order lists, gather the pools into the compact cache, attend. ``top`` [B,1,1,K] uint32
+        (``out_persistent``: a persistent generic-op output, not deallocated)."""
         ext = ttnn.concat([top, meta.tail_pool], dim=-1)  # [B,1,1,K+1] uint32: ranked pools | tail pool
-        ttnn.deallocate(top)
+        if not out_persistent:
+            ttnn.deallocate(top)
         ext_f = ttnn.typecast(ext, ttnn.float32)  # exact: pool ids < 2^24
         ttnn.deallocate(ext)
         ids_f = ttnn.multiply(ext_f, meta.keep)
