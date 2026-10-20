@@ -3701,6 +3701,64 @@ def test_matmul_block_float_ktile_padding_fp32_dest_acc(device, fp32_dest_acc_en
     assert_with_pcc(torch_output, output, pcc=pcc)
 
 
+@pytest.mark.skipif(is_blackhole(), reason="Wormhole only")
+@pytest.mark.parametrize("subblock", [(3, 3), (3, 4), (4, 3), (3, 5), (5, 3), (4, 4)])
+@pytest.mark.parametrize("k_tiles_per_core", [1, 2])
+@pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi, ttnn.MathFidelity.HiFi4])
+def test_matmul_1d_gather_in0_full_sync_odd_subblock(device, subblock, k_tiles_per_core, math_fidelity):
+    h, w = subblock
+    num_cores = 2
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores - 1, 0))})
+    m, k, n = 32 * h, 32 * k_tiles_per_core * num_cores, 32 * w * num_cores
+    torch.manual_seed(0)
+    torch_a = torch.randn(1, 1, m, k, dtype=torch.bfloat16)
+    torch_b = torch.randn(1, 1, k, n, dtype=torch.bfloat16)
+
+    def width_sharded(shape):
+        return ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(grid, shape, ttnn.ShardOrientation.ROW_MAJOR),
+        )
+
+    a = ttnn.from_torch(
+        torch_a, layout=ttnn.TILE_LAYOUT, device=device, memory_config=width_sharded([m, k // num_cores])
+    )
+    b = ttnn.from_torch(
+        torch_b, layout=ttnn.TILE_LAYOUT, device=device, memory_config=width_sharded([k, n // num_cores])
+    )
+    program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(num_cores, 1),
+        in0_block_w=k_tiles_per_core,
+        out_subblock_h=h,
+        out_subblock_w=w,
+        per_core_M=h,
+        per_core_N=w,
+        fuse_batch=True,
+        fused_activation=None,
+        mcast_in0=False,
+        gather_in0=True,
+        hop_cores=ttnn.CoreRangeSet([]),
+        untilize_out=False,
+    )
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=math_fidelity,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=False,
+        dst_full_sync_en=True,
+    )
+    output = ttnn.matmul(
+        a,
+        b,
+        program_config=program_config,
+        memory_config=width_sharded([m, n // num_cores]),
+        compute_kernel_config=compute_kernel_config,
+    )
+    assert_with_pcc(torch_a.float() @ torch_b.float(), ttnn.to_torch(output).float(), 0.999)
+
+
 @pytest.mark.parametrize("mcast_in0", [True, False], ids=["in0_mcast", "in1_mcast"])
 @pytest.mark.parametrize("out_block_w", [4, 2, 1])
 def test_matmul_1d_sharded_output_narrow_out_block(device, out_block_w, mcast_in0):
