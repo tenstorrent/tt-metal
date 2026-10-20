@@ -13,7 +13,7 @@
 // exponent, so the kept rows pack to the same bytes; the new rows round half up as paged_fused_update_cache's) ->
 // cb_out, written back to the cache.
 //
-// runtime args: [user | h << 8, k_src, v_src, k_cache, v_cache, pos, page_table]
+// runtime args: [user | h << 8, k_src, v_src, k_cache, v_cache, pos, page_table, (KV_QK_JOINT: v_src of V head 1)]
 // compile-time args: [cb_scr, M, kv_heads, head_tiles, block, pt_row_bytes, users, cb_old, cb_new, cb_mask, cb_out,
 // accessors (k_cache, v_cache, pos, page_table, k_src)]  (cb_old / cb_new / cb_out: K's; V's are the next index)
 
@@ -26,7 +26,18 @@
 void kernel_main() {
     const uint32_t arg0 = get_arg_val<uint32_t>(0);
     const uint32_t user = arg0 & 0xFF, h = (arg0 >> 8) & 0xFF;
-    const uint32_t src_addr = get_arg_val<uint32_t>(1 + KV_SEL);
+#ifdef KV_QK_JOINT
+    // the sources as split by nlp_create_qkv_heads(num_heads = q heads + kv heads, num_kv_heads = 1) (one RoPE op
+    // for Q and K): K = heads KV_QK_JOINT + h of the "q" tensor (arg 1), V head 0 = the "k" tensor (arg 2), V head 1 =
+    // the "v" tensor (arg 7)
+#if KV_SEL == 0
+    const uint32_t src_addr = get_arg_val<uint32_t>(1), hs = h + KV_QK_JOINT;
+#else
+    const uint32_t src_addr = h == 0 ? get_arg_val<uint32_t>(2) : get_arg_val<uint32_t>(7), hs = 0;
+#endif
+#else
+    const uint32_t src_addr = get_arg_val<uint32_t>(1 + KV_SEL), hs = h;
+#endif
     const uint32_t cache_addr = get_arg_val<uint32_t>(3 + KV_SEL);
     const uint32_t pos_addr = get_arg_val<uint32_t>(5);
     const uint32_t pt_addr = get_arg_val<uint32_t>(6);
@@ -123,7 +134,7 @@ void kernel_main() {
         const uint32_t R = r * users + user, sr = R % 32;
         const uint32_t src_off = (sr < 16 ? 0 : 1024) + (sr % 16) * 32;
         for (uint32_t t = 0; t < head_tiles; ++t) {
-            const uint64_t s_ = s_s.get_noc_addr((h * row_tiles + R / 32) * head_tiles + t) + src_off;
+            const uint64_t s_ = s_s.get_noc_addr((hs * row_tiles + R / 32) * head_tiles + t) + src_off;
             const uint32_t d = new_l1 + (g * head_tiles + t) * tile16 + dst_off;
             for (uint32_t f = 0; f < 2; ++f) {
                 noc_async_read(s_ + f * 512, d + f * 512, 32);

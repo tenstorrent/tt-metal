@@ -380,7 +380,13 @@ class BatchedKVWrite:
         io = [t for i, t in enumerate(io) if all(t is not u for u in io[:i])]
         ttnn.generic_op(io, ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=[cb]))
 
-    def _call_pack(self, k, v, k_cache, v_cache, pos_ui, page_table):
+    def joint(self, qk, v0, v1, cache, pos_ui, page_table, k_head0):
+        """The pack path from nlp_create_qkv_heads(num_heads = q + kv heads, num_kv_heads = 1)'s split: K = heads
+        k_head0 .. of qk (Q and K rotated by one RoPE op), V heads 0 / 1 = the one-head tensors v0 / v1."""
+        assert self.kv_heads == 2 and self.hpc == 1
+        self._call_pack(qk, v0, cache[0], cache[1], pos_ui, page_table, joint=(v1, k_head0))
+
+    def _call_pack(self, k, v, k_cache, v_cache, pos_ui, page_table, joint=None):
         """The BFP8_b caches with the packing on the compute core (fused_decode/kernels/b32_kv_write_pack*.cpp: the
         RISC-V row packing took ~15 of b32_kv_write.cpp's ~20 us per layer). One layer, one core per (user, kv head)."""
         from ..fused_decode.boundary import KERNEL_DIR
@@ -395,6 +401,8 @@ class BatchedKVWrite:
             u, h = i // self.kv_heads, i % self.kv_heads
             rt[c.x][c.y] = [u | (h << 8), k.buffer_address(), v.buffer_address(), k_cache.buffer_address(),
                             v_cache.buffer_address(), pos_ui.buffer_address(), page_table.buffer_address()]  # fmt: skip
+            if joint is not None:
+                rt[c.x][c.y].append(joint[0].buffer_address())
         dm = [
             ttnn.KernelDescriptor(
                 kernel_source=str(KERNEL_DIR / "b32_kv_write_pack.cpp"), core_ranges=self.cores, compile_time_args=ct,
@@ -403,7 +411,7 @@ class BatchedKVWrite:
                     processor=(ttnn.DataMovementProcessor.RISCV_0, ttnn.DataMovementProcessor.RISCV_1)[sel],
                     noc=(ttnn.NOC.NOC_0, ttnn.NOC.NOC_1)[sel],
                 ),
-                defines=[("KV_SEL", str(sel))],
+                defines=[("KV_SEL", str(sel))] + ([("KV_QK_JOINT", str(joint[1]))] if joint is not None else []),
             )
             for sel in (0, 1)
         ]  # fmt: skip
@@ -425,7 +433,7 @@ class BatchedKVWrite:
         cbs = [cb(cb_scr, bf16, 512, 1), cb(cb_old, bf8, 1088, n), cb(cb_old + 1, bf8, 1088, n), cb(cb_new, bf16, 2048, n),
                cb(cb_new + 1, bf16, 2048, n), cb(cb_mask, bf16, 2048, 2), cb(cb_out, bf8, 1088, n),
                cb(cb_out + 1, bf8, 1088, n)]  # fmt: skip
-        io = [pos_ui, page_table, k, v, k_cache, v_cache]
+        io = [pos_ui, page_table, k, v, k_cache, v_cache] + ([joint[0]] if joint is not None else [])
         ttnn.generic_op(io, ttnn.ProgramDescriptor(kernels=dm + [comp], semaphores=[], cbs=cbs))
 
 
@@ -897,12 +905,12 @@ class _UserBlockAttention:
             for n in sorted({n for _, n in self.programs})
         }
 
-    def __call__(self, q, k_cache, v_cache, pos_ui, page_table, sinks, scale, heads_io=False):
+    def __call__(self, q, k_cache, v_cache, pos_ui, page_table, sinks, scale, heads_io=False, q_heads=None):
         """q: [1, rows, heads, hd] (row 32 i + u, rotated); pos_ui: INT32 [rows] (8 u + i: start_u + i); page_table:
         INT32 [users, blocks]. Returns the attention output in q's layout. heads_io: q in the heads layout [1, heads,
         rows, hd] (the RoPE output) and the output [1, 1, rows, heads * hd] (o_proj's input) in L1."""
-        if heads_io:
-            shape, mc = [1, 1, q.shape[2], q.shape[1] * q.shape[3]], ttnn.L1_MEMORY_CONFIG
+        if heads_io:  # (q_heads: q's first heads are the query heads, e.g. Q and K in one RoPE output)
+            shape, mc = [1, 1, q.shape[2], (q_heads or q.shape[1]) * q.shape[3]], ttnn.L1_MEMORY_CONFIG
         else:
             shape, mc = list(q.shape), ttnn.DRAM_MEMORY_CONFIG
         out = ttnn.empty(shape, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.mesh, memory_config=mc)
@@ -1091,6 +1099,8 @@ class BatchedVerify:
             ttnn.L1_MEMORY_CONFIG if os.environ.get("B32_MOE_IN_L1", "1") == "1" else ttnn.DRAM_MEMORY_CONFIG
         )
         self.attn_mc = ttnn.L1_MEMORY_CONFIG if os.environ.get("B32_ATTN_L1", "1") == "1" else ttnn.DRAM_MEMORY_CONFIG
+        # Q and K rotated by one RoPE op (B32_QK_JOINT)
+        self.qk_joint = os.environ.get("B32_QK_JOINT", "1") == "1" and os.environ.get("B32_KVW_PACK", "1") == "1"
         # the drafter's context features in BFP8 (the context fc multicasts them to its 90 cores: 275 -> 218 us;
         # acceptance in its spread; B32_FEAT_DT=bf16: BF16)
         self.feat_dt = {"bf16": ttnn.bfloat16, "bf8": ttnn.bfloat8_b}[os.environ.get("B32_FEAT_DT", "bf8")]
@@ -1274,10 +1284,28 @@ class BatchedVerify:
         nh, nkv, hd = self.local_heads, self.local_kv_heads, cfg.head_dim
         k_cache, v_cache = self.kv_cache[li]
         block_attn = not cfg.sliding_window
+        cos, sin = cos_sin
+        if self.qk_joint and (block_attn or self.swin_attn is not None):
+            # Q and K in one tensor (nlp_create_qkv_heads with nh + nkv "q" heads and one "kv" head: the QKV columns
+            # [q | k | v] split as [q k | v0 | v1]), one RoPE op for both; the cache write reads K from heads nh .. and
+            # V from the two one-head tensors, the block attention Q from heads 0 .. nh - 1
+            qk, v0, v1 = ttnn.experimental.nlp_create_qkv_heads(
+                qkv, num_heads=nh + nkv, num_kv_heads=1, transpose_k_heads=False, memory_config=ttnn.L1_MEMORY_CONFIG
+            )
+            qk2 = ttnn.experimental.rotary_embedding_llama(qk, cos, sin, self.trans_rows, is_decode_mode=False,
+                                                           memory_config=ttnn.L1_MEMORY_CONFIG)  # fmt: skip
+            qk.deallocate(True)
+            self.kv_write.joint(qk2, v0, v1, (k_cache, v_cache), pos[self.block], self.page_table, nh)
+            v0.deallocate(True)
+            v1.deallocate(True)
+            ba = self.block_attn if block_attn else self.swin_attn
+            out = ba(qk2, k_cache, v_cache, pos[self.block], self.page_table, self.sinks[li], cfg.scaling,
+                     heads_io=True, q_heads=nh)  # fmt: skip
+            qk2.deallocate(True)
+            return out
         q, k, v = ttnn.experimental.nlp_create_qkv_heads(
             qkv, num_heads=nh, num_kv_heads=nkv, transpose_k_heads=False, memory_config=ttnn.L1_MEMORY_CONFIG
         )
-        cos, sin = cos_sin
         # (in L1, as q: the block attention reads its rows 32 bytes at a time)
         q2 = ttnn.experimental.rotary_embedding_llama(q, cos, sin, self.trans_rows, is_decode_mode=False,
                                                       memory_config=ttnn.L1_MEMORY_CONFIG)  # fmt: skip
