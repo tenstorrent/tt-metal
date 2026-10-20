@@ -325,8 +325,9 @@ here on many positions instead.
 - **fp32 logits** (HiFi2, fp32 accumulation). In bf16 the logits step is 0.125 at the usual top logit of 16-32, so
   near-tied rows often tie exactly and the lowest token id wins. 3 of the 40 rows tied on the merged branch.
   GreedyScan reads fp32. Decode step: 13.44 / 15.14 ms (1 / 4 rows), against 13.48 / 15.06.
-- **Prefill SDPA in fp32 dest.** Decode SDPA stays in bf16 dest: paged decode SDPA gave non-finite values with fp32
-  dest.
+- **Prefill SDPA in fp32 dest**, opt-in (`MIMO_SDPA_FP32_ACC=1`, positions >= 2 KL -9% with stock experts). It is
+  off by default: its larger circular buffers clash with decode's persistent L1 buffers under the vLLM adapter. Decode
+  SDPA stays in bf16 dest: paged decode SDPA gave non-finite values with fp32 dest.
 - **Expert values prepared for bfloat4_b.** Same format, memory and speed; only the values change.
   - MSE: each 16-value block takes the best shared exponent of {e, e-1, e+1}. This is tt-quant's `mse` policy
     (`common.bfp_mse_prepare`), and it matches tt-quant's values exactly.
@@ -359,3 +360,17 @@ Decode top-1 by reference margin (stock -> GPTQ):
 On the 8 golden prompts (100 positions, `test_model_error_tp8_dp4.py`), the mean KL goes from 0.1535 (stock, bf16
 logits) to 0.068 (GPTQ). The first token's massive activation (about 1090 in dim 2412, cancelled in layers 41-45) had
 carried most of it.
+
+**Final configuration on `mimo-v2.6/c16-top1`** (mimo-v2.6/vllm-c16 + this work). Settings: GPTQ experts
+(`MIMO_EXPERT_QUANT=gptq`), fp32 logits, bf16-dest SDPA. Measured 2026-10-20 on one BH Galaxy
+(`runs/top1/final_validate.sh`):
+
+| Check | Result |
+|---|---|
+| Prefill, 3072 positions | top-1 0.9215 (stock 0.8945), at margin >= 0.5 0.9872 (0.9739), KL 0.0329 (0.0609) |
+| Teacher-forced decode, 2784 positions | top-1 0.9221 (stock 0.9077), at margin >= 0.5 0.9875 (0.9755), KL 0.0280 (0.0556) |
+| `test_model_tp8_dp4` | rows with a reference margin >= 0.2: 34/34 (the merged branch missed a 0.61-margin row). Raw top-1 0.900: the 4 misses are reference near-ties (0.068-0.179) |
+| `test_model_traced_tp8_dp4` | traced == eager (PCC 1.000000) |
+| vLLM, c=16 (64 x 128 / 128, DP=4 x 4) | 1005.4, 1023.4, 1004.7 tok/s; TPOT 13.2-13.5 ms; TTFT median 317-322 ms |
+| vLLM, c=1 | TTFT 176 ms, TPOT 13.1 ms |
+| vLLM, other checks | HTTP suite 78 passed, 1 skipped; served greedy == standalone 16/16; 0 decode-trace recaptures |

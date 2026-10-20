@@ -109,6 +109,9 @@ vllm serve /path/to/MiMo-V2.6-Flash-MOPD --served-model-name XiaomiMiMo/MiMo-V2.
   --additional-config '{"tt": {"trace_mode": "decode_only", "trace_region_size": 1000000000, "l1_small_size": 65536, "dispatch_core_axis": "col", "sample_on_device_mode": "decode_only", "prefill_gather_ms": 200, "prefill_gather_quiet_ms": 25}}'
 ```
 
+- `MIMO_EXPERT_QUANT=gptq` serves the GPTQ-prepared bfloat4_b experts (same speed, KL about half the stock
+  packer's; see doc/tp8_dp4_plan.md "Accuracy"). Building their cache the first time needs
+  `MIMO_EXPERT_PREP_DIR` with `tests/perf/gptq_experts.py` output. The default is the MSE-prepared experts.
 - `trace_region_size` 1 GB holds the decode trace and the 28 prefill-batch traces per replica (150 MB is enough with
   `MIMO_PREFILL_TRACE=0`). `sample_on_device_mode` and the prefill gather need plugin `mimo-v2.6-flash/c16-throughput`.
 
