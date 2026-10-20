@@ -30,6 +30,7 @@ from ..fused_decode.boundary import KERNEL_DIR
 TILE = ttnn.TILE_SIZE
 TREE_SEM = 9
 OUT_SEM = 12  # BA_OUT_SPLIT: the reader's half of the root's output written
+Q_SEM = 13  # BA_Q_SPLIT: the writer's half of the packed Q tile read
 LAND_SEM, COPY_SEM = 10, 11  # the shared K / V reads: groups landed in the leader / copied by its partner
 MIN_CHUNKS = 4  # 32-position chunks per slice at least
 G = 8  # chunks per K / V group (one running-softmax step)
@@ -293,6 +294,10 @@ class BlockAttention:
             writer_common.append(user[0])
             if heads_io:
                 reader_common.append(out.buffer_address())  # (BA_OUT_SPLIT)
+                # the packed Q tile's reads split between the reader (column tile 0) and the writer (1)
+                defines += [("BA_Q_SPLIT", str(len(writer_common))), ("BA_Q_SEM", str(Q_SEM)), ("BA_CB_Q", str(cb_q))]
+                writer_common.append(q.buffer_address())
+                writer_ct += ttnn.TensorAccessorArgs(q).get_compile_time_args()
         if self.window:  # one window for all rows
             defines.append(("BA_WINDOW", str(self.window)))
         if self.swin:
@@ -337,7 +342,7 @@ class BlockAttention:
         """The op's own program semaphores (besides the wait semaphore)."""
         return [
             ttnn.SemaphoreDescriptor(i, ttnn.CoreType.WORKER, self.cores, 0)
-            for i in (TREE_SEM, LAND_SEM, COPY_SEM, OUT_SEM)
+            for i in (TREE_SEM, LAND_SEM, COPY_SEM, OUT_SEM, Q_SEM)
         ]
 
 

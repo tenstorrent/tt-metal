@@ -39,6 +39,9 @@ void kernel_main() {
     constexpr uint32_t min_chunks = get_compile_time_arg_val(6);
     constexpr uint32_t partial_tiles = get_compile_time_arg_val(7);
     constexpr auto out_args = TensorAccessorArgs<8>();
+#ifdef BA_Q_SPLIT
+    constexpr auto q_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
+#endif
     constexpr uint32_t tile = 2048;
     constexpr uint32_t Tt = M / 4;
     const uint32_t t = grp % BA_TQ;  // this core's packed Q tile
@@ -97,6 +100,31 @@ void kernel_main() {
     if (nc == 0) {
         return;
     }
+#ifdef BA_Q_SPLIT
+    {
+        // column tile 1 of the packed Q tile (the reader reads tile 0; heads layout, as ba_reader.cpp read_q), into
+        // the reader's cb_q pages (fresh: the CB's first two pages), then flag BA_Q_SEM
+        const uint32_t user = get_common_arg_val<uint32_t>(BA_USER_ARG_W) + grp / (BA_TQ * BA_NKV);
+        const auto s_q = TensorAccessor(q_args, get_common_arg_val<uint32_t>(BA_Q_SPLIT), tile);
+        const uint32_t ql1 = get_write_ptr(BA_CB_Q);
+        constexpr uint32_t d = 1;
+        for (uint32_t i = 0; i < 4; ++i) {
+            const uint32_t R = (4 * t + i) * BA_Q_RSTRIDE + user, rr = R % 32;
+            for (uint32_t j = 0; j < 8; ++j) {
+                const uint64_t src = s_q.get_noc_addr(((8 * g + j) * BA_Q_HEADS + R / 32) * 2 + d);
+                const uint32_t pr = 8 * i + j;
+                for (uint32_t f = 0; f < 2; ++f) {
+                    noc_async_read(
+                        src + ((rr / 16) * 2 + f) * 512 + (rr % 16) * 32,
+                        ql1 + d * tile + ((pr / 16) * 2 + f) * 512 + (pr % 16) * 32,
+                        32);
+                }
+            }
+        }
+        noc_async_read_barrier();
+        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(BA_Q_SEM)) = 1;
+    }
+#endif
     if (sl.send_round < 0) {
         cb_wait_front(cb_out, 2);
         const uint32_t src = get_read_ptr(cb_out);

@@ -318,8 +318,13 @@ void kernel_main() {
 #ifdef BA_Q_HEADS
         // Q in the heads layout [1, heads, rows, 64] (the RoPE output: head h's row tile rt at pages (h BA_Q_HEADS +
         // rt) 2 + d, row R = block row r BA_Q_RSTRIDE + user): packed tile (t, d) row 8 i + j = row 4 t + i of head 8 g
-        // + j, one 32-byte face row per (i, j, f)
-        for (uint32_t d = 0; d < 2; ++d) {
+        // + j, one 32-byte face row per (i, j, f) (BA_Q_SPLIT: column tile 1 read by the writer, flag BA_Q_SEM)
+#ifdef BA_Q_SPLIT
+        constexpr uint32_t n_qd = 1;
+#else
+        constexpr uint32_t n_qd = 2;
+#endif
+        for (uint32_t d = 0; d < n_qd; ++d) {
             for (uint32_t i = 0; i < 4; ++i) {
                 const uint32_t R = (4 * t + i) * BA_Q_RSTRIDE + user, rr = R % 32;
                 for (uint32_t j = 0; j < 8; ++j) {
@@ -356,6 +361,15 @@ void kernel_main() {
 #endif
         noc_async_read_set_trid(0);
         noc_async_read_barrier_with_trid(15);
+#ifdef BA_Q_SPLIT
+        {
+            volatile tt_l1_ptr uint32_t* qf = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(BA_Q_SEM));
+            while (*qf == 0) {
+                invalidate_l1_cache();
+            }
+            *qf = 0;
+        }
+#endif
         cb_push_back(cb_q, 2);
         q_done = true;
     };
