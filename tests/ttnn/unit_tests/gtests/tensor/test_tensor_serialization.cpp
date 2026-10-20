@@ -20,6 +20,7 @@
 #include "ttnn/config.hpp"
 #include "ttnn/tensor/overlapped_tensor.hpp"
 #include "ttnn/tensor/serialization.hpp"
+#include "ttnn/tensor/topology_check.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/operations/functions.hpp"
@@ -578,6 +579,23 @@ void expect_dump_rejected(const TemporaryFile& file, const Tensor& tensor, const
     const bool previous = ttnn::CONFIG.get<"verify_replicated_shards_on_dump">();
     ttnn::CONFIG.set<"verify_replicated_shards_on_dump">(enabled);
     return ttsl::make_cleanup([previous]() { ttnn::CONFIG.set<"verify_replicated_shards_on_dump">(previous); });
+}
+
+// The check the writer runs is callable on its own, for callers that gather a tensor by its label: the mislabelled
+// tensor is refused, a size-only check passes it, and the correctly labelled tensor passes.
+TEST(TopologyCheckTest, VerifyShardsMatchTopology) {
+    const std::vector<MeshCoordinate> coords = all_coords(MeshShape(1, 2));
+    const TensorTopology replicate_label(MeshShape(2), Placements{kReplicate}, coords);
+    const TensorTopology shard_label(MeshShape(2), Placements{shard_on(1)}, coords);
+    Tensor tensor =
+        make_host_tensor(MeshShape(1, 2), coords, {{1.0f, 2.0f, 3.0f}, {4.0f, 5.0f, 6.0f}}, replicate_label);
+
+    EXPECT_THAT(
+        [&]() { verify_shards_match_topology(tensor); },
+        ThrowsMessage<std::runtime_error>(HasSubstr("contents differ")));
+    EXPECT_NO_THROW(verify_shards_match_topology(tensor, /*compare_replica_contents=*/false));
+    tensor.update_tensor_topology(shard_label);
+    EXPECT_NO_THROW(verify_shards_match_topology(tensor));
 }
 
 // Two distinct shards under the collapsed 1-D Replicate label the default mappers produce. Before the byte compare

@@ -116,6 +116,8 @@ The header records the tensor's topology (distribution shape, per-axis `Shard`/`
 
 The topology is a label, and the writer checks it against the data before trusting it. Replicas in a group must have the same size and, by default, the same bytes; a labelled coordinate must hold a shard (unless it lives on another host in a `LOCAL` multi-host dump); and every populated local shard must be covered by the label. A tensor that fails any of these checks makes `dump_tensor` throw before the output file is created, so a rejected dump leaves no file behind. The usual cause is a tensor whose topology was relabelled by an operation without describing how the shards were actually produced; relabel it with `Tensor.update_tensor_topology` before dumping. The byte comparison costs one `memcmp` per replica and can be turned off with the `verify_replicated_shards_on_dump` entry of `ttnn.CONFIG` (for example `TTNN_CONFIG_OVERRIDES='{"verify_replicated_shards_on_dump": false}'`) when replicas are known to legitimately differ; the first replica is then the one written.
 
+The same check is available on its own as `ttnn.verify_shards_match_topology(host_tensor, compare_replica_contents=True)` (C++: `ttnn::verify_shards_match_topology`), for callers that keep one copy per replica group themselves; tt-train's checkpoint gather runs it before saving one copy of a replicated tensor.
+
 ## 4. Multi-Host Support
 
 The tensor serialization APIs work seamlessly in multi-host environments. From a user's perspective, there is no difference between single-host and multi-host usage:

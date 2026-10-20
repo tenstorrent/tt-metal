@@ -150,6 +150,21 @@ def test_dump_mislabelled_replicate_config_opt_out(tmp_path):
     torch.testing.assert_close(loaded[1], first_replica, rtol=0, atol=0)
 
 
+def test_verify_shards_match_topology(expect_error):
+    """The write-side check is callable on its own, on the host copy of a tensor, for callers that gather a tensor by
+    its label: it refuses the mislabelled tensor, passes it on sizes alone when asked to, and passes once the label is
+    restored."""
+    tensor, true_label, _ = _mislabelled_replicate_tensor()
+    host = tensor.cpu()
+
+    with expect_error(RuntimeError, "contents differ"):
+        ttnn.verify_shards_match_topology(host)
+    ttnn.verify_shards_match_topology(host, compare_replica_contents=False)
+
+    host.update_tensor_topology(true_label)
+    ttnn.verify_shards_match_topology(host)
+
+
 @pytest.mark.parametrize("height", [1024])
 @pytest.mark.parametrize("width", [1024])
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
