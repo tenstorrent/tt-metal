@@ -4,11 +4,7 @@
 
 #pragma once
 
-#include <cstdint>
-#include <optional>
 #include <string>
-#include <variant>
-#include <vector>
 
 #include <tt-metalium/experimental/metal2_host_api/kernel_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
@@ -83,9 +79,8 @@ struct ProgramSpec {
     Group<KernelSpec> kernels;
 
     // Program-scope resources (allocated for the Program's execution lifetime)
-    // DFBs (local + cross-node), and semaphores
+    // DFBs, semaphores, and scratchpads
     Group<DataflowBufferSpec> dataflow_buffers;
-    Group<CrossNodeDataflowBufferSpec> cross_node_dataflow_buffers;
     Group<SemaphoreSpec> semaphores;
     Group<ScratchpadSpec> scratchpads;
 
