@@ -66,8 +66,6 @@ env:
   #                                  ci_run.sh needs the PR and the commits to
   #                                  compare (PR_NUMBER, HEAD_SHA, BASE_SHA), which
   #                                  that workflow's plan job resolves.
-  #
-  # This is not an exemption: the legs still block the PR until an owner approves.
   UNSUPPORTED_YAMLS: >-
     vllm_model_tests.yaml
     ttnn_sweep_tests.yaml
