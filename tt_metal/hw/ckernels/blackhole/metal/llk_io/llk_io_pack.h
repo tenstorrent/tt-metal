@@ -21,8 +21,12 @@ inline void llk_wait_for_free_tiles(const std::int32_t operand, const std::int32
     DeviceZoneScopedSumN2("CB-COMPUTE-RESERVE-BACK");
     std::uint32_t output = operand;
 
-    volatile tt_reg_ptr std::uint32_t* tiles_acked_ptr = get_cb_tiles_acked_ptr(operand);
-    volatile tt_reg_ptr std::uint32_t* tiles_received_ptr = get_cb_tiles_received_ptr(operand);
+    volatile tt_l1_ptr std::uint32_t* tiles_acked_ptr =
+        reinterpret_cast<volatile tt_l1_ptr std::uint32_t*>(
+            STREAM_REG_ADDR(get_operand_stream_id(operand), STREAM_REMOTE_DEST_BUF_START_REG_INDEX));
+    volatile tt_l1_ptr std::uint32_t* tiles_received_ptr =
+        reinterpret_cast<volatile tt_l1_ptr std::uint32_t*>(
+            STREAM_REG_ADDR(get_operand_stream_id(operand), STREAM_REMOTE_DEST_BUF_SIZE_REG_INDEX));
 
     // while the producer (write-side interface) is waiting for space to free up "tiles_pushed" is not changing
     // "tiles_pushed" is updated by the producer only when the tiles are pushed

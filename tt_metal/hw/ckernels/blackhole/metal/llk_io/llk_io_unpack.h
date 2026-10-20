@@ -19,7 +19,9 @@ inline void llk_wait_tiles(int operand, std::int32_t num_tiles) {
     DeviceZoneScopedSumN1("CB-COMPUTE-WAIT-FRONT");
     std::uint32_t input = operand;
 
-    volatile tt_reg_ptr std::uint32_t* tiles_received_ptr = get_cb_tiles_received_ptr(operand);
+    volatile tt_l1_ptr std::uint32_t* tiles_received_ptr =
+        reinterpret_cast<volatile tt_l1_ptr std::uint32_t*>(
+            STREAM_REG_ADDR(get_operand_stream_id(operand), STREAM_REMOTE_DEST_BUF_SIZE_REG_INDEX));
     std::uint16_t num_tiles_u = (std::uint16_t)num_tiles;
 
     std::uint16_t tiles_received;
