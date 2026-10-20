@@ -13,6 +13,7 @@
 #include "ttnn/distributed/tensor_topology.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/tensor/storage.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
 
 #include <cstddef>
 #include <cstring>
@@ -36,7 +37,7 @@ std::string describe(const tt::tt_metal::TensorTopology& topology) {
 
 void verify_shards_match_topology(const Tensor& tensor, bool compare_replica_contents) {
     TT_FATAL(
-        tensor.storage_type() == tt::tt_metal::StorageType::HOST,
+        !is_device_tensor(tensor),
         "verify_shards_match_topology checks host shards; move the tensor to the host with cpu() first");
     const auto& distributed_buffer = tensor.host_storage().buffer();
     const auto& topology = tensor.tensor_topology();
