@@ -515,8 +515,8 @@ def run_moreh_layer_norm_backward_with_gamma_or_beta(
     [
         ([1, 20], 1),  # test 2d
         ([10, 20], 2),  # test 2d
-        ([2, TILE_HEIGHT, 16 * TILE_WIDTH], 1),  # test 3d, one mean / rstd per row
-        ([4, 2 * TILE_HEIGHT + 5, 3 * TILE_WIDTH], 1),  # test 3d, partial last tile row
+        ([2, TILE_HEIGHT, 16 * TILE_WIDTH], 1),  # test 3d
+        ([4, 2 * TILE_HEIGHT + 5, 3 * TILE_WIDTH], 1),  # test 3d
         ([3, 3, 4 * TILE_HEIGHT, 5 * TILE_WIDTH], 4),  # test 4d
         ([5, 2, 3, 4, 2 * TILE_HEIGHT + 13, 3 * TILE_WIDTH + 13], 4),  # test 6d
     ],
