@@ -305,8 +305,11 @@ class SparseRowOp:
         def accessors(*ts):
             return [a for t in ts for a in ttnn.TensorAccessorArgs(t).get_compile_time_args()]
 
-        reader_ct = accessors(x, values, offsets, meta_t, b, dbg)
-        writer_ct = accessors(out, meta_t, offsets, dbg, values, o2, x)
+        # META's accessor takes the values' compile-time arguments (interleaved DRAM, 4 KB pages): an accessor's page
+        # size is a compile-time argument, only a default the kernels override with META's row size at run time, so
+        # META's own would make one binary per row width
+        reader_ct = accessors(x, values, offsets, values, b, dbg)
+        writer_ct = accessors(out, values, offsets, dbg, values, o2, x)
 
         # circular buffers; L1 pages hold tpw words (256: one 16x16 face, so unpack / pack move one face)
         pg = tpw * 4
