@@ -24,25 +24,19 @@ def _height_sharded_on_one_core(shape, dtype, device):
     return torch_input, tt_input
 
 
-# H % 32 != 0 shapes the narrow-row pack_untilize lays out wrong, then shapes it packs correctly (controls).
 @pytest.mark.parametrize(
     "shape, dtype",
     [
-        # row byte width not a multiple of 16 bytes
         ((1, 4, 4, 64), torch.bfloat16),
         ((1, 4, 12, 64), torch.bfloat16),
-        # row wider than one face
         ((1, 4, 20, 64), torch.bfloat16),
         ((1, 4, 24, 64), torch.bfloat16),
         ((1, 4, 28, 64), torch.bfloat16),
         ((1, 4, 20, 64), torch.float32),
-        # H above one tile, not a multiple of it
         ((1, 4, 36, 64), torch.bfloat16),
         ((1, 4, 48, 64), torch.bfloat16),
         ((1, 4, 100, 64), torch.bfloat16),
-        # partial last tile column
         ((1, 8, 16, 40), torch.bfloat16),
-        # controls
         ((1, 4, 8, 64), torch.bfloat16),
         ((1, 4, 16, 64), torch.bfloat16),
         ((1, 4, 4, 64), torch.float32),

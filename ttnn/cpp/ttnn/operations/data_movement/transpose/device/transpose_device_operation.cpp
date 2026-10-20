@@ -335,7 +335,6 @@ TransposeDeviceOperation::program_factory_t TransposeDeviceOperation::select_pro
     bool use_sharded_wh_rm = native && input_width_and_height_fully_in_shard && output_width_and_height_fully_in_shard;
     bool use_sharded_hc = native && input_height_sharded && output_height_sharded && is_row_major;
     if (use_sharded_wh_rm && is_row_major) {
-        // H % 32 != 0 packs rows with the narrow-row pack_untilize; send the shapes it lays out wrong elsewhere.
         const uint32_t H = input_tensor.logical_shape()[-2], W = input_tensor.logical_shape()[-1];
         const uint32_t row_bytes = H * input_tensor.element_size();
         const bool narrow_row_supported =
