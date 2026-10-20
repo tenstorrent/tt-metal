@@ -859,6 +859,24 @@ MLA_MATMUL_CONFIG = {
 }
 
 
+# The chunked-prefill 5k-chunk candidates, shared by every SP that splits a 5120 chunk (see 640 / 1280).
+_CHUNKED_5K_SDPA = [
+    {
+        "q_chunk_size": 32,
+        "k_chunk_size": 640,
+        "num_heads": None,
+        "dense_head_cap_non_dsa": 64,
+        "chunked_only": True,
+    },
+    {
+        "q_chunk_size": 32,
+        "k_chunk_size": 640,
+        "num_heads": 96,
+        "chunked_only": True,
+    },
+]
+
+
 MLA_SDPA_CONFIG = {
     # Tuned for the Galaxy balanced MLA PCC path. The 8x4 max-sl cases hit the issue #45521 fallback.
     # 128k total seq_len → 16384 per device on 8x4
@@ -881,7 +899,7 @@ MLA_SDPA_CONFIG = {
         "q_chunk_size": 160,
         "k_chunk_size": 320,
     },
-    # 5k total seq_len → 640 per device on 8x4.
+    # 5k total seq_len → 640 per device on 8x4 (SP=8), 1280 on a 4x4 prefill stage (SP=4).
     # Two candidates (first tag match wins, see ttMLA._select_cfg):
     #   1. the original catch-all, kept exactly as-is, with its empirical non-DSA head cap;
     #   2. Kimi-K3 at 96 heads, which the cap would otherwise send to the k=32 default.
@@ -898,21 +916,13 @@ MLA_SDPA_CONFIG = {
     # k_chunk=640 at 24 heads/device over 56320 tokens with no L1 OOM. Note the sweep test itself
     # cannot corroborate that on a wider mesh -- it forces FABRIC_1D_RING, which does not map beyond
     # 2 SP for any variant (K2.6's case fails identically), so the sweep is small-mesh-only.
-    640: [
-        {
-            "q_chunk_size": 32,
-            "k_chunk_size": 640,
-            "num_heads": None,
-            "dense_head_cap_non_dsa": 64,
-            "chunked_only": True,
-        },
-        {
-            "q_chunk_size": 32,
-            "k_chunk_size": 640,
-            "num_heads": 96,
-            "chunked_only": True,
-        },
-    ],
+    640: _CHUNKED_5K_SDPA,
+    # SP=4 keeps the SP=8 tiling (two k-chunks per slab). It must not fall to the k=32 default: at k=32
+    # ring_mla's output scale grows ~10% per prior chunk (1.9x the reference after 10 chunks) while each
+    # chunk's PCC stays ~0.984, so test_mla_chunked_prefill production-50k+5k fails its full-region gate
+    # at 0.964 on SP=4 -- and equally on SP=8 forced to k=32. Measured on the K3 4x4 stage: k=640 gives
+    # 0.9925, matching 8x4.
+    1280: _CHUNKED_5K_SDPA,
 }
 
 
