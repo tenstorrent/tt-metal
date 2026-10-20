@@ -78,7 +78,7 @@ inline void llk_unpack_tilize_block(
             (tensor_shape.total_num_faces() == 2 && (tensor_shape.face_r_dim == 1 || tensor_shape.face_r_dim == 2)),
         "only 1x32 and 2x32 tiny tiles supported for unpack tilize on Quasar");
 
-    const LocalDFBInterface& local_dfb = g_dfb_interface[operand_id];
+    const LocalDFBInterface& local_dfb = get_local_dfb_interface(operand_id);
     const std::uint32_t rd_entry_idx = local_dfb.tc_slots[local_dfb.tc_idx].rd_entry_idx;
 
     // Compute how many l1_index units fit in one DFB entry.

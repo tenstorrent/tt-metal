@@ -361,17 +361,17 @@ void populate_dfb_global_header_participation(
             }
         }
         TT_FATAL(
-            active_dfbs <= ::dfb::MAX_ACTIVE_DFBS_PACK,
-            "Neo{} has {} active DFBs, exceeding the Pack local-interface limit {}",
+            active_dfbs <= ::dfb::MAX_ACTIVE_DFBS_TRISC,
+            "Neo{} has {} active DFBs, exceeding the compute-thread local-interface limit {}",
             hartid - ::dfb::TENSIX_RISC_OFFSET,
             active_dfbs,
-            ::dfb::MAX_ACTIVE_DFBS_PACK);
+            ::dfb::MAX_ACTIVE_DFBS_TRISC);
         TT_FATAL(
-            tc_slots <= ::dfb::MAX_PACK_TC_SLOTS,
-            "Neo{} DFBs require {} Pack tile-counter slots, exceeding the shared pool limit {}",
+            tc_slots <= ::dfb::MAX_TRISC_TC_SLOTS,
+            "Neo{} DFBs require {} compute-thread tile-counter slots, exceeding the shared pool limit {}",
             hartid - ::dfb::TENSIX_RISC_OFFSET,
             tc_slots,
-            ::dfb::MAX_PACK_TC_SLOTS);
+            ::dfb::MAX_TRISC_TC_SLOTS);
     }
     const uint32_t expected_id_mask = ghdr.num_dfbs >= 32 ? ~0u : ((1u << ghdr.num_dfbs) - 1u);
     TT_FATAL(

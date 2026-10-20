@@ -717,9 +717,9 @@ FORCE_INLINE DfbPackerRemapperRange setup_local_dfb_interfaces(uint32_t tt_l1_pt
     uint32_t total_tc_slots = 0;
     uint32_t total_sig_write = 0;
 
-#if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_PACK)
+#if defined(COMPILE_FOR_TRISC)
     uint8_t compact_dfb_count = 0;
-    uint8_t pack_tc_slot_count = 0;
+    uint8_t trisc_tc_slot_count = 0;
 #endif
 
     // g: capture time before the loop (3 uncached header reads above + blob-offset load)
@@ -775,15 +775,15 @@ FORCE_INLINE DfbPackerRemapperRange setup_local_dfb_interfaces(uint32_t tt_l1_pt
         WAYPOINT("L1");
 
         // --- Resolve g_dfb_interface slot ---
-#if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_PACK)
-        ASSERT(compact_dfb_count < dfb::MAX_ACTIVE_DFBS_PACK);
+#if defined(COMPILE_FOR_TRISC)
+        ASSERT(compact_dfb_count < dfb::MAX_ACTIVE_DFBS_TRISC);
         ASSERT(num_tcs <= dfb::MAX_NUM_TILE_COUNTERS_TO_RR);
-        ASSERT(pack_tc_slot_count + num_tcs <= dfb::MAX_PACK_TC_SLOTS);
+        ASSERT(trisc_tc_slot_count + num_tcs <= dfb::MAX_TRISC_TC_SLOTS);
         const uint8_t compact_id = compact_dfb_count++;
         g_dfb_logical_to_compact[eh.logical_dfb_id] = compact_id;
         LocalDFBInterface& iface = g_dfb_interface[compact_id];
-        iface.tc_slots.slot_base = pack_tc_slot_count;
-        pack_tc_slot_count += static_cast<uint8_t>(num_tcs);
+        iface.tc_slots.slot_base = trisc_tc_slot_count;
+        trisc_tc_slot_count += static_cast<uint8_t>(num_tcs);
 #else
         LocalDFBInterface& iface = g_dfb_interface[eh.logical_dfb_id];
 #endif
