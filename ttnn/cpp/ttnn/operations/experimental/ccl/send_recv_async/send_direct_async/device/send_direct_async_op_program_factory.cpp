@@ -272,6 +272,7 @@ ProgramDescriptor SendDirectAsyncProgramFactory::create_descriptor(
 
         uint32_t selected_link_index = link_indices[core_idx % link_indices.size()];
         tt::tt_fabric::append_fabric_connection_rt_args<ProgramDescriptor>(
+            *input_tensor.device(),
             sender_fabric_node_id,
             receiver_fabric_node_id,
             selected_link_index,

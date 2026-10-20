@@ -1213,6 +1213,7 @@ class SamplingOp:
                     sender_group = kernel_result.get_group_by_arg("sampling_mesh_sender_core", 1)
                     sender_kernel_idx = sender_group.brisc_kernel_index
                     fabric_rt_args = ttnn.setup_fabric_connection(
+                        mesh_device=mesh_device,
                         src_fabric_node_id=mesh_device.get_fabric_node_id(coord),
                         dst_fabric_node_id=mesh_device.get_fabric_node_id(dest_coord),
                         link_idx=sender_link_idx,

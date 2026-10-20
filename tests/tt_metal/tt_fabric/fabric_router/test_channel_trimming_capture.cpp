@@ -313,6 +313,7 @@ UnicastTrafficResult run_unicast_traffic_bw_nodes(
 
     // Use connection API to append EDM connection args (to first-hop neighbor)
     append_fabric_connection_rt_args(
+        *sender_device,
         src_fabric_node_id,
         connection_dst,
         link_idx,

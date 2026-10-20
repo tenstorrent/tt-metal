@@ -468,7 +468,14 @@ DeepseekMoEReduceScatterProgramArtifacts build_deepseek_moe_reduce_scatter_progr
                 dst_nodes.push_back(forward_coord_fabric_node_id);
             }
             append_routing_plane_connection_manager_rt_args(
-                sender_fabric_node_id, dst_nodes, {link}, program, writer_kernel_id, {core}, writer_rt_args);
+                *mesh_device,
+                sender_fabric_node_id,
+                dst_nodes,
+                {link},
+                program,
+                writer_kernel_id,
+                {core},
+                writer_rt_args);
 
             tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, {core}, writer_rt_args);
 

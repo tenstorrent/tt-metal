@@ -614,6 +614,7 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
                     } else {
                         std::vector<tt::tt_fabric::FabricNodeId> dst = {mesh_device->get_fabric_node_id(*neighbor)};
                         append_routing_plane_connection_manager_rt_args(
+                            *mesh_device,
                             sender_fabric_node_id,
                             dst,
                             {link},
