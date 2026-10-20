@@ -2004,6 +2004,28 @@
   team: train
   budget_type: e2e
 
+- name: Galaxy Deepseek MoE 16B TP=8 DP=4 train e2e tests
+  cmd: |
+    SUMMARY="${PIPELINE_DIR}/tt_train_summary.md"
+    rc=0
+    mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" bash -lc "
+      ./tt-train/scripts/setup_pth.sh
+      python tt-train/scripts/run_models.py --model_config tt-train/scripts/run_models_configs/galaxy.yaml --filter-filenames deepseek_moe_16b_tp8_dp4 --output-dir ${PIPELINE_DIR}/tt-train-metrics --summary-file ${SUMMARY}
+    " || rc=$?
+    if [ -s "$SUMMARY" ] && [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+      cat "$SUMMARY" >> "$GITHUB_STEP_SUMMARY"
+    fi
+    exit $rc
+  model: "[tt-train] deepseek_moe_16b_tp8_dp4"
+  skus:
+    bh_sc1_high_power:
+      timeout: 75
+      tier: 3
+      release_ready: false
+  owner_id: U07K00A281X # Kevin Wu
+  team: train
+  budget_type: e2e
+
 - name: Galaxy Llama 8B TP=8 DDP=4 train e2e tests
   cmd: |
     export HF_HOME=/mnt/models/huggingface
