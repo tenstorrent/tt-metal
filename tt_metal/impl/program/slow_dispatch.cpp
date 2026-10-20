@@ -9,6 +9,8 @@
 #include <span>
 #include <vector>
 
+#include <fmt/ranges.h>
+
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt_stl/fmt.hpp>
@@ -315,7 +317,7 @@ void WriteRuntimeArgsToDevice(IDevice& device, Program& program, bool force_slow
                                     logical_core.str(),
                                     physical_core.str(),
                                     rt_args_addr,
-                                    rt_args);
+                                    fmt::join(rt_args, ", "));
                                 metal_ctx.get_cluster().write_core(device_id, physical_core, rt_args, rt_args_addr);
                             }
 
@@ -331,7 +333,7 @@ void WriteRuntimeArgsToDevice(IDevice& device, Program& program, bool force_slow
                                     logical_core.str(),
                                     physical_core.str(),
                                     common_rt_args_addr,
-                                    common_rt_args);
+                                    fmt::join(common_rt_args, ", "));
                                 metal_ctx.get_cluster().write_core(
                                     device_id, physical_core, common_rt_args, common_rt_args_addr);
                             }
