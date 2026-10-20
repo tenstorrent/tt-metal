@@ -52,7 +52,6 @@ void read_mean_rstd(
 
             (src_h == 0 ? row_lo : row_hi) = tilized_idx;
 
-            // Same offset on both sides: Blackhole DRAM reads need source and destination aligned alike to 64 B.
             noc.async_read(
                 addrg,
                 dfb,

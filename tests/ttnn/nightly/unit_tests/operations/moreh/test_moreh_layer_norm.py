@@ -920,8 +920,6 @@ def test_moreh_layer_norm_backward_large_algorithm(
     "input_shape", [[2, 64, 64], [40, 32, 64], [2, 64, 16384]], ids=["small", "rows_16_to_39", "large"]
 )
 def test_moreh_layer_norm_backward_per_row_mean_rstd(input_shape, device):
-    # Every row has its own mean and scale around columns of -1 / +1, so y = +-1 exactly and dy = 1 gives
-    # dgamma = +-rows, dbeta = rows and input_grad = 0 only if each row reads its own mean / rstd.
     torch.manual_seed(2024)
     N, H, W = input_shape
     scale = torch.tensor([0.5, 1.0, 2.0, 4.0])[torch.randint(0, 4, (N, H, 1))]
