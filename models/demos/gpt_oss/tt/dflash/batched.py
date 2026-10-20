@@ -1055,6 +1055,13 @@ class BatchedVerify:
         self.local_kv_heads = mc.shard_size(attn0.config.num_kv_heads)
         hd = self.head_dim = attn0.config.head_dim
         self.residual_mc = width_sharded_memory_config(self.mesh, self.hidden, RESIDUAL_CORES, rows=self.rows)
+        if os.environ.get("B32_RES_BLOCK", "1") == "1":
+            # block sharded on 10 x 8 cores, one 32-row tile x 9 column tiles each: the sharded norm reduces over 10
+            # cores per row tile instead of 30 per 8 (standalone 14.6 -> 6.4 us per norm, 49 per pass)
+            self.residual_mc = ttnn.create_sharded_memory_config(
+                (TILE, self.hidden // 10), ttnn.CoreGrid(x=10, y=self.rows // TILE), ttnn.ShardStrategy.BLOCK,
+                ttnn.ShardOrientation.ROW_MAJOR, use_height_and_width_as_shard_shape=True,
+            )  # fmt: skip
         # sliding-window layers: one decode SDPA per 32-row step (the decode's 8 x 8 config, Q read from DRAM)
         self.sliding_pc = sdpa_decode_program_config(True)
         # the unpadded decode o_proj (batched_decode.BatchedOProj) is DRAM width-sharded: interleaved copies
