@@ -121,13 +121,33 @@ def _flip_ranges(nc, gx, rect):
     return out
 
 
+_SEMS = {}
+
+
+def _semaphores(nc, gx, cores):
+    """The 16 semaphores of a launch on the first nc cores (all start at 0), made once per core count."""
+    if (nc, gx) not in _SEMS:
+        _SEMS[(nc, gx)] = [ttnn.SemaphoreDescriptor(id=i, core_ranges=cores, initial_value=0) for i in range(16)]
+    return _SEMS[(nc, gx)]
+
+
 def slot_pages(n_tiles):
     """Pages per slot in the 27-slot value / offset tensors: odd, so the 27 slot pieces of one segment sit in
     different DRAM banks (pages interleave over 8 banks; a multiple-of-8 stride put all 27 reads on one bank)."""
     return n_tiles + (1 if n_tiles % 2 == 0 else 0)
 
 
+_CFG = []
+
+
 def _compute_config():
+    """The compute kernels' configuration (the same for every launch; made once)."""
+    if not _CFG:
+        _CFG.append(_make_compute_config())
+    return _CFG[0]
+
+
+def _make_compute_config():
     cfg = ttnn.ComputeConfigDescriptor(
         math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, dst_full_sync_en=True, math_approx_mode=False
     )
@@ -225,10 +245,6 @@ class SparseRowOp:
         aout, ao2 = out.buffer_address(), o2.buffer_address()
         reader_common = [ax, av, aoff, ameta, ab, g.x, adbg, meta_pages, ntlv, plan.win_b, flags, meta_bytes]
         writer_common = [aout, ameta, g.x, aoff, 0, 0, adbg, av, ao2, ax, meta_pages, ntlv, flags, meta_bytes]
-        # per-core arguments, as (core, list) pairs on cached CoreCoords: half the cost of filling a ttnn.RuntimeArgs
-        # core by core. (Moved into one common list, the counts made the coarse smoothers slower: +9 to +15 us)
-        compute_args = list(zip(logical_coords(device), [list(v) + [flags] for v in zip(nseg, nseg_gs, nseg_r)]))
-
         def accessors(*ts):
             return [a for t in ts for a in ttnn.TensorAccessorArgs(t).get_compile_time_args()]
 
@@ -348,18 +364,22 @@ class SparseRowOp:
                     config=wcfg,
                 ),
             ]
-        kernels.append(
-            ttnn.KernelDescriptor(
+        # compute kernel: per-core arguments, as (core, list) pairs on cached CoreCoords (half the cost of filling a
+        # ttnn.RuntimeArgs core by core; as common arguments, one list or one per group of equal cores, they made
+        # coarse launches 4 to 15 us slower). Launches with the same rows and options (CG start, CG SpMV) share it
+        ckey = ("compute", id(device), tuple(phases), tpw, flags, tuple(define_list))
+        if ckey not in plan._tables:
+            plan._tables[ckey] = ttnn.KernelDescriptor(
                 kernel_source=f"{KERNEL_ROOT}/compute.cpp",
                 source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
                 core_ranges=cores,
                 compile_time_args=[],
                 defines=define_list,
-                runtime_args=compute_args,
+                runtime_args=list(zip(logical_coords(device), [[*v, flags] for v in zip(nseg, nseg_gs, nseg_r)])),
                 config=_compute_config(),
             )
-        )
-        sems = [ttnn.SemaphoreDescriptor(id=i, core_ranges=cores, initial_value=0) for i in range(16)]
+        kernels.append(plan._tables[ckey])
+        sems = _semaphores(plan.nc, g.x, cores)
         self.prog = ttnn.ProgramDescriptor(kernels=kernels, semaphores=sems, cbs=cbs)
         # generic_op's last tensor is the launch's output; gs updates x in place
         self.io = (
