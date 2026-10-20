@@ -43,9 +43,6 @@ no TILIZE_IN (input already TILE).                                              
 Its arguments are named compile-time args that the ELF does not keep, so the shape comes from the
 model: 256 channels, 16 groups, 159*159 rows tilized to 25344 (``_nearest_32_per_core(25281, 4)``),
 ``core_grid = CoreGrid(y=4, x=4)``, ``num_out_blocks = 2`` (``num_splits=2``).                [M]
-
-No Quasar port exists and the mainline factories are legacy ProgramDescriptors, so every case
-xfails on Quasar.
 """
 
 import pytest
