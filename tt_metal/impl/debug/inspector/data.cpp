@@ -92,8 +92,6 @@ Data::~Data() {
 
 const llrt::RunTimeOptions& Data::rtoptions() const { return env_.get_rtoptions(); }
 
-bool Data::capture_tensor_specs() const { return rtoptions().get_inspector_capture_tensor_specs(); }
-
 RpcServer& Data::get_rpc_server() {
     return rpc_server_controller.get_rpc_server();
 }

@@ -166,7 +166,6 @@ TEST(InspectorSessionTest, HardwareSessionDoesNotRecordMockObjects) {
              experimental::get_mock_cluster_desc_name(silicon_env.get_device_properties().arch(), /*num_chips=*/1)});
     auto mock = mock_env.create_mesh_device(distributed::MeshDeviceConfig(mock_env.get_system_mesh().shape()));
     EXPECT_FALSE(experimental::inspector::IsEnabled(*mock));
-    EXPECT_FALSE(experimental::inspector::ShouldCaptureTensorSpecs(*mock));
 
     // Programs are dropped from the session when destroyed, so keep the workloads alive until the query.
     auto silicon_workload = run_no_op_workload(*silicon);
