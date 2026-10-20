@@ -351,7 +351,7 @@ def test_reshape_codegen_rm_ring_within_cb_page_limit(device):
     in_shape, out_shape, dtype = [4096, 8], [4096, 8, 1], ttnn.bfloat16
     source = _make(in_shape, dtype)
     x = _to_device(device, source, dtype, ttnn.ROW_MAJOR_LAYOUT, _DRAM)
-    one_core = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))])
+    one_core = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))])
     out = _force_codegen(x, out_shape, memory_config=_DRAM, sub_core_grids=one_core)
     _assert_bits(source.reshape(out_shape), ttnn.to_torch(out), dtype)
 
