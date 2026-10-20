@@ -198,8 +198,8 @@ private:
     }
 
     template <typename T>
-    static T*& heap_target(void* storage) noexcept {
-        return *std::launder(static_cast<T**>(storage));
+    static T& heap_target(void* storage) noexcept {
+        return **std::launder(static_cast<T**>(storage));
     }
 
     template <typename T>
