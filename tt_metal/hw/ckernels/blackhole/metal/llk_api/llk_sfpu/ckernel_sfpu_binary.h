@@ -210,6 +210,12 @@ inline void calculate_sfpu_binary(
     }
 }
 
+constexpr std::uint32_t SFPMAD_MOD1_NEGATE_VC = 2;
+
+sfpi_inline sfpi::vFloat _sfpu_mul_signed_zero_(sfpi::vFloat a, sfpi::vFloat b) {
+    return __builtin_rvtt_sfpmad(a.get(), b.get(), sfpi::vFloat(0.0f).get(), SFPMAD_MOD1_NEGATE_VC);
+}
+
 template <bool APPROXIMATION_MODE, BinaryOp BINOP, int ITERATIONS, bool is_fp32_dest_acc_en>
 inline void calculate_sfpu_binary_mul(
     const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
@@ -219,7 +225,7 @@ inline void calculate_sfpu_binary_mul(
         sfpi::vFloat in0 = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
         sfpi::vFloat in1 = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
 
-        sfpi::vFloat result = in0 * in1 - 0.0f;
+        sfpi::vFloat result = _sfpu_mul_signed_zero_(in0, in1);
 
         if constexpr (!is_fp32_dest_acc_en) {
             // software RNE approach:
@@ -264,7 +270,7 @@ inline void calculate_sfpu_binary_div(
             // scaling is exact for normal results.
             sfpi::vInt exponent = ea - eb + sfpi::exexp(q, sfpi::ExponentMode::Biased);
             sfpi::vInt half = sfpi::as<sfpi::vInt>(sfpi::as<sfpi::vUInt>(exponent) >> 1);
-            result = sfpi::setexp(q, half) * sfpi::setexp(sfpi::vFloat(1.0f), exponent - half) - 0.0f;
+            result = _sfpu_mul_signed_zero_(sfpi::setexp(q, half), sfpi::setexp(sfpi::vFloat(1.0f), exponent - half));
 
             // For exceptional inputs only the reciprocal's sign and zero/Inf
             // classification matter. Inverting its exponent gives Inf for zero,
