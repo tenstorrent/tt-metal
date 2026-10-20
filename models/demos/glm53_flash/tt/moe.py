@@ -44,6 +44,7 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.glm53_flash.tt.config import GLM53FlashConfig
+from models.demos.glm53_flash.tt.matmul_configs import DecodeLinear
 from models.demos.glm53_flash.tt.mesh import GLMMesh, interleave_blocks, single_chip
 from models.demos.glm53_flash.tt.mlp import TtClampedSwiGLU
 
@@ -126,6 +127,7 @@ class TtRouter(LightweightModule):
             (self.E - torch.arange(self.E, dtype=torch.float32)).reshape(1, 1, 1, self.E), ttnn.float32
         )
         self.fp32 = _compute(device, ttnn.MathFidelity.HiFi4, packer_l1_acc=False)
+        self.lin_gate = DecodeLinear(device, self.w_gate)
         import os
 
         self.tie_break = os.environ.get("GLM53_ROUTER_TIE_BREAK", "topk")  # topk (default) | rank | cumsum
@@ -170,7 +172,7 @@ class TtRouter(LightweightModule):
         biased scores), which swaps the 8th expert on ~20% of real tokens; the composite is exact.
         """
         T = x.shape[-2]
-        logits = ttnn.linear(x, self.w_gate, dtype=ttnn.float32, compute_kernel_config=self.fp32)
+        logits = self.lin_gate(x, dtype=ttnn.float32, compute_kernel_config=self.fp32)
         scores = ttnn.sigmoid(logits)  # fp32 [1,1,T,E]
         ttnn.deallocate(logits)
         choice = ttnn.add(scores, self.bias)

@@ -17,6 +17,7 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.demos.glm53_flash.tt.matmul_configs import DecodeLinear
 from models.demos.glm53_flash.tt.mesh import GLMMesh, interleave_blocks, single_chip
 
 
@@ -58,22 +59,22 @@ class TtClampedSwiGLU(LightweightModule):
         self.w13 = self.mesh.upload(w13, weight_dtype, cols=-1)
         self.w2 = self.mesh.upload(down_proj.t(), weight_dtype, cols=-2)
         self.compute = _compute_config(device)
+        self.lin13 = DecodeLinear(device, self.w13)
+        self.lin2 = DecodeLinear(device, self.w2)
 
     def forward(self, x: ttnn.Tensor, *, reduce: bool = True) -> ttnn.Tensor:
         """x: [1, 1, T, H] (replicated over the TP group) -> [1, 1, T, H] (TP partial if not ``reduce``)."""
         T = x.shape[-2]
         I = self.intermediate_local
-        gu = ttnn.linear(x, self.w13, dtype=self.activation_dtype, compute_kernel_config=self.compute)
+        gu = self.lin13(x, dtype=self.activation_dtype, compute_kernel_config=self.compute)
         gate = ttnn.slice(gu, [0, 0, 0, 0], [1, 1, T, I])
         up = ttnn.slice(gu, [0, 0, 0, I], [1, 1, T, 2 * I])
         ttnn.deallocate(gu)
-        gate = ttnn.clamp(gate, min=None, max=self.limit, output_tensor=gate)
-        up = ttnn.clamp(up, min=-self.limit, max=self.limit, output_tensor=up)
-        act = ttnn.silu(gate)
+        # silu(min(gate, limit)) * clamp(up, -limit, limit) in one op (ttnn.clamped_silu_glu)
+        h = ttnn.clamped_silu_glu(gate, up, self.limit)
         ttnn.deallocate(gate)
-        h = ttnn.multiply(act, up, output_tensor=act)
         ttnn.deallocate(up)
-        y = ttnn.linear(h, self.w2, dtype=self.activation_dtype, compute_kernel_config=self.compute)
+        y = self.lin2(h, dtype=self.activation_dtype, compute_kernel_config=self.compute)
         ttnn.deallocate(h)
         if reduce:
             y = self.mesh.all_reduce_cols(y)

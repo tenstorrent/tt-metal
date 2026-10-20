@@ -45,6 +45,7 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.glm53_flash.tt.config import GLM53FlashConfig
 from models.demos.glm53_flash.tt.indexer import TtDSAIndexer, TtIndexCache, height_shard_rows
+from models.demos.glm53_flash.tt.matmul_configs import DecodeLinear
 from models.demos.glm53_flash.tt.mesh import GLMMesh, single_chip
 
 TILE = 32
@@ -265,6 +266,11 @@ class TtDSA(LightweightModule):
         self.dense_exact_max_pos = cfg.index_topk + cfg.index_kpool - 2  # 2050
         self.hifi2 = _compute(device)
         self.hifi4 = _compute(device, ttnn.MathFidelity.HiFi4, packer_l1_acc=False)
+        # decode-shaped (M <= 32) projections use the 1D mcast configs of tt/matmul_configs.py
+        self.lin_qa = DecodeLinear(device, self.w_qa)
+        self.lin_qb = DecodeLinear(device, self.w_qb)
+        self.lin_kva = DecodeLinear(device, self.w_kva)
+        self.lin_o = DecodeLinear(device, self.w_o)
         grid = device.compute_with_storage_grid_size()
         self.sdpa_prefill_cfg = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=grid, q_chunk_size=128, k_chunk_size=128, exp_approx_mode=False
@@ -310,16 +316,16 @@ class TtDSA(LightweightModule):
     # ---------------------------------------------------------------- shared stems
     def _q_resid(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """x [1,1,T,4096] -> q_resid [1,1,T,1536] bf16 (q_a -> rmsnorm)."""
-        qa = ttnn.linear(x, self.w_qa, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)
+        qa = self.lin_qa(x, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)
         return ttnn.rms_norm(qa, epsilon=self.cfg.rms_norm_eps, weight=self.qa_norm, compute_kernel_config=self.hifi4)
 
     def _q(self, q_resid: ttnn.Tensor) -> ttnn.Tensor:
         """q_resid [1,1,T,1536] -> q [1,1,T,H*256] bf16 (q_b)."""
-        return ttnn.linear(q_resid, self.w_qb, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)
+        return self.lin_qb(q_resid, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)
 
     def _latent(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """x [1,1,T,4096] -> c [1,1,T,512] bf16 (kv_a -> rmsnorm)."""
-        c = ttnn.linear(x, self.w_kva, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)
+        c = self.lin_kva(x, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)
         return ttnn.rms_norm(c, epsilon=self.cfg.rms_norm_eps, weight=self.kva_norm, compute_kernel_config=self.hifi4)
 
     def _absorb_q(self, q: ttnn.Tensor) -> ttnn.Tensor:
@@ -337,7 +343,7 @@ class TtDSA(LightweightModule):
         return ttnn.reshape(ttnn.transpose(o, 1, 2), [1, 1, T, self.H * self.Dv])
 
     def _o_proj(self, o_heads: ttnn.Tensor) -> ttnn.Tensor:
-        y = ttnn.linear(o_heads, self.w_o, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)
+        y = self.lin_o(o_heads, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)
         return self.mesh.all_reduce_cols(y)  # TP partial -> replicated over the row's columns
 
     def _cu_window(self, n_keys: int) -> ttnn.Tensor:
