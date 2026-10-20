@@ -1213,7 +1213,7 @@ void check_archs(const json& manifest) {
     EXPECT_EQ(keys_of(manifest.at("archs")), (std::set<std::string>{lower_enum_name(BaseFabricFixture::arch_)}));
     EXPECT_EQ(
         keys_of(manifest.at("archs").at(lower_enum_name(BaseFabricFixture::arch_))),
-        (std::set<std::string>{"areas", "types"}));
+        (std::set<std::string>{"areas", "stream_registers", "types"}));
     const auto& areas = arch_areas(manifest);
     EXPECT_EQ(
         keys_of(areas),
@@ -1260,6 +1260,40 @@ void check_archs(const json& manifest) {
         keys_of(heartbeat),
         (std::set<std::string>{"address", "size", "schema", "cleared_by_host", "magic", "magic_mask", "period_iters"}));
     EXPECT_EQ(heartbeat.at("size"), sizeof(uint32_t));
+}
+
+// The stream registers are where the HAL puts them, and every register of every stream is in the HAL's register
+// space.
+void check_arch_stream_registers(const json& manifest) {
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    const auto& streams = manifest.at("archs").at(lower_enum_name(BaseFabricFixture::arch_)).at("stream_registers");
+    EXPECT_EQ(keys_of(streams), (std::set<std::string>{"base", "stride", "count", "register_offsets"}));
+    const auto base = streams.at("base").get<uint32_t>();
+    const auto stride = streams.at("stride").get<uint32_t>();
+    const auto count = streams.at("count").get<uint32_t>();
+    EXPECT_EQ(base, hal.get_noc_overlay_start_addr());
+    EXPECT_EQ(stride, hal.get_noc_stream_reg_space_size());
+    EXPECT_EQ(count, StreamRegAssignments::num_eth_stream_registers);
+
+    const auto& offsets = streams.at("register_offsets");
+    std::set<std::string> registers;
+    for (const auto reg : enchantum::values<manifest::StreamRegister>) {
+        registers.insert(lower_enum_name(reg));
+    }
+    EXPECT_EQ(keys_of(offsets), registers);
+    EXPECT_EQ(
+        offsets.at(lower_enum_name(manifest::StreamRegister::BUF_SPACE_AVAILABLE)).get<uint32_t>(),
+        hal.get_noc_stream_remote_dest_buf_space_available_reg_index() * sizeof(uint32_t));
+    EXPECT_EQ(
+        offsets.at(lower_enum_name(manifest::StreamRegister::REMOTE_SRC)).get<uint32_t>(),
+        hal.get_noc_stream_remote_src_reg_index() * sizeof(uint32_t));
+    for (const auto& [name, offset] : offsets.items()) {
+        SCOPED_TRACE(name);
+        EXPECT_LT(offset.get<uint32_t>(), stride);
+        for (uint32_t stream_id = 0; stream_id < count; ++stream_id) {
+            EXPECT_TRUE(hal.valid_reg_addr(base + (stream_id * stride) + offset.get<uint32_t>())) << stream_id;
+        }
+    }
 }
 
 // Enum values are written by name, with the values the enums define.
@@ -1444,6 +1478,9 @@ TEST_F(Fabric2DManifestFixture, RouterRegionsDisjoint) { check_router_regions_di
 
 TEST_F(Fabric1DManifestFixture, Archs) { check_archs(manifest_); }
 TEST_F(Fabric2DManifestFixture, Archs) { check_archs(manifest_); }
+
+TEST_F(Fabric1DManifestFixture, ArchStreamRegisters) { check_arch_stream_registers(manifest_); }
+TEST_F(Fabric2DManifestFixture, ArchStreamRegisters) { check_arch_stream_registers(manifest_); }
 
 TEST_F(Fabric1DManifestFixture, Enums) { check_enums(manifest_); }
 TEST_F(Fabric2DManifestFixture, Enums) { check_enums(manifest_); }
