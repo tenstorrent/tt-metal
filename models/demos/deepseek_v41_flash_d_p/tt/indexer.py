@@ -179,6 +179,8 @@ class TtIndexer:
         ttnn.deallocate(sub)
         q = ttnn.linear(qq, self.wq_b, dtype=ttnn.float32, compute_kernel_config=self.ckc, memory_config=DRAM)
         ttnn.deallocate(qq)
+        if self.rope.pairs is not None:
+            return self._query_glue(q, start)
         q4 = ttnn.reshape(q, [1, self.sq, self.nh, self.hd])
         qh = ttnn.permute(q4, (0, 2, 1, 3), memory_config=DRAM)  # [1, nh, Sq, hd]
         ttnn.deallocate(q)
@@ -191,6 +193,41 @@ class TtIndexer:
             ttnn.deallocate(t)
         out = fp4_q(qr_, Q_BLOCK, dtype=ttnn.bfloat16)
         ttnn.deallocate(qr_)
+        return out
+
+    def _query_glue(self, q: ttnn.Tensor, start: int) -> ttnn.Tensor:
+        """ATTN_GLUE=on (P.15): wq_b's output [1, 1, Sq, nh hd] fp32 (consumed) -> the index queries [1, nh, Sq, hd]
+        bf16, the values of the reshape + permute path bit for bit: the heads split by nlp_create_q_heads_split (a
+        data move), RoPE on the [.., 64] tails only; native (fp4_q is a cast): the rope's last ops write bf16 and the
+        interleave is a PairPerm matmul on the bf16 tail; official: interleaved in fp32 and quantized as before."""
+        qn, qt = ttnn.experimental.nlp_create_q_heads_split(
+            q, num_heads=self.nh, split_head_dim=self.hd - self.rd, memory_config=DRAM
+        )
+        ttnn.deallocate(q)
+        cos_r, sin_r = self.rope.rows(start, self.chunk)  # the row's W positions
+        cos, sin = self._sub(cos_r), self._sub(sin_r)
+        for t in (cos_r, sin_r):
+            ttnn.deallocate(t)
+        if native():
+            tb = rope_heads(qt, cos, sin, dtype=ttnn.bfloat16)  # [re | ro] bf16
+            for t in (qt, cos, sin):
+                ttnn.deallocate(t)
+            ti = self.rope.pairs(tb, self.rope.pairs.to_inter)
+            ttnn.deallocate(tb)
+            nb = ttnn.typecast(qn, ttnn.bfloat16, memory_config=DRAM)
+            ttnn.deallocate(qn)
+            out = ttnn.concat([nb, ti], dim=-1, memory_config=DRAM)
+            ttnn.deallocate(nb)
+            ttnn.deallocate(ti)
+            return out
+        tr = rope_heads(qt, cos, sin, interleave=True)
+        for t in (qt, cos, sin):
+            ttnn.deallocate(t)
+        full = ttnn.concat([qn, tr], dim=-1, memory_config=DRAM)
+        ttnn.deallocate(qn)
+        ttnn.deallocate(tr)
+        out = fp4_q(full, Q_BLOCK, dtype=ttnn.bfloat16)
+        ttnn.deallocate(full)
         return out
 
     def scores(self, x: ttnn.Tensor, qr: ttnn.Tensor, start: int, cache) -> tuple[ttnn.Tensor, int]:

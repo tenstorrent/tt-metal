@@ -44,6 +44,11 @@ Chain (one path on every box; nothing on the host per chunk except picking load-
     output         inverse RoPE + re-interleave -> fp8_qdq -> heads concatenated per group ->
                    grouped wo_a (the chip's whole groups, one batched matmul) -> fp8_qdq -> wo_b (K-split: the chip's
                    groups) -> exact sum over TP (all_gather + SFPU add, K-30) -> the chip's hidden slice
+    ATTN_GLUE=on   (P.15) q: nlp_create_q_heads_split -> RoPE on the 64-column tail -> x scale writing bf16 -> tail
+                   interleaved by a PairPerm matmul (tt/rope.py): window layers too read the table as stored
+                   (INTERLEAVED); output: bf16 nope kept, the tail de-interleaved by PairPerm (fp32 out), inverse RoPE
+                   writing bf16 [re | ro] (native; wo_a's input rows permuted at load), nlp_concat_heads after wo_a,
+                   the bf16 reduce-scatter result returned as is (tt/residual.py casts where it needs fp32)
 
 The served cache (TtWindowCache): position g on mesh row (g / W) % SP, column ((g mod W) / (W / TP)), local row
 (g / S) (W / TP) + g mod (W / TP) (W = S / SP; update_padded_kv_cache's sp x tp linearized block-cyclic order),
@@ -59,8 +64,8 @@ import ttnn
 
 from . import ccl
 from .common import DRAM, SP_AXIS, TP_AXIS, attn_compute_config, compute_config, dense_dtype, sum_cols
-from .quant import act_q, tf32_q
-from .rope import RopeTable, deinterleave_perm, deinterleave_tail, rope_heads
+from .quant import act_q, native, tf32_q
+from .rope import RopeTable, deinterleave_perm, deinterleave_tail, glue, rope_heads
 from .served import CacheSlab, DeviceScalars, alloc_served
 from .settings import settings
 from .window_exact import ExactWindow
@@ -358,6 +363,19 @@ class TtWindowAttention:
                 self.heads % 32 == 0
             ), f"sparse_sdpa needs a multiple of 32 heads per chip ({self.heads} after reshard)"
         self.o_sum = settings.get("ATTN_O_SUM")
+        # ATTN_GLUE=on (P.15; not for the exact window comparison path): q through nlp_create_q_heads_split, its tail
+        # interleaved by a PairPerm matmul after the bf16 cast, so the window layers too read the table in its stored
+        # (interleaved) order; the output de-interleaved by PairPerm on the bf16 sdpa output, kept bf16 (native: the
+        # inverse rope writes bf16 = act_q, wo_a's input rows permuted at load to [nope | re | ro]: no re-interleave),
+        # nlp_concat_heads after wo_a
+        self.glue = glue() and self.sdpa != "exact"
+        self.glue_q = self.glue and not self.fp32_q
+        self.glue_out = self.glue and native() and not self.fp32_out
+        if self.glue:
+            assert rope.pairs is not None, "ATTN_GLUE=on: the RopeTable was built without its PairPerm"
+            self.pairs = rope.pairs
+        if self.glue_q:
+            self.INTERLEAVED = True  # the table as stored (no per-chunk transform of the window rows)
         perm = deinterleave_perm(self.d, self.rd)
         # wq_b [heads * 512, q_lora] -> each head's rope rows de-interleaved -> [q_lora, heads * 512], columns split
         # over TP (chip c: heads [c H/TP, (c+1) H/TP)); bf16 exact (e4m3 x 2^k)
@@ -369,6 +387,8 @@ class TtWindowAttention:
         # wo_a [groups * rank, hpg * 512] -> [1, groups, hpg * 512, rank], groups split over TP; bf16-exact
         wo_a = w["wo_a"].float().view(self.groups, self.rank, -1)
         assert torch.equal(wo_a.bfloat16().float(), wo_a), "wo_a must be bf16-exact"
+        if self.glue_out:  # each head's input columns in the order the bf16 output path writes: [nope | re | ro]
+            wo_a = wo_a.view(self.groups, self.rank, self.hpg, self.d)[..., perm].reshape(self.groups, self.rank, -1)
         wo_a_t = wo_a.transpose(1, 2).unsqueeze(0).contiguous()
         self.wo_a = _upload(mesh, wo_a_t, dense_dtype(wo_a_t, "attn.wo_a"), ttnn.TILE_LAYOUT, (None, 1))
         # wo_b [H, groups * rank] -> [groups * rank, H], K (the chip's groups) split over TP
@@ -452,9 +472,43 @@ class TtWindowAttention:
         ttnn.deallocate(qr)
         return qs
 
+    def _q_glue(self, q_resid: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> ttnn.Tensor:
+        """ATTN_GLUE=on: q_resid -> scaled, roped q of the chip's heads [1, H/TP, S/SP, 512] bf16, the rope tail
+        interleaved (the table's stored order). The values of ``_q_heads`` + the bf16 cast, bit for bit: the heads
+        split by nlp_create_q_heads_split (a data move), RoPE on the [.., 64] tail only, the scale's multiply writing
+        bf16 (= ttnn.typecast's RNE), the interleave a PairPerm matmul on the bf16 tail."""
+        xq = act_q(q_resid, dtype=ttnn.bfloat16)  # NUMERICS=native: a cast (tt/quant.py)
+        qf = ttnn.linear(xq, self.wq_b, dtype=ttnn.float32, compute_kernel_config=self.ckc, memory_config=DRAM)
+        if xq is not q_resid:
+            ttnn.deallocate(xq)
+        qn, qr = ttnn.experimental.nlp_create_q_heads_split(
+            qf, num_heads=self.h_l, split_head_dim=self.d - self.rd, memory_config=DRAM
+        )
+        ttnn.deallocate(qf)
+        rot = rope_heads(qr, cos, sin)  # [re | ro] fp32
+        ttnn.deallocate(qr)
+        tb = ttnn.multiply(rot, self.scale, dtype=ttnn.bfloat16, memory_config=DRAM)
+        ttnn.deallocate(rot)
+        nb = ttnn.multiply(qn, self.scale, dtype=ttnn.bfloat16, memory_config=DRAM)
+        ttnn.deallocate(qn)
+        ti = self.pairs(tb, self.pairs.to_inter)
+        ttnn.deallocate(tb)
+        q = ttnn.concat([nb, ti], dim=-1, memory_config=DRAM)
+        ttnn.deallocate(nb)
+        ttnn.deallocate(ti)
+        return q
+
     def _q(self, q_resid: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> ttnn.Tensor:
         """q_resid -> scaled, roped q heads [1, H, S/(SP TP), 512] ROW_MAJOR (after the reshard): bf16 (the
         reference kernel's q), fp32 only with WINDOW_SDPA_PROBS=fp32."""
+        if self.glue_q:
+            qb = self._q_glue(q_resid, cos, sin)
+            qa = self._reshard(qb, in_dim=1, out_dim=2)
+            if qa is not qb:
+                ttnn.deallocate(qb)
+            q_rm = ttnn.to_layout(qa, ttnn.ROW_MAJOR_LAYOUT, memory_config=DRAM)
+            ttnn.deallocate(qa)
+            return q_rm
         qs = self._q_heads(q_resid, cos, sin)
         if self.fp32_q:
             qb = tf32_q(qs)  # the op's FPU reads q at TF32: rounded to nearest here (native: as is)
@@ -508,9 +562,44 @@ class TtWindowAttention:
             ttnn.deallocate(ot)
         if oh.dtype == ttnn.float32:
             return self._out_heads(oh, cos, sin)
+        if self.glue:
+            return self._out_glue(oh, cos, sin)
         of = ttnn.typecast(oh, ttnn.float32, memory_config=DRAM)
         ttnn.deallocate(oh)
         return self._out_heads(of, cos, sin)
+
+    def _out_glue(self, oh: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> ttnn.Tensor:
+        """ATTN_GLUE=on: the bf16 attention output of the chip's heads [1, H/TP, S/SP, 512] (consumed) -> attn_out.
+        Only the [.., 64] rope tail leaves bf16: de-interleaved by a PairPerm matmul writing fp32 (exact), inverse
+        RoPE in fp32; native: its last ops write bf16 (= act_q's cast) in [re | ro] order, which wo_a's permuted rows
+        read; official: re-interleaved in fp32 and quantized with the nope columns as before."""
+        b, h, rows, width = oh.shape
+        r0 = width - self.rd
+        nope = ttnn.slice(oh, [0, 0, 0, 0], [b, h, rows, r0], memory_config=DRAM)
+        tail = ttnn.slice(oh, [0, 0, 0, r0], [b, h, rows, width], memory_config=DRAM)
+        ttnn.deallocate(oh)
+        if self.INTERLEAVED:
+            tf = self.pairs(tail, self.pairs.to_de, dtype=ttnn.float32)
+        else:
+            tf = ttnn.typecast(tail, ttnn.float32, memory_config=DRAM)
+        ttnn.deallocate(tail)
+        if self.glue_out:
+            tr = rope_heads(tf, cos, sin, inverse=True, dtype=ttnn.bfloat16)
+            ttnn.deallocate(tf)
+            oq = ttnn.concat([nope, tr], dim=-1, memory_config=DRAM)
+            ttnn.deallocate(nope)
+            ttnn.deallocate(tr)
+        else:
+            tr = rope_heads(tf, cos, sin, inverse=True, interleave=True)
+            ttnn.deallocate(tf)
+            nf = ttnn.typecast(nope, ttnn.float32, memory_config=DRAM)
+            ttnn.deallocate(nope)
+            ou = ttnn.concat([nf, tr], dim=-1, memory_config=DRAM)
+            ttnn.deallocate(nf)
+            ttnn.deallocate(tr)
+            oq = act_q(ou, dtype=ttnn.bfloat16)
+            ttnn.deallocate(ou)
+        return self._out_proj(oq, rows)
 
     def _out_heads(self, of: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> ttnn.Tensor:
         """attention output of the chip's heads [1, H/TP, S/SP, 512] fp32 (rope tail [even | odd]; consumed) ->
@@ -524,6 +613,11 @@ class TtWindowAttention:
         ttnn.deallocate(of)
         oq = act_q(ou, dtype=ttnn.bfloat16)  # groups of 32 inside each head (512 % 32 == 0)
         ttnn.deallocate(ou)
+        return self._out_proj(oq, rows)
+
+    def _out_proj(self, oq: ttnn.Tensor, rows: int) -> ttnn.Tensor:
+        """The bf16 (act_q'd) output heads [1, H/TP, S/SP, 512] (consumed) -> grouped wo_a -> act_q -> wo_b -> the
+        sum over TP: attn_out [1, 1, S/SP, H/TP] (fp32; bf16 under ATTN_GLUE=on with CCL_IMPL=fabric_bf16)."""
         # heads of one wo_a group side by side: [G/TP, hpg, S/SP, 512] -> [1, G/TP, S/SP, hpg * 512]
         og = ttnn.experimental.nlp_concat_heads(
             ttnn.reshape(oq, [self.g_l, self.hpg, rows, self.d]), memory_config=DRAM
@@ -533,14 +627,31 @@ class TtWindowAttention:
         y = ttnn.matmul(og, self.wo_a, dtype=ttnn.float32, compute_kernel_config=self.ckc, memory_config=DRAM)
         ttnn.deallocate(og)
         # [1, G/TP, S/SP, rank] -> [1, 1, S/SP, G/TP * rank] (the chip's K range of wo_b, group-major)
-        parts = [ttnn.slice(y, [0, k, 0, 0], [1, k + 1, rows, self.rank], memory_config=DRAM) for k in range(self.g_l)]
-        ttnn.deallocate(y)
-        yt = ttnn.concat(parts, dim=-1, memory_config=DRAM) if len(parts) > 1 else parts[0]
-        if len(parts) > 1:
-            for t in parts:
-                ttnn.deallocate(t)
-        yq = act_q(yt, dtype=ttnn.bfloat16)
-        ttnn.deallocate(yt)
+        if self.glue:
+            # ATTN_GLUE=on: nlp_concat_heads (a data move) in place of G/TP slices + concat; native: on the bf16 cast
+            # (act_q is element-wise there; official: its fp8 blocks of 32 never cross a group's rank columns either)
+            if native():
+                yb = act_q(y, dtype=ttnn.bfloat16)
+                if yb is not y:
+                    ttnn.deallocate(y)
+                yq = ttnn.experimental.nlp_concat_heads(yb, memory_config=DRAM)
+                ttnn.deallocate(yb)
+            else:
+                yt = ttnn.experimental.nlp_concat_heads(y, memory_config=DRAM)
+                ttnn.deallocate(y)
+                yq = act_q(yt, dtype=ttnn.bfloat16)
+                ttnn.deallocate(yt)
+        else:
+            parts = [
+                ttnn.slice(y, [0, k, 0, 0], [1, k + 1, rows, self.rank], memory_config=DRAM) for k in range(self.g_l)
+            ]
+            ttnn.deallocate(y)
+            yt = ttnn.concat(parts, dim=-1, memory_config=DRAM) if len(parts) > 1 else parts[0]
+            if len(parts) > 1:
+                for t in parts:
+                    ttnn.deallocate(t)
+            yq = act_q(yt, dtype=ttnn.bfloat16)
+            ttnn.deallocate(yt)
         # CCL_IMPL=fabric_bf16 (P.6): the partial written in bf16 for the bf16 reduce-scatter (tt/ccl.py:partial_dtype)
         zdt = ccl.partial_dtype(self.mesh) if self.o_sum == "gather_add" else ttnn.float32
         z = ttnn.linear(yq, self.wo_b, dtype=zdt, compute_kernel_config=self.ckc, memory_config=DRAM)
@@ -550,7 +661,8 @@ class TtWindowAttention:
         if self.o_sum == "reduce_scatter":
             out = ttnn.reduce_scatter(z, dim=3, cluster_axis=TP_AXIS, memory_config=DRAM)
         else:
-            out = sum_cols(self.mesh, z)
+            # ATTN_GLUE=on: the bf16 reduce-scatter's result as is (tt/residual.py casts only where it needs fp32)
+            out = sum_cols(self.mesh, z, fp32=not self.glue)
         ttnn.deallocate(z)
         return out
 

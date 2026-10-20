@@ -128,9 +128,10 @@ def tp_sum(mesh, t: ttnn.Tensor, how: str | None = None, exact: bool = False) ->
     return ccl.tp_sum(mesh, t, exact=exact)
 
 
-def sum_cols(mesh, t: ttnn.Tensor) -> ttnn.Tensor:
+def sum_cols(mesh, t: ttnn.Tensor, fp32: bool = True) -> ttnn.Tensor:
     """The exact fp32 sum of ``t`` ([1, 1, R, H] fp32 TILE) over the TP axis, kept as the chip's hidden columns
-    [1, 1, R, H/TP] (the gather_add of ATTN_O_SUM / EXPERTS_SUM; tt/ccl.py:sum_cols). Does not consume ``t``."""
+    [1, 1, R, H/TP] (the gather_add of ATTN_O_SUM / EXPERTS_SUM; tt/ccl.py:sum_cols). Does not consume ``t``.
+    ``fp32`` False (ATTN_GLUE=on, P.15): the bf16 reduce-scatter's result is returned as is (no cast to fp32)."""
     if mesh.shape[TP_AXIS] == 1:
         return ttnn.clone(t, memory_config=DRAM)
-    return ccl.sum_cols(mesh, t)
+    return ccl.sum_cols(mesh, t, fp32=fp32)
