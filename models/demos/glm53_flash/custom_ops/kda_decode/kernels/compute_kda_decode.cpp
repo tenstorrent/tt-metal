@@ -42,6 +42,13 @@
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "api/dataflow/circular_buffer.h"
 
+// per-phase profiler zones: only where the kernel profiler provides the macro (compiled out otherwise)
+#if defined(PROFILE_KERNEL) && defined(DeviceZoneScopedN)
+#define KDA_ZONE(name) DeviceZoneScopedN(name)
+#else
+#define KDA_ZONE(name)
+#endif
+
 namespace {
 
 // CB plan (kept in sync with the program factory and the dataflow kernels)
@@ -353,6 +360,7 @@ void kernel_main() {
         taps.wait_front(3 * Kt);
         // ------------------------------------------------------------ 1. conv + SiLU per branch
         for (uint32_t br = 0; br < 3; br++) {
+            KDA_ZONE("kda_conv_branch");
             const uint32_t out_cb = (br == 0) ? cb_tmp : (br == 1 ? cb_tmp : cb_vc);
             // tilize the three history blocks of this branch (tap j -> ht tiles j*Kt ..)
             ht.reserve_back(3 * Kt);
@@ -443,6 +451,8 @@ void kernel_main() {
         vc.wait_front(Vt);
 
         // ------------------------------------------------------------ 2. gates
+        {
+        KDA_ZONE("kda_gates");
         gf.wait_front(Kt);
         cc.wait_front(Kt);
         {
@@ -539,9 +549,11 @@ void kernel_main() {
         }
         gog.pop_front(Vt);
         gate.wait_front(Vt);
+        }
 
         // ------------------------------------------------------------ 3. recurrence per user
         for (uint32_t r = u0; r < u1; r++) {
+            KDA_ZONE("kda_user");
             // lift row r of q, k, v, decay into row 0 of tile blocks
             rows.reserve_back(4 * Kt);
             select_row(cb_qn, r, cb_rows, 0, Kt);
@@ -630,6 +642,7 @@ void kernel_main() {
         bcol.pop_front(1);
 
         // ------------------------------------------------------------ 4. gated RMSNorm of the output block
+        KDA_ZONE("kda_out_norm");
         oblk.wait_front(Vt);
         mul_blocks(cb_oblk, 0, cb_oblk, 0, false, cb_tmp, Vt);  // squares
         tmp.wait_front(Vt);

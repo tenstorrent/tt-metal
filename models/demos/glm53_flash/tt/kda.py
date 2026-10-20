@@ -17,16 +17,10 @@ multiply plus a reduction so no tile padding ever enters a contraction.
 
 ``GLM53_KDA_FUSED=1`` (design 8.1) runs the whole decode block as 6 ops: the packed qkv matmul,
 two gate matmuls (``[f_a | g_a | b]`` then the block-diagonal ``[f_b, g_b, I]``), ONE
-``ttnn.transformer.kda_decode`` program (conv + SiLU from the device-owned history, L2 norms,
-gates, the per-key-channel delta-rule recurrence, the gated RMSNorm; state and conv history
-updated in place; row-major output so the users of a head can be split over cores), its
-tilize, then o_proj. ``GLM53_KDA_FUSED=2`` keeps the composite's conv/gates and
-replaces only the recurrence with ``fused_recurrent_gated_delta_rule`` (its rank-4 per-key ``g``,
-ring mode in place on ``state.recurrent``, q/k scales folded into the L2-norm weights).
-
-State contract (``ttKDA.KdaState``): ``recurrent [B, H, K, V]`` fp32 TILE, ``convolution
-[B, kernel-1, Q+K+V]`` bf16 ROW_MAJOR, both DRAM-interleaved; the same tensors carry from prefill
-into decode.
+``custom_ops.kda_decode`` program (a model-local ``ttnn.generic_op``: conv + SiLU from the
+device-owned history, L2 norms, gates, the per-key-channel delta-rule recurrence, the gated
+RMSNorm; state and conv history updated in place; row-major output so the users of a head can be
+split over cores), its tilize, then o_proj.
 """
 
 from __future__ import annotations
@@ -43,21 +37,14 @@ from models.demos.deepseek_v3_d_p.reference.kda.weights import normalize_kda_sta
 from models.demos.deepseek_v3_d_p.tt.kda.config import KDAProgramConfig, KDARecurrenceProgramConfig
 from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState, ttKDA
 from models.demos.deepseek_v3_d_p.tt.kda.weights import KDAWeights, load_kda_weights
+from models.demos.glm53_flash.custom_ops.kda_decode.op import KdaDecode, selector_tiles
 from models.demos.glm53_flash.tt.config import GLM53FlashConfig
 from models.demos.glm53_flash.tt.matmul_configs import DecodeLinear
-from models.demos.glm53_flash.tt.mesh import GLMMesh, interleave_blocks, selector_tiles, single_chip
+from models.demos.glm53_flash.tt.mesh import GLMMesh, interleave_blocks, single_chip
 
 L2_NORM_EPS = 1e-6  # FLA l2norm: x / sqrt(sum(x^2) + 1e-6)
-# decode path: "composite" (default) | "block" (GLM53_KDA_FUSED=1: one kda_decode program for the whole block) |
-# "recurrence" (GLM53_KDA_FUSED=2: composite conv/gates + the fused recurrence op)
-_FUSED_MODES = {
-    "0": "composite",
-    "1": "block",
-    "2": "recurrence",
-    "composite": "composite",
-    "block": "block",
-    "recurrence": "recurrence",
-}
+# decode path: "composite" (GLM53_KDA_FUSED=0) | "block" (GLM53_KDA_FUSED=1: one kda_decode program for the whole block)
+_FUSED_MODES = {"0": "composite", "1": "block", "composite": "composite", "block": "block"}
 KDA_FUSED_DEFAULT = _FUSED_MODES.get(os.environ.get("GLM53_KDA_FUSED", "1"), "block")  # block = design 8.1 (6 ops)
 
 
@@ -125,8 +112,8 @@ class TtKDA(LightweightModule):
         fused_decode: str | bool | None = None,
     ):
         """``attn_state_dict``: the raw checkpoint tensors of ``self_attn.`` (prefix stripped).
-        ``fused_decode``: "composite" | "block" | "recurrence" (default: the ``GLM53_KDA_FUSED``
-        environment knob, composite); ``True`` means "block".
+        ``fused_decode``: "composite" | "block" (default: the ``GLM53_KDA_FUSED`` environment knob);
+        ``True`` means "block".
 
         On a mesh the heads are split over the columns (``mesh.tp``): every projection that is
         per head is column-sharded head-major, the state holds the local heads, the decode output
@@ -198,12 +185,6 @@ class TtKDA(LightweightModule):
         else:
             self.fused_decode = _FUSED_MODES[str(fused_decode)]
         K, V, H = self.K, self.V, self.H
-        if self.fused_decode == "recurrence":
-            # rms_norm(x, eps/K) = sqrt(K) l2norm(x): the weights fold l2norm(q) K^-0.5 (FLA's query scale, so
-            # the op runs with scale 1) and l2norm(k) into the norms
-            self.q_norm_w = up(torch.full((1, 1, 1, K), 1.0 / K), ttnn.float32)
-            self.k_norm_w = up(torch.full((1, 1, 1, K), K**-0.5), ttnn.float32)
-            self._ring_idx: dict[int, ttnn.Tensor] = {}
         if self.fused_decode == "block":
             # the kda_decode program's constants (its tensor contract is in the op's docstring)
             self.taps_blk = up(
@@ -216,6 +197,13 @@ class TtKDA(LightweightModule):
             )
             self.o_norm_w32 = up(raw["o_norm.weight"].float().reshape(1, 1, 1, -1), ttnn.float32)
             self.selectors = up(selector_tiles(), ttnn.bfloat16)
+            self.kda_decode = KdaDecode(
+                num_heads=H,
+                head_dim=K,
+                gate_lower_bound=self.gate_lower_bound,
+                l2_eps=L2_NORM_EPS,
+                norm_eps=self.kcfg.norm_eps,
+            )
             # gates in two matmuls: x -> [f_a | g_a | b_logits] (bf16, as HF), then the block-diagonal
             # [f_b, g_b, I] -> [f | og | b_logits] (fp32 accumulate); the identity block carries the logits
             Hb = -(-H // 32) * 32
@@ -251,14 +239,6 @@ class TtKDA(LightweightModule):
                 torch.tensor([[[[int(value)]]]], dtype=torch.int32), ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT
             )
         return self._scalars[value]
-
-    def ring_idx(self, batch_size: int) -> ttnn.Tensor:
-        """Ring-mode block index idx[h] = h for B*H local heads (the fused op then reads and writes every
-        head's state in place in the caller's [B*H, K, V] buffer); cached per batch size."""
-        if batch_size not in self._ring_idx:
-            idx = torch.arange(batch_size * self.H, dtype=torch.int32).reshape(1, -1)
-            self._ring_idx[batch_size] = self.mesh.upload(idx, ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
-        return self._ring_idx[batch_size]
 
     # ------------------------------------------------------------------ state
     def allocate_state(self, batch_size: int = 1) -> KdaState:
@@ -377,8 +357,7 @@ class TtKDA(LightweightModule):
         f = ttnn.multiply(f, self.a_exp, output_tensor=f)
         g = ttnn.sigmoid(f, output_tensor=f)
         g = ttnn.multiply(g, self.gate_lower_bound, output_tensor=g)  # [1,1,B,H*K] fp32 log decay
-        if self.fused_decode == "composite":
-            decay = ttnn.exp(g, output_tensor=g)  # [1,1,B,H*K] fp32
+        decay = ttnn.exp(g, output_tensor=g)  # [1,1,B,H*K] fp32
         beta = ttnn.sigmoid(self.lin_b(x, dtype=ttnn.float32, compute_kernel_config=self.fp32))  # [1,1,B,H]
         og = self.lin_ga(x, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)
         og = self.lin_gb(og, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)  # [1,1,B,H*V]
@@ -387,11 +366,6 @@ class TtKDA(LightweightModule):
         qh = ttnn.reshape(ttnn.typecast(q, ttnn.float32), [1, B, H, K])
         kh = ttnn.reshape(ttnn.typecast(k, ttnn.float32), [1, B, H, K])
         vh = ttnn.reshape(ttnn.typecast(v, ttnn.float32), [1, B, H, V])
-        if self.fused_decode == "recurrence":
-            qh = ttnn.rms_norm(qh, epsilon=L2_NORM_EPS / K, weight=self.q_norm_w, compute_kernel_config=self.fp32)
-            kh = ttnn.rms_norm(kh, epsilon=L2_NORM_EPS / K, weight=self.k_norm_w, compute_kernel_config=self.fp32)
-            o, new_recurrent = self._fused_recurrence(qh, kh, vh, g, beta, state, inplace)
-            return self._output(x, o, og, new_conv, state, new_recurrent, inplace)
         qh = ttnn.multiply(ttnn.rms_norm(qh, epsilon=L2_NORM_EPS / K, compute_kernel_config=self.fp32), 1.0 / K)
         kh = ttnn.multiply(ttnn.rms_norm(kh, epsilon=L2_NORM_EPS / K, compute_kernel_config=self.fp32), K**-0.5)
 
@@ -421,20 +395,15 @@ class TtKDA(LightweightModule):
         qkv = self.lin_qkv(x, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)  # [1,1,B,3*H*K]
         g1 = self.lin_g1(x, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)  # [f_a | g_a | b]
         g2 = self.lin_g2(g1, dtype=ttnn.float32, compute_kernel_config=self.fp32)  # [f | og | b]
-        o = ttnn.transformer.kda_decode(
-            qkv,
-            g2,
-            conv,
-            rec,
-            self.taps_blk,
-            self.chan_consts,
-            self.o_norm_w32,
-            self.selectors,
-            self.H,
-            gate_lower_bound=self.gate_lower_bound,
-            l2_eps=L2_NORM_EPS,
-            norm_eps=self.kcfg.norm_eps,
-        )  # [1,1,B,H*V] bf16 ROW_MAJOR (one row per user), normed and gated
+        B = x.shape[-2]
+        o = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([1, 1, B, self.H * self.V]),
+            ttnn.bfloat16,
+            ttnn.ROW_MAJOR_LAYOUT,
+            self.device,
+            ttnn.DRAM_MEMORY_CONFIG,
+        )  # [1,1,B,H*V] bf16 ROW_MAJOR (one row per user): the program's pre-allocated output
+        self.kda_decode(qkv, g2, conv, rec, self.taps_blk, self.chan_consts, self.o_norm_w32, self.selectors, o)
         ttnn.deallocate(qkv)
         ttnn.deallocate(g1)
         ttnn.deallocate(g2)
@@ -446,37 +415,6 @@ class TtKDA(LightweightModule):
         if inplace:
             return y, state
         return y, KdaState(recurrent=rec, convolution=conv)
-
-    def _fused_recurrence(self, qh, kh, vh, g, beta, state: KdaState, inplace: bool):
-        """One ``fused_recurrent_gated_delta_rule`` call for all B*H local heads: q [1,B,H,K] (l2-normed and
-        K^-0.5-scaled), k [1,B,H,K] (l2-normed), v [1,B,H,V] fp32; g [1,1,B,H*K] per-key-channel log decay;
-        beta [1,1,B,H]. Returns o [1,B,H,V] fp32 and the new recurrent state [B,H,K,V]: ``inplace`` runs the
-        op's ring mode on a view of ``state.recurrent`` (read once, written once, no copy)."""
-        B, H, K, V = state.recurrent.shape[0], self.H, self.K, self.V
-        q4 = ttnn.reshape(qh, [B, 1, H, K])  # views: the tiled dims are unchanged
-        k4 = ttnn.reshape(kh, [B, 1, H, K])
-        v4 = ttnn.reshape(vh, [B, 1, H, V])
-        g4 = ttnn.reshape(g, [B, 1, H, K])  # [1,1,B,H*K] -> head rows (same relayout as the composite's)
-        b3 = ttnn.reshape(beta, [B, 1, H])
-        if inplace:
-            ring = ttnn.reshape(state.recurrent, [B * H, K, V])  # 0-cost view of the persistent state
-            o, _ = ttnn.transformer.fused_recurrent_gated_delta_rule(
-                q4,
-                k4,
-                v4,
-                g4,
-                b3,
-                scale=1.0,
-                initial_state=ring,
-                initial_state_block_idx=self.ring_idx(B),
-                output_per_token_state=True,
-            )
-            new_recurrent = state.recurrent
-        else:
-            o, new_recurrent = ttnn.transformer.fused_recurrent_gated_delta_rule(
-                q4, k4, v4, g4, b3, scale=1.0, initial_state=state.recurrent, output_final_state=True
-            )
-        return ttnn.reshape(o, [1, B, H, V]), new_recurrent
 
     def _output(self, x, oh, og, new_conv, state: KdaState, new_recurrent, inplace: bool):
         """Gated RMSNorm per head (rmsnorm(o) * w * sigmoid(gate)), o_proj, TP all-reduce and the state
@@ -491,10 +429,8 @@ class TtKDA(LightweightModule):
         if inplace:
             # write the new carries back into the caller's persistent tensors so a captured decode
             # trace reads the updated state on the next replay (device-owned autoregressive state);
-            # the fused path already updated the recurrent state in place
-            if new_recurrent is not state.recurrent:
-                ttnn.copy(new_recurrent, state.recurrent)
-                ttnn.deallocate(new_recurrent)
+            ttnn.copy(new_recurrent, state.recurrent)
+            ttnn.deallocate(new_recurrent)
             ttnn.copy(new_conv, state.convolution)
             ttnn.deallocate(new_conv)
             return y, state
