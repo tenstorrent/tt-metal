@@ -10,8 +10,8 @@
 //    multiplied against it.
 // 3. For each of the group's experts e builds the diagonal tile D_e = diag(w[0..M-1, e]) (BF16, exact), which the
 //    compute multiplies into the SwiGLU output (D_e @ h scales token row t by its routing weight w[t, e]).
-// 4. Writes each [32, 32] output tile (expert e, this bank's intermediate tile column) into the act tensor
-//    [1, E, 32, I] (TILE, interleaved: tile page e * I_tiles + bank).
+// 4. Writes each [32, 32] output tile (expert e, this bank's intermediate tile columns bank * ppb + q) into the act
+//    tensor [1, E, 32, I] (TILE, interleaved: tile page e * I_tiles + bank * ppb + q).
 //
 // runtime args: [x_addr, routing_addr, act_addr, bank_id, group]
 
@@ -38,7 +38,8 @@ void kernel_main() {
     constexpr uint32_t M = get_compile_time_arg_val(6);
     constexpr uint32_t groups = get_compile_time_arg_val(7);
     constexpr uint32_t i_tiles = get_compile_time_arg_val(8);
-    constexpr auto x_args = TensorAccessorArgs<9>();
+    constexpr uint32_t ppb = get_compile_time_arg_val(9);  // column pairs per bank = output tiles per expert
+    constexpr auto x_args = TensorAccessorArgs<10>();
     constexpr auto routing_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
     constexpr auto act_args = TensorAccessorArgs<routing_args.next_compile_time_args_offset()>();
 
@@ -91,9 +92,11 @@ void kernel_main() {
         }
         cb_push_back(cb_d, 1);
 
-        cb_wait_front(cb_out, 1);
-        noc_async_write(get_read_ptr(cb_out), s_act.get_noc_addr(e * i_tiles + bank_id), tile_page);
-        noc_async_write_barrier();
-        cb_pop_front(cb_out, 1);
+        for (uint32_t q = 0; q < ppb; ++q) {
+            cb_wait_front(cb_out, 1);
+            noc_async_write(get_read_ptr(cb_out), s_act.get_noc_addr(e * i_tiles + bank_id * ppb + q), tile_page);
+            noc_async_write_barrier();
+            cb_pop_front(cb_out, 1);
+        }
     }
 }
