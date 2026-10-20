@@ -61,6 +61,9 @@ struct SparsePushPlanParams {
     uint32_t max_rows = 0;
     uint32_t pages_per_packet = 0;
     uint32_t banks = 0;
+    // Run on these cores (e.g. a loaded sub-device's, to overlap another program); default: the first 120.
+    std::optional<CoreRangeSet> sub_core_grids;
+    std::optional<tt::tt_metal::SubDeviceId> subdevice_id;
 };
 
 struct SparsePushPlanInputs {
@@ -94,6 +97,8 @@ std::vector<Tensor> sparse_push_plan(
     uint32_t max_rows,
     uint32_t pages_per_packet,
     uint32_t banks,
-    const std::optional<Tensor>& chunk_start = std::nullopt);
+    const std::optional<Tensor>& chunk_start = std::nullopt,
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
+    const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id = std::nullopt);
 
 }  // namespace ttnn::prim

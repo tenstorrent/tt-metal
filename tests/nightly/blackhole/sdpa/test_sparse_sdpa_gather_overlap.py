@@ -1502,3 +1502,157 @@ def test_sparse_resume_breakdown(mesh_device):
         )
         logger.info(lines[-1])
     logger.info("\n" + "\n".join(lines))
+
+
+# ---------------------------------------------------------------------------------------------------------
+# Plan op beside the full layer's prefix gather: the gather on its 40-core sub-device, the plan op on the 80-core
+# top-k sub-device, alone and together (both enqueue orders). Real 1M top-k (layer from TOPK_LAYERS).
+# ---------------------------------------------------------------------------------------------------------
+
+
+@run_for_blackhole()
+@_PERF
+@pytest.mark.timeout(0)
+@pytest.mark.parametrize("device_params", [_TORUS_XY_GLM], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+def test_sparse_plan_beside_gather(mesh_device):
+    from safetensors.numpy import load_file
+
+    if not _TRACE_1M.exists():
+        pytest.skip(f"1M GLM-5.3 trace not found at {_TRACE_1M}")
+    kv_fmt, chunk_global = "fp8", 5120
+    topk_grid, gather_grid = _cols(0, 7), _cols(8, 11)
+    n_dev = mesh_device.get_num_devices()
+    links = 2
+    stripe_chunk = s_local = chunk_global // n_dev
+    prefix_tokens = _TRACE_1M_START
+    cache_tokens = prefix_tokens + chunk_global
+    pages_per_packet = max(1, ttnn.get_tt_fabric_max_payload_size_bytes() // 704)
+    layer = int(os.environ.get("TOPK_LAYERS", "62").split(",")[0])
+    common = dict(layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    shard_seq = ttnn.ShardTensorToMesh(mesh_device, dim=2)
+    replicate = ttnn.ReplicateTensorToMesh(mesh_device)
+    cache = _kv_cache(mesh_device, 2, cache_tokens, kv_fmt, shard_seq, seed=2)
+    dense_out = _zero_kv_buffer(mesh_device, cache_tokens, kv_fmt)
+    scalar = lambda v: ttnn.from_torch(
+        torch.tensor([[[[v]]]], dtype=torch.int32), dtype=ttnn.uint32, mesh_mapper=replicate, **common
+    )
+    user, start = scalar(0), scalar(prefix_tokens)
+    f = _TRACE_1M / "dsa" / f"dsa_topk_indices_layer_{layer}" / "rows_00000000_00005120.safetensors"
+    natural = next(iter(load_file(str(f)).values())).astype(np.int64).reshape(n_dev, s_local, TOPK)
+    idx = ttnn.from_torch(
+        torch.from_numpy(natural.reshape(1, 1, n_dev * s_local, TOPK).astype(np.int32)),
+        dtype=ttnn.uint32,
+        mesh_mapper=shard_seq,
+        **common,
+    )
+    manager = mesh_device.create_sub_device_manager([ttnn.SubDevice([topk_grid]), ttnn.SubDevice([gather_grid])], 0)
+    sems = [ttnn.create_global_semaphore(mesh_device, gather_grid, 0, ttnn.BufferType.L1_SMALL) for _ in range(2)]
+    ttnn.synchronize_device(mesh_device)
+
+    def timed(fn, n=10):
+        fn()
+        ttnn.synchronize_device(mesh_device)
+        tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+        fn()
+        ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
+        ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=True)
+        t0 = time.perf_counter()
+        for _ in range(n):
+            ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=False)
+        ttnn.synchronize_device(mesh_device)
+        us = (time.perf_counter() - t0) / n * 1e6
+        ttnn.release_trace(mesh_device, tid)
+        return us
+
+    plan_kw = dict(
+        num_devices=n_dev,
+        stripe_chunk=stripe_chunk,
+        max_rows=cache_tokens,
+        pages_per_packet=pages_per_packet,
+        banks=_DRAM_BANKS,
+        chunk_start=start,
+    )
+    plan_full = lambda: ttnn.experimental.sparse_push_plan(idx, **plan_kw)
+    plan_topk = lambda: ttnn.experimental.sparse_push_plan(
+        idx, **plan_kw, sub_core_grids=topk_grid, subdevice_id=ttnn.SubDeviceId(0)
+    )
+    gather = lambda: ttnn.experimental.high_bw_all_gather(
+        cache,
+        dim=2,
+        output_tensor=dense_out,
+        cluster_axis=None,
+        subdevice_id=ttnn.SubDeviceId(1),
+        sub_core_grids=gather_grid,
+        num_links=links,
+        input_batch_index_tensor=user,
+        batch_slot_num_layers=2,
+        batch_slot_layer_idx=1,
+        gathered_prefix_tensor=start,
+        gathered_slab_global=chunk_global,
+        ready_semaphore=sems[0],
+        data_valid_semaphore=sems[1],
+    )
+    t_plan_full = timed(plan_full)
+    host = lambda t: ttnn.to_torch(t, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=2)).numpy()
+    table_full, compact_full = (host(t) for t in plan_full())
+    mesh_device.load_sub_device_manager(manager)
+    table_80_t, compact_80_t = plan_topk()
+    ttnn.synchronize_device(mesh_device)
+    mesh_device.clear_loaded_sub_device_manager()
+    table_full_t, compact_full_t = plan_full()
+    # Does a tensor allocated while the sub-device manager was loaded read slower afterwards?
+    q = ttnn.from_torch(
+        torch.randn(1, H, n_dev * s_local, K_DIM).to(torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        mesh_mapper=shard_seq,
+        **common,
+    )
+    kv = _zero_kv_buffer(mesh_device, cache_tokens + n_dev * pages_per_packet * _DRAM_BANKS, kv_fmt)
+    sdpa = lambda ci: ttnn.transformer.sparse_sdpa(
+        q, kv, ci, V_DIM, kv_format=_KV_FORMATS[kv_fmt][0], scale=K_DIM**-0.5, k_chunk_size=128
+    )
+    logger.info(
+        f"sparse_sdpa with indices planned outside {timed(lambda: sdpa(compact_full_t)):.0f} us, inside the "
+        f"sub-device region {timed(lambda: sdpa(compact_80_t)):.0f} us; buffer addresses {compact_full_t.buffer_address():#x} "
+        f"vs {compact_80_t.buffer_address():#x}, tables {table_full_t.buffer_address():#x} vs {table_80_t.buffer_address():#x}"
+    )
+    table_80, compact_80 = host(table_80_t), host(compact_80_t)
+    tf, t8 = table_full.reshape(n_dev, -1), table_80.reshape(n_dev, -1)
+    diff = np.flatnonzero((tf != t8).any(0))
+    logger.info(
+        f"plan on 80 vs 120 cores: compact indices equal {np.array_equal(compact_full, compact_80)}; table words "
+        f"differing {diff.size}, first {diff[:12].tolist()}; chip 0 header 120 cores {tf[0, :8].tolist()} "
+        f"owner_prefix {tf[0, 64:72].tolist()}; 80 cores {t8[0, :8].tolist()} owner_prefix {t8[0, 64:72].tolist()}"
+    )
+    mesh_device.load_sub_device_manager(manager)
+    try:
+        t_gather = timed(gather)
+        t_plan80 = timed(plan_topk)
+        t_plan_then_gather = timed(lambda: (plan_topk(), gather()))
+        t_gather_then_plan = timed(lambda: (gather(), plan_topk()))
+
+        def eager(fn, n=5):  # untraced, like the model's prefill
+            fn()
+            ttnn.synchronize_device(mesh_device)
+            t0 = time.perf_counter()
+            for _ in range(n):
+                fn()
+            ttnn.synchronize_device(mesh_device)
+            return (time.perf_counter() - t0) / n * 1e6
+
+        e_gather = eager(gather)
+        e_plan = eager(plan_topk)
+        e_plan_then_gather = eager(lambda: (plan_topk(), gather()))
+        logger.info(
+            f"eager: gather {e_gather:.0f} us, plan (80 cores) {e_plan:.0f} us, plan then gather {e_plan_then_gather:.0f} us"
+        )
+    finally:
+        ttnn.synchronize_device(mesh_device)
+        mesh_device.clear_loaded_sub_device_manager()
+        mesh_device.remove_sub_device_manager(manager)
+    logger.info(
+        f"layer {layer} at {prefix_tokens} tokens: plan op 120 cores {t_plan_full:.0f} us, 80 top-k cores {t_plan80:.0f} us; "
+        f"prefix gather (40 cores) {t_gather:.0f} us; plan then gather {t_plan_then_gather:.0f} us; "
+        f"gather then plan {t_gather_then_plan:.0f} us"
+    )

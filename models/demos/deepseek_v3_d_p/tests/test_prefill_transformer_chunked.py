@@ -3201,6 +3201,8 @@ def test_glm_prefill_sparse_push_depth_sweep(
 ):
     n_chunks = int(os.environ.get("PUSH_SWEEP_N_CHUNKS", PUSH_SWEEP_LEN // CHUNK))
     ab_chunks = tuple(c for c in PUSH_SWEEP_CHUNKS if c < n_chunks)
+    if os.environ.get("PUSH_SWEEP_AB"):  # only these chunks (comma list)
+        ab_chunks = tuple(int(c) for c in os.environ["PUSH_SWEEP_AB"].split(",") if int(c) < n_chunks)
     run_chunked_transformer_updated(
         variant,
         config_only,

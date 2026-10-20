@@ -171,7 +171,9 @@ void bind_experimental_high_bw_all_gather_operation(nb::module_& mod) {
         nb::arg("max_rows"),
         nb::arg("pages_per_packet"),
         nb::arg("banks"),
-        nb::arg("chunk_start") = nb::none());
+        nb::arg("chunk_start") = nb::none(),
+        nb::arg("sub_core_grids") = nb::none(),
+        nb::arg("subdevice_id") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::high_bw_all_gather::detail

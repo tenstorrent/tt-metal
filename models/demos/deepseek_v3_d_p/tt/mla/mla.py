@@ -1931,23 +1931,27 @@ class ttMLA:
             compact=True,
         )
 
-    def _sparse_push_plan(self, indices, kvpe_cache, seq_len_local, kv_actual_isl, layer_idx):
-        """The (cached) push plan for `indices` and the compact buffer of `layer_idx`'s parity."""
+    def _sparse_push_plan_args(self, kvpe_cache, seq_len_local, kv_actual_isl, layer_idx):
+        """Planner, the compact buffer of `layer_idx`'s parity, and the plan arguments for this chunk."""
         planner = self.tt_ccl.get_sparse_kv_push(self.ccl_num_links)[0]
         storage = kvpe_cache.storage
         row_bytes = storage.shape[-1] * (1 if storage.dtype == ttnn.fp8_e4m3 else 2)
         page_bytes = -(-row_bytes // 64) * 64  # DRAM-aligned row page
         dense = self._sparse_kv_gather_buffer
         push_buffer = planner.push_buffer(layer_idx % 2, planner.buffer_rows(dense.shape[2], page_bytes), dense)
-        plan = planner.plan(
-            indices,
+        args = dict(
             stripe_chunk=seq_len_local // self.tp_factor,
             buffer_rows=push_buffer.shape[2],
             page_bytes=page_bytes,
             max_rows=dense.shape[2],
             chunk_start=kv_actual_isl or 0,
         )
-        return plan, push_buffer
+        return planner, push_buffer, args
+
+    def _sparse_push_plan(self, indices, kvpe_cache, seq_len_local, kv_actual_isl, layer_idx):
+        """The (cached) push plan for `indices` and the compact buffer of `layer_idx`'s parity."""
+        planner, push_buffer, args = self._sparse_push_plan_args(kvpe_cache, seq_len_local, kv_actual_isl, layer_idx)
+        return planner.plan(indices, **args), push_buffer
 
     def _next_layer_prefetch(self, plan, kvpe_cache, cache_batch_idx):
         """sparse_sdpa arguments that fuse the next layer's prefix push into this layer's attention, or None."""
@@ -2063,6 +2067,7 @@ class ttMLA:
         populated_global,
         seq_len_local,
         metadata=None,
+        kv_actual_isl=None,
     ):
         """Run the closed two-program overlap region and return joined branch outputs.
 
@@ -2096,6 +2101,24 @@ class ttMLA:
                 overlap_resources=resources,
                 metadata=metadata,
             )
+            # Opt-in: plan the first shared layer's push from these indices (final when there is no TP redistribution)
+            # on the top-k cores. Top-k is the region's longer leg, so at 1M this only matches planning after it.
+            if (
+                self._push_prefetch is not None
+                and self._sparse_kv_push
+                and metadata is None
+                and not selection_state.requires_tp_redistribution
+                and os.getenv("TT_SPARSE_PUSH_PLAN_OVERLAP", "0") == "1"
+            ):
+                planner, _, args = self._sparse_push_plan_args(
+                    kvpe_cache, seq_len_local, kv_actual_isl, self.layer_idx + 1
+                )
+                planner.plan_in_region(
+                    local_indices,
+                    **args,
+                    sub_core_grids=resources.topk_core_grid,
+                    subdevice_id=resources.topk_subdevice_id,
+                )
         except Exception:
             failed = True
             raise
@@ -2146,6 +2169,7 @@ class ttMLA:
             populated_global=populated_global,
             seq_len_local=seq_len_local,
             metadata=metadata,
+            kv_actual_isl=kv_actual_isl,
         )
         # The first shared layer after this one reuses these indices: plan its push now and prefetch its prefix
         # rows during this layer's sparse_sdpa.

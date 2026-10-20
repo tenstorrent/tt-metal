@@ -50,6 +50,16 @@ void SparsePushPlanDeviceOperation::validate_on_program_cache_miss(
         "max_rows {} must be a multiple of stripe_chunk {} and of 512",
         attrs.max_rows,
         attrs.stripe_chunk);
+    if (attrs.sub_core_grids.has_value() && attrs.subdevice_id.has_value()) {
+        const auto sub_cores =
+            idx.device()->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, *attrs.subdevice_id);
+        TT_FATAL(
+            sub_cores.contains(*attrs.sub_core_grids),
+            "sparse push plan cores {} must lie in sub-device {} ({})",
+            *attrs.sub_core_grids,
+            *attrs.subdevice_id,
+            sub_cores);
+    }
     TT_FATAL(attrs.pages_per_packet >= 1 && attrs.banks >= 1, "pages_per_packet and banks must be positive");
 }
 
@@ -85,9 +95,15 @@ tt::tt_metal::ProgramDescriptor SparsePushPlanDeviceOperation::create_descriptor
 
     auto* device = indices.device();
     const auto grid = device->compute_with_storage_grid_size();
-    const uint32_t core_rows = std::max<uint32_t>(1, std::min<uint32_t>(grid.y, kMaxCores / grid.x));
-    const uint32_t cores = grid.x * core_rows;
-    const auto core_list = tt::tt_metal::grid_to_cores(cores, grid.x, grid.y, true);
+    std::vector<CoreCoord> core_list;
+    if (attrs.sub_core_grids.has_value()) {
+        core_list = corerange_to_cores(*attrs.sub_core_grids, std::nullopt, true);
+        core_list.resize(std::min<size_t>(core_list.size(), kMaxCores));
+    } else {
+        const uint32_t core_rows = std::max<uint32_t>(1, std::min<uint32_t>(grid.y, kMaxCores / grid.x));
+        core_list = tt::tt_metal::grid_to_cores(grid.x * core_rows, grid.x, grid.y, true);
+    }
+    const uint32_t cores = core_list.size();
     std::set<CoreRange> ranges;
     for (const auto& c : core_list) {
         ranges.insert(CoreRange(c, c));
@@ -220,7 +236,9 @@ std::vector<Tensor> sparse_push_plan(
     uint32_t max_rows,
     uint32_t pages_per_packet,
     uint32_t banks,
-    const std::optional<Tensor>& chunk_start) {
+    const std::optional<Tensor>& chunk_start,
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id) {
     using Op = ttnn::operations::experimental::high_bw_all_gather::SparsePushPlanDeviceOperation;
     return ttnn::device_operation::launch<Op>(
         Op::operation_attributes_t{
@@ -228,7 +246,9 @@ std::vector<Tensor> sparse_push_plan(
             .stripe_chunk = stripe_chunk,
             .max_rows = max_rows,
             .pages_per_packet = pages_per_packet,
-            .banks = banks},
+            .banks = banks,
+            .sub_core_grids = sub_core_grids,
+            .subdevice_id = subdevice_id},
         Op::tensor_args_t{.indices = indices, .chunk_start = chunk_start});
 }
 

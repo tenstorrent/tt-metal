@@ -112,6 +112,7 @@ class SparseKvPushPlanner:
         self.banks = mesh_device.dram_grid_size().x
         self._last: SparseKvPushPlan | None = None
         self._key = None
+        self._pending = None  # plan-op outputs from plan_in_region, awaiting their table gather
         self.host_seconds = 0.0  # cumulative host planning time
         # Perf A/B only: when `memo` is a dict, plans are kept per (memo_tag, generation) so re-running the same chunk
         # reuses them without reading the indices back (stand-in for on-device planning).
@@ -167,6 +168,7 @@ class SparseKvPushPlanner:
 
     def invalidate(self):
         self._last = None
+        self._pending = None
         self.generation += 1
         self.prefetched.clear()
 
@@ -178,6 +180,27 @@ class SparseKvPushPlanner:
     @staticmethod
     def _pages_per_packet(page_bytes: int) -> int:
         return max(1, ttnn.get_tt_fabric_max_payload_size_bytes() // page_bytes)
+
+    def plan_in_region(
+        self,
+        indices: ttnn.Tensor,
+        *,
+        stripe_chunk: int,
+        buffer_rows: int,
+        page_bytes: int,
+        max_rows: int,
+        chunk_start: int | None,
+        sub_core_grids: ttnn.CoreRangeSet,
+        subdevice_id: ttnn.SubDeviceId,
+    ):
+        """Run the plan op on a loaded sub-device's cores (to overlap the program on the other one); the table gather
+        follows in the next plan() call with the same arguments, after the sub-devices have joined."""
+        key = (indices.buffer_address(), stripe_chunk, buffer_rows, page_bytes, chunk_start)
+        start = None if chunk_start is None else self.chunk_start(chunk_start)
+        table, compact = self._plan_op(
+            indices, stripe_chunk, page_bytes, max_rows, start, sub_core_grids=sub_core_grids, subdevice_id=subdevice_id
+        )
+        self._pending = (key, table, compact, stripe_chunk, max_rows, chunk_start is not None)
 
     def plan(
         self,
@@ -191,6 +214,10 @@ class SparseKvPushPlanner:
     ) -> SparseKvPushPlan:
         key = (indices.buffer_address(), stripe_chunk, buffer_rows, page_bytes, chunk_start)
         if self._last is not None and self._key == key:
+            return self._last
+        pending, self._pending = self._pending, None
+        if pending is not None and pending[0] == key:
+            self._key, self._last = key, self._gather_table(*pending[1:])
             return self._last
         if self.on_device:
             start = None if chunk_start is None else self.chunk_start(chunk_start)
@@ -234,17 +261,24 @@ class SparseKvPushPlanner:
         logger.info(f"sparse KV push plan: {dt:.3f}s on host, up to {used} buffer rows per chip")
         return self._last
 
-    def _plan_device(self, indices, stripe_chunk, page_bytes, max_rows, chunk_start=None):
-        n_dev = self.mesh_device.get_num_devices()
-        table, compact = ttnn.experimental.sparse_push_plan(
+    def _plan_op(self, indices, stripe_chunk, page_bytes, max_rows, chunk_start=None, **cores):
+        return ttnn.experimental.sparse_push_plan(
             indices,
-            num_devices=n_dev,
+            num_devices=self.mesh_device.get_num_devices(),
             stripe_chunk=stripe_chunk,
             max_rows=max_rows,
             pages_per_packet=self._pages_per_packet(page_bytes),
             banks=self.banks,
             chunk_start=chunk_start,
+            **cores,
         )
+
+    def _plan_device(self, indices, stripe_chunk, page_bytes, max_rows, chunk_start=None):
+        table, compact = self._plan_op(indices, stripe_chunk, page_bytes, max_rows, chunk_start)
+        return self._gather_table(table, compact, stripe_chunk, max_rows, chunk_start is not None)
+
+    def _gather_table(self, table, compact, stripe_chunk, max_rows, split_prefix):
+        n_dev = self.mesh_device.get_num_devices()
         _shard_over_mesh(table, self.mesh_device)
         rows = table.shape[2] * n_dev
         if self._tables is None or self._tables.shape[2] != rows:
@@ -264,5 +298,5 @@ class SparseKvPushPlanner:
             streams=self._tables,
             compact_indices=compact,
             push_kwargs=dict(push_stripe_chunk=stripe_chunk, push_max_rows=max_rows),
-            split_prefix=chunk_start is not None,
+            split_prefix=split_prefix,
         )
