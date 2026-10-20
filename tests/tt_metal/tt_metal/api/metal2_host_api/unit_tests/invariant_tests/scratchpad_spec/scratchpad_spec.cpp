@@ -141,6 +141,64 @@ TEST_F(ProgramSpecTestBlackhole, CPU_SharedScratchpadAllocationAndReallocation) 
     CheckSharedScratchpad(*mesh_device_, MakeMinimalGen1ValidProgramSpec());
 }
 
+TEST_F(ProgramSpecTestQuasar, CPU_SharedScratchpadWithoutDfbsOnDisjointNodes) {
+    ProgramSpec spec;
+    spec.name = "shared_scratchpad_without_dfbs";
+    spec.kernels = {MakeMinimalGen2DMKernel("left"), MakeMinimalGen2DMKernel("right")};
+    spec.work_units = {
+        MakeMinimalWorkUnit("left_work", NodeCoord{0, 0}, {"left"}),
+        MakeMinimalWorkUnit("right_work", NodeCoord{2, 0}, {"right"}),
+    };
+    spec.scratchpads = {
+        ScratchpadSpec{
+            .unique_id = ScratchpadSpecName{"shared"},
+            .size_per_node = 1024,
+            .advanced_options = {.allow_multi_kernel_binding = true}},
+        ScratchpadSpec{
+            .unique_id = ScratchpadSpecName{"other_shared"},
+            .size_per_node = 256,
+            .advanced_options = {.allow_multi_kernel_binding = true}},
+    };
+    for (auto& kernel : spec.kernels) {
+        kernel.scratchpad_bindings = {
+            {.scratchpad_spec_name = ScratchpadSpecName{"shared"}, .accessor_name = "pad"},
+            {.scratchpad_spec_name = ScratchpadSpecName{"other_shared"}, .accessor_name = "other"},
+        };
+    }
+    // Different binding orders prevent independent per-kernel allocations from
+    // accidentally producing matching addresses on otherwise empty nodes.
+    std::reverse(spec.kernels[1].scratchpad_bindings.begin(), spec.kernels[1].scratchpad_bindings.end());
+
+    // No DFBs or private scratchpads seed the allocators: shared allocation must
+    // create them on both disjoint nodes and reserve space for both scratchpads.
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    ASSERT_TRUE(program.impl().dataflow_buffers().empty());
+    auto left = program.impl().get_kernel_by_spec_name("left");
+    auto right = program.impl().get_kernel_by_spec_name("right");
+    const auto& left_handles = left->scratchpad_binding_handles();
+    const auto& right_handles = right->scratchpad_binding_handles();
+    ASSERT_EQ(left_handles.size(), 2u);
+    ASSERT_EQ(right_handles.size(), 2u);
+    auto check_addresses = [&] {
+        for (size_t i = 0; i < left_handles.size(); ++i) {
+            const auto& a = left_handles[i];
+            const auto& b = right_handles[right_handles.size() - 1 - i];
+            EXPECT_NE(a.allocated_address, 0u);
+            EXPECT_EQ(a.allocated_address, b.allocated_address);
+            EXPECT_EQ(left->common_runtime_args_data()[a.addr_crta_word], a.allocated_address);
+            EXPECT_EQ(right->common_runtime_args_data()[b.addr_crta_word], a.allocated_address);
+        }
+        const auto& a = left_handles[0];
+        const auto& b = left_handles[1];
+        EXPECT_TRUE(
+            a.allocated_address + a.size_bytes <= b.allocated_address ||
+            b.allocated_address + b.size_bytes <= a.allocated_address);
+    };
+    check_addresses();
+    SetProgramRunArgs(program, ProgramRunArgs{});
+    check_addresses();
+}
+
 TEST_F(ProgramSpecTestQuasar, CPU_SharedScratchpadUsesEntireBinderNodeUnion) {
     // The DFB occupies only nodes 1 and 2. The shared scratchpad must clear it even
     // if the first binding kernel's node set does not include node 2.

@@ -11,6 +11,7 @@
 #include <enchantum/enchantum.hpp>
 #include "tt_metal/detail/reports/memory_reporter.hpp"
 #include "impl/buffers/semaphore.hpp"
+#include <numeric>
 #include <ranges>
 #include <tt_align.hpp>
 #include <algorithm>
@@ -2193,7 +2194,7 @@ void detail::ProgramImpl::invalidate_circular_buffer_allocation() {
 void detail::ProgramImpl::prepare_ephemeral_allocation(const IDevice* device) {
     // Shared scratchpads allocate over the union of their binders' nodes. Register
     // those exact ranges before initializing region bases and allocating DFBs.
-    std::unordered_map<experimental::ScratchpadSpecName, CoreRangeSet> shared_cores;
+    std::unordered_map<ScratchpadBindingHandle::AllocationIdentifier, CoreRangeSet> shared_cores;
     for (const auto& kernels_of_core_type : this->kernels_) {
         for (const auto& [kernel_handle, kernel] : kernels_of_core_type) {
             for (const auto& handle : kernel->scratchpad_binding_handles()) {
@@ -2220,6 +2221,48 @@ void detail::ProgramImpl::allocate_scratchpads(const IDevice* device) {
     }
 
     const uint32_t alignment = device->allocator()->get_alignment(BufferType::DRAM);
+
+    // Set address to a given scratchpad binding handle and it's kernel
+    auto set_address_on_scratchpad = [](DeviceAddr addr, ScratchpadBindingHandle& handle, Kernel& kernel) {
+        TT_FATAL(
+            addr != 0,
+            "Internal error: scratchpad '{}' on kernel '{}' "
+            "has a 0 allocated address (allocation failed or was skipped).",
+            handle.accessor_name,
+            kernel.name());
+
+        handle.allocated_address = static_cast<uint32_t>(addr);
+
+        // Patch the allocated address into the kernel's CRTA buffer if it exists.
+        // On the Metal 2.0 factory path, reserve_runtime_arg_buffers pre-sizes the CRTA
+        // buffer before this runs, so the address is updated here. If CRTA is not yet allocated
+        // (legacy order: SetProgramRunArgs first), SetProgramRunArgs copies
+        // handle.allocated_address into the scratchpad section when it builds the buffer.
+        // This allows for allocation of scratchpad and the CRTA buffer to be order agnostic.
+        //
+        // Usage of the CRTA buffer:
+        //  - FD: the fast/mesh path snapshots the CRTA buffer into the command stream
+        //  - SD: the slow-dispatch path writes it via WriteRuntimeArgsToDevice
+        if (!kernel.common_runtime_args().empty()) {
+            RuntimeArgsData& crta = kernel.common_runtime_args_data();
+            crta[handle.addr_crta_word] = handle.allocated_address;
+        }
+    };
+
+    // Backticks needed to set a binding handle's address
+    struct ScratchpadBindingRef {
+        ScratchpadBindingHandle& handle;
+        Kernel& kernel;
+    };
+
+    // Multiple Scratchpad bindings could share the same allocation through:
+    // ScratchpadAdvancedOptions::allow_multi_kernel_binding.
+    //
+    // Shared allocation are identified by an ID.
+    std::unordered_map<ScratchpadBindingHandle::AllocationIdentifier, std::vector<ScratchpadBindingRef>>
+        multi_binded_scratchpads;
+
+    // Going through all single-binded scratchpads
     for (auto& kernels_of_core_type : this->kernels_) {
         for (auto& [kernel_handle, kernel] : kernels_of_core_type) {
             auto& scratchpad_handles = kernel->scratchpad_binding_handles();
@@ -2227,39 +2270,31 @@ void detail::ProgramImpl::allocate_scratchpads(const IDevice* device) {
                 continue;
             }
             const CoreRangeSet& kernel_cores = kernel->core_range_set();
-
             for (auto& handle : scratchpad_handles) {
-                // A scratchpad bumps onto the program-scope L1 region, stacking on top of any DFBs.
-                // (DFBs and CBs are mutually exclusive, so dfb_allocation_metadata_ owns the whole region.)
-                // The scratchpad address is delivered as a CRTA, so it sits at the same L1 offset on every core of
-                // the kernel. The kernel's core ranges were registered in add_kernel.
-                const uint64_t addr =
-                    allocate_scratchpad(this->dfb_allocation_metadata_, kernel_cores, handle.size_bytes, alignment);
-
-                handle.allocated_address = static_cast<uint32_t>(addr);
-
-                TT_FATAL(
-                    handle.allocated_address != 0,
-                    "Internal error: scratchpad '{}' on kernel '{}' "
-                    "has a 0 allocated address (allocation failed or was skipped).",
-                    handle.accessor_name,
-                    kernel->name());
-
-                // Patch the allocated address into the kernel's CRTA buffer if it exists.
-                // On the Metal 2.0 factory path, reserve_runtime_arg_buffers pre-sizes the CRTA
-                // buffer before this runs, so the address is updated here. If CRTA is not yet allocated
-                // (legacy order: SetProgramRunArgs first), SetProgramRunArgs copies
-                // handle.allocated_address into the scratchpad section when it builds the buffer.
-                // This allows for allocation of scratchpad and the CRTA buffer to be order agnostic.
-                //
-                // Usage of the CRTA buffer:
-                //  - FD: the fast/mesh path snapshots the CRTA buffer into the command stream
-                //  - SD: the slow-dispatch path writes it via WriteRuntimeArgsToDevice
-                if (!kernel->common_runtime_args().empty()) {
-                    RuntimeArgsData& crta = kernel->common_runtime_args_data();
-                    crta[handle.addr_crta_word] = handle.allocated_address;
+                // Multi-binded scratchpad, let's collect it and deal with it later
+                if (auto id = handle.shared_allocation_identifier) {
+                    multi_binded_scratchpads[*id].emplace_back(handle, *kernel);
+                    continue;
                 }
+
+                DeviceAddr addr = allocate_scratchpad(this->dfb_allocation_metadata_, kernel_cores, handle.size_bytes, alignment);
+                set_address_on_scratchpad(addr, handle, *kernel);
             }
+        }
+    }
+
+    // Now let's deal with multi-binded scratchpads
+    for (auto& [id, refs] : multi_binded_scratchpads) {
+        auto size_bytes = refs.front().handle.size_bytes;
+
+        CoreRangeSet cores = std::accumulate(
+            refs.begin(), refs.end(), CoreRangeSet{}, [](const CoreRangeSet& cores, const auto& handle) {
+                return cores.merge(handle.kernel.core_range_set());
+            });
+
+        DeviceAddr addr = allocate_scratchpad(this->dfb_allocation_metadata_, cores, size_bytes, alignment);
+        for (auto& handle : refs) {
+            set_address_on_scratchpad(addr, handle.handle, handle.kernel);
         }
     }
 
