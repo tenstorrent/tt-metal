@@ -17,7 +17,7 @@
 #include <vector>
 
 // UMD: re-exports tt_xy_pair, aliased as CoreCoord in this header.
-#include <umd/device/types/xy_pair.hpp>
+#include <tt-umd/types/xy_pair.hpp>
 
 namespace ttsl::json {
 template <typename T>
