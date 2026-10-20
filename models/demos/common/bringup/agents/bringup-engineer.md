@@ -53,12 +53,16 @@ You start with no memory of earlier steps. Everything you need is in the brief a
    measured, limits, used by) and its `INDEX.md` entry current, build (`./build_metal.sh`, fix any build errors), and run the fork's tests. When you extend an existing
    fork, iterate on a few targeted tests and the model's gate, then run the fork's full regression once, with the new
    option off: the results must match the recorded baseline (the recipe in the skill, section 3).
-7. Precision (owner rule). Run every matmul at HiFi4, in every role. Weights (owner, 2026-10-19): the shipped default
-   stores each weight in the device format of the checkpoint's own width: fp4 -> bfp4, fp8 -> bfp8, 16-bit -> bf16;
-   never wider (that doubles memory and DRAM traffic), never narrower. Where that format cannot hold the checkpoint's
-   values exactly (bfp4 for fp4 with per-32 scales, bfp8 for e4m3 with block scales), the weight's setting names the
-   smallest exact wider format (bfp8 / bf16) in `max_precision`, so the per-step tests stay exact and the default is
-   judged end to end (rule 14).
+7. Precision (owner rule, 2026-10-20: realistic from the start; F123). The model's shipped defaults (tt/settings.py)
+   are realistic precision from the first step, never "maximum then tuned down": weights in the device format of the
+   checkpoint's own width (fp4 -> bfp4, fp8 -> bfp8, 16-bit -> bf16; never wider, never narrower); matmuls at HiFi2,
+   LoFi where the weights are bfp4 / bfp8 and the step's end-to-end check holds; fp32 accumulation only where you
+   measured it to matter (a long reduction, softmax statistics), off elsewhere; stock TTNN kernels or the bring-up ops
+   at their normal settings, a high-precision variant only when a measured end-to-end gap needs it; cross-chip sums
+   in bf16. Reference point: GLM-5.3's production settings (attention HiFi2, experts LoFi with fp32 accumulation, bf16
+   reduce-scatter). Never above the reference, never a parity-only rounding (rule 17). Every such choice is a
+   `Setting` whose `max_precision` value is the exact / highest one (HiFi4, fp32 accumulation, the exact wider weight
+   format): the per-step tests run there to catch logic bugs (rule 14); it is never the shipped default.
 8. Check your work by running the gate command from the brief, exactly as written. The orchestrator runs it again
    afterwards and only its verdict counts. Do not edit tests, goldens, thresholds, `tasks.yaml`, `state.json` or
    `results/`.
@@ -105,9 +109,10 @@ You start with no memory of earlier steps. Everything you need is in the brief a
    step that is only hard, or that an existing op, a composition or a fork could do, is cheating.
 12. Do not commit. The orchestrator commits when the gate passes (or when it accepts a deferral).
 13. End with a short plain-text summary: what changed, what the gate printed, anything the next step must know.
-14. Precision. Bring every step up at maximum precision (HiFi4, fp32 accumulation, bf16 KV). Component and swap
-   tests always run at that precision (testing/model_precision.py), whatever the shipped defaults are; a later perf
-   pick that lowers precision is judged end to end (ladder, contract tests), never by the component limits.
+14. Precision checks. The shipped defaults are realistic (rule 7). Component and swap tests always run at the model's
+   `max_precision` (testing/model_precision.py): tight per-step limits catch logic bugs (a wrong index, a missing
+   scale); the realistic defaults are judged end to end (ladder, contract tests, the quick A/B), never by the
+   component limits.
    Maximum precision means the device's full precision for the reference's own dtypes (its native numerics, rule
    17: no parity-only rounding), never more: no fp32 where the reference computes in bf16, no exact or emulated
    paths to beat a limit. Every accuracy limit is 2 x the noise floor
