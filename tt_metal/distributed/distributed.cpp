@@ -5,6 +5,7 @@
 #include <tt_stl/assert.hpp>
 #include <tt_stl/fmt.hpp>
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/distributed_context.hpp>
 #include <utility>
 
 #include "device.hpp"
@@ -21,6 +22,9 @@
 #include "impl/program/slow_dispatch.hpp"
 #include <tt-metalium/tt_metal.hpp>
 #include "llrt/tt_cluster.hpp"
+#ifdef TT_METAL_USE_EMULE
+#include "emule_mesh_command_queue.hpp"
+#endif
 
 namespace tt::tt_metal::distributed {
 
@@ -117,7 +121,10 @@ void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload,
     }
 
     auto& env = mesh_impl.metal_env();
-    if (env.get_rtoptions().get_fast_dispatch()) {
+    // Emulated devices have no dispatch firmware: tt-emule's queue compiles and launches each program itself
+    // through the slow-dispatch path, so the fast-dispatch compile, binary upload and command generation are skipped.
+    const bool emulated = env.get_cluster().get_target_device_type() == tt::TargetDevice::Emule;
+    if (env.get_rtoptions().get_fast_dispatch() && !emulated) {
         mesh_workload.impl().compile(mesh_cq.device());
         mesh_workload.impl().load_binaries(mesh_cq);
         mesh_workload.impl().generate_dispatch_commands(mesh_cq);
@@ -137,6 +144,13 @@ void EventSynchronize(const MeshEvent& event) {
         event.device()->mesh_command_queue(event.impl().mesh_cq_id()).enqueue_wait_for_event(event);
         return;
     }
+#ifdef TT_METAL_USE_EMULE
+    // tt-emule's queue tracks its events itself; there are no sysmem completion counters to poll.
+    if (event.device()->impl().metal_env().get_cluster().get_target_device_type() == tt::TargetDevice::Emule) {
+        emule::event_synchronize(event);
+        return;
+    }
+#endif
     for (const auto& coord : event.impl().device_range()) {
         auto* physical_device = event.device()->impl().get_device(coord);
         while (physical_device->sysmem_manager().get_last_completed_event(event.impl().mesh_cq_id()) <
@@ -150,6 +164,11 @@ bool EventQuery(const MeshEvent& event) {
     if (!event.device()->impl().metal_env().get_rtoptions().get_fast_dispatch()) {
         return true;
     }
+#ifdef TT_METAL_USE_EMULE
+    if (event.device()->impl().metal_env().get_cluster().get_target_device_type() == tt::TargetDevice::Emule) {
+        return emule::event_query(event);
+    }
+#endif
     bool event_completed = true;
     for (const auto& coord : event.impl().device_range()) {
         auto* physical_device = event.device()->impl().get_device(coord);
@@ -195,10 +214,6 @@ void Finish(MeshCommandQueue& mesh_cq, ttsl::Span<const SubDeviceId> sub_device_
     mesh_cq.finish(sub_device_ids);
 }
 
-bool UsingDistributedEnvironment() {
-    using multihost::DistributedContext;
-    const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
-    return DistributedContext::is_initialized() && *(distributed_context.size()) > 1;
-}
+bool UsingDistributedEnvironment() { return *(multihost::DistributedContext::get_current_world()->size()) > 1; }
 
 }  // namespace tt::tt_metal::distributed

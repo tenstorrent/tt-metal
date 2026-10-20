@@ -1,9 +1,9 @@
 set(TT_METAL_PUBLIC_API
     api/internal/service/inter_process_counter_channel.hpp
     api/internal/service/service_core_manager.hpp
+    api/internal/disaggregation/layer_ack_decoder.hpp
     api/internal/disaggregation/layer_completion_message.hpp
     api/internal/disaggregation/layer_completion_queue.hpp
-    api/internal/disaggregation/layer_completion_reorder_buffer.hpp
     api/internal/disaggregation/layer_completion_router.hpp
     api/internal/reload_table.hpp
     api/tt-metalium/allocator.hpp
@@ -104,6 +104,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/pinned_memory.hpp
     api/tt-metalium/experimental/prefetcher_pipe.hpp
     api/tt-metalium/experimental/sender_core_type.hpp
+    api/tt-metalium/experimental/op_profiler_support.hpp
     api/tt-metalium/experimental/profiler.hpp
     api/tt-metalium/experimental/program_preparation.hpp
     api/tt-metalium/experimental/streaming_profiler.hpp

@@ -65,6 +65,7 @@
 #include "ttnn/operations/full_like/full_like_nanobind.hpp"
 #include "ttnn/operations/generic/generic_op_nanobind.hpp"
 #include "ttnn/operations/index_fill/index_fill_nanobind.hpp"
+#include "ttnn/operations/index_fill_new/index_fill_new_nanobind.hpp"
 #include "ttnn/operations/kv_cache/kv_cache_nanobind.hpp"
 #include "ttnn/operations/loss/loss_nanobind.hpp"
 #include "ttnn/operations/matmul/matmul_nanobind.hpp"
@@ -209,6 +210,10 @@ void py_module(nb::module_& mod) {
     auto m_index_fill = mod.def_submodule("index_fill", "index_fill operation");
     index_fill::bind_index_fill_operation(m_index_fill);
 
+    // Phase-1 descriptor-migration scaffolding for index_fill (#42392); removed in Phase 3.
+    auto m_index_fill_new = mod.def_submodule("index_fill_new", "index_fill_new operation");
+    index_fill_new::bind_index_fill_new_operation(m_index_fill_new);
+
     auto m_bernoulli = mod.def_submodule("bernoulli", "bernoulli operations");
     bernoulli::bind_bernoulli_operation(m_bernoulli);
 
@@ -263,8 +268,7 @@ NB_MODULE(_ttnn, mod) {
         mod.def_submodule("d2d_stream_service", "ttnn persistent device-to-device streaming service");
     auto m_counter_channel = mod.def_submodule("counter_channel", "ttnn cross-process producer-counter channel");
     auto m_layer_ack_service = mod.def_submodule("layer_ack_service", "ttnn per-layer completion ack service");
-    auto m_layer_completion =
-        mod.def_submodule("layer_completion", "Pipelined-prefill layer-completion ring/router/consumer");
+    auto m_layer_completion = mod.def_submodule("layer_completion", "Pipelined-prefill layer-completion ring/router");
     auto m_mesh_socket = mod.def_submodule("mesh_socket", "ttnn mesh socket");
     auto m_profiler = mod.def_submodule("profiler", "Submodule defining the profiler");
     auto m_reports = mod.def_submodule("reports", "ttnn reports");

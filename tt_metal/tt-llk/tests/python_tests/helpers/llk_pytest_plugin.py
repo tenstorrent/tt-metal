@@ -243,9 +243,10 @@ def pytest_addoption(parser):
         help="Append a JSON row (test, variant, measured max ULP and lane counts) to "
         "PATH for each comparison made right after exactly one accuracy_contract "
         "lookup in the same test, on a variant that ran with the dest_acc it names. "
-        "The exhaustive sweep skips tolerance cells before comparing, and under "
-        "--ulp-emit does not compare at all, so those record nothing. PATH is created "
-        "and truncated at session start. Reporting only: it cannot change a verdict.",
+        "The exhaustive sweep records every cell it measures, gated or not and under "
+        "--ulp-emit too, plus a non-finite lane count for a tolerance cell it cannot "
+        "measure. PATH is created and truncated at session start. Reporting only: it "
+        "cannot change a verdict.",
     )
     parser.addoption(
         "--ulp-emit",
@@ -734,10 +735,11 @@ def _select_tests_by_op(config, items):
 def _split_by_cost(config, items):
     """Cut the tests, in collection order, into --perf-splits chunks of equal estimated time.
 
-    A test weighs its module's cost from perf_split_costs.json divided by the module's test
-    count. The chunks are contiguous, so a module's tests, and the ELFs they share, stay in one
-    shard except at a cut point. This runs before _collapse_runtime_only_variants, so the
-    compile and run passes cut the same list.
+    A test weighs its module's cost from perf_split_costs.json (perf_split_costs_sol.json with
+    --speed-of-light, which compiles every variant) divided by the module's test count. The
+    chunks are contiguous, so a module's tests, and the ELFs they share, stay in one shard
+    except at a cut point. build_perf_split_costs.py rebuilds both tables. This runs before
+    _collapse_runtime_only_variants, so the compile and run passes cut the same list.
     """
     splits = config.getoption("--perf-splits")
     group = config.getoption("--perf-group")
@@ -749,18 +751,22 @@ def _split_by_cost(config, items):
         )
 
     arch = TestConfig.CHIP_ARCH.value
-    table = json.loads(
-        (Path(__file__).resolve().parents[2] / "perf_split_costs.json").read_text()
+    costs_file = (
+        "perf_split_costs_sol.json"
+        if TestConfig.SPEED_OF_LIGHT
+        else "perf_split_costs.json"
     )
+    table = json.loads((Path(__file__).resolve().parents[2] / costs_file).read_text())
     module_cost = table.get(arch)
     if module_cost is None:
-        raise pytest.UsageError(f"perf_split_costs.json has no costs for {arch}")
+        raise pytest.UsageError(f"{costs_file} has no costs for {arch}")
 
     modules = [item.path.stem for item in items]
     unknown = sorted(set(modules) - module_cost.keys())
     if unknown:
         logger.warning(
-            f"--perf-splits: no cost for {', '.join(unknown)}; each counts as 1 s"
+            f"--perf-splits: {costs_file} has no cost for {', '.join(unknown)}; "
+            "each counts as 1 s"
         )
     tests_in = collections.Counter(modules)
     weights = [module_cost.get(m, 1.0) / tests_in[m] for m in modules]
@@ -1190,8 +1196,8 @@ def _finish_ulp_emit(session):
         return
     if TestConfig.BUILD_MODE == BuildMode.PRODUCE or session.config.option.collectonly:
         # The producer only compiles -- TestConfig.run() skips before the device -- so it
-        # can never measure. It takes --ulp-emit only to collect the wider op set the
-        # consumer will run, and failing it would fail the documented emit workflow.
+        # can never measure. It collects the same op set with or without --ulp-emit,
+        # and failing it would fail the documented emit workflow.
         # `--collect-only --ulp-emit` previews that set, and runs nothing either.
         _ulp_emit_line(
             session, "--ulp-emit: nothing runs in this session; nothing to write"
