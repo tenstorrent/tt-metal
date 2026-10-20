@@ -29,9 +29,24 @@ from ....models.transformers.minimax_h3.sol_prepass import SolGeometry, SolPrepa
 from ....parallel.manager import CCLManager
 from ....utils.tensor import bf16_tensor, from_torch
 from .common import GALAXY_RING
-from .test_transformer_minimax_h3 import logical_length_tensor
 
 MODES = ["gather", "chunk", "compact"]
+
+
+def logical_length_tensor(mesh_device: ttnn.MeshDevice, value: int) -> ttnn.Tensor:
+    """The `logical_n` device tensor the op takes: [1, 1, 1, 1] uint32 ROW_MAJOR, replicated.
+
+    Copied from test_transformer_minimax_h3 rather than imported: that module pulls in a MiniMax-H3-patched
+    `diffusers`, which this file has no other use for and which is not installed everywhere. Keeping the file
+    standalone is the point -- its reference is the dense ring op, not a model.
+    """
+    return from_torch(
+        torch.tensor([value], dtype=torch.int64).reshape(1, 1, 1, 1),
+        device=mesh_device,
+        dtype=ttnn.uint32,
+        layout=ttnn.Layout.ROW_MAJOR,
+        mesh_axes=[..., None, None],
+    )
 _MODE_LINE = "RingJointSDPA sol mode resolved: "
 
 # Default geometry: small enough to run every parameter in one sitting, large enough that a K chunk holds
@@ -310,9 +325,7 @@ def _pack_env_restore(prev):
 
 
 @GALAXY_RING
-def test_q2_packing_matches_unpacked(
-    mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, reset_seeds, capfd
-):
+def test_q2_packing_matches_unpacked(mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, reset_seeds, capfd):
     """Q2's correctness gate: packing regroups blocks into full pages and must not change the math.
 
     Same inputs, same mask, same tau -- only the delivery unit differs (kept chunks vs packed pages). Any
