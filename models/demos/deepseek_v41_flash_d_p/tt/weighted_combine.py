@@ -30,6 +30,9 @@ home tokens are S = chunk / R (1024 at 2048 on 2x2, 4096 on 4x4): P = the fewest
 One pass of 1024 tokens needs >= 17 accumulators (1322 KB each at ring depth 1), i.e. >= 18 free cells and the
 op's A <= 16 cap lifted: an L1 capacity limit, not a hang. The "255-tile" hang was the local ring's grant
 batching, fixed in combine_rf (DS41-70); one pass runs up to 558 tokens a chip (310 fp32 tiles an accumulator).
+COMBINE_ACC=bf16 (P.9, sparse_combine_rf acc_dtype): the sums in bf16 (10 KB a token: the packer's L1 accumulation
+rounds each added row to bf16), so the 1024 home tokens fit the same 9 accumulators in ONE pass (114 tokens x 5 bf16
+tiles = 1140 KB an accumulator): the expert weights stream once a layer. TtExperts asserts the single pass for bf16.
 
 Rows are one fabric packet each (10240 B + a 32 B trailer): the mesh opens with a 10880 B fabric payload under
 EXPERTS_COMBINE=weighted (bringup/hooks.py:device_params). Everything that depends only on shapes is built once
@@ -207,9 +210,12 @@ class WeightedCombine:
         h_bf16: bool,
         arena_bytes: int | None = None,
         passes: int | None = None,
+        acc_dtype=None,
     ):
         """arena_bytes: the per-core arena (None: the flat expert's, grown for the accumulators up to ARENA_MAX; a
-        test override). passes: the pass count (None: the fewest that fit; a test override, >= that)."""
+        test override). passes: the pass count (None: the fewest that fit; a test override, >= that). acc_dtype: the
+        combine's running sums per home token in L1 (setting COMBINE_ACC, P.9): ttnn.float32 (None: 20 KB a token,
+        2x2: 2 passes of 512) or ttnn.bfloat16 (10 KB a token: the 1024 home tokens in one pass)."""
         from ttnn.bringup.combine_rf.combine_plan import axis_ports, combine_planner_prepare, port_luts
         from ttnn.bringup.combine_rf.sparse_all_gather_2d import mesh_plan, place_ports
         from ttnn.bringup.combine_rf.sparse_combine_rf import accumulator_bytes
@@ -218,6 +224,9 @@ class WeightedCombine:
         self.mesh, self.R, self.C, self.H, self.I, self.epc, self.K, self.S = mesh, R, C, H, I, epc, K, S
         self.Eg = R * epc  # the column's experts (ExpertMapping column-major: column c holds [c Eg, (c + 1) Eg))
         self.out_dtype, self.x_bf16, self.h_bf16 = out_dtype, x_bf16, h_bf16
+        self.acc_dtype = ttnn.float32 if acc_dtype is None else acc_dtype
+        acc_kw = dict(out_dtype=out_dtype, acc_dtype=self.acc_dtype)
+        acc_name = "fp32" if self.acc_dtype == ttnn.float32 else "bf16"
         self.plan = plan
         grid = mesh.compute_with_storage_grid_size()
         self.grid = grid
@@ -235,26 +244,22 @@ class WeightedCombine:
         self.A = min(16, len([c for c in self.cells if c not in port_cells]))
         assert self.A >= 1, f"no accumulator cell left ({len(self.cells)} free cells, ports {sorted(port_cells)})"
         self.links = links
-        # passes: the fewest whose home tokens' fp32 rows fit the accumulators in an arena of at most ARENA_MAX (or
-        # the flat expert's own, if larger)
+        # passes: the fewest whose home tokens' sums (fp32 or bf16 rows, acc_dtype) fit the accumulators in an arena
+        # of at most ARENA_MAX (or the flat expert's own, if larger)
         flat_bytes = int(plan["arena_tiles"]) * 2048
         cap_bytes = max(flat_bytes, ARENA_MAX)
         P = 1
-        while accumulator_bytes(R, self.A, H, -(-S // P), depth=1, out_dtype=out_dtype) > cap_bytes:
+        while accumulator_bytes(R, self.A, H, -(-S // P), depth=1, **acc_kw) > cap_bytes:
             P += 1
             assert P <= S, "no pass size fits the arena"
         if P > 1:  # (L1 capacity: the accumulators one pass would need)
             a1 = next(
-                (
-                    a
-                    for a in range(self.A, 65)
-                    if accumulator_bytes(R, a, H, S, depth=1, out_dtype=out_dtype) <= cap_bytes
-                ),
+                (a for a in range(self.A, 65) if accumulator_bytes(R, a, H, S, depth=1, **acc_kw) <= cap_bytes),
                 None,
             )
             logger.info(
-                f"EXPERTS_WEIGHTED S={S}: {P} passes (one pass needs >= {a1} accumulators of <= {cap_bytes >> 10} KB, "
-                f"this grid leaves {self.A})"
+                f"EXPERTS_WEIGHTED S={S}: {P} passes ({acc_name} sums: one pass needs >= {a1} accumulators of <= "
+                f"{cap_bytes >> 10} KB, this grid leaves {self.A})"
             )
         if passes is not None:
             assert passes >= P, f"passes={passes}: {-(-S // passes)} home tokens a pass do not fit (fewest {P})"
@@ -262,7 +267,7 @@ class WeightedCombine:
         self.P = P
         self.S_pass = -(-S // P)
         # (rings: 4 slots per source; the local ring 8 slots, else what the arena leaves: >= 2)
-        need = accumulator_bytes(R, self.A, H, self.S_pass, depth=4, out_dtype=out_dtype, local_slots=8)
+        need = accumulator_bytes(R, self.A, H, self.S_pass, depth=4, local_slots=8, **acc_kw)
         arena_bytes = arena_bytes or max(flat_bytes, min(cap_bytes, _ceil(need, 2048)))
         # the arena: every role's buffers (~all of L1) on every core; per call, at one address
         self.a_rows = arena_bytes // 64
@@ -272,7 +277,8 @@ class WeightedCombine:
         self.rows_cap = _ceil(R * self.S_pass * min(K, epc) + epc * (TILE - 1), TILE)
         self.cap = max(256, _ceil(R * self.S_pass, TILE))  # rows one expert may get in a pass
         logger.info(
-            f"EXPERTS_WEIGHTED S={S} passes={P} x {self.S_pass} accumulators={self.A} port cells={sorted(port_cells)} "
+            f"EXPERTS_WEIGHTED S={S} passes={P} x {self.S_pass} acc={acc_name} accumulators={self.A} "
+            f"port cells={sorted(port_cells)} "
             f"free cells={len(self.cells)} rows_cap={self.rows_cap} arena={arena_bytes >> 10} KB "
             f"flat arena={flat_bytes >> 10} KB acc={need >> 10} KB (ring depth 4, local ring 8)"
         )
@@ -356,6 +362,7 @@ class WeightedCombine:
                 out_row0=p * self.S_pass,
                 acc_unpack_fp32=True,
                 zero_unseen=True,
+                acc_dtype=self.acc_dtype,
             )
             assert len(run.cells["accs"]) == self.A, (run.cells, self.A)
             desc, l1_args = run.build_l1(self.y, self.out, arena)
