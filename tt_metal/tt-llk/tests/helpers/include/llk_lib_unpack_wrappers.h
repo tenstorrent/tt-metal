@@ -62,6 +62,20 @@ inline void _llk_unpack_tilizeA_B_init_wrapper_(
         unpack_src_format, unpack_dst_format, false /* narrow_tile */, ct_dim, num_faces, face_r_dim, face_r_dim);
 }
 
+// Wormhole bakes neginf_srcA / reload_srcB / zero_srcA_reduce into the MOP at init; only zero_srcA is an execute template.
+template <bool /*neginf_srcA*/ = false, std::uint32_t /*reload_srcB*/ = false, bool zero_srcA = false, bool /*zero_srcA_reduce*/ = false>
+inline void _llk_unpack_tilizeA_B_wrapper_(
+    const std::uint32_t unpack_src_format,
+    const std::uint32_t face_r_dim,
+    const std::uint32_t base_address_a,
+    const std::uint32_t address_b,
+    const std::uint32_t tile_index_a,
+    const std::uint32_t block_ct_dim,
+    const std::uint32_t num_faces = 4)
+{
+    _llk_unpack_tilizeA_B_<zero_srcA>(unpack_src_format, face_r_dim, false /* narrow_tile */, base_address_a, address_b, tile_index_a, block_ct_dim, num_faces);
+}
+
 inline void _llk_unpack_tilizeA_B_uninit_wrapper_(
     const std::uint32_t unpack_dst_format, const std::uint32_t num_faces = 4, const std::uint32_t face_r_dim = FACE_R_DIM)
 {
@@ -116,6 +130,20 @@ inline void _llk_unpack_tilizeA_B_init_wrapper_(
     const std::uint32_t face_r_dim = ckernel::FACE_R_DIM)
 {
     _llk_unpack_tilizeA_B_init_<neginf_srcA, reload_srcB, zero_srcA, zero_srcA_reduce>(unpack_src_format, unpack_dst_format, ct_dim, num_faces, face_r_dim);
+}
+
+template <bool neginf_srcA = false, std::uint32_t reload_srcB = false, bool zero_srcA = false, bool zero_srcA_reduce = false>
+inline void _llk_unpack_tilizeA_B_wrapper_(
+    const std::uint32_t unpack_src_format,
+    const std::uint32_t face_r_dim,
+    const std::uint32_t base_address_a,
+    const std::uint32_t address_b,
+    const std::uint32_t tile_index_a,
+    const std::uint32_t block_ct_dim,
+    const std::uint32_t num_faces = 4)
+{
+    _llk_unpack_tilizeA_B_<neginf_srcA, reload_srcB, zero_srcA, zero_srcA_reduce>(
+        unpack_src_format, face_r_dim, base_address_a, address_b, tile_index_a, block_ct_dim, num_faces);
 }
 
 inline void _llk_unpack_tilizeA_B_uninit_wrapper_(
