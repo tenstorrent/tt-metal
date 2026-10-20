@@ -12,9 +12,9 @@ KERNEL_SOURCE = """
 
 void kernel_main() {
     volatile tt_l1_ptr uint32_t* out = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_val<uint32_t>(0));
-#if defined(KH_AKH_B)
+#if defined(PREFIX_APREFIX_B)
     out[0] = 2;
-#elif defined(KH_A)
+#elif defined(PREFIX_A)
     out[0] = 1;
 #else
     out[0] = 3;
@@ -23,7 +23,7 @@ void kernel_main() {
 """
 
 
-def run_with_defines(device, defines):
+def run_with_defines(device, prefix, defines):
     core = ttnn.CoreCoord(0, 0)
     core_ranges = ttnn.CoreRangeSet([ttnn.CoreRange(core, core)])
     sharded_l1 = ttnn.MemoryConfig(
@@ -46,11 +46,11 @@ def run_with_defines(device, defines):
     program = ttnn.ProgramDescriptor(
         kernels=[
             ttnn.KernelDescriptor(
-                kernel_source=KERNEL_SOURCE,
+                kernel_source=KERNEL_SOURCE.replace("PREFIX", prefix),
                 source_type=ttnn.KernelDescriptor.SourceType.SOURCE_CODE,
                 core_ranges=core_ranges,
                 compile_time_args=[],
-                defines=defines,
+                defines=[(key.replace("PREFIX", prefix), value.replace("PREFIX", prefix)) for key, value in defines],
                 runtime_args=runtime_args,
                 config=ttnn.WriterConfigDescriptor(),
             )
@@ -61,12 +61,15 @@ def run_with_defines(device, defines):
 
 
 @pytest.mark.parametrize(
-    "first, first_value, second, second_value",
+    "prefix, first, first_value, second, second_value",
     [
-        ([("KH_A", "KH_B")], 1, [("KH_AKH_B", "")], 2),
-        ([("KH_AKH_B", "")], 2, [("KH_A", ""), ("KH_B", "")], 1),
+        ("KHS", [("PREFIX_A", "PREFIX_B")], 1, [("PREFIX_APREFIX_B", "")], 2),
+        ("KHC", [("PREFIX_APREFIX_B", "")], 2, [("PREFIX_A", ""), ("PREFIX_B", "")], 1),
     ],
+    ids=["key_value_split", "define_count"],
 )
-def test_kernels_differing_only_in_define_split_compile_separately(device, first, first_value, second, second_value):
-    assert run_with_defines(device, first) == first_value
-    assert run_with_defines(device, second) == second_value
+def test_kernels_differing_only_in_define_split_compile_separately(
+    device, prefix, first, first_value, second, second_value
+):
+    assert run_with_defines(device, prefix, first) == first_value
+    assert run_with_defines(device, prefix, second) == second_value
