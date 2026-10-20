@@ -5,30 +5,40 @@
 `--data-parallel-size 4` runs as four in-process lanes, one TP=8 replica per Galaxy row (`MiMoGalaxyGenerator`).
 Sampling runs on the host; decode replays one trace per replica; prefill runs eagerly in chunks.
 
-Measured 2026-10-19 on one BH Galaxy, tt-metal `mimo-v2.6/vllm` at ee6895badd4, plugin
-`mimo-v2.6-flash/vllm-plugin-dev` at 47cc860, vLLM 0.30.0, MOPD weights (48 layers, BFP4 experts, BFP8 KV).
+Measured 2026-10-20 on one BH Galaxy, tt-metal `mimo-v2.6/vllm` at 52f85d31b3e (the merge of
+`mimo-v2.6/vllm-prefill-trace`, `mimo-v2.6/slot-parity` and `mimo-v2.6/moe-prefill`, tenstorrent/tt-metal#61462),
+plugin `mimo-v2.6-flash/vllm-plugin-dev` at 11dc5a9, vLLM 0.30.0, MOPD weights (48 layers, BFP4 experts, BFP8 KV).
+The branch changes `chunked_flash_mla_prefill` (C++), so it needs its own ttnn build. Rows marked (ee6895badd4) were
+measured before the merges, at that commit with plugin 47cc860.
 
 | Check | Result |
 |---|---|
-| Plugin HTTP suite `tests/tt` (no spec decode), 32K, 4 lanes x 4 users | 64 passed, 1 skipped, 14 failed: 13 seed / batch reproducibility tests (decode-slot parity, below) and `test_bad_words` (the model stops inside its reasoning when the banned word is the natural next token) |
+| Plugin HTTP suite `tests/tt` (no spec decode), 32K, 4 lanes x 4 users | 77 passed, 1 skipped, 1 failed: `test_bad_words` (the model stops inside its reasoning when the banned word is the natural next token). The 13 seed / batch reproducibility tests that failed at ee6895badd4 (64 passed, 14 failed) pass |
 | Chunked prefill (`--max-num-batched-tokens 2048`) | the three needle-recall tests pass: one split prompt, a 3x-budget prompt, and four prompts sharing steps with ragged chunk boundaries |
-| Prefix caching | a second request on a cached 5.3K-token prefix prefills in 2.1 s instead of 31.8 s and recalls a passphrase from inside the prefix |
-| Greedy vs the standalone generator, 16 chat prompts (15-552 tokens), 32 tokens | 15/16 identical (32K server), 14/16 (1M server); the others diverge at a near-tie after 13+ tokens |
-| Qualitative, 6 readiness prompts, greedy and sampled (t=1.0, top_p=0.95) | coherent and correct; the `mimo` reasoning parser separates reasoning from content |
+| Prefix caching (ee6895badd4) | a second request on a cached 5.3K-token prefix prefills in 2.1 s instead of 31.8 s and recalls a passphrase from inside the prefix |
+| Greedy vs the standalone generator, 16 chat prompts (15-552 tokens), 32 tokens | 16/16 identical (32K server; at ee6895badd4: 15/16, and 14/16 on the 1M server) |
+| Decode-trace recaptures | 0 over startup, the HTTP suite, the greedy run and the benchmarks (36 at ee6895badd4) |
+| `test_model_tp8_dp4` (48 layers, fp32 golden) | top-1 0.925 (37/40), logits PCC min 0.9581 / mean 0.9922; each merged change alone gives 0.950 |
+| `test_model_traced_tp8_dp4` | traced == eager (PCC 1.000000) |
+| Qualitative, 6 readiness prompts, greedy and sampled (t=1.0, top_p=0.95) (ee6895badd4) | coherent and correct; the `mimo` reasoning parser separates reasoning from content |
 | Tool calling (`--tool-call-parser mimo --enable-auto-tool-choice`) | `get_weather({"city": "Paris", "unit": "celsius"})`, `finish_reason=tool_calls` |
-| `--max-model-len 1048576` | serves; KV pool 1.27M tokens per lane (1.21x one 1M request); a 20,936-token needle prompt recalls correctly (87 s, mostly prefill) |
+| `--max-model-len 1048576` (ee6895badd4) | serves; KV pool 1.27M tokens per lane (1.21x one 1M request); a 20,936-token needle prompt recalls correctly (87 s, mostly prefill) |
 
 ## Serving performance (host sampling, greedy, `vllm bench serve`, random 128 in / 128 out, `--ignore-eos`)
 
 | Concurrency (prompts) | TTFT median / p99 | TPOT mean / p99 | ITL median / p99 | t/s/user | Output tok/s |
 |---|---|---|---|---|---|
-| 1 (4) | 506 / 1795 ms | 23.9 / 24.2 ms | 23.8 / 27.4 ms | 41.9 | 33.1 |
-| 16 (64) | 4217 / 5762 ms | 34.6 / 66.5 ms | 32.0 / 42.0 ms | 28.9 | 233.7 |
+| 1 (4) | 274 / 281 ms | 23.6 / 24.0 ms | 23.6 / 28.9 ms | 42.4 | 39.1 |
+| 16 (64) | 3608 / 3654 ms | 34.4 / 59.6 ms | 32.4 / 42.9 ms | 29.1 | 263.4 |
+| 1 (4), ee6895badd4 | 506 / 1795 ms | 23.9 / 24.2 ms | 23.8 / 27.4 ms | 41.9 | 33.1 |
+| 16 (64), ee6895badd4 | 4217 / 5762 ms | 34.6 / 66.5 ms | 32.0 / 42.0 ms | 28.9 | 233.7 |
 
-32K server. On the 1M server, TPOT is 23.3 ms at concurrency 1 and 49.4 ms at 16 (wider page tables, below).
-The traced device step is 13.5 ms (1 row) / 15.1 ms (4 rows) with the on-device greedy loop
-(`tests/perf/decode_bandwidth.py`); serving adds host sampling (logit rows read back every step), per-step input
-copies and page-table bookkeeping. TTFT is dominated by the per-32-token `sparse_matmul` MoE prefill.
+32K server, after a 16-prompt warmup run. At ee6895badd4 the 1M server's TPOT was 23.3 ms at concurrency 1 and
+49.4 ms at 16 (wider page tables, below). The traced device step is 13.5 ms (1 row) / 15.1 ms (4 rows) with the
+on-device greedy loop (`tests/perf/decode_bandwidth.py`); serving adds host sampling (logit rows read back every
+step), per-step input copies and page-table bookkeeping. The expert-major MoE prefill halves TTFT at concurrency 1;
+the p99 drop is the recapture that the first request used to pay. At concurrency 16, TTFT is still about 13x the
+single-request value (not investigated).
 
 ## Launch
 
@@ -73,12 +83,21 @@ overwritten by the replay (tech_reports/AdvancedPerformanceOptimizationsForModel
 - the MoE routing zeros are filled on device per call (a per-length cache made while serving was corrupted);
 - the prefill RMSNorm reads a tiled weight, so it can fall back to its streaming kernel once decode's persistent L1
   buffers exist (otherwise its circular buffers clash with them);
-- a prefill that compiles new programs makes `generator_vllm.py` recapture that replica's decode trace
-  (`decode_recaptures`; 36 during the HTTP suite and benchmarks, ~0.4 s each). The next step is warming every
-  reachable prefill program before the capture (later chunks need a start-position-independent chunked MLA call).
+- `warmup_model_prefill` compiles every prefill program a served chunk can run before the decode capture, with an
+  idle eager decode step first so decode's persistent L1 buffers are in place (some program keys depend on the free
+  L1). The programs key on the chunk's padded length and start alignment only (`chunked_flash_mla_prefill` takes the
+  chunk start as a device tensor), so the warmup runs `prefill_warmup_chunks` through one layer of each kind: 62
+  chunks and 902 programs per replica at `--max-num-batched-tokens 2048`, including the expert-major MoE prefill's
+  `generic_op` programs. It takes 84 s at startup with the kernel cache warm (396 s cold).
+- a prefill that still compiles a new program makes `generator_vllm.py` recapture that replica's decode trace
+  (`decode_recaptures`): 0 during the HTTP suite and benchmarks.
 
-With `TT_METAL_TRACE_ALLOC_TRACKING=1`, a driver that serves 16 prompts (15-2154 tokens) over 4 lanes twice, with
-blocks freed and reallocated in between, found no unsafe buffer at any replay and identical tokens in both rounds.
+With `TT_METAL_TRACE_ALLOC_TRACKING=1` (`ttnn.execute_trace` then refuses to replay over a live buffer allocated after
+the capture) and program-cache misses forbidden after the capture, a driver that serves 16 prompts (15-2154 tokens)
+over 4 lanes twice, with blocks freed and reallocated in between, ran with no unsafe buffer, no new program, zero
+recaptures and identical tokens in both rounds, for 2048-token chunks and for ragged 448-token chunks. The MoE
+prefill's grouped-experts program (about 966 KB of static circular buffers on 120 cores) runs after decode without
+clashing with decode's persistent L1 buffers.
 
 ## Decode-slot parity
 
@@ -103,8 +122,8 @@ A global layer's prefill chunk after the first (`_prefill_owner_chunk`) zeroes t
 
 ## Not done
 
-- Slot parity of chunked prefill (above), and prefill recaptures down to zero.
+- Slot parity of chunked prefill (above).
 - Device sampling and async decode (host sampling reads every user's logit rows each step).
-- A 1M-token prompt: at ~250 prefill tokens/s per lane it would take ~70 min; the expert-major MoE prefill
-  (tenstorrent/tt-metal#61462) is the fix.
+- A 1M-token prompt, and the 1M server on the merged branch.
+- TTFT under concurrency (above).
 - Speculative decoding (lane DP refuses it), prefill tracing.

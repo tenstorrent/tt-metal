@@ -59,6 +59,5 @@ some Ethernet links can stay untrained, and opening the mesh then fails in
   descriptors are rebuilt per call). A 4K prompt takes 0.73 s on one row (5.6k tokens/s), but four rows at once reach
   only 8.3k tokens/s per Galaxy. Caching the descriptors or tracing fixed-size chunks are the candidates.
 - Non-greedy sampling on device (the device loop is greedy; the host loop reads per-chip top-k candidates).
-- Serving gaps (doc/vllm_integration/README.md): decode logits depend on the decode slot's parity; prefills that
-  compile new programs make the vLLM adapter recapture the decode trace; host sampling only.
+- Serving gaps (doc/vllm_integration/README.md): host sampling only; chunked prefill's slot parity is not measured.
 - Speculative decoding.
