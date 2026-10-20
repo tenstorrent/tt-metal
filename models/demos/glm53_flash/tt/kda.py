@@ -231,11 +231,21 @@ class TtKDA(LightweightModule):
             ]
             self.w_g1 = up(torch.cat(parts, dim=1), ttnn.bfloat16, cols=-1)
             d_a = raw["f_a_proj.weight"].shape[0]
-            w_g2 = torch.zeros(2 * d_a + Hb, H * K + H * V + Hb)
-            w_g2[:d_a, : H * K] = raw["f_b_proj.weight"].t().float()
-            w_g2[d_a : 2 * d_a, H * K : H * K + H * V] = raw["g_b_proj.weight"].t().float()
-            w_g2[2 * d_a : 2 * d_a + H, H * K + H * V : H * K + H * V + H] = torch.eye(H)
-            self.w_g2 = up(w_g2.to(torch.bfloat16), ttnn.bfloat16)
+            # per TP column c: [f_b | g_b] columns of ITS heads (head-major, heads c*H .. (c+1)*H) and the identity
+            # on its b logits; concatenated so the even column split hands every chip its own block
+            fb_t = raw["f_b_proj.weight"].t().float()  # [d_a, H_total*K]
+            gb_t = raw["g_b_proj.weight"].t().float()  # [d_a, H_total*V]
+            blocks = []
+            for c in range(tp):
+                w_g2 = torch.zeros(2 * d_a + Hb, H * K + H * V + Hb)
+                w_g2[:d_a, : H * K] = fb_t[:, c * H * K : (c + 1) * H * K]
+                w_g2[d_a : 2 * d_a, H * K : H * K + H * V] = gb_t[:, c * H * V : (c + 1) * H * V]
+                w_g2[2 * d_a : 2 * d_a + H, H * K + H * V : H * K + H * V + H] = torch.eye(H)
+                blocks.append(w_g2)
+            self.w_g2 = up(torch.cat(blocks, dim=1).to(torch.bfloat16), ttnn.bfloat16, cols=-1)
+            # decode-shaped (M <= 32) gate matmuls use the 1D mcast configs of tt/matmul_configs.py
+            self.lin_g1 = DecodeLinear(device, self.w_g1)
+            self.lin_g2 = DecodeLinear(device, self.w_g2)
 
     def scalar(self, value: int) -> ttnn.Tensor:
         """Cached replicated UINT32 device scalar (ttKDA's actual_start / actual_end)."""
@@ -411,9 +421,9 @@ class TtKDA(LightweightModule):
         rec, conv = state.recurrent, state.convolution
         if not inplace:
             rec, conv = ttnn.clone(rec), ttnn.clone(conv)
-        qkv = ttnn.linear(x, self.w_qkv, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)  # [1,1,B,3*H*K]
-        g1 = ttnn.linear(x, self.w_g1, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)  # [f_a | g_a | b]
-        g2 = ttnn.linear(g1, self.w_g2, dtype=ttnn.float32, compute_kernel_config=self.fp32)  # [f | og | b]
+        qkv = self.lin_qkv(x, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)  # [1,1,B,3*H*K]
+        g1 = self.lin_g1(x, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)  # [f_a | g_a | b]
+        g2 = self.lin_g2(g1, dtype=ttnn.float32, compute_kernel_config=self.fp32)  # [f | og | b]
         o = ttnn.transformer.kda_decode(
             qkv,
             g2,
@@ -433,7 +443,7 @@ class TtKDA(LightweightModule):
         ttnn.deallocate(g2)
         o_t = ttnn.to_layout(o, ttnn.TILE_LAYOUT)
         ttnn.deallocate(o)
-        y = ttnn.linear(o_t, self.w_o, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)  # [1,1,B,hidden]
+        y = self.lin_o(o_t, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)  # [1,1,B,hidden]
         ttnn.deallocate(o_t)
         y = self.mesh.all_reduce_cols(y)
         if inplace:
