@@ -10,7 +10,9 @@
 #include "pcie_noc_utils.h"
 
 constexpr uint32_t kModeHostTransport = 1;  // FIFO is pinned host RAM, pulled over PCIe (H2D leg)
-constexpr uint32_t kModeD2D = 2;            // FIFO is local L1, written by the upstream device
+constexpr uint32_t kModeD2D = 2;
+constexpr uint32_t kModeHostDma = 3;  // rx FIFO is local L1 filled by the host's DMA engine; tx is the D2H leg // FIFO
+                                      // is local L1, written by the upstream device
 
 void kernel_main() {
     constexpr uint32_t socket_config_addr = get_compile_time_arg_val(0);
@@ -21,7 +23,7 @@ void kernel_main() {
     // Bytes to cycle through; data_size for a correctness run.
     constexpr uint32_t dst_buffer_size = get_compile_time_arg_val(5);
 
-    static_assert(socket_mode == kModeHostTransport || socket_mode == kModeD2D);
+    static_assert(socket_mode == kModeHostTransport || socket_mode == kModeD2D || socket_mode == kModeHostDma);
     static_assert(data_size % page_size == 0, "data_size must be a whole number of pages");
     static_assert(dst_buffer_size % page_size == 0, "dst_buffer_size must be a whole number of pages");
 

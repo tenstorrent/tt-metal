@@ -117,12 +117,45 @@ std::vector<uint32_t> payload_for_core(uint32_t core_index, uint64_t size_bytes)
     return data;
 }
 
+tt::tt_metal::distributed::H2DMode env_h2d_mode() {
+    const char* v = std::getenv("TT_HOST_SOCKET_H2D_MODE");
+    if (v == nullptr || std::string_view(v) == "pull") {
+        return tt::tt_metal::distributed::H2DMode::DEVICE_PULL;
+    }
+    TT_FATAL(std::string_view(v) == "dma", "TT_HOST_SOCKET_H2D_MODE must be 'pull' or 'dma', got '{}'", v);
+    return tt::tt_metal::distributed::H2DMode::HOST_DMA;
+}
+
+uint32_t env_host_leg_kernel_mode() {
+    return env_h2d_mode() == tt::tt_metal::distributed::H2DMode::HOST_DMA ? kModeHostDma : kModeHostTransport;
+}
+
+void fit_fifo_to_l1(Params& params, uint32_t rings, uint32_t landing_pages, bool landing_is_ring) {
+    if (env_h2d_mode() != tt::tt_metal::distributed::H2DMode::HOST_DMA) {
+        return;
+    }
+    const uint64_t budget = env_u64("TT_HOST_SOCKET_L1_RING_BUDGET", 1100000);
+    const uint64_t budget_pages = budget / params.page_size;
+    uint64_t pages = landing_is_ring ? budget_pages / (rings + 1)
+                                     : (budget_pages > landing_pages ? (budget_pages - landing_pages) / rings : 0);
+    pages = std::max<uint64_t>(1, std::min<uint64_t>(pages, params.fifo_pages));
+    if (pages != params.fifo_pages) {
+        GTEST_LOG_(INFO) << "HOST_DMA: ring capped at " << pages << " pages of " << params.page_size << " B (was "
+                         << params.fifo_pages << ") so " << rings << " L1 ring(s) fit";
+        params.fifo_pages = static_cast<uint32_t>(pages);
+    }
+}
+
 void run_transfer(
-    const Params& params,
+    const Params& params_in,
     bool verify,
     double* gbps_out,
     std::vector<uint64_t>* ack_latency_ns_out,
     HostMeshSocket::HopSamples* hops_out) {
+    // Receiver L1 under HOST_DMA: one H2D ring per core, the socket's own D2D-shaped data buffer
+    // (one ring's worth per bank), and, when verifying, a landing buffer of one ring per core.
+    Params params = params_in;
+    fit_fifo_to_l1(params, params.num_cores + 1, 1, verify && params.bytes_per_core == 0);
     const auto& context = multihost::DistributedContext::get_current_world();
     const auto rank = context->rank();
     const bool is_sender = rank == kSenderRank;
@@ -141,6 +174,7 @@ void run_transfer(
     SocketConfig config(make_connections(params.num_cores), mem_config, kSenderRank, kReceiverRank, context);
 
     HostMeshSocket::TransportConfig transport;
+    transport.h2d_mode = env_h2d_mode();
     transport.page_size = page_size;
     transport.max_batch_pages = static_cast<uint32_t>(env_u64("TT_HOST_SOCKET_BATCH_PAGES", 8));
 
@@ -172,7 +206,7 @@ void run_transfer(
             static_cast<uint32_t>(data_buffer->address()),
             page_size,
             static_cast<uint32_t>(data_size),
-            kModeHostTransport,
+            env_host_leg_kernel_mode(),
             buffer_size,
         };
         CreateKernel(
@@ -323,7 +357,8 @@ HostMeshSocket::HopSamples gather_hop_samples(
     auto ship = [&](std::vector<uint64_t>& v) {
         if (context->rank() == report_rank) {
             uint64_t count = 0;
-            context->recv(std::span<std::byte>(reinterpret_cast<std::byte*>(&count), sizeof(count)), other_rank, kHopTag);
+            context->recv(
+                std::span<std::byte>(reinterpret_cast<std::byte*>(&count), sizeof(count)), other_rank, kHopTag);
             std::vector<uint64_t> incoming(count);
             if (count != 0) {
                 context->recv(
@@ -334,7 +369,8 @@ HostMeshSocket::HopSamples gather_hop_samples(
             v.insert(v.end(), incoming.begin(), incoming.end());
         } else {
             uint64_t count = v.size();
-            context->send(std::span<std::byte>(reinterpret_cast<std::byte*>(&count), sizeof(count)), report_rank, kHopTag);
+            context->send(
+                std::span<std::byte>(reinterpret_cast<std::byte*>(&count), sizeof(count)), report_rank, kHopTag);
             if (count != 0) {
                 context->send(
                     std::span<std::byte>(reinterpret_cast<std::byte*>(v.data()), count * sizeof(uint64_t)),

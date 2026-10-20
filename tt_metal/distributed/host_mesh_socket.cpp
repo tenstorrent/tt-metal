@@ -241,7 +241,7 @@ HostMeshSocket::HostMeshSocket(
                 wire.receiver_core,
                 config.socket_mem_config.socket_storage_type,
                 fifo_size,
-                H2DMode::DEVICE_PULL,
+                transport.h2d_mode,
                 H2DSocket::ExternalConfigBuffer{
                     .address = static_cast<uint32_t>(impl_->config_buffer_address),
                 });

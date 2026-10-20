@@ -168,6 +168,8 @@ else
     CHIP_CANDIDATES="${HOST_SOCKET_VISIBLE_DEVICES:-$DEFAULT_CHIPS_2N}"
 fi
 export TT_HOST_SOCKET_DEVICE_ID="${HOST_SOCKET_DEVICE_ID:-0}"
+# Receiver leg: pull (DEVICE_PULL, default) or dma (HOST_DMA via the PCIe DMA engine).
+export TT_HOST_SOCKET_H2D_MODE="${HOST_SOCKET_H2D_MODE:-pull}"
 RUN_TIMEOUT="${HOST_SOCKET_TIMEOUT:-600}"
 # Many chip pairs to get past contended devices, so keep each attempt short.
 case "$MODE" in smoke) RUN_TIMEOUT="${HOST_SOCKET_TIMEOUT:-120}" ;; esac
@@ -185,7 +187,7 @@ mkdir -p "$(dirname "$TT_HOST_SOCKET_CSV")"
 cd "$TT_METAL_HOME" || exit 2
 
 echo "== job ${SLURM_JOB_ID}: $N0 + $N1 (loopback=$LOOPBACK)"
-echo "== mode=$MODE binary=$BIN device=$TT_HOST_SOCKET_DEVICE_ID chips=$CHIP_CANDIDATES"
+echo "== mode=$MODE binary=$BIN device=$TT_HOST_SOCKET_DEVICE_ID chips=$CHIP_CANDIDATES h2d=$TT_HOST_SOCKET_H2D_MODE"
 echo "== mpirun=$MPIRUN"
 date
 
@@ -206,7 +208,7 @@ run_gtest() {  # label, gtest_filter, then VAR=VAL overrides
         env "$@" "$MPIRUN" -n "$NRANKS" --host "$HOSTSPEC" \
             --allow-run-as-root --tag-output $MAP_ARGS \
             -x TT_METAL_HOME -x TT_METAL_RUNTIME_ROOT -x TT_MESH_GRAPH_DESC_PATH \
-            -x TT_HOST_SOCKET_DEVICE_ID -x TT_VISIBLE_DEVICES_PER_RANK \
+            -x TT_HOST_SOCKET_DEVICE_ID -x TT_VISIBLE_DEVICES_PER_RANK -x TT_HOST_SOCKET_H2D_MODE \
             -x TT_HOST_SOCKET_PAGE_SIZE -x TT_HOST_SOCKET_FIFO_PAGES \
             -x TT_HOST_SOCKET_NUM_CORES -x TT_HOST_SOCKET_BYTES \
             -x TT_HOST_SOCKET_ITERS -x TT_HOST_SOCKET_SOAK_SECONDS \
@@ -215,6 +217,7 @@ run_gtest() {  # label, gtest_filter, then VAR=VAL overrides
             -x TT_HOST_SOCKET_CSV_LATENCY -x TT_HOST_SOCKET_LAT_ITERS -x TT_HOST_SOCKET_IDLE_RTT_US \
             -x TT_HOST_SOCKET_CSV_BURST -x TT_HOST_SOCKET_BURSTS -x TT_HOST_SOCKET_BURST_ITERS \
             -x TT_HOST_SOCKET_RING_CAP_BYTES -x TT_HOST_SOCKET_ACK_PAGE_SIZE \
+            -x TT_HOST_SOCKET_L1_RING_BUDGET -x TT_H2D_DMA_DOORBELL -x TT_H2D_DMA_DEBUG \
             -x OMPI_MCA_btl_tcp_if_include -x OMPI_MCA_oob_tcp_if_include \
             -x OMPI_MCA_btl_tcp_if_exclude -x OMPI_MCA_oob_tcp_if_exclude \
             "$HERE/rank_env.sh" "$BIN" --gtest_filter="$filter" 2>&1 | tee "$log"
@@ -252,6 +255,16 @@ case "$MODE" in
     smoke)
         run_gtest "host transport" 'HostTransportTest.*' || rc=$?
         run_gtest "correctness" 'HostSocketTest.*Correctness*' || rc=$?
+        ;;
+    correctness)
+        run_gtest "correctness" 'HostSocketTest.*Correctness*' || rc=$?
+        ;;
+    single)
+        run_gtest "single core correctness" 'HostSocketTest.SingleCoreCorrectness' || rc=$?
+        ;;
+    filter)
+        # Any gtest filter, for one-off runs: HOST_SOCKET_GTEST_FILTER='Suite.Case'.
+        run_gtest "filter ${HOST_SOCKET_GTEST_FILTER:?set HOST_SOCKET_GTEST_FILTER}" "$HOST_SOCKET_GTEST_FILTER" || rc=$?
         ;;
     latency)
         # Host-to-host alone first (no device: what it costs is the transport),
