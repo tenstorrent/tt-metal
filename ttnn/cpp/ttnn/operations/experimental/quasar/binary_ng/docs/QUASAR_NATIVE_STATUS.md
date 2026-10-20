@@ -17,6 +17,56 @@ simulator (~15 s/run, deterministic) with no transfer latency and no contention 
 happens. The *hardware emulator* is the closest thing to real behaviour we can get; it is available but far
 less accessible, so it is spent deliberately and rarely. **Never mix numbers from the two.**
 
+# ► Week of 2026-10-19, part 2 — the native factory is the default on Quasar
+
+## 1. TL;DR
+
+- **The native factory runs by default on Quasar.** `TTNN_QSR_NATIVE=0` runs the Metal 2.0 factory instead, as the
+  A/B reference arm; any value but `0` and `1` is refused. Wormhole and Blackhole do not change: the gate checks the
+  arch before it reads any `TTNN_QSR_*` variable.
+- **A default must give the right answer, so the rule batches the FPU kernel only at ring stride 1**
+  (R = C = W = 1). Above it, the FPU kernel's two-operand unpack steps one ring entry per tile, and only one tile
+  of each batch comes out right. At the old rule the whole no-broadcast file failed 22 FPU cases at 4,4,2. The
+  SFPU kernel keeps 4 tiles in a 16-bit DST and 2 in a 32-bit DST, exact at every stride.
+  `TTNN_QSR_TILES_PER_CYCLE` still sets any batch.
+- **Verified** on craq-sim `b9d8e2f4`, with nothing set: the native module 171 passed, 1 skipped, 2 strict
+  expected failures (the two batching-defect tests, which now set the batch of 8); every Quasar suite file in one
+  process each, all passing except the activation-format file's 10 BFP8 and BFP4 cases, which fail the DFB
+  validator with the native factory off too.
+
+---
+
+## 2. Changes
+
+- **Switch** (`native_tuning`): on unless `TTNN_QSR_NATIVE=0`; a value other than `0` or `1` throws.
+- **Gate** (`matches_quasar_native_slice`): the arch check comes before `native_tuning()`, so off Quasar no knob is
+  parsed and the settings line is not logged.
+- **Rule** (`resolve_native_config`): `native_compute_batch_exact(config, sfpu)` says where every tile of a batch
+  comes out right; the rule batches only there, and the factory's wrong-output warning uses the same helper.
+- **Tests**: the native tests run on Quasar unless `TTNN_QSR_NATIVE=0`, and skip off Quasar, so the Wormhole and
+  Blackhole nightly jobs that collect this directory run as before; the fallback control checks that the
+  environment's arch agrees with the device's. The Python model of the rule follows the change, the two
+  batching-defect tests set the batch of 8, the `rule-batch-depth` guard now trips on the DM batch, and a log case
+  pins the default settings line.
+- **Docs**: design §3.3, §3.6, the comparison table and §8 (the default; F13 is no longer a precondition).
+
+---
+
+## 3. Verification
+
+- **The old rule, known bad**: the whole no-broadcast file at the rule's former FPU batch of 8 failed 22 add and
+  subtract cases on L1 operands (PCC 0.12 to 0.5). The same file now passes: 104 passed, 2 strict expected
+  failures, at the default and with `TTNN_QSR_NATIVE=0`.
+- **The native module**: 171 passed, 1 skipped, 2 strict expected failures with nothing set; with
+  `TTNN_QSR_NATIVE=0`, the fallback control passes and 173 tests skip.
+- **The other suite files, default**: resnet_add 10, descriptor_cache_hit 4, bcast 134 and scalar 27 passed; the
+  activation formats 112 passed and the same 10 BFP8 and BFP4 failures as with the native factory off.
+- **`TTNN_QSR_NATIVE=false`** fails with "TTNN_QSR_NATIVE must be 0 or 1, got 'false'".
+- **Off Quasar**: the test-side switch keeps every native test skipped and runs the fallback control, for every
+  combination of arch and setting; not run on a Wormhole device.
+
+---
+
 # ► Week of 2026-10-19 — F5: fp32 runs native, on the SFPU kernel
 
 ## 1. TL;DR

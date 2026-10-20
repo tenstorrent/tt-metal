@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include <numeric>
+#include <string_view>
 
 #include <fmt/core.h>
 #include <fmt/format.h>
@@ -912,16 +913,19 @@ uint32_t native_max_tiles_per_cycle(bool sfpu, bool dst_32bit) {
     return ttnn::get_dest_reg_count(ttnn::ComputeKernelConfig{.fp32_dest_acc_en = dst_32bit}) / (sfpu ? 2u : 1u);
 }
 
+bool native_compute_batch_exact(const NativeConfig& config, bool sfpu) {
+    return sfpu || (config.reader_threads == 1 && config.compute_threads == 1 && config.writer_threads == 1);
+}
+
 NativeConfig resolve_native_config(const NativeTuning& tuning, NativeMoves moves) {
     // The rule: where an input moves, a reader thread per compute thread; where the output moves, a writer
     // thread per compute thread, within the 6 user DM cores that the readers leave. A borrowed operand moves
     // nothing, so its reader or writer runs one thread. The DM batch is 8 tiles per barrier, and the compute
-    // batch is as many tiles as a DST section holds: 8 on the FPU kernel and 4 on the SFPU kernel in a 16-bit DST,
-    // half that in a 32-bit DST. Beside a DRAM operand both are 1, as in the legacy binary_ng: the batching gains are
-    // craq-sim numbers, with no DRAM time.
+    // batch is as many tiles as a DST section holds where the batch comes out right: 4 on the SFPU kernel in a 16-bit
+    // DST and 2 in a 32-bit DST, and 8 on the FPU kernel at R = C = W = 1 only. Beside a DRAM operand both are 1, as in
+    // the legacy binary_ng: the batching gains are craq-sim numbers, with no DRAM time.
     constexpr uint32_t kRuleDmBatch = 8;
     const uint32_t rule_dm_batch = moves.dram ? 1u : kRuleDmBatch;
-    const uint32_t rule_tiles_per_cycle = moves.dram ? 1u : native_max_tiles_per_cycle(moves.sfpu, moves.dst_32bit);
     NativeConfig config;
     config.compute_threads = native_compute_threads(tuning);
     config.reader_threads = moves.inputs ? tuning.reader_threads.env.value_or(config.compute_threads) : 1u;
@@ -937,10 +941,13 @@ NativeConfig resolve_native_config(const NativeTuning& tuning, NativeMoves moves
     // each compute thread owns one counter of each ring.
     const bool one_counter_per_compute_thread =
         config.reader_threads <= config.compute_threads && config.writer_threads <= config.compute_threads;
-    config.tiles_per_cycle =
-        tuning.tiles_per_cycle.env.value_or(one_counter_per_compute_thread ? rule_tiles_per_cycle : 1u);
+    // Batch only where every tile of a batch comes out right: on the FPU kernel that is ring stride 1 alone.
+    const bool rule_batches =
+        !moves.dram && one_counter_per_compute_thread && native_compute_batch_exact(config, moves.sfpu);
+    config.tiles_per_cycle = tuning.tiles_per_cycle.env.value_or(
+        rule_batches ? native_max_tiles_per_cycle(moves.sfpu, moves.dst_32bit) : 1u);
     // Two batches of either kind per thread, so a batch is double-buffered, and a multiple of each, so no batch
-    // straddles the ring end: 16 at the rule's batches of 8, 2 beside DRAM.
+    // straddles the ring end: 16 at the rule's DM batch of 8, 2 beside DRAM.
     const uint32_t batch_lcm = std::lcm(config.dm_batch, config.tiles_per_cycle);
     const uint32_t two_batches = 2 * std::max(config.dm_batch, config.tiles_per_cycle);
     config.entries_per_thread = tuning.entries_per_thread.env.value_or(tt::round_up(two_batches, batch_lcm));
@@ -955,10 +962,20 @@ const NativeTuning& native_tuning() {
     // Lambdas, not file-scope helpers: this is a unity build, so `env_bool`/`read_knob` at file scope
     // would collide with any sibling in the same blob (an anonymous namespace does not help).
     static const NativeTuning tuning = [] {
-        // Unset, empty and "0" all mean OFF -- the A/B reference arm depends on =0 meaning off.
+        // Unset, empty and "0" all mean OFF.
         const auto env_bool = [](const char* name) {
             const char* v = std::getenv(name);
             return v != nullptr && v[0] != '\0' && v[0] != '0';
+        };
+        // TTNN_QSR_NATIVE: unset, empty or "1" runs the native factory, and "0" runs the Metal 2.0 factory as the A/B
+        // reference arm. Any other value is refused, so that a spelling such as "false" cannot leave it on.
+        const auto native_switch = [] {
+            const char* v = std::getenv("TTNN_QSR_NATIVE");
+            if (v == nullptr || v[0] == '\0' || std::string_view(v) == "1") {
+                return true;
+            }
+            TT_FATAL(std::string_view(v) == "0", "TTNN_QSR_NATIVE must be 0 or 1, got '{}'", v);
+            return false;
         };
         // max_value is per-knob and required: strtol returns long, so 4294967296 passes `> 0` and then
         // truncates to 0, and the gate's max(p,c) % min(p,c) then divides by zero. Depth 40 is a normal
@@ -985,7 +1002,7 @@ const NativeTuning& native_tuning() {
         constexpr uint32_t kMaxEntriesPerThread = 255;
 
         NativeTuning t;
-        t.enabled = env_bool("TTNN_QSR_NATIVE");
+        t.enabled = native_switch();
         t.implicit_sync = env_bool("TTNN_QSR_IMPLICIT_SYNC");
         read_knob(t.reader_threads, kMaxThreads);
         read_knob(t.compute_threads, kMaxThreads);
@@ -995,7 +1012,7 @@ const NativeTuning& native_tuning() {
         read_knob(t.tiles_per_cycle, kMaxBatch);
 
         // Only when enabled: with the native path off nothing reads these, so an unconditional throw
-        // would have no protective value and would kill the fallback reference arm on any arch.
+        // would have no protective value and would kill the fallback reference arm.
         if (!t.enabled) {
             const bool any_knob_set = t.implicit_sync || t.reader_threads.env.has_value() ||
                                       t.compute_threads.env.has_value() || t.writer_threads.env.has_value() ||
@@ -1004,8 +1021,8 @@ const NativeTuning& native_tuning() {
             if (any_knob_set) {
                 log_warning(
                     tt::LogOp,
-                    "TTNN_QSR_* tuning knobs are set but TTNN_QSR_NATIVE is off, so they have NO effect "
-                    "and the fallback factory will run. Set TTNN_QSR_NATIVE=1 to use them.");
+                    "TTNN_QSR_* tuning knobs are set but TTNN_QSR_NATIVE=0 turns the native factory off, so they "
+                    "have NO effect and the fallback factory will run. Unset TTNN_QSR_NATIVE to use them.");
             }
             return t;
         }

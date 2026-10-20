@@ -7,8 +7,9 @@
 Cases named wh_bh_descriptor cover the WH/BH descriptor implementation, not
 Quasar regressions awaiting a fix. Cases named shared_dfb and the sharded tests
 remain enabled for Quasar's supported routing as well as WH/BH. See
-QUASAR_PARITY_GAPS.md for the factory capability boundary. With TTNN_QSR_NATIVE
-on, the bf16 no-broadcast tensor-tensor cases run on the Quasar-native factory.
+QUASAR_PARITY_GAPS.md for the factory capability boundary. On Quasar, the
+no-broadcast tensor-tensor cases that the native gate admits run on the
+Quasar-native factory, unless TTNN_QSR_NATIVE=0.
 Passing on WH/BH does not validate Quasar-specific LLKs or packers.
 """
 

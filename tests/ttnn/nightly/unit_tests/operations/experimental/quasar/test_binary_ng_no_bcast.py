@@ -7,7 +7,8 @@ Sweep for the generalized Metal 2.0 / DataflowBuffer (DFB) no-broadcast slice of
 quasar binary ops. The DFB factory (binary_ng_metal_v2_factory.cpp) is a generic port of the
 descriptor factory's SubtileBroadcastType::NONE tiled path; matches_metal_v2_slice routes the whole
 no-broadcast tensor-tensor TILE slice to it — FPU and SFPU, interleaved and sharded, every dtype,
-full lhs/rhs/post activations.
+full lhs/rhs/post activations. On Quasar the native gate goes first and takes the cases it admits,
+unless TTNN_QSR_NATIVE=0, so this sweep runs both factories there.
 
 This sweep exercises the capabilities the ResNet residual-add canary (test_binary_ng_resnet_add.py)
 does not: the interleaved/DRAM path (TensorAccessor NoC reads + split_work_to_cores placement +
@@ -310,7 +311,7 @@ def test_no_bcast_sfpu_divide(device, dtype_tt, layout):
 #   Metal 2.0 factory borrows ONLY when all three operands are L1-sharded with one memory config (the
 #   is_native case); any interleaved operand, or a different memory config, takes the all-NoC path where
 #   every operand (output included) is read/written via its own sharding-aware TensorAccessor. The native
-#   factory (TTNN_QSR_NATIVE) borrows per operand instead, by its anchor, an L1 shard config or the L1
+#   factory, the default on Quasar, borrows per operand instead, by its anchor, an L1 shard config or the L1
 #   banks; test_binary_ng_quasar_native.py checks where each mix runs.
 _MIXED_CASES = [
     # NOTE: the interleaved-OUTPUT mixed cases (H.I.I, I.H.I, H.H.I, W.I.I) live in _MIXED_INTERLEAVED_OUT_CASES

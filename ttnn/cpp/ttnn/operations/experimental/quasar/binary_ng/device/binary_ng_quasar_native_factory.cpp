@@ -11,7 +11,7 @@
 // kernel paths point at kernels_qsr/ except kComputeIncludeCommon (a shared third tree); and a local
 // ProgramSpecFactoryConcept static_assert so a declaration slip blames this file.
 //
-// Reachable only via matches_quasar_native_slice (needs TTNN_QSR_NATIVE). Only that slice's kernels were
+// Reachable only via matches_quasar_native_slice (on Quasar unless TTNN_QSR_NATIVE=0). Only that slice's kernels were
 // copied (the no-broadcast reader, writer, and FPU and SFPU compute), so the bcast/scalar sources named below
 // point at files absent from kernels_qsr/ -- deliberate; see the note above select_dfb_kernel_sources.
 //
@@ -821,13 +821,13 @@ ProgramArtifacts create_no_bcast_artifacts(
     const bool has_sharding = anchor.kind == AnchorKind::kShard;
 
     // --- num_tiles_per_cycle: tiles per tile_regs_acquire, which the DST capacity bounds; the rule takes all
-    // of it. Neither batch has to divide a thread's share: the kernels run a short last batch. A
-    // borrowed ring is the shard or slice, walked once, so a batch there never wraps, and the ring holds the
-    // thread's whole share. Above ring stride 1 a compute batch gives a wrong output; see the warning below. ---
+    // of it where every tile of a batch comes out right. Neither batch has to divide a thread's share: the kernels
+    // run a short last batch. A borrowed ring is the shard or slice, walked once, so a batch there never wraps, and
+    // the ring holds the thread's whole share. Above ring stride 1 an FPU-kernel compute batch gives a wrong output;
+    // see the warning below. ---
     // in0/in1 endpoints are (R, C); out endpoints are (C, W).
     const uint32_t in_producers_consumers = std::max(reader_threads, compute_threads);
     const uint32_t out_producers_consumers = std::max(compute_threads, writer_threads);
-    const bool ring_stride_one = in_producers_consumers == 1 && out_producers_consumers == 1;
     // Every core processes borrowed_tiles, including a partial end core under an uneven shard and a bank
     // with one real page fewer: the buffer allocates the full count on every core, so computing on the pad
     // slots is in bounds and never reaches the logical output. The borrowed rings hold the first
@@ -973,8 +973,8 @@ ProgramArtifacts create_no_bcast_artifacts(
         out_producers_consumers);
     // Above ring stride 1 the FPU kernel's binary unpack reads tile p of a batch p entries on, not p strides on, so
     // only one tile of each batch is right; the SFPU kernel copies through the single-operand unpack, which strides.
-    // The rule's compute count of 4 reaches this on the NoC path in L1, the borrowed path and the mixed paths.
-    if (num_tiles_per_cycle > 1 && !ring_stride_one && !is_sfpu) {
+    // The rule never batches there, so only a set TTNN_QSR_TILES_PER_CYCLE reaches this.
+    if (num_tiles_per_cycle > 1 && !native_compute_batch_exact(cfg, is_sfpu)) {
         log_warning(
             tt::LogOp,
             "binary_ng Quasar-native: tiles_per_cycle={} above ring stride 1 (in: max(R,C)={}, out: "

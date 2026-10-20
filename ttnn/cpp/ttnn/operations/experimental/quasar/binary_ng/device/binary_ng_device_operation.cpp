@@ -641,14 +641,15 @@ bool BinaryNgDeviceOperation::matches_quasar_native_slice(
     // Narrower than matches_metal_v2_slice in op, dtype and broadcast, but it also admits DRAM shards. The broadcast
     // and tensor-scalar rejections are also preconditions of create_no_bcast_artifacts, which asserts them. The others
     // keep the slice to what has been validated on Quasar.
-    const NativeTuning& tuning = native_tuning();
-    // Cheapest possible check first: this predicate runs on EVERY dispatch, cache hits included.
-    if (!tuning.enabled) {
-        return false;
-    }
+    // Cheap checks first: this predicate runs on EVERY dispatch, cache hits included. The arch goes before
+    // native_tuning(), so that off Quasar the knobs are never parsed and the settings line is never logged.
     const auto& a = tensor_args.input_tensor_a;
     // device()->arch(), not the host arch-name helper: that returns "invalid" under the simulator.
     if (a.device()->arch() != tt::ARCH::QUASAR) {
+        return false;
+    }
+    const NativeTuning& tuning = native_tuning();
+    if (!tuning.enabled) {
         return false;
     }
     // MUST precede every input_tensor_b dereference below.
@@ -751,7 +752,7 @@ bool BinaryNgDeviceOperation::matches_quasar_native_slice(
 BinaryNgDeviceOperation::program_factory_t BinaryNgDeviceOperation::select_program_factory(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     // Order matters for the hot path: this runs on EVERY dispatch, cache hits included, and the native
-    // gate's first check is a cached bool that is false unless TTNN_QSR_NATIVE is set.
+    // gate's first checks are the arch and a cached bool, false when TTNN_QSR_NATIVE=0.
     if (matches_quasar_native_slice(attributes, tensor_args)) {
         return ProgramFactoryQuasarNative{};
     }
