@@ -5,14 +5,15 @@
 // RUN: %{blackhole_tensix_compile} %{blackhole_unpack_thread} -c %s -o %t.o
 // RUN: %{blackhole_objdump} -d %t.o | FileCheck %s
 
-#include "hal/counters/adc.h"
+#include "hal/counters.h"
 
-namespace adc = hal::counters::adc;
+namespace counters = hal::counters;
+namespace adc      = hal::counters::adc;
 
 extern "C" __attribute__((noinline, used)) void set_one_counter_one_channel()
 {
     constexpr auto y_counter = adc::AddrCounter {.channel1 = {.y = 5}}.for_clients<adc::Client::Unpacker0>();
-    adc::set<y_counter>();
+    counters::set<y_counter>();
 }
 
 // CHECK-LABEL: <set_one_counter_one_channel>:
@@ -22,7 +23,7 @@ extern "C" __attribute__((noinline, used)) void set_one_counter_one_channel()
 extern "C" __attribute__((noinline, used)) void set_x_both_channels()
 {
     constexpr auto x_counters = adc::AddrCounter {.channel0 = {.x = 4}, .channel1 = {.x = 3}}.for_clients<adc::Client::Packers>();
-    adc::set<x_counters>();
+    counters::set<x_counters>();
 }
 
 // CHECK-LABEL: <set_x_both_channels>:
@@ -32,7 +33,7 @@ extern "C" __attribute__((noinline, used)) void set_x_both_channels()
 extern "C" __attribute__((noinline, used)) void set_x_channel0_y_channel1()
 {
     constexpr auto xy_counters = adc::AddrCounter {.channel0 = {.x = 6}, .channel1 = {.y = 7}}.for_clients<adc::Client::Unpacker1>();
-    adc::set<xy_counters>();
+    counters::set<xy_counters>();
 }
 
 // Write mask 0b1001 selects only Channel0 X and Channel1 Y.
@@ -44,7 +45,7 @@ extern "C" __attribute__((noinline, used)) void set_all_counters_two_clients()
 {
     constexpr auto channel0_counters =
         adc::AddrCounter {.channel0 = {.x = 1, .y = 2, .z = 3, .w = 4}}.for_clients<adc::Client::Unpacker0, adc::Client::Unpacker1>();
-    adc::set<channel0_counters>();
+    counters::set<channel0_counters>();
 }
 
 // CHECK-LABEL: <set_all_counters_two_clients>:
@@ -56,8 +57,8 @@ extern "C" __attribute__((noinline, used)) void set_z_and_w_single_counters()
 {
     constexpr auto w_counter  = adc::AddrCounter {.channel1 = {.w = 9}}.for_clients<adc::Client::Packers>();
     constexpr auto z_counters = adc::AddrCounter {.channel0 = {.z = 1}, .channel1 = {.z = 2}}.for_clients<adc::Client::Packers>();
-    adc::set<w_counter>();
-    adc::set<z_counters>();
+    counters::set<w_counter>();
+    counters::set<z_counters>();
 }
 
 // CHECK-LABEL: <set_z_and_w_single_counters>:
@@ -69,7 +70,7 @@ extern "C" __attribute__((noinline, used)) void increment_xy_and_zw()
 {
     constexpr auto counter_increments =
         adc::AddrCounter {.action = adc::Action::Increment, .channel0 = {.x = 1, .y = 2}, .channel1 = {.z = 3, .w = 4}}.for_clients<adc::Client::Packers>();
-    adc::set<counter_increments>();
+    counters::set<counter_increments>();
 }
 
 // CHECK-LABEL: <increment_xy_and_zw>:
@@ -80,7 +81,7 @@ extern "C" __attribute__((noinline, used)) void increment_xy_and_zw()
 extern "C" __attribute__((noinline, used)) void advance_and_reset_xy_and_zw()
 {
     constexpr auto counter_reload = adc::AddrCounter {.action = adc::Action::AdvanceAndReset, .channel0 = {.x = 1, .z = 2}}.for_clients<adc::Client::Packers>();
-    adc::set<counter_reload>();
+    counters::set<counter_reload>();
 }
 
 // CHECK-LABEL: <advance_and_reset_xy_and_zw>:
@@ -128,7 +129,7 @@ extern "C" __attribute__((noinline, used)) void issue_encoded_operations()
 extern "C" __attribute__((noinline, used)) void single_x_and_z()
 {
     constexpr auto xz_counters = adc::AddrCounter {.channel0 = {.x = 1, .z = 2}}.for_clients<adc::Client::Unpacker0>();
-    adc::set<xz_counters>();
+    counters::set<xz_counters>();
 }
 
 // Only one X counter is selected, so SETADCXX would change an unselected counter.
@@ -140,7 +141,7 @@ extern "C" __attribute__((noinline, used)) void single_x_and_z()
 extern "C" __attribute__((noinline, used)) void both_x_channels_and_z()
 {
     constexpr auto xz_counters = adc::AddrCounter {.channel0 = {.x = 10, .z = 2}, .channel1 = {.x = 20}}.for_clients<adc::Client::Unpacker0>();
-    adc::set<xz_counters>();
+    counters::set<xz_counters>();
 }
 
 // SETADCXX takes X1 before X0. Z still needs its own instruction.
@@ -152,7 +153,7 @@ extern "C" __attribute__((noinline, used)) void both_x_channels_and_z()
 extern "C" __attribute__((noinline, used)) void prefer_xx_when_instruction_counts_tie()
 {
     constexpr auto xy_counters = adc::AddrCounter {.channel0 = {.x = 8, .y = 2}, .channel1 = {.x = 3}}.for_clients<adc::Client::Unpacker0>();
-    adc::set<xy_counters>();
+    counters::set<xy_counters>();
 }
 
 // Both SETADC(X0) + SETADCXY(Y0,X1) and SETADCXX(X0,X1) + SETADC(Y0) need two
@@ -165,7 +166,7 @@ extern "C" __attribute__((noinline, used)) void prefer_xx_when_instruction_count
 extern "C" __attribute__((noinline, used)) void keep_packed_xy_when_shorter()
 {
     constexpr auto xy_counters = adc::AddrCounter {.channel0 = {.x = 1, .y = 2}, .channel1 = {.x = 3}}.for_clients<adc::Client::Unpacker0>();
-    adc::set<xy_counters>();
+    counters::set<xy_counters>();
 }
 
 // SETADCXX would need a second instruction for Y0; the packed instruction covers all three.
@@ -176,7 +177,7 @@ extern "C" __attribute__((noinline, used)) void keep_packed_xy_when_shorter()
 extern "C" __attribute__((noinline, used)) void x_exceeds_dual_x_width()
 {
     constexpr auto xy_counters = adc::AddrCounter {.channel0 = {.x = 1024, .y = 2}, .channel1 = {.x = 3}}.for_clients<adc::Client::Unpacker0>();
-    adc::set<xy_counters>();
+    counters::set<xy_counters>();
 }
 
 // X0 does not fit SETADCXX's ten-bit value, so keep its full-width SETADC write.
@@ -188,7 +189,7 @@ extern "C" __attribute__((noinline, used)) void x_exceeds_dual_x_width()
 extern "C" __attribute__((noinline, used)) void packed_xy_and_single_z()
 {
     constexpr auto xyz_counters = adc::AddrCounter {.channel0 = {.x = 7, .y = 2, .z = 2}, .channel1 = {.x = 7}}.for_clients<adc::Client::Unpacker0>();
-    adc::set<xyz_counters>();
+    counters::set<xyz_counters>();
 }
 
 // Both X values fit the packed instruction, so updating Y needs no extra instruction.
@@ -200,7 +201,7 @@ extern "C" __attribute__((noinline, used)) void packed_xy_and_single_z()
 extern "C" __attribute__((noinline, used)) void dual_x_and_single_y_z()
 {
     constexpr auto xyz_counters = adc::AddrCounter {.channel0 = {.x = 60, .y = 2, .z = 2}, .channel1 = {.x = 1023}}.for_clients<adc::Client::Unpacker0>();
-    adc::set<xyz_counters>();
+    counters::set<xyz_counters>();
 }
 
 // Both X values fit SETADCXX; Y and Z each need their own instruction.
@@ -213,7 +214,7 @@ extern "C" __attribute__((noinline, used)) void dual_x_and_single_y_z()
 extern "C" __attribute__((noinline, used)) void wide_x_values_and_single_y_z()
 {
     constexpr auto xyz_counters = adc::AddrCounter {.channel0 = {.x = 60, .y = 2, .z = 2}, .channel1 = {.x = 60000}}.for_clients<adc::Client::Unpacker0>();
-    adc::set<xyz_counters>();
+    counters::set<xyz_counters>();
 }
 
 // X1 exceeds SETADCXX's range and neither X fits SETADCXY. Four writes are necessary.
@@ -227,7 +228,7 @@ extern "C" __attribute__((noinline, used)) void wide_x_values_and_single_y_z()
 extern "C" __attribute__((noinline, used)) void wide_x1_and_packed_x0_y()
 {
     constexpr auto xyz_counters = adc::AddrCounter {.channel0 = {.x = 7, .y = 2, .z = 2}, .channel1 = {.x = 60000}}.for_clients<adc::Client::Unpacker0>();
-    adc::set<xyz_counters>();
+    counters::set<xyz_counters>();
 }
 
 // X1 needs SETADC, but X0 and Y0 can still share a packed instruction.
@@ -240,7 +241,7 @@ extern "C" __attribute__((noinline, used)) void wide_x1_and_packed_x0_y()
 extern "C" __attribute__((noinline, used)) void dual_x_and_packed_y_channels()
 {
     constexpr auto xy_counters = adc::AddrCounter {.channel0 = {.x = 1023, .y = 0}, .channel1 = {.x = 1023, .y = 7}}.for_clients<adc::Client::Unpacker0>();
-    adc::set<xy_counters>();
+    counters::set<xy_counters>();
 }
 
 // Two full ten-bit X values share SETADCXX. Both Y values, including explicit zero, share SETADCXY.
@@ -253,7 +254,7 @@ extern "C" __attribute__((noinline, used)) void mixed_widths_all_counters()
 {
     constexpr auto counters = adc::AddrCounter {.channel0 = {.x = 0, .y = 8, .z = 7, .w = 1024}, .channel1 = {.x = 1023, .y = 7, .z = 8191, .w = 0}}
                                   .for_clients<adc::Client::Unpacker0, adc::Client::Packers>();
-    adc::set<counters>();
+    counters::set<counters>();
 }
 
 // Both families mix widths. Prefer XX on the XY tie and preserve explicitly selected zeroes.
@@ -274,7 +275,7 @@ extern "C" __attribute__((noinline, used)) void wide_values_all_counters()
             .channel1 = {.x = 65531, .y = 8188, .z = 8187, .w = 8186},
         }
             .for_clients<adc::Client::Unpacker0>();
-    adc::set<counters>();
+    counters::set<counters>();
 }
 
 // Every value needs SETADC, reaching the eight-instruction maximum within each dimension's range.

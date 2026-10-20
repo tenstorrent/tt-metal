@@ -7,9 +7,10 @@
 
 #include <cstdint>
 
-#include "hal/counters/adc.h"
+#include "hal/counters.h"
 
-namespace adc = hal::counters::adc;
+namespace counters = hal::counters;
+namespace adc      = hal::counters::adc;
 
 // Preserve the original masked-input case and its instruction expectations.
 // Masked arithmetic can reassociate differently in the HAL and raw TT_* wrappers;
@@ -18,7 +19,7 @@ extern "C" __attribute__((noinline, used)) void runtime_advance_and_reset_xy(std
 {
     const auto xy_reload =
         adc::AddrCounter {.action = adc::Action::AdvanceAndReset, .channel0 = {.x = x & 0x7u, .y = y & 0x7u}}.for_clients<adc::Client::Unpacker0>();
-    adc::set(xy_reload);
+    counters::set(xy_reload);
 }
 
 // ADDRCRXY, client 1, write mask 0b0011.

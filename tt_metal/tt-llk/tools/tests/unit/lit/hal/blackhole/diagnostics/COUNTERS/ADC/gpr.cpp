@@ -17,9 +17,10 @@
 //--- common.h
 #pragma once
 
-#include "hal/counters/adc.h"
+#include "hal/counters.h"
 
-namespace adc = hal::counters::adc;
+namespace counters = hal::counters;
+namespace adc      = hal::counters::adc;
 
 constexpr auto counter = adc::AddrCounter {.channel0 = {.x = 1}}.for_clients<adc::Client::Unpacker0>();
 
@@ -34,9 +35,9 @@ void probe()
     constexpr auto counter_reload =
         adc::AddrCounter {.action = adc::Action::AdvanceAndReset, .channel0 = counter.channel0}.for_clients<adc::Client::Unpacker0>();
 
-    adc::set<counter>();
-    adc::set<counter_increment>();
-    adc::set<counter_reload>();
+    counters::set<counter>();
+    counters::set<counter_increment>();
+    counters::set<counter_reload>();
 }
 
 //--- apply.cpp
@@ -45,7 +46,7 @@ void probe()
 void probe()
 {
     constexpr auto gpr_counter = adc::AddrCounter {.channel0 = {.x = hal::gpr<4>()}}.for_clients<adc::Client::Unpacker0>();
-    adc::set(gpr_counter);
+    counters::set(gpr_counter);
 }
 
 //--- get-operation.cpp
@@ -63,7 +64,7 @@ constexpr auto operation   = gpr_counter.operation();
 void reg2flop_current_thread_counter()
 {
     constexpr auto gpr_counter = adc::AddrCounter {.channel0 = {.x = hal::gpr<5>()}}.for_clients<adc::Client::Unpacker0>();
-    adc::set(gpr_counter);
+    counters::set(gpr_counter);
 }
 
 //--- carry-halfword.cpp
@@ -72,7 +73,7 @@ void reg2flop_current_thread_counter()
 void reg2flop_other_thread_carry_halfword()
 {
     constexpr auto gpr_counter = adc::AddrCounter {.channel1 = {.w = hal::gpr<60>()}}.for_clients<adc::Client::Packers>();
-    adc::set(gpr_counter);
+    counters::set(gpr_counter);
 }
 
 //--- encoded-byte.cpp
