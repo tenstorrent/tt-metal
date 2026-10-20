@@ -1,0 +1,2 @@
+tests/ttnn/unit_tests/operations/fused/test_layer_norm.py
+tests/ttnn/unit_tests/operations/sdpa/test_sdpa_prefill.py
