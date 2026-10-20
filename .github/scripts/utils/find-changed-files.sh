@@ -33,6 +33,7 @@ LLK_UNIT_TESTS_CHANGED=false
 LLK_PERF_CHANGED=false
 LLK_CI_CHANGED=false
 TTSIM_CI_CHANGED=false
+TTSIM_VERSION_CHANGED=false
 WORKFLOWS_CHANGED=false
 
 
@@ -53,7 +54,10 @@ while IFS= read -r FILE; do
             # Pins the ttsim release that fetch-ttsim downloads for every sim_* SKU. An
             # incompatible simulator build breaks the ttsim pipelines and nothing else, so
             # this gets its own flag rather than the blanket ANY_CODE_CHANGED fanout.
+            # The Quasar LLK PR gate runs against that pin, so a bump must run those shards
+            # without also labeling the PR as an LLK Quasar code change.
             TTSIM_CI_CHANGED=true
+            TTSIM_VERSION_CHANGED=true
             ;;
         tests/pipeline_reorg/ttsim_merge_gate_tests.yaml|tests/pipeline_reorg/ttsim_sanity_tests.yaml|tests/pipeline_reorg/ttsim_unit_tests.yaml|tests/pipeline_reorg/ttsim-skip-list.yaml)
             # ttsim test matrices and the skip list. These are maintained independently of
@@ -414,6 +418,7 @@ declare -A changes=(
     [llk-perf-changed]=$LLK_PERF_CHANGED
     [llk-ci-changed]=$LLK_CI_CHANGED
     [ttsim-ci-changed]=$TTSIM_CI_CHANGED
+    [ttsim-version-changed]=$TTSIM_VERSION_CHANGED
 )
 
 for var in "${!changes[@]}"; do
