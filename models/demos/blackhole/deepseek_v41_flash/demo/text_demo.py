@@ -11,6 +11,10 @@ sampling_params, enable_decode_trace, ...), real HF tokenizer + the checkpoint's
 Any batch size 1..128 is accepted: it is padded to a multiple of the 4 mesh rows (users per row = ceil(batch / 4)); padding users replay the last real prompt
 and are not printed. Any ISL: the prompt is processed in chunks (``DSV41_PREFILL_ROW_TOKENS`` tokens per mesh row per pass). Env: DSV41_LAYERS (e.g. 0-3 for a
 few-layer smoke run), DSV41_ENGRAM_RAM=0 (do not hold the 2 x 95 GB Engram tables in host RAM; slower decode host time).
+Production-like B=4 ISL sweep (4 users, ISL 1k .. 1M, model context 1,048,576 for all of them, k=5 speculative decoding, 128 new tokens): sessions ``isl1k_b4 .. isl1m_b4`` (prompt files
+``sample_prompts/long/input_data_long_<n>.json``, token counts 1024 .. 524288 and 1,000,000 for 1m; 256k / 512k / 1m (> 500 KB, not committed, git-ignored) are generated with ``python demo/sample_prompts/make_long_prompt.py --isl 262144|524288|1000000 --out demo/sample_prompts/long/input_data_long_<n>.json`` (deterministic)). One build serves all:
+    DSV41_SPEC=5 DSV41_POOL_DTYPE=fp8 DSV41_SESSION=isl1k_b4,isl2k_b4,isl4k_b4 pytest models/demos/blackhole/deepseek_v41_flash/demo/text_demo.py -k session
+(DSV41_SESSION_NOWARM=1 skips the compile prefill: the reported TTFT then includes the trace capture.) Log lines: ``TTFT``, ``Decode``, ``=== SPEC``, ``SPEC_RESULT``.
 Supported (ISL, batch) combinations and limits: see the ``Supported`` table in the module docstring of tt/dsv41_model.py / the final report.
 """
 
@@ -112,9 +116,7 @@ SCENARIOS = [
     _s(f"{LONG}/input_data_long_16k.json", 1, 32768, 64, "isl16k_b1"),
     _s(f"{LONG}/input_data_long_16k.json", 16, 32768, 64, "isl16k_b16"),
     _s(f"{LONG}/input_data_long_32k.json", 1, 65536, 64, "isl32k_b1"),
-    _s(f"{LONG}/input_data_long_32k.json", 4, 65536, 64, "isl32k_b4"),
     _s(f"{LONG}/input_data_long_64k.json", 1, 70000, 64, "isl64k_b1"),
-    _s(f"{LONG}/input_data_long_64k.json", 4, 70000, 64, "isl64k_b4"),
     _s(GSM, 32, 512, 384, "gsm8k_b32", instruct=True, stop_at_eos=True),
     *[
         _s(STRUCT, b, 512, 256, f"struct_b{b}", instruct=True, stop_at_eos=True) for b in (8, 16, 32)
@@ -130,15 +132,17 @@ SCENARIOS = [
     _s(f"{LONG}/input_data_long_64k.json", 16, 70000, 64, "isl64k_b16"),
     _s(f"{LONG}/input_data_long_64k.json", 32, 70000, 64, "isl64k_b32"),
     _s(f"{LONG}/input_data_long_64k.json", 64, 70000, 64, "isl64k_b64"),
-    _s(f"{LONG}/input_data_long_2k.json", 4, 4096, 64, "isl2k_b4"),
-    _s(f"{LONG}/input_data_long_4k.json", 4, 8192, 64, "isl4k_b4"),
-    _s(f"{LONG}/input_data_long_8k.json", 4, 16384, 64, "isl8k_b4"),
-    _s(f"{LONG}/input_data_long_16k.json", 4, 32768, 64, "isl16k_b4"),
     _s(f"{LONG}/input_data_long_4k.json", 128, 8192, 32, "isl4k_b128"),
     _s(f"{LONG}/input_data_long_8k.json", 128, 16384, 32, "isl8k_b128"),
     _s(f"{LONG}/input_data_long_16k.json", 128, 18432, 32, "isl16k_b128"),
     _s(f"{LONG}/input_data_long_64k.json", 128, 70000, 64, "isl64k_b128"),
     _s(f"{LONG}/input_data_long_32k.json", 16, 40000, 64, "isl32k_b16"),
+    # production-like B=4 ISL sweep (4 users, model context 1,048,576 for EVERY ISL so the indexer layers pay the O(context) cost as in the shipped B=4 build, prefill chunk 512, 128 new tokens, k=5 speculative decoding):
+    #   DSV41_SPEC=5 DSV41_POOL_DTYPE=fp8 DSV41_SESSION=isl1k_b4,isl2k_b4,... pytest demo/text_demo.py -k session   (one model build for all of them; see demo/sample_prompts/make_long_prompt.py for the prompt files)
+    *[
+        _s(f"{PROMPTS}/long/input_data_long_{n}.json", 4, 1048576, 128, f"isl{n}_b4", chunk=512)
+        for n in ("1k", "2k", "4k", "8k", "16k", "32k", "64k", "128k", "256k", "512k", "1m")
+    ],
     _s(GSM, 4, 512, 384, "gsm8k_b4", instruct=True, stop_at_eos=True),
     # a 1M-context build (tables / pool sized for 1,048,576 tokens, prefill chunk 512) with short GSM8K prompts: decode speed of plain vs speculative decoding at the long-context capacity
     _s(GSM, 4, 1048576, 384, "gsm8k_b4_m1M", instruct=True, stop_at_eos=True, chunk=512),
@@ -192,8 +196,6 @@ SCENARIOS = [
     _s(f"{PROMPTS}/input_data_long_128k_exact.json", 128, 135000, 64, "isl128k_b128"),
     _s(f"{PROMPTS}/input_data_long_256k_exact.json", 128, 270000, 64, "isl256k_b128"),
     _s(f"{LONG}/input_data_long_128k.json", 1, 135000, 64, "isl128k_b1"),
-    _s(f"{LONG}/input_data_long_128k.json", 4, 135000, 64, "isl128k_b4"),
-    _s(f"{LONG}/input_data_long_256k.json", 4, 270000, 64, "isl256k_b4"),
     _s(f"{LONG}/input_data_long_256k.json", 1, 270000, 64, "isl256k_b1"),
     # the REAL ~262k-token prompt (the LONG/ files above hold a ~102k-token prompt): the prefill of the long context, batch 4 / 1
     # chunk 512: the real ~262k / ~126k-token prompts (the LONG/ files above hold a ~102k-token prompt)
