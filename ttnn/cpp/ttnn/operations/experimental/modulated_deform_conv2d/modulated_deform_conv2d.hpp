@@ -34,7 +34,11 @@ namespace ttnn::experimental {
 // they do not fit; C over 256 takes several passes per kernel position to keep the slices small.
 //
 // Shapes:
-//   input        (B, H, W, C)                    ROW_MAJOR bfloat16, INTERLEAVED; C a multiple of 32
+//   input        (B, H, W, C)                    ROW_MAJOR bfloat16, C a multiple of 32; INTERLEAVED,
+//                                                or HEIGHT_SHARDED in L1 in whole 32-row shards when
+//                                                the output has the input's H and W: each core then
+//                                                computes its own shard's rows, whose corners lie
+//                                                mostly in its shard or a neighbour's
 //   offset_mask  (B, H_out, W_out, 3*K*K)        ROW_MAJOR bfloat16, INTERLEAVED: the offsets in
 //                                                pixels, (y, x) per kernel position, then the mask
 //                                                logits

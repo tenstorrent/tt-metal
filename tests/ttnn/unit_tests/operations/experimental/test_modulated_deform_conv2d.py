@@ -58,12 +58,27 @@ def random_inputs(batch, in_h, in_w, channels, c_out, kernel_size, stride, paddi
     return x, offset, logits, weight, bias
 
 
-def run_conv(device, x, offset, logits, weight, bias, kernel_size, stride, padding, dilation, relu):
-    """The op's output as a (B*Ho*Wo, C_out) float64 tensor; ``bias`` may be None."""
+def height_sharded(device, tensor, shard_rows):
+    """``tensor`` (B, H, W, C) height-sharded in L1 over the whole grid, ``shard_rows`` rows per core."""
+    batch, height, width, channels = tensor.shape
+    grid = device.compute_with_storage_grid_size()
+    cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
+    spec = ttnn.ShardSpec(cores, [shard_rows, channels], ttnn.ShardOrientation.ROW_MAJOR)
+    sharded = ttnn.to_memory_config(
+        ttnn.reshape(tensor, (1, 1, batch * height * width, channels)),
+        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, spec),
+    )
+    return ttnn.reshape(sharded, (batch, height, width, channels))
+
+
+def run_conv(device, x, offset, logits, weight, bias, kernel_size, stride, padding, dilation, relu, shard_rows=None):
+    """The op's output as a (B*Ho*Wo, C_out) float64 tensor; ``bias`` may be None. With
+    ``shard_rows``, the input goes height-sharded with that many rows per core."""
     row_major = lambda t: ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
     tiled = lambda t: ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_x = row_major(x) if shard_rows is None else height_sharded(device, row_major(x), shard_rows)
     out = ttnn.experimental.modulated_deform_conv2d(
-        row_major(x),
+        tt_x,
         row_major(torch.cat([offset, logits], dim=-1)),
         tiled(weight),
         None if bias is None else tiled(bias),
@@ -124,6 +139,27 @@ def test_modulated_deform_conv2d(
     if relu:
         expected = expected.clamp(min=0)
     assert_close(expected, actual)
+
+
+@pytest.mark.parametrize(
+    "batch, in_h, in_w, channels, c_out, shard_rows",
+    [
+        # 10 shards on a 110-core grid: most cores have no rows and only join the weight multicast.
+        (1, 16, 20, 64, 64, 32),
+        (6, 58, 100, 256, 256, 320),  # BEVFormer-base layer3, as the model shards it
+        (6, 29, 50, 512, 512, 96),  # two channel passes per kernel position
+    ],
+)
+def test_modulated_deform_conv2d_sharded_input(device, batch, in_h, in_w, channels, c_out, shard_rows):
+    """A height-sharded input gives the interleaved input's output exactly: only where the corners
+    are read from changes."""
+    conv = ((3, 3), (1, 1), (1, 1), (1, 1))
+    x, offset, logits, weight, bias = random_inputs(batch, in_h, in_w, channels, c_out, *conv, 4.0)
+    interleaved = run_conv(device, x, offset, logits, weight, bias, *conv, True)
+    sharded = run_conv(device, x, offset, logits, weight, bias, *conv, True, shard_rows=shard_rows)
+    assert torch.equal(sharded, interleaved)
+    expected = (reference_columns(x, offset, logits.sigmoid(), *conv) @ weight + bias).clamp(min=0)
+    assert_close(expected, sharded)
 
 
 def test_modulated_deform_conv2d_matches_torchvision(device):

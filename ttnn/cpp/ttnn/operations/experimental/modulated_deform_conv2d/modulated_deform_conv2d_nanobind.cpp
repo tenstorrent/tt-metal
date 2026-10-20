@@ -41,7 +41,9 @@ void bind_modulated_deform_conv2d(nb::module_& mod) {
         per kernel position to keep the slices small.
 
         Args:
-            * :attr:`input`: (B, H, W, C) ROW_MAJOR bfloat16 INTERLEAVED, C a multiple of 32
+            * :attr:`input`: (B, H, W, C) ROW_MAJOR bfloat16, C a multiple of 32; INTERLEAVED, or
+              HEIGHT_SHARDED in L1 in whole 32-row shards when the output has the input's H and W,
+              so each core computes its own shard's rows
             * :attr:`offset_mask`: (B, H_out, W_out, 3*K*K) ROW_MAJOR bfloat16 INTERLEAVED: the
               offsets in pixels, (y, x) per kernel position as in DCNv2, then the mask logits,
               before their sigmoid
@@ -51,7 +53,8 @@ void bind_modulated_deform_conv2d(nb::module_& mod) {
             * :attr:`kernel_size`: (K_h, K_w)
             * :attr:`stride`, :attr:`padding`, :attr:`dilation`: (h, w) pairs
             * :attr:`relu`: apply ReLU to the output
-            * :attr:`memory_config`: output memory config, interleaved
+            * :attr:`memory_config`: output memory config, interleaved; by default the input's, or DRAM
+              for a sharded input
 
         Returns:
             (1, 1, B*H_out*W_out, C_out) TILE bfloat16.
