@@ -115,7 +115,7 @@ def test_packed_push_is_decoded_and_run_per_entry(mesh_device):
         full = torch.arange(SP * F * W * HIDDEN, dtype=torch.float32).reshape(1, 1, SP * F * W, HIDDEN) % 251
         echo = _Echo()
         out = runner._prefill_entries(echo, None, _activation(mesh_device, full), meta["entries"], 7)
-        assert echo.calls == [(e.slot, e.start, e.end, 7) for e in entries]
+        assert echo.calls == [(e.slot, e.start, e.end, 7 + k) for k, e in enumerate(entries)]
         _check_joined(out, full, len(entries))
         ttnn.deallocate(out)
 

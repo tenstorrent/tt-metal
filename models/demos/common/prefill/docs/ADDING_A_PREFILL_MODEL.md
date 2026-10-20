@@ -202,8 +202,8 @@ class PrefillRuntime:  # structural contract — not a base class you must inher
 With `PREFILL_FORWARD_CHUNKS=F` (`PrefillRunParams.forward_chunks`, default 1) one forward carries F
 chunk *entries* of `chunk_size` tokens: `forward_tokens = F * chunk_size` rows. F = 1 is the
 `prefill_chunk` path above, unchanged. At F > 1 the runner calls `prefill_chunk` once per non-empty
-entry, each with its own slot, range and 12 B metadata tensor, and joins the outputs back into the
-forward's layout. A runtime that sets `supports_packed_forward = True` on the adapter gets the whole
+entry, each with its own slot, range, `request_id` and 12 B metadata tensor, and joins the outputs back
+into the forward's layout. A runtime that sets `supports_packed_forward = True` on the adapter gets the whole
 forward through `prefill_forward` instead:
 
 ```python

@@ -533,8 +533,8 @@ def _entry_metadata(entry, like: ttnn.Tensor) -> ttnn.Tensor:
 
 
 def _prefill_entries(runtime, kv_caches, inp, entries: list, c: int, d2h_service=None):
-    """A packed forward run one non-empty entry at a time through prefill_chunk. Returns the activation in the
-    packed layout, empty entries as zero rows."""
+    """A packed forward run one non-empty entry at a time through prefill_chunk, entry k as chunk c + k. Returns
+    the activation in the packed layout, empty entries as zero rows."""
     rows = CHUNK_SIZE // _sp
     real = [e for e in entries if not e.is_empty]
     outs = []
@@ -546,7 +546,7 @@ def _prefill_entries(runtime, kv_caches, inp, entries: list, c: int, d2h_service
             slot_id=entry.slot,
             actual_start=entry.start,
             actual_end=entry.end,
-            request_id=c,
+            request_id=c + k,
             d2h_service=d2h_service,
             metadata_msg=md,
         )

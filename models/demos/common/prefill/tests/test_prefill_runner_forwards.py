@@ -96,3 +96,19 @@ def test_index_endpoints_use_the_chunk_metadata(monkeypatch):
     monkeypatch.setattr(runner, "indexer_indices_global_spec", lambda *a: None)
     runner.build_d2d_index_endpoints(None, 1, (1, 1, 32, 8), inbound=True, outbound=True)
     assert made == [runner.CHUNK_METADATA_SIZE_BYTES] * 2
+
+
+class _PerEntryRuntime(_PackedRuntime):
+    def prefill_chunk(
+        self, inp, kv, *, slot_id, actual_start, actual_end, request_id=0, d2h_service=None, metadata_msg=None
+    ):
+        assert not self.calls or request_id > self.calls[-1][0], "request_id must increase"
+        self.calls.append((request_id, PrefillEntry(slot_id, actual_start, actual_end)))
+
+
+def test_per_entry_forwards_run_each_chunk_once(loop, monkeypatch):
+    monkeypatch.setattr(runner, "_entry_rows", lambda inp, k, rows: _Tensor())
+    monkeypatch.setattr(runner, "_entry_metadata", lambda entry, like: _Tensor())
+    runtime = _PerEntryRuntime()
+    loop(runtime, FORWARDS, supports_packed_forward=False)
+    assert runtime.calls == list(enumerate(e for f in FORWARDS for e in f))
