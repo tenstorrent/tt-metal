@@ -91,7 +91,8 @@ def _fingerprint_bytes(objdump, elf_path):
             start, end = o, c
             break
     if start is None:
-        return "no-window", ""
+        dump = "\n".join(f"{a:x} {mn} {op}" for a, mn, op in insns)
+        return "no-window-" + hashlib.sha1(dump.encode()).hexdigest()[:8], dump
     window = insns[start : end + 1]
     base = window[0][0]
     lines = [_norm(mn, op, kernel, base) for _, mn, op in window]
