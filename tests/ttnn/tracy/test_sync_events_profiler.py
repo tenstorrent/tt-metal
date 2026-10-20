@@ -154,9 +154,8 @@ def parse_zone_csv(csv_path: Path) -> list[SyncEvent]:
             # default for zone rows and prints it unconditionally, so a "0" in a zone row
             # means "no payload" -- while in a TS_DATA row 0 is a real value (CB id 0 is the
             # CB these kernels use). Reading the column for both would collapse the two.
-            # The streaming zone CSV writes the program's runtime id in the "trace id" column (the
-            # PID takes "run host ID"); it is how one capture holding every case splits per case.
-            program = int(get_col("trace id") or 0)
+            # The program's runtime id: it is how one capture holding every case splits per case.
+            program = int(get_col("run host ID") or 0)
             data_str = get_col("data")
             payload = None
             if data_str and row_type == "TS_DATA":
