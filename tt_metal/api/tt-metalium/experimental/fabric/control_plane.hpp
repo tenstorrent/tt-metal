@@ -324,11 +324,13 @@ public:
 
     void clear_fabric_context();
 
-    // Called after fabric is explicitly disabled (SetFabricConfig(DISABLED) / teardown). Drops the resolved
-    // fabric config back to DISABLED, then re-adopts only a per-mesh config the mesh graph declares explicitly
-    // (MGD-declared). This keeps get_fabric_config() reporting DISABLED-by-default after teardown on
-    // auto-discovered systems, while preserving an MGD's explicit per-mesh fabric_config across a disable.
-    void reset_fabric_config_after_disable();
+    // Align the control plane's resolved fabric config with the env's current config (called from teardown and
+    // any other config transition), then re-adopt a per-mesh config the mesh graph declares explicitly
+    // (MGD-declared). get_fabric_config() reads through to the control plane, so this keeps the control plane
+    // and the env in sync on every transition -- not just the disable case: on an auto-discovered system the
+    // config follows the env exactly (e.g. back to DISABLED on teardown), while an MGD's explicit per-mesh
+    // fabric_config is preserved via the re-adopt.
+    void sync_fabric_config(FabricConfig config);
 
     // Check if the provided chip and channel is a cross-host eth link
     bool is_cross_host_eth_link(ChipId chip_id, chan_id_t chan_id) const;

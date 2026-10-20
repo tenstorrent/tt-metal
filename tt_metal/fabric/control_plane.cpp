@@ -3228,15 +3228,16 @@ void ControlPlane::clear_fabric_context() {
     asic_id_to_fabric_node_cache_.clear();
 }
 
-void ControlPlane::reset_fabric_config_after_disable() {
-    // Fabric was explicitly disabled (SetFabricConfig(DISABLED), driven by teardown / device close). The
-    // control plane's resolved fabric_config_ must follow the env back to DISABLED; otherwise a control plane
-    // that previously adopted FABRIC_1D (e.g. via a process-wide override set by a prior test) keeps reporting
-    // it through get_fabric_config() after teardown, which forces fabric back on for the next device open and
-    // trips the single-chip fabric guard on an auto-discovered 1-chip mesh (the civ2 regression). Reset to
-    // DISABLED, then re-adopt so an MGD that declares an explicit per-mesh fabric_config keeps it (adopt is a
-    // no-op when the mesh graph declares nothing explicit, leaving DISABLED -- the original default behaviour).
-    this->fabric_config_ = FabricConfig::DISABLED;
+void ControlPlane::sync_fabric_config(FabricConfig config) {
+    // Keep the control plane's resolved fabric_config_ aligned with the env's config on every teardown / config
+    // transition (the env calls this with its own fabric_config_, whatever it is -- not only DISABLED). Without
+    // it, a control plane that previously adopted e.g. FABRIC_1D (via a process-wide override set by a prior
+    // test) keeps reporting that through get_fabric_config() after the env moved on, forcing fabric back on for
+    // the next device open and tripping the single-chip fabric guard on an auto-discovered 1-chip mesh (the
+    // civ2 regression). Align to the env's config, then re-adopt so an MGD that declares an explicit per-mesh
+    // fabric_config keeps it (adopt is a no-op when the mesh graph declares nothing explicit, leaving the env's
+    // config -- e.g. DISABLED on teardown, the original default behaviour).
+    this->fabric_config_ = config;
     this->adopt_local_mesh_fabric_config();
 }
 
