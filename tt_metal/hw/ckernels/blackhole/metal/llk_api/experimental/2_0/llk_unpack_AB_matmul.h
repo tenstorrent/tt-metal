@@ -48,8 +48,8 @@ inline void llk_unpack_AB_matmul(
     const std::uint32_t rt_dim = 1,
     const std::uint32_t kt_dim = 1) {
     SAN_HOOK(unsupported());
-    // Legacy execute wiring: base_a/tile_size_a <- IN0, base_b/tile_size_b <- IN1; partial_face_a <- IN1,
-    // partial_face_b <- IN0 (preserved verbatim, including the "TODO: Review RT" quirk).
+    // base_a/tile_size_a <- IN0, base_b/tile_size_b <- IN1; the IN0/IN1 shapes go to the LLK as
+    // in0/in1, which derives face-by-face unpacking from them.
     llk_unpack_AB_matmul_impl(
         base_ptr_in0,
         base_ptr_in1,
