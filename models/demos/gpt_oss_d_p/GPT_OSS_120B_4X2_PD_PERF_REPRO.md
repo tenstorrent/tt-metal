@@ -27,19 +27,45 @@ Use the following branches:
 ```text
 tt-metal: mg/gptoss-4x2-pd-perf-repro
 tt-blaze: mg/gptoss-4x2-pd-perf-repro
+tt-gen:   divanovic/gptoss120b-pd-1k-native
 ```
 
-Their base revisions are:
+Pin these exact revisions:
 
 ```text
-tt-metal: 7e5cea12b36828e03b63700e98cc9875164b989a
-tt-blaze: 442cf2e74b40ef3a2a144277e910cc25732fea2e
+tt-metal: use the head printed by `git rev-parse origin/mg/gptoss-4x2-pd-perf-repro`
+tt-blaze: d6d0b09f22f60a161d66fe4db90b9abed81ef82d
+tt-gen:   f5a46649a2d1e9a4ccae8b1e2504c63925b16473
 ```
 
 The tested frontend uses `ai-dynamo==1.5.0`. The tt-gen adapter, Python
 bindings, native KV manager, and DMK transport must be built from the
 matching internal tt-gen source. These instructions assume the user has
 access to tt-gen.
+
+Clone and build tt-gen:
+
+```bash
+git clone git@github.com:tenstorrent/tt-d-gen.git "$ROOT/tt-gen"
+git -C "$ROOT/tt-gen" checkout f5a46649a2d1e9a4ccae8b1e2504c63925b16473
+git -C "$ROOT/tt-gen" submodule update --init --recursive
+
+cd "$ROOT/tt-gen"
+./adapters/dynamo/setup_router_env.sh --with-test-deps
+VIRTUAL_ENV=$PWD/adapters/dynamo/.venv ./build_dgen.sh --dynamo
+./kv_manager/install-build-dependencies.sh
+./build_dgen.sh --kv-manager --mooncake --blaze \
+  --build-dir "$PWD/build-kv-manager"
+```
+
+The expected artifacts are:
+
+```text
+tt-gen/adapters/dynamo/.venv/bin/python
+tt-gen/build-dynamo/bindings/python
+tt-gen/build-kv-manager/kv_manager
+tt-gen/build-kv-manager/device_io/dmk.elf
+```
 
 ## Hardware and model prerequisites
 
@@ -65,6 +91,7 @@ export ROOT=/shared/gptoss-4x2-pd-repro
 export TT_METAL_HOME=$ROOT/tt-metal
 export TT_BLAZE_HOME=$ROOT/tt-blaze
 export TT_DGEN_HOME=$ROOT/tt-gen
+export TT_GEN_NATIVE_BUILD=$TT_DGEN_HOME/build-kv-manager/kv_manager
 export RUN=$ROOT/run
 export MODEL=/path/to/gpt-oss-120b
 
@@ -76,6 +103,27 @@ export DECODE_IP=<decode-rdma-ip>
 
 Use a new `RUN` directory for every decoder-owner launch. The retained
 decoder intentionally refuses stale owner or stop markers.
+
+The checked-in reproduction assets are under:
+
+```bash
+export REPRO=$TT_METAL_HOME/models/demos/gpt_oss_d_p/repro
+```
+
+Generate concrete configs from the templates:
+
+```bash
+mkdir -p "$RUN"
+envsubst < "$REPRO/manager-prefill.env.json.in" > "$RUN/manager-prefill.env.json"
+envsubst < "$REPRO/manager-decode.env.json.in"  > "$RUN/manager-decode.env.json"
+envsubst < "$REPRO/worker-prefill.json.in"     > "$RUN/worker-prefill.json"
+envsubst < "$REPRO/worker-decode.json.in"      > "$RUN/worker-decode.json"
+
+python3 -m json.tool "$RUN/manager-prefill.env.json" >/dev/null
+python3 -m json.tool "$RUN/manager-decode.env.json"  >/dev/null
+python3 -m json.tool "$RUN/worker-prefill.json"      >/dev/null
+python3 -m json.tool "$RUN/worker-decode.json"       >/dev/null
+```
 
 ## Required configuration
 
@@ -119,7 +167,9 @@ worker's peer to the other host's RDMA IP. Use all 36 layers and set
 ### 1. Start etcd and the OpenAI frontend on the prefill host
 
 ```bash
-etcd \
+export ETCD_BIN=$TT_DGEN_HOME/.dynamo_local/etcd/etcd
+
+"$ETCD_BIN" \
   --name gptoss-pd \
   --data-dir "$RUN/etcd-data" \
   --listen-client-urls "http://$PREFILL_IP:2379" \
@@ -129,7 +179,7 @@ etcd \
   --initial-cluster "gptoss-pd=http://$PREFILL_IP:2380"
 
 ETCD_ENDPOINTS="http://$PREFILL_IP:2379" \
-python -m dynamo.frontend \
+$TT_DGEN_HOME/adapters/dynamo/.venv/bin/python -m dynamo.frontend \
   --http-port 8000 \
   --discovery-backend etcd \
   --event-plane zmq \
@@ -147,6 +197,8 @@ export GPTOSS_SAMPLE=1
 export GPTOSS_CHAT_SOCKET_PREFIX=gptoss_4x2_pd_repro
 export TT_MPI_IFACE=<cluster-interface>
 export TT_METAL_CACHE_BASE=$HOME/.cache/tt-metal-cache/gptoss-4x2-pd
+export BLAZE_TENSORBIN_CACHE=$ROOT/cache/decode-tensorbin
+mkdir -p "$BLAZE_TENSORBIN_CACHE" "$TT_METAL_CACHE_BASE"
 
 bash "$TT_BLAZE_HOME/scripts/gptoss_reload_4x2/launch_chat_showcase.sh" \
   "$RUN/decode" 36
@@ -166,6 +218,33 @@ Activate the tt-metal Python environment, export the prefill variables listed
 above, then run:
 
 ```bash
+export PREFILL_MODEL=gpt_oss_d_p
+export PREFILL_HF_MODEL=$MODEL
+export HF_MODEL=$MODEL
+export PREFILL_TTNN_CACHE=$ROOT/cache/prefill-weights
+# Use 0 for the first cache-populating launch and 1 on later launches.
+export GPT_OSS_WEIGHTS_FROM_CACHE=0
+export PREFILL_NUM_LAYERS=36
+export PREFILL_NUM_USERS=2
+export PREFILL_SP=4
+export PREFILL_TP=8
+export PREFILL_CHUNK_SIZE=32768
+export PREFILL_MAX_SEQ_LEN=131072
+export PREFILL_ASYNC_LAYER_COMPLETION=1
+export PREFILL_LAYER_ACK_D2H=0
+export PREFILL_H2D_SERVICE_ID=gptoss_4x2_pd_repro
+export PREFILL_LAYER_COMPLETION_RING=/gptoss_4x2_pd_repro_completion
+export PREFILL_ENABLE_MIGRATION=1
+export PREFILL_MOCK_MIGRATION=0
+export PREFILL_MIGRATION_EXPORT_TO_FILE=1
+export PREFILL_MIGRATION_TABLE_PATH=$RUN/prefill/kv_table.pb
+export PREFILL_MIGRATION_DEVICE_MAP_PATH=$RUN/prefill/device_map.txt
+export PREFILL_USE_TRACE=0
+export PREFILL_TOPOLOGY=linear
+export PREFILL_FABRIC_MODE=1d
+export PREFILL_GATE_FALLBACK_MODE=DEVICE_FP32
+export PREFILL_MANIFEST=$TT_METAL_HOME/models/demos/gpt_oss_d_p/tt/runners/manifests/gpt_oss_120b_chat_36l.json
+
 cd "$TT_METAL_HOME"
 python -u -m models.demos.common.prefill.runners.prefill_runner
 ```
@@ -185,50 +264,44 @@ $RUN/prefill/device_map.txt
 
 ### 4. Start both KV managers
 
-Start the native `kv_manager` once on each host. Both managers need:
+Start the native `kv_manager` once on each host. Load the generated JSON into
+the environment before exec:
 
-```text
-KV_MANAGER_DISCOVERY_BACKEND=etcd
-KV_MANAGER_ETCD_ENDPOINT=http://<prefill-ip>:2379
-KV_MANAGER_KV_CHUNK_TABLE_PATHS=<prefill-table>,<decode-table>
-KV_MANAGER_DMK_ELF_PATH=<path-to-dmk.elf>
+```bash
+# Prefill host:
+set -a
+eval "$(jq -r 'to_entries[] | "export \(.key)=\(.value|@sh)"' "$RUN/manager-prefill.env.json")"
+set +a
+exec "$TT_GEN_NATIVE_BUILD/kv_manager"
+
+# Decode host:
+set -a
+eval "$(jq -r 'to_entries[] | "export \(.key)=\(.value|@sh)"' "$RUN/manager-decode.env.json")"
+set +a
+exec "$TT_GEN_NATIVE_BUILD/kv_manager"
 ```
 
-Prefill manager:
-
-```text
-KVM_ID=gptoss-4x2-prefill
-ROLE=leader
-KV_MANAGER_ADVERTISE_HOST=<prefill-ip>
-KV_MANAGER_TABLE_HOST=<prefill-host>
-KV_MANAGER_DEVICE_MAP_PATH=<run>/prefill/device_map.txt
-```
-
-Decode manager:
-
-```text
-KVM_ID=gptoss-4x2-decode
-ROLE=follower
-KV_MANAGER_ADVERTISE_HOST=<decode-ip>
-KV_MANAGER_TABLE_HOST=<decode-host>
-KV_MANAGER_DEVICE_MAP_PATH=<run>/decode/decode-device-map.txt
-```
+Do not start either manager until both model-owner table and device-map files
+exist.
 
 ### 5. Start tt-gen workers
 
-Run one worker on each host:
+Run one worker on each host. Use the tt-gen adapter environment and bindings:
 
 ```bash
-python -m tt_dynamo.main \
-  --config worker-prefill.json \
+export PYTHONPATH=$TT_DGEN_HOME/adapters/dynamo:$TT_DGEN_HOME/build-dynamo/bindings/python
+export ETCD_ENDPOINTS=http://$PREFILL_IP:2379
+
+$TT_DGEN_HOME/adapters/dynamo/.venv/bin/python -m tt_dynamo.main \
+  --config "$RUN/worker-prefill.json" \
   --model-path "$MODEL" \
   --served-model-name gpt-oss-120b-4x2-chat \
   --component gptoss_prefill \
   --reasoning-parser gpt_oss \
   --tool-call-parser harmony
 
-python -m tt_dynamo.main \
-  --config worker-decode.json \
+$TT_DGEN_HOME/adapters/dynamo/.venv/bin/python -m tt_dynamo.main \
+  --config "$RUN/worker-decode.json" \
   --model-path "$MODEL" \
   --served-model-name gpt-oss-120b-4x2-chat \
   --component gptoss_decode \
@@ -258,9 +331,13 @@ Measure TTFT from immediately before the HTTP POST until the first non-empty
 streaming delta. Run once to warm caches and report the second request.
 
 ```bash
-python async_bench.py 65536  # warm-up
-python async_bench.py 65536  # measured
-python analyze_migrations.py 72
+export FRONTEND_URL=http://$PREFILL_IP:8000
+export TOKENIZER_PATH=$MODEL
+export SERVED_MODEL_NAME=gpt-oss-120b-4x2-chat
+
+python "$REPRO/async_bench.py" 65536  # warm-up
+python "$REPRO/async_bench.py" 65536  # measured
+python "$REPRO/analyze_migrations.py" "$RUN/manager-prefill.log" 72
 ```
 
 Prefill service throughput is:

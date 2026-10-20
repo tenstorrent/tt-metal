@@ -1,0 +1,43 @@
+{
+  "runtime": {
+    "role": "prefill",
+    "layers_per_chunk": 36,
+    "max_slots": 2,
+    "max_seq_len": 131072,
+    "kv_block_size": 32,
+    "chunk_size": 32768,
+    "evict_enabled": true,
+    "recover_slot_after_ms": 300000,
+    "health_stall_ms": 360000,
+    "admit_max_attempts": 5,
+    "admit_backoff_ms": 50,
+    "admit_backoff_factor": 1.5,
+    "admit_jitter_pct": 20,
+    "kv_manager": "kvm",
+    "kv_endpoint_id": 1,
+    "kv_endpoint": "tcp://${PREFILL_IP}:9093",
+    "min_copy_tokens": 0,
+    "min_disagg_tokens": 64,
+    "kv_num_layers": 36,
+    "kv_control_port": 19071,
+    "kv_bootstrap_host": "${PREFILL_IP}",
+    "kv_peers": [
+      {
+        "host": "${DECODE_IP}",
+        "port": 19071,
+        "endpoint_id": 0,
+        "service": "kvm",
+        "kvm_id": "gptoss-4x2-decode"
+      }
+    ]
+  },
+  "device": {
+    "kind": "device",
+    "connect_timeout_ms": 1800000,
+    "prefill": {
+      "service_id": "gptoss_4x2_pd_repro",
+      "ack_shm_name": "/tt_prefill_layer_acks_gptoss_4x2_pd_repro",
+      "sp_factor": 4
+    }
+  }
+}

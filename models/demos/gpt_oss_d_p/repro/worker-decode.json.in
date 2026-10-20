@@ -1,0 +1,42 @@
+{
+  "runtime": {
+    "role": "decode",
+    "decode_backend": "base",
+    "max_slots": 2,
+    "max_seq_len": 131072,
+    "kv_block_size": 32,
+    "chunk_size": 8,
+    "evict_enabled": true,
+    "admit_max_attempts": 5,
+    "admit_backoff_ms": 50,
+    "admit_backoff_factor": 1.5,
+    "admit_jitter_pct": 20,
+    "kv_manager": "kvm",
+    "kv_endpoint_id": 0,
+    "kv_endpoint": "tcp://${PREFILL_IP}:9093",
+    "min_copy_tokens": 0,
+    "min_disagg_tokens": 64,
+    "kv_num_layers": 36,
+    "kv_control_port": 19071,
+    "kv_peers": [
+      {
+        "host": "${PREFILL_IP}",
+        "port": 19071,
+        "endpoint_id": 1,
+        "service": "kvm",
+        "kvm_id": "gptoss-4x2-prefill"
+      }
+    ],
+    "decode_lockstep": true
+  },
+  "device": {
+    "kind": "device",
+    "connect_timeout_ms": 7200000,
+    "decode": {
+      "wire_format": "blaze",
+      "h2d_socket_id": "gptoss_4x2_pd_repro",
+      "d2h_socket_id": "gptoss_4x2_pd_repro",
+      "shutdown_timeout_ms": 10000
+    }
+  }
+}
