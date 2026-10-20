@@ -39,7 +39,9 @@ TILE = 32
 # so the only parallelism is over K; 32 batches of 512 put it on 32 cores
 KS_DECODE = 32
 # "fast" (TtMHCFast, this module) | "wrap" (the DeepSeek composite TtMHCWrap, the reference path)
-MHC_IMPL = os.environ.get("GLM53_MHC_IMPL", "fast")
+MHC_IMPL = os.environ.get(
+    "GLM53_MHC_IMPL", "wrap"
+)  # fast fails the 22-layer prefill chain gate (first token); wrap until the exact custom-op path matches
 # TtMHCFast residual update: 0 = one HiFi4 matmul (bf16-rounded operands, ~1e-3 rel rms per wrap); 3 (or 1) =
 # exact: both operands split into 3 bf16 parts, the 6 significant products in one stacked-K matmul (3e-9);
 # 2 = the cheaper 2-way split, 3 products (3e-6). See TtMHCFast._exact_mm.

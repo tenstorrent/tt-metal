@@ -32,6 +32,8 @@ sparse prefill, dense and sparse decode) so a user can cross the 2048 boundary o
 
 from __future__ import annotations
 
+import os
+
 import torch
 
 import ttnn
@@ -41,6 +43,9 @@ from models.demos.glm53_flash.tt.config import GLM53FlashConfig
 TILE = 32
 SENTINEL = 0xFFFFFFFF
 DECODE_SCORE_SLACK = 8  # pools per user hidden by the traced decode scorer's fixed chunk start (TILE // index_kpool)
+# pooled-key cache dtype: bf16 (default) or bfp8_b (GLM53_POOL_DTYPE=bfloat8_b: halves the decode scorer's read,
+# the design's budget term; the selected sets are checked against the bf16 cache in tests/custom_ops)
+POOL_DTYPE = {"bfloat16": ttnn.bfloat16, "bfloat8_b": ttnn.bfloat8_b}[os.environ.get("GLM53_POOL_DTYPE", "bfloat16")]
 
 
 def _upload(device, t: torch.Tensor, dtype, layout=ttnn.TILE_LAYOUT):
@@ -107,11 +112,13 @@ class TtIndexCache:
         # least index_select_pools visible pools, the width the decode top-k ranks for every user (a short
         # allocation then holds 544 pool rows = 136 KB per user)
         pools = max(pools, cfg.index_select_pools)
-        self.pools_per_user = -(-(pools + DECODE_SCORE_SLACK) // TILE) * TILE
+        # rounded to 256 pools (8 tiles): the batched decode scorer streams the keys in 8-tile chunks
+        self.pools_per_user = -(-(pools + DECODE_SCORE_SLACK) // (8 * TILE)) * (8 * TILE)
         self.pool_blocks = self.pools_per_user // TILE
+        self.pool_dtype = POOL_DTYPE
         self.pool_cache = ttnn.zeros(
             (max_batch * self.pool_blocks, 1, TILE, self.D),
-            dtype=ttnn.bfloat16,
+            dtype=self.pool_dtype,
             layout=ttnn.TILE_LAYOUT,
             device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -212,12 +219,16 @@ class TtIndexCache:
             prefix = ttnn.reshape(
                 ttnn.slice(self.pool_cache, [blk, 0, 0, 0], [blk + 1, 1, r0, self.D]), [1, 1, r0, self.D]
             )
+            if prefix.dtype != ttnn.bfloat16:
+                prefix = ttnn.typecast(prefix, ttnn.bfloat16)
             pooled = ttnn.concat([prefix, pooled], dim=-2)
             ttnn.deallocate(prefix)
             n += r0
         n_pad = -(-n // TILE) * TILE
         if n_pad != n:
             pooled = ttnn.pad(pooled, [(0, 0), (0, 0), (0, n_pad - n), (0, 0)], value=0.0)
+        if pooled.dtype != self.pool_dtype:  # paged_fill_cache wants the cache dtype (paged_update_cache casts itself)
+            pooled = ttnn.typecast(pooled, self.pool_dtype)
         if b0 == 0 and not self.partition:
             ttnn.experimental.paged_fill_cache(self.pool_cache, pooled, self.page_table, batch_idx=user)
         else:
