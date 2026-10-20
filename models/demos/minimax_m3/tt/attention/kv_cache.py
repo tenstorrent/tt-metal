@@ -104,6 +104,22 @@ def page_table_width(max_seq_len: int) -> int:
     return -(-max_seq_len // PAGE_SIZE)
 
 
+def fixed_page_table(*, num_users, max_seq_len, sp, chunk_size, num_pages) -> torch.Tensor:
+    """The page table a runner installs while it, not the engine, places the pages: each row (slot) owns pages for
+    its whole capacity, shuffled within each rank's pool by a fixed seed. Every pipeline rank derives the same
+    table, so rank 0 can address every stage's pages, and a read that skipped the translation would not pass for a
+    slot cache."""
+    pages = page_table_width(max_seq_len)
+    owner = [page_owner(q, chunk_local=chunk_size // sp, sp=sp) for q in range(pages)]
+    needed = num_users * max(owner.count(rank) for rank in range(sp))
+    assert (
+        num_pages >= needed
+    ), f"{num_users} slots of {max_seq_len} tokens need {needed} pages per chip, got {num_pages}"
+    gen = torch.Generator().manual_seed(0)
+    free = [torch.randperm(num_pages, generator=gen).tolist() for _ in range(sp)]
+    return torch.tensor([[free[owner[q]].pop() for q in range(pages)] for _ in range(num_users)], dtype=torch.int32)
+
+
 def set_page_table(kv_cache: MiniMaxKVCache, table: torch.Tensor) -> None:
     """Overwrite the whole device page table with a host ``[num_users, width]`` table: rows in flight are passed
     unchanged. In place, because a captured trace records the table's address."""

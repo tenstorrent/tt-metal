@@ -10,7 +10,8 @@ table's addressing against the layouts: per-(stage, cache) base addresses at glo
 single-member per-head device groups vs the full-row index_k replica group, and the per-(config, stage,
 row) bank-walk restart, and the index_k rows limited to the MSA layers. The ``dedup_table`` cases rebuild
 it with index_k TP-deduped (``index_k_tp_axis``): index_k stays one config but every chip owns a distinct
-stripe, addressed by a single-chip group and its own bank walk, while K / V are unchanged.
+stripe, addressed by a single-chip group and its own bank walk, while K / V are unchanged. The ``paged`` case
+gives the second stage a paged pool: its chunks are addressed through each slot's page.
 """
 
 import os
@@ -20,7 +21,11 @@ import pytest
 
 import ttnn
 from models.demos.common.prefill.runners.migration import validate_stage_layout_contiguous
-from models.demos.minimax_m3.tt.attention.kv_cache import NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
+from models.demos.minimax_m3.tt.attention.kv_cache import (
+    NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK,
+    PAGE_SIZE,
+    fixed_page_table,
+)
 from models.demos.minimax_m3.tt.runners.kv_chunk_table import _chunk_size_bytes, build_and_serialize_kv_chunk_table
 
 SP = 2
@@ -81,7 +86,14 @@ def _stub_cache(num_layers, seq_len=SEQ_LEN, index_k_tp_axis=None):
 
 
 def _build(
-    tmp_path, stage_layouts, *, index_k_layers=None, seq_len=SEQ_LEN, chunk_size=CHUNK_SIZE, index_k_tp_axis=None
+    tmp_path,
+    stage_layouts,
+    *,
+    index_k_layers=None,
+    seq_len=SEQ_LEN,
+    chunk_size=CHUNK_SIZE,
+    index_k_tp_axis=None,
+    **paging,
 ):
     path = os.path.join(str(tmp_path), "m3_merge_table.pb")
     # num_layers is THIS rank's stage count (rank 0 builds), used only for the local shape assert.
@@ -99,6 +111,7 @@ def _build(
         path=path,
         stage_layouts=stage_layouts,
         index_k_layers=index_k_layers,
+        **paging,
     )
 
 
@@ -332,3 +345,49 @@ def test_dedup_index_k_rows_limited_to_msa_layers(dedup_table, tmp_path):
                     assert _ids(filtered.get_device_group(got.device_group_index).fabric_node_ids) == _ids(
                         dedup_table.get_device_group(want.device_group_index).fabric_node_ids
                     ), f"config {cfg_id} slot {slot} layer {layer} pos {pos} changed device group"
+
+
+def test_paged_stage_addressing(tmp_path):
+    """Stage 1 holds a paged pool (stage 0 keeps slots): every chunk of it lands at the block of its slot's page,
+    pool entry page * count + layer, in the same 32-token round-robin walk; stage 0's slot walk is unchanged."""
+    seq_len, chunk_size, num_pages = 256, PAGE_SIZE * SP, 9  # one page per rank per chunk, spare pages
+    chunk_local = chunk_size // SP
+    table = fixed_page_table(
+        num_users=NUM_USERS, max_seq_len=seq_len, sp=SP, chunk_size=chunk_size, num_pages=num_pages
+    )
+    layouts = _stage_layouts()
+    imp = ttnn.experimental.disaggregation.import_from_protobuf_file
+    (tmp_path / "paged").mkdir()
+    (tmp_path / "slots").mkdir()
+    paged = imp(
+        _build(
+            tmp_path / "paged",
+            layouts,
+            seq_len=seq_len,
+            chunk_size=chunk_size,
+            page_table=table,
+            paged_stage=lambda first, count: first > 0,
+        )
+    )
+    slots = imp(_build(tmp_path / "slots", layouts, seq_len=seq_len, chunk_size=chunk_size))
+    k_bytes = _chunk_size_bytes(ttnn.bfloat8_b, HEAD_DIM)
+    stage = layouts[0][1]
+    blocks_per_page = PAGE_SIZE // NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
+    for slot in range(NUM_USERS):
+        for position in range(0, seq_len, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK):
+            row = (position // chunk_local) % SP
+            for local_layer in range(stage["count"]):
+                global_layer = stage["first_layer"] + local_layer
+                page = int(table[slot, position // PAGE_SIZE])
+                block = (page * stage["count"] + local_layer) * blocks_per_page + (
+                    position % PAGE_SIZE
+                ) // NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
+                loc = paged.lookup(global_layer, position, slot, 0)
+                assert loc.noc_addr == ((block % NUM_BANKS) << 32) | (stage["base_addr"] + block // NUM_BANKS * k_bytes)
+                assert _ids(paged.get_device_group(loc.device_group_index).fabric_node_ids) == _ids(
+                    [stage["fnids"][row][0]]
+                )
+            for layer in range(STAGE_COUNTS[0]):
+                assert (
+                    paged.lookup(layer, position, slot, 0).noc_addr == slots.lookup(layer, position, slot, 0).noc_addr
+                )

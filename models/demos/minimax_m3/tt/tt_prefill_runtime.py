@@ -40,7 +40,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utils import block_cyclic_reorder
-from models.demos.minimax_m3.tt.attention.kv_cache import read_paged_slot_block
+from models.demos.minimax_m3.tt.attention.kv_cache import fixed_page_table, read_paged_slot_block
 from models.demos.minimax_m3.tt.prefill_chunk import PrefillChunk, pack_forward_tokens, validate_chunks
 from models.demos.minimax_m3.utils.general_utils import sparse_attention_freq
 
@@ -82,6 +82,9 @@ class TtPrefillRuntimeConfig:
     # MoE layers: run the shared expert on its own sub-device concurrently with dispatch (the runner's
     # PrefillRunParams.overlap_shared_expert_with_dispatch). Off: it runs before the MoE on the full grid.
     overlap_shared_expert: bool = True
+    # Pages per chip of the paged KV pool every MSA-only stage of the pipeline allocates (stage_is_paged); None =
+    # slot caches. The KV chunk table addresses those stages' pages.
+    kv_num_pages: Optional[int] = None
 
     def __post_init__(self):
         if self.forward_tokens_budget is None:
@@ -564,7 +567,6 @@ class TtPrefillRuntime:
         allocates a slot for every layer, zeros on dense ones), so every stage carries the same range."""
         from models.demos.common.prefill.runners.migration import KvCacheStage
 
-        _reject_paged_migration(kv_cache)
         first_layer_idx = self.config.first_layer_idx if first_layer_idx is None else int(first_layer_idx)
         num_my_layers = self.config.num_layers if num_my_layers is None else int(num_my_layers)
         return [
@@ -592,8 +594,19 @@ class TtPrefillRuntime:
         rank's own mesh."""
         from models.demos.minimax_m3.tt.runners.kv_chunk_table import build_and_serialize_kv_chunk_table
 
-        _reject_paged_migration(kv_cache)
         c = self.config
+        paging = {}
+        if c.kv_num_pages is not None:
+            paging = dict(
+                page_table=fixed_page_table(
+                    num_users=c.num_users,
+                    max_seq_len=c.max_seq_len,
+                    sp=c.sp_factor,
+                    chunk_size=c.chunk_size,
+                    num_pages=c.kv_num_pages,
+                ),
+                paged_stage=lambda first, count: stage_is_paged(self.hf_config, c.kv_num_pages, first, count),
+            )
         return build_and_serialize_kv_chunk_table(
             mesh_device=self.mesh_device,
             kv_cache=kv_cache,
@@ -608,12 +621,13 @@ class TtPrefillRuntime:
             path=path,
             stage_layouts=stage_layouts,
             index_k_layers=self.msa_layer_ids(),
+            **paging,
         )
 
     def msa_layer_ids(self) -> set[int]:
         """Global ids of the MSA (block-sparse) layers — the only layers that write an index_k (layers 3-59 on
         M3). Read through the same helper as ``Layer``, so the table can't disagree with the model."""
-        ids = {i for i, f in enumerate(sparse_attention_freq(self.hf_config) or []) if f}
+        ids = msa_layer_ids(self.hf_config)
         if not ids:
             logger.warning(
                 "[migration] the config has no MSA layers (sparse_attention_freq missing or use_sparse_attention "
@@ -752,6 +766,13 @@ class TtPrefillRuntime:
         )
 
 
-def _reject_paged_migration(kv_cache) -> None:
-    if kv_cache.page_table is not None:
-        raise NotImplementedError("KV migration publishes slot rows; a paged KV cache has no slot rows to publish")
+def msa_layer_ids(hf_config) -> set[int]:
+    return {i for i, f in enumerate(sparse_attention_freq(hf_config) or []) if f}
+
+
+def stage_is_paged(hf_config, kv_num_pages, first_layer_idx, num_layers) -> bool:
+    """Whether the stage holding layers ``[first_layer_idx, first_layer_idx + num_layers)`` runs a paged KV pool:
+    paging is configured and every layer is MSA (only the MSA cache read is paged; ring_joint reads slots)."""
+    return kv_num_pages is not None and set(range(first_layer_idx, first_layer_idx + num_layers)) <= msa_layer_ids(
+        hf_config
+    )

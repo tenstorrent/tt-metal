@@ -36,7 +36,12 @@ import socket
 from loguru import logger
 
 import ttnn
-from models.demos.minimax_m3.tt.attention.kv_cache import BH_NUM_DRAM_BANKS, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
+from models.demos.minimax_m3.tt.attention.kv_cache import (
+    BH_NUM_DRAM_BANKS,
+    NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK,
+    PAGE_SIZE,
+    PAGE_UNMAPPED,
+)
 
 # bf8_b / bf16 TILE byte sizes (32x32 tile). bf8_b = 1024 mantissa + 64 exponent bytes; bf16 = 2048.
 _TILE_BYTES = {ttnn.bfloat8_b: 1088, ttnn.bfloat16: 2048}
@@ -85,6 +90,8 @@ def build_and_serialize_kv_chunk_table(
     path,
     stage_layouts=None,
     index_k_layers=None,
+    page_table=None,
+    paged_stage=None,
 ) -> str:
     """Build the M3 multi-config block-cyclic KV chunk address table and serialize it to ``path`` for the
     inference server's SET_TABLE. Returns the path on success.
@@ -104,6 +111,10 @@ def build_and_serialize_kv_chunk_table(
     config's rows to those layers. The cache allocates index_k for every layer but dense layers never write
     it, and the decode peer has no index_k on dense layers; a row published on one side only makes the KV
     Manager reject the whole migration ("covered by only one side"). None publishes every layer.
+
+    ``page_table`` (host ``[num_users, width]``, the table every paged stage installed) and ``paged_stage(first_layer,
+    count)`` describe the stages that hold a paged pool: their chunks are addressed through the slot's page, so the
+    table keeps its (layer, position, slot) keys and its readers need no change.
     """
     tp_axis = 1 - sp_axis
     sp = mesh_shape[sp_axis]
@@ -131,10 +142,9 @@ def build_and_serialize_kv_chunk_table(
             "unset M3_INDEX_CACHE_BF16 for migrating runs"
         )
     index_k = kv_cache.index_k
+    entries = (kv_cache.num_pages if getattr(kv_cache, "page_table", None) is not None else num_users) * num_layers
     for name, t in (("k", kv_cache.k), ("v", kv_cache.v), ("index_k", index_k)):
-        assert (
-            t.shape[0] == num_users * num_layers
-        ), f"{name} cache batch dim {t.shape[0]} != num_users({num_users}) * num_layers({num_layers})"
+        assert t.shape[0] == entries, f"{name} cache batch dim {t.shape[0]} != {entries} (slots or pages x layers)"
 
     num_chunks_per_seq_len = seq_len // chunk_size
 
@@ -224,6 +234,8 @@ def build_and_serialize_kv_chunk_table(
             host_name = stage.get("host_name") or f"host-{stage['host_tag']:08x}"
             first = stage["first_layer"]
             filter_layers = label == "index_k" and index_k_layers is not None
+            stage_paged = page_table is not None and paged_stage(first, stage["count"])
+            assert not (stage_paged and len(row_groups) > 1), "a paged stage has no TP-deduped index_k"
             for global_row in range(sp):
                 for stripe, group_cols in enumerate(row_groups):
                     fabric_node_ids = [stage["fnids"][global_row][c] for c in group_cols]
@@ -233,6 +245,35 @@ def build_and_serialize_kv_chunk_table(
                         if key not in hosts_set:
                             table.set_fabric_node_host(fid, host_name=host_name)
                             hosts_set.add(key)
+
+                    if stage_paged:
+                        # Pool entry page * count + layer holds the page as page/32 blocks of the same round-robin
+                        # walk, so a block's bank and offset follow from its index alone.
+                        blocks_per_page = PAGE_SIZE // NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
+                        for slot in range(num_users):
+                            for local_layer in range(stage["count"]):
+                                global_layer = first + local_layer
+                                if filter_layers and global_layer not in index_k_layers:
+                                    continue
+                                for seq_chunk in range(num_chunks_per_seq_len):
+                                    start = seq_chunk * chunk_size + global_row * tokens_per_chunk_local
+                                    for position in range(
+                                        start, start + tokens_per_chunk_local, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
+                                    ):
+                                        page = int(page_table[slot, position // PAGE_SIZE])
+                                        if page == PAGE_UNMAPPED:
+                                            continue
+                                        block = (page * stage["count"] + local_layer) * blocks_per_page + (
+                                            position % PAGE_SIZE
+                                        ) // NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
+                                        location = ttnn.experimental.disaggregation.KvCacheLocation()
+                                        location.noc_addr = ((block % num_banks) << 32) | (
+                                            base_addr + block // num_banks * chunk_bytes
+                                        )
+                                        location.size_bytes = chunk_bytes
+                                        location.device_group_index = group_idx
+                                        table.set(global_layer, position, slot, location, config_id)
+                        continue
 
                     # Replay the ND-shard ROUND_ROBIN_1D walk: 32-token blocks round-robin across the DRAM
                     # banks (per chip / per tensor), advancing the per-bank offset after each full bank
