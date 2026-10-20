@@ -10,18 +10,20 @@ per-user `cur_pos`. Design: `doc/mesh/sparse_1m.md` section 2.3.
 |---|---|---|---|
 | `cache` | `[max_blocks, 1, 32, W]` (W % 32 == 0) | bf16 TILE, DRAM interleaved | the paged latent cache (read) |
 | `page_table` | `[B_table, blocks_per_seq]`, B_table >= B | int32 ROW_MAJOR | row b maps user b's logical blocks (any mapping) |
-| `pool_ids` | `[B, 1, 1, N]` | uint32 ROW_MAJOR | pool ids per user; 0xFFFFFFFF or `P*id >= blocks_per_seq*32` = zero rows |
-| `out` | `[B * ceil(N*P/32), 1, 32, W]` | bf16 TILE, pre-allocated by the caller | output row `P*i + j` of user b = cache row `P*pool_ids[b,i] + j` of user b; padding rows zero |
+| `top_ids` | `[B, 1, 1, K]` (K = 512) | uint32 ROW_MAJOR | the ranked pool ids per user; 0xFFFFFFFF or `P*id >= blocks_per_seq*32` = zero rows |
+| `tail_pool` | `[B, 1, 1, 1]` | uint32 ROW_MAJOR | `n` = the user's incomplete pool (`SparseDecodeMeta.tail_pool`); `n < K` marks a DENSE user |
+| `out` | `[B * ceil((K+1)*P/32), 1, 32, W]` | bf16 TILE, pre-allocated by the caller | slot `s < K` = ranked pool `s` (or pool `s` itself for a dense user: all complete pools in order), slot `K` = pool `n`; output row `P*s + j` = cache row `P*pool + j` of user b; padding rows zero |
 
 Semantics: pure data movement, no in-place inputs; `out` is fully written (every row of every output block, zeros
-where no pool). A pool never crosses a 16-row tile face (`P` in 1/2/4/8/16), so a pool is two contiguous
+where no pool). The slot -> pool mapping lives in the kernel, so the decode path hands it the top-k output and the
+tail pool directly (no id blend ops; the dense users' in-order lists need no host tensor). A pool never crosses a 16-row tile face (`P` in 1/2/4/8/16), so a pool is two contiguous
 `P*32`-byte runs per tile (one per face column): 32 reads of 128 B per 4-token pool, written into an L1 tile
 block, then `W/32` whole-tile writes.
 
 Kernel (`kernels/reader_paged_pool_gather.cpp`, RISCV_1 reader config): compile-time args
-`[Wt, P, N, out_blocks, blocks_per_seq, pt_row_bytes (aligned page), ids_row_bytes (aligned page), slots_per_block]`
-+ `TensorAccessorArgs` of cache, page_table, pool_ids, out; runtime args per core
-`[item0, n_items, stride, cache_addr, pt_addr, ids_addr, out_addr]`. Work items are (user, output block) dealt
+`[Wt, P, K, out_blocks, blocks_per_seq, pt_row_bytes (aligned page), ids_row_bytes (aligned page), slots_per_block,
+tail_row_bytes]` + `TensorAccessorArgs` of cache, page_table, top_ids, tail_pool, out; runtime args per core
+`[item0, n_items, stride, cache_addr, pt_addr, ids_addr, out_addr, tail_addr]`. Work items are (user, output block) dealt
 round-robin over `min(B*out_blocks, grid)` cores (core c = `(c // grid.y, c % grid.y)`); two L1 tile blocks
 alternate so the writes of one item drain while the next item's reads are in flight. CBs: 0 = tile blocks
 (2*Wt+1 x 2 KB), 1 = the pool-id row, 2 = 64 B page-table fragments.

@@ -84,9 +84,8 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> fused_recurrent_gated_delt
 
     const float scale = scale_opt.has_value() ? *scale_opt : (1.0f / std::sqrt(static_cast<float>(K)));
 
-    // Scale q (q is already L2-normed on host; a unit scale is folded by the caller and skipped), then
-    // head-split + GQA-expand q,k from H to HV heads.
-    ttnn::Tensor q = (scale == 1.0f) ? as_f32(q_in) : ttnn::multiply(as_f32(q_in), scale);
+    // Scale q (q is already L2-normed on host), then head-split + GQA-expand q,k from H to HV heads.
+    ttnn::Tensor q = ttnn::multiply(as_f32(q_in), scale);
     ttnn::Tensor k = as_f32(k_in);
     q = head_split(q, B, T, H, K);  // [B*H, T, K]
     k = head_split(k, B, T, H, K);
@@ -96,25 +95,9 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> fused_recurrent_gated_delt
     }
     ttnn::Tensor v = head_split(v_in, B, T, HV, V);  // [BH, T, V]
 
-    // decay = exp(g); beta as-is (already sigmoid'd). A rank-4 g [B,T,HV,K] is the per-key-channel log
-    // decay of KDA: its exp is laid out like q/k ([BH*T,1,K] rows) and the kernel scales S row-wise.
-    const auto& gs = g_in.logical_shape();
-    const bool per_channel = gs.rank() == 4;
-    ttnn::Tensor decay;
-    if (per_channel) {
-        TT_FATAL(
-            gs[0] == B && gs[1] == T && gs[2] == HV && gs[3] == K,
-            "fused_recurrent_gated_delta_rule: per-channel g must be [B,T,HV,K] = [{},{},{},{}], got {}",
-            B,
-            T,
-            HV,
-            K,
-            gs);
-        decay = ttnn::exp(head_split(g_in, B, T, HV, K));  // [BH, T, K]
-    } else {
-        decay = ttnn::exp(headvec_split(g_in, B, T, HV));  // [BH, T]
-    }
-    ttnn::Tensor beta = headvec_split(beta_in, B, T, HV);  // [BH, T]
+    // decay = exp(g); beta as-is (already sigmoid'd).
+    ttnn::Tensor decay = ttnn::exp(headvec_split(g_in, B, T, HV));  // [BH, T]
+    ttnn::Tensor beta = headvec_split(beta_in, B, T, HV);           // [BH, T]
 
     // Per-token layout: each (head, token) its own zero-padded tile-block.
     //   q/k [BH*T,1,K], v [BH*T,1,V], decay/beta [BH*T,1,1].
@@ -124,15 +107,10 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> fused_recurrent_gated_delt
         q = reshape_rm(q, ttnn::Shape({BH * T, 1, K}));
         k = reshape_rm(k, ttnn::Shape({BH * T, 1, K}));
         v = reshape_rm(v, ttnn::Shape({BH * T, 1, V}));
-        if (per_channel) {
-            decay = reshape_rm(decay, ttnn::Shape({BH * T, 1, K}));
-        }
     }
-    // A scalar decay and beta come from headvec_split as [BH,T] (BH packed in tile-rows); they always need
-    // the relayout to per-scalar tiles [BH*T,1,1] so bcast_scalar reads element [0,0]. They are tiny.
-    if (!per_channel) {
-        decay = reshape_rm(decay, ttnn::Shape({BH * T, 1, 1}));
-    }
+    // decay/beta come from headvec_split as [BH,T] (BH packed in tile-rows); they always need the
+    // relayout to per-scalar tiles [BH*T,1,1] so bcast_scalar reads element [0,0]. They are tiny.
+    decay = reshape_rm(decay, ttnn::Shape({BH * T, 1, 1}));
     beta = reshape_rm(beta, ttnn::Shape({BH * T, 1, 1}));
 
     // Initial state [B,HV,K,V] -> [BH,K,V] fp32 TILE. Always provide (zeros if absent) so the reader
@@ -175,8 +153,7 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> fused_recurrent_gated_delt
         want_state && !output_per_token_state,
         output_per_token_state,
         out_mem,
-        kernel_cfg,
-        per_channel);
+        kernel_cfg);
     const ttnn::Tensor& o_pt = res[0];  // [BH*T, 1, V]
     const ttnn::Tensor& st = res[1];    // [BH*T,K,V] per-token, else [BH,K,V]
 

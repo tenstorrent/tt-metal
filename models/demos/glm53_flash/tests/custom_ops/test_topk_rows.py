@@ -17,7 +17,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.glm53_flash.custom_ops.topk_rows.op import TopkRows
+from models.demos.glm53_flash.custom_ops.topk_rows.op import SENTINEL, TopkRows
 
 K = 512
 
@@ -143,3 +143,65 @@ def test_topk_rows_timing(mesh_device):
         )
         for t in (s_t, v_t, o_t, one):
             ttnn.deallocate(t)
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+@pytest.mark.parametrize("W,B", [(262400, 1), (262400, 8), (2560, 4)])
+def test_topk_rows_segmented(mesh_device, W, B):
+    """Two-stage top-512 (``segmented``): rows with -inf beyond each user's bound (as the masked scorer writes them), split
+    into S segments ranked on S cores, then the S*512 candidates merged and translated back to pool ids; vs torch over
+    the row's finite prefix (score multisets equal, ids inside the bound); timing vs the single-stage call."""
+    op = TopkRows(mesh_device)
+    S = op.segments_for(W)
+    assert S > 1, (W, S)
+    g = torch.Generator().manual_seed(W + 7 * B)
+    scores = torch.randn(B, 1, 1, W, generator=g).bfloat16()
+    valid = torch.randint(K, W + 1, (B,), generator=g)
+    valid[0] = W
+    valid[-1] = K
+    for b in range(B):
+        scores[b, 0, 0, int(valid[b]) :] = float("-inf")
+    seg = scores.reshape(B * S, 1, 1, W // S).contiguous()
+    seg_t = ttnn.from_torch(seg, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device)
+    ids1 = ttnn.zeros((B, 1, 1, S * K), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device)
+    vals1 = ttnn.zeros((B, 1, 1, S * K), dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device)
+    out_t = ttnn.zeros((B, 1, 1, K), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device)
+    op.segmented(seg_t, S, ids1, vals1, out_t)
+    ids = ttnn.to_torch(out_t).long()
+    ok, common = _check(scores, valid, ids)
+    # the stage-1 tables: every finite candidate's value must equal the score at its id
+    i1 = ttnn.to_torch(ids1).long().reshape(B, S, K)
+    v1 = ttnn.to_torch(vals1).float().reshape(B, S, K)
+    ok1 = True
+    for b in range(B):
+        for s_ in range(S):
+            for j in range(0, K, 37):
+                i = int(i1[b, s_, j])
+                if i != SENTINEL:
+                    ok1 &= (
+                        abs(float(scores[b, 0, 0, s_ * (W // S) + i]) - float(v1[b, s_, j])) < 1e-6
+                        or torch.isinf(v1[b, s_, j]).item()
+                    )
+    logger.info(
+        f"segmented topk W={W} B={B} S={S}: ok {ok}, stage-1 values consistent {ok1}, common ids {common}/{B * K}"
+    )
+    assert ok and ok1
+    full_t = ttnn.from_torch(scores, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device)
+    vr = ttnn.from_torch(
+        torch.full((B, 1), W, dtype=torch.int64), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device
+    )
+
+    def bench(fn, n=5):
+        fn()
+        ttnn.synchronize_device(mesh_device)
+        t0 = time.perf_counter()
+        for _ in range(n):
+            fn()
+        ttnn.synchronize_device(mesh_device)
+        return (time.perf_counter() - t0) / n * 1e3
+
+    t_seg = bench(lambda: op.segmented(seg_t, S, ids1, vals1, out_t))
+    t_one = bench(lambda: op(full_t, vr, out_t))
+    logger.info(f"segmented topk W={W} B={B} S={S}: {t_seg:.3f} ms (two stages) vs single-stage {t_one:.3f} ms")
+    for t in (seg_t, ids1, vals1, out_t, full_t, vr):
+        ttnn.deallocate(t)

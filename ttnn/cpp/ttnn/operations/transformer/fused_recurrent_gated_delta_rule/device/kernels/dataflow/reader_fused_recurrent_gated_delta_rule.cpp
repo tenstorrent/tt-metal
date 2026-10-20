@@ -1,10 +1,9 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 //
-// Reader: for each head this core owns (h0, h0 + stride, ...): initial state S [K,V] once (from s0
-// or host-provided zeros), then per token q,k [1,K], v [1,V], decay [1,1] (per-channel: [1,K]),
-// beta [1,1]. All fp32. Device 2.0 API.
-// Per-token layout: q/k/v are [BH*T, 1, D] and decay/beta [BH*T, 1, 1|K]; block index = h*T + t.
+// Reader: initial state S [K,V] once (from s0 or host-provided zeros), then per token
+// q,k [1,K], v [1,V], decay,beta [1,1]. All fp32. Device 2.0 API.
+// Per-token layout: q/k/v are [BH*T, 1, D] and decay/beta [BH*T, 1, 1]; block index = h*T + t.
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
@@ -20,10 +19,8 @@ void kernel_main() {
     constexpr uint32_t Kt = get_compile_time_arg_val(0);
     constexpr uint32_t Vt = get_compile_time_arg_val(1);
     constexpr uint32_t use_blk_idx = get_compile_time_arg_val(2);
-    constexpr uint32_t per_channel = get_compile_time_arg_val(3);
-    constexpr uint32_t decay_tiles = per_channel ? Kt : 1;
 
-    constexpr auto q_a = TensorAccessorArgs<4>();
+    constexpr auto q_a = TensorAccessorArgs<3>();
     constexpr auto k_a = TensorAccessorArgs<q_a.next_compile_time_args_offset()>();
     constexpr auto v_a = TensorAccessorArgs<k_a.next_compile_time_args_offset()>();
     constexpr auto d_a = TensorAccessorArgs<v_a.next_compile_time_args_offset()>();
@@ -31,17 +28,15 @@ void kernel_main() {
     constexpr auto s0_a = TensorAccessorArgs<b_a.next_compile_time_args_offset()>();
     constexpr auto idx_a = TensorAccessorArgs<s0_a.next_compile_time_args_offset()>();
 
-    const uint32_t h0 = get_arg_val<uint32_t>(0);
-    const uint32_t n_heads = get_arg_val<uint32_t>(1);
-    const uint32_t stride = get_arg_val<uint32_t>(2);
-    const uint32_t T = get_arg_val<uint32_t>(3);
-    const uint32_t q_addr = get_arg_val<uint32_t>(4);
-    const uint32_t k_addr = get_arg_val<uint32_t>(5);
-    const uint32_t v_addr = get_arg_val<uint32_t>(6);
-    const uint32_t d_addr = get_arg_val<uint32_t>(7);
-    const uint32_t b_addr = get_arg_val<uint32_t>(8);
-    const uint32_t s0_addr = get_arg_val<uint32_t>(9);
-    // rt 10 = block-index buffer address (0 when absent), rt 11 = its aligned page size, rt 12 = BH.
+    const uint32_t h = get_arg_val<uint32_t>(0);
+    const uint32_t T = get_arg_val<uint32_t>(1);
+    const uint32_t q_addr = get_arg_val<uint32_t>(2);
+    const uint32_t k_addr = get_arg_val<uint32_t>(3);
+    const uint32_t v_addr = get_arg_val<uint32_t>(4);
+    const uint32_t d_addr = get_arg_val<uint32_t>(5);
+    const uint32_t b_addr = get_arg_val<uint32_t>(6);
+    const uint32_t s0_addr = get_arg_val<uint32_t>(7);
+    // rt 8 = block-index buffer address (0 when absent), rt 9 = its aligned page size, rt 10 = BH.
 
     const uint32_t tb = get_tile_size(cb_q);  // fp32; all tensors share it
     const auto q_acc = TensorAccessor(q_a, q_addr, tb);
@@ -64,41 +59,30 @@ void kernel_main() {
         cb.push_back(n);
     };
 
-    // Ring mode: the [BH] block-index vector is read once into the scratch CB (never pushed) and
-    // indexed per head below.
-    uint32_t idx_l1 = 0;
-    [[maybe_unused]] uint32_t BH = 0;
+    // initial state S (once) — host always provides it (zeros if absent). In ring mode the block
+    // is idx[h] instead of h (caller contract: see the Python binding).
+    uint32_t s0_block = h;
     if constexpr (use_blk_idx) {
-        const uint32_t idx_addr = get_arg_val<uint32_t>(10);
-        const uint32_t idx_page_bytes = get_arg_val<uint32_t>(11);
-        BH = get_arg_val<uint32_t>(12);
+        const uint32_t idx_addr = get_arg_val<uint32_t>(8);
+        const uint32_t idx_page_bytes = get_arg_val<uint32_t>(9);
+        [[maybe_unused]] const uint32_t BH = get_arg_val<uint32_t>(10);
         CircularBuffer cb_idx(cb_blkidx);
-        idx_l1 = cb_idx.get_write_ptr();
+        const CoreLocalMem<volatile uint32_t> idx(cb_idx.get_write_ptr());
         const auto idx_acc = TensorAccessor(idx_a, idx_addr, idx_page_bytes);
         noc.async_read(idx_acc, cb_idx, idx_page_bytes, {.page_id = 0}, {.offset_bytes = 0});
         noc.async_read_barrier();
+        s0_block = idx[h];
+        // Watcher-checked caller contract: the block belongs to head h and lies inside the ring.
+        ASSERT(s0_block % BH == h && s0_block < T * BH);
     }
+    read_into(s0_acc, cb_S, s0_block * kv, kv);
 
-    for (uint32_t hi = 0; hi < n_heads; hi++) {
-        const uint32_t h = h0 + hi * stride;
-        // initial state S (once per head) — host always provides it (zeros if absent). In ring mode
-        // the block is idx[h] instead of h (caller contract: see the Python binding).
-        uint32_t s0_block = h;
-        if constexpr (use_blk_idx) {
-            const CoreLocalMem<volatile uint32_t> idx(idx_l1);
-            s0_block = idx[h];
-            // Watcher-checked caller contract: the block belongs to head h and lies inside the ring.
-            ASSERT(s0_block % BH == h && s0_block < T * BH);
-        }
-        read_into(s0_acc, cb_S, s0_block * kv, kv);
-
-        for (uint32_t t = 0; t < T; t++) {
-            const uint32_t block = h * T + t;
-            read_into(q_acc, cb_q, block * Kt, Kt);
-            read_into(k_acc, cb_k, block * Kt, Kt);
-            read_into(v_acc, cb_v, block * Vt, Vt);
-            read_into(d_acc, cb_decay, block * decay_tiles, decay_tiles);
-            read_into(b_acc, cb_beta, block, 1);
-        }
+    for (uint32_t t = 0; t < T; t++) {
+        const uint32_t block = h * T + t;
+        read_into(q_acc, cb_q, block * Kt, Kt);
+        read_into(k_acc, cb_k, block * Kt, Kt);
+        read_into(v_acc, cb_v, block * Vt, Vt);
+        read_into(d_acc, cb_decay, block, 1);
+        read_into(b_acc, cb_beta, block, 1);
     }
 }

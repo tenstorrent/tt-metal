@@ -19,16 +19,19 @@
 void kernel_main() {
     constexpr uint32_t Wt = get_compile_time_arg_val(0);
     constexpr uint32_t P = get_compile_time_arg_val(1);
-    constexpr uint32_t N = get_compile_time_arg_val(2);
+    constexpr uint32_t K = get_compile_time_arg_val(2);  // ranked pools per user; slot K = the tail pool
     constexpr uint32_t out_blocks = get_compile_time_arg_val(3);
     constexpr uint32_t blocks_per_seq = get_compile_time_arg_val(4);
     constexpr uint32_t pt_row_bytes = get_compile_time_arg_val(5);
     constexpr uint32_t ids_row_bytes = get_compile_time_arg_val(6);
     constexpr uint32_t slots_per_block = get_compile_time_arg_val(7);
-    constexpr auto cache_a = TensorAccessorArgs<8>();
+    constexpr uint32_t tail_row_bytes = get_compile_time_arg_val(8);
+    constexpr auto cache_a = TensorAccessorArgs<9>();
     constexpr auto pt_a = TensorAccessorArgs<cache_a.next_compile_time_args_offset()>();
     constexpr auto ids_a = TensorAccessorArgs<pt_a.next_compile_time_args_offset()>();
-    constexpr auto out_a = TensorAccessorArgs<ids_a.next_compile_time_args_offset()>();
+    constexpr auto tail_a = TensorAccessorArgs<ids_a.next_compile_time_args_offset()>();
+    constexpr auto out_a = TensorAccessorArgs<tail_a.next_compile_time_args_offset()>();
+    constexpr uint32_t N = K + 1;  // compact slots per user
 
     constexpr uint32_t tile_bytes = 2048;  // bf16 32x32
     constexpr uint32_t face_bytes = 512;   // 16x16 bf16
@@ -45,16 +48,19 @@ void kernel_main() {
     const uint32_t pt_addr = get_arg_val<uint32_t>(4);
     const uint32_t ids_addr = get_arg_val<uint32_t>(5);
     const uint32_t out_addr = get_arg_val<uint32_t>(6);
+    const uint32_t tail_addr = get_arg_val<uint32_t>(7);
 
     const auto cache_acc = TensorAccessor(cache_a, cache_addr, tile_bytes);
     const auto pt_acc = TensorAccessor(pt_a, pt_addr, pt_row_bytes);
     const auto ids_acc = TensorAccessor(ids_a, ids_addr, ids_row_bytes);
+    const auto tail_acc = TensorAccessor(tail_a, tail_addr, tail_row_bytes);
     const auto out_acc = TensorAccessor(out_a, out_addr, tile_bytes);
 
-    // L1 scratch (64 B aligned): two tile blocks, the pool-id row, the page-table fragments
+    // L1 scratch (64 B aligned): two tile blocks, the pool-id row (+ the tail page), the page-table fragments
     auto align64 = [](uint32_t a) { return (a + 63u) & ~63u; };
     const uint32_t blk_base = align64(CircularBuffer(0).get_write_ptr());
     const uint32_t ids_base = align64(CircularBuffer(1).get_write_ptr());
+    const uint32_t tail_base = align64(ids_base + ids_row_bytes);
     const uint32_t ptf_base = align64(CircularBuffer(2).get_write_ptr());
 
     Noc noc;
@@ -66,15 +72,25 @@ void kernel_main() {
         // the writes issued from this buffer two items ago must have drained before it is refilled
         noc.async_write_barrier();
 
-        // the user's pool-id row (one page) and, per slot, the 64 B page-table fragment of its block
+        // the user's ranked pool ids (one page), its tail pool n (one page) and, per slot, the 64 B page-table
+        // fragment of the slot's block. Slot s -> pool: s < K: the s-th ranked pool, or pool s itself for a DENSE
+        // user (n < K: every complete pool in order, the tail pool n then sits at slot n); s == K: the tail pool n.
         noc.async_read(ids_acc, CoreLocalMem<uint32_t>(ids_base), ids_row_bytes, {.page_id = b}, {});
+        noc.async_read(tail_acc, CoreLocalMem<uint32_t>(tail_base), tail_row_bytes, {.page_id = b}, {});
         noc.async_read_barrier();
         const CoreLocalMem<volatile uint32_t> ids(ids_base);
+        const uint32_t tail_pool = CoreLocalMem<volatile uint32_t>(tail_base)[0];
+        const bool dense = tail_pool < K;
         uint32_t pool_of[slots_per_block];
         uint32_t lblock_of[slots_per_block];
         for (uint32_t j = 0; j < slots_per_block; j++) {
             const uint32_t slot = blk * slots_per_block + j;
-            uint32_t p = (slot < N) ? ids[slot] : SENTINEL;
+            uint32_t p = SENTINEL;
+            if (slot < K) {
+                p = dense ? slot : ids[slot];
+            } else if (slot == K) {
+                p = tail_pool;
+            }
             if (p >= max_pool) {
                 p = SENTINEL;  // sentinel or outside the user's pages: zero rows
             }

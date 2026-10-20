@@ -1,23 +1,20 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 //
-// Compute kernel: the sequential-over-token recurrence, for every head this core owns in turn.
-// Carries the recurrent state S [K,V] on-core across the T tokens of a head. Derived from
-// flash-linear-attention `naive_recurrent_gated_delta_rule`; the vLLM
-// `fused_sigmoid_gating_delta_rule_update` is this same recurrence over the K+1 speculative tokens.
+// Compute kernel: the sequential-over-token recurrence for one head. Carries the recurrent state
+// S [K,V] on-core across T tokens. Derived from flash-linear-attention
+// `naive_recurrent_gated_delta_rule`; the vLLM `fused_sigmoid_gating_delta_rule_update` is this
+// same recurrence over the K+1 speculative tokens.
 //
 // Per token (q pre-scaled + L2-normed, k L2-normed, decay = exp(g_t), all done host-side):
 //   sd     = S * decay            (decay the state BEFORE the read, matches FLA + chunk scan)
-//            scalar decay: every element; per-channel decay (KDA): row k of S by decay[k]
 //   vread  = k . sd               ([1,V])
 //   u      = beta * (v - vread)   ([1,V])
 //   S_new  = sd + k^T (x) u       ([K,V] rank-1 update)
 //   o      = q . S_new            (read from the POST-update state)
 //
 // Per-token tiles are [1, D] (token in row 0, rows 1..31 host-zero-padded), so the outer-product
-// update k^T (x) u is a matmul with inner dim 1 whose 31 padding lanes are zero and vanish. The
-// per-channel decay row [1,K] is transposed to a column [K,1] (column 0 live, the rest zero) and
-// applied with a column broadcast, which scales row k of every S tile by decay[k].
+// update k^T (x) u is a matmul with inner dim 1 whose 31 padding lanes are zero and vanish.
 
 #include <cstdint>
 #include "api/compute/common.h"
@@ -33,7 +30,7 @@ namespace {
 
 constexpr uint32_t cb_q = 0, cb_k = 1, cb_v = 2, cb_decay = 3, cb_beta = 4, cb_S = 5;
 constexpr uint32_t cb_out = 6, cb_state = 7, cb_s2 = 8, cb_s3 = 9, cb_sd = 10;
-constexpr uint32_t cb_vread = 11, cb_u = 12, cb_kcol = 13, cb_dcol = 14;
+constexpr uint32_t cb_vread = 11, cb_u = 12, cb_kcol = 13;
 
 // fp32 DST tiles available per tile_regs_acquire (half-sync).
 constexpr uint32_t DST_TILES = 4;
@@ -147,30 +144,6 @@ void bcast_scalar_mul(uint32_t a, uint32_t scal, uint32_t o, uint32_t n) {
     cb_o.push_back(n);
 }
 
-// out[mi,ni] = A[mi,ni] * col[mi] (column broadcast: row r of the tile is scaled by element (r,0)
-// of the column tile), over the [Kt,Vt] block. The per-channel decay of the KDA recurrence.
-void bcast_col_mul(uint32_t a, uint32_t col, uint32_t o, uint32_t Kt, uint32_t Vt) {
-    CircularBuffer cb_o(o);
-    cb_o.reserve_back(Kt * Vt);
-    mul_bcast_cols_init(a, col);
-    for (uint32_t mi = 0; mi < Kt; mi++) {
-        for (uint32_t n0 = 0; n0 < Vt; n0 += DST_TILES) {
-            const uint32_t nn = (Vt - n0 < DST_TILES) ? (Vt - n0) : DST_TILES;
-            tile_regs_acquire();
-            for (uint32_t j = 0; j < nn; j++) {
-                mul_tiles_bcast_cols(a, col, mi * Vt + n0 + j, mi, j);
-            }
-            tile_regs_commit();
-            tile_regs_wait();
-            for (uint32_t j = 0; j < nn; j++) {
-                pack_tile<true>(j, o, mi * Vt + n0 + j);
-            }
-            tile_regs_release();
-        }
-    }
-    cb_o.push_back(Kt * Vt);
-}
-
 // out[Kt,1] = transpose of in[1,Kt]: transpose each of the Kt tiles. (in must be available.)
 void transpose_block(uint32_t in, uint32_t o, uint32_t n) {
     CircularBuffer cb_o(o);
@@ -193,12 +166,9 @@ void kernel_main() {
     constexpr uint32_t Kt = get_compile_time_arg_val(0);
     constexpr uint32_t Vt = get_compile_time_arg_val(1);
     constexpr uint32_t per_token = get_compile_time_arg_val(2);
-    constexpr uint32_t per_channel = get_compile_time_arg_val(3);
     const uint32_t T = get_arg_val<uint32_t>(0);
-    const uint32_t n_heads = get_arg_val<uint32_t>(1);
 
     constexpr uint32_t kv = Kt * Vt;
-    constexpr uint32_t decay_tiles = per_channel ? Kt : 1;
 
     // Every CB is fp32 (see the program factory), so the unpack/pack formats configured here hold
     // for every op below; no per-op data-format reconfig is needed.
@@ -207,66 +177,51 @@ void kernel_main() {
     CircularBuffer q(cb_q), k(cb_k), v(cb_v), decay(cb_decay), beta(cb_beta);
     CircularBuffer sd(cb_sd), vread(cb_vread), u(cb_u), kcol(cb_kcol);
 
-    for (uint32_t hi = 0; hi < n_heads; hi++) {
-        for (uint32_t t = 0; t < T; t++) {
-            const uint32_t cur_S_id = (t == 0) ? cb_S : ((t & 1u) ? cb_s2 : cb_s3);
-            const uint32_t nxt_S_id = (t & 1u) ? cb_s3 : cb_s2;
-            CircularBuffer cur_S(cur_S_id), nxt_S(nxt_S_id);
-            const bool last = (t == T - 1);
+    for (uint32_t t = 0; t < T; t++) {
+        const uint32_t cur_S_id = (t == 0) ? cb_S : ((t & 1u) ? cb_s2 : cb_s3);
+        const uint32_t nxt_S_id = (t & 1u) ? cb_s3 : cb_s2;
+        CircularBuffer cur_S(cur_S_id), nxt_S(nxt_S_id);
+        const bool last = (t == T - 1);
 
-            // sd = cur_S * decay  (decay before read)
-            decay.wait_front(decay_tiles);
-            cur_S.wait_front(kv);
-            if constexpr (per_channel) {
-                // decay row [1,K] -> column [K,1], then scale row k of S by decay[k]
-                CircularBuffer dcol(cb_dcol);
-                transpose_block(cb_decay, cb_dcol, Kt);
-                dcol.wait_front(Kt);
-                bcast_col_mul(cur_S_id, cb_dcol, cb_sd, Kt, Vt);
-                dcol.pop_front(Kt);
-            } else {
-                bcast_scalar_mul(cur_S_id, cb_decay, cb_sd, kv);
-            }
-            decay.pop_front(decay_tiles);
-            cur_S.pop_front(kv);
-            sd.wait_front(kv);
+        // sd = cur_S * decay  (decay before read)
+        decay.wait_front(1);
+        cur_S.wait_front(kv);
+        bcast_scalar_mul(cur_S_id, cb_decay, cb_sd, kv);
+        decay.pop_front(1);
+        cur_S.pop_front(kv);
+        sd.wait_front(kv);
 
-            // vread = k . sd  ([1,V])
-            k.wait_front(Kt);
-            mm(cb_k, cb_sd, cb_vread, 1, Kt, Vt, false);
-            vread.wait_front(Vt);
+        // vread = k . sd  ([1,V])
+        k.wait_front(Kt);
+        mm(cb_k, cb_sd, cb_vread, 1, Kt, Vt, false);
+        vread.wait_front(Vt);
 
-            // u = beta * (v - vread)
-            v.wait_front(Vt);
-            beta.wait_front(1);
-            delta_rule_residual(cb_v, cb_vread, cb_beta, cb_u, Vt);
-            v.pop_front(Vt);
-            vread.pop_front(Vt);
-            beta.pop_front(1);
-            u.wait_front(Vt);
+        // u = beta * (v - vread)
+        v.wait_front(Vt);
+        beta.wait_front(1);
+        delta_rule_residual(cb_v, cb_vread, cb_beta, cb_u, Vt);
+        v.pop_front(Vt);
+        vread.pop_front(Vt);
+        beta.pop_front(1);
+        u.wait_front(Vt);
 
-            // kcol = transpose(k) ([K,1])
-            transpose_block(cb_k, cb_kcol, Kt);
-            k.pop_front(Kt);
-            kcol.wait_front(Kt);
+        // kcol = transpose(k) ([K,1])
+        transpose_block(cb_k, cb_kcol, Kt);
+        k.pop_front(Kt);
+        kcol.wait_front(Kt);
 
-            // S_new = sd + kcol (x) u -> nxt_S (and the state output, per token or last)
-            rank1_update<Kt, Vt>(cb_sd, cb_kcol, cb_u, nxt_S_id, per_token || last);
-            kcol.pop_front(Kt);
-            u.pop_front(Vt);
-            sd.pop_front(kv);
-            nxt_S.wait_front(kv);
+        // S_new = sd + kcol (x) u -> nxt_S (and the state output, per token or last)
+        rank1_update<Kt, Vt>(cb_sd, cb_kcol, cb_u, nxt_S_id, per_token || last);
+        kcol.pop_front(Kt);
+        u.pop_front(Vt);
+        sd.pop_front(kv);
+        nxt_S.wait_front(kv);
 
-            // o = q . S_new  (read from POST-update state)
-            q.wait_front(Kt);
-            mm(cb_q, nxt_S_id, cb_out, 1, Kt, Vt, false);
-            q.pop_front(Kt);
+        // o = q . S_new  (read from POST-update state)
+        q.wait_front(Kt);
+        mm(cb_q, nxt_S_id, cb_out, 1, Kt, Vt, false);
+        q.pop_front(Kt);
 
-            // nxt_S is NOT popped here: the next token reads it as cur_S.
-        }
-        // The head's final S_new is still in the ping/pong CB of its last token; release it so the
-        // next head starts from its own reader-fed cb_S.
-        CircularBuffer last_S(((T - 1) & 1u) ? cb_s3 : cb_s2);
-        last_S.pop_front(kv);
+        // nxt_S is intentionally NOT popped: the next iteration reads it as cur_S.
     }
 }

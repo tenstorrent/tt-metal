@@ -35,6 +35,26 @@ except ImportError:  # pragma: no cover
 LAYER = int(os.environ.get("GLM53_PERF_LAYER", "4"))
 B = int(os.environ.get("GLM53_PERF_B", "1"))
 STEPS = int(os.environ.get("GLM53_PERF_DECODE_STEPS", "10"))
+# local head count: 64 = the whole layer on one chip; 16 emulates the TP4 per-chip shard (the first 16 heads' weights)
+H_LOCAL = int(os.environ.get("GLM53_PERF_H", "64"))
+
+
+def slice_heads(attn: dict, cfg, h: int):
+    """The first ``h`` heads' KDA weights (head-major rows / columns) and a config with ``kda_num_heads = h``."""
+    import dataclasses
+
+    K = cfg.kda_head_dim
+    hk = h * K
+    out = dict(attn)
+    for n in ("q_proj.weight", "k_proj.weight", "v_proj.weight", "f_b_proj.weight", "g_b_proj.weight"):
+        out[n] = attn[n][:hk]
+    for n in ("q_conv1d.weight", "k_conv1d.weight", "v_conv1d.weight"):
+        out[n] = attn[n][:hk]
+    out["b_proj.weight"] = attn["b_proj.weight"][:h]
+    out["A_log"] = attn["A_log"][:h]
+    out["dt_bias"] = attn["dt_bias"][:hk]
+    out["o_proj.weight"] = attn["o_proj.weight"][:, :hk]
+    return out, dataclasses.replace(cfg, kda_num_heads=h)
 
 
 def _read_profiler(device):
@@ -50,8 +70,10 @@ def test_kda_decode_perf(mesh_device):
     cfg = GLM53FlashConfig.from_hf_config_json(snapshot / "config.json")
     raw = load_layer_raw(snapshot, LAYER, shard_headers(snapshot), name_filter=lambda n: n.startswith("self_attn."))
     attn = {k[len("self_attn.") :]: v for k, v in raw.items()}
+    if H_LOCAL != cfg.kda_num_heads:
+        attn, cfg = slice_heads(attn, cfg, H_LOCAL)
     tt = TtKDA(mesh_device, cfg, attn, layer_idx=LAYER)
-    mode = "fused" if tt.fused_decode else "composite"
+    mode = tt.fused_decode
 
     torch.manual_seed(0)
     state = tt.allocate_state(B)
@@ -84,7 +106,7 @@ def test_kda_decode_perf(mesh_device):
     _read_profiler(mesh_device)
     assert torch.isfinite(ttnn.to_torch(y).float()).all()
     logger.info(
-        f"KDA layer {LAYER} {mode} traced decode B={B}: {dt*1e3:.3f} ms/step "
+        f"KDA layer {LAYER} {mode} H={tt.H} traced decode B={B}: {dt*1e3:.3f} ms/step "
         f"({1/dt:.0f} tok/s/user single-layer rate, {B/dt:.0f} tok/s aggregate)"
     )
     ttnn.release_trace(mesh_device, trace_id)
