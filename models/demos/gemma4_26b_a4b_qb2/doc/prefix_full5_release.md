@@ -70,7 +70,8 @@ the exact candidate Metal/inference refs and plugin
 
 ## Remaining qualification and limitations
 
-Final Shield `on-dispatch.yml@main` release is pending. Keep request seed
+Final Shield `on-dispatch.yml@main` release subsequently passed the functional
+gates; see the final result below. Keep request seed
 9472: the earlier one-task unseeded evidence does not justify removing it.
 Required final cohort is GPQA10 (8/10), Terminal5 (1/5), SWE5 (1/5), at the
 unchanged supported context. No full-set reference parity is claimed.
@@ -136,3 +137,96 @@ passed; the `Run tests` step was active at 08:52 UTC. The job-log API still
 returned `BlobNotFound`, and no evaluation artifact had been published.
 Therefore runtime image/precision confirmation, model readiness, and suite
 scores remain unverified at this checkpoint.
+
+## Final Shield result
+
+Run 39384889094 completed successfully at 13:44:59 UTC on
+`qb2-120-p05t09`. The final, non-partial report records acceptance `PASS`,
+model status `FUNCTIONAL`, and all three required evals passing:
+
+| Suite | Score | Required gate |
+|---|---:|---:|
+| GPQA Diamond | 9/10 | 8/10 |
+| Terminal-Bench 2.0 | 2/5 | 1/5 |
+| SWE-bench Verified | 2/5 | 1/5 |
+
+Use `report_id_tt-vllm-plugin_gemma-4-26B-A4B-it_p300x2_2026-10-20_09-12-35.md`
+from artifact `release_report_118525081608`. The other report in that artifact
+is an earlier partial snapshot, not the final result.
+
+The runtime Docker pull confirms digest
+`sha256:2f65a018484c4dc527cdd37e47919b31ce6064e0f90a32766b5e8ea2018172b4`,
+matching the exact-source image above. The Docker command has no Metal model
+source overlay. The server log confirms both prefix flags enabled,
+`enable_prefix_caching=True`, context 262144, block size 32, physical B1,
+chunked prefill disabled, and server seed 9472. Both Harbor configs retain
+request seed 9472; GPQA separately uses seed 42. Weights/tokenizer revision
+is `4d7ae4984b7db7de8f8457170b3f1a419ee76d52`.
+
+Precision provenance is the exact built source's committed
+`config/precision.json` (`bfp8_release_selected`) and default loader path;
+the standard server log does not print a runtime precision fingerprint.
+This is not an all-tensor-BFP8 claim: the fixed prefill expert-down BFP4
+policy remains. The supported immutable `UV_OVERRIDE` is present in the
+SWE Harbor config; no runtime Harbor source replacement is used.
+
+### Task outcomes and time
+
+| SWE task | Reward | Agent seconds (approximately) | Harbor input/output tokens |
+|---|---:|---:|---:|
+| Astropy 14096 | 1 | 1210.332 | 989532 / 32023 |
+| Django 11299 | 1 | 1133.892 | 2492711 / 23351 |
+| Matplotlib 25332 | 0 | 1649.451 | 2711120 / 35470 |
+| scikit-learn 14629 | 0 | 483.117 | 237853 / 16250 |
+| Sympy 13551 | 0 | 720.247 | 854540 / 16525 |
+
+All five SWE patches applied; all five task exception fields are null,
+with zero Harbor retries/errors. Matplotlib fails `test_complete[png]`;
+scikit-learn fails `test_multi_output_classes_[estimator1]`; Sympy passes
+the target issue test but regresses `test_rational_products` and
+`test_special_products`. These are verifier failures, not bootstrap failures.
+SWE suite wall time was 5459.804 seconds (about 91 minutes).
+
+Terminal passes `hf-model-inference` and `portfolio-optimization`.
+`financial-document-processor` receives reward zero without an exception.
+`caffe-cifar-10` and `password-recovery` each hit their 10800-second agent
+timeout and receive zero. Terminal suite wall time was 10830.902 seconds
+(about 3 hours); its five trials ran concurrently against the B1 server,
+so per-task elapsed times are not isolated model latency measurements.
+
+The release job lasted 5h13m36s; dispatch-to-completion including build and
+queueing was 6h33m40s. Server readiness was reached at 08:50:34 UTC after
+startup at 08:40:29. The final run is not an unseeded experiment and does
+not justify removing seed 9472.
+
+### Token accounting and performance
+
+Across the complete server log (warmups, GPQA, benchmarks, and agentic),
+531 `PREFIX_CACHE_PREFILL` records total 11788457 input tokens:
+10879328 cached and 909129 computed. These are log-derived prefill counts,
+not a per-suite Prometheus snapshot. Harbor separately reports:
+
+- SWE: 7285756 input / 123619 output tokens.
+- Terminal: 3783561 input / 379944 output tokens.
+- Harbor reports zero cached tokens; do not confuse that accounting field
+  with the observed server cache hits or reconcile these scopes silently.
+
+The standard cache-isolated benchmark measured 128/128 B1 mean TTFT
+104.7 ms, TPOT 18.8 ms, and output throughput 51.3 tokens/s. At 128/1024,
+output throughput was 52.1 tokens/s. The 131072/128 point measured TTFT
+76.337 seconds and TPOT 20.8 ms. The configured server context remains
+262144, but this sweep's largest measured input was 131072.
+
+The functional performance tier passes; complete/target tiers do not.
+The acceptance summary represents the benchmark as one waived and eleven
+not-applicable points, not twelve strict-target passes. These random-input
+benchmarks intentionally isolate prefix reuse and are not a caching-speedup
+measurement. Earlier controlled growing-prefix measurements remain the
+speed evidence; different agent trajectories and workers prevent claiming
+the shorter final SWE run versus the earlier 3/5 run as a causal speedup.
+
+Artifacts were downloaded under
+`/home/mvasiljevic/gemma4-prefix-evidence/39384889094/release`.
+No owned jobs remain active, no retry/build was duplicated, and production
+PR branches and draft states remain untouched. The optional persistent-trace
+variant remains separate and was not qualified by this release.
