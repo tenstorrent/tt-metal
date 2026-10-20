@@ -120,6 +120,9 @@ class TestOutcome:
     device_print_lines: list = field(default_factory=list)
 
 
+LLK_CODE_SHIFT = int(os.environ.get("LLK_CODE_SHIFT", "0"))
+
+
 class TestConfig:
 
     # === STATIC VARIABLES ===
@@ -1821,6 +1824,9 @@ class TestConfig:
                         f"-T{TestConfig.LINKER_SCRIPTS / name}.ld",
                         f"-T{TestConfig.LINKER_SCRIPTS / 'sections.ld'}",
                     ],
+                    [f"-Wl,--defsym=__llk_code_shift={LLK_CODE_SHIFT}"]
+                    if LLK_CODE_SHIFT
+                    else [],
                     # -lgcc pulls in libgcc soft-float/integer helpers (e.g. __mulsf3)
                     # that -nostdlib drops; only referenced helpers are linked.
                     ["-x", "c++", "-", "-lc", "-lgcc", "-o"],
