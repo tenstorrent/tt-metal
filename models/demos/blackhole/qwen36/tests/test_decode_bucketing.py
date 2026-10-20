@@ -111,7 +111,9 @@ def test_positional_slot_remap_moves_gdn_state_and_keeps_full_width(monkeypatch)
         sampling=None,
         _remap_gdn_slots=remaps.append,
     )
-    wrapper = SimpleNamespace(model=[model])
+    wrapper = Qwen36ForCausalLM.__new__(Qwen36ForCausalLM)
+    wrapper.model = [model]
+    wrapper.data_parallel = 1  # read by Generator.__del__
     monkeypatch.setenv("TT_DECODE_BUCKETING", "1")
     monkeypatch.setattr(
         Generator,
