@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tt-llk harness A/B on one CI Blackhole runner (knowledge/process/17_CI_AB.md). For every label (a side tree: main's
+# tt-llk harness counters and isolates (one run per line) on one CI Blackhole runner (knowledge/process/17_CI_AB.md). For every label (a side tree: main's
 # tree with ci_ab/variants/<label>/tree laid over it) a slot tree under /tmp/ra_slots/<label> is made and its nodes
 # are compiled there (fresh build dirs). Then each line of ci_ab/lines.txt ("<tag> <A label> <B label> <run types>")
 # runs ABBA twice (A1 B2 B3 A4 A5 B6 B7 A8), the same job and machine for both sides; the A and B repeats are the A/A.
@@ -48,32 +48,11 @@ run() { # run <tag> <side> <k> <label> <rts>
   echo "   $tag $s$k rc=$? $(grep -aE '[0-9]+ (passed|failed|error)' $log | tail -1) $(date -u +%T)"
   if grep -q "TIMED OUT" $log; then echo "== TENSIX TIMED OUT in $tag $s$k, stopping"; return 1; fi
 }
-stop=0; [[ -n ${RA_DRY:-} ]] && stop=1
 while read -r tag A B rts; do
-  [[ -z $tag || $tag == \#* || $stop == 1 ]] && continue
-  echo "== $tag ($A against $B, $rts) $(date -u +%T)"; k=0
-  if [[ $A != $B ]]; then
-    ha=$($PY $S/tools/ra_imgs.py $SL/builds/$A $SL/out/$A.hash 2>/dev/null | grep -F -f $S/ids/$tag.txt | cut -f3 | sort | sha256sum | cut -c1-16)
-    hb=$($PY $S/tools/ra_imgs.py $SL/builds/$B $SL/out/$B.hash 2>/dev/null | grep -F -f $S/ids/$tag.txt | cut -f3 | sort | sha256sum | cut -c1-16)
-    echo "   images $A $ha $B $hb"; [[ $ha == $hb ]] && echo "== VOID $tag: $A and $B images identical"
-  fi
-  if [[ $A == *_fn ]]; then run $tag A 1 $A $rts; [[ $B != $A ]] && run $tag B 2 $B $rts; grep -a -E "^(FAILED|ERROR) " $SL/out/run_${tag}_*.log | cut -c1-300 | head -20; continue; fi
-  for b in 1 2; do for s in A B B A; do k=$((k+1)); L=$A; [[ $s == B ]] && L=$B; run $tag $s $k $L $rts || { stop=1; break 2; }; done; done
+  [[ -z $tag || $tag == \#* ]] && continue
+  echo "== $tag ($A, $rts) $(date -u +%T)"
+  run $tag A 1 $A $rts || break
 done < $S/lines.txt
-
-# bits stage: functional ids on y0 y1 y2 yp, result hashes via the bitdump plugin (BITDUMP_FILE), compared after the job
-for L in y0 y1 y2 yp; do
-  D=$SL/$L; mkdir -p $SL/builds/${L}_bits
-  ( cd $D/tt_metal/tt-llk/tests/python_tests; mapfile -t N < $S/ids/bits.txt
-    env CHIP_ARCH=blackhole LLK_HOME=$D/tt_metal/tt-llk TT_LLK_DISABLE_ASSERTS=1 TMPDIR=$SL/builds/${L}_bits PYTHONPATH=$S/tools \
-      timeout -s INT -k 60 3600 $PY -m pytest --compile-producer -n $NP -p no:cacheprovider --override-ini=log_cli=false -q "${N[@]}" < /dev/null > $SL/prodb_$L.log 2>&1
-    echo "== built bits $L: $(grep -aE '[0-9]+ (passed|failed|error)' $SL/prodb_$L.log | tail -1)"
-    rm -f $SL/out/bits_$L.txt
-    env CHIP_ARCH=blackhole LLK_HOME=$D/tt_metal/tt-llk TT_LLK_DISABLE_ASSERTS=1 TMPDIR=$SL/builds/${L}_bits PYTHONPATH=$S/tools BITDUMP_FILE=$SL/out/bits_$L.txt \
-      timeout -s INT -k 60 3000 $PY -m pytest --compile-consumer -p no:cacheprovider -p bitdump --override-ini=log_cli=false -q -o timeout_method=thread --timeout 120 "${N[@]}" < /dev/null > $SL/out/runb_$L.log 2>&1
-    echo "== bits $L rc=$? $(grep -aE '[0-9]+ (passed|failed|error)' $SL/out/runb_$L.log | tail -1) hashes=$(wc -l < $SL/out/bits_$L.txt)" )
-done
-for L in y1 y2 yp; do cmp -s $SL/out/bits_y0.txt $SL/out/bits_$L.txt && echo "== BITS $L identical to y0" || echo "== BITS $L DIFFER from y0"; done
 for L in $(awk '{print $2; print $3}' $S/lines.txt | sort -u); do $PY $S/tools/ra_imgs.py $SL/builds/$L $SL/out/$L.hash > $SL/out/img_$L.tsv 2>/dev/null; done
 tar -czf $SL/ra_out.tgz -C $SL perf_data/runs out
 echo "== results $(stat -c %s $SL/ra_out.tgz) bytes"; echo "=====RA_BEGIN====="; base64 -w 76 $SL/ra_out.tgz; echo "=====RA_END====="
