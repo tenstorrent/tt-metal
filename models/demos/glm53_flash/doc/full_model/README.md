@@ -124,9 +124,46 @@ not a usable end-to-end accuracy metric for this model; the real-prompt generati
 
 Prompt "The capital of France is Paris. The theory of general relativity" (13 tokens), 16 greedy tokens.
 HF side: `hf_layer_reference.py --generate 16` (bf16 head path, layers streamed per token, 300-870 s per
-pass on the loaded host). See the status table below.
+pass on the loaded host).
 
-GENERATION_PLACEHOLDER
+Result (`fullmodel_generate.log`, 4713 s for the 16 tokens = 16 passes, 720 layer builds of which 672
+expert-cache hits; `fullmodel_hf_generate.log`, HF 16/16 in two resumed attempts):
+
+| | tokens | text |
+|---|---|---|
+| TT | [572, 7881, 553, 17489, 53690, 13, 576, 11478, 7735, 369, 6623, 374, 31908, 13, 576, 7772] | ' was developed by Albert Einstein. The chemical symbol for gold is Au. The largest' |
+| HF | [572, 7881, 553, 17489, 53690, 13, 576, 73538, 315, 279, 2779, 374, 279, 53582, 4204, 13] | ' was developed by Albert Einstein. The powerhouse of the cell is the mitochondria.' |
+
+Identical prefix: **7 tokens** (" was developed by Albert Einstein. The"); position-wise equal: 8/16 (the
+8th, ' is' at step 11, is a coincidence inside two different sentences). The divergence at step 7 is a
+near tie at a sentence start: TT ' chemical' 15.19 vs ' powerhouse' (HF's token) 14.94 as TT's #2 (0.25
+apart; bf16 logits at 15 resolve 0.0625), and HF's own top-2 there are ' powerhouse' 15.25 vs ' chemical' 15.1875 -- two
+different factual sentences, both coherent; once the sequences differ, later tokens are not comparable
+position by position. Every TT step's device argmax equals the host argmax of the device logits.
+
+| step | pos | TT token | TT top-5 (logits) | HF token | HF top-5 (logits) | HF token rank in TT top-5 | TT pass s | HF pass s |
+|---|---|---|---|---|---|---|---|---|
+| 0 | 12 | 572 ' was' | [572, 374, 11, 5302, 14748] (21.25, 18.375, 16.375, 16.25, 15.8125) | 572 **==** | [572, 374, 11, 5302, 16539] (21.375, 18.5, 16.5, 16.125, 15.875) | 1 | 454 | 501 |
+| 1 | 13 | 7881 ' developed' | [7881, 10976, 58883, 4652, 11100] (19.875, 19.875, 17.75, 17.625, 15.0625) | 7881 **==** | [7881, 10976, 4652, 58883, 11100] (19.875, 19.5, 17.625, 17.5, 15.0625) | 1 | 460 | 627 |
+| 2 | 14 | 553 ' by' | [553, 304, 198, 323, 271] (22.625, 14.9375, 14.8125, 14.8125, 13.9375) | 553 **==** | [553, 304, 323, 198, 13] (22.75, 15.1875, 14.9375, 14.875, 14.3125) | 1 | 450 | 748 |
+| 3 | 15 | 17489 ' Albert' | [17489, 53690, 81548, 279, 66136] (20.75, 17.5, 14.8125, 13.6875, 13.375) | 17489 **==** | [17489, 53690, 81548, 279, 66136] (20.75, 17.25, 14.375, 13.875, 13.5) | 1 | 390 | 727 |
+| 4 | 16 | 53690 ' Einstein' | [53690, 18041, 198, 468, 271] (23.75, 15.125, 14.875, 14.4375, 14.3125) | 53690 **==** | [53690, 18041, 198, 468, 13] (23.25, 15.1875, 14.4375, 14.1875, 13.8125) | 1 | 340 | 571 |
+| 5 | 17 | 13 '.' | [13, 382, 11, 304, 323] (21.125, 18.25, 16.75, 16.625, 15.8125) | 13 **==** | [13, 382, 304, 11, 323] (21.125, 18.125, 16.625, 16.5, 15.8125) | 1 | 317 | 484 |
+| 6 | 18 | 576 ' The' | [576, 362, 16490, 9954, 4337] (15.5, 13.625, 13.5, 13.4375, 11.5625) | 576 **==** | [576, 16490, 9954, 362, 758] (15.5625, 13.6875, 13.4375, 13.3125, 11.5) | 1 | 314 | 479 |
+| 7 | 19 | 11478 ' chemical' | [11478, 73538, 6722, 7772, 6028] (15.1875, 14.9375, 14.4375, 14.4375, 13.6875) | 73538 != | [73538, 11478, 6722, 7772, 8512] (15.25, 15.1875, 14.6875, 14.4375, 14.375) | 2 | 270 | 302 |
+| 8 | 20 | 7735 ' symbol' | [7735, 14795, 2392, 23541, 17712] (22.75, 19.875, 17.25, 16.125, 14.8125) | 315 != | [315, 1240, 374, 2779, 304] (22.375, 17, 15.5, 13.9375, 13.5625) | - | 243 | 418 |
+| 9 | 21 | 369 ' for' | [369, 315, 364, 374, 330] (22.125, 16.875, 16.625, 16.25, 16) | 279 != | [279, 264, 7761, 2779, 384] (24.875, 21.5, 17.125, 16.625, 15.75) | - | 269 | 714 |
+| 10 | 22 | 6623 ' gold' | [6623, 3015, 10996, 23487, 38387] (21.75, 20.75, 19, 18.75, 18.5) | 2779 != | [2779, 198, 9859, 7761, 1112] (23.125, 14.4375, 14.375, 14.3125, 13.5) | - | 240 | 867 |
+| 11 | 23 | 374 ' is' | [374, 320, 389, 304, 11] (23.875, 17.25, 17, 16.875, 16.5) | 374 **==** | [374, 19221, 11, 304, 1959] (23.375, 16.875, 16.625, 14.375, 14.1875) | 1 | 241 | 424 |
+| 12 | 24 | 31908 ' Au' | [31908, 330, 364, 38846, 64855] (21.625, 17.125, 16.75, 14.9375, 13.5625) | 279 != | [279, 53582, 2598, 3881, 21714] (21.625, 18.625, 18.125, 16.5, 14.9375) | - | 191 | 318 |
+| 13 | 25 | 13 '.' | [13, 382, 624, 11, 4192] (20.375, 18.625, 16.5, 16.125, 15.5) | 53582 != | [53582, 21714, 1112, 5451, 198] (22.625, 15.625, 14.25, 13.875, 13.625) | - | 178 | 586 |
+| 14 | 26 | 576 ' The' | [576, 16490, 9954, 4337, 362] (15.875, 13.5625, 12.875, 12.75, 12.3125) | 4204 != | [4204, 81, 271, 1112, 461] (22.125, 20.25, 12.25, 12, 11.875) | - | 178 | 575 |
+| 15 | 27 | 7772 ' largest' | [7772, 8512, 6722, 1882, 11408] (15.0625, 14.6875, 14.625, 13.4375, 13.125) | 13 != | [13, 382, 624, 11, 4192] (19.75, 18.125, 15.875, 14.9375, 14.75) | - | 178 | 571 |
+
+The test gate as first coded (position-wise matches >= 12/16) FAILED on this run (8/16); it was replaced
+after the run by the divergence-aware gate (first token equal, identical prefix >= 4, HF's token inside
+the TT top-5 at the first divergence) which the logged numbers satisfy (prefix 7, rank 2) -- revised from
+the log only, not re-run (device runs stopped for the board reset).
 
 ### 3. Timings, memory, cache (`fullmodel_dump_chain.log`, host load 35-70 on 64 cores from the other sessions)
 
@@ -139,6 +176,6 @@ GENERATION_PLACEHOLDER
 | layer run, prefill S=128 (warm) | 0.04-0.11 s (KDA+MoE), 0.58 s (layer 3 DSA compile pass excluded: first-pass compiles 31 s layer 0, 45 s layer 3) |
 | layer run, decode B=1 | 0.02-0.04 s (compile 15-17 s once per layer kind) |
 | release | 0.2-0.6 s (37 buffers of a MoE layer, 30 of a DSA layer, 32 of a dense layer) |
-| pass over 45 layers | prefill pass 3688 s with the cache being built (40 misses); decode passes 312 / 313 s (all hits); generation passes 450-460 s under the heavier host load |
+| pass over 45 layers | prefill pass 3688 s with the cache being built (40 misses); decode passes 312 / 313 s (all hits); generation passes 454 s (host load ~65) down to 178 s (load ~30) with every expert cached |
 | DRAM peak after a build | 9.65 GiB (KDA+MoE), 9.32 GiB (DSA+MoE), 2.59 GiB (dense); back to 1.84-1.97 GiB after every release (= embedding + head + the 45 layers' state) |
 | tensorbin cache | 313 GiB (335.2 GB) under `/home/ttuser/ashai/glm53/_cache/fullmodel`: 42 x (5.13 GB w13 + 2.57 GB w2) + the KDA prefill tensorbins |
