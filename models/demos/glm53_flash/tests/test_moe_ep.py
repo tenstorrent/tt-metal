@@ -47,20 +47,37 @@ def imbalance(dense_all: torch.Tensor, D: int) -> str:
     )
 
 
+DEVICE_PARAMS = {"l1_small_size": 32768, "trace_region_size": 160 * 1024 * 1024}
+
+
 @pytest.mark.timeout(3600)
-@pytest.mark.parametrize(
-    "device_params", [{"l1_small_size": 32768, "trace_region_size": 160 * 1024 * 1024}], indirect=True
-)
+@pytest.mark.parametrize("device_params", [DEVICE_PARAMS], indirect=True)
 @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
 @pytest.mark.parametrize("E_loc", [9, 36])
-@pytest.mark.parametrize("a2a", [False, True], ids=["direct", "a2a"])
-def test_moe_ep_single_chip(mesh_device, weights, E_loc, a2a, monkeypatch):
-    """``a2a``: the D = 1 dispatch / combine (GLM53_EP_FORCE_A2A=1, the identity on one chip) around the EP op --
-    the mesh plumbing checked before a block is available (runs only with GLM53_EP_A2A_TESTS=1 until then)."""
-    if a2a:
-        if os.environ.get("GLM53_EP_A2A_TESTS", "0") != "1":
-            pytest.skip("D = 1 all_to_all plumbing: GLM53_EP_A2A_TESTS=1 (device_params need the fabric)")
-        monkeypatch.setenv("GLM53_EP_FORCE_A2A", "1")
+def test_moe_ep_single_chip(mesh_device, weights, E_loc):
+    _run_single_chip(mesh_device, weights, E_loc)
+
+
+@pytest.mark.timeout(3600)
+@pytest.mark.skipif(
+    os.environ.get("GLM53_EP_A2A_TESTS", "0") != "1",
+    reason="the D = 1 all_to_all dispatch / combine plumbing (GLM53_EP_A2A_TESTS=1; needs the fabric)",
+)
+@pytest.mark.parametrize(
+    "device_params", [{**DEVICE_PARAMS, "fabric_config": ttnn.FabricConfig.FABRIC_2D}], indirect=True
+)
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+@pytest.mark.parametrize("E_loc", [9])
+def test_moe_ep_single_chip_a2a(mesh_device, weights, E_loc, monkeypatch):
+    """The mesh code path on one chip: all_to_all_dispatch of the tokens and of the weight lists, the EP op on the
+    dispatched rows, all_to_all_combine (local reduce) -- with D = 1 every op is the identity, so the result must
+    match the direct path exactly. Wrap the first run in `timeout 300` (a raw dispatch benchmark hung on a (2,4)
+    block with cluster_axis=None; this follows the DeepSeek-V3 decode pattern with cluster_axis=0)."""
+    monkeypatch.setenv("GLM53_EP_FORCE_A2A", "1")
+    _run_single_chip(mesh_device, weights, E_loc)
+
+
+def _run_single_chip(mesh_device, weights, E_loc):
     snapshot, text, raw, hf, sd = weights
     cfg = GLM53FlashConfig.from_hf_config_json(snapshot / "config.json")
     E, I = cfg.n_routed_experts, cfg.moe_intermediate_size

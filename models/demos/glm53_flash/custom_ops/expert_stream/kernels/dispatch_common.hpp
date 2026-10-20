@@ -128,5 +128,46 @@ inline uint32_t rows_from_indices(
     return nr;
 }
 
+// Work units of the gate|up dispatch: (expert, column pair) for every active expert and each of the bank's PPB
+// pairs, LPT-assigned to the core groups by pass count (units ordered by passes descending, expert ascending, pair
+// ascending; each to the least loaded group, lowest id on ties: with PPB = 1 exactly assign_group). Calls
+// f(e, q) for this group's units in that order (no unit list in memory: the bound would be E x PPB).
+template <uint32_t E, uint32_t PPB, uint32_t MAX_GROUPS, typename F>
+inline void for_each_unit(const uint16_t* passes, uint32_t groups, uint32_t group, F&& f) {
+    uint16_t order[E];
+    uint32_t na = 0;
+    for (uint32_t e = 0; e < E; ++e) {
+        if (passes[e] == 0) {
+            continue;
+        }
+        uint32_t i = na;
+        while (i > 0 && passes[order[i - 1]] < passes[e]) {
+            order[i] = order[i - 1];
+            --i;
+        }
+        order[i] = static_cast<uint16_t>(e);
+        ++na;
+    }
+    uint32_t load[MAX_GROUPS];
+    for (uint32_t g = 0; g < MAX_GROUPS; ++g) {
+        load[g] = 0;
+    }
+    for (uint32_t i = 0; i < na; ++i) {
+        const uint32_t e = order[i];
+        for (uint32_t q = 0; q < PPB; ++q) {
+            uint32_t g = 0;
+            for (uint32_t j = 1; j < groups; ++j) {
+                if (load[j] < load[g]) {
+                    g = j;
+                }
+            }
+            load[g] += passes[e];
+            if (g == group) {
+                f(e, q);
+            }
+        }
+    }
+}
+
 // Byte offset of row `row` (its first 16 columns) inside a BF16 32x32 tile; the next 16 columns are 512 B further.
 inline uint32_t tile_row_bytes(uint32_t row) { return ((row >> 4) * 2) * 512 + (row & 15) * 32; }

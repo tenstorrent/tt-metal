@@ -122,8 +122,9 @@ def test_mhc_fast_vs_wrap(mesh_device, which):
 
         # project
         m_w = _down(wrap.project(xd))[0, 0]  # [T, 24]
-        m_f = _down(fast.project(xd))[0, 0]  # [T, 32], zero columns past 24
-        assert tuple(m_f.shape) == (T, 32) and float(m_f[:, 24:].abs().max()) == 0.0
+        m_f = _down(fast.project(xd))[0, 0]  # decode: [T, 32] with zero columns past 24; prefill: [T, 24]
+        assert m_f.shape[0] == T and m_f.shape[1] in (24, 32), m_f.shape
+        assert m_f.shape[1] == 24 or float(m_f[:, 24:].abs().max()) == 0.0
         _cmp("mixes fast vs wrap", m_w, m_f[:, :24], PCC_BAR)
         _cmp("mixes fast vs torch", r_mixes, m_f[:, :24], PCC_REF)
 

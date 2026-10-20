@@ -3,9 +3,10 @@
 
 // Routed-expert gate|up weight streamer (NCRISC, NOC0) of the per-expert dispatch op
 // (custom_ops/expert_stream/op.py, ExpertGateUpDispatch). Same weight layout and column pipeline as
-// reader_gate_up.cpp; the experts of this core come from the LPT assignment over the per-expert token counts
-// (dispatch_common.hpp). With one column pair per bank an expert's two columns are streamed once however many
-// 32-row passes it takes (the compute keeps them resident); with more pairs they are streamed once per pass.
+// reader_gate_up.cpp; this core's work units are (expert, column pair) pairs from the LPT assignment over the
+// per-expert pass counts (dispatch_common.hpp for_each_unit): every pair is streamed once however many 32-row
+// passes its expert takes (the compute keeps it resident), and an expert's pairs spread over the bank's cores so a
+// few active experts still use every core.
 //
 // runtime args: [w_addr, counts_addr (EP: idx_addr), bank_id, vc, group, (EP) base_addr]
 
@@ -48,7 +49,7 @@ void kernel_main() {
     for (uint32_t i = 0; i < c_tiles; ++i) {
         noc_async_read(s_c.get_noc_addr(i), c_l1 + i * 2048, 2048);
     }
-    uint16_t n_tok[E], passes[E], base[E], mine[E];
+    uint16_t n_tok[E], passes[E], base[E];
     if constexpr (EP) {
         const uint32_t base_addr = get_arg_val<uint32_t>(5);
         const auto s_b = TensorAccessor(base_args, base_addr, 32);
@@ -63,7 +64,6 @@ void kernel_main() {
         read_counts<E>(reinterpret_cast<volatile tt_l1_ptr uint16_t*>(c_l1), n_tok);
     }
     pass_bases<E>(n_tok, passes, base);
-    const uint32_t n_mine = assign_group<E, 32>(passes, groups, group, mine);
 
     const uint64_t w_base = get_noc_addr_from_bank_id<true>(bank_id, w_addr);
     reset_noc_trid_barrier_counter(NOC_CLEAR_OUTSTANDING_REQ_MASK, noc_index);
@@ -86,36 +86,31 @@ void kernel_main() {
     uint32_t pushed = 0;
     uint32_t issued = 0;
 
-    for (uint32_t i = 0; i < n_mine; ++i) {
-        // one pair per bank: the pair stays resident in the compute over the expert's passes (streamed once);
-        // more pairs: the ppb pairs are streamed again for every pass
-        const uint32_t repeats = ppb == 1 ? 1 : passes[mine[i]];
-        for (uint32_t rep = 0; rep < repeats; ++rep) {
-            uint32_t src = static_cast<uint32_t>(mine[i]) * expert_stride;
-            for (uint32_t q = 0; q < ppb; ++q) {
-                noc_async_read_set_trid(trid);
-                for (uint32_t p = 0; p < pages_per_pair; ++p) {
-                    noc_async_read_one_packet_with_state_with_trid(w_base, src, l1_write, trid);
-                    src += page_bytes;
-                    l1_write += page_bytes;
-                }
-                ++issued;
-                if (free_blocks == num_buffers - extra_in_flight) {
-                    noc_async_read_barrier_with_trid(trid_to_wait);
-                    cb_push_back(cb_w, 2 * kt);
-                    ++pushed;
-                    trid_to_wait = trid_to_wait == num_buffers ? 1 : trid_to_wait + 1;
-                    cb_reserve_back(cb_w, 2 * kt * (extra_in_flight + 1));
-                } else {
-                    free_blocks -= 1;
-                }
-                trid = trid == num_buffers ? 1 : trid + 1;
-                if (l1_write >= cb_end) {
-                    l1_write = cb_base;
-                }
-            }
+    // this core's work units (expert, pair): each pair is streamed once and stays resident in the compute over
+    // the expert's passes
+    for_each_unit<E, ppb, 32>(passes, groups, group, [&](uint32_t e, uint32_t q) {
+        uint32_t src = e * expert_stride + q * pair_bytes;
+        noc_async_read_set_trid(trid);
+        for (uint32_t p = 0; p < pages_per_pair; ++p) {
+            noc_async_read_one_packet_with_state_with_trid(w_base, src, l1_write, trid);
+            src += page_bytes;
+            l1_write += page_bytes;
         }
-    }
+        ++issued;
+        if (free_blocks == num_buffers - extra_in_flight) {
+            noc_async_read_barrier_with_trid(trid_to_wait);
+            cb_push_back(cb_w, 2 * kt);
+            ++pushed;
+            trid_to_wait = trid_to_wait == num_buffers ? 1 : trid_to_wait + 1;
+            cb_reserve_back(cb_w, 2 * kt * (extra_in_flight + 1));
+        } else {
+            free_blocks -= 1;
+        }
+        trid = trid == num_buffers ? 1 : trid + 1;
+        if (l1_write >= cb_end) {
+            l1_write = cb_base;
+        }
+    });
     while (pushed < issued) {
         noc_async_read_barrier_with_trid(trid_to_wait);
         cb_push_back(cb_w, 2 * kt);
