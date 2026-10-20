@@ -75,6 +75,11 @@ perf: |
   `tt/settings.py`: the orchestrator sets it explicitly for both sides, change on and off, so its default does not matter.
   Make the change the default and never revert it when a test fails: the owner decides from the measurements. Do not
   change thresholds, goldens or frozen tests.
+  Your final check (F122, the quick A/B the owner decides on): `python -m models.demos.common.bringup.orchestrator
+  measure --task $task_id`: one process with your switch on (the last chunk after the golden prefix, every layer
+  against the golden, the clean wall time); the report reuses it while your code is unchanged, and the gate's full set
+  (frozen tests, every rung, the per-section profile) runs once before the final task. While iterating, run only what
+  your change needs. With a full A/B (tasks.yaml ab_mode: full):
   Accuracy first. Before any profile, run the frozen tests of the step the change touches: the accuracy commands of
   the gate below, in gate order, each once, through
   `python -m models.demos.common.bringup.orchestrator measure --task $task_id --part <the command's test file stem>`
