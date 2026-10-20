@@ -236,10 +236,12 @@ q_end_b        = num_valid_queries[b], or Q when not given
 
 `split_work_to_cores` over `compute_with_storage_grid_size()` picks the cores
 and the slot count from every query, so neither depends on `num_valid_queries`.
-The active tiles are then spread evenly over those cores, and unused slots are
-zero-filled. Every core gets the same number of slots: a cached program pads
-each core's runtime args to the kernel's longest (`Kernel::set_runtime_args_count`),
-so per-core lengths could not be matched on a cache hit.
+The active tiles are then spread evenly over those cores. Every core gets the
+same number of slots, and `msda_runtime_args` zero-fills the unused ones, so
+each core's runtime-arg vector has that fixed length.
+`Kernel::set_runtime_args_count` only widens a core's reported count to the
+longest vector in its kernel group; it does not write those slots. A shorter
+vector on a cache hit would not match that count.
 
 All runtime args, buffer addresses included, are plain values that
 `ProgramFactory::override_runtime_arguments` rebuilds on every cache hit. That

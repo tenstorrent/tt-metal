@@ -61,10 +61,12 @@ struct FusedMSDAOperation {
         // Per-batch count of queries to compute; empty means all of them.
         ttsl::SmallVector<uint32_t> num_valid_queries;
 
-        // These tuples are the program-cache key, and what op reports print. Every
-        // attribute that shapes the compiled program must be listed in both.
-        // num_valid_queries is left out on purpose: it only changes runtime args,
-        // which ProgramFactory::override_runtime_arguments rewrites on every hit.
+        // Program-cache key and the attributes op reports print. List every field
+        // that changes compile-time args, circular buffers, or the kernel, in both
+        // tuples. Omitting one is a silent cache hit on the wrong program.
+        // num_valid_queries stays off this list: it only changes the tile list and
+        // buffer addresses, which override_runtime_arguments rewrites on every hit.
+        // Adding it here misses the cache for every distinct count.
         static constexpr auto attribute_names = std::forward_as_tuple(
             "output_memory_config",
             "spatial_shapes_hw",
