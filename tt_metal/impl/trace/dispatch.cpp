@@ -16,7 +16,7 @@
 #include <tt_stl/strong_type.hpp>
 #include "dispatch/system_memory_manager.hpp"
 #include "trace_buffer.hpp"
-#include "tt_align.hpp"
+#include <tt-metalium/math.hpp>
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tt_metal/impl/trace/dispatch.hpp"
 #include "dispatch/worker_config_buffer.hpp"

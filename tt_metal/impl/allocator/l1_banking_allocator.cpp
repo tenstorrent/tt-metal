@@ -25,8 +25,8 @@
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/allocator/allocator_types.hpp"
-#include <tt-umd/types/xy_pair.hpp>
-#include <tt-metalium/tt_align.hpp>
+#include <umd/device/types/xy_pair.hpp>
+#include <tt-metalium/math.hpp>
 #include <impl/dispatch/dispatch_core_manager.hpp>
 #include "impl/dispatch/dispatch_core_common.hpp"
 #include <llrt/tt_cluster.hpp>
