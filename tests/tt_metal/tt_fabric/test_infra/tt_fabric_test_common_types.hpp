@@ -157,6 +157,15 @@ enum class MeshTrafficScope { ALL, INTRA_MESH, INTER_MESH };
 // Channel trimming mode for test config expansion
 enum class ChannelTrimmingMode { NONE, CAPTURE, REPLAY };
 
+// Trimming rtoptions a test group's fabric is built with (see TestFixture::resolve_channel_trimming_settings)
+struct ChannelTrimmingSettings {
+    ChannelTrimmingMode mode = ChannelTrimmingMode::NONE;
+    bool capture_enabled = false;
+    std::string profile_path;
+
+    bool operator==(const ChannelTrimmingSettings&) const = default;
+};
+
 struct TestFabricSetup {
     tt::tt_fabric::Topology topology{0};
     std::optional<tt_fabric::FabricTensixConfig> fabric_tensix_config;
@@ -165,7 +174,11 @@ struct TestFabricSetup {
     bool num_links_max = false;               // When true, resolve num_links to the platform max at build time
     std::optional<std::string> torus_config;  // For Torus topology: "X", "Y", or "XY"
     std::optional<uint32_t> max_packet_size;  // Custom max packet size for router
-    bool enable_channel_trimming = false;     // When true, test is expanded into CAPTURE + REPLAY phases
+    // Tri-state channel trimming intent:
+    //   true  → test is expanded into CAPTURE + REPLAY phases
+    //   false → capture explicitly disabled for this test (overrides trimming env vars)
+    //   nullopt (key absent) → obey TT_METAL_ENABLE_CHANNEL_TRIMMING_CAPTURE / TT_METAL_FABRIC_TRIMMING_PROFILE
+    std::optional<bool> enable_channel_trimming;
     bool use_vc2 = false;                     // When true, use private VC2 connection API instead of public API
 };
 
