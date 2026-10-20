@@ -13,7 +13,6 @@
 #include "autograd/auto_context.hpp"
 #include "tt-metalium/bfloat16.hpp"
 #include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
-#include "ttnn/operations/data_movement/untilize_with_unpadding/untilize_with_unpadding.hpp"
 #include "ttnn/tensor/layout/layout.hpp"
 #include "ttnn/tensor/types.hpp"
 
@@ -278,31 +277,9 @@ nb::object make_numpy_tensor(
             nb::dtype<NumpyType>()));
     };
 
-    const auto convert_to_row_major = [](const ttnn::Tensor& tensor) {
-        tt::tt_metal::Shape output_tensor_end(ttsl::SmallVector<uint32_t>(tensor.logical_shape().rank(), 0));
-        int logical_rank = tensor.logical_shape().rank();
-        for (int index = -1; index >= -logical_rank; --index) {
-            output_tensor_end[index] = tensor.logical_shape()[index] - 1;
-        }
-
-        return ttnn::untilize_with_unpadding(tensor, output_tensor_end, std::nullopt);
-    };
-
     const auto impl = [&make_numpy_tensor_from_data,
-                       &convert_to_row_major,
                        composer]<typename MetalType, typename NumpyType>(const ttnn::Tensor& tensor) {
-        if (tensor.storage_type() == ttnn::types::StorageType::HOST) {
-            if (tensor.layout() != tt::tt_metal::Layout::ROW_MAJOR) {
-                const auto row_major_tensor = convert_to_row_major(tensor);
-                const auto row_major_tensor_data = tt::tt_metal::host_buffer::get_as<MetalType const>(row_major_tensor);
-                return make_numpy_tensor_from_data.template operator()<NumpyType>(
-                    row_major_tensor_data, row_major_tensor.tensor_spec());
-            }
-            const auto tensor_data = tt::tt_metal::host_buffer::get_as<const MetalType>(tensor);
-            return make_numpy_tensor_from_data.template operator()<NumpyType>(tensor_data, tensor.tensor_spec());
-        }
-
-        // Move to CPU and convert to row major
+        // A device tensor comes to the host (a host tensor is returned as is), then to row major on the host.
         auto cpu_tensor = tensor.cpu(/*blocking=*/true);
         cpu_tensor = cpu_tensor.to_layout(tt::tt_metal::Layout::ROW_MAJOR);
 
