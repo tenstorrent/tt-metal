@@ -134,7 +134,8 @@ def test_max_pool2d_with_indices(ttnn_mesh_device, reset_seeds, h, hw):
     "c, h, hw, num_slices",
     [
         pytest.param(64, U.STEM_H, U.STEM_W, 2, id="stem-maxpool-dram-wslice2-159781"),
-        pytest.param(64, 24, 48, 2, id="proxy-stem-dram-wslice2-24x48x64"),
+        # TILE output width-slices are whole tiles: out width 64 (in 128, s2) -> 2 x 32.
+        pytest.param(64, 24, 128, 2, id="proxy-stem-dram-wslice2-24x128x64"),
     ],
 )
 def test_max_pool2d_stem_dram_sliced(ttnn_mesh_device, reset_seeds, c, h, hw, num_slices):

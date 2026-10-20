@@ -207,6 +207,10 @@ def _run_dram(mesh, shape, groups, grid, num_out_blocks, pad_rows):
     ],
 )
 def test_group_norm_dram(ttnn_mesh_device, reset_seeds, shape, groups, grid, num_out_blocks, pad_rows):
+    if ttnn.device.is_wormhole_b0(ttnn_mesh_device):
+        # The model's config (4x4 grid, num_out_blocks=2) puts ~1.48 MiB of CBs on the mcast
+        # sender core: fits Blackhole's 1.5 MiB L1, not Wormhole's 1464 KiB.
+        pytest.skip("model-faithful DRAM group_norm CBs exceed Wormhole L1")
     _run_dram(ttnn_mesh_device, shape, groups, grid, num_out_blocks, pad_rows)
 
 
