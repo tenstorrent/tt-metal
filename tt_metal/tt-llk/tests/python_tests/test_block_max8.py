@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""Direct SFPU coverage with eight occupied DST slots and alternating DST halves."""
+"""Direct SFPU and FPU (GMPOOL) coverage with eight occupied DST slots and alternating DST halves."""
 
 import pytest
 import torch
@@ -17,32 +17,21 @@ from tt_llk_harness import (
     tilize_block,
 )
 
+DST_INDICES = [0, 3, 7]
+VALID_COUNTS = [0, 1, 7, 8, 9, 15, 16, 17, 511, 512, 513, 1023, 1024]
+PATTERNS = ["random", "winners", "fractional", "negative_zero"]
 
-@blackhole_only
-@pytest.mark.parametrize("dst_index", [0, 3, 7])
-@pytest.mark.parametrize(
-    "valid", [0, 1, 7, 8, 9, 15, 16, 17, 511, 512, 513, 1023, 1024]
-)
-@pytest.mark.parametrize(
-    "pattern", ["random", "winners", "fractional", "negative_zero"]
-)
-@pytest.mark.parametrize(
-    "source",
-    ["sources/block_max8_test.cpp", "sources/block_max8_fpu_test.cpp"],
-    ids=["sfpu", "fpu"],
-)
-def test_block_max8(dst_index, valid, pattern, source):
+
+def _run_block_max8(source, dst_index, valid, pattern, negative_zero_result):
     """Check all pooled blocks and preserve every other tile in both DST halves.
 
     Three batches reuse the first half after exercising the second. Directed
     winners cover every position within each eight-score block. Ordinary patterns
     put large positive values in invalid tails to detect masking omissions.
     The negative-zero pattern is injected directly into DST because the input
-    unpack/datacopy path can canonicalize its sign before the SFPU sees it.
-    Exact negative-zero output bits are encoded as -1 in DST before packing,
-    which otherwise canonicalizes zeros; positive zero cannot pass this probe.
-    The FPU (GMPOOL) variant flushes exponent-zero inputs, so its contract
-    returns positive zero for a negative-zero block maximum.
+    unpack/datacopy path can canonicalize its sign before the kernel sees it.
+    Exact negative-zero output bits are encoded as negative_zero_result in DST
+    before packing, which otherwise canonicalizes zeros.
     """
     generator = torch.Generator().manual_seed(4869)
     logical = torch.randint(-256, 0, (24, 32, 32), generator=generator).bfloat16()
@@ -66,9 +55,7 @@ def test_block_max8(dst_index, valid, pattern, source):
     masked[:, valid:] = float("-inf")
     expected = masked.reshape(3, 128, 8).amax(-1)
     if pattern == "negative_zero":
-        expected[expected.view(torch.int16) == -32768] = (
-            0.0 if source.endswith("fpu_test.cpp") else -1.0
-        )
+        expected[expected.view(torch.int16) == -32768] = negative_zero_result
     src = tilize_block(
         logical.reshape(-1), [24 * 32, 32], DataFormat.Float16_b
     ).flatten()
@@ -104,3 +91,21 @@ def test_block_max8(dst_index, valid, pattern, source):
         assert torch.equal(
             actual[:, untouched], src.reshape(3, 8, 1024)[:, untouched]
         ), "Another DST tile changed"
+
+
+@blackhole_only
+@pytest.mark.parametrize("dst_index", DST_INDICES)
+@pytest.mark.parametrize("valid", VALID_COUNTS)
+@pytest.mark.parametrize("pattern", PATTERNS)
+def test_block_max8(dst_index, valid, pattern):
+    """SFPU variant: a negative-zero block maximum keeps its sign (-1 probe; +0 cannot pass)."""
+    _run_block_max8("sources/block_max8_test.cpp", dst_index, valid, pattern, -1.0)
+
+
+@blackhole_only
+@pytest.mark.parametrize("dst_index", DST_INDICES)
+@pytest.mark.parametrize("valid", VALID_COUNTS)
+@pytest.mark.parametrize("pattern", PATTERNS)
+def test_block_max8_fpu(dst_index, valid, pattern):
+    """FPU (GMPOOL) variant: GMPOOL flushes exponent-zero inputs, so a negative-zero maximum returns +0."""
+    _run_block_max8("sources/block_max8_fpu_test.cpp", dst_index, valid, pattern, 0.0)
