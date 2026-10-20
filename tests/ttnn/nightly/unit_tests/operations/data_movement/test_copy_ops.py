@@ -239,6 +239,90 @@ def test_experimental_typecast(N, C, H, W, memory_config, input_dtype, output_dt
     run_experimental_typecast_test(N, C, H, W, memory_config, input_dtype, output_dtype, device)
 
 
+@pytest.mark.parametrize(
+    "input_dtype, output_dtype",
+    [
+        (ttnn.int32, ttnn.float32),
+        (ttnn.int32, ttnn.bfloat16),
+        (ttnn.float32, ttnn.int32),
+        (ttnn.uint32, ttnn.float32),
+        (ttnn.uint16, ttnn.bfloat16),
+        (ttnn.float32, ttnn.bfloat16),
+        (ttnn.float32, ttnn.bfloat8_b),
+    ],
+    ids=[
+        "int32_to_float32",
+        "int32_to_bfloat16",
+        "float32_to_int32",
+        "uint32_to_float32",
+        "uint16_to_bfloat16",
+        "float32_to_bfloat16",
+        "float32_to_bfloat8_b",
+    ],
+)
+@pytest.mark.parametrize(
+    "input_grid, output_grid, preallocated",
+    [
+        (None, None, False),
+        (None, (0, 0), False),
+        (None, (0, 0), True),
+        ((0, 0), (0, 0), False),
+        ((0, 0), (0, 1), False),
+    ],
+    ids=[
+        "interleaved",
+        "height_sharded_output",
+        "height_sharded_preallocated_output",
+        "height_sharded_input_same_grid",
+        "height_sharded_input_other_grid",
+    ],
+)
+def test_experimental_typecast_matches_typecast(
+    input_dtype, output_dtype, input_grid, output_grid, preallocated, device
+):
+    torch.manual_seed(1020)
+    if input_dtype == ttnn.float32:
+        torch_input = (torch.randn(1, 1, 64, 64) * 100000).round()
+    elif input_dtype == ttnn.int32:
+        torch_input = torch.randint(-(2**20), 2**20, (1, 1, 64, 64), dtype=torch.int32)
+    else:
+        torch_input = torch.randint(0, 200, (1, 1, 64, 64), dtype=torch.int32)
+
+    def height_sharded(row):
+        x, y = row
+        grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x + 1, y))})
+        return ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(grid, [32, 64], ttnn.ShardOrientation.ROW_MAJOR),
+        )
+
+    input_memory_config = height_sharded(input_grid) if input_grid else ttnn.DRAM_MEMORY_CONFIG
+    memory_config = height_sharded(output_grid) if output_grid else ttnn.DRAM_MEMORY_CONFIG
+    tensor = ttnn.from_torch(
+        torch_input, dtype=input_dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=input_memory_config
+    )
+    output_tensor = None
+    if preallocated:
+        output_tensor = ttnn.from_torch(
+            torch.zeros(1, 1, 64, 64),
+            dtype=output_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=memory_config,
+        )
+    actual = ttnn.experimental.typecast(
+        tensor, output_dtype, memory_config=memory_config, optional_output_tensor=output_tensor
+    )
+    assert actual.dtype == output_dtype
+    assert actual.memory_config() == memory_config
+    actual = ttnn.to_torch(actual)
+    assert torch.equal(actual, ttnn.to_torch(ttnn.typecast(tensor, output_dtype)))
+    if output_dtype != ttnn.bfloat8_b and (input_dtype, output_dtype) != (ttnn.int32, ttnn.bfloat16):
+        torch_dtype = {ttnn.float32: torch.float32, ttnn.bfloat16: torch.bfloat16, ttnn.int32: torch.int32}
+        assert torch.equal(actual, torch_input.to(torch_dtype[output_dtype]))
+
+
 def run_typecast_test(N, C, H, W, memory_config, input_dtype, output_dtype, device):
     torch.manual_seed(2005)
     shape = [N, C, H, W]
