@@ -47,10 +47,16 @@ from models.common.lightweightmodule import LightweightModule
 from models.demos.glm53_flash.tt.config import GLM53FlashConfig
 from models.demos.glm53_flash.tt.indexer import TtDSAIndexer, TtIndexCache, height_shard_rows
 from models.demos.glm53_flash.tt.matmul_configs import DecodeLinear
-from models.demos.glm53_flash.tt.mesh import GLMMesh, single_chip
+from models.demos.glm53_flash.tt.mesh import GLMMesh, selector_tiles, single_chip
 
 TILE = 32
 CORES_PER_USER_DECODE = 4
+# decode block: "fused" (GLM53_DSA_FUSED=1: stem matmul -> ONE dsa_decode_state program -> folded q_b.W1 matmul ->
+# flash-MLA decode -> folded W2.o_proj matmul, 7 ops) | "composite" (default)
+DSA_FUSED_DEFAULT = "fused" if os.environ.get("GLM53_DSA_FUSED", "0") == "1" else "composite"
+# which absorb matrices the fused block folds into its projections: "both" (default) | "q" | "o" | "none"
+# (an unfolded side runs the composite's per-head bmm + transposes; a precision / perf attribution knob)
+DSA_FOLD = os.environ.get("GLM53_DSA_FOLD", "both")
 
 
 class StageTimer:
@@ -221,8 +227,10 @@ class TtDSA(LightweightModule):
         layer_idx: int,
         weight_dtype=ttnn.bfloat8_b,
         mesh: GLMMesh | None = None,
+        fused_decode: str | bool | None = None,
     ):
         """``attn_state_dict``: raw checkpoint tensors of ``self_attn.`` (prefix stripped, fp8 dequantized).
+        ``fused_decode``: "fused" | "composite" (default: the ``GLM53_DSA_FUSED`` knob); ``True`` = "fused".
 
         On a mesh the heads are split over the columns (``mesh.tp``, ``self.H`` = local heads): the
         latent stems (q_a, kv_a, their norms) and the indexer are replicated, q_b / kv_b / o_proj are
@@ -317,6 +325,34 @@ class TtDSA(LightweightModule):
             packer_l1_acc=False,
         )
         self.stage_timer: StageTimer | None = None
+        if fused_decode is None:
+            self.fused_decode = DSA_FUSED_DEFAULT
+        elif isinstance(fused_decode, bool):
+            self.fused_decode = "fused" if fused_decode else "composite"
+        else:
+            self.fused_decode = str(fused_decode)
+        if self.fused_decode == "fused":
+            # the dsa_decode_state program's constants (fp32 norm weights, the ape block, the selectors) and the
+            # folded absorb weights: q_lat = q_resid @ (Wqb[h] Wkb1[h]) per head -> packed [1,1,B,H*L] (the
+            # flash-MLA decode layout after one reshape), y = o_lat_packed @ stack_h(Wkb2[h]^T Wo[h]) (one matmul)
+            idx = self.indexer
+            f32 = lambda t: up(t.float().reshape(1, 1, 1, -1), ttnn.float32)
+            self.qa_norm_w32 = f32(sd["q_a_layernorm.weight"])
+            self.kva_norm_w32 = f32(sd["kv_a_layernorm.weight"])
+            self.knorm_w32 = f32(sd["indexer.k_norm.weight"])
+            self.knorm_b32 = f32(sd["indexer.k_norm.bias"])
+            ape = torch.full((1, 1, TILE, idx.D), -1e9)
+            ape[0, 0, : idx.P] = sd["indexer.index_kpool_compress_ape"].float().reshape(idx.P, idx.D)
+            self.ape_block = up(ape, ttnn.float32)
+            self.selectors = up(selector_tiles(), ttnn.bfloat16)
+            wqb = sd["q_b_proj.weight"].t().float().reshape(Lq, H, Dq)  # [Lq, H, Dq]
+            w_qb1 = torch.einsum("lhd,hdm->lhm", wqb, wkb1.float()).reshape(Lq, H * L)  # [Lq, H*L]
+            self.w_qb1 = up(w_qb1, weight_dtype, cols=-1)
+            wo = sd["o_proj.weight"].t().float().reshape(H, Dv, cfg.hidden_size)  # [H, Dv, hidden]
+            w_o2 = torch.einsum("hdm,hmn->hdn", wkb2.transpose(1, 2).float(), wo).reshape(H * L, cfg.hidden_size)
+            self.w_o2 = up(w_o2, weight_dtype, cols=-2)
+            self.lin_qb1 = DecodeLinear(device, self.w_qb1)
+            self.lin_o2 = DecodeLinear(device, self.w_o2)
 
     def set_stage_timer(self, timer: StageTimer | None):
         """Install (or remove, ``None``) the per-stage timer on this layer and its indexer."""
@@ -565,6 +601,8 @@ class TtDSA(LightweightModule):
         B = x.shape[-2]
         if self.stage_timer is not None:
             self.stage_timer.start()
+        if self.fused_decode == "fused":
+            return self._fused_decode(x, cache, positions, host_positions, dense_positions)
         stem = self.lin_stem(x, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)  # [1,1,B,2336]
         parts = {k: ttnn.slice(stem, [0, 0, 0, a], [1, 1, B, b]) for k, (a, b) in self.stem_bounds.items()}
         ttnn.deallocate(stem)
@@ -619,6 +657,116 @@ class TtDSA(LightweightModule):
         y = self._o_proj(self._o_lat_to_heads(oh))
         self._mark("out_proj")
         return y
+
+    def _fused_decode(self, x, cache: TtLatentCache, positions, host_positions, dense_positions):
+        """The 7-op dense decode block: stem matmul -> ``dsa_decode_state`` (q_a norm, latent append, index ring +
+        pool maintenance, all in place) -> folded q_b.Wkb1 matmul -> transpose to the decode head layout (the
+        packed rows are a free view of the head-major tiles) -> flash-MLA decode -> transpose -> folded
+        Wkb2.o_proj matmul (+ the TP all-reduce). Sparse users (positions > 2050) get
+        their head block replaced by the per-user indexer + sparse_sdpa result as in the composite path."""
+        B, H, L = x.shape[-2], self.H, self.L
+        idx = cache.index
+        b = self.stem_bounds
+        stem = self.lin_stem(x, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)  # [1,1,B,Ws]
+        q_resid = ttnn.transformer.dsa_decode_state(
+            stem,
+            cache.cache,
+            cache.page_table,
+            positions,
+            idx.ring_k,
+            idx.ring_g,
+            idx.pool_cache,
+            self.qa_norm_w32,
+            self.kva_norm_w32,
+            self.knorm_w32,
+            self.knorm_b32,
+            self.ape_block,
+            self.selectors,
+            b["qa"][0],
+            b["kva"][0],
+            b["k"][0],
+            b["g"][0],
+            self.cfg.q_lora_rank,
+            L,
+            idx.D,
+            idx.P,
+            idx.pool_blocks,
+            eps_rms=self.cfg.rms_norm_eps,
+            eps_ln=1e-6,
+        )  # [1,1,B,Lq]
+        self._mark("stem+state")
+        if DSA_FOLD in ("both", "q"):
+            q_lat = self.lin_qb1(q_resid, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)  # [1,1,B,H*L]
+            # B <= 32: the packed tiled rows ARE the head-major [1,H,B,L] tile sequence (a free view); the decode
+            # layout is then one multicore transpose. (A logical reshape would shuffle rows at ~5 GB/s.)
+            q_lat_h = ttnn.experimental.view(q_lat, [1, H, B, L]) if B <= TILE else self._heads_major(q_lat, B)
+        else:
+            q_lat_h = self._absorb_q(self._q(q_resid))  # [1,H,B,L] (composite absorb)
+            q_lat = None
+        q_dec = ttnn.transpose(q_lat_h, 1, 2)  # [1,B,H,L]
+        self._mark("absorb_q")
+        o_lat = ttnn.transformer.paged_flash_multi_latent_attention_decode(
+            q_dec,
+            cache.cache,
+            head_dim_v=L,
+            page_table_tensor=cache.page_table,
+            cur_pos_tensor=positions if dense_positions is None else dense_positions,
+            scale=self.scale,
+            program_config=self._decode_sdpa_config(B),
+            compute_kernel_config=self.sdpa_compute,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )  # [1,B,H,L]
+        self._mark("dense_mla_decode")
+        sparse_users = (
+            [u for u, a in enumerate(host_positions) if a > self.dense_exact_max_pos] if host_positions else []
+        )
+        if sparse_users:
+            w_idx = ttnn.slice(stem, [0, 0, 0, b["w"][0]], [1, 1, B, b["w"][1]])
+            sparse_rows = self._decode_sparse_rows(x, q_resid, q_lat_h, cache, host_positions, sparse_users, w=w_idx)
+            blocks = [
+                ttnn.transpose(sparse_rows[u], 1, 2)
+                if u in sparse_rows
+                else ttnn.slice(o_lat, [0, u, 0, 0], [1, u + 1, H, L])
+                for u in range(B)
+            ]  # [1,1,H,L] per user
+            o_new = blocks[0] if B == 1 else ttnn.concat(blocks, dim=1)
+            ttnn.deallocate(o_lat)
+            o_lat = o_new
+            ttnn.deallocate(w_idx)
+        ttnn.deallocate(q_dec)
+        ttnn.deallocate(q_lat if q_lat is not None else q_lat_h)
+        ttnn.deallocate(q_resid)
+        ttnn.deallocate(stem)
+        oh = ttnn.transpose(o_lat, 1, 2)  # [1,H,B,L]
+        ttnn.deallocate(o_lat)
+        if DSA_FOLD in ("both", "o"):
+            # the head-major tiles read as the packed [1,1,B,H*L] rows (free view, B <= 32)
+            o_p = ttnn.experimental.view(oh, [1, 1, B, H * L]) if B <= TILE else self._heads_packed(oh, B)
+            y = self.lin_o2(o_p, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)  # [1,1,B,hidden] (TP partial)
+            ttnn.deallocate(oh)
+            y = self.mesh.all_reduce_cols(y)
+        else:
+            y = self._o_proj(self._o_lat_to_heads(oh))  # composite absorb_o + o_proj
+        self._mark("out_proj")
+        return y
+
+    def _heads_major(self, q_lat: ttnn.Tensor, B: int) -> ttnn.Tensor:
+        """[1,1,B,H*L] -> [1,H,B,L] for B > 32 (several tile rows: no free view), through the row-major layout."""
+        rm = ttnn.to_layout(q_lat, ttnn.ROW_MAJOR_LAYOUT)
+        t = ttnn.to_layout(ttnn.reshape(rm, [1, B, self.H, self.L]), ttnn.TILE_LAYOUT)
+        ttnn.deallocate(rm)
+        out = ttnn.transpose(t, 1, 2)
+        ttnn.deallocate(t)
+        return out
+
+    def _heads_packed(self, oh: ttnn.Tensor, B: int) -> ttnn.Tensor:
+        """[1,H,B,L] -> [1,1,B,H*L] for B > 32, through the row-major layout."""
+        t = ttnn.transpose(oh, 1, 2)  # [1,B,H,L]
+        rm = ttnn.to_layout(t, ttnn.ROW_MAJOR_LAYOUT)
+        ttnn.deallocate(t)
+        out = ttnn.to_layout(ttnn.reshape(rm, [1, 1, B, self.H * self.L]), ttnn.TILE_LAYOUT)
+        ttnn.deallocate(rm)
+        return out
 
     def _decode_sparse_rows(
         self, x, q_resid, q_lat, cache: TtLatentCache, positions: list[int], users: list[int], w=None
