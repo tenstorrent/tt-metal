@@ -1747,15 +1747,16 @@
     # test_pipeline_wan_i2v.py defines for Blackhole -- there is no 4x8 ring case for I2V.
     # Stop at the first failed command: the devices are not reset between commands (#57706).
     run() { mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" python3 -m pytest "$@" || exit $?; }
-    run --timeout 1200 models/tt_dit/tests/models/wan2_2/test_performance_wan.py \
-      -k "ring_bh_4x8_sp1tp0 and resolution_720p and i2v"
+    # The CI cache starts empty, so the first perf test converts both transformers (~20 min) first.
+    run --timeout 3600 models/tt_dit/tests/models/wan2_2/test_performance_wan.py \
+      -k "ring_bh_4x8_sp1tp0 and i2v"
     run --timeout 3000 models/tt_dit/tests/models/wan2_2/test_pipeline_wan_i2v.py \
       -k "4x8sp1tp0nl2_linear_is_fsdp0 and resolution_720p"
   model: wan-2.2-i2v
   model_family: Wan
   skus:
     bh_sc1:
-      timeout: 75
+      timeout: 120
       tier: 1
       release_ready: true
   owner_id: U0ATR08RCQ0 # James Lee
