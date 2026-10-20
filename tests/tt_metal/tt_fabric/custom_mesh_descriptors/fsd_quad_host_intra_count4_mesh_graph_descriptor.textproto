@@ -1,9 +1,11 @@
 # Same four-host pod as fsd_quad_host_mesh_graph_descriptor, with intra-mesh count 4.
 # The mesh connection is two factory cables with one removed. Planes drop from 4 to the factory
 # count of 2. The one missing factory cable stays downed.
-# Every intermesh connection is RELAXED, and each boundary asks for a different count.
-# Mesh 2 to mesh 3 is the boundary missing one factory cable (16 factory, 15 live). Count 16
-# still needs that cable, so it stays downed and 15 live cables are registered.
+# Every intermesh connection is RELAXED and asks for at least as many cables as any boundary has in
+# the factory descriptor, so every factory cable is routed (used) on every boundary regardless of how
+# the solver rotates mesh ids onto physical hosts. The one missing factory cable is therefore always
+# "needed" and stays DOWNED (never merely unused) -- making this test solver/placement-independent.
+# Counts are kept distinct (16/17/18/19) so expect_distinct_intermesh still holds.
 mesh_descriptors {
   name: "M"
   arch: BLACKHOLE
@@ -21,22 +23,22 @@ graph_descriptors {
   connections {
     nodes { mesh { mesh_descriptor: "M" mesh_id: 0 } }
     nodes { mesh { mesh_descriptor: "M" mesh_id: 1 } }
-    channels { count: 2 policy: RELAXED }
+    channels { count: 16 policy: RELAXED }
   }
   connections {
     nodes { mesh { mesh_descriptor: "M" mesh_id: 1 } }
     nodes { mesh { mesh_descriptor: "M" mesh_id: 2 } }
-    channels { count: 6 policy: RELAXED }
+    channels { count: 17 policy: RELAXED }
   }
   connections {
     nodes { mesh { mesh_descriptor: "M" mesh_id: 2 } }
     nodes { mesh { mesh_descriptor: "M" mesh_id: 3 } }
-    channels { count: 16 policy: RELAXED }
+    channels { count: 18 policy: RELAXED }
   }
   connections {
     nodes { mesh { mesh_descriptor: "M" mesh_id: 3 } }
     nodes { mesh { mesh_descriptor: "M" mesh_id: 0 } }
-    channels { count: 12 policy: RELAXED }
+    channels { count: 19 policy: RELAXED }
   }
 }
 
