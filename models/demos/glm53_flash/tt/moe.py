@@ -128,7 +128,35 @@ class TtRouter(LightweightModule):
         self.fp32 = _compute(device, ttnn.MathFidelity.HiFi4, packer_l1_acc=False)
         import os
 
-        self.tie_break = os.environ.get("GLM53_ROUTER_TIE_BREAK", "rank")  # rank (default) | cumsum (A/B)
+        self.tie_break = os.environ.get("GLM53_ROUTER_TIE_BREAK", "rank")  # rank (default) | cumsum | topk
+        self._const: dict[tuple, ttnn.Tensor] = {}
+
+    def _forward_topk(self, scores, choice, T):
+        """One fp32 ``ttnn.topk`` (stable bitonic network: exact fp32 ranking, lowest index on ties) over the
+        biased scores, the unbiased scores gathered at the winners, renormalized and scattered into the dense
+        [1,1,T,E] matrix: ~10 ops instead of 8 rounds of the composite."""
+        k = self.k
+        vals, idx = ttnn.topk(
+            choice, k, dim=-1, largest=True, sorted=True
+        )  # [1,1,T,k] fp32 / uint32 (padded cols lose)
+        ttnn.deallocate(vals)
+        ttnn.deallocate(choice)
+        w = ttnn.gather(scores, -1, idx)  # unbiased scores at the winners [1,1,T,k] fp32
+        ttnn.deallocate(scores)
+        denom = ttnn.add(ttnn.sum(w, dim=-1, keepdim=True), 1e-20)
+        norm = ttnn.multiply(ttnn.reciprocal(denom), self.cfg.routed_scaling_factor)  # [1,1,T,1]
+        w = ttnn.multiply(w, norm, output_tensor=w)
+        zeros = self._dense_zeros(T)
+        dense = ttnn.scatter(zeros, -1, idx, w)  # [1,1,T,E]: weights at their expert columns, 0 elsewhere
+        return w, ttnn.typecast(idx, ttnn.float32), dense
+
+    def _dense_zeros(self, T: int) -> ttnn.Tensor:
+        key = ("zeros", T)
+        if key not in self._const:
+            self._const[key] = ttnn.zeros(
+                (1, 1, T, self.E), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=self.device
+            )
+        return self._const[key]
 
     def forward(self, x: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
         """x [1,1,T,H] bf16 -> (weights [1,1,T,8] fp32, indices [1,1,T,8] fp32 (integral), dense [1,1,T,E] fp32).
@@ -143,6 +171,8 @@ class TtRouter(LightweightModule):
         scores = ttnn.sigmoid(logits)  # fp32 [1,1,T,E]
         ttnn.deallocate(logits)
         choice = ttnn.add(scores, self.bias)
+        if self.tie_break == "topk":
+            return self._forward_topk(scores, choice, T)
         dense = None  # selected unbiased scores at their expert columns, else 0
         idx_cols, w_cols = [], []
         for _ in range(self.k):
