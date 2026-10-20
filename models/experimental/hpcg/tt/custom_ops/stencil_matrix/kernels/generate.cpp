@@ -159,6 +159,16 @@ void fill_run(
         for (int32_t sy = -1; sy <= 1; ++sy) {
             const int32_t jy = iy + sy, jz = iz + sz;
             const bool line_ok = jy >= 0 && jy < nx && jz >= 0 && jz < nx;
+            // the neighbour line in both x parities (sx = 0: the run's own parity; sx = +-1: the other one). A run's
+            // columns in one of them are one contiguous range (planned as one window piece), so its window base is
+            // looked up once per parity and shared by sx = -1 and +1
+            const uint32_t c0 = (uint32_t)px + 2 * (jy & 1) + 4 * (jz & 1);
+            uint32_t lqs[2] = {0, 0}, base[2] = {0, 0};
+            bool have[2] = {false, false};
+            if (line_ok) {
+                lqs[0] = g.line_q(c0, jy, jz);
+                lqs[1] = g.line_q(c0 ^ 1, jy, jz);
+            }
             for (int32_t sx = -1; sx <= 1; ++sx) {
                 const int32_t j = (sz + 1) * 9 + (sy + 1) * 3 + (sx + 1);
                 ilo[j] = 1;
@@ -167,9 +177,8 @@ void fill_run(
                 if (!line_ok) {
                     continue;
                 }
-                // neighbour x = 2 i + px + sx, in block cs (x parity flips with sx = +-1) at x index i + d
+                // neighbour x = 2 i + px + sx, in the block of parity px ^ (sx != 0), at x index i + d
                 const int32_t d = (px + sx) < 0 ? -1 : (px + sx) >> 1;
-                const uint32_t cs = (uint32_t)(px ^ (sx != 0)) + 2 * (jy & 1) + 4 * (jz & 1);
                 ilo[j] = (px + sx) < 0 ? 1 : 0;
                 ihi[j] = (nx - 1 - px - sx) >> 1;
                 const int32_t f = i0 > ilo[j] ? i0 : ilo[j];
@@ -177,8 +186,12 @@ void fill_run(
                 if (f > l) {
                     continue;  // no row of the run has this neighbour
                 }
-                const uint32_t lq = g.line_q(cs, jy, jz) + d;  // column of x index i: lq + i
-                K[j] = g.piece_base(lq + f) + 4 * lq;
+                const uint32_t pp = sx != 0, lq = lqs[pp] + d;  // column of x index i: lq + i
+                if (!have[pp]) {
+                    base[pp] = g.piece_base(lq + f);
+                    have[pp] = true;
+                }
+                K[j] = base[pp] + 4 * lq;
             }
         }
     }
