@@ -290,10 +290,14 @@ class GLMMesh:
         user-partitioned attention, as DeepSeek-V3's decode does)."""
         if self.cols == 1:
             return x
+        # the op's convention is the reverse of this helper's: it SPLITS ``out_dim`` over the devices and GROWS
+        # ``in_dim`` (output[in_dim] *= cols, output[out_dim] /= cols), so the arguments are swapped here. The
+        # grown dim may sit on the tile-row dim only if its per-device size is a multiple of 16 (16 heads per
+        # column qualifies); the split dim must not be the tile-row dim unless its size is a multiple of 16.
         return ttnn.experimental.all_to_all_async_generic(
             x,
-            in_dim=in_dim,
-            out_dim=out_dim,
+            in_dim=out_dim,
+            out_dim=in_dim,
             num_links=self.ccl.get_num_links(TP_AXIS),
             memory_config=memory_config or ttnn.DRAM_MEMORY_CONFIG,
             cluster_axis=TP_AXIS,
