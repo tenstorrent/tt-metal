@@ -28,7 +28,7 @@ constexpr std::string_view kernel_dir = "tt-train/sources/ttml/metal/ops/qkv_cau
 const m2::KernelSpecName READER{"reader"};
 const m2::KernelSpecName WRITER{"writer"};
 const m2::KernelSpecName COMPUTE{"compute"};
-const m2::ScratchpadSpecName ACT_WINDOW{"act_window"};
+const m2::ScratchpadSpecName X_WINDOW{"x_window"};
 const m2::ScratchpadSpecName DC_WINDOW{"dc_window"};
 
 m2::DataflowBufferSpec make_dataflow_buffer(const m2::DFBSpecName& name, uint32_t tiles, tt::DataFormat format) {
@@ -101,9 +101,9 @@ ttnn::device_operation::ProgramArtifacts QkvCausalConv1dSiluBackwardProgramFacto
     const uint32_t row_splits = attrs.row_splits;
     const auto dist = distribute(input.device().compute_with_storage_grid_size(), channel_blocks * row_splits);
 
-    const m2::DFBSpecName ACT_RM{"act_rm"}, ACT_TILE{"act_tile"}, WEIGHTS{"weights"}, GRAD_OUT{"grad_out"},
-        PREACT{"preact"}, SIGMOID{"sigmoid"}, DC_TILE{"dc_tile"}, DC_RM{"dc_rm"}, ACC{"acc"}, DCV_RM{"dcv_rm"},
-        DCV_TILE{"dcv_tile"}, OUTPUT{"output"}, ONES{"ones"};
+    const m2::DFBSpecName RAINBOW_RM{"rainbow_rm"}, RAINBOW_TILE{"rainbow_tile"}, WEIGHTS{"weights"},
+        GRAD_OUT{"grad_out"}, PREACT{"preact"}, SIGMOID{"sigmoid"}, DC_TILE{"dc_tile"}, DC_RM{"dc_rm"}, ACC{"acc"},
+        DCV_RM{"dcv_rm"}, DCV_TILE{"dcv_tile"}, OUTPUT{"output"}, ONES{"ones"};
     const m2::TensorParamName INPUT{"input"}, HISTORY{"history"}, GRAD_Q{"grad_q"}, GRAD_K{"grad_k"}, GRAD_V{"grad_v"},
         TAP0{"tap0"}, TAP1{"tap1"}, TAP2{"tap2"}, TAP3{"tap3"}, GRAD_INPUT{"grad_input"},
         GRAD_TAP_PARTIAL{"grad_tap_partial"};
@@ -120,8 +120,8 @@ ttnn::device_operation::ProgramArtifacts QkvCausalConv1dSiluBackwardProgramFacto
     m2::KernelSpec reader{
         .unique_id = READER,
         .source = std::string(kernel_dir) + "dataflow/reader.cpp",
-        .dfb_bindings = {producer(ACT_RM), producer(WEIGHTS), producer(GRAD_OUT), producer(ONES)},
-        .scratchpad_bindings = {{ACT_WINDOW, "act_window"}},
+        .dfb_bindings = {producer(RAINBOW_RM), producer(WEIGHTS), producer(GRAD_OUT), producer(ONES)},
+        .scratchpad_bindings = {{X_WINDOW, "x_window"}},
         .tensor_bindings =
             {tensor(INPUT),
              tensor(HISTORY),
@@ -161,9 +161,9 @@ ttnn::device_operation::ProgramArtifacts QkvCausalConv1dSiluBackwardProgramFacto
         .unique_id = COMPUTE,
         .source = std::string(kernel_dir) + "compute/qkv_causal_conv1d_silu_bw.cpp",
         .dfb_bindings =
-            {consumer(ACT_RM),
-             producer(ACT_TILE),
-             consumer(ACT_TILE),
+            {consumer(RAINBOW_RM),
+             producer(RAINBOW_TILE),
+             consumer(RAINBOW_TILE),
              consumer(WEIGHTS),
              consumer(GRAD_OUT),
              producer(PREACT),
@@ -192,7 +192,7 @@ ttnn::device_operation::ProgramArtifacts QkvCausalConv1dSiluBackwardProgramFacto
         .kernels = {std::move(reader), std::move(writer), std::move(compute)},
         .dataflow_buffers = std::move(dataflow_buffers),
         .scratchpads =
-            {{.unique_id = ACT_WINDOW, .size_per_node = window_bytes},
+            {{.unique_id = X_WINDOW, .size_per_node = window_bytes},
              {.unique_id = DC_WINDOW, .size_per_node = window_bytes}},
         .tensor_parameters =
             {

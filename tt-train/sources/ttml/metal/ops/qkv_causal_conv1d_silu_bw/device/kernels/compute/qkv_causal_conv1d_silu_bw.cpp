@@ -151,10 +151,10 @@ template <uint32_t channel_tiles_per_block, bool first, bool last>
     for (uint32_t base = 0; base < total; base += dst_tiles) {
         const uint32_t n = batch_size<total>(base);
         tile_regs_acquire();
-        reconfig_data_format(dfb::dc_tile, dfb::act_tile);
-        mul_init(dfb::dc_tile, dfb::act_tile);
+        reconfig_data_format(dfb::dc_tile, dfb::rainbow_tile);
+        mul_init(dfb::dc_tile, dfb::rainbow_tile);
         for (uint32_t i = 0; i < n; ++i) {
-            mul_tiles(dfb::dc_tile, dfb::act_tile, (base + i) % channel_tiles_per_block, base + i, i);
+            mul_tiles(dfb::dc_tile, dfb::rainbow_tile, (base + i) % channel_tiles_per_block, base + i, i);
         }
         tile_regs_commit();
         tile_regs_wait();
@@ -181,8 +181,8 @@ template <uint32_t channel_tiles_per_block>
 
 template <uint32_t channel_tiles_per_block, uint32_t tile_rows, uint32_t row_splits>
 TT_KERNEL void compute(uint32_t wi_start, uint32_t wi_count) {
-    compute_kernel_hw_startup(dfb::act_rm, dfb::act_tile, dfb::dc_rm);
-    DataflowBuffer activation(dfb::act_tile);
+    compute_kernel_hw_startup(dfb::rainbow_rm, dfb::rainbow_tile, dfb::dc_rm);
+    DataflowBuffer rainbow_window(dfb::rainbow_tile);
     DataflowBuffer weights(dfb::weights);
     DataflowBuffer grad_out(dfb::grad_out);
     DataflowBuffer preact(dfb::preact);
@@ -207,11 +207,11 @@ TT_KERNEL void compute(uint32_t wi_start, uint32_t wi_count) {
             ones.wait_front(1);
         }
         for (uint32_t step = 0; step < step_count; ++step) {
-            compute_kernel_lib::tilize<channel_tiles_per_block, dfb::act_rm, dfb::act_tile>(tap_count);
-            activation.wait_front(tap_count * channel_tiles_per_block);
+            compute_kernel_lib::tilize<channel_tiles_per_block, dfb::rainbow_rm, dfb::rainbow_tile>(tap_count);
+            rainbow_window.wait_front(tap_count * channel_tiles_per_block);
             grad_out.wait_front(channel_tiles_per_block);
 
-            conv<channel_tiles_per_block>(dfb::act_tile, false, preact, dfb::preact);
+            conv<channel_tiles_per_block>(dfb::rainbow_tile, false, preact, dfb::preact);
             preact.wait_front(channel_tiles_per_block);
             silu_backward<channel_tiles_per_block>(sigmoid, dc_tile);
             dc_tile.wait_front(channel_tiles_per_block);
@@ -230,7 +230,7 @@ TT_KERNEL void compute(uint32_t wi_start, uint32_t wi_count) {
                 }
             }
             compute_kernel_lib::untilize<channel_tiles_per_block, dfb::dc_tile, dfb::dc_rm>(1);
-            activation.pop_front(tap_count * channel_tiles_per_block);
+            rainbow_window.pop_front(tap_count * channel_tiles_per_block);
             grad_out.pop_front(channel_tiles_per_block);
 
             if (step > 0) {

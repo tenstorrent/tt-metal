@@ -32,9 +32,9 @@ inline std::array<QkvCausalConv1dSiluBackwardDataflowBuffer, 13> qkv_conv_bw_dat
     const auto bf16 = input_format;
     constexpr auto fp32 = tt::DataFormat::Float32;
     return {{
-        {"act_rm", 8 * channel_tiles_per_block, bf16},    // 4 shifted row-major views of the input window, x2
-        {"act_tile", 4 * channel_tiles_per_block, bf16},  // the 4 views tilized
-        {"weights", 4 * channel_tiles_per_block, bf16},   // taps [4][channel_tiles_per_block]
+        {"rainbow_rm", 8 * channel_tiles_per_block, bf16},    // x window copied 4x, each one row lower, row-major, x2
+        {"rainbow_tile", 4 * channel_tiles_per_block, bf16},  // the same 4 copies as tiles
+        {"weights", 4 * channel_tiles_per_block, bf16},       // taps [4][channel_tiles_per_block]
         {"grad_out", 2 * channel_tiles_per_block, bf16},
         {"preact", channel_tiles_per_block, bf16},
         {"sigmoid", qkv_conv_bw_dst_tiles, bf16},
