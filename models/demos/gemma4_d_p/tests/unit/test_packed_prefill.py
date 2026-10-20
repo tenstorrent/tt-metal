@@ -48,13 +48,35 @@ def test_packing_partial_requests_and_metadata():
     assert decode_metadata([0xFFFFFFFF] * 19) is None
 
 
+@pytest.mark.parametrize("first_rank", range(8))
+@pytest.mark.parametrize("length", [256, 257, 768])
+def test_rotated_starts_keep_tokens_and_positions_on_their_cache_rank(first_rank, length):
+    start = 2048 + first_rank * 32
+    second_start = 4096 + (7 - first_rank) * 32
+    segments = (PrefillSegment(0, start, start + length), PrefillSegment(1, second_start, second_start + 512))
+    validate_segments(segments, chunk_size=2048, cp=8, num_users=2, max_seq_len=8192)
+    tokens = [list(range(s.actual_start + 1, s.actual_end + 1)) for s in segments]
+    rows = pack_tokens(tokens, segments, chunk_size=2048)
+    positions = pack_positions(segments, chunk_size=2048)
+    for rank in range(8):
+        expected_positions, expected_tokens = [], []
+        for segment in segments:
+            owned = [p for p in range(segment.actual_start, segment.actual_end) if p // 32 % 8 == rank]
+            padding = [0] * (segment.padded_length() // 8 - len(owned))
+            expected_positions.extend(owned + padding)
+            expected_tokens.extend([p + 1 for p in owned] + padding)
+        padding = [0] * (2048 // 8 - len(expected_positions))
+        assert positions[rank] == expected_positions + padding
+        assert rows[rank] == expected_tokens + padding
+
+
 @pytest.mark.parametrize(
     "segments",
     [
         (),
         (PrefillSegment(0, 0, 512), PrefillSegment(0, 0, 256)),
         (PrefillSegment(6, 0, 256),),
-        (PrefillSegment(0, 32, 512),),
+        (PrefillSegment(0, 1, 512),),
         (PrefillSegment(0, 256, 256),),
         (PrefillSegment(0, 0, 8193),),
         (PrefillSegment(0, 262144, 262400),),

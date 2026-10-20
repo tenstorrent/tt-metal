@@ -25,7 +25,7 @@ from models.demos.gemma4_d_p.tt.runners.packing import PrefillSegment, pack_posi
 def test_prefill_packed_4k_traced(mesh_device, reset_seeds):
     chunk_size, max_seq_len = 4096, 262144
     lengths = (256, 512, 768, 1024, 1536)
-    prefixes = (27904, 12800, 25088, 29184, 13824)
+    prefixes = (27936, 12896, 25248, 29408, 13888)
     mesh = MeshConfig(mesh_device)
     segments = tuple(
         PrefillSegment(slot, prefix, prefix + length) for slot, (prefix, length) in enumerate(zip(prefixes, lengths))

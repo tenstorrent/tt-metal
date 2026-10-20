@@ -60,9 +60,9 @@ def test_staging_and_layout_changes_reuse_model_metadata(metadata_model):
     runtime.positions = torch.zeros((1, 4096), dtype=torch.int64)
     runtime._host_rows = lambda rows: torch.tensor(rows).reshape(1, -1)
     schedules = (
-        (PrefillSegment(4, 12800, 13056), PrefillSegment(1, 25088, 25600)),
-        (PrefillSegment(2, 512, 1280),),
-        (PrefillSegment(0, 0, 256), PrefillSegment(5, 29184, 30208), PrefillSegment(3, 13824, 15360)),
+        (PrefillSegment(4, 12896, 13152), PrefillSegment(1, 25248, 25760)),
+        (PrefillSegment(2, 544, 1312),),
+        (PrefillSegment(0, 0, 256), PrefillSegment(5, 29408, 30432), PrefillSegment(3, 13888, 15424)),
     )
     for segments in schedules:
         runtime._stage_batch(segments)

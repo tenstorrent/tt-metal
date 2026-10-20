@@ -30,8 +30,8 @@ def validate_segments(segments, *, chunk_size, cp, num_users, max_seq_len, slot_
         if not 0 <= slot < num_users or slot in slots:
             raise ValueError("Each request must use a distinct valid KV slot")
         slots.add(slot)
-        if start < 0 or start % (cp * STRIPE_SIZE):
-            raise ValueError(f"Request starts must align to {cp * STRIPE_SIZE} tokens")
+        if start < 0 or start % STRIPE_SIZE:
+            raise ValueError(f"Request starts must align to {STRIPE_SIZE} tokens")
         if not start < end <= max_seq_len:
             raise ValueError("Request must contain real tokens within the context limit")
         if slot_ends is not None and start and start != slot_ends[slot]:
@@ -56,17 +56,22 @@ def stripe_rows(values, cp=8):
 def pack_tokens(token_lists, segments, *, chunk_size=8192, cp=8, pad_token_id=0):
     if len(token_lists) != len(segments):
         raise ValueError("Each request needs one token list")
-    packed = []
+    packed = stripe_rows([pad_token_id] * chunk_size, cp)
+    offset = 0
     for tokens, segment in zip(token_lists, segments):
         length = segment.actual_end - segment.actual_start
         if len(tokens) != length or length <= 0:
             raise ValueError("Token count must match the request interval")
-        packed.extend(tokens)
-        packed.extend([pad_token_id] * (segment.padded_length(cp) - length))
-    if len(packed) > chunk_size:
-        raise ValueError("Padded requests exceed the packed chunk size")
-    packed.extend([pad_token_id] * (chunk_size - len(packed)))
-    return stripe_rows(packed, cp)
+        padded_length = segment.padded_length(cp)
+        local_length = padded_length // cp
+        if offset + local_length > chunk_size // cp:
+            raise ValueError("Padded requests exceed the packed chunk size")
+        rows = stripe_rows(list(tokens) + [pad_token_id] * (padded_length - length), cp)
+        first_rank = segment.actual_start // STRIPE_SIZE % cp
+        for rank in range(cp):
+            packed[rank][offset : offset + local_length] = rows[(rank - first_rank) % cp]
+        offset += local_length
+    return packed
 
 
 def pack_positions(segments, *, chunk_size=8192, cp=8):

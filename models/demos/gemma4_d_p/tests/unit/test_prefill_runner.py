@@ -61,6 +61,8 @@ def test_slot_offsets_and_partial_final_chunk(expect_error):
     runtime.validate_chunk(1, 16384, 16385)
     runtime.validate_chunk(5, 253952, 262144)
     runtime.validate_chunk(5, 0, 8192)
+    runtime.slot_ends[2] = 1056
+    runtime.validate_chunk(2, 1056, 1568)
     for chunk in [(6, 0, 8192), (0, 16384, 24576), (0, 1, 8193), (5, 253952, 262145)]:
         with expect_error(ValueError, "Gemma4|KV slot|Chunk|Slot|Request|request"):
             runtime.validate_chunk(*chunk)
