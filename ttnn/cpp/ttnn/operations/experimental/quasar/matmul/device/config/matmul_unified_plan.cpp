@@ -424,16 +424,17 @@ std::optional<MatmulUnifiedPlan> plan_unified_matmul(
             }
         }
     }
-    // ---- 5. Search: each C slice's subblock, then its K chunk, then the best C slice ----
-    // The number of K chunks and their length pull opposite ways. More K chunks pipeline better (see
-    // MAX_AUTO_K_CHUNK_TILES); longer ones move the partial sums less (each subblock's partial sums go to L1 and back
-    // between K chunks). So a C slice's K chunk is the longest that fits L1 up to that limit, or all of K when that
-    // lets A's shard be used in place. Of the C slices that fit L1, the best is, in priority order (#57884):
-    //   1. one C slice per core, the whole of each core's block of C, even with 1-tile K chunks (multicast, shards
-    //      used in place, no per-C-slice overhead);
+    // ---- 5. Search: for each C slice, (a) its subblock, then (b) its K chunk; then the best C slice ----
+    // Steps (a) and (b) are made per C slice, in that order, before and apart from the ranking:
+    //   (a) subblock: the config's, else the best that fills DST, fits L1 and keeps every shard borrow (see below);
+    //   (b) K chunk: the longest that fits L1, up to a limit that keeps enough K chunks to pipeline. The number of K
+    //       chunks and their length pull opposite ways: more K chunks overlap reads with compute (see
+    //       MAX_AUTO_K_CHUNK_TILES), longer ones move each subblock's partial sums to L1 and back less often.
+    // Then, of the C slices that fit L1, the best is, in priority order (#57884):
+    //   1. one C slice per core, the whole of each core's block of C, even with 1-tile K chunks (multicast, shards used
+    //      in place, no per-C-slice overhead);
     //   2. otherwise one whose K chunks are at least two tiles long (1-tile K chunks move the partial sums after every
-    //   K
-    //      tile);
+    //      K tile);
     //   3. then the one with the most tiles (each A and B tile read is reused across more of them), then the wider.
     const uint32_t K_chunk_floor = config.K_chunk_tiles.value_or(1);  // the shortest K chunk tried
     const uint32_t min_K_chunks = is_quasar ? QUASAR_NUM_READER_THREADS : MIN_OPERAND_BUFFER_DEPTH;
@@ -450,7 +451,7 @@ std::optional<MatmulUnifiedPlan> plan_unified_matmul(
         const uint32_t C_slice_M_tiles = C_slice_shape.first;
         const uint32_t C_slice_N_tiles = C_slice_shape.second;
 
-        // Subblock: the config's, else the largest that fills DST, voids no achievable borrow and fits L1 at the
+        // (a) Subblock: the config's, else the largest that fills DST, voids no achievable borrow and fits L1 at the
         // shortest K chunk, so the K chunk search below always finds one. Never trade a borrow for subblock volume:
         // a subblock that pads a borrowable shard's dims is rejected; C's borrow needs subblocks spanning the C slice
         // width, achievable only when that width fits DST.
@@ -484,7 +485,7 @@ std::optional<MatmulUnifiedPlan> plan_unified_matmul(
                 C_slice_M_tiles, C_slice_N_tiles, dst_capacity_tiles, base.num_compute_threads, subblock_viable);
         }
 
-        // K chunk: all of K when that lets a resident A shard be borrowed (main pins in0_block_w == K for
+        // (b) K chunk: all of K when that lets a resident A shard be borrowed (main pins in0_block_w == K for
         // height-sharded in0 for the same reason), else the config's, else the longest divisor of K_tiles that fits,
         // walking down from the pipelining limit.
         candidate = make_plan(
@@ -529,6 +530,7 @@ std::optional<MatmulUnifiedPlan> plan_unified_matmul(
             }
         }
 
+        // Ranking, priorities 1-3 above.
         if (dfbs_fit(candidate, l1_budget) && (!best.has_value() || priority(candidate) > priority(*best))) {
             best = candidate;
         }
