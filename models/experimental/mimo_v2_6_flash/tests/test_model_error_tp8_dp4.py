@@ -10,7 +10,9 @@ on the host, and every position's logits are scored against the reference: top-1
 device). With ~120 positions this is a steadier accuracy measure than the 40 rows of test_model_tp8_dp4.py, and
 it isolates the decoder stack from the device LM head.
 
-MIMO_ERROR_DUMP=<file> writes the per-layer and per-position numbers as JSON.
+MIMO_ERROR_DUMP=<file> writes the per-layer and per-position numbers as JSON. A golden from
+reference/make_golden_large.py (MIMO_GOLDEN; only the last layer's hidden states, many more positions) is scored the
+same way, with the reference logits from its hidden states and no per-layer comparison.
 """
 
 import json
@@ -41,13 +43,18 @@ def test_model_error_tp8_dp4(mesh_device):
         mesh_device, cfg, ckpt, cache_dir("model_bfp4experts"), dp=DP, users_per_replica=4, max_seq_len=1024
     )
     num_prompts = len(golden["token_ids"])
-    pending = {}
-    for g in range(num_prompts):
-        model = gen.models[g % DP]
-        pending[g] = (model, model.prefill_enqueue(golden["token_ids"][g], g // DP, return_hidden=True))
-    device_hidden = {g: model.prefill_read(handle)[1] for g, (model, handle) in pending.items()}
+    large = "final_hidden" in golden
+    device_hidden = {}
+    for first in range(0, num_prompts, DP):  # one prompt per replica at a time; slots are reused
+        pending = {}
+        for g in range(first, min(first + DP, num_prompts)):
+            model = gen.models[g % DP]
+            pending[g] = (model, model.prefill_enqueue(golden["token_ids"][g], 0, return_hidden=True))
+        for g, (model, handle) in pending.items():
+            hidden = model.prefill_read(handle)[1]
+            device_hidden[g] = [hidden[-1]] if large else hidden
 
-    num_layers = len(device_hidden[0])
+    num_layers = 0 if large else len(device_hidden[0])
     layer_rel, layer_pcc = [], []
     for i in range(num_layers):
         dev = torch.cat([device_hidden[g][i] for g in range(num_prompts)])
@@ -62,7 +69,11 @@ def test_model_error_tp8_dp4(mesh_device):
     for g in range(num_prompts):
         with torch.no_grad():
             dev = rms_norm(device_hidden[g][-1], norm, cfg.layernorm_epsilon) @ lm_head.T
-        ref = golden["logits"][g].float()
+        if large:
+            with torch.no_grad():
+                ref = rms_norm(golden["final_hidden"][g].float(), norm, cfg.layernorm_epsilon) @ lm_head.T
+        else:
+            ref = golden["logits"][g].float()
         for p in range(ref.shape[0]):
             lp_ref, lp_dev = ref[p].log_softmax(-1), dev[p].log_softmax(-1)
             top = ref[p].topk(2)
@@ -86,7 +97,12 @@ def test_model_error_tp8_dp4(mesh_device):
         f"margin >= 0.5 {top1_confident:.4f} ({len(confident)} rows), mean KL {kl:.4f}, "
         f"PCC min {min(r['pcc'] for r in rows):.4f} mean {sum(r['pcc'] for r in rows) / n:.4f}"
     )
-    for r in rows:
+    later = [r for r in rows if r["pos"] >= 2]  # positions 0-1 carry the first token's massive activation
+    logger.info(
+        f"positions >= 2 ({len(later)}): top-1 {sum(r['match'] for r in later) / len(later):.4f}, "
+        f"mean KL {sum(r['kl'] for r in later) / len(later):.4f}"
+    )
+    for r in rows if n <= 200 else []:
         if not r["match"]:
             logger.info(f"miss: golden {r['golden']} pos {r['pos']}, reference margin {r['ref_margin']:.3f}")
     if os.environ.get("MIMO_ERROR_DUMP"):
