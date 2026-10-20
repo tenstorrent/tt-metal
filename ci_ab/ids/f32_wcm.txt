@@ -1,0 +1,6 @@
+perf_eltwise_binary_allcfg.py::test_ac_bcastblock[pair:a32_b32_o32-formats:Float32->Float32-dest_acc:No-broadcast_type:Row-math_op:Elwadd-math_fidelity:LoFi-form:pf]
+perf_eltwise_binary_allcfg.py::test_ac_bcastblock[pair:a32_b32_o32-formats:Float32->Float32-dest_acc:No-broadcast_type:Column-math_op:Elwadd-math_fidelity:LoFi-form:pf]
+perf_eltwise_binary_allcfg.py::test_ac_bcastblock[pair:a32_b32_o32-formats:Float32->Float32-dest_acc:No-broadcast_type:Scalar-math_op:Elwadd-math_fidelity:LoFi-form:pf]
+perf_eltwise_binary_allcfg.py::test_ac_bcastblock[pair:a32_b32_o32-formats:Float32->Float32-dest_acc:Yes-broadcast_type:Row-math_op:Elwadd-math_fidelity:LoFi-form:pf]
+perf_eltwise_binary_allcfg.py::test_ac_bcastblock[pair:a32_b32_o32-formats:Float32->Float32-dest_acc:Yes-broadcast_type:Column-math_op:Elwadd-math_fidelity:LoFi-form:pf]
+perf_eltwise_binary_allcfg.py::test_ac_bcastblock[pair:a32_b32_o32-formats:Float32->Float32-dest_acc:Yes-broadcast_type:Scalar-math_op:Elwadd-math_fidelity:LoFi-form:pf]
