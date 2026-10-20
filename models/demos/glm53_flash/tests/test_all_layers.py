@@ -99,9 +99,12 @@ class _Hooks:
         self.tt_sub: dict[str, list[torch.Tensor]] = {"attn": [], "ffn": []}
         self.sublayers = sublayers
         if hasattr(hf.mlp, "gate"):
-            hf.mlp.gate.register_forward_hook(
-                lambda m, i, o: (self.hf_idx.append(o[2].detach().clone()), self.hf_gate_in.append(i[0].detach()))
-            )
+
+            def gate_hook(m, i, o):  # returns None: a non-None hook result would replace the gate output
+                self.hf_idx.append(o[2].detach().clone())
+                self.hf_gate_in.append(i[0].detach())
+
+            hf.mlp.gate.register_forward_hook(gate_hook)
             router = dec.layer.mlp.router
             orig_router = router.forward
 
