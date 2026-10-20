@@ -101,10 +101,10 @@ void kernel_main() {
     // when there is gamma or beta to fold in, otherwise the output buffer directly.
 #if defined(FUSE_GAMMA) || defined(FUSE_BETA)
     constexpr auto dfb_im_or_out = dfb_fusion;
-    DataflowBuffer& dfb_im_or_out_obj = dfb_fusion_obj;
+    auto& dfb_im_or_out_obj = dfb_fusion_obj;
 #else
     constexpr auto dfb_im_or_out = dfb_out;
-    DataflowBuffer& dfb_im_or_out_obj = dfb_out_obj;
+    auto& dfb_im_or_out_obj = dfb_out_obj;
 #endif
 
     //  Either in or in + b if doing fused pre-add
@@ -113,7 +113,7 @@ void kernel_main() {
     DataflowBuffer dfb_x_obj(dfb_x);
 #else
     constexpr auto dfb_x = dfb_in;
-    DataflowBuffer& dfb_x_obj = dfb_in_obj;
+    auto& dfb_x_obj = dfb_in_obj;
 #endif
 
     // Welford-fp32 alias of dfb_x. Shares SRAM with dfb_x but has its own buffer index
@@ -127,7 +127,7 @@ void kernel_main() {
 #else
     constexpr bool welford_fp32_alias = false;
     constexpr auto dfb_x_welford = dfb_x;
-    DataflowBuffer& dfb_x_welford_obj = dfb_x_obj;
+    auto& dfb_x_welford_obj = dfb_x_obj;
 #endif
 
 #ifdef COMPACT_FP32_FINALIZER
@@ -138,8 +138,8 @@ void kernel_main() {
 #else
     constexpr auto dfb_ex_welford = dfb_ex;
     constexpr auto dfb_ex2pe_fp32 = dfb_ex2pe;
-    DataflowBuffer& dfb_ex_welford_obj = dfb_ex_obj;
-    DataflowBuffer& dfb_ex2pe_fp32_obj = dfb_ex2pe_obj;
+    auto& dfb_ex_welford_obj = dfb_ex_obj;
+    auto& dfb_ex2pe_fp32_obj = dfb_ex2pe_obj;
 #endif
 
     constexpr uint32_t dst0 = 0;
@@ -503,10 +503,10 @@ void kernel_main() {
                 // added, and straight to the output otherwise.
 #ifdef FUSE_BETA
                 constexpr auto dfb_outg = dfb_fusion;
-                DataflowBuffer& dfb_outg_obj = dfb_fusion_obj;
+                auto& dfb_outg_obj = dfb_fusion_obj;
 #else
                 constexpr auto dfb_outg = dfb_out;
-                DataflowBuffer& dfb_outg_obj = dfb_out_obj;
+                auto& dfb_outg_obj = dfb_out_obj;
 #endif
                 mul_bcast_rows_init(dfb_fusion, dfb_gamma);
                 if (ncht == 0) {
@@ -574,4 +574,25 @@ void kernel_main() {
         }
 
     }  // NCHt loop
+
+    // The epsilon tile is pushed once by the reader and read on every NCHt iteration, so it is
+    // waited once up front rather than per iteration. Pop it here to balance the buffer.
+    dfb_eps_obj.pop_front(1);
+
+    // Gamma and beta are read by tile offset on every block of every NCHt row, so the first row
+    // waits block.start() + block.full_block_size() per block and leaves gamma and beta in place
+    // for the rows that follow. That wait grows block by block and ends at the last block's start
+    // plus a whole block, the value total_buffer_size holds: total_with_remainder() reduces to
+    // last_start + blk. It is also what the reader pushes in total, one full block per block.
+    // So pop total_buffer_size once here rather than per block.
+#ifdef FUSE_GAMMA
+    if constexpr (do_gamma) {
+        DataflowBuffer(dfb_gamma).pop_front(static_cast<uint16_t>(total_buffer_size));
+    }
+#endif
+#ifdef FUSE_BETA
+    if constexpr (do_beta) {
+        DataflowBuffer(dfb_beta).pop_front(static_cast<uint16_t>(total_buffer_size));
+    }
+#endif
 }

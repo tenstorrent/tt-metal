@@ -4,9 +4,15 @@
 
 #pragma once
 
+#include <cstdint>
+#include <optional>
+#include <ostream>
 #include <tt-metalium/mesh_coord.hpp>
 
 #include <tt-metalium/experimental/distributed_tensor/topology/distributed_tensor_configs.hpp>
+#include <tt_stl/small_vector.hpp>
+#include <utility>
+#include <vector>
 
 namespace tt::tt_metal {
 class TensorTopology {

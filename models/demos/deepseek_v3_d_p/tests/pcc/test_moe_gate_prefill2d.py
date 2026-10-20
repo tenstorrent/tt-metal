@@ -593,6 +593,95 @@ def test_forward_pass(
     )
 
 
+def _real_rows_per_sp_device(actual_isl: int, n_sp_devices: int, rows_per_device: int) -> list[int]:
+    """Right-padded real-token count on each SP device (sequential layout), as build_padding_config derives it."""
+    return [min(rows_per_device, max(0, actual_isl - d * rows_per_device)) for d in range(n_sp_devices)]
+
+
+@pytest.mark.parametrize(
+    "gate_model, gate_fallback_mode",
+    [case for case in REGULAR_GATE_CASES if case.values[1] == GateComputeMode.GPT_DEVICE],
+)
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links",
+    MESH_CONFIGS,
+    indirect=["mesh_device", "device_params"],
+)
+def test_gpt_device_gate_padded_rows(
+    gate_model, gate_fallback_mode, mesh_device, device_params, num_links, expect_error
+):
+    """GPT_DEVICE's padding-aware path (_sentinel_padded_rows) against the same gate run unpadded.
+
+    Real rows must be bit-identical to the unpadded run (same input, same program) and every padded
+    row must carry the n_routed_experts sentinel that dispatch/combine key on. The same gate instance
+    then sentinels a second, shorter row count, which a mask cached from the first shape would get
+    wrong, and rejects a left-padded call, which the helper cannot express.
+    """
+    random.seed(42)
+    torch.manual_seed(42)
+
+    config = _gate_config(gate_model)
+    config.ccl_config["NUM_LINKS"] = num_links
+    config.ccl_config["TOPOLOGY"] = per_axis_topology(device_params["fabric_config"])[config.ccl_config["TP_AXIS"]]
+    adjust_shapes_for_testing(config, mesh_device)
+
+    gate_w = _zero_bias_if_bias_free(gate_model, create_gate_weights(config.n_routed_experts, config.dim))
+    n_sp_devices = mesh_device.shape[0]
+    rows = config.sp_dim
+    k = config.n_activated_experts
+    torch_input = _make_gate_input(config, rows * n_sp_devices, allow_real_input=False)
+    tt_input = _shard_gate_input(config, mesh_device, torch_input)
+
+    tt_model = TtMoEGatePrefill(
+        config,
+        mesh_device,
+        weight=gate_w["weight"],
+        bias=gate_w["e_score_correction_bias"],
+        fallback_mode=gate_fallback_mode,
+    )
+    sp_composer = get_sp_mesh_composer(mesh_device)
+
+    def compose(t, n_rows):
+        return ttnn.to_torch(t, mesh_composer=sp_composer).view(n_sp_devices, n_rows, -1).to(torch.int64)
+
+    # Leading SP devices full, one a quarter full (so the half-length check below cuts inside it), the rest padding.
+    actual_isl = rows * (n_sp_devices * 5 // 8) + rows // 4
+    real = _real_rows_per_sp_device(actual_isl, n_sp_devices, rows)
+    assert any(0 < r < rows for r in real), f"test needs a partially padded device, got real rows {real}"
+    padding_config = tt_model.build_padding_config(actual_isl)
+
+    _, tt_full_indices, _ = tt_model(tt_input)
+    full = compose(tt_full_indices, rows)
+    assert (full < config.n_routed_experts).all(), "unpadded gate must never emit the sentinel"
+    _, tt_padded_indices, _ = tt_model(tt_input, actual_isl=actual_isl, padding_config=padding_config)
+    padded = compose(tt_padded_indices, rows)
+
+    sentinel = config.n_routed_experts
+    for d, real_d in enumerate(real):
+        assert torch.equal(padded[d, :real_d], full[d, :real_d]), f"SP device {d}: real rows changed"
+        assert (padded[d, real_d:] == sentinel).all(), f"SP device {d}: padded rows not sentinel-marked"
+
+    # Same gate, shorter row count (a short prompt after a long one): masks must follow the shape.
+    half = rows // 2
+    assert half % ttnn.TILE_SIZE == 0, f"{half} rows per device is not tile aligned"
+    _, tt_full_indices, _ = tt_model(tt_input)
+    tt_half = ttnn.slice(tt_full_indices, [0, 0], [half, k])
+    half_full = compose(tt_half, half)
+    tt_half_padded = tt_model._sentinel_padded_rows(tt_half, padding_config)
+    half_padded = compose(tt_half_padded, half)
+    for d, real_d in enumerate(real):
+        keep = min(real_d, half)
+        assert torch.equal(
+            half_padded[d, :keep], half_full[d, :keep]
+        ), f"SP device {d}: real rows changed at {half} rows"
+        assert (
+            half_padded[d, keep:] == sentinel
+        ).all(), f"SP device {d}: padded rows not sentinel-marked at {half} rows"
+
+    with expect_error(ValueError, "right-padding only"):
+        tt_model(tt_input, actual_isl=actual_isl, padding_side="left", padding_config=padding_config)
+
+
 # Hash gate compute modes: HASH_HOST reuses the reference HashRouter on host and ships results to
 # device; HASH_DEVICE runs the fully on-device moe_hash_gate (fused tid2eid[input_ids] lookup).
 HASH_GATE_MODES = [
