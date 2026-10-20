@@ -617,13 +617,16 @@ def ulp_failure_message(
     *stats* lets a caller that already has them skip a second pass, and supplying it
     *asserts they came from the same* ``mask``. *flush_subnormals* carries the same
     obligation against *distance*, which fixed the count printed beside the step size.
-    *rescued* is the lane mask the near-zero floor accepted, which a ranking caller has
+    *rescued* is the lane mask the near-zero floor covers, which a ranking caller has
     already excluded from *mask*; reporting it is what lets a DEBUG export tell a
-    budget-carried pass from a floor-carried one.
+    budget-carried pass from a floor-carried one. Only its lanes past *max_ulp* are
+    counted: a covered lane within the budget needed no rescue.
     """
     if stats is None:
         stats = ulp_stats(distance, mask)
     label = fmt.name if fmt is not None else str(golden.dtype)
+    if rescued is not None and max_ulp is not None:
+        rescued = rescued & ((distance < 0) | (distance > max_ulp))
     floor = "" if rescued is None else f", {int(rescued.sum())} held by the floor"
     if stats["worst_index"] is None:
         if stats["unmeasurable"] == 0:
@@ -740,11 +743,6 @@ def within_ulp(
         flush_subnormals=flush_subnormals,
         # Only with a floor configured: otherwise every verdict in the suite would grow a
         # "0 held by the floor" that says nothing.
-        # Counted only past the step budget: a covered lane within it needed no rescue.
-        rescued=(
-            None
-            if near_zero_atol is None
-            else rescued & selected & ((distance < 0) | (distance > max_ulp))
-        ),
+        rescued=None if near_zero_atol is None else rescued & selected,
     )
     return bool(torch.all(is_valid | ~selected)), message

@@ -202,6 +202,7 @@ def received_inputs(
     """
     from helpers.bfp_format_utils import BFP_BLOCK
     from helpers.golden_generators import quantize_input_to_unpack_format
+    from helpers.sfpu_domains import _dest_acc_flag
 
     # The block quantizer works on whole BFP_BLOCK-lane blocks. A device sweep is a
     # multiple of that; a host test may hand in a fragment, so pad it with zeros, which
@@ -212,14 +213,13 @@ def received_inputs(
     received = quantize_input_to_unpack_format(padded, input_format)[: flat.numel()]
     if (
         input_format == DataFormat.Float32
-        and getattr(dest_acc, "name", dest_acc) == "No"
+        and dest_acc is not None
+        and not _dest_acc_flag(dest_acc)
     ):
         from helpers.golden_generators import truncate_to_dest_width
 
-        width = (
-            DataFormat.Float16
-            if output_format == DataFormat.Float16
-            else DataFormat.Float16_b
+        width = _unpack_format(
+            input_format, output_format or DataFormat.Float16_b, dest_acc
         )
         received = truncate_to_dest_width(received.to(torch.float32), width)
     return received.reshape(src.shape)
@@ -285,16 +285,23 @@ def _dest_dtype(input_format: DataFormat, output_format=None, dest_acc=None):
 
 
 def dest_holds(
-    golden: torch.Tensor, input_format: DataFormat, output_format=None, dest_acc=None
+    golden: torch.Tensor,
+    result: torch.Tensor,
+    input_format: DataFormat,
+    output_format=None,
+    dest_acc=None,
 ) -> torch.Tensor:
-    """Lanes an fp16 Dest (``dest_acc=No``) can hold under a wider output: past 65504
-    or below 6.1e-5 what comes back is the Dest's edge, not the op's answer."""
+    """False on lanes an fp16 Dest (``dest_acc=No``) under a wider output lost: a golden
+    past 65504 answered by NaN or by the golden's sign in the Dest's top binade, or a
+    flush at the 2**-14 boundary (one side zero, the other at most 2**-14). Any other
+    answer -- wrong-signed, or more than 2x short of the edge -- is the op's."""
     from helpers.llk_params import format_dict
+    from helpers.sfpu_domains import _dest_acc_flag
 
     holds = torch.ones(golden.shape, dtype=torch.bool, device=golden.device)
     # A 32-bit Dest at dest_acc=Yes, and a bf16 one (fp32's exponent range), hold
     # every answer the output can.
-    if getattr(dest_acc, "name", dest_acc) != "No":
+    if dest_acc is None or _dest_acc_flag(dest_acc):
         return holds
     dtype = _dest_dtype(input_format, output_format, dest_acc)
     if dtype is not torch.float16:
@@ -303,9 +310,21 @@ def dest_holds(
     out = torch.finfo(format_dict[stimuli_format_for(output_format)])
     if dest.max >= out.max and dest.tiny <= out.tiny:
         return holds
-    magnitude = golden.detach().to(torch.float32).abs()
-    overflowed = magnitude > dest.max
-    flushed = (magnitude > 0) & (magnitude < dest.tiny)
+    g = golden.detach().to(torch.float32)
+    r = result.detach().to(torch.float32)
+    same_sign = torch.signbit(r) == torch.signbit(g)
+    # Past 65504 the golden is a stand-in (131008 for an fp16 inf), not the answer, so an
+    # answer near the edge cannot be ranked against it: I0(13.297) is 65772 and the
+    # kernel's 65440 is its usual 0.5%, which the stand-in reads as 8.4M fp32 steps.
+    top_binade = 2.0 ** (math.frexp(dest.max)[1] - 1)
+    overflowed = (g.abs() > dest.max) & (
+        torch.isnan(r) | (same_sign & (r.abs() >= top_binade))
+    )
+    # The generator zeroes a golden under 2**-14 before its fp16 cast, so the flushes
+    # the sweep sees are pairs across the boundary: 2**-14 against 0, or the reverse.
+    flushed = ((g == 0) & (r != 0) & (r.abs() <= dest.tiny)) | (
+        (r == 0) & (g != 0) & (g.abs() <= dest.tiny)
+    )
     return holds & ~overflowed & ~flushed
 
 
@@ -370,8 +389,8 @@ def measurable_mask(
     own, so there is nothing per-op to look up.
 
     The sweep feeds every non-special value of the format, with no per-op domain
-    clipping -- an op is measured wherever its format can reach. Four lane kinds come
-    back out, none of them a budget question (the last is two, on one boundary):
+    clipping -- an op is measured wherever its format can reach. Five lane kinds come
+    back out, none of them a budget question (the fourth is two, on one boundary):
 
     * either side NaN. :func:`ulp_distance` returns ``UNMEASURABLE`` there, and an op
       undefined at an input (``log`` of a negative) lands here on its own.
@@ -392,15 +411,14 @@ def measurable_mask(
       flushes below 2**-14 and *saturates* past 65504 -- about 44% of the strided lanes,
       whose golden sees the value as fed. Saturation, not a flush, and not the op's.
 
-    * answers the Dest cannot hold (:func:`dest_holds`): past an fp16 Dest's 65504 or
-      below its 6.1e-5 under a wider output, where what comes back is the Dest's
-      overflow or flush, not the op.
+    * answers the Dest lost (:func:`dest_holds`): an fp16 Dest's overflow past 65504
+      or its flush at 2**-14 under a wider output, which is the Dest's, not the op's.
 
     Subnormal *outputs* stay in. Where the golden underflows and the hardware writes
     zero the count is large but the lane is a real one the op produced -- Silu at
     ``x=-87.5`` is that case, and it is the op's own tail, not the unpack path.
 
-    Op-agnostic, so the op's *claim* is not read here: the sweep driver ANDs
+    Op-agnostic, so the op's *claim* is not read here: :func:`ranked_mask` ANDs
     :func:`claimed_lanes` into this mask, so a lane past an argument-reduction limit
     or on a pole sets no budget, just as it is no non-finite failure.
 
@@ -425,22 +443,32 @@ def measurable_mask(
         both_measurable
         & ~nonfinite_mismatches(golden, result)
         & normal_input
-        & dest_holds(golden, input_format, output_format, dest_acc)
+        & dest_holds(golden, result, input_format, output_format, dest_acc)
         & ~padding_lanes(src, input_format)
     )
 
 
-#: The magnitude past which an op's argument reduction stops claiming a finite answer,
-#: per op and per *stimuli* format: ``{op: {stimuli_format: limit}}``. Only ops whose
-#: kernel reduces its argument belong here; anywhere else a non-finite answer against a
-#: finite golden is a failure over the whole format. Sin, Cos and Tan stay within 2
-#: steps out to 65504 and give up past it -- `sin(2.6e28)` returns inf against a golden
-#: of -1, `tan(-3e38)` NaN against -2.4. The limit also bounds the ranking mask, so it
-#: is where accuracy stops, not merely where a non-finite answer starts.
-#:
-#: Keyed on the format the kernel is handed (:func:`_unpack_format`): float16 ends at
-#: 65504, so an fp16 input -- or a Float32 one unpacked into a Float16 Dest -- carries
-#: no limit, and a non-finite answer anywhere in it is a failure.
+def ranked_mask(
+    op,
+    src: torch.Tensor,
+    golden: torch.Tensor,
+    result: torch.Tensor,
+    input_format: DataFormat,
+    output_format=None,
+    dest_acc=None,
+) -> torch.Tensor:
+    """The lanes a sweep ranks: :func:`measurable_mask` within *op*'s :func:`claimed_lanes`."""
+    return measurable_mask(
+        src, golden, result, input_format, output_format, dest_acc
+    ) & claimed_lanes(op, src, input_format, output_format, dest_acc)
+
+
+#: Where Sin, Cos and Tan's range reduction breaks (0-2 steps inside, inf/NaN past it).
+#: It equals fp16's max, so an fp16 input -- or one unpacked into an fp16 Dest -- has none.
+_TRIG_CLAIM_LIMIT = 65504.0
+
+#: ``{op: {format the kernel is handed (:func:`_unpack_format`): limit}}``, bounding
+#: both the ranking mask and the non-finite check.
 _CLAIM_LIMIT: Dict = {}
 
 
@@ -448,8 +476,10 @@ def _claim_limits() -> Dict:
     from helpers.llk_params import MathOperation
 
     if not _CLAIM_LIMIT:
-        # Accurate (0-2 steps) out to 65504; the range reduction breaks past it.
-        wide_formats = {DataFormat.Float16_b: 65504.0, DataFormat.Float32: 65504.0}
+        wide_formats = {
+            DataFormat.Float16_b: _TRIG_CLAIM_LIMIT,
+            DataFormat.Float32: _TRIG_CLAIM_LIMIT,
+        }
         _CLAIM_LIMIT.update(
             {
                 MathOperation.Sin: wide_formats,
@@ -467,22 +497,8 @@ def claimed_lanes(
     output_format=None,
     dest_acc=None,
 ) -> torch.Tensor:
-    """Lanes where *op* claims a finite, accurate answer: the whole format, less the
-    side of each ``_OP_SINGULARITIES`` point the op is undefined on, the point itself
-    for a pole, every non-positive integer for the gamma family
-    (``_NONPOSITIVE_INTEGER_POLES``), and any ``_CLAIM_LIMIT`` for the format the kernel
-    is handed (:func:`_unpack_format`; *input_format*'s own without the other two).
-    Judged on the input as received (:func:`received_inputs`): a Bfp8_b 0.996 that
-    arrives as 1.0 is ``acosh``'s defined side. Read by :func:`nonfinite_failures` and
-    ANDed into the ranking mask by the sweep driver, so the two agree on what the op
-    answers for.
-
-    Deliberately not the functional driver's sampling window, which is where a few
-    thousand points are drawn, not where the op stops being defined: Abs is sampled on
-    (-10, 10) and defined everywhere. Nor ``_SFPU_UNDEFINED_RANGES``, whose holes are
-    guard bands that keep a random draw off a singularity: Reciprocal's is
-    (-1e-6, 1e-6), and ``1/1e-7`` is a finite bf16 answer an inf must not be excused on.
-    """
+    """Lanes where *op* claims an answer, judged on the input as received: all but its
+    singularities' undefined side, its poles, and anything past its ``_CLAIM_LIMIT``."""
     from helpers.sfpu_domains import (
         _NONPOSITIVE_INTEGER_POLES,
         _OP_SINGULARITIES,
@@ -831,9 +847,9 @@ def nonfinite_failures(
       fp16 Dest has no infinity, so ``log(0)`` answers -130560. Only the point: one step
       off it the op claims a finite answer again.
     * **the sweep's own zero padding**, which is not a value it chose to feed.
-    * **an answer the Dest cannot hold** (:func:`dest_holds`), on the same grounds as
-      in the mask: past an fp16 Dest under a wider output, what comes back is the
-      Dest's overflow, not the op's.
+    * **an answer the Dest lost** (:func:`dest_holds`), on the same grounds as in the
+      mask: an fp16 Dest's overflow under a wider output, answered with the golden's
+      sign at the Dest's edge. A wrong-signed or finite small answer stays.
     * **an input the op makes no claim on** (:func:`claimed_lanes`): the op's own limit
       rather than the sweep's -- the undefined side of a registered singularity, or
       past an argument-reduction limit on a format that reaches it. ``Sin`` and ``Cos``
@@ -874,7 +890,7 @@ def nonfinite_failures(
     return (
         nonfinite_mismatches(golden, result)
         & normal_input
-        & dest_holds(golden, input_format, output_format, dest_acc)
+        & dest_holds(golden, result, input_format, output_format, dest_acc)
         & ~excused
         & claimed_lanes(op, src, input_format, output_format, dest_acc)
         & ~(
@@ -978,14 +994,19 @@ class Floored:
     atol: float
 
 
+#: Absorbs the float noise in ``x / scale``, so an *x* already on the grid (6.8e-05)
+#: is not bumped a grid step. It lets the result land a hair below *x*; the
+#: 1.1x headroom applied before rounding is what keeps a floor above its error.
+_ROUND_UP_SLACK = 1e-9
+
+
 def _round_up_sig(x: float, digits: int = 2) -> float:
-    """*x* rounded up to *digits* significant figures, so a printed floor is never below
-    the error it was derived from."""
+    """*x* rounded up to *digits* significant figures (see :data:`_ROUND_UP_SLACK`)."""
     if x == 0:
         return 0.0
     exponent = math.floor(math.log10(x))
     scale = 10.0 ** (exponent - digits + 1)
-    return math.ceil(x / scale - 1e-9) * scale
+    return math.ceil(x / scale - _ROUND_UP_SLACK) * scale
 
 
 def near_zero_floor(
@@ -995,8 +1016,8 @@ def near_zero_floor(
     mask: torch.Tensor,
     out_fmt: DataFormat,
 ) -> Optional[Tuple[int, float]]:
-    """The near-zero floor (``atol``) a demoted cell needs, and the worst lane outside it
-    (``residual``); ``None`` when the cell fits without one (see SFPU_ULP.md)."""
+    """``(residual, atol)``: the worst lane outside the near-zero floor a demoted cell
+    needs, and that floor; ``None`` when the cell fits without one (see SFPU_ULP.md)."""
     from helpers.sfpu_accuracy_budget import usable_budget_ceiling
     from helpers.ulp import _ULP_PROXY_DTYPES, NEAR_ZERO_FRACTION
 
@@ -1266,7 +1287,7 @@ def _verdict(
 
 
 def _decide(
-    cells: Dict[Tuple[str, str, str, str], Union[int, str]],
+    cells: Dict[Tuple[str, str, str, str], Union[int, str, Floored]],
     op_name: Optional[str] = None,
 ) -> Dict[Tuple, Tuple]:
     """Each measured cell as ``(verdict, measured, extra)``; an unmeasurable one as

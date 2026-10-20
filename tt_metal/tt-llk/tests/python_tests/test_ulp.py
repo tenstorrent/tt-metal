@@ -999,7 +999,7 @@ def test_every_floor_covered_lane_is_reported_covered_even_within_budget():
     way. A lane outside the band is never covered, in budget or not."""
     golden = _t([100.0, 1e-8, 50.0], torch.float32)
     result = golden.clone()
-    result[2] = 50.00001  # outside the band, 2 steps
+    result[2] = 50.00001  # outside the band, 3 steps
     _, _, covered = ulp_elementwise_valid(golden, result, 4, near_zero_atol=1e-7)
     assert covered.tolist() == [False, True, False]
 

@@ -28,6 +28,7 @@ from helpers.ulp_sweep import (
     measurable_mask,
     merge_measured,
     nonfinite_failures,
+    ranked_mask,
     received_inputs,
     record,
     stale_excuses,
@@ -42,12 +43,17 @@ _OP = MathOperation.Abs
 _CELL = ("Float16", "Float16", "No", "No")
 
 
-def _record_full_grid(op, in_fmt, out_fmt, value):
-    """*value* on every ``approx`` x ``dest`` cell of ``in_fmt -> out_fmt``: the whole
-    grid the emitter refuses to write without."""
+def _record_full_grid(op, in_fmt, out_fmt, value, floor=None):
+    """*value* (with *floor*) on every ``approx`` x ``dest`` cell of ``in_fmt -> out_fmt``:
+    the whole grid the emitter refuses to write without."""
     for approx in ("No", "Yes"):
         for dest in ("No", "Yes"):
-            record(op, (in_fmt, out_fmt, approx, dest), value)
+            record(op, (in_fmt, out_fmt, approx, dest), value, floor=floor)
+
+
+#: A floored reading: the worst lane over every lane, and ``(residual, atol)`` for the
+#: lanes outside the floor.
+_WORST, _FLOOR = 14337, (2, 2.4e-7)
 
 
 #: One op block with a row of each kind write_table has to tell apart.
@@ -248,9 +254,7 @@ def test_a_row_carrying_a_floor_is_regenerated_from_the_measurement(table):
         "  - {in: Float16, out: Float16, max_ulp: 2, near_zero_atol: 5.59e-07}  # floor\n",
         encoding="utf-8",
     )
-    for approx in ("No", "Yes"):
-        for dest in ("No", "Yes"):
-            record("Gelu", ("Float16", "Float16", approx, dest), 5)
+    _record_full_grid("Gelu", "Float16", "Float16", 5)
     assert write_table(table, "today") == (1, [])
     text = table.read_text()
     assert "near_zero_atol" not in text
@@ -273,7 +277,7 @@ def test_an_op_wide_declared_tolerance_is_not_shadowed_by_a_rendered_row(
     any one measured cell -- but every rendered row is more specific than it, and a bare
     `metric: tolerance` there resolves to `atol=None`: the driver's 0.05, not the 0.13
     the table says the LUT needs. Such a row answers for every measured cell, so the op
-    is kept verbatim like a floor."""
+    is kept verbatim."""
     anchor = (
         ""
         if not wildcard.startswith("*")
@@ -517,9 +521,9 @@ def test_the_sweeps_own_zero_padding_is_not_data():
 
 
 def test_an_input_past_a_claim_limit_is_not_a_nonfinite_failure():
-    """`Sin` and `Cos` disagree on ~21,000 bf16 lanes past [-pi, pi] -- an argument
-    reduction giving up, not a regression. The budget is still measured everywhere;
-    only the non-finite answer needs the op to have been claiming something."""
+    """`Sin` and `Cos` disagree on bf16 lanes past +/-65504 -- an argument reduction
+    giving up, not a regression -- and those lanes leave the claim, so they are neither
+    ranked nor a non-finite failure."""
     fmt = DataFormat.Float16_b
     far = torch.tensor([2.6e28], dtype=torch.bfloat16)
     golden = torch.tensor([-1.0], dtype=torch.bfloat16)
@@ -531,7 +535,7 @@ def test_an_input_past_a_claim_limit_is_not_a_nonfinite_failure():
     assert not nonfinite_failures(
         MathOperation.Sin, far, golden, result, DataFormat.Bfp8_b, fmt
     ).any()
-    # Inside [-pi, pi] the same disagreement is a failure.
+    # Inside +/-65504 the same disagreement is a failure.
     assert nonfinite_failures(
         MathOperation.Sin,
         torch.tensor([1.0], dtype=torch.bfloat16),
@@ -549,9 +553,7 @@ def test_the_claim_limit_follows_what_the_stimuli_format_can_reach(op):
     """`sin(2.6e28)` is a bfloat16 value. float16 ends at 65504, inside the range the
     kernel reduces -- Sin and Cos read 1-4 steps over the whole fp16 format -- so an
     fp16 input carries no limit, and a non-finite answer at its very top is a failure.
-    The bf16/fp32 limit is 65504, where the reduction really breaks. The format that
-    counts is the one the kernel is handed: a Float32 input into a Float16 output at
-    ``dest_acc=No`` unpacks into a Float16 Dest, so it carries no limit either."""
+    The bf16/fp32 limit is 65504, where the reduction really breaks."""
     fmt = DataFormat.Float16
     top = torch.tensor([65504.0, 4.0], dtype=torch.float16)
     golden = torch.tensor([-1.0, -1.0], dtype=torch.float16)
@@ -570,25 +572,18 @@ def test_the_claim_limit_follows_what_the_stimuli_format_can_reach(op):
         DataFormat.Float16_b,
         DataFormat.Float16_b,
     ).tolist() == [False, True]
-    # Float32 into a Float16 output: 4.0 is claimed whichever format the kernel is
-    # handed, so an inf there fails at either Dest width.
+    # Float32 into a Float16 output: 4.0 is claimed at either Dest width.
     wide = top.to(torch.float32)
-    for dest, excused in (
-        (DestAccumulation.Yes, False),
-        (DestAccumulation.No, False),
-    ):
-        assert (
-            nonfinite_failures(
-                op,
-                wide,
-                golden,
-                result,
-                DataFormat.Float32,
-                DataFormat.Float16,
-                dest_acc=dest,
-            ).tolist()[1]
-            is not excused
-        ), dest
+    for dest in DestAccumulation:
+        assert nonfinite_failures(
+            op,
+            wide,
+            golden,
+            result,
+            DataFormat.Float32,
+            DataFormat.Float16,
+            dest_acc=dest,
+        ).tolist()[1], dest
 
 
 def test_a_block_float_input_the_quantizer_flushes_is_the_flush_not_the_op():
@@ -1206,8 +1201,8 @@ def test_emit_writes_on_a_clean_wormhole_session(table):
 
 def test_a_whole_table_emit_over_the_real_table_ends_green(tmp_path, monkeypatch):
     """Every op the emit sweeps, measured on every cell, written into a copy of the
-    checked-in table. The ops whose blocks carry a hand-maintained row -- a
-    op-wide `atol`/`rtol` anchors (GeluAppx, SigmoidAppx) -- are kept verbatim by
+    checked-in table. The ops whose blocks carry a hand-maintained row -- an
+    op-wide `atol`/`rtol` anchor (GeluAppx, SigmoidAppx) -- are kept verbatim by
     design, so they are named in the summary rather than failing the run: as a refusal
     they turned every whole-table emit red, and threw the rest of its verdict away."""
     import shutil
@@ -1438,44 +1433,64 @@ def test_the_polygamma_golden_is_the_pole_on_every_nonpositive_integer():
         assert golden._polygamma(-2.5) == want, order
 
 
-def test_a_lane_the_dest_cannot_hold_is_neither_ranked_nor_a_failure():
-    """A Float16 input runs on an fp16 Dest. Under a Float32 output an answer past
-    65504 or below 6.1e-5 is the Dest's overflow or flush, not the op's; the golden's
-    finite 131008 substitute for an fp16 infinity is the overflow case in disguise.
-    Under a Float16 output the Dest is as wide as the output and nothing is excluded,
-    and a bf16 Dest has fp32's range."""
+def test_a_lane_the_dest_lost_is_neither_ranked_nor_a_failure():
+    """A Float16 input runs on an fp16 Dest. Under a Float32 output a golden past 65504
+    answered with its sign in the Dest's top binade (65536, inf, or I0's 65440 for a true
+    65772), or with NaN, is the Dest's overflow, not the op's; the golden's finite 131008
+    for an fp16 infinity is the overflow in disguise. So is a flush across 2**-14, either way round. Under a
+    Float16 output the Dest is as wide as the output and nothing is excluded, and a
+    bf16 Dest has fp32's range."""
     from helpers.ulp_sweep import dest_holds
 
+    tiny = 2.0**-14
     golden = torch.tensor(
-        [70000.0, 131008.0, 1e-5, 0.0, 1.0, 65504.0], dtype=torch.float32
+        [70000.0, 131008.0, -131008.0, 131008.0, tiny, 0.0, 1.0, 65504.0],
+        dtype=torch.float32,
     )
-    assert dest_holds(
-        golden, DataFormat.Float16, DataFormat.Float32, DestAccumulation.No
-    ).tolist() == [False, False, False, True, True, True]
-    assert dest_holds(
-        golden, DataFormat.Float16, DataFormat.Float16, DestAccumulation.No
-    ).all()
-    assert dest_holds(
-        golden, DataFormat.Float16_b, DataFormat.Float32, DestAccumulation.No
-    ).all()
-    assert dest_holds(golden, DataFormat.Float16).all()  # variant not named
+    result = torch.tensor(
+        [65536.0, math.inf, math.nan, 65440.0, 0.0, tiny, 1.0, 65504.0],
+        dtype=torch.float32,
+    )
+    lost = [False] * 6 + [True, True]
+    fp16, fp32, no = DataFormat.Float16, DataFormat.Float32, DestAccumulation.No
+    assert dest_holds(golden, result, fp16, fp32, no).tolist() == lost
+    assert dest_holds(golden, result, fp16, fp16, no).all()
+    assert dest_holds(golden, result, DataFormat.Float16_b, fp32, no).all()
+    assert dest_holds(golden, result, fp16).all()  # variant not named
 
-    src = torch.full((6,), 2.0, dtype=torch.float16)
-    result = golden.clone()
-    result[0], result[1], result[2] = 65536.0, 66048.0, 0.0
-    mask = measurable_mask(
-        src, golden, result, DataFormat.Float16, DataFormat.Float32, DestAccumulation.No
-    )
-    assert mask.tolist() == [False, False, False, True, True, True]
+    src = torch.full((8,), 2.0, dtype=torch.float16)
+    assert measurable_mask(src, golden, result, fp16, fp32, no).tolist() == lost
+    # The overflow lanes disagree about being non-finite, and the Dest excuses them.
     assert not nonfinite_failures(
-        MathOperation.Exp,
-        src,
-        golden,
-        result,
-        DataFormat.Float16,
-        DataFormat.Float32,
-        dest_acc=DestAccumulation.No,
+        MathOperation.Exp, src, golden, result, fp16, fp32, dest_acc=no
     ).any()
+
+
+def test_an_answer_the_dest_did_not_saturate_to_stays_judged():
+    """Only an answer at the Dest's edge is excused. A wrong-signed answer against an
+    overflowed golden (Expm1Cw's #54770: 131008 against -1 or -131008), a same-signed
+    one more than 2x short of the edge, an answer 0 where the golden is a normal 1e-4,
+    and a pair that are both nonzero are the op's, and ranked; an inf against a golden of 1.0, or of the wrong
+    sign against 131008, is a non-finite failure."""
+    from helpers.ulp_sweep import dest_holds
+
+    tiny = 2.0**-14
+    golden = torch.tensor(
+        [131008.0, 131008.0, 70000.0, 1e-4, tiny, 1.0, 131008.0], dtype=torch.float32
+    )
+    result = torch.tensor(
+        [-1.0, -131008.0, 30000.0, 0.0, 3 * tiny, math.inf, -math.inf],
+        dtype=torch.float32,
+    )
+    fp16, fp32, no = DataFormat.Float16, DataFormat.Float32, DestAccumulation.No
+    assert dest_holds(golden, result, fp16, fp32, no).all()
+
+    src = torch.full((7,), 2.0, dtype=torch.float16)
+    ranked = measurable_mask(src, golden, result, fp16, fp32, no)
+    assert ranked.tolist() == [True] * 5 + [False, False]
+    assert nonfinite_failures(
+        MathOperation.Exp, src, golden, result, fp16, fp32, dest_acc=no
+    ).tolist() == [False] * 5 + [True, True]
 
 
 def test_the_near_zero_floor_is_derived_from_the_band_and_capped():
@@ -1531,11 +1546,7 @@ def test_a_floored_cell_is_written_with_its_floor_and_read_back(table):
     unfloored maximum. The loader accepts the row as a ULP contract with a floor."""
     from helpers.sfpu_accuracy_budget import _load_table
 
-    for approx in ("No", "Yes"):
-        for dest in ("No", "Yes"):
-            record(
-                "Gelu", ("Float16", "Float16", approx, dest), 14337, floor=(2, 2.4e-7)
-            )
+    _record_full_grid("Gelu", "Float16", "Float16", _WORST, floor=_FLOOR)
     assert write_table(table, "today") == (1, [])
     (row,) = [r for r in _rows(table) if r.startswith("- {in: Float16, out: Float16, ")]
     assert row.startswith(
@@ -1558,13 +1569,14 @@ def test_a_32bit_or_bf16_dest_holds_every_answer_the_output_can():
     from helpers.ulp_sweep import dest_holds
 
     golden = torch.tensor([70000.0, math.inf, 3.4e38, 1e-5], dtype=torch.float32)
+    result = torch.zeros_like(golden)  # what an fp16 Dest's flush would hand back
     for in_fmt, dest in (
         (DataFormat.Float16, DestAccumulation.Yes),
         (DataFormat.Float16_b, DestAccumulation.No),
         (DataFormat.Float16_b, DestAccumulation.Yes),
         (DataFormat.Float32, DestAccumulation.No),
     ):
-        assert dest_holds(golden, in_fmt, DataFormat.Float32, dest).all(), (
+        assert dest_holds(golden, result, in_fmt, DataFormat.Float32, dest).all(), (
             in_fmt,
             dest,
         )
@@ -1592,13 +1604,13 @@ def test_a_tied_reading_resolves_the_same_whichever_arrives_first():
 
     key = ("Float16_b", "Float16_b", "No", "No")
     outcomes = []
-    for order in ((None, (2, 2.4e-7)), ((2, 2.4e-7), None)):
+    for order in ((None, _FLOOR), (_FLOOR, None)):
         MEASURED.clear()
         for floor in order:
-            record("Abs", key, 14337, floor)
+            record("Abs", key, _WORST, floor)
         outcomes.append(MEASURED["Abs"][key])
     MEASURED.clear()
-    assert outcomes == [14337, 14337] and not isinstance(outcomes[0], Floored)
+    assert outcomes == [_WORST, _WORST] and not isinstance(outcomes[0], Floored)
 
 
 def test_the_trig_claim_reaches_65504_on_a_wide_input():
@@ -1615,14 +1627,22 @@ def test_the_trig_claim_reaches_65504_on_a_wide_input():
         DestAccumulation.No,
     )
     assert claimed.tolist() == [True, True, True, False]
+    # ranked_mask is the measurable lanes within that claim -- what the sweep ranks.
+    golden = torch.zeros(4, dtype=torch.bfloat16)
+    ranked = ranked_mask(
+        MathOperation.Sin,
+        src,
+        golden,
+        golden.clone(),
+        DataFormat.Float16_b,
+        DataFormat.Float16_b,
+        DestAccumulation.No,
+    )
+    assert ranked.tolist() == [True, True, True, False]
 
 
 def test_a_floor_that_still_leaves_the_cell_over_the_ceiling_demotes_and_says_so(table):
-    for approx in ("No", "Yes"):
-        for dest in ("No", "Yes"):
-            record(
-                "Gelu", ("Float16", "Float16", approx, dest), 14337, floor=(100, 1e-3)
-            )
+    _record_full_grid("Gelu", "Float16", "Float16", _WORST, floor=(100, 1e-3))
     write_table(table, "today")
     (row,) = [r for r in _rows(table) if r.startswith("- {in: Float16, out: Float16, ")]
     assert "metric: tolerance}" in row and "near_zero_atol" not in row
@@ -1638,23 +1658,23 @@ def test_floored_measurements_survive_the_xdist_merge():
 
     MEASURED.clear()
     key = ("Float16", "Float16", "No", "No")
-    record("Gelu", key, 14337, floor=(2, 2.4e-7))
+    record("Gelu", key, _WORST, floor=_FLOOR)
     exported = export_measured()
     MEASURED.clear()
     merge_measured(exported)
-    assert MEASURED["Gelu"][key] == Floored(14337, 2, 2.4e-7)
+    assert MEASURED["Gelu"][key] == Floored(_WORST, *_FLOOR)
     merge_measured(exported)
-    assert MEASURED["Gelu"][key] == Floored(14337, 2, 2.4e-7)
+    assert MEASURED["Gelu"][key] == Floored(_WORST, *_FLOOR)
     MEASURED.clear()
 
 
 @pytest.mark.parametrize(
     "first, second",
     [
-        ((14337, (2, 2.4e-7)), (5, None)),
-        ((5, None), (14337, (2, 2.4e-7))),
-        ((14337, (2, 2.4e-7)), (14337, (3, 1e-7))),
-        ((5, (1, 1e-7)), (14337, (2, 2.4e-7))),
+        ((_WORST, _FLOOR), (5, None)),
+        ((5, None), (_WORST, _FLOOR)),
+        ((_WORST, _FLOOR), (_WORST, (3, 1e-7))),
+        ((5, (1, 1e-7)), (_WORST, _FLOOR)),
     ],
 )
 def test_differing_readings_of_a_floored_cell_drop_the_floor(first, second):
@@ -1665,5 +1685,5 @@ def test_differing_readings_of_a_floored_cell_drop_the_floor(first, second):
     key = ("Float16", "Float16", "No", "No")
     for max_ulp, floor in (first, second):
         record("Gelu", key, max_ulp, floor=floor)
-    assert MEASURED["Gelu"][key] == 14337
+    assert MEASURED["Gelu"][key] == _WORST
     MEASURED.clear()

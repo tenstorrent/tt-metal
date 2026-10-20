@@ -75,12 +75,11 @@ from helpers.test_variant_parameters import (
 from helpers.ulp import ulp_distance, ulp_stats
 from helpers.ulp_budget_diff import RECORDED_SKIP
 from helpers.ulp_sweep import (
-    claimed_lanes,
     golden_input,
-    measurable_mask,
     near_zero_floor,
     nonfinite_failures,
     nonfinite_reason,
+    ranked_mask,
     stimuli_format_for,
     sweep_cells,
     sweep_spec,
@@ -245,9 +244,7 @@ def test_unary_sfpu_ulp_sweep(mathop, in_fmt, out_fmt, approx_mode, dest_acc):
     # argument-reduction limit or on a pole is one the op answers nothing for, so it
     # can no more set a budget than be a non-finite failure (which already read the
     # claim). Sin's and Cos's budgets were set by |x| ~ 1e13 lanes answering 2e38.
-    mask = measurable_mask(
-        src, golden, result, in_fmt, out_fmt, dest_acc
-    ) & claimed_lanes(mathop, src, in_fmt, out_fmt, dest_acc)
+    mask = ranked_mask(mathop, src, golden, result, in_fmt, out_fmt, dest_acc)
     overflowed = nonfinite_failures(
         mathop,
         src,

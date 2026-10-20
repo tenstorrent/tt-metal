@@ -1018,10 +1018,12 @@ def test_enrolled_ops_is_sorted_and_stable():
 #: negative and small positive x. Recorded, not fixed; tracked: Digamma #51128, Softplus
 #: #51866 (input clamps, under #52178) and Lgamma #55356.
 #:
-#: Erfc, Polygamma and Expm1Cw left this set with the claim applied to the ranking, the
+#: Erfc and Polygamma left this set with the claim applied to the ranking, the
 #: Dest-capacity rule and the emitted floor: each has cells inside the ceiling now and
 #: the rest fall through to tolerance, like Sign, Heaviside, GeluTanh, Tanhshrink,
-#: Xielu, I1 and SfpuElwmul.
+#: Xielu, I1 and SfpuElwmul. Expm1Cw stays: its only gateable cells were Float16 at
+#: dest_acc=No, where it answers the golden's overflow stand-in negated (-130560 for
+#: 130560, -131008 for 131008: #54770), the op's sign flip and not the Dest's overflow.
 ONLY_EVER_TOLERANCE = frozenset(
     {
         MathOperation.SigmoidAppx,
@@ -1031,6 +1033,7 @@ ONLY_EVER_TOLERANCE = frozenset(
         MathOperation.Softplus,
         MathOperation.Lgamma,
         MathOperation.Digamma,
+        MathOperation.Expm1Cw,
     }
 )
 
@@ -2183,9 +2186,9 @@ def _acknowledges(key, cell) -> bool:
 
 #: Swept cells of an enrolled unary op that resolve to no row of the op's own, with why.
 #: Empty: every enrolled op covers every cell the sweep drives. The emitter writes whole
-#: grids, so a hole can only open where it keeps a block verbatim (a floor row) and the
-#: sweep's format set then grows -- the cell is measured, resolves to the global default,
-#: and nothing holds it. A cell listed here is a decision, with its reason, not a gap.
+#: grids, so a hole can only open where it keeps a block verbatim (an op-wide
+#: `atol`/`rtol` anchor) and the sweep's format set then grows -- the cell is measured,
+#: resolves to the global default, and nothing holds it. A cell listed here is a decision, with its reason, not a gap.
 _UNRESOLVED_SWEPT_CELLS: dict = {}
 
 
