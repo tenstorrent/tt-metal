@@ -12,7 +12,7 @@ import types
 import pytest
 import torch
 
-from models.demos.blackhole.qwen36.tt.gdn.tp import fresh_row_select, spec_conv_sel
+from models.demos.blackhole.qwen36.tt.gdn.tp import TPGatedDeltaNet, fresh_row_select, spec_conv_sel
 from models.demos.blackhole.qwen36.tt.spec_engine import (
     PLACEHOLDER_TOKEN_ID,
     MTPSpecEngine,
@@ -104,6 +104,45 @@ def test_flag_read(monkeypatch):
         else:
             monkeypatch.setenv("QWEN36_SPEC_FAST_JOIN", val)
         assert spec_fast_join_enabled() is want
+
+
+# --------------------------------------------------------------------------- #
+# The masked-seed predicate
+# --------------------------------------------------------------------------- #
+def _masked_layer(**kw):
+    """A layer stand-in with the host state seed_masked_ok reads (the all-good values unless overridden)."""
+    d = dict(
+        _spec_ring=object(),
+        _conv_hist_rm=object(),
+        B=8,
+        _decode_B=8,
+        _conv_fmt="both",
+        _conv_taps_stale=False,
+        _rec_row_layout_ok=lambda: True,
+        _hist_hook_active=lambda: True,
+    )
+    d.update(kw)
+    return types.SimpleNamespace(**d)
+
+
+@pytest.mark.parametrize(
+    "kw,want",
+    [
+        ({}, True),
+        (dict(_conv_fmt="hist"), True),
+        (dict(_conv_fmt="packed"), False),  # needs the eager unpack first
+        (dict(_conv_fmt="states"), False),  # the "win" route
+        (dict(_conv_taps_stale=True), False),
+        (dict(B=1), False),  # a prefill scratch binding
+        (dict(_conv_hist_rm=None), False),
+        (dict(_spec_ring=None), False),
+        (dict(_hist_hook_active=lambda: False), False),
+        (dict(_rec_row_layout_ok=lambda: False), False),
+    ],
+)
+def test_seed_masked_ok_predicate(kw, want):
+    """seed_spec_rows_masked runs only on the pure "hist" taps route with nothing eager to do first."""
+    assert bool(TPGatedDeltaNet.seed_masked_ok(_masked_layer(**kw))) is want
 
 
 # --------------------------------------------------------------------------- #

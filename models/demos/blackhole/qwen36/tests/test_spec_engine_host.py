@@ -510,6 +510,7 @@ def test_propose_skip_plan():
 
 def test_mark_cleared_on_release_and_prefill(expect_error):
     def mk():
+        gens = [0, 0]
         return types.SimpleNamespace(
             _active={0},
             _fresh={},
@@ -520,6 +521,7 @@ def test_mark_cleared_on_release_and_prefill(expect_error):
             _no_draft={0},
             _speculated={0},
             _withheld_streak={0: 5},
+            _row_gens=lambda: gens,
             B=1,
             model=types.SimpleNamespace(),
             _last_hidden=[],

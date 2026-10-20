@@ -123,6 +123,13 @@ def spec_chain_sampled_enabled():
     return os.environ.get("QWEN36_SPEC_CHAIN_SAMPLED", "0") == "1"
 
 
+def spec_prefill_overlap_enabled():
+    """QWEN36_SPEC_PREFILL_OVERLAP (default on; "0" turns it off; needs QWEN36_SPEC_CHAIN=1 and QWEN36_SPEC_FUSED=1): the plugin may call prefill_forward
+    while one deferred (defer_read=True) verify step is still pending, and finish that step (propose_draft_tokens with its handle) after
+    the prefill. Read as the model capability supports_prefill_over_pending_spec."""
+    return os.environ.get("QWEN36_SPEC_PREFILL_OVERLAP", "1") != "0"
+
+
 def spec_fused_audit_enabled():
     """QWEN36_SPEC_FUSED_AUDIT (default "1" in stage S2): every sampled fused step reads back the top-k union (two extra
     reads) and checks the device commit against spec_fused_sampled.fused_sampled_reference."""
@@ -204,6 +211,16 @@ def spec_join_fast_enabled():
     MTP slot Tp-1 KV in ONE batched drafter decode call instead of one call per row (work/notes/55_mtp_join_fast.md).
     The KV written is the same; the staged tables of the other rows are refreshed by the next propose."""
     return os.environ.get("QWEN36_SPEC_JOIN_FAST", "1") != "0"
+
+
+def spec_join_trace_enabled():
+    """QWEN36_SPEC_JOIN_TRACE (default on; "0" turns it off): the GDN part of a join seed (MTPSpecEngine._seed_fresh_rows,
+    QWEN36_SPEC_FAST_JOIN=1) replays one captured trace per conv-window parity (a fixed 48-layer op sequence,
+    TPGatedDeltaNet._seed_masked_impl, selected by a fresh-row mask) instead of enqueueing seed_spec_rows_select eagerly
+    for every layer. A join the trace cannot serve (a layer's taps route is not "hist", mixed parity, no trace) runs
+    the eager loop as before. Read when the traces are captured and on every join; "0" keeps the eager seed byte for byte.
+    """
+    return os.environ.get("QWEN36_SPEC_JOIN_TRACE", "1") != "0"
 
 
 def spec_fast_prefill_enabled():

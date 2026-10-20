@@ -376,6 +376,18 @@ def fresh_row_select(fresh, n_users, T, kc):
     return sel
 
 
+def fresh_row_mask(fresh, n_users, Nv, Dk):
+    """Row mask of ``TPGatedDeltaNet.seed_spec_rows_masked`` (QWEN36_SPEC_JOIN_TRACE=1): torch.float32
+    [1, n_users*Nv, Dk, 1], 1.0 on the Nv head blocks of every fresh user (rows u*Nv .. (u+1)*Nv-1), 0.0 elsewhere.
+    The user index space is the ring / rec_state row space of fresh_row_select (engine rows)."""
+    f = {int(u) for u in fresh}
+    assert all(0 <= u < n_users for u in f), f"fresh rows {sorted(f)} outside range({n_users})"
+    m = torch.zeros(1, n_users * Nv, Dk, 1, dtype=torch.float32)
+    for u in sorted(f):
+        m[:, u * Nv : (u + 1) * Nv] = 1.0
+    return m
+
+
 def load_gdn_weights_tp(mesh, sd, args, cache_dir=None):
     """Shard one GDN layer's linear_attn.* weights across the mesh."""
     tp = args.num_devices
@@ -3493,14 +3505,84 @@ class TPGatedDeltaNet:
         ttnn.copy(new, win)  # in place: the window buffer keeps its address
         ttnn.deallocate(new)
 
-    def warmup_fast_seed(self, sel):
+    def seed_masked_ok(self):
+        """Host predicate for seed_spec_rows_masked: True only when the taps would come from the "hist" route and
+        nothing eager has to run first (no unpack of a packed history, no stale taps, the decode binding). The engine
+        calls seed_spec_rows_select when this is False."""
+        return (
+            self._spec_ring is not None
+            and self._rec_row_layout_ok()
+            and self._conv_hist_rm is not None
+            and self.B == self._decode_B
+            and self._hist_hook_active()
+            and self._conv_fmt in ("both", "hist")
+            and not self._conv_taps_stale
+        )
+
+    def seed_spec_rows_masked(self, mask, sel):
+        """seed_spec_rows_select with a FIXED op sequence (no host branch on which users are fresh), so the 48-layer
+        seed can be captured in a trace. ``mask`` is a persistent device tensor, fp32 TILE, shape [1, B*Nv, Dk, 1]
+        (the column-broadcast shape of ttnn.where against the slot-0 image): 1.0 for the Nv head blocks of every fresh
+        user, 0.0 elsewhere. ``sel`` is the same one-hot fresh_row_select tensor as seed_spec_rows_select takes.
+          ring   new = where(mask, rec_state, ring slot 0) over every user (an exact select: a non-fresh user's blocks
+                 are bit-identical to before, nan / inf included), then ONE slice_write of the whole slot 0;
+          E_prev the "hist" taps route + concat + matmul(sel) + copy, as in seed_spec_rows_select.
+        Needs seed_masked_ok(). Writes verify_win_cur(): the window parity is host state baked into a trace, so the
+        engine captures one trace per parity. Every temporary is freed, so each call allocates the same way."""
+        assert (
+            self.seed_masked_ok()
+        ), "seed_spec_rows_masked: the hist taps route is not ready (use seed_spec_rows_select)"
+        self._seed_masked_impl(mask, sel)
+
+    def _seed_masked_impl(self, mask, sel):
+        """The op sequence of seed_spec_rows_masked, without the host predicate (warmup compiles it with it unmet).
+        Per layer, fp32 rec_state: slice, where, to_memory_config, slice_write, to_layout (taps), concat, matmul,
+        copy = 8 ops (bf16 rec_state adds one typecast)."""
+        assert self._spec_ring is not None, "seed_spec_rows_masked before prepare_spec_verify"
+        B, Nv, Dk, Dv = self.B, self.Nv, self.Dk, self.Dv
+        T = self._spec_shape[1]
+        mc = ttnn.DRAM_MEMORY_CONFIG
+        ring4 = ttnn.reshape(self._spec_ring, (1, T * B * Nv, Dk, Dv))  # view, as in _write_ring_slot0_all
+        assert (
+            ring4.buffer_address() == self._spec_ring.buffer_address()
+        ), "the rank-4 ring view copied instead of aliasing; slice_write would write to a temporary"
+        old = ttnn.slice(ring4, (0, 0, 0, 0), (1, B * Nv, Dk, Dv), memory_config=mc)
+        src = ttnn.reshape(self.rec_state, (1, B * Nv, Dk, Dv))
+        cast = None if src.dtype == ttnn.float32 else ttnn.typecast(src, ttnn.float32)
+        new = ttnn.where(mask, src if cast is None else cast, old, memory_config=mc)
+        if cast is not None:
+            ttnn.deallocate(cast)
+        ttnn.deallocate(old)
+        sharded = ttnn.to_memory_config(new, self._row_shard_memcfg(B * Nv * Dk, Dv))
+        ttnn.deallocate(new)
+        ttnn.experimental.slice_write(sharded, ring4, [0, 0, 0, 0], [1, B * Nv, Dk, Dv], [1, 1, 1, 1])
+        ttnn.deallocate(sharded)
+        taps = self._fresh_taps_tile(route="hist")  # [B, K-1, C]
+        win = self.verify_win_cur()
+        cat = ttnn.concat([win, taps], dim=1, memory_config=mc)
+        ttnn.deallocate(taps)
+        new_win = ttnn.matmul(sel, cat, compute_kernel_config=self._cfg_onehot, memory_config=mc)
+        ttnn.deallocate(cat)
+        ttnn.copy(new_win, win)  # in place: the window buffer keeps its address
+        ttnn.deallocate(new_win)
+
+    def warmup_fast_seed(self, sel, mask=None):
         """Warmup only (spec engine, after prepare_spec_verify, before any capture): run seed_spec_rows_select for every
         single user and for all users at once, and build the taps tile through BOTH routes, so every program the fast
         seed can run after capture is compiled now. The state is warmup state here; the ring and window contents are
-        overwritten by the real seed."""
+        overwritten by the real seed. With ``mask`` (see seed_spec_rows_masked) it also runs the masked seed once per
+        window parity (the parity is restored), so its programs and both window buffers are touched before capture."""
         for u in range(self.B):
             self.seed_spec_rows_select([u], sel)
         self.seed_spec_rows_select(range(self.B), sel)
+        if mask is not None and self._conv_hist_rm is not None:
+            par = self._spec_win_par
+            try:
+                for p in (0, 1) if self._spec_fused else (par,):
+                    self._spec_win_par = p
+                    self._seed_masked_impl(mask, sel)
+            finally:
+                self._spec_win_par = par
         for route in ("hist", "win"):
             t = self._fresh_taps_tile(route=route)
             if t is not None:

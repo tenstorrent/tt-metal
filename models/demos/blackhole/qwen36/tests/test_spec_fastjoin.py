@@ -245,3 +245,64 @@ def test_layer_fast_seed_matches_slow_seed(mesh_device, fused, B, T, reset_seeds
     assert torch.isfinite(out_b).all()
     for t in (sel, sel_all):
         ttnn.deallocate(t)
+
+
+@torch.no_grad()
+@parametrize_mesh_tp()
+@pytest.mark.parametrize("par", [0, 1])
+@pytest.mark.parametrize(
+    "fresh", [[0], [3], [0, 5], [1, 2, 6], list(range(8))], ids=["r0", "r3", "r0_5", "r1_2_6", "all"]
+)
+def test_layer_masked_seed_matches_select_seed(mesh_device, fresh, par, reset_seeds, ensure_gc, monkeypatch):
+    """seed_spec_rows_masked (fixed op sequence, [1, B*Nv, Dk, 1] fp32 row mask) against seed_spec_rows_select on a twin
+    layer: ring slot 0 of EVERY user and both window buffers are bit-identical, for each window parity."""
+    mesh = mesh_device
+    mesh.enable_program_cache()
+    B, T = 8, 4
+    args, ga, gb = _build_twins(mesh, B, True, monkeypatch)
+    nd = mesh.get_num_devices()
+    Nv, Dk, Dv, C, K = ga.Nv, ga.Dk, ga.Dv, ga.qkv_dim_tp, ga.K
+    comp = tp_composer(mesh)
+    g_t = torch.Generator().manual_seed(7 + par)
+    rec0 = [0.1 * torch.randn(1, Nv, Dk, Dv, generator=g_t) for _ in range(B)]
+    hist0 = [torch.randn(1, 3, C, generator=g_t).to(torch.bfloat16) for _ in range(B)]
+    for g in (ga, gb):
+        _seed_durable(mesh, g, rec0, hist0)
+        g.prepare_spec_verify(B, T)
+        g.seed_spec_state()
+    sel = replicate_to_device(mesh, fresh_row_select(fresh, B, T, K))
+    m = torch.zeros(1, B * Nv, Dk, 1)
+    for u in fresh:
+        m[:, u * Nv : (u + 1) * Nv] = 1.0
+    mask = _rep_f32(mesh, m)
+    gb.warmup_fast_seed(sel, mask)  # compiles every program; restores the parity
+    for g in (ga, gb):
+        g.seed_spec_state()
+    # running content in every ring slot / window row, then a verify flips the parity of both twins
+    x0 = torch.randn(1, 1, B * T, args.dim, generator=g_t).to(torch.bfloat16)
+    for _ in range(1 + par):
+        for g in (ga, gb):
+            _verify(mesh, g, x0, [0] * B, B, T, Nv, K, comp)
+    for g in (ga, gb):
+        g._spec_win_par = par
+    new_rec = {u: 0.1 * torch.randn(1, Nv, Dk, Dv, generator=g_t) for u in fresh}
+    new_taps = {u: [torch.randn(1, 1, C, generator=g_t).to(torch.bfloat16) for _ in range(K)] for u in fresh}
+    for g in (ga, gb):
+        for u in fresh:
+            _prefill_fresh(mesh, g, u, new_rec[u], new_taps[u])
+    assert gb.seed_masked_ok(), "the layer is not on the hist taps route"
+    ga.seed_spec_rows_select(fresh, sel)
+    _guarded(mesh, lambda: gb.seed_spec_rows_masked(mask, sel))
+    _eq(
+        "masked seed: ring (all slots, all users)",
+        _ring(mesh, ga, nd, T, B, Nv, Dk, Dv),
+        _ring(mesh, gb, nd, T, B, Nv, Dk, Dv),
+    )
+    for p in (0, 1):
+        _eq(
+            f"masked seed: window buffer {p}",
+            _cat0(mesh, ga._verify_win_pair[p]),
+            _cat0(mesh, gb._verify_win_pair[p]),
+        )
+    for t in (sel, mask):
+        ttnn.deallocate(t)

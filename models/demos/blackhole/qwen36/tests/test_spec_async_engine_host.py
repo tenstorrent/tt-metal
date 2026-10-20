@@ -123,7 +123,7 @@ class _Pipe:
         self.live = [int(p) >= 0 for p in self.pos[:, 0]]
         self.tips = []
 
-    def enq(self, prev=None, sampling=None, absent=(), nv_hint=None, pt=None, finishing=None, remap=None):
+    def enq(self, prev=None, sampling=None, absent=(), nv_hint=None, pt=None, finishing=None, remap=None, host=None):
         B, r = self.B, self.r
         kw = {} if sampling is None else {"spec_sampling": sampling}
         if (
@@ -145,7 +145,12 @@ class _Pipe:
             acc = torch.ones(B, dtype=torch.int32)
             cr = torch.zeros(B, dtype=torch.bool)
             for u in range(B):
-                if self.live[u] and u not in absent:
+                if (
+                    host is not None and u in host
+                ):  # a new request's row: host tokens, one position, no drafts, no chain
+                    tok[u, 0], pos[u, 0] = host[u]
+                    self.live[u], self.up[u] = True, host[u][1]
+                elif self.live[u] and u not in absent:
                     cr[u] = True
                     pos[u] = int(self.up[u]) + torch.arange(T, dtype=torch.int32)
                     nvd[u] = K if nv_hint is None else int(nv_hint[u])
@@ -1162,3 +1167,136 @@ def test_adapter_passes_finishing_slots_and_gates_them_on_the_capability(monkeyp
             defer_read=True,
             finishing_slots=[1],
         )
+
+
+# --------------------------------------------------------------------------- #
+# prefill over a pending deferred step (QWEN36_SPEC_PREFILL_OVERLAP, supports_prefill_over_pending_spec)
+# --------------------------------------------------------------------------- #
+def test_prefill_overlap_capability_key(monkeypatch):
+    """supports_prefill_over_pending_spec: True by default (QWEN36_SPEC_PREFILL_OVERLAP unset or "1") with chain + fused on, False with QWEN36_SPEC_PREFILL_OVERLAP=0, False when
+    chain or fused is off. The dict is built at import, so the module is reloaded under each environment and once more at the end.
+    """
+    import importlib
+
+    from models.demos.blackhole.qwen36.tt import qwen36_vllm as qv
+
+    def caps(**env):
+        for k in ("QWEN36_SPEC_CHAIN", "QWEN36_SPEC_FUSED", "QWEN36_SPEC_PREFILL_OVERLAP"):
+            monkeypatch.delenv(k, raising=False)
+        for k, v in env.items():
+            monkeypatch.setenv(k, v)
+        return importlib.reload(qv).Qwen36MTPContractForCausalLM.model_capabilities
+
+    try:
+        on = dict(QWEN36_SPEC_CHAIN="1", QWEN36_SPEC_FUSED="1")
+        assert caps(**on)["supports_prefill_over_pending_spec"] is True
+        assert caps(**on, QWEN36_SPEC_PREFILL_OVERLAP="0")["supports_prefill_over_pending_spec"] is False
+        c = caps(**on, QWEN36_SPEC_PREFILL_OVERLAP="1")
+        assert c["supports_prefill_over_pending_spec"] is True and c["supports_async_spec_decode"] is True
+        assert (
+            caps(QWEN36_SPEC_CHAIN="1", QWEN36_SPEC_PREFILL_OVERLAP="1")["supports_prefill_over_pending_spec"] is False
+        )
+        assert (
+            caps(QWEN36_SPEC_FUSED="1", QWEN36_SPEC_PREFILL_OVERLAP="1")["supports_prefill_over_pending_spec"] is False
+        )
+    finally:
+        monkeypatch.undo()
+        importlib.reload(qv)
+
+
+def _fake_prefill(e):
+    """eng.prefill with the device work stubbed: the host writes of _prefill_row for a row that carries no fresh seed (the join
+    seed is not under test), so the next decode sees the new request's row as an ordinary active host row."""
+    from models.demos.blackhole.qwen36.tt.spec_engine import reset_draft_skip
+
+    def prefill_row(slot, prompt_ids, page_table_row, _cap_blocks=None, start_pos=None):
+        reset_draft_skip(e, slot)
+        e._parked.pop(slot, None)
+        e.__dict__.setdefault("_finishing", set()).discard(slot)
+        e._fresh_dirty.discard(slot)
+        e._active.add(slot)
+        return None
+
+    e._prefill_row = prefill_row
+
+
+def _prefill_order_run(mp, overlap, finishing):
+    """Two requests keep running (rows 0, 1); row 2's request ends and a new request is prefilled into row 2 while one deferred step is
+    pending. ``finishing``: row 2 is a claimed finishing slot (left out of step 2 by decode_forward(finishing_slots)); else its request
+    is released while step 1, which still covers the row, is pending. ``overlap``: the prefill runs before the pending step is
+    finished (the plugin finishes it afterwards); else after (the drained order). Then the next decode (host row 2)."""
+    B = 3
+    r = _AsyncRig(mp, B)
+    r.queue = _accepts(B, 3, 11)
+    _fake_prefill(r.e)
+    p = _Pipe(r, B, (3, 2, 1))
+    prompt = torch.arange(1, 6, dtype=torch.int32)
+    host = {2: (7, 90)}
+    outs = []
+    if finishing:
+        h1 = p.enq()
+        p.live[2] = False
+        h2 = p.enq(h1, absent=(2,), finishing=[2])
+        outs.append(p.resolve(h1))
+        pend = h2
+    else:
+        pend = p.enq()
+        r.e.release(2)  # the plugin claims the slot of the finished request while the step covering it is pending
+        p.live[2] = False
+    if overlap:
+        r.e.prefill(2, prompt, p.pt[2:3])
+        outs.append(p.resolve(pend))
+    else:
+        outs.append(p.resolve(pend))
+        r.e.prefill(2, prompt, p.pt[2:3])
+    h3 = p.enq(pend, host=host)
+    outs.append(p.resolve(h3))
+    return r, outs
+
+
+@pytest.mark.parametrize("finishing", [False, True])
+def test_prefill_over_a_pending_step_equals_the_drained_order(monkeypatch, finishing):
+    """A prefill into a slot the pending step covers (finishing=False) or into a claimed finishing slot (True), then the finish of
+    the pending step, then the next decode: outputs of every row and the host state equal finish first, prefill second.
+    """
+    ro, out_o = _prefill_order_run(monkeypatch, True, finishing)
+    rd, out_d = _prefill_order_run(monkeypatch, False, finishing)
+    assert len(out_o) == len(out_d)
+    for i, (a, b) in enumerate(zip(out_o, out_d)):
+        for u in range(3):
+            assert int(a[1][u]) == int(b[1][u]) and int(a[2][u]) == int(b[2][u]), (i, u)
+            c = int(a[1][u])
+            assert torch.equal(a[0][u, :c], b[0][u, :c]) and torch.equal(
+                a[3].draft_token_ids[u], b[3].draft_token_ids[u]
+            )
+            assert int(a[3].num_valid[u]) == int(b[3].num_valid[u]), (i, u)
+    _same_bookkeeping(ro, rd)
+    a, b = ro.e, rd.e
+    assert (a._active, a._fresh, a._parked, a._finishing if finishing else set()) == (
+        b._active,
+        b._fresh,
+        b._parked,
+        b._finishing if finishing else set(),
+    )
+    assert a._row_gens() == b._row_gens() and a._row_gens()[2] >= 1
+    assert a.chain_breaks == b.chain_breaks == {"tip_not_chainable": 1}, (a.chain_breaks, b.chain_breaks)
+    assert len(ro.syncs()) == len(rd.syncs())  # the pending step was finished before the decode: no synchronize left
+    assert 2 in a._active
+
+
+def test_materialize_skips_a_row_given_to_another_request(monkeypatch):
+    """A chain row whose generation moved since the pending step (a prefill gave it to another request) keeps the host inputs it came
+    with; the other chain rows are built from the pending step."""
+    B = 3
+    r = _AsyncRig(monkeypatch, B)
+    r.queue = _accepts(B, 2, 5)
+    _fake_prefill(r.e)
+    p = _Pipe(r, B, (3, 2, 1))
+    h1 = p.enq()
+    r.e.prefill(1, torch.arange(1, 4, dtype=torch.int32), p.pt[1:2])
+    cmask = torch.tensor([True, True, False])
+    clean = torch.full((B, T), 9, dtype=torch.int64)
+    start0, acc, nv = (torch.full((B,), 4, dtype=torch.int64) for _ in range(3))
+    c2, s2, a2, n2 = r.e._def_materialize(h1, cmask, clean, start0, acc, nv, "test")
+    assert torch.equal(c2[1], clean[1]) and int(s2[1]) == 4 and int(a2[1]) == 4 and int(n2[1]) == 4
+    assert int(s2[0]) > 4 and not torch.equal(c2[0], clean[0]) and torch.equal(c2[2], clean[2])

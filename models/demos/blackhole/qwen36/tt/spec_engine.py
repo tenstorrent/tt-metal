@@ -94,6 +94,7 @@ from models.demos.blackhole.qwen36.tt.tp_common import (
     spec_hostset_enabled,
     spec_hostset_trace_enabled,
     spec_join_fast_enabled,
+    spec_join_trace_enabled,
     verify_device_topk_m,
 )
 
@@ -191,6 +192,23 @@ def join_warm_plan(fresh_now, tokens, pt):
     slots = [int(fresh_now[u]) - 1 for u in rows]
     pt_rows = torch.as_tensor(pt)[rows].to(torch.int32).contiguous()
     return rows, toks, slots, pt_rows
+
+
+def join_mtp_warm_host(fresh_now, tokens, pt, phys, B, scratch_block, rope_delta, table_rows):
+    """Host inputs of the traced B-row MTP join warm (QWEN36_SPEC_JOIN_TRACE): (pack int32 [3, W], page table int32
+    [B, nb]), in PHYSICAL rows (the order of the hidden buffers the trace concatenates). ``phys[u]`` = the physical row
+    of fresh engine row u. Pack rows (uint32, as pack_u32_rows): 0 tokens [B]; 1 positions [B]; 2 RoPE table rows [B].
+    A fresh row carries its first token, slot Tp-1 and its page-table row (join_warm_plan); every other physical row
+    carries token 0, position 0 and the scratch block in every table entry, so its KV write lands in the scratch block.
+    """
+    rows, toks, slots, pt_rows = join_warm_plan(fresh_now, tokens, pt)
+    tok, pos = [0] * B, [0] * B
+    table = torch.full((B, pt_rows.shape[1]), int(scratch_block), dtype=torch.int32)
+    for i, u in enumerate(rows):
+        p = int(phys[u])
+        tok[p], pos[p], table[p] = toks[i], slots[i], pt_rows[i]
+    ridx = rope_row_index(pos, rope_delta, table_rows)
+    return pack_u32_rows([tok, pos, ridx.tolist()]), table
 
 
 def last_row_selector(i, bucket):
@@ -728,6 +746,7 @@ class FusedHandle:
         ) = self.tokens = self.start_host = self.mi_host = self.aux = self.pt = self.sampling = None
         self.lo = self.hi = self.exact = self.fin = self.draft_result = self.perm = None
         self.parity, self.cap, self.skip, self.finished = 0, 0, [], False
+        self.gen = None  # per-engine-row generations at creation (see MTPSpecEngine._row_gens)
 
     def wait(self):
         return self._eng._def_wait(self)
@@ -877,6 +896,21 @@ class MTPSpecEngine:
         self.fast_prefill = spec_fast_prefill_enabled()
         self._kc = self._gdn[0].K if self._gdn else 4  # GDN conv kernel size (E_prev carry rows 1 .. kc-1)
         self._fj_sel = None  # persistent one-hot [B, kc-1+T, kc-1+T + kc-1]: fresh_row_select, shared by every layer
+        # QWEN36_SPEC_JOIN_TRACE: persistent fresh-row mask (fresh_row_mask), the two seed traces (one per conv-window
+        # parity), the buffers they were captured against, and the replay / fallback counters
+        self._fj_mask = None
+        self._seed_trace = None
+        self._seed_trace_bufs = None
+        self._fj_mask_dims = None
+        self.join_trace_replays = 0
+        self.join_trace_fallbacks = {}  # reason -> count of joins whose GDN seed ran the eager loop
+        # QWEN36_SPEC_JOIN_TRACE, MTP part of the seed: ONE fixed B-row MTP decode (slot Tp-1 warm) replayed per join.
+        # Inputs: packed uint32 tokens / positions / RoPE rows, a [B, nb] page table (the row mask: a row that is not
+        # fresh holds the scratch block), the B per-row hidden buffers concatenated in the trace in the fixed physical
+        # order they had at capture (_mtpw_hidden; _mtpw_phys maps id(buffer) -> physical row).
+        self._mtpw_pack = self._mtpw_pt = self._mtpw_trace = self._mtpw_rope = None
+        self._mtpw_hidden, self._mtpw_phys = (), {}
+        self.join_mtp_trace_replays = 0
 
     # --------------------------------------------------------------------- #
     # Host helpers
@@ -944,6 +978,14 @@ class MTPSpecEngine:
         self._stage(host, dev, dtype, layout)
         cache[id(dev)] = (dev, host.clone())
 
+    # class defaults of the join-seed trace state (set per instance in __init__; engines built without it read these)
+    _fj_mask = _seed_trace = _seed_trace_bufs = _fj_mask_dims = None
+    join_trace_replays = 0
+    # the traced MTP part of the join seed (_mtpw_*): packed inputs, page table, hidden buffers, trace, id -> row map
+    _mtpw_pack = _mtpw_pt = _mtpw_trace = _mtpw_rope = None
+    _mtpw_hidden, _mtpw_phys = (), {}
+    join_mtp_trace_replays = 0
+
     _dr_rs_dirty = False  # the device wrote _dr_rs_pt (fused step): _dr_rs_cache no longer mirrors it
     # class defaults of the fused-step state (set per instance in __init__; engines built without it read these)
     _fa = _fa_trace = _fused_cache = _fa_pt_host = None
@@ -959,6 +1001,7 @@ class MTPSpecEngine:
     # deferred serving (stage S4b): the newest FusedHandle (chain_tip must name it), the context verify() reads, tip counter
     _def_last = _def_ctx = None
     _tip_seq = 0
+    _row_gen = None  # per-engine-row generation, bumped by prefill / release (see _row_gens)
     fused_greedy_checked = 0
 
     def _alloc_host_replicated(self, host, dtype, layout):
@@ -1019,6 +1062,92 @@ class MTPSpecEngine:
         for R in range(2, B + 1):
             self._warm_mtp_last_rows({u: 1 for u in range(R)}, tokens, pt)
         ttnn.synchronize_device(self.mesh)
+
+    def _mtp_warm_prepare(self):
+        """QWEN36_SPEC_JOIN_TRACE: allocate the persistent inputs of the traced MTP join warm (scratch-only content:
+        token 0, position 0, every table entry the scratch block) and run its body once so every program is compiled
+        before capture forbids cache misses."""
+        if not (self.fast_join and spec_join_fast_enabled() and spec_join_trace_enabled()):
+            return
+        B, rope = self.B, self.model.rope
+        rope.decode_rm_tables()  # the resident RoPE tables exist before the trace is captured
+        self._mtpw_rope = (rope.rope_delta, rope.max_seq_len)
+        zero = torch.zeros(B, dtype=torch.int32)
+        self._mtpw_pack = self._alloc_host_replicated(pack_u32_rows([zero] * 3), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
+        self._mtpw_pt = self._alloc_host_replicated(
+            torch.full((B, self.nb), self._scratch_block, dtype=torch.int32), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT
+        )
+        self._mtpw_hidden = tuple(self._last_hidden)
+        self._mtp_warm_body()
+        ttnn.synchronize_device(self.mesh)
+
+    def _mtp_warm_body(self):
+        """The traced MTP join warm: ONE B-row MTP decoder-layer decode, no lm_head. Inputs are persistent buffers: the
+        pack (rows as join_mtp_warm_host; sliced, typecast and RoPE-looked-up in the trace as the drafter does, via
+        model._dl_rope_cos_sin), the page table, and the hidden buffers of ``_mtpw_hidden`` concatenated in that order.
+        alias_kv_write=False: the rows are independent users (the batched eager warm does the same). The output is
+        dropped; the MTP KV of each row's slot is the effect."""
+        B, pk, model = self.B, self._mtpw_pack, self.model
+
+        def seg(row):
+            return ttnn.slice(pk, [row, 0], [row + 1, B])
+
+        tok = ttnn.reshape(seg(0), (B, 1))
+        p_u32 = seg(1)
+        p_i32 = ttnn.typecast(p_u32, ttnn.int32)
+        ttnn.deallocate(p_u32)
+        pos = ttnn.reshape(p_i32, (B,))
+        idx = seg(2)
+        cos, sin = model._dl_rope_cos_sin(idx, B)
+        parts = [ttnn.to_layout(h, ttnn.ROW_MAJOR_LAYOUT) for h in self._mtpw_hidden]
+        cat = ttnn.concat(parts, dim=2)  # [1,1,B,dim/tp]
+        hid = ttnn.to_layout(cat, ttnn.TILE_LAYOUT)
+        _, hn = self.mtp.forward_decode(
+            hid, tok, pos, cos, sin, self._mtpw_pt, need_logits=False, alias_kv_write=False, spec_n_users=1
+        )
+        for t in (tok, pos, idx, cos, sin, *parts, cat, hid, hn):
+            ttnn.deallocate(t)
+
+    def _capture_mtp_warm_trace(self):
+        """QWEN36_SPEC_JOIN_TRACE, inside the guarded scope: capture the MTP join warm once, against the hidden buffers
+        as they are ordered now (the trace bakes their addresses; _mtpw_phys records id(buffer) -> physical row)."""
+        self._mtpw_trace = None
+        if self._mtpw_pack is None or not spec_join_trace_enabled():
+            return
+        self._mtpw_hidden = tuple(self._last_hidden)
+        self._mtpw_phys = {id(h): p for p, h in enumerate(self._mtpw_hidden)}
+        self._mtpw_trace = ttnn.begin_trace_capture(self.mesh, cq_id=0)
+        self._mtp_warm_body()
+        ttnn.end_trace_capture(self.mesh, self._mtpw_trace, cq_id=0)
+        ttnn.synchronize_device(self.mesh)
+        logger.info("[spec_engine] join MTP warm trace captured")
+
+    def _mtp_warm_trace_why(self):
+        """None when the MTP part of this join can replay _mtpw_trace; else why it runs eagerly: "flag off" (not
+        counted), "mtp no trace", "mtp stale buffers" (the pack / page table, or a hidden buffer that is not one of
+        the captured ones or sits at another row than recorded). Without allocated inputs the feature is not in use
+        and nothing is counted ("")."""
+        if not spec_join_trace_enabled():
+            return "flag off"
+        if self._mtpw_pack is None:
+            return ""
+        if self._mtpw_trace is None:
+            return "mtp no trace"
+        h = self._last_hidden
+        if len(h) != len(self._mtpw_hidden) or any(self._mtpw_phys.get(id(x)) is None for x in h):
+            return "mtp stale buffers"
+        if len({id(x) for x in h}) != len(h) or any(self._mtpw_hidden[self._mtpw_phys[id(x)]] is not x for x in h):
+            return "mtp stale buffers"
+        return None
+
+    def _replay_mtp_warm(self, fresh_now, tokens, pt):
+        """Stage the pack and the page table, enqueue the MTP warm trace (no host sync)."""
+        phys = {u: self._mtpw_phys[id(self._last_hidden[u])] for u in fresh_now}
+        pack, table = join_mtp_warm_host(fresh_now, tokens, pt, phys, self.B, self._scratch_block, *self._mtpw_rope)
+        self._stage(pack, self._mtpw_pack, ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
+        self._stage_table(table, self._mtpw_pt, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
+        ttnn.execute_trace(self.mesh, self._mtpw_trace, cq_id=0, blocking=False)
+        self.join_mtp_trace_replays += 1
 
     def _check_scratch(self, pt):
         assert int(pt.max()) < self._scratch_block, (
@@ -1172,13 +1301,24 @@ class MTPSpecEngine:
         if self.fast_join:
             # QWEN36_SPEC_FAST_JOIN=1: the per-row ring writes at every offset, the whole-slot write, the window select
             # and both taps routes, compiled now (the ring and window pair exist since prepare_verify_trace).
-            from models.demos.blackhole.qwen36.tt.gdn.tp import fresh_row_select
+            from models.demos.blackhole.qwen36.tt.gdn.tp import fresh_row_mask, fresh_row_select
 
             self._fj_sel = self._alloc_host_replicated(
                 fresh_row_select(range(B), B, T, self._kc), ttnn.bfloat16, ttnn.TILE_LAYOUT
             )
+            if self._gdn and spec_join_trace_enabled():
+                # QWEN36_SPEC_JOIN_TRACE: the mask buffer (shared by every layer, so every layer must agree on Nv, Dk);
+                # warmup compiles the masked seed for both window parities before any capture
+                dims = {(dn.Nv, dn.Dk) for dn in self._gdn}
+                assert len(dims) == 1, f"join trace: GDN layers disagree on (Nv, Dk): {sorted(dims)}"
+                self._fj_mask_dims = dims.pop()
+                if self._fj_mask is not None:
+                    ttnn.deallocate(self._fj_mask)
+                self._fj_mask = self._alloc_host_replicated(
+                    fresh_row_mask([], B, *self._fj_mask_dims), ttnn.float32, ttnn.TILE_LAYOUT
+                )
             for dn in self._gdn:
-                dn.warmup_fast_seed(self._fj_sel)
+                dn.warmup_fast_seed(self._fj_sel, self._fj_mask)
             ttnn.synchronize_device(self.mesh)
         if B > 1:  # compile the join programs (per-user seed, feed merge)
             self._join_take = self._alloc_host_replicated(
@@ -1223,6 +1363,7 @@ class MTPSpecEngine:
         self._reseed_warmup(B * T, self._dim_frac, self._feed_dtype)
         self._eager_warmup()
         self._join_warm_warmup()
+        self._mtp_warm_prepare()
         self._draft_warmup([0] * B, self._hp_buf, [0] * B)
         if self.recorded_drafter:
             self._alloc_drafter_inputs()
@@ -1423,6 +1564,61 @@ class MTPSpecEngine:
         ttnn.synchronize_device(self.mesh)
         logger.info("[spec_engine] fused sampled accept trace captured (union top-k -> sampled walk + drafter inputs)")
 
+    def _seed_buffers(self):
+        """The device buffers a seed trace bakes in, per GDN layer (compared by identity at replay)."""
+        return [
+            (dn.rec_state, dn._conv_hist_rm, dn._spec_ring, *(getattr(dn, "_verify_win_pair", None) or ()))
+            for dn in self._gdn
+        ]
+
+    def _capture_seed_traces(self):
+        """QWEN36_SPEC_JOIN_TRACE, inside the guarded scope, after the chain traces: the GDN seed traces, then the
+        MTP warm trace (independent of the GDN guards)."""
+        self._capture_gdn_seed_traces()
+        self._capture_mtp_warm_trace()
+
+    def _capture_gdn_seed_traces(self):
+        """Capture the 48-layer masked seed once per conv-window parity (the parity picks the window half the seed
+        writes, and a trace bakes one address). Without the window pair (QWEN36_VERIFY_SPEC_STEP=0) there is one parity and one trace. Needs every layer's
+        seed_masked_ok() now; otherwise no trace and every join runs the eager seed."""
+        self._seed_trace = self._seed_trace_bufs = None
+        if not spec_join_trace_enabled():
+            return
+        if not self._gdn or self._fj_mask is None or not self.fast_join:
+            logger.info("[spec_engine] join seed trace not captured: no GDN layers / mask buffer / fast join")
+            return
+        bad = [i for i, dn in enumerate(self._gdn) if not dn.seed_masked_ok()]
+        if bad:
+            logger.info(f"[spec_engine] join seed trace not captured: seed_masked_ok() is False on layer(s) {bad[:4]}")
+            return
+        fused = all(dn._spec_fused for dn in self._gdn)
+        saved = [dn._spec_win_par for dn in self._gdn]
+        traces = []
+        try:
+            for p in (0, 1) if fused else (0,):
+                for dn in self._gdn:
+                    dn._spec_win_par = p
+                tid = ttnn.begin_trace_capture(self.mesh, cq_id=0)
+                for dn in self._gdn:
+                    dn._seed_masked_impl(self._fj_mask, self._fj_sel)
+                ttnn.end_trace_capture(self.mesh, tid, cq_id=0)
+                traces.append(tid)
+        finally:
+            for dn, par in zip(self._gdn, saved):
+                dn._spec_win_par = par
+        ttnn.synchronize_device(self.mesh)
+        self._seed_trace = traces if fused else [traces[0], traces[0]]
+        self._seed_trace_bufs = self._seed_buffers()
+        logger.info(f"[spec_engine] join seed trace captured ({len(traces)} window parity variant(s))")
+
+    def _release_seed_traces(self):
+        for tid in {t for t in (self._seed_trace or ())}:
+            ttnn.release_trace(self.mesh, tid)
+        self._seed_trace = self._seed_trace_bufs = None
+        if self._mtpw_trace is not None:
+            ttnn.release_trace(self.mesh, self._mtpw_trace)
+        self._mtpw_trace = None
+
     def capture_decode(self):
         """Record the verify trace, then the drafter trace. Idempotent; requires prepare_decode."""
         assert self.prepared, "capture_decode before prepare_decode"
@@ -1445,6 +1641,7 @@ class MTPSpecEngine:
                         self._capture_fused()
                 else:
                     logger.info("[spec_engine] drafter runs eagerly (QWEN36_SPEC_EAGER_DRAFTER=1)")
+                self._capture_seed_traces()  # last: every earlier trace keeps its allocation layout
         finally:
             self.mesh.set_program_cache_misses_allowed(True)
         self.captured = True
@@ -1463,6 +1660,7 @@ class MTPSpecEngine:
         if self.fast_prefill:
             model.release_prefill_trace_short()  # the spec short traces (captured or only prepared) and their inputs
             model.release_gdn_slot_write_traces()
+        self._release_seed_traces()
         for name in ("_ch_trace_g", "_ch_trace_s"):
             if getattr(self, name) is not None:
                 ttnn.release_trace(self.mesh, getattr(self, name))
@@ -1505,6 +1703,11 @@ class MTPSpecEngine:
         for t in (*self._dr_outs, *self._dr_bufs):
             ttnn.deallocate(t)
         self._dr_outs, self._dr_bufs = [], []
+        for t in (self._mtpw_pack, self._mtpw_pt):
+            if t is not None:
+                ttnn.deallocate(t)
+        self._mtpw_pack = self._mtpw_pt = self._mtpw_rope = None
+        self._mtpw_hidden, self._mtpw_phys = (), {}
         self._dr_tok0 = self._dr_rs_tok = self._dr_rs_pos = self._dr_rs_pt = self._dr_rs_cos = self._dr_rs_sin = None
         self._dr_pack = self._dr_eye = self._dr_rs_cache = None
         self._dr_hostset = False
@@ -1521,11 +1724,12 @@ class MTPSpecEngine:
             self._join_take,
             self._join_keep,
             self._fj_sel,
+            self._fj_mask,
         ]
         for t in bufs:
             if t is not None:
                 ttnn.deallocate(t)
-        self._fj_sel = None
+        self._fj_sel = self._fj_mask = None
         self._last_hidden, self._last_sel = [], {}
         self._mtp_pt, self._mtp_pt_rows, self._hp_buf, self._anchor_sel, self._eager_sel, self._vfeed = (
             None,
@@ -1662,9 +1866,18 @@ class MTPSpecEngine:
             self.release(s)
         self.finishing_freed = self.__dict__.get("finishing_freed", 0) + len(slots)
 
+    def _row_gens(self):
+        """Per-engine-row generation: bumped when a prefill or a release gives the row to another request. A deferred handle
+        records it at creation; its later finish / materialize skip rows whose generation moved (a prefill ran over the pending
+        step into the slot, e.g. a claimed finishing slot reused by a new request)."""
+        if self._row_gen is None:
+            self._row_gen = [0] * self.B
+        return self._row_gen
+
     def release(self, slot):
         """Mark runner slot ``slot`` (engine row _phys[slot]) empty and re-offer drafts to every row (no device work)."""
         slot = self._phys[int(slot)]
+        self._row_gens()[slot] += 1
         self._active.discard(slot)
         self._fresh.pop(slot, None)
         self._parked.pop(slot, None)
@@ -1722,6 +1935,11 @@ class MTPSpecEngine:
             getattr(self, "_def_last", None) is not None
         ):  # deferred serving: nothing chains on the pending step across a prefill
             self._def_last.chainable = False
+            if not self._def_last.device and self._def_last.fin is None:
+                # a fallback step ran on the host: its propose runs the drafter over the page table of its own step, which the new
+                # request may reuse; finish it now, as the drained order does
+                self._def_finish_any(self._def_last)
+        self._row_gens()[self._phys[int(slot)]] += 1
         return self._prefill_row(self._phys[int(slot)], prompt_ids, page_table_row, _cap_blocks, start_pos)
 
     def _prefill_row(self, slot, prompt_ids, page_table_row, _cap_blocks=None, start_pos=None):
@@ -2213,15 +2431,24 @@ class MTPSpecEngine:
         row (``rows``) is fresh. Nothing advances rec_state or the taps, so a fresh row left out of this step keeps
         its prefill state and needs no re-prefill. Returns the sorted fresh engine rows; the caller runs them in the
         normal verify replay with mi_prev = 0 (their tokens are [t_Tp, pad..] and the runner reads column 0)."""
-        from models.demos.blackhole.qwen36.tt.gdn.tp import fresh_row_select
+        from models.demos.blackhole.qwen36.tt.gdn.tp import fresh_row_mask, fresh_row_select
 
         B, T = self.B, self.T
         if spec_join_fast_enabled():
             # QWEN36_SPEC_JOIN_FAST: only the fresh rows' tables, one batched warm call (note 55)
             for u, Tp in fresh_now.items():
                 assert int(start_pos[u]) == Tp, f"slot {u}: start_pos {int(start_pos[u])} != prompt length {Tp}"
-            self._stage_mtp_tables_rows(pt, sorted(fresh_now))
-            self._warm_mtp_last_rows(fresh_now, tokens, pt)
+            mwhy = self._mtp_warm_trace_why()
+            if mwhy is None:
+                # QWEN36_SPEC_JOIN_TRACE: the fixed B-row warm replays; _mtp_pt_rows[u] stays unstaged (propose restages
+                # every table it reads before any use, the same as for the rows this eager branch leaves out)
+                self._replay_mtp_warm(fresh_now, tokens, pt)
+            else:
+                if mwhy not in ("", "flag off"):
+                    fb = self.__dict__.setdefault("join_trace_fallbacks", {})
+                    fb[mwhy] = fb.get(mwhy, 0) + 1
+                self._stage_mtp_tables_rows(pt, sorted(fresh_now))
+                self._warm_mtp_last_rows(fresh_now, tokens, pt)
         else:
             self._stage_mtp_tables(pt)
             for u, Tp in sorted(fresh_now.items()):
@@ -2234,10 +2461,43 @@ class MTPSpecEngine:
             self._fresh_dirty.discard(u)
         if self._gdn:
             self._stage(fresh_row_select(fresh, B, T, self._kc), self._fj_sel, ttnn.bfloat16, ttnn.TILE_LAYOUT)
-            seed_rows = range(B) if set(fresh) == set(rows) else fresh
-            for dn in self._gdn:
-                dn.seed_spec_rows_select(seed_rows, self._fj_sel)
+            why = self._join_trace_why()
+            if why is None:
+                # one trace replay for all layers: the mask (engine rows, as fresh_row_select) selects the fresh rows
+                # only, equal to the eager partial path (also when every active row is fresh)
+                p = self._gdn[0]._spec_win_par
+                self._stage(
+                    fresh_row_mask(fresh, B, *self._fj_mask_dims), self._fj_mask, ttnn.float32, ttnn.TILE_LAYOUT
+                )
+                ttnn.execute_trace(self.mesh, self._seed_trace[p], cq_id=0, blocking=False)
+                self.join_trace_replays += 1
+            else:
+                fb = self.__dict__.setdefault("join_trace_fallbacks", {})
+                fb[why] = fb.get(why, 0) + 1
+                seed_rows = range(B) if set(fresh) == set(rows) else fresh
+                for dn in self._gdn:
+                    dn.seed_spec_rows_select(seed_rows, self._fj_sel)
         return fresh
+
+    def _join_trace_why(self):
+        """None when the GDN seed of this join can replay the seed trace; else the reason it runs eagerly:
+        "flag off", "no trace", "taps route layer <i>" (seed_masked_ok() False), "mixed parity",
+        "stale buffers" (a layer's ring / window / state buffer is not the one the trace was captured against)."""
+        if not spec_join_trace_enabled():
+            return "flag off"
+        if self._seed_trace is None:
+            return "no trace"
+        for i, dn in enumerate(self._gdn):
+            if not dn.seed_masked_ok():
+                return f"taps route layer {i}"
+        if len({dn._spec_win_par for dn in self._gdn}) != 1:
+            return "mixed parity"
+        cur = self._seed_buffers()
+        if len(cur) != len(self._seed_trace_bufs) or any(
+            len(a) != len(b) or any(x is not y for x, y in zip(a, b)) for a, b in zip(cur, self._seed_trace_bufs)
+        ):
+            return "stale buffers"
+        return None
 
     def _topk_from_logits(self, out):
         """(ids, logits [B, T, vocab] fp32) of an eager seed / join step (QWEN36_SPEC_FAST_JOIN=0) -> (ids,
@@ -2577,7 +2837,17 @@ class MTPSpecEngine:
                     else ""
                 )
                 + self._park_note_text()
+                + self._join_trace_note_text()
             )
+
+    def _join_trace_note_text(self):
+        """Tail of the periodic fused line: seed-trace replays and the eager fallbacks by reason (flag on only)."""
+        if not spec_join_trace_enabled():
+            return ""
+        fb = self.__dict__.setdefault("join_trace_fallbacks", {})
+        return f"; join trace replays {self.join_trace_replays}, fallbacks " + (
+            ", ".join(f"{k}={v}" for k, v in sorted(fb.items())) or "none"
+        )
 
     def _park_note_text(self):
         """Tail of the periodic fused line: deferred chain breaks by reason, park / unpark counts and times, finishing rows."""
@@ -3299,6 +3569,7 @@ class MTPSpecEngine:
         h.start_host = torch.as_tensor(start_pos).to(torch.int64).clone()
         h.mi_host = torch.as_tensor(args[2]).to(torch.int64).clone()
         h.parity, h.aux, h.pt, h.sampling = parity, aux.clone(), pt.clone(), sampling
+        h.gen = list(self._row_gens())
         h.lo = (chain["lo"] if chain is not None else h.start_host).clone()
         h.hi = (chain["hi"] if chain is not None else h.start_host).clone()
         h.skip = [bool(s) for s in propose_skip_plan(self._no_draft, B)[0]]
@@ -3317,6 +3588,7 @@ class MTPSpecEngine:
         B, T = self.B, self.T
         h = FusedHandle(self, self._def_next_tip(), None)
         h.device, h.ready, h.chainable = False, True, False
+        h.gen = list(self._row_gens())
         committed = torch.as_tensor(fz.committed).to(torch.int64).reshape(B, T)
         counts = torch.as_tensor(fz.counts).to(torch.int64).reshape(B)
         p0 = torch.as_tensor(start0).to(torch.int64).reshape(B).clone()
@@ -3519,7 +3791,10 @@ class MTPSpecEngine:
         f = self._def_finish_any(prev)
         committed, counts, p0 = f["committed"], f["counts"], f["p0"]
         clean, start0, acc_rows, nv_rows = clean.clone(), start0.clone(), acc_rows.clone(), nv_rows.clone()
+        gen = self._row_gens()
         for u in torch.nonzero(cmask).reshape(-1).tolist():
+            if prev.gen is not None and prev.gen[u] != gen[u]:
+                continue  # a prefill / release gave the row to another request since the pending step: its output was dropped
             c = int(counts[u])
             n = min(int(nv_rows[u]), int(f["nv"][u]))
             tok0 = int(committed[u, c - 1])

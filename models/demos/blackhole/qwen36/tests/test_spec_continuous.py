@@ -329,12 +329,16 @@ def test_join_running_batch(mesh_device, fast_join, monkeypatch):
 @pytest.mark.timeout(7200)
 @pytest.mark.parametrize("mesh_device", [_MESH_SHAPE], indirect=True)
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
-def test_fast_join_vs_eager_seed(mesh_device, monkeypatch):
+@pytest.mark.parametrize("join_trace", ["0", "1"])  # QWEN36_SPEC_JOIN_TRACE: 1 = the GDN join seed replays a trace
+def test_fast_join_vs_eager_seed(mesh_device, join_trace, monkeypatch):
     """QWEN36_SPEC_FAST_JOIN 0 vs 1 on the SAME model and prompts (note 23, D2): the join schedule under both flags,
     one engine after the other. Every request's tokens identical between the flags (the seeded first token comes
     from the T-row verify kernels instead of the eager T = 1 forward: a bf16 near-tie flip would show here;
     QWEN36_FAST_JOIN_STRICT_TOKENS=0 turns that into a log line), mean committed tokens per row-step within 0.1,
-    and the fast path's join / seed steps under half the eager seed's and under 1.8x a plain step."""
+    and the fast path's join / seed steps under half the eager seed's and under 1.8x a plain step.
+    With join_trace=1 (QWEN36_SPEC_JOIN_TRACE=1) the fast run replays the GDN seed trace and must give the same
+    tokens as the eager seed; the engine's join_trace_replays must be > 0 (the trace path really ran)."""
+    monkeypatch.setenv("QWEN36_SPEC_JOIN_TRACE", join_trace)
     monkeypatch.setenv("QWEN36_SPEC_FAST_JOIN", "0")
     model, eng, tokenizer, prompts = _setup(mesh_device)
     runs = {}
@@ -357,6 +361,8 @@ def test_fast_join_vs_eager_seed(mesh_device, monkeypatch):
             mesh_device.set_program_cache_misses_allowed(True)
         for u in range(B):
             _assert_same(f"[fast_join={flag}] request {u} joined late", stag[u], full[u])
+        if flag == "1" and join_trace == "1":
+            assert eng.join_trace_replays > 0, f"no seed trace replay (fallbacks {eng.join_trace_fallbacks})"
         plain, _, joins = _step_classes(drv)
         runs[flag] = dict(
             full=full, stag=stag, rate=_accept_rate(drv), plain=statistics.median(plain), join=statistics.median(joins)
@@ -429,12 +435,18 @@ def test_row_moves_keep_state(mesh_device):
 @pytest.mark.parametrize("mesh_device", [_MESH_SHAPE], indirect=True)
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
 @pytest.mark.parametrize("fast_join", ["0", "1"])
-def test_churn_row_moves_match_full_batch(mesh_device, fast_join, monkeypatch):
+@pytest.mark.parametrize("join_trace", ["0", "1"])  # QWEN36_SPEC_JOIN_TRACE: 1 = the GDN join seed replays a trace
+def test_churn_row_moves_match_full_batch(mesh_device, fast_join, join_trace, monkeypatch):
     """Production-shaped churn (note 23, D3): short outputs, a finish about every second step, each hole condensed
     by the runner's swap remap and refilled by a new request. Every request's tokens equal its full-batch tokens,
     no program compiles after capture, and a remap costs nothing on the device: a step with a remap and no fresh
     row takes < 1.3x the median plain step (QWEN36_SPEC_SLOTMAP=1; the device remap of =0 adds ~200 ms). With
-    QWEN36_SPEC_FAST_JOIN=1 a join step (a fresh row seeded) takes < 1.8x the median plain step as well."""
+    QWEN36_SPEC_FAST_JOIN=1 a join step (a fresh row seeded) takes < 1.8x the median plain step as well.
+    With join_trace=1 (QWEN36_SPEC_JOIN_TRACE=1, needs fast_join=1) the joins replay the GDN seed trace, with the
+    same tokens, and join_trace_replays must be > 0."""
+    if join_trace == "1" and fast_join == "0":
+        pytest.skip("the join seed trace belongs to QWEN36_SPEC_FAST_JOIN=1")
+    monkeypatch.setenv("QWEN36_SPEC_JOIN_TRACE", join_trace)
     monkeypatch.setenv("QWEN36_SPEC_FAST_JOIN", fast_join)
     model, eng, tokenizer, prompts = _setup(mesh_device)
     assert eng.fast_join is (fast_join == "1")
@@ -472,6 +484,8 @@ def test_churn_row_moves_match_full_batch(mesh_device, fast_join, monkeypatch):
             f"join={len(joins)} (median {statistics.median(joins) if joins else 0:.1f} ms, "
             f"max {max(joins) if joins else 0:.1f} ms)"
         )
+        if join_trace == "1":
+            assert eng.join_trace_replays > 0, f"no seed trace replay (fallbacks {eng.join_trace_fallbacks})"
         assert len(remap_only) >= 3, "the churn schedule produced no remap-only steps"
         assert statistics.median(remap_only) < 1.3 * statistics.median(plain), "a remap step is not free"
         if fast_join == "1":
@@ -485,8 +499,12 @@ def test_churn_row_moves_match_full_batch(mesh_device, fast_join, monkeypatch):
 @pytest.mark.timeout(3600)
 @pytest.mark.parametrize("mesh_device", [_MESH_SHAPE], indirect=True)
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
-def test_left_out_rows_keep_state(mesh_device):
-    """Requests left out of decode steps (running, or before their first decode) keep their full-batch tokens."""
+@pytest.mark.parametrize("join_trace", ["0", "1"])  # QWEN36_SPEC_JOIN_TRACE: 1 = the GDN join seed replays a trace
+def test_left_out_rows_keep_state(mesh_device, join_trace, monkeypatch):
+    """Requests left out of decode steps (running, or before their first decode) keep their full-batch tokens.
+    With join_trace=1 (QWEN36_SPEC_JOIN_TRACE=1) the joins replay the GDN seed trace (a fresh row left out of a
+    join keeps its prefill state: the mask selects only the rows in the step) and join_trace_replays must be > 0."""
+    monkeypatch.setenv("QWEN36_SPEC_JOIN_TRACE", join_trace)
     model, eng, tokenizer, prompts = _setup(mesh_device)
     n_prog = mesh_device.num_program_cache_entries()
     mesh_device.set_program_cache_misses_allowed(False)
@@ -512,6 +530,8 @@ def test_left_out_rows_keep_state(mesh_device):
         for u in range(B):
             _assert_same(f"request {u} left out of some steps", out[u], full[u])
         assert not eng._parked, f"parked slots left behind: {sorted(eng._parked)}"
+        if join_trace == "1":
+            assert eng.join_trace_replays > 0, f"no seed trace replay (fallbacks {eng.join_trace_fallbacks})"
         assert mesh_device.num_program_cache_entries() == n_prog, "a program compiled after capture"
     finally:
         mesh_device.set_program_cache_misses_allowed(True)
@@ -596,10 +616,51 @@ def _mtp_kv_slot_all_devices(eng, blocks, pos):
     return out
 
 
-def _join_scenario(eng, prompts, R, join_fast, monkeypatch):
+def _mtp_cache_blocks(eng):
+    """Device 0's MTP paged K and V as host tensors [n_blocks, ...] (for the changed-block diff of a join step)."""
+    att = eng.mtp.attention
+    return [ttnn.to_torch(ttnn.get_device_tensors(c)[0]) for c in (att.paged_k, att.paged_v)]
+
+
+_POISON = 1.0  # exact in bf16 and bf8_b; real MTP K/V rows are never all 1.0
+
+
+def _poison_mtp_kv_slots(eng, slots):
+    """Overwrite MTP paged K and V at (block, offset) ``slots`` with _POISON on EVERY device, in place (same
+    buffers, so captured traces stay valid). Host read-modify-write of each device's cache, then
+    copy_host_to_device_tensor (the cache dtype is kept, so the sentinel survives bf16 and bf8_b alike)."""
+    att = eng.mtp.attention
+    mesh = eng.mesh
+    for cache in (att.paged_k, att.paged_v):
+        per_dev = [ttnn.to_torch(t) for t in ttnn.get_device_tensors(cache)]
+        for c in per_dev:
+            for blk, off in slots:
+                c[blk, :, off] = _POISON
+        host = ttnn.from_host_shards(
+            [ttnn.from_torch(c, dtype=cache.dtype, layout=ttnn.TILE_LAYOUT) for c in per_dev], mesh.shape
+        )
+        ttnn.copy_host_to_device_tensor(host, cache)
+    ttnn.synchronize_device(mesh)
+
+
+def _changed_blocks(before, after):
+    """Block ids whose K or V bytes differ between two _mtp_cache_blocks snapshots."""
+    out = set()
+    for a, b in zip(before, after):
+        diff = (a != b).reshape(a.shape[0], -1).any(dim=1)
+        out |= {int(i) for i in diff.nonzero().flatten()}
+    return out
+
+
+def _join_scenario(eng, prompts, R, join_fast, monkeypatch, join_trace=None, check_blocks=False):
     """R fresh rows (rows 0..R-1) join in ONE step (QWEN36_SPEC_JOIN_FAST=join_fast), then run to completion.
     Returns tokens, the MTP KV of slot Tp-1 per fresh row right after the join step, the join step's verify logits
-    (fresh rows) and the join step's host ms."""
+    (fresh rows) and the join step's host ms. ``join_trace`` (not None) sets QWEN36_SPEC_JOIN_TRACE for the run (read
+    on every join, so a captured seed trace is simply not replayed with "0"). ``check_blocks``: also returns the MTP
+    cache blocks the join step changed ("changed"), the fresh rows' slot Tp-1 blocks ("fresh_blocks") and the scratch
+    block ("scratch")."""
+    if join_trace is not None:
+        monkeypatch.setenv("QWEN36_SPEC_JOIN_TRACE", join_trace)
     monkeypatch.setenv("QWEN36_SPEC_JOIN_FAST", join_fast)
     logger.info(f"[joinfast] QWEN36_SPEC_JOIN_FAST={os.environ['QWEN36_SPEC_JOIN_FAST']} R={R}")
     drv = BatchDriver(eng, seed=11)
@@ -611,8 +672,28 @@ def _join_scenario(eng, prompts, R, join_fast, monkeypatch):
         if first:
             kw["spec_mode"] = "logits"
             assert sorted(eng._fresh) == list(range(R)), f"fresh rows {sorted(eng._fresh)} != 0..{R - 1}"
+        if first:
+            # poison slot Tp-1 of every fresh row (all devices): an equal KV afterwards proves a real write
+            _poison_mtp_kv_slots(
+                eng,
+                [
+                    (
+                        drv.reqs[r]["blocks"][(len(drv.reqs[r]["prompt"]) - 1) // BLOCK_SIZE],
+                        (len(drv.reqs[r]["prompt"]) - 1) % BLOCK_SIZE,
+                    )
+                    for r in range(R)
+                ],
+            )
+        if first and check_blocks:
+            before = _mtp_cache_blocks(eng)
         t0 = time.perf_counter()
         res = orig(*a, **kw)
+        if first and check_blocks:
+            snap["changed"] = _changed_blocks(before, _mtp_cache_blocks(eng))
+            snap["scratch"] = int(eng._scratch_block)
+            snap["fresh_blocks"] = {
+                drv.reqs[r]["blocks"][(len(drv.reqs[r]["prompt"]) - 1) // BLOCK_SIZE] for r in range(R)
+            }
         if first:
             snap["ms"] = 1e3 * (time.perf_counter() - t0)
             snap["logits"] = res.logits[:R].clone()
@@ -636,20 +717,34 @@ def _join_scenario(eng, prompts, R, join_fast, monkeypatch):
 @pytest.mark.timeout(3600)
 @pytest.mark.parametrize("mesh_device", [_MESH_SHAPE], indirect=True)
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
-def test_join_fast_multirow_bit_identical(mesh_device, monkeypatch):
+@pytest.mark.parametrize("join_trace", ["0", "1"])  # QWEN36_SPEC_JOIN_TRACE: 1 = the GDN join seed replays a trace
+def test_join_fast_multirow_bit_identical(mesh_device, join_trace, monkeypatch):
     """QWEN36_SPEC_JOIN_FAST 1 vs 0 with R = 2 and R = 4 fresh rows joining in one step (temperature 0): identical
     token streams, bit-identical MTP KV of slot Tp-1 for every joined row (every device), identical verify logits of
-    the join step (torch.equal). Logs the join step host ms for both flags (3 repeats each, interleaved)."""
+    the join step (torch.equal). Logs the join step host ms for both flags (3 repeats each, interleaved).
+    With join_trace=1 (QWEN36_SPEC_JOIN_TRACE=1) every run replays the GDN seed trace and the fixed B-row MTP warm
+    trace (join_mtp_trace_replays must grow), and the reference is the fully eager join (JOIN_FAST=0, JOIN_TRACE=0):
+    tokens, MTP KV of slot Tp-1 and join logits stay bit-identical. The MTP KV is compared as bytes; a mismatch
+    reports the max abs diff (the test fails above 0: the B-row decode may use another program config than the R-row
+    one). The MTP cache blocks the join step changes are the fresh rows' slot Tp-1 blocks plus the scratch block."""
+    monkeypatch.setenv("QWEN36_SPEC_JOIN_TRACE", join_trace)
     monkeypatch.setenv("QWEN36_SPEC_FAST_JOIN", "1")
     monkeypatch.setenv("QWEN36_SPEC_JOIN_FAST", "1")  # prepare compiles the batched warm programs
     model, eng, tokenizer, prompts = _setup(mesh_device)
     assert eng.fast_join
     for R in (2, 4):
         runs = {"0": [], "1": []}
+        replays0, mtp0 = eng.join_trace_replays, eng.join_mtp_trace_replays
         for rep in range(3):
             for flag in ("1", "0"):
-                runs[flag].append(_join_scenario(eng, prompts, R, flag, monkeypatch))
-        ref = runs["0"][0]
+                runs[flag].append(_join_scenario(eng, prompts, R, flag, monkeypatch, join_trace, rep == 0))
+        if join_trace == "1":
+            assert eng.join_trace_replays > replays0, f"R={R}: no seed trace replay ({eng.join_trace_fallbacks})"
+            assert eng.join_mtp_trace_replays > mtp0, f"R={R}: no MTP warm trace replay ({eng.join_trace_fallbacks})"
+            ref = _join_scenario(eng, prompts, R, "0", monkeypatch, "0")  # the all-eager reference
+            monkeypatch.setenv("QWEN36_SPEC_JOIN_TRACE", "1")
+        else:
+            ref = runs["0"][0]
         for flag in ("1", "0"):
             for i, s in enumerate(runs[flag]):
                 tag = f"R={R} flag={flag} rep={i}"
@@ -657,9 +752,17 @@ def test_join_fast_multirow_bit_identical(mesh_device, monkeypatch):
                     _assert_same(f"{tag} request {rid}", s["outs"][rid], ref["outs"][rid])
                 for r in range(R):
                     for d, (a, b) in enumerate(zip(s["kv"][r], ref["kv"][r])):
-                        assert torch.equal(a, b), f"{tag}: MTP KV row {r} tensor {d} differs"
+                        diff = float((a.float() - b.float()).abs().max())
+                        assert diff == 0.0, f"{tag}: MTP KV row {r} tensor {d} differs, max abs diff {diff}"
                     assert any(bool(t.any()) for t in s["kv"][r]), f"{tag}: MTP KV row {r} is all zero"
                 assert torch.equal(s["logits"], ref["logits"]), f"{tag}: join-step verify logits differ"
+        if join_trace == "1":
+            s = runs["1"][0]
+            extra = s["changed"] - s["fresh_blocks"] - {s["scratch"]}
+            assert (
+                not extra
+            ), f"R={R}: the join step wrote MTP blocks {sorted(extra)} besides the fresh rows' and scratch"
+            assert s["fresh_blocks"] <= s["changed"], f"R={R}: a fresh row's slot Tp-1 block was not written"
         for flag in ("1", "0"):
             ms = [s["ms"] for s in runs[flag]]
             logger.info(

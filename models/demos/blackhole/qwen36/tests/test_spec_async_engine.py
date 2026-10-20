@@ -36,13 +36,18 @@ class AsyncDriver(ChainDriver):
 
     def __init__(self, eng, seed, **kw):
         super().__init__(eng, seed, recycle=False, **kw)
-        self.pend = []  # (handle, rows live at enqueue)
+        self.pend = []  # (handle, rows live at enqueue, request id of each)
+        self.tip = None  # the newest handle, whether or not it was read
+        self.chain_on_tip = (
+            False  # the next step chains on ``tip`` although it was read already (prefill over a pending step)
+        )
+        self.host_rows = set()  # rows admitted since the last step: they carry host tokens, not placeholders
         self.next0 = {}  # row -> exact column-0 position of the oldest pending (or next) step
         self.it_ms = []
 
     def enq(self):
         B, eng = tc.B, self.eng
-        prev = self.pend[-1][0] if self.pend else None
+        prev = self.pend[-1][0] if self.pend else (self.tip if self.chain_on_tip else None)
         assert len(self.pend) <= 1
         tok = torch.zeros((B, T), dtype=torch.int32)
         pos = torch.full((B, T), PAD, dtype=torch.int32)
@@ -66,7 +71,14 @@ class AsyncDriver(ChainDriver):
         else:
             cr = torch.zeros(B, dtype=torch.bool)
             for r in live:
-                up = self.next0[r] + T  # bound of the real column-0 position of this step
+                if r in self.host_rows:
+                    q = self.reqs[r]
+                    p0 = q["P"] + len(q["out"]) - 1
+                    self.next0[r] = p0
+                    tok[r, 0], pos[r, 0], nvd[r], acc[r] = q["out"][-1], p0, 0, q["acc"]
+                    pt[r] = self._blocks_for(q, p0)
+                    continue
+                up = self.next0[r] + (T if self.pend else 0)  # bound of the real column-0 position of this step
                 cr[r] = True
                 tok[r] = PAD
                 pos[r] = up + torch.arange(T, dtype=torch.int32)
@@ -86,11 +98,13 @@ class AsyncDriver(ChainDriver):
             **kw,
         )
         assert res.argmax_ids is None and res.handle is not None
-        self.pend.append((res.handle, list(live)))
+        self.pend.append((res.handle, list(live), {r: self.reqs[r]["rid"] for r in live}))
+        self.tip, self.chain_on_tip = res.handle, False
+        self.host_rows.clear()
         self.steps += 1
 
     def resolve(self):
-        h, rows = self.pend.pop(0)
+        h, rows, rids = self.pend.pop(0)
         ids, counts, p0 = h.wait()
         B = tc.B
         cpos = torch.full_like(ids, -1)
@@ -101,7 +115,9 @@ class AsyncDriver(ChainDriver):
         ms = {}
         for r in rows:
             q = self.reqs[r]
-            if q is None:  # finished one step ago: this step ran its row for nothing, output discarded
+            if (
+                q is None or q["rid"] != rids[r]
+            ):  # finished one step ago (its row may carry a new request): output discarded
                 continue
             cnt = int(counts[r])
             assert 1 <= cnt <= T and int(p0[r]) >= 0
@@ -383,5 +399,73 @@ def test_async_chain_sampled(mesh_device, monkeypatch):
             "[async:sampled:time] b8 median ms/step over 50 (audits off): "
             + ", ".join(f"{k}={v:.2f}" for k, v in res.items())
         )
+    finally:
+        mesh_device.set_program_cache_misses_allowed(True)
+
+
+def _prefill_over_pending_run(eng, prompts, overlap, steps=40):
+    """Depth-1 deferred pipeline over 6 requests (row 5 ends after 30 tokens). At step 4 a new request is prefilled into the free row 6,
+    and once row 5 has finished, another into that just-finished row, each while one deferred step is pending. ``overlap``: prefill, then
+    read and propose the pending step (the plugin's order with QWEN36_SPEC_PREFILL_OVERLAP); else read and propose first, then
+    prefill (the drained order). The step after either chains on the (already read) tip and so materializes it."""
+    drv = AsyncDriver(eng, seed=11, sampled=lambda s: False)
+    for u in range(6):
+        drv.admit(u, u, prompts[u], max_new=30 if u == 5 else BIG)
+    joined = set()
+
+    def join(row, rid, prompt):
+        if overlap:
+            drv.admit(row, rid, prompt, max_new=BIG)
+            drv.resolve()
+        else:
+            drv.resolve()
+            drv.admit(row, rid, prompt, max_new=BIG)
+        drv.host_rows.add(row)
+        drv.chain_on_tip = True
+        joined.add(rid)
+
+    for i in range(steps):
+        drv.enq()
+        if len(drv.pend) == 2:
+            drv.resolve()
+        if len(drv.pend) == 1 and i >= 4 and 20 not in joined:
+            join(6, 20, prompts[6])
+        elif len(drv.pend) == 1 and drv.reqs[5] is None and 21 not in joined and 20 in joined:
+            join(5, 21, prompts[5])
+    drv.drain()
+    streams = _streams(drv)
+    for r in drv.live():
+        drv._finish(r)
+    assert joined == {20, 21}, f"joins done {sorted(joined)}"
+    return streams
+
+
+@_marks
+def test_prefill_over_pending_deferred_step(mesh_device, monkeypatch):
+    """The plugin may prefill while one deferred verify step is pending and finish that step afterwards (QWEN36_SPEC_PREFILL_OVERLAP).
+    Greedy, all M1 flags (fused, chain, chain audit every step): every token stream of the run that prefills over the pending step
+    (into a free row and into a just-finished row) equals the run that finishes the pending step before each prefill, bit for bit.
+    """
+    _env(monkeypatch)
+    monkeypatch.setenv("QWEN36_SPEC_PREFILL_OVERLAP", "1")
+    model, eng, tokenizer, prompts = _setup(mesh_device)
+    # warm pass with program-cache misses allowed: the eager programs of a join into running rows and of the materialize compile here
+    _prefill_over_pending_run(eng, prompts, overlap=False, steps=30)
+    n_prog = mesh_device.num_program_cache_entries()
+    mesh_device.set_program_cache_misses_allowed(False)
+    try:
+        cb0 = dict(eng.chain_breaks)
+        drained = _prefill_over_pending_run(eng, prompts, overlap=False)
+        cb1 = dict(eng.chain_breaks)
+        overlapped = _prefill_over_pending_run(eng, prompts, overlap=True)
+        cb2 = dict(eng.chain_breaks)
+        for k, name in ((cb1, "drained"), (cb2, "overlap")):
+            logger.info(f"[async:prefill_overlap] {name} chain_breaks={k}")
+        for cb_a, cb_b in ((cb0, cb1), (cb1, cb2)):
+            assert cb_b.get("tip_not_chainable", 0) - cb_a.get("tip_not_chainable", 0) >= 2, (cb_a, cb_b)
+        assert sorted(drained) == sorted(overlapped) and {20, 21} <= set(overlapped)
+        for rid in sorted(drained):
+            assert len(drained[rid]) > 1 and drained[rid] == overlapped[rid], f"request {rid}: overlap != drained order"
+        assert mesh_device.num_program_cache_entries() == n_prog, "a program compiled after capture"
     finally:
         mesh_device.set_program_cache_misses_allowed(True)

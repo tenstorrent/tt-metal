@@ -32,6 +32,7 @@ from models.demos.blackhole.qwen36.tt.tp_common import (
     spec_chain_enabled,
     spec_fused_enabled,
     spec_hostset_enabled,
+    spec_prefill_overlap_enabled,
     verify_device_topk_m,
 )
 from models.tt_transformers.tt.generator import Generator
@@ -951,6 +952,11 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
         # QWEN36_SPEC_CHAIN=1 and QWEN36_SPEC_FUSED=1 (stage S4b): fused verifies are enqueue-only (decode_forward defer_read), read on
         # the plugin's reader thread (read_decode_output) and may chain on the step in flight. Read at import, like the other flags here.
         "supports_async_spec_decode": bool(spec_chain_enabled() and spec_fused_enabled()),
+        # QWEN36_SPEC_PREFILL_OVERLAP=1 on top of that: prefill_forward may run while one deferred verify step is pending; the plugin
+        # finishes it (propose_draft_tokens with the handle) after the prefill and the next decode materializes it.
+        "supports_prefill_over_pending_spec": bool(
+            spec_chain_enabled() and spec_fused_enabled() and spec_prefill_overlap_enabled()
+        ),
         # decode_forward(finishing_slots=[runner slots]): requests left out of a step only because the step in flight ends them at
         # max_tokens. The engine frees their rows without parking (spec_engine._apply_finishing). Only meaningful with spec.
         "supports_finishing_slots": True,
