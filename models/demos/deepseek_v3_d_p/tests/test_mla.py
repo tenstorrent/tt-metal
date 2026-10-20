@@ -22,6 +22,7 @@ from models.common.utility_functions import comp_pcc, hf_cache_layer_kv
 from models.demos.deepseek_v3_d_p.reference.mla_reference import create_mla_reference
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     fabric2d_device_params,
+    torus_x_device_params,
     torus_xy_device_params,
     torus_y_device_params,
 )
@@ -554,8 +555,12 @@ def _run_chunked_prefill(
     determinism_check=False,
     profile=False,
     tight_cache=False,
+    sp_axis=0,
 ):
     """Unified chunked-prefill scenario, decoupled from the reference.
+
+    `sp_axis` is the mesh axis the sequence is split over; TP takes the other one. 1 is the
+    4x4-stage layout, where SP's ring is mesh axis 1.
 
     `reference` selects how inputs + ground truth are produced -- independent of prefill_len / env:
       * "cpu"   -> synthetic inputs + torch MLA reference (k_pe in Meta basis). Partial-chunk iters
@@ -577,7 +582,7 @@ def _run_chunked_prefill(
         pytest.skip("profile needs reference=None (func) -- accuracy is the cpu/trace path's job")
     if profile and not ttnn.device.IsProgramRealtimeProfilerActive():
         pytest.fail("realtime profiler inactive (needs Blackhole, WORKER dispatch, fabric-tensix DM off)")
-    sp_axis, tp_axis = 0, 1
+    tp_axis = 1 - sp_axis
     if topology is None:
         topology = per_axis_topology()
     mesh_shape = list(mesh_device.shape)
@@ -925,9 +930,13 @@ def _run_chunked_prefill(
     #      chunks). k_nope is compared directly; k_pe is direct for the CPU ref (mla_reference is
     #      Meta-style) and for NoPE, re-interleaved for a roped GPU trace -- see trace_pe_interleave. ----
     if any(users[u]["kv_post"] is not None for u in range(num_users)):
+        kv_concat_dims = [None, None]
+        kv_concat_dims[sp_axis], kv_concat_dims[tp_axis] = 2, 1  # sequence along SP, TP replicas on dim 1
         cache_sr = ttnn.to_torch(
             tt_kvpe_cache.storage,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape),
+            mesh_composer=ttnn.ConcatMesh2dToTensor(
+                mesh_device, dims=tuple(kv_concat_dims), mesh_shape=mesh_device.shape
+            ),
         ).to(torch.float32)[
             :, :1
         ]  # TP replica 0 -> [num_users, 1, seq_cache, kvpe]
@@ -1311,14 +1320,22 @@ _CHUNKED_SCENARIOS = (
 
 
 @pytest.mark.parametrize(
-    "mesh_device,device_params",
+    "mesh_device,device_params,sp_axis",
     [
-        pytest.param((2, 2), fabric2d_device_params(l1_small_size=1152), id="fabric2d-2x2"),
-        pytest.param((2, 4), fabric2d_device_params(l1_small_size=1152), id="fabric2d-2x4"),
+        pytest.param((2, 2), fabric2d_device_params(l1_small_size=1152), 0, id="fabric2d-2x2"),
+        pytest.param((2, 4), fabric2d_device_params(l1_small_size=1152), 0, id="fabric2d-2x4"),
         # high_bw_all_gather parks readiness/completion semaphores in L1_SMALL. On 8x4 the
         # fallback fragments general L1 enough that a later op's static circular buffers collide.
         #
-        pytest.param((8, 4), torus_xy_device_params(l1_small_size=1152), id="torus-xy-8x4"),
+        pytest.param((8, 4), torus_xy_device_params(l1_small_size=1152), 0, id="torus-xy-8x4"),
+        # One 4x4 prefill stage (a Galaxy tray half): SP=4 on the axis-1 ring, TP=4 on the axis-0 line.
+        pytest.param(
+            (4, 4),
+            torus_x_device_params(l1_small_size=1152),
+            1,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+            id="torus-x-4x4-sp1",
+        ),
     ],
     indirect=["mesh_device", "device_params"],
 )
@@ -1339,7 +1356,7 @@ _CHUNKED_SCENARIOS = (
 @pytest.mark.parametrize("determinism_check", [False, True], ids=["no_determinism", "with_determinism"])
 @pytest.mark.timeout(0)
 def test_mla_chunked_prefill(
-    request, mesh_device, kwargs, reference, device_params, variant, use_metadata_tensor, determinism_check
+    request, mesh_device, sp_axis, kwargs, reference, device_params, variant, use_metadata_tensor, determinism_check
 ):
     """Unified chunked-prefill driver crossed with independent mesh and reference axes. Each
     functionality scenario (rotation edges, production depth, multi-user, deep prefix) runs on any mesh
@@ -1396,6 +1413,7 @@ def test_mla_chunked_prefill(
         topology=topology,
         use_metadata_tensor=use_metadata_tensor,
         determinism_check=determinism_check,
+        sp_axis=sp_axis,
         **kwargs,
     )
 

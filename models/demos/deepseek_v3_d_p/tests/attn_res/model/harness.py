@@ -53,7 +53,11 @@ FABRIC = {"fabric_config": ttnn.FabricConfig.FABRIC_2D, "l1_small_size": L1_SMAL
 
 
 def placements():
-    """The meshes this suite runs, one `pytest.param` per box.
+    """The meshes this suite runs, one `pytest.param` per box: `(mesh_shape, device_params, sp_axis)`.
+
+    `sp_axis` is the axis the tokens are split over; the hidden dim goes on the other one,
+    `1 - sp_axis`, which is the only axis the op sends on. Every arm but the 4x4 one keeps
+    today's layout, SP on axis 0.
 
     Every test sizes its input as `PER_CHIP_TOKENS * op.sp_factor`, so the SP axis is what
     picks the chunk: 2x4 holds 1280 tokens and 8x4 holds 5120, both at 640 rows per device,
@@ -75,21 +79,40 @@ def placements():
     fixture state.
     """
     return [
-        pytest.param((2, 4), FABRIC, id="mesh-2x4"),
+        pytest.param((2, 4), FABRIC, 0, id="mesh-2x4"),
         pytest.param(
             (8, 4),
             fabric2d_device_params(l1_small_size=L1_SMALL_SIZE, **EXACT_BOX),
+            0,
             id="mesh-8x4",
         ),
         pytest.param(
             (8, 4),
             torus_x_device_params(l1_small_size=L1_SMALL_SIZE, **EXACT_BOX),
+            0,
             id="torusx-mesh-8x4",
         ),
         pytest.param(
             (8, 4),
             torus_xy_device_params(l1_small_size=L1_SMALL_SIZE, **EXACT_BOX),
+            0,
             id="torusxy-mesh-8x4",
+        ),
+        *stage_4x4_placements(),
+    ]
+
+
+def stage_4x4_placements(**extra_device_params):
+    """One 4x4 prefill stage, a single Galaxy tray half: SP=4 on the axis-1 ring, TP=4 on the
+    axis-0 line, so the op's TP collective runs on a line. It skips unless exactly one half is
+    visible (see run_4x4_stage_tests.sh)."""
+    return [
+        pytest.param(
+            (4, 4),
+            torus_x_device_params(l1_small_size=L1_SMALL_SIZE, **EXACT_BOX, **extra_device_params),
+            1,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+            id="torusx-mesh-4x4-sp1",
         ),
     ]
 

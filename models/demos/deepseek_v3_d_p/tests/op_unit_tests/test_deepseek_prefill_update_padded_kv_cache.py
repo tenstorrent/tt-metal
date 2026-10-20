@@ -424,25 +424,36 @@ def test_update_padded_kv_cache_full_mesh_rejects_axis_topology(mesh_device, exp
 
 
 @pytest.mark.parametrize(
-    "mesh_device, device_params",
+    "mesh_device, device_params, sp_axis",
     [
         pytest.param(
             (1, 4),
             torus_x_device_params(),
+            0,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(1, 4), topology="ring"),
             id="torus-x-1x4",
         ),
         pytest.param(
             (2, 4),
             fabric2d_device_params(),
+            0,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
             id="fabric2d-2x4",
         ),
         pytest.param(
             (8, 4),
             torus_xy_device_params(),
+            0,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="torus-xy-8x4",
+        ),
+        # One 4x4 prefill stage (a Galaxy tray half): the cache's sequence is split over mesh axis 1.
+        pytest.param(
+            (4, 4),
+            torus_x_device_params(),
+            1,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+            id="torus-x-4x4-sp1",
         ),
     ],
     indirect=["mesh_device", "device_params"],
@@ -460,6 +471,7 @@ def test_update_padded_kv_cache_full_mesh_rejects_axis_topology(mesh_device, exp
 def test_update_padded_kv_cache_single_iteration_prefill(
     mesh_device,
     device_params,
+    sp_axis,
     config_name,
     num_users,
     num_layers,
@@ -480,7 +492,7 @@ def test_update_padded_kv_cache_single_iteration_prefill(
         pytest.skip("FP8_E4M3 is Blackhole-only")
     if is_ci_env or is_ci_v2_env:
         pytest.skip("CI runs only the small padded_partial case (multi-iteration); this is a subset of it")
-    sp_axis, tp_axis = 0, 1
+    tp_axis = 1 - sp_axis
     sp = mesh_device.shape[sp_axis]
     tile = ttnn.TILE_SIZE
 
@@ -609,19 +621,23 @@ def _rotated_chip_positions(kv_actual, sp, chunk_local):
 
 
 @pytest.mark.parametrize(
-    "mesh_device",
+    "mesh_device, sp_axis",
     [
         pytest.param(
-            (2, 2), marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 2), topology="mesh-2x2"), id="2x2"
+            (2, 2), 0, marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 2), topology="mesh-2x2"), id="2x2"
         ),
         pytest.param(
-            (2, 4), marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"), id="2x4"
+            (2, 4), 0, marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"), id="2x4"
         ),
         pytest.param(
-            (8, 4), marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"), id="8x4"
+            (8, 4), 0, marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"), id="8x4"
+        ),
+        # One 4x4 prefill stage (a Galaxy tray half): the cache's sequence is split over mesh axis 1.
+        pytest.param(
+            (4, 4), 1, marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"), id="4x4-sp1"
         ),
     ],
-    indirect=True,
+    indirect=["mesh_device"],
 )
 @pytest.mark.parametrize("dtype, layout", DTYPE_LAYOUT_CASES, ids=DTYPE_LAYOUT_IDS)
 @pytest.mark.parametrize(
@@ -636,6 +652,7 @@ def _rotated_chip_positions(kv_actual, sp, chunk_local):
 @pytest.mark.timeout(0)
 def test_update_padded_kv_cache_multi_iteration_prefill(
     mesh_device,
+    sp_axis,
     config_name,
     num_users,
     num_layers,
@@ -664,7 +681,7 @@ def test_update_padded_kv_cache_multi_iteration_prefill(
         pytest.skip("FP8_E4M3 is Blackhole-only")
     if (is_ci_env or is_ci_v2_env) and not (config_name == "small" and scenario == "padded_partial"):
         pytest.skip("CI runs only the small padded_partial case; the others are subsets of it")
-    sp_axis, tp_axis = 0, 1
+    tp_axis = 1 - sp_axis
     sp = mesh_device.shape[sp_axis]
     tile = ttnn.TILE_SIZE
     C = new_isl_tiles_per_dev * tile  # per-device chunk (physical, fixed every iter)
