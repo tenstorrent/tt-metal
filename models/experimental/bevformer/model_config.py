@@ -258,6 +258,11 @@ _TTNN_DTYPES["BOX_DTYPE"] = _TTNN_DTYPES["GRID_DTYPE"]
 # suffice, the rest is margin.
 CODER_BISECTION_STEPS = 22
 
+# DCN input channels whose input goes to the op height-sharded rather than interleaved in L1: most
+# bilinear corners then lie in the core's own shard or a neighbour's. It pays at layer3 (C=256,
+# ten 32-row blocks per core); layer4's three blocks per core and two channel passes run slower so.
+DCN_SHARDED_INPUT_CHANNELS = (256,)
+
 
 # The backbone and FPN. Their choices below are sized for base's 6 cameras at 1600x928; small and
 # tiny take them unchanged, apart from the FPN levels, which follow the variant's outputs. Layer
