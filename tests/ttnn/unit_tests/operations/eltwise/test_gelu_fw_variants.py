@@ -333,9 +333,6 @@ def test_gelu_tanh_fast_param_inf_nan_and_saturation(device):
 
 
 def test_gelu_accurate_bf16_saturated_end(device):
-    """#60224: below the saturation point finite inputs give +0, and a negative NaN or -inf must not come out finite
-    (a BF16 Dest reads a NaN back as +inf, tenstorrent/tt-llk#675, so any non-finite output passes)."""
-    # NaNs of both signs and payloads, then -inf, built from bit patterns so the NaN signs survive.
     special = [0xFFC0, 0xFF81, 0xFFFF, 0x7FC0, 0x7F81, 0x7FFF, 0xFF80]
     row = torch.tensor([b - (1 << 16) if b & 0x8000 else b for b in special], dtype=torch.int16)
     saturated = torch.tensor([-5.5625, -6.0, -13.375, -100.0, -1.0e30, -3.0e38], dtype=torch.bfloat16)

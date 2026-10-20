@@ -149,8 +149,6 @@ constexpr float GELU_HCORR_C3 = 7.5950479368e-04f;
 // GELU(x) = x * Phi(x) where Phi is approximated piecewise
 sfpi_inline sfpi::vFloat calculate_gelu_piecewise(sfpi::vFloat x) {
     sfpi::vFloat x2 = x * x;
-    // Default for x <= -5.54259443 (torch saturation): x - x is +0 for finite x and NaN for a NaN or -inf.
-    // Written as d < 0 (how x > -5.54259443f compiles) so the default fills the latency slot after the compare MAD.
     sfpi::vFloat d = -5.54259443f - x;
     sfpi::vFloat result = x - x;
 
