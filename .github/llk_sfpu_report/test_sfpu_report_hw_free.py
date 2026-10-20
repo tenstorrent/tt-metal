@@ -1013,6 +1013,18 @@ def test_an_op_ran_when_one_of_its_variants_computed():
     assert "did not run" not in report.render([summary])
 
 
+@pytest.mark.parametrize("base, head, not_run", [(700.0, 16.0, True), (300.0, 450.0, False)])
+def test_a_variant_accuracy_does_not_run_goes_by_its_cycles(base, head, not_run):
+    # Accuracy runs fast mode off only: a fast-mode variant that still computes keeps the op's numbers.
+    summary = _did_not_run()
+    for rows in summary["perf"]["unary"].values():
+        fast = dict(rows[0]["MATH_ISOLATE"], base=base, head=head)
+        rows.append(dict(rows[0], op="Square (fast_mode Yes)", fast_mode="Yes", MATH_ISOLATE=fast))
+    text = report.render([summary])
+    assert ("did not run on the PR side" in text) is not_run
+    assert ("Square (fast_mode Yes)" in text) is not not_run
+
+
 @pytest.mark.parametrize(
     "base, head, not_run",
     [
@@ -1088,14 +1100,34 @@ def test_harness_changes_are_found_by_name_and_by_golden_method(tmp_path):
         "    def __init__(self):\n"
         "        self.ops = {\n"
         "            MathOperation.Tanh: self._tanh,\n"
+        "            MathOperation.Fmod: self._fmod,\n"
         "            MathOperation.Abs: self._abs,\n"
         "        }\n"
         "\n"
         "    def _tanh(self, x):\n"
         "        return torch.tanh(x)\n"
         "\n"
+        "    def _fmod(self, x):\n"
+        "        return torch.fmod(x, 2)\n"
+        "\n"
         "    def _abs(self, x):\n"
         "        return abs(x)\n"
+        "\n"
+        "\n"
+        "class EltwiseBinaryGolden:\n"
+        "    def _add(self, a, b):\n"
+        "        return a + b\n"
+        "\n"
+        "\n"
+        "class BinarySFPUGolden(EltwiseBinaryGolden):\n"
+        "    def __init__(self):\n"
+        "        self.ops = {\n"
+        "            MathOperation.SfpuElwadd: self._add,\n"
+        "            MathOperation.SfpuBinaryFmod: self._fmod,\n"
+        "        }\n"
+        "\n"
+        "    def _fmod(self, a, b):\n"
+        "        return torch.fmod(a, b)\n"
     )
     params = 'class MathOperation(Enum):\n    Exp = OpSpec("exponential")\n    SfpuLogsigmoid = OpSpec("LOGSIGMOID")\n'
     git("init", "-q")
@@ -1106,8 +1138,14 @@ def test_harness_changes_are_found_by_name_and_by_golden_method(tmp_path):
             py + "test_eltwise_unary_sfpu.py": "OPS = [MathOperation.Abs]\n",
         }
     )
-    # Tanh's golden changes; a method added after Abs's does not change Abs.
-    new_golden = golden.replace("tanh(x)", "tanh(x.double())") + "\n    def _sign(self, x):\n        return x.sign()\n"
+    # Tanh's golden changes, and so do the binary _fmod and the _add the binary golden
+    # inherits. The unary _fmod does not, and a method added after Abs's does not change Abs.
+    new_golden = (
+        golden.replace("tanh(x)", "tanh(x.double())")
+        .replace("fmod(a, b)", "fmod(a.double(), b)")
+        .replace("a + b", "b + a")
+        .replace("abs(x)\n", "abs(x)\n\n    def _sign(self, x):\n        return x.sign()\n")
+    )
     write(
         {
             py + "helpers/golden_generators.py": new_golden,
@@ -1116,8 +1154,11 @@ def test_harness_changes_are_found_by_name_and_by_golden_method(tmp_path):
         }
     )
     plan = overlay.make_plan(tmp_path, "HEAD", base)
-    assert overlay.harness_changes(plan, ["SfpuLogsigmoid", "Tanh", "Abs", "Exp", "Typecast"]) == {
+    ops = ["SfpuLogsigmoid", "Tanh", "Abs", "Exp", "Typecast", "Fmod", "SfpuBinaryFmod", "SfpuElwadd"]
+    assert overlay.harness_changes(plan, ops) == {
         "SfpuLogsigmoid": [py + "helpers/llk_params.py"],
         "Tanh": [py + "helpers/golden_generators.py"],
+        "SfpuBinaryFmod": [py + "helpers/golden_generators.py"],
+        "SfpuElwadd": [py + "helpers/golden_generators.py"],
         "Exp": [py + "test_eltwise_unary_sfpu.py"],
     }

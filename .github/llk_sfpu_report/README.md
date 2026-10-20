@@ -114,9 +114,10 @@ show only rows that changed, regressions first, and fold everything else into
 
 Above the regressions, an op that **did not run on the PR side** gets its own ⚠️ line,
 and its numbers are left out: they are not the PR's kernel. On the PR side it hands
-back an input unchanged on every lane, where the base side computed something; an op
-without accuracy results instead takes under a cycle per row there, and at least 10
-times fewer cycles than before. Either main's harness asks for the op in a way the PR's
+back an input unchanged on every lane, where the base side computed something. The perf
+variants accuracy does not run, and an op without accuracy results, go by their cycles
+instead: under a cycle per row there, and at least 10 times fewer than before. Either
+main's harness asks for the op in a way the PR's
 device code no longer runs (#54080 moved logsigmoid from the binary to the unary
 harness, in its Python and in `sfpu_operations.h`), or the PR's kernel stopped
 computing. The line says which is likely: when the PR also changes the op in the

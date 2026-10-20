@@ -418,17 +418,21 @@ def accuracy_section(summaries):
     return lines + [""]
 
 
+def _perf_only(family, row):
+    """Whether accuracy does not run this perf variant: fast mode on, or a binary op's approx Yes."""
+    return row.get("fast_mode") == "Yes" or (family == "binary" and row["approx"] != "No")
+
+
 def _perf_only_variants(summaries):
-    """Perf variants accuracy does not run: fast mode on, or a binary op's approx Yes."""
+    """The perf variants accuracy does not run."""
     out = []
     for s in summaries:
         for family, by_schedule in s["perf"].items():
             for row in by_schedule.get("loadmacro", []):
-                op = row["op"].split(" (", 1)[0]
-                if row.get("fast_mode") == "Yes":
-                    out.append(f"`{op}` fast mode")
-                elif family == "binary" and row["approx"] != "No":
-                    out.append(f"`{op}` approx={row['approx']}")
+                if _perf_only(family, row):
+                    op = row["op"].split(" (", 1)[0]
+                    mode = "fast mode" if row.get("fast_mode") == "Yes" else f"approx={row['approx']}"
+                    out.append(f"`{op}` {mode}")
     return list(dict.fromkeys(out))
 
 
@@ -568,25 +572,33 @@ def _not_run(s):
     code no longer runs (#54080), or the PR's kernel stopped computing.
 
     Accuracy decides: every variant hands back an input unchanged on the PR side, and
-    none did before. An op without accuracy results goes by its cycles: every variant
-    under a cycle per row, and NOT_RUN_SPEEDUP times faster than before.
+    none did before. The perf variants accuracy does not run, and an op without
+    accuracy results, go by their cycles: under a cycle per row, and NOT_RUN_SPEEDUP
+    times faster than before.
     """
-    returns, cycles = {}, {}
+    returns, cycles, perf_only = {}, {}, {}
     for rec in s["accuracy"]:
         if "base" in rec and "returns_input" in rec:
             returns.setdefault(rec["key"][0], []).append(rec["returns_input"])
-    for by_schedule in s["perf"].values():
+    for family, by_schedule in s["perf"].items():
         for row in by_schedule.get("loadmacro", []):
             m = row.get("MATH_ISOLATE", {})
             if m.get("base") is not None and m.get("head") is not None:
-                cycles.setdefault(row["op"].split(" (", 1)[0], []).append((m["base"], m["head"]))
+                op = row["op"].split(" (", 1)[0]
+                cycles.setdefault(op, []).append((m["base"], m["head"]))
+                if _perf_only(family, row):
+                    perf_only.setdefault(op, []).append((m["base"], m["head"]))
+
+    def collapsed(timed):
+        return all(head < ROWS_PER_TILE and base >= NOT_RUN_SPEEDUP * head for base, head in timed)
+
     out = {}
     for op in s["ops"]["measured"]:
         sides, timed = returns.get(op), cycles.get(op, [])
         if sides:
-            if all(r["head"] and not r["base"] for r in sides):
+            if all(r["head"] and not r["base"] for r in sides) and collapsed(perf_only.get(op, [])):
                 out[op] = {"returns": sides[0]["head"], "cycles": timed}
-        elif timed and all(head < ROWS_PER_TILE and base >= NOT_RUN_SPEEDUP * head for base, head in timed):
+        elif timed and collapsed(timed):
             out[op] = {"returns": None, "cycles": timed}
     return out
 
