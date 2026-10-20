@@ -628,7 +628,7 @@ jobs:
       pytest-markers: "not perf and not nightly and not quasar and not accuracy"
 
   # Quasar LLK tests on ttsim, two shards (llk_pr_gate_tests.yaml, sim_quasar_xl).
-  # Replaces the compile-only llk-build-quasar check. The skip list is the script default.
+  # Sanity runs the same shards. The skip list is the script default.
   llk-quasar-tests:
     needs: [resolve-docker-pull-refs, build-docker-images, find-changed-files]
     if: ${{
