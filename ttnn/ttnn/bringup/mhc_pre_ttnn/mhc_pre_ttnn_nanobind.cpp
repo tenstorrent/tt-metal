@@ -132,6 +132,9 @@ void bind_mhc_pre_ttnn(nb::module_& mod) {
             comb = exp(L - rowmax) / rowsum + hc_eps; m / (colsum + hc_eps); (sinkhorn_iters - 1) x {rows, columns}
         coefficients_given=True: input is a finished hc (..., T, n(n+2)); only pre is read.
         streams (..., T, n*C) fp32, optional: y = sum_i pre_i * streams[..., i*C:(i+1)*C] -> (..., T, C) fp32.
+        collapse_pre (..., T, n..32) fp32, optional (default None; needs streams, coefficients_given=False): y
+        collapses with collapse_pre's columns 0..n-1 instead of the pre just computed; hc is still returned
+        (single-pass mHC: a sublayer collapses with the previous sublayer's pre; deepseek_v41_flash_d_p P.14).
 
         Returns:
             tuple[ttnn.Tensor | None, ttnn.Tensor | None]: (hc, y); hc when computed, y when streams are given.
@@ -151,7 +154,8 @@ void bind_mhc_pre_ttnn(nb::module_& mod) {
         nb::arg("clamp_max") = 30.0,
         nb::arg("coefficients_given") = false,
         nb::arg("compute_kernel_config") = nb::none(),
-        nb::arg("deepseek") = false);
+        nb::arg("deepseek") = false,
+        nb::arg("collapse_pre") = nb::none());
 
     ttnn::bind_function<"mhc_pre_xing_pack", "ttnn.bringup.">(
         mod,
@@ -159,17 +163,29 @@ void bind_mhc_pre_ttnn(nb::module_& mod) {
         The row ttnn.bringup.mhc_pre_xing reduces, from the caller's partial projection, in one pass over the streams.
 
         Args:
-            mix (ttnn.Tensor): (..., T, 32) float32 TILE: the partial x @ fn^T in columns 0 .. n(n+2)-1, zero elsewhere.
+            mix (ttnn.Tensor | None): (..., T, 32) float32 TILE: the partial x @ fn^T in columns 0 .. n(n+2)-1, zero
+                elsewhere. None only in engram mode.
             streams (ttnn.Tensor): (..., T, n*C) float32 TILE, the local stream columns.
 
+        Keyword Args:
+            n (int): streams, 1..4.
+            engram_keys (ttnn.Tensor, optional): engram mode (default None; with engram_weight, mix None;
+                deepseek_v41_flash_d_p P.14): (..., T, >= n*C) float32 TILE, the keys k in columns 0 .. n*C - 1.
+            engram_weight (ttnn.Tensor, optional): (..., 32, n*C) float32 TILE, leading dims 1: the weight row w on
+                all 32 rows.
+
         Returns:
-            ttnn.Tensor: mix with column n (n + 2) = sum over the row of streams^2 (exact fp32 on the SFPU).
+            ttnn.Tensor: mix with column n (n + 2) = sum over the row of streams^2 (exact fp32 on the SFPU). Engram
+            mode: a new row (..., T, 32) float32 = [sum_c h_i w_i k_i (i < n) | sum_c h_i^2 | sum_c k_i^2 | 0 ...] of
+            the chip's columns (h_i = streams[..., i C:(i+1) C]), exact fp32 SFPU, one pass over h and k.
         )doc",
         &mhc_pre_xing_pack,
-        nb::arg("mix"),
+        nb::arg("mix").none(),
         nb::arg("streams"),
         nb::kw_only(),
-        nb::arg("n") = 4);
+        nb::arg("n") = 4,
+        nb::arg("engram_keys") = nb::none(),
+        nb::arg("engram_weight") = nb::none());
 
     mod.def(
         "_mhc_pre_ttnn_program_descriptor",

@@ -15,6 +15,11 @@ TILE (row-split, replicated over TP; only columns 0..3 are read) -> out [1, 1, S
 hidden columns. The column split carries through, so there is no collective and no weight. ttnn.multiply + 3 x
 ttnn.addcmul with a [S/SP, 1] column broadcast: both take the SFPU path at fp32 (ternary_program_factory.cpp: the FPU
 addcmul is only for non-fp32), so every product and sum is an exact fp32 operation (K-30 does not apply). No host work.
+
+MHC_FUSED=on (P.14) and a whole [S/SP, 24] mixes tensor as ``pre``: ONE ttnn.bringup.mhc_pre_xing(pre, x,
+coefficients_given=True) program instead (the same fp32 SFPU multiply + fused multiply-adds in stream order). The
+all-device model then folds attn / ffn collapse into the hc steps (tt/mhc.py:TtHcMixes.fused); this path is its final
+collapse (and the hybrid's ffn_collapse).
 """
 
 from __future__ import annotations
@@ -23,19 +28,24 @@ import ttnn
 
 from .common import DRAM
 from .layout import HC
+from .settings import settings
 
 
 class TtHcCollapse:
     """Call with (streams [1, 1, R, n x w] fp32, pre [1, 1, R, >= n] fp32); returns [1, 1, R, w] fp32. Consumes
     neither input."""
 
-    def __init__(self, n: int = HC):
+    def __init__(self, n: int = HC, fused: bool | None = None):
         self.n = n
+        self.fused = settings.get("MHC_FUSED") == "on" if fused is None else bool(fused)
 
     def __call__(self, x: ttnn.Tensor, pre: ttnn.Tensor) -> ttnn.Tensor:
         assert x.dtype == ttnn.float32 and pre.dtype == ttnn.float32, (x.dtype, pre.dtype)
         rows, w = x.shape[-2], x.shape[-1] // self.n
         assert x.shape[-1] == self.n * w and pre.shape[-1] >= self.n and pre.shape[-2] == rows, (x.shape, pre.shape)
+        if self.fused and pre.shape[-1] == self.n * (self.n + 2):
+            _, y = ttnn.bringup.mhc_pre_xing(pre, x, n=self.n, coefficients_given=True)
+            return y
         y = None
         for i in range(self.n):
             s = ttnn.slice(x, [0, 0, 0, i * w], [1, 1, rows, (i + 1) * w], memory_config=DRAM)

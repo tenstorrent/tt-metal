@@ -340,6 +340,19 @@ TABLE = {
         "the mHC residual post * y + comb^T x (tt/residual.py): fused = ttnn.bringup.mhc_post in one program; addcmul "
         "= per output stream multiply + 4 x addcmul; both fp32 on the SFPU",
     ),
+    "MHC_FUSED": Setting(
+        "on",
+        ("on", "off"),
+        "the mHC chain of the all-device model (tt/model.py; P.14, owner comparison). on = fewer passes over the fp32 "
+        "streams: each hc step computes its coefficients AND collapses the streams with the pending / previous pre in "
+        "ONE ttnn.bringup.mhc_pre_xing(collapse_pre=) program (attn_collapse / ffn_collapse do no work; the block "
+        "boundary carries the whole [S/SP, 24] mixes as the pending pre); the residuals (ttnn.bringup.mhc_post "
+        "stats_weight=) also emit the next hc step's partial row (sum of squares + the chip's hc_fn slice), so that hc "
+        "step reads no streams before its exchange; the final collapse is mhc_pre_xing(coefficients_given=True); the "
+        "engram add's partials come from one mhc_pre_xing_pack(engram=) pass and its add is mhc_post with an "
+        "identity comb. off = the P.13 chain (matmul + pack per hc step, the multiply / addcmul collapses, the "
+        "engram op chains)",
+    ),
     "HC_SINKHORN": Setting(
         "sfpu_fp32",
         ("sfpu_fp32", "fpu"),

@@ -28,6 +28,10 @@ namespace ttnn::operations::bringup::mhc_pre_ttnn {
 //   m / (colsum + hc_eps), then (sinkhorn_iters - 1) x { rows, columns } as above. Needs the coefficients.
 // coefficients_given = true: `input` is a finished hc (..., T, n(n+2)) fp32 (only pre, columns 0..n-1, is read).
 // streams (..., T, n*C) fp32, optional: y = sum_i pre_i * streams[..., i*C:(i+1)*C] (..., T, C) fp32.
+// collapse_pre (..., T, n..32) fp32, optional (default none; needs streams and the coefficients): y collapses with
+//   collapse_pre's columns 0..n-1 instead of the pre just computed (single-pass mHC, deepseek_v41_flash_d_p P.14: a
+//   sublayer collapses with the previous sublayer's pre); hc is still returned. Compile define MHC_XING_GIVEN_PRE
+//   (absent when off: the program is the one it was).
 // Returns (hc or None, y or None): hc when the coefficients are computed, y when streams are given.
 std::tuple<std::optional<Tensor>, std::optional<Tensor>> mhc_pre_xing(
     const Tensor& input,
@@ -43,11 +47,21 @@ std::tuple<std::optional<Tensor>, std::optional<Tensor>> mhc_pre_xing(
     double clamp_max = 30.0,
     bool coefficients_given = false,
     const std::optional<tt::tt_metal::ComputeConfigDescriptor>& compute_kernel_config = std::nullopt,
-    bool deepseek = false);
+    bool deepseek = false,
+    const std::optional<Tensor>& collapse_pre = std::nullopt);
 
 // ttnn.bringup.mhc_pre_xing_pack: the row mhc_pre_xing reduces, from the caller's partial projection. `mix` (..., T,
 // 32) fp32 (partial x @ fn^T in columns 0 .. n(n+2)-1, zero elsewhere) and the local streams (..., T, n*C) fp32 -> mix
 // with column n (n + 2) = sum over the row of streams^2 (exact fp32, SFPU), one pass over the streams.
-Tensor mhc_pre_xing_pack(const Tensor& mix, const Tensor& streams, int64_t n = 4);
+// Engram mode (engram_keys and engram_weight given, mix None; deepseek_v41_flash_d_p P.14): a separate program, one
+// pass over the streams h and the keys k (engram_keys (..., T, >= n*C) fp32, the keys in columns 0 .. n*C - 1) with
+// the weight w (engram_weight (..., 32, n*C) fp32, the weight row on all 32 rows) -> a new row (..., T, 32) fp32 =
+// [sum_c h_i w_i k_i (i < n) | sum_c h_i^2 | sum_c k_i^2 | 0 ...] (exact fp32 SFPU; the engram gate's partials).
+Tensor mhc_pre_xing_pack(
+    const std::optional<Tensor>& mix,
+    const Tensor& streams,
+    int64_t n = 4,
+    const std::optional<Tensor>& engram_keys = std::nullopt,
+    const std::optional<Tensor>& engram_weight = std::nullopt);
 
 }  // namespace ttnn::operations::bringup::mhc_pre_ttnn

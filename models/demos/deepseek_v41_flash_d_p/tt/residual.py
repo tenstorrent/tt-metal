@@ -53,6 +53,21 @@ class TtHcResidual:
             return self._fused(x, mix, y, rows)
         return self._addcmul(x, mix, y, rows, w)
 
+    def fused(self, x: ttnn.Tensor, mix: ttnn.Tensor, y: ttnn.Tensor, hc=None):
+        """MHC_FUSED=on (tt/model.py): the new streams, and, when ``hc`` (the tt/mhc.py:TtHcMixes that reads them
+        next) is given, that step's partial row [1, 1, R, 32] (x' @ fn^T + sum x'^2), emitted by the same mhc_post
+        pass (stats_weight); (streams, row or None). The pending pre stays the caller's (the whole mixes)."""
+        if hc is None or self.mode != "fused":
+            return TtHcResidual.__call__(self, x, mix, y), None
+        rows = x.shape[-2]
+        n = self.n
+        post = ttnn.slice(mix, [0, 0, 0, n], [1, 1, rows, 2 * n], memory_config=DRAM)
+        comb = ttnn.slice(mix, [0, 0, 0, 2 * n], [1, 1, rows, 2 * n + n * n], memory_config=DRAM)
+        out, row = ttnn.bringup.mhc_post(y, x, post, comb, stats_weight=hc.fn_t, compute_kernel_config=hc.post_cfg)
+        ttnn.deallocate(post)
+        ttnn.deallocate(comb)
+        return out, row
+
     def _fused(self, x, mix, y, rows):
         n = self.n
         post = ttnn.slice(mix, [0, 0, 0, n], [1, 1, rows, 2 * n], memory_config=DRAM)

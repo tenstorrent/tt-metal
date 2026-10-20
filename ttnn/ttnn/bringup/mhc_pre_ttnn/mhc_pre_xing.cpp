@@ -11,6 +11,7 @@
 #include "mhc_pre_ttnn.hpp"
 #include "device/mhc_pre_ttnn_device_operation_types.hpp"
 #include "device/mhc_pre_xing_device_operation.hpp"
+#include "device/mhc_engram_pack_device_operation.hpp"
 
 namespace ttnn::operations::bringup::mhc_pre_ttnn {
 
@@ -47,7 +48,8 @@ std::tuple<std::optional<Tensor>, std::optional<Tensor>> mhc_pre_xing(
     double clamp_max,
     bool coefficients_given,
     const std::optional<tt::tt_metal::ComputeConfigDescriptor>& compute_kernel_config,
-    bool deepseek) {
+    bool deepseek,
+    const std::optional<Tensor>& collapse_pre) {
     const auto cfg = compute_kernel_config.value_or(default_compute_kernel_config());
     if (!cfg.fp32_dest_acc_en) {
         throw UnsupportedAxisError("mhc_pre_xing: fp32_dest_acc_en=False not in SUPPORTED [True]");
@@ -102,9 +104,31 @@ std::tuple<std::optional<Tensor>, std::optional<Tensor>> mhc_pre_xing(
         }
     }
 
+    if (collapse_pre.has_value()) {
+        if (coefficients_given || !streams.has_value()) {
+            throw ValueErrorCpp(
+                "mhc_pre_xing: collapse_pre needs streams and the coefficients (coefficients_given=False)");
+        }
+        check_tile_dram_f32(*collapse_pre, "collapse_pre");
+        const auto& ps = collapse_pre->logical_shape();
+        const auto& is = input.logical_shape();
+        if (ps.rank() != is.rank()) {
+            throw ValueErrorCpp("mhc_pre_xing: collapse_pre and input ranks differ");
+        }
+        for (size_t i = 0; i + 1 < ps.rank(); ++i) {
+            if (ps[i] != is[i]) {
+                throw ValueErrorCpp("mhc_pre_xing: collapse_pre and input leading dims differ");
+            }
+        }
+        if (ps[-1] < n || ps[-1] > TILE_HW) {
+            throw ValueErrorCpp(fmt::format("mhc_pre_xing: collapse_pre last dim {} must be in [n, 32]", ps[-1]));
+        }
+    }
+
     MhcPreXingParams p;
     p.n = static_cast<uint32_t>(n);
     p.compute_coef = !coefficients_given;
+    p.given_pre = collapse_pre.has_value();
     if (!coefficients_given) {
         p.scale = {scale[0], scale[1], scale[2]};
         p.base = base;
@@ -117,7 +141,7 @@ std::tuple<std::optional<Tensor>, std::optional<Tensor>> mhc_pre_xing(
     p.clamp_max = clamp_max;
     p.deepseek = deepseek;
     p.compute_config = cfg;
-    auto out = ttnn::prim::bringup::mhc_pre_xing(input, streams, p);
+    auto out = ttnn::prim::bringup::mhc_pre_xing(input, streams, p, collapse_pre);
     std::optional<Tensor> hc, y;
     size_t k = 0;
     if (p.compute_coef) {
@@ -129,10 +153,50 @@ std::tuple<std::optional<Tensor>, std::optional<Tensor>> mhc_pre_xing(
     return {hc, y};
 }
 
-Tensor mhc_pre_xing_pack(const Tensor& mix, const Tensor& streams, int64_t n) {
+Tensor mhc_pre_xing_pack(
+    const std::optional<Tensor>& mix_opt,
+    const Tensor& streams,
+    int64_t n,
+    const std::optional<Tensor>& engram_keys,
+    const std::optional<Tensor>& engram_weight) {
     if (n < 1 || n > 4) {
         throw ValueErrorCpp(fmt::format("mhc_pre_xing_pack: n={} must be in [1, 4]", n));
     }
+    if (engram_keys.has_value() || engram_weight.has_value()) {
+        if (!engram_keys.has_value() || !engram_weight.has_value() || mix_opt.has_value()) {
+            throw ValueErrorCpp("mhc_pre_xing_pack: engram mode needs engram_keys and engram_weight, and mix None");
+        }
+        check_tile_dram_f32(streams, "streams");
+        check_tile_dram_f32(*engram_keys, "engram_keys");
+        check_tile_dram_f32(*engram_weight, "engram_weight");
+        const auto& ss = streams.logical_shape();
+        const auto& ks = engram_keys->logical_shape();
+        const auto& ws = engram_weight->logical_shape();
+        if (ss[-1] % (n * TILE_HW) != 0) {
+            throw ValueErrorCpp(fmt::format("mhc_pre_xing_pack: streams last dim {} must be n*C, C % 32 == 0", ss[-1]));
+        }
+        if (ks.rank() != ss.rank() || ks[-1] < ss[-1]) {
+            throw ValueErrorCpp("mhc_pre_xing_pack: engram_keys must be (..., T, >= n*C) like the streams");
+        }
+        for (size_t i = 0; i + 1 < ss.rank(); ++i) {
+            if (ks[i] != ss[i]) {
+                throw ValueErrorCpp("mhc_pre_xing_pack: engram_keys and streams leading dims differ");
+            }
+        }
+        int64_t lead = 1;
+        for (size_t i = 0; i + 2 < ws.rank(); ++i) {
+            lead *= ws[i];
+        }
+        if (lead != 1 || ws[-2] != TILE_HW || ws[-1] != ss[-1]) {
+            throw ValueErrorCpp("mhc_pre_xing_pack: engram_weight must be (..., 32, n*C) with leading dims 1");
+        }
+        return ttnn::prim::bringup::mhc_engram_pack(streams, *engram_keys, *engram_weight, static_cast<uint32_t>(n))
+            .at(0);  // [1] is the partials scratch, freed with the vector
+    }
+    if (!mix_opt.has_value()) {
+        throw ValueErrorCpp("mhc_pre_xing_pack: mix is required (it is None only in engram mode)");
+    }
+    const Tensor& mix = *mix_opt;
     check_tile_dram_f32(mix, "mix");
     check_tile_dram_f32(streams, "streams");
     if (mix.logical_shape()[-1] != TILE_HW) {
