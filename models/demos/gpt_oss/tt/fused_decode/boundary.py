@@ -57,7 +57,7 @@ def flat_tiles(hidden):
 
 # The boundary core holds the flat residual, partial sum, receive buffers and normed output, and runs the boundary op
 # and the producers' fabric sender. It must not be a streamed-matmul worker core (those sit next to the DRAM banks,
-# columns 0-2 and 6-8), so the sender can join the producer programs; (0, 1), (1, 1), (0, 2), (3, 0) and (4, 0)
+# columns 0-2 and 7-9), so the sender can join the producer programs; (0, 1), (1, 1), (0, 2), (3, 0) and (4, 0)
 # measured alike.
 BOUNDARY_CORE = (0, 1)
 
