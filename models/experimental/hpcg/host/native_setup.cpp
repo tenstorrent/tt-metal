@@ -11,6 +11,8 @@
 #include <cstdint>
 #include <vector>
 
+#include <omp.h>
+
 namespace {
 
 // Storage order of one level (reference/problem.py): colour blocks c = px + 2 py + 4 pz, y-bands inside a block,
@@ -130,6 +132,37 @@ int64_t merge_pieces(
         ++np;
     }
     return np;
+}
+
+// v[i] = v[the last mapped index before i] for every unmapped i (v[0] when there is none), in parallel: each thread
+// finds its chunk's last mapped index, a short serial pass carries it into the next chunks, then each thread fills
+// its chunk. Mapped entries are only read, so threads never race.
+template <typename T, typename M>
+void fill_from_previous(T* v, int64_t n, M mapped) {
+    const int64_t nt = omp_get_max_threads(), chunk = (n + nt - 1) / nt;
+    std::vector<int64_t> last(nt, -1), carry(nt, -1);
+#pragma omp parallel for schedule(static, 1)
+    for (int64_t c = 0; c < nt; ++c) {
+        for (int64_t i = c * chunk; i < std::min(n, (c + 1) * chunk); ++i) {
+            if (mapped(i)) {
+                last[c] = i;
+            }
+        }
+    }
+    for (int64_t c = 1; c < nt; ++c) {
+        carry[c] = last[c - 1] >= 0 ? last[c - 1] : carry[c - 1];
+    }
+#pragma omp parallel for schedule(static, 1)
+    for (int64_t c = 0; c < nt; ++c) {
+        int64_t run = carry[c];
+        for (int64_t i = c * chunk; i < std::min(n, (c + 1) * chunk); ++i) {
+            if (mapped(i)) {
+                run = i;
+            } else {
+                v[i] = v[run < 0 ? 0 : run];
+            }
+        }
+    }
 }
 
 }  // namespace
@@ -271,16 +304,17 @@ int64_t hpcg_link(
             }
         });
     }
-    int64_t rmax = -1, last = 0;
+    int64_t rmax = -1;
+#pragma omp parallel for schedule(static) reduction(max : rmax)
     for (int64_t qc = 0; qc < CP; ++qc) {
-        if (Rw[qc] > 0.0) {
+        if (Rw[qc] > 0.0f) {
             rmax = std::max(rmax, (int64_t)R[qc]);
-            last = qc;
-        } else {
-            // R[last] is final (last < qc); with no real row yet, last = 0 and R[0] = 0, as in numpy
-            R[qc] = qc == 0 ? 0 : R[last];
         }
     }
+    if (CP > 0 && !(Rw[0] > 0.0f)) {
+        R[0] = 0;  // no real row before: padding rows take R[0] = 0, as in numpy
+    }
+    fill_from_previous(R, CP, [&](int64_t qc) { return Rw[qc] > 0.0f; });
 #pragma omp parallel for schedule(static)
     for (int64_t q = 0; q < nb0; ++q) {
         Pm[q] = 0;
@@ -293,14 +327,7 @@ int64_t hpcg_link(
             Pw[R[qc]] = 1.0f;
         }
     }
-    int64_t lastm = 0;
-    for (int64_t q = 0; q < nb0; ++q) {
-        if (Pw[q] > 0.0) {
-            lastm = q;
-        } else {
-            Pm[q] = Pm[lastm];
-        }
-    }
+    fill_from_previous(Pm, nb0, [&](int64_t q) { return Pw[q] > 0.0f; });  // Pm[0] = 0 when q = 0 is unmapped
     return rmax;
 }
 

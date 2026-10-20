@@ -36,7 +36,7 @@ def main(nx, which, per_core):
         op()
         op()
         ttnn.synchronize_device(device)
-        d = ttnn.to_torch(h.debug).numpy().astype(np.int64)
+        d = ttnn.to_torch(h.debug).numpy().view(np.uint32).astype(np.int64)  # 32-bit counters under an fp32 label
         rd, wr = d[0::2, :8], d[1::2, :8]
         act = rd[:, 7] > 0
         print(which, "cores", int(act.sum()), "(cycles at the AI clock; mean / max over cores)")
