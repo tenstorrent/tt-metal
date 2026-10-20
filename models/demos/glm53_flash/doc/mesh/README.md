@@ -59,6 +59,20 @@ eager step in the middle), and the outputs are checked byte-equal across the fou
 | `test_mesh_decoder.py` layer 0, B=2/row (16 users, DP8 x TP4) | per-user pcc vs HF prefill min 0.999869 p10 0.999873 median 0.999913; traced HF-cache steps min 0.99985-0.99988 | `test_8x4_decoder_l0_torus.log` (47 s) |
 | layers 3, 4 (hybrid experts EP4 x TP8: 72 experts x 256-wide slices per chip) | layer 3: per-user min 0.999525 p10 0.999659 median 0.999773; layer 4: min 0.999912 p10 0.999966 median 0.999986 (16 users x 48 traced steps + 3 HF-cache steps) | `test_8x4_decoder_l34_torus.log` (132 s incl. weight load) |
 
+## Resident multi-layer model, traced end-to-end decode step (`tt/mesh_model.py`, `tests/test_mesh_model.py`)
+
+Embedding (replicated) -> N `FunctionalDecoder` layers on the mesh -> head (replicated, greedy argmax), the
+whole step in one captured trace; the prompt goes through the decode step token by token (HF prefill rows
+of the dump chain `L45_S128` are the reference of the output after the last built layer).
+
+| mesh | layers | users/row | chain vs HF (per-user pcc, 32 tokens) | greedy id vs host head | traced step | per layer | log |
+|---|---|---|---|---|---|---|---|
+| (1,4) row-6 ring, TP4 | 0-5 (3 dense + 3 MoE) | 2 | 0.999253 (through 6 layers) | 100 % | 32.55 ms -> 30.7 tok/s per user, 61 aggregate | 5.43 ms (single chip: 10.8 ms per MoE layer) | `test_mesh_model_ring_l0-5.log` |
+| 8x4, all 45 layers | 0-44 | 4 and 32 | pending (needs the whole Galaxy free) | | | | |
+
+Build cost: dense layer 2.7 s, MoE layer 43-48 s on the (1,4) mesh (host fp8 -> bf16 dequant 3-7 s, the rest
+is the bfp8 conversion + upload), i.e. ~32 min for 45 layers.
+
 ## Root cause of the TP4 sparse-row gap (2026-10-20)
 
 `test_tp4_sparse_prefill_layer3` first gave rows >= 2048 at 0.99777 (single chip 0.99990) while the
