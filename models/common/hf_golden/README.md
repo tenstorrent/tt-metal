@@ -29,6 +29,7 @@ the dtype, the layers it exists on and what it is.
 | `generate_golden_hy3.py` | tencent/Hy3 | transformers `hy_v3` (GQA + MoE) |
 | `generate_golden_hy4_preview.py` | tencent/Hy4-preview | transformers `hy_v4` (DSA + sinks + IHC), needs transformers >= 5.17 |
 | `generate_golden_kimi_k2_7_code.py` | moonshotai/Kimi-K2.7-Code | transformers `kimi_k25` (DeepseekV3 text model), INT4 experts dequantized, needs transformers >= 5.17 |
+| `generate_golden_k2_horizon.py` | IFM/K2-Horizon-375B-A23B | repo remote code (GQA + partial RoPE + MoE), plain bf16 |
 | `generate_golden_whole_model.py` | Qwen/Qwen3.8-27B, Llama-3.1-8B, Mistral-Medium-3.5 | whole model, one forward (see below) |
 
 Not covered yet:
@@ -72,6 +73,13 @@ to compressed_tensors 0.17 (checked at run time on the first MoE layer). transfo
 latent (normed c_kv and roped k_pe), so it is stored as is. isl 56320 with `--prefill-chunk 5120`: 2.2 min, 54 GB GPU
 peak, 64 GB on disk (38 GB trimmed to 28 layers); its first 10240 rows equal the isl 10240 run bit for bit (426/426
 tensors).
+
+**K2-Horizon-375B-A23B:** `<|ifm|begin_of_text|>` prefix, the BOS its tokenizer prepends (wikitext ppl at isl 10240
+over the same 10100 tokens: 6.266 BOS, 6.278 raw, 6.325 chat). Its router computes the logits in bf16 (stored widened
+to fp32), and RoPE rotates dim pairs (j, j + 64) for j < 32 only. isl 56320 with `--prefill-chunk 5120`: 2.2 min,
+41 GB GPU peak, 57 GB on disk (36 GB trimmed to 26 layers); its first 10240 rows equal the isl 10240 run bit for bit
+(359/359 tensors), ppl 4.146 over all 56318 tokens. Layer 1 writes one outlier channel (max |x| ~1e3 at rms 0.7) and
+layers 59-60 blow the residual up to max |x| ~1.1e6: compare those relatively.
 
 **MiniMax-M3 at long ISL:** the upstream lightning indexer builds a whole [4, N, N] fp32 score matrix (~105 GB peak at
 isl 56320 with its masked copy). `HF_GOLDEN_INDEXER_CHUNK=4096` builds it 4096 query rows at a time (~4 GB); every op
