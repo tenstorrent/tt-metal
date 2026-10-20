@@ -181,7 +181,13 @@ def _big_setup(seed=0, rows=2048, shards=4, heads=2, dim=64, q_chunk=256):
     consts = spec_constants(geo, scale=dim**-0.5)  # forcing rules off; they floor density and compress the ratio
     g = torch.Generator().manual_seed(seed)
     shape = (shards, heads, rows, dim)
-    return geo, consts, torch.randn(shape, generator=g) * 0.5, torch.randn(shape, generator=g) * 0.5, torch.randn(shape, generator=g)
+    return (
+        geo,
+        consts,
+        torch.randn(shape, generator=g) * 0.5,
+        torch.randn(shape, generator=g) * 0.5,
+        torch.randn(shape, generator=g),
+    )
 
 
 def _or_ratio(q, k, v, geo, consts, *, tau, scale, thresh_type):

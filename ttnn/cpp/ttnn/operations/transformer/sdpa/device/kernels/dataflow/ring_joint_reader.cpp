@@ -1885,23 +1885,30 @@ void kernel_main() {
                         }
                     }();
                     CircularBuffer cb_k(cb_k_in);
-                    if constexpr (
-                        (k_uses_batch_chain && batch_mcast_enabled) || (gqa_grouped_kv && gqa_mcast_enabled)) {
-                        // Ensures that compute has completed with the previous K chunk before we overwrite the buffer
-                        // with the next K chunk for mcast.
-                        const uint32_t reserve_tiles = is_padded_iter ? 2 * k_chunk_tiles : k_chunk_tiles;
-                        cb_k.reserve_back(reserve_tiles);
-                    } else {
-                        cb_k.reserve_back(k_chunk_tiles);
-                    }
-                    uint32_t cb_k_start_address = cb_k.get_write_ptr();
+                    uint32_t cb_k_start_address;
                     if constexpr (sol_pack) {
-                        // Raw chunks land in staging, never in the page compute reads. The reserve above is left
-                        // un-pushed, so its write pointer does not advance and the packed page reserved before
-                        // the loop stays valid. Staging is reserved once and reused for every chunk.
+                        // Raw chunks land in staging; cb_k_in carries the packed page, whose reserve/push is
+                        // owned by the page lifecycle around this loop.
+                        //
+                        // Do NOT reserve cb_k_in here. A per-chunk reserve contends with that outstanding
+                        // packed-page reserve, and the mcast branch below asks for 2 * k_chunk_tiles from a
+                        // 2-page CB -- unsatisfiable the moment one page is in flight, which is the permanent
+                        // cb_reserve_back stall measured on 2026-10-20 (160k CRBW waypoints, zero CWFW:
+                        // the reader could not get space while compute was never waiting for data).
                         CircularBuffer cb_ks(cb_k_stage);
                         cb_ks.reserve_back(k_chunk_tiles);
                         cb_k_start_address = cb_ks.get_write_ptr();
+                    } else {
+                        if constexpr (
+                            (k_uses_batch_chain && batch_mcast_enabled) || (gqa_grouped_kv && gqa_mcast_enabled)) {
+                            // Ensures that compute has completed with the previous K chunk before we overwrite the
+                            // buffer with the next K chunk for mcast.
+                            const uint32_t reserve_tiles = is_padded_iter ? 2 * k_chunk_tiles : k_chunk_tiles;
+                            cb_k.reserve_back(reserve_tiles);
+                        } else {
+                            cb_k.reserve_back(k_chunk_tiles);
+                        }
+                        cb_k_start_address = cb_k.get_write_ptr();
                     }
                     bool received_k_from_chain = false;
                     if constexpr (!has_sliding_window) {
@@ -1995,8 +2002,11 @@ void kernel_main() {
                         // staging-only because we intentionally do not push it to compute.
                         if constexpr (gqa_grouped_kv && gqa_mcast_enabled) {
                             const uint32_t nv = nq / q_heads_per_v;
-                            CircularBuffer cb_v(cb_v_in);
-                            cb_v.reserve_back(2 * v_cb_entry_tiles);
+                            // Staging-only receive. Under sol_pack it must target cb_v_stage: cb_v_in holds the
+                            // packed page, and asking it for 2 * v_cb_entry_tiles from a 2-page CB can never be
+                            // satisfied once a page is in flight.
+                            CircularBuffer cb_v(sol_pack ? cb_v_stage : cb_v_in);
+                            cb_v.reserve_back(sol_pack ? v_cb_entry_tiles : 2 * v_cb_entry_tiles);
                             if (v_chain.should_receive(nv)) {
                                 v_chain.receive(noc);
                             }
@@ -2117,12 +2127,14 @@ void kernel_main() {
                         const Slice v_slice(
                             k_slice.d0, nv, k_slice.d2_start, k_slice.d2_end, v_col_offset_t, v_col_offset_t + vDHt);
                         CircularBuffer cb_v(cb_v_in);
-                        cb_v.reserve_back(v_cb_entry_tiles);
-                        uint32_t cb_v_start_address = cb_v.get_write_ptr();
+                        uint32_t cb_v_start_address;
                         if constexpr (sol_pack) {
-                            CircularBuffer cb_vs(cb_v_stage);
+                            CircularBuffer cb_vs(cb_v_stage);  // see the K note: cb_v_in holds the packed page
                             cb_vs.reserve_back(v_cb_entry_tiles);
                             cb_v_start_address = cb_vs.get_write_ptr();
+                        } else {
+                            cb_v.reserve_back(v_cb_entry_tiles);
+                            cb_v_start_address = cb_v.get_write_ptr();
                         }
                         bool received_v_from_chain = false;
                         if constexpr (!has_sliding_window) {
