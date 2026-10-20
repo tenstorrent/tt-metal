@@ -556,12 +556,15 @@ class TtMiMoAttention:
             return self.decode_sdpa_program
         key = (batch, table_tokens)
         if key not in self._split_sdpa_programs:
+            grid = ttnn.CoreCoord(8, 8)
+            if os.environ.get("MIMO_SDPA_FULL_GRID", "0") == "1":
+                grid = self.plan.mesh_device.compute_with_storage_grid_size()
             self._split_sdpa_programs[key] = ttnn.SDPAProgramConfig(
-                compute_with_storage_grid_size=ttnn.CoreCoord(8, 8),
+                compute_with_storage_grid_size=grid,
                 q_chunk_size=0,
                 k_chunk_size=256 if table_tokens % 256 == 0 else 128,
                 exp_approx_mode=False,
-                max_cores_per_head_batch=max(16, 64 // batch),
+                max_cores_per_head_batch=max(16, min(64, grid.x * grid.y // batch)),
             )
         return self._split_sdpa_programs[key]
 

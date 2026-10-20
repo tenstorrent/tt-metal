@@ -374,3 +374,51 @@ carried most of it.
 | vLLM, c=16 (64 x 128 / 128, DP=4 x 4) | 1005.4, 1023.4, 1004.7 tok/s; TPOT 13.2-13.5 ms; TTFT median 317-322 ms |
 | vLLM, c=1 | TTFT 176 ms, TPOT 13.1 ms |
 | vLLM, other checks | HTTP suite 78 passed, 1 skipped; served greedy == standalone 16/16; 0 decode-trace recaptures |
+
+## Long context: 8 users x 1M (branch `mimo-v2.6/long-ctx`, 2026-10-20)
+
+Goal: 8 users (2 per lane) with 1M context each under vLLM, prefix caching (APC) correct, and the per-user decode
+speed. Two changes on top of `mimo-v2.6/c16-top1`:
+
+1. **Global decode SDPA over the decode users' rows only.** `paged_flash_multi_latent_attention_decode` takes its
+   batch from the page table's rows and splits its cores evenly over them. With the 32-row table each of 2 users got
+   2 of 64 cores: 21 ms per global layer at 1M context (17 GB/s). The model now slices the page table and the owned
+   positions to the decode users (2 rows: 32 cores per user, 256-token K chunks); ConcatHeads zero-fills the rows
+   past them. One chip, 1M context, one global layer: 21.0 -> 1.15 ms (311 GB/s; 1.07 ms with the 12 x 10 grid).
+2. **128-wide SWA V cache.** vLLM sizes each KV buffer to the lane's whole block pool and shares it between one
+   layer of each KV cache group, so the SWA layers' 192-wide (zero-padded) V buffers cost 8 x 192 of the 4692 bytes
+   per token per chip. The SWA V cache now keeps V's 128 real dims and shares the global layers' V buffers (9 K + 9
+   V buffers): 3060 bytes per token per chip, so 2 x 1M per lane fits in 6.55 GB per chip (33472 blocks per lane).
+   SWA decode reads it with `paged_flash_multi_latent_attention_decode` (`head_dim_v` 128, sinks, sliding window);
+   SwaDecodeQkv writes 4 V tile columns; a later SWA prefill chunk pads the cached window back to 192. vLLM's block
+   tables, prefix caching and eviction are unchanged.
+
+Accuracy (unchanged): `test_decoder_tp8_dp4` 3 passed, `test_chunked_prefill_tp8_dp4` 5 passed,
+`test_model_tp8_dp4` top-1 0.900 with 34/34 clear rows, PCC min 0.9372 / mean 0.9941.
+
+Traced decode step, 2 users per row (`tests/perf/long_decode.py`, device-resident greedy loop; only the prompt's
+KV is real, the step attends over the whole context):
+
+| Position | Before, 4 rows | After, 1 row | After, 4 rows | 4 rows, `MIMO_SDPA_FULL_GRID=1` |
+|---|---|---|---|---|
+| 4K | 13.95 ms | 11.57 ms | 13.55 ms (73.8 tok/s per user) | 13.25 ms |
+| 128K | 36.99 ms | 12.36 ms | 14.61 ms (68.4) | 14.96 ms |
+| 512K | 107.94 ms | 16.63 ms | 18.33 ms (54.6) | 17.96 ms |
+| ~1M | 201.11 ms | 21.38 ms | 23.29 ms (42.9) | 22.61 ms |
+
+vLLM, DP=4 x 2 seqs, `--max-model-len 1048576`, `MIMO_KV_GB_PER_CHIP=6.6` (`runs/swa1/exp1m.sh`):
+
+| Check | Result |
+|---|---|
+| c=8, 64 x 128 / 128 | TPOT 12.28-12.34 ms (81 tok/s per user), median ITL 11.06-11.27 ms, 556-560 tok/s |
+| c=1 | TPOT 10.24 ms (98 tok/s), TTFT 184 ms |
+| c=8, 8 x 128K / 256 | median ITL 12.22 ms (82 tok/s per user once both users of a lane decode); prefill ~68 s per 128K prompt, so the mean TPOT (190 ms) is the other user's prefill chunks interleaved with decode |
+| APC (`runs/swa1/apc_check.py`, 13.7K-token shared document, 8 questions) | answers 24/24 correct; greedy text with prefix hits == without 16/16; 8/8 requests of the second warm round reused 13632-13696 of 13701 prompt tokens, in 2.16 s instead of 3.0 s |
+| HTTP suite (`tests/tt`, max_num_seqs 8) | 78 passed, 1 skipped |
+
+Decode at 1M is bandwidth-bound: each chip reads its own user's global KV, 9 layers x 1M x 340 bytes = 3.2 GB per
+step, which takes 7.1 ms at this Galaxy's 448 GB/s (GDDR6 at 14 Gbps). The SDPA reads it at ~330 GB/s (9.7 ms).
+With the 12.2 ms rest of the step, 70 tok/s per user (14.3 ms) holds up to ~350K context; at 1M the ceiling is
+~1000 / (12.2 + 7.1) = 52 tok/s, and the step is ~21-23 ms (43-48 tok/s) today. Prefill of a 1M prompt is the other
+limit: the chunked MLA prefill makes a 2048-token chunk at context C cost roughly 0.25 s + 12.5 us x C / 1K, ~1 hour
+per 1M prompt.
