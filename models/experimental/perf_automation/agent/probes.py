@@ -962,6 +962,66 @@ def _py_spy_exe() -> str:
     return str(beside) if beside.is_file() and os.access(beside, os.X_OK) else ""
 
 
+# How py-spy may read another process here, learned at the first refused read and kept: "plain",
+# "elevated" (through _ELEVATE) or "refused" (neither works).
+_PY_SPY_MODE = ["plain"]
+
+
+def _py_spy_dump(exe, pid):
+    """`py-spy dump` of pid, or None when it cannot run.
+
+    PTRACE IS NOT A GIVEN. Under Yama ptrace_scope=1 -- the default on Ubuntu -- only an ANCESTOR may
+    read a process, and py-spy is the supervisor's child, a sibling of the test, so every read came back
+    "Permission Denied" and the stack check never ran at all. Measured on MiniCPM5-2B, 2026-10-20: a
+    profile hung in `to_torch` for 90 minutes, then 3 hours, with its stack never read once, while the
+    test's background threads ticked the syscall counter and kept the stall clock from starting.
+    Reproduced with a profiled pytest frozen after `import ttnn`: the stall check never fired and only
+    the 4x ceiling stopped it. So a refused read is retried once elevated, with the non-interactive
+    sudo this tool already uses for its other privileged steps (pkgtools._ELEVATE), and the answer is
+    kept for the rest of the process. Where neither works the check stays off, as it always was there,
+    but says so once instead of failing silently."""
+    import subprocess as _sp
+
+    from .pkgtools import _ELEVATE
+
+    args = [exe, "dump", "--pid", str(int(pid)), "--locals", "--nonblocking"]
+
+    def _run(prefix):
+        try:
+            return _sp.run(list(prefix) + args, capture_output=True, text=True, timeout=8)
+        except Exception:  # noqa: BLE001 -- an unsampleable process contributes nothing, never an error
+            return None
+
+    def _refused(res):
+        text = (getattr(res, "stdout", "") or "") + (getattr(res, "stderr", "") or "")
+        return res is not None and "permission denied" in text.lower()
+
+    mode = _PY_SPY_MODE[0]
+    if mode == "refused":
+        return None
+    if mode == "elevated":
+        return _run(_ELEVATE)
+    r = _run(())
+    if not _refused(r):
+        return r
+    r2 = _run(_ELEVATE)
+    if r2 is not None and r2.returncode == 0:
+        _PY_SPY_MODE[0] = "elevated"
+        return r2
+    if r2 is not None and not _refused(r2) and "sudo" not in (getattr(r2, "stderr", "") or "").lower():
+        return None  # elevated, but this one process could not be read (it exited): decide on a later one
+    _PY_SPY_MODE[0] = "refused"
+    print(
+        "  [probes] WARNING: py-spy may not read the run's processes (ptrace refused, and `sudo -n` "
+        "did not help): the stall check cannot see a frozen stack and falls back to syscall counters, "
+        "which a hung run's background threads keep moving. Allow it with "
+        "`sudo sysctl kernel.yama.ptrace_scope=0` or passwordless sudo for py-spy.",
+        file=sys.stderr,
+        flush=True,
+    )
+    return None
+
+
 def _stack_fingerprint(pid) -> str:
     """A digest of the process's Python stacks AND their local variables, or "" when it cannot be
     sampled.
@@ -979,21 +1039,12 @@ def _stack_fingerprint(pid) -> str:
     keeps the frame that never changes and drops the outer loop that does.
     """
     import hashlib as _hashlib
-    import subprocess as _sp
 
     exe = _py_spy_exe()
     if not exe:
         return ""
-    try:
-        r = _sp.run(
-            [exe, "dump", "--pid", str(int(pid)), "--locals", "--nonblocking"],
-            capture_output=True,
-            text=True,
-            timeout=8,
-        )
-    except Exception:  # noqa: BLE001 -- an unsampleable process contributes nothing, never an error
-        return ""
-    if r.returncode != 0:
+    r = _py_spy_dump(exe, pid)
+    if r is None or r.returncode != 0:
         return ""
     # The frames only -- not the thread header, which carries a state that flickers between samples.
     frames = "\n".join(ln.strip() for ln in (r.stdout or "").splitlines() if ln.startswith("    "))

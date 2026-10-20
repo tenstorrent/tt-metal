@@ -4174,6 +4174,7 @@ def _run_device_proc(
     )
     _mp = _pr.memory_pressure_watch_new()
     rc, out = None, ""
+    _stall_killed = [False]
     try:
         if stall_s:
             import sys as _sys
@@ -4277,6 +4278,7 @@ def _run_device_proc(
                         f"{int(idle)}s > adaptive limit {limit}s) -- treating as wedge",
                         flush=True,
                     )
+                    _stall_killed[0] = True
                     raise subprocess.TimeoutExpired(cmd, limit)
                 # NO WALL-CLOCK KILL WHILE THE WORK IS REAL -- BUT THERE IS A CEILING.
                 #
@@ -4376,7 +4378,15 @@ def _run_device_proc(
         # So it records in `finally`, on the timeout path as much as the success path, exactly as
         # _fullpipe_e2e already does for "pcc". A hard-limit kill at 900 s becomes 900 s of observed
         # cost, and the next budget is 6x that instead of a constant.
-        if observe_op and observe_root is not None:
+        #
+        # EXCEPT A STALL. A step killed for making no progress was hung, not slow: its duration is the
+        # stall window plus however long the hang went unnoticed, and says nothing about what the work
+        # costs. Recording a hang is what grew MiniCPM5-2B's budgets on 2026-10-20: a gate check hung on
+        # a deadlocked kernel was booked as a 1891 s profile beside four of 21-69 s, p95 x 6 hit the 3 h
+        # ceiling, and the next hang was given 3 h as both its stall window and its budget. That one
+        # reached the ceiling only because the stack check could not read the test (probes._py_spy_dump);
+        # with the read working it is a stall, and a stall is not booked.
+        if observe_op and observe_root is not None and not _stall_killed[0]:
             try:
                 record_observed(observe_root, observe_op, time.monotonic() - _obs_t0)
             except Exception:  # noqa: BLE001
@@ -5822,6 +5832,123 @@ def _warn_dirty_model_tree(demo_dir, repo_root) -> list:
     return dirty
 
 
+# A file bigger than this is not copied into the round-start snapshot, and is then left alone by the
+# restore: model dirs hold no hand-edited source anywhere near this size.
+_SNAPSHOT_MAX_BYTES = 8 << 20
+_ABSENT = object()
+_AT_HEAD = object()
+
+
+def _model_tree_snapshot(repo_root, model_root) -> dict | None:
+    """The model dir's uncommitted state as a round starts: HEAD, and the content of every file that
+    differs from HEAD or is untracked. None when the model dir is not inside this repo or git cannot say.
+
+    WHAT A KILLED ROUND LEAVES BEHIND IS WHAT THE NEXT ONE RUNS. The round watchdog SIGKILLs the agent
+    mid-attempt, and nothing put back the edit it was measuring. Measured on MiniCPM5-2B, 2026-10-20:
+    the agent single-buffered a C++ matmul's output CB, the measurement hung on the deadlocked chip, the
+    watchdog killed the round -- and the edit stayed. The gate check after it profiled the edit and hung,
+    the next round's agent saw the diff and called the gate check, which hung for its whole 3 h round,
+    and the check after that hung again: 6 h with nothing measured. The agent's own git_revert cannot
+    help, because a killed agent calls nothing. Taken per round rather than per run so the restore keeps
+    what was already there when the round began -- instrumentation, and anything an operator left."""
+    try:
+        from agent import gitio
+
+        rel = Path(model_root).resolve().relative_to(Path(repo_root).resolve())
+        head = gitio.head_sha(repo_root)
+        paths = set(gitio.changed_files(repo_root, "HEAD", pathspec=rel)) | gitio.untracked_under(repo_root, rel)
+    except Exception:  # noqa: BLE001
+        return None
+    files = {}
+    for p in paths:
+        f = Path(repo_root) / p
+        try:
+            if not f.exists():
+                files[p] = _ABSENT
+            elif f.is_file() and f.stat().st_size <= _SNAPSHOT_MAX_BYTES:
+                files[p] = f.read_bytes()
+            else:
+                files[p] = None
+        except OSError:
+            files[p] = None
+    return {"rel": rel, "head": head, "files": files}
+
+
+def _restore_model_tree(repo_root, snap, patch_path=None) -> list:
+    """Put the model dir back to `snap` after a killed round. Returns the repo-relative paths changed.
+
+    A file the round changed goes back to its round-start content: to HEAD if it was clean then, deleted
+    if the round created it. A file committed during the round is clean against the new HEAD and is not
+    touched -- a commit is how a win is banked, and nothing banked is undone. Before anything is
+    discarded, the round's uncommitted diff and the files it created are written to `patch_path`, so the
+    edit can still be read. Never raises: a restore that cannot run leaves the tree as the kill left it,
+    which is where it was before this existed."""
+    if not snap:
+        return []
+    try:
+        from agent import gitio
+
+        rel = snap["rel"]
+        head = gitio.head_sha(repo_root)
+        now = set(gitio.changed_files(repo_root, "HEAD", pathspec=rel)) | gitio.untracked_under(repo_root, rel)
+    except Exception:  # noqa: BLE001
+        return []
+    files = snap["files"]
+    # A file dirty at round start but clean now was reverted or committed during the round; put its
+    # round-start content back only if HEAD has not moved (nothing was committed).
+    cands = sorted(now | (set(files) if head == snap["head"] else set()))
+    todo = []
+    for p in cands:
+        f = Path(repo_root) / p
+        want = files.get(p, _AT_HEAD)
+        if want is None:
+            continue
+        try:
+            cur = f.read_bytes() if f.is_file() else _ABSENT
+        except OSError:
+            continue
+        if isinstance(want, bytes) and cur == want:
+            continue
+        if want is _ABSENT and cur is _ABSENT:
+            continue
+        todo.append((p, want))
+    if not todo:
+        return []
+    if patch_path is not None:
+        try:
+            diff = subprocess.run(
+                ["git", "diff", "HEAD", "--", str(rel)], cwd=str(repo_root), capture_output=True, text=True, timeout=120
+            ).stdout
+            untracked = gitio.untracked_under(repo_root, rel)
+            created = [p for p, w in todo if w is _AT_HEAD and p in untracked]
+            Path(patch_path).parent.mkdir(parents=True, exist_ok=True)
+            Path(patch_path).write_text(
+                diff + "".join("\n# created by the killed round (removed): %s\n" % p for p in created)
+            )
+        except Exception:  # noqa: BLE001 -- the record is a courtesy; the restore must still happen
+            pass
+    tracked = set(gitio.present_at(repo_root, head, [p for p, w in todo if w is _AT_HEAD]))
+    done = []
+    for p, want in todo:
+        f = Path(repo_root) / p
+        try:
+            if want is _AT_HEAD:
+                if p in tracked:
+                    gitio.checkout(repo_root, head, p)
+                elif f.is_file():
+                    f.unlink()
+            elif want is _ABSENT:
+                if f.is_file():
+                    f.unlink()
+            else:
+                f.parent.mkdir(parents=True, exist_ok=True)
+                f.write_bytes(want)
+            done.append(p)
+        except Exception:  # noqa: BLE001
+            continue
+    return done
+
+
 def _preflight_tool(repo_root: Path) -> bool:
     """Run the TOOL'S OWN test suite against the copy this run will execute. Returns True to proceed.
 
@@ -6158,6 +6285,8 @@ def optimize_pipeline(
             print(
                 "  [optimize/cc] round %d starts with stacks still short of their band: %s" % (rounds + 1, st["short"])
             )
+        _model_root = mcp_env.get("PERF_MCP_MODEL_ROOT") or os.environ.get("PERF_MCP_MODEL_ROOT")
+        _snap = _model_tree_snapshot(repo_root, _model_root) if _model_root else None
         wedged = _run_round_with_watchdog(
             round_cmd, repo_root, devices, kernel_log, stall_sec, agent_env=_round_launch.env
         )
@@ -6218,6 +6347,18 @@ def optimize_pipeline(
         else:
             auth_strikes = 0
         if wedged:
+            # The killed agent cannot revert the edit it was measuring; put the model dir back to where
+            # the round found it, or the next gate check and round run that edit (see
+            # _model_tree_snapshot).
+            _mani = _latest_manifest(repo_root / PERF_DIR)
+            _patch = (_mani.parent if _mani else Path(kernel_log).parent) / ("killed_round_%d.patch" % (rounds + 1))
+            _undone = _restore_model_tree(repo_root, _snap, _patch)
+            if _undone:
+                print(
+                    "  [optimize/cc] WATCHDOG: restored %d model file(s) the killed round left uncommitted "
+                    "(%s); its diff is kept in %s" % (len(_undone), ", ".join(_undone[:5]), _patch),
+                    flush=True,
+                )
             wedge_strikes += 1
             if wedge_strikes >= max_wedge:
                 print(
