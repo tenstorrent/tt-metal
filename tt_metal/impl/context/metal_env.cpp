@@ -21,6 +21,8 @@
 #include "profiler_state_manager.hpp"
 #include "tt_metal/llrt/tt_cluster.hpp"
 #include "tt_metal/llrt/hal.hpp"
+#include <umd/device/coordinates/grendel_noc_address_resolver.hpp>
+#include <umd/device/soc_arch_descriptor.hpp>
 #include "tt_metal/llrt/rtoptions.hpp"
 #include "tt_metal/common/tt_backend_api_types.hpp"
 #include <tt-logger/tt-logger.hpp>
@@ -163,6 +165,29 @@ bool should_enable_cce_programmable_cores(const Cluster& cluster) {
     }
     return false;
 }
+
+// Package ATT uses the real CCE SRAM window as the DRAM-core l1_noc_offset. A Mimir-local package
+// keeps the 0x2000000000 tag, which create_dram_mem_map applies when this returns 0.
+uint64_t cce_l1_noc_offset_for_hal(const Cluster& cluster) {
+    bool saw_package = false;
+    bool saw_mimir_local = false;
+    for (ChipId chip_id : cluster.all_chip_ids()) {
+        const metal_SocDescriptor& desc = cluster.get_soc_desc(chip_id);
+        if (!desc.has_programmable_dram_views()) {
+            continue;
+        }
+        if (desc.get_arch_descriptor().get_grendel_address_space() == tt::umd::GrendelAddressSpace::FullPackage) {
+            saw_package = true;
+        } else {
+            saw_mimir_local = true;
+        }
+    }
+    TT_FATAL(!(saw_package && saw_mimir_local), "A cluster cannot mix Mimir-local and FullPackage programmable DRAM.");
+    if (!saw_package) {
+        return 0;
+    }
+    return tt::umd::GrendelAddressWindows{}.dram_l1_noc_offset;
+}
 }  // namespace
 
 void MetalEnvImpl::initialize_base_objects() {
@@ -200,7 +225,8 @@ void MetalEnvImpl::initialize_base_objects() {
         this->rtoptions_->get_simulator_enabled(),
         should_enable_blackhole_dram_programmable_cores(*this->cluster_, *this->rtoptions_),
         this->rtoptions_->get_eth_ptp_trace(),
-        should_enable_cce_programmable_cores(*this->cluster_));
+        should_enable_cce_programmable_cores(*this->cluster_),
+        cce_l1_noc_offset_for_hal(*this->cluster_));
 
     this->rtoptions_->ParseAllFeatureEnv(*hal_);
     this->cluster_->set_hal(hal_.get());

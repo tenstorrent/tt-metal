@@ -38,7 +38,7 @@ namespace dram_realtime_profiler_msgs {
 #include "hal/generated/realtime_profiler_msgs_impl.hpp"
 }
 
-HalCoreInfoType create_dram_mem_map() {
+HalCoreInfoType create_dram_mem_map(uint64_t cce_l1_noc_offset) {
     static_assert(decltype(DevicePrintMemoryLayout::buffer)::processor_count == PROCESSOR_COUNT);
     static_assert(sizeof(mailboxes_t) <= MEM_CCE_MAILBOX_SIZE);
     static_assert(MEM_CCE_WATCHER_RING_BUFFER_LOCK % 64 == 0);
@@ -105,7 +105,7 @@ HalCoreInfoType create_dram_mem_map() {
              .fw_launch_addr = CCE_BOOT_HART_RESET_VECTOR,
              .fw_launch_addr_value = MEM_CCE_SRAM_LOCAL_BASE + MEM_CCE_FIRMWARE_BASE,
              .memory_load = ll_api::memory::Loading::CONTIGUOUS,
-             .l1_noc_offset = MEM_CCE_L1_NOC_OFFSET});
+             .l1_noc_offset = cce_l1_noc_offset != 0 ? cce_l1_noc_offset : MEM_CCE_L1_NOC_OFFSET});
         dram_dm_names.emplace_back(fmt::format("CCE{}", hart), fmt::format("CCE{}", hart));
     }
     std::vector<std::vector<HalJitBuildConfig>> processor_classes = {std::move(dram_dm_processors)};

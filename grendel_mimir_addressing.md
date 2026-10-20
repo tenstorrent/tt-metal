@@ -25,23 +25,17 @@ There is no PCIe Grendel device. `TTDevice::create` only handles Wormhole and Bl
 
 Addressing is chosen by which class is constructed, not by the descriptor. A future FPGA build that looks like PCIe but uses ATT addressing has nowhere to go.
 
-### 2. The CCE control plane has two implementations, and both assume Mimir-local registers
+### 2. CCE control is one implementation on the Mimir-local path
 
-`EmuTTDevice` overrides the reset vector, the PF_CTRL reset and the DMRISC remap and drives them through chippy register accessors.
+Done in step 2. Reset vector, PF_CTRL and DMRISC remap offsets are relative to one CCE (`0x02000000`, `0x02200000`, `0x02202000`). The DRAM-core coordinate selects the CCE. `GrendelNocAddressResolver::cce_control_address` produces the flat config address, and `MimirChippyMemoryMap` turns that into the chiplet-local AXI address. Emulation and JTAG share that path. The package ATT does not use this mapping. `program_cce_dmrisc_remap` still hardcodes the MMK SPA constants (step 5).
 
-`GrendelJtagTTDevice` does not override those. It uses the base `TTDevice` path, which writes the raw offsets in `grendel_implementation.hpp` (`0x02000000`, `0x02200000`, `0x02202000`) straight to the transport, skipping the resolver.
+### 3. The descriptor selects the address space
 
-`cce_control_addr()` then folds the CCE index into those offsets: `0x04000000` per Mimir and `0x01000000` per CCE. That only makes sense when both Mimirs share one local address map, which they never do. On PCIe, writing those offsets at a DRAM core's coordinate would land in the wrong place.
-
-### 3. The package address windows have no Mimir CCE SRAM, Mimir config or SMC windows
-
-In the default `GrendelAddressWindows`, `dram_l1_size` is 0. A host access to CCE SRAM, which is a DRAM core plus `MEM_CCE_L1_NOC_OFFSET` (`0x2000000000`), throws in package mode.
-
-`0x2000000000` is a tag that only the emulation and JTAG paths understand. On full Grendel the host and dispatch use the real NOC/ATT window of that CCE's SRAM, and the HAL `l1_noc_offset` for a DRAM core is that window. The tag stays an internal detail of the Mimir-local UMD path.
+Done in step 3. `address_space: mimir_local` selects the chiplet-local windows, including the `0x2000000000` CCE SRAM tag. `address_space: full_package`, and a descriptor that omits the key, selects the qsr.s1 ATT. That table now has CCE SRAM at `0x1280000000` (4 MiB per CCE), Mimir config at `0x1300000000` (128 MiB per Mimir, lane 0), and CCE control as a per-CCE offset in that window. In package mode the HAL `l1_noc_offset` for a DRAM core is `0x1280000000`. The `0x2000000000` tag stays on the Mimir-local path. Emulation and JTAG still require `mimir_local`.
 
 ### 4. The Mimir topology is assumed, not described
 
-UMD assumes DRAM channel `n` is Mimir instance `n`, chippy chiplet `"m{n}"`, and SPA instance `n`. That shows up in `EmuTTDevice::Impl`, in `program_cce_dmrisc_remap` (`mimir = cce_index / locations_per_channel`), and in `ChipletMetadata(Mimir, i, i)`.
+UMD assumes DRAM channel `n` is Mimir instance `n`, chippy chiplet `"m{n}"`, and SPA instance `n`. That shows up in `EmuTTDevice::Impl` (the select name) and in `program_cce_dmrisc_remap` (`mimir = cce_index / locations_per_channel`).
 
 `program_cce_dmrisc_remap` hardcodes the MMK SPA layout: config `0x1300000000`, SRAM `0x1280000000`, GDDR `0x1000000000000`.
 
@@ -79,9 +73,9 @@ The Quasar choices in `risc_firmware_initializer.cpp` (reset all harts, release 
 
 | What | Address space |
 | --- | --- |
-| `CCE_*_BASE` plus `cce_control_addr()` | CCE core-local register plane. Reset vector `0x02000000`, PF_CTRL `0x02200000`, DMRISC remap `0x02202000`. |
+| Per-CCE offsets plus `cce_control_address` | CCE register plane relative to one CCE. Reset vector `0x02000000`, PF_CTRL `0x02200000`, DMRISC remap `0x02202000`. The DRAM core selects the CCE. |
 | `program_cce_dmrisc_remap` constants | Package SPA, per Mimir. Config `0x1300000000`, SRAM `0x1280000000`, GDDR `0x1000000000000`. |
-| Default `GrendelAddressWindows` | Package ATT flat addresses for qsr.s1. NEO L1, config and GDDR windows. `dram_l1_size` is 0, so there is no CCE SRAM window. |
+| Default `GrendelAddressWindows` | Package ATT flat addresses for qsr.s1. NEO L1, Quasar config, GDDR, CCE SRAM `0x1280000000`, Mimir config `0x1300000000`. |
 | `mimir_local_address_windows` plus `MimirChippyMemoryMap` | Chiplet-local AXI. Config at 0, CCE SRAM at `0x40000000`, GDDR at `0x800000000`, CCE SRAM tag `0x2000000000`. |
 
 | Who is looking | CCE SRAM | GDDR |
@@ -119,15 +113,17 @@ Check: same pass and fail as the baseline. This suite is the yardstick for every
 
 ### Step 2. One CCE control plane
 
-Make the CCE register offsets relative to one CCE. The DRAM-core coordinate selects the CCE, and the resolver turns that pair into a flat address. Delete the `EmuTTDevice` overrides and the per-CCE stride folding in `cce_control_addr`. Emulation and JTAG then share one implementation.
+Done. `GrendelNocAddressResolver::cce_control_address` takes a DRAM core and a per-CCE offset. `EmuTTDevice` and `GrendelJtagTTDevice` both write that flat address through `MimirChippyMemoryMap`. The chippy register-accessor overrides and `cce_control_addr` are gone. `program_cce_dmrisc_remap` still uses the hardcoded MMK SPA constants; step 5 removes those.
 
-Check: UMD reset tests on the mock and on SiVal, the Metal suite, and JTAG.
+Check: UMD reset tests on the mock and on SiVal, the Metal suite, and JTAG. Host-side, `GrendelNocAddressResolver.CceControlOffsetIsRelativeToOneCce` covers the address math.
 
 ### Step 3. Choose the address space from the descriptor, and finish the package windows
 
-The descriptor says whether a package is addressed Mimir-locally or through the package ATT. Add CCE SRAM, Mimir config, SMC and CCE control windows to the package windows. In package mode `MEM_CCE_L1_NOC_OFFSET` is the real NOC/ATT address of that CCE's SRAM, and that value is the HAL `l1_noc_offset` for a DRAM core. The Mimir-local path keeps the `0x2000000000` tag inside UMD.
+Done. The descriptor key is `address_space`. `mimir_1x1.yaml` and `mimir_2x_package.yaml` set `mimir_local`. A descriptor that omits the key, including the Quasar simulation descriptors, stays `full_package`. `address_windows_for` is what `EmuTTDevice`, `GrendelJtagTTDevice`, and `RtlSimulationTTDevice` call. Emulation and JTAG reject `full_package` because their transport is still chiplet-local.
 
-Check: extend the golden resolver tests with package-mode CCE cases. Behaviour on current hardware does not change.
+Package windows, from `models/qsr.s1/att/address_map.csv`: CCE SRAM `0x1280000000` stride 4 MiB, Mimir config `0x1300000000` stride 128 MiB. CCE control is the per-CCE offset in that window. Package-mode HAL `l1_noc_offset` for a DRAM core is `0x1280000000`. Mimir-local keeps `MEM_CCE_L1_NOC_OFFSET` (`0x2000000000`).
+
+Check: `GrendelNocAddressResolver.PackageCceSramMatchesGoldenAddressMap` and `PackageMimirConfigCarriesCceControl`. Behaviour on current Mimir hardware does not change.
 
 ### Step 4. Separate the transport from the address space in UMD
 
@@ -181,6 +177,7 @@ Use this when moving a Mimir test onto the current tree. The contract tests and 
 - A test that constructs `Cluster` (`llrt::RunTimeOptions` plus `Cluster`), or that calls `write_core` / `read_core` itself, goes in `tests/tt_metal/tt_metal/context/test_mimir_backend.cpp`.
 - Register a new `.cpp` in `tests/tt_metal/tt_metal/context/sources.cmake`, inside the `TT_UMD_BUILD_GRENDEL_JTAG` list. The binary is `./build/test/tt_metal/unit_tests_context`.
 - Coordinate math, the GDDR sweep, and the SRAM helper live in `tests/tt_metal/tt_metal/context/mimir_contract.hpp`, namespace `tt::tt_metal::mimir_contract`. Call them. Do not reimplement CCE-to-Mimir indexing in the test.
+- A Mimir soc descriptor must set `address_space: mimir_local`. Omitting it selects `full_package`. Emulation and JTAG then refuse to attach, and a FullPackage HAL uses `0x1280000000` as the DRAM-core NOC offset instead of `0x2000000000`. Do not put a FullPackage address in a Mimir-local test.
 
 ### When the test runs
 
@@ -215,3 +212,4 @@ Size the case from the descriptor:
 - `EmuTTDevice` tests attach to a live server without INIT. Set `TT_UMD_EMU_INIT=1` only against the chippy mock.
 - Set `TT_UMD_EMU_DRAM=1` only after GDDR bring-up.
 - A per-hart reset mask must release every hart only when the request is the full `RiscType::ALL_NEO_DMS` mask: `(risc_type & ALL_NEO_DMS) == ALL_NEO_DMS`. Any non-zero overlap is not enough. `RiscType::DM0` releases bit 1 only (`1 << 1`). `DM7` releases bit 8.
+- CCE control offsets are relative to one CCE: reset vector `0x02000000`, PF_CTRL `0x02200000`, DMRISC remap `0x02202000`. The DRAM-core coordinate selects the CCE. Do not add `0x04000000` per Mimir or `0x01000000` per CCE in test code, and do not call `cce_control_addr`. Writing `CCE_RESET_VECTOR_BASE` through `write_to_device_reg` on a DRAM core still programs that core's CCE. Reading the register back through a chippy accessor still works.
