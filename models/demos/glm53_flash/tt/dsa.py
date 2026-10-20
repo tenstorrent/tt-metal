@@ -37,6 +37,8 @@ Cache: ``[max_blocks, 1, block_size, 512]`` bf16, paged; page_table ``[B, max_bl
 
 from __future__ import annotations
 
+import time
+
 import torch
 
 import ttnn
@@ -47,6 +49,52 @@ from models.demos.glm53_flash.tt.mesh import GLMMesh, single_chip
 
 TILE = 32
 CORES_PER_USER_DECODE = 4
+
+
+class StageTimer:
+    """Wall time per stage of the eager decode step (test instrumentation). ``mark(name)`` synchronizes
+    the device and charges the time since the previous mark to ``name``; the allocator's DRAM bytes at
+    every boundary are recorded in ``dram``. Never enable it in a traced or served path: the
+    synchronizations serialize dispatch. Install with ``TtDSA.set_stage_timer``."""
+
+    def __init__(self, device):
+        self.device = device
+        self.times: dict[str, float] = {}
+        self.dram: dict[str, int] = {}
+        self.order: list[str] = []
+        self._t: float | None = None
+
+    def reset(self):
+        self.times, self.dram, self.order, self._t = {}, {}, [], None
+
+    def start(self):
+        ttnn.synchronize_device(self.device)
+        self._t = time.perf_counter()
+
+    def mark(self, name: str):
+        ttnn.synchronize_device(self.device)
+        now = time.perf_counter()
+        if self._t is not None:
+            self.times[name] = self.times.get(name, 0.0) + (now - self._t)
+        if name not in self.order:
+            self.order.append(name)
+        try:
+            mv = ttnn.device.get_memory_view(self.device, ttnn.BufferType.DRAM)
+            self.dram[name] = mv.num_banks * mv.total_bytes_allocated_per_bank
+        except Exception:  # pragma: no cover - informational
+            pass
+        self._t = time.perf_counter()
+
+    @property
+    def total(self) -> float:
+        return sum(self.times.values())
+
+    def report(self) -> str:
+        gib = 2**30
+        return "  ".join(
+            f"{k} {self.times.get(k, 0.0) * 1e3:.2f}ms" + (f" [{self.dram[k] / gib:.2f}GiB]" if k in self.dram else "")
+            for k in self.order
+        )
 
 
 def _compute(device, fidelity=ttnn.MathFidelity.HiFi2, fp32_acc=True, packer_l1_acc=True):
@@ -232,6 +280,16 @@ class TtDSA(LightweightModule):
             fp32_dest_acc_en=False,
             packer_l1_acc=False,
         )
+        self.stage_timer: StageTimer | None = None
+
+    def set_stage_timer(self, timer: StageTimer | None):
+        """Install (or remove, ``None``) the per-stage timer on this layer and its indexer."""
+        self.stage_timer = timer
+        self.indexer.stage_timer = timer
+
+    def _mark(self, name: str):
+        if self.stage_timer is not None:
+            self.stage_timer.mark(name)
 
     def _decode_sdpa_config(self, batch: int) -> ttnn.SDPAProgramConfig:
         """Flash MLA decode splits each user's heads over cores and tree-reduces the partial results;
@@ -334,6 +392,19 @@ class TtDSA(LightweightModule):
         return ttnn.reshape(ttnn.transpose(o, 1, 2), [1, 1, T, H * Dv])
 
     # --------------------------------------------------------------------- prefill
+    def prefill_state(self, x: ttnn.Tensor, cache: TtLatentCache, user: int, seq_len: int, start: int = 0):
+        """The state half of ``prefill_forward`` without the attention output: the chunk's latent goes into
+        the user's pages [start, start + T_pad) and the pooled-key index is maintained for positions
+        [start, start + seq_len) (same contract as ``prefill_forward``: ``start % block_size == 0``,
+        chunks in order). Used to seed long contexts synthetically (the 1 M-position cache test) and
+        for prefix-state construction where the chunk's own attention output is not needed."""
+        if start % cache.block_size:
+            raise ValueError(f"start {start} must be a multiple of the cache block size {cache.block_size}")
+        c = self._latent(x)
+        cache.fill(c, user, start=start)
+        ttnn.deallocate(c)
+        self.indexer.maintain_prefill(x, cache.index, user, seq_len, start=start)
+
     def prefill_forward(
         self, x: ttnn.Tensor, cache: TtLatentCache, user: int, seq_len: int, start: int = 0
     ) -> ttnn.Tensor:
@@ -424,6 +495,7 @@ class TtDSA(LightweightModule):
         pool_ids: ttnn.Tensor,
         ring_slots: ttnn.Tensor,
         host_positions: list[int] | None = None,
+        dense_positions: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor:
         """x [1,1,B,4096] (one token per user at position a = positions[b]); ``pool_ids`` = a // 4 and
         ``ring_slots`` = a % 4 ([B] int32 device tensors, host-derived like ``positions``). Appends the
@@ -431,23 +503,32 @@ class TtDSA(LightweightModule):
         for every slot (HF-exact through position 2050, trace-safe). With ``host_positions`` (the same
         values), users at a >= 2051 get their row replaced by the per-user indexer + sparse_sdpa result
         (host chunk geometry, not traced). Without ``host_positions`` a user beyond 2050 is attended
-        densely, which is NOT HF semantics: FunctionalDecoder enforces the routing."""
+        densely, which is NOT HF semantics: FunctionalDecoder enforces the routing.
+        ``dense_positions`` (optional [B] int32, host-derived like ``pool_ids``): the positions the dense
+        flash-MLA decode attends up to instead of ``positions``. The dense row of a sparse user is
+        discarded, so ``min(a, dense_exact_max_pos)`` per user bounds that op's cost to 2051 keys at
+        any context length (it reads the whole prefix otherwise: 1 GiB per layer at 1 M positions) and
+        is the identity for every user still on the dense path."""
         B = x.shape[-2]
+        if self.stage_timer is not None:
+            self.stage_timer.start()
         q_resid = self._q_resid(x)
         q = self._q(q_resid)  # [1,1,B,H*Dq]
         c = self._latent(x)  # [1,1,B,L]
         cache.update(ttnn.reshape(c, [1, B, 1, self.L]), positions)
         ttnn.deallocate(c)
         self.indexer.maintain_decode(x, cache.index, pool_ids, ring_slots)
+        self._mark("stems+append+index_maintain")
         q_lat = self._absorb_q(q)  # [1,H,B,L]
         ttnn.deallocate(q)
         q_dec = ttnn.transpose(q_lat, 1, 2)  # [1,B,H,L] (decode layout: batch, padded heads, dim)
+        self._mark("absorb_q")
         o_lat = ttnn.transformer.paged_flash_multi_latent_attention_decode(
             q_dec,
             cache.cache,
             head_dim_v=self.L,
             page_table_tensor=cache.page_table,
-            cur_pos_tensor=positions,
+            cur_pos_tensor=positions if dense_positions is None else dense_positions,
             scale=self.scale,
             program_config=self._decode_sdpa_config(B),
             compute_kernel_config=self.sdpa_compute,
@@ -456,6 +537,7 @@ class TtDSA(LightweightModule):
         ttnn.deallocate(q_dec)
         oh = ttnn.transpose(o_lat, 1, 2)  # [1,H,B,L]
         ttnn.deallocate(o_lat)
+        self._mark("dense_mla_decode")
         sparse_users = (
             [u for u, a in enumerate(host_positions) if a > self.dense_exact_max_pos] if host_positions else []
         )
@@ -470,7 +552,9 @@ class TtDSA(LightweightModule):
             oh = oh_new
         ttnn.deallocate(q_resid)
         ttnn.deallocate(q_lat)
-        return self._o_proj(self._o_lat_to_heads(oh))
+        y = self._o_proj(self._o_lat_to_heads(oh))
+        self._mark("out_proj")
+        return y
 
     def _decode_sparse_rows(self, x, q_resid, q_lat, cache: TtLatentCache, positions: list[int], users: list[int]):
         """Per-user indexer selection + sparse_sdpa rows {u: [1,H,1,L]} for the listed users (positions
@@ -483,14 +567,19 @@ class TtDSA(LightweightModule):
             a = positions[u]
             # indexer_score_dsa wants a tile-aligned query block and chunk start: score the 32 positions
             # [a - a%32, a - a%32 + 32) with this user's query placed at row r = a % 32 (zero rows elsewhere,
-            # scored but discarded) and keep row r of the selection
+            # scored but discarded); the selection keeps row r only (one row through the expansion + top-k)
             start, r = a - a % TILE, a % TILE
             qu = self._place_row(ttnn.slice(q_i, [0, 0, u, 0], [1, idx.Hi, u + 1, D]), r)
             wu = self._place_row(ttnn.slice(w_i, [0, 0, u, 0], [1, 1, u + 1, idx.Hi]), r)
-            indices32 = idx.select(qu, wu, cache.index, u, query_start=start, num_pools_valid=(a + 1) // idx.P)
-            indices = ttnn.slice(indices32, [0, 0, r, 0], [1, 1, r + 1, indices32.shape[-1]])
+            self._mark("index_queries")
+            indices = idx.select(qu, wu, cache.index, u, query_start=start, num_pools_valid=(a + 1) // idx.P, row=r)
             q_rm = ttnn.to_layout(ttnn.slice(q_lat, [0, 0, u, 0], [1, self.H, u + 1, self.L]), ttnn.ROW_MAJOR_LAYOUT)
-            kv_rm = cache.user_rows_rm(u, a + 1)
+            self._mark("q_rm")
+            kv_tile = cache.user_rows(u, a + 1)  # the user's whole prefix: a fresh TILE copy ...
+            self._mark("kv_slice")
+            kv_rm = ttnn.to_layout(kv_tile, ttnn.ROW_MAJOR_LAYOUT)  # ... untilized for the sparse_sdpa kv contract
+            ttnn.deallocate(kv_tile)
+            self._mark("kv_untilize")
             o_rm = ttnn.transformer.sparse_sdpa(
                 self._pad_heads_rm(q_rm),
                 kv_rm,
@@ -500,10 +589,12 @@ class TtDSA(LightweightModule):
                 scale=self.scale,
                 k_chunk_size=128,
             )  # [1,H,1,L]
+            self._mark("sparse_sdpa")
             ttnn.deallocate(kv_rm)
             ttnn.deallocate(q_rm)
-            ttnn.deallocate(indices32)
+            ttnn.deallocate(indices)
             out[u] = self._unpad_heads(ttnn.to_layout(o_rm, ttnn.TILE_LAYOUT))
+            self._mark("sparse_out")
         ttnn.deallocate(q_i)
         ttnn.deallocate(w_i)
         return out
@@ -518,9 +609,9 @@ class TtDSA(LightweightModule):
         start, r = position - position % TILE, position % TILE
         qu = self._place_row(q_i, r)
         wu = self._place_row(w_i, r)
-        ids32 = idx.select(qu, wu, cache.index, user, query_start=start, num_pools_valid=(position + 1) // idx.P)
-        ids = ttnn.to_torch(ttnn.slice(ids32, [0, 0, r, 0], [1, 1, r + 1, ids32.shape[-1]])).flatten().tolist()
-        for t in (q_resid, q_i, w_i, ids32):
+        ids_t = idx.select(qu, wu, cache.index, user, query_start=start, num_pools_valid=(position + 1) // idx.P, row=r)
+        ids = ttnn.to_torch(ids_t).flatten().tolist()
+        for t in (q_resid, q_i, w_i, ids_t):
             ttnn.deallocate(t)
         return [int(i) for i in ids]
 
@@ -548,18 +639,12 @@ class TtDSA(LightweightModule):
         return ttnn.slice(o, [0, 0, 0, 0], [1, self.H, o.shape[-2], o.shape[-1]])
 
     def _place_row(self, row: ttnn.Tensor, r: int) -> ttnn.Tensor:
-        """[.., 1, W] -> [.., 32, W] with ``row`` at row r and zeros elsewhere (tile pad cannot front-pad)."""
-        shape = list(row.shape)
-        parts = []
-        if r:
-            parts.append(
-                ttnn.zeros(shape[:-2] + [r, shape[-1]], dtype=row.dtype, layout=ttnn.TILE_LAYOUT, device=self.device)
-            )
-        parts.append(row)
-        if TILE - 1 - r:
-            parts.append(
-                ttnn.zeros(
-                    shape[:-2] + [TILE - 1 - r, shape[-1]], dtype=row.dtype, layout=ttnn.TILE_LAYOUT, device=self.device
-                )
-            )
-        return parts[0] if len(parts) == 1 else ttnn.concat(parts, dim=-2)
+        """[.., 1, W] -> [.., 32, W] with ``row`` at row r and zeros elsewhere: a broadcast multiply by the
+        one-hot column ``e_r`` [1,1,32,1] (cached per r), so every r runs the same program (a zeros +
+        concat build changes geometry with r and recompiled at every new ``position % 32``)."""
+        key = ("row_mask", r)
+        if key not in self._pad_cache:
+            m = torch.zeros(1, 1, TILE, 1)
+            m[0, 0, r, 0] = 1.0
+            self._pad_cache[key] = ttnn.from_torch(m, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)
+        return ttnn.multiply(row, self._pad_cache[key])

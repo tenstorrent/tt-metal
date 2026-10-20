@@ -73,3 +73,24 @@ def per_row_stats(ref: torch.Tensor, out: torch.Tensor) -> str:
     per = (rc * oc).sum(1) / (rc.norm(dim=1) * oc.norm(dim=1) + 1e-12)
     q = torch.quantile(per, torch.tensor([0.0, 0.05, 0.5]))
     return f"per-row pcc min {q[0]:.5f} p5 {q[1]:.5f} median {q[2]:.5f} rows<0.997 {int((per < 0.997).sum())}/{S}"
+
+
+def log_dram(device, when: str) -> tuple[float, float]:
+    """Allocator view of the device DRAM (the capacity evidence line of the context contract);
+    returns (allocated, free) in GiB (nan when the memory view is unavailable)."""
+    from loguru import logger
+
+    try:
+        import ttnn
+
+        mv = ttnn.device.get_memory_view(device, ttnn.BufferType.DRAM)
+        n, gib = mv.num_banks, 2**30
+        alloc, free = n * mv.total_bytes_allocated_per_bank / gib, n * mv.total_bytes_free_per_bank / gib
+        logger.info(
+            f"DRAM {when}: {n} banks x {mv.total_bytes_per_bank / gib:.3f} GiB = "
+            f"{n * mv.total_bytes_per_bank / gib:.2f} GiB allocatable, {alloc:.2f} GiB allocated, {free:.2f} GiB free"
+        )
+        return alloc, free
+    except Exception as e:  # pragma: no cover - informational only
+        logger.info(f"DRAM memory view unavailable ({when}): {e}")
+        return float("nan"), float("nan")

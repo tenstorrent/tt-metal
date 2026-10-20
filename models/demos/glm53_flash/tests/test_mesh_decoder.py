@@ -35,7 +35,7 @@ from models.demos.glm53_flash.tt.functional_decoder import (
 from models.demos.glm53_flash.tt.mesh import mesh_device_params
 
 DUMP = Path("bringup/references/glm53_flash/R4097")
-ROWS, COLS = 2, 4
+ROWS, COLS = (int(v) for v in os.environ.get("GLM53_MESH_SHAPE", "2,4").split(","))  # (8,4) = the whole Galaxy
 B = int(os.environ.get("GLM53_MESH_B", "2"))  # users per row (design: 4 and 32)
 S = int(os.environ.get("GLM53_MESH_S", "48"))  # prompt tokens fed through the decode step
 N_DECODE = 3  # HF-cache decode steps after the prompt, all through the captured trace

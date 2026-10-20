@@ -30,8 +30,10 @@ from loguru import logger
 
 import ttnn
 from models.demos.glm53_flash.reference.checkpoint import default_snapshot_dir, load_layer_raw, shard_headers
-from models.demos.glm53_flash.tests.test_dsa_long import _attention_input, _hf_index_stems, _hf_pool, per_row_stats
-from models.demos.glm53_flash.tests.utils import pcc
+from models.demos.glm53_flash.tests.utils import attention_input as _attention_input
+from models.demos.glm53_flash.tests.utils import hf_index_stems as _hf_index_stems
+from models.demos.glm53_flash.tests.utils import hf_pool as _hf_pool
+from models.demos.glm53_flash.tests.utils import pcc, per_row_stats
 from models.demos.glm53_flash.tt.config import GLM53FlashConfig
 from models.demos.glm53_flash.tt.functional_decoder import (
     FunctionalDecoder,
