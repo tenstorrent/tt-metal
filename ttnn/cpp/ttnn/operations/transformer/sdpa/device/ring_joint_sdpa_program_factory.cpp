@@ -3238,6 +3238,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
     };
     for (auto* kernel : {&reader_kernel, &writer_kernel, &compute_kernel}) {
         kernel->named_compile_time_args = ksplit_named_args;
+        variant.append_named_compile_time_args(kernel->named_compile_time_args);
     }
     // Padded multicast slots exist only under the same conditions that let static_mcast_q_count exceed q_per_core
     // (or with the rotated Q split); without them the compute kernel drops its padded-slot drain loop.
@@ -3259,6 +3260,9 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
         // Code size, not correctness: at O3 the merge epilogue grows the q128 compute binaries past the 70,656 B
         // kernel config buffer ("Program size too large"). O2 cuts the three TRISC binaries by ~30%.
         compute_kernel.opt_level = tt::tt_metal::KernelBuildOptLevel::O2;
+    }
+    if (auto opt_level = variant.compute_opt_level()) {
+        compute_kernel.opt_level = opt_level;
     }
     if (auto config = variant.compute_config()) {
         compute_kernel.config = std::move(*config);

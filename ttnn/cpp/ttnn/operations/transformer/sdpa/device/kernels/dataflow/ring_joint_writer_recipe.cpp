@@ -17,11 +17,10 @@ struct RingJointWriterPolicy {
     static constexpr bool kResidentRingState = true;
     // Common runtime arg 0: the internal state tensor (state_backing below).
     static constexpr uint32_t kCommonArgCount = 1;
-#ifdef SDPA_RECIPE_FP32
-    static constexpr bool kFp32State = true;
-#else
-    static constexpr bool kFp32State = false;
-#endif
+    // The recipe compute's named compile-time arguments (the ring factory gives every ring kernel the set).
+    static constexpr bool kFp32State = get_named_compile_time_arg_val("recipe_fp32") != 0;
+    // Streamed checkpoints: BF16 recipes with fused chunks (recipe_state_transfer.hpp, stream_recipe_state).
+    static constexpr bool kStreamState = get_named_compile_time_arg_val("recipe_ring_stream_state") != 0;
 
     template <uint32_t args_offset>
     static FORCE_INLINE auto state_backing() {
@@ -31,11 +30,11 @@ struct RingJointWriterPolicy {
 
     template <uint32_t Sq_chunk_t, uint32_t vDHt, typename Accessor>
     static FORCE_INLINE void transfer_state(Noc& noc, const Accessor& backing) {
-#ifdef SDPA_RING_STREAM_STATE
-        stream_recipe_state<Sq_chunk_t, 17, 18, vDHt>(noc, backing);
-#else
-        transfer_recipe_state<kFp32State, Sq_chunk_t, 17, 18, vDHt>(noc, backing);
-#endif
+        if constexpr (kStreamState) {
+            stream_recipe_state<Sq_chunk_t, 17, 18, vDHt>(noc, backing);
+        } else {
+            transfer_recipe_state<kFp32State, Sq_chunk_t, 17, 18, vDHt>(noc, backing);
+        }
     }
 };
 

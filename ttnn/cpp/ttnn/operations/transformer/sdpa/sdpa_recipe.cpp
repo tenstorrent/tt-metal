@@ -9,6 +9,7 @@
 #include <bit>
 #include <cmath>
 #include <cstdlib>
+#include <iterator>
 #include <set>
 
 #include <tt-metalium/allocator.hpp>
@@ -94,6 +95,51 @@ bool recipe_fused_cb(const CBDescriptor& cb) {
 }
 
 uint32_t recipe_subblock_width(uint32_t tiles) { return tiles % 4 == 0 ? 4 : tiles % 2 == 0 ? 2 : 1; }
+
+std::optional<KernelBuildOptLevel> recipe_opt_level(KernelBuildOptLevel level) {
+    // tt_metal exposes no public watcher query to ttnn. The JIT build enables the watcher from RunTimeOptions
+    // (tt_metal internal), which takes it from this variable.
+    const char* watcher = std::getenv("TT_METAL_WATCHER");
+    if (watcher != nullptr && watcher[0] != '\0') {
+        return std::nullopt;
+    }
+    return level;
+}
+
+void set_named_arg(NamedCompileTimeArgs& args, std::string_view name, uint32_t value) {
+    const auto it = std::ranges::find_if(args, [&](const auto& arg) { return arg.first == name; });
+    if (it != args.end()) {
+        it->second = value;
+    } else {
+        args.emplace_back(std::string(name), value);
+    }
+}
+
+uint32_t named_arg(const NamedCompileTimeArgs& args, std::string_view name) {
+    const auto it = std::ranges::find_if(args, [&](const auto& arg) { return arg.first == name; });
+    TT_FATAL(it != args.end(), "SDPA recipe kernel has no named compile-time argument {}", name);
+    return it->second;
+}
+
+NamedCompileTimeArgs recipe_named_args(const NamedCompileTimeArgs& args) {
+    NamedCompileTimeArgs recipe_args;
+    std::ranges::copy_if(
+        args, std::back_inserter(recipe_args), [](const auto& arg) { return arg.first.starts_with("recipe_"); });
+    return recipe_args;
+}
+
+uint64_t recipe_drop_fused(ProgramDescriptor::CBDescriptors& cbs, NamedCompileTimeArgs& args, uint32_t q_tiles) {
+    if (q_tiles % 2 != 0 && named_arg(args, "recipe_lofi") == 0) {
+        return 0;
+    }
+    uint64_t freed = 0;
+    for (const auto& cb : cbs) {
+        freed += recipe_fused_cb(cb) ? cb.total_size : 0;
+    }
+    cbs.erase(std::remove_if(cbs.begin(), cbs.end(), recipe_fused_cb), cbs.end());
+    set_named_arg(args, "recipe_fused", 0);
+    return freed;
+}
 
 namespace {
 // Legacy SDPA's granularity rule: the largest value <= limit that divides the tile count.
@@ -202,35 +248,42 @@ ProgramDescriptor recipe_compute_program(
              {"scale", std::bit_cast<uint32_t>(scale.value_or(1.0f / std::sqrt(static_cast<float>(d_tiles * 32))))},
              {"q_tiles", q_tiles},
              {"k_tiles", k_tiles},
-             {"d_tiles", d_tiles}},
+             {"d_tiles", d_tiles},
+             {"vd_tiles", vd},
+             // The recipe selection (recipe_config.hpp). Callers set the feature arguments they use.
+             {"recipe_fp32", fp32 ? 1u : 0u},
+             {"recipe_accurate", policy.selection.recipe == Recipe::D ? 1u : 0u},
+             {"recipe_lofi", policy.selection.recipe == Recipe::E ? 1u : 0u},
+             {"recipe_fused", fused ? 1u : 0u},
+             {"recipe_mask", 0},
+             {"recipe_krange", 0},
+             {"recipe_sink_cb", 0},
+             {"recipe_sink_bf16", 0},
+             {"recipe_ring", 0},
+             {"recipe_ring_causal", 0},
+             {"recipe_ring_chunked", 0},
+             {"recipe_ring_group_tiles", 0},
+             {"recipe_ring_stream_state", 0},
+             {"recipe_k_primary_rows", 0},
+             {"recipe_k_joint_rows", 0},
+             {"recipe_qk_w", recipe_subblock_width(k_tiles)},
+             {"recipe_pv_w", recipe_subblock_width(vd)}},
         .defines =
             {{"EXP_APPROX_MODE", "1"},
              {"STATS_GRANULARITY", std::to_string(recipe_granularity(q_tiles, fp32 ? 4 : 8))},
              {"SUB_EXP_GRANULARITY", std::to_string(recipe_granularity(k_tiles, fp32 ? 4 : 8))},
              {"MUL_BCAST_GRANULARITY", std::to_string(recipe_granularity(q_tiles * k_tiles, fp32 ? 4 : 8))},
              {"DHT_GRANULARITY", std::to_string(recipe_granularity(vd, 8))},
-             {"REDUCE_GRANULARITY", std::to_string(recipe_granularity(q_tiles, fp32 ? 2 : 4))},
-             {"SDPA_RECIPE_QK_W", std::to_string(recipe_subblock_width(k_tiles))},
-             {"SDPA_RECIPE_PV_W", std::to_string(recipe_subblock_width(vd))}},
+             {"REDUCE_GRANULARITY", std::to_string(recipe_granularity(q_tiles, fp32 ? 2 : 4))}},
         .config = compute_config};
     // The recipes record their exp programs in the replay buffer once and replay them per tile from other
     // functions; the SFPI compiler's replay optimization would overwrite them (tenstorrent/tt-metal#58433).
     // Internal-only, temporary workaround (tt_metal/api/internal): drop this define once the compiler fix lands.
     compute.defines.emplace_back(tt::tt_metal::internal::DISABLE_SFPU_REPLAY_OPTIMIZATION_DEFINE, "1");
-    if (fp32) {
-        compute.defines.emplace_back("SDPA_RECIPE_FP32", "1");
-    }
     if (policy.selection.recipe == Recipe::D) {
-        compute.defines.emplace_back("SDPA_RECIPE_ACCURATE", "1");
-    }
-    if (policy.selection.recipe == Recipe::E) {
-        compute.defines.emplace_back("SDPA_RECIPE_LOFI", "1");
-    }
-    if (fused) {
-        compute.defines.emplace_back("SDPA_RECIPE_FUSED", "1");
-    }
-    if (vd != d_tiles) {
-        compute.defines.emplace_back("SDPA_RECIPE_V_DHT", std::to_string(vd));
+        // The dense ACCURATE kernel builds at -O2 (run_recipe_segments sets the dense kernel's final level; the ring
+        // factories choose their own).
+        compute.opt_level = recipe_opt_level(KernelBuildOptLevel::O2);
     }
     program.kernels.push_back(std::move(compute));
     return program;
@@ -277,7 +330,7 @@ static void check_recipe_l1_fit(
     ProgramDescriptor& program, uint64_t available, uint32_t q_chunk, uint32_t k_chunk, uint32_t compute_q_tiles) {
     uint64_t bytes = recipe_cb_bytes(program);
     if (bytes > available) {
-        bytes -= recipe_drop_fused(program.cbs, program.kernels.front().defines, compute_q_tiles);
+        bytes -= recipe_drop_fused(program.cbs, program.kernels.front().named_compile_time_args, compute_q_tiles);
     }
     TT_FATAL(
         bytes <= available,
@@ -712,9 +765,9 @@ static ProgramDescriptor recipe_program(
     auto program = recipe_compute_program(
         policy, grid, k_chunks, compute_q_tiles, k_tiles, d_tiles, scale, vd_tiles, recipe_kv_storage(v.dtype()));
     if (attn_mask) {
-        // The fused chunks run without an attn_mask (recipe_streaming.hpp: SDPA_RECIPE_FUSED_ACTIVE), so a masked
-        // build drops their CBs and SDPA_RECIPE_FUSED.
-        recipe_drop_fused(program.cbs, program.kernels.front().defines, compute_q_tiles);
+        // The fused chunks run without an attn_mask (recipe_config.hpp: fused_active), so a masked build drops their
+        // CBs and clears recipe_fused.
+        recipe_drop_fused(program.cbs, program.kernels.front().named_compile_time_args, compute_q_tiles);
     }
     // The layout's L1 choices (mask CB depth, fused CBs) see at most the hashed budget (SDPARecipeParams::l1_budget).
     const uint64_t available = std::min(recipe_free_l1(*q.device()), l1_budget);
@@ -735,10 +788,10 @@ static ProgramDescriptor recipe_program(
             .total_size = groups * group_bytes,
             .core_ranges = grid,
             .format_descriptors = {{.buffer_index = kRecipeMaskCb, .data_format = mask_format, .page_size = mask_page}}});
-        auto& defines = program.kernels.front().defines;
-        defines.emplace_back("SDPA_RECIPE_MASK", "1");
+        auto& compute_args = program.kernels.front().named_compile_time_args;
+        set_named_arg(compute_args, "recipe_mask", 1);
         if (keyed) {
-            defines.emplace_back("SDPA_RECIPE_KRANGE", "1");
+            set_named_arg(compute_args, "recipe_krange", 1);
         }
         if (mask_format == tt::DataFormat::Float32) {
             // Unpack the FP32 mask straight to DST so the L1 add sees the exact FP32 values.
@@ -766,16 +819,17 @@ static ProgramDescriptor recipe_program(
             .core_ranges = grid,
             .format_descriptors = {
                 {.buffer_index = kRecipeSinkCb, .data_format = tt::DataFormat::UInt32, .page_size = kRecipeSinkPage}}});
-        auto& defines = program.kernels.front().defines;
-        defines.emplace_back("SDPA_RECIPE_SINK", std::to_string(kRecipeSinkCb));
+        auto& compute_args = program.kernels.front().named_compile_time_args;
+        set_named_arg(compute_args, "recipe_sink_cb", kRecipeSinkCb);
         if (options.attention_sink->dtype() == DataType::BFLOAT16) {
-            defines.emplace_back("SDPA_RECIPE_SINK_BF16", "1");
+            set_named_arg(compute_args, "recipe_sink_bf16", 1);
         }
     }
     check_recipe_l1_fit(program, available, q_chunk, k_chunk, compute_q_tiles);
     if (k_length % k_chunk != 0 || k_rows % 32 != 0 || joint_k_rows % 32 != 0) {
-        program.kernels.front().defines.emplace_back("SDPA_RECIPE_K_PRIMARY_ROWS", std::to_string(k_rows));
-        program.kernels.front().defines.emplace_back("SDPA_RECIPE_K_JOINT_ROWS", std::to_string(joint_k_rows));
+        auto& compute_args = program.kernels.front().named_compile_time_args;
+        set_named_arg(compute_args, "recipe_k_primary_rows", k_rows);
+        set_named_arg(compute_args, "recipe_k_joint_rows", joint_k_rows);
     }
     // Key ranges share K/V between the cores running one head's Q chunks in a snake round when some head has more
     // than one core (dataflow/reader_recipe.cpp: RecipeKvShare); it needs a second ready semaphore. Sliding and
@@ -788,30 +842,62 @@ static ProgramDescriptor recipe_program(
         program.semaphores.push_back({.id = i, .core_ranges = grid, .initial_value = i == 2 ? 1u : 0u});
     }
     const std::string prefix = "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/";
+    // Reader and writer named compile-time arguments (dataflow/reader_recipe.cpp: recipe_reader, writer_recipe.cpp:
+    // recipe_writer); every one is set, the features' defaults off.
     KernelDescriptor reader{
         .kernel_source = prefix + "dataflow/reader_recipe.cpp",
         .core_ranges = grid,
         .compile_time_args =
             {q_tiles, k_chunks, jobs_per_head, q.logical_shape()[2], joint_q_rows, k_rows, joint_k_rows},
+        .named_compile_time_args =
+            {{"joint", segments.size() == 2 ? 1u : 0u},
+             {"k_chunk_tiles", k_tiles},
+             {"d_tiles", d_tiles},
+             {"q_pad_tiles", compute_q_tiles - q_tiles},
+             {"q_per_kv_head", qs[1] / kv_heads},
+             {"kv_rows", 0},
+             {"v_d_tiles", d_tiles},
+             {"v_src_d_tiles", d_tiles},
+             {"v_is_k", 0},
+             {"mask", 0},
+             {"mask_cb", kRecipeMaskCb},
+             {"mask_group_rows", mask_group_rows},
+             {"mask_q_tiles", 0},
+             {"mask_k_tiles", 0},
+             {"mask_heads", qs[1]},
+             {"mask_bcast_batch", 0},
+             {"mask_bcast_heads", 0},
+             {"krange", 0},
+             {"causal", 0},
+             {"window", 0},
+             {"segments", 0},
+             {"scratch_cb", kRecipeKeyScratchCb},
+             {"cores", cores},
+             {"batch_heads", batch_heads},
+             {"kv_share", 0},
+             {"q_slab_jobs", 0},
+             {"q_offset_page", 0},
+             {"segments_page", 0},
+             {"page_table_page", 0},
+             {"q_heads", qs[1]},
+             {"kv_heads", kv_heads},
+             {"page_block_tiles", 1},
+             {"page_table_offset", 0},
+             {"read_barrier_tiles", 16},
+             {"shared_read_barrier_tiles", 16},
+             {"sink_cb", 0},
+             {"sink_heads", 1},
+             {"sink_cta", 0},
+             {"sink_arg", 0}},
         .config = ReaderConfigDescriptor{}};
-    if (segments.size() == 2) {
-        reader.defines.emplace_back("SDPA_JOINT", "1");
-    }
-    reader.defines.emplace_back("SDPA_K_CHUNK_TILES", std::to_string(k_tiles));
-    reader.defines.emplace_back("SDPA_RECIPE_Q_PAD_TILES", std::to_string(compute_q_tiles - q_tiles));
-    reader.defines.emplace_back("SDPA_RECIPE_DHT", std::to_string(d_tiles));
-    if (qs[1] != kv_heads) {
-        reader.defines.emplace_back("SDPA_RECIPE_Q_PER_KV_HEAD", std::to_string(qs[1] / kv_heads));
-    }
+    auto& reader_args = reader.named_compile_time_args;
     if (paged || vd_tiles != d_tiles || v_is_k) {
         // K/V tile rows located one at a time (dataflow/reader_recipe.cpp: read_kv_rows): through the page table, and
         // for MLA a V narrower than its source rows (V's own tensor, or K's first head_dim_v columns).
-        reader.defines.emplace_back("SDPA_RECIPE_KV_ROWS", std::to_string(k_rows));
-        reader.defines.emplace_back("SDPA_RECIPE_V_DHT", std::to_string(vd_tiles));
-        reader.defines.emplace_back("SDPA_RECIPE_V_SRC_DHT", std::to_string(v_is_k ? d_tiles : vd_tiles));
-        if (v_is_k) {
-            reader.defines.emplace_back("SDPA_RECIPE_V_IS_K", "1");
-        }
+        set_named_arg(reader_args, "kv_rows", k_rows);
+        set_named_arg(reader_args, "v_d_tiles", vd_tiles);
+        set_named_arg(reader_args, "v_src_d_tiles", v_is_k ? d_tiles : vd_tiles);
+        set_named_arg(reader_args, "v_is_k", v_is_k ? 1 : 0);
     }
     for (const auto& segment : segments) {
         for (uint32_t i = 0; i < (v_is_k ? 2u : 3u); ++i) {
@@ -820,32 +906,44 @@ static ProgramDescriptor recipe_program(
     }
     if (attn_mask) {
         const auto& ms = attn_mask->logical_shape();
-        reader.defines.emplace_back("SDPA_RECIPE_MASK", "1");
-        reader.defines.emplace_back("SDPA_RECIPE_MASK_CB", std::to_string(kRecipeMaskCb));
-        reader.defines.emplace_back("SDPA_RECIPE_MASK_GROUP_ROWS", std::to_string(mask_group_rows));
-        reader.defines.emplace_back("SDPA_RECIPE_MASK_Q_TILES", std::to_string((ms[2] + 31) / 32));
-        reader.defines.emplace_back("SDPA_RECIPE_MASK_K_TILES", std::to_string((ms[3] + 31) / 32));
-        reader.defines.emplace_back("SDPA_RECIPE_MASK_HEADS", std::to_string(qs[1]));
-        reader.defines.emplace_back("SDPA_RECIPE_MASK_BCAST_BATCH", ms[0] == 1 ? "1" : "0");
-        reader.defines.emplace_back("SDPA_RECIPE_MASK_BCAST_HEADS", ms[1] == 1 ? "1" : "0");
+        set_named_arg(reader_args, "mask", 1);
+        set_named_arg(reader_args, "mask_q_tiles", (ms[2] + 31) / 32);
+        set_named_arg(reader_args, "mask_k_tiles", (ms[3] + 31) / 32);
+        set_named_arg(reader_args, "mask_bcast_batch", ms[0] == 1 ? 1 : 0);
+        set_named_arg(reader_args, "mask_bcast_heads", ms[1] == 1 ? 1 : 0);
         TensorAccessorArgs(attn_mask->buffer()).append_to(reader.compile_time_args);
     }
     KernelDescriptor writer{
         .kernel_source = prefix + "dataflow/writer_recipe.cpp",
         .core_ranges = grid,
         .compile_time_args = {q_tiles, q.logical_shape()[2], joint_q_rows},
+        .named_compile_time_args =
+            {{"joint", segments.size() == 2 ? 1u : 0u},
+             {"d_tiles", vd_tiles},
+             {"q_pad_tiles", compute_q_tiles - q_tiles},
+             {"concat_heads", options.output_concat_heads ? qs[1] : 0u},
+             {"q_jobs", jobs_per_head},
+             {"krange", 0},
+             {"causal", 0},
+             {"window", 0},
+             {"segments", 0},
+             {"cores", cores},
+             {"batch_heads", batch_heads},
+             {"q_slab_jobs", 0},
+             {"q_offset_page", 0},
+             {"segments_page", 0},
+             {"k_rows", k_rows},
+             {"k_chunks", k_chunks},
+             {"k_chunk_tiles", k_tiles},
+             {"key_range_cb", kRecipeKeyRangeCb},
+             {"mask_cb", kRecipeMaskCb},
+             {"mask_group_rows", mask_group_rows},
+             {"masked_tile_cb", kRecipeMaskedTileCb},
+             {"mask_cache_tiles", kRecipeMaskCacheTiles},
+             {"scratch_cb", kRecipeKeyScratchCb},
+             {"scratch_writer", 0}},
         .config = WriterConfigDescriptor{}};
-    if (segments.size() == 2) {
-        writer.defines.emplace_back("SDPA_JOINT", "1");
-    }
-    writer.defines.emplace_back("SDPA_RECIPE_DHT", std::to_string(vd_tiles));
-    if (options.output_concat_heads) {
-        writer.defines.emplace_back("SDPA_RECIPE_CONCAT_HEADS", std::to_string(qs[1]));
-        if (!keyed) {
-            writer.defines.emplace_back("SDPA_RECIPE_Q_JOBS", std::to_string(jobs_per_head));
-        }
-    }
-    writer.defines.emplace_back("SDPA_RECIPE_Q_PAD_TILES", std::to_string(compute_q_tiles - q_tiles));
+    auto& writer_args = writer.named_compile_time_args;
     for (const auto& tensor : outputs) {
         TensorAccessorArgs(tensor.buffer()).append_to(writer.compile_time_args);
     }
@@ -857,66 +955,44 @@ static ProgramDescriptor recipe_program(
         TT_FATAL(
             !key_range.q_offset_tensor || key_range.q_offset_tensor->buffer()->aligned_page_size() <= 64,
             "SDPA recipe Q offset tensor page must fit 64 bytes");
-        const std::string segment_bounds =
-            std::to_string(key_range.segments ? key_range.segments->logical_shape()[0] : 0);
-        for (auto* kernel : {&reader, &writer}) {
-            kernel->defines.emplace_back("SDPA_RECIPE_KRANGE", "1");
-            kernel->defines.emplace_back("SDPA_RECIPE_CAUSAL", key_range.causal ? "1" : "0");
-            kernel->defines.emplace_back("SDPA_RECIPE_WINDOW", std::to_string(key_range.sliding_window));
-            kernel->defines.emplace_back("SDPA_RECIPE_SEGMENTS", segment_bounds);
-            kernel->defines.emplace_back("SDPA_RECIPE_SCRATCH_CB", std::to_string(kRecipeKeyScratchCb));
-            kernel->defines.emplace_back("SDPA_RECIPE_CORES", std::to_string(cores));
-            kernel->defines.emplace_back("SDPA_RECIPE_BATCH_HEADS", std::to_string(batch_heads));
-        }
-        if (kv_share) {
-            reader.defines.emplace_back("SDPA_RECIPE_KV_SHARE", "1");
-        }
-        writer.defines.emplace_back("SDPA_RECIPE_Q_JOBS", std::to_string(jobs_per_head));
-        if (key_range.q_slab_rows) {
-            for (auto* kernel : {&reader, &writer}) {
-                kernel->defines.emplace_back(
-                    "SDPA_RECIPE_Q_SLAB_JOBS", std::to_string(key_range.q_slab_rows / q_chunk));
+        const uint32_t segment_bounds = key_range.segments ? key_range.segments->logical_shape()[0] : 0;
+        for (auto* args : {&reader_args, &writer_args}) {
+            set_named_arg(*args, "krange", 1);
+            set_named_arg(*args, "causal", key_range.causal ? 1 : 0);
+            set_named_arg(*args, "window", key_range.sliding_window);
+            set_named_arg(*args, "segments", segment_bounds);
+            if (key_range.q_slab_rows) {
+                set_named_arg(*args, "q_slab_jobs", key_range.q_slab_rows / q_chunk);
             }
         }
-        writer.defines.emplace_back("SDPA_RECIPE_K_ROWS", std::to_string(k_rows));
-        writer.defines.emplace_back("SDPA_RECIPE_K_CHUNKS", std::to_string(k_chunks));
-        writer.defines.emplace_back("SDPA_K_CHUNK_TILES", std::to_string(k_tiles));
-        writer.defines.emplace_back("SDPA_RECIPE_MASK_CB", std::to_string(kRecipeMaskCb));
-        writer.defines.emplace_back("SDPA_RECIPE_MASK_GROUP_ROWS", std::to_string(mask_group_rows));
-        writer.defines.emplace_back("SDPA_RECIPE_KEY_RANGE_CB", std::to_string(kRecipeKeyRangeCb));
-        writer.defines.emplace_back("SDPA_RECIPE_MASKED_TILE_CB", std::to_string(kRecipeMaskedTileCb));
-        writer.defines.emplace_back("SDPA_RECIPE_MASK_CACHE_TILES", std::to_string(kRecipeMaskCacheTiles));
-        writer.defines.emplace_back("SDPA_RECIPE_SCRATCH_WRITER", std::to_string(key_range_scratch_half(key_range)));
-        for (const auto& [tensor, define, to_writer] :
-             {std::tuple{&key_range.q_offset_tensor, "SDPA_RECIPE_Q_OFFSET_PAGE", true},
-              std::tuple{&key_range.segments, "SDPA_RECIPE_SEGMENTS_PAGE", true},
-              std::tuple{&key_range.page_table, "SDPA_RECIPE_PAGE_TABLE_PAGE", false}}) {
+        if (kv_share) {
+            set_named_arg(reader_args, "kv_share", 1);
+        }
+        set_named_arg(writer_args, "scratch_writer", key_range_scratch_half(key_range));
+        for (const auto& [tensor, name, to_writer] :
+             {std::tuple{&key_range.q_offset_tensor, "q_offset_page", true},
+              std::tuple{&key_range.segments, "segments_page", true},
+              std::tuple{&key_range.page_table, "page_table_page", false}}) {
             if (!*tensor) {
                 continue;
             }
             key_tensors.push_back(**tensor);
-            const auto page = std::to_string((*tensor)->buffer()->aligned_page_size());
-            for (auto* kernel : to_writer ? std::vector{&reader, &writer} : std::vector{&reader}) {
-                kernel->defines.emplace_back(define, page);
+            const uint32_t page = (*tensor)->buffer()->aligned_page_size();
+            for (auto* args : to_writer ? std::vector{&reader_args, &writer_args} : std::vector{&reader_args}) {
+                set_named_arg(*args, name, page);
             }
         }
         // Without the chain every core reads its own K/V: bound the reads in flight per core like legacy SDPA
         // (dataflow_common.hpp: get_barrier_read_threshold), at most the chain head's 16 tiles. Measured on 10 heads x
         // 8192^2 causal over 110 cores: 16 tiles 2.66 ms, 2 tiles 2.25 ms (STANDARD).
         const uint32_t kv_page = k.buffer()->page_size();
-        reader.defines.emplace_back(
-            "SDPA_RECIPE_READ_BARRIER_TILES",
-            std::to_string(std::clamp<uint32_t>((512 / cores) * (1024 + 128) / kv_page, 1, 16)));
-        if (kv_share) {
-            // With K/V sharing one core per head and round reads the shared chunks: the chain head's interval.
-            reader.defines.emplace_back("SDPA_RECIPE_SHARED_READ_BARRIER_TILES", "16");
-        }
+        const uint32_t barrier_tiles = std::clamp<uint32_t>((512 / cores) * (1024 + 128) / kv_page, 1, 16);
+        set_named_arg(reader_args, "read_barrier_tiles", barrier_tiles);
+        // With K/V sharing one core per head and round reads the shared chunks: the chain head's interval.
+        set_named_arg(reader_args, "shared_read_barrier_tiles", kv_share ? 16 : barrier_tiles);
         if (paged) {
-            reader.defines.emplace_back("SDPA_RECIPE_Q_HEADS", std::to_string(qs[1]));
-            reader.defines.emplace_back("SDPA_RECIPE_KV_HEADS", std::to_string(kv_heads));
-            reader.defines.emplace_back("SDPA_RECIPE_PAGE_BLOCK_TILES", std::to_string(block_rows / 32));
-            reader.defines.emplace_back(
-                "SDPA_RECIPE_PAGE_TABLE_OFFSET", std::to_string(2 * key_range_scratch_half(key_range)));
+            set_named_arg(reader_args, "page_block_tiles", block_rows / 32);
+            set_named_arg(reader_args, "page_table_offset", 2 * key_range_scratch_half(key_range));
         }
         for (const auto& tensor : key_tensors) {
             TensorAccessorArgs(tensor.buffer()).append_to(reader.compile_time_args);
@@ -928,17 +1004,21 @@ static ProgramDescriptor recipe_program(
         }
     }
     if (options.attention_sink) {
-        // The sink tensor's accessor and address come last (runtime arg SDPA_RECIPE_SINK_ARG).
-        reader.defines.emplace_back("SDPA_RECIPE_SINK_CB", std::to_string(kRecipeSinkCb));
-        reader.defines.emplace_back("SDPA_RECIPE_SINK_HEADS", std::to_string(qs[1]));
-        reader.defines.emplace_back("SDPA_RECIPE_SINK_CTA", std::to_string(reader.compile_time_args.size()));
-        reader.defines.emplace_back(
-            "SDPA_RECIPE_SINK_ARG",
-            std::to_string(keyed ? kReaderKeyedTensorArg + 3 : kReaderTensorArg + (attn_mask ? 1 : 0)));
+        // The sink tensor's accessor and address come last (runtime arg sink_arg).
+        set_named_arg(reader_args, "sink_cb", kRecipeSinkCb);
+        set_named_arg(reader_args, "sink_heads", qs[1]);
+        set_named_arg(reader_args, "sink_cta", reader.compile_time_args.size());
+        set_named_arg(
+            reader_args, "sink_arg", keyed ? kReaderKeyedTensorArg + 3 : kReaderTensorArg + (attn_mask ? 1 : 0));
         TensorAccessorArgs(options.attention_sink->buffer()).append_to(reader.compile_time_args);
     }
     const uint32_t sink_address = options.attention_sink ? options.attention_sink->buffer()->address() : 0;
     auto compute = std::move(program.kernels.front());
+    // Blackhole builds the dense ACCURATE kernel at -O2 (recipe_compute_program); Wormhole picks its level in the
+    // kernel (kernels/compute/sdpa_recipe.cpp) and keeps the default here.
+    if (q.device()->arch() == tt::ARCH::WORMHOLE_B0) {
+        compute.opt_level = std::nullopt;
+    }
     for (uint32_t i = 0; i < cores; ++i) {
         const auto core = coordinates[i];
         const uint32_t head = i / chain, rank = i % chain;

@@ -59,6 +59,7 @@ public:
             tensor_args.v_head_dim(args.latent_v_head_dim) / tt::constants::TILE_WIDTH);
         desc.cbs = program_.cbs;
         causal_ = args.is_causal;
+        wormhole_ = tensor_args.input_q.device()->arch() == tt::ARCH::WORMHOLE_B0;
         // Chunked prefill (Q shorter than the K/V shard): the device's Q slab and the chunk group, in tiles.
         if (tensor_args.is_chunked() && !args.is_cross) {
             chunked_q_tiles_ = tensor_args.input_q.padded_shape()[2] / tt::constants::TILE_HEIGHT;
@@ -73,7 +74,7 @@ public:
         return fp32_dest_acc_en ? 1u : 2u;
     }
 
-    // The dense recipe's host rule (SDPA_RECIPE_QK_W / SDPA_RECIPE_PV_W come from the same helper).
+    // The dense recipe's host rule (recipe_qk_w / recipe_pv_w come from the same helper).
     uint32_t fixed_subblock_w(uint32_t tiles) const override { return ring_recipes::recipe_subblock_width(tiles); }
 
     bool resident_ring_state() const override { return true; }
@@ -133,7 +134,8 @@ public:
         if (cb_bytes > available) {
             // Then the fused chunks' CBs: without them every K chunk runs on the reduce path (slower than giving
             // up Q prefetch, so this goes last).
-            cb_bytes -= ring_recipes::recipe_drop_fused(desc.cbs, program_.kernels.front().defines, Sq_chunk_t_);
+            cb_bytes -= ring_recipes::recipe_drop_fused(
+                desc.cbs, program_.kernels.front().named_compile_time_args, Sq_chunk_t_);
             log_debug(tt::LogOp, "Named ring recipe: unfused chunks to fit L1");
         }
         TT_FATAL(
@@ -161,24 +163,34 @@ public:
     void append_defines(tt::tt_metal::KernelDescriptor::Defines& defines) const override {
         const auto& recipe_defines = program_.kernels.front().defines;
         defines.insert(defines.end(), recipe_defines.begin(), recipe_defines.end());
-        // STANDARD's and FAST's fused chunks (after any L1 fallback in finalize_cbs) stream their ring
-        // checkpoints: compute overlaps the state save/restore of multi-Q workers with its chunks instead of waiting.
-        const auto has = [&](const char* name) {
-            return std::any_of(
-                recipe_defines.begin(), recipe_defines.end(), [&](const auto& d) { return d.first == name; });
-        };
-        if (has("SDPA_RECIPE_FUSED") && !has("SDPA_RECIPE_FP32")) {
-            defines.emplace_back("SDPA_RING_STREAM_STATE", "1");
-        }
+    }
+
+    // The recipe's named arguments (after any L1 fallback in finalize_cbs) on every ring kernel: the writer's state
+    // transfer reads them too.
+    void append_named_compile_time_args(tt::tt_metal::KernelDescriptor::NamedCompileTimeArgs& args) const override {
+        auto recipe_args = ring_recipes::recipe_named_args(program_.kernels.front().named_compile_time_args);
+        ring_recipes::set_named_arg(recipe_args, "recipe_ring", 1);
+        // STANDARD's and FAST's fused chunks stream their ring checkpoints: compute overlaps the state save/restore
+        // of multi-Q workers with its chunks instead of waiting.
+        ring_recipes::set_named_arg(recipe_args, "recipe_ring_stream_state", fused() && !fp32() ? 1 : 0);
         // Causal (and balanced) rings: diagonal masking, skipped K chunks and Q chunks (streaming/recipe_ring.hpp).
-        if (causal_ || chunked_q_tiles_) {
-            defines.emplace_back("SDPA_RECIPE_RING_CAUSAL", "1");
-        }
+        ring_recipes::set_named_arg(recipe_args, "recipe_ring_causal", ring_causal() ? 1 : 0);
         // Chunked prefill masks every step in the sequence's frame (streaming/recipe_ring.hpp).
-        if (chunked_q_tiles_) {
-            defines.emplace_back("SDPA_RECIPE_RING_CHUNKED", std::to_string(chunked_q_tiles_));
-            defines.emplace_back("SDPA_RECIPE_RING_GROUP_TILES", std::to_string(chunk_group_tiles_));
+        ring_recipes::set_named_arg(recipe_args, "recipe_ring_chunked", chunked_q_tiles_);
+        ring_recipes::set_named_arg(recipe_args, "recipe_ring_group_tiles", chunk_group_tiles_);
+        args.insert(args.end(), recipe_args.begin(), recipe_args.end());
+    }
+
+    // Blackhole unpack and pack (ring_joint_sdpa_recipe.cpp builds math, and every Wormhole thread, at its own level):
+    // -O2 for fused chunks, ACCURATE and the causal ring step, whose code overflows the kernel config buffer at -O3.
+    // Wormhole keeps the default: its link-time inlining needs it (the math LLK's address-mode setup takes constants).
+    std::optional<tt::tt_metal::KernelBuildOptLevel> compute_opt_level() const override {
+        if (wormhole_) {
+            return std::nullopt;
         }
+        return fused() || accurate() || ring_causal()
+                   ? ring_recipes::recipe_opt_level(tt::tt_metal::KernelBuildOptLevel::O2)
+                   : std::nullopt;
     }
 
     std::optional<tt::tt_metal::KernelDescriptor::ConfigDescriptor> compute_config() const override {
@@ -186,9 +198,21 @@ public:
     }
 
 private:
+    bool fused() const {
+        return ring_recipes::named_arg(program_.kernels.front().named_compile_time_args, "recipe_fused") != 0;
+    }
+    bool fp32() const {
+        return ring_recipes::named_arg(program_.kernels.front().named_compile_time_args, "recipe_fp32") != 0;
+    }
+    bool accurate() const {
+        return ring_recipes::named_arg(program_.kernels.front().named_compile_time_args, "recipe_accurate") != 0;
+    }
+    bool ring_causal() const { return causal_ || chunked_q_tiles_ != 0; }
+
     mutable tt::tt_metal::ProgramDescriptor program_;  // finalize_cbs may drop the fused chunks
     tt::tt_metal::CoreRangeSet grid_;
     bool causal_ = false;
+    bool wormhole_ = false;
     uint32_t chunked_q_tiles_ = 0;
     uint32_t chunk_group_tiles_ = 0;
     uint32_t Sq_chunk_t_ = 0;
