@@ -8,7 +8,6 @@ from helpers.golden_generators import UntilizeGolden, get_golden_generator
 from helpers.llk_params import (
     DestAccumulation,
     DestSync,
-    ImpliedMathFormat,
     format_dict,
 )
 from helpers.param_config import input_output_formats, parametrize
@@ -17,7 +16,6 @@ from helpers.stimuli_generator import StimuliSpec, generate_stimuli
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     DEST_SYNC,
-    IMPLIED_MATH_FORMAT,
     NUM_FACES,
     NUM_FACES_C_DIM,
     NUM_FACES_R_DIM,
@@ -78,7 +76,6 @@ def run_pack_untilize_semaphore_sync(
                 block_rt_dim=rows_per_section,
                 tile_dimensions=tile_dimensions,
             ),
-            IMPLIED_MATH_FORMAT(ImpliedMathFormat.Yes),
             DEST_SYNC(dest_sync),
         ],
         runtimes=[

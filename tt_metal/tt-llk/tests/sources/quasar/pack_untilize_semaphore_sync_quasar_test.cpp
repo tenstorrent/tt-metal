@@ -74,7 +74,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     set_up_zero_dest_dvalid_handshake_for_math();
 
-    _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.math), static_cast<DataFormat>(formats.math));
+    _llk_math_srcAB_hw_configure_<false /*EN_IMPLIED_MATH_FORMAT*/, is_fp32_dest_acc_en>(
+        static_cast<DataFormat>(formats.math), static_cast<DataFormat>(formats.math));
     _llk_math_pack_sync_init_<dest_sync>();
     _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en>(num_faces * TEST_FACE_R_DIM /*num_rows_per_matrix*/, 1 /*num_matrices*/);
 
@@ -138,6 +139,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
     else
     {
+        // Seed the Src row counter and row mask a 1x32/2x32 strided pack leaves behind, so each case checks the init's reset on its own.
+        TTI_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::ROW_SEL, p_pacr::PACK0, 16);
+        cfg_rmw(THCON_PACKER0_REG3_PACK_STRIDE_NO_WRITE_RMW, 1);
+        cfg_rmw(THCON_PACKER0_REG3_PACK_STRIDE_ROW_MASK_RMW, 0xC);
         _llk_pack_untilize_strided_init_<FULL_CT_DIM, BLOCK_CT_DIM>(bfd_pack, tensor_shape);
     }
 
