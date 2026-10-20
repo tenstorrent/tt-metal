@@ -411,8 +411,6 @@ void kernel_main() {
             rm_index_output_dfb.push_back(TILE_H);
             pack_untilize_uninit(dfb::rm_index_output);
 
-            // The startups above leave the engines configured for untilize; restore the pre-loop sort setup so
-            // the next tile-row block sorts like the first one (#54309).
             compute_kernel_hw_startup(dfb::rm_input, dfb::index_tensor, dfb::input_tensor);
             compute_kernel_hw_startup(dfb::input_tensor, dfb::index_tensor, dfb::input_tensor_transposed);
             ckernel::topk_tile_init();
