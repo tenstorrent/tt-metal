@@ -95,7 +95,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             j,
                             j * CT_DIM,
                             TILE_SIZE_UNPACK_B,
-                            TILE_SIZE_UNPACK_A,
+                            TILE_SIZE_UNPACK_B, // in1 tiles sit in full-size L1 slots; TILE_SIZE_UNPACK_A is scaled for tiny in0
                             in0_tensor_shape,
                             in1_tensor_shape,
                             CT_DIM,
