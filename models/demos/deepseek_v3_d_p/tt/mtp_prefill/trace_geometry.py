@@ -195,6 +195,9 @@ class MTPTraceEmbedSource:
 
     Every level runs the generation chain and patches the union; ``geometry`` zeroes the patch of a
     provided level, so the eager result is reproduced with one program for every chunk.
+
+    With ``embed_fn=None`` it serves chunks whose levels are all provided: generation and the patch are
+    skipped, which is what the masks would reduce them to.
     """
 
     def __init__(self, union: MTPUnionEmbedding, geometry: MTPTraceGeometry, embed_fn, all_gather_sp=None):
@@ -217,11 +220,12 @@ class MTPTraceEmbedSource:
     def __call__(self, k: int, prev_normed) -> ttnn.Tensor:
         assert k == self._next_level, f"levels must run in order; expected {self._next_level}, got {k}"
         self._next_level += 1
-        if k == 0:
-            self.union.clear_rows(self.geometry.keep)
-        gathered = self.embed_fn(prev_normed)
-        self.union.add_patch(self.geometry.selects[k], gathered)
-        ttnn.deallocate(gathered)
+        if self.embed_fn is not None:
+            if k == 0:
+                self.union.clear_rows(self.geometry.keep)
+            gathered = self.embed_fn(prev_normed)
+            self.union.add_patch(self.geometry.selects[k], gathered)
+            ttnn.deallocate(gathered)
         return self.union.blended_window(k + 1, self.geometry, self.all_gather_sp, ONE_HOT_COMPUTE_CONFIG)
 
 
