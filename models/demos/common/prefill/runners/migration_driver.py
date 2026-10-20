@@ -72,6 +72,9 @@ class MigrationDriver:
         self.layers = _parse_layers(os.environ.get("PREFILL_MIGRATION_LAYERS", ""))
         self.done_file = os.environ.get("MIGRATION_DONE_FILE", "/tmp/migration_done.sentinel")
         self.handoff_path = os.environ.get("PREFILL_MIGRATION_HANDOFF_PATH", "")
+        # The last rank's output rows (prefill_runner.FIRST_TOKEN_DIR); set => the handoff carries first_token.
+        self.first_token_dir = os.environ.get("PREFILL_FIRST_TOKEN_DIR", "")
+        self.first_token_timeout_s = float(os.environ.get("PREFILL_FIRST_TOKEN_TIMEOUT_S", "120"))
         self.client = None
 
     @property
@@ -208,6 +211,34 @@ class MigrationDriver:
         logger.info(f"[migration_driver] migrations complete: {migrated} pair(s)")
         return migrated
 
+    def _first_token(self, src_slot: int, real_len: int) -> int:
+        """The first token of ``src_slot``'s request, from the row the last rank wrote for its last chunk.
+
+        Waits for the row (the last rank writes it after its forward, possibly after the layer acks) and
+        consumes it, so a later request of the same slot and length cannot read a stale one."""
+        import torch
+
+        from models.demos.common.prefill.runners import prefill_producer as producer
+
+        path = os.path.join(self.first_token_dir, f"slot{int(src_slot)}_end{int(real_len)}.pt")
+        deadline = time.monotonic() + self.first_token_timeout_s
+        while not os.path.exists(path):
+            if time.monotonic() >= deadline:
+                raise TimeoutError(
+                    f"[migration_driver] no first-token row {path} after {self.first_token_timeout_s:.0f}s; the "
+                    f"last rank publishes it under PREFILL_FIRST_TOKEN_DIR, which must be storage this host reads"
+                )
+            time.sleep(0.1)
+        row = torch.load(path)
+        t0 = time.perf_counter()
+        token = int(producer.ADAPTER.first_token_from_hidden(row["hidden"]))
+        os.remove(path)
+        logger.info(
+            f"[migration_driver] first token for slot {src_slot} (len {real_len}): {token} "
+            f"(host head {(time.perf_counter() - t0) * 1e3:.1f} ms)"
+        )
+        return token
+
     def _write_handoff(self, triples: list, slot_traces: dict, pools_by_trace: dict) -> None:
         if not self.handoff_path:
             return
@@ -220,7 +251,10 @@ class MigrationDriver:
         for src, dst, real_len in triples:
             pool = pools_by_trace[slot_traces[src]]
             last_tok = int(pool[real_len - 1]) if 1 <= real_len <= len(pool) else int(pool[-1])
-            slots.append({"dst_slot": int(dst), "prompt_len": int(real_len), "last_prompt_token": last_tok})
+            entry = {"dst_slot": int(dst), "prompt_len": int(real_len), "last_prompt_token": last_tok}
+            if self.first_token_dir:
+                entry["first_token"] = self._first_token(src, real_len)
+            slots.append(entry)
         base_dir = os.path.abspath(os.path.dirname(self.handoff_path) or ".")
         name = os.path.basename(self.handoff_path)
         handoff_path = os.path.abspath(os.path.join(base_dir, name))

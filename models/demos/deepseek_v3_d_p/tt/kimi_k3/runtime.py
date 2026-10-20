@@ -29,6 +29,17 @@ from models.demos.deepseek_v3_d_p.tt.kimi_k3.transformer import TtKimiK3Transfor
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_runtime import TtPrefillRuntime
 
 
+class _TtKimiK3TransformerHostNorm(TtKimiK3Transformer):
+    """Last-rank stack without the device final norm, for `return_last_hidden`; the adapter applies it on host.
+
+    The production runtime has no state dict and `check_cache_complete` does not check for a final-norm
+    weight, so a device norm could silently load `torch.empty` (#54841).
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, build_tail=False, **kwargs)
+
+
 class TtKimiK3Runtime(TtPrefillRuntime):
     MODEL_CLS = TtKimiK3Transformer
 
@@ -36,6 +47,8 @@ class TtKimiK3Runtime(TtPrefillRuntime):
         # The shared build starts GLM-5.3's MTP predictor before MODEL_CLS runs, so reject here.
         if self.config.mtp_levels:
             raise ValueError(f"Kimi-K3 has no MTP predictor; got mtp_levels={self.config.mtp_levels}")
+        if self.config.return_last_hidden and self.config.is_last_rank:
+            self.MODEL_CLS = _TtKimiK3TransformerHostNorm
         super()._build_model(state_dict)
 
     @property
