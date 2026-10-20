@@ -156,6 +156,7 @@ def run_layers(
     text_config,
     *,
     stream: bool = False,
+    perturb: float = 0.0,
 ):
     """Prefill ``prompt_ids`` then ``num_decode`` greedy-free decode steps (next token = a fixed id
     sequence, since no LM head is run) through the given consecutive layers, dumping per-layer
@@ -174,6 +175,11 @@ def run_layers(
     cache = DynamicCache(config=text_config)
 
     x = embed[prompt_ids].unsqueeze(2).expand(-1, -1, hc, -1).contiguous()  # [B, T, 4, H] bf16
+    if perturb:
+        # control for chain-sensitivity studies: relative Gaussian noise on the layer-0 input (the size of a
+        # bf16 / bfp8 device error), everything downstream unchanged
+        g = torch.Generator().manual_seed(1234)
+        x = (x.float() * (1.0 + perturb * torch.randn(x.shape, generator=g))).to(x.dtype)
     out_dir.mkdir(parents=True, exist_ok=True)
     torch.save({"prompt_ids": prompt_ids, "x0": x}, out_dir / "prefill_input.pt")
     if stream:
@@ -330,6 +336,9 @@ def main():
         help="use uniformly random token ids of --seq-len (non-repetitive) instead of repeating --prompt",
     )
     ap.add_argument("--out", type=Path, default=Path("bringup/references/glm53_flash"))
+    ap.add_argument(
+        "--perturb", type=float, default=0.0, help="relative noise on the layer-0 input (chain-sensitivity control)"
+    )
     args = ap.parse_args()
 
     from transformers import AutoTokenizer
@@ -350,7 +359,7 @@ def main():
     assert layers[0] == 0 and layers == list(range(layers[0], layers[-1] + 1)), "layers must be 0..N"
     print(f"snapshot {snapshot}\nprompt tokens {ids.shape}", flush=True)
     torch.manual_seed(0)
-    run_layers(snapshot, layers, ids, args.num_decode, args.out, text, stream=args.stream)
+    run_layers(snapshot, layers, ids, args.num_decode, args.out, text, stream=args.stream, perturb=args.perturb)
 
 
 if __name__ == "__main__":
