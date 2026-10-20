@@ -561,16 +561,20 @@ void py_module_types(nb::module_& mod) {
         &ttnn::get_cb_address,
         nb::arg("descriptor"),
         R"pbdoc(
-            Get the L1 byte address of a CB descriptor.
+            Get the L1 byte address a CB descriptor is programmed at.
 
-            Returns buffer base address + address_offset when a buffer is present,
-            or just address_offset when no buffer is set (manually placed CB).
+            Returns the backing buffer's address on the descriptor's cores + address_offset,
+            or just address_offset when no buffer or tensor is set.
 
             Args:
                 descriptor: A CBDescriptor to get the address from
 
             Returns:
                 The L1 byte address of the circular buffer
+
+            Raises:
+                RuntimeError: If a per-core-allocated buffer's address differs across the
+                    descriptor's cores, or one of them has no shard.
         )pbdoc");
 
     // Bind KernelDescriptor related types

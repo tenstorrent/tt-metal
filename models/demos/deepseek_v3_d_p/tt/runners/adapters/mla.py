@@ -57,6 +57,11 @@ def unwrap_multimodal_config(cfg):
 class MLAPrefillAdapter(PrefillModelAdapter):
     """DeepSeek-V3-family prefill adapter (MLA + MoE over TtPrefillRuntime)."""
 
+    def fabric_payload_size(self) -> int:
+        from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import moe_fabric_payload_size
+
+        return moe_fabric_payload_size(self.model_config)
+
     # ------------------------------------------------------------------
     # HF config
     # ------------------------------------------------------------------

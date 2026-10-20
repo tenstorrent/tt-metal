@@ -117,6 +117,9 @@ run_t3000_ttnn_tests() {
   pytest tests/ttnn/distributed/test_data_parallel_example.py ; fail+=$?
   pytest tests/ttnn/distributed/test_hybrid_data_tensor_parallel_example_T3000.py ; fail+=$?
   pytest tests/ttnn/distributed/test_matmul_send_recv_pipeline.py ; fail+=$?
+  # Multi-device graph-report coverage: the 2x4 cases skip on smaller machines, so this leg is
+  # the only one that exercises program-execution fan-out and submesh device-id normalization.
+  pytest tests/ttnn/unit_tests/base_functionality/test_graph_report.py ; fail+=$?
   # Regression test for async cpu() use-after-free (issue #43638)
   pytest tests/ttnn/unit_tests/base_functionality/test_device_synchronize.py::test_cpu_blocking_false_discarded_return_no_uaf -xv --count=3 ; fail+=$?
   # Record the end time
@@ -186,6 +189,7 @@ run_t3000_ttnn_multiprocess_slow_tests() {
   local mesh2x4_rank_binding="tests/tt_metal/distributed/config/2x4_multiprocess_rank_bindings.yaml"
 
   tt-run --mpi-args "$mpi_args" --rank-binding "$mesh2x4_rank_binding" pytest -svv tests/ttnn/distributed/test_submesh_not_spanning_all_ranks_T3000.py
+  tt-run --mpi-args "$mpi_args" --rank-binding "$mesh2x4_rank_binding" pytest -svv tests/ttnn/unit_tests/base_functionality/test_graph_report.py::test_multihost_graph_report
   tt-run --mpi-args "$mpi_args" --rank-binding "$mesh2x4_rank_binding" build/test/ttnn/multiprocess/unit_tests_dual_rank_2x4_to_string
 }
 

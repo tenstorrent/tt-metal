@@ -8,6 +8,7 @@
 
 #include <type_traits>
 #include <algorithm>
+#include <cstring>
 
 #include <tt_stl/span.hpp>
 #include "ttnn/operations/functions.hpp"
@@ -172,28 +173,30 @@ XtensorAdapter<typename Expression::value_type> concat_ndim(
         std::accumulate(result_shape.begin(), result_shape.end(), static_cast<size_t>(1), std::multiplies<size_t>());
     XtensorAdapter<DataType> result(std::vector<DataType>(result_volume), std::move(result_shape));
 
-    // An optimization for concatenating along the outer dimension.
-    if (normalized_dims.size() == 1) {
-        // Check if all dimensions before the concat dimension have size 1.
-        bool can_use_memcpy = true;
-        for (int d = 0; d < normalized_dims[0]; ++d) {
-            if (expected_shape[d] != 1) {
-                can_use_memcpy = false;
-                break;
-            }
-        }
+    // Empty tensors have no valid element pointers; do not form offsets or call memcpy.
+    if (result_volume == 0) {
+        return result;
+    }
 
-        if (can_use_memcpy) {
-            DataType* result_ptr = result.data().data();
-            const size_t chunk_size = std::accumulate(
-                expected_shape.begin(), expected_shape.end(), static_cast<size_t>(1), std::multiplies<size_t>());
-            size_t offset = 0;
-            for (const auto& expr : expressions) {
-                std::memcpy(result_ptr + offset, expr.data(), chunk_size * sizeof(DataType));
-                offset += chunk_size;
+    if (normalized_dims.size() == 1 && std::all_of(expressions.begin(), expressions.end(), [](const auto& expr) {
+            return expr.layout() == xt::layout_type::row_major && expr.is_contiguous() && expr.data_offset() == 0;
+        })) {
+        // Each outer coordinate contributes one contiguous block per input, in input order.
+        const auto axis = normalized_dims.front();
+        const size_t outer_count = std::accumulate(
+            expected_shape.begin(), expected_shape.begin() + axis, size_t{1}, std::multiplies<size_t>());
+        const size_t block_elements =
+            std::accumulate(expected_shape.begin() + axis, expected_shape.end(), size_t{1}, std::multiplies<size_t>());
+        DataType* result_ptr = result.data().data();
+        for (size_t outer = 0; outer < outer_count; ++outer) {
+            for (size_t chunk = 0; chunk < expressions.size(); ++chunk) {
+                std::memcpy(
+                    result_ptr + (outer * expressions.size() + chunk) * block_elements,
+                    expressions[chunk].data() + outer * block_elements,
+                    block_elements * sizeof(DataType));
             }
-            return result;
         }
+        return result;
     }
 
     // Get the size of each piece along concatenation dimensions
