@@ -17,7 +17,6 @@
 #include <vector>
 #include <unordered_set>
 #include <tt-metalium/allocator.hpp>
-#include "impl/allocator/allocator.hpp"
 
 #include <fmt/format.h>
 #include <nanobind/nanobind.h>
@@ -522,9 +521,8 @@ void pytensor_module(nb::module_& mod) {
             }
             geometry.page_alignment = device->allocator()->get_alignment(BufferType::L1);
             // HYBRID banks reserve DRAM-aligned extents even though SRAM pages use L1 alignment.
-            const auto& config = device->allocator_impl()->get_config();
             geometry.allocation_alignment =
-                config.allocator_mode == AllocatorMode::HYBRID ? config.dram_alignment : config.l1_alignment;
+                tt::tt_metal::experimental::per_core_allocation::l1_tensor_allocation_alignment(*device);
             const auto aligned_page = ((geometry.page_size + geometry.page_alignment - 1) / geometry.page_alignment) *
                                       geometry.page_alignment;
             geometry.aligned_shard_size = pages * aligned_page;
