@@ -706,6 +706,23 @@ def _check_mtp_kv_slots(
         f"[producer] slot {slot_id} MTP: {len(per_level)}/{MTP_LEVELS} local level slots written and "
         f"pairwise distinct"
     )
+    # Decode reads its later levels through their own rows, so read them that way too: they must return
+    # level 0's KV bit for bit, which is what the golden scores below.
+    level0_kv = dict(per_level).get(0)
+    if level0_kv is not None and MTP_DECODE_LEVELS > MTP_LEVELS:
+        for k in range(MTP_LEVELS, MTP_DECODE_LEVELS):
+            layer = NUM_LAYERS + k
+            alias_kv = _read_kv_slice(
+                table, device_map, 0, layer, slot_id, read_end, head_dim, _decode_kv_chunk, start=first_pos
+            )[skip_rows : skip_rows + cmp_len]
+            assert torch.equal(alias_kv, level0_kv), (
+                f"MTP decode level {k} (layer {layer}) reads back different KV than level 0's row over {span}, "
+                f"though the table gives both the same addresses: something wrote that memory between the reads."
+            )
+        logger.info(
+            f"[producer] slot {slot_id} MTP: decode levels {MTP_LEVELS}..{MTP_DECODE_LEVELS - 1} read back "
+            f"through their own rows bit-identical to level 0's KV over {span}"
+        )
 
     if not per_level:
         return None
