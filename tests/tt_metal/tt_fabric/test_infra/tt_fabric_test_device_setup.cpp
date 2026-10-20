@@ -447,6 +447,9 @@ void TestWorker::create_kernel(
     const std::vector<std::pair<size_t, size_t>>& addresses_and_size_to_clear,
     tt::tt_metal::NOC noc_id) const {
     std::map<std::string, std::string> kernel_defines;
+    if (std::getenv("TT_FABRIC_FULL_RESEND") != nullptr) {
+        kernel_defines["STOCK_FULL_RESEND"] = "";  // stock benchmark steady state writes payload + header per packet (no credit-only resend)
+    }
     if (std::getenv("TT_FABRIC2") != nullptr) {
         kernel_defines["FABRIC2_WORKER"] = "";  // Fabric 2.0 worker adapter (fabric2_worker_adapter.hpp)
         if (std::getenv("F2_DISPATCH") != nullptr && std::atoi(std::getenv("F2_DISPATCH")) != 0) {

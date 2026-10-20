@@ -1158,6 +1158,11 @@ struct SenderKernelTrafficConfig {
                 // Fabric 2.0 steady state: the header is unchanged, so the adapter re-posts its request
                 // without copying the header again, as with the stock credit-only path.
                 conn->resend_header((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
+#elif defined(STOCK_FULL_RESEND)
+                // Stock steady state moving the whole packet (TT_FABRIC_FULL_RESEND): the payload and the header into
+                // the slot per packet, as the non-benchmark path and as Fabric 2.0 do, instead of the credit-only resend.
+                conn->send_payload_without_header_non_blocking_from_address((uint32_t)packet_header, payload_size_bytes);
+                conn->send_payload_flush_non_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
 #else
                 fabric_detail::update_credits_and_slots<STATEFUL_NOC>(conn);
 #endif
