@@ -914,6 +914,10 @@ class BatchedVerify:
         # one BFP8 step larger in magnitude (tests/_scratch_b32_verify.py test_kvwrite). trans_rows (the prefill RoPE
         # transformation matrix of the target's RoPE) is set by the runner.
         self.trans_rows = None
+        # the MoE input (router, typecast for the gather) in L1 (B32_MOE_IN_L1)
+        self.moe_in_mc = (
+            ttnn.L1_MEMORY_CONFIG if os.environ.get("B32_MOE_IN_L1", "1") == "1" else ttnn.DRAM_MEMORY_CONFIG
+        )
         self.kv_write = BatchedKVWrite(self.mesh, users, block, self.local_kv_heads, hd, kv_cache[1][0].shape[2],
                                        head_split=True)  # fmt: skip
 
@@ -1170,7 +1174,7 @@ class BatchedVerify:
             res2 = self._attention(li, layer, res, pos, rot)
             res.deallocate(True)
             n2 = layer.post_attention_layernorm.forward_sharded(res2)
-            normed = ttnn.to_memory_config(n2, ttnn.DRAM_MEMORY_CONFIG)
+            normed = ttnn.to_memory_config(n2, self.moe_in_mc)
             n2.deallocate(True)
             # the MoE's all-reduce lands on the residual shards: the residual add stays sharded (as the attention's)
             moe = self._moe(li, layer, normed, self.residual_mc)
