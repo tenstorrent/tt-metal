@@ -13,6 +13,7 @@
 #include "params.h"
 #include "perf.h"
 #include "profiler.h"
+#include "tensor_shape_helpers.h"
 
 // Globals
 std::uint32_t unp_cfg_context          = 0;
@@ -51,8 +52,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const Operand& buffer_B           = params.buffer_B;
 #endif
 
-    const ckernel::TensorShape in0_tensor_shape = ckernel::tensor_shape_from_tile_dims(in0_tile_r_dim, in0_tile_c_dim);
-    const ckernel::TensorShape in1_tensor_shape = ckernel::tensor_shape_from_tile_dims(in1_tile_r_dim, in1_tile_c_dim);
+    const ckernel::TensorShape in0_tensor_shape = tensor_shape_from_tile_dims(in0_tile_r_dim, in0_tile_c_dim);
+    const ckernel::TensorShape in1_tensor_shape = tensor_shape_from_tile_dims(in1_tile_r_dim, in1_tile_c_dim);
 
     {
         START_PERF_MEASURE("INIT")
@@ -139,8 +140,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const bool UNPACK_TRANSPOSE_FACES = params.UNPACK_TRANSPOSE_FACES;
 #endif
 
-    const ckernel::TensorShape in0_tensor_shape = ckernel::tensor_shape_from_tile_dims(in0_tile_r_dim, in0_tile_c_dim);
-    const ckernel::TensorShape in1_tensor_shape = ckernel::tensor_shape_from_tile_dims(in1_tile_r_dim, in1_tile_c_dim);
+    const ckernel::TensorShape in0_tensor_shape = tensor_shape_from_tile_dims(in0_tile_r_dim, in0_tile_c_dim);
+    const ckernel::TensorShape in1_tensor_shape = tensor_shape_from_tile_dims(in1_tile_r_dim, in1_tile_c_dim);
 
     {
         START_PERF_MEASURE("INIT")
