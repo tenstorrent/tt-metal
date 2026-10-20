@@ -842,6 +842,7 @@ class GRPOTrainer:
         self._tokenizer: Any = None
         self._optimizer: Any = None
         self._lr_scheduler: Any = None
+        self._monitor_cb: Optional[GRPOMonitor] = None
         self._num_devices: int = 1
         self._fsdp_enabled: bool = False
         self._ddp_enabled: bool = False
@@ -1124,6 +1125,7 @@ class GRPOTrainer:
         self._generation_batch_prompts = generation_batch_prompts
         self._prompts = prompts
         self._extra_dataset_columns = extra_columns
+        self._monitor_cb = next((cb for cb in self.callbacks if isinstance(cb, GRPOMonitor)), None)
         total_optimizer_steps = (total_prompts // generation_batch_prompts) * grpo_cfg.num_iterations
 
         # A constant LR needs no scheduler, so none is created: constructing one, even a no-op,
@@ -1385,10 +1387,9 @@ class GRPOTrainer:
         ``on_step_end`` OUTSIDE the ``step_time_s`` window.
         """
         step = self.global_step
-        monitor_cb = next((cb for cb in self.callbacks if isinstance(cb, GRPOMonitor)), None)
 
         for cb in self.callbacks:
-            if cb is monitor_cb:
+            if cb is self._monitor_cb:
                 continue
             self._time_callback(cb, "on_step_end", self, step, **self.metrics)
 
@@ -1400,8 +1401,8 @@ class GRPOTrainer:
         # GRPOMonitor's own cost is deliberately outside this window.
         self.metrics["step_time_s"] = time.perf_counter() - self._step_start_time
 
-        if monitor_cb is not None:
-            self._time_callback(monitor_cb, "on_step_end", self, step, **self.metrics)
+        if self._monitor_cb is not None:
+            self._time_callback(self._monitor_cb, "on_step_end", self, step, **self.metrics)
 
     def _maybe_checkpoint(self) -> None:
         """Save a checkpoint on interval + fire ``on_save`` for non-monitor
@@ -1422,9 +1423,8 @@ class GRPOTrainer:
             model_source=self.model_source,
         )
         ckpt_dir = os.path.join(cfg.output_dir, "checkpoints", f"grpo_step_{step}")
-        monitor_cb = next((cb for cb in self.callbacks if isinstance(cb, GRPOMonitor)), None)
         for cb in self.callbacks:
-            if cb is monitor_cb:
+            if cb is self._monitor_cb:
                 continue
             self._time_callback(cb, "on_save", self, step, ckpt_dir)
 
