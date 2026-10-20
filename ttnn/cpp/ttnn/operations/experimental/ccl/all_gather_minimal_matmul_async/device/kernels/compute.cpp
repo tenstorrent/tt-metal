@@ -20,6 +20,7 @@
 // (PROFILE_KERNEL); each AGMM_TIME costs two wall-clock reads, and the totals are emitted once at
 // kernel end as timestamped data (zone names agmm-*). Zero cost otherwise.
 #if defined(PROFILE_KERNEL)
+#include "tools/profiler/kernel_profiler.hpp"
 #define AGMM_PROF 1
 FORCE_INLINE uint32_t agmm_clock() {
     return *reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
