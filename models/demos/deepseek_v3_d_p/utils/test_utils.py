@@ -137,7 +137,9 @@ def print_l1_small_buffers(device, name):
 def adjust_shapes_for_testing(config, mesh_device, tile_align_width: bool = True):
     """Scale TP dimension for smaller meshes. sp_dim (per-device seq len) is always correct.
 
-    The TP extent is read along config.ccl_config["TP_AXIS"] (mesh axis 1 by default).
+    The TP extent is read along config.ccl_config["TP_AXIS"] (mesh axis 1 by default). Only a TP
+    extent below 4 scales the dim down; a wider one (TP=8, the 8x4 Galaxy with SP on axis 1) keeps
+    the model's real dim and splits it finer.
 
     `tile_align_width` rounds the model dim up so the per-device width (config.dim / n_tp_devices) is
     a multiple of 32. An L1-sharded gate input needs that -- a shard width must be whole tiles -- so
@@ -146,7 +148,7 @@ def adjust_shapes_for_testing(config, mesh_device, tile_align_width: bool = True
     where TILE_LAYOUT padding covers the ragged width and the test can hold the deployed dim exactly.
     """
     n_tp_devices = mesh_device.shape[config.ccl_config.get("TP_AXIS", 1)]
-    if n_tp_devices != 4:
+    if n_tp_devices < 4:
         config.dim = config.dim // (4 // n_tp_devices)
     if tile_align_width:
         tile_multiple = 32 * n_tp_devices

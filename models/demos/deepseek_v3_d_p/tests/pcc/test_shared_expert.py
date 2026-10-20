@@ -142,6 +142,15 @@ def shared_expert_sub_device(mesh_device):
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="torus-xy-8x4",
         ),
+        # The same Galaxy with TP=8 on mesh axis 0, as when SP moves to axis 1.
+        pytest.param(
+            (8, 4),
+            torus_xy_device_params(fabric_payload_size=KimiK3Config.FABRIC_PAYLOAD_SIZE),
+            2,
+            0,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="torus-xy-8x4-tp0",
+        ),
     ],
     indirect=["mesh_device", "device_params"],
 )
