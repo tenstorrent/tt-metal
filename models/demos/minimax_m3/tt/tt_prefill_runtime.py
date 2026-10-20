@@ -386,13 +386,10 @@ class TtPrefillRuntime:
             request_id: the engine's chunk counter, part of the runner's call contract. Only the
                 layer-completion sink needs it, to build a globally-dense
                 seq = request_id * num_layers + layer_idx.
-            d2h_service: the device-side per-layer ack transport. When set, each layer ends with one D2H
-                record (``metadata_msg``) enqueued as a device op, so the ack reaches the host only after the
-                layer's cache writes have executed. When None, acks go through the host sink
+            d2h_service: the device-side per-layer ack transport. When None, acks go through the host sink
                 (set_layer_completion_sink).
-            record_dev: the chunk's metadata tensor, passed on every call and unused here.
-            metadata_msg: the chunk's raw socket metadata tensor, the record the D2H ack carries. Required
-                with d2h_service.
+            record_dev: the chunk's metadata tensor, unused here.
+            metadata_msg: the chunk's raw socket metadata tensor, sent as the D2H ack record.
         """
         assert d2h_service is None or metadata_msg is not None, "metadata_msg is required with d2h_service"
         assert self.model_built, "build the model before prefill_chunk()"
@@ -425,21 +422,19 @@ class TtPrefillRuntime:
         # per-chunk host reshard, and the tensors are persistent (do NOT deallocate them here). The KV
         # cache is engine-owned and passed in. If a LayerAck channel is registered, the model bumps it
         # once per layer via on_layer_complete.
-        # Migration reads the cache over NoC, out of band from the command queue, as soon as a layer is
-        # acked, so an ack must not reach the host before the layer's cache writes have executed. The model
-        # calls on_layer_complete once the layer is enqueued, not executed.
+        # on_layer_complete runs once the layer is enqueued; the ack must not reach the host before the
+        # layer's cache writes have executed.
         if d2h_service is not None:
-            # Device-op ack, enqueued on the same CQ behind the layer.
+
             def on_layer_complete(layer_idx: int) -> None:
                 ttnn.experimental.deepseek_prefill.outbound_socket_service_sync(d2h_service, metadata=metadata_msg)
 
         elif self._layer_completion_sink is not None:
-            # Pipelined mode registers a completion sink keyed by (global_layer_idx, request_id); bind
-            # request_id per call so the synchronous per-layer callback reads no mutable state.
+            # Pipelined mode registers a completion sink keyed by (global_layer_idx, request_id); bind request_id
+            # per call so the synchronous per-layer callback reads no mutable state.
             sink = self._layer_completion_sink
 
             def on_layer_complete(layer_idx: int) -> None:
-                # A host callback has to flush the layer first.
                 ttnn.synchronize_device(self.mesh_device)
                 # The model reports a rank-local index; the sink's seq = request_id * total_layers +
                 # layer_idx needs the GLOBAL index, else every rank's local layer k collides at one seq
@@ -483,9 +478,8 @@ class TtPrefillRuntime:
         self._layer_completion_sink = sink
 
     def set_d2h_ack_service(self, service) -> None:
-        """Trace-only entry point of the runner's D2H ack contract. This runtime does not trace (the adapter
-        reports use_trace=False), so the service reaches it per chunk through prefill_chunk instead."""
-        raise NotImplementedError("MiniMax-M3 prefill does not trace; the D2H ack service goes to prefill_chunk")
+        """The runner calls this only for traced runtimes; this one takes the service per chunk in prefill_chunk."""
+        raise NotImplementedError("MiniMax-M3 prefill does not trace")
 
     def gather_layer(self, kv_cache, slot_id: int, layer_idx: int, n_tokens: int):
         """Read one layer's device cache back to NATURAL token order (un-rotating the block-cyclic SP
