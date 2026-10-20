@@ -46,6 +46,9 @@ class FaceLayoutConfig:
     num_faces_in0: int
     num_faces_in1: int
     num_faces: int
+    # partial_face_in0/in1/math become PARTIAL_FACE_A/B/MATH, which no C++ source reads (the matmul
+    # LLK derives partial faces from the tile shapes). Perf-schema-only: kept for the perf_math_matmul
+    # partial_a/partial_b/partial_face_math columns.
     partial_face_in0: bool
     partial_face_in1: bool
     partial_face_math: bool
