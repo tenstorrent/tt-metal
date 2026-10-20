@@ -26,3 +26,32 @@ def test_deallocate(device, h, w, expect_error):
     ttnn.deallocate(output_tensor)
     with expect_error(RuntimeError, r"Input Tensor A is not allocated"):
         output_tensor_reference + output_tensor_reference
+
+
+def test_deallocate_buffers_then_stale_tensor_does_not_free_live_range(device):
+    shape = (1, 1, 32, 32)
+    stale = ttnn.from_torch(torch.rand(shape, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn.device.DeallocateBuffers(device)
+
+    torch_live = torch.rand(shape, dtype=torch.bfloat16)
+    live = ttnn.from_torch(torch_live, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn.deallocate(stale)
+    other = ttnn.from_torch(torch.rand(shape, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+
+    assert other.buffer_address() != live.buffer_address()
+    assert torch.equal(ttnn.to_torch(live), torch_live)
+
+
+def test_deallocate_buffers_then_cached_program(device):
+    shape = (1, 1, 32, 32)
+    torch_input = torch.rand(shape, dtype=torch.bfloat16)
+    first = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+    assert torch.equal(ttnn.to_torch(ttnn.add(first, first)), torch_input + torch_input)
+    ttnn.device.DeallocateBuffers(device)
+
+    _occupied = [
+        ttnn.from_torch(torch.rand(shape, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+        for _ in range(8)
+    ]
+    second = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+    assert torch.equal(ttnn.to_torch(ttnn.add(second, second)), torch_input + torch_input)
