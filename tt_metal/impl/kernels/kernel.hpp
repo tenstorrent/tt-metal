@@ -180,11 +180,14 @@ struct ScratchpadBindingHandle {
     std::optional<LLKMetadata> llk_metadata;  // LLK related metadata (dataformat/ tile format)
     // Present only if the binding handle could share it's allocation with another scratchpad.
     // Configured in advanced options: ScratchpadAdvancedOptions::allow_multi_kernel_binding.
+    // For all the scratchpad binding handle sharing the same identifier,
+    // the size_bytes are all equivalent.
     //
     // Note this field does not affect kernel hash computation,
     // as the build artifact of 2 kernels with/without shared allocation is the same.
     //
     // The ScratchpadSpecName serves as an identifier & does not carry specific meaning.
+    using AllocationIdentifier = experimental::ScratchpadSpecName;
     std::optional<experimental::ScratchpadSpecName> shared_allocation_identifier;
 };
 
