@@ -8,7 +8,7 @@ import numpy as np
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_pcc,
 )
-from models.common.utility_functions import nearest_y
+from tt_py_test_utils_common.utility_functions import nearest_y
 
 import ttnn
 from loguru import logger
