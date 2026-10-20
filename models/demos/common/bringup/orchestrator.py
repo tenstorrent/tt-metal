@@ -199,6 +199,7 @@ TEST_TIMEOUT = re.compile(r"Timeout \(>[\d.]+s\) from pytest-timeout")
 # Perf picks (F57): the A/B report's lines. A component / swap check that fails prints "FAIL <metric>: <values> (...)".
 FAILED_CHECK = re.compile(r"^FAIL\s+\S.*$", re.M)
 LADDER_TEST = "models/demos/common/bringup/tests/test_ladder.py"
+PROFILE_TEST = "models/demos/common/bringup/tests/test_profile.py"
 AB_ROWS = (  # (row, ladder metric); pcc_layer_* is the minimum over the layers
     ("min layer PCC", "pcc_layer_*"),
     ("final hidden PCC", "pcc_final_hidden"),
@@ -1293,7 +1294,7 @@ class Orchestrator:
             "on": on,
             "table": str(d / "table.md"),
         }
-        rec.update(rungs=self.ab_rungs(task), tests={}, ladder={}, profile={}, note="")
+        rec.update(rungs=self.ab_rungs(task), tests={}, ladder={}, profile={}, quick={}, note="")
         owned = [p for p in changed if allowed(p, list(task.get("paths") or []))]
         base = self.ab_base(old, on, tid)
         sides = ([("old", old)] if old else []) + [("new", on)]
@@ -1316,14 +1317,17 @@ class Orchestrator:
         kinds = {n: k for n, k, _, _ in self.ab_items(task)}
         # F121: when max precision pins every switch to one side's values, the gate's frozen tests are that side's:
         # they run once, there, and the other side shows the same result (they cannot see the change)
-        shared = self.gate_tests_side(task) if len(sides) == 2 and self.switches_pinned(task) else None
+        quick = self.ab_quick(task)
+        shared = self.gate_tests_side(task) if len(sides) == 2 and not quick and self.switches_pinned(task) else None
         try:
             for side, env in sides:
                 parts = None
                 if shared and side != shared:
                     parts = [n for n, k in kinds.items() if k != "test"]
                 for n, r in self.ab_measure(task, side, env, base, code, only=parts).items():
-                    if kinds[n] == "profile":
+                    if kinds[n] == "quick":
+                        rec["quick"][side] = r
+                    elif kinds[n] == "profile":
                         rec["profile"][side] = r
                     else:
                         rec["tests" if kinds[n] == "test" else "ladder"].setdefault(n, {})[side] = r
@@ -1372,9 +1376,16 @@ class Orchestrator:
             base.pop(k, None)
         return base
 
+    def ab_quick(self, task: dict) -> bool:
+        """F122: the pick's A/B mode: tasks.yaml ab_mode, else the spec's perf.ab_mode (defaults.yaml: quick)."""
+        return (task.get("ab_mode") or self.spec.get("perf.ab_mode") or "full") == "quick"
+
     def ab_items(self, task: dict) -> list[tuple[str, str, str, dict]]:
         """The A/B report's runs as (name, kind, command, extra env): each frozen test command of the gate (as the gate
         runs it, gate_command), the ladder at every A/B rung, and the plain profile (with F114's clean wall run)."""
+        if self.ab_quick(task):  # F122: one process a side
+            quick = f"BRINGUP_QUICK=1 BRINGUP_PROFILE_WALL=1 scripts/run_safe_pytest.sh --no-precompile --run-all {PROFILE_TEST}"
+            return [("quick", "quick", quick, {})]
         segs = [x.strip() for x in gate_command(task).split("&&") if x.strip()]
         tests = [x for x in segs if "test_profile.py" not in x and "test_ladder.py" not in x]
         items = [
@@ -1418,6 +1429,19 @@ class Orchestrator:
                 result = {"rc": rc, "checks": [m.strip() for m in FAILED_CHECK.findall(text)][:12]}
             elif kind == "ladder":
                 result = dict(self.ab_summary(got), rc=rc)
+            elif kind == "quick":
+                lay = {k: v for k, v in got.items() if k.startswith("pcc_layer_L")}
+                worst = min(lay, key=lay.get) if lay else None
+                result = {
+                    "min layer PCC": lay.get(worst),
+                    "min layer": worst and worst[len("pcc_layer_") :],
+                    "chunk_wall_ms": got.get("chunk_wall_ms"),
+                    "chunk_wall_ms_spread": got.get("chunk_wall_ms_spread"),
+                    "chunk_wall_gap_ms": got.get("chunk_wall_gap_ms"),
+                    "pcc_chunk_out": got.get("pcc_chunk_out"),
+                    "host_transfers_per_layer": got.get("host_transfers_per_layer"),
+                    "rc": rc,
+                }
             else:
                 keys = ["device_ms_total", "chunk_wall_ms", "profiled_programs", "pcc_chunk_out"] + [
                     k for k in task["gate"].get("metrics") or {} if k.startswith("device_ms_") and "*" not in k
@@ -1436,6 +1460,15 @@ class Orchestrator:
         """Would the gate pass with the change on: every command exited 0 and every threshold holds on its metrics."""
         from models.demos.common.bringup.core.gate import check_metrics
 
+        if rec.get("quick"):  # F122: the thresholds the quick run measured; the full gate runs before the final task
+            from models.demos.common.bringup.core.gate import measured_only
+
+            r = rec["quick"].get("new")
+            got = M.load(task["id"], d / "new" / "quick")
+            ok, lines = check_metrics(measured_only(task["gate"].get("metrics") or {}, got), got)
+            failing = ["quick: not run" if r is None else f"quick: exit code {r['rc']}"] if not r or r["rc"] else []
+            failing += [x.strip() for x in lines if "FAIL" in x or "MISSING" in x]
+            return {"ok": ok and not failing, "failing": failing, "partial": True}
         m = re.search(r"BRINGUP_RUNG=(\S+)", task["gate"]["cmd"])
         runs = {n: r.get("new") for n, r in rec["tests"].items()}  # what the gate itself runs, with the change on
         runs.update({m.group(1): rec["ladder"].get(m.group(1), {}).get("new")} if m and rec["ladder"] else {})
@@ -1474,19 +1507,40 @@ class Orchestrator:
         ]
         if rec["note"]:
             out += ["", f"Note: {rec['note']}"]
-        out += ["", "## Frozen accuracy tests of the gate (component metric vs its limit)", ""]
-        out += ["| test | on | off |", "|---|---|---|"]
+        if rec.get("quick"):  # F122
+            out += ["", "## Quick A/B: the last chunk after the golden prefix, one process a side", ""]
+            out += ["| | on | off |", "|---|---|---|"]
+            for k in (
+                "min layer PCC",
+                "min layer",
+                "pcc_chunk_out",
+                "chunk_wall_ms",
+                "chunk_wall_ms_spread",
+                "chunk_wall_gap_ms",
+                "host_transfers_per_layer",
+                "rc",
+            ):
+                vals = [rec["quick"].get(s, {}).get(k) for s, _ in sides]
+                out.append(f"| {'exit code' if k == 'rc' else k} | " + " | ".join(fmt(v) for v in vals) + " |")
+            out += [
+                "",
+                "Frozen tests, every ladder rung and the per-section profile run once, before the final task "
+                "(the pick's full gate, merged with the other quick picks').",
+            ]
+        if rec["tests"]:
+            out += ["", "## Frozen accuracy tests of the gate (component metric vs its limit)", ""]
+            out += ["| test | on | off |", "|---|---|---|"]
         for name, r in rec["tests"].items():
             cell = lambda s: "-" if s not in r else ("pass" if r[s]["rc"] == 0 else f"FAIL (rc {r[s]['rc']})")  # noqa
             out.append(f"| {name} | {cell('new')} | {cell('old')} |")
         for name, r in rec["tests"].items():
             for side, label in sides:
                 out += [f"- {name} {label}: {c}" for c in (r.get(side) or {}).get("checks", [])]
-        rungs = rec["rungs"]
-        out += ["", "## End to end (ladder)", ""]
-        out += ["| | " + " | ".join(f"{r} {lbl}" for r in rungs for _, lbl in sides) + " |"]
-        out += ["|---|" + "---|" * (2 * len(rungs))]
-        for label, _ in AB_ROWS + (("exit code", "rc"),):
+        rungs = rec["rungs"] if rec["ladder"] else []
+        out += ["", "## End to end (ladder)", ""] if rungs else []
+        out += ["| | " + " | ".join(f"{r} {lbl}" for r in rungs for _, lbl in sides) + " |"] if rungs else []
+        out += ["|---|" + "---|" * (2 * len(rungs))] if rungs else []
+        for label, _ in AB_ROWS + (("exit code", "rc"),) if rungs else ():
             cells = []
             for r in rungs:
                 for side, _ in sides:
@@ -1509,7 +1563,8 @@ class Orchestrator:
                     f"| {lbl} | " + " | ".join(f"{v:.1f}" if ms and v is not None else fmt(v) for v in vals) + " |"
                 )
         g = rec["gate_on"]
-        out += ["", f"## Gate with the change on: {'PASS' if g['ok'] else 'FAIL'}", ""]
+        part = " (the thresholds the quick run measured)" if g.get("partial") else ""
+        out += ["", f"## Gate with the change on{part}: {'PASS' if g['ok'] else 'FAIL'}", ""]
         out += [f"- {x}" for x in g["failing"]]
         out += ["", f"Logs: {self.run_dir / 'ab' / task['id']}", ""]
         return "\n".join(out)
@@ -1528,6 +1583,8 @@ class Orchestrator:
             self.echo(f"  [{tid}] accept gate: the A/B 'on' side's measurement, not run again ({reuse['source']})")
         res = self.gate(tid, reuse=reuse)
         if res.verdict == "PASS":
+            if reuse is not None and reuse.get("partial"):
+                self.led.update(tid, full_pending=True)  # F122: its full gate runs before the final task
             return self._after(task)
         why = (
             f"accepted, but the gate fails with the change on:\n{res.summary()}\nDrop the failing frozen test from the "
@@ -1545,6 +1602,12 @@ class Orchestrator:
         stamp_file = side / "side.json"
         if not stamp_file.exists() or not rec.get("on"):
             return None
+        if self.ab_quick(task):  # F122: accept on the quick run; the full gate is pending (run before the final task)
+            it = (json.loads(stamp_file.read_text()).get("items") or {}).get("quick") or {}
+            if it.get("stamp", {}).get("code") != self.ab_code_key(task) or (it.get("result") or {}).get("rc") != 0:
+                return None
+            got = {k: v["value"] for k, v in M.load(tid, side / "quick").items()}
+            return {"metrics": got, "source": f"quick A/B {side / 'quick'}; full gate pending", "partial": True}
         kept = json.loads(stamp_file.read_text())
         code = self.ab_code_key(task)
         tests_side = self.gate_tests_side(task)  # F120: the side whose switch values the gate's frozen tests run at
@@ -1658,6 +1721,10 @@ class Orchestrator:
             task = self.led.task(tid)
         if self.perf_pick(task):  # F57: no gate before or after the agent; the owner decides on the A/B report
             return self.perf_step(task)
+        if task.get("step") == "perf" and role is None:  # F122: the final task: the quick picks' full gates first
+            stop = self.pending_full_gates()
+            if stop is not None:
+                return stop
         plan_written = task.get("approval") == "plan" and (self.spec.bringup_dir / "plan.yaml").exists()
         if role is None or plan_written:
             # A scripted step, or a plan written by an earlier run: gate it; an agent only sees it after a failure.
@@ -1681,6 +1748,28 @@ class Orchestrator:
         if self.needs_human(task):
             return self._human(task, self.needs_human(task))
         return self._after(task) if satisfied(self.led.status(tid)) else STOPPED
+
+    def pending_full_gates(self) -> int | None:
+        """F122: every quick-accepted pick's full gate, once, on the tree as it is now; picks with the same gate
+        command share one run. None when all pass (cleared), else the stop."""
+        pending = [tid for tid, e in self.led.state().items() if isinstance(e, dict) and e.get("full_pending")]
+        done = {}
+        for tid in sorted(pending):
+            cmd = gate_command(self.led.task(tid))
+            if cmd in done:
+                src, metrics = done[cmd]
+                res = self.gate(tid, reuse={"metrics": metrics, "source": f"the same gate as {src}, run just now"})
+            else:
+                self.echo(f"  [{tid}] full gate (quick-accepted pick)")
+                res = self.gate(tid)
+                done[cmd] = (tid, {k: v["value"] for k, v in M.load(tid, self.led.results_dir).items()})
+            if res.verdict != "PASS":
+                return self._human(
+                    self.led.task(tid),
+                    f"{tid} was accepted on its quick A/B; its full gate fails now:\n{res.summary()}",
+                )
+            self.led.update(tid, full_pending=False)
+        return None
 
     def _after(self, task: dict) -> int:
         picked = any(  # a pick is an agent's perf task after X.2 (the final X.3 is scripted)

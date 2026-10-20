@@ -1383,3 +1383,12 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
   (gate_tests_side), the A/B runs the frozen tests once, on that side, and shows the result for both: they cannot see
   the change. DeepSeek-V4.1 P.9 (COMBINE_ACC, pinned fp32, with EXPERTS_COMBINE pinned separate): ~40 min of identical
   tests per side.
+
+- F122 (owner, 2026-10-20): quick A/B by default (defaults.yaml perf.ab_mode: quick; a task's ab_mode overrides).
+  One process a side: BRINGUP_QUICK=1 BRINGUP_PROFILE_WALL=1 test_profile.py (the last chunk after the golden prefix,
+  the clean wall of F114b, then every layer vs the golden: pcc_layer_L*, pcc_chunk_out, host transfers). The accept
+  checks the thresholds the quick run measured (measured_only) and marks the pick full_pending; before the final
+  scripted perf task (X.3) the orchestrator runs every pending pick's full gate once, picks with the same gate command
+  sharing one run (pending_full_gates); a failure stops the run. The perf brief makes `orchestrator measure` the
+  agent's final check. DeepSeek-V4.1: a full A/B was ~2 h 20 min a pick (16 frozen tests, two rungs, profile, both
+  sides); the owner: "it takes a day only to try a few simple things".

@@ -42,6 +42,7 @@ def pick(**kw):
         "brief": {"details": "run the experts at HiFi2"},
         "ab": {"env": {"TOY_FIDELITY": "hifi4"}, "change": {"TOY_FIDELITY": "hifi2"}},
         "gate": {"cmd": GATE, "metrics": {"device_ms_experts": "< 10", "pcc_chunk_out": ">= 0.97"}},
+        "ab_mode": "full",  # F122: these tests cover the full A/B; the quick one has its own
     }
     t.update(kw)
     return t
@@ -59,6 +60,9 @@ def fake_runner(calls):
         if "test_ladder.py" in cmd:
             rec = {"pcc_layer_L00": 0.999, "pcc_layer_L01": 0.990 if on else 0.995, "pcc_final_hidden": 0.99}
             rec.update(pcc_logits_tail=0.998, top1_match=1.0, top5_overlap=0.95 if on else 1.0)
+        elif "BRINGUP_QUICK=1" in cmd:  # F122: one process a side
+            rec = {"pcc_layer_L00": 0.999, "pcc_layer_L01": 0.990 if on else 0.995, "pcc_chunk_out": 0.99}
+            rec.update(chunk_wall_ms=250.0 if on else 840.0, chunk_wall_ms_spread=4.0, host_transfers_per_layer=0)
         elif "test_profile.py" in cmd:
             rec = {"device_ms_total": 90.0 if on else 100.0, "device_ms_experts": 8.0 if on else 12.0}
             rec["pcc_chunk_out"] = 0.99
@@ -506,3 +510,45 @@ def test_frozen_tests_run_once_when_max_precision_pins_the_switch(mk, monkeypatc
     rec = o.led.state()["P.1"]["ab"]
     assert rec["tests"]["test_c_x"]["new"]["rc"] == 0 and "shared" in rec["tests"]["test_c_x"]["new"]
     assert "frozen tests ran once" in rec["note"] and rec["gate_on"]["ok"]
+
+
+def test_the_quick_ab_runs_one_process_a_side(mk):
+    """F122: the default A/B: one run a side (the last chunk after the golden prefix, every layer, clean wall)."""
+    gate = {
+        "cmd": GATE,
+        "metrics": {"device_ms_experts": "< 10", "pcc_layer_L*": ">= 0.97", "pcc_chunk_out": ">= 0.97"},
+    }
+    o = mk([pick(ab_mode="quick", gate=gate)], CHANGE)
+    assert o.run() == HUMAN, mk.lines
+    d = o.run_dir / "ab" / "P.1"
+    assert [(c["on"], c["dir"].relative_to(d).as_posix()) for c in mk.calls] == [
+        (False, "old/quick"),
+        (True, "new/quick"),
+    ]
+    rec = o.led.state()["P.1"]["ab"]
+    assert rec["quick"]["new"]["min layer PCC"] == 0.990 and rec["quick"]["old"]["chunk_wall_ms"] == 840.0
+    assert rec["gate_on"]["ok"] and rec["gate_on"]["partial"]  # device_ms_experts waits for the full gate
+    table = (d / "table.md").read_text()
+    assert "Quick A/B" in table and "Frozen accuracy tests" not in table
+
+
+def test_a_quick_pick_is_accepted_now_and_its_full_gate_runs_once_before_the_final_task(mk, sandbox):
+    """F122: accept on the quick A/B (no run), the pick's full gate pending; before the final task the pending gates
+    run once, picks with the same gate command sharing one run."""
+    full = record_cmd(device_ms_experts=8.0, pcc_layer_L00=0.99, pcc_chunk_out=0.99)
+    gate = {"cmd": full, "metrics": {"device_ms_experts": "< 10", "pcc_layer_L*": ">= 0.97"}}
+    final = {"id": "X.3", "title": "final", "step": "perf", "deps": ["P.1", "P.2"], "gate": {"cmd": record_cmd(n=1)}}
+    p2 = pick(id="P.2", ab_mode="quick", gate=gate, deps=["P.1"])
+    o = mk(
+        [pick(ab_mode="quick", gate=gate), p2, final], dict(CHANGE, **{"P.2.perf.1.md": {"write": {"src/b.txt": "x"}}})
+    )
+    assert o.run() == HUMAN
+    assert decide(o, "P.1", "accept") == 0
+    assert o.run() == HUMAN  # P.1 accepted without a run; P.2's quick A/B waits
+    st = o.led.state()["P.1"]
+    assert st["status"] == "PASS" and st.get("full_pending")
+    assert decide(o, "P.2", "accept") == 0
+    assert o.run() == DONE, mk.lines[-4:]
+    assert not o.led.state()["P.1"].get("full_pending") and not o.led.state()["P.2"].get("full_pending")
+    assert sum("full gate (quick-accepted pick)" in ln for ln in mk.lines) == 1  # P.2 shares P.1's run
+    assert "the same gate as P.1" in Path(o.led.state()["P.2"]["log"]).read_text()
