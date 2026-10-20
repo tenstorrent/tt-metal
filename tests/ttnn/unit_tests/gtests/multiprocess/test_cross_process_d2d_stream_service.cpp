@@ -50,8 +50,9 @@
 // before its OUTBOUND sender, so the per-endpoint MeshSocket handshakes cascade
 // 0↔1, 1↔2, … without deadlock.
 //
-// Fixture: MeshDeviceExaboxFixture — each rank opens its local mesh_device_ on a
-// UBB Galaxy where world_size == number of meshes in the mesh-graph descriptor.
+// Fixture: CrossProcessD2DFixture — each rank opens its local mesh_device_, and world_size ==
+// number of meshes in the mesh-graph descriptor (a split Galaxy, or a QuietBox with one 1x1 mesh
+// per chip, chained over the ethernet links between them).
 //
 // Launch (no CI yet):
 //   tt-run --rank-binding <rank_binding.yaml> --mpi-args "--allow-run-as-root --tag-output"
@@ -132,6 +133,7 @@ using ::tt::tt_metal::distributed::EnqueueMeshWorkload;
 using ::tt::tt_metal::distributed::Finish;
 using ::tt::tt_metal::distributed::MeshCoordinateRange;
 using ::tt::tt_metal::distributed::MeshDevice;
+using ::tt::tt_metal::distributed::MeshDeviceConfig;
 using ::tt::tt_metal::distributed::MeshMapperConfig;
 using ::tt::tt_metal::distributed::MeshWorkload;
 using ::tt::tt_metal::distributed::SocketMemoryConfig;
@@ -144,8 +146,35 @@ using ttnn::D2DStreamService;
 using ttnn::D2DStreamServiceReceiver;
 using ttnn::D2DStreamServiceSender;
 
-// Each rank owns its local mesh; world_size == number of meshes in the descriptor.
-using CrossProcessD2DFixture = tt::tt_fabric::fabric_router_tests::MeshDeviceExaboxFixture;
+// Each rank opens its whole local mesh with fabric on; world_size == number of meshes in the
+// descriptor. Unlike MeshDeviceExaboxFixture this doesn't require a UBB Galaxy, and unlike
+// MeshDeviceFixtureBase it allows a 1x1 mesh (its fabric links all go to other meshes), so it also
+// runs on a QuietBox with one chip per rank.
+class CrossProcessD2DFixture : public ::testing::Test {
+protected:
+    void SetUp() override {
+        auto& context = tt::tt_metal::MetalContext::instance();
+        if (static_cast<size_t>(*context.global_distributed_context().size()) !=
+            context.get_control_plane().get_mesh_graph().get_mesh_ids().size()) {
+            GTEST_SKIP() << "Needs one mesh per rank in the mesh graph descriptor.";
+        }
+        tt::tt_fabric::SetFabricConfig(
+            tt::tt_fabric::FabricConfig::FABRIC_2D,
+            tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+        mesh_device_ = MeshDevice::create(MeshDeviceConfig(context.get_system_mesh().shape()));
+    }
+
+    void TearDown() override {
+        if (!mesh_device_) {
+            return;
+        }
+        mesh_device_->close();
+        mesh_device_.reset();
+        tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::DISABLED);
+    }
+
+    std::shared_ptr<MeshDevice> mesh_device_;
+};
 
 const CoreRange kWorkerCores{CoreCoord{0, 0}, CoreCoord{0, 0}};  // single worker core
 // ForwardChainStress uses a multi-core grid so the num_workers machinery is actually
