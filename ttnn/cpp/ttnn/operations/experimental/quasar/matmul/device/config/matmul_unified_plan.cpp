@@ -735,127 +735,48 @@ std::optional<MatmulUnifiedProgramConfig> choose_unified_placement(
     }
 
     const tt::tt_metal::IDevice& device = *A.device();
-    const CoreCoord grid = attributes.user_core_coord.value_or(device.compute_with_storage_grid_size());
+    const CoreCoord device_grid = device.compute_with_storage_grid_size();
+    const CoreCoord grid = attributes.user_core_coord.value_or(device_grid);
+    const uint32_t grid_columns = grid.x;
+    const uint32_t grid_rows = grid.y;
     // With a 32-bit DST ttnn.linear adds the bias separately (see the plan), so it takes no L1 here.
     const uint32_t fused_bias_tile_bytes = get_fp32_dest_acc_en(attributes.compute_kernel_config) ? 0 : bias_tile_bytes;
+    const tt::tt_metal::MathFidelity math_fidelity =
+        std::get<0>(get_compute_kernel_config_args(device.arch(), attributes.compute_kernel_config.value()));
     const MatmulUnifiedPlan gemm = plan_gemm_size(A, B, attributes);
     const uint32_t M_tiles = gemm.M_tiles;
     const uint32_t N_tiles = gemm.N_tiles;
     const tt::tt_metal::MemoryConfig& C_memory = attributes.output_mem_config;
     const std::optional<tt::tt_metal::ShardSpec>& C_shard = C_memory.shard_spec();
 
-    // ---- 1. Candidates: each natural placement with its plan ----
-    // A placement is cores, an orientation and the C slice shapes to try in order (by default 0 x 0: the plan picks the
-    // C slice).
-    // Its plan is the first that fits L1; a placement whose plan does not tile a requested sharded output layout is
-    // dropped.
-    struct Candidate {
-        std::string name;
-        MatmulUnifiedProgramConfig config;
-        MatmulUnifiedPlan plan;
-    };
-    std::vector<Candidate> candidates;
-    const auto add_candidate = [&](const std::string& name,
-                                   const CoreRangeSet& cores,
-                                   tt::tt_metal::ShardOrientation orientation,
-                                   const std::vector<std::pair<uint32_t, uint32_t>>& C_slice_shapes = {{0, 0}}) {
-        const CoreCoord device_grid = device.compute_with_storage_grid_size();
-        if (cores.bounding_box().end_coord.x >= device_grid.x || cores.bounding_box().end_coord.y >= device_grid.y) {
-            return;
-        }
-        for (const auto& [C_slice_M_tiles, C_slice_N_tiles] : C_slice_shapes) {
-            MatmulUnifiedProgramConfig config = requested;
-            config.cores = cores;
-            config.orientation = orientation;
-            config.C_slice_M_tiles = C_slice_M_tiles;
-            config.C_slice_N_tiles = C_slice_N_tiles;
-            const std::optional<MatmulUnifiedPlan> plan =
-                plan_unified_matmul(A, B, fused_bias_tile_bytes, config, attributes, std::nullopt, /*must_fit=*/false);
-            if (!plan.has_value()) {
-                continue;
-            }
-            const bool tiles_requested_layout = !C_memory.is_sharded() || C_shard.has_value() ||
-                                                plan->sharded_output_layout == C_memory.memory_layout();
-            if (tiles_requested_layout) {
-                candidates.push_back({name, std::move(config), *plan});
-            }
-            return;
-        }
-    };
-    // A 1D placement gives each core a share of C: share_width_tiles columns (share_is_columns) or rows, over all of
-    // C's other dimension. The C slice shapes to try for it, largest first: the whole share as one C slice, then the
-    // share cut into 2, 3, ... C slices along its length, the last possibly shorter (13 tiles in 4: 4, 4, 4, 1).
-    const auto C_slice_shapes_for_share = [&](uint32_t share_width_tiles, bool share_is_columns) {
-        std::vector<std::pair<uint32_t, uint32_t>> shapes;
-        const uint32_t share_length_tiles = share_is_columns ? M_tiles : N_tiles;
-        uint32_t previous_C_slice_length_tiles = 0;
-        for (uint32_t C_slices_per_share = 1; C_slices_per_share <= share_length_tiles; ++C_slices_per_share) {
-            const uint32_t C_slice_length_tiles = tt::div_up(share_length_tiles, C_slices_per_share);
-            if (C_slice_length_tiles != previous_C_slice_length_tiles) {
-                shapes.push_back(
-                    share_is_columns ? std::pair(C_slice_length_tiles, share_width_tiles)
-                                     : std::pair(share_width_tiles, C_slice_length_tiles));
-                previous_C_slice_length_tiles = C_slice_length_tiles;
-            }
-        }
-        return shapes;
-    };
-    constexpr tt::tt_metal::ShardOrientation ROW_MAJOR = tt::tt_metal::ShardOrientation::ROW_MAJOR;
-
-    if (C_memory.is_sharded() && C_shard.has_value()) {
-        // The output shard fixes the cores and the C slice.
-        add_candidate("output_shard", C_shard->grid, C_shard->orientation);
-    } else {
-        const uint32_t grid_columns = grid.x;
-        const uint32_t grid_rows = grid.y;
-        add_candidate(
-            "2D",
-            CoreRangeSet(CoreRange({0, 0}, {std::min(grid_columns, N_tiles) - 1, std::min(grid_rows, M_tiles) - 1})),
-            ROW_MAJOR);
-        // 1D over whole rows of the grid (part of one row for a short dimension), one C slice per core: when the C
-        // slices span all of C's other dimension every core needs the same A (B), which is multicast to all of them.
-        const CoreRangeSet across_N_cores(CoreRange(
-            {0, 0}, {std::min(grid_columns, N_tiles) - 1, std::clamp(N_tiles / grid_columns, 1u, grid_rows) - 1}));
-        const CoreRangeSet across_M_cores(CoreRange(
-            {0, 0}, {std::min(grid_columns, M_tiles) - 1, std::clamp(M_tiles / grid_columns, 1u, grid_rows) - 1}));
-        add_candidate(
-            "1D_across_N",
-            across_N_cores,
-            ROW_MAJOR,
-            C_slice_shapes_for_share(tt::div_up(N_tiles, across_N_cores.num_cores()), /*share_is_columns=*/true));
-        add_candidate(
-            "1D_across_M",
-            across_M_cores,
-            ROW_MAJOR,
-            C_slice_shapes_for_share(tt::div_up(M_tiles, across_M_cores.num_cores()), /*share_is_columns=*/false));
-        // Keep a sharded operand where it is: an L1 shard can then be bound in place, and a DRAM shard is read by
-        // the core next to its bank.
-        if (A.is_sharded() && A.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED) {
-            const uint32_t A_shard_M_tiles = A.shard_spec()->shape[0] / TILE_HEIGHT;
-            add_candidate(
-                "A_shard_rows",
-                A.memory_config().is_dram() ? dram_bank_cores(device) : A.shard_spec()->grid,
-                A.shard_spec()->orientation,
-                C_slice_shapes_for_share(A_shard_M_tiles, /*share_is_columns=*/false));
-        }
-        if (B.is_sharded() && B.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED) {
-            const uint32_t B_shard_N_tiles = B.shard_spec()->shape[1] / TILE_WIDTH;
-            add_candidate(
-                "B_shard_columns",
-                B.memory_config().is_dram() ? dram_bank_cores(device) : B.shard_spec()->grid,
-                B.shard_spec()->orientation,
-                C_slice_shapes_for_share(B_shard_N_tiles, /*share_is_columns=*/true));
-        }
-    }
-
-    // ---- 2. Choose: the candidate with the lowest estimated cycles (the first on a tie) ----
-    const tt::tt_metal::MathFidelity math_fidelity =
-        std::get<0>(get_compute_kernel_config_args(device.arch(), attributes.compute_kernel_config.value()));
     std::optional<MatmulUnifiedProgramConfig> best;
     std::pair<double, double> best_estimate;
-    for (const Candidate& candidate : candidates) {
+    // Plans the placement (a 0 x 0 C slice: the plan picks it) and keeps it if its estimate is the lowest so far, the
+    // first on a tie. False when it does not fit: cores beyond the device grid (a larger user_core_coord), DFBs beyond
+    // L1, or C slices that do not tile a sharded output in the layout it asks for.
+    const auto try_placement = [&](const CoreRangeSet& cores,
+                                   tt::tt_metal::ShardOrientation orientation,
+                                   uint32_t C_slice_M_tiles,
+                                   uint32_t C_slice_N_tiles) {
+        const CoreCoord last_core = cores.bounding_box().end_coord;
+        if (last_core.x >= device_grid.x || last_core.y >= device_grid.y) {
+            return false;
+        }
+        MatmulUnifiedProgramConfig config = requested;
+        config.cores = cores;
+        config.orientation = orientation;
+        config.C_slice_M_tiles = C_slice_M_tiles;
+        config.C_slice_N_tiles = C_slice_N_tiles;
+        const std::optional<MatmulUnifiedPlan> plan =
+            plan_unified_matmul(A, B, fused_bias_tile_bytes, config, attributes, std::nullopt, /*must_fit=*/false);
+        if (!plan.has_value()) {
+            return false;
+        }
+        if (C_memory.is_sharded() && !C_shard.has_value() && plan->sharded_output_layout != C_memory.memory_layout()) {
+            return false;
+        }
         const std::pair<double, double> estimate = estimate_plan_cycles(
-            candidate.plan,
+            *plan,
             device.arch(),
             math_fidelity,
             A.memory_config().is_dram(),
@@ -863,16 +784,82 @@ std::optional<MatmulUnifiedProgramConfig> choose_unified_placement(
             C_memory.is_dram());
         log_debug(
             tt::LogOp,
-            "Unified matmul placement: {} with a {}x{}-tile C slice on {} cores: {:.0f} cycles",
-            candidate.name,
-            candidate.plan.C_slice_M_tiles,
-            candidate.plan.C_slice_N_tiles,
-            candidate.plan.cores.size(),
+            "Unified matmul placement: {}x{}-tile C slice on {}: {:.0f} cycles",
+            plan->C_slice_M_tiles,
+            plan->C_slice_N_tiles,
+            cores.str(),
             estimate.first);
         if (!best.has_value() || estimate < best_estimate) {
-            best = candidate.config;
+            best = std::move(config);
             best_estimate = estimate;
         }
+        return true;
+    };
+
+    // A 1D placement gives each core a share of C: share_width_tiles of its columns (share_is_columns) over all of M,
+    // or of its rows over all of N. The C slice is the first that fits of the whole share, then the share cut into
+    // 2, 3, ... C slices along its length, the last possibly shorter (13 tiles in 4: 4, 4, 4, 1).
+    const auto try_1D_placement = [&](const CoreRangeSet& cores,
+                                      tt::tt_metal::ShardOrientation orientation,
+                                      uint32_t share_width_tiles,
+                                      bool share_is_columns) {
+        const uint32_t share_length_tiles = share_is_columns ? M_tiles : N_tiles;
+        uint32_t previous_C_slice_length_tiles = 0;
+        for (uint32_t C_slices_per_share = 1; C_slices_per_share <= share_length_tiles; ++C_slices_per_share) {
+            const uint32_t C_slice_length_tiles = tt::div_up(share_length_tiles, C_slices_per_share);
+            if (C_slice_length_tiles == previous_C_slice_length_tiles) {
+                continue;  // the C slice that just did not fit
+            }
+            previous_C_slice_length_tiles = C_slice_length_tiles;
+            const bool fits = share_is_columns
+                                  ? try_placement(cores, orientation, C_slice_length_tiles, share_width_tiles)
+                                  : try_placement(cores, orientation, share_width_tiles, C_slice_length_tiles);
+            if (fits) {
+                return;
+            }
+        }
+    };
+
+    // A sharded output's shard grid fixes the cores, and the plan takes the C slice from the shard: the only placement.
+    if (C_memory.is_sharded() && C_shard.has_value()) {
+        try_placement(C_shard->grid, C_shard->orientation, /*C_slice_M_tiles=*/0, /*C_slice_N_tiles=*/0);
+        return best;
+    }
+
+    constexpr tt::tt_metal::ShardOrientation ROW_MAJOR = tt::tt_metal::ShardOrientation::ROW_MAJOR;
+    // 2D: a rectangle of cores over C's rows and columns, the plan picking the C slice.
+    try_placement(
+        CoreRangeSet(CoreRange({0, 0}, {std::min(grid_columns, N_tiles) - 1, std::min(grid_rows, M_tiles) - 1})),
+        ROW_MAJOR,
+        /*C_slice_M_tiles=*/0,
+        /*C_slice_N_tiles=*/0);
+
+    // 1D across N (M): whole grid rows (part of one row for a narrow C) splitting C's columns (rows). With one C slice
+    // per core every core needs the same A (B), which is multicast to all of them.
+    const CoreRangeSet across_N_cores(CoreRange(
+        {0, 0}, {std::min(grid_columns, N_tiles) - 1, std::clamp(N_tiles / grid_columns, 1u, grid_rows) - 1}));
+    const CoreRangeSet across_M_cores(CoreRange(
+        {0, 0}, {std::min(grid_columns, M_tiles) - 1, std::clamp(M_tiles / grid_columns, 1u, grid_rows) - 1}));
+    try_1D_placement(
+        across_N_cores, ROW_MAJOR, tt::div_up(N_tiles, across_N_cores.num_cores()), /*share_is_columns=*/true);
+    try_1D_placement(
+        across_M_cores, ROW_MAJOR, tt::div_up(M_tiles, across_M_cores.num_cores()), /*share_is_columns=*/false);
+
+    // 1D on a sharded operand's cores, which keeps it where it is: an L1 shard can then be bound in place, and a DRAM
+    // shard is read by the core next to its bank.
+    if (A.is_sharded() && A.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED) {
+        try_1D_placement(
+            A.memory_config().is_dram() ? dram_bank_cores(device) : A.shard_spec()->grid,
+            A.shard_spec()->orientation,
+            A.shard_spec()->shape[0] / TILE_HEIGHT,
+            /*share_is_columns=*/false);
+    }
+    if (B.is_sharded() && B.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED) {
+        try_1D_placement(
+            B.memory_config().is_dram() ? dram_bank_cores(device) : B.shard_spec()->grid,
+            B.shard_spec()->orientation,
+            B.shard_spec()->shape[1] / TILE_WIDTH,
+            /*share_is_columns=*/true);
     }
     return best;
 }
