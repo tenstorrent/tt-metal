@@ -1396,3 +1396,10 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
 - F122b: the dashboard narrows a quick-accepted pick's (full_pending) thresholds to the metrics its quick A/B measured
   (the rest wait for the full gate before the final task); without it the watch stopped on "DASHBOARD RED: P.9:
   pcc_state_min missing; device_ms_experts missing".
+
+- F123 (owner, 2026-10-20): realistic precision from the start. Agents' rule 7: the shipped defaults are realistic
+  from the first step (checkpoint-width weights, HiFi2 / LoFi, fp32 accumulation only where measured to matter, stock
+  kernels unless a measured end-to-end gap, bf16 cross-chip sums; reference GLM-5.3 production); max_precision is the
+  per-step tests' bug-check setting only (rule 14). The bringup skill's intake asks for the reference point.
+  DeepSeek-V4.1: built at max precision, then P.4 / P.6 / P.7 / P.10 / P.13 to get down to realistic; the
+  sparse_sdpa high-precision options existed only to beat the parity fp8 quantizers (removed in P.8).
