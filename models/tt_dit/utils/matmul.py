@@ -173,6 +173,13 @@ grid_88_configs = {
     (13664, 5376, 7168): (8, 7, 10, (2, 2)),  # ff1, 15709.9 us
     (13664, 5376, 5376): (8, 7, 12, (2, 2)),  # to_qkv
     (13664, 7168, 1344): (8, 8, 6, (2, 2)),  # to_out
+    # MiniMax-H3 at 5 s / 768P (4736 rows/device) on the same grid, swept 2026-10-20 (270-325 combos per
+    # shape, PR #61559 kernels; PCC 0.99998 on test_linear / test_linear_swiglu at these shapes). 19 M tiles
+    # per core: M_block 10 (10 + 9) beats the generic 8 (8 + 8 + 3) by 9-15%, and the Blackhole blockings
+    # `agmm_block_size` used to hand this grid by 27-66%.
+    (4736, 5376, 5376): (10, 6, 8, (2, 2)),  # to_qkv, 3865.2 us (rank 1/325); generic (8, 7, 8) 4261 us
+    (4736, 7168, 1344): (10, 8, 8, (2, 2)),  # to_out, 1502.2 us (rank 1/270); generic (8, 8, 8) 1683 us
+    (4736, 5376, 7168): (10, 7, 10, (2, 2)),  # ff1, 5678.3 us (rank 1/243); generic (8, 7, 8) 6672 us
 }
 
 
