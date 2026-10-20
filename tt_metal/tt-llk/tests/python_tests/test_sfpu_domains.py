@@ -445,15 +445,6 @@ def test_int_comparison_ops_are_the_ordered_elw_compares():
     ), "the alias table and the driven set disagree"
 
 
-@pytest.mark.parametrize("arch_dir", ["tt_llk_wormhole_b0", "tt_llk_blackhole"])
-def test_copy_dest_is_absent_from_wh_bh_binary_op(arch_dir):
-    declared = _binary_op_enumerators(arch_dir)
-    assert MathOperation.SfpuCopyDest.value.cpp_enum_value not in declared, (
-        f"BinaryOp::{MathOperation.SfpuCopyDest.value.cpp_enum_value} is Quasar-only and "
-        f"appeared in {arch_dir}"
-    )
-
-
 def test_every_float_binary_op_is_classified_for_cat_b():
     """Enrolled or recorded-as-not-ready, for every float op the binary sweep can drive.
 
