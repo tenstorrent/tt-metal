@@ -6,7 +6,7 @@ import pytest
 import torch
 
 import ttnn
-from models.common.utility_functions import run_for_blackhole
+from tt_py_test_utils_common.utility_functions import run_for_blackhole
 from tests.ttnn.nightly.unit_tests.operations.experimental.kda.recurrent_chunk_scan_test_utils import (
     device_protocol,
     host_protocol,
@@ -88,6 +88,7 @@ def test_chronology_summaries_single_capture(
                                 actual[part][folded_head],
                                 name=f"summary G={groups} actual_start={actual_start_value} group={group} part={part}",
                                 pcc_threshold=0.999,
+                                nrmse_threshold=0.006,
                             )
     finally:
         ttnn.release_trace(device, trace)

@@ -15,7 +15,7 @@
 // 2. Add the `SfpuType` enumerator to the `if constexpr` chain in
 //    call_unary_sfpu_operation_quasar() (and to init_unary_sfpu_operation_quasar()
 //    if the op needs an init step).
-#include "experimental/ckernel_sfpu_abs.h"
+#include "llk_sfpu/ckernel_sfpu_abs.h"
 #include "llk_sfpu/ckernel_sfpu_activations.h"
 #include "llk_sfpu/ckernel_sfpu_add1.h"
 #include "llk_sfpu/ckernel_sfpu_alt_complex_rotate90.h"
@@ -29,6 +29,7 @@
 #include "llk_sfpu/ckernel_sfpu_cumsum.h"
 #include "llk_sfpu/ckernel_sfpu_digamma.h"
 #include "llk_sfpu/ckernel_sfpu_elu.h"
+#include "llk_sfpu/ckernel_sfpu_ema.h"
 #include "llk_sfpu/ckernel_sfpu_erf.h"
 #include "llk_sfpu/ckernel_sfpu_erfc.h"
 #include "llk_sfpu/ckernel_sfpu_erfinv.h"
@@ -51,6 +52,7 @@
 #include "llk_sfpu/ckernel_sfpu_negative.h"
 #include "llk_sfpu/ckernel_sfpu_polygamma.h"
 #include "llk_sfpu/ckernel_sfpu_prelu.h"
+#include "llk_sfpu/ckernel_sfpu_rand.h"
 #include "llk_sfpu/ckernel_sfpu_rdiv.h"
 #include "llk_sfpu/ckernel_sfpu_recip.h"
 #include "llk_sfpu/ckernel_sfpu_relu.h"
@@ -62,6 +64,7 @@
 #include "llk_sfpu/ckernel_sfpu_selu.h"
 #include "llk_sfpu/ckernel_sfpu_sigmoid_appx.h"
 #include "llk_sfpu/ckernel_sfpu_sign.h"
+#include "llk_sfpu/ckernel_sfpu_signbit.h"
 #include "llk_sfpu/ckernel_sfpu_softcap.h"
 #include "llk_sfpu/ckernel_sfpu_softplus.h"
 #include "llk_sfpu/ckernel_sfpu_softshrink.h"
@@ -75,9 +78,11 @@
 #include "llk_sfpu/ckernel_sfpu_trigonometry.h"
 #include "llk_sfpu/ckernel_sfpu_typecast.h"
 #include "llk_sfpu/ckernel_sfpu_unary_comp.h"
+#include "llk_sfpu/ckernel_sfpu_unary_max_min.h"
 #include "llk_sfpu/ckernel_sfpu_unary_power.h"
 #include "llk_sfpu/ckernel_sfpu_unary_shift.h"
 #include "llk_sfpu/ckernel_sfpu_xielu.h"
+#include "sfpu/ckernel_sfpu_fill.h"
 #include "sfpu/ckernel_sfpu_sigmoid.h"
 #include "sfpu/ckernel_sfpu_silu.h"
 #include "sfpu/ckernel_sfpu_sqrt.h"
@@ -96,6 +101,7 @@
 #include "llk_sfpu/ckernel_sfpu_add_top_row.h"      // calculate_add_top_row (top four rows of two tiles, Float32/Int32)
 #include "llk_sfpu/ckernel_sfpu_atan2.h"            // calculate_sfpu_atan2 / calculate_sfpu_atan2_init (float atan2)
 #include "llk_sfpu/ckernel_sfpu_binary.h"           // calculate_sfpu_binary / sfpu_binary_init (float mul/div)
+#include "llk_sfpu/ckernel_sfpu_binary_bcast.h"     // calculate_binary_bcast / init_binary_bcast (float add/sub/mul, row/col bcast)
 #include "llk_sfpu/ckernel_sfpu_binary_bitwise.h"   // calculate_sfpu_binary_bitwise (int32 and/or/xor)
 #include "llk_sfpu/ckernel_sfpu_binary_fmod.h"      // calculate_sfpu_binary_fmod / calculate_fmod_int32
 #include "llk_sfpu/ckernel_sfpu_binary_max_min.h"   // calculate_binary_max_min / _init_binary_max_min_
@@ -105,15 +111,40 @@
 #include "llk_sfpu/ckernel_sfpu_copy_dest_values.h" // copy_dest_value / copy_dest_value_init (Dest-to-Dest copy)
 #include "llk_sfpu/ckernel_sfpu_div_int32.h"        // calculate_div_int32 / div_init (int32 / int32 -> fp32)
 #include "llk_sfpu/ckernel_sfpu_div_int32_floor.h"  // calculate_div_int32_trunc / calculate_div_int32_floor
+#include "llk_sfpu/ckernel_sfpu_gcd.h"              // calculate_gcd / calculate_gcd_init
 #include "llk_sfpu/ckernel_sfpu_int_sum.h"          // add_int (Dest tile += the next tile) / sum_int_init
 #include "llk_sfpu/ckernel_sfpu_isclose.h"          // calculate_sfpu_isclose / isclose_init
+#include "llk_sfpu/ckernel_sfpu_lcm.h"              // calculate_lcm / calculate_lcm_init
+#include "llk_sfpu/ckernel_sfpu_logaddexp.h"        // calculate_sfpu_logaddexp / calculate_sfpu_logaddexp_init
+#include "llk_sfpu/ckernel_sfpu_logaddexp2.h"       // calculate_sfpu_logaddexp2 / calculate_sfpu_logaddexp2_init
 #include "llk_sfpu/ckernel_sfpu_logsigmoid.h"       // calculate_logsigmoid (x, exp(-x) -> logsigmoid(x))
 #include "llk_sfpu/ckernel_sfpu_mask.h"             // calculate_mask / calculate_mask_posinf / calculate_int_mask
 #include "llk_sfpu/ckernel_sfpu_quant.h"            // quant_family / quant_family_init (quant/requant/dequant)
+#include "llk_sfpu/ckernel_sfpu_shift.h"            // calculate_binary_left_shift / right / logical right
 #include "llk_sfpu/ckernel_sfpu_situ_glu.h"         // calculate_situ_glu (softcapped gate * sigmoid(gate) * softcapped up)
 #include "llk_sfpu/llk_math_eltwise_binary_sfpu_macros.h"
 #include "sfpu/ckernel_sfpu_binary_comp.h" // calculate_binary_comp_int32 (int gt/lt/le/ge)
 #include "sfpu/ckernel_sfpu_mul_int32.h"   // _mul_int32_ (int mul)
+
+// Ternary SFPU op headers (consumed by the ternary dispatchers below).
+// To add a new Quasar ternary SFPU op:
+// 1. Include its ckernel header below.
+// 2. Add the SfpuType enumerator if it is not there.
+// 3. Add the `if constexpr` branch in call_ternary_sfpu_operation_quasar()
+//    and init_ternary_sfpu_operation_quasar().
+#include "llk_sfpu/ckernel_sfpu_where.h"
+#include "llk_sfpu/llk_math_eltwise_ternary_sfpu_macros.h"
+
+// rand defaults; the RAND_RANGE / RAND_SEED template parameters override them.
+#ifndef RAND_FROM_BITS
+#define RAND_FROM_BITS 0x3F800000u // 1.0f
+#endif
+#ifndef RAND_SCALE_BITS
+#define RAND_SCALE_BITS 0x40000000u // 2.0f
+#endif
+#ifndef RAND_SEED
+#define RAND_SEED 0x12345678u
+#endif
 
 namespace test_utils
 {
@@ -123,6 +154,10 @@ using namespace ckernel::sfpu;
 
 template <auto>
 inline constexpr bool unhandled_op = false;
+
+// Mirrored by EMA_ALPHA_BITS / EMA_BETA_BITS in helpers/sfpu_dispatch_constants.py.
+inline constexpr std::uint32_t kEmaAlphaBits = 0x3F19999Au; // 0.6f
+inline constexpr std::uint32_t kEmaBetaBits  = 0x3ECCCCCDu; // 0.4f
 
 /**
  * @brief Whether OPERATION is one of the six comparison-to-zero modes.
@@ -175,6 +210,10 @@ void init_unary_sfpu_operation_quasar()
     {
         gelu_init<APPROX, is_fp32_dest_acc_en>();
     }
+    else if constexpr (OPERATION == SfpuType::abs || OPERATION == SfpuType::abs_int32)
+    {
+        abs_init();
+    }
     else if constexpr (OPERATION == SfpuType::square)
     {
         init_square();
@@ -191,6 +230,10 @@ void init_unary_sfpu_operation_quasar()
     {
         init_zero_comp();
     }
+    else if constexpr (OPERATION == SfpuType::signbit)
+    {
+        init_signbit();
+    }
     else if constexpr (OPERATION == SfpuType::typecast)
     {
         init_typecast();
@@ -198,6 +241,26 @@ void init_unary_sfpu_operation_quasar()
     else if constexpr (is_trig_op(OPERATION))
     {
         init_trigonometry<OPERATION, is_fp32_dest_acc_en>();
+    }
+    else if constexpr (OPERATION == SfpuType::tan)
+    {
+        tangent_init<APPROX>();
+    }
+    else if constexpr (OPERATION == SfpuType::atan)
+    {
+        atan_init<APPROX, is_fp32_dest_acc_en>();
+    }
+    else if constexpr (OPERATION == SfpuType::sinh)
+    {
+        sinh_init<APPROX, is_fp32_dest_acc_en>();
+    }
+    else if constexpr (OPERATION == SfpuType::cosh)
+    {
+        cosh_init<APPROX, is_fp32_dest_acc_en>();
+    }
+    else if constexpr (OPERATION == SfpuType::asin || OPERATION == SfpuType::acos)
+    {
+        asin_acos_init<is_fp32_dest_acc_en>();
     }
     else if constexpr (OPERATION == SfpuType::cumsum)
     {
@@ -418,6 +481,16 @@ void init_unary_sfpu_operation_quasar()
         // tanh_derivative_tile's kernel: the accurate sech^2 form, whatever fast_and_approx says.
         tanh_derivative_sech2_init<APPROX>();
     }
+    else if constexpr (OPERATION == SfpuType::rand)
+    {
+        init_rand<APPROX>(static_cast<std::uint32_t>(RAND_SEED));
+    }
+    else if constexpr (OPERATION == SfpuType::ema)
+    {
+        // In place: the harness packs the tile it hands the functor (dst + 1 is in test_sfpu_ema_quasar.py).
+        init_ema<0 /*OUT_TILE_DELTA*/>();
+        ema_load_alpha_beta(kEmaAlphaBits, kEmaBetaBits);
+    }
     // rsub_scalar_int32 is stateless: its compute API init is SFPU_UNARY_INIT(unused).
 }
 
@@ -480,6 +553,60 @@ void call_zero_comp_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_fo
 }
 
 /**
+ * @brief Apply signbit in-place on one Dest tile.
+ *
+ * Signbit needs the SFPU math format at runtime to pick the load/store width and the
+ * integer-vs-float result encoding (see `ckernel_sfpu_signbit.h`); the format mapping
+ * matches @ref call_zero_comp_operation_quasar.
+ *
+ * @tparam DST_SYNC Destination synchronization mode used for bounds checking.
+ * @tparam is_fp32_dest_acc_en Whether Dest is in FP32 mode.
+ * @tparam ITERATIONS Number of SFPU loop iterations.
+ * @param dst_index Destination tile index operated on (already offset by DST_INDEX).
+ * @param sfpu_format SFPU math format selecting the sfpmem mode / result encoding.
+ * @note Must be preceded by @ref init_unary_sfpu_operation_quasar for signbit.
+ */
+template <DstSync DST_SYNC, bool is_fp32_dest_acc_en, int ITERATIONS = SFPU_ITERATIONS>
+void call_signbit_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_format)
+{
+    // A sign-bit test is exact, so signbit has no approximate path.
+    constexpr bool approx_mode = false;
+
+    switch (sfpu_format)
+    {
+        case DataFormat::Int32:
+            SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_signbit, (approx_mode, DataFormat::Int32, ITERATIONS), dst_index, VectorMode::RC);
+            break;
+        case DataFormat::Int16:
+            SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_signbit, (approx_mode, DataFormat::Int16, ITERATIONS), dst_index, VectorMode::RC);
+            break;
+        case DataFormat::Int8:
+        {
+            constexpr DataFormat sfpu_fmt = is_fp32_dest_acc_en ? DataFormat::Int32 : DataFormat::Int8;
+            SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_signbit, (approx_mode, sfpu_fmt, ITERATIONS), dst_index, VectorMode::RC);
+            break;
+        }
+        case DataFormat::UInt16:
+            SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_signbit, (approx_mode, DataFormat::UInt16, ITERATIONS), dst_index, VectorMode::RC);
+            break;
+        case DataFormat::UInt8:
+        {
+            constexpr DataFormat sfpu_fmt = is_fp32_dest_acc_en ? DataFormat::Int32 : DataFormat::UInt8;
+            SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_signbit, (approx_mode, sfpu_fmt, ITERATIONS), dst_index, VectorMode::RC);
+            break;
+        }
+        case DataFormat::Float16:
+        case DataFormat::Float16_b:
+        case DataFormat::Float32:
+            SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_signbit, (approx_mode, DataFormat::Float32, ITERATIONS), dst_index, VectorMode::RC);
+            break;
+        default:
+            LLK_ASSERT(false, "Unsupported Quasar signbit SFPU format");
+            break;
+    }
+}
+
+/**
  * @brief Apply a Quasar unary SFPU op in-place on one Dest tile.
  *
  * @tparam OPERATION The SFPU operation type (compile-time `SfpuType` constant).
@@ -490,10 +617,10 @@ void call_zero_comp_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_fo
  * @tparam TYPECAST_IN_FORMAT Source format for the typecast op (default Float32).
  * @tparam TYPECAST_OUT_FORMAT Destination format for the typecast op (default Float16_b).
  * @param dst_index Destination tile index operated on (already offset by DST_INDEX).
- * @param sfpu_format SFPU math format; only the comp family reads it (see
- *        @ref call_zero_comp_operation_quasar), float-only ops ignore it.
+ * @param sfpu_format SFPU math format used by format-dependent ops such as comp, signbit and fill.
  * @param first Whether this tile starts a fresh top-to-bottom accumulation chain; only cumsum
- *        reads it. Defaults to true so each tile is independent.
+ *        and ema read it. Defaults to true so each tile is independent.
+ * @param fill_const_value Constant written by fill; other operations ignore it.
  * @note Must be preceded by @ref init_unary_sfpu_operation_quasar for the same op.
  */
 template <
@@ -504,12 +631,38 @@ template <
     int ITERATIONS                 = SFPU_ITERATIONS,
     DataFormat TYPECAST_IN_FORMAT  = DataFormat::Float32,
     DataFormat TYPECAST_OUT_FORMAT = DataFormat::Float16_b>
-void call_unary_sfpu_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_format = DataFormat::Float32, [[maybe_unused]] const bool first = true)
+void call_unary_sfpu_operation_quasar(
+    std::uint32_t dst_index,
+    DataFormat sfpu_format                        = DataFormat::Float32,
+    [[maybe_unused]] const bool first             = true,
+    [[maybe_unused]] const float fill_const_value = 5.0f)
 {
     constexpr std::uint32_t kReluThresholdBits = 0x40A00000u; // 5.0f
     if constexpr (OPERATION == SfpuType::abs)
     {
-        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, _calculate_abs_, (ITERATIONS), dst_index, VectorMode::RC);
+        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_abs, (APPROX, ITERATIONS), dst_index, VectorMode::RC);
+    }
+    else if constexpr (OPERATION == SfpuType::abs_int32)
+    {
+        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_abs_int32, (APPROX, ITERATIONS), dst_index, VectorMode::RC);
+    }
+    else if constexpr (OPERATION == SfpuType::fill)
+    {
+        if (sfpu_format == DataFormat::Int32)
+        {
+            SFPU_UNARY_CALL(
+                DST_SYNC,
+                is_fp32_dest_acc_en,
+                _calculate_fill_int_,
+                (APPROX, ckernel::InstrModLoadStore::INT32, ITERATIONS),
+                dst_index,
+                VectorMode::RC,
+                static_cast<std::uint32_t>(fill_const_value));
+        }
+        else
+        {
+            SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, _calculate_fill_, (APPROX, ITERATIONS), dst_index, VectorMode::RC, fill_const_value);
+        }
     }
     else if constexpr (OPERATION == SfpuType::exponential)
     {
@@ -591,6 +744,30 @@ void call_unary_sfpu_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_f
         SFPU_UNARY_CALL(
             DST_SYNC, is_fp32_dest_acc_en, calculate_trigonometry, (OPERATION, false /* APPROX */, is_fp32_dest_acc_en, ITERATIONS), dst_index, VectorMode::RC);
     }
+    else if constexpr (OPERATION == SfpuType::tan)
+    {
+        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_tangent, (APPROX, is_fp32_dest_acc_en, ITERATIONS), dst_index, VectorMode::RC);
+    }
+    else if constexpr (OPERATION == SfpuType::atan)
+    {
+        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_atan, (APPROX, is_fp32_dest_acc_en, ITERATIONS), dst_index, VectorMode::RC);
+    }
+    else if constexpr (OPERATION == SfpuType::sinh)
+    {
+        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_sinh, (APPROX, is_fp32_dest_acc_en, ITERATIONS), dst_index, VectorMode::RC);
+    }
+    else if constexpr (OPERATION == SfpuType::cosh)
+    {
+        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_cosh, (APPROX, is_fp32_dest_acc_en, ITERATIONS), dst_index, VectorMode::RC);
+    }
+    else if constexpr (OPERATION == SfpuType::asin)
+    {
+        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_asin, (APPROX, is_fp32_dest_acc_en, ITERATIONS), dst_index, VectorMode::RC);
+    }
+    else if constexpr (OPERATION == SfpuType::acos)
+    {
+        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_acos, (APPROX, is_fp32_dest_acc_en, ITERATIONS), dst_index, VectorMode::RC);
+    }
     else if constexpr (OPERATION == SfpuType::negative)
     {
         SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, _calculate_negative_, (false, ITERATIONS), dst_index, VectorMode::RC);
@@ -624,9 +801,52 @@ void call_unary_sfpu_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_f
             static_cast<std::uint32_t>(0xBF800000),  // min = -1.0 (fp32)
             static_cast<std::uint32_t>(0x3F800000)); // max = +1.0 (fp32)
     }
+    else if constexpr (OPERATION == SfpuType::unary_max || OPERATION == SfpuType::unary_min)
+    {
+        // Defaults match UnarySFPUGolden UNARY_MAX_MIN_VALUE; Float32 serves every float Dest width.
+#ifdef SFPU_UNARY_MAX_MIN_SCALAR
+        constexpr std::uint32_t UNARY_MAX_MIN_FLOAT_SCALAR = SFPU_UNARY_MAX_MIN_SCALAR;
+#else
+        constexpr std::uint32_t UNARY_MAX_MIN_FLOAT_SCALAR = 0x00000000; // 0.0 (fp32)
+#endif
+        SFPU_UNARY_CALL(
+            DST_SYNC,
+            is_fp32_dest_acc_en,
+            calculate_unary_max_min,
+            (OPERATION == SfpuType::unary_max /* IS_MAX_OP */, DataFormat::Float32, APPROX, ITERATIONS),
+            dst_index,
+            VectorMode::RC,
+            UNARY_MAX_MIN_FLOAT_SCALAR);
+    }
+    else if constexpr (OPERATION == SfpuType::unary_max_int32 || OPERATION == SfpuType::unary_min_int32)
+    {
+        // Defaults match UnarySFPUGolden INT_MAXMIN_SCALAR and a two's-complement Dest.
+#ifdef SFPU_UNARY_MAX_MIN_SCALAR
+        constexpr std::uint32_t UNARY_MAX_MIN_INT32_SCALAR = SFPU_UNARY_MAX_MIN_SCALAR;
+#else
+        constexpr std::uint32_t UNARY_MAX_MIN_INT32_SCALAR = 1000;
+#endif
+#ifdef SFPU_UNARY_MAX_MIN_SIGN_MAGNITUDE
+        constexpr bool UNARY_MAX_MIN_SIGN_MAGNITUDE = true;
+#else
+        constexpr bool UNARY_MAX_MIN_SIGN_MAGNITUDE = false;
+#endif
+        SFPU_UNARY_CALL(
+            DST_SYNC,
+            is_fp32_dest_acc_en,
+            calculate_unary_max_min,
+            (OPERATION == SfpuType::unary_max_int32 /* IS_MAX_OP */, DataFormat::Int32, APPROX, ITERATIONS, UNARY_MAX_MIN_SIGN_MAGNITUDE),
+            dst_index,
+            VectorMode::RC,
+            UNARY_MAX_MIN_INT32_SCALAR);
+    }
     else if constexpr (is_zero_comp_op(OPERATION))
     {
         call_zero_comp_operation_quasar<OPERATION, DST_SYNC, is_fp32_dest_acc_en, ITERATIONS>(dst_index, sfpu_format);
+    }
+    else if constexpr (OPERATION == SfpuType::signbit)
+    {
+        call_signbit_operation_quasar<DST_SYNC, is_fp32_dest_acc_en, ITERATIONS>(dst_index, sfpu_format);
     }
     else if constexpr (OPERATION == SfpuType::typecast)
     {
@@ -650,6 +870,15 @@ void call_unary_sfpu_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_f
         // Whole-tile op: the accumulation chain spans all 32 tile rows and crosses the face-pair
         // boundary, so it runs once per tile (RC_custom), not once per face.
         SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_cumsum, (APPROX, ITERATIONS), dst_index, VectorMode::RC_custom, first);
+    }
+    else if constexpr (OPERATION == SfpuType::ema)
+    {
+        // Once per tile (RC_custom); first = true (the default) starts a new chain every tile.
+        if (first)
+        {
+            ema_clear_previous_output();
+        }
+        SFPU_UNARY_CALL_NO_TEMPLATE_ARGS(DST_SYNC, is_fp32_dest_acc_en, calculate_ema, dst_index, VectorMode::RC_custom);
     }
     else if constexpr (OPERATION == SfpuType::floor)
     {
@@ -806,14 +1035,7 @@ void call_unary_sfpu_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_f
     }
     else if constexpr (OPERATION == SfpuType::power_iterative)
     {
-        SFPU_UNARY_CALL(
-            DST_SYNC,
-            is_fp32_dest_acc_en,
-            calculate_unary_power_iterative,
-            (APPROX, ITERATIONS),
-            dst_index,
-            VectorMode::RC,
-            3u /* exponent */);
+        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_unary_power_iterative, (APPROX, ITERATIONS), dst_index, VectorMode::RC, 3u /* exponent */);
     }
     else if constexpr (OPERATION == SfpuType::log)
     {
@@ -1045,6 +1267,18 @@ void call_unary_sfpu_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_f
     {
         SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_tanh_derivative_sech2, (APPROX, is_fp32_dest_acc_en, ITERATIONS), dst_index, VectorMode::RC);
     }
+    else if constexpr (OPERATION == SfpuType::rand)
+    {
+        SFPU_UNARY_CALL(
+            DST_SYNC,
+            is_fp32_dest_acc_en,
+            calculate_rand,
+            (APPROX, ITERATIONS),
+            dst_index,
+            VectorMode::RC,
+            static_cast<std::uint32_t>(RAND_FROM_BITS),
+            static_cast<std::uint32_t>(RAND_SCALE_BITS));
+    }
     else
     {
         static_assert(unhandled_op<OPERATION>, "call_unary_sfpu_operation_quasar: unhandled Quasar unary SFPU operation");
@@ -1089,19 +1323,29 @@ constexpr ckernel::sfpu::QuantVariant quant_variant_of()
  * @tparam OP The binary op (compile-time `ckernel::BinaryOp` constant).
  * @tparam is_fp32_dest_acc_en Whether Dest is in FP32 mode. Must match the calculate step;
  *         atan2 uses it to select the reciprocal variant its polynomial expects.
- * @tparam SIGN_MAGNITUDE_FORMAT Quant family only: if true, treat int32 Dest as SMAG32
- *         and skip the sign-magnitude<->2's-complement casts. Must match the calculate step.
+ * @tparam SIGN_MAGNITUDE_FORMAT Int32 Dest holds SMAG32 (quant family, ADD/MUL, signed comparisons, GCD and LCM).
+ *         Must match the calculate step.
  * @tparam APPROXIMATION_MODE Whether to use the operation's approximate path. Must match the
  *         calculate step; atan2 uses it to select the LUT-only reciprocal path.
+ * @tparam BCAST_TYPE NONE, or COL / ROW for the src1-broadcast ADD / SUB / MUL kernel.
  * @param zero_point fp32 bit-pattern of the zero-point loaded once by the quant
  *        family init (DEQUANT expects the bits of -zero_point); ignored by the
  *        other ops, which have no runtime init argument.
  * @note Pair with @ref call_binary_sfpu_operation_quasar for the calculate step.
  */
-template <ckernel::BinaryOp OP, bool is_fp32_dest_acc_en = false, bool SIGN_MAGNITUDE_FORMAT = false, bool APPROXIMATION_MODE = false>
+template <
+    ckernel::BinaryOp OP,
+    bool is_fp32_dest_acc_en          = false,
+    bool SIGN_MAGNITUDE_FORMAT        = false,
+    bool APPROXIMATION_MODE           = false,
+    ckernel::BroadcastType BCAST_TYPE = ckernel::BroadcastType::NONE>
 void init_binary_sfpu_operation_quasar([[maybe_unused]] std::uint32_t zero_point = 0)
 {
-    if constexpr (OP == BinaryOp::MUL)
+    if constexpr (BCAST_TYPE != BroadcastType::NONE)
+    {
+        init_binary_bcast<OP, BCAST_TYPE>();
+    }
+    else if constexpr (OP == BinaryOp::MUL)
     {
         sfpu_binary_init<APPROXIMATION_MODE, BinaryOp::MUL>(); // no-op for MUL; harmless on the int path
     }
@@ -1129,6 +1373,10 @@ void init_binary_sfpu_operation_quasar([[maybe_unused]] std::uint32_t zero_point
     else if constexpr (OP == BinaryOp::ISCLOSE)
     {
         isclose_init();
+    }
+    else if constexpr (OP == BinaryOp::LCM)
+    {
+        calculate_lcm_init();
     }
     else if constexpr (OP == BinaryOp::FMOD)
     {
@@ -1186,6 +1434,21 @@ void init_binary_sfpu_operation_quasar([[maybe_unused]] std::uint32_t zero_point
     {
         init_add_top_row();
     }
+    else if constexpr (OP == BinaryOp::LOGADDEXP)
+    {
+        // log1p's coefficients live in the program constant registers and differ by destination
+        // precision; the init also programs the ADDR_MOD_6 the store advances through.
+        calculate_sfpu_logaddexp_init<is_fp32_dest_acc_en>();
+    }
+    else if constexpr (OP == BinaryOp::LOGADDEXP2)
+    {
+        calculate_sfpu_logaddexp2_init<is_fp32_dest_acc_en>();
+    }
+    else if constexpr (OP == BinaryOp::GCD)
+    {
+        calculate_gcd_init();
+    }
+    // RSHFT / LSHFT / LOGICAL_RSHFT need no init beyond the shared SFPU one.
     // ADD / SUB / GT / LT / LE / GE / COPY_DEST / LOGSIGMOID are stateless — no init.
 }
 
@@ -1203,10 +1466,12 @@ void init_binary_sfpu_operation_quasar([[maybe_unused]] std::uint32_t zero_point
  *         NearestEven applies software RNE before the store. Ignored for MUL (no narrowing)
  *         and DIV (always rounds RNE regardless). No-op when is_fp32_dest_acc_en is true.
  * @tparam ITERATIONS Number of SFPU loop iterations.
- * @tparam SIGN_MAGNITUDE_FORMAT Quant family only: if true, treat int32 Dest as SMAG32
- *         and skip the sign-magnitude<->2's-complement casts. Must match the init step.
+ * @tparam SIGN_MAGNITUDE_FORMAT Int32 Dest holds SMAG32 (quant family, ADD/MUL, signed comparisons, GCD and LCM).
+ *         Must match the init step.
  * @tparam APPROXIMATION_MODE Whether to use the operation's approximate path. Must match the
  *         init step; atan2 uses it to select the LUT-only reciprocal path.
+ * @tparam BCAST_TYPE NONE, or COL / ROW for the src1-broadcast ADD / SUB / MUL kernel (float only,
+ *         Default rounding; ignores ITERATIONS and APPROXIMATION_MODE).
  * @param src0_tile,src1_tile,dst_tile Operand / result tile indices. COPY_DEST ignores
  *        `src1_tile` and writes `src0_tile` onto `dst_tile`.
  * @param math_format Dest encoding. Int32 vs float path for MUL and max/min; COPY_DEST
@@ -1221,10 +1486,17 @@ template <
     ckernel::DstRoundingMode dst_rounding_mode = ckernel::DstRoundingMode::Default,
     int ITERATIONS                             = SFPU_ITERATIONS,
     bool SIGN_MAGNITUDE_FORMAT                 = false,
-    bool APPROXIMATION_MODE                    = false>
+    bool APPROXIMATION_MODE                    = false,
+    ckernel::BroadcastType BCAST_TYPE          = ckernel::BroadcastType::NONE>
 void call_binary_sfpu_operation_quasar(std::uint32_t src0_tile, std::uint32_t src1_tile, std::uint32_t dst_tile, [[maybe_unused]] DataFormat math_format)
 {
-    if constexpr (OP == BinaryOp::ADD)
+    if constexpr (BCAST_TYPE != BroadcastType::NONE)
+    {
+        static_assert(dst_rounding_mode == ckernel::DstRoundingMode::Default, "binary_bcast does not implement NearestEven rounding");
+        LLK_ASSERT(math_format != DataFormat::Int32, "binary_bcast supports float formats only");
+        SFPU_BINARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_binary_bcast, (OP, BCAST_TYPE), src0_tile, src1_tile, dst_tile, VectorMode::None);
+    }
+    else if constexpr (OP == BinaryOp::ADD)
     {
         if (math_format == DataFormat::Int32)
         {
@@ -1232,7 +1504,7 @@ void call_binary_sfpu_operation_quasar(std::uint32_t src0_tile, std::uint32_t sr
                 DST_SYNC,
                 is_fp32_dest_acc_en,
                 calculate_add_int,
-                (false, ITERATIONS, DataFormat::Int32, 0, false),
+                (false, ITERATIONS, DataFormat::Int32, 0, SIGN_MAGNITUDE_FORMAT),
                 src0_tile,
                 src1_tile,
                 dst_tile,
@@ -1267,28 +1539,57 @@ void call_binary_sfpu_operation_quasar(std::uint32_t src0_tile, std::uint32_t sr
     else if constexpr (OP == BinaryOp::GT)
     {
         SFPU_BINARY_CALL(
-            DST_SYNC, is_fp32_dest_acc_en, calculate_binary_comp_int32, (false, ITERATIONS, SfpuType::gt), src0_tile, src1_tile, dst_tile, VectorMode::RC);
+            DST_SYNC,
+            is_fp32_dest_acc_en,
+            calculate_binary_comp_int32,
+            (false, ITERATIONS, SfpuType::gt, SIGN_MAGNITUDE_FORMAT),
+            src0_tile,
+            src1_tile,
+            dst_tile,
+            VectorMode::RC);
     }
     else if constexpr (OP == BinaryOp::LT)
     {
         SFPU_BINARY_CALL(
-            DST_SYNC, is_fp32_dest_acc_en, calculate_binary_comp_int32, (false, ITERATIONS, SfpuType::lt), src0_tile, src1_tile, dst_tile, VectorMode::RC);
+            DST_SYNC,
+            is_fp32_dest_acc_en,
+            calculate_binary_comp_int32,
+            (false, ITERATIONS, SfpuType::lt, SIGN_MAGNITUDE_FORMAT),
+            src0_tile,
+            src1_tile,
+            dst_tile,
+            VectorMode::RC);
     }
     else if constexpr (OP == BinaryOp::LE)
     {
         SFPU_BINARY_CALL(
-            DST_SYNC, is_fp32_dest_acc_en, calculate_binary_comp_int32, (false, ITERATIONS, SfpuType::le), src0_tile, src1_tile, dst_tile, VectorMode::RC);
+            DST_SYNC,
+            is_fp32_dest_acc_en,
+            calculate_binary_comp_int32,
+            (false, ITERATIONS, SfpuType::le, SIGN_MAGNITUDE_FORMAT),
+            src0_tile,
+            src1_tile,
+            dst_tile,
+            VectorMode::RC);
     }
     else if constexpr (OP == BinaryOp::GE)
     {
         SFPU_BINARY_CALL(
-            DST_SYNC, is_fp32_dest_acc_en, calculate_binary_comp_int32, (false, ITERATIONS, SfpuType::ge), src0_tile, src1_tile, dst_tile, VectorMode::RC);
+            DST_SYNC,
+            is_fp32_dest_acc_en,
+            calculate_binary_comp_int32,
+            (false, ITERATIONS, SfpuType::ge, SIGN_MAGNITUDE_FORMAT),
+            src0_tile,
+            src1_tile,
+            dst_tile,
+            VectorMode::RC);
     }
     else if constexpr (OP == BinaryOp::MUL)
     {
         if (math_format == DataFormat::Int32)
         {
-            SFPU_BINARY_CALL(DST_SYNC, is_fp32_dest_acc_en, _mul_int32_, (false, ITERATIONS), src0_tile, src1_tile, dst_tile, VectorMode::RC);
+            SFPU_BINARY_CALL(
+                DST_SYNC, is_fp32_dest_acc_en, _mul_int32_, (false, ITERATIONS, SIGN_MAGNITUDE_FORMAT), src0_tile, src1_tile, dst_tile, VectorMode::RC);
         }
         else
         {
@@ -1323,6 +1624,19 @@ void call_binary_sfpu_operation_quasar(std::uint32_t src0_tile, std::uint32_t sr
             is_fp32_dest_acc_en,
             calculate_sfpu_atan2,
             (APPROXIMATION_MODE, ITERATIONS, is_fp32_dest_acc_en),
+            src0_tile,
+            src1_tile,
+            dst_tile,
+            VectorMode::RC);
+    }
+    else if constexpr (OP == BinaryOp::LCM)
+    {
+        // Compute-API lcm contract: |operand| <= 2^LCM_MAX_INPUT_BITS - 1.
+        SFPU_BINARY_CALL(
+            DST_SYNC,
+            is_fp32_dest_acc_en,
+            calculate_lcm,
+            (SIGN_MAGNITUDE_FORMAT, LCM_MAX_INPUT_BITS, ITERATIONS),
             src0_tile,
             src1_tile,
             dst_tile,
@@ -1383,6 +1697,10 @@ void call_binary_sfpu_operation_quasar(std::uint32_t src0_tile, std::uint32_t sr
             SFPU_BINARY_CALL(
                 DST_SYNC, is_fp32_dest_acc_en, copy_dest_value, (DataFormat::Float32, false, ITERATIONS), src0_tile, dst_tile, 0 /* unused */, VectorMode::RC);
         }
+    }
+    else if constexpr (OP == BinaryOp::GCD)
+    {
+        SFPU_BINARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_gcd, (SIGN_MAGNITUDE_FORMAT, ITERATIONS), src0_tile, src1_tile, dst_tile, VectorMode::RC);
     }
     else if constexpr (quasar_binary_op_is_quant(OP))
     {
@@ -1529,6 +1847,73 @@ void call_binary_sfpu_operation_quasar(std::uint32_t src0_tile, std::uint32_t sr
             SFPU_BINARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_add_top_row, (DataFormat::Float32), src0_tile, src1_tile, dst_tile, VectorMode::None);
         }
     }
+    else if constexpr (OP == BinaryOp::LOGADDEXP)
+    {
+        // is_fp32_dest_acc_en selects the fp32 or bf16 exponential, the log1p coefficient set the
+        // paired init loaded, and the bf16 rounding before the store.
+        SFPU_BINARY_CALL(
+            DST_SYNC,
+            is_fp32_dest_acc_en,
+            calculate_sfpu_logaddexp,
+            (APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS),
+            src0_tile,
+            src1_tile,
+            dst_tile,
+            VectorMode::RC);
+    }
+    else if constexpr (OP == BinaryOp::LOGADDEXP2)
+    {
+        SFPU_BINARY_CALL(
+            DST_SYNC,
+            is_fp32_dest_acc_en,
+            calculate_sfpu_logaddexp2,
+            (APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS),
+            src0_tile,
+            src1_tile,
+            dst_tile,
+            VectorMode::RC);
+    }
+    else if constexpr (OP == BinaryOp::RSHFT || OP == BinaryOp::LSHFT || OP == BinaryOp::LOGICAL_RSHFT)
+    {
+        // INT32, not INT32_2S_COMP, as in the Blackhole harness and binary_shift.h: Int32 tiles reach
+        // Dest raw, so the shift operates on the bits directly. a = src0, shift amount = src1.
+        if constexpr (OP == BinaryOp::RSHFT)
+        {
+            SFPU_BINARY_CALL(
+                DST_SYNC,
+                is_fp32_dest_acc_en,
+                calculate_binary_right_shift,
+                (APPROXIMATION_MODE, ITERATIONS, ckernel::InstrModLoadStore::INT32, false),
+                src0_tile,
+                src1_tile,
+                dst_tile,
+                VectorMode::RC);
+        }
+        else if constexpr (OP == BinaryOp::LSHFT)
+        {
+            SFPU_BINARY_CALL(
+                DST_SYNC,
+                is_fp32_dest_acc_en,
+                calculate_binary_left_shift,
+                (APPROXIMATION_MODE, ITERATIONS, ckernel::InstrModLoadStore::INT32, false),
+                src0_tile,
+                src1_tile,
+                dst_tile,
+                VectorMode::RC);
+        }
+        else
+        {
+            SFPU_BINARY_CALL(
+                DST_SYNC,
+                is_fp32_dest_acc_en,
+                calculate_logical_right_shift,
+                (APPROXIMATION_MODE, ITERATIONS, ckernel::InstrModLoadStore::INT32, false),
+                src0_tile,
+                src1_tile,
+                dst_tile,
+                VectorMode::RC);
+        }
+    }
     else if constexpr (OP == BinaryOp::ISCLOSE)
     {
         // isclose(a, b) = |a - b| <= atol + rtol * |b| with torch's defaults rtol = 1e-5, atol = 1e-8
@@ -1604,6 +1989,60 @@ void call_binary_sfpu_operation_quasar(std::uint32_t src0_tile, std::uint32_t sr
     else
     {
         static_assert(unhandled_op<OP>, "call_binary_sfpu_operation_quasar: unhandled Quasar binary SFPU operation");
+    }
+}
+
+/**
+ * @brief Initialize shared SFPU state and the selected Quasar ternary operation.
+ *
+ * @tparam OPERATION Ternary SFPU operation to initialize.
+ * @tparam is_fp32_dest_acc_en Dest accumulation mode, matching the calculate step.
+ * @tparam APPROX Approximation mode, matching the calculate step.
+ * @note Pair with @ref call_ternary_sfpu_operation_quasar for the calculate step.
+ */
+template <SfpuType OPERATION, bool is_fp32_dest_acc_en, bool APPROX = false>
+void init_ternary_sfpu_operation_quasar()
+{
+    if constexpr (OPERATION == SfpuType::where)
+    {
+        _llk_math_eltwise_ternary_sfpu_init_<OPERATION>();
+    }
+    else
+    {
+        static_assert(unhandled_op<OPERATION>, "init_ternary_sfpu_operation_quasar: unhandled Quasar ternary SFPU operation");
+    }
+}
+
+/**
+ * @brief Apply a Quasar ternary SFPU op over three Dest operands into a result tile.
+ *
+ * @tparam OPERATION Ternary SFPU operation to execute.
+ * @tparam DST_SYNC Destination synchronization mode used for bounds checking.
+ * @tparam is_fp32_dest_acc_en Whether Dest is in FP32 mode.
+ * @tparam APPROX Whether to use the operation's approximate path.
+ * @tparam ITERATIONS Number of SFPU row-pair iterations per face.
+ * @param src0_tile First operand tile index; the condition for where.
+ * @param src1_tile Second operand tile index; the true value for where.
+ * @param src2_tile Third operand tile index; the false value for where.
+ * @param dst_tile Result tile index, which may alias an input.
+ * @param vector_mode Faces to process; defaults to the whole tile.
+ * @note Call @ref init_ternary_sfpu_operation_quasar for the same op before this function.
+ */
+template <SfpuType OPERATION, DstSync DST_SYNC, bool is_fp32_dest_acc_en, bool APPROX = false, int ITERATIONS = SFPU_ITERATIONS>
+void call_ternary_sfpu_operation_quasar(
+    const std::uint32_t src0_tile,
+    const std::uint32_t src1_tile,
+    const std::uint32_t src2_tile,
+    const std::uint32_t dst_tile,
+    VectorMode vector_mode = VectorMode::RC)
+{
+    if constexpr (OPERATION == SfpuType::where)
+    {
+        SFPU_TERNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_where, (APPROX, ITERATIONS), src0_tile, src1_tile, src2_tile, dst_tile, vector_mode);
+    }
+    else
+    {
+        static_assert(unhandled_op<OPERATION>, "call_ternary_sfpu_operation_quasar: unhandled Quasar ternary SFPU operation");
     }
 }
 
