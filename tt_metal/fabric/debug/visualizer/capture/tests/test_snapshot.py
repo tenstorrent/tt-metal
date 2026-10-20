@@ -47,10 +47,12 @@ class FakeDevice:
         self.failing = failing  # (router path, address) whose read raises
         self.short = short  # (router path, address) whose read returns 2 bytes
         self.opened = 0
+        self.archs = set()  # the arch each open_router was given
         self.reads = []  # (router path, address, size) in the order read
         self.counts = collections.Counter()
 
-    def open_router(self, router):
+    def open_router(self, router, arch):
+        self.archs.add(arch)
         if router.path in self.unopenable:
             raise CaptureError("chip not found")
         self.opened += 1
@@ -112,6 +114,7 @@ class Snapshots(SnapshotCase):
         self.assertEqual(self.result.json_path, self.out_dir / f"{NAME}.json")
         self.assertEqual(self.result.bin_path, self.out_dir / f"{NAME}.bin")
         self.assertEqual(sorted(p.name for p in self.out_dir.iterdir()), [f"{NAME}.bin", f"{NAME}.json"])
+        self.assertEqual(self.result.routers, 2)
         self.assertEqual(self.result.errors, {})
 
     def test_header(self):
@@ -144,6 +147,7 @@ class Snapshots(SnapshotCase):
     def test_routers(self):
         self.take()
         self.assertEqual(list(self.snapshot["routers"]), ["M0/C0/E1", "M1/C0/S1"])
+        self.assertEqual(self.device.archs, {MANIFEST["run"]["arch"]})
         entry = self.snapshot["routers"]["M0/C0/E1"]
         self.assertEqual(entry["device"], {"unique_id": "0x000000036190302b", "ttexalens_id": 1})
         self.assertEqual(entry["core"], {"translated": [25, 16], "logical": [0, 0]})

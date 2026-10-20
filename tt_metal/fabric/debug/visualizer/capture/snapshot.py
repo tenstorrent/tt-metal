@@ -47,8 +47,8 @@ class OpenedRouter:
 class Device(Protocol):
     version: str  # the version of the library that reads the device
 
-    def open_router(self, router: RouterPlan) -> OpenedRouter:
-        """Finds the router's chip and core, or raises CaptureError."""
+    def open_router(self, router: RouterPlan, arch: str) -> OpenedRouter:
+        """Finds the router's chip, which must be of `arch` (run.arch), and its core, or raises CaptureError."""
 
     def read(self, opened: OpenedRouter, address: int, size: int) -> bytes:
         """`size` bytes at `address` on the router's core, or raises CaptureError."""
@@ -58,6 +58,7 @@ class Device(Protocol):
 class Snapshot:
     json_path: pathlib.Path
     bin_path: pathlib.Path
+    routers: int  # how many routers it has
     errors: dict[str, dict]  # each failed router's error, by the router's path
 
 
@@ -217,7 +218,7 @@ def take_snapshot(
     for router in plan.routers:
         entry = routers[router.path]
         try:
-            opened[router.path] = device.open_router(router)
+            opened[router.path] = device.open_router(router, plan.arch)
         except CaptureError as error:
             entry["error"] = {"stage": "open", "path": None, "message": str(error)}
             continue
@@ -256,4 +257,4 @@ def take_snapshot(
     _write_file(json_path, (json.dumps(snapshot, indent=2) + "\n").encode())
     errors = {path: entry["error"] for path, entry in routers.items() if entry["error"] is not None}
 
-    return Snapshot(json_path=json_path, bin_path=bin_path, errors=errors)
+    return Snapshot(json_path=json_path, bin_path=bin_path, routers=len(routers), errors=errors)
