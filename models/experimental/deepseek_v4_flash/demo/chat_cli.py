@@ -667,9 +667,10 @@ class UserSession:
             for i in range(self._next_render, len(self.messages))
             if self.messages[i]["role"] != "assistant"
         )
-        # Only the very first turn may carry the tokenizer's special prefix (BOS);
-        # later turns continue an existing sequence.
-        ids = list(self.engine.tokenizer(rendered, add_special_tokens=first_turn)["input_ids"])
+        ids = list(self.engine.tokenizer(rendered, add_special_tokens=False)["input_ids"])
+        if first_turn:
+            # The tokenizer does not add BOS (V4.1's add_bos_token is false); encode_messages prepends it.
+            ids.insert(0, self.engine.tokenizer.bos_token_id)
 
         prefix: list[int] = []
         if self.pending_id is not None:
