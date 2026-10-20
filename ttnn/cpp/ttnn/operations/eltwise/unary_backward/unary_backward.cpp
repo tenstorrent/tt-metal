@@ -1327,7 +1327,6 @@ std::vector<Tensor> sign_bw(
 std::vector<Tensor> div_no_nan_bw(
     const Tensor& grad, const Tensor& /*input*/, float scalar, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    // Test the host float directly: a device copy of a subnormal scalar is flushed to zero.
     if (scalar == 0.0f) {
         grad_tensor.emplace_back(
             ttnn::zeros_like(grad, grad.dtype(), grad.layout(), std::nullopt, output_mem_config));
