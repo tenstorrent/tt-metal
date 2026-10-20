@@ -64,7 +64,7 @@ def gptq_batched(w, h, bits, damping=0.3, block=128, inner=16, offsets=(0, 1)):
     the [E, K, N] updates down."""
     E, K, N = w.shape
     w = w.clone()
-    h = h.double().clone()
+    h = h.clone()  # fp32: the damped Hessian (0.3 x mean diagonal) is well conditioned
     diag = torch.diagonal(h, dim1=1, dim2=2)
     dead = diag == 0
     diag[dead] = 1.0
@@ -74,7 +74,11 @@ def gptq_batched(w, h, bits, damping=0.3, block=128, inner=16, offsets=(0, 1)):
     h = h.gather(1, perm[:, :, None].expand(E, K, K)).gather(2, perm[:, None, :].expand(E, K, K))
     damp = damping * torch.diagonal(h, dim1=1, dim2=2).mean(-1)
     h += damp[:, None, None] * torch.eye(K, dtype=h.dtype)
-    u = torch.linalg.cholesky(torch.cholesky_inverse(torch.linalg.cholesky(h)), upper=True).float()
+    try:
+        u = torch.linalg.cholesky(torch.cholesky_inverse(torch.linalg.cholesky(h)), upper=True)
+    except torch.linalg.LinAlgError:  # fp32 not positive definite enough: redo in fp64
+        hd = h.double()
+        u = torch.linalg.cholesky(torch.cholesky_inverse(torch.linalg.cholesky(hd)), upper=True).float()
     del h
     q = torch.empty_like(w)
     for b1 in range(0, K, block):
@@ -123,7 +127,7 @@ def expert_hessians(x, idx, wts, experts, expert_ids):
     return h_gu, h_d, count
 
 
-def quantize_layer(cfg, args, experts, x, idx, wts, bits, inter_local, dst, i, t0, chunk=32):
+def quantize_layer(cfg, args, experts, x, idx, wts, bits, inter_local, dst, i, t0, chunk=64):
     """GPTQ one MoE layer's experts from its captured input x [T, H] and routing (idx, wts [T, k]); save to dst.
     Experts go ``chunk`` at a time to bound memory (~60 GB per layer instead of ~200 GB)."""
     t1 = time.time()
