@@ -1552,3 +1552,27 @@ On the LoudBox the TP axis is the line of 4 that already holds the combine's bus
 room (as the link model said). folded_sp keeps 2x the per-chip shared weights of folded (a 2-way, not 4-way, split).
 Left in folded_sp at 5120: the shared expert itself 854 us (linears 507 HiFi4 fp32, six eltwise ops 188, tilize /
 untilize per piece 160) - next: one custom op (fused activation, in-op tilize / row-major out, HiFi2), est. ~150 us.
+
+### Folded shared expert, round 2 + the router's fused top-k (2026-10-20, 2 x 4 bh-lb-09, L4 real weights, folded_sp)
+- The arena does not have to live through the shared expert: it was zeroed before the dispatch only because the
+  dispatch was the "every chip zeroed" barrier. The fused op now starts with its own barrier (combine barrier=: each
+  chip's port facing a chip atomically increments every port core there, cumulative persistent words; nothing remote
+  is sent before N - 1 increments of this call), so the block runs dispatch -> shared expert (all of L1) -> arena zero
+  -> fused op. Barrier cost ~19 us (SPC_SE=off probe: fused 1657 vs 1638 without the barrier).
+- Shared expert: one call over the group's G S rows (no 320-row pieces), bf8 weights / HiFi2 / bf16 gate-up (owner:
+  OK), the clamped SiLU GLU as one op (combine_rf/glu_act.py, the SFPU's clamped_silu_glu), the own block added by
+  the accumulators (an extra local row from DRAM: no tilize + add), tilize / untilize with 1 KB row pieces (cw 16).
+  Shared part vs CPU fp32: rel L2 1.7% (bf8 / HiFi2; 0.6% at bf16 / HiFi4).
+- Tried, not kept: the flat op as the shared expert (FlatLayoutOptions.single_subgrid for I <= 1024, flat_routed_expert
+  output=): works (1.9%) but 424 vs 338 us - one I 1024 expert has too few gate/up cores; a row-major down output via the
+  1D config's untilize_out: rows written but the tensor is labelled TILE, NaNs in an interleaved row-major buffer.
+- The shared rows in the fused op (SPC_SE probes): ~136 us at S640 (sender DRAM reads 43, own rows 9).
+- Router: TtRouter.joint - logits, one add with a sigmoid input activation, combine_rf/router_topk (now any even K <= 16,
+  automatic core split) writing the block's joint routing rows in 32-token pages (the planner and dispatch_prep read
+  32 B rows at any 32 B offset now); the same picks and bit-identical weights as moe_grouped_topk (640 / 640 tokens).
+  top-k + routing_pack 89 + 16 -> 9 + 48 us, planner 96 -> 73 us (32-token pages).
+| L4 MoE block, us | today (separate SE) | folded_sp v0 | + barrier, one SE call, glu_act | + own rows, cw 16 | + router top-k |
+| chunk 5120 | 4058 | 3497 | 3037 | 2884 | **2811** |
+| chunk 2048 | 2423 | 2130 | 1903 | 1885 | **1791** |
+Chunk 5120 now: router 35 + 9 + 48 | gather 39 | planner 73 | prep 30 | dispatch 482 | SE tilize 50 + gu 106 + glu 30 +
+down 78 + untilize 52 | zero 3 | fused 1751 | tilize 25.

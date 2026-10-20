@@ -53,15 +53,17 @@ void kernel_main() {
     if constexpr (__NOROUTE__) {  // (probe: no route words)
         return;
     }
+    // (a DRAM read keeps its source's 64 B alignment in L1: a row at an odd 32 B of its page lands 32 B into its slot)
+    auto so = [&](uint32_t t) { return ((ME * S + t) % PT * ROW) & 63u; };
     for (uint32_t t = t0; t < t1; ++t) {
         const uint32_t g = ME * S + t;
-        noc_async_read(ids.get_noc_addr(g / PT) + (g % PT) * ROW, rows_l1 + (t - t0) * RS, ROW);
+        noc_async_read(ids.get_noc_addr(g / PT) + (g % PT) * ROW, rows_l1 + (t - t0) * RS + so(t), ROW);
     }
     noc_async_read_barrier();
     invalidate_l1_cache();
     const uint32_t r0 = ME / C, c0 = ME % C;
     for (uint32_t t = t0; t < t1; ++t) {
-        const uint32_t* id2 = reinterpret_cast<const uint32_t*>(rows_l1 + (t - t0) * RS);  // two ids a word
+        const uint32_t* id2 = reinterpret_cast<const uint32_t*>(rows_l1 + (t - t0) * RS + so(t));  // two ids a word
         uint32_t m = 0;
         for (uint32_t k = 0; k < K / 2; ++k) {
             const uint32_t v = id2[k];

@@ -164,6 +164,7 @@ class TtK3TokenSplitMoE:
         layout_overrides=None,
         shared_tp=False,
         shared_axis=1,
+        joint_routing=False,
     ):
         """routed_only (GLM-5.3-Flash hack): only the routed experts and their combine - no router (the caller's top-k
         goes to routed()), no latent projections (d.latent = d.H: the dispatch rows are x), no shared expert; the
@@ -175,7 +176,9 @@ class TtK3TokenSplitMoE:
         expert folded in, split over each mesh row's chips (shared_axis 1; 0: each column's) - the dispatch also sends
         every token to its group-mates,
         routed(shared=) runs the chip's slice on the row's tokens between the dispatch and the experts, and the combine
-        carries the partials to their owners (its shared_rows); the chip's own partial is added to the output."""
+        carries the partials to their owners (its shared_rows); the chip's own partial is added to the output.
+        joint_routing (routed_only): routed() takes the router's joint rows (combine_rf/router_topk.py's 32-token pages:
+        ids, then weights' bf16 bits) as ids, wts None."""
         self.mesh, self.d, self.S, self.torus = mesh_device, d, S, tuple(torus)
         self.routed_only = routed_only
         assert not routed_only or d.latent == d.H, "routed_only: no latent projections (d.latent = d.H)"
@@ -420,7 +423,8 @@ class TtK3TokenSplitMoE:
         # that one is zeroed); the combine's ports drain their credits, so nothing lands after the call either.
         # Allocated here once for its address (the kernels bake it: every call's arena must land there).
         self.sparse_dispatch = os.environ.get("K3_DISPATCH", "sparse") == "sparse"
-        self.rows_pt = 32 if self.topk_custom else 1  # (routing rows per page)
+        self.joint_routing = bool(joint_routing)
+        self.rows_pt = 32 if self.topk_custom or self.joint_routing else 1  # (routing rows per page)
         # the latent down output untilized straight into this chip's rows of the dispatch buffer (layout_ops with a row
         # offset), dispatch_prep then only writes the route words: -18 us of own-row copy for +2.5 us of untilize
         self.lat_direct = self.sparse_dispatch and os.environ.get("K3_LAT_DIRECT", "1") == "1"
@@ -466,11 +470,25 @@ class TtK3TokenSplitMoE:
                 memory_config=dram,
                 mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
             )
-            ids0, wts0 = z(ttnn.uint16), z(ttnn.bfloat16)
+            if self.joint_routing:  # (the router's 32-token pages)
+                ids0, wts0 = (
+                    ttnn.from_torch(
+                        torch.zeros(self.N * S // 32, 32 * 2 * d.K, dtype=torch.int16),
+                        dtype=ttnn.uint16,
+                        layout=ttnn.ROW_MAJOR_LAYOUT,
+                        device=mesh_device,
+                        memory_config=dram,
+                        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+                    ),
+                    None,
+                )
+            else:
+                ids0, wts0 = z(ttnn.uint16), z(ttnn.bfloat16)
             g0, _ = self.gather_routing(ids0, wts0)
             ttnn.synchronize_device(mesh_device)
             for t in (ids0, wts0):
-                ttnn.deallocate(t)
+                if t is not None and t.is_allocated():
+                    ttnn.deallocate(t)
             if g0 is not getattr(self, "_rg_out", None):
                 ttnn.deallocate(g0)
         if self.shared_tp:  # (allocated before the arena: above it, not capping the L1 below it)
@@ -518,7 +536,7 @@ class TtK3TokenSplitMoE:
             cores=sorted(pcores, key=lambda c: (c[1], c[0])),
             row_pages=True,
             joint=True,
-            tokens_per_page=32 if self.topk_custom else 1,
+            tokens_per_page=self.rows_pt,
             torus=self.torus,
         )
         # deterministic combine: the planner rebuilds every chip's flat-expert schedule (the plan's schedule parameters,

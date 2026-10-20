@@ -146,10 +146,10 @@ class TtExpertsTs:
             ttnn.deallocate(self.flat.done)
             self.flat.done = shared[1]
 
-    def _block(self, s):
+    def _block(self, s, joint=False):
         from models.demos.deepseek_v3_d_p.tt.moe.tt_k3_token_split_moe import K3Dims, TtK3TokenSplitMoE
 
-        key = (id(self.mesh), s, self.H, self.K, self.E, self.shared.axis if self.shared is not None else None)
+        key = (id(self.mesh), s, self.H, self.K, self.E, self.shared.axis if self.shared is not None else None, joint)
         hit = _BLOCKS.get(key)
         # (built at the first call; rebuilt if L1 the model allocated since - e.g. a later op's first-call semaphores -
         # moved the arena: its address is baked into the kernels)
@@ -173,6 +173,7 @@ class TtExpertsTs:
                 flat_layout=FLAT_LAYOUT,
                 shared_tp=self.shared is not None,
                 shared_axis=self.shared.axis if self.shared is not None else 1,
+                joint_routing=joint,
                 # (hang hunting: block variants, e.g. {"acc_on_ports": false} or {"deterministic": true})
                 **json.loads(os.environ.get("GLM_TS_BLOCK_OPTS", "{}")),
             )
@@ -207,18 +208,20 @@ class TtExpertsTs:
     def __call__(self, x, dense=None, idx=None, wts=None, split=False, full_mesh=False):
         """x [1, 1, S/n, H] (this chip's own rows), idx / wts [1, 1, S/n, K] -> [1, 1, S/n, H] bf16 TILE, the routed
         experts' sum for this chip's rows (the split residual layout); gathered_x: all S rows as tiles (the shared
-        expert's input, valid until the next MoE layer's call)."""
+        expert's input, valid until the next MoE layer's call). wts None: idx is the router's joint rows (TtRouter.joint:
+        32-token pages of ids and weights' bf16 bits)."""
         assert split and full_mesh and idx is not None, "GLM_EXPERTS_MODE=ts: the split layout's full-mesh MoE input"
+        joint = wts is None
         s = x.shape[-2]
         n = self.mesh.get_num_devices()
         tmp = []
         if x.dtype != ttnn.bfloat16:
             x = ttnn.typecast(x, ttnn.bfloat16)
             tmp.append(x)
-        if idx.dtype != ttnn.uint16:
+        if not joint and idx.dtype != ttnn.uint16:
             idx = ttnn.typecast(idx, ttnn.uint16)
             tmp.append(idx)
-        if wts.dtype != ttnn.bfloat16:
+        if not joint and wts.dtype != ttnn.bfloat16:
             wts = ttnn.typecast(wts, ttnn.bfloat16)
             tmp.append(wts)
         import time as _t
@@ -226,7 +229,7 @@ class TtExpertsTs:
         t0 = _t.perf_counter()
         self.gathered_x = self._gather_x(x, n * s) if self.shared is None else None
         t1 = _t.perf_counter()
-        blk = self._block(s)
+        blk = self._block(s, joint)
         x2 = ttnn.reshape(x, [s, self.H])
         t2 = _t.perf_counter()
         hk = moe_hooks()
@@ -234,9 +237,9 @@ class TtExpertsTs:
         if hk and hasattr(hk, "before_moe"):  # (hang hunting: GLM_HANG_HOOKS)
             hk.before_moe(ctx)
         op0 = ttnn._ttnn.get_device_operation_id()
-        y = blk.routed(
-            x2, ttnn.reshape(idx, [s, self.K]), ttnn.reshape(wts, [s, self.K]), self.flat, shared=self.shared
-        )
+        ids2 = idx if joint else ttnn.reshape(idx, [s, self.K])
+        wts2 = None if joint else ttnn.reshape(wts, [s, self.K])
+        y = blk.routed(x2, ids2, wts2, self.flat, shared=self.shared)
         if hk and hasattr(hk, "after_moe"):
             hk.after_moe(ctx, y)
         if (

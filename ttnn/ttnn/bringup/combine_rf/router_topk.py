@@ -124,16 +124,19 @@ void kernel_main() {
 """
 
 
-def router_topk_prepare(mesh_device, *, S, E, K, route_scale=1.0, split=8, bias_mode=False):
-    """run(s, b) -> [S / 32, 32 * 2 K] uint16 row-major: 2 KB pages of 32 tokens' joint rows (s / b: [S, E] fp32
+def router_topk_prepare(mesh_device, *, S, E, K, route_scale=1.0, split=None, bias_mode=False):
+    """run(s, b) -> [S / 32, 32 * 2 K] uint16 row-major: 128 K B pages of 32 tokens' joint rows (s / b: [S, E] fp32
     TILE, DRAM interleaved); combine_plan tokens_per_page=32 reads it (and its fabric all-gather).
     bias_mode: run(bias, b) with bias the [1, E] fp32 row-major correction bias (one read per RISC): only the biased
-    scores b are read per token, each pick's score is b - bias (b = sigmoid(logits) + bias in one ttnn.add)."""
+    scores b are read per token, each pick's score is b - bias (b = sigmoid(logits) + bias in one ttnn.add). K: even,
+    <= 16 (a token's row 4 K <= 64 B). split: cores per row tile (default: the most of 8 / 4 / 2 the grid holds)."""
     import struct
 
-    assert S % 32 == 0 and E % 32 == 0 and 32 % split == 0 and 4 * K == 64
-    ET, nt, spt = E // 32, S // 32, 32 // split
     grid = mesh_device.compute_with_storage_grid_size()
+    if split is None:
+        split = next(sp for sp in (8, 4, 2) if (S // 32) * sp <= grid.x * grid.y)
+    assert S % 32 == 0 and E % 32 == 0 and 32 % split == 0 and K % 2 == 0 and 4 * K <= 64
+    ET, nt, spt = E // 32, S // 32, 32 // split
     assert nt * split <= grid.x * grid.y
     cores = [ttnn.CoreCoord(i % grid.x, i // grid.x) for i in range(nt * split)]
     crs = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in cores])
@@ -152,20 +155,29 @@ def router_topk_prepare(mesh_device, *, S, E, K, route_scale=1.0, split=8, bias_
             rt0[c.x][c.y] = base + [(i % split) * spt, scale_bits, 0, spt // 2]
             rt1[c.x][c.y] = base + [(i % split) * spt + spt // 2, scale_bits, per_risc, spt // 2]
         ct = [K, ET, spt] + list(ttnn.TensorAccessorArgs(s).get_compile_time_args())
-        ct += list(ttnn.TensorAccessorArgs(b).get_compile_time_args()) + list(ttnn.TensorAccessorArgs(out).get_compile_time_args())
+        ct += list(ttnn.TensorAccessorArgs(b).get_compile_time_args()) + list(
+            ttnn.TensorAccessorArgs(out).get_compile_time_args()
+        )
         program = ttnn.ProgramDescriptor()
-        program.cbs = [ttnn.CBDescriptor(total_size=l1, core_ranges=crs,
-                                         format_descriptors=[ttnn.CBFormatDescriptor(0, ttnn.uint32, l1)])]
+        program.cbs = [
+            ttnn.CBDescriptor(
+                total_size=l1, core_ranges=crs, format_descriptors=[ttnn.CBFormatDescriptor(0, ttnn.uint32, l1)]
+            )
+        ]
         import os
 
         src = _TOPK.replace("__PROBE__", {"noweights": "1", "noscan": "2"}.get(os.environ.get("TOPK_PROBE", ""), "0"))
         src = src.replace("__BIAS__", "1" if bias_mode else "0")
-        dm1 = ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_1, noc=ttnn.NOC.RISCV_1_default)
+        dm1 = ttnn.DataMovementConfigDescriptor(
+            processor=ttnn.DataMovementProcessor.RISCV_1, noc=ttnn.NOC.RISCV_1_default
+        )
         program.kernels = [
-            ttnn.KernelDescriptor(kernel_source=src, source_type=st, core_ranges=crs, compile_time_args=ct, runtime_args=rt0,
-                                  config=dm),
-            ttnn.KernelDescriptor(kernel_source=src, source_type=st, core_ranges=crs, compile_time_args=ct, runtime_args=rt1,
-                                  config=dm1),
+            ttnn.KernelDescriptor(
+                kernel_source=src, source_type=st, core_ranges=crs, compile_time_args=ct, runtime_args=rt0, config=dm
+            ),
+            ttnn.KernelDescriptor(
+                kernel_source=src, source_type=st, core_ranges=crs, compile_time_args=ct, runtime_args=rt1, config=dm1
+            ),
         ]
         R, C = tuple(mesh_device.shape)
         mesh_desc = ttnn.MeshProgramDescriptor()
@@ -173,8 +185,9 @@ def router_topk_prepare(mesh_device, *, S, E, K, route_scale=1.0, split=8, bias_
         return mesh_desc
 
     def run(s, b):
-        out = ttnn.allocate_tensor_on_device(ttnn.Shape([S // 32, 32 * 2 * K]), ttnn.uint16, ttnn.ROW_MAJOR_LAYOUT, mesh_device,
-                                             ttnn.DRAM_MEMORY_CONFIG)
+        out = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([S // 32, 32 * 2 * K]), ttnn.uint16, ttnn.ROW_MAJOR_LAYOUT, mesh_device, ttnn.DRAM_MEMORY_CONFIG
+        )
         k = tuple(int(t.buffer_address()) for t in (s, b, out))
         if state.get("key") != k:
             state["key"], state["desc"] = k, build(s, b, out)

@@ -490,7 +490,10 @@ void kernel_main() {
     // (JW) one page per token of its K ids then its K weights ([N S, 2 K] uint16, RP = 4 K bytes; wts = ids)
     constexpr uint32_t RP = __RPAGE__, JW = __RJOINT__, RB = 2 * K;  // (RB: one row's ids, or weights, in bytes)
     constexpr uint32_t PT = __RPT__;  // tokens per page (joint rows: PT rows of RP bytes a page; 1: a page a row)
-    static_assert(PT == 1 || (JW && RP == 64), "multi-token pages: joint rows only");
+    static_assert(PT == 1 || (JW && 64 % RP == 0), "multi-token pages: joint rows only (64 / RP rows a 64 B)");
+    // (staging stride: 64 B a row with one row a page; RP with multi-token pages - a run is one read that keeps its
+    // source's 64 B alignment, so it starts SH rows into the staging when its first row is not 64 B aligned)
+    constexpr uint32_t SR = PT == 1 ? 64 : (RP ? RP : 64), RA = 64 / SR;
     const InterleavedAddrGen<true> ids_g = {.bank_base_address = ids_addr, .page_size = RP ? RP * PT : T * 2};
     const InterleavedAddrGen<true> w_g = {.bank_base_address = w_addr, .page_size = RP ? RP * PT : T * 2};
     // (row pages land 64 bytes apart in local scratch, free until the sort: a DRAM read keeps its source's 64-byte
@@ -507,18 +510,19 @@ void kernel_main() {
             noc_async_read(get_noc_addr(0, g) + e0 * 2 - d0, dst, al64(n * 2 + d0));
             return dst + d0;
         } else {
-            const uint32_t r0 = e0 / K, rows = n / K;
+            const uint32_t r0 = e0 / K, rows = n / K, sh = r0 % RA;
             if constexpr (PT == 1) {
                 for (uint32_t r = 0; r < rows; ++r) noc_async_read(get_noc_addr(r0 + r, g), stg + r * 64, RP);
-            } else {  // (whole runs of rows per page: one read each, rows already 64 bytes apart)
+            } else {  // (whole runs of rows per page: one read each, rows SR apart)
                 for (uint32_t r = r0; r < r0 + rows;) {
                     const uint32_t first = r % PT, cnt = PT - first < r0 + rows - r ? PT - first : r0 + rows - r;
-                    noc_async_read(get_noc_addr(r / PT, g) + first * RP, stg + (r - r0) * 64, cnt * RP);
+                    noc_async_read(get_noc_addr(r / PT, g) + first * RP, stg + (r - r0 + sh) * SR, cnt * RP);
                     r += cnt;
                 }
             }
-            pk_src[npk] = stg, pk_dst[npk] = dst, pk_dw[npk] = dst_w, pk_rows[npk++] = rows;
-            stg += rows * 64;
+            pk_src[npk] = stg + sh * SR, pk_dst[npk] = dst, pk_dw[npk] = dst_w, pk_rows[npk++] = rows;
+            stg += (rows + sh) * SR;
+            stg = (stg + 63) & ~63u;
             return dst;
         }
     };
@@ -542,8 +546,8 @@ void kernel_main() {
         // (unpacked by local NoC copies, one per row and array: scalar L1 copies cost ~50 cycles a word here)
         for (uint32_t q = 0; q < npk; ++q) {
             for (uint32_t r = 0; r < pk_rows[q]; ++r) {
-                noc_async_read(get_noc_addr(pk_src[q] + r * 64), pk_dst[q] + r * RB, RB);
-                if (pk_dw[q]) noc_async_read(get_noc_addr(pk_src[q] + r * 64 + RB), pk_dw[q] + r * RB, RB);
+                noc_async_read(get_noc_addr(pk_src[q] + r * SR), pk_dst[q] + r * RB, RB);
+                if (pk_dw[q]) noc_async_read(get_noc_addr(pk_src[q] + r * SR + RB), pk_dw[q] + r * RB, RB);
             }
         }
         noc_async_read_barrier();

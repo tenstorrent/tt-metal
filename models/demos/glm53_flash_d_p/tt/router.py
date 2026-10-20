@@ -61,11 +61,42 @@ class TtRouter:
         self._bias_rows = {}  # rows -> the bias repeated over them (the fused gate takes a full-shape bias)
         self.zeros = replicate(mesh, torch.zeros(1, 1, self.max_rows, E), dtype=ttnn.bfloat16)
         self.cfg = hifi4_config()
+        self._bias_rm = None  # (joint(): the bias as a row-major fp32 row, the custom top-k's input)
+        self._rtopk = {}
 
     def _rows(self, t, s):
         if s == self.max_rows:
             return t
         return ttnn.slice(t, [0, 0, 0, 0], [1, 1, s, self.num_experts])
+
+    def joint(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        """x: [1, 1, S, H] TILE (the chip's own rows) -> the joint routing rows [S / 32, 32 * 2 k] uint16 row-major
+        (per token its k expert ids, then its k weights' bf16 bits, 32 tokens a page): combine_rf/router_topk.py on
+        b = sigmoid(logits) + bias (one add with a sigmoid on its input), the weights from b - bias; selection in fp32
+        as moe_grouped_topk's fp32_selection. The token-split MoE block takes these rows as they are."""
+        from ttnn.bringup.combine_rf.router_topk import router_topk_prepare
+
+        mc = ttnn.DRAM_MEMORY_CONFIG
+        s = x.shape[-2]
+        logits = ttnn.linear(
+            x,
+            self.w,
+            dtype=ttnn.float32,
+            program_config=linear_config(x, self.w, ttnn.float32),
+            compute_kernel_config=mm_config(self.cfg),
+            memory_config=mc,
+        )
+        b = ttnn.add(logits, self.bias, input_tensor_a_activations=[ttnn.UnaryOpType.SIGMOID], memory_config=mc)
+        ttnn.deallocate(logits)
+        if self._bias_rm is None:
+            self._bias_rm = ttnn.to_layout(ttnn.reshape(self.bias, [1, self.num_experts]), ttnn.ROW_MAJOR_LAYOUT)
+        if s not in self._rtopk:
+            self._rtopk[s] = router_topk_prepare(
+                self.mesh, S=s, E=self.num_experts, K=self.top_k, route_scale=self.route_scale, bias_mode=True
+            )
+        rows = self._rtopk[s](self._bias_rm, ttnn.reshape(b, [s, self.num_experts]))
+        ttnn.deallocate(b)
+        return rows
 
     def __call__(self, x: ttnn.Tensor, dense: bool = True):
         """x: replicated [1, 1, S, H] TILE (bf16 or fp32), S a multiple of 32 and <= max_rows.
