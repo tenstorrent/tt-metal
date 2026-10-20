@@ -229,6 +229,12 @@ class Reads(unittest.TestCase):
     def test_areas_are_the_non_null_ones(self):
         self.assertEqual(self.plan.areas, {"heartbeat": L1Read(0x1F80, 4), "routing_table": L1Read(0x3F440, 2704)})
 
+    def test_the_heartbeat_is_the_heartbeat_areas_word(self):
+        self.assertEqual(self.plan.heartbeat, RegisterRead(0x1F80))
+        manifest = copy.deepcopy(MANIFEST)
+        manifest["archs"]["wormhole_b0"]["areas"]["heartbeat"] = None
+        self.assertIsNone(get_read_plan(manifest).heartbeat)
+
     def test_core_registers_keep_the_arrays_order(self):
         self.assertEqual(
             self.plan.core_registers,
@@ -304,6 +310,13 @@ class BadManifests(unittest.TestCase):
             named = rf"archs\.wormhole_b0\.core_registers\[1\]\.size is {size}; .*one 4-byte word"
             with self.subTest(size), self.assertRaisesRegex(ManifestError, named):
                 get_read_plan(manifest)
+
+    def test_a_heartbeat_that_isnt_one_word_is_rejected(self):
+        manifest = copy.deepcopy(MANIFEST)
+        manifest["archs"]["wormhole_b0"]["areas"]["heartbeat"]["size"] = 8
+        named = r"archs\.wormhole_b0\.areas\.heartbeat\.size is 8; capture samples it as one 4-byte word"
+        with self.assertRaisesRegex(ManifestError, named):
+            get_read_plan(manifest)
 
 
 if __name__ == "__main__":
