@@ -1867,6 +1867,8 @@ class SRCA_REUSE_COUNT(RuntimeParameter):
 
 @dataclass
 class PARTIAL_FACE(RuntimeParameter):
+    # Only PARTIAL_FACE_PACK is read by C++ sources. PARTIAL_FACE_A/B/MATH are perf-schema-only: they
+    # feed the partial_a/partial_b/partial_face_math perf columns (see helpers/perf/test_schemas.py).
     partial_a: bool = False
     partial_face_pack: bool = False
     partial_b: bool = False
