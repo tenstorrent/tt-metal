@@ -331,10 +331,13 @@ FORCE_INLINE void scale_rows_from_lane(
     make_lane_masks(lanes, 1);
     for (uint32_t b = 0; b < 8; ++b) {
         const uint32_t off = band_off(b);
-        // broadcast the column across the subvectors (single chain)
-        TT_SFPLOAD(L0, IM, ADDR_MOD_7, src * DT + off + group_off(group));
-        TTI_SFPNOP;
-        TTI_SFPMUL(L0, L4, C0, L0, 0);
+        // broadcast the column across the subvectors (single chain). The lane is extracted under the lane
+        // mask as a condition code (not a multiply: the other lanes of a statistics tile may hold NaN/inf).
+        TT_SFPLOAD(L2, IM, ADDR_MOD_7, src * DT + off + group_off(group));
+        TTI_SFPMOV(0, C0, L0, 0);
+        TTI_SFPSETCC(0, L4, 0, sfpi::SFPSETCC_MOD1_LREG_NE0);
+        TTI_SFPMOV(0, L2, L0, 0);
+        TTI_SFPENCC(0, 0, 0, 0);
         TTI_SFPNOP;
         TTI_SFPSHFT2(0, L0, L2, ROR1);
         TTI_SFPNOP;
@@ -368,6 +371,71 @@ FORCE_INLINE void scale_rows_from_lane(
         TT_SFPSTORE(L3, IM, ADDR_MOD_7, t + ODD);
         TT_SFPSTORE(L5, IM, ADDR_MOD_7, t + RIGHT);
         TT_SFPSTORE(L6, IM, ADDR_MOD_7, t + RIGHT + ODD);
+    }
+}
+
+// Exact projection of one stream tile on the SFPU: out[row][m] += sum_f x[row][f] * F[f][m] for the 24 outputs
+// m. F comes as three "row-replicated" tiles at dest slots frep0..frep0+2: band r of tile q holds F[:, 8q + r]
+// as four identical rows (so a slot load at (band r, slot s) gives lane (i, c) the value F[f(s, c), 8q + r] for
+// every row i), `mask` is a tile whose band k holds 1.0 at even column 2k (slot load (band k, +0) = the lane-k
+// mask). Per band and m: 4 slot products summed lane-wise, a subvector rotate-add tree (every lane = the row's
+// dot product), the lane of column m kept and added into the out slot of m's column group. Exact fp32 (FMAs,
+// adds, multiplies by 1.0/0.0 and lane rotates), ~28 instructions per (band, m).
+FORCE_INLINE void proj_exact_tile(uint32_t out, uint32_t x, uint32_t /*unused*/, uint32_t frep0, uint32_t mask) {
+    for (uint32_t b = 0; b < 8; ++b) {
+        const uint32_t off = band_off(b);
+        const uint32_t xo = x * DT + off;
+        TT_SFPLOAD(L0, IM, ADDR_MOD_7, xo);
+        TT_SFPLOAD(L1, IM, ADDR_MOD_7, xo + ODD);
+        TT_SFPLOAD(L2, IM, ADDR_MOD_7, xo + RIGHT);
+        TT_SFPLOAD(L3, IM, ADDR_MOD_7, xo + RIGHT + ODD);
+        for (uint32_t m = 0; m < 24; ++m) {
+            const uint32_t fo = (frep0 + (m >> 3)) * DT + band_off(m & 7);
+            TT_SFPLOAD(L4, IM, ADDR_MOD_7, fo);
+            TTI_SFPNOP;
+            TTI_SFPMUL(L0, L4, C0, L5, 0);
+            TT_SFPLOAD(L4, IM, ADDR_MOD_7, fo + ODD);
+            TTI_SFPNOP;
+            TTI_SFPMAD(L1, L4, L5, L5, 0);
+            TT_SFPLOAD(L4, IM, ADDR_MOD_7, fo + RIGHT);
+            TTI_SFPNOP;
+            TTI_SFPMAD(L2, L4, L5, L5, 0);
+            TT_SFPLOAD(L4, IM, ADDR_MOD_7, fo + RIGHT + ODD);
+            TTI_SFPNOP;
+            TTI_SFPMAD(L3, L4, L5, L5, 0);
+            TTI_SFPNOP;
+            // subvector tree: every lane of a row <- the row's sum over the 8 lanes
+            TTI_SFPSHFT2(0, L5, L6, ROR1);
+            TTI_SFPNOP;
+            TTI_SFPADD(L5, C1, L6, L5, 0);
+            TTI_SFPNOP;
+            TTI_SFPSHFT2(0, L5, L6, ROR1);
+            TTI_SFPNOP;
+            TTI_SFPSHFT2(0, L6, L6, ROR1);
+            TTI_SFPNOP;
+            TTI_SFPADD(L5, C1, L6, L5, 0);
+            TTI_SFPNOP;
+            TTI_SFPSHFT2(0, L5, L6, ROR1);
+            TTI_SFPNOP;
+            TTI_SFPSHFT2(0, L6, L6, ROR1);
+            TTI_SFPNOP;
+            TTI_SFPSHFT2(0, L6, L6, ROR1);
+            TTI_SFPNOP;
+            TTI_SFPSHFT2(0, L6, L6, ROR1);
+            TTI_SFPNOP;
+            TTI_SFPADD(L5, C1, L6, L5, 0);
+            // keep the lane of column m and add into out's slot of m's group
+            const uint32_t group = (m >> 4) * 2 + (m & 1);
+            const uint32_t lane = (m & 15) >> 1;
+            TT_SFPLOAD(L7, IM, ADDR_MOD_7, mask * DT + band_off(lane));
+            const uint32_t oo = out * DT + off + group_off(group);
+            TT_SFPLOAD(L6, IM, ADDR_MOD_7, oo);
+            TTI_SFPMUL(L5, L7, C0, L7, 0);
+            TTI_SFPNOP;
+            TTI_SFPADD(L6, C1, L7, L6, 0);
+            TTI_SFPNOP;
+            TT_SFPSTORE(L6, IM, ADDR_MOD_7, oo);
+        }
     }
 }
 
