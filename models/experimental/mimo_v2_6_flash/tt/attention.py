@@ -528,10 +528,11 @@ class TtMiMoAttention:
                 p: per_chip(plan, m, ttnn.bfloat16, ttnn.TILE_LAYOUT) for p, m in slot_owner_masks(tp, self.rep).items()
             }
 
-        # Prefill SDPA accumulates in fp32 dest (MIMO_SDPA_FP32_ACC=0 turns it off for A/B). Decode SDPA stays
-        # in bf16 dest: the paged decode SDPA returns non-finite values with fp32 dest.
+        # MIMO_SDPA_FP32_ACC=1: prefill SDPA accumulates in fp32 dest (positions >= 2 KL -9% with stock-packed experts).
+        # Off by default: its larger circular buffers clash with decode's persistent L1 buffers once the vLLM adapter
+        # warms the 2048-token prefill chunks. Decode SDPA stays in bf16 dest (fp32 dest gave non-finite values).
         self.sdpa_config = compute_config(
-            ttnn.MathFidelity.HiFi4, fp32_acc=os.environ.get("MIMO_SDPA_FP32_ACC", "1") == "1", packer_l1_acc=False
+            ttnn.MathFidelity.HiFi4, fp32_acc=os.environ.get("MIMO_SDPA_FP32_ACC", "0") == "1", packer_l1_acc=False
         )
         self.decode_sdpa_config = compute_config(ttnn.MathFidelity.HiFi4, fp32_acc=False, packer_l1_acc=False)
         self.decode_sdpa_program = ttnn.SDPAProgramConfig(
