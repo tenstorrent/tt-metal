@@ -234,13 +234,21 @@ def test_auto_C_slice_from_output_shard(device):
 @pytest.mark.parametrize(
     "M,K,N,C_slice_M_tiles,C_slice_N_tiles,K_chunk_tiles,subblock",
     [
-        (7 * TILE, 3 * TILE, 11 * TILE, 3, 4, 0, (0, 0)),  # 3x3 blocks, ragged right and bottom edge
+        (7 * TILE, 3 * TILE, 11 * TILE, 3, 4, None, (None, None)),  # 3x3 blocks, ragged right and bottom edge
         (5 * TILE, 8 * TILE, 5 * TILE, 4, 4, 2, (2, 2)),  # 2x2 blocks with a 1-tile edge strip each way
-        (2 * TILE, 100, 3 * TILE, 2, 3, 0, (1, 3)),  # K=100: last K tile is 4 columns wide, must be zeroed
+        (2 * TILE, 100, 3 * TILE, 2, 3, None, (1, 3)),  # K=100: last K tile is 4 columns wide, must be zeroed
         (4 * TILE, 6 * TILE, 6 * TILE, 4, 6, 1, (4, 1)),  # K_chunk_tiles=1: six K steps, spill/reload every step
         (3 * TILE, 4 * TILE, 3 * TILE, 3, 3, 4, (3, 1)),  # single K step: no partials at all
-        (7 * TILE, 2 * TILE, 5 * TILE, 7, 5, 0, (2, 4)),  # subblock does not divide the 7x5 C slice: padded to 8x8
-        (4 * TILE, 3 * TILE, 9 * TILE, 4, 3, 0, (2, 2)),  # interior slices' padded-N overshoot overlaps the neighbour
+        (7 * TILE, 2 * TILE, 5 * TILE, 7, 5, None, (2, 4)),  # subblock does not divide the 7x5 C slice: padded to 8x8
+        (
+            4 * TILE,
+            3 * TILE,
+            9 * TILE,
+            4,
+            3,
+            None,
+            (2, 2),
+        ),  # interior slices' padded-N overshoot overlaps the neighbour
         (3 * TILE, 4 * TILE, 3 * TILE, 3, 3, 2, (2, 2)),  # non-dividing subblock with K spill/reload through partials
     ],
 )
@@ -379,7 +387,7 @@ def test_zeros_give_exact_zero(device):
 # ----------------------------------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("K_chunk_tiles", [0, 1], ids=["single_K_chunk", "K_spill"])
+@pytest.mark.parametrize("K_chunk_tiles", [None, 1], ids=["single_K_chunk", "K_spill"])
 @pytest.mark.parametrize("bcast", [True, False], ids=["bcast_in1", "batched_in1"])
 def test_batch(device, bcast, K_chunk_tiles):
     gx, gy = _grid(device)
@@ -631,7 +639,7 @@ def test_fp32_dest_acc_and_fp32_out(device, C_slice_M_tiles, C_slice_N_tiles):
 
 @pytest.mark.parametrize(
     "C_slice_M_tiles,C_slice_N_tiles,subblock",
-    [(2, 2, (0, 0)), (3, 3, (2, 2))],
+    [(2, 2, (None, None)), (3, 3, (2, 2))],
     ids=["dividing_subblock", "padded_subblock"],
 )
 def test_packer_l1_acc(device, C_slice_M_tiles, C_slice_N_tiles, subblock):
@@ -680,12 +688,12 @@ def _bias_row(N):
 
 # name, (M, K, N) in tiles, C slice, K_chunk_tiles, cores (x1, y1), packer_l1_acc
 BIAS_CASES = [
-    ("single_K_chunk", (4, 4, 4), (2, 2), 0, (1, 1), False),
+    ("single_K_chunk", (4, 4, 4), (2, 2), None, (1, 1), False),
     ("K_spill", (2, 6, 4), (2, 2), 1, (1, 0), False),
     ("K_spill_packer_l1_acc", (2, 8, 4), (2, 4), 2, (0, 0), True),
-    ("several_C_slices_per_core", (8, 2, 8), (2, 2), 0, (1, 0), False),
+    ("several_C_slices_per_core", (8, 2, 8), (2, 2), None, (1, 0), False),
     ("several_C_slices_K_spill", (4, 4, 6), (2, 3), 1, (0, 0), False),
-    ("ragged_N_padded_subblock", (3, 3, 5), (3, 5), 0, (0, 0), False),
+    ("ragged_N_padded_subblock", (3, 3, 5), (3, 5), None, (0, 0), False),
 ]
 
 
@@ -714,7 +722,7 @@ def test_fused_bias_is_exact_on_zero_A(device):
     assert torch.equal(out.to(torch.float32), bias.to(torch.float32).expand(1, 1, M, N))
 
 
-@pytest.mark.parametrize("K_chunk_tiles", [0, 1], ids=["single_K_chunk", "K_spill"])
+@pytest.mark.parametrize("K_chunk_tiles", [None, 1], ids=["single_K_chunk", "K_spill"])
 def test_fused_bias_batched_A(device, K_chunk_tiles):
     M, K, N = 2 * TILE, 2 * TILE, 4 * TILE
     torch.manual_seed(5)
@@ -755,7 +763,7 @@ ACTIVATIONS = [
 
 
 @pytest.mark.parametrize("with_bias", [True, False], ids=["bias", "no_bias"])
-@pytest.mark.parametrize("K_chunk_tiles", [0, 1], ids=["single_K_chunk", "K_spill"])
+@pytest.mark.parametrize("K_chunk_tiles", [None, 1], ids=["single_K_chunk", "K_spill"])
 @pytest.mark.parametrize("name,op,torch_op,rtol", ACTIVATIONS, ids=[a[0] for a in ACTIVATIONS])
 def test_fused_activation(device, name, op, torch_op, rtol, K_chunk_tiles, with_bias):
     M, K, N = 4 * TILE, 3 * TILE, 4 * TILE
@@ -802,15 +810,15 @@ def test_ragged_batched_spill_all_at_once(device):
 # S mod T are idle. K_tiles = 2 fits in one auto K chunk, so only the two cases that set K_chunk_tiles below
 # K_tiles spill partials through C_partials.
 SUBBLOCK_SPLITS = [
-    # name, C slice (M, N tiles), subblock (M, N tiles), K_tiles, K_chunk_tiles. At four threads: fewer
+    # name, C slice (M, N tiles), subblock (M, N tiles), K_tiles, K_chunk_tiles (None = auto). At four threads: fewer
     # subblocks than threads, a last round with idle threads, full rounds, and a padded C slice.
-    ("one_subblock", (2, 2), (2, 2), 2, 0),
-    ("two_subblocks", (2, 4), (2, 2), 2, 0),
-    ("three_subblocks", (3, 2), (1, 2), 2, 0),
-    ("five_subblocks", (5, 2), (1, 2), 2, 0),
-    ("six_subblocks", (3, 4), (1, 2), 2, 0),
-    ("eight_subblocks", (4, 4), (1, 2), 2, 0),
-    ("padded_slice_four_subblocks", (3, 3), (2, 2), 2, 0),
+    ("one_subblock", (2, 2), (2, 2), 2, None),
+    ("two_subblocks", (2, 4), (2, 2), 2, None),
+    ("three_subblocks", (3, 2), (1, 2), 2, None),
+    ("five_subblocks", (5, 2), (1, 2), 2, None),
+    ("six_subblocks", (3, 4), (1, 2), 2, None),
+    ("eight_subblocks", (4, 4), (1, 2), 2, None),
+    ("padded_slice_four_subblocks", (3, 3), (2, 2), 2, None),
     ("three_subblocks_K_spill", (3, 2), (1, 2), 4, 2),
     ("five_subblocks_K_spill", (5, 2), (1, 2), 4, 1),
 ]
@@ -1251,7 +1259,7 @@ def test_auto_placement_rejects_a_C_slice(device, expect_error):
                 ttnn.BufferType.L1,
                 _shard(_rect(0, 0, 0, 0), [2 * TILE, 4 * TILE]),
             ),
-            "exactly one C slice per core",
+            "is the C slice",
         ),
         # Auto-config (no program_config), batched A and batched B: batch cannot be fused, so a block-sharded
         # output must be rejected with the actionable batch message.
@@ -1268,7 +1276,7 @@ def test_auto_placement_rejects_a_C_slice(device, expect_error):
         "subblock_too_big",
         "slice_does_not_fit_l1",
         "explicit_K_chunk_does_not_fit",
-        "sharded_multi_block",
+        "C_slice_not_the_shard",
         "auto_config_batched_a_and_b_block_sharded_out",
     ],
 )
