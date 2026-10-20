@@ -142,7 +142,9 @@ FORCE_INLINE bool run_sender_channel_step_speedy(
                     busy = internal_::eth_txq_is_busy(sender_txq_id);
                 }
             }
-            internal_::eth_send_packet_bytes_unsafe(sender_txq_id, src_addr, dest_addr, payload_size_bytes);
+            // Round up to whole 16B ethernet words; see send_next_data.
+            internal_::eth_send_packet_bytes_unsafe(
+                sender_txq_id, src_addr, dest_addr, align_power_of_2(payload_size_bytes, 16));
 
             // Note: We can only advance to the next buffer index if we have fully completed the send (both the payload
             // and sync messages)
