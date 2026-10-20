@@ -1687,9 +1687,34 @@ def test_sparse_push_tree(mesh_device):
                 pages_per_packet=pages_per_packet,
                 banks=_DRAM_BANKS,
             )
+
+            # Planning chains as each path runs them: today's plan op (with its rewrite) + table gather, and the plan op
+            # without rewrite + table gather + the dimension-ordered planner (from those tables).
+            def base_plan(rewrite):
+                t, _ = ttnn.experimental.sparse_push_plan(
+                    idx_natural,
+                    num_devices=n_dev,
+                    stripe_chunk=stripe_chunk,
+                    max_rows=cache_tokens,
+                    pages_per_packet=pages_per_packet,
+                    banks=_DRAM_BANKS,
+                    chunk_start=start,
+                    rewrite=rewrite,
+                )
+                _shard_over_mesh(t, mesh_device)
+                ttnn.experimental.high_bw_all_gather(t, dim=2, output_tensor=tables, cluster_axis=None, num_links=links)
+
+            t_today_plan = timed(lambda: base_plan(True))
+            t_slim_plan = timed(lambda: base_plan(False))
+            base_plan(False)
             streams, idx_tree, *_ = tree_plan()
             ttnn.synchronize_device(mesh_device)
             t_plan = timed(lambda: tree_plan())
+            t_chain = timed(lambda: (base_plan(False), tree_plan()))
+            logger.info(
+                f"layer {layer}: planning today (plan op + table gather) {t_today_plan:.0f} us; dimension-ordered: plan op "
+                f"without rewrite + table gather {t_slim_plan:.0f} us + planner {t_plan:.0f} us = {t_chain:.0f} us"
+            )
             ref, ref_maps, stats = _tree_plan_records(
                 natural,
                 n_dev,

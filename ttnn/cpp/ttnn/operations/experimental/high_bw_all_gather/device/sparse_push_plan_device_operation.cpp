@@ -172,6 +172,9 @@ tt::tt_metal::ProgramDescriptor SparsePushPlanDeviceOperation::create_descriptor
     if (std::getenv("SPARSE_PUSH_PLAN_TIMING")) {
         kernel.defines.emplace_back("SPARSE_PUSH_PLAN_TIMING", "1");
     }
+    if (!attrs.rewrite) {
+        kernel.defines.emplace_back("PLAN_NO_REWRITE", "1");
+    }
     kernel.config = tt::tt_metal::DataMovementConfigDescriptor{
         .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = tt::tt_metal::NOC::RISCV_0_default};
 
@@ -220,7 +223,8 @@ std::vector<Tensor> sparse_push_plan(
     uint32_t max_rows,
     uint32_t pages_per_packet,
     uint32_t banks,
-    const std::optional<Tensor>& chunk_start) {
+    const std::optional<Tensor>& chunk_start,
+    bool rewrite) {
     using Op = ttnn::operations::experimental::high_bw_all_gather::SparsePushPlanDeviceOperation;
     return ttnn::device_operation::launch<Op>(
         Op::operation_attributes_t{
@@ -228,7 +232,8 @@ std::vector<Tensor> sparse_push_plan(
             .stripe_chunk = stripe_chunk,
             .max_rows = max_rows,
             .pages_per_packet = pages_per_packet,
-            .banks = banks},
+            .banks = banks,
+            .rewrite = rewrite},
         Op::tensor_args_t{.indices = indices, .chunk_start = chunk_start});
 }
 

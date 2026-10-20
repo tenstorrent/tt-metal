@@ -71,9 +71,10 @@ std::vector<Tensor> sparse_push_plan(
     uint32_t max_rows,
     uint32_t pages_per_packet,
     uint32_t banks,
-    const std::optional<Tensor>& chunk_start) {
+    const std::optional<Tensor>& chunk_start,
+    bool rewrite) {
     return ttnn::prim::sparse_push_plan(
-        indices, num_devices, stripe_chunk, max_rows, pages_per_packet, banks, chunk_start);
+        indices, num_devices, stripe_chunk, max_rows, pages_per_packet, banks, chunk_start, rewrite);
 }
 
 std::vector<Tensor> sparse_push_tree_plan(

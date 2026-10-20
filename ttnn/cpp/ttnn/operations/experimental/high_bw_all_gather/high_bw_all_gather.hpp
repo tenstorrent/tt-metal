@@ -63,7 +63,8 @@ std::vector<Tensor> sparse_push_plan(
     uint32_t max_rows,
     uint32_t pages_per_packet,
     uint32_t banks,
-    const std::optional<Tensor>& chunk_start = std::nullopt);
+    const std::optional<Tensor>& chunk_start = std::nullopt,
+    bool rewrite = true);
 
 // PROTOTYPE on-device tree-push planner: returns {sender streams, compact indices, slot table}
 // (see device/sparse_push_tree_plan_device_operation.hpp).

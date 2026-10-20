@@ -171,7 +171,8 @@ void bind_experimental_high_bw_all_gather_operation(nb::module_& mod) {
         nb::arg("max_rows"),
         nb::arg("pages_per_packet"),
         nb::arg("banks"),
-        nb::arg("chunk_start") = nb::none());
+        nb::arg("chunk_start") = nb::none(),
+        nb::arg("rewrite") = true);
 
     ttnn::bind_function<"sparse_push_tree_plan", "ttnn.experimental.">(
         mod,

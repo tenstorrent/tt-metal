@@ -210,6 +210,9 @@ void kernel_main() {
     wait_flag(or_go);
     or_chunks(sync[0], sync[1], sync[2]);
     *or_done = 1;
+#if defined(PLAN_NO_REWRITE)
+    return;  // its half of the OR is all the helper does without the rewrite
+#endif
     wait_flag(ready);
     rewrite(unit_start + rewrite_split, unit_start + unit_count);
     return;
@@ -325,6 +328,12 @@ void kernel_main() {
     barrier();
     PLAN_STAMP(2);
 
+#if defined(PLAN_NO_REWRITE)
+    // Without the rewrite only the header is left: core 0 gathers every block count for the per-owner totals.
+    if (core_idx != 0) {
+        return;
+    }
+#endif
     // Assemble what this core's rewrite needs: every active block count, and the reduced bitmap words and in-block
     // prefixes of the chunks its own indices touched (a chunk lies inside one reducer's range).
     for (uint32_t c = 0; c < cores; ++c) {
@@ -335,6 +344,7 @@ void kernel_main() {
                 core_noc(c, image_l1 + (counts_off + cb0) * 4), image_l1 + (counts_off + cb0) * 4, (cb1 - cb0) * 4);
         }
     }
+#if !defined(PLAN_NO_REWRITE)
     // Runs of consecutive dirty chunks within one reducer's range are fetched with one read per field.
     const uint32_t range_words = blocks_per_core * words_per_block;
     uint32_t run_start = 0, run_len = 0, run_owner = 0;
@@ -365,6 +375,7 @@ void kernel_main() {
         }
     }
     flush_run();
+#endif
     noc_async_read_barrier();
     invalidate_l1_cache();
     PLAN_STAMP(3);
@@ -409,6 +420,10 @@ void kernel_main() {
         write_span(0, bitmap_off * 4);  // header and per-owner counts
     }
 
+#if defined(PLAN_NO_REWRITE)
+    noc_async_write_barrier();
+    return;
+#endif
     *ready = 1;  // NCRISC may start its share of the rewrite
     rewrite(unit_start, unit_start + rewrite_split);
 #if defined(SPARSE_PUSH_PLAN_TIMING) && !defined(REWRITE_HELPER)

@@ -61,6 +61,7 @@ struct SparsePushPlanParams {
     uint32_t max_rows = 0;
     uint32_t pages_per_packet = 0;
     uint32_t banks = 0;
+    bool rewrite = true;  // false: table only (the tree planner rewrites the indices itself)
 };
 
 struct SparsePushPlanInputs {
@@ -94,6 +95,7 @@ std::vector<Tensor> sparse_push_plan(
     uint32_t max_rows,
     uint32_t pages_per_packet,
     uint32_t banks,
-    const std::optional<Tensor>& chunk_start = std::nullopt);
+    const std::optional<Tensor>& chunk_start = std::nullopt,
+    bool rewrite = true);
 
 }  // namespace ttnn::prim
