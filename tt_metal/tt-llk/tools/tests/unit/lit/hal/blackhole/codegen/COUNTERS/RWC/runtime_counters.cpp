@@ -11,14 +11,15 @@
 
 #include <cstdint>
 
-#include "hal/counters/rwc.h"
+#include "hal/counters.h"
 
-namespace rwc = hal::counters::rwc;
+namespace counters = hal::counters;
+namespace rwc      = hal::counters::rwc;
 
 extern "C" __attribute__((noinline, used)) void runtime_next_face(std::uint32_t b, std::uint32_t d)
 {
     const auto face = rwc::MathCounter {.src_b = rwc::Set(b), .dest = rwc::AdvanceAndReset(d), .flip = rwc::Src::A | rwc::Src::B};
-    rwc::set(face);
+    counters::set(face);
 }
 
 extern "C" __attribute__((noinline, used)) void reference_runtime_next_face(std::uint32_t b, std::uint32_t d)
@@ -31,7 +32,7 @@ extern "C" __attribute__((noinline, used)) void reference_runtime_next_face(std:
 extern "C" __attribute__((noinline, used)) void runtime_increment_dest(std::uint32_t d)
 {
     const auto rows = rwc::MathCounter {.dest = rwc::Increment(d)};
-    rwc::set(rows);
+    counters::set(rows);
 }
 
 extern "C" __attribute__((noinline, used)) void reference_runtime_increment_dest(std::uint32_t d)
@@ -42,7 +43,7 @@ extern "C" __attribute__((noinline, used)) void reference_runtime_increment_dest
 extern "C" __attribute__((noinline, used)) void runtime_advance_and_reset_dest(std::uint32_t d)
 {
     const auto base = rwc::MathCounter {.dest = rwc::AdvanceAndReset(d)};
-    rwc::set(base);
+    counters::set(base);
 }
 
 extern "C" __attribute__((noinline, used)) void reference_runtime_advance_and_reset_dest(std::uint32_t d)
@@ -53,7 +54,7 @@ extern "C" __attribute__((noinline, used)) void reference_runtime_advance_and_re
 extern "C" __attribute__((noinline, used)) void runtime_increment_and_save_dest(std::uint32_t d)
 {
     const auto save = rwc::MathCounter {.dest = rwc::IncrementAndSave(d)};
-    rwc::set(save);
+    counters::set(save);
 }
 
 extern "C" __attribute__((noinline, used)) void reference_runtime_increment_and_save_dest(std::uint32_t d)
@@ -64,7 +65,7 @@ extern "C" __attribute__((noinline, used)) void reference_runtime_increment_and_
 extern "C" __attribute__((noinline, used)) void runtime_set_and_increment(std::uint32_t a, std::uint32_t d)
 {
     const auto mixed = rwc::MathCounter {.src_a = rwc::Set(a), .dest = rwc::Increment(d)};
-    rwc::set(mixed);
+    counters::set(mixed);
 }
 
 extern "C" __attribute__((noinline, used)) void reference_runtime_set_and_increment(std::uint32_t a, std::uint32_t d)

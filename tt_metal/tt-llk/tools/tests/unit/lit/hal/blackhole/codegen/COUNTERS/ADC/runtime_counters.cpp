@@ -11,14 +11,15 @@
 
 #include <cstdint>
 
-#include "hal/counters/adc.h"
+#include "hal/counters.h"
 
-namespace adc = hal::counters::adc;
+namespace counters = hal::counters;
+namespace adc      = hal::counters::adc;
 
 extern "C" __attribute__((noinline, used)) void runtime_set_xy(std::uint32_t x, std::uint32_t y)
 {
     const auto xy_counters = adc::AddrCounter {.channel0 = {.x = x, .y = y}}.for_clients<adc::Client::Unpacker0>();
-    adc::set(xy_counters);
+    counters::set(xy_counters);
 }
 
 extern "C" __attribute__((noinline, used)) void reference_runtime_set_xy(std::uint32_t x, std::uint32_t y)
@@ -31,7 +32,7 @@ extern "C" __attribute__((noinline, used)) void reference_runtime_set_xy(std::ui
 extern "C" __attribute__((noinline, used)) void runtime_set_single_counter(std::uint32_t z)
 {
     const auto z_counter = adc::AddrCounter {.channel1 = {.z = z}}.for_clients<adc::Client::Unpacker1>();
-    adc::set(z_counter);
+    counters::set(z_counter);
 }
 
 extern "C" __attribute__((noinline, used)) void reference_runtime_set_single_counter(std::uint32_t z)
@@ -42,7 +43,7 @@ extern "C" __attribute__((noinline, used)) void reference_runtime_set_single_cou
 extern "C" __attribute__((noinline, used)) void runtime_set_x_both_channels(std::uint32_t x0, std::uint32_t x1)
 {
     const auto x_counters = adc::AddrCounter {.channel0 = {.x = x1}, .channel1 = {.x = x0}}.for_clients<adc::Client::Packers>();
-    adc::set(x_counters);
+    counters::set(x_counters);
 }
 
 extern "C" __attribute__((noinline, used)) void reference_runtime_set_x_both_channels(std::uint32_t x0, std::uint32_t x1)
@@ -55,7 +56,7 @@ extern "C" __attribute__((noinline, used)) void reference_runtime_set_x_both_cha
 extern "C" __attribute__((noinline, used)) void runtime_set_zw(std::uint32_t z, std::uint32_t w)
 {
     const auto zw_counters = adc::AddrCounter {.channel1 = {.z = z, .w = w}}.for_clients<adc::Client::Packers>();
-    adc::set(zw_counters);
+    counters::set(zw_counters);
 }
 
 extern "C" __attribute__((noinline, used)) void reference_runtime_set_zw(std::uint32_t z, std::uint32_t w)
@@ -68,7 +69,7 @@ extern "C" __attribute__((noinline, used)) void reference_runtime_set_zw(std::ui
 extern "C" __attribute__((noinline, used)) void runtime_increment_zw(std::uint32_t z, std::uint32_t w)
 {
     const auto zw_increment = adc::AddrCounter {.action = adc::Action::Increment, .channel0 = {.z = z, .w = w}}.for_clients<adc::Client::Packers>();
-    adc::set(zw_increment);
+    counters::set(zw_increment);
 }
 
 extern "C" __attribute__((noinline, used)) void reference_runtime_increment_zw(std::uint32_t z, std::uint32_t w)
@@ -81,7 +82,7 @@ extern "C" __attribute__((noinline, used)) void reference_runtime_increment_zw(s
 extern "C" __attribute__((noinline, used)) void runtime_advance_and_reset_xy(std::uint32_t x, std::uint32_t y)
 {
     const auto xy_reload = adc::AddrCounter {.action = adc::Action::AdvanceAndReset, .channel0 = {.x = x, .y = y}}.for_clients<adc::Client::Unpacker0>();
-    adc::set(xy_reload);
+    counters::set(xy_reload);
 }
 
 extern "C" __attribute__((noinline, used)) void reference_runtime_advance_and_reset_xy(std::uint32_t x, std::uint32_t y)

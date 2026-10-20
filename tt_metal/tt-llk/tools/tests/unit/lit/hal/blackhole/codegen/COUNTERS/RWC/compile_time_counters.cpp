@@ -5,14 +5,15 @@
 // RUN: %{blackhole_tensix_compile} %{blackhole_math_thread} -c %s -o %t.o
 // RUN: %{blackhole_objdump} -d %t.o | FileCheck %s
 
-#include "hal/counters/rwc.h"
+#include "hal/counters.h"
 
-namespace rwc = hal::counters::rwc;
+namespace counters = hal::counters;
+namespace rwc      = hal::counters::rwc;
 
 extern "C" __attribute__((noinline, used)) void set_sources()
 {
     constexpr auto sources = rwc::MathCounter {.src_a = rwc::Set(4), .src_b = rwc::Set(4)};
-    rwc::set<sources>();
+    counters::set<sources>();
 }
 
 // CHECK-LABEL: <set_sources>:
@@ -22,7 +23,7 @@ extern "C" __attribute__((noinline, used)) void set_sources()
 extern "C" __attribute__((noinline, used)) void set_all_and_clear_fidelity()
 {
     constexpr auto reset = rwc::MathCounter {.src_a = rwc::Set(1), .src_b = rwc::Set(2), .dest = rwc::Set(3), .clear_fidelity = true};
-    rwc::set<reset>();
+    counters::set<reset>();
 }
 
 // CHECK-LABEL: <set_all_and_clear_fidelity>:
@@ -32,7 +33,7 @@ extern "C" __attribute__((noinline, used)) void set_all_and_clear_fidelity()
 extern "C" __attribute__((noinline, used)) void increment_dest()
 {
     constexpr auto rows = rwc::MathCounter {.dest = rwc::Increment(8)};
-    rwc::set<rows>();
+    counters::set<rows>();
 }
 
 // CHECK-LABEL: <increment_dest>:
@@ -43,7 +44,7 @@ extern "C" __attribute__((noinline, used)) void increment_dest()
 extern "C" __attribute__((noinline, used)) void advance_and_reset_dest()
 {
     constexpr auto base = rwc::MathCounter {.dest = rwc::AdvanceAndReset(8)};
-    rwc::set<base>();
+    counters::set<base>();
 }
 
 // CHECK-LABEL: <advance_and_reset_dest>:
@@ -54,7 +55,7 @@ extern "C" __attribute__((noinline, used)) void advance_and_reset_dest()
 extern "C" __attribute__((noinline, used)) void rewind_sources()
 {
     constexpr auto rewind = rwc::MathCounter {.src_a = rwc::AdvanceAndReset(), .src_b = rwc::AdvanceAndReset()};
-    rwc::set<rewind>();
+    counters::set<rewind>();
 }
 
 // CHECK-LABEL: <rewind_sources>:
@@ -65,7 +66,7 @@ extern "C" __attribute__((noinline, used)) void rewind_sources()
 extern "C" __attribute__((noinline, used)) void next_face()
 {
     constexpr auto face = rwc::MathCounter {.src_b = rwc::Set(0), .dest = rwc::AdvanceAndReset(8), .flip = rwc::Src::A | rwc::Src::B};
-    rwc::set<face>();
+    counters::set<face>();
 }
 
 // CHECK-LABEL: <next_face>:
@@ -75,7 +76,7 @@ extern "C" __attribute__((noinline, used)) void next_face()
 extern "C" __attribute__((noinline, used)) void flip_only()
 {
     constexpr auto flip = rwc::MathCounter {.flip = rwc::Src::B};
-    rwc::set<flip>();
+    counters::set<flip>();
 }
 
 // CHECK-LABEL: <flip_only>:
@@ -85,7 +86,7 @@ extern "C" __attribute__((noinline, used)) void flip_only()
 extern "C" __attribute__((noinline, used)) void increment_and_save_dest()
 {
     constexpr auto save = rwc::MathCounter {.dest = rwc::IncrementAndSave(7)};
-    rwc::set<save>();
+    counters::set<save>();
 }
 
 // CHECK-LABEL: <increment_and_save_dest>:
@@ -96,7 +97,7 @@ extern "C" __attribute__((noinline, used)) void increment_and_save_dest()
 extern "C" __attribute__((noinline, used)) void set_and_increment()
 {
     constexpr auto mixed = rwc::MathCounter {.src_a = rwc::Set(1), .dest = rwc::Increment(2)};
-    rwc::set<mixed>();
+    counters::set<mixed>();
 }
 
 // CHECK-LABEL: <set_and_increment>:
