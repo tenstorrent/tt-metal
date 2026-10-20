@@ -2625,7 +2625,7 @@ def test_high_bw_all_gather_paged_source(mesh_device, ag_traced, dtype, layout, 
     if ag_traced:
         return
     # A new table on the cached program: page 0 of user 0 moved to a spare pool page, the rest past the first slab
-    # unmapped. The old table is freed first, so a stale table address would read freed memory, not the old mapping.
+    # unmapped. The first table is freed before the call, so a program still bound to it cannot pass this check.
     sparse = table.clone()
     owned_by_rank0 = [q for q in range(table.shape[1]) if (q * page_size // chunk_local) % ranks == 0]
     sparse[0, 0] = min(set(range(num_pages)) - set(table[:, owned_by_rank0].flatten().tolist()))
