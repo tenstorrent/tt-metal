@@ -71,8 +71,8 @@ int main(void)
 #endif
     device_setup();
 #if defined(ARCH_QUASAR)
-    // No BRISC on Quasar: unpack configures and arms the counters while the other TRISCs are still held in reset.
-    llk_perf::configure_and_arm();
+    // No BRISC on Quasar: unpack scrubs the debug features while the others are held in reset.
+    llk_perf::clear_debug_features();
 #endif
     clear_trisc_soft_reset(); // Release the rest of the triscs
 #endif
@@ -88,6 +88,9 @@ int main(void)
 #endif
 
 #if defined(LLK_PROFILER)
+    // Counters on only, empty otherwise (counters.h): copy the launch word here, before the kernel, and read the
+    // last zone of a single thread run type after it (read_last_zone).
+    llk_perf::load_counted_zones();
     llk_profiler::reset();
     llk_profiler::sync_threads();
 #endif
