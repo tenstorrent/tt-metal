@@ -3,3 +3,4 @@ tt_metal/tt-llk/tt_llk_blackhole/llk_lib/llk_unpack_AB_reduce.h
 tt_metal/tt-llk/tt_llk_blackhole/llk_lib/llk_reduce_block.h
 tt_metal/hw/inc/api/compute/reduce.h
 ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.inl
+tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_unpack_AB_reduce_api.h

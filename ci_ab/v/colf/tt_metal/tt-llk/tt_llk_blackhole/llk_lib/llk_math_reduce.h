@@ -603,7 +603,7 @@ inline void _llk_math_reduce_(const std::uint32_t dst_index, const ckernel::Tens
     {
         if constexpr (type != PoolType::MAX)
         {
-            if (reduce_col_paired<type, dim>(tensor_shape))
+            if (reduce_col_paired<type, dim, math_fidelity>(tensor_shape))
             {
                 for (std::uint32_t row_num = 0; row_num < tensor_shape.num_faces_r_dim; row_num++)
                 {

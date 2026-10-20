@@ -142,7 +142,7 @@ inline void reduce_col_pool_pair()
         }
         else
         {
-            TTI_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_4, p_gpool::INDEX_DIS, 16);
+            TTI_GAPOOL(p_setrwc::CLR_AB, p_gpool::DIM_16X16, ADDR_MOD_4, p_gpool::INDEX_DIS, 16);
         }
     }
 }
@@ -603,12 +603,11 @@ inline void _llk_math_reduce_(const std::uint32_t dst_index, const ckernel::Tens
     {
         if constexpr (type != PoolType::MAX)
         {
-            if (reduce_col_paired<type, dim>(tensor_shape))
+            if (reduce_col_paired<type, dim, math_fidelity>(tensor_shape))
             {
                 for (std::uint32_t row_num = 0; row_num < tensor_shape.num_faces_r_dim; row_num++)
                 {
                     reduce_col_pool_pair<math_fidelity>();
-                    TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_AD);
                 }
                 return;
             }

@@ -77,7 +77,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
         START_PERF_MEASURE("INIT")
         _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
             formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, CI_FACE_R, CI_FACE_R, CI_FACES, CI_FACES);
+#ifdef CI_REDUCE_FKEY
+        _llk_unpack_AB_reduce_init_<POOL_TYPE, REDUCE_DIM, MATH_FIDELITY>(CI_SHAPE);
+#else
         _llk_unpack_AB_reduce_init_<POOL_TYPE, REDUCE_DIM>(CI_SHAPE);
+#endif
         PROFILER_SYNC();
     }
     {
