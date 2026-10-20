@@ -577,23 +577,6 @@ void pytensor_module(nb::module_& mod) {
         nb::keep_alive<0, 1>(),
         "Create a non-owning L1 tensor view. The caller must validate bounds and retain backing storage.");
     mod.def(
-        "experimental_retain_tensor_backing",
-        [](Tensor& view, const std::vector<Tensor>& owners) {
-            std::vector<DeviceStorage> storage;
-            for (const auto& owner : owners) {
-                TT_FATAL(
-                    &owner.device_storage().get_mesh_tensor().device() ==
-                        &view.device_storage().get_mesh_tensor().device(),
-                    "Backing storage uses a different mesh");
-                storage.push_back(owner.device_storage());
-            }
-            view.device_storage().retain_backing_storage(std::move(storage));
-        },
-        nb::arg("view"),
-        nb::arg("owners"),
-        "Retain caller-validated backing through native tensor copies; explicit backing deallocation remains "
-        "prohibited.");
-    mod.def(
         "decorate_external_operation",
         [](const nb::callable& function, const std::optional<std::string>& function_name) -> nb::object {
             return nb::cpp_function(
