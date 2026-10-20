@@ -796,8 +796,8 @@ def test_uint32_reduce_max_min_bit31(mathop, dims, reduce_pool):
 # the single output element, so one poisoned lane is the whole answer rather than one probe among
 # 4096.
 #
-# ReduceScalar is not covered by this sweep and is not driven below: sfpu_reduce_test.cpp branches
-# on REDUCE_COL and REDUCE_ROW only, so there is no scalar path to reach through this source.
+# ReduceScalar is not part of this specials sweep: the scalar path is PROD-only, and
+# test_sfpu_reduce_prod drives it through the same source.
 #
 # The classes below are therefore about the interaction between a special and the fold, which no
 # element-wise sweep can express:

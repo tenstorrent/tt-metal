@@ -1810,14 +1810,14 @@ inline void scalar_prod_accumulate_slice(const std::uint32_t slice_addr) {
     TT_SFPLOAD(p_sfpu::LREG5, INSTRUCTION_MODE, ADDR_MOD_7, slice_addr + ROWS_PER_LOAD);
     TT_SFPLOAD(p_sfpu::LREG2, INSTRUCTION_MODE, ADDR_MOD_7, slice_addr + 2 * ROWS_PER_LOAD);
     TT_SFPLOAD(p_sfpu::LREG6, INSTRUCTION_MODE, ADDR_MOD_7, slice_addr + 3 * ROWS_PER_LOAD);
-    TTI_SFPMUL(p_sfpu::LREG1, p_sfpu::LREG2, p_sfpu::LCONST_0, p_sfpu::LREG1, 0);
-    TTI_SFPMUL(p_sfpu::LREG5, p_sfpu::LREG6, p_sfpu::LCONST_0, p_sfpu::LREG5, 0);
+    TTI_SFPMUL(p_sfpu::LREG1, p_sfpu::LREG2, p_sfpu::LCONST_0, p_sfpu::LREG1, 0 /* instr_mod1: no negation */);
+    TTI_SFPMUL(p_sfpu::LREG5, p_sfpu::LREG6, p_sfpu::LCONST_0, p_sfpu::LREG5, 0 /* instr_mod1: no negation */);
     if constexpr (seed) {
-        TTI_SFPMOV(0, p_sfpu::LREG1, p_sfpu::LREG0, 0);
-        TTI_SFPMOV(0, p_sfpu::LREG5, p_sfpu::LREG4, 0);
+        TTI_SFPMOV(0 /* imm12 */, p_sfpu::LREG1, p_sfpu::LREG0, 0 /* instr_mod1: plain copy */);
+        TTI_SFPMOV(0 /* imm12 */, p_sfpu::LREG5, p_sfpu::LREG4, 0 /* instr_mod1: plain copy */);
     } else {
-        TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
-        TTI_SFPMUL(p_sfpu::LREG4, p_sfpu::LREG5, p_sfpu::LCONST_0, p_sfpu::LREG4, 0);
+        TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG0, 0 /* instr_mod1: no negation */);
+        TTI_SFPMUL(p_sfpu::LREG4, p_sfpu::LREG5, p_sfpu::LCONST_0, p_sfpu::LREG4, 0 /* instr_mod1: no negation */);
     }
 }
 
@@ -1827,13 +1827,13 @@ inline void scalar_prod_accumulate_slice(const std::uint32_t slice_addr) {
  */
 inline void scalar_prod_fold_columns() {
     for (std::uint32_t shift = 4; shift > 0; shift >>= 1) {
-        TTI_SFPSHFT2(0, p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+        TTI_SFPSHFT2(0 /* imm12 */, p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
         for (std::uint32_t step = 1; step < shift; step++) {
             TTI_SFPNOP;
-            TTI_SFPSHFT2(0, p_sfpu::LREG1, p_sfpu::LREG1, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+            TTI_SFPSHFT2(0 /* imm12 */, p_sfpu::LREG1, p_sfpu::LREG1, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
         }
         TTI_SFPNOP;
-        TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
+        TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG0, 0 /* instr_mod1: no negation */);
         TTI_SFPNOP;
     }
 }
@@ -1852,19 +1852,19 @@ inline void perform_reduce_scalar_prod() {
 
     // Each lane of LREG0 then holds the product of 32 values.
     TTI_SFPNOP;
-    TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG4, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
+    TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG4, p_sfpu::LCONST_0, p_sfpu::LREG0, 0 /* instr_mod1: no negation */);
     TTI_SFPNOP;
 
     // Spread LREG0's 4 rows across row 0 of LREG0-3 and fold them.
-    TTI_SFPTRANSP(0, 0, 0, 0);
-    TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
-    TTI_SFPMUL(p_sfpu::LREG2, p_sfpu::LREG3, p_sfpu::LCONST_0, p_sfpu::LREG2, 0);
+    TTI_SFPTRANSP(0 /* imm12 */, 0 /* lreg_c */, 0 /* lreg_dest */, 0 /* instr_mod1 */);
+    TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG0, 0 /* instr_mod1: no negation */);
+    TTI_SFPMUL(p_sfpu::LREG2, p_sfpu::LREG3, p_sfpu::LCONST_0, p_sfpu::LREG2, 0 /* instr_mod1: no negation */);
     TTI_SFPNOP;
-    TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
+    TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LCONST_0, p_sfpu::LREG0, 0 /* instr_mod1: no negation */);
     TTI_SFPNOP;
 
     scalar_prod_fold_columns();
-    TTI_SFPSTORE(p_sfpu::LREG0, INSTRUCTION_MODE, ADDR_MOD_7, 0);
+    TTI_SFPSTORE(p_sfpu::LREG0, INSTRUCTION_MODE, ADDR_MOD_7, 0 /* dest_reg_addr: element [0][0] */);
 }
 
 // ============================================================================
@@ -1951,7 +1951,7 @@ inline void init_reduce(std::uint32_t block_ct_dim = 1) {
  * @tparam output_format The packer-visible OUTPUT data format (defaults to @p format). Drives the final store mode:
  *         UInt16 output in a 32-bit dest is stored via mode 9 (low->high 16-bit swap), while a 32-bit output (e.g.
  *         UInt32) is stored with the plain instruction mode. This lets UInt16 input be summed into a UInt32 output
- *         without overflow.
+ *         without overflow. Unused for PROD, which stores with the instruction mode of @p format.
  * @param block_ct_dim Block dimension (used for SUM/AVG column reduction to specify number of columns, default is 1 for
  * single tile)
  * @param block_rt_dim Block dimension (used for MAX/MIN reduction to specify block height, or SUM/MAX row reduction;

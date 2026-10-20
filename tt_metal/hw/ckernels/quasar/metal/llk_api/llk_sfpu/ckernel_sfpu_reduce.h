@@ -410,14 +410,14 @@ inline void reduce_scalar_prod_slice(const std::uint32_t slice_addr) {
     TT_SFPLOAD(p_sfpu::LREG2, MODE, ADDR_MOD_7, 0 /* done */, slice_addr + 2 * REDUCE_ROWS_PER_LOAD);
     TT_SFPLOAD(p_sfpu::LREG6, MODE, ADDR_MOD_7, 0 /* done */, slice_addr + 3 * REDUCE_ROWS_PER_LOAD);
 
-    reduce_combine<PoolType::PROD, false, p_sfpu::LREG1, p_sfpu::LREG2>();
-    reduce_combine<PoolType::PROD, false, p_sfpu::LREG5, p_sfpu::LREG6>();
+    reduce_combine<PoolType::PROD, false /* IS_INT */, p_sfpu::LREG1, p_sfpu::LREG2>();
+    reduce_combine<PoolType::PROD, false /* IS_INT */, p_sfpu::LREG5, p_sfpu::LREG6>();
     if constexpr (SEED) {
         TTI_SFPMOV(p_sfpu::LREG1, p_sfpu::LREG0, 0 /* instr_mod1: plain copy */);
         TTI_SFPMOV(p_sfpu::LREG5, p_sfpu::LREG4, 0 /* instr_mod1: plain copy */);
     } else {
-        reduce_combine<PoolType::PROD, false, p_sfpu::LREG0, p_sfpu::LREG1>();
-        reduce_combine<PoolType::PROD, false, p_sfpu::LREG4, p_sfpu::LREG5>();
+        reduce_combine<PoolType::PROD, false /* IS_INT */, p_sfpu::LREG0, p_sfpu::LREG1>();
+        reduce_combine<PoolType::PROD, false /* IS_INT */, p_sfpu::LREG4, p_sfpu::LREG5>();
     }
 }
 
@@ -445,15 +445,15 @@ inline void reduce_scalar_prod_tile() {
         reduce_scalar_prod_slice<MODE, false /* SEED */>((slice / 2) * REDUCE_FACE_STRIDE + parity);
     }
 
-    reduce_combine<PoolType::PROD, false, p_sfpu::LREG0, p_sfpu::LREG4>();
+    reduce_combine<PoolType::PROD, false /* IS_INT */, p_sfpu::LREG0, p_sfpu::LREG4>();
 
     TTI_SFPTRANSP;
-    reduce_combine<PoolType::PROD, false, p_sfpu::LREG0, p_sfpu::LREG1>();
-    reduce_combine<PoolType::PROD, false, p_sfpu::LREG2, p_sfpu::LREG3>();
-    reduce_combine<PoolType::PROD, false, p_sfpu::LREG0, p_sfpu::LREG2>();
+    reduce_combine<PoolType::PROD, false /* IS_INT */, p_sfpu::LREG0, p_sfpu::LREG1>();
+    reduce_combine<PoolType::PROD, false /* IS_INT */, p_sfpu::LREG2, p_sfpu::LREG3>();
+    reduce_combine<PoolType::PROD, false /* IS_INT */, p_sfpu::LREG0, p_sfpu::LREG2>();
 
     TTI_SFPMOV(p_sfpu::LREG0, REDUCE_ACC_REG, 0 /* instr_mod1: plain copy */);
-    reduce_row_fold_columns<PoolType::PROD, false>();
+    reduce_row_fold_columns<PoolType::PROD, false /* IS_INT */>();
 
     TTI_SFPSTORE(REDUCE_ACC_REG, MODE, ADDR_MOD_7, 0 /* done */, p_sfpu::col_offset::EVEN_COL);
 }
