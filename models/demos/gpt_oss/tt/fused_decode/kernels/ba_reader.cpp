@@ -87,7 +87,7 @@ void kernel_main() {
     const auto s_pos = TensorAccessor(pos_args, pos_addr, pos_page_bytes);
     const auto s_pt = TensorAccessor(pt_args, pt_addr, pt_page_bytes);
     const auto s_sink = TensorAccessor(sink_args, sink_addr, tile);
-    const auto s_lib = TensorAccessor(lib_args, lib_addr, 33 * 33 * 2 * 256);
+    const auto s_lib = TensorAccessor(lib_args, lib_addr, 256);  // one 256-byte segment per page
 
     cb_reserve_back(cb_scr, 1);
     const uint32_t scr = get_write_ptr(cb_scr);  // [pos page | page-table row]
@@ -199,13 +199,12 @@ void kernel_main() {
     // mask tile: row group i keeps columns [from, keep[i]) (BF16 -1e30 elsewhere): its 8 segments (8 rows x 16
     // columns) copied from the mask library (segment (a, b, f) = half f of a row group keeping columns [a, b), a, b in
     // 0 .. 32)
-    const uint64_t lib = s_lib.get_noc_addr(0);
     // (from_i: per row group, overriding from)
     auto mask = [&](uint32_t a, const uint32_t* keep, uint32_t from = 0, const uint32_t* from_i = nullptr) {
         for (uint32_t i = 0; i < 4; ++i) {
             const uint32_t fr = from_i ? from_i[i] : from;
             for (uint32_t f = 0; f < 2; ++f) {
-                noc_async_read(lib + ((fr * 33 + keep[i]) * 2 + f) * 256, aux + a * tile + rows8(i, f), 256);
+                noc_async_read(s_lib.get_noc_addr((fr * 33 + keep[i]) * 2 + f), aux + a * tile + rows8(i, f), 256);
             }
         }
     };

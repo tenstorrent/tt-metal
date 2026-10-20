@@ -84,12 +84,14 @@ class BlockAttention:
         self.cores = _rects(self.core_list)
         self.min_chunks = min_chunks or MIN_CHUNKS
         self.rounds = max(1, (slices - 1).bit_length())
+        # one 256-byte segment per page, interleaved over L1 (as one DRAM page every core of a program read its masks
+        # from one bank: a 16-user verify program 57 us vs 37 with 8 users)
         self.mask_lib = ttnn.from_torch(
-            self._mask_lib(),
+            self._mask_lib().reshape(1, 1, -1, 64),
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=mesh_device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
         # the packed Q (a producer writes it in this layout: the verify QKV with spec_tt) and the packed output (o_proj
