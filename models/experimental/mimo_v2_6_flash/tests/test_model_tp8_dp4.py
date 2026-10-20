@@ -13,6 +13,8 @@ Golden activations come from ``reference/make_golden.py`` (MIMO_GOLDEN, default
 Then every user keeps generating greedily, and the text is logged.
 """
 
+import json
+import os
 
 import pytest
 import torch
@@ -58,12 +60,30 @@ def test_model_tp8_dp4(mesh_device):
 
     first = gen.prefill({u: usr["ids"][: usr["prefill_len"]] for u, usr in users.items()})
 
-    top1, pccs = [], []
+    top1, pccs, rows = [], [], []
+
+    def score(lg, ref, g, step):
+        lg, ref = lg.float(), ref.float()
+        top1.append(int(lg.argmax()) == int(ref.argmax()))
+        pccs.append(pcc(lg, ref))
+        r2, d2 = ref.topk(2), lg.topk(2)
+        gold = int(r2.indices[0])
+        rows.append(
+            dict(
+                golden=g,
+                step=step,
+                match=top1[-1],
+                ref_margin=float(r2.values[0] - r2.values[1]),
+                # how far the device puts the reference's top-1 below its own top-1 (0 when it matches)
+                dev_deficit=float(d2.values[0] - lg[gold]),
+                dev_margin=float(d2.values[0] - d2.values[1]),
+                pcc=pccs[-1],
+            )
+        )
+
     for u, usr in users.items():
         if usr["golden"] is not None:
-            ref = golden["logits"][usr["golden"]][usr["prefill_len"] - 1]
-            top1.append(int(first[u].argmax()) == int(ref.argmax()))
-            pccs.append(pcc(first[u], ref))
+            score(first[u], golden["logits"][usr["golden"]][usr["prefill_len"] - 1], usr["golden"], 0)
 
     # ---- teacher-forced decode over the last 4 prompt tokens
     positions = {u: usr["prefill_len"] for u, usr in users.items() if usr["golden"] is not None}
@@ -73,9 +93,7 @@ def test_model_tp8_dp4(mesh_device):
         feed = {u: int(users[u]["ids"][positions[u]]) for u in positions}
         out = gen.decode(feed, positions)
         for u, lg in out.items():
-            ref = golden["logits"][users[u]["golden"]][positions[u]]
-            top1.append(int(lg.argmax()) == int(ref.argmax()))
-            pccs.append(pcc(lg, ref))
+            score(lg, golden["logits"][users[u]["golden"]][positions[u]], users[u]["golden"], t + 1)
             last_logits[u] = lg
             positions[u] += 1
 
@@ -84,6 +102,16 @@ def test_model_tp8_dp4(mesh_device):
         f"vs fp32 reference over {len(top1)} logits rows (4 replicas): top-1 {top1_rate:.3f}, "
         f"PCC min {min(pccs):.4f} mean {sum(pccs) / len(pccs):.4f}"
     )
+    for r in sorted(rows, key=lambda r: r["ref_margin"]):
+        if not r["match"] or r["ref_margin"] < 0.25:
+            logger.info(
+                f"golden {r['golden']} step {r['step']}: {'ok  ' if r['match'] else 'MISS'} reference margin "
+                f"{r['ref_margin']:.3f}, device margin {r['dev_margin']:.3f}, reference top-1 "
+                f"{r['dev_deficit']:.3f} below the device's, PCC {r['pcc']:.4f}"
+            )
+    if os.environ.get("MIMO_TOP1_DUMP"):
+        with open(os.environ["MIMO_TOP1_DUMP"], "w") as f:
+            json.dump(rows, f, indent=1)
 
     # ---- DP consistency: the shared prompt must give the same answer on every row
     shared_users = [r * 4 + 2 for r in range(DP)]

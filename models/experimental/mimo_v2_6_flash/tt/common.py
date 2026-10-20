@@ -150,6 +150,56 @@ def cache_exists(cache_file, dtype, layout=ttnn.TILE_LAYOUT):
     return os.path.exists(f"{cache_file}_dtype_{dtype.name}_layout_{layout.name}.tensorbin")
 
 
+BFP_MANTISSA_BITS = {ttnn.bfloat8_b: 7, ttnn.bfloat4_b: 3}
+
+
+def bfp_project_blocks(x, bits, offsets=(0, -1, 1)):
+    """Round [n, 16] fp32 blocks onto the BFP grid with ``bits`` mantissa bits; each block takes the shared exponent
+    ``e + offset`` (``e``: its largest element exponent, the stock packer's) of least squared error, ties to the
+    earlier offset. Returns fp32 values the stock packer reproduces exactly (no signed zeros)."""
+    max_code, scale_offset = float((1 << bits) - 1), 126 + bits
+    a = x.abs()
+    e = ((x.view(torch.int32) >> 23) & 0xFF).amax(-1, keepdim=True)
+    best_err = best_step = None
+    for offset in offsets:
+        cand = e + offset
+        # Power-of-two scaling and round-half-even are exact in fp32 for these magnitudes.
+        step = torch.ldexp(torch.ones_like(a[:, :1]), (cand - scale_offset).float())
+        err = (torch.round(a / step).clamp_(max=max_code) * step - a).square_().sum(-1, keepdim=True)
+        if offset:
+            err = torch.where((cand >= bits) & (cand <= 254), err, torch.full_like(err, float("inf")))
+        if best_err is None:
+            best_err, best_step = err, step
+        else:
+            better = err < best_err
+            best_err = torch.where(better, err, best_err)
+            best_step = torch.where(better, step, best_step)
+    q = torch.round(a / best_step).clamp_(max=max_code) * best_step
+    return torch.where(q > 0, torch.copysign(q, x), torch.zeros_like(x))
+
+
+def bfp_mse_prepare(w, dtype, chunk=1 << 24):
+    """Values on the ``dtype`` (bfloat8_b / bfloat4_b) grid with each block's shared exponent chosen for least error.
+
+    ``w`` [..., N] is in its stored layout: the 16-value blocks of a tile face row run along the last dim, so blocks
+    are 16 consecutive columns. The stock host packer gives every block the largest element exponent ``e`` and
+    rounds; here each block takes the best of ``{e, e - 1, e + 1}`` (``e - 1`` clips the largest elements) under
+    squared error, with ties to ``e``. The result is exactly representable in bf16, and the stock packer reproduces
+    it bit for bit, so the device format, memory and speed are unchanged (tt-quant's ``mse`` policy,
+    github.com/tenstorrent/tt-quant). On MiMo's MXFP4 experts in bfloat4_b it raises the weight SQNR from ~18.3 to
+    ~20.9 dB.
+    """
+    bits = BFP_MANTISSA_BITS[dtype]
+    shape = w.shape
+    assert shape[-1] % 16 == 0, shape
+    flat = w.reshape(-1, 16)
+    out = torch.empty(flat.shape, dtype=torch.bfloat16)
+    rows = chunk // 16
+    for s in range(0, flat.shape[0], rows):
+        out[s : s + rows] = bfp_project_blocks(flat[s : s + rows].float(), bits).to(torch.bfloat16)
+    return out.reshape(shape)
+
+
 def as_weight(torch_tensor, plan, mapper, dtype, cache_file, layout=ttnn.TILE_LAYOUT, memory_config=None):
     """``ttnn.as_tensor`` that loads from the cache when ``torch_tensor`` is None and the cache is warm."""
     return ttnn.as_tensor(

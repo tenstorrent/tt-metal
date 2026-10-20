@@ -37,6 +37,8 @@ trace replays compiles one (a program compiled after a trace capture keeps buffe
 softmax scale because the SDPA kernels apply ``scale`` to the sink logit too.
 """
 
+import os
+
 import torch
 
 import ttnn
@@ -526,7 +528,12 @@ class TtMiMoAttention:
                 p: per_chip(plan, m, ttnn.bfloat16, ttnn.TILE_LAYOUT) for p, m in slot_owner_masks(tp, self.rep).items()
             }
 
-        self.sdpa_config = compute_config(ttnn.MathFidelity.HiFi4, fp32_acc=False, packer_l1_acc=False)
+        # Prefill SDPA accumulates in fp32 dest (MIMO_SDPA_FP32_ACC=0 turns it off for A/B). Decode SDPA stays
+        # in bf16 dest: the paged decode SDPA returns non-finite values with fp32 dest.
+        self.sdpa_config = compute_config(
+            ttnn.MathFidelity.HiFi4, fp32_acc=os.environ.get("MIMO_SDPA_FP32_ACC", "1") == "1", packer_l1_acc=False
+        )
+        self.decode_sdpa_config = compute_config(ttnn.MathFidelity.HiFi4, fp32_acc=False, packer_l1_acc=False)
         self.decode_sdpa_program = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=ttnn.CoreCoord(8, 8),
             q_chunk_size=0,
@@ -921,7 +928,7 @@ class TtMiMoAttention:
             sliding_window_size=self.sliding_window,
             attention_sink=self.decode_sinks,
             program_config=self.decode_sdpa_program,
-            compute_kernel_config=self.sdpa_config,
+            compute_kernel_config=self.decode_sdpa_config,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         if not fused_qkv:
@@ -977,7 +984,7 @@ class TtMiMoAttention:
             cur_pos_tensor=pos_owned,
             scale=self.scale,
             program_config=self.decode_sdpa_program,
-            compute_kernel_config=self.sdpa_config,
+            compute_kernel_config=self.decode_sdpa_config,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )  # [1, B, 16, 128]
         q_rot.deallocate(True)
