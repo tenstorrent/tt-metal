@@ -28,6 +28,7 @@
 #include "ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_program_factory.hpp"
 #include "ttnn/operations/transformer/sdpa/device/sdpa_perf_model.hpp"
 #include "ttnn/tensor/types.hpp"
+#include "ttnn/operations/experimental/gemma4/validate_descriptor.hpp"
 
 using namespace tt::tt_metal;
 
@@ -220,13 +221,52 @@ void validate_ring_joint_all_gather_on_program_cache_miss(
     }
 }
 
-void validate_metadata_tensors(const RingJointSDPAInputs& tensor_args, uint32_t kv_stripe_split) {
+void validate_metadata_tensors(const RingJointSDPAParams& args, const RingJointSDPAInputs& tensor_args) {
+    if (args.request_index.has_value()) {
+        TT_FATAL(
+            args.stripe_size == 32 && args.request_local_tokens.has_value() && tensor_args.has_metadata() &&
+                tensor_args.output.has_value(),
+            "Packed SDPA requires stripe_size=32, request metadata, a local request length, and output_tensor");
+        ttnn::experimental::gemma4::validate_request_descriptors(
+            *tensor_args.slot_id, tensor_args.input_q, *args.request_index);
+        const uint32_t local = *args.request_local_tokens;
+        const auto& q = tensor_args.input_q;
+        TT_FATAL(
+            local > 0 && local % 32 == 0 && local <= q.logical_shape()[2] && q.logical_shape()[0] == 1,
+            "Packed SDPA request_local_tokens must fit Q and be a positive multiple of 32; Q batch must be one");
+        auto out_shape = q.logical_shape();
+        out_shape[3] = tensor_args.v_head_dim(args.latent_v_head_dim);
+        const auto validate_buffer = [&](const Tensor& tensor) {
+            TT_FATAL(
+                tensor.storage_type() == StorageType::DEVICE && tensor.buffer() != nullptr &&
+                    tensor.device() == q.device() && tensor.dtype() == DataType::BFLOAT16 &&
+                    tensor.layout() == Layout::TILE && tensor.memory_config() == ttnn::DRAM_MEMORY_CONFIG,
+                "Packed SDPA output and statistics must be interleaved BF16 TILE DRAM tensors on Q's device");
+            TT_FATAL(
+                tensor.buffer() != q.buffer() && tensor.buffer() != tensor_args.input_k.buffer(),
+                "Packed SDPA output and statistics cannot alias inputs");
+        };
+        validate_buffer(*tensor_args.output);
+        TT_FATAL(tensor_args.output->logical_shape() == out_shape, "Packed SDPA output must match full Q with V width");
+        if (tensor_args.stats.has_value()) {
+            validate_buffer(*tensor_args.stats);
+            const auto& shape = tensor_args.stats->logical_shape();
+            TT_FATAL(
+                shape.rank() == 4 && shape[0] == 1 && shape[1] == q.logical_shape()[1] && shape[2] >= 2 * local &&
+                    shape[2] % 32 == 0 && shape[3] == 1 && tensor_args.stats->buffer() != tensor_args.output->buffer(),
+                "Packed SDPA statistics require [1, heads, >=2*request_local_tokens, 1] with tile-aligned rows");
+        }
+        return;
+    }
+    TT_FATAL(
+        !args.request_local_tokens.has_value() && !tensor_args.output.has_value() && !tensor_args.stats.has_value(),
+        "Explicit request extent/output/statistics require request descriptors");
     TT_FATAL(
         tensor_args.slot_id.has_value() == tensor_args.kv_actual_isl.has_value(),
         "metadata tensors slot_id and kv_actual_isl_tensor must be supplied together, or neither supplied");
 
     TT_FATAL(
-        !tensor_args.has_kv_valid_end() || tensor_args.kv_pad_from_metadata(kv_stripe_split),
+        !tensor_args.has_kv_valid_end() || tensor_args.kv_pad_from_metadata(args.kv_stripe_split),
         "kv_valid_end_tensor requires the slot_id / kv_actual_isl metadata path with chunked-shaped prefill "
         "(Q.seq < K.seq or kv_stripe_split > 1)");
 
@@ -300,7 +340,7 @@ void validate_runtime_patched_scalars(const RingJointSDPAParams& args, const Rin
             args.logical_n,
             capacity);
         if (!kv_pad_rotation_active(args, tensor_args)) {
-            const uint64_t chunk = static_cast<uint64_t>(tensor_args.input_q.logical_shape()[2]) * args.q_ring_size();
+            const uint64_t chunk = static_cast<uint64_t>(tensor_args.local_q_seq_len(args)) * args.q_ring_size();
             TT_FATAL(
                 args.logical_n >= chunk && args.logical_n % chunk == 0,
                 "Split KV without actual ISL requires logical_n to be a positive multiple of the Q chunk "
@@ -311,7 +351,7 @@ void validate_runtime_patched_scalars(const RingJointSDPAParams& args, const Rin
     }
 
     if (args.has_kv_pad_rotation()) {
-        const auto N_local_q = tensor_args.input_q.logical_shape()[2];
+        const auto N_local_q = tensor_args.local_q_seq_len(args);
         const auto N_local_kv = tensor_args.local_kv_seq_len();
         const auto kv_actual_isl = args.kv_actual_isl.value();
         TT_FATAL(
@@ -362,7 +402,7 @@ void validate_runtime_patched_scalars(const RingJointSDPAParams& args, const Rin
 
     if (args.uses_neighbor_halo() && tensor_args.is_chunked(args.kv_stripe_split, args.stripe_size) &&
         (!kv_pad_rotation_active(args, tensor_args) || args.circular_kv_cache)) {
-        const auto q_group_size = tensor_args.input_q.logical_shape()[2] * args.ring_size;
+        const auto q_group_size = tensor_args.local_q_seq_len(args) * args.ring_size;
         // One complete group is enough: at logical_n == q_group_size device 0 clips its
         // window at token 0 and devices 1..R-1 consume predecessors within that group.
         // Below one group build_sliding_q_work_plan is empty, so the reader would not push
@@ -385,7 +425,7 @@ void validate_runtime_patched_scalars(const RingJointSDPAParams& args, const Rin
         }
     }
     if (args.uses_neighbor_halo() && kv_pad_rotation_active(args, tensor_args)) {
-        const uint32_t local = tensor_args.input_q.logical_shape()[2];
+        const uint32_t local = tensor_args.local_q_seq_len(args);
         // Live metadata is checked against the halo capacity by every device consumer.
         const bool needs_two =
             args.has_kv_pad_rotation() &&
@@ -404,7 +444,7 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     const auto& input_tensor_q = tensor_args.input_q;
     const auto& gathered_input_tensor_k = tensor_args.gathered_k;
 
-    validate_metadata_tensors(tensor_args, args.kv_stripe_split);
+    validate_metadata_tensors(args, tensor_args);
     if (args.striped_halo) {
         TT_FATAL(args.stripe_size != 0 && args.has_sliding_window(), "Striped halo requires explicit sliding stripes");
         TT_FATAL(
@@ -413,7 +453,7 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
             "Striped halo requires a CP axis and Linear topology");
     }
     if (args.stripe_size != 0) {
-        const auto q_rows = input_tensor_q.logical_shape()[2];
+        const auto q_rows = tensor_args.local_q_seq_len(args);
         TT_FATAL(
             args.stripe_size % tt::constants::TILE_HEIGHT == 0 && q_rows % args.stripe_size == 0 &&
                 tensor_args.local_kv_seq_len() % args.stripe_size == 0,
@@ -664,7 +704,7 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     const auto NQH = q_shape[1];
     const auto NKH = k_shape[1];
     TT_FATAL(NQH > 0 && NKH > 0, "Q and K num_heads must be greater than 0. Got Q: {}, K: {}", NQH, NKH);
-    const auto N_local_q = q_shape[2];
+    const auto N_local_q = tensor_args.local_q_seq_len(args);
     const auto N_local_kv = tensor_args.local_kv_seq_len();
     const auto gathered_buffer_n = k_shape[2];
     const auto N_global =
@@ -1143,7 +1183,7 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
 
 void RingJointSDPADeviceOperation::validate_on_program_cache_hit(
     const RingJointSDPAParams& args, const RingJointSDPAInputs& tensor_args) {
-    validate_metadata_tensors(tensor_args, args.kv_stripe_split);
+    validate_metadata_tensors(args, tensor_args);
     validate_runtime_patched_scalars(args, tensor_args);
 }
 
@@ -1166,7 +1206,7 @@ RingJointSDPAResultSpec RingJointSDPADeviceOperation::compute_output_specs(
     stats_shape[3] = 1;
     // 2× the sequence length: first half stores running max, second half stores running sum.
     // Used as DRAM scratch for multi-Q-chunk deferred norm round-trips between ring iterations.
-    stats_shape[2] = (input.padded_shape()[2] + joint_padded_seq) * 2;
+    stats_shape[2] = (tensor_args.local_q_seq_len(args) + joint_padded_seq) * 2;
 
     auto out_shape = input.logical_shape();
     // head dim as v head dim
@@ -1177,17 +1217,23 @@ RingJointSDPAResultSpec RingJointSDPADeviceOperation::compute_output_specs(
             out_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), args.output_memory_config)),
         tt::tt_metal::TensorSpec(
             joint_output_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), args.output_memory_config)),
-        tt::tt_metal::TensorSpec(
-            stats_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), args.output_memory_config))};
+        tensor_args.stats.has_value()
+            ? tensor_args.stats->tensor_spec()
+            : tt::tt_metal::TensorSpec(
+                  stats_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), args.output_memory_config))};
 }
 
 RingJointSDPAResult RingJointSDPADeviceOperation::create_output_tensors(
     const RingJointSDPAParams& args, const RingJointSDPAInputs& tensor_args) {
     auto output_specs = compute_output_specs(args, tensor_args);
     return {
-        create_device_tensor(output_specs[RING_JOINT_SDPA_OUTPUT_IDX], tensor_args.input_q.device()),
+        tensor_args.output.has_value()
+            ? *tensor_args.output
+            : create_device_tensor(output_specs[RING_JOINT_SDPA_OUTPUT_IDX], tensor_args.input_q.device()),
         create_device_tensor(output_specs[RING_JOINT_SDPA_JOINT_OUTPUT_IDX], tensor_args.input_q.device()),
-        create_device_tensor(output_specs[RING_JOINT_SDPA_STATS_OUTPUT_IDX], tensor_args.input_q.device()),
+        tensor_args.stats.has_value()
+            ? *tensor_args.stats
+            : create_device_tensor(output_specs[RING_JOINT_SDPA_STATS_OUTPUT_IDX], tensor_args.input_q.device()),
     };
 }
 
@@ -1231,6 +1277,11 @@ ttsl::hash::hash_t RingJointSDPADeviceOperation::compute_program_hash(
         args.kv_stripe_split,
         args.stripe_size,
         args.striped_halo,
+        args.request_index,
+        args.request_local_tokens,
+        tensor_args.output,
+        tensor_args.stats,
+        args.request_index.has_value() ? tensor_args.slot_id : std::nullopt,
         args.compute_kernel_config,
         args.program_config,
         args.ccl_core_grid_offset,
@@ -1302,7 +1353,7 @@ tt::tt_metal::operation::OpPerformanceModelGeneral<Tensors> RingJointSDPADeviceO
 
     const uint32_t B = q_shape[0];
     const uint32_t NQH = q_shape[1];
-    const uint32_t N_local = q_shape[2];
+    const uint32_t N_local = tensor_args.local_q_seq_len(args);
     const uint32_t N_global = gathered_k_shape[2];
     const bool has_joint_tensors =
         tensor_args.joint_q.has_value() || tensor_args.joint_k.has_value() || tensor_args.joint_v.has_value();
@@ -1395,7 +1446,12 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     const std::optional<ttnn::Tensor>& logical_l_tensor,
     const std::optional<ttnn::Tensor>& kv_valid_end_tensor,
     const uint32_t stripe_size,
-    const bool striped_halo) {
+    const bool striped_halo,
+    const std::optional<ttnn::Tensor>& request_descriptors,
+    std::optional<uint32_t> request_index,
+    std::optional<uint32_t> request_local_tokens,
+    const std::optional<ttnn::Tensor>& output_tensor,
+    const std::optional<ttnn::Tensor>& stats_tensor) {
     using OperationType = ttnn::prim::RingJointSDPADeviceOperation;
 
     auto kernel_config_val = init_device_compute_kernel_config(
@@ -1622,6 +1678,16 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
         stripe_size,
         striped_halo);
 
+    TT_FATAL(
+        request_descriptors.has_value() == request_index.has_value() &&
+            request_descriptors.has_value() == request_local_tokens.has_value(),
+        "Packed SDPA requires request_descriptors, request_index, and request_local_tokens together");
+    TT_FATAL(
+        !request_descriptors.has_value() || (!slot_id.has_value() && !kv_actual_isl_tensor.has_value()),
+        "Request descriptors replace slot_id and kv_actual_isl_tensor");
+    operation_attributes.request_index = request_index;
+    operation_attributes.request_local_tokens = request_local_tokens;
+
     auto tensor_args = OperationType::tensor_args_t{
         .input_q = input_tensor_q,
         .input_k = input_tensor_k,
@@ -1636,11 +1702,13 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
         // and C++20 requires designated initializers in declaration order.
         .gathered_joint_k = resolved_gathered_joint_k,
         .gathered_joint_v = resolved_gathered_joint_v,
-        .slot_id = slot_id,
-        .kv_actual_isl = kv_actual_isl_tensor,
+        .slot_id = request_descriptors.has_value() ? request_descriptors : slot_id,
+        .kv_actual_isl = request_descriptors.has_value() ? request_descriptors : kv_actual_isl_tensor,
         .logical_n_tensor = logical_n_tensor,
         .logical_l_tensor = logical_l_tensor,
-        .kv_valid_end = kv_valid_end_tensor};
+        .kv_valid_end = kv_valid_end_tensor,
+        .output = output_tensor,
+        .stats = stats_tensor};
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

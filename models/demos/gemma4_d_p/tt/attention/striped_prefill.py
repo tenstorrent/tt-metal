@@ -7,59 +7,48 @@ import ttnn
 from models.demos.gemma4_d_p.tt.attention.ring_prefill import ring_prefill_program_config, ring_sdpa_chunk_sizes
 
 
-def _rows(tensor, start, length):
-    return ttnn.slice(
-        tensor,
-        (0, 0, start, 0),
-        (tensor.shape[0], tensor.shape[1], start + length, tensor.shape[3]),
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-
-
 def striped_prefill_attention(attention, q, k, v, requests, compute_config):
     mesh, ccl = attention.mesh_config, attention.ccl_manager
     cache = attention.ring_kv_cache
     global_attention = not attention.config.is_sliding
-    outputs = []
-    offset = 0
+    cache_k = cache.kv if global_attention else cache.k
+    keys = k if k.dtype == cache_k.dtype else ttnn.typecast(k, cache_k.dtype)
+    values = None if global_attention else (v if v.dtype == cache.v.dtype else ttnn.typecast(v, cache.v.dtype))
+    output = ttnn.zeros_like(q, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    stats = ttnn.empty(
+        (q.shape[0], q.shape[1], 2 * max(length for length, _ in requests) // mesh.cp_degree, 1),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh.device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
     for length, metadata in requests:
         local_length = length // mesh.cp_degree
-        query = _rows(q, offset, local_length)
-        keys = _rows(k, offset, local_length)
-        values = None if global_attention else _rows(v, offset, local_length)
         pairs = ((cache.kv, keys),) if global_attention else ((cache.k, keys), (cache.v, values))
         for target, source in pairs:
-            converted = source if source.dtype == target.dtype else ttnn.typecast(source, target.dtype)
-            ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+            ttnn.experimental.gemma4.update_cache(
                 target,
-                converted,
-                slot_idx=metadata.slot_idx,
-                kv_actual_global=metadata.kv_actual_global,
-                valid_global=metadata.valid_global,
+                source,
+                request_descriptors=metadata.descriptors,
+                request_index=metadata.index,
+                request_local_tokens=local_length,
                 layer_idx=attention.ring_layer_idx,
                 num_layers=attention.ring_num_layers,
                 cluster_axis=mesh.cp_axis,
-                stripe_size=32,
             )
-            if converted is not source:
-                converted.deallocate(True)
-        keys.deallocate(True)
-        if values is not None:
-            values.deallocate(True)
 
         q_chunk = next(size for size in (128, 64, 32) if local_length % size == 0)
-        cache_k = cache.kv if global_attention else cache.k
         k_chunk = next(
             size for size in ((256, 128, 64, 32) if global_attention else (32,)) if cache_k.shape[2] % size == 0
         )
         grid = ccl.compute_grid_size
         num_cores = (grid.x - 1) * grid.y
-        splits = 3 if query.shape[1] * (local_length // q_chunk) * 3 <= num_cores else 1
+        splits = 3 if q.shape[1] * (local_length // q_chunk) * 3 <= num_cores else 1
         segmented = False
         # Keep ragged slabs on divisor-Q tuning; legacy's policy is validated on 128-row-aligned slabs.
         if global_attention and local_length % 128 == 0:
             q_chunk, _, splits, segmented = ring_sdpa_chunk_sizes(
-                local_length, sliding=False, num_heads=query.shape[1], num_cores=num_cores
+                local_length, sliding=False, num_heads=q.shape[1], num_cores=num_cores
             )
         config = ring_prefill_program_config(
             mesh.device,
@@ -96,8 +85,8 @@ def striped_prefill_attention(attention, q, k, v, requests, compute_config):
                 sliding_window_size=attention.config.sliding_window_size,
                 communication="halo",
             )
-        output, stats = ttnn.experimental.gemma4.rjsdpa(
-            query,
+        ttnn.experimental.gemma4.rjsdpa(
+            q,
             cache_k,
             persistent_output_buffer_kv=gather_k,
             head_dim_v=attention.config.head_dim,
@@ -115,23 +104,18 @@ def striped_prefill_attention(attention, q, k, v, requests, compute_config):
             use_column_major_ccl=True,
             is_balanced=False,
             stripe_size=32,
-            slot_id=metadata.slot_idx,
-            kv_actual_isl_tensor=metadata.kv_actual_global,
+            request_descriptors=metadata.descriptors,
+            request_index=metadata.index,
+            request_local_tokens=local_length,
+            output_tensor=output,
+            stats_tensor=stats,
             kv_cache_num_layers=attention.ring_num_layers,
             kv_cache_layer_idx=attention.ring_layer_idx,
             **sliding_args,
         )
-        query.deallocate(True)
-        stats.deallocate(True)
-        outputs.append(output)
-        offset += local_length
-    if offset < q.shape[2]:
-        padding = _rows(q, offset, q.shape[2] - offset)
-        outputs.append(ttnn.zeros_like(padding))
-        padding.deallocate(True)
-    if len(outputs) == 1:
-        return outputs[0]
-    result = ttnn.concat(outputs, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    for output in outputs:
-        output.deallocate(True)
-    return result
+    stats.deallocate(True)
+    if keys is not k:
+        keys.deallocate(True)
+    if values is not None and values is not v:
+        values.deallocate(True)
+    return output

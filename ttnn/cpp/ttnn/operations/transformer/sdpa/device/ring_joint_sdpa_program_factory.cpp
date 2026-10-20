@@ -470,9 +470,8 @@ RingWritePlan build_ring_write_plan(
 
 RingJointRuntimeDerivation build_runtime_derivation(
     const ttnn::prim::RingJointSDPAParams& args, const ttnn::prim::RingJointSDPAInputs& tensor_args) {
-    const auto& q_shape = tensor_args.input_q.logical_shape();
     const uint32_t k_chunk_size = args.get_k_chunk_size();
-    const uint32_t q_local_padded_N = q_shape[2];
+    const uint32_t q_local_padded_N = tensor_args.local_q_seq_len(args);
     const uint32_t kv_local_padded_N = tensor_args.local_kv_seq_len();
     const RingJointInputParams joint_input_params = resolve_ring_joint_input_params(args, tensor_args);
 
@@ -610,7 +609,7 @@ std::optional<uint32_t> compute_gather_valid_Ht(
         return std::nullopt;
     }
     const uint32_t ring_size = static_cast<uint32_t>(args.all_gather_operation_attributes.ring_size);
-    const uint32_t n_local_q = tensor_args.input_q.padded_shape()[2];  // per-device Q slab (chunk_local)
+    const uint32_t n_local_q = tensor_args.local_q_seq_len(args);
     const uint32_t kv_region =
         args.has_sliding_window() && args.stripe_size != 0 ? args.stripe_size : n_local_q / args.kv_stripe_split;
     const uint32_t chunk_global = kv_region * ring_size;
@@ -666,7 +665,7 @@ void apply_ring_joint_scalar_runtime_args(
     std::optional<ring_joint::ChunkedSlidingHaloLayout> runtime_halo_layout;
     if (uses_neighbor_halo) {
         runtime_halo_layout = ring_joint::build_chunked_sliding_halo_layout(
-            tensor_args.input_q.padded_shape()[2] / tt::constants::TILE_HEIGHT,
+            tensor_args.local_q_seq_len(args) / tt::constants::TILE_HEIGHT,
             args.get_k_chunk_size() / tt::constants::TILE_HEIGHT,
             args.sliding_window_size.value(),
             tt::constants::TILE_HEIGHT,
@@ -1111,7 +1110,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     const uint32_t NHK = k_shape[1];
     const uint32_t NHV = tensor_args.v_num_heads();
     const uint32_t DH = q_shape[3];
-    const uint32_t q_local_padded_N = q_shape[2];
+    const uint32_t q_local_padded_N = tensor_args.local_q_seq_len(args);
     const uint32_t kv_local_padded_N = tensor_args.local_kv_seq_len();
     const uint32_t ring_size = static_cast<uint32_t>(args.all_gather_operation_attributes.ring_size);
     const uint32_t gathered_padded_N = k_shape[2];
@@ -3841,7 +3840,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             // Explicit stripes keep this query-window extent for metadata's end-position
             // derivation. Since stripe_size divides Q.local_seq, rounding the transfer up
             // to Q-sized groups covers every live stripe (possibly fetching an extra tail).
-            tensor_args.input_q.padded_shape()[2] / (tt::constants::TILE_HEIGHT * args.kv_stripe_split),
+            q_local_padded_Nt / args.kv_stripe_split,
             // (user, layer)-major KV-cache batch factor: the all-gather reader computes the gathered slot as
             // slot_id[0] * kv_cache_num_layers + kv_cache_layer_idx. Defaults (1, 0) keep callers unaffected.
             args.kv_cache_num_layers,
@@ -3861,6 +3860,15 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             has_sliding_window ? args.stripe_size / tt::constants::TILE_HEIGHT : 0);
     }
 
+    if (args.request_index.has_value()) {
+        for (auto& kernel : desc.kernels) {
+            kernel.defines.emplace_back("GEMMA4_REQUEST_INDEX", std::to_string(*args.request_index));
+            kernel.defines.emplace_back("GEMMA4_PACKED_Q_TILES", std::to_string(input_tensor_q.padded_shape()[2] / 32));
+            kernel.defines.emplace_back(
+                "GEMMA4_STATS_TILES",
+                std::to_string(output_tensors[RING_JOINT_SDPA_STATS_OUTPUT_IDX].padded_shape()[2] / 32));
+        }
+    }
     return desc;
 }
 

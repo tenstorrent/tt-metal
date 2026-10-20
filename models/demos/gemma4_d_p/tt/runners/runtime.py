@@ -58,10 +58,15 @@ class Gemma4PrefillRuntime:
         return ttnn.to_device(self._host_rows(rows), self.mesh_device)
 
     def _stage_batch(self, segments):
-        for segment, metadata in zip(segments, self.model.request_metadata):
-            metadata.update(
-                slot_idx=segment.slot_id, kv_actual_global=segment.actual_start, valid_global=segment.actual_end
+        self.model.packed_prefill_metadata.update(
+            (
+                segment.slot_id,
+                segment.actual_start,
+                segment.actual_end - segment.actual_start,
+                segment.padded_length(self.mesh_config.cp_degree),
             )
+            for segment in segments
+        )
         rows = pack_positions(segments, chunk_size=self.config.chunk_size, cp=self.mesh_config.cp_degree)
         ttnn.copy_host_to_device_tensor(self._host_rows(rows), self.positions)
         self._layout = tuple(s.padded_length(self.mesh_config.cp_degree) for s in segments)

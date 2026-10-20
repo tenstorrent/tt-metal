@@ -51,6 +51,8 @@ struct RingJointSDPAParams {
     // Zero preserves the legacy shape-derived mapping.
     uint32_t stripe_size = 0;
     bool striped_halo = false;
+    std::optional<uint32_t> request_index;
+    std::optional<uint32_t> request_local_tokens;
 
     // We need a constructor, because all_gather_struct is not default initializable.
     RingJointSDPAParams(
@@ -143,6 +145,8 @@ struct RingJointSDPAParams {
         "kv_stripe_split",
         "stripe_size",
         "striped_halo",
+        "request_index",
+        "request_local_tokens",
         "all_gather_operation_attributes",
         "all_gather_tensor_args");
     auto attribute_values() const {
@@ -167,6 +171,8 @@ struct RingJointSDPAParams {
             std::cref(kv_stripe_split),
             std::cref(stripe_size),
             std::cref(striped_halo),
+            std::cref(request_index),
+            std::cref(request_local_tokens),
             std::cref(all_gather_operation_attributes),
             std::cref(all_gather_tensor_args));
     }
@@ -191,6 +197,7 @@ struct RingJointSDPAInputs {
     // Trace-safe metadata path (both or neither): 1-element uint32 DRAM tensors the kernels read at start, slot_id[0]
     // the cache-user slot and kv_actual_isl[0] the prior valid global KV length, so one captured program replays
     // across chunks and users. Contract: ring_joint_scaled_dot_product_attention docstring (sdpa_nanobind.cpp).
+    // With request_index set, both tensors alias the packed descriptor table instead.
     std::optional<Tensor> slot_id;
     std::optional<Tensor> kv_actual_isl;
 
@@ -203,6 +210,12 @@ struct RingJointSDPAInputs {
 
     // Global real-token count (metadata path only); attention stops at the tile holding the last real token.
     std::optional<Tensor> kv_valid_end;
+    std::optional<Tensor> output;
+    std::optional<Tensor> stats;
+
+    uint32_t local_q_seq_len(const RingJointSDPAParams& args) const {
+        return args.request_local_tokens.value_or(input_q.logical_shape()[2]);
+    }
 
     bool has_metadata() const { return slot_id.has_value() && kv_actual_isl.has_value(); }
 

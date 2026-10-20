@@ -211,7 +211,11 @@ void kernel_main() {
         // place between trace replays, so a cached L1 line would return the prior chunk's kv_actual_isl and
         // silently clamp the gather to the wrong prefix.
         const uint32_t kv_actual = trace_metadata::read_metadata_scalar_u32(
-            meta_noc, meta_args, kv_actual_isl_addr, cb_meta.get_write_ptr());  // kv_actual_isl (tile-aligned)
+            meta_noc,
+            meta_args,
+            kv_actual_isl_addr,
+            cb_meta.get_write_ptr(),
+            ttnn::experimental::gemma4::request::prefix_tokens);  // kv_actual_isl (tile-aligned)
         uint32_t cache_local_tile_rows = input_tensor_Ht[0];
         for (uint32_t input_idx = 1; input_idx < num_inputs; ++input_idx) {
             cache_local_tile_rows = std::min(cache_local_tile_rows, input_tensor_Ht[input_idx]);

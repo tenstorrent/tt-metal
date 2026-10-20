@@ -72,7 +72,25 @@ Global layers use tied QK projection; sliding layers use QKV. Weight caches are 
 - `tt/runners/kv_caches.py::allocate_ring_kv_caches` allocates one durable cache per semantic layer. Global layers store 640 channels (`Krot128 | V512`); local layers store separate 256-channel K and V caches.
 - `tt/runners/kv_chunk_table.py::build_kv_chunk_address_table` exposes those same cache buffers for CP8/TP4 migration. It uses the shared migration utilities under `models/demos/common/prefill`.
 
-Each model call prefills one user's chunk and returns post-norm hidden states. `max_batch_size` controls the number of durable user cache slots; `user_id` selects a slot. The constructor returns the ring caches, also exposed through `model.tt_kv_cache`. Physical capacity is at least two chunks so single-chunk prompts use the same ring SDPA path. External allocations accept `prefill_chunk_size`; `Gemma4KvCaches.max_seq_len` reports physical capacity for migration offsets. Callers can supply external caches and receive per-layer migration acknowledgements through callbacks, segmented traces, or a D2H socket service. Traced callers stage ring metadata and absolute RoPE positions before replay. This prefill model does not expose a logits projection API.
+Legacy model calls prefill one user's chunk and return post-norm hidden states. `max_batch_size` controls the number of durable user cache slots; `user_id` selects a slot. The constructor returns the ring caches, also exposed through `model.tt_kv_cache`. Physical capacity is at least two chunks so single-chunk prompts use the same ring SDPA path. External allocations accept `prefill_chunk_size`; `Gemma4KvCaches.max_seq_len` reports physical capacity for migration offsets. Callers can supply external caches and receive per-layer migration acknowledgements through callbacks, segmented traces, or a D2H socket service. Traced callers stage ring metadata and absolute RoPE positions before replay. This prefill model does not expose a logits projection API.
+
+The packed runner shares projection and MLP work across requests, with stripe=32 ownership on CP8. Each request reserves a multiple of 256 tokens, independently of its valid length. The model owns one replicated device descriptor table; the runner stages it and the full-batch RoPE position tensor before replay. Rows contain `[active, cache_slot, prefix_tokens, valid_tokens, packed_offset_tiles, packed_span_tiles, 0, 0]`, with offsets and spans measured in CP-local 32-token tiles. Tile-aligned prefixes support rotated block-cyclic starts.
+
+`ttnn.experimental.gemma4.update_cache` reads request rows directly from full projected K/V buffers, after one whole-buffer dtype conversion when needed. `ttnn.experimental.gemma4.rjsdpa` reads Q at the descriptor offset and writes into one packed output buffer, sharing statistics scratch across sequential request calls. There are no per-request Q/K/V slices or output concatenations. The output is initialized each replay, including unused batch capacity.
+
+Request lengths and tuning remain fixed per trace layout. The host `prefill_lengths` must match the staged descriptor spans; changing lengths selects another trace. Updating slots, prefixes, or offsets does not change the compiled configuration. Inactive entries are reserved for future dynamic-count support and are not dispatched.
+
+The full-model packed sanity test uses five requests totaling 4096 tokens with fixed, nonzero rotated prefixes:
+
+```bash
+pytest 'models/demos/gemma4_d_p/demo/packed_prefill_debug.py::test_prefill_packed_4k_traced[blackhole-8x4]' -sv
+```
+
+Op-level checks cover global and sliding attention, descriptor changes during trace replay, partial requests, L1 sources, ND-sharded caches, shared statistics, and output isolation:
+
+```bash
+pytest tests/ttnn/unit_tests/operations/experimental/gemma4/test_packed_offsets.py -sv
+```
 
 ## Host verification
 

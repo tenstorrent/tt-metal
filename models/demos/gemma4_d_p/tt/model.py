@@ -12,7 +12,7 @@ from models.demos.gemma4_d_p.tt.attention.ring_prefill import ring_cache_capacit
 from models.demos.gemma4_d_p.tt.ccl import ccl_allgather, ccl_partition_rows
 from models.demos.gemma4_d_p.tt.layer import Gemma4DecoderLayer
 from models.demos.gemma4_d_p.tt.precision import dtype_to_str
-from models.demos.gemma4_d_p.tt.prefill_metadata import PrefillMetadata
+from models.demos.gemma4_d_p.tt.prefill_metadata import PackedPrefillMetadata, PrefillMetadata
 from models.demos.gemma4_d_p.utils.general_utils import get_cache_file_name
 
 
@@ -137,8 +137,9 @@ class Gemma4Model:
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
 
-        self.request_metadata = tuple(PrefillMetadata(mesh_config) for _ in range(max_prefill_requests))
-        self.prefill_metadata = self.request_metadata[0]
+        self.prefill_metadata = PrefillMetadata(mesh_config)
+        self.packed_prefill_metadata = PackedPrefillMetadata(mesh_config, max_prefill_requests, prefill_chunk_size)
+        self.request_metadata = self.packed_prefill_metadata.requests
         # When True the caller refreshes the ring metadata itself, outside any trace.
         self._prefill_metadata_external = False
         self._prefill_trace_controller = None
@@ -269,6 +270,8 @@ class Gemma4Model:
                 raise ValueError(f"Packed request lengths must be positive multiples of {quantum}")
             if sum(prefill_lengths) > self.prefill_chunk_size:
                 raise ValueError("Packed request lengths exceed the model's chunk size")
+            if prefill_lengths != self.packed_prefill_metadata.layout:
+                raise ValueError("Packed request lengths must match the staged descriptor spans")
             prefill_batch = tuple(zip(prefill_lengths, self.request_metadata))
         elif not self._prefill_metadata_external:
             self.prefill_metadata.update(slot_idx=user_id, kv_actual_global=chunk_start_idx)

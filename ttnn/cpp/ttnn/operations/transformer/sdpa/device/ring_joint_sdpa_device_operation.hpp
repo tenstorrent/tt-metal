@@ -76,6 +76,11 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     const std::optional<ttnn::Tensor>& logical_l_tensor = std::nullopt,
     const std::optional<ttnn::Tensor>& kv_valid_end_tensor = std::nullopt,
     uint32_t stripe_size = 0,
-    bool striped_halo = false);
+    bool striped_halo = false,
+    const std::optional<ttnn::Tensor>& request_descriptors = std::nullopt,
+    std::optional<uint32_t> request_index = std::nullopt,
+    std::optional<uint32_t> request_local_tokens = std::nullopt,
+    const std::optional<ttnn::Tensor>& output_tensor = std::nullopt,
+    const std::optional<ttnn::Tensor>& stats_tensor = std::nullopt);
 
 }  // namespace ttnn::prim

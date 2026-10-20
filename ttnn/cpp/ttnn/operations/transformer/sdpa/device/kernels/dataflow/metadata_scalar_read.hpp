@@ -12,6 +12,7 @@
 #include "api/core_local_mem.h"
 #include "api/tensor/tensor_accessor.h"
 #include "ttnn/operations/transformer/sdpa/device/kernels/chunked_q_mapping.hpp"
+#include "ttnn/operations/experimental/gemma4/request_descriptor.hpp"
 
 namespace trace_metadata {
 
@@ -33,13 +34,57 @@ namespace trace_metadata {
 // platforms -- so the caller passes an address it has reasoned about rather than this helper guessing.
 template <typename NocT, typename AccessorArgsT>
 inline uint32_t read_metadata_scalar_u32(
-    NocT& noc, const AccessorArgsT& accessor_args, uint32_t tensor_addr, uint32_t dst_l1_addr) {
+    NocT& noc,
+    const AccessorArgsT& accessor_args,
+    uint32_t tensor_addr,
+    uint32_t dst_l1_addr,
+    [[maybe_unused]] uint32_t descriptor_field = 0) {
     const auto accessor = TensorAccessor(accessor_args, tensor_addr);
+#ifdef GEMMA4_REQUEST_INDEX
+    noc.async_read(
+        accessor,
+        CoreLocalMem<uint8_t>(dst_l1_addr),
+        ttnn::experimental::gemma4::request::bytes,
+        {.page_id = GEMMA4_REQUEST_INDEX},
+        {});
+#else
     noc.async_read(accessor, CoreLocalMem<uint8_t>(dst_l1_addr), sizeof(uint32_t), {.page_id = 0}, {});
+#endif
     noc.async_read_barrier();
     invalidate_l1_cache();
+#ifdef GEMMA4_REQUEST_INDEX
+    return CoreLocalMem<volatile uint32_t>(dst_l1_addr)[descriptor_field];
+#else
     return CoreLocalMem<volatile uint32_t>(dst_l1_addr)[0];
+#endif
 }
+
+#ifdef GEMMA4_REQUEST_INDEX
+inline uint32_t packed_offset(uint32_t scratch, uint32_t span_tiles, uint32_t buffer_tiles, uint32_t ring_size) {
+    namespace request = ttnn::experimental::gemma4::request;
+    const CoreLocalMem<volatile uint32_t> row(scratch);
+    const uint32_t offset = row[request::packed_offset_tiles];
+    const bool valid = row[request::active] == 1 && row[request::packed_span_tiles] == span_tiles &&
+                       span_tiles <= buffer_tiles && offset <= buffer_tiles - span_tiles &&
+                       row[request::valid_tokens] > 0 && row[request::valid_tokens] <= span_tiles * 32 * ring_size;
+    ASSERT(valid);
+    return valid ? offset : 0;
+}
+
+struct PackedTileShape {
+    uint32_t heads;
+    uint32_t buffer_rows;
+    uint32_t columns;
+    uint32_t request_rows;
+    uint32_t offset;
+
+    uint32_t d2() const { return request_rows; }
+    uint32_t stride2() const { return columns; }
+    uint32_t id_of(uint32_t batch, uint32_t head, uint32_t row, uint32_t column) const {
+        return ((batch * heads + head) * buffer_rows + offset + row) * columns + column;
+    }
+};
+#endif
 
 inline uint32_t bounded_cache_batch_idx(
     uint32_t slot_id, uint32_t num_layers, uint32_t layer_idx, uint32_t cache_batch_extent) {

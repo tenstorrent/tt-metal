@@ -37,7 +37,12 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> rjsdpa(
     const std::optional<ttnn::Tensor>& input_tensor_v,
     const std::optional<ttnn::Tensor>& persistent_output_buffer_v,
     std::optional<uint32_t> sliding_window_size,
-    const std::string& communication) {
+    const std::string& communication,
+    const std::optional<ttnn::Tensor>& request_descriptors,
+    std::optional<uint32_t> request_index,
+    std::optional<uint32_t> request_local_tokens,
+    const std::optional<ttnn::Tensor>& output_tensor,
+    const std::optional<ttnn::Tensor>& stats_tensor) {
     TT_FATAL(
         communication == "all_gather" || communication == "halo", "rjsdpa communication must be all_gather or halo");
     const bool striped_halo = communication == "halo";
@@ -59,7 +64,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> rjsdpa(
             "rjsdpa stripe_size must be a positive multiple of 32 tokens");
         // Without an explicit prefix, preserve ring_mla's latest-Q-window convention.
         // Tensor metadata must remain device-resident for trace replay.
-        if (!kv_actual_isl.has_value() && !kv_actual_isl_tensor.has_value()) {
+        if (!kv_actual_isl.has_value() && !kv_actual_isl_tensor.has_value() && !request_descriptors.has_value()) {
             TT_FATAL(
                 !cluster_axis.has_value() || *cluster_axis < mesh_device.shape().dims(),
                 "rjsdpa cluster_axis must be within the mesh dimensions");
@@ -112,7 +117,12 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> rjsdpa(
         std::nullopt,  // logical_l_tensor
         std::nullopt,  // kv_valid_end_tensor
         stripe_size.value_or(0),
-        striped_halo);
+        striped_halo,
+        request_descriptors,
+        request_index,
+        request_local_tokens,
+        output_tensor,
+        stats_tensor);
     return {
         output_tensors[ttnn::prim::RING_JOINT_SDPA_OUTPUT_IDX],
         output_tensors[ttnn::prim::RING_JOINT_SDPA_STATS_OUTPUT_IDX]};

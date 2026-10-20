@@ -120,15 +120,23 @@ void kernel_main() {
         arg_idx += 7 + num_inputs;
         Noc meta_noc;
         CircularBuffer cb_meta(meta_cb_id);
-        const uint32_t slot =
-            trace_metadata::read_metadata_scalar_u32(meta_noc, slot_meta_args, slot_id_addr, cb_meta.get_write_ptr());
+        const uint32_t slot = trace_metadata::read_metadata_scalar_u32(
+            meta_noc,
+            slot_meta_args,
+            slot_id_addr,
+            cb_meta.get_write_ptr(),
+            ttnn::experimental::gemma4::request::cache_slot);
         for (uint32_t input = 0; input < num_inputs; ++input) {
             const uint32_t batch =
                 trace_metadata::bounded_cache_batch_idx(slot, num_layers, layer_idx, input_cache_batch_extent[input]);
             input_batch_base[input] = batch * input_batch_head_count[input] * input_stride_pages[input];
         }
         const uint32_t kv_actual_isl = trace_metadata::read_metadata_scalar_u32(
-            meta_noc, kv_meta_args, kv_actual_isl_addr, cb_meta.get_write_ptr());
+            meta_noc,
+            kv_meta_args,
+            kv_actual_isl_addr,
+            cb_meta.get_write_ptr(),
+            ttnn::experimental::gemma4::request::prefix_tokens);
         geometry.prefix_tokens = trace_metadata::bounded_kv_actual_isl(
             kv_actual_isl, geometry.q_local_rows * geometry.ring_size, geometry.cache_local_rows * geometry.ring_size);
         geometry.logical_tokens = 32 * trace_metadata::logical_tile_rows_clamped_to_cache(

@@ -40,6 +40,11 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> rjsdpa(
     const std::optional<ttnn::Tensor>& input_tensor_v = std::nullopt,
     const std::optional<ttnn::Tensor>& persistent_output_buffer_v = std::nullopt,
     std::optional<uint32_t> sliding_window_size = std::nullopt,
-    const std::string& communication = "all_gather");
+    const std::string& communication = "all_gather",
+    const std::optional<ttnn::Tensor>& request_descriptors = std::nullopt,
+    std::optional<uint32_t> request_index = std::nullopt,
+    std::optional<uint32_t> request_local_tokens = std::nullopt,
+    const std::optional<ttnn::Tensor>& output_tensor = std::nullopt,
+    const std::optional<ttnn::Tensor>& stats_tensor = std::nullopt);
 
 }  // namespace ttnn::experimental::gemma4

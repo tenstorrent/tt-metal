@@ -211,8 +211,12 @@ void kernel_main() {
         // factory actually wired a slot tensor. main's bounded_cache_batch_idx clamps the recomposed
         // index against the input's real batch extent (#53904).
         if constexpr (has_slot_metadata) {
-            const uint32_t slot_id =
-                trace_metadata::read_metadata_scalar_u32(meta_noc, meta_args, slot_id_addr, cb_meta.get_write_ptr());
+            const uint32_t slot_id = trace_metadata::read_metadata_scalar_u32(
+                meta_noc,
+                meta_args,
+                slot_id_addr,
+                cb_meta.get_write_ptr(),
+                ttnn::experimental::gemma4::request::cache_slot);
             for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
                 const uint32_t cache_batch_idx = trace_metadata::bounded_cache_batch_idx(
                     slot_id, kv_cache_num_layers, kv_cache_layer_idx, input_cache_batch_extent[input_idx]);
@@ -221,7 +225,11 @@ void kernel_main() {
             }
         }
         const uint32_t kv_actual = trace_metadata::read_metadata_scalar_u32(
-            meta_noc, kv_meta_args, kv_actual_isl_addr, cb_meta.get_write_ptr());
+            meta_noc,
+            kv_meta_args,
+            kv_actual_isl_addr,
+            cb_meta.get_write_ptr(),
+            ttnn::experimental::gemma4::request::prefix_tokens);
         uint32_t cache_local_tile_rows = input_tensor_Ht[0];
         for (uint32_t input_idx = 1; input_idx < num_inputs; ++input_idx) {
             cache_local_tile_rows = std::min(cache_local_tile_rows, input_tensor_Ht[input_idx]);

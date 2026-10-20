@@ -312,6 +312,7 @@ void kernel_main() {
     constexpr bool has_logical_length_tensor = has_logical_n_tensor || has_logical_l_tensor;
     // Live joint tail in tiles; equals the compile-time value unless logical_l arrives as a tensor.
     uint32_t logical_lt = logical_lt_compile;
+    [[maybe_unused]] uint32_t packed_offset = 0;
 
     // Joint-path compile-time gating. When zero, joint Q/K branches are statically dead
     // and dropped by the compiler, eliminating runtime ternaries and joint generator uses.
@@ -536,8 +537,12 @@ void kernel_main() {
         CircularBuffer cb_q_scratch(cb_q_in);
         const uint32_t meta_l1 = cb_q_scratch.get_write_ptr();
         if constexpr (slot_from_metadata) {
-            const uint32_t slot_id =
-                trace_metadata::read_metadata_scalar_u32(meta_noc, meta_args, get_common_arg_val<uint32_t>(0), meta_l1);
+            const uint32_t slot_id = trace_metadata::read_metadata_scalar_u32(
+                meta_noc,
+                meta_args,
+                get_common_arg_val<uint32_t>(0),
+                meta_l1,
+                ttnn::experimental::gemma4::request::cache_slot);
             kv_cache_batch_idx = trace_metadata::bounded_cache_batch_idx(
                 slot_id,
                 get_common_arg_val<uint32_t>(1),
@@ -559,7 +564,14 @@ void kernel_main() {
         }
         if constexpr (kv_pad_from_metadata) {
             uint32_t kv_actual_isl = trace_metadata::read_metadata_scalar_u32(
-                meta_noc, kv_meta_args, get_common_arg_val<uint32_t>(4), meta_l1);
+                meta_noc,
+                kv_meta_args,
+                get_common_arg_val<uint32_t>(4),
+                meta_l1,
+                ttnn::experimental::gemma4::request::prefix_tokens);
+#ifdef GEMMA4_REQUEST_INDEX
+            packed_offset = trace_metadata::packed_offset(meta_l1, q_local_padded_Nt, GEMMA4_PACKED_Q_TILES, ring_size);
+#endif
             if constexpr (has_sliding_window && SLIDING_HALO_SLOT_COUNT > 0) {
                 kv_actual_isl = trace_metadata::bounded_sliding_kv_actual_isl(
                     kv_actual_isl, q_local_padded_Nt, ring_size, kv_local_padded_Nt, SLIDING_HALO_SLOT_COUNT);
@@ -780,7 +792,12 @@ void kernel_main() {
     const uint32_t kv_batch_dim = indexed_kv_cache ? kv_cache_batch_idx + 1 : B;
     // The fused all-gather wrote the active slot to gathered slot 0, so address it as batch-1.
     const uint32_t gathered_kv_batch_dim = indexed_kv_cache ? 1 : B;
+#ifdef GEMMA4_REQUEST_INDEX
+    const auto input_q_tile_logical =
+        trace_metadata::PackedTileShape{NH, GEMMA4_PACKED_Q_TILES, DHt, q_local_padded_Nt, packed_offset};
+#else
     const auto input_q_tile_logical = TensorTileShape(B, NH, q_local_padded_Nt, DHt);
+#endif
     // Packed KV: K/V rows can be wider than the head dims; V is the last vDHt columns of its row.
     constexpr uint32_t k_row_Wt = get_named_compile_time_arg_val("k_row_Wt");
     constexpr uint32_t v_row_Wt = get_named_compile_time_arg_val("v_row_Wt");

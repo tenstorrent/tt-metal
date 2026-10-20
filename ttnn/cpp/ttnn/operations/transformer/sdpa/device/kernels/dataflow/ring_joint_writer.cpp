@@ -709,10 +709,19 @@ void kernel_main() {
         single_valid_kv_chunk_mask = masks.single_valid_kv_chunk_mask;
     }
 
+    [[maybe_unused]] uint32_t packed_offset = 0;
     if constexpr (kv_pad_from_metadata) {
         CircularBuffer cb_meta_scratch(cb_out);
         uint32_t kv_actual_isl = trace_metadata::read_metadata_scalar_u32(
-            noc, meta_args, get_common_arg_val<uint32_t>(0), cb_meta_scratch.get_write_ptr());
+            noc,
+            meta_args,
+            get_common_arg_val<uint32_t>(0),
+            cb_meta_scratch.get_write_ptr(),
+            ttnn::experimental::gemma4::request::prefix_tokens);
+#ifdef GEMMA4_REQUEST_INDEX
+        packed_offset = trace_metadata::packed_offset(
+            cb_meta_scratch.get_write_ptr(), q_local_padded_Nt, GEMMA4_PACKED_Q_TILES, ring_size);
+#endif
         if constexpr (has_sliding_window && SLIDING_HALO_SLOT_COUNT > 0) {
             kv_actual_isl = trace_metadata::bounded_sliding_kv_actual_isl(
                 kv_actual_isl, q_local_padded_Nt, ring_size, kv_local_padded_Nt, SLIDING_HALO_SLOT_COUNT);
@@ -762,14 +771,22 @@ void kernel_main() {
     const auto stats_writer = TensorAccessor(stats_args, stats_addr);
 
     constexpr bool output_has_no_padding = !has_joint_q && (q_local_padded_Nt % Sq_chunk_t == 0);
+#ifdef GEMMA4_REQUEST_INDEX
+    const auto output_tile_logical =
+        trace_metadata::PackedTileShape{NH, GEMMA4_PACKED_Q_TILES, vDHt, q_local_padded_Nt, packed_offset};
+#else
     using StaticOutputTileShape = StaticTensorTileShape<B, NH, q_local_padded_Nt, vDHt>;
     using OutputTileShape = std::conditional_t<output_has_no_padding, StaticOutputTileShape, TensorTileShape>;
-
     const auto output_tile_logical = OutputTileShape(B, NH, q_local_padded_Nt, vDHt);
+#endif
     const auto joint_tile_logical = TensorTileShape(B, NH, Lt, vDHt);
     // stats tensor is 2× the sequence length: first half stores max (used by both eager and
     // deferred-norm paths), second half stores sum (deferred-norm only).
+#ifdef GEMMA4_REQUEST_INDEX
+    const auto stats_tile_logical = StaticTensorTileShape<B, NH, GEMMA4_STATS_TILES, 1>();
+#else
     const auto stats_tile_logical = StaticTensorTileShape<B, NH, (q_local_padded_Nt + Lt) * 2, 1>();
+#endif
 
     const auto out_generator = PaddedAddrGenerator(out_writer, output_tile_logical);
     const auto joint_out_generator = PaddedAddrGenerator(joint_out_writer, joint_tile_logical);

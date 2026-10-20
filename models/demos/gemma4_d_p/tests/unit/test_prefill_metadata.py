@@ -49,9 +49,8 @@ def metadata_model(monkeypatch):
 def test_staging_and_layout_changes_reuse_model_metadata(metadata_model):
     model, hidden = metadata_model
     metadata = model.request_metadata
-    buffers = tuple((m.slot_idx, m.kv_actual_global, m.valid_global) for m in metadata)
-    assert model.prefill_metadata is metadata[0]
-    assert len({id(tensor) for entry in buffers for tensor in entry}) == 9
+    buffer = model.packed_prefill_metadata.tensor
+    assert all(entry.descriptors is buffer for entry in metadata)
 
     runtime = Gemma4PrefillRuntime.__new__(Gemma4PrefillRuntime)
     runtime.model = model
@@ -61,7 +60,7 @@ def test_staging_and_layout_changes_reuse_model_metadata(metadata_model):
     runtime._host_rows = lambda rows: torch.tensor(rows).reshape(1, -1)
     schedules = (
         (PrefillSegment(4, 12896, 13152), PrefillSegment(1, 25248, 25760)),
-        (PrefillSegment(2, 544, 1312),),
+        (PrefillSegment(2, 544, 801),),
         (PrefillSegment(0, 0, 256), PrefillSegment(5, 29408, 30432), PrefillSegment(3, 13888, 15424)),
     )
     for segments in schedules:
@@ -70,29 +69,35 @@ def test_staging_and_layout_changes_reuse_model_metadata(metadata_model):
         for layer in model.layers:
             requests = layer.call_args.kwargs["prefill_batch"]
             assert tuple(length for length, _ in requests) == runtime._layout
+            offset = 0
             for index, ((_, entry), segment) in enumerate(zip(requests, segments)):
                 assert entry is metadata[index]
-                assert (entry.slot_idx.item(), entry.kv_actual_global.item(), entry.valid_global.item()) == (
+                span = segment.padded_length(8)
+                assert entry.index == index
+                assert entry.descriptors[index].tolist() == [
+                    1,
                     segment.slot_id,
                     segment.actual_start,
-                    segment.actual_end,
-                )
+                    segment.actual_end - segment.actual_start,
+                    offset // 256,
+                    span // 256,
+                    0,
+                    0,
+                ]
+                offset += span
+            assert not torch.any(buffer[len(segments) :])
         assert model.request_metadata is metadata
-        assert all(
-            actual is original
-            for entry, original_buffers in zip(metadata, buffers)
-            for actual, original in zip((entry.slot_idx, entry.kv_actual_global, entry.valid_global), original_buffers)
-        )
+        assert all(entry.descriptors is buffer for entry in metadata)
 
 
 def test_legacy_prefill_uses_first_model_metadata_entry(metadata_model):
     model, hidden = metadata_model
     model(hidden, user_id=2, chunk_start_idx=8192)
-    assert model.request_metadata[0].slot_idx.item() == 2
-    assert model.request_metadata[0].kv_actual_global.item() == 8192
+    assert model.prefill_metadata.slot_idx.item() == 2
+    assert model.prefill_metadata.kv_actual_global.item() == 8192
     for layer in model.layers:
         assert layer.call_args.kwargs["prefill_batch"] is None
-        assert layer.call_args.kwargs["prefill_metadata"] is model.request_metadata[0]
+        assert layer.call_args.kwargs["prefill_metadata"] is model.prefill_metadata
 
 
 @pytest.mark.parametrize(
@@ -109,5 +114,38 @@ def test_invalid_layouts_fail_before_attention(metadata_model, expect_error, len
     model, hidden = metadata_model
     with expect_error(ValueError, error):
         model(hidden, prefill_lengths=lengths)
+    for layer in model.layers:
+        layer.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "requests,error",
+    [
+        ((), "metadata capacity"),
+        (((0, 1, 256, 256),), "Invalid packed request"),
+        (((0, 0, 257, 256),), "Invalid packed request"),
+        (((0, 0, 0, 256),), "Invalid packed request"),
+        (((0, 0, 257, 257),), "Invalid packed request"),
+        (((-1, 0, 256, 256),), "Invalid packed request"),
+        (((0, 0, 4097, 4352),), "chunk size"),
+        (((0, 0x100000000, 256, 256),), "uint32"),
+    ],
+)
+def test_invalid_descriptors_do_not_change_staged_table(metadata_model, expect_error, requests, error):
+    model, _ = metadata_model
+    metadata = model.packed_prefill_metadata
+    metadata.update(((2, 544, 257, 512),))
+    before = metadata.tensor.clone()
+    with expect_error(ValueError, error):
+        metadata.update(requests)
+    torch.testing.assert_close(metadata.tensor, before)
+    assert metadata.layout == (512,)
+
+
+def test_layout_must_match_staged_descriptor_spans(metadata_model, expect_error):
+    model, hidden = metadata_model
+    model.packed_prefill_metadata.update(((0, 32, 257, 512),))
+    with expect_error(ValueError, "staged descriptor spans"):
+        model(hidden, prefill_lengths=(256,))
     for layer in model.layers:
         layer.assert_not_called()

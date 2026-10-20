@@ -52,10 +52,15 @@ def test_prefill_packed_4k_traced(mesh_device, reset_seeds):
         tokens_all[s.slot_id * chunk_size + s.actual_start : s.slot_id * chunk_size + s.actual_end].tolist()
         for s in segments
     ]
-    for segment, request_metadata in zip(segments, model.request_metadata):
-        request_metadata.update(
-            slot_idx=segment.slot_id, kv_actual_global=segment.actual_start, valid_global=segment.actual_end
+    model.packed_prefill_metadata.update(
+        (
+            segment.slot_id,
+            segment.actual_start,
+            segment.actual_end - segment.actual_start,
+            segment.padded_length(mesh.cp_degree),
         )
+        for segment in segments
+    )
 
     def upload(rows):
         return ttnn.from_torch(

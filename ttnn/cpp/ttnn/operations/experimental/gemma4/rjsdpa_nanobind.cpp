@@ -4,6 +4,7 @@
 
 #include "rjsdpa_nanobind.hpp"
 #include "rjsdpa.hpp"
+#include "update_cache.hpp"
 #include "ttnn-nanobind/bind_function.hpp"
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/tuple.h>
@@ -44,7 +45,12 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> rjsdpa_wrapper(
     const std::optional<ttnn::Tensor>& input_tensor_v,
     const std::optional<ttnn::Tensor>& persistent_output_buffer_v,
     std::optional<uint32_t> sliding_window_size,
-    const std::string& communication) {
+    const std::string& communication,
+    const std::optional<ttnn::Tensor>& request_descriptors,
+    std::optional<uint32_t> request_index,
+    std::optional<uint32_t> request_local_tokens,
+    const std::optional<ttnn::Tensor>& output_tensor,
+    const std::optional<ttnn::Tensor>& stats_tensor) {
     auto strategy = use_column_major_ccl ? ttnn::ccl::CoreAllocationStrategy::COL_MAJOR
                                          : ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR;
     return ttnn::experimental::gemma4::rjsdpa(
@@ -76,12 +82,32 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> rjsdpa_wrapper(
         input_tensor_v,
         persistent_output_buffer_v,
         sliding_window_size,
-        communication);
+        communication,
+        request_descriptors,
+        request_index,
+        request_local_tokens,
+        output_tensor,
+        stats_tensor);
 }
 }  // namespace
 
 void bind_rjsdpa(nb::module_& mod) {
     auto gemma4 = mod.def_submodule("gemma4", "Experimental Gemma4 operations");
+    ttnn::bind_function<"update_cache", "ttnn.experimental.gemma4.">(
+        gemma4,
+        "Copy a descriptor's rows from a packed TILE buffer into a stripe=32 KV cache. "
+        "request_local_tokens is the fixed per-rank capacity for this trace; the descriptor "
+        "selects the source offset, cache slot, prefix, and valid token count.",
+        &update_cache,
+        nb::arg("cache").noconvert(),
+        nb::arg("input").noconvert(),
+        nb::kw_only(),
+        nb::arg("request_descriptors").noconvert(),
+        nb::arg("request_index"),
+        nb::arg("request_local_tokens"),
+        nb::arg("layer_idx"),
+        nb::arg("num_layers"),
+        nb::arg("cluster_axis"));
     const auto* doc = R"doc(
         Packed-KV causal ring attention, with the same arguments and (output, statistics)
         return contract as ttnn.transformer.ring_mla, plus optional stripe_size.
@@ -132,6 +158,26 @@ void bind_rjsdpa(nb::module_& mod) {
         matching K/V head counts. Host or device prefix, indexed users/layers, partial
         queries, and trace replay are supported. Circular caches are not supported with
         explicit stripes. Without stripe_size, sliding retains the legacy halo contract.
+
+        Packed-buffer addressing (stripe_size=32): supply request_descriptors, request_index,
+        request_local_tokens, and output_tensor together. Descriptors are replicated UINT32
+        ROW_MAJOR DRAM [max_requests, 8] rows:
+            [active, cache_slot, prefix_tokens, valid_tokens,
+             packed_offset_tiles, packed_span_tiles, 0, 0].
+        Offsets/spans count 32-token rows per CP rank. request_local_tokens is a fixed,
+        compiled request capacity and must equal packed_span_tiles * 32. The selected
+        descriptor must be active; inactive dispatches and dynamic capacities are not supported.
+        Descriptors replace slot_id / kv_actual_isl_tensor. Q and output_tensor contain the
+        full packed batch; only this request's span is read/written, with their full head
+        strides. output_tensor must be BF16 TILE DRAM with Q's shape and head_dim_v width.
+        Other output rows are untouched; initialize them before each replay if needed.
+        valid_tokens bounds KV updates; SDPA retains padded-capacity causal scheduling, and
+        callers ignore padded query results.
+
+        Optional stats_tensor reuses BF16 TILE DRAM scratch of shape
+        [1, Q.heads, >=2*request_local_tokens, 1], with tile-aligned sequence length.
+        Request calls may share it sequentially. Preallocated output/statistics are returned
+        by reference; buffers must not alias inputs or each other.
         )doc";
     ttnn::bind_function<"rjsdpa", "ttnn.experimental.gemma4.">(
         gemma4,
@@ -166,7 +212,12 @@ void bind_rjsdpa(nb::module_& mod) {
         nb::arg("input_tensor_v").noconvert() = nb::none(),
         nb::arg("persistent_output_buffer_v").noconvert() = nb::none(),
         nb::arg("sliding_window_size").noconvert() = nb::none(),
-        nb::arg("communication") = "all_gather");
+        nb::arg("communication") = "all_gather",
+        nb::arg("request_descriptors").noconvert() = nb::none(),
+        nb::arg("request_index") = nb::none(),
+        nb::arg("request_local_tokens") = nb::none(),
+        nb::arg("output_tensor").noconvert() = nb::none(),
+        nb::arg("stats_tensor").noconvert() = nb::none());
 }
 
 }  // namespace ttnn::experimental::gemma4
