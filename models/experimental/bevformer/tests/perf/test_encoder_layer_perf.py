@@ -55,7 +55,13 @@ def _head_sha():
 @torch.no_grad()
 @pytest.mark.timeout(1200)
 @pytest.mark.parametrize("config_name", ["nuscenes_base"])
-@pytest.mark.parametrize("bev_size", [(100, 100)])
+@pytest.mark.parametrize(
+    "bev_size",
+    [
+        pytest.param((100, 100), id="bev_100x100"),
+        pytest.param((200, 200), id="bev_200x200"),
+    ],
+)
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("expected_pcc", [0.997])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32 * 1024}], indirect=True)
