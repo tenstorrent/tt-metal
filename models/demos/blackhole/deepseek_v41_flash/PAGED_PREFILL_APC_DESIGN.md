@@ -1271,3 +1271,15 @@ The -151.6 MiB per bank is the net of the removed tables (2.50 + 0.04 GiB = ~325
 ### Prefill slots
 
 All tables above used `DSV41_PREFILL_UP=1` (production). A `DSV41_PREFILL_UP=4` 262,144 B=16 run hung (pytest alive 2 h 50 min, no progress after the JIT of the first chunk; killed, `.46` reset); it was not chased (UP=4 also hung the production server under load, and UP=1 with `DSV41_KEY_EXPORT_FILL=1` is the correct production config). The paged code indexes by prefill slot (scratch region, page-table rows, window ids, the translation kernel's per-slot user), nothing assumes Up = 1.
+
+### 262,144 B=16 rerun on the corrected production config (`DSV41_PREFILL_UP=1`, `DSV41_KEY_EXPORT_FILL=1`, branch with b16fix 121e75b70a9 cherry-picked as 5d39e9ec3dd) [T]
+
+Same shape as the first 262,144 table (bf16 pool of 2300 pages per mesh row, 40 layers, chunk 512). Dense == write == read: first tokens 20538 / 201 / 115 / 201, last-token logits bit-equal (max abs 0), pool (pages + rings) bit-identical. Replay: dense 429.1 ms/chunk, write 429.3, read 406.2 (-5.3 %). DRAM allocated per bank: 3277.6 / 3277.6 / 3198.3 MiB (read -79.3 MiB). Log `t256k_fill1.log`. The earlier table (without the key-export fix) is identical in logits and pool: the export only touches the decode key slab, which this test does not compare, and the prefill logits do not read it.
+
+## 3.4 Not done and why
+
+- **PF3 (paged prefill indexer)** needs a change to the C++ reader of `indexer_score_dsa` (`ttnn/cpp/ttnn/operations/experimental/indexer_score/`) and a rebuild of `_ttnn.so`. Every worktree (this one, the server's `wt/vllm_test`, the other agents' runs) shares the single build of `/mnt/tt-data/ssinghal/tests/tt-metal/build`: rebuilding it while the isolation and eval agents run on it is not safe, and the server worktree must be moved to the same commit afterwards (memory note host-server-uses-vllm-test-worktree). It needs its own build tree or an agreed window; estimate in P.2 unchanged (3-5 weeks).
+- **PF4** (remove tables / key FIFOs / hand-off / export, port APC to pages) depends on PF3 for the key FIFOs. The latent-table part is already optional by flag (`read`): what remains for it is the APC port (`prefix_cache.py` reads `sp.kvt.t`, absent in `read`) and deleting the dual path.
+- Pool dtype (PF0): all measurements use a bf16 pool (P1). At production sizes the pool is fp8; with `read` the window rows and latents of the prefill would be read as fp8 (P2a: 0.9995 -> 0.997 per-layer PCC measured earlier). The Q2a / Q2b / Q16 experiments were not run.
+- Decode after a paged prefill and spec decode were not exercised in this test (prefill logits and the pool were compared).
+- Design-note assumptions checked: PF1 / PF2 "no kernel change for P1" is wrong in one detail: an id-translation kernel IS needed (the indexer returns FIFO slots, not entries; the selected ids need `slot - off` and a page-table lookup per user), written as `paged_kernels/prefill_id_translate.cpp` (a dataflow kernel, JIT-compiled, no C++ rebuild). The P.6 time estimate (-1.5 to -4 %) is too low: measured -5.3 % at 262,144 and -27.5 % at 1M.
