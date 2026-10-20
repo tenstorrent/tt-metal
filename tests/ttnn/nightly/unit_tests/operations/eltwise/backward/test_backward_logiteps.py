@@ -67,7 +67,6 @@ def test_bw_logiteps_domain(eps, dtype, device):
     torch.logit(x, eps=eps).backward(grad_data.float())
     golden = x.grad
     if dtype == ttnn.bfloat16:
-        # bfloat16 tensors on device hold NaN as +inf
         golden = torch.where(torch.isnan(golden), torch.inf, golden)
 
     assert torch.equal(torch.isnan(output), torch.isnan(golden))

@@ -1255,7 +1255,6 @@ std::vector<Tensor> cosh_bw(
 std::vector<Tensor> logiteps_bw(
     const Tensor& grad, const Tensor& input, float eps, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    // Negative eps disables clamping, as in torch: the domain is [0, 1] and NaN outside it.
     const float low = eps < 0.0f ? 0.0f : eps;
     const float high = 1.0f - low;
     Tensor grad_result = ttnn::multiply(
