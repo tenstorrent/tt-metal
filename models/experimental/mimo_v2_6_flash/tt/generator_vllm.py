@@ -318,7 +318,18 @@ class MiMoV2ForCausalLM:
             # vLLM starts chunks and prefix hits on block boundaries; a chunk that does not is moved back to one and
             # recomputes the positions in front of it (their K / V are rewritten with the same values).
             start = int(starts[i]) // BLOCK_SIZE * BLOCK_SIZE
-            placed.append((i, lane, slot, start, int(ends[i])))
+            cached = 0
+            if (
+                start > 0
+                and PREFILL_BATCH
+                and prefill_padded_len(int(ends[i])) <= self.models[0].PREFILL_BATCH_MAX_PADDED
+            ):
+                # A short prompt whose first blocks are cached (a prefix hit) is recomputed from position 0 in a batch
+                # pass (with the lane's other first chunks, traced) instead of an eager later chunk. Its cached blocks
+                # are not written: another request may read them, and a pass of another length could compute their
+                # K / V slightly differently. Their fill entries go to the null block.
+                cached, start = start // BLOCK_SIZE, 0
+            placed.append((i, lane, slot, start, int(ends[i]), cached))
             table_rows[lane][slot] = self._group_rows(tables, i)
         for lane, rows_of_lane in enumerate(table_rows):
             if rows_of_lane:
@@ -344,12 +355,13 @@ class MiMoV2ForCausalLM:
         for rows_of_pass in order:
             lane = rows_of_pass[0][1]
             chunks = [
-                (torch.as_tensor(tokens[i, start:end]).to(torch.int32), slot) for i, _, slot, start, end in rows_of_pass
+                (torch.as_tensor(tokens[i, start:end]).to(torch.int32), slot, cached)
+                for i, _, slot, start, end, cached in rows_of_pass
             ]
             if self._batchable(rows_of_pass[0]):
                 handle = self.models[lane].prefill_enqueue_batch(chunks)
             else:
-                (chunk, slot), start = chunks[0], rows_of_pass[0][3]
+                (chunk, slot, _), start = chunks[0], rows_of_pass[0][3]
                 handle = self.models[lane].prefill_enqueue(chunk, slot, start_pos=start)
             pending.append((rows_of_pass, lane, handle))
         t1 = time.perf_counter()
@@ -369,7 +381,7 @@ class MiMoV2ForCausalLM:
 
     def _batchable(self, placed_row):
         """A first chunk (start 0) whose padded length a prefill batch takes."""
-        _, _, _, start, end = placed_row
+        start, end = placed_row[3], placed_row[4]
         return PREFILL_BATCH and start == 0 and prefill_padded_len(end) <= self.models[0].PREFILL_BATCH_MAX_PADDED
 
     def _recapture_after_new_programs(self, programs):

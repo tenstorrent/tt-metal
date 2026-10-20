@@ -569,23 +569,23 @@ class TtMiMoModel:
     # as many ops as long ones, so batching them is what pays. MIMO_PREFILL_BATCH=0 turns batching off.
     PREFILL_BATCH_MAX_PADDED = 512
 
-    def _prefill_reduce(self, padded):
-        """The row reductions of a prefill pass of chunks padded to ``padded``. A chunk short enough to be batched
-        reduces in chip order (MeshPlan.ordered_reduce) whether it runs in a batch or alone, so a user's prefill
-        does not depend on what it was batched with; longer chunks always run alone and keep ``ttnn.all_reduce``."""
+    def _prefill_reduce(self, padded, users=1):
+        """The row reductions of a prefill pass of ``users`` chunks padded to ``padded``. A chunk short enough to be
+        batched reduces as it would alone whether it runs in a batch or not (MeshPlan.prefill_reduce), so a user's
+        prefill does not depend on what it was batched with; longer chunks always run alone."""
         if padded <= self.PREFILL_BATCH_MAX_PADDED:
-            return self.plan.ordered_reduce()
+            return self.plan.prefill_reduce(users, padded)
         return contextlib.nullcontext()
 
     def prefill_enqueue_batch(self, chunks, layers=None):
-        """First chunks of one or more users in one pass. ``chunks``: [(tokens 1D torch, slot)], each from position
-        0, every one padded to the longest one's padded length S (at most PREFILL_BATCH_MAX_PADDED). The users' rows
+        """First chunks of one or more users in one pass. ``chunks``: [(tokens 1D torch, slot[, cached blocks])], each
+        from position 0, every one padded to the longest one's padded length S (at most PREFILL_BATCH_MAX_PADDED). The users' rows
         run user after user ([1, 1, R * S, hidden]) through the norms, projections and MoE, and through attention as
         a batch of R sequences. Replays the pass's trace when one was captured (``capture_prefill_batch_trace``).
         Only with vLLM's page tables (``setup_vllm_kv_cache``). Returns a pending handle for ``prefill_read``, whose
         logits have one row per user."""
         assert self.layer_groups is not None, "a prefill batch writes through vLLM's page tables"
-        num, padded = len(chunks), max(prefill_padded_len(t.numel()) for t, _ in chunks)
+        num, padded = len(chunks), max(prefill_padded_len(c[0].numel()) for c in chunks)
         assert padded <= self.PREFILL_BATCH_MAX_PADDED and padded <= self.max_seq_len, padded
         trace = self.prefill_traces.get((num, padded)) if layers is None else None
         if trace is not None and trace["id"] is not None:
@@ -614,15 +614,20 @@ class TtMiMoModel:
 
     def _prefill_batch_host(self, chunks, padded, keys):
         """Host inputs of a prefill batch: tokens int32 [R * S]; per page table key its fill rows [tp, R, blocks];
-        each user's last-token tile start in the pass's rows; each user's row in the logits."""
-        tokens = torch.cat([torch.nn.functional.pad(t.to(torch.int32), (0, padded - t.numel())) for t, _ in chunks])
-        slots = [slot for _, slot in chunks]
+        each user's last-token tile start in the pass's rows; each user's row in the logits. A chunk's optional third
+        entry is how many of its first blocks the pass must not write (cached by a prefix hit): their fill entries
+        are vLLM's null block 0."""
+        tokens = torch.cat([torch.nn.functional.pad(c[0].to(torch.int32), (0, padded - c[0].numel())) for c in chunks])
+        slots = [c[1] for c in chunks]
         fills = {}
         for key in keys:
             table, scratch = self._host_table(key)
             fills[key] = kv_lib.batch_fill_rows(table, slots, padded, self.block_size, scratch)
-        starts = [r * padded + (t.numel() - 1) // TILE * TILE for r, (t, _) in enumerate(chunks)]
-        picks = [r * TILE + (t.numel() - 1) % TILE for r, (t, _) in enumerate(chunks)]
+            for r, c in enumerate(chunks):
+                if len(c) > 2 and c[2]:
+                    fills[key][:, r, : c[2]] = 0
+        starts = [r * padded + (c[0].numel() - 1) // TILE * TILE for r, c in enumerate(chunks)]
+        picks = [r * TILE + (c[0].numel() - 1) % TILE for r, c in enumerate(chunks)]
         return tokens, fills, starts, picks
 
     def _prefill_batch_device(self, tokens_tt, tables, ats, num, padded, layers):
@@ -631,7 +636,7 @@ class TtMiMoModel:
         Returns logits [1, 1, 32 * R, vocab / tp] (the users' last-token tiles, user after user)."""
         x = ttnn.embedding(tokens_tt, self.embedding, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
         x = ttnn.reshape(x, (1, 1, num * padded, self.cfg.hidden_size))
-        with self._prefill_reduce(padded):
+        with self._prefill_reduce(padded, num):
             for i in layers:
                 y = self.layers[i].forward_prefill(
                     x,
@@ -721,7 +726,7 @@ class TtMiMoModel:
 
     def _replay_prefill_batch(self, trace, chunks):
         """Copy a batch's inputs into its trace's buffers and replay it (non-blocking)."""
-        num, padded = len(chunks), max(prefill_padded_len(t.numel()) for t, _ in chunks)
+        num, padded = len(chunks), max(prefill_padded_len(c[0].numel()) for c in chunks)
         tokens, fills, starts, picks = self._prefill_batch_host(chunks, padded, list(trace["tables"]))
         ttnn.copy_host_to_device_tensor(
             kv_lib.replicated(self.plan, tokens.reshape(1, -1), ttnn.uint32, device=False), trace["tokens"]

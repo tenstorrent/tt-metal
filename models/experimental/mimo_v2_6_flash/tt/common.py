@@ -37,8 +37,8 @@ class MeshPlan:
         self.tp = self.mesh_shape[tp_axis]
         self.num_links = num_links
         self.topology = topology if self.tp > 2 else ttnn.Topology.Linear
-        # ``ordered_reduce``: all_reduce sums the chips in chip order (see there).
-        self.ordered = False
+        # ``prefill_reduce``: how all_reduce reduces a prefill pass's rows (see there).
+        self.reduce_mode = None
         self.sum_config = compute_config(ttnn.MathFidelity.HiFi4, fp32_acc=True, packer_l1_acc=False)
 
     def shard(self, dim):
@@ -51,22 +51,42 @@ class MeshPlan:
         return ttnn.ReplicateTensorToMesh(self.mesh_device)
 
     @contextlib.contextmanager
-    def ordered_reduce(self):
-        """Inside: ``all_reduce`` all-gathers the chips' tensors and sums them in chip order in fp32, so every row's
-        sum depends on that row's values only. ``ttnn.all_reduce`` reduce-scatters, and the order it adds a row's
-        chips in changes with the number of rows (and where the row sits), so a prefill row computed in a batch
-        would differ from the same row computed alone. 8x the memory of the input while it runs."""
-        assert not self.ordered, "ordered_reduce does not nest"
-        self.ordered = True
+    def prefill_reduce(self, users, padded):
+        """Inside: ``all_reduce`` of a prefill pass's rows [1, 1, users * padded, hidden] (``users`` chunks padded to
+        ``padded``, user after user) gives every user's rows the sum the same chunk would get alone, bit for bit, so a
+        user's prefill does not depend on what it was batched with. ``ttnn.all_reduce``'s order of adding a row's chips
+        changes with the rows around it. For padded >= 96 reducing the pass as a batch of ``users`` [1, 1, padded,
+        hidden] tensors already matches each chunk alone (checked for 2-4 users, padded 96-512); shorter chunks
+        all-gather the chips and sum them in chip order in fp32, alone or batched (8x the input's memory while it
+        runs)."""
+        assert self.reduce_mode is None, "prefill_reduce does not nest"
+        if padded <= 64:
+            self.reduce_mode = ("ordered", users, padded)
+        elif users > 1:
+            self.reduce_mode = ("users", users, padded)
         try:
             yield
         finally:
-            self.ordered = False
+            self.reduce_mode = None
 
     def all_reduce(self, x, memory_config=None):
         if self.tp == 1:
             return x
-        if self.ordered:
+        mode = self.reduce_mode
+        if mode is not None and mode[0] == "users":
+            users, padded = mode[1], mode[2]
+            assert x.shape[-2] == users * padded, (x.shape, mode)
+            batch = ttnn.reshape(x, (users, 1, padded, x.shape[-1]))  # the same tiles, user after user
+            out = ttnn.all_reduce(
+                batch,
+                cluster_axis=self.tp_axis,
+                num_links=self.num_links,
+                topology=self.topology,
+                memory_config=memory_config or ttnn.DRAM_MEMORY_CONFIG,
+            )
+            x.deallocate(True)
+            return ttnn.reshape(out, (1, 1, users * padded, out.shape[-1]))
+        if mode is not None and mode[0] == "ordered":
             gathered = ttnn.all_gather(
                 x,
                 dim=0,
