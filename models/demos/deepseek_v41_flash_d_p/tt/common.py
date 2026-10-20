@@ -7,6 +7,7 @@ TP axis (all_gather + SFPU ttnn.add, K-30: the FPU in all_reduce reads fp32 at a
 from __future__ import annotations
 
 import torch
+from loguru import logger
 
 import ttnn
 
@@ -18,20 +19,28 @@ SP_AXIS = 0  # mesh rows: sequence
 DRAM = ttnn.DRAM_MEMORY_CONFIG
 
 
-def compute_config(mesh):
-    """HiFi4 + fp32 accumulation by default (owner rule 7; tt/settings.py MATMUL_FIDELITY / FP32_DEST_ACC)."""
+def fp32_acc(needed: bool = True) -> bool:
+    """Whether a program accumulates in fp32 DEST (setting FP32_ACC): all = every program (the bring-up precision,
+    max precision); needed = only the sites that pass ``needed=True``: fp32 data paths (SFPU fp32 sums / Sinkhorn /
+    norm statistics, whose values would be cut to bf16 in a 16-bit DEST), long reductions measured to matter and the
+    softmax statistics (P.13; the list and the numbers: tt/settings.py FP32_ACC)."""
+    return settings.get("FP32_ACC") == "all" or bool(needed)
+
+
+def compute_config(mesh, needed: bool = True):
+    """MATMUL_FIDELITY; fp32 accumulation per FP32_ACC (``needed``: this site keeps it under FP32_ACC=needed)."""
     return ttnn.init_device_compute_kernel_config(
         mesh.arch(),
         math_fidelity=getattr(ttnn.MathFidelity, settings.get("MATMUL_FIDELITY")),
         math_approx_mode=False,
-        fp32_dest_acc_en=bool(settings.get("FP32_DEST_ACC")),
+        fp32_dest_acc_en=fp32_acc(needed),
         packer_l1_acc=False,
     )
 
 
-def attn_compute_config(mesh):
-    """The attention-side matmuls' config (P.7, owner comparison): fidelity ATTN_FIDELITY (default HiFi4), fp32
-    accumulation as everywhere (FP32_DEST_ACC). Used by the attention input projection [wq_a | wkv] (tt/q_a.py), wq_b,
+def attn_compute_config(mesh, needed: bool = True):
+    """The attention-side matmuls' config (P.7, owner comparison): fidelity ATTN_FIDELITY, fp32 accumulation per
+    FP32_ACC (``needed`` as in compute_config). Used by the attention input projection [wq_a | wkv] (tt/q_a.py), wq_b,
     the window / sparse sparse_sdpa, wo_a, wo_b (tt/attention.py), the indexer's weights_proj / wq_b and its ring score
     (tt/indexer.py) and the compressor's projections (tt/compressor.py). mHC, norms, router, experts, shared expert and
     every non-matmul op keep compute_config (MATMUL_FIDELITY)."""
@@ -39,9 +48,50 @@ def attn_compute_config(mesh):
         mesh.arch(),
         math_fidelity=getattr(ttnn.MathFidelity, settings.get("ATTN_FIDELITY")),
         math_approx_mode=False,
-        fp32_dest_acc_en=bool(settings.get("FP32_DEST_ACC")),
+        fp32_dest_acc_en=fp32_acc(needed),
         packer_l1_acc=False,
     )
+
+
+def bfp8_roundtrip(t: torch.Tensor) -> torch.Tensor:
+    """t as ttnn's host bfloat8_b packing holds it (TILE, groups of 16 along the last dim), fp32; no device."""
+    return ttnn.to_torch(ttnn.from_torch(t.float().contiguous(), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)).float()
+
+
+BFP8_STATS: list[dict] = []  # DENSE_WEIGHTS=bfp8: one entry per dense fp8 matrix loaded (dense_dtype), for the A/B
+_LOADING = {"layer": None}  # the layer whose weights are being loaded (set_load_layer): dense_dtype's log label
+
+
+def set_load_layer(layer: int | None) -> None:
+    """Names the layer the next dense_dtype calls load (the block / build functions set it; logging only)."""
+    _LOADING["layer"] = layer
+
+
+def dense_dtype(w: torch.Tensor, label: str):
+    """The device dtype of a dense weight the checkpoint stores in fp8 (e4m3 x ue8m0 per 32 x 32; setting
+    DENSE_WEIGHTS): bf16 = the dequantized values exactly (e4m3 x 2^k is bf16-exact); bfp8 = bfloat8_b, the
+    checkpoint's own 8-bit width (agent rule 7): 7 magnitude bits under one exponent per 16 values along the last dim,
+    so a value more than 3 binades under its group's largest loses bits. ``w`` is the tensor as it will be uploaded
+    (its last dim is the one bfp8 groups); with bfp8 the per-matrix change is logged (values changed, ||dW|| / ||W||)
+    and kept in BFP8_STATS."""
+    if settings.get("DENSE_WEIGHTS") != "bfp8":
+        return ttnn.bfloat16
+    wf = w.float()
+    d = bfp8_roundtrip(wf).reshape(wf.shape).sub_(wf)
+    layer = _LOADING["layer"]
+    label = label if layer is None else f"L{layer:02d} {label}"
+    st = {
+        "matrix": label,
+        "shape": tuple(wf.shape),
+        "changed_frac": float(torch.count_nonzero(d)) / max(1, d.numel()),
+        "rel": float(d.norm() / wf.norm().clamp_min(1e-30)),
+    }
+    BFP8_STATS.append(st)
+    logger.info(
+        f"DENSE_BFP8 {label} {st['shape']} values_changed={100 * st['changed_frac']:.2f} % "
+        f"||dW||/||W||={st['rel']:.4g}"
+    )
+    return ttnn.bfloat8_b
 
 
 def fpu_weight(w: torch.Tensor) -> torch.Tensor:

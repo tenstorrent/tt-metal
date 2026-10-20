@@ -48,7 +48,7 @@ import torch
 import ttnn
 
 from . import ccl
-from .common import DRAM, SP_AXIS, TP_AXIS, attn_compute_config, tp_sum
+from .common import DRAM, SP_AXIS, TP_AXIS, attn_compute_config, dense_dtype, tp_sum
 from .quant import act_q, fp4_q, native, round_tf32
 from .rope import RopeTable, deinterleave_perm, rope_heads
 from .settings import settings
@@ -101,7 +101,9 @@ class TtIndexer:
         wq = wq.view(self.nh, self.hd, q_lora)[:, perm, :].reshape(self.nh * self.hd, q_lora)
         wq_t = wq.t().contiguous()
         assert torch.equal(wq_t.bfloat16().float(), wq_t), "wq_b must be bf16-exact (e4m3 x 2^k)"
-        self.wq_b = _upload(mesh, wq_t.reshape(1, 1, q_lora, -1), ttnn.bfloat16)
+        # DENSE_WEIGHTS (P.13): bf16 (exact fp8 values) or bfloat8_b (the checkpoint's 8-bit width). weights_proj is
+        # bf16 in the checkpoint: it stays bf16 (rule 7)
+        self.wq_b = _upload(mesh, wq_t.reshape(1, 1, q_lora, -1), dense_dtype(wq_t, "indexer.wq_b"))
         # weights_proj [nh, H] scaled by hd^-0.5 nh^-0.5 (a power of two: exact) -> W^T [H, nh], K rows split over TP
         scale = self.hd**-0.5 * self.nh**-0.5
         wp = w["weights_proj"].float() * scale

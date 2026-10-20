@@ -1,10 +1,7 @@
 include(sources.cmake)
 
 add_library(ttnn_op_bringup_prepare_chunk_recurrence ${LIB_TYPE})
-add_library(
-    TTNN::Ops::Bringup::PrepareChunkRecurrence
-    ALIAS ttnn_op_bringup_prepare_chunk_recurrence
-)
+add_library(TTNN::Ops::Bringup::PrepareChunkRecurrence ALIAS ttnn_op_bringup_prepare_chunk_recurrence)
 
 tt_reuse_precompile_headers(ttnn_op_bringup_prepare_chunk_recurrence TT::CommonPCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_bringup_prepare_chunk_recurrence)
@@ -48,8 +45,7 @@ install(
         ttnn_op_bringup_prepare_chunk_recurrence
     FILE_SET
     kernels
-        DESTINATION
-            ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn/ttnn/bringup/prepare_chunk_recurrence
+        DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn/ttnn/bringup/prepare_chunk_recurrence
         COMPONENT ttnn-runtime
 )
 
