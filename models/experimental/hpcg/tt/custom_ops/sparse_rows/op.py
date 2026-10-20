@@ -91,15 +91,20 @@ def debug_buffer(device, zeros=True):
     return u32_rows(device, [[0] * 16] * (2 * g.x * g.y))
 
 
+_RANGES = {}
+
+
 def core_ranges(nc, gx):
-    """The first nc logical cores, row by row."""
-    full, part = divmod(nc, gx)
-    rs = []
-    if full:
-        rs.append(ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(gx - 1, full - 1)))
-    if part:
-        rs.append(ttnn.CoreRange(ttnn.CoreCoord(0, full), ttnn.CoreCoord(part - 1, full)))
-    return ttnn.CoreRangeSet(rs)
+    """The first nc logical cores, row by row (made once per core count: descriptors copy what they are given)."""
+    if (nc, gx) not in _RANGES:
+        full, part = divmod(nc, gx)
+        rs = []
+        if full:
+            rs.append(ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(gx - 1, full - 1)))
+        if part:
+            rs.append(ttnn.CoreRange(ttnn.CoreCoord(0, full), ttnn.CoreCoord(part - 1, full)))
+        _RANGES[(nc, gx)] = ttnn.CoreRangeSet(rs)
+    return _RANGES[(nc, gx)]
 
 
 def _flip_ranges(nc, gx, rect):
@@ -123,6 +128,47 @@ def _flip_ranges(nc, gx, rect):
             else:
                 rs.append((x0, x1, y, y))
     return out
+
+
+_GROUPS = {}
+
+
+def _kernel_groups(nc, gx, rect):
+    """(core ranges, reader config, writer config) of each NoC assignment of a launch on the first nc cores: reader
+    on NoC 0 and writer on NoC 1, swapped inside rect (_flip_ranges). Made once per (nc, gx, rect)."""
+    key = (nc, gx, tuple(rect))
+    if key not in _GROUPS:
+        flipped = _flip_ranges(nc, gx, rect)
+        groups = []
+        for f, rects in flipped.items():
+            cr = core_ranges(nc, gx)
+            if len(flipped) > 1:
+                cr = ttnn.CoreRangeSet(
+                    [ttnn.CoreRange(ttnn.CoreCoord(x0, y0), ttnn.CoreCoord(x1, y1)) for x0, x1, y0, y1 in rects]
+                )
+            rcfg = ttnn.DataMovementConfigDescriptor(
+                processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.NOC_1 if f else ttnn.NOC.NOC_0
+            )
+            wcfg = ttnn.DataMovementConfigDescriptor(
+                processor=ttnn.DataMovementProcessor.RISCV_1, noc=ttnn.NOC.NOC_0 if f else ttnn.NOC.NOC_1
+            )
+            groups.append((cr, rcfg, wcfg))
+        _GROUPS[key] = groups
+    return _GROUPS[key]
+
+
+_CBS = {}
+
+
+def _cb(nc, gx, idx, nbytes, page, face):
+    """A circular buffer of fp32 pages on the first nc cores (face: pages of one 16 x 16 tile face), made once per
+    shape: launches share most of their buffers' shapes."""
+    key = (nc, gx, idx, nbytes, page, face)
+    if key not in _CBS:
+        tile = {"tile": ttnn._ttnn.program_descriptor.TileDescriptor(16, 16)} if face else {}
+        fd = ttnn.CBFormatDescriptor(buffer_index=idx, data_format=ttnn.float32, page_size=page, **tile)
+        _CBS[key] = ttnn.CBDescriptor(total_size=nbytes, core_ranges=core_ranges(nc, gx), format_descriptors=[fd])
+    return _CBS[key]
 
 
 _SEMS = {}
@@ -264,16 +310,8 @@ class SparseRowOp:
 
         # circular buffers; L1 pages hold tpw words (256: one 16x16 face, so unpack / pack move one face)
         pg = tpw * 4
-        tile_desc = ttnn._ttnn.program_descriptor.TileDescriptor(16, 16) if tpw == 256 else None
-
         def cb(idx, nbytes, page=4096, tile=False):
-            fd = ttnn.CBFormatDescriptor(
-                buffer_index=idx,
-                data_format=ttnn.float32,
-                page_size=page,
-                **({"tile": tile_desc} if tile and tile_desc else {}),
-            )
-            return ttnn.CBDescriptor(total_size=nbytes, core_ranges=cores, format_descriptors=[fd])
+            return _cb(plan.nc, g.x, idx, nbytes, page, tile and tpw == 256)
 
         own = [j % NGATH for j in range(plan.nslot)]
         c2 = own.count(2)
@@ -340,21 +378,9 @@ class SparseRowOp:
 
         if noc_flip is None:
             noc_flip = NOC_FLIP_RECT if (mode == "spmv" or out2 is not None) else ()
-        flipped = _flip_ranges(plan.nc, g.x, noc_flip)
         define_list = [(k, str(v)) for k, v in defs.items()]
         kernels = []
-        for f, rects in flipped.items():
-            cr = cores
-            if len(flipped) > 1:
-                cr = ttnn.CoreRangeSet(
-                    [ttnn.CoreRange(ttnn.CoreCoord(x0, y0), ttnn.CoreCoord(x1, y1)) for x0, x1, y0, y1 in rects]
-                )
-            rcfg = ttnn.DataMovementConfigDescriptor(
-                processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.NOC_1 if f else ttnn.NOC.NOC_0
-            )
-            wcfg = ttnn.DataMovementConfigDescriptor(
-                processor=ttnn.DataMovementProcessor.RISCV_1, noc=ttnn.NOC.NOC_0 if f else ttnn.NOC.NOC_1
-            )
+        for cr, rcfg, wcfg in _kernel_groups(plan.nc, g.x, noc_flip):
             kernels += [
                 ttnn.KernelDescriptor(
                     kernel_source=f"{KERNEL_ROOT}/reader.cpp",

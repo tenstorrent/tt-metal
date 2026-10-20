@@ -137,21 +137,14 @@ class CgVectorOp:
         return ttnn.generic_op(self.io, self.prog)
 
 
-class DotFinishOp:
-    """Finishes a dot product on one core: adds the per-core values in the first nparts pages of `part` (64-byte slots,
-    zero elsewhere), reduces the 1024 lanes, and writes the value to word 0 of `out` (one fp32 4 KB page: element
-    (0, 0) of a tile). keep_old: first copies out's current page to `old` (CG's previous r.z). sqrt: writes the
-    square root (the residual norm). Replaces two ttnn.sum calls and a ttnn.copy (or ttnn.sqrt) with one launch."""
+_FINISH = []
 
-    def __init__(self, device, part, nparts, out, old=None, keep_old=False, sqrt=False):
-        if keep_old and old is None:
-            raise ValueError("keep_old needs the `old` tile")
-        old = old if old is not None else out
+
+def _finish_parts():
+    """DotFinishOp's core (0, 0), circular buffers, defines and compute configuration: the same for every finish,
+    made once per process."""
+    if not _FINISH:
         cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))])
-        ra, wa, ca = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
-        ra[0][0] = [part.buffer_address(), nparts]
-        wa[0][0] = [out.buffer_address(), old.buffer_address(), int(keep_old)]
-        ca[0][0] = [nparts, int(sqrt)]
         cbs_ids = dict(CB_A=0, CB_OUT=16, CB_T=17)
         # keep_old and sqrt are runtime arguments: the three finishes of an iteration share one binary
         defs = [(k, str(v)) for k, v in cbs_ids.items()] + [("VB", str(VB))]
@@ -172,6 +165,25 @@ class DotFinishOp:
         m = [ttnn.UnpackToDestMode.Default] * 64
         m[cbs_ids["CB_A"]] = ttnn.UnpackToDestMode.UnpackToDestFp32
         cfg.unpack_to_dest_mode = ttnn._ttnn.program_descriptor.VectorUnpackToDestMode(m)
+        _FINISH.append((cores, cbs, defs, cfg))
+    return _FINISH[0]
+
+
+class DotFinishOp:
+    """Finishes a dot product on one core: adds the per-core values in the first nparts pages of `part` (64-byte slots,
+    zero elsewhere), reduces the 1024 lanes, and writes the value to word 0 of `out` (one fp32 4 KB page: element
+    (0, 0) of a tile). keep_old: first copies out's current page to `old` (CG's previous r.z). sqrt: writes the
+    square root (the residual norm). Replaces two ttnn.sum calls and a ttnn.copy (or ttnn.sqrt) with one launch."""
+
+    def __init__(self, device, part, nparts, out, old=None, keep_old=False, sqrt=False):
+        if keep_old and old is None:
+            raise ValueError("keep_old needs the `old` tile")
+        old = old if old is not None else out
+        ra, wa, ca = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
+        ra[0][0] = [part.buffer_address(), nparts]
+        wa[0][0] = [out.buffer_address(), old.buffer_address(), int(keep_old)]
+        ca[0][0] = [nparts, int(sqrt)]
+        cores, cbs, defs, cfg = _finish_parts()
         src = ttnn.KernelDescriptor.SourceType.FILE_PATH
 
         def accessors(*ts):

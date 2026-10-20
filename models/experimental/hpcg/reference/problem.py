@@ -88,17 +88,18 @@ class Level:
         band_y0 = np.zeros(8 * nb, np.int32)
         band_ny = np.zeros(8 * nb, np.int32)
         band_start = np.zeros(8 * nb, np.int64)
+        per_py = []  # a colour's lines depend only on its y parity: (lines per band, first line per band)
         for py in (0, 1):
             cy = (nx - py + 1) // 2
-            line_band[py * nl : py * nl + cy] = np.arange(cy) * bands // h
-        for c in range(8):
-            py = (c >> 1) & 1
-            cy = (nx - py + 1) // 2
             lb = np.arange(cy) * bands // h  # nondecreasing: band j's lines are one run
+            line_band[py * nl : py * nl + cy] = lb
+            ny = np.bincount(lb, minlength=nb)[:nb]
+            per_py.append((ny, np.where(ny > 0, np.searchsorted(lb, np.arange(nb)), 0)))
+        for c in range(8):
+            ny, y0 = per_py[(c >> 1) & 1]
             nbc = len(bstarts[c]) - 1
-            ny = np.bincount(lb, minlength=nbc)[:nbc]
-            band_y0[c * nb : c * nb + nbc] = np.where(ny > 0, np.searchsorted(lb, np.arange(nbc)), 0)
-            band_ny[c * nb : c * nb + nbc] = ny
+            band_y0[c * nb : c * nb + nbc] = y0[:nbc]
+            band_ny[c * nb : c * nb + nbc] = ny[:nbc]
             band_start[c * nb : (c + 1) * nb] = bstarts[c][-1]  # bands a colour lacks: empty, at the block's end
             band_start[c * nb : c * nb + nbc] = bstarts[c][:-1]
         self.nb, self.nl = nb, nl
