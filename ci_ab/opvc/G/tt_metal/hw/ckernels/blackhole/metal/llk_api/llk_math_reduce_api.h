@@ -17,7 +17,8 @@ template <
     ReduceDim dim,
     bool is_fp32_dest_acc_en,
     MathFidelity math_fidelity,
-    bool is_int_fpu_en = false>
+    bool is_int_fpu_en = false,
+    int col_pair_static = -1>
 inline void llk_math_reduce(const std::uint32_t dst_index, const ckernel::TensorShape tensor_shape) {
     LLK_ASSERT((dst_index < get_dest_max_tiles_rt<DST_SYNC_MODE, DstTileShape::Tile32x32>()), "");
 
@@ -31,7 +32,7 @@ inline void llk_math_reduce(const std::uint32_t dst_index, const ckernel::Tensor
         StateDiscard<bool>(is_fp32_dest_acc_en),
         StateDiscard<bool>(is_int_fpu_en)));
 
-    _llk_math_reduce_<type, dim, is_fp32_dest_acc_en, math_fidelity, is_int_fpu_en>(dst_index, tensor_shape);
+    _llk_math_reduce_<type, dim, is_fp32_dest_acc_en, math_fidelity, is_int_fpu_en, col_pair_static>(dst_index, tensor_shape);
 }
 
 template <
@@ -39,7 +40,8 @@ template <
     ReduceDim dim,
     bool is_fp32_dest_acc_en,
     MathFidelity math_fidelity,
-    bool is_int_fpu_en = false>
+    bool is_int_fpu_en = false,
+    int col_pair_static = -1>
 inline void llk_math_reduce(const std::uint32_t operandA, const std::uint32_t operandB, const std::uint32_t dst_index) {
     LLK_ASSERT((dst_index < get_dest_max_tiles_rt<DST_SYNC_MODE, DstTileShape::Tile32x32>()), "");
 
@@ -56,7 +58,7 @@ inline void llk_math_reduce(const std::uint32_t operandA, const std::uint32_t op
         StateDiscard<bool>(is_fp32_dest_acc_en),
         StateDiscard<bool>(is_int_fpu_en)));
 
-    _llk_math_reduce_<type, dim, is_fp32_dest_acc_en, math_fidelity, is_int_fpu_en>(dst_index, tensor_shape);
+    _llk_math_reduce_<type, dim, is_fp32_dest_acc_en, math_fidelity, is_int_fpu_en, col_pair_static>(dst_index, tensor_shape);
 }
 
 template <

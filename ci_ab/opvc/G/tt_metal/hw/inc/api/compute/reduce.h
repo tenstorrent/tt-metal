@@ -205,11 +205,22 @@ template <
 ALWI void reduce_tile(
     std::uint32_t icb, std::uint32_t icb_scaler, std::uint32_t itile, std::uint32_t itile_scaler, std::uint32_t idst) {
 #ifndef ARCH_QUASAR
+#ifdef ARCH_BLACKHOLE
+    // The init opted in, so the math thread need not read the pair state
+    MATH((llk_math_reduce<
+          reduce_type,
+          reduce_dim,
+          is_fp32_dest_acc_en,
+          reduce_math_fidelity<reduce_type, reduce_dim, pow2_scaler>(MATH_FIDELITY),
+          false,
+          reduce_col_pair<reduce_type, reduce_dim, pow2_scaler>() ? 1 : -1>(icb, icb_scaler, idst)));
+#else
     MATH((llk_math_reduce<
           reduce_type,
           reduce_dim,
           is_fp32_dest_acc_en,
           reduce_math_fidelity<reduce_type, reduce_dim, pow2_scaler>(MATH_FIDELITY)>(icb, icb_scaler, idst)));
+#endif
     UNPACK((llk_unpack_AB_reduce<reduce_type, reduce_dim>(icb, icb_scaler, itile, itile_scaler)));
 #else
     MATH((llk_math_reduce<reduce_type, reduce_dim>(icb, icb_scaler, idst)));

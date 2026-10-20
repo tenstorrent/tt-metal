@@ -529,7 +529,7 @@ inline void reduce_configure_mop(const ckernel::TensorShape& tensor_shape)
  * @note Call @ref _llk_math_reduce_init_ with matching template args before this
  *       function, and @ref _llk_math_reduce_uninit_ after it to restore modified state.
  */
-template <PoolType type, ReduceDim dim, bool is_fp32_dest_acc_en, MathFidelity math_fidelity, bool is_int_fpu_en = false>
+template <PoolType type, ReduceDim dim, bool is_fp32_dest_acc_en, MathFidelity math_fidelity, bool is_int_fpu_en = false, int col_pair_static = -1>
 inline void _llk_math_reduce_(const std::uint32_t dst_index, const ckernel::TensorShape tensor_shape)
 {
     LLK_VALIDATE_TENSOR_SHAPE_MATH("_llk_math_reduce_", tensor_shape);
@@ -604,9 +604,10 @@ inline void _llk_math_reduce_(const std::uint32_t dst_index, const ckernel::Tens
     }
     else if constexpr (dim == ReduceDim::REDUCE_COL)
     {
-        if constexpr (type != PoolType::MAX)
+        // col_pair_static 1: the caller's init opted in, so the state need not be read
+        if constexpr (type != PoolType::MAX && math_fidelity != MathFidelity::LoFi && col_pair_static != 0)
         {
-            if (reduce_col_pair_state && reduce_col_paired<type, dim>(tensor_shape))
+            if ((col_pair_static == 1 || reduce_col_pair_state) && reduce_col_paired<type, dim>(tensor_shape))
             {
                 for (std::uint32_t row_num = 0; row_num < tensor_shape.num_faces_r_dim; row_num++)
                 {
@@ -862,8 +863,9 @@ inline void _llk_math_reduce_init_(const ckernel::TensorShape& tensor_shape)
         "The FPU reduce has no MIN: the hardware provides GMPOOL (max) and GAPOOL (average) only. "
         "Use the SFPU reduce instead (ckernel_sfpu_reduce.h::calculate_reduce).");
 
+    static_assert(!col_pair || math_fidelity != MathFidelity::LoFi, "the column pair layout is not used at LoFi");
     bool pair = false;
-    if constexpr (dim == ReduceDim::REDUCE_COL && type != PoolType::MAX)
+    if constexpr (dim == ReduceDim::REDUCE_COL && type != PoolType::MAX && math_fidelity != MathFidelity::LoFi)
     {
         pair                  = col_pair && reduce_col_paired<type, dim>(tensor_shape);
         reduce_col_pair_state = pair;
