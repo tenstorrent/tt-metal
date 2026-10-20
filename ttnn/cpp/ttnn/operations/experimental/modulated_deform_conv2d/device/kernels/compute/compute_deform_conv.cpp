@@ -8,13 +8,13 @@
 // Kernel positions run outermost, the core's blocks of 32 output rows inside them; an input wider
 // than one chunk of channels takes a pass per chunk at each position. During the first pass each
 // block's geometry is computed on the SFPU two blocks ahead of its corners, so a reader gathers one
-// block while compute works through another, and handed to the reader that owns the block (even
-// blocks to the first, odd to the second), which keeps it for every pass. For each (pass, block)
-// the reader's four corners are tilized on the unpacker, multiplied by their scalar columns and
-// summed in L1, which gives the block's columns of that pass's chunk; a matmul with the pass's
-// chunk x C_out slice of the weight then accumulates into the block's output tiles, in fp32 dest
-// within the pass and in bfloat16 L1 across passes. After the last pass the bias is added, the ReLU
-// applied, and the bfloat16 output handed to the block's reader.
+// block while compute works through another, from inputs staged by the reader that owns the block
+// (even blocks the first, odd the second), and handed back to it, which keeps it for every pass.
+// For each (pass, block) the reader's four corners are tilized on the unpacker, multiplied by their
+// scalar columns and summed in L1, which gives the block's columns of that pass's chunk; a matmul
+// with the pass's chunk x C_out slice of the weight then accumulates into the block's output tiles,
+// in fp32 dest within the pass and in bfloat16 L1 across passes. After the last pass the bias is
+// added, the ReLU applied, and the bfloat16 output handed to the block's reader.
 
 #include <cstdint>
 
@@ -69,6 +69,8 @@ constexpr uint32_t OUT_TILES = get_compile_time_arg_val(23);  // C_out / 32
 constexpr bool HAS_BIAS = get_compile_time_arg_val(24);
 constexpr bool RELU = get_compile_time_arg_val(25);
 constexpr uint32_t CHUNKS = get_compile_time_arg_val(26);  // passes per kernel position
+// The odd blocks' geometry inputs, staged by their reader; geom_in_cb holds the even ones'.
+constexpr uint32_t odd_geom_in_cb_index = get_compile_time_arg_val(27);
 constexpr uint32_t CORNERS = 4;
 constexpr uint32_t BLOCK_TILES = CORNERS * channel_tiles;
 constexpr uint32_t WEIGHT_SLICE_TILES = channel_tiles * OUT_TILES;
@@ -112,19 +114,20 @@ inline void in_range(uint32_t dst, uint32_t scratch, uint32_t lo_fp32, uint32_t 
 // corner row or column lies outside the input; a corner's weight is the product of its two
 // axis weights and the mask. Eight dest tiles are live at once, which full-sync dest holds
 // in fp32.
-void compute_geometry(CircularBuffer& geom_in_cb, uint32_t index_cb_index, uint32_t weight_cb_index) {
+void compute_geometry(uint32_t in_cb_index, uint32_t index_cb_index, uint32_t weight_cb_index) {
+    CircularBuffer geom_in_cb(in_cb_index);
     CircularBuffer index_cb(index_cb_index);
     CircularBuffer weight_cb(weight_cb_index);
     geom_in_cb.wait_front(GEOM_IN_TILES);
-    reconfig_data_format_srca(geom_in_cb_index);
-    copy_init(geom_in_cb_index);
+    reconfig_data_format_srca(in_cb_index);
+    copy_init(in_cb_index);
 
     tile_regs_acquire();
-    copy_tile(geom_in_cb_index, IN_DY, 0);
-    copy_tile(geom_in_cb_index, IN_ORIGIN_Y, 1);
-    copy_tile(geom_in_cb_index, IN_DX, 3);
-    copy_tile(geom_in_cb_index, IN_ORIGIN_X, 4);
-    copy_tile(geom_in_cb_index, IN_MASK, 6);
+    copy_tile(in_cb_index, IN_DY, 0);
+    copy_tile(in_cb_index, IN_ORIGIN_Y, 1);
+    copy_tile(in_cb_index, IN_DX, 3);
+    copy_tile(in_cb_index, IN_ORIGIN_X, 4);
+    copy_tile(in_cb_index, IN_MASK, 6);
     copy_tile(geom_kernel_cb_index, KERNEL_Y, 2);
     copy_tile(geom_kernel_cb_index, KERNEL_X, 5);
 
@@ -208,7 +211,6 @@ void kernel_main() {
     const uint32_t num_blocks = get_arg_val<uint32_t>(0);
 
     CircularBuffer tiled_cb(tiled_cb_index);
-    CircularBuffer geom_in_cb(geom_in_cb_index);
     CircularBuffer column_cb(column_cb_index);
     CircularBuffer conv_weight_cb(conv_weight_cb_index);
     CircularBuffer acc_cb(acc_cb_index);
@@ -220,7 +222,7 @@ void kernel_main() {
     auto geometry_of = [&](uint32_t block) {
         const bool odd = block & 1;
         compute_geometry(
-            geom_in_cb,
+            odd ? odd_geom_in_cb_index : geom_in_cb_index,
             odd ? odd_geom_index_cb_index : geom_index_cb_index,
             odd ? odd_geom_weight_cb_index : geom_weight_cb_index);
     };

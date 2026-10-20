@@ -113,6 +113,9 @@ ProgramDescriptor ModulatedDeformConv2dOperation::create_descriptor(
     constexpr uint8_t column_cb = tt::CBIndex::c_18;
     constexpr uint8_t acc_cb = tt::CBIndex::c_19;
     constexpr uint8_t bias_cb = tt::CBIndex::c_20;
+    // The second reader stages the odd blocks' geometry inputs.
+    constexpr uint8_t odd_offset_mask_arena_cb = tt::CBIndex::c_1;
+    constexpr uint8_t odd_geom_in_cb = tt::CBIndex::c_21;
 
     // A core's blocks are consecutive output rows, which sample a band of input rows: the dilated
     // kernel's rows plus the bottom corners' row, widened by a margin on each side for the offsets.
@@ -150,7 +153,10 @@ ProgramDescriptor ModulatedDeformConv2dOperation::create_descriptor(
                 }}},
             });
         };
-    push_cb(offset_mask_arena_cb, TILE_ROWS, offset_mask_page_nbytes);
+    // Each reader's staging arena, half a block's offset-mask rows.
+    for (const uint8_t cb : {offset_mask_arena_cb, odd_offset_mask_arena_cb}) {
+        push_cb(cb, TILE_ROWS / 2, offset_mask_page_nbytes);
+    }
     // The four corners of a (pass, block) and one scalar tile per corner, per reader, two deep.
     for (const uint8_t cb : {corner_block_cb, odd_corner_block_cb}) {
         push_cb(cb, 2 * CORNERS * chunk_tiles, tile_nbytes);
@@ -159,8 +165,10 @@ ProgramDescriptor ModulatedDeformConv2dOperation::create_descriptor(
         push_cb(cb, 2 * CORNERS, tile_nbytes);
     }
     push_cb(tiled_block_cb, CORNERS * chunk_tiles, tile_nbytes);
-    // The geometry inputs, two blocks deep, and each reader's blocks' geometry for the whole run.
-    push_cb(geom_in_cb, 2 * GEOM_IN_TILES, fp32_tile_nbytes, tt::DataFormat::Float32);
+    // Each reader's geometry inputs, one block deep, and its blocks' geometry for the whole run.
+    for (const uint8_t cb : {geom_in_cb, odd_geom_in_cb}) {
+        push_cb(cb, GEOM_IN_TILES, fp32_tile_nbytes, tt::DataFormat::Float32);
+    }
     push_cb(geom_kernel_cb, 2, fp32_tile_nbytes, tt::DataFormat::Float32);
     const uint32_t even_slots = std::max<uint32_t>(1, (max_blocks + 1) / 2);
     const uint32_t odd_slots = std::max<uint32_t>(1, max_blocks / 2);
@@ -242,7 +250,7 @@ ProgramDescriptor ModulatedDeformConv2dOperation::create_descriptor(
 
     auto reader_ct = [&](bool first) {
         KernelDescriptor::CompileTimeArgs ct{
-            offset_mask_arena_cb,
+            first ? offset_mask_arena_cb : odd_offset_mask_arena_cb,
             first ? corner_block_cb : odd_corner_block_cb,
             first ? scalar_tile_cb : odd_scalar_tile_cb,
             s.channels,
@@ -261,7 +269,7 @@ ProgramDescriptor ModulatedDeformConv2dOperation::create_descriptor(
             input_page_nbytes,
             offset_mask_page_nbytes,
             kOffsetClampPixels,
-            geom_in_cb,
+            first ? geom_in_cb : odd_geom_in_cb,
             first ? geom_index_cb : odd_geom_index_cb,
             first ? geom_weight_cb : odd_geom_weight_cb,
             geom_kernel_cb,
@@ -347,7 +355,8 @@ ProgramDescriptor ModulatedDeformConv2dOperation::create_descriptor(
         out_tiles,
         has_bias ? 1u : 0u,
         attrs.relu ? 1u : 0u,
-        chunks};
+        chunks,
+        odd_geom_in_cb};
     // The geometry runs in fp32 and keeps eight tiles in dest at once, which takes full-sync dest;
     // its fp32 inputs unpack straight to dest, as srcA would round them to TF32. Each pass's matmul
     // reduction accumulates in fp32 too.
@@ -360,6 +369,7 @@ ProgramDescriptor ModulatedDeformConv2dOperation::create_descriptor(
     compute_config.dst_full_sync_en = true;
     compute_config.unpack_to_dest_mode.assign(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
     compute_config.unpack_to_dest_mode[geom_in_cb] = UnpackToDestMode::UnpackToDestFp32;
+    compute_config.unpack_to_dest_mode[odd_geom_in_cb] = UnpackToDestMode::UnpackToDestFp32;
     compute_config.unpack_to_dest_mode[geom_kernel_cb] = UnpackToDestMode::UnpackToDestFp32;
     compute_desc.config = compute_config;
 
