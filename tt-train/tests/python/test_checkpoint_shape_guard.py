@@ -187,7 +187,7 @@ def test_save_rejects_param_whose_replicate_label_hides_different_data(tp_mesh, 
     original = _forge_replicate(params[name])
 
     path = str(tmp_path / "forged_param.ckpt")
-    with expect_error(ReplicaMismatchError, rf"model\[{name}\] is labelled .* differs from copy 0") as excinfo:
+    with expect_error(ReplicaMismatchError, rf"model\[{name}\] is labelled .* differ") as excinfo:
         checkpointing.save_checkpoint(path, header={}, model_params=params, optimizer=opt)
     for fragment in ("Replicate", "Nothing was written"):
         assert fragment in str(excinfo.value), str(excinfo.value)
@@ -257,9 +257,8 @@ def test_replica_check_can_be_disabled(tp_mesh, tmp_path, expect_error):
 
 def test_save_keeps_nd_replicated_tensor(tp_mesh, tmp_path):
     """A tensor replicated under an N-D label (``[1, 2] / (Replicate, Replicate)``, what an explicit N-D mapper makes)
-    saves at its own shape with the replica check on and off. The check stacks one axis's copies on a tensor dim, and
-    the composer needs a distinct dim per mesh axis ("dims must be unique"), so the other ``Replicate`` axis must not
-    reuse it."""
+    saves at its own shape with the replica check on and off: the check passes on identical copies, and the composer
+    keeps one copy per ``Replicate`` axis (each on its own tensor dim: "dims must be unique")."""
     device = ttml.autograd.AutoContext.get_instance().get_device()
     mapper = ttnn.create_mesh_mapper(device, ttnn.MeshMapperConfig([ttnn.PlacementReplicate() for _ in tp_mesh.shape]))
     data = np.random.default_rng(4).standard_normal((1, 1, 32, 32), dtype=np.float32)

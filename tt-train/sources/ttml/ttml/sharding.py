@@ -6,10 +6,8 @@
 
 from __future__ import annotations
 
-import warnings
 from math import prod
 
-import numpy as np
 import ttnn
 import ttml
 
@@ -23,7 +21,17 @@ class ReplicaMismatchError(ValueError):
     """A tensor's label says two devices hold copies of the same data, and they do not.
 
     ``Sharding.gather`` keeps one copy per ``Replicate`` mesh axis, so a ``Replicate`` label over data that differs
-    across that axis would silently drop every copy but the first (the C++ flatbuffer writer refuses the same case)."""
+    across that axis would silently drop every copy but the first. The check is ``ttnn.verify_shards_match_topology``,
+    the one the flatbuffer writer runs before ``dump_tensor`` writes one copy per replica group."""
+
+
+def _fatal_message(error: BaseException) -> str:
+    """The message of a ttnn ``TT_FATAL`` (the text under its ``info:`` line), or the error's first line."""
+    text = str(error)
+    if "info:\n" in text:
+        text = text.split("info:\n", 1)[1]
+    text = text.split("\nbacktrace:", 1)[0].strip()
+    return text.splitlines()[0] if text else str(error).splitlines()[0]
 
 
 class Sharding:
@@ -85,54 +93,44 @@ class Sharding:
     def gather(self, tensor: ttml.autograd.Tensor, verify_replicas: bool = False):
         """Full host array for ``tensor`` in its native dtype, gathered into a single copy.
 
-        On a single device the tensor is one host buffer, read directly. Otherwise a composer keyed on the
-        tensor's own topology rebuilds it (cf. ``auto_compose._compose_nd_sharded``): a Shard axis
-        concatenates its shards along the sharded dim, and a Replicate axis contributes one copy.
+        On a single device the tensor is one host buffer, read directly. Otherwise every shard is read to the host
+        once and a composer keyed on the tensor's own topology rebuilds the array from that copy (cf.
+        ``auto_compose._compose_nd_sharded``): a Shard axis concatenates its shards along the sharded dim, and a
+        Replicate axis contributes one copy.
 
-        With ``verify_replicas`` (off by default; ``save_checkpoint`` turns it on), every copy along each Replicate axis
-        is read and byte-compared before one is kept, and ``ReplicaMismatchError`` is raised if they differ, i.e. the
-        label does not describe the data. This holds the whole replicated extent on the host for a moment (one copy
-        per replica). Otherwise only the first copy is read, trusting the label."""
-        dtype = tensor.get_value(ttml.autograd.PreferredPrecision.NATIVE).dtype
+        With ``verify_replicas`` (off by default; ``save_checkpoint`` turns it on), ``ttnn.verify_shards_match_topology``
+        checks the host copy first: the shards the label calls replicas of each other must hold the same bytes, else
+        ``ReplicaMismatchError`` is raised, i.e. the label does not describe the data and keeping one copy would drop
+        the others. The check compares shards already on the host, so it moves no data and allocates nothing."""
+        value = tensor.get_value(ttml.autograd.PreferredPrecision.NATIVE)
+        dtype = value.dtype
         if self._is_single_device():
             return tensor.to_numpy(dtype, precision=ttml.autograd.PreferredPrecision.NATIVE)
-        rank = len(tensor.get_value(ttml.autograd.PreferredPrecision.NATIVE).shape)
+        host = value if value.storage_type() == ttnn.StorageType.HOST else value.cpu()
+        if verify_replicas:
+            try:
+                ttnn.verify_shards_match_topology(host)
+            except RuntimeError as e:
+                raise ReplicaMismatchError(
+                    f"labelled {self.describe()}, but the copies that label calls replicas of each other differ, so "
+                    f"the data is not replicated there; saving one copy would drop the others ({_fatal_message(e)})"
+                ) from e
+        rank = len(value.shape)
         shard_dims = {p.dim % rank for p in self._placements if isinstance(p, ttnn.PlacementShard)}
         free_dims = [d for d in range(rank) if d not in shard_dims]
         dims: list[int] = []
         shape_override: list[int] = []
-        replica_axes: list[tuple[int, int, int]] = []  # (mesh axis, tensor dim its copies are stacked on, copies)
         for axis, p in enumerate(self._placements):
             if isinstance(p, ttnn.PlacementShard):
                 dims.append(p.dim)
                 shape_override.append(self._dist_shape[axis])
-                continue
-            # Replicate: the composer needs a distinct dim per mesh axis, so take one no Shard axis uses.
-            dims.append(free_dims.pop(0) if free_dims else 0)
-            copies = self._dist_shape[axis]
-            if verify_replicas and copies > 1 and dims[-1] not in shard_dims and dims[-1] not in dims[:-1]:
-                # Stack this axis's copies along that dim so they can be split apart and compared.
-                shape_override.append(copies)
-                replica_axes.append((axis, dims[-1], copies))
-            else:  # size-1 override -> one copy, no duplication to slice off
-                if verify_replicas and copies > 1:
-                    warnings.warn(
-                        f"Sharding.gather: no free tensor dim to compare the copies on mesh axis {axis} of a "
-                        f"rank-{rank} tensor laid out {self.describe()}; keeping the first copy unchecked",
-                        stacklevel=2,
-                    )
+            else:
+                # Replicate: the composer needs a distinct dim per mesh axis, so take one no Shard axis uses; the
+                # size-1 override keeps one copy of that axis.
+                dims.append(free_dims.pop(0) if free_dims else 0)
                 shape_override.append(1)
         config = ttnn.MeshComposerConfig(dims=dims, mesh_shape_override=ttnn.MeshShape(shape_override))
-        composer = ttnn.create_mesh_composer(_mesh_device(), config)
-        data = tensor.to_numpy(dtype, composer=composer, precision=ttml.autograd.PreferredPrecision.NATIVE)
-        for axis, dim, copies in replica_axes:
-            parts = np.split(data, copies, axis=dim)
-            first = np.ascontiguousarray(parts[0])
-            for index, part in enumerate(parts[1:], start=1):
-                if np.ascontiguousarray(part).tobytes() != first.tobytes():
-                    raise ReplicaMismatchError(
-                        f"labelled {self.describe()}, but copy {index} along mesh axis {axis} differs from copy 0, "
-                        "so the data is not replicated there; saving one copy would drop the others"
-                    )
-            data = first
-        return data
+        composed = ttnn.aggregate_tensor(host, ttnn.create_mesh_composer(_mesh_device(), config))
+        return ttml.autograd.create_tensor(composed, False).to_numpy(
+            dtype, precision=ttml.autograd.PreferredPrecision.NATIVE
+        )
