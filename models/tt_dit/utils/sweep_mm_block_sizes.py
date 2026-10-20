@@ -923,12 +923,16 @@ def _build_op_runner(cfg, mesh_device, M, K, N, dtype, is_agmm, uc_cfg, core_gri
     # MM_SWEEP_FP32_DEST=0 switches to bf16 DST accumulation (8 DST tiles, so 2x4 subblocks) for
     # A/B runs; the model runs fp32 (default 1).
     fp32_dest = os.environ.get("MM_SWEEP_FP32_DEST", "1") != "0"
+    # MM_SWEEP_DST_FULL_SYNC=1: full-sync DST (8 fp32 tiles, so 2x4 subblocks) at the cost of
+    # math/pack overlap. The op forwards the flag into its compute kernel.
+    dst_full_sync = os.environ.get("MM_SWEEP_DST_FULL_SYNC", "0") == "1"
     compute_config = ttnn.init_device_compute_kernel_config(
         mesh_device.arch(),
         math_fidelity=fidelity,
         math_approx_mode=uc_cfg.get("math_approx_mode", False),
         fp32_dest_acc_en=fp32_dest,
         packer_l1_acc=True,
+        dst_full_sync_en=dst_full_sync,
     )
 
     fused_activation = uc_cfg.get("fused_activation", None)

@@ -1085,6 +1085,9 @@ all_gather_minimal_matmul_async_factory_helper(
         tt::tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
+            // Forwarded so a caller can trade math/pack overlap for 8 fp32 DST tiles (2x4 subblocks);
+            // validation already sizes the subblock check from it (get_dest_reg_count).
+            .dst_full_sync_en = dst_full_sync_en,
             .math_approx_mode = math_approx_mode,
             .compile_args = compute_compile_time_args,
             .defines = compute_defines});
