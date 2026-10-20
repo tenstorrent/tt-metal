@@ -4,15 +4,16 @@
 """Tracy harness for the detector end to end: images to class logits, boxes, the frame's BEV and the
 3D detections, all on device; dropping the invalid boxes on the host after it is timed apart.
 
-Dummy weights and ``test_bevformer``'s inputs over three frames.
+Dummy weights over a 100x100 BEV and nuScenes' six-camera rig, three frames. The images stay the
+base 1600x928; only the grid is smaller than ``BEV_SHAPES["base"]``.
 The first frame, which has no previous BEV, runs eagerly; the second is the warmup and the PCC
-gate, then is captured as a trace and replayed once in a signposted region, so the report covers
-already-compiled programs with no host dispatch in between. The capture is also the check that the
-forward has no host operations: any read or write between host and device inside a capture region
-fails it.
+gate. ``live`` then runs that forward once between Tracy's ``start`` and ``stop``, so the stage
+signposts and any host dispatch are in the report. ``trace`` captures it and replays it once in
+that window, so the report is already-compiled programs with no host dispatch; the capture fails
+on any host read or write, and the replay carries only ``start`` and ``stop``.
 
-The third frame replays the same trace, as a deployment would: ``prepare_frame`` refills the
-frame's buffers in place on the host, and the second frame's BEV is copied into the captured
+The third frame, ``trace`` only, replays the same trace, as a deployment would: ``prepare_frame``
+refills the frame's buffers in place on the host, and the second frame's BEV is copied into the captured
 previous-BEV input. The camera rig stays the same, so the plan sized for the first frame covers
 every refill. The ego drives the third step backwards and twice as far, turning the other way,
 so its shift and rotation differ from the second frame's.
@@ -26,17 +27,18 @@ from loguru import logger
 
 import ttnn
 from models.experimental.bevformer.tests.common import (
-    BEV_SHAPES,
     build_reference_bevformer,
     check_detector_outputs,
     frame_metas,
     random_image_batch,
+    signposted_forward,
     signposted_trace,
     to_conv_layout,
 )
 from models.experimental.bevformer.tt.model_preprocessing import create_bevformer_parameters
 from models.experimental.bevformer.tt.tt_bevformer import TTBEVFormer
 
+BEV_SHAPE = (100, 100)
 PCC_THRESHOLD = 0.99
 
 
@@ -52,13 +54,17 @@ def _check(expected, tt_outputs):
 # the conv shapes and once per frame.
 @pytest.mark.timeout(1800)
 @pytest.mark.parametrize(
-    "device_params",
-    # Headroom for the detector's recorded commands, not a measured size.
-    [{"l1_small_size": 32 * 1024, "trace_region_size": 128 * 1024 * 1024}],
-    indirect=True,
+    "traced, device_params",
+    [
+        (False, {"l1_small_size": 32 * 1024}),
+        # Headroom for the detector's recorded commands, not a measured size.
+        (True, {"l1_small_size": 32 * 1024, "trace_region_size": 128 * 1024 * 1024}),
+    ],
+    ids=["live", "trace"],
+    indirect=["device_params"],
 )
-def test_bevformer_perf(device, reset_seeds):
-    torch_model = build_reference_bevformer(BEV_SHAPES["base"])
+def test_bevformer_perf(device, reset_seeds, traced):
+    torch_model = build_reference_bevformer(BEV_SHAPE)
     img = random_image_batch()[None]
     frames = frame_metas(1, 3, torch.Generator().manual_seed(0), motion=(1, -2))
 
@@ -82,8 +88,12 @@ def test_bevformer_perf(device, reset_seeds):
         outputs = tt_model(tt_img, frame, prev_bev=prev_bev)
         return (*outputs, tt_model.detect(*outputs[:2]))
 
-    # Doubles as the warmup of the path with a previous BEV, the one the trace records.
+    # Doubles as the warmup of the path with a previous BEV, the one a trace records.
     _check(expected[1], run())
+
+    if not traced:
+        _check(expected[1], signposted_forward(device, run))
+        return
 
     with signposted_trace(device, run) as (trace_id, tt_outputs):
         _check(expected[1], tt_outputs)

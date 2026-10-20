@@ -543,25 +543,30 @@ pytest models/experimental/bevformer/tests/pcc/test_point_sampling_3d_2d.py
 ### Perf harnesses
 
 Located in `models/experimental/bevformer/tests/perf/`. Each runs a stage, on the base 200x200 grid
-unless noted, behind a PCC gate that doubles as the warmup, captures its forward as a trace, which
-fails on any host read or write, and replays it once between Tracy's `start` and `stop` signposts.
-`test_fused_msda_perf.py` instead runs its forward eagerly between the signposts, without a trace,
-and its report takes no `--tracing-mode`:
+unless noted, behind a PCC gate that doubles as the warmup, then one signposted run.
+`test_encoder_layer_perf.py` and `test_bevformer_perf.py` take `-k live` or `-k trace`. `live` calls
+the forward between Tracy's `start` and `stop`, so stage signposts and host dispatch are in the
+report, and the report takes no `--tracing-mode`. `trace` captures the forward, which fails on any
+host read or write, and replays it once in that window; the replay carries only `start` and `stop`.
+The other harnesses are trace, except `test_fused_msda_perf.py`, which is live only:
 
 - `test_backbone_fpn_perf.py`: the backbone and the FPN on six 928x1600 images.
 - `test_fused_msda_perf.py`: the fused MSDA module and the fused op alone, on the nuScenes tiny
   and base attention shapes.
-- `test_encoder_layer_perf.py`: one encoder layer on a 100x100 grid, without the per-frame setup.
+- `test_encoder_layer_perf.py`: one encoder layer on a 100x100 or 200x200 grid (`-k bev_100x100`
+  or `-k bev_200x200`), without the per-frame setup.
 - `test_encoder_perf.py`: the six-layer encoder, and one layer alone, on a second frame; it then
   replays the trace on the next frame, with the plan refilled in place.
 - `test_decoder_perf.py`: the six-layer decoder.
 - `test_head_perf.py`: the head and the coder's top-k.
-- `test_bevformer_perf.py`: the detector end to end, images to the 3D detections, then a replay on
-  a third frame as a deployment would run it.
+- `test_bevformer_perf.py`: the detector end to end on a 100x100 grid, images to the 3D detections.
+  `trace` then replays on a third frame as a deployment would run it.
 
 **Usage:**
 ```bash
-python -m tracy -p -r -v -m "pytest models/experimental/bevformer/tests/perf/test_bevformer_perf.py"
+python -m tracy -p -r -v -m "pytest models/experimental/bevformer/tests/perf/test_bevformer_perf.py -k live"
+tt-perf-report <ops_perf_results.csv> --start-signpost start --end-signpost stop
+python -m tracy -p -r -v -m "pytest models/experimental/bevformer/tests/perf/test_bevformer_perf.py -k trace"
 tt-perf-report <ops_perf_results.csv> --start-signpost start --end-signpost stop --tracing-mode
 ```
 

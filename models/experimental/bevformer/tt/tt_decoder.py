@@ -131,6 +131,7 @@ class TTDetectionTransformerDecoder:
         """
         if reference_points.dtype != GRID_DTYPE:
             raise ValueError(f"reference_points must be {GRID_DTYPE}, got {reference_points.dtype}")
+        signpost(header="TTNN Decoder Forward Start")
         output = query
         if not self.batch_first:
             output = ttnn.permute(output, (1, 0, 2))
@@ -161,4 +162,7 @@ class TTDetectionTransformerDecoder:
         outputs = ttnn.stack(intermediate, dim=0)
         if not self.batch_first:
             outputs = ttnn.permute(outputs, (0, 2, 1, 3))
-        return outputs, ttnn.stack(intermediate_reference_points, dim=0), ttnn.stack(box_codes, dim=0)
+        reference_points_out = ttnn.stack(intermediate_reference_points, dim=0)
+        box_codes_out = ttnn.stack(box_codes, dim=0)
+        signpost(header="TTNN Decoder Forward End")
+        return outputs, reference_points_out, box_codes_out

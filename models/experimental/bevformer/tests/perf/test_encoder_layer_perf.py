@@ -3,15 +3,15 @@
 
 """Tracy harness for a single BEVFormer encoder layer, called directly.
 
-A 100x100 BEV grid over nuScenes' six-camera rig, bs=1 and no previous BEV: a PCC gate that
-doubles as the warmup, then the layer captured as a trace and one signposted replay, so the report
-covers already-compiled programs with no host dispatch in between.
+A 100x100 or 200x200 BEV grid over nuScenes' six-camera rig, bs=1 and no previous BEV: a PCC gate
+that doubles as the warmup, then one signposted run. ``live`` calls the layer between ``start`` and
+``stop``, so the stage signposts (``BEVLayer TSA/SCA/FFN``) and any host dispatch are in the
+report. ``trace`` captures the layer and replays it once in that window, so the report is
+already-compiled programs with no host dispatch; the replay carries only ``start`` and ``stop``.
 
 What the encoder builds once per frame and shares between its layers, the camera geometry's
 rebatch plan, the spatial cross-attention's layer inputs and the self-attention's reference
-points, is built before the capture, so the measured region is the cost the encoder repeats per
-layer. The layer's stages are signposted (``BEVLayer TSA/SCA/FFN Start/Complete``) when it is
-captured; the replay itself carries only the ``start`` and ``stop`` signposts.
+points, is built before the measured run, so the region is the cost the encoder repeats per layer.
 """
 
 import pytest
@@ -24,29 +24,33 @@ from models.experimental.bevformer.tests.common import (
     build_reference_encoder,
     camera_rows,
     random_encoder_inputs,
+    signposted_forward,
     signposted_trace,
     to_device,
 )
 from models.experimental.bevformer.tt.model_preprocessing import create_bevformer_encoder_parameters
 from models.experimental.bevformer.tt.tt_encoder import TTBEVFormerEncoder
 
-BEV_SHAPE = (100, 100)
-
 
 @torch.no_grad()
 @pytest.mark.timeout(1200)
+@pytest.mark.parametrize("bev_shape", [(100, 100), (200, 200)], ids=["bev_100x100", "bev_200x200"])
 @pytest.mark.parametrize(
-    "device_params",
-    # Headroom for the layer's recorded commands, not a measured size.
-    [{"l1_small_size": 32 * 1024, "trace_region_size": 32 * 1024 * 1024}],
-    indirect=True,
+    "traced, device_params",
+    [
+        (False, {"l1_small_size": 32 * 1024}),
+        # Headroom for the layer's recorded commands, not a measured size.
+        (True, {"l1_small_size": 32 * 1024, "trace_region_size": 32 * 1024 * 1024}),
+    ],
+    ids=["live", "trace"],
+    indirect=["device_params"],
 )
-def test_encoder_layer_perf(device, reset_seeds):
-    bev_h, bev_w = BEV_SHAPE
+def test_encoder_layer_perf(device, reset_seeds, traced, bev_shape):
+    bev_h, bev_w = bev_shape
     # A one-layer encoder is that layer: without a previous BEV the encoder only builds the frame
     # inputs around it.
     torch_model = build_reference_encoder(1)
-    inputs = random_encoder_inputs(BEV_SHAPE, 1)
+    inputs = random_encoder_inputs(bev_shape, 1)
     torch_output = torch_model(
         inputs["bev_query"],
         inputs["value"],
@@ -82,5 +86,8 @@ def test_encoder_layer_perf(device, reset_seeds):
     # Doubles as the warmup: this call compiles the kernels and fills the program cache.
     check(run())
 
-    with signposted_trace(device, run) as (_, tt_output):
-        check(tt_output)
+    if traced:
+        with signposted_trace(device, run) as (_, tt_output):
+            check(tt_output)
+    else:
+        check(signposted_forward(device, run))

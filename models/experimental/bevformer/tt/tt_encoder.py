@@ -173,11 +173,12 @@ class TTBEVFormerEncoder:
         bs, num_query, embed_dims = bev_query.shape
         assert num_query == self.bev_h * self.bev_w, f"{num_query} queries for a {self.bev_h}x{self.bev_w} BEV"
         assert value.shape[1] == self.num_keys, f"{value.shape[1]} keys, expected {self.num_keys}"
-
         if prev_bev is not None and shift is not None:
             assert (
                 tuple(shift.shape) == (bs, 1, 1, 2) and shift.dtype == GRID_DTYPE
             ), f"shift must be {GRID_DTYPE} (bs, 1, 1, 2), got {shift.dtype} {tuple(shift.shape)}"
+
+        signpost(header="TTNN Encoder Forward Start")
         # Upstream shifts the previous BEV's points only when there is a previous BEV.
         ref_2d = self.reference_points(bs, shift if prev_bev is not None else None)
         if prev_bev is not None:
@@ -191,4 +192,5 @@ class TTBEVFormerEncoder:
         output = bev_query
         for layer in self.layers:
             output = layer(output, value, bev_pos, prev_bev, ref_2d, sca_inputs)
+        signpost(header="TTNN Encoder Forward End")
         return output
