@@ -2257,7 +2257,8 @@ class GenerationServer:
         are skipped -- the model's own tokens are in the cache already -- and the
         turn starts with the pending token that closed the previous one. ``closing``
         overrides whether it does (a resumed conversation renders the assistant turns
-        after its resume point and still closes the cached one)."""
+        after its resume point and still closes the cached one). A render from the
+        first message starts with BOS."""
         engine = user.engine
         first_turn = user._next_render == 0
         rendered = "".join(
@@ -2265,7 +2266,10 @@ class GenerationServer:
             for i in range(user._next_render, len(user.messages))
             if include_assistant or user.messages[i]["role"] != "assistant"
         )
-        ids = list(engine.tokenizer(rendered, add_special_tokens=first_turn)["input_ids"])
+        ids = list(engine.tokenizer(rendered, add_special_tokens=False)["input_ids"])
+        if first_turn:
+            # The tokenizer does not add BOS (V4.1's add_bos_token is false); encode_messages prepends it.
+            ids.insert(0, engine.tokenizer.bos_token_id)
         if closing is None:
             closing = not include_assistant
         if not closing:

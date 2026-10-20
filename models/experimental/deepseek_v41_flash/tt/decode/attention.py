@@ -151,8 +151,9 @@ class DeepSeekV41Indexer(DeepSeekV4Indexer):
         ``page_row`` (INT32 ROW_MAJOR ``[1]``) picks the session's row of a shared ``[N, L]``
         ``idx_page_table``; without it the table is ``[1, L]``. Block ids are logical (a session's
         entry ``w`` is at logical block ``w // 64``) and ``pool_rows`` are physical ``comp_kv`` rows,
-        so a consumer's ``new_row_index`` is translated through ``idx_page_table`` (``kv_page_table``)
-        while its selected rows are not.
+        so a consumer's ``new_row_index`` is translated through ``idx_page_table`` (``kv_page_table``,
+        which the op takes only with ``page_row``) while its selected rows are not. A consumer given
+        ``new_row`` therefore needs ``page_row``, also with one session.
         """
         users = _packed_users(tokens)
         assert users == 1, f"fused_lightning_select_kv decodes one user, got {users}"
@@ -197,11 +198,12 @@ class DeepSeekV41Indexer(DeepSeekV4Indexer):
                 )
             key_cache, page_table = scache.pool_keys, scache.pool_page_table
             extra.update(num_keys_tensor=scache.pool_count, row_table=scache.pool_rows)
-            if page_row is not None:
-                if new_row is None:
-                    del extra["page_table_row_tensor"]
-                else:
-                    extra["kv_page_table"] = scache.idx_page_table
+            if new_row is not None:
+                # Without kv_page_table the op writes new_kv_row at new_row_index as a raw comp_kv row.
+                assert page_row is not None, "a consumer writing new_row needs page_row to map its logical entry"
+                extra["kv_page_table"] = scache.idx_page_table
+            elif page_row is not None:
+                del extra["page_table_row_tensor"]
         sel_kv, scores, *_ = ttnn.experimental.deepseek.fused_lightning_select_kv(
             query,
             key_cache,
@@ -676,10 +678,11 @@ class DeepSeekV41Attention(DeepSeekV4Module):
         ``candidates`` makes the select two-level and ``build_pool`` has a consumer build the pool
         first (see :meth:`DeepSeekV41Indexer.select_kv`).
 
-        Several sessions (see :class:`DeepSeekV41LayerCache`): ``page_row`` (INT32 ROW_MAJOR ``[1]``) is
-        the session's slot, its row of every ``idx_page_table``; ``ring_offset`` / ``win_offset`` are
-        the first rows of its slot in ``kv`` and in ``win_kv`` / ``win_gate``. ``sliding_pos`` and
-        ``win_slot`` already include those offsets, and ``entry`` stays the session's logical row.
+        ``page_row`` (INT32 ROW_MAJOR ``[1]``) is the session's slot, its row of every ``idx_page_table``
+        (0 with one session). Several sessions (see :class:`DeepSeekV41LayerCache`): ``ring_offset`` /
+        ``win_offset`` are the first rows of its slot in ``kv`` and in ``win_kv`` / ``win_gate``.
+        ``sliding_pos`` and ``win_slot`` already include those offsets, and ``entry`` stays the
+        session's logical row.
         """
         b, s, _, d = hidden.shape
         assert s == 1, f"decode attends one token per user, but S == {s}"

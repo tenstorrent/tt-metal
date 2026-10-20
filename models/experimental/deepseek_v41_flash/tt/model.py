@@ -1037,13 +1037,15 @@ class DeepSeekV41Model(DeepSeekV4Model):
             "win_rope": {},
             "entry": {},
             "index_pos": {},
-            "page_row": None,
+            # Even one session's page table is not the identity (block 0 is ZERO_BLOCK), so the paged
+            # ops always read the slot's row.
+            "page_row": field(3),
             "ring_offset": None,
             "win_offset": None,
         }
         win_base_f = None
         if self._slotted:
-            ctx["page_row"], ctx["ring_offset"], ctx["win_offset"] = field(3), field(4), field(5)
+            ctx["ring_offset"], ctx["win_offset"] = field(4), field(5)
             if any(r > 1 for r in sm["kv_ratios"]):
                 win_base_f = ttnn.typecast(
                     ttnn.to_layout(ttnn.reshape(ctx["win_offset"], [1, 1, 1, 1]), ttnn.TILE_LAYOUT), ttnn.float32
