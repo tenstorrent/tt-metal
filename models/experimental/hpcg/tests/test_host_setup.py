@@ -171,3 +171,9 @@ def test_segment_counts_match_meta(nx, bands):
     for phases in ([7, 6, 5, 4, 3, 2, 1, 0], list(range(8)) + resid, resid):
         for tpw in (256, 1024):
             assert list(p.meta(phases, noc, tpw)[1:4]) == list(p.segment_counts(phases, tpw)), (phases, tpw)
+    # a post-smoother sharing the pre-smoother's table (SparseRowOp's table_phases): its counts are the table's
+    # Gauss-Seidel counts, with no RESTF segments
+    gs16 = [7, 6, 5, 4, 3, 2, 1, 0] + list(range(8))
+    for tpw in (256, 1024):
+        _, _, table_gs, _, _ = p.meta(gs16 + resid, noc, tpw)
+        assert list(p.segment_counts(gs16, tpw)) == [table_gs, table_gs, [0] * p.nc], tpw

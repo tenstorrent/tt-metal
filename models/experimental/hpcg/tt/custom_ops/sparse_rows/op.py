@@ -263,7 +263,12 @@ class SparseRowOp:
             if list(table_phases[: len(phases)]) != list(phases):
                 raise ValueError("phases must be a prefix of table_phases")
             nph = len(phases)
-            nseg, nseg_gs, nseg_r = plan.segment_counts(phases, tpw)
+            if all(p < 8 for p in phases) and all(p >= 8 for p in table_phases[nph:]):
+                # the table's Gauss-Seidel phases, then only SpMV passes: the table's Gauss-Seidel counts are this
+                # launch's (all its segments are Gauss-Seidel ones), with no RESTF segments
+                nseg, nseg_r = nseg_gs, [0] * plan.nc
+            else:
+                nseg, nseg_gs, nseg_r = plan.segment_counts(phases, tpw)
         meta_b = meta_t.shape[1] * 4  # one DRAM page per core: its row, a multiple of 64 bytes
         self.keep = [meta_t]
         ntlv = slot_pages(plan.pout // TILE) if plan.nslot == 27 else plan.pout // TILE
