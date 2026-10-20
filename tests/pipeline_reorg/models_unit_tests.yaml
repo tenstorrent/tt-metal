@@ -2374,3 +2374,26 @@
   owner_id: U03PUAKE719 # Miguel Tairum Cruz (external bring-up by murodbecks)
   team: models
   budget_type: unit
+
+# VoxCPM2 component qualification only; integrated TT speech synthesis remains pending.
+# The 16 device replay cases need the two pinned CUDA captures and the checkpoint under
+# /mnt/MLPerf/tt_dnn-models/openbmb/VoxCPM2 (see models/experimental/voxcpm2/validation/cases.py).
+# Until those are provisioned the device cases skip and this leg runs the host tests only
+# (seconds on bh_p150, run 38267491428). Once the assets are staged, add
+# `export VOXCPM2_REQUIRE_DEVICE_TESTS=1` so missing assets fail instead of skip, and raise
+# the timeout (with the models unit_tier3 bh_p150 budget) to cover the device replays.
+- name: VoxCPM2 component accuracy tests
+  cmd: |
+    set -e
+    export TT_METAL_WATCHER=30
+    uv pip install -r models/experimental/voxcpm2/requirements.txt
+    pytest models/experimental/voxcpm2/tests --timeout=120
+  model: voxcpm2
+  model_family: VoxCPM
+  skus:
+    bh_p150:
+      timeout: 2
+      tier: 3
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz (external bring-up by erertertet)
+  team: models
+  budget_type: unit
