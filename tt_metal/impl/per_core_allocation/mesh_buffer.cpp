@@ -28,6 +28,11 @@ std::vector<CoreCoord> shard_cores(const BufferShardingArgs& args) {
 }
 }  // namespace
 
+uint32_t l1_tensor_allocation_alignment(const IDevice& device) {
+    const auto& config = device.allocator_impl()->get_config();
+    return config.allocator_mode == AllocatorMode::HYBRID ? config.dram_alignment : config.l1_alignment;
+}
+
 std::vector<L1TensorExtent> get_l1_tensor_owner_extents(
     const distributed::MeshBuffer& buffer, const std::vector<distributed::MeshCoordinate>& coords) {
     TT_FATAL(buffer.is_allocated(), "Cannot inspect deallocated L1 storage");
