@@ -193,8 +193,21 @@ def test_fused_msda_v2_num_valid_queries_matches_reference_and_reuses_program(de
                 num_valid_queries=num_valid_queries,
             )
         got = ttnn.to_torch(out).to(torch.float32)
+        if num_valid_queries is not None:
+            with device.cache_entries_counter.measure():
+                full_out = ttnn.experimental.fused_msda_from_offsets(
+                    value_t,
+                    ref_t,
+                    off_t,
+                    attn_t,
+                    spatial_shapes,
+                    reference_mode="pillar",
+                )
+            full_got = ttnn.to_torch(full_out).to(torch.float32)
         for b, n in enumerate(num_valid_queries or [Q] * B):
             _assert_close(reference[b, :n], got[b, :n])
+            if num_valid_queries is not None:
+                torch.testing.assert_close(full_got[b, :n], got[b, :n], rtol=0, atol=0)
     assert device.cache_entries_counter.total == 1
 
 
