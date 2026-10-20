@@ -391,7 +391,8 @@ inline void _llk_unpack_tilize_(
             {
                 TTI_CFGSHIFTMASK(1, 0b011, 32 - 1, 0, 0b11, THCON_SEC0_REG3_Base_cntx1_address_ADDR32);
             }
-            TTI_NOP;
+            // SrcB DVALID + UNP_ZEROSRC for math's ELWADD branch; also the slot between the config write and the UNPACR that reads it
+            TTI_UNPACR_NOP(SrcB, 0, 0, p_unpacr_nop::SET_DVALID, 0, p_unpacr_nop::WAIT_LIKE_UNPACR, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
 
             // Face 2: Ch0.Z=2, Ch1.Z=2 -> SrcA rows 32..47
             TTI_UNPACR(SrcA, 0b00010001 /*Ch0.Z+=1, Ch1.Z+=1*/, 0, 0, 0, 1, 0 /*no Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
@@ -405,12 +406,9 @@ inline void _llk_unpack_tilize_(
             TTI_UNPACR(SrcA, 0b00010001 /*Ch0.Z+=1, Ch1.Z+=1*/, 0, 0, 0, 1, 0 /*no Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
             // Face 1: Ch0.Z=1, Ch1.Z=1 -> SrcA rows 16..31. SetDvalid flips the SrcA bank.
             TTI_UNPACR(SrcA, 0b00010001 /*Ch0.Z+=1, Ch1.Z+=1*/, 0, 0, 0, 1, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+            // SrcB DVALID + UNP_ZEROSRC for math's ELWADD branch (dest_acc=Yes, is_int_fpu_en, or dst==UInt8)
+            TTI_UNPACR_NOP(SrcB, 0, 0, p_unpacr_nop::SET_DVALID, 0, p_unpacr_nop::WAIT_LIKE_UNPACR, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
         }
-
-        // SrcB DVALID + UNP_ZEROSRC. Required so math's ELWADD branch (dest_acc=Yes,
-        // is_int_fpu_en, or dst==UInt8) sees a zero SrcB; for the MOVA2D branch it's
-        // a no-op handshake but kept uniform across formats.
-        TTI_UNPACR_NOP(SrcB, 0, 0, p_unpacr_nop::SET_DVALID, 0, p_unpacr_nop::WAIT_LIKE_UNPACR, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
 
         // T6::SEMGET for context release
         t6_semaphore_get(semaphore::UNPACK_SYNC);
