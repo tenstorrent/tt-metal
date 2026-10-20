@@ -146,6 +146,8 @@ Same-chip A/B (chip 4, layer 4, traced decode B=1, 20 steps, `_logs/mesh/perf_la
 10.74 ms/step -> 8.03 ms/step (-2.7 ms, -25 %); router sets identical to the reference path (32/32,
 255/256, MoE PCC 0.999946). An argmax-based variant was also exact but slower (the index tensor's
 layout conversions cost more than the cumsum). Knob `GLM53_ROUTER_TIE_BREAK=cumsum` keeps the old path.
+On the (2,4) block (`test_perf_mesh.py`, layer 4, 4 users/row, rows-6-7 block, `meshperf_router_ab_rows67_*.log`):
+8.03 -> 5.34 ms/step (-34 %), i.e. ~-113 ms on the 318 ms 45-layer step above (42 MoE layers).
 
 ## Root cause of the TP4 sparse-row gap (2026-10-20)
 
