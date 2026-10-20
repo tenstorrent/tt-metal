@@ -48,7 +48,7 @@ def get_backward_tensors(output_grad_shape, input_grad_shape, device):
         ([5, 2, 3, 5, 33, 128], 0),
         ([19], -1),
         ([1, 19], -1),
-        ([1, 151936], -1),
+        ([1, 4736], -1),  # long scan; the [1, 151936] vocab width is in the reduction nightly
         ([5], -1),
     ],
 )
@@ -96,7 +96,7 @@ def test_cumsum(size, dim, dtypes, device):
         ([7, 13, 129, 33], 1),
         ([2, 3, 5, 33, 128], -1),
         ([5, 2, 3, 5, 33, 128], 0),
-        ([1, 151936], -1),
+        ([1, 4736], -1),  # long scan; the [1, 151936] vocab width is in the reduction nightly
     ],
 )
 @pytest.mark.parametrize(
@@ -150,7 +150,7 @@ def test_cumsum_with_preallocated_output(size, dim, dtypes, device):
         ([7, 13, 129, 33], 1),
         ([2, 3, 5, 33, 128], -1),
         ([5, 2, 3, 5, 33, 128], 0),
-        ([1, 151936], -1),
+        ([1, 4736], -1),  # long scan; the [1, 151936] vocab width is in the reduction nightly
     ],
 )
 @pytest.mark.parametrize(
@@ -273,9 +273,10 @@ def test_cumsum_failing_cases(
 @pytest.mark.parametrize(
     "size, dim",
     [
-        ([1, 72192, 9], 1),  # the shape from #55542: 2256 tiles along the scan, one core
-        ([1, 151936], -1),  # the longest fp32 shape the tests above already run
-        ([4, 65536], -1),
+        # The #55542 geometry (long thin scan on one core) at a shorter length. The full-length
+        # shapes ([1, 72192, 9], [1, 151936], [4, 65536]) are in the reduction nightly.
+        ([1, 8192, 9], 1),
+        ([4, 8192], -1),
     ],
 )
 @pytest.mark.parametrize("sequence_type", ["iid", "piecewise_constant"])
@@ -292,7 +293,8 @@ def test_cumsum_fp32_long_scan_accuracy(size, dim, sequence_type, device):
     piecewise-constant sequence below it measures K ~ 216 (#55542: 1825 ULP, sign flips near zero
     crossings). On the iid sequence the errors cancel and the plain path sits at K ~ 0.5, so that
     case discriminates nothing and is here only to show the change does not regress it. K = 8:
-    4x margin over the guarantee, 25x below the plain path on the discriminating sequence.
+    4x margin over the guarantee, 25x below the plain path on the discriminating sequence at the
+    #55542 length (the plain path already reaches K ~ 22 at the 8192 used here).
 
     Why not ULP of the reference: an iid sequence's running sum is a random walk that crosses zero,
     where one ULP of the reference is ~1e-12 and any fp32 method reads as "thousands of ULP" while
@@ -327,16 +329,16 @@ def test_cumsum_fp32_long_scan_accuracy(size, dim, sequence_type, device):
     )
 
 
-def test_cumsum_disable_compensated_sum(device):
+def test_cumsum_disable_compensated_sum(device, n=8192):
     """`disable_compensated_sum=True` must actually fall back to the plain sequential sum.
 
     Uses the discriminating sequence from the accuracy test above (piecewise-constant, where
     consecutive rounding errors share a sign). The default compensated path stays within the
-    8*eps*sum|x| bound; the plain path is expected well outside it (~216x on this sequence). If the
-    flag did nothing, both would pass the bound and the escape hatch would be a silent no-op.
+    8*eps*sum|x| bound; the plain path is expected well outside it (~22x at n=8192, ~216x at the
+    72192 of #55542, which the reduction nightly runs). If the flag did nothing, both would pass the
+    bound and the escape hatch would be a silent no-op.
     """
     torch.manual_seed(29112024)
-    n = 72192
     along = torch.randn(n // 256 + 1, dtype=torch.float32).repeat_interleave(256)[:n]
     torch_input = along.view(1, n, 1).expand(1, n, 9).contiguous()
 
@@ -366,8 +368,8 @@ def test_cumsum_disable_compensated_sum(device):
 @pytest.mark.parametrize(
     "size, dim",
     [
-        ([1, 151936], -1),  # long scan
-        ([1, 72192, 9], 1),  # the long thin shape from #55542
+        ([1, 8192], -1),  # long scan; [1, 151936] and [1, 72192, 9] are in the reduction nightly
+        ([1, 8192, 9], 1),  # the long thin geometry from #55542
         ([4096, 32], 0),
         ([33, 35, 37], -2),  # height not a multiple of 32: tile padding along the scan axis
         ([3, 1000], -1),  # width not a multiple of 32: tile padding along the scan axis
@@ -418,3 +420,77 @@ def test_cumsum_bf16_accuracy(size, dim, sequence_type, reverse_order, device):
 
     assert output.dtype == torch.bfloat16
     assert_with_ulp(expected_result=expected, actual_result=output, ulp_threshold=1)
+
+
+def _cumsum_calltrace(input_tensor, **kwargs):
+    ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+    try:
+        output_tensor = ttnn.cumsum(input_tensor, **kwargs)
+    finally:
+        captured_graph = ttnn.graph.end_graph_capture()
+    return output_tensor, ttnn.graph.extract_calltrace(captured_graph)
+
+
+@pytest.mark.parametrize(
+    "size, dim",
+    [
+        ([1048576], 0),  # 1D: the permute used to pad every element out to its own tile
+        ([1, 151936], -1),
+        ([151936, 1], -2),
+        ([33, 35, 37], -1),
+        ([33, 35, 37], -2),
+        ([100, 64, 64], -1),  # more rows of tiles than cores: both core groups
+        ([100, 64, 64], -2),
+        ([2, 3, 5, 33, 128], -1),
+    ],
+)
+def test_cumsum_tile_axis_runs_in_place(size, dim, device):
+    """A forward bf16 cumsum along H or W must scan the tiles in place (#24824, #23264).
+
+    Before, the scan axis was permuted to dim 0, which pads every remaining element of a thin tensor
+    out to its own row or tile: 32x the memory, and 1024x for a 1D tensor (a 10.8M-element int32
+    scan tried to allocate 44 GB). The call trace checks the structure directly: no permute, and the
+    output is the only device tensor the op creates.
+    """
+    torch.manual_seed(29112024)
+    torch_input = torch.randn(size).to(torch.bfloat16)
+    input_tensor = ttnn.from_torch(torch_input, device=device, layout=ttnn.Layout.TILE)
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
+
+    output_tensor, calltrace = _cumsum_calltrace(input_tensor, dim=dim)
+
+    assert "PermuteDeviceOperation" not in calltrace, calltrace
+    assert calltrace.count("tt::tt_metal::create_device_tensor") == 1, calltrace
+    assert_with_ulp(
+        expected_result=torch.cumsum(torch_input, dim),
+        actual_result=ttnn.to_torch(output_tensor),
+        ulp_threshold=1,
+    )
+
+
+@pytest.mark.parametrize(
+    "torch_dtype, reverse_order",
+    [
+        (torch.float32, False),  # keeps the compensated (Kahan) accumulation of the permuted path
+        (torch.int32, False),  # cumsum_tile only adds floats
+        (torch.bfloat16, True),  # cumsum_tile only scans forward
+    ],
+)
+def test_cumsum_tile_axis_fallback_permutes(torch_dtype, reverse_order, device):
+    """Scans the tile-axis kernel does not cover yet still take the permuted path, and stay correct.
+
+    This also shows the call-trace check in test_cumsum_tile_axis_runs_in_place can see a permute.
+    """
+    torch.manual_seed(29112024)
+    size, dim = [33, 35, 37], -1
+    torch_input = torch.randint(-2, 3, size, dtype=torch_dtype)
+    input_tensor = ttnn.from_torch(torch_input, device=device, layout=ttnn.Layout.TILE)
+
+    output_tensor, calltrace = _cumsum_calltrace(input_tensor, dim=dim, reverse_order=reverse_order)
+
+    assert "PermuteDeviceOperation" in calltrace, calltrace
+    if reverse_order:
+        expected = torch.flip(torch.cumsum(torch.flip(torch_input, [dim]), dim), [dim])
+    else:
+        expected = torch.cumsum(torch_input, dim)
+    assert_cumsum_quality(expected, ttnn.to_torch(output_tensor, dtype=torch_dtype))

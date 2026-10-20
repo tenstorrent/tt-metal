@@ -164,6 +164,17 @@ tt::tt_metal::BufferType prefer_l1_small_buffer_type(const tt::tt_metal::distrib
     return l1_small_bank_size > 0 ? tt::tt_metal::BufferType::L1_SMALL : tt::tt_metal::BufferType::L1;
 }
 
+void warn_if_semaphores_fall_back_to_l1(tt::tt_metal::BufferType sem_buffer_type) {
+    if (sem_buffer_type == tt::tt_metal::BufferType::L1_SMALL) {
+        return;
+    }
+    log_warning(
+        tt::LogOp,
+        "Allocating semaphores in L1, which may fragment L1 and reduce headroom for subsequent op allocations. "
+        "Pass a non-zero l1_small_size to ttnn.open_device / ttnn.open_mesh_device to reserve an L1_SMALL region "
+        "for them.");
+}
+
 size_t l1_small_floor_address(const tt::tt_metal::distributed::MeshDevice& mesh_device) {
     const auto& allocator = mesh_device.allocator();
     return allocator->get_worker_l1_size() - allocator->get_bank_size(tt::tt_metal::BufferType::L1_SMALL);
@@ -396,31 +407,6 @@ size_t LineTopology::get_distance_to_end_of_line(ttnn::ccl::LineDirection direct
 
 ttnn::ccl::Topology LineTopology::topology() const { return ttnn::ccl::Topology::Linear; }
 
-SenderReceiverConfig get_device_sender_receiver_config(
-    const IDevice* target_device, const std::vector<IDevice*>& devices, ttnn::ccl::Topology topology) {
-    uint32_t num_devices = devices.size();
-    bool is_linear = topology == ttnn::ccl::Topology::Linear;
-    SenderReceiverConfig config;
-    for (uint32_t i = 0; i < num_devices; ++i) {
-        if (devices.at(i) == target_device) {
-            config.device_index = i;
-            bool is_last_chip_in_clockwise_direction = is_linear && i == (num_devices - 1);
-            bool is_last_chip_in_counter_clockwise_direction = is_linear && i == 0;
-
-            config.receiver_device_id = is_last_chip_in_clockwise_direction
-                                            ? std::nullopt
-                                            : std::optional<tt::ChipId>(devices.at((i + 1) % num_devices)->id());
-
-            config.sender_device_id =
-                is_last_chip_in_counter_clockwise_direction
-                    ? std::nullopt
-                    : std::optional<tt::ChipId>(devices.at((i + num_devices - 1) % num_devices)->id());
-        }
-    }
-
-    return config;
-}
-
 SenderReceiverConfig get_device_sender_receiver_config_in_ring(
     const MeshCoordinate& mesh_coord,
     const distributed::MeshDevice* mesh_device,
@@ -480,7 +466,7 @@ std::vector<IDevice*> get_active_physical_devices(const std::vector<Tensor>& ten
 WorkerCoreSelection try_choose_worker_cores(
     size_t num_links,
     size_t num_workers_per_link,
-    IDevice* device,
+    distributed::MeshDevice* device,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     const CoreCoord core_grid_offset,
     const std::optional<CoreRangeSet>& sub_core_grid,
@@ -561,7 +547,7 @@ WorkerCoreSelection try_choose_worker_cores(
 std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
     size_t num_links,
     size_t num_workers_per_link,
-    IDevice* device,
+    distributed::MeshDevice* device,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     const CoreCoord core_grid_offset,
     const std::optional<CoreRangeSet>& sub_core_grid,
