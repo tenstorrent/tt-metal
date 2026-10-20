@@ -1,0 +1,33 @@
+# One BH Galaxy as two 4x4 prefill stages: the top tray half (rows 0-3) is mesh 0 and the bottom
+# half (rows 4-7) is mesh 1. Inside a half only the 4-wide X axis (mesh axis 1) keeps its ring, so
+# SP runs on axis 1 and TP on axis 0: dim_types [LINE, RING].
+#
+# The top -> bottom seam is the in-host Y links (rows 3<->4, the 2<->5 chord and the 0<->7 wrap on a
+# Rev C subtorus host: 28 links). assign_z_direction routes them as the Z hop between meshes.
+# RELAXED, because the count is measured on aisle C and other hosts may have fewer.
+#
+# Launch: 2 ranks on one host, TT_MESH_ID 0..1, each pinned to its 16 chips with TT_VISIBLE_DEVICES
+# from gen_pipeline_binding.py --layout 4x4.
+
+mesh_descriptors {
+  name: "M0"
+  arch: BLACKHOLE
+  device_topology { dims: [ 4, 4 ] dim_types: [ LINE, RING ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+    channels { count: 28 policy: RELAXED }
+    assign_z_direction: true
+  }
+}
+
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
