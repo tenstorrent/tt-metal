@@ -27,6 +27,7 @@
 
 #include "ckernel.h"
 #include "llk_defs.h"
+#include "tensor_shape_helpers.h"
 
 // Globals
 std::uint32_t unp_cfg_context          = 0;
@@ -104,8 +105,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         params.TILE_SIZE_UNPACK_B,
         params.TILE_SIZE_UNPACK_A);
     _llk_unpack_configure_stoch_rnd_<STOCHASTIC_RND>();
-    const ckernel::TensorShape in0_tensor_shape = ckernel::tensor_shape_from_tile_dims(params.in0_tile_r_dim, params.in0_tile_c_dim);
-    const ckernel::TensorShape in1_tensor_shape = ckernel::tensor_shape_from_tile_dims(params.in1_tile_r_dim, params.in1_tile_c_dim);
+    const ckernel::TensorShape in0_tensor_shape = tensor_shape_from_tile_dims(params.in0_tile_r_dim, params.in0_tile_c_dim);
+    const ckernel::TensorShape in1_tensor_shape = tensor_shape_from_tile_dims(params.in1_tile_r_dim, params.in1_tile_c_dim);
     _llk_unpack_AB_matmul_init_<>(params.UNPACK_TRANSPOSE_FACES, params.CT_DIM, params.RT_DIM, params.KT_DIM, in0_tensor_shape, in1_tensor_shape);
     for (std::uint32_t j = 0; j < params.KT_DIM; j++)
     {
@@ -162,8 +163,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     run = 1;
     _llk_math_reconfig_data_format_srca_<is_fp32_dest_acc_en, false>(formats_array[run].math);
     _llk_math_reconfig_data_format_srcb_<is_fp32_dest_acc_en, false>(formats_array[run].math);
-    const ckernel::TensorShape in0_tensor_shape = ckernel::tensor_shape_from_tile_dims(params.in0_tile_r_dim, params.in0_tile_c_dim);
-    const ckernel::TensorShape in1_tensor_shape = ckernel::tensor_shape_from_tile_dims(params.in1_tile_r_dim, params.in1_tile_c_dim);
+    const ckernel::TensorShape in0_tensor_shape = tensor_shape_from_tile_dims(params.in0_tile_r_dim, params.in0_tile_c_dim);
+    const ckernel::TensorShape in1_tensor_shape = tensor_shape_from_tile_dims(params.in1_tile_r_dim, params.in1_tile_c_dim);
     _llk_math_matmul_init_<MATH_FIDELITY, THROTTLE_LEVEL>(in0_tensor_shape, in1_tensor_shape, params.UNPACK_TRANSPOSE_FACES, params.CT_DIM, params.RT_DIM);
     _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
     for (std::uint32_t j = 0; j < params.KT_DIM; j++)
