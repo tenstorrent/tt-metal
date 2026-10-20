@@ -1264,8 +1264,13 @@ TEST_F(SDPAForwardTest, GateTest_IsElementwiseNotBroadcast) {
     // head, row or column block, or broadcast over any axis, zeroes some open elements or lets some closed ones
     // through. Dh_v = 192 gives vWt = 6 -> block_size = 3: two finalize blocks that each fill DST, so the gate
     // copy has to offset by tile_idx into the second block and that block has to be re-initialised after the
-    // first block's gate code.
-    const uint32_t B = 2U, H = 2U, S = 64U, Dh_qk = 64U, Dh_v = 192U;
+    // first block's gate code. B is sized from the grid so there are more rows than cores: some cores get two
+    // rows, so the per-row gate read and cb_pop_front run more than once per core. The B*H*St/2 row pairs stay
+    // below the core count, so the program factory keeps the non-balanced path.
+    const uint32_t H = 2U, S = 64U, Dh_qk = 64U, Dh_v = 192U;
+    const uint32_t St = S / 32U;
+    const auto grid = ttml::autograd::ctx().get_device().compute_with_storage_grid_size();
+    const uint32_t B = static_cast<uint32_t>(grid.x * grid.y) / (H * St) + 1U;
     auto t = make_gate_fixture(B, H, S, Dh_qk, Dh_v);
     auto [ungated, ungated_lse] = run_kernel_causal(t, std::nullopt);
 
@@ -1273,8 +1278,9 @@ TEST_F(SDPAForwardTest, GateTest_IsElementwiseNotBroadcast) {
     const xt::xarray<float> coin = ttml::test_utils::make_uniform_xarray<float>(t.out_shape, -1.0F, 1.0F, rng());
     const xt::xarray<bool> open = coin >= 0.0F;
     const xt::xarray<float> gate = xt::where(open, 16.0F, -16.0F);
-    // sigmoid(+16) and sigmoid(-16) round to 1 and 0 in bf16, so the gated output is the ungated output with the
-    // closed elements zeroed.
+    // sigmoid(+16) is 1 - 1.1e-7 and sigmoid(-16) is ~1.1e-7, and the kernel keeps both in fp32 DST. The open
+    // elements are within rtol of O and the closed ones are |O| * 1.1e-7, far below atol, so the gated output is
+    // the ungated output with the closed elements zeroed.
     const xt::xarray<float> expected = xt::where(open, ungated, 0.0F);
 
     auto [gated, gated_lse] = run_kernel_causal(t, gate);
@@ -1283,6 +1289,8 @@ TEST_F(SDPAForwardTest, GateTest_IsElementwiseNotBroadcast) {
     EXPECT_TRUE(xt::allclose(gated, expected, 8e-3F, 1e-4F))
         << "Random +/-16 gate mismatch: the gate is not being applied elementwise with the right indexing (MSE: "
         << compute_mse(expected, gated) << ")";
+    // The logsumexp is packed before the gate path runs, so it must be bit-identical.
+    EXPECT_TRUE(xt::all(xt::equal(gated_lse, ungated_lse))) << "Gate changed the intermediates (logsumexp)";
 }
 
 TEST_F(SDPAForwardTest, NIGHTLY_GateTest_WorksWithoutIntermediates) {

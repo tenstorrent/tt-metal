@@ -1428,8 +1428,7 @@ TEST_F(SDPABackwardTest, GateTest_AutogradGateGradMatchesKernel) {
     // sdpa_bw and adds grad_gate to gate->get_grad(). The second case leaves only the gate requiring grad, so the
     // node must not be pruned. The op runs the same kernels on the same inputs as the direct calls below, so the
     // gradients must be bit-identical, even though the op writes grad_gate into the forward output's buffer. The
-    // gated dO gets its own buffer, so dY must come back unchanged. Shapes match
-    // GateTest_ProgramCacheHitReadsNewGate, so the kernels are already built when both tests run.
+    // gated dO gets its own buffer, so dY must come back unchanged.
     using namespace ttml;
     auto* device = &autograd::ctx().get_device();
 
