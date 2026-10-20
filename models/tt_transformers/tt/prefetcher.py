@@ -346,23 +346,29 @@ class Prefetcher(LightweightModule):
         self.init_prefill_done = False
         self.prefetch_done = False
 
-        ### PrefetcherPipes
-        # Each receiver keeps a whole tensor's blocks until its matmul is done with them, so a ring holds the largest
-        # weight share. The rings are persistent L1 at the bottom of the sender and receiver cores, which any program's
-        # circular buffers there seal, so they are reserved now, before anything runs (model construction does).
-        if self.num_tensors > 0:
-            senders = self.core_config.sender_cores(active=True)
-            receivers = self.core_config.receiver_cores(sender_active=True, receiver_active=True)
-            ring_size = max_bytes_per_receiver(self.model_name, self.mesh_device.get_num_devices(), self.ring_size)
-            logger.info(f"[DRAM Prefetcher] Creating PrefetcherPipes with ring size: {ring_size}")
-            self.pipe_space = ttnn.experimental.create_prefetcher_pipe_space(
-                self.mesh_device,
-                sender_cores=self.to_core_range_set(senders),
-                receiver_domain=self.to_core_range_set(receivers),
-                ring_size=ring_size,
-                max_receivers_per_pipe=self.num_receiver_cores,
-            )
-            self.pipes = self.pipe_space.create_pipes(list(zip(senders, receivers)))
+    def _reserve_pipes(self):
+        """Reserve the PrefetcherPipes: one per active sender, whose receivers are that sender's ring cores.
+
+        Each receiver keeps a whole tensor's blocks until its matmul is done with them, so a ring holds the largest
+        weight share. The rings are persistent L1 at the bottom of the sender and receiver cores, which a live
+        program's circular buffers there seal. Called on the first decode: clearing the program cache releases the
+        programs that model construction and prefill left on those cores, and decode compiles its own above the rings.
+        A prefill after that has to fit beside the rings.
+        """
+        ttnn.synchronize_device(self.mesh_device)
+        self.mesh_device.clear_program_cache()
+        senders = self.core_config.sender_cores(active=True)
+        receivers = self.core_config.receiver_cores(sender_active=True, receiver_active=True)
+        ring_size = max_bytes_per_receiver(self.model_name, self.mesh_device.get_num_devices(), self.ring_size)
+        logger.info(f"[DRAM Prefetcher] Creating PrefetcherPipes with ring size: {ring_size}")
+        self.pipe_space = ttnn.experimental.create_prefetcher_pipe_space(
+            self.mesh_device,
+            sender_cores=self.to_core_range_set(senders),
+            receiver_domain=self.to_core_range_set(receivers),
+            ring_size=ring_size,
+            max_receivers_per_pipe=self.num_receiver_cores,
+        )
+        self.pipes = self.pipe_space.create_pipes(list(zip(senders, receivers)))
 
     # NOTE: DRAM prefetched weights are prefetched in the order of the construction of the module
     def register_callback(self, callback: Callable[[], None]):
@@ -403,6 +409,8 @@ class Prefetcher(LightweightModule):
         self.receiver_cores = self.core_config.receiver_cores
         match mode:
             case Mode.DECODE:
+                if self.num_tensors > 0 and not self.pipes:
+                    self._reserve_pipes()
                 self.prefetcher_sub_device = PrefetcherSubDevice(self.mesh_device)
                 self.prefetcher_sub_device.add_sub_device(self.to_core_range_set(self.sender_cores(active=True)))
                 self.prefetcher_sub_device.add_sub_device(self.all_worker_cores_range_set)
