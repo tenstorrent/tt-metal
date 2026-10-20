@@ -16,7 +16,7 @@ the reference is the live HF layer (``build_layer``, strict-fp32 tensors preserv
 reported too, so the stack is validated layer by layer. For MoE layers the router top-8 sets of
 the HF gate and the TT router are compared row by row.
 
-    TT_VISIBLE_DEVICES=2 GLM53_LAYERS=0-11 pytest models/demos/glm53_flash/tests/test_all_layers.py -s
+    TT_VISIBLE_DEVICES=2 GLM53_LAYERS=0-11 pytest models/demos/glm53_flash/tests/test_all_layers.py -s --timeout 1800
     pytest models/demos/glm53_flash/tests/test_all_layers.py -s -k "L07 or L43"
 
 Env: ``GLM53_LAYERS=a-b`` (or ``a,b,c``) restricts the parametrization; ``GLM53_RESULTS=<file>``
@@ -187,10 +187,10 @@ def snapshot_ctx():
 def test_layer_vs_hf(mesh_device, snapshot_ctx, layer_idx):
     from transformers import DynamicCache
 
-    t_start = time.time()
     snapshot, text, cfg, headers = snapshot_ctx
     kind = f"{'KDA' if cfg.is_kda(layer_idx) else 'DSA'}+{'MoE' if cfg.is_moe(layer_idx) else 'dense'}"
-    _wait_for_dump(DUMP / f"layer{layer_idx}_decode{NUM_DECODE - 1}.pt")
+    _wait_for_dump(DUMP / f"layer{layer_idx}_decode{NUM_DECODE - 1}.pt")  # (pass --timeout above 300 s to wait)
+    t_start = time.time()
     pre = torch.load(DUMP / f"layer{layer_idx}_prefill.pt")
     decs = [torch.load(DUMP / f"layer{layer_idx}_decode{s}.pt") for s in range(NUM_DECODE)]
     x_in = pre["x_in"]  # [1, S, 4, 4096] bf16: this layer's true HF input
