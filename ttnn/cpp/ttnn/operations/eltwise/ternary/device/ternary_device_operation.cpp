@@ -277,6 +277,23 @@ void TernaryDeviceOperation::validate_on_program_cache_miss(
     const auto& input_c = tensor_args.input_tensor_c;
     const auto& optional_output_tensor = tensor_args.optional_output_tensor;
 
+    auto validate_tile_shape = [](const Tensor& tensor) {
+        if (tensor.layout() == Layout::TILE) {
+            const auto tile_shape = tensor.tensor_spec().tile().get_tile_shape();
+            TT_FATAL(
+                tile_shape[0] == tt::constants::TILE_HEIGHT && tile_shape[1] == tt::constants::TILE_WIDTH,
+                "Ternary operations support only 32x32 tiles, got {}x{}",
+                tile_shape[0],
+                tile_shape[1]);
+        }
+    };
+    validate_tile_shape(input_a);
+    for (const auto* tensor : {&input_b, &input_c, &optional_output_tensor}) {
+        if (tensor->has_value()) {
+            validate_tile_shape(tensor->value());
+        }
+    }
+
     auto out_memory_config = args.memory_config;
     auto broadcast_type = args.broadcast_type;
 
