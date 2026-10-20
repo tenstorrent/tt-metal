@@ -31,6 +31,8 @@ from models.demos.glm53_flash.tt.mesh import mesh_device_params
 
 DUMP = Path("bringup/references/glm53_flash/R4097")
 ROWS, COLS = 1, 4
+# the diagnostics can run on another mesh shape (e.g. "1,1" for the single-chip control)
+DIAG_MESH = tuple(int(v) for v in __import__("os").environ.get("GLM53_DIAG_MESH", "1,4").split(","))
 S = 200  # non-aligned prompt
 N_DECODE = 3
 
@@ -118,8 +120,8 @@ def test_tp4_sparse_prefill_layer3(mesh_device):
 
 
 @pytest.mark.timeout(1800)
-@pytest.mark.parametrize("device_params", [mesh_device_params(ROWS, COLS)], indirect=True)
-@pytest.mark.parametrize("mesh_device", [(ROWS, COLS)], indirect=True)
+@pytest.mark.parametrize("device_params", [mesh_device_params(*DIAG_MESH)], indirect=True)
+@pytest.mark.parametrize("mesh_device", [DIAG_MESH], indirect=True)
 def test_tp4_sparse_diagnostic_layer3(mesh_device):
     """Diagnostic for the TP4 sparse-row gap: per-row PCC distribution of the sparse rows, the
     indexer selection of every chip vs HF's index_ids (and across chips), and the sparse rows
@@ -182,3 +184,58 @@ def test_tp4_sparse_diagnostic_layer3(mesh_device):
         f"rows >= {split} via the DENSE path at TP4: pcc {pcc(x_out[:, split:], out2[:, split:]):.6f} "
         f"(sparse path: {pcc(x_out[:, split:], out[:, split:]):.6f}); rows < {split}: {pcc(x_out[:, :split], out2[:, :split]):.6f}"
     )
+
+
+@pytest.mark.timeout(1800)
+@pytest.mark.parametrize("device_params", [mesh_device_params(*DIAG_MESH)], indirect=True)
+@pytest.mark.parametrize("mesh_device", [DIAG_MESH], indirect=True)
+def test_tp4_sparse_attention_level_layer3(mesh_device):
+    """Attention-sublayer output at TP4 vs the HF attention (forward hook) on the R4097 prompt, dense
+    and sparse rows separately, plus the TT attention output saved for a single-chip comparison."""
+    import os
+
+    from models.demos.glm53_flash.reference.hf_layer_reference import build_layer, load_config
+    from models.demos.glm53_flash.tests.test_dsa_long import per_row_stats
+
+    layer_idx = 3
+    snapshot = default_snapshot_dir()
+    _, text = load_config(snapshot)
+    headers = shard_headers(snapshot)
+    raw = load_layer_raw(snapshot, layer_idx, headers)
+    cfg = GLM53FlashConfig.from_hf_config_json(snapshot / "config.json")
+    pre = torch.load(DUMP / f"layer{layer_idx}_prefill.pt")
+    x_in = pre["x_in"]
+    T = x_in.shape[1]
+    hf, _ = build_layer(snapshot, text, layer_idx, headers)
+    captured = {}
+    hf.self_attn.register_forward_hook(lambda m, i, o: captured.__setitem__("attn", o[0].detach().float()))
+    with torch.no_grad():
+        hf(x_in, attention_mask=torch.ones(1, T, dtype=torch.bool))
+    attn_hf = captured["attn"][0]  # [T, 4096]
+    dec = FunctionalDecoder.from_state_dict(
+        raw, hf_config=cfg, layer_idx=layer_idx, mesh_device=mesh_device, max_batch=1, max_seq_len=4160
+    )
+    mesh = dec.mesh
+    attn = dec.layer.attn
+    orig = attn.prefill_forward
+
+    def wrapped(*a, **k):
+        y = orig(*a, **k)
+        captured["tt"] = mesh.to_host(y)[0, 0, :T].float()
+        return y
+
+    attn.prefill_forward = wrapped
+    dec.prefill_forward(host_streams_to_device(x_in, mesh_device), user=0, seq_len=T)
+    attn_tt = captured["tt"]
+    split = attn.sparse_row_start
+    logger.info(
+        f"TP4 attention vs HF attention: all {pcc(attn_hf, attn_tt):.6f}, rows < {split} {pcc(attn_hf[:split], attn_tt[:split]):.6f}, "
+        f"rows >= {split} {pcc(attn_hf[split:], attn_tt[split:]):.6f}"
+    )
+    logger.info(
+        f"sparse rows per-row: {per_row_stats(attn_hf[split:].reshape(1, -1, 1, 4096), attn_tt[split:].reshape(1, -1, 1, 4096))}"
+    )
+    out = os.environ.get("GLM53_SAVE_ATTN")
+    if out:
+        torch.save({"hf": attn_hf, "tt": attn_tt, "split": split}, out)
+        logger.info(f"saved attention outputs to {out}")
