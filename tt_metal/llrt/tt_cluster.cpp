@@ -899,44 +899,21 @@ namespace {
 // TODO: Remove this once we have a proper fix for small DMA sizes.
 constexpr uint32_t min_dma_size_bytes = 32;
 
-// Smallest Blackhole writes for which DMA beats an MMIO write of the same ordering, from UMD's
-// single-core write microbenchmark (see #60793). Below these the fixed cost of a DMA call dominates.
-constexpr uint32_t bh_strict_dma_write_min_bytes = 2 * 1024;
-constexpr uint32_t bh_relaxed_dma_write_min_bytes = 64 * 1024;
-
 }  // namespace
 
 bool Cluster::dma_available(ChipId chip_id) const {
-    return !this->rtoptions_.get_disable_dma_ops() &&
-           (this->arch_ == tt::ARCH::WORMHOLE_B0 || this->arch_ == tt::ARCH::BLACKHOLE) &&
+    return this->hal_ != nullptr && !this->rtoptions_.get_disable_dma_ops() &&
            this->get_cluster_desc()->is_chip_mmio_capable(chip_id);
 }
 
 bool Cluster::use_dma_read(ChipId chip_id, uint32_t sz_in_bytes) const {
-    // Blackhole has no device-to-host DMA.
-    return this->arch_ == tt::ARCH::WORMHOLE_B0 && this->dma_available(chip_id) && sz_in_bytes >= min_dma_size_bytes;
+    return this->dma_available(chip_id) && this->hal_->supports_dma_reads() && sz_in_bytes >= min_dma_size_bytes;
 }
 
-bool Cluster::use_dma_write(
-    ChipId chip_id, uint32_t sz_in_bytes, uint64_t addr, tt::umd::IoOrdering ordering, CoreType core_type) const {
-    if (!this->dma_available(chip_id) || sz_in_bytes < min_dma_size_bytes) {
-        return false;
-    }
-    if (this->arch_ == tt::ARCH::WORMHOLE_B0) {
-        return true;
-    }
+bool Cluster::use_dma_write(ChipId chip_id, uint32_t sz_in_bytes, uint64_t addr, tt::umd::IoOrdering ordering) const {
     // UMD rejects a DMA write whose address or size is not a multiple of 4.
-    if (addr % 4 != 0 || sz_in_bytes % 4 != 0) {
-        return false;
-    }
-    // Ethernet cores keep MMIO: active ones run fabric firmware while the host writes them, and DMA to them is
-    // not validated yet.
-    if (core_type != CoreType::TENSIX && core_type != CoreType::WORKER && core_type != CoreType::DRAM) {
-        return false;
-    }
-    const uint32_t min_bytes =
-        ordering == tt::umd::IoOrdering::Strict ? bh_strict_dma_write_min_bytes : bh_relaxed_dma_write_min_bytes;
-    return sz_in_bytes >= min_bytes;
+    return this->dma_available(chip_id) && addr % 4 == 0 && sz_in_bytes % 4 == 0 && sz_in_bytes >= min_dma_size_bytes &&
+           sz_in_bytes >= this->hal_->get_dma_write_min_bytes(ordering);
 }
 
 void Cluster::write_core(
@@ -969,11 +946,8 @@ void Cluster::write_core(
     const tt::umd::IoOrdering resolved_ordering = ordering.value_or(
         core_coord.core_type == CoreType::DRAM ? tt::umd::IoOrdering::Relaxed : tt::umd::IoOrdering::Strict);
 
-    if (this->use_dma_write(chip_id, sz_in_bytes, addr, resolved_ordering, core_coord.core_type)) {
-        // Wormhole keeps the Relaxed DMA window it has always used; its Strict DMA cost is unmeasured.
-        const tt::umd::IoOrdering dma_ordering =
-            this->arch_ == tt::ARCH::BLACKHOLE ? resolved_ordering : tt::umd::IoOrdering::Relaxed;
-        this->driver_->dma_write_to_device(mem_ptr, sz_in_bytes, core.chip, core_coord, addr, dma_ordering);
+    if (this->use_dma_write(chip_id, sz_in_bytes, addr, resolved_ordering)) {
+        this->driver_->dma_write_to_device(mem_ptr, sz_in_bytes, core.chip, core_coord, addr, resolved_ordering);
     } else {
         this->driver_->write_to_device(mem_ptr, sz_in_bytes, core.chip, core_coord, addr, resolved_ordering);
     }
