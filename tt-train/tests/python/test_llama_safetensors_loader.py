@@ -14,9 +14,10 @@ import pytest
 
 import ttnn
 import ttml
+from bf16_ulp import assert_within_bf16_ulp
 from ttml.common.utils import to_bf16_4d, unpermute_proj_rows
 from ttml.models import EmbeddingPlacement, WeightTyingType
-from ttml.models.llama import Llama, LlamaConfig, load_from_safetensors
+from ttml.models.llama import Llama, LlamaConfig, load_from_safetensors, safetensors_loader
 from ttml.models.llama.safetensors_loader import (
     COL_DIM,
     ROW_DIM,
@@ -702,6 +703,90 @@ class TestLoadIntoModel:
             load_from_safetensors(Llama(e2e_config(False, EmbeddingPlacement.Replicated)), tmp_path)
 
 
+# ── Against HuggingFace ──
+
+# Over six seeds, a correct load measured at most 13 ULP at the peak and 4 at the p99. A load that skips
+# the RoPE unpermute, swaps gate and up, or misreads rope_theta measured at least 62 and 41.
+HF_MAX_ULP = 32.0
+HF_MAX_ULP_P99 = 8.0
+
+
+def hf_llama(directory, tied: bool) -> tuple[np.ndarray, np.ndarray]:
+    """Save a small random ``LlamaForCausalLM`` into *directory* in bf16, as real checkpoints ship.
+    Return a prompt and HF's float32 logits for it, computed from those same bf16 weights."""
+    torch = pytest.importorskip("torch")
+    transformers = pytest.importorskip("transformers")
+    config = transformers.LlamaConfig(
+        hidden_size=MODEL_HIDDEN,
+        intermediate_size=INTERMEDIATE,
+        num_hidden_layers=N_LAYERS,
+        num_attention_heads=N_HEADS,
+        num_key_value_heads=N_KV_HEADS,
+        vocab_size=VOCAB,
+        max_position_embeddings=SEQ_LEN,
+        rope_theta=500000.0,
+        tie_word_embeddings=tied,
+    )
+    torch.manual_seed(0)
+    model = transformers.LlamaForCausalLM(config).eval()
+    with torch.no_grad():
+        for name, param in model.named_parameters():
+            if name.endswith("norm.weight"):
+                param.copy_(torch.rand_like(param) + 0.5)  # distinct gains, so swapping two norms shows
+            else:
+                # HF's 0.02 init leaves attention near uniform, where skipping the RoPE unpermute passes.
+                param.copy_(torch.randn_like(param) * MODEL_HIDDEN**-0.5)
+    model.to(torch.bfloat16).save_pretrained(directory)
+    model.float()  # exact: every bf16 value is a float32
+
+    ids = np.random.default_rng(7).integers(0, VOCAB, (1, SEQ_LEN))
+    with torch.no_grad():
+        return ids, model(torch.from_numpy(ids)).logits[0].numpy()
+
+
+def ttml_logits(model: Llama, ids: np.ndarray) -> np.ndarray:
+    """*model*'s ``[seq, vocab]`` logits for *ids*."""
+    causal = np.tril(np.ones((1, 1, SEQ_LEN, SEQ_LEN), dtype=np.float32))
+    logits = model(
+        ttml.autograd.Tensor.from_numpy(
+            ids.reshape(1, 1, 1, -1).astype(np.uint32), ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32
+        ),
+        ttml.autograd.Tensor.from_numpy(causal, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16),
+    )
+    composer = None
+    if model.config.use_tp:
+        device = ttml.autograd.AutoContext.get_instance().get_device()
+        composer = ttml.core.distributed.concat_mesh_to_tensor_composer(device, COL_DIM)
+    values = logits.to_numpy(ttnn.DataType.FLOAT32, composer=composer)
+    ttml.autograd.AutoContext.get_instance().reset_graph()
+    return values.reshape(SEQ_LEN, -1)[:, :VOCAB]
+
+
+def assert_logits_match_hf(directory, tied: bool, **config_overrides) -> None:
+    """Build the model from HF's config.json and load its checkpoint, as the examples do, then compare logits."""
+    ids, expected = hf_llama(directory, tied)
+    model = Llama(LlamaConfig.from_hf(directory, max_position_embeddings=SEQ_LEN, **config_overrides))
+    load_from_safetensors(model, directory)
+    model.eval()
+    # Logits cross zero and their error is absolute, so every element is measured in ULP at the peak.
+    assert_within_bf16_ulp(
+        ttml_logits(model, ids), expected, "logits vs HF", HF_MAX_ULP, HF_MAX_ULP_P99, p99_floor_binades=0
+    )
+
+
+@pytest.mark.requires_device
+class TestMatchesHuggingFace:
+    @pytest.mark.parametrize("tied", [False, True], ids=["untied", "tied"])
+    def test_logits(self, tmp_path, tied):
+        assert_logits_match_hf(tmp_path, tied)
+
+    def test_sees_q_and_k_left_in_hf_row_order(self, tmp_path, monkeypatch, expect_error):
+        """The end-to-end oracle shares this bug with the loader, so only HF can see it."""
+        monkeypatch.setattr(safetensors_loader, "unpermute_proj_rows", lambda rows, n_heads: rows)
+        with expect_error(AssertionError, "logits vs HF: ulp="):
+            assert_logits_match_hf(tmp_path, tied=False)
+
+
 @pytest.mark.requires_device
 @pytest.mark.usefixtures("tp_mesh")
 class TestCoverageAgainstRealTensorParallelModels:
@@ -748,6 +833,10 @@ class TestLoadIntoTensorParallelModel:
         assert model.padded_vocab_size > vocab, "premise: the model rounds the vocab up"
         load_from_safetensors(model, tmp_path)
         assert_every_parameter_loaded(model, hf, ttml.mesh().axis_size("tp"), EmbeddingPlacement.VocabParallel)
+
+    def test_logits_match_hugging_face(self, tmp_path):
+        """Tied and vocab-parallel, as LoRA loads Llama 3.2 1B, with the fused blocks interleaved per device."""
+        assert_logits_match_hf(tmp_path, tied=True, use_tp=True, embedding_placement=EmbeddingPlacement.VocabParallel)
 
 
 if __name__ == "__main__":
