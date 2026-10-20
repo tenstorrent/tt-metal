@@ -70,6 +70,7 @@ def _run_case(
     dilation=(1, 1),  # max pool only
     ceil_mode=False,
     count_include_pad=None,  # avg only; None = op default (True). False -> per-stick scalars (config DFB)
+    divisor_override=None,  # avg only; one scalar (1/divisor) for every window
     dtype="bf16",  # "bf16" | "bf8b" (bf8b forces TILE layout; golden runs on the quantized input)
     out_layout="rm",  # "rm" | "tile" output layout (tiled output runs single-lane by policy)
 ):
@@ -108,6 +109,7 @@ def _run_case(
             padding=padding,
             ceil_mode=ceil_mode,
             **({} if count_include_pad is None else dict(count_include_pad=count_include_pad)),
+            divisor_override=divisor_override,
         )
     out_h, out_w = golden_nchw.shape[2], golden_nchw.shape[3]  # exact for ceil_mode/dilation
     golden = golden_nchw.permute(0, 2, 3, 1).reshape(batch * out_h * out_w, channels).contiguous()
@@ -143,6 +145,7 @@ def _run_case(
         + (f" d={dilation}" if dilation != [1, 1] else "")
         + (" ceil" if ceil_mode else "")
         + (" excl_pad" if count_include_pad is False else "")
+        + (f" div={divisor_override}" if divisor_override is not None else "")
         + (f" {dtype}" if dtype != "bf16" else "")
         + (" out=TILE" if out_layout == "tile" else ""),
     )
@@ -169,6 +172,7 @@ def _run_case(
             output_layout=ttnn.TILE_LAYOUT if out_layout == "tile" else ttnn.ROW_MAJOR_LAYOUT,
             **(dict(dilation=dilation) if pool == "max" else {}),  # avg_pool2d takes no dilation
             **({} if count_include_pad is None else dict(count_include_pad=count_include_pad)),
+            **({} if divisor_override is None else dict(divisor_override=divisor_override)),
         )
         ttnn.synchronize_device(device)
         return out
@@ -179,7 +183,7 @@ def _run_case(
     out.deallocate()
 
     got_max = got.max().item()
-    if got_max > input_max + 1e-2:
+    if got_max > input_max + 1e-2 and divisor_override is None:  # sum / divisor can exceed the input max
         return f"LEAK out.max={got_max:.4f} > in.max={input_max:.4f}"
     max_diff = (got - golden).abs().max().item()
     close = torch.allclose(got, golden, rtol=0.01, atol=0.01)
@@ -446,6 +450,32 @@ UNIT_CASES = [
             cores=1,
             sim_skip="craq-sim HANG at T=4 (uneven lane split); exact on ZeBu RTL at T=4 (pcc=0.99995, 2026-09-04) and on WH -- sim artifact",
         ),
+    ),
+    # Avg-pool options (the production avgpool test's axes at sim scale): divisor_override is one
+    # scalar (1/divisor) per core and wins over count_include_pad and the ceil overhang; without it,
+    # padding + count_include_pad=False or a ceil overhang need per-stick scalars.
+    ("avg_div5_k3x3_p1", dict(pool="avg", padding=(1, 1), divisor_override=5, cores=1)),
+    ("avg_div5_excl_k3x3_p1", dict(pool="avg", padding=(1, 1), count_include_pad=False, divisor_override=5, cores=1)),
+    (
+        "avg_div5_ceil_k3x3_s2_b4",
+        dict(pool="avg", batch=4, in_h=8, in_w=4, padding=(0, 0), ceil_mode=True, divisor_override=5, cores=1),
+    ),
+    ("avg_ceil_p1_k3x3_s2_b4", dict(pool="avg", batch=4, in_h=8, in_w=4, padding=(1, 1), ceil_mode=True, cores=1)),
+    (
+        "avg_ceil_p1_excl_k3x3_s2_b4",
+        dict(pool="avg", batch=4, in_h=8, in_w=4, padding=(1, 1), ceil_mode=True, count_include_pad=False, cores=1),
+    ),
+    (
+        "avg_excl_k9x9_p1_large",
+        dict(pool="avg", in_h=16, in_w=16, kernel=(9, 9), padding=(1, 1), count_include_pad=False, cores=1),
+    ),
+    (
+        "avg_div64_k9x9_p1_large",
+        dict(pool="avg", in_h=16, in_w=16, kernel=(9, 9), padding=(1, 1), divisor_override=64, cores=1),
+    ),
+    (
+        "avg_excl_c280_k3x3_p1",
+        dict(pool="avg", channels=280, in_h=8, in_w=4, padding=(1, 1), count_include_pad=False, cores=1),
     ),
     # TILE output layout runs single-lane by policy (the tiled-output path is not lane-aware: at
     # num_threads=4 DFB_FAST_TILIZE has in_ntiles_c entries -> TT_FATAL for C<128, hang at C=128;
