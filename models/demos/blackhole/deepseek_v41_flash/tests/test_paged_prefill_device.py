@@ -82,7 +82,8 @@ def _run(mesh_device):
         layer_ids=layer_ids,
         log=log,
     )
-    assert pool.dtype == ttnn.bfloat16 and pool.scratch_rows > 0, "build with DSV41_PF_PAGED=write|read and a bf16 pool"
+    assert pool.scratch_rows > 0, "build with DSV41_PF_PAGED=write|read"
+    assert pool.dtype == ttnn.bfloat16 or set(MODES) == {"0"}, "write / read need a bf16 pool (P1)"
     g = torch.Generator().manual_seed(4321)
     prompts = torch.randint(1000, 100000, (B, ISL), generator=g)
     users = [0, 5, 10, 15] if U >= 4 else [0, U]
@@ -91,6 +92,8 @@ def _run(mesh_device):
     log(f"PP model: B={B} U={U} Up={m.Up} layers {LAYERS} chunk {CHUNK} S_pad {S_pad} lens {lens}")
 
     def snap():
+        if os.environ.get("PP_NOPOOL"):  # 1M: the pool is 2.5 GiB per mesh row
+            return []
         return [ttnn.to_torch(ttnn.get_device_tensors(pool.pool)[r * m.cols]).clone() for r in range(m.rows)]
 
     results = {}
@@ -123,9 +126,24 @@ def _run(mesh_device):
         st = snap()
         results[mode] = dict(res=res, pool=st, times=times, dram=free)
 
+    if os.environ.get(
+        "PP_SAVE"
+    ):  # logits of every mode (dense logits do not depend on the pool dtype: prefill reads the bf16 tables)
+        torch.save({mode: {u: results[mode]["res"][u] for u in users} for mode in MODES}, os.environ["PP_SAVE"])
+    ref = torch.load(os.environ["PP_REF"]) if os.environ.get("PP_REF") else None
+    if ref is not None:
+        for mode in MODES:
+            for u in users:
+                t0_, l0 = ref["0"][u]
+                t1_, l1 = results[mode]["res"][u]
+                eq = bool(torch.equal(l0, l1))
+                log(
+                    f"PP {mode} vs saved dense user {u}: token {t0_} / {t1_} logits equal {eq} maxabs {(l0 - l1).abs().max().item():.3e}"
+                )
+                assert t0_ == t1_ and eq, "differs from the saved dense run"
     base = results[MODES[0]]
     ok = True
-    for mode in MODES[1:]:
+    for mode in MODES[1:] if ref is None else []:
         r = results[mode]
         for u in users:
             t0_, l0 = base["res"][u]

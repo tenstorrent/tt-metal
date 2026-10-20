@@ -1238,3 +1238,18 @@ Users 0/5/10/15 with 32768 / 32571 / 31741 / 32256 tokens (64 chunks).
 | DRAM allocated per bank | 3102.4 MiB | 3102.4 MiB | 3093.2 MiB (-9.2 MiB: the 32k tables, 3 x 16384 + 32768 rows x 1 KiB / 8 banks ~ 10 MiB) |
 
 Log: `/mnt/tt-data/ssinghal/dsv4-logs/paged_prefill/t32k_L40.log`.
+
+### 262,144, all 40 layers, B=16, Up=1, chunk 512, .46, bf16 pool of 2300 pages per mesh row (smaller than production: the bf16 pool next to the dense tables must fit), `DSV41_MO_OVERLAP=0` (its production default at this size) [T]
+
+Users 0/5/10/15 with 262144 / 261947 / 261117 / 261632 tokens (512 chunks per user), column-sharded prefill indexer (`DSV41_PIDX_SHARD=auto`, active at this size).
+
+| | dense | write (PF1) | read (PF2) |
+|---|---|---|---|
+| first tokens | 20538 / 201 / 115 / 201 | same | same |
+| last-token logits vs dense | | bit-equal (max abs 0) | bit-equal (max abs 0) |
+| whole pool (pages + rings) vs dense | | bit-identical | bit-identical |
+| replay of 512 chunks | 219.698 s (429.1 ms) | 219.841 s (429.4 ms) | 207.939 s (**406.1 ms, -5.4 %**) |
+| DRAM allocated per bank | 3300.0 MiB | 3300.0 MiB | 3220.7 MiB (**-79.3 MiB per bank = 0.62 GiB per chip: the kv tables of the note's section P.5, 0.63 GiB**) |
+| free / largest block per bank | 583.7 / 515.4 MiB | 583.7 / 519.9 | 662.9 / 535.9 |
+
+The speed-up is larger than the note's estimate (P.6: -1.5 % at 262,144, from the FIFO shift alone): the removed latent FIFO shifts + user-mask gates + the table copy of the window rows are worth 23 ms per chunk, 5.4 %. Log: `/mnt/tt-data/ssinghal/dsv4-logs/paged_prefill/t256k_L40.log`.
