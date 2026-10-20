@@ -59,6 +59,7 @@ import ttnn
 
 from models.experimental.ops.descriptors.op_descriptor import (
     OpDescriptor,
+    LazyOutputList,
     _DeferredOutput,
     _clear_all_program_key_caches,
     is_op_descriptor,
@@ -539,6 +540,17 @@ def _gather_inputs(ops) -> List:
     return inputs
 
 
+def _gather_output_bindings(ops, entry):
+    """Keep bound outputs without materializing deferred or lazy output slots."""
+    bindings = []
+    for op_index, tensor_index in entry.output_sources or ():
+        outputs = ops[op_index].output_tensors
+        slots = outputs._slots if isinstance(outputs, LazyOutputList) else outputs
+        tensor = slots[tensor_index] if tensor_index < len(slots) else None
+        bindings.append(tensor if isinstance(tensor, ttnn.Tensor) else None)
+    return bindings
+
+
 def _build_run_cache_key(container, ops, device):
     """Build fusion cache key from precomputed container values."""
     branch_keys = tuple(op.program_cache_key for op in ops)
@@ -600,7 +612,7 @@ def _container_run(container: Any, results, device=None, kernel_dir: Optional[st
         and getattr(container, "_cached_entry_gen", -1) == _BUILD_CACHE_GEN
     ):
         inputs = _gather_inputs(container._cached_ops)
-        outputs = entry.dispatch_state.dispatch(inputs)
+        outputs = entry.dispatch_state.dispatch(inputs, _gather_output_bindings(container._cached_ops, entry))
         _cleanup_persistent_ops(container._cached_ops)
         return _filter_results(outputs, container._default_results, results)
 
@@ -612,7 +624,7 @@ def _container_run(container: Any, results, device=None, kernel_dir: Optional[st
     if entry is not None:
         if entry.dispatch_state is not None:
             inputs = _gather_inputs(ops)
-            outputs = entry.dispatch_state.dispatch(inputs)
+            outputs = entry.dispatch_state.dispatch(inputs, _gather_output_bindings(ops, entry))
             _cleanup_persistent_ops(ops)
             container._cached_entry = entry
             container._cached_entry_gen = _BUILD_CACHE_GEN
