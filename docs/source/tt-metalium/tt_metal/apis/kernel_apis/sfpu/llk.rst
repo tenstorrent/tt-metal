@@ -463,7 +463,7 @@ to a ``vBool`` type.  These may be used:
 
 Both operands must be related vector types, or the second operand may
 be an appropriate scalar operator, or, for integral comparisons, may
-be a ``vMag`` type.  The `&&``, ``||`` operators are not
+be a ``vMag`` type.  The ``&&``, ``||`` operators are not
 short-circuiting.
 
 You may create predicate functions that return a ``vBool``, but they
@@ -512,7 +512,7 @@ Mask Generation
 Masks can be generated from comparison operations on Blackhole and
 Quasar targets:
 
--- code-block:: c++
+.. code-block:: c++
 
     vUInt mask (a OP b)
 
