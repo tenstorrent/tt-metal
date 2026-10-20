@@ -77,6 +77,24 @@ ATTENTION_PATH = re.compile(
     r"(?i)(?:sdpa|attention|attn|flash_mla|flash_decode|/mla/|softmax_attn)"
 )
 _INCLUDE = re.compile(r'^[ \t]*#[ \t]*include[ \t]*[<"]([^">]+)[">]', re.M)
+#: Library include search roots of a Blackhole compute kernel build (JIT ``-I`` order). Used only
+#: to tell apart same-signature library definitions that live in different headers (a twin in a
+#: header the kernel never includes is not a candidate of its calls).
+LIBRARY_INCLUDE_ROOTS = (
+    "tt_metal/hw/inc",
+    "tt_metal/hw/ckernels/blackhole/metal/common",
+    "tt_metal/hw/ckernels/blackhole/metal/llk_io",
+    "tt_metal/hw/ckernels/blackhole/metal/llk_api",
+    "tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu",
+    "tt_metal/tt-llk/tt_llk_blackhole/common/inc",
+    "tt_metal/tt-llk/tt_llk_blackhole/llk_lib",
+    "tt_metal/tt-llk/common",
+    "tt_metal/hw/inc/internal/tt-1xx",
+    "tt_metal/hw/inc/internal/tt-1xx/blackhole",
+    "tt_metal/include",
+    "tt_metal",
+    "",
+)
 _LOOP_KEYWORD = re.compile(r"(?<![\w.>:$])(for|while|do)\b")
 _OBJECT_MACRO = re.compile(
     r"^[ \t]*#[ \t]*define[ \t]+([A-Za-z_]\w*)(?![\w(])[ \t]*(.*)$", re.M
@@ -263,6 +281,7 @@ class SourceCache:
         self._closure: dict[str, tuple[str, ...]] = {}
         self._scanned: dict[str, scan.SourceFile] = {}
         self._exists: dict[str, bool] = {}
+        self._lib_closure: dict[tuple, frozenset[str]] = {}
 
     def exists(self, rel: str) -> bool:
         cached = self._exists.get(rel)
@@ -328,6 +347,46 @@ class SourceCache:
                     stack.append(resolved)
         result = tuple(sorted(seen))
         self._closure[rel] = result
+        return result
+
+    def resolve_library_include(self, includer: str, target: str) -> str | None:
+        """Repo-relative path of an include, searched next to the includer and then in the
+        Blackhole library include roots (:data:`LIBRARY_INCLUDE_ROOTS`)."""
+        directory = includer.rsplit("/", 1)[0] if "/" in includer else ""
+        candidates = [f"{directory}/{target}" if directory else target]
+        candidates += [
+            f"{root}/{target}" if root else target for root in LIBRARY_INCLUDE_ROOTS
+        ]
+        for candidate in candidates:
+            rel = _normalize_rel(candidate)
+            if rel is not None and self.exists(rel):
+                return rel
+        return None
+
+    def library_closure(self, rels: Iterable[str]) -> frozenset[str]:
+        """Every file reachable through ``#include`` from ``rels`` (local and library headers).
+
+        Includes under any preprocessor condition are followed (union over threads); includes
+        that resolve to no file are ignored, so the closure may be incomplete but never names a
+        file the build cannot reach from the kernel.
+        """
+        key = tuple(sorted(rels))
+        cached = self._lib_closure.get(key)
+        if cached is not None:
+            return cached
+        seen: set[str] = set()
+        stack = sorted(set(rels), reverse=True)
+        while stack:
+            current = stack.pop()
+            if current in seen:
+                continue
+            seen.add(current)
+            for target, local in self.includes(current):
+                resolved = local or self.resolve_library_include(current, target)
+                if resolved and resolved not in seen:
+                    stack.append(resolved)
+        result = frozenset(seen)
+        self._lib_closure[key] = result
         return result
 
     def include_texts(self, rels: Iterable[str]) -> set[str]:
@@ -521,10 +580,12 @@ class _Inliner:
         functions: Sequence[scan.FunctionDef],
         *,
         allow_experimental: bool = True,
+        visible: frozenset[str] | None = None,
     ):
         self.db = db
         self.kernel_path = kernel_path
         self.allow_experimental = allow_experimental
+        self.visible = visible
         self.by_name: dict[str, list[scan.FunctionDef]] = {}
         for fn in sorted(functions, key=lambda f: (f.path, f.line, f.key)):
             self.by_name.setdefault(fn.name, []).append(fn)
@@ -639,6 +700,12 @@ class _Inliner:
             if not candidates:
                 self._lib_cache[cache_key] = None
                 return None
+        if len(candidates) > 1 and self.visible:
+            # same-signature twins in headers the kernel never includes are not candidates
+            included = [c for c in candidates if c.path in self.visible]
+            if included and len(included) < len(candidates):
+                candidates = included
+                resolution = "exact" if len(included) == 1 else resolution
         if candidates:
             roles = sorted({c.role for c in candidates})
             layers = sorted({c.layer for c in candidates})
@@ -1025,7 +1092,13 @@ def extract_kernel(db, cache: SourceCache, rel: str) -> Kernel | None:
         re.search(r"\bexperimental::|namespace\s+experimental\b", cache.text(dep) or "")
         for dep in closure
     )
-    inliner = _Inliner(db, rel, functions, allow_experimental=allow_experimental)
+    inliner = _Inliner(
+        db,
+        rel,
+        functions,
+        allow_experimental=allow_experimental,
+        visible=cache.library_closure(closure),
+    )
     entry = entries[0]
     inliner.walk(entry, {}, attention=bool(ATTENTION_PATH.search(rel)))
     # Local functions with compute calls that the entry never reached (unified kernels whose

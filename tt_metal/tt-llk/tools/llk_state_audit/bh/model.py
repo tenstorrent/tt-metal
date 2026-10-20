@@ -672,6 +672,14 @@ class CallGraph:
             scored = [(_targ_score(fn, expanded_targs), fn) for fn in compatible]
             best = max(score for score, _ in scored)
             compatible = [fn for score, fn in scored if score == best]
+        if len(compatible) > 1:
+            # an integer-valued argument cannot bind a class/enum-typed parameter (no implicit
+            # int -> TensorShape / scoped-enum conversion): drop overloads that would need one
+            typed = [
+                fn for fn in compatible if not _integral_mismatch(fn, expanded_args)
+            ]
+            if typed:
+                compatible = typed
         if len(compatible) > 1 and caller is not None:
             scored = [(_type_score(fn, expanded_args, caller), fn) for fn in compatible]
             best = max(score for score, _ in scored)
@@ -1118,6 +1126,46 @@ def _targ_score(fn: FunctionModel, targs: Sequence[str]) -> int:
         elif re.fullmatch(r"-?(?:0x[0-9a-fA-F]+|\d+)[uUlL]*", text):
             score += 1 if tokens & _INTEGRAL else -2
     return score
+
+
+_ARG_GETTER = re.compile(
+    r"\b(?:get_compile_time_arg_val|get_arg_val|get_common_arg_val|get_named_compile_time_arg_val)"
+    r"\s*(?:<[^<>()]*>)?\s*\((?:[^()]|\([^()]*\))*\)"
+)
+_NUMERIC_EXPR = re.compile(r"^[\s()+\-*/%<>&|^~!0-9a-fA-FxXuUlL]+$")
+_NON_CLASS = _INTEGRAL | {
+    "float",
+    "double",
+    "auto",
+    "uint",
+    "size_t",
+    "uintptr_t",
+    "intptr_t",
+}
+
+
+def _integral_argument(text: str) -> bool:
+    """The argument is an integer expression: literals, runtime/compile-time arg getters, arithmetic."""
+    text = compact(text)
+    if not text or text in ("true", "false"):
+        return False
+    reduced = _ARG_GETTER.sub("0", text)
+    return bool(re.search(r"\d", reduced)) and bool(_NUMERIC_EXPR.match(reduced))
+
+
+def _integral_mismatch(fn: FunctionModel, args: Sequence[str]) -> bool:
+    """An integer argument meets a parameter whose type is a class or enum (not a template param)."""
+    template_names = {p.name for p in fn.template_params if p.name}
+    for param, arg in zip(fn.params, args):
+        if param.variadic or not _integral_argument(arg):
+            continue
+        tokens = _type_tokens(param.type) - {"tt_l1_ptr", "tt_reg_ptr"}
+        if not tokens or "*" in (param.type or "") or tokens & template_names:
+            continue
+        if tokens & _NON_CLASS:
+            continue
+        return True
+    return False
 
 
 def _type_score(fn: FunctionModel, args: Sequence[str], caller: FunctionModel) -> int:

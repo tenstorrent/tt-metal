@@ -449,6 +449,15 @@ Normalization does the following:
 `hazards.run` itself merges findings with the same `(kind, resource, ops)` (overloads of one API)
 and drops findings whose resource is unresolved (contains `?`).
 
+Kernel calls are resolved against the kernel's include closure (`kernels.SourceCache.library_closure`,
+local headers plus the Blackhole library include roots): a same-signature twin defined in a header the
+kernel never includes is not a candidate. An integer-valued argument (literal, arithmetic,
+`get_compile_time_arg_val(..)`) never binds a class- or enum-typed parameter (`model.candidates`).
+The thread of a kernel-call effect is its compile-time thread (the `UNPACK/MATH/PACK` wrappers and
+`#ifdef TRISC_*` regions on its path); a name hint such as `_llk_math_*` does not override it, and an
+effect under two different compile-time threads is compiled out (`hazards.Context.compiled_threads`).
+A setter counts as folded only in an execute's prologue or epilogue (`hazards.setter_phase`).
+
 `tree_fingerprint` is the sha256 over the (path, bytes) of every analysed header in path
 order, plus `cfg_defines.h`.
 

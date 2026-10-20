@@ -43,10 +43,25 @@ inside an execute (the FOLD); explicit kernel init/config calls are the pre-fold
       ``SFPNOP`` and no ``WAIT_SFPU`` after its last LOADMACRO) followed, before any SFPU drain, by
       another op whose folded init rewrites state those sequences use with a different value.
 
-Ranking: findings in SDPA/attention kernels and helpers first, then dependent / cross-thread /
-fold-drop above ordering, same-loop above kernel-wide, known values above unknown, more kernels
-first. Resources ignored by ``resource_conflict`` (every init canonically resets them and every
-execute consumes them only as transient state) are listed in :data:`TRANSIENT_RESOURCES`.
+Ranking: concrete clobbers (fold drops, dependent readers, cross-thread writers) above the
+replay / ordering mechanisms, known values above unknown, SDPA/attention kernels and helpers
+above the rest within a class, same-loop above kernel-wide, more kernels first. Resources
+ignored by ``resource_conflict`` (every init canonically resets them and every execute consumes
+them only as transient state) are listed in :data:`TRANSIENT_RESOURCES`.
+
+Model refinements applied to every rule:
+
+* the thread of a kernel-call effect is the compile-time thread of its path (the kernel call's
+  ``UNPACK/MATH/PACK`` wrapper, the wrappers and ``#ifdef TRISC_*`` regions on ``via`` and at the
+  sink); name hints (``_llk_math_*`` SFPU helpers run on the pack thread under ``PACK((..))``) do
+  not override it, and an effect under two different compile-time threads is compiled out;
+* a setter is part of the FOLD only in an execute's prologue (before its first execute call) or
+  epilogue (after its last one); a setter between two executes is the op's own multi-phase
+  sequencing (``generalized_moe_gate``, ``mul_reduce_scalar_tile``) and predates the fold;
+* fold_drop matches the kernel's setter up to :data:`FOLD_DEPTH` levels below both the execute
+  and the setter, names the state after the shallowest fold parameter driving the same sinks,
+  counts only sinks reachable under the init's own bindings (Blackhole ELWMUL ignores
+  ``acc_to_dest``), and requires the setter's value to actually write that state.
 """
 
 from __future__ import annotations
@@ -499,6 +514,71 @@ class Context:
         self._effects: dict[tuple, tuple] = {}
         self._own: dict[str, tuple] = {}
         self._reach: dict[str, frozenset[str]] = {}
+        self._edge_threads: dict[tuple, str | None] = {}
+        self._sink_threads: dict[tuple, str | None] = {}
+
+    # ---- compiled thread of an effect --------------------------------------- #
+    def _edge_thread(self, parent: str, child: str, evidence: str) -> str | None:
+        key = (parent, child, evidence)
+        if key in self._edge_threads:
+            return self._edge_threads[key]
+        thread = None
+        fn = self.db.function(parent)
+        if fn is not None and evidence:
+            edges = [e for e in fn.calls if e.evidence == evidence]
+            exact = [e for e in edges if child in e.callee_keys]
+            for edge in exact or edges:
+                if edge.thread:
+                    thread = edge.thread
+                    break
+        self._edge_threads[key] = thread
+        return thread
+
+    def _sink_thread(self, holder: str, evidence: str) -> str | None:
+        key = (holder, evidence)
+        if key in self._sink_threads:
+            return self._sink_threads[key]
+        thread = None
+        fn = self.db.function(holder)
+        definition = fn.definition if fn is not None else None
+        path, _, line = evidence.rpartition(":")
+        if definition is not None and line.isdigit() and path == definition.path:
+            number = int(line)
+            for site in definition.calls:
+                if site.line == number and site.thread:
+                    thread = site.thread
+                    break
+            if thread is None:
+                thread = definition.pp_info_at_line(number)[0] or definition.pp_thread
+        self._sink_threads[key] = thread
+        return thread
+
+    def compiled_threads(self, call: kmod.KCall, via, evidence: str) -> list[str]:
+        """Threads fixed at compile time along the path of an effect: the kernel call's
+        ``UNPACK/MATH/PACK`` wrapper, the wrapper or ``#ifdef TRISC_*`` region of every call on
+        ``via``, and of the sink. Thread hints taken from function names are not compile-time
+        facts (``_llk_math_*`` SFPU helpers also run on the pack thread)."""
+        threads: list[str] = []
+        if call.thread:
+            threads.append(call.thread)
+        for position in range(1, len(via)):
+            thread = self._edge_thread(
+                via[position - 1][0], via[position][0], via[position][1]
+            )
+            if thread:
+                threads.append(thread)
+        if via:
+            thread = self._sink_thread(via[-1][0], evidence)
+            if thread:
+                threads.append(thread)
+        return threads
+
+    # ---- prologue / epilogue of an execute ---------------------------------- #
+    def phase(self, parent: str, evidence: str) -> str:
+        """Where a call sits in a compute-API execute body: ``prologue`` (before the first call
+        of an execute), ``epilogue`` (after the last one) or ``body`` (between executes: a
+        multi-phase op re-configuring itself mid-sequence)."""
+        return setter_phase(self.db, parent, evidence)
 
     def _own_effects(self, key: str) -> tuple:
         cached = self._own.get(key)
@@ -544,6 +624,12 @@ class Context:
         evidence = call.evidence
         for effect in effects:
             changes: dict = {}
+            via = ((key, ""),) + effect.via
+            compiled = self.compiled_threads(call, via, effect.evidence)
+            if len(set(compiled)) > 1:
+                continue  # compiled out: inside another thread's wrapper / TRISC region
+            if compiled and compiled[0] != effect.thread:
+                changes["thread"] = compiled[0]
             uses = set(effect.params) & set(bound)
             if uses:
                 value = substitute(effect.value, bound) if effect.value else ""
@@ -564,9 +650,9 @@ class Context:
                     )
                 if effect.detail:
                     changes["detail"] = substitute(effect.detail, bound)
-            if effect.thread == "any" and call.thread:
+            if effect.thread == "any" and call.thread and not compiled:
                 changes["thread"] = call.thread
-            changes["via"] = ((key, ""),) + effect.via
+            changes["via"] = via
             if low:
                 changes["confidence"] = "low"
             out.append(replace(effect, **changes))
@@ -615,6 +701,43 @@ class Context:
             cached = frozenset(found)
             self._reach[key] = cached
         return cached
+
+
+def _execute_span(db, key: str) -> tuple:
+    """(first, last) line of the calls of ``key`` that reach an execute (LLK, compute API or SFPU
+    execute); ``(None, None)`` when the body calls none."""
+    fn = db.function(key)
+    lines: list[int] = []
+    if fn is not None:
+        for edge in fn.calls:
+            callees = [db.function(k) for k in edge.callee_keys]
+            if any(c is not None and c.role == "execute" for c in callees):
+                lines.append(_evidence_key(edge.evidence)[1])
+    if not lines:
+        return (None, None)
+    return (min(lines), max(lines))
+
+
+_SPANS: dict[tuple, tuple] = {}
+
+
+def setter_phase(db, parent: str, evidence: str) -> str:
+    """``prologue`` / ``epilogue`` / ``body`` position of a call inside an execute (see
+    :meth:`Context.phase`). The FOLD puts an op's own reconfig/init before its executes and its
+    uninit after them; a setter between two executes is the op's own multi-phase sequencing
+    (``generalized_moe_gate`` re-initializing for its sigmoid phase, ``mul_reduce_scalar_tile``
+    arming the packer mask for the pack that follows), which predates the fold."""
+    key = (id(db), parent)
+    span = _SPANS.get(key)
+    if span is None:
+        span = _SPANS[key] = _execute_span(db, parent)
+    first, last = span
+    line = _evidence_key(evidence)[1]
+    if first is None or line < first:
+        return "prologue"
+    if line > last:
+        return "epilogue"
+    return "body"
 
 
 def op_calls(kernel: kmod.Kernel) -> list[kmod.KCall]:
@@ -821,6 +944,7 @@ def fold_path(db, access: _Access) -> bool:
             parent is not None
             and parent.role == "execute"
             and parent.layer == "compute_api"
+            and setter_phase(db, parent.key, via[position][1]) != "body"
         ):
             return True
     return False
@@ -878,15 +1002,20 @@ def rule_conflicts(ctx: Context) -> list[dict]:
                         if pair is None:
                             continue
                         x, y = pair
+                        # one finding per SFPU recording (the init that records it) and thread:
+                        # exp_packthread_tile and exp_tile_first_column both reach exp_init's
+                        # recording, so they are one mechanism
+                        recorder = _sink_function(db, x.effect) or op_a
                         key = (
                             "resource_conflict",
                             "replay_loop",
                             group,
-                            (op_a, x.effect.thread),
+                            (recorder, x.effect.thread),
                         )
                         agg = aggs.get(key)
                         if agg is None:
                             agg = aggs[key] = _Agg("replay_loop", group, (op_a,))
+                        agg.values.setdefault("sfpu_ops", set()).add(op_a)
                         agg.values.setdefault("others", set()).add(op_b)
                         _record(
                             db,
@@ -1261,11 +1390,14 @@ def _conflict_finding(db, agg: _Agg) -> dict:
             f"unsynchronized writes of shared config"
         )
     elif agg.kind == "replay_loop":
-        op_a = agg.ops[0]
-        others = sorted(agg.values.get("others", set()))
+        sfpu_ops = sorted(agg.values.get("sfpu_ops", set()) or {agg.ops[0]})
+        op_a = ", ".join(sfpu_ops)
+        others = sorted(set(agg.values.get("others", set())) - set(sfpu_ops))
         op_b = ", ".join(others[:4]) + (" ..." if len(others) > 4 else "")
-        ops = [op_a] + others
-        llk = sorted(agg.llk.get(op_a, set()))
+        ops = sfpu_ops + others
+        llk = []
+        for op in sfpu_ops:
+            llk.extend(sorted(agg.llk.get(op, set())))
         for other in others[:3]:
             llk.extend(sorted(agg.llk.get(other, set())))
         threads = "/".join(sorted(t for t in agg.threads if t and t != "any"))
@@ -1308,7 +1440,10 @@ def _conflict_finding(db, agg: _Agg) -> dict:
         confidence = "high"
     if agg.has("low") and not agg.has("known_values"):
         confidence = "low"
-    score = {"dependent": 5.0, "cross": 4.0, "replay_loop": 2.5, "sfpu_loop": 0.0}.get(
+    # ranking: a concrete clobber (dependent reader, cross-thread writers) above the replay /
+    # ordering mechanisms that need a hoisting compiler or hardware timing to bite; the fold's
+    # SDPA/attention targets get a smaller boost on top
+    score = {"dependent": 6.5, "cross": 6.0, "replay_loop": 3.0, "sfpu_loop": 0.0}.get(
         agg.kind, 0.0
     )
     formats = agg.has("format_pair") and not agg.has("plain_pair")
@@ -1316,29 +1451,28 @@ def _conflict_finding(db, agg: _Agg) -> dict:
         confidence = "low"
         score = 1.5
     if agg.attention_kernels:
-        score += 1.0 if agg.kind == "sfpu_loop" else 6.0
+        score += 2.0 if agg.kind in ("dependent", "cross") else 1.0
     elif any(kmod.ATTENTION_PATH.search(k) for k in agg.kernels):
-        score += 3.0
+        score += 0.5
     if agg.has("same_loop"):
-        score += 1.0
+        score += 0.5
     if agg.has("known_values"):
         score += 1.0
     if confidence == "low":
         score -= 3.0
-    score += min(2.0, math.log10(1 + len(agg.kernels)))
+    score += min(1.5, math.log10(1 + len(agg.kernels)))
     if agg.kind == "sfpu_loop":
         # same-thread thrash is correct at runtime: always below the other kinds
         score = min(score, 1.0) + min(0.5, math.log10(1 + len(agg.kernels)) / 4)
     return {
         "_score": score,
-        "_drop": (
-            formats
-            and not (
-                agg.attention_kernels
-                and any(_ATTENTION_OP.search(op) for op in agg.ops)
-            )
-        )
-        or (agg.kind == "sfpu_loop" and not agg.attention_kernels),
+        # per-operand format/geometry state is re-derived from the CB by every reconfig: two ops
+        # that leave different formats only conflict when their CBs differ in format, and a
+        # pre-fold kernel that interleaved them already needed matching formats (no evidence)
+        # same-thread SFPU re-programming by executes that each re-run their own init right
+        # before their SFPU body is runtime-correct after the fold (thrash, not a hazard); an
+        # execute that relies on another op's init is the dependent-reader case instead
+        "_drop": formats or agg.kind == "sfpu_loop",
         "_debug": {k: sorted(v)[:6] for k, v in sorted(agg.values.items())},
         "confidence": confidence,
         "evidence": _cap_evidence(agg.evidence),
@@ -1365,6 +1499,15 @@ class _Node:
     params: dict  # param name -> bound text (kernel scope or marker scope)
     depth: int
     evidence: str
+    entry: str = (
+        ""  # call site in the walked root that leads to this node (depth-1 call)
+    )
+
+
+#: How deep below a folded execute (and below an explicit kernel setter) an init/config is
+#: matched: ``mul_tiles -> mul_init -> binary_tiles_init`` against a kernel's ``mul_tiles_init ->
+#: binary_tiles_init``.
+FOLD_DEPTH = 3
 
 
 class _Chain:
@@ -1385,20 +1528,29 @@ class _Chain:
         fn = self.db.function(key)
         if fn is not None:
             self._walk(
-                fn, dict(bindings), 0, max_depth, nodes, include_self, set(), fn.loc
+                fn, dict(bindings), 0, max_depth, nodes, include_self, set(), fn.loc, ""
             )
         result = tuple(nodes)
         self._cache[cache_key] = result
         return result
 
     def _walk(
-        self, fn, bindings, depth, max_depth, nodes, include_self, stack, evidence
+        self,
+        fn,
+        bindings,
+        depth,
+        max_depth,
+        nodes,
+        include_self,
+        stack,
+        evidence,
+        entry,
     ):
         if fn.key in stack or depth > max_depth:
             return
         if include_self or depth > 0:
             nodes.append(
-                _Node(fn.key, fn.name, fn.role, dict(bindings), depth, evidence)
+                _Node(fn.key, fn.name, fn.role, dict(bindings), depth, evidence, entry)
             )
         stack = stack | {fn.key}
         frame = self.db.graph.frame_bindings(fn, bindings)
@@ -1446,6 +1598,7 @@ class _Chain:
                     include_self,
                     stack,
                     edge.evidence,
+                    entry or edge.evidence,
                 )
 
 
@@ -1481,6 +1634,8 @@ def _is_folded(db, fn) -> bool:
     if fn is None or fn.role != "execute" or fn.layer != "compute_api":
         return False
     for edge in fn.calls:
+        if setter_phase(db, fn.key, edge.evidence) == "body":
+            continue
         for key in edge.callee_keys:
             callee = db.function(key)
             if (
@@ -1508,11 +1663,24 @@ def _norm_value(db, text: str):
     return ("t", text)
 
 
+_IDENT = re.compile(r"[A-Za-z_]\w*")
+
+
 def _comparable(db, a: str, b: str) -> bool:
-    """False when a side is a bare compile-time define (APPROX, DST_ACCUM_MODE, ...): unknown."""
+    """False when a side is a bare compile-time define (APPROX, DST_ACCUM_MODE, ...), or the two
+    texts differ only by such defines on one side (``f<X, MathFidelity::LoFi>`` vs
+    ``f<X, MATH_FIDELITY>``): the values are unknown, not different."""
     for text in (a, b):
         if _int(db, text) is None and _DEFINE_ONLY.match(compact(text)):
             return False
+    if _int(db, a) is None or _int(db, b) is None:
+        ids_a, ids_b = set(_IDENT.findall(a)), set(_IDENT.findall(b))
+        for only in (ids_a - ids_b, ids_b - ids_a):
+            if only and all(
+                _DEFINE_ONLY.match(name) and "_" in name or name.isupper()
+                for name in only
+            ):
+                return False
     return True
 
 
@@ -1526,6 +1694,9 @@ class _Candidate:
     sinks: tuple[str, ...]
     depth: int
     others: dict  # other fixed params of the node -> value
+    canonical: str = (
+        ""  # name of the shallowest fold parameter that drives the same sinks
+    )
 
 
 class _FoldModel:
@@ -1535,6 +1706,7 @@ class _FoldModel:
         self.db = db
         self.chain = chain
         self._cache: dict[tuple, tuple] = {}
+        self._writes: dict[tuple, frozenset] = {}
 
     def candidates(self, call: kmod.KCall) -> tuple:
         keys = call.keys
@@ -1549,12 +1721,27 @@ class _FoldModel:
             return cached
         explicit = _explicit_params(fn, call)
         kernel_bind = self.db.graph.bind(fn, call.template_args, call.args)
-        scope_nodes = self.chain.walk(fn.key, {}, include_self=False, max_depth=1)
+        scope_nodes = self.chain.walk(
+            fn.key, {}, include_self=False, max_depth=FOLD_DEPTH
+        )
         result: list[_Candidate] = []
         f_params = set(fn.param_names)
+        # an init the fold reaches twice with different values for a parameter (tilize_init's
+        # llk_pack_init<Tilize> and tilize_uninit's llk_pack_init<Default>) is set and reset by
+        # the execute itself: no single value of it is "the fold's"
+        seen_values: dict[tuple, set] = {}
+        for node in self.chain.walk(
+            fn.key, {}, include_self=False, max_depth=FOLD_DEPTH + 2
+        ):
+            for name, text in node.params.items():
+                seen_values.setdefault((node.key, name), set()).add(
+                    compact(substitute(text, kernel_bind))
+                )
         for node in scope_nodes:
-            if node.role not in SETTER_ROLES or node.depth > 1:
-                continue  # only the init/config the execute calls directly (the folded call)
+            if node.role not in SETTER_ROLES or node.depth > FOLD_DEPTH:
+                continue  # inits/configs the folded call reaches
+            if setter_phase(self.db, fn.key, node.entry) == "body":
+                continue  # the op's own mid-sequence re-init, not the fold's prologue
             if _FORMAT_RECONFIG.search(node.name):
                 continue  # per-operand format reconfig: every op sets it for its own CBs
             nfn = self.db.function(node.key)
@@ -1582,6 +1769,8 @@ class _FoldModel:
                 origin = sorted(deps)[0] if len(deps) == 1 else ""
                 fixed[name] = (value, origin)
             for name, (value, origin) in sorted(fixed.items()):
+                if len(seen_values.get((node.key, name), ())) > 1:
+                    continue
                 sinks = self._sinks(fn, call, kernel_bind, node, name, origin)
                 if not sinks:
                     continue
@@ -1597,21 +1786,69 @@ class _FoldModel:
                         others={k: v[0] for k, v in fixed.items() if k != name},
                     )
                 )
-        out = tuple(result)
+        # one name per piece of state: a deeper init parameter fed by a shallower one (copy_init's
+        # transpose_within_16x16_face -> llk_unpack_A_init's within_face_16x16_transpose) is
+        # reported under the shallow name, whichever level the kernel's setter matched
+        named: list[_Candidate] = []
+        for cand in result:
+            best = cand
+            for other in result:
+                if other.depth < best.depth and set(cand.sinks) <= set(other.sinks):
+                    best = other
+            named.append(replace(cand, canonical=best.origin or best.param))
+        out = tuple(named)
         self._cache[cache_key] = out
         return out
+
+    def setter_writes(self, node, cand) -> bool:
+        """Whether the kernel setter, through its own binding of the shared init ``node``,
+        writes at least one sink of the candidate parameter (or reaches an instruction sink).
+        """
+        if node is None:
+            return False
+        bound = {k: compact(v) for k, v in node.params.items()}
+        key = (node.key, tuple(sorted(bound.items())))
+        written = self._writes.get(key)
+        if written is None:
+            try:
+                effects = self.db.graph.effects(node.key, bound)
+            except Exception:  # pragma: no cover - defensive
+                effects = ()
+            written = frozenset(e.evidence for e in effects if e.access == "write")
+            self._writes[key] = written
+        sinks = set(cand.sinks)
+        if sinks & written:
+            return True
+        # instruction-operand sinks (no write effect at that line): keep the candidate
+        return not any(s in self._write_sinks(cand) for s in sinks)
+
+    def _write_sinks(self, cand) -> frozenset:
+        key = (cand.node_key,)
+        cached = self._writes.get(key)
+        if cached is None:
+            try:
+                effects = self.db.graph.effects(cand.node_key, {})
+            except Exception:  # pragma: no cover - defensive
+                effects = ()
+            cached = frozenset(e.evidence for e in effects if e.access == "write")
+            self._writes[key] = cached
+        return cached
 
     def _sinks(self, fn, call, kernel_bind, node, name, origin) -> tuple[str, ...]:
         """Evidence that the parameter reaches hardware state below ``node``."""
         bound = {k: compact(substitute(v, kernel_bind)) for k, v in node.params.items()}
         marked = {name: _MARK}
+        # the node's other bindings decide the branches the parameter can reach (acc_to_dest
+        # feeds the ELWADD/ELWSUB MOP only; the ELWMUL MOP hard-codes 0 on Blackhole)
+        feasible = {k: v for k, v in bound.items() if k != name and not has_unbound(v)}
+        feasible[name] = _MARK
         sinks: set[str] = set()
         try:
-            effects = self.db.graph.effects(node.key, marked)
+            effects = self.db.graph.effects(node.key, feasible)
         except Exception:  # pragma: no cover - defensive
             effects = ()
         for effect in effects:
-            if effect.access != "write":
+            if effect.access != "write" or effect.resource.startswith("param:"):
                 continue
             in_value = (
                 _MARK in (effect.value or "")
@@ -1621,17 +1858,23 @@ class _FoldModel:
             in_condition = _MARK in (effect.condition or "")
             if not (in_value or in_condition):
                 continue
-            if not in_value:
+            if effect.condition:
                 actual = substitute(
-                    (effect.condition or "").replace(_MARK, f"({bound.get(name, '')})"),
+                    (
+                        (effect.condition or "").replace(
+                            _MARK, f"({bound.get(name, '')})"
+                        )
+                        if not in_value
+                        else (effect.condition or "")
+                    ),
                     bound,
                 )
-                if truth(actual) is False:
+                if _MARK not in actual and truth(actual) is False:
                     continue
             sinks.add(effect.evidence)
         if not sinks:
             # instruction operands: the parameter flows into a TTI_/TT_ macro below the node
-            for sub in self.chain.walk(node.key, marked, max_depth=5):
+            for sub in self.chain.walk(node.key, feasible, max_depth=5):
                 sfn = self.db.function(sub.key)
                 if sfn is None or sfn.definition is None:
                     continue
@@ -1664,7 +1907,7 @@ def rule_fold_drop(ctx: Context) -> list[dict]:
             if fn is None:
                 continue
             bind = db.graph.bind(fn, call.template_args, call.args)
-            for node in chain.walk(fkey, bind, include_self=True, max_depth=2):
+            for node in chain.walk(fkey, bind, include_self=True, max_depth=FOLD_DEPTH):
                 if node.key not in nodes or node.depth < nodes[node.key].depth:
                     nodes[node.key] = node
         setter_cache[key] = nodes
@@ -1691,6 +1934,8 @@ def rule_fold_drop(ctx: Context) -> list[dict]:
                     continue
                 if not _comparable(db, prev_value, cand.value):
                     continue
+                if not fold.setter_writes(setter_nodes(prev).get(cand.node_key), cand):
+                    continue  # with its value the setter never wrote that state (a skip/gate flag)
                 # a setter that differs from F in several other fixed params is a different op variant
                 prev_node = setter_nodes(prev).get(cand.node_key)
                 differing = 0
@@ -1701,17 +1946,25 @@ def rule_fold_drop(ctx: Context) -> list[dict]:
                             db, compact(pv)
                         ) != _norm_value(db, value):
                             differing += 1
-                if differing > 1:
+                # below the folded call itself the shared LLK init must be the same op variant
+                limit = (
+                    1
+                    if cand.depth <= 1 and (prev_node is None or prev_node.depth <= 1)
+                    else 0
+                )
+                if differing > limit:
                     continue
                 dedupe = (
                     _norm_value(db, prev_value),
                     _norm_value(db, cand.value),
-                    cand.origin or cand.param,
+                    cand.canonical or cand.origin or cand.param,
                 )
-                if dedupe in reported:
+                sink_key = (frozenset(cand.sinks), dedupe[0], dedupe[1])
+                if dedupe in reported or sink_key in reported:
                     continue
                 reported.add(dedupe)
-                param = cand.origin or cand.param
+                reported.add(sink_key)
+                param = cand.canonical or cand.origin or cand.param
                 key = ("fold_drop", call.name, param)
                 agg = aggs.get(key)
                 if agg is None:
@@ -1761,12 +2014,12 @@ def rule_fold_drop(ctx: Context) -> list[dict]:
             + ", so the folded execute silently drops the caller's configuration"
         )
         ops = [api] + [n for n in nodes if n != api] + [s for s in setters if s != api]
-        score = 5.0 + (6.0 if agg.attention_kernels else 0.0)
+        score = 6.0 + (2.0 if agg.attention_kernels else 0.0)
         if agg.has("same_loop"):
-            score += 1.0
+            score += 0.5
         if agg.has("known_values"):
-            score += 1.0
-        score += min(2.0, math.log10(1 + len(agg.kernels)))
+            score += 1.5
+        score += min(1.5, math.log10(1 + len(agg.kernels)))
         confidence = "high" if agg.has("known_values") else "medium"
         findings.append(
             {
@@ -1784,6 +2037,15 @@ def rule_fold_drop(ctx: Context) -> list[dict]:
             }
         )
     return findings
+
+
+_STEM = re.compile(r"_(?:re)?(?:init|uninit|config|configure|reconfig)(?:_\w*)?$")
+
+
+def _setter_stem(name: str) -> str:
+    """``pack_untilize_init`` -> ``pack_untilize``: the op a compute-API setter is named after."""
+    stem = _STEM.sub("", name)
+    return stem if stem != name and len(stem) >= 4 else ""
 
 
 def _clip(text: str, limit: int = 60) -> str:
@@ -1812,22 +2074,42 @@ def _last_setter(db, calls, position, cand, setter_nodes, fold):
         for i in range(len(calls) - 1, position, -1)
         if kmod.same_loop(calls[i], target)
     ]
+    passed: list[str] = []  # executes between the candidate setter and the target
     for index in order + tail:
         prev = calls[index]
         if _exclusive(prev, target):
             continue
         if prev.role == "execute":
+            passed.append(prev.name)
             if prev.name == target.name or any(
                 c.node_key == cand.node_key and c.param == cand.param
                 for c in fold.candidates(prev)
+            ):
+                return None
+            # another folded execute that re-runs the same LLK init (at any depth of its own
+            # folded chain, e.g. copy_tile -> copy_init -> llk_math_eltwise_unary_datacopy_init)
+            # already replaced the state: an explicit setter before it configured that op
+            reached = setter_nodes(prev).get(cand.node_key)
+            if (
+                reached is not None
+                and reached.depth >= 1
+                and cand.param in reached.params
+                and _is_folded(
+                    db, db.function(prev.keys[0]) if len(prev.keys) == 1 else None
+                )
             ):
                 return None
             continue
         if prev.role not in SETTER_ROLES:
             continue
         node = setter_nodes(prev).get(cand.node_key)
-        if node is None or node.depth > 1 or cand.param not in node.params:
+        if node is None or node.depth > FOLD_DEPTH or cand.param not in node.params:
             continue
+        stem = _setter_stem(prev.name)
+        if stem and any(
+            name != target.name and name.startswith(stem) for name in passed
+        ):
+            return None  # the setter configured its own op (X_init -> X_...), run in between
         return prev, compact(node.params[cand.param])
     return None
 
@@ -1978,8 +2260,8 @@ def _fact_findings(ctx: Context, facts: list[dict]) -> list[dict]:
             f"between, so with intrinsic-issued instructions the consumer can run on the old value"
             + (f" (when {condition[:80]})" if condition else "")
         )
-        score = (3.0 if verdict == "unordered" else 1.5) + (6.0 if attention else 0.0)
-        score += min(2.0, math.log10(1 + len(kernels)))
+        score = (3.0 if verdict == "unordered" else 1.5) + (1.0 if attention else 0.0)
+        score += min(1.5, math.log10(1 + len(kernels)))
         findings.append(
             {
                 "_score": score,
@@ -2087,7 +2369,7 @@ def _ordering_findings(ctx: Context, raw: list[tuple]) -> list[dict]:
                 f"consumer can run before the store lands (or the compiler can sink the store past it)"
             )
         score = (
-            2.0 + (6.0 if attention else 0.0) + min(2.0, math.log10(1 + len(kernels)))
+            2.0 + (1.0 if attention else 0.0) + min(1.5, math.log10(1 + len(kernels)))
         )
         findings.append(
             {
@@ -2287,11 +2569,11 @@ def _loadmacro_findings(ctx: Context) -> list[dict]:
             if name and name not in ops:
                 ops.append(name)
         score = (
-            2.5
-            + (6.0 if agg.attention_kernels else 0.0)
-            + (1.0 if agg.has("same_loop") else 0.0)
+            3.0
+            + (1.0 if agg.attention_kernels else 0.0)
+            + (0.5 if agg.has("same_loop") else 0.0)
         )
-        score += min(2.0, math.log10(1 + len(agg.kernels)))
+        score += min(1.5, math.log10(1 + len(agg.kernels)))
         findings.append(
             {
                 "_score": score,

@@ -93,14 +93,13 @@ class HazardRulesTest(unittest.TestCase):
         llk = "tt_metal/tt-llk/tt_llk_blackhole/llk_lib/llk_demo.h"
         self.assertEqual(finding["evidence"], [f"{llk}:25", f"{llk}:26"])
 
-    def test_sfpu_same_loop_pair(self) -> None:
-        finding = self.find("resource_conflict", "SFPU.LREG12")
-        self.assertEqual(finding["kernels"], [SFPU_LOOP])
-        self.assertEqual(finding["ops"][:2], ["sfpu_a_tile", "sfpu_b_tile"])
-        # same-thread SFPU thrash (correct at runtime, only blocks hoisting) ranks below the
-        # dependent, cross-thread and fold-drop findings, even inside an attention kernel
-        self.assertEqual(finding["rank"], len(self.findings))
-        self.assertIn("in the same loop body", finding["summary"])
+    def test_sfpu_same_loop_pair_is_not_reported(self) -> None:
+        # same-thread SFPU thrash: each folded execute re-runs its own init right before its SFPU
+        # body, so the pair is correct at runtime (it only blocks hoisting) -- not a hazard,
+        # even inside an attention kernel
+        self.assertFalse([f for f in self.findings if f["resource"] == "SFPU.LREG12"])
+        for finding in self.findings:
+            self.assertNotIn(SFPU_LOOP, finding["kernels"])
 
     def test_clean_kernel_does_not_fire(self) -> None:
         # explicit l1_acc, a default matching the last setter, SFPU ops in different loops,
@@ -109,7 +108,7 @@ class HazardRulesTest(unittest.TestCase):
         for finding in self.findings:
             self.assertNotIn(OK, finding["kernels"])
             self.assertNotIn(SFPU_PLAIN, finding["kernels"])
-        self.assertEqual(len(self.findings), 5)
+        self.assertEqual(len(self.findings), 4)
 
     def test_output_is_deterministic_and_normalized(self) -> None:
         again = effects_db.normalize_findings(
