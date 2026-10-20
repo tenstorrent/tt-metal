@@ -40,6 +40,12 @@ TEST(PackScalarIntoUint32, IntegerTypesAreNumericAndSaturate) {
     EXPECT_EQ(pack_scalar_into_uint32(DataType::UINT32, kInf), 0xFFFFFFFFu);
 }
 
+TEST(PackScalarIntoUint32, ThirtyTwoBitIntegersTruncate) {
+    EXPECT_EQ(pack_scalar_into_uint32(DataType::INT32, 1.75f), 1u);
+    EXPECT_EQ(pack_scalar_into_uint32(DataType::INT32, -1.75f), 0xFFFFFFFFu);
+    EXPECT_EQ(pack_scalar_into_uint32(DataType::UINT32, 1.75f), 1u);
+}
+
 TEST(PackScalarIntoUint32, UnsupportedTypesThrow) {
     for (DataType dtype :
          {DataType::BFLOAT8_B,
