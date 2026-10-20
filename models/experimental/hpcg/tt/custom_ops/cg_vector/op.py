@@ -48,18 +48,13 @@ class CgVectorOp:
         part = part if part is not None else a
         o1 = b if mode == "axpy" else a  # axpy writes over b (p = z + beta p); xr writes x (a) and r (c)
         o2 = b if mode == "dot" else c  # dot: the writer reads b
-        ra, wa, ca = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
-        t = 0
-        r_head = [x.buffer_address() for x in (a, b, c, d, s1, s2)]
-        w_head = [x.buffer_address() for x in (o1, o2, part)]
-        ad = d.buffer_address()
+        # reader / writer: common arguments (a core derives its tile range from its logical position); the compute
+        # kernel keeps its per-core tile count
+        reader_common = [x.buffer_address() for x in (a, b, c, d, s1, s2)] + [base, rem, g.x]
+        writer_common = [x.buffer_address() for x in (o1, o2, part)] + [base, rem, g.x, d.buffer_address()]
+        ca = ttnn.RuntimeArgs()
         for i in range(nc):
-            k = base + (1 if i < rem else 0)
-            cx, cy = i % g.x, i // g.x
-            ra[cx][cy] = r_head + [t, k]
-            wa[cx][cy] = w_head + [t, k, i, ad]
-            ca[cx][cy] = [k]
-            t += k
+            ca[i % g.x][i // g.x] = [base + (1 if i < rem else 0)]
         defs = [(k, str(v)) for k, v in CB.items()] + [("MODE_" + mode.upper(), "1"), ("VB", str(VB))]
 
         def accessors(*ts):
@@ -94,7 +89,7 @@ class CgVectorOp:
                 core_ranges=cores,
                 compile_time_args=accessors(a, b, c, d, s1, s2),
                 defines=defs,
-                runtime_args=ra,
+                common_runtime_args=reader_common,
                 config=ttnn.ReaderConfigDescriptor(),
             ),
             ttnn.KernelDescriptor(
@@ -103,7 +98,7 @@ class CgVectorOp:
                 core_ranges=cores,
                 compile_time_args=accessors(o1, o2, part, d),
                 defines=defs,
-                runtime_args=wa,
+                common_runtime_args=writer_common,
                 config=ttnn.WriterConfigDescriptor(),
             ),
             ttnn.KernelDescriptor(

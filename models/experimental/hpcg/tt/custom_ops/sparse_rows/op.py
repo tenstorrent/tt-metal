@@ -186,16 +186,13 @@ class SparseRowOp:
         dbg = debug if debug is not None else debug_buffer(device)
         self.keep.append(dbg)
         cores = core_ranges(plan.nc, g.x)
-        reader_args, writer_args, compute_args = {}, {}, {}
+        # data-movement kernels: one common argument list (a core finds its row from its logical position, so no
+        # per-core lists to build); the compute kernel keeps per-core segment counts
         ax, av, aoff, ameta, ab, adbg = (t.buffer_address() for t in (x, values, offsets, meta_t, b, dbg))
         aout, ao2 = out.buffer_address(), o2.buffer_address()
-        r_head, r_tail = [ax, av, aoff, ameta, ab], [adbg, meta_pages, ntlv, plan.win_b, flags, meta_bytes]
-        w_tail = [adbg, av, ao2, ax, meta_pages, ntlv, flags, meta_bytes]
-        for i in range(plan.nc):
-            c = (i % g.x, i // g.x)
-            reader_args[c] = r_head + [i] + r_tail
-            writer_args[c] = [aout, ameta, i, aoff, noc_xy[i][0], noc_xy[i][1]] + w_tail
-            compute_args[c] = [nseg[i], nseg_gs[i], nseg_r[i], flags]
+        reader_common = [ax, av, aoff, ameta, ab, g.x, adbg, meta_pages, ntlv, plan.win_b, flags, meta_bytes]
+        writer_common = [aout, ameta, g.x, aoff, 0, 0, adbg, av, ao2, ax, meta_pages, ntlv, flags, meta_bytes]
+        compute_args = {(i % g.x, i // g.x): [nseg[i], nseg_gs[i], nseg_r[i], flags] for i in range(plan.nc)}
 
         def accessors(*ts):
             return [a for t in ts for a in ttnn.TensorAccessorArgs(t).get_compile_time_args()]
@@ -302,11 +299,6 @@ class SparseRowOp:
             wcfg = ttnn.DataMovementConfigDescriptor(
                 processor=ttnn.DataMovementProcessor.RISCV_1, noc=ttnn.NOC.NOC_0 if f else ttnn.NOC.NOC_1
             )
-            ra, wa = ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
-            for i in idx:
-                c = (i % g.x, i // g.x)
-                ra[c[0]][c[1]] = reader_args[c]
-                wa[c[0]][c[1]] = writer_args[c]
             kernels += [
                 ttnn.KernelDescriptor(
                     kernel_source=f"{KERNEL_ROOT}/reader.cpp",
@@ -314,7 +306,7 @@ class SparseRowOp:
                     core_ranges=cr,
                     compile_time_args=reader_ct,
                     defines=define_list,
-                    runtime_args=ra,
+                    common_runtime_args=reader_common,
                     config=rcfg,
                 ),
                 ttnn.KernelDescriptor(
@@ -323,7 +315,7 @@ class SparseRowOp:
                     core_ranges=cr,
                     compile_time_args=writer_ct,
                     defines=define_list,
-                    runtime_args=wa,
+                    common_runtime_args=writer_common,
                     config=wcfg,
                 ),
             ]

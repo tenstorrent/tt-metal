@@ -11,10 +11,13 @@
 #include <cstdint>
 
 void kernel_main() {
-    const uint32_t a_addr = get_arg_val<uint32_t>(0), b_addr = get_arg_val<uint32_t>(1);
-    const uint32_t c_addr = get_arg_val<uint32_t>(2), d_addr = get_arg_val<uint32_t>(3);
-    const uint32_t s1_addr = get_arg_val<uint32_t>(4), s2_addr = get_arg_val<uint32_t>(5);
-    const uint32_t t0 = get_arg_val<uint32_t>(6), nt = get_arg_val<uint32_t>(7);
+    const uint32_t a_addr = get_common_arg_val<uint32_t>(0), b_addr = get_common_arg_val<uint32_t>(1);
+    const uint32_t c_addr = get_common_arg_val<uint32_t>(2), d_addr = get_common_arg_val<uint32_t>(3);
+    const uint32_t s1_addr = get_common_arg_val<uint32_t>(4), s2_addr = get_common_arg_val<uint32_t>(5);
+    // tiles split over the cores: core i takes base (+ 1 for the first rem cores) tiles; i from the logical position
+    const uint32_t base = get_common_arg_val<uint32_t>(6), rem = get_common_arg_val<uint32_t>(7);
+    const uint32_t i = get_absolute_logical_y() * get_common_arg_val<uint32_t>(8) + get_absolute_logical_x();
+    const uint32_t nt = base + (i < rem), t0 = i * base + (i < rem ? i : rem);
     constexpr auto aa = TensorAccessorArgs<0>();
     constexpr auto ab = TensorAccessorArgs<aa.next_compile_time_args_offset()>();
     constexpr auto ac = TensorAccessorArgs<ab.next_compile_time_args_offset()>();

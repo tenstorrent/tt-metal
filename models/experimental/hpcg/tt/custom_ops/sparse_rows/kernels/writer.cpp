@@ -18,13 +18,12 @@ struct Pend {
 };
 
 void kernel_main() {
-    const uint32_t out_addr = get_arg_val<uint32_t>(0);
-    const uint32_t meta_addr = get_arg_val<uint32_t>(1);
-    const uint32_t row = get_arg_val<uint32_t>(2);
-    const uint32_t off_addr = get_arg_val<uint32_t>(3);
-    const uint32_t my_x = get_arg_val<uint32_t>(4), my_y = get_arg_val<uint32_t>(5);
-    const uint32_t meta_pages = get_arg_val<uint32_t>(10), ntlv = get_arg_val<uint32_t>(11);
-    const uint32_t flags = get_arg_val<uint32_t>(12), meta_bytes = get_arg_val<uint32_t>(13);
+    const uint32_t out_addr = get_common_arg_val<uint32_t>(0);
+    const uint32_t meta_addr = get_common_arg_val<uint32_t>(1);
+    const uint32_t row = get_absolute_logical_y() * get_common_arg_val<uint32_t>(2) + get_absolute_logical_x();
+    const uint32_t off_addr = get_common_arg_val<uint32_t>(3);
+    const uint32_t meta_pages = get_common_arg_val<uint32_t>(10), ntlv = get_common_arg_val<uint32_t>(11);
+    const uint32_t flags = get_common_arg_val<uint32_t>(12), meta_bytes = get_common_arg_val<uint32_t>(13);
     const bool wsplit = flags & F_WSPLIT;
     constexpr auto ao = TensorAccessorArgs<0>();
     constexpr auto am = TensorAccessorArgs<ao.next_compile_time_args_offset()>();
@@ -35,12 +34,12 @@ void kernel_main() {
     [[maybe_unused]] constexpr auto adbg0 = TensorAccessorArgs<af.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto avv = TensorAccessorArgs<adbg0.next_compile_time_args_offset()>();
 #ifdef OFFW
-    const auto V = TensorAccessor(avv, get_arg_val<uint32_t>(7), 4096);
+    const auto V = TensorAccessor(avv, get_common_arg_val<uint32_t>(7), 4096);
 #endif
     constexpr auto ao2 = TensorAccessorArgs<avv.next_compile_time_args_offset()>();
-    [[maybe_unused]] const auto OUT2 = TensorAccessor(ao2, get_arg_val<uint32_t>(8), 4096);  // A x of SpMV passes
+    [[maybe_unused]] const auto OUT2 = TensorAccessor(ao2, get_common_arg_val<uint32_t>(8), 4096);  // A x of SpMV passes
     constexpr auto asr = TensorAccessorArgs<ao2.next_compile_time_args_offset()>();
-    const auto SRC = TensorAccessor(asr, get_arg_val<uint32_t>(9), 4096);  // x, for the odd window regions
+    const auto SRC = TensorAccessor(asr, get_common_arg_val<uint32_t>(9), 4096);  // x, for the odd window regions
 #ifdef KDEBUG
     uint32_t T[8] = {0, 0, 0, 0, 0, 0, 0, 0};
     uint32_t t0 = CLK();
@@ -60,8 +59,6 @@ void kernel_main() {
     const uint32_t win = get_write_ptr(CB_WIN);
     const uint32_t offw = get_write_ptr(CB_OFF2);  // 2 x count_of(1) offset pages
     constexpr uint32_t C1 = count_of(1);
-    (void)my_x;
-    (void)my_y;
     Pend pend = {0, 0, 0, 0, 0};
     auto emit = [&](const Pend& e) {
         cb_wait_front(CB_OUT, 1);
@@ -75,7 +72,7 @@ void kernel_main() {
             return;
         }
         const volatile uint32_t* bk = M.blk(e.b);
-        noc_async_write(src, get_noc_addr(my_x, my_y, win + bk[6] + (e.q0 - bk[4]) * 4), n * 4);
+        noc_async_write(src, get_noc_addr(win + bk[6] + (e.q0 - bk[4]) * 4), n * 4);  // this core's own window
         const volatile uint32_t* ex = M.m + bk[2];
         for (uint32_t i = 0; i < bk[3]; ++i) {
             const uint32_t qs = ex[5 * i + 2], qe = ex[5 * i + 3];
@@ -360,7 +357,7 @@ void kernel_main() {
     T[7] = CLK() - tstart;
     {
         constexpr auto adbg = TensorAccessorArgs<af.next_compile_time_args_offset()>();
-        const auto DBG = TensorAccessor(adbg, get_arg_val<uint32_t>(6), 64);
+        const auto DBG = TensorAccessor(adbg, get_common_arg_val<uint32_t>(6), 64);
         volatile uint32_t* o = (volatile uint32_t*)(get_write_ptr(CB_MB) + 48);
         for (uint32_t i = 0; i < 8; ++i) {
             o[i] = T[i];

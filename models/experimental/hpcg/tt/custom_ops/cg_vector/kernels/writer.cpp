@@ -8,9 +8,11 @@
 #include <cstdint>
 
 void kernel_main() {
-    const uint32_t o1_addr = get_arg_val<uint32_t>(0), o2_addr = get_arg_val<uint32_t>(1);
-    const uint32_t part_addr = get_arg_val<uint32_t>(2);
-    const uint32_t t0 = get_arg_val<uint32_t>(3), nt = get_arg_val<uint32_t>(4), core = get_arg_val<uint32_t>(5);
+    const uint32_t o1_addr = get_common_arg_val<uint32_t>(0), o2_addr = get_common_arg_val<uint32_t>(1);
+    const uint32_t part_addr = get_common_arg_val<uint32_t>(2);
+    const uint32_t base = get_common_arg_val<uint32_t>(3), rem = get_common_arg_val<uint32_t>(4);
+    const uint32_t core = get_absolute_logical_y() * get_common_arg_val<uint32_t>(5) + get_absolute_logical_x();
+    const uint32_t nt = base + (core < rem), t0 = core * base + (core < rem ? core : rem);
     constexpr auto a1 = TensorAccessorArgs<0>();
     constexpr auto a2 = TensorAccessorArgs<a1.next_compile_time_args_offset()>();
     constexpr auto ap = TensorAccessorArgs<a2.next_compile_time_args_offset()>();
@@ -18,7 +20,7 @@ void kernel_main() {
     const auto O2 = TensorAccessor(a2, o2_addr, 4096);
     const auto PART = TensorAccessor(ap, part_addr, 4096);
     constexpr auto ad = TensorAccessorArgs<ap.next_compile_time_args_offset()>();
-    const auto Dv = TensorAccessor(ad, get_arg_val<uint32_t>(6), 4096);  // XR: Ap
+    const auto Dv = TensorAccessor(ad, get_common_arg_val<uint32_t>(6), 4096);  // XR: Ap
     (void)O1;
     (void)O2;
     (void)PART;

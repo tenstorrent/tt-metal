@@ -55,16 +55,17 @@ struct SegIter {  // flattened (phase, segment) walk over META
 };
 
 void kernel_main() {
-    const uint32_t src_addr = get_arg_val<uint32_t>(0);
-    const uint32_t v_addr = get_arg_val<uint32_t>(1);
-    const uint32_t off_addr = get_arg_val<uint32_t>(2);
-    const uint32_t meta_addr = get_arg_val<uint32_t>(3);
-    const uint32_t b_addr = get_arg_val<uint32_t>(4);
-    const uint32_t row = get_arg_val<uint32_t>(5);
+    const uint32_t src_addr = get_common_arg_val<uint32_t>(0);
+    const uint32_t v_addr = get_common_arg_val<uint32_t>(1);
+    const uint32_t off_addr = get_common_arg_val<uint32_t>(2);
+    const uint32_t meta_addr = get_common_arg_val<uint32_t>(3);
+    const uint32_t b_addr = get_common_arg_val<uint32_t>(4);
+    // every argument is common to all cores; this core's row of the tables follows from its logical position
+    const uint32_t row = get_absolute_logical_y() * get_common_arg_val<uint32_t>(5) + get_absolute_logical_x();
     // grid-dependent sizes come as runtime arguments, so one binary serves every level and grid size
-    const uint32_t meta_pages = get_arg_val<uint32_t>(7), ntlv = get_arg_val<uint32_t>(8);
-    const uint32_t winb = get_arg_val<uint32_t>(9), flags = get_arg_val<uint32_t>(10);
-    const uint32_t meta_bytes = get_arg_val<uint32_t>(11);  // this core's row length, a multiple of 64 bytes
+    const uint32_t meta_pages = get_common_arg_val<uint32_t>(7), ntlv = get_common_arg_val<uint32_t>(8);
+    const uint32_t winb = get_common_arg_val<uint32_t>(9), flags = get_common_arg_val<uint32_t>(10);
+    const uint32_t meta_bytes = get_common_arg_val<uint32_t>(11);  // this core's row length, a multiple of 64 bytes
     const bool wsplit = flags & F_WSPLIT, addb = flags & F_ADDB, restf = flags & F_RESTF;
 #ifdef GS
     constexpr bool kGS = true;
@@ -330,7 +331,7 @@ void kernel_main() {
     T[7] = CLK() - tstart;
     {
         constexpr auto adbg = TensorAccessorArgs<ab.next_compile_time_args_offset()>();
-        const auto DBG = TensorAccessor(adbg, get_arg_val<uint32_t>(6), 64);
+        const auto DBG = TensorAccessor(adbg, get_common_arg_val<uint32_t>(6), 64);
         volatile uint32_t* o = (volatile uint32_t*)(get_write_ptr(CB_MB) + 16);
         for (uint32_t k = 0; k < 8; ++k) {
             o[k] = T[k];

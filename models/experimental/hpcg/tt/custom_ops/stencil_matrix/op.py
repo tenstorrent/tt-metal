@@ -85,9 +85,6 @@ class StencilMatrixOp:
         head = [t.buffer_address() for t in (self.values, self.offsets, self.meta, bt)]
         tail = [meta_pages, int(b is not None), len(zeros), zt[0].buffer_address(), zt[1].buffer_address()]
         for half, cfg in ((0, ttnn.ReaderConfigDescriptor()), (1, ttnn.WriterConfigDescriptor())):
-            ra = ttnn.RuntimeArgs()
-            for k in range(plan.nc):
-                ra[k % g.x][k // g.x] = head + [k, half] + tail
             kernels.append(
                 ttnn.KernelDescriptor(
                     kernel_source=KERNEL,
@@ -95,7 +92,7 @@ class StencilMatrixOp:
                     core_ranges=cores,
                     compile_time_args=ct,
                     defines=defs,
-                    runtime_args=ra,
+                    common_runtime_args=head + [g.x, half] + tail,  # a core's row: its logical position
                     config=cfg,
                 )
             )

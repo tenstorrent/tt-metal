@@ -234,11 +234,13 @@ void fill_chunk(const Geo& g, uint32_t c, uint32_t q0, uint32_t q1, uint32_t rea
 }  // namespace
 
 void kernel_main() {
-    const uint32_t v_addr = get_arg_val<uint32_t>(0), off_addr = get_arg_val<uint32_t>(1);
-    const uint32_t meta_addr = get_arg_val<uint32_t>(2), b_addr = get_arg_val<uint32_t>(3);
-    const uint32_t row = get_arg_val<uint32_t>(4), half = get_arg_val<uint32_t>(5);
-    const uint32_t meta_pages = get_arg_val<uint32_t>(6), has_b = get_arg_val<uint32_t>(7);
-    const uint32_t nzero = get_arg_val<uint32_t>(8);  // vectors to zero over this core's rows (0, 1 or 2)
+    const uint32_t v_addr = get_common_arg_val<uint32_t>(0), off_addr = get_common_arg_val<uint32_t>(1);
+    const uint32_t meta_addr = get_common_arg_val<uint32_t>(2), b_addr = get_common_arg_val<uint32_t>(3);
+    // common arguments; this core's row follows from its logical position (arg 4: grid width)
+    const uint32_t row = get_absolute_logical_y() * get_common_arg_val<uint32_t>(4) + get_absolute_logical_x();
+    const uint32_t half = get_common_arg_val<uint32_t>(5);
+    const uint32_t meta_pages = get_common_arg_val<uint32_t>(6), has_b = get_common_arg_val<uint32_t>(7);
+    const uint32_t nzero = get_common_arg_val<uint32_t>(8);  // vectors to zero over this core's rows (0, 1 or 2)
     constexpr auto av = TensorAccessorArgs<0>();
     constexpr auto ao = TensorAccessorArgs<av.next_compile_time_args_offset()>();
     constexpr auto am = TensorAccessorArgs<ao.next_compile_time_args_offset()>();
@@ -249,8 +251,8 @@ void kernel_main() {
     const auto Bv = TensorAccessor(ab, b_addr, 4096);
     constexpr auto az0 = TensorAccessorArgs<ab.next_compile_time_args_offset()>();
     constexpr auto az1 = TensorAccessorArgs<az0.next_compile_time_args_offset()>();
-    const auto Z0 = TensorAccessor(az0, get_arg_val<uint32_t>(9), 4096);
-    const auto Z1 = TensorAccessor(az1, get_arg_val<uint32_t>(10), 4096);
+    const auto Z0 = TensorAccessor(az0, get_common_arg_val<uint32_t>(9), 4096);
+    const auto Z1 = TensorAccessor(az1, get_common_arg_val<uint32_t>(10), 4096);
     const uint32_t zpage = get_write_ptr(CB_Z);  // 4 KB of zeros, the source of the zero vectors' writes
     if (nzero) {
         const uint64_t zsrc = get_noc_addr(MEM_ZEROS_BASE);
