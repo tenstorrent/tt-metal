@@ -211,6 +211,9 @@ def _attention_core(
     # (cached_len). Single write point for ALL layer types and ALL chunks (the MSA index_k write is in
     # the is_sparse branch below); the cache-read attention paths below then read the accumulated prefix.
     if kv_cache is not None:
+        assert (
+            config.is_sparse or kv_cache.page_table is None
+        ), "a dense layer's ring_joint reads slots: a paged KV cache serves MSA layers only"
         with zone("kv_write", FINE):
             write_kv_chunk(
                 kv_cache,
@@ -313,9 +316,6 @@ def _attention_core(
         sp_kcfg = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=False, packer_l1_acc=False
         )
-        assert (
-            kv_cache is None or kv_cache.page_table is None
-        ), "a dense layer's ring_joint reads slots: a paged KV cache serves MSA layers only"
         if cached_len > 0:
             # Cache-read: ring_joint over the accumulated prefix in the cache (the seam already wrote this
             # chunk -> write_chunk=False). logical_n = full valid prefix = cached_len + this chunk.

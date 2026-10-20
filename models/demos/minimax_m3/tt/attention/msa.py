@@ -47,8 +47,8 @@ def _ensure_dram(t):
 def high_bw_sp_gather(t, mesh_config, ccl_manager, out_buf, *, gathered_dim_size=None, **source):
     """SP all-gather of ``t`` on dim 2 with ``ttnn.experimental.high_bw_all_gather`` into the persistent
     ``out_buf`` (CCLManager.get_high_bw_gather_buffer); the returned tensor aliases it, do not deallocate.
-    ``source`` selects one row of a cache (``MiniMaxKVCache.gather_source``); ``gathered_dim_size``
-    bounds the rows moved per rank, and rank r's rows still land at ``r * out_buf.shape[2] / ranks``."""
+    ``source`` selects one row of a cache (``MiniMaxKVCache.gather_source``); ``gathered_dim_size`` is the
+    global extent moved (ranks x rows per rank), and rank r's rows still land at ``r * out_buf.shape[2] / ranks``."""
     return ttnn.experimental.high_bw_all_gather(
         t,
         dim=2,

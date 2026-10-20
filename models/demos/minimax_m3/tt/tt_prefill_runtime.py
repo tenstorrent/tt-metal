@@ -21,9 +21,10 @@ paths feed identical tensors into the forward and share one code path. The embed
 embeds in ``prepare_inputs_prefill``, separate from the model forward), unlike DeepSeek which embeds
 inside ``forward``.
 
-The cache holds ``num_users * num_layers`` rows (slot-major: cache_row = slot_id * num_layers + layer_idx); each
-``prefill_forward`` call fills every PrefillChunk into its slot_id at its absolute KV offset, running the
-cache-read attention path against the already-written prefix. ``prefill_chunk`` is the one-chunk form.
+A slot cache holds ``num_users * num_layers`` rows (slot-major: cache_row = slot_id * num_layers + layer_idx); a
+paged cache holds a page pool and slot_id is its page-table row (see MiniMaxKVCache). Each ``prefill_forward`` call
+fills every PrefillChunk into its slot_id at its absolute KV offset, running the cache-read attention path against
+the already-written prefix. ``prefill_chunk`` is the one-chunk form.
 
 Reference: models/demos/deepseek_v3_d_p/tt/tt_prefill_runtime.py (interface) and
 tests/galaxy_prefill_kv_pcc.py (cache readback + RoPE swizzle convention).
@@ -343,9 +344,10 @@ class TtPrefillRuntime:
         high_bw_all_gather), so sweeping every KV-length bucket (the previous behaviour: max_seq_len /
         chunk_size chunks, 196 at 1M) re-ran the same programs and still missed variant (iii). What IS hashed
         is the cache capacity itself (gather buffer shapes, sparse_sdpa T), which is why reconfigure_capacity()
-        invalidates this warm-up. The warm-up writes slots the real run overwrites; on a paged cache it writes
-        through the installed page table, which needs no mapping of its own (unmapped pages drop writes and gather
-        as zeros)."""
+        invalidates this warm-up. The warm-up writes slots 0, 1, ... with throwaway KV. On a paged cache it writes
+        through the installed table, so compile before mapping live pages: on the all-unmapped table
+        allocate_kv_caches installs, every warm-up write is dropped and every gather reads zeros (the programs are
+        the same), while a mapped table gets warm-up KV in the pages its first rows map."""
         assert self.model_built
         cfg = self.config
         chunk, n_chunks = cfg.chunk_size, cfg.forward_chunks
@@ -631,7 +633,8 @@ class TtPrefillRuntime:
         max_seq_len=k*chunk_size)`` (see ``read_seq_len``). Without the bound a 1M-capacity slot is ~120 GB
         of fp32 per cache on host. ``None`` reads the whole capacity.
 
-        One device slice + one mesh compose per cache. DRAM_MEMORY_CONFIG on the slice is required —
+        A slot cache takes one device slice + one mesh compose per cache (a paged cache, one per run of page ids:
+        ``read_paged_slot_block``). DRAM_MEMORY_CONFIG on the slice is required —
         the cache is ND-sharded ROUND_ROBIN_1D, and slicing into another ND-shard miscomputes the DRAM
         core on host read-back.
 
@@ -691,11 +694,11 @@ class TtPrefillRuntime:
             return host.reshape(n_l, 1, sp * n_slabs * chunk_local, hd)
 
         if kv_cache.page_table is not None:
-            chunk = self.config.chunk_size
+            chunk_local = self.config.chunk_size // self.config.sp_factor
             return [
-                read_paged_slot_block(kv_cache, kv_cache.k, slot_id, rows=rows, chunk_size=chunk),
-                read_paged_slot_block(kv_cache, kv_cache.v, slot_id, rows=rows, chunk_size=chunk),
-                read_paged_slot_block(kv_cache, kv_cache.index_k, slot_id, rows=rows, chunk_size=chunk)[:, :1],
+                read_paged_slot_block(kv_cache, kv_cache.k, slot_id, rows=rows, chunk_local=chunk_local),
+                read_paged_slot_block(kv_cache, kv_cache.v, slot_id, rows=rows, chunk_local=chunk_local),
+                read_paged_slot_block(kv_cache, kv_cache.index_k, slot_id, rows=rows, chunk_local=chunk_local)[:, :1],
             ]
         if kv_cache.index_k_tp_axis is None:
             index_k = _slot_block(kv_cache.index_k, collapse_tp=True)

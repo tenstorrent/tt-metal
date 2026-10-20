@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+import itertools
 import os
 from dataclasses import dataclass
 from typing import Optional
@@ -19,8 +20,9 @@ BH_NUM_DRAM_BANKS = 8
 
 # Page-table entry of a logical page with no physical page (the ops' paged_kv_table.hpp).
 PAGE_UNMAPPED = -1
-# Tokens per page of a paged cache. A whole number of 32-row tiles that divides a chunk's per-chip run
-# (chunk_size / sp), so a page never straddles two SP ranks.
+# Tokens per page of a paged cache. A whole number of 32-row tiles that divides a chunk's per-chip slab
+# (chunk_size / sp), so a page never straddles two SP ranks. 64 is the serving engine's KV block, and keeps a 1M-token
+# table row at 16384 entries.
 PAGE_SIZE = 64
 
 
@@ -45,13 +47,16 @@ class MiniMaxKVCache(KvCaches):
 
     Paged (``page_table`` set): each cache is a pool of ``num_pages`` pages per chip,
     ``[num_pages*num_layers, 1, PAGE_SIZE, head_dim]`` with entry ``page * num_layers + layer``, so one page id
-    holds that page of every layer. ``page_table`` ``[num_users, width]`` (INT32, DRAM, replicated) maps row
-    ``slot_id``'s global logical page q (positions ``[q*PAGE_SIZE, (q+1)*PAGE_SIZE)``) to a physical page in the
-    pool of the SP rank that holds it (``page_owner``), or ``PAGE_UNMAPPED``. Before a request's first chunk the
-    caller sets its whole row: the request's own pages, PAGE_UNMAPPED everywhere else. A final chunk writes its
-    pad rows too, and the writer drops only those on unmapped pages, so a stale entry left in the row would put
-    them into another request's page. Not paged: ring_joint reads (a stage holding a dense layer, M3's layers
-    0-2, keeps slot caches), index_k TP dedup, KV migration.
+    holds that page of every layer; every chip has its own pool, so a page id names a different page on each SP
+    rank. ``page_table`` ``[num_users, width]`` (INT32, DRAM, replicated) maps row ``slot_id``'s global logical page
+    q (positions ``[q*PAGE_SIZE, (q+1)*PAGE_SIZE)``) to a physical page in the pool of the SP rank that holds it,
+    ``page_owner(q, chunk_local=chunk_size // sp, sp=sp)``, so a table is built for one chunk_size; or to
+    ``PAGE_UNMAPPED``. Before a request's first chunk its row holds the request's own pages and PAGE_UNMAPPED
+    everywhere else. A chunk writes its pad rows too, and a resume rewrites the tile below its start,
+    so a page the row maps from another request (a shared prefix) must lie wholly below the row's first write:
+    the shared prefix ends on a page boundary. A stale entry would put pad rows into another request's page. Not
+    paged: ring_joint reads (a stage holding a dense layer, M3's layers 0-2, keeps slot caches), index_k TP
+    dedup, KV migration.
     """
 
     k: ttnn.Tensor
@@ -65,10 +70,6 @@ class MiniMaxKVCache(KvCaches):
     page_table: Optional[ttnn.Tensor] = None  # None = slot cache
     num_pages: int = 0  # pages in each chip's pool when paged
 
-    def paging_kwargs(self) -> dict:
-        """The page-table argument of the KV write and gather ops; empty for a slot cache."""
-        return {} if self.page_table is None else {"page_table": self.page_table}
-
     def gather_source(self, cache_row: int, chunk_local: int) -> dict:
         """high_bw_all_gather arguments that read ``cache_row`` (slot_id * num_layers + layer) of this cache.
         A paged read passes the same flat row, which the op splits into the page-table row and the layer with the
@@ -80,7 +81,7 @@ class MiniMaxKVCache(KvCaches):
             "input_batch_index": cache_row,
             "batch_slot_num_layers": self.num_layers,
             "gathered_slab_global": chunk_local * self.sp,
-            **self.paging_kwargs(),
+            "page_table": self.page_table,
         }
 
     def deallocate(self) -> None:
@@ -92,8 +93,8 @@ class MiniMaxKVCache(KvCaches):
 
 
 def page_owner(q, *, chunk_local, sp):
-    """SP rank holding global logical page ``q``: positions are block-cyclic over the ranks in runs of
-    ``chunk_local``, and a page never straddles two runs (``chunk_local % PAGE_SIZE == 0``)."""
+    """SP rank holding global logical page ``q``: positions are block-cyclic over the ranks in slabs of
+    ``chunk_local``, and a page never straddles two slabs (``chunk_local % PAGE_SIZE == 0``)."""
     return (q * PAGE_SIZE // chunk_local) % sp
 
 
@@ -103,7 +104,11 @@ def page_table_width(max_seq_len: int) -> int:
 
 
 def set_page_table(kv_cache: MiniMaxKVCache, table: torch.Tensor) -> None:
-    """Overwrite the whole device page table, in place, with a host ``[num_users, width]`` table."""
+    """Overwrite the whole device page table with a host ``[num_users, width]`` table: rows in flight are passed
+    unchanged. In place, because a captured trace records the table's address."""
+    assert tuple(table.shape) == tuple(kv_cache.page_table.shape), f"table {tuple(table.shape)} is not the cache's"
+    # An entry outside the pool is not an error to the ops (they drop or zero it), so it is caught here.
+    assert int(table.min()) >= PAGE_UNMAPPED and int(table.max()) < kv_cache.num_pages, "entry outside the pool"
     mesh_device = kv_cache.page_table.device()
     host = ttnn.from_torch(
         table.to(torch.int32),
@@ -114,39 +119,41 @@ def set_page_table(kv_cache: MiniMaxKVCache, table: torch.Tensor) -> None:
     ttnn.copy_host_to_device_tensor(host, kv_cache.page_table)
 
 
-def read_paged_slot_block(kv_cache: MiniMaxKVCache, tensor, slot_id: int, *, rows: int, chunk_size: int):
+def read_paged_slot_block(kv_cache: MiniMaxKVCache, tensor, slot_id: int, *, rows: int, chunk_local: int):
     """Host copy of ``slot_id``'s first ``rows`` local rows per chip of one paged cache tensor, in the slot-cache
     layout ``[num_layers, heads, sp*rows, head_dim]`` (SP ranks along dim 2, TP cols along dim 1); unmapped pages
-    read as zeros. The slot's pages are read in runs of consecutive physical pages, so the copy is bounded by the
-    pages it maps. Rank s's local page i holds global page ``q = ((i // per_run) * sp + s) * per_run + i % per_run``,
-    ``per_run`` pages per rank per chunk."""
-    mesh_device = tensor.device()
+    read as zeros. Rank s's local page i holds global page ``q = ((i // per_slab) * sp + s) * per_slab + i %
+    per_slab``, ``per_slab`` pages per rank per chunk. Each run of consecutive page ids the slot maps on any rank
+    is one slice of every chip, and only the ranks that map an id keep it, so the copy is at most sp times the
+    slot's pages."""
     sp, n_layers = kv_cache.sp, kv_cache.num_layers
-    per_run = chunk_size // sp // PAGE_SIZE
+    assert chunk_local % PAGE_SIZE == 0 and rows % PAGE_SIZE == 0, f"{chunk_local} / {rows} rows are not whole pages"
+    rows = min(rows, kv_cache.max_seq_len // sp)
+    mesh_device = tensor.device()
+    per_slab = chunk_local // PAGE_SIZE
     table = ttnn.to_torch(ttnn.get_device_tensors(kv_cache.page_table)[0]).to(torch.int64)
     i = torch.arange(rows // PAGE_SIZE)
-    q = ((i // per_run)[None, :] * sp + torch.arange(sp)[:, None]) * per_run + (i % per_run)[None, :]
+    q = ((i // per_slab)[None, :] * sp + torch.arange(sp)[:, None]) * per_slab + (i % per_slab)[None, :]
     phys = table[slot_id][q]  # [sp, local pages]
     mapped = (phys >= 0) & (phys < kv_cache.num_pages)
     shape = list(tensor.shape)
     out = torch.zeros(n_layers, shape[1] * mesh_device.shape[1], sp * rows, shape[3])
     composer = ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape)
     pages = sorted(set(phys[mapped].tolist()))
-    host = {}  # physical page -> its entries [n_layers, tp, sp*page, hd]
-    while pages:
-        lo = hi = pages.pop(0)
-        while pages and pages[0] == hi + 1:
-            hi = pages.pop(0)
+    for _, run in itertools.groupby(enumerate(pages), lambda t: t[1] - t[0]):
+        ids = [p for _, p in run]
+        lo, hi = ids[0], ids[-1] + 1
         sl = ttnn.slice(
-            tensor, [lo * n_layers, 0, 0, 0], [(hi + 1) * n_layers, *shape[1:]], memory_config=ttnn.DRAM_MEMORY_CONFIG
+            tensor, [lo * n_layers, 0, 0, 0], [hi * n_layers, *shape[1:]], memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
-        run = ttnn.to_torch(sl, mesh_composer=composer).float()
+        block = ttnn.to_torch(sl, mesh_composer=composer).float()  # [(hi - lo) * layers, tp, sp * page, hd]
         ttnn.deallocate(sl)
-        for p in range(lo, hi + 1):
-            host[p] = run[(p - lo) * n_layers : (p - lo + 1) * n_layers]
-    for rank, local in mapped.nonzero().tolist():
-        dst = rank * rows + local * PAGE_SIZE
-        out[:, :, dst : dst + PAGE_SIZE] = host[int(phys[rank, local])][:, :, rank * PAGE_SIZE : (rank + 1) * PAGE_SIZE]
+        for rank, local in (mapped & (phys >= lo) & (phys < hi)).nonzero().tolist():
+            entry = (int(phys[rank, local]) - lo) * n_layers
+            dst = rank * rows + local * PAGE_SIZE
+            out[:, :, dst : dst + PAGE_SIZE] = block[
+                entry : entry + n_layers, :, rank * PAGE_SIZE : (rank + 1) * PAGE_SIZE
+            ]
     return out
 
 
@@ -285,11 +292,12 @@ def allocate_kv_caches(
     )
 
 
-def _write_one(cache, tensor, *, slot_id, layer_idx, num_layers, kv_actual, sp_axis, paging, tp_axis=None):
+def _write_one(cache, tensor, *, slot_id, layer_idx, num_layers, kv_actual, sp_axis, page_table, tp_axis=None):
     """Write one SP-sharded chunk tensor into a packed cache via update_padded_kv_cache.
 
     ``tp_axis`` (KV dedup): ``tensor`` is TP-replicated and each chip persists only its own 1/tp window
-    of its SP shard (the op picks the window from its coordinate on ``tp_axis``).
+    of its SP shard (the op picks the window from its coordinate on ``tp_axis``). ``page_table`` (None for a slot
+    cache) makes ``slot_id`` a page-table row of a paged pool.
 
     The op requires TILE layout and input.dtype == cache.dtype, so cast a copy to the cache's dtype when
     needed (the original stays live for the attention op that follows). At ``kv_actual % 32 == 0`` chunk
@@ -305,7 +313,7 @@ def _write_one(cache, tensor, *, slot_id, layer_idx, num_layers, kv_actual, sp_a
         kv_actual_global=kv_actual,
         cluster_axis=sp_axis,
         tp_axis=tp_axis,
-        **paging,
+        page_table=page_table,
     )
     if src is not tensor:
         src.deallocate(True)
@@ -315,8 +323,9 @@ def write_kv_chunk(kv_cache: MiniMaxKVCache, tt_k, tt_v, *, slot_id, layer_idx, 
     """Write this chunk's post-RoPE K and raw V into the packed cache (every layer type).
 
     tt_k / tt_v are the per-device SP shards [1, n_kv_local, s_local, head_dim] (heads TP-sharded on the
-    cols, sequence SP-sharded on the ``sp_axis`` rows) — exactly the per-chip cache layout, so they write
-    in place. ``kv_actual`` is the cumulative valid prefix before this chunk (0 for non-chunked).
+    cols, sequence SP-sharded on the ``sp_axis`` rows) — exactly the per-chip layout of a slot cache, so they write
+    in place (a paged cache scatters them over the row's pages). ``kv_actual`` is the cumulative valid prefix
+    before this chunk (0 for non-chunked).
     """
     _write_one(
         kv_cache.k,
@@ -326,7 +335,7 @@ def write_kv_chunk(kv_cache: MiniMaxKVCache, tt_k, tt_v, *, slot_id, layer_idx, 
         num_layers=kv_cache.num_layers,
         kv_actual=kv_actual,
         sp_axis=sp_axis,
-        paging=kv_cache.paging_kwargs(),
+        page_table=kv_cache.page_table,
     )
     _write_one(
         kv_cache.v,
@@ -336,7 +345,7 @@ def write_kv_chunk(kv_cache: MiniMaxKVCache, tt_k, tt_v, *, slot_id, layer_idx, 
         num_layers=kv_cache.num_layers,
         kv_actual=kv_actual,
         sp_axis=sp_axis,
-        paging=kv_cache.paging_kwargs(),
+        page_table=kv_cache.page_table,
     )
 
 
@@ -355,6 +364,6 @@ def write_index_k_chunk(kv_cache: MiniMaxKVCache, tt_index_k, *, slot_id, layer_
         num_layers=kv_cache.num_layers,
         kv_actual=kv_actual,
         sp_axis=sp_axis,
-        paging=kv_cache.paging_kwargs(),
+        page_table=kv_cache.page_table,
         tp_axis=kv_cache.index_k_tp_axis,
     )
