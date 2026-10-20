@@ -8,7 +8,8 @@ One CG iteration, as HPCG 3.1's CG.cpp with a 4-level multigrid preconditioner (
   multigrid, per level l = 0..2: pre-smoother + residual SpMV + r - A z (one sparse-row launch), restriction,
       the coarser level, prolongation (gather and add in one launch), post-smoother; level 3: one smoother
   rtz = r.z, p = z + (rtz / rtz_old) p, Ap = A p, pAp = p.Ap, x += alpha p, r -= alpha Ap, |r|
-Every matrix and vector pass is a custom op (tt/custom_ops), including the final sums of the dot products. The whole iteration is trace-capturable.
+Every matrix and vector pass is a custom op (tt/custom_ops), including the final sums of the dot products. The CG
+start (start()) and every iteration run on the device only and are trace-capturable; the CG scalars stay on device.
 """
 
 import ttnn
@@ -35,7 +36,7 @@ def slot_stride(P):
 class DeviceLevel:
     """One multigrid level on device: matrix values and window offsets, and the level's work vectors."""
 
-    def __init__(self, device, L, ncores, noc_xy):
+    def __init__(self, device, L, ncores, noc_xy, r=None):
         self.L, self.P = L, L.P
         blocks = [(L.starts[c], L.starts[c + 1]) for c in range(8)]
         self.plan = SparseRowPlan(
@@ -51,7 +52,8 @@ class DeviceLevel:
         # the storage rows are already padded to slot_stride, so both tables upload as they are
         self.values = rows_to_device(device, L.V_rows)
         self.offsets = rows_to_device(device, self.plan.off)  # 32-bit window offsets
-        self.z, self.Az, self.r = (zeros_device(device, L.P) for _ in range(3))
+        self.z, self.Az = (zeros_device(device, L.P) for _ in range(2))
+        self.r = r if r is not None else zeros_device(device, L.P)  # the fine level shares CG's r
 
 
 class HPCG:
@@ -59,7 +61,8 @@ class HPCG:
 
     ops: ("gs_pre", l), ("gs", l): pre- and post-smoother of level l;
     ("restrict", l), ("prolong", l): level l -> l + 1 and back; "spmv_cg": Ap = A p.
-    vops: "rz", "pAp" dot partials; "p": p update; "xr": x and r update with the partial r.r.
+    vops: "rr", "rz", "pAp" dot partials and their "*_fin" sums; "p": p update; "xr": x and r update with the
+    partial r.r. A CG solve is reset(), start(), then iteration() repeated.
     """
 
     def __init__(self, device, nx, bands=None, order=COLOUR_ORDER, kernel_debug=False, level_cores=None):
@@ -73,14 +76,14 @@ class HPCG:
         self.order = list(order)
         noc_xy = noc_coords(device)
         lc = list(level_cores or []) + [nc] * 4  # cores per level for the smoothers (default: all)
-        self.lv = [DeviceLevel(device, L, min(nc, lc[l]), noc_xy) for l, L in enumerate(self.levels)]
         L0 = self.levels[0]
+        self.r = zeros_device(device, L0.P)
+        self.lv = [
+            DeviceLevel(device, L, min(nc, lc[l]), noc_xy, r=self.r if l == 0 else None)
+            for l, L in enumerate(self.levels)
+        ]
         self.b = to_device(device, L0.B)
-        self.x, self.r, self.p, self.Ap, self.zero = (zeros_device(device, L0.P) for _ in range(5))
-        self.lv[0].r = self.r
-        self.acc = ttnn.init_device_compute_kernel_config(
-            device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, math_approx_mode=False
-        )
+        self.x, self.p, self.Ap, self.zero = (zeros_device(device, L0.P) for _ in range(4))
         self.debug = debug_buffer(device)  # per-core cycle counters, written by kernel_debug builds
         dbg = dict(kernel_debug=kernel_debug, debug=self.debug)
         self._dbg = dbg
@@ -164,7 +167,26 @@ class HPCG:
         )
         ncv = min(nc, L0.P // TILE)
         self.part = zeros_device(device, ncv * TILE)  # per-core dot partials, one tile each
-        self.vops = None
+        # CG scalars, one fp32 tile each (value at element (0, 0)); they never leave the device
+        scalar = ttnn.Shape([1, 1])
+        self._one = ttnn.full(scalar, 1.0, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+        self.rtz, self.rtz_old, self.pAp, self.normr, self.normr0 = (
+            ttnn.full(scalar, 0.0, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device) for _ in range(5)
+        )
+        z = self.lv[0].z
+        rz = CgVectorOp(device, "dot", self.r, z, part=self.part)
+        n = -(-rz.nc * 64 // (4 * TILE))  # pages holding one 64-byte slot per core
+        self.vops = dict(
+            rr=CgVectorOp(device, "dot", self.r, self.r, part=self.part),
+            nr0_fin=DotFinishOp(device, self.part, n, self.normr0, sqrt=True),
+            rz=rz,
+            rz_fin=DotFinishOp(device, self.part, n, self.rtz, old=self.rtz_old, keep_old=True),
+            pAp=CgVectorOp(device, "dot", self.p, self.Ap, part=self.part),
+            pAp_fin=DotFinishOp(device, self.part, n, self.pAp),
+            p=CgVectorOp(device, "axpy", z, self.p, s1=self.rtz, s2=self.rtz_old),
+            xr=CgVectorOp(device, "xr", self.x, self.p, self.r, self.Ap, s1=self.rtz, s2=self.pAp, part=self.part),
+            nr_fin=DotFinishOp(device, self.part, n, self.normr, sqrt=True),
+        )
 
     def spmv(self, l):
         """A plain z -> Az launch of level l (used by tests and diagnostics, built on first use)."""
@@ -185,39 +207,21 @@ class HPCG:
             self.ops[("prolong", l)]()
             self.ops[("gs", l)]()
 
-    def dot(self, a, b):
-        s = ttnn.sum(ttnn.multiply(a, b), dim=-2, keepdim=True, compute_kernel_config=self.acc)
-        return ttnn.sum(s, dim=-1, keepdim=True, compute_kernel_config=self.acc)
-
-    def setup_cg(self):
-        """CG start (HPCG CG.cpp): x = 0, p = 0, r = b - A p, normr0 = |r|. r.z starts at 1, so iteration 1 keeps 1 as
-        the previous r.z and its p = z + (r.z / 1) * 0 = z. Untraced; writes only persistent buffers."""
+    def reset(self):
+        """x = 0. HPCG zeroes x before each CG call (main.cpp), outside the CG timer."""
         ttnn.copy(self.zero, self.x)
-        ttnn.copy(self.zero, self.p)
+
+    def start(self):
+        """CG start, the part of HPCG's CG.cpp that runs inside its timer before iteration 1: p = x, Ap = A p,
+        r = b - Ap, normr0 = |r|. Device only and trace-capturable; returns normr0 as a 1x1 device tensor.
+        r.z starts at 1, so iteration 1 keeps 1 as the previous r.z and its p = z + (r.z / 1) p = z (p = x = 0)."""
+        ttnn.copy(self.x, self.p)
         self.ops["spmv_cg"]()
         ttnn.subtract(self.b, self.Ap, output_tensor=self.r)
-        nr = ttnn.sqrt(self.dot(self.r, self.r))
-        self.normr0 = float(ttnn.to_torch(nr).reshape(-1)[0])
-        if self.vops is None:
-            self._one = ttnn.add(ttnn.multiply(nr, 0.0), 1.0)
-            self.rtz = ttnn.add(ttnn.multiply(nr, 0.0), 1.0)
-            self.rtz_old, self.pAp, self.normr = (ttnn.add(ttnn.multiply(nr, 0.0), 0.0) for _ in range(3))
-            z = self.lv[0].z
-            rz = CgVectorOp(self.device, "dot", self.r, z, part=self.part)
-            n = -(-rz.nc * 64 // (4 * TILE))  # pages holding one 64-byte slot per core
-            self.vops = dict(
-                rz=rz,
-                rz_fin=DotFinishOp(self.device, self.part, n, self.rtz, old=self.rtz_old, keep_old=True),
-                pAp=CgVectorOp(self.device, "dot", self.p, self.Ap, part=self.part),
-                pAp_fin=DotFinishOp(self.device, self.part, n, self.pAp),
-                p=CgVectorOp(self.device, "axpy", z, self.p, s1=self.rtz, s2=self.rtz_old),
-                xr=CgVectorOp(
-                    self.device, "xr", self.x, self.p, self.r, self.Ap, s1=self.rtz, s2=self.pAp, part=self.part
-                ),
-                nr_fin=DotFinishOp(self.device, self.part, n, self.normr, sqrt=True),
-            )
-        else:
-            ttnn.copy(self._one, self.rtz)
+        self.vops["rr"]()
+        self.vops["nr0_fin"]()
+        ttnn.copy(self._one, self.rtz)
+        return self.normr0
 
     def iteration(self):
         """One CG iteration; returns |r| as a 1x1 device tensor (the same tensor every call)."""

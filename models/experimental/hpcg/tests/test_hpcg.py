@@ -91,9 +91,10 @@ def test_hpcg_ops_and_cg(device, nx, bands):
     assert rel < 1e-6
 
     iters = 3
-    h.setup_cg()
+    h.reset()
+    nr0 = float(ttnn.to_torch(h.start()).reshape(-1)[0])
     _, hist64 = ref.cg(h.levels, iters, np.float64, order)
     for k in range(iters):
-        nr = float(ttnn.to_torch(h.iteration()).reshape(-1)[0]) / h.normr0
+        nr = float(ttnn.to_torch(h.iteration()).reshape(-1)[0]) / nr0
         logger.info(f"CG {k + 1}: device {nr:.6e}  numpy fp64 {hist64[k]:.6e}")
         assert abs(nr - hist64[k]) <= 1e-5 * hist64[k], f"CG iteration {k + 1}"

@@ -92,11 +92,13 @@ class Level:
                 band_ny[c * nb + j] = sel.size
                 band_start[c * nb + j] = bstarts[c][j]
         stride = slot_stride(P) if slot_stride else P
-        self.pos = np.empty(self.n, np.int64)
-        self.nat_at = np.empty(P, np.int64)
-        self.V_rows = np.zeros((27, stride), np.float32)
-        self.COL_rows = np.zeros((27, stride), np.int32)
-        self.B = np.empty(P)
+        from models.experimental.hpcg.host.native import zeros  # huge-page tables: see its docstring
+
+        self.pos = zeros(self.n, np.int64)
+        self.nat_at = zeros(P, np.int64)
+        self.V_rows = zeros((27, stride), np.float32)
+        self.COL_rows = zeros((27, stride), np.int32)
+        self.B = zeros(P, np.float32)
         self.nnz = int(
             lib.hpcg_build_level(
                 nx,
@@ -166,13 +168,31 @@ class Level:
         V[13, self.nat_at < 0] = 1.0
         self.V, self.COL = V, COL
         self.nnz = int(cnt.sum())
-        self.B = np.zeros(p)
+        self.B = np.zeros(p, np.float32)  # exact: 26 - (neighbours - 1)
         self.B[pos] = 26.0 - (cnt - 1)
 
     def link(self, C):
         """C = next coarser level. R[qc]: block-0 position (relative) of coarse point qc's fine point.
         Pm[q]: coarse position of fine block-0 position q (pads -> any, with weight 0)."""
         self.coarse = C
+        from models.experimental.hpcg.host import native
+
+        lib = native.lib()
+        if lib is not None:
+            self._link_native(lib, C)
+        else:
+            self._link_numpy(C)
+
+    def _link_native(self, lib, C):
+        nb0 = self.starts[1]
+        self.R, self.Rw = np.empty(C.P, np.int64), np.empty(C.P)
+        self.Pm, self.Pw = np.empty(nb0, np.int64), np.empty(nb0)
+        cnat = np.ascontiguousarray(C.nat_at, np.int64)
+        rmax = lib.hpcg_link(self.nx, self.pos, nb0, C.nx, C.P, cnat, self.R, self.Rw, self.Pm, self.Pw)
+        assert rmax < nb0
+
+    def _link_numpy(self, C):
+        """The grid transfer tables with numpy array operations: the readable definition, and the fallback."""
         cn = C.nat_at
         real = cn >= 0
         cx, cy, cz = cn % C.nx, (cn // C.nx) % C.nx, cn // (C.nx * C.nx)

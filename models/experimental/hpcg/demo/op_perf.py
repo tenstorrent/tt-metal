@@ -40,7 +40,8 @@ def main(nx):
     S = {o["op"].replace(" ", ""): o["sol_us"] for o in speed_of_light.ops(nx)}
     try:
         h = HPCG(device, nx)
-        h.setup_cg()
+        h.reset()
+        h.start()
         res = {}
         for l in range(len(h.lv)):
             res[f"gs_pre_L{l}"] = (
@@ -59,12 +60,14 @@ def main(nx):
         res["dot_p_Ap"] = (timed(lambda: (v["pAp"](), v["pAp_fin"]())), S["DDOT"])
         res["x_r_update_norm"] = (timed(lambda: (v["xr"](), v["nr_fin"]())), 2 * S["WAXPBY"] + S["DDOT"])
         tot = sum(us for us, _ in res.values())
+        start_us = timed(lambda: (h.reset(), h.start())) - timed(h.reset)  # once per CG set, not per iteration
         print(
             json.dumps(
                 dict(
                     nx=nx,
                     sum_ms=round(tot / 1e3, 3),
                     sol_ms=round(sum(s for _, s in res.values()) / 1e3, 3),
+                    cg_start_us=round(start_us, 1),
                     ops={
                         k: dict(us=round(us, 1), sol_us=round(s, 2), pct_of_sol=round(100 * s / us, 1))
                         for k, (us, s) in res.items()

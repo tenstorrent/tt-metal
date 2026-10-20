@@ -73,6 +73,13 @@ def hpcg_flops(nx):
     return 6 * n0 + 6 * n0 + 2 * nnz0 + sum(10 * level(nx >> l)[1] for l in range(3)) + 4 * level(nx >> 3)[1]
 
 
+def hpcg_start_flops(nx):
+    """Flops of the CG start (r = b - A x, |r|), which ReportResults.cpp credits once per CG set: one DDOT, one
+    WAXPBY and one SpMV."""
+    n0, nnz0 = level(nx)
+    return 2 * n0 + 2 * n0 + 2 * nnz0
+
+
 if __name__ == "__main__":
     nx = int(sys.argv[1])
     ms = float(sys.argv[2]) if len(sys.argv) > 2 else None

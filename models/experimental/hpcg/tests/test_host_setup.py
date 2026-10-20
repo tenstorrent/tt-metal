@@ -52,3 +52,15 @@ def test_plan_matches_numpy(nx, bands, exchange):
     assert np.array_equal(got[1], want[1]), "offsets"
     assert np.array_equal(got[2], want[2]), "own L1 offsets"
     assert got[3] == want[3], "exchange entries"
+
+
+@pytest.mark.parametrize("nx, bands", CASES)
+def test_link_matches_numpy(nx, bands):
+    if native.lib() is None:
+        pytest.skip("no C++ compiler")
+    F, C = Level(nx, bands, slot_stride), Level(nx // 2, 1, slot_stride)
+    F._link_native(native.lib(), C)
+    got = (F.R, F.Rw, F.Pm, F.Pw)
+    F._link_numpy(C)
+    for name, g, w in zip(("R", "Rw", "Pm", "Pw"), got, (F.R, F.Rw, F.Pm, F.Pw)):
+        assert g.dtype == w.dtype and np.array_equal(g, w), name

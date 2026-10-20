@@ -14,6 +14,8 @@ import numpy as np
 import torch
 import ttnn
 
+from models.experimental.hpcg.host import native
+
 TILE = 1024
 
 
@@ -29,10 +31,16 @@ _WORD_OF_FLAT = word_of_flat(np.arange(TILE))
 
 def to_device(device, data):
     """q-ordered numpy vector (length a multiple of 1024) -> fp32 TILE tensor [P / 32, 32] on device."""
-    data = np.asarray(data, np.float32)
+    data = np.ascontiguousarray(data, np.float32).reshape(-1)
     if data.size % TILE:
         raise ValueError(f"vector length {data.size} is not a multiple of {TILE}")
-    a = data.reshape(-1, TILE)[:, _WORD_OF_FLAT].reshape(-1, 32)
+    lib = native.lib()
+    if lib is not None:  # the same permutation in one parallel pass (numpy's fancy indexing ran at about 1 GB/s)
+        a = native.zeros(data.size, np.float32)
+        lib.hpcg_tile_permute(data, a, data.size)
+        a = a.reshape(-1, 32)
+    else:
+        a = data.reshape(-1, TILE)[:, _WORD_OF_FLAT].reshape(-1, 32)
     return ttnn.from_torch(torch.from_numpy(a), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
 
 
@@ -67,5 +75,7 @@ def rows_to_device(device, a):
 
 
 def zeros_device(device, P):
-    """A zero vector of length P, created on the device (nothing is sent from the host)."""
-    return ttnn.zeros(ttnn.Shape([P // 32, 32]), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    """A zero vector of length P, zero-filled by the device: ttnn.zeros builds the zeros on the host and uploads them
+    (9.5 ms for 28 MB on the P150), while allocating and filling on the device takes about 2 ms."""
+    t = ttnn.empty(ttnn.Shape([P // 32, 32]), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    return ttnn.zeros_like(t)

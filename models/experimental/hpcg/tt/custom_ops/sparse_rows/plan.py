@@ -90,6 +90,7 @@ class SparseRowPlan:
             nbr[m].add(k)
         self.nc, self.own, self.own_l1, self.pieces, self.exch, self.nbr = nc, own, own_l1, pieces, exch, nbr
         self.out_blocks = out_blocks
+        self._tables = {}  # _core_tables cache
 
     @staticmethod
     def _plan_native(lib, COL, own, exchange, ng, empty_lo):
@@ -108,7 +109,7 @@ class SparseRowPlan:
             < 0
         ):
             raise ValueError(f"a core needs more than {maxp} window pieces")
-        off = np.zeros((nslot, stride), np.int32)
+        off = native.zeros((nslot, stride), np.int32)  # huge pages: written once, then uploaded
         own_l1 = np.zeros(nc * NB, np.int64)
         bad = lib.hpcg_plan_offsets(
             nslot, stride, COL, nc, NB, own_f, int(exchange), GRAN, ng, maxp, plo, pln, pl1, npc, stride, off, own_l1
@@ -185,53 +186,59 @@ class SparseRowPlan:
                             ents.append((int(k), b, m, s, f, int(l1[p]) + (s - plo) * 4))
         return pieces, off, own_l1, ents
 
+    def _core_tables(self, noc_xy, tpw):
+        """The parts of each core's metadata row that do not depend on the launch's phases, computed once per tpw
+        (launches sharing this plan reuse them): the head without its phase list, the body (segments, then exchange
+        entries), each block's segment and exchange offsets relative to the body, and segments per block."""
+        key = (tpw, tuple(map(tuple, noc_xy)))
+        if key in self._tables:
+            return self._tables[key]
+        NB = len(self.out_blocks)
+        slot = {k: sorted(self.nbr[k]) for k in range(self.nc)}
+        out = []
+        for k in range(self.nc):
+            nbrs = slot[k]
+            lo, ln, l1 = self.pieces[k]
+            head = np.stack([lo, ln, l1], axis=1).reshape(-1).tolist()
+            nb_words = []
+            for m in nbrs:
+                nb_words += [noc_xy[m][0], noc_xy[m][1], 1 + slot[m].index(k)]  # my slot on m
+            body, blk, nsegs = [], [], []
+            for b in range(NB):
+                a, e = (int(v) for v in self.own[k, b])
+                # segments never cross an L1 page (tpw words): cuts at the page boundaries inside [a, e)
+                cuts = [a] + list(range((a // tpw + 1) * tpw, e, tpw)) + [e] if e > a else []
+                blk.append([len(body), max(0, len(cuts) - 1)])
+                nsegs.append(max(0, len(cuts) - 1))
+                for s, f in zip(cuts[:-1], cuts[1:]):
+                    body += [s, f]
+            for b in range(NB):
+                ex = self.exch[k][b]
+                a, e = (int(v) for v in self.own[k, b])
+                blk[b] += [len(body), len(ex), a, e, int(self.own_l1[k, b])]
+                for x in ex:
+                    body += list(x)
+            out.append((len(lo), len(nbrs), head, nb_words, body, blk, nsegs))
+        self._tables[key] = out
+        return out
+
     def meta(self, phases, noc_xy, tpw=TILE):
         """Per-core metadata rows (layout in kernels/common.h) and segment counts for the compute kernel.
         phases: out block ids; 8 + b = an SpMV pass over block b (RESID launches)."""
         rows = []
         NB = len(self.out_blocks)
+        phases = list(phases)
         nseg_core, nseg_gs_core, nseg_r_core = [], [], []
-        for k in range(self.nc):
-            nbrs = sorted(self.nbr[k])
-            lo, ln, l1 = self.pieces[k]
-            head = [len(lo), len(phases), len(nbrs) + 1, len(nbrs), NB]
-            head += [int(v) for t in zip(lo, ln, l1) for v in t]
-            blk_at = len(head)
-            head += [0] * (7 * NB)
-            for m in nbrs:
-                head += [noc_xy[m][0], noc_xy[m][1], 1 + sorted(self.nbr[m]).index(k)]  # my slot on m
-            head += list(phases)
-            head += [0, 0]  # reserved
-            body = []
-            segs_per_block = []
-            for b in range(NB):
-                a, e = (int(v) for v in self.own[k, b])
-                segs = []
-                q = a
-                while q < e:
-                    q1 = min(e, (q // tpw + 1) * tpw)  # segments never cross an L1 page (tpw words)
-                    segs.append((q, q1))
-                    q = q1
-                segs_per_block.append(segs)
-            pos = len(head)
-            for b in range(NB):
-                segs = segs_per_block[b]
-                head[blk_at + 7 * b + 0] = pos + len(body)
-                head[blk_at + 7 * b + 1] = len(segs)
-                for s in segs:
-                    body += list(s)
-            for b in range(NB):
-                ex = self.exch[k][b]
-                head[blk_at + 7 * b + 2] = pos + len(body)
-                head[blk_at + 7 * b + 3] = len(ex)
-                head[blk_at + 7 * b + 4], head[blk_at + 7 * b + 5] = (int(v) for v in self.own[k, b])
-                head[blk_at + 7 * b + 6] = int(self.own_l1[k, b])
-                for e in ex:
-                    body += list(e)
+        for npieces, nnb, pieces, nb_words, body, blk, nsegs in self._core_tables(noc_xy, tpw):
+            pos = 5 + len(pieces) + 7 * NB + len(nb_words) + len(phases) + 2  # body start in the row
+            blocks = []
+            for seg_at, nseg, ex_at, nex, a, e, own_l1 in blk:
+                blocks += [pos + seg_at, nseg, pos + ex_at, nex, a, e, own_l1]
+            head = [npieces, len(phases), nnb + 1, nnb, NB] + pieces + blocks + nb_words + phases + [0, 0]  # reserved
             rows.append(head + body)
-            nseg_core.append(sum(len(segs_per_block[b & 7]) for b in phases))
-            nseg_gs_core.append(sum(len(segs_per_block[b]) for b in phases if b < 8))
-            nseg_r_core.append(sum(len(segs_per_block[0]) for b in phases if b == 8))
+            nseg_core.append(sum(nsegs[b & 7] for b in phases))
+            nseg_gs_core.append(sum(nsegs[b] for b in phases if b < 8))
+            nseg_r_core.append(sum(nsegs[0] for b in phases if b == 8))
         w = -(-max(len(r) for r in rows) // 16) * 16
         m = np.zeros((self.nc, w), np.int64)
         for k, r in enumerate(rows):

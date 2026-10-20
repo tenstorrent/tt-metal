@@ -33,73 +33,147 @@ int64_t hpcg_build_level(
     int64_t* nat_at,
     float* V,
     int32_t* COL,
-    double* B) {
-    const int64_t n = (int64_t)nx * nx * nx;
-#pragma omp parallel for schedule(static)
-    for (int64_t q = 0; q < P; ++q) {
-        nat_at[q] = -1;
-    }
-#pragma omp parallel for schedule(static)
-    for (int32_t iz = 0; iz < nx; ++iz) {
-        for (int32_t iy = 0; iy < nx; ++iy) {
-            for (int32_t ix = 0; ix < nx; ++ix) {
-                const int px = ix & 1, py = iy & 1, pz = iz & 1, c = px + 2 * py + 4 * pz;
-                const int64_t cx = (nx - px + 1) / 2;
-                const int j = line_band[py * nl + (iy >> 1)];
-                const int64_t k = (int64_t)c * nbands + j;
-                const int64_t q =
-                    band_start[k] + ((int64_t)(iz >> 1) * band_ny[k] + ((iy >> 1) - band_y0[k])) * cx + (ix >> 1);
+    float* B) {
+    // q of grid point (x, y, z), from the storage-order formula (no table lookups beyond the band tables)
+    auto q_of = [&](int32_t x, int32_t y, int32_t z) -> int64_t {
+        const int px = x & 1, py = y & 1, pz = z & 1, c = px + 2 * py + 4 * pz;
+        const int64_t cx = (nx - px + 1) / 2;
+        const int64_t k = (int64_t)c * nbands + line_band[py * nl + (y >> 1)];
+        return band_start[k] + ((int64_t)(z >> 1) * band_ny[k] + ((y >> 1) - band_y0[k])) * cx + (x >> 1);
+    };
+    // Rows are visited in storage order (colour block, band, z line pair, y line, x), so each of the 27 value and
+    // column rows is written front to back. Work items: (colour, band, z index), split over the threads.
+    const int32_t nzc = (nx + 1) / 2;
+    const int64_t items = 8LL * nbands * nzc;
+    int64_t nnz = 0;
+#pragma omp parallel for schedule(dynamic, 4) reduction(+ : nnz)
+    for (int64_t it = 0; it < items; ++it) {
+        const int c = (int)(it / ((int64_t)nbands * nzc));
+        const int jb = (int)((it / nzc) % nbands);
+        const int32_t iz2 = (int32_t)(it % nzc);
+        const int px = c & 1, py = (c >> 1) & 1, pz = c >> 2;
+        const int32_t iz = 2 * iz2 + pz;
+        const int64_t k = (int64_t)c * nbands + jb;
+        if (iz >= nx || band_ny[k] == 0) {
+            continue;
+        }
+        const int32_t cxn = (nx - px + 1) / 2;
+        for (int32_t yl = 0; yl < band_ny[k]; ++yl) {
+            const int32_t iy = 2 * (band_y0[k] + yl) + py;
+            int64_t q = band_start[k] + ((int64_t)iz2 * band_ny[k] + yl) * cxn;
+            for (int32_t ix2 = 0; ix2 < cxn; ++ix2, ++q) {
+                const int32_t ix = 2 * ix2 + px;
                 const int64_t nat = ((int64_t)iz * nx + iy) * nx + ix;
                 pos[nat] = q;
                 nat_at[q] = nat;
-            }
-        }
-    }
-    int64_t nnz = 0;
-#pragma omp parallel for schedule(static) reduction(+ : nnz)
-    for (int32_t iz = 0; iz < nx; ++iz) {
-        for (int32_t iy = 0; iy < nx; ++iy) {
-            for (int32_t ix = 0; ix < nx; ++ix) {
-                const int64_t nat = ((int64_t)iz * nx + iy) * nx + ix;
-                const int64_t q = pos[nat];
                 int cnt = 0;
                 for (int sz = -1; sz <= 1; ++sz) {
                     for (int sy = -1; sy <= 1; ++sy) {
+                        const int32_t jy = iy + sy, jz = iz + sz;
+                        const bool line_ok = jy >= 0 && jy < nx && jz >= 0 && jz < nx;
                         for (int sx = -1; sx <= 1; ++sx) {
                             const int j = (sz + 1) * 9 + (sy + 1) * 3 + (sx + 1);
-                            const int32_t jx = ix + sx, jy = iy + sy, jz = iz + sz;
-                            if (jx < 0 || jx >= nx || jy < 0 || jy >= nx || jz < 0 || jz >= nx) {
+                            const int32_t jx = ix + sx;
+                            if (!line_ok || jx < 0 || jx >= nx) {
                                 COL[j * stride + q] = (int32_t)q;  // missing neighbour: a zero entry on the row itself
                                 V[j * stride + q] = 0.0f;
                                 continue;
                             }
                             V[j * stride + q] = (j == 13) ? 26.0f : -1.0f;
-                            COL[j * stride + q] = (int32_t)pos[((int64_t)jz * nx + jy) * nx + jx];
+                            COL[j * stride + q] = (int32_t)q_of(jx, jy, jz);
                             ++cnt;
                         }
                     }
                 }
-                B[q] = 26.0 - (cnt - 1);
+                B[q] = 26.0f - (cnt - 1);
                 nnz += cnt;
             }
         }
     }
-    // padding rows (at the end of each colour block): zero entries on the row itself, diagonal 1 so the Gauss-Seidel
-    // update keeps them at 0
+    // padding rows (the tail of each colour block, past its last band): zero entries on the row itself, diagonal 1
+    // so the Gauss-Seidel update keeps them at 0
+    for (int c = 0; c < 8; ++c) {
+        const int px = c & 1, py = (c >> 1) & 1, pz = c >> 2;
+        const int64_t cnt = (int64_t)((nx - px + 1) / 2) * ((nx - py + 1) / 2) * ((nx - pz + 1) / 2);
+        const int64_t a = band_start[(int64_t)c * nbands] + cnt;
+        const int64_t e = c < 7 ? band_start[(int64_t)(c + 1) * nbands] : P;
 #pragma omp parallel for schedule(static)
-    for (int64_t q = 0; q < P; ++q) {
-        if (nat_at[q] >= 0) {
-            continue;
+        for (int64_t q = a; q < e; ++q) {
+            nat_at[q] = -1;
+            B[q] = 0.0f;
+            for (int j = 0; j < 27; ++j) {
+                COL[j * stride + q] = (int32_t)q;
+                V[j * stride + q] = 0.0f;
+            }
+            V[13 * stride + q] = 1.0f;
         }
-        B[q] = 0.0;
-        for (int j = 0; j < 27; ++j) {
-            COL[j * stride + q] = (int32_t)q;
-            V[j * stride + q] = 0.0f;
-        }
-        V[13 * stride + q] = 1.0f;
     }
-    (void)n;
     return nnz;
+}
+
+// Grid transfer tables between fine level F (nx, pos, nb0 = rows of its colour block 0) and coarse level C (cnx,
+// cnat_at[CP]), as Level.link in reference/problem.py. R[qc]: q of coarse point qc's fine point (a padding row takes
+// the previous real row's R); Rw[qc]: 1 on real rows. Pm[q] (q < nb0): coarse q of fine point q (a fine row without
+// a coarse point takes the previous mapped row's Pm); Pw[q]: 1 on mapped rows. Returns the largest R of a real row.
+int64_t hpcg_link(
+    int32_t nx,
+    const int64_t* pos,
+    int64_t nb0,
+    int32_t cnx,
+    int64_t CP,
+    const int64_t* cnat_at,
+    int64_t* R,
+    double* Rw,
+    int64_t* Pm,
+    double* Pw) {
+    int64_t rmax = -1, last = 0;
+    for (int64_t qc = 0; qc < CP; ++qc) {
+        const int64_t cn = cnat_at[qc];
+        if (cn >= 0) {
+            const int64_t cx = cn % cnx, cy = (cn / cnx) % cnx, cz = cn / ((int64_t)cnx * cnx);
+            R[qc] = pos[2 * cx + 2 * cy * nx + 2 * cz * (int64_t)nx * nx];
+            Rw[qc] = 1.0;
+            rmax = std::max(rmax, R[qc]);
+            last = qc;
+        } else {
+            // R[last] is final (last < qc); with no real row yet, last = 0 and R[0] = 0, as in numpy
+            R[qc] = qc == 0 ? 0 : R[last];
+            Rw[qc] = 0.0;
+        }
+    }
+    for (int64_t q = 0; q < nb0; ++q) {
+        Pm[q] = 0;
+        Pw[q] = 0.0;
+    }
+    for (int64_t qc = 0; qc < CP; ++qc) {
+        if (cnat_at[qc] >= 0 && R[qc] < nb0) {
+            Pm[R[qc]] = qc;
+            Pw[R[qc]] = 1.0;
+        }
+    }
+    int64_t lastm = 0;
+    for (int64_t q = 0; q < nb0; ++q) {
+        if (Pw[q] > 0.0) {
+            lastm = q;
+        } else {
+            Pm[q] = Pm[lastm];
+        }
+    }
+    return rmax;
+}
+
+// to_device's host permutation (tt/layout.py): dst[t * 1024 + k] = src[t * 1024 + word_of_flat(k)], so that after
+// TT-NN tilizes the [P / 32, 32] tensor, word w of DRAM page t holds src[t * 1024 + w].
+void hpcg_tile_permute(const float* src, float* dst, int64_t P) {
+#pragma omp parallel for schedule(static)
+    for (int64_t t = 0; t < P / 1024; ++t) {
+        const float* s = src + t * 1024;
+        float* d = dst + t * 1024;
+        for (int k = 0; k < 1024; ++k) {
+            const int rr = k >> 5, c = k & 31;
+            d[k] = s[((rr >> 4) * 2 + (c >> 4)) * 256 + (rr & 15) * 16 + (c & 15)];
+        }
+    }
 }
 
 // Window pieces of every core of one sparse-row launch: the granules (gran words) that its rows' columns touch
