@@ -131,7 +131,15 @@ Optional:
                                             and <directory>/cluster_<YYYY-MM-DD>_<HHMMSS>.jsonl merged
                                             (default: $CLUSTER_DEBUG_LOG_ROOT_DEFAULT; if that is not
                                             writable, <output>/cluster_debug_attempt_<N>/)
+    --glx-reset-cmd <command>               Command each host runs to reset its Galaxy
+                                            (default: \$GLX_RESET_CMD, else tt-smi -glx_reset)
     --help                                  Display this help message and exit
+
+Environment:
+    OMPI_MCA_btl_tcp_if_exclude             When set and --use-docker is not, the MPI interface
+                                            is left to it: no auto-detection, and no
+                                            btl_tcp_if_include. --mpi-if or --use-docker pins
+                                            an interface instead, and it is dropped
 
 ================================================================================
 To see the full list of run_cluster_validation flags forwardable via
@@ -184,6 +192,7 @@ CLUSTER_DEBUG_TOOL=""
 CLUSTER_DEBUG_TOOL_NAME="tt-bh-glx-cluster-debug"
 CLUSTER_DEBUG_LOG_ROOT_DEFAULT="/data/dcamp/cluster-debug/logs"
 CLUSTER_DEBUG_LOG_ROOT="$CLUSTER_DEBUG_LOG_ROOT_DEFAULT"
+GLX_RESET_CMD="${GLX_RESET_CMD:-tt-smi -glx_reset}"
 SKIP_SYS_TRIAGE=false
 SYS_TRIAGE_ON_HOST=false
 SYS_TRIAGE_PATH=""
@@ -358,6 +367,14 @@ while [[ $# -gt 0 ]]; do
                 exit 1
             fi
             BMC_API_URL="$2"
+            shift 2
+            ;;
+        --glx-reset-cmd)
+            if [[ -z "$2" ]] || [[ "$2" == --* ]]; then
+                echo "Error: --glx-reset-cmd requires a non-empty value"
+                exit 1
+            fi
+            GLX_RESET_CMD="$2"
             shift 2
             ;;
         --bmc-user)
@@ -543,8 +560,16 @@ fi
 
 # Validate/auto-detect MPI interface with first host from the list
 FIRST_HOST="${HOSTS%%,*}"
+if [[ "$MPI_IF_EXPLICIT" == "true" || -n "$DOCKER_IMAGE" ]]; then
+    # An interface gets pinned with btl_tcp_if_include, which Open MPI refuses alongside an
+    # include or exclude inherited from the environment, so those go first.
+    unset OMPI_MCA_btl_tcp_if_include OMPI_MCA_btl_tcp_if_exclude
+fi
 if [[ "$MPI_IF_EXPLICIT" == "true" ]]; then
     validate_mpi_interface "$MPI_IF" "true" "$FIRST_HOST"
+elif [[ -z "$DOCKER_IMAGE" ]] && mpi_if_set_by_env; then
+    # mpi-docker always pins an interface, so only plain mpirun leaves it to the environment.
+    MPI_IF=""
 else
     MPI_IF=$(validate_mpi_interface "" "false" "$FIRST_HOST")
     # Check if validation failed (command substitution only exits subshell, not parent)
@@ -553,6 +578,8 @@ else
         exit 1
     fi
 fi
+MPI_IF_ARGS=()
+[[ -n "$MPI_IF" ]] && MPI_IF_ARGS=(--mca btl_tcp_if_include "$MPI_IF")
 
 # Default output dir when not overridden by --output: the comma-separated host list followed by a
 # timestamp, e.g. "bh-glx-c01u02,bh-glx-c01u08-20260720_131500". Keeps each run's artifacts distinct.
@@ -592,10 +619,10 @@ if [[ "$CHECK" == true ]]; then
     echo "=========================================="
     echo "MPI connectivity check"
     echo "Using hosts: $HOSTS"
-    echo "MPI interface: $MPI_IF"
+    echo "MPI interface: ${MPI_IF:-set by the MPI environment}"
     echo "=========================================="
     mpirun --host "$HOSTS" \
-        --mca btl_tcp_if_include "$MPI_IF" \
+        "${MPI_IF_ARGS[@]}" \
         "${MPI_EXTRA_ARGS[@]}" \
         hostname
     echo "=========================================="
@@ -655,7 +682,7 @@ run_cross_host_port_down() {
             "${DESCRIPTOR_ARGS[@]}" \
             --cross-host-port-down)
         timeout --signal=TERM --kill-after=30s "$CROSS_HOST_PORT_DOWN_TIMEOUT_S" mpirun --host "$HOSTS" \
-            --mca btl_tcp_if_include "$MPI_IF" \
+            "${MPI_IF_ARGS[@]}" \
             "${MPI_EXTRA_ARGS[@]}" \
             bash -c "set -o pipefail; h=\$(hostname); $_bin_cmd 2>&1 | while IFS= read -r l; do printf '[%s] %s\n' \"\$h\" \"\$l\"; done"
     fi
@@ -695,7 +722,8 @@ echo "=========================================="
 echo "Cluster recovery"
 echo "Using hosts: $HOSTS"
 echo "Configuration: $CONFIG"
-echo "MPI interface: $MPI_IF"
+echo "Reset command: $GLX_RESET_CMD"
+echo "MPI interface: ${MPI_IF:-set by the MPI environment}"
 if [[ "${#MPI_EXTRA_ARGS[@]}" -gt 0 ]]; then
     echo "MPI extra args: ${MPI_EXTRA_ARGS[*]}"
 fi
@@ -925,7 +953,7 @@ run_sys_triage() {
     else
         BMC_USER="$BMC_USER" BMC_PASSWORD="$BMC_PASSWORD" \
             timeout --signal=TERM --kill-after=30s "$((SYS_TRIAGE_TIMEOUT_S + 120))" mpirun --host "$HOSTS" \
-            --mca btl_tcp_if_include "$MPI_IF" \
+            "${MPI_IF_ARGS[@]}" \
             -x BMC_USER -x BMC_PASSWORD \
             "${MPI_EXTRA_ARGS[@]}" \
             bash -c "$SYS_TRIAGE_RANK_CMD" _ "$SYS_TRIAGE_DIR" "$SYS_TRIAGE_PATH" "$SYS_TRIAGE_TIMEOUT_S" \
@@ -978,7 +1006,7 @@ elif [[ "$SKIP_MPI_STRESS_TEST" == false ]]; then
             --map-by ppr:1:node \
             --bind-to none \
             --mca btl self,vader,tcp \
-            --mca btl_tcp_if_include "$MPI_IF" \
+            "${MPI_IF_ARGS[@]}" \
             "${MPI_EXTRA_ARGS[@]}" \
             "$MPI_STRESS_BIN" 1000 1048576
     fi
@@ -1000,13 +1028,13 @@ collect_cluster_debug() {
     # about two minutes per attempt instead of four; verified identical to the serial sweep.
     local args=(
         --hosts "$HOSTS"
-        --mpi-if "$MPI_IF"
         --output "$OUTPUT_DIR/cluster_debug_attempt_${attempt}"
         --cluster-name "recover_${CONFIG}"
         --reason "recover.sh attempt ${attempt} of ${MAX_ATTEMPTS}, validation exit ${validation_exit}"
         --per-host-root "$CLUSTER_DEBUG_LOG_ROOT"
         --parallelize
     )
+    [[ -n "$MPI_IF" ]] && args+=(--mpi-if "$MPI_IF")
     [[ -n "$FACTORY_DESCRIPTOR_PATH" ]] && args+=(--factory-descriptor-path "$FACTORY_DESCRIPTOR_PATH")
     [[ -n "$CLUSTER_DEBUG_TOOL" ]] && args+=(--tool "$CLUSTER_DEBUG_TOOL")
     [[ "$CLUSTER_DEBUG_USE_IPMI" == true ]] && args+=(--use-ipmi)
@@ -1047,7 +1075,8 @@ hosts_from_unretrainable_yaml() {
         sort -u | paste -sd, -
 }
 
-# Note: tt-smi -glx_reset is deprecated as of tt-smi 3.1.1; use tt-smi -r if available
+# Note: tt-smi -glx_reset is deprecated as of tt-smi 3.1.1; use tt-smi -r if available.
+# --glx-reset-cmd replaces it where tt-smi cannot reach the BMC, e.g. a container without sudo.
 run_glx_reset() {
     local reset_hosts="$1"
     local reset_cmd
@@ -1056,7 +1085,7 @@ run_glx_reset() {
     read -r -d '' reset_cmd <<'RESET_CMD' || true
 set -o pipefail
 h=$(hostname)
-script -qefc "tt-smi -glx_reset" /dev/null |
+script -qefc "$1" /dev/null |
     tr -d '\000' |
     sed -u 's/\r$//; s/.*\r//; s/\^@//g; /^\(\x1b\[[0-9;]*[a-zA-Z]\|[[:space:]]\)*$/d' |
     awk '{
@@ -1080,9 +1109,9 @@ fi
 exit "$ec"
 RESET_CMD
     mpirun --host "$reset_hosts" \
-        --mca btl_tcp_if_include "$MPI_IF" \
+        "${MPI_IF_ARGS[@]}" \
         "${MPI_EXTRA_ARGS[@]}" \
-        bash -c "$reset_cmd"
+        bash -c "$reset_cmd" _ "$GLX_RESET_CMD"
 }
 
 for (( ATTEMPT=1; ATTEMPT<=MAX_ATTEMPTS; ATTEMPT++ )); do
@@ -1108,7 +1137,7 @@ if [[ "$SKIP_RESET" == false && "$SKIP_CROSS_HOST_PORT_DOWN" == false ]]; then
     else
         PORT_DOWN_EXIT=$?
         echo "WARNING: cross-host port down FAILED (exit code $PORT_DOWN_EXIT); running cleanup reset then retrying port down."
-        echo "Running tt-smi -glx_reset (cleanup after failed port down)..."
+        echo "Running $GLX_RESET_CMD (cleanup after failed port down)..."
         if run_glx_reset "$HOSTS"; then
             RESET_EXIT=0
             echo ""
@@ -1134,7 +1163,7 @@ fi
 # still failed after retry, or when the cleanup reset already failed.
 if [[ "$SKIP_RESET" == false ]]; then
     if [[ $PORT_DOWN_EXIT -eq 0 && $RESET_EXIT -eq 0 ]]; then
-        echo "Running tt-smi -glx_reset..."
+        echo "Running $GLX_RESET_CMD..."
         # Capture the status without tripping `set -e` (the `if` context suspends it) so a reset
         # failure retries the attempt instead of aborting the whole script.
         if run_glx_reset "$HOSTS"; then RESET_EXIT=0; else RESET_EXIT=$?; fi
@@ -1196,7 +1225,7 @@ elif [[ "$SKIP_VALIDATION" == false ]]; then
             local _bin_cmd
             _bin_cmd=$(printf '%q ' ./build/tools/scaleout/run_cluster_validation "${round_args[@]}")
             mpirun --host "$HOSTS" \
-                --mca btl_tcp_if_include "$MPI_IF" \
+                "${MPI_IF_ARGS[@]}" \
                 "${MPI_EXTRA_ARGS[@]}" \
                 bash -c "set -o pipefail; h=\$(hostname); $_bin_cmd 2>&1 | while IFS= read -r l; do printf '[%s] %s\n' \"\$h\" \"\$l\"; done"
         fi
@@ -1244,7 +1273,7 @@ elif [[ "$SKIP_VALIDATION" == false ]]; then
         [[ -z "$FAULTY_HOSTS" ]] && break
 
         echo ""
-        echo "Links still down; running tt-smi -glx_reset on $FAULTY_HOSTS"
+        echo "Links still down; running $GLX_RESET_CMD on $FAULTY_HOSTS"
         if ! run_glx_reset "$FAULTY_HOSTS"; then
             echo "Targeted reset failed; no further retrains this attempt."
             break
