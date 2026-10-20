@@ -185,7 +185,6 @@ def test_geglu_op(device, dim, variant):
 
 @pytest.mark.parametrize("op", ["glu", "reglu", "geglu", "swiglu"])
 def test_glu_family_logical_width_not_tile_aligned(device, op):
-    # The split point used to be half the padded width: logical width 100 (padded 128) was split at 64, not 50 (#53283).
     torch.manual_seed(0)
     x = torch.randn((1, 1, 40, 100), dtype=torch.bfloat16)
     a, b = x.float().chunk(2, dim=-1)
