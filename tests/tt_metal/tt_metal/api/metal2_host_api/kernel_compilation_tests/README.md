@@ -14,3 +14,4 @@ Put a test elsewhere when:
 |---|---|
 | `resource_bindings/` | Resource binding emissions |
 | `kernel_args/` | Compile-time varargs, and 1st world kernel arguments |
+| `fabric/` | Fabric kernel defines on data-movement kernels |
