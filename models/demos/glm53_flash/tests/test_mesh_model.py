@@ -31,6 +31,7 @@ MESH = tuple(int(v) for v in os.environ.get("GLM53_MESH_SHAPE", "1,4").split(","
 B = int(os.environ.get("GLM53_MODEL_B", "2"))  # users per row
 S = int(os.environ.get("GLM53_MODEL_S", "32"))  # prompt tokens through the decode step (<= 128)
 N_PERF = int(os.environ.get("GLM53_MODEL_PERF_STEPS", "20"))
+TRACE_MB = int(os.environ.get("GLM53_MODEL_TRACE_MB", "256"))  # 45 layers x 32 users/row needs ~216 MB
 _DT = {"bfp8": ttnn.bfloat8_b, "bfp4": ttnn.bfloat4_b}
 EXPERT_DTYPE = _DT[os.environ.get("GLM53_MODEL_EXPERT_DTYPE", "bfp8")]  # routed gate/up
 EXPERT_DOWN_DTYPE = _DT[os.environ.get("GLM53_MODEL_EXPERT_DOWN_DTYPE", "bfp8")]  # routed down
@@ -46,7 +47,9 @@ def _layer_range() -> list[int]:
 
 
 @pytest.mark.timeout(10800)
-@pytest.mark.parametrize("device_params", [mesh_device_params(*MESH, trace_region_size=200_000_000)], indirect=True)
+@pytest.mark.parametrize(
+    "device_params", [mesh_device_params(*MESH, trace_region_size=TRACE_MB * 1_000_000)], indirect=True
+)
 @pytest.mark.parametrize("mesh_device", [MESH], indirect=True)
 def test_mesh_model_chain_and_perf(mesh_device):
     layers = _layer_range()
@@ -182,7 +185,9 @@ def _ttft(model, layers, cfg):
 
 
 @pytest.mark.timeout(10800)
-@pytest.mark.parametrize("device_params", [mesh_device_params(*MESH, trace_region_size=200_000_000)], indirect=True)
+@pytest.mark.parametrize(
+    "device_params", [mesh_device_params(*MESH, trace_region_size=TRACE_MB * 1_000_000)], indirect=True
+)
 @pytest.mark.parametrize("mesh_device", [MESH], indirect=True)
 def test_mesh_model_ttft(mesh_device):
     """Prefill-only variant (no decode trace): the prompt -> first token time through every built layer."""
