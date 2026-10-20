@@ -410,24 +410,18 @@ ProgramDescriptor build_tile_mapped(
     desc.cbs.push_back(make_cb(kCbScratch, fmt, tile_bytes, 1, all_cores));
 
     KernelDescriptor reader;
+    reader.kernel_source = op_kernel("reader_reshape_tile_mapped_pipelined.cpp");
     reader.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader.core_ranges = all_cores;
-    if (input_depth > 1) {
-        // Half-depth batches keep a slot free for the tile the writer still holds across rows.
-        reader.kernel_source = op_kernel("reader_reshape_tile_mapped_pipelined.cpp");
-        reader.compile_time_args = {
-            layout.page_bytes(), tile_bytes, kCbMap, kCbMappedInput, input_depth / 2, input_depth};
-    } else {
-        reader.kernel_source = op_kernel("reader_reshape_tile_mapped.cpp");
-        reader.compile_time_args = {layout.page_bytes(), tile_bytes, kCbMap, kCbMappedInput};
-    }
+    // Half-depth batches keep a slot free for the tile the writer still holds across rows.
+    reader.compile_time_args = {
+        layout.page_bytes(), tile_bytes, kCbMap, kCbMappedInput, std::max<uint32_t>(1, input_depth / 2), input_depth};
     TensorAccessorArgs(*map_buf).append_to(reader.compile_time_args);
     TensorAccessorArgs(*in_buf).append_to(reader.compile_time_args);
     reader.config = ReaderConfigDescriptor{};
 
     KernelDescriptor writer;
-    writer.kernel_source =
-        op_kernel(layout.sliced ? "writer_reshape_tile_mapped_ranged.cpp" : "writer_reshape_tile_mapped.cpp");
+    writer.kernel_source = op_kernel("writer_reshape_tile_mapped.cpp");
     writer.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer.core_ranges = all_cores;
     writer.compile_time_args = {
@@ -436,7 +430,8 @@ ProgramDescriptor build_tile_mapped(
         static_cast<uint32_t>(input.element_size()),
         kCbMap,
         kCbMappedInput,
-        kCbScratch};
+        kCbScratch,
+        static_cast<uint32_t>(layout.sliced)};
     TensorAccessorArgs(*out_buf).append_to(writer.compile_time_args);
     writer.config = WriterConfigDescriptor{};
 

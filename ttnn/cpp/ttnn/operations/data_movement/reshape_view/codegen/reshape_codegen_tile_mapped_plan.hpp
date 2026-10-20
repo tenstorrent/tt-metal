@@ -68,9 +68,8 @@ TileMappedPlan build_tile_mapped_plan(
     uint32_t num_cores,
     bool sliced);
 
-// Input CB depth that fits `l1_budget` beside one map page and one scratch tile: 8 or 4 enables the pipelined
-// reader, 1 the serial one, 0 means nothing fits. The unsliced layout at depth 1 never needs more L1 than native's
-// tiled reshape of the same shapes.
+// Input CB depth (8, 4 or 1) that fits `l1_budget` beside one map page and one scratch tile, 0 when nothing fits.
+// The unsliced layout at depth 1 never needs more L1 than native's tiled reshape of the same shapes.
 uint32_t tile_mapped_input_depth(const TileMappedLayout& layout, uint32_t tile_bytes, uint64_t l1_budget);
 
 }  // namespace ttnn::operations::data_movement::reshape_codegen

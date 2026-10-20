@@ -17,8 +17,7 @@ import ttnn
 from tests.ttnn.unit_tests.operations.data_movement import test_reshape_codegen as gate
 from tests.ttnn.utils_for_testing import assert_equal
 
-# `ttnn.reshape` takes no implementation argument -- it routes on its own. The forced legs below are
-# the verification-only entries in the private module; see reshape_force.hpp.
+# `ttnn.reshape` routes on its own; the forced legs are the verification-only entries (reshape_force.hpp).
 _force_native = ttnn._ttnn.operations.data_movement.reshape_force_native
 _force_codegen = ttnn._ttnn.operations.data_movement.reshape_force_codegen
 
