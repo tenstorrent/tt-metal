@@ -119,12 +119,11 @@ def _all_reduce(x, memory_config=ttnn.DRAM_MEMORY_CONFIG):
 
 
 def _mm_config_256(k, n):
-    """Program config for the drafter's [256, k] x [k, n] matmuls (None: the auto config). Measured on one device
-    (BF16 weights, HiFi4): the auto config spreads these narrow outputs over few cores with all 8 row tiles each; 2D
-    over 10 x 8 cores (one row tile, n / 10 columns each) is 1.4-2.0x faster (QKV 74 -> 37 us, gate / up 86 -> 49,
-    down 73 -> 51, o_proj 45 -> 33); the fc (k = 14400) is fastest 1D over 90 cores (487 -> 293 us). Round at ISL
-    256 49.2 -> 47.6 ms, acceptance 4.72 -> 4.77. (The verify's QKV / o_proj in these configs: 47.7 ms but acceptance
-    4.38 and agreement with plain decode 0.986 -> 0.974: not used there.)"""
+    """Program config for the drafter's and the verify's [256, k] x [k, n] projections (None: the auto config).
+    Measured on one device: the auto config spreads these narrow outputs over few cores with all 8 row tiles each;
+    2D over 10 x 8 cores (one row tile, n / 10 columns each) is 1.4-2.5x faster (drafter QKV 74 -> 37 us, gate / up
+    86 -> 49, down 73 -> 51, o_proj 45 -> 33; verify QKV BF8 68 -> 27); the drafter's fc (k = 14400) is fastest 1D
+    over 90 cores (487 -> 293 us)."""
     kt, nt = k // TILE, n // TILE
     if k == 14400 and nt == 90:
         return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
@@ -832,8 +831,8 @@ class BatchedVerify:
         )
         gate.deallocate(True)
         up.deallocate(True)
-        # BF16 like the batched decode's down input, to DRAM for the 2D down
-        act8 = ttnn.multiply(act, w_cols, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # BF8 into the 2D down (DRAM): half the activation reads; the down's sums stay FP32
+        act8 = ttnn.multiply(act, w_cols, dtype=ttnn.bfloat8_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         act.deallocate(True)
         w_cols.deallocate(True)
         down = ttnn.matmul(
@@ -863,6 +862,7 @@ class BatchedVerify:
             x,
             w.wqkv,
             bias=w.wqkv_bias,
+            program_config=_mm_config_256(w.wqkv.shape[-2], w.wqkv.shape[-1]),
             dtype=ttnn.bfloat16,
             compute_kernel_config=self.qkv_ck,
         )
@@ -933,6 +933,7 @@ class BatchedVerify:
         o = ttnn.matmul(
             heads,
             self.oproj_w[li],
+            program_config=_mm_config_256(heads.shape[-1], self.oproj_w[li].shape[-1]),
             dtype=ttnn.bfloat16,
             compute_kernel_config=self.qkv_ck,
         )
