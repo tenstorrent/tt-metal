@@ -341,3 +341,40 @@ def test_ragged_tail_blocks_stay_pooled():
     partial = (consts["full_row"].reshape(-1) < 0.5) & (geo.block_lengths().reshape(-1) > 0)
     if partial.any():
         assert e[..., partial].max() == 0.0, "a partial tail block was marked exact"
+
+
+@pytest.mark.parametrize("rows,label", [(1152, "aligned (18 full blocks)"), (1184, "partial tail (18 full + 32)")])
+def test_partial_tail_block_accuracy(rows, label):
+    """Is the device's PCC 0.855 at rows=1184 an algorithmic limit or an implementation bug?
+
+    On device (2026-10-20, packing OFF, pre-existing) test_ragged_logical_n and test_small_k_chunk both sit at
+    ~0.855 for gather and compact, while chunk mode passes. Both use rows=1184, which is not a multiple of the
+    64-token block: the last block of every shard holds 32 tokens, is never exact-eligible (full_row gates on
+    length >= block), and goes through the pooled correction.
+
+    That is 32/1184 = 2.7 % of keys approximated. If the reference -- which shares no device code -- shows the
+    same collapse against the aligned geometry, the cost is inherent to pooling a partial block. If the
+    reference holds up, the device has a bug in partial-block handling and the xfail in
+    test_sol_compact_minimax_h3.py is hiding it.
+    """
+    geo = SolGeometry(shards=2, rows=rows, logical_n=2 * rows, q_chunk=128, k_chunk=256)
+    consts = build_constants(geo, band=1, sink_tokens=0, force_first_chunk=True, scale=SCALE)
+    g = torch.Generator().manual_seed(0)
+    shape = (2, 2, rows, D)
+    q = torch.randn(shape, generator=g) * 0.5
+    k = torch.randn(shape, generator=g) * 0.5
+    v = torch.randn(shape, generator=g)
+    kg = torch.cat([k[s] for s in range(2)], dim=1).float()
+    vg = torch.cat([v[s] for s in range(2)], dim=1).float()
+    ref = torch.stack([torch.softmax(q[s].float() @ kg.transpose(1, 2) * SCALE, dim=-1) @ vg for s in range(2)])
+
+    r = qblock_mask(q, k, v, geo, consts, tau=1.0, scale=SCALE)
+    out = sol_attention(q, k, v, r["block_mask"], r["pooled_k"], r["pooled_v"], geo, scale=SCALE)
+    lens = geo.block_lengths().reshape(-1)
+    partial = int(((lens > 0) & (lens < geo.block)).sum())
+    pooled_tokens = float(lens[(lens > 0) & (lens < geo.block)].sum())
+    print(
+        f"\n  {label}: nb={geo.nb} partial_blocks={partial} pooled_tokens={pooled_tokens:.0f}"
+        f"  pcc={_pcc(out, ref):.5f}  rel_L2={_rel_l2(out, ref):.5f}"
+    )
+    assert torch.isfinite(out).all()
