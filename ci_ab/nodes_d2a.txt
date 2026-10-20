@@ -1,0 +1,13 @@
+ci_ab/test_d2a_ab.py::test_d2a[addcmul-1k-bf16]
+ci_ab/test_d2a_ab.py::test_d2a[addcmul-1k-f32]
+ci_ab/test_d2a_ab.py::test_d2a[addcmul-8k-bf16]
+ci_ab/test_d2a_ab.py::test_d2a[addcmul-8k-f32]
+ci_ab/test_d2a_ab.py::test_d2a[addcdiv-1k-bf16]
+ci_ab/test_d2a_ab.py::test_d2a[addcdiv-1k-f32]
+ci_ab/test_d2a_ab.py::test_d2a[addcdiv-8k-bf16]
+ci_ab/test_d2a_ab.py::test_d2a[addcdiv-8k-f32]
+ci_ab/test_d2a_ab.py::test_d2a[hardswish-1k-bf16]
+ci_ab/test_d2a_ab.py::test_d2a[hardswish-1k-f32]
+ci_ab/test_d2a_ab.py::test_d2a[hardswish-8k-bf16]
+ci_ab/test_d2a_ab.py::test_d2a[hardswish-8k-f32]
+models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_csa_compressor.py::test_csa_compressor_single_device
