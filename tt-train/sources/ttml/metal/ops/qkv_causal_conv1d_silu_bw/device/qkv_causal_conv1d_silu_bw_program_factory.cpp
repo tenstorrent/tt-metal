@@ -102,8 +102,9 @@ ttnn::device_operation::ProgramArtifacts QkvCausalConv1dSiluBackwardProgramFacto
     const auto dist = distribute(input.device().compute_with_storage_grid_size(), channel_blocks * row_splits);
 
     const m2::DFBSpecName RAINBOW_RM{"rainbow_rm"}, RAINBOW_TILE{"rainbow_tile"}, WEIGHTS{"weights"},
-        GRAD_OUT{"grad_out"}, PREACT{"preact"}, SIGMOID{"sigmoid"}, DC_TILE{"dc_tile"}, DC_RM{"dc_rm"}, ACC{"acc"},
-        DCV_RM{"dcv_rm"}, DCV_TILE{"dcv_tile"}, OUTPUT{"output"}, ONES{"ones"};
+        GRAD_OUT{"grad_out"}, PREACT{"preact"}, SIGMOID{"sigmoid"}, DC_TILE{"dc_tile"}, DC_RM{"dc_rm"},
+        PARTIAL{"partial"}, DC_RAINBOW_RM{"dc_rainbow_rm"}, DC_RAINBOW_TILE{"dc_rainbow_tile"}, OUTPUT{"output"},
+        ONES{"ones"};
     const m2::TensorParamName INPUT{"input"}, HISTORY{"history"}, GRAD_Q{"grad_q"}, GRAD_K{"grad_k"}, GRAD_V{"grad_v"},
         TAP0{"tap0"}, TAP1{"tap1"}, TAP2{"tap2"}, TAP3{"tap3"}, GRAD_INPUT{"grad_input"},
         GRAD_TAP_PARTIAL{"grad_tap_partial"};
@@ -145,7 +146,7 @@ ttnn::device_operation::ProgramArtifacts QkvCausalConv1dSiluBackwardProgramFacto
     m2::KernelSpec writer{
         .unique_id = WRITER,
         .source = std::string(kernel_dir) + "dataflow/writer.cpp",
-        .dfb_bindings = {consumer(DC_RM), producer(DCV_RM), consumer(OUTPUT), consumer(ACC)},
+        .dfb_bindings = {consumer(DC_RM), producer(DC_RAINBOW_RM), consumer(OUTPUT), consumer(PARTIAL)},
         .scratchpad_bindings = {{DC_WINDOW, "dc_window"}},
         .tensor_bindings = {tensor(GRAD_INPUT), tensor(GRAD_TAP_PARTIAL)},
         .compile_time_args =
@@ -173,10 +174,10 @@ ttnn::device_operation::ProgramArtifacts QkvCausalConv1dSiluBackwardProgramFacto
              producer(DC_TILE),
              consumer(DC_TILE),
              producer(DC_RM),
-             producer(ACC),
-             consumer(DCV_RM),
-             producer(DCV_TILE),
-             consumer(DCV_TILE),
+             producer(PARTIAL),
+             consumer(DC_RAINBOW_RM),
+             producer(DC_RAINBOW_TILE),
+             consumer(DC_RAINBOW_TILE),
              producer(OUTPUT),
              consumer(ONES)},
         .compile_time_args =

@@ -16,7 +16,7 @@ constexpr uint32_t halo_rows = tap_count - 1;
 constexpr uint32_t tile_height = tt::constants::TILE_HEIGHT;
 
 // Per work item (channel_block, split): weights, then for every 32-row step a 35-row input window (3 rows of history or
-// previous rows + 32 new rows), 4 shifted views of it, and the matching grad_q/k/v tiles.
+// previous rows + 32 new rows), 4 shifted copies of it, and the matching grad_q/k/v tiles.
 template <
     uint32_t channel_tiles_per_block,
     uint32_t tile_rows,

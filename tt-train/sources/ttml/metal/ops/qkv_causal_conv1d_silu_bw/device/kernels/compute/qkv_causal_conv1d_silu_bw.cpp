@@ -12,7 +12,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 
-// Every stage below (conv, silu_backward, accumulate_grad_tap, grad_input_tile) is marked [[gnu::noinline]].
+// Every stage below (conv, silu_backward, accumulate_partial, grad_input_tile) is marked [[gnu::noinline]].
 // Each stage starts with LLK *_init calls that program the math hardware through inline assembly, and some of
 // those instructions take their operand as an immediate: a number baked into the instruction bits, which GCC
 // must know at compile time. If GCC inlines all stages into one function it sees several similar init
@@ -44,12 +44,12 @@ FORCE_INLINE void mul_bcast_rows_accumulate(
     UNPACK((llk_unpack_AB<BroadcastType::ROW>(icb0, icb1, itile0, itile1, 0)));
 }
 
-// out = sum_tap weights[w] * view_tap, w = tap (preact) or 3 - tap (grad_input), summed in DST.
+// out = sum_tap weights[w] * copy_tap, w = tap (preact) or 3 - tap (grad_input), summed in DST.
 template <uint32_t channel_tiles_per_block>
-[[gnu::noinline]] void conv(uint32_t views_cb, bool reversed, DataflowBuffer& out, uint32_t out_cb) {
+[[gnu::noinline]] void conv(uint32_t rainbow_cb, bool reversed, DataflowBuffer& out, uint32_t out_cb) {
     out.reserve_back(channel_tiles_per_block);
-    reconfig_data_format(views_cb, dfb::weights);
-    mul_bcast_rows_init(views_cb, dfb::weights);
+    reconfig_data_format(rainbow_cb, dfb::weights);
+    mul_bcast_rows_init(rainbow_cb, dfb::weights);
     pack_reconfig_data_format(out_cb);
     for (uint32_t base = 0; base < channel_tiles_per_block; base += dst_tiles) {
         const uint32_t n = batch_size<channel_tiles_per_block>(base);
@@ -58,7 +58,7 @@ template <uint32_t channel_tiles_per_block>
             const uint32_t w = reversed ? tap_count - 1 - tap : tap;
             for (uint32_t i = 0; i < n; ++i) {
                 mul_bcast_rows_accumulate(
-                    views_cb,
+                    rainbow_cb,
                     dfb::weights,
                     tap * channel_tiles_per_block + base + i,
                     w * channel_tiles_per_block + base + i,
@@ -138,15 +138,15 @@ template <uint32_t channel_tiles_per_block>
     dc_tile.push_back(channel_tiles_per_block);
 }
 
-// acc[tap][tile_column] += dc * view_tap. The partial lives in the acc pages in L1 and the packer adds each step's
+// partial[tap][tile_column] += dc * copy_tap. The partial lives in L1 and the packer adds each step's
 // products onto them in place (pack_reconfig_l1_acc), in fp32: nothing is unpacked back into the engine, so no
 // tf32 rounding. The pages are reserved once per item, written out of order by tile index, and pushed to the
 // writer on the last own step.
 template <uint32_t channel_tiles_per_block>
-[[gnu::noinline]] void accumulate_grad_tap(DataflowBuffer& acc, bool first, bool last) {
+[[gnu::noinline]] void accumulate_partial(DataflowBuffer& partial, bool first, bool last) {
     constexpr uint32_t total = tap_count * channel_tiles_per_block;
     if (first) {
-        acc.reserve_back(total);
+        partial.reserve_back(total);
     }
     for (uint32_t base = 0; base < total; base += dst_tiles) {
         const uint32_t n = batch_size<total>(base);
@@ -158,25 +158,25 @@ template <uint32_t channel_tiles_per_block>
         }
         tile_regs_commit();
         tile_regs_wait();
-        pack_reconfig_data_format(dfb::acc);
+        pack_reconfig_data_format(dfb::partial);
         pack_reconfig_l1_acc(first ? 0 : 1);
         for (uint32_t i = 0; i < n; ++i) {
-            pack_tile<true>(i, dfb::acc, base + i);
+            pack_tile<true>(i, dfb::partial, base + i);
         }
         pack_reconfig_l1_acc(0);
         tile_regs_release();
     }
     if (last) {
-        acc.push_back(total);
+        partial.push_back(total);
     }
 }
 
 template <uint32_t channel_tiles_per_block>
-[[gnu::noinline]] void grad_input_tile(DataflowBuffer& dc_views, DataflowBuffer& output) {
-    compute_kernel_lib::tilize<channel_tiles_per_block, dfb::dcv_rm, dfb::dcv_tile>(tap_count);
-    dc_views.wait_front(tap_count * channel_tiles_per_block);
-    conv<channel_tiles_per_block>(dfb::dcv_tile, true, output, dfb::output);
-    dc_views.pop_front(tap_count * channel_tiles_per_block);
+[[gnu::noinline]] void grad_input_tile(DataflowBuffer& dc_rainbow, DataflowBuffer& output) {
+    compute_kernel_lib::tilize<channel_tiles_per_block, dfb::dc_rainbow_rm, dfb::dc_rainbow_tile>(tap_count);
+    dc_rainbow.wait_front(tap_count * channel_tiles_per_block);
+    conv<channel_tiles_per_block>(dfb::dc_rainbow_tile, true, output, dfb::output);
+    dc_rainbow.pop_front(tap_count * channel_tiles_per_block);
 }
 
 template <uint32_t channel_tiles_per_block, uint32_t tile_rows, uint32_t row_splits>
@@ -188,8 +188,8 @@ TT_KERNEL void compute(uint32_t wi_start, uint32_t wi_count) {
     DataflowBuffer preact(dfb::preact);
     DataflowBuffer sigmoid(dfb::sigmoid);
     DataflowBuffer dc_tile(dfb::dc_tile);
-    DataflowBuffer acc(dfb::acc);
-    DataflowBuffer dc_views(dfb::dcv_tile);
+    DataflowBuffer partial(dfb::partial);
+    DataflowBuffer dc_rainbow(dfb::dc_rainbow_tile);
     DataflowBuffer output(dfb::output);
     DataflowBuffer ones(dfb::ones);
 
@@ -217,18 +217,19 @@ TT_KERNEL void compute(uint32_t wi_start, uint32_t wi_count) {
             dc_tile.wait_front(channel_tiles_per_block);
             preact.pop_front(channel_tiles_per_block);
             if (step < own_steps) {  // the extra step's rows belong to the next core's partial
-                accumulate_grad_tap<channel_tiles_per_block>(acc, /*first=*/step == 0, /*last=*/step + 1 == own_steps);
+                const bool first = step == 0, last = step + 1 == own_steps;
+                accumulate_partial<channel_tiles_per_block>(partial, first, last);
             }
             compute_kernel_lib::untilize<channel_tiles_per_block, dfb::dc_tile, dfb::dc_rm>(1);
             rainbow_window.pop_front(tap_count * channel_tiles_per_block);
             grad_out.pop_front(channel_tiles_per_block);
 
             if (step > 0) {
-                grad_input_tile<channel_tiles_per_block>(dc_views, output);
+                grad_input_tile<channel_tiles_per_block>(dc_rainbow, output);
             }
         }
         if (!has_halo) {
-            grad_input_tile<channel_tiles_per_block>(dc_views, output);
+            grad_input_tile<channel_tiles_per_block>(dc_rainbow, output);
         }
         weights.pop_front(tap_count * channel_tiles_per_block);
     }

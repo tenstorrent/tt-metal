@@ -40,9 +40,9 @@ inline std::array<QkvCausalConv1dSiluBackwardDataflowBuffer, 13> qkv_conv_bw_dat
         {"sigmoid", qkv_conv_bw_dst_tiles, bf16},
         {"dc_tile", channel_tiles_per_block, bf16},
         {"dc_rm", 2 * channel_tiles_per_block, bf16},
-        {"acc", 4 * channel_tiles_per_block, fp32},  // grad_tap partial [4][channel_tiles], packer-accumulated in place
-        {"dcv_rm", 4 * channel_tiles_per_block, bf16},  // 4 shifted row-major views of the dc window
-        {"dcv_tile", 4 * channel_tiles_per_block, bf16},
+        {"partial", 4 * channel_tiles_per_block, fp32},  // grad_w partial [4][channel_tiles], packer adds in place
+        {"dc_rainbow_rm", 4 * channel_tiles_per_block, bf16},  // 4 shifted row-major copies of the dc window
+        {"dc_rainbow_tile", 4 * channel_tiles_per_block, bf16},
         {"output", 2 * channel_tiles_per_block, bf16},
         {"ones", 1, bf16},
     }};
