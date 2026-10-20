@@ -76,8 +76,6 @@ ProgramArtifacts ProdAllDeviceOperation::ProdAllProgramFactory::create_program_a
         .enable_32_bit_dest = fp32_dest_acc_en,
         .double_buffer_dest = true,  // legacy dst_full_sync_en = false -> !false
     };
-    // Float32 input with a 32-bit DEST multiplies on the SFPU, whose input is unpacked straight to DEST:
-    // the FPU multiply keeps only ~10 mantissa bits of the running product (#57634).
     const bool sfpu_mul = in_cb_data_format == DataFormat::Float32 && fp32_dest_acc_en;
     if (in_cb_data_format == DataFormat::Float32) {
         compute_hw.unpack_modes.insert({INPUT_DFB, sfpu_mul ? UnpackMode::UnpackToDest : UnpackMode::UnpackToSrc});

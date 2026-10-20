@@ -117,7 +117,6 @@ def test_prod_dims_block_float(dim, npu_dtype, device):
 
 @pytest.mark.parametrize("shape, dim", [((1, 1, 32, 1024), -1), ((1, 1, 1024, 32), -2), ((1, 64, 32, 32), 1)])
 def test_prod_float32_keeps_fp32_precision(device, shape, dim):
-    # The fp32 product used to be formed at ~10 bits per multiply (SrcA), losing ~65% over 1024 factors (#57634).
     torch.manual_seed(0)
     x = torch.exp(0.01 * torch.randn(shape, dtype=torch.float64)).float()
     expected = torch.exp(torch.log(x.double()).sum(dim=dim))
