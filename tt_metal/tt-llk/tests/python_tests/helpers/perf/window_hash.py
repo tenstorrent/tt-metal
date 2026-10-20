@@ -191,7 +191,7 @@ def write_rows(run_dir, test_name, sweep, rows):
         pd.DataFrame(rows, columns=["window_run_type", "window_thread", "window_hash"]),
         how="cross",
     )
-    frame["nodeid"] = os.environ.get("PYTEST_CURRENT_TEST", "").split(" ")[0]
+    frame["nodeid"] = os.environ.get("PYTEST_CURRENT_TEST", "").rsplit(" ", 1)[0]
     run_dir.mkdir(parents=True, exist_ok=True)
     name = test_name.replace("/", "_").replace(".", "_")
     path = run_dir / f"{name}.{os.getpid()}.windowhash"
