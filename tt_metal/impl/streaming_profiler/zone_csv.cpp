@@ -121,7 +121,6 @@ void ZoneCsvConsumer::write_csv() {
         "PCIe slot, core_x, core_y, RISC processor type, timer_id, "
         "time[cycles since reset], data, run host ID, trace id, trace id counter, "
         "zone name, type, source line, source file, meta data, logical_x, logical_y\n");
-    // `trace id` and `trace id counter` stay empty, as the device profiler log leaves them for untraced programs.
     for (const Row& r : rows_) {
         std::fprintf(
             f,
