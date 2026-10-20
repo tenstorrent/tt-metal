@@ -1,0 +1,59 @@
+# GLM-5.3-Flash Phase 2: multi-chip decoder (work in progress, 2026-10-20)
+
+Design of record: `~/ashai/GLM_5.3_DESIGN.md` sections 4-5 (columns = TP group of a row, rows = DP
+user groups and the expert-TP axis). Code: `tt/mesh.py` (`GLMMesh`, placement helpers,
+collectives) threaded through every stage-1 module with a `mesh=` keyword; a `(1, 1)` mesh keeps
+the single-chip behaviour (every collective is the identity, every placement replicated).
+
+## Layout per module (as implemented)
+
+| module | placement on a `(rows, cols)` mesh | collective |
+|---|---|---|
+| mHC, norms, router, indexer | replicated | none |
+| dense MLP / shared expert | `[gate_c \| up_c]` of w13 per column, rows `c` of w2 | `all_reduce` over columns (shared expert folded into the routed partial first) |
+| routed experts | experts `[c*E/cols, (c+1)*E/cols)` per column, intermediate slice `r` per row; per-column expert selector `[E, E/cols]` (identity block) picks the local routing weights | `all_gather` tokens over rows -> local `sparse_matmul` -> `reduce_scatter` over rows -> `all_reduce` over columns |
+| KDA decode | heads per column (head-major `[q_c\|k_c\|v_c]` projection, taps, gates, A_log/dt_bias); state `[B, 64/cols, 128, 128]` + conv `[B, 3, 3*2048]` per chip | `all_reduce` over columns after o_proj |
+| KDA prefill | ttKDA with `tensor_parallel_axis=1` + `TT_CCL` handles (reduce-scatter on hidden, then `all_gather` over columns); single-row meshes only (multi-row = sequence-parallel ttKDA, the Phase-3 prefill engine) | ttKDA's own reduce-scatter + `all_gather` |
+| DSA | q_a/kv_a/norms replicated; q_b, kv_b (absorbed and prefill forms), o_proj head-sharded over columns (16 heads per chip at TP4); latent cache + pooled-key index replicated across the columns (Phase-2 first step; user-partitioned cache next) | `all_reduce` over columns after o_proj |
+| positions / streams | `[rows*B]` positions and `[1,1,rows*B,16384]` streams row-sharded (row r = users `[rB, (r+1)B)`) | none |
+
+Not wired yet (the decoder refuses them): prefill on multi-row meshes; sparse DSA decode (positions
+> 2050) on multi-row meshes (needs the metadata-tensor variants so every row runs one SPMD graph);
+the `sparse_sdpa` prefill rows at 16 local heads (H % 32 contract) are untested.
+
+## Test beds on the 32-chip Galaxy (disjoint from the single-chip work on chips 0-8)
+
+| mesh | env | probe |
+|---|---|---|
+| (2, 4) block, grid rows 4-5 | `TT_VISIBLE_DEVICES=27,26,31,30,23,22,19,18` + `p150_x8_mesh_graph_descriptor.textproto` + `MESH_DEVICE=P150x8`, FABRIC_2D RELAXED_INIT, max payload router config, `l1_small_size 32768` | `~/g4cov/mesh_sanity.py 2 4` PASS (`_logs/mesh/sanity_rows45.log`) |
+| (1, 4) ring, grid row 6 | `TT_VISIBLE_DEVICES=25,29,21,17` + `~/g4cov/p150_x4_galaxy_2ch.textproto` + `MESH_DEVICE=P150x4` | `mesh_sanity.py 1 4` PASS (`sanity_row6_1x4.log`) |
+
+`TT_METAL_WATCHER` cannot be combined with the fabric kernels on this build (mesh open fails with
+`program.cpp:3760 state.offset <= max_size`); `pytest.ini` sets a 300 s timeout, the mesh tests carry
+`@pytest.mark.timeout(1800)` (weights + first compile of a MoE layer exceed 300 s).
+
+## Evidence (real weights, PCC vs HF; logs under `~/ashai/glm53/_logs/mesh/`)
+
+| test | mesh | result | log |
+|---|---|---|---|
+| `test_mesh_ccl.py` | (2,4) | TP SwiGLU + `all_reduce_cols` vs torch per row-chip > 0.995 (3 iterations, rows carry different tokens, columns byte-equal); `all_gather_rows` bf16/fp32 byte-exact; `reduce_scatter_rows` 0.9999; the three collectives inside a captured trace, 3 replays on new inputs > 0.9999 | `test_mesh_ccl_1.log` |
+| `test_mesh_moe.py` (layer 3) | (2,4) | hybrid MoE vs HF MoE: T=2/row 0.999959, T=32/row 0.999967, replicated | `test_mesh_moe_1.log` |
+| `test_mesh_decoder.py` layer 0 | (2,4), B=2/row | 4 users x 48 prompt tokens through the captured decode trace: per-user 0.99991-0.99993 (worst single row 0.99984); HF-cache traced steps 48-50: 0.99989-0.99994 | `test_mesh_decoder_l0_1.log` |
+| layer 3 | (2,4), B=2/row | per-user 0.99974-0.99989 (worst single row 0.99652 = the position-0 row); traced steps 48-50: 0.99993-0.99997 | `test_mesh_decoder_l3_2.log` |
+| layer 4 | (2,4), B=2/row | per-user 0.99994-0.99999 (worst row 0.99789); traced steps: 0.99996-0.99999 | `test_mesh_decoder_l4_1.log` |
+| `test_mesh_tp_prefill.py` layer 0 | (1,4) | TP4 prefill S=200 vs HF 0.999853 (replicated across the 4 chips); decode 200-202: 0.99990-0.99992 | `test_tp4_prefill_l0_3.log` |
+| layers 3, 4 | (1,4) | pending | `test_tp4_prefill_l34_1.log` |
+| `test_mesh_decoder.py` B=32/row | (2,4), 64 users | pending | `test_mesh_decoder_b32_1.log` |
+
+Method note: the mesh has no prefill path on multi-row meshes yet, so the decode test feeds each
+user's prompt through the decode step token by token; HF's prefill output row t is the exact
+reference of the decode output at step t (same recurrence / causal attention), then HF decode
+steps with a live cache follow. Every step after the warm-up runs through the captured trace (one
+eager step in the middle), and the outputs are checked byte-equal across the four columns of a row.
+
+## Next
+
+1. B=32/row and the (1,4) TP prefill for layers 3/4 (running).
+2. Full 8x4 mesh (needs all 32 chips free) with FABRIC_2D_TORUS_XY; A/B TP4 vs TP8.
+3. Mesh prefill: ttKDA sequence-parallel over the rows + chunked DSA (after the chunked-prefill branch lands), user-partitioned latent/index cache, sparse decode through metadata tensors, 1 M-position cache test.
+4. `tt-perf-report` of the mesh decode step (layer 4), hybrid vs `TTMoEDecode`, expert dtype under the eval gate.

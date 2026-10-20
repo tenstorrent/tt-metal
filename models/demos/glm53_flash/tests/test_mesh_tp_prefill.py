@@ -83,3 +83,35 @@ def test_tp4_prefill_decode_vs_hf(mesh_device, layer_idx):
         p_d = pcc(y_hf_dec[t], device_streams_to_host(yd, 4, 1, mesh=mesh))
         logger.info(f"layer {layer_idx} TP4 decode at position {S + t}: pcc vs HF {p_d:.6f}")
         assert p_d > 0.995
+
+
+@pytest.mark.timeout(1800)
+@pytest.mark.parametrize("device_params", [mesh_device_params(ROWS, COLS)], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(ROWS, COLS)], indirect=True)
+def test_tp4_sparse_prefill_layer3(mesh_device):
+    """The sparse DSA prefill rows (>= 2048) with 16 local heads per chip: the R4097 random-prompt
+    dump of layer 3 through the TP4 decoder, dense rows and sparse rows scored separately."""
+    layer_idx = 3
+    snapshot = default_snapshot_dir()
+    headers = shard_headers(snapshot)
+    raw = load_layer_raw(snapshot, layer_idx, headers)
+    cfg = GLM53FlashConfig.from_hf_config_json(snapshot / "config.json")
+    pre = torch.load(DUMP / f"layer{layer_idx}_prefill.pt")
+    x_in, x_out = pre["x_in"], pre["x_out"]
+    T = x_in.shape[1]
+    dec = FunctionalDecoder.from_state_dict(
+        raw, hf_config=cfg, layer_idx=layer_idx, mesh_device=mesh_device, max_batch=1, max_seq_len=4160
+    )
+    mesh = dec.mesh
+    y = dec.prefill_forward(host_streams_to_device(x_in, mesh_device), user=0, seq_len=T)
+    out = device_streams_to_host(y, 4, T, mesh=mesh)
+    split = dec.layer.attn.sparse_row_start
+    p_all, p_dense, p_sparse = (
+        pcc(x_out, out),
+        pcc(x_out[:, :split], out[:, :split]),
+        pcc(x_out[:, split:], out[:, split:]),
+    )
+    logger.info(
+        f"layer 3 TP4 sparse prefill T={T}: pcc all {p_all:.6f}, rows < {split} {p_dense:.6f}, rows >= {split} {p_sparse:.6f}"
+    )
+    assert min(p_all, p_dense, p_sparse) > 0.995
