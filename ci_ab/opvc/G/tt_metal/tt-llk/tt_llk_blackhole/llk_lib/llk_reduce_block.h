@@ -24,11 +24,12 @@ constexpr bool reduce_block_holds_scaler(const TensorShape& tensor_shape)
 }
 
 // Unpack and math agree on this: SUM/AVG REDUCE_COL of full 32x32 tiles unpacks faces 0,1 and 2,3 into one SrcA bank each (rows 0 and 16),
-// so the two face chains of a face row can alternate in the math thread. LoFi keeps one face per bank: it is unpack bound and the pairing costs it.
-template <PoolType pool_type, ReduceDim reduce_dim, MathFidelity math_fidelity>
+// so the two face chains of a face row can alternate in the math thread. Both inits must opt in (col_pair): a caller whose unpack does not
+// follow the pair layout, and LoFi (unpack bound, the pairing costs it), keep one face per bank.
+template <PoolType pool_type, ReduceDim reduce_dim>
 constexpr bool reduce_col_paired(const TensorShape& tensor_shape)
 {
-    return (reduce_dim == ReduceDim::REDUCE_COL) && (pool_type != PoolType::MAX) && (math_fidelity != MathFidelity::LoFi) && (tensor_shape.total_num_faces() == 4) &&
+    return (reduce_dim == ReduceDim::REDUCE_COL) && (pool_type != PoolType::MAX) && (tensor_shape.total_num_faces() == 4) &&
            (tensor_shape.face_r_dim == FACE_R_DIM);
 }
 

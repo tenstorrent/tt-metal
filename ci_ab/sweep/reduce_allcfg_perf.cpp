@@ -12,6 +12,13 @@
 #include <cstdio>
 
 #include "ci_reduce_side.h"
+
+// The side opts in to the COL pair layout (both inits); the other sides have no such template argument
+#ifdef CI_REDUCE_FKEY
+#define CI_CP , (MATH_FIDELITY != ckernel::MathFidelity::LoFi)
+#else
+#define CI_CP
+#endif
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "counters.h"
@@ -77,11 +84,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         START_PERF_MEASURE("INIT")
         _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
             formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, CI_FACE_R, CI_FACE_R, CI_FACES, CI_FACES);
-#ifdef CI_REDUCE_FKEY
-        _llk_unpack_AB_reduce_init_<POOL_TYPE, REDUCE_DIM, MATH_FIDELITY>(CI_SHAPE);
-#else
-        _llk_unpack_AB_reduce_init_<POOL_TYPE, REDUCE_DIM>(CI_SHAPE);
-#endif
+        _llk_unpack_AB_reduce_init_<POOL_TYPE, REDUCE_DIM CI_CP>(CI_SHAPE);
         PROFILER_SYNC();
     }
     {
@@ -164,7 +167,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         START_PERF_MEASURE("INIT")
         _llk_math_pack_sync_init_<DST_SYNC, is_fp32_dest_acc_en>();
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
-        _llk_math_reduce_init_<POOL_TYPE, REDUCE_DIM, is_fp32_dest_acc_en, MATH_FIDELITY>(CI_SHAPE);
+        _llk_math_reduce_init_<POOL_TYPE, REDUCE_DIM, is_fp32_dest_acc_en, MATH_FIDELITY CI_CP>(CI_SHAPE);
         PROFILER_SYNC();
     }
     {

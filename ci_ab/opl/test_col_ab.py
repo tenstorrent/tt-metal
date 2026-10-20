@@ -49,3 +49,25 @@ def test_moreh_mean_h(device, shape, dt):
 @pytest.mark.parametrize("shape", ["1x1x1024x1024", "4x1x2048x256", "1x1x256x2048"])
 def test_moreh_softmax_h(device, shape, dt):
     ttnn.to_torch(ttnn.operations.moreh.softmax(_x(device, SHAPES[shape], dt), -2))
+
+
+FID = {"HiFi2": ttnn.MathFidelity.HiFi2, "HiFi4": ttnn.MathFidelity.HiFi4}
+POOLS = {
+    "320x48x48_k9": (1, 320, 48, 48, 9),
+    "320x48x48_k36": (1, 320, 48, 48, 36),
+    "64x96x96_k9": (1, 64, 96, 96, 9),
+}
+
+
+@pytest.mark.parametrize("fid", list(FID))
+@pytest.mark.parametrize("case", list(POOLS))
+def test_avg_pool_large(device, case, fid):
+    # Large-window avg_pool2d: the reduce COL math over tilizeA_B unpacked tiles (must keep one face per bank)
+    N, C, H, W, k = POOLS[case]
+    torch.manual_seed(58706)
+    t = torch.randn((N, C, H, W), dtype=torch.float32).permute(0, 2, 3, 1).reshape(1, 1, N * H * W, C)
+    x = ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    cfg = ttnn.WormholeComputeKernelConfig(math_fidelity=FID[fid], math_approx_mode=False, fp32_dest_acc_en=False, packer_l1_acc=False)
+    out = ttnn.avg_pool2d(input_tensor=x, batch_size=N, input_h=H, input_w=W, channels=C, kernel_size=[k, k], stride=[2, 2],
+                          padding=[1, 1], compute_kernel_config=cfg, config_tensor_in_dram=True)
+    ttnn.to_torch(out)

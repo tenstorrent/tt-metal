@@ -201,6 +201,18 @@ ALWI void reduce_init_short_with_dt(uint32_t old_dfb_id, uint32_t input_dfb_id, 
     MATH((llk_math_reconfig_data_format_srca<DST_ACCUM_MODE>(old_dfb_id, srca_dfb_id)));
 
     // Reconfigure unpacker for reduce operation (SRCA and SRCB)
+#ifdef ARCH_BLACKHOLE
+    UNPACK((llk_unpack_AB_reduce_init<reduce_type, reduce_dim, reduce_col_pair<reduce_type, reduce_dim, reduce_pow2_scaler>()>(
+        input_dfb_id, scaler_dfb_id)));
+
+    // Reconfigure math for reduce operation
+    MATH((llk_math_reduce_init<
+          reduce_type,
+          reduce_dim,
+          DST_ACCUM_MODE,
+          reduce_math_fidelity<reduce_type, reduce_dim, reduce_pow2_scaler>(MATH_FIDELITY),
+          reduce_col_pair<reduce_type, reduce_dim, reduce_pow2_scaler>()>(input_dfb_id, scaler_dfb_id)));
+#else
     UNPACK((llk_unpack_AB_reduce_init<reduce_type, reduce_dim>(input_dfb_id, scaler_dfb_id)));
 
     // Reconfigure math for reduce operation
@@ -210,6 +222,7 @@ ALWI void reduce_init_short_with_dt(uint32_t old_dfb_id, uint32_t input_dfb_id, 
           DST_ACCUM_MODE,
           reduce_math_fidelity<reduce_type, reduce_dim, reduce_pow2_scaler>(MATH_FIDELITY)>(
         input_dfb_id, scaler_dfb_id)));
+#endif
 
     // Skip packer reconfiguration - it remains valid from initial reduce_init call
 }

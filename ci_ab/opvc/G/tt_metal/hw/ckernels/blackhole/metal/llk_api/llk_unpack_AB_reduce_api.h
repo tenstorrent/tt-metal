@@ -16,7 +16,7 @@
 // FORMAT-FREE at the op level (formats set at compute_kernel_hw_startup), so the cores take only operand A's
 // tile geometry (init) / the two runtime L1 addresses (exec). Callers resolve these from a CB id or a
 // descriptor.
-template <PoolType pool_type, ReduceDim reduce_dim>
+template <PoolType pool_type, ReduceDim reduce_dim, bool col_pair = false>
 inline void llk_unpack_AB_reduce_init_impl(const ckernel::TensorShape& tensor_shape) {
     SAN_HOOK(init<OperationUnpackReduce>(
         StateVal<OperationUnpackReduce::PoolType>(to_underlying(pool_type)),
@@ -24,7 +24,7 @@ inline void llk_unpack_AB_reduce_init_impl(const ckernel::TensorShape& tensor_sh
         StateVal<OperationUnpackReduce::FaceHeight>(tensor_shape.face_r_dim),
         StateVal<OperationUnpackReduce::NumFaces>(tensor_shape.total_num_faces())));
 
-    _llk_unpack_AB_reduce_init_<pool_type, reduce_dim, MATH_FIDELITY>(tensor_shape);
+    _llk_unpack_AB_reduce_init_<pool_type, reduce_dim, col_pair>(tensor_shape);
 }
 
 template <PoolType pool_type, ReduceDim reduce_dim>
@@ -34,12 +34,12 @@ inline void llk_unpack_AB_reduce_impl(const std::uint32_t address_a, const std::
     WAYPOINT("UABD");
 }
 
-template <PoolType pool_type, ReduceDim reduce_dim>
+template <PoolType pool_type, ReduceDim reduce_dim, bool col_pair = false>
 inline void llk_unpack_AB_reduce_init(const std::uint32_t operandA, const std::uint32_t operandB) {
     const std::uint32_t operandA_id = get_operand_id(operandA);
     const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operandA_id);
 
-    llk_unpack_AB_reduce_init_impl<pool_type, reduce_dim>(tensor_shape);
+    llk_unpack_AB_reduce_init_impl<pool_type, reduce_dim, col_pair>(tensor_shape);
 }
 
 template <PoolType pool_type, ReduceDim reduce_dim>

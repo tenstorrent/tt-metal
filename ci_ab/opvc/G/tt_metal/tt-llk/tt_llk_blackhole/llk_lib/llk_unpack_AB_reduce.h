@@ -36,7 +36,7 @@ using namespace ckernel::unpacker;
  * @note For REDUCE_SCALAR operations, SrcA is cleared before unpacking because SrcA is clobbered in the Math kernel.
  *       A MAX of full faces skips it: the next unpack rewrites those rows.
  */
-template <PoolType pool_type, ReduceDim reduce_dim, MathFidelity math_fidelity>
+template <PoolType pool_type, ReduceDim reduce_dim, bool col_pair>
 inline void _llk_unpack_AB_reduce_mop_config_(const ckernel::TensorShape tensor_shape)
 {
     // Validate tensor shape for tile-dependent operations
@@ -49,7 +49,7 @@ inline void _llk_unpack_AB_reduce_mop_config_(const ckernel::TensorShape tensor_
     constexpr std::uint32_t clear_src      = swap_operands ? Srcs::SrcB : Srcs::SrcA;
 
     const bool full_tile          = swap_operands && (tensor_shape.total_num_faces() == 4);
-    const bool paired             = reduce_col_paired<pool_type, reduce_dim, math_fidelity>(tensor_shape);
+    const bool paired             = col_pair && reduce_col_paired<pool_type, reduce_dim>(tensor_shape);
     const bool is_tiny            = tensor_shape.face_r_dim < FACE_R_DIM;
     const std::uint32_t innerloop = full_tile ? 1 : (paired ? 2 : tensor_shape.total_num_faces());
     const std::uint32_t clear_val = is_max ? p_unpacr_nop::CLR_SRC_NEGINF : p_unpacr_nop::CLR_SRC_0;
@@ -117,7 +117,7 @@ inline void _llk_unpack_AB_reduce_mop_config_(const ckernel::TensorShape tensor_
  * @ref _llk_unpack_AB_reduce_ is the matching execute call.
  * @ref _llk_math_reduce_init_ is the matching init on the math thread (this is the scaler operand unpack pairing).
  */
-template <PoolType pool_type, ReduceDim reduce_dim, MathFidelity math_fidelity>
+template <PoolType pool_type, ReduceDim reduce_dim, bool col_pair = false>
 inline void _llk_unpack_AB_reduce_init_(const ckernel::TensorShape tensor_shape)
 {
     // The partial-face clear picks CLR_SRC_NEGINF only for MAX, so MIN would pad SrcA with zero where it needs +inf.
@@ -144,7 +144,7 @@ inline void _llk_unpack_AB_reduce_init_(const ckernel::TensorShape tensor_shape)
     }
     else
     {
-        if (reduce_col_paired<pool_type, reduce_dim, math_fidelity>(tensor_shape))
+        if (col_pair && reduce_col_paired<pool_type, reduce_dim>(tensor_shape))
         {
             TT_SETADCXX(p_setadc::UNP_A, 2 * FACE_R_DIM * FACE_C_DIM - 1, 0x0);
         }
@@ -156,7 +156,7 @@ inline void _llk_unpack_AB_reduce_init_(const ckernel::TensorShape tensor_shape)
     }
 
     // Configure unpack MOP
-    _llk_unpack_AB_reduce_mop_config_<pool_type, reduce_dim, math_fidelity>(tensor_shape);
+    _llk_unpack_AB_reduce_mop_config_<pool_type, reduce_dim, col_pair>(tensor_shape);
 }
 
 /**

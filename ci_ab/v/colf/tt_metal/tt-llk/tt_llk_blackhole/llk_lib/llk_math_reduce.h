@@ -20,9 +20,12 @@
 
 using namespace ckernel;
 
+// Set by the last _llk_math_reduce_init_: the unpack thread was initialised with the same col_pair
+inline bool reduce_col_pair_state = false;
+
 // local function declarations
 template <PoolType type, ReduceDim dim, MathFidelity math_fidelity>
-inline void reduce_configure_addrmod(const ckernel::TensorShape& tensor_shape);
+inline void reduce_configure_addrmod(const ckernel::TensorShape& tensor_shape, const bool col_pair);
 
 template <PoolType type, ReduceDim dim, MathFidelity math_fidelity>
 inline void reduce_configure_mop(const ckernel::TensorShape& tensor_shape);
@@ -603,7 +606,7 @@ inline void _llk_math_reduce_(const std::uint32_t dst_index, const ckernel::Tens
     {
         if constexpr (type != PoolType::MAX)
         {
-            if (reduce_col_paired<type, dim, math_fidelity>(tensor_shape))
+            if (reduce_col_pair_state && reduce_col_paired<type, dim>(tensor_shape))
             {
                 for (std::uint32_t row_num = 0; row_num < tensor_shape.num_faces_r_dim; row_num++)
                 {
@@ -714,7 +717,7 @@ inline void _llk_math_reduce_block_(
  * @param tensor_shape: Tile shape determining dest stride for REDUCE_ROW.
  */
 template <PoolType type, ReduceDim dim, MathFidelity math_fidelity>
-inline void reduce_configure_addrmod(const ckernel::TensorShape& tensor_shape)
+inline void reduce_configure_addrmod(const ckernel::TensorShape& tensor_shape, const bool col_pair)
 {
     constexpr bool high_fidelity = is_high_fidelity(math_fidelity);
 
@@ -816,22 +819,25 @@ inline void reduce_configure_addrmod(const ckernel::TensorShape& tensor_shape)
 
         if constexpr (dim == ReduceDim::REDUCE_COL && type != PoolType::MAX)
         {
-            addr_mod_t {
-                .srca = {.incr = FACE_R_DIM},
-            }
-                .set(ADDR_MOD_2);
+            if (col_pair)
+            {
+                addr_mod_t {
+                    .srca = {.incr = FACE_R_DIM},
+                }
+                    .set(ADDR_MOD_2);
 
-            addr_mod_t {
-                .srca     = {.clr = 1},
-                .fidelity = {.incr = 1},
-            }
-                .set(ADDR_MOD_3);
+                addr_mod_t {
+                    .srca     = {.clr = 1},
+                    .fidelity = {.incr = 1},
+                }
+                    .set(ADDR_MOD_3);
 
-            addr_mod_t {
-                .srca     = {.clr = 1},
-                .fidelity = {.clr = 1},
+                addr_mod_t {
+                    .srca     = {.clr = 1},
+                    .fidelity = {.clr = 1},
+                }
+                    .set(ADDR_MOD_4);
             }
-                .set(ADDR_MOD_4);
         }
     }
 }
@@ -847,7 +853,7 @@ inline void reduce_configure_addrmod(const ckernel::TensorShape& tensor_shape)
  * @note Call @ref _llk_math_reduce_ with matching template args after this function,
  *       and @ref _llk_math_reduce_uninit_ after the last reduce to restore modified state.
  */
-template <PoolType type, ReduceDim dim, bool is_fp32_dest_acc_en, MathFidelity math_fidelity>
+template <PoolType type, ReduceDim dim, bool is_fp32_dest_acc_en, MathFidelity math_fidelity, bool col_pair = false>
 inline void _llk_math_reduce_init_(const ckernel::TensorShape& tensor_shape)
 {
     // There is no min-pool instruction - the FPU has GMPOOL (max) and GAPOOL (average/sum).
@@ -856,7 +862,13 @@ inline void _llk_math_reduce_init_(const ckernel::TensorShape& tensor_shape)
         "The FPU reduce has no MIN: the hardware provides GMPOOL (max) and GAPOOL (average) only. "
         "Use the SFPU reduce instead (ckernel_sfpu_reduce.h::calculate_reduce).");
 
-    reduce_configure_addrmod<type, dim, math_fidelity>(tensor_shape);
+    bool pair = false;
+    if constexpr (dim == ReduceDim::REDUCE_COL && type != PoolType::MAX)
+    {
+        pair                  = col_pair && reduce_col_paired<type, dim>(tensor_shape);
+        reduce_col_pair_state = pair;
+    }
+    reduce_configure_addrmod<type, dim, math_fidelity>(tensor_shape, pair);
     reduce_configure_mop<type, dim, math_fidelity>(tensor_shape);
 
     TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0);

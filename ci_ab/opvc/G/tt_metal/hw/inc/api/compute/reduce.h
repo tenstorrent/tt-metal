@@ -36,6 +36,18 @@ constexpr MathFidelity reduce_math_fidelity(MathFidelity kernel_fidelity) {
     return kernel_fidelity;
 }
 
+// reduce_init and the reduce helpers unpack a COL SUM/AVG tile's face row into one SrcA bank (not at LoFi) and the math thread follows.
+// Other inits (tilizeA_B_reduce_init, sampling) leave it off and keep one face per bank.
+template <PoolType reduce_type, ReduceDim reduce_dim, bool pow2_scaler>
+constexpr bool reduce_col_pair() {
+#ifdef ARCH_BLACKHOLE
+    return reduce_dim == ReduceDim::REDUCE_COL && reduce_type != PoolType::MAX &&
+           reduce_math_fidelity<reduce_type, reduce_dim, pow2_scaler>(MATH_FIDELITY) != MathFidelity::LoFi;
+#else
+    return false;
+#endif
+}
+
 // clang-format off
 /**
  * Performs the necessary hardware and software initialization for reduce operation for provided circular buffer identifiers (CB IDs). In order for reduce
@@ -97,12 +109,22 @@ ALWI void reduce_init(
 #else
     state_configure(icb, icb_scaler, ocb, call_line);
 #endif
+#ifdef ARCH_BLACKHOLE
+    UNPACK((llk_unpack_AB_reduce_init<reduce_type, reduce_dim, reduce_col_pair<reduce_type, reduce_dim, pow2_scaler>()>(icb, icb_scaler)));
+    MATH((llk_math_reduce_init<
+          reduce_type,
+          reduce_dim,
+          is_fp32_dest_acc_en,
+          reduce_math_fidelity<reduce_type, reduce_dim, pow2_scaler>(MATH_FIDELITY),
+          reduce_col_pair<reduce_type, reduce_dim, pow2_scaler>()>(icb, icb_scaler)));
+#else
     UNPACK((llk_unpack_AB_reduce_init<reduce_type, reduce_dim>(icb, icb_scaler)));
     MATH((llk_math_reduce_init<
           reduce_type,
           reduce_dim,
           is_fp32_dest_acc_en,
           reduce_math_fidelity<reduce_type, reduce_dim, pow2_scaler>(MATH_FIDELITY)>(icb, icb_scaler)));
+#endif
     PACK((llk_pack_reduce_mask_config<reduce_dim, PackMode::Default>(ocb)));
 }
 
