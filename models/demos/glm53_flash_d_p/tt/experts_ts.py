@@ -182,7 +182,12 @@ class TtExpertsTs:
                 # (hang hunting: block variants, e.g. {"acc_on_ports": false} or {"deterministic": true})
                 **json.loads(os.environ.get("GLM_TS_BLOCK_OPTS", "{}")),
             )
-            logger.info(f"GLM experts ts: arena at {hit.arena_addr} (L1 below it: the dispatch manifest, the CBs)")
+            sh_ = hit._arena_spec[4].shard_spec
+            ab = int(sh_.shape[0]) * int(sh_.shape[1]) * 4
+            logger.info(
+                f"GLM experts ts: arena at {hit.arena_addr}, {ab >> 10} KB a core (L1 below it: the dispatch manifest, the "
+                f"CBs; without it - the shared expert's time - L1 up to {(hit.arena_addr + ab) >> 10} KB is free)"
+            )
             if os.environ.get("GLM_TS_L1_REPORT") == "1":  # (debug: the L1 buffers the model holds besides the arena)
                 bufs = [
                     b
