@@ -103,6 +103,10 @@ class QuantConfig:
     # within 1 BF16 ULP of the FP32 tanh form, ~-0.8 % of the 720p denoise). WAN5B_FF1_GELU=fast /
     # accurate overrides the preset either way.
     ff1_fast_gelu: bool = False
+    # S07. Cross-attention SDPA writes the concatenated-heads layout itself (`output_concat_heads`,
+    # ad2792e70b0), dropping the separate concatenate_heads op; a layout change, PCC unchanged.
+    # WAN5B_CROSS_SDPA_CONCAT_HEADS=1 / 0 overrides the preset either way.
+    cross_sdpa_concat_heads: bool = False
 
     @staticmethod
     def default() -> QuantConfig:
@@ -337,6 +341,17 @@ def _all_bf8_lofi_act8_out8_ff8_sdpamm() -> QuantConfig:
     return base
 
 
+def _all_bf8_lofi_act8_out8_ff8_sdpamm_cat() -> QuantConfig:
+    """`_sdpamm` plus the cross-attention SDPA writing concatenated heads: the 5B default since S07.
+
+    On u20-42 at 160 W, same hour as the previous default (`all_bf8_lofi_act8_out8_ff8`, step8):
+    720p 7.406 vs 7.852 s total (x3), PCC 99.981 % vs 99.983 %.
+    """
+    base = _all_bf8_lofi_act8_out8_ff8_sdpamm()
+    base.cross_sdpa_concat_heads = True
+    return base
+
+
 def _all_bf8_lofi_act8_out8_ff8_n16() -> QuantConfig:
     """The 5B default with norm_out emitting bf16 (A7), which the default never picked up.
 
@@ -357,6 +372,7 @@ def _all_bf8_lofi_act8_out8_ff8_n16_sdpamm() -> QuantConfig:
 
 
 QuantConfig.all_bf8_lofi_act8 = staticmethod(_all_bf8_lofi_act8)
+QuantConfig.all_bf8_lofi_act8_out8_ff8_sdpamm_cat = staticmethod(_all_bf8_lofi_act8_out8_ff8_sdpamm_cat)
 QuantConfig.all_bf8_lofi_act8_out8_ff8_n16 = staticmethod(_all_bf8_lofi_act8_out8_ff8_n16)
 QuantConfig.all_bf8_lofi_act8_out8_ff8_n16_sdpamm = staticmethod(_all_bf8_lofi_act8_out8_ff8_n16_sdpamm)
 QuantConfig.all_bf8_lofi_act8_out8_ff8_sdpamm = staticmethod(_all_bf8_lofi_act8_out8_ff8_sdpamm)
@@ -483,6 +499,7 @@ def apply_quant_config(model, config: QuantConfig) -> None:
 
         # Cross-attention mm_compute_kernel_config
         block.attn2.mm_compute_kernel_config = _make_linear_compute_config(arch, config.cross_attn_q)
+        block.attn2.cross_sdpa_concat_heads = _cross_sdpa_concat_heads(config)
 
         # FFN linears
         _apply_linear_config(block.ffn.ff1, config.ffn_ff1, arch, f"blocks[{idx}].ffn.ff1", **act)
@@ -552,6 +569,13 @@ def _ff1_gelu_form(config: QuantConfig) -> str:
     return "fast" if config.ff1_fast_gelu else "accurate"
 
 
+def _cross_sdpa_concat_heads(config: QuantConfig) -> bool:
+    forced = os.environ.get("WAN5B_CROSS_SDPA_CONCAT_HEADS", "").strip()
+    if forced in ("0", "1"):
+        return forced == "1"
+    return config.cross_sdpa_concat_heads
+
+
 def set_quant_config(pipeline, config: QuantConfig) -> None:
     """Install a quantization config on a WanPipeline.
 
@@ -592,9 +616,10 @@ def set_quant_config(pipeline, config: QuantConfig) -> None:
 QUANT_CONFIG_ENV = "WAN5B_QUANT_CONFIG"
 """Name of a `QuantConfig` preset to use instead of the 5B default; `bf16` (or `none`) keeps bf16 weights."""
 
-QUANT_CONFIG_DEFAULT_5B = "all_bf8_lofi_act8_out8_ff8"
+QUANT_CONFIG_DEFAULT_5B = "all_bf8_lofi_act8_out8_ff8_sdpamm_cat"
 """Preset applied when `WAN5B_QUANT_CONFIG` is unset: the fastest PCC-passing 5B configuration on a
-BH Galaxy (sprint 7, 720p T2V / I2V / 480p, PCC 99.983 % vs the torch reference)."""
+BH Galaxy (sprint 7 S07, 720p T2V / I2V / 480p, PCC 99.981 % vs the torch reference).
+`all_bf8_lofi_act8_out8_ff8` is the previous default (HiFi2 ring-SDPA matmuls, separate concat heads)."""
 
 QUANT_CONFIG_BF16_NAMES = ("bf16", "none")
 
@@ -625,6 +650,7 @@ def quant_config_from_env(var: str = QUANT_CONFIG_ENV) -> tuple[str, QuantConfig
             "all_bf8_lofi_act8_mod16_ff8",
             "all_bf8_lofi_act8_out8_ff8",
             "all_bf8_lofi_act8_out8_ff8_sdpamm",
+            "all_bf8_lofi_act8_out8_ff8_sdpamm_cat",
             "all_bf8_lofi_act8_out8_ff8_n16",
             "all_bf8_lofi_act8_out8_ff8_n16_sdpamm",
         ]
