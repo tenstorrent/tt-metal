@@ -222,14 +222,14 @@ ALWI void reduce(
  * @brief Issue one host-planned tiled reduce call.
  *
  * Lowers every planner-selected field of `Call` into the explicit reduce() above, including
- * accumulation, post-scaling, partial handling, the output group and the shared auxiliary-CB slice.
+ * accumulation, scaling, partial handling, the output group and the shared auxiliary-CB slice.
  *
  * It does not perform compute-kernel startup or any surrounding CB preparation. The kernel owns when
  * this call runs and may perform arbitrary work, including refilling a reused input CB, between
  * planned calls.
  *
  * An optional caller post operation runs on each completed output tile after the plan's
- * post-scaling. Intermediate accumulation calls do not run it.
+ * scaling. Intermediate accumulation calls do not run it.
  *
  * @tparam Call A constexpr call descriptor such as ttnn::kernel_lib::ReduceCallArgs<CTA_OFFSET>.
  */

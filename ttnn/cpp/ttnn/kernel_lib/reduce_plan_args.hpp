@@ -262,7 +262,7 @@ public:
     static constexpr std::uint32_t logical_h = word<reduce_plan_args::CallWord::LogicalHeight>();
     static constexpr std::uint32_t logical_w = word<reduce_plan_args::CallWord::LogicalWidth>();
     static constexpr std::uint32_t row_stride = word<reduce_plan_args::CallWord::RowStride>();
-    static constexpr std::uint32_t reduce_factor = word<reduce_plan_args::CallWord::ReduceFactor>();
+    static constexpr std::uint32_t scale_bits = word<reduce_plan_args::CallWord::ScaleBits>();
     static constexpr std::uint32_t output_chunk_tiles = reduce_plan_args::extract(
         chunk_and_auxiliary,
         reduce_plan_args::chunk_and_auxiliary::output_tiles_shift,
@@ -275,7 +275,6 @@ public:
         chunk_and_auxiliary,
         reduce_plan_args::chunk_and_auxiliary::auxiliary_tile_count_shift,
         reduce_plan_args::chunk_and_auxiliary::auxiliary_tile_count_mask);
-    static constexpr std::uint32_t post_scale_bits = word<reduce_plan_args::CallWord::PostScaleBits>();
 
     static constexpr std::uint32_t num_compile_time_args() {
         return reduce_plan_args::call_compile_time_arg_count() * (has_tail_variant ? 2 : 1);
@@ -284,7 +283,6 @@ public:
     static constexpr std::uint32_t next_compile_time_args_offset() { return CTA_OFFSET + num_compile_time_args(); }
 
     static_assert(rows > 0 && columns > 0 && batches > 0, "Reduction block shape must be non-zero");
-    static_assert(reduce_factor > 0, "Reduction factor must be non-zero");
     static_assert(output_chunk_tiles > 0, "Reduction output group must be non-zero");
     static_assert(
         auxiliary_tile_count == 0 || auxiliary_cb_id != reduce_plan_args::no_cb_id,

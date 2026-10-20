@@ -305,12 +305,10 @@ void configure_scalar_and_aux(
     const float scale = scalar.value_or(automatic_average ? 1.0F / logical_reduce_elements : 1.0F);
     if (uses_sfpu) {
         // SFPU folds never read the scaler; the placeholder keeps the auxiliary CB uniform.
-        plan.reduce_factor = 1;
-        plan.post_scale = scale;
+        plan.scale = scale;
         plan.auxiliary_tiles.push_back({.type = ReduceAuxiliaryTileType::Placeholder});
     } else if (plan.algorithm == ReduceAlgorithm::TileSum) {
-        plan.reduce_factor = automatic_average ? logical_reduce_elements : 1U;
-        plan.post_scale = scalar.value_or(1.0F);
+        plan.scale = scale;
         if (has_partial) {
             plan.auxiliary_tiles.push_back(
                 {.value = 1.0F,
@@ -328,8 +326,7 @@ void configure_scalar_and_aux(
             "Reduce planner: Native HW reduction cannot represent negative scalar {}",
             scale);
         const float reader_scaler = dim == ReduceOpDim::HW ? std::sqrt(scale) : scale;
-        plan.post_scale = 1.0F;
-        plan.reduce_factor = 1;
+        plan.scale = 1.0F;
         plan.auxiliary_tiles.push_back(
             {.value = reader_scaler, .type = ReduceAuxiliaryTileType::FirstRow, .num_valid_elements = tile_w});
         if (has_partial) {
@@ -751,13 +748,10 @@ static ReduceSequencePlan make_fixed_reduce_sequence_plan(
         const float grand_scalar = 1.0F / static_cast<float>(grand_factor);
         for (auto& plan : plans) {
             if (plan.algorithm == ReduceAlgorithm::TileSum) {
-                plan.reduce_factor = grand_factor;
-                plan.post_scale = 1.0F;
+                plan.scale = grand_scalar;
             } else {
                 const float reader_scaler =
                     first_config.reduce_dim == ReduceOpDim::HW ? std::sqrt(grand_scalar) : grand_scalar;
-                plan.reduce_factor = 1;
-                plan.post_scale = 1.0F;
                 for (auto& tile : plan.auxiliary_tiles) {
                     tile.value = round_reduce_auxiliary_value(reader_scaler, plan.auxiliary_cb.data_format);
                 }
@@ -1127,8 +1121,11 @@ ReduceCallArgs::ReduceCallArgs(const ReduceCallPlan& call) {
             plan.algorithm == ReduceAlgorithm::TileSum,
         "Reduce plan args: a partial-mask call must use TileSum");
     TT_FATAL(
-        plan.Ht > 0 && plan.Wt > 0 && plan.batches > 0 && plan.reduce_factor > 0 && plan.chunk.output_tiles > 0,
+        plan.Ht > 0 && plan.Wt > 0 && plan.batches > 0 && plan.chunk.output_tiles > 0,
         "Reduce plan args: call contains zero-sized kernel geometry");
+    TT_FATAL(
+        plan.scale == 1.0F || plan.algorithm == ReduceAlgorithm::TileSum || plan_uses_sfpu(plan),
+        "Reduce plan args: a Native call carries its scale in the scaler tile");
     TT_FATAL(!plan.auxiliary_tiles.empty(), "Reduce plan args: every planned reduction reads an auxiliary recipe");
 
     compile_time_args_.reserve(reduce_plan_args::call_compile_time_arg_count());
@@ -1139,9 +1136,8 @@ ReduceCallArgs::ReduceCallArgs(const ReduceCallPlan& call) {
         plan.Wt,
         plan.batches,
         plan.input_row_stride_tiles,
-        plan.reduce_factor,
+        std::bit_cast<std::uint32_t>(plan.scale),
         encode_chunk_and_auxiliary(call),
-        std::bit_cast<std::uint32_t>(plan.post_scale),
         call.accumulation_index,
         plan.tail_runtime_arg_offset,
         plan.logical_h,
