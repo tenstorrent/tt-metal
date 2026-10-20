@@ -52,7 +52,7 @@ from . import ccl
 from .common import DRAM, SP_AXIS, TP_AXIS, attn_compute_config, tp_sum
 from .norm import TtDistributedRmsNorm
 from .quant import fp4_q, native, round_tf32
-from .rope import deinterleave_perm, rope_deinterleaved
+from .rope import PairPerm, deinterleave_perm, glue, rope_deinterleaved, rope_deinterleaved_bf16
 from .served import CacheSlab, alloc_served
 from .settings import settings
 
@@ -90,6 +90,7 @@ class CompressRope:
         assert self.half % 32 == 0, f"rope half width {self.half} is not a tile multiple"
         self.cos = _upload(mesh, rot.real.float().reshape(1, 1, j, self.half), ttnn.float32, ttnn.ROW_MAJOR_LAYOUT)
         self.sin = _upload(mesh, rot.imag.float().reshape(1, 1, j, self.half), ttnn.float32, ttnn.ROW_MAJOR_LAYOUT)
+        self.pairs = PairPerm(mesh, self.half) if glue() else None  # ATTN_GLUE=on (P.15)
 
     def rows(self, g0: int, n: int) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         sp = self.mesh.shape[SP_AXIS]
@@ -333,13 +334,24 @@ class TtCompressor:
         ttnn.deallocate(pooled)
         n = rows // r
         cos, sin = self.rope.rows(start // r, n * self.mesh.shape[SP_AXIS])
-        lr = rope_deinterleaved(latent, cos, sin)
-        ckv = fp4_q(lr, CKV_BLOCK, e4m3_scale=True, dtype=ttnn.bfloat16)  # NUMERICS=native: a cast
-        ttnn.deallocate(lr)
+        # ATTN_GLUE=on + NUMERICS=native (P.15): fp4_q is a cast; the rope's last ops write bf16 and the re-interleave
+        # is a PairPerm matmul (bit-identical). Official: the fp4 blocks need the fp32 interleaved rows first.
+        fold = self.rope.pairs is not None and native()
+        if fold:
+            ckv = rope_deinterleaved_bf16(latent, cos, sin, self.rope.pairs)
+        else:
+            lr = rope_deinterleaved(latent, cos, sin)
+            ckv = fp4_q(lr, CKV_BLOCK, e4m3_scale=True, dtype=ttnn.bfloat16)  # NUMERICS=native: a cast
+            ttnn.deallocate(lr)
         kp = self._mm(latent, self.wk)
         ttnn.deallocate(latent)
         kn = self.k_norm(kp)
         ttnn.deallocate(kp)
+        if fold:
+            k = rope_deinterleaved_bf16(kn, cos, sin, self.rope.pairs)
+            for t in (kn, cos, sin):
+                ttnn.deallocate(t)
+            return ckv, k
         kr = rope_deinterleaved(kn, cos, sin)
         for t in (kn, cos, sin):
             ttnn.deallocate(t)

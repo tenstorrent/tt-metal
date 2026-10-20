@@ -12,6 +12,11 @@ column blocks. Then, all on the SFPU in fp32 (fp32 x fp32 eltwise never passes t
     tail [re | ro] -> ROW_MAJOR [R, 2, 32] -> transpose -> [R, 32, 2] -> [R, 64]: back to the interleaved order
                                                   (data movement only; bit-exact on device, probe in BREADCRUMBS)
 
+ATTN_GLUE=on (P.15): the interleave / de-interleave is a ``PairPerm`` 0/1 matmul on the bf16 tail instead (after
+the cast that follows every site; exact at HiFi4), and the rope's last add / subtract write bf16 directly (the same
+RNE as ttnn.typecast): ``rope_deinterleaved_bf16`` (kv, compressor), ``rope_heads(..., dtype=bf16)`` (q, indexer q,
+the attention output).
+
 cos / sin: ``RopeTable`` holds the reference's own fp32 table (torch.polar of the fp32 angles) for positions
 [0, max_seq), [1, 1, max_seq, 32] fp32 TILE, replicated, built once at load. Per chunk it is sliced on the device at
 [start, start + S) and split over the SP axis with ``ttnn.mesh_partition``, so mesh row r gets the positions of its
@@ -25,6 +30,54 @@ import torch
 import ttnn
 
 from .common import DRAM, SP_AXIS
+from .settings import settings
+
+
+def glue() -> bool:
+    """ATTN_GLUE=on (P.15): the attention / RoPE glue folded into ops (``PairPerm``, nlp_create_q_heads_split,
+    the bf16 output path; tt/settings.py)."""
+    return settings.get("ATTN_GLUE") == "on"
+
+
+class PairPerm:
+    """ATTN_GLUE=on (P.15): the rope tail's pair (de-)interleave as a 0/1 [2 half, 2 half] matmul on a bf16 tensor
+    (one nonzero product per output: exact at HiFi3 / HiFi4 for any bf16 operand; HiFi2 / LoFi drop in0's last
+    mantissa bit, probe ds41_attn_glue/probe_003), replacing the ROW_MAJOR reshape to 8-byte pages of
+    ``interleave_tail`` / ``deinterleave_tail``. ``to_inter``: [even | odd] -> interleaved (e_0, o_0, e_1, ...);
+    ``to_de``: the inverse. Load-time [1, 1, 2 half, 2 half] bf16 TILE, replicated."""
+
+    def __init__(self, mesh, half: int):
+        w = 2 * half
+        src = torch.arange(w).view(2, half).t().reshape(-1)  # interleaved column i reads [even | odd] column src[i]
+        p_inter = torch.zeros(w, w)
+        p_inter[src, torch.arange(w)] = 1.0  # out[:, i] = in[:, src[i]]
+        self.half = half
+
+        def dev(t):
+            return ttnn.from_torch(
+                t.reshape(1, 1, w, w).contiguous(),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh,
+                memory_config=DRAM,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
+            )
+
+        self.to_inter, self.to_de = dev(p_inter), dev(p_inter.t())
+        # HiFi4 + fp32 DEST: the only exact setting for a bf16 data move through the FPU (not a precision choice)
+        self.ckc = ttnn.init_device_compute_kernel_config(
+            mesh.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
+        )
+
+    def __call__(self, t: ttnn.Tensor, p: ttnn.Tensor, dtype=ttnn.bfloat16) -> ttnn.Tensor:
+        """t [..., R, 2 half] bf16 TILE -> its columns permuted by ``p`` (``to_inter`` / ``to_de``), in ``dtype``
+        (bf16 or fp32: exact either way). Does not consume ``t``."""
+        assert t.dtype == ttnn.bfloat16 and t.shape[-1] == 2 * self.half, (t.dtype, t.shape)
+        return ttnn.matmul(t, p, dtype=dtype, compute_kernel_config=self.ckc, memory_config=DRAM)
 
 
 def deinterleave_perm(width: int, rope_dim: int) -> torch.Tensor:
@@ -56,6 +109,7 @@ class RopeTable:
             )
 
         self.cos, self.sin = dev(rot.real), dev(rot.imag)
+        self.pairs = PairPerm(mesh, self.half) if glue() else None  # ATTN_GLUE=on (P.15)
 
     def rows(self, start: int, length: int) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """cos, sin of the chip row's natural block of [start, start + length): [1, 1, length / SP, R/2] fp32."""
@@ -111,6 +165,29 @@ def rope_deinterleaved(x: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> tt
     return out
 
 
+def rope_deinterleaved_bf16(x: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor, pairs: PairPerm) -> ttnn.Tensor:
+    """ATTN_GLUE=on, NUMERICS=native (P.15): ``rope_deinterleaved`` then a cast to bf16, bit for bit, with the
+    re-interleave as a ``PairPerm`` matmul on the bf16 tail (the rope's add / subtract write bf16: the same RNE as
+    ttnn.typecast, probe ds41_attn_glue/probe_001). x [1, 1, R, W] fp32 TILE -> [1, 1, R, W] bf16 TILE, interleaved
+    tail. Does not consume its inputs."""
+    rows, width, half = x.shape[-2], x.shape[-1], cos.shape[-1]
+    r0 = width - 2 * half
+    tail = ttnn.slice(x, [0, 0, 0, r0], [1, 1, rows, width], memory_config=DRAM)
+    rot = rope_heads(tail, cos, sin, dtype=ttnn.bfloat16)  # [re | ro] bf16
+    ttnn.deallocate(tail)
+    inter = pairs(rot, pairs.to_inter)
+    ttnn.deallocate(rot)
+    if r0 == 0:
+        return inter
+    head = ttnn.slice(x, [0, 0, 0, 0], [1, 1, rows, r0], memory_config=DRAM)
+    hb = ttnn.typecast(head, ttnn.bfloat16, memory_config=DRAM)
+    ttnn.deallocate(head)
+    out = ttnn.concat([hb, inter], dim=-1, memory_config=DRAM)
+    ttnn.deallocate(hb)
+    ttnn.deallocate(inter)
+    return out
+
+
 def interleave_tail(t: ttnn.Tensor, half: int) -> ttnn.Tensor:
     """[B, H, R, 2 * half] TILE whose columns are [even | odd] -> the interleaved order (e_0, o_0, e_1, ...): a
     ROW_MAJOR transpose of [2, half] per row (data movement only, exact). Does not consume ``t``."""
@@ -147,16 +224,24 @@ def deinterleave_tail(t: ttnn.Tensor, half: int) -> ttnn.Tensor:
 
 
 def rope_heads(
-    x: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor, inverse: bool = False, interleave: bool = False
+    x: ttnn.Tensor,
+    cos: ttnn.Tensor,
+    sin: ttnn.Tensor,
+    inverse: bool = False,
+    interleave: bool = False,
+    dtype=ttnn.float32,
 ) -> ttnn.Tensor:
     """RoPE of the last 2 * half columns of x [B, H, R, W] fp32 TILE (every head), held DE-interleaved ([even | odd],
     ``deinterleave_perm``), by cos / sin [1, 1, R, half] fp32 (broadcast over the heads). The reference's complex
     product term for term on the SFPU (fp32): forward re = e c - o s, ro = e s + o c; ``inverse`` (rope(...,
     inverse=True), the conjugate) re = e c + o s, ro = o c - e s. ``interleave``: return the tail in the reference's
-    interleaved order (else [re | ro]). Returns [B, H, R, W] fp32 TILE; does not consume its inputs."""
+    interleaved order (else [re | ro]). ``dtype``: what the final add / subtract write (bf16 = the fp32 result cast
+    to bf16, bit for bit; only with ``interleave`` False and no head columns, W == 2 half). Returns [B, H, R, W]
+    TILE; does not consume its inputs."""
     b, h, rows, width = x.shape
     half = cos.shape[-1]
     r0 = width - 2 * half
+    assert dtype == ttnn.float32 or (r0 == 0 and not interleave), (dtype, r0, interleave)
     xe = ttnn.slice(x, [0, 0, 0, r0], [b, h, rows, r0 + half], memory_config=DRAM)
     xo = ttnn.slice(x, [0, 0, 0, r0 + half], [b, h, rows, width], memory_config=DRAM)
 
@@ -165,11 +250,11 @@ def rope_heads(
 
     ec, os_, es, oc = mul(xe, cos), mul(xo, sin), mul(xe, sin), mul(xo, cos)
     if inverse:
-        re = ttnn.add(ec, os_, dtype=ttnn.float32, memory_config=DRAM)
-        ro = ttnn.subtract(oc, es, dtype=ttnn.float32, memory_config=DRAM)
+        re = ttnn.add(ec, os_, dtype=dtype, memory_config=DRAM)
+        ro = ttnn.subtract(oc, es, dtype=dtype, memory_config=DRAM)
     else:
-        re = ttnn.subtract(ec, os_, dtype=ttnn.float32, memory_config=DRAM)
-        ro = ttnn.add(es, oc, dtype=ttnn.float32, memory_config=DRAM)
+        re = ttnn.subtract(ec, os_, dtype=dtype, memory_config=DRAM)
+        ro = ttnn.add(es, oc, dtype=dtype, memory_config=DRAM)
     for t in (ec, os_, es, oc, xe, xo):
         ttnn.deallocate(t)
     tail = ttnn.concat([re, ro], dim=-1, memory_config=DRAM)

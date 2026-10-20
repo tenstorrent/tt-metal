@@ -37,8 +37,8 @@ import ttnn
 from .common import DRAM
 from .norm import TtDistributedRmsNorm
 from .q_a import TtAttnInProj
-from .quant import act_q
-from .rope import RopeTable, deinterleave_perm, rope_deinterleaved
+from .quant import act_q, native
+from .rope import RopeTable, deinterleave_perm, rope_deinterleaved, rope_deinterleaved_bf16
 
 
 def attn_in_weights(ck, cfg, layer: int) -> dict[str, torch.Tensor]:
@@ -71,6 +71,12 @@ class TtWindowKv:
         kn = self.norm(kv)
         ttnn.deallocate(kv)
         cos, sin = self.rope.rows(start, rows * self.mesh.shape[0])
+        if self.rope.pairs is not None and native():
+            # ATTN_GLUE=on (P.15): rope + cast to bf16 + re-interleave as a PairPerm matmul (act_q == the cast)
+            out = rope_deinterleaved_bf16(kn, cos, sin, self.rope.pairs)
+            for t in (kn, cos, sin):
+                ttnn.deallocate(t)
+            return out
         kr = rope_deinterleaved(kn, cos, sin)
         for t in (kn, cos, sin):
             ttnn.deallocate(t)
