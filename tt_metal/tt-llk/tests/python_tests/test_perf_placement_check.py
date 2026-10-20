@@ -199,3 +199,12 @@ def test_placement_only_is_not_a_failure_but_is_reported(tmp_path):
 
     assert "ℹ️ no confirmed regression, code-placement effects only" in report
     assert "### Code-placement effects (hardware): all 1" in report
+
+
+def test_nothing_measured_is_not_called_clean(tmp_path):
+    base = _side(tmp_path / "base", [_BASE] * 5)
+    cur = _side(tmp_path / "cur", [_BASE * 1.2] * 5, window="bbb", skip=("p36",))
+
+    report = render(_decide(tmp_path, base, cur), "wormhole")
+
+    assert "⚠️ no confirmed regression, 1 not re-measured" in report

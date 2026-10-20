@@ -271,10 +271,12 @@ def render(results, arch):
         verdict = f"❌ {len(by['regression'])} confirmed regression(s)"
     elif by["review"] or by["partial"]:
         verdict = f"⚠️ no confirmed regression, {len(by['review']) + len(by['partial'])} to review"
+    elif by["unmeasured"]:
+        verdict = f"⚠️ no confirmed regression, {len(by['unmeasured'])} not re-measured"
     elif by["placement"]:
         verdict = "ℹ️ no confirmed regression, code-placement effects only"
     else:
-        verdict = "✅ no regressions"
+        verdict = "✅ no confirmed regression"
     head = "| test | configuration | run type | change at positions +0 / +4 / +20 / +36 / +52 B | loop code changed in |"
     rule = "|---|---|---|---|---|"
     lines = [
