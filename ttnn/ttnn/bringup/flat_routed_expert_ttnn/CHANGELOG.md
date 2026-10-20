@@ -145,3 +145,12 @@ shapes, mesh, row-major y).
   mesh (K-52); alone with --no-precompile: 1 passed (min PCC 0.99804). So: the baseline's 26 / 13.
 - Needed by: deepseek_v41_flash_d_p P.8 (tt/weighted_combine.py)
 - Files: flat_routed_expert.{hpp,cpp}, flat_routed_expert_nanobind.cpp
+
+### se5_recv: drain the write command buffer before polling a transaction id (from Marko Staletovic's 318b7ca5403)
+- What: the x and h chains wait for `noc_cmd_buf_ready(noc_index, write_cmd_buf)` before
+  `ncrisc_noc_nonposted_write_with_transaction_id_flushed`; right after issuing, the last write can still sit in the
+  command buffer and its id reads "done" (stale x / h, ~1 in 1e5 calls; his stress: 1.0M calls bit-exact after).
+  Only this fix is taken from that commit (not the unicast x snakes: they reuse gate/up semaphores 2/3 that the
+  DeepSeek-V4.1 routing_weights / fp8_act_quant path uses). Always on (a bug fix).
+- Needed by: deepseek_v41_flash_d_p (2026-10-20, overseer), test_ds41_h_options 7/7.
+- Files: device/kernels/se5_recv.cpp
