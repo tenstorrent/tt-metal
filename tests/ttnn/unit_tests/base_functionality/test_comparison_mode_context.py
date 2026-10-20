@@ -1611,7 +1611,6 @@ def test_linear_in0_column_offset_in_comparison_mode(device):
         fuse_batch=True,
     )
 
-    # The op multiplies only the 64 columns starting at in0_column_offset; the golden multiplied the whole width.
     with comparison_mode():
         output_tensor = ttnn.linear(
             _to_device(wide, device), _to_device(weight, device), program_config=program_config, in0_column_offset=64

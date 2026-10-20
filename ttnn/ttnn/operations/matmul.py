@@ -83,7 +83,6 @@ def _golden_function(
     import torch
 
     if in0_column_offset is not None:
-        # The op reads only K columns of a wider input_tensor_a, starting at in0_column_offset.
         k = input_tensor_b.shape[-1] if transpose_b else input_tensor_b.shape[-2]
         input_tensor_a = input_tensor_a[..., in0_column_offset : in0_column_offset + k]
     if transpose_a:
