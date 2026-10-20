@@ -25,6 +25,7 @@ from ....models.transformers.minimax_h3.sol_qblock_ref import (
     max_page_blocks,
     page_stats,
     qblock_mask,
+    score_blocks,
     sol_attention,
     spec_constants,
     spec_mask,
@@ -162,6 +163,70 @@ def test_diagonal_threshold_is_not_the_papers_threshold():
     differing = (full != diag)[..., valid].float().mean().item()
     print(f"\n  full-cov vs diag threshold: {differing:.4%} of block decisions differ")
     assert full.shape == diag.shape
+
+
+# Production operating point: density 0.10-0.15 (lead, 2026-10-20), NOT the 0.33 earlier notes assumed.
+# The OR ratio is bounded by 1/density, so at the small test geometry's 0.58 it cannot exceed 1.76x however
+# independent the Q blocks are -- the device's 1.03x was measured against a ceiling, not against 3.4x.
+PROD_DENSITY = (0.10, 0.15)
+
+
+def _big_setup(seed=0, rows=2048, shards=4, heads=2, dim=64, q_chunk=256):
+    """Larger geometry for density questions: 32 blocks/shard x 4 shards = 128 global blocks, TQ = 4.
+
+    The default _setup has 4 blocks per shard, far too few for 'do adjacent Q blocks pick the same blocks' to
+    mean anything -- with that few candidates they must agree. Production has 144+ per shard.
+    """
+    geo = SolGeometry(shards=shards, rows=rows, logical_n=shards * rows, q_chunk=q_chunk, k_chunk=512)
+    consts = spec_constants(geo, scale=dim**-0.5)  # forcing rules off; they floor density and compress the ratio
+    g = torch.Generator().manual_seed(seed)
+    shape = (shards, heads, rows, dim)
+    return geo, consts, torch.randn(shape, generator=g) * 0.5, torch.randn(shape, generator=g) * 0.5, torch.randn(shape, generator=g)
+
+
+def _or_ratio(q, k, v, geo, consts, *, tau, scale, thresh_type):
+    e = score_blocks(q, k, v, geo, consts, tau=tau, scale=scale, thresh_type=thresh_type)["exact"]
+    c = ((e.transpose(2, 3) @ consts["qc_pool_t"]).transpose(2, 3) > 0.5).float() * consts["full_row"]
+    valid = consts["full_row"].reshape(-1) > 0.5
+    s_blk, s_chk = e[..., valid].mean().item(), c[..., valid].mean().item()
+    return s_blk, s_chk, s_chk / max(s_blk, 1e-9)
+
+
+@pytest.mark.parametrize("thresh_type", ["diag", "full"])
+def test_or_cost_at_production_density(thresh_type):
+    """THE decision measurement for Q1-Q3: what does the Q-OR cost where the model actually runs?
+
+    Sweeps tau to find the production band (density 0.10-0.15) and reports the OR ratio there, under both the
+    device's diagonal threshold and the paper's full-covariance one. Three confounds are removed versus the
+    device run that produced 1.03x:
+
+    * density -- 1.03x was measured at 0.58, where the ratio cannot exceed 1/0.58 = 1.76x by arithmetic;
+    * geometry -- 4 blocks per shard forces agreement, this uses 32;
+    * forcing rules -- band/sink/prefix/force-block-0 floor density and compress the ratio; off here.
+
+    If the ratio is still near 1 at density 0.10-0.15 with 32 blocks per shard, the Q blocks genuinely agree and
+    Q1-Q3 buys nothing. If it approaches the independence bound 1/(1-(1-s)^TQ)/s, the OR is expensive and the
+    rewrite is justified. This test reports; it does not judge.
+    """
+    geo, consts, q, k, v = _big_setup()
+    scale = q.shape[-1] ** -0.5
+    tq = geo.q_chunk // geo.block
+    print(f"\n  thresh={thresh_type}  TQ={tq}  blocks/shard={geo.nb}  shards={geo.shards}")
+    in_band = []
+    for tau in (0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 4.0):
+        s_blk, s_chk, ratio = _or_ratio(q, k, v, geo, consts, tau=tau, scale=scale, thresh_type=thresh_type)
+        indep = (1.0 - (1.0 - s_blk) ** tq) / max(s_blk, 1e-9)
+        flag = ""
+        if PROD_DENSITY[0] <= s_blk <= PROD_DENSITY[1]:
+            flag = "  <-- production band"
+            in_band.append((tau, s_blk, ratio, indep))
+        print(
+            f"    tau {tau:4.1f}:  s(block) {s_blk:.4f}  s(chunk) {s_chk:.4f}  "
+            f"OR cost {ratio:.2f}x  (independent would be {indep:.2f}x, ceiling {1/max(s_blk,1e-9):.1f}x){flag}"
+        )
+    assert in_band, "no tau reached the production density band; widen the sweep"
+    for tau, s_blk, ratio, indep in in_band:
+        assert 1.0 - 1e-6 <= ratio <= indep + 1e-6, f"ratio {ratio} outside [1, {indep}] at tau {tau}"
 
 
 def test_forcing_rules_only_add_blocks():
