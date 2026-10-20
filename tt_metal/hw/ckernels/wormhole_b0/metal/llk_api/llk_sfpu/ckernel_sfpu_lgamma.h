@@ -105,7 +105,7 @@ inline void calculate_lgamma_stirling_fp32(
             sfpi::vFloat q = PolynomialEvaluator::eval(t, c0, c1, c2, c3, c4, c5, c6, c7);
             res = p * q - sub;
         }
-        v_elseif(z < 2.5f) {
+        v_elseif(z < 2.2f) {
             // Taylor Expansion around z=2 (d2 = z - 2.0)
             constexpr float q0 = 0.42278434f;   // 1 - gamma
             constexpr float q1 = 0.32246703f;   // (zeta(2)-1)/2
