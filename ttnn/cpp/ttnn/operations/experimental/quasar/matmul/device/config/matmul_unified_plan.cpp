@@ -491,9 +491,9 @@ std::optional<MatmulUnifiedPlan> plan_unified_matmul(
             subblock_M_tiles,
             subblock_N_tiles,
             base.K_tiles);
-        const bool borrows_A_with_one_K_chunk =
+        const bool single_K_chunk_allows_A_borrow =
             !config.K_chunk_tiles.has_value() && candidate.borrow_A && dfbs_fit(candidate, l1_budget);
-        if (!borrows_A_with_one_K_chunk) {
+        if (!single_K_chunk_allows_A_borrow) {
             const uint32_t K_chunk_cap = C_slice_M_tiles * C_slice_N_tiles > SMALL_C_SLICE_TILES
                                              ? MAX_AUTO_K_CHUNK_TILES
                                              : std::max(MAX_AUTO_K_CHUNK_TILES, base.K_tiles / min_K_chunks);
