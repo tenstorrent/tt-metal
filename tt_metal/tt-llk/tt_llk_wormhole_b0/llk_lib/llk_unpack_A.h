@@ -313,6 +313,9 @@ inline void _llk_unpack_A_init_(
     LLK_ASSERT(
         BType != BroadcastType::COL || num_faces == 4 || (!acc_to_dest && !should_unpack_to_dest(unpack_to_dest, unpack_src_format, unpack_dst_format)),
         "Unary Broadcast Column: tiles other than 32x32 need no acc_to_dest and no unpack to dest");
+    // Row broadcast with acc_to_dest keeps the 32x32 MOP and has no test for other tiles. (Scalar
+    // broadcast with acc_to_dest is rejected by a static_assert in _llk_unpack_A_mop_config_.)
+    LLK_ASSERT(BType != BroadcastType::ROW || !acc_to_dest || num_faces == 4, "Unary Broadcast Row with acc_to_dest: 32x32 only");
     LLK_ASSERT(transpose_of_faces == 0 || face_r_dim == 16, "Partial faces are not supported for transpose datacopy, face_r_dim must be 16 rows");
     LLK_ASSERT(
         is_unpacker_format_conversion_supported_dest(static_cast<DataFormat>(unpack_src_format), static_cast<DataFormat>(unpack_dst_format), unpack_to_dest),
