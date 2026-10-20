@@ -17,6 +17,7 @@
 #include <limits>
 #include <map>
 #include <optional>
+#include <set>
 #include <memory>
 #include <string>
 #include <tuple>
@@ -47,7 +48,6 @@
 #include <tt-metalium/tile.hpp>
 #include <umd/device/types/arch.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
-#include <tt-metalium/int8.hpp>
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 namespace tt::tt_metal {
@@ -63,6 +63,9 @@ namespace unit_tests::sfpu_util {
 const map<std::string, std::map<std::string, std::string>> sfpu_op_to_op_name = {
     // FIXME: #1157
     {"relu", {{"SFPU_OP_CHAIN_0", "relu_tile_init(); relu_tile(0);"}}},
+    // No SFPU chain: copy_tile / copy_block then pack_tile only, golden = input. Used by the DEST-index tests, whose
+    // tiles sit at non-zero DEST indices that the tile-0 chains above would not touch.
+    {"datacopy", {}},
     {"relu_min", {{"SFPU_OP_CHAIN_0", "relu_min_tile_init(); relu_min_tile(0, 0x40A33333u);"}}},  // 5.1f
     {"relu_max", {{"SFPU_OP_CHAIN_0", "relu_max_tile_init(); relu_max_tile(0, 0x40A33333u);"}}},  // 5.1f
     {"exponential", {{"SFPU_OP_CHAIN_0", "exp_tile_init(); exp_tile(0);"}}},
@@ -189,6 +192,20 @@ const map<std::string, std::map<std::string, std::string>> sfpu_op_to_op_name = 
     {"log_with_base", {{"SFPU_OP_CHAIN_0", "log_with_base_tile_init(); log_with_base_tile(0, 0x3EDE5BD9u);"}}},
     {"tiled_prod", {{"SFPU_OP_CHAIN_0", "tiled_prod_tile_init(); tiled_prod_tile(0);"}}},
     {"alt_complex_rotate90", {{"SFPU_OP_CHAIN_0", "alt_complex_rotate90_tile_init(); alt_complex_rotate90_tile(0);"}}},
+    {"abs", {{"SFPU_OP_CHAIN_0", "abs_tile_init(); abs_tile(0);"}}},
+    {"fill", {{"SFPU_OP_FILL_INCLUDE", "1"}, {"SFPU_OP_CHAIN_0", "fill_tile_init(); fill_tile(0, 5.0f);"}}},
+    // Trigonometry family (api/compute/eltwise_unary/trigonometry.h).
+    {"sin", {{"SFPU_OP_TRIG_FAMILY_INCLUDE", "1"}, {"SFPU_OP_CHAIN_0", "sin_tile_init(); sin_tile(0);"}}},
+    {"cos", {{"SFPU_OP_TRIG_FAMILY_INCLUDE", "1"}, {"SFPU_OP_CHAIN_0", "cos_tile_init(); cos_tile(0);"}}},
+    {"tan", {{"SFPU_OP_TRIG_FAMILY_INCLUDE", "1"}, {"SFPU_OP_CHAIN_0", "tan_tile_init(); tan_tile(0);"}}},
+    {"asin", {{"SFPU_OP_TRIG_FAMILY_INCLUDE", "1"}, {"SFPU_OP_CHAIN_0", "asin_tile_init(); asin_tile(0);"}}},
+    {"acos", {{"SFPU_OP_TRIG_FAMILY_INCLUDE", "1"}, {"SFPU_OP_CHAIN_0", "acos_tile_init(); acos_tile(0);"}}},
+    {"atan", {{"SFPU_OP_TRIG_FAMILY_INCLUDE", "1"}, {"SFPU_OP_CHAIN_0", "atan_tile_init(); atan_tile(0);"}}},
+    {"sinh", {{"SFPU_OP_TRIG_FAMILY_INCLUDE", "1"}, {"SFPU_OP_CHAIN_0", "sinh_tile_init(); sinh_tile(0);"}}},
+    {"cosh", {{"SFPU_OP_TRIG_FAMILY_INCLUDE", "1"}, {"SFPU_OP_CHAIN_0", "cosh_tile_init(); cosh_tile(0);"}}},
+    {"asinh", {{"SFPU_OP_TRIG_FAMILY_INCLUDE", "1"}, {"SFPU_OP_CHAIN_0", "asinh_tile_init(); asinh_tile(0);"}}},
+    {"acosh", {{"SFPU_OP_TRIG_FAMILY_INCLUDE", "1"}, {"SFPU_OP_CHAIN_0", "acosh_tile_init(); acosh_tile(0);"}}},
+    {"atanh", {{"SFPU_OP_TRIG_FAMILY_INCLUDE", "1"}, {"SFPU_OP_CHAIN_0", "atanh_tile_init(); atanh_tile(0);"}}},
 };
 
 // digamma / trigamma in double: recurrence up to x >= 6, then the asymptotic series.
@@ -232,7 +249,7 @@ bool is_exact_unary_sfpu_op(const std::string& op_name) {
     return op_name == "ceil" || op_name == "floor" || op_name == "trunc" || op_name == "frac" || op_name == "round" ||
            op_name == "isinf" || op_name == "isposinf" || op_name == "isneginf" || op_name == "isnan" ||
            op_name == "isfinite" || op_name == "logical_not" || op_name == "heaviside" || op_name == "identity" ||
-           op_name.starts_with("unary_");
+           op_name == "abs" || op_name == "fill" || op_name.starts_with("unary_");
 }
 
 // Binary SFPU ops driven by `run_sfpu_binary_two_input_buffer`.
@@ -404,6 +421,27 @@ const map<std::string, std::map<std::string, std::string>> sfpu_binary_op_to_op_
      {{"SFPU_OP_MASK_INCLUDE", "1"},
       {"SFPU_OP_INIT_0", "mask_tile_init();"},
       {"SFPU_OP_CHAIN_0", "mask_tile(0, 1, DataFormat::Int32);"}}},
+    // DST[0] shifted by DST[1]; an amount outside [0, 32) gives 0.
+    {"left_shift_binary",
+     {{"SFPU_OP_BINARY_SHIFT_INCLUDE", "1"},
+      {"SFPU_OP_INIT_0", "binary_shift_tile_init();"},
+      {"SFPU_OP_CHAIN_0", "binary_left_shift_tile<DataFormat::Int32>(0, 1, 0);"}}},
+    {"right_shift_binary",
+     {{"SFPU_OP_BINARY_SHIFT_INCLUDE", "1"},
+      {"SFPU_OP_INIT_0", "binary_shift_tile_init();"},
+      {"SFPU_OP_CHAIN_0", "binary_right_shift_tile<DataFormat::Int32>(0, 1, 0);"}}},
+    {"logical_right_shift_binary",
+     {{"SFPU_OP_BINARY_SHIFT_INCLUDE", "1"},
+      {"SFPU_OP_INIT_0", "binary_shift_tile_init();"},
+      {"SFPU_OP_CHAIN_0", "binary_logical_right_shift_tile<DataFormat::Int32>(0, 1, 0);"}}},
+    {"logaddexp_binary",
+     {{"SFPU_OP_BINARY_LOGADDEXP_INCLUDE", "1"},
+      {"SFPU_OP_INIT_0", "logaddexp_binary_tile_init();"},
+      {"SFPU_OP_CHAIN_0", "logaddexp_binary_tile(0, 1, 0);"}}},
+    {"logaddexp2_binary",
+     {{"SFPU_OP_BINARY_LOGADDEXP_INCLUDE", "1"},
+      {"SFPU_OP_INIT_0", "logaddexp2_binary_tile_init();"},
+      {"SFPU_OP_CHAIN_0", "logaddexp2_binary_tile(0, 1, 0);"}}},
 };
 
 // ---- Tile-layout ops (goldens mirror the tt-llk SFPU tests' UnarySFPUGolden) --------------------
@@ -523,6 +561,11 @@ const map<std::string, std::map<std::string, std::string>> sfpu_int32_unary_op_t
      {{"SFPU_OP_INT_SUM_INCLUDE", "1"}, {"SFPU_OP_CHAIN_0", "sfpu_sum_int_init(); sfpu_sum_int_col(0);"}}},
     {"sum_int_row",
      {{"SFPU_OP_INT_SUM_INCLUDE", "1"}, {"SFPU_OP_CHAIN_0", "sfpu_sum_int_init(); sfpu_sum_int_row(0);"}}},
+    {"abs_int32",
+     {{"SFPU_OP_COMPUTE_KERNEL_API_INCLUDE", "1"}, {"SFPU_OP_CHAIN_0", "abs_tile_init(); abs_tile_int32(0);"}}},
+    {"fill_int32",
+     {{"SFPU_OP_FILL_INCLUDE", "1"},
+      {"SFPU_OP_CHAIN_0", "fill_tile_init(); fill_tile_int<DataFormat::Int32>(0, 5u);"}}},
 };
 
 int32_t int32_unary_result(const std::string& op_name, int32_t x) {
@@ -547,15 +590,25 @@ int32_t int32_unary_result(const std::string& op_name, int32_t x) {
     if (op_name == "logical_not_int32") {
         return x == 0 ? 1 : 0;
     }
+    if (op_name == "abs_int32") {
+        return x < 0 ? -x : x;
+    }
+    if (op_name == "fill_int32") {
+        return 5;
+    }
     TT_THROW("Unsupported int unary op_name in test");
 }
 
 // Int8 binary ops whose operands stay non-negative (see generate_non_negative_int8_binary_inputs).
+bool is_binary_shift_op(const std::string& op_name) {
+    return op_name == "left_shift_binary" || op_name == "right_shift_binary" || op_name == "logical_right_shift_binary";
+}
+
 bool is_non_negative_int8_binary_op(const std::string& op_name) {
     return op_name == "add_top_row_int32" || op_name == "div_int32_floor" || op_name == "div_int32_trunc" ||
            op_name == "div_int32" || op_name == "fmod_int32" || op_name == "remainder_int32" ||
            op_name == "bitwise_and_binary" || op_name == "bitwise_or_binary" || op_name == "bitwise_xor_binary" ||
-           op_name == "rsub_int" || op_name == "sfpu_add_int" || op_name == "int_mask";
+           op_name == "rsub_int" || op_name == "sfpu_add_int" || op_name == "int_mask" || is_binary_shift_op(op_name);
 }
 
 // Rows 0-3 of faces 0 and 1 in tile order: what sfpu_add_top_row writes (see ckernel_sfpu_add_top_row.h).
@@ -577,11 +630,24 @@ std::pair<vector<uint32_t>, vector<uint32_t>> generate_non_negative_int8_binary_
     }
     std::uniform_int_distribution<int> lhs_dist(0, is_rsub ? 63 : 127);
     std::uniform_int_distribution<int> rhs_dist(rhs_min, masks ? 1 : 127);
+    // Shift amounts: [0, 24] keeps 127 << amount below 2**31, so the result stays non-negative; one
+    // lane in eight takes an out-of-range amount in [32, 127], which gives 0.
+    std::uniform_int_distribution<int> shift_dist(0, 24);
+    std::uniform_int_distribution<int> out_of_range_shift_dist(32, 127);
+    const bool shifts = is_binary_shift_op(op_name);
     const size_t words = (numel + 3) / 4;
     vector<uint32_t> lhs(words, 0), rhs(words, 0);
     for (size_t i = 0; i < numel; ++i) {
         lhs[i / 4] |= static_cast<uint32_t>(lhs_dist(rng)) << (8 * (i % 4));
-        rhs[i / 4] |= static_cast<uint32_t>(rhs_dist(rng)) << (8 * (i % 4));
+        int rhs_value = 0;
+        if (!shifts) {
+            rhs_value = rhs_dist(rng);
+        } else if (i % 8 == 7) {
+            rhs_value = out_of_range_shift_dist(rng);
+        } else {
+            rhs_value = shift_dist(rng);
+        }
+        rhs[i / 4] |= static_cast<uint32_t>(rhs_value) << (8 * (i % 4));
     }
     return {lhs, rhs};
 }
@@ -598,8 +664,17 @@ bool is_int8_binary_sfpu_op(const std::string& op_name) {
 // two data-format paths stay in sync.
 float sfpu_function(const std::string& op_name, float input) {
     const double d = input;  // for the goldens computed in double
+    if (op_name == "datacopy") {
+        return input;
+    }
     if (op_name == "relu") {
         return fmaxf(input, 0.0f);
+    }
+    if (op_name == "abs") {
+        return std::fabs(input);
+    }
+    if (op_name == "fill") {
+        return 5.0f;
     }
     if (op_name == "relu_min") {
         return fmaxf(input, 5.1f);
@@ -810,6 +885,39 @@ float sfpu_function(const std::string& op_name, float input) {
     if (op_name == "softcap") {
         return static_cast<float>(5.0 * std::tanh(d / 5.0));
     }
+    if (op_name == "sin") {
+        return static_cast<float>(std::sin(d));
+    }
+    if (op_name == "cos") {
+        return static_cast<float>(std::cos(d));
+    }
+    if (op_name == "tan") {
+        return static_cast<float>(std::tan(d));
+    }
+    if (op_name == "asin") {
+        return static_cast<float>(std::asin(d));
+    }
+    if (op_name == "acos") {
+        return static_cast<float>(std::acos(d));
+    }
+    if (op_name == "atan") {
+        return static_cast<float>(std::atan(d));
+    }
+    if (op_name == "sinh") {
+        return static_cast<float>(std::sinh(d));
+    }
+    if (op_name == "cosh") {
+        return static_cast<float>(std::cosh(d));
+    }
+    if (op_name == "asinh") {
+        return static_cast<float>(std::asinh(d));
+    }
+    if (op_name == "acosh") {
+        return static_cast<float>(std::acosh(d));
+    }
+    if (op_name == "atanh") {
+        return static_cast<float>(std::atanh(d));
+    }
     if (op_name == "unary_ne") {
         return input != 0.5f ? 1.0f : 0.0f;
     }
@@ -917,6 +1025,12 @@ bfloat16 sfpu_binary_function(const std::string& op_name, const bfloat16& lhs_bf
     if (op_name == "add_top_row") {
         return bfloat16(lhs + rhs);  // top rows only; the caller restores the rest
     }
+    if (op_name == "logaddexp_binary") {
+        return bfloat16(static_cast<float>(std::max(a, b) + std::log1p(std::exp(-std::fabs(a - b)))));
+    }
+    if (op_name == "logaddexp2_binary") {
+        return bfloat16(static_cast<float>(std::max(a, b) + std::log2(1.0 + std::exp2(-std::fabs(a - b)))));
+    }
     TT_THROW("Unsupported binary op_name in test");
 }
 
@@ -1023,6 +1137,13 @@ int32_t get_binary_int_operation_result(const std::string& op_name, int lhs, int
     if (op_name == "int_mask") {
         return rhs == 0 ? 0 : lhs;
     }
+    if (is_binary_shift_op(op_name)) {
+        // Non-negative operands: the arithmetic and logical right shifts agree.
+        if (rhs < 0 || rhs >= 32) {
+            return 0;
+        }
+        return op_name == "left_shift_binary" ? static_cast<int32_t>(static_cast<uint32_t>(lhs) << rhs) : lhs >> rhs;
+    }
     TT_THROW("Unsupported int8 binary op_name in test");
 }
 
@@ -1071,6 +1192,27 @@ vector<uint32_t> generate_packed_sfpu_input(const unsigned int numel, const std:
     if (op_name == "erfinv") {
         return uniform(-0.95f, 0.95f);
     }
+    // Trigonometry: each op's domain, as in the tt-llk SFPU tests (helpers/sfpu_domains.py).
+    if (op_name == "sin" || op_name == "cos") {
+        return uniform(-3.14f, 3.14f);
+    }
+    if (op_name == "tan") {
+        // Inside the poles at +-pi/2.
+        return uniform(-1.3f, 1.3f);
+    }
+    if (op_name == "asin" || op_name == "acos" || op_name == "atanh") {
+        return uniform(-0.95f, 0.95f);
+    }
+    if (op_name == "atan" || op_name == "asinh") {
+        return uniform(-10.0f, 10.0f);
+    }
+    if (op_name == "sinh" || op_name == "cosh") {
+        return uniform(-5.0f, 5.0f);
+    }
+    if (op_name == "acosh") {
+        // x >= 1; clear of x ~ 1, where the result's slope is unbounded.
+        return uniform(1.1f, 10.0f);
+    }
     if (op_name == "lgamma_stirling" || op_name == "digamma" || op_name == "polygamma") {
         return uniform(0.5f, 8.0f);
     }
@@ -1112,7 +1254,7 @@ vector<uint32_t> generate_packed_sfpu_input(const unsigned int numel, const std:
     if (op_name == "celu" || op_name == "elu" || op_name == "selu" || op_name == "softshrink" ||
         op_name == "hardshrink" || op_name == "hardtanh" || op_name == "erf" || op_name == "erfc" ||
         op_name == "identity" || op_name == "hardmish" || op_name == "prelu" || op_name == "tanhshrink" ||
-        op_name == "xielu" || op_name == "power") {
+        op_name == "xielu" || op_name == "power" || op_name == "abs" || op_name == "fill") {
         return uniform(-3.0f, 3.0f);
     }
     if (op_name == "tiled_prod") {
@@ -1225,6 +1367,17 @@ std::pair<vector<uint32_t>, vector<uint32_t>> generate_packed_sfpu_binary_inputs
     if (op_name == "add_top_row") {
         return {uniform(-4.0f, 4.0f, seed), uniform(-4.0f, 4.0f, seed + 1)};
     }
+    if (op_name == "logaddexp_binary" || op_name == "logaddexp2_binary") {
+        // Past the point where the composed log(exp(a) + exp(b)) overflows (|x| > 88.7, resp. 127).
+        // Every fourth RHS lane copies its LHS: equal inputs give max + ln 2, resp. + 1.
+        auto lhs = uniform(-200.0f, 200.0f, seed);
+        auto rhs = unpack_vector<bfloat16, uint32_t>(uniform(-200.0f, 200.0f, seed + 1));
+        const auto lhs_values = unpack_vector<bfloat16, uint32_t>(lhs);
+        for (size_t i = 0; i < rhs.size(); i += 4) {
+            rhs[i] = lhs_values[i];
+        }
+        return {lhs, pack_vector<uint32_t, bfloat16>(rhs)};
+    }
     if (op_name == "div_binary" || op_name == "mul_float") {
         // Reuse the div operand generator: values in [-4,-0.25] ∪ [0.25,4]. For mul this
         // is simply well-conditioned, finite bf16 input with independent lhs/rhs signs.
@@ -1243,8 +1396,8 @@ std::pair<vector<uint32_t>, vector<uint32_t>> generate_packed_sfpu_binary_inputs
         return {lhs, rhs};
     }
     if (is_int8_binary_sfpu_op(op_name)) {
-        auto lhs = create_random_vector_of_int8(numel, seed);
-        auto rhs = create_random_vector_of_int8(numel, seed + 1);
+        auto lhs = tt::test_utils::create_random_vector_of_int8(numel, seed);
+        auto rhs = tt::test_utils::create_random_vector_of_int8(numel, seed + 1);
         return {lhs, rhs};
     }
     TT_THROW("Unsupported binary op_name in test");
@@ -1289,7 +1442,7 @@ std::pair<float, float> sfpu_tolerance(const std::string& op_name, bool fp32_des
     if (op_name == "tanh") {
         return {0.175f, 0.1f};
     }
-    if ((op_name == "gelu") || (op_name == "relu")) {
+    if ((op_name == "gelu") || (op_name == "relu") || (op_name == "relu_min") || (op_name == "relu_max")) {
         return {0.15f, 0.001f};
     }
     if (op_name == "gelu_accurate") {
@@ -1569,6 +1722,14 @@ struct SfpuConfig {
     bool unpack_to_dest =
         false;  // route input DFB to Dest (unpack_modes=UnpackToDest); pair with en_32bit_dest for 32-bit Dest
     bool en_32bit_dest = false;
+    size_t out_dfb_entries = 0;        // 0 = num_tiles; fewer entries make the packer wait on the writer (pack back-pressure)
+    // DEST placement (unary path of eltwise_sfpu_2_0.cpp). dst_tile_start: DEST index the tile(s) land at and are
+    // packed back from. section_ntiles > 0: one DEST section of that many tiles per tile_regs_acquire instead of one
+    // tile, placed with one copy_block, or with one copy_tile per tile when section_use_copy_tile is set. Section
+    // mode needs sfpu_op = "datacopy": the SFPU chains all target DEST tile 0.
+    size_t dst_tile_start = 0;
+    size_t section_ntiles = 0;
+    bool section_use_copy_tile = false;
 };
 
 // Builds a DataflowBufferSpec. `entry_size` is derived from `fmt` so that input and output
@@ -1637,8 +1798,11 @@ std::vector<uint32_t> run_sfpu_pipeline(
 
     const experimental::DataflowBufferSpec in_dfb_spec =
         make_dfb_spec(IN_DFB, test_config, test_config.l1_input_data_format);
-    const experimental::DataflowBufferSpec out_dfb_spec =
+    experimental::DataflowBufferSpec out_dfb_spec =
         make_dfb_spec(OUT_DFB, test_config, test_config.l1_output_data_format);
+    if (test_config.out_dfb_entries != 0) {
+        out_dfb_spec.num_entries = static_cast<uint32_t>(test_config.out_dfb_entries);
+    }
 
     experimental::DataMovementHardwareConfig reader_hw_config;
     if (mesh_device.arch() == tt::ARCH::QUASAR) {
@@ -1718,11 +1882,31 @@ std::vector<uint32_t> run_sfpu_pipeline(
         .unpack_modes = unpack_modes,
     };
 
+    // DEST placement knobs, see SfpuConfig. In section mode the compute kernel handles section_ntiles tiles per
+    // tile_regs_acquire, so it loops num_tiles / section_ntiles times.
+    std::map<std::string, std::string> compute_defines = defines;
+    if (test_config.dst_tile_start != 0) {
+        compute_defines["DST_TILE_START"] = std::to_string(test_config.dst_tile_start);
+    }
+    if (test_config.section_ntiles != 0) {
+        TT_FATAL(
+            test_config.num_tiles % test_config.section_ntiles == 0,
+            "num_tiles ({}) must be a multiple of section_ntiles ({})",
+            test_config.num_tiles,
+            test_config.section_ntiles);
+        compute_defines["SECTION_NTILES"] = std::to_string(test_config.section_ntiles);
+        if (test_config.section_use_copy_tile) {
+            compute_defines["SECTION_USE_COPY_TILE"] = "1";
+        }
+    }
+    const uint32_t per_core_block_cnt = static_cast<uint32_t>(
+        test_config.section_ntiles != 0 ? test_config.num_tiles / test_config.section_ntiles : test_config.num_tiles);
+
     experimental::KernelSpec compute_spec{
         .unique_id = COMPUTE,
         .source = "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_sfpu_2_0.cpp",
         .num_threads = 1,
-        .compiler_options = {.defines = to_kernel_defines(defines)},
+        .compiler_options = {.defines = to_kernel_defines(compute_defines)},
         .dfb_bindings =
             {{
                  .dfb_spec_name = IN_DFB,
@@ -1736,8 +1920,7 @@ std::vector<uint32_t> run_sfpu_pipeline(
                  .endpoint_type = experimental::DFBEndpointType::PRODUCER,
                  .access_pattern = experimental::DFBAccessPattern::STRIDED,
              }},
-        .compile_time_args =
-            {{"per_core_block_cnt", static_cast<uint32_t>(test_config.num_tiles)}, {"per_core_block_size", 1u}},
+        .compile_time_args = {{"per_core_block_cnt", per_core_block_cnt}, {"per_core_block_size", 1u}},
         .hw_config = compute_hw_config,
     };
 
@@ -1786,6 +1969,33 @@ std::vector<uint32_t> run_sfpu_pipeline(
     return dest_buffer_data;
 }
 
+// Triage for an fp32 unpack-to-dest mismatch: per output tile, the fraction of words equal to every golden tile (g) and
+// every input tile (in), plus the zero count. "tile t == g(t+1)" means the next section overwrote this one before pack
+// read it; "== in(t)" means the SFPU did not touch it; all near 0 means garbage.
+void log_fp32_tile_match_fractions(
+    const std::vector<uint32_t>& dest_buffer_data,
+    const std::vector<uint32_t>& packed_golden,
+    const std::vector<uint32_t>& packed_input,
+    size_t num_tiles) {
+    constexpr size_t wpt = tt::constants::TILE_HW;
+    for (size_t t = 0; t < num_tiles; ++t) {
+        std::string line;
+        for (size_t j = 0; j < num_tiles; ++j) {
+            size_t eq_g = 0, eq_in = 0;
+            for (size_t i = 0; i < wpt; ++i) {
+                eq_g += (dest_buffer_data[t * wpt + i] == packed_golden[j * wpt + i]);
+                eq_in += (dest_buffer_data[t * wpt + i] == packed_input[j * wpt + i]);
+            }
+            line += fmt::format(" g{}={:.2f} in{}={:.2f}", j, double(eq_g) / wpt, j, double(eq_in) / wpt);
+        }
+        size_t zeros = 0;
+        for (size_t i = 0; i < wpt; ++i) {
+            zeros += (dest_buffer_data[t * wpt + i] == 0);
+        }
+        log_info(tt::LogTest, "fp32 out tile {} match fractions:{} zeros={}/{}", t, line, zeros, wpt);
+    }
+}
+
 /// @brief Does Dram --> Reader --> CB --> Sfpu Compute --> CB --> Writer --> Dram. So far, enqueue APIs only added to
 /// grayskull
 /// @param device
@@ -1798,7 +2008,9 @@ bool run_sfpu_all_same_buffer(distributed::MeshDevice& mesh_device, const SfpuCo
     const bool is_fp32 = (test_config.l1_input_data_format == tt::DataFormat::Float32);
     const bool is_relu_family =
         test_config.sfpu_op == "relu" || test_config.sfpu_op == "relu_min" || test_config.sfpu_op == "relu_max";
-    TT_FATAL(!is_fp32 || is_relu_family, "Float32 SFPU path supports relu / relu_min / relu_max only in v1");
+    TT_FATAL(
+        !is_fp32 || is_relu_family || test_config.sfpu_op == "datacopy",
+        "Float32 SFPU path supports relu / relu_min / relu_max / datacopy only in v1");
     const size_t element_size = is_fp32 ? sizeof(float) : sizeof(bfloat16);
     const size_t numel = byte_size / element_size;
     const int seed = sfpu_test_seed;
@@ -1858,8 +2070,12 @@ bool run_sfpu_all_same_buffer(distributed::MeshDevice& mesh_device, const SfpuCo
     sfpu_defines["SFPU_OP_UNARY_COMP_INCLUDE"] = "1";
 
     const auto dest_buffer_data = run_sfpu_pipeline(mesh_device, test_config, sfpu_defines, packed_input);
-    return is_fp32 ? sfpu_util::is_close_packed_sfpu_output_f32(dest_buffer_data, packed_golden, test_config.sfpu_op)
-                   : sfpu_util::is_close_packed_sfpu_output(dest_buffer_data, packed_golden, test_config.sfpu_op);
+    const bool ok = is_fp32 ? sfpu_util::is_close_packed_sfpu_output_f32(dest_buffer_data, packed_golden, test_config.sfpu_op)
+                            : sfpu_util::is_close_packed_sfpu_output(dest_buffer_data, packed_golden, test_config.sfpu_op);
+    if (!ok && is_fp32) {
+        log_fp32_tile_match_fractions(dest_buffer_data, packed_golden, packed_input, test_config.num_tiles);
+    }
+    return ok;
 }
 
 /// Int32 unary SFPU ops: Int8 L1 (non-negative) -> 32-bit Dest -> Int32 L1, compared exactly.
@@ -2448,8 +2664,91 @@ bool run_sfpu_typecast(
 
 }  // namespace unit_tests::compute::sfpu
 
+TEST_F(LLKBlackholeSingleCardFixture, SfpuExp21fRetainedCoefficients) {
+    using namespace unit_tests::compute::sfpu;
+    constexpr size_t num_tiles = 4;
+    // Both sides of the exp21f clamps, plus ordinary values that must still match exp(x).
+    const std::vector<float> samples = {
+        -100.0f,
+        -90.0f,
+        -88.5f,
+        -88.04f,
+        -88.03f,
+        -87.5f,
+        -20.0f,
+        -1.0f,
+        -0.5f,
+        0.0f,
+        0.5f,
+        1.0f,
+        20.0f,
+        88.0f,
+        88.5f,
+        88.72f,
+        88.73f,
+        89.0f,
+        100.0f};
+    std::vector<float> input(num_tiles * tt::constants::TILE_HW);
+    for (size_t i = 0; i < input.size(); ++i) {
+        input[i] = samples[i % samples.size()];
+    }
+
+    // Reuse the unary pipeline; only the coefficient-loading policy differs between programs.
+    std::map<std::string, std::string> defines = {
+        {"SFPU_UNARY_OP", "1"},
+        {"SFPU_OP_EXP_INCLUDE", "1"},
+        {"SFPU_OP_CHAIN_0",
+         "exp_tile_init<false>(); "
+         "MATH(_llk_math_eltwise_unary_sfpu_params_([]() __attribute__((always_inline)) { "
+         "const sfpi::vFloat c0 = sfpu::EXP_21F_BF16_C0; "
+         "const sfpi::vFloat c1 = sfpu::EXP_21F_BF16_C1; "
+         "const sfpi::vFloat c2 = sfpu::EXP_21F_BF16_C2; "
+         "for (int i = 0; i < 8; ++i) { "
+         "sfpi::vFloat x = sfpi::dst_reg[0]; "
+         "if constexpr (RETAIN_EXP_COEFFICIENTS) { "
+         "sfpi::dst_reg[0] = sfpu::_sfpu_exp_21f_bf16_<DST_ACCUM_MODE>(x, c0, c1, c2); "
+         "} else { sfpi::dst_reg[0] = sfpu::_sfpu_exp_21f_bf16_<DST_ACCUM_MODE>(x); } "
+         "sfpi::dst_reg++; } }, 0, VectorMode::RC);)"}};
+
+    for (const bool fp32_dest : {false, true}) {
+        SCOPED_TRACE(fp32_dest ? "FP32 destination" : "BF16 destination");
+        const auto format = fp32_dest ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+        const SfpuConfig config{
+            .num_tiles = num_tiles,
+            .l1_input_data_format = format,
+            .l1_output_data_format = format,
+            .cores = CoreRangeSet({CoreRange({0, 0}, {0, 0})}),
+            .approx_mode = false,
+            .unpack_to_dest = fp32_dest,
+            .en_32bit_dest = fp32_dest};
+        const auto packed_input = unit_tests::sfpu_util::typecast_pack(format, input);
+        const auto quantized_input = unit_tests::sfpu_util::typecast_decode(format, packed_input);
+        for (const auto& device : devices_) {
+            defines["RETAIN_EXP_COEFFICIENTS"] = "false";
+            const auto scalar = run_sfpu_pipeline(*device, config, defines, packed_input);
+            defines["RETAIN_EXP_COEFFICIENTS"] = "true";
+            const auto retained = run_sfpu_pipeline(*device, config, defines, packed_input);
+            ASSERT_EQ(retained, scalar);
+            const auto output = unit_tests::sfpu_util::typecast_decode(format, retained);
+            ASSERT_EQ(output.size(), input.size());
+            // This is the BF16 exp approximation in both destination modes. FP32 DST retains
+            // its approximation error (e.g. exp21f(0) = 1.0017248), rather than rounding it away.
+            for (size_t i = 0; i < output.size(); ++i) {
+                if (std::abs(quantized_input[i]) <= 20.0f) {
+                    const float expected = std::exp(quantized_input[i]);
+                    EXPECT_NEAR(output[i], expected, expected * 1e-2f) << "element " << i;
+                }
+            }
+        }
+    }
+}
+
 void run_quasar_sfpu_unpack_to_dest_fp32(
-    distributed::MeshDevice& dev, size_t num_tiles, const std::string& sfpu_op, bool dst_full_sync_en) {
+    distributed::MeshDevice& dev,
+    size_t num_tiles,
+    const std::string& sfpu_op,
+    bool dst_full_sync_en,
+    size_t out_dfb_entries = 0) {
     CoreRange core_range({0, 0}, {0, 0});
     CoreRangeSet core_range_set({core_range});
     unit_tests::compute::sfpu::SfpuConfig cfg{
@@ -2463,14 +2762,24 @@ void run_quasar_sfpu_unpack_to_dest_fp32(
         .dst_full_sync_en = dst_full_sync_en,
         .unpack_to_dest = true,
         .en_32bit_dest = true,
+        .out_dfb_entries = out_dfb_entries,
     };
     log_info(
-        tt::LogTest, "Quasar SFPU FP32: op={} num_tiles={} dst_full_sync_en={}", sfpu_op, num_tiles, dst_full_sync_en);
+        tt::LogTest,
+        "Quasar SFPU FP32: op={} num_tiles={} dst_full_sync_en={} out_dfb_entries={}",
+        sfpu_op,
+        num_tiles,
+        dst_full_sync_en,
+        out_dfb_entries);
     EXPECT_TRUE(unit_tests::compute::sfpu::run_sfpu_all_same_buffer(dev, cfg));
 }
 
 void run_quasar_sfpu_unpack_to_dest_16b(
-    distributed::MeshDevice& dev, size_t num_tiles, const std::string& sfpu_op, bool dst_full_sync_en) {
+    distributed::MeshDevice& dev,
+    size_t num_tiles,
+    const std::string& sfpu_op,
+    bool dst_full_sync_en,
+    size_t out_dfb_entries = 0) {
     CoreRange core_range({0, 0}, {0, 0});
     CoreRangeSet core_range_set({core_range});
     unit_tests::compute::sfpu::SfpuConfig cfg{
@@ -2483,6 +2792,7 @@ void run_quasar_sfpu_unpack_to_dest_16b(
         .approx_mode = false,
         .dst_full_sync_en = dst_full_sync_en,
         .unpack_to_dest = true,  // 16-bit operand unpack-to-dest (fp32_dest_acc_en stays false)
+        .out_dfb_entries = out_dfb_entries,
     };
     log_info(
         tt::LogTest,
@@ -2490,6 +2800,47 @@ void run_quasar_sfpu_unpack_to_dest_16b(
         sfpu_op,
         num_tiles,
         dst_full_sync_en);
+    EXPECT_TRUE(unit_tests::compute::sfpu::run_sfpu_all_same_buffer(dev, cfg));
+}
+
+// DEST-index coverage for Quasar unpack-to-dest: pure datacopy (golden = input) with the tile(s) placed at
+// dst_tile_start, one tile per acquire (section_ntiles = 0) or one section of section_ntiles tiles per acquire,
+// placed with copy_block or, with section_use_copy_tile, with one copy_tile per tile.
+void run_quasar_unpack_to_dest_dest_index(
+    distributed::MeshDevice& dev,
+    bool fp32_dest,
+    size_t num_tiles,
+    bool dst_full_sync_en,
+    size_t dst_tile_start,
+    size_t section_ntiles,
+    bool section_use_copy_tile) {
+    CoreRange core_range({0, 0}, {0, 0});
+    CoreRangeSet core_range_set({core_range});
+    const tt::DataFormat fmt = fp32_dest ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+    unit_tests::compute::sfpu::SfpuConfig cfg{
+        .num_tiles = num_tiles,
+        .tile_byte_size = (fp32_dest ? 4u : 2u) * 32 * 32,
+        .l1_input_data_format = fmt,
+        .l1_output_data_format = fmt,
+        .cores = core_range_set,
+        .sfpu_op = "datacopy",
+        .approx_mode = false,
+        .dst_full_sync_en = dst_full_sync_en,
+        .unpack_to_dest = true,
+        .en_32bit_dest = fp32_dest,
+        .dst_tile_start = dst_tile_start,
+        .section_ntiles = section_ntiles,
+        .section_use_copy_tile = section_use_copy_tile,
+    };
+    log_info(
+        tt::LogTest,
+        "Quasar unpack-to-dest DEST index: {} num_tiles={} {} dst_tile_start={} section_ntiles={} copy_tile={}",
+        fp32_dest ? "FP32" : "16b",
+        num_tiles,
+        dst_full_sync_en ? "SyncFull" : "SyncHalf",
+        dst_tile_start,
+        section_ntiles,
+        section_use_copy_tile);
     EXPECT_TRUE(unit_tests::compute::sfpu::run_sfpu_all_same_buffer(dev, cfg));
 }
 
@@ -2644,7 +2995,22 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(1, "expm1"),
         std::make_tuple(1, "log_with_base"),
         std::make_tuple(1, "tiled_prod"),
-        std::make_tuple(1, "alt_complex_rotate90")),
+        std::make_tuple(1, "alt_complex_rotate90"),
+        std::make_tuple(1, "abs"),
+        std::make_tuple(1, "fill"),
+        std::make_tuple(1, "sin"),
+        std::make_tuple(4, "sin"),
+        std::make_tuple(1, "cos"),
+        std::make_tuple(4, "cos"),
+        std::make_tuple(1, "tan"),
+        std::make_tuple(1, "asin"),
+        std::make_tuple(1, "acos"),
+        std::make_tuple(1, "atan"),
+        std::make_tuple(1, "sinh"),
+        std::make_tuple(1, "cosh"),
+        std::make_tuple(1, "asinh"),
+        std::make_tuple(1, "acosh"),
+        std::make_tuple(1, "atanh")),
     [](const testing::TestParamInfo<std::tuple<size_t, std::string>>& info) {
         return std::get<1>(info.param) + "_" + std::to_string(std::get<0>(info.param)) + "tiles";
     });
@@ -2891,7 +3257,22 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(1, "expm1"),
         std::make_tuple(1, "log_with_base"),
         std::make_tuple(1, "tiled_prod"),
-        std::make_tuple(1, "alt_complex_rotate90")),
+        std::make_tuple(1, "alt_complex_rotate90"),
+        std::make_tuple(1, "abs"),
+        std::make_tuple(1, "fill"),
+        std::make_tuple(1, "sin"),
+        std::make_tuple(4, "sin"),
+        std::make_tuple(1, "cos"),
+        std::make_tuple(4, "cos"),
+        std::make_tuple(1, "tan"),
+        std::make_tuple(1, "asin"),
+        std::make_tuple(1, "acos"),
+        std::make_tuple(1, "atan"),
+        std::make_tuple(1, "sinh"),
+        std::make_tuple(1, "cosh"),
+        std::make_tuple(1, "asinh"),
+        std::make_tuple(1, "acosh"),
+        std::make_tuple(1, "atanh")),
     [](const testing::TestParamInfo<std::tuple<size_t, std::string>>& info) {
         return std::get<1>(info.param) + "_" + std::to_string(std::get<0>(info.param)) + "tiles";
     });
@@ -3097,7 +3478,12 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(1, "bitwise_xor_binary"),
         std::make_tuple(1, "rsub_int"),
         std::make_tuple(1, "sfpu_add_int"),
-        std::make_tuple(1, "int_mask")),
+        std::make_tuple(1, "int_mask"),
+        std::make_tuple(1, "left_shift_binary"),
+        std::make_tuple(1, "right_shift_binary"),
+        std::make_tuple(1, "logical_right_shift_binary"),
+        std::make_tuple(1, "logaddexp_binary"),
+        std::make_tuple(1, "logaddexp2_binary")),
     [](const testing::TestParamInfo<std::tuple<size_t, std::string>>& info) {
         return std::get<1>(info.param) + "_" + std::to_string(std::get<0>(info.param)) + "tiles";
     });
@@ -3186,12 +3572,14 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(1, "rsub_unary_int32"),
         std::make_tuple(1, "logical_not_int32"),
         std::make_tuple(1, "sum_int_col"),
-        std::make_tuple(1, "sum_int_row")),
+        std::make_tuple(1, "sum_int_row"),
+        std::make_tuple(1, "abs_int32"),
+        std::make_tuple(1, "fill_int32")),
     [](const testing::TestParamInfo<std::tuple<size_t, std::string>>& info) {
         return std::get<1>(info.param) + "_" + std::to_string(std::get<0>(info.param)) + "tiles";
     });
 
-TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarSfpuRelu) {
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarSfpuRelu) {
     // 1 and 4-tile, SyncFull and SyncHalf
     for (const char* sfpu_op : {"relu", "relu_min", "relu_max"}) {
         for (const uint32_t num_tiles : {1u, 4u}) {
@@ -3205,7 +3593,28 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarSfpuRelu) {
     }
 }
 
-TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarSfpuUnpackToDest16b) {
+TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarSfpuReluPackBackpressure) {
+    // 3 and 4 tiles through a ONE-entry output DFB: the packer waits on the writer every section, so the unpacker is
+    // admitted to the next section only when the DEST occupancy count says a bank is free (tt-metal #58903): the
+    // single bank in SyncFull, a third section into two banks in SyncHalf.
+    for (const uint32_t num_tiles : {3u, 4u}) {
+        for (const bool dst_full_sync_en : {true, false}) {
+            SCOPED_TRACE(
+                std::string("num_tiles=") + std::to_string(num_tiles) + (dst_full_sync_en ? " SyncFull" : " SyncHalf"));
+            run_quasar_sfpu_unpack_to_dest_fp32(
+                this->device(), num_tiles, "relu", dst_full_sync_en, /*out_dfb_entries=*/1);
+        }
+    }
+    // Same in SyncHalf with a 16-bit DEST (bank-1 base at row 512 instead of 256): separates "flips inert" from "flip
+    // size wrong".
+    for (const uint32_t num_tiles : {2u, 3u, 4u}) {
+        SCOPED_TRACE(std::string("16b num_tiles=") + std::to_string(num_tiles) + " SyncHalf");
+        run_quasar_sfpu_unpack_to_dest_16b(
+            this->device(), num_tiles, "relu", /*dst_full_sync_en=*/false, /*out_dfb_entries=*/1);
+    }
+}
+
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarSfpuUnpackToDest16b) {
     // 16-bit operand explicitly unpacked to Dest
     for (const char* sfpu_op : {"relu", "relu_min", "relu_max"}) {
         for (const bool dst_full_sync_en : {true, false}) {
@@ -3217,6 +3626,49 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarSfpuUnpackToDest16b) {
                     num_tiles,
                     dst_full_sync_en ? "SyncFull" : "SyncHalf");
                 run_quasar_sfpu_unpack_to_dest_16b(this->device(), num_tiles, sfpu_op, dst_full_sync_en);
+            }
+        }
+    }
+}
+
+TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarUnpackToDestDestIndex) {
+    // Under unpack-to-dest the unpacker places the tiles, so the DEST index has to survive copy_tile / copy_block and
+    // the packer has to read the tiles back from the same indices. Per DEST width and sync mode, within the section
+    // capacity (get_dest_max_tiles: 16 / 8 tiles for a 16-bit DEST, 8 / 4 for a 32-bit DEST, SyncFull / SyncHalf):
+    // one copy_tile per acquire at index 1 and at the last index; one copy_block of 2 and 4 tiles per acquire at
+    // start 0 and at the top of the section; and several copy_tile per acquire, at start 0 and at the top.
+    for (const bool fp32_dest : {false, true}) {
+        for (const bool dst_full_sync_en : {true, false}) {
+            const uint32_t capacity = (fp32_dest ? 8u : 16u) / (dst_full_sync_en ? 1u : 2u);
+            const std::string mode =
+                std::string(fp32_dest ? "FP32" : "16b") + (dst_full_sync_en ? " SyncFull" : " SyncHalf");
+            for (const uint32_t dst : {1u, capacity - 1}) {
+                SCOPED_TRACE(mode + " copy_tile dst=" + std::to_string(dst));
+                run_quasar_unpack_to_dest_dest_index(
+                    this->device(),
+                    fp32_dest,
+                    /*num_tiles=*/2,
+                    dst_full_sync_en,
+                    dst,
+                    /*section_ntiles=*/0,
+                    /*section_use_copy_tile=*/false);
+            }
+            for (const bool use_copy_tile : {false, true}) {
+                for (const uint32_t ntiles : {2u, 4u}) {
+                    for (const uint32_t start : std::set<uint32_t>{0u, capacity - ntiles}) {
+                        SCOPED_TRACE(
+                            mode + (use_copy_tile ? " copy_tile x" : " copy_block ") + std::to_string(ntiles) +
+                            " start=" + std::to_string(start));
+                        run_quasar_unpack_to_dest_dest_index(
+                            this->device(),
+                            fp32_dest,
+                            /*num_tiles=*/2 * ntiles,
+                            dst_full_sync_en,
+                            start,
+                            /*section_ntiles=*/ntiles,
+                            /*section_use_copy_tile=*/use_copy_tile);
+                    }
+                }
             }
         }
     }
@@ -3241,12 +3693,17 @@ TEST_P(SingleCoreSingleMeshDeviceSfpuTypecastFixture, TensixSfpuTypecast) {
     //  * any UInt8 endpoint;
     //  * any Int16 endpoint (the data_format.cpp Int16 enablement is reverted until the full narrow-int
     //    datapath lands, so an Int16 endpoint trips the format-consistency / pack_src derivation);
-    //  * a non-Float32 input widening into a 32-bit Int output (Float16_b/MX -> Int32).
+    //  * a non-Float32 input widening into a 32-bit Int output (Float16_b/MX -> Int32);
+    //  * Int32 narrowed to Float16_b (hangs, tenstorrent/tt-metal#59923).
     // Float32 <-> Int32 and Float16_b/MX <-> Float32 still run.
     // Int16/UInt8 support through the metal2 compute-API path is tracked in tenstorrent/tt-metal#48601.
     const bool uint8_endpoint = (in_fmt == tt::DataFormat::UInt8 || out_fmt == tt::DataFormat::UInt8);
     const bool int16_endpoint = (in_fmt == tt::DataFormat::Int16 || out_fmt == tt::DataFormat::Int16);
     const bool widen_to_int32 = (out_fmt == tt::DataFormat::Int32 && in_fmt != tt::DataFormat::Float32);
+    const bool int32_to_bf16 = (in_fmt == tt::DataFormat::Int32 && out_fmt == tt::DataFormat::Float16_b);
+    if (int32_to_bf16) {
+        GTEST_SKIP() << "disabled due to hang on Quasar (tenstorrent/tt-metal#59923)";
+    }
     if (uint8_endpoint || int16_endpoint || widen_to_int32) {
         GTEST_SKIP() << "typecast format not yet supported through the metal2 compute-API path "
                         "(tenstorrent/tt-metal#48601)";
@@ -3258,7 +3715,7 @@ TEST_P(SingleCoreSingleMeshDeviceSfpuTypecastFixture, TensixSfpuTypecast) {
         unit_tests::sfpu_util::typecast_device_format_name(in_fmt),
         unit_tests::sfpu_util::typecast_device_format_name(out_fmt));
     for (auto& device : this->devices_) {
-        EXPECT_TRUE(unit_tests::compute::sfpu::run_sfpu_typecast(*device, in_fmt, out_fmt, 1));
+        EXPECT_TRUE(unit_tests::compute::sfpu::run_sfpu_typecast(*device, in_fmt, out_fmt, 4));
     }
 }
 

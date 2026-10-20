@@ -47,7 +47,7 @@ void kernel_main() {
     constexpr uint32_t row_chunk = compute_kernel_lib::DEST_AUTO_LIMIT;
 
     compute_kernel_hw_startup(dfb::in0, dfb::scaler, dfb::out);
-    dfb_scaler.wait_front(1);  // scaler tile from the reader
+    dfb_scaler.wait_front(onetile);  // scaler tile from the reader
 
     // tiles are expected to come in the N C W_skip H W_chunk order
     // W_skip(chunk size) represents the number of tile columns whose reduction will be intertwined
@@ -173,5 +173,8 @@ void kernel_main() {
             dfb_output.push_back(static_cast<uint16_t>(ntiles));
         }
     }
+    // The scaler tile is waited once and reused for the whole reduction; pop it at the
+    // end so the buffer is left balanced.
+    dfb_scaler.pop_front(onetile);
 #endif  // REDUCE_FPU_NEGATE
 }

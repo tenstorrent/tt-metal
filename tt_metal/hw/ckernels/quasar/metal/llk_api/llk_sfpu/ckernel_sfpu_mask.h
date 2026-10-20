@@ -37,7 +37,7 @@ inline void calculate_int_mask() {
         vInt mask = dst_reg[mask_idx];
         // Quasar: store as INT32. SFPSTORE's default format follows ALU_FORMAT_SPEC_REG rather than the 32-bit
         // Dest mode; on the Int32 unpack-to-dest path `dst_reg[0] = 0.0f` cleared only the top 16 bits.
-        v_if(mask == 0) { dst_reg[0].mode<DataLayout::I32>() = vInt(0); }
+        v_if(mask == 0) { dst_reg[0].mode<sfpi::DataLayout::I32>() = vInt(0); }
         v_endif;
         dst_reg++;
     }

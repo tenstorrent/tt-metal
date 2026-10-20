@@ -55,6 +55,10 @@ bool is_axis_wrap_wired(const tt::tt_metal::distributed::MeshDevice& mesh_device
 // itself (see selective_reduce_combine, whose mux is by far the greediest).
 tt::tt_metal::BufferType prefer_l1_small_buffer_type(const tt::tt_metal::distributed::MeshDevice& mesh_device);
 
+// Companion to prefer_l1_small_buffer_type: when it fell back to L1, name the device-open parameter
+// that would have kept the semaphores in L1_SMALL.
+void warn_if_semaphores_fall_back_to_l1(tt::tt_metal::BufferType sem_buffer_type);
+
 // Floor of the L1_SMALL region, i.e. the highest address a fabric mux's raw-L1 map may reach. Derived
 // from immutable limits: worker L1 is fixed and the L1_SMALL bank is never shrunk, whereas the L1 bank
 // size IS reduced by a sub-device manager's bottom-up reservation
@@ -99,10 +103,6 @@ struct SenderReceiverConfig {
     std::optional<tt::ChipId> receiver_device_id;
 };
 
-// Returns `SenderReceiverConfig` for a given device, given topology.
-SenderReceiverConfig get_device_sender_receiver_config(
-    const IDevice* target_device, const std::vector<IDevice*>& devices, ttnn::ccl::Topology topology);
-
 // Returns `SenderReceiverConfig` for a given device in a ring topology with a given cluster axis.
 SenderReceiverConfig get_device_sender_receiver_config_in_ring(
     const MeshCoordinate& mesh_coord, const distributed::MeshDevice* mesh_device, uint32_t cluster_axis, int ring_size);
@@ -134,7 +134,7 @@ struct WorkerCoreSelection {
 WorkerCoreSelection try_choose_worker_cores(
     size_t num_links,
     size_t num_workers_per_link,
-    IDevice* device,
+    distributed::MeshDevice* device,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     CoreCoord core_grid_offset = CoreCoord(0, 0),
     const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt,
@@ -143,7 +143,7 @@ WorkerCoreSelection try_choose_worker_cores(
 std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
     size_t num_links,
     size_t num_workers_per_link,
-    IDevice* device,
+    distributed::MeshDevice* device,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     CoreCoord core_grid_offset = CoreCoord(0, 0),
     const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt,
