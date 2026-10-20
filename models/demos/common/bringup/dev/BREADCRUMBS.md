@@ -1392,3 +1392,7 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
   sharing one run (pending_full_gates); a failure stops the run. The perf brief makes `orchestrator measure` the
   agent's final check. DeepSeek-V4.1: a full A/B was ~2 h 20 min a pick (16 frozen tests, two rungs, profile, both
   sides); the owner: "it takes a day only to try a few simple things".
+
+- F122b: the dashboard narrows a quick-accepted pick's (full_pending) thresholds to the metrics its quick A/B measured
+  (the rest wait for the full gate before the final task); without it the watch stopped on "DASHBOARD RED: P.9:
+  pcc_state_min missing; device_ms_experts missing".
