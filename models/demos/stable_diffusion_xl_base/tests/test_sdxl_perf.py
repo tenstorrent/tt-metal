@@ -129,8 +129,9 @@ DEVICE_PERF_EXPECTATIONS = {
     },
     "vae_decode_1024x1024": {
         "wormhole": 663_083_865,
-        # bh_p150 run 2026-09-25 (260.30M) on #55698; previous target 267.50M
-        "blackhole": 260_304_000,
+        # mean of bh_p150 runs 2026-10-17..19 (254.07M..254.62M) after #60876 (padded_slice RM reader no longer
+        # over-reads the input row); previous target 260.30M (2026-09-25, #55698)
+        "blackhole": 254_384_000,
     },
     "vae_decode_512x512": {
         "wormhole": 167_473_541,
