@@ -627,3 +627,55 @@ def test_partial_block_is_dropped_not_pooled(
         f"sol matches the truncated reference at {pcc_trunc:.5f}: the partial block is being dropped entirely, "
         f"not pooled"
     )
+
+
+@GALAXY_RING
+@pytest.mark.parametrize("pad_keys", [0, 32], ids=["no_pad", "pad32"])
+def test_partial_block_padding_hypothesis(
+    mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, pad_keys, reset_seeds, capfd
+):
+    """Are unmasked padding keys entering the softmax at rows=1184?
+
+    Established so far: partialness is the trigger (1216 with 19 FULL blocks passes), the bias is exonerated
+    (both sources bit-identical), sparsity is irrelevant (tau=-1e4 == tau=1.0), compaction is exonerated
+    (gather fails too), and the tail tokens are NOT dropped (sol is further from the truncated reference,
+    0.744, than from dense, 0.855).
+
+    Hypothesis: kv_local_padded_Nt = 37 tiles is ODD, but sol_nb = div_up(37, 2) = 19 blocks spans 38 tiles --
+    block 18's second tile is past the end of the tensor. Compact forces apply_mask = false, so nothing masks
+    it. Zero-valued padding keys give QK = 0, hence exp(0) = 1: full softmax weight against a zero value,
+    inflating the denominator for EVERY query by a constant. Uniform, moderate, tau-independent -- fits.
+
+    The reference here appends `pad_keys` zero keys/values per shard. If sol matches the padded reference much
+    better than the clean one, the padding is being attended and the fix is to mask it (or to pad
+    kv_local_padded_Nt up to an even tile count so no half-block exists).
+    """
+    rows = 1184
+    r = _run(
+        mesh_device,
+        sp_axis,
+        num_links,
+        topology,
+        capfd,
+        mode="compact",
+        tau=-1e4,
+        rows=rows,
+        logical_n=8 * rows,
+    )
+    S = tuple(mesh_device.shape)[sp_axis]
+    q, k, v = _qkv(S, rows)
+    ks, vs = [], []
+    for sh in range(S):
+        kk, vv = k[sh].float(), v[sh].float()
+        if pad_keys:
+            z = torch.zeros(kk.shape[0], pad_keys, kk.shape[2])
+            kk, vv = torch.cat([kk, z], dim=1), torch.cat([vv, z], dim=1)
+        ks.append(kk)
+        vs.append(vv)
+    kg, vg = torch.cat(ks, dim=1), torch.cat(vs, dim=1)
+    ref = torch.cat(
+        [torch.softmax(q[sh].float() @ kg.transpose(1, 2) * (D**-0.5), dim=-1) @ vg for sh in range(S)], dim=1
+    )
+    pcc = _pcc(ref, r.sol, logical_n=8 * rows)
+    logger.info(f"[pad] pad_keys={pad_keys}/shard  sol vs reference pcc={pcc:.5f}")
+    assert pcc > 0.99, f"pad_keys={pad_keys}: pcc {pcc:.5f}"
