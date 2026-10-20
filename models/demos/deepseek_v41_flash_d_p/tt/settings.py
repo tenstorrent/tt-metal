@@ -167,6 +167,26 @@ TABLE = {
         "the wo_b partial-sum exchange over axis 1 ([S/SP, H] fp32): gather_add = all_gather + SFPU ttnn.add, then "
         "the chip's hidden slice (exact fp32, K-30); reduce_scatter = one CCL whose FPU add reads fp32 at about TF32",
     ),
+    "ATTN_GLUE": Setting(
+        "on",
+        ("on", "off"),
+        "P.15 (owner comparison 2026-10-20, glue report items 1, 2, 6): the attention / RoPE glue folded into ops. on = "
+        "(1) the rope tail's pair interleave / de-interleave (tt/rope.py: ROW_MAJOR reshapes to 8-byte pages) as an "
+        "exact 0/1 [64, 64] bf16 matmul after the bf16 cast (tt/rope.PairPerm, HiFi4: the one exact fidelity), at q, "
+        "the attention output, the indexer q, the window kv and the compressor; the window layers keep the table's "
+        "stored (interleaved) order like the compressed ones (no table transform); the output's re-interleave dropped "
+        "by permuting wo_a's input rows at load; (2) the q head split through ttnn.experimental.nlp_create_q_heads_split "
+        "(attention, indexer); (6) the attention output kept in bf16 (no bf16 -> fp32 -> bf16 of the 448 nope "
+        "columns), nlp_concat_heads after wo_a, and the reduce-scatter's bf16 result handed to mhc_post where it takes "
+        "bf16 (the residual casts only for MHC_FUSED's stats pass, which needs fp32). Exact (bit-identical up to the "
+        "summation order of permuted dot products) under NUMERICS=native; under official the rope tails ahead of an fp8 "
+        "/ fp4 block keep the old fp32 interleave. off = the P.14 path. Not a precision switch. Measured P.15 (2x2, "
+        "chunk 53248-55296, plain profile, off -> on): attention 114.36 -> 43.01 ms a chunk, indexer 34.97 -> 25.15, kv "
+        "2.11 -> 1.24, compressor 2.38 -> 1.90, attn_residual 2.93 -> 3.29 (the A12 cast moved there), device sum "
+        "202.19 -> 119.82 ms; programs 9772 -> 8892 (attention 3296 -> 2648); quick A/B on: chunk wall 201.8 ms (P.14: "
+        "213.7; host-bound now), worst layer L03 0.99489 (P.14: 0.99488). Window attention L0 out path vs float64: "
+        "rel 0.00736 off and on (max precision 0.00136 both)",
+    ),
     # ---- routed experts (tt/experts.py)
     "EXPERTS_IMPL": Setting(
         "bfp4",
