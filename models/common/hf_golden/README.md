@@ -30,6 +30,7 @@ the dtype, the layers it exists on and what it is.
 | `generate_golden_hy4_preview.py` | tencent/Hy4-preview | transformers `hy_v4` (DSA + sinks + IHC), needs transformers >= 5.17 |
 | `generate_golden_kimi_k2_7_code.py` | moonshotai/Kimi-K2.7-Code | transformers `kimi_k25` (DeepseekV3 text model), INT4 experts dequantized, needs transformers >= 5.17 |
 | `generate_golden_k2_horizon.py` | IFM/K2-Horizon-375B-A23B | repo remote code (GQA + partial RoPE + MoE), plain bf16 |
+| `generate_golden_nemotron_3_ultra.py` | nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B-BF16 | transformers `nemotron_h` (Mamba-2 + latent MoE + NoPE GQA), needs `--with kernels==0.12.3` |
 | `generate_golden_whole_model.py` | Qwen/Qwen3.8-27B, Llama-3.1-8B, Mistral-Medium-3.5 | whole model, one forward (see below) |
 
 Not covered yet:
@@ -80,6 +81,16 @@ to fp32), and RoPE rotates dim pairs (j, j + 64) for j < 32 only. isl 56320 with
 41 GB GPU peak, 57 GB on disk (36 GB trimmed to 26 layers); its first 10240 rows equal the isl 10240 run bit for bit
 (359/359 tensors), ppl 4.146 over all 56318 tokens. Layer 1 writes one outlier channel (max |x| ~1e3 at rms 0.7) and
 layers 59-60 blow the residual up to max |x| ~1.1e6: compare those relatively.
+
+**Nemotron-3-Ultra-550B-A55B:** 108 single-mixer blocks (48 Mamba-2, 48 latent MoE, 12 attention without RoPE).
+No prefix (wikitext ppl at isl 10240 over the same 10100 tokens: 5.073 raw, 5.075 `<s>`, 5.238 chat). The Mamba-2
+kernels come from the kernels hub (`--with kernels==0.12.3`; newer kernels break transformers 5.12.1's loader), so
+don't run it with HF_HUB_OFFLINE. transformers runs any Mamba call after the first as a single decode token, so the
+script carries the conv and fp32 SSM state across `--prefill-chunk` chunks itself (`mamba_prefill`). Smoke needs
+`--num-layers 8`: the cache's length comes from an attention block, the first being block 7. isl 56320 with
+`--prefill-chunk 5120`: 2.9 min, 49 GB GPU peak, 102 GB on disk (42 GB trimmed to 39 blocks); its first 10240 rows
+equal the isl 10240 run bit for bit (278/278 tensors), ppl 3.345 over all 56319 tokens. Mamba blocks 6 and 13 write
+the first outliers (max |x| ~330), blocks 54-69 grow them to ~3.6e3 and the last blocks to ~8.8e3 at block 107.
 
 **MiniMax-M3 at long ISL:** the upstream lightning indexer builds a whole [4, N, N] fp32 score matrix (~105 GB peak at
 isl 56320 with its masked copy). `HF_GOLDEN_INDEXER_CHUNK=4096` builds it 4096 query rows at a time (~4 GB); every op
@@ -190,6 +201,15 @@ event layer with its input layer, so it can be run alone from golden input:
 ```
 python trim_trace.py <root>/deepseek-ai/DeepSeek-V4-Flash/isl56320 <trimmed-root> \
     --layers 0-5,7,8,25,26,28-30,39-42 --reason "..."
+```
+
+`trace_ppl.py` scores a trace's wikitext perplexity from its stored final hidden state: logits = last_hidden_state @
+lm_head.T at every position, cross-entropy of each next token, over the same wikitext tokens whatever the prefix
+(`--skip`, `--count`). The lm_head is read from the checkpoint; models with logit multipliers or softcaps need them
+applied first.
+
+```
+python trace_ppl.py <root>/<hf-repo>/isl10240 <checkpoint snapshot> lm_head.weight --skip 1 --count 10100
 ```
 
 Naming:
