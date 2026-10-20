@@ -388,7 +388,7 @@ def generate_face_layout_config(num_faces: int) -> List[FaceLayoutConfig]:
     }
 
     # Calculate output faces based on input layouts
-    # In _mask_tile: matrix A (is_matrix_B=False) uses f0,f1 (horizontal layout)
+    # In _mask_tile: a 32-wide tile (wide_tile=True) uses f0,f1 (horizontal layout)
     output_num_faces = calculate_matmul_output_faces(
         num_faces_in0=num_faces,
         num_faces_in1=num_faces,
