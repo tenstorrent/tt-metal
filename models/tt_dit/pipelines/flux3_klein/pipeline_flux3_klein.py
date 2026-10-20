@@ -134,6 +134,22 @@ def to_pil(image: torch.Tensor):
     return Image.fromarray(array)
 
 
+def image_to_uint8_on_device(image: ttnn.Tensor) -> ttnn.Tensor:
+    """``to_pil``'s arithmetic ON THE DEVICE: bf16 ``[1, H, W, 3]`` in [-1, 1] -> uint8 ROW_MAJOR ``[1, H, W, 3]`` by
+    ``floor(clamp((x + 1) * 127.5, 0, 255))`` computed in fp32 (bf16 -> fp32 typecast is exact, and ``(clamp(x, -1, 1)
+    + 1) * 127.5`` equals ``clamp((x + 1) * 127.5, 0, 255)`` for every x: the map is monotonic), then a typecast that
+    cannot round because the values are already integral. Bit-identical to ``to_pil`` of the bf16 host copy
+    (``test_readback_fast_equals_legacy``). The readback then moves 1 byte per channel instead of 2 and needs no host
+    untilize."""
+    x = ttnn.typecast(image, ttnn.float32)
+    x = ttnn.add(x, 1.0)
+    x = ttnn.multiply(x, 127.5)
+    x = ttnn.clamp(x, min=0.0, max=255.0)
+    x = ttnn.floor(x)
+    x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+    return ttnn.typecast(x, ttnn.uint8)
+
+
 # --- request / result ------------------------------------------------------------------------------------------------------
 
 
@@ -424,6 +440,9 @@ class Flux3KleinPipeline:
             raise ValueError("at least one resident variant is required")
         self.upsampler = upsampler
         """Anything with ``__call__(prompt, images, boxes) -> str`` (``resolve_caption``); ``None`` = no upsampling."""
+        self.readback = "fast"
+        """How the decoded image reaches the host: ``"fast"`` (uint8 on the device, one replica read; the default) or
+        ``"legacy"`` (``tensor.to_torch`` of the bf16 image, every replica; kept for the equality test)."""
         for variant in resident:
             if variant not in MODELS:
                 raise ValueError(f"unknown variant {variant!r}")
@@ -724,12 +743,25 @@ class Flux3KleinPipeline:
         ttnn.synchronize_device(self._device)
         decode_s = time.time() - t0
 
-        # 6. host
+        # 6. host. ``out`` is replicated on every chip (the decoder ends with its spatial all-gather); the legacy
+        # ``tensor.to_torch`` read ALL 32 replicas in TILE layout and untilized each on the host (2.1 s at 1024x1024,
+        # 8.4 s at 2048x2048, sweep 2026-10-20). "fast": the uint8 conversion runs on the device and ONE replica is
+        # read (``ttnn.get_device_tensors(x)[0]``, the pattern of the Flux2 prompt encoder / Ideogram decode).
         t0 = time.time()
-        img = tensor.to_torch(out)[0].permute(2, 0, 1).float()
-        if not traced:
-            ttnn.deallocate(out)
-        image = to_pil(img)
+        if self.readback == "fast":
+            from PIL import Image
+
+            u8 = image_to_uint8_on_device(out)
+            array = ttnn.to_torch(ttnn.get_device_tensors(u8)[0])[0].numpy()
+            ttnn.deallocate(u8)
+            if not traced:
+                ttnn.deallocate(out)
+            image = Image.fromarray(array)
+        else:
+            img = tensor.to_torch(out)[0].permute(2, 0, 1).float()
+            if not traced:
+                ttnn.deallocate(out)
+            image = to_pil(img)
         if resolved.crop is not None:
             image = image.crop(resolved.crop)  # generate.py:76-77
         final_tokens = denoiser.read_state(prepared)
