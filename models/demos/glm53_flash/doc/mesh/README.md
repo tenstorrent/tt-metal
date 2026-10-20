@@ -128,6 +128,16 @@ Log `test_sp_prefill_lb2.log` (first-call walls include compile: 15.1 / 10.8 / 0
 TTFT, resident model layers 0-5 on the rows-2-3 (2,4) block, prompt 128 tokens (`test_mesh_model_ttft_lb2_l0-5.log`):
 warm 300 ms (cold 38.7 s = first-call compiles), chain 0.999479 vs HF rows, first greedy token == host head (1526).
 
+## Optimization 1: router tie-break (2026-10-20)
+
+The exact fp32 top-8 router's first-match tie-break used `ttnn.cumsum` (single-core, 330 us x 8 rounds =
+2.64 ms per MoE layer, replicated on every chip). Replaced by a second max over the candidate one-hot
+weighted with a descending iota (`E - column`): the lowest tied column wins, exact, all in TILE layout.
+Same-chip A/B (chip 4, layer 4, traced decode B=1, 20 steps, `_logs/mesh/perf_layer4_router_ab_{cumsum,rank}.log`):
+10.74 ms/step -> 8.03 ms/step (-2.7 ms, -25 %); router sets identical to the reference path (32/32,
+255/256, MoE PCC 0.999946). An argmax-based variant was also exact but slower (the index tensor's
+layout conversions cost more than the cumsum). Knob `GLM53_ROUTER_TIE_BREAK=cumsum` keeps the old path.
+
 ## Root cause of the TP4 sparse-row gap (2026-10-20)
 
 `test_tp4_sparse_prefill_layer3` first gave rows >= 2048 at 0.99777 (single chip 0.99990) while the
