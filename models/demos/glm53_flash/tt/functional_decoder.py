@@ -76,8 +76,8 @@ def device_streams_to_host(
 ) -> torch.Tensor:
     """Packed ``[1, 1, T, n*C]`` -> HF ``[1, S, n, C]`` fp32 (S = seq_len rows). With a multi-row
     ``mesh`` the rows' shards are concatenated (first column of each row)."""
-    if mesh is not None and mesh.rows > 1:
-        t = mesh.to_host(packed, rows=2).float()[0, 0]
+    if mesh is not None and not mesh.is_single:
+        t = mesh.to_host(packed, rows=2 if mesh.rows > 1 else None).float()[0, 0]
     else:
         t = ttnn.to_torch(packed).float()[0, 0]
     T, nC = t.shape

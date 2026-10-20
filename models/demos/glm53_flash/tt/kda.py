@@ -199,12 +199,18 @@ class TtKDA(LightweightModule):
                 input_projection_math_fidelity=ttnn.MathFidelity.HiFi2,
                 output_projection_math_fidelity=ttnn.MathFidelity.HiFi2,
             )
+            tt_ccl = None
+            if self.mesh.tp > 1:
+                from models.common.modules.tt_ccl import get_tt_ccl
+
+                tt_ccl = get_tt_ccl(self.device)  # ttKDA's TP reduce-scatter semaphores (one set per mesh)
             layer = ttKDA(
                 self.device,
                 self.kcfg,
                 None,
                 layer_idx=self.layer_idx,
                 weights=self.prefill_weights,
+                tt_ccl=tt_ccl,
                 sp_axis=0,
                 tp_axis=1,
                 program_config=program_config,

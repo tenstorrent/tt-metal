@@ -15,6 +15,7 @@ users (different prompts per row), the outputs must be replicated across the fou
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
@@ -35,9 +36,9 @@ from models.demos.glm53_flash.tt.mesh import mesh_device_params
 
 DUMP = Path("bringup/references/glm53_flash/R4097")
 ROWS, COLS = 2, 4
-B = 2  # users per row
-S = 48  # prompt tokens fed through the decode step
-N_DECODE = 3  # HF-cache decode steps after the prompt (the last one trace-replayed)
+B = int(os.environ.get("GLM53_MESH_B", "2"))  # users per row (design: 4 and 32)
+S = int(os.environ.get("GLM53_MESH_S", "48"))  # prompt tokens fed through the decode step
+N_DECODE = 3  # HF-cache decode steps after the prompt, all through the captured trace
 
 
 def _hf_prefill_and_decode(hf, text, x_prompt, x_next):
@@ -72,7 +73,7 @@ def test_mesh_decode_vs_hf(mesh_device, layer_idx):
     hf, _ = build_layer(snapshot, text, layer_idx, headers)
     base = torch.load(DUMP / f"layer{layer_idx}_prefill.pt")["x_in"]  # [1, 4097, 4, 4096] random-token streams
     U = ROWS * B
-    offs = [100 + 400 * u for u in range(U)]
+    offs = [100 + (3900 // U) * u for u in range(U)]  # distinct prompt windows inside the 4097-token dump
     prompts = [base[:, o : o + S] for o in offs]
     nexts = [base[:, o + S : o + S + N_DECODE] for o in offs]
     refs = [_hf_prefill_and_decode(hf, text, p, n) for p, n in zip(prompts, nexts)]
