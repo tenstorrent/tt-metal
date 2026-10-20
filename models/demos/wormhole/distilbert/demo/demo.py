@@ -163,6 +163,10 @@ def run_distilbert_question_and_answering_inference(
     logger.info(f"preprocessing_input: {measurements['preprocessing_input']} s")
     logger.info(f"inference_time: {measurements['inference_time']} s")
     logger.info(f"post_processing : {measurements['post_processing']} s")
+    if measurements["inference_time"] > 0:
+        from models.demos.utils.common_demo_utils import report_vision_fps
+
+        report_vision_fps("distilbert", batch_size / measurements["inference_time"], batch_size)
     return measurements
 
 
