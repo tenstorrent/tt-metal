@@ -29,7 +29,7 @@ import torch
 
 import ttnn
 
-from .common import DRAM, SP_AXIS
+from .common import DRAM, SP_AXIS, TP_AXIS
 from .settings import settings
 
 
@@ -37,6 +37,45 @@ def glue() -> bool:
     """ATTN_GLUE=on (P.15): the attention / RoPE glue folded into ops (``PairPerm``, nlp_create_q_heads_split,
     the bf16 output path; tt/settings.py)."""
     return settings.get("ATTN_GLUE") == "on"
+
+
+def indexer_glue() -> bool:
+    """INDEXER_GLUE=on (P.16): the indexer / shared-source glue folded into ops or computed once per chunk (the
+    rope rows memo here, tt/sparse_attention.ChunkMemo, the score op's block max / bias; tt/settings.py)."""
+    return settings.get("INDEXER_GLUE") == "on"
+
+
+class RowsMemo:
+    """INDEXER_GLUE=on (P.16): device tensors that depend only on (a load-time table, a chunk start), computed once
+    and handed to every caller of the chunk (the rope rows of all 8 layers' kv / attention / indexer steps). Holds
+    the entries of the latest start only (another start frees them: the values are constants of the table, so a
+    re-run or another slot recomputes them). Callers release what they got through ``free`` (never
+    ``ttnn.deallocate``): memoized tensors stay."""
+
+    def __init__(self, on: bool):
+        self.on = on
+        self._d: dict = {}
+
+    def get(self, key, make):
+        if not self.on:
+            return make()
+        hit = self._d.get(key)
+        if hit is not None and all(t.is_allocated() for t in hit):
+            return hit
+        for k in [k for k in self._d if k[0] != key[0]]:  # another start: the old rows go
+            for t in self._d.pop(k):
+                if t.is_allocated():
+                    ttnn.deallocate(t)
+        hit = self._d[key] = make()
+        return hit
+
+    def mine(self, t: ttnn.Tensor) -> bool:
+        return any(t is u for v in self._d.values() for u in v)
+
+    def free(self, *ts) -> None:
+        for t in ts:
+            if not self.mine(t):
+                ttnn.deallocate(t)
 
 
 class PairPerm:
@@ -110,9 +149,35 @@ class RopeTable:
 
         self.cos, self.sin = dev(rot.real), dev(rot.imag)
         self.pairs = PairPerm(mesh, self.half) if glue() else None  # ATTN_GLUE=on (P.15)
+        self.memo = RowsMemo(indexer_glue())  # INDEXER_GLUE=on (P.16): the rows once per (start, length)
 
-    def rows(self, start: int, length: int) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        """cos, sin of the chip row's natural block of [start, start + length): [1, 1, length / SP, R/2] fp32."""
+    def free(self, *ts) -> None:
+        """Release rows from ``rows``: freed unless memoized (INDEXER_GLUE=on)."""
+        self.memo.free(*ts)
+
+    def rows(self, start: int, length: int, tp_split: bool = False) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """cos, sin of the chip row's natural block of [start, start + length): [1, 1, length / SP, R/2] fp32.
+        ``tp_split``: this chip's Sq = length / (SP TP) rows of that block (mesh column c: rows [c Sq, (c+1) Sq);
+        the indexer's queries). Release them with ``free``."""
+        if tp_split:
+            return self.memo.get((start, length, True), lambda: self._tp_split(start, length))
+        return self.memo.get((start, length, False), lambda: self._rows(start, length))
+
+    def _tp_split(self, start: int, length: int) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        rows = self.rows(start, length)
+        tp = self.mesh.shape[TP_AXIS]
+        out = tuple(
+            (
+                ttnn.clone(t, memory_config=DRAM)
+                if tp == 1
+                else ttnn.mesh_partition(t, dim=2, cluster_axis=TP_AXIS, memory_config=DRAM)
+            )
+            for t in rows
+        )
+        self.free(*rows)
+        return out
+
+    def _rows(self, start: int, length: int) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         sp = self.mesh.shape[SP_AXIS]
         assert start % 32 == 0 and length % (32 * sp) == 0, (start, length, sp)
         assert start + length <= self.max_seq, f"positions up to {start + length} > the table's {self.max_seq}"

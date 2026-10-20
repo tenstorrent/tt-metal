@@ -56,11 +56,11 @@ from .mhc import NG, build_hc
 from .norm import TtDistributedRmsNorm, build_norm
 from .q_a import TtAttnInProj, TtQa
 from .residual import build_residual
-from .rope import RopeTable
+from .rope import RopeTable, indexer_glue
 from .router import build_router
 from .settings import settings
 from .shared_expert import build_shared_expert
-from .sparse_attention import SparseIndexTables, TtSparseAttention
+from .sparse_attention import ChunkMemo, SparseIndexTables, TtSparseAttention
 
 NONE_ID = 0xFFFFFFFF  # the device's "no index" (top-k / candidate pads)
 
@@ -166,6 +166,7 @@ class DS41DeviceState:
         self.topk = {i: {} for i in model.layers if cfg.is_index_source(i)}
         self.cands = {i: {} for i in model.layers if cfg.is_cand_source(i)}
         self.topk_prefix, self.cands_prefix = {}, {}
+        self.memo = ChunkMemo() if model.memo_last is not None else None  # INDEXER_GLUE=on (P.16)
         self.tail = {i: model.engram[i].new_tail() for i in model.engram}
         self.tokens = None
         self.history = None  # this slot's real token ids by position (host; the engram tail of any start)
@@ -173,6 +174,8 @@ class DS41DeviceState:
 
     # ------------------------------------------------------------------ per chunk (device)
     def put(self, store: dict, layer: int, start: int, t: ttnn.Tensor) -> None:
+        if store is self.topk and self.memo is not None:  # a new top-k: the index list made from the old one goes
+            self.memo.drop(("index", layer))
         stale = [start] if self.keep_history else list(store[layer])
         for k in stale:
             old = store[layer].pop(k, None)
@@ -286,6 +289,8 @@ class DS41DeviceState:
         return out
 
     def free(self) -> None:
+        if self.memo is not None:
+            self.memo.clear()
         for c in [*self.window.values(), *self.compress.values()]:
             c.free()
         for store in (self.topk, self.cands):
@@ -351,6 +356,9 @@ class TtDS41Block:
         # SHARED_EXPERT_IMPL=flat + EXPERTS_COMBINE=weighted (P.12): the shared expert reads its x rows from the routed
         # experts' gathered row-major q(x) (experts runs first in the block graph)
         self.experts.keep_rows = bool(self.shared.reads_rows and self.experts.weighted)
+        # INDEXER_GLUE=on (P.16): the weighted experts take the router's own weights (no dense scatter, no gather)
+        self.router_wts = indexer_glue() and self.experts.weighted
+        self.router.dense = not self.router_wts
         self.fns = self._fns()
         # boundaries freed after their last reader (never "in": the caller owns it; never "out")
         last = {}
@@ -406,6 +414,7 @@ class TtDS41Block:
         def indexer(ctx, x, qr, *compressed):
             st, start = ctx.state, ctx.start
             cache = st.compress[self.kv_src].index_k
+            self.indexer.share(st.memo, self.kv_src)  # INDEXER_GLUE=on: the tiled keys once per (source, chunk)
             if isinstance(self.indexer, TtReindexer):
                 cands = st.get(st.cands, cfg.cand_source, start, "candidate pool")
                 top = self.indexer(x, qr, start, cache, cands)
@@ -426,6 +435,10 @@ class TtDS41Block:
             else:
                 top = st.get(st.topk, self.idx_src, start, "top-k")
             ckv = st.compress[self.kv_src].ckv
+            if st.memo is not None:  # INDEXER_GLUE=on (P.16): the source's history / index list once per chunk
+                return self.attention(
+                    qr, kvt, start, end, st.window[i], ckv, top, memo=st.memo, sources=(self.kv_src, self.idx_src)
+                )
             return self.attention(qr, kvt, start, end, st.window[i], ckv, top)
 
         def attn_residual(ctx, x, mix, y):
@@ -444,7 +457,9 @@ class TtDS41Block:
             return self.router(x)  # (dense [S/SP, E] fp32 RM, top-k ids, weights)
 
         def experts(ctx, x, routing):
-            dense, idx, _ = routing
+            dense, idx, wts = routing
+            if self.router_wts:  # INDEXER_GLUE=on (P.16)
+                return self.experts.partial(x, dense, idx, wts=wts)
             return self.experts.partial(x, dense, idx)  # this dispatch group's fp32 partial [S/SP, H]
 
         def shared_expert(ctx, x):
@@ -548,7 +563,11 @@ class TtDS41Block:
         def no_cpu(name):
             raise AssertionError(f"layer {self.layer}: step {name} has no device module (all-device model)")
 
-        return run_block(self.steps, no_cpu, ctx, h, overrides=overrides)
+        out = run_block(self.steps, no_cpu, ctx, h, overrides=overrides)
+        if state.memo is not None:  # INDEXER_GLUE=on (P.16): slots whose last reader of the chunk was this layer
+            for slot in self.model.memo_last.get(self.layer, ()):
+                state.memo.drop(slot)
+        return out
 
 
 # ============================================================================================= model
@@ -613,6 +632,20 @@ class TtDS41Model:
         self.blocks = {}
         for i in self.layers:
             self.blocks[i] = TtDS41Block(self, i)
+        # INDEXER_GLUE=on (P.16): the shared tensors of a chunk (tt/sparse_attention.ChunkMemo) and the last loaded
+        # layer that reads each: {layer: [slots dropped after it]}; None = off
+        self.memo_last = None
+        if indexer_glue():
+            last = {}
+            for i in self.layers:
+                if cfg.ratio(i):
+                    last[("comp", cfg.kv_source_of(i))] = i
+                    last[("index", cfg.index_source_of(i))] = i
+                if cfg.is_index_source(i):
+                    last[("keys", cfg.kv_source_of(i))] = i
+            self.memo_last = {}
+            for slot, i in last.items():
+                self.memo_last.setdefault(i, []).append(slot)
         self.load_seconds = time.time() - t0
 
     def next_hc(self, i: int):

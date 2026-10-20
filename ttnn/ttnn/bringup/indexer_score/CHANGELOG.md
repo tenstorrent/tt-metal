@@ -122,3 +122,34 @@ Mechanical fork changes (fork_op.py): namespace `ttnn::operations::bringup`, CMa
 - Files: device/indexer_score_device_operation.cpp (validations, launch, ring entry, hash),
   device/indexer_score_device_operation.hpp, device/indexer_score_device_operation_types.hpp,
   device/indexer_score_host_common.hpp (geometry), indexer_score_nanobind.cpp, tests/unit/test_natural_query_blocks.py
+
+### Block epilogue: block_bias / block_max_out / block_max_pin (opt-in), 2026-10-20
+- What: `ring_indexer_score_dsa(..., block_keys=0, block_bias=None, block_max_out=None, block_max_pin=False)`. With
+  `block_keys` > 0 (a divisor of 32; exactly when a tensor is given) the WRITER works on each untilized score strip in
+  L1 before its rows go out, per fragment of consecutive logical key tiles: `block_bias` [1, 1, Sq, NB] bf16
+  TILE (NB block_keys >= T, NB % 32 == 0; a strip reads its row block's bias tile(s), 2 KB each, issued before the
+  strip arrives and kept while the next strip needs the same tile): every score of a block (block_keys adjacent
+  logical keys) whose bias is nonzero (-inf) is written -inf, 0 keeps it;
+  `block_max_out` [1, 1, Sq, NBm] fp32 ROW_MAJOR (NBm block_keys >= T, NBm % 4 == 0, block_keys <= 8 so a tile's run
+  is 16-byte aligned), written in place: the max of each block's written bf16 scores, exactly widened to fp32, for
+  the blocks of the first kv_len keys (later columns untouched); `block_max_pin`: +inf there at each query's own
+  block (its newest visible key (pos + 1) // ratio - 1). New attributes `block_keys`, `block_max_pin` and
+  tensor_args `block_bias`, `block_max_out` (presence and widths hashed); the factory adds the writer define
+  `INDEXER_SCORE_BLOCK_EPILOGUE`, two scratch CBs after every other CB, appended writer CT args and two common args
+  after the shard order, only when the option is on. Off (default): the same kernels' code paths, args and CBs.
+- Why: DeepSeek-V4.1's candidate pool (layer 20: max over each block of 8 keys of the [Sq, T] scores, the newest
+  block pinned) took 8 strided slices of [512, 55296] bf16 + 7 maximum + the pin ops (~9 ms of a chunk, glue report
+  item 3); its re-index layers (24-36) added a 0 / -inf block bias by repeat_interleave x 8 + add (~3.2 ms, item 8).
+- Speed (2x2 p150, layer 20's shapes: Sq 512 x 32 heads x 128, T 55296, kv_len 55296, HiFi2 + fp32 DEST, q 64 x k
+  32, 30 synced calls): plain 1.68 ms; + block max and pin 1.96 (first scalar version 3.07: per-value branches and
+  16-bit loads; now 32-bit loads and Zbb max / min on the fp32 bit patterns); + bias 1.69 (first version with
+  ROW_MAJOR bias rows, one 64-byte read per query row per strip: 2.16). In the model (P.16 plain profile) the indexer
+  section fell 25.15 -> 12.94 ms a chunk.
+- Exactness: tests/unit/test_block_epilogue.py (2x2, ratio 1, natural blocks, block-cyclic keys, T 6144, starts 0 /
+  32 / 1088 / 2048 / 2592 / 4064, block_keys 8 and 4): biased scores, block maxes (plain and biased) and the pin equal
+  the plain call's scores bit for bit; columns past kv_len / block_keys keep a sentinel; 7 refusals. Negative
+  controls by hand (a corrupted max, a bias that skips a key): both fail.
+- Needed by: deepseek_v41_flash_d_p P.16
+- Files: device/indexer_score_device_operation_types.hpp, device/indexer_score_device_operation.hpp,
+  device/indexer_score_device_operation.cpp (launch validation, hash), device/ring_indexer_score_dsa_program_factory.cpp,
+  device/kernels/writer_indexer_score.cpp, indexer_score_nanobind.cpp, tests/unit/test_block_epilogue.py
