@@ -555,8 +555,9 @@ inline void eltwise_unary_configure_mop(
  * @tparam pack_mode: Packing layout, values = <Default/Tilize>
  * @param tensor_shape: Tile geometry (face_r_dim, face grid). Total face count must be 1, 2, or 4.
  * @param dst_format: Destination data format (DataFormat enum underlying value); 255 means unset.
- * @note COL broadcast supports only a full 32x32 tile (16-row faces, 2x2 face grid).
- * @note B2D ROW broadcast does not support a 32x16 tile (2x1 face grid).
+ * @note B2D COL, ROW and SCALAR broadcast follow the face grid on every tile shape. The remaining
+ *       32x32-only broadcast limits (COL with unpack to dest or acc_to_dest, ROW with acc_to_dest) are
+ *       asserted on the unpack side in @ref _llk_unpack_A_init_ (tt-metal#47328).
  * @note On the unpack thread, pair with @ref _llk_unpack_A_init_ (copy/transpose), @ref _llk_unpack_tilize_init_ (tilize) or @ref _llk_unpack_untilize_init_
  * (untilize) which feed the tile.
  * @note @ref _llk_math_eltwise_unary_datacopy_ runs the configured op with matching template args.
