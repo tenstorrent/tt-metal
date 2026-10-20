@@ -132,12 +132,15 @@ def _mm_config_256(k, n):
             out_block_h=8, out_block_w=1, per_core_M=8, per_core_N=1, fuse_batch=True, fused_activation=None,
             mcast_in0=True,
         )  # fmt: skip
-    if nt % 10:
-        return None
-    pn = nt // 10
+    gx = 10
+    if nt % 10:  # (the context pass's K / V projection, 12 tiles: 6 x 8 cores)
+        gx = max(d for d in range(1, 12) if nt % d == 0)
+        if gx < 4:
+            return None
+    pn = nt // gx
     bw = {90: 10, 60: 12, 32: 8}.get(kt, max(d for d in range(1, 17) if kt % d == 0))
     return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-        compute_with_storage_grid_size=ttnn.CoreCoord(10, 8), in0_block_w=bw, out_subblock_h=1,
+        compute_with_storage_grid_size=ttnn.CoreCoord(gx, 8), in0_block_w=bw, out_subblock_h=1,
         out_subblock_w=max(d for d in range(1, 5) if pn % d == 0), out_block_h=1, out_block_w=pn, per_core_M=1,
         per_core_N=pn, transpose_mcast=False, fused_activation=None,
     )  # fmt: skip
@@ -438,12 +441,24 @@ class BatchedDraft:
             kb = reverse_permute(w[a + "k_proj.bias"][:, None], D * nkv, D * nkv * hd, 1)[:, 0]
             vb = w[a + "v_proj.bias"]
             g, u = w[m + "gate_proj.weight"], w[m + "up_proj.weight"]
+
+            def kv_only(qp, kp, vp):
+                """[q | k | v] per device with only nkv of its q heads (the context pass needs K / V only: a 3.3x
+                narrower projection; the q stub keeps nlp_create_qkv_heads' layout)"""
+                qh, kh = nq * hd, nkv * hd
+                return torch.cat(
+                    [torch.cat([qp[d * qh : d * qh + kh], kp[d * kh : (d + 1) * kh], vp[d * kh : (d + 1) * kh]])
+                     for d in range(D)]
+                )  # fmt: skip
+
             self.L.append(
                 dict(
                     ln1=norm_w(w[p + "input_layernorm.weight"]),
                     ln2=norm_w(w[p + "post_attention_layernorm.weight"]),
                     qkv=put(per_device([q, k, v]).T, cols, dtype=wdt),
                     qkv_b=put(per_device([qb, kb, vb]).reshape(1, -1), cols),
+                    kv=put(kv_only(q, k, v).T, cols, dtype=wdt),
+                    kv_b=put(kv_only(qb, kb, vb).reshape(1, -1), cols),
                     q_norm=norm_w(reverse_permute_1d(w[a + "q_norm.weight"])),
                     k_norm=norm_w(reverse_permute_1d(w[a + "k_norm.weight"])),
                     o=put(w[a + "o_proj.weight"].T, rows, dtype=wdt),
@@ -496,6 +511,12 @@ class BatchedDraft:
             math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=False
         )
         # (with BF16 weights HiFi2 / LoFi were no faster; with the BFP8 ones HiFi2 is: 26.8 -> 26.6 ms, LoFi as HiFi2)
+        # the context pass's fc (compute-bound: 21 GFLOP per pass) at LoFi: round 23.0 -> 22.9 ms at ISL 256, acceptance
+        # 5.02 / 5.01 tokens per round (in its spread); B32_CTX_FC_FID=HiFi2: the other matmuls' fidelity
+        self.fc_ck = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=getattr(ttnn.MathFidelity, os.environ.get("B32_CTX_FC_FID", "LoFi")), math_approx_mode=False,
+            fp32_dest_acc_en=True, packer_l1_acc=True,
+        )  # fmt: skip
         # the pass activations between ops in L1 (B32_DRAFT_L1)
         self.act_mc = ttnn.L1_MEMORY_CONFIG if os.environ.get("B32_DRAFT_L1", "1") == "1" else ttnn.DRAM_MEMORY_CONFIG
         self.mm_ck = ttnn.WormholeComputeKernelConfig(
@@ -513,7 +534,7 @@ class BatchedDraft:
         self.argmax = _Argmax(lm8.shape[-1], target.vocab_size)
 
     # -- pieces ----------------------------------------------------------------------------------------------------
-    def _linear(self, x, w, bias=None):
+    def _linear(self, x, w, bias=None, ck=None):
         pc = _mm_config_256(w.shape[-2], w.shape[-1]) if x.shape[-2] == self.rows else None
         # (a pass's 256-row activations in L1; the prompt context's chunks in DRAM)
         mc = self.act_mc if x.shape[-2] == self.rows else ttnn.DRAM_MEMORY_CONFIG
@@ -523,7 +544,7 @@ class BatchedDraft:
             bias=bias,
             program_config=pc,
             dtype=ttnn.bfloat16,
-            compute_kernel_config=self.mm_ck,
+            compute_kernel_config=ck or self.mm_ck,
             memory_config=mc,
         )
 
@@ -535,12 +556,14 @@ class BatchedDraft:
             out.append(ttnn.reshape(t, [1, 1, self.rows, self.hd]))
         return out
 
-    def _heads_qk(self, qkv, L, cos, sin, with_q):
+    def _heads_qk(self, qkv, L, cos, sin, with_q, nq=None):
         """[1, 1, rows, qkv] projection -> (Q or None, K, V) heads in the prefill layout [1, heads, rows, hd] (L1),
-        K (and Q) head-normed and rotated, every row at its own position."""
+        K (and Q) head-normed and rotated, every row at its own position. nq: the projection's q heads (the context
+        pass's K / V projection carries an nkv-head q stub)."""
         q, k, v = ttnn.experimental.nlp_create_qkv_heads(
-            qkv, num_heads=self.nq, num_kv_heads=self.nkv, transpose_k_heads=False, memory_config=ttnn.L1_MEMORY_CONFIG
-        )
+            qkv, num_heads=nq or self.nq, num_kv_heads=self.nkv, transpose_k_heads=False,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )  # fmt: skip
         trans = self.rope.get_both_trans_mats()["prefill"]
 
         def norm_rope(t, w):
@@ -604,14 +627,19 @@ class BatchedDraft:
     # -- passes -----------------------------------------------------------------------------------------------------
     def context(self, features, pos, rot):
         """features: device [1, 1, rows, 5 * hidden] (row 32 i + u); pos: per-step positions; rot: per-row (cos, sin)."""
-        ctx = self._linear(features, self.fc_full)
+        ctx = self._linear(features, self.fc_full, ck=self.fc_ck)
         ctx2 = ttnn.rms_norm(ctx, epsilon=self.eps, weight=self.hidden_norm, compute_kernel_config=self.ck)
         ctx.deallocate(True)
         ks, vs = [], []  # every layer's K / V, then one write program for the 8 layers
+        kv_only = os.environ.get("B32_CTX_KV_ONLY", "1") == "1"
         for li in range(self.layers):
             L = self.L[li]
-            qkv = self._linear(ctx2, L["qkv"], L["qkv_b"])
-            _, k, v = self._heads_qk(qkv, L, *rot, with_q=False)
+            if kv_only:  # K / V (and an nkv-head q stub) only
+                qkv = self._linear(ctx2, L["kv"], L["kv_b"])
+                _, k, v = self._heads_qk(qkv, L, *rot, with_q=False, nq=self.nkv)
+            else:
+                qkv = self._linear(ctx2, L["qkv"], L["qkv_b"])
+                _, k, v = self._heads_qk(qkv, L, *rot, with_q=False)
             qkv.deallocate(True)
             ks.append(k)
             vs.append(v)
