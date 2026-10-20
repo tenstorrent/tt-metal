@@ -228,13 +228,10 @@ void MetalEnvImpl::verify_fw_capabilities() {
 // ─── Fabric config ────────────────────────────────────────────────────────────
 
 tt_fabric::FabricConfig MetalEnvImpl::get_fabric_config() const {
-    // One source of truth. Once the control plane exists it has resolved this process's actual fabric
-    // config from the mesh graph descriptor (the MGD's per-mesh fabric_config takes precedence over the
-    // SetFabricConfig override -- see ControlPlane::adopt_local_mesh_fabric_config). Every consumer (the
-    // firmware initializer, device setup, the test harness, ...) pulls that resolved value from here, so
-    // the device fabric is always brought up for the same config the routers were built with -- never
-    // partially initialized with the override and then overridden. Before the control plane exists, the
-    // stored value is the requested override (used only to build the control plane).
+    // One source of truth: once the control plane exists it has resolved this process's config from the MGD
+    // (per-mesh fabric_config > SetFabricConfig override, see adopt_local_mesh_fabric_config), so every
+    // consumer builds the device fabric for the same config the routers used. Before it exists, fabric_config_
+    // is the requested override.
     if (control_plane_ != nullptr) {
         return control_plane_->get_fabric_config();
     }
@@ -469,24 +466,20 @@ void MetalEnvImpl::teardown_fabric_config() {
     if (!devices_still_open) {
         if (this->control_plane_) {
             this->control_plane_->clear_fabric_context();
-            // Always sync the control plane's resolved config to the env's current config (DISABLED here) so
-            // get_fabric_config() -- which reads through to the control plane -- stays aligned with the env
-            // after teardown instead of reporting a stale config. Re-adopt preserves an MGD's per-mesh config.
+            // Keep the control plane's resolved config aligned with the env (now DISABLED) so the read-through
+            // get_fabric_config() doesn't report a stale config; re-adopt preserves an MGD's per-mesh config.
             this->control_plane_->sync_fabric_config(this->fabric_config_);
         } else if (!rtoptions_->has_factory_system_descriptor_path()) {
             this->get_control_plane().clear_fabric_context();
             this->get_control_plane().sync_fabric_config(this->fabric_config_);
         }
     } else if (this->control_plane_) {
-        // Devices are still open, so tearing down the fabric context (clear_fabric_context) is deferred to the
-        // fabric firmware teardown that runs as the last device closes. The config field, however, must still be
-        // synced now: we have just marked the env config DISABLED with zero active routing planes, and
-        // get_fabric_config() reads through to the control plane. Without this, the control plane keeps reporting
-        // a stale non-DISABLED config (e.g. the FABRIC_1D a prior open enabled for dispatch) while the routing
-        // planes are gone, so the next device open takes the "fabric already configured" branch and trips
-        // "Fabric is enabled for dispatch but no routing planes are active" (device_manager.cpp). This mirrors
-        // the !devices_still_open branch above, minus clear_fabric_context; adopt still preserves an MGD's
-        // per-mesh config. Routing-plane teardown continues to happen later via the deferred firmware path.
+        // Devices still open: clear_fabric_context is deferred to firmware teardown at last device close, but the
+        // config must sync now. The env is DISABLED with zero routing planes; without syncing, the read-through
+        // get_fabric_config() keeps reporting a stale non-DISABLED config (e.g. a prior dispatch FABRIC_1D), so
+        // the next device open takes the "fabric already configured" branch and trips "Fabric is enabled for
+        // dispatch but no routing planes are active" (device_manager.cpp). Mirrors the branch above minus
+        // clear_fabric_context; adopt preserves an MGD's per-mesh config.
         this->control_plane_->sync_fabric_config(this->fabric_config_);
     }
 }

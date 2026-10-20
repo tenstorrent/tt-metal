@@ -456,11 +456,10 @@ void MeshGraph::initialize_from_mgd(
             }
         }
 
-        // Resolve this mesh's FabricConfig per-mesh (MeshGraphDescriptor owns the precedence: the MGD's
-        // own fabric_config field > process-wide override > dim_types-derived default). Different meshes
-        // in one MGD may therefore run different configs; the config-vs-topology check below applies the
-        // resolved config against each mesh's own topology. Only an explicitly-requested config drives
-        // connectivity -- a derived default leaves the mesh on its declared dim_types topology.
+        // Resolve this mesh's FabricConfig (MeshGraphDescriptor owns the precedence: MGD fabric_config >
+        // process-wide override > dim_types-derived default), so meshes in one MGD may run different configs.
+        // Only an explicitly-requested config drives connectivity; a derived default leaves the mesh on its
+        // declared dim_types topology.
         FabricType mgd_fabric_type = MeshGraphDescriptor::infer_fabric_type_from_dim_types(mesh_desc);
         const auto resolved = MeshGraphDescriptor::resolve_fabric_config(mesh_desc, fabric_config);
         const std::optional<FabricConfig> mesh_fabric_config =
@@ -484,20 +483,17 @@ void MeshGraph::initialize_from_mgd(
             effective_fabric_type = mgd_fabric_type;
         }
 
-        // Record the resolved per-mesh config (explicit override, or the dim_types-derived default) so the
-        // control plane and tests can see each mesh's routing config.
+        // Record the resolved per-mesh config so the control plane and tests can see each mesh's routing config.
         this->mesh_fabric_config_[mesh_id] = resolved.config;
-        // Separately record only explicitly-requested configs (is_explicit == mesh_fabric_config has a
-        // value) so consumers can distinguish a declared/overridden config from a derived default and avoid
-        // forcing fabric on from a mere default. See MeshGraph::get_explicit_fabric_config.
+        // Separately record only explicitly-requested configs so consumers can distinguish a declared/overridden
+        // config from a derived default and avoid forcing fabric on. See MeshGraph::get_explicit_fabric_config.
         if (mesh_fabric_config.has_value()) {
             this->explicit_mesh_fabric_config_[mesh_id] = *mesh_fabric_config;
         }
 
-        // A 1D fabric config is single-mesh only: 1D routing has no inter-mesh story. Reject an
-        // explicitly-requested 1D config (declared per-mesh in the MGD or set process-wide) on an MGD with
-        // more than one compute mesh. A small mesh whose dim_types merely *derive* to 1D is left alone --
-        // it can still be a sub-mesh of a larger multi-mesh fabric (e.g. assign_z virtualization).
+        // A 1D fabric config is single-mesh only (1D routing has no inter-mesh story): reject an
+        // explicitly-requested 1D config on an MGD with more than one compute mesh. A mesh whose dim_types
+        // merely *derive* to 1D is left alone -- it can still be a sub-mesh of a larger fabric.
         if (mesh_fabric_config.has_value() && all_meshes.size() > 1) {
             const auto requested = *mesh_fabric_config;
             const bool is_1d = requested == FabricConfig::FABRIC_1D || requested == FabricConfig::FABRIC_1D_RING ||

@@ -159,10 +159,9 @@ public:
     // override, else the config derived from the mesh's dim_types. Meshes in one MGD may differ.
     FabricConfig get_fabric_config(MeshId mesh_id) const;
 
-    // The *explicitly-requested* FabricConfig for a mesh (declared MeshDescriptor.fabric_config or a
-    // process-wide override), or std::nullopt when the mesh only has a dim_types-derived default. Callers
-    // that must not act on a derived default -- e.g. deciding whether to force a fabric bring-up -- use this
-    // instead of get_fabric_config(), which always returns a concrete (possibly derived) config.
+    // The *explicitly-requested* FabricConfig (declared MeshDescriptor.fabric_config or a process-wide
+    // override), or std::nullopt when only a dim_types-derived default exists. Callers that must not act on a
+    // derived default (e.g. deciding whether to force a fabric bring-up) use this instead of get_fabric_config().
     std::optional<FabricConfig> get_explicit_fabric_config(MeshId mesh_id) const;
 
     // Get the chip ids for a given mesh_id
@@ -290,9 +289,8 @@ private:
     std::unordered_map<MeshId, bool> intra_mesh_relaxed_policy_;
     // Resolved FabricConfig per mesh (MGD-declared, process-wide override, or dim_types default).
     std::unordered_map<MeshId, FabricConfig> mesh_fabric_config_;
-    // Subset of the above holding only meshes whose config came from an explicit source (MGD-declared or a
-    // process-wide override); meshes with only a dim_types-derived default are absent. Backs
-    // get_explicit_fabric_config().
+    // Subset of the above with only explicitly-sourced configs (MGD-declared or override); derived-default
+    // meshes are absent. Backs get_explicit_fabric_config().
     std::unordered_map<MeshId, FabricConfig> explicit_mesh_fabric_config_;
     bool inter_mesh_relaxed_policy_ = false;  // Default to STRICT (false = not relaxed)
     // Set true in initialize_from_mgd when policy is read from the descriptor (vs implicit default)

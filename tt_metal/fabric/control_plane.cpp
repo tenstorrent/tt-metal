@@ -820,21 +820,17 @@ struct MeshFabricConfigObservation {
     uint32_t rank;
     uint32_t mesh_host_rank;
     FabricConfig fabric_config;
-    // Process-wide channel-geometry knobs that must be IDENTICAL on every rank. They select the per-VC
-    // buffer-slot table and the channel buffer size; two inter-mesh-linked processes (and transitively the
-    // whole fabric) must agree on them or the inter-mesh channel geometry diverges -> silent credit stall.
-    // Unlike fabric_config these come from env/rtoptions + the router-config override, which the launcher
-    // does not otherwise guarantee uniform across ranks.
+    // Process-wide channel-geometry knobs that must be IDENTICAL on every rank: they select the per-VC
+    // buffer-slot table and channel buffer size, so any divergence across an inter-mesh link -> silent credit
+    // stall. From env/rtoptions + router-config override, which the launcher doesn't guarantee uniform.
     uint8_t vc2_enabled;
     uint8_t mesh_pass_through_enabled;
     uint64_t max_payload_override;  // std::numeric_limits<uint64_t>::max() == no override
 };
 
-// Validate the gathered per-mesh FabricConfigs. Rules:
-//   - every rank that owns a given mesh must report the same config,
-//   - a 1D config may not be used when more than one mesh is present (and cannot be mixed with 2D).
-// Different 2D configs across meshes are allowed, including meshes joined by an intermesh link.
-// Throws (TT_FATAL) on any violation; mesh_graph_path is only used for error context.
+// Validate the gathered per-mesh FabricConfigs: every rank owning a mesh must report the same config, and the
+// process-wide channel-geometry knobs must be identical on every rank. Different 2D configs across meshes are
+// allowed (incl. intermesh-linked). Throws (TT_FATAL) on violation; mesh_graph_path is error context only.
 void validate_fabric_configs(
     const std::vector<MeshFabricConfigObservation>& observations, const std::string& mesh_graph_path) {
     std::string observed_values;
@@ -847,10 +843,8 @@ void validate_fabric_configs(
             enchantum::to_string(o.fabric_config));
     }
 
-    // Every rank that owns a given mesh must report the same config; different meshes may differ.
-    // (The 1D-cannot-span-multiple-meshes rule lives in MeshGraph, which sees each mesh's *resolved*
-    // per-mesh config -- MGD-declared, process-wide override, or derived -- whereas these observations
-    // only carry the process-wide config and so cannot see an MGD-declared 1D mesh.)
+    // Every rank owning a given mesh must report the same config; different meshes may differ. (The
+    // 1D-cannot-span-multiple-meshes rule lives in MeshGraph, which sees each mesh's resolved per-mesh config.)
     std::map<MeshId, FabricConfig> per_mesh_config;
     for (const auto& o : observations) {
         const auto [it, inserted] = per_mesh_config.try_emplace(o.mesh_id, o.fabric_config);
@@ -865,12 +859,10 @@ void validate_fabric_configs(
             observed_values);
     }
 
-    // Channel-geometry env knobs must be identical on EVERY rank (globally, not just per-mesh). Unlike
-    // fabric_config -- which may legitimately differ across 2D meshes -- enable_fabric_vc2,
-    // enable_fabric_mesh_pass_through, and the max_packet_payload_size override select the per-VC
-    // buffer-slot table and the channel buffer size. Any disagreement across an inter-mesh link (and these
-    // are process-wide env/override values the launcher does not guarantee uniform) makes the two ends of
-    // the channel size their buffers differently -> silent credit stall. Assert uniformity up front.
+    // Channel-geometry env knobs must be identical on EVERY rank (globally, not just per-mesh): unlike
+    // fabric_config (which may differ across 2D meshes), vc2 / mesh_pass_through / max_payload select the per-VC
+    // buffer-slot table and channel buffer size, so any disagreement across an inter-mesh link -> silent credit
+    // stall. Assert uniformity up front.
     if (!observations.empty()) {
         const auto& ref = observations.front();
         for (const auto& o : observations) {
@@ -904,24 +896,18 @@ void validate_fabric_configs(
 }  // namespace
 
 void ControlPlane::adopt_local_mesh_fabric_config() {
-    // Each rank/process (tt-run launches one MPI rank per mesh, each with its own TT_MESH_ID) owns a
-    // single mesh, so build for that mesh's *explicitly-configured* config, not the raw process-wide
-    // override. Only an explicit source adopts here -- a per-mesh fabric_config declared in the MGD, or a
-    // process-wide SetFabricConfig override threaded into the mesh graph. A dim_types-derived default
-    // (is_explicit == false; always a 2D-family config) is deliberately NOT adopted: it must not flip a
-    // process that never requested fabric (e.g. a single-card run, or any auto-discovered graph, where the
-    // override is std::nullopt) from DISABLED to FABRIC_2D and force an unwanted fabric bring-up. Leaving
-    // fabric_config_ untouched in that case keeps single-config / no-fabric runs on exactly the config they
-    // asked for. No-op when a rank owns several meshes (single-host multi-mesh testing). MetalEnvImpl
-    // aligns its runtime config to this, so the env and the control plane agree on one config per process.
+    // Each rank owns one mesh (tt-run launches one MPI rank per mesh, each with its own TT_MESH_ID), so build
+    // for that mesh's *explicitly-configured* config (MGD-declared fabric_config or a process-wide override).
+    // A dim_types-derived default is deliberately NOT adopted: it must not flip a process that never requested
+    // fabric (single-card / auto-discovered, override == nullopt) from DISABLED to FABRIC_2D. No-op when a rank
+    // owns several meshes (single-host multi-mesh testing). MetalEnvImpl aligns its config to this.
     if (this->mesh_graph_ == nullptr || this->local_mesh_binding_.mesh_ids.size() != 1) {
         return;
     }
     const auto local_mesh = this->local_mesh_binding_.mesh_ids.front();
     const auto explicit_config = this->mesh_graph_->get_explicit_fabric_config(local_mesh);
     if (!explicit_config.has_value()) {
-        // No explicitly-requested config for this mesh; keep the process-wide fabric config (the
-        // SetFabricConfig override, DISABLED by default). Never let a derived default force fabric on.
+        // No explicit config for this mesh; keep the process-wide config (override, DISABLED by default).
         return;
     }
     const auto resolved = *explicit_config;
@@ -940,9 +926,8 @@ void ControlPlane::adopt_local_mesh_fabric_config() {
 }
 
 void ControlPlane::validate_fabric_config_compatibility() {
-    // Inter-mesh dimensionality compatibility (moved out of MeshGraph): two meshes joined by an inter-mesh
-    // link must share routing dimensionality -- all 2D configs (FABRIC_2D, FABRIC_2D_TORUS_X/Y/XY) interoperate,
-    // a 1D config cannot be inter-mesh-linked to a 2D one. Uses each mesh's resolved per-mesh config.
+    // Inter-mesh dimensionality compatibility (moved out of MeshGraph): meshes joined by an inter-mesh link
+    // must share routing dimensionality -- all 2D configs interoperate, a 1D config cannot be linked to a 2D.
     {
         auto is_2d = [](FabricConfig cfg) {
             return cfg == FabricConfig::FABRIC_2D || cfg == FabricConfig::FABRIC_2D_TORUS_X ||
@@ -998,8 +983,8 @@ void ControlPlane::validate_fabric_config_compatibility() {
     distributed_context.all_reduce(
         ttsl::Span<uint32_t>(&local_binding_count, 1), ttsl::Span<uint32_t>(&max_binding_count, 1), ReduceOp::MAX);
 
-    // Process-wide channel-geometry knobs (same for every mesh this rank owns); gathered so we can assert
-    // they are identical on every rank -- see validate_fabric_configs.
+    // Process-wide channel-geometry knobs; gathered to assert they are identical on every rank (see
+    // validate_fabric_configs).
     const auto& rtoptions = this->rtoptions_.get();
     const uint8_t vc2_enabled = rtoptions.get_enable_fabric_vc2() ? 1 : 0;
     const uint8_t mesh_pass_through_enabled = rtoptions.get_enable_fabric_mesh_pass_through() ? 1 : 0;

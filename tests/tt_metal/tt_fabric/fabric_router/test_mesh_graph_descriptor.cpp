@@ -2633,12 +2633,11 @@ std::optional<tt::tt_fabric::FabricConfig> resolve_mesh_fabric_config(
     }
     std::optional<tt::tt_fabric::FabricConfig> resolved;
     try {
-        // MeshGraph's ctor already takes std::optional<FabricConfig>, so pass the override through directly.
         tt::tt_fabric::MeshGraph mesh_graph(cluster, path.string(), process_wide_override);
         resolved = mesh_graph.get_fabric_config(MeshId{mesh_id});
     } catch (const std::exception&) {
-        // A rejected config (config-vs-topology or the 1D-multi-mesh guard) is the expected negative
-        // outcome here; report it to callers as nullopt.
+        // A rejected config (config-vs-topology or the 1D-multi-mesh guard) is the expected negative outcome;
+        // report it as nullopt.
         resolved.reset();
     }
     std::filesystem::remove(path);
@@ -2646,12 +2645,8 @@ std::optional<tt::tt_fabric::FabricConfig> resolve_mesh_fabric_config(
 }
 }  // namespace
 
-// Single-mesh resolution rules (T3K so an explicit 1D config maps to MESH and doesn't expand to a torus):
-//   - auto-derive is ALWAYS 2D (a line -> FABRIC_2D, a ring axis -> the matching torus), never 1D;
-//   - an explicit config (code override or declared MGD field) can request anything incl. 1D and overrides
-//     the derived default; the MGD field wins over a conflicting code override;
-//   - the config-vs-topology check runs after resolution, so an incompatible torus (from either source) is
-//     rejected (nullopt) while a compatible config is accepted.
+// Single-mesh resolution rules (T3K so an explicit 1D config maps to MESH, not a torus). See the per-case
+// inline comments below; the config-vs-topology check runs after resolution and rejects an incompatible torus.
 TEST(MeshGraphDescriptorTests, FabricConfigResolutionSingleMesh) {
     using FabricConfig = tt::tt_fabric::FabricConfig;
     const auto mgd = [](const std::string& dim_types, const std::string& field) {
@@ -2678,9 +2673,8 @@ TEST(MeshGraphDescriptorTests, FabricConfigResolutionSingleMesh) {
 }
 
 // Multi-mesh resolution: a two-mesh line MGD (4x8 RING,LINE + 4x2 LINE,LINE). Each mesh resolves its own
-// config (declared fields and derived defaults are per-mesh); the declared field wins over a process-wide
-// override; a per-mesh-incompatible override is rejected on the mesh that can't support it; and an explicit
-// 1D config is rejected on this multi-mesh MGD (contrast the single-mesh test, where explicit 1D is kept).
+// config; the declared field wins over a process-wide override; and an explicit 1D config is rejected here
+// (contrast the single-mesh test, where explicit 1D is kept). See the per-case inline comments below.
 TEST(MeshGraphDescriptorTests, FabricConfigResolutionMultiMesh) {
     using FabricConfig = tt::tt_fabric::FabricConfig;
     const auto mgd = [](const std::string& ring_field, const std::string& line_field) {

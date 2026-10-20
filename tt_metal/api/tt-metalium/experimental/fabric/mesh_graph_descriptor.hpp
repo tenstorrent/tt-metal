@@ -332,9 +332,8 @@ public:
     static FabricType infer_fabric_type_from_dim_types(const proto::MeshDescriptor* mesh_desc);
     static FabricType infer_fabric_type_from_dim_types(const proto::SwitchDescriptor* switch_desc);
 
-    // Default fabric config for a mesh derived from its device_topology dim_types. Always a 2D-family
-    // config (never 1D -- 1D can only be requested explicitly): FABRIC_2D, or the matching
-    // FABRIC_2D_TORUS_X/Y/XY per its ring axes (dim 0 -> Y, dim 1 -> X).
+    // Default fabric config derived from a mesh's device_topology dim_types. Always 2D-family (1D is
+    // explicit-only): FABRIC_2D, or FABRIC_2D_TORUS_X/Y/XY per its ring axes (dim 0 -> Y, dim 1 -> X).
     static FabricConfig default_fabric_config_from_dim_types(const proto::MeshDescriptor* mesh_desc);
 
     // A mesh's resolved fabric config plus whether it came from an explicit source (a declared
