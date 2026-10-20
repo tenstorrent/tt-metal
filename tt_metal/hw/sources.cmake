@@ -169,7 +169,6 @@ set(HW_JIT_API_HEADERS
     inc/api/compute/experimental/sdpa_custom_mm_reuse_dest_srcb.h
     inc/api/compute/experimental/sdpa_sub_custom.h
     inc/api/compute/experimental/sdpa_weighted_reduce.h
-    inc/api/compute/experimental/semaphore.h
     inc/api/compute/experimental/semaphore_compute_impl.h
     inc/api/compute/experimental/sinkhorn.h
     inc/api/compute/experimental/softmax_k.h
@@ -222,6 +221,7 @@ set(HW_JIT_API_HEADERS
     inc/api/dataflow/cross_node_dfb.h
     inc/api/dataflow/prefetcher_pipe.h
     inc/api/dataflow/dataflow_buffer.h
+    inc/api/dataflow/dfb_access.h
     inc/api/dataflow/dfb_binding_token.h
     inc/api/dataflow/prefetcher_pipe_binding_token.h
     inc/experimental/kernel_args.h
@@ -325,7 +325,6 @@ set(HW_JIT_API_HEADERS
     inc/internal/tt-2xx/dataflow_buffer/dataflow_buffer_interface.h
     inc/internal/tt-2xx/dataflow_buffer/dataflow_buffer_isr.h
     inc/internal/tt-2xx/quasar/cache.h
-    inc/internal/tt-2xx/quasar/cfg_defines.h
     inc/internal/tt-2xx/quasar/core_config.h
     inc/internal/tt-2xx/quasar/dev_mem_map.h
     inc/internal/tt-2xx/quasar/device_print_mem.h
