@@ -298,3 +298,13 @@ def interleave_blocks(parts: list[torch.Tensor], n: int, dim: int = -1) -> torch
     ``gate_i | up_i`` (``q_i | k_i | v_i``) block of its own slice."""
     chunks = [p.chunk(n, dim=dim) for p in parts]
     return torch.cat([c for i in range(n) for c in (cc[i] for cc in chunks)], dim=dim).contiguous()
+
+
+def selector_tiles() -> torch.Tensor:
+    """The [33*32, 32] constant of the fused decode programs (``kda_decode``, ``dsa_decode_state``): tile r < 32
+    has a 1 at (0, r) (E_r lifts row r of a block into row 0; its transpose places row 0 at row r), tile 32 is all
+    ones (row / column sums by matmul)."""
+    sel = torch.zeros(33, 32, 32)
+    sel[torch.arange(32), 0, torch.arange(32)] = 1.0
+    sel[32] = 1.0
+    return sel.reshape(33 * 32, 32)

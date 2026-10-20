@@ -45,7 +45,7 @@ from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState, ttKDA
 from models.demos.deepseek_v3_d_p.tt.kda.weights import KDAWeights, load_kda_weights
 from models.demos.glm53_flash.tt.config import GLM53FlashConfig
 from models.demos.glm53_flash.tt.matmul_configs import DecodeLinear
-from models.demos.glm53_flash.tt.mesh import GLMMesh, interleave_blocks, single_chip
+from models.demos.glm53_flash.tt.mesh import GLMMesh, interleave_blocks, selector_tiles, single_chip
 
 L2_NORM_EPS = 1e-6  # FLA l2norm: x / sqrt(sum(x^2) + 1e-6)
 # decode path: "composite" (default) | "block" (GLM53_KDA_FUSED=1: one kda_decode program for the whole block) |
@@ -215,10 +215,7 @@ class TtKDA(LightweightModule):
                 cols=-1,
             )
             self.o_norm_w32 = up(raw["o_norm.weight"].float().reshape(1, 1, 1, -1), ttnn.float32)
-            sel = torch.zeros(33, 32, 32)
-            sel[torch.arange(32), 0, torch.arange(32)] = 1.0  # tile r: 1 at (0, r)
-            sel[32] = 1.0  # all ones: row sums by matmul
-            self.selectors = up(sel.reshape(33 * 32, 32), ttnn.bfloat16)
+            self.selectors = up(selector_tiles(), ttnn.bfloat16)
             # gates in two matmuls: x -> [f_a | g_a | b_logits] (bf16, as HF), then the block-diagonal
             # [f_b, g_b, I] -> [f | og | b_logits] (fp32 accumulate); the identity block carries the logits
             Hb = -(-H // 32) * 32
