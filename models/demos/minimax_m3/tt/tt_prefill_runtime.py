@@ -39,7 +39,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utils import block_cyclic_reorder
-from models.demos.minimax_m3.tt.attention.kv_cache import ordered_page_table, read_paged_slot_block, set_page_table
+from models.demos.minimax_m3.tt.attention.kv_cache import read_paged_slot_block
 from models.demos.minimax_m3.tt.prefill_chunk import PrefillChunk, pack_forward_tokens, validate_chunks
 from models.demos.minimax_m3.utils.general_utils import sparse_attention_freq
 
@@ -343,7 +343,9 @@ class TtPrefillRuntime:
         high_bw_all_gather), so sweeping every KV-length bucket (the previous behaviour: max_seq_len /
         chunk_size chunks, 196 at 1M) re-ran the same programs and still missed variant (iii). What IS hashed
         is the cache capacity itself (gather buffer shapes, sparse_sdpa T), which is why reconfigure_capacity()
-        invalidates this warm-up. The warm-up writes slots the real run overwrites."""
+        invalidates this warm-up. The warm-up writes slots the real run overwrites; on a paged cache it writes
+        through the installed page table, which needs no mapping of its own (unmapped pages drop writes and gather
+        as zeros)."""
         assert self.model_built
         cfg = self.config
         chunk, n_chunks = cfg.chunk_size, cfg.forward_chunks
@@ -364,19 +366,11 @@ class TtPrefillRuntime:
             f"TtPrefillRuntime.compile() — warming first / cache-read / ragged forwards ({n_chunks} x {chunk}-token "
             f"chunks, capacity {cfg.max_seq_len})"
         )
-        paged = kv_cache.page_table is not None
-        if paged:
-            # The warm-up maps pages of its own, so its gathers read pages it wrote rather than whatever an unmapped
-            # page leaves behind; the table it found is put back afterwards.
-            found_table = ttnn.to_torch(ttnn.get_device_tensors(kv_cache.page_table)[0])
-            set_page_table(kv_cache, ordered_page_table(kv_cache, chunk))
         t0 = time.perf_counter()
         for chunks in plan:
             inp = self.make_forward_input([[0] * chunk] * n_chunks, [c.actual_start for c in chunks])
             self.prefill_forward(inp, kv_cache, chunks)
         ttnn.synchronize_device(self.mesh_device)
-        if paged:
-            set_page_table(kv_cache, found_table)
         warmup_ms = (time.perf_counter() - t0) * 1000.0
         logger.info(f"[prefill timing] task_id=WARMUP variants={len(plan)} runtime.compile() = {warmup_ms:.2f} ms")
         self.compiled = True
@@ -643,7 +637,8 @@ class TtPrefillRuntime:
 
         A TP-deduped index_k (``kv_cache.index_k_tp_axis``) is returned in the SAME layout as the replicated
         one: its per-column stripes are re-interleaved on host, so callers need no special case. So is a paged
-        cache: ``slot_id``'s pages are placed where a slot cache would hold them, unmapped pages as zeros.
+        cache: ``slot_id``'s pages under the same bound are placed where a slot cache would hold them, unmapped
+        pages as zeros, read in runs of consecutive physical pages (``read_paged_slot_block``).
         """
         start = slot_id * self.config.num_layers
         end = start + self.config.num_layers

@@ -313,10 +313,12 @@ def _attention_core(
         sp_kcfg = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=False, packer_l1_acc=False
         )
+        assert (
+            kv_cache is None or kv_cache.page_table is None
+        ), "a dense layer's ring_joint reads slots: a paged KV cache serves MSA layers only"
         if cached_len > 0:
             # Cache-read: ring_joint over the accumulated prefix in the cache (the seam already wrote this
             # chunk -> write_chunk=False). logical_n = full valid prefix = cached_len + this chunk.
-            assert kv_cache.page_table is None, "ring_joint reads a slot cache: a paged KV cache serves MSA layers only"
             logical_n = cached_len + seq_len * sp
             with zone("ring_joint_sdpa"):
                 tt_sdpa_out = dense_sp_attention(
