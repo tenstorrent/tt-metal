@@ -31,6 +31,9 @@ from helpers.golden_generator.heavyweight.data_transfer_blocks import (
 from helpers.golden_generator.heavyweight.data_transfer_blocks.l1_codec import (
     tile_bytes_for,
 )
+from helpers.golden_generator.heavyweight.data_transfer_blocks.storage import (
+    to_dest_storage,
+)
 from helpers.llk_params import DestAccumulation, PackerReluType, StochasticRounding
 
 QUASAR = QuasarDataTransferBlocks()
@@ -75,7 +78,9 @@ def test_a_defaulted_wide_float_src_format_is_refused():
     dest_acc is off, and both clip where Tf32 would not -- so the input alone
     does not determine the register family, exactly as dest_format_for says."""
     l1 = QUASAR.pack_to_l1(_tile_of(1.0), DataFormat.Float32)
-    with pytest.raises(ValueError, match="does not determine the src register family"):
+    with pytest.raises(  # allow-pytest.raises: host-only test
+        ValueError, match="does not determine the src register family"
+    ):  # allow-pytest.raises: host-only test
         QUASAR.l1_to_srcA(l1, DataFormat.Float32)
     # dest_acc on, the device really does use Tf32, so no caller input needed.
     assert QUASAR.l1_to_srcA(l1, DataFormat.Float32, dest_acc=True)[0].item() == 1.0
@@ -85,7 +90,9 @@ def test_srcs_is_refused_on_architectures_without_it():
     """SrcS is Quasar-only: no UNP_S unpacker and no _is_srcs_32bit_mode_ on
     Wormhole or Blackhole, so the blocks must not answer for it."""
     for blocks in (WORMHOLE, BLACKHOLE):
-        with pytest.raises(ValueError, match="no SrcS register"):
+        with pytest.raises(  # allow-pytest.raises: host-only test
+            ValueError, match="no SrcS register"
+        ):  # allow-pytest.raises: host-only test
             blocks.srcs_format(DataFormat.Float16_b)
 
 
@@ -148,7 +155,7 @@ def test_srcs_storage_format(l1_format, dest_acc, expected):
 )
 def test_quasar_rejects_illegal_srca_pairs(l1_format, src_format):
     l1 = QUASAR.pack_to_l1(torch.ones(TILE), l1_format)
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError):  # allow-pytest.raises: host-only test
         QUASAR.l1_to_srcA(l1, l1_format, src_format)
 
 
@@ -176,7 +183,7 @@ def test_quasar_accepts_legal_srca_pairs(l1_format, src_format):
 )
 def test_srcs_rejects_converting_fp16_under_dest_acc(l1_format, src_format):
     l1 = QUASAR.pack_to_l1(torch.ones(TILE), l1_format, use_srcs=True, dest_acc=True)
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError):  # allow-pytest.raises: host-only test
         QUASAR.l1_to_srcS(l1, l1_format, src_format, dest_acc=True)
 
 
@@ -193,7 +200,9 @@ def test_srcs_rejects_converting_fp16_under_dest_acc(l1_format, src_format):
 )
 def test_a_format_the_architecture_cannot_hold_is_refused(blocks, l1_format):
     assert not blocks.supports(l1_format)
-    with pytest.raises(ValueError, match="cannot read"):
+    with pytest.raises(  # allow-pytest.raises: host-only test
+        ValueError, match="cannot read"
+    ):  # allow-pytest.raises: host-only test
         blocks.src_format(l1_format)
 
 
@@ -205,19 +214,21 @@ def test_a_format_the_architecture_cannot_hold_is_refused(blocks, l1_format):
 def test_a_real_format_without_a_codec_says_so(blocks, l1_format):
     """Not a KeyError, and not a claim that the hardware cannot hold it."""
     assert not blocks.supports(l1_format)
-    with pytest.raises(ValueError, match="no L1 codec"):
+    with pytest.raises(  # allow-pytest.raises: host-only test
+        ValueError, match="no L1 codec"
+    ):  # allow-pytest.raises: host-only test
         blocks.src_format(l1_format)
 
 
 def test_wormhole_without_a_pair_table_still_rejects_a_non_src_format():
     l1 = WORMHOLE.pack_to_l1(torch.ones(TILE), DataFormat.Float16_b)
     WORMHOLE.l1_to_srcA(l1, DataFormat.Float16_b, DataFormat.Tf32)
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError):  # allow-pytest.raises: host-only test
         WORMHOLE.l1_to_srcA(l1, DataFormat.Float16_b, DataFormat.Int8)
 
 
 def test_a_tensor_is_not_an_l1_buffer():
-    with pytest.raises(TypeError):
+    with pytest.raises(TypeError):  # allow-pytest.raises: host-only test
         QUASAR.l1_to_srcA(torch.ones(TILE), DataFormat.Float16_b)
 
 
@@ -245,7 +256,9 @@ def test_a_wide_float_input_with_16_bit_dest_does_not_guess_the_family():
     """Tf32 is not parametrized in: it has no L1 codec, so it raises for that
     reason first and would pass this test without exercising the family check.
     ``test_a_real_format_without_a_codec_says_so`` covers it."""
-    with pytest.raises(ValueError, match="does not determine the register family"):
+    with pytest.raises(  # allow-pytest.raises: host-only test
+        ValueError, match="does not determine the register family"
+    ):  # allow-pytest.raises: host-only test
         QUASAR.dest_format_for(DataFormat.Float32, False)
 
 
@@ -258,7 +271,7 @@ def test_a_wide_float_input_with_16_bit_dest_does_not_guess_the_family():
     ],
 )
 def test_a_dest_format_that_contradicts_dest_acc_is_refused(dest_format, dest_acc):
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError):  # allow-pytest.raises: host-only test
         QUASAR.resolve_dest_format(dest_format, DataFormat.Float16_b, dest_acc)
 
 
@@ -375,7 +388,9 @@ def test_multi_tile_bfp8_reads_every_tile_at_the_padded_stride():
 
 @pytest.mark.parametrize("datums", [TILE + 1, 2 * TILE - 1, TILE // 2])
 def test_a_partial_tile_is_refused_rather_than_dropped(datums):
-    with pytest.raises(ValueError, match="whole number"):
+    with pytest.raises(  # allow-pytest.raises: host-only test
+        ValueError, match="whole number"
+    ):  # allow-pytest.raises: host-only test
         QUASAR.pack_to_l1(torch.ones(datums), DataFormat.Float32)
 
 
@@ -383,7 +398,9 @@ def test_an_explicit_tile_count_packs_a_prefix_but_not_past_the_end():
     x = torch.arange(2 * TILE, dtype=torch.float32)
     l1 = QUASAR.pack_to_l1(x, DataFormat.Float32, tile_count=1)
     assert QUASAR.unpack_from_l1(l1, DataFormat.Float32).tolist() == x[:TILE].tolist()
-    with pytest.raises(ValueError, match="tile_count=3"):
+    with pytest.raises(  # allow-pytest.raises: host-only test
+        ValueError, match="tile_count=3"
+    ):  # allow-pytest.raises: host-only test
         QUASAR.pack_to_l1(x, DataFormat.Float32, tile_count=3)
 
 
@@ -529,12 +546,12 @@ def test_quasar_reduce_col_keeps_rows_0_and_8_of_each_face():
     ],
 )
 def test_an_out_of_range_edge_mask_is_refused(kwargs):
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError):  # allow-pytest.raises: host-only test
         PackEdgeMask(**kwargs)
 
 
 def test_a_selector_shorter_than_the_rows_is_refused():
-    with pytest.raises(ValueError, match="rows"):
+    with pytest.raises(ValueError, match="rows"):  # allow-pytest.raises: host-only test
         PackEdgeMask(masks=(0xFFFF,), select=[0]).apply(torch.ones(32))
 
 
@@ -556,12 +573,12 @@ def test_face_select_words_repeat_for_every_tile(faces):
 
 def test_a_period_that_does_not_tile_the_rows_is_refused():
     mask = PackEdgeMask.from_face_select_words((0xFFFF,), [0x0000] * 4)
-    with pytest.raises(ValueError, match="tile"):
+    with pytest.raises(ValueError, match="tile"):  # allow-pytest.raises: host-only test
         mask.keep(100 * 16)
 
 
 def test_data_that_is_not_whole_rows_is_refused():
-    with pytest.raises(ValueError, match="rows"):
+    with pytest.raises(ValueError, match="rows"):  # allow-pytest.raises: host-only test
         PackEdgeMask(masks=(0xFFFF,)).apply(torch.ones(20))
 
 
@@ -622,7 +639,7 @@ INTEGER_SATURATION_CASES = [
     ids=[f"{c[0].name}-{c[1]:g}" for c in INTEGER_SATURATION_CASES],
 )
 def test_integer_dest_saturates_instead_of_wrapping(dest_format, value, expected):
-    got = QUASAR._to_dest_storage(torch.tensor([value]), dest_format)
+    got = to_dest_storage(torch.tensor([value]), dest_format)
     assert got.item() == expected
 
 
@@ -634,7 +651,7 @@ def test_integer_dest_saturates_instead_of_wrapping(dest_format, value, expected
 def test_non_finite_into_an_integer_dest_is_not_undefined(value, expected):
     """A NaN survives a clamp and makes the cast undefined, so it is mapped
     before the clamp rather than left to torch."""
-    got = QUASAR._to_dest_storage(torch.tensor([value]), DataFormat.Int8)
+    got = to_dest_storage(torch.tensor([value]), DataFormat.Int8)
     assert got.item() == expected
 
 
@@ -683,7 +700,7 @@ def test_integer_dest_accumulates_exactly(current, addend, expected):
 def test_a_derived_integer_dest_is_checked_like_an_explicit_one(
     blocks, l1_format, dest_acc
 ):
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError):  # allow-pytest.raises: host-only test
         blocks.dest_format_for(l1_format, dest_acc)
 
 
@@ -713,7 +730,7 @@ def test_the_legal_integer_dest_pairings_still_resolve(l1_format, dest_acc, expe
 )
 def test_the_unpacker_does_not_widen_into_a_32_bit_dest(l1_format):
     l1 = QUASAR.pack_to_l1(torch.zeros(TILE), l1_format, **ONE_TILE_GEOMETRY)
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError):  # allow-pytest.raises: host-only test
         QUASAR.l1_to_dest(l1, l1_format, dest_acc=True, **ONE_TILE_GEOMETRY)
 
 
