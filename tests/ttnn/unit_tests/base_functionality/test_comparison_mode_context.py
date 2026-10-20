@@ -1450,7 +1450,6 @@ def test_group_norm_default_epsilon_in_comparison_mode(device):
     torch_input[..., ::2, :] *= 1e-3
     input_tensor = _to_device(torch_input.reshape(1, 1, 256, 1024), device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-    # The op's default epsilon is 1e-12; the golden used torch's 1e-5, which shrinks the low-variance groups about 3x.
     with comparison_mode():
         output_tensor = ttnn.group_norm(input_tensor, num_groups=32, inplace=False)
 
