@@ -70,6 +70,7 @@ class WarmupCoordinatorConfig:
     decode_trace_enabled: bool
     eager_plan: WarmupPlan
     sampled_plan: WarmupPlan
+    log_probs_supported: bool = False  # The mesh computes selected-token logprobs (8 or 32 devices).
 
     def __post_init__(self) -> None:
         if not isinstance(self.warmup, WarmupConfig):
@@ -86,6 +87,7 @@ class WarmupCoordinatorConfig:
             "prime_q128_tile_ends",
             "prefill_trace_enabled",
             "decode_trace_enabled",
+            "log_probs_supported",
         ):
             if not isinstance(getattr(self, name), bool):
                 raise TypeError(f"{name} must be bool")
@@ -111,6 +113,7 @@ class WarmupCoordinatorConfig:
             lane_batch_size=self.lane_batch_size,
             allow_force_argmax=self.allow_force_argmax,
             can_sample_on_device=False,
+            log_probs_supported=self.log_probs_supported,
         )
         expected_sampled = _build_plan(
             warmup=self.warmup,
@@ -119,6 +122,7 @@ class WarmupCoordinatorConfig:
             lane_batch_size=self.lane_batch_size,
             allow_force_argmax=self.allow_force_argmax,
             can_sample_on_device=True,
+            log_probs_supported=self.log_probs_supported,
         )
         if self.eager_plan != expected_eager or self.sampled_plan != expected_sampled:
             raise ValueError("warmup plans must match resolved policy and geometry")
@@ -165,6 +169,7 @@ class WarmupCoordinatorConfig:
         device_sampling_enabled = prefill.device_sampling_enabled
         allow_force_argmax = prefill.allow_force_argmax
         prime_q128_tile_ends = device_sampling_enabled and lane_batch_size >= 32
+        log_probs_supported = bool(getattr(getattr(prefill.model, "sampling", None), "log_probs_supported", False))
         eager_plan = _build_plan(
             warmup=warmup,
             layout=prefill.page_table_layout,
@@ -172,6 +177,7 @@ class WarmupCoordinatorConfig:
             lane_batch_size=lane_batch_size,
             allow_force_argmax=allow_force_argmax,
             can_sample_on_device=False,
+            log_probs_supported=log_probs_supported,
         )
         sampled_plan = _build_plan(
             warmup=warmup,
@@ -180,6 +186,7 @@ class WarmupCoordinatorConfig:
             lane_batch_size=lane_batch_size,
             allow_force_argmax=allow_force_argmax,
             can_sample_on_device=True,
+            log_probs_supported=log_probs_supported,
         )
         return cls(
             warmup=warmup,
@@ -195,6 +202,7 @@ class WarmupCoordinatorConfig:
             eager_plan=eager_plan,
             sampled_plan=sampled_plan,
             page_table_layout_ceiling=prefill.page_table_layout_ceiling,
+            log_probs_supported=log_probs_supported,
         )
 
     def with_page_table_layout(self, layout: PageTableLayout) -> "WarmupCoordinatorConfig":
@@ -221,6 +229,7 @@ class WarmupCoordinatorConfig:
                 lane_batch_size=self.lane_batch_size,
                 allow_force_argmax=self.allow_force_argmax,
                 can_sample_on_device=False,
+                log_probs_supported=self.log_probs_supported,
             ),
             sampled_plan=_build_plan(
                 warmup=self.warmup,
@@ -229,6 +238,7 @@ class WarmupCoordinatorConfig:
                 lane_batch_size=self.lane_batch_size,
                 allow_force_argmax=self.allow_force_argmax,
                 can_sample_on_device=True,
+                log_probs_supported=self.log_probs_supported,
             ),
         )
 
@@ -660,6 +670,7 @@ def _build_plan(
     lane_batch_size: int,
     allow_force_argmax: bool,
     can_sample_on_device: bool,
+    log_probs_supported: bool,
 ) -> WarmupPlan:
     sampling_paths = ["logits"]
     if can_sample_on_device:
@@ -697,8 +708,10 @@ def _build_plan(
         if not allow_force_argmax or warmup.include_decode_top_k:
             decode_paths.append("topk")
     decode = [WarmupCase("decode", lane_batch_size, None, sampling_path) for sampling_path in decode_paths]
-    if can_sample_on_device and warmup.include_log_probs:
+    if can_sample_on_device and log_probs_supported and warmup.include_log_probs:
         # Greedy requests with logprobs also take top-k; logprobs are part of program identity.
+        # Only meshes that compute logprobs get these variants: elsewhere they would run the
+        # same device work as plain top-k and only add traces to the reserved trace region.
         prefill.extend([replace(case, log_probs=True) for case in prefill if case.sampling_path == "topk"])
         decode.append(WarmupCase("decode", lane_batch_size, None, "topk", log_probs=True))
     return WarmupPlan(tuple(prefill), tuple(decode))

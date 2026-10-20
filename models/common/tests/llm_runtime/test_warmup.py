@@ -125,6 +125,7 @@ def make_runtime_configs(
     page_table_layout=None,
     sampling_config=None,
     model=None,
+    log_probs_supported=False,
 ):
     mesh = Mesh()
     sampling_config = sampling_config or SimpleNamespace(
@@ -137,6 +138,7 @@ def make_runtime_configs(
         sampling=SimpleNamespace(
             config=sampling_config,
             decode_forward=lambda logits, *, k=None, p=None, temp=None, seeds=None, tt_out_tok=None, enable_log_probs=False: None,
+            log_probs_supported=log_probs_supported,
         ),
         vocab_size=128,
     )
@@ -181,6 +183,7 @@ def make_coordinator(
     allow_force_argmax=True,
     page_table_layout=None,
     sampling_config=None,
+    log_probs_supported=False,
 ):
     events = events if events is not None else []
     execution = execution or RecordingExecution(events)
@@ -208,6 +211,7 @@ def make_coordinator(
         allow_force_argmax=allow_force_argmax,
         page_table_layout=layout,
         sampling_config=sampling_config,
+        log_probs_supported=log_probs_supported,
     )
     execution.prefill = SimpleNamespace(config=prefill_config)
     execution.decode = SimpleNamespace(config=decode_config)
@@ -420,11 +424,7 @@ def test_resolved_config_is_frozen_and_owns_both_coverage_plans(expect_error):
     )
 
     assert coordinator.config.eager_plan.decode == (coordinator.config.eager_plan.decode[0],)
-    assert [(case.sampling_path, case.log_probs) for case in coordinator.config.sampled_plan.decode] == [
-        ("logits", False),
-        ("argmax", False),
-        ("topk", True),
-    ]
+    assert [case.sampling_path for case in coordinator.config.sampled_plan.decode] == ["logits", "argmax"]
     with expect_error(AttributeError, "cannot assign"):
         coordinator.config.lane_batch_size = 4
 
@@ -614,6 +614,7 @@ def test_greedy_selected_token_logprob_identity_is_warmed(allow_force_argmax, en
         sequence_lengths=(128,),
         lane_capacity=lane_capacity,
         allow_force_argmax=allow_force_argmax,
+        log_probs_supported=True,
     )
 
     coordinator.warmup_prefill(kv_cache="cache", enable_trace=enable_trace, can_sample_on_device=True)
@@ -667,7 +668,9 @@ def test_greedy_selected_token_logprob_identity_is_warmed(allow_force_argmax, en
 
 def test_logprob_variants_can_be_disabled():
     config = WarmupConfig(prefill_seq_lens=(128,), prefill_batch_sizes=(1,), include_log_probs=False)
-    coordinator, execution, *_ = make_coordinator(warmup_config=config, sequence_lengths=(128,), lane_capacity=2)
+    coordinator, execution, *_ = make_coordinator(
+        warmup_config=config, sequence_lengths=(128,), lane_capacity=2, log_probs_supported=True
+    )
 
     coordinator.warmup_prefill(kv_cache="cache", enable_trace=False, can_sample_on_device=True)
     coordinator.warmup_decode(
@@ -680,6 +683,24 @@ def test_logprob_variants_can_be_disabled():
 
     calls = execution.prefill_calls + execution.decode_calls
     assert not any(call["sampling_params"] is not None and call["sampling_params"].enable_log_probs for call in calls)
+
+
+def test_meshes_that_do_not_compute_logprobs_keep_the_plain_plan():
+    config = WarmupConfig(prefill_seq_lens=(128,), prefill_batch_sizes=(1,))
+    plans = [
+        make_coordinator(warmup_config=config, lane_capacity=2, log_probs_supported=supported)[0].config.sampled_plan
+        for supported in (False, True)
+    ]
+
+    assert not any(case.log_probs for case in plans[0].prefill + plans[0].decode)
+    assert [case for case in plans[1].prefill + plans[1].decode if not case.log_probs] == list(
+        plans[0].prefill + plans[0].decode
+    )
+    assert [(case.sampling_path, case.log_probs) for case in plans[1].decode] == [
+        ("logits", False),
+        ("argmax", False),
+        ("topk", True),
+    ]
 
 
 def test_q128_single_topk_primes_all_tile_ends():
@@ -696,7 +717,6 @@ def test_q128_single_topk_primes_all_tile_ends():
         for call in execution.prefill_calls
         if call["sampling_params"] is not None
         and float(call["sampling_params"].temperature[0]) == 1.0
-        and not call["sampling_params"].enable_log_probs
         and call["start_pos"] is None
     ]
     assert [int(call["prompt_lens"][0]) for call in topk_calls] == [32, 64, 96, 128]
@@ -1077,10 +1097,7 @@ def test_failed_case_is_not_marked_complete_and_retry_skips_completed_case(expec
         num_blocks=8,
         can_sample_on_device=True,
     )
-    # The retry compiles the failed argmax case and the logprob top-k case, not logits again.
-    assert len(execution.decode_calls) == 3
-    assert execution.decode_calls[0]["sampling_params"] is None
-    assert execution.decode_calls[2]["sampling_params"].enable_log_probs is True
+    assert len(execution.decode_calls) == 2
 
 
 def test_dynamic_hints_cannot_expand_static_trace_or_sampling_ceilings(expect_error):

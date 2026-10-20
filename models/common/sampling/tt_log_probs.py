@@ -416,10 +416,14 @@ class LogProbsCalculator:
         self.global_exp_sum = ttnn.sum(gathered_sum_exp_tensors, dim=2, keepdim=True, **self.common_args)
         ttnn.deallocate(gathered_sum_exp_tensors)
 
+    @staticmethod
+    def supports_mesh(mesh_device) -> bool:
+        """Whether a mesh of this size computes logprobs (checkable before the calculator exists)."""
+        return mesh_device.get_num_devices() in (8, 32)
+
     def _is_supported(self):
         """Check if logprobs computation is supported on this device configuration."""
-        num_devices = self.mesh_device.get_num_devices()
-        if num_devices not in (8, 32):
+        if not self.supports_mesh(self.mesh_device):
             return False
         if self.num_devices_for_sharding < 2:
             return False
