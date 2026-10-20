@@ -14,8 +14,9 @@ control tensors and the routing agree by construction. The bucket-fill ASSERT in
 (watcher builds only) relies on that.
 
 Cases default to the production chunk: 5120 tokens over an 8-chip dispatch group, so
-seq_len_per_chip is 640. Two tests vary it on purpose:
-`test_dispatch_fabric2d_partial_last_tile` and `test_dispatch_fabric2d_padding_config`.
+seq_len_per_chip is 640. `test_dispatch_fabric2d_partial_last_tile` varies it on purpose,
+`test_dispatch_fabric2d_padding_config` marks part of it as padding, and
+`test_dispatch_fabric2d_topk_above_bound` shrinks it because the op is refused before it runs.
 
 The mesh axis comes from the shared table in `tests/pcc/mesh_configs.py`, so CI's hardware-class
 selection through `requires_mesh_topology` matches the model's other prefill tests.
@@ -50,6 +51,9 @@ assert len(_MESH_CONFIGS) == len(_MESH_IDS), "dispatch_fabric2d mesh configs mis
 
 # The production 8x4 mesh on its own, for the tests about how the op is called, not the ring geometry.
 _PRODUCTION_MESH = [param for param in _MESH_CONFIGS if param.id == "fabric2d-torus-xy-8x4-2link"]
+
+# The largest top-k the op is validated at, MAX_EXPERTS_PER_TOK in dispatch_fabric2d_device_operation.cpp.
+MAX_TOPK = 16
 
 
 def _reference_dispatch(indices, table, offs, x, capacity, G, H, seq, topk, emb):
@@ -307,6 +311,9 @@ class _Fixture:
     Shared by the tests below that are about how the op is called, not about the routing.
     Routing coverage (in-group vs production draws, roomy vs tight capacity) lives in
     test_dispatch_fabric2d's parametrization.
+
+    `capacity_div` divides the buffer down from room for every pick the group makes,
+    H * seq_len_per_chip * topk pages. None sizes it to the draw, the smallest buffer that drops nothing.
     """
 
     # emb_dim 512 is 16 tiles wide, so the untilizer packs two column blocks per tile row. At 256 there
@@ -327,7 +334,7 @@ class _Fixture:
         self.seq_len_per_chip, self.emb_dim, self.H, self.G = seq_len_per_chip, emb_dim, H, G
         self.num_routed_experts, self.topk = num_routed_experts, topk
         self.experts_per_chip = num_routed_experts // G // H
-        self.capacity = max(1, H * seq_len_per_chip * topk // capacity_div)
+        self.capacity_div = capacity_div
         torch.manual_seed(seed)
         self.table = _expert_dispatch_table(num_routed_experts, H, G)
         experts_per_group = num_routed_experts // G
@@ -359,7 +366,7 @@ class _Fixture:
         """Bring every routing input back in line with `indices`. Call it after editing `indices`.
 
         Recomputes the expert offsets, counts and region tables from `indices`, uploads them together
-        with `indices` itself, and clears the cached `reference()`.
+        with `indices` itself, resizes a buffer sized to the draw, and clears the cached `reference()`.
 
         The op trusts the offsets table to match the indices: it is how every chip on the axis, forwarding
         chips included, sizes the chunks it waits for and forwards. A table from a stale draw has the right
@@ -381,6 +388,12 @@ class _Fixture:
             )
             offs[g], counts[g], region[g] = o[0].to(torch.int32), c[0].to(torch.int32), r[0].to(torch.int32)
         self.offs = offs
+        if self.capacity_div is None:
+            # Expert e's pages on its chip run from region[e] to region[e] + counts[e], so the largest end is
+            # the most pages any chip is sent.
+            self.capacity = int((region + counts).max())
+        else:
+            self.capacity = max(1, H * self.seq_len_per_chip * self.topk // self.capacity_div)
         self.tt_idx = self._shard(self.indices.permute(1, 0, 2, 3).to(torch.int32).to(torch.int16), (0, 1), ttnn.uint16)
         self.tt_offs = self._shard(offs, (None, 0), ttnn.int32)
         self.tt_counts = self._shard(counts[:, 0:1, :], (None, 0), ttnn.int32)
@@ -430,8 +443,8 @@ class _Fixture:
         multi-launch tests compare several launches against the same draw.
 
         The cache is cleared only by `rebuild()`, so after editing `indices` a test must call it or it
-        is checked against the old draw. Nothing else needs clearing: `x`, `capacity` and `emb_dim`
-        never change after `__init__`.
+        is checked against the old draw. Nothing else needs clearing: `x` and `emb_dim` never change
+        after `__init__`, and `capacity` changes only in `rebuild()`.
         """
         if self._reference is None:
             self._reference = _reference_dispatch(
@@ -644,6 +657,55 @@ def test_dispatch_fabric2d_partial_last_tile(mesh_device, device_params, num_lin
     for layout, label in ((ttnn.ROW_MAJOR_LAYOUT, "row-major"), (ttnn.TILE_LAYOUT, "tile")):
         payload, metadata = fx.run(cfg.sp_axis, num_links, layout=layout)
         fx.check(payload, metadata, f"{label}, 660 tokens per chip")
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links",
+    _MESH_CONFIGS,
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.timeout(900)
+def test_dispatch_fabric2d_topk16(mesh_device, device_params, num_links):
+    """Kimi K3's routing shape dispatches byte-exact in both layouts: top-16 over 896 experts at emb 3584.
+
+    The routing index unrolls a token's picks by eight, so top-16 is the case that loops over them. On
+    8x1 all 896 experts sit in one group, 112 per chip, so the stream core's scratch is larger than on
+    the 8x4 production mesh.
+    """
+    cfg = extract_mesh_config(mesh_device)
+    fx = _Fixture(
+        mesh_device,
+        cfg.dispatch_group_size,
+        cfg.num_dispatch_groups,
+        emb_dim=3584,
+        num_routed_experts=896,
+        topk=MAX_TOPK,
+        capacity_div=None,
+    )
+    # A buffer one page short drops the same pick in the op and the reference, so the byte-exact check
+    # alone would pass. The draw must fit exactly: every routed pick placed, and the last page used.
+    _, _, src_of = fx.reference()
+    routed = int(sum((fx.table[g, fx.indices[g]] != -1).sum() for g in range(fx.G)))
+    placed = int((src_of >= 0).sum())
+    assert placed == routed, f"{routed - placed} of {routed} picks dropped at a capacity sized to the draw"
+    assert bool((src_of[..., fx.capacity - 1] >= 0).any()), f"no chip uses page {fx.capacity - 1}; the buffer is roomy"
+    for layout, label in ((ttnn.ROW_MAJOR_LAYOUT, "row-major"), (ttnn.TILE_LAYOUT, "tile")):
+        payload, metadata = fx.run(cfg.sp_axis, num_links, layout=layout)
+        fx.check(payload, metadata, f"{label}, top-16 over 896 experts, emb 3584")
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links",
+    _MESH_CONFIGS,
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.timeout(900)
+def test_dispatch_fabric2d_topk_above_bound(mesh_device, device_params, num_links, expect_error):
+    """A top-k above the supported bound is refused when the op is validated, before any kernel is built."""
+    cfg = extract_mesh_config(mesh_device)
+    fx = _Fixture(mesh_device, cfg.dispatch_group_size, cfg.num_dispatch_groups, seq_len_per_chip=32, topk=MAX_TOPK + 1)
+    with expect_error(RuntimeError, f"num_experts_per_tok {MAX_TOPK + 1} is above {MAX_TOPK}"):
+        fx.run(cfg.sp_axis, num_links)
 
 
 @pytest.mark.parametrize(
