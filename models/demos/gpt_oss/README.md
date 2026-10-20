@@ -141,17 +141,17 @@ on QuietBox 2 next to the decode paths above. Time to first token (TTFT), ms:
 | Prompt length (tokens) | Batch 1: before | **Batch 1: now** | Batch 32 (all 32 users): before | **Batch 32: now** |
 |---:|---:|---:|---:|---:|
 | 128 | 164.3 | **42.2** | 2,731.6 | **153.2** |
-| 512 | | | 14,706.6 | **445.1** |
+| 512 | 1,231.7 | **49.8** | 14,706.6 | **445.1** |
 | 1,024 | 1,233.5 | **61.9** | 14,704.1 | **834.3** |
-| 2,048 | | | | **1,574.7** |
-| 4,096 | | | | **3,254.6** |
-| 8,192 | 9,715.6 | **230.4** | | **6,830.3** |
-| 32,768 | 39,259.9 | **989.6** | | |
-| 131,072 | 155,734.8 | **6,724.6** | | |
+| 2,048 | 2,312.0 | **81.2** | 28,417.1 | **1,574.7** |
+| 4,096 | 4,851.5 | **129.4** | 56,047.6 | **3,254.6** |
+| 8,192 | 9,715.6 | **230.4** | 113,700.0 | **6,830.3** |
+| 32,768 | 39,259.9 | **989.6** | 464,260.5 | **32,139.4** |
+| 131,072 | 155,734.8 | **6,724.6** | does not fit | does not fit |
 
 Before: `main` 35f4cd54629; now: this code, back to back on one QuietBox 2. Random prompts (batch 1) and the
-harness's text prompts (batch 32), untraced, logits read back to host. `main` pads 512 to 1,024; batch 32 at 2K and
-longer was not run on `main` (its dense MoE prefill takes minutes per call there).
+harness's text prompts (batch 32: 32 different prompts in one prefill call), untraced, logits read back to host.
+`main` pads 512 to 1,024. 32 users x 128K tokens of KV cache do not fit in DRAM.
 
 What makes prefill faster:
 - **MoE computes only the routed experts** (`tt/experts/prefill_routed.py`). Before, prefill ran every token through
