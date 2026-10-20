@@ -3,8 +3,9 @@
 
 """Fingerprint of the code a TILE_LOOP zone executes, independent of the address it is linked at.
 
-The window is every instruction of run_kernel reachable from the TILE_LOOP zone's zone_reserve call up to its
-zone_record call, plus the functions those instructions call. Branch targets inside the window are written as
+The window is every instruction of run_kernel reachable from the start of the TILE_LOOP zone up to its end, plus the
+functions those instructions call. The zone is found by its id: either the zone_reserve/zone_record calls or the
+inline lui of its START/END entry word. Branch targets inside the window are written as
 positions in the window and jumps out of it as "out", so moving code leaves the fingerprint unchanged and a change
 to an executed instruction changes it.
 """
@@ -68,22 +69,44 @@ def _a0_before(insns, i):
     return None if hi is None else (hi + (lo or 0)) & 0xFFFF
 
 
+def _zone_lui(mnemonic, operands):
+    """(kind, id) for the inline zone entry word: lui of (0xA or 0xB) << 16 | id, else None."""
+    if mnemonic not in ("lui", "c.lui"):
+        return None
+    try:
+        imm = int(operands.split(",")[-1].strip(), 0)
+    except ValueError:
+        return None
+    return {0xA: "start", 0xB: "end"}.get(imm >> 16), imm & 0xFFFF
+
+
+def _starts(insns, k):
+    _, mnemonic, operands = insns[k]
+    lui = _zone_lui(mnemonic, operands)
+    return _is_call(mnemonic, operands, "zone_reserve") or (lui and lui[0] == "start")
+
+
+def _ends(insns, k, ids):
+    _, mnemonic, operands = insns[k]
+    if _is_call(mnemonic, operands, "zone_record"):
+        return _a0_before(insns, k) in ids
+    lui = _zone_lui(mnemonic, operands)
+    return lui is not None and lui[0] == "end" and lui[1] in ids
+
+
 def _region(insns, start, ids):
     index = {a: k for k, (a, _, _) in enumerate(insns)}
     order, seen, todo = [], set(), [start]
     while todo:
         k = todo.pop()
         while k < len(insns) and k not in seen:
-            if k != start and _is_call(insns[k][1], insns[k][2], "zone_reserve"):
+            if k != start and _starts(insns, k):
                 break
             seen.add(k)
             order.append(k)
-            _, mnemonic, operands = insns[k]
-            if (
-                _is_call(mnemonic, operands, "zone_record")
-                and _a0_before(insns, k) in ids
-            ):
+            if _ends(insns, k, ids):
                 break
+            _, mnemonic, operands = insns[k]
             target = _TARGET.search(operands)
             t = index.get(int(target.group(1), 16)) if target else None
             if mnemonic in _ENDS or (mnemonic in ("j", "c.j", "tail") and t is None):
@@ -100,15 +123,11 @@ def _region(insns, start, ids):
 def _window(insns, elf_bytes):
     ids = {_hash16(m.group(0)[:-1]) for m in _TILE_LOOP.finditer(elf_bytes)}
     found = []
-    for k, (_, mnemonic, operands) in enumerate(insns):
-        if not _is_call(mnemonic, operands, "zone_reserve"):
+    for k in range(len(insns)):
+        if not _starts(insns, k):
             continue
         region = _region(insns, k, ids)
-        if any(
-            _is_call(insns[x][1], insns[x][2], "zone_record")
-            and _a0_before(insns, x) in ids
-            for x in region
-        ):
+        if any(_ends(insns, x, ids) for x in region):
             found.append(region)
     return min(found, key=len) if found else None
 
