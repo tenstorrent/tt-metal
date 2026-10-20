@@ -90,7 +90,6 @@ inline Tensor move_impl(const Tensor& input_tensor, const std::optional<MemoryCo
     // Only compute with storage cores allow CBs to be created
     auto compute_with_storage_grid_size = ghost_input_tensor.device()->compute_with_storage_grid_size();
     const auto num_l1_banks = compute_with_storage_grid_size.x * compute_with_storage_grid_size.y;
-    // Same rounding as the overlap program factory's CB (page slots keep the DRAM/L1 page alignment).
     uint32_t size_per_l1_bank = tt::tt_metal::detail::calculate_bank_size_spread(
         output_tensor.buffer()->size(),
         output_tensor.buffer()->page_size(),

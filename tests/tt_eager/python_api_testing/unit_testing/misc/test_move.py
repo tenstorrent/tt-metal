@@ -187,8 +187,6 @@ def test_move_op_overlap_row_major_unaligned_page_size(device, move_op, buffer_t
 @pytest.mark.parametrize("width", [8, 16, 24, 32, 40, 72])
 @pytest.mark.parametrize("extra_rows", [1, 3])
 def test_move_op_overlap_row_major_multi_page_per_core(device, move_op, buffer_type, width, extra_rows):
-    # More rows than cores puts 2+ row-major pages on some cores, so the CB holds several pages back to back;
-    # each CB slot must keep the DRAM page alignment. Bit-exact: a misaligned page still passes a PCC check.
     mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, buffer_type)
     grid = device.compute_with_storage_grid_size()
     torch.manual_seed(0)
