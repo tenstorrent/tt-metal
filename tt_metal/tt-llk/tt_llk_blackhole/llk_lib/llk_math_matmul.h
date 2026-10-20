@@ -683,6 +683,30 @@ inline void matmul_configure_mop_throttled(
 }
 
 /**
+ * @brief Whether the matmul MOP supports this in0 x in1 tile-shape pair.
+ *
+ * Supported (checked with test_unpack_matmul / test_math_matmul): in0 1/2/4/8/16/32x32 with in1 32x32
+ * or 32x16, and in0 32x16 or 16x16 with in1 16x32. Rejected:
+ * - in0 columns != in1 rows (the contraction dims must match);
+ * - in1 shorter than a full 16-row face (MVMUL reads 16 SrcA rows per face);
+ * - in1 16x16: no MOP path, it falls into the 32x32 one (also covers 16x16 x 16x16);
+ * - in0 with 16 columns and fewer than 16 rows (1/2/4/8x16): the recorded MOP does not match
+ *   the replay length; on Wormhole the math thread hangs.
+ *
+ * @param in0_tensor_shape: Tile shape of in0 (loaded to SrcB).
+ * @param in1_tensor_shape: Tile shape of in1 (loaded to SrcA).
+ * @return True when _llk_math_matmul_init_ can serve the pair.
+ */
+inline constexpr bool matmul_supports_tensor_shapes(const ckernel::TensorShape& in0_tensor_shape, const ckernel::TensorShape& in1_tensor_shape)
+{
+    const bool k_dims_match   = in0_tensor_shape.num_faces_c_dim == in1_tensor_shape.num_faces_r_dim;
+    const bool in1_full_faces = in1_tensor_shape.face_r_dim == MAX_FACE_R_DIM;
+    const bool in1_is_16x16   = (in1_tensor_shape.num_faces_r_dim == 1) && (in1_tensor_shape.num_faces_c_dim == 1);
+    const bool in0_short_k16  = (in0_tensor_shape.num_faces_c_dim == 1) && (in0_tensor_shape.face_r_dim != MAX_FACE_R_DIM);
+    return k_dims_match && in1_full_faces && !in1_is_16x16 && !in0_short_k16;
+}
+
+/**
  * @brief Configure the math (FPU/matrix engine) thread for a matmul: programs address mods and the MVMUL MOP.
  *
  * Computes D = in0 * in1, where in0 is loaded to SrcB and in1 to SrcA. When THROTTLE_LEVEL > 0, builds the
@@ -719,6 +743,7 @@ inline void _llk_math_matmul_init_(
 {
     LLK_VALIDATE_TENSOR_SHAPE_MATH("_llk_math_matmul_init_", in0_tensor_shape);
     LLK_VALIDATE_TENSOR_SHAPE_MATH("_llk_math_matmul_init_", in1_tensor_shape);
+    LLK_ASSERT(matmul_supports_tensor_shapes(in0_tensor_shape, in1_tensor_shape), "matmul does not support this in0 x in1 tile-shape pair");
     const std::uint32_t in0_tile_r_dim = in0_tensor_shape.total_row_dim();
     const std::uint32_t in0_tile_c_dim = in0_tensor_shape.total_col_dim();
     const std::uint32_t in1_tile_r_dim = in1_tensor_shape.total_row_dim();
