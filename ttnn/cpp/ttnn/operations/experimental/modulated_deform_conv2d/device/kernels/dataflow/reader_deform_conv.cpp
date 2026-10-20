@@ -10,15 +10,19 @@
 // An input wider than a chunk of channels takes one pass per chunk at each position, with that
 // chunk's rows of the weight; a pass reads only its chunk of each corner. Two copies of this kernel
 // run per core, one on each data-movement RISC-V and NoC: the first takes the core's even blocks
-// and loads the weight slices and the bias, the second the odd blocks and stages the geometry.
-// Compute returns each block's geometry, every sample's top-left corner page within its image and
-// its four weights, to the copy that owns the block, which keeps it for all kernel positions.
+// and loads the weight slices and the bias, the second the odd blocks. Each copy stages the
+// geometry inputs of its own blocks; compute returns each block's geometry, every sample's top-left
+// corner page within its image and its four weights, to the same copy, which keeps it for all
+// kernel positions.
 //
-// The geometry is staged during the first kernel position, two blocks ahead of compute, and compute
-// derives it just before the block's corners. For each (pass, block) a copy hands compute the four
-// corners as one row-major block, 32 rows of [corner 0 | corner 1 | corner 2 | corner 3] chunk-wide
-// input sticks, landed by the NoC reads, and one scalar tile per corner whose column 0 holds the
-// row's weight. After the last position it writes its blocks' C_out-wide output.
+// The geometry is staged during the first kernel position, a copy's next block once it has handed
+// compute the corners of the current one, and compute derives it two blocks ahead of the block's
+// corners. Staging is scalar work on the RISC-V, so each copy does it for its own blocks.
+//
+// For each (pass, block) a copy hands compute the four corners as one row-major block, 32 rows of
+// [corner 0 | corner 1 | corner 2 | corner 3] chunk-wide input sticks, landed by the NoC reads, and
+// one scalar tile per corner whose column 0 holds the row's weight. After the last position it
+// writes its blocks' C_out-wide output.
 //
 // A corner is read only when its weight is nonzero. Every other row, and every row past the block's
 // end, is zeroed rather than skipped: a stale NaN or Inf times a zero scalar would still be NaN.
@@ -65,9 +69,9 @@ constexpr uint32_t geom_index_cb_index = get_compile_time_arg_val(20);
 constexpr uint32_t geom_weight_cb_index = get_compile_time_arg_val(21);
 constexpr uint32_t geom_kernel_cb_index = get_compile_time_arg_val(22);
 // This copy's role: the parity of the blocks it takes. The first copy (even blocks) loads the
-// weight and the bias, the second stages the geometry.
+// weight and the bias, the second writes the kernel offset tiles.
 constexpr uint32_t BLOCK_PARITY = get_compile_time_arg_val(23);
-constexpr bool STAGES_GEOMETRY = BLOCK_PARITY == 1;
+constexpr bool WRITES_KERNEL_TILES = BLOCK_PARITY == 1;
 constexpr bool LOADS_WEIGHT = BLOCK_PARITY == 0;
 constexpr uint32_t output_cb_index = get_compile_time_arg_val(24);
 constexpr uint32_t tile_nbytes = get_compile_time_arg_val(25);
@@ -96,6 +100,8 @@ constexpr auto weight_args = TensorAccessorArgs<output_args.next_compile_time_ar
 constexpr auto bias_args = TensorAccessorArgs<weight_args.next_compile_time_args_offset()>();
 
 constexpr uint32_t TILE_ROWS = 32;
+// Offset-mask rows a copy's staging arena holds; the two copies share the L1 of one block's rows.
+constexpr uint32_t ARENA_ROWS = TILE_ROWS / 2;
 constexpr uint32_t CHANNEL_TILES = C / 32;
 constexpr uint32_t CHUNKS = CHANNEL_TILES / CHUNK_TILES;
 constexpr uint32_t PASSES = kernel_positions * CHUNKS;
@@ -286,13 +292,11 @@ void kernel_main() {
         finish_weight_slice(pass);
     };
 
-    uint32_t offset_mask_l1 = 0;
-    if constexpr (STAGES_GEOMETRY) {
-        // The arena is reserved once and used as flat L1; nothing waits on it.
-        CircularBuffer offset_mask_arena_cb(offset_mask_arena_cb_index);
-        offset_mask_arena_cb.reserve_back(TILE_ROWS);
-        offset_mask_l1 = offset_mask_arena_cb.get_write_ptr();
-
+    // The arena is reserved once and used as flat L1; nothing waits on it.
+    CircularBuffer offset_mask_arena_cb(offset_mask_arena_cb_index);
+    offset_mask_arena_cb.reserve_back(ARENA_ROWS);
+    const uint32_t offset_mask_l1 = offset_mask_arena_cb.get_write_ptr();
+    if constexpr (WRITES_KERNEL_TILES) {
         CircularBuffer geom_kernel_cb(geom_kernel_cb_index);
         geom_kernel_cb.reserve_back(2);
         const uint32_t kernel_l1 = geom_kernel_cb.get_write_ptr();
@@ -312,23 +316,28 @@ void kernel_main() {
     auto stage_geometry = [&](uint32_t block) {
         const uint32_t row0 = block * TILE_ROWS;
         const uint32_t valid_rows = valid_rows_of(block, num_rows);
-        for (uint32_t r = 0; r < valid_rows; ++r) {
-            CoreLocalMem<uint32_t> dst(offset_mask_l1 + r * offset_mask_page_nbytes);
-            noc.async_read(offset_mask_acc, dst, offset_mask_page_nbytes, {.page_id = row0 + r}, {.offset_bytes = 0});
-        }
         geom_in_cb.reserve_back(GEOM_IN_TILES);
         const uint32_t geom_l1 = geom_in_cb.get_write_ptr();
-        noc.async_read_barrier();
 
         // (h_out, w_out) of the block's first row, then stepped row by row.
         uint32_t h_o = (row0 / OUT_W) % OUT_H;
         uint32_t w_o = row0 % OUT_W;
         tt_l1_ptr uint32_t* geom = reinterpret_cast<tt_l1_ptr uint32_t*>(geom_l1);
         for (uint32_t r = 0; r < valid_rows; ++r) {
+            // The arena holds a share of the block's rows; the next share lands once this one is used.
+            if (r % ARENA_ROWS == 0) {
+                const uint32_t rows = valid_rows - r < ARENA_ROWS ? valid_rows - r : ARENA_ROWS;
+                for (uint32_t a = 0; a < rows; ++a) {
+                    CoreLocalMem<uint32_t> dst(offset_mask_l1 + a * offset_mask_page_nbytes);
+                    noc.async_read(
+                        offset_mask_acc, dst, offset_mask_page_nbytes, {.page_id = row0 + r + a}, {.offset_bytes = 0});
+                }
+                noc.async_read_barrier();
+            }
             const uint32_t origin_y = int_to_fp32(static_cast<int32_t>(h_o) * STRIDE_H - PAD_H);
             const uint32_t origin_x = int_to_fp32(static_cast<int32_t>(w_o) * STRIDE_W - PAD_W);
-            const tt_l1_ptr uint16_t* off =
-                reinterpret_cast<const tt_l1_ptr uint16_t*>(offset_mask_l1 + r * offset_mask_page_nbytes);
+            const tt_l1_ptr uint16_t* off = reinterpret_cast<const tt_l1_ptr uint16_t*>(
+                offset_mask_l1 + (r % ARENA_ROWS) * offset_mask_page_nbytes);
             // The mask logits follow the row's 2*K*K offsets.
             const tt_l1_ptr uint16_t* msk = off + 2 * kernel_positions;
             tt_l1_ptr uint32_t* row = geom + tile_element(r, 0);
@@ -350,12 +359,9 @@ void kernel_main() {
         geom_in_cb.push_back(GEOM_IN_TILES);
     };
 
-    if constexpr (STAGES_GEOMETRY) {
-        // During the first kernel position compute derives each block's geometry two blocks
-        // ahead of its corners; staging keeps the next two blocks ready, the depth of geom_in_cb.
-        for (uint32_t j = 0; j < num_blocks && j < 2; ++j) {
-            stage_geometry(start_block + j);
-        }
+    // The copy's first block; compute derives the first two blocks' geometry before any corners.
+    if (BLOCK_PARITY < num_blocks) {
+        stage_geometry(start_block + BLOCK_PARITY);
     }
     if constexpr (LOADS_WEIGHT) {
         load_weight_slice(0);
@@ -414,13 +420,6 @@ void kernel_main() {
             const uint32_t block = start_block + j;
             const uint32_t valid_rows = valid_rows_of(block, num_rows);
             if (pass == 0) {
-                if constexpr (STAGES_GEOMETRY) {
-                    for (uint32_t ahead = j + 1; ahead <= j + 2 && ahead < num_blocks; ++ahead) {
-                        if (ahead >= 2) {
-                            stage_geometry(start_block + ahead);
-                        }
-                    }
-                }
                 index_cb.wait_front(slot + 1);
                 corner_weight_cb.wait_front(CORNERS * (slot + 1));
             }
@@ -524,6 +523,11 @@ void kernel_main() {
                 Noc(1 - noc_index).async_read_barrier();
             }
             corner_block_cb.push_back(CORNERS * CHUNK_TILES);
+            // Compute took this block's inputs before its geometry came back, so the slot is free
+            // for the copy's next block, which compute needs once it is through this one.
+            if (pass == 0 && j + 2 < num_blocks) {
+                stage_geometry(start_block + j + 2);
+            }
         }
         if constexpr (LOADS_WEIGHT) {
             if (pass + 1 < PASSES) {
