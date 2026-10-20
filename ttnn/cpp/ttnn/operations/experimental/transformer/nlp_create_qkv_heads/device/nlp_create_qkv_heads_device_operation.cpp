@@ -109,6 +109,18 @@ void NlpCreateHeadsDeviceOperation::validate_on_program_cache_miss(
             input_tensor.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR,
             "Input tensor shard orientation must be ROW_MAJOR but got {}",
             input_tensor.shard_spec().value().orientation);
+        const auto& input_grid = input_tensor.shard_spec().value().grid;
+        const auto input_box = input_grid.bounding_box();
+        const uint32_t input_box_width = input_box.end_coord.x - input_box.start_coord.x + 1;
+        const auto input_cores = corerange_to_cores(input_grid, std::nullopt, true);
+        for (uint32_t i = 0; i < input_cores.size(); ++i) {
+            TT_FATAL(
+                input_cores[i] == CoreCoord(
+                                      input_box.start_coord.x + (i % input_box_width),
+                                      input_box.start_coord.y + (i / input_box_width)),
+                "Input shard grid {} must fill its bounding box row by row from its first core",
+                input_grid);
+        }
         auto core_grid = input_tensor.device()->compute_with_storage_grid_size();
         uint32_t num_cores = core_grid.x * core_grid.y;
         // 1 Head Per Core Max for now

@@ -511,6 +511,66 @@ def test_sharded_nlp_create_qkv_heads_test(
     )
 
 
+@pytest.mark.parametrize(
+    "input_grid, num_q_heads, num_kv_heads, error",
+    [
+        ([(0, 0, 3, 0)], 32, 4, None),
+        ([(1, 0, 4, 0)], 32, 4, None),
+        ([(0, 1, 3, 1)], 32, 4, None),
+        ([(0, 0, 1, 1)], 32, 4, None),
+        ([(2, 1, 3, 2)], 32, 4, None),
+        ([(0, 0, 7, 0), (0, 1, 3, 1)], 24, 12, None),
+        ([(0, 0, 1, 0), (0, 1, 2, 1)], 10, 5, "must fill its bounding box"),
+    ],
+    ids=["origin_row", "offset_x", "offset_y", "square_2x2", "offset_2x2", "rows_8_4", "not_row_major"],
+)
+@pytest.mark.parametrize("read_from_input_tensor_kv", [False, True])
+def test_sharded_nlp_create_qkv_heads_input_grid(
+    input_grid, num_q_heads, num_kv_heads, error, read_from_input_tensor_kv, device, expect_error
+):
+    torch.manual_seed(1234)
+    batch, head_dim = 32, 64
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(a, b), ttnn.CoreCoord(c, d)) for a, b, c, d in input_grid})
+    num_cores = grid.num_cores()
+    Q = torch.randn(1, 1, batch, num_cores, num_q_heads // num_cores * head_dim)
+    K = torch.randn(1, 1, batch, num_cores, num_kv_heads // num_cores * head_dim)
+    V = torch.randn(1, 1, batch, num_cores, num_kv_heads // num_cores * head_dim)
+
+    def to_device(t):
+        mem = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(grid, [batch, t.shape[-1] // num_cores], ttnn.ShardOrientation.ROW_MAJOR),
+        )
+        return ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem)
+
+    if read_from_input_tensor_kv:
+        in0, in1 = to_device(Q.flatten(-2, -1)), to_device(torch.concat([K, V], -1).flatten(-2, -1))
+    else:
+        in0, in1 = to_device(torch.concat([Q, K, V], -1).flatten(-2, -1)), None
+
+    def run():
+        return ttnn.experimental.nlp_create_qkv_heads(
+            in0,
+            in1,
+            num_heads=num_q_heads,
+            num_kv_heads=num_kv_heads,
+            transpose_k_heads=False,
+            memory_config=ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, in0.memory_config().shard_spec
+            ),
+        )
+
+    if error:
+        with expect_error(RuntimeError, error):
+            run()
+        return
+    q, k, v = run()
+    for got, ref, heads in ((q, Q, num_q_heads), (k, K, num_kv_heads), (v, V, num_kv_heads)):
+        expected = ref.flatten(-2, -1).reshape(1, batch, heads, head_dim).transpose(-3, -2).bfloat16()
+        assert torch.equal(ttnn.to_torch(got), expected)
+
+
 def test_sharded_nlp_create_qkv_heads_with_program_cache(device):
     dtype = ttnn.bfloat8_b
     mem_config = ttnn.L1_MEMORY_CONFIG
