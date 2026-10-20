@@ -429,7 +429,7 @@ class Golden:
         dest_acc = as_dest_acc(dest_acc)
         if (
             not dest_acc
-            and self.blocks.PROMOTES_OUTLIER_TO_32_BIT_DEST
+            and self.blocks.promotes_outlier_to_32_bit_dest
             and in_format.is_exponent_B()
             and not in_format.is_float32()
             and out_format is DataFormat.Float16
