@@ -32,6 +32,7 @@ from models.demos.deepseek_v3_d_p.tt.mhc.tt_mhc import (  # noqa: F401
     build_consts,
     mhc_expand,
 )
+from models.demos.glm53_flash.custom_ops.mhc_post_mix.op import MhcPostMix
 from models.demos.glm53_flash.tt.config import GLM53FlashConfig
 
 TILE = 32
@@ -44,9 +45,8 @@ MHC_IMPL = os.environ.get("GLM53_MHC_IMPL", "fast")
 # exact: both operands split into 3 bf16 parts, the 6 significant products in one stacked-K matmul (3e-9);
 # 2 = the cheaper 2-way split, 3 products (3e-6). See TtMHCFast._exact_mm.
 MHC_EXACT = {"0": 0, "1": 3, "2": 2, "3": 3}[os.environ.get("GLM53_MHC_EXACT", "0")]
-# 1: the fused exact fp32 post-block kernel ttnn.experimental.deepseek_prefill.mhc_post_mix (one program
-# replacing the coefficient extraction, the block-diagonal matmul and the addcmul; exact like the composite
-# chain; needs the worktree build that carries the op)
+# 1: the fused exact fp32 post-block kernel custom_ops/mhc_post_mix (a model-local ttnn.generic_op: one program
+# replacing the coefficient extraction, the block-diagonal matmul and the addcmul; exact like the composite chain)
 MHC_POST_KERNEL = os.environ.get("GLM53_MHC_POST_KERNEL", "0") == "1"
 
 
@@ -195,9 +195,9 @@ class TtMHCFast(LightweightModule):
         self.exact = MHC_EXACT if exact is None else int(exact)  # residual update: 0 | 2 | 3 bf16 parts
         assert self.exact in (0, 2, 3), self.exact
         self.post_kernel = MHC_POST_KERNEL if post_kernel is None else bool(post_kernel)
-        if self.post_kernel:
-            assert hasattr(ttnn.experimental.deepseek_prefill, "mhc_post_mix"), "this ttnn build has no mhc_post_mix"
         self.n = int(cfg.n)
+        # the fused post-block as a model-local generic op (custom_ops/mhc_post_mix); output allocated per call
+        self.post_mix = MhcPostMix(self.n) if self.post_kernel else None
         self.C = int(cfg.dim)
         self.nC = self.n * self.C
         self.iters = int(cfg.sinkhorn_iters)
@@ -506,9 +506,8 @@ class TtMHCFast(LightweightModule):
         y32 = _view_rows(y, Tp)
         if self.post_kernel:
             # one program on the packed streams (any Tp): exact fp32, row-local (no pad-row guard needed)
-            out = ttnn.experimental.deepseek_prefill.mhc_post_mix(
-                x32, y32, _view_rows(post, Tp), _view_rows(comb, Tp), n, collapse
-            )
+            out = self.post_mix.allocate_output(x32, collapse)
+            self.post_mix(x32, y32, _view_rows(post, Tp), _view_rows(comb, Tp), out, collapse)
             return _view_rows(out, T)
         if Tp == TILE:
             if T != Tp:
