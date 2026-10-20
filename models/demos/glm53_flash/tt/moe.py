@@ -135,9 +135,13 @@ class TtRouter(LightweightModule):
         for _ in range(self.k):
             # first-match argmax of the biased scores (one index per row, exact fp32 ranking) -> one-hot
             # by comparing against the expert iota; replaces max + eq + single-core cumsum tie-break
-            m_idx = ttnn.argmax(ttnn.untilize(choice, use_multicore=True), dim=-1, keepdim=True)  # [1,1,T,1] u32
-            onehot = ttnn.eq(self.iota, ttnn.typecast(ttnn.tilize(m_idx, use_multicore=True), ttnn.float32))
+            choice_rm = ttnn.untilize(choice, use_multicore=True)
+            m_idx = ttnn.argmax(choice_rm, dim=-1, keepdim=True)  # [1,1,T,1] uint32 ROW_MAJOR (first max)
+            ttnn.deallocate(choice_rm)
+            m_f = ttnn.typecast(ttnn.to_layout(m_idx, ttnn.TILE_LAYOUT), ttnn.float32)  # [1,1,T,1] (tile-padded)
+            onehot = ttnn.eq(self.iota, m_f)  # [1,1,1,E] vs [1,1,T,1] -> [1,1,T,E]
             ttnn.deallocate(m_idx)
+            ttnn.deallocate(m_f)
             sel = ttnn.multiply(onehot, scores)  # [1,1,T,E]
             dense = sel if dense is None else ttnn.add(dense, sel, output_tensor=dense)
             idx_cols.append(ttnn.sum(ttnn.multiply(onehot, self.iota), dim=-1, keepdim=True))
