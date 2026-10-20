@@ -132,7 +132,8 @@ class SolPrepassFused:
     ):
         # "compact" (tier 3, DESIGN_BLOCK_COMPACT.md) consumes the gather-form block mask: same outputs as "gather".
         # emit_chunk_union=True additionally writes the (Q chunk x K chunk) union row as "chunk_union" (dormant option).
-        assert mode in ("gather", "chunk", "compact"), mode
+        # "pack" is compact plus the ring op's Q2 cross-chunk packing; the pre-pass output is identical to compact.
+        assert mode in ("gather", "chunk", "compact", "pack"), mode
         assert thresh_type == "diag", "fused pre-pass implements the diag threshold (H3 policy)"
         self.mode = mode
         self.mesh_device = mesh_device

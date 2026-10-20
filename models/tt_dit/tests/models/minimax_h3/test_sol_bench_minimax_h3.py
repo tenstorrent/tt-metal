@@ -129,6 +129,9 @@ def test_sol_bench_attention(mesh_device, sp_axis, tp_axis, num_links, topology,
             tt_model.sol_logical_n = seq_len
             tt_model.sol_sink_tokens = int(os.environ.get("SOL_SINK_TOKENS", "1245"))
             tt_model.sol_report_density = True
+            # SOL_BENCH_MODE: gather | chunk | compact | pack (pack = compact + Q2 packing; pair it with
+            # SOL_BENCH_CHUNKS=64xK, the 64-row Q chunk Q1 needs and the only size whose L1 fits the staging).
+            tt_model.sol_mode = os.environ.get("SOL_BENCH_MODE", "compact")
 
         op_times = []
         orig_ring = ttnn.transformer.ring_joint_scaled_dot_product_attention
@@ -198,7 +201,8 @@ def test_sol_bench_attention(mesh_device, sp_axis, tp_axis, num_links, topology,
         }
         results.append(rec)
         logger.info(
-            f"[{WORKING_POINTS[seq_local]}] {mode} chunks={chunks_env or 'measured'} tau={tau}: compile {compile_ms:.0f} ms; "
+            f"[{WORKING_POINTS[seq_local]}] {mode}{'/' + tt_model.sol_mode if mode == 'sol' else ''} "
+            f"chunks={chunks_env or 'measured'} tau={tau}: compile {compile_ms:.0f} ms; "
             f"module {' / '.join(f'{m:.2f}' for m in module_ms)} ms; op {' / '.join(f'{m:.2f}' for m in op_times)} ms; "
             f"density {density}"
         )

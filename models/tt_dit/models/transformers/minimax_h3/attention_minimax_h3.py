@@ -517,7 +517,7 @@ class MiniMaxH3Attention(Module):
                 dense_prefix_queries=self.sol_dense_prefix,
                 mode=self.sol_mode,
                 # compaction generates the pooled-column bias on device, so the fused producer skips the ~87 MB bias write
-                **({"emit_bias": self.sol_mode != "compact"} if self.sol_fused else {}),
+                **({"emit_bias": not self._sol_compact_family} if self.sol_fused else {}),
             )
         scale = self.head_dim**-0.5
         self._sol_prepass.prepare(geo, self.sol_sink_tokens, scale)
@@ -530,19 +530,25 @@ class MiniMaxH3Attention(Module):
             "sol_pooled_v": out["pooled_v"],
         }
         if (
-            out.get("bias") is not None and self.sol_mode != "compact"
-        ):  # compact mode generates the bias on device and rejects a tensor
+            out.get("bias") is not None and not self._sol_compact_family
+        ):  # compact / pack generate the bias on device and reject a tensor
             kwargs["sol_bias"] = out["bias"]
-        if self.sol_mode == "compact":
+        if self._sol_compact_family:
             # Explicit op mode (sol-vid2's `sol_mode` keyword). The docstring never lists keyword names, so probe the raw
             # binding: calling it with no arguments raises a TypeError whose text lists the accepted keywords. Compact
             # must not silently fall back to gather (2026-10-16: every "compact" measurement before this fix was gather).
+            # "pack" is compact plus the op's Q2 cross-chunk packing (needs the 64-row Q chunk).
             if not _binding_has_sol_mode():
                 raise RuntimeError(
-                    "sol_mode='compact' requested but the installed ring_joint SDPA binding has no sol_mode keyword"
+                    f"sol_mode={self.sol_mode!r} requested but the installed ring_joint SDPA binding has no sol_mode keyword"
                 )
-            kwargs["sol_mode"] = "compact"
+            kwargs["sol_mode"] = self.sol_mode
         return kwargs
+
+    @property
+    def _sol_compact_family(self) -> bool:
+        """compact and pack: block mask streamed through the chains, bias generated on device."""
+        return self.sol_mode in ("compact", "pack")
 
     # ------------------------------------------------------------------ forward
 
