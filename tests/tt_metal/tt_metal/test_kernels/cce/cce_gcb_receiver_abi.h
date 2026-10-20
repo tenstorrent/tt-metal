@@ -47,7 +47,7 @@ inline constexpr uint32_t kStatusMagic = 0, kStatusCode = 1, kStatusRequestsDone
                           kStatusMismatchedWords = 4, kStatusFirstMismatchRequest = 5, kStatusFirstMismatchPage = 6,
                           kStatusFirstMismatchWord = 7, kStatusObserved = 8, kStatusExpected = 9,
                           kStatusWaitReceiver = 10, kStatusWaitPagesSent = 11, kStatusWaitPagesAcked = 12,
-                          kStatusWords = 13;
+                          kStatusRechecked = 13, kStatusWords = 14;
 inline constexpr uint32_t kDoneMagic = 0x6CB0D0E5u, kStatusPoison = 0xBADD0E00u;
 
 // kCodeCreditTimeout: a sender's free-space wait or a receiver's page wait used its budget; the sender then records

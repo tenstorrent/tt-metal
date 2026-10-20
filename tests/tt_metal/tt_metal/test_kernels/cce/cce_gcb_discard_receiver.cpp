@@ -39,6 +39,17 @@ bool request_page_bytes_valid(const remote_cb::Receiver& receiver, uint32_t page
 
 uint32_t code_for(FrontWait wait) { return wait == FrontWait::Stopped ? abi::kCodeStopped : abi::kCodeCreditTimeout; }
 
+// kCodeOk once rd_ptr is at the new page size's boundary; kCodeStopped or kCodeCreditTimeout if the padding wait ended.
+uint32_t resize_or_stop(
+    remote_cb::Receiver& receiver, uint32_t page_bytes, const volatile uint32_t* command, uint64_t budget_cycles) {
+    const remote_cb::WaitResult resized = remote_cb::resize_receiver_bounded(
+        receiver, page_bytes, budget_cycles, [command]() { return *command == abi::kCommandStop; });
+    if (resized == remote_cb::WaitResult::Stopped) {
+        return abi::kCodeStopped;
+    }
+    return resized == remote_cb::WaitResult::Expired ? abi::kCodeCreditTimeout : abi::kCodeOk;
+}
+
 uint32_t drain_count(
     remote_cb::Receiver& receiver,
     const volatile uint32_t* command,
@@ -51,8 +62,8 @@ uint32_t drain_count(
         if (!request_page_bytes_valid(receiver, page_bytes)) {
             return abi::kCodeBadSchedule;
         }
-        if (remote_cb::resize_receiver_bounded(receiver, page_bytes, budget_cycles) == remote_cb::WaitResult::Expired) {
-            return abi::kCodeCreditTimeout;
+        if (const uint32_t code = resize_or_stop(receiver, page_bytes, command, budget_cycles); code != abi::kCodeOk) {
+            return code;
         }
         for (uint32_t page = 0; page < num_pages; ++page) {
             const FrontWait wait = wait_front_or_stop(receiver, 1, command, budget_cycles);
@@ -78,8 +89,8 @@ uint32_t drain_until_stopped(
     if (!request_page_bytes_valid(receiver, page_bytes)) {
         return abi::kCodeBadSchedule;
     }
-    if (remote_cb::resize_receiver_bounded(receiver, page_bytes, budget_cycles) == remote_cb::WaitResult::Expired) {
-        return abi::kCodeCreditTimeout;
+    if (const uint32_t code = resize_or_stop(receiver, page_bytes, command, budget_cycles); code != abi::kCodeOk) {
+        return code;
     }
     while (true) {
         const FrontWait wait = wait_front_or_stop(receiver, 1, command, budget_cycles);
