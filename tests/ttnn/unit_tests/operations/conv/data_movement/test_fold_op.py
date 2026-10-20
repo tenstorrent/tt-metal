@@ -494,6 +494,44 @@ def test_fold_sharded(device, act_shape, stride_h, stride_w, padding, core_grid)
     run_fold_sharded_test(device, act_shape, stride_h, stride_w, padding, core_grid)
 
 
+@pytest.mark.parametrize(
+    "act_shape,core_grid,channel_padding",
+    [
+        ((1, 32, 16, 8), (4, 4), (0, 8)),
+        ((1, 32, 16, 8), (4, 4), (8, 0)),
+        ((1, 128, 16, 8), (8, 8), (0, 8)),
+    ],
+)
+@pytest.mark.parametrize(
+    "orientation", [ttnn.ShardOrientation.COL_MAJOR, ttnn.ShardOrientation.ROW_MAJOR], ids=["col_major", "row_major"]
+)
+def test_fold_sharded_channel_padding_shard_orientation(device, act_shape, core_grid, channel_padding, orientation):
+    # Channel padding pads the height-sharded input, which has to keep every shard on its core in either orientation.
+    grid_x, grid_y = core_grid
+    compute_grid = device.compute_with_storage_grid_size()
+    if compute_grid.x < grid_x or compute_grid.y < grid_y:
+        pytest.skip(f"needs a {grid_x}x{grid_y} compute grid")
+    torch.manual_seed(0)
+    N, H, W, C = act_shape
+    torch_input = torch.randn(act_shape, dtype=torch.bfloat16)
+    c_front, c_back = channel_padding
+    expected = fold_torch(torch.nn.functional.pad(torch_input, (c_front, c_back)), 2, 2)
+
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_x - 1, grid_y - 1))})
+    shard_spec = ttnn.ShardSpec(shard_grid, [N * H * W // (grid_x * grid_y), C], orientation)
+    tt_input = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec),
+    )
+    tt_out = ttnn.fold(tt_input, stride_h=2, stride_w=2, padding=[0, 0, 0, 0, c_front, c_back])
+    actual = ttnn.to_torch(tt_out)
+
+    assert torch.equal(expected, actual)
+
+
 def test_fold_tile_partial_tile_width_rejected(device, expect_error):
     """Logical W=48 padded to 64: 64%32==0 hides the partial-tile W the tile-native writer would OOB into. validate_fold must FATAL on logical_shape now."""
     shape = (1, 32, 48, 32)

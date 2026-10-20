@@ -437,7 +437,9 @@ ttnn::device_operation::ProgramArtifacts PadRmShardedHeightOnlyProgramFactory::c
 
     // Iterate the output shard grid's real cores. Deriving them from the bounding box emits
     // runtime args for cores in the gaps of a non-contiguous grid, where the kernels do not run.
-    const auto padded_cores_in_order = corerange_to_cores(all_cores_padded, num_cores_padded, row_major);
+    // Output shard i lives on the i-th output core in the output orientation, which can differ from the input's.
+    const bool row_major_padded = shard_spec_padded.orientation == ShardOrientation::ROW_MAJOR;
+    const auto padded_cores_in_order = corerange_to_cores(all_cores_padded, num_cores_padded, row_major_padded);
     for (uint32_t i = 0; i < num_cores_padded; i++) {
         const CoreCoord& core = padded_cores_in_order[i];
         const auto& core_args = all_runtime_args[i];

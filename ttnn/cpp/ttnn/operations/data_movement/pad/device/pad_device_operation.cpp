@@ -51,6 +51,16 @@ bool can_use_sharded_optimized_factory(const PadParams& operation_attributes, co
         // Note this case causes the sharded optimized PadRmShardedWidthOnlyProgramFactory{} to hang.
         return false;
     }
+    // The width-only factory copies each core's local input shard into its local output shard, so both tensors
+    // must place shard i on the same core. Which core holds shard i follows from the grid and the orientation.
+    if (input_tensor.logical_shape()[-1] != operation_attributes.output_logical_shape[-1]) {
+        const auto& input_shard_spec = input_tensor.shard_spec().value();
+        const auto& output_shard_spec = operation_attributes.output_mem_config.shard_spec().value();
+        if (input_shard_spec.orientation != output_shard_spec.orientation ||
+            input_shard_spec.grid != output_shard_spec.grid) {
+            return false;
+        }
+    }
     return true;
 }
 }  // namespace
