@@ -139,7 +139,8 @@ jobs:
       fail-fast: false
       matrix:
         test-group: ${{ fromJSON(needs.load-test-matrix.outputs.matrix) }}
-    name: "Shadow compile ${{ matrix.test-group.name }}"
+    # Must not match the gate's leg filter ("_<arch> group N/M").
+    name: "Shadow compile, shard ${{ matrix.test-group.split_group }} on ${{ join(matrix.test-group.runs_on, ' ') }}"
     runs-on: ${{ inputs.shadow-compile-runner }}
     timeout-minutes: ${{ matrix.test-group.timeout }}
     container:
@@ -310,9 +311,10 @@ jobs:
         env:
           TIMEOUT_MINUTES: ${{ matrix.test-group.timeout }}
         run: |
-          # Must exceed the sum of the shadow step timeouts below (41 min).
+          # Must exceed the sum of the shadow step timeouts below (26 min).
           left=$(( TIMEOUT_MINUTES - ( $(date +%s) - JOB_START_EPOCH ) / 60 ))
-          if (( left >= 45 )); then
+          echo "minutes-left=$left" >> "$GITHUB_OUTPUT"
+          if (( left >= 30 )); then
             echo "run=true" >> "$GITHUB_OUTPUT"
           else
             echo "run=false" >> "$GITHUB_OUTPUT"
@@ -322,7 +324,7 @@ jobs:
         id: shadow-zstd
         if: ${{ steps.shadow-gate.outputs.run == 'true' }}
         continue-on-error: true
-        timeout-minutes: 2
+        timeout-minutes: 1
         shell: bash
         run: command -v zstd || { apt-get update -qq && apt-get install -y -qq zstd; }
       - name: "Shadow: download the CPU-built ELFs"
@@ -338,7 +340,7 @@ jobs:
         id: shadow-identity
         if: ${{ steps.shadow-download.outcome == 'success' }}
         continue-on-error: true
-        timeout-minutes: 8
+        timeout-minutes: 4
         shell: bash
         working-directory: ${{ env.LLK_PATH }}
         run: |
@@ -349,7 +351,7 @@ jobs:
         id: shadow-unpack
         if: ${{ !cancelled() && steps.shadow-download.outcome == 'success' }}
         continue-on-error: true
-        timeout-minutes: 8
+        timeout-minutes: 3
         shell: bash
         working-directory: ${{ env.LLK_PATH }}
         env:
@@ -361,9 +363,10 @@ jobs:
           python3 tests/llk_perf_offload.py unpack --cmd "$MATRIX_CMD" \
             --dir "$RUNNER_TEMP/shadow-download" --no-junit --delete-archive
       - name: "Shadow: measure the CPU-built ELFs"
+        id: shadow-measure
         if: ${{ steps.shadow-unpack.outcome == 'success' }}
         continue-on-error: true
-        timeout-minutes: 15
+        timeout-minutes: 10
         shell: bash
         working-directory: ${{ env.LLK_PATH }}
         env:
@@ -378,17 +381,24 @@ jobs:
         run: |
           ${{ matrix.test-group.cmd }}
       - name: "Shadow: collect the results"
-        if: ${{ !cancelled() && steps.shadow-unpack.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.shadow-gate.outcome == 'success' }}
         continue-on-error: true
         timeout-minutes: 1
         shell: bash
         working-directory: ${{ env.LLK_PATH }}
+        env:
+          STATUS: >-
+            {"ran": ${{ steps.shadow-gate.outputs.run }}, "minutes_left": ${{ steps.shadow-gate.outputs.minutes-left }},
+             "steps": {"zstd": "${{ steps.shadow-zstd.outcome }}", "download": "${{ steps.shadow-download.outcome }}",
+             "identity": "${{ steps.shadow-identity.outcome }}", "unpack": "${{ steps.shadow-unpack.outcome }}",
+             "measure": "${{ steps.shadow-measure.outcome }}"}}
         run: |
           mkdir -p "$RUNNER_TEMP/shadow-report/perf"
+          echo "$STATUS" > "$RUNNER_TEMP/shadow-report/status.json"
           cp -r "perf_data/runs/${PERF_RUN_TAG}-shadow" "$RUNNER_TEMP/shadow-report/perf/" || true
           cp tests/python_tests/pytest-report-*-${{ matrix.test-group.split_group }}-shadow*.xml "$RUNNER_TEMP/shadow-report/" || true
       - name: "Shadow: upload the results"
-        if: ${{ !cancelled() && steps.shadow-unpack.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.shadow-gate.outcome == 'success' }}
         continue-on-error: true
         timeout-minutes: 2
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
@@ -400,7 +410,7 @@ jobs:
 
   llk-perf-shadow-compare:
     name: "Shadow compile: compare board-built and CPU-built results"
-    needs: [build-images, llk-perf-exec]
+    needs: [build-images, load-test-matrix, llk-perf-exec]
     if: ${{ !cancelled() && inputs.shadow-compile-runner != '' && needs.llk-perf-exec.result != 'skipped' }}
     continue-on-error: true
     runs-on: ubuntu-latest
@@ -413,7 +423,9 @@ jobs:
         timeout-minutes: 20
         with:
           ref: ${{ inputs.ref }}
-          sparse-checkout: tt_metal/tt-llk/tests
+          sparse-checkout: |
+            tt_metal/tt-llk/tests
+            .github/actions/report-failure
       - name: Download the official results
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -426,10 +438,13 @@ jobs:
           path: shadow-compare/shadow
       - name: Compare
         shell: bash
+        env:
+          EXPECTED_MATRIX: ${{ needs.load-test-matrix.outputs.matrix }}
         run: |
           python3 tt_metal/tt-llk/tests/llk_perf_shadow_compare.py \
             --official shadow-compare/official --shadow shadow-compare/shadow \
-            --suffix "${{ inputs.artifact-suffix }}" --out shadow-compare/report.json
+            --suffix "${{ inputs.artifact-suffix }}" --expected-matrix "$EXPECTED_MATRIX" \
+            --out shadow-compare/report.json
       - name: Upload the comparison
         if: always()
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
@@ -437,6 +452,14 @@ jobs:
           name: llk-shadow-report${{ inputs.artifact-suffix }}
           path: shadow-compare/report.json
           retention-days: 30
+      - name: Report a CHECK to Slack
+        if: ${{ failure() && github.event_name == 'schedule' }}
+        uses: ./.github/actions/report-failure
+        with:
+          test_name: "LLK perf shadow compile (report-only)"
+          slack_bot_token: ${{ secrets.LLK_SLACK_REPORTING_BOT_TOKEN }}
+          slack_channel_id: ${{ secrets.LLK_CI_STATUS_CHANNEL_ID }}
+          status: failure
 
   upload-perf-data:
     name: "Upload perf data to the warehouse"
