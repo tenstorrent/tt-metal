@@ -197,6 +197,36 @@ def test_optional_output_argument_with_tiny_tiles(device, n, c, m, k, n_out, til
     assert_with_pcc(output, optional_output_tensor, 0.999)
 
 
+@pytest.mark.parametrize(
+    "a_shape, b_shape, out_shape, raises",
+    [
+        ((1, 1, 64, 128), (1, 1, 128, 256), (1, 1, 128, 128), True),
+        ((1, 1, 64, 128), (1, 1, 128, 256), (1, 1, 256, 64), True),
+        ((1, 1, 64, 128), (128,), (1, 1, 64), True),
+        ((1, 1, 1, 128), (1, 1, 128, 64), (1, 1, 64, 1), True),
+        ((1, 1, 96, 128), (1, 1, 128, 256), (2, 1, 48, 256), True),
+        ((1, 1, 64, 128), (1, 1, 128, 256), (1, 1, 64, 256), False),
+        ((1, 1, 64, 128), (1, 1, 128, 256), (64, 256), False),
+        ((1, 1, 64, 128), (128,), (1, 1, 64, 1), False),
+        ((2, 1, 64, 128), (2, 1, 128, 256), (1, 1, 128, 256), False),
+    ],
+)
+def test_optional_output_shape_must_match(device, a_shape, b_shape, out_shape, raises, expect_error):
+    torch.manual_seed(0)
+    torch_a = torch.randn(a_shape, dtype=torch.bfloat16)
+    torch_b = torch.randn(b_shape, dtype=torch.bfloat16)
+    a = ttnn.from_torch(torch_a, layout=ttnn.TILE_LAYOUT, device=device)
+    b = ttnn.from_torch(torch_b, layout=ttnn.TILE_LAYOUT, device=device)
+    out = ttnn.from_torch(torch.zeros(out_shape, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+    if raises:
+        with expect_error(RuntimeError, "Shape of Optional Output Tensor"):
+            ttnn.matmul(a, b, optional_output_tensor=out)
+        return
+    ttnn.matmul(a, b, optional_output_tensor=out)
+    expected = torch.matmul(torch_a.float(), torch_b.float()).reshape(out_shape)
+    assert_with_pcc(expected, ttnn.to_torch(out).float(), 0.999)
+
+
 @pytest.mark.parametrize("n", [1])
 @pytest.mark.parametrize("c", [2])
 @pytest.mark.parametrize("h", [71])

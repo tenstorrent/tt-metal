@@ -208,11 +208,19 @@ void validate_matmul_optional_tensors(
     if (is_optional_output_tensor) {
         const auto& optional_output_tensor_c = optional_output_tensors.at(0);
         const auto& optional_output_tensor_shape = optional_output_tensor_c->logical_shape();
+        const auto computed_shape = operations::matmul::utilities::compute_matmul_output_shape(
+            args.input_tensors.at(0), args.input_tensors.at(1), attributes.transpose_a, attributes.transpose_b);
+        const uint32_t out_tile_h = optional_output_tensor_c->tensor_spec().tile().get_height();
+        const bool same_rows =
+            optional_output_tensor_shape[-2] == computed_shape[-2] ||
+            (computed_shape[-2] % out_tile_h == 0 && optional_output_tensor_shape[-2] % out_tile_h == 0 &&
+             optional_output_tensor_shape.volume() == computed_shape.volume());
         TT_FATAL(
-            optional_output_tensor_shape == output_tensor_spec.logical_shape(),
-            "Shape of Optional Output Tensor {} doesn't match Output Tensor {}",
+            optional_output_tensor_shape[-1] == computed_shape[-1] && same_rows,
+            "Shape of Optional Output Tensor {} doesn't match Output Tensor {}: the last dimension must match, and "
+            "leading dimensions may only be folded into whole tile rows",
             optional_output_tensor_shape,
-            output_tensor_spec.logical_shape());
+            computed_shape);
         TT_FATAL(
             optional_output_tensor_c->dtype() == attributes.output_dtype.value(),
             "Type mismatch between optional output tensor {} & output tensor {}",
