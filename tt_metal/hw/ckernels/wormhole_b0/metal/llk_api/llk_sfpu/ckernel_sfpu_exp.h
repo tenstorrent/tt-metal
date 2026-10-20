@@ -486,6 +486,7 @@ void calculate_exponential(const std::uint32_t exp_base_scale_factor = p_sfpu::k
         for (int d = 0; d < ITERATIONS; d++) {
             TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_3, 0);
             TTI_SFPSWAP(0, p_sfpu::LREG14, p_sfpu::LREG0, 9);
+            TTI_SFPNOP;  // SFPMAD must not read LREG0 before the SFPSWAP result lands (SFPSWAP + SFPNOP costs no cycle)
             TTI_SFPMAD(p_sfpu::LREG12, p_sfpu::LREG0, p_sfpu::LREG13, p_sfpu::LREG0, 0);
             TTI_SFPNOP;  // no WH SFPU scoreboard: SFP_STOCH_RND must not read LREG0 the cycle after SFPMAD writes it
             TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_UINT16);
