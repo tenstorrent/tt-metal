@@ -1010,7 +1010,7 @@ void kernel_main() {
 #ifdef SOL_PACK_DEBUG
                     // Printed before the reserve: reserve_back is where the reader blocks, so the last PUSH
                     // line names the page it could not get space for.
-                    DPRINT << "PUSH k=" << k_chunk << " n=" << (pages_pushed + 1) << ENDL();
+                    DPRINT("SOLPUSH k={} n={}\n", k_chunk, pages_pushed + 1);
 #endif
                     cb_kp.reserve_back(k_chunk_tiles);
                     cb_vp.reserve_back(v_cb_entry_tiles);
@@ -1682,6 +1682,14 @@ void kernel_main() {
                             // pages and the fill of the trailing partial page, and deriving both from one
                             // published number keeps them consistent with each other too.
                             plan_words[5] = sol_total_kept;
+#ifdef SOL_PACK_DEBUG
+                            DPRINT(
+                                "SOLPLAN r={} q={} kept={} expect={}\n",
+                                ring_id,
+                                q_chunk,
+                                sol_total_kept,
+                                (sol_total_kept + sol_blocks_per_page - 1) / sol_blocks_per_page);
+#endif
                         }
                         uint32_t ulo = lo, uhi = hi;
                         if (sol_n_members > 0 && head_chain.is_participant && nq == head_chain.chain_head) {
@@ -2255,8 +2263,7 @@ void kernel_main() {
                     }
 #ifdef SOL_PACK_DEBUG
                     if (!is_padded_iter) {
-                        DPRINT << "PACK r=" << ring_id << " q=" << q_chunk << " pushed=" << sol_pages_pushed
-                               << ENDL();
+                        DPRINT("SOLDONE r={} q={} pushed={}\n", ring_id, q_chunk, sol_pages_pushed);
                     }
 #endif
                     // The trailing reserve_back (from the loop, or the pre-loop one when nothing was kept) is
