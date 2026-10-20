@@ -29,7 +29,7 @@
 #include <google/protobuf/text_format.h>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/experimental/fabric/physical_node_id.hpp>  // experimental::canonical_cluster_id_for_node_id
-#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <tt-umd/types/cluster_descriptor_types.hpp>
 
 #include <protobuf/factory_system_descriptor.pb.h>   // tt::scaleout_tools::fsd::proto (from scaleout_tools)
 #include <protobuf/physical_system_descriptor.pb.h>  // tt::fabric::proto (compiled into this lib)
