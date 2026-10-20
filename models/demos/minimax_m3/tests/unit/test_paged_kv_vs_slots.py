@@ -1,17 +1,18 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Paged KV cache through the MSA attention layer, SP=8 x TP=4: every forward on a paged cache must match the same
-forward on a slot cache bit for bit, both the chunks' real output rows and the K / V / index_k the slots hold
-afterwards (read back through the page table).
+"""Paged KV cache through the MSA attention layer, SP=8 x TP=4. Each case first fills the caches with single-chunk
+forwards (not compared), then runs one compared forward on both: its chunks' real output rows and the K / V / index_k
+the slots hold afterwards (read back through the page table) must match the slot cache bit for bit, and every pool
+page no row maps, and the cache layer never written, must stay zero.
 
-Cases: an ordered table, a shuffled one, a partial last chunk, two requests sharing prefix pages (the second writes
-only its suffix), a packed forward of 4 chunks, a resume that starts mid-page, and a row mapping only the request's
+Cases: an ordered table; a shuffled one ending on a partial chunk; two requests sharing prefix pages (the second
+writes only its suffix); a packed forward of 4 chunks; a resume that starts mid-page; a row mapping only the request's
 own pages (the final chunk's pad rows fall on unmapped pages). The layer writes cache layer 1 of 2, so the pool's
 page x layer entries are exercised. Random weights, the runtime's whole-cache indexed RoPE.
 
-test_prefill_runtime_paged runs the same comparison through TtPrefillRuntime with real weights (two MSA + MoE
-layers) and checks that compile() covers the paged programs and hands back the page table it found.
+test_prefill_runtime_paged runs a packed schedule through TtPrefillRuntime with real weights (two MSA + MoE layers):
+the slots' K / V / index_k must match the slot cache's bit for bit, and compile() must cover every paged program.
 """
 
 import os
@@ -26,8 +27,8 @@ from models.common.utils import block_cyclic_reorder
 from models.demos.minimax_m3.config import MeshConfig
 from models.demos.minimax_m3.tt.attention import Attention, AttentionConfig, allocate_kv_caches
 from models.demos.minimax_m3.tt.attention.kv_cache import (
+    PAGE_SIZE,
     PAGE_UNMAPPED,
-    ordered_page_table,
     page_owner,
     read_paged_slot_block,
     set_page_table,
@@ -44,11 +45,12 @@ from ..test_factory import compose_tp_hidden, parametrize_mesh_with_fabric
 
 HIDDEN, NQ, NKV, HEAD_DIM, ROTARY_DIM, THETA, EPS = 6144, 64, 4, 128, 64, 5_000_000.0, 1e-6
 NIDX, INDEX_DIM = 4, 128
-C, USERS, LAYERS, LAYER = 1024, 4, 2, 1
+SP, C, USERS = 8, 1024, 4
+CACHE_LAYERS, WRITTEN_LAYER = 2, 1  # the attention layer writes cache layer 1 of 2
 CAP = 12 * C
-PAGE = 64
-# Every row's pages plus spares, so a shuffled table is not a relabelling of an ordered one.
-NUM_PAGES = USERS * CAP // 8 // PAGE + 8
+SPARE_PAGES = 8  # past every row's pages, so a shuffled table is not a relabelling of an ordered one
+NUM_PAGES = USERS * CAP // SP // PAGE_SIZE + SPARE_PAGES
+SHARED_PREFIX = 2 * C  # shared_prefix: row 1 maps row 0's pages under these positions
 
 
 def fills(slot, start, end):
@@ -60,7 +62,13 @@ def fills(slot, start, end):
 CASES = {
     "ordered": ("ordered", [], fills(0, 0, 2 * C), [PrefillChunk(0, 2 * C, 3 * C)]),
     "shuffled_partial": ("shuffled", [], fills(1, 0, 3 * C), [PrefillChunk(1, 3 * C, 3 * C + 700)]),
-    "shared_prefix": ("shared", fills(1, 0, 2 * C), fills(0, 0, 2 * C), [PrefillChunk(1, 2 * C, 3 * C)]),
+    # The slot cache fills slot 1's prefix itself; the paged row 1 maps slot 0's pages there.
+    "shared_prefix": (
+        "shared",
+        fills(1, 0, SHARED_PREFIX),
+        fills(0, 0, SHARED_PREFIX),
+        [PrefillChunk(1, SHARED_PREFIX, SHARED_PREFIX + C)],
+    ),
     "packed": (
         "shuffled",
         [],
@@ -72,32 +80,33 @@ CASES = {
 }
 
 
-def build_table(kind, kv_cache, sp, seed):
-    """Host page table for one case. ``shared``: row 1 maps row 0's pages for its first 2*C positions.
-    ``request``: row 2 maps only the pages under its C + 300 tokens."""
+def build_table(kind, width, seed):
+    """Host page table for one case. ``ordered``: row r takes the r-th run of every rank's pages, in position order.
+    ``shared``: row 1 maps row 0's pages under SHARED_PREFIX. ``request``: row 2 maps only the pages under its C + 300
+    tokens."""
+    owner = [page_owner(q, chunk_local=C // SP, sp=SP) for q in range(width)]
     if kind == "ordered":
-        return ordered_page_table(kv_cache, C)
-    width = kv_cache.page_table.shape[-1]
+        per_run = C // SP // PAGE_SIZE  # pages per rank per chunk
+        q = torch.arange(width)
+        local = q // (per_run * SP) * per_run + q % per_run  # q's index among its rank's pages
+        table = torch.arange(USERS)[:, None] * -(-width // SP) + local
+        assert int(table.max()) < NUM_PAGES
+        return table
     gen = torch.Generator().manual_seed(seed)
-    free = [torch.randperm(NUM_PAGES, generator=gen).tolist() for _ in range(sp)]
-    table = torch.tensor(
-        [
-            [free[page_owner(q, page_size=PAGE, chunk_local=C // sp, sp=sp)].pop() for q in range(width)]
-            for _ in range(USERS)
-        ]
-    )
+    free = [torch.randperm(NUM_PAGES, generator=gen).tolist() for _ in range(SP)]
+    table = torch.tensor([[free[owner[q]].pop() for q in range(width)] for _ in range(USERS)])
     if kind == "shared":
-        table[1, : 2 * C // PAGE] = table[0, : 2 * C // PAGE]
+        table[1, : SHARED_PREFIX // PAGE_SIZE] = table[0, : SHARED_PREFIX // PAGE_SIZE]
     elif kind == "request":
-        table[2, -(-(C + 300) // PAGE) :] = PAGE_UNMAPPED
+        table[2, -(-(C + 300) // PAGE_SIZE) :] = PAGE_UNMAPPED
     return table
 
 
-@pytest.mark.timeout(1800)
+@pytest.mark.timeout(600)
 @parametrize_mesh_with_fabric(mesh_shapes=[(8, 4)], linear_fabric=True)
 def test_paged_kv_vs_slots(mesh_device, device_params, reset_seeds):
     rows, cols = tuple(mesh_device.shape)
-    assert (rows, cols) == (8, 4)
+    assert (rows, cols) == (SP, 4)
     sp, s = rows, C // rows
 
     torch.manual_seed(0)
@@ -151,8 +160,8 @@ def test_paged_kv_vs_slots(mesh_device, device_params, reset_seeds):
         ccl_manager=ccl,
         mesh_config=mesh_config,
         program_config=MiniMaxM3AttentionProgramConfig(),
-        global_layer_idx=3,
-        local_layer_idx=LAYER,
+        global_layer_idx=3,  # M3's first MSA layer
+        local_layer_idx=WRITTEN_LAYER,
         transformation_mats=rope_setup.get_both_trans_mats(),
     )
     seq_mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(rows, cols), dims=(2, None))
@@ -166,18 +175,37 @@ def test_paged_kv_vs_slots(mesh_device, device_params, reset_seeds):
 
     rope = [indexed_rope(rope_setup.cos_matrix_prefill), indexed_rope(rope_setup.sin_matrix_prefill)]
 
-    def rows_at(start):
-        """The input rows of the chunk starting at ``start``: a function of the position only, so slots filled over
-        the same positions hold the same KV (what lets a slot cache stand in for shared pages)."""
-        return torch.randn(C, HIDDEN, generator=torch.Generator().manual_seed(start + 1)) * 0.1
+    donors = {}  # slot -> the slot whose inputs it repeats under SHARED_PREFIX (shared_prefix)
+
+    def rows_at(slot, start):
+        """The input rows of ``slot``'s chunk starting at ``start``, distinct per slot, so a read of the wrong row
+        shows. A slot sharing a donor's prefix pages takes the donor's rows there, so its slot cache holds the
+        same KV."""
+        if start < SHARED_PREFIX:
+            slot = donors.get(slot, slot)
+        seed = slot * CAP + start + 1
+        return torch.randn(C, HIDDEN, generator=torch.Generator().manual_seed(seed)) * 0.1
+
+    def poison_gather_buffers():
+        """Fill the persistent gather outputs with a finite sentinel, so a gather that leaves rows unwritten cannot
+        pass on what the forward before it left there."""
+        for buf in ccl._high_bw_gather_buffers.values():
+            sentinel = ttnn.from_torch(
+                torch.full(list(buf.shape), 64.0),
+                dtype=buf.dtype,
+                layout=buf.layout,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            )
+            ttnn.copy_host_to_device_tensor(sentinel, buf)
 
     def run(chunks, kvc):
         """One attention forward over ``chunks``; returns each chunk's output rows in natural order."""
+        poison_gather_buffers()
         n = len(chunks)
         order = pack_forward_tokens(
             [[k * C + i for i in range(C)] for k in range(n)], [c.actual_start for c in chunks], sp
         )
-        x = torch.cat([rows_at(c.actual_start) for c in chunks])[order].reshape(1, 1, -1, HIDDEN)
+        x = torch.cat([rows_at(c.slot_id, c.actual_start) for c in chunks])[order].reshape(1, 1, -1, HIDDEN)
         x_tt = ttnn.from_torch(
             x, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=seq_mapper
         )
@@ -193,10 +221,12 @@ def test_paged_kv_vs_slots(mesh_device, device_params, reset_seeds):
             natural.append(rows_k)
         return natural
 
+    composer = ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape)
+
     def slot_cache_kv(kvc, slot):
-        """[k, v, index_k] of ``slot``'s cache layer LAYER, natural order, from a slot cache."""
-        composer = ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape)
-        row = slot * LAYERS + LAYER
+        """[k, v, index_k] of ``slot``'s cache layer WRITTEN_LAYER, natural order, from a slot cache. index_k is
+        replicated across the TP cols, so one col is kept."""
+        row = slot * CACHE_LAYERS + WRITTEN_LAYER
         out = []
         for t in (kvc.k, kvc.v, kvc.index_k):
             shape = list(t.shape)
@@ -210,21 +240,39 @@ def test_paged_kv_vs_slots(mesh_device, device_params, reset_seeds):
         """slot_cache_kv of a paged cache, read through its page table."""
         out = [
             naturalize_kv_block(
-                read_paged_slot_block(kvc, t, slot, rows=CAP // sp, chunk_size=C)[LAYER], CAP, sp, C, CAP
+                read_paged_slot_block(kvc, t, slot, rows=CAP // sp, chunk_size=C)[WRITTEN_LAYER], CAP, sp, C, CAP
             )
             for t in (kvc.k, kvc.v, kvc.index_k)
         ]
         out[2] = out[2][:1]
         return out
 
+    def written_outside_rows(kvc, table):
+        """Names of the pool tensors holding a nonzero value in a page no row maps, or in the layer never written."""
+        dirty = []
+        for name, t in (("k", kvc.k), ("v", kvc.v), ("index_k", kvc.index_k)):
+            pool = ttnn.to_torch(t, mesh_composer=composer)  # [pages * layers, tp, sp * page, hd]
+            pool = pool.reshape(NUM_PAGES, CACHE_LAYERS, cols, sp, PAGE_SIZE, -1)
+            for rank in range(sp):
+                owned = [q for q in range(table.shape[1]) if page_owner(q, chunk_local=C // sp, sp=sp) == rank]
+                used = set(table[:, owned].flatten().tolist())
+                unused = [p for p in range(NUM_PAGES) if p not in used]
+                if pool[unused, :, :, rank].any() or pool[:, 1 - WRITTEN_LAYER, :, rank].any():
+                    dirty.append(f"{name} rank {rank}")
+        return dirty
+
     failures = []
     for seed, (name, (table_kind, slot_only, both, forward)) in enumerate(CASES.items()):
         validate_chunks(forward, chunk_size=C, forward_chunks=len(forward), num_users=USERS, max_seq_len=CAP)
-        slots_kv = allocate_kv_caches(mesh_device, num_layers=LAYERS, max_seq_len=CAP, num_users=USERS)
+        donors.clear()
+        if table_kind == "shared":
+            donors[1] = 0
+        slots_kv = allocate_kv_caches(mesh_device, num_layers=CACHE_LAYERS, max_seq_len=CAP, num_users=USERS)
         paged_kv = allocate_kv_caches(
-            mesh_device, num_layers=LAYERS, max_seq_len=CAP, num_users=USERS, num_pages=NUM_PAGES, page_size=PAGE
+            mesh_device, num_layers=CACHE_LAYERS, max_seq_len=CAP, num_users=USERS, num_pages=NUM_PAGES
         )
-        set_page_table(paged_kv, build_table(table_kind, paged_kv, sp, seed))
+        table = build_table(table_kind, paged_kv.page_table.shape[-1], seed)
+        set_page_table(paged_kv, table)
         for chunk in slot_only:
             run([chunk], slots_kv)
         for chunk in both:
@@ -248,29 +296,30 @@ def test_paged_kv_vs_slots(mesh_device, device_params, reset_seeds):
                 logger.info(f"[{name}] slot {slot} {cache} [0, {end}): bit-exact {same}")
                 if not same:
                     failures.append(f"{name} slot {slot} {cache}: cache differs")
+        failures += [
+            f"{name}: {where} written outside the rows' pages" for where in written_outside_rows(paged_kv, table)
+        ]
         slots_kv.deallocate()
         paged_kv.deallocate()
 
     assert not failures, f"paged vs slots: {failures}"
 
 
-RUNTIME_LAYERS = [3, 4]  # MSA + MoE: a paged cache serves no dense ring_joint layer
+RUNTIME_LAYERS = [3, 4]  # two MSA-attention + MoE layers: a paged cache serves no dense ring_joint layer
 RUNTIME_CAP = 8 * C
+EMPTY = PrefillChunk(0, 0, 0)  # pads a forward to its fixed chunk count
+# Slots 1 and 3 end their second forward mid-tile (C + 700, 300) and resume at the 32-aligned start below it
+# (C + 672, 288), rewriting the partial tile, as a multi-turn resume does.
 RUNTIME_SCHEDULE = [
     [PrefillChunk(0, 0, C), PrefillChunk(0, C, 2 * C), PrefillChunk(1, 0, C), PrefillChunk(2, 0, C)],
     [PrefillChunk(0, 2 * C, 3 * C), PrefillChunk(1, C, C + 700), PrefillChunk(2, C, 2 * C), PrefillChunk(3, 0, 300)],
-    [
-        PrefillChunk(1, C + 672, 2 * C + 672),
-        PrefillChunk(3, 288, C + 288),
-        PrefillChunk(0, 0, 0),
-        PrefillChunk(0, 0, 0),
-    ],
+    [PrefillChunk(1, C + 672, 2 * C + 672), PrefillChunk(3, 288, C + 288), EMPTY, EMPTY],
 ]
 
 
-@pytest.mark.timeout(2400)  # a 2-layer real-weight build, two compiles and per-slot read-backs
+@pytest.mark.timeout(600)
 @parametrize_mesh_with_fabric(mesh_shapes=[(8, 4)], linear_fabric=True)
-def test_prefill_runtime_paged(mesh_device, device_params, reset_seeds):
+def test_prefill_runtime_paged(mesh_device, device_params, reset_seeds, monkeypatch):
     if not os.getenv("HF_MODEL"):
         pytest.skip("needs real MiniMax-M3 weights (HF_MODEL + a warm TT_CACHE_PATH tilized cache)")
     from models.demos.minimax_m3.tt.model_config import ModelArgs
@@ -281,7 +330,7 @@ def test_prefill_runtime_paged(mesh_device, device_params, reset_seeds):
     model_args = ModelArgs(mesh_device=mesh_device)
     hf_config = model_args.hf_config
     hf_config.num_hidden_layers = built
-    os.environ.setdefault("M3_LOAD_NLAYERS", str(built))
+    monkeypatch.setenv("M3_LOAD_NLAYERS", str(built))
     cache_path = model_args.weight_cache_path(ttnn.bfloat8_b)
     if not weight_cache_is_complete(cache_path, hf_config, built, ttnn.bfloat4_b):
         pytest.skip(f"tilized weight cache for the first {built} layers is not complete at {cache_path}")
@@ -331,17 +380,14 @@ def test_prefill_runtime_paged(mesh_device, device_params, reset_seeds):
     runtime.compile(slots_kv)
     run(slots_kv)
 
-    paged_kv = allocate(num_pages=USERS * RUNTIME_CAP // sp // PAGE + 8, page_size=PAGE)
+    paged_kv = allocate(num_pages=USERS * RUNTIME_CAP // sp // PAGE_SIZE + SPARE_PAGES)
     gen_table = torch.Generator().manual_seed(7)
     free = [torch.randperm(paged_kv.num_pages, generator=gen_table).tolist() for _ in range(sp)]
     width = paged_kv.page_table.shape[-1]
-    owner = [page_owner(q, page_size=PAGE, chunk_local=C // sp, sp=sp) for q in range(width)]
+    owner = [page_owner(q, chunk_local=C // sp, sp=sp) for q in range(width)]
     table = torch.tensor([[free[owner[q]].pop() for q in range(width)] for _ in range(USERS)])
-    # Installed before compile(), which warms up on pages of its own and must hand this table back.
     set_page_table(paged_kv, table)
     runtime.compile(paged_kv)
-    after = ttnn.to_torch(ttnn.get_device_tensors(paged_kv.page_table)[0]).to(torch.int64)
-    assert torch.equal(after, table.to(torch.int64)), "compile() did not hand back the page table it found"
     programs = mesh_device.num_program_cache_entries()
     run(paged_kv)
     new_programs = mesh_device.num_program_cache_entries() - programs
