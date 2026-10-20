@@ -51,8 +51,6 @@ void validate_fast_and_approximate_mode(
 bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b, bool fast_and_approximate_mode = false) {
     using enum BinaryOpType;
     using enum DataType;
-    // The FPU kernel reads each operand through a 19-bit source register, so a float32 operand paired with a
-    // narrower float keeps the SFPU kernel, as two float32 operands already do.
     const auto is_narrow_float = [](DataType d) { return d == BFLOAT16 || d == BFLOAT8_B || d == BFLOAT4_B; };
     const bool float32_with_narrow_float = (a == FLOAT32 && is_narrow_float(b)) || (b == FLOAT32 && is_narrow_float(a));
     switch (val) {

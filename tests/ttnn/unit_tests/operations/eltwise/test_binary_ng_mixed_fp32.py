@@ -37,12 +37,9 @@ _BCAST = {"none": (H, W), "row": (1, W), "col": (H, 1), "scalar": (1, 1)}
 @pytest.mark.parametrize("narrow_dtype, bcast", _NARROW)
 @pytest.mark.parametrize("op, kwargs, is_comparison", _OPS)
 def test_binary_ng_float32_with_narrow_float(device, op, kwargs, is_comparison, narrow_dtype, bcast, float32_first):
-    """A float32 operand mixed with a bfloat16 / bfloat8_b operand must give the same result as
-    typecasting the narrow operand to float32 first."""
     torch.manual_seed(0)
     narrow = (torch.randn(H, W) * 4).bfloat16()[: _BCAST[bcast][0], : _BCAST[bcast][1]]
     if is_comparison:
-        # within 2^-14 of the narrow value: equal once the float32 operand loses its low mantissa bits
         sign = torch.where(torch.rand(H, W) < 0.5, 1.0, -1.0)
         wide = (torch.randn(H, W) * 4).bfloat16().float()
         wide[: narrow.shape[0], : narrow.shape[1]] = narrow.float()
@@ -64,7 +61,6 @@ def test_binary_ng_float32_with_narrow_float(device, op, kwargs, is_comparison, 
         if out_dtype == ttnn.float32 or is_comparison:
             assert torch.equal(out, ref), f"{(out != ref).sum().item()} of {out.numel()} differ ({out_dtype})"
         else:
-            # rounding the float32 result to bfloat16 can differ by one step from the all-float32 path
             finite = torch.isfinite(ref)
             assert torch.equal(out[~finite].nan_to_num(), ref[~finite].nan_to_num())
             assert_with_ulp(expected_result=ref[finite], actual_result=out[finite], ulp_threshold=1)
