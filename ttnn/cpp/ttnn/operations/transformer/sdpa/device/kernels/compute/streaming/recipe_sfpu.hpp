@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 #include "fp32_state_sfpu.hpp"
+#include "recipe_config.hpp"
 // SFPU exponentials for the FP32-state recipes (BALANCED, ACCURATE); STANDARD and FAST use the
 // standard approximate exp.
 //
@@ -21,16 +22,17 @@
 //   cancel exactly). K cancels in O / l because P feeds both; P, l or an LSE produced here must not be
 //   combined with values from a different exp implementation. Emulating p over m in [1, 2), the relative
 //   ripple around K is +-0.35% for BALANCED's quadratic and +-0.10% for ACCURATE's cubic.
+// SFPI code exists in the MATH and PACK builds only.
 #if defined(TRISC_MATH) || defined(TRISC_PACK)
 namespace ckernel::sfpu {
 // Online-softmax correction, accurate FP32 exp with the full scale.
 template <uint32_t scale_fp32>
 inline void calculate_sdpa_exp_correction() {
-#ifndef SDPA_RECIPE_FP32
-    // The score exp's SFPU programs may leave a DST increment in ADDR_MOD_7. This
-    // routine advances dst_reg explicitly; reset before using the SFPI loop.
-    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
-#endif
+    if constexpr (!recipe::fp32) {
+        // The score exp's SFPU programs may leave a DST increment in ADDR_MOD_7. This
+        // routine advances dst_reg explicitly; reset before using the SFPI loop.
+        addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
+    }
     constexpr float scale = __builtin_bit_cast(float, scale_fp32);
     for (int d = 0; d < 4; ++d) {
         sfpi::vFloat x = sfpi::dst_reg[0];

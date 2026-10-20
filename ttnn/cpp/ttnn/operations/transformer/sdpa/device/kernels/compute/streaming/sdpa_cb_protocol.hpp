@@ -24,13 +24,10 @@
 // wrapper. That keeps almost all of the Wormhole code-size win (only the exp pack's ~few
 // static copies return) with no measurable BH perf cost. On MATH/UNPACK threads pack_tile is
 // a no-op, so the outlined wrapper collapses to an empty inline function (zero overhead).
-#ifdef TRISC_PACK
-__attribute__((noinline, noclone)) static void sdpa_pack_tile_ooo(uint32_t dst, uint32_t cb, uint32_t idx) {
-    llk_pack<DST_ACCUM_MODE, true, PackMode::Default>(dst, cb, idx);
+__attribute__((noinline, noclone)) static void sdpa_pack_tile_ooo_pack(uint32_t dst, uint32_t cb, uint32_t idx) {
+    PACK((llk_pack<DST_ACCUM_MODE, true, PackMode::Default>(dst, cb, idx)));
 }
-#else
-ALWI void sdpa_pack_tile_ooo(uint32_t, uint32_t, uint32_t) {}
-#endif
+ALWI void sdpa_pack_tile_ooo(uint32_t dst, uint32_t cb, uint32_t idx) { PACK((sdpa_pack_tile_ooo_pack(dst, cb, idx))); }
 
 static __attribute__((noinline, noclone)) void sdpa_cb_push_back_out_of_line(uint32_t cb_id, uint32_t num_tiles) {
     CircularBuffer(cb_id).push_back(num_tiles);

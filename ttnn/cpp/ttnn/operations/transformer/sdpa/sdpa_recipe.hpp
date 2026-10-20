@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
-#include <algorithm>
-#include <map>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "sdpa_precision_policy.hpp"
@@ -41,28 +41,32 @@ uint64_t recipe_free_l1(tt::tt_metal::IDevice& device);
 // Fused STANDARD / FAST chunks add CBs 29-31 (recipe_compute_program).
 bool recipe_fused_cb(const tt::tt_metal::CBDescriptor& cb);
 
-// A layout whose fused CBs do not fit L1 drops them and the SDPA_RECIPE_FUSED define, so the kernel runs every K
-// chunk on the reduce path. An odd STANDARD Q chunk keeps them (its unfused kernel cannot build the single-row group;
-// recipe_compute_q_tiles). `defines` is a KernelDescriptor::Defines or a std::map. Returns the bytes freed (0 when
-// nothing was dropped).
-template <typename Defines>
-uint64_t recipe_drop_fused(tt::tt_metal::ProgramDescriptor::CBDescriptors& cbs, Defines& defines, uint32_t q_tiles) {
-    auto named = [](const char* name) { return [name](const auto& define) { return define.first == name; }; };
-    if (q_tiles % 2 != 0 && std::ranges::none_of(defines, named("SDPA_RECIPE_LOFI"))) {
-        return 0;
-    }
-    uint64_t freed = 0;
-    for (const auto& cb : cbs) {
-        freed += recipe_fused_cb(cb) ? cb.total_size : 0;
-    }
-    cbs.erase(std::remove_if(cbs.begin(), cbs.end(), recipe_fused_cb), cbs.end());
-    std::erase_if(defines, named("SDPA_RECIPE_FUSED"));
-    return freed;
-}
+// The recipe compute kernels select their behavior through named compile-time arguments (kernel side:
+// device/kernels/compute/streaming/recipe_config.hpp). recipe_compute_program sets every one of them on its compute
+// kernel; the ring and exp ring factories copy them (the "recipe_" names) onto their kernels.
+using NamedCompileTimeArgs = tt::tt_metal::KernelDescriptor::NamedCompileTimeArgs;
+// Sets `name` to `value`, adding the argument if absent.
+void set_named_arg(NamedCompileTimeArgs& args, std::string_view name, uint32_t value);
+// The value of `name`, which must be present.
+uint32_t named_arg(const NamedCompileTimeArgs& args, std::string_view name);
+// The recipe arguments ("recipe_" names) of a recipe compute kernel's named compile-time arguments.
+NamedCompileTimeArgs recipe_named_args(const NamedCompileTimeArgs& args);
+
+// A layout whose fused CBs do not fit L1 drops them and clears recipe_fused in the recipe compute kernel's named
+// arguments `args`, so the kernel runs every K chunk on the reduce path. An odd STANDARD Q chunk keeps them (its
+// unfused kernel cannot build the single-row group; recipe_compute_q_tiles). Returns the bytes freed (0 when nothing
+// was dropped).
+uint64_t recipe_drop_fused(
+    tt::tt_metal::ProgramDescriptor::CBDescriptors& cbs, NamedCompileTimeArgs& args, uint32_t q_tiles);
 
 // Recipe QK/PV matmul subblock width for a K chunk or head dim of `tiles` tiles: the largest of 4, 2 and 1
-// dividing it (SDPA_RECIPE_QK_W / SDPA_RECIPE_PV_W). Shared by the dense, ring and exp ring recipe hosts.
+// dividing it (recipe_qk_w / recipe_pv_w). Shared by the dense, ring and exp ring recipe hosts.
 uint32_t recipe_subblock_width(uint32_t tiles);
+
+// The kernel optimization level a recipe factory sets: `level`, or the default when the watcher is enabled. Watcher
+// builds are -Os (the recipe kernels' WATCHER_ENABLED pragma), and their link must stay at the default level: at -O2
+// the LLK's address-mode setup is not inlined into the -Os code and its asm constants do not resolve.
+std::optional<tt::tt_metal::KernelBuildOptLevel> recipe_opt_level(tt::tt_metal::KernelBuildOptLevel level);
 
 tt::tt_metal::ProgramDescriptor recipe_compute_program(
     const PrecisionPolicy& policy,

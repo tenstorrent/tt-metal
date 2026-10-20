@@ -93,9 +93,12 @@ public:
     virtual void append_writer_common_runtime_args(
         tt::tt_metal::KernelDescriptor& /*writer*/, const RingJointSDPAResult&) const {}
     virtual void append_defines(tt::tt_metal::KernelDescriptor::Defines& /*defines*/) const {}
+    // Named compile-time arguments the variant adds to the reader, writer and compute kernels.
+    virtual void append_named_compile_time_args(tt::tt_metal::KernelDescriptor::NamedCompileTimeArgs& /*args*/) const {}
     virtual std::optional<tt::tt_metal::KernelDescriptor::ConfigDescriptor> compute_config() const {
         return std::nullopt;
     }
+    virtual std::optional<tt::tt_metal::KernelBuildOptLevel> compute_opt_level() const { return std::nullopt; }
 };
 
 tt::tt_metal::WorkloadDescriptor build_workload_descriptor(
