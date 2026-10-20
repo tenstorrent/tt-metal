@@ -106,7 +106,6 @@ public:
     // Alignment can be pulled out of the AllocatorConfig but this getter is a helper
     // so client code does not need to condition based on BufferType
     std::uint32_t get_alignment(BufferType buffer_type) const;
-    std::uint32_t get_l1_allocation_alignment() const;
 
     // This a proxy of get_config().worker_l1_size,
     // this helper function is made for reports.cpp in TTNN and act as a transient member function
@@ -150,9 +149,6 @@ public:
     // Mirror a lockstep allocation (from the mesh-level allocator) into this allocator's lockstep sub-allocator.
     // This marks the region as occupied so per-bank allocators avoid it.
     void mirror_lockstep_allocation(DeviceAddr address, DeviceAddr size);
-    std::vector<std::pair<DeviceAddr, DeviceAddr>> get_l1_available_ranges(
-        BankManager::AllocatorDependencies::AllocatorID allocator_id,
-        const std::vector<std::pair<DeviceAddr, DeviceAddr>>& additional_occupied_ranges) const;
     void unmirror_lockstep_allocation(DeviceAddr address);
 
     // Device-global L1 arena for allocations that outlive individual programs.

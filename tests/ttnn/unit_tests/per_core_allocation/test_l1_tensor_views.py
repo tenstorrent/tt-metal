@@ -124,16 +124,6 @@ def test_lockstep_view_requires_one_address(per_core_mesh_device, expect_error):
         )
 
 
-def test_free_ranges_exclude_live_owner(per_core_mesh_device):
-    mesh = per_core_mesh_device
-    core = ttnn.CoreCoord(0, 0)
-    owner = _owner(mesh, core)
-    (extent,) = ttnn.experimental_l1_tensor_owned_extents(owner)
-    free = ttnn.experimental_get_l1_free_ranges(mesh, extent.device_coord, core)
-    assert free and all(start < end for start, end in free)
-    assert all(end <= extent.address or start >= extent.address + extent.size for start, end in free)
-
-
 def test_view_preserves_selected_device_coverage(mesh_device):
     mesh = mesh_device
     coord, core = ttnn.MeshCoordinate(0, 1), ttnn.CoreCoord(0, 0)

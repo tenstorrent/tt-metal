@@ -56,11 +56,15 @@ std::vector<L1TensorExtent> get_l1_tensor_owner_extents(
         }
         DeviceAddr size = local->aligned_size_per_bank();
         if (owned || local->impl().owns_data_) {
+            // Match the existing bank manager's reservation alignment without changing its API.
+            const auto& config = allocator->get_config();
+            const auto alignment =
+                config.allocator_mode == AllocatorMode::HYBRID ? config.dram_alignment : config.l1_alignment;
             size = detail::calculate_bank_size_spread(
                 local->aligned_size(),
                 local->aligned_page_size(),
                 local->num_cores().value_or(allocator->get_num_banks(BufferType::L1)),
-                allocator->get_l1_allocation_alignment());
+                alignment);
         }
         for (const auto& core : cores) {
             result.push_back({coord, core, get_shard_base_address(*local, core), size});
