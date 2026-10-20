@@ -1,0 +1,4 @@
+ci_ab/test_dr_ab.py::test_hardswish[shape0-dram]
+ci_ab/test_dr_ab.py::test_hardswish[shape1-dram]
+ci_ab/test_dr_ab.py::test_hardswish[shape0-l1sh]
+ci_ab/test_dr_ab.py::test_hardswish[shape1-l1sh]
