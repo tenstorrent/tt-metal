@@ -213,5 +213,7 @@ def write_rows(run_dir, test_name, sweep, rows):
     frame["nodeid"] = os.environ.get("PYTEST_CURRENT_TEST", "").rsplit(" ", 1)[0]
     run_dir.mkdir(parents=True, exist_ok=True)
     name = test_name.replace("/", "_").replace(".", "_")
-    path = run_dir / f"{name}.{os.getpid()}.windowhash"
+    # Tests that share a source can have different columns; each column set gets its own file.
+    columns = hashlib.sha1(",".join(frame.columns).encode()).hexdigest()[:8]
+    path = run_dir / f"{name}.{columns}.{os.getpid()}.windowhash"
     frame.to_csv(path, mode="a", header=not path.exists(), index=False)
