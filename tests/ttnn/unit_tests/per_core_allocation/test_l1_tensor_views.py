@@ -157,3 +157,60 @@ def test_view_preserves_selected_device_coverage(mesh_device):
     selected_host = ttnn.distribute_tensor(ttnn.from_torch(value, dtype=ttnn.uint8), mapper)
     ttnn.copy_host_to_device_tensor(selected_host, view)
     torch.testing.assert_close(_read(view), value)
+
+
+def test_allocation_only_views_narrow_writes_and_lifetime(mesh_device):
+    """Exercise selected-device allocation, padded writes, semaphore storage and native-copy lifetime."""
+    mesh, core = mesh_device, ttnn.CoreCoord(0, 0)
+    coord = ttnn.MeshCoordinate(0, 1)
+    baseline = ttnn.experimental_get_l1_occupied_ranges(mesh, coord, core)
+    owner = ttnn.experimental_allocate_single_device_tensor(mesh, coord, _spec([core], 768))
+    assert owner.device_coords() == [coord]
+    (extent,) = ttnn.experimental_l1_tensor_owned_extents(owner)
+    mapper = ttnn.create_mesh_mapper(
+        mesh, ttnn.MeshMapperConfig([ttnn.PlacementReplicate(), ttnn.PlacementReplicate()],
+                                  ttnn.MeshShape(1, 1), coord))
+
+    def upload(value, target):
+        """Write only the selected device and wait before releasing host data."""
+        host = ttnn.distribute_tensor(ttnn.from_torch(value, dtype=ttnn.uint8), mapper)
+        ttnn.copy_host_to_device_tensor(host, target)
+        ttnn.synchronize_device(mesh)
+
+    upload(torch.full((1, 768), 91, dtype=torch.uint8), owner)
+    occupied = ttnn.experimental_get_l1_occupied_ranges(mesh, coord, core)
+    spec = _spec([core], 17)
+    view = _view(mesh, spec, owner, [(coord, core, 256)])
+    geometry = ttnn.experimental_l1_tensor_geometry(mesh, coord, spec)
+    assert ttnn.experimental_l1_tensor_owned_extents(view)[0].size == geometry.aligned_shard_size
+    upload(torch.full((1, 17), 7, dtype=torch.uint8), view)
+    submesh = mesh.create_submesh(ttnn.MeshShape(1, 1), coord)
+    grid = ttnn.CoreRangeSet([ttnn.CoreRange(core, core)])
+    sem = ttnn.experimental_create_global_semaphore_at_address(submesh, grid, 37, ttnn.BufferType.L1,
+                                                             extent.address + 512)
+    assert ttnn.get_global_semaphore_address(sem) == extent.address + 512
+    del sem
+    data = _read(owner).reshape(-1)
+    assert torch.all(data[:256] == 91)
+    assert torch.all(data[256:273] == 7)
+    assert torch.all(data[256 + geometry.aligned_shard_size:512] == 91)
+    assert data[512:516].tolist() == [37, 0, 0, 0]
+    assert torch.all(data[528:] == 91)
+    assert ttnn.experimental_get_l1_occupied_ranges(mesh, coord, core) == occupied
+    ttnn.experimental_retain_tensor_backing(view, [owner])
+    copied = ttnn.get_device_tensors(view)[0]
+    del owner, view
+    gc.collect()
+    torch.testing.assert_close(ttnn.to_torch(copied), torch.full((1, 17), 7, dtype=torch.uint8))
+    del copied
+    gc.collect()
+    assert ttnn.experimental_get_l1_occupied_ranges(mesh, coord, core) == baseline
+
+    owner = ttnn.experimental_allocate_single_device_tensor(mesh, coord, _spec([core], 768))
+    view = _view(mesh, _spec([core], 64), owner, [(coord, core, 0)])
+    del owner
+    gc.collect()
+    # Raw views deliberately retain nothing, and destroying one must not free the address again.
+    assert ttnn.experimental_get_l1_occupied_ranges(mesh, coord, core) == baseline
+    ttnn.deallocate(view)
+    assert ttnn.experimental_get_l1_occupied_ranges(mesh, coord, core) == baseline
