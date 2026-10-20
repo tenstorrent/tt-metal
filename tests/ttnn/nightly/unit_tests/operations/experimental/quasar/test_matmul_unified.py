@@ -1259,7 +1259,7 @@ def test_auto_placement_rejects_a_C_slice(device, expect_error):
         (
             lambda: qsr.MatmulUnifiedProgramConfig(cores=_rect(0, 0, 0, 0), C_slice_M_tiles=40, C_slice_N_tiles=40),
             None,
-            "shrink C_slice_M_tiles",
+            "do not fit for any C slice",
         ),
         (
             lambda: qsr.MatmulUnifiedProgramConfig(
