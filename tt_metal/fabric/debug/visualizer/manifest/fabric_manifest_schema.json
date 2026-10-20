@@ -138,6 +138,14 @@
       "required": ["stream_id", "register", "schema"]
     },
     "stream": { "$ref": "#/$defs/stream_keys", "unevaluatedProperties": false },
+    "core_register_keys": {
+      "$ref": "#/$defs/type_keys",
+      "properties": {
+        "name": { "$ref": "#/$defs/name" },
+        "address": { "$ref": "#/$defs/count" }
+      },
+      "required": ["name", "address"]
+    },
 
     "arch": {
       "type": "object",
@@ -188,6 +196,33 @@
           "required": ["base", "stride", "count", "register_offsets"],
           "additionalProperties": false
         },
+        "core_registers": {
+          "description": "A router core's soft reset and wall clock registers, in the order they are read: reading wall_clock_low latches wall_clock_high. reset_masks is indexed by physical ERISC, which a router ERISC's physical_erisc names.",
+          "type": "array",
+          "prefixItems": [
+            {
+              "$ref": "#/$defs/core_register_keys",
+              "properties": {
+                "name": { "const": "soft_reset" },
+                "reset_masks": { "type": "array", "items": { "type": "integer", "minimum": 1 }, "minItems": 1 }
+              },
+              "required": ["reset_masks"],
+              "unevaluatedProperties": false
+            },
+            {
+              "$ref": "#/$defs/core_register_keys",
+              "properties": { "name": { "const": "wall_clock_low" } },
+              "unevaluatedProperties": false
+            },
+            {
+              "$ref": "#/$defs/core_register_keys",
+              "properties": { "name": { "const": "wall_clock_high" } },
+              "unevaluatedProperties": false
+            }
+          ],
+          "minItems": 3,
+          "items": false
+        },
         "types": {
           "type": "object",
           "additionalProperties": {
@@ -212,7 +247,7 @@
           }
         }
       },
-      "required": ["areas", "stream_registers", "types"],
+      "required": ["areas", "stream_registers", "core_registers", "types"],
       "additionalProperties": false
     },
 
@@ -399,9 +434,10 @@
             "type": "object",
             "properties": {
               "processor": { "$ref": "#/$defs/name" },
+              "physical_erisc": { "$ref": "#/$defs/count" },
               "fields": { "$ref": "#/$defs/fields" }
             },
-            "required": ["processor", "fields"],
+            "required": ["processor", "physical_erisc", "fields"],
             "additionalProperties": false
           }
         },

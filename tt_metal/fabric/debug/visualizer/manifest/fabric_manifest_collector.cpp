@@ -23,6 +23,7 @@
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_fields.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_names.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_struct_layouts.hpp"
+#include "tt_metal/llrt/hal.hpp"
 
 namespace tt::tt_fabric {
 
@@ -734,8 +735,10 @@ manifest::Router collect_manifest_router(const ManifestRouterInputs& inputs) {
     });
     std::vector<manifest::Erisc> eriscs;
     for (size_t risc_id = 0; risc_id < args.size(); ++risc_id) {
+        const auto processor = inputs.kernel.processors[risc_id];
         eriscs.push_back({
-            .processor = inputs.kernel.processors[risc_id],
+            .processor = processor,
+            .physical_erisc = inputs.hal.get_active_eth_physical_erisc(static_cast<uint32_t>(processor)),
             .fields = collect_fields(
                 inputs,
                 manifest::k_erisc_fields,

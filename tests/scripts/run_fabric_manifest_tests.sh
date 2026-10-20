@@ -51,6 +51,8 @@ run_mock t3k_1d "$T3K" 'Fabric1DManifestFixture.*'
 run_mock t3k_2d "$T3K" 'Fabric2DManifestFixture.*'
 run_mock bh_4xp150_1d "$BH_4XP150" 'Fabric1DManifestFixture.*'
 run_mock bh_4xp150_2d "$BH_4XP150" 'Fabric2DManifestFixture.*'
+# Single-ERISC mode, where a router's one processor runs on physical ERISC1.
+TT_METAL_DISABLE_MULTI_AERISC=1 run_mock bh_4xp150_2d_single_erisc "$BH_4XP150" 'Fabric2DManifestFixture.*'
 
 echo "== split_t3k"
 TT_METAL_LOGS_PATH="$OUT_DIR/split_t3k" python3 "$TT_RUN" \
