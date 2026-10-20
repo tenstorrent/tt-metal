@@ -37,6 +37,7 @@ struct SparsePushTreePlanInputs {
     Tensor tables;   // uint32 [1, 1, pages * num_devices, 1024]: every requester's sparse_push_plan table
     Tensor indices;  // uint32 [1, 1, rows, topk] per device, 0xFFFFFFFF = masked
     Tensor rank;     // uint32 [1, 1, 1, 16] per device: word 0 = this device's row-major mesh rank
+    Tensor paths;    // uint32 [1, 1, num_devices, 256]: per chip, its dimension-ordered path tables (host-built)
 };
 
 struct SparsePushTreePlanDeviceOperation {
@@ -61,6 +62,7 @@ std::vector<Tensor> sparse_push_tree_plan(
     const Tensor& tables,
     const Tensor& indices,
     const Tensor& rank,
+    const Tensor& paths,
     const ttnn::operations::experimental::high_bw_all_gather::SparsePushTreePlanParams& params);
 
 }  // namespace ttnn::prim

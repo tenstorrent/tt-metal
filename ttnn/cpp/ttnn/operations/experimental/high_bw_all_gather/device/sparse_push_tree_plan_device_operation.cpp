@@ -32,7 +32,8 @@ enum TreeCb : uint32_t {
     kIdx = 7,
     kVars = 8,
     kDens = 9,
-    kCache = 10
+    kCache = 10,
+    kHandoff = 11
 };
 constexpr uint32_t kCacheRows = 24576;  // rows a planner core remembers between its passes
 constexpr uint32_t kWin = 256;  // must match the kernel's bitmap window
@@ -40,29 +41,6 @@ constexpr uint32_t kWin = 256;  // must match the kernel's bitmap window
 uint32_t round_up(uint32_t x, uint32_t m) { return (x + m - 1) / m * m; }
 
 uint32_t senders(const SparsePushTreePlanParams& p) { return 4 * p.links * p.senders_per_link; }
-
-// Ring cover table for the kernel: per set of ring offsets, the smallest (forward, backward) extents covering it,
-// balanced on ties (as _ring_cover in the host reference). Entry: forward | backward << 8 | (forward + backward) << 16.
-std::string cover_table(uint32_t n) {
-    std::string out = "{";
-    for (uint32_t set = 0; set < (1u << n); ++set) {
-        uint32_t best_sum = 1000, best_max = 1000, bf = 0, bb = 0;
-        for (uint32_t f = 0; f < n; ++f) {
-            uint32_t b = 0;
-            for (uint32_t t = f + 1; t < n; ++t) {
-                if ((set >> t & 1) && n - t > b) {
-                    b = n - t;
-                }
-            }
-            const uint32_t mx = std::max(f, b);
-            if (f + b < best_sum || (f + b == best_sum && mx < best_max)) {
-                best_sum = f + b, best_max = mx, bf = f, bb = b;
-            }
-        }
-        out += std::to_string(bf | bb << 8 | (bf + bb) << 16) + (set + 1 < (1u << n) ? "," : "}");
-    }
-    return out;
-}
 
 }  // namespace tree_plan_detail
 
@@ -81,7 +59,7 @@ void SparsePushTreePlanDeviceOperation::validate_on_program_cache_miss(
         "tables must hold every requester's plan table ({} pages)",
         layout.pages * n_dev);
     TT_FATAL(attrs.slot_capacity % 16 == 0, "slot_capacity must be a multiple of 16");
-    for (const auto* t : {&args.tables, &args.indices, &args.rank}) {
+    for (const auto* t : {&args.tables, &args.indices, &args.rank, &args.paths}) {
         TT_FATAL(t->dtype() == DataType::UINT32 && t->layout() == Layout::ROW_MAJOR, "inputs must be UINT32 ROW_MAJOR");
         TT_FATAL(t->buffer() != nullptr && t->buffer()->buffer_type() == BufferType::DRAM, "inputs must be in DRAM");
     }
@@ -151,11 +129,12 @@ tt::tt_metal::ProgramDescriptor SparsePushTreePlanDeviceOperation::create_descri
     add_cb(td::kOpen, kGroups * td::kRecordBytes);
     add_cb(td::kCarry, kGroups * td::kRecordBytes);
     add_cb(td::kScratch, 3072);
-    add_cb(td::kRw, (attrs.slot_capacity + max_blocks + td::round_up(W, 16)) * 4);
+    add_cb(td::kRw, (max_blocks + td::round_up(W, 16)) * 4);
     add_cb(td::kIdx, td::round_up(topk * 4, 64));
     add_cb(td::kVars, 8192);
     add_cb(td::kDens, (cores + 1) * td::round_up(wpc / 16, 16) * 4);
     add_cb(td::kCache, td::kCacheRows * 8);
+    add_cb(td::kHandoff, 1024);
 
     auto add_semaphore = [&]() {
         const auto id = static_cast<uint32_t>(desc.semaphores.size());
@@ -165,6 +144,7 @@ tt::tt_metal::ProgramDescriptor SparsePushTreePlanDeviceOperation::create_descri
     };
     const uint32_t arrive_sem = add_semaphore();
     const uint32_t go_sem = add_semaphore();
+    const uint32_t handoff_sem = add_semaphore();
 
     auto* streams_buf = outputs[0].buffer();
     std::vector<uint32_t> ct = {
@@ -194,6 +174,7 @@ tt::tt_metal::ProgramDescriptor SparsePushTreePlanDeviceOperation::create_descri
         td::kCntWords,
         max_blocks,
         td::kCacheRows,
+        handoff_sem,
     };
     for (const auto* buf :
          {args.tables.buffer(),
@@ -202,7 +183,8 @@ tt::tt_metal::ProgramDescriptor SparsePushTreePlanDeviceOperation::create_descri
           streams_buf,
           outputs[1].buffer(),
           outputs[2].buffer(),
-          outputs[3].buffer()}) {
+          outputs[3].buffer(),
+          args.paths.buffer()}) {
         tt::tt_metal::TensorAccessorArgs(buf).append_to(ct);
     }
 
@@ -212,8 +194,6 @@ tt::tt_metal::ProgramDescriptor SparsePushTreePlanDeviceOperation::create_descri
     kernel.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
     kernel.core_ranges = all_cores;
     kernel.compile_time_args = std::move(ct);
-    kernel.defines.emplace_back("TREE_COVER_R", td::cover_table(attrs.mesh_rows));
-    kernel.defines.emplace_back("TREE_COVER_C", td::cover_table(attrs.mesh_cols));
     kernel.config = tt::tt_metal::DataMovementConfigDescriptor{
         .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = tt::tt_metal::NOC::RISCV_0_default};
     std::vector<uint32_t> core_xy;
@@ -232,10 +212,17 @@ tt::tt_metal::ProgramDescriptor SparsePushTreePlanDeviceOperation::create_descri
         rt.push_back(outputs[1].buffer());
         rt.push_back(outputs[2].buffer());
         rt.push_back(outputs[3].buffer());
+        rt.push_back(args.paths.buffer());
         kernel.emplace_runtime_args(core_list[i], rt);
     }
     kernel.common_runtime_args = {core_xy.begin(), core_xy.end()};
+    // NCRISC rewrites the indices as soon as BRISC has the group counts, while BRISC emits records.
+    tt::tt_metal::KernelDescriptor helper = kernel;
+    helper.defines.emplace_back("REWRITE_HELPER", "1");
+    helper.config = tt::tt_metal::DataMovementConfigDescriptor{
+        .processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = tt::tt_metal::NOC::RISCV_1_default};
     desc.kernels.push_back(std::move(kernel));
+    desc.kernels.push_back(std::move(helper));
     return desc;
 }
 
@@ -247,10 +234,11 @@ std::vector<Tensor> sparse_push_tree_plan(
     const Tensor& tables,
     const Tensor& indices,
     const Tensor& rank,
+    const Tensor& paths,
     const ttnn::operations::experimental::high_bw_all_gather::SparsePushTreePlanParams& params) {
     using Op = ttnn::operations::experimental::high_bw_all_gather::SparsePushTreePlanDeviceOperation;
     return ttnn::device_operation::launch<Op>(
-        params, Op::tensor_args_t{.tables = tables, .indices = indices, .rank = rank});
+        params, Op::tensor_args_t{.tables = tables, .indices = indices, .rank = rank, .paths = paths});
 }
 
 }  // namespace ttnn::prim

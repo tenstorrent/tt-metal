@@ -1667,10 +1667,19 @@ def test_sparse_push_tree(mesh_device):
                 mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
                 **common,
             )
+            paths = ttnn.from_torch(
+                torch.from_numpy(_dim_path_tables(n_dev, mesh_shape).astype(np.uint32).view(np.int32)).reshape(
+                    1, 1, n_dev, 256
+                ),
+                dtype=ttnn.uint32,
+                mesh_mapper=replicate,
+                **common,
+            )
             tree_plan = lambda: ttnn.experimental.sparse_push_tree_plan(
                 tables,
                 idx_natural,
                 rank,
+                paths,
                 mesh_rows=mesh_shape[0],
                 mesh_cols=mesh_shape[1],
                 stripe_chunk=stripe_chunk,
@@ -1682,7 +1691,15 @@ def test_sparse_push_tree(mesh_device):
             ttnn.synchronize_device(mesh_device)
             t_plan = timed(lambda: tree_plan())
             ref, ref_maps, stats = _tree_plan_records(
-                natural, n_dev, mesh_shape, stripe_chunk, pages_per_packet, buffer_rows, links=links, k_per=k_per
+                natural,
+                n_dev,
+                mesh_shape,
+                stripe_chunk,
+                pages_per_packet,
+                buffer_rows,
+                links=links,
+                k_per=k_per,
+                dim=True,
             )
             got = ttnn.to_torch(streams, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))[:, 0].numpy()
             ref = ref[:, 0].numpy()
@@ -1742,6 +1759,7 @@ def test_sparse_push_tree(mesh_device):
             "local": _tree_plan_local,
             "level": partial(_tree_plan_local, per_packet=False),
             "records": _tree_plan_records,
+            "dim": partial(_tree_plan_records, dim=True),
         }.get(os.environ.get("TREE_PLAN"), _tree_plan)
         streams_host, slot_maps, stats = planner(
             natural, n_dev, mesh_shape, stripe_chunk, pages_per_packet, buffer_rows, links=links, k_per=k_per
@@ -1948,7 +1966,59 @@ def _tree_plan_local(
 _TREE_LEVELS = 12  # tree depths a plan may use (the device planner's bound)
 
 
-def _tree_plan_records(natural, n_dev, mesh_shape, stripe_chunk, pages_per_packet, buffer_rows, links=2, k_per=2):
+def _dim_path(o, d, mesh_shape):
+    """Dimension-ordered path owner o -> chip d as [(from, dir, to)]: along the owner's column to d's row, then along
+    that row, each the short way round; half-way ties go S / E when the owner's row + column is even."""
+    R, C = mesh_shape
+    (ro, co), (rd, cd) = divmod(o, C), divmod(d, C)
+    fwd = (ro + co) % 2 == 0
+    path, r, c = [], ro, co
+    s = (rd - ro) % R
+    south = s < R - s or (s == R - s and fwd)
+    for _ in range(s if south else R - s):
+        nr = (r + (1 if south else -1)) % R
+        path.append((r * C + c, _S if south else _N, nr * C + c))
+        r = nr
+    e = (cd - co) % C
+    east = e < C - e or (e == C - e and fwd)
+    for _ in range(e if east else C - e):
+        nc = (c + (1 if east else -1)) % C
+        path.append((r * C + c, _E if east else _W, r * C + nc))
+        c = nc
+    return path
+
+
+def _dim_path_tables(n_dev, mesh_shape):
+    """Per chip a, for sparse_push_tree_plan: [via x32 | in_of x32 | depth x32 | beyond x128] over owners o, where via
+    = requesters whose path from o passes a, in_of = arrival dir | hop << 8 (4 = a is o), depth = hops o -> a, beyond
+    [4 o + dir] = requesters whose path continues from a in that direction."""
+    t = np.zeros((n_dev, 256), dtype=np.int64)
+    t[:, 32:64] = 4
+    for o in range(n_dev):
+        for d in range(n_dev):
+            if d == o:
+                continue
+            for h, (u, dr, v) in enumerate(_dim_path(o, d, mesh_shape)):
+                t[v, o] |= 1 << d
+                t[v, 32 + o] = dr | h << 8
+                t[v, 64 + o] = h + 1
+                t[u, 96 + 4 * o + dr] |= 1 << d
+    return t
+
+
+def _dim_edges(o, mask, n_dev, mesh_shape):
+    """Edges (from, dir, to, depth) of the union of o's dimension-ordered paths to the requesters in mask."""
+    edges = {}
+    for d in range(n_dev):
+        if mask >> d & 1:
+            for h, (u, dr, v) in enumerate(_dim_path(o, d, mesh_shape)):
+                edges[(u, dr, v)] = h
+    return [(u, dr, v, h) for (u, dr, v), h in edges.items()]
+
+
+def _tree_plan_records(
+    natural, n_dev, mesh_shape, stripe_chunk, pages_per_packet, buffer_rows, links=2, k_per=2, dim=False
+):
     """Reference for the device tree planner (SPARSE_PUSH_TREE=2 stream format): _tree_plan_local's rules, with
     fixed-size records so every row's words have a position computable from per-edge group counts alone.
 
@@ -1984,7 +2054,9 @@ def _tree_plan_records(natural, n_dev, mesh_shape, stripe_chunk, pages_per_packe
         o, m, x = int(owners[u]), int(remote[u]), int(uniq[u])
         ro, co = divmod(o, C)
         key = (o, m, x & 1)
-        if key not in edges_of:
+        if key not in edges_of and dim:
+            edges_of[key] = _dim_edges(o, m, n_dev, mesh_shape)
+        elif key not in edges_of:
             rel = [(((d // C) - ro) % R, ((d % C) - co) % C) for d in range(n_dev) if m >> d & 1]
             edges_of[key] = [
                 (((a[0] + ro) % R) * C + (a[1] + co) % C, dr, ((b[0] + ro) % R) * C + (b[1] + co) % C, h)

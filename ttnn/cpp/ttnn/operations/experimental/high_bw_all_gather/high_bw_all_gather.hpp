@@ -71,6 +71,7 @@ std::vector<Tensor> sparse_push_tree_plan(
     const Tensor& tables,
     const Tensor& indices,
     const Tensor& rank,
+    const Tensor& paths,
     uint32_t mesh_rows,
     uint32_t mesh_cols,
     uint32_t stripe_chunk,

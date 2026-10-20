@@ -41,7 +41,8 @@ enum Cb : uint32_t {
     kIdx = 7,
     kVars = 8,
     kDens = 9,
-    kCache = 10
+    kCache = 10,
+    kHandoff = 11
 };
 constexpr uint32_t kWin = 256;        // bitmap words per requester streamed into L1 at a time
 constexpr uint32_t kChunkWords = 16;  // rows are balanced over cores in chunks of 512
@@ -55,17 +56,6 @@ inline uint32_t popcount(uint32_t x) {
 inline uint32_t ctz(uint32_t x) { return __builtin_ctz(x); }
 inline uint32_t ceil_div(uint32_t a, uint32_t b) { return (a + b - 1) / b; }
 
-// 32 x 32 bit transpose in place: bit j of a[i] <-> bit i of a[j] (Hacker's Delight 7-3, LSB-first indices).
-inline void transpose32(uint32_t* a) {
-    uint32_t m = 0x0000FFFFu;
-    for (uint32_t j = 16; j != 0; j >>= 1, m ^= (m << j)) {
-        for (uint32_t k = 0; k < 32; k = (k + j + 1) & ~j) {
-            const uint32_t t = ((a[k] >> j) ^ a[k + j]) & m;
-            a[k] ^= t << j;
-            a[k + j] ^= t;
-        }
-    }
-}
 }  // namespace
 
 void kernel_main() {
@@ -95,13 +85,15 @@ void kernel_main() {
     constexpr uint32_t cnt_words = get_compile_time_arg_val(23);
     constexpr uint32_t max_blocks = get_compile_time_arg_val(24);
     constexpr uint32_t cache_rows = get_compile_time_arg_val(25);
-    constexpr auto tables_args = TensorAccessorArgs<26>();
+    constexpr uint32_t handoff_sem_id = get_compile_time_arg_val(26);
+    constexpr auto tables_args = TensorAccessorArgs<27>();
     constexpr auto idx_args = TensorAccessorArgs<tables_args.next_compile_time_args_offset()>();
     constexpr auto rank_args = TensorAccessorArgs<idx_args.next_compile_time_args_offset()>();
     constexpr auto streams_args = TensorAccessorArgs<rank_args.next_compile_time_args_offset()>();
     constexpr auto compact_args = TensorAccessorArgs<streams_args.next_compile_time_args_offset()>();
     constexpr auto slots_args = TensorAccessorArgs<compact_args.next_compile_time_args_offset()>();
     constexpr auto uni_args = TensorAccessorArgs<slots_args.next_compile_time_args_offset()>();
+    constexpr auto paths_args = TensorAccessorArgs<uni_args.next_compile_time_args_offset()>();
 
     constexpr uint32_t per_dir = links * k_per;
     constexpr uint32_t senders = 4 * per_dir;
@@ -113,7 +105,7 @@ void kernel_main() {
     static_assert(8 + 2 * P <= kRecordWords, "record too small");
 
     const uint32_t me = get_arg_val<uint32_t>(0);
-    [[maybe_unused]] uint32_t stamp[12] = {};
+    [[maybe_unused]] uint32_t stamp[16] = {};
     PLAN_T(0);
     const auto tables = TensorAccessor(tables_args, get_arg_val<uint32_t>(1), 4096);
     const auto indices = TensorAccessor(idx_args, get_arg_val<uint32_t>(2), topk * 4);
@@ -122,6 +114,106 @@ void kernel_main() {
     const auto compact = TensorAccessor(compact_args, get_arg_val<uint32_t>(5), topk * 4);
     const auto slots_t = TensorAccessor(slots_args, get_arg_val<uint32_t>(6), slot_cap * 4);
     const auto uni_t = TensorAccessor(uni_args, get_arg_val<uint32_t>(7), W * 4);
+    const auto paths_t = TensorAccessor(paths_args, get_arg_val<uint32_t>(8), 1024);
+
+    // Handoff to NCRISC, which rewrites the indices while BRISC emits records:
+    // [0] rank | [1] valid words of this requester | [2] its needed rows | [16, 48) in_of | [48, 48 + 4 LV) lanes
+    // before each (arrival dir, hop) group of kept rows.
+    auto* handoff = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(kHandoff));
+    constexpr uint32_t sc_div = sc;  // keeps the helper's division by a constant
+    auto lane_rel_h = [](uint32_t j) { return (j % B) + (j / B) * unit; };
+#if defined(REWRITE_HELPER)
+    {
+        noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(handoff_sem_id)), 1);
+        invalidate_l1_cache();
+        const uint32_t a = handoff[0], vw = handoff[1], need_a = handoff[2];
+        uint32_t in_of[32], lnb_in[4 * LV];
+        for (uint32_t o = 0; o < n_dev; ++o) {
+            in_of[o] = handoff[16 + o];
+        }
+        for (uint32_t i = 0; i < 4 * LV; ++i) {
+            lnb_in[i] = handoff[48 + i];
+        }
+        const uint32_t region_a = ceil_div(ceil_div(need_a, P) + LV, B) * unit;
+        constexpr uint32_t segs = topk % 512 == 0 ? topk / 512 : 1, seg_len = topk / segs;
+        const uint32_t units = rows * segs, per_core = ceil_div(units, G);
+        const uint32_t u0 = me * per_core < units ? me * per_core : units;
+        const uint32_t u1 = u0 + per_core < units ? u0 + per_core : units;
+        if (u0 >= u1) {
+            return;
+        }
+        // A needed row's slot follows from its owner: owned here -> the own region; otherwise it arrived from
+        // in_of[owner] at that hop, so it sits at its rank among this chip's needed rows of owners with the same
+        // (direction, hop) -- a per-block prefix over the requester's bitmap per such class.
+        const uint32_t rw_l1 = get_write_ptr(kRw);
+        auto* bpre = reinterpret_cast<uint32_t*>(rw_l1);  // [max_blocks] | this requester's bitmap [W]
+        auto* abits = bpre + max_blocks;
+        const uint32_t blocks = vw / words_per_block;
+        for (uint32_t w = 0; w < vw;) {
+            const uint32_t word = bitmap_off + w;
+            const uint32_t in_page = word % 1024;
+            const uint32_t n = vw - w < 1024 - in_page ? vw - w : 1024 - in_page;
+            noc_async_read(
+                tables.get_noc_addr(a * table_pages + word / 1024) + in_page * 4,
+                reinterpret_cast<uint32_t>(abits + w),
+                n * 4);
+            w += n;
+        }
+        for (uint32_t b = 0; b < blocks;) {
+            const uint32_t word = counts_off + b;
+            const uint32_t in_page = word % 1024;
+            const uint32_t n = blocks - b < 1024 - in_page ? blocks - b : 1024 - in_page;
+            noc_async_read(
+                tables.get_noc_addr(a * table_pages + word / 1024) + in_page * 4,
+                reinterpret_cast<uint32_t>(bpre + b),
+                n * 4);
+            b += n;
+        }
+        noc_async_read_barrier();
+        invalidate_l1_cache();
+        uint32_t cls_run[1 + 4 * LV];  // class 0 = owned here, else 1 + arrival dir * LV + hop
+        for (uint32_t c = 0; c < 1 + 4 * LV; ++c) {
+            cls_run[c] = 0;
+        }
+        for (uint32_t b = 0; b < blocks; ++b) {
+            const uint32_t o = b % n_dev;
+            const uint32_t c = o == a ? 0u : 1u + (in_of[o] & 0xFF) % 4 * LV + (in_of[o] >> 8);
+            const uint32_t v = bpre[b];
+            bpre[b] = cls_run[c];
+            cls_run[c] += v;
+        }
+        const uint32_t idx_l1 = get_write_ptr(kIdx);
+        auto* idx = reinterpret_cast<uint32_t*>(idx_l1);
+        for (uint32_t u = u0; u < u1; ++u) {
+            const uint64_t seg_off = (u % segs) * seg_len * 4;
+            noc_async_write_barrier();
+            noc_async_read(indices.get_noc_addr(u / segs) + seg_off, idx_l1, seg_len * 4);
+            noc_async_read_barrier();
+            invalidate_l1_cache();
+            for (uint32_t k = 0; k < seg_len; ++k) {
+                const uint32_t v = idx[k];
+                if (v == kSentinel) {
+                    continue;
+                }
+                const uint32_t blk = v / sc_div, w = v >> 5, o = blk % n_dev;
+                uint32_t rank = bpre[blk];
+                for (uint32_t w2 = blk * words_per_block; w2 < w; ++w2) {
+                    rank += popcount(abits[w2]);
+                }
+                rank += popcount(abits[w] & ((1u << (v & 31)) - 1u));
+                if (o == a) {
+                    idx[k] = lane_rel_h(rank / P) + (rank % P) * B;
+                } else {
+                    const uint32_t din = in_of[o] & 0xFF, h = in_of[o] >> 8;
+                    idx[k] = (1 + din) * region_a + lane_rel_h(lnb_in[din * LV + h] + rank / P) + (rank % P) * B;
+                }
+            }
+            noc_async_write(idx_l1, compact.get_noc_addr(u / segs) + seg_off, seg_len * 4);
+        }
+        noc_async_write_barrier();
+        return;
+    }
+#endif
 
     const uint32_t bits_l1 = get_write_ptr(kBits);
     const uint32_t cnt_l1 = get_write_ptr(kCnt);
@@ -205,68 +297,26 @@ void kernel_main() {
         return ((pick / k_per) * 4 + dr) * k_per + pick % k_per;
     };
 
-    // Ring covers (host-computed): smallest (forward, backward) extents covering a set of ring offsets, balanced on
-    // ties. Entry: forward | backward << 8 | (forward + backward) << 16.
-    constexpr uint32_t cover_r[1u << R] = TREE_COVER_R;
-    constexpr uint32_t cover_c[1u << C] = TREE_COVER_C;
-    static_assert(R == 8 && C == 4, "occupancy bit tricks assume the 8 x 4 mesh");
-
-    // Tree of one row from its owner, given its requesters `rm` relative to the owner (bit r * C + c), seen from
-    // relative position (pr, pc). yx: walk the owner's column (rows are majors), then fan out along rows.
-    struct Role {
-        uint32_t in_dir, in_depth;  // in_dir 4 = not reached from a neighbour
-        uint32_t n_out, out_dir[4], out_depth[4];
-    };
-    auto role_of = [&](uint32_t majors, uint32_t minor_set, bool yx, uint32_t p_maj, uint32_t p_min, Role& role) {
-        const uint32_t n_maj = yx ? R : C, n_min = yx ? C : R;
-        const uint32_t maj_f = yx ? kS : kE, maj_b = yx ? kN : kW, min_f = yx ? kE : kS, min_b = yx ? kW : kN;
-        const uint32_t cm = yx ? cover_r[majors & ~1u] : cover_c[majors & ~1u];
-        const uint32_t f = cm & 0xFF, b = (cm >> 8) & 0xFF;
-        auto out = [&](uint32_t dir, uint32_t depth) {
-            role.out_dir[role.n_out] = dir;
-            role.out_depth[role.n_out++] = depth;
-        };
-        if (p_min == 0) {
-            if (p_maj >= 1 && p_maj <= f) {
-                role.in_dir = maj_f, role.in_depth = p_maj - 1;
-            } else if (p_maj >= 1 && n_maj - p_maj <= b) {
-                role.in_dir = maj_b, role.in_depth = n_maj - p_maj - 1;
-            } else if (p_maj != 0) {
-                return;  // off the tree
-            }
-            if (p_maj < f) {
-                out(maj_f, p_maj);
-            }
-            if (p_maj == 0 ? b > 0 : (p_maj > f && n_maj - p_maj < b)) {
-                out(maj_b, p_maj == 0 ? 0 : n_maj - p_maj);
-            }
-        }
-        if (!(majors >> p_maj & 1)) {
-            return;
-        }
-        const uint32_t cn = yx ? cover_c[minor_set & ~1u] : cover_r[minor_set & ~1u];
-        const uint32_t f2 = cn & 0xFF, b2 = (cn >> 8) & 0xFF;
-        const uint32_t d0 = p_maj <= f ? p_maj : n_maj - p_maj;
-        if (p_min == 0) {
-            if (f2 > 0) {
-                out(min_f, d0);
-            }
-            if (b2 > 0) {
-                out(min_b, d0);
-            }
-        } else if (p_min <= f2) {
-            role.in_dir = min_f, role.in_depth = d0 + p_min - 1;
-            if (p_min < f2) {
-                out(min_f, d0 + p_min);
-            }
-        } else if (n_min - p_min <= b2) {
-            const uint32_t t = n_min - p_min;
-            role.in_dir = min_b, role.in_depth = d0 + t - 1;
-            if (t < b2) {
-                out(min_b, d0 + t);
-            }
-        }
-    };
+    // Dimension-ordered paths: owner (ro, co) -> chip d goes along column co to d's row, then along that row, each the
+    // short way round; half-way ties go S / E when ro + co is even. Per owner o, from this chip's point of view:
+    //   via[o]        requesters whose path passes through this chip (a row of o arrives here if one wants it)
+    //   in_of[o]      arrival direction | hop index << 8 (4 = this chip is the owner)
+    //   beyond[o][dr] requesters whose path continues to this chip's neighbour in direction dr
+    //   depth[o]      hops from the owner to this chip (the level of edges leaving it)
+    // Host-built (see _dim_path_tables in the test): [via x32 | in_of x32 | depth x32 | beyond x128] for this chip.
+    auto* via = carve(256);
+    auto* in_of = via + n_dev;
+    auto* depth = in_of + n_dev;
+    auto* beyond = depth + n_dev;
+    static_assert(n_dev == 32, "path tables hold 32 owners");
+    noc_async_read(paths_t.get_noc_addr(a), reinterpret_cast<uint32_t>(via), 1024);
+    noc_async_read_barrier();
+    invalidate_l1_cache();
+    uint32_t nbr[4];
+    for (uint32_t dr = 0; dr < 4; ++dr) {
+        nbr[dr] = (dr == kE || dr == kW) ? ar * C + (ac + (dr == kE ? 1 : C - 1)) % C
+                                         : ((ar + (dr == kS ? 1 : R - 1)) % R) * C + ac;
+    }
 
     // Streams requester bitmaps [ws, we) through L1 window by window (zero past each requester's valid extent).
     auto* col_v = carve(32);
@@ -310,41 +360,63 @@ void kernel_main() {
             }
         }
     };
-    // Visits every row of [ws, we) that someone needs with (row, requester mask). Sparse words gather each row's mask
-    // directly, dense ones transpose.
-    auto for_each_row = [&](uint32_t ws, uint32_t we, auto&& fn) {
+    // Rows of bitmap word i (owner o) that arrive here, leave in each direction, or that this chip needs.
+    auto classify = [&](uint32_t i, uint32_t o, uint32_t& arrive, uint32_t* out, uint32_t& go, uint32_t& need) {
+        uint32_t* v = col_v;
+        for (uint32_t d = 0; d < n_dev; ++d) {
+            v[d] = bits[d * kWin + i];
+        }
+        auto any_of = [&](uint32_t set) {
+            uint32_t r = 0;
+            for (; set; set &= set - 1) {
+                r |= v[ctz(set)];
+            }
+            return r;
+        };
+        arrive = o == a ? 0u : any_of(via[o]);
+        go = 0;
+        for (uint32_t dr = 0; dr < 4; ++dr) {
+            out[dr] = beyond[o * 4 + dr] ? any_of(beyond[o * 4 + dr]) : 0u;
+            go |= out[dr];
+        }
+        need = v[a];
+    };
+    // Visits every row of [ws, we) that involves this chip with its cache entry (see the count pass). The owner is
+    // fixed per bitmap word, so arrival and each forwarding direction are ORs of a few requesters' words.
+    auto for_each_entry = [&](uint32_t ws, uint32_t we, auto&& fn) {
         for_each_word(
             ws,
             we,
             [&](uint32_t w, uint32_t i) {
-                const uint32_t any = uni_win[i];
-                if (!any) {
+                if (!uni_win[i]) {
                     return;
                 }
-                if (popcount(any) <= 2) {
-                    for (uint32_t u = any; u; u &= u - 1) {
-                        const uint32_t j = ctz(u);
-                        uint32_t m = 0;
-                        for (uint32_t d = 0; d < n_dev; ++d) {
-                            m |= ((bits[d * kWin + i] >> j) & 1u) << d;
+                const uint32_t blk = (w * 32) / sc, o = blk % n_dev;
+                uint32_t arrive, out[4], go, need;
+                classify(i, o, arrive, out, go, need);
+                const uint32_t own = o == a ? 1u : 0u;
+                const uint32_t* v = col_v;
+                const uint32_t in_dir = in_of[o] & 0xFF, in_depth = in_of[o] >> 8;
+                for (uint32_t u = arrive | go | need; u; u &= u - 1) {
+                    const uint32_t j = ctz(u), x = w * 32 + j;
+                    const uint32_t local = (blk / n_dev) * sc + x % sc;
+                    const bool arrives = arrive >> j & 1;
+                    uint32_t outs = 0, n_out = 0;
+                    for (uint32_t dr = 0; dr < 4; ++dr) {
+                        if (out[dr] >> j & 1) {
+                            const uint32_t keep = (v[nbr[dr]] >> j & 1) ? 0u : 1u;
+                            outs |= (dr | depth[o] << 2 | keep << 6) << (7 * n_out++);
                         }
-                        fn(w * 32 + j, m);
                     }
-                    return;
-                }
-                auto* col = col_v;
-                for (uint32_t d = 0; d < 32; ++d) {
-                    col[d] = d < n_dev ? bits[d * kWin + i] : 0;
-                }
-                transpose32(col);  // col[j] = requesters of row 32 w + j
-                for (uint32_t u = any; u; u &= u - 1) {
-                    const uint32_t j = ctz(u);
-                    fn(w * 32 + j, col[j]);
+                    fn(local | (need >> j & 1) << 20 | own << 21 | (arrives ? in_dir : 4u) << 22 |
+                           (arrives ? in_depth : 0u) << 25 | n_out << 29,
+                       outs);
                 }
             },
             true);
     };
 
+    PLAN_T(10);
     // 0. Balance: needed rows per 512-row chunk over an even split, then contiguous chunk ranges of equal rows.
     constexpr uint32_t chunks = W / kChunkWords;
     constexpr uint32_t chunks_per_core = wpc / kChunkWords;
@@ -365,7 +437,11 @@ void kernel_main() {
                 any |= bits[d * kWin + i];
             }
             uni_win[i] = any;
-            my_dens[(w - e0) / kChunkWords] += 64 * popcount(any) + 1;  // a row costs ~64 scanned words
+            if (any) {
+                uint32_t arrive, out[4], go, need;
+                classify(i, ((w * 32) / sc) % n_dev, arrive, out, go, need);
+                my_dens[(w - e0) / kChunkWords] += 5 * popcount(arrive | go | need) + 2;  // a row ~ 2.5 word scans
+            }
             if (i + 1 == kWin || w + 1 == e1) {
                 const uint32_t first = w - i;
                 noc_async_write(reinterpret_cast<uint32_t>(uni_win), uni_t.get_noc_addr(0) + first * 4, (i + 1) * 4);
@@ -373,7 +449,9 @@ void kernel_main() {
             }
         });
     }
+    PLAN_T(11);
     barrier();
+    PLAN_T(12);
     for (uint32_t c = 0; c < G; ++c) {
         noc_async_read(
             core_noc(c, dens_l1 + G * dens_per_core * 4), dens_l1 + c * dens_per_core * 4, dens_per_core * 4);
@@ -409,54 +487,6 @@ void kernel_main() {
         }
     }
 
-    // Per-row tree view of this chip: role (incoming / outgoing edges), from the owner's point of view.
-    auto view = [&](uint32_t x, uint32_t mask, uint32_t& owner, uint32_t& local, uint32_t& remote, Role& role) {
-        const uint32_t blk = x / sc;
-        owner = blk % n_dev;
-        local = (blk / n_dev) * sc + x % sc;
-        remote = mask & ~(1u << owner);
-        role.in_dir = 4;
-        role.in_depth = 0;
-        role.n_out = 0;
-        if (!remote) {
-            return;
-        }
-        const uint32_t ro = owner / C, co = owner % C;
-        // Rotate so the owner sits at (0, 0): rows by whole nibbles, columns inside each nibble.
-        uint32_t rm = (remote >> (C * ro)) | (ro ? remote << (32 - C * ro) : 0u);
-        rm = ((rm >> co) & (0x11111111u * ((1u << (C - co)) - 1u))) |
-             ((rm << (C - co)) & (0x11111111u * (((1u << co) - 1u) << (C - co))));
-        // yx: per-row column sets (nibbles); xy: per-column row sets (strided bits compressed to a byte).
-        uint32_t rows_set = 0, ey = 0, cols_set = 0, ex = 0, col_bits[4];
-        for (uint32_t r = 0; r < R; ++r) {
-            const uint32_t nib = (rm >> (r * C)) & 0xFu;
-            if (nib) {
-                rows_set |= 1u << r;
-                ey += cover_c[nib & ~1u] >> 16;
-            }
-        }
-        ey += cover_r[rows_set & ~1u] >> 16;
-        for (uint32_t c = 0; c < C; ++c) {
-            uint32_t v = (rm >> c) & 0x11111111u;
-            v = (v | (v >> 3)) & 0x03030303u;
-            v = (v | (v >> 6)) & 0x000F000Fu;
-            v = (v | (v >> 12)) & 0xFFu;
-            col_bits[c] = v;
-            if (v) {
-                cols_set |= 1u << c;
-                ex += cover_r[v & ~1u] >> 16;
-            }
-        }
-        ex += cover_c[cols_set & ~1u] >> 16;
-        const bool yx = ey < ex || (ey == ex && (x & 1));
-        const uint32_t pr = (ar + R - ro) % R, pc = (ac + C - co) % C;
-        if (yx) {
-            role_of(rows_set, (rm >> (pr * C)) & 0xFu, true, pr, pc, role);
-        } else {
-            role_of(cols_set, col_bits[pc], false, pc, pr, role);
-        }
-    };
-
     PLAN_T(1);
     // 1. Count. Rows that involve this chip are also cached (2 words each) so the emit pass skips the rest:
     //   [0] local | need << 20 | own << 21 | in_dir << 22 | in_depth << 25 | n_out << 29
@@ -468,36 +498,26 @@ void kernel_main() {
     for (uint32_t g = 0; g < cnt_words; ++g) {
         cnt[g] = 0;
     }
-    for_each_row(w0, w1, [&](uint32_t x, uint32_t mask) {
-        uint32_t owner, local, remote;
-        Role role;
-        view(x, mask, owner, local, remote, role);
-        const uint32_t need = mask >> a & 1;
-        const uint32_t own = owner == a ? 1u : 0u;
+    for_each_entry(w0, w1, [&](uint32_t e0, uint32_t outs) {
+        const uint32_t need = e0 >> 20 & 1, own = e0 >> 21 & 1, in_dir = e0 >> 22 & 7, in_depth = e0 >> 25 & 15;
+        const uint32_t n_out = e0 >> 29;
         ++visited;
         cnt[kNeed] += need;
         if (own && need) {
             cnt[kOwn] += 1;
         }
-        if (role.in_dir < 4) {
-            cnt[kIn + (role.in_dir * LV + role.in_depth) * 2 + (need ? 0 : 1)] += 1;
+        if (in_dir < 4) {
+            cnt[kIn + (in_dir * LV + in_depth) * 2 + (need ? 0 : 1)] += 1;
         }
-        uint32_t outs = 0;
-        for (uint32_t e = 0; e < role.n_out; ++e) {
-            const uint32_t b = neighbour(a, role.out_dir[e]);
-            const uint32_t keep = (remote >> b & 1) ? 0 : 1;
-            cnt[kOut + (role.out_dir[e] * LV + role.out_depth[e]) * 2 + keep] += 1;
-            outs |= (role.out_dir[e] | role.out_depth[e] << 2 | keep << 6) << (7 * e);
-        }
-        if (!need && role.in_dir == 4 && role.n_out == 0) {
-            return;
+        for (uint32_t e = 0; e < n_out; ++e) {
+            const uint32_t o = outs >> (7 * e);
+            cnt[kOut + ((o & 3) * LV + ((o >> 2) & 15)) * 2 + ((o >> 6) & 1)] += 1;
         }
         if (cached == cache_rows) {
             cache_full = true;
             return;
         }
-        cache[2 * cached] =
-            local | need << 20 | own << 21 | role.in_dir << 22 | (role.in_depth & 15) << 25 | role.n_out << 29;
+        cache[2 * cached] = e0;
         cache[2 * cached + 1] = outs;
         ++cached;
     });
@@ -554,6 +574,18 @@ void kernel_main() {
             edge_pk[io * 4 + dr] = pk;
         }
     }
+    handoff[0] = a;
+    handoff[1] = valid_words[a];
+    handoff[2] = needed_rows[a];
+    for (uint32_t o = 0; o < n_dev; ++o) {
+        handoff[16 + o] = in_of[o];
+    }
+    for (uint32_t dr = 0; dr < 4; ++dr) {
+        for (uint32_t h = 0; h < LV; ++h) {
+            handoff[48 + dr * LV + h] = lnb[at(1, dr, h, 0)];
+        }
+    }
+    noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(handoff_sem_id)), 1);
     const uint32_t own_packets = ceil_div(tot[kOwn], P);
     auto locals_of = [&](uint32_t w) { return own_packets > w ? ceil_div(own_packets - w, senders) : 0u; };
     auto record_noc = [&](uint32_t w, uint32_t r) {
@@ -656,9 +688,6 @@ void kernel_main() {
             here = base(a, in_dir, keep) + lane_rel(lnb[at(1, in_dir, in_depth, keep)] + k / P) + (k % P) * B;
             arrival = (stream_of(in_dir, n) << 24) | (n / per_dir + 1);
         }
-        if (need) {
-            add(kNeed, here, 0);
-        }
         for (uint32_t e = 0; e < n_out; ++e) {
             const uint32_t o = outs >> (7 * e);
             const uint32_t dr = o & 3, h = (o >> 2) & 15, keep = (o >> 6) & 1;
@@ -674,24 +703,7 @@ void kernel_main() {
             emit_row(cache[2 * i], cache[2 * i + 1]);
         }
     } else {
-        for_each_row(w0, w1, [&](uint32_t x, uint32_t mask) {
-            uint32_t owner, local, remote;
-            Role role;
-            view(x, mask, owner, local, remote, role);
-            const uint32_t need = mask >> a & 1;
-            if (!need && role.in_dir == 4 && role.n_out == 0) {
-                return;
-            }
-            uint32_t outs = 0;
-            for (uint32_t e = 0; e < role.n_out; ++e) {
-                const uint32_t keep = (remote >> neighbour(a, role.out_dir[e]) & 1) ? 0 : 1;
-                outs |= (role.out_dir[e] | role.out_depth[e] << 2 | keep << 6) << (7 * e);
-            }
-            emit_row(
-                local | need << 20 | (owner == a ? 1u : 0u) << 21 | role.in_dir << 22 | role.in_depth << 25 |
-                    role.n_out << 29,
-                outs);
-        });
+        for_each_entry(w0, w1, [&](uint32_t e0, uint32_t outs) { emit_row(e0, outs); });
     }
 
     PLAN_T(5);
@@ -757,78 +769,18 @@ void kernel_main() {
     }
 
     PLAN_T(7);
-    // 4. Rewrite this core's share of the requester's index rows once the slot table is complete.
-    barrier();
     PLAN_T(8);
-    const uint32_t rw_l1 = get_write_ptr(kRw);
-    auto* rw = reinterpret_cast<uint32_t*>(rw_l1);
-    const uint32_t rows_per_core = ceil_div(rows, G);
-    const uint32_t r0 = me * rows_per_core < rows ? me * rows_per_core : rows;
-    const uint32_t r1 = r0 + rows_per_core < rows ? r0 + rows_per_core : rows;
-    if (r0 < r1) {
-        // Layout of rw: slot table [slot_cap] | block prefix [max_blocks] | this requester's bitmap [W].
-        auto* slot = rw;
-        auto* bpre = rw + slot_cap;
-        auto* abits = bpre + max_blocks;
-        const uint32_t nslots = needed_rows[a] < slot_cap ? needed_rows[a] : slot_cap;
-        noc_async_read(slots_t.get_noc_addr(0), rw_l1, ceil_div(nslots, kLineSlots) * kLineSlots * 4);
-        const uint32_t vw = valid_words[a], blocks = vw / words_per_block;
-        for (uint32_t w = 0; w < vw;) {
-            const uint32_t word = bitmap_off + w;
-            const uint32_t in_page = word % 1024;
-            const uint32_t n = vw - w < 1024 - in_page ? vw - w : 1024 - in_page;
-            noc_async_read(
-                tables.get_noc_addr(a * table_pages + word / 1024) + in_page * 4,
-                reinterpret_cast<uint32_t>(abits + w),
-                n * 4);
-            w += n;
-        }
-        for (uint32_t b = 0; b < blocks;) {
-            const uint32_t word = counts_off + b;
-            const uint32_t in_page = word % 1024;
-            const uint32_t n = blocks - b < 1024 - in_page ? blocks - b : 1024 - in_page;
-            noc_async_read(
-                tables.get_noc_addr(a * table_pages + word / 1024) + in_page * 4,
-                reinterpret_cast<uint32_t>(bpre + b),
-                n * 4);
-            b += n;
-        }
-        noc_async_read_barrier();
-        invalidate_l1_cache();
-        for (uint32_t b = 0, s = 0; b < blocks; ++b) {
-            const uint32_t v = bpre[b];
-            bpre[b] = s;
-            s += v;
-        }
-        const uint32_t idx_l1 = get_write_ptr(kIdx);
-        auto* idx = reinterpret_cast<uint32_t*>(idx_l1);
-        for (uint32_t r = r0; r < r1; ++r) {
-            noc_async_write_barrier();
-            noc_async_read(indices.get_noc_addr(r), idx_l1, topk * 4);
-            noc_async_read_barrier();
-            invalidate_l1_cache();
-            for (uint32_t k = 0; k < topk; ++k) {
-                const uint32_t v = idx[k];
-                if (v == kSentinel) {
-                    continue;
-                }
-                const uint32_t blk = v / sc, w = v >> 5;
-                uint32_t rank = bpre[blk];
-                for (uint32_t w2 = blk * words_per_block; w2 < w; ++w2) {
-                    rank += popcount(abits[w2]);
-                }
-                rank += popcount(abits[w] & ((1u << (v & 31)) - 1u));
-                idx[k] = rank < nslots ? slot[rank] : kSentinel;
-            }
-            noc_async_write(idx_l1, compact.get_noc_addr(r), topk * 4);
-        }
-        noc_async_write_barrier();
-    }
+    // 4. The index rewrite runs on NCRISC (REWRITE_HELPER) from the handoff written above.
 #if defined(DEBUG_PRINT_ENABLED)
     PLAN_T(9);
     DPRINT(
-        "TPLAN core {} w0 {} w1 {} rows {} setup {} count {} b1 {} xch {} emit {} b2 {} tail {} b3 {} rewrite {}\n",
+        "TPLAN core {} pre {} dens {} b0 {} bnd {} w0 {} w1 {} rows {} setup {} count {} b1 {} xch {} emit {} b2 {} "
+        "tail {} b3 {} rewrite {}\n",
         me,
+        stamp[10] - stamp[0],
+        stamp[11] - stamp[10],
+        stamp[12] - stamp[11],
+        stamp[1] - stamp[12],
         w0,
         w1,
         visited,

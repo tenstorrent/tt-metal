@@ -177,14 +177,16 @@ void bind_experimental_high_bw_all_gather_operation(nb::module_& mod) {
         mod,
         R"doc(
             PROTOTYPE. On-device planner for the multicast-tree push (high_bw_all_gather with SPARSE_PUSH_TREE=2).
-            From every requester's all-gathered ``sparse_push_plan`` table, this device's top-k indices and its mesh
-            rank (uint32 [1, 1, 1, 16], word 0), returns ``[streams, compact_indices, slot_table]``: the push's
-            per-sender record pages and the indices rewritten to slots of the tree-push buffer.
+            From every requester's all-gathered ``sparse_push_plan`` table, this device's top-k indices, its mesh
+            rank (uint32 [1, 1, 1, 16], word 0) and the dimension-ordered path tables (uint32 [1, 1, devices, 256]),
+            returns ``[streams, compact_indices, slot_table, union]``: the push's per-sender record pages and the
+            indices rewritten to slots of the tree-push buffer.
         )doc",
         &sparse_push_tree_plan,
         nb::arg("tables").noconvert(),
         nb::arg("indices").noconvert(),
         nb::arg("rank").noconvert(),
+        nb::arg("paths").noconvert(),
         nb::kw_only(),
         nb::arg("mesh_rows"),
         nb::arg("mesh_cols"),
