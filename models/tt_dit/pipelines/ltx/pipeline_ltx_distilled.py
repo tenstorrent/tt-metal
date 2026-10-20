@@ -115,6 +115,26 @@ def _keyframe_s1_sigmas(latent_frames: int) -> list[float]:
     return [1.0] + (_KEYFRAME_S1_HEAD[-extra:] if extra else []) + _KEYFRAME_S1_TAIL
 
 
+def ref_with_frame0(ref_latent: torch.Tensor, image_conds) -> torch.Tensor:
+    """IC-LoRA reference latent whose frame 0 is the frame-0 conditioning image, when a gen pins one.
+
+    The reference rides at combined latent frames [T, T+R) and its frame r lines up in time with target
+    frame r. With a sheet in every reference frame and a different first frame pinned at target frame 0,
+    the two disagree at t=0, and the target's first frames get blocky colour patches in flat regions
+    (sky; ex2 frames 1-8 on every seed, ex6 faint specks; task #135). Putting the first frame's own
+    latent at reference frame 0 (sheet kept in frames 1..R-1) removes them (ex2 s45/s46, ex6 s45) with
+    the same frame-0 fidelity. ``image_conds`` are (latent_frame, latent, strength); the cached
+    reference is never modified. LTX_REF_IMG0=0 keeps the sheet in every reference frame."""
+    if not _env_on("LTX_REF_IMG0", "1"):
+        return ref_latent
+    first = next((lat for idx, lat, *_ in image_conds or () if idx == 0), None)
+    if first is None:
+        return ref_latent
+    out = ref_latent.clone()
+    out[:, :, 0:1] = first.to(out.dtype)
+    return out
+
+
 def pixel_to_latent_frame(pixel_idx: int, num_frames: int) -> int:
     """Map a pixel-frame index to the latent frame that owns it.
 
@@ -2271,6 +2291,10 @@ class LTXDistilledPipeline(LTXPipeline):
                 f"{tuple(ref_latent_full.shape)} latent (strength={ref_strength}) "
                 f"{'(cached)' if cached is not None else ''}in {time.time() - t0:.1f}s"
             )
+
+        if reference_video is not None and s1_image_conds:
+            ref_latent_s1 = ref_with_frame0(ref_latent_s1, s1_image_conds)
+            ref_latent_full = ref_with_frame0(ref_latent_full, full_image_conds)
 
         # IC-LoRA runs on a wider (target+reference) sequence, so it captures / replays its OWN trace
         # family (s1_ref/s2_ref) and never collides with the narrower i2v/t2v traces (which bake the

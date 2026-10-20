@@ -1650,6 +1650,26 @@ def test_keyframe_s1_sigmas_differ_between_tiers(monkeypatch):
     assert len(out["medium"]) > len(out["fast"])
 
 
+
+def test_ref_with_frame0_puts_the_first_frame_at_reference_frame_0(monkeypatch):
+    """A sheet plus a frame-0 image: reference frame 0 becomes the image's latent, frames 1..R-1 keep the
+    sheet, and the cached reference is left alone. No frame-0 image or LTX_REF_IMG0=0: the sheet as is."""
+    from models.tt_dit.pipelines.ltx.pipeline_ltx_distilled import ref_with_frame0
+
+    monkeypatch.delenv("LTX_REF_IMG0", raising=False)
+    ref = torch.ones(1, 4, 3, 2, 2, dtype=torch.bfloat16)
+    img0 = torch.full((1, 4, 1, 2, 2), 5.0)
+    kf = torch.full((1, 4, 1, 2, 2), 7.0)
+    out = ref_with_frame0(ref, [(2, kf, 1.0), (0, img0, 1.0)])
+    assert out.dtype == ref.dtype and out.shape == ref.shape
+    assert torch.equal(out[:, :, 0:1], img0.to(ref.dtype))
+    assert torch.equal(out[:, :, 1:], ref[:, :, 1:])
+    assert torch.equal(ref, torch.ones_like(ref)), "the cached reference must not change"
+    assert ref_with_frame0(ref, [(2, kf, 1.0)]) is ref
+    assert ref_with_frame0(ref, None) is ref
+    monkeypatch.setenv("LTX_REF_IMG0", "0")
+    assert ref_with_frame0(ref, [(0, img0, 1.0)]) is ref
+
 # --- full coverage matrix: every model x tier x resolution, t2v AND i2v ---------------------------
 # Deselected by default (LTX_MATRIX=1 to arm): one cell loads 22B weights and renders two clips, so
 # the full sweep is hours of device time — a manual gate, not a per-PR one.
