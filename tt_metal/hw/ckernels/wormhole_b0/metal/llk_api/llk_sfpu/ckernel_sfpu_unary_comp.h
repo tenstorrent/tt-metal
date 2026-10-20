@@ -110,42 +110,64 @@ inline void _calculate_unary_comp_weak_(std::uint32_t value) {
     }
 }
 
-inline void unary_ne_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
+// The store that advances DST goes through ADDR_MOD_6, which the 2-bit addr_mod field
+// of an SFPU store encodes as ADDR_MOD_2, and the only slot the generic SFPU init
+// programs is ADDR_MOD_7 with dest incr 0, so each init programs ADDR_MOD_6 itself, as
+// the zero comparisons in ckernel_sfpu_comp.h do.
+inline void unary_ne_init() {
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
+    math::reset_counters(p_setrwc::SET_ABD_F);
+}
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_unary_ne(std::uint32_t value) {
     _calculate_unary_comp_equal_<ITERATIONS, /*IS_EQUAL=*/false>(value);
 }
 
-inline void unary_eq_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
+inline void unary_eq_init() {
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
+    math::reset_counters(p_setrwc::SET_ABD_F);
+}
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_unary_eq(std::uint32_t value) {
     _calculate_unary_comp_equal_<ITERATIONS, /*IS_EQUAL=*/true>(value);
 }
 
-inline void unary_gt_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
+inline void unary_gt_init() {
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
+    math::reset_counters(p_setrwc::SET_ABD_F);
+}
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_unary_gt(std::uint32_t value) {
     _calculate_unary_comp_strict_<ITERATIONS, /*IS_GREATER=*/true>(value);
 }
 
-inline void unary_lt_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
+inline void unary_lt_init() {
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
+    math::reset_counters(p_setrwc::SET_ABD_F);
+}
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_unary_lt(std::uint32_t value) {
     _calculate_unary_comp_strict_<ITERATIONS, /*IS_GREATER=*/false>(value);
 }
 
-inline void unary_ge_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
+inline void unary_ge_init() {
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
+    math::reset_counters(p_setrwc::SET_ABD_F);
+}
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_unary_ge(std::uint32_t value) {
     _calculate_unary_comp_weak_<ITERATIONS, /*IS_GREATER=*/true>(value);
 }
 
-inline void unary_le_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
+inline void unary_le_init() {
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
+    math::reset_counters(p_setrwc::SET_ABD_F);
+}
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_unary_le(std::uint32_t value) {
