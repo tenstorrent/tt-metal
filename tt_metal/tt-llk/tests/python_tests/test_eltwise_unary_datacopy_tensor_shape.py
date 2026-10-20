@@ -7,7 +7,9 @@
 Runs unpack_A -> _llk_math_eltwise_unary_datacopy_ -> pack on one tile per
 shape, with the math side given the real TensorShape (unpack_A_test.cpp builds
 it from the face grid). Covers the plain copy (A2D), the SrcB broadcasts (B2D)
-and the 32-bit unpack-to-dest path (Float32 with dest_acc=Yes).
+and the 32-bit unpack-to-dest path (Float32 with dest_acc=Yes), with an exact
+compare. This is the face-grid broadcast test for _llk_unpack_A_ as well
+(tt-metal#47328); test_unpack_A.py covers the transpose of faces.
 
 Shapes the LLK blocks with LLK_ASSERT are not listed here; see
 _llk_math_eltwise_unary_datacopy_init_ for the supported set.
@@ -17,49 +19,13 @@ import pytest
 import torch
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat
-from helpers.golden_generators import (
-    TILE_DIMENSIONS,
-    BroadcastGolden,
-    get_golden_generator,
-)
-from helpers.llk_params import (
-    BlocksCalculationAlgorithm,
-    BroadcastType,
-    DestAccumulation,
-    DestSync,
-    EltwiseBinaryReuseDestType,
-    StochasticRounding,
-    Transpose,
-    format_dict,
-)
-from helpers.param_config import (
-    get_num_blocks_and_num_tiles_in_block,
-    input_output_formats,
-    parametrize,
-)
-from helpers.stimuli_config import StimuliConfig
+from helpers.golden_generators import BroadcastGolden, get_golden_generator
+from helpers.llk_params import BroadcastType, DestAccumulation, format_dict
+from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_generator import generate_stimuli
-from helpers.test_config import TestConfig
-from helpers.test_variant_parameters import (
-    ACC_TO_DEST,
-    BROADCAST_TYPE,
-    DISABLE_SRC_ZERO_FLAG,
-    INPUT_DIMENSIONS,
-    NUM_BLOCKS,
-    NUM_FACES,
-    NUM_FACES_C_DIM,
-    NUM_FACES_R_DIM,
-    NUM_TILES_IN_BLOCK,
-    PARTIAL_FACE,
-    REUSE_DEST_TYPE,
-    STOCHASTIC_ROUNDING,
-    TEST_FACE_DIMS,
-    TILE_COUNT,
-    UNPACK_TRANS_FACES,
-    UNPACK_TRANS_WITHIN_FACE,
-)
 from helpers.tile_constants import get_tile_params
 from helpers.tile_shape import construct_tile_shape
+from helpers.unpack_A_config import unpack_A_tile_config
 from helpers.utils import passed_test
 
 DATACOPY_TILE_SHAPES = [
@@ -92,7 +58,8 @@ def test_eltwise_unary_datacopy_tensor_shape(
         pytest.skip("32-bit formats require dest accumulation")
 
     # Column broadcast through SrcB follows the face grid; the unpack-to-dest (32-bit) column
-    # broadcast is still 32x32-only and _llk_unpack_A_init_ asserts it.
+    # broadcast is still 32x32-only and _llk_unpack_A_init_ asserts it (tt-metal#47328).
+    # Row and scalar unpack to dest run on every shape.
     if (
         broadcast_type == BroadcastType.Column
         and tile_dimensions != [32, 32]
@@ -137,63 +104,15 @@ def test_eltwise_unary_datacopy_tensor_shape(
     else:
         golden_tensor = src_A.to(format_dict[formats.output_format])
 
-    num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
-        DestSync.Half,
-        dest_acc,
+    configuration = unpack_A_tile_config(
         formats,
-        input_dimensions,
         tile_dimensions,
-        BlocksCalculationAlgorithm.Standard,
-    )
-
-    configuration = TestConfig(
-        "sources/unpack_A_test.cpp",
-        formats,
-        templates=[
-            STOCHASTIC_ROUNDING(StochasticRounding.No),
-            BROADCAST_TYPE(broadcast_type),
-            ACC_TO_DEST(False),
-            REUSE_DEST_TYPE(EltwiseBinaryReuseDestType.NONE),
-            PARTIAL_FACE(
-                partial_a=False,
-                partial_face_pack=False,
-                partial_b=False,
-                partial_face_math=False,
-            ),
-            DISABLE_SRC_ZERO_FLAG(False),
-        ],
-        runtimes=[
-            UNPACK_TRANS_FACES(Transpose.No),
-            UNPACK_TRANS_WITHIN_FACE(Transpose.No),
-            NUM_FACES(num_faces),
-            NUM_FACES_R_DIM(num_faces_r_dim, num_faces_r_dim),
-            NUM_FACES_C_DIM(num_faces_c_dim, num_faces_c_dim),
-            TILE_COUNT(tile_cnt_A),
-            TEST_FACE_DIMS(face_r_dim=face_r_dim),
-            NUM_TILES_IN_BLOCK(num_tiles_in_block),
-            NUM_BLOCKS(num_blocks),
-            INPUT_DIMENSIONS(
-                input_dimensions[0] // TILE_DIMENSIONS[0],
-                input_dimensions[1] // TILE_DIMENSIONS[1],
-            ),
-        ],
-        variant_stimuli=StimuliConfig(
-            src_A,
-            formats.input_format,
-            src_B,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_cnt_A,
-            tile_count_B=tile_cnt_B,
-            tile_count_res=tile_cnt_A,
-            num_faces=num_faces,
-            face_r_dim=face_r_dim,
-            tile_dimensions=tile_dimensions,
-            use_dense_tile_dimensions=True,
-        ),
+        src_A,
+        tile_cnt_A,
+        src_B,
+        tile_cnt_B,
         dest_acc=dest_acc,
-        unpack_to_dest=formats.input_format.is_32_bit()
-        and dest_acc == DestAccumulation.Yes,
+        broadcast_type=broadcast_type,
     )
 
     res_from_L1 = configuration.run().result
