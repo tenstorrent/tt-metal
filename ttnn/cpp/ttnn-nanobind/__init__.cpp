@@ -33,6 +33,7 @@
 #include "ttnn-nanobind/program_descriptors.hpp"
 #include "ttnn-nanobind/tensor_accessor_args.hpp"
 #include "ttnn-nanobind/mcast_host.hpp"
+#include "ttnn-nanobind/mrs_mcast_host.hpp"
 #include "ttnn-nanobind/reports.hpp"
 #include "ttnn-nanobind/tensor.hpp"
 #include "ttnn-nanobind/types.hpp"
@@ -276,6 +277,7 @@ NB_MODULE(_ttnn, mod) {
     auto m_tensor_accessor_args = mod.def_submodule("tensor_accessor_args", "Tensor accessor args types");
     auto m_mcast_host =
         mod.def_submodule("mcast_host", "Host-side mcast helper (counterpart of kernel_lib/mcast/kernel/mcast_pipe)");
+    auto m_mrs_mcast_host = mod.def_submodule("mrs_mcast_host", "matmul_reduce_scatter's mcast host helper");
 
     // TYPES
     ttnn::tensor::tensor_mem_config_module_types(m_tensor);
@@ -304,6 +306,7 @@ NB_MODULE(_ttnn, mod) {
     ttnn::program_descriptors::py_module_types(m_program_descriptors);
     ttnn::tensor_accessor_args::py_module_types(m_tensor_accessor_args);
     ttnn::mcast_host::py_module_types(m_mcast_host);
+    ttnn::mrs_mcast_host::py_module_types(m_mrs_mcast_host);
 
     // FUNCTIONS / OPERATIONS
     ttnn::tensor::tensor_mem_config_module(m_tensor);
@@ -346,6 +349,7 @@ NB_MODULE(_ttnn, mod) {
     ttnn::reports::py_module(m_reports);
     ttnn::tensor_accessor_args::py_module(m_tensor_accessor_args);
     ttnn::mcast_host::py_module(m_mcast_host);
+    ttnn::mrs_mcast_host::py_module(m_mrs_mcast_host);
 
     // ttnn operations have to come before the deprecated ones,
     // because ttnn defines additional type bindings.

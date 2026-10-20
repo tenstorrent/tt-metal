@@ -66,6 +66,9 @@ set(TTNNCPP_SRCS
     cpp/ttnn/kernel_lib/mcast/host/program_adapters/mcast_legacy_program_adapter.cpp
     cpp/ttnn/kernel_lib/mcast/host/program_adapters/mcast_descriptor_adapter.cpp
     cpp/ttnn/kernel_lib/mcast/host/program_adapters/mcast_spec_adapter.cpp
+    cpp/ttnn/kernel_lib/mrs/mcast/host/mcast_host.cpp
+    cpp/ttnn/kernel_lib/mrs/mcast/host/mcast_descriptor.cpp
+    cpp/ttnn/kernel_lib/mrs/mcast/host/mcast_resources.cpp
     cpp/ttnn/operations/compute_throttle_utils.cpp
     cpp/ttnn/operations/trace.cpp
     cpp/ttnn/graph/capture_program_config_registry.cpp
@@ -142,6 +145,7 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn-nanobind/operations/trace.cpp
     cpp/ttnn-nanobind/tensor_accessor_args.cpp
     cpp/ttnn-nanobind/mcast_host.cpp
+    cpp/ttnn-nanobind/mrs_mcast_host.cpp
     cpp/ttnn-nanobind/pipeline_module_nanobind.cpp
 )
 

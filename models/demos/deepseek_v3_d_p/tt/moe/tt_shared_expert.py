@@ -19,6 +19,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.demos.deepseek_v3_d_p.tt.fused_matmul_reduce_scatter import fused_matmul_reduce_scatter, fused_mmrs_enabled
 from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.tt.moe.debug_logging import DEBUG_LOGGING_ENABLED
@@ -593,7 +594,19 @@ class TtSharedExpert(LightweightModule):
             ttnn.deallocate(up_out)
             activated = gate_out
 
-        # 3) Compute down projection
+        # 3) Compute down projection. Fused with the reduce-scatter (DS_FUSED_MMRS=1) only off a sub-device:
+        # the fused op takes the whole worker grid, so it cannot overlap the MoE dispatch.
+        if self.mesh_device.shape[1] > 1 and self.subdevice_id is None and fused_mmrs_enabled():
+            output = fused_matmul_reduce_scatter(
+                activated,
+                self.down_proj,
+                cluster_axis=1,
+                dim=3,
+                topology=self.topology,
+                num_links=self.num_links,
+            )
+            ttnn.deallocate(activated)
+            return output
         output_full = ttnn.matmul(
             activated,
             self.down_proj,

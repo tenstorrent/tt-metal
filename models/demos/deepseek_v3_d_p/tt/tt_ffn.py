@@ -17,6 +17,7 @@ from typing import Optional
 from loguru import logger
 
 import ttnn
+from models.demos.deepseek_v3_d_p.tt.fused_matmul_reduce_scatter import fused_matmul_reduce_scatter, fused_mmrs_enabled
 from models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert import (
     ACTIVATION_CLAMPED_SILU_GLU,
     ACTIVATION_SILU,
@@ -163,7 +164,16 @@ class TtFfn(TtSharedExpert):
             )
         logger.debug(f"After {self.activation} activation: {activated.shape}")
 
-        # Step 4: Down projection
+        # Step 4: Down projection (fused with the reduce-scatter when DS_FUSED_MMRS=1)
+        if self.mesh_device.shape[1] > 1 and fused_mmrs_enabled():
+            return fused_matmul_reduce_scatter(
+                activated,
+                self.down_proj,
+                cluster_axis=1,
+                dim=3,
+                topology=self.topology,
+                num_links=self.num_links,
+            )
         output_full = ttnn.matmul(activated, self.down_proj, compute_kernel_config=self.compute_kernel_config)
         logger.debug(f"After down_proj matmul: {output_full.shape}")
 

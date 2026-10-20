@@ -22,6 +22,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.demos.deepseek_v3_d_p.tt.fused_matmul_reduce_scatter import fused_matmul_reduce_scatter, fused_mmrs_enabled
 from models.demos.deepseek_v3_d_p.tt.mla.compressor import TtCSACompressor, rope_table_tokens
 from models.demos.deepseek_v3_d_p.tt.mla.mla_config import get_indexer_key_chunk, get_matmul_config
 from models.demos.deepseek_v3_d_p.tt.mla.rope import interleaved_perm_matrix
@@ -474,11 +475,12 @@ class TtIndexerBase:
             self.tt_ccl.mla_high_bw_all_gather_buffers[key] = output
         return output
 
-    def _tp_rs_ag(self, t, rs_only=False):
-        """All-reduce over TP = reduce-scatter (dim 3) then all-gather; rs_only stops after the RS."""
+    def _tp_rs_ag(self, t, rs_only=False, ag_only=False):
+        """All-reduce over TP = reduce-scatter (dim 3) then all-gather; rs_only stops after the RS, ag_only
+        starts from an already reduce-scattered t."""
         if self.tp_factor == 1:
             return t
-        t = ttnn.experimental.reduce_scatter_minimal_async(
+        t = t if ag_only else ttnn.experimental.reduce_scatter_minimal_async(
             t,
             persistent_output_buffers=None,
             dim=3,
@@ -505,6 +507,17 @@ class TtIndexerBase:
             output_tensor=self._k_all_gather_output,
             num_links=self.ccl_num_links,
             cluster_axis=self.tp_axis,
+        )
+
+    def _fused_head_weights(self, hidden_states: ttnn.Tensor) -> ttnn.Tensor:
+        """weights_proj with its TP sum and sequence-row scatter fused into one op."""
+        return fused_matmul_reduce_scatter(
+            hidden_states,
+            self._idx_wproj,
+            cluster_axis=self.tp_axis,
+            dim=2,
+            topology=self.tp_ccl_topology,
+            num_links=self.ccl_num_links,
         )
 
     def _tp_reduce_scatter_sequence(self, t):
@@ -687,14 +700,25 @@ class TtIndexerBase:
         the cache end needs only its real tokens to fit. forward() reads back the same prefix
         (``valid_pos``)."""
         wk_cfg = self._resolve_mm_cfg("indexer.wk", seq_len)
-        k = ttnn.linear(
-            hidden_states,
-            self._idx_wk,
-            compute_kernel_config=self.default_compute_kernel_config,
-            memory_config=wk_cfg["out_mem_config"] if wk_cfg is not None else ttnn.DRAM_MEMORY_CONFIG,
-            **({"program_config": wk_cfg["program_config"]} if wk_cfg is not None else {}),
-        )  # per-chip partial [1, 1, S/sp, D_idx]
-        k = self._tp_rs_ag(k)  # all-reduce over TP
+        if self.tp_factor > 1 and fused_mmrs_enabled():
+            k = fused_matmul_reduce_scatter(
+                hidden_states,
+                self._idx_wk,
+                cluster_axis=self.tp_axis,
+                dim=3,
+                topology=self.tp_ccl_topology,
+                num_links=self.ccl_num_links,
+            )
+            k = self._tp_rs_ag(k, ag_only=True)  # complete the all-reduce
+        else:
+            k = ttnn.linear(
+                hidden_states,
+                self._idx_wk,
+                compute_kernel_config=self.default_compute_kernel_config,
+                memory_config=wk_cfg["out_mem_config"] if wk_cfg is not None else ttnn.DRAM_MEMORY_CONFIG,
+                **({"program_config": wk_cfg["program_config"]} if wk_cfg is not None else {}),
+            )  # per-chip partial [1, 1, S/sp, D_idx]
+            k = self._tp_rs_ag(k)  # all-reduce over TP
         k = ttnn.layer_norm(
             k,
             weight=self._idx_knorm_w,
@@ -860,15 +884,18 @@ class TtIndexerBase:
         # weights_proj: device stem -> reduce TP partials and scatter query rows. The static scale is
         # already folded into the persistent projection weight in _upload_weights().
         wproj_cfg = self._resolve_mm_cfg("indexer.weights_proj", seq_len)
-        weights = ttnn.linear(
-            hidden_states,
-            self._idx_wproj,
-            compute_kernel_config=self.default_compute_kernel_config,
-            memory_config=wproj_cfg["out_mem_config"] if wproj_cfg is not None else ttnn.DRAM_MEMORY_CONFIG,
-            **({"program_config": wproj_cfg["program_config"]} if wproj_cfg is not None else {}),
-        )
-        # Sum TP partials and scatter the sequence rows consumed by local scoring.
-        weights = self._tp_reduce_scatter_sequence(weights)
+        if self.tp_factor > 1 and fused_mmrs_enabled():
+            weights = self._fused_head_weights(hidden_states)
+        else:
+            weights = ttnn.linear(
+                hidden_states,
+                self._idx_wproj,
+                compute_kernel_config=self.default_compute_kernel_config,
+                memory_config=wproj_cfg["out_mem_config"] if wproj_cfg is not None else ttnn.DRAM_MEMORY_CONFIG,
+                **({"program_config": wproj_cfg["program_config"]} if wproj_cfg is not None else {}),
+            )
+            # Sum TP partials and scatter the sequence rows consumed by local scoring.
+            weights = self._tp_reduce_scatter_sequence(weights)
         # Q and gate weights now have the same TP×SP query ownership. Scoring still uses the original
         # full-SP cache geometry below; only the input query count and its TP sub-offset are smaller.
         qc = (64 if sq_local % 64 == 0 else 32) if tpsp else 64
@@ -1417,6 +1444,8 @@ class TtCsaIndexer(TtIndexerBase):
         return q
 
     def _head_weights(self, hidden_states: ttnn.Tensor) -> ttnn.Tensor:
+        if self.tp_factor > 1 and fused_mmrs_enabled():
+            return self._fused_head_weights(hidden_states)
         weights = ttnn.linear(
             hidden_states,
             self._idx_wproj,

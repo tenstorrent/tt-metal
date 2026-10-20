@@ -651,6 +651,12 @@ void device_module(nb::module_& m_device) {
         nb::arg("mesh_device").noconvert(),
         nb::arg("device_coord"),
         get_l1_occupied_ranges_doc.data());
+    m_device.def(
+        "GetLowestOccupiedComputeL1Address",
+        [](MeshDevice* device) { return device->lowest_occupied_compute_l1_address(); },
+        nb::arg("device").noconvert(),
+        "Lowest address of any L1 buffer on the compute cores, or None when none is allocated. A program's "
+        "circular buffers must end below it.");
 
     constexpr std::string_view synchronize_device_doc = R"doc(
                 Synchronize the device with host by waiting for all operations to complete.
