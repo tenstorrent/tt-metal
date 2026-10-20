@@ -79,19 +79,24 @@ env:
   # and gates normally. It only opts them out of the *source* pass: every entry here
   # shares the one cmd `cd tests/python_tests && pytest -m "$PYTEST_MARKERS" ... .`,
   # so any file anywhere under that (currently flat, 180+ file) tree scopes every
-  # entry in all three, regardless of which markers would actually select it --
-  # pytest markers are invisible to a path match. llk_pr_gate_tests.yaml stays
-  # source-scanned: it is the cheap, fast-feedback leg this gate exists to run per
-  # push. These three are not: llk-e2e.yaml and llk-bit-exact.yaml already run the
-  # full suite nightly, and llk-perf.yaml's nightly covers llk_perf_tests.yaml too,
-  # so dispatching them again per push on an unrelated file is duplicate signal at
-  # real hardware cost (measured ~7 runner-hours in #60588's validation run).
+  # entry in all four, regardless of which markers would actually select it --
+  # pytest markers are invisible to a path match. llk_e2e_tests.yaml and
+  # llk_bit_exact_tests.yaml already run the full suite nightly, and llk-perf.yaml's
+  # nightly covers llk_perf_tests.yaml too, so dispatching them again per push on an
+  # unrelated file is duplicate signal at real hardware cost (measured ~7
+  # runner-hours in #60588's validation run). llk_pr_gate_tests.yaml duplicates
+  # pr-gate.yaml's llk-smoke-tests job instead of a nightly -- that duplication is
+  # intentional long-term (a second, independent run here is meant to feed an AI
+  # run summary that can flag a test as bad), but the use case isn't built yet, so
+  # it's exempted here too for now.
   #
   # Remove this once either lands: (1) the scope tool learns to resolve which legs
   # a change actually selects (e.g. by marker) instead of matching the whole tree,
   # or (2) the LLK side detects a verify-changed-tests invocation and prunes its own
-  # unrequired legs.
+  # unrequired legs. llk_pr_gate_tests.yaml should also come back off this list once
+  # the AI run summary use case above lands.
   SOURCE_SCAN_EXEMPT_YAMLS: >-
+    llk_pr_gate_tests.yaml
     llk_e2e_tests.yaml
     llk_bit_exact_tests.yaml
     llk_perf_tests.yaml
