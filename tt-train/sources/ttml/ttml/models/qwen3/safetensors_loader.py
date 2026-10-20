@@ -27,7 +27,7 @@ import numpy as np
 import ttnn
 import ttml
 
-from ttml.common.utils import resolve_padded_load_shape, to_bf16_4d, unpermute_proj_rows
+from ttml.common.utils import resolve_padded_load_shape, unpermute_proj_rows
 
 from .. import WeightTyingType
 
@@ -93,10 +93,6 @@ def _crop_to_hf_2d(arr: np.ndarray, rows: int, cols: int) -> np.ndarray:
 
 def _crop_to_hf_1d(arr: np.ndarray, dim: int) -> np.ndarray:
     return arr[:dim]
-
-
-def _assign(param, arr_4d: np.ndarray) -> None:
-    param.assign(ttml.autograd.Tensor.from_numpy(arr_4d, layout=ttnn.Layout.TILE))
 
 
 def _fit_to_param_shape(arr: np.ndarray, param, hf_name: str, expected_shape: Optional[tuple] = None) -> np.ndarray:
@@ -371,7 +367,7 @@ def load_from_safetensors(model, safetensors_path, config) -> None:
         # expected_shape uses the ORIGINAL hf_name (before any tie remap) so the
         # config lookup is correct even when embed_tokens/lm_head share a param.
         arr = _fit_to_param_shape(arr, param, hf_name, expected_shape=hf_shapes.get(hf_name))
-        _assign(param, to_bf16_4d(arr))
+        ttml.autograd.assign_numpy(param, arr)
         loaded.add(ttml_name)
 
     # ── Fuse staged K/V into kv_proj ──
@@ -399,7 +395,7 @@ def load_from_safetensors(model, safetensors_path, config) -> None:
         fused = _fit_to_param_shape(
             fused, param, f"model.layers.{layer_idx}.self_attn.kv_proj.{kind}", expected_shape=kv_expected
         )
-        _assign(param, to_bf16_4d(fused))
+        ttml.autograd.assign_numpy(param, fused)
         loaded.add(ttml_name)
 
     unused = sorted(p for p in parameters if p not in loaded)

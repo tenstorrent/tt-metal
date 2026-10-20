@@ -14,6 +14,7 @@ on:
           - llama3.1-8b-qb2
           - gemma4-31b-qb2
           - qwen38-27b-qb2
+          - qwen-image-2.1-p150
       sku:
         description: Hardware to test
         type: choice
@@ -21,6 +22,7 @@ on:
         options:
           - all
           - bh_quietbox_2
+          - bh_p150
       tier:
         description: Model tier
         type: choice

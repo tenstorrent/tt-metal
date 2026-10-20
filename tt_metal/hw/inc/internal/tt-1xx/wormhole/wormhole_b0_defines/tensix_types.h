@@ -233,6 +233,12 @@ enum class DataFormat : std::uint8_t {
     Invalid = 0xff
 };
 
+// Format predicates the Compute API checks formats with, so one check compiles on every arch.
+// Quasar's DataFormat has no UInt32, Bfp8_b or Bfp4_b; its copies of these return false.
+constexpr bool is_uint32_format(DataFormat format) { return format == DataFormat::UInt32; }
+constexpr bool is_bfp8_b_format(DataFormat format) { return format == DataFormat::Bfp8_b; }
+constexpr bool is_bfp4_b_format(DataFormat format) { return format == DataFormat::Bfp4_b; }
+
 struct io_queue_pointers_t {
     static constexpr std::uint32_t INVALID_IO_QUEUE_POINTER = 0xfeedface;
     static constexpr std::uint32_t WRAP_MASK = 0x80000000;

@@ -131,7 +131,10 @@ template <bool numerator_can_be_int_min = true>
 sfpi_inline sfpi::vInt compute_unsigned_remainder_int32(const sfpi::vInt& a_signed, const sfpi::vInt& b_signed) {
     sfpi::vMag b = sfpi::abs(b_signed);
     sfpi::vMag a;
-    sfpi::vFloat inv_b_f = unsigned_remainder_recip_scheduled(b, [&]() { a = sfpi::abs(a_signed); });
+    // always_inline: at -O2 (the metal JIT's level) GCC keeps the lambda call, which sends the
+    // captured vMag through memory ("cannot read SFPU object from memory"); -O3 inlines it anyway.
+    sfpi::vFloat inv_b_f = unsigned_remainder_recip_scheduled(
+        b, [&]() __attribute__((always_inline)) { a = sfpi::abs(a_signed); });
     sfpi::vFloat a_f = sfpi::convert<sfpi::vFloat>(a, sfpi::RoundMode::Nearest);
     if constexpr (numerator_can_be_int_min) {
         v_if(a_f < 0.0f) { a_f = TWO_POW_31; }

@@ -15,7 +15,7 @@ import pytest
 import ttnn
 import ttml
 from bf16_ulp import assert_within_bf16_ulp
-from ttml.common.utils import to_bf16_4d, unpermute_proj_rows
+from ttml.common.utils import unpermute_proj_rows
 from ttml.models import EmbeddingPlacement, WeightTyingType
 from ttml.models.llama import Llama, LlamaConfig, load_from_safetensors, safetensors_loader
 from ttml.models.llama.safetensors_loader import (
@@ -253,17 +253,6 @@ class TestHelpers:
         assert np.array_equal(first[:2, :3], arr), "checkpoint block moved"
         assert np.array_equal(first, second), "padding differs between loads of one checkpoint"
         assert (first[2:] != 0).all() and (first[:2, 3:] != 0).all(), "padding is zeros, which leaves dead rows"
-
-    def test_to_bf16_4d_forces_c_order(self):
-        """from_numpy reads the buffer linearly and ignores strides, so an F-ordered view would
-        reach the device transposed."""
-        transposed = np.arange(12, dtype=np.float32).reshape(3, 4).T
-        out = to_bf16_4d(transposed)
-        assert out.flags.c_contiguous, "astype(order='K') kept the source layout"
-        assert np.array_equal(out.reshape(4, 3).astype(np.float32), transposed)
-
-    def test_to_bf16_4d_makes_a_vector_one_row(self):
-        assert to_bf16_4d(np.zeros(5, np.float32)).shape == (1, 1, 1, 5)
 
     def test_unpermute_matches_the_explicit_definition(self):
         """out[2i] = w[i], out[2i+1] = w[half+i], per head."""

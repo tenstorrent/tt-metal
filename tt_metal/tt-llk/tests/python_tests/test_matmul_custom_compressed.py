@@ -14,7 +14,8 @@ from helpers.compressed_utils import (
     run_compressed,
 )
 from helpers.param_config import parametrize
-from helpers.tile_constants import DEFAULT_TILE_C_DIM
+from helpers.test_variant_parameters import CUSTOM_MM_CALLS
+from helpers.tile_constants import DEFAULT_TILE_C_DIM, DEFAULT_TILE_R_DIM
 
 
 def promote_assignment(assignment, ct):
@@ -234,3 +235,84 @@ def test_matmul_custom_compressed_metadata_word_boundary(shape, formats):
     M, K, N = shape
     assignment = assign_clustered(K, N, formats, COMPRESSION_GRANULARITY)
     run_tile_compressed(M, K, N, assignment)
+
+
+# Multi-call: K splits over back-to-back calls that accumulate into one DEST, every call repeating one
+# tile pattern with its metadata restarting on the previous-format sentinel, as the blaze host builds
+# it. The kernel holds math back before each call, so the unpacker reaches the next call while math
+# still holds the previous one's banks (see CUSTOM_MM_CALLS).
+#   race      bfp8/bfp4 only, so nothing inside a call clears SrcA: a both-bank SrcB clear issued while
+#             math still holds the banks drops the SrcA writes it overlaps
+#   rearm     the same with a -inf SrcA clear after every call, which the end-of-call stall's clear to 0
+#             would otherwise mask
+#   boundary  each call ends on bfp2: only the end-of-call stall separates that unpack from the next
+#             call's bfp4/bfp8 format change
+MULTI_CALL_CASES = [
+    # (id, M, K, N, per-call tiles (row-major kt_per_call x ct), rearm)
+    ("race", 1, 1024, 32, ["bfp8", "bfp4"], False),
+    ("race-m8", 8, 1024, 32, ["bfp8", "bfp4"], False),
+    ("rearm", 1, 1024, 32, ["bfp8", "bfp4"], True),
+    ("rearm-m8", 8, 1024, 32, ["bfp8", "bfp4"], True),
+    ("boundary-bfp4", 1, 2048, 32, ["bfp4", "bfp4", "bfp4", "bfp2"], False),
+    ("boundary-bfp8-m8", 8, 2048, 32, ["bfp8", "bfp8", "bfp8", "bfp2"], False),
+    ("boundary-ct2", 1, 1024, 64, ["bfp4", "bfp8", "bfp4", "bfp2"], False),
+]
+# Per-call weight slots are sized for the largest compressed tile (bfp8, 32x32).
+BFP8_TILE_BYTES = 1088
+# A missing stall corrupts part of one tile per boundary, which the default tolerance misses on
+# some shapes; on Blackhole these land at PCC >= 0.9998 with the stall and <= 0.998 without it.
+# The race cases fall far below that.
+MULTI_CALL_PCC = 0.9995
+
+
+@blackhole_only
+@pytest.mark.parametrize(
+    "M,K,N,pattern,rearm",
+    [pytest.param(*case[1:], id=case[0]) for case in MULTI_CALL_CASES],
+)
+def test_matmul_custom_compressed_multi_call(M, K, N, pattern, rearm):
+    """Back-to-back calls into one DEST, checked against the full-K golden."""
+    kt, ct = K // DEFAULT_TILE_R_DIM, N // DEFAULT_TILE_C_DIM
+    tiles_per_call = len(pattern)
+    num_calls = kt * ct // tiles_per_call
+
+    def pack_b_per_call(tiles):
+        # Contiguous within a call, one bfp8-sized slot per call.
+        calls = [
+            tiles[c * tiles_per_call : (c + 1) * tiles_per_call]
+            for c in range(num_calls)
+        ]
+        return (
+            b"".join(
+                b"".join(full for _, full in call).ljust(
+                    tiles_per_call * BFP8_TILE_BYTES, b"\0"
+                )
+                for call in calls
+            ),
+            None,
+        )
+
+    def encode_meta_per_call(assignment, ct, kt, aux):
+        # One metadata stream per call, each restarting on the previous-format sentinel.
+        return b"".join(
+            encode_tile_meta(
+                assignment[c * tiles_per_call : (c + 1) * tiles_per_call], ct
+            )
+            for c in range(num_calls)
+        )
+
+    run_compressed(
+        M,
+        K,
+        N,
+        [FMT_CODE[f] for f in pattern] * num_calls,
+        "sources/matmul_custom_compressed_test.cpp",
+        COMPRESSION_GRANULARITY,
+        SUPPORTED_M,
+        SUPPORTED_FORMATS,
+        promote_assignment,
+        pack_b_per_call,
+        encode_meta_per_call,
+        pcc_threshold=MULTI_CALL_PCC,
+        calls=CUSTOM_MM_CALLS(num_calls=num_calls, rearm=rearm),
+    )

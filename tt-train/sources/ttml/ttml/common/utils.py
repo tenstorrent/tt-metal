@@ -7,7 +7,6 @@
 from __future__ import annotations
 
 import os, random
-import ml_dtypes
 import numpy as np
 import ttnn
 import ttml
@@ -176,10 +175,6 @@ def unpermute_proj_rows(w: np.ndarray, n_heads: int) -> np.ndarray:
     if per_head % 2 != 0:
         raise RuntimeError(f"rows per head {per_head} must be even")
     return w.reshape(n_heads, 2, per_head // 2, *w.shape[1:]).swapaxes(1, 2).reshape(w.shape)
-
-
-def to_bf16_4d(arr: np.ndarray) -> np.ndarray:
-    return arr.reshape((1,) * (4 - arr.ndim) + arr.shape).astype(ml_dtypes.bfloat16, order="C", copy=False)
 
 
 def initialize_device(yaml_config: dict):

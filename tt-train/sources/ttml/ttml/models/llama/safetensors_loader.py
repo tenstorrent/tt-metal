@@ -13,13 +13,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterator, Sequence
 
-import ml_dtypes
 import numpy as np
 from safetensors import safe_open
 
 import ttnn
 import ttml
-from ttml.common.utils import resolve_padded_load_shape, to_bf16_4d, unpermute_proj_rows
+from ttml.common.utils import resolve_padded_load_shape, unpermute_proj_rows
 
 from .. import WeightTyingType
 from . import Llama, LlamaConfig
@@ -134,8 +133,8 @@ def _pad_to(arr: np.ndarray, shape: tuple[int, int]) -> np.ndarray:
 
 
 def _host_array(rule: _Rule, checkpoint: _Checkpoint, shape: tuple[int, int], shard_dim: int | None, mesh_size: int):
-    """*rule*'s sources as one bf16 array of *shape*, laid out over *mesh_size* ranks."""
-    blocks = [checkpoint[name].astype(ml_dtypes.bfloat16, copy=False) for name in rule.sources]
+    """*rule*'s sources as one array of *shape*, laid out over *mesh_size* ranks, in the checkpoint's dtype."""
+    blocks = [checkpoint[name] for name in rule.sources]
     if rule.transform:
         blocks = rule.transform(*blocks)
     return _pad_to(_assemble(blocks, shard_dim, mesh_size), shape)
@@ -363,11 +362,7 @@ def load_from_safetensors(model: Llama, safetensors_path: str | os.PathLike) -> 
         for rule, (shard_dim, shape) in zip(rules, plans):
             host = _host_array(rule, checkpoint, shape, shard_dim, mesh_size)
             mapper = tp.mesh.axis_mapper("tp", tdim=shard_dim) if tp and shard_dim is not None else None
-            parameters[rule.param].assign(
-                ttml.autograd.Tensor.from_numpy(
-                    to_bf16_4d(host), ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, mapper=mapper
-                )
-            )
+            ttml.autograd.assign_numpy(parameters[rule.param], host, mapper=mapper)
         unused = checkpoint.names - {source for rule in rules for source in rule.sources}
 
     return LoadResult(

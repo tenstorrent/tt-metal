@@ -18,7 +18,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import is_blackhole, skip_for_slow_dispatch
+from tt_py_test_utils_common.utility_functions import is_blackhole, skip_for_slow_dispatch
 from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS_PER_CHIP
 
 pytestmark = [
