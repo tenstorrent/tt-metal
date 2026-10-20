@@ -270,3 +270,10 @@ def pad_vision_seq_parallel(tensor, num_devices):
         tensor = torch.nn.functional.pad(tensor, (0, 0, 0, pad_len))
 
     return tensor
+
+
+def torch_pad(t: torch.Tensor, amount: int, *, dim: int) -> torch.Tensor:
+    """Pads `t` with `amount` zeros at the end of dimension `dim`."""
+    padding = [0] * (2 * t.ndim)
+    padding[-(dim * 2 + 1)] = amount
+    return torch.nn.functional.pad(t, padding)
