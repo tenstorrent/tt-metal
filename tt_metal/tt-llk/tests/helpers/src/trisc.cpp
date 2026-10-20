@@ -71,7 +71,8 @@ int main(void)
 #endif
     device_setup();
 #if defined(ARCH_QUASAR)
-    // No BRISC on Quasar: unpack configures the counters (a counting launch) while the other TRISCs are still held in reset.
+    // No BRISC on Quasar: unpack resets the barrier and scrubs the debug features while the others are held in reset.
+    llk_barrier::reset_semaphores();
     llk_perf::configure_and_arm();
 #endif
     clear_trisc_soft_reset(); // Release the rest of the triscs

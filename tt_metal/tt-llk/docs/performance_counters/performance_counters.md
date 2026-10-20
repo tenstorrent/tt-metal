@@ -114,7 +114,7 @@ Quasar reached that through an L1 generation barrier first, and the measurements
 
 ### Configure-once from BRISC
 
-Before any TRISC kernel runs, BRISC executes `configure_and_arm_from_brisc()` once (called from `brisc.cpp`). Quasar has no BRISC in this harness, so the unpack TRISC calls the same `configure_and_arm()` from `trisc.cpp`, after `device_setup()` and before it clears the other TRISCs out of soft reset; the registers are reached through the NEO local window (`bank_regs(Bank)` defaults to `LOCAL_REGS_WINDOW` there) instead of the RISC-V debug block. This:
+Before any TRISC kernel runs, BRISC executes `configure_and_arm_from_brisc()` once (called from `brisc.cpp`). Quasar has no BRISC in this harness, so the unpack TRISC calls the same `configure_and_arm()` from `trisc.cpp`, after `device_setup()` and before it clears the other TRISCs out of soft reset, for the scrub alone; the host programs Quasar's bank registers through NEO0's register window before a counting launch (`counters.py`). This:
 
 - Clears `DBG_FEATURE_DISABLE` to `0` in every launch, see [DBG_FEATURE_DISABLE scrub](#dbg_feature_disable-scrub) below.
 - When the launch counts a zone, programs each bank's reference-period and mode registers and sets `PERF_CNT_MUX_CTRL` for L1. Registers only: BRISC reading an L1 config right before the release moved the TRISCs' timing.

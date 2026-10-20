@@ -260,13 +260,16 @@ inline void configure_hardware()
 #endif
 }
 
-// Runs on BRISC before it releases the TRISCs, on Quasar on the unpack TRISC before it releases the others. The zone arms
-// start the counters and the readouts write the results and the config they used.
+// Runs on BRISC before it releases the TRISCs; on Quasar the unpack TRISC calls it for the scrub alone. The zone arms start
+// the counters and the readouts write the results and the config they used.
 inline void configure_and_arm()
 {
     // Not counter work, so every launch does it: it zeroes the debug feature chicken bits (L1 arbitration among them).
 #if !defined(TT_METAL_TTSIM)
     llk::perf::clear_debug_feature_disable();
+#endif
+#if defined(ARCH_QUASAR)
+    return; // the host configures a counting launch (counters.py), so no TRISC runs counter code before the windows
 #endif
     if (counted_zones() != 0)
     {

@@ -2045,6 +2045,13 @@ class TestConfig:
                 [counted_zones | self.launch_token << 8],
                 safe_mode=False,  # a register on Wormhole and Blackhole
             )
+        if TestConfig.CHIP_ARCH == ChipArchitecture.QUASAR and getattr(
+            self, "counted_zones", 0
+        ):
+            # imported here: counters.py imports this module
+            from .counters import configure_quasar_counters
+
+            configure_quasar_counters(TestConfig.TENSIX_LOCATION)
 
         if TestConfig.LAST_LOADED_ELFS != VARIANT_ELF_DIR:
             TestConfig.LAST_LOADED_ELFS = VARIANT_ELF_DIR

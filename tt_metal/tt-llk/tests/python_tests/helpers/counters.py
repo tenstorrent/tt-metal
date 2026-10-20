@@ -11,7 +11,7 @@ from tt_llk_perf.headers import bank_tables
 from tt_llk_perf.metrics import quasar_l1_client_label
 
 from .chip_architecture import ChipArchitecture, get_chip_architecture
-from .device_io import read_words_from_device
+from .device_io import read_words_from_device, write_words_to_device
 from .test_config import TestConfig
 
 COUNTER_SLOT_COUNT = TestConfig._PERF_COUNTERS_CONFIG_WORDS
@@ -281,3 +281,21 @@ def read_counters(
         all_results.extend(zone_results)
 
     return pd.DataFrame(all_results)
+
+
+# Quasar has no BRISC: the host programs the bank registers (counters.h configure_hardware) through NEO0's register window
+# before a counting launch, so no TRISC runs counter code before the windows. Offsets: perf_counters/registers.h.
+_QUASAR_NEO0_WINDOW = 0x01800000
+_QUASAR_BANK_REGS = {0: (0x0, 0x4), 1: (0x18, 0x1C), 2: (0xC, 0x10), 4: (0x8C, 0x90)}
+_REF_PERIOD_MAX = 0xFFFFFFFF
+
+
+def configure_quasar_counters(location: str) -> None:
+    """Before a counting Quasar launch: each bank's reference period and continuous mode. Nothing starts here and the
+    l1_client stays off: the zone arms route, enable and start them, the same instructions as counters off.
+    """
+    for ref_period, mode in _QUASAR_BANK_REGS.values():
+        for offset, value in ((ref_period, _REF_PERIOD_MAX), (mode, 0)):
+            write_words_to_device(
+                location, _QUASAR_NEO0_WINDOW + offset, [value], safe_mode=False
+            )
