@@ -55,6 +55,7 @@ def glm_decoder_layer_reference(
     mla_ref=None,
     actual_start: int = 0,
     actual_end: int | None = None,
+    rows: torch.Tensor | None = None,
 ):
     """One GLM decoder layer on CPU (DSA-MLA + norm/residual + FFN), matching TtPrefillBlock.forward.
 
@@ -76,6 +77,8 @@ def glm_decoder_layer_reference(
             Required for chunked prefill -- the caches and the fill watermark live on the instance.
         actual_start / actual_end: this call's cache write window. The defaults reproduce a
             single-shot pass exactly, so existing callers are unaffected.
+        rows: chunk rows to compute the output and top-k for (all if None); the caches still take
+            every row.
 
     Returns:
         (output [1, seq, hidden], kvpe_cache) in the device layout; with ``return_indexer_topk``
@@ -88,8 +91,10 @@ def glm_decoder_layer_reference(
     attn_norm_out = rms_norm(x, attn_norm_weight, config.rms_norm_eps)
 
     ref = SparseMLAReference(config, mla_weights, seq_len=seq_len) if mla_ref is None else mla_ref
-    mla_out = ref.forward(attn_norm_out, actual_start=actual_start, actual_end=actual_end, indexer_topk=indexer_topk)
-    x = x + mla_out
+    mla_out = ref.forward(
+        attn_norm_out, actual_start=actual_start, actual_end=actual_end, indexer_topk=indexer_topk, rows=rows
+    )
+    x = (x if rows is None else x[:, rows]) + mla_out
 
     ffn_norm_out = rms_norm(x, ffn_norm_weight, config.rms_norm_eps)
     if ffn_weights is not None:

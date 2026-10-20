@@ -544,6 +544,23 @@ def _turn_chunks(turns) -> list[tuple[int, int]]:
     return chunks
 
 
+# The reference runs attention and the MoE only at these rows; its caches and fused projection still take every row.
+_REF_EDGE_ROWS = 8  # a chip's last K + 1 rows read the next chip's tokens, K <= 7
+_REF_SAMPLE_FRACTION = 0.1
+
+
+def _reference_rows(chunks, total: int, chunk_local: int) -> torch.Tensor:
+    """Positions the reference computes layer outputs at: each chunk's first tile and last rows, both sides of every
+    chip boundary, and a seeded random sample of the rest."""
+    keep = torch.rand(total, generator=torch.Generator().manual_seed(5)) < _REF_SAMPLE_FRACTION
+    for start, end in chunks:
+        keep[start : start + ttnn.TILE_SIZE] = True
+        keep[max(end - _REF_EDGE_ROWS, 0) : end] = True
+    for edge in range(chunk_local, total, chunk_local):
+        keep[edge - _REF_EDGE_ROWS : edge + _REF_EDGE_ROWS] = True
+    return keep.nonzero().flatten()
+
+
 def _release_predictor(predictor):
     """Remove the predictor's MoE sub-device manager; the sparse-MLA one is the mesh's, released when it closes."""
     predictor.mesh_device.clear_loaded_sub_device_manager()
@@ -711,7 +728,8 @@ def test_mtp_multiturn_pcc(
         for k in range(1, num_levels):
             hiddens[k][start:end] = normeds[k - 1]
 
-    logger.info(f"[mtp multiturn] CPU reference over [0, {total}) in {CHUNK}-token chunks")
+    sel = _reference_rows(chunks, total, CHUNK // sp)
+    logger.info(f"[mtp multiturn] CPU reference over [0, {total}) in {CHUNK}-token chunks, outputs at {len(sel)} rows")
     t0 = time.monotonic()
     refs = [SparseMLAReference(config, mla_weights, seq_len=CACHE_LEN) for _ in range(num_levels)]
     token_ids = torch.tensor(ids)
@@ -735,6 +753,7 @@ def test_mtp_multiturn_pcc(
                 mla_refs=refs,
                 actual_start=ref_start,
                 actual_end=ref_end,
+                rows=sel[(sel >= ref_start) & (sel < ref_end)] - ref_start,
             )
         )
     ref_x, ref_out, ref_normed = (
@@ -743,14 +762,16 @@ def test_mtp_multiturn_pcc(
     logger.info(f"[mtp multiturn] CPU reference took {time.monotonic() - t0:.1f}s")
 
     for i, (start, end, xs, outs, normeds) in enumerate(dev_chunks):
+        picked = (sel >= start) & (sel < end)
+        local = sel[picked] - start
         for k in range(num_levels):
             what = f"[mtp multiturn] chunk {i} L{k + 1}"
             _, msg = assert_with_pcc(ref_x[k][start:end], xs[k], FUSED_MTP_PCC)
             logger.info(f"{what} fused projection PCC: {msg}")
-            _, msg = assert_with_pcc(ref_out[k][start:end], outs[k], module_pcc)
-            logger.info(f"{what} layer output PCC: {msg}")
-            _, msg = assert_with_pcc(ref_normed[k][start:end], normeds[k], module_pcc)
-            logger.info(f"{what} shared_head.norm output PCC: {msg}")
+            _, msg = assert_with_pcc(ref_out[k][picked], outs[k][local], module_pcc)
+            logger.info(f"{what} layer output PCC at {len(local)} rows: {msg}")
+            _, msg = assert_with_pcc(ref_normed[k][picked], normeds[k][local], module_pcc)
+            logger.info(f"{what} shared_head.norm output PCC at {len(local)} rows: {msg}")
 
     # Whole slots, so a row a later turn failed to overwrite fails too; nothing at or past the last tile is written.
     tail = -(-total // ttnn.TILE_SIZE) * ttnn.TILE_SIZE

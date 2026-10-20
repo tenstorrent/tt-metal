@@ -208,6 +208,7 @@ class IndexerCPU(nn.Module):
         start_pos: int,
         freqs_cis: torch.Tensor,
         mask: Optional[torch.Tensor],
+        rows: Optional[torch.Tensor] = None,
     ):
         """
         Forward pass of Indexer layer.
@@ -218,24 +219,27 @@ class IndexerCPU(nn.Module):
             start_pos: Starting position in cache
             freqs_cis: Rotary embedding frequencies
             mask: Optional attention mask
+            rows: Optional rows of x to score (all if None); qr and mask then hold only these
 
         Returns:
             (topk_indices, index_score)
         """
         bsz, seqlen, _ = x.size()
         end_pos = start_pos + seqlen
+        xq, freqs_q = (x, freqs_cis) if rows is None else (x[:, rows], freqs_cis[rows])
+        nq = xq.size(1)
 
         logger.info(f"Indexer forward: bsz={bsz}, seqlen={seqlen}, start_pos={start_pos}")
 
         # Query projection
         q = self.wq_b(qr)  # [B, L, n_heads * head_dim]
-        q = q.view(bsz, seqlen, self.n_heads, self.head_dim)  # [B, L, H, D]
+        q = q.view(bsz, nq, self.n_heads, self.head_dim)  # [B, L, H, D]
 
         # Split RoPE and non-RoPE parts
         q_pe, q_nope = torch.split(q, [self.rope_head_dim, self.head_dim - self.rope_head_dim], dim=-1)
 
         # Apply RoPE (DS: non-interleaved / GLM: interleaved — ModelArgs.index_rope_interleave)
-        q_pe = apply_rotary_emb(q_pe, freqs_cis, interleaved=self.rope_interleave)
+        q_pe = apply_rotary_emb(q_pe, freqs_q, interleaved=self.rope_interleave)
 
         # Concatenate back
         q = torch.cat([q_pe, q_nope], dim=-1)  # [B, L, H, D]
@@ -263,7 +267,7 @@ class IndexerCPU(nn.Module):
             self.k_scale_cache[:bsz, start_pos:end_pos] = k_scale
 
             # Compute weights
-            weights = self.weights_proj(x.float())  # [B, L, H]
+            weights = self.weights_proj(xq.float())  # [B, L, H]
             weights = weights * (self.n_heads**-0.5)  # Scale by 1/sqrt(n_heads)
             weights = weights.unsqueeze(-1)  # [B, L, H, 1]
             weights = weights * q_scale * self.softmax_scale  # [B, L, H, 1]
@@ -280,7 +284,7 @@ class IndexerCPU(nn.Module):
             # identity, so fold only weights_proj * Hi**-0.5 * softmax_scale into
             # the per-head weights and pass unit key scales.
             self.k_cache[:bsz, start_pos:end_pos] = k
-            weights = self.weights_proj(x.float()) * (self.n_heads**-0.5) * self.softmax_scale  # [B, L, H]
+            weights = self.weights_proj(xq.float()) * (self.n_heads**-0.5) * self.softmax_scale  # [B, L, H]
             index_score = fp8_index_cpu(
                 q,  # [B, L, H, D]
                 weights,  # [B, L, H]
@@ -291,9 +295,9 @@ class IndexerCPU(nn.Module):
         # index_score is summed over heads: [B, L, C] where C == end_pos
         assert index_score.shape == (
             bsz,
-            seqlen,
+            nq,
             end_pos,
-        ), f"Expected index_score shape {(bsz, seqlen, end_pos)}, got {tuple(index_score.shape)}"
+        ), f"Expected index_score shape {(bsz, nq, end_pos)}, got {tuple(index_score.shape)}"
 
         # Apply mask if provided ([seqlen, end_pos] broadcasts over batch)
         if mask is not None:
@@ -305,9 +309,9 @@ class IndexerCPU(nn.Module):
 
         assert topk_indices.shape == (
             bsz,
-            seqlen,
+            nq,
             topk_k,
-        ), f"Expected topk_indices shape {(bsz, seqlen, topk_k)}, got {tuple(topk_indices.shape)}"
+        ), f"Expected topk_indices shape {(bsz, nq, topk_k)}, got {tuple(topk_indices.shape)}"
 
         return topk_indices, index_score
 
@@ -390,6 +394,7 @@ class MLACPU(nn.Module):
         start_pos: int,
         freqs_cis: torch.Tensor,
         mask: Optional[torch.Tensor],
+        rows: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         """
         Args:
@@ -397,6 +402,8 @@ class MLACPU(nn.Module):
             start_pos: write offset into the cache
             freqs_cis: rotary frequencies for absolute positions [S, rope/2]
             mask: causal mask [S, S] for prefill, or None for decode
+            rows: optional rows of x that attend (all if None); mask and out then hold only these,
+                while the caches still take every row
 
         Returns:
             out: [B, S, dim]
@@ -408,12 +415,14 @@ class MLACPU(nn.Module):
         )
 
         # ----- Shared front-end -----
-        qr = self.q_norm(self.wq_a(x))  # [B, S, q_lora_rank]
+        xq, freqs_q = (x, freqs_cis) if rows is None else (x[:, rows], freqs_cis[rows])
+        nq = xq.size(1)
+        qr = self.q_norm(self.wq_a(xq))  # [B, S, q_lora_rank]
         q = self.wq_b(qr)  # [B, S, H * qk_head_dim]
-        q = q.view(bsz, seqlen, self.n_heads, self.qk_head_dim)
+        q = q.view(bsz, nq, self.n_heads, self.qk_head_dim)
         q_nope, q_pe = torch.split(q, [self.qk_nope_head_dim, self.qk_rope_head_dim], dim=-1)
         # MLA RoPE is interleaved (the indexer's is not).
-        q_pe = apply_rotary_emb(q_pe, freqs_cis, interleaved=True)
+        q_pe = apply_rotary_emb(q_pe, freqs_q, interleaved=True)
 
         kv = self.wkv_a(x)  # [B, S, kv_lora_rank + rope]
         kv, k_pe = torch.split(kv, [self.kv_lora_rank, self.qk_rope_head_dim], dim=-1)
@@ -440,8 +449,8 @@ class MLACPU(nn.Module):
             scores = torch.einsum("bshd,bthd->bsht", q, k) * self.softmax_scale  # [B, S, H, T]
 
             # Indexer -> additive {0, -inf} mask, combined with the causal mask.
-            topk_indices = self.indexer(x, qr, start_pos, freqs_cis, mask)[0]
-            index_mask = torch.full((bsz, seqlen, seqlen), float("-inf"), device=x.device).scatter_(-1, topk_indices, 0)
+            topk_indices = self.indexer(x, qr, start_pos, freqs_cis, mask, rows)[0]
+            index_mask = torch.full((bsz, nq, seqlen), float("-inf"), device=x.device).scatter_(-1, topk_indices, 0)
             index_mask = index_mask + mask
             scores = scores + index_mask.unsqueeze(2)
 
@@ -457,10 +466,8 @@ class MLACPU(nn.Module):
                 + torch.einsum("bshr,btr->bsht", q_pe, self.pe_cache[:bsz, :end_pos])
             ) * self.softmax_scale  # [B, S, H, T]
 
-            topk_indices = self.indexer(x, qr, start_pos, freqs_cis, mask)[0]
-            index_mask = torch.full((bsz, seqlen, end_pos), float("-inf"), device=x.device).scatter_(
-                -1, topk_indices, 0
-            )
+            topk_indices = self.indexer(x, qr, start_pos, freqs_cis, mask, rows)[0]
+            index_mask = torch.full((bsz, nq, end_pos), float("-inf"), device=x.device).scatter_(-1, topk_indices, 0)
             # Chunked prefill ([S>1, end_pos] mask): rows with fewer causal keys than
             # topk still get future indices scattered to 0 — re-impose causality like
             # the prefill branch above (mask shape [S, end_pos], rows offset start_pos).

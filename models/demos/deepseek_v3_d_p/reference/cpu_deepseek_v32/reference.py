@@ -200,6 +200,7 @@ class SparseMLAReference:
         actual_start: int = 0,
         actual_end: int | None = None,
         indexer_topk: torch.Tensor | None = None,
+        rows: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Single forward pass; returns the MLA output [B, S, dim].
 
@@ -210,6 +211,9 @@ class SparseMLAReference:
 
         ``indexer_topk`` overrides the indexer's selection with indices computed elsewhere, the CPU
         dual of ttMLA's ``indexer_indices``.
+
+        ``rows`` (chunk-local indices) limits the output, logits and top-k to those rows; the caches
+        still take every row.
         """
         x = hidden_states.to(torch.bfloat16)
         seqlen = x.shape[-2]
@@ -218,10 +222,12 @@ class SparseMLAReference:
         freqs = self._freqs[actual_start:end]
         # Causal mask [seqlen, end]; triu offset by actual_start keeps chunk causality (== single-shot at 0).
         mask = torch.full((seqlen, end), float("-inf")).triu_(actual_start + 1)
+        if rows is not None:
+            mask = mask[rows]
         self._inject_topk = indexer_topk
         try:
             with torch.no_grad():
-                out = self._mla.forward(x, actual_start, freqs, mask)
+                out = self._mla.forward(x, actual_start, freqs, mask, rows)
         finally:
             self._inject_topk = None
         self._filled = max(self._filled, end)
