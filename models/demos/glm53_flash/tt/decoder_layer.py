@@ -183,6 +183,8 @@ class TtDecoderLayer(LightweightModule):
         return self._hc_call_impl(hc, streams, sublayer, norm_w, collapse)
 
     def _hc_call_impl(self, hc, streams, sublayer, norm_w, collapse: bool = False):
+        if hasattr(hc, "select"):  # TtMHCSplit: the implementation depends on the row count
+            hc = hc.select(streams)
         if getattr(hc, "fuses_norm", False):
             kw = dict(collapse=True) if collapse else {}
             return hc.forward(

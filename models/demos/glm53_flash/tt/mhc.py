@@ -65,6 +65,9 @@ MHC_DECODE_EXACT = os.environ.get("GLM53_MHC_DECODE_EXACT", "1") == "1"
 # coefficients (needs GLM53_MHC_POST_KERNEL=2)
 # (2: the exact SFPU projection variant of the op)
 MHC_PRE_BLOCK = int(os.environ.get("GLM53_MHC_PRE_BLOCK", "0"))
+# GLM53_MHC_PREFILL_IMPL=wrap (with GLM53_MHC_IMPL=fast): the composite wrap serves the prefill rows, the fast path
+# the decode tile (A/B of the prefill numerics; see TtMHCSplit)
+MHC_PREFILL_IMPL = os.environ.get("GLM53_MHC_PREFILL_IMPL", "")
 
 
 @dataclass(frozen=True)
@@ -104,7 +107,28 @@ def build_mhc(
     assert base.numel() == kcfg.mix_hc and scale.numel() == 3
     impl = impl or MHC_IMPL
     cls = {"fast": TtMHCFast, "wrap": TtMHCWrap}[impl]
-    return cls(device, kcfg, fn.float(), base.float(), scale.float(), dtype=ttnn.float32)
+    hc = cls(device, kcfg, fn.float(), base.float(), scale.float(), dtype=ttnn.float32)
+    if impl == "fast" and MHC_PREFILL_IMPL == "wrap":
+        # A/B: composite wrap for prefill rows, fast path for decode (one tile of rows)
+        return TtMHCSplit(hc, TtMHCWrap(device, kcfg, fn.float(), base.float(), scale.float(), dtype=ttnn.float32))
+    return hc
+
+
+class TtMHCSplit:
+    """Two hyper-connection implementations behind one object: ``decode`` (fast path) for a single tile of
+    rows (the decode batch), ``prefill`` (the composite wrap) for anything taller. ``decoder_layer._hc_call_impl``
+    resolves the implementation per call through ``select``; ``supports_collapse`` is the decode path's
+    (the collapse is decode-only). ``GLM53_MHC_PREFILL_IMPL=wrap`` with ``GLM53_MHC_IMPL=fast``."""
+
+    def __init__(self, decode, prefill):
+        self.decode, self.prefill = decode, prefill
+
+    def select(self, x: ttnn.Tensor):
+        return self.decode if x.padded_shape[-2] == TILE else self.prefill
+
+    @property
+    def supports_collapse(self) -> bool:
+        return bool(getattr(self.decode, "supports_collapse", False))
 
 
 def streams_hf_to_packed(x: torch.Tensor) -> torch.Tensor:
