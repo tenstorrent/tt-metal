@@ -18,7 +18,7 @@ namespace ttnn::operations::experimental::deepseek_prefill::update_padded_kv_cac
 // write at different offsets so that new tokens overwrite the trailing pad cells of the prior
 // cache before spilling into the next slab.
 //
-// Cache slot is addressed with users-outer, layers-inner linearization — the op composes
+// Without a page table the cache slot is addressed with users-outer, layers-inner linearization — the op composes
 // `batch_idx = slot_idx * num_layers + layer_idx`. `slot_idx` and `kv_actual_global` (tokens,
 // tile-aligned) stay out of the program hash either way, so successive users/chunks reuse one cached
 // program (per layer).
@@ -37,11 +37,12 @@ namespace ttnn::operations::experimental::deepseek_prefill::update_padded_kv_cac
 // directly. Tiled RoPE is untilized with LLK inside the cache update.
 // No packed intermediate is allocated.
 //
-// Optional `page_table` + `page_size` (both forms): a paged cache. `cache` is a pool of page-sized entries
-// [num_pages * num_layers, heads, page_size, head_dim] and `page_table` is a uint32 ROW_MAJOR DRAM tensor
-// [rows, pages] (pages a multiple of 16) replicated across the mesh; `slot_idx` picks the request's row, whose entry q
-// is the physical page holding global positions [q * page_size, (q + 1) * page_size) on the chip that owns them
-// (0xFFFFFFFF = unmapped, not written). See device/kernels/paged_kv_table.hpp. Plain copy path only.
+// Optional `page_table` (both forms): a paged cache, in the format of device/kernels/paged_kv_table.hpp. `cache` is
+// then a pool of single-head pages [num_pages * num_layers, 1, page, head_dim] (page p of layer l at entry
+// p * num_layers + l; the page size is its seq dim) and `page_table` an INT32 ROW_MAJOR DRAM tensor [rows, width]
+// replicated across the mesh. `slot_idx` selects the request's row, which bounds it to width * page tokens. An entry
+// of -1 is unmapped and its rows are not written; neither is an entry outside the pool, which is invalid. The tensor
+// form does not check `slot_idx` against the table's rows. Plain copy path only, with an explicit `cluster_axis`.
 //
 // In-place: returns a handle to `cache`. Two call forms (identical results):
 
@@ -64,8 +65,7 @@ ttnn::Tensor update_padded_kv_cache(
     std::optional<uint32_t> tp_axis = std::nullopt,
     const std::optional<ttnn::Tensor>& rope = std::nullopt,
     const std::optional<ttnn::Tensor>& scales = std::nullopt,
-    const std::optional<ttnn::Tensor>& page_table = std::nullopt,
-    std::optional<uint32_t> page_size = std::nullopt);
+    const std::optional<ttnn::Tensor>& page_table = std::nullopt);
 
 // (2) Per-element-tensor form (traceable): `slot_idx`/`kv_actual_global` are read on-device by the
 //     writer kernel from two 1-element uint32 DRAM tensors ([1,1,1,1], ROW_MAJOR, replicated across
@@ -85,8 +85,7 @@ ttnn::Tensor update_padded_kv_cache(
     std::optional<uint32_t> tp_axis = std::nullopt,
     const std::optional<ttnn::Tensor>& rope = std::nullopt,
     const std::optional<ttnn::Tensor>& scales = std::nullopt,
-    const std::optional<ttnn::Tensor>& page_table = std::nullopt,
-    std::optional<uint32_t> page_size = std::nullopt);
+    const std::optional<ttnn::Tensor>& page_table = std::nullopt);
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::update_padded_kv_cache
 

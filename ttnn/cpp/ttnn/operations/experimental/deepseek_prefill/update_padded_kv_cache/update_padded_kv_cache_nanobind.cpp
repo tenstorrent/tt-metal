@@ -31,7 +31,7 @@ void bind_update_padded_kv_cache(nb::module_& mod) {
 
             In place: returns a handle to `cache`.
 
-            Cache slot is linearized users-outer, layers-inner — internally the op composes
+            Without ``page_table`` the cache slot is linearized users-outer, layers-inner — the op composes
             ``batch_idx = slot_idx * num_layers + layer_idx``. ``slot_idx`` and ``kv_actual_global``
             stay out of the program hash, so successive users/chunks reuse one cached program (per
             layer).
@@ -87,16 +87,19 @@ void bind_update_padded_kv_cache(nb::module_& mod) {
                     is BF16 (64 values), ROW_MAJOR or TILE. Tiled RoPE is untilized inside this
                     operation using LLK. Cache is ROW_MAJOR FP8_E4M3 with 656-byte
                     rows containing the three fields. All fields share leading shapes.
-                page_table (ttnn.Tensor, optional): Selects a paged cache. ``cache`` is then a pool of
-                    page-sized entries ``[num_pages * num_layers, heads, page_size, head_dim]`` and
-                    ``page_table`` a uint32 ROW_MAJOR DRAM tensor ``[rows, pages]`` (``pages`` a multiple
-                    of 16) replicated across the mesh. ``slot_idx`` selects the request's row; entry ``q``
-                    is the physical page, in the pool of the chip that owns global positions
-                    ``[q * page_size, (q + 1) * page_size)``, that holds them. 0xFFFFFFFF marks an
-                    unmapped page, which is not written. Plain copy path only (no ``rope``, ``scales``
-                    or ``tp_axis``); requires ``cluster_axis``.
-                page_size (int, optional): Tokens per page, with ``page_table``. A multiple of 32 that
-                    divides the per-chip input seq.
+                page_table (ttnn.Tensor, optional): Selects a paged cache (not the ``paged_update_cache`` /
+                    SDPA ``page_table`` format). ``cache`` is then a pool of single-head pages
+                    ``[num_pages * num_layers, 1, page, head_dim]`` whose seq dim is the page size (a multiple of
+                    32 dividing the per-chip input seq); page ``p`` of layer ``l`` is entry ``p * num_layers + l``.
+                    ``page_table`` is an INT32 ROW_MAJOR DRAM tensor ``[rows, width]`` replicated across the
+                    mesh, and ``slot_idx`` selects the request's row, which holds at most ``width * page`` tokens.
+                    Entry ``q`` names the physical page holding global positions ``[q * page, (q + 1) * page)``
+                    in the pool of the rank that owns them, ``(q * page / chunk_local) % sp`` with ``chunk_local``
+                    the per-chip input seq and ``sp`` the mesh extent along ``cluster_axis``: every write of a
+                    request must use the same ``chunk_local``. -1 is unmapped and its rows are not written;
+                    neither is an entry outside the pool, which is invalid. The tensor form does not check
+                    ``slot_idx`` against the table's rows. Plain copy path only (no ``rope``, ``scales`` or
+                    ``tp_axis``); requires ``cluster_axis``. Format: ``device/kernels/paged_kv_table.hpp``.
 
             Returns:
                 ttnn.Tensor: handle to `cache` with the new slab written in place.
@@ -115,8 +118,7 @@ void bind_update_padded_kv_cache(nb::module_& mod) {
                 std::optional<uint32_t>,
                 const std::optional<Tensor>&,
                 const std::optional<Tensor>&,
-                const std::optional<Tensor>&,
-                std::optional<uint32_t>>(&update_padded_kv_cache),
+                const std::optional<Tensor>&>(&update_padded_kv_cache),
             nb::arg("cache").noconvert(),
             nb::arg("input").noconvert(),
             nb::arg("slot_idx"),
@@ -128,8 +130,7 @@ void bind_update_padded_kv_cache(nb::module_& mod) {
             nb::arg("tp_axis") = nb::none(),
             nb::arg("rope").noconvert() = nb::none(),
             nb::arg("scales").noconvert() = nb::none(),
-            nb::arg("page_table").noconvert() = nb::none(),
-            nb::arg("page_size") = nb::none()),
+            nb::arg("page_table").noconvert() = nb::none()),
         // Per-element-tensor form (traceable).
         ttnn::overload_t(
             nb::overload_cast<
@@ -144,8 +145,7 @@ void bind_update_padded_kv_cache(nb::module_& mod) {
                 std::optional<uint32_t>,
                 const std::optional<Tensor>&,
                 const std::optional<Tensor>&,
-                const std::optional<Tensor>&,
-                std::optional<uint32_t>>(&update_padded_kv_cache),
+                const std::optional<Tensor>&>(&update_padded_kv_cache),
             nb::arg("cache").noconvert(),
             nb::arg("input").noconvert(),
             nb::arg("slot_idx").noconvert(),
@@ -157,8 +157,7 @@ void bind_update_padded_kv_cache(nb::module_& mod) {
             nb::arg("tp_axis") = nb::none(),
             nb::arg("rope").noconvert() = nb::none(),
             nb::arg("scales").noconvert() = nb::none(),
-            nb::arg("page_table").noconvert() = nb::none(),
-            nb::arg("page_size") = nb::none()));
+            nb::arg("page_table").noconvert() = nb::none()));
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::update_padded_kv_cache::detail

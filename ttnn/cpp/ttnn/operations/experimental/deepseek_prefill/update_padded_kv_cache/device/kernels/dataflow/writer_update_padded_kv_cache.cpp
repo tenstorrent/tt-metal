@@ -12,7 +12,7 @@
 #include "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/pack_scaled_fp8_kv_cache/shared_with_host/packed_kv_layout.hpp"
 
 namespace packed = ttnn::operations::experimental::deepseek_prefill::pack_scaled_fp8_kv_cache;
-namespace paged = ttnn::operations::experimental::deepseek_prefill::paged_kv_table;
+namespace paged = ttnn::operations::experimental::paged_kv;
 
 namespace {
 
@@ -24,11 +24,6 @@ inline uint32_t local_cache_offset(uint32_t prefix, uint32_t coordinate, uint32_
     return slab * chunk + (coordinate < boundary ? chunk : (coordinate == boundary ? offset : 0));
 }
 
-// Inverse of the block-cyclic placement: the global page-row a chip-local cache row holds.
-inline uint32_t global_row_of_local(uint32_t local_row, uint32_t coordinate, uint32_t factor, uint32_t chunk) {
-    return ((local_row / chunk) * factor + coordinate) * chunk + local_row % chunk;
-}
-
 // The two runs of the request's page-table row one write can touch, loaded into L1. A chip writes one contiguous
 // run of local rows, which crosses at most one slab boundary; each slab is one contiguous run of logical pages.
 struct PageWindows {
@@ -38,6 +33,7 @@ struct PageWindows {
 
     uint32_t lookup(uint32_t page) const {
         for (uint32_t w = 0; w < 2; ++w) {
+            // Unsigned: a page below the window's base wraps past its count, so one compare tests both bounds.
             if (page - base[w] < count[w]) {
                 return CoreLocalMem<volatile uint32_t>(l1[w])[page - base[w]];
             }
@@ -47,7 +43,7 @@ struct PageWindows {
 };
 
 // Loads the logical pages [first, last) of `row` into window `w`. Reads start on a DRAM-aligned entry and cover
-// whole aligned groups, which stay inside the row because the host requires its width to be a whole number of groups.
+// whole aligned groups, which stay inside the row's DRAM page: the allocator pads every page to the DRAM alignment.
 template <typename TableAccessor>
 inline void load_page_window(
     Noc& noc,
@@ -57,7 +53,7 @@ inline void load_page_window(
     uint32_t row,
     uint32_t first,
     uint32_t last) {
-    constexpr uint32_t align = paged::kTableEntriesPerRead;
+    constexpr uint32_t align = DRAM_ALIGNMENT / sizeof(uint32_t);
     const uint32_t aligned_first = first - first % align;
     const uint32_t entries = (last - aligned_first + align - 1) / align * align;
     noc.async_read(
@@ -93,9 +89,9 @@ inline void load_page_window(
 // layout, so the same accessor serves every read), then (paged only) the page-table accessor. tile_height divides kv
 // tokens into the page-row unit (TILE_HEIGHT for TILE, 1 for ROW_MAJOR), so one kernel handles both layouts.
 //
-// Paged: `cache` is a pool of page-sized entries (paged_kv_table.hpp) and `slot_idx` selects the request's page-table
-// row. Common args [12]=page-table binding, [13]=page-rows per page, [14]=row width in pages, [15]=pool pages. A row
-// whose page is unmapped (or outside the pool) is not written.
+// Paged: `cache` is a pool of single-head KV pages (paged_kv_table.hpp) and `slot_idx` selects the request's page-table
+// row. Common args [12]=page-table binding, [13]=page-rows per KV page, [14]=row width in KV pages, [15]=pool KV pages.
+// A row whose KV page is unmapped (or outside the pool) is not written.
 //
 // The body lives in a template on `HasMeta` so the `if constexpr` below actually DISCARDS (does not
 // instantiate) the unused branch — `kernel_main` is not a template, so an `if constexpr` there would
@@ -196,11 +192,11 @@ static void run_writer() {
     uint32_t page_rows = 1;
     uint32_t pool_pages = 0;
     if constexpr (Paged) {
-        // The page-table accessor follows the cache accessor and, on the metadata path, the metadata accessor
-        // (whose args are named only when present, as for kMetaArgsOffset above).
+        // The page-table accessor follows the cache accessor and, on the metadata path, the metadata accessor. Both
+        // offsets below are valid accessor offsets in a paged program, so neither needs kMetaArgsOffset's guard.
         constexpr uint32_t after_cache = cache_args.next_compile_time_args_offset();
         constexpr uint32_t table_args_offset =
-            HasMeta ? TensorAccessorArgs<HasMeta ? after_cache : 0>().next_compile_time_args_offset() : after_cache;
+            HasMeta ? TensorAccessorArgs<after_cache>().next_compile_time_args_offset() : after_cache;
         constexpr auto table_args = TensorAccessorArgs<table_args_offset>();
         const auto table = TensorAccessor(table_args, get_common_arg_val<uint32_t>(12));
         page_rows = get_common_arg_val<uint32_t>(13);
@@ -210,20 +206,22 @@ static void run_writer() {
         // DRAM reads need a DRAM-aligned L1 destination; the host pads the CB by one alignment unit.
         CircularBuffer cb_table(get_compile_time_arg_val(10));
         cb_table.reserve_back(1);
-        constexpr uint32_t align_bytes = paged::kTableEntriesPerRead * sizeof(uint32_t);
+        constexpr uint32_t align_bytes = DRAM_ALIGNMENT;
         windows.l1[0] = (cb_table.get_write_ptr() + align_bytes - 1) / align_bytes * align_bytes;
-        windows.l1[1] = windows.l1[0] + paged::window_capacity(chunk_local_t, page_rows) * sizeof(uint32_t);
+        windows.l1[1] =
+            windows.l1[0] +
+            paged::window_capacity(chunk_local_t, page_rows, align_bytes / sizeof(uint32_t)) * sizeof(uint32_t);
 
         if (rows_to_write > 0) {
-            const auto page_of = [&](uint32_t local_row) {
-                return global_row_of_local(local_row, my_sp_coord, sp_factor, chunk_local_t) / page_rows;
+            const auto kv_page_of = [&](uint32_t local_row) {
+                return paged::global_row_of_local(local_row, my_sp_coord, sp_factor, chunk_local_t) / page_rows;
             };
-            // Local rows [lo, hi] of one slab -> one window; pages past the row's width stay unmapped.
+            // Local rows [lo, hi] of one slab -> one window; KV pages past the row's width stay unmapped.
             const auto load = [&](uint32_t w, uint32_t lo, uint32_t hi) {
-                const uint32_t first_page = page_of(lo);
-                const uint32_t end_page = page_of(hi) + 1 < table_width ? page_of(hi) + 1 : table_width;
-                if (first_page < end_page) {
-                    load_page_window(noc, table, windows, w, slot_idx, first_page, end_page);
+                const uint32_t first_kv_page = kv_page_of(lo);
+                const uint32_t end_kv_page = kv_page_of(hi) + 1 < table_width ? kv_page_of(hi) + 1 : table_width;
+                if (first_kv_page < end_kv_page) {
+                    load_page_window(noc, table, windows, w, slot_idx, first_kv_page, end_kv_page);
                 }
             };
             const uint32_t first = update_idxt;
@@ -233,7 +231,6 @@ static void run_writer() {
             if (last > slab_last) {
                 load(1, slab_last + 1, last);
             }
-            // Completed once the first input page is in, so the table read hides under the reader's.
         }
         cb_table.push_back(1);
     }
@@ -243,7 +240,7 @@ static void run_writer() {
     uint32_t next_row = 0;
     uint32_t row_in_chunk = 0;
     uint32_t row_in_page = 0;
-    uint32_t logical_page = 0;
+    uint32_t kv_page = 0;
     uint32_t physical = paged::kUnmappedPage;
     const uint32_t slab_page_jump = Paged ? 1 + (sp_factor - 1) * (chunk_local_t / page_rows) : 0;
 
@@ -268,6 +265,8 @@ static void run_writer() {
         bool mapped = true;
         if constexpr (Paged) {
             if (table_pending) {
+                // The table read completes once the first input page is in, so it hides under the reader's. The
+                // windows were filled by DMA, which does not evict this core's L1 cache.
                 cb.wait_front(1);
                 noc.async_read_barrier();
                 invalidate_l1_cache();
@@ -275,24 +274,25 @@ static void run_writer() {
             }
             if (blk == 0 || row != next_row) {
                 const uint32_t local_row = update_idxt + row;
-                const uint32_t global_row = global_row_of_local(local_row, my_sp_coord, sp_factor, chunk_local_t);
+                const uint32_t global_row =
+                    paged::global_row_of_local(local_row, my_sp_coord, sp_factor, chunk_local_t);
                 row_in_chunk = local_row % chunk_local_t;
                 row_in_page = global_row % page_rows;
-                logical_page = global_row / page_rows;
-                physical = windows.lookup(logical_page);
+                kv_page = global_row / page_rows;
+                physical = windows.lookup(kv_page);
             } else if (++row_in_chunk == chunk_local_t) {
                 row_in_chunk = 0;
                 row_in_page = 0;
-                logical_page += slab_page_jump;
-                physical = windows.lookup(logical_page);
+                kv_page += slab_page_jump;
+                physical = windows.lookup(kv_page);
             } else if (++row_in_page == page_rows) {
                 row_in_page = 0;
-                physical = windows.lookup(++logical_page);
+                physical = windows.lookup(++kv_page);
             }
             next_row = row + 1;
             mapped = physical < pool_pages;
-            page0 =
-                (physical * num_layers + layer_idx) * cache_CHtWt + (block / input_Ht) * cache_HtWt + row_in_page * Wt;
+            // A pool entry holds one head (validate_paged), so the head term of the contiguous address drops out.
+            page0 = (physical * num_layers + layer_idx) * cache_CHtWt + row_in_page * Wt;
         } else {
             page0 = start_idx + (block / input_Ht) * cache_HtWt + row * Wt;
         }

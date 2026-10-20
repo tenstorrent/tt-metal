@@ -46,8 +46,6 @@ struct UpdatePaddedKvCacheDeviceOperation {
         // KV dedup: second axis to also shard the cache across. The input stays TP-replicated and each chip
         // persists only its own 1/tp window; the axes linearize to one block-cyclic axis of size sp*tp.
         std::optional<uint32_t> tp_axis;
-        // Paged cache: tokens per page, set together with `tensor_args.page_table` (paged_kv_table.hpp).
-        std::optional<uint32_t> page_size;
     };
 
     struct tensor_args_t {
@@ -66,7 +64,8 @@ struct UpdatePaddedKvCacheDeviceOperation {
         std::optional<Tensor> rope;
         // Optional FP32 scales: selects mixed-field ROW_MAJOR FP8 packing.
         std::optional<Tensor> scales;
-        // Optional page table [rows, pages] uint32: `cache` is then a page pool and slot_idx selects the row.
+        // Optional page table [rows, width] INT32 (kernels/paged_kv_table.hpp): `cache` is then a page pool and
+        // slot_idx selects the row.
         std::optional<Tensor> page_table;
     };
 
@@ -145,7 +144,6 @@ ttnn::Tensor update_padded_kv_cache(
     std::optional<uint32_t> tp_axis = std::nullopt,
     const std::optional<ttnn::Tensor>& rope = std::nullopt,
     const std::optional<ttnn::Tensor>& scales = std::nullopt,
-    const std::optional<ttnn::Tensor>& page_table = std::nullopt,
-    std::optional<uint32_t> page_size = std::nullopt);
+    const std::optional<ttnn::Tensor>& page_table = std::nullopt);
 
 }  // namespace ttnn::prim
