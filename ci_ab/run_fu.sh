@@ -15,8 +15,8 @@ export CHIP_ARCH=blackhole LLK_HOME=$L LLK_PERF_L1_MUX_GROUP=0 TT_LLK_DISABLE_AS
 MODS="perf_fast_untilize_allcfg.py"
 NP=$(( $(nproc) > 16 ? 16 : $(nproc) ))
 src() { [[ $1 == M2 ]] && echo M || echo $1; }
-pick() { case $1 in M|H1) echo pick_A.txt;; *) echo pick_B.txt;; esac; }
-rts() { case $1 in M|H1|M2) echo L1_TO_L1,PACK_ISOLATE,UNPACK_ISOLATE;; D1) echo L1_TO_L1,UNPACK_ISOLATE;; *) echo UNPACK_ISOLATE;; esac; }
+pick() { [[ -n $PICKF ]] && { echo $PICKF; return; };  case $1 in M|H1) echo pick_A.txt;; *) echo pick_B.txt;; esac; }
+rts() { [[ -n $RTS ]] && { echo $RTS; return; };  case $1 in M|H1|M2) echo L1_TO_L1,PACK_ISOLATE,UNPACK_ISOLATE;; D1) echo L1_TO_L1,UNPACK_ISOLATE;; *) echo UNPACK_ISOLATE;; esac; }
 build() {  # side dir
   local s=$1 d=$2; place $(src $s); rm -rf $d; mkdir -p $d
   cd $L/tests/python_tests
