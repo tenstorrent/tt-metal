@@ -804,6 +804,10 @@ class BatchedVerify:
         """All experts for all rows ([rows, E * I_local] matmuls), unrouted experts zeroed by the routing weights; then
         the TP all-reduce. x: [1, 1, rows, hidden] normed (DRAM)."""
         UWP, U = ttnn.UnaryWithParam, ttnn.UnaryOpType
+        # gate / up / expand / SwiGLU in L1 interleaved (the elementwise ops run faster there than on the matmuls'
+        # width shards: SwiGLU 228 -> 160 us; BF8 gate / up outputs broke the verify: agreement 0.31)
+        mc = ttnn.L1_MEMORY_CONFIG
+        gu_dt = ttnn.bfloat16
         W = self.moe[li]
         w = self._router(layer, x)
         x8 = ttnn.typecast(x, ttnn.bfloat8_b)
@@ -814,16 +818,14 @@ class BatchedVerify:
                 W[n],
                 bias=W[n + "_bias"],
                 program_config=self.gate_pc,
-                memory_config=self.moe_mc,
-                dtype=ttnn.bfloat16,
+                memory_config=mc,
+                dtype=gu_dt,
                 compute_kernel_config=self.ck,
             )
             for n in ("gate", "up")
         )
         x8.deallocate(True)
-        w_cols = ttnn.matmul(
-            w, W["expand"], program_config=self.expand_pc, memory_config=self.moe_mc, dtype=ttnn.bfloat16
-        )
+        w_cols = ttnn.matmul(w, W["expand"], program_config=self.expand_pc, memory_config=mc, dtype=ttnn.bfloat16)
         limit, alpha = self.swiglu_limit, self.alpha
         act = ttnn.multiply(
             up,
@@ -835,7 +837,7 @@ class BatchedVerify:
                 UWP(U.SILU),
                 UWP(U.MUL_UNARY_SFPU, 1.0 / alpha),
             ],
-            memory_config=self.moe_mc,
+            memory_config=mc,
         )
         gate.deallocate(True)
         up.deallocate(True)
