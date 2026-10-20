@@ -442,9 +442,7 @@ class TtPrefillRuntime:
             kv_cache: the engine-owned MiniMaxKVCache (from the adapter's allocate_kv_cache); the chunks'
                 KV is written into it. The same object is passed on every call.
             chunks: the forward's PrefillChunk list, in pack order (validate_chunks).
-            request_id: the runner's forward index, not a request id (a forward's chunks can belong to
-                several requests). Part of the runner's call contract; only the layer-completion sink uses it,
-                as seq = request_id * num_layers + layer_idx.
+            request_id: the runner's forward index, part of the runner's call contract; unused here.
             d2h_service: the device-side per-layer ack transport. This runtime emits acks only through
                 the host callback (set_layer_completion_sink), so a caller asking for the D2H path gets a
                 loud error rather than silently missing acks.
@@ -487,16 +485,16 @@ class TtPrefillRuntime:
         # host reshard, and the tensors are persistent (do NOT deallocate them here). The KV cache is
         # engine-owned and passed in. If a LayerAck channel is registered, the model bumps it once per layer
         # via on_layer_complete.
-        # Pipelined mode registers a completion sink keyed by (global_layer_idx, request_id); bind request_id
-        # per call so the synchronous per-layer callback reads no mutable state. Single-host mode uses the ack.
+        # Pipelined mode: bind the forward's chunks per call so the synchronous callback reads no mutable state.
         if self._layer_completion_sink is not None:
             sink = self._layer_completion_sink
 
             def on_layer_complete(layer_idx: int) -> None:
-                # The model reports a rank-local index; the sink's seq = request_id * total_layers +
-                # layer_idx needs the GLOBAL index, else every rank's local layer k collides at one seq
-                # and all but the first rank's completion is dropped.
-                sink(cfg.first_layer_idx + layer_idx, request_id)
+                # The model reports a rank-local layer index. Empty chunks write no KV, so they report nothing.
+                global_layer = cfg.first_layer_idx + layer_idx
+                for c in chunks:
+                    if not c.is_empty:
+                        sink.layers_completed(global_layer, global_layer + 1, c.slot_id, c.actual_start, c.actual_end)
 
         else:
             on_layer_complete = self._on_layer_complete
@@ -523,11 +521,8 @@ class TtPrefillRuntime:
         return out  # logits [1,1,chunk_local,vocab_shard], SP-sharded on seq / TP-sharded on vocab
 
     def set_layer_completion_sink(self, sink) -> None:
-        """Register a per-layer completion sink for pipelined (multi-rank) prefill. ``sink`` is called once
-        per layer as ``sink(layer_idx, request_id)`` — the global layer index plus the current request/chunk
-        id (bound per ``prefill_chunk`` call, so the sink reads no mutable runtime state). Replaces the
-        single-host ack-counter inject: the runner pushes a full completion into the host-local
-        LayerCompletionQueue and the LayerCompletionRouter re-emits it in seq order to the scheduler channel."""
+        """Register the completion sink for pipelined prefill, fired per layer for each non-empty chunk of the
+        prefill_forward() call."""
         assert self.compiled, "Call compile() before set_layer_completion_sink()"
         self._layer_completion_sink = sink
 
