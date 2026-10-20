@@ -26,6 +26,8 @@ void kernel_main() {
 
     DataflowBuffer dfb_scaler_obj(dfb::scaler);
     DataflowBuffer dfb_mask_h_obj(dfb::mask_h);
+    DataflowBuffer dfb_input_obj(dfb::input);
+    DataflowBuffer dfb_masked_input_obj(dfb::masked_input);
     constexpr uint32_t TILE_H = 32;
     constexpr bool do_mask_h = (origin_H % TILE_H) != 0;
 
@@ -59,16 +61,15 @@ void kernel_main() {
                 ckl::eltwise_chain(
                     ckl::IterationShape::tiles(onetile),
                     ckl::CopyTile<ckl::input(
-                        dfb::input, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig)>{},
+                        dfb::input, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig)>{
+                        dfb_input_obj},
                     ckl::CopyTile<
                         ckl::input(dfb::mask_h, ckl::WaitPolicy::None, ckl::PopPolicy::None, kDataFormatReconfig),
-                        ckl::Dst::D1>{},
+                        ckl::Dst::D1>{dfb_mask_h_obj},
                     ckl::Mask<DataFormat::Float16_b, ckl::Dst::D0>{},
                     ckl::PackTile<ckl::output(
-                        dfb::masked_input,
-                        ckl::ReservePolicy::PerTile,
-                        ckl::PushPolicy::PerTile,
-                        kDataFormatReconfig)>{});
+                        dfb::masked_input, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{
+                        dfb_masked_input_obj});
 
                 // Phase 2 with masked input: Reduce final masked tile with accumulation
                 ckl::reduce<REDUCE_OP, REDUCE_DIM, dfb::masked_input, dfb::scaler, dfb::out>(

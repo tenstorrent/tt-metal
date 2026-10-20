@@ -404,8 +404,7 @@ class Sampling1D(LightweightModule):
         x_bf16 = self._mask_invalid_vocab_logits(x_bf16)
 
         # Strategy-dispatched top-k
-        active_batch = int(x_bf16.shape[2])
-        topk_values, topk_indices = self._topk(x_bf16, active_batch)
+        topk_values, topk_indices = self._topk(x_bf16)
 
         # Convert indices to int32
         topk_indices_int32 = ttnn.typecast(topk_indices, dtype=ttnn.int32, sub_core_grids=cfg.sub_core_grids)
@@ -569,10 +568,6 @@ class Sampling1D(LightweightModule):
         """Split vocab in half → two topk → concat. Port of tt_sampling.py:346-371."""
         cfg = self.config
         x_list = ttnn.split(x_bf16, x_bf16.shape[-1] // 2, dim=3)
-        local_indices, sliced_indices = self._slice_user_rows(
-            self._local_indices, active_batch, self._local_indices.memory_config()
-        )
-        indices_list = ttnn.split(local_indices, local_indices.shape[-1] // 2, dim=3)
 
         values_parts = []
         indices_parts = []
@@ -593,8 +588,6 @@ class Sampling1D(LightweightModule):
         for v, i in zip(values_parts, indices_parts):
             ttnn.deallocate(v)
             ttnn.deallocate(i)
-        if sliced_indices:
-            ttnn.deallocate(local_indices)
 
         return gathered_values, gathered_indices
 
@@ -614,18 +607,12 @@ class Sampling1D(LightweightModule):
                 sub_core_grids=cfg.sub_core_grids,
             )
 
-        local_indices, sliced_indices = self._slice_user_rows(
-            self._local_indices, active_batch, self._local_indices.memory_config()
-        )
         topk_values, topk_indices = ttnn.topk(
             x_bf16,
             k=cfg.max_top_k,
             dim=-1,
             sub_core_grids=cfg.sub_core_grid_topk,
-            indices_tensor=local_indices,
         )
-        if sliced_indices:
-            ttnn.deallocate(local_indices)
 
         # For 1D meshes use cluster_axis=None
         sampling_cluster_axis = None if 1 in cluster_shape else 0

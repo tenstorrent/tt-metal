@@ -6,6 +6,7 @@ set(UNIT_TESTS_JIT_BUILD_SRC
     test_compiler_version.cpp
     test_depend.cpp
     test_file_renamer.cpp
+    test_firmware_build_dedup.cpp
     test_jit_build_telemetry.cpp
     test_jit_compile_deduper.cpp
     test_kernel_signature_parser.cpp

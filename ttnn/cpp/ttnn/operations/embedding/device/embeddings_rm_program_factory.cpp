@@ -9,6 +9,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/math.hpp>
 
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
@@ -89,8 +90,6 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsRMProgramFactory::create_prog
     }
     uint32_t g1_numcores = core_group_1.num_cores();
 
-    tt::DataFormat input_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
-
     tt::DataFormat weights_data_format = tt::tt_metal::datatype_to_dataformat_converter(weights.dtype());
 
     uint32_t rounded_weight_page_size = tt::align(weight_page_size, alignment);
@@ -134,13 +133,10 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsRMProgramFactory::create_prog
     const KernelSpecName WRITER{"writer"};
 
     const DFBSpecName OUTPUT{"output"};
-    const DFBSpecName INDEX_SCRATCH{"index_scratch"};
-    const DFBSpecName WEIGHT_CACHE{"weight_cache"};
-    // On Quasar the weight cache is a node-local scratchpad too (same Gen2 self-loop rule as the index
-    // scratch); the reader fills it and reads tokens back out of it, both over the NoC.
+    // The reader's private copy of the weight rows it serves locally: it fills it and reads tokens
+    // back out of it, both over the NoC.
     const ScratchpadSpecName WEIGHT_CACHE_SP{"weight_cache_sp"};
-    // On Quasar the index scratch page is a node-local scratchpad, not a self-loop DFB: Gen2 forbids a
-    // DM kernel binding a DFB as both PRODUCER and CONSUMER (which is how the reader uses it below).
+    // The reader's private page for the block of indices it is working through.
     const ScratchpadSpecName INDEX_SCRATCH_SP{"index_scratch_sp"};
 
     const TensorParamName INPUT_PARAM{"input"};
@@ -153,68 +149,53 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsRMProgramFactory::create_prog
     // -----------------------------------------------------------------------
     // Dataflow buffers
     // -----------------------------------------------------------------------
-    // The staging buffer's total size has to divide evenly by its entry size. The two are derived from
-    // different alignments, the entry size from the index buffer's and the sharded total from the
-    // output shard's own, so they can disagree. Nothing downstream would catch a truncated entry
-    // count: when the output is sharded the reader stages one entry per output row and no kernel
-    // drains the buffer, so a short buffer stalls the reader partway through its rows.
+    // The output's total size has to divide evenly by the per-row stride. The two are derived from
+    // different alignments, the stride from the index buffer's and the sharded total from the output
+    // shard's own, so they can disagree.
     TT_FATAL(
         out_dfb_total_size % chunk_size == 0,
         "Embedding output staging buffer size {} B must be divisible by its entry size {} B",
         out_dfb_total_size,
         chunk_size);
 
-    DataflowBufferSpec out_dfb{
-        .unique_id = OUTPUT,
-        .entry_size = chunk_size,
-        .num_entries = out_dfb_total_size / chunk_size,
-        .data_format_metadata = weights_data_format,
-    };
     if (output_sharded) {
-        // The staging buffer *is* the output shard: it is built on the output tensor's own SRAM, so
-        // the rows the reader gathers land in place and no writer kernel is created below.
-        out_dfb.borrowed_from = OUTPUT_PARAM;
-    }
-    spec.dataflow_buffers.push_back(std::move(out_dfb));
-
-    uint32_t index_page_size = round_up_to_mul32(input_element_size_bytes);
-    const bool index_as_scratchpad = device->arch() == tt::ARCH::QUASAR;
-    Group<ScratchpadSpec> scratchpads;
-    if (index_as_scratchpad) {
-        scratchpads.push_back(
-            ScratchpadSpec{.unique_id = INDEX_SCRATCH_SP, .size_per_node = block_height * index_page_size});
+        // The reader gathers its rows straight into the output shard, one chunk_size-strided row per
+        // output row, through a LocalTensorAccessor on the output tensor; there is no staging buffer
+        // and no writer kernel. Nothing on the device bounds those writes, so check here that this
+        // core's rows fit in the shard.
+        TT_FATAL(
+            num_blocks_per_core_group_1 * chunk_size <= out_dfb_total_size,
+            "Embedding sharded output: {} rows of {} B do not fit in the {} B output shard",
+            num_blocks_per_core_group_1,
+            chunk_size,
+            out_dfb_total_size);
     } else {
         spec.dataflow_buffers.push_back(DataflowBufferSpec{
-            .unique_id = INDEX_SCRATCH,
-            .entry_size = block_height * index_page_size,
-            .num_entries = 1,
-            .data_format_metadata = input_data_format,
+            .unique_id = OUTPUT,
+            .entry_size = chunk_size,
+            .num_entries = out_dfb_total_size / chunk_size,
+            .data_format_metadata = weights_data_format,
         });
     }
+
+    uint32_t index_page_size = round_up_to_mul32(input_element_size_bytes);
+    Group<ScratchpadSpec> scratchpads;
+    scratchpads.push_back(
+        ScratchpadSpec{.unique_id = INDEX_SCRATCH_SP, .size_per_node = block_height * index_page_size});
 
     if (use_local_cache) {
         uint32_t cache_page_size = round_up_to_mul32(weight_page_size);
         // PADDED caches the single pad row; BINARY caches rows 0 and 1.
         const uint32_t cache_entries = (embeddings_type == EmbeddingsType::PADDED) ? 1u : 2u;
-        if (index_as_scratchpad) {
-            scratchpads.push_back(
-                ScratchpadSpec{.unique_id = WEIGHT_CACHE_SP, .size_per_node = cache_entries * cache_page_size});
-        } else {
-            spec.dataflow_buffers.push_back(DataflowBufferSpec{
-                .unique_id = WEIGHT_CACHE,
-                .entry_size = cache_page_size,
-                .num_entries = cache_entries,
-                .data_format_metadata = weights_data_format,
-            });
-        }
+        scratchpads.push_back(
+            ScratchpadSpec{.unique_id = WEIGHT_CACHE_SP, .size_per_node = cache_entries * cache_page_size});
     }
 
     // -----------------------------------------------------------------------
     // Tensor parameters
     //
     // The output parameter is declared in every configuration: the writer binds it when the output is
-    // interleaved, and the borrowed staging buffer resolves its address from it when the output is
-    // sharded.
+    // interleaved, and the reader binds it when the output is sharded.
     // -----------------------------------------------------------------------
     spec.tensor_parameters.push_back(
         TensorParameter{.unique_id = INPUT_PARAM, .spec = input_mesh_tensor.tensor_spec()});
@@ -227,59 +208,32 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsRMProgramFactory::create_prog
     // Reader
     // -----------------------------------------------------------------------
     Group<DFBBinding> reader_dfb_bindings;
-    reader_dfb_bindings.push_back(DFBBinding{
-        .dfb_spec_name = OUTPUT,
-        .accessor_name = "in0",
-        .endpoint_type = DFBEndpointType::PRODUCER,
-    });
+    Group<TensorBinding> reader_tensor_bindings = {
+        TensorBinding{.tensor_parameter_name = INPUT_PARAM, .accessor_name = "input"},
+        TensorBinding{.tensor_parameter_name = WEIGHTS_PARAM, .accessor_name = "weights"},
+    };
     if (output_sharded) {
-        // With no writer kernel the reader is the staging buffer's only endpoint, so it holds both
-        // roles.
+        // The reader writes its rows straight into its own output shard.
+        reader_tensor_bindings.push_back(
+            TensorBinding{.tensor_parameter_name = OUTPUT_PARAM, .accessor_name = "out_shard"});
+    } else {
+        // The reader stages rows for the writer kernel to drain.
         reader_dfb_bindings.push_back(DFBBinding{
             .dfb_spec_name = OUTPUT,
             .accessor_name = "in0",
-            .endpoint_type = DFBEndpointType::CONSUMER,
-        });
-    }
-    // The index scratch page never leaves the reader: it reserves the page once, decodes indices out
-    // of it, and commits it at the end only to leave the buffer balanced. Both roles are the reader's.
-    // On Quasar that self-loop is illegal, so bind a node-local scratchpad once instead — same "in1"
-    // accessor, so the kernel selects scratch::in1 vs dfb::in1 under #ifdef ARCH_QUASAR.
-    Group<KernelSpec::ScratchpadBinding> reader_scratchpad_bindings;
-    if (index_as_scratchpad) {
-        reader_scratchpad_bindings.push_back(
-            KernelSpec::ScratchpadBinding{.scratchpad_spec_name = INDEX_SCRATCH_SP, .accessor_name = "in1"});
-    } else {
-        reader_dfb_bindings.push_back(DFBBinding{
-            .dfb_spec_name = INDEX_SCRATCH,
-            .accessor_name = "in1",
             .endpoint_type = DFBEndpointType::PRODUCER,
         });
-        reader_dfb_bindings.push_back(DFBBinding{
-            .dfb_spec_name = INDEX_SCRATCH,
-            .accessor_name = "in1",
-            .endpoint_type = DFBEndpointType::CONSUMER,
-        });
     }
+    // The index scratch page never leaves the reader: it decodes indices out of it, so it is the
+    // reader's private scratchpad.
+    Group<KernelSpec::ScratchpadBinding> reader_scratchpad_bindings;
+    reader_scratchpad_bindings.push_back(
+        KernelSpec::ScratchpadBinding{.scratchpad_spec_name = INDEX_SCRATCH_SP, .accessor_name = "in1"});
     if (use_local_cache) {
-        // Likewise the weight cache: the reader fills it and reads tokens back out of it, with no
-        // hand-off to another kernel. On Quasar that self-loop is illegal, so bind a node-local
-        // scratchpad once instead (same "local_cache" accessor -> scratch::local_cache vs dfb::local_cache).
-        if (index_as_scratchpad) {
-            reader_scratchpad_bindings.push_back(
-                KernelSpec::ScratchpadBinding{.scratchpad_spec_name = WEIGHT_CACHE_SP, .accessor_name = "local_cache"});
-        } else {
-            reader_dfb_bindings.push_back(DFBBinding{
-                .dfb_spec_name = WEIGHT_CACHE,
-                .accessor_name = "local_cache",
-                .endpoint_type = DFBEndpointType::PRODUCER,
-            });
-            reader_dfb_bindings.push_back(DFBBinding{
-                .dfb_spec_name = WEIGHT_CACHE,
-                .accessor_name = "local_cache",
-                .endpoint_type = DFBEndpointType::CONSUMER,
-            });
-        }
+        // The weight cache: the reader fills it and reads tokens back out of it, with no hand-off to
+        // another kernel, so it is the reader's private scratchpad too.
+        reader_scratchpad_bindings.push_back(
+            KernelSpec::ScratchpadBinding{.scratchpad_spec_name = WEIGHT_CACHE_SP, .accessor_name = "local_cache"});
     }
 
     EmbeddingsIndexType embeddings_index_type;
@@ -289,14 +243,18 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsRMProgramFactory::create_prog
         embeddings_index_type = EmbeddingsIndexType::UINT32;
     }
 
-    // These defines and the weight cache's DFB binding share one condition, the embeddings type. That
-    // is what lets the reader name the cache handle at all: a dfb:: handle exists only on the builds
+    // These defines and the weight cache's scratchpad binding share one condition, the embeddings type. That
+    // is what lets the reader name the cache handle at all: a scratch:: handle exists only on the builds
     // where the host binds it, so the reader's reference to it is compiled out under the same defines
     // on the builds where it is not.
     KernelSpec::CompilerOptions::Defines embedding_defines{
         {enchantum::to_string(embeddings_type).data(), "1"},
         {enchantum::to_string(embeddings_index_type).data(), "1"},
     };
+    if (output_sharded) {
+        // Selects the reader's output-shard path; it shares the condition of the out_shard binding.
+        embedding_defines.insert({"OUTPUT_SHARDED", "1"});
+    }
 
     Group<std::string> reader_rta_names = {"batch_offset", "weights_offset", "num_rows", "index_idx"};
     if (embeddings_type == EmbeddingsType::PADDED) {
@@ -309,11 +267,7 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsRMProgramFactory::create_prog
         .compiler_options = {.defines = embedding_defines},
         .dfb_bindings = std::move(reader_dfb_bindings),
         .scratchpad_bindings = std::move(reader_scratchpad_bindings),
-        .tensor_bindings =
-            {
-                TensorBinding{.tensor_parameter_name = INPUT_PARAM, .accessor_name = "input"},
-                TensorBinding{.tensor_parameter_name = WEIGHTS_PARAM, .accessor_name = "weights"},
-            },
+        .tensor_bindings = std::move(reader_tensor_bindings),
         .compile_time_args =
             {
                 {"input_page_size", input_page_size},
@@ -328,7 +282,7 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsRMProgramFactory::create_prog
         .hw_config = ttnn::create_reader_datamovement_config(),
     });
 
-    // Empty on non-Quasar; on Quasar carries the reader's index scratchpad.
+    // The reader's index scratchpad, plus its weight cache under PADDED / BINARY.
     spec.scratchpads = std::move(scratchpads);
 
     // -----------------------------------------------------------------------

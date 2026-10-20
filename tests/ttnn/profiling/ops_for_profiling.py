@@ -1351,22 +1351,6 @@ def swiglu_1(x):
     ttnn.swiglu(x, -1)
 
 
-def glu_2(x):
-    ttnn.glu(x, -2)
-
-
-def geglu_2(x):
-    ttnn.geglu(x, -2)
-
-
-def reglu_2(x):
-    ttnn.reglu(x, -2)
-
-
-def swiglu_2(x):
-    ttnn.swiglu(x, -2)
-
-
 def repeat(x):
     ttnn.repeat(x, ttnn.Shape((1, 1, 1, 4)))
 
@@ -2120,22 +2104,6 @@ all_unary_ops = [
     {
         "op": swiglu_1,
         "name": "ttnn.swiglu_dim_3",
-    },
-    {
-        "op": glu_2,
-        "name": "ttnn.glu_dim_2",
-    },
-    {
-        "op": geglu_2,
-        "name": "ttnn.geglu_dim_2",
-    },
-    {
-        "op": reglu_2,
-        "name": "ttnn.reglu_dim_2",
-    },
-    {
-        "op": swiglu_2,
-        "name": "ttnn.swiglu_dim_2",
     },
     {
         "op": repeat,

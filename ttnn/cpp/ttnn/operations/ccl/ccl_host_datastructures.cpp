@@ -5,6 +5,7 @@
 #include <string>
 
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
+#include <tt-metalium/math.hpp>
 
 using namespace tt::tt_metal;
 
