@@ -9557,6 +9557,55 @@ tasks:
       pcc_state_min: '>= 0.97'
       host_transfers_per_layer: == 0
       device_ms_shared_expert: '< 11.4'
+- id: P.13
+  title: 'Realistic defaults (owner rule F123): fp8 weights in bfp8, HiFi2, fp32 accumulation only where needed, stock
+    window attention vs today''s: owner comparison'
+  step: perf
+  role: perf
+  deps:
+  - P.12
+  device: true
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/bringup/hooks.py
+  - ttnn/ttnn/bringup
+  ab:
+    change:
+      DENSE_WEIGHTS: bfp8
+      MATMUL_FIDELITY: HiFi2
+      FP32_ACC: needed
+      WINDOW_SDPA: source
+    env:
+      DENSE_WEIGHTS: bf16
+      MATMUL_FIDELITY: HiFi4
+      FP32_ACC: all
+      WINDOW_SDPA: high_precision
+  brief:
+    details: 'Owner (2026-10-20, agents rule 7 / F123): the shipped defaults go realistic. (1) DENSE_WEIGHTS {bf16, bfp8}
+      (new): every weight the checkpoint stores in fp8 (attention wq_a / wkv / wq_b / wo_a / wo_b, the indexer''s and
+      compressor''s projections, the engram projection, the shared expert if P.12 did not already) is loaded as bfp8
+      instead of bf16 dequantized (DeepSeek keeps them fp8 and multiplies them with fp8 kernels; bfp8 is the same width;
+      log the per-matrix rel change bfp8 makes, as experts.py does for bfp4). (2) MATMUL_FIDELITY HiFi2 (exists) for
+      the matmuls still at HiFi4. (3) FP32_ACC {all, needed} (new; replaces the boolean FP32_DEST_ACC as the switch):
+      needed keeps fp32 accumulation only where you measure it to matter (long reductions, softmax statistics, the
+      experts'' down as today) and turns it off elsewhere; list where it stays and why. (4) WINDOW_SDPA source (exists):
+      the stock ttnn.transformer.sparse_sdpa for the window attention (its high-precision fork options existed to beat
+      the parity fp8 quantizers, removed in P.8). max_precision keeps bf16 / HiFi4 / all / high_precision. Report each
+      change''s own effect where you can isolate it (the per-section times), and the end-to-end PCC. Final check:
+      `python -m models.demos.common.bringup.orchestrator measure --task P.13`.'
+  gate:
+    cmd: for t in swa swa_engram enc_source enc_source_engram enc_reuse dec_candidate dec_reindex dec_reuse; do scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_${t}_experts.py || exit 1; done
+      && for t in swa_12 swa_engram_15 enc_source_14 enc_source_engram_17 enc_reuse_12 dec_candidate_14 dec_reindex_13
+      dec_reuse_12; do scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_${t}_experts.py
+      || exit 1; done && BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=10000
+      scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+    metrics:
+      pcc_layer_L*: '>= 0.97'
+      pcc_state_min: '>= 0.97'
+      host_transfers_per_layer: == 0
+      device_ms_total: '> 0'
 - id: X.3
   title: 'Final: full-target accuracy, warm full prefill (no readback), one warm chunk at several positions'
   step: perf
@@ -9570,6 +9619,7 @@ tasks:
   - P.10
   - P.11
   - P.12
+  - P.13
   gate:
     cmd: BRINGUP_RUNG=s55296 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py && BRINGUP_FULL_PREFILL=1
       BRINGUP_PROFILE_OPS=1 TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1
