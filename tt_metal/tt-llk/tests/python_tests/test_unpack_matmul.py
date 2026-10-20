@@ -115,8 +115,7 @@ def test_unpack_matmul(
         num_faces=num_faces_in0,
         stimuli_format=formats.input_format,
         input_dimensions=in0_dimensions,  # This will generate the right number of tiles
-        # 2-face mode: a 32-wide tile keeps f0,f1, a 16-wide tile keeps f0,f2
-        is_matrix_A=in0_tile_c_dim > 16,
+        wide_tile=in0_tile_c_dim > 16,
         face_r_dim=(in0_tile_r_dim if in0_tile_r_dim < 16 else 16),
     )
 
@@ -124,8 +123,7 @@ def test_unpack_matmul(
         num_faces=num_faces_in1,
         stimuli_format=formats.input_format,
         input_dimensions=in1_dimensions,  # This will generate the right number of tiles
-        # 2-face mode: a 32-wide tile keeps f0,f1, a 16-wide tile keeps f0,f2
-        is_matrix_A=in1_tile_c_dim > 16,
+        wide_tile=in1_tile_c_dim > 16,
     )
 
     in1_golden = in1
