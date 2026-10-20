@@ -1589,3 +1589,10 @@ Whole model, 56k last chunk top1 / top5 per run: separate 0.667 0.684 0.674 0.67
 bf8 HiFi2 0.647 0.664 0.655 0.658 0.667 0.688 (0.663 / 0.873); bf8 HiFi3 0.663 0.636 0.656 (0.651); bf16 HiFi4 0.687
 0.649. Run-to-run sd ~1.3 points (arrival-order fp32 sums): no difference resolvable at these counts.
 Default set to bf8 HiFi3 (owner, 2026-10-20): L4 shared expert 0.0070 / 0.9988 vs golden; MoE block scale 1.0199 vs separate 1.0203 (was 1.0191 with HiFi2); GLM_SE_PREC=bf8_hifi2 / bf16_hifi4 probes.
+Shared expert on the bring-up unified op (ttnn.bringup.unified_routed_expert_moe, high_precision, ClampedSiluGlu,
+HiFi3 + fp32 dest, bf8 weights): G "experts" sharing the slice weights, one per owner block, each reading its S rows at
+the block's slot of the dispatch buffer; the TILE bf16 output's blocks untilized into y_se (layout_ops untilize with a
+per-chip source map). Correct (shared part 1.4% rel L2, random weights). L4 block (us): chunk 5120 366 + 51 untilize vs
+the matmul path's 363 (tilize 50 + gate/up 140 + glu 30 + down 91 + untilize 52); chunk 2048 174 vs 181. At 5120 it
+runs ~54% of the HiFi3 peak of its 88-core grid (the 11 x 8 grid; each block re-streams the weights): not kept as the
+default (GLM_SE_IMPL=unified probe).

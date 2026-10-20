@@ -565,6 +565,26 @@ class TtK3TokenSplitMoE:
                 mesh_device, "tilize", cw=cw, src_tile_of=lambda ch, tr: mate(ch, tr // ST) * ST + tr % ST
             )
             self.se_untilize = layout_op_prepare(mesh_device, "untilize", cw=cw)
+            # (the unified-op shared expert: G "experts", block j at its slot of the dispatch buffer; the output's blocks
+            # untilized into y_se in the partial's order)
+            self.se_untilize_g = layout_op_prepare(
+                mesh_device, "untilize", cw=cw, src_tile_of=lambda ch, tr: mate(ch, tr // ST) * ST + tr % ST
+            )
+            u32 = lambda t: ttnn.from_torch(  # noqa: E731
+                t,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=mesh_device,
+                memory_config=dram,
+                mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+            )
+            self.se_ureg = u32(
+                torch.tensor(
+                    [[mate((d // C, d % C), j) * S for j in range(G)] for d in range(R * C)], dtype=torch.int32
+                )
+            )
+            self.se_ucnt = u32(torch.full((R * C, G), S, dtype=torch.int32))
+            self.se_ugidx = u32(torch.arange(G, dtype=torch.int32).repeat(R * C))
             # (the flat-op shared expert: its rows by a token index into the dispatch buffer, the same order)
             tix = torch.zeros(R, C, 1, G * S, dtype=torch.int32)
             for r_ in range(R):
@@ -1255,7 +1275,11 @@ class TtK3TokenSplitMoE:
             xg = self.dispatch(x, prep)
             mark("dispatch")
             GS = self.G * self.S
-            if hasattr(shared, "partials"):  # (the flat op: rows straight from the dispatch buffer into y_se)
+            if hasattr(shared, "partials") and hasattr(shared, "G"):  # (the unified op: TILE out at the slots)
+                o = shared.partials(xg, self.se_ureg, self.se_ucnt, self.se_ugidx, self.S)
+                self.se_untilize_g(o, self.y_se, rows=GS)
+                ttnn.deallocate(o)
+            elif hasattr(shared, "partials"):  # (the flat op: rows straight from the dispatch buffer into y_se)
                 shared.partials(xg, ttnn.reshape(self.se_tidx, [1, GS]), self.y_se)
             else:
                 xs = self.se_tilize(xg, rows=GS)

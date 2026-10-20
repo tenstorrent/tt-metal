@@ -224,3 +224,66 @@ class TtSharedFlat:
             math_fidelity=self.fidelity,
             output=out,
         )
+
+
+class TtSharedUnified:
+    """The same split shared expert on the bring-up unified routed expert op (ttnn.bringup.unified_routed_expert_moe,
+    high_precision: bf16 x / intermediates / output, the requested fidelity with fp32 dest; ClampedSiluGlu fused; x
+    row-major, tilized in the op): G "experts" sharing this chip's slice weights, one per owner block of the group,
+    each reading its S rows at the block's slot of the dispatch buffer and writing them at the same rows of a TILE bf16
+    output (the block untilizes the G blocks into its partial)."""
+
+    def __init__(
+        self,
+        mesh,
+        w_gate: torch.Tensor,
+        w_up: torch.Tensor,
+        w_down: torch.Tensor,
+        limit: float = 10.0,
+        axis: int = 1,
+        fidelity=ttnn.MathFidelity.HiFi3,
+    ):
+        assert float(limit) == 10.0, f"ClampedSiluGlu has the limit 10 compiled in, got {limit}"
+        self.mesh, self.axis = mesh, axis
+        R, C = tuple(mesh.shape)
+        self.G = G = C if axis == 1 else R
+        inter, hidden = w_gate.shape
+        assert inter % (G * 32) == 0
+        self.per = per = inter // G
+        pos = [(d % C) if axis == 1 else (d // C) for d in range(R * C)]  # (chip d's slice)
+        sl = lambda i: slice(i * per, (i + 1) * per)  # noqa: E731
+
+        def put(ts):  # (per device its [K, N] slice: rows of the stacked tensor)
+            return ttnn.from_torch(
+                torch.cat(ts, 0).to(torch.bfloat16),
+                dtype=ttnn.bfloat8_b,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=0),
+            )
+
+        self.w_gate = put([w_gate[sl(p)].T.float() for p in pos])  # [H, per] each
+        self.w_up = put([w_up[sl(p)].T.float() for p in pos])
+        self.w_down = put([w_down[:, sl(p)].T.float() for p in pos])  # [per, H]
+        self.cfg = ttnn.types.BlackholeComputeKernelConfig(
+            math_fidelity=fidelity, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=True
+        )
+
+    def partials(self, xg, regions, counts, gidx, S):
+        """xg: the dispatch buffer [N S, H] bf16 row-major; regions / counts [1, G] uint32 per chip (block j's first row
+        and S), gidx [G] uint32 (0 .. G - 1) -> [N S, H] bf16 TILE with the G blocks' partials at their rows."""
+        G = self.G
+        return ttnn.bringup.unified_routed_expert_moe(
+            xg,
+            regions,
+            counts,
+            gidx,
+            [self.w_gate] * G,
+            [self.w_up] * G,
+            [self.w_down] * G,
+            max_dispatched_tokens_per_expert=S,
+            compute_kernel_config=self.cfg,
+            activation=ttnn.bringup.RoutedExpertActivation.ClampedSiluGlu,
+            high_precision=True,
+        )

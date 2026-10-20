@@ -64,7 +64,7 @@ class TtExpertsTs:
         num_links: int = 2,
         shared_weights=None,
         shared_axis: int = 1,
-        shared_impl: str = "ttnn",
+        shared_impl: str = os.environ.get("GLM_SE_IMPL", "ttnn"),  # (probe: ttnn / unified / flat)
     ):
         """shared_weights (gate, up [I_s, H], down [H, I_s] torch, HF layout): the shared expert folded into the block
         (split over each mesh row's chips, its partials summed by the combine): the call then returns routed + shared
@@ -88,7 +88,11 @@ class TtExpertsTs:
         if shared_weights is not None:
             from models.demos.glm53_flash_d_p.tt.shared_tp_row import TtSharedFlat, TtSharedTpRow
 
-            if shared_impl == "flat":  # (one set of done words for every layer's shared expert)
+            if shared_impl == "unified":  # (the bring-up unified op, high precision)
+                from models.demos.glm53_flash_d_p.tt.shared_tp_row import TtSharedUnified
+
+                self.shared = TtSharedUnified(mesh, *shared_weights, limit=limit, axis=shared_axis)
+            elif shared_impl == "flat":  # (one set of done words for every layer's shared expert)
                 d0 = _DONE.get(("se", id(mesh)))
                 self.shared = TtSharedFlat(
                     mesh,

@@ -117,7 +117,7 @@ def layout_op_prepare(
 ):
     """kind "tilize": run(src [rows, W] bf16 ROW_MAJOR) -> [rows, W] bf16 TILE; "untilize": the reverse. DRAM
     interleaved in and out; rows % 32 == 0, W % (32 * cw) == 0. pages_per_row P: the row-major side stores each row as
-    P pages ([rows * P, W / P], e.g. P 2 at W 7168: pages that fit a fabric packet). src_tile_of (tilize):
+    P pages ([rows * P, W / P], e.g. P 2 at W 7168: pages that fit a fabric packet). src_tile_of (tilize / untilize):
     ((mesh row, column), output row tile) -> the source row tile on that chip (a per-chip gather of 32-row blocks;
     run(src, rows=) then gives the output's row count)."""
     assert kind in ("tilize", "untilize")
@@ -242,6 +242,8 @@ def layout_op_prepare(
         with src_tile_of): the output's rows."""
         rows_out = rows
         rows, W = int(src.shape[-2]), int(src.shape[-1])
+        if kind == "untilize" and rows_out is not None:  # (src_tile_of: the gathered row tiles)
+            rows = rows_out
         if kind == "tilize":  # (src [rows * P, W / P])
             rows, W = (rows_out if rows_out is not None else rows // P), W * P
             if dst is None:
