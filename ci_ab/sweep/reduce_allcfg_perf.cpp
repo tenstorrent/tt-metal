@@ -19,6 +19,11 @@
 #else
 #define CI_CP
 #endif
+#ifdef CI_REDUCE_STATIC
+#define CI_EXS , 1
+#else
+#define CI_EXS
+#endif
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "counters.h"
@@ -221,7 +226,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             for (std::uint32_t t = 0; t < n; t++)
                             {
                                 const std::uint32_t dst = CI_K > 1 ? out_dst(call, section) : call - section + t;
-                                _llk_math_reduce_<POOL_TYPE, REDUCE_DIM, is_fp32_dest_acc_en, MATH_FIDELITY, false>(dst, CI_SHAPE);
+                                _llk_math_reduce_<POOL_TYPE, REDUCE_DIM, is_fp32_dest_acc_en, MATH_FIDELITY, false CI_EXS>(dst, CI_SHAPE);
                             }
                         }
                     }
