@@ -89,7 +89,8 @@ struct MatmulMultiCoreProgramConfig {
 
 // Placement-first config for the Quasar-native matmul (GH#41910): the caller names the clusters and
 // the C slice (in 32x32 tiles) each produces in one go; the factory assigns one batch's C slices to
-// `cores` as contiguous runs. Edge C slices are clipped on read/write, so any M / N works. Within a
+// `cores` as contiguous runs, or, when batches with their own B have too few C slices each, to groups of the cores
+// that each take a run of the batches. Edge C slices are clipped on read/write, so any M / N works. Within a
 // cluster the C slice's subblocks are assigned round-robin to the compute threads (NEOs). A bias row and the
 // activation are applied in DST before the final pack.
 // Batches of A that use one B are stacked into one [batch * M x N] GEMM.
@@ -118,6 +119,11 @@ struct MatmulUnifiedProgramConfig {
     // Compute threads per core (Quasar NEOs running the compute kernel); 1, 2 or 4. Unset = auto: 4 on Quasar,
     // 1 elsewhere (Wormhole / Blackhole have one compute engine per core).
     std::optional<std::size_t> num_compute_threads;
+    // Groups the cores split into when batches have their own B: each group takes a run of the batches and splits every
+    // one of them over its cores like a single batch (1 = every core takes every batch). At most the batches and the
+    // cores. Unset = auto (lowest estimated cycles; more than one only when a batch has too few C slices for the
+    // cores).
+    std::optional<std::size_t> num_batch_groups;
     // Applied to the finished sum in DST, after the bias, before the final pack.
     std::optional<ttnn::operations::unary::UnaryWithParam> fused_activation = std::nullopt;
 };

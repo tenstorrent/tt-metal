@@ -138,9 +138,9 @@ bool shard_matches(
     return shard_cores == cores;
 }
 
-// Every field of the plan for one set of choices: C slice, subblock and K chunk. `base`
-// holds the fields common to every candidate; `cores` are the config's cores, of which the first C_slices_per_batch are
-// active.
+// Every field of the plan for one set of choices: C slice, subblock, K chunk and batch groups. `base` holds the fields
+// common to every candidate; `cores` are the config's cores, of which the first num_batch_groups runs of
+// min(cores / num_batch_groups, C_slices_per_batch) are active.
 MatmulUnifiedPlan make_plan(
     const MatmulUnifiedPlan& base,
     const CoreRangeSet& cores,
@@ -152,7 +152,8 @@ MatmulUnifiedPlan make_plan(
     uint32_t C_slice_N_tiles,
     uint32_t subblock_M_tiles,
     uint32_t subblock_N_tiles,
-    uint32_t K_chunk_tiles) {
+    uint32_t K_chunk_tiles,
+    uint32_t num_batch_groups) {
     MatmulUnifiedPlan plan = base;
     const std::vector<CoreCoord> all_cores =
         corerange_to_cores(cores, std::nullopt, base.orientation == ShardOrientation::ROW_MAJOR);
@@ -161,27 +162,33 @@ MatmulUnifiedPlan make_plan(
         std::get<3>(get_compute_kernel_config_args(A.device()->arch(), attributes.compute_kernel_config.value()));
     plan.C_slice_M_tiles = C_slice_M_tiles;
     plan.C_slice_N_tiles = C_slice_N_tiles;
-    // The C slices of one batch, walked across N then down M; every core produces its C slices for all batches.
+    // The C slices of one batch, walked across N then down M; each batch group's cores split them, and every core
+    // produces its C slices for each of its group's batches.
     const uint32_t C_slices_across_N = tt::div_up(plan.N_tiles, C_slice_N_tiles);
     const uint32_t C_slices_down_M = tt::div_up(plan.M_tiles, C_slice_M_tiles);
     plan.C_slices_across_N = C_slices_across_N;
     plan.C_slices_per_batch = C_slices_down_M * C_slices_across_N;
-    const uint32_t num_active = std::min<uint32_t>(all_cores.size(), plan.C_slices_per_batch);
-    plan.cores.assign(all_cores.begin(), all_cores.begin() + num_active);
-    plan.max_C_slices_per_core = tt::div_up(plan.C_slices_per_batch, num_active);
-    // The busiest core's C slices over all batches.
-    const uint64_t C_slices_per_core = (uint64_t)plan.batch_size * plan.max_C_slices_per_core;
+    plan.num_batch_groups = num_batch_groups;
+    const uint32_t cores_per_batch_group =
+        std::min<uint32_t>(all_cores.size() / num_batch_groups, plan.C_slices_per_batch);
+    plan.cores.assign(all_cores.begin(), all_cores.begin() + num_batch_groups * cores_per_batch_group);
+    plan.max_C_slices_per_core = tt::div_up(plan.C_slices_per_batch, cores_per_batch_group);
+    // The busiest core's C slices over all its batches.
+    const uint64_t C_slices_per_core =
+        (uint64_t)tt::div_up(plan.batch_size, num_batch_groups) * plan.max_C_slices_per_core;
+    // A shard is borrowed only with one batch: each core's one C slice then has one block of each operand.
+    const bool one_C_slice = plan.batch_size == 1 && C_slices_per_core == 1;
 
     // Shards that match the C slice.
     // A: the C slice's rows for all of K; C slices must span N so no two cores need the same rows. The copy
     // path zeroes A's K padding in the DFB; a borrowed shard is never written, so K must be a tile multiple.
     plan.A_shard_borrowable =
-        C_slices_per_core == 1 && C_slices_across_N == 1 && plan.A_last_K_tile_valid_columns == 0 &&
+        one_C_slice && C_slices_across_N == 1 && plan.A_last_K_tile_valid_columns == 0 &&
         shard_matches(A.memory_config(), C_slice_M_tiles, plan.K_tiles, plan.cores) &&
         (uint64_t)C_slice_M_tiles * plan.K_tiles * tt::tile_size(plan.A_format) <= MAX_DFB_EXTENT_BYTES;
     // B: the C slice's columns for all of K; C slices must span M.
     plan.B_shard_borrowable =
-        C_slices_per_core == 1 && C_slices_down_M == 1 &&
+        one_C_slice && C_slices_down_M == 1 &&
         shard_matches(B.memory_config(), plan.K_tiles, C_slice_N_tiles, plan.cores) &&
         (uint64_t)plan.K_tiles * C_slice_N_tiles * tt::tile_size(plan.B_format) <= MAX_DFB_EXTENT_BYTES;
     // C: its own shard spec, or the one the op allocates it with. Packed straight into the shard when subblock-major
@@ -189,19 +196,22 @@ MatmulUnifiedPlan make_plan(
     // thread owns every N-th entry).
     const tt::tt_metal::MemoryConfig& C_memory =
         output.has_value() ? output->memory_config() : attributes.output_mem_config;
-    plan.C_slices_are_C_shards =
-        C_memory.shard_spec().has_value()
-            ? C_slices_per_core == 1 && shard_matches(C_memory, C_slice_M_tiles, C_slice_N_tiles, plan.cores)
-            : C_slice_shard_spec(plan, C_memory).has_value();
-    plan.C_shard_borrowable = plan.C_slices_are_C_shards && plan.num_compute_threads == 1;
+    plan.C_slices_are_C_shards = C_memory.shard_spec().has_value()
+                                     ? C_slices_per_core == 1 &&
+                                           (plan.batch_size == 1 || plan.M_tiles % C_slice_M_tiles == 0) &&
+                                           shard_matches(C_memory, C_slice_M_tiles, C_slice_N_tiles, plan.cores)
+                                     : C_slice_shard_spec(plan, C_memory).has_value();
+    plan.C_shard_borrowable = plan.C_slices_are_C_shards && one_C_slice && plan.num_compute_threads == 1;
 
     // Multicast.
-    // One C slice per core on a rectangle laid out as the C slices tile C (walked row-major): the cores of a row
-    // then need the same A slice at the same time, and the cores of a column the same B slice. When C is a single
-    // row of C slices every core of any rectangle needs the same A slice (one column: the same B slice).
+    // One batch group with one C slice per core on a rectangle laid out as the C slices tile C (walked row-major): the
+    // cores of a row then need the same A slice at the same time, and the cores of a column the same B slice. When C
+    // is a single row of C slices every core of any rectangle needs the same A slice (one column: the same B slice).
+    // Several batch groups work on different batches.
     const std::vector<CoreRange>& core_ranges = cores.ranges();
-    const bool one_C_slice_per_core_of_rectangle =
-        core_ranges.size() == 1 && plan.max_C_slices_per_core == 1 && plan.cores.size() == core_ranges[0].size();
+    const bool one_C_slice_per_core_of_rectangle = num_batch_groups == 1 && core_ranges.size() == 1 &&
+                                                   plan.max_C_slices_per_core == 1 &&
+                                                   plan.cores.size() == core_ranges[0].size();
     const bool cores_tile_C =
         one_C_slice_per_core_of_rectangle && core_ranges[0].grid_size().x == C_slices_across_N &&
         core_ranges[0].grid_size().y == C_slices_down_M &&
@@ -322,7 +332,8 @@ std::pair<double, double> estimate_plan_cycles(
     bool B_in_dram,
     bool C_in_dram) {
     constexpr double TILE_BYTES = 2048.0;  // the cost model's tile
-    const double C_slices_on_busiest_core = (double)plan.batch_size * plan.max_C_slices_per_core;
+    const double C_slices_on_busiest_core =
+        (double)tt::div_up(plan.batch_size, plan.num_batch_groups) * plan.max_C_slices_per_core;
     const double K_chunks_on_busiest_core = C_slices_on_busiest_core * plan.K_chunks_per_C_slice;
 
     // Compute, on the busiest thread: per K tile of a subblock the unpack overlaps the math, and padded tiles cost
@@ -352,6 +363,9 @@ std::pair<double, double> estimate_plan_cycles(
     const double bias_tiles = (double)plan.C_slice_N_tiles * plan.bias_entry_bytes / TILE_BYTES;
     const double C_tiles = (double)plan.C_slice_M_tiles * plan.C_slice_N_tiles * plan.C_entry_bytes / TILE_BYTES;
     const double C_write_cycles = plan.borrow_C ? 0.0 : C_tiles * model.tile_write_cycles;
+    // With ragged K one reader thread zero-pads the last tile of each of the C slice's A rows.
+    const double A_pad_cycles =
+        plan.A_last_K_tile_valid_columns > 0 && !plan.borrow_A ? plan.C_slice_M_tiles * model.A_pad_tile_cycles : 0.0;
     const bool multicast = plan.A_mcast_num_dests > 0 || plan.B_mcast_num_dests > 0;
     const double read_cycles_per_tile =
         std::max(model.tile_read_cycles / plan.num_reader_threads, model.core_tile_read_cycles);
@@ -360,7 +374,7 @@ std::pair<double, double> estimate_plan_cycles(
             ((A_tiles + B_tiles + bias_tiles) * read_cycles_per_tile +
              ((plan.A_mcast_num_dests > 0 ? A_tiles : 0.0) + (plan.B_mcast_num_dests > 0 ? B_tiles : 0.0)) *
                  model.tile_mcast_cycles +
-             C_write_cycles) +
+             C_write_cycles + A_pad_cycles) +
         K_chunks_on_busiest_core * (model.K_chunk_read_cycles + (multicast ? model.K_chunk_mcast_cycles : 0.0)) /
             plan.num_reader_threads;
 
@@ -377,7 +391,8 @@ std::pair<double, double> estimate_plan_cycles(
                                 (plan.B_mcast_num_dests > 0 ? first_K_chunk_B_tiles : 0.0)) *
                                    model.tile_mcast_cycles +
                                model.read_latency_cycles + C_write_cycles +
-                               C_slices_on_busiest_core * model.C_slice_cycles;
+                               C_slices_on_busiest_core * model.C_slice_cycles +
+                               (plan.K_chunks_per_C_slice == 1 ? A_pad_cycles : 0.0);
     const double read_step_cycles = dm_cycles / K_chunks_on_busiest_core;
     const double compute_step_cycles = compute_cycles / K_chunks_on_busiest_core;
     const double step_cycles = std::pow(
@@ -453,6 +468,21 @@ std::optional<MatmulUnifiedPlan> plan_unified_matmul(
         dst_capacity_tiles,
         fp32_dest_acc_en);
     TT_FATAL(
+        config.num_batch_groups.value_or(1) >= 1 && config.num_batch_groups.value_or(1) <= base.batch_size,
+        "MatmulUnifiedProgramConfig.num_batch_groups ({}) must be at least 1 and at most the batches with their own B "
+        "({})",
+        config.num_batch_groups.value_or(1),
+        base.batch_size);
+    // More batch groups than cores is a placement that does not fit (the chooser tries others).
+    if (config.num_batch_groups.value_or(1) > config.cores.num_cores()) {
+        TT_FATAL(
+            !must_fit,
+            "MatmulUnifiedProgramConfig.num_batch_groups ({}) exceeds the cores ({})",
+            *config.num_batch_groups,
+            config.cores.num_cores());
+        return std::nullopt;
+    }
+    TT_FATAL(
         !config.K_chunk_tiles.has_value() || base.K_tiles % *config.K_chunk_tiles == 0,
         "K_chunk_tiles ({}) must divide K_tiles ({})",
         *config.K_chunk_tiles,
@@ -482,14 +512,19 @@ std::optional<MatmulUnifiedPlan> plan_unified_matmul(
 
     // ---- 4. C slice candidates ----
     // A C slice dim the config gives is fixed, and an auto one divides the largest C slice: M / N split over the
-    // bounding box of the cores (one C slice per core). A sharded C's shard shape comes first, so its shards can be
-    // the C slices.
+    // bounding box of the cores (one C slice per core). With batches that have their own B and batch groups allowed,
+    // the groups keep the cores busy with C slices up to a whole batch's C, so an auto dim may also split M (N) into
+    // any number of C slices (the smallest dim for that number). A sharded C's shard shape comes first, so its shards
+    // can be the C slices.
     const uint32_t core_rows = bounding_box.grid_size().y;
     const uint32_t core_columns = bounding_box.grid_size().x;
     const bool M_fixed = config.C_slice_M_tiles.has_value();
     const bool N_fixed = config.C_slice_N_tiles.has_value();
-    const uint32_t max_C_slice_M_tiles = config.C_slice_M_tiles.value_or(tt::div_up(base.M_tiles, core_rows));
-    const uint32_t max_C_slice_N_tiles = config.C_slice_N_tiles.value_or(tt::div_up(base.N_tiles, core_columns));
+    const bool batch_groups_allowed = base.batch_size > 1 && config.num_batch_groups.value_or(2) > 1;
+    const uint32_t max_C_slice_M_tiles =
+        config.C_slice_M_tiles.value_or(batch_groups_allowed ? base.M_tiles : tt::div_up(base.M_tiles, core_rows));
+    const uint32_t max_C_slice_N_tiles =
+        config.C_slice_N_tiles.value_or(batch_groups_allowed ? base.N_tiles : tt::div_up(base.N_tiles, core_columns));
 
     std::vector<std::pair<uint32_t, uint32_t>> C_slice_shapes;
     const std::optional<tt::tt_metal::ShardSpec>& C_shard =
@@ -501,8 +536,12 @@ std::optional<MatmulUnifiedPlan> plan_unified_matmul(
     }
     for (uint32_t h = max_C_slice_M_tiles; h >= 1; --h) {
         for (uint32_t w = max_C_slice_N_tiles; w >= 1; --w) {
-            const bool h_allowed = M_fixed ? h == max_C_slice_M_tiles : max_C_slice_M_tiles % h == 0;
-            const bool w_allowed = N_fixed ? w == max_C_slice_N_tiles : max_C_slice_N_tiles % w == 0;
+            const bool h_allowed = M_fixed                ? h == max_C_slice_M_tiles
+                                   : batch_groups_allowed ? h == tt::div_up(base.M_tiles, tt::div_up(base.M_tiles, h))
+                                                          : max_C_slice_M_tiles % h == 0;
+            const bool w_allowed = N_fixed                ? w == max_C_slice_N_tiles
+                                   : batch_groups_allowed ? w == tt::div_up(base.N_tiles, tt::div_up(base.N_tiles, w))
+                                                          : max_C_slice_N_tiles % w == 0;
             if (h_allowed && w_allowed) {
                 C_slice_shapes.emplace_back(h, w);
             }
@@ -523,52 +562,79 @@ std::optional<MatmulUnifiedPlan> plan_unified_matmul(
         base.B_format);
     const bool C_in_dram =
         output.has_value() ? output->memory_config().is_dram() : attributes.output_mem_config.is_dram();
+    const uint32_t num_cores = static_cast<uint32_t>(config.cores.num_cores());
     std::optional<MatmulUnifiedPlan> best;
     // After the loops, the last tried (the smallest C slice, a 1x1 subblock and the shortest K chunk): the L1 error
     // reports it.
     MatmulUnifiedPlan candidate;
     for (const auto& [C_slice_M_tiles, C_slice_N_tiles] : C_slice_shapes) {
-        // Widest first, so a tie keeps the wider subblock (measured slightly faster on Wormhole and Quasar).
-        for (uint32_t subblock_N_tiles =
-                 config.subblock_N_tiles.value_or(std::min(dst_capacity_tiles, C_slice_N_tiles));
-             subblock_N_tiles >= config.subblock_N_tiles.value_or(1);
-             --subblock_N_tiles) {
-            for (uint32_t subblock_M_tiles =
-                     config.subblock_M_tiles.value_or(std::min(dst_capacity_tiles / subblock_N_tiles, C_slice_M_tiles));
-                 subblock_M_tiles >= config.subblock_M_tiles.value_or(1);
-                 --subblock_M_tiles) {
-                for (uint32_t K_chunk_tiles = config.K_chunk_tiles.value_or(base.K_tiles);
-                     K_chunk_tiles >= config.K_chunk_tiles.value_or(1);
-                     --K_chunk_tiles) {
-                    if (base.K_tiles % K_chunk_tiles != 0) {
-                        continue;
-                    }
-                    candidate = make_plan(
-                        base,
-                        config.cores,
-                        A,
-                        B,
-                        output,
-                        attributes,
-                        C_slice_M_tiles,
-                        C_slice_N_tiles,
-                        subblock_M_tiles,
-                        subblock_N_tiles,
-                        K_chunk_tiles);
-                    if (!dfbs_fit(candidate, l1_budget)) {
-                        continue;
-                    }
-                    candidate.estimated_cycles = estimate_plan_cycles(
-                        candidate,
-                        cost_model,
-                        math_fidelity_phases,
-                        A.memory_config().is_dram(),
-                        B.memory_config().is_dram(),
-                        C_in_dram);
-                    if (!best.has_value() ||
-                        std::make_pair(!candidate.C_slices_are_C_shards, candidate.estimated_cycles) <
-                            std::make_pair(!best->C_slices_are_C_shards, best->estimated_cycles)) {
-                        best = candidate;
+        // Batch groups: the config's, else one (every core takes every batch) and, with batches that have their own B,
+        // the count that leaves the busiest core fewest C slices (the fewest groups on a tie), so that few C slices per
+        // batch do not leave cores idle. Only one group can multicast.
+        const uint32_t C_slices_per_batch =
+            tt::div_up(base.M_tiles, C_slice_M_tiles) * tt::div_up(base.N_tiles, C_slice_N_tiles);
+        uint32_t spread_batch_groups = 1;
+        uint64_t spread_C_slices_per_core =
+            (uint64_t)base.batch_size * tt::div_up(C_slices_per_batch, std::min(num_cores, C_slices_per_batch));
+        for (uint32_t groups = 2; groups <= std::min(base.batch_size, num_cores); ++groups) {
+            const uint32_t cores_per_group = std::min(num_cores / groups, C_slices_per_batch);
+            const uint64_t C_slices_per_core =
+                (uint64_t)tt::div_up(base.batch_size, groups) * tt::div_up(C_slices_per_batch, cores_per_group);
+            if (C_slices_per_core < spread_C_slices_per_core) {
+                spread_batch_groups = groups;
+                spread_C_slices_per_core = C_slices_per_core;
+            }
+        }
+        std::vector<uint32_t> batch_group_counts = {1};
+        if (config.num_batch_groups.has_value()) {
+            batch_group_counts = {static_cast<uint32_t>(*config.num_batch_groups)};
+        } else if (spread_batch_groups > 1) {
+            batch_group_counts.push_back(spread_batch_groups);
+        }
+        for (const uint32_t num_batch_groups : batch_group_counts) {
+            // Widest first, so a tie keeps the wider subblock (measured slightly faster on Wormhole and Quasar).
+            for (uint32_t subblock_N_tiles =
+                     config.subblock_N_tiles.value_or(std::min(dst_capacity_tiles, C_slice_N_tiles));
+                 subblock_N_tiles >= config.subblock_N_tiles.value_or(1);
+                 --subblock_N_tiles) {
+                for (uint32_t subblock_M_tiles = config.subblock_M_tiles.value_or(
+                         std::min(dst_capacity_tiles / subblock_N_tiles, C_slice_M_tiles));
+                     subblock_M_tiles >= config.subblock_M_tiles.value_or(1);
+                     --subblock_M_tiles) {
+                    for (uint32_t K_chunk_tiles = config.K_chunk_tiles.value_or(base.K_tiles);
+                         K_chunk_tiles >= config.K_chunk_tiles.value_or(1);
+                         --K_chunk_tiles) {
+                        if (base.K_tiles % K_chunk_tiles != 0) {
+                            continue;
+                        }
+                        candidate = make_plan(
+                            base,
+                            config.cores,
+                            A,
+                            B,
+                            output,
+                            attributes,
+                            C_slice_M_tiles,
+                            C_slice_N_tiles,
+                            subblock_M_tiles,
+                            subblock_N_tiles,
+                            K_chunk_tiles,
+                            num_batch_groups);
+                        if (!dfbs_fit(candidate, l1_budget)) {
+                            continue;
+                        }
+                        candidate.estimated_cycles = estimate_plan_cycles(
+                            candidate,
+                            cost_model,
+                            math_fidelity_phases,
+                            A.memory_config().is_dram(),
+                            B.memory_config().is_dram(),
+                            C_in_dram);
+                        if (!best.has_value() ||
+                            std::make_pair(!candidate.C_slices_are_C_shards, candidate.estimated_cycles) <
+                                std::make_pair(!best->C_slices_are_C_shards, best->estimated_cycles)) {
+                            best = candidate;
+                        }
                     }
                 }
             }
@@ -598,11 +664,14 @@ std::optional<MatmulUnifiedPlan> plan_unified_matmul(
 
 std::optional<tt::tt_metal::ShardSpec> C_slice_shard_spec(
     const MatmulUnifiedPlan& plan, const tt::tt_metal::MemoryConfig& C_memory) {
-    if (!C_memory.is_sharded() || C_memory.buffer_type() != tt::tt_metal::BufferType::L1 || plan.batch_size != 1 ||
-        plan.max_C_slices_per_core != 1) {
+    // One C slice per core over all its batches; with several batches, C slices that tile each batch's rows exactly, so
+    // C's rows of C slices run on from one batch to the next (one batch group per batch, in core order).
+    if (!C_memory.is_sharded() || C_memory.buffer_type() != tt::tt_metal::BufferType::L1 ||
+        plan.max_C_slices_per_core != 1 || tt::div_up(plan.batch_size, plan.num_batch_groups) != 1 ||
+        (plan.batch_size > 1 && plan.M_tiles % plan.C_slice_M_tiles != 0)) {
         return std::nullopt;
     }
-    const uint32_t C_slices_down_M = plan.C_slices_per_batch / plan.C_slices_across_N;
+    const uint32_t C_slices_down_M = plan.batch_size * (plan.C_slices_per_batch / plan.C_slices_across_N);
     const bool row_major = plan.orientation == ShardOrientation::ROW_MAJOR;
     // Height and width sharding place shard i on the grid's i-th core; block sharding places shard (row, column) at
     // that offset in a rectangle (column, row with COL_MAJOR).
@@ -678,13 +747,15 @@ std::optional<MatmulUnifiedProgramConfig> choose_unified_placement(
 
     std::optional<MatmulUnifiedProgramConfig> best;
     std::pair<bool, std::pair<double, double>> best_rank;
-    // Plans the placement (an unset C slice: the plan picks it) and keeps it, with the plan's C slice, subblock and K
-    // chunk, if it ranks first so far (C slices that are a sharded C's shards, then the lowest estimate; the first on a
-    // tie). False when it does not fit: cores beyond the device grid (a larger user_core_coord) or DFBs beyond L1.
+    // Plans the placement (an unset C slice or batch group count: the plan picks it) and keeps it, with the plan's C
+    // slice, subblock, K chunk and batch groups, if it ranks first so far (C slices that are a sharded C's shards, then
+    // the lowest estimate; the first on a tie). False when it does not fit: cores beyond the device grid (a larger
+    // user_core_coord) or DFBs beyond L1.
     const auto try_placement = [&](const CoreRangeSet& cores,
                                    tt::tt_metal::ShardOrientation orientation,
                                    std::optional<uint32_t> C_slice_M_tiles,
-                                   std::optional<uint32_t> C_slice_N_tiles) {
+                                   std::optional<uint32_t> C_slice_N_tiles,
+                                   std::optional<uint32_t> num_batch_groups) {
         const CoreCoord last_core = cores.bounding_box().end_coord;
         if (last_core.x >= device_grid.x || last_core.y >= device_grid.y) {
             return false;
@@ -694,6 +765,9 @@ std::optional<MatmulUnifiedProgramConfig> choose_unified_placement(
         config.orientation = orientation;
         config.C_slice_M_tiles = C_slice_M_tiles;
         config.C_slice_N_tiles = C_slice_N_tiles;
+        if (!requested.num_batch_groups.has_value()) {
+            config.num_batch_groups = num_batch_groups;
+        }
         const std::optional<MatmulUnifiedPlan> plan =
             plan_unified_matmul(A, B, fused_bias_tile_bytes, config, attributes, std::nullopt, /*must_fit=*/false);
         if (!plan.has_value()) {
@@ -714,11 +788,16 @@ std::optional<MatmulUnifiedProgramConfig> choose_unified_placement(
             config.subblock_M_tiles = plan->subblock_M_tiles;
             config.subblock_N_tiles = plan->subblock_N_tiles;
             config.K_chunk_tiles = plan->K_chunk_tiles;
+            config.num_batch_groups = plan->num_batch_groups;
             best = std::move(config);
             best_rank = rank;
         }
         return true;
     };
+
+    // Batch groups multicast nothing, so they take the whole grid (below), where their reads spread over the NoC; the
+    // placements sized to one batch's C keep one group, the layout their multicast is for.
+    constexpr std::optional<uint32_t> ONE_BATCH_GROUP = 1;
 
     // A 1D placement's C slices are columns (C_slices_are_columns) or rows of C, C_slice_width_tiles wide and as long
     // as all of C's other dimension, or if that does not fit L1, 1/2, 1/3, ... of it, rounded up (13 tiles in 4 C
@@ -730,9 +809,10 @@ std::optional<MatmulUnifiedProgramConfig> choose_unified_placement(
         const uint32_t C_length_tiles = C_slices_are_columns ? M_tiles : N_tiles;
         for (uint32_t C_slices_along_length = 1; C_slices_along_length <= C_length_tiles; ++C_slices_along_length) {
             const uint32_t C_slice_length_tiles = tt::div_up(C_length_tiles, C_slices_along_length);
-            const bool fits = C_slices_are_columns
-                                  ? try_placement(cores, orientation, C_slice_length_tiles, C_slice_width_tiles)
-                                  : try_placement(cores, orientation, C_slice_width_tiles, C_slice_length_tiles);
+            const bool fits =
+                C_slices_are_columns
+                    ? try_placement(cores, orientation, C_slice_length_tiles, C_slice_width_tiles, ONE_BATCH_GROUP)
+                    : try_placement(cores, orientation, C_slice_width_tiles, C_slice_length_tiles, ONE_BATCH_GROUP);
             if (fits) {
                 return;
             }
@@ -741,7 +821,7 @@ std::optional<MatmulUnifiedProgramConfig> choose_unified_placement(
 
     // An L1-sharded C's own shard grid, where its shards can be the C slices.
     if (C_shard.has_value() && attributes.output_mem_config.buffer_type() == tt::tt_metal::BufferType::L1) {
-        try_placement(C_shard->grid, C_shard->orientation, std::nullopt, std::nullopt);
+        try_placement(C_shard->grid, C_shard->orientation, std::nullopt, std::nullopt, std::nullopt);
     }
 
     constexpr tt::tt_metal::ShardOrientation ROW_MAJOR = tt::tt_metal::ShardOrientation::ROW_MAJOR;
@@ -755,7 +835,19 @@ std::optional<MatmulUnifiedProgramConfig> choose_unified_placement(
              tt::div_up(M_tiles, tt::div_up(M_tiles, grid_rows)) - 1})),
         ROW_MAJOR,
         std::nullopt,
-        std::nullopt);
+        std::nullopt,
+        ONE_BATCH_GROUP);
+
+    // Batches with their own B: the whole grid, which the plan splits into batch groups when one batch has too few C
+    // slices for it (the rectangles above then cover one batch's C slices only).
+    if (gemm.batch_size > 1) {
+        try_placement(
+            CoreRangeSet(CoreRange({0, 0}, {grid_columns - 1, grid_rows - 1})),
+            ROW_MAJOR,
+            std::nullopt,
+            std::nullopt,
+            std::nullopt);
+    }
 
     // 1D across N (M): whole grid rows (part of one row for a narrow C) splitting C's columns (rows). With one C slice
     // per core every core needs the same A (B), multicast to all of them when the C slices fill every core; so when

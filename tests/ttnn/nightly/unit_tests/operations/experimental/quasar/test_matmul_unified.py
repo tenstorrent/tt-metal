@@ -403,6 +403,36 @@ def test_batch(device, bcast, K_chunk_tiles):
     _check(out, _golden(a, b))
 
 
+@pytest.mark.parametrize(
+    "batch,M_tiles,N_tiles,cores,C_slice,num_batch_groups,K_chunk_tiles",
+    [
+        # 16 cores in 4 groups of 4, 2 batches each, one C slice per core and batch.
+        (8, 2, 2, (0, 0, 3, 3), (1, 1), 4, None),
+        # 7 batches over 3 groups of 2 cores (3, 2 and 2 batches); 3 C slices per batch, so 2 and 1 per core.
+        (7, 3, 1, (0, 0, 2, 1), (1, 1), 3, None),
+        # One batch per group, ragged C slices, K over several K chunks (with several reader threads on Quasar).
+        (4, 3, 3, (0, 0, 3, 1), (2, 2), 4, 1),
+    ],
+    ids=["even", "uneven", "one_batch_per_group_K_chunks"],
+)
+def test_batch_groups(device, batch, M_tiles, N_tiles, cores, C_slice, num_batch_groups, K_chunk_tiles):
+    """Batches with their own B split over groups of the cores, each group taking a run of the batches."""
+    gx, gy = _grid(device)
+    if cores[2] >= gx or cores[3] >= gy:
+        pytest.skip("grid too small")
+    M, K, N = M_tiles * TILE, 4 * TILE, N_tiles * TILE
+    torch.manual_seed(5)
+    a, b = _randn(1, batch, M, K), _randn(1, batch, K, N)
+    config = qsr.MatmulUnifiedProgramConfig(
+        cores=_rect(*cores),
+        C_slice_M_tiles=C_slice[0],
+        C_slice_N_tiles=C_slice[1],
+        K_chunk_tiles=K_chunk_tiles,
+        num_batch_groups=num_batch_groups,
+    )
+    _check(_run(device, a, b, config), _golden(a, b))
+
+
 def test_batch_from_multiple_leading_dims(device):
     """(2, 3, M, K) x (2, 3, K, N): every leading dim folds into one batch of 6."""
     gx, gy = _grid(device)
@@ -1231,6 +1261,21 @@ def test_auto_placement_sharded_output_batched_B(device, out_layout, auto):
     _check(ttnn.to_torch(out), _golden(a, b))
 
 
+@pytest.mark.parametrize("auto", ["empty_unified_config", "none"])
+@pytest.mark.parametrize(
+    "batch,M,K,N",
+    [(16, 2 * TILE, 4 * TILE, 2 * TILE), (12, 197, 197, 64), (7, 3 * TILE, 2 * TILE, 2 * TILE)],
+    ids=["heads", "ragged_attention_V", "odd_batch"],
+)
+def test_auto_placement_batched_B(device, batch, M, K, N, auto):
+    """Batches with their own B and few C slices each: auto placement splits the cores into batch groups."""
+    if auto == "none" and device.arch() != ttnn.device.Arch.QUASAR:
+        pytest.skip("without a program config only Quasar takes the unified matmul")
+    torch.manual_seed(36)
+    a, b = _randn(1, batch, M, K), _randn(1, batch, K, N)
+    _check(_run(device, a, b, _auto_config(device, auto)), _golden(a, b))
+
+
 def test_auto_placement_keeps_explicit_fields(device):
     # K chunk and subblock stay as given; only the cores, C slice and orientation are chosen.
     M, K, N = 4 * TILE, 6 * TILE, 4 * TILE
@@ -1421,6 +1466,25 @@ def test_rejections(device, expect_error, make_config, out_mem, pattern):
             b_t,
             program_config=make_config(),
             memory_config=out_mem or ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=_hifi4(device),
+        )
+
+
+@pytest.mark.parametrize(
+    "batch,num_batch_groups,pattern",
+    [(1, 2, "at most the batches"), (4, 3, "exceeds the cores")],
+    ids=["more_batch_groups_than_batches", "more_batch_groups_than_cores"],
+)
+def test_batch_group_rejections(device, expect_error, batch, num_batch_groups, pattern):
+    M = K = N = 2 * TILE
+    a, b = _randn(1, batch, M, K), _randn(1, batch, K, N)
+    a_t = ttnn.from_torch(a, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
+    b_t = ttnn.from_torch(b, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
+    with expect_error(RuntimeError, pattern):
+        ttnn.experimental.quasar.matmul(
+            a_t,
+            b_t,
+            program_config=qsr.MatmulUnifiedProgramConfig(cores=_rect(0, 0, 1, 0), num_batch_groups=num_batch_groups),
             compute_kernel_config=_hifi4(device),
         )
 

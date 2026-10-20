@@ -652,7 +652,8 @@ void py_module(nb::module_& mod) {
         auto (None, or empty cores); with no cores the placement is chosen too. Each core produces C slices of C_slice_M_tiles x C_slice_N_tiles tiles:
         the factory walks the C slices of a batch (across N, then down M) and hands that walk to the cores
         in enumeration order as contiguous runs (a core may produce several, for every batch; surplus cores
-        idle). Edge C slices are clipped on read and write, so any M / N works. Every operand is addressed
+        idle). When batches with their own B have too few C slices each to fill the cores, the cores are split
+        into groups that each take a run of the batches and split every one of them the same way. Edge C slices are clipped on read and write, so any M / N works. Every operand is addressed
         through the tensor accessor, so interleaved, L1-sharded and DRAM-sharded inputs and outputs all take
         the same kernels. The 1D, 2D and DRAM-sharded strategies are particular choices of
         (cores, C_slice_M_tiles, C_slice_N_tiles). Within a core the C slice's subblocks are assigned
@@ -683,6 +684,7 @@ void py_module(nb::module_& mod) {
                 std::optional<std::size_t>,
                 tt::tt_metal::ShardOrientation,
                 std::optional<std::size_t>,
+                std::optional<std::size_t>,
                 std::optional<UnaryWithParam>>(),
             nb::kw_only(),
             nb::arg("cores") = CoreRangeSet(),
@@ -693,6 +695,7 @@ void py_module(nb::module_& mod) {
             nb::arg("subblock_N_tiles").noconvert() = nb::none(),
             nb::arg("orientation") = tt::tt_metal::ShardOrientation::ROW_MAJOR,
             nb::arg("num_compute_threads").noconvert() = nb::none(),
+            nb::arg("num_batch_groups").noconvert() = nb::none(),
             nb::arg("fused_activation") = nb::none())
         .def_rw("cores", &MatmulUnifiedProgramConfig::cores, R"doc(
             Cores (clusters) that take part, as a CoreRangeSet. Empty (the default) = auto placement: the cores, C
@@ -733,6 +736,12 @@ void py_module(nb::module_& mod) {
             subblocks are assigned round-robin to the threads, which all read the resident A and B slices.
             None = auto: 4 on Quasar, 1 elsewhere (Wormhole / Blackhole have one compute engine per core).
         )doc")
+        .def_rw("num_batch_groups", &MatmulUnifiedProgramConfig::num_batch_groups, R"doc(
+            Groups the cores split into when batches have their own B: each group takes a run of the batches and
+            splits every one of them over its cores like a single batch (1 = every core takes every batch). At most
+            the batches and the cores. None = auto, chosen with the other auto sizes (more than one only when a batch
+            has too few C slices for the cores).
+        )doc")
         .def_rw("fused_activation", &MatmulUnifiedProgramConfig::fused_activation, R"doc(
             Optional activation applied to the finished sum in DST, after the bias and before the final pack.
         )doc")
@@ -740,7 +749,7 @@ void py_module(nb::module_& mod) {
             return fmt::format(
                 "MatmulUnifiedProgramConfig(cores={}, C_slice_M_tiles={}, C_slice_N_tiles={}, K_chunk_tiles={}, "
                 "subblock_M_tiles={}, subblock_N_tiles={}, orientation={}, num_compute_threads={}, "
-                "fused_activation={})",
+                "num_batch_groups={}, fused_activation={})",
                 config.cores.str(),
                 config.C_slice_M_tiles,
                 config.C_slice_N_tiles,
@@ -749,6 +758,7 @@ void py_module(nb::module_& mod) {
                 config.subblock_N_tiles,
                 config.orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR ? "ROW_MAJOR" : "COL_MAJOR",
                 config.num_compute_threads,
+                config.num_batch_groups,
                 config.fused_activation);
         });
 

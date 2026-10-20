@@ -37,9 +37,10 @@ template <
     uint32_t num_writer_threads,    // consumers of C_slice; divides num_compute_threads
     uint32_t C_entries_per_thread,  // entries one thread's subblocks of the C slice take
     uint32_t C_borrowed>            // C's L1 shard is the C_slice DFB: the compute packs in place, nothing is written
-TT_KERNEL void writer(uint32_t first_C_slice, uint32_t num_C_slices) {
-    // first_C_slice: this core's first C slice in the row-major walk over C (across N, then down M);
-    // num_C_slices: how many consecutive ones it writes, per batch.
+TT_KERNEL void writer(uint32_t first_batch, uint32_t num_batches, uint32_t first_C_slice, uint32_t num_C_slices) {
+    // first_batch, num_batches: the batches of this core's batch group; first_C_slice: this core's first C slice in the
+    // row-major walk over one batch's C (across N, then down M); num_C_slices: how many consecutive ones it writes, per
+    // batch.
     constexpr uint32_t C_batch_stride_tiles = M_tiles * N_tiles;
     constexpr uint32_t subblock_tiles = subblock_M_tiles * subblock_N_tiles;  // what the compute packs at once
     constexpr uint32_t C_slices_across_N = (N_tiles + C_slice_N_tiles - 1) / C_slice_N_tiles;
@@ -59,7 +60,9 @@ TT_KERNEL void writer(uint32_t first_C_slice, uint32_t num_C_slices) {
     const uint32_t C_entry_stride_bytes = C_slice.get_stride_size();
 
     const uint32_t thread = get_my_thread_id();
-    for (uint32_t batch = 0; batch < batch_size; ++batch) {
+    // With one batch the bounds are compile-time, so the address math folds away.
+    const uint32_t end_batch = batch_size == 1 ? 1 : first_batch + num_batches;
+    for (uint32_t batch = batch_size == 1 ? 0 : first_batch; batch < end_batch; ++batch) {
         const uint32_t C_batch_first_tile = batch * C_batch_stride_tiles;
 
         for (uint32_t MN_chunk = 0; MN_chunk < num_C_slices; ++MN_chunk) {
