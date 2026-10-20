@@ -12,6 +12,11 @@
 // read once, patched, written back whole (DRAM accesses are 64-byte aligned; one core per user: no read-modify-write
 // races between rows sharing a tile).
 //
+// KV_BF8 (the target's verify pass): the caches are BFP8_b (1088-byte tiles); each row's two 16-value halves per tile
+// are staged as BF16 (64 bytes per (row, h, t)) and packed into the landed tile (bfp8_row.hpp: one shared exponent per
+// 16-value face row, so a row's write leaves the tile's other rows untouched; rounded half up as the device packer of
+// paged_fused_update_cache: the same cache bytes).
+//
 // runtime args: [user, k_src, v_src, k_cache, v_cache, pos, page_table, (k_cache, v_cache) of layers 1 .. L - 1]
 // compile-time args: [cb_scr, M, kv_heads, head_tiles, block, pt_row_bytes, users, accessors (k_cache, v_cache, pos,
 // page_table, k_src)]
@@ -19,6 +24,9 @@
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
+#ifdef KV_BF8
+#include "bfp8_row.hpp"
+#endif
 
 void kernel_main() {
     const uint32_t user = get_arg_val<uint32_t>(0);
@@ -47,7 +55,11 @@ void kernel_main() {
     constexpr uint32_t n_layers = 1;
 #endif
 
+#ifdef KV_BF8
+    constexpr uint32_t tile = 1088;
+#else
     constexpr uint32_t tile = 2048;
+#endif
     constexpr uint32_t rows = M * users;       // source rows
     constexpr uint32_t row_tiles = rows / 32;  // source tile rows per head
     const auto s_pos = TensorAccessor(pos_args, pos_addr, rows * 4);
@@ -94,6 +106,14 @@ void kernel_main() {
     auto dst_l1 = [&](uint32_t l, uint32_t kv, uint32_t g, uint32_t h, uint32_t t) -> uint32_t {
         return dst + ((((l * 2 + kv) * 2 + g) * kv_heads + h) * head_tiles + t) * tile;
     };
+#ifdef KV_BF8
+    // this kernel's staged BF16 source rows (layer, row, h, t): two 32-byte halves each, after both kernels' tiles
+    const uint32_t stage =
+        dst + n_layers * 2 * 2 * kv_heads * head_tiles * tile + KV_SEL * n_layers * M * kv_heads * head_tiles * 64;
+    auto stage_l1 = [&](uint32_t l, uint32_t r, uint32_t h, uint32_t t) -> uint32_t {
+        return stage + (((l * M + r) * kv_heads + h) * head_tiles + t) * 64;
+    };
+#endif
     auto layer_arg = [&](uint32_t l, uint32_t kv, uint32_t first_arg) -> uint32_t {
         // layer l's (k, v) cache / source: runtime args first_arg + 4 (l - 1) + kv (l >= 1)
         return get_arg_val<uint32_t>(first_arg + 4 * (l - 1) + kv);
@@ -135,16 +155,50 @@ void kernel_main() {
                 for (uint32_t h = 0; h < kv_heads; ++h) {
                     for (uint32_t t = 0; t < head_tiles; ++t) {
                         const uint64_t s_ = s_s.get_noc_addr((h * row_tiles + R / 32) * head_tiles + t) + src_off;
+#ifdef KV_BF8
+                        const uint32_t d = stage_l1(l, r, h, t);
+                        for (uint32_t f = 0; f < 2; ++f) {
+                            noc_async_read(s_ + f * 512, d + f * 32, 32);
+                        }
+#else
                         const uint32_t d = dst_l1(l, kv, g, h, t) + dst_off;
                         for (uint32_t f = 0; f < 2; ++f) {
                             noc_async_read(s_ + f * 512, d + f * 512, 32);
                         }
+#endif
                     }
                 }
             }
         }
     }
     noc_async_read_barrier();
+#ifdef KV_BF8
+    // the staged BF16 halves -> BFP8_b rows of the landed tiles
+    invalidate_l1_cache();
+    for (uint32_t l = 0; l < n_layers; ++l) {
+        for (uint32_t kv = kv_lo; kv < kv_hi; ++kv) {
+            for (uint32_t r = first; r <= last; ++r) {
+                if (pos[r] < 0) {
+                    continue;
+                }
+                const uint32_t p = pos[r];
+                const uint32_t g = (p / block == bi0 && (p % block) / 32 == tr0) ? 0 : 1;
+                for (uint32_t h = 0; h < kv_heads; ++h) {
+                    for (uint32_t t = 0; t < head_tiles; ++t) {
+                        for (uint32_t f = 0; f < 2; ++f) {
+                            uint32_t shared, man[4];
+                            bfp8_row::half_row<true>(
+                                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stage_l1(l, r, h, t) + f * 32),
+                                shared,
+                                man);
+                            bfp8_row::put(dst_l1(l, kv, g, h, t), p % 32, f, shared, man);
+                        }
+                    }
+                }
+            }
+        }
+    }
+#endif
     for (uint32_t l = 0; l < n_layers; ++l) {
         for (uint32_t kv = kv_lo; kv < kv_hi; ++kv) {
             const auto s_c = TensorAccessor(kc_args, cache_addr(l, kv), tile);

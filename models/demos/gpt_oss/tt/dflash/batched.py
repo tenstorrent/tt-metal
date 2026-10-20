@@ -206,7 +206,7 @@ class _Argmax:
 
 class BatchedKVWrite:
     """Every user's block rows (rotated K / V heads in the prefill layout [1, kv_heads, rows, 64], L1 interleaved) ->
-    the users' paged BF16 caches, one core per user (fused_decode/kernels/b32_kv_write.cpp: K on BRISC, V on NCRISC),
+    the users' paged BF16 (drafter) or BFP8_b (target) caches, one core per user (fused_decode/kernels/b32_kv_write.cpp: K on BRISC, V on NCRISC),
     one or several layers per program: replaces the 8 per-step head splits + paged_fused_update_cache calls."""
 
     def __init__(self, mesh, users, block, kv_heads, head_dim, block_size):
@@ -232,6 +232,9 @@ class BatchedKVWrite:
             rt[c.x][c.y] = [u, ks[0].buffer_address(), vs[0].buffer_address(), k0.buffer_address(),
                             v0.buffer_address(), pos_ui.buffer_address(), page_table.buffer_address()] + more  # fmt: skip
         defines = [("KV_LAYERS", str(n))] if n > 1 else []
+        bf8 = k0.dtype == ttnn.bfloat8_b  # the target's cache: rows packed to BFP8_b in the kernel
+        if bf8:
+            defines.append(("KV_BF8", "1"))
         kernels = [
             ttnn.KernelDescriptor(
                 kernel_source=str(KERNEL_DIR / "b32_kv_write.cpp"),
@@ -246,7 +249,9 @@ class BatchedKVWrite:
             )
             for sel in (0, 1)
         ]
-        scratch = 512 + n * 2 * 2 * self.kv_heads * self.head_tiles * 2048
+        tile_bytes = 1088 if bf8 else 2048
+        stage = 2 * n * self.block * self.kv_heads * self.head_tiles * 64 if bf8 else 0
+        scratch = 512 + n * 2 * 2 * self.kv_heads * self.head_tiles * tile_bytes + stage
         cb = ttnn.CBDescriptor(
             total_size=scratch,
             core_ranges=self.cores,
@@ -746,27 +751,10 @@ class BatchedVerify:
         mc = model.layers[0].self_attn.mesh_config
         self.local_heads = mc.shard_size(attn0.config.num_heads)
         self.local_kv_heads = mc.shard_size(attn0.config.num_kv_heads)
-        hd = attn0.config.head_dim
+        hd = self.head_dim = attn0.config.head_dim
         self.residual_mc = width_sharded_memory_config(self.mesh, self.hidden, RESIDUAL_CORES, rows=self.rows)
-        self.head_grid_mc = ttnn.create_sharded_memory_config(
-            shape=(TILE, hd),
-            core_grid=ttnn.CoreGrid(y=8, x=8),
-            strategy=ttnn.ShardStrategy.HEIGHT,
-            orientation=ttnn.ShardOrientation.ROW_MAJOR,
-            use_height_and_width_as_shard_shape=True,
-        )
-        # full-attention layers: SDPA on the whole grid (11 x 10; the decode's 8 x 8 holds one user per core), Q read
-        # from DRAM (a sharded Q must sit on the SDPA grid's cores): at 4K context attention 22.2 -> 20.9 ms per pass,
-        # same output; the 128-token sliding-window layers keep the decode's 8 x 8 config and sharded Q
-        self.sdpa_pc = {
-            False: ttnn.SDPAProgramConfig(
-                compute_with_storage_grid_size=self.mesh.compute_with_storage_grid_size(),
-                q_chunk_size=0,
-                k_chunk_size=sdpa_decode_program_config(False).k_chunk_size,
-                exp_approx_mode=False,
-            ),
-            True: sdpa_decode_program_config(True),
-        }
+        # sliding-window layers: one decode SDPA per 32-row step (the decode's 8 x 8 config, Q read from DRAM)
+        self.sliding_pc = sdpa_decode_program_config(True)
         # the unpadded decode o_proj (batched_decode.BatchedOProj) is DRAM width-sharded: interleaved copies
         self.oproj_w = [
             ttnn.to_memory_config(layer.self_attn.batched_oproj.weight, ttnn.DRAM_MEMORY_CONFIG)
@@ -774,22 +762,20 @@ class BatchedVerify:
         ]
         # QKV / o_proj over 256 rows: the batched decode's compute config (HiFi2, BF16 accumulation in L1)
         self.qkv_ck = attn0.batched_qkv.compute_kernel_config
-        # Q and K rotated by one op and K / V written by one op (the fused decode's layout: Q heads on cores 0-31, K on
-        # 32-63; cos / sin rows for the Q users then the K users)
-        from ..model import create_rope_setup
-
-        self.rope_qk = create_rope_setup(
-            self.mesh, cfg, max_local_batch_size=users, datatype=ttnn.bfloat16, use_qk_fused=True
-        )
-        self.trans_qk = self.rope_qk.get_both_trans_mats()["decode"]
         # full-attention layers: block attention (each user's K / V read once for its 8 rows), 8 users per program on 3
         # history slices each (96 cores): 24 layers' attention at 16K context 47.9 -> 18.1 ms (16 x 1: 20.3, 4 x 6:
         # 20.6), at 300 11.3 -> 10.9 ms
         self.block_attn = _UserBlockAttention(
             self.mesh, users, block, self.local_heads, self.local_kv_heads, hd, kv_cache[1][0].shape[2], 8, 3
         )
-        # the QKV head input's width-sharded cores (interleaved_to_sharded_partial takes a rectangle)
-        self.qkv_grid = ttnn.CoreCoord(10, (self.local_heads + 2 * self.local_kv_heads) // 10)
+        # heads, RoPE and the K / V cache writes once per layer for all 256 rows (prefill-layout heads, per-row cos / sin,
+        # the multi-user BFP8_b write kernel) instead of per 32-row step (interleaved_to_sharded_partial, decode heads,
+        # fused-QK RoPE, paged_fused_update_cache: 4 x 8 ops per layer): round 42.2 -> 41.0 ms at ISL 256. The kernel
+        # packs the exact BF16 rows (round half up, as the device packer); the per-step path stored ~10% of the values
+        # one BFP8 step larger in magnitude (tests/_scratch_b32_verify.py test_kvwrite). trans_rows (the prefill RoPE
+        # transformation matrix of the target's RoPE) is set by the runner.
+        self.trans_rows = None
+        self.kv_write = BatchedKVWrite(self.mesh, users, block, self.local_kv_heads, hd, kv_cache[1][0].shape[2])
 
     def _router(self, layer, x):
         """Dense [rows, experts] routing weights: each row's softmax over its top-k logits, zeros elsewhere (as
@@ -878,11 +864,10 @@ class BatchedVerify:
         down.deallocate(True)
         return out
 
-    def _attention(self, li, layer, res, pos, rot_mats):
-        """The layer's attention for all rows: input norm, QKV and o_proj (+ all-reduce) once over the 256 rows (their
-        weights read once per pass); per 32-row step the decode attention core: heads, RoPE, paged K/V write at
-        positions start_u + i, paged SDPA decode (step i sees steps 0 .. i). res: [rows, hidden] width-sharded residual;
-        rot_mats[i]: step i's fused-QK cos / sin. Returns res + attention (same layout)."""
+    def _attention(self, li, layer, res, pos, rot):
+        """The layer's attention for all rows: input norm, QKV, the attention core (_attention_rows) and o_proj (+
+        all-reduce), each once over the 256 rows. res: [rows, hidden] width-sharded residual; rot: every row's cos / sin
+        [1, 1, rows, hd]. Returns res + attention (same layout)."""
         attn_mod, model = layer.self_attn, self.model
         w, cfg = attn_mod.weights, attn_mod.config
         nh, nkv, hd = self.local_heads, self.local_kv_heads, cfg.head_dim
@@ -898,64 +883,9 @@ class BatchedVerify:
             compute_kernel_config=self.qkv_ck,
         )
         x.deallocate(True)
-        k_cache, v_cache = self.kv_cache[li]
-        block_attn = self.block_attn is not None and not cfg.sliding_window
-        outs = []
-        for i in range(self.block):
-            # step i's 32 rows straight from the interleaved QKV into the width-sharded head input
-            part = ttnn.interleaved_to_sharded_partial(
-                qkv, self.qkv_grid, [U32, hd], self.block, i, ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-                ttnn.ShardOrientation.ROW_MAJOR,
-            )  # fmt: skip
-            # Q heads on cores 0-31, K on 32-63: Q and K rotated by one op, K and V written by one op
-            q, k, v = ttnn.experimental.nlp_create_qkv_heads_decode(
-                part, num_heads=nh, num_kv_heads=nkv, overlap_qk_coregrid=False, memory_config=self.head_grid_mc
-            )
-            part.deallocate(True)
-            cos, sin = rot_mats[i]
-            q2, k2 = ttnn.experimental.rotary_embedding_llama_fused_qk(q, k, cos, sin, self.trans_qk)
-            q.deallocate(True)
-            k.deallocate(True)
-            ttnn.experimental.paged_fused_update_cache(
-                k_cache, k2, v_cache, v, update_idxs_tensor=pos[i], page_table=self.page_table
-            )
-            k2.deallocate(True)
-            v.deallocate(True)
-            if block_attn:  # the 8 steps' Q go to block attention together
-                outs.append(q2)
-                continue
-            if not cfg.sliding_window:
-                q3 = ttnn.to_memory_config(q2, ttnn.DRAM_MEMORY_CONFIG)
-                q2.deallocate(True)
-                q2 = q3
-            outs.append(
-                ttnn.transformer.paged_scaled_dot_product_attention_decode(
-                    q2,
-                    k_cache,
-                    v_cache,
-                    cur_pos_tensor=pos[i],
-                    sliding_window_size=cfg.sliding_window,
-                    attention_sink=w.decode_sinks,
-                    page_table_tensor=self.page_table,
-                    scale=cfg.scaling,
-                    program_config=self.sdpa_pc[bool(cfg.sliding_window)],
-                    compute_kernel_config=attn_mod.program_config.get_compute_kernel_config(),
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                )
-            )
-            q2.deallocate(True)
+        sdpa = self._attention_rows(li, attn_mod, qkv, pos, rot)
         qkv.deallocate(True)
-        # [1, rows, heads, hd] (row 32 i + u) -> [1, heads, rows, hd] -> [1, 1, rows, heads * hd]: one concat, one
-        # permute and one head concat per layer (not a reshard, a head concat and a copy per step)
-        sdpa = ttnn.concat(outs, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        for t in outs:
-            t.deallocate(True)
-        if block_attn:
-            q_all = sdpa
-            sdpa = self.block_attn(
-                q_all, k_cache, v_cache, pos[self.block], self.page_table, w.decode_sinks, cfg.scaling
-            )
-            q_all.deallocate(True)
+        # [1, rows, heads, hd] (row 32 i + u) -> [1, heads, rows, hd] -> [1, 1, rows, heads * hd]
         perm = ttnn.permute(sdpa, (0, 2, 1, 3))
         sdpa.deallocate(True)
         heads = ttnn.experimental.nlp_concat_heads(perm, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -978,6 +908,57 @@ class BatchedVerify:
         summed_s.deallocate(True)
         return out
 
+    def _attention_rows(self, li, attn_mod, qkv, pos, cos_sin):
+        """The attention core for all 256 rows at once: QKV -> prefill-layout heads [1, heads, rows, hd], Q and K rotated
+        per row, K / V into the BFP8_b caches by one multi-user kernel, then block attention (full layers) or one
+        sliding-window decode SDPA per 32-row step on Q's step slice. Returns [1, rows, heads, hd] (row 32 i + u)."""
+        w, cfg = attn_mod.weights, attn_mod.config
+        nh, nkv, hd = self.local_heads, self.local_kv_heads, cfg.head_dim
+        k_cache, v_cache = self.kv_cache[li]
+        block_attn = not cfg.sliding_window
+        q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+            qkv, num_heads=nh, num_kv_heads=nkv, transpose_k_heads=False, memory_config=ttnn.L1_MEMORY_CONFIG
+        )
+        cos, sin = cos_sin
+        q2 = ttnn.experimental.rotary_embedding_llama(q, cos, sin, self.trans_rows, is_decode_mode=False)
+        q.deallocate(True)
+        k2 = ttnn.experimental.rotary_embedding_llama(k, cos, sin, self.trans_rows, is_decode_mode=False)
+        k.deallocate(True)
+        self.kv_write([k2], [v], [(k_cache, v_cache)], pos[self.block], self.page_table)
+        k2.deallocate(True)
+        v.deallocate(True)
+        q_rows = ttnn.permute(q2, (0, 2, 1, 3), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        q2.deallocate(True)
+        if block_attn:
+            out = self.block_attn(q_rows, k_cache, v_cache, pos[self.block], self.page_table, w.decode_sinks,
+                                  cfg.scaling)  # fmt: skip
+            q_rows.deallocate(True)
+            return out
+        outs = []
+        for i in range(self.block):
+            qi = ttnn.slice(q_rows, [0, i * U32, 0, 0], [1, (i + 1) * U32, nh, hd])
+            outs.append(
+                ttnn.transformer.paged_scaled_dot_product_attention_decode(
+                    qi,
+                    k_cache,
+                    v_cache,
+                    cur_pos_tensor=pos[i],
+                    sliding_window_size=cfg.sliding_window,
+                    attention_sink=w.decode_sinks,
+                    page_table_tensor=self.page_table,
+                    scale=cfg.scaling,
+                    program_config=self.sliding_pc,
+                    compute_kernel_config=attn_mod.program_config.get_compute_kernel_config(),
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+            )
+            qi.deallocate(True)
+        q_rows.deallocate(True)
+        out = ttnn.concat(outs, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        for t in outs:
+            t.deallocate(True)
+        return out
+
     def _sharded_rows(self, x, norm, residual_mc):
         """Norm each 32-row tile of x on its width-sharded residual shards (the batched decode's norm)."""
         parts = []
@@ -994,9 +975,9 @@ class BatchedVerify:
             t.deallocate(True)
         return out
 
-    def forward(self, tokens, pos, rot_idx):
-        """tokens: device [1, rows] UINT32 (row 32 i + u). pos[i] / rot_idx[i]: step i's [32] INT32 positions and
-        [1, 32] UINT32 RoPE indices. Returns (per-device argmax of every row, device features [1, 1, rows, 5 hidden]).
+    def forward(self, tokens, pos, rot):
+        """tokens: device [1, rows] UINT32 (row 32 i + u). pos[i]: step i's [32] INT32 positions (pos[block]: every
+        row's, user-major); rot: every row's cos / sin [1, 1, rows, hd] (BatchedDraft.rows_cos_sin). Returns (per-device argmax of every row, device features [1, 1, rows, 5 hidden]).
         """
         _TPAllReduce.reset()
         model = self.model
@@ -1005,13 +986,8 @@ class BatchedVerify:
         feats = []
         res = ttnn.to_memory_config(x, self.residual_mc, dtype=ttnn.bfloat16)
         x.deallocate(True)
-        rot_mats = []  # every layer's RoPE rows of step i (once per pass, not per layer)
-        for r in rot_idx:
-            r2 = ttnn.concat([r, r], dim=1)  # the Q users' rows, then the K users'
-            rot_mats.append(self.rope_qk.get_rot_mats(r2))
-            r2.deallocate(True)
         for li, layer in enumerate(model.layers):
-            res2 = self._attention(li, layer, res, pos, rot_mats)
+            res2 = self._attention(li, layer, res, pos, rot)
             res.deallocate(True)
             n2 = layer.post_attention_layernorm.forward_sharded(res2)
             normed = ttnn.to_memory_config(n2, ttnn.DRAM_MEMORY_CONFIG)
@@ -1029,8 +1005,6 @@ class BatchedVerify:
             x = x2
             if li < len(model.layers) - 1:
                 x2.deallocate(True)
-        for t in (t for pair in rot_mats for t in pair):
-            t.deallocate(True)
         features = ttnn.concat(feats, dim=-1)
         for t in feats:
             t.deallocate(True)
@@ -1071,6 +1045,7 @@ class BatchedDFlashRunner:
         self.capture = TargetCapture(model, self.draft.target_layer_ids)
         kv = kv_cache[0] if isinstance(kv_cache[0][0], list) else kv_cache
         self.verify = BatchedVerify(model, self.page_table, kv, users, B, self.draft.target_layer_ids)
+        self.verify.trans_rows = self.draft.rope.get_both_trans_mats()["prefill"]  # (the target's RoPE)
         # persistent per-round inputs (the traces' inputs)
         z = torch.zeros(users, dtype=torch.int32)
         self.d_tokens = _replicate(mesh, torch.zeros(1, self.rows, dtype=torch.int32), ttnn.uint32)
@@ -1079,17 +1054,14 @@ class BatchedDFlashRunner:
         self.pos = [_replicate(mesh, z, ttnn.int32) for _ in range(B)] + [
             _replicate(mesh, torch.zeros(self.rows, dtype=torch.int32), ttnn.int32)
         ]
-        self.rot = [_replicate(mesh, z.reshape(1, users), ttnn.uint32) for _ in range(B)]
         self.bound = _replicate(mesh, z, ttnn.int32)
         self.pos_rows = _replicate(mesh, torch.zeros(1, self.rows, dtype=torch.int32), ttnn.uint32)
         # the per-round inputs travel as two packed host writes (int32: per-step positions, user-major positions, the
-        # draft bound; uint32: the draft tokens, RoPE indices, per-row positions), unpacked on device into the tensors
-        # above at the start of a pass (one host-to-device copy each instead of 19)
+        # draft bound; uint32: the draft tokens, per-row positions), unpacked on device into the tensors above at the
+        # start of a pass (one host-to-device copy each instead of 11)
         U = users
         self.unpack_i = [(t, [U]) for t in self.pos[:B]] + [(self.pos[B], [self.rows]), (self.bound, [U])]
-        self.unpack_u = (
-            [(self.d_tokens, [1, self.rows])] + [(t, [1, U]) for t in self.rot] + [(self.pos_rows, [1, self.rows])]
-        )
+        self.unpack_u = [(self.d_tokens, [1, self.rows]), (self.pos_rows, [1, self.rows])]
         n_i = sum(math.prod(shape) for _, shape in self.unpack_i)
         n_u = sum(math.prod(shape) for _, shape in self.unpack_u)
         self.in_i = _replicate(mesh, torch.zeros(1, n_i, dtype=torch.int32), ttnn.int32)
@@ -1146,19 +1118,28 @@ class BatchedDFlashRunner:
 
     def _draft_pass(self):
         self._unpack()
-        return self.draft.draft(self.d_tokens, self.pos, self._rot_mats(), self.bound)
+        rot = self._rot_mats()
+        out = self.draft.draft(self.d_tokens, self.pos, rot, self.bound)
+        for t in rot:
+            t.deallocate(True)
+        return out
 
     def _verify_pass(self):
         self._unpack()  # (the step-by-step path may run verify without a draft pass)
-        out, features = self.verify.forward(self.v_tokens, self.pos, self.rot)
-        self.draft.context(features, self.pos, self._rot_mats())
+        rot = self._rot_mats()  # every verify row's cos / sin: the target's layers and the drafter's context
+        out, features = self.verify.forward(self.v_tokens, self.pos, rot)
+        self.draft.context(features, self.pos, rot)
         features.deallocate(True)
+        for t in rot:
+            t.deallocate(True)
         return out
 
     def _round_pass(self):
         """A whole round on the device: draft, the devices' argmax combined, the verify block [last token, 7 drafts]
         built from it, verify + context. Returns the draft and verify token ids ([1, 1, rows, 1] FLOAT32)."""
-        d_out = self._draft_pass()
+        self._unpack()
+        rot = self._rot_mats()  # (the draft block's positions are the verify block's: one cos / sin for the round)
+        d_out = self.draft.draft(self.d_tokens, self.pos, rot, self.bound)
         d_tok = self.draft.argmax.combine(d_out, self.mesh)
         for t in d_out:
             t.deallocate(True)
@@ -1169,10 +1150,12 @@ class BatchedDFlashRunner:
         lasts.deallocate(True)
         v_tokens = ttnn.reshape(ttnn.to_layout(ttnn.typecast(vt, ttnn.uint32), ttnn.ROW_MAJOR_LAYOUT), [1, self.rows])
         vt.deallocate(True)
-        out, features = self.verify.forward(v_tokens, self.pos, self.rot)
+        out, features = self.verify.forward(v_tokens, self.pos, rot)
         v_tokens.deallocate(True)
-        self.draft.context(features, self.pos, self._rot_mats())
+        self.draft.context(features, self.pos, rot)
         features.deallocate(True)
+        for t in rot:
+            t.deallocate(True)
         v_tok = self.verify.argmax.combine(out, self.mesh)
         for t in out:
             t.deallocate(True)
@@ -1202,7 +1185,7 @@ class BatchedDFlashRunner:
         rows_i = ttnn.reshape(steps, [1, 1, 1, self.rows])
         rows_u = ttnn.reshape(ttnn.transpose(steps, -2, -1), [1, 1, 1, self.rows])
         vi = ttnn.concat([rows_i, rows_u, start + float(B - 1)], dim=-1)
-        vu = ttnn.concat([last, self.mask_rest, rows_i, rows_i], dim=-1)
+        vu = ttnn.concat([last, self.mask_rest, rows_i], dim=-1)
         for src, dst, dtype in ((vi, self.in_i, ttnn.int32), (vu, self.in_u, ttnn.uint32)):
             t = ttnn.reshape(ttnn.to_layout(ttnn.typecast(src, dtype), ttnn.ROW_MAJOR_LAYOUT), list(dst.shape))
             ttnn.copy(t, dst)
@@ -1240,7 +1223,7 @@ class BatchedDFlashRunner:
         st = torch.tensor(starts, dtype=torch.int32)
         steps = st[None] + torch.arange(B)[:, None]  # [step i, user u]: start_u + i
         vi = torch.cat([steps.reshape(-1), steps.T.reshape(-1), st + B - 1])
-        vu = torch.cat([toks.reshape(-1), steps.reshape(-1), steps.reshape(-1)])
+        vu = torch.cat([toks.reshape(-1), steps.reshape(-1)])
         _copy(mesh, self.in_i, vi.reshape(1, -1), ttnn.int32)
         _copy(mesh, self.in_u, vu.reshape(1, -1), ttnn.uint32)
 

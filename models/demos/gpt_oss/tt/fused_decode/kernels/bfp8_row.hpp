@@ -12,6 +12,9 @@ namespace bfp8_row {
 // One BF16 value (bits b) as a BFP8_b byte under shared exponent `shared`: sign | 7-bit magnitude = the 8-bit
 // significand (hidden bit included) shifted right by shared - exponent + 1, rounded to nearest even and saturated (the
 // rounding of tt_metal's host BFP8 packer); zero / denormal inputs and magnitudes that round to 0 give 0.
+// HALF_UP: round half up instead (the device packer's rounding: a BF16 tile packed to BFP8_b on device, e.g. by
+// paged_update_cache; measured equal on random tiles, tests/_scratch_bf8_round.py).
+template <bool HALF_UP = false>
 inline uint32_t byte(uint32_t b, uint32_t shared) {
     // branchless: round to nearest even as (sig + half - 1 + lsb) >> shift (exhaustively equal to the branchy form)
     const uint32_t e = (b >> 7) & 0xFF;
@@ -19,13 +22,15 @@ inline uint32_t byte(uint32_t b, uint32_t shared) {
     const uint32_t valid = (e != 0) & (shift_ <= 8);
     const uint32_t shift = valid ? shift_ : 8;
     const uint32_t sig = 0x80 | (b & 0x7F);
-    uint32_t q = (sig + (1u << (shift - 1)) - 1 + ((sig >> shift) & 1)) >> shift;
+    uint32_t q = HALF_UP ? (sig + (1u << (shift - 1))) >> shift
+                         : (sig + (1u << (shift - 1)) - 1 + ((sig >> shift) & 1)) >> shift;
     q -= q >> 7;  // 128 -> 127 (saturate)
     q = valid ? q : 0;
     return q ? (((b >> 15) << 7) | q) : 0;
 }
 
 // 16 BF16 values (8 words at in) -> the shared exponent and 4 mantissa words
+template <bool HALF_UP = false>
 inline void half_row(volatile tt_l1_ptr uint32_t* in, uint32_t& shared, uint32_t* man) {
     uint32_t v[16];
     shared = 0;
@@ -39,8 +44,8 @@ inline void half_row(volatile tt_l1_ptr uint32_t* in, uint32_t& shared, uint32_t
         shared = e1 > shared ? e1 : shared;
     }
     for (uint32_t q = 0; q < 4; ++q) {
-        man[q] = byte(v[4 * q], shared) | (byte(v[4 * q + 1], shared) << 8) | (byte(v[4 * q + 2], shared) << 16) |
-                 (byte(v[4 * q + 3], shared) << 24);
+        man[q] = byte<HALF_UP>(v[4 * q], shared) | (byte<HALF_UP>(v[4 * q + 1], shared) << 8) |
+                 (byte<HALF_UP>(v[4 * q + 2], shared) << 16) | (byte<HALF_UP>(v[4 * q + 3], shared) << 24);
     }
 }
 
