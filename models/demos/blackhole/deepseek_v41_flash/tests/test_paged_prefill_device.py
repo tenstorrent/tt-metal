@@ -8,7 +8,7 @@ re-captured and the same users are prefilled through ``prefill_interleaved`` (pr
 first token and last-token logits (bit equality, max abs diff), the whole pool (pages + rings, everything below the scratch region: bit equality), and per mode the replay time per chunk and the
 DRAM per bank after the capture.
 
-Env: DSV41_LAYERS (default 0-24), PP_U (users per row, 4), PP_ISL (4096), PP_CHUNK (512), PP_MODES, PP_REPS (timed repetitions, 2), DSV41_POOL_DTYPE must stay unset (bf16 pool).
+Env: DSV41_LAYERS (default 0-24), PP_PAGES (pages per mesh row of the pool), PP_U (users per row, 4), PP_ISL (4096), PP_CHUNK (512), PP_MODES, PP_REPS (timed repetitions, 2), DSV41_POOL_DTYPE must stay unset (bf16 pool).
     DSV41_PF_PAGED=write DSV41_PREFILL_UP=1 DSV41_PF_UMASK=1 pytest tests/test_paged_prefill_device.py -s
 """
 
@@ -70,6 +70,10 @@ def _run(mesh_device):
     S_pad = -(-ISL // CHUNK) * CHUNK
     max_ctx = max(ISL + 64, S_pad)
     pp = default_page_params(max_ctx, U)
+    if os.environ.get(
+        "PP_PAGES"
+    ):  # pages per mesh row (default: all users x max_ctx): a smaller pool lets the bf16 pool + dense tables fit at 1M
+        pp["page_max_num_blocks_per_dp"] = int(os.environ["PP_PAGES"])
     args, m, pool, _ = create_tt_model(
         md,
         B,
