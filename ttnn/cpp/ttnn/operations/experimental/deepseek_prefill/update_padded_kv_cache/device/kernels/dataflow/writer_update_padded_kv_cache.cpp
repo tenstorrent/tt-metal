@@ -70,16 +70,6 @@ inline void load_page_window(
     windows.count[w] = entries;
 }
 
-// The page-table accessor follows the cache accessor and, on the metadata path, the metadata accessor.
-template <bool HasMeta, uint32_t AfterCache>
-constexpr uint32_t page_table_args_offset() {
-    if constexpr (HasMeta) {
-        return TensorAccessorArgs<AfterCache>().next_compile_time_args_offset();
-    } else {
-        return AfterCache;
-    }
-}
-
 }  // namespace
 
 // CB -> cache writer for the per-chip-offset kv-cache update op.
@@ -206,8 +196,12 @@ static void run_writer() {
     uint32_t page_rows = 1;
     uint32_t pool_pages = 0;
     if constexpr (Paged) {
-        constexpr auto table_args =
-            TensorAccessorArgs<page_table_args_offset<HasMeta, cache_args.next_compile_time_args_offset()>()>();
+        // The page-table accessor follows the cache accessor and, on the metadata path, the metadata accessor
+        // (whose args are named only when present, as for kMetaArgsOffset above).
+        constexpr uint32_t after_cache = cache_args.next_compile_time_args_offset();
+        constexpr uint32_t table_args_offset =
+            HasMeta ? TensorAccessorArgs<HasMeta ? after_cache : 0>().next_compile_time_args_offset() : after_cache;
+        constexpr auto table_args = TensorAccessorArgs<table_args_offset>();
         const auto table = TensorAccessor(table_args, get_common_arg_val<uint32_t>(12));
         page_rows = get_common_arg_val<uint32_t>(13);
         const uint32_t table_width = get_common_arg_val<uint32_t>(14);
