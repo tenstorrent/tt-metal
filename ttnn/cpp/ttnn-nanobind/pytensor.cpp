@@ -232,8 +232,7 @@ RowMajorHostBuffer convert_block_float_to_logical_row_major(const HostBuffer& bu
             tensor_spec.logical_shape(),
             tensor_spec.padded_shape()));
     auto logical_data =
-        HostTensor::from_buffer(unpack_block_float_tiles_to_float(buffer, tensor_spec), decode_spec)
-            .to_vector<float>();
+        HostTensor::from_buffer(unpack_block_float_tiles_to_float(buffer, tensor_spec), decode_spec).to_vector<float>();
     return RowMajorHostBuffer::create_logical(HostBuffer(std::move(logical_data)), tensor_spec);
 }
 
@@ -272,8 +271,7 @@ RowMajorHostBuffer convert_to_row_major_host_buffer(const Tensor& tt_tensor, con
         // Previous impl only copied if data needed transformation. Instead *always* copy
         // because the HostBuffer will be returned directly to the other python frameworks
         // wrapped in an ndarray
-        auto logical_data =
-            HostTensor::from_buffer(std::move(host_buffer), tensor_spec).to_vector<T>();
+        auto logical_data = HostTensor::from_buffer(std::move(host_buffer), tensor_spec).to_vector<T>();
         return RowMajorHostBuffer::create_logical(HostBuffer(std::move(logical_data)), tensor_spec);
     };
 
@@ -443,8 +441,7 @@ void pytensor_module_types(nb::module_& mod) {
         .def_ro("core_coord", &L1TensorExtent::core_coord)
         .def_ro("address", &L1TensorExtent::address)
         .def_ro("size", &L1TensorExtent::size);
-    nb::class_<L1TensorViewPlacement>(
-        mod, "L1TensorViewPlacement", "Absolute non-owning address on one device/core.")
+    nb::class_<L1TensorViewPlacement>(mod, "L1TensorViewPlacement", "Absolute non-owning address on one device/core.")
         .def(nb::init<distributed::MeshCoordinate, CoreCoord, DeviceAddr>())
         .def_ro("device_coord", &L1TensorViewPlacement::device_coord)
         .def_ro("core_coord", &L1TensorViewPlacement::core_coord)
@@ -580,14 +577,18 @@ void pytensor_module(nb::module_& mod) {
         [](Tensor& view, const std::vector<Tensor>& owners) {
             std::vector<DeviceStorage> storage;
             for (const auto& owner : owners) {
-                TT_FATAL(&owner.device_storage().get_mesh_tensor().device() == &view.device_storage().get_mesh_tensor().device(),
-                         "Backing storage uses a different mesh");
+                TT_FATAL(
+                    &owner.device_storage().get_mesh_tensor().device() ==
+                        &view.device_storage().get_mesh_tensor().device(),
+                    "Backing storage uses a different mesh");
                 storage.push_back(owner.device_storage());
             }
             view.device_storage().retain_backing_storage(std::move(storage));
         },
-        nb::arg("view"), nb::arg("owners"),
-        "Retain caller-validated backing through native tensor copies; explicit backing deallocation remains prohibited.");
+        nb::arg("view"),
+        nb::arg("owners"),
+        "Retain caller-validated backing through native tensor copies; explicit backing deallocation remains "
+        "prohibited.");
     mod.def(
         "decorate_external_operation",
         [](const nb::callable& function, const std::optional<std::string>& function_name) -> nb::object {
@@ -1683,8 +1684,7 @@ void pytensor_module(nb::module_& mod) {
         .def(
             "buffer_unique_id",
             [](const Tensor& self) -> std::optional<size_t> {
-                if (!is_device_tensor(self) || !self.is_allocated() ||
-                    !self.device_storage().is_root_allocated()) {
+                if (!is_device_tensor(self) || !self.is_allocated() || !self.device_storage().is_root_allocated()) {
                     return std::nullopt;
                 }
                 auto* backing = self.device_storage().get_root_mesh_buffer().get_backing_buffer();
@@ -1876,20 +1876,26 @@ void pytensor_module(nb::module_& mod) {
         "experimental_allocate_single_device_tensor",
         [](distributed::MeshDevice& mesh, const distributed::MeshCoordinate& coord, const TensorSpec& spec) {
             TT_FATAL(spec.memory_config().buffer_type() == BufferType::L1, "Extent acquisition requires L1");
-            TT_FATAL(experimental::per_core_allocation::is_per_core_allocation(spec.compute_buffer_sharding_args()),
-                     "Extent acquisition requires per-core allocation");
+            TT_FATAL(
+                experimental::per_core_allocation::is_per_core_allocation(spec.compute_buffer_sharding_args()),
+                "Extent acquisition requires per-core allocation");
             auto buffer = experimental::per_core_allocation::create_on_single_device(
-                distributed::ReplicatedBufferConfig{.size = spec.compute_packed_buffer_size_bytes()},
-                distributed::DeviceLocalBufferConfig{
+                tt::tt_metal::distributed::ReplicatedBufferConfig{.size = spec.compute_packed_buffer_size_bytes()},
+                tt::tt_metal::distributed::DeviceLocalBufferConfig{
                     .page_size = spec.compute_page_size_bytes(),
                     .buffer_type = spec.memory_config().buffer_type(),
                     .sharding_args = spec.compute_buffer_sharding_args()},
-                &mesh, coord);
-            TensorTopology topology(distributed::MeshShape(1, 1), {distributed::MeshMapperConfig::Replicate{}}, {coord});
+                &mesh,
+                coord);
+            TensorTopology topology(
+                distributed::MeshShape(1, 1), {distributed::MeshMapperConfig::Replicate{}}, {coord});
             return Tensor(DeviceStorage(
                 mesh_tensor_from_buffer_with_topology(std::move(*buffer), spec, std::move(topology)), {coord}));
         },
-        nb::arg("mesh_device").noconvert(), nb::arg("coord"), nb::arg("tensor_spec"), nb::keep_alive<0, 1>(),
+        nb::arg("mesh_device").noconvert(),
+        nb::arg("coord"),
+        nb::arg("tensor_spec"),
+        nb::keep_alive<0, 1>(),
         "Allocate per-core L1 on one device without initializing or uploading any bytes.");
     mod.def(
         "experimental_to_single_device",
