@@ -354,11 +354,13 @@ class _LayerTimer:
 
 
 @torch.inference_mode()
-def generate(model, lm_w, ids: list[int], gen: int, chunk: int, stop: set[int], *, log=print) -> dict:
+def generate(model, lm_w, ids: list[int], gen: int, chunk: int, stop: set[int], *, log=None) -> dict:
     """Chunked prefill of ``ids`` through the HF cache, then greedy decode of up to ``gen`` tokens (the first from
     the prefill's last-token logits), stopping after an eos like the mesh test. Returns ids, logits top-20, times."""
     from transformers import DynamicCache
 
+    if log is None:
+        log = lambda m: print(m, flush=True)  # noqa: E731
     cache = DynamicCache(config=model.config)
     S = len(ids)
     x = torch.tensor([ids], dtype=torch.long)

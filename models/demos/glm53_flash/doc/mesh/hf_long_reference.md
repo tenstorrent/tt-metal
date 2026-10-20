@@ -66,4 +66,12 @@ text, top-20 last-token logits, per-step top-5, wall times, needle flag, config)
 
 ## Results
 
-(filled in as the runs complete; see `/home/ttuser/ashai/glm53/_agents/hfref/STATUS.md` for the live state)
+| run | result |
+|---|---|
+| `--selftest` (blocked indexer vs stock, S=300 + 1-token step, S=257 + 5-token step) | same top-k sets |
+| `--validate-g16 --attn eager` (13-token prompt, 16 greedy tokens) | all 16 tokens identical to FULLMODEL_G16, top-5 ids identical at every step, max abs logit difference 0.000 |
+| `--validate-g16 --attn sdpa` | pending |
+| NEEDLE_4096 / NEEDLE_16384 / NEEDLE_65536 | pending (see `/home/ttuser/ashai/glm53/_agents/hfref/STATUS.md`) |
+
+Host (AMD EPYC 9354P 32c/64t, avx512_bf16, shared with two other jobs at the time): 13-token prefill 61 s, decode
+16-63 s per token (8 experts x 42 layers dequantized per step, ~8 GB of shard reads).
