@@ -486,6 +486,10 @@ def _scan_sp_grouped_chunks(
             emit_outputs=correct,
             emit_memory_config=correction.terms_memory_config if correct else None,
         )
+        if correct:
+            # The summary is the chunk terms' last reader: free their L1 before the relay and its companion.
+            for tensor in grouped.as_kernel_args():
+                ttnn.deallocate(tensor)
         if ring_relay is not None:
             group_entry_states, prefix_final_state = ring_relay(
                 packed, initial_state, actual_start, companion=prefix_companion
