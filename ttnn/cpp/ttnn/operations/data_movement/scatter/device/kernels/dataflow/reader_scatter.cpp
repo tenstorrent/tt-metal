@@ -6,6 +6,8 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/scratchpad.h"
+#include "api/core_local_mem.h"
+#include "api/dataflow/endpoints.h"
 #include "experimental/kernel_args.h"
 #include "../common.hpp"
 
@@ -133,6 +135,7 @@ void kernel_main() {
             const uint32_t input_chunk_length = std::min(input_stick_size - input_offset, input_and_output_chunk_size);
 
             // first phase: copy input data to output
+#ifdef ARCH_QUASAR
             load_to_scratchpad(
                 noc,
                 input_page,
@@ -147,6 +150,19 @@ void kernel_main() {
                 auto input_lock = input_page.scoped_lock(0, input_chunk_length);
                 copy_input_to_output<input_std_type>(input_page, output_dfb, input_chunk_length);
             }
+#else
+            // WH/BH: the NoC reads the input chunk straight into the output page. The element-by-element copy
+            // out of a scratchpad cost more than the scatter itself (one volatile load + store per element: a
+            // 33K-element fp32 row took ~300 us on BH).
+            output_dfb.reserve_back(ONE_PAGE);
+            noc.async_read(
+                PrecomposedUnicastEndpoint{},
+                CoreLocalMem<uint32_t>(output_dfb.get_write_ptr()),
+                input_chunk_length * sizeof(input_std_type),
+                {.noc_addr = input_addr_gtor.get_noc_addr(input_stick_id) + input_offset * sizeof(input_std_type)},
+                {});
+            noc.async_read_barrier();
+#endif
 
             if (in_bounds<N>(coord, index_dims)) {
                 const uint32_t index_stick_id = to_id<N>(coord, index_strides);
