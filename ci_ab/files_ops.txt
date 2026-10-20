@@ -1,0 +1,15 @@
+tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_topk.h
+tt_metal/hw/inc/api/compute/topk.h
+tt_metal/tt-llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_topk.h
+ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/compute/sort_cross_core_data_exchange.cpp
+ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/compute/sort_single_row_multi_core.cpp
+ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/compute/sort_single_row_single_core.cpp
+ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/moe_grouped_topk/device/kernels/compute/moe_gate_common_compute.hpp
+ttnn/cpp/ttnn/operations/experimental/reduction/deepseek_grouped_gate/device/kernels/compute/deepseek_grouped_gate.cpp
+ttnn/cpp/ttnn/operations/experimental/topk_router_gpt/device/kernels/compute.cpp
+ttnn/cpp/ttnn/operations/reduction/moe/device/kernels/compute/moe.cpp
+ttnn/cpp/ttnn/operations/reduction/sampling/device/kernels/compute/sampling.cpp
+ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/compute/topk_common_funcs.hpp
+ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/compute/topk_final.cpp
+ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/compute/topk_local.cpp
+ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/compute/topk_local_tree_merge.cpp
