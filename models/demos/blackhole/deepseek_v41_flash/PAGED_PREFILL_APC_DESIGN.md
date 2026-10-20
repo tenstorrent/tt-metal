@@ -1253,3 +1253,21 @@ Users 0/5/10/15 with 262144 / 261947 / 261117 / 261632 tokens (512 chunks per us
 | free / largest block per bank | 583.7 / 515.4 MiB | 583.7 / 519.9 | 662.9 / 535.9 |
 
 The speed-up is larger than the note's estimate (P.6: -1.5 % at 262,144, from the FIFO shift alone): the removed latent FIFO shifts + user-mask gates + the table copy of the window rows are worth 23 ms per chunk, 5.4 %. Log: `/mnt/tt-data/ssinghal/dsv4-logs/paged_prefill/t256k_L40.log`.
+
+### 1M build (max_ctx 1,000,064, S_pad 1,000,448), all 40 layers, B=4 (1 user per mesh row, Up=1), chunk 512, trace region 650 MB, .46, `DSV41_MO_OVERLAP=0` [T]
+
+Users 0 / 1 with 1,000,000 / 999,803 tokens (1954 chunks). A bf16 pool next to the dense tables does not fit at 1M (note P.5), so the comparison is across two boots: dense with the production **fp8** pool (the dense prefill reads the bf16 tables, its logits do not depend on the pool dtype), read with a **bf16** pool; logits saved by the first, compared by the second. No pool comparison and no `write` mode at this size.
+
+| | dense (fp8 pool, production) | read (PF2, bf16 pool) |
+|---|---|---|
+| first tokens | 26704 / 1831 | same |
+| last-token logits | reference | **bit-equal (max abs 0)** |
+| replay of 1954 chunks | 1463.955 s (**749.2 ms/chunk**) | 1060.576 s (**542.8 ms/chunk, -27.5 %**) |
+| DRAM allocated per bank (after capture + run) | 3659.9 MiB | 3508.3 MiB (-151.6 MiB) |
+| free / largest block per bank | 337.0 / 235.1 MiB | 488.6 / 311.2 MiB |
+
+The -151.6 MiB per bank is the net of the removed tables (2.50 + 0.04 GiB = ~325 MiB per bank) and the bf16 pool of the two admitted prompts (the pool here holds 1 user per row: 7,813 pages bf16 vs fp8 = +~125 MiB per bank over the fp8 pool); the production pool (4 users per row sharing the row's pages) is analysed in P.5. The -27.5 % chunk time is far above the note's estimate (-4 %, P.6, shift only): the in-place FIFO shift in 16,384-row pieces, the `umask` gates and the table copies are about 207 ms per chunk at 1M. Logs: `t1m_dense.log`, `t1m_read.log`, `t1m_dense_logits.pt`.
+
+### Prefill slots
+
+All tables above used `DSV41_PREFILL_UP=1` (production). A `DSV41_PREFILL_UP=4` 262,144 B=16 run hung (pytest alive 2 h 50 min, no progress after the JIT of the first chunk; killed, `.46` reset); it was not chased (UP=4 also hung the production server under load, and UP=1 with `DSV41_KEY_EXPORT_FILL=1` is the correct production config). The paged code indexes by prefill slot (scratch region, page-table rows, window ids, the translation kernel's per-slot user), nothing assumes Up = 1.
