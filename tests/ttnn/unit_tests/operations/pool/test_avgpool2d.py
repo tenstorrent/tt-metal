@@ -209,8 +209,6 @@ def test_avg_pool2d_dram_post_commit(
 def test_avg_pool2d_dram_slice_tile_out(
     device, tensor_map, input_shape, kernel_size, stride, padding, ceil_mode, count_include_pad
 ):
-    # TILE output rounds the output width of each height slice up to a tile. The extra outputs must not shift the
-    # windows, and must not change the divisor of the last window in ceil mode.
     dram_slice_config = ttnn.Op2DSliceConfig(num_slices=2, slice_type=ttnn.Op2DDRAMSliceHeight)
 
     run_avg_pool2d(
