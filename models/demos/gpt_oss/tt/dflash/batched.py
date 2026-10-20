@@ -637,6 +637,68 @@ def _gu_joint(gT, uT, D, gx):
          for d in range(D) for j in range(gx)], dim=1)  # fmt: skip
 
 
+def _qkv_rope(mesh, trans, qkv, cos, sin, na, nb, rope_heads, headnorm=None):
+    """A QKV projection [1, 1, rows, heads 64] -> its heads in three heads-layout tensors (heads 0 .. na - 1, the next
+    nb, the rest), heads < rope_heads rotated (rotary_embedding_llama's prefill mode, the rotation tile trans), in one
+    program (fused_decode/kernels/qkv_rope_*.cpp): one core per (32-row tile, 2 heads). headnorm = (gq, gk, nq, eps):
+    the rotated heads RMS-normed per head first (heads < nq with the weight tiles gq [1, 1, 32, 64], the others gk), as
+    ttnn.rms_norm on the heads layout."""
+    from ..fused_decode.boundary import KERNEL_DIR
+
+    rows, nt = qkv.shape[-2], qkv.shape[-1] // TILE
+    heads, hd = nt // 2, 2 * TILE
+    hpc = 2
+    gx, gy = heads // hpc, rows // TILE
+    assert gx * hpc == heads and gx <= 11
+    mk = lambda n: ttnn.empty([1, n, rows, hd], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh,
+                              memory_config=ttnn.L1_MEMORY_CONFIG)  # fmt: skip
+    a, b, c = mk(na), mk(nb), mk(heads - na - nb)
+    cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(gx - 1, gy - 1))])
+    cb_x, cb_cos, cb_sin, cb_t, cb_out, cb_g, cb_sc, cb_sq, cb_rs, cb_tn, cb_nrm = range(11)
+    rin = [qkv, cos, sin, trans] + ([headnorm[0], headnorm[1]] if headnorm else [])
+    rct = [cb_x, cb_cos, cb_sin, cb_t, hpc, nt, cb_g, cb_sc, rope_heads]
+    for t in rin:
+        rct += ttnn.TensorAccessorArgs(t).get_compile_time_args()
+    wct = [cb_out, hpc, na, gy, nb]
+    for t in (a, b, c):
+        wct += ttnn.TensorAccessorArgs(t).get_compile_time_args()
+    f32 = lambda v: struct.unpack("<I", struct.pack("<f", v))[0]
+    defines = [("QR_HEADNORM", "1"), ("QR_NQ", str(headnorm[2]))] if headnorm else []
+    dm = ttnn.DataMovementConfigDescriptor
+    kernels = [
+        ttnn.KernelDescriptor(
+            kernel_source=str(KERNEL_DIR / "qkv_rope_reader.cpp"), core_ranges=cores, compile_time_args=rct,
+            runtime_args=[], common_runtime_args=[t.buffer_address() for t in rin], defines=defines,
+            config=dm(processor=ttnn.DataMovementProcessor.RISCV_1, noc=ttnn.NOC.NOC_0),
+        ),
+        ttnn.KernelDescriptor(
+            kernel_source=str(KERNEL_DIR / "qkv_rope_writer.cpp"), core_ranges=cores, compile_time_args=wct,
+            runtime_args=[], common_runtime_args=[t.buffer_address() for t in (a, b, c)],
+            config=dm(processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.NOC_1),
+        ),
+        ttnn.KernelDescriptor(
+            kernel_source=str(KERNEL_DIR / "qkv_rope_compute.cpp"), core_ranges=cores,
+            compile_time_args=[cb_x, cb_cos, cb_sin, cb_t, cb_out, hpc, rope_heads, cb_g, cb_sc, cb_sq, cb_rs, cb_tn,
+                               cb_nrm, f32(1.0 / hd), f32(headnorm[3] if headnorm else 0.0)],
+            runtime_args=[], defines=defines,
+            config=ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True,
+                                                math_approx_mode=False),
+        ),
+    ]  # fmt: skip
+
+    def cb(i, pages, dt=ttnn.bfloat16, page=2048):
+        return ttnn.CBDescriptor(total_size=page * pages, core_ranges=cores,
+                                 format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=i, data_format=dt,
+                                                                             page_size=page)])  # fmt: skip
+
+    cbs = [cb(cb_x, 2 * hpc), cb(cb_cos, 2), cb(cb_sin, 2), cb(cb_t, 1), cb(cb_out, 2)]
+    if headnorm:
+        cbs += [cb(cb_g, 2 * hpc), cb(cb_sc, 1), cb(cb_sq, 2, ttnn.float32, 4096), cb(cb_rs, 1, ttnn.float32, 4096),
+                cb(cb_tn, 2, ttnn.float32, 4096), cb(cb_nrm, 2)]  # fmt: skip
+    ttnn.generic_op(rin + [a, b, c], ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs))
+    return a, b, c
+
+
 class BatchedDraft:
     """The z-lab drafter (8 layers, TP like a dense target layer) for `users` sequences, each with its own paged BF16
     K/V cache; draft and context passes over all users' rows at once."""
@@ -729,6 +791,13 @@ class BatchedDraft:
                     kv_b=put(kv_only(qb, kb, vb).reshape(1, -1), cols),
                     q_norm=norm_w(reverse_permute_1d(w[a + "q_norm.weight"])),
                     k_norm=norm_w(reverse_permute_1d(w[a + "k_norm.weight"])),
+                    # (the per-head norm weights as [32, 64] tiles, every row the weights: _qkv_rope's headnorm)
+                    q_norm_t=put(
+                        reverse_permute_1d(w[a + "q_norm.weight"]).float()[None, :].expand(TILE, -1).contiguous()
+                    ),
+                    k_norm_t=put(
+                        reverse_permute_1d(w[a + "k_norm.weight"]).float()[None, :].expand(TILE, -1).contiguous()
+                    ),
                     o=put(w[a + "o_proj.weight"].T, rows, dtype=wdt),
                     o_b=put(w[a + "o_proj.bias"].reshape(1, -1)),
                     g=put(g.T, cols, dtype=wdt),  # gate and up as two matmuls: no slices of a joint output
@@ -942,11 +1011,15 @@ class BatchedDraft:
         """[1, 1, rows, qkv] projection -> (Q or None, K, V) heads in the prefill layout [1, heads, rows, hd] (L1),
         K (and Q) head-normed and rotated, every row at its own position. nq: the projection's q heads (the context
         pass's K / V projection carries an nkv-head q stub)."""
+        trans = self.rope.get_both_trans_mats()["prefill"]
+        if with_q and nq is None and qkv.shape[-2] == self.rows and os.environ.get("B32_DRAFT_QKV_ROPE", "1") == "1":
+            # heads split + per-head norms + RoPE in one program (_qkv_rope)
+            return _qkv_rope(self.mesh_device, trans, qkv, cos, sin, self.nq, self.nkv, self.nq + self.nkv,
+                             headnorm=(L["q_norm_t"], L["k_norm_t"], self.nq, self.eps))  # fmt: skip
         q, k, v = ttnn.experimental.nlp_create_qkv_heads(
             qkv, num_heads=nq or self.nq, num_kv_heads=self.nkv, transpose_k_heads=False,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )  # fmt: skip
-        trans = self.rope.get_both_trans_mats()["prefill"]
 
         def norm_rope(t, w):
             n = ttnn.rms_norm(t, epsilon=self.eps, weight=w, compute_kernel_config=self.ck)
@@ -1634,56 +1707,8 @@ class BatchedVerify:
         return out
 
     def _qkv_rope_heads(self, qkv, cos, sin, rope_heads, hd):
-        """qkv [1, 1, rows, (rope_heads + 2) hd] -> (the rotated Q and K heads [1, rope_heads, rows, hd], V heads 0 / 1
-        [1, 1, rows, hd]), as nlp_create_qkv_heads(num_heads = rope_heads, num_kv_heads = 1) + rotary_embedding_llama
-        (prefill mode, self.trans_rows), in one program: one core per (32-row tile, 2 heads)."""
-        from ..fused_decode.boundary import KERNEL_DIR
-
-        rows, nt = qkv.shape[-2], qkv.shape[-1] // TILE
-        heads = nt // 2
-        hpc = 2
-        gx, gy = heads // hpc, rows // TILE
-        assert gx * hpc == heads and gx <= 11 and hd == 2 * TILE
-        mk = lambda shp: ttnn.empty(shp, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.mesh,
-                                    memory_config=ttnn.L1_MEMORY_CONFIG)  # fmt: skip
-        qk, v0, v1 = mk([1, rope_heads, rows, hd]), mk([1, 1, rows, hd]), mk([1, 1, rows, hd])
-        cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(gx - 1, gy - 1))])
-        cb_x, cb_cos, cb_sin, cb_t, cb_out = range(5)
-        rct = [cb_x, cb_cos, cb_sin, cb_t, hpc, nt]
-        for t in (qkv, cos, sin, self.trans_rows):
-            rct += ttnn.TensorAccessorArgs(t).get_compile_time_args()
-        wct = [cb_out, hpc, rope_heads, gy]
-        for t in (qk, v0, v1):
-            wct += ttnn.TensorAccessorArgs(t).get_compile_time_args()
-        dm = ttnn.DataMovementConfigDescriptor
-        kernels = [
-            ttnn.KernelDescriptor(
-                kernel_source=str(KERNEL_DIR / "qkv_rope_reader.cpp"), core_ranges=cores, compile_time_args=rct,
-                runtime_args=[], common_runtime_args=[t.buffer_address() for t in (qkv, cos, sin, self.trans_rows)],
-                config=dm(processor=ttnn.DataMovementProcessor.RISCV_1, noc=ttnn.NOC.NOC_0),
-            ),
-            ttnn.KernelDescriptor(
-                kernel_source=str(KERNEL_DIR / "qkv_rope_writer.cpp"), core_ranges=cores, compile_time_args=wct,
-                runtime_args=[], common_runtime_args=[t.buffer_address() for t in (qk, v0, v1)],
-                config=dm(processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.NOC_1),
-            ),
-            ttnn.KernelDescriptor(
-                kernel_source=str(KERNEL_DIR / "qkv_rope_compute.cpp"), core_ranges=cores,
-                compile_time_args=[cb_x, cb_cos, cb_sin, cb_t, cb_out, hpc, rope_heads], runtime_args=[],
-                config=ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True,
-                                                    math_approx_mode=False),
-            ),
-        ]  # fmt: skip
-
-        def cb(i, pages):
-            return ttnn.CBDescriptor(total_size=2048 * pages, core_ranges=cores,
-                                     format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=i, data_format=ttnn.bfloat16,
-                                                                                 page_size=2048)])  # fmt: skip
-
-        cbs = [cb(cb_x, 2 * hpc), cb(cb_cos, 2), cb(cb_sin, 2), cb(cb_t, 1), cb(cb_out, 2)]
-        ttnn.generic_op([qkv, cos, sin, self.trans_rows, qk, v0, v1],
-                        ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs))  # fmt: skip
-        return qk, v0, v1
+        """(the rotated Q and K heads [1, rope_heads, rows, hd], V heads 0 / 1 [1, 1, rows, hd]): _qkv_rope."""
+        return _qkv_rope(self.mesh, self.trans_rows, qkv, cos, sin, rope_heads, 1, rope_heads)
 
     def _attention_rows(self, li, attn_mod, qkv, pos, cos_sin):
         """The attention core for all 256 rows at once: QKV -> prefill-layout heads [1, heads, rows, hd], Q and K rotated
