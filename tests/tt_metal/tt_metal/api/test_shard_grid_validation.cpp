@@ -69,16 +69,24 @@ std::shared_ptr<Buffer> make_unallocated_width_sharded_buffer(
         one_shard_args(core));
 }
 
-std::shared_ptr<Buffer> make_four_core_height_sharded_buffer(IDevice* device, uint32_t num_pages) {
-    constexpr uint32_t kTilePageSize = 2048;
-    const CoreRangeSet grid(std::set<CoreRange>({CoreRange({0, 0}, {3, 0})}));
+constexpr uint32_t kShardCores = 4;
+constexpr uint32_t kPagesPerShard = 4;
+constexpr uint32_t kTilePageSize = 2048;
+
+std::shared_ptr<Buffer> make_height_sharded_tile_buffer(IDevice* device, uint32_t num_pages) {
+    const CoreRangeSet grid(std::set<CoreRange>({CoreRange({0, 0}, {kShardCores - 1, 0})}));
     return BufferImpl::create(
         device,
         static_cast<DeviceAddr>(num_pages) * kTilePageSize,
         kTilePageSize,
         BufferType::L1,
         BufferShardingArgs(
-            ShardSpecBuffer(grid, {32, 128}, ShardOrientation::ROW_MAJOR, {32, 32}, {num_pages / 4, 4}),
+            ShardSpecBuffer(
+                grid,
+                {32, 32 * kPagesPerShard},
+                ShardOrientation::ROW_MAJOR,
+                {32, 32},
+                {num_pages / kPagesPerShard, kPagesPerShard}),
             TensorMemoryLayout::HEIGHT_SHARDED));
 }
 
@@ -87,15 +95,15 @@ std::shared_ptr<Buffer> make_four_core_height_sharded_buffer(IDevice* device, ui
 TEST_F(AnyDispatchMeshDeviceSingleCardFixture, ShardSpecValidationRejectsMorePagesThanShardsHold) {
     for (auto& mesh_device : this->devices_) {
         auto* device = mesh_device->get_devices()[0];
-        EXPECT_ANY_THROW(make_four_core_height_sharded_buffer(device, 32));
+        EXPECT_ANY_THROW(make_height_sharded_tile_buffer(device, 2 * kShardCores * kPagesPerShard));
     }
 }
 
 TEST_F(AnyDispatchMeshDeviceSingleCardFixture, ShardSpecValidationAcceptsPagesThatShardsHold) {
     for (auto& mesh_device : this->devices_) {
         auto* device = mesh_device->get_devices()[0];
-        EXPECT_NO_THROW(make_four_core_height_sharded_buffer(device, 16));
-        EXPECT_NO_THROW(make_four_core_height_sharded_buffer(device, 12));
+        EXPECT_NO_THROW(make_height_sharded_tile_buffer(device, kShardCores * kPagesPerShard));
+        EXPECT_NO_THROW(make_height_sharded_tile_buffer(device, (kShardCores - 1) * kPagesPerShard));
     }
 }
 

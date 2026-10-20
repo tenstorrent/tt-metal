@@ -290,12 +290,15 @@ void validate_buffer_parameters(
         size);
 
     if (shard_spec.has_value() && !buffer_distribution_spec.has_value()) {
+        const DeviceAddr num_pages = size / page_size;
         const DeviceAddr num_cores = shard_spec->grid().num_cores();
+        const DeviceAddr max_pages = shard_spec->num_pages() * num_cores;
         TT_FATAL(
-            size / page_size <= shard_spec->num_pages() * num_cores,
-            "Sharded buffer has {} pages but its shard spec holds at most {} ({} pages per shard on {} cores)",
-            size / page_size,
-            shard_spec->num_pages() * num_cores,
+            num_pages <= max_pages,
+            "Sharded buffer has {} pages but its shard spec holds at most {} ({} pages per shard on {} cores). "
+            "Enlarge the shard shape or the shard grid.",
+            num_pages,
+            max_pages,
             shard_spec->num_pages(),
             num_cores);
     }

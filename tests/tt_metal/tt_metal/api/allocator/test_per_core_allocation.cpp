@@ -93,7 +93,7 @@ TEST_F(PerCoreAllocationTest, PerCoreAndLockstepCoexist) {
     ShardSpecBuffer shard_spec(
         CoreRangeSet(core_range), shard_shape, ShardOrientation::ROW_MAJOR, page_shape, tensor2d_shape);
 
-    DeviceAddr total_size = 2 * PAGE_SIZE * num_cores;
+    DeviceAddr total_size = PAGE_SIZE * num_cores;
 
     // Create per-core buffer
     auto shard_args = BufferShardingArgs(shard_spec, TensorMemoryLayout::HEIGHT_SHARDED);
@@ -171,7 +171,7 @@ TEST_F(PerCoreAllocationTest, DeallocationFreesPerCoreSpace) {
     ShardSpecBuffer shard_spec(
         CoreRangeSet(core_range), shard_shape, ShardOrientation::ROW_MAJOR, page_shape, tensor2d_shape);
 
-    DeviceAddr total_size = 2 * PAGE_SIZE * num_cores;
+    DeviceAddr total_size = PAGE_SIZE * num_cores;
 
     auto shard_args = BufferShardingArgs(shard_spec, TensorMemoryLayout::HEIGHT_SHARDED);
     experimental::per_core_allocation::set_per_core_allocation(shard_args, true);
