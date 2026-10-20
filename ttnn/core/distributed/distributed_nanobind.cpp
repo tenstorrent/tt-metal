@@ -304,7 +304,21 @@ void py_module(nb::module_& mod) {
             &MeshDevice::create_submesh,
             nb::arg("submesh_shape"),
             nb::arg("offset") = nb::none(),
-            nb::keep_alive<1, 0>())  // Keep MeshDevice alive as long as SubmeshDevice is alive
+            nb::arg("share_allocator") = false,
+            nb::keep_alive<1, 0>(),  // Keep MeshDevice alive as long as SubmeshDevice is alive
+            R"doc(
+              Create a submesh over a range of this mesh's devices.
+
+                Args:
+                    submesh_shape (MeshShape): Shape of the submesh.
+                    offset (MeshCoordinate, optional): Coordinate of the submesh's first device in this mesh.
+                    share_allocator (bool): Allocate through this mesh's allocator, so the buffers of this mesh and
+                        of the submesh never overlap. Traces and sub-device managers are not supported on such a
+                        submesh, and it closes when this mesh closes.
+
+                Overlapping meshes run one after another. Call quiesce_devices() on this mesh before switching
+                between it and an overlapping submesh. With share_allocator, enqueueing without it raises.
+        )doc")
         .def(
             "create_submeshes",
             &MeshDevice::create_submeshes,
