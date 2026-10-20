@@ -74,7 +74,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             is_fp32_dest_acc_en,
             BroadcastType::NONE,
             true /* is_int_fpu_en */,
-            PackMode::Default>(params.num_faces, formats.math);
+            PackMode::Default>(ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, params.num_faces), formats.math);
     }
     else
     {
@@ -83,7 +83,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             is_fp32_dest_acc_en,
             BroadcastType::NONE,
             false /* is_int_fpu_en */,
-            PackMode::Default>(params.num_faces, formats.math);
+            PackMode::Default>(ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, params.num_faces), formats.math);
     }
 
     _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();

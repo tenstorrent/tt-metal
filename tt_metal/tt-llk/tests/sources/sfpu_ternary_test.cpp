@@ -100,7 +100,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             _llk_math_wait_for_dest_available_<dest_sync>();
             _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, is_int_fpu_en, PackMode::Default>(
-                4 /* num_faces */, MATH_FMT);
+                ckernel::DEFAULT_TENSOR_SHAPE, MATH_FMT);
             _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, dest_sync, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
                 0, MATH_FMT, MATH_FMT); // input a
             _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, dest_sync, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
