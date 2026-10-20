@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from typing import Iterable, List, NamedTuple, Tuple
 
 from helpers.format_config import DataFormat, FormatConfig, is_dest_acc_needed
-from helpers.golden_generators import TILE_DIM
+from helpers.golden_generators import FACE_DIM, TILE_DIM
 from helpers.llk_params import (
     DestAccumulation,
     DestSync,
@@ -425,6 +425,20 @@ def generate_face_layout_config_sweep(math_matmul: bool) -> List[FaceLayoutConfi
 # ===========================================================
 
 
+def _is_invalid_fp16b_to_fp16(fmt: FormatConfig, dest_acc: DestAccumulation) -> bool:
+    """Float16_b in -> Float16 out without dest_acc: skip it.
+
+    Float16_b has an 8-bit exponent and Float16 a 5-bit one, so the math needs Float32 in dest
+    (dest_acc on). test_config.py turns dest_acc on when compiling this combo, which then hits
+    LLK_ASSERTs in the math_matmul and unpack_matmul tests.
+    """
+    return (
+        dest_acc == DestAccumulation.No
+        and fmt.input_format == DataFormat.Float16_b
+        and fmt.output_format == DataFormat.Float16
+    )
+
+
 def sweep_matmul(
     formats_list: List[FormatConfig],
     dest_acc_modes: List[DestAccumulation],
@@ -478,14 +492,7 @@ def sweep_matmul(
                             math_matmul
                         )
                         for face_layout_config in face_layout_config_sweep:
-                            # Don't add invalid variants. If these variants are added LLK_ASSERTs are hit in math_matmul and unpack_matmul tests.
-                            # In test_config.py, when compiling the test itself, dest_acc is changed to DestAccumulation.Yes, which causes the assert to be hit.
-                            # Furthermore, this combo is not valid because Float16_b has 8-bit exponent and Float16 has 5-bit exponent which, when doing calculations with these formats it needs to be expanded to Float32, which requires dest_acc to be true
-                            if (
-                                dest_acc == DestAccumulation.No
-                                and fmt.input_format == DataFormat.Float16_b
-                                and fmt.output_format == DataFormat.Float16
-                            ):
+                            if _is_invalid_fp16b_to_fp16(fmt, dest_acc):
                                 continue
 
                             base_matmul_dims = MatmulConfig(
@@ -589,14 +596,7 @@ def sweep_tiny_tiles_matmul(
                 max_dst_indices.append(max_dst_index)
 
             for max_dst_idx in max_dst_indices:
-                # Don't add invalid variants. If these variants are added LLK_ASSERTs are hit in math_matmul and unpack_matmul tests.
-                # In test_config.py, when compiling the test itself, dest_acc is changed to DestAccumulation.Yes, which causes the assert to be hit.
-                # Furthermore, this combo is not valid because Float16_b has 8-bit exponent and Float16 has 5-bit exponent which, when doing calculations with these formats it needs to be expanded to Float32, which requires dest_acc to be true
-                if (
-                    config["dest_acc"] == DestAccumulation.No
-                    and config["fmt"].input_format == DataFormat.Float16_b
-                    and config["fmt"].output_format == DataFormat.Float16
-                ):
+                if _is_invalid_fp16b_to_fp16(config["fmt"], config["dest_acc"]):
                     continue
 
                 combinations.append(
@@ -629,7 +629,7 @@ MATMUL_TINY_IN0_PAIRS = [((r, 32), (32, 32)) for r in (1, 2, 4, 8, 16)]
 
 def _tile_num_faces(tile: Tuple[int, int]) -> int:
     rows, cols = tile
-    return (2 if rows > 16 else 1) * (2 if cols > 16 else 1)
+    return (2 if rows > FACE_DIM else 1) * (2 if cols > FACE_DIM else 1)
 
 
 def sweep_matmul_tile_shape_pairs(
@@ -650,12 +650,7 @@ def sweep_matmul_tile_shape_pairs(
         for dest_acc in dest_acc_modes:
             if is_dest_acc_needed(fmt) and dest_acc == DestAccumulation.No:
                 continue
-            # Same invalid format combination the sweeps above skip.
-            if (
-                dest_acc == DestAccumulation.No
-                and fmt.input_format == DataFormat.Float16_b
-                and fmt.output_format == DataFormat.Float16
-            ):
+            if _is_invalid_fp16b_to_fp16(fmt, dest_acc):
                 continue
             for in0_tile, in1_tile in tile_pairs:
                 assert (
@@ -670,7 +665,7 @@ def sweep_matmul_tile_shape_pairs(
                     unpack_transpose_within_face=Transpose.No,
                     partial_face_in0=in0_tile[0] < TILE_DIM,
                     partial_face_in1=in1_tile[0] < TILE_DIM,
-                    partial_face_math=in0_tile[0] < 16,
+                    partial_face_math=in0_tile[0] < FACE_DIM,
                     partial_face_pack=out_tile[0] < TILE_DIM,
                 )
                 for ct_dim in ct_dims:
