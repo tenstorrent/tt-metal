@@ -207,7 +207,6 @@ def test_nlp_cqkv_split_invalid_width(device, split, expect_error):
 
 
 def test_nlp_create_qkv_heads_rejects_head_dim_not_tile_multiple(device):
-    # emb 128 over 8 heads gives head_dim 16; this used to return garbage and then failed in the kernel build (#36240).
     q = ttnn.from_torch(torch.randn(1, 1, 32, 128), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     kv = ttnn.from_torch(torch.randn(1, 1, 32, 128), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     with pytest.raises(RuntimeError, match="head_dim to be a multiple"):
