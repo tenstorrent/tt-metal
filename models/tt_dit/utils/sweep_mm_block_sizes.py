@@ -86,6 +86,18 @@ DEVICE_CONFIGS = {
         "tp_axis": 0,
         "cluster_axis": 0,
     },
+    # 6 KB payload = 3 bf16 tiles per packet, the largest Wormhole allows (7616 B incl. header).
+    "wh_4x8_ring_6k": {
+        "mesh_shape": (4, 8),
+        "fabric_config": "FABRIC_1D_RING",
+        "fabric_router_config_payload": 6144,
+        "topology": "Ring",
+        "num_links": 4,
+        "num_workers_per_link": 2,
+        "sp_axis": 1,
+        "tp_axis": 0,
+        "cluster_axis": 0,
+    },
     "wh_4x8_linear": {
         "mesh_shape": (4, 8),
         "fabric_config": "FABRIC_1D",
@@ -187,6 +199,11 @@ SHAPES = [
     (4736, 5376, 5376, 8, 8, True, "qkv"),
     (4736, 7168, 1344, 8, 8, True, "plain"),
     (4736, 5376, 7168, 8, 8, True, "ff1_swiglu"),
+    # The model passes force_transpose=False, so at 5 s (M = 4736 < N) to_qkv and ff1 run
+    # NON-transposed: `agmm_worker_grid` reserves the mux column and trims to 7x8 workers. Sweep
+    # these with MM_SWEEP_FORCE_TRANSPOSE=0 (explicit combos) to see what the model actually gets.
+    (4736, 5376, 5376, 7, 8, True, "qkv"),
+    (4736, 5376, 7168, 7, 8, True, "ff1_swiglu"),
     # The 10 s and 15 s per-device lengths for the same three shapes. `AGMM_BLOCK_SIZES` is keyed on
     # (K, N) alone on the argument that the block shape does not want to change with M -- but that was
     # established on Blackhole's 120-core grid, and it does NOT hold here: ff2 at M=4768 picks
@@ -938,12 +955,18 @@ def _build_op_runner(cfg, mesh_device, M, K, N, dtype, is_agmm, uc_cfg, core_gri
     Non-AGMM path: replicated input/weight/bias; minimal_matmul or minimal_matmul_split
     based on use_case.
     """
+    # A/B knobs, all defaulting to the model settings: MM_SWEEP_FIDELITY=LoFi|HiFi2|HiFi3|HiFi4,
+    # MM_SWEEP_FP32_DEST=0 for bf16 DST accumulation, MM_SWEEP_DST_FULL_SYNC=1 for full-sync DST.
+    fidelity = getattr(ttnn.MathFidelity, os.environ.get("MM_SWEEP_FIDELITY", "HiFi2"))
+    fp32_dest = os.environ.get("MM_SWEEP_FP32_DEST", "1") != "0"
+    dst_full_sync = os.environ.get("MM_SWEEP_DST_FULL_SYNC", "0") == "1"
     compute_config = ttnn.init_device_compute_kernel_config(
         mesh_device.arch(),
-        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_fidelity=fidelity,
         math_approx_mode=uc_cfg.get("math_approx_mode", False),
-        fp32_dest_acc_en=True,
+        fp32_dest_acc_en=fp32_dest,
         packer_l1_acc=True,
+        dst_full_sync_en=dst_full_sync,
     )
 
     fused_activation = uc_cfg.get("fused_activation", None)
@@ -1217,7 +1240,10 @@ def _build_op_runner(cfg, mesh_device, M, K, N, dtype, is_agmm, uc_cfg, core_gri
                 topology=cfg["topology"],
                 cluster_axis=cfg["cluster_axis"],
                 barrier_semaphore=None,
-                force_transpose=True,
+                # MM_SWEEP_FORCE_TRANSPOSE=0 runs the op's own orientation (transposed only when M > N),
+                # which is what the H3 model passes (force_transpose=False); M < N shapes then
+                # parallelise M across grid_y and N across grid_x with the mux column at grid_x.
+                force_transpose=os.environ.get("MM_SWEEP_FORCE_TRANSPOSE", "1") != "0",
                 num_workers_per_link=cfg["num_workers_per_link"],
                 num_buffers_per_channel=24 if is_blackhole() else 48,
                 scalar=scalar,
