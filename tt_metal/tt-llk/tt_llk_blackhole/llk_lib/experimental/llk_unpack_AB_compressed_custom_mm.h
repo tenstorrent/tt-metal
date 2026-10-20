@@ -29,6 +29,7 @@ using namespace ckernel::unpacker;
 inline void _llk_unpack_AB_compressed_custom_mm_mop_config_()
 {
     constexpr std::uint8_t set_dvalid = 1;
+    block_replay_body()               = BlockReplayBody::None;
     load_replay_buf(
         0,
         25,
