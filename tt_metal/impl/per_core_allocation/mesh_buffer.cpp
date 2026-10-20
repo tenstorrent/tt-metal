@@ -34,7 +34,6 @@ std::vector<L1TensorExtent> get_l1_tensor_owner_extents(
     auto mesh = buffer.mesh_device_.lock();
     TT_FATAL(mesh != nullptr, "L1 owner MeshDevice is closed");
     const bool owned = std::holds_alternative<distributed::MeshBuffer::OwnedBufferState>(buffer.state_);
-    const bool pinned = std::holds_alternative<distributed::MeshBuffer::OwnerPinnedViewState>(buffer.state_);
     std::vector<L1TensorExtent> result;
     for (const auto& coord : coords) {
         TT_FATAL(mesh->impl().is_local(coord), "L1 owner device must be local");
@@ -56,7 +55,7 @@ std::vector<L1TensorExtent> get_l1_tensor_owner_extents(
             cores = shard_cores(buffer.device_local_config_.sharding_args);
         }
         DeviceAddr size = local->aligned_size_per_bank();
-        if (!pinned && (owned || local->impl().owns_data_)) {
+        if (owned || local->impl().owns_data_) {
             size = detail::calculate_bank_size_spread(
                 local->aligned_size(),
                 local->aligned_page_size(),
@@ -74,10 +73,7 @@ std::shared_ptr<distributed::MeshBuffer> create_l1_tensor_view(
     distributed::MeshDevice& mesh,
     const distributed::MeshBufferConfig& mesh_config,
     const distributed::DeviceLocalBufferConfig& local_config,
-    const std::vector<std::vector<L1TensorExtent>>& owners,
-    const std::vector<L1TensorViewPlacement>& placements,
-    std::shared_ptr<void> owner_pin) {
-    TT_FATAL(owner_pin != nullptr, "L1 view requires retained owners");
+    const std::vector<L1TensorViewPlacement>& placements) {
     TT_FATAL(local_config.buffer_type == BufferType::L1, "L1 view requires L1 memory");
     TT_FATAL(is_sharded(local_config.sharding_args.buffer_layout()), "L1 view requires sharded memory");
     const auto cores = shard_cores(local_config.sharding_args);
@@ -99,25 +95,14 @@ std::shared_ptr<distributed::MeshBuffer> create_l1_tensor_view(
     std::optional<DeviceAddr> lockstep_address;
     auto result = std::shared_ptr<distributed::MeshBuffer>(
         new distributed::MeshBuffer(mesh_config, local_config, 0, replicated->size, &mesh));
-    result->state_ = distributed::MeshBuffer::OwnerPinnedViewState{std::move(owner_pin)};
     for (const auto& coord : coords) {
         std::unordered_map<CoreCoord, DeviceAddr> addresses;
         for (const auto& placement : placements) {
             if (placement.device_coord != coord) {
                 continue;
             }
-            TT_FATAL(placement.owner_index < owners.size(), "L1 view owner index is out of range");
-            const auto& extents = owners[placement.owner_index];
-            auto owner = std::find_if(extents.begin(), extents.end(), [&](const auto& extent) {
-                return extent.device_coord == coord && extent.core_coord == placement.core_coord;
-            });
-            TT_FATAL(owner != extents.end(), "L1 view owner has no extent on selected device/core");
-            TT_FATAL(placement.offset <= owner->size, "L1 view offset exceeds owner extent");
             TT_FATAL(
-                owner->address <= std::numeric_limits<DeviceAddr>::max() - placement.offset,
-                "L1 view address overflows");
-            TT_FATAL(
-                addresses.emplace(placement.core_coord, owner->address + placement.offset).second,
+                addresses.emplace(placement.core_coord, placement.address).second,
                 "Duplicate L1 view placement");
         }
         TT_FATAL(addresses.size() == cores.size(), "L1 view requires complete shard coverage");
@@ -137,12 +122,10 @@ std::shared_ptr<distributed::MeshBuffer> create_l1_tensor_view(
             if (placement.device_coord != coord) {
                 continue;
             }
-            const auto& extents = owners[placement.owner_index];
-            auto owner = std::find_if(extents.begin(), extents.end(), [&](const auto& extent) {
-                return extent.device_coord == coord && extent.core_coord == placement.core_coord;
-            });
             TT_FATAL(addresses.at(placement.core_coord) % local->alignment() == 0, "L1 view address must be aligned");
-            TT_FATAL(local->aligned_size_per_bank() <= owner->size - placement.offset, "L1 view exceeds owner extent");
+            TT_FATAL(
+                placement.address <= std::numeric_limits<DeviceAddr>::max() - local->aligned_size_per_bank(),
+                "L1 view address overflows");
             if (!per_core) {
                 if (!lockstep_address.has_value()) {
                     lockstep_address = addresses.at(placement.core_coord);
