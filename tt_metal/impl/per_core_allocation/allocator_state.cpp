@@ -60,46 +60,6 @@ AddressRanges occupied_ranges(const std::vector<const AllocatorImpl*>& allocator
 
 }  // namespace
 
-AddressRanges get_l1_free_ranges(
-    const distributed::MeshDevice& mesh, const distributed::MeshCoordinate& coord, const CoreCoord& core) {
-    const auto allocators = hybrid_allocators(mesh, coord);
-    const auto* device_allocator = allocators.front();
-    const auto* banks = device_allocator->find_bank_ids(BufferType::L1, core);
-    TT_FATAL(banks != nullptr && !banks->empty(), "Core {} has no L1 bank", core.str());
-    AddressRanges occupied;
-    auto append = [&](const AddressRanges& ranges) { occupied.insert(occupied.end(), ranges.begin(), ranges.end()); };
-    using AllocatorID = BankManager::AllocatorDependencies::AllocatorID;
-    for (const auto* allocator : allocators) {
-        append(allocator->persistent_l1().occupied_ranges(core));
-        if (allocator != device_allocator) {
-            append(allocator->get_l1_allocated_ranges(AllocatorID{0}));
-            if (const auto* other_banks = allocator->find_bank_ids(BufferType::L1, core)) {
-                append(allocator->get_l1_allocated_ranges(AllocatorID{other_banks->front() + 1}));
-            }
-        }
-    }
-    return device_allocator->get_l1_available_ranges(AllocatorID{banks->front() + 1}, occupied);
-}
-
-AddressRanges get_l1_lockstep_occupied_ranges(
-    const distributed::MeshDevice& mesh, const distributed::MeshCoordinate& coord) {
-    AddressRanges ranges;
-    for (const auto* allocator : hybrid_allocators(mesh, coord)) {
-        const auto more = allocator->get_l1_allocated_ranges(BankManager::AllocatorDependencies::AllocatorID{0});
-        ranges.insert(ranges.end(), more.begin(), more.end());
-    }
-    std::sort(ranges.begin(), ranges.end());
-    AddressRanges merged;
-    for (const auto& [start, end] : ranges) {
-        if (!merged.empty() && start <= merged.back().second) {
-            merged.back().second = std::max(merged.back().second, end);
-        } else {
-            merged.emplace_back(start, end);
-        }
-    }
-    return merged;
-}
-
 AddressRanges get_l1_occupied_ranges(
     const distributed::MeshDevice& mesh_device,
     const distributed::MeshCoordinate& device_coord,
