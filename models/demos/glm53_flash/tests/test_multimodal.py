@@ -15,9 +15,12 @@ fp32 tower, bf16 text layers, greedy; the same ``encode_multimodal`` prompt on b
    ``inputs_embeds`` bit-exactly and the text rows equal the device text embedding bit-exactly (PCC 1.0 on
    both), built from the TT features the image rows score the tower PCC; all 4 streams identical.
 2. ``test_multimodal_single_chip``: ``GLM53Model`` (45 layers streamed through one chip, tensorbin cache)
-   generates 16 greedy tokens from the multimodal streams; the first token must equal HF's, the
+   generates ``GLM53_MM_N`` greedy tokens from the multimodal streams; the first token must equal HF's, the
    position-wise matches / identical prefix are reported (after a divergence the two continue different
-   sentences).
+   sentences). A pass over the 45 layers takes ~400 s, so a job under the 1500 s device cap yields 3 tokens:
+   the generated ids are checkpointed in ``GLM53_MM_CKPT`` and the next run prefills prompt + those ids
+   (teacher-forced on the device's own tokens, the prefill path replaying what decode produced) and generates
+   ``GLM53_MM_N`` more, so the 16-token continuation spans several jobs.
 3. ``test_multimodal_mesh`` (``GLM53_MESH_SHAPE``): the resident ``GLM53MeshModel`` with the tower
    replicated on the mesh: ``prefill_multimodal`` + traced decode, same comparison.
 
@@ -61,6 +64,9 @@ from models.demos.glm53_flash.tt.vision import GLM53VisionConfig
 
 REF_DIR = Path("bringup/references/glm53_flash") / os.environ.get("GLM53_MM_REF", "MM_shapes_hello")
 N_TOKENS = int(os.environ.get("GLM53_MM_N", "16"))
+# single-chip continuation checkpoint: the generated ids so far; the next job prefills prompt + those ids
+# (teacher-forced on the device's own tokens) and generates GLM53_MM_N more, so 16 tokens span several jobs
+CKPT = Path(os.environ.get("GLM53_MM_CKPT", f"generated/glm53_flash_mm/single_chip_{REF_DIR.name}.json"))
 LAYERS = parse_layers(os.environ["GLM53_MM_LAYERS"]) if os.environ.get("GLM53_MM_LAYERS") else None
 _cache_env = os.environ.get("GLM53_FULLMODEL_CACHE", "/home/ttuser/ashai/glm53/_cache/fullmodel")
 CACHE_ROOT = None if _cache_env.lower() == "none" else Path(_cache_env)
@@ -222,13 +228,23 @@ def test_multimodal_single_chip(mesh_device, ref):
     t_tower = time.perf_counter() - t0
     p_tower = pcc(feats[0], ref["feats"][0])
     logger.info(f"tower: {t_tower:.1f} s, PCC vs HF fp32 {p_tower:.6f}")
+    prev_ids: list[int] = []
+    prev_records: list[dict] = []
+    if CKPT.exists():
+        ck = json.loads(CKPT.read_text())
+        if ck.get("prompt_ids") == ids[0].tolist() and ck.get("layers") == LAYERS:
+            prev_ids, prev_records = list(ck["generated"]), list(ck.get("records", []))
+            logger.info(f"checkpoint {CKPT}: continuing after {len(prev_ids)} generated tokens {prev_ids}")
+        else:
+            logger.warning(f"checkpoint {CKPT} belongs to another prompt / layer set: ignored")
+    ids_full = torch.cat([ids.reshape(-1), torch.tensor(prev_ids, dtype=ids.dtype)])  # prompt + tokens so far
     model = GLM53Model.from_snapshot(
         mesh_device,
         snapshot,
         headers=shard_headers(snapshot),
         layers=LAYERS,
         max_batch=1,
-        max_seq_len=S + N_TOKENS + 32,
+        max_seq_len=int(ids_full.numel()) + N_TOKENS + 32,
         weight_cache_root=CACHE_ROOT,
     )
     full = LAYERS is None
@@ -240,16 +256,34 @@ def test_multimodal_single_chip(mesh_device, ref):
             f"(device greedy {rec['device_greedy']}), top-5 {rec['top5_ids']} {rec['top5_logits']}, pass {rec['pass_s']} s"
         )
 
-    streams = multimodal_streams(model, ids, feats)
+    streams = multimodal_streams(model, ids_full, feats)
     t0 = time.perf_counter()
-    tt_ids, records = model.generate(ids, N_TOKENS, streams=streams, on_token=on_token)
+    tt_new, records = model.generate(ids_full, N_TOKENS, streams=streams, on_token=on_token)
+    tt_ids = prev_ids + tt_new
     logger.info(
-        f"TT greedy {N_TOKENS} tokens in {time.perf_counter() - t0:.0f} s: {tt_ids}\nTT text: {tok.decode(tt_ids)!r}"
+        f"TT greedy {N_TOKENS} new tokens in {time.perf_counter() - t0:.0f} s: {tt_new}; "
+        f"all {len(tt_ids)}: {tt_ids}\nTT text: {tok.decode(tt_ids)!r}"
     )
     logger.info("per-layer timing (seconds, means over the passes):\n" + model.timing_table())
     for rec in records:
         assert rec["device_greedy"] is None or rec["device_greedy"] == rec["token"], f"device argmax differs: {rec}"
-    _compare_generation(tok, tt_ids, records, hf, strict=full)
+    CKPT.parent.mkdir(parents=True, exist_ok=True)
+    CKPT.write_text(
+        json.dumps(
+            {
+                "prompt_ids": ids[0].tolist(),
+                "layers": LAYERS,
+                "generated": tt_ids,
+                "records": prev_records + records,
+                "text": tok.decode(tt_ids),
+                "image": ref["prompt"]["image"],
+                "question": ref["prompt"]["question"],
+            },
+            indent=1,
+        )
+    )
+    logger.info(f"checkpoint written to {CKPT} ({len(tt_ids)} generated tokens)")
+    _compare_generation(tok, tt_ids, prev_records + records, hf, strict=full)
 
 
 # ---------------------------------------------------------------------------------------------
