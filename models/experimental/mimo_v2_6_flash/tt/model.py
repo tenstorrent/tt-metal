@@ -600,18 +600,19 @@ class TtMiMoModel:
             for k in keys
         }
         ats = [kv_lib.replicated(self.plan, torch.tensor([0, 0, s, 0], dtype=torch.int32), ttnn.uint32) for s in starts]
+        picks_tt = kv_lib.replicated(self.plan, torch.tensor(picks, dtype=torch.int32).reshape(1, -1), ttnn.uint32)
         tokens_tt = self._to_device_tokens(tokens)
         for setup in self.rope_setups.values():
             setup.begin_prefill_chunk()
-        logits = self._prefill_batch_device(tokens_tt, tables, ats, num, padded, layers)
+        logits = self._prefill_batch_device(tokens_tt, tables, ats, picks_tt, num, padded, layers)
         for setup in self.rope_setups.values():
             setup.end_prefill_chunk()
         # Enqueued: freeing them now is ordered with the work that reads them.
         for t in [*tables.values()]:
             t.release()
-        for t in [rows, tokens_tt, *ats]:
+        for t in [rows, tokens_tt, picks_tt, *ats]:
             t.deallocate(True)
-        return {"logits": logits, "row": picks, "hidden": None}
+        return {"logits": logits, "row": list(range(num)), "hidden": None}
 
     def _prefill_batch_host(self, chunks, padded, keys):
         """Host inputs of a prefill batch: tokens int32 [R * S]; per page table key its fill rows [tp, R, blocks];
@@ -631,10 +632,11 @@ class TtMiMoModel:
         picks = [r * TILE + (c[0].numel() - 1) % TILE for r, c in enumerate(chunks)]
         return tokens, fills, starts, picks
 
-    def _prefill_batch_device(self, tokens_tt, tables, ats, num, padded, layers):
+    def _prefill_batch_device(self, tokens_tt, tables, ats, picks_tt, num, padded, layers):
         """A prefill batch from device inputs only (trace-capturable when the RoPE mats are pinned): tokens [1, R * S]
-        uint32, {page table key: kv.BatchFillTables}, each user's last-token tile start (uint32 [4] slice starts).
-        Returns logits [1, 1, 32 * R, vocab / tp] (the users' last-token tiles, user after user)."""
+        uint32, {page table key: kv.BatchFillTables}, each user's last-token tile start (uint32 [4] slice starts), and
+        each user's last-token row among those tiles (uint32 [1, R]). Returns the users' last-token logits, row-major
+        [1, 1, R, vocab / tp]: the LM head and the readback see only those rows."""
         x = ttnn.embedding(tokens_tt, self.embedding, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
         x = ttnn.reshape(x, (1, 1, num * padded, self.cfg.hidden_size))
         with self._prefill_reduce(padded, num):
@@ -651,18 +653,27 @@ class TtMiMoModel:
                 x.deallocate(True)
                 x = y
         if num * padded == TILE:
-            last = x  # a slice covering the whole tensor shares its buffer, so it must not be freed separately
+            tiles = x  # a slice covering the whole tensor shares its buffer, so it must not be freed separately
         else:
             # Each user's last token: the tile row holding it, through a tensor-args slice (keyed on the length).
             parts = [ttnn.slice(x, at, at, slice_dim=2, num_devices=num * padded // TILE) for at in ats]
             x.deallocate(True)
-            last = ttnn.concat(parts, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG) if num > 1 else parts[0]
+            tiles = ttnn.concat(parts, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG) if num > 1 else parts[0]
             if num > 1:
                 for t in parts:
                     t.deallocate(True)
+        # Then the row itself: gather the R rows (an exact copy), so the LM head and the readback have R rows, not
+        # 32 R (the logits of a tile row of every user were most of a pass's host read).
+        rows_rm = ttnn.reshape(ttnn.to_layout(tiles, ttnn.ROW_MAJOR_LAYOUT), (TILE * num, self.cfg.hidden_size))
+        tiles.deallocate(True)
+        last = ttnn.embedding(picks_tt, rows_rm, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+        rows_rm.deallocate(True)
+        last = ttnn.reshape(last, (1, 1, num, self.cfg.hidden_size))
         logits = self._logits(last, prefill=True)
         last.deallocate(True)
-        return logits
+        out = ttnn.to_layout(logits, ttnn.ROW_MAJOR_LAYOUT)
+        logits.deallocate(True)
+        return out
 
     # ------------------------------------------------------------------ traced prefill batches
     def setup_prefill_batch_trace(self, num, padded):
@@ -686,11 +697,12 @@ class TtMiMoModel:
                 for k in keys
             },
             "ats": [kv_lib.replicated(self.plan, torch.zeros(4, dtype=torch.int32), ttnn.uint32) for _ in range(num)],
+            "picks": kv_lib.replicated(self.plan, torch.zeros(1, num, dtype=torch.int32), ttnn.uint32),
             "rope": {name: setup.get_prefill_rot_mats(0, padded) for name, setup in self.rope_setups.items()},
             "logits": ttnn.allocate_tensor_on_device(
-                ttnn.Shape([1, 1, TILE * num, self.vocab_local]),
+                ttnn.Shape([1, 1, num, self.vocab_local]),
                 ttnn.bfloat16,
-                ttnn.TILE_LAYOUT,
+                ttnn.ROW_MAJOR_LAYOUT,
                 self.mesh_device,
                 ttnn.DRAM_MEMORY_CONFIG,
             ),
@@ -701,7 +713,7 @@ class TtMiMoModel:
         for name, setup in self.rope_setups.items():
             setup.begin_prefill_chunk(pinned={(0, padded): trace["rope"][name]})
         logits = self._prefill_batch_device(
-            trace["tokens"], trace["tables"], trace["ats"], num, padded, range(len(self.layers))
+            trace["tokens"], trace["tables"], trace["ats"], trace["picks"], num, padded, range(len(self.layers))
         )
         for setup in self.rope_setups.values():
             setup.end_prefill_chunk()
@@ -740,8 +752,12 @@ class TtMiMoModel:
                 self.plan, torch.tensor([0, 0, s, 0], dtype=torch.int32), ttnn.uint32, device=False
             )
             ttnn.copy_host_to_device_tensor(host, at)
+        picks_host = torch.tensor(picks, dtype=torch.int32).reshape(1, -1)
+        ttnn.copy_host_to_device_tensor(
+            kv_lib.replicated(self.plan, picks_host, ttnn.uint32, device=False), trace["picks"]
+        )
         ttnn.execute_trace(self.mesh_device, trace["id"], cq_id=0, blocking=False)
-        return {"logits": trace["logits"], "row": picks, "hidden": None, "persistent": True}
+        return {"logits": trace["logits"], "row": list(range(num)), "hidden": None, "persistent": True}
 
     def prefill_read(self, pending):
         """-> (last-token logits [vocab], per-layer hidden states [tokens, hidden] when requested). A batch's pending
