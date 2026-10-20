@@ -1,0 +1,11 @@
+# job 0: M H T2 T5 H2 then reversed
+b1 M ids/job0.txt all
+b1 H ids/job0.txt all
+b1 T2 ids/job0.txt all
+b1 T5 ids/job0.txt all
+b1 H2 ids/job0.txt all
+b2 H2 ids/job0.txt all
+b2 T5 ids/job0.txt all
+b2 T2 ids/job0.txt all
+b2 H ids/job0.txt all
+b2 M ids/job0.txt all
