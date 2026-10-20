@@ -181,7 +181,7 @@ jobs:
       llk-tests-changed: ${{ steps.find-changes.outputs.llk-tests-changed }}
       llk-perf-changed: ${{ steps.find-changes.outputs.llk-perf-changed }}
       llk-ci-changed: ${{ steps.find-changes.outputs.llk-ci-changed }}
-      ttsim-version-changed: ${{ steps.find-changes.outputs.ttsim-version-changed }}
+      ttsim-ci-changed: ${{ steps.find-changes.outputs.ttsim-ci-changed }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 20
@@ -639,7 +639,7 @@ jobs:
          needs.find-changed-files.outputs.llk-common-changed == 'true' ||
          needs.find-changed-files.outputs.llk-sfpi-changed == 'true' ||
          needs.find-changed-files.outputs.llk-ci-changed == 'true' ||
-         needs.find-changed-files.outputs.ttsim-version-changed == 'true')
+         needs.find-changed-files.outputs.ttsim-ci-changed == 'true')
       }}
     uses: ./.github/workflows/llk-ttsim-pr-gate-impl.yaml
     secrets: inherit
