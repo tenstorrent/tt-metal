@@ -19,44 +19,6 @@
 using namespace ckernel;
 using namespace ckernel::unpacker;
 
-namespace llk_unpack_tilize_detail
-{
-// _llk_unpack_tilize_block_ replays this per tile body from one context acquire; it adds one tile width (SCRATCH_SEC0) to the
-// base address register of its context (half 0 is context 0, half 1 context 1).
-constexpr std::uint32_t BLOCK_REPLAY_HALF_LEN = 4;
-
-// The replay record takes start and length as immediates: both are template parameters.
-template <std::uint32_t base_address_reg, std::uint32_t start>
-inline void load_block_replay_half()
-{
-    load_replay_buf(
-        start,
-        BLOCK_REPLAY_HALF_LEN,
-        []
-        {
-            TTI_CFGSHIFTMASK(1, 0b011, 32 - 1, 0, 0b11, base_address_reg);
-            // Also the one instruction between the config write and the UNPACR that consumes it
-            TTI_SETADCZW(0b001, 0, 0, 0, 0, 0b1111);
-            TTI_UNPACR(SrcA, 0b1 /*Z inc*/, 0, 0, 0, 1 /* Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
-            TTI_UNPACR_NOP(SrcB, 0, 0, p_unpacr_nop::SET_DVALID, 0, 0, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
-        });
-}
-
-// Whole-tile UNPACRs to consecutive DEST tiles: the L1 side restarts at each tile's base address, the DEST side Z walks on.
-template <std::uint32_t base_address_reg>
-inline void unpack_to_dest_run(const std::uint32_t num_tiles)
-{
-#pragma GCC unroll 0
-    for (std::uint32_t tile = 0; tile < num_tiles; ++tile)
-    {
-        TTI_CFGSHIFTMASK(1, 0b011, 32 - 1, 0, 0b11, base_address_reg);
-        // Also the one instruction between the config write and the UNPACR that consumes it
-        TTI_SETADCZW(0b001, 0, 0, 0, 0, 0b0001);
-        ckernel::ckernel_template::run();
-    }
-}
-} // namespace llk_unpack_tilize_detail
-
 /**
  * @brief Program the unpacker MOP for the non-8-bit tilize path (Blackhole whole-tile workaround).
  *
@@ -104,7 +66,6 @@ inline void _llk_unpack_tilize_mop_config_(const bool unpack_to_dest = false)
  * @param face_r_dim: Rows per face, valid values = <2, 4, 8, 16>.
  * @param narrow_tile: Whether the tile is narrow (single column of faces). Not supported on the 8-bit path (asserted false).
  * @param num_faces: Number of faces in the tile, valid values = <2, 4>.
- * @param record_block_body: Block calls follow: record their body here instead of at the first block call.
  * @note Call @ref _llk_unpack_tilize_uninit_ to restore the modified tile-descriptor state.
  * @ref _llk_unpack_tilize_ is the matching execute call.
  * @ref _llk_math_eltwise_unary_datacopy_init_ (A2D, PackMode::Tilize) is the matching init on the math thread.
@@ -115,12 +76,10 @@ inline void _llk_unpack_tilize_init_(
     const std::uint32_t ct_dim            = 0,
     const std::uint32_t face_r_dim        = FACE_R_DIM,
     const bool narrow_tile                = false,
-    const std::uint32_t num_faces         = 4,
-    const bool record_block_body          = false)
+    const std::uint32_t num_faces         = 4)
 {
     LLK_ASSERT(face_r_dim == 1 || face_r_dim == 2 || face_r_dim == 4 || face_r_dim == 8 || face_r_dim == 16, "face_r_dim must be 1, 2, 4, 8, or 16 for tilize");
     LLK_ASSERT(num_faces == 2 || num_faces == 4, "num_faces must be 2 or 4 for tilize");
-    block_replay_body() = BlockReplayBody::None;
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(0);
 
     // Program Ch1.Z stride from unpack_dst_format's datum size, required by the
@@ -208,18 +167,6 @@ inline void _llk_unpack_tilize_init_(
         TT_SETADCXX(p_setadc::UNP0, Tile_x_dim - 1, 0x0);
 
         _llk_unpack_tilize_mop_config_(unpack_to_dest);
-
-        // Unpack to dest never takes the block path; an init whose caller makes no block call writes no replay body
-        if (!unpack_to_dest && record_block_body)
-        {
-            llk_unpack_tilize_detail::load_block_replay_half<THCON_SEC0_REG3_Base_address_ADDR32, 0>();
-            llk_unpack_tilize_detail::load_block_replay_half<THCON_SEC0_REG3_Base_cntx1_address_ADDR32, llk_unpack_tilize_detail::BLOCK_REPLAY_HALF_LEN>();
-            block_replay_body() = BlockReplayBody::Tilize;
-        }
-        else if (!unpack_to_dest)
-        {
-            block_replay_body() = BlockReplayBody::TilizeInit;
-        }
     }
 }
 
@@ -289,22 +236,14 @@ inline void _llk_unpack_tilize_(
         const std::uint32_t address = base_address + top_face_offset_address;
         LLK_ASSERT(is_valid_L1_address(address), "L1 base_address must be in valid L1 memory region");
 
-        // Poll first: the read's latency overlaps the counter reset
-        std::uint32_t contexts_in_use = semaphore_read(semaphore::UNPACK_SYNC);
-
         // Clear Z/W counters on UNP_A for both channels (Ch0 for L1 read, Ch1 for SrcA write)
         TTI_SETADCZW(0b001, 0, 0, 0, 0, 0b1111);
 
-        const std::uint32_t context = unp_cfg_context;
-
         // Wait for a free context (up to 2 tiles in flight)
-        while (__builtin_expect(contexts_in_use >= 2, 0))
-        {
-            contexts_in_use = semaphore_read(semaphore::UNPACK_SYNC);
-        }
+        wait_for_next_context(2);
 
         // Write top-face base address to the active context's REG3
-        if (0 == context)
+        if (0 == unp_cfg_context)
         {
             cfg[THCON_SEC0_REG3_Base_address_ADDR32] = address;
         }
@@ -327,7 +266,7 @@ inline void _llk_unpack_tilize_(
             // Shift the active context's Base_address by SCRATCH_SEC0_val (= bot_face_offset - 2
             // in 16B words) so face 2/3 read correctly at Z=2/3 on the L1 side. CFGSHIFTMASK's
             // target is an instruction immediate, so we pick the variant at compile time per context.
-            if (0 == context)
+            if (0 == unp_cfg_context)
             {
                 TTI_CFGSHIFTMASK(1, 0b011, 32 - 1, 0, 0b11, THCON_SEC0_REG3_Base_address_ADDR32);
             }
@@ -360,7 +299,7 @@ inline void _llk_unpack_tilize_(
         t6_semaphore_get(semaphore::UNPACK_SYNC);
 
         // Flip to the other context for the next tile
-        switch_config_context_from(context);
+        switch_config_context(unp_cfg_context);
     }
     else
     {
@@ -368,22 +307,14 @@ inline void _llk_unpack_tilize_(
         std::uint32_t address = base_address + top_face_offset_address;
         LLK_ASSERT(is_valid_L1_address(address), "L1 base_address must be in valid L1 memory region");
 
-        // Poll first: the read's latency overlaps the counter reset
-        std::uint32_t contexts_in_use = semaphore_read(semaphore::UNPACK_SYNC);
-
         // Clear z/w start counters
         TTI_SETADCZW(0b001, 0, 0, 0, 0, 0b1111);
 
-        std::uint32_t context = unp_cfg_context;
-
         // Wait for free context
-        while (__builtin_expect(contexts_in_use >= 2, 0))
-        {
-            contexts_in_use = semaphore_read(semaphore::UNPACK_SYNC);
-        }
+        wait_for_next_context(2);
 
         // Get tile address
-        if (0 == context)
+        if (0 == unp_cfg_context)
         {
             cfg[THCON_SEC0_REG3_Base_address_ADDR32] = address;
         }
@@ -398,7 +329,7 @@ inline void _llk_unpack_tilize_(
         if (unpack_to_dest)
         {
             // Unpack to dest
-            set_dst_write_addr(context, unpack_src_format);
+            set_dst_write_addr(unp_cfg_context, unpack_src_format);
             wait_for_dest_available();
         }
 
@@ -415,170 +346,11 @@ inline void _llk_unpack_tilize_(
         {
             // Pair with set_dst_write_addr above (both keyed on unpack_src_format), so the
             // canonical Z-stride restore matches the value programmed on entry.
-            unpack_to_dest_tile_done(context, unpack_src_format);
+            unpack_to_dest_tile_done(unp_cfg_context, unpack_src_format);
         }
 
         // Switch unpacker config context
-        switch_config_context_from(context);
-    }
-}
-
-// One context acquire for a row of tiles; 8-bit formats and unpack to dest take one _llk_unpack_tilize_ per tile.
-inline void _llk_unpack_tilize_block_(
-    const std::uint32_t base_address,
-    const std::uint32_t first_tile_index,
-    const std::uint32_t num_tiles,
-    const std::uint32_t unpack_src_format = 0,
-    const std::uint32_t unpack_dst_format = 0,
-    const std::uint32_t face_r_dim        = FACE_R_DIM,
-    const std::uint32_t num_faces         = 4,
-    const bool narrow_tile                = false)
-{
-    LLK_ASSERT(num_tiles > 0, "A block has at least one tile");
-    LLK_ASSERT(num_faces == 2 || num_faces == 4, "num_faces must be 2 or 4 for tilize");
-
-    auto unpack_source_format = static_cast<DataFormat>(unpack_src_format);
-    auto unpack_dest_format   = static_cast<DataFormat>(unpack_dst_format);
-
-    const bool unpack_to_dest =
-        (unpack_source_format == DataFormat::UInt32) || (unpack_source_format == DataFormat::Int32) || (unpack_dest_format == DataFormat::Float32);
-
-    const BlockReplayBody record = block_replay_body();
-    const bool block_path        = !IS_8BIT_FORMAT(unpack_src_format) && !unpack_to_dest;
-    LLK_ASSERT(
-        !block_path || record == BlockReplayBody::Tilize || record == BlockReplayBody::TilizeInit,
-        "_llk_unpack_tilize_block_ needs _llk_unpack_tilize_init_ as the last unpack init");
-    if (!block_path || record != BlockReplayBody::Tilize)
-    {
-        if (block_path && record == BlockReplayBody::TilizeInit)
-        {
-            llk_unpack_tilize_detail::load_block_replay_half<THCON_SEC0_REG3_Base_address_ADDR32, 0>();
-            llk_unpack_tilize_detail::load_block_replay_half<THCON_SEC0_REG3_Base_cntx1_address_ADDR32, llk_unpack_tilize_detail::BLOCK_REPLAY_HALF_LEN>();
-            block_replay_body() = BlockReplayBody::Tilize;
-        }
-        else
-        {
-            for (std::uint32_t tile = 0; tile < num_tiles; ++tile)
-            {
-                _llk_unpack_tilize_(base_address, first_tile_index + tile, unpack_src_format, unpack_dst_format, face_r_dim, num_faces, narrow_tile);
-            }
-            return;
-        }
-    }
-
-    const std::uint32_t tile_offset_16B = SCALE_DATUM_SIZE(unpack_src_format, 1) << (narrow_tile ? 0 : 1);
-    const std::uint32_t address         = base_address + first_tile_index * tile_offset_16B;
-    LLK_ASSERT(is_valid_L1_address(address), "L1 base_address must be in valid L1 memory region");
-    LLK_ASSERT(is_valid_L1_address(address + (num_tiles - 1) * tile_offset_16B), "L1 address of the last tile must be in valid L1 memory region");
-
-    volatile std::uint32_t tt_reg_ptr* cfg = get_cfg_pointer(); // get pointer to registers for current state ID
-
-    // Tile advance into SCRATCH_SEC0 from the instruction stream, so the write is ordered behind the CFGSHIFTMASKs of an earlier block row
-    TT_SETDMAREG(0, LOWER_HALFWORD(tile_offset_16B), 0, LO_16(p_gpr_unpack::TMP0));
-    TT_SETDMAREG(0, UPPER_HALFWORD(tile_offset_16B), 0, HI_16(p_gpr_unpack::TMP0));
-    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
-    TTI_WRCFG(p_gpr_unpack::TMP0, p_cfg::WRCFG_32b, SCRATCH_SEC0_val_ADDR32);
-
-    std::uint32_t contexts_in_use = semaphore_read(semaphore::UNPACK_SYNC);
-    TTI_SETADCZW(0b001, 0, 0, 0, 0, 0b1111);
-    std::uint32_t context = unp_cfg_context;
-    while (__builtin_expect(contexts_in_use >= 2, 0))
-    {
-        contexts_in_use = semaphore_read(semaphore::UNPACK_SYNC);
-    }
-
-    // The body adds the advance before every tile, the first one included
-    if (0 == context)
-    {
-        cfg[THCON_SEC0_REG3_Base_address_ADDR32] = address - tile_offset_16B;
-    }
-    else
-    {
-        cfg[THCON_SEC0_REG3_Base_cntx1_address_ADDR32] = address - tile_offset_16B;
-    }
-
-    // Trisc::SEMPOST for context acquire
-    semaphore_post(semaphore::UNPACK_SYNC);
-
-    // Hold the body's config write and its UNPACR until the base address store from the RISC has landed
-    TTI_STALLWAIT(p_stall::STALL_UNPACK | p_stall::STALL_CFG, p_stall::TRISC_CFG);
-
-    const std::uint32_t start = (0 == context) ? 0 : llk_unpack_tilize_detail::BLOCK_REPLAY_HALF_LEN;
-    for (std::uint32_t tile = 0; tile < num_tiles; ++tile)
-    {
-        TT_REPLAY(start, llk_unpack_tilize_detail::BLOCK_REPLAY_HALF_LEN, 0, 0);
-    }
-
-    // T6::SEMGET for context release
-    t6_semaphore_get(semaphore::UNPACK_SYNC);
-
-    // Switch unpacker config context
-    switch_config_context_from(context);
-}
-
-// A row of four-face tiles unpacked to dest: each run of up to dest_section_tiles tiles takes one DEST slot handshake and one
-// context, as _llk_math_eltwise_unary_datacopy_block_ takes them on the math thread; a run of one tile takes _llk_unpack_tilize_.
-inline void _llk_unpack_tilize_dest_block_(
-    const std::uint32_t base_address,
-    const std::uint32_t first_tile_index,
-    const std::uint32_t num_tiles,
-    const std::uint32_t unpack_src_format,
-    const std::uint32_t unpack_dst_format,
-    const std::uint32_t face_r_dim,
-    const std::uint32_t num_faces,
-    const bool narrow_tile,
-    const std::uint32_t dest_section_tiles)
-{
-    LLK_ASSERT(num_tiles > 0 && dest_section_tiles > 0, "A block and a run have at least one tile");
-    LLK_ASSERT(ckernel::unpacker::is_32bit_input(unpack_src_format, unpack_dst_format) && num_faces == 4, "DEST runs take four-face 32-bit tiles");
-
-    const std::uint32_t tile_offset_16B = SCALE_DATUM_SIZE(unpack_src_format, 1) << (narrow_tile ? 0 : 1);
-    TT_SETDMAREG(0, LOWER_HALFWORD(tile_offset_16B), 0, LO_16(p_gpr_unpack::TMP0));
-    TT_SETDMAREG(0, UPPER_HALFWORD(tile_offset_16B), 0, HI_16(p_gpr_unpack::TMP0));
-    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
-    TTI_WRCFG(p_gpr_unpack::TMP0, p_cfg::WRCFG_32b, SCRATCH_SEC0_val_ADDR32);
-
-    volatile std::uint32_t tt_reg_ptr* cfg = get_cfg_pointer();
-    for (std::uint32_t tile = 0; tile < num_tiles;)
-    {
-        const std::uint32_t run_tiles = (num_tiles - tile < dest_section_tiles) ? num_tiles - tile : dest_section_tiles;
-        if (run_tiles == 1)
-        {
-            _llk_unpack_tilize_(base_address, first_tile_index + tile, unpack_src_format, unpack_dst_format, face_r_dim, num_faces, narrow_tile);
-            ++tile;
-            continue;
-        }
-        const std::uint32_t address = base_address + (first_tile_index + tile) * tile_offset_16B;
-        LLK_ASSERT(is_valid_L1_address(address), "L1 base_address must be in valid L1 memory region");
-        LLK_ASSERT(is_valid_L1_address(address + (run_tiles - 1) * tile_offset_16B), "L1 address of the last tile must be in valid L1 memory region");
-
-        std::uint32_t contexts_in_use = semaphore_read(semaphore::UNPACK_SYNC);
-        TTI_SETADCZW(0b001, 0, 0, 0, 0, 0b1111);
-        std::uint32_t context = unp_cfg_context;
-        while (__builtin_expect(contexts_in_use >= 2, 0))
-        {
-            contexts_in_use = semaphore_read(semaphore::UNPACK_SYNC);
-        }
-        // The run adds the advance before every tile, the first one included
-        cfg[(0 == context) ? THCON_SEC0_REG3_Base_address_ADDR32 : THCON_SEC0_REG3_Base_cntx1_address_ADDR32] = address - tile_offset_16B;
-        semaphore_post(semaphore::UNPACK_SYNC);
-
-        set_dst_write_addr<true>(context, unpack_src_format);
-        wait_for_dest_available();
-        TTI_STALLWAIT(p_stall::STALL_UNPACK | p_stall::STALL_CFG, p_stall::TRISC_CFG);
-        if (0 == context)
-        {
-            llk_unpack_tilize_detail::unpack_to_dest_run<THCON_SEC0_REG3_Base_address_ADDR32>(run_tiles);
-        }
-        else
-        {
-            llk_unpack_tilize_detail::unpack_to_dest_run<THCON_SEC0_REG3_Base_cntx1_address_ADDR32>(run_tiles);
-        }
-
-        t6_semaphore_get(semaphore::UNPACK_SYNC);
-        unpack_to_dest_tile_done(context, unpack_src_format);
-        switch_config_context_from(context);
-        tile += run_tiles;
+        switch_config_context(unp_cfg_context);
     }
 }
 
@@ -697,7 +469,7 @@ inline void _llk_unpack_tilizeA_B_mop_config_(const std::uint32_t num_faces = 4)
  * @param num_faces: Number of faces in the tile, valid values = <1, 2, 4>.
  * @param unpB_face_r_dim: Rows per face for operand B.
  * @note Call @ref _llk_unpack_tilizeA_B_uninit_ to revert the config it writes, including the SrcA Y stride.
- * @ref _llk_unpack_tilizeA_B_ is the matching execute call.
+ * @ref _llk_unpack_tilizeA_B_ is the matching execute call. Kernels outside tt-metal run their own row loop on this init's MOP and SCRATCH_SEC0 stride.
  */
 template <bool neginf_srcA = false, std::uint32_t reload_srcB = false, bool zero_srcA = false, bool zero_srcA_reduce = false>
 inline void _llk_unpack_tilizeA_B_init_(
@@ -722,9 +494,8 @@ inline void _llk_unpack_tilizeA_B_init_(
     config_unpacker_x_end<p_setadc::UNP_A>(1);
     config_unpacker_x_end<p_setadc::UNP_B>(unpB_face_r_dim);
 
-    // Set Y stride for SrcA to be one 1x16 row of datums
-    std::uint32_t unpA_ch1_y_stride = SCALE_DATUM_SIZE(unpack_dst_format, FACE_C_DIM);
-    cfg_reg_rmw_tensix<UNP0_ADDR_CTRL_XY_REG_1_Ystride_RMW>(unpA_ch1_y_stride);
+    // SrcA Y stride: one 1x16 row of datums, a Tf32 register format counted as 32-bit
+    cfg_reg_rmw_tensix<UNP0_ADDR_CTRL_XY_REG_1_Ystride_RMW>(canonical_unpA_y_stride(unpack_dst_format));
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(0);
 
     _llk_unpack_tilizeA_B_mop_config_<neginf_srcA, reload_srcB, zero_srcA, zero_srcA_reduce>(num_faces);
@@ -860,5 +631,208 @@ inline void _llk_unpack_tilizeA_B_uninit_(const std::uint32_t unpack_dst_format)
     TTI_WRCFG(p_gpr_unpack::TMP0, 0, THCON_SEC0_REG2_Out_data_format_ADDR32);
     cfg_reg_rmw_tensix<UNP0_ADDR_CTRL_XY_REG_1_Ystride_ADDR32, UNP0_ADDR_CTRL_XY_REG_0_Ystride_SHAMT, UNP0_ADDR_CTRL_XY_REG_1_Ystride_MASK>(
         canonical_unpA_y_stride(unpack_dst_format));
+    TTI_NOP;
+}
+
+// One UNPACR per row of operand A: each iteration unpacks one 1x16 row into the next SrcA row and steps the L1 row (channel 0 Z);
+// the iteration selected by the zmask (the last row of a face) also sets SrcA data valid.
+// TODO: add support for all the template parameters
+template <bool neginf_srcA = false, std::uint32_t reload_srcB = false, bool zero_srcA = false, bool zero_srcA_reduce = false>
+inline void _llk_unpack_tilizeA_B_block_mop_config_(const std::uint32_t num_faces = 4)
+{
+    LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
+    static constexpr std::uint32_t unpack_row = TT_OP_UNPACR(SrcA, 0b01000001 /*CH1_Y+=1, CH0_Z+=1*/, 0, 0, 0, 1, 0, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+    static constexpr std::uint32_t unpack_last_row =
+        TT_OP_UNPACR(SrcA, 0b01000001 /*CH1_Y+=1, CH0_Z+=1*/, 0, 0, 0, 1, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+
+    ckernel_unpack_template tmp = ckernel_unpack_template(
+        false,           // src B
+        false,           // halo
+        unpack_row,
+        0,
+        0,
+        0,
+        unpack_last_row,
+        0,
+        0);
+
+    tmp.program();
+}
+
+// Rows are selected with the unpacker 0 channel 0 counters (X dim one 1x16 face row, Y dim the block row pitch in face rows, Z dim the rows of a face);
+// a one-tile column stride in SCRATCH_SEC0 advances SrcA's L1 address between tiles. The MOP and SCRATCH_SEC0 differ from _llk_unpack_tilizeA_B_init_'s, so the two forms do not mix.
+template <bool neginf_srcA = false, std::uint32_t reload_srcB = false, bool zero_srcA = false, bool zero_srcA_reduce = false>
+inline void _llk_unpack_tilizeA_B_block_init_(
+    const std::uint32_t unpack_src_format,
+    const std::uint32_t unpack_dst_format,
+    const std::uint32_t ct_dim,
+    const std::uint32_t num_faces       = 4,
+    const std::uint32_t unpB_face_r_dim = FACE_R_DIM,
+    const std::uint32_t unpA_face_r_dim = FACE_R_DIM)
+{
+    LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
+    LLK_ASSERT(unpA_face_r_dim >= 1 && unpA_face_r_dim <= FACE_R_DIM, "unpA_face_r_dim must be 1 to 16");
+    LLK_ASSERT(ct_dim * ((num_faces == 1) ? 1 : 2) <= 255, "the row pitch in face rows must fit the 8-bit tile descriptor Y dim");
+
+    // One tile column of operand A in 16B words, the CFGSHIFTMASK increment between the tiles of a block
+    const std::uint32_t tile_offset_16B = SCALE_DATUM_SIZE(unpack_src_format, 1) << 1;
+    const std::uint32_t y_dim           = ct_dim * ((num_faces == 1) ? 1 : 2);
+
+    TT_SETDMAREG(0, LOWER_HALFWORD(tile_offset_16B), 0, LO_16(p_gpr_unpack::TMP0));
+    TT_SETDMAREG(0, UPPER_HALFWORD(tile_offset_16B), 0, HI_16(p_gpr_unpack::TMP0));
+    TT_SETDMAREG(0, y_dim, 0, LO_16(p_gpr_unpack::TMP1));
+    TT_SETDMAREG(0, unpA_face_r_dim, 0, HI_16(p_gpr_unpack::TMP1));
+    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON | p_stall::UNPACK | p_stall::TRISC_CFG);
+    TTI_WRCFG(p_gpr_unpack::TMP0, p_cfg::WRCFG_32b, SCRATCH_SEC0_val_ADDR32);
+    // FACE_DIM_1x16 holds FACE_C_DIM in both halfwords: x_dim of one face row in both contexts
+    TTI_WRCFG(p_gpr_unpack::FACE_DIM_1x16, p_cfg::WRCFG_32b, THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32);
+    TTI_WRCFG(p_gpr_unpack::TMP1, p_cfg::WRCFG_32b, THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1);
+    TTI_NOP;
+
+    // Unpack 1 row of 1x16 at a time for SrcA
+    config_unpacker_x_end<p_setadc::UNP_A>(1);
+    config_unpacker_x_end<p_setadc::UNP_B>(unpB_face_r_dim);
+
+    // SrcA Y stride: one 1x16 row of datums, a Tf32 register format counted as 32-bit
+    cfg_reg_rmw_tensix<UNP0_ADDR_CTRL_XY_REG_1_Ystride_RMW>(canonical_unpA_y_stride(unpack_dst_format));
+    cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(0);
+
+    _llk_unpack_tilizeA_B_block_mop_config_<neginf_srcA, reload_srcB, zero_srcA, zero_srcA_reduce>(num_faces);
+}
+
+// face selects the tile's column half (Y) and row half (W).
+template <std::uint32_t face, bool neginf_srcA, std::uint32_t reload_srcB, bool zero_srcA_reduce, bool clear_pad = true>
+inline void _llk_unpack_tilizeA_B_face_(const std::uint32_t face_r_dim)
+{
+    // A face of 16 rows overwrites every SrcA row, so only a shorter face needs the padding clear
+    if constexpr (clear_pad && neginf_srcA)
+    {
+        TTI_UNPACR_NOP(SrcA, 0, 0, 0, 0, 1 /* wait like UNPACR */, 0, p_unpacr::UNP_CLRSRC_NEGINF, p_unpacr::UNP_CLRSRC);
+    }
+    else if constexpr (clear_pad && zero_srcA_reduce)
+    {
+        TTI_UNPACR_NOP(SrcA, 0, 0, 0, 0, 1 /* wait like UNPACR */, 0, p_unpacr::UNP_CLRSRC_ZERO, p_unpacr::UNP_CLRSRC);
+    }
+
+    // SrcA row 0; L1 row 0 of the face's column half (Y) and row half (W)
+    TTI_SETADCXY(p_setadc::UNP_A, 0, 0, face & 1, 0, 0b1010);
+    TTI_SETADCZW(p_setadc::UNP_A, 0, 0, face >> 1, 0, 0b0011);
+
+    // If reload_srcB, only first face needs to be loaded, otherwise CH0_Z+=1
+    TTI_UNPACR(SrcB, reload_srcB ? 0b0 : 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+
+    TT_MOP(0, face_r_dim - 1, 1u << (face_r_dim - 1));
+}
+
+template <bool neginf_srcA, std::uint32_t reload_srcB, bool zero_srcA_reduce, bool clear_pad>
+inline void _llk_unpack_tilizeA_B_block_tiles_(const std::uint32_t face_r_dim, const std::uint32_t num_tiles, const std::uint32_t num_faces)
+{
+    for (std::uint32_t tile = 0; tile < num_tiles; tile++)
+    {
+        if (tile > 0)
+        {
+            // Base address += SCRATCH_SEC0 (one tile column); CFGSHIFTMASK's target is an immediate
+            if (0 == unp_cfg_context)
+            {
+                TTI_CFGSHIFTMASK(1, 0b011, 32 - 1, 0, 0b11, THCON_SEC0_REG3_Base_address_ADDR32);
+            }
+            else
+            {
+                TTI_CFGSHIFTMASK(1, 0b011, 32 - 1, 0, 0b11, THCON_SEC0_REG3_Base_cntx1_address_ADDR32);
+            }
+            TTI_NOP;
+        }
+
+        TTI_SETADCZW(p_setadc::UNP_B, 0, 0, 0, 0, 0b1111);
+
+        _llk_unpack_tilizeA_B_face_<0, neginf_srcA, reload_srcB, zero_srcA_reduce, clear_pad>(face_r_dim);
+        if (num_faces > 1)
+        {
+            _llk_unpack_tilizeA_B_face_<1, neginf_srcA, reload_srcB, zero_srcA_reduce, clear_pad>(face_r_dim);
+        }
+        if (num_faces > 2)
+        {
+            _llk_unpack_tilizeA_B_face_<2, neginf_srcA, reload_srcB, zero_srcA_reduce, clear_pad>(face_r_dim);
+            _llk_unpack_tilizeA_B_face_<3, neginf_srcA, reload_srcB, zero_srcA_reduce, clear_pad>(face_r_dim);
+        }
+    }
+
+}
+
+// One configuration context acquire covers the block: the RISC programs the first tile's address, the instruction stream advances it
+// one tile column (CFGSHIFTMASK) per further tile. Call the block init with matching template args first and the block uninit after.
+template <bool neginf_srcA = false, std::uint32_t reload_srcB = false, bool zero_srcA = false, bool zero_srcA_reduce = false>
+inline void _llk_unpack_tilizeA_B_block_(
+    const std::uint32_t unpA_src_format,
+    const std::uint32_t face_r_dim,
+    const std::uint32_t base_address_a,
+    const std::uint32_t address_b,
+    const std::uint32_t tile_index_a,
+    const std::uint32_t num_tiles,
+    const std::uint32_t num_faces = 4)
+{
+    LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
+    LLK_ASSERT(face_r_dim >= 1 && face_r_dim <= FACE_R_DIM, "face_r_dim must be 1 to 16");
+    LLK_ASSERT(num_tiles > 0, "A block has at least one tile");
+    const std::uint32_t address_a = base_address_a + (SCALE_DATUM_SIZE(unpA_src_format, tile_index_a) << 1);
+
+    volatile std::uint32_t tt_reg_ptr* cfg = get_cfg_pointer(); // get pointer to registers for current state ID
+
+    // Wait for free context
+    wait_for_next_context(2);
+
+    // Validate and configure addresses
+    _llk_unpack_configure_addresses_(address_a, address_b, cfg);
+
+    // Trisc::SEMPOST for context acquire
+    semaphore_post(semaphore::UNPACK_SYNC);
+
+    // Stall unpacker and the CFGSHIFTMASKs below until pending CFG writes from Trisc have completed
+    TTI_STALLWAIT(p_stall::STALL_UNPACK | p_stall::STALL_CFG, p_stall::TRISC_CFG);
+
+    if (face_r_dim < FACE_R_DIM)
+    {
+        _llk_unpack_tilizeA_B_block_tiles_<neginf_srcA, reload_srcB, zero_srcA_reduce, true>(face_r_dim, num_tiles, num_faces);
+    }
+    else
+    {
+        _llk_unpack_tilizeA_B_block_tiles_<neginf_srcA, reload_srcB, zero_srcA_reduce, false>(face_r_dim, num_tiles, num_faces);
+    }
+
+    // T6::SEMGET for context release
+    t6_semaphore_get(semaphore::UNPACK_SYNC);
+
+    // Switch unpacker config context
+    switch_config_context(unp_cfg_context);
+}
+
+// Reverts the block init's operand A addressing and zeroes the Ch0/Ch1 Y, Z and W counters on both unpackers. The unpack config word-0 write is a full-word write,
+// wider than init's: it forces out_data_format and throttle_mode and zeroes context_count, tileize_mode, unpack_src_reg_set_update and shift_amount.
+inline void _llk_unpack_tilizeA_B_block_uninit_(const std::uint32_t unpack_dst_format, const ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE)
+{
+    const std::uint32_t num_faces  = tensor_shape.total_num_faces();
+    const std::uint32_t face_r_dim = tensor_shape.face_r_dim;
+    LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
+
+    TTI_STALLWAIT(p_stall::STALL_THCON, p_stall::UNPACK);
+
+    // _llk_unpack_tilizeA_B_block_ uses the y-stride and steps the y, z and w counters
+    TTI_SETADCXY(0b011, 0, 0, 0, 0, 0b1010);
+    TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
+
+    unpack_config_u config = {0};
+
+    config.f.out_data_format = unpack_dst_format;
+    config.f.throttle_mode   = 2;
+    TT_SETDMAREG(0, LOWER_HALFWORD(config.val[0]), 0, LO_16(p_gpr_unpack::TMP0));
+    TT_SETDMAREG(0, UPPER_HALFWORD(config.val[0]), 0, HI_16(p_gpr_unpack::TMP0));
+    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
+    // Load unpack config[0]
+    TTI_WRCFG(p_gpr_unpack::TMP0, 0, THCON_SEC0_REG2_Out_data_format_ADDR32);
+    cfg_reg_rmw_tensix<UNP0_ADDR_CTRL_XY_REG_1_Ystride_ADDR32, UNP0_ADDR_CTRL_XY_REG_0_Ystride_SHAMT, UNP0_ADDR_CTRL_XY_REG_1_Ystride_MASK>(
+        canonical_unpA_y_stride(unpack_dst_format));
+    cfg_reg_rmw_tensix<THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32, 0, 0xffffffff>(canonical_unpA_tile_x_dim_cntx(face_r_dim));
+    // Y dim 1 (low halfword), Z dim num_faces (high halfword), the configure_unpack_AB baseline
+    cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1, 0, 0xffffffff>(1 | (num_faces << 16));
     TTI_NOP;
 }

@@ -67,18 +67,24 @@ inline void _llk_math_fast_tilize_init_([[maybe_unused]] const std::uint32_t unp
 
 // One call = one row-chunk (one MOP run). num_units loop removed; block
 // height is always 1 and chunk iteration is in the caller.
+// gap_rows: the second chunk of a DEST section, written to the 8 gap rows of every 16 that the first chunk leaves free.
 template <bool is_fp32_dest_acc_en = false>
 inline void _llk_math_fast_tilize_block_(
     const std::uint32_t dst_index,
     [[maybe_unused]] const std::uint32_t unpack_dst_format,
     [[maybe_unused]] const std::uint32_t unit_dim,
-    [[maybe_unused]] const std::uint32_t num_faces = 4)
+    [[maybe_unused]] const std::uint32_t num_faces = 4,
+    const bool gap_rows                             = false)
 {
     // Use SrcRegs (not DestReg) - DestReg sends a hardware mailbox to the unpack
     // thread, but fast-tilize unpack uses counter-based addressing and never reads
     // the mailbox. After ~4 unread writes the mailbox FIFO fills and math RISC-V
     // deadlocks. SrcRegs uses TT_SETC16 to set DEST offset directly.
     math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
+    if (gap_rows)
+    {
+        TTI_SETRWC(p_setrwc::CLR_NONE, 0, 8, 0, 0, p_setrwc::SET_D);
+    }
 
     // 1 MOP = 4 dvalids x 8 MOVA2D + 4 SETRWC(CLR_A)
     ckernel_template::run();

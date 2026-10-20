@@ -188,43 +188,6 @@ inline void reset_config_context()
     TTI_SETC16(UNPACK_MISC_CFG_CfgContextOffset_0_ADDR32, 0x0000);
 }
 
-// switch_config_context from the caller's copy of the context, so the global is not reloaded after the volatile stores.
-inline void switch_config_context_from(const std::uint32_t context_used)
-{
-    unp_cfg_context = 1 - context_used;
-    if (context_used == 0)
-    {
-        TTI_SETC16(UNPACK_MISC_CFG_CfgContextOffset_0_ADDR32, 0x0101);
-    }
-    else
-    {
-        TTI_SETC16(UNPACK_MISC_CFG_CfgContextOffset_0_ADDR32, 0x0000);
-    }
-}
-
-// Which block body the replay buffer holds: the inits clear it; the unpack A block call records its own, the tilize body is recorded
-// by the tilize init when block calls follow, else by the first tilize block call.
-// An unpack A value is the face count, with a half bit while only that half is held.
-enum class BlockReplayBody : std::uint8_t
-{
-    None      = 0,
-    UnpackA_1 = 1,
-    UnpackA_2 = 2,
-    UnpackA_4 = 4,
-    Tilize    = 8,
-    // The tilize init ran without recording the body
-    TilizeInit = 0x40,
-};
-constexpr std::uint8_t BLOCK_REPLAY_HALF_0 = 0x10;
-constexpr std::uint8_t BLOCK_REPLAY_HALF_1 = 0x20;
-
-// Internal linkage: a kernel that never reads the record (no block call) drops the variable and the inits' stores to it.
-static inline BlockReplayBody& block_replay_body()
-{
-    static BlockReplayBody body = BlockReplayBody::None;
-    return body;
-}
-
 // Sync on unpacker idle via waiting busy contexts counter 0
 inline void wait_for_idle()
 {
@@ -1001,45 +964,9 @@ inline void config_unpacker_x_end(const std::uint32_t face_r_dim)
     }
 }
 
-// Wait for the math thread's post for this tile and consume it: the unpack stall holds the MOP's UNPACRs, the sync stall the SEMGET.
 inline void wait_for_dest_available()
 {
-    TTI_SEMWAIT(p_stall::STALL_SYNC | p_stall::STALL_UNPACK, semaphore::t6_sem(semaphore::MATH_DONE), p_stall::STALL_ON_ZERO);
-    TTI_SEMGET(semaphore::t6_sem(semaphore::MATH_DONE));
-}
-
-// The srcA Z stride stays at canonical_unpA_z_stride of the operand's dst format, which its configure or srca reconfig programmed.
-inline void unpack_to_dest_tile_done(std::uint32_t &context_id)
-{
-    t6_semaphore_post<p_stall::UNPACK0>(semaphore::UNPACK_TO_DEST);
-    // Restore config context
-    if (context_id == 0)
-    {
-        cfg_reg_rmw_tensix<THCON_SEC0_REG2_Unpack_if_sel_cntx0_RMW>(0);
-        cfg_reg_rmw_tensix<THCON_SEC0_REG5_Dest_cntx0_address_RMW>(4 * 16);
-    }
-    else
-    {
-        cfg_reg_rmw_tensix<THCON_SEC0_REG2_Unpack_if_sel_cntx1_RMW>(0);
-        cfg_reg_rmw_tensix<THCON_SEC0_REG5_Dest_cntx1_address_RMW>(4 * 16);
-    }
-    TTI_SETC16(SRCA_SET_Base_ADDR32, 0x4); // re-enable address bit swizzle
-}
-
-inline void set_dst_write_addr(const std::uint32_t &context_id)
-{
-    std::uint32_t dst_byte_addr = 16 * (4 + mailbox_read(ThreadId::MathThreadId)); // Apply fixed offset of 4*16 to dest address
-    TTI_SETC16(SRCA_SET_Base_ADDR32, 0x0);                                         // Disable address bit swizzle
-    if (context_id == 0)
-    {
-        cfg_reg_rmw_tensix<THCON_SEC0_REG2_Unpack_if_sel_cntx0_RMW>(1);
-        cfg_reg_rmw_tensix<THCON_SEC0_REG5_Dest_cntx0_address_RMW>(dst_byte_addr);
-    }
-    else
-    {
-        cfg_reg_rmw_tensix<THCON_SEC0_REG2_Unpack_if_sel_cntx1_RMW>(1);
-        cfg_reg_rmw_tensix<THCON_SEC0_REG5_Dest_cntx1_address_RMW>(dst_byte_addr);
-    }
+    t6_semaphore_wait_on_max<p_stall::STALL_UNPACK>(semaphore::UNPACK_TO_DEST);
 }
 
 // Restore srcA channel-1 Z-stride to the canonical baseline derived from unpack_dst_format.
@@ -1065,17 +992,13 @@ inline void unpack_to_dest_tile_done(std::uint32_t &context_id, const std::uint3
     TTI_SETC16(SRCA_SET_Base_ADDR32, 0x4); // re-enable address bit swizzle
 }
 
-// tile_z_step: one channel 1 Z step per 32x32 DEST tile (four faces), so whole-tile UNPACRs walk consecutive DEST tiles.
-template <bool tile_z_step = false>
 inline void set_dst_write_addr(const std::uint32_t &context_id, const std::uint32_t &unpack_dst_format)
 {
     std::uint32_t dst_byte_addr = 16 * (4 + mailbox_read(ThreadId::MathThreadId)); // Apply fixed offset of 4*16 to dest address
     TTI_SETC16(SRCA_SET_Base_ADDR32, 0x0);                                         // Disable address bit swizzle
-    // Set unpacker Z-stride from the canonical baseline for unpack_dst_format. Paired with
+    // Set unpacker Z-stride to the canonical baseline for unpack_dst_format. Paired with
     // unpack_to_dest_tile_done's canonical restore; no GPR snapshot of the prior value.
-    constexpr std::uint32_t z_faces = tile_z_step ? 4 : 1;
-    TT_SETDMAREG(
-        0, LOWER_HALFWORD((z_faces * canonical_unpA_z_stride(unpack_dst_format)) << UNP0_ADDR_CTRL_ZW_REG_1_Zstride_SHAMT), 0, LO_16(p_gpr_unpack::TMP_LO));
+    TT_SETDMAREG(0, LOWER_HALFWORD(canonical_unpA_z_stride(unpack_dst_format) << UNP0_ADDR_CTRL_ZW_REG_1_Zstride_SHAMT), 0, LO_16(p_gpr_unpack::TMP_LO));
     TTI_WRCFG(p_gpr_unpack::TMP_LO, p_cfg::WRCFG_32b, UNP0_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32);
     if (context_id == 0)
     {

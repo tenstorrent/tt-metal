@@ -20,6 +20,7 @@ from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
+    FAST_TILIZE_W_STEP,
     LOOP_FACTOR,
     NUM_FACES,
     NUM_GUARD_TILES,
@@ -83,11 +84,15 @@ def test_fast_tilize_full(formats, dest_acc, dimensions):
     configuration = TestConfig(
         "sources/fast_tilize_bh_test.cpp",
         formats,
-        templates=[PERF_RUN_TYPE(PerfRunType.L1_TO_L1)],
+        templates=[
+            PERF_RUN_TYPE(PerfRunType.L1_TO_L1),
+            FAST_TILIZE_W_STEP(input_width_tiles, formats),
+        ],
         runtimes=[
             generate_input_dim(input_dimensions, input_dimensions),
             TILE_COUNT(tile_count),
-            LOOP_FACTOR(1),
+            # The second pass packs a row on the counter state the first one leaves.
+            LOOP_FACTOR(2),
             NUM_FACES(4),
             NUM_GUARD_TILES(0),
         ],
@@ -192,7 +197,10 @@ def test_fast_tilize_large(formats, dest_acc, dimensions):
     configuration = TestConfig(
         "sources/fast_tilize_bh_test.cpp",
         formats,
-        templates=[PERF_RUN_TYPE(PerfRunType.L1_TO_L1)],
+        templates=[
+            PERF_RUN_TYPE(PerfRunType.L1_TO_L1),
+            FAST_TILIZE_W_STEP(input_width_tiles, formats),
+        ],
         runtimes=[
             generate_input_dim(input_dimensions, input_dimensions),
             TILE_COUNT(tile_count),
@@ -271,7 +279,10 @@ def test_fast_tilize_overflow_guard(formats, dest_acc, dimensions):
     configuration = TestConfig(
         "sources/fast_tilize_bh_test.cpp",
         formats,
-        templates=[PERF_RUN_TYPE(PerfRunType.L1_TO_L1)],
+        templates=[
+            PERF_RUN_TYPE(PerfRunType.L1_TO_L1),
+            FAST_TILIZE_W_STEP(input_width_tiles, formats),
+        ],
         runtimes=[
             generate_input_dim(input_dimensions, input_dimensions),
             TILE_COUNT(tile_count),

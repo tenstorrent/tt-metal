@@ -86,6 +86,29 @@ class THROTTLE_LEVEL(TemplateParameter):
         return f"constexpr int THROTTLE_LEVEL = {self.throttle_level};"
 
 
+@dataclass(init=False)
+class FAST_TILIZE_W_STEP(TemplateParameter):
+    """Blackhole fast tilize: a 16-bit input steps L1 by the packer's output W counter, as the `ttnn.tilize` kernels do
+    (tilize_helpers.inl), except a row of two tiles with a 16-bit output, which keeps the paced init. No dataclass
+    field, so the perf reports keep their columns.
+    """
+
+    def __init__(self, ct_dim: int, formats):
+        self.two_tile_row = ct_dim == 2
+        self.w_step = formats.input_format.size == 2 and (
+            ct_dim >= 3 or (self.two_tile_row and formats.output_format.size != 2)
+        )
+
+    def __repr__(self) -> str:
+        return f"FAST_TILIZE_W_STEP({self.w_step}, {self.two_tile_row})"
+
+    def convert_to_cpp(self) -> str:
+        return (
+            f"constexpr bool FAST_TILIZE_W_STEP = {str(self.w_step).lower()};\n"
+            f"constexpr bool FAST_TILIZE_TWO_TILE_ROW = {str(self.two_tile_row).lower()};"
+        )
+
+
 @dataclass
 class MATH_TRANSPOSE_FACES(TemplateParameter):
     math_transpose_faces: Transpose
@@ -844,38 +867,6 @@ class TILIZE(TemplateParameter):
 
     def convert_to_cpp(self) -> str:
         return f"constexpr bool tilize_en = {str(self.tilize.value).lower()};"
-
-
-@dataclass
-class UNPACK_BLOCK(TemplateParameter):
-    """One block call per DEST block (datacopy) or block row (tilize).
-
-    A macro, so a kernel can default it to 0 when a driver does not pass it.
-    """
-
-    unpack_block: bool = False
-
-    def convert_to_cpp(self) -> str:
-        return f"#define UNPACK_BLOCK {1 if self.unpack_block else 0}"
-
-
-class DATACOPY_FLAG(TemplateParameter):
-    """A datacopy kernel switch (#define <name> 1), picked from columns the test already reports, so it adds no column."""
-
-    def __init__(self, name: str):
-        self.name = name
-
-    def __repr__(self) -> str:
-        return f"DATACOPY_FLAG({self.name})"
-
-    def __eq__(self, other) -> bool:
-        return isinstance(other, DATACOPY_FLAG) and other.name == self.name
-
-    def __hash__(self) -> int:
-        return hash(self.name)
-
-    def convert_to_cpp(self) -> str:
-        return f"#define {self.name} 1"
 
 
 @dataclass

@@ -16,11 +16,6 @@
 #include "perf.h"
 #include "profiler.h"
 
-// UNPACK_BLOCK (driver template): one block call per block row instead of one call per tile
-#ifndef UNPACK_BLOCK
-#define UNPACK_BLOCK 0
-#endif
-
 // Globals
 std::uint32_t unp_cfg_context          = 0;
 std::uint32_t pack_sync_tile_dst_ptr   = 0;
@@ -64,7 +59,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             FACE_R_DIM,
             4 /* num_faces */,
             4 /* num_faces */);
-        _llk_unpack_tilize_init_wrapper_(formats.unpack_A_src, formats.unpack_A_dst, BLOCK_CT_DIM, FACE_R_DIM, false /* narrow_tile */, 4, UNPACK_BLOCK);
+        _llk_unpack_tilize_init_wrapper_(formats.unpack_A_src, formats.unpack_A_dst, BLOCK_CT_DIM, FACE_R_DIM, false /* narrow_tile */);
         PROFILER_SYNC();
     }
 
@@ -77,18 +72,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 for (std::uint32_t i = 0; i < BLOCK_RT_DIM; i++)
                 {
                     const std::uint32_t tile_row_addr = L1_ADDRESS(src + (i % 8) * 0x1000); // TODO SS<-LP use PERF_ADDRESS here
-#if UNPACK_BLOCK
-                    _llk_unpack_tilize_block_wrapper_(
-                        tile_row_addr,
-                        0 /* first tile */,
-                        BLOCK_CT_DIM,
-                        formats.unpack_A_src,
-                        formats.unpack_A_dst,
-                        0 /* block_ct_dim */,
-                        FACE_R_DIM,
-                        4 /* num_faces */,
-                        false /* narrow_tile */);
-#else
                     for (std::uint32_t j = 0; j < BLOCK_CT_DIM; j++)
                     {
                         _llk_unpack_tilize_wrapper_(
@@ -101,7 +84,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             4 /* num_faces */,
                             false /* narrow_tile */);
                     }
-#endif
                 }
             }
         }
@@ -214,21 +196,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_lib_pack_wrappers.h"
 #include "llk_pack_common.h"
 
-#if UNPACK_BLOCK && defined(ARCH_BLACKHOLE)
-// tilize_block's pack: one run for the DEST section's tiles (8-bit sources run the PackMode::Default program)
-inline void pack_tilize_block(const std::uint32_t num_tiles, const std::uint32_t unpack_src_format)
-{
-    if (_llk_pack_skip_bh_tilize_workaround_wrapper_(unpack_src_format))
-    {
-        _llk_pack_block_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default>(0, PERF_ADDRESS(PERF_OUTPUT, 0), num_tiles);
-    }
-    else
-    {
-        _llk_pack_block_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Tilize>(0, PERF_ADDRESS(PERF_OUTPUT, 0), num_tiles);
-    }
-}
-#endif
-
 void run_kernel(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
@@ -278,22 +245,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
-#if UNPACK_BLOCK && defined(ARCH_BLACKHOLE)
-            if (TILE_CNT > 1)
-            {
-                for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
-                {
-                    for (std::uint32_t remaining_tiles = TILE_CNT; remaining_tiles > 0;)
-                    {
-                        const std::uint32_t num_tiles = std::min(remaining_tiles, MAX_TILES_DEST);
-                        pack_tilize_block(num_tiles, formats.unpack_A_src);
-                        remaining_tiles -= num_tiles;
-                    }
-                }
-                PROFILER_SYNC();
-                return;
-            }
-#endif
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
                 for (std::uint32_t i = 0; i < TILE_CNT; ++i)
@@ -316,15 +267,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 std::uint32_t num_tiles = std::min(remaining_tiles, MAX_TILES_DEST);
                 _llk_packer_wait_for_math_done_();
-#if UNPACK_BLOCK && defined(ARCH_BLACKHOLE)
-                if (num_tiles > 1)
-                {
-                    pack_tilize_block(num_tiles, formats.unpack_A_src);
-                    _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
-                    remaining_tiles -= num_tiles;
-                    continue;
-                }
-#endif
                 for (std::uint32_t i = 0; i < num_tiles; ++i)
                 {
                     const std::uint32_t tile_index = i % MAX_TILES_DEST;
