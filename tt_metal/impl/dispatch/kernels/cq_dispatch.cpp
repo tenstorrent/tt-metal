@@ -720,7 +720,12 @@ __attribute__((noinline)) void process_write_paged() {
 //
 // Since all subcmds all appear in the first page and given the size restrictions
 // this command can't be too many pages.  All pages are released at the end
-template <bool mcast, typename WritePackedSubCmd>
+//
+// late_wait delays each command-buffer wait by two cycles. Use it for transfers that keep the NIU busy longer than one
+// pass of the write loop below: an early wait finds the buffer still busy and its re-read costs a full NoC register
+// round trip, so on WH a 512 B transfer takes ~21 cycles per write with the early wait and ~17 with the late one.
+// Smaller transfers are CPU-bound and only lose the two cycles.
+template <bool mcast, typename WritePackedSubCmd, bool late_wait = false>
 void process_write_packed(uint32_t flags, uint32_t* l1_cache) {
     volatile CQDispatchCmd tt_l1_ptr* cmd = reinterpret_cast<volatile CQDispatchCmd tt_l1_ptr*>(cmd_ptr);
 
@@ -767,7 +772,8 @@ void process_write_packed(uint32_t flags, uint32_t* l1_cache) {
         noc_async_write_barrier();
     };
     WritePackedSubCmd* sub_cmd_ptr = (WritePackedSubCmd*)l1_cache;
-    while (count != 0) {
+    WritePackedSubCmd* const sub_cmd_end = sub_cmd_ptr + count;
+    auto write_sub_cmd = [&]() {
         uint32_t dst_noc = sub_cmd_ptr->noc_xy_addr;
         uint32_t num_dests = mcast ? ((CQDispatchWritePackedMulticastSubCmd*)sub_cmd_ptr)->num_mcast_dests : 1;
         sub_cmd_ptr++;
@@ -777,59 +783,98 @@ void process_write_packed(uint32_t flags, uint32_t* l1_cache) {
         } else {
             dst = get_noc_addr_helper(dst_noc, dst_addr);
         }
-        // Get a page if needed
-        if (xfer_size > dispatch_cb_reader.available_bytes(data_ptr)) {
-            // Check for block completion and issue orphan writes for this block
-            // before proceeding to next block
-            uint32_t orphan_size = 0;
-            dispatch_cb_reader.get_cb_page_and_release_pages(data_ptr, [&](bool will_wrap) {
-                orphan_size = dispatch_cb_reader.available_bytes(data_ptr);
-                if (orphan_size != 0) {
-                    wait_for_barrier();
-                    cq_noc_async_write_with_state<CQ_NOC_SNdL>(
-                        static_cast<uint32_t>(data_ptr), dst, orphan_size, num_dests);
-                    writes++;
-                    mcasts += num_dests;
-                    if (!will_wrap) {
-                        data_ptr += orphan_size;
-                    }
+        wait_for_barrier();
+        if constexpr (late_wait) {
+            asm volatile("nop\nnop");
+        }
+        cq_noc_async_write_with_state<CQ_NOC_SNdl>(static_cast<uint32_t>(data_ptr), dst, xfer_size, num_dests);
+        if constexpr (mcast) {
+            writes++;
+            mcasts += num_dests;
+        }
+    };
+    while (sub_cmd_ptr != sub_cmd_end) {
+        // Sub-cmds whose data is already wholly available are written in a run that checks nothing but the command
+        // buffer. Keeping that loop to two branches (the buffer wait and its own exit) is what makes it fast at any
+        // placement: with the page-boundary check and a count test also inside it, BRISC's branch predictor aliased
+        // them with the back edge at some code addresses, costing ~4-6 cycles per write depending on where unrelated
+        // code changes happened to leave this loop.
+        uint32_t available = dispatch_cb_reader.available_bytes(data_ptr);
+        if (xfer_size <= available) {
+            WritePackedSubCmd* run_start = sub_cmd_ptr;
+            if (stride == 0) {
+                do {
+                    write_sub_cmd();
+                } while (sub_cmd_ptr != sub_cmd_end);
+            } else {
+                // The run ends at the last sub-cmd, or at the last one whose data ends within what is available.
+                uintptr_t last = data_ptr + (sub_cmd_end - sub_cmd_ptr - 1) * stride;
+                uintptr_t limit = data_ptr + (available - xfer_size);
+                if (last < limit) {
+                    limit = last;
                 }
-                noc_nonposted_writes_num_issued[noc_index] += writes;
-                noc_nonposted_writes_acked[noc_index] += mcasts;
-                writes = 0;
-                mcasts = 0;
-            });
-
-            // Write the remainder of the transfer. All the remaining contents of the transfer is now available, since
-            // the size of a single transfer is at most the CB page size. This write has a different destination address
-            // than the default, so we restore the destination address to the start immediately afterwards to avoid the
-            // overhead in the common case.
-            if (orphan_size != 0) {
-                uint32_t remainder_xfer_size = xfer_size - orphan_size;
-                // Creating full NOC addr not needed as we are not programming the noc coords
-                uint32_t remainder_dst_addr = dst_addr + orphan_size;
-                wait_for_barrier();
-                cq_noc_async_write_with_state<CQ_NOC_SnDL>(
-                    static_cast<uint32_t>(data_ptr), remainder_dst_addr, remainder_xfer_size, num_dests);
-                // Reset values expected below
-                cq_noc_async_write_with_state<CQ_NOC_snDL, CQ_NOC_WAIT, CQ_NOC_send>(0, dst, xfer_size, num_dests);
-                writes++;
-                mcasts += num_dests;
-
-                count--;
-                data_ptr += stride - orphan_size;
-
-                continue;
+                do {
+                    write_sub_cmd();
+                    data_ptr += stride;
+                } while (data_ptr <= limit);
             }
+            if constexpr (!mcast) {
+                writes += sub_cmd_ptr - run_start;
+                mcasts += sub_cmd_ptr - run_start;
+            }
+            continue;
         }
 
+        // The next sub-cmd's data runs past the available pages. Get more, first writing out the part that is here if
+        // the next pages start a new block.
+        uint32_t dst_noc = sub_cmd_ptr->noc_xy_addr;
+        uint32_t num_dests = mcast ? ((CQDispatchWritePackedMulticastSubCmd*)sub_cmd_ptr)->num_mcast_dests : 1;
+        uint64_t dst;
+        if constexpr (mcast) {
+            dst = cq_mcast_noc_addr(dst_noc, dst_addr);
+        } else {
+            dst = get_noc_addr_helper(dst_noc, dst_addr);
+        }
+        uint32_t orphan_size = 0;
+        dispatch_cb_reader.get_cb_page_and_release_pages(data_ptr, [&](bool will_wrap) {
+            orphan_size = dispatch_cb_reader.available_bytes(data_ptr);
+            if (orphan_size != 0) {
+                wait_for_barrier();
+                cq_noc_async_write_with_state<CQ_NOC_SNdL>(
+                    static_cast<uint32_t>(data_ptr), dst, orphan_size, num_dests);
+                writes++;
+                mcasts += num_dests;
+                if (!will_wrap) {
+                    data_ptr += orphan_size;
+                }
+            }
+            noc_nonposted_writes_num_issued[noc_index] += writes;
+            noc_nonposted_writes_acked[noc_index] += mcasts;
+            writes = 0;
+            mcasts = 0;
+        });
+        if (orphan_size == 0) {
+            // Nothing was written; the whole sub-cmd is available now, so the run above takes it.
+            continue;
+        }
+
+        // Write the remainder of the transfer. All the remaining contents of the transfer is now available, since
+        // the size of a single transfer is at most the CB page size. This write has a different destination address
+        // than the default, so we restore the destination address to the start immediately afterwards to avoid the
+        // overhead in the common case.
+        uint32_t remainder_xfer_size = xfer_size - orphan_size;
+        // Creating full NOC addr not needed as we are not programming the noc coords
+        uint32_t remainder_dst_addr = dst_addr + orphan_size;
         wait_for_barrier();
-        cq_noc_async_write_with_state<CQ_NOC_SNdl>(static_cast<uint32_t>(data_ptr), dst, xfer_size, num_dests);
+        cq_noc_async_write_with_state<CQ_NOC_SnDL>(
+            static_cast<uint32_t>(data_ptr), remainder_dst_addr, remainder_xfer_size, num_dests);
+        // Reset values expected below
+        cq_noc_async_write_with_state<CQ_NOC_snDL, CQ_NOC_WAIT, CQ_NOC_send>(0, dst, xfer_size, num_dests);
         writes++;
         mcasts += num_dests;
 
-        count--;
-        data_ptr += stride;
+        sub_cmd_ptr++;
+        data_ptr += stride - orphan_size;
     }
 
     noc_nonposted_writes_num_issued[noc_index] += writes;
@@ -1320,7 +1365,16 @@ re_run_command:
             if (flags & CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_MCAST) {
                 process_write_packed<true, CQDispatchWritePackedMulticastSubCmd>(flags, l1_cache);
             } else {
-                process_write_packed<false, CQDispatchWritePackedUnicastSubCmd>(flags, l1_cache);
+#ifdef ARCH_WORMHOLE
+                // Transfers above this keep the NIU busy past one pass of process_write_packed's write loop.
+                constexpr uint32_t packed_write_late_wait_size = 448;
+                if (cmd->write_packed.size > packed_write_late_wait_size) {
+                    process_write_packed<false, CQDispatchWritePackedUnicastSubCmd, true>(flags, l1_cache);
+                } else
+#endif
+                {
+                    process_write_packed<false, CQDispatchWritePackedUnicastSubCmd>(flags, l1_cache);
+                }
             }
         } break;
 
