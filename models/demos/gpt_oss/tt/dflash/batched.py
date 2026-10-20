@@ -333,6 +333,9 @@ class BatchedKVWrite:
 
         n = len(caches)
         k0, v0 = caches[0]
+        if (k0.dtype == ttnn.bfloat8_b and n == 1 and self.hpc == 1 and not src_head_stride
+                and os.environ.get("B32_KVW_PACK", "1") == "1"):  # fmt: skip
+            return self._call_pack(ks[0], vs[0], k0, v0, pos_ui, page_table)
         ct = [0, self.block, self.kv_heads, self.head_tiles, self.block_size, page_table.shape[-1] * 4, self.users]
         for t in (k0, v0, pos_ui, page_table, ks[0]):
             ct += ttnn.TensorAccessorArgs(t).get_compile_time_args()
@@ -376,6 +379,54 @@ class BatchedKVWrite:
         io = [pos_ui, page_table] + [t for l in range(n) for t in (ks[l], vs[l], caches[l][0], caches[l][1])]
         io = [t for i, t in enumerate(io) if all(t is not u for u in io[:i])]
         ttnn.generic_op(io, ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=[cb]))
+
+    def _call_pack(self, k, v, k_cache, v_cache, pos_ui, page_table):
+        """The BFP8_b caches with the packing on the compute core (fused_decode/kernels/b32_kv_write_pack*.cpp: the
+        RISC-V row packing took ~15 of b32_kv_write.cpp's ~20 us per layer). One layer, one core per (user, kv head)."""
+        from ..fused_decode.boundary import KERNEL_DIR
+
+        cb_scr, cb_old, cb_new, cb_mask, cb_out = 0, 1, 3, 5, 6  # (old / new / out: K at the index, V at index + 1)
+        ct = [cb_scr, self.block, self.kv_heads, self.head_tiles, self.block_size, page_table.shape[-1] * 4,
+              self.users, cb_old, cb_new, cb_mask, cb_out]  # fmt: skip
+        for t in (k_cache, v_cache, pos_ui, page_table, k):
+            ct += ttnn.TensorAccessorArgs(t).get_compile_time_args()
+        rt = ttnn.RuntimeArgs()
+        for i, c in enumerate(self.core_list):
+            u, h = i // self.kv_heads, i % self.kv_heads
+            rt[c.x][c.y] = [u | (h << 8), k.buffer_address(), v.buffer_address(), k_cache.buffer_address(),
+                            v_cache.buffer_address(), pos_ui.buffer_address(), page_table.buffer_address()]  # fmt: skip
+        dm = [
+            ttnn.KernelDescriptor(
+                kernel_source=str(KERNEL_DIR / "b32_kv_write_pack.cpp"), core_ranges=self.cores, compile_time_args=ct,
+                runtime_args=rt,
+                config=ttnn.DataMovementConfigDescriptor(
+                    processor=(ttnn.DataMovementProcessor.RISCV_0, ttnn.DataMovementProcessor.RISCV_1)[sel],
+                    noc=(ttnn.NOC.NOC_0, ttnn.NOC.NOC_1)[sel],
+                ),
+                defines=[("KV_SEL", str(sel))],
+            )
+            for sel in (0, 1)
+        ]  # fmt: skip
+        comp = ttnn.KernelDescriptor(
+            kernel_source=str(KERNEL_DIR / "b32_kv_write_pack_compute.cpp"), core_ranges=self.cores,
+            compile_time_args=[cb_old, cb_new, cb_mask, cb_out, self.head_tiles], runtime_args=[],
+            config=ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.HiFi4,
+                                                fp32_dest_acc_en=os.environ.get("B32_KVW_FP32", "1") == "1",
+                                                math_approx_mode=False),
+        )  # fmt: skip
+        n = 2 * self.head_tiles  # tiles per kv at most (2 groups)
+
+        def cb(i, dtype, page, pages):
+            return ttnn.CBDescriptor(total_size=page * pages, core_ranges=self.cores,
+                                     format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=i, data_format=dtype,
+                                                                                 page_size=page)])  # fmt: skip
+
+        bf8, bf16 = ttnn.bfloat8_b, ttnn.bfloat16
+        cbs = [cb(cb_scr, bf16, 512, 1), cb(cb_old, bf8, 1088, n), cb(cb_old + 1, bf8, 1088, n), cb(cb_new, bf16, 2048, n),
+               cb(cb_new + 1, bf16, 2048, n), cb(cb_mask, bf16, 2048, 2), cb(cb_out, bf8, 1088, n),
+               cb(cb_out + 1, bf8, 1088, n)]  # fmt: skip
+        io = [pos_ui, page_table, k, v, k_cache, v_cache]
+        ttnn.generic_op(io, ttnn.ProgramDescriptor(kernels=dm + [comp], semaphores=[], cbs=cbs))
 
 
 class BatchedDraft:
