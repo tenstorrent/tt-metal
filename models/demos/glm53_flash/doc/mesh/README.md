@@ -339,3 +339,9 @@ writes it.
 |---|---|---|---|---|---|
 | morning (composite ops), 4 users/row = 32 users | 203.35 ms | 4.9 | 157 | 0.868 | 75 % |
 | r4 (fast exact mHC + KDA block + stream experts), 4 users/row = 32 users | 76.45 ms | 13.1 | 419 | 0.842 | 100 % |
+| morning (composite ops), 32 users/row = 256 users | 426.54 ms | 2.3 | 600 | 0.868 | 75 % |
+| r4, 32 users/row = 256 users | 121.56 ms | 8.2 | 2106 | 0.851 | see log |
+
+TTFT at 128 tokens (r4): warm 919 ms (4/row) and 971 ms (32/row) vs 2587 ms in the morning, but the first token
+differs from the host head (39030 vs 102647, chain PCC 0.82 vs 0.91): the prefill-side regression under the fast exact
+mHC path; A/B with the composite wrap on the prefill rows queued (`GLM53_MHC_PREFILL_IMPL=wrap`).
