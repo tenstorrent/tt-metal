@@ -40,6 +40,10 @@ GEMMA_SEQUENCE_LENGTH = 1024
 VIDEO_EMBED_DIM = 4096
 AUDIO_EMBED_DIM = 2048
 
+CONNECTOR_PROBE_PROMPT = "a cat walks across a sunny kitchen"
+# Healthy connectors embed the probe at absmean ~0.2-0.4; a cache of unloaded weights gives 0.
+CONNECTOR_PROBE_MIN_ABSMEAN = 1e-3
+
 GEMMA_CONFIG_METADATA_KEY = "gemma_config"
 TOKENIZER_JSON_TENSOR_KEY = "tokenizer_json"
 HF_ASSET_TENSOR_PREFIX = "hf_asset__"
@@ -185,6 +189,7 @@ class Gemma4TokenizerEncoderPair:
         # ``defer_trace_capture`` / ``open_trace_gate`` (same contract as the Gemma-3 pair).
         self._trace_gate_open = True
         self._trace_captured = False
+        self._connectors_probed = False
 
     @property
     def sequence_length(self) -> int:
@@ -320,6 +325,18 @@ class Gemma4TokenizerEncoderPair:
             if self.mode == "av"
             else None
         )
+        if not self._connectors_probed:
+            self._probe_connectors(
+                lambda axis: self._load_connector(
+                    axis,
+                    self._video_dim if axis == "video" else self._audio_dim,
+                    video_num_blocks if axis == "video" else audio_num_blocks,
+                    num_heads,
+                    connector_name,
+                    ckpt,
+                ),
+                connector_name,
+            )
 
     def _load_connector(self, axis, output_dim, num_blocks, num_heads, connector_name, ckpt) -> EmbeddingsConnector:
         connector = getattr(self, f"{axis}_connector")
@@ -403,27 +420,77 @@ class Gemma4TokenizerEncoderPair:
 
         results = []
         for prompt in prompts:
-            input_ids, attention_mask = self.tokenize(prompt)
-            tt_ids = ttnn.from_torch(
-                input_ids, device=self.mesh_device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT
-            )
-            seq = tt_ids.shape[-1]
-            tt_gemma_mask = self.gemma_encoder.build_attn_mask(attention_mask, seq)
-            fe_mask = self.feature_extractor.build_mask(attention_mask)
-            # src_idx/keep_mask are dim-independent → shared by both connectors.
-            src_idx, keep_mask = self.video_connector.build_indices(attention_mask, seq)
-
             traced = self._encoder_trace and self._trace_gate_open
-            video_dev, audio_dev = self._encode_device(
-                tt_ids, tt_gemma_mask, fe_mask, src_idx, keep_mask, traced=traced
-            )
+            results.append(self._encode_one(prompt, traced=traced))
             self._trace_captured |= traced
-            video_embeds = ttnn.to_torch(ttnn.get_device_tensors(video_dev)[0]).float()
-            audio_embeds = (
-                ttnn.to_torch(ttnn.get_device_tensors(audio_dev)[0]).float() if audio_dev is not None else None
-            )
-            results.append((video_embeds, audio_embeds))
         return results
+
+    def _encode_one(self, prompt: str, *, traced: bool) -> tuple[torch.Tensor, torch.Tensor | None]:
+        input_ids, attention_mask = self.tokenize(prompt)
+        tt_ids = ttnn.from_torch(input_ids, device=self.mesh_device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+        seq = tt_ids.shape[-1]
+        tt_gemma_mask = self.gemma_encoder.build_attn_mask(attention_mask, seq)
+        fe_mask = self.feature_extractor.build_mask(attention_mask)
+        # src_idx/keep_mask are dim-independent → shared by both connectors.
+        src_idx, keep_mask = self.video_connector.build_indices(attention_mask, seq)
+
+        video_dev, audio_dev = self._encode_device(tt_ids, tt_gemma_mask, fe_mask, src_idx, keep_mask, traced=traced)
+        video_embeds = ttnn.to_torch(ttnn.get_device_tensors(video_dev)[0]).float()
+        audio_embeds = ttnn.to_torch(ttnn.get_device_tensors(audio_dev)[0]).float() if audio_dev is not None else None
+        return video_embeds, audio_embeds
+
+    def _probe_connectors(self, rebuild: Callable[[str], EmbeddingsConnector], connector_name: str) -> None:
+        """Run one short prompt through the connectors just loaded; a cache that embeds it to zeros
+        or non-finite values is moved aside and rebuilt from the checkpoint.
+
+        The connector caches are content-blind, so nothing else would refuse one that holds the
+        wrong weights: task #117's 4x8 ltx25_ic_fused cache held weights that were never loaded,
+        every prompt embedded to zeros, the reference latents went inf, and IC videos ignored both
+        the prompt and the sheet. Untraced and once per pair, so it captures no trace and costs one
+        encode."""
+        if not self.is_loaded() or cache_module._kernel_capture_only():  # noqa: SLF001
+            return
+        t0 = time.time()
+        embeds = self._encode_one(CONNECTOR_PROBE_PROMPT, traced=False)
+        broken = _broken_axes(embeds)
+        for axis in broken:
+            cache_dir = cache_module.model_cache_dir(
+                model_name=connector_name,
+                subfolder=f"{axis}_connector",
+                parallel_config=self.parallel_config,
+                mesh_shape=tuple(self.mesh_device.shape),
+                mesh_device=self.mesh_device,
+                dtype="float32",
+                required=False,
+            )
+            logger.warning(
+                f"{axis} connector cache '{cache_dir}' embeds a probe prompt to zeros or non-finite values "
+                f"({_probe_stats(embeds, axis)}); moving it aside and rebuilding it from the checkpoint"
+            )
+            if cache_dir is not None:
+                aside = cache_dir.with_name(f"{cache_dir.name}.bad-{time.strftime('%Y%m%d-%H%M%S')}-{os.getpid()}")
+                try:
+                    cache_dir.rename(aside)
+                    logger.warning(f"moved the bad {axis} connector cache to '{aside}'")
+                except FileNotFoundError:
+                    pass  # another rank of a multi-host mesh moved it first
+            ttnn.distributed_context_barrier()
+            getattr(self, f"{axis}_connector").deallocate_weights()
+            # A fresh module: reloading into the one just deallocated left the rebuilt video connector
+            # embedding to zeros in a warm pipeline (exabox job 139023).
+            setattr(self, f"{axis}_connector", None)
+            setattr(self, f"{axis}_connector", rebuild(axis))
+        if broken:
+            embeds = self._encode_one(CONNECTOR_PROBE_PROMPT, traced=False)
+            still = _broken_axes(embeds)
+            if still:
+                msg = (
+                    f"{', '.join(still)} connector still embeds to zeros or non-finite values after a rebuild "
+                    f"from {self.transformer_checkpoint} ({'; '.join(_probe_stats(embeds, a) for a in still)})"
+                )
+                raise RuntimeError(msg)
+        self._connectors_probed = True
+        logger.info(f"connector probe {'rebuilt ' + ', '.join(broken) if broken else 'ok'} in {time.time() - t0:.2f}s")
 
     def _prepare_trans_mat(self) -> ttnn.Tensor:
         """Cached per-tile rotation matrix for rotary_embedding_llama."""
@@ -434,6 +501,34 @@ class Gemma4TokenizerEncoderPair:
     @staticmethod
     def _cache_name(path: str) -> str:
         return os.path.basename(os.path.normpath(path)).removesuffix(".safetensors")
+
+
+def _probe_stats(embeds: tuple[torch.Tensor, torch.Tensor | None], axis: str) -> str:
+    t = embeds[0] if axis == "video" else embeds[1]
+    fin = torch.isfinite(t)
+    absmean = t[fin].abs().mean().item() if fin.any() else float("nan")
+    return (
+        f"{axis}: finite absmean {absmean:.4g}, non-finite {1 - fin.float().mean().item():.3g}, "
+        f"zero {(t == 0).float().mean().item():.3g}"
+    )
+
+
+def _broken_axes(embeds: tuple[torch.Tensor, torch.Tensor | None]) -> list[str]:
+    """The connector axes whose probe embeds are non-finite, or (video only) near all zeros.
+
+    Healthy 4x8 audio connectors embed every prompt to exact zeros (live and freshly rebuilt
+    ltx25_ic and sulphur25_ic caches alike), so zeros there say nothing about the cache.
+    """
+    video, audio = embeds
+
+    def broken(axis, t):
+        if t is None:
+            return False
+        if not torch.isfinite(t).all():
+            return True
+        return axis == "video" and t.abs().mean() < CONNECTOR_PROBE_MIN_ABSMEAN
+
+    return [axis for axis, t in (("video", video), ("audio", audio)) if broken(axis, t)]
 
 
 def _memoize(state: dict | Callable[[], dict]) -> Callable[[], dict]:
