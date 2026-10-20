@@ -9378,6 +9378,54 @@ tasks:
       pcc_state_min: '>= 0.97'
       host_transfers_per_layer: == 0
       device_ms_experts: '< 134.2'
+- id: P.9
+  title: 'Weighted combine with bf16 accumulators: the chunk in one pass (weights streamed once) vs fp32 sums in two
+    passes: owner comparison'
+  step: perf
+  role: perf
+  deps:
+  - P.8
+  device: true
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/bringup/hooks.py
+  - ttnn/ttnn/bringup/combine_rf
+  - ttnn/ttnn/bringup/flat_routed_expert_ttnn
+  - ttnn/ttnn/bringup/INDEX.md
+  ab:
+    change:
+      COMBINE_ACC: bf16
+    env:
+      COMBINE_ACC: fp32
+  brief:
+    details: 'Owner (2026-10-20, option B): the weighted combine (EXPERTS_COMBINE=weighted, the default since P.8)
+      keeps every home token''s running sum in its accumulator cores'' L1 as fp32 (20 KB a token), so 9 accumulators
+      hold at most ~558 tokens a chip and the model''s 1024 run in two passes, which streams every expert''s weights
+      twice a layer (~1.9 ms a layer; combine_rf/README.md, CHANGELOG.md, known_issues DS41-70, BREADCRUMBS P.8 and the
+      2026-10-19 investigation in commit d62b64adcc5). Add ONE setting in tt/settings.py, COMBINE_ACC {fp32 (default),
+      bf16}: bf16 keeps the accumulators'' sums in bf16 (10 KB a token, the packer''s L1 accumulation in bf16; the
+      weight multiply as today), so the chunk fits one pass with today''s accumulator cores. In combine_rf this is an
+      option of sparse_combine_rf (and its planner / arena sizing) whose default keeps today''s fp32 program; the
+      model''s weighted_combine.py picks the fewest passes that fit, so bf16 runs one pass (assert it at the model''s
+      chunk; log the pass count). Determinism stays (the fixed order). MAX_PRECISION: COMBINE_ACC fp32. Tests (fork,
+      tests/unit or tests/): bf16 accumulation vs a float64 reference and vs the fp32 path (report both rel errors), the
+      route tests single pass at S=1024 (all-local, all-remote, random), the refusal math for bf16. Measure with
+      tt/perf_experts.py: the experts call per layer, one pass bf16 vs two passes fp32, and the rel error between the
+      two at layer 0 and layer 24. Run your final frozen-test checks through `orchestrator measure` (F116). Report:
+      the experts section and device total (plain profile), chunk_wall_ms, and the precision numbers.'
+  gate:
+    cmd: for t in swa swa_engram enc_source enc_source_engram enc_reuse dec_candidate dec_reindex dec_reuse; do scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_${t}_experts.py || exit 1; done
+      && for t in swa_12 swa_engram_15 enc_source_14 enc_source_engram_17 enc_reuse_12 dec_candidate_14 dec_reindex_13
+      dec_reuse_12; do scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_${t}_experts.py
+      || exit 1; done && BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=10000
+      scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+    metrics:
+      pcc_layer_L*: '>= 0.97'
+      pcc_state_min: '>= 0.97'
+      host_transfers_per_layer: == 0
+      device_ms_experts: '< 45.3'
 - id: X.3
   title: 'Final: full-target accuracy, warm full prefill (no readback), one warm chunk at several positions'
   step: perf
@@ -9387,6 +9435,7 @@ tasks:
   - P.6
   - P.7
   - P.8
+  - P.9
   gate:
     cmd: BRINGUP_RUNG=s55296 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py && BRINGUP_FULL_PREFILL=1
       BRINGUP_PROFILE_OPS=1 TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1
