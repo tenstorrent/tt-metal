@@ -17,6 +17,7 @@ import calls  # noqa: E402
 import compare  # noqa: E402
 import ops  # noqa: E402
 import profile_csv  # noqa: E402
+import render  # noqa: E402
 import stats  # noqa: E402
 
 
@@ -265,3 +266,50 @@ def test_loaded_from_tree_detects_a_side_running_the_other_build():
     assert run.loaded_from_tree("/a", [mine, None])
     assert not run.loaded_from_tree("/a", [mine, other])
     assert not run.loaded_from_tree("/a", [{}])
+
+
+def render_one(**kwargs):
+    doc = results_for(**kwargs)
+    doc["op"] = "t"
+    return doc
+
+
+def test_render_lists_slower_and_beaten_calls_first():
+    device = {"default": 1200.0, "native": 800.0, "codegen": 1200.0}
+    doc = render_one(after_default=120.0, after_native=80.0, device_ns=device, device_before_ns={"default": 1000.0})
+    text = render.render([doc])
+    assert text.startswith(render.MARKER)
+    assert "**Needs a look**" in text
+    assert "**slower** 20.0% slower" in text
+    assert "**native beats the default** by 33.3%" in text
+
+
+def test_render_clean_run_has_nothing_to_look_at():
+    same = {"default": 1000.0, "native": 1000.0, "codegen": 1000.0}
+    text = render.render([render_one(after_default=100.0, after_native=100.0, device_ns=same, device_before_ns=same)])
+    assert "Nothing needs a look" in text
+    assert "0 slower, 0 faster, 1 no change" in text
+
+
+def test_render_warns_when_device_rounds_disagree():
+    ns = {"default": [1000.0, 1100.0, 1000.0, 1100.0, 1000.0], "native": 1000.0}
+    text = render.render(
+        [render_one(after_default=100.0, after_native=100.0, device_ns=ns, device_before_ns={"default": 1000.0})]
+    )
+    assert "device rounds disagreed" in text
+
+
+def test_render_without_device_time_shows_a_reason_not_zeros():
+    text = render.render([render_one(after_default=100.0, after_native=100.0)])
+    assert "n/a (no device time)" in text
+    assert "Needs a look" not in text
+
+
+def test_render_sheds_detail_to_fit_the_limit():
+    device = {"default": 1200.0, "native": 800.0, "codegen": 1200.0}
+    doc = render_one(after_default=120.0, after_native=80.0, device_ns=device, device_before_ns={"default": 1000.0})
+    full = render.render([doc])
+    assert "<details>" in full and "```mermaid" in full
+    no_detail = render.render([doc], limit=len(full) - 1)
+    assert "<details>" not in no_detail and "```mermaid" in no_detail
+    assert len(render.render([doc], limit=800)) <= 800

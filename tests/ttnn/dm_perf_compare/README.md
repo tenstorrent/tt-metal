@@ -63,6 +63,13 @@ stand in. A change that touches the host path needs a paired same-session measur
 
 See `calls.py`. One op, a list of calls (`shape`, `dtype`, `layout`, `memory_config`, `args`).
 
+## Report
+
+`python render.py results_*.json > comment.md` renders the PR comment from one results file per op and
+arch: what needs a look, the answer to each question, a per-call chart and table, and a collapsed detail
+section. The body starts with a marker line so the workflow can update one sticky comment in place. Over
+60000 characters it sheds the detail section, then the calls without a finding, then the chart.
+
 ## Tests
 
 `pytest tests/ttnn/dm_perf_compare/test_dm_perf_compare.py` covers the comparison logic without a device.
