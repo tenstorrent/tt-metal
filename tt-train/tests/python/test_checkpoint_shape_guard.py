@@ -156,7 +156,7 @@ def test_save_rejects_state_whose_label_does_not_describe_its_data(tp_mesh, tmp_
     assert forged_shape != param_shape, "precondition: the forged label must make the moment gather to a shard"
 
     path = str(tmp_path / "forged.ckpt")
-    with expect_error(ReplicaMismatchError, rf"optimizer/exp_avg\[{name}\] is labelled .* differs"):
+    with expect_error(ReplicaMismatchError, rf"optimizer/exp_avg\[{name}\] is labelled .* differ"):
         checkpointing.save_checkpoint(path, header={}, model_params=params, optimizer=opt)
     _assert_nothing_written(path)
 
