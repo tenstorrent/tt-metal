@@ -255,6 +255,14 @@ void validate_paged_source(const HighBwAllGatherParams& args, const HighBwAllGat
             "high_bw_all_gather paged source needs {}x{} tiles",
             tt::constants::TILE_HEIGHT,
             tt::constants::TILE_WIDTH);
+    } else {
+        // The reader translates one input page per token row; a page narrower than the row (a width-split shard)
+        // would be taken for a row of its own.
+        TT_FATAL(
+            input.buffer()->page_size() == in_shape[3] * input.element_size(),
+            "high_bw_all_gather paged row-major source needs one page per token row ({} B), got {} B pages",
+            in_shape[3] * input.element_size(),
+            input.buffer()->page_size());
     }
     TT_FATAL(
         out_shape[0] == 1 && out_shape[1] == 1 && out_shape[3] == in_shape[3] &&
