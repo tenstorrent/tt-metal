@@ -44,14 +44,17 @@ pass of 286 tokens ~10-20 min, each decode pass ~8-10 min.
 
 | check | result |
 |---|---|
-| processor encoding == reference ids | pending |
-| tower on device vs HF fp32 features (this image) | pending (HF-bf16 floor on this image 0.9909) |
-| streams from HF features: text rows bit-exact vs device text embedding and HF inputs_embeds; image rows bit-exact vs HF | pending |
-| streams from TT features: image rows PCC == tower PCC | pending |
-| single chip, 45 layers: first token == HF; 16-token greedy continuation | pending |
+| processor encoding == reference ids (286 tokens, 256 image tokens at rows 11..266) | yes |
+| tower on device vs HF fp32 features (this image; 1 chip, build + run + release 25.7 s) | PCC 0.98823 (HF-bf16 floor on this image 0.99086; bar min(0.995, floor - 0.03) = 0.961) |
+| streams from HF features: text rows and image rows vs HF inputs_embeds, text rows vs the device text embedding | bit-exact (PCC 1.000000, max diff 0 on both row sets); all 4 streams identical |
+| streams from TT features: image rows PCC vs HF inputs_embeds | 0.98823 (= the tower PCC), text rows bit-exact |
+| single chip, 45 layers streamed (`GLM53Model`, fullmodel tensorbin cache), `GLM53_MM_N=3` | first token 785 `'The'` == HF; 3/3 greedy tokens == HF (`'The image contains'`); step-0 top-5 ids identical to HF's (TT logits 21.375 / 19.125 / 18.625 / 18.375 / 17.125 vs HF 21.75 / 19.0 / 18.625 / 18.5 / 18.0); device argmax == host argmax on every decode step. Prefill pass 417 s, decode passes 389 / 370 s, tower 7.5 s: 1192 s per job, so 3 tokens is the maximum under the 1500 s device-job cap (16 tokens would take ~85 min) |
 | mesh (`GLM53_MESH_SHAPE`): first token == HF; traced decode | pending |
 
 ## Open issues
+
+- The single-chip test shows 3 matching tokens (the device-job cap, not a model limit): the 16-token
+  comparison is the mesh test's job (resident model, traced decode in seconds).
 
 - The sample image (flat shapes on white) is a moderately ill-conditioned input for the tower: HF itself in
   bf16 scores PCC 0.9909 against its fp32 run (test_vision.py documents the gradient image at 0.86). The
