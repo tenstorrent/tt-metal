@@ -18,16 +18,17 @@
 //--- common.h
 #pragma once
 
-#include "hal/counters/rwc.h"
+#include "hal/counters.h"
 
-namespace rwc = hal::counters::rwc;
+namespace counters = hal::counters;
+namespace rwc      = hal::counters::rwc;
 
 //--- empty.cpp
 #include "common.h"
 
 void probe()
 {
-    rwc::set<rwc::MathCounter {}>();
+    counters::set<rwc::MathCounter {}>();
 }
 
 //--- src-increment-and-save.cpp
@@ -40,7 +41,7 @@ constexpr auto save = rwc::MathCounter {.src_a = rwc::IncrementAndSave(1)};
 
 void probe()
 {
-    rwc::set<rwc::MathCounter {.dest = rwc::Set(16)}>();
+    counters::set<rwc::MathCounter {.dest = rwc::Set(16)}>();
 }
 
 //--- increment-immediate.cpp
