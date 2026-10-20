@@ -345,7 +345,6 @@ const DFBSpecName DFB_INTRA_RIGHT{"intra_kernel_right_inc_cb"};
 const DFBSpecName DFB_INTRA_DOWN_LEFT{"intra_kernel_down_left_wrap_inc_cb"};
 const DFBSpecName DFB_COMPUTE_TMP_IDX{"compute_tmp_idx_cb"};
 const DFBSpecName DFB_PRE_TILIZE{"pre_tilize_cb"};
-const DFBSpecName DFB_FAST_TILIZE{"fast_tilize_cb"};
 const DFBSpecName DFB_OUT{"out_cb"};
 const DFBSpecName DFB_OUT_IDX{"out_idx_cb"};
 const DFBSpecName DFB_CONFIG{"config_cb"};
@@ -743,7 +742,7 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
     // mandatory: in_scalar_0, clear_value, in_shard, reader_indices, in_0, out
     constexpr uint32_t num_mandatory_dfbs = 6;
     dfbs.reserve(
-        num_mandatory_dfbs + (return_indices ? 9 : 0) + (cb_sizes.has_pre_tilize ? 2 : 0) +
+        num_mandatory_dfbs + (return_indices ? 9 : 0) + (cb_sizes.has_pre_tilize ? 1 : 0) +
         (cb_sizes.has_out_idx ? 1 : 0) + (one_scalar_per_core ? 0 : 1));
 
     dfbs.push_back(local_dfb(
@@ -807,43 +806,38 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
         dfbs.push_back(local_dfb(DFB_INTRA_DOWN_LEFT, idx_pagesize, 1, params.index_format));
     }
 
-    // pre_tilize / fast_tilize: two aliased DFBs over one L1 region (TILED output).
+    // TILE output: each compute thread packs its 32-stick tile row as untilized full tiles into one entry, which
+    // compute then tilizes. Every stick's pack writes 32 rows starting at its own, so the entry has 32
+    // spare rows for the last stick's.
     if (cb_sizes.has_pre_tilize) {
-        const uint32_t pre_tilize_total = cb_sizes.pre_tilize_cb_pagesize * cb_sizes.pre_tilize_cb_npages;
-        const uint32_t fast_tilize_page_size = tt::tile_size(params.data_format);
         TT_FATAL(
-            pre_tilize_total % fast_tilize_page_size == 0,
-            "pre_tilize_cb total {} must be a multiple of fast_tilize tile {}",
-            pre_tilize_total,
-            fast_tilize_page_size);
-        DataflowBufferSpec pre = local_dfb(
+            output_shard_shape[1] == params.in_ntiles_c * tt::constants::TILE_WIDTH,
+            "TILE output shard width {} must be the input's {} channel tiles",
+            output_shard_shape[1],
+            params.in_ntiles_c);
+        const uint32_t pre_tilize_entry_size = 2 * params.in_ntiles_c * tt::constants::TILE_HW * params.nbytes;
+        dfbs.push_back(local_dfb(
             DFB_PRE_TILIZE,
-            cb_sizes.pre_tilize_cb_pagesize,
-            cb_sizes.pre_tilize_cb_npages,
+            pre_tilize_entry_size,
+            params.num_threads_per_cluster,
             params.data_format,
-            pack_untilize_tile);
-        pre.advanced_options.alias_with = {DFB_FAST_TILIZE};
-        DataflowBufferSpec fast = local_dfb(
-            DFB_FAST_TILIZE, fast_tilize_page_size, pre_tilize_total / fast_tilize_page_size, params.data_format);
-        fast.advanced_options.alias_with = {DFB_PRE_TILIZE};
-        dfbs.push_back(std::move(pre));
-        dfbs.push_back(std::move(fast));
+            tt::tt_metal::Tile()));
     }
 
     // output CB (borrowed output) + optional output index CB (borrowed output_idx)
-    if (is_output_tiled || return_indices) {
-        // Compute packs into out_cb (tiles, or the mpwi row-major faces): keep the real page geometry.
+    if (return_indices) {
+        // Compute packs the mpwi row-major faces into out_cb: keep the real page geometry.
         dfbs.push_back(borrowed_dfb(
             DFB_OUT,
             cb_sizes.out_cb_pagesize,
             cb_sizes.out_cb_npages,
             params.output_data_format,
             OUTPUT_TENSOR,
-            is_output_tiled ? std::nullopt : std::optional{pack_untilize_tile}));
+            pack_untilize_tile));
     } else {
-        // Row-major output: compute packs into the scratch DFB and the reader writes the shard via
-        // DFB_OUT_SHARD, so out_cb is census-only -- no kernel touches its pages. Its natural page
-        // count need not divide the lane count, so reuse the lane-agnostic raw-view geometry.
+        // Compute packs into the scratch DFB and the reader writes the shard via DFB_OUT_SHARD, so
+        // out_cb is census-only -- no kernel touches its pages. Its natural page count need not divide
+        // the thread count, so reuse the raw-view geometry.
         const auto [out_view_entry_size, out_view_num_entries] =
             raw_view_geometry(cb_sizes.out_cb_pagesize * cb_sizes.out_cb_npages);
         dfbs.push_back(
@@ -855,8 +849,11 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
         // [DEBUG scratch 32x32] FULL-TILE pack target: the default 32x32 tile (four 16x16 faces) so the
         // pack reads DEST as a full 32x32 tile (not the narrow face_r_dim=1 pool output). Sized for one full
         // 32-row write: output_shard_width * out_nbytes * TILE_HEIGHT (page = FACE_WIDTH*nbytes face unit).
-        const uint32_t scratch_npages = params.num_threads_per_cluster;
-        const uint32_t scratch_pagesize = params.in_ntiles_c * tt::constants::TILE_HW * params.nbytes;
+        // TILE output: one tile per entry (the tilize pack addresses whole tiles), in_ntiles_c per thread.
+        const uint32_t scratch_npages =
+            is_output_tiled ? params.in_ntiles_c * params.num_threads_per_cluster : params.num_threads_per_cluster;
+        const uint32_t scratch_pagesize = is_output_tiled ? tt::tile_size(params.output_data_format)
+                                                          : params.in_ntiles_c * tt::constants::TILE_HW * params.nbytes;
         dfbs.push_back(local_dfb(
             DFB_SCRATCH_0, scratch_pagesize, scratch_npages, params.output_data_format, tt::tt_metal::Tile()));
         // [DEBUG scratch->out] borrowed OUTPUT view (per-stick RM rows) that the DM readers write into
@@ -919,6 +916,7 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
         {"pool_type_is_avg", static_cast<uint32_t>(params.is_avg_pool)},
         {"one_scalar_per_core", static_cast<uint32_t>(one_scalar_per_core)},
         {"in_nbytes_c", in_nbytes_c},
+        {"in_ntiles_c", params.in_ntiles_c},
         // [DEBUG scratch->out] output row stride (bytes) for the DM NoC copy of scratch row 0.
         {"out_row_bytes", output_shard_shape[1] * params.nbytes},
         // [DEBUG scratch->out] full page count of one scratch CB; the reader waits/pops the WHOLE CB per
@@ -1122,11 +1120,8 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
         reader0_defines.insert({"HAS_CONFIG", "1"});
         reader1_defines.insert({"HAS_CONFIG", "1"});
     }
-    // Mirror compute_defines' OUTPUT_TILED gate (below) onto the readers: for TILED output, compute
-    // packs straight into the real out_cb (borrowed from the output tensor) and never produces
-    // scratch_cb_0/1, so the reader's scratch-consume/NoC-copy-to-out_shard workaround (which only
-    // exists to route around the ROW_MAJOR path's broken narrow pack) must not run -- otherwise the
-    // reader deadlocks forever on scratch_cb.wait_front waiting for pushes that will never come.
+    // Mirror compute_defines' OUTPUT_TILED gate (below) onto the readers: for TILE output threads own
+    // whole 32-stick tile rows and the reader copies tilized tile rows (not sticks) from scratch.
     if (is_output_tiled) {
         reader0_defines.insert({"OUTPUT_TILED", "1"});
         reader1_defines.insert({"OUTPUT_TILED", "1"});
@@ -1261,16 +1256,6 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
             compute_bindings.push_back(DFBBinding{
                 .dfb_spec_name = DFB_PRE_TILIZE,
                 .accessor_name = "pre_tilize_cb",
-                .endpoint_type = DFBEndpointType::CONSUMER,
-                .access_pattern = DFBAccessPattern::STRIDED});
-            compute_bindings.push_back(DFBBinding{
-                .dfb_spec_name = DFB_FAST_TILIZE,
-                .accessor_name = "fast_tilize_cb",
-                .endpoint_type = DFBEndpointType::PRODUCER,
-                .access_pattern = DFBAccessPattern::STRIDED});
-            compute_bindings.push_back(DFBBinding{
-                .dfb_spec_name = DFB_FAST_TILIZE,
-                .accessor_name = "fast_tilize_cb",
                 .endpoint_type = DFBEndpointType::CONSUMER,
                 .access_pattern = DFBAccessPattern::STRIDED});
         }

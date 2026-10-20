@@ -72,7 +72,7 @@ def _run_case(
     count_include_pad=None,  # avg only; None = op default (True). False -> per-stick scalars (config DFB)
     divisor_override=None,  # avg only; one scalar (1/divisor) for every window
     dtype="bf16",  # "bf16" | "bf8b" (bf8b forces TILE layout; golden runs on the quantized input)
-    out_layout="rm",  # "rm" | "tile" output layout (tiled output runs single-lane by policy)
+    out_layout="rm",  # "rm" | "tile" output layout
 ):
     pattern = pattern or PATTERN
     kernel, stride, padding, dilation = list(kernel), list(stride), list(padding), list(dilation)
@@ -477,48 +477,55 @@ UNIT_CASES = [
         "avg_excl_c280_k3x3_p1",
         dict(pool="avg", channels=280, in_h=8, in_w=4, padding=(1, 1), count_include_pad=False, cores=1),
     ),
-    # TILE output layout runs single-lane by policy (the tiled-output path is not lane-aware: at
-    # num_threads=4 DFB_FAST_TILIZE has in_ntiles_c entries -> TT_FATAL for C<128, hang at C=128;
-    # found by resnet50/quasar/tests/ops/test_max_pool2d_correctness.py on the ZeBu emulator).
-    # NOTE: even at T=1 the tiled-output path is WRONG on Quasar RTL (pcc ~0 for C=64), identically
-    # on main -- a pre-existing Quasar bug; these cases are exact on WH silicon.
+    # TILE output: each thread owns whole 32-stick tile rows (dealt round-robin) and tilizes them itself;
+    # cores with fewer than 128 output sticks leave threads idle. Covers several rows per thread, a partial
+    # last row, wide C (3 c-blocks), per-stick scalars, a large kernel, and the resnet50 global avg pool.
+    ("tiled_out_max_k3x3", dict(out_layout="tile")),
+    ("tiled_out_max_k3x3_c128", dict(channels=128, in_h=8, in_w=4, out_layout="tile")),
+    ("tiled_out_avg_k3x3", dict(pool="avg", stride=(1, 1), padding=(0, 0), out_layout="tile")),
     (
-        "tiled_out_max_k3x3_T1",
-        dict(
-            out_layout="tile",
-            sim_skip="craq-sim UnimplementedFunctionality: tensix_execute_pacr_stride (tiled-output pack); on ZeBu RTL the tiled-output path MISMATCHES identically on main (merge-base bc294789ec3) and this branch at T=1 -- pre-existing Quasar bug; WH silicon exact",
-        ),
+        "tiled_out_avg_k7x7_large",
+        dict(pool="avg", kernel=(7, 7), stride=(2, 2), padding=(0, 0), cores=1, out_layout="tile"),
+    ),
+    # 256 sticks = 8 tile rows: 2 per thread
+    (
+        "tiled_out_max_k3x3_s1_8rows",
+        dict(in_h=16, in_w=16, stride=(1, 1), padding=(1, 1), cores=1, out_layout="tile"),
+    ),
+    # 112 sticks = 3 full tile rows + a 16-stick partial row on thread 3
+    (
+        "tiled_out_max_k3x3_s1_partial_row",
+        dict(in_h=16, in_w=10, stride=(1, 1), padding=(0, 0), cores=1, out_layout="tile"),
     ),
     (
-        "tiled_out_max_k3x3_c128_T1",
+        "tiled_out_max_c280_3blocks",
+        dict(channels=280, in_h=8, in_w=8, stride=(1, 1), padding=(1, 1), cores=1, out_layout="tile"),
+    ),
+    (
+        "tiled_out_avg_excl_k3x3_p1",
         dict(
-            channels=128,
+            pool="avg",
             in_h=8,
-            in_w=4,
-            out_layout="tile",
-            sim_skip="craq-sim UnimplementedFunctionality: tensix_execute_pacr_stride (tiled-output pack); on ZeBu RTL the tiled-output path MISMATCHES identically on main (merge-base bc294789ec3) and this branch at T=1 -- pre-existing Quasar bug; WH silicon exact",
-        ),
-    ),
-    (
-        "tiled_out_avg_k3x3_T1",
-        dict(
-            pool="avg",
+            in_w=8,
             stride=(1, 1),
-            padding=(0, 0),
-            out_layout="tile",
-            sim_skip="craq-sim UnimplementedFunctionality: tensix_execute_pacr_stride (tiled-output pack); on ZeBu RTL the tiled-output path MISMATCHES identically on main (merge-base bc294789ec3) and this branch at T=1 -- pre-existing Quasar bug; WH silicon exact",
-        ),
-    ),
-    (
-        "tiled_out_avg_k7x7_large_T1",
-        dict(
-            pool="avg",
-            kernel=(7, 7),
-            stride=(2, 2),
-            padding=(0, 0),
+            padding=(1, 1),
+            count_include_pad=False,
             cores=1,
             out_layout="tile",
-            sim_skip="craq-sim UnimplementedFunctionality: tensix_execute_pacr_stride (tiled-output pack); on ZeBu RTL the tiled-output path MISMATCHES identically on main (merge-base bc294789ec3) and this branch at T=1 -- pre-existing Quasar bug; WH silicon exact",
+        ),
+    ),
+    (
+        "tiled_out_gap_b1_width_avg_1stick",
+        dict(
+            pool="avg",
+            in_h=4,
+            in_w=8,
+            kernel=(4, 8),
+            stride=(1, 1),
+            padding=(0, 0),
+            shard="width",
+            grid_yx=(1, 2),
+            out_layout="tile",
         ),
     ),
     ("bf8b_k3x3", dict(dtype="bf8b", cores=1, sim_skip="Metal-2.0 DFB bfp8 unsupported (program_spec.cpp:1731)")),

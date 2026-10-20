@@ -66,10 +66,6 @@ void kernel_main() {
     constexpr bool is_output_block_format = (bool)get_arg(args::is_output_block_format);
 #ifdef OUTPUT_TILED
     constexpr auto pre_tilize_cb_id = dfb::pre_tilize_cb;
-    // fast_tilize_cb_id is a consumer-view alias of pre_tilize_cb_id (same L1 region,
-    // full-tile face_geometry = {face_r_dim=16, num_faces=4}). Used as the input operand
-    // to fast_tilize so the unpacker/math read the correct face count from CB metadata.
-    constexpr auto fast_tilize_cb_id = dfb::fast_tilize_cb;
 #endif
 
     constexpr bool last_tile_is_partial = in_c % TILE_WIDTH != 0;
@@ -127,7 +123,9 @@ void kernel_main() {
     DataflowBuffer scratch_cb_0(scratch_cb_id_0);
 #ifdef OUTPUT_TILED
     DataflowBuffer pre_tilize_cb(pre_tilize_cb_id);
-    DataflowBuffer fast_tilize_cb(fast_tilize_cb_id);
+    auto& pack_target_cb = pre_tilize_cb;
+#else
+    auto& pack_target_cb = scratch_cb_0;
 #endif
 
     // Packer dest is baked at init (hw_startup + pack_untilize_dest_init) and must match the CB
@@ -156,18 +154,20 @@ void kernel_main() {
     // runtime args are used while for grid sample the max out sticks is set
     const uint32_t num_out_sticks_this_cluster =
         max_out_sticks_per_core ? max_out_sticks_per_core : get_arg(args::out_nhw_this_core);
-    // This lane's share: the reader deals sticks round-robin (stick i -> lane i % T), so lane t owns
-    // quotient + 1 sticks for t < sticks % T and quotient otherwise — no divisibility required.
-    // get_num_threads()/get_my_thread_id() are 1/0 off Quasar.
+    // This thread's sticks: the reader deals sticks round-robin in units of deal_sticks (unit u -> thread
+    // u % T; one stick for row-major output, one 32-stick tile row for TILE output), so thread t owns
+    // quotient + 1 units for t < units % T, and only the last unit can be partial — no divisibility
+    // required. get_num_threads()/get_my_thread_id() are 1/0 off Quasar.
+    constexpr uint32_t deal_sticks = is_output_tiled ? TILE_HEIGHT : 1;
     const uint32_t num_threads = get_num_threads();
-    const uint32_t num_out_sticks_per_thread =
-        num_out_sticks_this_cluster / num_threads +
-        (get_my_thread_id() < num_out_sticks_this_cluster % num_threads ? 1u : 0u);
-    uint32_t last_tile_height =
-        num_out_sticks_this_cluster % TILE_HEIGHT == 0 ? TILE_HEIGHT : num_out_sticks_this_cluster % TILE_HEIGHT;
+    const uint32_t num_units = (num_out_sticks_this_cluster + deal_sticks - 1) / deal_sticks;
+    const uint32_t num_units_this_thread =
+        num_units / num_threads + (get_my_thread_id() < num_units % num_threads ? 1u : 0u);
+    uint32_t num_out_sticks_per_thread = num_units_this_thread * deal_sticks;
+    if (num_units_this_thread > 0 && (num_units - 1) % num_threads == get_my_thread_id()) {
+        num_out_sticks_per_thread -= num_units * deal_sticks - num_out_sticks_this_cluster;
+    }
 
-    uint32_t tilize_stick_counter = 0;
-    uint32_t tilize_stick_total = 0;
     for (uint32_t n = 0; n < num_out_sticks_per_thread; ++n) {
         const uint32_t curr_scalar_cb_id = in_scalar_cb_id_0;
         const uint32_t curr_in_cb_id = in_cb_id_0;
@@ -175,9 +175,6 @@ void kernel_main() {
         DataflowBuffer curr_in_cb = in_cb_0;
         if constexpr (!one_scalar_per_core) {
             curr_scalar_cb.wait_front(1);
-        }
-        if (is_output_tiled && !tilize_stick_counter) {
-            out_cb.reserve_back(in_ntiles_c);
         }
         for (uint32_t c_i = 0; c_i < in_nblocks_c; c_i++) {
             const bool last_c_block = c_i == in_nblocks_c - 1;
@@ -216,66 +213,42 @@ void kernel_main() {
             }
             tile_regs_commit();
             tile_regs_wait();
-            if constexpr (is_output_tiled) {
-                // TILED output: accumulate sticks and perform tilization when needed.
-                // pre_tilize_cb_id / fast_tilize_cb_id are only emitted under OUTPUT_TILED; even
-                // though this branch is discarded by `if constexpr` on the non-tiled build, the
-                // compiler still name-looks-up those DFB tokens, so the body must be #ifdef-gated.
-#ifdef OUTPUT_TILED
-                if (last_c_block) {
-                    pack_untilize_dest<partial_iter_output_tiles>(pre_tilize_cb_id, 1, 0);
-                    pre_tilize_cb.push_back(partial_iter_output_tiles);
-                    tilize_stick_counter++;
-                    tilize_stick_total++;
-                } else {
-                    pack_untilize_dest<max_tiles_per_iter>(pre_tilize_cb_id, 1, 0);
-                    pre_tilize_cb.push_back(max_tiles_per_iter);
+#if PACK_TO_SCRATCH == 1
+            // Each output stick is packed as a full untilized 32x32 tile whose row 0 is the result (a narrow
+            // 1x32 pack would read DEST in the tiny-tile layout, not the reduce's full-tile layout). Row-major
+            // output: row 0 of a per-stick scratch entry, which the reader copies to the output. TILE output:
+            // row n % 32 of this thread's tile-row entry; sticks go in ascending rows, so each overwrites the
+            // previous stick's junk rows (the entry has 32 spare rows for the last stick's).
+            const uint32_t tile_row = is_output_tiled ? n % TILE_HEIGHT : 0;
+            if (first_c_block && tile_row == 0) {
+                pack_target_cb.reserve_back(1);
+            }
+            pack_untilize_dest_init<max_tiles_per_iter, in_ntiles_c>(pack_target_cb_id);
+            pack_untilize_dest<max_tiles_per_iter, in_ntiles_c>(pack_target_cb_id, 1, tile_row * in_nblocks_c + c_i);
+            tile_regs_release();
+            if (last_c_block) {
+                if constexpr (!is_output_tiled) {
+                    scratch_cb_0.push_back(1);  // hand off to the DM reader, which writes the output
                 }
-                tile_regs_release();
-
-                bool last_tile = num_out_sticks_this_cluster - tilize_stick_total < last_tile_height;
-                if (tilize_stick_counter == TILE_HEIGHT || (last_tile && tilize_stick_counter == last_tile_height)) {
-                    if (last_tile && last_tile_height != TILE_HEIGHT) {
-                        pre_tilize_cb.wait_front(last_tile_height * in_ntiles_c);
-                        // if the last tile is not whole we won't have pushed enough sticks, so we need to
-                        // push some filler sticks to reach TILE_HEIGHT to make sure the CB pointers are correct
-                        // before calling tilize
-                        uint32_t filler_stick_tiles =
-                            (TILE_HEIGHT - last_tile_height) *
-                            ((in_nblocks_c - 1) * max_tiles_per_iter + partial_iter_output_tiles);
-                        pre_tilize_cb.push_back(filler_stick_tiles);
-                    }
+#ifdef OUTPUT_TILED
+                if (tile_row == TILE_HEIGHT - 1 || n == num_out_sticks_per_thread - 1) {
+                    // Tile row done (or this thread's last, partial one): tilize it into in_ntiles_c scratch
+                    // tiles, which the reader copies to the output.
+                    pre_tilize_cb.push_back(1);
+                    pre_tilize_cb.wait_front(1);
                     pack_untilize_uninit(pre_tilize_cb_id);
-
                     unpack_tilizeA_B_uninit(curr_in_cb_id);
-                    pack_reconfig_data_format(out_cb_id);
-
-                    // Hand the freshly-written L1 region off to the consumer view of the
-                    // multi-format CB. pre_tilize_cb_id was pushed in TILE_HEIGHT*in_ntiles_c
-                    // stick-pages (page_size = TILE_WIDTH*nbytes); fast_tilize_cb_id sees the
-                    // same bytes as in_ntiles_c full tiles (page_size = tile_size). Both views
-                    // advance by the same number of bytes per round so their rd/wr pointers
-                    // stay aligned. The producer-view wait_front/pop_front/reserve_back below
-                    // continues to drive the producer pointer ledger.
-                    fast_tilize_cb.push_back(in_ntiles_c);
-                    fast_tilize_cb.wait_front(in_ntiles_c);
-
+                    pack_reconfig_data_format(scratch_cb_id_0);
+                    scratch_cb_0.reserve_back(in_ntiles_c);
 #ifdef ARCH_QUASAR
-                    // Quasar tilize_init does not program PACK; retarget from pack-untilize (pre_tilize) to out_cb.
-                    pack_init(out_cb_id);
+                    // Quasar tilize_init does not program PACK; retarget from pack-untilize (pre_tilize) to scratch.
+                    pack_init(scratch_cb_id_0);
 #endif
-                    fast_tilize_init(fast_tilize_cb_id, in_ntiles_c, out_cb_id);
-                    fast_tilize_block(fast_tilize_cb_id, in_ntiles_c, out_cb_id);
-                    fast_tilize_uninit(fast_tilize_cb_id, out_cb_id, in_ntiles_c);
-
-                    out_cb.push_back(in_ntiles_c);
-                    release_out_pages(out_cb, in_ntiles_c);
-                    fast_tilize_cb.pop_front(in_ntiles_c);
-                    fast_tilize_cb.reserve_back(in_ntiles_c);
-                    pre_tilize_cb.pop_front(TILE_HEIGHT * in_ntiles_c);
-                    pre_tilize_cb.reserve_back(TILE_HEIGHT * in_ntiles_c);
-
-                    tilize_stick_counter = 0;
+                    fast_tilize_init(pre_tilize_cb_id, in_ntiles_c, scratch_cb_id_0);
+                    fast_tilize_block(pre_tilize_cb_id, in_ntiles_c, scratch_cb_id_0);
+                    fast_tilize_uninit(pre_tilize_cb_id, scratch_cb_id_0, in_ntiles_c);
+                    scratch_cb_0.push_back(in_ntiles_c);
+                    pre_tilize_cb.pop_front(1);
 
                     // Re-init fused tilize+reduce: tilize_init reprogrammed the FPU (A2D datacopy).
                     tilizeA_B_reduce_init<neginf_srca_maxpool, zero_srca_avgpool>(
@@ -283,35 +256,9 @@ void kernel_main() {
                     if constexpr (is_output_block_format) {
                         pack_reconfig_data_format(pre_tilize_cb_id);
                     }
-                    pack_untilize_dest_init<max_tiles_per_iter, max_tiles_per_iter, false /*narrow_row*/, TILE_C_DIM>(
-                        pre_tilize_cb_id);
                 }
 #endif  // OUTPUT_TILED
-            } else {
-#if PACK_TO_SCRATCH == 1
-                const uint32_t curr_scratch_cb_id = scratch_cb_id_0;
-                DataflowBuffer curr_scratch_cb = scratch_cb_0;
-                // One full-width stick per output row: reserve/push once, pack each c-block into its channel slice.
-                if (first_c_block) {
-                    curr_scratch_cb.reserve_back(1);
-                }
-                // Re-init pack-untilize for this stick's scratch CB.
-                // full_ct_dim = in_ntiles_c; block_c_index places the slice. Init width must match pack width.
-                if (last_c_block) {
-                    pack_untilize_dest_init<partial_iter_output_tiles, in_ntiles_c>(curr_scratch_cb_id);
-                    pack_untilize_dest<partial_iter_output_tiles, in_ntiles_c>(
-                        curr_scratch_cb_id, 1, (c_i * max_tiles_per_iter) / partial_iter_output_tiles);
-                } else {
-                    pack_untilize_dest_init<max_tiles_per_iter, in_ntiles_c>(curr_scratch_cb_id);
-                    pack_untilize_dest<max_tiles_per_iter, in_ntiles_c>(curr_scratch_cb_id, 1, c_i);
-                }
-                tile_regs_release();
-
-                if (last_c_block) {
-                    // One entry per output stick (the scratch DFB is sized num_threads_per_cluster entries of
-                    // one full-width stick each), pushed once after every c-block has packed its slice.
-                    curr_scratch_cb.push_back(1);  // hand off to the DM reader, which writes the output
-                }
+            }
 #else
                 // Production RM path: narrow pack straight into out_cb (already reserved above). Pair the
                 // pack-untilize init with a matching width per c-block (same contract as the scratch path).
@@ -326,7 +273,6 @@ void kernel_main() {
                 out_cb.push_back(output_faces);
                 release_out_pages(out_cb, output_faces);
 #endif
-            }
         }
         if constexpr (!one_scalar_per_core) {
             curr_scalar_cb.pop_front(1);
