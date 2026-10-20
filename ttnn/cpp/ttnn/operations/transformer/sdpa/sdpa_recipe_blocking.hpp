@@ -139,6 +139,44 @@ struct RecipeBlocking {
 // definition. Exp ring programs are not covered.
 bool recipe_program_fits(const RecipeBlockingProblem& problem, uint32_t q_tiles, uint32_t k_tiles);
 
+// Whether the named ring recipe kernels take a caller-chosen chunk pair: a supported geometry whose program is not
+// known to exceed the kernel config buffer. Op-chosen chunks (0) always do, since the chooser only emits fitting ones.
+// Ring calls outside this run the recipe as a configuration of the streaming kernel instead (named_ring_recipe_gap).
+// free_l1 (0: not checked) is the device's unreserved L1; the recipe's smallest CB layout must fit it.
+inline bool named_ring_recipe_chunks_fit(
+    const PrecisionPolicy& policy,
+    uint32_t q_chunk,
+    uint32_t k_chunk,
+    uint32_t head_dim,
+    uint32_t v_head_dim,
+    uint64_t free_l1 = 0,
+    bool causal = false) {
+    if (q_chunk == 0 || k_chunk == 0) {
+        return true;
+    }
+    if (q_chunk % 32 != 0 || k_chunk % 32 != 0 || head_dim % 32 != 0) {
+        return false;
+    }
+    RecipeBlockingProblem ring;
+    ring.op = RecipeOp::Ring;
+    ring.policy = policy;
+    ring.d_tiles = head_dim / 32;
+    ring.vd_tiles = v_head_dim != head_dim ? v_head_dim / 32 : 0;
+    ring.causal = causal;
+    if (!recipe_geometry_supported(q_chunk / 32, k_chunk / 32, head_dim / 32) ||
+        !recipe_program_fits(ring, q_chunk / 32, k_chunk / 32)) {
+        return false;
+    }
+    return free_l1 == 0 || recipe_l1_bytes(
+                               RecipeOp::Ring,
+                               policy,
+                               q_chunk / 32,
+                               k_chunk / 32,
+                               head_dim / 32,
+                               RecipeL1Context{.vd_tiles = ring.vd_tiles})
+                                   .minimum <= free_l1;
+}
+
 // Every feasible blocking with its modeled cost, cheapest first (the chooser's candidate list).
 std::vector<RecipeBlocking> recipe_blocking_candidates(const RecipeBlockingProblem& problem);
 

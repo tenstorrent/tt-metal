@@ -6,6 +6,7 @@
 
 #include <functional>
 #include <optional>
+#include <string_view>
 #include <tuple>
 #include <utility>
 
@@ -52,6 +53,9 @@ struct RingJointSDPAParams {
     // Internal structural ratio, derived from Q/KV sequence distributions.
     uint32_t kv_stripe_split = 1;
     std::optional<ttnn::transformer::SDPAPrecision> precision = std::nullopt;
+    // Run `precision` as a configuration of the streaming kernel even where the named recipe kernels would take the
+    // call (set when the named program did not fit; see named_ring_recipe_gap).
+    bool recipe_on_streaming_kernel = false;
 
     // We need a constructor, because all_gather_struct is not default initializable.
     RingJointSDPAParams(
@@ -138,6 +142,7 @@ struct RingJointSDPAParams {
         "circular_kv_cache",
         "kv_stripe_split",
         "precision",
+        "recipe_on_streaming_kernel",
         "all_gather_operation_attributes",
         "all_gather_tensor_args");
     auto attribute_values() const {
@@ -161,6 +166,7 @@ struct RingJointSDPAParams {
             std::cref(circular_kv_cache),
             std::cref(kv_stripe_split),
             std::cref(precision),
+            std::cref(recipe_on_streaming_kernel),
             std::cref(all_gather_operation_attributes),
             std::cref(all_gather_tensor_args));
     }
@@ -253,6 +259,13 @@ inline bool kv_pad_rotation_active(const RingJointSDPAParams& args, const RingJo
 inline bool indexed_kv_cache_active(const RingJointSDPAParams& args, const RingJointSDPAInputs& tensor_args) {
     return args.has_indexed_kv_cache() || tensor_args.has_metadata();
 }
+
+// Why the named ring recipe kernels cannot run this precision call (nullopt: they can). Such calls run the recipe as a
+// fixed configuration of the streaming ring kernel instead (fp32 DEST; FP32 running state for BALANCED and
+// ACCURATE; LoFi matmuls for FAST), so every ring feature (latent V, split KV, sliding windows, KV-pad rotation,
+// attention sinks, any chunk pair) takes a recipe. Defined in ring_joint_sdpa_device_operation.cpp.
+std::optional<std::string_view> named_ring_recipe_gap(
+    const RingJointSDPAParams& args, const RingJointSDPAInputs& tensor_args);
 
 // Index constants for RingJointSDPAResult vector
 constexpr size_t RING_JOINT_SDPA_OUTPUT_IDX = 0;

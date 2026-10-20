@@ -746,28 +746,50 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     // Only FP32 DEST leaves the streaming kernel; it runs the ACCURATE ring recipe.
     const bool routed = !precision && routes_fp32_dest(input_tensor_q, compute_kernel_config);
     if (routed) {
-        const auto gap = ring_recipe_gap(
-            input_tensor_q,
-            input_tensor_k,
-            input_tensor_v,
-            is_cross,
-            attention_sink,
-            sliding_window_size,
-            circular_kv_cache,
-            kv_actual_isl,
-            slot_id,
-            kv_actual_isl_tensor);
-        TT_FATAL(
-            !gap,
-            "Ring joint SDPA with fp32_dest_acc_en=True runs the ACCURATE ring recipe, which does not support {}; use "
-            "fp32_dest_acc_en=False",
-            gap.value_or(""));
         precision = SDPAPrecision::ACCURATE;
         program_config = *routed_program_config(program_config);
     }
+    // The caller's configs (after fp32-DEST routing), for re-running a named recipe call on the streaming kernel.
+    const auto caller_program_config = program_config;
     ttnn::Tensor query = input_tensor_q;
     std::optional<ttnn::Tensor> joint_query = joint_tensor_q;
-    if (precision) {
+    // A recipe the named ring kernels cannot take runs as a configuration of the streaming kernel: the program factory
+    // derives its numerics, and the device op makes the same decision (named_ring_recipe_gap, a superset of this one).
+    const bool streaming_recipe =
+        precision && (ring_recipe_gap(
+                          input_tensor_q,
+                          input_tensor_k,
+                          input_tensor_v,
+                          is_cross,
+                          attention_sink,
+                          sliding_window_size,
+                          circular_kv_cache,
+                          kv_actual_isl,
+                          slot_id,
+                          kv_actual_isl_tensor) ||
+                      program_config.max_k_splits > 1 || program_config.segmented_accumulation ||
+                      !numeric::named_ring_recipe_chunks_fit(
+                          numeric::resolve_precision_policy(numeric::select_recipe(*precision, input_tensor_k.dtype())),
+                          program_config.q_chunk_size,
+                          program_config.k_chunk_size,
+                          input_tensor_q.logical_shape()[3],
+                          input_tensor_v.logical_shape()[3],
+                          numeric::recipe_free_l1(*input_tensor_q.device()),
+                          is_causal));
+    if (streaming_recipe) {
+        TT_FATAL(
+            routed || !compute_kernel_config.has_value(),
+            "Specify either an SDPA precision recipe or a compute kernel config, not both");
+        TT_FATAL(
+            !program_config.matmul_math_fidelity.has_value(),
+            "An SDPA precision recipe sets the matmul fidelity; leave program_config.matmul_math_fidelity unset");
+        TT_FATAL(
+            program_config.q_chunk_size > 0 && program_config.k_chunk_size > 0,
+            "This ring call runs its {} recipe on the streaming kernel, which needs explicit q/k chunk sizes",
+            *precision);
+        compute_kernel_config = std::nullopt;
+        program_config.exp_approx_mode = std::nullopt;
+    } else if (precision) {
         const auto policy = numeric::resolve_recipe_policy(
             input_tensor_q, input_tensor_k, *precision, scale, compute_kernel_config, program_config);
         if (routed) {
@@ -829,50 +851,86 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     const auto [logical_l_scalar, logical_l_tensor] = split_logical_length(logical_l, padded_ring_l);
 
     auto topology_1d = ttnn::ccl::convert_2d_to_1d_topology(topology);
-    auto output_tensors = ttnn::prim::ring_joint_scaled_dot_product_attention(
-        query,
-        input_tensor_k,  // AllGather input
-        input_tensor_v,  // AllGather input
-        joint_q,
-        joint_k,
-        joint_v,
-        persistent_output_buffer_k,  // AllGather output / RingAttention input
-        persistent_output_buffer_v,  // AllGather output / RingAttention input
-        persistent_output_buffer_joint_k,
-        persistent_output_buffer_joint_v,
-        joint_strategy,
-        logical_n_scalar,
-        logical_l_scalar,
-        std::move(program_config),
-        dim,
-        multi_device_global_semaphore,
-        num_links,
-        cluster_axis,
-        mesh_device,
-        topology_1d,
-        ccl_core_grid_offset,
-        subdevice_id,
-        is_causal,
-        is_balanced,
-        is_cross,
-        scale,
-        compute_kernel_config,
-        core_allocation_strategy,
-        kv_cache_batch_idx,
-        kv_actual_isl,
-        std::nullopt,  // latent_v_head_dim
-        attention_sink,
-        slot_id,
-        kv_actual_isl_tensor,
-        // Resolve to (1, 0) when unset so the readers compute slot = slot_id[0], the
-        // pre-existing behaviour for callers that pass no layer packing.
-        kv_cache_num_layers.value_or(1),
-        kv_cache_layer_idx.value_or(0),
-        sliding_window_size,
-        circular_kv_cache,
-        logical_n_tensor,
-        logical_l_tensor,
-        precision);
+    const auto run = [&](const ttnn::Tensor& q,
+                         const std::optional<ttnn::Tensor>& jq,
+                         operations::transformer::SDPAProgramConfig config,
+                         const std::optional<DeviceComputeKernelConfig>& compute_config,
+                         bool on_streaming_kernel) {
+        return ttnn::prim::ring_joint_scaled_dot_product_attention(
+            q,
+            input_tensor_k,  // AllGather input
+            input_tensor_v,  // AllGather input
+            jq,
+            joint_k,
+            joint_v,
+            persistent_output_buffer_k,  // AllGather output / RingAttention input
+            persistent_output_buffer_v,  // AllGather output / RingAttention input
+            persistent_output_buffer_joint_k,
+            persistent_output_buffer_joint_v,
+            joint_strategy,
+            logical_n_scalar,
+            logical_l_scalar,
+            std::move(config),
+            dim,
+            multi_device_global_semaphore,
+            num_links,
+            cluster_axis,
+            mesh_device,
+            topology_1d,
+            ccl_core_grid_offset,
+            subdevice_id,
+            is_causal,
+            is_balanced,
+            is_cross,
+            scale,
+            compute_config,
+            core_allocation_strategy,
+            kv_cache_batch_idx,
+            kv_actual_isl,
+            std::nullopt,  // latent_v_head_dim
+            attention_sink,
+            slot_id,
+            kv_actual_isl_tensor,
+            // Resolve to (1, 0) when unset so the readers compute slot = slot_id[0], the
+            // pre-existing behaviour for callers that pass no layer packing.
+            kv_cache_num_layers.value_or(1),
+            kv_cache_layer_idx.value_or(0),
+            sliding_window_size,
+            circular_kv_cache,
+            logical_n_tensor,
+            logical_l_tensor,
+            precision,
+            on_streaming_kernel);
+    };
+    std::vector<ttnn::Tensor> output_tensors;
+    try {
+        output_tensors = run(query, joint_q, program_config, compute_kernel_config, streaming_recipe);
+    } catch (const std::exception& e) {
+        // The named recipe kernels' program can outgrow the kernel config buffer or L1 in ways the measured
+        // exclusions (named_ring_recipe_chunks_fit) do not predict; run the recipe on the streaming kernel instead.
+        const std::string_view what = e.what();
+        const bool does_not_fit = what.find("state.offset <= max_size") != std::string_view::npos ||
+                                  what.find("Named ring SDPA recipe needs") != std::string_view::npos ||
+                                  what.find("beyond max L1 size") != std::string_view::npos;
+        if (!precision || streaming_recipe || !does_not_fit) {
+            throw;
+        }
+        log_warning(
+            tt::LogOp,
+            "Ring SDPA {} recipe: the named kernels' program does not fit at Q{}/K{}; running it on the streaming "
+            "kernel",
+            *precision,
+            caller_program_config.q_chunk_size,
+            caller_program_config.k_chunk_size);
+        auto streaming_config = caller_program_config;
+        streaming_config.exp_approx_mode = std::nullopt;
+        if (streaming_config.q_chunk_size == 0 || streaming_config.k_chunk_size == 0) {
+            // Op-chosen blocking: keep the chunks the named recipe's chooser picked.
+            streaming_config.q_chunk_size = program_config.q_chunk_size;
+            streaming_config.k_chunk_size = program_config.k_chunk_size;
+        }
+        output_tensors = run(input_tensor_q, drop_if_empty(joint_tensor_q), streaming_config, std::nullopt, true);
+    }
     // Ring joint outputs are BF16 for every Q dtype (legacy and recipe alike), so no narrowing back to Q's dtype.
     return {
         output_tensors[prim::RING_JOINT_SDPA_OUTPUT_IDX],
@@ -907,32 +965,22 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> ring_mla(
     std::optional<uint32_t> kv_cache_layer_idx,
     std::optional<SDPAPrecision> precision) {
     reject_decode_settings(program_config);
+    if (!precision && routes_fp32_dest(input_tensor_q, compute_kernel_config)) {
+        // FP32 DEST runs ACCURATE, as on ring_joint_scaled_dot_product_attention.
+        precision = SDPAPrecision::ACCURATE;
+        compute_kernel_config = std::nullopt;
+        program_config.matmul_math_fidelity = std::nullopt;
+    }
     if (precision.has_value()) {
-        // ring_mla recipes are fixed configurations of the ring_mla (latent-V streaming) kernel: the named recipe
-        // kernels have no latent V, causal, chunked or K-multicast support. All run the softmax arithmetic in fp32
-        // DEST. STANDARD (HiFi2) and FAST (LoFi) keep the running O and row sums in bf16 CBs; BALANCED (HiFi2) keeps
-        // them in fp32 CBs updated exactly in DEST, so long prefixes do not drift. FAST callers round Q and the
-        // latent with prepare_sdpa_input first so LoFi's operand truncation loses nothing further.
-        TT_FATAL(
-            *precision == SDPAPrecision::STANDARD || *precision == SDPAPrecision::BALANCED ||
-                *precision == SDPAPrecision::FAST,
-            "ring_mla supports the STANDARD, BALANCED and FAST precision recipes");
+        // ring_mla recipes are fixed configurations of the ring_mla streaming kernel (named_ring_recipe_gap: latent V);
+        // the program factory derives their numerics. FAST callers round Q and the latent with prepare_sdpa_input.
         TT_FATAL(
             !compute_kernel_config.has_value(),
             "Specify either an SDPA precision recipe or a compute kernel config, not both");
         TT_FATAL(
             !program_config.matmul_math_fidelity.has_value(),
             "An SDPA precision recipe sets the matmul fidelity; leave program_config.matmul_math_fidelity unset");
-        compute_kernel_config = ttnn::init_device_compute_kernel_config(
-            input_tensor_q.device()->arch(),
-            std::nullopt,
-            tt::tt_metal::MathFidelity::HiFi2,
-            /*default_approx_mode=*/false,
-            /*default_fp32_acc=*/true,
-            /*default_l1_acc=*/false);
-        if (*precision == SDPAPrecision::FAST) {
-            program_config.matmul_math_fidelity = tt::tt_metal::MathFidelity::LoFi;
-        }
+        program_config.exp_approx_mode = std::nullopt;
     }
     auto topology_1d = ttnn::ccl::convert_2d_to_1d_topology(topology);
     auto output_tensors = ttnn::prim::ring_joint_scaled_dot_product_attention(

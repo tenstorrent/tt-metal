@@ -298,7 +298,14 @@ bool recipe_program_fits(const RecipeBlockingProblem& p, uint32_t q_tiles, uint3
         // buffer from Q160 up: causal balanced ACCURATE with BFP8 K/V on a 2x2 P150b mesh measured 70672 B at
         // Q160/K192 and K448, 70688 at Q160/K256, 70720 at Q160/K384 (K160, K224, K288, K320 and K512 fit by a few
         // bytes) and 71184-71696 B at Q320; every Q32 and Q64 blocking fits.
-        return !(p.vd_tiles != 0 && p.vd_tiles < p.d_tiles && p.d_tiles >= 16 && q_tiles >= 5);
+        if (p.vd_tiles != 0 && p.vd_tiles < p.d_tiles && p.d_tiles >= 16 && q_tiles >= 5) {
+            return false;
+        }
+        // STANDARD (B) with BFP8/BFP4 K/V on a causal ring exceeds the buffer on a 4-device P150 ring: 16Q/1KV and
+        // 16Q/2KV D128 at Q128-256/K256-512, MLA D576/V128 at Q128/K128, chunked prefill at Q128/K512 and Q192/K256
+        // (program.cpp "state.offset <= max_size"). BALANCED and FAST fit the same calls; with BF16 K/V B fits too.
+        return !(
+            p.causal && p.policy.selection.recipe == Recipe::B && p.policy.selection.kv_storage != KVStorage::BF16);
     }
     if (p.op != RecipeOp::Dense && p.op != RecipeOp::Joint) {
         return true;
