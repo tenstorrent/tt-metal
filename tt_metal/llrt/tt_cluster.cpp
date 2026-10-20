@@ -893,19 +893,50 @@ void Cluster::read_dram_vec(void* mem_ptr, uint32_t sz_in_bytes, ChipId device_i
     read_core(mem_ptr, sz_in_bytes, tt_cxy_pair(device_id, dram_core.x, dram_core.y), addr + offset);
 }
 
-bool Cluster::supports_dma_operations(ChipId chip_id, uint32_t sz_in_bytes) const {
-    if (this->rtoptions_.get_disable_dma_ops()) {
+namespace {
+
+// Currently, DMA reads/writes hang for small sizes. As a safety measure, we disable DMA for small sizes.
+// TODO: Remove this once we have a proper fix for small DMA sizes.
+constexpr uint32_t min_dma_size_bytes = 32;
+
+// Smallest Blackhole writes for which DMA beats an MMIO write of the same ordering, from UMD's
+// single-core write microbenchmark (see #60793). Below these the fixed cost of a DMA call dominates.
+constexpr uint32_t bh_strict_dma_write_min_bytes = 2 * 1024;
+constexpr uint32_t bh_relaxed_dma_write_min_bytes = 64 * 1024;
+
+}  // namespace
+
+bool Cluster::dma_available(ChipId chip_id) const {
+    return !this->rtoptions_.get_disable_dma_ops() &&
+           (this->arch_ == tt::ARCH::WORMHOLE_B0 || this->arch_ == tt::ARCH::BLACKHOLE) &&
+           this->get_cluster_desc()->is_chip_mmio_capable(chip_id);
+}
+
+bool Cluster::use_dma_read(ChipId chip_id, uint32_t sz_in_bytes) const {
+    // Blackhole has no device-to-host DMA.
+    return this->arch_ == tt::ARCH::WORMHOLE_B0 && this->dma_available(chip_id) && sz_in_bytes >= min_dma_size_bytes;
+}
+
+bool Cluster::use_dma_write(
+    ChipId chip_id, uint32_t sz_in_bytes, uint64_t addr, tt::umd::IoOrdering ordering, CoreType core_type) const {
+    if (!this->dma_available(chip_id) || sz_in_bytes < min_dma_size_bytes) {
         return false;
     }
-
-    // Currently, DMA reads/writes hang for small sizes. As a safety measure, we disable DMA for small sizes.
-    // TODO: Remove this once we have a proper fix for small DMA sizes.
-    constexpr uint32_t min_dma_size_bytes = 32;
-
-    // DMA reads and writes are only supported on WH. If/when DMA reads and writes are supported on BH, this should be
-    // updated to support BH architectures as well. See https://github.com/tenstorrent/tt-metal/issues/22957
-    return this->arch_ == tt::ARCH::WORMHOLE_B0 && this->get_cluster_desc()->is_chip_mmio_capable(chip_id) &&
-           sz_in_bytes >= min_dma_size_bytes;
+    if (this->arch_ == tt::ARCH::WORMHOLE_B0) {
+        return true;
+    }
+    // UMD rejects a DMA write whose address or size is not a multiple of 4.
+    if (addr % 4 != 0 || sz_in_bytes % 4 != 0) {
+        return false;
+    }
+    // Ethernet cores keep MMIO: active ones run fabric firmware while the host writes them, and DMA to them is
+    // not validated yet.
+    if (core_type != CoreType::TENSIX && core_type != CoreType::WORKER && core_type != CoreType::DRAM) {
+        return false;
+    }
+    const uint32_t min_bytes =
+        ordering == tt::umd::IoOrdering::Strict ? bh_strict_dma_write_min_bytes : bh_relaxed_dma_write_min_bytes;
+    return sz_in_bytes >= min_bytes;
 }
 
 void Cluster::write_core(
@@ -935,12 +966,15 @@ void Cluster::write_core(
             sz_in_bytes);
     }
     tt::umd::CoreCoord core_coord = soc_desc.get_coord_at(core, CoordSystem::TRANSLATED);
+    const tt::umd::IoOrdering resolved_ordering = ordering.value_or(
+        core_coord.core_type == CoreType::DRAM ? tt::umd::IoOrdering::Relaxed : tt::umd::IoOrdering::Strict);
 
-    if (this->supports_dma_operations(chip_id, sz_in_bytes)) {
-        this->driver_->dma_write_to_device(mem_ptr, sz_in_bytes, core.chip, core_coord, addr);
+    if (this->use_dma_write(chip_id, sz_in_bytes, addr, resolved_ordering, core_coord.core_type)) {
+        // Wormhole keeps the Relaxed DMA window it has always used; its Strict DMA cost is unmeasured.
+        const tt::umd::IoOrdering dma_ordering =
+            this->arch_ == tt::ARCH::BLACKHOLE ? resolved_ordering : tt::umd::IoOrdering::Relaxed;
+        this->driver_->dma_write_to_device(mem_ptr, sz_in_bytes, core.chip, core_coord, addr, dma_ordering);
     } else {
-        const tt::umd::IoOrdering resolved_ordering = ordering.value_or(
-            core_coord.core_type == CoreType::DRAM ? tt::umd::IoOrdering::Relaxed : tt::umd::IoOrdering::Strict);
         this->driver_->write_to_device(mem_ptr, sz_in_bytes, core.chip, core_coord, addr, resolved_ordering);
     }
 
@@ -970,7 +1004,7 @@ void Cluster::read_core(void* mem_ptr, uint32_t size_in_bytes, tt_cxy_pair core,
     }
     tt::umd::CoreCoord core_coord = soc_desc.get_coord_at(core, CoordSystem::TRANSLATED);
 
-    if (this->supports_dma_operations(chip_id, size_in_bytes)) {
+    if (this->use_dma_read(chip_id, size_in_bytes)) {
         this->driver_->dma_read_from_device(mem_ptr, size_in_bytes, core.chip, core_coord, addr);
     } else {
         this->driver_->read_from_device(mem_ptr, core.chip, core_coord, addr, size_in_bytes);
@@ -1695,7 +1729,7 @@ bool Cluster::is_external_cable(ChipId physical_chip_id, tt::tt_metal::CoreCoord
 }
 
 uint32_t Cluster::get_alignment_requirements(ChipId chip_id, uint32_t size_in_bytes) const {
-    if (this->supports_dma_operations(chip_id, size_in_bytes)) {
+    if (this->dma_available(chip_id) && size_in_bytes >= min_dma_size_bytes) {
         return this->hal_->get_dma_alignment();
     }
     return 1;
