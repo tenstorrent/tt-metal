@@ -166,6 +166,12 @@ SHAPES = [
     (4768, 5376, 5376, 12, 9, True, "qkv"),
     (4768, 7168, 1344, 12, 9, True, "plain"),
     (4768, 5376, 7168, 12, 9, True, "ff1_swiglu"),
+    # MiniMax-H3 AGMM shapes on WH Galaxy 4x8 (wh_4x8_ring), 8x8 worker grid (row 9 = muxes).
+    # M=3424 is the per-device packed sequence length the WH model runs; these are the shapes
+    # behind the grid_88_configs H3 entries in matmul.py.
+    (3424, 5376, 5376, 8, 8, True, "qkv"),
+    (3424, 7168, 1344, 8, 8, True, "plain"),
+    (3424, 5376, 7168, 8, 8, True, "ff1_swiglu"),
     # MiniMax-H3 fused MM+RS+addcmul (ff2). K = 14336 / tp = 3584 is already per-device. The core grid
     # is the *matmul* grid; the reduce-scatter takes the rows above it, so one entry per candidate grid.
     (4768, 3584, 5376, 12, 7, False, "mmrs"),
