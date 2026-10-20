@@ -1021,8 +1021,6 @@ inline void perform_reduce_row_sum_avg(std::uint32_t block_ct_dim, std::uint32_t
     }
 }
 
-// A row reduce writes its results to column 0 of faces 0/2 only, but the pack keeps column 0 of every face, so input
-// column 16 would leak into the output. Zero the even-column half of faces 1/3 (all rows) of each tile row's first tile.
 template <InstrModLoadStore INSTRUCTION_MODE>
 inline void clear_row_reduce_faces_1_3(std::uint32_t block_ct_dim, std::uint32_t block_rt_dim) {
     TTI_SFPMOV(0, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);

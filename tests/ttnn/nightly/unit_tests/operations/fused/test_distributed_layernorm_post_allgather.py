@@ -452,7 +452,6 @@ def test_layer_norm_post_all_gather_bias_only_rejects_mismatched_beta_row_major(
 @pytest.mark.parametrize("n_devices", [1, 4])
 @pytest.mark.parametrize("fast_and_approximate_mode", [False, True], ids=["sfpu_accurate", "fpu_fast_approx"])
 def test_post_all_gather_fp32_stats_from_pre_all_gather(device, variant, n_devices, fast_and_approximate_mode):
-    """Float32 pre_all_gather -> gather -> post_all_gather, one simulated device per width chunk (#57965)."""
     torch.manual_seed(0)
     is_rmsnorm = variant != "layer_norm"
     use_2d = {"use_2d_core_grid": True} if variant == "rms_norm_2d" else {}
@@ -494,5 +493,4 @@ def test_post_all_gather_fp32_stats_from_pre_all_gather(device, variant, n_devic
 
     ref = reference_layernorm(torch_input.double(), torch.ones(1024, dtype=torch.float64), None, 1e-5, is_rmsnorm)
     max_err = (output.double() - ref).abs().max().item()
-    # ttnn.rms_norm / ttnn.layer_norm on this input are within 0.01; leaking stats column 16 gives about 0.09.
     assert max_err < 3e-2, f"max abs error {max_err}"

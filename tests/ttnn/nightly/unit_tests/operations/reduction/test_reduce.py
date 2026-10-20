@@ -379,7 +379,6 @@ def test_rm_reduce_h_axis_split_output_layout(device, reduce_op, keepdim, output
 @pytest.mark.parametrize("op", ["sum", "max", "min"])
 @pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.int32, ttnn.bfloat16], ids=["float32", "int32", "bfloat16"])
 def test_reduce_row_keepdim_tile_padding_is_zero(device, op, dtype, fp32_dest_acc_en):
-    """The padding a keepdim row reduce leaves in its output tile is zero on the SFPU path too, as on the FPU path (#57965)."""
     if device.arch() == ttnn.device.Arch.QUASAR:
         pytest.skip("Quasar's SFPU reduce is not covered here")
     if dtype != ttnn.bfloat16 and not fp32_dest_acc_en:
