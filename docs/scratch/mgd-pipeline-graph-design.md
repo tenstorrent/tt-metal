@@ -8,6 +8,10 @@ SPDX-License-Identifier: Apache-2.0
 
 Brainstorm / design notes for [tt-metal#52016](https://github.com/tenstorrent/tt-metal/issues/52016).
 
+A visual version with diagrams, the worked example and the full per-PR implementation plan
+is in [mgd-pipeline-graph-design.html](mgd-pipeline-graph-design.html). Download it and open
+it in a browser; GitHub shows HTML files as source.
+
 **Status:** design. Nothing below is implemented yet except Tier D (2.4), which already
 runs in the pipeline builder and is not changed. Rewritten after the SAT joint-placement
 rework of the topology mapper landed; the Tier C plan (2.3, 4, 5) follows that code.
