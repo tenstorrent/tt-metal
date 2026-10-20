@@ -3,7 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import itertools
+import math
 import os
+from pathlib import Path
 
 import numpy as np
 import PIL
@@ -27,14 +29,39 @@ from ....utils.test import (
 from .common import check_first_frame_matches_seed, check_output_sanity
 
 
-def create_fractal_image(width: int, height: int) -> Image.Image:
-    c = np.linspace(-2.0, 1.0, width)[None, :] + 1j * np.linspace(-1.5, 1.5, height)[:, None]
-    z = np.zeros_like(c)
-    img = np.zeros(c.shape, dtype=np.uint8)
-    for i in range(32):
-        z = z * z + c
-        img[(img == 0) & (np.abs(z) > 2)] = 255 - 8 * i
-    return Image.fromarray(np.dstack((img, np.roll(img, width // 10, 1), np.roll(img, height // 10, 0))), "RGB")
+# The official I2V example (Wan-Video/Wan2.2 README and wan/configs/wan_i2v_A14B.py). Image, prompt,
+# size, flow shift, boundary and seed match the diffusers reference run, and so does the noise: both
+# draw it from the CPU generator.
+OFFICIAL_IMAGE_URL = (
+    "https://raw.githubusercontent.com/Wan-Video/Wan2.2/1ea34ff48f87168174e12956e200b1d908b1c5ff/examples/i2v_input.JPG"
+)
+OFFICIAL_IMAGE_SHA256 = "077e3d965090c9028c69c00931675f42e1acc815c6eb450ab291b3b72d211a8e"
+OFFICIAL_PROMPT = (
+    "Summer beach vacation style, a white cat wearing sunglasses sits on a surfboard. The fluffy-furred feline "
+    "gazes directly at the camera with a relaxed expression. Blurred beach scenery forms the background featuring "
+    "crystal-clear waters, distant green hills, and a blue sky dotted with white clouds. The cat assumes a naturally "
+    "relaxed posture, as if savoring the sea breeze and warm sunlight. A close-up shot highlights the feline's "
+    "intricate details and the refreshing atmosphere of the seaside."
+)
+OFFICIAL_FLOW_SHIFT = 5.0
+OFFICIAL_BOUNDARY_RATIO = 0.9  # the checkpoint's model_index.json
+OFFICIAL_SEED = 0
+
+
+def official_image() -> Image.Image:
+    path = Path(torch.hub.get_dir()) / "wan2.2_i2v_input.jpg"
+    if not path.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        torch.hub.download_url_to_file(OFFICIAL_IMAGE_URL, str(path), hash_prefix=OFFICIAL_IMAGE_SHA256)
+    return Image.open(path).convert("RGB")
+
+
+def official_size(max_area: int, image: Image.Image) -> tuple[int, int]:
+    """Wan's image2video.py: the image's aspect ratio at max_area, in whole latent patches."""
+    aspect = image.height / image.width
+    lat_h = round(math.sqrt(max_area * aspect) // 8 // 2 * 2)
+    lat_w = round(math.sqrt(max_area / aspect) // 8 // 2 * 2)
+    return lat_w * 8, lat_h * 8
 
 
 @pytest.mark.parametrize(
@@ -62,10 +89,10 @@ def create_fractal_image(width: int, height: int) -> Image.Image:
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize(
-    "width, height",
+    "max_area",
     [
-        (832, 480),
-        (1280, 720),
+        832 * 480,
+        1280 * 720,
     ],
     ids=[
         "resolution_480p",
@@ -80,8 +107,7 @@ def test_pipeline_inference(
     num_links,
     dynamic_load,
     topology,
-    width,
-    height,
+    max_area,
     is_fsdp,
     no_prompt,
     request,
@@ -92,9 +118,11 @@ def test_pipeline_inference(
     skip_if_unsupported_num_links(mesh_device, num_links)
 
     if no_prompt:
-        test_image = create_fractal_image(width, height)
+        test_image = official_image()
     else:
-        test_image = PIL.Image.open("./prompt_image.png")
+        test_image = PIL.Image.open("./prompt_image.png").convert("RGB")
+    width, height = official_size(max_area, test_image)
+    test_image = test_image.resize((width, height))
     image_prompt = [ImagePrompt(image=test_image, frame_pos=0)]
     negative_prompt = "色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走"
 
@@ -128,7 +156,7 @@ def test_pipeline_inference(
         ),
     )
 
-    prompt = "The cat in the hat runs up the hill to the house."
+    prompt = OFFICIAL_PROMPT
 
     def run(*, prompt, number, seed):
         logger.info(f"Running inference with prompt: '{prompt}'")
@@ -143,6 +171,8 @@ def test_pipeline_inference(
                 seed=seed,
                 guidance_scale=guidance_scale,
                 guidance_scale_2=guidance_scale_2,
+                flow_shift=OFFICIAL_FLOW_SHIFT,
+                boundary_ratio=OFFICIAL_BOUNDARY_RATIO,
                 output_type="uint8",
             )
 
@@ -171,18 +201,17 @@ def test_pipeline_inference(
 
     # VBench gate for I2V uses ONLY subject_consistency + background_consistency. They measure
     # intra-video feature consistency (does the content stay coherent frame-to-frame), which still
-    # catches a pipeline that emits incoherent/garbage output. The other VBench dimensions are dropped
-    # because they're meaningless for this test's synthetic seed: the CI seed is a fractal, so
-    # `dynamic_degree` (RAFT optical-flow "is it moving") reads ~0 (a fractal can't be animated
-    # naturally) and `imaging_quality` (MUSIQ, trained on natural photos) reads ~0.30 regardless of
-    # correctness -- neither reflects a real defect here. Floors are provisional: set below one
-    # observed i2v run (subject≈0.75, background≈0.89); tighten/loosen as more runs accrue.
-    vbench_thresholds_by_height = {
-        720: {
+    # catches a pipeline that emits incoherent/garbage output. The other VBench dimensions were dropped
+    # while the CI seed was a synthetic fractal, for which `dynamic_degree` (RAFT optical-flow "is it
+    # moving") reads ~0 and `imaging_quality` (MUSIQ, trained on natural photos) reads ~0.30 regardless
+    # of correctness. Floors are provisional: set below one observed i2v run on the fractal seed
+    # (subject≈0.75, background≈0.89); tighten/loosen as runs on the official image accrue.
+    vbench_thresholds_by_area = {
+        (1280 * 720): {
             "subject_consistency": 0.70,
             "background_consistency": 0.80,
         },
-        480: {
+        (832 * 480): {
             "subject_consistency": 0.70,
             "background_consistency": 0.82,
         },
@@ -191,11 +220,11 @@ def test_pipeline_inference(
     def check_output_with_vbench(prompt, number):
         if int(ttnn.distributed_context_get_rank()) == 0:
             output_filename = f"wan_i2v_{width}x{height}_{number}.mp4"
-            thresholds = vbench_thresholds_by_height[height]
+            thresholds = vbench_thresholds_by_area[max_area]
             assert_vbench_quality(output_filename, prompt=prompt, thresholds=thresholds)
 
     if no_prompt:
-        run(prompt=prompt, number=0, seed=42)
+        run(prompt=prompt, number=0, seed=OFFICIAL_SEED)
         check_output_with_vbench(prompt, 0)
     else:
         for i in itertools.count():
