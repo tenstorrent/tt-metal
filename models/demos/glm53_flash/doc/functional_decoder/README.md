@@ -82,6 +82,7 @@ prefill of the whole prompt (same kernels, same row classes):
 | `test_chunked_prefill.py` | chunked prefill (`start=`): layers 0 / 3 on R4097 in chunks 1024x3+1025 (layer 3 also 1536+1024x2+513, a chunk straddling the 2048 split) vs the dump and vs the single-shot run, then 4 decode steps; layer 3 R2042 / R2040 in 512x3+506 / 504 chunks + 12 decode steps + pool cache vs host; both layers at T=2040 as 1024+1016 vs single-shot; indexer maintenance at arbitrary (non-pool-aligned) chunk offsets | layer 0 R4097: chunks 0.99967-0.99978 vs HF, 0.99999 vs single-shot (chunk 0, carry-free, already 0.999996: ttKDA geometry at 4128 vs 1024 rows), decode 0.9998; layer 3 R4097: 0.999937 / 0.999938 vs HF (single-shot 0.999938), 0.999999 / 1.000000 vs single-shot, chunks 0.99992-0.99998, row classes >= 0.99986, the straddling chunk [1536,2560) 0.99996, decode 0.99996; T=2040: layer 0 bit-identical to single-shot (max diff 0, 100 % equal), layer 3 PCC 1.000000 (99.83 % equal); R2042 / R2040 512-chunks 0.99987 / 0.99988 vs HF (row classes >= 0.99987), decode >= 0.99978, pool cache worst row 0.99999; indexer offsets: all pools and ring rows 1.00000 |
 | watcher | `TT_METAL_WATCHER=10` on the layer-3 dump test (`~/ashai/glm53/_logs/watcher_layer3`) | PASSED, 10 dumps, no watcher exceptions |
 | `test_expert_dtype.py` | expert dtype gate (design section 9): routed experts bfp8 / bfp4 gate-up / bfp4 all on layers 3 and 4, MoE-only T=256 + R4097 prefill (4097 rows, per-row distribution) + 4 decode steps; `doc/functional_decoder/dtype_gate.md` | bfp4 gate/up: MoE sublayer 0.99968 (L3) / 0.99504 (L4), full layer >= 0.99945 prefill, >= 0.99747 decode; bfp8 default kept, eval-set gate pending |
+| `test_all_layers.py` | every layer 0..44 on its own HF input (`L45_S128` dump: 128 random tokens + 2 decode steps through the full HF stack, produced layer by layer with `hf_layer_reference.py --stream`), prefill S=128 + 2 decode vs the live HF layer, router top-8 sets with near-tie margins, attention / FFN sub-block PCCs | 45/45 pass: prefill 0.99886 (layer 23) .. 1.0, decode >= 0.99786 (layer 27, one 4e-4-margin expert flip), per-row prefill min 0.9755 (layer 23 row 125); router sets 109-126/128 identical, every flipped prefill row below the median 8th-9th margin except 3 rows of layer 43; sub-blocks: attention >= 0.99915, FFN >= 0.99589 (prefill); HF live == dump (1.000000) for all 45 layers; 4 chips, ~2 min/layer |
 | `test_perf_layer.py` | warmed prefill S=1024 (wall), traced decode B=1 (one replay, tt-perf-report `Device Time`) | prefill: layer 3 314 ms, layer 4 298 ms (device 293 ms, 1002 ops); decode: layer 3 10.87 ms/step device (435 ops, wall 11.31), layer 4 10.76 ms/step device (471 ops, wall 11.2) |
 
 Context contract: `doc/context_contract.json`. Full log: `doc/functional_decoder/work_log.md`.
@@ -97,6 +98,10 @@ source ~/ashai/glm53/env.sh
 TT_VISIBLE_DEVICES=0 pytest models/demos/glm53_flash/tests -s           # all device tests (one chip)
 python models/demos/glm53_flash/reference/hf_layer_reference.py --layers 0,1,2,3,4 --seq-len 256 --num-decode 4 \
     --out bringup/references/glm53_flash/T256                            # regenerate the HF dumps (CPU)
+python models/demos/glm53_flash/reference/hf_layer_reference.py --layers 0-44 --seq-len 128 --random-ids 45 \
+    --num-decode 2 --stream --out bringup/references/glm53_flash/L45_S128   # all-layer dump (layer by layer, ~25 min)
+TT_VISIBLE_DEVICES=0 GLM53_LAYERS=0-11 pytest models/demos/glm53_flash/tests/test_all_layers.py -s --timeout 1800
+                                                                         # every layer vs HF (shard GLM53_LAYERS over chips)
 ```
 
 ## Known limits (single chip, v1)
