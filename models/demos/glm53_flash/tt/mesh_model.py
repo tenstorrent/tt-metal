@@ -115,6 +115,36 @@ class GLM53MeshModel:
         logits, ids = self.head.forward_greedy(streams)
         return streams, logits, ids
 
+    # ------------------------------------------------------------------ prefill (TTFT)
+    def prefill(self, prompt_ids: torch.Tensor, user: int = 0):
+        """One prompt through every layer (sequence-parallel over the rows on a multi-row mesh) and the
+        head on its last token. Returns ``(streams_local, logits_last [1,1,1,V] per chip, owner_row)``:
+        the row holding the last token is ``owner_row`` (every row computes the head on its own local
+        row ``(S-1) % T_local``; only the owner's result is the prompt's)."""
+        S = int(prompt_ids.numel())
+        unit = 32 * self.mesh.rows
+        T_pad = -(-S // unit) * unit
+        host = self.embedding.tokens_to_host(prompt_ids, pad_to=T_pad)  # [1,1,1,T_pad]
+        if self.mesh.rows > 1:
+            ids_dev = self.mesh.upload(host, ttnn.uint32, rows=3, layout=ttnn.ROW_MAJOR_LAYOUT)
+        else:
+            ids_dev = ttnn.from_torch(host, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device)
+        streams = self.embedding(ids_dev)  # [1,1,T_pad/rows,16384] per row (its slab)
+        ttnn.deallocate(ids_dev)
+        for dec in self.layers:
+            out = dec.prefill_forward(streams, user=user, seq_len=S)
+            ttnn.deallocate(streams)
+            streams = out
+        T_loc = T_pad // self.mesh.rows
+        owner_row, local_last = divmod(S - 1, T_loc)
+        logits = self.head.last_token_logits(streams, local_last + 1) if self.head is not None else None
+        return streams, logits, owner_row
+
+    def first_token(self, logits_last: ttnn.Tensor, owner_row: int) -> int:
+        ids = self.head.greedy(logits_last)  # [1,1,1,1] per chip
+        shards = [ttnn.to_torch(t).view(torch.int32).reshape(-1) for t in self.mesh.device_tensors(ids)]
+        return int(shards[owner_row * self.mesh.cols][0])
+
     def ids_to_host(self, ids: ttnn.Tensor) -> torch.Tensor:
         """greedy ids [1,1,B,1] uint32 per chip -> [rows*B] int64."""
         t = self.mesh.to_host(ids, rows=2 if self.mesh.rows > 1 else None)

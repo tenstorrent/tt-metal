@@ -153,11 +153,11 @@ class TtDecoderLayer(LightweightModule):
         user's cache holds [0, start). Returns the new streams and the layer state after the chunk.
         ``actual_start`` / ``actual_end`` override the KDA device scalars derived from ``start`` and
         ``seq_len`` (global positions, as ttKDA defines them)."""
-        T = streams.shape[-2]
+        T = streams.shape[-2] * self.mesh.rows  # the chunk's rows (this chip holds T / rows of them)
         new_state = LayerState(kda=state.kda, cache=state.cache)
 
         def attention(h):
-            h = self._norm(h, self.input_norm_w)  # [1,1,T,hidden] bf16
+            h = self._norm(h, self.input_norm_w)  # [1,1,T/rows,hidden] bf16
             if self.is_kda:
                 start_t = actual_start if actual_start is not None else self.attn.scalar(start)
                 end = actual_end
@@ -165,11 +165,24 @@ class TtDecoderLayer(LightweightModule):
                 # chronology is the clipped interval [start, start + seq_len) (derive_interval)
                 if end is None and (seq_len != T or start):
                     end = self.attn.scalar(start + seq_len)
+                T_loc = h.shape[-2]
                 y, new_state.kda = self.attn.prefill_forward(
-                    ttnn.reshape(h, [1, T, self.hidden]), state.kda, start_t, end
+                    ttnn.reshape(h, [1, T_loc, self.hidden]), state.kda, start_t, end
                 )
-                return ttnn.reshape(y, [1, 1, T, self.hidden])
-            return self.attn.prefill_forward(h, state.cache, user, seq_len, start=start)
+                return ttnn.reshape(y, [1, 1, T_loc, self.hidden])
+            if self.mesh.rows == 1:
+                return self.attn.prefill_forward(h, state.cache, user, seq_len, start=start)
+            # sequence-parallel rows (v1): every row attends over the whole chunk (gathered slabs, in
+            # row order), fills the replicated cache/index identically, then keeps its own slab of the
+            # output: the reduce-scatter over the rows of ``rows`` identical copies is exactly
+            # rows * slab (a power-of-two sum of equal bf16 values), scaled back by 1/rows.
+            rows = self.mesh.rows
+            h_full = self.mesh.all_gather_rows(h, dim=2)  # [1,1,T,hidden]
+            y_full = self.attn.prefill_forward(h_full, state.cache, user, seq_len, start=start)
+            ttnn.deallocate(h_full)
+            y = self.mesh.reduce_scatter_rows(y_full, dim=2)  # [1,1,T/rows,hidden] = rows * slab
+            ttnn.deallocate(y_full)
+            return ttnn.multiply(y, 1.0 / rows, output_tensor=y)
 
         streams = self.attn_hc.forward(streams, attention, sublayer_dtype=ttnn.bfloat16)
 

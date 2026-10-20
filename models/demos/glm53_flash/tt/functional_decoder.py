@@ -79,7 +79,8 @@ def host_streams_to_device(
     """HF ``[1, S, n, C]`` (any dtype) -> packed ``[1, 1, T_pad, n*C]`` fp32 on device. With a
     multi-row ``mesh`` the rows (= ``rows * B`` decode users) are sharded over the mesh rows."""
     _, S, n, C = streams.shape
-    T_pad = pad_to if pad_to is not None else -(-S // TILE) * TILE
+    unit = TILE * (mesh.rows if mesh is not None else 1)  # a multi-row prefill chunk splits into row slabs
+    T_pad = pad_to if pad_to is not None else -(-S // unit) * unit
     packed = torch.zeros(1, 1, T_pad, n * C, dtype=torch.float32)
     packed[0, 0, :S] = streams.reshape(S, n * C).float()
     if mesh is not None and mesh.rows > 1:
@@ -262,7 +263,7 @@ class FunctionalDecoder(LightweightModule):
         ``start + i``. ``start == 0`` starts a new prompt; a later chunk must start where the previous
         one ended (``next_start[user]``), on a 32-row boundary, and end within ``max_seq_len`` (see
         the module docstring for the full chunked-prefill contract)."""
-        T = streams.shape[-2]
+        T = streams.shape[-2] * self.mesh.rows  # multi-row mesh: streams hold this row's slab of the chunk
         seq_len = T if seq_len is None else seq_len
         if T % TILE or seq_len > T or seq_len <= 0:
             raise ValueError(f"T_pad={T} must be a multiple of {TILE} and 0 < seq_len={seq_len} <= T_pad")
@@ -277,8 +278,10 @@ class FunctionalDecoder(LightweightModule):
                 f"user {user}: chunk start {start} is not contiguous with the previous chunk "
                 f"(expected {self.next_start[user]}; a chunk with a non-{TILE}-aligned seq_len must be the last)"
             )
-        if self.mesh.rows > 1:
-            raise NotImplementedError("prefill on a multi-row mesh is not wired yet (single-row / single-chip only)")
+        # multi-row mesh (sequence-parallel prefill v1): the rows hold consecutive slabs of the chunk; the
+        # KDA carries come back replicated over the rows and the DSA cache / index are written on every
+        # row, so slot ``user`` of EVERY row ends up holding this prompt (a per-row ownership mask is the
+        # next step; until then a prefilled user is decodable from any row's slot ``user``).
         state, temporaries = self._state_for_prefill(user, start)
         out, new_state = self.layer.prefill_forward(streams, state, user=user, seq_len=seq_len, start=start)
         for t in temporaries:

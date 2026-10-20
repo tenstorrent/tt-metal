@@ -119,3 +119,54 @@ def test_mesh_model_chain_and_perf(mesh_device):
         f"(per layer {ms / len(layers):.2f} ms; the prompt loop above averaged {sum(step_times) / len(step_times) * 1e3:.2f} ms/step blocking)"
     )
     ttnn.release_trace(mesh_device, trace_id)
+
+
+@pytest.mark.timeout(10800)
+@pytest.mark.parametrize("device_params", [mesh_device_params(*MESH, trace_region_size=200_000_000)], indirect=True)
+@pytest.mark.parametrize("mesh_device", [MESH], indirect=True)
+def test_mesh_model_ttft(mesh_device):
+    """Prefill of the dump prompt through every built layer + head (TTFT, cold and warm), first greedy
+    token vs the host head on the HF chain rows; then the traced decode step from that state."""
+    layers = _layer_range()
+    cfg = GLM53FlashConfig.from_hf_config_json(default_snapshot_dir() / "config.json")
+    model = GLM53MeshModel(
+        mesh_device,
+        cfg,
+        layers,
+        max_batch=B,
+        max_seq_len=512,
+        expert_dtype=EXPERT_DTYPE,
+        expert_down_dtype=EXPERT_DOWN_DTYPE,
+    )
+    prompt = torch.load(DUMP / "prefill_input.pt")["prompt_ids"].reshape(-1)
+    S_p = int(prompt.numel())
+    ref = torch.load(DUMP / f"layer{layers[-1]}_prefill.pt")["x_out"][0]  # [128, 4, 4096]
+    from models.demos.glm53_flash.reference.checkpoint import FINAL_NORM_KEY, LM_HEAD_KEY, load_tensors, shard_headers
+
+    snapshot = default_snapshot_dir()
+    w = load_tensors(snapshot, [FINAL_NORM_KEY, LM_HEAD_KEY], shard_headers(snapshot))
+    h = ref.float().mean(1)
+    hn = h * torch.rsqrt(h.pow(2).mean(-1, keepdim=True) + cfg.rms_norm_eps) * w[FINAL_NORM_KEY].float()
+    host_first = int((hn[S_p - 1] @ w[LM_HEAD_KEY].float().t()).argmax(-1))
+    walls = []
+    for it in range(2):
+        ttnn.synchronize_device(mesh_device)
+        t0 = time.perf_counter()
+        streams, logits, owner = model.prefill(prompt, user=0)
+        tok = model.first_token(logits, owner)
+        walls.append(time.perf_counter() - t0)
+        out = (
+            model.mesh.to_host(streams, rows=2 if model.mesh.rows > 1 else None).float()[0, 0, :S_p].reshape(S_p, 4, -1)
+        )
+        p = pcc(ref, out)
+        logger.info(
+            f"TTFT mesh {MESH} layers {len(layers)} prompt {S_p} tokens: {'cold' if it == 0 else 'warm'} {walls[-1] * 1e3:.0f} ms; "
+            f"chain pcc vs HF rows {p:.6f}; first token {tok} (host head on HF rows: {host_first}, "
+            f"{'match' if tok == host_first else 'DIFFERENT'})"
+        )
+        ttnn.deallocate(streams)
+        ttnn.deallocate(logits)
+    assert p > PCC_BAR
+    logger.info(
+        f"PERF-TTFT mesh {MESH} layers {len(layers)} S={S_p}: warm {walls[-1] * 1e3:.0f} ms (cold {walls[0] * 1e3:.0f} ms)"
+    )

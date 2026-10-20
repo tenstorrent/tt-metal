@@ -86,6 +86,19 @@ prefill dominates; the design's prefill engine (SP8 x TP4, dispatch-based expert
 and it is not wired yet (ttKDA is sequence-parallel on multi-row meshes). Eager decode steps carry host
 overhead; the traced step is 5.4 ms/layer (resident-model row above). Log `test_tp4_prefill_perf_row2.log`.
 
+## Sequence-parallel prefill v1 (TTFT path)
+
+`tests/test_mesh_sp_kda.py` on the rows-2-3 (2,4) block: ttKDA with the prompt split over the rows (row r =
+slab r of the chunk, `active_seq_len` global, grouped-scan `summary_group_chunks` sized to divide the local
+chunk count): output 0.999926 vs HF (per row 0.999923 / 0.999916), final recurrent state 0.999897 and
+replicated over the rows, conv history 0.999992 (`test_sp_kda_lb2_2.log`). v1 wiring through
+`FunctionalDecoder.prefill_forward` on multi-row meshes: KDA layers sequence-parallel, the hybrid MoE
+gathers the slabs as before, DSA layers gather the full chunk over the rows, attend on every row and keep
+their slab through a reduce-scatter of identical copies (exact, x 1/rows). Limitation: the KDA carries and
+the DSA cache/index of the prefilled user land in slot ``user`` of EVERY row (per-row ownership masks /
+scratch page tables are the next step). `tt/mesh_model.py::prefill` + `test_mesh_model.py::test_mesh_model_ttft`
+measure the prompt -> first token time.
+
 ## Root cause of the TP4 sparse-row gap (2026-10-20)
 
 `test_tp4_sparse_prefill_layer3` first gave rows >= 2048 at 0.99777 (single chip 0.99990) while the
