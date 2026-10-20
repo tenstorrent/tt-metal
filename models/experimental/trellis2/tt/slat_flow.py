@@ -79,8 +79,9 @@ class TtSLatFlow(Module):
         if key not in self._mods:
             m = host.modulation(self._host_state, t)
             parts = (m.shift_msa, m.scale_msa, m.gate_msa, m.shift_mlp, m.scale_mlp, m.gate_mlp)
+            to_device = float32_tensor if self.precision.fp32_modulate else bf16_tensor
             self._mods[key] = [
-                [bf16_tensor(p[i].reshape(1, 1, 1, -1), device=self.mesh_device) for p in parts]
+                [to_device(p[i].reshape(1, 1, 1, -1), device=self.mesh_device) for p in parts]
                 for i in range(host.NUM_BLOCKS)
             ]
         return self._mods[key]

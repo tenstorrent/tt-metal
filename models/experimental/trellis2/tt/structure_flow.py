@@ -53,6 +53,9 @@ class Precision:
     # x_t reaches the input layer with ~16 mantissa bits, as TRELLIS.2's bf16 model keeps it fp32: uploaded as bf16
     # hi and lo halves against a stacked [W; W] weight (an fp32 activation overflows L1 at K=32). Off: one bf16 copy.
     fp32_input: bool = False
+    # adaLN shift/scale/gate in fp32: norm output * scale + shift in fp32 with one cast to bf16 before the attention or
+    # MLP input, gate applied in fp32 before the residual add (off: norm output, vectors and gated branch in bf16)
+    fp32_modulate: bool = False
 
 
 def hi_lo_split(x: torch.Tensor) -> torch.Tensor:
@@ -215,18 +218,29 @@ class Block(Module):
             d, host.NUM_HEADS, ctx_dim=host.COND_CHANNELS, mesh_device=mesh_device, precision=precision
         )
         self.mlp = FeedForward(d, host.MLP_CHANNELS, mesh_device=mesh_device, precision=precision)
+        self.fp32_modulate = precision.fp32_modulate
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         # the per-block modulation table is folded into the host-side adaLN vectors
         state.pop("modulation", None)
 
+    def _modulate(self, normed: ttnn.Tensor, scale: ttnn.Tensor, shift: ttnn.Tensor) -> ttnn.Tensor:
+        if self.fp32_modulate:
+            return _norm_in(ttnn.add(ttnn.multiply(normed, scale), shift))
+        return ttnn.add(ttnn.multiply(_norm_in(normed), scale), shift)
+
+    def _gate(self, branch: ttnn.Tensor, gate: ttnn.Tensor) -> ttnn.Tensor:
+        if self.fp32_modulate:
+            branch = ttnn.typecast(branch, ttnn.float32)
+        return ttnn.multiply(branch, gate)
+
     def forward(self, x: ttnn.Tensor, mod: list[ttnn.Tensor], context: ttnn.Tensor, tables: DeviceTables):
         shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = mod
-        h = ttnn.add(ttnn.multiply(_norm_in(self.norm1(x)), scale_msa), shift_msa)
-        x = _residual_add(x, ttnn.multiply(self.self_attn(h, tables), gate_msa))
+        h = self._modulate(self.norm1(x), scale_msa, shift_msa)
+        x = _residual_add(x, self._gate(self.self_attn(h, tables), gate_msa))
         x = _residual_add(x, self.cross_attn(_norm_in(self.norm2(x)), tables, context))
-        h = ttnn.add(ttnn.multiply(_norm_in(self.norm3(x)), scale_mlp), shift_mlp)
-        return _residual_add(x, ttnn.multiply(self.mlp(h), gate_mlp))
+        h = self._modulate(self.norm3(x), scale_mlp, shift_mlp)
+        return _residual_add(x, self._gate(self.mlp(h), gate_mlp))
 
 
 class TtStructureFlow(Module):
@@ -277,8 +291,9 @@ class TtStructureFlow(Module):
     def modulation(self, t: torch.Tensor) -> list[list[ttnn.Tensor]]:
         m = host.modulation(self._host_state, t)
         parts = (m.shift_msa, m.scale_msa, m.gate_msa, m.shift_mlp, m.scale_mlp, m.gate_mlp)
+        to_device = float32_tensor if self.precision.fp32_modulate else bf16_tensor
         return [
-            [bf16_tensor(p[i].reshape(1, 1, 1, -1), device=self.mesh_device) for p in parts]
+            [to_device(p[i].reshape(1, 1, 1, -1), device=self.mesh_device) for p in parts]
             for i in range(host.NUM_BLOCKS)
         ]
 

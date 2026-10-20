@@ -4,15 +4,19 @@
 
 """G1: the TRELLIS.2 structure flow DiT on one device against the CPU fp32 goldens.
 
-Gate (project VALIDATION.md, accepted 2026-10-15):
+Gate (project VALIDATION.md, restated 2026-10-19):
 - single pass: every recorded call, fed its golden x_t / t / cond, PCC >= 0.999 (CPU bf16 floor 0.99987);
-- full sample: 12 free-running steps from the golden noise, last call PCC >= 0.985 (CPU bf16 floor 0.9854).
+- full sample: 12 free-running steps from the golden noise; the error (1 - PCC) of the last call and of the final
+  latent is at most 1.5x the CPU bf16 floor of the same input and seed, given as TRELLIS2_BF16_FLOOR=<last>,<final>.
+  Without it the last call is held to 0.985 (the T.png seed 42 floor).
 
-TRELLIS2_RESULTS_DIR, if set, receives a JSON table per test.
+TRELLIS2_RESULTS_DIR, if set, receives a JSON table per test. TRELLIS2_PRECISION=<field>=<0|1>,... overrides
+Precision() defaults for A/B runs.
 """
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
 import time
@@ -26,11 +30,29 @@ from models.experimental.trellis2.tt.structure_flow import Precision, TtStructur
 
 SINGLE_PASS_PCC = 0.999
 LAST_CALL_PCC = 0.985
+FLOOR_RATIO = 1.5
 
 pytestmark = pytest.mark.skipif(goldens.missing_reason() is not None, reason=goldens.missing_reason() or "")
 
 
-def _model(mesh_device, precision: Precision = Precision()) -> TtStructureFlow:
+def precision_from_env() -> Precision:
+    spec = os.environ.get("TRELLIS2_PRECISION", "")
+    overrides = {k: v == "1" for k, v in (kv.split("=") for kv in spec.split(",") if kv)}
+    return dataclasses.replace(Precision(), **overrides)
+
+
+def free_running_thresholds() -> tuple[float, float | None]:
+    """(last call, final latent) PCC thresholds."""
+    floor = os.environ.get("TRELLIS2_BF16_FLOOR")
+    if not floor:
+        return LAST_CALL_PCC, None
+    last, final = (float(v) for v in floor.split(","))
+    return 1 - FLOOR_RATIO * (1 - last), 1 - FLOOR_RATIO * (1 - final)
+
+
+def _model(mesh_device, precision: Precision | None = None) -> TtStructureFlow:
+    precision = precision or precision_from_env()
+    logger.info(f"precision {precision}")
     model = TtStructureFlow(mesh_device=mesh_device, precision=precision)
     model.load_torch_state_dict(host.load_state_dict(f"{goldens.weights_dir()}/{goldens.SS_CKPT}"))
     return model
@@ -84,9 +106,11 @@ def test_structure_flow_full_sample(mesh_device):
     for r in rows:
         logger.info(f"call {r['call']:2d} ({r['branch']}) free-running pcc={r['pcc']:.6f}")
     gold_final = steps[-1]["x_prev"]
+    last_threshold, final_threshold = free_running_thresholds()
     result = {
         "last_call_pcc": rows[-1]["pcc"],
-        "threshold": LAST_CALL_PCC,
+        "threshold": last_threshold,
+        "final_threshold": final_threshold,
         "final_sample_pcc": goldens.pcc(final, gold_final),
         "final_sample_max_abs_err": (final - gold_final).abs().max().item(),
         "seconds": seconds,
@@ -96,4 +120,6 @@ def test_structure_flow_full_sample(mesh_device):
     logger.info(
         f"last call {result['last_call_pcc']:.6f}, final sample {result['final_sample_pcc']:.6f}, {seconds:.1f} s"
     )
-    assert result["last_call_pcc"] >= LAST_CALL_PCC
+    assert result["last_call_pcc"] >= last_threshold
+    if final_threshold is not None:
+        assert result["final_sample_pcc"] >= final_threshold
