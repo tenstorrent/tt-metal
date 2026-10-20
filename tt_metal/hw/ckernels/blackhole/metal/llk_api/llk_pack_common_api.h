@@ -47,7 +47,6 @@ inline void llk_pack_hw_configure(std::uint32_t pack_output) {
     const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
     const std::uint32_t tile_c_dim = get_output_tile_c_dim(output_id);
     const std::uint32_t num_faces = get_output_num_faces(output_id);
-    // By face height, not the CB's partial_face (tile height < 32): 16x32 block-float needs two exponent sections.
     const bool partial_face = face_r_dim < FACE_R_DIM;
 
     const std::uint32_t tile_size = get_local_cb_interface(output_id).fifo_page_size;

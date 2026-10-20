@@ -158,13 +158,6 @@ def test_tiny_tiles_bfloat(device, n, c, h, w, tile_h, tile_w, dtype, transpose_
 @pytest.mark.parametrize("k", [32, 64])
 @pytest.mark.parametrize("fp32_dest_acc_en", [False, True])
 def test_tiny_tiles_bfloat_output(device, tile_h, out_dtype, k, fp32_dest_acc_en):
-    """Matmul with a short-tile block-float output.
-
-    A block-float tile carries one 16-byte exponent section per face, or a single one when the faces are
-    shorter than 16 rows (8x32 / 4x32). The matmul kernel reconfigures the packer to the output format before
-    packing it (k=64 also accumulates the partials in L1 first), so the reconfigure has to set the packer's
-    partial-face flag from the output's face height.
-    """
     torch.manual_seed(0)
     m, n = 64, 64
     in0 = torch.randn((1, 1, m, k), dtype=torch.bfloat16)
@@ -205,7 +198,6 @@ def test_tiny_tiles_bfloat_output(device, tile_h, out_dtype, k, fp32_dest_acc_en
     assert_numeric_metrics(
         in0.float() @ in1.float(),
         ttnn.to_torch(output_t).float(),
-        # bfloat4_b keeps 3 mantissa bits: 0.984-0.986 on every tile shape here; the misplaced layout gives about 0.
         pcc_threshold=0.999 if out_dtype == ttnn.bfloat8_b else 0.97,
         check_allclose=False,
         check_frobenius=False,
