@@ -516,7 +516,7 @@ void McastImpl::prepare_arguments_() const {
 }
 
 void McastImpl::require_arguments_prepared_() const {
-    TT_FATAL(arguments_prepared_, "McastImpl: attach or call append_semaphores() before requesting arguments");
+    TT_FATAL(arguments_prepared_, "McastImpl: attach before requesting arguments");
 }
 const McastImpl::Group* McastImpl::group_for_core_(const CoreCoord& core) const {
     for (const auto& group : groups_) {
