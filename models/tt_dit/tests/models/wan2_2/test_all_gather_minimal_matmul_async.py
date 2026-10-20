@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 import pytest
 import torch
 from loguru import logger
@@ -173,6 +175,8 @@ def run_test_linear_impl(
         math_approx_mode=False,
         fp32_dest_acc_en=fp32_acc,
         packer_l1_acc=True,
+        # AGMM_TEST_DST_FULL_SYNC=1 checks numerics of the full-sync DST build (8 fp32 DST tiles).
+        dst_full_sync_en=os.environ.get("AGMM_TEST_DST_FULL_SYNC") == "1",
     )
 
     matmul_config = ttnn.MinimalMatmulConfig(
@@ -930,6 +934,8 @@ def run_test_linear_fsdp(
         math_approx_mode=False,
         fp32_dest_acc_en=fp32_acc,
         packer_l1_acc=True,
+        # AGMM_TEST_DST_FULL_SYNC=1 checks numerics of the full-sync DST build (8 fp32 DST tiles).
+        dst_full_sync_en=os.environ.get("AGMM_TEST_DST_FULL_SYNC") == "1",
     )
 
     matmul_config = ttnn.MinimalMatmulConfig(
