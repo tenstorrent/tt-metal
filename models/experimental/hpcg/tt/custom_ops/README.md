@@ -14,7 +14,9 @@ needs no `_ttnn.so` rebuild.
         README.md                this file
         sparse_rows/             persistent sparse-row launch
             op.py, plan.py, kernels/
-        cg_vector/               fused CG vector passes
+        cg_vector/               fused CG vector passes and the dot-product finish
+            op.py, kernels/
+        stencil_matrix/          setup: the device writes a level's matrix tables
             op.py, kernels/
 
 ## What the solver calls
@@ -24,11 +26,17 @@ needs no `_ttnn.so` rebuild.
 | `SparseRowOp` mode `gs` | one symmetric Gauss-Seidel per launch: 16 colour phases, neighbours exchange updated rows on chip; the pre-smoother also runs the residual SpMV and writes `r - A z` for the restriction |
 | `SparseRowOp` mode `gs`, SpMV phases only | the CG SpMV `Ap = A p`, cores kept in lockstep phase by phase |
 | `SparseRowOp` mode `spmv`, 1-slot plan | restriction gather, and prolongation gather plus add |
-| `CgVectorOp` | `r.z` and `p.Ap` partials, `p = z + beta p`, and `x += alpha p`, `r -= alpha Ap` with the `r.r` partial |
+| `CgVectorOp` mode `dot` | per-core partial sums of `r.r` (CG start), `r.z` and `p.Ap` |
+| `CgVectorOp` mode `axpy` | `p = z + beta p`, with `beta` divided on chip |
+| `CgVectorOp` mode `xr` | `x += alpha p`, `r -= alpha Ap` and the per-core `r.r` partial, with `alpha` divided on chip |
+| `DotFinishOp` | one core adds the per-core partials into one value; options keep the previous `r.z` or take the square root |
+| `StencilMatrixOp` | setup, once per level: writes the 27-slot matrix values and window byte offsets (and, on the fine level, `b`) into DRAM; bit-identical to the host-built tables |
 
 `SparseRowPlan` (`sparse_rows/plan.py`) decides which rows each core owns, the
 x window pieces each core loads into L1, every column's L1 byte offset, and
-which rows each core pushes to which neighbour. Kernel metadata layout:
+which rows each core pushes to which neighbour. For the Gauss-Seidel launches
+it plans from the grid's storage-order formula (`stencil=`), and
+`StencilMatrixOp` computes the column offsets on the device. Kernel metadata layout:
 `sparse_rows/kernels/common.h`.
 
 ## Conventions

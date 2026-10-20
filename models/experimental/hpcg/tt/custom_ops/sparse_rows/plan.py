@@ -10,6 +10,7 @@ from models.experimental.hpcg.host import native
 from models.experimental.hpcg.tt.layout import TILE
 
 ALIGN = 32  # rows per ownership unit (128 B of fp32 values)
+MAX_PIECES = (256, 4096)  # window pieces per core the planner first makes room for, then retries with
 MAX_NB = 14  # 16 semaphores per core: 1 ready flag + 1 own progress slot + up to 14 neighbour slots
 GRAN = 16  # window granule (words) = 64 B: every window piece is NoC-aligned in DRAM and in L1
 WGAP = 8  # column runs at most this many granules apart share one window piece
@@ -121,10 +122,13 @@ class SparseRowPlan:
         offsets and the exchange entries; no offsets table (the device generates it)."""
         nc, NB = own.shape[:2]
         own_f = np.ascontiguousarray(own.reshape(-1), np.int64)
-        maxp = 4096
-        plo, pln, pl1 = (np.zeros(nc * maxp, np.int64) for _ in range(3))
-        npc = np.zeros(nc, np.int64)
-        if lib.hpcg_plan_windows_stencil(*L.geo(), nc, NB, own_f, GRAN, WGAP, ng, empty_lo, maxp, plo, pln, pl1, npc) < 0:
+        for maxp in MAX_PIECES:
+            plo, pln, pl1 = (np.zeros(nc * maxp, np.int64) for _ in range(3))
+            npc = np.zeros(nc, np.int64)
+            args = (*L.geo(), nc, NB, own_f, GRAN, WGAP, ng, empty_lo, maxp, plo, pln, pl1, npc)
+            if lib.hpcg_plan_windows_stencil(*args) >= 0:
+                break
+        else:
             raise ValueError(f"a core needs more than {maxp} window pieces")
         pieces = [
             (
@@ -135,14 +139,13 @@ class SparseRowPlan:
             for k in range(nc)
         ]
         own_l1 = np.zeros((nc, NB), np.int64)
-        for k in range(nc):
+        for k in range(nc):  # the window piece holding each block's own rows
             lo, ln, l1 = pieces[k]
-            for b in range(NB):
-                a, e = own[k, b]
-                if e > a:
-                    p0 = int(np.searchsorted(lo, a, side="right") - 1)
-                    assert e <= lo[p0] + ln[p0], "own rows split over window pieces"
-                    own_l1[k, b] = l1[p0] + (a - lo[p0]) * 4
+            a, e = own[k, :, 0], own[k, :, 1]
+            p0 = np.searchsorted(lo, a, side="right") - 1
+            has = e > a
+            assert np.all(e[has] <= lo[p0[has]] + ln[p0[has]]), "own rows split over window pieces"
+            own_l1[k, has] = l1[p0[has]] + (a[has] - lo[p0[has]]) * 4
         n = lib.hpcg_plan_exchange(nc, NB, own_f, maxp, plo, pln, pl1, npc, None)
         ents = np.zeros((n, 6), np.int64)
         lib.hpcg_plan_exchange(nc, NB, own_f, maxp, plo, pln, pl1, npc, ents.ctypes.data)
@@ -155,15 +158,13 @@ class SparseRowPlan:
         nc, NB = own.shape[:2]
         COL = np.ascontiguousarray(COL, np.int32)
         own_f = np.ascontiguousarray(own.reshape(-1), np.int64)
-        maxp = 4096
-        plo, pln, pl1 = (np.zeros(nc * maxp, np.int64) for _ in range(3))
-        npc = np.zeros(nc, np.int64)
-        if (
-            lib.hpcg_plan_windows(
-                nslot, stride, COL, nc, NB, own_f, int(exchange), GRAN, WGAP, ng, empty_lo, maxp, plo, pln, pl1, npc
-            )
-            < 0
-        ):
+        for maxp in MAX_PIECES:
+            plo, pln, pl1 = (np.zeros(nc * maxp, np.int64) for _ in range(3))
+            npc = np.zeros(nc, np.int64)
+            args = (nslot, stride, COL, nc, NB, own_f, int(exchange), GRAN, WGAP, ng, empty_lo, maxp, plo, pln, pl1, npc)
+            if lib.hpcg_plan_windows(*args) >= 0:
+                break
+        else:
             raise ValueError(f"a core needs more than {maxp} window pieces")
         off = native.zeros((nslot, stride), np.int32)  # huge pages: written once, then uploaded
         own_l1 = np.zeros(nc * NB, np.int64)
@@ -278,7 +279,35 @@ class SparseRowPlan:
 
     def meta(self, phases, noc_xy, tpw=TILE):
         """Per-core metadata rows (layout in kernels/common.h) and segment counts for the compute kernel.
-        phases: out block ids; 8 + b = an SpMV pass over block b (RESID launches)."""
+        phases: out block ids; 8 + b = an SpMV pass over block b (RESID launches). Built by the compiled helper
+        (host/native_setup.cpp's hpcg_plan_meta); _meta_python is the readable definition and the fallback."""
+        lib = native.lib()
+        if lib is None:
+            return self._meta_python(phases, noc_xy, tpw)
+        key = ("native", tuple(map(tuple, noc_xy)))
+        if key not in self._tables:
+            NB = len(self.out_blocks)
+            pat = np.cumsum([0] + [len(p[0]) for p in self.pieces]).astype(np.int64)
+            plo, pln, pl1 = (np.concatenate([p[i] for p in self.pieces]).astype(np.int64) for i in range(3))
+            slot = [sorted(self.nbr[k]) for k in range(self.nc)]
+            nat = np.cumsum([0] + [len(s) for s in slot]).astype(np.int64)
+            nbr = np.asarray([m for s in slot for m in s], np.int64)
+            own = np.ascontiguousarray(self.own.reshape(-1), np.int64)
+            own_l1 = np.ascontiguousarray(self.own_l1.reshape(-1), np.int64)
+            xat = np.ascontiguousarray(self._exch_at, np.int64)
+            xrows = np.ascontiguousarray(self._exch_rows.reshape(-1), np.int64)
+            noc = np.ascontiguousarray(np.asarray(noc_xy, np.int64).reshape(-1))
+            self._tables[key] = (NB, [pat, plo, pln, pl1, nat, nbr, noc, own, own_l1, xat, xrows])
+        NB, args = self._tables[key]
+        ph = np.asarray(list(phases), np.int64)
+        counts = [np.zeros(self.nc, np.int64) for _ in range(3)]
+        longest = lib.hpcg_plan_meta(self.nc, NB, ph.size, ph, *args, tpw, 0, None, *counts)
+        m = np.zeros((self.nc, -(-longest // 16) * 16), np.int64)
+        lib.hpcg_plan_meta(self.nc, NB, ph.size, ph, *args, tpw, m.shape[1], m.ctypes.data, *counts)
+        return (m,) + tuple(c.tolist() for c in counts)
+
+    def _meta_python(self, phases, noc_xy, tpw=TILE):
+        """meta() in Python: the readable definition, and the fallback without a C++ compiler."""
         NB = len(self.out_blocks)
         phases = [int(p) for p in phases]
         tables = self._core_tables(noc_xy, tpw)

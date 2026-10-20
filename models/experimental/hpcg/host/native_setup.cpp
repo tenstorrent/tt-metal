@@ -585,4 +585,108 @@ int64_t hpcg_plan_exchange(
     return n;
 }
 
+// Per-core metadata rows of one sparse-row launch (layout in tt/custom_ops/sparse_rows/kernels/common.h), the
+// same rows as SparseRowPlan.meta's Python version. Inputs per core k: window pieces plo/pln/pl1[pat[k] .. pat[k+1]),
+// neighbours nbr[nat[k] .. nat[k+1]) (sorted), own (a, e) and own_l1 per block, exchange rows (5 words each)
+// xrows[xat[k * NB + b] .. xat[k * NB + b + 1]). With m == nullptr, returns the longest row; otherwise writes rows
+// into m ([nc][w], zero-filled) and the segment counts (all phases, Gauss-Seidel phases, phase 8) per core.
+int64_t hpcg_plan_meta(
+    int32_t nc,
+    int32_t NB,
+    int32_t nph,
+    const int64_t* phases,
+    const int64_t* pat,
+    const int64_t* plo,
+    const int64_t* pln,
+    const int64_t* pl1,
+    const int64_t* nat,
+    const int64_t* nbr,
+    const int64_t* noc_xy,
+    const int64_t* own,
+    const int64_t* own_l1,
+    const int64_t* xat,
+    const int64_t* xrows,
+    int64_t tpw,
+    int64_t w,
+    int64_t* m,
+    int64_t* nseg,
+    int64_t* nseg_gs,
+    int64_t* nseg_r) {
+    int64_t longest = 0;
+    for (int32_t k = 0; k < nc; ++k) {
+        const int64_t R = pat[k + 1] - pat[k], nnb = nat[k + 1] - nat[k];
+        std::vector<int64_t> segs_in(NB);
+        int64_t nsegs = 0, nx = 0;
+        for (int32_t b = 0; b < NB; ++b) {
+            const int64_t a = own[(k * NB + b) * 2], e = own[(k * NB + b) * 2 + 1];
+            segs_in[b] = e > a ? (e - 1) / tpw - a / tpw + 1 : 0;  // segments never cross an L1 page (tpw words)
+            nsegs += segs_in[b];
+            nx += xat[k * NB + b + 1] - xat[k * NB + b];
+        }
+        const int64_t pos = 5 + 3 * R + 7 * NB + 3 * nnb + nph + 2;  // body start
+        const int64_t len = pos + 2 * nsegs + 5 * nx;
+        longest = std::max(longest, len);
+        if (m == nullptr) {
+            continue;
+        }
+        int64_t* r = m + (int64_t)k * w;
+        r[0] = R;
+        r[1] = nph;
+        r[2] = nnb + 1;
+        r[3] = nnb;
+        r[4] = NB;
+        for (int64_t i = 0; i < R; ++i) {
+            r[5 + 3 * i] = plo[pat[k] + i];
+            r[6 + 3 * i] = pln[pat[k] + i];
+            r[7 + 3 * i] = pl1[pat[k] + i];
+        }
+        int64_t* blk = r + 5 + 3 * R;
+        int64_t* nbw = blk + 7 * NB;
+        for (int64_t i = 0; i < nnb; ++i) {
+            const int64_t mm = nbr[nat[k] + i];
+            const int64_t* f = std::lower_bound(nbr + nat[mm], nbr + nat[mm + 1], (int64_t)k);
+            nbw[3 * i] = noc_xy[2 * mm];
+            nbw[3 * i + 1] = noc_xy[2 * mm + 1];
+            nbw[3 * i + 2] = 1 + (f - (nbr + nat[mm]));  // my slot on m
+        }
+        int64_t* ph = nbw + 3 * nnb;
+        for (int32_t p = 0; p < nph; ++p) {
+            ph[p] = phases[p];
+        }
+        int64_t at = pos;
+        for (int32_t b = 0; b < NB; ++b) {
+            const int64_t a = own[(k * NB + b) * 2], e = own[(k * NB + b) * 2 + 1];
+            blk[7 * b] = at;
+            blk[7 * b + 1] = segs_in[b];
+            for (int64_t q = a; q < e;) {
+                const int64_t q1 = std::min(e, (q / tpw + 1) * tpw);
+                r[at++] = q;
+                r[at++] = q1;
+                q = q1;
+            }
+        }
+        for (int32_t b = 0; b < NB; ++b) {
+            const int64_t x0 = xat[k * NB + b], x1 = xat[k * NB + b + 1];
+            blk[7 * b + 2] = at;
+            blk[7 * b + 3] = x1 - x0;
+            blk[7 * b + 4] = own[(k * NB + b) * 2];
+            blk[7 * b + 5] = own[(k * NB + b) * 2 + 1];
+            blk[7 * b + 6] = own_l1[k * NB + b];
+            for (int64_t i = 5 * x0; i < 5 * x1; ++i) {
+                r[at++] = xrows[i];
+            }
+        }
+        int64_t s = 0, sg = 0, sr = 0;
+        for (int32_t p = 0; p < nph; ++p) {
+            s += segs_in[phases[p] & 7];
+            sg += phases[p] < 8 ? segs_in[phases[p]] : 0;
+            sr += phases[p] == 8 ? segs_in[0] : 0;
+        }
+        nseg[k] = s;
+        nseg_gs[k] = sg;
+        nseg_r[k] = sr;
+    }
+    return longest;
+}
+
 }  // extern "C"

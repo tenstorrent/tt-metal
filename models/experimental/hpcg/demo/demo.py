@@ -44,7 +44,7 @@ def main(nx, iters):
         setup_s = time.time() - t0
         emit(
             nx=nx,
-            setup_s=round(setup_s, 1),
+            setup_s=round(setup_s, 3),
             rows=[L.n for L in h.levels],
             nnz=[L.nnz for L in h.levels],
             bands=[L.bands for L in h.levels],

@@ -48,10 +48,11 @@ limit because their coarsest copies are too small to keep the cores busy.
 colouring of the grid (needed to run in parallel) takes 51 to 53 iterations to
 reach the accuracy HPCG's reference code reaches in 50, and HPCG credits only 50.
 HPCG also charges a tenth of the setup time to every 50 iterations; setup here
-takes 0.2 s at 104³ and 0.6 s at 192³. Scored this way, the P150 rates 77.9,
-89.4 and 99.7 GFLOP/s at 104³, 128³ and 192³. HPCG's fp64 reference code on a
-24-thread Ryzen 9 7900X rates 3.83, 4.02 and 4.40 GFLOP/s, so the P150 is 20 to
-23 times faster.
+takes 0.03 s at 104³ and 0.05 s at 192³. Each timed set also includes the CG
+start (r = b - A x and its norm), as HPCG times it. Scored this way, the P150
+rates 81.7, 93.8 and 104.0 GFLOP/s at 104³, 128³ and 192³. HPCG's fp64
+reference code on a 24-thread Ryzen 9 7900X rates 3.83, 4.02 and 4.40 GFLOP/s,
+so the P150 is 21 to 24 times faster.
 
 ## How it works
 
@@ -73,8 +74,11 @@ nothing while it runs.
 - **Vector operations.** Dot products and vector updates are single passes over
   the vectors. Each core reduces its share of a dot product to one number, and
   one small launch adds the 130 numbers.
-- **Setup.** Building the matrix and each core's tables on the host is C++
-  (`host/native_setup.cpp`), compiled automatically the first time it runs.
+- **Setup.** The card writes the matrix itself: one launch per grid fills each
+  core's rows of matrix values and column offsets straight into DRAM, so
+  nothing large crosses from the host. The host only plans which rows and
+  pieces of x each core handles, in C++ (`host/native_setup.cpp`, compiled
+  automatically the first time it runs).
 
 ## Rules
 

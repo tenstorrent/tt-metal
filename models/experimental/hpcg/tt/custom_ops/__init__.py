@@ -13,7 +13,8 @@
     the residual and CG SpMV, and the multigrid restriction and prolongation gathers. ``plan.py`` decides which
     rows each core owns and which x window pieces it holds.
   - ``cg_vector``: the fused CG vector work. Dot products (per-core partials), p = z + beta p, and
-    x += alpha p with r -= alpha Ap and the partial r.r in one pass.
+    x += alpha p with r -= alpha Ap and the partial r.r in one pass; DotFinishOp adds the partials.
+  - ``stencil_matrix``: setup. The device writes a level's matrix values, column window offsets and b.
 
 Building the program from Python means a change to a descriptor or a kernel needs no ``_ttnn.so`` rebuild.
 """

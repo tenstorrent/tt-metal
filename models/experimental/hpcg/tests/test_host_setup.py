@@ -81,3 +81,17 @@ def test_stencil_windows_match_column_windows(nx, bands):
         assert np.array_equal(gl, wl) and np.array_equal(gn, wn) and np.array_equal(g1, w1)
     assert np.array_equal(got.own_l1, want.own_l1) and got.exch == want.exch and got.win_b == want.win_b
     assert got.off is None
+
+
+@pytest.mark.parametrize("nx, bands", [(26, 1), (64, 10), (60, 5)])
+def test_meta_matches_python(nx, bands):
+    """The compiled per-core metadata rows equal the Python ones, for Gauss-Seidel, residual and SpMV phase lists."""
+    L, _ = _levels(nx, bands)
+    blocks = [(L.starts[c], L.starts[c + 1]) for c in range(8)]
+    noc = [(1 + i % 13, 2 + i // 13) for i in range(130)]
+    p = SparseRowPlan(L.COL_rows, blocks, blocks, 130, noc, True, bands=L.bstarts if bands > 1 else None, pout=L.P)
+    gs = list(range(7, -1, -1)) + list(range(8))
+    for phases in (gs, gs + [8 + b for b in range(8)], [8 + b for b in range(8)], [0]):
+        for tpw in (1024, 256):
+            got, want = p.meta(phases, noc, tpw), p._meta_python(phases, noc, tpw)
+            assert np.array_equal(got[0], want[0]) and list(got[1:]) == list(want[1:]), (phases[:3], tpw)

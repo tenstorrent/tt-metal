@@ -54,13 +54,18 @@ VDEP = 27  # matrix-value pages in flight (reader)
 NOC_FLIP_RECT = (7, 12, 0, 9)
 
 
+_NOC_XY = {}
+
+
 def noc_coords(device):
-    """NoC (x, y) of every worker core, indexed by logical core id x + y * grid_x."""
-    g = device.compute_with_storage_grid_size()
-    return [
-        (c.x, c.y)
-        for c in (device.worker_core_from_logical_core(ttnn.CoreCoord(i % g.x, i // g.x)) for i in range(g.x * g.y))
-    ]
+    """NoC (x, y) of every worker core, indexed by logical core id x + y * grid_x (looked up once per device)."""
+    if id(device) not in _NOC_XY:
+        g = device.compute_with_storage_grid_size()
+        _NOC_XY[id(device)] = [
+            (c.x, c.y)
+            for c in (device.worker_core_from_logical_core(ttnn.CoreCoord(i % g.x, i // g.x)) for i in range(g.x * g.y))
+        ]
+    return _NOC_XY[id(device)]
 
 
 def debug_buffer(device):
