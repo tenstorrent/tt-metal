@@ -183,6 +183,23 @@ json stream_registers_json(const manifest::StreamRegisters& registers) {
     return out;
 }
 
+// An array, in the order the registers are read.
+json core_registers_json(const manifest::CoreRegisters& registers) {
+    const auto entry = [](const char* name, uint32_t address) {
+        json out;
+        out["name"] = name;
+        out["address"] = address;
+        add_type_json(out, layout::type_of<uint32_t>());
+        return out;
+    };
+    json soft_reset = entry("soft_reset", registers.soft_reset);
+    soft_reset["reset_masks"] = registers.reset_masks;
+    return json::array(
+        {std::move(soft_reset),
+         entry("wall_clock_low", registers.wall_clock_low),
+         entry("wall_clock_high", registers.wall_clock_high)});
+}
+
 // Each struct by name, with its members in order.
 json types_json(const std::vector<layout::StructType>& types) {
     json out = json::object();
@@ -217,6 +234,7 @@ json make_archs_json(const manifest::Arch& arch) {
     json archs;
     archs[lower_enum_name(arch.arch)]["areas"] = std::move(areas_json);
     archs[lower_enum_name(arch.arch)]["stream_registers"] = stream_registers_json(arch.stream_registers);
+    archs[lower_enum_name(arch.arch)]["core_registers"] = core_registers_json(arch.core_registers);
     archs[lower_enum_name(arch.arch)]["types"] = types_json(arch.types);
     return archs;
 }
@@ -491,6 +509,7 @@ json eriscs_json(const std::vector<manifest::Erisc>& eriscs) {
     for (size_t risc_id = 0; risc_id < eriscs.size(); ++risc_id) {
         json& erisc = out[fmt::format("erisc{}", risc_id)];
         erisc["processor"] = lower_enum_name(eriscs[risc_id].processor);
+        erisc["physical_erisc"] = eriscs[risc_id].physical_erisc;
         erisc["fields"] = fields_json(eriscs[risc_id].fields);
     }
     return out;
