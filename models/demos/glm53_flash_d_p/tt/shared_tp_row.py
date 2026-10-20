@@ -10,9 +10,9 @@ the chip's slice of the clamped SwiGLU MLP on them, and the combine carries each
     h    = silu(min(g, L)) * clamp(u, -L, L)
     o    = h @ Wd_c                        [C S, H] bf16, the partial (summed over the row by the combine)
 
-Weights bf16, HiFi4 + fp32 accumulation, as the model's TtDenseMLP (mlp.py). It runs while the token-split block's
-arena holds most of L1: the matmuls' circular buffers are sized to l1_budget (bytes per core), and the block calls it
-per owner block of S rows."""
+Weights bf8 (w_dtype), HiFi2 (fidelity) + fp32 accumulation, bf16 gate / up and h; the activation is one op
+(combine_rf/glu_act.py: the SFPU's clamped SiLU GLU, limit 10). The block runs it before allocating its arena
+(the fused op has its own barrier), so l1_budget (circular-buffer bytes per core) can be most of L1."""
 
 from __future__ import annotations
 
@@ -21,7 +21,6 @@ import math
 import torch
 
 import ttnn
-from models.demos.glm53_flash_d_p.tt.common import hifi4_config, mm_config
 from models.demos.glm53_flash_d_p.tt.mm_configs import TILE_BYTES, _largest_div
 
 
@@ -62,14 +61,17 @@ class TtSharedTpRow:
         w_up: torch.Tensor,
         w_down: torch.Tensor,
         limit: float = 10.0,
-        l1_budget: int = 160 * 1024,
+        l1_budget: int = 700 * 1024,
         axis: int = 1,
+        w_dtype=ttnn.bfloat8_b,
+        fidelity=ttnn.MathFidelity.HiFi2,
     ):
         """HF weights: w_gate, w_up [I, H]; w_down [H, I]. axis: the group is each mesh row (1: slice c on chip (r,
         c)) or each column (0: slice r)."""
         self.mesh = mesh
         self.limit = float(limit)
         self.axis = axis
+        self.w_dtype = w_dtype
         R, C = tuple(mesh.shape)
         G = C if axis == 1 else R
         inter, hidden = w_gate.shape
@@ -81,14 +83,20 @@ class TtSharedTpRow:
         )
         self.w_gu = self._shard(gu.reshape(1, 1, hidden, 2 * inter), -1)
         self.w_down = self._shard(w_down.float().T.reshape(1, 1, inter, hidden), -2)
-        self.cfg = hifi4_config()
+        assert float(limit) == 10.0, f"glu_act's SFPU kernel has the limit 10 compiled in, got {limit}"
+        self.cfg = ttnn.types.BlackholeComputeKernelConfig(
+            math_fidelity=fidelity, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=True
+        )
         self.l1_budget = l1_budget
+        from ttnn.bringup.combine_rf.glu_act import glu_act_prepare
+
+        self.act = glu_act_prepare(mesh)
 
     def _shard(self, t, dim):
         R, C = tuple(self.mesh.shape)
         return ttnn.from_torch(
             t.to(torch.bfloat16),
-            dtype=ttnn.bfloat16,
+            dtype=self.w_dtype,
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -105,34 +113,22 @@ class TtSharedTpRow:
         l1_budget: the circular-buffer bytes per core the matmuls may take (default: the constructor's)."""
         budget = l1_budget or self.l1_budget
         mc = ttnn.DRAM_MEMORY_CONFIG
-        lim = self.limit
         gu = ttnn.linear(
             x,
             self.w_gu,
-            dtype=ttnn.float32,
-            program_config=self._pc(x, self.w_gu, ttnn.float32, budget),
-            compute_kernel_config=mm_config(self.cfg),
+            dtype=ttnn.bfloat16,
+            program_config=self._pc(x, self.w_gu, ttnn.bfloat16, budget),
+            compute_kernel_config=self.cfg,
             memory_config=mc,
         )
-        s_, per = gu.shape[-2], self.per
-        g = ttnn.slice(gu, (0, 0, 0, 0), (1, 1, s_, per), memory_config=mc)
-        u = ttnn.slice(gu, (0, 0, 0, per), (1, 1, s_, 2 * per), memory_config=mc)
+        h = self.act(gu)  # (silu(min(g, 10)) * clamp(u, +-10): one op)
         ttnn.deallocate(gu)
-        gc = ttnn.minimum(g, lim, memory_config=mc)
-        ttnn.deallocate(g)
-        a = ttnn.silu(gc, memory_config=mc)
-        ttnn.deallocate(gc)
-        uc = ttnn.clamp(u, min=-lim, max=lim, memory_config=mc)
-        ttnn.deallocate(u)
-        h = ttnn.multiply(a, uc, dtype=ttnn.float32, memory_config=mc)
-        ttnn.deallocate(a)
-        ttnn.deallocate(uc)
         o = ttnn.linear(
             h,
             self.w_down,
             dtype=ttnn.bfloat16,
             program_config=self._pc(h, self.w_down, ttnn.bfloat16, budget),
-            compute_kernel_config=mm_config(self.cfg),
+            compute_kernel_config=self.cfg,
             memory_config=mc,
         )
         ttnn.deallocate(h)

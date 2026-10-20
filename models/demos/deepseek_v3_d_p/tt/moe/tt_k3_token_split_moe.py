@@ -473,6 +473,21 @@ class TtK3TokenSplitMoE:
                 ttnn.deallocate(t)
             if g0 is not getattr(self, "_rg_out", None):
                 ttnn.deallocate(g0)
+        if self.shared_tp:  # (allocated before the arena: above it, not capping the L1 below it)
+            # (the fused op's barrier words: persistent, never rewritten - cumulative counts across calls)
+            gcores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))])
+            self.bar = ttnn.from_torch(
+                torch.zeros(1, 1, grid.x * grid.y, 16, dtype=torch.int32),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=mesh_device,
+                memory_config=ttnn.MemoryConfig(
+                    ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                    ttnn.BufferType.L1,
+                    ttnn.ShardSpec(gcores, [1, 16], ttnn.ShardOrientation.ROW_MAJOR),
+                ),
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            )
         a_rows = int(plan["arena_tiles"]) * 32
         all_cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))])
         self._arena_spec = (
@@ -521,28 +536,16 @@ class TtK3TokenSplitMoE:
             # the shared expert's input: the row's C S tokens from the dispatch buffer as tiles, the chip's own block
             # first (block j = column (c + j) % C: the order of the partial's blocks the combine sends), and its
             # partial row-major (the combine's shared_rows; persistent: the combine bakes its address)
-            # (per piece of SB rows of owner block j: the shared expert's matmuls fit beside the arena at one row tile a
-            # core in M; the own block's partial goes to y_se's block 0, tilized for the final add)
-            grid_ = mesh_device.compute_with_storage_grid_size()
-            ST, SB = S // 32, min(S, 32 * grid_.y)
-            while S % SB:
-                SB -= 32
+            # (the shared expert runs before the arena is allocated - the fused op's own barrier replaces the dispatch
+            # as the "every chip zeroed" sync - so it is one call over the group's G S rows, block j first (j = 0:
+            # own); its partial goes to y_se: the combine sends blocks 1.. to their owners, its accumulators add block 0)
             G, ax = self.G, self.shared_axis
             mate = lambda ch, j: ch[0] * C + (ch[1] + j) % C if ax == 1 else ((ch[0] + j) % R) * C + ch[1]  # noqa: E731
-            self.se_pieces = [(j, k * SB, SB) for j in list(range(1, G)) + [0] for k in range(S // SB)]
-            self.se_tilize = {
-                (j, r0): layout_op_prepare(
-                    mesh_device,
-                    "tilize",
-                    src_tile_of=lambda ch, tr, j=j, r0=r0: mate(ch, j) * ST + r0 // 32 + tr,
-                )
-                for j, r0, _ in self.se_pieces
-            }
-            self.se_own_tilize = layout_op_prepare(mesh_device, "tilize")
-            self.se_untilize = {
-                (j, r0): layout_op_prepare(mesh_device, "untilize", row0_of=lambda r, c, j=j, r0=r0: j * S + r0)
-                for j, r0, _ in self.se_pieces
-            }
+            ST = S // 32
+            self.se_tilize = layout_op_prepare(
+                mesh_device, "tilize", src_tile_of=lambda ch, tr: mate(ch, tr // ST) * ST + tr % ST
+            )
+            self.se_untilize = layout_op_prepare(mesh_device, "untilize")
             self.y_se = ttnn.allocate_tensor_on_device(
                 ttnn.Shape([self.G * S, d.H]), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, mesh_device, dram
             )
@@ -565,6 +568,7 @@ class TtK3TokenSplitMoE:
             acc_on_ports=acc_on_ports,
             piece_max=max(7168, 2 * d.latent),  # (the L1 hand-off: one piece a row; a fabric payload >= row + 32 B)
             shared_rows=dict(tensor=self.y_se, axis=self.shared_axis) if self.shared_tp else None,
+            barrier=dict(tensor=self.bar) if self.shared_tp else None,
         )
         self.acc_on_ports = acc_on_ports
         self.A = len(self.combine.cells["accs"])
@@ -1206,22 +1210,27 @@ class TtK3TokenSplitMoE:
         mark("planner")
         prep = self.dispatch_prep(x, gi)
         mark("dispatch_prep")
-        arena = self.alloc_arena()
-        mark("arena_zero")
-        xg = self.dispatch(x, prep)  # (also the barrier: every chip zeroed its arena before any chip's experts start)
-        mark("dispatch")
         own_se = None
-        if shared is not None:  # (the chip's slice on its row's tokens; the row-mates' partials go out in the combine)
-            # (block j: the owner in column (mine + j) % C, 0: my own tokens, last; the matmuls' circular buffers sit
-            # below the arena: L1's static region starts at ~61 KB, ~100 KB slack for what mm2d_fit does not count)
-            for j, r0, nr in self.se_pieces:
-                xs = self.se_tilize[(j, r0)](xg, rows=nr)
-                o = shared(ttnn.reshape(xs, [1, 1, nr, self.d.H]), l1_budget=self.arena_addr - 160 * 1024)
-                ttnn.deallocate(xs)
-                self.se_untilize[(j, r0)](ttnn.reshape(o, [nr, self.d.H]), self.y_se)
-                ttnn.deallocate(o)
-            own_se = self.se_own_tilize(self.y_se, rows=self.S)  # (block 0's rows: the own tokens' partial)
+        if shared is None:
+            arena = self.alloc_arena()
+            mark("arena_zero")
+            xg = self.dispatch(
+                x, prep
+            )  # (also the barrier: every chip zeroed its arena before any chip's experts start)
+            mark("dispatch")
+        else:
+            # (the shared expert between the dispatch and the arena: the fused op starts with its own barrier)
+            xg = self.dispatch(x, prep)
+            mark("dispatch")
+            GS = self.G * self.S
+            xs = self.se_tilize(xg, rows=GS)
+            o = shared(ttnn.reshape(xs, [1, 1, GS, self.d.H]))
+            ttnn.deallocate(xs)
+            self.se_untilize(ttnn.reshape(o, [GS, self.d.H]), self.y_se)
+            ttnn.deallocate(o)
             mark("shared")
+            arena = self.alloc_arena()
+            mark("arena_zero")
         n0 = self.mesh.num_program_cache_entries() if os.environ.get("K3_CACHE_LOG") == "1" else None
         self.experts_combine(xg, pl, arena, op)
         if n0 is not None and self.mesh.num_program_cache_entries() > n0:

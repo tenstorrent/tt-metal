@@ -358,6 +358,10 @@ constexpr uint32_t NL = __NL__;  // fabric connections: 1 (a port per link) or L
 // c0 + j of my mesh row, j 0 = mine, not sent); this port's rows are read into NSE staging slots and sent before the
 // flat's rows, on the same rings and credits (static counts)
 constexpr uint32_t SE = __SE__, NSE = __NSE__;
+// barrier (the arena zeroed right before this program, no other cross-chip sync before it): every port core counts one
+// atomic increment from every other chip in a persistent word (bar[0], cumulative; bar[1] its calls) and sends
+// nothing remote before all N - 1 of this call are in; each chip's port facing a chip increments that chip's ports
+constexpr uint32_t BAR = __BAR__;
 #if __FUSED__
 // (a port that is also an accumulator, acc_on_ports: this RISC also runs the port's L1 hand-off - slot grants to the y
 // writers, pushes of landed rows - and the accumulator's output writes; RISCV_1 runs the accumulator's reader)
@@ -482,6 +486,22 @@ void kernel_main() {
             se_home[i] = get_arg_val<uint32_t>(a++);
             se_blk[i] = get_arg_val<uint32_t>(a++);
         }
+    }
+    if constexpr (BAR) {
+        const uint32_t bar_addr = get_arg_val<uint32_t>(a++), n_bt = get_arg_val<uint32_t>(a++);
+        for (uint32_t i = 0; i < n_bt; ++i) {
+            const uint32_t ch = get_arg_val<uint32_t>(a++), bx = get_arg_val<uint32_t>(a++), by = get_arg_val<uint32_t>(a++);
+            auto* h = hdr_at(ch, 0);
+            h->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{get_noc_addr(bx, by, bar_addr), 1, true});
+            conn.wait_for_empty_write_slot();
+            conn.send_payload_flush_blocking_from_address(reinterpret_cast<uint32_t>(h), sizeof(PACKET_HEADER_TYPE));
+        }
+        volatile tt_l1_ptr uint32_t* bw = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(bar_addr);
+        const uint32_t tgt = (bw[1] + 1) * (N - 1);
+        do {
+            invalidate_l1_cache();
+        } while (static_cast<int32_t>(bw[0] - tgt) < 0);
+        bw[1] = bw[1] + 1;
     }
     const InterleavedAddrGen<true> se_g = {.bank_base_address = se_addr, .page_size = row_bytes};
     uint32_t se_oi = 0, se_t = 0, se_rd = 0, se_ready = 0, se_sent = 0, se_free = 0;
@@ -792,6 +812,12 @@ void kernel_main() {
     }
     uint32_t n_rows = n_local;
     for (uint32_t k = 0; k < N; ++k) n_rows += want[k];
+    // shared_rows: the chip's own tokens' shared-expert partial (rows 0 .. SOWN of the partial) is added here as one
+    // more row each (weight 1), between ring polls
+    constexpr uint32_t SOWN = __SOWN__;
+    const InterleavedAddrGen<true> own_g = {.bank_base_address = __OWNADDR__, .page_size = row_bytes};
+    uint32_t oi = me;
+    if constexpr (SOWN) n_rows += me < SOWN ? (SOWN - me + A - 1) / A : 0;
     constexpr uint32_t TCH = 256;
     volatile tt_l1_ptr uint32_t* misc = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(area + MISC);
     volatile tt_l1_ptr uint32_t* taken = misc + __MTAKEN__;  // per ring (source chip), cumulative
@@ -1046,6 +1072,11 @@ void kernel_main() {
         for (uint32_t k = 0; k < N; ++k) {
             if (want[k]) take_ring(k);
         }
+        if (SOWN && oi < SOWN) {
+            push(get_noc_addr(oi, own_g), oi);
+            oi += A;
+            ++done;
+        }
     }
     if constexpr (__DEVPLAN__) {  // (the compute's end marker: it does not know the row count)
         cb_reserve_back(cb_meta, 1);
@@ -1105,6 +1136,7 @@ def sparse_combine_rf_prepare(
     ring_depth=None,
     probes=None,
     shared_rows=None,
+    barrier=None,
 ):
     """rows_by_chip[coord] = list of (y row on that chip, home coord, home token t, link[, local expert]). cells: the
     logical (x, y) cells the combine may use (ports nearest their Ethernet cores, accumulators the rest), else the
@@ -1132,7 +1164,10 @@ def sparse_combine_rf_prepare(
     1, or column, axis 0; G chips), [G S, W] bf16 row-major in DRAM, block j = the owner j places along the group
     ((r, (c + j) % C) / ((r + j) % R, c); block 0: mine, not sent): every chip sends its group-mates their blocks before
     the flat's rows, into the same accumulators with weight 1 (the split shared expert's reduce-scatter, on the
-    combine's rings and credits; static counts on top of the plan's)."""
+    combine's rings and credits; static counts on top of the plan's; the accumulators add block 0, the own tokens'
+    partial, from DRAM). barrier (with l1): dict(tensor=) - a persistent L1
+    tensor of >= 8 B per core on every core (zeros at creation, never rewritten by the caller): the program starts with
+    a cross-chip barrier, so the caller may zero the arena right before it (no other sync in between)."""
     R, C = tuple(mesh_device.shape)
     N, L, A0 = R * C, num_links, n_acc
     row_bytes = W * 2
@@ -1404,6 +1439,9 @@ def sparse_combine_rf_prepare(
         "__HSZ__": str(HSZ_),
         "__SE__": str(int(SE_ON)),
         "__NSE__": str(max(NSE, 1)),
+        "__BAR__": str(int(barrier is not None)),
+        "__SOWN__": str(S if SE_ON else 0),
+        "__OWNADDR__": str(int(shared_rows["tensor"].buffer_address()) if SE_ON else 0),
     }
     dbg_t = ttnn.from_torch(
         torch.zeros(R, C, 128, 16, dtype=torch.int32),
@@ -1610,6 +1648,17 @@ def sparse_combine_rf_prepare(
                     stage = (inj_off if FUSED else RINGS) + QP * ISLOT
                     args += [int(shared_rows["tensor"].buffer_address()), se_n[k], area + stage, S, se_ret[k]]
                     args += [len(se_own[k])] + [v_ for o_ in se_own[k] for v_ in o_]
+                if (
+                    barrier is not None
+                ):  # (after the SE args, as the kernel reads them; the port facing each other chip increments every port core there)
+                    bt = []
+                    if li == 0:
+                        for s_ in chips:
+                            if s_ != ch and fh(ch, s_) == d:
+                                for xy in sorted({(c_.x, c_.y) for kk_, c_ in port_core.items() if kk_[0] == s_}):
+                                    v_ = virt(ttnn.CoreCoord(*xy))
+                                    bt += [idx(s_), v_.x, v_.y]
+                    args += [int(barrier["tensor"].buffer_address()), len(bt) // 3] + bt
                 ps_rt[core.x][core.y] = args
             ar_rt, ac_rt, aw_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
             for i, core in enumerate(acc_cores):
