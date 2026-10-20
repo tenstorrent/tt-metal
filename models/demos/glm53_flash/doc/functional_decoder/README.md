@@ -46,7 +46,7 @@ Residual convention: HF `[B, S, 4, 4096]` <-> packed `[1, 1, B*S, 16384]` (`host
 | `test_batch8.py` | 8 user slots (lengths 1..200, permuted page table), layers 3 and 4, 3 batched decode steps | prefill >= 0.9968 (1-token user), decode worst per user 0.9994 |
 | `test_determinism.py` | layers 0, 3: repeated prefill and traced-decode replay with `throw_exception_on_fallback`; sparse prefill + sparse decode repeated | bit-identical outputs |
 | watcher | `TT_METAL_WATCHER=10` on the layer-3 dump test (`~/ashai/glm53/_logs/watcher_layer3`) | PASSED, 10 dumps, no watcher exceptions |
-| `test_perf_layer.py` | warmed prefill S=1024 (wall), traced decode B=1 (one replay, tt-perf-report `Device Time`) | prefill: layer 3 314 ms, layer 4 298 ms (device 293 ms, 1002 ops); decode: layer 3 10.93 ms/step device (435 ops, wall 11.36), layer 4 10.76 ms/step device (471 ops, wall 11.2) |
+| `test_perf_layer.py` | warmed prefill S=1024 (wall), traced decode B=1 (one replay, tt-perf-report `Device Time`) | prefill: layer 3 314 ms, layer 4 298 ms (device 293 ms, 1002 ops); decode: layer 3 10.87 ms/step device (435 ops, wall 11.31), layer 4 10.76 ms/step device (471 ops, wall 11.2) |
 
 Context contract: `doc/context_contract.json`. Full log: `doc/functional_decoder/work_log.md`.
 Profiler note: Tracy device zones of the SDPA prefill kernels (dense and sparse share `compute_streaming.hpp`: `:632` vs

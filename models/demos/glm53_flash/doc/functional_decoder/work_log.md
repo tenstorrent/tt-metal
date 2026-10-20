@@ -178,3 +178,27 @@ completion and across 2048/2050). New/extended tests: per-row PCC split (rows < 
 4097 and 16385 prefills with every class asserted > 0.995; random-prompt prefill PCC asserted; the transition test
 checks the short user 0 at every step against its own HF cache; `test_prefill_tail_2_3_then_decode`; dense DSA
 prefill at S = 1, 2, 3, 31, 33 (short-S control); sparse-path determinism.
+- Results after the review-2 fixes (`_logs/fix2_*.log`, one chip): dsa (S=1/2/3/31/33/96/1000) 7 passed, attention-only
+  S=1 0.99989 (no short-S effect in the DSA sublayer); sparse 4097 repeated prompt 0.99992 (rows<2048 0.99994, >=2048
+  0.9999); random prompt 4097 0.99994 (rows<2048 0.99988, >=2048 0.99986; per position%4 all >= 0.9998), selection ids
+  98-99 % common with contiguous rows, pool cache 0.999994; transition 2040..2063 both users >= 0.9995; 16K 0.99983
+  (0.99988 / 0.99980); traced + two users (layer 3) unchanged; 8 users (layer 3) worst 0.99938; tails 2/3 (R2042/R2043):
+  prefill 0.99987/0.99990, 12 decode steps >= 0.9978, pool cache 0.999994 (worst row 0.99999).
+- Checkpoint: local `arg/glm53_flash` @ 4cd5f8fe829 (code + docs), upstream `origin/arg/glm-53-flash` @ 3ae53bf70ee.
+  Running: full logged sweep (`_logs/sweep2_*.log`), watcher re-runs (`watcher2_*`), layer-3 decode perf re-collection.
+- Open design item carried into the next round (reviewer "other concern", design Phase-1 row: "chunked prefill"):
+  wire `prefill_forward(streams, user, seq_len, start)` through the API. KDA: `ttKDA.forward(actual_start=start)`
+  with the user's carried `KdaState` (already supported; needs the per-user state read from the batched slots).
+  DSA: `paged_fill_cache` at a block offset (fill from `start` with a page-table view), index maintenance from
+  `start` (pools `start//4 ..`, ring from the previous tail), dense rows via the cached prefix (K/V from
+  `user_rows_rm` + chunk) while `start + T <= 2048`, sparse rows via `select(query_start=start)`. The quadratic
+  `[T_chunk, 4*pools]` score intermediate then scales with the chunk, not the context.
+- Final sweep after the review-2 fixes (`_logs/sweep2_<test>.log`): test_kda 2, test_moe 2, test_dsa 7, test_decoder_layer 5,
+  test_decode_trace 5, test_dsa_sparse 1, test_dsa_long 5, test_batch8 2, test_determinism 3 (incl. the sparse path) -> 32/32 passed.
+  Per-row PCC distributions (one token row = 4 x 4096 values): random 4097 prefill median 0.9999, p5 0.99981, min 0.98783;
+  dense 2040 prefill median 0.99996, p5 0.99985, min 0.99079, 5/2040 rows < 0.997; 16385 prefill min 0.9678 (one row). A single-token
+  prefill is one sample of this distribution (the 8-user test's 1-token user at 0.9968); the DSA attention alone at S=1 is 0.99989.
+- Watcher re-runs on the fixed paths (`_logs/watcher2_test_dsa_sparse`, `_logs/watcher2_test_decode_trace`): clean, 2328 / 3002 lines, 0 suspicious.
+- layer3_dsa_moe traced decode re-profiled on the new decode path (dense flash-MLA for every slot + index maintenance, B=1, pos 1024,
+  one replay, seed-only; wall 11.31 ms/step): 435 ops, 10.87 ms device per step, duplicate ids 0; top op classes: AccumulationDeviceOperation 2.64 ms x8, MatmulDeviceOperation 1.66 ms x13, UnaryDeviceOperation 1.42 ms x12, SparseMatmulDeviceOperation 1.11 ms x2, BinaryNgDeviceOperation 0.95 ms x92, TernaryDeviceOperation 0.62 ms x38.
+  README decode row: layer 3 10.87 ms/step device (435 ops)
