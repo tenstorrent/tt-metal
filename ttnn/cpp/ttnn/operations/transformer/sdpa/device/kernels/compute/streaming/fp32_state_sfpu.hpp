@@ -3,6 +3,9 @@
 
 #pragma once
 
+#include "recipe_config.hpp"
+
+// SFPI code exists in the MATH and PACK builds only.
 #if defined(TRISC_MATH) || defined(TRISC_PACK)
 #include "ckernel_sfpu_recip.h"
 #include "llk_math_eltwise_unary_sfpu_macros.h"
@@ -47,12 +50,12 @@ inline void sdpa_state_normalize() {
 
 inline void sdpa_state_reciprocal() {
     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
-#ifdef ARCH_WORMHOLE
-    // Wormhole's reciprocal seeds from a quadratic in the three programmable constants.
-    sfpu_reciprocal_init<false>();
-#else
-    sfpi::vConstFloatPrgm0 = 2.0f;
-#endif
+    if constexpr (recipe::wormhole) {
+        // Wormhole's reciprocal seeds from a quadratic in the three programmable constants.
+        sfpu_reciprocal_init<false>();
+    } else {
+        sfpi::vConstFloatPrgm0 = 2.0f;
+    }
     for (int d = 0; d < 4; ++d) {
         sfpi::dst_reg[0] = sfpu_reciprocal_iter<2>(sfpi::dst_reg[0]);
         sfpi::dst_reg += 2;

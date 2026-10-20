@@ -65,12 +65,10 @@ Tensor prepare_sdpa_input(const Tensor& input, bool is_query, DataType dtype) {
         .kernel_source = prefix + "dataflow/reader_prepare.cpp",
         .core_ranges = grid,
         .compile_time_args = {batch},
+        // The sequence length (unaligned rows get their tile padding zeroed) and head dim in tiles.
+        .named_compile_time_args = {{"seq_rows", shape[2]}, {"d_tiles", shape[3] / 32}},
         .config = ReaderConfigDescriptor{}};
     TensorAccessorArgs(input.buffer()).append_to(reader.compile_time_args);
-    if (shape[2] % 32 != 0) {
-        reader.defines.emplace_back("SDPA_PREPARE_ROWS", std::to_string(shape[2]));
-        reader.defines.emplace_back("SDPA_PREPARE_DHT", std::to_string(shape[3] / 32));
-    }
     KernelDescriptor writer{
         .kernel_source = prefix + "dataflow/writer_prepare.cpp",
         .core_ranges = grid,

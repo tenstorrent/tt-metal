@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 #include "fp32_state_sfpu.hpp"
+#include "recipe_config.hpp"
 // SFPU exponentials for the FP32-state recipes (BALANCED, ACCURATE); STANDARD and FAST use the
 // standard approximate exp.
 //
@@ -21,23 +22,17 @@
 //   cancel exactly). K cancels in O / l because P feeds both; P, l or an LSE produced here must not be
 //   combined with values from a different exp implementation. Emulating p over m in [1, 2), the relative
 //   ripple around K is +-0.35% for BALANCED's quadratic and +-0.10% for ACCURATE's cubic.
+// SFPI code exists in the MATH and PACK builds only.
 #if defined(TRISC_MATH) || defined(TRISC_PACK)
-// Raw SFPU load/store address modes. Wormhole encodes two bits; its SFPU launcher's base offset selects 4-7.
-#ifdef ARCH_WORMHOLE
-#define SDPA_SFPU_ADDR_MOD_6 ADDR_MOD_2
-#define SDPA_SFPU_ADDR_MOD_7 ADDR_MOD_3
-#else
-#define SDPA_SFPU_ADDR_MOD_6 ADDR_MOD_6
-#define SDPA_SFPU_ADDR_MOD_7 ADDR_MOD_7
-#endif
-#ifdef SDPA_RECIPE_SINK
 #include "sfpu/ckernel_sfpu_converter.h"
-#endif
 namespace ckernel::sfpu {
-#ifdef SDPA_RECIPE_SINK
-// Attention sink: dest tile 0's first column (a row's denominator l) += k * exp(scale * (sink - m)), with m in dest
-// tile 1's first column (the maxima the row's P were taken against). k is the score exp's mean factor (on average
-// P = k * exp(scale * (s - m)), and l sums P), so the sink weighs like one more key with logit `sink`.
+// Raw SFPU load/store address modes. Wormhole encodes two bits; its SFPU launcher's base offset selects 4-7.
+constexpr uint32_t kSdpaSfpuAddrMod6 = recipe::wormhole ? ADDR_MOD_2 : ADDR_MOD_6;
+constexpr uint32_t kSdpaSfpuAddrMod7 = recipe::wormhole ? ADDR_MOD_3 : ADDR_MOD_7;
+
+// Attention sink (recipe::sink): dest tile 0's first column (a row's denominator l) += k * exp(scale * (sink - m)),
+// with m in dest tile 1's first column (the maxima the row's P were taken against). k is the score exp's mean factor
+// (on average P = k * exp(scale * (s - m)), and l sums P), so the sink weighs like one more key with logit `sink`.
 template <uint32_t scale_fp32, uint32_t k_bits>
 inline void calculate_sdpa_sink_denominator(uint32_t sink_bits) {
     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
@@ -52,16 +47,15 @@ inline void calculate_sdpa_sink_denominator(uint32_t sink_bits) {
         sfpi::dst_reg += 2;
     }
 }
-#endif
 
 // Online-softmax correction, accurate FP32 exp with the full scale.
 template <uint32_t scale_fp32>
 inline void calculate_sdpa_exp_correction() {
-#ifndef SDPA_RECIPE_FP32
-    // The score exp's SFPU programs may leave a DST increment in ADDR_MOD_7. This
-    // routine advances dst_reg explicitly; reset before using the SFPI loop.
-    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
-#endif
+    if constexpr (!recipe::fp32) {
+        // The score exp's SFPU programs may leave a DST increment in ADDR_MOD_7. This
+        // routine advances dst_reg explicitly; reset before using the SFPI loop.
+        addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
+    }
     constexpr float scale = __builtin_bit_cast(float, scale_fp32);
     for (int d = 0; d < 4; ++d) {
         sfpi::vFloat x = sfpi::dst_reg[0];
@@ -167,8 +161,8 @@ inline void calculate_sdpa_exp_refine_loadmacro() {
     TTI_SFPMUL(4, 0, p_sfpu::LCONST_0, 13, 0);
     TTI_SFPMUL(5, 0, p_sfpu::LCONST_0, 14, 0);
     TTI_REPLAY(8, replay_len, 1, 1);
-    TTI_SFPLOADMACRO(6, 0, SDPA_SFPU_ADDR_MOD_6, 0);
-    TTI_SFPLOADMACRO(7, 0, SDPA_SFPU_ADDR_MOD_6, 2);
+    TTI_SFPLOADMACRO(6, 0, kSdpaSfpuAddrMod6, 0);
+    TTI_SFPLOADMACRO(7, 0, kSdpaSfpuAddrMod6, 2);
     TTI_SFPMAD(2, 6, 12, 4, 0);
     TTI_SFPMAD(3, 6, 12, 5, 0);
     TTI_SFPMAD(2, 4, 13, 4, 0);
@@ -177,8 +171,8 @@ inline void calculate_sdpa_exp_refine_loadmacro() {
         TTI_SFPMAD(2, 4, 14, 4, 0);
         TTI_SFPMAD(3, 5, 14, 5, 0);
     }
-    TTI_SFPLOADMACRO(8, 0, SDPA_SFPU_ADDR_MOD_6, 0);
-    TTI_SFPLOADMACRO(13, 0, SDPA_SFPU_ADDR_MOD_7, 2);
+    TTI_SFPLOADMACRO(8, 0, kSdpaSfpuAddrMod6, 0);
+    TTI_SFPLOADMACRO(13, 0, kSdpaSfpuAddrMod7, 2);
 #pragma GCC unroll 8
     for (int i = 2; i < iterations; i += 2) {
         lltt::replay(8, replay_len);

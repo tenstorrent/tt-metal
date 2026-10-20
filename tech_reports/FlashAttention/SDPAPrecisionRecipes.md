@@ -343,7 +343,7 @@ pass-outer and ring-inner.
 With Q shorter than the K/V shard (and not `is_cross`), Q is the newest chunk group's slab on each device and K/V the
 cache of every group so far: device d's shard holds its slab of each group back to back, so local K tile t is global
 tile (t / slab) · group + d · slab + t mod slab. Every step masks in the sequence's frame
-(`SDPA_RECIPE_RING_CHUNKED`): compute walks the K chunks the reader sends (before `logical_n`, or the device's last Q
+(`recipe_ring_chunked`): compute walks the K chunks the reader sends (before `logical_n`, or the device's last Q
 row with the reader's dense causal skip), pops those past a Q chunk's last row, and stamps the per-tile mask on the
 rest from that mapping, as the causal diagonal does. A first chunk group's step on a later device's K has no visible
 key; the recipes mark it inactive on the host. The legacy FP32 tests of the feature (Kimi-style D576 / V128 with BFP8
@@ -353,7 +353,7 @@ K/V, and an indexed ND-sharded cache with V narrower than Q) now route to ACCURA
 
 A causal ring (`is_causal`) holds the sequence's chunk d on device d; balanced (`is_balanced`) holds chunks d and
 2R − 1 − d, so devices do equal work. The ring reader and writer schedule both as for the legacy kernels; the recipe
-compute (`SDPA_RECIPE_RING_CAUSAL`) follows them:
+compute (`recipe_ring_causal`) follows them:
 
 - On the device's own K shard, query q sees key k ≤ q in the shard's frame (a balanced shard's two chunks keep
   their order). QK tiles past a Q tile row are set to −∞ in the pack thread, the diagonal tiles above their
@@ -383,7 +383,7 @@ and 26.03 ms (balanced). The causal/noncausal time ratio of each recipe matches 
 slabs of the whole sequence, chunks `ring_id` and 2R − 1 − `ring_id` of 2R, so every device does the same work. It
 needs no communication: Q, K and V hold the whole sequence on every device. With `precision` it runs on the dense
 recipe kernels and the [K-range model](#causal-sliding-window-chunked-and-windowed-attention): a head's Q chunks are
-the two slabs' chunks, read from Q at their sequence rows (`SDPA_RECIPE_Q_SLAB_JOBS`; the reader and writer map a job
+the two slabs' chunks, read from Q at their sequence rows (`q_slab_jobs`; the reader and writer map a job
 to its chunk of the sequence), and the causal key range of each follows from its global position. The snake deal
 balances the early slab's chunks against the late slab's. Without an explicit `ring_id`, each
 device takes its index along the mesh axis of length R, and the op runs one program per device that differs only
@@ -433,24 +433,28 @@ rounding differs from the round-to-nearest-even with saturation in `prepare_bfp4
 | `dataflow/recipe_key_range.hpp` | K-range model: per-row key intervals, chunk classes and order, edge mask tiles, snake Q deal |
 | `streaming/recipe_checkpoint.hpp`, `dataflow/recipe_state_transfer.hpp` | Ring multi-Q state checkpoints (compute side, writer side) |
 | `dataflow/reader_recipe.cpp`, `ring_joint_*_impl.hpp`, `exp_ring_joint_*_impl.hpp` | Readers / writers; the ring and exp ring bodies are shared with the legacy kernels through a `Policy` struct (the legacy kernels compile unchanged) |
-| `sdpa_recipe.cpp`, `sdpa_recipe_blocking.cpp` | Host: recipe → CB layout and defines; chunk chooser |
+| `sdpa_recipe.cpp`, `sdpa_recipe_blocking.cpp` | Host: recipe → CB layout and compile-time arguments; chunk chooser |
 
-Compile-time defines set by the host:
+Named compile-time arguments set by the host (kernel side: `streaming/recipe_config.hpp`; the kernels branch on
+them with `if constexpr`):
 
-| Define | Set for | Meaning |
+| Argument | Set for | Meaning |
 |---|---|---|
-| `SDPA_RECIPE_FP32` | BALANCED, ACCURATE | FP32 scores and state (DEST in FP32) |
-| `SDPA_RECIPE_ACCURATE` | ACCURATE | HiFi4 QK and PV, the cubic exp fit |
-| `SDPA_RECIPE_LOFI` | FAST | LoFi matmuls (prepared inputs) |
-| `SDPA_RECIPE_FUSED` | STANDARD, FAST with QK width ≥ 2 | fused K chunks (inactive with an attn_mask) |
-| `SDPA_RECIPE_MASK` | an attn_mask or a key range | additive mask on the reduce path |
-| `SDPA_RECIPE_KRANGE` | causal, sliding window, chunked, windowed | K range per Q chunk; mask on edge chunks only |
-| `SDPA_RECIPE_Q_SLAB_JOBS` (reader, writer) | ring-distributed | a head's Q chunks are two slabs of the sequence |
-| `SDPA_RECIPE_KV_SHARE` (reader) | key ranges with more cores than heads | K/V passed between a round's partner cores |
-| `SDPA_RECIPE_QK_W`, `SDPA_RECIPE_PV_W` | all | matmul subblock widths |
-| `SDPA_RECIPE_RING` (in the ring kernels) | ring, exp ring | key-tail masking, resident state |
-| `SDPA_RING_STREAM_STATE` | ring STANDARD and FAST with fused chunks | streamed multi-Q checkpoints |
-| `SDPA_RECIPE_RING_CAUSAL` | causal (and balanced) ring | diagonal mask, skipped K and Q chunks |
+| `recipe_fp32` | BALANCED, ACCURATE | FP32 scores and state (DEST in FP32) |
+| `recipe_accurate` | ACCURATE | HiFi4 QK and PV, the cubic exp fit |
+| `recipe_lofi` | FAST | LoFi matmuls (prepared inputs) |
+| `recipe_fused` | STANDARD, FAST with QK width ≥ 2 | fused K chunks (inactive with an attn_mask) |
+| `recipe_mask` | an attn_mask or a key range | additive mask on the reduce path |
+| `recipe_krange` | causal, sliding window, chunked, windowed | K range per Q chunk; mask on edge chunks only |
+| `recipe_sink_cb`, `recipe_sink_bf16` | attention sinks | the sink logit in each row's denominator |
+| `q_slab_jobs` (reader, writer) | ring-distributed | a head's Q chunks are two slabs of the sequence |
+| `kv_share` (reader) | key ranges with more cores than heads | K/V passed between a round's partner cores |
+| `recipe_qk_w`, `recipe_pv_w` | all | matmul subblock widths |
+| `recipe_k_primary_rows`, `recipe_k_joint_rows` | unaligned keys | key-tail masking |
+| `recipe_ring` | ring, exp ring | key-tail masking, resident state |
+| `recipe_ring_stream_state` | ring STANDARD and FAST with fused chunks | streamed multi-Q checkpoints |
+| `recipe_ring_causal` | causal (and balanced) ring | diagonal mask, skipped K and Q chunks |
+| `recipe_ring_chunked`, `recipe_ring_group_tiles` | ring chunked prefill | masks in the sequence's frame |
 
 **Code size.** Each program must fit the 70656 B kernel config buffer; the ring and exp ring FAST kernels sit
 within a few hundred bytes of it (see the size notes in `streaming/recipe_fused_chunk.hpp`). Check changes on the

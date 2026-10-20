@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 #include "../../recipe_state_layout.hpp"
+#include "recipe_config.hpp"
 
 // The dataflow owner copies raw tile bytes; no unpack, arithmetic, or narrowing
 // is allowed here. Each recurrent CB spans exactly one complete Q-block state.
@@ -25,13 +26,13 @@ void recipe_checkpoint(RecipeAccumulatorState& state, uint32_t slot, bool restor
         auto* words = reinterpret_cast<volatile uint32_t*>(get_local_cb_interface(request_cb).fifo_wr_ptr << 4);
         words[Transfer::Operation] = restore ? Transfer::Restore : Transfer::Save;
         words[Transfer::Slot] = slot;
-#ifdef SDPA_RECIPE_FP32
-        words[Transfer::Numerator] = state.prev.out;
-        words[Transfer::Denominator] = state.prev.sum;
-#else
-        words[Transfer::Numerator] = state.cur.out;
-        words[Transfer::Denominator] = state.cur.sum;
-#endif
+        if constexpr (recipe::fp32) {
+            words[Transfer::Numerator] = state.prev.out;
+            words[Transfer::Denominator] = state.prev.sum;
+        } else {
+            words[Transfer::Numerator] = state.cur.out;
+            words[Transfer::Denominator] = state.cur.sum;
+        }
         words[Transfer::Maximum] = state.prev.max;
         words[Transfer::Chunks] = state.processed_chunks;
     })
@@ -41,18 +42,18 @@ void recipe_checkpoint(RecipeAccumulatorState& state, uint32_t slot, bool restor
         state.processed_chunks = ack.read_tile_value(0, Transfer::Chunks);
         CircularBuffer(state.prev.max).reserve_back(q_tiles);
         CircularBuffer(state.prev.max).push_back(q_tiles);
-#ifdef SDPA_RECIPE_FP32
-        CircularBuffer(state.prev.out).reserve_back(q_tiles * d_tiles);
-        CircularBuffer(state.prev.sum).reserve_back(q_tiles);
-        CircularBuffer(state.prev.out).push_back(q_tiles * d_tiles);
-        CircularBuffer(state.prev.sum).push_back(q_tiles);
-#endif
+        if constexpr (recipe::fp32) {
+            CircularBuffer(state.prev.out).reserve_back(q_tiles * d_tiles);
+            CircularBuffer(state.prev.sum).reserve_back(q_tiles);
+            CircularBuffer(state.prev.out).push_back(q_tiles * d_tiles);
+            CircularBuffer(state.prev.sum).push_back(q_tiles);
+        }
     } else {
         CircularBuffer(state.prev.max).pop_front(q_tiles);
-#ifdef SDPA_RECIPE_FP32
-        CircularBuffer(state.prev.out).pop_front(q_tiles * d_tiles);
-        CircularBuffer(state.prev.sum).pop_front(q_tiles);
-#endif
+        if constexpr (recipe::fp32) {
+            CircularBuffer(state.prev.out).pop_front(q_tiles * d_tiles);
+            CircularBuffer(state.prev.sum).pop_front(q_tiles);
+        }
     }
     ack.pop_front(1);
     UNPACK({
@@ -63,8 +64,8 @@ void recipe_checkpoint(RecipeAccumulatorState& state, uint32_t slot, bool restor
     PACK((void)mailbox_read(ckernel::ThreadId::UnpackThreadId);)
 }
 
-#ifdef SDPA_RING_STREAM_STATE
-// Streamed checkpoints (BF16 recipes with fused chunks; see StateTransfer and recipe_fused_chunk.hpp).
+// Streamed checkpoints (recipe::ring_stream_state: BF16 recipes with fused chunks; see StateTransfer and
+// recipe_fused_chunk.hpp).
 // Restore: waits only for header, maxima and sums; the fused chunk waits for each group's O rows before its PV.
 template <uint32_t q_tiles, uint32_t request_cb, uint32_t ack_cb>
 void recipe_checkpoint_restore_stream(RecipeAccumulatorState& state, uint32_t slot) {
@@ -120,4 +121,3 @@ void recipe_checkpoint_save_tail(RecipeAccumulatorState& state, uint32_t slot, b
     recipe_stream_save_slot = kNoStreamSlot;
     recipe_stream_saved_rows = 0;
 }
-#endif
