@@ -14,10 +14,11 @@ Keeping them as module-level functions also keeps them directly testable: a
 rule here can be checked against a tensor without constructing an architecture.
 """
 
-from typing import Optional
+from typing import Optional, Union
 
 import torch
 from helpers.format_config import DataFormat
+from helpers.llk_params import DestAccumulation
 
 #: Explicit mantissa bits an IEEE float32 holds, the width every mask below is
 #: cut from.
@@ -147,3 +148,23 @@ def flush_subnormals(
         torch.zeros_like(values),
         values,
     )
+
+
+def as_dest_acc(dest_acc: Union[bool, DestAccumulation]) -> bool:
+    """Normalise an accumulation setting to a plain bool.
+
+    Accepts ``DestAccumulation`` as well as a bool, because the rest of the
+    harness passes the enum and a bare ``bool`` parameter cannot be trusted to
+    notice: ``DestAccumulation`` defines no ``__bool__``, so ``DestAccumulation.No``
+    is **truthy**. Passed to a bool parameter it reads as "accumulation on" and
+    silently selects a 32-bit Dest -- the model then runs at fp32 where the
+    device had 16 bits, which looks like an arithmetic discrepancy rather than
+    a wiring mistake.
+
+    Taking the enum here and reducing to a bool once keeps the codec boundary
+    (``helpers.pack`` / ``helpers.unpack``, which size tiles from a bool) plain
+    while the ops speak the harness's own vocabulary.
+    """
+    if isinstance(dest_acc, DestAccumulation):
+        return dest_acc is DestAccumulation.Yes
+    return bool(dest_acc)

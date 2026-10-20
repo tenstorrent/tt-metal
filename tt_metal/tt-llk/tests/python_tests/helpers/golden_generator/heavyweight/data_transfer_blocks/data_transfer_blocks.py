@@ -60,6 +60,7 @@ from .storage import (
     SRC_MANT_BITS,
     SRC_STORAGE_FORMATS,
     SRCS_STORAGE_FORMATS,
+    as_dest_acc,
     flush_subnormals,
     saturate_to_integer,
     truncate_mantissa,
@@ -85,26 +86,6 @@ class UnmodelledHardwareWarning(RuntimeWarning):
     bypasses the filter, so the unit test would keep passing while the suite
     stayed silent.
     """
-
-
-def as_dest_acc(dest_acc: Union[bool, DestAccumulation]) -> bool:
-    """Normalise an accumulation setting to a plain bool.
-
-    Accepts ``DestAccumulation`` as well as a bool, because the rest of the
-    harness passes the enum and a bare ``bool`` parameter cannot be trusted to
-    notice: ``DestAccumulation`` defines no ``__bool__``, so ``DestAccumulation.No``
-    is **truthy**. Passed to a bool parameter it reads as "accumulation on" and
-    silently selects a 32-bit Dest -- the model then runs at fp32 where the
-    device had 16 bits, which looks like an arithmetic discrepancy rather than
-    a wiring mistake.
-
-    Taking the enum here and reducing to a bool once keeps the codec boundary
-    (``helpers.pack`` / ``helpers.unpack``, which size tiles from a bool) plain
-    while the ops speak the harness's own vocabulary.
-    """
-    if isinstance(dest_acc, DestAccumulation):
-        return dest_acc is DestAccumulation.Yes
-    return bool(dest_acc)
 
 
 class DataTransferBlocks(ABC):
