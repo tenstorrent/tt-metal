@@ -162,49 +162,49 @@ void kernel_main() {
         for (uint32_t i = 0; i < RPC; ++i) {
             const uint32_t rr = r0 % 32 + i;
             uint32_t b[E], key[E];
+            // the row's 32 logits: two 16-value face rows, read 2 values per 32-bit load
+            for (uint32_t f = 0; f < 2; ++f) {
+                volatile tt_l1_ptr uint32_t* src =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(lg_l1 + off(rr, 16 * f));
+                for (uint32_t w = 0; w < 8; ++w) {
+                    const uint32_t two = src[w];
+                    b[16 * f + 2 * w] = two & 0xFFFF;
+                    b[16 * f + 2 * w + 1] = two >> 16;
+                }
+            }
             for (uint32_t e = 0; e < E; ++e) {
-                b[e] = *u16(lg_l1 + off(rr, e));
                 key[e] = key16(b[e]);
             }
-            // the 4th largest logit (with multiplicity)
-            uint32_t top[gmoe::K_SEL];
-            for (uint32_t k = 0; k < gmoe::K_SEL; ++k) {
-                top[k] = 0;
-            }
+            // the routed experts as TopKRouter.dense_decode selects them: every logit >= the 4th largest (with
+            // multiplicity), at most K, in descending logit order, then ascending index. One pass keeps the K largest
+            // (key, index) by insertion (an equal key goes after the ones already in: the lower index first); the
+            // first K_SEL are routed, the K-th too when it ties the K_SEL-th
+            uint32_t tk[K], ti[K], m = 0;
             for (uint32_t e = 0; e < E; ++e) {
-                uint32_t v = key[e];
-                for (uint32_t k = 0; k < gmoe::K_SEL; ++k) {
-                    if (v > top[k]) {
-                        const uint32_t tmp = top[k];
-                        top[k] = v;
-                        v = tmp;
-                    }
+                const uint32_t v = key[e];
+                if (m == K && v <= tk[K - 1]) {
+                    continue;
+                }
+                uint32_t p = m < K ? m : K - 1;
+                while (p > 0 && tk[p - 1] < v) {
+                    tk[p] = tk[p - 1];
+                    ti[p] = ti[p - 1];
+                    --p;
+                }
+                tk[p] = v;
+                ti[p] = e;
+                if (m < K) {
+                    ++m;
                 }
             }
-            const uint32_t kth = top[gmoe::K_SEL - 1], kmax = top[0];
-            // the selected (logit >= kth), at most K: descending logit, then ascending index
-            uint32_t sel[K], n = 0;
-            uint32_t taken = 0;  // bit e: picked
-            for (; n < K; ++n) {
-                uint32_t best = E;
-                for (uint32_t e = 0; e < E; ++e) {
-                    if (key[e] >= kth && !((taken >> e) & 1) && (best == E || key[e] > key[best])) {
-                        best = e;
-                    }
-                }
-                if (best == E) {
-                    break;
-                }
-                sel[n] = best;
-                taken |= 1u << best;
+            const uint32_t kth = tk[gmoe::K_SEL - 1];
+            uint32_t sel[K], n = 0, taken = 0;  // taken bit e: routed
+            for (; n < m && tk[n] >= kth; ++n) {
+                sel[n] = ti[n];
+                taken |= 1u << ti[n];
             }
             // softmax over the selected, fixed point: e_k = 2^((l_k - max) log2 e) (Q30), w_k = e_k / sum
-            uint32_t maxb = 0;
-            for (uint32_t e = 0; e < E; ++e) {
-                if (key[e] == kmax) {
-                    maxb = b[e];
-                }
-            }
+            const uint32_t maxb = b[ti[0]];
             const int32_t qmax = q16(maxb);
             uint32_t ex[K];
             uint64_t sum = 0;
