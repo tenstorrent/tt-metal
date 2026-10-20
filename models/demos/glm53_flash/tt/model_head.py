@@ -114,15 +114,24 @@ class TtModelHead(LightweightModule):
         return cls(device, cfg, w[FINAL_NORM_KEY], w[LM_HEAD_KEY], **kw)
 
     # ---- pieces -------------------------------------------------------------------------------
-    def collapse(self, streams: ttnn.Tensor) -> ttnn.Tensor:
-        """Packed ``[1, 1, T, n*H]`` fp32 -> unweighted mean over the n streams ``[1, 1, T, H]`` fp32."""
-        T, H = streams.shape[-2], self.hidden
+    @staticmethod
+    def collapse_streams(streams: ttnn.Tensor, n: int) -> ttnn.Tensor:
+        """Packed ``[1, 1, T, n*H]`` fp32 -> unweighted mean over the n streams ``[1, 1, T, H]`` fp32
+        (4 slices + 3 adds + 1 scale; the last decoder layer's ``collapse=True`` emits this directly)."""
+        T, H = streams.shape[-2], streams.shape[-1] // n
         acc = ttnn.slice(streams, [0, 0, 0, 0], [1, 1, T, H])
-        for i in range(1, self.n):
+        for i in range(1, n):
             part = ttnn.slice(streams, [0, 0, 0, i * H], [1, 1, T, (i + 1) * H])
             acc = ttnn.add(acc, part, output_tensor=acc)
             ttnn.deallocate(part)
-        return ttnn.multiply(acc, 1.0 / self.n, output_tensor=acc)
+        return ttnn.multiply(acc, 1.0 / n, output_tensor=acc)
+
+    def collapse(self, streams: ttnn.Tensor) -> ttnn.Tensor:
+        """Packed ``[1, 1, T, n*H]`` fp32 -> unweighted mean over the n streams ``[1, 1, T, H]`` fp32;
+        an already collapsed ``[1, 1, T, H]`` (``decode_forward(collapse=True)``) passes through."""
+        if streams.shape[-1] == self.hidden:
+            return streams
+        return self.collapse_streams(streams, self.n)
 
     def norm(self, h: ttnn.Tensor) -> ttnn.Tensor:
         """Final RMSNorm in fp32, result in bf16 (the LM head input dtype)."""

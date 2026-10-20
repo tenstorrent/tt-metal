@@ -108,8 +108,11 @@ class GLM53MeshModel:
         ``keep_layer_outputs`` (eager diagnostics only) keeps every layer's output in ``self.layer_outputs``."""
         streams = self.embedding(ids_dev)
         self.layer_outputs = []
-        for dec in self.layers:
-            out = dec.decode_forward(streams, positions=positions)
+        last = len(self.layers) - 1
+        for k, dec in enumerate(self.layers):
+            # the last layer feeds the head: its FFN wrap emits the mean over the streams directly
+            collapse = k == last and self.head is not None and not keep_layer_outputs and dec.supports_collapse
+            out = dec.decode_forward(streams, positions=positions, collapse=collapse)
             if keep_layer_outputs:
                 self.layer_outputs.append(out)
             else:

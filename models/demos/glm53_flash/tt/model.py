@@ -221,8 +221,16 @@ class GLM53Model:
             raise ValueError(f"{len(token_ids)} tokens for {B} user slots")
         dp = self.decode_positions(positions)
         x = self.embedding(self.embedding.tokens_to_device(torch.tensor(token_ids, dtype=torch.int32), pad_to=B))
-        x = self._run_layers(x, lambda dec, h: dec.decode_forward(h, positions=dp), "decode", on_layer)
-        logits, ids = self.head.forward_greedy(x)
+        last = self.cfg.num_hidden_layers - 1
+        x = self._run_layers(
+            x,
+            lambda dec, h: dec.decode_forward(
+                h, positions=dp, collapse=dec.layer_idx == last and dec.supports_collapse
+            ),
+            "decode",
+            on_layer,
+        )
+        logits, ids = self.head.forward_greedy(x)  # a collapsed [1,1,B,hidden] passes straight to the norm
         ttnn.deallocate(x)
         for t in (dp.positions, dp.pool_ids, dp.ring_slots):
             ttnn.deallocate(t)
