@@ -252,6 +252,13 @@ def _reduce_set(value, data_axes) -> set:
     return {axis for axis in data_axes if not is_sharded_on_axis(value, axis)}
 
 
+def _links_per_axis() -> dict:
+    """Ethernet links the collectives use on each mesh axis, as the fabric control plane reports them."""
+    get = getattr(ttnn, "get_num_links", None) or ttnn._ttnn.operations.ccl.get_num_links
+    device = _device()
+    return {axis: int(get(device, axis)) for axis in range(len(device.shape))}
+
+
 def _assert_mean_over_axis(before: list, after: list, mesh_shape, axis: int, what: str) -> None:
     """``after`` holds, on every device, the mean of ``before`` over mesh axis ``axis`` (bf16 sum then exact scale).
 
@@ -477,12 +484,15 @@ class TestDPxTP:
 
         ttml.core.distributed.synchronize_gradients(params, [dp])
 
+        links = _links_per_axis()
         for name, t in params.items():
             grad = t.get_grad()
             assert not is_sharded_on_axis(grad, dp), name
             if name.endswith(TP_SHARDED_SUFFIXES):
                 assert is_sharded_on_axis(grad, tp), f"{name}: the TP shard did not survive the dp all_reduce"
-            _assert_mean_over_axis(before[name], _shards(grad), dp_tp_mesh.shape, dp, name)
+            _assert_mean_over_axis(
+                before[name], _shards(grad), dp_tp_mesh.shape, dp, f"{name} (links per axis {links})"
+            )
 
 
 # --- HSDP on [2, 2] ("dp", "fsdp") ------------------------------------------------------------------------------
@@ -524,11 +534,12 @@ class TestHSDP:
 
         ttml.core.distributed.synchronize_gradients(params, [dp])
 
+        links = _links_per_axis()
         for name, t in params.items():
             grad = t.get_grad()
             assert not is_sharded_on_axis(grad, dp), name
             assert is_sharded_on_axis(grad, fsdp), name
-            _assert_mean_over_axis(before[name], _shards(grad), hsdp_mesh.shape, dp, name)
+            _assert_mean_over_axis(before[name], _shards(grad), hsdp_mesh.shape, dp, f"{name} (links per axis {links})")
 
         head = params["Model/head/weight"]
         reduced = ttnn.multiply(ttml.core.distributed.all_reduce(head.get_grad(), cluster_axis=fsdp), 1.0 / F)
