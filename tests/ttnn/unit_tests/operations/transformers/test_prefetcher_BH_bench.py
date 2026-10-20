@@ -1036,14 +1036,14 @@ def test_bench_traced_prefetch_and_linear(device, k, n, requests):
 
     with _tensor_prefetcher_session(device):
         if requests == "queued_ahead":
-            # The correctness run's request and every replayed matmul's, in the identity ring rotation
+            # The correctness run's request and every traced matmul's, in the identity ring rotation
             # prefetch_and_linear gives a streaming gather.
             block_count = ttnn.experimental.tensor_prefetcher_block_count_for_matmul_1d(
                 program_config, tt_weight, prefetcher_pipes=pipes
             )
             ttnn.experimental.queue_tensor_prefetcher_request(
                 device,
-                [(tt_weight, block_count, list(range(block_count)))] * (1 + 2 * trace_repeats),
+                [(tt_weight, block_count, list(range(block_count)))] * (1 + trace_repeats),
                 prefetcher_pipes=pipes,
             )
 
@@ -1054,8 +1054,8 @@ def test_bench_traced_prefetch_and_linear(device, k, n, requests):
         for _ in range(trace_repeats):
             single_linear()
         ttnn.end_trace_capture(device, trace_id, cq_id=0)
-        # The first replay after capture runs about 3x slower than the ones after it; time the second.
-        ttnn.execute_trace(device, trace_id, cq_id=0, blocking=False)
+        # The first synchronize after the device opens waits ~5 ms for the real-time profiler's
+        # first clock sync; take it before the clock starts.
         ttnn.synchronize_device(device)
         t0 = time.perf_counter()
         ttnn.execute_trace(device, trace_id, cq_id=0, blocking=False)
