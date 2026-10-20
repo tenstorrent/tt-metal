@@ -17,6 +17,7 @@ from concurrent.futures import ThreadPoolExecutor
 import numpy as np
 import ttnn
 
+from models.experimental.hpcg.host import native
 from models.experimental.hpcg.reference.problem import COLOUR_ORDER, Level, build
 from models.experimental.hpcg.tt.custom_ops.cg_vector import CgVectorOp, DotFinishOp
 from models.experimental.hpcg.tt.custom_ops.sparse_rows import SparseRowOp, SparseRowPlan, slot_pages
@@ -31,6 +32,10 @@ from models.experimental.hpcg.tt.layout import (
     to_device,
     upload_zeros,
 )
+
+# The compiled setup helper (host/native_setup.cpp) is loaded with this module, as TT-NN is with `import ttnn`:
+# loading a library is program start-up (in HPCG's C++ code this code is part of the executable), not setup
+native.lib()
 
 
 def default_bands(nx_level):
@@ -76,11 +81,13 @@ class DeviceLevel:
         self.r = r if r is not None else empty_device(device, L.P)  # the fine level shares CG's r
 
     @staticmethod
-    def stencil_plan(L, ncores, noc_xy):
+    def stencil_plan(L, ncores, noc_xy, defer_exchange=False):
         """The Gauss-Seidel plan of level L from its storage-order formula (host work only: no device calls)."""
         blocks = [(L.starts[c], L.starts[c + 1]) for c in range(8)]
         bands = L.bstarts if L.bands > 1 else None
-        return SparseRowPlan(None, blocks, blocks, ncores, noc_xy, True, bands=bands, pout=L.P, stencil=L)
+        return SparseRowPlan(
+            None, blocks, blocks, ncores, noc_xy, True, bands=bands, pout=L.P, stencil=L, defer_exchange=defer_exchange
+        )
 
 
 class HPCG:
@@ -122,13 +129,18 @@ class HPCG:
             tables0 = StencilJob.allocate(device, L0)  # allocations need no plan: done before planning
         self.r, self.b, self.x, self.p, self.Ap = (empty_device(device, L0.P) for _ in range(5))
         if not host_tables:
-            plan0 = DeviceLevel.stencil_plan(L0, min(nc, lc[0]), noc_xy)
+            # exchange lists after the fine level's generation launch (it needs only the windows)
+            plan0 = DeviceLevel.stencil_plan(L0, min(nc, lc[0]), noc_xy, defer_exchange=True)
         fine = dict(r=self.r, b=self.b, zeros=(self.x, self.p))  # x = 0 (initial guess) and p = 0 on the fine level
         # matrix generation in two launches: the fine level's as soon as it is planned (the device writes it while
         # the host plans the rest), then the coarser levels' and the grid transfers' together
         self.lv = [DeviceLevel(device, L0, min(nc, lc[0]), noc_xy, plan=plan0, tables=tables0, **fine)]
         if self.lv[0].job is not None:
             launched.append(gen.submit(StencilMatrixOp(device, [self.lv[0].job])))
+            if not plan0.complete_exchange():  # too many neighbours: re-plan (fewer cores) and generate again
+                tables = (self.lv[0].values, self.lv[0].offsets)
+                self.lv[0] = DeviceLevel(device, L0, min(nc, lc[0]), noc_xy, tables=tables, **fine)
+                launched.append(gen.submit(StencilMatrixOp(device, [self.lv[0].job])))
             self.levels = build(nx, bands, slot_stride, tables=False, finest=L0)
         self.lv += [DeviceLevel(device, L, min(nc, lc[l]), noc_xy) for l, L in enumerate(self.levels) if l > 0]
         jobs = [d.job for d in self.lv[1:] if d.job is not None]

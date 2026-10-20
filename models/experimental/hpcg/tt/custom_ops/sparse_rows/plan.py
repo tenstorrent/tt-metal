@@ -84,6 +84,7 @@ class SparseRowPlan:
         stencil=None,
         transfer=None,
         host_tables=True,
+        defer_exchange=False,
     ):
         """COL: [nslot, P] column indices (q order). out_blocks: (start, end) q ranges of the output rows, one per
         phase block (GS: one colour each). src_regions: q ranges of the input vector the columns fall in.
@@ -97,12 +98,17 @@ class SparseRowPlan:
         transfer: (kind, F, C) with COL = None: a grid transfer launch between fine level F and coarse level C (kind
         "restrict" or "prolong"), planned from their storage-order formulas without Level.link's tables; off holds the
         1-slot window offsets and weights the 1-slot values (exchange=False, pout = the out rows' vector length).
-        host_tables=False: off and weights are None (the device generates them, tt/custom_ops/stencil_matrix)."""
+        host_tables=False: off and weights are None (the device generates them, tt/custom_ops/stencil_matrix).
+        defer_exchange (stencil plans): leave the exchange lists for complete_exchange(), so the windows are ready
+        sooner (matrix generation needs only them); the neighbour limit is then checked there."""
         nc = ncores
         while True:
             p = object.__new__(cls)
-            p._init(COL, out_blocks, src_regions, nc, noc_xy, exchange, bands, pout, stencil, transfer, host_tables)
-            if not exchange or int(np.diff(p._nbr_csr[1]).max(initial=0)) <= MAX_NB or nc == 1:
+            p._init(
+                COL, out_blocks, src_regions, nc, noc_xy, exchange, bands, pout, stencil, transfer, host_tables,
+                defer_exchange,
+            )
+            if not exchange or defer_exchange or int(np.diff(p._nbr_csr[1]).max(initial=0)) <= MAX_NB or nc == 1:
                 return p
             nc = max(1, int(nc * 0.75))
 
@@ -122,6 +128,7 @@ class SparseRowPlan:
         stencil=None,
         transfer=None,
         host_tables=True,
+        defer_exchange=False,
     ):
         if stencil is not None:
             nslot, stride = 27, stencil.stride
@@ -147,7 +154,10 @@ class SparseRowPlan:
             )
         elif stencil is not None:
             assert exchange and lib is not None
-            pieces, off, own_l1, ents = self._plan_stencil(lib, stencil, own, ng, src_regions[0][0], noc_xy)
+            pieces, off, own_l1, ents = self._plan_stencil(
+                lib, stencil, own, ng, src_regions[0][0], None if defer_exchange else noc_xy
+            )
+            self._noc_xy = noc_xy
         elif lib is not None:
             pieces, off, own_l1, ents = self._plan_native(lib, COL, own, exchange, ng, src_regions[0][0], noc_xy)
         else:
@@ -260,8 +270,22 @@ class SparseRowPlan:
                 break
         else:
             raise ValueError(f"a core needs more than {maxp} window pieces")
-        ents = SparseRowPlan._exchange_native(lib, nc, NB, own_f, maxp, plo, pln, pl1, npc, noc_xy)
+        ents = (np.zeros((0, 5), np.int64), np.zeros(nc * NB + 1, np.int64), _no_neighbours(nc))
+        if noc_xy is not None:  # None: deferred (complete_exchange)
+            ents = SparseRowPlan._exchange_native(lib, nc, NB, own_f, maxp, plo, pln, pl1, npc, noc_xy)
         return (*_compact(nc, maxp, (plo, pln, pl1), npc), npc), None, own_l1, ents
+
+    def complete_exchange(self):
+        """The exchange lists of a plan made with defer_exchange=True; False when a core then has more than MAX_NB
+        neighbours (the caller re-plans without deferring, which retries on fewer cores)."""
+        nc, NB = self.own.shape[:2]
+        own_f = np.ascontiguousarray(self.own.reshape(-1), np.int64)
+        plo, pln, pl1, npc = (np.ascontiguousarray(x, np.int64) for x in self.piece_arrays)
+        lib = native.lib()
+        ents = SparseRowPlan._exchange_native(lib, nc, NB, own_f, plo.shape[1], plo, pln, pl1, npc, self._noc_xy)
+        self._exch_rows, self._exch_at, self._nbr_csr = ents
+        self._tables = {}
+        return int(np.diff(self._nbr_csr[1]).max(initial=0)) <= MAX_NB
 
     @staticmethod
     def _plan_transfer(lib, transfer, own, ng, empty_lo, pout, host_tables=True):

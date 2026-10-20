@@ -145,3 +145,16 @@ def test_ownership_matches_numpy(nc):
             got = SparseRowPlan._ownership(native.lib(), blocks, bands, nc)
             want = SparseRowPlan._ownership_numpy(blocks, bands, nc)
             assert np.array_equal(got, want), (nc, B)
+
+
+@pytest.mark.parametrize("nx, bands", CASES)
+def test_deferred_exchange_matches(nx, bands):
+    """A stencil plan whose exchange lists are completed later equals one planned in one go."""
+    L, _ = _levels(nx, bands)
+    blocks = [(L.starts[c], L.starts[c + 1]) for c in range(8)]
+    noc = [(i % 13, i // 13) for i in range(130)]
+    bs = L.bstarts if bands > 1 else None
+    want = SparseRowPlan(None, blocks, blocks, 130, noc, True, bands=bs, pout=L.P, stencil=L)
+    got = SparseRowPlan(None, blocks, blocks, want.nc, noc, True, bands=bs, pout=L.P, stencil=L, defer_exchange=True)
+    assert got.complete_exchange()
+    assert got.exch == want.exch and got.nbr == want.nbr and np.array_equal(got.own_l1, want.own_l1)
