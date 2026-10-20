@@ -25,6 +25,7 @@ nothing overrides a method: there is one implementation of each transfer, and
 architectures differ in the data their units carry. See :mod:`.arch` for why.
 """
 
+from functools import partial
 from typing import FrozenSet, Optional, Union
 
 import torch
@@ -32,13 +33,35 @@ from helpers.format_config import DataFormat
 from helpers.llk_params import DestAccumulation, PackerReluType, StochasticRounding
 
 from .arch import (
+    BLOCK_FLOAT_FORMATS,
+    MX_FORMATS,
     ArchGolden,
     BlackholeArch,
     QuasarArch,
     WormholeArch,
 )
-from .l1_support import L1Buffer
+from .l1_support import L1Buffer, L1Support
 from .pack_effects import PackEdgeMask
+
+# Re-exported so the operations layer keeps importing the register rules from
+# the blocks that apply them, rather than reaching past them into storage.
+# Listed in __all__ because autoflake strips an import nothing in this module
+# body uses, which is exactly what a re-export is.
+from .storage import (  # noqa: F401
+    BF16_MANT_BITS,
+    DEST_32_BIT_FORMATS,
+    DEST_STORAGE_FORMATS,
+    INT32_DEST_COMPATIBLE,
+    SRC_MANT_BITS,
+    SRC_STORAGE_FORMATS,
+    SRCS_STORAGE_FORMATS,
+    as_dest_acc,
+    flush_subnormals,
+    saturate_to_integer,
+    truncate_mantissa,
+    truncate_src_mantissa,
+)
+from .units.pack import UnmodelledHardwareWarning  # noqa: F401
 
 
 class DataTransferBlocks:
@@ -187,6 +210,16 @@ class DataTransferBlocks:
         """Dest formats available on this architecture."""
         return self.arch.l1.dest_formats
 
+    @property
+    def promotes_outlier_to_32_bit_dest(self) -> bool:
+        """Whether the harness promotes this architecture's outlier combination.
+
+        An exponent-B input with a Float16 output runs with a 32-bit Dest
+        everywhere except Quasar. The packer owns the rule; the operations
+        layer needs the answer when it resolves ``dest_acc``.
+        """
+        return self.arch.pack.promotes_outlier_to_32_bit_dest
+
     def src_format(self, l1_format: DataFormat) -> DataFormat:
         """The src-register storage format the unpacker lands `l1_format` in."""
         return self.arch.unpack.src_format(l1_format)
@@ -220,23 +253,53 @@ class DataTransferBlocks:
 # ----------------------------------------------------------------------
 # Architecture factories.
 #
-# Kept as callables with the original names so `blocks_class = Quasar...` and
-# `self.blocks_class()` in the operations layer keep working unchanged. They
-# are functions rather than subclasses on purpose: a subclass would be a place
-# to override a transfer, which is the thing this structure removes.
+# Kept under the original names so `blocks_class = Quasar...` and
+# `self.blocks_class()` in the operations layer keep working unchanged.
+#
+# ``partial`` rather than a plain function, and deliberately not a subclass.
+# A plain function assigned to a class attribute becomes a *method*: functions
+# are descriptors, so ``self.blocks_class()`` would pass ``self`` as the arch
+# and raise. ``partial`` is not a descriptor, so it survives the assignment
+# intact. A subclass would work too, but it would reintroduce somewhere to
+# override a transfer -- the thing this structure exists to remove.
 # ----------------------------------------------------------------------
 
+QuasarDataTransferBlocks = partial(DataTransferBlocks, QuasarArch())
+QuasarDataTransferBlocks.__doc__ = (
+    "Quasar: MX formats, no block float, and the only SrcS register."
+)
 
-def QuasarDataTransferBlocks() -> DataTransferBlocks:  # noqa: N802 -- was a class
-    """Quasar: MX formats, no block float, and the only SrcS register."""
-    return DataTransferBlocks(QuasarArch())
+WormholeDataTransferBlocks = partial(DataTransferBlocks, WormholeArch())
+WormholeDataTransferBlocks.__doc__ = "Wormhole: block float, no MX."
+
+BlackholeDataTransferBlocks = partial(DataTransferBlocks, BlackholeArch())
+BlackholeDataTransferBlocks.__doc__ = "Blackhole: block float, no MX, plus Fp8_e4m3."
 
 
-def WormholeDataTransferBlocks() -> DataTransferBlocks:  # noqa: N802 -- was a class
-    """Wormhole: block float, no MX."""
-    return DataTransferBlocks(WormholeArch())
-
-
-def BlackholeDataTransferBlocks() -> DataTransferBlocks:  # noqa: N802 -- was a class
-    """Blackhole: block float, no MX, plus Fp8_e4m3."""
-    return DataTransferBlocks(BlackholeArch())
+__all__ = [
+    "BF16_MANT_BITS",
+    "BLOCK_FLOAT_FORMATS",
+    "BlackholeArch",
+    "BlackholeDataTransferBlocks",
+    "DEST_32_BIT_FORMATS",
+    "DEST_STORAGE_FORMATS",
+    "DataTransferBlocks",
+    "INT32_DEST_COMPATIBLE",
+    "L1Buffer",
+    "L1Support",
+    "MX_FORMATS",
+    "PackEdgeMask",
+    "QuasarArch",
+    "QuasarDataTransferBlocks",
+    "SRC_MANT_BITS",
+    "SRC_STORAGE_FORMATS",
+    "SRCS_STORAGE_FORMATS",
+    "UnmodelledHardwareWarning",
+    "WormholeArch",
+    "WormholeDataTransferBlocks",
+    "as_dest_acc",
+    "flush_subnormals",
+    "saturate_to_integer",
+    "truncate_mantissa",
+    "truncate_src_mantissa",
+]
