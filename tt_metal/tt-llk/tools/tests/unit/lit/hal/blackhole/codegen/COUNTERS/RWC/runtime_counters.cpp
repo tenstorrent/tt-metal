@@ -26,7 +26,7 @@ extern "C" __attribute__((noinline, used)) void reference_runtime_next_face(std:
 {
     const auto src_b = b;
     const auto dest  = d;
-    TT_SETRWC(ckernel::p_setrwc::CLR_AB, ckernel::p_setrwc::CR_D, dest, src_b, 0, ckernel::p_setrwc::SET_BD);
+    TT_SETRWC(0x3 /*CLR_AB*/, 0x4 /*CR_D*/, dest, src_b, 0 /*rwc_a*/, 0x6 /*SET_BD*/);
 }
 
 extern "C" __attribute__((noinline, used)) void runtime_increment_dest(std::uint32_t d)
@@ -37,7 +37,7 @@ extern "C" __attribute__((noinline, used)) void runtime_increment_dest(std::uint
 
 extern "C" __attribute__((noinline, used)) void reference_runtime_increment_dest(std::uint32_t d)
 {
-    TT_INCRWC(0, d, 0, 0);
+    TT_INCRWC(0x0 /*CR_NONE*/, d, 0 /*rwc_b*/, 0 /*rwc_a*/);
 }
 
 extern "C" __attribute__((noinline, used)) void runtime_advance_and_reset_dest(std::uint32_t d)
@@ -48,7 +48,7 @@ extern "C" __attribute__((noinline, used)) void runtime_advance_and_reset_dest(s
 
 extern "C" __attribute__((noinline, used)) void reference_runtime_advance_and_reset_dest(std::uint32_t d)
 {
-    TT_INCRWC(ckernel::p_setrwc::CR_D, d, 0, 0);
+    TT_INCRWC(0x4 /*CR_D*/, d, 0 /*rwc_b*/, 0 /*rwc_a*/);
 }
 
 extern "C" __attribute__((noinline, used)) void runtime_increment_and_save_dest(std::uint32_t d)
@@ -59,7 +59,7 @@ extern "C" __attribute__((noinline, used)) void runtime_increment_and_save_dest(
 
 extern "C" __attribute__((noinline, used)) void reference_runtime_increment_and_save_dest(std::uint32_t d)
 {
-    TT_SETRWC(ckernel::p_setrwc::CLR_NONE, ckernel::p_setrwc::C_TO_CR_MODE, d, 0, 0, ckernel::p_setrwc::SET_D);
+    TT_SETRWC(0x0 /*CLR_NONE*/, 0x8 /*C_TO_CR_MODE*/, d, 0 /*rwc_b*/, 0 /*rwc_a*/, 0x4 /*SET_D*/);
 }
 
 extern "C" __attribute__((noinline, used)) void runtime_set_and_increment(std::uint32_t a, std::uint32_t d)
@@ -70,8 +70,8 @@ extern "C" __attribute__((noinline, used)) void runtime_set_and_increment(std::u
 
 extern "C" __attribute__((noinline, used)) void reference_runtime_set_and_increment(std::uint32_t a, std::uint32_t d)
 {
-    TT_SETRWC(ckernel::p_setrwc::CLR_NONE, 0, 0, 0, a, ckernel::p_setrwc::SET_A);
-    TT_INCRWC(0, d, 0, 0);
+    TT_SETRWC(0x0 /*CLR_NONE*/, 0x0 /*CR_NONE*/, 0 /*rwc_d*/, 0 /*rwc_b*/, a, 0x1 /*SET_A*/);
+    TT_INCRWC(0x0 /*CR_NONE*/, d, 0 /*rwc_b*/, 0 /*rwc_a*/);
 }
 
 extern "C" __attribute__((noinline, used)) void runtime_flip_increment_and_advance(std::uint32_t a, std::uint32_t d)
@@ -82,8 +82,8 @@ extern "C" __attribute__((noinline, used)) void runtime_flip_increment_and_advan
 
 extern "C" __attribute__((noinline, used)) void reference_runtime_flip_increment_and_advance(std::uint32_t a, std::uint32_t d)
 {
-    TT_SETRWC(ckernel::p_setrwc::CLR_AB, ckernel::p_setrwc::CR_D, d, 0, 0, ckernel::p_setrwc::SET_D);
-    TT_INCRWC(0, 0, 0, a);
+    TT_SETRWC(0x3 /*CLR_AB*/, 0x4 /*CR_D*/, d, 0 /*rwc_b*/, 0 /*rwc_a*/, 0x4 /*SET_D*/);
+    TT_INCRWC(0x0 /*CR_NONE*/, 0 /*rwc_d*/, 0 /*rwc_b*/, a);
 }
 
 extern "C" __attribute__((noinline, used)) std::uint32_t runtime_encoded_increment_src_a(std::uint32_t a)
@@ -94,5 +94,5 @@ extern "C" __attribute__((noinline, used)) std::uint32_t runtime_encoded_increme
 
 extern "C" __attribute__((noinline, used)) std::uint32_t reference_runtime_encoded_increment_src_a(std::uint32_t a)
 {
-    return TT_OP_INCRWC(0, 0, 0, a);
+    return TT_OP_INCRWC(0x0 /*CR_NONE*/, 0 /*rwc_d*/, 0 /*rwc_b*/, a);
 }
