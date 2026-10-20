@@ -45,7 +45,7 @@ def test_plan_matches_numpy(nx, bands, exchange):
     noc = [(i % 13, i // 13) for i in range(130)]
     p = SparseRowPlan(L.COL_rows, blocks, blocks, 130, noc, exchange, bands=L.bstarts if bands > 1 else None, pout=L.P)
     ng = L.P // 16 + 2
-    got = SparseRowPlan._plan_native(native.lib(), L.COL_rows, p.own, exchange, ng, 0)
+    got = SparseRowPlan._plan_native(native.lib(), L.COL_rows, p.own, exchange, ng, 0, noc)
     want = SparseRowPlan._plan_numpy(L.COL_rows, L.P, p.own, exchange, ng, 0)
 
     def per_core(f):  # ([nc, maxp] lo, len, l1, pieces per core) -> per-core (lo, len, l1)
@@ -57,7 +57,8 @@ def test_plan_matches_numpy(nx, bands, exchange):
         assert np.array_equal(gl, wl) and np.array_equal(gn, wn) and np.array_equal(g1, w1)
     assert np.array_equal(got[1], want[1]), "offsets"
     assert np.array_equal(got[2], want[2]), "own L1 offsets"
-    assert np.array_equal(np.asarray(got[3]).reshape(-1, 6), np.asarray(want[3], np.int64).reshape(-1, 6)), "exchange"
+    w_rows, w_at, w_nbr = SparseRowPlan._group_exchange(want[3], p.nc, 8, noc)
+    assert np.array_equal(got[3][0], w_rows) and np.array_equal(got[3][1], w_at) and got[3][2] == w_nbr, "exchange"
 
 
 @pytest.mark.parametrize("nx, bands", CASES)

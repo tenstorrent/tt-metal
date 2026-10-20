@@ -748,4 +748,65 @@ int64_t hpcg_plan_meta(
     return longest;
 }
 
+// hpcg_plan_exchange's entries, already as SparseRowPlan uses them: grouped by (k, b) in their original order (a
+// stable counting sort), each as (NoC x, NoC y of m, s, f, dst) in rows[at[k * NB + b] .. at[k * NB + b + 1]); and
+// every core's neighbours (the cores it sends rows to or receives rows from), sorted, in nbr[nat[k] .. nat[k + 1]].
+// noc_xy[2 m], noc_xy[2 m + 1]: NoC x, y of core m. Returns the number of entries, or -needed when it exceeds cap
+// (rows holds cap entries; nbr holds nc * nc).
+int64_t hpcg_plan_exchange_grouped(
+    int32_t nc,
+    int32_t NB,
+    const int64_t* own,
+    int64_t max_pieces,
+    const int64_t* piece_lo,
+    const int64_t* piece_ln,
+    const int64_t* piece_l1,
+    const int64_t* npieces,
+    const int64_t* noc_xy,
+    int64_t cap,
+    int64_t* rows,
+    int64_t* at,
+    int64_t* nbr,
+    int64_t* nat) {
+    const int64_t n = hpcg_plan_exchange(nc, NB, own, max_pieces, piece_lo, piece_ln, piece_l1, npieces, nullptr);
+    if (n > cap) {
+        return -n;
+    }
+    std::vector<int64_t> ent(n * 6);
+    hpcg_plan_exchange(nc, NB, own, max_pieces, piece_lo, piece_ln, piece_l1, npieces, ent.data());
+    const int64_t nkey = (int64_t)nc * NB;
+    for (int64_t i = 0; i <= nkey; ++i) {
+        at[i] = 0;
+    }
+    for (int64_t i = 0; i < n; ++i) {
+        ++at[ent[i * 6] * NB + ent[i * 6 + 1] + 1];
+    }
+    for (int64_t i = 0; i < nkey; ++i) {
+        at[i + 1] += at[i];
+    }
+    std::vector<int64_t> fill(at, at + nkey);
+    std::vector<uint8_t> adj((size_t)nc * nc, 0);
+    for (int64_t i = 0; i < n; ++i) {
+        const int64_t* e = &ent[i * 6];
+        int64_t* r = rows + 5 * fill[e[0] * NB + e[1]]++;
+        r[0] = noc_xy[2 * e[2]];
+        r[1] = noc_xy[2 * e[2] + 1];
+        r[2] = e[3];
+        r[3] = e[4];
+        r[4] = e[5];
+        adj[e[0] * nc + e[2]] = adj[e[2] * nc + e[0]] = 1;
+    }
+    int64_t m = 0;
+    for (int32_t k = 0; k < nc; ++k) {
+        nat[k] = m;
+        for (int32_t j = 0; j < nc; ++j) {
+            if (adj[(size_t)k * nc + j]) {
+                nbr[m++] = j;
+            }
+        }
+    }
+    nat[nc] = m;
+    return n;
+}
+
 }  // extern "C"

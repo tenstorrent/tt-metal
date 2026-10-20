@@ -74,11 +74,12 @@ class SparseRowPlan:
         lib = native.lib()
         if stencil is not None:
             assert exchange and lib is not None
-            pieces, off, own_l1, ents = self._plan_stencil(lib, stencil, own, ng, src_regions[0][0])
+            pieces, off, own_l1, ents = self._plan_stencil(lib, stencil, own, ng, src_regions[0][0], noc_xy)
         elif lib is not None:
-            pieces, off, own_l1, ents = self._plan_native(lib, COL, own, exchange, ng, src_regions[0][0])
+            pieces, off, own_l1, ents = self._plan_native(lib, COL, own, exchange, ng, src_regions[0][0], noc_xy)
         else:
             pieces, off, own_l1, ents = self._plan_numpy(COL, pout, own, exchange, ng, src_regions[0][0])
+            ents = self._group_exchange(ents, nc, NB, noc_xy)
         plo, pln, pl1, npc = pieces  # [nc, maxp] each (zero past npc[k]), and pieces per core
         self.piece_arrays = (plo, pln, pl1, npc)
         pieces = [(plo[k, : npc[k]], pln[k, : npc[k]], pl1[k, : npc[k]]) for k in range(nc)]  # views, no copies
@@ -89,20 +90,28 @@ class SparseRowPlan:
         self.R = int(npc.max())
         self.off = off
         # exchange lists (GS): rows [s, f) of block b owned by k that sit in a window piece of m -> (m's NoC x, y,
-        # s, f, L1 byte offset of s in m's window), grouped by (k, b) in their original order
+        # s, f, L1 byte offset of s in m's window), grouped by (k, b) in their original order, and each core's
+        # neighbours (sorted)
+        self._exch_rows, self._exch_at, nbr = ents
+        self.nc, self.own, self.own_l1, self.pieces, self.nbr = nc, own, own_l1, pieces, nbr
+        self.out_blocks = out_blocks
+        self._tables = {}  # _core_tables cache
+
+    @staticmethod
+    def _group_exchange(ents, nc, NB, noc_xy):
+        """Plain (k, b, m, s, f, dst) exchange entries -> the grouped form the compiled planner returns: rows of
+        (m's NoC x, y, s, f, dst) grouped by (k, b) in their original order, the group starts, and each core's
+        neighbours (the cores it pushes rows to or receives rows from), sorted."""
         E = np.asarray(ents, np.int64).reshape(-1, 6)
         key = E[:, 0] * NB + E[:, 1]
         order = np.argsort(key, kind="stable")
         E, key = E[order], key[order]
         nxy = np.asarray(noc_xy, np.int64).reshape(-1, 2)
-        self._exch_rows = np.column_stack([nxy[E[:, 2], 0], nxy[E[:, 2], 1], E[:, 3], E[:, 4], E[:, 5]])
-        self._exch_at = np.searchsorted(key, np.arange(nc * NB + 1))
-        # neighbours of each core (sorted): the cores it pushes rows to or receives rows from
+        rows = np.column_stack([nxy[E[:, 2], 0], nxy[E[:, 2], 1], E[:, 3], E[:, 4], E[:, 5]])
+        at = np.searchsorted(key, np.arange(nc * NB + 1))
         pairs = np.unique(np.concatenate([E[:, 0] * nc + E[:, 2], E[:, 2] * nc + E[:, 0]]))
         nbr = [x.tolist() for x in np.split(pairs % nc, np.searchsorted(pairs // nc, np.arange(1, nc)))]
-        self.nc, self.own, self.own_l1, self.pieces, self.nbr = nc, own, own_l1, pieces, nbr
-        self.out_blocks = out_blocks
-        self._tables = {}  # _core_tables cache
+        return rows, at, nbr
 
     def exch_rows(self, k, b):
         """Exchange entries of core k, block b: an [n, 5] array of (NoC x, NoC y, s, f, L1 byte offset)."""
@@ -118,7 +127,7 @@ class SparseRowPlan:
         ]
 
     @staticmethod
-    def _plan_stencil(lib, L, own, ng, empty_lo):
+    def _plan_stencil(lib, L, own, ng, empty_lo, noc_xy):
         """Window pieces from the storage-order formula of level L (host/native_setup.cpp), the own rows' window
         offsets and the exchange entries; no offsets table (the device generates it)."""
         nc, NB = own.shape[:2]
@@ -143,13 +152,24 @@ class SparseRowPlan:
         plo_f, pln_f, pl1_f = (x.reshape(-1)[f] for x in (lo2, ln2, l12))
         assert np.all((e <= plo_f + pln_f)[has]), "own rows split over window pieces"
         own_l1 = np.where(has, pl1_f + (a - plo_f) * 4, 0)
-        n = lib.hpcg_plan_exchange(nc, NB, own_f, maxp, plo, pln, pl1, npc, None)
-        ents = np.zeros((n, 6), np.int64)
-        lib.hpcg_plan_exchange(nc, NB, own_f, maxp, plo, pln, pl1, npc, ents.ctypes.data)
+        ents = SparseRowPlan._exchange_native(lib, nc, NB, own_f, maxp, plo, pln, pl1, npc, noc_xy)
         return (lo2, ln2, l12, npc), None, own_l1, ents
 
     @staticmethod
-    def _plan_native(lib, COL, own, exchange, ng, empty_lo):
+    def _exchange_native(lib, nc, NB, own_f, maxp, plo, pln, pl1, npc, noc_xy):
+        """Exchange entries grouped by (core, block), and each core's sorted neighbours (host/native_setup.cpp)."""
+        noc = np.ascontiguousarray(np.asarray(noc_xy, np.int64).reshape(-1))
+        cap = 64 * nc * NB
+        while True:
+            rows, at = np.empty((cap, 5), np.int64), np.empty(nc * NB + 1, np.int64)
+            nbr, nat = np.empty(nc * nc, np.int64), np.empty(nc + 1, np.int64)
+            n = lib.hpcg_plan_exchange_grouped(nc, NB, own_f, maxp, plo, pln, pl1, npc, noc, cap, rows, at, nbr, nat)
+            if n >= 0:
+                return rows[:n], at, [nbr[nat[k] : nat[k + 1]].tolist() for k in range(nc)]
+            cap = -n
+
+    @staticmethod
+    def _plan_native(lib, COL, own, exchange, ng, empty_lo, noc_xy=()):
         """Window pieces, offsets and exchange entries from host/native_setup.cpp (same results as _plan_numpy)."""
         nslot, stride = COL.shape
         nc, NB = own.shape[:2]
@@ -170,11 +190,9 @@ class SparseRowPlan:
         )
         assert bad == 0, "column outside its window piece, or own rows split over pieces"
         pieces = tuple(x.reshape(nc, maxp) for x in (plo, pln, pl1)) + (npc,)
-        ents = np.zeros((0, 6), np.int64)
+        ents = (np.zeros((0, 5), np.int64), np.zeros(nc * NB + 1, np.int64), [[] for _ in range(nc)])
         if exchange:
-            n = lib.hpcg_plan_exchange(nc, NB, own_f, maxp, plo, pln, pl1, npc, None)
-            ents = np.zeros((n, 6), np.int64)
-            lib.hpcg_plan_exchange(nc, NB, own_f, maxp, plo, pln, pl1, npc, ents.ctypes.data)
+            ents = SparseRowPlan._exchange_native(lib, nc, NB, own_f, maxp, plo, pln, pl1, npc, noc_xy)
         return pieces, off, own_l1.reshape(nc, NB), ents
 
     @staticmethod

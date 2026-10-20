@@ -103,6 +103,8 @@ def _build():
     ]
     lib.hpcg_plan_exchange.restype = I64
     lib.hpcg_plan_exchange.argtypes = [I32, I32, i64p, I64, i64p, i64p, i64p, i64p, ctypes.c_void_p]
+    lib.hpcg_plan_exchange_grouped.restype = I64
+    lib.hpcg_plan_exchange_grouped.argtypes = [I32, I32, i64p, I64, i64p, i64p, i64p, i64p, i64p, I64] + [i64p] * 4
     return lib
 
 
