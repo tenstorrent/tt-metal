@@ -67,6 +67,12 @@ void bind_unified_routed_expert_ffn(nb::module_& mod) {
             l1_end (int, optional): L1 address the op's circular buffers must end below; 0 (default)
                 uses the whole L1. Pass the lowest address of buffers kept resident in L1
                 (MeshDevice.lowest_occupied_compute_l1_address()) to fit the blocking around them.
+            x_row_index (ttnn.Tensor, optional): UINT32 ROW_MAJOR row of one entry per buffer row. With it,
+                dispatched_buffer is the token-ordered ROW_MAJOR input and buffer row r reads its row
+                x_row_index[r] (no dispatch gather); the output has one row per entry.
+            output_row_major (bool, optional): ROW_MAJOR bf16 output instead of TILE bf8 (ROW_MAJOR
+                dispatched_buffer only). Rows outside every expert region stay uninitialized.
+            zero_output_row (int, optional): with output_row_major, one output row the op sets to zeros.
 
         Each per-expert FFN picks its chunk_M_tiles / per_core_M / num_chunks at
         RUNTIME from the device-resident token count, so there is no expected-token
@@ -92,7 +98,10 @@ void bind_unified_routed_expert_ffn(nb::module_& mod) {
         nb::arg("down_biases") = nb::none(),
         nb::arg("min_active_tokens") = 0,
         nb::arg("max_active_tokens") = std::numeric_limits<uint32_t>::max(),
-        nb::arg("l1_end") = 0);
+        nb::arg("l1_end") = 0,
+        nb::arg("x_row_index") = nb::none(),
+        nb::arg("output_row_major") = false,
+        nb::arg("zero_output_row") = std::numeric_limits<uint32_t>::max());
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn::detail
