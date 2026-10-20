@@ -21,8 +21,10 @@ Everything else as `ttnn.experimental.deepseek_prefill.unified_routed_expert_moe
 ## Consider it instead of
 - A per-expert loop of `ttnn.experimental.deepseek_prefill.extract` -> `ttnn.linear` x3 -> activation -> `insert`:
   one program, no per-expert dispatch, work bounded by the live counts on device (no host sync).
-- The stock `unified_routed_expert_moe` / `TtRoutedExpert` when you need GeGLU, a fidelity above LoFi or fp32 DEST for
-  Silu-type experts, bf16 activations (outlier channels), or DeepSeek-V4's routing-weight-before-quant expert.
+- The stock `unified_routed_expert_moe` / `TtRoutedExpert` when you need GeGLU or DeepSeek-V4's
+  routing-weight-before-quant expert (`routing_weights`, `fp8_act_quant`, `weights_transposed`).
+- Precision only (rule 7), not a reason to fork: a fidelity above LoFi or fp32 DEST for Silu-type experts, bf16
+  activations (outlier channels): `high_precision`, for per-step checks or a measured end-to-end gap.
 - For DeepSeek-V4.1 on 2x2 `ttnn.bringup.flat_routed_expert` measured faster (see Measured).
 
 ## Options
@@ -30,18 +32,22 @@ Positional: `dispatched_buffer` (ROW_MAJOR bf16, or TILE bfp8 written in place; 
 `expert_region_offsets`, `expert_token_counts` (UINT32, per global expert), `global_expert_idx_table` (UINT32, local
 slot -> global id), `gate_projs`, `up_projs`, `down_projs` (lists, one TILE tensor per local expert),
 `max_dispatched_tokens_per_expert` (int).
-Keyword:
+
+Realistic (use by default), keyword:
 - `compute_kernel_config=None`: fidelity / fp32 DEST; ignored (LoFi, bf16 DEST) unless GeluTanh or high_precision.
 - `activation=RoutedExpertActivation.Silu`: Silu, SwiGluOai (clamped), SituGlu (Blackhole only), ClampedSiluGlu
   (`silu(min(g,10)) * clamp(u,+-10)`, Blackhole only), GeluTanh (fork addition).
 - `gate_biases=None`, `up_biases=None`, `down_biases=None`: per-local-expert biases (gpt-oss), all three or none.
 - `min_active_tokens=0`, `max_active_tokens=UINT32_MAX`: experts whose count falls outside the band are skipped
   (hybrid split with moe_fused_swiglu).
-- `high_precision=False` (fork, opt-in): see What it does.
 - `routing_weights=None` (fork, opt-in): FLOAT32 ROW_MAJOR DRAM-interleaved [rows of buffer, C >= experts_per_chip];
   needs high_precision, fp32_dest_acc_en, a fused binary activation (SwiGluOai / SituGlu / ClampedSiluGlu), no biases.
-- `fp8_act_quant=False` (fork, opt-in): same requirements as routing_weights.
+  DeepSeek-V4.1's expert arithmetic (the weight before the quant).
+- `fp8_act_quant=False` (fork, opt-in): same requirements as routing_weights. DeepSeek's `act_quant(h, 32, 'ue8m0')`.
 - `weights_transposed=False` (fork, opt-in): gate/up [hidden, emb], down [emb, hidden].
+
+Precision only: per-step checks or a measured end-to-end gap (rule 7):
+- `high_precision=False` (fork, opt-in): see What it does. Required by `routing_weights` / `fp8_act_quant`.
 
 ## Measured
 Accuracy, fork model cases (`tests/cases.py`, x ~ N(0,1), weights ~ N(0, 1/fan_in), vs float32 reference):

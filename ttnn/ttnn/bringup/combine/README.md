@@ -22,6 +22,8 @@ Everything else as `ttnn.experimental.deepseek_prefill.combine`.
   routed rows back, bounded by the device-resident counts.
 
 ## Options
+Realistic (use by default): every option below.
+
 Positional: `dispatched_buffer` (1, 1, N, H) expert outputs (BFLOAT16, or BFLOAT8_B TILE as the model cases pass),
 `dispatched_metadata` (1, 1, N, 3) INT32, `expert_token_counts`, `expert_region_offsets` (1, 1, E) INT32 / UINT32.
 Keyword (required): `dispatch_group_size`, `experts_per_chip`, `num_experts_per_tok`, `seq_len_per_chip`.
@@ -35,6 +37,8 @@ Keyword (optional):
 - `use_l1_small_for_semaphores=False`: the GlobalSemaphores in L1_SMALL instead of L1.
 - `use_fp8_combine=False`: fp8_e4m3 output (Blackhole).
 No fork-only option: the fork change is automatic on a 1-device axis.
+
+Precision only: per-step checks or a measured end-to-end gap (rule 7): none.
 
 ## Measured
 - Accuracy: exact, including a BFLOAT8_B buffer (unpacked to bf16 losslessly) (`CHANGELOG.md`; every model case in

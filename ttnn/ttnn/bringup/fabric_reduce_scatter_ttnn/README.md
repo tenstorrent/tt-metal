@@ -19,13 +19,16 @@ New op (no TTNN source on this tree; from `ttnn/ttnn/operations/examples/fabric_
 ## Consider it instead of
 - `ttnn.reduce_scatter` / `ttnn.experimental.reduce_scatter_minimal_async` on DRAM TILE partials: faster at the
   measured model shapes (Measured), and a whole-mesh reduce in one call (`cluster_axis=None`) instead of axis 0 then 1.
-- `ttnn.all_gather` + `ttnn.add` (+ `ttnn.mesh_partition`) for exact fp32 partial sums: `exact_fp32_add=True` with
-  `dim=3` is bit-identical to that chain at TP 2 and one call.
 - `ttnn.all_reduce` when every chip only needs its slice; for a replicated sum follow with `ttnn.bringup.fabric_all_gather`.
+- Precision only (rule 7: cross-chip sums in bf16): `ttnn.all_gather` + `ttnn.add` (+ `ttnn.mesh_partition`) for exact
+  fp32 partial sums: `exact_fp32_add=True` with `dim=3` is bit-identical to that chain at TP 2 and one call; for
+  per-step checks or a measured end-to-end gap.
 
 ## Options
 `fabric_reduce_scatter(input_tensor, *, cluster_axis=0, topology=ttnn.Topology.Linear, num_links=1, scheme="ring",
 output=None, placement="auto", dim=2, exact_fp32_add=False, cache_descriptors=False)`
+
+Realistic (use by default):
 - `cluster_axis=0`: 0 / 1 a mesh axis; `None` the whole mesh (snake; ring where it closes, e.g. 2 x 4).
 - `topology=Linear`: or Ring (a group of 2 is a line).
 - `num_links=1`: links per hop.
@@ -33,13 +36,15 @@ output=None, placement="auto", dim=2, exact_fp32_add=False, cache_descriptors=Fa
 - `output=None`: preallocated `[1, 1, Sb, W]` (same dtype); else allocated.
 - `placement="auto"`: port cores by Ethernet-core probe; "simple" (forced under the emulator).
 - `dim=2` (opt-in fork addition, 3): column blocks; Wb a multiple of 32.
-- `exact_fp32_add=False` (opt-in fork addition): FLOAT32 partials only; UnpackToDestFp32 into fp32 DEST, SFPU add,
-  one IEEE fp32 rounding per add. Default adds on the FPU at fp32 DEST off.
 - `cache_descriptors=False` (opt-in fork addition): LRU (512) of mesh program descriptors keyed by group config, dim,
   exact_fp32_add, counters, dtype, page size, padded shapes and buffer addresses.
 - `prepare(mesh_device, *, cluster_axis=0, topology=Linear, num_links=1, scheme="ring", placement="auto")` (opt-in fork
   addition): builds and caches the plan and global semaphores (incl. the one-time `synchronize_device`); call at load
   time.
+
+Precision only: per-step checks or a measured end-to-end gap (rule 7):
+- `exact_fp32_add=False` (opt-in fork addition): FLOAT32 partials only; UnpackToDestFp32 into fp32 DEST, SFPU add,
+  one IEEE fp32 rounding per add. Default adds on the FPU at fp32 DEST off.
 
 ## Measured
 - DeepSeek-V4.1, 2x2 BH, [1024, 5120] fp32 over axis 1, `dim=3` + `exact_fp32_add`: device 0.150 ms at 4 links (0.235
