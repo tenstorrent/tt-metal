@@ -41,11 +41,12 @@ def _hf_moe(text_config, raw_mlp_prefixed):
     return hf, sd
 
 
-def realistic_mlp_input(snapshot, text_config, raw_layer, seq_len: int) -> torch.Tensor:
+def realistic_mlp_input(snapshot, text_config, raw_layer, seq_len: int, layer: int | None = None) -> torch.Tensor:
     """The MoE input distribution: post_attention_layernorm(ffn_hc(residual streams)). A random
     input makes every expert score ~sigmoid(0) and the top-8 degenerates into tie-breaks, so the
-    streams come from the host reference dump of this layer when present, else from the embedding
-    of random tokens (layer-0-like scale)."""
+    streams come from the host reference dump of this layer (``layer``, default the module's
+    ``LAYER``) when present, else from the embedding of random tokens (layer-0-like scale)."""
+    layer = LAYER if layer is None else layer
     from transformers.models.glm5_next.modeling_glm5_next import Glm5NextTextHyperConnection, Glm5NextTextRMSNorm
 
     hc = Glm5NextTextHyperConnection(text_config)
@@ -56,7 +57,7 @@ def realistic_mlp_input(snapshot, text_config, raw_layer, seq_len: int) -> torch
     norm.weight.data = raw_layer["post_attention_layernorm.weight"]
     dump = None
     for d in sorted(Path("bringup/references/glm53_flash").glob("T*")):
-        f = d / f"layer{LAYER}_prefill.pt"
+        f = d / f"layer{layer}_prefill.pt"
         if f.exists():
             dump = torch.load(f)
             break

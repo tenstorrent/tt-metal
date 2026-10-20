@@ -109,10 +109,13 @@ def load_config(snapshot: Path):
     return cfg, text
 
 
-def build_layer(snapshot: Path, text_config, layer_idx: int, headers=None):
+def build_layer(snapshot: Path, text_config, layer_idx: int, headers=None, raw=None):
+    """``raw``: the layer's ``load_layer_raw`` dict when the caller already holds it (a device
+    test loads it once for the HF and the TT side); loaded here otherwise."""
     from transformers.models.glm5_next.modeling_glm5_next import Glm5NextTextDecoderLayer
 
-    raw = load_layer_raw(snapshot, layer_idx, headers)
+    if raw is None:
+        raw = load_layer_raw(snapshot, layer_idx, headers)
     sd = convert_to_hf_module_keys(raw)
     with torch.device("meta"):
         layer = Glm5NextTextDecoderLayer(text_config, layer_idx)
@@ -145,11 +148,22 @@ def layer_stats(sd: dict[str, torch.Tensor]) -> dict[str, dict]:
 # --------------------------------------------------------------------------------------------
 @torch.no_grad()
 def run_layers(
-    snapshot: Path, layers: list[int], prompt_ids: torch.Tensor, num_decode: int, out_dir: Path, text_config
+    snapshot: Path,
+    layers: list[int],
+    prompt_ids: torch.Tensor,
+    num_decode: int,
+    out_dir: Path,
+    text_config,
+    *,
+    stream: bool = False,
 ):
     """Prefill ``prompt_ids`` then ``num_decode`` greedy-free decode steps (next token = a fixed id
     sequence, since no LM head is run) through the given consecutive layers, dumping per-layer
-    tensors. Layers must start at 0 so layer 0 can take the real embedding."""
+    tensors. Layers must start at 0 so layer 0 can take the real embedding.
+
+    ``stream=True`` runs layer by layer (prefill + all decode steps of layer i, then layer i+1) and
+    frees each module afterwards, so all 45 layers fit in host RAM (an MoE layer is ~15 GB bf16).
+    The per-layer cache entries are independent, so the dumps are identical to the stacked order."""
     from transformers import DynamicCache
 
     headers = shard_headers(snapshot)
@@ -162,6 +176,8 @@ def run_layers(
     x = embed[prompt_ids].unsqueeze(2).expand(-1, -1, hc, -1).contiguous()  # [B, T, 4, H] bf16
     out_dir.mkdir(parents=True, exist_ok=True)
     torch.save({"prompt_ids": prompt_ids, "x0": x}, out_dir / "prefill_input.pt")
+    if stream:
+        return _run_layers_streaming(snapshot, layers, x, T, num_decode, out_dir, text_config, headers, embed, cache)
     modules = {}
     index_ids: dict[int, list] = {}
     topk = None
@@ -204,6 +220,64 @@ def run_layers(
         print(f"decode step {step} (pos {T + step}) done", flush=True)
 
 
+@torch.no_grad()
+def _run_layers_streaming(snapshot, layers, x_pre, T, num_decode, out_dir, text_config, headers, embed, cache):
+    """Layer-by-layer order of ``run_layers`` (same token ids, same records), one module in memory."""
+    import gc
+
+    hc = text_config.hc_mult
+    B = x_pre.shape[0]
+    mask = torch.ones(B, T, dtype=torch.bool)
+    mask_d = torch.ones(B, 1, dtype=torch.bool)
+    gen = torch.Generator().manual_seed(0)
+    toks = [torch.randint(0, text_config.vocab_size, (B, 1), generator=gen) for _ in range(num_decode)]
+    x_dec = [embed[t].unsqueeze(2).expand(-1, -1, hc, -1).contiguous() for t in toks]
+    topk_pre = None
+    topk_dec = [None] * num_decode
+    for li in layers:
+        t0 = time.time()
+        layer, sd = build_layer(snapshot, text_config, li, headers)
+        (out_dir / f"layer{li}_weight_stats.json").write_text(json.dumps(layer_stats(sd), indent=1))
+        del sd
+        index_ids: list = []
+        idx_mod = getattr(layer.self_attn, "indexer", None)
+        if idx_mod is not None:
+            idx_mod.register_forward_hook(lambda m, i, o: index_ids.append(o.detach().clone()))
+        x_in = x_pre
+        x_pre, topk_pre = layer(
+            x_in, attention_mask=mask, past_key_values=cache, use_cache=True, prev_topk_indices=topk_pre
+        )
+        rec = {"x_in": x_in, "x_out": x_pre, "topk_indices": topk_pre}
+        if idx_mod is not None:
+            rec["index_ids"] = index_ids[-1]
+        rec.update(_cache_snapshot(cache, li))
+        torch.save(rec, out_dir / f"layer{li}_prefill.pt")
+        t1 = time.time()
+        for step in range(num_decode):
+            x_in = x_dec[step]
+            x_dec[step], topk_dec[step] = layer(
+                x_in, attention_mask=mask_d, past_key_values=cache, use_cache=True, prev_topk_indices=topk_dec[step]
+            )
+            rec = {
+                "token": toks[step],
+                "position": T + step,
+                "x_in": x_in,
+                "x_out": x_dec[step],
+                "topk_indices": topk_dec[step],
+            }
+            if idx_mod is not None:
+                rec["index_ids"] = index_ids[-1]
+            rec.update(_cache_snapshot(cache, li))
+            torch.save(rec, out_dir / f"layer{li}_decode{step}.pt")
+        print(
+            f"layer {li} prefill T={T}: {t1 - t0:.1f}s  out std {x_pre.float().std():.4f}; "
+            f"{num_decode} decode steps {time.time() - t1:.1f}s",
+            flush=True,
+        )
+        del layer, idx_mod, index_ids, rec
+        gc.collect()
+
+
 def _cache_snapshot(cache, li: int) -> dict:
     """Clone the per-layer cache state so later steps do not alias it."""
     out = {}
@@ -223,10 +297,28 @@ def _cache_snapshot(cache, li: int) -> dict:
     return out
 
 
+def parse_layers(spec: str) -> list[int]:
+    """``"0,1,2"`` or ``"0-44"`` (inclusive) -> sorted layer indices."""
+    out: list[int] = []
+    for part in spec.split(","):
+        part = part.strip()
+        if "-" in part:
+            a, b = part.split("-")
+            out.extend(range(int(a), int(b) + 1))
+        elif part:
+            out.append(int(part))
+    return sorted(set(out))
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--snapshot", type=Path, default=None)
-    ap.add_argument("--layers", type=str, default="0,1,2,3,4", help="consecutive layers starting at 0")
+    ap.add_argument("--layers", type=str, default="0,1,2,3,4", help="consecutive layers starting at 0 (a,b,c or a-b)")
+    ap.add_argument(
+        "--stream",
+        action="store_true",
+        help="layer-by-layer order, one module in memory at a time (needed for all 45 layers); same dumps",
+    )
     ap.add_argument("--prompt", type=str, default="The capital of France is Paris. The theory of general relativity")
     ap.add_argument("--seq-len", type=int, default=None, help="repeat/truncate the prompt to this many tokens")
     ap.add_argument("--num-decode", type=int, default=3)
@@ -254,11 +346,11 @@ def main():
         if args.seq_len is not None:
             reps = (args.seq_len + ids.shape[1] - 1) // ids.shape[1]
             ids = ids.repeat(1, reps)[:, : args.seq_len]
-    layers = [int(x) for x in args.layers.split(",")]
+    layers = parse_layers(args.layers)
     assert layers[0] == 0 and layers == list(range(layers[0], layers[-1] + 1)), "layers must be 0..N"
     print(f"snapshot {snapshot}\nprompt tokens {ids.shape}", flush=True)
     torch.manual_seed(0)
-    run_layers(snapshot, layers, ids, args.num_decode, args.out, text)
+    run_layers(snapshot, layers, ids, args.num_decode, args.out, text, stream=args.stream)
 
 
 if __name__ == "__main__":

@@ -28,6 +28,7 @@ from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState
 from models.demos.glm53_flash.tt.config import GLM53FlashConfig
 from models.demos.glm53_flash.tt.dsa import TtDSA, TtLatentCache
 from models.demos.glm53_flash.tt.kda import TtKDA
+from models.demos.glm53_flash.tt.mesh import GLMMesh, single_chip
 from models.demos.glm53_flash.tt.mhc import build_mhc
 from models.demos.glm53_flash.tt.mlp import TtClampedSwiGLU
 from models.demos.glm53_flash.tt.moe import TtMoE
@@ -55,10 +56,18 @@ class TtDecoderLayer(LightweightModule):
         *,
         weight_cache_path: Path | None = None,
         weight_dtype=ttnn.bfloat8_b,
+        expert_dtype=ttnn.bfloat8_b,
+        expert_down_dtype=ttnn.bfloat8_b,
+        mesh: GLMMesh | None = None,
     ):
         """``state_dict``: raw checkpoint tensors of ``model.language_model.layers.{i}.`` with the
-        prefix stripped and the fp8 groups dequantized (``reference/checkpoint.load_layer_raw``)."""
+        prefix stripped and the fp8 groups dequantized (``reference/checkpoint.load_layer_raw``).
+        ``weight_dtype`` covers the big non-expert matmuls (attention projections, dense MLP, shared
+        expert); ``expert_dtype`` / ``expert_down_dtype`` the routed experts' gate/up and down weights.
+        ``mesh`` (``tt/mesh.py``): the multi-chip placement; the hyper-connections and norms are
+        replicated, the sublayers are tensor-parallel over the columns."""
         self.device = device
+        self.mesh = mesh if mesh is not None else single_chip(device)
         self.cfg = cfg
         self.layer_idx = layer_idx
         self.is_kda = cfg.is_kda(layer_idx)
@@ -89,12 +98,21 @@ class TtDecoderLayer(LightweightModule):
                 layer_idx=layer_idx,
                 weight_cache_path=weight_cache_path,
                 weight_dtype=weight_dtype,
+                mesh=self.mesh,
             )
         else:
-            self.attn = TtDSA(device, cfg, attn_sd, layer_idx=layer_idx, weight_dtype=weight_dtype)
+            self.attn = TtDSA(device, cfg, attn_sd, layer_idx=layer_idx, weight_dtype=weight_dtype, mesh=self.mesh)
         mlp_sd = _strip(sd, "mlp.")
         if self.is_moe:
-            self.mlp = TtMoE(device, cfg, mlp_sd, weight_dtype=weight_dtype)
+            self.mlp = TtMoE(
+                device,
+                cfg,
+                mlp_sd,
+                weight_dtype=weight_dtype,
+                expert_dtype=expert_dtype,
+                expert_down_dtype=expert_down_dtype,
+                mesh=self.mesh,
+            )
         else:
             self.mlp = TtClampedSwiGLU(
                 device,
@@ -103,6 +121,7 @@ class TtDecoderLayer(LightweightModule):
                 mlp_sd["down_proj.weight"],
                 cfg.swiglu_limit,
                 weight_dtype=weight_dtype,
+                mesh=self.mesh,
             )
         self.norm_compute = ttnn.init_device_compute_kernel_config(
             device.arch(),
@@ -124,26 +143,33 @@ class TtDecoderLayer(LightweightModule):
         *,
         user: int,
         seq_len: int,
+        start: int = 0,
         actual_start: ttnn.Tensor | None = None,
         actual_end: ttnn.Tensor | None = None,
     ) -> tuple[ttnn.Tensor, LayerState]:
-        """streams [1,1,T_pad,4*hidden] fp32 for one user; T_pad % 32 == 0 and rows past
-        ``seq_len`` are padding. Returns the new streams and the layer state after the chunk."""
+        """streams [1,1,T_pad,4*hidden] fp32 for one user: row i is the token at absolute position
+        ``start + i`` (``start % 32 == 0``), T_pad % 32 == 0 and rows past ``seq_len`` are padding.
+        KDA: ``state.kda`` is the carry after position ``start`` (zeros for a new prompt); DSA: the
+        user's cache holds [0, start). Returns the new streams and the layer state after the chunk.
+        ``actual_start`` / ``actual_end`` override the KDA device scalars derived from ``start`` and
+        ``seq_len`` (global positions, as ttKDA defines them)."""
         T = streams.shape[-2]
         new_state = LayerState(kda=state.kda, cache=state.cache)
 
         def attention(h):
             h = self._norm(h, self.input_norm_w)  # [1,1,T,hidden] bf16
             if self.is_kda:
-                start = actual_start if actual_start is not None else self.attn.scalar(0)
+                start_t = actual_start if actual_start is not None else self.attn.scalar(start)
                 end = actual_end
-                if end is None and seq_len != T:
-                    end = self.attn.scalar(seq_len)
+                # the exclusive global valid end; a chunk at start > 0 always carries it so the kernels'
+                # chronology is the clipped interval [start, start + seq_len) (derive_interval)
+                if end is None and (seq_len != T or start):
+                    end = self.attn.scalar(start + seq_len)
                 y, new_state.kda = self.attn.prefill_forward(
-                    ttnn.reshape(h, [1, T, self.hidden]), state.kda, start, end
+                    ttnn.reshape(h, [1, T, self.hidden]), state.kda, start_t, end
                 )
                 return ttnn.reshape(y, [1, 1, T, self.hidden])
-            return self.attn.prefill_forward(h, state.cache, user, seq_len)
+            return self.attn.prefill_forward(h, state.cache, user, seq_len, start=start)
 
         streams = self.attn_hc.forward(streams, attention, sublayer_dtype=ttnn.bfloat16)
 

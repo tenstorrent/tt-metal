@@ -1,0 +1,189 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+"""Mesh layout, weight placement and collectives for the multi-chip GLM-5.3-Flash decoder.
+
+Axis convention (design section 4): mesh columns (axis 1) are the tensor-parallel group of a
+row (heads / intermediate / vocab split ``cols``-way), mesh rows (axis 0) are the data-parallel
+groups for attention and the expert-TP axis of the routed MoE. A ``(1, 1)`` mesh degrades every
+collective to the identity so the single-chip stage-1 modules keep running unchanged.
+
+Placement helpers return ``ttnn`` mesh mappers for ``ttnn.from_torch``; ``upload`` wraps the
+common case. Collectives wrap the generic ``ttnn.all_reduce`` / ``all_gather`` /
+``reduce_scatter`` composites with ``cluster_axis`` (the ones gpt_oss uses on the Blackhole
+Galaxy); every collective must run once eagerly before a trace is captured.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+import torch
+
+import ttnn
+
+TP_AXIS = 1  # columns
+DP_AXIS = 0  # rows (and expert-TP)
+
+
+def mesh_device_params(rows: int, cols: int, **overrides) -> dict:
+    """``device_params`` for the pytest ``mesh_device`` fixture: fabric on for any multi-chip
+    mesh (2D torus on the full Galaxy, plain 2D for a block), relaxed init, the architecture's
+    maximum fabric payload, an L1-small region for the composite collectives."""
+    params: dict = {"l1_small_size": 32768}
+    if rows * cols > 1:
+        from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config, get_max_payload_size
+
+        params["fabric_config"] = (
+            ttnn.FabricConfig.FABRIC_2D_TORUS_XY if (rows, cols) == (8, 4) else ttnn.FabricConfig.FABRIC_2D
+        )
+        params["reliability_mode"] = ttnn.FabricReliabilityMode.RELAXED_INIT
+        params["fabric_router_config"] = create_fabric_router_config(get_max_payload_size())
+    params.update(overrides)
+    return params
+
+
+@dataclass(frozen=True)
+class GLMMesh:
+    """A mesh device plus the axis convention. ``tp`` = columns, ``dp`` = rows."""
+
+    device: ttnn.MeshDevice
+    rows: int
+    cols: int
+    topology: ttnn.Topology | None = None  # None = ttnn default for the fabric
+
+    @classmethod
+    def from_device(cls, mesh_device, topology=None) -> "GLMMesh":
+        shape = list(mesh_device.shape)
+        return cls(mesh_device, int(shape[0]), int(shape[1]), topology)
+
+    @property
+    def tp(self) -> int:
+        return self.cols
+
+    @property
+    def dp(self) -> int:
+        return self.rows
+
+    @property
+    def is_single(self) -> bool:
+        return self.rows == 1 and self.cols == 1
+
+    @property
+    def mesh_shape(self) -> tuple[int, int]:
+        return (self.rows, self.cols)
+
+    # ------------------------------------------------------------------ placement
+    def replicate(self):
+        return ttnn.ReplicateTensorToMesh(self.device)
+
+    def shard_cols(self, dim: int):
+        """Split ``dim`` over the TP group (columns), replicate over rows."""
+        return ttnn.ShardTensor2dMesh(self.device, mesh_shape=self.mesh_shape, dims=(None, dim))
+
+    def shard_rows(self, dim: int):
+        """Split ``dim`` over the rows, replicate over columns."""
+        return ttnn.ShardTensor2dMesh(self.device, mesh_shape=self.mesh_shape, dims=(dim, None))
+
+    def shard_2d(self, row_dim: int | None, col_dim: int | None):
+        return ttnn.ShardTensor2dMesh(self.device, mesh_shape=self.mesh_shape, dims=(row_dim, col_dim))
+
+    def upload(
+        self,
+        t: torch.Tensor,
+        dtype,
+        *,
+        cols: int | None = None,
+        rows: int | None = None,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    ) -> ttnn.Tensor:
+        """``from_torch`` with the placement ``(rows, cols)`` = host dims split over the mesh
+        rows / columns (``None`` = replicated on that axis)."""
+        if cols is not None:
+            assert t.shape[cols] % self.cols == 0, (tuple(t.shape), cols, self.cols)
+        if rows is not None:
+            assert t.shape[rows] % self.rows == 0, (tuple(t.shape), rows, self.rows)
+        return ttnn.from_torch(
+            t.contiguous(),
+            dtype=dtype,
+            layout=layout,
+            device=self.device,
+            memory_config=memory_config,
+            mesh_mapper=self.shard_2d(rows, cols),
+        )
+
+    # ------------------------------------------------------------------ readback
+    def device_tensors(self, x: ttnn.Tensor) -> list[ttnn.Tensor]:
+        """Per-chip tensors in mesh (row-major) order."""
+        return list(ttnn.get_device_tensors(x))
+
+    def to_host(self, x: ttnn.Tensor, *, rows: int | None = None, cols: int | None = None) -> torch.Tensor:
+        """Host tensor: chip shards concatenated on ``rows`` / ``cols`` (``None`` = take the first
+        replica on that axis). Equal replicas are the caller's assertion, not checked here."""
+        shards = [ttnn.to_torch(d) for d in self.device_tensors(x)]
+        grid = [[shards[r * self.cols + c] for c in range(self.cols)] for r in range(self.rows)]
+        row_parts = []
+        for r in range(self.rows):
+            row_parts.append(torch.cat(grid[r], dim=cols) if cols is not None else grid[r][0])
+        return torch.cat(row_parts, dim=rows) if rows is not None else row_parts[0]
+
+    # ------------------------------------------------------------------ collectives
+    def _ccl_kwargs(self, num_links=None):
+        kw = {}
+        if self.topology is not None:
+            kw["topology"] = self.topology
+        if num_links is not None:
+            kw["num_links"] = num_links
+        return kw
+
+    def all_reduce_cols(self, x: ttnn.Tensor, *, memory_config=None, num_links=None) -> ttnn.Tensor:
+        """Sum the TP partials of a row; result replicated over the row's columns."""
+        if self.cols == 1:
+            return x
+        return ttnn.all_reduce(
+            x, cluster_axis=TP_AXIS, memory_config=memory_config or x.memory_config(), **self._ccl_kwargs(num_links)
+        )
+
+    def all_gather_cols(self, x: ttnn.Tensor, dim: int, *, memory_config=None) -> ttnn.Tensor:
+        if self.cols == 1:
+            return x
+        return ttnn.all_gather(x, dim=dim, cluster_axis=TP_AXIS, memory_config=memory_config or x.memory_config())
+
+    def all_gather_rows(self, x: ttnn.Tensor, dim: int, *, memory_config=None) -> ttnn.Tensor:
+        """Concatenate the rows' shards along ``dim`` (rows ordered by mesh row)."""
+        if self.rows == 1:
+            return x
+        return ttnn.all_gather(x, dim=dim, cluster_axis=DP_AXIS, memory_config=memory_config or x.memory_config())
+
+    def reduce_scatter_rows(self, x: ttnn.Tensor, dim: int, *, memory_config=None, num_links=None) -> ttnn.Tensor:
+        """Sum over the rows and hand row ``r`` the ``r``-th slice of ``dim``."""
+        if self.rows == 1:
+            return x
+        return ttnn.reduce_scatter(
+            x,
+            dim=dim,
+            cluster_axis=DP_AXIS,
+            memory_config=memory_config or x.memory_config(),
+            **self._ccl_kwargs(num_links),
+        )
+
+    def all_reduce_rows(self, x: ttnn.Tensor, *, memory_config=None, num_links=None) -> ttnn.Tensor:
+        if self.rows == 1:
+            return x
+        return ttnn.all_reduce(
+            x, cluster_axis=DP_AXIS, memory_config=memory_config or x.memory_config(), **self._ccl_kwargs(num_links)
+        )
+
+
+def single_chip(device) -> GLMMesh:
+    """The stage-1 layout: everything local, collectives are identities."""
+    return GLMMesh(device, 1, 1)
+
+
+def interleave_blocks(parts: list[torch.Tensor], n: int, dim: int = -1) -> torch.Tensor:
+    """Concatenate ``parts`` so that an ``n``-way split of ``dim`` hands shard ``i`` the ``i``-th
+    ``n``-th of every part, in order: ``[p0_0 | p1_0 | ... | p0_1 | p1_1 | ...]``. Used for the
+    fused ``[gate | up]`` and ``[q | k | v]`` projections so each TP chip keeps a complete
+    ``gate_i | up_i`` (``q_i | k_i | v_i``) block of its own slice."""
+    chunks = [p.chunk(n, dim=dim) for p in parts]
+    return torch.cat([c for i in range(n) for c in (cc[i] for cc in chunks)], dim=dim).contiguous()

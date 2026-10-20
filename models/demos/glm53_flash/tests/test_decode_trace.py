@@ -2,13 +2,13 @@
 # SPDX-License-Identifier: Apache-2.0
 """Traced decode (capture once, replay per token) and multi-user decode vs the HF reference.
 
-Capture semantics: the first decode step runs eagerly (program compile) and is also captured;
-the capture step itself consumes the SAME inputs, so the state advances twice for that token.
-To keep the comparison exact the test captures on a throw-away user (user 1) ... no: simpler,
-it captures on the real inputs of decode step 0, so after capture the state has seen token 0
-twice. Instead this test prefills, captures the trace on a dummy token at position S (advancing
-the state by two dummy tokens), then re-prefills to reset the state and replays the real steps.
-That exercises exactly what serving does: capture once, then only replays.
+Capture semantics: ``capture_decode_trace`` runs one eager warm-up step (program compile) and then
+captures the next step on the SAME persistent inputs, so the device state advances twice for that
+token. The test therefore prefills, captures on a throw-away token at position S, re-prefills to
+reset the state, and replays the captured graph for the 4 reference steps while updating only the
+persistent input tensors: exactly what serving does (capture once, then replays only). For the DSA
+layer the pooled-key index maintained INSIDE the captured graph (complete pools + the raw ring rows)
+is checked against a host recomputation over the prefill and the 4 replayed tokens.
 
     TT_VISIBLE_DEVICES=0 pytest models/demos/glm53_flash/tests/test_decode_trace.py -s
 """
@@ -24,7 +24,7 @@ from loguru import logger
 import ttnn
 from models.demos.glm53_flash.reference.checkpoint import default_snapshot_dir, load_layer_raw, shard_headers
 from models.demos.glm53_flash.reference.hf_layer_reference import build_layer, load_config
-from models.demos.glm53_flash.tests.utils import pcc
+from models.demos.glm53_flash.tests.utils import attention_input, hf_index_stems, hf_pool, pcc
 from models.demos.glm53_flash.tt.config import GLM53FlashConfig
 from models.demos.glm53_flash.tt.functional_decoder import (
     FunctionalDecoder,
@@ -73,6 +73,7 @@ def test_traced_decode_vs_dump(mesh_device, layer_idx):
     assert p > 0.995
 
     # 3) replay the captured decode for the 4 reference steps, updating only the inputs
+    decode_inputs = []
     for step in range(4):
         d = torch.load(DUMP / f"layer{layer_idx}_decode{step}.pt")
         ttnn.copy_host_to_device_tensor(
@@ -83,7 +84,39 @@ def test_traced_decode_vs_dump(mesh_device, layer_idx):
         p_d = pcc(d["x_out"], device_streams_to_host(out_dev, 4, 1))
         logger.info(f"  traced decode step {step} (pos {d['position']}): pcc {p_d:.6f}")
         assert p_d > 0.995
+        decode_inputs.append(d["x_in"])
     ttnn.release_trace(mesh_device, trace_id)
+
+    if dec.cache is not None:
+        _check_index_after_replays(dec, raw, cfg, x_in, decode_inputs)
+
+
+def _check_index_after_replays(dec: FunctionalDecoder, raw, cfg, x_in: torch.Tensor, decode_inputs: list):
+    """The pooled-key index is written INSIDE the captured decode graph (ring rows + pool a // 4 of
+    every replay). Re-derive every complete pool and the current ring rows on the host from the HF
+    layer inputs of the prefill + the replayed tokens and compare with the device index cache."""
+    P = cfg.index_kpool
+    x_all = torch.cat([attention_input(raw, cfg, x) for x in [x_in] + decode_inputs], dim=0)  # [N, 4096]
+    N = x_all.shape[0]
+    k, g, ape = hf_index_stems(raw, cfg, x_all)
+    pools_ref = hf_pool(k, g, ape, P)  # [N // P, D]
+    n_complete = pools_ref.shape[0]
+    cache_rows = ttnn.to_torch(dec.cache.index.pools_batched())[0, 0, :n_complete].float()
+    p_pool = pcc(pools_ref, cache_rows)
+    worst = min(pcc(pools_ref[i], cache_rows[i]) for i in range(n_complete))
+    # the ring rows (row j = the latest position p with p % P == j); the last P positions were all
+    # written by the replays, so they define every row
+    ring_k, ring_g = (ttnn.to_torch(t)[0, 0].float() for t in dec.cache.index.rings())  # [P, D] each (user 0)
+    latest = {p % P: p for p in range(N - P, N)}
+    k_ref = torch.stack([k[latest[j]] for j in range(P)])
+    g_ref = torch.stack([g[latest[j]] for j in range(P)])
+    p_ring_k, p_ring_g = pcc(k_ref, ring_k), pcc(g_ref, ring_g)
+    logger.info(
+        f"  index after the replays: {n_complete} complete pools vs host pcc {p_pool:.6f} (worst row {worst:.5f}); "
+        f"ring rows (positions {sorted(latest.values())}) k {p_ring_k:.6f} gate {p_ring_g:.6f}"
+    )
+    assert p_pool > 0.999 and worst > 0.99, "pooled-key cache written by the traced decode drifted from HF"
+    assert p_ring_k > 0.999 and p_ring_g > 0.999, "ring rows written by the traced decode drifted from HF"
 
 
 @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
