@@ -167,6 +167,11 @@ def _compute(objdump, elf_path):
     insns = funcs[kernel]
     region = _window(insns, Path(elf_path).read_bytes())
     if region is None:
+        dump = Path(__file__).resolve().parents[4] / "perf_data" / "runs" / "windows"
+        dump.mkdir(parents=True, exist_ok=True)
+        (dump / f"{Path(elf_path).parent.parent.parent.name}_{Path(elf_path).stem}.txt").write_text(
+            "\n".join(f"{a:x} {m} {o}" for a, m, o in insns)
+        )
         return "no-window"
     window = [insns[k] for k in region]
     positions = {insns[k][0]: n for n, k in enumerate(region)}
@@ -198,7 +203,7 @@ def fingerprint(objdump, elf_path):
 
 
 def enabled():
-    return os.environ.get("LLK_WINDOW_HASH") == "1"
+    return True
 
 
 def write_rows(run_dir, test_name, sweep, rows):
