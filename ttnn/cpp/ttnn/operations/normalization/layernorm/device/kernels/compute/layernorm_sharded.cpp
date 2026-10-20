@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#define ELTWISE_BINARY_BCAST_BLOCK_UNPACK true
 #define BCAST_LLKOP EltwiseBinaryType::ELWMUL
 #define BCAST_DIM BroadcastType::COL
 
@@ -19,6 +20,22 @@
 #endif
 
 // SPLIT REDUCE across Cores
+#if defined(ARCH_BLACKHOLE)
+// Above LoFi the block form reads equal or slower, so only LoFi unpacks the subblock with one call.
+template <EltwiseBinaryType op, BroadcastType dim>
+ALWI void bcast_subblock(
+    uint32_t icb0, uint32_t icb1, uint32_t start_itile0, uint32_t start_itile1, uint32_t start_idst, uint32_t ntiles) {
+    if constexpr (MATH_FIDELITY == MathFidelity::LoFi) {
+        any_tiles_bcast_block<op, dim>(icb0, icb1, start_itile0, start_itile1, start_idst, ntiles);
+    } else {
+        for (uint32_t i = 0; i < ntiles; ++i) {
+            any_tiles_bcast<op, dim>(
+                icb0, icb1, start_itile0 + i, dim == BroadcastType::ROW ? start_itile1 + i : start_itile1, start_idst + i);
+        }
+    }
+}
+#endif
+
 void kernel_main() {
     // An idle core sits in a hole of a non-rectangular shard grid. It carries this program's dataflow
     // buffers so the reduction's multicast has somewhere to land, and does no work of its own, so its
@@ -356,10 +373,15 @@ void kernel_main() {
         dfb_ex_global.wait_front(1);
         for (uint32_t j = 0; j < num_subblocks_w; j++) {
             tile_regs_acquire();
+#if defined(ARCH_BLACKHOLE)
+            bcast_subblock<EltwiseBinaryType::ELWSUB, BroadcastType::COL>(
+                dfb_in_id, dfb_ex_global_id, index_subblock_w_offset + index_h_offset, 0, 0, subblock_w);
+#else
             for (uint32_t w = 0; w < subblock_w; w++) {
                 index = w + index_subblock_w_offset + index_h_offset;
                 sub_tiles_bcast_cols(dfb_in_id, dfb_ex_global_id, index, 0, w);
             }
+#endif
             tile_regs_commit();
             tile_regs_wait();
 #ifdef ARCH_BLACKHOLE
@@ -569,6 +591,10 @@ void kernel_main() {
         dfb_ex_global.wait_front(1);
         for (uint32_t j = 0; j < num_subblocks_w; j++) {
             tile_regs_acquire();
+#if defined(ARCH_BLACKHOLE) && !defined(SFPU_OP_INIT_ACTIVATION)
+            bcast_subblock<EltwiseBinaryType::ELWMUL, BroadcastType::COL>(
+                dfb_xmm_id, dfb_ex_global_id, index_subblock_w_offset + index_h_offset, 0, 0, subblock_w);
+#else
             for (uint32_t w = 0; w < subblock_w; w++) {
                 index = w + index_subblock_w_offset + index_h_offset;
                 mul_tiles_bcast_cols(dfb_xmm_id, dfb_ex_global_id, index, 0, w);
@@ -583,6 +609,7 @@ void kernel_main() {
                 }
 #endif
             }
+#endif
             tile_regs_commit();
 
             tile_regs_wait();
@@ -632,6 +659,10 @@ void kernel_main() {
             index_subblock_w_offset = 0;
             for (uint32_t j = 0; j < num_subblocks_w; j++) {
                 tile_regs_acquire();
+#if defined(ARCH_BLACKHOLE) && !defined(SFPU_OP_INIT_ACTIVATION)
+                bcast_subblock<EltwiseBinaryType::ELWMUL, BroadcastType::ROW>(
+                    dfb_im_id, dfb_gamma_id, index_subblock_w_offset + index_h_offset, index_subblock_w_offset, 0, subblock_w);
+#else
                 for (uint32_t w = 0; w < subblock_w; w++) {
                     index = w + index_subblock_w_offset;
                     mul_tiles_bcast_rows(dfb_im_id, dfb_gamma_id, index + index_h_offset, index, w);
@@ -645,6 +676,7 @@ void kernel_main() {
                     }
 #endif
                 }
+#endif
                 tile_regs_commit();
                 tile_regs_wait();
 #ifdef ARCH_BLACKHOLE
@@ -685,6 +717,10 @@ void kernel_main() {
             index_subblock_w_offset = 0;
             for (uint32_t j = 0; j < num_subblocks_w; j++) {
                 tile_regs_acquire();
+#if defined(ARCH_BLACKHOLE) && !defined(SFPU_OP_INIT_ACTIVATION)
+                bcast_subblock<EltwiseBinaryType::ELWADD, BroadcastType::ROW>(
+                    dfb_fusion_id, dfb_beta_id, index_subblock_w_offset + index_h_offset, index_subblock_w_offset, 0, subblock_w);
+#else
                 for (uint32_t w = 0; w < subblock_w; w++) {
                     index = w + index_subblock_w_offset;
                     add_tiles_bcast_rows(dfb_fusion_id, dfb_beta_id, index + index_h_offset, index, w);
@@ -693,6 +729,7 @@ void kernel_main() {
                     SFPU_OP_FUNC_ACTIVATION
 #endif
                 }
+#endif
                 tile_regs_commit();
                 tile_regs_wait();
 #ifdef ARCH_BLACKHOLE
