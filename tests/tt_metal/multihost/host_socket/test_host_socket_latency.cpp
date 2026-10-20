@@ -26,6 +26,10 @@ TEST(HostSocketLatencyTest, RoundTrip) {
     ASSERT_EQ(*context->size(), 2) << "needs exactly 2 ranks";
 
     Params params = params_from_env();
+    // Under HOST_DMA each receiver socket keeps an H2D ring plus its D2D-shaped data buffer in L1;
+    // this rank receives on one socket and the peer on the other, but both rings are sized
+    // identically, so budget for the larger side: two rings' worth per socket, plus a payload page each.
+    fit_fifo_to_l1(params, 4, 2, false);
     const uint32_t page_size = params.page_size;
     const uint32_t fifo_size = params.fifo_size();
     const uint32_t iterations = static_cast<uint32_t>(env_or("TT_HOST_SOCKET_LAT_ITERS", 200));
@@ -41,6 +45,7 @@ TEST(HostSocketLatencyTest, RoundTrip) {
     SocketMemoryConfig mem_config(BufferType::L1, fifo_size);
 
     HostMeshSocket::TransportConfig transport;
+    transport.h2d_mode = env_h2d_mode();
     transport.page_size = page_size;
     // A latency probe must not batch.
     transport.max_batch_pages = 1;
@@ -71,7 +76,7 @@ TEST(HostSocketLatencyTest, RoundTrip) {
                     static_cast<uint32_t>(payload->address()),
                     static_cast<uint32_t>(measurement->address()),
                     iterations,
-                    kModeHostTransport,
+                    env_host_leg_kernel_mode(),
                 }});
     } else {
         CreateKernel(
@@ -87,7 +92,7 @@ TEST(HostSocketLatencyTest, RoundTrip) {
                     page_size,
                     static_cast<uint32_t>(payload->address()),
                     iterations,
-                    kModeHostTransport,
+                    env_host_leg_kernel_mode(),
                 }});
     }
 

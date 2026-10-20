@@ -94,9 +94,11 @@ TEST(HostSocketLatencyTest, BurstToLastCredit) {
     SocketMemoryConfig rev_mem(BufferType::L1, ack_fifo_size);
 
     HostMeshSocket::TransportConfig fwd_transport;
+    fwd_transport.h2d_mode = env_h2d_mode();
     fwd_transport.page_size = page_size;
     fwd_transport.max_batch_pages = static_cast<uint32_t>(env_or("TT_HOST_SOCKET_BATCH_PAGES", 8));
     HostMeshSocket::TransportConfig rev_transport;
+    rev_transport.h2d_mode = env_h2d_mode();
     rev_transport.page_size = ack_page_size;
     rev_transport.max_batch_pages = 1;
 
@@ -136,7 +138,7 @@ TEST(HostSocketLatencyTest, BurstToLastCredit) {
                     static_cast<uint32_t>(measurement->address()),
                     iterations,
                     num_bursts,
-                    kModeHostTransport,
+                    env_host_leg_kernel_mode(),
                 }});
     } else {
         kernel = CreateKernel(
@@ -155,7 +157,7 @@ TEST(HostSocketLatencyTest, BurstToLastCredit) {
                     static_cast<uint32_t>(ack->address()),
                     iterations,
                     num_bursts,
-                    kModeHostTransport,
+                    env_host_leg_kernel_mode(),
                 }});
     }
     SetRuntimeArgs(program, kernel, core, bursts);
@@ -198,8 +200,8 @@ TEST(HostSocketLatencyTest, BurstToLastCredit) {
         const uint32_t burst = bursts[b];
         const double burst_bytes = static_cast<double>(page_size) * burst;
         GTEST_LOG_(INFO) << "  burst " << burst << " (" << burst_bytes / 1024.0 << " KiB):"
-                         << " local p50 " << local.p50 << " p99 " << local.p99
-                         << " | remote p50 " << remote.p50 << " p99 " << remote.p99 << " us"
+                         << " local p50 " << local.p50 << " p99 " << local.p99 << " | remote p50 " << remote.p50
+                         << " p99 " << remote.p99 << " us"
                          << " | per msg " << remote.p50 / burst << " us"
                          << " | " << burst_bytes / remote.p50 / 1e3 << " GB/s";
         record_burst(page_size, burst, ring_pages, local, remote);

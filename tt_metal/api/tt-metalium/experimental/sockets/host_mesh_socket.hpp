@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <tt-metalium/experimental/sockets/h2d_socket.hpp>
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
 
 #include <cstdint>
@@ -47,6 +48,10 @@ public:
         uint32_t max_batch_pages = 8;
         /// False: no relay thread, caller must call poll().
         bool own_relay_thread = true;
+        /// Receiver leg. DEVICE_PULL: the receiver kernel reads pages from the pinned host ring over
+        /// PCIe. HOST_DMA: the relay DMAs each arrived page into the receiver's L1 ring and the
+        /// kernel reads it locally (same kernel path as a D2D socket).
+        H2DMode h2d_mode = H2DMode::DEVICE_PULL;
     };
 
     HostMeshSocket(

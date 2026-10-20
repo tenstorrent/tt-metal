@@ -21,6 +21,12 @@ constexpr multihost::Rank kReceiverRank{1};
 // SOCKET_MODE values understood by host_socket_{sender,receiver}.cpp.
 constexpr uint32_t kModeHostTransport = 1;
 constexpr uint32_t kModeD2D = 2;
+constexpr uint32_t kModeHostDma = 3;  // H2D leg is HOST_DMA: rx from L1, tx over D2H
+
+// TT_HOST_SOCKET_H2D_MODE: "pull" (default, DEVICE_PULL) or "dma" (HOST_DMA).
+tt::tt_metal::distributed::H2DMode env_h2d_mode();
+// Kernel socket_mode matching env_h2d_mode(): kModeHostTransport or kModeHostDma.
+uint32_t env_host_leg_kernel_mode();
 
 inline const char* kSenderKernel = "tests/tt_metal/tt_metal/test_kernels/misc/socket/host_socket_sender.cpp";
 inline const char* kReceiverKernel = "tests/tt_metal/tt_metal/test_kernels/misc/socket/host_socket_receiver.cpp";
@@ -82,6 +88,12 @@ struct Params {
 
 /// Reads overrides from the environment so a launcher can sweep without a rebuild.
 Params params_from_env(Params defaults = {});
+
+/// HOST_DMA keeps every socket's ring in receiver L1, and the lockstep allocator charges each ring
+/// to every bank, so `rings` rings plus `landing_pages` pages (or, when `landing_is_ring`, one more
+/// ring's worth) must fit in TT_HOST_SOCKET_L1_RING_BUDGET bytes (default 1.1 MB). Shrinks
+/// params.fifo_pages when they do not; a no-op for DEVICE_PULL. Both ranks must call it the same way.
+void fit_fifo_to_l1(Params& params, uint32_t rings, uint32_t landing_pages, bool landing_is_ring);
 
 /// Environment lookups with a fallback, for knobs that are not part of Params.
 uint64_t env_or(const char* name, uint64_t fallback);

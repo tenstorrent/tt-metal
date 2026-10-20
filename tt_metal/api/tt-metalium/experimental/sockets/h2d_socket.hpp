@@ -324,6 +324,7 @@ private:
     // HOST_DMA owner only: binds the pinned staging ring's IOVA and the receiver core to the
     // UMD zero-copy DMA write. Left unset (MMIO fallback) when the device has no DMA engine.
     void init_dma_writer(const std::shared_ptr<MeshDevice>& mesh_device);
+    void dma_debug_check(uint32_t ring_offset, uint32_t num_bytes, uint64_t device_addr);
     // Moves one write's payload to the receiver by the mode's transport.
     void write_payload(void* data, uint32_t num_bytes, uint64_t device_addr);
 
@@ -365,6 +366,14 @@ private:
     std::function<void(void*, uint32_t, uint64_t)> pcie_writer = nullptr;
     // HOST_DMA: (ring_offset, num_bytes, device_addr) -> zero-copy DMA from the staging ring.
     std::function<void(uint32_t, uint32_t, uint64_t)> dma_writer = nullptr;
+    // HOST_DMA with TT_H2D_DMA_DOORBELL=dma: the doorbell (bytes_sent) travels through the DMA engine
+    // too, from a pinned word right after bytes_acked, so it queues behind the payload on the same
+    // TLB, NOC and VC. Off by default: measured on Blackhole, a DMA write has landed in L1 by the
+    // time the engine reports completion, and the extra DMA costs ~5 us per commit.
+    bool dma_doorbell_ = false;
+    // HOST_DMA debug (TT_H2D_DMA_DEBUG): read each committed span back and report when it landed.
+    bool dma_debug_ = false;
+    uint64_t dma_commits_ = 0;
     H2DMode h2d_mode_ = H2DMode::HOST_PUSH;
     std::unique_ptr<NamedShm> shm_;
     std::unique_ptr<PCIeCoreWriter> pcie_writer_instance_;

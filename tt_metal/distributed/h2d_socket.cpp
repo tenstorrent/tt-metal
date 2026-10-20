@@ -28,8 +28,11 @@
 #include <tt-umd/tt_device/tt_device.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <algorithm>
+#include <array>
+#include <chrono>
 #include <cstdlib>
 #include <cstring>
+#include <string_view>
 #include <sys/mman.h>
 #include <unistd.h>
 
@@ -116,7 +119,8 @@ H2DSocket::PinnedBufferInfo H2DSocket::init_host_data_buffer(
     const MeshCoordinateRangeSet& device_range,
     uint32_t pcie_alignment,
     const std::string& shm_name) {
-    uint32_t host_buffer_size_bytes = fifo_size_ + sizeof(uint32_t);
+    // [ring | bytes_acked] and, for HOST_DMA, one more word the doorbell is staged in.
+    uint32_t host_buffer_size_bytes = fifo_size_ + sizeof(uint32_t) * (h2d_mode_ == H2DMode::HOST_DMA ? 2u : 1u);
     uint32_t host_buffer_size_words = host_buffer_size_bytes / sizeof(uint32_t);
     size_t page_size = sysconf(_SC_PAGESIZE);
     // Reserve room for HDSocketConnectorState immediately after the pinned region,
@@ -432,6 +436,130 @@ void H2DSocket::init_dma_writer(const std::shared_ptr<MeshDevice>& mesh_device) 
                      uint32_t ring_offset, uint32_t num_bytes, uint64_t device_addr) {
         tt_device->dma_write_zero_copy(staging_iova + ring_offset, device_addr, num_bytes, translated_core);
     };
+    if (const char* v = std::getenv("TT_H2D_DMA_DOORBELL"); v != nullptr && *v != '\0') {
+        dma_doorbell_ = std::string_view(v) == "dma";
+    }
+    if (const char* v = std::getenv("TT_H2D_DMA_DEBUG"); v != nullptr && *v != '\0' && *v != '0') {
+        dma_debug_ = true;
+    }
+    log_info(
+        LogMetal,
+        "H2DSocket HOST_DMA: device {} core ({},{}) ring L1 0x{:x} ({} B) staging iova 0x{:x} doorbell={} debug={}",
+        device_id,
+        translated_core.x,
+        translated_core.y,
+        aligned_data_buf_start_,
+        fifo_size_,
+        staging_iova,
+        dma_doorbell_ ? "dma" : "mmio",
+        dma_debug_);
+
+    // Prove the engine can actually read this ring and reach this core before trusting it with
+    // traffic. On Blackhole Galaxy hosts the IOMMU hands some devices IOVAs above 2^32 (seen:
+    // 0x3ffffff7fb00000) and the PCIe DMA engine then delivers nothing to L1, while NOC-initiated
+    // reads of the same ring work. Without this check the receiver reads stale L1 as payload.
+    if (receiver_core_window_ == nullptr) {
+        return;
+    }
+    constexpr uint32_t kProbeBytes = 256;
+    std::array<uint32_t, kProbeBytes / sizeof(uint32_t)> pattern{};
+    for (uint32_t i = 0; i < pattern.size(); i++) {
+        pattern[i] = 0xA5000000u ^ (i * 0x01010101u) ^ static_cast<uint32_t>(staging_iova);
+    }
+    std::memcpy(host_buffer_.get(), pattern.data(), kProbeBytes);
+    tt_driver_atomics::sfence();
+    std::array<uint32_t, pattern.size()> readback{};
+    readback.fill(~pattern[0]);
+    receiver_core_window_->write_block(
+        static_cast<uint64_t>(aligned_data_buf_start_) + dram_l1_noc_offset_, readback.data(), kProbeBytes);
+    bool dma_ok = true;
+    try {
+        dma_writer(0, kProbeBytes, aligned_data_buf_start_);
+        receiver_core_window_->read_block(
+            static_cast<uint64_t>(aligned_data_buf_start_) + dram_l1_noc_offset_, readback.data(), kProbeBytes);
+        dma_ok = readback == pattern;
+    } catch (const std::exception& e) {
+        log_warning(LogMetal, "H2DSocket HOST_DMA: probe transfer threw: {}", e.what());
+        dma_ok = false;
+    }
+    std::memset(host_buffer_.get(), 0, kProbeBytes);
+    if (!dma_ok) {
+        log_warning(
+            LogMetal,
+            "H2DSocket HOST_DMA: device {} PCIe DMA probe from iova 0x{:x} to L1 0x{:x} did not land (got 0x{:08x}, "
+            "expected 0x{:08x}); payload writes fall back to MMIO on this socket.",
+            device_id,
+            staging_iova,
+            aligned_data_buf_start_,
+            readback[0],
+            pattern[0]);
+        dma_writer = nullptr;
+    }
+}
+
+void H2DSocket::dma_debug_check(uint32_t ring_offset, uint32_t num_bytes, uint64_t device_addr) {
+    if (receiver_core_window_ == nullptr || num_bytes < sizeof(uint32_t)) {
+        return;
+    }
+    const auto* staging = reinterpret_cast<const uint8_t*>(host_buffer_.get()) + ring_offset;
+    uint32_t exp_first = 0;
+    uint32_t exp_last = 0;
+    std::memcpy(&exp_first, staging, sizeof(uint32_t));
+    std::memcpy(&exp_last, staging + num_bytes - sizeof(uint32_t), sizeof(uint32_t));
+    const uint64_t last_addr = device_addr + num_bytes - sizeof(uint32_t);
+    const auto start = std::chrono::steady_clock::now();
+    uint32_t got_first = 0;
+    uint32_t got_last = 0;
+    double waited_us = 0.0;
+    bool landed = false;
+    for (;;) {
+        got_first = receiver_core_window_->read32(device_addr + dram_l1_noc_offset_);
+        got_last = receiver_core_window_->read32(last_addr + dram_l1_noc_offset_);
+        waited_us = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - start).count();
+        if (got_first == exp_first && got_last == exp_last) {
+            landed = true;
+            break;
+        }
+        if (waited_us > 5000.0) {
+            break;
+        }
+    }
+    if (!landed || dma_commits_ < 16 || waited_us > 2.0) {
+        log_info(
+            LogMetal,
+            "H2D DMA debug commit#{} off={} bytes={} l1=0x{:x}: {} after {:.2f} us (first exp=0x{:08x} got=0x{:08x}, "
+            "last exp=0x{:08x} got=0x{:08x})",
+            dma_commits_,
+            ring_offset,
+            num_bytes,
+            device_addr,
+            landed ? "landed" : "NOT LANDED",
+            waited_us,
+            exp_first,
+            got_first,
+            exp_last,
+            got_last);
+    }
+    if (dma_commits_ == 0) {
+        receiver_socket_md md{};
+        receiver_core_window_->read_block(config_buffer_address_ + dram_l1_noc_offset_, &md, sizeof(md));
+        log_info(
+            LogMetal,
+            "H2D DMA debug config@0x{:x}: read_ptr=0x{:x} fifo_addr=0x{:x} fifo_total_size={} bytes_sent={} "
+            "bytes_acked={} is_h2d={} (host: ring=0x{:x} fifo={} curr={} write_ptr={} bytes_sent={})",
+            config_buffer_address_,
+            md.read_ptr,
+            md.fifo_addr,
+            md.fifo_total_size,
+            md.bytes_sent,
+            md.bytes_acked,
+            md.is_h2d,
+            aligned_data_buf_start_,
+            fifo_size_,
+            fifo_curr_size_,
+            write_ptr_,
+            bytes_sent_);
+    }
 }
 
 H2DSocket::H2DSocket(
@@ -852,6 +980,16 @@ void H2DSocket::push_bytes(uint32_t num_bytes) {
 
 void H2DSocket::notify_receiver() {
     uint32_t bytes_sent_addr = config_buffer_address_ + offsetof(receiver_socket_md, bytes_sent);
+    if (h2d_mode_ == H2DMode::HOST_DMA && dma_writer && dma_doorbell_) {
+        // The payload went through the DMA engine with relaxed NOC ordering, so an MMIO doorbell
+        // can reach L1 first. Send the doorbell the same way: same TLB, NOC and VC, so it queues
+        // behind the data.
+        const uint32_t slot = fifo_size_ + sizeof(uint32_t);
+        host_buffer_[slot / sizeof(uint32_t)] = bytes_sent_;
+        tt_driver_atomics::sfence();
+        dma_writer(slot, sizeof(uint32_t), bytes_sent_addr);
+        return;
+    }
     pcie_writer(&bytes_sent_, sizeof(bytes_sent_), bytes_sent_addr);
     tt_driver_atomics::sfence();
 }
@@ -926,15 +1064,19 @@ uint32_t H2DSocket::required_config_buffer_size() {
 
 std::span<std::byte> H2DSocket::host_fifo() const {
     TT_FATAL(
-        h2d_mode_ == H2DMode::DEVICE_PULL,
-        "H2DSocket::host_fifo: only DEVICE_PULL keeps the ring in host memory; HOST_PUSH writes device L1 directly");
+        h2d_mode_ == H2DMode::DEVICE_PULL || h2d_mode_ == H2DMode::HOST_DMA,
+        "H2DSocket::host_fifo: only DEVICE_PULL and HOST_DMA keep a ring in host memory; HOST_PUSH writes device L1 "
+        "directly");
     TT_FATAL(host_buffer_ != nullptr, "H2DSocket::host_fifo: no host data buffer");
     return {reinterpret_cast<std::byte*>(host_buffer_.get()), fifo_size_};
 }
 
 void H2DSocket::commit_pages(uint32_t num_pages) {
     TT_FATAL(page_size_ > 0, "Page size must be set before committing pages.");
-    TT_FATAL(h2d_mode_ == H2DMode::DEVICE_PULL, "H2DSocket::commit_pages is only meaningful for a DEVICE_PULL ring");
+    TT_FATAL(
+        h2d_mode_ == H2DMode::DEVICE_PULL || h2d_mode_ == H2DMode::HOST_DMA,
+        "H2DSocket::commit_pages is only meaningful for a ring the producer fills in host memory (DEVICE_PULL or "
+        "HOST_DMA)");
     uint32_t num_bytes = num_pages * page_size_;
     TT_FATAL(num_bytes <= fifo_curr_size_, "Cannot commit more pages than the socket FIFO size.");
     TT_FATAL(
@@ -947,6 +1089,29 @@ void H2DSocket::commit_pages(uint32_t num_pages) {
         bytes_sent_,
         bytes_acked_,
         page_size_);
+    if (h2d_mode_ == H2DMode::HOST_DMA) {
+        // The producer filled the staging ring in place; move the committed span into the L1 ring
+        // before publishing it. The engine copies a linear range, so split at the ring end.
+        const uint32_t first = std::min(num_bytes, fifo_curr_size_ - write_ptr_);
+        auto move = [this](uint32_t ring_offset, uint32_t bytes) {
+            if (bytes == 0) {
+                return;
+            }
+            const uint64_t device_addr = static_cast<uint64_t>(aligned_data_buf_start_) + ring_offset;
+            if (dma_writer) {
+                dma_writer(ring_offset, bytes, device_addr);
+                if (dma_debug_) {
+                    dma_debug_check(ring_offset, bytes, device_addr);
+                }
+            } else {
+                pcie_writer(reinterpret_cast<uint8_t*>(host_buffer_.get()) + ring_offset, bytes, device_addr);
+                tt_driver_atomics::sfence();
+            }
+        };
+        move(write_ptr_, first);
+        move(0, num_bytes - first);
+        dma_commits_++;
+    }
     this->push_bytes(num_bytes);
     this->notify_receiver();
 }

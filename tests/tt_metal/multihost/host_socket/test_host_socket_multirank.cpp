@@ -59,6 +59,7 @@ TEST(HostSocketMultiRankTest, NonParticipantsAreNotWaitedOn) {
         SocketConfig socket_config({connection}, mem_config, sender, receiver, context);
 
         HostMeshSocket::TransportConfig transport;
+        transport.h2d_mode = env_h2d_mode();
         transport.page_size = kMrPageSize;
 
         // Construction is what the full-context barrier used to hang in. The

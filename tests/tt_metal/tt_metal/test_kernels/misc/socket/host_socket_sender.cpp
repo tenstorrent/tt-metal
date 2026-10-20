@@ -12,6 +12,7 @@
 
 constexpr uint32_t kModeHostTransport = 1;  // downstream FIFO is pinned host RAM (D2H leg)
 constexpr uint32_t kModeD2D = 2;            // downstream FIFO is another device's L1
+constexpr uint32_t kModeHostDma = 3;        // downstream FIFO is pinned host RAM; the peer's H2D leg is HOST_DMA
 
 void kernel_main() {
     constexpr uint32_t socket_config_addr = get_compile_time_arg_val(0);
@@ -22,7 +23,7 @@ void kernel_main() {
     // Bytes to cycle through: data_size to make every page distinct, else one page.
     constexpr uint32_t src_buffer_size = get_compile_time_arg_val(5);
 
-    static_assert(socket_mode == kModeHostTransport || socket_mode == kModeD2D);
+    static_assert(socket_mode == kModeHostTransport || socket_mode == kModeD2D || socket_mode == kModeHostDma);
     static_assert(data_size % page_size == 0, "data_size must be a whole number of pages");
     static_assert(src_buffer_size % page_size == 0, "src_buffer_size must be a whole number of pages");
 
@@ -32,7 +33,7 @@ void kernel_main() {
     uint32_t src = src_l1_addr;
     uint32_t remaining = data_size;
 
-    if constexpr (socket_mode == kModeHostTransport) {
+    if constexpr (socket_mode == kModeHostTransport || socket_mode == kModeHostDma) {
         const uint32_t pcie_xy_enc = socket.d2h.pcie_xy_enc;
         const uint64_t fifo_base = (static_cast<uint64_t>(socket.d2h.data_addr_hi) << 32) | socket.downstream_fifo_addr;
         while (remaining) {
