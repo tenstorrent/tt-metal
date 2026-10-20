@@ -64,6 +64,27 @@ def test_weight_placement_matches_global_expert_table(mesh_shape, sp_axis, is_co
     assert all_placed == list(range(num_experts))
 
 
+@pytest.mark.parametrize("mesh_shape", [(2, 4), (4, 2), (4, 4), (8, 4)], ids=lambda s: f"{s[0]}x{s[1]}")
+@pytest.mark.parametrize("sp_axis", [0, 1], ids=["sp0", "sp1"])
+def test_metadata_source_is_the_row_major_mesh_index(mesh_shape, sp_axis):
+    """The re-encoded source of every (chip, group) is the row-major index of that device's mesh
+    coordinate, the index the dispatch op writes and the combine op reads; unfilled slots stay -1."""
+    mesh_rows, mesh_cols = mesh_shape
+    dispatch_group_size, num_dispatch_groups = mesh_shape[sp_axis], mesh_shape[1 - sp_axis]
+    sources, expected = [-1], [-1]
+    for group in range(num_dispatch_groups):
+        for chip in range(dispatch_group_size):
+            sources.append(ExpertMapping.compute_linearized_mesh_coord(chip, group, num_dispatch_groups))
+            row, col = (chip, group) if sp_axis == 0 else (group, chip)
+            expected.append(row * mesh_cols + col)
+    metadata = torch.tensor([[source, 7, 1] for source in sources], dtype=torch.int32)
+
+    out = ExpertMapping.metadata_source_for_sp_axis(metadata, num_dispatch_groups, dispatch_group_size, sp_axis)
+
+    assert out[:, 0].tolist() == expected
+    assert torch.equal(out[:, 1:], metadata[:, 1:])
+
+
 @pytest.mark.parametrize("sp_axis", [0, 1], ids=["sp0", "sp1"])
 def test_resolve_per_axis_topology_indexes_by_axis(sp_axis):
     tp_axis = 1 - sp_axis
