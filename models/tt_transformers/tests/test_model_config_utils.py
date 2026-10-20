@@ -207,6 +207,22 @@ def test_compute_galaxy_width_shard_cores_rejects_non_positive_width(expect_erro
 
 
 @pytest.mark.parametrize(
+    ("grid_x", "grid_y", "n_tiles"),
+    [
+        (11, 10, 48),  # Qwen2.5-1.5B dim on a p150b
+        (11, 10, 72),  # Gemma-2-2B dim on a p150b
+        (12, 10, 48),
+    ],
+)
+def test_find_grid_fits_the_blackhole_device_grid(monkeypatch, grid_x, grid_y, n_tiles):
+    monkeypatch.setattr("models.tt_transformers.tt.model_config.is_wormhole_b0", lambda: False)
+    args = SimpleNamespace(max_grid_size=ttnn.CoreGrid(x=grid_x, y=grid_y))
+    rows, cols = ModelArgs.find_grid(args, n_tiles)
+    assert rows <= grid_y and cols <= grid_x
+    assert n_tiles % (rows * cols) == 0
+
+
+@pytest.mark.parametrize(
     ("base_model_name", "padded_vocab_size", "sampling_splits", "expected"),
     [
         ("Llama-3.1-70B", 128256, 4, True),

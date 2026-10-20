@@ -3840,8 +3840,9 @@ class ModelArgs:
         Raises:
             AssertionError: If it's not possible to find such a grid configuration.
         """
-        max_rows = 8 if is_wormhole_b0() else 10
-        max_cols = 8 if is_wormhole_b0() else 12
+        # Harvested Blackhole boards (p150b: 11 columns) have a smaller grid than 10x12.
+        max_rows = 8 if is_wormhole_b0() else min(10, self.max_grid_size.y)
+        max_cols = 8 if is_wormhole_b0() else min(12, self.max_grid_size.x)
         max_cores = max_rows * max_cols
 
         # Find all possible numbers of cores that divide N and are less than or equal to max_cores
