@@ -433,8 +433,13 @@ def _mcp_config(repo_root: Path, manifest_path: str, pipe: dict, devices: str, k
     _seq = os.environ.get("TT_PERF_SEQ_LEN")
     if _seq:
         env["TT_PERF_SEQ_LEN"] = _seq
+    # The kernel-rung depth and the C++-only ladder (--max-cpp-attempts / --cpp-only) are read by the
+    # server's ladder and recorder, so they have to be in this dict or the flags reach nothing.
     for _k in (
         "PERF_MCP_TARGET_BAND",
+        "PERF_MCP_MAX_CPP_ATTEMPTS",
+        "PERF_MCP_MAX_TTL_ATTEMPTS",
+        "PERF_MCP_CPP_ONLY",
         "TT_PERF_MODULE_LEVEL",
         "TT_PERF_MESH_ROWS",
         "TT_PERF_MESH_COLS",

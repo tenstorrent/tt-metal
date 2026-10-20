@@ -753,6 +753,43 @@ def _reexec_under_memory_scope():
         return
 
 
+def add_cpp_flags(popt) -> None:
+    """--max-cpp-attempts and --cpp-only on the optimize parser. Defined here beside _apply_cpp_flags,
+    which reads them, so cli.py carries one line for both."""
+    popt.add_argument(
+        "--max-cpp-attempts",
+        type=int,
+        default=None,
+        dest="max_cpp_attempts",
+        help="clean (measured, not crashed) C++ kernel tries each open op gets before its C++ rung closes. "
+        "Default 1. Raise it for a large op whose first hand kernel lost: each later try is handed the "
+        "previous attempt's note and builds on that kernel (sets PERF_MCP_MAX_CPP_ATTEMPTS).",
+    )
+    popt.add_argument(
+        "--cpp-only",
+        action="store_true",
+        dest="cpp_only",
+        help="offer only the C++ kernel rung: no knob, structural, tt-lang or fusion rungs, and no structural "
+        "gates. Ops with no C++ kernel to write clear at once. Pair with --max-cpp-attempts for several tries "
+        "per op (sets PERF_MCP_CPP_ONLY=1).",
+    )
+
+
+def _apply_cpp_flags(args) -> str | None:
+    """--max-cpp-attempts / --cpp-only into the variables perf_mcp reads (_kernel_cap / _cpp_only).
+
+    Set only when asked, so a run without the flags keeps whatever the environment already says.
+    Returns an error message for an unusable value, else None."""
+    mca = getattr(args, "max_cpp_attempts", None)
+    if mca is not None:
+        if mca < 1:
+            return "--max-cpp-attempts must be 1 or more"
+        os.environ["PERF_MCP_MAX_CPP_ATTEMPTS"] = str(mca)
+    if getattr(args, "cpp_only", False):
+        os.environ["PERF_MCP_CPP_ONLY"] = "1"
+    return None
+
+
 def cmd_optimize(args) -> int:
     _reexec_under_memory_scope()
     _tf = invalid_trace_flag_error()
@@ -775,6 +812,10 @@ def cmd_optimize(args) -> int:
     # mismatched sample count between the two manufactured a false gain from noise on every run.
     if getattr(args, "fullpipe_samples", None) is not None:
         os.environ["PERF_MCP_FULLPIPE_SAMPLES"] = str(args.fullpipe_samples)
+    _cpp_err = _apply_cpp_flags(args)
+    if _cpp_err:
+        print("error: " + _cpp_err)
+        return 1
     if os.environ.get("PERF_MCP_SUPERVISED") != "1":
         _sweep_stale_perf_mcp()
         try:

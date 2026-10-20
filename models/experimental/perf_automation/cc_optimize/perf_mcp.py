@@ -826,6 +826,31 @@ def _partial_reason(knob: str, st: dict) -> str:
 
 
 _MAX_KERNEL_WEDGES = int(os.environ.get("PERF_MCP_MAX_KERNEL_WEDGES", "3"))
+# CLEAN TRIES PER KERNEL RUNG, PER OP. One by default: a measured kernel is the proof the rung was
+# explored, and that stays the rule unless the operator asks for more. The rung was hard-wired to one,
+# so a large op whose first hand kernel lost had no second chance at all: on minicpm5_2b (2026-10-19)
+# one C++ try on the prefill gate/up kernel -- about 55 ms of a stage 120 ms over its band -- closed it,
+# and the run spent its last rounds with nothing to work. Read at call time, as the gate caps are, and
+# shared by the ladder that hands the rung out and the recorder that accepts it (_rung_allowance), so
+# the two cannot disagree. A later try is handed the previous attempt's note (termination_check), so it
+# builds on that kernel instead of starting again.
+_KERNEL_CAP_ENVS = {"cpp": "PERF_MCP_MAX_CPP_ATTEMPTS", "tt-lang": "PERF_MCP_MAX_TTL_ATTEMPTS"}
+
+
+def _kernel_cap(kind: str) -> int:
+    """How many clean (measured, not wedged) tries the `kind` kernel rung gets on one op; 1 if unset."""
+    env = _KERNEL_CAP_ENVS.get(_normalise_rung(kind))
+    try:
+        return max(1, int(os.environ.get(env, "1") or "1")) if env else 1
+    except ValueError:
+        return 1
+
+
+def _cpp_only() -> bool:
+    """PERF_MCP_CPP_ONLY=1: the C++ rung is the whole ladder. Every op is offered only a C++ kernel and
+    the structural gates (host, decode, conv, fold and the rest) are not consulted -- an operator who
+    asks for C++ alone has already decided the cheaper levers are spent. Off unless set to exactly 1."""
+    return os.environ.get("PERF_MCP_CPP_ONLY") == "1"
 
 
 def _material_gap_ms(device_ms: float) -> float:
@@ -1739,9 +1764,71 @@ def _untried_material_ops(blocking, attempts) -> list:
 
 
 def _rung_state(matches, kind):
-    clean = any((a.get("kernel_kind") or "").lower() == kind and not a.get("wedged") for a in matches)
+    """(clean tries, wedged tries) of `kind` among `matches`. The count is what _kernel_cap compares;
+    it reads truthy for one or more, as the boolean it replaced did."""
+    clean = sum(1 for a in matches if (a.get("kernel_kind") or "").lower() == kind and not a.get("wedged"))
     wedged = sum(1 for a in matches if (a.get("kernel_kind") or "").lower() == kind and a.get("wedged"))
     return clean, wedged
+
+
+def _kernel_retry_reason(kind: str, clean: int) -> str:
+    """The rung text for a kernel rung's second and later clean try on one op."""
+    return (
+        "%s attempt %d of %d on this op: build on the previous kernel (its recorded note follows) -- keep "
+        "what it got right and change what lost, do not start over; record_kernel_attempt(...,'%s',...)."
+        % ("C++" if kind == "cpp" else "tt-lang", clean + 1, _kernel_cap(kind), kind)
+    )
+
+
+def _cpp_rung(matches: list, first_reason: str):
+    """(False, "cpp", reason) while the C++ rung has tries left on this op, else None.
+
+    Closes after _kernel_cap("cpp") clean tries or _MAX_KERNEL_WEDGES wedges. One copy, read by the
+    ordinary ladder and by the C++-only one, so the two hand the rung out by the same rule."""
+    clean, wedged = _rung_state(matches, "cpp")
+    if clean >= _kernel_cap("cpp") or wedged >= _MAX_KERNEL_WEDGES:
+        return None
+    _tr = _trace_on()
+    if wedged:
+        if _tr:
+            _r = (
+                "apply the PROVEN trace-safe recipe (fix the recipe application, do NOT bounce rungs): %s (attempt %d)"
+                % (
+                    _TRACE_SAFE_HINT,
+                    wedged + 1,
+                )
+            )
+        else:
+            _r = (
+                "the C++ kernel crashed in EAGER (TT_PERF_TRACE=0) — a real math/runtime error, not a trace issue; fix it from the traceback/check_pcc and retry (attempt %d)"
+                % (wedged + 1)
+            )
+        return (False, "cpp", _r)
+    _suffix = _ISOLATE_FIRST if _tr else _EAGER_NOTE
+    if clean:
+        return (False, "cpp", _kernel_retry_reason("cpp", clean) + _suffix)
+    return (False, "cpp", first_reason + _suffix)
+
+
+def _cpp_only_status(open_op: dict, op_code: str, matches: list) -> tuple[bool, str, str]:
+    """The ladder under PERF_MCP_CPP_ONLY: the C++ rung alone, by the same rule the full ladder uses.
+
+    The launch-gap bucket and sealed op classes have no kernel to write, so they clear at once."""
+    if (open_op.get("bucket") or "").lower() == "host_fallback" or not _is_kernel_able(op_code):
+        return (True, "done", "C++-only run (PERF_MCP_CPP_ONLY=1): no C++ kernel applies to this op")
+    _cpp = _cpp_rung(
+        matches,
+        "C++-only run (PERF_MCP_CPP_ONLY=1): author a C++ Metalium kernel via ttnn.generic_op (GUIDELINES/12) "
+        "for this op and record it.",
+    )
+    if _cpp:
+        return _cpp
+    return (
+        True,
+        "done",
+        "C++-only run (PERF_MCP_CPP_ONLY=1): C++ rung spent (%d clean tr%s, the cap)"
+        % (_kernel_cap("cpp"), "y" if _kernel_cap("cpp") == 1 else "ies"),
+    )
 
 
 def _trace_compat_feedback(raw_reason: str) -> str:
@@ -1818,6 +1905,8 @@ def _op_ladder_status(open_op: dict, op_code: str, attempts: list) -> tuple[bool
     fidelity = (open_op.get("fidelity") or "").lower()
     bound = (open_op.get("bound_by") or "").lower()
     is_matmul = "matmul" in (op_code or "").lower()
+    if _cpp_only():
+        return _cpp_only_status(open_op, op_code, matches)
     # BOX (0) HOST / dispatch bucket (GAP-A) — NOT a device op, so the matmul ladder (grid/dtype/
     # tt-lang/C++) is meaningless. Its lever is a STRUCTURAL host-loop transform (trace capture /
     # 2-CQ). Routed via recall_knobs(op_class=host_fallback).
@@ -1989,9 +2078,7 @@ def _op_ladder_status(open_op: dict, op_code: str, attempts: list) -> tuple[bool
         _tr = _trace_on()
         _suffix = _ISOLATE_FIRST if _tr else _EAGER_NOTE
         _tl_clean, _tl_wedged = _rung_state(matches, "tt-lang")
-        _cpp_clean, _cpp_wedged = _rung_state(matches, "cpp")
-        _tl_done = _tl_clean or _tl_wedged >= _MAX_KERNEL_WEDGES
-        _cpp_done = _cpp_clean or _cpp_wedged >= _MAX_KERNEL_WEDGES
+        _tl_done = _tl_clean >= _kernel_cap("tt-lang") or _tl_wedged >= _MAX_KERNEL_WEDGES
         if not _tl_done and _ttl_available():
             if _tl_wedged:
                 if _tr:
@@ -2008,33 +2095,18 @@ def _op_ladder_status(open_op: dict, op_code: str, attempts: list) -> tuple[bool
                         % (_tl_wedged + 1)
                     )
                 return (False, "tt-lang", _r)
+            if _tl_clean:
+                return (False, "tt-lang", _kernel_retry_reason("tt-lang", _tl_clean) + _suffix)
             return (
                 False,
                 "tt-lang",
                 "knobs exhausted (grid+dtype); author a tt-lang kernel (GUIDELINES/11) and record it." + _suffix,
             )
-        if (_tl_done or not _ttl_available()) and not _cpp_done:
-            if _cpp_wedged:
-                if _tr:
-                    _r = (
-                        "apply the PROVEN trace-safe recipe (fix the recipe application, do NOT bounce rungs): %s (attempt %d)"
-                        % (
-                            _TRACE_SAFE_HINT,
-                            _cpp_wedged + 1,
-                        )
-                    )
-                else:
-                    _r = (
-                        "the C++ kernel crashed in EAGER (TT_PERF_TRACE=0) — a real math/runtime error, not a trace issue; fix it from the traceback/check_pcc and retry (attempt %d)"
-                        % (_cpp_wedged + 1)
-                    )
-                return (False, "cpp", _r)
-            return (
-                False,
-                "cpp",
-                "tt-lang measured; author a C++ Metalium kernel via ttnn.generic_op (GUIDELINES/12) and record it."
-                + _suffix,
-            )
+        _cpp = _cpp_rung(
+            matches, "tt-lang measured; author a C++ Metalium kernel via ttnn.generic_op (GUIDELINES/12) and record it."
+        )
+        if _cpp:
+            return _cpp
     # every box ticked (knobs + structural + tt-lang + C++) -> genuine irreducible residual -> DONE.
     # STRUCTURAL is asserted ABOVE (before the kernel rungs), so reaching here means it is already tried.
     return (
@@ -6391,7 +6463,9 @@ def _rung_allowance(op_signature: str, kernel_kind: str, attempts: list, partial
         # and there is no gate re-asking for a second. A gate rung is different precisely because
         # something IS re-asking, up to its cap, and refusing it earlier than the cap leaves the
         # gate with no route to clear.
-        allowed = _gate_rung_allowance(rung) or 1
+        # The kernel rungs take _kernel_cap, the number the ladder hands them out up to (1 unless the
+        # operator raised it).
+        allowed = _gate_rung_allowance(rung) or _kernel_cap(rung)
     return tries, allowed
 
 
@@ -8898,29 +8972,31 @@ def termination_check() -> dict:
     # property of the capture. Handed to every gate,
     # including the two that read other fields today, so the next gate to read open_ops cannot
     # inherit this by being wired the older way.
-    host_block = _host_gate(_gate_prof, blocking, attempts)
-    if host_block:
-        blocking.append(host_block)
-    decode_block = _decode_gate(_gate_prof, attempts)
-    if decode_block:
-        blocking.append(decode_block)
-    conv_block = _conv_gate(_gate_prof, attempts)
-    if conv_block:
-        blocking.append(conv_block)
-    fold_block = _fold_gate(_gate_prof, attempts)
-    if fold_block:
-        blocking.append(fold_block)
-    # Exactly as before the fusion ladder: these three ride with the FOLD rung, not the later ones.
-    if fold_block and fold_block.get("next_rung") == _FOLD_LEVER[0][-1]:
-        order_block = _order_gate(_gate_prof, attempts)
-        if order_block:
-            blocking.append(order_block)
-        split_block = _split_gate(_gate_prof, attempts)
-        if split_block:
-            blocking.append(split_block)
-        stock_block = _stock_gate(_gate_prof, attempts)
-        if stock_block:
-            blocking.append(stock_block)
+    # A C++-only run consults none of them: the operator asked for the C++ rung alone (_cpp_only).
+    if not _cpp_only():
+        host_block = _host_gate(_gate_prof, blocking, attempts)
+        if host_block:
+            blocking.append(host_block)
+        decode_block = _decode_gate(_gate_prof, attempts)
+        if decode_block:
+            blocking.append(decode_block)
+        conv_block = _conv_gate(_gate_prof, attempts)
+        if conv_block:
+            blocking.append(conv_block)
+        fold_block = _fold_gate(_gate_prof, attempts)
+        if fold_block:
+            blocking.append(fold_block)
+        # Exactly as before the fusion ladder: these three ride with the FOLD rung, not the later ones.
+        if fold_block and fold_block.get("next_rung") == _FOLD_LEVER[0][-1]:
+            order_block = _order_gate(_gate_prof, attempts)
+            if order_block:
+                blocking.append(order_block)
+            split_block = _split_gate(_gate_prof, attempts)
+            if split_block:
+                blocking.append(split_block)
+            stock_block = _stock_gate(_gate_prof, attempts)
+            if stock_block:
+                blocking.append(stock_block)
     # A STAGE THAT HAS REACHED ITS BAND GOES LAST. The gate works out which stacks are still short --
     # three lines from where the target is chosen -- and used that only to refuse to stop, never to
     # decide what to work on. So the target stayed "the biggest gap anywhere", and on
