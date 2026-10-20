@@ -119,9 +119,11 @@ class TtMiMoMoE:
             weights = ttnn.mul(weights, self.cfg.routed_scaling_factor)
         return indices, weights
 
-    def _router_logits(self, x):
-        """fp32 logits [1, 1, T, E]: DRAM-sharded matmul for one tile row, else linear on an interleaved copy."""
-        if x.shape[-2] == TILE:
+    def _router_logits(self, x, prefill=False):
+        """fp32 logits [1, 1, T, E]: DRAM-sharded matmul for a decode tile row, else linear on an interleaved copy.
+        Prefill always takes the linear, with a program config whose K blocking does not change with T, so a row's
+        logits do not depend on the other rows (a prefill row in a batch equals the same row alone)."""
+        if x.shape[-2] == TILE and not prefill:
             return self.router_mm(x, self.w_router)
         weight = ttnn.to_memory_config(self.w_router, ttnn.DRAM_MEMORY_CONFIG)
         logits = ttnn.linear(
@@ -130,9 +132,29 @@ class TtMiMoMoE:
             dtype=ttnn.float32,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.router_config,
+            program_config=self._router_program(x.shape[-2]) if prefill else None,
         )
         weight.deallocate(True)
         return logits
+
+    def _router_program(self, rows):
+        """2D multicast matmul: the experts' 8 tile columns over 8 core columns, the row tiles over up to 8 core
+        rows, a fixed K block of 8 tiles (every row's K sum is added in the same order for any T)."""
+        mt, nt = rows // TILE, self.num_experts // TILE
+        ny = max(d for d in range(1, 9) if mt % d == 0)
+        return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(nt, ny),
+            in0_block_w=8,
+            out_subblock_h=1,
+            out_subblock_w=1,
+            out_block_h=mt // ny,
+            out_block_w=1,
+            per_core_M=mt // ny,
+            per_core_N=1,
+            transpose_mcast=False,
+            fused_activation=None,
+            fuse_batch=False,
+        )
 
     def route(self, x, token_mask=None):
         """x [1, 1, T, hidden] -> dense routing weights [1, 1, T, E] (bf16; zero off the top-8)."""
@@ -385,10 +407,10 @@ class TtMiMoMoE:
         out.deallocate(True)
         return y
 
-    def forward(self, x, token_mask=None):
+    def forward(self, x, token_mask=None, decode=False):
         """x [1, 1, T, hidden] replicated across the row -> [1, 1, T, hidden] replicated."""
         assert x.shape[-2] % TILE == 0, "pad tokens to a multiple of 32"
-        logits = self._router_logits(x)
+        logits = self._router_logits(x, prefill=not decode)
         indices, weights = self._topk(logits)
         logits.deallocate(True)
         if token_mask is not None:

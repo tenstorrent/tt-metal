@@ -23,9 +23,14 @@ safe because a block id belongs to one group at a time. On a chip every layer's 
 attention.py) on the SWA layers, so V is shared among layers of the same kind. The global layers keep both copies
 of their KV head on a chip pair (setup_vllm_kv_cache): a block can be shared by requests in slots of either parity.
 
-Sampling runs on the host: prefill and decode return last-token logits [B, 1, vocab]. Decode replays one traced
-step per replica (captured in ``warmup_model_decode``); prefill runs eagerly in chunks of up to 4096 tokens, between
-the replays. A program first compiled after the capture would keep buffers the replays overwrite, so
+Sampling: prefill returns last-token logits [B, 1, vocab] for the host to sample. Decode replays one traced step
+per replica (captured in ``warmup_model_decode``) that also computes each slot's greedy token and writes it, with
+the slot's position plus one, into the trace's own inputs (TtMiMoModel._feed_back). With ``sample_on_device_mode``
+the plugin samples greedy rows on device (``max_device_top_k`` 1: a row with temperature > 0 and any other top_k,
+penalties, logprobs or structured output send the whole batch to host sampling, which reads the logit rows) and
+overlaps the steps (``decode_input_update_contract`` 1, ``supports_async_decode``): a steady step copies only the
+RoPE inputs of the adapter's own position counter, and its tokens are read back without blocking. Prefill runs
+eagerly in chunks of up to 4096 tokens, between the replays. A program first compiled after the capture would keep buffers the replays overwrite, so
 ``warmup_model_prefill`` compiles every prefill program a served chunk can run first: they key only on the chunk's
 padded length and the alignment of its start (attention.py), a bounded set.
 """
@@ -43,7 +48,7 @@ import ttnn
 from ..reference.checkpoint import MiMoCheckpoint, default_model_path
 from ..reference.config import MiMoConfig
 from .generator import MiMoGalaxyGenerator
-from .model import prefill_warmup_chunks
+from .model import prefill_padded_len, prefill_warmup_batches, prefill_warmup_chunks
 
 TP = 8
 BLOCK_SIZE = 64
@@ -55,6 +60,10 @@ DEFAULT_KV_GB_PER_CHIP = 6.0
 # Blocks vLLM's sliding-window groups can hold per request while a prefill chunk of up to 4096 tokens is in flight
 # (SlidingWindowSpec.max_admission_blocks_per_request), in tokens: 5 SWA groups x (127 + 4096 tokens + 1 block).
 SWA_TOKENS_PER_USER = 5 * (math.ceil((127 + 4096) / BLOCK_SIZE) + 1) * BLOCK_SIZE
+# MIMO_VLLM_TIMING=1 logs each prefill's host enqueue and total time, and decode's host time every 128 steps.
+TIMING = os.environ.get("MIMO_VLLM_TIMING") == "1"
+# MIMO_PREFILL_BATCH=0: prefill every row on its own (TtMiMoModel.prefill_enqueue_batch is not used).
+PREFILL_BATCH = os.environ.get("MIMO_PREFILL_BATCH", "1") == "1"
 
 
 def _model_path(hf_config):
@@ -76,7 +85,15 @@ class MiMoV2ForCausalLM:
         "supports_prefix_caching": True,
         "folds_dp_into_lanes": True,
         "fabric_config": {"config": ttnn.FabricConfig.FABRIC_1D_RING},
+        # Device sampling is the decode trace's greedy token (module docstring).
+        "supports_sample_on_device": True,
+        "supports_async_decode": True,
+        "max_device_top_k": 1,
+        "supports_device_penalties": False,
+        "supports_device_logprobs": False,
     }
+    # The four reload commands of the plugin's decode reload contract (docs/DECODE_RELOAD_CONTRACT.md).
+    decode_input_update_contract = 1
     # Emits SlidingWindowSpec groups: the plugin's KV budget adds its sliding-window headroom.
     _HYBRID_KV_CACHE_GROUPS_ENABLED = True
     # (vllm_config, specs) recorded by get_kv_cache_spec, which the plugin calls in the worker process that later
@@ -100,6 +117,9 @@ class MiMoV2ForCausalLM:
         self.layer_groups = None
         self.kv_caches = None
         self.decode_recaptures = 0  # decode traces captured again after a prefill compiled new programs
+        # Per lane: int32 [max_batch] positions the next decode step reads (-1: idle slot), set by a reloading step
+        # and advanced with every step, as the trace advances its own (a steady step reads no host positions).
+        self.decode_positions = [None] * self.dp
 
     # ------------------------------------------------------------------ construction and sizing
     @classmethod
@@ -301,19 +321,51 @@ class MiMoV2ForCausalLM:
         for lane, rows_of_lane in enumerate(table_rows):
             if rows_of_lane:
                 self.models[lane].set_vllm_page_tables(rows_of_lane)
-        # Enqueue every row before reading any, the rows of different lanes interleaved so all replicas have work.
-        by_lane = [[p for p in placed if p[1] == lane] for lane in range(self.dp)]
-        order = [rows_of[k] for k in range(max(map(len, by_lane))) for rows_of in by_lane if k < len(rows_of)]
+        # A lane's first chunks of one padded length (at most PREFILL_BATCH_MAX_PADDED) go in one pass
+        # (TtMiMoModel.prefill_enqueue_batch, which pads every chunk to the longest); the other rows one by one. Every
+        # pass is enqueued before any is read, the lanes interleaved so all replicas have work.
+        by_lane = []
+        for lane in range(self.dp):
+            groups = {}
+            for p in placed:
+                if p[1] == lane:
+                    key = prefill_padded_len(p[4]) if self._batchable(p) else ("row", p[0])
+                    groups.setdefault(key, []).append(p)
+            by_lane.append(list(groups.values()))
+        order = [passes[k] for k in range(max(map(len, by_lane))) for passes in by_lane if k < len(passes)]
         programs = [model.mesh_device.num_program_cache_entries() for model in self.models]
-        pending = {}
-        for i, lane, slot, start, end in order:
-            chunk = torch.as_tensor(tokens[i, start:end]).to(torch.int32)
-            pending[i] = (lane, self.models[lane].prefill_enqueue(chunk, slot, start_pos=start))
+        t0 = time.perf_counter()
+        pending = []
+        for rows_of_pass in order:
+            lane = rows_of_pass[0][1]
+            chunks = [
+                (torch.as_tensor(tokens[i, start:end]).to(torch.int32), slot) for i, _, slot, start, end in rows_of_pass
+            ]
+            if len(chunks) > 1:
+                handle = self.models[lane].prefill_enqueue_batch(chunks)
+            else:
+                (chunk, slot), start = chunks[0], rows_of_pass[0][3]
+                handle = self.models[lane].prefill_enqueue(chunk, slot, start_pos=start)
+            pending.append((rows_of_pass, lane, handle))
+        t1 = time.perf_counter()
         logits = [None] * rows
-        for i, (lane, handle) in pending.items():
-            logits[i] = self.models[lane].prefill_read(handle)[0]
+        for rows_of_pass, lane, handle in pending:
+            out = self.models[lane].prefill_read(handle)[0].reshape(len(rows_of_pass), -1)
+            for k, p in enumerate(rows_of_pass):
+                logits[p[0]] = out[k]
+        if TIMING:
+            logger.info(
+                f"MiMo vLLM timing: prefill {rows} rows in {len(pending)} passes "
+                f"{[[p[4] - p[3] for p in rows_of] for rows_of, _, _ in pending]}: enqueue {1e3 * (t1 - t0):.0f} ms, "
+                f"total {1e3 * (time.perf_counter() - t0):.0f} ms"
+            )
         self._recapture_after_new_programs(programs)
         return torch.stack(logits).unsqueeze(1)
+
+    def _batchable(self, placed_row):
+        """A first chunk (start 0) whose padded length a prefill batch takes."""
+        _, _, _, start, end = placed_row
+        return PREFILL_BATCH and start == 0 and prefill_padded_len(end) <= self.models[0].PREFILL_BATCH_MAX_PADDED
 
     def _recapture_after_new_programs(self, programs):
         """``programs``: each replica's program-cache size before the prefill. A prefill that compiled new programs
@@ -344,43 +396,137 @@ class MiMoV2ForCausalLM:
         page_tables_per_layer=None,
         sampling_params=None,
         slot_remap=None,
+        prompt_tokens=None,
+        output_tokens=None,
+        *,
+        reload_inputs=True,
+        reload_page_table=False,
+        reload_sampling_params=False,
+        reset_sampling_state=False,
         **kwargs,
     ):
         """One decode step for every lane's slots: tokens [B, 1], start_pos [B] (-1: idle slot), B = lanes x per_lane.
 
-        ``slot_remap`` is ignored: the model keeps no slot-owned state between steps (tokens, positions and page
-        tables come from the host every step; the KV is addressed through the page tables)."""
-        if sampling_params is not None:
-            raise ValueError("MiMo samples on the host; got device sampling_params")
+        ``sampling_params`` None: host sampling, every step reloads the inputs and the step returns logits
+        [B, 1, vocab]. Otherwise device sampling (greedy only, ``max_device_top_k`` 1): the step returns the greedy
+        tokens [B]. ``reload_inputs`` False (steady device decode) leaves ``tokens`` and ``start_pos`` unread: the
+        trace consumes the tokens and positions its last replay wrote, and the adapter copies the RoPE inputs of its
+        own position counter (``decode_positions``); ``reload_page_table`` then copies the page tables.
+
+        The model keeps no other slot state (no penalty or RNG state), so a reloading step needs no ``slot_remap``:
+        it rewrites every slot's tokens and positions. A steady step with a non-identity remap raises."""
+        if "reset_batch" in kwargs:
+            raise ValueError("MiMo implements decode_input_update_contract 1; got the legacy reset_batch keyword")
+        if kwargs.get("defer_device_sampling"):
+            raise ValueError("MiMo has no deferred device sampling (no device grammar)")
+        if reload_inputs and reload_page_table:
+            raise ValueError("reload_inputs already copies the page tables; got reload_page_table too")
+        if reset_sampling_state and not reload_inputs:
+            raise ValueError("reset_sampling_state without reload_inputs")
+        on_device = sampling_params is not None
+        if not reload_inputs:
+            if not on_device:
+                raise ValueError("host sampling decodes from host inputs: reload_inputs must be True")
+            if not enable_trace:
+                raise ValueError("a steady decode (reload_inputs False) replays the decode trace: enable_trace False")
+            if slot_remap is not None and any(int(j) != i for i, j in enumerate(slot_remap)):
+                raise ValueError(f"a steady decode cannot move resident slot state: slot_remap {list(slot_remap)}")
+        t0 = time.perf_counter()
         tables = self._layer_tables(page_table, page_tables_per_layer)
-        tokens = torch.as_tensor(tokens).reshape(-1)
-        positions = torch.as_tensor(start_pos).reshape(-1)
-        rows = positions.numel()
-        if rows > self.dp * self.per_lane:
-            raise ValueError(f"{rows} decode rows > {self.dp} lanes x {self.per_lane} slots")
+        rows = self.dp * self.per_lane
+        if reload_inputs:
+            tokens = torch.as_tensor(tokens).reshape(-1)
+            positions = torch.as_tensor(start_pos).reshape(-1)
+            rows = positions.numel()
+            if rows > self.dp * self.per_lane:
+                raise ValueError(f"{rows} decode rows > {self.dp} lanes x {self.per_lane} slots")
         handles = []
         for lane, model in enumerate(self.models):
             first = lane * self.per_lane
             last = min(first + self.per_lane, rows)
             if first >= rows:
                 break
-            tok = torch.zeros(model.max_batch, dtype=torch.int32)
-            pos = torch.full((model.max_batch,), -1, dtype=torch.int32)
-            tok[: last - first] = tokens[first:last].to(torch.int32)
-            pos[: last - first] = positions[first:last].to(torch.int32)
-            if int(pos.max()) < 0:
+            if reload_inputs:
+                tok = torch.zeros(model.max_batch, dtype=torch.int32)
+                pos = torch.full((model.max_batch,), -1, dtype=torch.int32)
+                tok[: last - first] = tokens[first:last].to(torch.int32)
+                pos[: last - first] = positions[first:last].to(torch.int32)
+            else:
+                pos = self.decode_positions[lane]
+                if pos is None:
+                    raise RuntimeError(f"lane {lane}: a steady decode before any reloading decode")
+            active = pos >= 0
+            if on_device:
+                self._check_greedy(sampling_params, first, [s for s in range(last - first) if active[s]])
+            if not bool(active.any()):
+                self.decode_positions[lane] = pos
                 handles.append(None)
                 continue
-            model.set_vllm_page_tables(
-                {s: self._group_rows(tables, first + s) for s in range(last - first) if pos[s] >= 0}
-            )
+            if reload_inputs or reload_page_table:
+                model.set_vllm_page_tables(
+                    {s: self._group_rows(tables, first + s) for s in range(last - first) if active[s]}
+                )
             if enable_trace and model.decode_trace is None:
                 raise RuntimeError("decode trace requested before warmup_model_decode captured it")
-            handles.append((lane, last - first, model.decode_enqueue(tok, pos)))
-        out = {"rows": rows, "handles": handles}
+            handle = model.decode_enqueue(tok, pos) if reload_inputs else model.decode_enqueue_resident(pos)
+            self.decode_positions[lane] = torch.where(active, pos + 1, pos)
+            handles.append((lane, last - first, handle))
+        out = {"rows": rows, "handles": handles, "tokens": on_device}
+        if TIMING:
+            self._decode_timing(t0, reload_inputs, on_device)
         if read_from_device:
-            return self._read_logits(out)
+            return self.process_decode_output_host(self.read_decode_output(out), is_tokens=on_device)
         return out
+
+    def _decode_timing(self, t0, reload_inputs, on_device):
+        """Every 128 decode steps: the mean host time of decode_forward's submission, and the share of steps that
+        reloaded their inputs or sampled on device."""
+        now = time.perf_counter()
+        stats = getattr(self, "_timing", None) or {"steps": 0, "host": 0.0, "reload": 0, "device": 0, "since": now}
+        stats["steps"] += 1
+        stats["host"] += now - t0
+        stats["reload"] += int(reload_inputs)
+        stats["device"] += int(on_device)
+        if stats["steps"] == 128:
+            logger.info(
+                f"MiMo vLLM timing: decode {stats['steps']} steps in {1e3 * (now - stats['since']):.0f} ms, submit "
+                f"{1e3 * stats['host'] / stats['steps']:.2f} ms/step, {stats['reload']} reloads, "
+                f"{stats['device']} device-sampled"
+            )
+            stats = None
+        self._timing = stats
+
+    @staticmethod
+    def _check_greedy(sampling_params, first, slots):
+        """Device sampling is greedy: every active row has temperature 0 or top_k 1 (the plugin routes any other
+        row to host sampling through ``max_device_top_k``)."""
+        for s in slots:
+            temperature = float(sampling_params.temperature[first + s])
+            top_k = int(sampling_params.top_k[first + s])
+            if temperature != 0.0 and top_k != 1:
+                raise ValueError(
+                    f"row {first + s}: device sampling is greedy only; got temperature {temperature}, top_k {top_k}"
+                )
+
+    def read_decode_output(self, out, async_read=False, **kwargs):
+        """Starts reading a decode step's output: its greedy tokens (device sampling), without blocking when
+        ``async_read`` (returns the per-lane host tensors and their read events), or its logit rows (host sampling;
+        read now, returned with no events)."""
+        if kwargs.get("sample_rows") is not None:
+            raise ValueError("MiMo declares no selective host readback; got sample_rows")
+        if not out["tokens"]:
+            logits = self._read_logits(out)
+            return (logits, []) if async_read else logits
+        reads, events = [], []
+        for entry in out["handles"]:
+            if entry is None:
+                continue
+            lane, n, handle = entry
+            reads.append((lane, n, handle["next_tokens"].cpu(blocking=not async_read)))
+            if async_read:
+                events.append(ttnn.record_event(self.models[lane].mesh_device, 0))
+        host = {"rows": out["rows"], "reads": reads}
+        return (host, events) if async_read else host
 
     def _read_logits(self, out):
         vocab = self.gen.cfg.vocab_size
@@ -392,15 +538,22 @@ class MiMoV2ForCausalLM:
             logits[lane * self.per_lane : lane * self.per_lane + n, 0] = self.models[lane].decode_read_rows(handle)[:n]
         return logits
 
-    def read_decode_output(self, out, async_read=False, **kwargs):
-        """Reads the logits now (the read is not split from the forward yet); returns them with no pending events."""
-        logits = self._read_logits(out)
-        return (logits, []) if async_read else logits
-
     def process_decode_output_host(self, out, is_tokens=False, **kwargs):
-        if is_tokens:
-            raise ValueError("MiMo samples on the host; decode returns logits")
-        return out if isinstance(out, torch.Tensor) else self._read_logits(out)
+        """Host output of ``read_decode_output``: greedy tokens int32 [B] in slot order (``is_tokens``; idle slots
+        0), else the logits it read."""
+        if kwargs.get("sample_rows") is not None:
+            raise ValueError("MiMo declares no compact host logits; got sample_rows")
+        if not is_tokens:
+            if not isinstance(out, torch.Tensor):
+                raise ValueError("host sampling: read_decode_output returns the logits")
+            return out
+        if isinstance(out, torch.Tensor) or "reads" not in out:
+            raise ValueError("device sampling: expected the token reads of read_decode_output")
+        tokens = torch.zeros(out["rows"], dtype=torch.int32)
+        for lane, n, host in out["reads"]:
+            row = ttnn.to_torch(ttnn.get_device_tensors(host)[0]).reshape(-1)[:n]
+            tokens[lane * self.per_lane : lane * self.per_lane + n] = row.to(torch.int32)
+        return tokens
 
     # ------------------------------------------------------------------ warmup and lifetime
     def _max_prefill_tokens(self):
@@ -452,13 +605,28 @@ class MiMoV2ForCausalLM:
             handles = [(m, m.prefill_enqueue(tokens[:n], 0, start_pos=start, layers=layers)) for m in self.models]
             for m, h in handles:
                 m.prefill_read(h)
+        # Batches of first chunks (prefill_forward): every user count and padded length a lane's step can hold. Slots
+        # 1 .. users - 1 write the blocks after slot 0's.
+        batches = prefill_warmup_batches(max_tokens, self.per_lane, model0.PREFILL_BATCH_MAX_PADDED, self.max_seq_len)
+        batches = batches if PREFILL_BATCH else []
+        span = -(-model0.PREFILL_BATCH_MAX_PADDED // BLOCK_SIZE)
+        if self.per_lane * span > blocks.numel():
+            raise RuntimeError(f"{num_blocks} KV blocks cannot back the prefill warmup's batches {batches}")
         for model in self.models:
-            model.set_vllm_page_tables({0: {g: torch.zeros(width, dtype=torch.int32) for g in groups}})
+            model.set_vllm_page_tables({s: {g: blocks[s * span :] for g in groups} for s in range(self.per_lane)})
+        for users, n in batches:
+            chunks_of = [(tokens[:n], s) for s in range(users)]
+            handles = [(m, m.prefill_enqueue_batch(chunks_of, layers=layers)) for m in self.models]
+            for m, h in handles:
+                m.prefill_read(h)
+        for model in self.models:
+            empty = torch.zeros(width, dtype=torch.int32)
+            model.set_vllm_page_tables({s: {g: empty for g in groups} for s in range(self.per_lane)})
         self.already_warmed_up_prefill = self.prefill_programs_compiled = True
         new = [m.mesh_device.num_program_cache_entries() - p for m, p in zip(self.models, programs)]
         logger.info(
             f"MiMo vLLM: prefill warmed up in {time.time() - t0:.1f}s: {len(chunks)} chunks of up to {max_tokens} "
-            f"tokens through layers {layers}, {new} new programs per replica"
+            f"tokens and {len(batches)} batches through layers {layers}, {new} new programs per replica"
         )
 
     def warmup_model_decode(self, kv_cache=None, enable_trace=False, max_batch_size=None, **kwargs):

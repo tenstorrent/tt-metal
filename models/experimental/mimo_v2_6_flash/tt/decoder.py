@@ -57,9 +57,11 @@ class TtRMSNorm:
         """The weight as a torch [hidden] tensor (read back from chip 0; it is replicated)."""
         return ttnn.to_torch(ttnn.get_device_tensors(self.weight)[0]).float().reshape(-1)
 
-    def __call__(self, x, memory_config=None):
-        """``memory_config``: where the decode (one tile row) output goes; DRAM interleaved by default."""
-        if x.shape[-2] == TILE:
+    def __call__(self, x, memory_config=None, prefill=False):
+        """``memory_config``: where the decode (one tile row) output goes; DRAM interleaved by default. ``prefill``
+        takes the interleaved norm for any row count, whose rows do not depend on the other rows (a prefill row in a
+        batch equals the same row alone); a decode tile row takes the width-sharded norm."""
+        if x.shape[-2] == TILE and not prefill:
             mem, program = self._decode_configs(x.shape[-1])
             x_sharded = ttnn.to_memory_config(x, mem)
             y = ttnn.rms_norm(
@@ -111,8 +113,11 @@ class TtMiMoDenseMLP:
         for w in (w_gate, w_up, w_down):
             w.deallocate(True)
 
-    def forward(self, x, token_mask=None):
-        if x.shape[-2] == TILE:
+    def forward(self, x, token_mask=None, decode=False):
+        """``decode``: a decode step (32 rows), through the DRAM-sharded matmuls. Prefill always takes the
+        interleaved linears, whose rows do not depend on the other rows (a prefill row computed in a batch equals
+        the same row computed alone)."""
+        if decode and x.shape[-2] == TILE:
             gate = self.up_mm(x, self.w_gate)
             up = self.up_mm(x, self.w_up)
             act = ttnn.mul(
@@ -217,11 +222,11 @@ class TtMiMoDecoderLayer:
         self.attn_reduce = ReduceExpand(plan, self.hidden, plan.tp, cfg)
 
     def _ffn(self, x, token_mask, decode=False):
-        h = self.post_norm(x)
+        h = self.post_norm(x, prefill=not decode)
         if decode and self.is_moe and self.mlp.decode_users is not None:
             out = self.mlp.forward_decode(h, token_mask)
         else:
-            out = self.mlp.forward(h, token_mask)
+            out = self.mlp.forward(h, token_mask, decode=decode)
         h.deallocate(True)
         y = ttnn.add(x, out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         out.deallocate(True)
@@ -232,11 +237,11 @@ class TtMiMoDecoderLayer:
         return page_table[self.is_swa] if isinstance(page_table, dict) else page_table
 
     def forward_prefill(
-        self, x, user_id, page_table, kv_cache, token_mask=None, real_len=None, start_pos=0, tables=None
+        self, x, user_id, page_table, kv_cache, token_mask=None, real_len=None, start_pos=0, tables=None, users=1
     ):
         """One prefill chunk at ``start_pos``; ``tables``: this layer's kv.PrefillTables (see
-        TtMiMoAttention.forward_prefill)."""
-        h = self.input_norm(x)
+        TtMiMoAttention.forward_prefill). ``users`` R > 1: the first chunks of R users, rows user after user."""
+        h = self.input_norm(x, prefill=True)
         attn = self.attn.forward_prefill(
             h,
             user_id,
@@ -245,6 +250,7 @@ class TtMiMoDecoderLayer:
             start_pos=start_pos,
             real_len=real_len,
             tables=tables,
+            users=users,
         )
         h.deallocate(True)
         x2 = ttnn.add(x, attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)

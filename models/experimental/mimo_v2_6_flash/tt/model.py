@@ -17,6 +17,7 @@ update and SDPA skip it, and its MoE routing weights are masked to zero so it do
 set of experts computed.
 """
 
+import contextlib
 import os
 import time
 
@@ -74,6 +75,22 @@ def prefill_warmup_chunks(max_tokens, max_seq_len, block_size, window):
                 chunks.add(chunk)
                 out.append((n, start))
     return out
+
+
+def prefill_warmup_batches(max_tokens, max_users, max_padded, max_seq_len):
+    """(users, tokens) of first-chunk batches (TtMiMoModel.prefill_enqueue_batch) that together run every program a
+    batch of up to ``max_users`` users and ``max_tokens`` real tokens can: one per user count and padded length of at
+    most ``max_padded``, each user with the fewest tokens padded to that length. Batch programs key on those two only
+    (every chunk starts at 0)."""
+    shortest = {}
+    for n in range(1, min(max_tokens, max_padded, max_seq_len) + 1):
+        shortest.setdefault(prefill_padded_len(n), n)
+    return [
+        (users, n)
+        for users in range(2, max_users + 1)
+        for padded, n in sorted(shortest.items())
+        if padded <= max_padded and users * n <= max_tokens
+    ]
 
 
 class TtMiMoModel:
@@ -283,6 +300,8 @@ class TtMiMoModel:
         self.layer_groups = list(layer_groups)
         empty = torch.zeros(self.max_batch, table_width, dtype=torch.int32)
         self.vllm_tables = {g: empty.clone() for g in sorted(set(self.layer_groups))}
+        # Decode's device-sampled greedy token (decode_forward_device); persistent buffers, made before any capture.
+        self.greedy_head = GreedyHead(self.plan, self.vocab_local, self.decode_users, self.max_batch)
         self.page_table_tt = {
             g: ttnn.from_torch(
                 empty,
@@ -461,11 +480,12 @@ class TtMiMoModel:
         tt_tokens.deallocate(True)
         return ttnn.reshape(x, (1, 1, tokens.numel(), self.cfg.hidden_size))
 
-    def _logits(self, x, h=None):
-        """``h``: final_norm(x) when the last layer's reduction already computed it (a persistent buffer)."""
+    def _logits(self, x, h=None, prefill=False):
+        """``h``: final_norm(x) when the last layer's reduction already computed it (a persistent buffer).
+        ``prefill``: x holds prefill rows (the final norm takes its row-invariant prefill form, TtRMSNorm)."""
         own_h = h is None
         if own_h:
-            h = self.final_norm(x)
+            h = self.final_norm(x, prefill=prefill)
         logits = ttnn.linear(
             h,
             self.lm_head,
@@ -490,22 +510,27 @@ class TtMiMoModel:
             self.swa_table.prefill(slot, start_pos, start_pos + n, start_pos + padded)
             self._sync_swa_table()
         tables, start = self._prefill_tables(slot, start_pos, padded, layers)
+        for setup in self.rope_setups.values():
+            setup.begin_prefill_chunk()
         x = self._embed(torch.nn.functional.pad(tokens.to(torch.int32), (0, padded - n)))
-        for k, i in enumerate(layers):
-            y = self.layers[i].forward_prefill(
-                x,
-                slot,
-                self._layer_page_table(i),
-                self.kv_caches[i],
-                real_len=n,
-                start_pos=start_pos,
-                tables=tables[self._table_key(i)],
-            )
-            x.deallocate(True)
-            x = y
-            if hidden is not None:
-                hidden[k].append((ttnn.clone(x), n))
+        with self._prefill_reduce(padded):
+            for k, i in enumerate(layers):
+                y = self.layers[i].forward_prefill(
+                    x,
+                    slot,
+                    self._layer_page_table(i),
+                    self.kv_caches[i],
+                    real_len=n,
+                    start_pos=start_pos,
+                    tables=tables[self._table_key(i)],
+                )
+                x.deallocate(True)
+                x = y
+                if hidden is not None:
+                    hidden[k].append((ttnn.clone(x), n))
         # Enqueued: freeing them now is ordered with the work that reads them.
+        for setup in self.rope_setups.values():
+            setup.end_prefill_chunk()
         for t in tables.values():
             t.release()
         if start is not None:
@@ -535,12 +560,85 @@ class TtMiMoModel:
             last = ttnn.slice(x, at, at, slice_dim=2, num_devices=padded // TILE)
             at.deallocate(True)
             x.deallocate(True)
-        logits = self._logits(last)
+        logits = self._logits(last, prefill=True)
         last.deallocate(True)
         return {"logits": logits, "row": seq_len - 1 - tile_start, "hidden": hidden}
 
+    # Longest padded length a chunk of a prefill batch can have (``prefill_enqueue_batch``): shorter chunks dispatch
+    # as many ops as long ones, so batching them is what pays. MIMO_PREFILL_BATCH=0 turns batching off.
+    PREFILL_BATCH_MAX_PADDED = 512
+
+    def _prefill_reduce(self, padded):
+        """The row reductions of a prefill pass of chunks padded to ``padded``. A chunk short enough to be batched
+        reduces in chip order (MeshPlan.ordered_reduce) whether it runs in a batch or alone, so a user's prefill
+        does not depend on what it was batched with; longer chunks always run alone and keep ``ttnn.all_reduce``."""
+        if padded <= self.PREFILL_BATCH_MAX_PADDED:
+            return self.plan.ordered_reduce()
+        return contextlib.nullcontext()
+
+    def prefill_enqueue_batch(self, chunks, layers=None):
+        """First chunks of several users in one pass. ``chunks``: [(tokens 1D torch, slot)], each from position 0,
+        every one padded to the longest one's padded length S (at most PREFILL_BATCH_MAX_PADDED). The users' rows run
+        user after user ([1, 1, R * S, hidden]) through the norms, projections and MoE, and through attention as a
+        batch of R sequences. Only with vLLM's page tables (``setup_vllm_kv_cache``). Returns a pending handle for
+        ``prefill_read``, whose logits have one row per user."""
+        assert self.layer_groups is not None, "a prefill batch writes through vLLM's page tables"
+        num = len(chunks)
+        assert num > 1, "a prefill batch has several users"
+        padded = max(prefill_padded_len(t.numel()) for t, _ in chunks)
+        assert padded <= self.PREFILL_BATCH_MAX_PADDED and padded <= self.max_seq_len, padded
+        layers = range(len(self.layers)) if layers is None else layers
+        rows = kv_lib.replicated(self.plan, torch.arange(num, dtype=torch.int32), ttnn.uint32)
+        tables = {}
+        for i in layers:
+            key = self._table_key(i)
+            if key not in tables:
+                table, scratch = self._host_table(key)
+                slots = [slot for _, slot in chunks]
+                tables[key] = kv_lib.BatchFillTables(self.plan, table, slots, padded, self.block_size, scratch, rows)
+        for setup in self.rope_setups.values():
+            setup.begin_prefill_chunk()
+        tokens = torch.cat([torch.nn.functional.pad(t.to(torch.int32), (0, padded - t.numel())) for t, _ in chunks])
+        x = self._embed(tokens)
+        with self._prefill_reduce(padded):
+            for i in layers:
+                y = self.layers[i].forward_prefill(
+                    x,
+                    None,
+                    self._layer_page_table(i),
+                    self.kv_caches[i],
+                    start_pos=0,
+                    tables=tables[self._table_key(i)],
+                    users=num,
+                )
+                x.deallocate(True)
+                x = y
+        for setup in self.rope_setups.values():
+            setup.end_prefill_chunk()
+        for t in tables.values():
+            t.release()
+        rows.deallocate(True)
+        # Each user's last token: the tile row holding it, through a tensor-args slice (keyed on the padded length).
+        parts, picks = [], []
+        for r, (t, _) in enumerate(chunks):
+            n = t.numel()
+            at = kv_lib.replicated(
+                self.plan, torch.tensor([0, 0, r * padded + (n - 1) // TILE * TILE, 0], dtype=torch.int32), ttnn.uint32
+            )
+            parts.append(ttnn.slice(x, at, at, slice_dim=2, num_devices=num * padded // TILE))
+            at.deallocate(True)
+            picks.append(r * TILE + (n - 1) % TILE)
+        x.deallocate(True)
+        last = ttnn.concat(parts, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        for t in parts:
+            t.deallocate(True)
+        logits = self._logits(last, prefill=True)
+        last.deallocate(True)
+        return {"logits": logits, "row": picks, "hidden": None}
+
     def prefill_read(self, pending):
-        """-> (last-token logits [vocab], per-layer hidden states [tokens, hidden] when requested)."""
+        """-> (last-token logits [vocab], per-layer hidden states [tokens, hidden] when requested). A batch's pending
+        handle (``prefill_enqueue_batch``) gives [users, vocab]."""
         logits = self.plan.to_torch_tp_concat(pending["logits"], dim=-1).float()
         pending["logits"].deallocate(True)
         out = logits.reshape(-1, logits.shape[-1])[pending["row"]]
@@ -625,10 +723,14 @@ class TtMiMoModel:
             return {"logits": logits, "next_tokens": next_tokens}
         rows = None
         if self.layer_groups is not None:
-            # vLLM samples on the host: it reads the users' rows (row-major) instead of 32 rows of tiles.
+            # vLLM: host sampling reads the users' rows (row-major) instead of 32 rows of tiles; device sampling is
+            # GreedyHead's greedy token (the lowest id on ties, like the host's argmax), written into the next step's
+            # token input. Nothing reads per-chip top-k candidates.
             rm = ttnn.to_layout(logits, ttnn.ROW_MAJOR_LAYOUT)
             rows = ttnn.slice(rm, (0, 0, 0, 0), (1, 1, self.decode_users, self.vocab_local))
             rm.deallocate(True)
+            next_tokens = self.greedy_head(logits, token_input=tokens_tt)
+            return {"logits": logits, "next_tokens": next_tokens, "logits_rows": rows}
         # Each chip's top-k over its vocab shard: the host can merge 8 x k candidates per user instead of
         # reading 32 x 152576 logits every step.
         values, indices = ttnn.topk(logits, k=self.DECODE_TOPK, dim=-1, largest=True, sorted=True)
@@ -668,6 +770,7 @@ class TtMiMoModel:
         if greedy_only and self.greedy_head is None:
             # Persistent buffers, allocated before any capture.
             self.greedy_head = GreedyHead(self.plan, self.vocab_local, self.decode_users, self.max_batch)
+        written = greedy_only or self.layer_groups is not None  # GreedyHead wrote the tokens into the input
         # Per-step token slots for device-resident runs, allocated before capture: buffers allocated after a
         # capture may overlap the trace's replayed intermediates.
         history = [
@@ -684,16 +787,16 @@ class TtMiMoModel:
         host = self.prepare_decode_inputs_host(torch.zeros(self.max_batch, dtype=torch.int32), empty)
         inputs = [ttnn.to_device(t, self.mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG) for t in host]
         warm = self.decode_forward_device(*inputs, greedy_only=greedy_only)
-        self._feed_back(inputs, warm, tokens_written=greedy_only)  # every slot is empty: positions stay -1
+        self._feed_back(inputs, warm, tokens_written=written)  # every slot is empty: positions stay -1
         for name, t in warm.items():
-            if not (greedy_only and name == "next_tokens"):  # GreedyHead's buffer is persistent
+            if not (written and name == "next_tokens"):  # GreedyHead's buffer is persistent
                 t.deallocate(True)
         ttnn.synchronize_device(self.mesh_device)
         fabric = getattr(self.plan, "fabric_gather", None)
         phase = fabric.phase if fabric is not None else None
         trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
         output = self.decode_forward_device(*inputs, greedy_only=greedy_only)
-        self._feed_back(inputs, output, tokens_written=greedy_only)
+        self._feed_back(inputs, output, tokens_written=written)
         ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
         # Every replay reuses the gather phases baked in at capture: back to back, replays only alternate the
         # gather buffers if the step made an even number of fabric reductions (FabricRowGather.advance).
@@ -730,10 +833,28 @@ class TtMiMoModel:
             t.deallocate(True)
         return out
 
+    def decode_enqueue_resident(self, positions):
+        """A decode step on the tokens and positions the last replay fed back (``_feed_back``): copies only the
+        RoPE inputs of ``positions`` (torch [max_batch], what the trace's own positions now hold), then replays the
+        trace. Non-blocking; returns the trace's output."""
+        assert self.decode_trace is not None, "a resident decode step replays the decode trace"
+        assert int(positions.max()) < self.max_seq_len, f"position {int(positions.max())} >= {self.max_seq_len}"
+        self._advance_swa(positions)
+        host = (
+            *self.rope_setups["swa"].decode_host_inputs(positions),
+            *self.rope_setups["full"].decode_host_inputs(positions),
+        )
+        for h, d in zip(host, self.decode_trace["inputs"][2:6]):
+            ttnn.copy_host_to_device_tensor(h, d)
+        ttnn.execute_trace(self.mesh_device, self.decode_trace["id"], cq_id=0, blocking=False)
+        return self.decode_trace["output"]
+
     def _release(self, handle):
         if self.decode_trace is None or handle is not self.decode_trace["output"]:
+            persistent = self.greedy_head.next_tokens if self.greedy_head is not None else None
             for t in handle.values():
-                t.deallocate(True)
+                if t is not persistent:
+                    t.deallocate(True)
 
     def decode_read(self, handle):
         """Full logits [max_batch, vocab] (reads every vocab shard)."""

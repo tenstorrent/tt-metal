@@ -16,6 +16,7 @@ Routed experts are tensor-parallel too: every chip holds all 256 experts with 1/
 ``moe_intermediate_size`` (2048 / 8 = 256), and the expert output is all-reduced across the row.
 """
 
+import contextlib
 import math
 import os
 
@@ -36,6 +37,9 @@ class MeshPlan:
         self.tp = self.mesh_shape[tp_axis]
         self.num_links = num_links
         self.topology = topology if self.tp > 2 else ttnn.Topology.Linear
+        # ``ordered_reduce``: all_reduce sums the chips in chip order (see there).
+        self.ordered = False
+        self.sum_config = compute_config(ttnn.MathFidelity.HiFi4, fp32_acc=True, packer_l1_acc=False)
 
     def shard(self, dim):
         """Shard tensor ``dim`` across the TP axis, replicate across the other axis."""
@@ -46,9 +50,41 @@ class MeshPlan:
     def replicate(self):
         return ttnn.ReplicateTensorToMesh(self.mesh_device)
 
+    @contextlib.contextmanager
+    def ordered_reduce(self):
+        """Inside: ``all_reduce`` all-gathers the chips' tensors and sums them in chip order in fp32, so every row's
+        sum depends on that row's values only. ``ttnn.all_reduce`` reduce-scatters, and the order it adds a row's
+        chips in changes with the number of rows (and where the row sits), so a prefill row computed in a batch
+        would differ from the same row computed alone. 8x the memory of the input while it runs."""
+        assert not self.ordered, "ordered_reduce does not nest"
+        self.ordered = True
+        try:
+            yield
+        finally:
+            self.ordered = False
+
     def all_reduce(self, x, memory_config=None):
         if self.tp == 1:
             return x
+        if self.ordered:
+            gathered = ttnn.all_gather(
+                x,
+                dim=0,
+                cluster_axis=self.tp_axis,
+                num_links=self.num_links,
+                topology=self.topology,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            x.deallocate(True)
+            out = ttnn.sum(
+                gathered,
+                dim=0,
+                keepdim=True,
+                memory_config=memory_config or ttnn.DRAM_MEMORY_CONFIG,
+                compute_kernel_config=self.sum_config,
+            )
+            gathered.deallocate(True)
+            return out
         out = ttnn.all_reduce(
             x,
             cluster_axis=self.tp_axis,

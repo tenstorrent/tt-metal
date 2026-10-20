@@ -139,6 +139,23 @@ class PrefillTables:
                 t.deallocate(True)
 
 
+class BatchFillTables:
+    """The KV blocks a batch of first chunks writes through one page table (TtMiMoAttention.forward_prefill with
+    ``users`` R > 1: R users, each from position 0 and padded to the same ``padded`` length): ``fill`` int32
+    [R, ceil(padded / block_size)] per chip, row r the blocks of user r's positions 0 .. padded - 1, and ``rows``
+    uint32 [R] = 0 .. R - 1 (shared by the batch's tables; the caller frees it), the row of ``fill`` each input batch
+    entry of the batched ``paged_fill_cache`` writes through. The shapes depend only on R and ``padded``."""
+
+    def __init__(self, plan, table, slots, padded, block_size, scratch, rows):
+        count = -(-padded // block_size)
+        fill = torch.cat([block_rows(table, slot, 0, count, scratch) for slot in slots], dim=1)  # [tp, R, count]
+        self.fill = per_chip(plan, fill, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
+        self.rows = rows
+
+    def release(self):
+        self.fill.deallocate(True)
+
+
 # Most padding a prefill chunk gets (model.prefill_padded_len rounds up to 32, then to 128 or 256 tokens).
 PREFILL_MAX_PAD = 255
 

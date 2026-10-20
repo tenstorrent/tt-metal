@@ -43,7 +43,7 @@ import ttnn
 
 from .proj_stream import BankStreamMatmul
 from .common import TILE, DramShardedMatmul, as_weight, cache_name, compute_config, decode_linear_config, pad_to
-from .kv import kv_replication, per_chip, slot_owner_masks
+from .kv import BatchFillTables, kv_replication, per_chip, slot_owner_masks
 from .moe_stream import KERNEL_DIR, zero_output
 from .rope import permute_heads_for_rope
 
@@ -651,7 +651,7 @@ class TtMiMoAttention:
         trans = self.rope.transformation_mat_prefill
         q_rot = ttnn.experimental.rotary_embedding_llama(q, cos, sin, trans, is_decode_mode=False)
         k_rot = ttnn.experimental.rotary_embedding_llama(k, cos, sin, trans, is_decode_mode=False)
-        for t in (q, k, cos, sin):
+        for t in (q, k, *((cos, sin) if self.rope.owns_prefill_rot_mats else ())):
             t.deallocate(True)
         return q_rot, k_rot
 
@@ -662,15 +662,18 @@ class TtMiMoAttention:
         k_cache, v_cache = kv_cache
         seq_len = k_rot.shape[-2]
         table, batch_idx = (page_table, user_id) if tables is None else (tables.fill, 0)
+        batch = {"batch_idx": batch_idx}
+        if isinstance(tables, BatchFillTables):  # input batch entry r writes through row r of tables.fill
+            batch = {"batch_idx_tensor": tables.rows}
         k_fill = ttnn.typecast(k_rot, k_cache.dtype)
         if v_cache.shape[-1] < v.shape[-1]:
-            v_real = ttnn.slice(v, (0, 0, 0, 0), (1, v.shape[1], seq_len, v_cache.shape[-1]))
+            v_real = ttnn.slice(v, (0, 0, 0, 0), (v.shape[0], v.shape[1], seq_len, v_cache.shape[-1]))
             v_fill = ttnn.typecast(v_real, v_cache.dtype)
             v_real.deallocate(True)
         else:
             v_fill = ttnn.typecast(v, v_cache.dtype)
-        ttnn.experimental.paged_fill_cache(k_cache, k_fill, table, batch_idx=batch_idx)
-        ttnn.experimental.paged_fill_cache(v_cache, v_fill, table, batch_idx=batch_idx)
+        ttnn.experimental.paged_fill_cache(k_cache, k_fill, table, **batch)
+        ttnn.experimental.paged_fill_cache(v_cache, v_fill, table, **batch)
         k_fill.deallocate(True)
         v_fill.deallocate(True)
 
@@ -688,18 +691,25 @@ class TtMiMoAttention:
                 t.deallocate(True)
         return out
 
-    def forward_prefill(self, x, user_id, page_table, kv_cache, start_pos=0, real_len=None, tables=None):
+    def forward_prefill(self, x, user_id, page_table, kv_cache, start_pos=0, real_len=None, tables=None, users=1):
         """x [1, 1, S, hidden] (S a multiple of 32): positions start_pos .. start_pos + S - 1 of the user in slot
         ``user_id`` (``real_len`` real tokens, then padding whose K/V land past them, where decode overwrites them).
         ``start_pos`` is a multiple of the block size; the cache must hold the user's earlier positions.
         ``tables`` (kv.PrefillTables of this layer's page table; required when start_pos > 0): the blocks the chunk
         writes, and for a later chunk the window blocks it reads (SWA) or its whole context and start (global).
-        Without it a first chunk writes row ``user_id`` of ``page_table``."""
+        Without it a first chunk writes row ``user_id`` of ``page_table``.
+
+        ``users`` R > 1: first chunks of R users at once, x [1, 1, R * S, hidden] user after user (each padded to S),
+        ``tables`` their kv.BatchFillTables. The projections see R * S rows; attention runs as a batch of R sequences.
+        """
         assert start_pos == 0 or tables is not None, "a later chunk needs its kv.PrefillTables"
+        assert users == 1 or (start_pos == 0 and isinstance(tables, BatchFillTables)), "a batch is first chunks"
         if start_pos > 0 and self.split_users:
             return self._prefill_owner_chunk(x, user_id, kv_cache, start_pos, tables)
-        seq_len = x.shape[-2]
+        seq_len = x.shape[-2] // users
         xqkv = self._prefill_qkv(x)
+        if users > 1:
+            xqkv = ttnn.reshape(xqkv, (users, 1, seq_len, xqkv.shape[-1]))
         q, k, v = ttnn.experimental.nlp_create_qkv_heads(
             xqkv,
             num_heads=self.nh_local,
@@ -754,6 +764,8 @@ class TtMiMoAttention:
             attn = chunk
         attn_cat = ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         attn.deallocate(True)
+        if users > 1:  # [R, 1, S, heads * dim] -> the users' rows back to back (after the head concat: see above)
+            attn_cat = ttnn.reshape(attn_cat, (1, 1, users * seq_len, attn_cat.shape[-1]))
         out = ttnn.linear(
             attn_cat,
             self.wo,
