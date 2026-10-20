@@ -169,6 +169,12 @@ def _compute(objdump, elf_path):
     if region is None:
         return "no-window"
     window = [insns[k] for k in region]
+    dump = Path(__file__).resolve().parents[4] / "perf_data" / "runs" / "windows"
+    dump.mkdir(parents=True, exist_ok=True)
+    inside = set(region)
+    (dump / f"{hashlib.sha1(Path(elf_path).read_bytes()).hexdigest()[:12]}_{Path(elf_path).stem}.txt").write_text(
+        str(elf_path) + "\n" + "\n".join(f"{'W' if k in inside else ' '} {a:x} {m} {o}" for k, (a, m, o) in enumerate(insns))
+    )
     positions = {insns[k][0]: n for n, k in enumerate(region)}
     lines = [_normalise(m, o, kernel, positions) for _, m, o in window]
     seen = set()
