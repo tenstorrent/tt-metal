@@ -2536,4 +2536,28 @@ TEST_F(UnitMeshFixture, B10_Blocked_Rejected_2_0) {
         std::exception);
 }
 
+// A program with DFBs and no CBs reserves no CB config region, so its DFB config follows its semaphores directly and
+// dispatch sends both in one write. local_cb_mask describes the DFBs once the offsets are finalized: bit 0 for slot 0
+// on WH/BH, a count of 1 on Quasar.
+TEST_F(UnitMeshAnyDispatchFixture, TensixDFBConfigFollowsSemaphoresWithoutCBRegion) {
+    const bool is_quasar = this->device().arch() == ARCH::QUASAR;
+    experimental::ProgramSpec spec = is_quasar ? experimental::test_helpers::MakeMinimalValidProgramSpec()
+                                               : experimental::test_helpers::MakeMinimalGen1ValidProgramSpec();
+    spec.semaphores.push_back(
+        {.unique_id = experimental::SemaphoreSpecName{"sem"}, .target_nodes = experimental::NodeCoord{0, 0}});
+
+    Program program = experimental::MakeProgramFromSpec(this->device(), spec);
+    program.impl().finalize_dataflow_buffer_configs();
+    program.impl().finalize_offsets(this->device().get_devices()[0]);
+
+    const auto& hal = MetalContext::instance(program.impl().get_context_id()).hal();
+    const uint32_t index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
+    const ProgramConfig& config = program.impl().get_program_config(index);
+    EXPECT_EQ(config.cb_size, 0u);
+    EXPECT_EQ(config.dfb_offset, config.sem_offset + config.sem_size);
+    for (const auto& kernel_group : program.impl().get_kernel_groups(index)) {
+        EXPECT_EQ(kernel_group->launch_msg.view().kernel_config().local_cb_mask(), 1u);
+    }
+}
+
 }  // end namespace tt::tt_metal
