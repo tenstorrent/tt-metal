@@ -1001,6 +1001,7 @@ manifest::Router ComputeMeshRouterBuilder::collect_manifest_router(const ChipRou
         .chip_facts = chip_facts,
         .addresses_to_clear = addresses_to_clear,
         .kernel = kernel_inputs_,
+        .hal = fabric_context_.get_hal(),
     };
     return tt::tt_fabric::collect_manifest_router(inputs);
 }
