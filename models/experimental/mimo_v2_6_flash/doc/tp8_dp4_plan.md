@@ -30,7 +30,7 @@ DP path. The cost is that experts must be BFP4 to fit.
 | Attention sink (SWA) | 64 | 8 | pre-divided by the softmax scale |
 | Dense MLP (layer 0) | 4096 -> 16384 -> 4096 | 4096 x 2048, 2048 x 4096 | column / row parallel + all-reduce |
 | Router | 4096 x 256 bf16, bias fp32 | replicated | fp32 sigmoid / topk / gather |
-| Routed experts | 256 x (3 x 4096 x 2048) | 256 x (3 x 4096 x 256) | intermediate dim TP-sharded, BFP4; decode streams the selected experts bank-locally (`tt/moe_stream.py`); prefill `sparse_matmul` on the union of selected experts per 32-token group; all-reduce |
+| Routed experts | 256 x (3 x 4096 x 2048) | 256 x (3 x 4096 x 256) | intermediate dim TP-sharded, BFP4; decode streams the selected experts bank-locally (`tt/moe_stream.py`), prefill runs them expert-major (`tt/moe_prefill.py`); all-reduce |
 | LM head | 4096 x 152576 | 4096 x 19072 | vocab-parallel, host concatenates |
 | KV cache, SWA layer | | K, V `[blocks, 1, 64, 192]` | paged by absolute position, only the blocks a window can still read backed: `kv.swa_blocks_per_user` (9) per user for any chunk size (`kv.SwaBlockTable`), BFP8 |
 | KV cache, global layer | | K `[blocks, 1, 64, 192]`, V `[blocks, 1, 64, 128]` | full context, only the users this chip owns, BFP8; decode via `paged_flash_multi_latent_attention_decode`, later prefill chunks via `chunked_flash_mla_prefill` with a separate V cache |
@@ -245,3 +245,60 @@ Decode on this cache layout, and chunked prefill on it (it replaces #60957's pad
 | `test_model_chunked_tp8_dp4.py` (48 layers, ~1.5K-token prompt) | chunks of 128-1024 and a prefix hit at 512: next-token logits PCC vs one shot >= 0.9963, same top-1 up to a bf16 tie |
 | `test_model_traced_tp8_dp4.py` | passed: traced == eager (logits PCC 1.000000); device greedy loop == host loop for 16 tokens per user |
 | `tests/perf/decode_bandwidth.py --steps 32 --repeats 5` | device loop 1 row 13.48 ms/step (51.8%), 4 rows 15.06 ms (46.4%); 128/128 tokens match the host loop (every run starts from a fresh prefill) |
+
+## MoE prefill, 2026-10-19 (branch `mimo-v2.6/moe-prefill`, MOPD)
+
+MoE prefill (`tt/moe_prefill.py`) replaces the per-32-token `sparse_matmul`, which re-read ~40% of the expert weights
+for every 32 tokens (~37 GB per 4K-token layer per chip). It was built on `mimo-v2.6/decode-perf-chunked` (#61388,
+closed) and ported onto `mimo-v2.6/dev` after #61389 without changing it. `TtMiMoMoE.forward` routes as before (fp32
+top-8, the token mask applied to the weights) and hands the indices and weights to `PrefillExperts`:
+
+- `DevicePlan` (16 cores, split by expert) sorts the T x 8 (token, k) pairs by expert and pads each expert to
+  32-row groups, entirely on device; it is bitwise identical to the host version of the plan.
+- `GroupedExperts` runs every group in one program on 30 teams of 4 cores. A team core keeps its slice of the
+  job's expert (442 KB of BFP4, from two DRAM banks) in L1 for all of the job's groups, reads its quarter of the
+  group's token rows straight from x and shares the tilized quarter with the team, computes two intermediate
+  columns (gate|up, SwiGLU x routing weight), swaps h tiles with the team, and writes its 32 down columns of every
+  row straight to row k * T + t of a k-major output. `CombineK` sums the 8 rows of every token and tilizes.
+
+One MoE layer, 4096-token chunk, one row (`tests/perf/kagent_moe_prefill_bench.py`). The steps were measured on
+`mimo-v2.6/decode-perf-chunked`; the last row is this branch:
+
+| Change | ms |
+|---|---|
+| Per-32-token `sparse_matmul` | 337.9 |
+| Expert-major with ttnn ops (host plan, embedding gathers, indexed `sparse_matmul` per group) | 34.7 |
+| Grouped expert kernel (each expert slice read once per job) | 20.3 |
+| Plan on device (no routing read back) | 17.6 |
+| Team cores read their token rows directly (no gathered copy of x) | 13.2 |
+| Rows written straight to the k-major output + `CombineK` | 11.8 -> 10.8 (1 KB reads) |
+| Plan on 16 cores | 9.7 |
+| This branch (median of 5) | 9.65 |
+
+`tests/perf/kagent_moe_prefill_check.py` on this branch: output vs the saved `sparse_matmul` outputs PCC
+0.999990-0.999993 (worst token 0.999980) on the golden layer-1 inputs and on 32, 1056 and 4096 random tokens; every
+chip identical, all finite; a second 4096-token call bitwise identical.
+
+Full model on one row (`tests/perf/prefill_time.py`, random tokens): 4096 tokens in one chunk 13.9 s -> 0.731 s (5601
+tokens/s); in chunks of 2048 0.842 s, of 1024 1.062 s; 32K tokens in 4K chunks 6.55 s (5004 tokens/s), from 720 ms
+for the first chunk to 902 ms for the last. All four rows at once (`MiMoGalaxyGenerator.prefill`, 4K prompts): 4 users
+in 2.13 s (7.7k tokens/s per Galaxy), 16 users in 7.91 s (8.3k tokens/s). The host dispatches every op of all four rows
+from one Python thread, so four rows give 1.5x one row, not 4x.
+
+### Validation on `mimo-v2.6/moe-prefill` (MOPD, 2026-10-19)
+
+| Test | Result |
+|---|---|
+| `test_kv_tables.py`, `test_prefill_helpers.py` | 14 passed |
+| `test_decoder_tp8_dp4.py` (layers 0, 1, 5) | 3 passed; worst PCC prefill 0.9987, decode 0.9965 (layer 1: 0.99965 / 0.99898) |
+| `test_chunked_prefill_tp8_dp4.py` (layers 0, 1, 5) | 3 passed; chunked vs reference >= 0.99892, vs one shot >= 0.99932, cached K / V >= 0.99993, decode after it >= 0.99748 |
+| `test_moe_decode_tp8.py` | passed: streaming decode vs prefill (now expert-major), worst user PCC 0.999986, within 2 ulp |
+| `test_model_tp8_dp4.py` (48 layers) | top-1 0.950, logits PCC min 0.9581 / mean 0.9921 vs the fp32 golden (`sparse_matmul`: 0.975, 0.9608 / 0.9925; one of the 40 rows flips) |
+| `test_model_chunked_tp8_dp4.py` | chunks of 128-1024 and a prefix hit at 512: next-token logits PCC vs one shot >= 0.9953, same top-1 up to a bf16 tie, same greedy text |
+| `test_model_traced_tp8_dp4.py` | passed: traced == eager (logits PCC 1.000000); device greedy loop == host loop for 16 tokens per user |
+| `tests/perf/decode_bandwidth.py --steps 32 --repeats 5` | device loop 1 row 13.50 ms/step (51.7%), 4 rows 15.07 ms (46.3%); 128/128 tokens match the host loop |
+
+`test_model_traced_tp8_dp4` first failed here on a tie, not on a wrong value: golden prompt 0 reaches an exact bf16 tie at
+its second decode step (" that" and " of" both 17.625), and the host loop's `MiMoGalaxyGenerator.greedy_token` took the
+first of the per-chip top-k candidates while the device loop's GreedyHead takes the lowest id. `greedy_token` now takes
+the lowest id too, like `torch.argmax` over the full logits.
