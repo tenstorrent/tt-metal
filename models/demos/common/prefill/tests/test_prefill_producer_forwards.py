@@ -288,3 +288,15 @@ def test_packed_rejects_burst(env, expect_error):
     env(forward_chunks=2)
     with expect_error(AssertionError, "p_burst"):
         run(make_cfg(p_burst=0.5, forward_chunks=2))
+
+
+def test_slot_lengths_from_env(monkeypatch, expect_error):
+    monkeypatch.setattr(producer, "MAX_SEQ_LEN", 32768)
+    monkeypatch.delenv("PREFILL_PRODUCER_SLOT_LENGTHS", raising=False)
+    assert producer._slot_lengths_from_env(4) is None
+    monkeypatch.setenv("PREFILL_PRODUCER_SLOT_LENGTHS", "32768,2048")
+    assert producer._slot_lengths_from_env(4) == {0: 32768, 1: 2048}  # slots 2 and 3 keep random lengths
+    for bad in ("1,2,3,4,5", "2048,abc", "2048,0", "2048,", "32769"):  # 32769: past MAX_SEQ_LEN
+        monkeypatch.setenv("PREFILL_PRODUCER_SLOT_LENGTHS", bad)
+        with expect_error(ValueError, "PREFILL_PRODUCER_SLOT_LENGTHS"):
+            producer._slot_lengths_from_env(4)

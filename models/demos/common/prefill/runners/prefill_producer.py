@@ -507,8 +507,25 @@ def _config_from_env() -> ProducerConfig:
         pcc_threshold=float(os.environ.get("PREFILL_STANDALONE_CHUNKED_PCC", "0.93")),
         interleave=interleave,
         multi_turn_prob=float(os.environ.get("PREFILL_PRODUCER_MULTI_TURN_PROB", "0.0")),
+        slot_lengths=_slot_lengths_from_env(int(os.environ.get("PREFILL_NUM_USERS", "1"))),
         forward_chunks=FORWARD_CHUNKS,
     )
+
+
+def _slot_lengths_from_env(num_users: int):
+    """PREFILL_PRODUCER_SLOT_LENGTHS=n0,n1,...: slot s's prompts are n_s tokens (one shared trace), else None.
+    Slots past the list keep random lengths."""
+    spec = os.environ.get("PREFILL_PRODUCER_SLOT_LENGTHS", "").strip()
+    if not spec:
+        return None
+    entries = spec.split(",")
+    # A length past MAX_SEQ_LEN would reach the runner, whose validation stops the device-owning process.
+    if len(entries) > num_users or not all(e.strip().isdigit() and 0 < int(e) <= MAX_SEQ_LEN for e in entries):
+        raise ValueError(
+            f"PREFILL_PRODUCER_SLOT_LENGTHS={spec!r}: want at most {num_users} token counts in [1, {MAX_SEQ_LEN}]"
+            " (PREFILL_MAX_SEQ_LEN), comma-separated"
+        )
+    return {slot: int(n) for slot, n in enumerate(entries)}
 
 
 class _Slot:
@@ -1532,6 +1549,8 @@ def _resolve_slot_prompts(cfg: ProducerConfig):
         trace = resolve_trace_dir(default)
         slot_traces = {s: trace for s in range(cfg.num_users)}
         pool_tokens = MAX_SEQ_LEN if cfg.multi_turn_prob > 0 else cfg.chunks_max * CHUNK_SIZE
+        if cfg.slot_lengths:
+            pool_tokens = max(pool_tokens, max(cfg.slot_lengths.values()))
         return slot_traces, None, {trace: _load_token_pool(trace, pool_tokens)}
 
     entries = [e.strip() for e in spec.split(",") if e.strip()]
@@ -1692,7 +1711,7 @@ def main() -> None:
     chunk_layers = _completion_layers_per_chunk(kv_table)
     layer_bound = _completion_layer_bound(chunk_layers)
     slot_traces, slot_lengths, pools_by_trace = _resolve_slot_prompts(cfg)
-    cfg.slot_lengths = slot_lengths
+    cfg.slot_lengths = slot_lengths or cfg.slot_lengths
 
     def push_forward(pushes: list) -> float:
         for p in pushes:
