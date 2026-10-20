@@ -615,7 +615,7 @@ class ExpertGateUpDispatch(_BankStreamOp):
         ]
         for t in (x_rm, routing, counts, act, table, base if self.ep else counts):
             writer_ct += ttnn.TensorAccessorArgs(t).get_compile_time_args()
-        compute_ct = [cb_xrm, cb_x, cb_w, cb_d, cb_h, cb_out, self.kt, self.ppb]
+        compute_ct = [cb_xrm, cb_x, cb_w, cb_d, cb_h, cb_out, self.kt]
         program = self._program("gate_up_dispatch", cbs, reader_ct, reader_rt, writer_ct, writer_rt, compute_ct)
         ttnn.generic_op([w13, x_rm, routing, counts, act, table] + ([base] if self.ep else []), program)
         return act
