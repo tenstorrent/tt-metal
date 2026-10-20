@@ -32,7 +32,7 @@ constexpr uint32_t kMetaEntryBytes = 16;
 constexpr uint32_t kBlockWords = 256;  // stream words per refill
 constexpr uint32_t kScalarCbBytes = 64;
 
-enum Cb : uint32_t { kData = 0, kMeta = 1, kRuns = 2, kScalar = 3, kHeaders = 4 };
+enum Cb : uint32_t { kData = 0, kMeta = 1, kRuns = 2, kScalar = 3, kHeaders = 4, kCounters = 5 };
 
 struct WorkerKernels {
     tt::tt_metal::KernelHandle reader;
@@ -45,8 +45,15 @@ uint8_t sparse_push_mux_buffers() {
     return env ? static_cast<uint8_t>(std::stoul(env)) : 2;
 }
 
+// PROTOTYPE switch: SPARSE_PUSH_TREE=1 runs host-planned stream pages as one-hop multicast trees
+// (kernels/tree_push_*.cpp), one page per sender.
+bool tree_mode(const HighBwAllGatherParams& params) {
+    const char* v = std::getenv("SPARSE_PUSH_TREE");
+    return params.push_stripe_chunk == 0 && v != nullptr && std::string(v) != "0";
+}
+
 uint32_t num_links(const HighBwAllGatherParams& params, const HighBwAllGatherInputs& tensor_args) {
-    if (params.push_stripe_chunk > 0) {
+    if (params.push_stripe_chunk > 0 || tree_mode(params)) {
         return params.num_links.value_or(2);
     }
     // push_runs_tensor per device: [1, 1, links, words]; one stream page per link, shared by its 4 senders.
@@ -71,6 +78,7 @@ HighBwSparsePushFactory::cached_mesh_workload_t HighBwSparsePushFactory::create_
 
     const uint32_t links = num_links(operation_attributes, tensor_args);
     const bool from_table = operation_attributes.push_stripe_chunk > 0;
+    const bool tree = tree_mode(operation_attributes);
     const uint32_t channels = links * kDirections;
     TT_FATAL(channels >= 1 && channels <= kMaxChannels, "sparse push supports 1..2 links, got {}", links);
     TT_FATAL(
@@ -118,6 +126,9 @@ HighBwSparsePushFactory::cached_mesh_workload_t HighBwSparsePushFactory::create_
     const uint32_t senders_per_channel = use_mux ? per_channel_k : 1u;
     const uint32_t workers = channels * senders_per_channel;
     TT_FATAL(cores_all.size() >= workers, "sparse push needs {} worker cores", workers);
+    TT_FATAL(
+        !tree || (workers <= 16 && runs_tensor.padded_shape()[-2] == workers),
+        "tree push (prototype) needs at most 16 senders and one stream page per sender");
     // Layout: channel c = link * 4 + dir; worker w = c * K + k. Mux cores follow the workers.
     std::vector<CoreCoord> worker_cores(cores_all.begin(), cores_all.begin() + workers);
     std::vector<CoreCoord> mux_cores;
@@ -174,9 +185,23 @@ HighBwSparsePushFactory::cached_mesh_workload_t HighBwSparsePushFactory::create_
         cb(kRuns, from_table ? 4096 : kBlockWords * sizeof(uint32_t), 1, tt::DataFormat::RawUInt32);
         cb(kScalar, kScalarCbBytes, 1, tt::DataFormat::RawUInt32);
         cb(kHeaders, tt::tt_fabric::get_tt_fabric_packet_header_size_bytes(), 1 + 4, tt::DataFormat::RawUInt32);
+        const uint32_t go_sem_id = tree ? tt::tt_metal::CreateSemaphore(program, worker_range, 0) : 0u;
+        if (tree) {
+            cb(kCounters, 64, 1, tt::DataFormat::RawUInt32);
+        }
 
         std::vector<uint32_t> reader_ct;
-        if (from_table) {
+        if (tree) {
+            reader_ct = {
+                page_bytes,
+                pages_per_packet,
+                pages_per_slot,
+                batch_from_meta ? 1u : 0u,
+                kBlockWords,
+                runs_page_bytes,
+                go_sem_id,
+            };
+        } else if (from_table) {
             const auto layout =
                 SparsePushPlanLayout::make(operation_attributes.push_max_rows, operation_attributes.push_stripe_chunk);
             TT_FATAL(
@@ -215,13 +240,18 @@ HighBwSparsePushFactory::cached_mesh_workload_t HighBwSparsePushFactory::create_
         }
         tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_ct);
         tt::tt_metal::TensorAccessorArgs(runs_tensor.buffer()).append_to(reader_ct);
+        if (tree) {
+            tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(reader_ct);
+        }
         if (batch_from_meta) {
             tt::tt_metal::TensorAccessorArgs(tensor_args.input_batch_index_tensor->buffer()).append_to(reader_ct);
         }
         if (from_table && tensor_args.push_progress_tensor.has_value()) {
             tt::tt_metal::TensorAccessorArgs(tensor_args.push_progress_tensor->buffer()).append_to(reader_ct);
         }
-        std::vector<uint32_t> writer_ct = {page_bytes, num_devices, my_rank, workers, packet_bytes, links};
+        std::vector<uint32_t> writer_ct =
+            tree ? std::vector<uint32_t>{page_bytes, workers, packet_bytes, go_sem_id}
+                 : std::vector<uint32_t>{page_bytes, num_devices, my_rank, workers, packet_bytes, links};
         tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_ct);
         writer_ct.push_back(use_mux ? 1u : 0u);
         if (use_mux) {
@@ -251,12 +281,13 @@ HighBwSparsePushFactory::cached_mesh_workload_t HighBwSparsePushFactory::create_
         const std::string kdir = "ttnn/cpp/ttnn/operations/experimental/high_bw_all_gather/device/kernels/";
         auto reader = tt::tt_metal::CreateKernel(
             program,
-            kdir + (from_table ? "sparse_push_table_reader.cpp" : "sparse_push_reader.cpp"),
+            kdir + (tree ? "tree_push_reader.cpp"
+                         : (from_table ? "sparse_push_table_reader.cpp" : "sparse_push_reader.cpp")),
             worker_range,
             tt::tt_metal::ReaderDataMovementConfig(reader_ct, reader_defines));
         auto writer = tt::tt_metal::CreateKernel(
             program,
-            kdir + "sparse_push_writer.cpp",
+            kdir + (tree ? "tree_push_writer.cpp" : "sparse_push_writer.cpp"),
             worker_range,
             tt::tt_metal::WriterDataMovementConfig(writer_ct, writer_defines));
 
@@ -269,8 +300,8 @@ HighBwSparsePushFactory::cached_mesh_workload_t HighBwSparsePushFactory::create_
              operation_attributes.batch_slot_num_layers,
              operation_attributes.batch_slot_layer_idx,
              operation_attributes.input_batch_index.value_or(0),
-             tensor_args.push_progress_tensor.has_value() ? tensor_args.push_progress_tensor->buffer()->address()
-                                                          : 0u});
+             tensor_args.push_progress_tensor.has_value() ? tensor_args.push_progress_tensor->buffer()->address() : 0u,
+             output_tensor.buffer()->address()});
         tt::tt_metal::SetCommonRuntimeArgs(
             program, writer, {output_tensor.buffer()->address(), ready_sem.address(), done_sem.address()});
 
@@ -300,10 +331,27 @@ HighBwSparsePushFactory::cached_mesh_workload_t HighBwSparsePushFactory::create_
         for (uint32_t w = 0; w < workers; ++w) {
             const uint32_t c = w / senders_per_channel, k = w % senders_per_channel;
             const uint32_t link = c / kDirections, dir = c % kDirections;
-            tt::tt_metal::SetRuntimeArgs(
-                program, reader, worker_cores[w], {link, dir, my_rank, k, senders_per_channel, links, w});
-            std::vector<uint32_t> writer_rt = {
-                w, dir, link, k, static_cast<uint32_t>(sync_core.x), static_cast<uint32_t>(sync_core.y)};
+            std::vector<uint32_t> writer_rt;
+            if (tree) {
+                tt::tt_metal::SetRuntimeArgs(
+                    program,
+                    reader,
+                    worker_cores[w],
+                    {w, static_cast<uint32_t>(sync_core.x), static_cast<uint32_t>(sync_core.y)});
+                const auto nbr = mesh_device->get_fabric_node_id(neighbors[dir]);
+                writer_rt = {
+                    w,
+                    link,
+                    k,
+                    static_cast<uint32_t>(sync_core.x),
+                    static_cast<uint32_t>(sync_core.y),
+                    static_cast<uint32_t>(nbr.chip_id),
+                    static_cast<uint32_t>(*nbr.mesh_id)};
+            } else {
+                tt::tt_metal::SetRuntimeArgs(
+                    program, reader, worker_cores[w], {link, dir, my_rank, k, senders_per_channel, links, w});
+                writer_rt = {w, dir, link, k, static_cast<uint32_t>(sync_core.x), static_cast<uint32_t>(sync_core.y)};
+            }
             for (uint32_t other = 0; other < workers; ++other) {
                 const auto phys = mesh_device->worker_core_from_logical_core(worker_cores[other]);
                 writer_rt.push_back(static_cast<uint32_t>(phys.x));
@@ -341,7 +389,8 @@ HighBwSparsePushFactory::cached_mesh_workload_t HighBwSparsePushFactory::create_
                 .reader_kernel_id = reader,
                 .writer_kernel_id = writer,
                 .ready_sem = ready_sem,
-                .done_sem = done_sem});
+                .done_sem = done_sem,
+                .tree = tree});
     }
     return cached_mesh_workload_t{std::move(workload), std::move(shared_variables)};
 }
@@ -363,6 +412,7 @@ void HighBwSparsePushFactory::override_runtime_arguments(
         reader[5] = operation_attributes.input_batch_index.value_or(0);
         reader[6] =
             tensor_args.push_progress_tensor.has_value() ? tensor_args.push_progress_tensor->buffer()->address() : 0u;
+        reader[7] = output_tensor.buffer()->address();
         auto& writer = tt::tt_metal::GetCommonRuntimeArgs(program, vars.writer_kernel_id);
         writer[0] = output_tensor.buffer()->address();
         writer[1] = operation_attributes.ready_semaphore->address();

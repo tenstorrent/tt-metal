@@ -1342,3 +1342,365 @@ def test_sparse_push_hop_efficiency(mesh_device):
         for t in (idx_tt, table, tables):
             ttnn.deallocate(t)
     logger.info("\n" + "\n".join(lines))
+
+
+# ---------------------------------------------------------------------------------------------------------
+# PROTOTYPE multicast-tree push (SPARSE_PUSH_TREE=1): each prefix row is sent once per link of a tree from its owner
+# to every requester that wants it, one hop at a time (see kernels/tree_push_reader.cpp). Host-planned.
+# ---------------------------------------------------------------------------------------------------------
+
+_E, _W, _N, _S = 0, 1, 2, 3  # get_neighbors order; N = row - 1, E = col + 1
+
+
+def _ring_cover(offsets, n):
+    """Smallest (forward, backward) ring extents covering offsets 1..n-1 from 0; balanced on ties."""
+    best = None
+    for fwd in range(n):
+        back = max([n - t for t in offsets if t > fwd], default=0)
+        key = (fwd + back, max(fwd, back))
+        if best is None or key < best[0]:
+            best = (key, fwd, back)
+    return best[1], best[2]
+
+
+def _tree_edges(rel_dests, order, mesh_shape):
+    """Edges (from, dir, to, depth) of a tree from (0, 0) to rel_dests [(row, col)]; order "yx" walks the owner's
+    column first and fans out along rows, "xy" the transpose."""
+    R, C = mesh_shape
+    yx = order == "yx"
+    # (major ring length, minor ring length, major/minor -> chip, fwd/back dirs)
+    nmaj, nmin = (R, C) if yx else (C, R)
+    to_rc = (lambda a, b: (a % R, b % C)) if yx else (lambda a, b: (b % R, a % C))
+    dmaj = (_S, _N) if yx else (_E, _W)
+    dmin = (_E, _W) if yx else (_S, _N)
+    dests = [(r, c) if yx else (c, r) for r, c in rel_dests]
+    majors = sorted({a for a, _ in dests} - {0})
+    fwd, back = _ring_cover(majors, nmaj)
+    edges = []
+    for t in range(fwd):
+        edges.append((to_rc(t, 0), dmaj[0], to_rc(t + 1, 0), t))
+    for t in range(back):
+        edges.append((to_rc(-t, 0), dmaj[1], to_rc(-t - 1, 0), t))
+    for a in {a for a, _ in dests}:
+        minors = sorted({b for aa, b in dests if aa == a} - {0})
+        if not minors:
+            continue
+        depth0 = a if a <= fwd else nmaj - a
+        f2, b2 = _ring_cover(minors, nmin)
+        for t in range(f2):
+            edges.append((to_rc(a, t), dmin[0], to_rc(a, t + 1), depth0 + t))
+        for t in range(b2):
+            edges.append((to_rc(a, -t), dmin[1], to_rc(a, -t - 1), depth0 + t))
+    return edges
+
+
+def _tree_plan(natural, n_dev, mesh_shape, stripe_chunk, pages_per_packet, buffer_rows, links=2, k_per=2):
+    """Host plan for the tree push: stream pages [n_dev, 1, senders, words], each requester's natural-row -> page
+    map, and stats. Requester d needs the rows in natural[d] (negative = masked)."""
+    R, C = mesh_shape
+    B, P = _DRAM_BANKS, pages_per_packet
+    unit = P * B
+    senders = links * 4 * k_per
+    needed = [np.unique(v[v >= 0]) for v in natural.reshape(n_dev, -1)]
+    req_of = np.concatenate([np.full(len(v), d) for d, v in enumerate(needed)])
+    uniq, inv = np.unique(np.concatenate(needed), return_inverse=True)
+    masks = np.zeros(len(uniq), dtype=np.int64)
+    np.bitwise_or.at(masks, inv, np.left_shift(1, req_of).astype(np.int64))
+    owners, local = _owner_local(uniq, stripe_chunk, n_dev)
+    remote = masks & ~np.left_shift(1, owners).astype(np.int64)
+
+    # Group rows by (owner, remote requesters); pick the Y-first or X-first tree per group, keeping links balanced.
+    order = np.lexsort((remote, owners))
+    keys = np.stack([owners[order], remote[order]], 1)
+    cuts = np.flatnonzero(np.any(keys[1:] != keys[:-1], 1)) + 1
+    groups = [g for g in np.split(order, cuts) if remote[g[0]]]
+    groups.sort(key=len, reverse=True)
+    load = np.zeros((n_dev, 4))
+    buckets = {}  # (depth, from, dir, keep) -> [uniq row ids]
+    max_depth = 0
+    for g in groups:
+        o = int(owners[g[0]])
+        ro, co = divmod(o, C)
+        m = int(remote[g[0]])
+        dests = [divmod(d, C) for d in range(n_dev) if m >> d & 1]
+        rel = [((r - ro) % R, (c - co) % C) for r, c in dests]
+        best = None
+        for tree_order in ("yx", "xy"):
+            edges = [
+                (((a[0] + ro) % R) * C + (a[1] + co) % C, dr, ((b[0] + ro) % R) * C + (b[1] + co) % C, h)
+                for a, dr, b, h in _tree_edges(rel, tree_order, mesh_shape)
+            ]
+            trial = load.copy()
+            for a, dr, _, _ in edges:
+                trial[a, dr] += len(g)
+            if best is None or (trial.max(), len(edges)) < best[0]:
+                best = ((trial.max(), len(edges)), trial, edges)
+        _, load, edges = best
+        for a, dr, b, h in edges:
+            buckets.setdefault((h, a, dr, bool(m >> b & 1)), []).append(g)
+            max_depth = max(max_depth, h)
+
+    neighbour = lambda a, dr: (((a // C + (dr == _S) - (dr == _N)) % R) * C + (a % C + (dr == _E) - (dr == _W)) % C)
+    nu = len(uniq)
+    loc = np.full((n_dev, nu), np.iinfo(np.int64).min, dtype=np.int64)  # page (>= 0) or staging placeholder
+    arr_w = np.full((n_dev, nu), -1, dtype=np.int64)
+    arr_i = np.zeros((n_dev, nu), dtype=np.int64)
+    compact_lanes = np.zeros(n_dev, dtype=np.int64)
+    stage_lanes = np.zeros(n_dev, dtype=np.int64)
+    sent = np.zeros((n_dev, senders), dtype=np.int64)
+    rr = np.zeros((n_dev, 4), dtype=np.int64)
+    expected = np.zeros((n_dev, senders), dtype=np.int64)
+    items = [[[] for _ in range(senders)] for _ in range(n_dev)]  # (depth, waits, kind, target, srcs)
+    lane_rel = lambda j: (j % B) + (j // B) * unit
+
+    # Requesters' own rows: local copies into their compact buffers.
+    for d in range(n_dev):
+        ids = np.flatnonzero((owners == d) & (masks >> d & 1).astype(bool))
+        for p, start in enumerate(range(0, len(ids), P)):
+            chunk = ids[start : start + P]
+            j = compact_lanes[d]
+            compact_lanes[d] += 1
+            loc[d, chunk] = lane_rel(j) + np.arange(len(chunk)) * B
+            items[d][p % senders].append((0, {}, 3, int(lane_rel(j)), local[chunk]))
+
+    for key in sorted(buckets):
+        h, a, dr, keep = key
+        b = neighbour(a, dr)
+        ids = np.concatenate(buckets[key])
+        for start in range(0, len(ids), P):
+            chunk = ids[start : start + P]
+            i = np.arange(len(chunk)) * B
+            pick = rr[a, dr] % (links * k_per)
+            rr[a, dr] += 1
+            w = ((pick // k_per) * 4 + dr) * k_per + pick % k_per
+            if keep:
+                j = compact_lanes[b]
+                compact_lanes[b] += 1
+                target = int(lane_rel(j))
+                loc[b, chunk] = target + i
+            else:
+                j = stage_lanes[b]
+                stage_lanes[b] += 1
+                target = -int(lane_rel(j)) - 1
+                loc[b, chunk] = -(lane_rel(j) + i) - 1
+            if h == 0:
+                kind, srcs, waits = 1, local[chunk], {}
+            else:
+                kind, srcs = 2, loc[a, chunk].copy()
+                assert (srcs != np.iinfo(np.int64).min).all(), "row forwarded before it arrived"
+                waits = {}
+                for s, k in zip(arr_w[a, chunk], arr_i[a, chunk]):
+                    waits[int(s)] = max(waits.get(int(s), 0), int(k) + 1)
+            arr_w[b, chunk] = w
+            arr_i[b, chunk] = sent[a, w]
+            sent[a, w] += 1
+            expected[b, w] += 1
+            items[a][w].append((h, waits, kind, target, srcs))
+
+    compact_pages = -(-compact_lanes.max() // B) * unit
+    stage_base = -(-compact_pages // unit) * unit
+    stage_pages = -(-stage_lanes.max() // B) * unit
+    assert stage_base + stage_pages <= buffer_rows, f"tree staging overflow: {stage_base + stage_pages} > {buffer_rows}"
+    page_of = lambda v: np.where(v >= 0, v, stage_base - v - 1)
+
+    pages = []
+    for c in range(n_dev):
+        for w in range(senders):
+            words = [0] + [int(x) for x in expected[c]] + [0] * (31 - senders)
+            waited = {}
+            its = sorted(items[c][w], key=lambda it: (it[0], max(it[1].values(), default=0)))
+            level = 0
+            for h, waits, kind, target, srcs in its:
+                while level < h:
+                    words.append(6)
+                    level += 1
+                for s, k in sorted(waits.items()):
+                    if k > waited.get(s, 0):
+                        words += [4, s, k]
+                        waited[s] = k
+                words += [kind, int(page_of(np.int64(target))), len(srcs)]
+                words += [int(x) for x in (page_of(srcs) if kind == 2 else srcs)]
+            while level < max_depth:
+                words.append(6)
+                level += 1
+            words.append(0)
+            pages.append(words)
+    width = max(len(w) for w in pages)
+    width += -width % 16
+    host = np.zeros((n_dev * senders, width), dtype=np.int64)
+    for idx, w in enumerate(pages):
+        host[idx, : len(w)] = w
+    slot_maps = np.full((n_dev, natural.max() + 1), -1, dtype=np.int64)
+    for d in range(n_dev):
+        ids = np.searchsorted(uniq, needed[d])
+        slot_maps[d, needed[d]] = page_of(loc[d, ids])
+        assert (loc[d, ids] >= 0).all(), "requester row not in its compact buffer"
+    stats = dict(
+        depth=max_depth + 1,
+        busiest_dir_mb=load.max() * 704 / 1e6,
+        staged_rows=int(stage_lanes.max() * P),
+        packets=int(sent.sum()),
+        stream_words=width,
+    )
+    return torch.from_numpy(host.reshape(n_dev, 1, senders, width).astype(np.int32)), slot_maps, stats
+
+
+@run_for_blackhole()
+@_PERF
+@pytest.mark.timeout(0)
+@pytest.mark.parametrize("device_params", [_TORUS_XY_GLM], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+def test_sparse_push_tree(mesh_device):
+    from safetensors.numpy import load_file
+
+    from models.demos.deepseek_v3_d_p.tt.mla.sparse_kv_push import _shard_over_mesh
+
+    if not _TRACE_1M.exists():
+        pytest.skip(f"1M GLM-5.3 trace not found at {_TRACE_1M}")
+    assert os.environ.get("SPARSE_PUSH_TREE", "0") != "0", "run with SPARSE_PUSH_TREE=1"
+    kv_fmt, chunk_global = "fp8", 5120
+    n_dev = mesh_device.get_num_devices()
+    mesh_shape = tuple(mesh_device.shape)
+    links = 2
+    stripe_chunk = s_local = chunk_global // n_dev
+    prefix_tokens = _TRACE_1M_START
+    cache_tokens = prefix_tokens + chunk_global
+    page_bytes = 704
+    pages_per_packet = max(1, ttnn.get_tt_fabric_max_payload_size_bytes() // page_bytes)
+    buffer_rows = cache_tokens + n_dev * pages_per_packet * _DRAM_BANKS
+    layers = [int(x) for x in os.environ.get("TOPK_LAYERS", "62").split(",")]
+    k_per = max(1, int(os.environ.get("SPARSE_PUSH_MUX_K", "2")))  # senders per channel; 0 = direct (one)
+
+    common = dict(layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    shard_seq = ttnn.ShardTensorToMesh(mesh_device, dim=2)
+    replicate = ttnn.ReplicateTensorToMesh(mesh_device)
+    cache = _kv_cache(mesh_device, 2, cache_tokens, kv_fmt, shard_seq, seed=2)
+    dense_out = _zero_kv_buffer(mesh_device, cache_tokens, kv_fmt)
+    routed_out = _zero_kv_buffer(mesh_device, buffer_rows, kv_fmt)
+    tree_out = _zero_kv_buffer(mesh_device, buffer_rows, kv_fmt)
+    q = ttnn.from_torch(
+        torch.randn(1, H, n_dev * s_local, K_DIM).to(torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        mesh_mapper=shard_seq,
+        **common,
+    )
+    scalar = lambda v: ttnn.from_torch(
+        torch.tensor([[[[v]]]], dtype=torch.int32), dtype=ttnn.uint32, mesh_mapper=replicate, **common
+    )
+    user, start = scalar(0), scalar(prefix_tokens)
+    grid = mesh_device.compute_with_storage_grid_size()
+    sems = [
+        ttnn.create_global_semaphore(mesh_device, _cols(0, grid.x - 1), 0, ttnn.BufferType.L1_SMALL) for _ in range(2)
+    ]
+    gather_kw = dict(
+        dim=2,
+        cluster_axis=None,
+        num_links=links,
+        input_batch_index_tensor=user,
+        batch_slot_num_layers=2,
+        batch_slot_layer_idx=1,
+        ready_semaphore=sems[0],
+        data_valid_semaphore=sems[1],
+    )
+
+    def timed(fn, n=10):
+        fn()
+        ttnn.synchronize_device(mesh_device)
+        tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+        fn()
+        ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
+        ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=True)
+        t0 = time.perf_counter()
+        for _ in range(n):
+            ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=False)
+        ttnn.synchronize_device(mesh_device)
+        us = (time.perf_counter() - t0) / n * 1e6
+        ttnn.release_trace(mesh_device, tid)
+        return us
+
+    ttnn.experimental.high_bw_all_gather(
+        cache, output_tensor=dense_out, gathered_prefix_tensor=start, gathered_slab_global=chunk_global, **gather_kw
+    )
+    lines = [f"GLM-5.3 real top-k, fp8, 5k chunk at {prefix_tokens} tokens: routed table push vs one-hop tree push"]
+    for layer in layers:
+        f = _TRACE_1M / "dsa" / f"dsa_topk_indices_layer_{layer}" / "rows_00000000_00005120.safetensors"
+        natural = next(iter(load_file(str(f)).values())).astype(np.int64).reshape(n_dev, s_local, TOPK)
+        idx_natural = ttnn.from_torch(
+            torch.from_numpy(natural.reshape(1, 1, n_dev * s_local, TOPK).astype(np.int32)),
+            dtype=ttnn.uint32,
+            mesh_mapper=shard_seq,
+            **common,
+        )
+        # Today's push: device plan, table all-gather, multi-hop routed push.
+        table, _ = ttnn.experimental.sparse_push_plan(
+            idx_natural,
+            num_devices=n_dev,
+            stripe_chunk=stripe_chunk,
+            max_rows=cache_tokens,
+            pages_per_packet=pages_per_packet,
+            banks=_DRAM_BANKS,
+            chunk_start=start,
+        )
+        _shard_over_mesh(table, mesh_device)
+        tables = ttnn.from_torch(
+            torch.zeros(1, 1, table.shape[2] * n_dev, 1024, dtype=torch.int32),
+            dtype=ttnn.uint32,
+            mesh_mapper=replicate,
+            **common,
+        )
+        ttnn.experimental.high_bw_all_gather(table, dim=2, output_tensor=tables, cluster_axis=None, num_links=links)
+        routed = lambda: ttnn.experimental.high_bw_all_gather(
+            cache,
+            output_tensor=routed_out,
+            push_runs_tensor=tables,
+            push_stripe_chunk=stripe_chunk,
+            push_max_rows=cache_tokens,
+            **gather_kw,
+        )
+        t_routed = timed(routed)
+
+        t0 = time.perf_counter()
+        streams_host, slot_maps, stats = _tree_plan(
+            natural, n_dev, mesh_shape, stripe_chunk, pages_per_packet, buffer_rows, links=links, k_per=k_per
+        )
+        t_host = time.perf_counter() - t0
+        streams = ttnn.from_torch(
+            streams_host, dtype=ttnn.uint32, mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0), **common
+        )
+        tree = lambda: ttnn.experimental.high_bw_all_gather(
+            cache, output_tensor=tree_out, push_runs_tensor=streams, **gather_kw
+        )
+        logger.info(f"layer {layer}: first tree push (untraced)")
+        tree()
+        ttnn.synchronize_device(mesh_device)
+        logger.info(f"layer {layer}: first tree push done")
+        t_tree = timed(tree)
+        lines.append(
+            f"  layer {layer}: routed {t_routed:6.0f} us, tree {t_tree:6.0f} us ({t_routed / t_tree:.2f}x); "
+            f"tree depth {stats['depth']}, busiest direction {stats['busiest_dir_mb']:.1f} MB, "
+            f"staged {stats['staged_rows']} rows/chip, {stats['packets']} packets, plan {t_host:.0f} s on host"
+        )
+        logger.info(lines[-1])
+
+        # Exactness: sparse_sdpa over the tree's compact buffer equals sparse_sdpa over the dense gather.
+        compact = np.where(natural >= 0, np.take_along_axis(slot_maps[:, None, :], np.maximum(natural, 0), 2), -1)
+        idx_tree = ttnn.from_torch(
+            torch.from_numpy(compact.reshape(1, 1, n_dev * s_local, TOPK).astype(np.int32)),
+            dtype=ttnn.uint32,
+            mesh_mapper=shard_seq,
+            **common,
+        )
+        out_dense = ttnn.to_torch(
+            _sparse_sdpa(q, dense_out, idx_natural, s_local * TP, kv_fmt),
+            mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=2),
+        )
+        out_tree = ttnn.to_torch(
+            ttnn.transformer.sparse_sdpa(
+                q, tree_out, idx_tree, V_DIM, kv_format=_KV_FORMATS[kv_fmt][0], scale=K_DIM**-0.5, k_chunk_size=128
+            ),
+            mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=2),
+        )
+        assert torch.equal(out_dense, out_tree), f"layer {layer}: tree push differs from the dense-gather path"
+        for t in (idx_natural, table, tables, streams, idx_tree):
+            ttnn.deallocate(t)
+    logger.info("\n" + "\n".join(lines))

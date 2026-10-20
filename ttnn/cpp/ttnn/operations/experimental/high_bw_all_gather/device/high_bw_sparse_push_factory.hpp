@@ -23,6 +23,7 @@ struct HighBwSparsePushFactory {
         tt::tt_metal::KernelHandle writer_kernel_id{};
         tt::tt_metal::GlobalSemaphore ready_sem;
         tt::tt_metal::GlobalSemaphore done_sem;
+        bool tree = false;
     };
 
     using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
