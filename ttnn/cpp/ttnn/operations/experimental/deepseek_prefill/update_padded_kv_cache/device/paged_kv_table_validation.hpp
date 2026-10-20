@@ -6,14 +6,30 @@
 
 #include <cstdint>
 
+#include <tt-metalium/constants.hpp>
+
 #include "ttnn/tensor/tensor.hpp"
 
-// Host-side checks of a paged KV page table (kernels/paged_kv_table.hpp), shared by the ops that write and read it.
+// Host-side checks of a paged KV pool and its page table (kernels/paged_kv_table.hpp).
 namespace ttnn::operations::experimental::paged_kv {
 
 inline uint32_t page_table_width(const Tensor& table) { return table.logical_shape()[-1]; }
 
 inline uint32_t page_table_rows(const Tensor& table) { return table.logical_volume() / page_table_width(table); }
+
+// A pool of single-head pages [entries, 1, page, D], the page a whole number of 32-row tiles.
+inline void validate_page_pool(const Tensor& pool) {
+    const auto& shape = pool.padded_shape();
+    TT_FATAL(
+        shape.rank() == 4 && shape[1] == 1,
+        "a paged KV pool holds single-head pages [entries, 1, page, D]; got {}",
+        shape);
+    TT_FATAL(
+        shape[2] % tt::constants::TILE_HEIGHT == 0,
+        "a paged KV pool's page ({} tokens, its seq dim) must be a multiple of {}",
+        shape[2],
+        tt::constants::TILE_HEIGHT);
+}
 
 // The container the kernels read: rows of INT32 entries, interleaved in DRAM on the pool's device.
 inline void validate_page_table(const Tensor& table, const Tensor& pool) {

@@ -6,15 +6,14 @@
 
 #include <cstdint>
 
-// Page-table format of a paged KV cache, shared by the ops that write it (update_padded_kv_cache) and read it
-// (high_bw_all_gather), host and device side.
+// Page-table format of a paged KV cache, host and device side.
 //
-// The pool holds page-sized cache entries [num_pages * num_layers, heads, page, head_dim]; physical page p of layer l
-// is entry p * num_layers + l. A request's row of the INT32 table maps every GLOBAL logical page q (sequence positions
-// [q * page, (q + 1) * page)) to a physical page in the pool of the rank that holds q, or -1 when unmapped. Positions
-// are placed block-cyclically over the sp ranks of the cluster axis in runs of chunk_local, the per-chip input seq of a
-// write, so q lives on rank (q * page / chunk_local) % sp and every write and read of a request must use the same
-// chunk_local. One replicated row serves the whole mesh; each chip reads only its own entries.
+// The pool holds single-head pages [num_pages * num_layers, 1, page, head_dim]; physical page p of layer l is entry
+// pool_entry(p, l, num_layers). A request's row of the INT32 table maps every GLOBAL logical page q (sequence positions
+// [q * page, (q + 1) * page)) to a physical page in the pool of the chip at SP coordinate (q * page / chunk_local) % sp
+// along the cluster axis, or -1 when unmapped: positions are placed block-cyclically over the sp coordinates in runs of
+// chunk_local, the per-chip input seq of a write, so every write and read of a request must use the same chunk_local.
+// One replicated row serves the whole mesh; each chip reads only its own entries.
 //
 // This is not the page-table format of paged_update_cache / SDPA, whose INT32 entries are device-local blocks of a
 // per-device, per-layer cache.
@@ -22,6 +21,9 @@ namespace ttnn::operations::experimental::paged_kv {
 
 // The unmapped entry (-1) as the kernels read it.
 inline constexpr uint32_t kUnmappedPage = 0xFFFFFFFFu;
+
+// The pool entry holding physical page `page` of `layer`.
+constexpr uint32_t pool_entry(uint32_t page, uint32_t layer, uint32_t num_layers) { return page * num_layers + layer; }
 
 // The global row (token, or tile-row when tiled) a chip-local cache row holds under block-cyclic placement.
 constexpr uint32_t global_row_of_local(uint32_t local_row, uint32_t rank, uint32_t ranks, uint32_t chunk_rows) {

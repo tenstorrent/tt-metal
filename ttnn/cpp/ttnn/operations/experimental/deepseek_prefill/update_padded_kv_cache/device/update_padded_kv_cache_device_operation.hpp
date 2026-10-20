@@ -21,7 +21,7 @@ namespace ttnn::operations::experimental::deepseek_prefill::update_padded_kv_cac
 
 struct UpdatePaddedKvCacheDeviceOperation {
     struct operation_attributes_t {
-        // Cache slot is linearized as users-outer, layers-inner:
+        // A contiguous cache slot is linearized as users-outer, layers-inner (a paged cache goes through its table):
         //   batch_idx = slot_idx * num_layers + layer_idx
         // layer_idx is hashed (structural): it takes only num_layers distinct values, so one cached
         // program per layer is reused across users and chunks.

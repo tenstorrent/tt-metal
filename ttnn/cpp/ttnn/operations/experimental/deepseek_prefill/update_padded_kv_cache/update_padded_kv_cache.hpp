@@ -42,7 +42,9 @@ namespace ttnn::operations::experimental::deepseek_prefill::update_padded_kv_cac
 // p * num_layers + l; the page size is its seq dim) and `page_table` an INT32 ROW_MAJOR DRAM tensor [rows, width]
 // replicated across the mesh. `slot_idx` selects the request's row, which bounds it to width * page tokens. An entry
 // of -1 is unmapped and its rows are not written; neither is an entry outside the pool, which is invalid. The tensor
-// form does not check `slot_idx` against the table's rows. Plain copy path only, with an explicit `cluster_axis`.
+// form does not check `slot_idx` against the table's rows. The table's width is part of the program key, so a workload
+// keeps one fixed-width table. The page is a multiple of 32 dividing the per-chip input seq. Plain copy path only (no
+// rope, scales or tp_axis), with an explicit `cluster_axis`.
 //
 // In-place: returns a handle to `cache`. Two call forms (identical results):
 
