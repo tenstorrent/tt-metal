@@ -37,11 +37,11 @@ namespace CMAKE_UNIQUE_NAMESPACE {
 // A TRISC-visible DFB's extent is a uint16_t of 16-byte units (validate_ring_extent); enforced on
 // every arch so a Wormhole-legal config never FATALs on Quasar.
 constexpr uint64_t MAX_DFB_EXTENT_BYTES = 65535ull * 16ull;
-// Auto K chunk cap, for pipelining rather than L1: compute waits for the first K chunk to be read in full and the last
-// K chunk's compute overlaps no read, so fewer, longer K chunks leave more of a C slice unoverlapped, which shows on
-// cores that produce a single C slice. A C slice of at most SMALL_C_SLICE_TILES tiles has A and B slices cheap enough
-// to read in longer K chunks: its cap is K_tiles / min_K_chunks (one K chunk per reader thread on Quasar, two to
-// double-buffer elsewhere), still enough K chunks to overlap (#57884). Tuning points, not hardware limits.
+// Longest auto K chunk, a pipelining limit rather than an L1 one: it keeps the number of K chunks up. Compute waits
+// for the first K chunk to be read in full and the last K chunk's compute overlaps no read, so a core that produces a
+// single C slice needs several K chunks. A C slice of at most SMALL_C_SLICE_TILES tiles has A and B slices cheap enough
+// for longer K chunks: its limit is K_tiles / min_K_chunks, which still leaves one K chunk per reader thread on Quasar
+// and two to double-buffer elsewhere (#57884). Tuning points, not hardware limits.
 constexpr uint32_t MAX_AUTO_K_CHUNK_TILES = 8;
 constexpr uint32_t SMALL_C_SLICE_TILES = 4;
 // DM threads and buffering per core, fixed so the readers and writers keep the NoC busy rather than sized to the L1
@@ -425,11 +425,16 @@ std::optional<MatmulUnifiedPlan> plan_unified_matmul(
         }
     }
     // ---- 5. Search: each C slice's subblock, then its K chunk, then the best C slice ----
-    // Of the C slices that fit L1, the best is, in priority order (#57884):
-    //   1. the largest, the whole of each core's block of C (one C slice per core: multicast, shards used in place, no
-    //      per-C-slice overhead);
-    //   2. one with a K chunk of at least two tiles (with one, every tile product spills and reloads the partial sums);
-    //   3. the one with the most tiles (each A and B tile read is reused across more of them), then the wider.
+    // The number of K chunks and their length pull opposite ways. More K chunks pipeline better (see
+    // MAX_AUTO_K_CHUNK_TILES); longer ones move the partial sums less (each subblock's partial sums go to L1 and back
+    // between K chunks). So a C slice's K chunk is the longest that fits L1 up to that limit, or all of K when that
+    // lets A's shard be used in place. Of the C slices that fit L1, the best is, in priority order (#57884):
+    //   1. one C slice per core, the whole of each core's block of C, even with 1-tile K chunks (multicast, shards
+    //      used in place, no per-C-slice overhead);
+    //   2. otherwise one whose K chunks are at least two tiles long (1-tile K chunks move the partial sums after every
+    //   K
+    //      tile);
+    //   3. then the one with the most tiles (each A and B tile read is reused across more of them), then the wider.
     const uint32_t K_chunk_floor = config.K_chunk_tiles.value_or(1);  // the shortest K chunk tried
     const uint32_t min_K_chunks = is_quasar ? QUASAR_NUM_READER_THREADS : MIN_OPERAND_BUFFER_DEPTH;
     const auto priority = [&](const MatmulUnifiedPlan& plan) {
@@ -481,7 +486,7 @@ std::optional<MatmulUnifiedPlan> plan_unified_matmul(
 
         // K chunk: all of K when that lets a resident A shard be borrowed (main pins in0_block_w == K for
         // height-sharded in0 for the same reason), else the config's, else the longest divisor of K_tiles that fits,
-        // walking down from the cap (see MAX_AUTO_K_CHUNK_TILES).
+        // walking down from the pipelining limit.
         candidate = make_plan(
             base,
             config.cores,
