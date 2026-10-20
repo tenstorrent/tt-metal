@@ -101,13 +101,15 @@ def gptq_batched(w, h, bits, damping=0.3, block=128, inner=16, offsets=(0, 1)):
     return q.gather(1, inv[:, :, None].expand(E, K, N))
 
 
-def expert_hessians(x, idx, wts, experts, num_experts):
-    """x [T, H] fp32 MoE input, idx / wts [T, k]. -> (H_gate_up [E, H, H], H_down [E, I, I], tokens per expert)."""
+def expert_hessians(x, idx, wts, experts, expert_ids):
+    """x [T, H] fp32 MoE input, idx / wts [T, k]. -> (H_gate_up [n, H, H], H_down [n, I, I], tokens [n]) for the
+    experts ``expert_ids`` (n of them)."""
     hidden, inter = x.shape[1], experts["down_proj"].shape[-1]
-    h_gu = torch.zeros(num_experts, hidden, hidden)
-    h_d = torch.zeros(num_experts, inter, inter)
-    count = torch.zeros(num_experts, dtype=torch.long)
-    for e in range(num_experts):
+    n = len(expert_ids)
+    h_gu = torch.zeros(n, hidden, hidden)
+    h_d = torch.zeros(n, inter, inter)
+    count = torch.zeros(n, dtype=torch.long)
+    for j, e in enumerate(expert_ids):
         t, slot = torch.where(idx == e)
         if t.numel() == 0:
             continue
@@ -115,10 +117,44 @@ def expert_hessians(x, idx, wts, experts, num_experts):
         we = wts[t, slot, None].float()
         act = F.silu(xe @ experts["gate_proj"][e].float().T) * (xe @ experts["up_proj"][e].float().T)
         xw, aw = xe * we, act * we
-        h_gu[e] = xw.T @ xw
-        h_d[e] = aw.T @ aw
-        count[e] = t.numel()
+        h_gu[j] = xw.T @ xw
+        h_d[j] = aw.T @ aw
+        count[j] = t.numel()
     return h_gu, h_d, count
+
+
+def quantize_layer(cfg, args, experts, x, idx, wts, bits, inter_local, dst, i, t0, chunk=32):
+    """GPTQ one MoE layer's experts from its captured input x [T, H] and routing (idx, wts [T, k]); save to dst.
+    Experts go ``chunk`` at a time to bound memory (~60 GB per layer instead of ~200 GB)."""
+    t1 = time.time()
+    # Device layout: gate/up -> [E, H, tp * 2 * I_local] (chip c: [gate_c | up_c]); down -> [E, I, H].
+    w_gate_up, w_down = expert_weights_host(experts, args.tp, inter_local, ttnn.bfloat4_b, mse=False)
+    w_gate_up, w_down = w_gate_up[0], w_down[0]
+    q_gate_up, q_down = torch.empty_like(w_gate_up), torch.empty_like(w_down)  # bf16 holds bfloat4_b values
+    num_experts, few, t_h = w_gate_up.shape[0], 0, 0.0
+    for c0 in range(0, num_experts, chunk):
+        ids = list(range(c0, min(c0 + chunk, num_experts)))
+        th = time.time()
+        h_gu, h_d, count = expert_hessians(x, idx, wts, experts, ids)
+        t_h += time.time() - th
+        wg, wd = w_gate_up[ids].float(), w_down[ids].float()
+        qg = gptq_batched(wg, h_gu, bits, args.damping)
+        del h_gu
+        qd = gptq_batched(wd, h_d, bits, args.damping)
+        del h_d
+        low = count < args.min_tokens
+        if low.any():
+            qg[low] = bfp_mse_prepare(wg[low], ttnn.bfloat4_b).float()
+            qd[low] = bfp_mse_prepare(wd[low], ttnn.bfloat4_b).float()
+        few += int(low.sum())
+        q_gate_up[ids] = qg.to(torch.bfloat16)
+        q_down[ids] = qd.to(torch.bfloat16)
+    torch.save({"w_gate_up": q_gate_up.unsqueeze(0), "w_down": q_down.unsqueeze(0)}, dst + ".tmp")
+    os.replace(dst + ".tmp", dst)
+    logger.info(
+        f"layer {i}: inputs {t1 - t0:.0f}s, hessians {t_h:.0f}s, gptq {time.time() - t1 - t_h:.0f}s; "
+        f"{few} experts under {args.min_tokens} tokens"
+    )
 
 
 def main():
@@ -132,6 +168,16 @@ def main():
     parser.add_argument("--tp", type=int, default=8)
     parser.add_argument("--damping", type=float, default=0.3)
     parser.add_argument("--min-tokens", type=int, default=64)
+    parser.add_argument(
+        "--capture-dir",
+        default=None,
+        help="stage 1: run the reference and save every MoE layer's input and routing here (no GPTQ)",
+    )
+    parser.add_argument(
+        "--from-capture",
+        default=None,
+        help="stage 2: GPTQ the --layers from a stage-1 capture dir (layers are independent: run several at once)",
+    )
     args = parser.parse_args()
     torch.set_num_threads(args.threads)
     if "-" in args.layers:
@@ -144,15 +190,24 @@ def main():
     path = default_model_path()
     cfg = MiMoConfig.from_model_path(path)
     ckpt = MiMoCheckpoint(path, cfg)
+    bits = BFP_MANTISSA_BITS[ttnn.bfloat4_b]
+    inter_local = cfg.moe_intermediate_size // args.tp
+    if args.from_capture:
+        for i in sorted(layers):
+            dst = os.path.join(args.out, f"layer{i}.pt")
+            if not cfg.is_moe(i) or os.path.exists(dst):
+                continue
+            t0 = time.time()
+            cap = torch.load(os.path.join(args.from_capture, f"layer{i}.pt"))
+            experts = ckpt.experts(i)
+            quantize_layer(cfg, args, experts, cap["x"].float(), cap["idx"], cap["wts"], bits, inter_local, dst, i, t0)
+        return
     tok = AutoTokenizer.from_pretrained(path, trust_remote_code=True)
     seqs = calibration_sequences(tok, args.calib, args.seqs, args.seq_len)
     logger.info(f"{len(seqs)} calibration sequences of {args.seq_len} tokens")
     embedding = ckpt.embedding()
     hidden = [embedding[t].float() for t in seqs]
     del embedding
-    bits = BFP_MANTISSA_BITS[ttnn.bfloat4_b]
-    inter_local = cfg.moe_intermediate_size // args.tp
-
     captured = []
     plain_moe = ref.moe
 
@@ -187,51 +242,18 @@ def main():
                 hidden[s_] = hidden[s_] + part
         t1 = time.time()
         if quantize:
-            experts = layer.w["experts"]
             x = torch.cat([c[0] for c in captured])
             idx = torch.cat([c[1] for c in captured])
             wts = torch.cat([c[2] for c in captured])
-            h_gu, h_d, count = expert_hessians(x, idx, wts, experts, cfg.n_routed_experts)
-            t2 = time.time()
-            # Device layout: gate/up -> [E, H, tp * 2 * I_local] (chip c: [gate_c | up_c]); down -> [E, I, H].
-            w_gate_up, w_down = expert_weights_host(experts, args.tp, inter_local, ttnn.bfloat4_b, mse=False)
-            w_gate_up, w_down = w_gate_up[0].float(), w_down[0].float()
-            q_gate_up = gptq_batched(w_gate_up, h_gu, bits, args.damping)
-            del h_gu
-            q_down = gptq_batched(w_down, h_d, bits, args.damping)
-            del h_d
-            few = count < args.min_tokens
-            if few.any():
-                q_gate_up[few] = bfp_mse_prepare(w_gate_up[few], ttnn.bfloat4_b).float()
-                q_down[few] = bfp_mse_prepare(w_down[few], ttnn.bfloat4_b).float()
-            # Calibration-set output error of gate/up (routing-weighted) as a sanity check: GPTQ vs MSE.
-            mse_gu = bfp_mse_prepare(w_gate_up, ttnn.bfloat4_b).float()
-            num = torch.zeros(3)
-            for e in range(cfg.n_routed_experts):
-                t, slot = torch.where(idx == e)
-                if t.numel() == 0:
-                    continue
-                xe = x[t] * wts[t, slot, None].float()
-                ref_y = xe @ w_gate_up[e]
-                num += torch.tensor(
-                    [
-                        float((xe @ q_gate_up[e] - ref_y).square().sum()),
-                        float((xe @ mse_gu[e] - ref_y).square().sum()),
-                        float(ref_y.square().sum()),
-                    ]
+            if args.capture_dir:
+                os.makedirs(args.capture_dir, exist_ok=True)
+                torch.save(
+                    dict(x=x.to(torch.bfloat16), idx=idx, wts=wts), os.path.join(args.capture_dir, f"layer{i}.pt")
                 )
-            out = {
-                "w_gate_up": q_gate_up.to(torch.bfloat16).unsqueeze(0),
-                "w_down": q_down.to(torch.bfloat16).unsqueeze(0),
-            }
-            dst = os.path.join(args.out, f"layer{i}.pt")
-            torch.save(out, dst + ".tmp")
-            os.replace(dst + ".tmp", dst)
-            logger.info(
-                f"layer {i}: forward {t1 - t0:.0f}s, hessians {t2 - t1:.0f}s, gptq {time.time() - t2:.0f}s; "
-                f"{int(few.sum())} experts under {args.min_tokens} tokens; gate/up output rel. error on the "
-                f"calibration tokens: gptq {float((num[0] / num[2]).sqrt()):.4f}, mse {float((num[1] / num[2]).sqrt()):.4f}"
-            )
+                logger.info(f"layer {i}: forward {t1 - t0:.0f}s, captured {x.shape[0]} tokens")
+            else:
+                dst = os.path.join(args.out, f"layer{i}.pt")
+                quantize_layer(cfg, args, layer.w["experts"], x, idx, wts, bits, inter_local, dst, i, t0)
         else:
             logger.info(f"layer {i}: forward {t1 - t0:.0f}s")
         del layer

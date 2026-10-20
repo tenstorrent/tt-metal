@@ -185,9 +185,8 @@ class TtMiMoModel:
         if logits_dtype is None:
             logits_dtype = ttnn.float32 if os.environ.get("MIMO_LOGITS_FP32", "1") != "0" else ttnn.bfloat16
         self.logits_dtype = logits_dtype
-        self.lm_config = compute_config(
-            ttnn.MathFidelity.HiFi4 if logits_dtype == ttnn.float32 else ttnn.MathFidelity.HiFi2
-        )
+        # HiFi2 with fp32 accumulation: the bfloat8_b LM head weights, not the fidelity, bound the logit error.
+        self.lm_config = compute_config(ttnn.MathFidelity.HiFi2)
         self.kv_caches = None
         self.page_table_tt = None
         # Host copies of the model's own page tables ({is_swa: int32 [tp, max_batch, blocks]}) and each one's scratch
