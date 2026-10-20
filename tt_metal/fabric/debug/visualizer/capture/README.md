@@ -76,15 +76,38 @@ and won't overwrite a snapshot.
 
 [`fabric_snapshot_schema.json`](fabric_snapshot_schema.json) is the `.json`'s JSON Schema.
 
+## Taking a snapshot
+
+Capture reads through ttexalens from its own process, so it works while the process that owns the fabric is hung, or
+after it is gone. It needs the run's manifests, which the run writes when `TT_METAL_FABRIC_GENERATE_MANIFEST=1` (see the
+[manifest README](../manifest/README.md)). From the repo root:
+
+```bash
+python3 -m tt_metal.fabric.debug.visualizer.capture generated/fabric
+```
+
+Pass manifest files or directories; a directory stands for the `fabric_manifest_rank_*.json` files in it. Each snapshot
+is written next to its manifest, or into `-o DIR`. Capture prints one line per snapshot and one per router error. It
+exits non-zero when ttexalens doesn't start or a manifest can't be read or its snapshot written; a router error is only
+recorded in the snapshot.
+
+**Finding a router.** A router's chip is the one ttexalens has under the chip's `asic_id`, and it must be of `run.arch`.
+The router's core is `identity.virtual_core` as a translated coordinate, if ttexalens puts it at
+`identity.logical_core`; if not, capture tries ttexalens's eth core number `identity.eth_chan` and says which it read.
+When neither is at the logical core, that is an `open` error for the router.
+
 ## Components
 
 | File | What it does |
 | --- | --- |
 | [`reads.py`](reads.py) | `get_read_plan`: what to read on each router core, from the manifest |
 | [`snapshot.py`](snapshot.py) | `take_snapshot`: reads the plan through a device and writes the snapshot |
+| [`exalens.py`](exalens.py) | `open_exalens`: the device that reads through ttexalens. The only module that imports ttexalens |
+| [`__main__.py`](__main__.py) | The command line: takes a snapshot of each manifest given |
 | [`fabric_snapshot_schema.json`](fabric_snapshot_schema.json) | The snapshot `.json`'s JSON Schema |
 | [`tests/test_reads.py`](tests/test_reads.py) | Hand-written cases for the read plan |
 | [`tests/test_snapshot.py`](tests/test_snapshot.py) | Cases for the snapshot, with a fake device and clock |
+| [`tests/test_exalens.py`](tests/test_exalens.py) | Cases for finding a router's chip and core and reading it, with fake ttexalens objects |
 | [`tests/check_capture.py`](tests/check_capture.py) | Takes a snapshot of each manifest CI writes, with a fake device, and checks it |
 | [`../common/manifest_lookup.py`](../common/manifest_lookup.py) | `lookup`, which reads a manifest value and checks its JSON type, and `ManifestError`. Shared with decode |
 
