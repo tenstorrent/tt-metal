@@ -1435,6 +1435,14 @@ def probe_beside(
 # (log(-eps), sqrt(-eps)). Pass include_undefined=True to probe the far side anyway once
 # the goldens model it.
 SingularitySide = Enum("SingularitySide", "BOTH ABOVE BELOW")
+#: Ops with a pole at every non-positive integer. ``_OP_SINGULARITIES`` names points;
+#: these are a lattice, and ``ulp_sweep.claimed_lanes`` excludes it: digamma and
+#: trigamma are infinite there, lgamma's |gamma| is, and every fp32 value of magnitude
+#: 2**23 or more is an integer, so for these ops the far negative tail is poles only.
+_NONPOSITIVE_INTEGER_POLES = frozenset(
+    {MathOperation.Digamma, MathOperation.Lgamma, MathOperation.Polygamma}
+)
+
 _BOTH, _ABOVE, _BELOW = (
     SingularitySide.BOTH,
     SingularitySide.ABOVE,

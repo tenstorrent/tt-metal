@@ -50,7 +50,6 @@ private:
         Tensor& matmul_output_tensor,
 
         /* All Gather Params */
-        IDevice* target_device,
         const MeshCoordinate& target_device_coord,
         const std::optional<MeshCoordinate>& forward_coord,
         const std::optional<MeshCoordinate>& backward_coord,

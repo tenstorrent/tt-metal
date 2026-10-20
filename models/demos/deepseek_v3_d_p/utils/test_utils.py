@@ -72,6 +72,21 @@ def gather_cache_natural(tt_cache, mesh_device, tp_shard_kv: bool = False):
     return flat, sp * tp
 
 
+def tp_stripe_major_cache(linear_chip_order: torch.Tensor, sp: int, tp: int) -> torch.Tensor:
+    """[seq, D] in linear chip order -> [tp, seq/tp, D]: a dims[sp]=2, dims[tp]=1 mapper then puts rank
+    s*tp+t on chip (s, t). Inverse of gather_cache_natural(tp_shard_kv=True)."""
+    seq, head_dim = linear_chip_order.shape
+    local = seq // (sp * tp)
+    return linear_chip_order.reshape(sp, tp, local, head_dim).permute(1, 0, 2, 3).reshape(tp, seq // tp, head_dim)
+
+
+def preload_cache(host_tensor, storage) -> None:
+    """Copy a host-staged cache onto device, keeping the cache's declared topology (the copy would replace it)."""
+    topology = storage.tensor_topology()
+    ttnn.copy_host_to_device_tensor(host_tensor, storage)
+    storage.update_tensor_topology(topology)
+
+
 def unrotate_cache_layer(cache_slot: torch.Tensor, positions: torch.Tensor, total_len: int) -> torch.Tensor:
     """Un-rotate one slot's block-cyclic cache rows [seq_len_cache, head_dim] to natural order and slice the
     valid region. `positions` = blockcyclic_positions(sp, chunk, seq_len_cache)."""
