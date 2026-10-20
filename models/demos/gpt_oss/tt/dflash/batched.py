@@ -929,7 +929,7 @@ class BatchedVerify:
             logits = ttnn.linear(x, r.weight, bias=r.bias, program_config=self.router_pc,
                                  compute_kernel_config=self.router_ck, memory_config=ttnn.L1_MEMORY_CONFIG,
                                  dtype=ttnn.bfloat16)  # fmt: skip
-            w = self.grouped.route(logits)
+            w = self.grouped.route(logits, li)
             logits.deallocate(True)
             down = self.grouped(li, x)
             if self.grouped.bias_slot:  # (the combine added the down bias)

@@ -12,6 +12,8 @@
 //     making every slot's entries serially was slower: 96 vs 66 us);
 //   phase 2 (every core = slot s): the plan from the rows' expert masks (counts, slots), slot s's stripes of P1T
 //     (one-hot rows) and Pw (the routing weights), core 0 the slot table.
+// GMOE_BIAS_COPY (= hidden tiles; common args 11, 12: [down bias rows, Y_g]): the cores without phase-1 rows copy the
+//   layer's down bias rows into that slot of a shared Y_g.
 // GMOE_BIAS_SLOT (the last slot: never a routed one, at most (ROWS K_IDS + 31 E) / 32 = 71 slots are): phase 1 writes
 //   the rows of W into Pw's columns of that slot instead of W, and its core leaves them; Y_g's rows of that slot hold
 //   the experts' down biases, so the combine (Pw Y_g) adds each row's routing-weighted down bias.
@@ -108,6 +110,11 @@ void kernel_main() {
     constexpr auto p1t_args = TensorAccessorArgs<w_args.next_compile_time_args_offset()>();
     constexpr auto pw_args = TensorAccessorArgs<p1t_args.next_compile_time_args_offset()>();
     constexpr auto table_args = TensorAccessorArgs<pw_args.next_compile_time_args_offset()>();
+#ifdef GMOE_BIAS_COPY
+    constexpr auto b_args = TensorAccessorArgs<table_args.next_compile_time_args_offset()>();
+    constexpr auto yg_args = TensorAccessorArgs<b_args.next_compile_time_args_offset()>();
+    constexpr uint32_t KTH = GMOE_BIAS_COPY;  // hidden tiles
+#endif
     constexpr uint32_t tile = 2048;
     constexpr uint32_t E = gmoe::E;
     constexpr uint32_t ROWS = gmoe::ROWS;
@@ -233,6 +240,25 @@ void kernel_main() {
         noc_semaphore_inc(get_noc_addr(hub_x, hub_y, get_semaphore(SEM_ARRIVE)), 1);
         noc_async_atomic_barrier();
     }
+#ifdef GMOE_BIAS_COPY
+    // the cores without phase-1 rows: the layer's down bias rows [E, hidden] (BFP8 tiles) into the bias slot of the
+    // shared Y_g (in L1: the combine reads it there)
+    if (s >= N1) {
+        constexpr uint32_t bt = 1088;
+        const auto s_b = TensorAccessor(b_args, get_common_arg_val<uint32_t>(11), bt);
+        const auto s_yg = TensorAccessor(yg_args, get_common_arg_val<uint32_t>(12), bt);
+        const uint32_t bl1 = table_l1 + 8 * E;
+        uint32_t n = 0;
+        for (uint32_t c = s - N1; c < KTH; c += NCORES - N1) {
+            noc_async_read(s_b.get_noc_addr(c), bl1 + n++ * bt, bt);
+        }
+        noc_async_read_barrier();
+        n = 0;
+        for (uint32_t c = s - N1; c < KTH; c += NCORES - N1) {
+            noc_async_write(bl1 + n++ * bt, s_yg.get_noc_addr((MAX_SLOTS - 1) * KTH + c), bt);
+        }
+    }
+#endif
     volatile tt_l1_ptr uint32_t* go = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SEM_GO));
     if (s == 0) {  // the hub: every row to every core, then GO
         volatile tt_l1_ptr uint32_t* arrive = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SEM_ARRIVE));

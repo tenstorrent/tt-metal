@@ -92,7 +92,13 @@ class GroupedMoE:
         self.ag = zeros([1, 1, S, self.ku * TILE], ttnn.bfloat8_b)
         # Y_g: the down outputs per slot row (the combine's K side), BFP8: down + combine 28 us faster per layer than
         # BF16, output PCC vs the float reference 0.99991 (BF16 0.99995)
-        self.yg = zeros([1, 1, S, hidden], ttnn.bfloat8_b)
+        # (B32_GMOE_YG_L1, with bias_slot: one Y_g in L1 for all layers, the route op copies the layer's down bias rows
+        # into its bias slot: the combine reads Y_g from L1)
+        self.bias_slot = os.environ.get("B32_GMOE_BIAS", "1") == "1"
+        self.yg_l1 = self.bias_slot and os.environ.get("B32_GMOE_YG_L1", "1") == "1"
+        self.yg = zeros(
+            [1, 1, S, hidden], ttnn.bfloat8_b, ttnn.L1_MEMORY_CONFIG if self.yg_l1 else ttnn.DRAM_MEMORY_CONFIG
+        )
         # per layer: 32-row bias tiles, and the down K tile each expert shares with a neighbour, the neighbour's rows
         # zeroed (row tile e of edge)
         keep = torch.zeros(E, 1, 1, TILE, 1)
@@ -102,7 +108,6 @@ class GroupedMoE:
                   for e in range(E)]  # fmt: skip
         # the down bias through the combine (gmoe_route.cpp GMOE_BIAS_SLOT): the last slot of each layer's own Y_g holds
         # the experts' down bias rows, Pw's columns of it the routing weights (no bias matmul and add per layer)
-        self.bias_slot = os.environ.get("B32_GMOE_BIAS", "1") == "1"
         self.layers = []
         for W in moe:
 
@@ -127,11 +132,14 @@ class GroupedMoE:
             )
             if self.bias_slot:
                 assert W["down_bias"].shape[-2] == E
-                pad = zeros([1, 1, S - TILE, hidden], ttnn.bfloat8_b)
-                b8 = ttnn.typecast(W["down_bias"], ttnn.bfloat8_b)
-                self.layers[-1]["yg"] = ttnn.concat([pad, b8], dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-                pad.deallocate(True)
-                b8.deallocate(True)
+                b8 = ttnn.typecast(W["down_bias"], ttnn.bfloat8_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                if self.yg_l1:
+                    self.layers[-1]["down_bias8"] = b8
+                else:
+                    pad = zeros([1, 1, S - TILE, hidden], ttnn.bfloat8_b)
+                    self.layers[-1]["yg"] = ttnn.concat([pad, b8], dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                    pad.deallocate(True)
+                    b8.deallocate(True)
         for t in keep_t:
             t.deallocate(True)
         self.ck_hifi2 = ttnn.init_device_compute_kernel_config(
@@ -209,7 +217,7 @@ class GroupedMoE:
         cbs = [self._cb(0, ttnn.bfloat16, scr, 1, cores)]
         ttnn.generic_op(io, ttnn.ProgramDescriptor(kernels=[k], semaphores=[], cbs=cbs))
 
-    def route(self, logits):
+    def route(self, logits, li=None):
         """The routing and the plan in one program (fused_decode/kernels/gmoe_route.cpp): logits [1, 1, rows, E] (BF16
         tiles, the router matmul's) -> the dense routing weights W [1, 1, rows, E] (BF16, L1; the down bias's), and
         self.p1t / self.pw / self.table as plan(). Replaces the router's top-k / softmax ops and the plan op. With
@@ -223,15 +231,21 @@ class GroupedMoE:
         io = [logits, w, self.p1t, self.pw, self.table]
         ct = [0, RW, MAX_SLOTS, RW * RH, 0, 1]
         defines = [("GMOE_BIAS_SLOT", str(MAX_SLOTS - 1))] if self.bias_slot else []
+        extra = []
+        if self.yg_l1:  # the layer's down bias rows into the shared Y_g's bias slot (cores 64 .. 71)
+            b8 = self.layers[li]["down_bias8"]
+            defines.append(("GMOE_BIAS_COPY", str(self.kt)))
+            extra = [b8.buffer_address(), self.yg.buffer_address()]
+            io = io + [b8, self.yg]
         for t in io:
             ct += ttnn.TensorAccessorArgs(t).get_compile_time_args()
         k = ttnn.KernelDescriptor(
             kernel_source=str(KERNEL_DIR / "gmoe_route.cpp"), core_ranges=cores, compile_time_args=ct,
-            runtime_args=[], common_runtime_args=[t.buffer_address() for t in io] + [a_.x, a_.y, a_.x, a_.y, b_.x, b_.y],
+            runtime_args=[], common_runtime_args=[t.buffer_address() for t in io[:5]] + [a_.x, a_.y, a_.x, a_.y, b_.x, b_.y] + extra,
             config=ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.NOC_0),
             defines=defines,
         )  # fmt: skip
-        scr = self.rows * 32 + 4 * 32 + 2048 + 4 * 64 + 2 * (self.rows // TILE) * 2048 + 8 * E
+        scr = self.rows * 32 + 4 * 32 + 2048 + 4 * 64 + 2 * (self.rows // TILE) * 2048 + 8 * E + 12 * 1088
         cbs = [self._cb(0, ttnn.bfloat16, scr, 1, cores)]
         sems = [ttnn.SemaphoreDescriptor(i, ttnn.CoreType.WORKER, cores, 0) for i in (0, 1)]
         ttnn.generic_op(io, ttnn.ProgramDescriptor(kernels=[k], semaphores=sems, cbs=cbs))
@@ -288,7 +302,7 @@ class GroupedMoE:
         ttnn.generic_op(io + [self.ag], ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs))
 
     def _yg(self, li):
-        return self.layers[li]["yg"] if self.bias_slot else self.yg
+        return self.layers[li]["yg"] if self.bias_slot and not self.yg_l1 else self.yg
 
     def down(self, li, wc=4, cc=1):
         """Y_g = A_g's slots x their expert's down rows (self.yg; with bias_slot the layer's own, its last slot the
