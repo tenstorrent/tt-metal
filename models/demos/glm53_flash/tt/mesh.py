@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import torch
@@ -56,6 +56,7 @@ class GLMMesh:
     rows: int
     cols: int
     topology: ttnn.Topology | None = None  # None = ttnn default for the fabric
+    _ccl: object = field(default=None, repr=False, compare=False)  # lazy TT_CCL (async collectives)
 
     @classmethod
     def from_device(cls, mesh_device, topology=None) -> "GLMMesh":
@@ -178,6 +179,60 @@ class GLMMesh:
         return torch.cat(row_parts, dim=rows) if rows is not None else row_parts[0]
 
     # ------------------------------------------------------------------ collectives
+    @property
+    def ccl(self):
+        """Persistent CCL semaphores (``models.common.modules.tt_ccl.TT_CCL``) for the async collectives."""
+        if self._ccl is None:
+            from models.common.modules.tt_ccl import get_tt_ccl
+
+            object.__setattr__(self, "_ccl", get_tt_ccl(self.device))  # frozen dataclass
+        return self._ccl
+
+    @property
+    def async_ccl(self) -> bool:
+        """``GLM53_CCL=async`` (default): single-op ``*_async`` gathers / reduce-scatters with persistent
+        semaphores; ``generic``: the composite ``ttnn.all_gather`` / ``ttnn.reduce_scatter`` (on 8 rows the
+        composites expand to all_broadcast + 8 untilizes + concat + tilize / 8 fill_pads + concat + rs)."""
+        return os.environ.get("GLM53_CCL", "async") == "async"
+
+    def _async_topology(self):
+        return self.topology if self.topology is not None else ttnn.Topology.Linear
+
+    def _all_gather_async(self, x, dim, axis, memory_config):
+        ccl = self.ccl
+        return ttnn.experimental.all_gather_async(
+            x,
+            persistent_output_buffer=None,
+            dim=dim,
+            multi_device_global_semaphore=ccl.get_and_cycle_ag_semaphore_handles(axis),
+            num_links=ccl.get_num_links(axis),
+            cluster_axis=axis,
+            topology=self._async_topology(),
+            memory_config=memory_config,
+            barrier_semaphore=ccl.get_and_cycle_barrier_semaphore_handle(axis),
+            chunks_per_sync=10,
+            num_workers_per_link=2,
+            num_buffers_per_channel=2,
+        )
+
+    def _reduce_scatter_async(self, x, dim, axis, memory_config):
+        ccl = self.ccl
+        return ttnn.experimental.reduce_scatter_minimal_async(
+            x,
+            persistent_output_buffers=None,
+            dim=dim,
+            multi_device_global_semaphore=ccl.get_and_cycle_rs_semaphore_handles(axis),
+            barrier_semaphore=ccl.get_and_cycle_barrier_semaphore_handle(axis),
+            num_links=ccl.get_num_links(axis),
+            cluster_axis=axis,
+            memory_config=memory_config,
+            intermediate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            topology=self._async_topology(),
+            chunks_per_sync=10,
+            num_workers_per_link=2,
+            num_buffers_per_channel=2,
+        )
+
     def _ccl_kwargs(self, num_links=None):
         kw = {}
         if self.topology is not None:
@@ -197,18 +252,24 @@ class GLMMesh:
     def all_gather_cols(self, x: ttnn.Tensor, dim: int, *, memory_config=None) -> ttnn.Tensor:
         if self.cols == 1:
             return x
+        if self.async_ccl:
+            return self._all_gather_async(x, dim, TP_AXIS, memory_config or x.memory_config())
         return ttnn.all_gather(x, dim=dim, cluster_axis=TP_AXIS, memory_config=memory_config or x.memory_config())
 
     def all_gather_rows(self, x: ttnn.Tensor, dim: int, *, memory_config=None) -> ttnn.Tensor:
         """Concatenate the rows' shards along ``dim`` (rows ordered by mesh row)."""
         if self.rows == 1:
             return x
+        if self.async_ccl:
+            return self._all_gather_async(x, dim, DP_AXIS, memory_config or x.memory_config())
         return ttnn.all_gather(x, dim=dim, cluster_axis=DP_AXIS, memory_config=memory_config or x.memory_config())
 
     def reduce_scatter_rows(self, x: ttnn.Tensor, dim: int, *, memory_config=None, num_links=None) -> ttnn.Tensor:
         """Sum over the rows and hand row ``r`` the ``r``-th slice of ``dim``."""
         if self.rows == 1:
             return x
+        if self.async_ccl:
+            return self._reduce_scatter_async(x, dim, DP_AXIS, memory_config or x.memory_config())
         return ttnn.reduce_scatter(
             x,
             dim=dim,
