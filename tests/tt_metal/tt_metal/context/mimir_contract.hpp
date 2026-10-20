@@ -1,0 +1,378 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+// Shared helpers for Mimir/CCE tests. Contract tests call these instead of a raw Cluster or a
+// chippy transport. Case sizes come from the selected package descriptor.
+#pragma once
+
+#include <gtest/gtest.h>
+
+#include <algorithm>
+#include <cstdint>
+#include <cstdlib>
+#include <limits>
+#include <set>
+#include <span>
+#include <string>
+#include <string_view>
+#include <vector>
+
+#include <fmt/format.h>
+
+#include "impl/context/metal_context.hpp"
+#include "llrt/hal.hpp"
+#include "llrt/metal_soc_descriptor.hpp"
+#include <tt-metalium/tt_metal.hpp>
+#include "umd/device/soc_arch_descriptor.hpp"
+#include "umd/device/types/core_coordinates.hpp"
+
+namespace tt::tt_metal {
+namespace mimir_contract {
+
+inline constexpr uint64_t kCceSramTestOffset = 0x800;
+inline constexpr uint32_t kDramOffset = 0x800;
+inline constexpr uint64_t kGddrSlotStride = 1ull << 30;
+// Mimir/MMK emu GDDR is an 8GiB SPA with a 1GiB sparse backing store. Unique 32KiB pages persist
+// until reset.
+inline constexpr uint64_t kEmuGddrBackingBudget = 1ull << 30;
+inline constexpr uint64_t kEmuGddrBackingPage = 32ull << 10;
+
+struct GddrBackingTracker {
+    std::set<uint64_t> pages;
+
+    void note(uint32_t mimir_index, uint64_t address, uint64_t size) {
+        if (size == 0) {
+            return;
+        }
+        const uint64_t first = address / kEmuGddrBackingPage;
+        const uint64_t last = (address + size - 1) / kEmuGddrBackingPage;
+        for (uint64_t page = first; page <= last; ++page) {
+            pages.insert((static_cast<uint64_t>(mimir_index) << 32) | page);
+        }
+        const uint64_t used = pages.size() * kEmuGddrBackingPage;
+        ASSERT_LE(used, kEmuGddrBackingBudget)
+            << "EMU GDDR unique backing " << used << " B exceeds the 1GiB sparse budget";
+    }
+};
+
+inline thread_local GddrBackingTracker* t_gddr_backing = nullptr;
+
+struct GddrBackingScope {
+    GddrBackingTracker tracker;
+    GddrBackingScope() { t_gddr_backing = &tracker; }
+    ~GddrBackingScope() { t_gddr_backing = nullptr; }
+};
+
+inline const char* selected_soc_desc_path() {
+    if (const char* path = std::getenv("TT_METAL_EMU_SOC_DESC")) {
+        return path;
+    }
+    return std::getenv("TT_METAL_GRENDEL_JTAG_SOC_DESC");
+}
+
+inline bool transport_configured() {
+    const bool emu = std::getenv("TT_METAL_EMU_SERVER") != nullptr;
+    const bool jtag = std::getenv("TT_METAL_GRENDEL_JTAG_SERVER") != nullptr;
+    return emu || jtag;
+}
+
+// The package file, not the transport. Opening the device is what makes a skipped case slow, so
+// callers decide from this before CreateDevice.
+inline const metal_SocDescriptor& configured_soc_desc() {
+    static const metal_SocDescriptor desc = [] {
+        const char* path = selected_soc_desc_path();
+        TT_FATAL(path != nullptr, "No package descriptor selected");
+        auto arch = std::make_shared<tt::umd::SocArchDescriptor>(std::string(path));
+        return metal_SocDescriptor(tt::umd::SocDescriptor(std::move(arch)), tt::BoardType::UNKNOWN);
+    }();
+    return desc;
+}
+
+inline bool package_has_programmable_dram() {
+    const char* path = selected_soc_desc_path();
+    if (path == nullptr) {
+        return false;
+    }
+    return configured_soc_desc().has_programmable_dram_views();
+}
+
+// GTEST_SKIP returns from the function that invokes it, so this has to be a macro. Contract tests
+// run for any selected package that declares programmable DRAM cores. A transport is still required
+// to open the device.
+#define skip_unless_programmable_dram_package()                                                                     \
+    do {                                                                                                            \
+        if (!::tt::tt_metal::mimir_contract::package_has_programmable_dram()) {                                     \
+            GTEST_SKIP() << "Selected package has no programmable DRAM cores.";                                     \
+        }                                                                                                           \
+        if (!::tt::tt_metal::mimir_contract::transport_configured()) {                                              \
+            GTEST_SKIP() << "Selected package has programmable DRAM cores, but no device transport is configured."; \
+        }                                                                                                           \
+    } while (0)
+
+inline uint32_t locations_per_channel(const metal_SocDescriptor& soc_desc) {
+    return std::max<uint32_t>(static_cast<uint32_t>(soc_desc.get_grid_size(tt::CoreType::DRAM).y), 1u);
+}
+
+inline uint32_t mimir_index_for_cce(const metal_SocDescriptor& soc_desc, uint32_t cce_index) {
+    return cce_index / locations_per_channel(soc_desc);
+}
+
+inline uint32_t location_for_cce(const metal_SocDescriptor& soc_desc, uint32_t cce_index) {
+    return cce_index % locations_per_channel(soc_desc);
+}
+
+inline uint32_t mimir_index_for_cce(uint32_t cce_index) {
+    return mimir_index_for_cce(configured_soc_desc(), cce_index);
+}
+
+inline uint32_t location_for_cce(uint32_t cce_index) { return location_for_cce(configured_soc_desc(), cce_index); }
+
+inline uint32_t num_cces_from_soc(const metal_SocDescriptor& soc_desc) {
+    return static_cast<uint32_t>(soc_desc.get_num_dram_channels() * locations_per_channel(soc_desc));
+}
+
+inline const metal_SocDescriptor& soc_desc_of(const IDevice* device) {
+    return MetalContext::instance().get_cluster().get_soc_desc(device->id());
+}
+
+inline uint32_t num_cces_on(const IDevice* device) { return num_cces_from_soc(soc_desc_of(device)); }
+
+// One Mimir is one UMD DRAM channel. Device::num_dram_channels() is the Metal view count.
+inline uint32_t num_mimirs_on(const IDevice* device) {
+    return static_cast<uint32_t>(soc_desc_of(device).get_num_dram_channels());
+}
+
+struct GddrSweep {
+    uint32_t num_slots = 0;
+    uint32_t slot_stride = 0;
+};
+
+inline GddrSweep gddr_sweep_from_soc(const IDevice* device) {
+    const uint64_t view_size = soc_desc_of(device).dram_view_size;
+    // Views of at least 1 GiB are walked in 1 GiB slots. A smaller non-zero view is one slot of
+    // that size. The slot must still divide the view's address_offset.
+    uint64_t slot_stride = kGddrSlotStride;
+    if (view_size == 0 || view_size > std::numeric_limits<uint32_t>::max()) {
+        return {};
+    }
+    if (view_size < kGddrSlotStride) {
+        slot_stride = view_size;
+    } else if (view_size % kGddrSlotStride != 0) {
+        return {};
+    }
+    return {static_cast<uint32_t>(view_size / slot_stride), static_cast<uint32_t>(slot_stride)};
+}
+
+struct GddrTarget {
+    uint32_t host_view = 0;
+    uint32_t mimir_index = 0;
+    uint32_t location = 0;
+    // Kernel offsets are mimir-relative. slot_base is the view's address_offset in slots.
+    uint32_t slot_base = 0;
+    uint32_t num_slots = 0;
+    uint32_t slot_stride = 0;
+};
+
+struct CcePartition {
+    uint32_t cce_index = 0;
+    uint32_t partition = 0;
+};
+
+inline constexpr uint32_t kMaxCces = 4;
+inline constexpr uint32_t kMaxPartitions = 4;
+
+inline const std::vector<CcePartition>& cce_partition_params() {
+    static const std::vector<CcePartition> params = [] {
+        std::vector<CcePartition> built;
+        built.reserve(kMaxCces * kMaxPartitions);
+        for (uint32_t cce_index = 0; cce_index < kMaxCces; ++cce_index) {
+            for (uint32_t partition = 0; partition < kMaxPartitions; ++partition) {
+                built.push_back({cce_index, partition});
+            }
+        }
+        return built;
+    }();
+    return params;
+}
+
+inline std::string cce_partition_name(const ::testing::TestParamInfo<CcePartition>& info) {
+    return fmt::format("Cce{}Partition{}", info.param.cce_index, info.param.partition);
+}
+
+inline bool is_cross_mimir_case() {
+    const char* suite = ::testing::UnitTest::GetInstance()->current_test_info()->test_suite_name();
+    return std::string_view(suite).find("CrossMimir") != std::string_view::npos;
+}
+
+inline std::vector<uint32_t> dram_views_for_channel(const metal_SocDescriptor& soc_desc, uint32_t channel) {
+    std::vector<uint32_t> views;
+    for (uint32_t view = 0; view < soc_desc.get_num_dram_views(); ++view) {
+        if (soc_desc.get_channel_for_dram_view(static_cast<int>(view)) == channel) {
+            views.push_back(view);
+        }
+    }
+    return views;
+}
+
+inline uint32_t local_dram_view_for_cce(const metal_SocDescriptor& soc_desc, uint32_t cce_index) {
+    const std::vector<uint32_t> views = dram_views_for_channel(soc_desc, mimir_index_for_cce(soc_desc, cce_index));
+    TT_FATAL(!views.empty(), "Mimir {} has no DRAM view", mimir_index_for_cce(soc_desc, cce_index));
+    if (views.size() == 1) {
+        return views.front();
+    }
+    const uint32_t location = location_for_cce(soc_desc, cce_index);
+    TT_FATAL(
+        location < views.size(),
+        "CCE {} location {} has no DRAM view on mimir {}",
+        cce_index,
+        location,
+        mimir_index_for_cce(soc_desc, cce_index));
+    return views[location];
+}
+
+// Metal's logical DRAM coordinate is {view, index into that view's endpoints}, not {channel, location}.
+inline CoreCoord logical_cce_core(const metal_SocDescriptor& soc_desc, uint32_t cce_index) {
+    const uint32_t view = local_dram_view_for_cce(soc_desc, cce_index);
+    return soc_desc.get_logical_dram_core_for_subchannel(
+        static_cast<int>(view), static_cast<int>(location_for_cce(soc_desc, cce_index)));
+}
+
+inline uint32_t dram_view_location(const metal_SocDescriptor& soc_desc, uint32_t view) {
+    const uint32_t channel = static_cast<uint32_t>(soc_desc.get_channel_for_dram_view(static_cast<int>(view)));
+    const std::vector<uint32_t> views = dram_views_for_channel(soc_desc, channel);
+    for (uint32_t location = 0; location < views.size(); ++location) {
+        if (views[location] == view) {
+            return location;
+        }
+    }
+    TT_FATAL(false, "DRAM view {} is not on channel {}", view, channel);
+    return 0;
+}
+
+inline bool partition_in_case(const metal_SocDescriptor& soc_desc, uint32_t cce_index, uint32_t partition, bool cross) {
+    if (partition >= soc_desc.get_num_dram_views()) {
+        return false;
+    }
+    const bool local =
+        soc_desc.get_channel_for_dram_view(static_cast<int>(partition)) == mimir_index_for_cce(soc_desc, cce_index);
+    return cross ? !local : local;
+}
+
+inline bool cce_partition_case_applies(const CcePartition& param, bool cross) {
+    const metal_SocDescriptor& soc_desc = configured_soc_desc();
+    if (param.cce_index >= num_cces_from_soc(soc_desc) || soc_desc.get_num_dram_channels() == 0) {
+        return false;
+    }
+    if (cross && soc_desc.get_num_dram_channels() < 2) {
+        return false;
+    }
+    return partition_in_case(soc_desc, param.cce_index, param.partition, cross);
+}
+
+inline GddrTarget gddr_target_for_view(const metal_SocDescriptor& soc_desc, uint32_t view, const GddrSweep& sweep) {
+    const uint64_t address_offset = soc_desc.get_address_offset(static_cast<int>(view));
+    TT_FATAL(
+        sweep.slot_stride != 0 && address_offset % sweep.slot_stride == 0,
+        "DRAM view {} address_offset {} is not a multiple of the {} B slot",
+        view,
+        address_offset,
+        sweep.slot_stride);
+    return {
+        view,
+        static_cast<uint32_t>(soc_desc.get_channel_for_dram_view(static_cast<int>(view))),
+        dram_view_location(soc_desc, view),
+        static_cast<uint32_t>(address_offset / sweep.slot_stride),
+        sweep.num_slots,
+        sweep.slot_stride};
+}
+
+inline uint64_t host_slot_offset(const GddrTarget& target, uint32_t slot) {
+    return static_cast<uint64_t>(slot) * target.slot_stride;
+}
+
+inline void write_gddr_view(IDevice* device, uint32_t view, uint64_t address, const std::vector<uint32_t>& data) {
+    const metal_SocDescriptor& soc_desc = soc_desc_of(device);
+    const uint32_t size = static_cast<uint32_t>(data.size() * sizeof(uint32_t));
+    if (t_gddr_backing != nullptr) {
+        const uint32_t channel = static_cast<uint32_t>(soc_desc.get_channel_for_dram_view(static_cast<int>(view)));
+        t_gddr_backing->note(channel, soc_desc.get_address_offset(static_cast<int>(view)) + address, size);
+    }
+    TT_FATAL(
+        address <= std::numeric_limits<uint32_t>::max(), "GDDR view offset 0x{:x} does not fit the host API", address);
+    detail::WriteToDeviceDRAMChannel(
+        device,
+        static_cast<int>(view),
+        static_cast<uint32_t>(address),
+        std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(data.data()), size));
+}
+
+inline void read_gddr_view(
+    IDevice* device, uint32_t view, uint64_t address, uint32_t size, std::vector<uint32_t>& data) {
+    const metal_SocDescriptor& soc_desc = soc_desc_of(device);
+    if (t_gddr_backing != nullptr) {
+        const uint32_t channel = static_cast<uint32_t>(soc_desc.get_channel_for_dram_view(static_cast<int>(view)));
+        t_gddr_backing->note(channel, soc_desc.get_address_offset(static_cast<int>(view)) + address, size);
+    }
+    TT_FATAL(
+        address <= std::numeric_limits<uint32_t>::max(), "GDDR view offset 0x{:x} does not fit the host API", address);
+    data.assign(size / sizeof(uint32_t), 0);
+    ASSERT_TRUE(
+        detail::ReadFromDeviceDRAMChannel(device, static_cast<int>(view), static_cast<uint32_t>(address), size, data));
+}
+
+inline uint32_t base_dram_view_for_mimir(const metal_SocDescriptor& soc_desc, uint32_t mimir_index) {
+    const std::vector<uint32_t> views = dram_views_for_channel(soc_desc, mimir_index);
+    TT_FATAL(!views.empty(), "Mimir {} has no DRAM view", mimir_index);
+    for (uint32_t view : views) {
+        if (soc_desc.get_address_offset(static_cast<int>(view)) == 0) {
+            return view;
+        }
+    }
+    TT_FATAL(false, "Mimir {} has no DRAM view at offset 0", mimir_index);
+    return views.front();
+}
+
+inline void write_mimir_gddr(
+    IDevice* device, uint32_t mimir_index, uint64_t address, const std::vector<uint32_t>& data) {
+    write_gddr_view(device, base_dram_view_for_mimir(soc_desc_of(device), mimir_index), address, data);
+}
+
+inline void read_mimir_gddr(
+    IDevice* device, uint32_t mimir_index, uint64_t address, uint32_t size, std::vector<uint32_t>& data) {
+    read_gddr_view(device, base_dram_view_for_mimir(soc_desc_of(device), mimir_index), address, size, data);
+}
+
+// Host view of one CCE's SRAM. The address is the HAL NOC address (base plus offset), which UMD
+// resolves. Callers do not form a chiplet-local AXI address.
+inline void write_cce_sram(
+    IDevice* device, CoreCoord logical_dram_core, uint64_t noc_addr, const void* data, uint32_t size) {
+    const CoreCoord virtual_core = device->virtual_core_from_logical_core(logical_dram_core, CoreType::DRAM);
+    MetalContext::instance().get_cluster().write_core(data, size, {device->id(), virtual_core}, noc_addr);
+}
+
+inline void read_cce_sram(IDevice* device, CoreCoord logical_dram_core, uint64_t noc_addr, void* data, uint32_t size) {
+    const CoreCoord virtual_core = device->virtual_core_from_logical_core(logical_dram_core, CoreType::DRAM);
+    MetalContext::instance().get_cluster().read_core(data, size, {device->id(), virtual_core}, noc_addr);
+}
+
+inline uint64_t cce_sram_noc_addr(uint64_t offset) {
+    return MetalContext::instance().hal().get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::BASE) +
+           offset;
+}
+
+// UMD logical DRAM coordinate {channel, location}. Backend checks that do not go through a Metal
+// device use this. Contract tests use logical_cce_core().
+inline CoreCoord translated_dram_core(const metal_SocDescriptor& soc_desc, uint32_t cce_index) {
+    const auto core = soc_desc.translate_coord_to(
+        tt::umd::CoreCoord(
+            mimir_index_for_cce(soc_desc, cce_index),
+            location_for_cce(soc_desc, cce_index),
+            CoreType::DRAM,
+            CoordSystem::LOGICAL),
+        CoordSystem::TRANSLATED);
+    return {core.x, core.y};
+}
+
+}  // namespace mimir_contract
+}  // namespace tt::tt_metal
