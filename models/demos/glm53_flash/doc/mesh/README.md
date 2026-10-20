@@ -185,6 +185,16 @@ layout conversions cost more than the cumsum). Knob `GLM53_ROUTER_TIE_BREAK=cums
 On the (2,4) block (`test_perf_mesh.py`, layer 4, 4 users/row, rows-6-7 block, `meshperf_router_ab_rows67_*.log`):
 8.03 -> 5.34 ms/step (-34 %), i.e. ~-113 ms on the 318 ms 45-layer step above (42 MoE layers).
 
+## Optimization 2: router as one fp32 top-k (2026-10-20)
+
+`ttnn.topk` accepts fp32 inputs (stable bitonic network on Blackhole), so the exact top-8 is one op: topk over
+the biased scores -> `ttnn.gather` of the unbiased scores at the winners -> renormalize x 2.5 -> `ttnn.scatter`
+into the dense [T, E] routing matrix (bf16: scatter has no fp32 TILE path, and the expert block applied bf16
+weights anyway). ~10 ops instead of ~90. Same-chip A/B chip 4, layer 4 traced decode B=1:
+rank 8.03 -> topk 7.60 ms/step; routing identical to the reference composite (32/32, 255/256, dense weights
+0.999872, MoE PCC 0.999946; `_logs/mesh/router_topk_test_moe_3.log`, `perf_layer4_router_ab3_*.log`). Default
+now `GLM53_ROUTER_TIE_BREAK=topk` (`rank` / `cumsum` kept for A/B).
+
 ## Root cause of the TP4 sparse-row gap (2026-10-20)
 
 `test_tp4_sparse_prefill_layer3` first gave rows >= 2048 at 0.99777 (single chip 0.99990) while the

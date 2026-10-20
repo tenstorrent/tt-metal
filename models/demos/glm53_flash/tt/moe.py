@@ -128,7 +128,7 @@ class TtRouter(LightweightModule):
         self.fp32 = _compute(device, ttnn.MathFidelity.HiFi4, packer_l1_acc=False)
         import os
 
-        self.tie_break = os.environ.get("GLM53_ROUTER_TIE_BREAK", "rank")  # rank (default) | cumsum | topk
+        self.tie_break = os.environ.get("GLM53_ROUTER_TIE_BREAK", "topk")  # topk (default) | rank | cumsum
         self._const: dict[tuple, ttnn.Tensor] = {}
 
     def _forward_topk(self, scores, choice, T):
@@ -146,15 +146,18 @@ class TtRouter(LightweightModule):
         denom = ttnn.add(ttnn.sum(w, dim=-1, keepdim=True), 1e-20)
         norm = ttnn.multiply(ttnn.reciprocal(denom), self.cfg.routed_scaling_factor)  # [1,1,T,1]
         w = ttnn.multiply(w, norm, output_tensor=w)
-        zeros = self._dense_zeros(T)
-        dense = ttnn.scatter(zeros, -1, idx, w)  # [1,1,T,E]: weights at their expert columns, 0 elsewhere
+        # scatter has no fp32 TILE path: the dense matrix is built in bf16, which is the dtype the expert
+        # block applies anyway (it typecasts the fp32 weights to bf16 before weighting the expert outputs)
+        w16 = ttnn.typecast(w, ttnn.bfloat16)
+        dense = ttnn.scatter(self._dense_zeros(T), -1, idx, w16)  # [1,1,T,E] bf16: weights at their columns
+        ttnn.deallocate(w16)
         return w, ttnn.typecast(idx, ttnn.float32), dense
 
     def _dense_zeros(self, T: int) -> ttnn.Tensor:
         key = ("zeros", T)
         if key not in self._const:
             self._const[key] = ttnn.zeros(
-                (1, 1, T, self.E), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=self.device
+                (1, 1, T, self.E), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device
             )
         return self._const[key]
 
@@ -296,6 +299,9 @@ class TtRoutedExperts(LightweightModule):
         self.select = (
             None if ep == 1 else self.mesh.upload(torch.eye(self.E, dtype=torch.float32), ttnn.float32, cols=-1)
         )
+        self.select_bf16 = (
+            None if ep == 1 else self.mesh.upload(torch.eye(self.E, dtype=torch.float32), ttnn.bfloat16, cols=-1)
+        )
         grid = device.compute_with_storage_grid_size()
         self.grid = (grid.x, grid.y)
         self.compute = _compute(device)
@@ -307,7 +313,8 @@ class TtRoutedExperts(LightweightModule):
         E, H, I = self.E_local, self.H, self.I_local
         M = xb.shape[-2]
         if self.select is not None:  # keep the routing weights of this column's experts: [1,1,M,E_local]
-            dense_w = ttnn.matmul(dense_w, self.select, dtype=ttnn.float32, compute_kernel_config=self.fp32)
+            sel = self.select if dense_w.dtype == ttnn.float32 else self.select_bf16
+            dense_w = ttnn.matmul(dense_w, sel, dtype=dense_w.dtype, compute_kernel_config=self.fp32)
         # per-expert activity mask over the block (nonzero = active); bf16 ROW_MAJOR [1,1,1,E]
         active = ttnn.sum(dense_w, dim=-2, keepdim=True)  # [1,1,1,E] fp32
         sparsity = ttnn.to_layout(ttnn.typecast(active, ttnn.bfloat16), ttnn.ROW_MAJOR_LAYOUT)
@@ -334,7 +341,8 @@ class TtRoutedExperts(LightweightModule):
         h = ttnn.multiply(act, up, output_tensor=act)  # [1,E,M,I]
         ttnn.deallocate(up)
         # weight each (expert, token) row by its routing weight before the down projection
-        w_cols = ttnn.transpose(ttnn.typecast(dense_w, self.activation_dtype), -2, -1)  # [1,1,E,M]
+        w16 = dense_w if dense_w.dtype == self.activation_dtype else ttnn.typecast(dense_w, self.activation_dtype)
+        w_cols = ttnn.transpose(w16, -2, -1)  # [1,1,E,M]
         w_cols = ttnn.reshape(w_cols, [1, E, M, 1])
         h = ttnn.multiply(h, w_cols, output_tensor=h)
         down = ttnn.sparse_matmul(
