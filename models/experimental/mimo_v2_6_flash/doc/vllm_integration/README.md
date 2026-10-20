@@ -94,6 +94,8 @@ long prompt computes a continuation chunk instead of the standalone's one-shot p
 per-user eager prefill, device greedy equal to host greedy over 5 exact bf16 top-2 ties, device RoPE equal to host
 RoPE. The prefill numerics differ from 52f85d31b3e by the prefill router and the 32-row kernels (standalone greedy
 11/16 prompts identical over 32 tokens to the 52f85d31b3e standalone); decode numerics are unchanged.
+`test_model_tp8_dp4` on this branch: top-1 0.950, logits PCC min 0.9611 / mean 0.9923 (52f85d31b3e: 0.925, 0.9581 /
+0.9922).
 
 ## Launch
 
