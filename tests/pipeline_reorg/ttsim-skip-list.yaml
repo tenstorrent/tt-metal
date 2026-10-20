@@ -9,7 +9,9 @@
 # run_ttsim_regression.sh reads this file too. It keeps entries under
 # tt_metal/tt-llk/tests/python_tests/ and drops that prefix, because the LLK
 # suite collects pytest with python_tests/ as rootdir. ttnn sim legs only apply
-# wormhole_b0 and blackhole, so quasar entries are LLK-only.
+# wormhole_b0 and blackhole, so quasar entries are LLK-only. The weekly
+# workflow passes --no-ignore; these LLK entries are for callers that must
+# stay green, such as the quasar ttsim PR gate.
 
 wormhole_b0:
   # Job-level timeouts -- can be cut down still

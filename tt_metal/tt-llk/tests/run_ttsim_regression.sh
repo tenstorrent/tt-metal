@@ -9,7 +9,8 @@
 # `_Exit(1)` on UnimplementedFunctionality (and similar) only kills that one
 # test and the suite continues. LLK node ids in
 # tests/pipeline_reorg/ttsim-skip-list.yaml are deselected for the architecture
-# under test, on both the collection pass and the real run.
+# under test, on both the collection pass and the real run. The weekly workflow
+# passes --no-ignore; that list is for callers that must stay green.
 #
 # Generates:
 #   - JUnit XML at python_tests/ttsim_results/ttsim_<timestamp>.xml

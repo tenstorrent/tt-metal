@@ -39,8 +39,6 @@ jobs:
     secrets: inherit
     with:
       docker-image: ${{ needs.build-images.outputs.llk-ci-tag }}
-      # Per-arch node ids in this file are deselected before the suite runs.
-      ignore-file: tests/pipeline_reorg/ttsim-skip-list.yaml
 
   ttsim-digest:
     name: "📊 Weekly ttsim digest"
