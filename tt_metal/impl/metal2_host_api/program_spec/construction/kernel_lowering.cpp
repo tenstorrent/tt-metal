@@ -15,9 +15,11 @@
 #include <variant>
 #include <vector>
 
+#include <experimental/fabric/control_plane.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt_stl/fmt.hpp>
 
+#include "impl/context/metal_context.hpp"
 #include "impl/metal2_host_api/helpers.hpp"
 
 namespace tt::tt_metal::experimental {
@@ -384,6 +386,11 @@ LoweredKernel LowerKernel(
         if (kernel_spec.is_data_movement_kernel()) {
             auto config = MakeGen1DataMovementConfig(kernel_spec);
             config.compile_args = std::move(compile_args);
+            // As CreateKernel: fabric routing mode and packet-header sizing, for kernels that talk to the fabric.
+            for (const auto& [name, value] :
+                 MetalContext::instance(context_id).get_control_plane().get_fabric_kernel_defines()) {
+                config.defines.emplace(name, value);
+            }
             kernel = std::make_shared<DataMovementKernel>(
                 context_id,
                 kernel_src,
