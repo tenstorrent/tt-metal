@@ -83,6 +83,40 @@ class TestZoneAccumulator:
             acc.feed(r, {})
         return acc
 
+    @staticmethod
+    def _fw_op(ns, t0, t1):
+        # one-cycle-per-ns clock: FW duration equals the cycle span
+        return {
+            "OP CODE": "Matmul",
+            "OP TYPE": P.DEVICE_OP_TYPE,
+            "DEVICE ID": 0,
+            P.DURATION_COL: ns,
+            P.FW_START_COL: t0,
+            P.FW_END_COL: t1,
+            P.FW_DURATION_COL: t1 - t0,
+        }
+
+    def _zone(self, ops):
+        return (
+            [self._sig(f"{P.ZONE_START} {P.ROOT_ZONE}"), self._sig(f"{P.ZONE_START} attn")]
+            + ops
+            + [
+                self._sig(f"{P.ZONE_END} attn"),
+                self._sig(f"{P.ZONE_END} {P.ROOT_ZONE}"),
+            ]
+        )
+
+    def test_span_is_the_fw_wall_not_the_kernel_sum(self):
+        # Two ops whose firmware windows overlap (sub-device concurrency): the kernel sum is 2 ms, the span 1.5 ms.
+        acc = self._feed(self._zone([self._fw_op(1_000_000, 0, 1_000_000), self._fw_op(1_000_000, 500_000, 1_500_000)]))
+        z = P.summarize(acc)[f"{P.ROOT_ZONE}/attn"]
+        assert z["ms_max"] == pytest.approx(2.0)
+        assert z["span_ms_max"] == pytest.approx(1.5)
+
+    def test_span_is_absent_without_fw_columns(self):
+        acc = self._feed(self._zone([self._op(1_000_000), self._op(1_000_000)]))
+        assert P.summarize(acc)[f"{P.ROOT_ZONE}/attn"]["span_ms_max"] is None
+
     def test_ops_outside_the_root_zone_are_ignored(self):
         # Warmup and cache-prefix ops share the CSV with the profiled chunk; they must not be counted.
         acc = self._feed([self._op(1_000_000)])
