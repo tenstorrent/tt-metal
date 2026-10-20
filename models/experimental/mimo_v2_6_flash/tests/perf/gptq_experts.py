@@ -58,6 +58,20 @@ def project_rows(w, bits, offsets):
     return bfp_project_blocks(w.reshape(-1, 16), bits, offsets).reshape(e, n)
 
 
+def inverse_hessian_factor(h):
+    """Upper U with U^T U = h^-1 ([E, K, K]), as GPTQ's cholesky(cholesky_inverse(cholesky(h)), upper) but with one
+    Cholesky and one triangular inverse: P h P = L L^T (P reverses the order) gives U = P L^-1 P. fp32, with an fp64
+    retry when fp32 is not positive definite enough."""
+    k = h.shape[-1]
+    rev = torch.arange(k - 1, -1, -1)
+    for dtype in (torch.float32, torch.float64):
+        low, info = torch.linalg.cholesky_ex(h[:, rev][:, :, rev].to(dtype))
+        if not bool(info.any()):
+            eye = torch.eye(k, dtype=dtype).expand_as(low)
+            return torch.linalg.solve_triangular(low, eye, upper=False)[:, rev][:, :, rev].float()
+    raise torch.linalg.LinAlgError("Hessian not positive definite in fp64")
+
+
 def gptq_batched(w, h, bits, damping=0.3, block=128, inner=16, offsets=(0, 1)):
     """w [E, K, N] fp32 (device layout), h [E, K, K] -> on-grid [E, K, N]. act-order per expert; lazy updates in two
     levels (``inner`` rows by rank-1 updates, ``block`` rows by one batched matmul) to keep the memory traffic of
@@ -74,11 +88,7 @@ def gptq_batched(w, h, bits, damping=0.3, block=128, inner=16, offsets=(0, 1)):
     h = h.gather(1, perm[:, :, None].expand(E, K, K)).gather(2, perm[:, None, :].expand(E, K, K))
     damp = damping * torch.diagonal(h, dim1=1, dim2=2).mean(-1)
     h += damp[:, None, None] * torch.eye(K, dtype=h.dtype)
-    try:
-        u = torch.linalg.cholesky(torch.cholesky_inverse(torch.linalg.cholesky(h)), upper=True)
-    except torch.linalg.LinAlgError:  # fp32 not positive definite enough: redo in fp64
-        hd = h.double()
-        u = torch.linalg.cholesky(torch.cholesky_inverse(torch.linalg.cholesky(hd)), upper=True).float()
+    u = inverse_hessian_factor(h)
     del h
     q = torch.empty_like(w)
     for b1 in range(0, K, block):
