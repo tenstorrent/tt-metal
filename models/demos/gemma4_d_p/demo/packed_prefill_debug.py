@@ -7,6 +7,7 @@ import os
 
 import pytest
 import torch
+from loguru import logger
 
 import ttnn
 from models.demos.gemma4_d_p.config import MeshConfig
@@ -25,7 +26,12 @@ from models.demos.gemma4_d_p.tt.runners.packing import PrefillSegment, pack_posi
 def test_prefill_packed_4k_traced(mesh_device, reset_seeds):
     chunk_size, max_seq_len = 4096, 262144
     lengths = (256, 512, 768, 1024, 1536)
+    prefixes = (27904, 12800, 25088, 29184, 13824)
     mesh = MeshConfig(mesh_device)
+    segments = tuple(
+        PrefillSegment(slot, prefix, prefix + length) for slot, (prefix, length) in enumerate(zip(prefixes, lengths))
+    )
+    logger.info("[packed_debug] lengths={} prefixes={} (zero-initialized synthetic KV history)", lengths, prefixes)
     hf_model = os.environ["HF_MODEL"]
     args = Gemma4ModelArgs.from_hf_config(Gemma4ModelArgs.load_hf_config(hf_model))
     caches = allocate_ring_kv_caches(
@@ -40,14 +46,17 @@ def test_prefill_packed_4k_traced(mesh_device, reset_seeds):
         ring_kv_caches=caches,
         stripe_size=32,
     )
-    segments = tuple(PrefillSegment(slot, 0, length) for slot, length in enumerate(lengths))
-    tokens_all = _get_prefill_tokens(hf_model, len(lengths) * chunk_size, args.vocab_size)[0]
+    token_count = max(s.slot_id * chunk_size + s.actual_end for s in segments)
+    tokens_all = _get_prefill_tokens(hf_model, token_count, args.vocab_size)[0]
     token_lists = [
-        tokens_all[slot * chunk_size : slot * chunk_size + length].tolist() for slot, length in enumerate(lengths)
+        tokens_all[s.slot_id * chunk_size + s.actual_start : s.slot_id * chunk_size + s.actual_end].tolist()
+        for s in segments
     ]
     metadata = [model.prefill_metadata] + [PrefillMetadata(mesh) for _ in lengths[1:]]
     for segment, request_metadata in zip(segments, metadata):
-        request_metadata.update(slot_idx=segment.slot_id, kv_actual_global=0, valid_global=segment.actual_end)
+        request_metadata.update(
+            slot_idx=segment.slot_id, kv_actual_global=segment.actual_start, valid_global=segment.actual_end
+        )
 
     def upload(rows):
         return ttnn.from_torch(

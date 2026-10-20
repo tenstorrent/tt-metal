@@ -76,7 +76,7 @@ For debugging, replay one 4k packed batch with requests `[256, 512, 768, 1024, 1
 pytest 'models/demos/gemma4_d_p/demo/packed_prefill_debug.py::test_prefill_packed_4k_traced[blackhole-8x4]' -sv
 ```
 
-This uses all 60 layers, the canonical Gutenberg token source and trace reservation, zero cached prefix, and the same five 256k cache slots as the 4k benchmark. Like the canonical test, it warms up the forward, captures it with the output kept alive, then executes the trace. It performs exactly one replay, with no performance sweep or output comparison. Pytest timeout is disabled for breakpoints. The `ttnn.execute_trace(...)` call is the replay entry point; Python attention code runs during warmup and capture.
+This uses all 60 layers, the canonical Gutenberg token source and trace reservation, and the same five 256k cache slots as the 4k benchmark. The requests use fixed cached prefixes `[27904, 12800, 25088, 29184, 13824]`, all below 32k and aligned to 256 tokens. They are embedded in the test and logged before model loading. Historical KV is zero-initialized synthetic data, as in the performance tests. Like the canonical test, it warms up the forward, captures it with the output kept alive, then executes the trace. It performs exactly one replay, with no performance sweep or output comparison. Pytest timeout is disabled for breakpoints. The `ttnn.execute_trace(...)` call is the replay entry point; Python attention code runs during warmup and capture.
 
 Compare full requests and equally sized mixed batches at 4k, 6k, and 8k in one test:
 
