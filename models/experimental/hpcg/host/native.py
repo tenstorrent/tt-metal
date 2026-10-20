@@ -55,10 +55,12 @@ def _build():
     lib.hpcg_ownership.restype = None
     lib.hpcg_ownership.argtypes = [I32, i64p, i64p, i64p, i64p, I32, I64, i64p]
     if "OMP_NUM_THREADS" not in os.environ:
-        # half the logical CPUs: the planners' parallel regions are short, so one preempted thread (by the
-        # generation warm-up thread, or any other) delays the whole region by a scheduler time slice; 12 of the
-        # P150 host's 24 measured as fast as 24 alone, and 0.9 ms faster beside the warm-up (192^3 first setup)
-        lib.hpcg_set_threads(max(1, (os.cpu_count() or 2) // 2))
+        # a quarter of the logical CPUs: the planners' parallel regions are short, so starting threads costs more
+        # than they save past a few, and one preempted thread (by the generation thread, or any other) delays the
+        # whole region by a scheduler time slice. First setup on the P150's host (24 logical CPUs), median of 6:
+        # 104^3 9.65 ms with 12 threads, 9.1 with 8, 8.9 with 6, 9.25 with 4; 192^3 and 288^3 the same for 4 to 12
+        # (the card's matrix generation is the longer path there); all 24 were 0.9 ms slower at 192^3
+        lib.hpcg_set_threads(max(1, (os.cpu_count() or 4) // 4))
     lib.hpcg_build_level.restype = I64
     lib.hpcg_build_level.argtypes = [I32, I32, I32, i32p, i32p, i32p, i64p, I64, I64, i64p, i64p, f32p, i32p, f32p]
     lib.hpcg_link.restype = I64

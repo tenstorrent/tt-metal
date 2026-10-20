@@ -241,8 +241,7 @@ void fill_from_previous(T* v, int64_t n, M mapped) {
 
 extern "C" {
 
-// OpenMP threads of the calling thread's parallel regions (host/native.py: half the logical CPUs, so a Python thread
-// working beside the planners, such as the generation warm-up, never preempts one of their threads)
+// OpenMP threads of the calling thread's parallel regions (host/native.py sets a quarter of the logical CPUs)
 void hpcg_set_threads(int32_t n) { omp_set_num_threads(n); }
 
 // Row ownership of a launch (SparseRowPlan._ownership_numpy is the definition): own[(k * NB + b) * 2 + {0, 1}] =
