@@ -1777,8 +1777,9 @@ def _unreferenced_pool_rows(pool_host, table, *, num_layers, num_pages, page_siz
     return torch.cat(rows) if rows else torch.zeros(0)
 
 
-# The CI-selected (2x4) subset: the small multi-chunk prefill, and a repr chunk long enough that cores walk rows
-# across page and slab boundaries, on the 4-rank column axis so a slab jump skips more than one other rank.
+# The CI-selected subset (CI runs the 2x4 ids, and every id on 2x2): the small multi-chunk prefill, and a repr chunk
+# long enough that cores walk rows across page and slab boundaries, on the column axis so that on 2x4 a slab jump
+# skips more than one other rank.
 _PAGED_CI_CASES = {("small", "padded_partial", 0), ("repr", "partial_tail", 1)}
 
 
@@ -1835,7 +1836,9 @@ def test_update_padded_kv_cache_paged(
     if scenario == "padded_partial":
         new_actual_isls = [(sp - 1) * C + tile, 2 * C, sp * C]
     else:
-        new_actual_isls = [(sp - 1) * C + tile, 2 * C, C + tile]
+        # The first chunk ends two tiles into a slab, so the later writes cross a slab boundary inside one core's run
+        # of rows (rather than at a core's first row) on both the 13x10 and the 12x10 worker grid.
+        new_actual_isls = [(sp - 1) * C + 2 * tile, 2 * C, C + tile]
     assert all(isl <= chunk_global for isl in new_actual_isls)
     cum_total = sum(new_actual_isls)
     cache_global = cache_tokens_per_dev * sp
@@ -1986,13 +1989,18 @@ def test_update_padded_kv_cache_paged(
 @pytest.mark.parametrize("mesh_device", [(2, 4)], ids=["2x4"], indirect=True)
 @pytest.mark.timeout(0)
 def test_update_padded_kv_cache_paged_table_swap(mesh_device):
-    """One cached program serves a new page table: slot 8 (a row past the first DRAM bank sweep, so the row
-    stride matters) is written through table A, then through a wider table B (the row stride is compiled in, so
-    this compiles a new program), then through table C of B's width at another address (a cache hit). Each write
-    must land on its table's pages and leave the others' alone."""
+    """One cached program serves a new page table: the slot whose row is the first past one row per DRAM bank
+    (interleaved row r sits in bank r % banks at offset r // banks rows, so only such a row depends on the compiled
+    row stride) is written through table A, then through a wider table B (the row stride is compiled in, so this
+    compiles a new program), then through table C of B's width at another address (a cache hit). Each write must land
+    on its table's pages and leave the others' alone."""
+    from models.demos.common.prefill.runners.migration import get_num_dram_banks
+
     sp_axis = 0
     sp = mesh_device.shape[sp_axis]
-    C, page_size, num_users, slot = 128, 32, 9, 8
+    C, page_size = 128, 32
+    slot = get_num_dram_banks(mesh_device)
+    num_users = slot + 1
     chunk_global = C * sp
     pages = chunk_global // page_size
     tables, num_pages = [], 0
@@ -2068,9 +2076,77 @@ def test_update_padded_kv_cache_paged_table_swap(mesh_device):
 
 @pytest.mark.parametrize("mesh_device", [(2, 4)], ids=["2x4"], indirect=True)
 @pytest.mark.timeout(0)
+def test_update_padded_kv_cache_paged_row_end(mesh_device):
+    """A metadata-path write that runs past the end of its table row (the host cannot bound it there) writes only the
+    pages the row maps. The row's width is not a whole DRAM read group, and the padding after it in the row's DRAM
+    page holds a valid page id: a wider table freed just before leaves it there, and the narrow table reuses its
+    memory. A lookup past the row's end would find that page and write it."""
+    sp_axis, tp_axis = 0, 1
+    sp = mesh_device.shape[sp_axis]
+    C, page_size, width = 128, 32, 20
+    chunk_global = C * sp
+    # Each rank's pages in order, so the last page of every pool is one no row maps: the decoy, which must stay zero.
+    owner = [(q * page_size // C) % sp for q in range(width)]
+    table = torch.tensor([[owner[:q].count(owner[q]) for q in range(width)]], dtype=torch.int32)
+    num_pages = max(owner.count(rank) for rank in range(sp)) + 1
+    decoy_page = num_pages - 1
+    pool = _page_pool(
+        mesh_device,
+        page_size=page_size,
+        sp_axis=sp_axis,
+        num_pages=num_pages,
+        num_layers=1,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+    )
+    decoy = _page_table_tensor(mesh_device, torch.full((1, 32), decoy_page, dtype=torch.int32))
+    decoy_address = decoy.buffer_address()
+    ttnn.deallocate(decoy)
+    tt_table = _page_table_tensor(mesh_device, table)
+    assert tt_table.buffer_address() == decoy_address, "the narrow table must reuse the wider one's memory"
+
+    concat_dims = [None, None]
+    concat_dims[sp_axis] = 2
+    concat_dims[tp_axis] = 1
+    composer = ttnn.ConcatMesh2dToTensor(mesh_device, dims=tuple(concat_dims), mesh_shape=mesh_device.shape)
+    kv_actual = 512  # the chunk covers [512, 768): pages 16-19 are mapped, 20-23 lie past the row's end
+    torch.manual_seed(0)
+    tt_input = _make_input(
+        torch.randn(1, 1, chunk_global, KVPE_HEAD_DIM, dtype=torch.bfloat16),
+        ttnn.bfloat16,
+        ttnn.ROW_MAJOR_LAYOUT,
+        mesh_device,
+        ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=[2, None]),
+    )
+    sent = ttnn.to_torch(tt_input, mesh_composer=composer).to(torch.bfloat16)[0, 0]
+    slot_t, kv_t = _make_meta_tensors(mesh_device, kv_actual_global=kv_actual, slot_idx=0)
+    ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+        pool, tt_input, slot_t, kv_t, layer_idx=0, num_layers=1, cluster_axis=sp_axis, page_table=tt_table
+    )
+    ttnn.synchronize_device(mesh_device)
+
+    end = width * page_size
+    positions = _rotated_chip_positions(kv_actual, sp, C)
+    flat = torch.tensor([positions[c][r] for c in range(sp) for r in range(C)], dtype=torch.long)
+    expected = torch.zeros(end, KVPE_HEAD_DIM, dtype=torch.bfloat16)
+    inside = flat < end
+    expected[flat[inside]] = sent[inside]
+    pool_host = ttnn.to_torch(pool, mesh_composer=composer).to(torch.bfloat16)[:, :1, :, :]
+    recon = _natural_from_pool(
+        pool_host, table, user=0, layer=0, num_layers=1, n_tokens=end, page_size=page_size, chunk_local=C, sp=sp
+    )
+    assert torch.equal(recon, expected), "the mapped part of the row does not hold the write"
+    untouched = _unreferenced_pool_rows(
+        pool_host, table, num_layers=1, num_pages=num_pages, page_size=page_size, chunk_local=C, sp=sp
+    )
+    assert not untouched.any(), "a write past the row's end landed in the pool"
+
+
+@pytest.mark.parametrize("mesh_device", [(2, 4)], ids=["2x4"], indirect=True)
+@pytest.mark.timeout(0)
 def test_update_padded_kv_cache_paged_rejects(mesh_device, expect_error):
-    """Paged writes reject what the page table cannot express. A good write runs first, so the rejects of the same
-    shapes run on the cache-hit validator."""
+    """Paged writes reject what the page table cannot express. A good write runs first, so the rejects that keep the
+    program key (the slot, the capacity, the table's dtype) run on the cache-hit validator."""
     sp_axis = 0
     sp = mesh_device.shape[sp_axis]
     C, page_size, num_layers = 128, 64, 1
@@ -2141,8 +2217,8 @@ def test_update_padded_kv_cache_paged_rejects(mesh_device, expect_error):
 @pytest.mark.timeout(0)
 def test_update_padded_kv_cache_paged_perf(mesh_device, page_size):
     """A paged write of MiniMax-M3's per-chip K chunk (1024 rows of 128, bfloat8_b) against a contiguous one. Device
-    time is the slowest chip's, median of 7. The bound is absolute: the page lookup is a fixed cost per write, and a
-    ratio on so short an op would gate on noise."""
+    time is the slowest chip's, median of 7. The bound is absolute: paging adds a fixed cost per write (one table read
+    per core, a lookup per row), and a ratio on so short an op would gate on noise."""
     require_realtime_profiler("update_padded_kv_cache paged perf")
     sp_axis = 0
     sp = mesh_device.shape[sp_axis]
