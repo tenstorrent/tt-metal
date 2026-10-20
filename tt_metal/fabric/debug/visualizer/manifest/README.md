@@ -47,6 +47,7 @@ The types at L1 addresses come from the struct layouts in `fabric_struct_layouts
 | `vocabulary` | Every field `category` and `kind`, and every chip `z_port_role` |
 | `archs.<arch>.areas` | L1 areas the architecture fixes: heartbeat, telemetry, routing table, go and launch messages, Ethernet firmware mailbox |
 | `archs.<arch>.stream_registers` | Where the stream registers are: `base`, `stride`, `count` and `register_offsets`, from the HAL |
+| `archs.<arch>.core_registers` | The soft reset and wall clock registers, in the order they are read, with each physical ERISC's reset bit |
 | `archs.<arch>.types` | Every struct a schema names, with its size and members in order |
 | `enums` | Every enum a schema names, with its values |
 | `meshes` | Each mesh, its chips, and each local chip's routers |
@@ -73,7 +74,7 @@ path:
   `intra_chip_downstream_edges`, `fields`, `eriscs` and `leftover_l1`.
   - `channels.senders` and `channels.receivers` are keyed `vc<n>`, then `ch<m>`. VCs without channels are left out.
   - `intra_chip_downstream_edges` is keyed `vc<n>`, then `edge<n>`.
-  - `eriscs` is keyed `erisc<n>`, by the ERISC's index; each has its `processor` and `fields`.
+  - `eriscs` is keyed `erisc<n>`, by the ERISC's index; each has its `processor`, `physical_erisc` and `fields`.
 
 ### Regions, stream registers and schemas
 
@@ -145,6 +146,14 @@ entries.
   there is none.
 - **Architecture areas** (`archs.<arch>.areas`): the heartbeat word with its magic, mask and period, and the HAL's
   areas, typed from the HAL.
+- **Core registers** (`archs.<arch>.core_registers`): `soft_reset`, `wall_clock_low` and `wall_clock_high`, each a
+  `u32` at its HAL address. The array keeps the read order: reading the low word latches the high word.
+  `soft_reset.reset_masks` is UMD's reset bit for each of the HAL's physical ERISCs on the Ethernet core, one on
+  Wormhole and two on Blackhole, whether or not the ERISC mode runs a processor on it.
+- **Physical ERISC** (`physical_erisc`): the ERISC on the Ethernet core that the processor runs on, from the HAL,
+  which indexes `reset_masks`. It is the processor's index, except in Blackhole single-ERISC mode, where base
+  firmware keeps ERISC0 and the one processor runs on ERISC1. The HAL compiles the same value into Blackhole kernels
+  as `PHYSICAL_AERISC_ID`.
 
 ## Arguments the manifest leaves out
 
