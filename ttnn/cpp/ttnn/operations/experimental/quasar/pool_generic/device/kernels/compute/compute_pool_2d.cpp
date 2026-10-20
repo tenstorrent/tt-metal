@@ -36,7 +36,8 @@
 // stays resident, so pop each block right after it is pushed to leave the buffer balanced. dummy_unpack
 // orders the pop after the wait on Quasar (nothing unpacks this buffer, and a bare wait_front -> pop_front
 // traps the unpacker).
-ALWI void release_out_pages(DataflowBuffer& out_cb, uint32_t num_pages) {
+template <typename DFB>
+ALWI void release_out_pages(DFB& out_cb, uint32_t num_pages) {
     out_cb.wait_front(num_pages);
     dummy_unpack(out_cb.get_id());
     out_cb.pop_front(num_pages);
