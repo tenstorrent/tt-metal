@@ -136,24 +136,9 @@ class SparseRowPlan:
         nc = max(1, min(ncores, max(-(-l // ALIGN) for l in lens)))
         if bands is not None and (len(bands) != NB or nc % (len(bands[0]) - 1) or nc < len(bands[0]) - 1):
             bands = None
-        own = np.zeros((nc, NB, 2), np.int64)
-        for b, (s, e) in enumerate(out_blocks):
-            if bands is not None:  # band j of the block -> cores j*pb .. (j+1)*pb - 1, even ALIGN-row cuts
-                cuts = np.array(bands[b], np.int64)
-                cuts[0], cuts[-1] = s, e
-                B = len(cuts) - 1
-                pb = nc // B
-                bs, be = cuts[:-1, None], cuts[1:, None]
-                inner = np.minimum(be, -(-(bs + np.arange(1, pb)[None, :] * (be - bs) // pb) // ALIGN) * ALIGN)
-                c = np.concatenate([bs, inner, be], axis=1)  # band j's cuts: c[j, i] .. c[j, i + 1] -> core j*pb + i
-                own[:, b, 0] = c[:, :-1].reshape(-1)
-                own[:, b, 1] = np.maximum(c[:, :-1], c[:, 1:]).reshape(-1)
-            else:  # equal contiguous ALIGN-row shares of the block
-                per = -(-(e - s) // (nc * ALIGN)) * ALIGN
-                a = np.minimum(e, s + np.arange(nc) * per)
-                own[:, b, 0], own[:, b, 1] = a, np.minimum(e, a + per)
-        ng = max(e for _, e in src_regions) // GRAN + 2  # granules of the input vector
         lib = native.lib()
+        own = self._ownership(lib, out_blocks, bands, nc)
+        ng = max(e for _, e in src_regions) // GRAN + 2  # granules of the input vector
         self.weights, self.transfer = None, transfer
         if transfer is not None:
             assert not exchange and lib is not None
@@ -183,6 +168,42 @@ class SparseRowPlan:
         self.nc, self.own, self.own_l1 = nc, own, own_l1
         self.out_blocks = out_blocks
         self._tables = {}  # _core_tables cache
+
+    @staticmethod
+    def _ownership(lib, out_blocks, bands, nc):
+        """[nc, NB, 2] row ranges (a, e) of each core in each out block (_ownership_numpy is the definition; the
+        compiled helper computes the same in one call instead of about ten small numpy calls per block)."""
+        NB = len(out_blocks)
+        if lib is None:
+            return SparseRowPlan._ownership_numpy(out_blocks, bands, nc)
+        s = np.array([a for a, _ in out_blocks], np.int64)
+        e = np.array([b for _, b in out_blocks], np.int64)
+        cuts = np.array([v for b in bands for v in b] if bands is not None else [], np.int64)
+        cat = np.cumsum([0] + [len(b) for b in bands] if bands is not None else [0] * (NB + 1)).astype(np.int64)
+        own = np.empty((nc, NB, 2), np.int64)
+        lib.hpcg_ownership(NB, s, e, cuts, cat, nc, ALIGN, own)
+        return own
+
+    @staticmethod
+    def _ownership_numpy(out_blocks, bands, nc):
+        NB = len(out_blocks)
+        own = np.zeros((nc, NB, 2), np.int64)
+        for b, (s, e) in enumerate(out_blocks):
+            if bands is not None:  # band j of the block -> cores j*pb .. (j+1)*pb - 1, even ALIGN-row cuts
+                cuts = np.array(bands[b], np.int64)
+                cuts[0], cuts[-1] = s, e
+                B = len(cuts) - 1
+                pb = nc // B
+                bs, be = cuts[:-1, None], cuts[1:, None]
+                inner = np.minimum(be, -(-(bs + np.arange(1, pb)[None, :] * (be - bs) // pb) // ALIGN) * ALIGN)
+                c = np.concatenate([bs, inner, be], axis=1)  # band j's cuts: c[j, i] .. c[j, i + 1] -> core j*pb + i
+                own[:, b, 0] = c[:, :-1].reshape(-1)
+                own[:, b, 1] = np.maximum(c[:, :-1], c[:, 1:]).reshape(-1)
+            else:  # equal contiguous ALIGN-row shares of the block
+                per = -(-(e - s) // (nc * ALIGN)) * ALIGN
+                a = np.minimum(e, s + np.arange(nc) * per)
+                own[:, b, 0], own[:, b, 1] = a, np.minimum(e, a + per)
+        return own
 
     @property
     def nbr(self):

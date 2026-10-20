@@ -245,6 +245,49 @@ extern "C" {
 // working beside the planners, such as the generation warm-up, never preempts one of their threads)
 void hpcg_set_threads(int32_t n) { omp_set_num_threads(n); }
 
+// Row ownership of a launch (SparseRowPlan._ownership_numpy is the definition): own[(k * NB + b) * 2 + {0, 1}] =
+// core k's rows [a, e) of out block b = [s[b], e[b]). With y-bands (cuts[cat[b] .. cat[b + 1]) holds block b's band
+// starts and end), band j goes to cores j * pb .. (j + 1) * pb - 1 (pb = nc / bands), split at align-row cuts;
+// without (cat[b] == cat[b + 1]), each core takes an equal contiguous share rounded up to align rows.
+void hpcg_ownership(
+    int32_t NB,
+    const int64_t* s,
+    const int64_t* e,
+    const int64_t* cuts,
+    const int64_t* cat,
+    int32_t nc,
+    int64_t align,
+    int64_t* own) {
+    auto up = [align](int64_t x) { return (x + align - 1) / align * align; };
+    std::vector<int64_t> c;
+    for (int32_t b = 0; b < NB; ++b) {
+        const int64_t nb = cat[b + 1] - cat[b];
+        if (nb > 0) {
+            const int64_t B = nb - 1, pb = nc / B;
+            for (int64_t j = 0; j < B; ++j) {
+                const int64_t bs = j == 0 ? s[b] : cuts[cat[b] + j];
+                const int64_t be = j + 1 == B ? e[b] : cuts[cat[b] + j + 1];
+                c.assign(1, bs);
+                for (int64_t i = 1; i < pb; ++i) {
+                    c.push_back(std::min(be, up(bs + i * (be - bs) / pb)));
+                }
+                c.push_back(be);
+                for (int64_t i = 0; i < pb; ++i) {
+                    own[((j * pb + i) * NB + b) * 2] = c[i];
+                    own[((j * pb + i) * NB + b) * 2 + 1] = std::max(c[i], c[i + 1]);
+                }
+            }
+        } else {
+            const int64_t per = up((e[b] - s[b] + nc - 1) / nc);  // the numpy form's ceil(n / (nc align)) align
+            for (int32_t k = 0; k < nc; ++k) {
+                const int64_t a = std::min(e[b], s[b] + k * per);
+                own[(k * NB + b) * 2] = a;
+                own[(k * NB + b) * 2 + 1] = std::min(e[b], a + per);
+            }
+        }
+    }
+}
+
 // Matrix of one level, in the storage order of reference/problem.py (colour blocks, y-bands, natural order).
 // line_band[py * nl + yl]: band of colour-line yl (= iy >> 1) for y parity py; band_y0 / band_ny [(c * nbands + j)]:
 // first colour-line and number of lines of band j in colour c; band_start[c * nbands + j]: q of band j's first row.

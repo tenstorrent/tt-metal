@@ -127,3 +127,21 @@ def test_transfer_plans_match_link(nx, bands):
             assert np.array_equal(gl, wl) and np.array_equal(gn, wn) and np.array_equal(g1, w1), kind
         assert np.array_equal(got.off, want.off), f"{kind} offsets"
         assert np.array_equal(got.weights.reshape(-1), weights), f"{kind} weights"
+
+
+@pytest.mark.parametrize("nc", [1, 7, 64, 96, 130])
+def test_ownership_matches_numpy(nc):
+    """Row ownership from the compiled helper equals the numpy definition, with and without y-bands."""
+    rng = np.random.default_rng(nc)
+    for _ in range(20):
+        starts = np.cumsum(rng.integers(0, 50000, 9))
+        blocks = [(int(starts[b]), int(starts[b + 1])) for b in range(8)]
+        for B in (1, 2, 5, 10):
+            if nc % B or nc < B:
+                continue
+            bands = None
+            if B > 1:
+                bands = [[s] + sorted(int(x) for x in rng.integers(s, e + 1, B - 1)) + [e] for s, e in blocks]
+            got = SparseRowPlan._ownership(native.lib(), blocks, bands, nc)
+            want = SparseRowPlan._ownership_numpy(blocks, bands, nc)
+            assert np.array_equal(got, want), (nc, B)

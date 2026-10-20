@@ -52,6 +52,8 @@ def _build():
             os.replace(out, so)  # atomic: a concurrent build never sees a half-written file
     lib = ctypes.CDLL(str(so))
     lib.hpcg_set_threads.argtypes = [I32]
+    lib.hpcg_ownership.restype = None
+    lib.hpcg_ownership.argtypes = [I32, i64p, i64p, i64p, i64p, I32, I64, i64p]
     if "OMP_NUM_THREADS" not in os.environ:
         # half the logical CPUs: the planners' parallel regions are short, so one preempted thread (by the
         # generation warm-up thread, or any other) delays the whole region by a scheduler time slice; 12 of the
