@@ -1690,7 +1690,10 @@ class TestConfig:
             ) from e
 
     def _compile_kernel_part(self, name, compile_command, source):
-        run_shell_command(compile_command, TestConfig.TESTS_WORKING_DIR, source)
+        if os.environ.get("LLK_TIME_SPLIT", "1") != "1" or "-x" not in compile_command:
+            run_shell_command(compile_command, TestConfig.TESTS_WORKING_DIR, source)
+            return
+        _time_split_build(self.test_name, self.variant_id, name, compile_command, source)
 
     def build_elfs(self):
 
@@ -2553,3 +2556,53 @@ def process_coverage_run_artefacts() -> bool:
 
     end = time.time()
     logger.info("Combined {} coverage files in {:.2f}s", len(info_files), end - start)
+
+
+_SPLIT_COUNT = [0]
+_SHIFTS = (4, 20, 36, 52)
+
+
+def _time_split_build(test_name, variant_id, thread, cmd, source):
+    import csv
+    import time
+
+    from .perf import window_hash
+
+    head = cmd[: cmd.index("-x")]
+    elf = Path(cmd[-1])
+    obj = elf.with_suffix(".o")
+    t0 = time.perf_counter()
+    run_shell_command(head + ["-c", "-x", "c++", "-", "-o", str(obj)], TestConfig.TESTS_WORKING_DIR, source)
+    t1 = time.perf_counter()
+    run_shell_command(head + [str(obj), "-lc", "-lgcc", "-o", str(elf)], TestConfig.TESTS_WORKING_DIR)
+    t2 = time.perf_counter()
+    _SPLIT_COUNT[0] += 1
+    row = {"test": test_name, "variant": variant_id, "thread": thread,
+           "compile_s": round(t1 - t0, 4), "link_s": round(t2 - t1, 4)}
+    if _SPLIT_COUNT[0] % 20 == 1:
+        base_fp = window_hash.fingerprint(TestConfig.OBJDUMP, elf)[0]
+        base_size = TestConfig.get_elf_text_size(elf)
+        same, sizes, relink = True, [], 0.0
+        for k in _SHIFTS:
+            out = elf.with_name(f"{elf.stem}.s{k}.elf")
+            t3 = time.perf_counter()
+            run_shell_command(head + [f"-Wl,--defsym=__llk_code_shift={k}", str(obj), "-lc", "-lgcc", "-o", str(out)], TestConfig.TESTS_WORKING_DIR)
+            relink += time.perf_counter() - t3
+            same &= window_hash.fingerprint(TestConfig.OBJDUMP, out)[0] == base_fp
+            sizes.append(TestConfig.get_elf_text_size(out) - k)
+            out.unlink(missing_ok=True)
+        row.update(relink_s=round(relink / len(_SHIFTS), 4), window=base_fp,
+                   window_same_all_shifts=same, text_size=base_size,
+                   text_size_changed=any(x != base_size for x in sizes))
+    run_dir = TestConfig.perf_run_dir()
+    run_dir.mkdir(parents=True, exist_ok=True)
+    path = run_dir / f"buildtime.{os.getpid()}.csv"
+    fields = ["test", "variant", "thread", "compile_s", "link_s", "relink_s", "window",
+              "window_same_all_shifts", "text_size", "text_size_changed"]
+    new = not path.exists()
+    with open(path, "a", newline="") as fh:
+        w = csv.DictWriter(fh, fieldnames=fields)
+        if new:
+            w.writeheader()
+        w.writerow(row)
+
