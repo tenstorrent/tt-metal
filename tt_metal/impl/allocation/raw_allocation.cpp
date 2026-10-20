@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/experimental/allocation/allocation.hpp>
+#include <tt-metalium/experimental/allocation/raw_allocation.hpp>
 
 #include <cstdint>
 #include <utility>
@@ -13,21 +13,21 @@
 #include <tt_stl/assert.hpp>
 #include <tt_stl/overloaded.hpp>
 
-#include "impl/allocation/allocation_impl.hpp"
+#include "impl/allocation/raw_allocation_impl.hpp"
 
 namespace tt::tt_metal::experimental {
 
-Allocation::Allocation() : pimpl_(std::make_unique<AllocationImpl>()) {}
+RawAllocation::RawAllocation() : pimpl_(std::make_unique<RawAllocationImpl>()) {}
 
-Allocation::Allocation(AllocationImpl&& impl) : pimpl_(std::make_unique<AllocationImpl>(std::move(impl))) {}
+RawAllocation::RawAllocation(RawAllocationImpl&& impl) : pimpl_(std::make_unique<RawAllocationImpl>(std::move(impl))) {}
 
-Allocation::~Allocation() = default;
+RawAllocation::~RawAllocation() = default;
 
-Allocation::Allocation(Allocation&&) noexcept = default;
+RawAllocation::RawAllocation(RawAllocation&&) noexcept = default;
 
-Allocation& Allocation::operator=(Allocation&&) noexcept = default;
+RawAllocation& RawAllocation::operator=(RawAllocation&&) noexcept = default;
 
-Allocation Allocation::adopt_from_meshtensor(MeshTensor tensor) {
+RawAllocation RawAllocation::adopt_from_meshtensor(MeshTensor tensor) {
     const auto& mesh_buffer = tensor.mesh_buffer();
     TT_FATAL(mesh_buffer.is_allocated(), "Cannot adopt a deallocated MeshTensor buffer");
     const auto* buffer = mesh_buffer.get_backing_buffer();
@@ -40,12 +40,12 @@ Allocation Allocation::adopt_from_meshtensor(MeshTensor tensor) {
     }
     TT_FATAL(buffer != nullptr, "Cannot adopt a MeshTensor that does not own its buffer allocation");
     TT_FATAL(buffer->is_allocated(), "Cannot adopt a deallocated MeshTensor device buffer");
-    TT_FATAL(buffer->buffer_type() == BufferType::L1, "Allocation only supports MeshTensors backed by L1 buffers");
+    TT_FATAL(buffer->buffer_type() == BufferType::L1, "RawAllocation only supports MeshTensors backed by L1 buffers");
 
     const auto size = static_cast<uint32_t>(buffer->aligned_size_per_bank());
 
     if (per_core_allocation::is_per_core_allocation(*buffer)) {
-        return Allocation(AllocationImpl(
+        return RawAllocation(RawAllocationImpl(
             PerNodeAllocation(per_core_allocation::get_per_core_addresses(*buffer), size, std::move(tensor))));
     } else if (range_lockstep_allocation::is_range_lockstep_allocation(*buffer)) {
         // Match the allocator: the distribution spec takes precedence over the shard grid,
@@ -56,24 +56,24 @@ Allocation Allocation::adopt_from_meshtensor(MeshTensor tensor) {
         } else {
             allocated_nodes = buffer->shard_spec().grid();
         }
-        return Allocation(AllocationImpl(
+        return RawAllocation(RawAllocationImpl(
             RangeLockstepAllocation(buffer->address(), size, std::move(allocated_nodes), std::move(tensor))));
     } else {
-        return Allocation(AllocationImpl(LockstepAllocation(buffer->address(), size, std::move(tensor))));
+        return RawAllocation(RawAllocationImpl(LockstepAllocation(buffer->address(), size, std::move(tensor))));
     }
 }
 
-MeshTensor Allocation::release_as_meshtensor(Allocation allocation) {
-    TT_FATAL(allocation.pimpl_ != nullptr, "Cannot release a MeshTensor from a moved-from Allocation");
+MeshTensor RawAllocation::release_as_meshtensor(RawAllocation allocation) {
+    TT_FATAL(allocation.pimpl_ != nullptr, "Cannot release a MeshTensor from a moved-from RawAllocation");
     return std::visit(
         ttsl::overloaded{
-            [](NoAlloc&) -> MeshTensor { TT_THROW("Cannot release a MeshTensor from an empty Allocation"); },
+            [](NoAlloc&) -> MeshTensor { TT_THROW("Cannot release a MeshTensor from an empty RawAllocation"); },
             [](TensorBackedResource& backing) -> MeshTensor { return std::move(backing.resource); }},
         allocation.pimpl_->_detail);
 }
 
-AllocationImpl& Allocation::impl() { return *pimpl_; }
+RawAllocationImpl& RawAllocation::impl() { return *pimpl_; }
 
-const AllocationImpl& Allocation::impl() const { return *pimpl_; }
+const RawAllocationImpl& RawAllocation::impl() const { return *pimpl_; }
 
 }  // namespace tt::tt_metal::experimental

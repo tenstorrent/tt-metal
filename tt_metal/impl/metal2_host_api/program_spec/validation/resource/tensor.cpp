@@ -4,6 +4,7 @@
 
 #include <string>
 #include <unordered_set>
+#include <variant>
 #include <vector>
 
 #include <tt_stl/assert.hpp>
@@ -101,7 +102,9 @@ void ValidateTensorParametersUsed(const ValidationContext& ctx) {
     }
     for (const auto& dfb : spec.dataflow_buffers) {
         if (dfb.borrowed_from.has_value()) {
-            used_tensor_parameters.insert(*dfb.borrowed_from);
+            if (const auto* tensor_name = std::get_if<TensorParamName>(&*dfb.borrowed_from)) {
+                used_tensor_parameters.insert(*tensor_name);
+            }
         }
     }
     for (const auto& tensor_parameter : spec.tensor_parameters) {
