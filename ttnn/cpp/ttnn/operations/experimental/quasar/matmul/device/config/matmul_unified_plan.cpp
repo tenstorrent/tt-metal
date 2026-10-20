@@ -733,6 +733,7 @@ std::optional<MatmulUnifiedProgramConfig> choose_unified_placement(
         return std::nullopt;
     }
 
+    // ---- 1. Setup ----
     const tt::tt_metal::IDevice& device = *A.device();
     const CoreCoord device_grid = device.compute_with_storage_grid_size();
     const CoreCoord grid = attributes.user_core_coord.value_or(device_grid);
@@ -743,23 +744,17 @@ std::optional<MatmulUnifiedProgramConfig> choose_unified_placement(
     const MatmulUnifiedPlan gemm = plan_gemm_size(A, B, attributes);
     const uint32_t M_tiles = gemm.M_tiles;
     const uint32_t N_tiles = gemm.N_tiles;
-    const std::optional<tt::tt_metal::ShardSpec>& C_shard = attributes.output_mem_config.shard_spec();
+    constexpr tt::tt_metal::ShardOrientation ROW_MAJOR = tt::tt_metal::ShardOrientation::ROW_MAJOR;
 
-    std::optional<MatmulUnifiedProgramConfig> best;
-    std::pair<bool, std::pair<double, double>> best_rank;
-    // Plans the placement (an unset C slice or batch group count: the plan picks it) and keeps it, with the plan's C
-    // slice, subblock, K chunk and batch groups, if it ranks first so far (C slices that are a sharded C's shards, then
-    // the lowest estimate; the first on a tie). False when it does not fit: cores beyond the device grid (a larger
-    // user_core_coord) or DFBs beyond L1.
-    const auto try_placement = [&](const CoreRangeSet& cores,
+    // ---- 2. Placement candidates ----
+    // Each is `requested` with a placement: the cores and their orientation, and the C slice and batch group count
+    // when the placement fixes them (unset, the plan picks them).
+    std::vector<MatmulUnifiedProgramConfig> candidates;
+    const auto add_candidate = [&](const CoreRangeSet& cores,
                                    tt::tt_metal::ShardOrientation orientation,
                                    std::optional<uint32_t> C_slice_M_tiles,
                                    std::optional<uint32_t> C_slice_N_tiles,
                                    std::optional<uint32_t> num_batch_groups) {
-        const CoreCoord last_core = cores.bounding_box().end_coord;
-        if (last_core.x >= device_grid.x || last_core.y >= device_grid.y) {
-            return false;
-        }
         MatmulUnifiedProgramConfig config = requested;
         config.cores = cores;
         config.orientation = orientation;
@@ -768,10 +763,113 @@ std::optional<MatmulUnifiedProgramConfig> choose_unified_placement(
         if (!requested.num_batch_groups.has_value()) {
             config.num_batch_groups = num_batch_groups;
         }
+        candidates.push_back(std::move(config));
+    };
+    // A 1D placement's C slices are whole columns (rows) of C, or 1/2, 1/3, ... of them, rounded up (13 tiles: 13, 7,
+    // 5, 4, 3, 2 and 1 tiles long).
+    const auto C_slice_lengths = [](uint32_t C_length_tiles) {
+        std::vector<uint32_t> lengths;
+        for (uint32_t C_slices_along_length = 1; C_slices_along_length <= C_length_tiles; ++C_slices_along_length) {
+            const uint32_t length = tt::div_up(C_length_tiles, C_slices_along_length);
+            if (lengths.empty() || length != lengths.back()) {
+                lengths.push_back(length);
+            }
+        }
+        return lengths;
+    };
+    // Batch groups multicast nothing, so they take the whole grid, where their reads spread over the NoC; the
+    // placements sized to one batch's C keep one group, the layout their multicast is for.
+    constexpr std::optional<uint32_t> ONE_BATCH_GROUP = 1;
+
+    // The grid, 2D: the rectangle the largest C slices (C over the grid's rows and columns, rounded up) fill, so A and
+    // B multicast along its rows and columns.
+    add_candidate(
+        CoreRangeSet(CoreRange(
+            {0, 0},
+            {tt::div_up(N_tiles, tt::div_up(N_tiles, grid_columns)) - 1,
+             tt::div_up(M_tiles, tt::div_up(M_tiles, grid_rows)) - 1})),
+        ROW_MAJOR,
+        std::nullopt,
+        std::nullopt,
+        ONE_BATCH_GROUP);
+    // The grid, 1D: columns (rows) of C split across N (M) over whole grid rows (part of one row for a narrow C). With
+    // one C slice per core every core needs the same A (B), multicast to all of them when the C slices fill every
+    // core; so when they do not, also over the most whole rows they fill.
+    for (const bool C_slices_are_columns : {true, false}) {
+        const uint32_t C_width_tiles = C_slices_are_columns ? N_tiles : M_tiles;
+        const uint32_t columns = std::min(grid_columns, C_width_tiles);
+        const uint32_t all_rows = std::clamp(C_width_tiles / grid_columns, 1u, grid_rows);
+        for (uint32_t rows = all_rows; rows >= 1; --rows) {
+            const uint32_t C_slice_width_tiles = tt::div_up(C_width_tiles, columns * rows);
+            const bool C_slices_fill_the_cores = tt::div_up(C_width_tiles, C_slice_width_tiles) == columns * rows;
+            if (rows == all_rows || C_slices_fill_the_cores) {
+                for (const uint32_t length : C_slice_lengths(C_slices_are_columns ? M_tiles : N_tiles)) {
+                    add_candidate(
+                        CoreRangeSet(CoreRange({0, 0}, {columns - 1, rows - 1})),
+                        ROW_MAJOR,
+                        C_slices_are_columns ? length : C_slice_width_tiles,
+                        C_slices_are_columns ? C_slice_width_tiles : length,
+                        ONE_BATCH_GROUP);
+                }
+            }
+            if (C_slices_fill_the_cores) {
+                break;
+            }
+        }
+    }
+    // The whole grid for batches with their own B, which the plan splits into batch groups when a batch has too few C
+    // slices for it.
+    if (gemm.batch_size > 1) {
+        add_candidate(
+            CoreRangeSet(CoreRange({0, 0}, {grid_columns - 1, grid_rows - 1})),
+            ROW_MAJOR,
+            std::nullopt,
+            std::nullopt,
+            std::nullopt);
+    }
+    // Sharded operands' cores, which keep them where they are: an L1-sharded C's own shard grid, where its shards can
+    // be the C slices; rows of C on a height-sharded A's cores and columns of C on a width-sharded B's (an L1 shard can
+    // then be bound in place, and a DRAM shard is read by the core next to its bank).
+    const std::optional<tt::tt_metal::ShardSpec>& C_shard = attributes.output_mem_config.shard_spec();
+    if (C_shard.has_value() && attributes.output_mem_config.buffer_type() == tt::tt_metal::BufferType::L1) {
+        add_candidate(C_shard->grid, C_shard->orientation, std::nullopt, std::nullopt, std::nullopt);
+    }
+    if (A.is_sharded() && A.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED) {
+        for (const uint32_t length : C_slice_lengths(N_tiles)) {
+            add_candidate(
+                A.memory_config().is_dram() ? dram_bank_cores(device) : A.shard_spec()->grid,
+                A.shard_spec()->orientation,
+                A.shard_spec()->shape[0] / TILE_HEIGHT,
+                length,
+                ONE_BATCH_GROUP);
+        }
+    }
+    if (B.is_sharded() && B.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED) {
+        for (const uint32_t length : C_slice_lengths(M_tiles)) {
+            add_candidate(
+                B.memory_config().is_dram() ? dram_bank_cores(device) : B.shard_spec()->grid,
+                B.shard_spec()->orientation,
+                length,
+                B.shard_spec()->shape[1] / TILE_WIDTH,
+                ONE_BATCH_GROUP);
+        }
+    }
+
+    // ---- 3. Plan every candidate; the best ranked wins ----
+    // Ranked by C slices that are a sharded C's shards, then the lowest estimate; the first on a tie. The winner keeps
+    // its plan's C slice, subblock, K chunk and batch group count. A candidate does not fit with cores beyond the
+    // device grid (a larger user_core_coord) or DFBs beyond L1.
+    std::optional<MatmulUnifiedProgramConfig> best;
+    std::pair<bool, std::pair<double, double>> best_rank;
+    for (MatmulUnifiedProgramConfig& config : candidates) {
+        const CoreCoord last_core = config.cores.bounding_box().end_coord;
+        if (last_core.x >= device_grid.x || last_core.y >= device_grid.y) {
+            continue;
+        }
         const std::optional<MatmulUnifiedPlan> plan =
             plan_unified_matmul(A, B, fused_bias_tile_bytes, config, attributes, std::nullopt, /*must_fit=*/false);
         if (!plan.has_value()) {
-            return false;
+            continue;
         }
         const std::pair<bool, std::pair<double, double>> rank{!plan->C_slices_are_C_shards, plan->estimated_cycles};
         log_debug(
@@ -779,7 +877,7 @@ std::optional<MatmulUnifiedProgramConfig> choose_unified_placement(
             "Unified matmul placement: {}x{}-tile C slice on {}: {:.0f} cycles{}",
             plan->C_slice_M_tiles,
             plan->C_slice_N_tiles,
-            cores.str(),
+            config.cores.str(),
             rank.second.first,
             plan->C_slices_are_C_shards ? ", C slices are C's shards" : "");
         if (!best.has_value() || rank < best_rank) {
@@ -792,101 +890,6 @@ std::optional<MatmulUnifiedProgramConfig> choose_unified_placement(
             best = std::move(config);
             best_rank = rank;
         }
-        return true;
-    };
-
-    // Batch groups multicast nothing, so they take the whole grid (below), where their reads spread over the NoC; the
-    // placements sized to one batch's C keep one group, the layout their multicast is for.
-    constexpr std::optional<uint32_t> ONE_BATCH_GROUP = 1;
-
-    // A 1D placement's C slices are columns (C_slices_are_columns) or rows of C, C_slice_width_tiles wide and as long
-    // as all of C's other dimension, or if that does not fit L1, 1/2, 1/3, ... of it, rounded up (13 tiles in 4 C
-    // slices: 4, 4, 4 and 1).
-    const auto try_1D_placement = [&](const CoreRangeSet& cores,
-                                      tt::tt_metal::ShardOrientation orientation,
-                                      uint32_t C_slice_width_tiles,
-                                      bool C_slices_are_columns) {
-        const uint32_t C_length_tiles = C_slices_are_columns ? M_tiles : N_tiles;
-        for (uint32_t C_slices_along_length = 1; C_slices_along_length <= C_length_tiles; ++C_slices_along_length) {
-            const uint32_t C_slice_length_tiles = tt::div_up(C_length_tiles, C_slices_along_length);
-            const bool fits =
-                C_slices_are_columns
-                    ? try_placement(cores, orientation, C_slice_length_tiles, C_slice_width_tiles, ONE_BATCH_GROUP)
-                    : try_placement(cores, orientation, C_slice_width_tiles, C_slice_length_tiles, ONE_BATCH_GROUP);
-            if (fits) {
-                return;
-            }
-        }
-    };
-
-    // An L1-sharded C's own shard grid, where its shards can be the C slices.
-    if (C_shard.has_value() && attributes.output_mem_config.buffer_type() == tt::tt_metal::BufferType::L1) {
-        try_placement(C_shard->grid, C_shard->orientation, std::nullopt, std::nullopt, std::nullopt);
-    }
-
-    constexpr tt::tt_metal::ShardOrientation ROW_MAJOR = tt::tt_metal::ShardOrientation::ROW_MAJOR;
-    // 2D: a rectangle of cores over C's rows and columns, the plan picking the C slice. It is the rectangle the
-    // largest C slices (C over the grid's rows and columns, rounded up) fill, so A and B multicast along its rows and
-    // columns.
-    try_placement(
-        CoreRangeSet(CoreRange(
-            {0, 0},
-            {tt::div_up(N_tiles, tt::div_up(N_tiles, grid_columns)) - 1,
-             tt::div_up(M_tiles, tt::div_up(M_tiles, grid_rows)) - 1})),
-        ROW_MAJOR,
-        std::nullopt,
-        std::nullopt,
-        ONE_BATCH_GROUP);
-
-    // Batches with their own B: the whole grid, which the plan splits into batch groups when one batch has too few C
-    // slices for it (the rectangles above then cover one batch's C slices only).
-    if (gemm.batch_size > 1) {
-        try_placement(
-            CoreRangeSet(CoreRange({0, 0}, {grid_columns - 1, grid_rows - 1})),
-            ROW_MAJOR,
-            std::nullopt,
-            std::nullopt,
-            std::nullopt);
-    }
-
-    // 1D across N (M): whole grid rows (part of one row for a narrow C) splitting C's columns (rows). With one C slice
-    // per core every core needs the same A (B), multicast to all of them when the C slices fill every core; so when
-    // they do not, also the most whole rows they fill.
-    for (const bool C_slices_are_columns : {true, false}) {
-        const uint32_t C_width_tiles = C_slices_are_columns ? N_tiles : M_tiles;
-        const uint32_t columns = std::min(grid_columns, C_width_tiles);
-        const uint32_t all_rows = std::clamp(C_width_tiles / grid_columns, 1u, grid_rows);
-        for (uint32_t rows = all_rows; rows >= 1; --rows) {
-            const uint32_t C_slice_width_tiles = tt::div_up(C_width_tiles, columns * rows);
-            const bool C_slices_fill_the_cores = tt::div_up(C_width_tiles, C_slice_width_tiles) == columns * rows;
-            if (rows == all_rows || C_slices_fill_the_cores) {
-                try_1D_placement(
-                    CoreRangeSet(CoreRange({0, 0}, {columns - 1, rows - 1})),
-                    ROW_MAJOR,
-                    C_slice_width_tiles,
-                    C_slices_are_columns);
-            }
-            if (C_slices_fill_the_cores) {
-                break;
-            }
-        }
-    }
-
-    // 1D on a sharded operand's cores, which keeps it where it is: an L1 shard can then be bound in place, and a DRAM
-    // shard is read by the core next to its bank.
-    if (A.is_sharded() && A.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED) {
-        try_1D_placement(
-            A.memory_config().is_dram() ? dram_bank_cores(device) : A.shard_spec()->grid,
-            A.shard_spec()->orientation,
-            A.shard_spec()->shape[0] / TILE_HEIGHT,
-            /*C_slices_are_columns=*/false);
-    }
-    if (B.is_sharded() && B.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED) {
-        try_1D_placement(
-            B.memory_config().is_dram() ? dram_bank_cores(device) : B.shard_spec()->grid,
-            B.shard_spec()->orientation,
-            B.shard_spec()->shape[1] / TILE_WIDTH,
-            /*C_slices_are_columns=*/true);
     }
     return best;
 }

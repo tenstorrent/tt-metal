@@ -255,11 +255,11 @@ constexpr ArchCostModel QUASAR_COST_MODEL{
 
 // A config is what the caller asks for, its placement is the cores, C slice and orientation, and the plan
 // (MatmulUnifiedPlan) is everything derived from a config with a placement.
-// Returns `requested` with the placement whose plan has the lowest estimated cycles, and that plan's C slice, subblock
-// and K chunk, among: a sharded output's shard grid, a 2D rectangle, the whole grid for batches with their own B, 1D
-// across N and across M, and the cores of a height-sharded A or a width-sharded B. A sharded C prefers placements whose
-// C slices are its shards (written in place), but takes any. nullopt when the unified matmul cannot run the case or no
-// placement fits.
+// Returns `requested` with the placement whose plan has the lowest estimated cycles, and that plan's C slice, subblock,
+// K chunk and batch groups. The candidates: on the grid, a 2D rectangle and 1D across N and across M (every C slice
+// length), and the whole grid for batches with their own B; a sharded C's shard grid; and the cores of a
+// height-sharded A or a width-sharded B. A sharded C prefers placements whose C slices are its shards (written in
+// place), but takes any. nullopt when the unified matmul cannot run the case or no placement fits.
 std::optional<operations::experimental::quasar::matmul::MatmulUnifiedProgramConfig> choose_unified_placement(
     const ttnn::Tensor& input_tensor_a,
     const ttnn::Tensor& input_tensor_b,
