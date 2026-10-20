@@ -207,22 +207,20 @@ class SparseRowOp:
             raise ValueError("values must be fp32, TILE or ROW_MAJOR rows of 1024 (4 KB pages)")
         g = device.compute_with_storage_grid_size()
         noc_xy = noc_coords(device)
-        # rows of whole 4 KB pages, and the grid-dependent sizes (table pages, pages per slot, window bytes) as
-        # runtime arguments: the kernel binaries then do not depend on the level or the grid size, so a process
-        # loads each binary once (about 2-3 ms per binary)
+        # the grid-dependent sizes (metadata row bytes, pages per slot, window bytes) as runtime arguments: the kernel
+        # binaries then do not depend on the level or the grid size, so a process loads each binary once (about 2-3 ms
+        # per binary)
         # table_phases: phases of a table to share (another launch on the plan whose phases start with these): the
         # kernels then run only the first len(phases) of its phases
-        meta_t, nseg, nseg_gs, nseg_r, used = plan.meta_tensor(device, table_phases or phases, noc_xy, tpw)
+        meta_t, nseg, nseg_gs, nseg_r, _ = plan.meta_tensor(device, table_phases or phases, noc_xy, tpw)
         nph = 0
         if table_phases is not None:
             if list(table_phases[: len(phases)]) != list(phases):
                 raise ValueError("phases must be a prefix of table_phases")
             nph = len(phases)
             nseg, nseg_gs, nseg_r = plan.segment_counts(phases, tpw)
-        meta_pages = meta_t.shape[0] // plan.nc
-        meta_bytes = -(-used * 4 // 64) * 64  # the rows' used length, read at launch
+        meta_b = meta_t.shape[1] * 4  # one DRAM page per core: its row, a multiple of 64 bytes
         self.keep = [meta_t]
-        meta_b = meta_pages * 4096
         ntlv = slot_pages(plan.pout // TILE) if plan.nslot == 27 else plan.pout // TILE
         offw = plan.nslot == 27  # the writer reads its own slots' values and the other gatherers' offsets
         defs = dict(
@@ -256,8 +254,8 @@ class SparseRowOp:
         # per-core lists to build); the compute kernel keeps per-core segment counts
         ax, av, aoff, ameta, ab, adbg = (t.buffer_address() for t in (x, values, offsets, meta_t, b, dbg))
         aout, ao2 = out.buffer_address(), o2.buffer_address()
-        reader_common = [ax, av, aoff, ameta, ab, g.x, adbg, meta_pages, ntlv, plan.win_b, flags, meta_bytes, nph]
-        writer_common = [aout, ameta, g.x, aoff, 0, 0, adbg, av, ao2, ax, meta_pages, ntlv, flags, meta_bytes, nph]
+        reader_common = [ax, av, aoff, ameta, ab, g.x, adbg, meta_b, ntlv, plan.win_b, flags, nph]
+        writer_common = [aout, ameta, g.x, aoff, 0, 0, adbg, av, ao2, ax, meta_b, ntlv, flags, nph]
         def accessors(*ts):
             return [a for t in ts for a in ttnn.TensorAccessorArgs(t).get_compile_time_args()]
 
@@ -312,8 +310,8 @@ class SparseRowOp:
                 cb(CB["CB_OUT"], 2 * pg, pg, True),
                 cb(CB["CB_WIN"], win_b, win_b),
                 cb(CB["CB_OFF"], 2 * mg[0] * pg, pg),
-                cb(CB["CB_META"], meta_b),
-                cb(CB["CB_META2"], meta_b),
+                cb(CB["CB_META"], meta_b, meta_b),
+                cb(CB["CB_META2"], meta_b, meta_b),
                 cb(CB["CB_OFF2"], 2 * mg[1] * pg, pg),
                 cb(CB["CB_G3"], gd * pg, pg, True),
                 cb(CB["CB_OFF3"], ring * pg, pg),

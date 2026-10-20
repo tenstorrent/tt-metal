@@ -22,15 +22,15 @@ void kernel_main() {
     const uint32_t meta_addr = get_common_arg_val<uint32_t>(1);
     const uint32_t row = get_absolute_logical_y() * get_common_arg_val<uint32_t>(2) + get_absolute_logical_x();
     const uint32_t off_addr = get_common_arg_val<uint32_t>(3);
-    const uint32_t meta_pages = get_common_arg_val<uint32_t>(10), ntlv = get_common_arg_val<uint32_t>(11);
-    const uint32_t flags = get_common_arg_val<uint32_t>(12), meta_bytes = get_common_arg_val<uint32_t>(13);
-    const uint32_t nph = get_common_arg_val<uint32_t>(14);  // phases to run, if not 0: a prefix of the table's
+    const uint32_t meta_bytes = get_common_arg_val<uint32_t>(10), ntlv = get_common_arg_val<uint32_t>(11);
+    const uint32_t flags = get_common_arg_val<uint32_t>(12);
+    const uint32_t nph = get_common_arg_val<uint32_t>(13);  // phases to run, if not 0: a prefix of the table's
     const bool wsplit = flags & F_WSPLIT;
     constexpr auto ao = TensorAccessorArgs<0>();
     constexpr auto am = TensorAccessorArgs<ao.next_compile_time_args_offset()>();
     constexpr auto af = TensorAccessorArgs<am.next_compile_time_args_offset()>();
     const auto OUT = TensorAccessor(ao, out_addr, 4096);
-    const auto META = TensorAccessor(am, meta_addr, 4096);
+    const auto META = TensorAccessor(am, meta_addr, meta_bytes);  // page `row`: this core's row
     const auto OFF = TensorAccessor(af, off_addr, 1024 * OFFB);
     [[maybe_unused]] constexpr auto adbg0 = TensorAccessorArgs<af.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto avv = TensorAccessorArgs<adbg0.next_compile_time_args_offset()>();
@@ -52,7 +52,7 @@ void kernel_main() {
 #define TOC(i)
 #endif
     const uint32_t meta = get_write_ptr(CB_META2);
-    read_meta(META, row * meta_pages, meta, meta_bytes);
+    noc_async_read(META.get_noc_addr(row), meta, meta_bytes);
     noc_async_read_barrier();
     invalidate_l1_cache();
     Meta M;

@@ -50,16 +50,6 @@ inline uint32_t cb_ahead_ptr(uint32_t cb, uint32_t ahead, uint32_t page_bytes) {
     }
     return a;
 }
-// a core's META row: its pages start at page0 (rows are padded to whole 4 KB pages, so the page size and the kernel
-// binary do not depend on the grid); only the row's own bytes are read
-template <typename A>
-inline void read_meta(const A& acc, uint32_t page0, uint32_t l1, uint32_t nbytes) {
-    for (uint32_t p = 0; nbytes; ++p) {
-        const uint32_t n = nbytes < 4096 ? nbytes : 4096;
-        noc_async_read(acc.get_noc_addr(page0 + p), l1 + p * 4096, n);
-        nbytes -= n;
-    }
-}
 // read words [q, q + n) of a q-ordered vector (4 KB pages) into L1
 template <typename A>
 inline void read_q(const A& acc, uint32_t q, uint32_t l1, uint32_t n, uint8_t noc = noc_index) {

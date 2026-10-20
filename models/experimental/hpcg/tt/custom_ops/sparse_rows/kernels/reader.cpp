@@ -63,10 +63,10 @@ void kernel_main() {
     // every argument is common to all cores; this core's row of the tables follows from its logical position
     const uint32_t row = get_absolute_logical_y() * get_common_arg_val<uint32_t>(5) + get_absolute_logical_x();
     // grid-dependent sizes come as runtime arguments, so one binary serves every level and grid size
-    const uint32_t meta_pages = get_common_arg_val<uint32_t>(7), ntlv = get_common_arg_val<uint32_t>(8);
+    const uint32_t meta_bytes = get_common_arg_val<uint32_t>(7);  // META's page: one core's row, a multiple of 64 B
+    const uint32_t ntlv = get_common_arg_val<uint32_t>(8);
     const uint32_t winb = get_common_arg_val<uint32_t>(9), flags = get_common_arg_val<uint32_t>(10);
-    const uint32_t meta_bytes = get_common_arg_val<uint32_t>(11);  // this core's row length, a multiple of 64 bytes
-    const uint32_t nph = get_common_arg_val<uint32_t>(12);  // phases to run, if not 0: a prefix of the table's
+    const uint32_t nph = get_common_arg_val<uint32_t>(11);  // phases to run, if not 0: a prefix of the table's
     const bool wsplit = flags & F_WSPLIT, addb = flags & F_ADDB, restf = flags & F_RESTF;
 #ifdef GS
     constexpr bool kGS = true;
@@ -81,7 +81,7 @@ void kernel_main() {
     const auto SRC = TensorAccessor(as, src_addr, 4096);  // unused when ZEROX
     const auto V = TensorAccessor(av, v_addr, 4096);
     const auto OFF = TensorAccessor(ao, off_addr, 1024 * OFFB);
-    const auto META = TensorAccessor(am, meta_addr, 4096);  // this core's row: pages row * meta_pages onwards
+    const auto META = TensorAccessor(am, meta_addr, meta_bytes);  // page `row`: this core's row
     const auto Bv = TensorAccessor(ab, b_addr, 4096);
     (void)Bv;
 #ifdef KDEBUG
@@ -95,7 +95,7 @@ void kernel_main() {
 #define TOC(i)
 #endif
     const uint32_t meta = get_write_ptr(CB_META);
-    read_meta(META, row * meta_pages, meta, meta_bytes);
+    noc_async_read(META.get_noc_addr(row), meta, meta_bytes);
     noc_async_read_barrier();
     invalidate_l1_cache();
     Meta M;

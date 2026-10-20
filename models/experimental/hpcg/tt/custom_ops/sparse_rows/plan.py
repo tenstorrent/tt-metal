@@ -490,19 +490,21 @@ class SparseRowPlan:
         return nseg.tolist(), nseg_gs.tolist(), nseg_r.tolist()
 
     def meta_tensor(self, device, phases, noc_xy, tpw=TILE):
-        """meta(..., align=TILE) uploaded as a ROW_MAJOR [nc * pages, 1024] device tensor (u32_rows), and the rest of
-        meta's result: (tensor, nseg, nseg_gs, nseg_r, longest). The rows are built in a reused host buffer (TT-NN
-        copies them on upload), so no fresh memory is faulted in per launch; launches with the same phases (CG start
-        and CG SpMV) share one upload."""
+        """meta(..., align=16) uploaded as a ROW_MAJOR [nc, w] device tensor (u32_rows): one DRAM page per core, of
+        the longest row rounded up to 64 bytes (rows of whole 4 KB pages uploaded 1.1 to 24 times the bytes: 0.47 ms
+        of uploads per HPCG() at 104^3, 43 to 433 words used of 1024). Returns the rest of meta's result too:
+        (tensor, nseg, nseg_gs, nseg_r, longest). The rows are built in a reused host buffer (TT-NN copies them on
+        upload), so no fresh memory is faulted in per launch; launches with the same phases (CG start and CG SpMV)
+        share one upload."""
         lib = native.lib()
         key = ("tensor", id(device), id(noc_xy), tuple(phases), tpw)
         if key not in self._tables:
             if lib is None:
-                m, *rest = self._meta_python(phases, noc_xy, tpw, TILE)
-                self._tables[key] = (u32_rows(device, m.reshape(-1, TILE)), *rest)
+                m, *rest = self._meta_python(phases, noc_xy, tpw, 16)
+                self._tables[key] = (u32_rows(device, m), *rest)
             else:
-                m, *rest = self._meta_native(lib, phases, noc_xy, tpw, TILE, _scratch)
-                self._tables[key] = (u32_rows(device, m.reshape(-1, TILE)), *rest)
+                m, *rest = self._meta_native(lib, phases, noc_xy, tpw, 16, _scratch)
+                self._tables[key] = (u32_rows(device, m), *rest)
         return self._tables[key]
 
     def _meta_native(self, lib, phases, noc_xy, tpw, align, scratch):
