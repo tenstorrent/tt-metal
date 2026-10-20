@@ -97,6 +97,15 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="torus-xy-8x4-tp0",
         ),
+        # One 4x4 prefill stage (a Galaxy tray half): TP=4 on the axis-0 line, SP's ring on axis 1.
+        pytest.param(
+            (4, 4),
+            torus_x_device_params(fabric_payload_size=KimiK3Config.FABRIC_PAYLOAD_SIZE),
+            2,
+            0,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+            id="torus-x-4x4-tp0",
+        ),
     ],
     indirect=["mesh_device", "device_params"],
 )

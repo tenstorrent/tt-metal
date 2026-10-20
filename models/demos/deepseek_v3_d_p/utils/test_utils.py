@@ -50,20 +50,24 @@ def gather_cache_tp0(tt_cache, mesh_device) -> torch.Tensor:
     return cache_full[:, 0]
 
 
-def gather_cache_natural(tt_cache, mesh_device, tp_shard_kv: bool = False):
+def gather_cache_natural(tt_cache, mesh_device, tp_shard_kv: bool = False, sp_axis: int = 0):
     """Gather a KV/indexer cache to host float32 in shard-major (block-cyclic) order, returning
     ``(cache [num_slots, seq_len_cache, head_dim], stripe_count)`` for the caller to un-rotate.
     An ``MlaKvCache`` is decoded to logical [latent || RoPE] rows (incl. packed scaled FP8).
 
+    The sequence is sharded along mesh axis ``sp_axis`` and TP runs along the other one.
     TP-sharded, every tp-coord holds a distinct slice, so flatten into linear chip order (sp_coord*tp +
     tp_coord) over sp*tp stripes. Mirrors sparse_mla/test_sparse_mla.py::_cache_natural."""
     from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCache
 
-    sp, tp = mesh_device.shape[0], mesh_device.shape[1]
+    tp_axis = 1 - sp_axis
+    sp, tp = mesh_device.shape[sp_axis], mesh_device.shape[tp_axis]
+    dims = [None, None]
+    dims[sp_axis], dims[tp_axis] = 2, 1  # sequence along SP, TP replicas or slices on dim 1
     is_mla_cache = isinstance(tt_cache, MlaKvCache)
     cache_sr = ttnn.to_torch(
         tt_cache.storage if is_mla_cache else tt_cache,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape),
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=tuple(dims), mesh_shape=mesh_device.shape),
     )  # [num_slots, tp, seq_dim, head_dim]
     if is_mla_cache:
         cache_sr = tt_cache.unpack_host(cache_sr)

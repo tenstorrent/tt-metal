@@ -39,6 +39,7 @@ from loguru import logger
 import ttnn
 from models.demos.deepseek_v3_d_p.tests.pcc.mesh_configs import ALL_MESH_CONFIGS
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import extract_mesh_config, get_gate_outputs
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 
 # One 5120-token chunk spread over the 8-chip dispatch group.
 CHUNK = 5 * 1024
@@ -53,9 +54,11 @@ SEQ_LEN_PER_CHIP = CHUNK // DISPATCH_GROUP_SIZE
 FWD_REDUCTION = 16
 
 # The production Galaxy row and its 8x1 TorusY LoudBox proxy. The proxy is one dispatch group on a
-# single-axis ring, so it covers neither cross-group routing nor the 2D torus.
+# single-axis ring, so it covers neither cross-group routing nor the 2D torus. The 4x4 row is one
+# 4x4 prefill stage, whose SP ring is mesh axis 1.
 _MESH_IDS = (
     "fabric2d-torus-xy-8x4-2link",
+    "fabric2d-torus-x-4x4-2link",
     "fabric2d-torus-y-8x1-2link",
     "fabric2d-torus-x-1x8-2link",
 )
@@ -421,6 +424,10 @@ def test_combine_fabric2d(
 ):
     if mesh_device.shape[sp_axis] == 1:
         pytest.skip(f"mesh {tuple(mesh_device.shape)} has no extent along sp_axis={sp_axis}")
+    # The op relays tokens around a ring on the SP axis, and TtMoe only picks it when that axis
+    # wraps. On a 4x4 tray half only axis 1 does, so sp0 there is a layout the model never runs.
+    if per_axis_topology(device_params["fabric_config"])[sp_axis] != ttnn.Topology.Ring:
+        pytest.skip(f"sp_axis={sp_axis} is not a ring under {device_params['fabric_config']}")
     cfg = extract_mesh_config(mesh_device, sp_axis)
     H, G = cfg.dispatch_group_size, cfg.num_dispatch_groups
     if routing == "production" and G == 1:
