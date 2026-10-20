@@ -5,7 +5,7 @@
 slot) only, the decode step exchanges heads -> users before the traced sparse attention and users -> heads after
 (``GLMMesh.all_to_all_cols``), prefill fills the owner's slot and the scratch slot.
 
-* ``test_partitioned_two_rows_four_users``: layer 3, 4 users per row (one per column) prefilled from four
+* ``test_partitioned_two_rows_four_users``: layer 3 on ``GLM53_MESH_SHAPE`` (default 2,4), 4 users per row (one per column) prefilled from four
   reference streams (R4097 sparse, R2040 dense -> sparse at 2047, R2042, R2043), 12 lockstep decode steps
   (eager, then the captured trace replayed), every (row, user, step) output vs its HF dump > 0.995 and the two
   rows byte-equal (replicated prefill, identical tokens).
@@ -18,6 +18,7 @@ slot) only, the decode step exchanges heads -> users before the traced sparse at
 
 from __future__ import annotations
 
+import os
 import time
 from pathlib import Path
 
@@ -33,7 +34,7 @@ from models.demos.glm53_flash.tt.functional_decoder import FunctionalDecoder, ho
 from models.demos.glm53_flash.tt.mesh import GLMMesh, mesh_device_params
 
 LAYER = 3
-ROWS, COLS = 2, 4
+ROWS, COLS = (int(v) for v in os.environ.get("GLM53_MESH_SHAPE", "2,4").split(","))  # (8,4) = the whole Galaxy
 B = 4  # users per row = one per column
 DUMPS = ["R4097", "R2040", "R2042", "R2043"]
 REF = Path("bringup/references/glm53_flash")
@@ -122,7 +123,7 @@ def test_partitioned_two_rows_four_users(mesh_device):
         check(out_dev, s, "trace replay")
     ttnn.release_trace(mesh_device, trace_id)
     worst = min(r[4] for r in results)
-    logger.info(f"partitioned (2,4): worst pcc {worst:.6f} over {len(results)} (step, row, user) samples")
+    logger.info(f"partitioned ({ROWS},{COLS}): worst pcc {worst:.6f} over {len(results)} (step, row, user) samples")
     assert all(r[4] > 0.995 for r in results), [r for r in results if r[4] <= 0.995]
 
 
@@ -148,7 +149,7 @@ def test_partitioned_1m_step(mesh_device):
         partition_users=True,
     )
     logger.info(
-        f"layer {LAYER} on the (2,4) block, 1 user per column x {N + 64} positions: built in {time.perf_counter() - t0:.0f} s"
+        f"layer {LAYER} on the ({ROWS},{COLS}) mesh, 1 user per column x {N + 64} positions: built in {time.perf_counter() - t0:.0f} s"
     )
     U = ROWS * B
     streams = mesh.upload(torch.randn(1, 1, U, 4 * cfg.hidden_size) * 0.5, ttnn.float32, rows=2)

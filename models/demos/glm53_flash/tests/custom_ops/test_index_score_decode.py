@@ -3,7 +3,8 @@
 """``custom_ops/index_score_decode`` (batched one-query-per-user indexer scores, a model-local generic op) vs the
 torch golden sum_h relu(q_h . k_p) w_h: PCC and the top-512 selected-set overlap per user (the quantity the sparse
 decode consumes) for W = 1280 and 262400 (the 1 M-position pool width) with B = 1 / 4 / 8 / 32; trace replay with
-refreshed queries; the pooled-key streaming rate.
+refreshed queries; the pooled-key streaming rate; the shared-slot / scored-width form (every user = one cache slot,
+B = 70 users, per-row bounds) and that form against the shared ``indexer_score_dsa`` on prefill rows.
 
     TT_VISIBLE_DEVICES=0 pytest models/demos/glm53_flash/tests/custom_ops/test_index_score_decode.py -s
 """
@@ -185,4 +186,100 @@ def test_index_score_decode_masked_segmented(mesh_device, B):
     logger.info(f"writer v2 B={B}: masked prefix equal / tail -inf {ok}; segmented layout equal to masked {ok_seg}")
     assert ok and ok_seg
     for t in (q_t, w_t, k_t, o_plain, v_t, o_mask, o_seg):
+        ttnn.deallocate(t)
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+@pytest.mark.parametrize("B,cols", [(4, None), (70, 768)])
+def test_index_score_decode_shared_slot(mesh_device, B, cols):
+    """``slot``: every user scores the same cache slot (the prefill form: the T queries of one prompt as T users);
+    ``cols``: only the first ``cols`` pools are scored (the out row is ``cols`` wide, the slot stride stays the cache
+    width); B = 70 spans three w tile rows (b >= 32). Per-row bounds through ``valid_rows``: the golden on the prefix,
+    -inf at and beyond."""
+    W, slots, slot = 1280, 4, 2
+    cols_eff = cols or W
+    op = IndexScoreDecode(mesh_device)
+    g = torch.Generator().manual_seed(300 + B)
+    q = (torch.randn(B, Hi, D, generator=g) * 0.5).bfloat16()
+    kk = (torch.randn(slots, 1, W, D, generator=g) * 0.5).bfloat16()
+    w = (torch.randn(B, Hi, generator=g) * 0.2).bfloat16()
+    ref = op.golden(q, kk[slot, 0].unsqueeze(0).expand(B, W, D), w)[:, :cols_eff]
+    bounds = torch.tensor([[K + (b * 37) % (cols_eff - K)] for b in range(B)], dtype=torch.int32)
+    q_t = ttnn.from_torch(q.reshape(1, B, Hi, D), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device)
+    w_t = ttnn.from_torch(w.reshape(1, 1, B, Hi), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device)
+    k_t = ttnn.from_torch(kk, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device)
+    v_t = ttnn.from_torch(bounds, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device)
+    o_t = ttnn.zeros((B, 1, 1, cols_eff), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device)
+    op(q_t, w_t, k_t, o_t, valid_rows=v_t, slot=slot, cols=cols)
+    got = ttnn.to_torch(o_t).float().reshape(B, cols_eff)
+    worst_pcc, worst_ov = 1.0, 1.0
+    for b in range(B):
+        n = int(bounds[b, 0])
+        assert torch.isinf(got[b, n:]).all() and (got[b, n:] < 0).all(), (b, n, got[b, n : n + 4])
+        assert torch.isfinite(got[b, :n]).all(), (b, n)
+        worst_pcc = min(worst_pcc, pcc(ref[b, :n], got[b, :n]))
+        top_r = set(torch.topk(ref[b, :n], K).indices.tolist())
+        top_g = set(torch.topk(got[b, :n], K).indices.tolist())
+        worst_ov = min(worst_ov, len(top_r & top_g) / K)
+    logger.info(
+        f"shared slot B={B} cols={cols_eff}: worst prefix pcc {worst_pcc:.6f}, worst top-512 overlap {worst_ov:.4f}"
+    )
+    assert worst_pcc > 0.999 and worst_ov > 0.97
+    for t in (q_t, w_t, k_t, v_t, o_t):
+        ttnn.deallocate(t)
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+def test_index_score_decode_prefill_rows_vs_shared_op(mesh_device):
+    """The prefill form (``TtDSAIndexer._score_prefill_rows``: T queries of one slot, per-row causal bounds) against
+    ``ttnn.experimental.indexer_score_dsa`` on the same queries and pooled keys (chunk_start_idx = query_start,
+    cache_batch_idx = slot): the visible prefix of every row (PCC, top-512 overlap) and the mask pattern (pool p
+    visible to row t iff p < (query_start + t + 1) // P)."""
+    T, W, slots, slot, P, query_start = 96, 1280, 3, 1, 4, 2048
+    op = IndexScoreDecode(mesh_device)
+    g = torch.Generator().manual_seed(5)
+    q = (torch.randn(T, Hi, D, generator=g) * 0.5).bfloat16()
+    kk = (torch.randn(slots, 1, W, D, generator=g) * 0.5).bfloat16()
+    w = (torch.randn(T, Hi, generator=g) * 0.2).bfloat16()
+    pools = ttnn.from_torch(kk, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device)
+    w_t = ttnn.from_torch(w.reshape(1, 1, T, Hi), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device)
+    q_h = ttnn.from_torch(
+        q.transpose(0, 1).reshape(1, Hi, T, D).contiguous(),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+    )
+    ref_t = ttnn.experimental.indexer_score_dsa(
+        q_h,
+        pools,
+        w_t,
+        chunk_start_idx=query_start,
+        key_compression_ratio=P,
+        program_config=ttnn.IndexerScoreProgramConfig(q_chunk_size=32, k_chunk_size=32, head_group_size=0),
+        cache_batch_idx=slot,
+        kv_len=W,
+        seq_shard_axes=[0],
+    )
+    ref = ttnn.to_torch(ref_t).float().reshape(T, W)
+    q_r = ttnn.from_torch(q.reshape(1, T, Hi, D), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device)
+    bounds = torch.tensor([[min(W, (query_start + t + 1) // P)] for t in range(T)], dtype=torch.int32)
+    v_t = ttnn.from_torch(bounds, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device)
+    o_t = ttnn.zeros((T, 1, 1, W), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device)
+    op(q_r, w_t, pools, o_t, valid_rows=v_t, slot=slot, cols=W)
+    got = ttnn.to_torch(o_t).float().reshape(T, W)
+    worst_pcc, worst_ov = 1.0, 1.0
+    for t in range(T):
+        n = int(bounds[t, 0])
+        assert (ref[t, n:] == float("-inf")).all(), (t, n, ref[t, n : n + 4])
+        assert (got[t, n:] == float("-inf")).all(), (t, n, got[t, n : n + 4])
+        assert torch.isfinite(ref[t, :n]).all() and torch.isfinite(got[t, :n]).all(), (t, n)
+        worst_pcc = min(worst_pcc, pcc(ref[t, :n], got[t, :n]))
+        top_r = set(torch.topk(ref[t, :n], K).indices.tolist())
+        top_g = set(torch.topk(got[t, :n], K).indices.tolist())
+        worst_ov = min(worst_ov, len(top_r & top_g) / K)
+    logger.info(
+        f"prefill rows vs indexer_score_dsa T={T}: worst prefix pcc {worst_pcc:.6f}, worst top-512 overlap {worst_ov:.4f}"
+    )
+    assert worst_pcc > 0.999 and worst_ov > 0.97
+    for t in (pools, w_t, q_h, ref_t, q_r, v_t, o_t):
         ttnn.deallocate(t)
