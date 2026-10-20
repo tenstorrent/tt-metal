@@ -150,6 +150,11 @@ class PrefillModelAdapter(ABC):
     # Whether the runtime implements prefill_forward (several chunk entries per forward). Without it the runner
     # runs a PREFILL_FORWARD_CHUNKS > 1 forward one entry at a time. See docs/ADDING_A_PREFILL_MODEL.md.
     supports_packed_forward: bool = False
+    # With supports_packed_forward, whether prefill_forward also serves PREFILL_USE_TRACE=1 (it stages each entry's
+    # inputs before a trace replay) and PREFILL_LAYER_ACK_D2H=1 (it sends one 12-byte (slot, start, end) record per
+    # entry per KV-writing layer, each entry's records contiguous). Otherwise the runner refuses those with F > 1.
+    supports_packed_forward_trace: bool = False
+    supports_packed_forward_d2h_acks: bool = False
 
     def fabric_payload_size(self) -> int:
         """The fabric packet payload the mesh is opened with. It is fixed at mesh open, before the model is
