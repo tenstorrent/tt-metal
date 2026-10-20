@@ -2343,8 +2343,6 @@ def test_group_norm_sharded_all_config(
 def test_group_norm_sharded_two_pass_fp32_row_major_matches_tile(
     device, offset, N, C, H, W, num_groups, grid_y, grid_x
 ):
-    # The in-kernel tilize of a Float32 ROW_MAJOR input must be lossless, so the result matches a TILE input.
-    # A large mean offset makes any TF32 rounding of x visible once the mean is subtracted.
     torch.manual_seed(0)
     x = torch.rand((N, C, H, W), dtype=torch.float32) + offset
     w = torch.rand((C,), dtype=torch.float32)

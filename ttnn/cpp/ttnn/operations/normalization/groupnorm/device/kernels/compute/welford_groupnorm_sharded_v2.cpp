@@ -135,8 +135,6 @@ void kernel_main() {
         compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
         compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(per_core_M);
 #else
-    // FP32: tilize from the UnpackToDestFp32 alias of the input shard (c_29, same L1 as c_0) so the row-major
-    // input does not pass through SrcA, which rounds it to TF32.
     constexpr std::uint32_t dfb_in_rm_id = welford_fp32_alias ? dfb_in0_welford_id : dfb_in0_id;
     compute_kernel_hw_startup(dfb_in_rm_id, dfb_in_rm_id, dfb_in_id);
     compute_kernel_lib::tilize<
