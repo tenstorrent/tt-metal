@@ -244,7 +244,7 @@ class TT_CCL:
         return self.combine_overlap_semaphores
 
     def get_combine_forwarding_buffer(
-        self, emb_dim, experts_per_chip, num_experts_per_tok, seq_len_per_chip, num_links
+        self, emb_dim, experts_per_chip, num_experts_per_tok, seq_len_per_chip, num_links, combine_axis=0
     ):
         """combine_fabric2d's DRAM forwarding buffer for hybrid_routed_expert_moe overlapped with combine.
 
@@ -252,7 +252,7 @@ class TT_CCL:
         forward: left to the op, it is allocated while that forward's dispatch buffer and outputs are live and stays
         pinned there, splitting the DRAM each later layer's dispatch buffer needs in one piece.
         """
-        key = (emb_dim, experts_per_chip, num_experts_per_tok, seq_len_per_chip, num_links)
+        key = (emb_dim, experts_per_chip, num_experts_per_tok, seq_len_per_chip, num_links, combine_axis)
         buffer = self.combine_forwarding_buffers.get(key)
         if buffer is None:
             buffer = ttnn.experimental.deepseek_prefill.hybrid_routed_expert_moe_forwarding_buffer(
@@ -261,7 +261,7 @@ class TT_CCL:
                 experts_per_chip=experts_per_chip,
                 num_experts_per_tok=num_experts_per_tok,
                 seq_len_per_chip=seq_len_per_chip,
-                combine_axis=0,
+                combine_axis=combine_axis,
                 combine_num_links=num_links,
             )
             self.combine_forwarding_buffers[key] = buffer
