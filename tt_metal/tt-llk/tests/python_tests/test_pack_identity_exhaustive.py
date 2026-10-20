@@ -1,7 +1,10 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Every 16 bit pattern of Float16_b and Float16 through an identity pack (A2D datacopy, same format in and out)."""
+"""Every 16 bit pattern of Float16_b and Float16 through an identity pack (A2D datacopy, same format in and out).
+
+The Float16 arm passes at the merge base too (the conversion path keeps fp16 NaN); it guards the identity path.
+"""
 
 from collections import Counter
 

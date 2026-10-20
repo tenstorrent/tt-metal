@@ -30,7 +30,7 @@ from helpers.llk_params import (
 from helpers.pack import pack_bfp16
 from helpers.param_config import input_output_formats
 from helpers.stimuli_config import StimuliConfig
-from helpers.test_config import TestConfig
+from helpers.test_config import BuildMode, TestConfig
 from helpers.test_variant_parameters import (
     ACC_TO_DEST,
     BROADCAST_TYPE,
@@ -128,6 +128,13 @@ def _stimuli_config(formats, src_A, src_B):
     )
 
 
+def _build(configuration):
+    # Build before any run() so a --compile-producer pass, which skips at the first run(), builds every kernel.
+    configuration.generate_variant_hash()
+    if TestConfig.BUILD_MODE in [BuildMode.PRODUCE, BuildMode.DEFAULT]:
+        configuration.build_elfs()
+
+
 def _run_bits(configuration):
     configuration.run()
     raw = configuration.variant_stimuli.collect_raw_result_bytes(
@@ -136,20 +143,19 @@ def _run_bits(configuration):
     return torch.from_numpy(np.frombuffer(raw, dtype=np.int16)[:N].copy())
 
 
-def _run_toggled(formats, dest_acc, datacopy, src_A, src_B):
-    configuration = TestConfig(
+def _toggled_config(formats, dest_acc, datacopy, src_A, src_B):
+    return TestConfig(
         "sources/fp32_dest_acc_mid_kernel_pack_test.cpp",
         formats,
         templates=[MID_KERNEL_DATACOPY(datacopy)],
         variant_stimuli=_stimuli_config(formats, src_A, src_B),
         dest_acc=dest_acc,
     )
-    return _run_bits(configuration)
 
 
-def _run_native_datacopy(formats, dest_acc, src_A, src_B):
+def _native_datacopy_config(formats, dest_acc, src_A, src_B):
     # Same parameters test_pack_identity_exhaustive.py uses for an A2D datacopy, cut to one tile.
-    configuration = TestConfig(
+    return TestConfig(
         "sources/eltwise_unary_datacopy_test.cpp",
         formats,
         templates=[
@@ -169,12 +175,11 @@ def _run_native_datacopy(formats, dest_acc, src_A, src_B):
         variant_stimuli=_stimuli_config(formats, src_A, src_B),
         dest_acc=dest_acc,
     )
-    return _run_bits(configuration)
 
 
-def _run_native_elwmul(formats, dest_acc, src_A, src_B):
+def _native_elwmul_config(formats, dest_acc, src_A, src_B):
     # Same templates test_eltwise_binary.py uses for one ELWMUL HiFi4 tile without broadcast.
-    configuration = TestConfig(
+    return TestConfig(
         "sources/eltwise_binary_test.cpp",
         formats,
         templates=[
@@ -203,7 +208,6 @@ def _run_native_elwmul(formats, dest_acc, src_A, src_B):
         variant_stimuli=_stimuli_config(formats, src_A, src_B),
         dest_acc=dest_acc,
     )
-    return _run_bits(configuration)
 
 
 def _is_nan(bits):
@@ -255,13 +259,20 @@ def test_fp32_dest_acc_mid_kernel_pack(built_dest_acc):
 
     # The disable arm datacopies A, since ELWMUL does not leave a NaN in Dst for the packer to lose.
     datacopy = run_dest_acc == DestAccumulation.No
-    got = _run_toggled(formats, built_dest_acc, datacopy, src_A, src_B)
+    toggled = _toggled_config(formats, built_dest_acc, datacopy, src_A, src_B)
     if datacopy:
-        native = _run_native_datacopy(formats, run_dest_acc, src_A, src_B)
+        native_config = _native_datacopy_config(formats, run_dest_acc, src_A, src_B)
         native_name = "eltwise_unary_datacopy_test A2D"
     else:
-        native = _run_native_elwmul(formats, run_dest_acc, src_A, src_B)
+        native_config = _native_elwmul_config(formats, run_dest_acc, src_A, src_B)
         native_name = "eltwise_binary_test ELWMUL HiFi4"
+    _build(toggled)
+    _build(native_config)
+    if TestConfig.BUILD_MODE == BuildMode.PRODUCE:
+        pytest.skip(TestConfig.SKIP_JUST_FOR_COMPILE_MARKER)
+
+    got = _run_bits(toggled)
+    native = _run_bits(native_config)
 
     failures = []
     if datacopy:
