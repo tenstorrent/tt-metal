@@ -32,7 +32,7 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include "tt_metal/test_utils/stimulus.hpp"
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/arch.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include "single_core_compute_runners.hpp"
 
