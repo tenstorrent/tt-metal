@@ -80,6 +80,30 @@ nothing while it runs.
   pieces of x each core handles, in C++ (`host/native_setup.cpp`, compiled
   automatically the first time it runs).
 
+## Host time
+
+Measured at 192³ on the P150's host (Ryzen 9 7900X).
+
+- **During the timed solve: none.** The host queues one trace replay for the
+  CG start and one per iteration (0.1 ms for 51 replays) and reads nothing
+  back; a 50-iteration set measures 50 × 23.65 ms + 3.95 ms for the start.
+- **Setup, charged by HPCG's score (a tenth per 50-iteration set): about
+  0.05 s.** It is needed before the first launch:
+  - the card generating the matrix (one launch per grid, about 17 ms, mostly
+    the fine grid's 1.5 GB of values and offsets);
+  - planning which rows and pieces of x each core handles, and which updated
+    rows it sends to which neighbour (about 14 ms, C++);
+  - building the launch descriptions the card is dispatched with (about
+    10 ms), the grid-transfer tables (about 6 ms) and allocating the vectors
+    (about 4 ms).
+- **Once per process, not charged:** `import ttnn` (1.5 s), opening the card
+  (0.2 s), loading the compiled kernels on first use (about 0.06 s) and
+  recording the two traces (3 ms). These belong to TT-NN and the runtime, like
+  loading a program for a CPU run.
+- **Checking results, outside the benchmark:** reading the residual after
+  each iteration (only in the run that records the history, 0.07 ms each) and
+  reading x once at the end (0.07 s).
+
 ## Rules
 
 Checked against HPCG 3.1's source and its
