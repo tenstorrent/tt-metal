@@ -12,9 +12,8 @@ which op mislabelled the tensor, it only refuses to serialise the consequence.
 
 Each test states its negative control in its docstring: what the same call did before the guard existed.
 
-Runs on the module-scoped ``tp_mesh`` ([1, 2], conftest). Helpers are copied from
-``test_optimizer_state_topology.py`` (``TPBlock``, ``_train_step``) rather than imported: the repo runs pytest with
-``--import-mode=importlib``, under which sibling test modules are not importable.
+Runs on the module-scoped ``tp_mesh`` ([1, 2], conftest). The TP block, its optimizer and the training step come from
+``tp_block.py``, the helper module shared with ``test_optimizer_state_topology.py``.
 """
 
 from __future__ import annotations
@@ -30,7 +29,7 @@ import ttnn
 from ttml import checkpointing
 from ttml.checkpointing import CheckpointShapeError
 from ttml.sharding import ReplicaMismatchError
-from ttml.modules import AbstractModuleBase, ColumnParallelLinear, LinearLayer, RowParallelLinear
+from tp_block import fresh_tp, trained_tp
 
 pytestmark = [pytest.mark.requires_device, pytest.mark.timeout(1800)]
 
@@ -40,54 +39,7 @@ DIM = 128
 NATIVE = ttml.autograd.PreferredPrecision.NATIVE
 
 
-# --- helpers (mirroring test_optimizer_state_topology.py) ------------------------------------------------------
-
-
-class TPBlock(AbstractModuleBase):
-    """Replicated linear -> column-parallel -> row-parallel: sharded weights on dims 2 and 3, a sharded bias
-    (column-parallel, dim 3) and replicated params (the first linear, the row-parallel bias)."""
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.inp = LinearLayer(DIM, DIM)
-        self.up = ColumnParallelLinear(DIM, DIM, has_bias=True)
-        self.down = RowParallelLinear(DIM, DIM, has_bias=True, input_is_parallel=True)
-
-    def forward(self, x):
-        return self.down(self.up(self.inp(x)))
-
-
-def _make_adamw(params):
-    cfg = ttml.optimizers.AdamWConfig.make(lr=1e-3, beta1=0.9, beta2=0.999, epsilon=1e-8, weight_decay=0.0)
-    return ttml.optimizers.AdamW(params, cfg)
-
-
-def _train_step(model, opt) -> None:
-    """One forward/backward/optimizer step on a ``(1, 1, DIM, DIM)`` input, so every moment exists and is non-zero."""
-    ctx = ttml.autograd.AutoContext.get_instance()
-    x = ttml.autograd.Tensor.from_numpy(
-        np.random.default_rng(0).standard_normal((1, 1, DIM, DIM), dtype=np.float32),
-        ttnn.Layout.TILE,
-        ttnn.DataType.BFLOAT16,
-    )
-    opt.zero_grad()
-    loss = ttml.ops.unary.mean(model(x))
-    loss.backward(False)
-    opt.step()
-    ctx.reset_graph()
-
-
-def _fresh_tp():
-    """An untrained TPBlock and its AdamW: (model, params, opt)."""
-    model = TPBlock()
-    params = model.parameters()
-    return model, params, _make_adamw(params)
-
-
-def _trained_tp():
-    model, params, opt = _fresh_tp()
-    _train_step(model, opt)
-    return params, opt
+# --- helpers ----------------------------------------------------------------------------------------------------
 
 
 def _gathered_shape(tensor) -> tuple:
@@ -193,7 +145,7 @@ def test_save_rejects_state_whose_label_does_not_describe_its_data(tp_mesh, tmp_
 
     Negative control: before the guard, ``save_checkpoint`` wrote the file with the (1, 1, DIM/2, DIM)-or-similar
     record silently, so the ``expect_error`` here would have failed with "did not raise"."""
-    params, opt = _trained_tp()
+    params, opt = trained_tp(DIM)
     name = _sharded_param_name(params)
     param_shape = _gathered_shape(params[name])
     moment = opt.get_state_dict()["exp_avg"][name]
@@ -229,7 +181,7 @@ def test_save_rejects_param_whose_replicate_label_hides_different_data(tp_mesh, 
 
     Negative control: with ``verify_replicas=False`` (the gather before this check) the file is written and its
     record for the parameter holds one device's shard."""
-    params, opt = _trained_tp()
+    params, opt = trained_tp(DIM)
     name = _sharded_param_name(params)
     full = _gathered_shape(params[name])
     original = _forge_replicate(params[name])
@@ -290,7 +242,7 @@ def test_replica_check_can_be_disabled(tp_mesh, tmp_path, expect_error):
     """The replica check is on by default, and ``verify_replicas=False`` restores the label-trusting gather, which
     keeps one copy. Checked on a parameter whose ``Replicate`` label hides different data, saved alone so the shape
     cross-check has nothing to compare it with."""
-    params, _ = _trained_tp()
+    params, _ = trained_tp(DIM)
     name = _sharded_param_name(params)
     _forge_replicate(params[name])
     path = str(tmp_path / "toggle.ckpt")
@@ -329,7 +281,7 @@ def test_save_warns_and_skips_state_not_in_model_params(tp_mesh, tmp_path):
     Everything else in the same save is still checked.
 
     Negative control: no warning was emitted before the guard (``pytest.warns`` would fail with "did not warn")."""
-    params, opt = _trained_tp()
+    params, opt = trained_tp(DIM)
     dropped = _sharded_param_name(params)
     subset = ttml.NamedParameters()
     for n, t in params.items():
@@ -364,7 +316,7 @@ def test_save_warns_and_skips_state_not_in_model_params(tp_mesh, tmp_path):
 
 def test_save_without_model_params_warns_once(tp_mesh, tmp_path):
     """An optimizer saved alone cannot be cross-checked at all; say so once rather than per leaf."""
-    params, opt = _trained_tp()
+    params, opt = trained_tp(DIM)
     path = str(tmp_path / "opt_only.ckpt")
     with pytest.warns(UserWarning, match="saving an optimizer without model_params") as rec:
         checkpointing.save_checkpoint(path, header={}, optimizer=opt)
@@ -384,7 +336,7 @@ def test_load_rejects_truncated_optimizer_record(tp_mesh, tmp_path, expect_error
 
     Negative control: before the guard, ``load_checkpoint`` redistributed the half-size record by the live
     ``Shard`` mapper and ``set_state_dict`` installed a quarter-size moment without complaint."""
-    params, opt = _trained_tp()
+    params, opt = trained_tp(DIM)
     name = _sharded_param_name(params)
     good = str(tmp_path / "good.ckpt")
     checkpointing.save_checkpoint(good, header={"step": 1}, model_params=params, optimizer=opt)
@@ -394,7 +346,7 @@ def test_load_rejects_truncated_optimizer_record(tp_mesh, tmp_path, expect_error
     full = _gathered_shape(params[name])
     assert truncated != full
 
-    _, fresh_params, fresh_opt = _fresh_tp()
+    _, fresh_params, fresh_opt = fresh_tp(DIM)
     with expect_error(CheckpointShapeError, rf"optimizer/exp_avg\[{name}\] record has shape") as excinfo:
         checkpointing.load_checkpoint(bad, model_params=fresh_params, optimizer=fresh_opt)
     message = str(excinfo.value)
@@ -403,12 +355,12 @@ def test_load_rejects_truncated_optimizer_record(tp_mesh, tmp_path, expect_error
         params[name].get_value(NATIVE).shape
     ), "the live moment must be untouched by a refused load"
 
-    _, _, opt_only = _fresh_tp()
+    _, _, opt_only = fresh_tp(DIM)
     with expect_error(CheckpointShapeError, rf"optimizer/exp_avg\[{name}\] record has shape"):
         checkpointing.load_checkpoint(bad, optimizer=opt_only)
 
     # Positive control: the untampered file restores into the same fresh pair.
-    _, fresh_params, fresh_opt = _fresh_tp()
+    _, fresh_params, fresh_opt = fresh_tp(DIM)
     assert checkpointing.load_checkpoint(good, model_params=fresh_params, optimizer=fresh_opt) == {"step": 1}
 
 
@@ -419,7 +371,7 @@ def test_load_rejects_truncated_record_without_model_group(tp_mesh, tmp_path, ex
 
     Negative control: ``set_state_dict`` has no shape check of its own, so before the guard this installed the
     wrong-size moment silently."""
-    params, opt = _trained_tp()
+    params, opt = trained_tp(DIM)
     name = _sharded_param_name(params)
     good = str(tmp_path / "opt_good.ckpt")
     with pytest.warns(UserWarning, match="without model_params"):
@@ -428,7 +380,7 @@ def test_load_rejects_truncated_record_without_model_group(tp_mesh, tmp_path, ex
     bad = str(tmp_path / "opt_bad.ckpt")
     _write_with_truncated_record(good, bad, ("optimizer", "exp_avg", name), _shard_dim(params[name]))
 
-    _, _, fresh_opt = _fresh_tp()
+    _, _, fresh_opt = fresh_tp(DIM)
     with expect_error(CheckpointShapeError, rf"optimizer/exp_avg\[{name}\] record of shape .* per-device"):
         checkpointing.load_checkpoint(bad, optimizer=fresh_opt)
 
@@ -441,7 +393,7 @@ def test_load_rejects_truncated_model_record(tp_mesh, tmp_path, expect_error):
 
     Negative control: ``assign`` (``AutocastTensor::set_tensor``) has no shape check of its own, so before the guard
     this installed the quarter-size parameter silently (the ``expect_error`` would have failed with "did not raise")."""
-    params, opt = _trained_tp()
+    params, opt = trained_tp(DIM)
     name = _sharded_param_name(params)
     good = str(tmp_path / "model_good.ckpt")
     checkpointing.save_checkpoint(good, header={}, model_params=params, optimizer=opt)
@@ -449,7 +401,7 @@ def test_load_rejects_truncated_model_record(tp_mesh, tmp_path, expect_error):
     bad = str(tmp_path / "model_bad.ckpt")
     _write_with_truncated_record(good, bad, ("model", name), _shard_dim(params[name]))
 
-    _, fresh_params, _ = _fresh_tp()
+    _, fresh_params, _ = fresh_tp(DIM)
     live_shape = tuple(fresh_params[name].get_value(NATIVE).shape)
     with expect_error(CheckpointShapeError, rf"model\[{name}\] record of shape .* per-device"):
         checkpointing.load_checkpoint(bad, model_params=fresh_params)
