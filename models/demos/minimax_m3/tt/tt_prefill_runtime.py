@@ -39,12 +39,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utils import block_cyclic_reorder
-from models.demos.minimax_m3.tt.attention.kv_cache import (
-    PAGE_UNMAPPED,
-    ordered_page_table,
-    read_paged_slot_block,
-    set_page_table,
-)
+from models.demos.minimax_m3.tt.attention.kv_cache import ordered_page_table, read_paged_slot_block, set_page_table
 from models.demos.minimax_m3.tt.prefill_chunk import PrefillChunk, pack_forward_tokens, validate_chunks
 from models.demos.minimax_m3.utils.general_utils import sparse_attention_freq
 
@@ -373,7 +368,7 @@ class TtPrefillRuntime:
         if paged:
             # The warm-up maps pages of its own, so its gathers read pages it wrote rather than whatever an unmapped
             # page leaves behind; the table it found is put back afterwards.
-            found_table = ttnn.to_torch(ttnn.get_device_tensors(kv_cache.page_table)[0]).to(torch.int64) & PAGE_UNMAPPED
+            found_table = ttnn.to_torch(ttnn.get_device_tensors(kv_cache.page_table)[0])
             set_page_table(kv_cache, ordered_page_table(kv_cache, chunk))
         t0 = time.perf_counter()
         for chunks in plan:

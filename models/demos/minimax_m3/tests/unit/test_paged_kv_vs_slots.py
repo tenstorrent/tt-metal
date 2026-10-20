@@ -340,8 +340,8 @@ def test_prefill_runtime_paged(mesh_device, device_params, reset_seeds):
     # Installed before compile(), which warms up on pages of its own and must hand this table back.
     set_page_table(paged_kv, table)
     runtime.compile(paged_kv)
-    after = ttnn.to_torch(ttnn.get_device_tensors(paged_kv.page_table)[0]).to(torch.int64) & PAGE_UNMAPPED
-    assert torch.equal(after, table), "compile() did not hand back the page table it found"
+    after = ttnn.to_torch(ttnn.get_device_tensors(paged_kv.page_table)[0]).to(torch.int64)
+    assert torch.equal(after, table.to(torch.int64)), "compile() did not hand back the page table it found"
     programs = mesh_device.num_program_cache_entries()
     run(paged_kv)
     new_programs = mesh_device.num_program_cache_entries() - programs

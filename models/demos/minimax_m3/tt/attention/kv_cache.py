@@ -17,8 +17,8 @@ from models.demos.deepseek_v3_b1.micro_ops.dram_zero_fill.op import DRAMZeroFill
 NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK = 32
 BH_NUM_DRAM_BANKS = 8
 
-# Page-table entry of a logical page with no physical page (the ops' paged_kv_table.hpp kUnmappedPage).
-PAGE_UNMAPPED = 0xFFFFFFFF
+# Page-table entry of a logical page with no physical page (the ops' paged_kv_table.hpp).
+PAGE_UNMAPPED = -1
 
 
 @dataclass
@@ -42,7 +42,7 @@ class MiniMaxKVCache(KvCaches):
 
     Paged (``page_table`` set): each cache is a pool of ``num_pages`` pages per chip,
     ``[num_pages*num_layers, 1, page_size, head_dim]`` with entry ``page * num_layers + layer``, so one page id
-    holds that page of every layer. ``page_table`` ``[num_users, width]`` (uint32, DRAM, replicated) maps row
+    holds that page of every layer. ``page_table`` ``[num_users, width]`` (INT32, DRAM, replicated) maps row
     ``slot_id``'s global logical page q (positions ``[q*page_size, (q+1)*page_size)``) to a physical page in the
     pool of the SP rank that holds it (``page_owner``), or ``PAGE_UNMAPPED``. The owner writes a request's
     whole row before its first chunk: the KV writer skips unmapped pages, which is where a final chunk's pad
@@ -58,7 +58,11 @@ class MiniMaxKVCache(KvCaches):
     sp: int
     index_k_tp_axis: Optional[int] = None  # None = index_k TP-replicated; else the mesh axis it is deduped over
     page_table: Optional[ttnn.Tensor] = None  # None = slot cache
-    page_size: int = 0  # tokens per page when paged
+
+    @property
+    def page_size(self) -> int:
+        """Tokens per page (paged caches only): the pool's seq dim."""
+        return self.k.shape[2]
 
     @property
     def num_pages(self) -> int:
@@ -66,19 +70,18 @@ class MiniMaxKVCache(KvCaches):
         return self.k.shape[0] // self.num_layers
 
     def paging_kwargs(self) -> dict:
-        """The page-table arguments of the KV write and gather ops; empty for a slot cache."""
-        return {} if self.page_table is None else {"page_table": self.page_table, "page_size": self.page_size}
+        """The page-table argument of the KV write and gather ops; empty for a slot cache."""
+        return {} if self.page_table is None else {"page_table": self.page_table}
 
     def gather_source(self, cache_row: int, chunk_local: int) -> dict:
         """high_bw_all_gather arguments that read ``cache_row`` (slot_id * num_layers + layer) of this cache.
-        A paged read also needs the block-cyclic period (``chunk_local`` rows per rank) to place pages on ranks."""
+        A paged read also needs the pool's layer count and the block-cyclic period (``chunk_local`` rows per rank)
+        that places pages on ranks."""
         if self.page_table is None:
             return {"input_batch_index": cache_row}
-        slot_id, layer_idx = divmod(cache_row, self.num_layers)
         return {
-            "input_batch_index": slot_id,
+            "input_batch_index": cache_row,
             "batch_slot_num_layers": self.num_layers,
-            "batch_slot_layer_idx": layer_idx,
             "gathered_slab_global": chunk_local * self.sp,
             **self.paging_kwargs(),
         }
@@ -113,8 +116,8 @@ def set_page_table(kv_cache: MiniMaxKVCache, table: torch.Tensor) -> None:
     """Overwrite the whole device page table, in place, with a host ``[num_users, width]`` table."""
     mesh_device = kv_cache.page_table.device()
     host = ttnn.from_torch(
-        table.to(torch.int64),
-        dtype=ttnn.uint32,
+        table.to(torch.int32),
+        dtype=ttnn.int32,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
@@ -129,11 +132,11 @@ def read_paged_slot_block(kv_cache: MiniMaxKVCache, tensor, slot_id: int, *, row
     mesh_device = tensor.device()
     sp, n_layers, page = kv_cache.sp, kv_cache.num_layers, kv_cache.page_size
     per_run = chunk_size // sp // page
-    table = ttnn.to_torch(ttnn.get_device_tensors(kv_cache.page_table)[0]).to(torch.int64) & PAGE_UNMAPPED
+    table = ttnn.to_torch(ttnn.get_device_tensors(kv_cache.page_table)[0]).to(torch.int64)
     i = torch.arange(rows // page)
     q = ((i // per_run)[None, :] * sp + torch.arange(sp)[:, None]) * per_run + (i % per_run)[None, :]
     phys = table[slot_id][q]  # [sp, local pages]
-    mapped = phys < kv_cache.num_pages
+    mapped = (phys >= 0) & (phys < kv_cache.num_pages)
     shape = list(tensor.shape)
     out = torch.zeros(n_layers, shape[1] * mesh_device.shape[1], sp * rows, shape[3])
     if not bool(mapped.any()):
@@ -264,11 +267,9 @@ def allocate_kv_caches(
 
     page_table = None
     if paged:
-        # Whole DRAM-aligned groups of 16 entries per row: the kernels read the row in those groups.
-        width = -(-max_seq_len // page_size // 16) * 16
         page_table = ttnn.from_torch(
-            torch.full((num_users, width), PAGE_UNMAPPED, dtype=torch.int64),
-            dtype=ttnn.uint32,
+            torch.full((num_users, -(-max_seq_len // page_size)), PAGE_UNMAPPED, dtype=torch.int32),
+            dtype=ttnn.int32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -285,7 +286,6 @@ def allocate_kv_caches(
         sp=sp,
         index_k_tp_axis=index_k_tp_axis,
         page_table=page_table,
-        page_size=page_size if paged else 0,
     )
 
 
