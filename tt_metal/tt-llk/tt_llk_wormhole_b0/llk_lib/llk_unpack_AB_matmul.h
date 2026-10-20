@@ -311,6 +311,7 @@ inline void _llk_unpack_AB_matmul_(
     const std::uint32_t rt_dim   = 1,
     const std::uint32_t kt_dim   = 1)
 {
+    asm volatile(".rept 4\n\tnop\n\t.endr");
     // In0/InA -> srcB (supports partial face)
     // In1/InB -> srcA
 
