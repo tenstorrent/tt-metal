@@ -268,8 +268,7 @@ NB_MODULE(_ttnn, mod) {
         mod.def_submodule("d2d_stream_service", "ttnn persistent device-to-device streaming service");
     auto m_counter_channel = mod.def_submodule("counter_channel", "ttnn cross-process producer-counter channel");
     auto m_layer_ack_service = mod.def_submodule("layer_ack_service", "ttnn per-layer completion ack service");
-    auto m_layer_completion =
-        mod.def_submodule("layer_completion", "Pipelined-prefill layer-completion ring/router/consumer");
+    auto m_layer_completion = mod.def_submodule("layer_completion", "Pipelined-prefill layer-completion ring/router");
     auto m_mesh_socket = mod.def_submodule("mesh_socket", "ttnn mesh socket");
     auto m_profiler = mod.def_submodule("profiler", "Submodule defining the profiler");
     auto m_reports = mod.def_submodule("reports", "ttnn reports");

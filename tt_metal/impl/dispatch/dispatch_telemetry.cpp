@@ -14,13 +14,13 @@
 #include <tt-metalium/experimental/dispatch_telemetry.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/assert.hpp>
-#include <umd/device/tt_device/tt_device.hpp>
-#include <umd/device/types/xy_pair.hpp>
+#include <tt-umd/tt_device/tt_device.hpp>
+#include <tt-umd/types/xy_pair.hpp>
 
 #include "impl/dispatch/dispatch_telemetry.hpp"
 #include <hostdevcommon/dispatch_telemetry_types.hpp>
 #include "llrt/tt_cluster.hpp"
-#include "umd/device/types/core_coordinates.hpp"
+#include <tt-umd/types/core_coordinates.hpp>
 
 namespace tt::tt_metal {
 

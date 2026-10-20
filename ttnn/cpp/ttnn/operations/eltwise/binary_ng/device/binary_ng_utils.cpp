@@ -828,7 +828,7 @@ bool is_uneven(const tt::tt_metal::TensorSpec& t) {
 // more info may be checked in other places, such as actual output is uneven or not
 // this function is called in both earlier and later stages of the program execution
 bool is_native_L1_sharding(
-    const tt::tt_metal::TensorSpec& a, const std::optional<tt::tt_metal::TensorSpec>& b, const MemoryConfig& c) {
+    const tt::tt_metal::TensorSpec& a, const tt::tt_metal::TensorSpec* b, const MemoryConfig& c) {
     if (!c.is_sharded()) {
         return false;
     }
@@ -838,7 +838,7 @@ bool is_native_L1_sharding(
         return config.is_sharded() && !config.shard_spec().has_value();
     };
     if (lacks_2d_shard_spec(c) || lacks_2d_shard_spec(a.memory_config()) ||
-        (b.has_value() && lacks_2d_shard_spec(b->memory_config()))) {
+        (b != nullptr && lacks_2d_shard_spec(b->memory_config()))) {
         return false;
     }
 
@@ -859,11 +859,11 @@ bool is_native_L1_sharding(
     const bool c_shard_matches_a = shard_specs_comparable && *c.shard_spec() == *a.memory_config().shard_spec();
 
     // Scalar value path (b is not a tensor)
-    if (!b.has_value() && a.memory_config().is_sharded()) {
+    if (b == nullptr && a.memory_config().is_sharded()) {
         return a_is_l1 && c_is_l1 && c_shard_matches_a && !is_uneven(a);
     }
 
-    if (!b.has_value()) {
+    if (b == nullptr) {
         return false;
     }
 

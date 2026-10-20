@@ -81,12 +81,12 @@ int main() {
 
     DEVICE_PRINT_INITIALIZE_LOCK();
 
-    mailboxes->go_messages[0].signal = RUN_MSG_DONE;
+    mailboxes->go_messages[0].slot[0].signal = RUN_MSG_DONE;
     mailboxes->launch_msg_rd_ptr = 0;
 
     WAYPOINT("GW");
     while (1) {
-        while (mailboxes->go_messages[0].signal != RUN_MSG_GO) {
+        while (mailboxes->go_messages[0].slot[0].signal != RUN_MSG_GO) {
             invalidate_l1_cache();
         }
         WAYPOINT("GD");
@@ -105,7 +105,7 @@ int main() {
         WAYPOINT("D");
         DEVICE_PRINT_KERNEL_FINISHED();
 
-        mailboxes->go_messages[0].signal = RUN_MSG_DONE;
+        mailboxes->go_messages[0].slot[0].signal = RUN_MSG_DONE;
 
         if (launch_msg->kernel_config.mode == DISPATCH_MODE_DEV) {
             launch_msg->kernel_config.enables = 0;

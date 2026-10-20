@@ -52,6 +52,8 @@ struct SDPAInputs {
     // read by the writer at runtime. Present only when the caller wants a per-device offset under one
     // shared program; otherwise the scalar windowed_q_token_offset is used.
     std::optional<Tensor> windowed_q_token_offset_tensor;
+    // [Bm, Hm, q chunks, k chunks] int32 or uint32, nonzero where that block of the dense attn_mask is not all masked.
+    std::optional<Tensor> attn_mask_block_map;
 };
 
 }  // namespace ttnn::prim

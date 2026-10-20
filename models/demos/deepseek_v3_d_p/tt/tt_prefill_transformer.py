@@ -22,6 +22,7 @@ from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import resolve_has_indexer
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
 from models.demos.deepseek_v3_d_p.tt.mla.utils import (
@@ -49,6 +50,14 @@ from models.demos.deepseek_v3_d_p.tt.tt_parallel_embedding import TtParallelEmbe
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import TopologyArg, TtPrefillBlock
 from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCache, MlaKvCacheFormat
+
+
+def _row_fold_width(n: int, max_cols: int = 2048) -> int:
+    """Widest 16-aligned divisor of ``n`` up to ``max_cols``: the row length to fold a 1 x ``n`` vector into."""
+    for cols in range(min(n, max_cols) // 16 * 16, 0, -16):
+        if n % cols == 0:
+            return cols
+    raise ValueError(f"no 16-aligned divisor of {n} up to {max_cols} to fold a row-major gather into")
 
 
 def rank_loads_embedding(is_first_rank: bool, is_last_rank: bool, mtp_levels: int) -> bool:
@@ -181,6 +190,7 @@ class TtPrefillTransformer(LightweightModule):
         max_seq_len: Optional[int] = None,
         kv_only_last_layer: bool = False,
         routing_use_l1_small_for_semaphores: bool = False,
+        tp_shard_kv: Optional[bool] = None,
         first_layer_idx: int = 0,
         is_first_rank: bool = True,
         is_last_rank: bool = True,
@@ -214,6 +224,7 @@ class TtPrefillTransformer(LightweightModule):
         # local layer slice onto the global map.
         self.first_layer_idx = first_layer_idx
         self.indexer_types = getattr(config, "indexer_types", None)
+        self.last_indexer_indices = None
 
         tp_topology = topology[1] if isinstance(topology, tuple) else topology
         sp_topology = topology[0] if isinstance(topology, tuple) else topology
@@ -286,6 +297,7 @@ class TtPrefillTransformer(LightweightModule):
                 max_seq_len=max_seq_len,
                 kv_only=kv_only_last_layer and is_last,
                 routing_use_l1_small_for_semaphores=routing_use_l1_small_for_semaphores,
+                tp_shard_kv=tp_shard_kv,
                 sparse_kv_cache_format=sparse_kv_cache_format,
                 overlap_shared_expert_with_dispatch=overlap_shared_expert_with_dispatch,
                 first_layer_idx=first_layer_idx,
@@ -306,6 +318,11 @@ class TtPrefillTransformer(LightweightModule):
                 topology=tp_topology,
                 weight_cache_path=weight_cache_path,
                 cache_name_prefix="norm",
+                use_fused=(
+                    use_fused_rmsnorm
+                    if use_fused_rmsnorm is not None
+                    else getattr(model_cfg, "USE_FUSED_PREFILL_RMSNORM", False) and is_blackhole() and is_chunked
+                ),
             )
             if build_tail
             else None
@@ -417,6 +434,11 @@ class TtPrefillTransformer(LightweightModule):
         for layer in self._trace_blocks():
             layer.set_trace_controller(controller)
 
+    def set_tp_shard_kv(self, tp_shard_kv: Optional[bool]):
+        """Switch every layer's KV layout; the cache passed to forward() must be allocated to match."""
+        for layer in self.layers:
+            layer.mla.set_tp_shard_kv(tp_shard_kv)
+
     def release_sub_device_managers(self):
         """Remove every MoE-created overlap sub-device manager and free the MTP SP-rank tensor before closing the
         mesh device. Ensures none is loaded first (clear is idempotent). Leaving managers registered at mesh close
@@ -445,6 +467,23 @@ class TtPrefillTransformer(LightweightModule):
             host = host.squeeze(0)
         return host
 
+    @property
+    def receives_indexer_indices(self) -> bool:
+        return self.indexer_types is not None and self.indexer_types[self.first_layer_idx] == "shared"
+
+    @property
+    def forwards_indexer_indices(self) -> bool:
+        next_idx = self.first_layer_idx + self.num_layers
+        return (
+            not self.is_last_rank
+            and self.indexer_types is not None
+            and next_idx < len(self.indexer_types)
+            and self.indexer_types[next_idx] == "shared"
+        )
+
+    def indexer_indices_shape(self) -> tuple:
+        return self.layers[0].mla.indexer_indices_shape()
+
     def forward(
         self,
         token_ids: ttnn.Tensor,
@@ -466,6 +505,7 @@ class TtPrefillTransformer(LightweightModule):
         input_is_embedded: bool = False,
         provided_levels: int = 0,
         mtp_geometry=None,
+        seed_indexer_indices: Optional[ttnn.Tensor] = None,
     ):
         """
         Forward pass: [embed] -> [block x N]. The populated KV cache is the output.
@@ -511,6 +551,11 @@ class TtPrefillTransformer(LightweightModule):
             mtp_geometry: an `MTPTraceGeometry` the caller refreshed for this chunk. The MTP levels then
                         take every per-chunk decision from device tensors, so the forward can be captured;
                         `provided_levels` is ignored (the geometry carries it).
+            seed_indexer_indices: GLM-5.3 indexer reuse across a pipeline boundary. When this rank's first
+                        layer is ``shared``, the upstream rank's last ``full`` layer top-k indices (shape
+                        indexer_indices_shape()), reused by every leading ``shared`` layer. When
+                        forwards_indexer_indices is set, this rank's last ``full`` layer indices are left in
+                        last_indexer_indices for the caller to send downstream.
 
         Returns:
             On a non-last rank: the hidden-state activation tensor to hand to the next rank.
@@ -566,13 +611,13 @@ class TtPrefillTransformer(LightweightModule):
         # following "shared" layers. reuse=False (no indexer_types) leaves the call + 2-tuple return
         # exactly as before.
         reuse = self.indexer_types is not None
-        # reuse seeds from the first "full" layer within this forward; a stack starting on a "shared"
-        # layer has no prior indices (pipeline-parallel would need them threaded in from the prior rank).
         if reuse:
-            assert (
-                self.indexer_types[self.first_layer_idx] == "full"
-            ), f"first layer {self.first_layer_idx} must be 'full' to seed indexer reuse, got '{self.indexer_types[self.first_layer_idx]}'"
-        indexer_indices = None
+            assert self.indexer_types[self.first_layer_idx] == "full" or seed_indexer_indices is not None, (
+                f"first layer {self.first_layer_idx} is '{self.indexer_types[self.first_layer_idx]}': "
+                "a stack starting on a shared layer needs seed_indexer_indices from the upstream rank"
+            )
+        indexer_indices = seed_indexer_indices if reuse else None
+        self.last_indexer_indices = None
         for i, layer in enumerate(self.layers):
             signpost(f"forward_layer_{i}_start")
             mode = self.indexer_types[self.first_layer_idx + i] if reuse else "full"
@@ -617,6 +662,8 @@ class TtPrefillTransformer(LightweightModule):
                 intermediates[f"layer_{i}"] = self._to_host(h)
             if read_profiler:
                 ttnn.ReadDeviceProfiler(self.mesh_device)
+        if self.forwards_indexer_indices:
+            self.last_indexer_indices = indexer_indices
         # Drop the held reference. Python reference counting releases owned top-k allocations after
         # their last consumer; any TP gather scratch remains owned by TT_CCL.
         indexer_indices = None
@@ -726,12 +773,44 @@ class TtPrefillTransformer(LightweightModule):
         return gathered
 
     def mtp_generate_embedding_selected(self, h_normed: ttnn.Tensor, lm_rows: ttnn.Tensor) -> ttnn.Tensor:
-        """:meth:`mtp_generate_embedding` with the LM head's tile picked on device by the one-hot ``lm_rows``."""
+        """:meth:`mtp_generate_embedding` with the LM head's input picked on device by the one-hot ``lm_rows``.
+
+        ``lm_rows`` copies the last real row into all 32 rows, so the argmax reads row 0 only.
+        """
+        assert self.lm_head is not None, "MTP generation needs the LM head (last rank, build_tail)"
         tile = select_rows(lm_rows, h_normed)
-        try:
-            return self._mtp_embed_greedy(tile, None)
-        finally:
-            ttnn.deallocate(tile)
+        logits, _ = self.lm_head(tile, None)
+        ttnn.deallocate(tile)
+        rm_logits = ttnn.to_layout(logits, ttnn.ROW_MAJOR_LAYOUT)
+        ttnn.deallocate(logits)
+        s = list(rm_logits.shape)
+        row = ttnn.slice(rm_logits, [0, 0, 0, 0], [s[0], s[1], 1, s[3]])
+        ttnn.deallocate(rm_logits)
+        if self.lm_head.is_column_parallel and self.tp_factor > 1:
+            # A row-major W gather caps pages at 64 KiB; fold the shard into rows, gather on H, unfold.
+            shard = s[3]
+            cols = _row_fold_width(shard)
+            folded = ttnn.reshape(row, [s[0], s[1], shard // cols, cols])
+            full = ttnn.all_gather(
+                folded,
+                dim=-2,
+                cluster_axis=self.tp_axis,
+                num_links=self.lm_head.num_links,
+                topology=self.lm_head.topology,
+            )
+            ttnn.deallocate(folded)
+            row = ttnn.reshape(full, [s[0], s[1], 1, shard * self.tp_factor])
+        ids = ttnn.argmax(row, dim=-1, keepdim=False)
+        ttnn.deallocate(row)
+        tile_ids = ttnn.repeat(ids, ttnn.Shape([1] * (len(ids.shape) - 1) + [ttnn.TILE_SIZE]))
+        ttnn.deallocate(ids)
+        emb = self.mtp_embed_ids(tile_ids)
+        ttnn.deallocate(tile_ids)
+        if self.sp_factor == 1:
+            return emb
+        gathered = self._mtp_all_gather_sp(emb)
+        ttnn.deallocate(emb)
+        return gathered
 
     def _mtp_all_gather_sp(self, rows: ttnn.Tensor) -> ttnn.Tensor:
         """``[1, 1, 32, H/tp]`` per chip -> ``[1, 1, 32*sp, H/tp]`` on every chip, in SP order."""
@@ -858,8 +937,8 @@ class TtPrefillTransformer(LightweightModule):
         fwd_kwargs["actual_isl"] = actual_isl
         all_gather_sp = self._mtp_all_gather_sp if self.sp_factor > 1 else None
 
-        def run(embed_fn):
-            source = MTPTraceEmbedSource(union, geometry, embed_fn=embed_fn, all_gather_sp=all_gather_sp)
+        def run(embed_fn, blend=True):
+            source = MTPTraceEmbedSource(union, geometry, embed_fn=embed_fn, all_gather_sp=all_gather_sp, blend=blend)
             out = self.mtp_predictor.forward(source, h_normed, rope_tensors, kvpe_cache, **fwd_kwargs)
             if on_mtp_complete is not None:
                 on_mtp_complete(out, source.generated_tokens)
@@ -874,4 +953,8 @@ class TtPrefillTransformer(LightweightModule):
             generate()
             return
         assert not union.has_derived, "the variants share the union's row blocks only"
-        self._trace_controller.capture_variants({"generate": generate, "provided": lambda: run(None)})
+        variants = {"generate": generate, "provided": lambda: run(None)}
+        if geometry.has_split_chip:
+            # On chip-aligned chunks the split-chip blend is the identity, so skip it.
+            variants["provided_aligned"] = lambda: run(None, blend=False)
+        self._trace_controller.capture_variants(variants)
