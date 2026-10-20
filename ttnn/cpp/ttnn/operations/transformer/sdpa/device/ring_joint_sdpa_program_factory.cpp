@@ -558,7 +558,7 @@ RingJointRuntimeArgLayout get_runtime_arg_layout(
     const uint32_t NH = tensor_args.input_q.logical_shape()[1];
     const uint32_t NHK = k_shape[1];
     const uint32_t NHV = tensor_args.v_num_heads();
-    const bool v_shares_k_buffer = tensor_args.v_shares_k_buffer();
+    const bool v_shares_k_buffer = ttnn::prim::latent_v_from_k_chunk(args, tensor_args);
     const bool gqa_grouped_kv = ring_joint::is_gqa_grouped_kv_head_mode(v_shares_k_buffer, NH, NHK, NHV);
     const bool k_uses_batch_chain = ring_joint::uses_shared_k_batch_chain(gqa_grouped_kv, NHK);
 
@@ -1021,7 +1021,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
 
     const auto& input_tensor_q = tensor_args.input_q;
     const auto& input_tensor_k = tensor_args.input_k;
-    const bool v_shares_k_buffer = tensor_args.v_shares_k_buffer();
+    const bool v_shares_k_buffer = ttnn::prim::latent_v_from_k_chunk(args, tensor_args);
     const auto& input_tensor_v = tensor_args.input_v.has_value() ? tensor_args.input_v.value() : input_tensor_k;
 
     const RingJointInputParams joint_input_params = resolve_ring_joint_input_params(args, tensor_args);
@@ -3206,6 +3206,11 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
         "k_row_Wt", input_tensor_k.padded_shape()[3] / tt::constants::TILE_WIDTH);
     reader_kernel.named_compile_time_args.emplace_back(
         "v_row_Wt", input_tensor_v.padded_shape()[3] / tt::constants::TILE_WIDTH);
+    // V's first column in its row: the last vDHt columns of a packed [K | V] row, else the row's start (an explicit V,
+    // or latent V read from K's leading columns by the named recipe kernels).
+    reader_kernel.named_compile_time_args.emplace_back(
+        "v_col_offset_t",
+        tensor_args.has_packed_kv() ? input_tensor_v.padded_shape()[3] / tt::constants::TILE_WIDTH - vDHt : 0u);
     compute_kernel.defines = kernel_defines;
     ComputeConfigDescriptor compute_config{
         .math_fidelity = math_fidelity,

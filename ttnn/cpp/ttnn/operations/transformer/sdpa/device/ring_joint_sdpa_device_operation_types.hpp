@@ -267,6 +267,10 @@ inline bool indexed_kv_cache_active(const RingJointSDPAParams& args, const RingJ
 std::optional<std::string_view> named_ring_recipe_gap(
     const RingJointSDPAParams& args, const RingJointSDPAInputs& tensor_args);
 
+// Latent V (ring_mla) copied from the K chunk in L1 (the streaming kernel). The named recipe kernels instead read it
+// as its own stream from K's leading columns (the reader's separate-V path, v_col_offset_t = 0).
+bool latent_v_from_k_chunk(const RingJointSDPAParams& args, const RingJointSDPAInputs& tensor_args);
+
 // Index constants for RingJointSDPAResult vector
 constexpr size_t RING_JOINT_SDPA_OUTPUT_IDX = 0;
 constexpr size_t RING_JOINT_SDPA_JOINT_OUTPUT_IDX = 1;

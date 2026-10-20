@@ -971,60 +971,146 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> ring_mla(
         compute_kernel_config = std::nullopt;
         program_config.matmul_math_fidelity = std::nullopt;
     }
+    // Recipes run on Colman's named ring recipe kernels, which read the latent V from K's leading columns. Calls they
+    // cannot take (packed K/V, KV-pad rotation, a chunk pair that does not fit; the device op's named_ring_recipe_gap
+    // is the authority and a superset) run as a configuration of the streaming kernel instead.
+    ttnn::Tensor query = input_tensor_q;
+    const auto caller_program_config = program_config;
+    bool streaming_recipe = false;
     if (precision.has_value()) {
-        // ring_mla recipes are fixed configurations of the ring_mla streaming kernel (named_ring_recipe_gap: latent V);
-        // the program factory derives their numerics. FAST callers round Q and the latent with prepare_sdpa_input.
         TT_FATAL(
-            !compute_kernel_config.has_value(),
+            !compute_kernel_config.has_value() || routes_fp32_dest(input_tensor_q, compute_kernel_config),
             "Specify either an SDPA precision recipe or a compute kernel config, not both");
         TT_FATAL(
             !program_config.matmul_math_fidelity.has_value(),
             "An SDPA precision recipe sets the matmul fidelity; leave program_config.matmul_math_fidelity unset");
-        program_config.exp_approx_mode = std::nullopt;
+        const uint32_t head_dim = input_tensor_q.logical_shape()[3];
+        const bool chunked = input_tensor_q.logical_shape()[2] < input_tensor_kv.logical_shape()[2];
+        streaming_recipe =
+            input_tensor_kv.logical_shape()[3] != head_dim || kv_actual_isl.has_value() ||
+            (chunked && (slot_id.has_value() || kv_actual_isl_tensor.has_value())) ||
+            !numeric::named_ring_recipe_chunks_fit(
+                numeric::resolve_precision_policy(numeric::select_recipe(*precision, input_tensor_kv.dtype())),
+                program_config.q_chunk_size,
+                program_config.k_chunk_size,
+                head_dim,
+                head_dim_v,
+                numeric::recipe_free_l1(*input_tensor_q.device()),
+                /*causal=*/true);
+        if (streaming_recipe) {
+            TT_FATAL(
+                program_config.q_chunk_size > 0 && program_config.k_chunk_size > 0,
+                "This ring_mla call runs its {} recipe on the streaming kernel, which needs explicit q/k chunk sizes",
+                *precision);
+            compute_kernel_config = std::nullopt;
+            program_config.exp_approx_mode = std::nullopt;
+        } else {
+            const std::size_t ring_size = !cluster_axis.has_value() ? mesh_device.num_devices()
+                                          : *cluster_axis == 0      ? mesh_device.get_view().num_rows()
+                                                                    : mesh_device.get_view().num_cols();
+            const auto policy = numeric::resolve_recipe_policy(
+                input_tensor_q, input_tensor_kv, *precision, scale, compute_kernel_config, program_config);
+            const bool auto_q_chunk = program_config.q_chunk_size == 0;
+            program_config = numeric::resolve_ring_recipe_blocking(
+                policy,
+                input_tensor_q,
+                input_tensor_kv,
+                std::nullopt,
+                std::nullopt,
+                static_cast<uint32_t>(ring_size),
+                program_config,
+                head_dim_v);
+            if (is_balanced && auto_q_chunk) {
+                // A balanced ring's Q chunks must not straddle the two halves of a device's sequence.
+                const uint32_t half_tiles = input_tensor_q.padded_shape()[2] / 64;
+                uint32_t q_tiles = program_config.q_chunk_size / 32;
+                while (q_tiles > 1 && half_tiles % q_tiles != 0) {
+                    --q_tiles;
+                }
+                program_config.q_chunk_size = q_tiles * 32;
+            }
+            finalize_ring_recipe_config(
+                numeric::RecipeOp::Ring, policy, program_config, compute_kernel_config, head_dim);
+            query = numeric::recipe_bf16_query(input_tensor_q);
+        }
     }
     auto topology_1d = ttnn::ccl::convert_2d_to_1d_topology(topology);
-    auto output_tensors = ttnn::prim::ring_joint_scaled_dot_product_attention(
-        input_tensor_q,
-        input_tensor_kv,
-        std::nullopt,
-        std::nullopt,
-        std::nullopt,
-        std::nullopt,
-        persistent_output_buffer_kv,
-        std::nullopt,  // persistent_output_buffer_v
-        std::nullopt,  // persistent_output_buffer_joint_k
-        std::nullopt,  // persistent_output_buffer_joint_v
-        "rear",
-        logical_n,
-        /*logical_l=*/static_cast<std::size_t>(0),
-        std::move(program_config),
-        dim,
-        multi_device_global_semaphore,
-        num_links,
-        cluster_axis,
-        mesh_device,
-        topology_1d,
-        ccl_core_grid_offset,
-        subdevice_id,
-        /*is_causal=*/true,
-        is_balanced,
-        /*is_cross=*/false,
-        scale,
-        compute_kernel_config,
-        core_allocation_strategy,
-        kv_cache_batch_idx,
-        kv_actual_isl,
-        head_dim_v,
-        std::nullopt,  // attention_sink
-        slot_id,
-        kv_actual_isl_tensor,
-        kv_cache_num_layers.value_or(1),
-        kv_cache_layer_idx.value_or(0),
-        std::nullopt,  // sliding_window_size
-        /*circular_kv_cache=*/false,
-        /*logical_n_tensor=*/std::nullopt,
-        /*logical_l_tensor=*/std::nullopt,
-        precision);
+    const auto run = [&](const ttnn::Tensor& q,
+                         operations::transformer::SDPAProgramConfig config,
+                         const std::optional<DeviceComputeKernelConfig>& compute_config,
+                         bool on_streaming_kernel) {
+        return ttnn::prim::ring_joint_scaled_dot_product_attention(
+            q,
+            input_tensor_kv,
+            std::nullopt,
+            std::nullopt,
+            std::nullopt,
+            std::nullopt,
+            persistent_output_buffer_kv,
+            std::nullopt,  // persistent_output_buffer_v
+            std::nullopt,  // persistent_output_buffer_joint_k
+            std::nullopt,  // persistent_output_buffer_joint_v
+            "rear",
+            logical_n,
+            /*logical_l=*/static_cast<std::size_t>(0),
+            std::move(config),
+            dim,
+            multi_device_global_semaphore,
+            num_links,
+            cluster_axis,
+            mesh_device,
+            topology_1d,
+            ccl_core_grid_offset,
+            subdevice_id,
+            /*is_causal=*/true,
+            is_balanced,
+            /*is_cross=*/false,
+            scale,
+            compute_config,
+            core_allocation_strategy,
+            kv_cache_batch_idx,
+            kv_actual_isl,
+            head_dim_v,
+            std::nullopt,  // attention_sink
+            slot_id,
+            kv_actual_isl_tensor,
+            kv_cache_num_layers.value_or(1),
+            kv_cache_layer_idx.value_or(0),
+            std::nullopt,  // sliding_window_size
+            /*circular_kv_cache=*/false,
+            /*logical_n_tensor=*/std::nullopt,
+            /*logical_l_tensor=*/std::nullopt,
+            precision,
+            on_streaming_kernel);
+    };
+    std::vector<ttnn::Tensor> output_tensors;
+    try {
+        output_tensors = run(query, program_config, compute_kernel_config, streaming_recipe);
+    } catch (const std::exception& e) {
+        // As on ring_joint_scaled_dot_product_attention: a named program that does not fit at dispatch reruns on the
+        // streaming kernel.
+        const std::string_view what = e.what();
+        const bool does_not_fit = what.find("state.offset <= max_size") != std::string_view::npos ||
+                                  what.find("Named ring SDPA recipe needs") != std::string_view::npos ||
+                                  what.find("beyond max L1 size") != std::string_view::npos;
+        if (!precision || streaming_recipe || !does_not_fit) {
+            throw;
+        }
+        log_warning(
+            tt::LogOp,
+            "ring_mla {} recipe: the named kernels' program does not fit at Q{}/K{}; running it on the streaming "
+            "kernel",
+            *precision,
+            program_config.q_chunk_size,
+            program_config.k_chunk_size);
+        auto streaming_config = caller_program_config;
+        streaming_config.exp_approx_mode = std::nullopt;
+        if (streaming_config.q_chunk_size == 0 || streaming_config.k_chunk_size == 0) {
+            streaming_config.q_chunk_size = program_config.q_chunk_size;
+            streaming_config.k_chunk_size = program_config.k_chunk_size;
+        }
+        output_tensors = run(input_tensor_q, streaming_config, std::nullopt, true);
+    }
     return {output_tensors[prim::RING_JOINT_SDPA_OUTPUT_IDX], output_tensors[prim::RING_JOINT_SDPA_STATS_OUTPUT_IDX]};
 }
 

@@ -776,7 +776,7 @@ void kernel_main() {
     // Packed KV: K/V rows can be wider than the head dims; V is the last vDHt columns of its row.
     constexpr uint32_t k_row_Wt = get_named_compile_time_arg_val("k_row_Wt");
     constexpr uint32_t v_row_Wt = get_named_compile_time_arg_val("v_row_Wt");
-    constexpr uint32_t v_col_offset_t = v_row_Wt - vDHt;
+    constexpr uint32_t v_col_offset_t = get_named_compile_time_arg_val("v_col_offset_t");
     const auto input_k_tile_logical = TensorTileShape(kv_batch_dim, NHK, kv_local_padded_Nt, k_row_Wt);
     const auto gathered_k_input_tile_logical =
         TensorTileShape(gathered_kv_batch_dim, NHK, gathered_padded_Nt, k_row_Wt);

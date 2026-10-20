@@ -301,11 +301,7 @@ bool recipe_program_fits(const RecipeBlockingProblem& p, uint32_t q_tiles, uint3
         if (p.vd_tiles != 0 && p.vd_tiles < p.d_tiles && p.d_tiles >= 16 && q_tiles >= 5) {
             return false;
         }
-        // STANDARD (B) with BFP8/BFP4 K/V on a causal ring exceeds the buffer on a 4-device P150 ring: 16Q/1KV and
-        // 16Q/2KV D128 at Q128-256/K256-512, MLA D576/V128 at Q128/K128, chunked prefill at Q128/K512 and Q192/K256
-        // (program.cpp "state.offset <= max_size"). BALANCED and FAST fit the same calls; with BF16 K/V B fits too.
-        return !(
-            p.causal && p.policy.selection.recipe == Recipe::B && p.policy.selection.kv_storage != KVStorage::BF16);
+        return true;
     }
     if (p.op != RecipeOp::Dense && p.op != RecipeOp::Joint) {
         return true;

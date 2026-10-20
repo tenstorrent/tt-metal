@@ -395,13 +395,14 @@ void validate_runtime_patched_scalars(const RingJointSDPAParams& args, const Rin
 
 }  // namespace
 
+bool latent_v_from_k_chunk(const RingJointSDPAParams& args, const RingJointSDPAInputs& tensor_args) {
+    return tensor_args.v_shares_k_buffer() && !(args.precision && !named_ring_recipe_gap(args, tensor_args));
+}
+
 std::optional<std::string_view> named_ring_recipe_gap(
     const RingJointSDPAParams& args, const RingJointSDPAInputs& tensor_args) {
     if (args.recipe_on_streaming_kernel) {
         return "named recipe program does not fit";
-    }
-    if (tensor_args.has_latent_v()) {
-        return "latent V (ring_mla)";
     }
     if (args.kv_stripe_split != 1) {
         return "split KV";
@@ -420,7 +421,7 @@ std::optional<std::string_view> named_ring_recipe_gap(
         return "K split / segmented accumulation";
     }
     const uint32_t head_dim = tensor_args.input_q.logical_shape()[3];
-    const uint32_t v_head_dim = tensor_args.input_v->logical_shape()[3];
+    const uint32_t v_head_dim = tensor_args.v_head_dim(args.latent_v_head_dim);
     if (tensor_args.input_k.logical_shape()[3] != head_dim || v_head_dim > head_dim ||
         v_head_dim % tt::constants::TILE_WIDTH != 0) {
         return "K/V head dims";
@@ -666,7 +667,6 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         // The recipe runs as a configuration of the streaming kernel (the program factory derives its numerics).
         log_debug(tt::LogOp, "Ring SDPA {} recipe on the streaming kernel: {}", *args.precision, *recipe_gap);
     } else if (args.precision) {
-        TT_FATAL(!tensor_args.has_latent_v(), "Named ring recipes require explicit K and V");
         // Split KV (ring_mla with Q sharded on fewer devices than K/V) packs several sources into one K chunk; the
         // recipe kernels run one source per ring iteration.
         TT_FATAL(
@@ -680,9 +680,10 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
             *args.precision,
             input_tensor_q,
             tensor_args.input_k,
-            *tensor_args.input_v,
+            // Latent V (ring_mla) is read from K's leading columns.
+            tensor_args.input_v.value_or(tensor_args.input_k),
             gathered_input_tensor_k,
-            *tensor_args.gathered_v,
+            tensor_args.gathered_v.value_or(gathered_input_tensor_k),
             tensor_args.joint_q,
             tensor_args.joint_k,
             tensor_args.joint_v,
@@ -691,8 +692,8 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
             args.scale);
         TT_FATAL(
             tensor_args.input_k.logical_shape()[3] == q_shape[3] &&
-                tensor_args.input_v->logical_shape()[3] <= q_shape[3] &&
-                tensor_args.input_v->logical_shape()[3] % tt::constants::TILE_WIDTH == 0,
+                tensor_args.v_head_dim(args.latent_v_head_dim) <= q_shape[3] &&
+                tensor_args.v_head_dim(args.latent_v_head_dim) % tt::constants::TILE_WIDTH == 0,
             "Named ring recipes require K's head dim to be Q's and a tile-aligned V head dim of at most Q's");
         TT_FATAL(
             !args.has_sliding_window(),
