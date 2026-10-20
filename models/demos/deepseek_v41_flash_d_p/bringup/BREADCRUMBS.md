@@ -1961,3 +1961,42 @@ Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deeps
   multiplies by bf16 routing weights (the planner's format), below the reference's fp32 weight (DS41-23).
 - Re-run: change on `DS41_EXPERTS_COMBINE=weighted DS41_NUMERICS=native DS41_FFN_NORM_DTYPE=bf16`, off
   `DS41_EXPERTS_COMBINE=separate DS41_NUMERICS=official DS41_FFN_NORM_DTYPE=fp32`, in front of each gate command.
+
+## P.9 perf (attempt 1): weighted combine with bf16 running sums, the chunk in one pass (owner comparison)
+- Setting COMBINE_ACC {fp32, bf16} (tt/settings.py; default fp32 = today's path, as the owner's text says; F104 sets
+  bf16 on accept), MAX_PRECISION fp32. Used only under EXPERTS_COMBINE=weighted.
+- Fork combine_rf: `sparse_combine_rf_prepare(acc_dtype=None | ttnn.bfloat16)`: CB_ACC Float16_b with 2048 B tiles
+  instead of fp32 4096 B; same kernels, same det order (the packer's L1 accumulation adds the weighted fp32 DEST row
+  onto the bf16 sum). `accumulator_bytes(acc_dtype=)`, `acc_page()`, the arena refusal ("bf16 tiles", s_fit / a_min)
+  size with it. Default None = fp32: programs unchanged. CHANGELOG / README / INDEX updated; Python only (no build).
+- Model: tt/weighted_combine.py `WeightedCombine(acc_dtype=)` picks the fewest passes with it (DS41-69's sizing) and
+  logs `EXPERTS_WEIGHTED S=1024 passes=1 x 1024 acc=bf16`; tt/experts.py `combine_acc` (build_experts arg / setting)
+  asserts one pass for bf16 and logs the pass count per layer. 2x2: 9 accumulators, 114 tokens x 5 bf16 tiles =
+  1140 KB each, arena 1314 KB (ring depth 4, local ring 8 kept: DS41-70).
+- Tests: fork tests/unit/test_acc_dtype.py 4/4 (sizing: one call holds 1143 bf16 vs 567 fp32 tokens at 9
+  accumulators / 1356 KB; refusal 1024 tokens in 1156 KB: bf16 "<= 963 or >= 10 accumulators", 963 builds, 972 refused,
+  fp32 "<= 477"; standalone combine precision, 6 bf16 rows a token at 2^-6..2^6 vs the float64 sum: fp32 rel 7e-9, bf16
+  rel 2.71e-3 / 2.79e-3 (one rounding of the exact sum 1.66e-3), bias -1.2e-5 / -1.5e-5, worst row 3.9e-3); whole fork
+  suite 8/8 (test_column_planner 4/4 = baseline). Model tt/perf_experts.py: test_weighted_combine_routes_bf16 (S=1024,
+  local / remote / random: one pass, completes) 3/3; test_combine_acc (layers 0 / 24, real weights, chunk 2048).
+- Measured, test_combine_acc (synced experts call per layer; float64 on 128 tokens; bf16 vs fp32 on all 2048 rows):
+  shipped glm precision (NUMERICS native, FFN_NORM_DTYPE bf16, CCL_IMPL fabric_bf16): fp32 2 x 512 5.74 ms, bf16
+  1 x 1024 4.29 ms (L0 and L24); vs float64 L0 fp32 0.02015 / bf16 0.02018, L24 0.02059 / 0.02061; bf16 vs fp32
+  0.0036 (bias -1.8e-4). Full precision (EXPERTS_PRECISION=full, CCL_IMPL=fabric): 6.09 / 6.05 -> 4.96 / 4.95 ms;
+  vs float64 L0 fp32 0.00291 / bf16 0.00406 (bias +2e-5 / -2.0e-4), L24 0.00296 / 0.00413; bf16 vs fp32 0.00287 /
+  0.00291. Determinism: bf16 twice 0 of 10.5M values differ (both layers).
+- Per op, layer 0, glm (test_combine_acc ops): fp32 total 5372 µs = fused 2 calls 4107 + planners 807 (2 passes on
+  2 cores); bf16 4236 µs = fused 1 call 2201 + planner 1573 (1024 tokens on one core). The planner is now the
+  biggest non-expert piece (DS41-73: next lever).
+- Accuracy, change on (DS41_COMBINE_ACC=bf16): the 16 frozen test files in gate order, each once, run one by one
+  with scripts/run_safe_pytest.sh (the measure part `test_c_${t}_experts` is one 8-file command, ~19 min, over the
+  10-minute foreground limit): all PASS; they run EXPERTS_COMBINE=separate (MAX_PRECISION), so COMBINE_ACC is not on
+  their path (test_c_swa_experts vs CPU rel 0.00224936, the recorded value; swa_12 swap_ffn_hc WAIVED as before).
+  Ladder `last` via `orchestrator measure --task P.9 --part last`: rc 0, min layer PCC 0.99680 (L03) (P.8 on: 0.9968).
+- Plain profile via `measure --part profile` (the tool moved the foreground call to background at its 600 s limit; it
+  ran to the end): device_ms_total 251.86 (P.8 on 258.1), device_ms_experts 38.91 (P.8 on 45.3; gate < 45.3),
+  chunk_wall_ms 241.0, profiled_programs 11772, pcc_chunk_out 0.99977.
+- Re-run: on `DS41_COMBINE_ACC=bf16`, off `DS41_COMBINE_ACC=fp32` in front of each gate command; A/B:
+  `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all --no-precompile
+  "models/demos/deepseek_v41_flash_d_p/tt/perf_experts.py::test_combine_acc" -k "not ops"` (ops: profiler env);
+  fork: `scripts/run_safe_pytest.sh --run-all --no-precompile ttnn/ttnn/bringup/combine_rf/tests/unit`.
