@@ -33,6 +33,7 @@ STEPS = int(os.environ.get("GLM53_BLOCK_STEPS", "20"))
 # reference outputs of an earlier run (the "current block"): saved when the file does not exist, else loaded and
 # every path is compared against its entry (PCC >= 0.9999 = the exactness bar for a block rewrite)
 REF = os.environ.get("GLM53_BLOCK_REF", "")
+PATHS = os.environ.get("GLM53_BLOCK_PATHS", "sparse legacy,sparse tuned,dense,stream").split(",")
 DENSE_W_DTYPE = (
     ttnn.float32 if os.environ.get("GLM53_BLOCK_W_FP32", "0") == "1" else ttnn.bfloat16
 )  # the router's dtype
@@ -130,6 +131,7 @@ def test_expert_block_paths(mesh_device, weights):
 
     sparse = TtRoutedExperts(mesh_device, cfg_loc, gate_up_loc, down_loc)
     dense = TtRoutedExperts(mesh_device, cfg_loc, gate_up_loc, down_loc, dense=True)
+    stream = TtRoutedExperts(mesh_device, cfg_loc, gate_up_loc, down_loc, stream=True)
     results = {}
     ref_outs = None
     if REF and os.path.isfile(REF):
@@ -151,7 +153,10 @@ def test_expert_block_paths(mesh_device, weights):
             ("sparse legacy", sparse, "legacy"),
             ("sparse tuned", sparse, ""),
             ("dense", dense, ""),
+            ("stream", stream, ""),
         ):
+            if name not in PATHS:
+                continue
             os.environ["GLM53_SPARSE_CONFIG"] = env
             top, dev_ops = count_ops(mesh_device, lambda: mod.forward(x_dev, w_dev))
             y, dt = timed_trace(mesh_device, lambda: mod.forward(x_dev, w_dev), STEPS)
@@ -160,7 +165,7 @@ def test_expert_block_paths(mesh_device, weights):
             outs[name] = y
             all_outs[(T, name)] = y
             p = pcc(ref, y)
-            p_vs = pcc(outs["sparse legacy"], y)
+            p_vs = pcc(outs["sparse legacy"], y) if "sparse legacy" in outs else float("nan")
             p_ref = pcc(ref_outs[(T, name)], y) if ref_outs is not None and (T, name) in ref_outs else float("nan")
             blocks = 1 if mod.dense else -(-T // 32)
             results[(T, name)] = (dt, p, p_vs, active, len(top), len(dev_ops), p_ref)

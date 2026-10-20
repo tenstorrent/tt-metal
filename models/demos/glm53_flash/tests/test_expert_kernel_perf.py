@@ -119,10 +119,12 @@ def mk_config(
     in0_block_w: int,
     out_subblock_w: int = 1,
     out_subblock_h: int = 1,
+    per_core_N: int | None = None,
 ):
     cx, cy = cores_xy
     Mt, Nt, Kt = math.ceil(m / TILE), math.ceil(n / TILE), math.ceil(k / TILE)
-    per_core_N = math.ceil(Nt / (cx * cy))
+    if per_core_N is None:  # a grid larger than Nt / per_core_N = batch groups (the kernel's own tiling)
+        per_core_N = max(1, math.ceil(Nt / (cx * cy)))
     assert Kt % in0_block_w == 0, (Kt, in0_block_w)
     assert per_core_N % out_subblock_w == 0 and Mt % out_subblock_h == 0, (per_core_N, out_subblock_w, Mt)
     return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
@@ -353,6 +355,8 @@ class Sweep:
         in0_dtype=ttnn.bfloat16,
         check_torch=True,
         extra=None,
+        zero_fill=True,
+        transposed=False,
     ):
         xy, ibw, sw = cfg_tuple
         x_host = torch.randn(1, 1, M, H, generator=torch.Generator().manual_seed(7)).bfloat16()
@@ -378,9 +382,14 @@ class Sweep:
         )
         if idx is not None:
             kw["indices"] = idx
+        if not zero_fill:
+            kw["zero_fill_output"] = False
+        if transposed:  # the [1, E, N, K] copy of the weights (transposed tiles)
+            kw["in1_transposed"] = True
+        w13 = sh.w13_t if transposed else sh.w13
 
         def fn():
-            return ttnn.sparse_matmul(x, sh.w13, **kw)
+            return ttnn.sparse_matmul(x, w13, **kw)
 
         key = ("w13", sh.E, sh.n13, M, len(ids))
 
@@ -393,7 +402,7 @@ class Sweep:
                 ref = torch.stack([x_host[0, 0].float() @ sh.ref13(e) for e in ids])
                 res["pcc"] = pcc(ref, got)
                 res["maxdiff"] = float((ref - got).abs().max())
-                if not indices:
+                if not indices and zero_fill:
                     inactive = [e for e in range(sh.E) if e not in ids]
                     res["inactive_max"] = float(y[inactive].abs().max()) if inactive else 0.0
             if key in self.base_out:
@@ -423,7 +432,9 @@ class Sweep:
             out_l1=out_l1,
             in0_dtype=str(in0_dtype).split(".")[-1],
             bytes=sh.bytes13(len(ids)),
-            ops_per_call=2,
+            ops_per_call=2 if zero_fill else 1,
+            zero_fill=zero_fill,
+            transposed=transposed,
         )
         if extra:
             meta.update(extra)
@@ -447,6 +458,7 @@ class Sweep:
         out_l1=False,
         check_torch=True,
         extra=None,
+        accumulate=False,
     ):
         xy, ibw, sw = cfg_tuple
         h_host = torch.randn(1, sh.E, M, sh.i2, generator=torch.Generator().manual_seed(8)).bfloat16()
@@ -457,7 +469,7 @@ class Sweep:
         hd = ttnn.from_torch(h_dev, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.dev)
         sp = sparsity_tensor(self.dev, sh.E, ids)
         idx = indices_tensor(self.dev, ids) if indices else None
-        pc = mk_config(xy, M, H, sh.i2, ibw, sw)
+        pc = mk_config(xy, M, H, sh.i2, ibw, sw, per_core_N=4 if xy[0] * xy[1] > 32 and accumulate else None)
         kw = dict(
             sparsity=sp,
             nnz=(len(ids) if nnz == "exact" else None),
@@ -470,6 +482,8 @@ class Sweep:
         )
         if idx is not None:
             kw["indices"] = idx
+        if accumulate:
+            kw["accumulate_batch"] = True
 
         def fn():
             return ttnn.sparse_matmul(hd, sh.w2, **kw)
@@ -477,9 +491,20 @@ class Sweep:
         key = ("w2", sh.E, sh.i2, M, len(ids))
 
         def check(out):
+            res = {}
+            if accumulate:  # [1, G, M, H]: the sum over the active experts (per group), compared as the total
+                y = ttnn.to_torch(out).float().sum(dim=1).reshape(M, H)
+                res["groups"] = int(out.shape[1])
+                if check_torch:
+                    ref = sum((h_host[0, e].float() @ sh.ref2(e) for e in ids), torch.zeros(M, H))
+                    res["pcc"] = pcc(ref, y)
+                    res["maxdiff"] = float((ref - y).abs().max())
+                if key in self.base_out:
+                    res["pcc_vs_base"] = pcc(self.base_out[key].sum(dim=0), y)
+                assert res.get("pcc", 1.0) > 0.999 and res.get("pcc_vs_base", 1.0) > 0.9999, (name, res)
+                return res
             y = ttnn.to_torch(out).float().reshape(-1, M, H)
             got = y if indices else y[ids]
-            res = {}
             if check_torch:
                 ref = torch.stack([h_host[0, e].float() @ sh.ref2(e) for e in ids])
                 res["pcc"] = pcc(ref, got)
@@ -509,6 +534,7 @@ class Sweep:
             out_l1=out_l1,
             bytes=sh.bytes2(len(ids)),
             ops_per_call=2,
+            accumulate=accumulate,
         )
         if extra:
             meta.update(extra)
@@ -1093,6 +1119,81 @@ def stage_dense2(sw: Sweep, shapes: dict):
     ttnn.deallocate(w2d)
 
 
+def stage_kernel(sw: Sweep, shapes: dict):
+    """The sparse kernel changes (own build): batch groups (a grid of G x Nt cores streams the experts G-way,
+    in0 reused across the experts when it fits), the accumulate-over-experts down mode ([1, G, M, H], no slab,
+    no reduce) and zero_fill_output=False, at the hybrid per-chip shapes with 28 (real routing) / 72 active.
+    EVIDENCE ONLY: those sparse_matmul kwargs (`zero_fill_output`, `in1_transposed`, `accumulate_batch`) existed
+    only in the dropped local build (doc/mesh/expert_kernel_sweep.md section 8); the stage is skipped on the main
+    build (`ttnn.sparse_matmul` has no such kwargs) and the custom op in custom_ops/expert_stream replaces it."""
+    if "accumulate_batch" not in str(ttnn.sparse_matmul.__doc__):
+        logger.warning("stage kernel skipped: this build's sparse_matmul has none of the section-8 kernel features")
+        return
+    sh13, sh2 = shapes[("w13", 72, 512)], shapes[("w2", 72, 256)]
+    grid = sw.b.grid
+    if sh13.w13_t is None:
+        sh13.w13_t = ttnn.from_torch(
+            sh13.w13_host.transpose(-1, -2).contiguous(), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=sw.dev
+        )
+    for a in (28, 72):
+        ids = active_ids(72, a, seed=5)
+        # W13 N=512 with the weights stored transposed ([1, E, N, K]: a core's column = contiguous tiles)
+        for G, xy in ((1, (4, 4)), (6, (12, 8))):
+            if xy[0] > grid[0] or xy[1] > grid[1]:
+                continue
+            for ibw in (16, 64):
+                sw.w13_case(
+                    sh13,
+                    ids,
+                    32,
+                    (xy, ibw, 1),
+                    name=f"kernel w13T N=512 a={a} G={G} c={xy[0]*xy[1]} ibw={ibw}",
+                    check_torch=True,
+                    transposed=True,
+                )
+        # W13 N=512: Nt = 16 blocks; G groups = 16 G cores
+        for G, xy in ((1, (4, 4)), (4, (8, 8)), (6, (12, 8))):
+            if xy[0] > grid[0] or xy[1] > grid[1]:
+                continue
+            for ibw in (16, 32, 64):
+                sw.w13_case(
+                    sh13,
+                    ids,
+                    32,
+                    (xy, ibw, 1),
+                    name=f"kernel w13 N=512 a={a} G={G} c={xy[0]*xy[1]} ibw={ibw}",
+                    check_torch=(ibw == 64),
+                )
+            sw.w13_case(
+                sh13,
+                ids,
+                32,
+                (xy, 16, 1),
+                name=f"kernel w13 N=512 a={a} G={G} c={xy[0]*xy[1]} ibw=16 nofill",
+                check_torch=False,
+                zero_fill=False,
+            )
+        # W2 I=256 (K=256, Nt=128): 32 cores x 4 tiles per group; G = 1 / 2 / 3 groups; accumulate mode
+        for G, xy in ((1, (8, 4)), (2, (8, 8)), (3, (12, 8))):
+            if xy[0] > grid[0] or xy[1] > grid[1]:
+                continue
+            for ibw in (4, 8):
+                cfg = (xy, ibw, 4)
+                if G == 1:
+                    sw.w2_case(
+                        sh2, ids, 32, cfg, name=f"kernel w2 I=256 a={a} G=1 c=32 ibw={ibw} slab", check_torch=(ibw == 8)
+                    )
+                sw.w2_case(
+                    sh2,
+                    ids,
+                    32,
+                    cfg,
+                    name=f"kernel w2 I=256 a={a} G={G} c={xy[0]*xy[1]} ibw={ibw} accumulate",
+                    check_torch=(ibw == 8),
+                    accumulate=True,
+                )
+
+
 @pytest.mark.timeout(7200)
 @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
 def test_expert_kernel_sweep(mesh_device):
@@ -1101,7 +1202,7 @@ def test_expert_kernel_sweep(mesh_device):
     shapes: dict = {}
     need13 = {512, 1024, 2048, 4096} if any(s in STAGES for s in ("w13", "active")) else set()
     need2 = {256, 512, 1024, 2048} if any(s in STAGES for s in ("w2", "active")) else set()
-    if any(s in STAGES for s in ("tokens", "place", "dense", "dense2")):
+    if any(s in STAGES for s in ("tokens", "place", "dense", "dense2", "kernel")):
         need13.add(512)
         need2.add(256)
     for n in sorted(need13):
@@ -1118,6 +1219,7 @@ def test_expert_kernel_sweep(mesh_device):
             "place": stage_place,
             "dense": stage_dense,
             "dense2": stage_dense2,
+            "kernel": stage_kernel,
         }[stage](sw, shapes)
     logger.info(f"{len(bench.cases)} cases; sidecar {CASES_JSON}")
     # wall-time summary (device times come from the profiler CSV via --report)
