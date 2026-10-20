@@ -13,6 +13,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 
+#include "impl/allocator/allocator.hpp"
 #include "impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include "impl/kernels/kernel.hpp"
 #include "impl/program/program_impl.hpp"
@@ -139,6 +140,76 @@ TEST_F(ProgramSpecTestGen1, CPU_SharedScratchpadAllocationAndReallocation) {
 
 TEST_F(ProgramSpecTestBlackhole, CPU_SharedScratchpadAllocationAndReallocation) {
     CheckSharedScratchpad(*mesh_device_, MakeMinimalGen1ValidProgramSpec());
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_SharedScratchpadReallocationWithUnequalPersistentBases) {
+    auto& arena = mesh_device_->allocator_impl()->persistent_l1();
+    const auto alignment = mesh_device_->allocator()->get_alignment(BufferType::DRAM);
+    const auto persistent = arena.allocate(CoreRangeSet(CoreRange({1, 0})), 4096, alignment);
+    const auto lower_base = arena.high_water_mark(CoreRangeSet(CoreRange({0, 0})));
+    const auto higher_base = arena.high_water_mark(CoreRangeSet(CoreRange({1, 0})));
+    ASSERT_GT(higher_base, lower_base);
+
+    {
+        ProgramSpec spec = MakeMinimalValidProgramSpec();
+        auto left = MakeMinimalGen2DMKernel("left");
+        auto right = MakeMinimalGen2DMKernel("right");
+        left.scratchpad_bindings = {
+            {.scratchpad_spec_name = ScratchpadSpecName{"private"}, .accessor_name = "local"},
+            {.scratchpad_spec_name = ScratchpadSpecName{"shared"}, .accessor_name = "pad"},
+        };
+        right.scratchpad_bindings = {{.scratchpad_spec_name = ScratchpadSpecName{"shared"}, .accessor_name = "pad"}};
+        spec.kernels.push_back(left);
+        spec.kernels.push_back(right);
+        spec.scratchpads = {
+            ScratchpadSpec{.unique_id = ScratchpadSpecName{"private"}, .size_per_node = 512},
+            ScratchpadSpec{
+                .unique_id = ScratchpadSpecName{"shared"},
+                .size_per_node = 1024,
+                .advanced_options = {.allow_multi_kernel_binding = true}},
+        };
+        spec.work_units = {
+            MakeMinimalWorkUnit("left_work", NodeCoord{0, 0}, {"left"}),
+            MakeMinimalWorkUnit("right_work", NodeCoord{1, 0}, {"right"}),
+            // Keep DFB allocation from populating the scratchpad allocators after invalidation.
+            MakeMinimalWorkUnit("dfb_work", NodeCoord{2, 0}, {"dm_kernel", "compute_kernel"}),
+        };
+
+        Program program = MakeProgramFromSpec(*mesh_device_, spec);
+        auto left_kernel = program.impl().get_kernel_by_spec_name("left");
+        auto right_kernel = program.impl().get_kernel_by_spec_name("right");
+        const auto& private_pad = left_kernel->scratchpad_binding_handles().at(0);
+        const auto& shared_left = left_kernel->scratchpad_binding_handles().at(1);
+        const auto& shared_right = right_kernel->scratchpad_binding_handles().at(0);
+        auto check_addresses = [&] {
+            EXPECT_NE(private_pad.allocated_address, 0u);
+            EXPECT_GE(private_pad.allocated_address, lower_base);
+            EXPECT_GE(shared_left.allocated_address, higher_base);
+            EXPECT_EQ(shared_left.allocated_address, shared_right.allocated_address);
+            EXPECT_TRUE(
+                private_pad.allocated_address + private_pad.size_bytes <= shared_left.allocated_address ||
+                shared_left.allocated_address + shared_left.size_bytes <= private_pad.allocated_address);
+            EXPECT_EQ(
+                left_kernel->common_runtime_args_data()[private_pad.addr_crta_word], private_pad.allocated_address);
+            EXPECT_EQ(
+                left_kernel->common_runtime_args_data()[shared_left.addr_crta_word], shared_left.allocated_address);
+            EXPECT_EQ(
+                right_kernel->common_runtime_args_data()[shared_right.addr_crta_word], shared_right.allocated_address);
+        };
+        check_addresses();
+
+        // The first shared allocation creates an allocator spanning adjacent nodes 0–1.
+        // Resize clears its regions but retains that range. Reallocating the private pad
+        // on node 0 must account for node 1's higher base when marking this empty allocator.
+        ProgramRunArgs args;
+        args.dfb_run_overrides.push_back({.dfb = DFBSpecName{"dfb_0"}, .num_entries = 8});
+        SetProgramRunArgs(program, args);
+        ASSERT_NO_THROW(program.impl().prepare_ephemeral_allocation(mesh_device_.get()));
+        ASSERT_NO_THROW(program.impl().allocate_dataflow_buffers(mesh_device_.get()));
+        ASSERT_NO_THROW(program.impl().allocate_scratchpads(mesh_device_.get()));
+        check_addresses();
+    }
+    arena.deallocate(persistent.id);
 }
 
 TEST_F(ProgramSpecTestQuasar, CPU_SharedScratchpadWithoutDfbsOnDisjointNodes) {
