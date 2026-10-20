@@ -644,7 +644,7 @@ FRESH_LTX_PROMPTS = (
     indirect=["mesh_device", "device_params"],
 )
 def test_pipeline_distilled_i2v(
-    mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, topology, is_fsdp, tmp_path
+    mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp, tmp_path
 ):
     """E2E I2V in two stages.
 
@@ -802,7 +802,7 @@ _STANDALONE_I2V_COND_IMAGE = os.environ.get(
     indirect=["mesh_device", "device_params"],
 )
 def test_pipeline_distilled_i2v_standalone(
-    mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, topology, is_fsdp, tmp_path
+    mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp, tmp_path
 ):
     """STANDALONE E2E I2V: a single distilled i2v gen conditioned on a STORED image on disk,
     with NO preceding t2v generate() in the same process (and no model switch).
@@ -903,7 +903,7 @@ def test_pipeline_distilled_i2v_standalone(
     indirect=["mesh_device", "device_params"],
 )
 def test_pipeline_distilled_i2v_two_images(
-    mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, topology, is_fsdp, tmp_path
+    mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp, tmp_path
 ):
     """JOB-QUEUE STEADY STATE: two i2v gens with DIFFERENT conditioning images back-to-back in
     one process. Gen B's conditioning encode runs AFTER gen A's traced denoise replay — the exact
@@ -1014,7 +1014,7 @@ def test_pipeline_distilled_i2v_two_images(
     indirect=["mesh_device", "device_params"],
 )
 def test_pipeline_distilled_i2v_arbitrary_frame(
-    mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, topology, is_fsdp, tmp_path
+    mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp, tmp_path
 ):
     """ARBITRARY-FRAME I2V: four consecutive gens in ONE process exercising the generalized
     conditioning — first frame, last frame, last frame again (traced-replay steady state), and a
@@ -1146,7 +1146,9 @@ def test_pipeline_distilled_i2v_arbitrary_frame(
     ids=["bh_2x4sp1tp0", "bh_4x8sp1tp0"],
     indirect=["mesh_device", "device_params"],
 )
-def test_audio_decode_girl(mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, topology, is_fsdp):
+def test_audio_decode_girl(
+    mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp
+):
     """Just the audio section of the AV pipeline: real checkpoint weights, real girl-clip
     latent shape (num_frames -> als.frames), no transformer/gemma (decode_audio never
     encodes prompts). Profiles cold (weight load + compile) vs warm (steady-state per-gen)
@@ -1309,7 +1311,7 @@ def test_audio_decode_girl(mesh_device, mesh_shape, sp_axis, tp_axis, num_links,
     indirect=["mesh_device", "device_params"],
 )
 def test_pipeline_distilled_i2v_middle_keyframe(
-    mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, topology, is_fsdp, tmp_path
+    mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp, tmp_path
 ):
     """MIDDLE-KEYFRAME I2V render check. The arbitrary-frame test only pins the first/last EDGES; a
     mid-sequence pin is the two-sided case a full-strength pin can't reconcile on the few-step
@@ -1443,7 +1445,7 @@ def test_pipeline_distilled_i2v_middle_keyframe(
     indirect=["mesh_device", "device_params"],
 )
 def test_kf_fringe_repro(
-    mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, topology, is_fsdp, tmp_path
+    mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp, tmp_path
 ):
     """Repro harness for the keyframe-neighbor CHROMATIC FRINGING (green tint on the edges of frames
     around a pin, worst just after the middle pin). Pins 3 images at [0, mid, last] and prints a
@@ -1650,7 +1652,6 @@ def test_keyframe_s1_sigmas_differ_between_tiers(monkeypatch):
     assert len(out["medium"]) > len(out["fast"])
 
 
-
 def test_ref_with_frame0_puts_the_first_frame_at_reference_frame_0(monkeypatch):
     """A sheet plus a frame-0 image: reference frame 0 becomes the image's latent, frames 1..R-1 keep the
     sheet, and the cached reference is left alone; stage 2 only by default (s1, s2, 1 = both stages). No frame-0
@@ -1680,6 +1681,7 @@ def test_ref_with_frame0_puts_the_first_frame_at_reference_frame_0(monkeypatch):
     for stage in ("s1", "s2"):
         assert torch.equal(ref_with_frame0(ref, [(0, img0, 1.0)], stage)[:, :, 0:1], img0.to(ref.dtype))
     assert torch.equal(ref_with_frame0(ref, [(0, img0, 1.0)], "s1")[:, :, 0:1], img0.to(ref.dtype))
+
 
 # --- full coverage matrix: every model x tier x resolution, t2v AND i2v ---------------------------
 # Deselected by default (LTX_MATRIX=1 to arm): one cell loads 22B weights and renders two clips, so
@@ -1721,7 +1723,7 @@ def _matrix_checkpoint(model):
     indirect=["mesh_device", "device_params"],
 )
 def test_ltx_matrix_cell(
-    mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, topology, is_fsdp, tmp_path
+    mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp, tmp_path
 ):
     """One matrix cell: ONE mode (t2v or i2v) on one (model, tier, resolution).
 
