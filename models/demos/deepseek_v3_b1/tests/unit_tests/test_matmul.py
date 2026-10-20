@@ -34,7 +34,19 @@ from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3_b1.micro_ops.matmul.op import Matmul
 
 
-def _run_matmul_single_core(device, M, K, N, in0_dtype, in1_dtype, transpose, fused_activation, fp32_dest_acc_en):
+def _run_matmul_single_core(
+    device,
+    M,
+    K,
+    N,
+    in0_dtype,
+    in1_dtype,
+    transpose,
+    fused_activation,
+    fp32_dest_acc_en,
+    torch_a=None,
+    pcc_threshold=None,
+):
     """Test single-core matmul operation with fully sharded inputs"""
 
     # Use fused_activation directly (no special suffixes needed now)
@@ -64,7 +76,8 @@ def _run_matmul_single_core(device, M, K, N, in0_dtype, in1_dtype, transpose, fu
 
     # Create input A and input B PyTorch tensors
     torch.manual_seed(0)
-    torch_a = torch.randn((M, K), dtype=torch.bfloat16)
+    if torch_a is None:
+        torch_a = torch.randn((M, K), dtype=torch.bfloat16)
     torch_b = torch.randn((K, N), dtype=torch.bfloat16)
     if transpose:
         torch_b = torch_b.T
@@ -167,7 +180,8 @@ def _run_matmul_single_core(device, M, K, N, in0_dtype, in1_dtype, transpose, fu
 
     # Verify matmul results (slightly lower PCC for fused activations due to approximation)
     logger.info(f"Verifying matmul{activation_str}{fp32_str} results...")
-    pcc_threshold = 0.98 if actual_activation else 0.99
+    if pcc_threshold is None:
+        pcc_threshold = 0.98 if actual_activation else 0.99
 
     passing, pcc_message = comp_pcc(torch_expected, output_torch, pcc_threshold)
     logger.info(pcc_message)
@@ -209,6 +223,17 @@ def _run_matmul_single_core(device, M, K, N, in0_dtype, in1_dtype, transpose, fu
 )
 def test_matmul_single_core(device, M, K, N, in0_dtype, in1_dtype, transpose, fused_activation, fp32_dest_acc_en):
     _run_matmul_single_core(device, M, K, N, in0_dtype, in1_dtype, transpose, fused_activation, fp32_dest_acc_en)
+
+
+@pytest.mark.parametrize("K", [8160, 8192])
+@pytest.mark.parametrize("N, transpose", [(32, False), (64, False), (64, True)])
+def test_matmul_single_core_last_k_tile(device, K, N, transpose):
+    torch.manual_seed(0)
+    torch_a = torch.zeros((1, K), dtype=torch.bfloat16)
+    torch_a[:, -16:] = torch.randn((1, 16), dtype=torch.bfloat16)
+    _run_matmul_single_core(
+        device, 1, K, N, ttnn.bfloat16, ttnn.bfloat8_b, transpose, None, False, torch_a=torch_a, pcc_threshold=0.999
+    )
 
 
 @pytest.mark.parametrize(

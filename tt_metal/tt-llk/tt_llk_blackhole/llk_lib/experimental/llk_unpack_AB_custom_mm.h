@@ -42,9 +42,6 @@ inline void _llk_unpack_AB_custom_mm_iter_insns(const bool post1)
     // Counters of interest are CH0 Y and Z (both with a stride of a single face in L1
     // (datum_size * 16 * face_r_dim) and CH1 Y with a stride of a face in SrcB (16 rows)
     // Each unpack instruction we move to next face in L1, but this is split among Y and Z counters
-    // Because they are 8 bit counters and to cover max inner dim of 256
-    // we need to increment face counter 512 times thus overflowing if we use a single counter,
-    // using both counters allows us to cover exactly 512 needed increments
     // For SrcB first unpack has to land at index 0 and second one at index 16,
     // increment from first to second is straightforward, but moving back to 0 after second requires us to exploit
     // counter overflow as CH1 counters only use low 6 bits and wrap at the number of rows in a Src reg (64)
@@ -231,15 +228,15 @@ inline void _llk_unpack_AB_custom_mm_init_(const std::uint32_t unpB_face_r_dim, 
     TTI_SETADCXY(0b011, 0, 0, 0, 0, 0b1010);
 }
 
-inline void _llk_unpack_AB_custom_mm_run_(
+inline void _llk_unpack_AB_custom_mm_walk_(
     volatile std::uint32_t* cfg,
     std::uint32_t address_a,
     const std::uint32_t address_b,
     const std::uint32_t block_increment,
     const std::uint32_t inner_increment,
     const std::uint32_t kt_dim,
-    const std::uint32_t ct_dim) {
-    // Program SrcB address once, its updated using counters for up to 256 kt_dim
+    const std::uint32_t ct_dim)
+{
     cfg[THCON_SEC1_REG3_Base_address_ADDR32] = address_b;
     // Program SrcA address once, its updated using CFGSHIFTMASK
     cfg[THCON_SEC0_REG3_Base_address_ADDR32] = address_a;
@@ -288,6 +285,28 @@ inline void _llk_unpack_AB_custom_mm_run_(
     TTI_SETADCXY(0b011, 0, 0, 0, 0, 0b1010);
 }
 
+inline void _llk_unpack_AB_custom_mm_run_(
+    volatile std::uint32_t* cfg,
+    std::uint32_t address_a,
+    std::uint32_t address_b,
+    const std::uint32_t block_increment,
+    const std::uint32_t inner_increment,
+    std::uint32_t kt_dim,
+    const std::uint32_t ct_dim,
+    const std::uint32_t tile_size_b)
+{
+    constexpr std::uint32_t max_kt_per_walk = 255;
+    if (kt_dim > max_kt_per_walk)
+    {
+        const std::uint32_t kt_first = kt_dim / 2;
+        _llk_unpack_AB_custom_mm_walk_(cfg, address_a, address_b, block_increment, inner_increment, kt_first, ct_dim);
+        address_a += kt_first * ((ct_dim - 1) * block_increment + inner_increment);
+        address_b += kt_first * tile_size_b;
+        kt_dim -= kt_first;
+    }
+    _llk_unpack_AB_custom_mm_walk_(cfg, address_a, address_b, block_increment, inner_increment, kt_dim, ct_dim);
+}
+
 /**
  * @brief Unpack a kt_dim x ct_dim block of weight tiles into SrcA and the matching activation tiles into SrcB.
  *
@@ -327,5 +346,5 @@ inline void _llk_unpack_AB_custom_mm_(
     wait_for_next_context(1);
     reset_config_context();
 
-    _llk_unpack_AB_custom_mm_run_(cfg, address_a, address_b, block_increment, inner_increment, kt_dim, ct_dim);
+    _llk_unpack_AB_custom_mm_run_(cfg, address_a, address_b, block_increment, inner_increment, kt_dim, ct_dim, tile_size_b);
 }
