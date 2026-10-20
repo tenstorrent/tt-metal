@@ -17,6 +17,31 @@ SCRIPT = REPO / "tt_metal/tt-llk/tests/run_ttsim_regression.sh"
 LLK_PREFIX = "tt_metal/tt-llk/tests/python_tests/"
 VECTOR_ADD = "quasar/test_vector_add_l1_quasar.py::test_vector_add_l1_quasar"
 RAND = "quasar/test_rand_quasar.py::test_rand_quasar"
+RAND_SEED = "quasar/test_rand_quasar.py::test_rand_seed_quasar"
+# Exact parametrizations. A shorter prefix would also drop passing cases of the same test.
+SFPENCC = (
+    "quasar/test_eltwise_binary_sfpu_quasar.py::test_eltwise_binary_sfpu_int_quasar"
+    "[formats:Int32->Int32-dest_acc:Yes-mathop:SfpuGcd-tile_indices:(0, 1, 0)]",
+    "quasar/test_eltwise_binary_sfpu_quasar.py::test_eltwise_binary_sfpu_int_quasar"
+    "[formats:Int32->Int32-dest_acc:Yes-mathop:SfpuGcd-tile_indices:(2, 3, 0)]",
+    "quasar/test_fused_quasar.py::test_fuser[quasar/sfpu_int32_gcd__op1_math2_SfpuGcd__operand1_format_Int32]",
+    "quasar/test_fused_quasar.py::test_fuser[quasar/sfpu_int32_gcd_pairs_extremes]",
+    "quasar/test_fused_quasar.py::test_fuser[quasar/sfpu_int32_gcd_pairs_fibonacci_nan]",
+    "quasar/test_fused_quasar.py::test_fuser[quasar/sfpu_int32_gcd_pairs_shared_factor]",
+    "quasar/test_fused_quasar.py::test_fuser[quasar/sfpu_int32_gcd_pairs_worst_case]",
+    "quasar/test_fused_quasar.py::test_fuser[quasar/sfpu_int32_lcm_pairs_equal_signs__op1_math2_SfpuGcd]",
+    "quasar/test_fused_quasar.py::test_fuser[quasar/sfpu_int32_lcm_pairs_extremes__op1_math2_SfpuGcd]",
+    "quasar/test_fused_quasar.py::test_fuser[quasar/sfpu_int32_lcm_pairs_shared_factor__op1_math2_SfpuGcd]",
+    "quasar/test_fused_quasar.py::test_fuser[quasar/sfpu_int32_lcm_pairs_worst_case__op1_math2_SfpuGcd]",
+    "quasar/test_fused_quasar.py::test_fuser[quasar/sfpu_int32_lcm_pairs_zeros_units__op1_math2_SfpuGcd]",
+)
+CFG_WR32 = (
+    "quasar/test_fused_quasar.py::test_fuser[quasar/sfpu_rand_dest16__op1_math2_Rand__op1_math3_Neg__op1_math4_Add1__op1_math5_Add1__op1_math6_Abs__op1_math7_Neg__op1_math8_Add1__op1_math9_GreaterThanEqualZero__operand1_format_Float16_b]",
+    "quasar/test_fused_quasar.py::test_fuser[quasar/sfpu_rand_dest16__op1_math2_Rand__op1_math3_Neg__op1_math4_Add1__op1_math5_Add1__op1_math6_Abs__op1_math7_Neg__op1_math8_Add1__op1_math9_GreaterThanEqualZero__operand1_format_Float16]",
+    "quasar/test_fused_quasar.py::test_fuser[quasar/sfpu_rand_dest32__op1_math2_Rand__op1_math3_Neg__op1_math4_Add1__op1_math5_Add1__op1_math6_Abs__op1_math7_Neg__op1_math8_Add1__op1_math9_GreaterThanEqualZero__operand1_format_Float16_b]",
+    "quasar/test_fused_quasar.py::test_fuser[quasar/sfpu_rand_dest32__op1_math2_Rand__op1_math3_Neg__op1_math4_Add1__op1_math5_Add1__op1_math6_Abs__op1_math7_Neg__op1_math8_Add1__op1_math9_GreaterThanEqualZero__operand1_format_Float16]",
+    "quasar/test_fused_quasar.py::test_fuser[quasar/sfpu_rand_dest32__op1_math2_Rand__op1_math3_Neg__op1_math4_Add1__op1_math5_Add1__op1_math6_Abs__op1_math7_Neg__op1_math8_Add1__op1_math9_GreaterThanEqualZero__operand1_format_Float32]",
+)
 
 
 def _run(*args, ignore_file=None):
@@ -32,7 +57,13 @@ def test_default_list_selects_quasar_llk_entries():
     wormhole = _run("-a", "wormhole")
 
     assert quasar.returncode == 0, quasar.stderr
-    assert quasar.stdout.splitlines() == [VECTOR_ADD, RAND]
+    assert quasar.stdout.splitlines() == [
+        VECTOR_ADD,
+        RAND,
+        RAND_SEED,
+        *CFG_WR32,
+        *SFPENCC,
+    ]
     assert blackhole.returncode == 0, blackhole.stderr
     assert blackhole.stdout == ""
     assert wormhole.returncode == 0, wormhole.stderr
