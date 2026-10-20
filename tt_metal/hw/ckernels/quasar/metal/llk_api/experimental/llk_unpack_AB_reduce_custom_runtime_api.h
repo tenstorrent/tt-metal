@@ -79,8 +79,8 @@ inline void llk_unpack_AB_reduce_block_max_row_runtime(
     const std::uint32_t operandB_id = get_operand_id(operandB);
     const LocalDFBInterface& local_dfb_interface_a = get_local_dfb_interface(operandA_id);
     const LocalDFBInterface& local_dfb_interface_b = get_local_dfb_interface(operandB_id);
-    const std::uint32_t l1_tile_index_a =
-        local_dfb_interface_a.tc_slots[local_dfb_interface_a.tc_idx].rd_entry_idx + row_start_index;
+    const std::uint32_t l1_tile_index_a = local_dfb_interface_a.tc_slots[local_dfb_interface_a.tc_idx].rd_entry_idx +
+                                          row_start_index * local_dfb_interface_a.stride_size_tiles;
     const std::uint32_t l1_tile_index_b = local_dfb_interface_b.tc_slots[local_dfb_interface_b.tc_idx].rd_entry_idx;
 
     WAYPOINT("URBW");

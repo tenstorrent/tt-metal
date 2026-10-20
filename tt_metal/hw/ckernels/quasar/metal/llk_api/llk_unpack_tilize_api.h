@@ -233,8 +233,9 @@ inline void llk_unpack_tilizeA_B(
         entry_size_16B / (face_row_16B * tensor_shape_A.num_faces_c_dim);
     const std::uint32_t l1_index_a = rd_entry_idx_a * l1_index_per_entry + tile_index_a;
 
-    const std::uint32_t l1_index_b =
-        local_dfb_interface_b.tc_slots[local_dfb_interface_b.tc_idx].rd_entry_idx + tile_index_b;
+    // Consecutive tiles of a batch are stride_size_tiles entries apart, as on the pack side (#56194).
+    const std::uint32_t l1_index_b = local_dfb_interface_b.tc_slots[local_dfb_interface_b.tc_idx].rd_entry_idx +
+                                     tile_index_b * local_dfb_interface_b.stride_size_tiles;
 
     WAYPOINT("UPTW");
 
