@@ -222,9 +222,19 @@ scorer read (section 2.4) being the floor-setting term.
 
 ### 4.4 Main-tree build (the rule of 2026-10-20: model-local ops only)
 
-The same tests on the main-tree build (`TT_METAL_HOME=$W`, `GLM53_KDA_FUSED=0`; the gather as the generic op, per-user
-top-k calls): `sparse1m_main_{customop,traced,regress,1m,perf}.log` -- the figures to quote for the integration
-branch are those of section 4.2 / 4.3's per-user-top-k columns (the batched-top-k columns need the custom top-k op).
+The same tests on the main-tree build (`TT_METAL_HOME=$W`, `GLM53_KDA_FUSED=0`; the gather as the generic op,
+per-user top-k calls), all green (`sparse1m_main_{customop,traced,regress,1m,perf}.log`):
+
+| what | result (main build) |
+|---|---|
+| `tests/custom_ops/test_paged_pool_gather.py` (7 cases) | bit-equal to the golden incl. trace replay; eager call 0.146 / 0.233 / 0.357 ms at 1 / 4 / 8 users x 513 pools on the 1 M cache (the Python descriptor build is per call; inside a traced step the kernel alone runs) |
+| `test_dsa_sparse_traced.py` (2 tests) | 26/26 (user, step) samples > 0.9998, worst 0.999847; dense user bit-equal to the eager reference path; ids 97.9-99.0 % of HF |
+| regression: `test_decode_trace` l3, `test_decoder_layer` (4), `test_batch8` B=8 l3, `test_dsa_sparse`, `test_dsa_long` (4) | 13/13 passed |
+| `test_sparse_1m.py` | PCC vs HF-restricted 0.999803 / 0.999838 (16 K), 0.999767 / 0.999757 (131 K), 0.999680 / 0.999706 (1 M); attention step 1.89 / 3.43 / 5.38 ms (16 K), 2.15 / 3.93 / 6.36 (131 K), 2.99 / 7.88 / 14.25 (1 M) at 1 / 4 / 8 users; eager reference 2.4 / 4.0 / 13.6 ms (1 user) |
+| `test_sparse_perf.py` (layer 3, traced) | 5.92 / 9.10 / 12.78 ms (4 K), 6.06 / 9.64 / 14.15 (131 K), 7.05 / 13.59 / 21.86 (1 M) at 1 / 4 / 8 users; DSA block 60 / 93 / 129 device ops |
+
+These are the figures of the integration branch; the batched-top-k columns of 4.2 / 4.3 (1 M: 4.5 / 6.4 ms attention,
+10.2 / 14.2 ms layer at 4 / 8 users) need the per-row top-k as a custom op.
 
 ## 5. What remains
 
