@@ -362,6 +362,7 @@ class TtPrefillTransformer(LightweightModule):
 
         self.mtp_predictor = mtp_predictor
         self.num_mtp_levels = num_mtp_levels
+        self._trace_controller = None
         if mtp_predictor is not None:
             assert is_last_rank and not kv_only_last_layer, (
                 "MTP is seeded by h^0 = model.norm(trunk output) and needs the LM head for the last "
@@ -412,6 +413,7 @@ class TtPrefillTransformer(LightweightModule):
         (ring_indexer_score_dsa, topk_large_indices) read their per-chunk scalars on-device from the
         metadata tensors, so a replay derives each chunk's causal window instead of reusing the
         captured one."""
+        self._trace_controller = controller
         for layer in self._trace_blocks():
             layer.set_trace_controller(controller)
 
@@ -711,8 +713,10 @@ class TtPrefillTransformer(LightweightModule):
             )
             ttnn.deallocate(logits)
             logits = full
-        ids = ttnn.argmax(logits, dim=-1, keepdim=False)
+        rm_logits = ttnn.to_layout(logits, ttnn.ROW_MAJOR_LAYOUT)
         ttnn.deallocate(logits)
+        ids = ttnn.argmax(rm_logits, dim=-1, keepdim=False)
+        ttnn.deallocate(rm_logits)
         emb = self.mtp_embed_ids(ids)
         ttnn.deallocate(ids)
         if self.sp_factor == 1:
@@ -844,21 +848,30 @@ class TtPrefillTransformer(LightweightModule):
         on_mtp_complete: Optional[Callable] = None,
         **fwd_kwargs,
     ) -> None:
-        """:meth:`run_mtp` as one program for every chunk: each level generates, and ``geometry`` masks
-        what eager would have skipped. The level outputs are freed here, so a capture holds none past its end.
+        """:meth:`run_mtp` with no per-chunk host branch: each level generates, and ``geometry`` masks
+        what eager would have skipped. Under a trace controller it is captured twice, and the replay runs
+        "provided" (no generation) for chunks whose levels are all provided, else "generate". The level
+        outputs are freed here, so a capture holds none past its end.
         """
         assert self.mtp_predictor is not None, "run_mtp_traced called on a transformer built without an mtp_predictor"
         assert not self.is_balanced, "MTP device generation is block-cyclic only"
-        source = MTPTraceEmbedSource(
-            union,
-            geometry,
-            embed_fn=lambda h: self.mtp_generate_embedding_selected(h, geometry.lm_rows),
-            all_gather_sp=self._mtp_all_gather_sp if self.sp_factor > 1 else None,
-        )
         fwd_kwargs["actual_isl"] = actual_isl
-        out = self.mtp_predictor.forward(source, h_normed, rope_tensors, kvpe_cache, **fwd_kwargs)
-        if on_mtp_complete is not None:
-            on_mtp_complete(out, source.generated_tokens)
-        for t in {id(t): t for t in (*out.x, *out.out, *out.out_head_normed) if t is not None}.values():
-            if t.is_allocated():
-                ttnn.deallocate(t)
+        all_gather_sp = self._mtp_all_gather_sp if self.sp_factor > 1 else None
+
+        def run(embed_fn):
+            source = MTPTraceEmbedSource(union, geometry, embed_fn=embed_fn, all_gather_sp=all_gather_sp)
+            out = self.mtp_predictor.forward(source, h_normed, rope_tensors, kvpe_cache, **fwd_kwargs)
+            if on_mtp_complete is not None:
+                on_mtp_complete(out, source.generated_tokens)
+            for t in {id(t): t for t in (*out.x, *out.out, *out.out_head_normed) if t is not None}.values():
+                if t.is_allocated():
+                    ttnn.deallocate(t)
+            # The next variant must start from the row blocks, not this one's temporaries.
+            union.drop_derived()
+
+        generate = lambda: run(lambda h: self.mtp_generate_embedding_selected(h, geometry.lm_rows))
+        if self._trace_controller is None:
+            generate()
+            return
+        assert not union.has_derived, "the variants share the union's row blocks only"
+        self._trace_controller.capture_variants({"generate": generate, "provided": lambda: run(None)})

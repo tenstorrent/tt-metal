@@ -77,6 +77,17 @@ TEST_F(PrefetcherPipeSpecTestQuasar, CPU_RelayComputeProducerFails) {
         "exactly the relayed pipe set");
 }
 
+TEST_F(PrefetcherPipeSpecTestQuasar, CPU_RelayDFBBlockedProducerFails) {
+    auto spec = MakeFullPipeSpec();
+    KernelNamed(spec, "receiver").dfb_bindings = {BlockedProducerOf(relay_dfb_name, "relay", /*block_size=*/4)};
+    EXPECT_SPEC_REJECTED(spec, "relay DFB does not support the BLOCKED access pattern");
+}
+TEST_F(PrefetcherPipeSpecTestQuasar, CPU_RelayDFBBlockedConsumerFails) {
+    auto spec = MakeFullPipeSpec();
+    KernelNamed(spec, "compute").dfb_bindings = {BlockedConsumerOf(relay_dfb_name, "relay", /*block_size=*/4)};
+    EXPECT_SPEC_REJECTED(spec, "relay DFB does not support the BLOCKED access pattern");
+}
+
 TEST_F(PrefetcherPipeSpecTestQuasar, CPU_RelayProducerNotBindingPipeFails) {
     // The relay's producer must be the pipe's receiver kernel; without the binding it cannot drive
     // the pipe protocol the relay depends on.
