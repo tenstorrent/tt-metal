@@ -752,6 +752,9 @@ TEST(EthFwStage, DecodesStageValues) {
     EXPECT_EQ(llrt::eth_fw_stage_to_string(0x494e4946), "APP_FW_INIT");
     EXPECT_EQ(llrt::eth_fw_stage_to_string(0x50554c46), "APP_FW");
     EXPECT_EQ(llrt::eth_fw_stage_to_string(0x4c4e524b), "KERNEL");
+    EXPECT_EQ(llrt::eth_fw_stage_to_string(0x494e4942), "BASE_INIT");
+    EXPECT_EQ(llrt::eth_fw_stage_to_string(0x47534d42), "BASE_MSG");
+    EXPECT_EQ(llrt::eth_fw_stage_to_string(0x49504142), "API_REQUEST");
     EXPECT_EQ(llrt::eth_fw_stage_to_string(0x44434241), "0x44434241 ('ABCD')");
     EXPECT_EQ(llrt::eth_fw_stage_to_string(0x00000001), "0x00000001 ('....')");
 }

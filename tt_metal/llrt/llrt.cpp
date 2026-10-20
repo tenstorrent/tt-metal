@@ -332,6 +332,9 @@ std::string eth_fw_stage_to_string(uint32_t stage) {
         case ETH_FW_STAGE_FW_INIT: return "APP_FW_INIT";
         case ETH_FW_STAGE_FW_LOOP: return "APP_FW";
         case ETH_FW_STAGE_KERNEL: return "KERNEL";
+        case ETH_FW_STAGE_BASE_INIT: return "BASE_INIT";
+        case ETH_FW_STAGE_BASE_MSG: return "BASE_MSG";
+        case ETH_FW_STAGE_API_REQUEST: return "API_REQUEST";
         default: break;
     }
     // Unrecognized value: render the packed ASCII bytes (if printable) alongside the raw hex.

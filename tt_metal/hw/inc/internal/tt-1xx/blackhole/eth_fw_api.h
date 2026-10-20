@@ -100,12 +100,16 @@ static_assert(sizeof(chip_info_t) == 32, "chip_info_t size is not 32 bytes");
 // The base ethernet firmware is external (tt-firmware) and cannot be instrumented, so it is inferred:
 // the host initializes the slot to ETH_FW_STAGE_UNKNOWN before the application FW starts, and the
 // application FW stamps ETH_FW_STAGE_BASE_FW right before handing the core back to base FW.
+// Newer base FW also stamps its own stages in slot 0 (BASE_INIT, BASE_FW, BASE_MSG, API_REQUEST).
 enum eth_fw_stage_e : uint32_t {
-    ETH_FW_STAGE_UNKNOWN = 0,           // Host sentinel; also implies (uninstrumented) base FW pre-app-FW
-    ETH_FW_STAGE_BASE_FW = 0x45534142,  // "BASE": app FW returned control to base FW
-    ETH_FW_STAGE_FW_INIT = 0x494e4946,  // "FINI": app FW early init, before the mailbox poll loop
-    ETH_FW_STAGE_FW_LOOP = 0x50554c46,  // "FLUP": app FW dispatch/poll loop, idle waiting for a go signal
-    ETH_FW_STAGE_KERNEL = 0x4c4e524b,   // "KRNL": executing a launched kernel (fabric router adds EDMStatus)
+    ETH_FW_STAGE_UNKNOWN = 0,               // Host sentinel; also implies (uninstrumented) base FW pre-app-FW
+    ETH_FW_STAGE_BASE_FW = 0x45534142,      // "BASE": base FW main loop, or app FW returned control
+    ETH_FW_STAGE_FW_INIT = 0x494e4946,      // "FINI": app FW early init, before the mailbox poll loop
+    ETH_FW_STAGE_FW_LOOP = 0x50554c46,      // "FLUP": app FW dispatch/poll loop, idle waiting for a go signal
+    ETH_FW_STAGE_KERNEL = 0x4c4e524b,       // "KRNL": executing a launched kernel (fabric router adds EDMStatus)
+    ETH_FW_STAGE_BASE_INIT = 0x494e4942,    // "BINI": base FW boot-time link training
+    ETH_FW_STAGE_BASE_MSG = 0x47534d42,     // "BMSG": base FW servicing a mailbox message
+    ETH_FW_STAGE_API_REQUEST = 0x49504142,  // "BAPI": app FW called a base FW API
 };
 
 struct eth_fw_stage_t {
