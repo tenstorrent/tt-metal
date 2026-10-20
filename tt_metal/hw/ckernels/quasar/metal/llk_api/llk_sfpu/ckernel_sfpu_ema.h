@@ -142,9 +142,7 @@ inline void ema_load_alpha_beta(const std::uint32_t alpha, const std::uint32_t b
  */
 inline void ema_clear_previous_output() { TTI_SFPLOADI(EMA_CARRY_REG, sfpi::SFPLOADI_MOD0_FLOATB, FP16B_ZERO); }
 
-/** @brief Set the carry to row 0 of the Dest tile, starting a new chain from its first input. */
 inline void ema_seed_previous_output() {
-    // Paired with the second transpose: leaves the weights in place and the carry math-ready.
     TTI_SFPTRANSP;
 
     TTI_SFPLOAD(p_sfpu::LREG0, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, EMA_NO_DONE, p_sfpu::col_offset::EVEN_COL);

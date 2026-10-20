@@ -50,7 +50,7 @@ def test_ema(device, T, B, C, cores_y, cores_x, alpha):
     torch_output_tensor = ttnn.to_torch(dev_output_tensor)
     logger.info("Finished OP, comparing outputs")
 
-    # Calculate golden EMA output (output_0 = input_0)
+    # Calculate golden EMA output
     golden_function = ttnn.get_golden_function(ttnn.ema)
     golden_output_tensor = golden_function(torch_input_tensor.float(), alpha)
 
@@ -66,7 +66,6 @@ def test_ema(device, T, B, C, cores_y, cores_x, alpha):
 
 
 def test_ema_starts_from_first_input(device):
-    # The docstring example: output_0 = input_0, then output_t = alpha * output_{t-1} + (1 - alpha) * input_t.
     torch_input_tensor = torch.tensor([1.0, 2.0, 3.0, 4.0], dtype=torch.bfloat16).repeat(1, 1, 32, 1)
     expected = torch.tensor([1.0, 1.5, 2.25, 3.125], dtype=torch.bfloat16).repeat(1, 1, 32, 1)
 

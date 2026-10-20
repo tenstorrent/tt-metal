@@ -269,10 +269,8 @@ sfpi_inline void _clear_previous_output_()
     TTI_SFPLOADI(ckernel::p_sfpu::LREG4, sfpi::SFPLOADI_MOD0_FLOATB, 0);
 }
 
-/** @brief Seeds the previous EMA output (LREG4) with row 0 of the tile in dst 0, so the sequence starts from input_0. */
 sfpi_inline void _seed_previous_output_()
 {
-    // SFPTRANSP also transposes LREG4-7; the pair leaves alpha and beta in place.
     TTI_SFPTRANSP(0, 0, 0, 0);
     _ema_load_current_input_<0, 0>();
     TTI_SFPTRANSP(0, 0, 0, 0);

@@ -96,7 +96,6 @@ void kernel_main() {
             tile_regs_acquire();
             transpose_tile(dfb::src, 0, inp_dst_index);
             if (tile_id == 0) {
-                // Each batch starts from its first input: output_0 = input_0
                 ema_seed_previous_output(inp_dst_index);
             }
             ema_tile(inp_dst_index);

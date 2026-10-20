@@ -17,7 +17,6 @@ ALWI void ema_init(uint32_t alpha, uint32_t beta) {
 
 ALWI void ema_clear_previous_output() { MATH((llk_math_ema_sfpu_clear_previous_output())); }
 
-// Starts a sequence from its first input (output_0 = input_0); call before ema_tile on its first tile.
 ALWI void ema_seed_previous_output(uint32_t input_dst_index) {
     MATH((llk_math_ema_sfpu_seed_previous_output(input_dst_index)));
 }
