@@ -178,6 +178,7 @@ Dram open_dram() {
             control_tables_addr + (ct.dispatch_group_size + 1) * ct.num_routed_experts * 4),
         ct.num_routed_experts,
         ct.dispatch_group_size,
+        ct.dispatch_capacity,
 #ifdef CMBF2D_OVERLAPPED
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ids_addr),
         ids_stride / 4,
