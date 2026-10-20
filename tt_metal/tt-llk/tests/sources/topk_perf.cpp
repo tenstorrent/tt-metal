@@ -342,11 +342,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
                                     dest_sync,
                                     is_fp32_dest_acc_en,
                                     calculate_bitonic_topk_merge,
-                                    (APPROX, is_fp32_dest_acc_en, TOPK_SORT_DIRECTION, NETWORK_STABLE_SORT, TOPK_FUSED_STABLE, TOPK_RANK_STAMPED, TOPK_TIE_ORDER, TOPK_TAG_BITS),
+                                    (APPROX, is_fp32_dest_acc_en, TOPK_SORT_DIRECTION, NETWORK_STABLE_SORT, TOPK_FUSED_STABLE, TOPK_RANK_STAMPED, TOPK_TIE_ORDER, TOPK_TAG_BITS, TOPK_K),
                                     dst_index,
                                     vector_mode,
-                                    it,
-                                    TOPK_K);
+                                    it);
                             }
 
                             if (last_iteration)

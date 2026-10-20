@@ -465,19 +465,25 @@ inline void _topk_strip_rank_tags_(std::uint32_t dst_tile_index)
     set_dst_write_addr(0);
 }
 
+template <std::uint32_t N, std::uint32_t I = 0>
+[[gnu::always_inline]] inline void topk_finalize_vectors()
+{
+    if constexpr (I < N)
+    {
+        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 2 * I);
+        TTI_SFPSTORE(p_sfpu::LREG0, TOPK_SFPSTORE_MODE_PACK_UINT16, ADDR_MOD_7, 2 * I);
+        topk_finalize_vectors<N, I + 1>();
+    }
+}
+
 // uint16 index tile in 32-bit DEST: rotate the [0|idx] integer into the high half the packer reads.
 inline void _topk_finalize_hi16_index_tile_(std::uint32_t dst_tile_index)
 {
     // The SFPENCC, SETC16 and SETRWC before the first SFPLOAD are the three instructions an FPU write to Dst needs.
     TOPK_SFPENCC_ALL_LANES_ON();
-    set_dst_write_addr(0);
+    set_dst_write_addr(dst_tile_index * 64);
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
-    const std::uint32_t base = dst_tile_index * 64;
-    for (std::uint32_t off = base; off < base + 64; off += 2)
-    {
-        TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, off);
-        TT_SFPSTORE(p_sfpu::LREG0, TOPK_SFPSTORE_MODE_PACK_UINT16, ADDR_MOD_7, off);
-    }
+    topk_finalize_vectors<32>(); // straight-line: per-instruction issue from a loop starves the SFPU
     set_dst_write_addr(0);
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
 }
@@ -1188,22 +1194,35 @@ inline void bitonic_topk_ph3_group_first_swaps(const bool dir, bool &init_replay
 // fused packed keys never take the comparator-stable path (their bf16 slab is widened into
 // 32-bit DEST by the same SrcA datacopy, which canonicalizes +-0 before the fuse -- silicon-probed).
 // Predicate: (x & 0x7FFFFFFF) == 0 (zero magnitude); action: x &= 0x7FFFFFFF (-> +0.0).
+template <std::uint32_t N, std::uint32_t I = 0>
+[[gnu::always_inline]] inline void topk_negzero_vectors()
+{
+    if constexpr (I < N)
+    {
+        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 2 * I);
+        TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);
+        TTI_SFPAND(0, p_sfpu::LREG12, p_sfpu::LREG1, 0);
+        TTI_SFPSETCC(0, p_sfpu::LREG1, 0, sfpi::SFPSETCC_MOD1_LREG_EQ0);
+        TTI_SFPAND(0, p_sfpu::LREG12, p_sfpu::LREG0, 0);
+        TOPK_SFPENCC_ALL_LANES_ON();
+        TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 2 * I);
+        topk_negzero_vectors<N, I + 1>();
+    }
+}
+
 inline void _topk_canonicalize_negzero_value_tiles_()
 {
     TOPK_SFPENCC_ALL_LANES_ON();
     sfpi::vConstIntPrgm0 = 0x7FFFFFFF;
     set_dst_write_addr(0);
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
-    for (std::uint32_t off = 0; off < 128; off += 2)
+    // Four vectors and one INCRWC a replay; the RISC only issues the replays.
+    load_replay_buf<Exec>(0, 29, [] { topk_negzero_vectors<4>(); TTI_INCRWC(0, 8, 0, 0); });
+    for (std::uint32_t i = 1; i < 16; i++)
     {
-        TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, off);
-        TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);
-        TTI_SFPAND(0, p_sfpu::LREG12, p_sfpu::LREG1, 0);
-        TTI_SFPSETCC(0, p_sfpu::LREG1, 0, sfpi::SFPSETCC_MOD1_LREG_EQ0);
-        TTI_SFPAND(0, p_sfpu::LREG12, p_sfpu::LREG0, 0);
-        TOPK_SFPENCC_ALL_LANES_ON();
-        TT_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, off);
+        lltt::replay(0, 29);
     }
+    topk_replay_init = 0;
     set_dst_write_addr(0);
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
 }
@@ -1830,8 +1849,9 @@ template <
     bool FUSED             = false,
     bool RANK_STAMPED      = false,
     TopkTieOrder TIE_ORDER = TopkTieOrder::Unset,
-    std::uint32_t TAG_BITS = 16>
-inline void _bitonic_topk_merge(const int m_iter, const int k)
+    std::uint32_t TAG_BITS = 16,
+    bool PER_GROUP         = false>
+inline void _bitonic_topk_merge_rt_(const int m_iter, const int k)
 {
     static_assert(RANK_STAMPED || TAG_BITS == 16, "TAG_BITS applies to the rank-stamped mode only");
     // UInt16-in-32b-DEST: clear garbage high bits before compare-swap (#50215).
@@ -1862,6 +1882,47 @@ inline void _bitonic_topk_merge(const int m_iter, const int k)
         _sfpu_load_config32_(p_sfpu::LREG13, rank_span >> 16, rank_span & 0xFFFF); // right-run complement (2K-1)
     }
 
+    if constexpr (PER_GROUP)
+    {
+        std::uint32_t dst_addr_offset = 0;
+        for (int face = 0; face < 2; face++)
+        {
+            for (int col = 0; col < 2; col++)
+            {
+                TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+                int k_max             = k > 32 ? 32 : k;
+                std::uint32_t inner_d = k_max >> 2;
+                std::uint32_t total_datums_to_compare = ((64 >> m_iter) < 2 * k_max) ? 2 * k_max : (64 >> m_iter);
+                std::uint32_t dist            = (k_max << m_iter) > 32 ? 32 : (k_max << m_iter);
+                std::uint32_t ld_dist         = (dist < 16) ? dist : 2 * dist;
+                std::uint32_t datums_compared = 0;
+                std::uint32_t dst_offset      = 0;
+                std::uint32_t dst_cr          = 0;
+                while (datums_compared < total_datums_to_compare)
+                {
+                    for (std::uint32_t ii = 0; ii < inner_d; ii++)
+                    {
+                        bitonic_topk_merge_group<is_fp32_dest_acc_en, top_min, STABLE_SORT, FUSED, RANK_STAMPED, TIE_ORDER>(dst_offset, ld_dist, ii == 0);
+                        datums_compared += 8;
+                        if (ii == (inner_d - 1))
+                        {
+                            dst_cr += 2 * dist;
+                            dst_offset = dst_cr;
+                        }
+                        else
+                        {
+                            dst_offset += 4;
+                        }
+                    }
+                }
+                dst_addr_offset += 2;
+                set_dst_write_addr(dst_addr_offset);
+            }
+            dst_addr_offset = 16;
+            set_dst_write_addr(dst_addr_offset);
+        }
+        return;
+    }
     constexpr bool merge_macros = TOPK_STEP_LOADMACRO && !STABLE_SORT && !RANK_STAMPED;
     if constexpr (merge_macros)
     {
@@ -1972,6 +2033,80 @@ inline void _bitonic_topk_merge(const int m_iter, const int k)
     {
         bitonic_topk_step_macro_drain<FUSED>();
     }
+}
+
+// K >= 32: every quadrant is one block of 8 groups at distance 32, whatever m_iter, so the register set of each group,
+// the group offsets and the quadrant starts are constants and nothing is decided at run time.
+template <bool is_fp32_dest_acc_en, bool top_min, bool FUSED, std::uint32_t SET0, std::uint32_t II = 0>
+[[gnu::always_inline]] inline void topk_merge_block_k32()
+{
+    if constexpr (II < 8)
+    {
+        if constexpr (II > 0)
+        {
+            if constexpr ((II & 3) == 0)
+            {
+                TTI_INCRWC(0, 10, 0, 0);
+                TTI_INCRWC(0, 10, 0, 0);
+            }
+            else
+            {
+                TTI_INCRWC(0, 4, 0, 0);
+            }
+        }
+        constexpr std::uint32_t ld_dist = 64;
+        bitonic_topk_merge_group_macro<is_fp32_dest_acc_en, FUSED, (SET0 + II) % topk_merge_macro_sets<FUSED>()>(top_min ? ld_dist : 0, top_min ? 0 : ld_dist);
+        topk_merge_block_k32<is_fp32_dest_acc_en, top_min, FUSED, SET0, II + 1>();
+    }
+}
+
+template <bool is_fp32_dest_acc_en, bool top_min, bool FUSED>
+inline void _topk_merge_k32_macros_()
+{
+    topk_uint16_clear_value_tiles_high_bits();
+    topk_validate_mode_combo<is_fp32_dest_acc_en, false, FUSED, false, TopkTieOrder::Unset>();
+    _topk_merge_macros_init_<FUSED>();
+    constexpr std::uint32_t sets = topk_merge_macro_sets<FUSED>();
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+    topk_merge_block_k32<is_fp32_dest_acc_en, top_min, FUSED, 0>();
+    set_dst_write_addr(2);
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+    topk_merge_block_k32<is_fp32_dest_acc_en, top_min, FUSED, 8 % sets>();
+    set_dst_write_addr(4);
+    set_dst_write_addr(16);
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+    topk_merge_block_k32<is_fp32_dest_acc_en, top_min, FUSED, 16 % sets>();
+    set_dst_write_addr(18);
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+    topk_merge_block_k32<is_fp32_dest_acc_en, top_min, FUSED, 24 % sets>();
+    set_dst_write_addr(20);
+    set_dst_write_addr(16);
+    bitonic_topk_step_macro_drain<FUSED>();
+}
+
+// k from 32 up is the run-time-k merge unchanged. Below that, a k whose later m_iter cannot walk the dest counter
+// (dist not a multiple of 8, or at most 16 group words a quadrant) addresses each group on its own.
+template <
+    bool APPROXIMATION_MODE,
+    bool is_fp32_dest_acc_en,
+    bool top_min,
+    bool STABLE_SORT       = false,
+    bool FUSED             = false,
+    bool RANK_STAMPED      = false,
+    TopkTieOrder TIE_ORDER = TopkTieOrder::Unset,
+    std::uint32_t TAG_BITS = 16,
+    std::uint32_t K>
+inline void _bitonic_topk_merge(const int m_iter)
+{
+    static_assert(K > 0, "K is the merge's run length");
+    constexpr bool per_group = ((K & 7) != 0) || (2 * K * (FUSED ? 4 : 8) <= 128);
+    if constexpr (K >= 32 && TOPK_STEP_LOADMACRO && !STABLE_SORT && !RANK_STAMPED && (FUSED))
+    {
+        _topk_merge_k32_macros_<is_fp32_dest_acc_en, top_min, FUSED>();
+        return;
+    }
+    _bitonic_topk_merge_rt_<APPROXIMATION_MODE, is_fp32_dest_acc_en, top_min, STABLE_SORT, FUSED, RANK_STAMPED, TIE_ORDER, TAG_BITS, K < 32 && per_group>(
+        m_iter, static_cast<int>(K));
 }
 
 // One step (N to 5) over TOTAL datums of the quadrant at a fixed distance and start direction, so it compiles straight-line.
