@@ -252,13 +252,30 @@ def _reduce_set(value, data_axes) -> set:
     return {axis for axis in data_axes if not is_sharded_on_axis(value, axis)}
 
 
-def _assert_mean_over_axis(before: list, after: list, mesh_shape, axis: int) -> None:
-    """``after`` holds, on every device, the mean of ``before`` over mesh axis ``axis`` (bf16 sum then exact scale)."""
+def _assert_mean_over_axis(before: list, after: list, mesh_shape, axis: int, what: str) -> None:
+    """``after`` holds, on every device, the mean of ``before`` over mesh axis ``axis`` (bf16 sum then exact scale).
+
+    On a mismatch the message names ``what`` and, per device in mesh row-major order, how many elements are off and
+    whether that device's ``before`` equals the first device's of its group along the other axes (identical copies
+    there mean the reduction, not the pairing, is what went wrong)."""
     shape = tuple(mesh_shape)
     b = np.stack(before).reshape(shape + before[0].shape)
     a = np.stack(after).reshape(shape + after[0].shape)
     expected = np.broadcast_to(b.mean(axis=axis, keepdims=True), b.shape)
-    np.testing.assert_allclose(a, expected, rtol=2e-2, atol=1e-4)
+    off = ~np.isclose(a, expected, rtol=2e-2, atol=1e-4)
+    per_device = {coord: int(off[coord].sum()) for coord in np.ndindex(shape) if off[coord].any()}
+    same_before = {
+        coord: bool(np.array_equal(b[coord], b[tuple(c if i == axis else 0 for i, c in enumerate(coord))]))
+        for coord in np.ndindex(shape)
+    }
+    np.testing.assert_allclose(
+        a,
+        expected,
+        rtol=2e-2,
+        atol=1e-4,
+        err_msg=f"{what}: after vs mean of before over mesh axis {axis}; elements off per device {per_device}; "
+        f"before equal to the first device of its group {same_before}",
+    )
 
 
 def _assert_per_axis_labels(params, n_axes: int) -> None:
@@ -403,7 +420,7 @@ class TestDDP:
             assert len(_placements(grad)) == 2, name
             assert not is_sharded_on_axis(grad, dp), name
             assert not is_sharded_on_axis(grad, 1 - dp), name
-            _assert_mean_over_axis(before[name], _shards(grad), ddp_mesh.shape, dp)
+            _assert_mean_over_axis(before[name], _shards(grad), ddp_mesh.shape, dp, name)
 
     def test_collapsed_grad_label_is_read_reduced_and_relabelled(self, ddp_mesh):
         """Negative control. A gradient carrying the collapsed ``{2}, [Shard(0)]`` label (what a whole-mesh
@@ -436,7 +453,7 @@ class TestDDP:
             assert not is_sharded_on_axis(grad, dp), name
             assert not is_sharded_on_axis(grad, 1 - dp), name
             assert all(not isinstance(p, ttnn.PlacementShard) for p in _placements(grad)), name
-            _assert_mean_over_axis(before[name], _shards(grad), ddp_mesh.shape, dp)
+            _assert_mean_over_axis(before[name], _shards(grad), ddp_mesh.shape, dp, name)
 
 
 # --- DP x TP on [2, 2] ("dp", "tp") -----------------------------------------------------------------------------
@@ -465,7 +482,7 @@ class TestDPxTP:
             assert not is_sharded_on_axis(grad, dp), name
             if name.endswith(TP_SHARDED_SUFFIXES):
                 assert is_sharded_on_axis(grad, tp), f"{name}: the TP shard did not survive the dp all_reduce"
-            _assert_mean_over_axis(before[name], _shards(grad), dp_tp_mesh.shape, dp)
+            _assert_mean_over_axis(before[name], _shards(grad), dp_tp_mesh.shape, dp, name)
 
 
 # --- HSDP on [2, 2] ("dp", "fsdp") ------------------------------------------------------------------------------
@@ -511,13 +528,13 @@ class TestHSDP:
             grad = t.get_grad()
             assert not is_sharded_on_axis(grad, dp), name
             assert is_sharded_on_axis(grad, fsdp), name
-            _assert_mean_over_axis(before[name], _shards(grad), hsdp_mesh.shape, dp)
+            _assert_mean_over_axis(before[name], _shards(grad), hsdp_mesh.shape, dp, name)
 
         head = params["Model/head/weight"]
         reduced = ttnn.multiply(ttml.core.distributed.all_reduce(head.get_grad(), cluster_axis=fsdp), 1.0 / F)
         assert not is_sharded_on_axis(reduced, dp)
         assert not is_sharded_on_axis(reduced, fsdp)
-        _assert_mean_over_axis(_shards(head.get_grad()), _shards(reduced), hsdp_mesh.shape, fsdp)
+        _assert_mean_over_axis(_shards(head.get_grad()), _shards(reduced), hsdp_mesh.shape, fsdp, "head over fsdp")
 
     def test_causal_lm_collate_hsdp(self, hsdp_mesh):
         """``causal_lm_collate_fn`` with the HSDP mapper: the standard per-device shapes, the collapsed whole-mesh
