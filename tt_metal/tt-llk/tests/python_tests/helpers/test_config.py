@@ -222,6 +222,8 @@ class TestConfig:
 
     # CLI perf counter flags
     ENABLE_PERF_COUNTERS: ClassVar[bool] = False
+    # The readout token of the last counting launch (counters.h launch_word), 1..0xFFFF.
+    _LAUNCH_TOKEN: ClassVar[int] = 0
     # One run observes one group of 8 L1 interfaces; sweep this to cover all of them.
     PERF_L1_MUX_GROUP: ClassVar[int] = int(os.environ.get("LLK_PERF_L1_MUX_GROUP", "0"))
     # Quasar has no L1 counter bank; one l1_client event (subport*8 + event, -1 = none) rides in its slot.
@@ -266,6 +268,14 @@ class TestConfig:
 
     # Size of one full zone block (data + sync/pad)
     PERF_COUNTERS_ZONE_SIZE: ClassVar[int] = _PERF_COUNTERS_ZONE_DATA_BYTES + 40
+
+    # counters.h COUNTED_ZONES_REG on Quasar: the word after PERF_COUNTERS_LAYOUT_END's flag, mask and valid counts.
+    _PERF_COUNTERS_QUASAR_COUNTED_ZONES: ClassVar[int] = (
+        PERF_COUNTERS_ZONES_BASE
+        + PERF_COUNTERS_MAX_ZONES * PERF_COUNTERS_ZONE_SIZE
+        + 8
+        + PERF_COUNTERS_MAX_ZONES * 4
+    )
 
     # Device print buffer. It sits above loaders, and under RUNTIME_ARGS_START.
     # Coverage builds extend TRISC sections past this address; device print
@@ -377,6 +387,35 @@ class TestConfig:
         return f"-{variant}" if variant else ""
 
     @staticmethod
+    def _perf_counters_suffix() -> str:
+        """Counters on compiles BRISC and the kernels differently (counters.h), so its artefacts never mix with counters off."""
+        if not TestConfig.ENABLE_PERF_COUNTERS:
+            return ""
+        return f"-counters-l1mux{TestConfig.PERF_L1_MUX_GROUP}-l1client{TestConfig.PERF_L1_CLIENT_SEL}"
+
+    @staticmethod
+    def runs_on_ttsim() -> bool:
+        sim_path = (
+            os.environ.get("TT_METAL_SIMULATOR")
+            or os.environ.get("TT_UMD_SIMULATOR_PATH")
+            or ""
+        )
+        return TestConfig.TEST_TARGET.run_simulator and sim_path.endswith(".so")
+
+    @staticmethod
+    def counted_zones_address() -> int | None:
+        """counters.h COUNTED_ZONES_REG, or None on ttsim (no overlay registers, counters compiled out)."""
+        if TestConfig.runs_on_ttsim():
+            return None
+        match TestConfig.CHIP_ARCH:
+            case ChipArchitecture.WORMHOLE:
+                return 0xFFB40000 + 249 * 4  # STREAM_SCRATCH_1 of overlay stream 0
+            case ChipArchitecture.BLACKHOLE:
+                return 0xFFB40000 + 37 * 4
+            case _:
+                return TestConfig._PERF_COUNTERS_QUASAR_COUNTED_ZONES
+
+    @staticmethod
     def resolve_artefacts_path() -> Path:
         """Use $RUNNER_TEMP/tt-llk-build in GHA, else tempfile.gettempdir()/tt-llk-build."""
         runner_temp = os.environ.get("RUNNER_TEMP")
@@ -414,7 +453,10 @@ class TestConfig:
 
         # A Quasar IP variant compiles the shared objects differently, so it gets its own directory.
         variant_suffix = TestConfig._quasar_variant_suffix()
-        TestConfig.SHARED_DIR = TestConfig.ARTEFACTS_DIR / f"shared{variant_suffix}"
+        TestConfig.SHARED_DIR = (
+            TestConfig.ARTEFACTS_DIR
+            / f"shared{variant_suffix}{TestConfig._perf_counters_suffix()}"
+        )
         TestConfig.SHARED_OBJ_DIR = TestConfig.SHARED_DIR / "obj"
         TestConfig.SHARED_ELF_DIR = TestConfig.SHARED_DIR / "elf"
         # Profiler builds need separate shared artefacts (trisc.cpp compiles differently with -DLLK_PROFILER)
@@ -1255,6 +1297,9 @@ class TestConfig:
             "temp_elfs",
             # Host-side determinism-check opt-out; does not affect the compiled kernel.
             "expected_nondeterministic",
+            # Which zones a launch counts and its readout token, written before it (counters.h launch_word).
+            "counted_zones",
+            "launch_token",
         ]
 
         if not TestConfig.SPEED_OF_LIGHT:
@@ -1323,8 +1368,16 @@ class TestConfig:
             *src_include_append,
         ]
 
+        # Counters on compiles every variant differently (counters.h), so it hashes apart from counters off.
+        counters = (
+            [TestConfig._perf_counters_suffix()]
+            if TestConfig.ENABLE_PERF_COUNTERS
+            else []
+        )
         self.variant_id = sha256(
-            str(" | ".join(temp_str + ["<<search-dirs>>"] + search_dirs)).encode()
+            str(
+                " | ".join(temp_str + ["<<search-dirs>>"] + search_dirs + counters)
+            ).encode()
         ).hexdigest()
 
     def resolve_shared_compile_options(self) -> tuple[str, str, str]:
@@ -1377,12 +1430,7 @@ class TestConfig:
             else "-DLLK_BOOT_MODE_BRISC "
         )
         # ttsim models no counter or overlay registers; the RTL emulator does, so it keeps them.
-        sim_path = (
-            os.environ.get("TT_METAL_SIMULATOR")
-            or os.environ.get("TT_UMD_SIMULATOR_PATH")
-            or ""
-        )
-        if TestConfig.TEST_TARGET.run_simulator and sim_path.endswith(".so"):
+        if TestConfig.runs_on_ttsim():
             OPTIONS_COMPILE += "-DTT_METAL_TTSIM "
 
         NON_COVERAGE_OPTIONS_COMPILE = OPTIONS_COMPILE
@@ -1445,13 +1493,10 @@ class TestConfig:
                 run_shell_command(compile_command, TestConfig.TESTS_WORKING_DIR)
 
             if TestConfig.CHIP_ARCH != ChipArchitecture.QUASAR:
-                # Both builds get the mux group: BRISC writes the counter config and runs the startup
-                # sequence either way (see counters.h); only PERF_COUNTERS_COMPILED tells them apart.
-                perf_cnt_flag = (
-                    f"-DLLK_PERF_L1_MUX_GROUP={TestConfig.PERF_L1_MUX_GROUP} "
-                )
+                # Only counters on compiles counter code into BRISC (counters.h).
+                perf_cnt_flag = ""
                 if TestConfig.ENABLE_PERF_COUNTERS:
-                    perf_cnt_flag += "-DPERF_COUNTERS_COMPILED "
+                    perf_cnt_flag = f"-DPERF_COUNTERS_COMPILED -DLLK_PERF_L1_MUX_GROUP={TestConfig.PERF_L1_MUX_GROUP} "
                 compile_command = (  # brisc.elf : brisc.cpp
                     f"{TestConfig.GXX} {TestConfig.ARCH_NON_COMPUTE} {TestConfig.OPTIONS_ALL} {TestConfig.OPTIONS_LINK} {local_non_coverage} "
                     f'{"-DCOVERAGE " if TestConfig.WITH_COVERAGE else ""}'
@@ -1758,18 +1803,18 @@ class TestConfig:
                 if self.requires_vector_ext and name == "unpack":
                     optional_kernel_flags += f" {TestConfig.QUASAR_VECTOR_MARCH}"
 
-                # Both builds get the L1 selection (mux group on tt-1xx, l1_client event on Quasar): the
-                # counters off build compiles the same zone code with the counters stopped (counters.h).
-                if TestConfig.CHIP_ARCH == ChipArchitecture.QUASAR:
-                    optional_kernel_flags += (
-                        f" -DLLK_PERF_L1_CLIENT_SEL={TestConfig.PERF_L1_CLIENT_SEL}"
-                    )
-                else:
-                    optional_kernel_flags += (
-                        f" -DLLK_PERF_L1_MUX_GROUP={TestConfig.PERF_L1_MUX_GROUP}"
-                    )
+                # Only counters on compiles counter code, with its L1 selection (mux group on tt-1xx, l1_client
+                # event on Quasar); counters off keeps each zone's rendezvous alone (counters.h).
                 if TestConfig.ENABLE_PERF_COUNTERS:
                     optional_kernel_flags += " -DPERF_COUNTERS_COMPILED"
+                    if TestConfig.CHIP_ARCH == ChipArchitecture.QUASAR:
+                        optional_kernel_flags += (
+                            f" -DLLK_PERF_L1_CLIENT_SEL={TestConfig.PERF_L1_CLIENT_SEL}"
+                        )
+                    else:
+                        optional_kernel_flags += (
+                            f" -DLLK_PERF_L1_MUX_GROUP={TestConfig.PERF_L1_MUX_GROUP}"
+                        )
 
                 coverage_args = (
                     [
@@ -1914,6 +1959,25 @@ class TestConfig:
     # soft-reset kick (re-polling alone cannot recover a wedged core).
     BRISC_BOOT_MAX_ATTEMPTS: ClassVar[int] = 3
 
+    def _write_launch_word(self, counted_zones: int):
+        """Counters on only: the launch word counters.h reads (launch_word), and on Quasar the bank registers."""
+        if counted_zones:
+            TestConfig._LAUNCH_TOKEN = TestConfig._LAUNCH_TOKEN % 0xFFFF + 1
+            self.launch_token = TestConfig._LAUNCH_TOKEN
+        counted_zones_addr = TestConfig.counted_zones_address()
+        if counted_zones_addr is not None:
+            write_words_to_device(
+                TestConfig.TENSIX_LOCATION,
+                counted_zones_addr,
+                [counted_zones | self.launch_token << 8],
+                safe_mode=False,  # a register on Wormhole and Blackhole
+            )
+        if TestConfig.CHIP_ARCH == ChipArchitecture.QUASAR and counted_zones:
+            # imported here: counters.py imports this module
+            from .counters import configure_quasar_counters
+
+            configure_quasar_counters(TestConfig.TENSIX_LOCATION)
+
     def run_elf_files(self) -> list:
         boot_mode = (
             CHIP_DEFAULT_BOOT_MODES[TestConfig.CHIP_ARCH]
@@ -2004,6 +2068,12 @@ class TestConfig:
             str((VARIANT_ELF_DIR / f"{trisc_name}.elf").absolute())
             for trisc_name in TestConfig.KERNEL_COMPONENTS
         ]
+
+        # Counters on: every launch names the zones it counts (counters.h launch_word), 0 unless a perf run counts
+        # them, then with a new token that the readouts store, so a result is never one an earlier launch left.
+        self.launch_token = 0
+        if TestConfig.ENABLE_PERF_COUNTERS:
+            self._write_launch_word(getattr(self, "counted_zones", 0))
 
         if TestConfig.LAST_LOADED_ELFS != VARIANT_ELF_DIR:
             TestConfig.LAST_LOADED_ELFS = VARIANT_ELF_DIR

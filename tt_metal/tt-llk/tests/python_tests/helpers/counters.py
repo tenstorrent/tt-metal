@@ -11,7 +11,7 @@ from tt_llk_perf.headers import bank_tables
 from tt_llk_perf.metrics import quasar_l1_client_label
 
 from .chip_architecture import ChipArchitecture, get_chip_architecture
-from .device_io import read_words_from_device
+from .device_io import read_words_from_device, write_words_to_device
 from .test_config import TestConfig
 
 COUNTER_SLOT_COUNT = TestConfig._PERF_COUNTERS_CONFIG_WORDS
@@ -115,11 +115,13 @@ _SYNC_ZONE_COMPLETE = _parse_uint(_HEADER_TEXT, "SYNC_ZONE_COMPLETE")
 _COUNTER_SELECT_MISSED = _parse_uint(_HEADER_TEXT, "COUNTER_SELECT_MISSED")
 
 
-def _read_zone_counters(location: str, zone: int, zone_name: str) -> list[dict]:
+def _read_zone_counters(
+    location: str, zone: int, zone_name: str, token: int | None = None
+) -> list[dict]:
     """
     Read performance counter results for a single zone from L1.
 
-    Returns list of result dicts, or empty list if zone was not used.
+    Returns list of result dicts, or empty list if zone was not used (or, with a token, not read out by that launch).
     """
     sync_addr = _zone_sync_ctrl_addr(zone)
     sync_ctrl = read_words_from_device(location=location, addr=sync_addr, word_count=1)
@@ -131,14 +133,19 @@ def _read_zone_counters(location: str, zone: int, zone_name: str) -> list[dict]:
         f"Zone {zone} ({zone_name}): sync_word=0x{sync_word:08x} at addr=0x{sync_addr:06x}"
     )
 
-    # Zone was never used (BRISC clears sync to 0 before each run)
+    if token is not None and sync_word >> 8 != token:
+        logger.warning(
+            f"Zone {zone_name}: sync word 0x{sync_word:08x} is not this launch's readout (token {token})"
+        )
+        return []
+
+    # Zone was never used
     if sync_word == 0:
         logger.debug(f"Zone {zone}: sync_word is 0, skipping (zone not used)")
         return []
 
-    # Lightweight stop writes only SYNC_ZONE_COMPLETE (0xFF); the high bytes are
-    # unused under the current protocol. Any other low-byte value signals
-    # corrupted or partially-written sync state.
+    # The readout writes SYNC_ZONE_COMPLETE (0xFF) and its launch's token above it.
+    # Any other low-byte value signals corrupted or partially-written sync state.
     if (sync_word & 0xFF) != _SYNC_ZONE_COMPLETE:
         logger.warning(
             f"Zone {zone}: unexpected sync word 0x{sync_word:08x} "
@@ -246,7 +253,9 @@ def decode_config_word(config_word: int) -> tuple:
     )
 
 
-def read_counters(location: str = "0,0") -> pd.DataFrame:
+def read_counters(
+    location: str = "0,0", zones: int | None = None, token: int | None = None
+) -> pd.DataFrame:
     """
     Read performance counter results from all zones.
 
@@ -255,6 +264,8 @@ def read_counters(location: str = "0,0") -> pd.DataFrame:
 
     Args:
         location: Tensix core coordinates (e.g., "0,0").
+        zones: the zones the launch counted (a bit per zone id), None for all.
+        token: the launch's readout token (counters.h launch_word), None to skip the check.
 
     Returns:
         DataFrame with columns:
@@ -263,8 +274,28 @@ def read_counters(location: str = "0,0") -> pd.DataFrame:
     all_results = []
 
     for zone_idx in range(TestConfig.PERF_COUNTERS_MAX_ZONES):
+        if zones is not None and not zones >> zone_idx & 1:
+            continue
         zone_name = f"ZONE_{zone_idx}"
-        zone_results = _read_zone_counters(location, zone_idx, zone_name)
+        zone_results = _read_zone_counters(location, zone_idx, zone_name, token)
         all_results.extend(zone_results)
 
     return pd.DataFrame(all_results)
+
+
+# Quasar has no BRISC: the host programs the bank registers (counters.h configure_hardware) through NEO0's register window
+# before a counting launch, so no TRISC runs counter code before the windows. Offsets: perf_counters/registers.h.
+_QUASAR_NEO0_WINDOW = 0x01800000
+_QUASAR_BANK_REGS = {0: (0x0, 0x4), 1: (0x18, 0x1C), 2: (0xC, 0x10), 4: (0x8C, 0x90)}
+_REF_PERIOD_MAX = 0xFFFFFFFF
+
+
+def configure_quasar_counters(location: str) -> None:
+    """Before a counting Quasar launch: each bank's reference period and continuous mode. Nothing starts here and the
+    l1_client stays off: the zone arms route, enable and start them.
+    """
+    for ref_period, mode in _QUASAR_BANK_REGS.values():
+        for offset, value in ((ref_period, _REF_PERIOD_MAX), (mode, 0)):
+            write_words_to_device(
+                location, _QUASAR_NEO0_WINDOW + offset, [value], safe_mode=False
+            )
