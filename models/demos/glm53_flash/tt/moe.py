@@ -45,6 +45,7 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.glm53_flash.custom_ops.expert_stream.op import (
+    ExpertDispatch,
     ExpertStream,
     down_stream_layout,
     gate_up_stream_layout,
@@ -482,6 +483,10 @@ class TtRoutedExperts(LightweightModule):
             )
             self.stream_x_l1 = os.environ.get("GLM53_STREAM_X_L1", "1") == "1"
             self.stream_act_l1 = os.environ.get("GLM53_STREAM_ACT_L1", "1") == "1"
+            # phase 2: > 32 gathered tokens go through the per-expert dispatch ops (weights read once)
+            self.stream_dispatch = os.environ.get("GLM53_STREAM_DISPATCH", "1") == "1"
+            self.dispatch_ops = {}
+            self.dispatch_shapes = (E_loc, H, I_loc, H)
             self.stream_op = ExpertStream(
                 device,
                 E_loc,
@@ -489,7 +494,9 @@ class TtRoutedExperts(LightweightModule):
                 I_loc,
                 H,
                 groups=int(os.environ.get("GLM53_STREAM_GROUPS", "12")),
-                down_readers=int(os.environ.get("GLM53_STREAM_DOWN_READERS", "2")),
+                down_readers=int(os.environ["GLM53_STREAM_DOWN_READERS"])
+                if os.environ.get("GLM53_STREAM_DOWN_READERS")
+                else None,  # auto: 2 at I_loc = 256, 4 at 1024, 8 at 2048
             )
         elif dense:
             shape13 = (1, ep, H, tpr * E_loc * I_loc)
@@ -657,6 +664,37 @@ class TtRoutedExperts(LightweightModule):
         ttnn.deallocate(act)
         return out
 
+    def _dispatch_op(self, T: int):
+        """The dispatch ops for T gathered tokens (one program per T, cached)."""
+        if T not in self.dispatch_ops:
+            E_loc, K, I_loc, H = self.dispatch_shapes
+            self.dispatch_ops[T] = ExpertDispatch(
+                self.device,
+                E_loc,
+                K,
+                I_loc,
+                H,
+                T,
+                groups=int(os.environ.get("GLM53_STREAM_GROUPS", "12")),
+                down_readers=int(os.environ.get("GLM53_DISPATCH_DOWN_READERS", "8")),
+            )
+        return self.dispatch_ops[T]
+
+    def _block_dispatch(self, x: ttnn.Tensor, dense_w: ttnn.Tensor) -> ttnn.Tensor:
+        """All T (multiple of 32, <= 256) gathered tokens through the dispatch ops: the column selector matmul,
+        the row-major copy of x and the per-expert counts, the gate|up dispatch, the down dispatch -> [1,1,T,H]."""
+        if self.select is not None:
+            dense_w = ttnn.matmul(dense_w, self.select_bf16, dtype=ttnn.bfloat16, compute_kernel_config=self.fp32)
+        elif dense_w.dtype != ttnn.bfloat16:
+            dense_w = ttnn.typecast(dense_w, ttnn.bfloat16)
+        op = self._dispatch_op(x.shape[-2])
+        x_rm, counts = ExpertDispatch.prepare(x, dense_w)
+        act, table, out = op.alloc(self.device, act_l1=self.stream_act_l1)
+        op.forward(x_rm, dense_w, counts, self.w13, self.w2, act, table, out)
+        for t in (x_rm, counts, act, table):
+            ttnn.deallocate(t)
+        return out
+
     def forward(self, x: ttnn.Tensor, dense_w: ttnn.Tensor) -> ttnn.Tensor:
         """x [1,1,T,H] bf16, dense_w [1,1,T,E] fp32 (this row's tokens) -> [1,1,T,H] TP partial over
         the columns. Sparse layout: processed in 32-token blocks; a short last block (or T < 32, e.g.
@@ -670,6 +708,8 @@ class TtRoutedExperts(LightweightModule):
         block = self._block_stream if self.stream else self._block
         if self.dense:
             y = self._block_dense(x, dense_w)
+        elif self.stream and self.stream_dispatch and TILE < T <= 256 and T % TILE == 0:
+            y = self._block_dispatch(x, dense_w)
         elif T <= TILE:
             y = block(x, dense_w)
             if self.stream and T < TILE:

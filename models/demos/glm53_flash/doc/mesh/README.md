@@ -198,8 +198,13 @@ column-major; 96 gate|up cores with `clamped_silu_glu` in DST and the routing we
 16 down cores accumulating the expert sum in fp32 DST and writing once), trace-safe (every kernel scans the routing
 matrix on device, no host counts). Block at 4 users/row (28 real active): 683 -> 341 us (3 device ops, PCC
 0.99997 vs the sparse block, 54 % of DRAM peak), `GLM53_STREAM_EXPERTS=1`; at 256 tokens the block form
-re-streams the weights per 32-token block (2.41 ms vs 1.26 ms dense), the per-expert dispatch form that reads each
-expert once is the phase-2 design in section 9 (expected 0.6-0.8 ms).
+re-streams the weights per 32-token block (2.41 ms vs 1.26 ms dense).
+Phase 2 (section 10): the per-expert dispatch ops (`ExpertDispatch`: on-device gather of each expert's routed rows
+from the row-major tokens, tilize, the same gate|up kernel; down projection per pass with the token sums gathered
+in L1 and summed in fp32 DST), every active expert read once, three small ttnn ops + two generic ops; real routing
+M = 256: 0.78 ms per layer per chip, 6 device ops, PCC 0.99995 vs the sparse block (dense 1.26 ms, blocks 2.41 ms), `GLM53_STREAM_DISPATCH=1` default above 32
+tokens. The op is also generalized to the wider per-chip slices of the smaller meshes (I = 1024 on a (2,4) block:
+4 column pairs per bank, 4 down readers; 2048 on one chip), 8x4 unchanged.
 
 ## Optimization 1: router tie-break (2026-10-20)
 

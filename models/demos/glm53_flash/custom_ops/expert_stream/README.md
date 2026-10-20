@@ -22,6 +22,25 @@ The routing matrix is scanned by every kernel (reader and writer on the data-mov
 compute threads through the BRISC mailboxes), so the active-expert set is data-dependent at runtime and the calls
 are trace-safe. On a mesh the same program runs on every chip with that chip's weights and gathered tokens.
 
+## Dispatch ops (T > 32 gathered tokens, weights read once)
+
+| tensor | shape / dtype / layout | role |
+|---|---|---|
+| `x_rm` | `[1, 1, T, K]` BF16 ROW_MAJOR (L1) | `to_layout(x, ROW_MAJOR)`: the writer gathers token rows (8 KB each) |
+| `routing` | `[1, 1, T, E]` BF16 TILE | as above (T a multiple of 32, <= 256) |
+| `counts` | `[1, 1, 1, E]` BF16 TILE | `routing_counts(routing) = sum_t (routing != 0)`: the per-expert row counts every kernel enumerates the passes from |
+| `act` | `[1, P, 32, I]` BF16 TILE (L1) | pass k's activations (expert ascending, 32 routed rows per pass; `P = max_passes(T, E) = T/4 + E`) |
+| `table` | `[1, 1, P, 64]` UINT16 ROW_MAJOR (L1) | pass k's `[n_rows, e, t_0 .. t_31]`, written by the gate|up op (bank 0), read by the down op |
+| `out` | `[1, 1, T, H]` BF16 TILE DRAM | the expert sum per token |
+
+`ExpertDispatch(device, E, K, I, H, T)`: `prepare(x, routing)` (the two helper ops), `alloc(device)`,
+`forward(x_rm, routing, counts, w13, w2, act, table, out)`; `golden` = `expert_dispatch_golden` (per-pass act, y,
+passes). The gate|up dispatch keeps an expert's (gate, up) pair resident over its passes with one pair per bank
+(the 8x4) and re-streams per pass with more pairs; the down dispatch runs 8 readers per bank (2 output columns),
+phase 1 = `h_k = act[k] @ W2[e][:, cols]` per pass into a resident BF16 buffer, phase 2 = per token row tile the
+contributions (<= 8 per token) gathered into slot tiles and summed in fp32 DST (identity-tile matmuls, HiFi4).
+Numbers: `doc/mesh/expert_kernel_sweep.md` section 10.
+
 ## Kernels and core assignment
 
 `ExpertGateUpStream(device, E, K, I, groups)`: `groups` worker cores per DRAM bank (default 12 -> 96 cores), placed
@@ -45,12 +64,24 @@ from the bank's optimal NOC0 worker core outwards; core (bank `b`, group `g`) st
 * `compute_down.cpp`: `out[:, c] += act[e] @ W2[e][:, c]` for every active expert with the `cols` output tiles
   resident in DST (fp32), packed once.
 
+Wider per-chip slices (I = 1024 on a (2,4) block, 2048 on one chip): `ppb = I / 32 / banks` column pairs per bank
+(the compute loops the pairs per expert, the expert's `D` tile shared), down segments of `I/32` K tiles read in
+packets that divide the segment, readers per bank chosen so that an expert's block stays <= 128 tiles (2 x 8
+columns at I = 256, 4 x 4 at 1024, 8 x 2 at 2048; `_down_readers`).
+
+Dispatch kernels: `reader_gate_up_dispatch.cpp` (the LPT expert list, pairs as the streaming unit),
+`writer_gate_up_dispatch.cpp` (row gather, `D` per pass, pass table), `compute_gate_up_dispatch.cpp` (tilize +
+the block compute per pass), `reader_down_dispatch.cpp`, `writer_down_dispatch.cpp` (activations per pass, the
+metadata page, the gather slots), `compute_down_dispatch.cpp`; `dispatch_common.hpp` (counts -> passes, LPT).
+
 Compile-time args carry CB ids, tile counts, `E`, `M = 32`, the group count / columns per core, strides and the
 `TensorAccessorArgs` of the interleaved tensors; runtime args carry buffer addresses, the bank id, the NOC virtual
 channel and the core's group / column offset (`op.py`).
 
 ## Tests
 
+`tests/custom_ops/test_expert_dispatch.py`: the dispatch ops at T = 64 / 256, I = 256 / 1024, skewed routing with
+multi-pass experts, per-pass act and pass table vs the torch golden, the whole dispatch as a trace.
 `tests/custom_ops/test_expert_stream.py`: random weights at the model shapes, 8 / 32 / 256 tokens (256 = 8 blocks),
 2 or 8 routed experts per token, PCC >= 0.9999 of `act` and `out` vs the torch golden on bfp8-rounded weights, and
 one block captured as a trace and replayed (device time per block). `GLM53_STREAM_GROUPS` /
@@ -77,7 +108,8 @@ row partials in L1): the design is in section 9 of the sweep doc, expected 0.6-0
 
 ## Knobs
 
-`GLM53_STREAM_EXPERTS=1` selects the stream block in `tt/moe.py` (`TtRoutedExperts(stream=True)`, weight cache tag
+`GLM53_STREAM_DISPATCH` (1: 32 < T <= 256 gathered tokens go through the dispatch ops, 0: 32-token blocks),
+`GLM53_DISPATCH_DOWN_READERS` (8). `GLM53_STREAM_EXPERTS=1` selects the stream block in `tt/moe.py` (`TtRoutedExperts(stream=True)`, weight cache tag
 `_stream`: the bank-major layouts are built once from the per-chip slices and uploaded width-sharded over the DRAM
 banks through `upload_cached(..., rows=0, cols=1, memory_config=stream_memory_config(rows))`); `GLM53_STREAM_GROUPS`
 (12), `GLM53_STREAM_DOWN_READERS` (2), `GLM53_STREAM_X_L1` (1), `GLM53_STREAM_ACT_L1` (1).

@@ -28,6 +28,7 @@ void kernel_main() {
     constexpr uint32_t cb_h = get_compile_time_arg_val(3);
     constexpr uint32_t cb_out = get_compile_time_arg_val(4);
     constexpr uint32_t kt = get_compile_time_arg_val(5);
+    constexpr uint32_t ppb = get_compile_time_arg_val(6);  // column pairs per bank
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_x, cb_w, cb_out);
     matmul_init(cb_x, cb_w);
@@ -39,45 +40,47 @@ void kernel_main() {
 
     cb_wait_front(cb_x, kt);
     for (uint32_t i = 0; i < n; ++i) {
-        tile_regs_acquire();
-        // DST tiles 0 / 1 are accumulators that are never packed (only the SwiGLU result is), so they are not
-        // cleared by the packer: zero them before every expert.
-        fill_tile_init();
-        fill_tile(0, 0.0f);
-        fill_tile(1, 0.0f);
-        matmul_init(cb_x, cb_w);
-        for (uint32_t c = 0; c < 2; ++c) {  // gate -> DST 0, up -> DST 1
-            cb_wait_front(cb_w, kt);
-            for (uint32_t k = 0; k < kt; ++k) {
-                matmul_tiles(cb_x, cb_w, k, k, c);
+        cb_wait_front(cb_d, 1);  // the expert's routing weights, shared by its column pairs
+        for (uint32_t q = 0; q < ppb; ++q) {
+            tile_regs_acquire();
+            // DST tiles 0 / 1 are accumulators that are never packed (only the SwiGLU result is), so they are not
+            // cleared by the packer: zero them before every expert.
+            fill_tile_init();
+            fill_tile(0, 0.0f);
+            fill_tile(1, 0.0f);
+            matmul_init(cb_x, cb_w);
+            for (uint32_t c = 0; c < 2; ++c) {  // gate -> DST 0, up -> DST 1
+                cb_wait_front(cb_w, kt);
+                for (uint32_t k = 0; k < kt; ++k) {
+                    matmul_tiles(cb_x, cb_w, k, k, c);
+                }
+                cb_pop_front(cb_w, kt);
             }
-            cb_pop_front(cb_w, kt);
-        }
-        clamped_silu_glu_tile_init();
-        clamped_silu_glu_tile(0, 1, 2);
-        tile_regs_commit();
-        cb_reserve_back(cb_h, 1);
-        tile_regs_wait();
-        pack_tile(2, cb_h);
-        tile_regs_release();
-        cb_push_back(cb_h, 1);
+            clamped_silu_glu_tile_init();
+            clamped_silu_glu_tile(0, 1, 2);
+            tile_regs_commit();
+            cb_reserve_back(cb_h, 1);
+            tile_regs_wait();
+            pack_tile(2, cb_h);
+            tile_regs_release();
+            cb_push_back(cb_h, 1);
 
-        // routing weights: out = D_e @ h (BF16 x BF16 operands; srcA = in1, srcB = in0 as in the matmul kernels)
-        reconfig_data_format(cb_w, cb_h, cb_x, cb_d);
-        matmul_init(cb_d, cb_h);
-        tile_regs_acquire();
-        cb_wait_front(cb_d, 1);
-        cb_wait_front(cb_h, 1);
-        matmul_tiles(cb_d, cb_h, 0, 0, 3);
+            // routing weights: out = D_e @ h (BF16 x BF16 operands; srcA = in1, srcB = in0 as in the matmul kernels)
+            reconfig_data_format(cb_w, cb_h, cb_x, cb_d);
+            matmul_init(cb_d, cb_h);
+            tile_regs_acquire();
+            cb_wait_front(cb_h, 1);
+            matmul_tiles(cb_d, cb_h, 0, 0, 3);
+            cb_pop_front(cb_h, 1);
+            tile_regs_commit();
+            cb_reserve_back(cb_out, 1);
+            tile_regs_wait();
+            pack_tile(3, cb_out);
+            tile_regs_release();
+            cb_push_back(cb_out, 1);
+            reconfig_data_format(cb_h, cb_w, cb_d, cb_x);
+        }
         cb_pop_front(cb_d, 1);
-        cb_pop_front(cb_h, 1);
-        tile_regs_commit();
-        cb_reserve_back(cb_out, 1);
-        tile_regs_wait();
-        pack_tile(3, cb_out);
-        tile_regs_release();
-        cb_push_back(cb_out, 1);
-        reconfig_data_format(cb_h, cb_w, cb_d, cb_x);
     }
     cb_pop_front(cb_x, kt);
 }

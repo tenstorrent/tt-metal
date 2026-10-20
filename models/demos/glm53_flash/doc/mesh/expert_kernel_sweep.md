@@ -280,6 +280,16 @@ M = 256 <= 1.0 ms: **not met** -- the block op streams the weights once per 32-t
 the 31 active experts 8x (2.41 ms vs 1.26 ms for the dense layout, which reads each expert once); the dense layout
 stays the path at >= 8 users/row until the dispatch form below exists.
 
+### Wider per-chip slices (2026-10-20, after the coordinator's (2,4) mesh run)
+
+The op is generalized to `ppb = I_local / 32 / banks` column pairs per bank (`gate_up_stream_layout`: bank b holds
+the pairs `b ppb + q`; the compute loops the pairs per expert with the expert's `D` tile shared; the down segments
+of `I/32` K tiles are read in packets that divide the segment and the readers per bank are chosen so that an
+expert's block stays <= 128 tiles: 2 readers x 8 columns at I = 256, 4 x 4 at 1024, 8 x 2 at 2048). The 8x4 case
+(ppb = 1, one 8.7 KB packet per segment) is unchanged: 476.5 us traced block, same PCCs. `test_expert_stream_widths`
+(`_logs/optexperts_p2a_2.log`): I = 1024 (the (2,4) block, 43 active) act 0.999981 / out 0.999974; I = 2048 (one
+chip, E = 24) 0.999983 / 0.999976.
+
 ### Phase 2 (design, not built): the per-expert dispatch form for M = 256
 
 To read every active expert once at 256 gathered tokens the op has to process, per expert, the rows routed to it
@@ -305,3 +315,60 @@ routed rows per chip at HiFi2 (~100 us): ~0.6-0.8 ms per layer per chip, against
 The mesh variants of the unit test ((1,4) / (2,4): per-chip expert slices, replicated tokens) are written but
 gated on `GLM53_STREAM_MESH_TESTS=1`: multi-chip meshes were not opened in this pass (board note), so they are not
 yet run.
+
+## 10. Phase 2 built: the per-expert dispatch ops (2026-10-20, `custom_ops/expert_stream`, `ExpertDispatch`)
+
+Two more generic ops under the same directory, for `T` gathered tokens (32 < T <= 256) with every active expert's
+weights read once (`doc`: `custom_ops/expert_stream/README.md`):
+
+* inputs: the block inputs plus `x_rm = to_layout(x, ROW_MAJOR)` (L1) and `counts = sum_t (routing != 0)`
+  (`ttnn.ne` + `ttnn.sum`, exact BF16 integers up to 256): three small ttnn ops; every kernel derives the same pass
+  enumeration from the counts (expert ascending, 32 routed rows per pass, `P <= T/4 + E` passes) and the same LPT
+  expert -> core-group assignment (`kernels/dispatch_common.hpp`), so the active set stays data-dependent on device;
+* `ExpertGateUpDispatch` (96 cores): per pass the writer gathers the pass's token rows of `x_rm` (one 8 KB NOC read
+  per row) into a row-major block, the compute tilizes it (`tilize_block`, 128 tiles) and runs the gate|up / SwiGLU /
+  `D @ h` of the block op into `act [1, P, 32, I]`; bank 0 writes the pass table `[P, 64]` uint16
+  (`[n_rows, e, t_0 .. t_31]`). The (gate, up) pair of an expert stays resident over its passes (two pair slots of
+  2 x 139 KB; a pair must never straddle the CB end: the first version with three single-column slots and a 2-column
+  wait read past the CB on every second expert);
+* `ExpertDownDispatch` (64 cores: 8 per bank x 2 output columns): phase 1 `h_k = act[k] @ W2[e][:, cols]` per pass
+  (the expert's 17 KB block resident over its passes, pass counts through a metadata page read by the unpack thread
+  and forwarded to the math / pack threads), packed BF16 into a resident buffer (`P x 2` tiles = 544 KB); phase 2
+  per token row tile: the writer copies every (pass, row) contribution of the tile's tokens (<= 8 per token) into
+  gather slot tiles, the compute sums the slots in fp32 DST as identity-tile matmuls (HiFi4, exact) and packs the
+  two output tiles.
+
+`tests/custom_ops/test_expert_dispatch.py` (random weights, Zipf-skewed routing, 2 picks per token, `popular` =
+experts routed by every token -> multi-pass; `_logs/optexperts_p2g_1.log`):
+
+| T | I | active of 72 | passes | act PCC | out PCC | pass table |
+|---|---|---|---|---|---|---|
+| 64 | 256 | 31 | 32 | 0.999982 | 0.999978 | exact |
+| 256 | 256 | 58 | 66 | 0.999981 | 0.999997 | exact |
+| 256 | 256 (+2 popular) | 58 | 80 | 0.999984 | 0.999991 | exact |
+| 64 | 1024 (+1 popular) | 29 | 30 | 0.999983 | 0.999982 | exact |
+
+Traced (prepare ops + both generic ops, 20 replays): T = 256, I = 256, 58 active / 72 passes: 1118 us per call
+(eager gate|up 554 us, down 595 us); T = 64, I = 1024 (the (2,4) chip width, 35 active): 2073 us (gate|up 1369 us:
+35 x 8.9 MB of full-width... 4x wider slices = 312 MB of weights, the platform's cost, not the op's).
+
+Real routing (`tests/test_moe_block.py`, layer-4 weights, M = 256 = 31 of 72 active, `GLM53_STREAM_EXPERTS=1`
+default policy: block form at T <= 32, dispatch above; `_logs/optexperts_moe_block_dispatch3.log`):
+
+| M | path | us per layer per chip | device ops | PCC vs torch | PCC vs sparse-legacy |
+|---|---|---|---|---|---|
+| 32 | stream block (unchanged) | 343 | 3 | 0.999926 | 0.999972 |
+| 256 | stream, 8 blocks (section 9) | 2410 | 41 | 0.999911 | 0.999952 |
+| 256 | dense one pass | 1256 | 6 | 0.999905 | 0.999988 |
+| 256 | **stream dispatch** | **779** | 6 | 0.999908 | 0.999954 |
+
+Target M = 256 <= 0.8 ms per layer per chip: **met, 779 us** (1.6x the dense one-pass layout, 3.1x the 8-block
+stream form, 6.5x the tuned sparse blocks); runs vary 779-822 us between kernel variants of the down op (see below). Where the time goes (unit test at 58
+active, eager per op): gate|up ~560 us (58 x 2.23 MB = 129 MB, ~75 % of it DRAM time at 300 GB/s; the rest the
+per-pass gather + tilize), down ~600 us (64 MB of W2 at 17 KB blocks from 8 cores per bank, 74 MB of activation
+tile reads over the NOC, ~80 us of gather copies). The down op is the remaining lever: an expert-parallel
+split (each of a bank's 8 cores streams whole 70 KB expert blocks for a subset of the experts, as the block op's
+readers do at 310 GB/s, then reduces its [T, 16-column] partial into the bank owner's L1) would halve its DRAM
+inefficiency and cut the activation traffic 8x; estimated down ~150-200 us, layer ~550-600 us at real routing.
+Transaction-id pipelining of the activation reads (`noc_async_read_set_trid` + plain reads) did not synchronize
+on the writer's NOC (stale slots); the reads are batched three passes per barrier instead.
