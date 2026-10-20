@@ -7,9 +7,9 @@
 # Wormhole/Blackhole this excludes Quasar-only tests; for Quasar it selects
 # Quasar-only tests. Each test runs in a forked subprocess so that ttsim's
 # `_Exit(1)` on UnimplementedFunctionality (and similar) only kills that one
-# test and the suite continues. Node ids listed in ttsim_ignore_list.txt are
-# deselected for the architecture under test, on both the collection pass
-# and the real run.
+# test and the suite continues. LLK node ids in
+# tests/pipeline_reorg/ttsim-skip-list.yaml are deselected for the architecture
+# under test, on both the collection pass and the real run.
 #
 # Generates:
 #   - JUnit XML at python_tests/ttsim_results/ttsim_<timestamp>.xml
@@ -32,7 +32,6 @@ LATEST_COLLECTED="${RESULTS_DIR}/latest.collected.txt"
 WORKERS="${WORKERS:-10}"
 TIMEOUT="${TIMEOUT:-300}"
 ARCHITECTURE="${TTSIM_ARCHITECTURE:-blackhole}"
-IGNORE_FILE="${TTSIM_IGNORE_FILE:-${SCRIPT_DIR}/ttsim_ignore_list.txt}"
 USE_IGNORE=1
 LIST_IGNORE=0
 TEST_PATHS=()
@@ -46,6 +45,9 @@ PYTEST_NO_TESTS_COLLECTED=5
 # tt_metal/ttsim-version, the same pin every tt-metal sim pipeline uses, so
 # bumping that one file moves this script too.
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
+# Same file the ttnn sim legs deselect from. LLK entries live in its per-arch
+# sections; this script keeps the ones under python_tests/.
+IGNORE_FILE="${TTSIM_IGNORE_FILE:-${REPO_ROOT}/tests/pipeline_reorg/ttsim-skip-list.yaml}"
 TTSIM_VERSION_FILE="${REPO_ROOT}/tt_metal/ttsim-version"
 TTSIM_REPO="tenstorrent/ttsim"
 TTSIM_CACHE_ROOT="${TTSIM_CACHE_DIR:-${HOME}/.cache/ttsim}"
@@ -71,13 +73,13 @@ Options:
   -a, --architecture A  ttsim architecture: 'blackhole', 'wormhole', or
                         'quasar' (default: blackhole; env: TTSIM_ARCHITECTURE).
                         Controls test selection and collection.
-  --ignore-file PATH    Node-id ignore list (default: ttsim_ignore_list.txt next to
-                        this script; env: TTSIM_IGNORE_FILE). Sections are
-                        [all], [blackhole], [wormhole], and [quasar]. Entries
-                        are pytest node-id prefixes relative to python_tests/.
+  --ignore-file PATH    ttsim skip list (default: tests/pipeline_reorg/ttsim-skip-list.yaml;
+                        env: TTSIM_IGNORE_FILE). LLK entries are repo-root paths
+                        under tt_metal/tt-llk/tests/python_tests/. The matching
+                        architecture section is wormhole_b0, blackhole, or quasar.
                         file.py::test_name also skips test_name_extra; use
                         file.py::test_name[ to skip one parametrized test.
-  --no-ignore           Run every collected test; do not read the ignore list.
+  --no-ignore           Run every collected test; do not read the skip list.
   --list-ignore         Print the prefixes selected for --architecture and exit.
                         Does not download ttsim or run pytest.
   -h, --help            Show this help message.
@@ -89,7 +91,7 @@ Environment:
                         \${TTSIM_CACHE_DIR:-\$HOME/.cache/ttsim} and exports
                         this automatically.
   TTSIM_CACHE_DIR       Override the download cache root (default: ~/.cache/ttsim).
-  TTSIM_IGNORE_FILE     Override the default ignore-list path.
+  TTSIM_IGNORE_FILE     Override the default ttsim skip-list path.
   GH_TOKEN              Optional. Sent with the GitHub API request for the
                         release digest, to avoid the unauthenticated rate limit.
 
@@ -159,62 +161,74 @@ if [[ "$ARCHITECTURE" == "quasar" && ${#TEST_PATHS[@]} -eq 0 ]]; then
 fi
 
 # ──────────────────────────────────────────────────────────────
-# Ignore list
+# Skip list
 # ──────────────────────────────────────────────────────────────
-# Entries are pytest node-id prefixes. `--deselect` uses
+# Entries in the shared skip list are repo-root pytest node ids. This suite
+# collects with python_tests/ as rootdir, so only entries under that tree are
+# kept and the directory prefix is removed. `--deselect` uses
 # nodeid.startswith(), so a file path skips that file, `file.py::test_name`
 # also skips `test_name_extra`, and `file.py::test_name[` skips only the
 # parametrizations of that test. The same prefixes go to the collection pass
 # and the real run; otherwise a deselected test would still be in the
 # collected denominator and the HTML report would count it as crashed.
-load_ttsim_ignore_list() {
+load_ttsim_skip_list() {
     local file="$1"
     local arch="$2"
-    local section=""
-    local line
+    local yaml_arch prefix parsed node_id
+
+    case "$arch" in
+        wormhole)  yaml_arch=wormhole_b0 ;;
+        blackhole|quasar) yaml_arch="$arch" ;;
+        *)
+            echo "ERROR: no ttsim skip-list section for architecture '$arch'" >&2
+            exit 1
+            ;;
+    esac
 
     if [[ ! -f "$file" ]]; then
-        echo "ERROR: ignore list not found: $file" >&2
+        echo "ERROR: ttsim skip list not found: $file" >&2
         exit 1
     fi
 
-    while IFS= read -r line || [[ -n "$line" ]]; do
-        line="${line%$'\r'}"
-        # Trim surrounding whitespace. A line of only whitespace becomes empty.
-        line="${line#"${line%%[![:space:]]*}"}"
-        line="${line%"${line##*[![:space:]]}"}"
-        [[ -z "$line" || "$line" == \#* ]] && continue
+    prefix="tt_metal/tt-llk/tests/python_tests/"
+    if ! parsed="$(
+        python3 - "$file" "$yaml_arch" "$prefix" <<'PY'
+import sys
 
-        # Drop a trailing " # comment", then trim the right side again.
-        line="${line%%[[:space:]]#*}"
-        line="${line%"${line##*[![:space:]]}"}"
-        [[ -z "$line" ]] && continue
-
-        if [[ "$line" =~ ^\[([A-Za-z0-9_-]+)\][[:space:]]*(#.*)?$ ]]; then
-            section="${BASH_REMATCH[1]}"
-            case "$section" in
-                all|blackhole|wormhole|quasar) ;;
-                *)
-                    echo "ERROR: unknown section [$section] in $file (expected all, blackhole, wormhole, or quasar)" >&2
-                    exit 1
-                    ;;
-            esac
+path, arch, prefix = sys.argv[1:]
+current = None
+with open(path, encoding="utf-8") as handle:
+    for raw in handle:
+        line = raw.split("#", 1)[0].rstrip("\r\n")
+        if not line.strip():
             continue
-        fi
+        stripped = line.strip()
+        if not line[:1].isspace() and stripped.endswith(":"):
+            current = stripped[:-1].strip().strip("\"'")
+            continue
+        if not stripped.startswith("- "):
+            continue
+        item = stripped[2:].strip().strip("\"'")
+        if current is None:
+            sys.stderr.write(f"ERROR: skip entry before any architecture key in {path}: {item}\n")
+            sys.exit(1)
+        if current == arch and item.startswith(prefix):
+            sys.stdout.write(item[len(prefix) :] + "\n")
+PY
+    )"; then
+        echo "ERROR: failed to read ttsim skip list: $file" >&2
+        exit 1
+    fi
 
-        if [[ -z "$section" ]]; then
-            echo "ERROR: ignore entry before any [section] in $file: $line" >&2
-            exit 1
-        fi
-        if [[ "$section" == "all" || "$section" == "$arch" ]]; then
-            IGNORE_PREFIXES+=("$line")
-            DESELECT_ARGS+=(--deselect "$line")
-        fi
-    done <"$file"
+    while IFS= read -r node_id; do
+        [[ -z "$node_id" ]] && continue
+        IGNORE_PREFIXES+=("$node_id")
+        DESELECT_ARGS+=(--deselect "$node_id")
+    done <<<"$parsed"
 }
 
 if [[ "$USE_IGNORE" -eq 1 ]]; then
-    load_ttsim_ignore_list "$IGNORE_FILE" "$ARCHITECTURE"
+    load_ttsim_skip_list "$IGNORE_FILE" "$ARCHITECTURE"
 fi
 
 if [[ "$LIST_IGNORE" -eq 1 ]]; then
@@ -489,9 +503,9 @@ echo " Per-test fork  : on"
 echo " Timeout        : ${TIMEOUT}s"
 echo " Tests collected: ${collected_count}"
 if [[ "$USE_IGNORE" -eq 1 ]]; then
-    echo " Ignore list    : ${IGNORE_FILE} (${#IGNORE_PREFIXES[@]} for ${ARCHITECTURE})"
+    echo " Skip list      : ${IGNORE_FILE} (${#IGNORE_PREFIXES[@]} for ${ARCHITECTURE})"
 else
-    echo " Ignore list    : disabled"
+    echo " Skip list      : disabled"
 fi
 echo " JUnit XML      : ${XML_PATH}"
 echo " HTML report    : ${HTML_PATH}"
@@ -565,7 +579,7 @@ if [[ $pytest_exit -eq 0 ]]; then
 else
     echo " TESTS FAILED (pytest exit code: $pytest_exit)"
     if [[ $pytest_exit -eq $PYTEST_NO_TESTS_COLLECTED && ${#IGNORE_PREFIXES[@]} -gt 0 ]]; then
-        echo " No tests were collected. The ignore list may have deselected every requested test."
+        echo " No tests were collected. The skip list may have deselected every requested test."
         echo " Re-run with --no-ignore to include those tests."
     fi
 fi

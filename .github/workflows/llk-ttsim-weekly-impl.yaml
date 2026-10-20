@@ -30,11 +30,11 @@ on:
       ignore-file:
         required: false
         type: string
-        default: "tt_metal/tt-llk/tests/ttsim_ignore_list.txt"
+        default: "tests/pipeline_reorg/ttsim-skip-list.yaml"
         description: >
-          Repo-relative node-id ignore list forwarded to run_ttsim_regression.sh.
-          The script applies the section for the leg's architecture. An empty
-          string passes --no-ignore.
+          Repo-relative ttsim skip list forwarded to run_ttsim_regression.sh.
+          The script applies LLK entries from the leg's architecture section.
+          An empty string passes --no-ignore.
 
 # No `checks: write` — see the informational note above.
 permissions:
@@ -225,10 +225,10 @@ jobs:
               > "${ARTIFACT_DIR}/ttsim-${ARCH}.enumerated"
           fi
           cp "${GITHUB_WORKSPACE}/tt_metal/ttsim-version" "${ARTIFACT_DIR}/ttsim-version"
-          # The list the regression step deselected from, so the artifact shows
-          # which node ids were excluded for this arch.
+          # The shared skip list the regression step read, so the artifact shows
+          # which node ids were excluded.
           if [[ -n "$IGNORE_FILE" && -f "${GITHUB_WORKSPACE}/${IGNORE_FILE}" ]]; then
-            cp "${GITHUB_WORKSPACE}/${IGNORE_FILE}" "${ARTIFACT_DIR}/ttsim_ignore_list.txt"
+            cp "${GITHUB_WORKSPACE}/${IGNORE_FILE}" "${ARTIFACT_DIR}/ttsim-skip-list.yaml"
           fi
           ls -la "${ARTIFACT_DIR}/"
 
@@ -338,7 +338,7 @@ jobs:
             echo "| ❌ Failed | ${failed} |"
             echo "| ⏩ Skipped | ${skipped} |"
             echo "| 💥 Crashed | ${crashed_disp} |"
-            echo "| 🚫 Ignore list | ${ignore_disp} |"
+            echo "| 🚫 Skip list | ${ignore_disp} |"
             echo "| 📈 Pass rate | ${pass_pct}% |"
             echo ""
             echo "HTML report: available in the \`ttsim-report-${ARCH}\` artifact of this run."

@@ -3,6 +3,13 @@
 #
 # Structure: Each architecture has its own section with all tests to skip.
 # Tests that apply to all architectures are duplicated in each section.
+# Paths are pytest node ids from the repo root, the same form ttnn sim legs pass
+# to --deselect.
+#
+# run_ttsim_regression.sh reads this file too. It keeps entries under
+# tt_metal/tt-llk/tests/python_tests/ and drops that prefix, because the LLK
+# suite collects pytest with python_tests/ as rootdir. ttnn sim legs only apply
+# wormhole_b0 and blackhole, so quasar entries are LLK-only.
 
 wormhole_b0:
   # Job-level timeouts -- can be cut down still
@@ -38,3 +45,7 @@ blackhole:
   # ZEROACC failures
   # https://github.com/tenstorrent/ttsim-private/issues/326
   - tests/ttnn/unit_tests/operations/eltwise/test_broadcast_to.py
+
+quasar:
+  # ttsim: rv32_v_alu baby-RISC V extension is out of scope.
+  - tt_metal/tt-llk/tests/python_tests/quasar/test_vector_add_l1_quasar.py::test_vector_add_l1_quasar

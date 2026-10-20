@@ -23,7 +23,6 @@ while IFS= read -r FILE; do
         tt_metal/tt-llk/tt_llk_quasar/**|$TESTS/sources/quasar/**|$TESTS/python_tests/quasar/**|tt_metal/hw/ckernels/quasar/**|\
         $TESTS/python_tests/accuracy/**|\
         $TESTS/run_quasar_regression.sh|$TESTS/run_ttsim_regression.sh|$TESTS/render_ttsim_report.py|\
-        $TESTS/ttsim_ignore_list.txt|\
         *.md)
             ;;
         tt_metal/sfpi-info.sh|tt_metal/sfpi-version|\

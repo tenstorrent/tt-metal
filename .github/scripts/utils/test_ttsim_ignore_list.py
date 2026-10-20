@@ -3,7 +3,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Parser checks for tests/run_ttsim_regression.sh --list-ignore."""
+"""Parser checks for tests/run_ttsim_regression.sh reading ttsim-skip-list.yaml."""
 
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ import pytest
 
 REPO = Path(__file__).resolve().parents[3]
 SCRIPT = REPO / "tt_metal/tt-llk/tests/run_ttsim_regression.sh"
+LLK_PREFIX = "tt_metal/tt-llk/tests/python_tests/"
 VECTOR_ADD = "quasar/test_vector_add_l1_quasar.py::test_vector_add_l1_quasar"
 
 
@@ -43,59 +44,48 @@ def test_no_ignore_prints_nothing():
     assert result.stdout == ""
 
 
-def test_trailing_comment_and_all_section(tmp_path):
-    ignore_file = tmp_path / "ignore.txt"
+def test_llk_paths_are_stripped_and_other_suites_are_left_alone(tmp_path):
+    ignore_file = tmp_path / "ttsim-skip-list.yaml"
     ignore_file.write_text(
         "\n".join(
             [
-                "# header",
-                "",
-                "[all]  # every arch",
-                "common/test_shared.py::test_shared  # reason",
-                "[quasar]",
-                "quasar/test_other.py::test_other   # some reason",
-                "[blackhole]",
-                "bh_only.py::test_bh",
-                "[wormhole] # wh",
+                "wormhole_b0:",
+                "  - tests/ttnn/unit_tests/test_conv.py  # ttnn, not collected here",
+                f"  - {LLK_PREFIX}test_wh.py::test_wh  # llk",
+                "blackhole:",
+                f"  - {LLK_PREFIX}test_bh.py::test_bh",
+                "quasar:",
+                f"  - {LLK_PREFIX}quasar/test_other.py::test_other",
+                "  - tests/ttnn/unit_tests/test_quasar_ttnn.py",
             ]
         )
         + "\n"
     )
 
-    quasar = _run("-a", "quasar", ignore_file=ignore_file)
+    wormhole = _run("-a", "wormhole", ignore_file=ignore_file)
     blackhole = _run("-a", "blackhole", ignore_file=ignore_file)
+    quasar = _run("-a", "quasar", ignore_file=ignore_file)
 
-    assert quasar.returncode == 0, quasar.stderr
-    assert quasar.stdout.splitlines() == [
-        "common/test_shared.py::test_shared",
-        "quasar/test_other.py::test_other",
-    ]
+    assert wormhole.returncode == 0, wormhole.stderr
+    assert wormhole.stdout.splitlines() == ["test_wh.py::test_wh"]
     assert blackhole.returncode == 0, blackhole.stderr
-    assert blackhole.stdout.splitlines() == [
-        "common/test_shared.py::test_shared",
-        "bh_only.py::test_bh",
-    ]
+    assert blackhole.stdout.splitlines() == ["test_bh.py::test_bh"]
+    assert quasar.returncode == 0, quasar.stderr
+    assert quasar.stdout.splitlines() == ["quasar/test_other.py::test_other"]
 
 
-@pytest.mark.parametrize(
-    "body, message",
-    [
-        ("quasar/foo.py::test_x\n", "ignore entry before any [section]"),
-        ("[riscv]\nfoo.py::test_x\n", "unknown section [riscv]"),
-    ],
-)
-def test_loader_rejects_bad_lists(tmp_path, body, message):
-    ignore_file = tmp_path / "ignore.txt"
-    ignore_file.write_text(body)
+def test_loader_rejects_an_entry_before_any_key(tmp_path):
+    ignore_file = tmp_path / "ttsim-skip-list.yaml"
+    ignore_file.write_text(f"- {LLK_PREFIX}quasar/foo.py::test_x\n")
     result = _run("-a", "quasar", ignore_file=ignore_file)
     assert result.returncode != 0
-    assert message in result.stderr
+    assert "skip entry before any architecture key" in result.stderr
 
 
 def test_missing_ignore_file(tmp_path):
-    result = _run("-a", "quasar", ignore_file=tmp_path / "missing.txt")
+    result = _run("-a", "quasar", ignore_file=tmp_path / "missing.yaml")
     assert result.returncode != 0
-    assert "ignore list not found" in result.stderr
+    assert "ttsim skip list not found" in result.stderr
 
 
 def test_ignore_file_requires_a_path():
