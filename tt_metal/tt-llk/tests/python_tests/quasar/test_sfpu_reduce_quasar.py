@@ -25,8 +25,8 @@ from helpers.perf.core import create_test_or_perf_config
 from helpers.reduce_prod import (
     PROD_DIMENSIONS,
     PROD_STIMULI,
+    check_prod_result,
     generate_prod_stimuli,
-    prod_result_bounds,
 )
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
@@ -248,7 +248,7 @@ def _reduce_test_config_kwargs(
     dest_acc,
     loop_factor=1,
 ):
-    """Kernel configuration shared by the sweep and the Int32 range-end guard."""
+    """TestConfig kwargs for one sfpu_reduce_quasar_test.cpp variant."""
     return {
         "test_name": "sources/quasar/sfpu_reduce_quasar_test.cpp",
         "formats": formats,
@@ -573,7 +573,9 @@ def test_sfpu_reduce_prod_quasar(formats, stimulus, dimension_combinations):
     """Scalar PROD on Quasar: every tile's product must land in its element [0][0].
 
     pow2 stimuli have an exact product, so they must match bit-exactly. near_one allows the fp32
-    chain's error, then models the store's narrowing (see prod_result_bounds).
+    chain's error, then models the store's narrowing (see prod_result_bounds). The kernel runs
+    approximate gelu_init before init_reduce, so a LCONST_0 that init_reduce failed to restore
+    breaks every product.
     """
     dest_acc = _unpack_to_dest_acc(formats.input_format)
     input_dimensions = dimension_combinations
@@ -583,7 +585,6 @@ def test_sfpu_reduce_prod_quasar(formats, stimulus, dimension_combinations):
         format_dict[formats.input_format]
     )
     src_B = torch.zeros_like(src_A)
-    lower, upper = prod_result_bounds(src_A, tile_cnt, stimulus, formats, dest_acc)
 
     configuration = create_test_or_perf_config(
         is_perf=False,
@@ -600,12 +601,4 @@ def test_sfpu_reduce_prod_quasar(formats, stimulus, dimension_combinations):
         ),
     )
     res_from_L1 = configuration.run().result
-
-    res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
-    # Element [0][0] of every tile: the first datum of its face 0.
-    result = res_tensor.view(tile_cnt, ELEMENTS_PER_TILE)[:, 0].to(torch.float64)
-
-    assert torch.all((result >= lower) & (result <= upper)), (
-        f"scalar PROD mismatch ({stimulus}): device={result.tolist()} "
-        f"allowed=[{lower.tolist()}, {upper.tolist()}]"
-    )
+    check_prod_result(res_from_L1, src_A, tile_cnt, stimulus, formats, dest_acc)

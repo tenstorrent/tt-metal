@@ -39,7 +39,8 @@ constexpr std::uint32_t ROWS_PER_TILE = 64;
 constexpr std::uint32_t ROWS_PER_FACE = 16;
 
 // Tile-layout address tables for the manual column MAX/MIN reduce path (calculate_reduce_max_min_uint16).
-// Hoisted to file scope alongside the other reduce kernels for consistency.
+// Hoisted to file scope alongside the other reduce kernels for consistency; scalar PROD
+// (scalar_prod_slice_addr) also reads COL_REDUCE_COLUMN_OFFSETS.
 //   COL_REDUCE_ODD_COLUMNS:    dest-word offset between the even- and odd-column halves of a face.
 //   COL_REDUCE_COLUMN_OFFSETS: even/odd column-half selector per face index (even, odd, even, odd).
 //   COL_REDUCE_FACE_ADDRS:     per-face load addresses for the two vertically adjacent face pairs.
@@ -1792,9 +1793,14 @@ inline void calculate_reduce_max_min_int32_col() {
 // consumer issues at least one instruction after its producer, which covers the 2-cycle SFPMAD latency for the
 // non-SFPMAD consumers that Blackhole does not interlock.
 
-// Dest address of slice `slice`: face slice / 2, even (0) or odd (1) columns by slice % 2.
+constexpr std::uint32_t SCALAR_PROD_COLUMN_PARITIES = 2;  // even and odd columns of a face, one slice each
+constexpr std::uint32_t SCALAR_PROD_SLICES = SCALAR_PROD_COLUMN_PARITIES * NUM_FACES;
+constexpr std::uint32_t SCALAR_PROD_SFPU_COLUMNS = 8;  // SFPU column instances the column fold collapses
+
+// Dest address of slice `slice`: its face, then its even (0) or odd (1) column parity.
 constexpr std::uint32_t scalar_prod_slice_addr(const std::uint32_t slice) {
-    return (slice / 2) * ROWS_PER_FACE + COL_REDUCE_COLUMN_OFFSETS[slice % 2];
+    return (slice / SCALAR_PROD_COLUMN_PARITIES) * ROWS_PER_FACE +
+           COL_REDUCE_COLUMN_OFFSETS[slice % SCALAR_PROD_COLUMN_PARITIES];
 }
 
 /**
@@ -1810,12 +1816,12 @@ inline void scalar_prod_accumulate_slice(const std::uint32_t slice_addr) {
     TT_SFPLOAD(p_sfpu::LREG5, INSTRUCTION_MODE, ADDR_MOD_7, slice_addr + ROWS_PER_LOAD);
     TT_SFPLOAD(p_sfpu::LREG2, INSTRUCTION_MODE, ADDR_MOD_7, slice_addr + 2 * ROWS_PER_LOAD);
     TT_SFPLOAD(p_sfpu::LREG6, INSTRUCTION_MODE, ADDR_MOD_7, slice_addr + 3 * ROWS_PER_LOAD);
-    TTI_SFPMUL(p_sfpu::LREG1, p_sfpu::LREG2, p_sfpu::LCONST_0, p_sfpu::LREG1, 0 /* instr_mod1: no negation */);
-    TTI_SFPMUL(p_sfpu::LREG5, p_sfpu::LREG6, p_sfpu::LCONST_0, p_sfpu::LREG5, 0 /* instr_mod1: no negation */);
-    if constexpr (seed) {
-        TTI_SFPMOV(0 /* imm12 */, p_sfpu::LREG1, p_sfpu::LREG0, 0 /* instr_mod1: plain copy */);
-        TTI_SFPMOV(0 /* imm12 */, p_sfpu::LREG5, p_sfpu::LREG4, 0 /* instr_mod1: plain copy */);
-    } else {
+    // The first slice writes its pair products straight into the accumulators.
+    constexpr std::uint32_t even_dst = seed ? p_sfpu::LREG0 : p_sfpu::LREG1;
+    constexpr std::uint32_t odd_dst = seed ? p_sfpu::LREG4 : p_sfpu::LREG5;
+    TTI_SFPMUL(p_sfpu::LREG1, p_sfpu::LREG2, p_sfpu::LCONST_0, even_dst, 0 /* instr_mod1: no negation */);
+    TTI_SFPMUL(p_sfpu::LREG5, p_sfpu::LREG6, p_sfpu::LCONST_0, odd_dst, 0 /* instr_mod1: no negation */);
+    if constexpr (!seed) {
         TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG0, 0 /* instr_mod1: no negation */);
         TTI_SFPMUL(p_sfpu::LREG4, p_sfpu::LREG5, p_sfpu::LCONST_0, p_sfpu::LREG4, 0 /* instr_mod1: no negation */);
     }
@@ -1826,7 +1832,7 @@ inline void scalar_prod_accumulate_slice(const std::uint32_t slice_addr) {
  *        stage, leaving the product of all 8 columns in every column. Clobbers LREG1.
  */
 inline void scalar_prod_fold_columns() {
-    for (std::uint32_t shift = 4; shift > 0; shift >>= 1) {
+    for (std::uint32_t shift = SCALAR_PROD_SFPU_COLUMNS / 2; shift > 0; shift >>= 1) {
         TTI_SFPSHFT2(0 /* imm12 */, p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
         for (std::uint32_t step = 1; step < shift; step++) {
             TTI_SFPNOP;
@@ -1846,7 +1852,7 @@ inline void scalar_prod_fold_columns() {
 template <InstrModLoadStore INSTRUCTION_MODE>
 inline void perform_reduce_scalar_prod() {
     scalar_prod_accumulate_slice<INSTRUCTION_MODE, true /*seed*/>(scalar_prod_slice_addr(0));
-    for (std::uint32_t slice = 1; slice < 2 * NUM_FACES; slice++) {
+    for (std::uint32_t slice = 1; slice < SCALAR_PROD_SLICES; slice++) {
         scalar_prod_accumulate_slice<INSTRUCTION_MODE, false /*seed*/>(scalar_prod_slice_addr(slice));
     }
 

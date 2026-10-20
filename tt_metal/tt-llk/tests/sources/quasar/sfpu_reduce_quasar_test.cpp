@@ -22,14 +22,14 @@ using namespace ckernel;
 // Three programs in one file, one per thread:
 //   T0 unpack: load every tile of buffer_A from L1 into Dest. One _llk_unpack_unary_operand_
 //              call covers the whole TILE_CNT bank - no FPU datacopy is involved.
-//   T1 math:   run calculate_reduce over Dest. REDUCE_COL is called once per tile, since a
-//              column sits inside one tile. REDUCE_ROW is called once for the whole block,
-//              since a row spans every tile of its tile row.
+//   T1 math:   run calculate_reduce over Dest. REDUCE_COL and REDUCE_SCALAR are called once per
+//              tile, since a column or a whole-tile product sits inside one tile. REDUCE_ROW is
+//              called once for the whole block, since a row spans every tile of its tile row.
 //   T2 pack:   write the reduced tiles back out to buffer_Res in L1.
 //
-// The reduce only writes the axis it collapses onto - row 0 for REDUCE_COL, column 0 for
-// REDUCE_ROW - and leaves the rest of each tile holding leftovers. The Python side compares
-// just that axis.
+// The reduce only writes what it collapses onto - row 0 for REDUCE_COL, column 0 for REDUCE_ROW,
+// element [0][0] for REDUCE_SCALAR - and leaves the rest of each tile holding leftovers. The
+// Python side compares just that part.
 //
 // Perf run types. Operands reach Dest through the unpack-to-dest engine, so there is no SrcA/SrcB
 // handshake here - the Dest dvalid chain is the only producer/consumer token. That means the two
@@ -111,6 +111,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "cfg_defines.h"
 #include "cmath_common.h"
 #include "llk_math_common.h"
+#include "llk_sfpu/ckernel_sfpu_gelu.h"
 #include "llk_sfpu/ckernel_sfpu_reduce.h"
 #include "llk_sfpu/llk_math_eltwise_unary_sfpu_macros.h"
 #include "params.h"
@@ -142,6 +143,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_math_srcAB_hw_configure_<false /*EN_IMPLIED_MATH_FORMAT*/, is_fp32_dest_acc_en>(math_format, math_format);
 
         _llk_math_eltwise_sfpu_init_();
+        if constexpr (POOL_TYPE == ckernel::PoolType::PROD)
+        {
+            // Approximate GELU's LUT overwrites LCONST_0, so PROD only passes if init_reduce restores it.
+            ckernel::sfpu::gelu_init<true /*APPROXIMATION_MODE*/, is_fp32_dest_acc_en>();
+        }
         ckernel::sfpu::init_reduce<POOL_TYPE, REDUCE_MATH_FORMAT, is_fp32_dest_acc_en>();
 
         // Math is the SFPU link in the chain.
@@ -164,7 +170,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 if constexpr (REDUCE_DIM == ckernel::ReduceDim::REDUCE_COL || REDUCE_DIM == ckernel::ReduceDim::REDUCE_SCALAR)
                 {
-                    // A column (or a scalar PROD) lives inside one tile, so each tile reduces onto its own row 0.
+                    // A column or a scalar PROD lives inside one tile, so each tile reduces on its own:
+                    // onto its row 0 (REDUCE_COL) or its element [0][0] (REDUCE_SCALAR).
                     for (std::uint32_t tile = 0; tile < TILE_CNT; ++tile)
                     {
                         SFPU_UNARY_CALL(

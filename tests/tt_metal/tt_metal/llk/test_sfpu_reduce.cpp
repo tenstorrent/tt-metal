@@ -196,9 +196,9 @@ std::vector<double> as_seen_by_device(const std::vector<std::uint32_t>& encoded,
     return values;
 }
 
-// Scalar PROD tiles cycle through three stimuli, by tile index.
-enum class ProdTile { PowerOfTwo, NearOne, Zero };
-constexpr std::uint32_t kProdTileKinds = 3;
+// Scalar PROD tiles cycle through the stimuli before Count, by tile index.
+enum class ProdTile { PowerOfTwo, NearOne, Zero, Count };
+constexpr std::uint32_t kProdTileKinds = static_cast<std::uint32_t>(ProdTile::Count);
 // NearOne magnitudes lie in [1 - spread, 1 + spread]: the fp32 multiply chain rounds, and a 1024-value
 // product stays far inside fp16's range.
 constexpr double kProdNearOneSpread = 0.05;
@@ -268,6 +268,7 @@ std::vector<double> generate_stimulus(
 // Fold `values` (row-major rows x cols) and return only the lane the kernel writes:
 //   Column -> one value per column, for each tile row       (block_rt_dim * num_blocks * cols)
 //   Row    -> one value per row                             (rows)
+//   Scalar -> one product per tile, its element [0][0]      (rows / 32 * cols / 32)
 std::vector<double> gold_sfpu_reduce(
     const std::vector<double>& values, const SfpuReduceConfig& config, std::uint32_t rows, std::uint32_t cols) {
     const auto fold = [&config](double acc, double x, bool first) {

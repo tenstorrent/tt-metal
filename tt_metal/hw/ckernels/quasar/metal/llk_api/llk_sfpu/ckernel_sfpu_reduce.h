@@ -32,6 +32,7 @@ constexpr std::uint32_t REDUCE_ROWS_PER_LOAD = 4;  // face rows one SFPLOAD cove
 constexpr std::uint32_t REDUCE_QUADS_PER_FACE_PAIR = FACE_R_DIM / REDUCE_ROWS_PER_LOAD;
 constexpr std::uint32_t REDUCE_FACE_PAIRS = TILE_NUM_FACES / 2;
 constexpr std::uint32_t REDUCE_SFPU_COLUMNS = 8;         // SFPU column instances a row spans
+constexpr std::uint32_t REDUCE_COLUMN_PARITIES = 2;      // even and odd columns, one SFPLOAD each
 constexpr std::uint32_t REDUCE_COL_EXTENT = TILE_R_DIM;  // rows a column reduce collapses
 constexpr std::uint32_t REDUCE_COLS_PER_TILE = TILE_C_DIM;
 
@@ -410,12 +411,13 @@ inline void reduce_scalar_prod_slice(const std::uint32_t slice_addr) {
     TT_SFPLOAD(p_sfpu::LREG2, MODE, ADDR_MOD_7, 0 /* done */, slice_addr + 2 * REDUCE_ROWS_PER_LOAD);
     TT_SFPLOAD(p_sfpu::LREG6, MODE, ADDR_MOD_7, 0 /* done */, slice_addr + 3 * REDUCE_ROWS_PER_LOAD);
 
-    reduce_combine<PoolType::PROD, false /* IS_INT */, p_sfpu::LREG1, p_sfpu::LREG2>();
-    reduce_combine<PoolType::PROD, false /* IS_INT */, p_sfpu::LREG5, p_sfpu::LREG6>();
     if constexpr (SEED) {
-        TTI_SFPMOV(p_sfpu::LREG1, p_sfpu::LREG0, 0 /* instr_mod1: plain copy */);
-        TTI_SFPMOV(p_sfpu::LREG5, p_sfpu::LREG4, 0 /* instr_mod1: plain copy */);
+        // SFPMUL is dest = a * b + c, so c = 0.0 makes it dest = a * b.
+        TTI_SFPMUL(p_sfpu::LREG1, p_sfpu::LREG2, p_sfpu::LCONST_0, p_sfpu::LREG0, 0 /* instr_mod1: no negation */);
+        TTI_SFPMUL(p_sfpu::LREG5, p_sfpu::LREG6, p_sfpu::LCONST_0, p_sfpu::LREG4, 0 /* instr_mod1: no negation */);
     } else {
+        reduce_combine<PoolType::PROD, false /* IS_INT */, p_sfpu::LREG1, p_sfpu::LREG2>();
+        reduce_combine<PoolType::PROD, false /* IS_INT */, p_sfpu::LREG5, p_sfpu::LREG6>();
         reduce_combine<PoolType::PROD, false /* IS_INT */, p_sfpu::LREG0, p_sfpu::LREG1>();
         reduce_combine<PoolType::PROD, false /* IS_INT */, p_sfpu::LREG4, p_sfpu::LREG5>();
     }
@@ -437,12 +439,14 @@ inline void reduce_scalar_prod_slice(const std::uint32_t slice_addr) {
 template <DataFormat FORMAT>
 inline void reduce_scalar_prod_tile() {
     constexpr std::uint32_t MODE = reduce_sfpmem_mode<FORMAT>();
-    constexpr std::uint32_t SLICES = 2 * TILE_NUM_FACES;
+    constexpr std::uint32_t SLICES = REDUCE_COLUMN_PARITIES * TILE_NUM_FACES;
 
     reduce_scalar_prod_slice<MODE, true /* SEED */>(p_sfpu::col_offset::EVEN_COL);
     for (std::uint32_t slice = 1; slice < SLICES; slice++) {
-        const std::uint32_t parity = (slice % 2 == 0) ? p_sfpu::col_offset::EVEN_COL : p_sfpu::col_offset::ODD_COL;
-        reduce_scalar_prod_slice<MODE, false /* SEED */>((slice / 2) * REDUCE_FACE_STRIDE + parity);
+        const std::uint32_t face = slice / REDUCE_COLUMN_PARITIES;
+        const std::uint32_t parity =
+            (slice % REDUCE_COLUMN_PARITIES == 0) ? p_sfpu::col_offset::EVEN_COL : p_sfpu::col_offset::ODD_COL;
+        reduce_scalar_prod_slice<MODE, false /* SEED */>(face * REDUCE_FACE_STRIDE + parity);
     }
 
     reduce_combine<PoolType::PROD, false /* IS_INT */, p_sfpu::LREG0, p_sfpu::LREG4>();
@@ -450,9 +454,8 @@ inline void reduce_scalar_prod_tile() {
     TTI_SFPTRANSP;
     reduce_combine<PoolType::PROD, false /* IS_INT */, p_sfpu::LREG0, p_sfpu::LREG1>();
     reduce_combine<PoolType::PROD, false /* IS_INT */, p_sfpu::LREG2, p_sfpu::LREG3>();
-    reduce_combine<PoolType::PROD, false /* IS_INT */, p_sfpu::LREG0, p_sfpu::LREG2>();
+    TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LCONST_0, REDUCE_ACC_REG, 0 /* instr_mod1: no negation */);
 
-    TTI_SFPMOV(p_sfpu::LREG0, REDUCE_ACC_REG, 0 /* instr_mod1: plain copy */);
     reduce_row_fold_columns<PoolType::PROD, false /* IS_INT */>();
 
     TTI_SFPSTORE(REDUCE_ACC_REG, MODE, ADDR_MOD_7, 0 /* done */, p_sfpu::col_offset::EVEN_COL);
@@ -463,17 +466,16 @@ inline void reduce_scalar_prod_tile() {
 // ============================================================================
 
 /**
- * @brief Check a reduce configuration at compile time.
+ * @brief Check a reduce configuration at compile time; for PROD, also restore LCONST_0 to 0.0.
  *
- * Nothing is programmed here. The SFPU config register, ADDR_MOD_7 and the RWC counters are all
- * set up by @ref _llk_math_eltwise_sfpu_init_, and the reduce addresses Dest with immediates
- * measured from the section base @ref _llk_math_eltwise_sfpu_start_ writes. No reduce path claims
- * a programmable constant register or a replay slot, so this cannot disturb a neighbouring op's
- * setup.
+ * The SFPU config register, ADDR_MOD_7 and the RWC counters are all set up by
+ * @ref _llk_math_eltwise_sfpu_init_, and the reduce addresses Dest with immediates measured from
+ * the section base @ref _llk_math_eltwise_sfpu_start_ writes. No reduce path claims a replay slot.
  *
- * The reverse is not guaranteed. The folds read LCONST_0 / LCONST_1 (LREG9/10) at their reset
- * defaults, and SFPCONFIG can overwrite those - gelu_init in approximate mode does - while
- * @c _init_sfpu_config_reg_ restores only SFPU_CTRL and LREG11.
+ * The folds read LCONST_0 / LCONST_1 (LREG9/10) as 0.0 / 1.0, and SFPCONFIG can overwrite those -
+ * gelu_init in approximate mode loads its LUT there - while @c _init_sfpu_config_reg_ restores
+ * only SFPU_CTRL and LREG11. PROD therefore reloads LCONST_0, the addend of every SFPMUL; the other
+ * pools still rely on the reset defaults.
  *
  * @tparam POOL_TYPE: Reduction operator, values = <SUM/AVG/MAX/MIN/PROD>; PROD takes float formats only
  * @tparam FORMAT: Math-side data format of the operand
@@ -499,6 +501,10 @@ inline void init_reduce([[maybe_unused]] const std::uint32_t block_ct_dim = 1) {
     static_assert(
         !reduce_is_32_bit_format<FORMAT>() || IS_FP32_DEST_ACC_EN,
         "a 32-bit reduce format requires a 32-bit Dest (IS_FP32_DEST_ACC_EN)");
+
+    if constexpr (POOL_TYPE == PoolType::PROD) {
+        math::_sfpu_load_config32_(p_sfpu::LCONST_0, 0 /* upper16 */, 0 /* lower16 */);
+    }
 }
 
 /**
