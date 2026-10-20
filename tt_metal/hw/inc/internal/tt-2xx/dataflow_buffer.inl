@@ -529,19 +529,6 @@ inline void DataflowBuffer<Pap, Cap>::finish_impl() {
 }
 
 template <dfb::AccessPattern Pap, dfb::AccessPattern Cap>
-inline DataflowBuffer<Pap, Cap>::~DataflowBuffer() {
-    if (drain_owner_ != this) {
-        return;
-    }
-    finish_impl();
-#ifndef COMPILE_FOR_TRISC
-    if (has_outbound_writes_) {
-        write_barrier_impl(noc_index);
-    }
-#endif
-}
-
-template <dfb::AccessPattern Pap, dfb::AccessPattern Cap>
 inline uint32_t DataflowBuffer<Pap, Cap>::get_write_ptr_impl() const {
 #if DFB_IS_COMPUTE_MATH
     return 0;
@@ -819,7 +806,9 @@ inline void DataflowBuffer<Pap, Cap>::lock_release_impl(ScopedLockRegion region,
 }
 
 template <dfb::AccessPattern Pap, dfb::AccessPattern Cap>
-inline void DataflowBuffer<Pap, Cap>::write_barrier_impl([[maybe_unused]] const Noc& noc) const {}
+inline void DataflowBuffer<Pap, Cap>::write_barrier_impl(const Noc& noc) const {
+    write_barrier_impl(noc.get_noc_id());
+}
 
 // Consumer barrier: waits outbound write from DFB writes to arrive at their destination
 // Falls back to a full barrier when no txn_ids are assigned
@@ -944,7 +933,6 @@ inline void DataflowBuffer<Pap, Cap>::commit_implicit_write(uint32_t num_tiles) 
     } else {
         dfb_dm_advance_slot(local_dfb_interface_, block);
     }
-    drain_owner_->has_outbound_writes_ = true;
     ctiles_written_ += block;
     if (ctiles_written_ % local_dfb_interface_.num_entries_per_txn_id == 0) {
         ctxn_id_index_ = (ctxn_id_index_ + 1) % local_dfb_interface_.num_txn_ids;
