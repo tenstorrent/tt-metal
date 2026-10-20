@@ -44,7 +44,18 @@ from .moe_prefill import PrefillExperts
 from .proj_stream import RouterScoreStream
 
 
-def expert_weights_host(experts, tp, inter_local, expert_dtype, layer_idx=None, mse=True):
+def expert_quant(expert_dtype):
+    """How bfloat4_b experts are prepared: "mse" (default, bfp_mse_prepare), "gptq" (tests/perf/gptq_experts.py,
+    read from MIMO_EXPERT_PREP_DIR) or "" (the stock packer). MIMO_EXPERT_QUANT picks it; MIMO_EXPERT_MSE=0 is
+    "" (older switch). Other dtypes always use the stock packer."""
+    if expert_dtype != ttnn.bfloat4_b or os.environ.get("MIMO_EXPERT_MSE", "1") == "0":
+        return ""
+    quant = os.environ.get("MIMO_EXPERT_QUANT", "mse")
+    assert quant in ("", "stock", "mse", "gptq"), quant
+    return "" if quant == "stock" else quant
+
+
+def expert_weights_host(experts, tp, inter_local, expert_dtype, layer_idx=None, mse=True, quant=None):
     """Host expert weights in device layout: (w_gate_up [1, E, H, tp * 2 * I_local], w_down [1, E, I, H]).
 
     gate/up [E, I, H] -> one tensor whose chip-c slice holds [gate_c | up_c], so one matmul makes both; down
@@ -54,7 +65,9 @@ def expert_weights_host(experts, tp, inter_local, expert_dtype, layer_idx=None, 
     prep_dir = os.environ.get("MIMO_EXPERT_PREP_DIR")
     path = os.path.join(prep_dir, f"layer{layer_idx}.pt") if prep_dir and layer_idx is not None else None
     mse = mse and expert_dtype == ttnn.bfloat4_b
-    if mse and path and os.path.exists(path):
+    if quant == "gptq":
+        assert path and os.path.exists(path), f"gptq experts need tests/perf/gptq_experts.py output at {path}"
+    if (mse or quant == "gptq") and path and os.path.exists(path):
         saved = torch.load(path)
         return saved["w_gate_up"], saved["w_down"]
     g = experts["gate_proj"].transpose(1, 2)
@@ -90,10 +103,9 @@ class TtMiMoMoE:
         self.router_mm = DramShardedMatmul(
             plan, self.hidden, self.num_experts, out_dtype=ttnn.float32, compute_kernel_config=self.router_config
         )
-        # bfloat4_b experts are stored MSE-prepared (bfp_mse_prepare): same format and speed, lower error.
-        # MIMO_EXPERT_MSE=0 keeps the stock packer's values (A/B).
-        self.expert_mse = expert_dtype == ttnn.bfloat4_b and os.environ.get("MIMO_EXPERT_MSE", "1") != "0"
-        tag = "_mse" if self.expert_mse else ""
+        # bfloat4_b experts are stored prepared (expert_quant): same format and speed, lower error.
+        self.expert_quant = expert_quant(expert_dtype)
+        tag = f"_{self.expert_quant}" if self.expert_quant else ""
         expert_cache = [cache_name(cache_dir, prefix, n + tag) for n in ("w_gate_up", "w_down")]
         if all(cache_exists(f, expert_dtype) for f in expert_cache):
             experts = None  # already converted: skip dequantizing 256 experts on the host
@@ -104,7 +116,7 @@ class TtMiMoMoE:
             bias = router["e_score_correction_bias"].float().reshape(1, 1, 1, -1)
         if experts is not None:
             w_gate_up, w_down = expert_weights_host(
-                experts, tp, self.inter_local, expert_dtype, layer_idx, self.expert_mse
+                experts, tp, self.inter_local, expert_dtype, layer_idx, self.expert_quant == "mse", self.expert_quant
             )
 
         rep = plan.replicate()

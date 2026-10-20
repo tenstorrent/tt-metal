@@ -31,6 +31,7 @@ from .attention import TtMiMoAttention
 from .common import TILE, MeshPlan, as_weight, cache_name, compute_config, pad_to
 from .decoder import TtMiMoDecoderLayer, TtRMSNorm
 from .greedy_head import GreedyHead
+from .moe import expert_quant
 from .moe_stream import zero_output
 from .rope import MiMoRotarySetup
 
@@ -97,13 +98,13 @@ class TtMiMoModel:
         expert_dtype=ttnn.bfloat4_b,
         lm_head_dtype=ttnn.bfloat8_b,
         kv_dtype=ttnn.bfloat8_b,
-        logits_dtype=ttnn.float32,
+        logits_dtype=None,
         num_links=2,
     ):
         """``ckpt`` may be None when ``cache_dir`` already holds every tensor (a later DP replica).
         ``max_prefill_chunk``: the default prefill chunk (a multiple of ``block_size``).
         ``logits_dtype``: fp32 keeps near-tied logits apart; in bf16 (a step of 0.125 at the usual top logit of
-        16-32) they often tie exactly and the lowest token id wins."""
+        16-32) they often tie exactly and the lowest token id wins. Default fp32 (MIMO_LOGITS_FP32=0: bf16)."""
         assert max_prefill_chunk % block_size == 0
         self.mesh_device = mesh_device
         self.cfg = cfg
@@ -151,13 +152,16 @@ class TtMiMoModel:
         del lm
         mark(top)
 
+        # Prepared bfloat4_b experts are their own cache files (moe.TtMiMoMoE), so their own layer tag.
+        quant = expert_quant(expert_dtype)
+        expert_tag = f"_{quant}" if quant else ""
         self.layers = []
         for i in range(self.num_layers):
             t0 = time.time()
             # Bump LAYER_CACHE_LAYOUT when a layer's cached tensor set changes, so a warm cache from an older
             # layout is rebuilt instead of loaded with tensors missing. Unchanged tensors (e.g. experts) are
             # still loaded from their cache files; lazy experts are only dequantized when they are missing.
-            tag = f"layer{i}_tp{plan.tp}_{self.LAYER_CACHE_LAYOUT}"
+            tag = f"layer{i}_tp{plan.tp}_{self.LAYER_CACHE_LAYOUT}{expert_tag}"
             weights = None if warm(tag) else load_layer_weights(ckpt, cfg, i, lazy_experts=True)
             self.layers.append(
                 TtMiMoDecoderLayer(
@@ -178,8 +182,12 @@ class TtMiMoModel:
                 f"[{tuple(mesh_device.shape)} id={id(mesh_device):x}] layer {i} ready in {time.time() - t0:.1f}s"
             )
 
-        self.lm_config = compute_config(ttnn.MathFidelity.HiFi4)
+        if logits_dtype is None:
+            logits_dtype = ttnn.float32 if os.environ.get("MIMO_LOGITS_FP32", "1") != "0" else ttnn.bfloat16
         self.logits_dtype = logits_dtype
+        self.lm_config = compute_config(
+            ttnn.MathFidelity.HiFi4 if logits_dtype == ttnn.float32 else ttnn.MathFidelity.HiFi2
+        )
         self.kv_caches = None
         self.page_table_tt = None
         # Host copies of the model's own page tables ({is_swa: int32 [tp, max_batch, blocks]}) and each one's scratch
