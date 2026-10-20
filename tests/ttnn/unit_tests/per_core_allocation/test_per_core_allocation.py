@@ -678,7 +678,6 @@ def test_triangle_allocation_then_uniform_sharded(device):
 
 @requires_hybrid_allocator
 def test_per_core_view_is_rejected(device):
-    """A row-major view of a per-core tensor used to come back as a lockstep tensor at L1 address 0 (#58466)."""
     core = ttnn.CoreCoord(0, 0)
     shard_spec = ttnn.ShardSpec(
         ttnn.CoreRangeSet([ttnn.CoreRange(core, core)]), [64, 64], ttnn.ShardOrientation.ROW_MAJOR

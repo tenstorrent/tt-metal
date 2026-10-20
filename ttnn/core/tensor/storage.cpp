@@ -53,8 +53,6 @@ void validate_mesh_coordinates(
     }
 }
 
-// A per-core MeshBuffer keeps its addresses on the device buffers, while a reinterpretation is created at the
-// single mesh address, so it would alias L1 address 0 on the shard cores (#58466).
 MeshTensor reject_per_core_source(const DeviceStorage& owning_storage, MeshTensor reinterpreted_mesh_tensor) {
     TT_FATAL(
         !(owning_storage.is_allocated() &&
