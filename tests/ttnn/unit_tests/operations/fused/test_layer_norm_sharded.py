@@ -6,7 +6,7 @@ import pytest
 import torch
 import ttnn
 
-from models.common.utility_functions import is_watcher_enabled, run_for_wormhole_b0_or_blackhole
+from tt_py_test_utils_common.utility_functions import is_watcher_enabled, run_for_wormhole_b0_or_blackhole
 from tests.ttnn.unit_tests.operations.fused.sharded_test_utils import (
     layernorm_test_main,
     single_stage_param_sets,
