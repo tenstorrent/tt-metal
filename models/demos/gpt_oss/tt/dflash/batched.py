@@ -326,8 +326,9 @@ class BatchedKVWrite:
         self.core_list = [ttnn.CoreCoord(x, y) for y in range(grid.y) for x in range(grid.x)][:n]
         self.cores = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in self.core_list])
 
-    def __call__(self, ks, vs, caches, pos_ui, page_table):
-        """ks / vs: per layer [1, kv_heads, rows, hd]; caches: per layer (k_cache, v_cache)."""
+    def __call__(self, ks, vs, caches, pos_ui, page_table, src_head_stride=0):
+        """ks / vs: per layer [1, kv_heads, rows, hd]; caches: per layer (k_cache, v_cache). src_head_stride: ks / vs
+        are one tensor each for all layers, layer l's heads from head l src_head_stride."""
         from ..fused_decode.boundary import KERNEL_DIR
 
         n = len(caches)
@@ -345,6 +346,8 @@ class BatchedKVWrite:
             rt[c.x][c.y] = [arg0, ks[0].buffer_address(), vs[0].buffer_address(), k0.buffer_address(),
                             v0.buffer_address(), pos_ui.buffer_address(), page_table.buffer_address()] + more  # fmt: skip
         defines = [("KV_LAYERS", str(n))] if n > 1 else []
+        if src_head_stride:
+            defines.append(("KV_SRC_HSTRIDE", str(src_head_stride)))
         bf8 = k0.dtype == ttnn.bfloat8_b  # the target's cache: rows packed to BFP8_b in the kernel
         if bf8:
             defines.append(("KV_BF8", "1"))
@@ -371,6 +374,7 @@ class BatchedKVWrite:
             format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=0, data_format=ttnn.bfloat16, page_size=scratch)],
         )
         io = [pos_ui, page_table] + [t for l in range(n) for t in (ks[l], vs[l], caches[l][0], caches[l][1])]
+        io = [t for i, t in enumerate(io) if all(t is not u for u in io[:i])]
         ttnn.generic_op(io, ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=[cb]))
 
 
@@ -473,6 +477,41 @@ class BatchedDraft:
                     down=put(w[m + "down_proj.weight"].T, rows, dtype=wdt),
                 )
             )
+        # the context pass's joint K / V projection for every layer: [q stubs (nkv heads per layer) | k | v], each part
+        # layer-major (nlp_create_qkv_heads with L nkv heads of each), one matmul + one heads op + one norm + one
+        # RoPE for the 8 layers instead of 8 of each; the per-layer k_norm weights as a per-head multiplier
+        if os.environ.get("B32_CTX_JOINT", "1") == "1":
+            parts = [[], [], []]
+            bparts = [[], [], []]
+            knw = []
+            for i in range(self.layers):
+                a = f"layers.{i}.self_attn."
+                q = reverse_permute(w[a + "q_proj.weight"], D * nq, D * nq * hd, self.hidden)
+                k = reverse_permute(w[a + "k_proj.weight"], D * nkv, D * nkv * hd, self.hidden)
+                v = w[a + "v_proj.weight"]
+                qb = reverse_permute(w[a + "q_proj.bias"][:, None], D * nq, D * nq * hd, 1)[:, 0]
+                kb = reverse_permute(w[a + "k_proj.bias"][:, None], D * nkv, D * nkv * hd, 1)[:, 0]
+                vb = w[a + "v_proj.bias"]
+                qh, kh = nq * hd, nkv * hd
+                for j, (t, tb) in enumerate(((q, qb), (k, kb), (v, vb))):
+                    rows_per = qh if j == 0 else kh
+                    parts[j].append([t[d * rows_per : d * rows_per + kh] for d in range(D)])
+                    bparts[j].append([tb[d * rows_per : d * rows_per + kh] for d in range(D)])
+                knw.append(reverse_permute_1d(w[a + "k_norm.weight"]).float())
+            joint = torch.cat(
+                [torch.cat([parts[j][i][d] for j in range(3) for i in range(self.layers)]) for d in range(D)]
+            )
+            jb = torch.cat(
+                [torch.cat([bparts[j][i][d] for j in range(3) for i in range(self.layers)]) for d in range(D)]
+            )
+            self.kv_joint = put(joint.T, cols, dtype=wdt)
+            self.kv_joint_b = put(jb.reshape(1, -1), cols)
+            kn = torch.stack([knw[i] for i in range(self.layers) for _ in range(nkv)]).reshape(
+                1, self.layers * nkv, 1, hd
+            )
+            self.knorm_joint = put(kn, dtype=ttnn.bfloat16)
+        else:
+            self.kv_joint = None
         self.block_size = block_size
         self.num_blocks = -(-(-(-(max_positions + self.block) // block_size)) // 8) * 8  # (32-byte page-table rows)
         user_tables = torch.arange(users * self.num_blocks, dtype=torch.int32).reshape(users, self.num_blocks)
@@ -484,6 +523,8 @@ class BatchedDraft:
         self.res_mc = width_sharded_memory_config(mesh, self.hidden, _TPAllReduce.CORES, rows=self.rows)
         self.norm_pc = sharded_norm_program_config(self.res_mc)
         self.kv_write = BatchedKVWrite(mesh, users, self.block, nkv, hd, block_size)
+        # (the context pass's 8-layer write: one core per (user, kv head))
+        self.kv_write_ctx = BatchedKVWrite(mesh, users, self.block, nkv, hd, block_size, head_split=True)
         # attention: block attention (b1's kernels, uniform), 16 users per program on 4 cores each
         # (16 users x 1 history slice: the window bounds every core's history to ~33 chunks; vs 8 x 3: round 25.0 -> 24.8
         # ms at ISL 256, 25.8 -> 25.4 at 1024)
@@ -633,9 +674,24 @@ class BatchedDraft:
     def context(self, features, pos, rot):
         """features: device [1, 1, rows, 5 * hidden] (row 32 i + u); pos: per-step positions; rot: per-row (cos, sin)."""
         ctx = self._linear(features, self.fc_full, ck=self.fc_ck)
-        ctx2 = ttnn.rms_norm(ctx, epsilon=self.eps, weight=self.hidden_norm, compute_kernel_config=self.ck)
-        ctx.deallocate(True)
+        if os.environ.get("B32_CTX_NORM_SHARDED", "1") == "1":
+            # the hidden norm on the residual's 90 width shards (interleaved: 8 cores, 44 us)
+            cs = ttnn.to_memory_config(ctx, self.res_mc)
+            ctx.deallocate(True)
+            n = ttnn.rms_norm(
+                cs, epsilon=self.eps, weight=self.hidden_norm, program_config=self.norm_pc, memory_config=self.res_mc,
+                compute_kernel_config=self.ck,
+            )  # fmt: skip
+            cs.deallocate(True)
+            ctx2 = ttnn.to_memory_config(n, self.act_mc)
+            n.deallocate(True)
+        else:
+            ctx2 = ttnn.rms_norm(ctx, epsilon=self.eps, weight=self.hidden_norm, compute_kernel_config=self.ck)
+            ctx.deallocate(True)
         ks, vs = [], []  # every layer's K / V, then one write program for the 8 layers
+        if self.kv_joint is not None:
+            self._context_joint(ctx2, pos, rot)
+            return
         kv_only = os.environ.get("B32_CTX_KV_ONLY", "1") == "1"
         for li in range(self.layers):
             L = self.L[li]
@@ -652,6 +708,28 @@ class BatchedDraft:
         self.kv_write(ks, vs, self.caches, pos[self.block], self.page_table)
         for t in ks + vs:
             t.deallocate(True)
+
+    def _context_joint(self, ctx2, pos, rot):
+        """Every layer's K / V of the context rows in one projection (kv_joint), heads op, norm, RoPE and cache write."""
+        L, nkv = self.layers, self.nkv
+        qkv = self._linear(ctx2, self.kv_joint, self.kv_joint_b)
+        ctx2.deallocate(True)
+        q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+            qkv, num_heads=L * nkv, num_kv_heads=L * nkv, transpose_k_heads=False, memory_config=ttnn.L1_MEMORY_CONFIG
+        )
+        qkv.deallocate(True)
+        q.deallocate(True)
+        n = ttnn.rms_norm(k, epsilon=self.eps, compute_kernel_config=self.ck)
+        k.deallocate(True)
+        nw = ttnn.multiply(n, self.knorm_joint, memory_config=ttnn.L1_MEMORY_CONFIG)
+        n.deallocate(True)
+        trans = self.rope.get_both_trans_mats()["prefill"]
+        k2 = ttnn.experimental.rotary_embedding_llama(nw, rot[0], rot[1], trans, is_decode_mode=False,
+                                                      memory_config=ttnn.L1_MEMORY_CONFIG)  # fmt: skip
+        nw.deallocate(True)
+        self.kv_write_ctx([k2] * L, [v] * L, self.caches, pos[self.block], self.page_table, src_head_stride=nkv)
+        k2.deallocate(True)
+        v.deallocate(True)
 
     def draft(self, tokens, pos, rot, bound):
         """tokens: device [1, rows] UINT32 noise block (row 32 i + u: user u's last token for i = 0, else the mask).
@@ -962,6 +1040,9 @@ class BatchedVerify:
             ttnn.L1_MEMORY_CONFIG if os.environ.get("B32_MOE_IN_L1", "1") == "1" else ttnn.DRAM_MEMORY_CONFIG
         )
         self.attn_mc = ttnn.L1_MEMORY_CONFIG if os.environ.get("B32_ATTN_L1", "1") == "1" else ttnn.DRAM_MEMORY_CONFIG
+        # the drafter's context features in BFP8 (the context fc multicasts them to its 90 cores: 275 -> 218 us;
+        # acceptance in its spread; B32_FEAT_DT=bf16: BF16)
+        self.feat_dt = {"bf16": ttnn.bfloat16, "bf8": ttnn.bfloat8_b}[os.environ.get("B32_FEAT_DT", "bf8")]
         self.kv_write = BatchedKVWrite(self.mesh, users, block, self.local_kv_heads, hd, kv_cache[1][0].shape[2],
                                        head_split=True)  # fmt: skip
 
@@ -1231,7 +1312,7 @@ class BatchedVerify:
             res2.deallocate(True)
             moe.deallocate(True)
             if li in self.capture_layers:
-                feats.append(ttnn.to_memory_config(res, ttnn.DRAM_MEMORY_CONFIG))
+                feats.append(ttnn.to_memory_config(res, ttnn.DRAM_MEMORY_CONFIG, dtype=self.feat_dt))
         features = ttnn.concat(feats, dim=-1)
         for t in feats:
             t.deallocate(True)

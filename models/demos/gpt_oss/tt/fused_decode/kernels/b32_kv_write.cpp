@@ -17,6 +17,7 @@
 // 16-value face row, so a row's write leaves the tile's other rows untouched; rounded half up as the device packer of
 // paged_fused_update_cache: the same cache bytes).
 //
+// KV_SRC_HSTRIDE: one source tensor pair for every layer, layer l's kv heads from head l KV_SRC_HSTRIDE.
 // runtime args: [user, k_src, v_src, k_cache, v_cache, pos, page_table, (k_cache, v_cache) of layers 1 .. L - 1]
 // compile-time args: [cb_scr, M, kv_heads, head_tiles, block, pt_row_bytes, users, accessors (k_cache, v_cache, pos,
 // page_table, k_src)]
@@ -158,7 +159,13 @@ void kernel_main() {
                 const uint32_t src_off = (sr < 16 ? 0 : 1024) + (sr % 16) * 32;
                 for (uint32_t h = h_lo; h < h_hi; ++h) {
                     for (uint32_t t = 0; t < head_tiles; ++t) {
-                        const uint64_t s_ = s_s.get_noc_addr((h * row_tiles + R / 32) * head_tiles + t) + src_off;
+#ifdef KV_SRC_HSTRIDE
+                        // one source for every layer (the context pass's joint projection): layer l's heads from l HS
+                        const uint32_t hs = h + l * KV_SRC_HSTRIDE;
+#else
+                        const uint32_t hs = h;
+#endif
+                        const uint64_t s_ = s_s.get_noc_addr((hs * row_tiles + R / 32) * head_tiles + t) + src_off;
 #ifdef KV_BF8
                         const uint32_t d = stage_l1(l, r, h, t);
                         for (uint32_t f = 0; f < 2; ++f) {
