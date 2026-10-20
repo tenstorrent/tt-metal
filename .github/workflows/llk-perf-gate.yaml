@@ -182,11 +182,18 @@ jobs:
         with:
           python-version: '3.10'
       - run: pip install pandas
-      - name: Download the stage-1 reports
+      - name: Download the stage-1 Wormhole report
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
-          pattern: llk-perf-gate-report-*
-          path: reports
+          pattern: llk-perf-gate-report-wormhole
+          merge-multiple: true
+          path: reports/wormhole
+      - name: Download the stage-1 Blackhole report
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          pattern: llk-perf-gate-report-blackhole
+          merge-multiple: true
+          path: reports/blackhole
       - name: Download the PR head's Wormhole data
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
@@ -204,7 +211,7 @@ jobs:
         run: |
           ARCHES=()
           for ARCH in wormhole blackhole; do
-            CANDIDATES="reports/llk-perf-gate-report-${ARCH}/perf_gate_report.regressions.csv"
+            CANDIDATES="reports/${ARCH}/perf_gate_report.regressions.csv"
             [ -f "$CANDIDATES" ] || continue
             mkdir -p "nodes/${ARCH}"
             python3 tt_metal/tt-llk/perf/placement_check.py nodes \
