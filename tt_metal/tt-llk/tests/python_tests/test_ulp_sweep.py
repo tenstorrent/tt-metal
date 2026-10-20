@@ -19,6 +19,7 @@ from datetime import date
 
 import pytest
 import torch
+import yaml
 from helpers.chip_architecture import ChipArchitecture
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.llk_params import ApproximationMode, DestAccumulation, MathOperation
@@ -1425,12 +1426,17 @@ def test_a_not_measurable_verdict_keeps_the_measurable_lanes_maximum(table):
     both figures as fields, and the readers that judge them -- ulp_budget_diff's
     ``recorded_nonfinite`` and ``recorded_max`` -- must find each in the row the emitter
     actually writes; read through them rather than through the fields. The registry
-    must load that row too: only its loader holds the rule that ``nonfinite`` belongs on
-    a ``metric: tolerance`` row, so drift would first show at the next import."""
+    must load that row too: ``parse_table`` already runs the shared provenance check,
+    and only the registry resolves the key fields and ``metric`` to enums and builds the
+    ``AccuracyContract``."""
     from helpers.sfpu_accuracy_budget import Metric, _load_table
     from helpers.ulp import ulp_distance, ulp_stats
     from helpers.ulp_budget_diff import parse_table, recorded_max, recorded_nonfinite
-    from helpers.ulp_sweep import nonfinite_verdict, record_unmeasurable
+    from helpers.ulp_sweep import (
+        nonfinite_reason,
+        nonfinite_verdict,
+        record_unmeasurable,
+    )
 
     src = torch.tensor([1.0, 2.0, 3.0, 4.0], dtype=torch.bfloat16)
     golden = torch.tensor([1.0, 2.0, 3.0, 4.0], dtype=torch.bfloat16)
@@ -1443,6 +1449,9 @@ def test_a_not_measurable_verdict_keeps_the_measurable_lanes_maximum(table):
     # worst of the rest, which the headroom report holds it to.
     assert (verdict.nonfinite, verdict.measured) == (1, 1)  # 3.0 -> 3.015625: 1 step
     assert "x=2: 2 -> inf" in verdict.why
+    assert nonfinite_reason(verdict, 3).endswith(
+        ": 1 such lane(s); max 1 ULP over the 3 measurable lane(s)"
+    )
 
     # And as the readers read them back from the row the emitter writes.
     record("Gelu", _CELL, 5)
@@ -1852,6 +1861,26 @@ def test_an_anchored_key_line_keeps_its_anchor_when_its_op_is_emitted(table):
     assert BudgetTable.load(table).rows_of("Neg")[0].max_ulp == 3
 
 
+def test_a_rewrite_that_would_not_load_leaves_the_table_as_it_was(table):
+    """A row anchor inside an emitted block is gone from the rewrite while `Neg`'s alias
+    still names it. The table was written first and loaded after, so the refusal left
+    one no LLK test could import; it is now loaded before it is written."""
+    text = (
+        "Abs:\n"
+        "  - &base {in: Float16, out: Float16, max_ulp: 7, measured: 6, run: 2026-09-01}\n"
+        "\n"
+        "Neg:\n"
+        "  - *base\n"
+    )
+    table.write_text(text, encoding="utf-8")
+    _record_grid("Abs", "Float16", "Float16", 2)
+    with _refuses(ValueError) as caught:
+        write_table(table, _RUN)
+    assert "left as it was: found undefined alias" in str(caught.value)
+    assert isinstance(caught.value.__cause__, yaml.YAMLError)
+    assert table.read_text(encoding="utf-8") == text
+
+
 def test_a_cell_that_ranked_no_lane_stays_without_a_figure_when_a_number_arrives(table):
     """A no-lane verdict (`nonfinite == 0`) given a later reading's figure was written as
     `{metric: tolerance, measured: N}` with no `nonfinite`: an ordinary demotion to every
@@ -1874,7 +1903,7 @@ def test_a_cell_whose_every_claimed_lane_is_non_finite_records_no_figure():
     """Over no ranked lane `ulp_stats` reads `max: 0`, which written as `measured: 0`
     would claim the rest of the cell bit-exact; there is no rest."""
     from helpers.ulp import ulp_distance, ulp_stats
-    from helpers.ulp_sweep import nonfinite_verdict
+    from helpers.ulp_sweep import nonfinite_reason, nonfinite_verdict
 
     src = torch.tensor([1.0, 2.0], dtype=torch.bfloat16)
     golden = torch.tensor([1.0, 2.0], dtype=torch.bfloat16)
@@ -1883,6 +1912,9 @@ def test_a_cell_whose_every_claimed_lane_is_non_finite_records_no_figure():
     stats = ulp_stats(ulp_distance(golden, result), ~overflowed)
     verdict = nonfinite_verdict(overflowed, src, golden, result, stats)
     assert (verdict.nonfinite, verdict.measured) == (2, None)
+    # The failure message names no worst lane either ("max None ULP over 0 lanes").
+    reason = nonfinite_reason(verdict, 0)
+    assert reason.endswith(": 2 such lane(s)") and "max" not in reason, reason
 
 
 def test_the_plugin_prints_the_emit_summary_on_a_clean_session(

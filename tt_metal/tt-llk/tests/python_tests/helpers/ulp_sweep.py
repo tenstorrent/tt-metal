@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple, Union
 
 import torch
+import yaml
 from helpers.format_config import DataFormat
 from helpers.stimuli_generator import StimuliSpec
 from helpers.ulp_provenance import (
@@ -929,10 +930,11 @@ class Unmeasurable:
 
     *nonfinite* is how many lanes disagreed with the golden about being finite -- what
     makes the cell unmeasurable, and the count the headroom report (from #57527) fails a
-    run on when it grows; 0 when no lane could be ranked at all. *measured* is the worst
-    lane over the lanes that *could* be ranked -- usually tens of thousands of them,
-    which a demotion used to throw away, so a cell parked by a handful of lanes recorded
-    no step count for the rest of it."""
+    run on when it grows; 0 for a cell with no rankable lane and no non-finite one
+    either. *measured* is the worst lane over the lanes that *could* be ranked --
+    usually tens of thousands of them, which a demotion used to throw away, so a cell
+    parked by a handful of lanes recorded no step count for the rest of it; ``None``
+    when there were none."""
 
     why: str
     nonfinite: int = 0
@@ -964,11 +966,12 @@ def nonfinite_verdict(
 
 def nonfinite_reason(verdict: Unmeasurable, lanes: int) -> str:
     """*verdict*, from :func:`nonfinite_verdict`, as one sentence for a failure message:
-    the message and the recorded verdict are the one computation."""
-    return (
-        f"{verdict.nonfinite} {verdict.why}; max {verdict.measured} ULP over the "
-        f"{lanes} measurable lanes"
-    )
+    the message and the recorded verdict are the one computation. A cell whose every
+    lane is non-finite has no worst lane to name."""
+    reason = f"{verdict.why}: {verdict.nonfinite} such lane(s)"
+    if verdict.measured is None:
+        return reason
+    return f"{reason}; max {verdict.measured} ULP over the {lanes} measurable lane(s)"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1098,7 +1101,9 @@ def record(
     keep whichever arrived last, which is the polarity that can hide error; ``max`` is
     the one that cannot. For the same reason a cell already recorded unmeasurable
     (:func:`record_unmeasurable`) stays so: a number arriving later does not rescue it,
-    though its worst lane still counts. A floor is derived from one reading's lanes, so
+    though its worst lane still counts -- except against a verdict of no rankable lane
+    and no non-finite one (``nonfinite == 0``), which takes no figure
+    (:func:`_with_measured`). A floor is derived from one reading's lanes, so
     two readings that differ keep the worst lane with no floor, which can demote the cell
     but cannot hide error.
     """
@@ -1725,8 +1730,18 @@ def write_table(path, run: date) -> WriteReport:
     # Exactly one trailing newline: an op block carries its own trailing blank lines,
     # and the last block's leave the file ending in several. `end-of-file-fixer` then
     # rewrites the table on every commit.
-    path.write_text("".join(out).rstrip("\n") + "\n", encoding="utf-8")
-    after = BudgetTable.load(path)
+    text = "".join(out).rstrip("\n") + "\n"
+    # Loaded before it is written: a rewrite that does not load (a row anchor gone from
+    # an emitted block while an alias elsewhere still names it) leaves the table as it
+    # was, not one the next LLK test cannot import.
+    try:
+        after = BudgetTable(text)
+    except (ValueError, yaml.YAMLError) as error:
+        raise ValueError(
+            f"{path}: the rewritten table would not load, so it was left as it was: "
+            f"{error}"
+        ) from error
+    path.write_text(text, encoding="utf-8")
     report = WriteReport(
         path=path,
         written={op: after.rows_of(op) for op in written},

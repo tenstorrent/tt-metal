@@ -24,7 +24,7 @@ import argparse
 import itertools
 import json
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 from xml.etree import ElementTree
@@ -110,6 +110,9 @@ class Row:
     #: tolerance cell with them, so widening one loosens that cell.
     atol: Optional[float] = None
     rtol: Optional[float] = None
+    #: An alias row (``- *anchor``, or ``Neg: *low``): its provenance is its anchor's,
+    #: so a retargeted alias carries a measurement the base already had.
+    alias: bool = field(default=False, compare=False)
 
     @property
     def gated(self) -> bool:
@@ -144,9 +147,11 @@ class Change:
     differs from the same row's in the base table -- the table's rule for raising a
     budget. Read off that one row, not off the two rows the cell resolves to: when a
     deleted row hands its cells to a broader one, those two rows' fields differ although
-    neither was re-measured. ``None`` -- reported "n/a" -- for a widened ``atol``/``rtol``
-    bound whose row has no provenance in either revision: ``measured`` is a step count,
-    which such a row cannot record, so the rule cannot apply to it.
+    neither was re-measured. An alias row's fields are its anchor's, so it counts only
+    with provenance no base row had. ``None`` -- reported "n/a" -- for a widened
+    ``atol``/``rtol`` bound when no row involved records a measurement: not the deciding
+    row in either revision, nor the row the cell resolved to in the base. ``measured``
+    is a step count, which such a row cannot record, so the rule cannot apply to it.
     """
 
     cell: Cell
@@ -272,6 +277,7 @@ def parse_table(text: str) -> Dict[Cell, Row]:
             near_zero_atol=row.near_zero_atol,
             atol=_number(values.get("atol")),
             rtol=_number(values.get("rtol")),
+            alias=row.alias,
         )
     return rows
 
@@ -549,30 +555,50 @@ def compare(base: Dict[Cell, Row], head: Dict[Cell, Row]) -> List[Change]:
                 variants=found.variants + 1 if found else 1,
                 held_before=was.describe(),
                 held_after=now.describe(),
-                remeasured=_remeasured(base, now.row, kind),
+                remeasured=_remeasured(base, now.row, kind, was.row),
             )
     return sorted(grouped.values(), key=lambda c: (_KIND_ORDER.index(c.kind), c.cell))
 
 
 def _remeasured(
-    base: Dict[Cell, Row], row: Optional[Row], kind: str = ""
+    base: Dict[Cell, Row],
+    row: Optional[Row],
+    kind: str = "",
+    resolved_before: Optional[Row] = None,
 ) -> Optional[bool]:
     """Whether *row*, the head row deciding a cell, carries provenance the base table's
-    same row did not; a row counts only with provenance fields of its own. ``None``
-    for a widened bound on a row that records no measurement on either side (see
-    :class:`Change`); any other loosening is held to the rule, an ungating one too."""
+    same row did not; a row counts only with provenance fields of its own, and an alias
+    row only with provenance new to the whole base. ``None`` for a widened bound when
+    neither *row* on either side nor *resolved_before*, the row the cell resolved to in
+    the base, records a measurement (see :class:`Change`); any other loosening is held
+    to the rule, an ungating one too."""
     if row is None:
         return False
     was = base.get((row.op, row.key))
-    unrecorded = row.provenance == Provenance() and (
-        was is None or was.provenance == Provenance()
+    unrecorded = all(
+        r is None or r.provenance == Provenance() for r in (row, was, resolved_before)
     )
     if kind == "tolerance_widened" and row.declares_tolerance and unrecorded:
         return None
     # Dropping a measurement is not taking one: the head row needs fields of its own.
     if row.provenance == Provenance():
         return False
+    if row.alias:
+        # `Neg: *low` -> `*high` hands Neg the measurement `&high` already carried.
+        return row.provenance not in _provenances(base)
     return was is None or was.provenance != row.provenance
+
+
+#: Every provenance a table records, built once per table, for :func:`_remeasured`.
+_PROVENANCES: Dict[int, Tuple[Dict[Cell, Row], frozenset]] = {}
+
+
+def _provenances(table: Dict[Cell, Row]) -> frozenset:
+    cached = _PROVENANCES.get(id(table))
+    if cached is None or cached[0] is not table:
+        found = frozenset(r.provenance for r in table.values())
+        cached = _PROVENANCES[id(table)] = (table, found)
+    return cached[1]
 
 
 _KIND_TEXT = {

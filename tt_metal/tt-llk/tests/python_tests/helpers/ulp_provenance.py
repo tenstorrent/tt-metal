@@ -140,11 +140,11 @@ class Provenance:
     * ``measured_all`` -- a floored row's worst lane over every lane, floor included.
     * ``nonfinite`` -- lanes disagreeing with the golden about being finite, which hold
       the row's cell on tolerance; the headroom report fails a run in which it grows.
-    * ``run`` -- the day the exhaustive sweep measured the row, on ``MEASURED_ARCH`` (or
-      the row's own ``arch``).
-    * ``sampled`` -- the day a functional driver's sample measured it instead. A finite
-      sample cannot assert what the sweep can: an exhaustive row carries exactly the
-      emitter's budget, a sampled one may sit above its figure.
+    * ``run`` -- the day the sweep measured the row, on ``MEASURED_ARCH`` (or the row's
+      own ``arch``): every value of a 16-bit input, a stride of a Float32 one.
+    * ``sampled`` -- the day a functional driver's sample measured it instead. A sample
+      cannot assert what the sweep can: a swept row carries exactly the emitter's
+      budget, a sampled one may sit above its figure.
     """
 
     measured: Optional[int] = None
@@ -243,7 +243,8 @@ def check_provenance(where: str, row: Dict[str, Any], *, tolerance: bool) -> Non
             "`nonfinite` lanes hold a cell on tolerance, so it belongs on a "
             "`metric: tolerance` row"
         )
-    if provenance.measured_all is not None and "near_zero_atol" not in row:
+    # `near_zero_atol: null` is the contract's "no floor", the same as no field.
+    if provenance.measured_all is not None and row.get("near_zero_atol") is None:
         problems.append(
             "`measured_all` is the worst lane a `near_zero_atol` floor rescues; the "
             "row has no floor"

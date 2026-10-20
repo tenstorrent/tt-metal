@@ -965,6 +965,12 @@ def test_arch_must_be_passed_explicitly():
             "Abs:\n  - {max_ulp: 1, measured: 1, measured_all: 9, run: 2026-01-01}\n",
             "the row has no floor",
         ),
+        # `null` is the contract's "no floor", so it rescues nothing either.
+        (
+            "Abs:\n  - {max_ulp: 1, near_zero_atol: null, measured: 1, "
+            "measured_all: 9, run: 2026-01-01}\n",
+            "the row has no floor",
+        ),
         (
             "Abs:\n  - {max_ulp: 2, near_zero_atol: 1.0e-07, measured: 5, "
             "measured_all: 3, run: 2026-01-01}\n",
@@ -994,6 +1000,7 @@ def test_arch_must_be_passed_explicitly():
         "measured-negative",
         "nonfinite-on-a-budget",
         "measured-all-without-floor",
+        "measured-all-with-a-null-floor",
         "measured-all-below-measured",
         "sampled-without-measured",
     ],

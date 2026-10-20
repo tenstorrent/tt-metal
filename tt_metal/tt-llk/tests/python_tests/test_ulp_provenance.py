@@ -182,9 +182,9 @@ def test_every_row_the_sweep_drives_names_its_run(live):
 
 
 def test_only_the_sweep_claims_a_run(live):
-    """``run`` is the exhaustive sweep's, and the audit holds such a row to exactly the
-    emitter's budget. A row of an op the sweep never collects was sampled by a
-    functional driver, and ``run`` on it would read a sample as exhaustive."""
+    """``run`` is the sweep's, and the audit holds such a row to exactly the emitter's
+    budget. A row of an op the sweep never collects was sampled by a functional driver,
+    and ``run`` on it would read a sample as swept."""
     swept = _swept_ops()
     claimed = [
         row.describe()

@@ -23,8 +23,8 @@
 #   measured_all  on a floored row, the worst lane over every lane
 #   nonfinite     on a tolerance row, the lanes that disagreed with the golden about
 #                 being finite; the headroom report fails a run where it grows
-#   run           the day the exhaustive sweep (`test_unary_sfpu_ulp.py --ulp-emit`)
-#                 measured the row, or
+#   run           the day the sweep (`test_unary_sfpu_ulp.py --ulp-emit`) measured
+#                 the row: every value of a 16-bit input, a stride of a Float32 one; or
 #   sampled       the day a functional driver's sample did; never both
 #
 # The loader refuses a figure without its date. A budget may only be *raised* together
