@@ -1739,10 +1739,12 @@ tt::tt_metal::KernelBuildOptLevel FabricEriscDatamoverBuilder::get_kernel_opt_le
     if (opt_level_override.has_value()) {
         return opt_level_override.value();
     }
-    // Use Os (optimize for size) when VC1 is active to fit in code space
-    // Use O3 (optimize for performance) otherwise
+    // VC1-bearing (multi-mesh) routers carry up to 9 sender channels and do not fit the ACTIVE_ETH
+    // kernel config window at -O3 (Blackhole keeps the router text inside that window). -O2 fits
+    // every supported multi-mesh configuration and is markedly faster on the hot path than the -Os
+    // these routers were built with before. Everything else gets -O3.
     bool vc1_active = this->config.num_used_receiver_channels_per_vc[1] > 0;
-    return vc1_active ? tt::tt_metal::KernelBuildOptLevel::Os : tt::tt_metal::KernelBuildOptLevel::O3;
+    return vc1_active ? tt::tt_metal::KernelBuildOptLevel::O2 : tt::tt_metal::KernelBuildOptLevel::O3;
 }
 
 void FabricEriscDatamoverBuilder::teardown_from_host(
