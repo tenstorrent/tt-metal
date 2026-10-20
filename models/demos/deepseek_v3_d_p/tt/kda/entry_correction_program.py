@@ -47,7 +47,8 @@ void kernel_main() {
     constexpr uint32_t kt = get_compile_time_arg_val(11);
     constexpr uint32_t has_end = get_compile_time_arg_val(12);
     constexpr uint32_t cb_ctl_writer = get_compile_time_arg_val(13);
-    constexpr auto base_args = TensorAccessorArgs<15>();
+    constexpr uint32_t final_stride = get_compile_time_arg_val(15);  // the head's cores: rows of the final state
+    constexpr auto base_args = TensorAccessorArgs<16>();
     constexpr auto m_args = TensorAccessorArgs<base_args.next_compile_time_args_offset()>();
     constexpr auto a_args = TensorAccessorArgs<m_args.next_compile_time_args_offset()>();
     constexpr auto b_args = TensorAccessorArgs<a_args.next_compile_time_args_offset()>();
@@ -68,7 +69,7 @@ void kernel_main() {
     const uint32_t head = get_arg_val<uint32_t>(8);
     const uint32_t first_chunk = get_arg_val<uint32_t>(9);
     const uint32_t last_chunk = get_arg_val<uint32_t>(10);
-    // The final state's tile column this core forms (kt: none).
+    // The first tile row of the final state this core forms (kt: none); it forms every final_stride-th row on.
     const uint32_t final_column = get_arg_val<uint32_t>(11);
     // The head's first core reads its seeds and writes them to the head's other cores (NoC x | y << 16 each).
     const uint32_t seed_sender = get_arg_val<uint32_t>(12);
@@ -113,12 +114,14 @@ void kernel_main() {
     words[4] = need_group;
     words[5] = need_tail;
     words[6] = final_column;
+    words[7] = final_stride;
     cb_reserve_back(cb_ctl_writer, 1);
     volatile tt_l1_ptr uint32_t* writer_words =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_ctl_writer));
     writer_words[0] = chunks;
     writer_words[1] = final;
     writer_words[2] = final_column;
+    writer_words[3] = final_stride;
     cb_push_back(cb_ctl_writer, 1);
     cb_push_back(cb_ctl, 1);
 
@@ -186,20 +189,22 @@ void kernel_main() {
         cb_push_back(cb_base, chunks * kt);
     }
     if (final) {
-        // Tile row final_column of A and of B: that row of the final state is A[row] @ seed + B[row].
+        // Tile rows of A and of B: each row of the final state is A[row] @ seed + B[row].
         const auto a = TensorAccessor(a_args, a_addr);
         const auto b = TensorAccessor(b_args, b_addr);
         const uint32_t tile = get_tile_size(cb_b);
-        cb_reserve_back(cb_a, kt);
-        cb_reserve_back(cb_b, kt);
-        for (uint32_t c = 0; c < kt; ++c) {
-            const uint32_t page = head * state_tiles + final_column * kt + c;
-            noc_async_read_page(page, a, get_write_ptr(cb_a) + c * tile);
-            noc_async_read_page(page, b, get_write_ptr(cb_b) + c * tile);
+        for (uint32_t row = final_column; row < kt; row += final_stride) {
+            cb_reserve_back(cb_a, kt);
+            cb_reserve_back(cb_b, kt);
+            for (uint32_t c = 0; c < kt; ++c) {
+                const uint32_t page = head * state_tiles + row * kt + c;
+                noc_async_read_page(page, a, get_write_ptr(cb_a) + c * tile);
+                noc_async_read_page(page, b, get_write_ptr(cb_b) + c * tile);
+            }
+            noc_async_read_barrier();
+            cb_push_back(cb_a, kt);
+            cb_push_back(cb_b, kt);
         }
-        noc_async_read_barrier();
-        cb_push_back(cb_a, kt);
-        cb_push_back(cb_b, kt);
     }
 }
 """
@@ -236,7 +241,8 @@ void kernel_main() {
     const uint32_t final_tail = read_tile_value(cb_ctl, 0, 3);
     const uint32_t need_group = read_tile_value(cb_ctl, 0, 4);
     const uint32_t need_tail = read_tile_value(cb_ctl, 0, 5);
-    const uint32_t j = read_tile_value(cb_ctl, 0, 6);
+    const uint32_t first_row = read_tile_value(cb_ctl, 0, 6);
+    const uint32_t row_stride = read_tile_value(cb_ctl, 0, 7);
     cb_pop_front(cb_ctl, 1);
     // output_c = F0_c + (FI_c - F0_c) @ seed. The differences first, for all of this core's chunks (they need no
     // seed, so they run while the seeds arrive); then per chunk F0's row is copied into DST and the K-sum accumulates
@@ -297,13 +303,13 @@ void kernel_main() {
         cb_pop_front(cb_base, chunks * kt);
         cb_pop_front(cb_diff, chunks * kt);
     }
-    // This core's tile row j of final = A @ seed + B.
+    // This core's tile rows of final = A @ seed + B.
     if (final) {
         const uint32_t seed = final_tail ? cb_tail : cb_seed;
-        cb_wait_front(cb_a, kt);
-        cb_wait_front(cb_b, kt);
         pack_reconfig_data_format(cb_final);
-        {
+        for (uint32_t row = first_row; row < kt; row += row_stride) {
+            cb_wait_front(cb_a, kt);
+            cb_wait_front(cb_b, kt);
             cb_reserve_back(cb_final, kt);
             tile_regs_acquire();
             reconfig_data_format_srca(cb_b);
@@ -323,9 +329,9 @@ void kernel_main() {
             }
             tile_regs_release();
             cb_push_back(cb_final, kt);
+            cb_pop_front(cb_a, kt);
+            cb_pop_front(cb_b, kt);
         }
-        cb_pop_front(cb_a, kt);
-        cb_pop_front(cb_b, kt);
     }
     if (need_group) {
         cb_pop_front(cb_seed, state_tiles);
@@ -359,7 +365,8 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_ctl));
     const uint32_t chunks = words[0];
     const uint32_t final = words[1];
-    const uint32_t j = words[2];
+    const uint32_t first_row = words[2];
+    const uint32_t row_stride = words[3];
     cb_pop_front(cb_ctl, 1);
 
     const auto out = TensorAccessor(out_args, out_addr);
@@ -377,7 +384,7 @@ void kernel_main() {
         const auto states = TensorAccessor(final_args, final_addr);
         const uint32_t tile = get_tile_size(cb_final);
         // Row j of the state: tiles (j, c).
-        {
+        for (uint32_t j = first_row; j < kt; j += row_stride) {
             cb_wait_front(cb_final, kt);
             for (uint32_t c = 0; c < kt; ++c) {
                 noc_async_write_page(head * kt * kt + j * kt + c, states, get_read_ptr(cb_final) + c * tile);
@@ -412,7 +419,10 @@ class EntryCorrection:
         self.num_chunks = num_chunks
         self.kt = key_dim // ttnn.TILE_SIZE
         self.local_rows = local_rows
-        self.cores_per_head = max(1, min(num_chunks, len(cores) // batch_heads))
+        # Cores per head: the most that divide the head's chunks evenly (so each core's chunk rows are one shard).
+        self.cores_per_head = max(
+            d for d in range(1, max(1, min(num_chunks, len(cores) // batch_heads)) + 1) if num_chunks % d == 0
+        )
         self.cores = cores[: batch_heads * self.cores_per_head]
         self.core_set = ttnn.CoreRangeSet([]).merge(ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in self.cores]))
         self.per_core = -(-num_chunks // self.cores_per_head)
@@ -525,6 +535,7 @@ class EntryCorrection:
                     int(actual_end is not None),
                     _CB_CTL_WRITER,
                     0,
+                    self.cores_per_head,
                 ]
                 for t in (zero_output, identity_output, final_a, final_b, entry, tail_entry, actual_start, end):
                     reader_ct += list(ttnn.TensorAccessorArgs(t).get_compile_time_args())

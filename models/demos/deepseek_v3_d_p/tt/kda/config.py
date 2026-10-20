@@ -93,6 +93,9 @@ class KDARecurrenceProgramConfig:
     # With the ring relay: the summary also emits each chunk's output terms and an EntryCorrection program forms
     # the chunk outputs and the final state from the entry states in parallel, instead of a second sequential scan.
     entry_correction: bool = False
+    # Cores the entry correction may use: its products count toward the Blackhole di/dt bound (as
+    # KDAProgramConfig.max_matmul_cores).
+    entry_correction_max_cores: int = 110
 
     def __post_init__(self) -> None:
         if self.local_scan_strategy not in ("direct", "grouped"):

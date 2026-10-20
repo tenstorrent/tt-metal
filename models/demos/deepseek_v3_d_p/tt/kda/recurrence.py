@@ -773,7 +773,8 @@ class KDARecurrence:
             self._relay_final_carry = _RelayFinalCarry(device, sequence_parallel_axis, links)
             if program_config.entry_correction:
                 grid = device.compute_with_storage_grid_size()
-                columns = grid.x
+                # Its products count toward the Blackhole di/dt bound on cores in matmuls at once.
+                max_cores = program_config.entry_correction_max_cores
                 self._entry_correction = EntryCorrection(
                     device,
                     sequence_parallel_axis=sequence_parallel_axis,
@@ -781,7 +782,7 @@ class KDARecurrence:
                     num_chunks=local_rows // KDA_CHUNK_SIZE,
                     key_dim=key_dim,
                     local_rows=local_rows,
-                    cores=[ttnn.CoreCoord(x, y) for y in range(grid.y) for x in range(columns)],
+                    cores=[ttnn.CoreCoord(x, y) for y in range(grid.y) for x in range(grid.x)][:max_cores],
                     math_fidelity=program_config.scan_math_fidelity,
                 )
                 # Every correction core reads its head's entry state: L1 spares those DRAM reads.
