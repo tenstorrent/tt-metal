@@ -9,10 +9,10 @@ What changed in this release is in `RELEASE_NOTES.md`.
 
 | | |
 |---|---|
-| Image | `ghcr.io/tenstorrent/tt-inference-server/vllm-tt-metal-src-dsv4.1-flash:0.24.0-0725831-84b529b` |
+| Image | `ghcr.io/tenstorrent/tt-inference-server/vllm-tt-metal-src-dsv4.1-flash:0.24.0-0655530-4743e01` |
 | Size | 22.4 GB on disk (5.7 GB compressed), built 2026-10-19 |
-| tt-metal | `072583132bf6a32c5660196bcdd4b40ebb91de93` |
-| tt-inference-server | `84b529b9afdeaa12c230523c1c90ed2c307b18bf` |
+| tt-metal | `0655530d60388057829d20dee426063ea51712ee` |
+| tt-inference-server | `4743e018f94f274465731ae16189301368305f57` |
 | vllm-tt-plugin | `ff71d290df8e95e5e956d49ba860478db2cb034c` |
 | vLLM | 0.31.0 (torch 2.11.0+cpu, transformers 5.12.1) |
 | Model | [`deepseek-ai/DeepSeek-V4.1-Flash`](https://huggingface.co/deepseek-ai/DeepSeek-V4.1-Flash) (476 GB, 48 shards) |
@@ -48,7 +48,7 @@ Everything else in the launch stays the same.
 
 The specs without `_apc` run with prefix caching off and a chunked-prefill token budget (`max_num_batched_tokens`) of 67,584 (the measured value of the former `_noapc` specs). The `_apc` specs keep the previous defaults: prefix caching on, budget 4,096.
 
-The image's own catalog (tt-inference-server `84b529b9`) still carries the previous defaults: a launch **without** a runtime spec (`--model deepseek-ai/DeepSeek-V4.1-Flash --tt-device blackhole_galaxy`, or `--impl deepseek-v41-flash-1m`) serves with prefix caching on and a chunk budget of 4,096 (k = 5, image input). To get the defaults of this release, launch with a runtime spec from `assets/` as in step 3 (`SPEC`).
+The image's own catalog (tt-inference-server `4743e018`) carries the same defaults as the runtime specs without `_apc`: a launch without a runtime spec (`--model deepseek-ai/DeepSeek-V4.1-Flash --tt-device blackhole_galaxy`, or `--impl deepseek-v41-flash-1m`) serves 16 users at 262,144 tokens, or 4 users at 1,048,576 tokens, with prefix caching off and a chunk budget of 67,584 (k = 5, image input). Prefix caching is opt-in: use an `_apc` spec.
 
 Shared settings:
 - Speculative decoding: 5 draft tokens per round, lossless.
@@ -78,7 +78,7 @@ It is 131,584 by default and 262,144 in the 16-user long-context spec.
 `docker run` pulls it on first use.
 
 ```bash
-export IMAGE=ghcr.io/tenstorrent/tt-inference-server/vllm-tt-metal-src-dsv4.1-flash:0.24.0-0725831-84b529b
+export IMAGE=ghcr.io/tenstorrent/tt-inference-server/vllm-tt-metal-src-dsv4.1-flash:0.24.0-0655530-4743e01
 docker pull $IMAGE
 ```
 
@@ -89,7 +89,7 @@ export CKPT=/path/to/deepseek-v41-flash        # the checkpoint (read-only for t
 export CACHE=/path/to/dsv41_cache              # weights/ and kernels/, reused across starts
 export STATE=/path/to/dsv41_state              # scratch dirs the server writes to
 export SPEC=$PWD/assets/runtime_spec_b16_k5_262144_vision.json   # run from models/demos/blackhole/deepseek_v41_flash/ in tt-metal
-export IMAGE=ghcr.io/tenstorrent/tt-inference-server/vllm-tt-metal-src-dsv4.1-flash:0.24.0-0725831-84b529b
+export IMAGE=ghcr.io/tenstorrent/tt-inference-server/vllm-tt-metal-src-dsv4.1-flash:0.24.0-0655530-4743e01
 
 mkdir -p $CKPT $CACHE/weights $CACHE/unified $CACHE/kernels $STATE/cache_root $STATE/logs $STATE/traces
 
