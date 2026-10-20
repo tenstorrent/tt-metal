@@ -30,7 +30,7 @@ from models.demos.gpt_oss.utils.general_utils import get_default_num_links
 from models.tt_transformers.tt.load_checkpoints import convert_hf_qkv_to_meta_format
 
 from ...tt.experts.prefill_routed import ROUTED_PREFILL_ENV, ROUTED_PREFILL_NUM_EXPERTS, routed_prefill_mesh_supported
-from ..test_factory import TestFactory, parametrize_mesh_with_fabric
+from ..test_factory import TestFactory, parametrize_mesh_with_fabric, skip_1x4_on_galaxy
 
 SEQ_LEN = 1024
 COMMITTED_EXPERT_INPUT_DTYPE = mlp_module.PREFILL_SP_EXPERT_INPUT_DTYPE
@@ -63,6 +63,7 @@ def _prefill(model, mesh_device, tokens, get_last_token, skip_lm_head):
     return out_torch
 
 
+@skip_1x4_on_galaxy
 @parametrize_mesh_with_fabric([(1, 4)])
 def test_prefill_sequence_parallel_bit_identical(mesh_device, device_params, monkeypatch, reset_seeds):
     from transformers.models.gpt_oss.modeling_gpt_oss import GptOssForCausalLM

@@ -200,6 +200,14 @@ def parametrize_mesh_with_fabric(mesh_shapes=None):
     return decorator
 
 
+# A 1x4 ring submesh does not come up on a 32-device Galaxy: the fabric router sync times out when the mesh opens, and
+# every later test of the session errors on the broken fabric. Tests pinned to [(1, 4)] skip there (before the mesh
+# fixture opens anything) and run on QuietBox 2 / LoudBox.
+skip_1x4_on_galaxy = pytest.mark.skipif(
+    ttnn.get_num_devices() > 8, reason="a 1x4 ring submesh does not come up on a Galaxy; runs on QuietBox 2 / LoudBox"
+)
+
+
 def parametrize_batch_seq(configs=None, ids=None):
     """Universal batch/seq parametrization"""
     configs = configs or [(1, 1), (1, 32)]

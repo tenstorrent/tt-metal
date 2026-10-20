@@ -22,7 +22,7 @@ from loguru import logger
 
 import ttnn
 from models.demos.gpt_oss.config import MeshConfig, ModeConfig
-from models.demos.gpt_oss.tests.test_factory import parametrize_mesh_with_fabric
+from models.demos.gpt_oss.tests.test_factory import parametrize_mesh_with_fabric, skip_1x4_on_galaxy
 from models.demos.gpt_oss.tt.ccl import CCLManager
 from models.demos.gpt_oss.utils.general_utils import get_default_num_links
 
@@ -51,6 +51,7 @@ def _poison_free_l1(mesh_device):
         ttnn.deallocate(t)
 
 
+@skip_1x4_on_galaxy
 @parametrize_mesh_with_fabric([(1, 4)])
 def test_ccl_manager_allreduce_after_l1_poison(mesh_device, device_params):
     rows, cols = mesh_device.shape
@@ -88,6 +89,7 @@ def test_ccl_manager_allreduce_after_l1_poison(mesh_device, device_params):
     assert not failures, "TP all-reduce wrong after L1 poison:\n" + "\n".join(failures)
 
 
+@skip_1x4_on_galaxy
 @parametrize_mesh_with_fabric([(1, 4)])
 def test_prefill_attention_allreduce_after_l1_poison(mesh_device, device_params):
     rows, cols = mesh_device.shape

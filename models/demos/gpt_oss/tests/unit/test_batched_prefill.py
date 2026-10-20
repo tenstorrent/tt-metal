@@ -34,7 +34,7 @@ from models.demos.gpt_oss.tt.batched_prefill import (
 )
 from models.demos.gpt_oss.tt.experts.prefill_routed import ROUTED_PREFILL_NUM_EXPERTS
 
-from ..test_factory import parametrize_mesh_with_fabric, real_checkpoint_path
+from ..test_factory import parametrize_mesh_with_fabric, real_checkpoint_path, skip_1x4_on_galaxy
 
 H = 2880
 USERS = (0, 5, 31)
@@ -69,6 +69,7 @@ def _skip_unless_bh_1x4(mesh_device):
 
 
 @pytest.mark.parametrize("B, S, scatter", [(32, 128, False), (32, 256, False), (4, 1024, True)])
+@skip_1x4_on_galaxy
 @parametrize_mesh_with_fabric([(1, 4)])
 def test_per_user_reduce_matches_batch1(mesh_device, device_params, B, S, scatter):
     _skip_unless_bh_1x4(mesh_device)
@@ -102,6 +103,7 @@ class _Manager:
         self.num_links = num_links
 
 
+@skip_1x4_on_galaxy
 @parametrize_mesh_with_fabric([(1, 4)])
 def test_batched_reduce_links(mesh_device, device_params, monkeypatch):
     _skip_unless_bh_1x4(mesh_device)
@@ -119,6 +121,7 @@ def test_batched_reduce_links(mesh_device, device_params, monkeypatch):
     assert batched_reduce_links(_Manager(mesh_device), 1) == 1
 
 
+@skip_1x4_on_galaxy
 @parametrize_mesh_with_fabric([(1, 4)])
 def test_fill_batch_idx_per_model(mesh_device, device_params):
     _skip_unless_bh_1x4(mesh_device)
@@ -130,6 +133,7 @@ def test_fill_batch_idx_per_model(mesh_device, device_params):
 
 
 @pytest.mark.parametrize("S", [128, 256])
+@skip_1x4_on_galaxy
 @parametrize_mesh_with_fabric([(1, 4)])
 def test_batched_router_matches_batch1(mesh_device, device_params, S):
     _skip_unless_bh_1x4(mesh_device)
@@ -162,6 +166,7 @@ def test_batched_router_matches_batch1(mesh_device, device_params, S):
 
 
 @pytest.mark.parametrize("sequence_parallel", [False, True])
+@skip_1x4_on_galaxy
 @parametrize_mesh_with_fabric([(1, 4)])
 def test_last_token_rows(mesh_device, device_params, sequence_parallel):
     _skip_unless_bh_1x4(mesh_device)
@@ -232,6 +237,7 @@ def _prefill(ctx, tokens, lens, page_table, sampling_params=None):
 
 
 @pytest.mark.parametrize("L", [512, 2048])
+@skip_1x4_on_galaxy
 @parametrize_mesh_with_fabric([(1, 4)])
 def test_model_batched_matches_batch1(mesh_device, device_params, L):
     """32 users of L tokens in one batched forward: each checked user's last-token logits equal its batch-1 prefill
@@ -249,6 +255,7 @@ def test_model_batched_matches_batch1(mesh_device, device_params, L):
         assert torch.equal(logits32[u], logits1[0]), f"L={L} user {u}: max {(logits32[u] - logits1[0]).abs().max()}"
 
 
+@skip_1x4_on_galaxy
 @parametrize_mesh_with_fabric([(1, 4)])
 def test_model_batched_unequal_lengths(mesh_device, device_params):
     """Prompts of 128, 100, 65 and 33 tokens in one 128 bucket: one batched forward, and each user's last-token
@@ -270,6 +277,7 @@ def test_model_batched_unequal_lengths(mesh_device, device_params):
 
 
 @pytest.mark.parametrize("B, L", [(4, 128), (32, 128), (32, 2048)])
+@skip_1x4_on_galaxy
 @parametrize_mesh_with_fabric([(1, 4)])
 def test_model_on_device_sampling(mesh_device, device_params, B, L, expect_error):
     """Greedy on-device sampling with B users of L tokens (128: the text demo's prefill call; 2K: sequence-parallel

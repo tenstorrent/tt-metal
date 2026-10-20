@@ -42,7 +42,7 @@ from ...tt.experts.prefill_routed import (
     routed_prefill_mesh_supported,
 )
 from ...tt.mlp import MLP
-from ..test_factory import TestFactory, parametrize_mesh_with_fabric, real_checkpoint_path
+from ..test_factory import TestFactory, parametrize_mesh_with_fabric, real_checkpoint_path, skip_1x4_on_galaxy
 
 THRESHOLDS = json.loads((Path(__file__).resolve().parents[2] / "unit_test_thresholds.json").read_text())
 ROUTED_VS_DENSE_PCC = 0.99
@@ -162,6 +162,7 @@ def routed_env(monkeypatch):
     monkeypatch.setenv("GPT_OSS_ROUTED_PREFILL_MIN_SEQ", "64")
 
 
+@skip_1x4_on_galaxy
 @parametrize_mesh_with_fabric([(1, 4)])
 @pytest.mark.parametrize(
     "seq_len, chunk",
@@ -293,6 +294,7 @@ def test_routed_prefill_experts(
     assert ok_s, f"skewed routed experts vs HF PCC {pcc_s} < {thresholds['experts']}"
 
 
+@skip_1x4_on_galaxy
 @parametrize_mesh_with_fabric([(1, 4)])
 @pytest.mark.parametrize("seq_len", [1024], ids=["S1024"])
 def test_routed_prefill_layers_back_to_back(mesh_device, device_params, seq_len, routed_env, reset_seeds):
@@ -357,6 +359,7 @@ def test_routed_prefill_layers_back_to_back(mesh_device, device_params, seq_len,
     assert not bad, f"routed vs dense below {ROUTED_VS_DENSE_PCC}: {bad}"
 
 
+@skip_1x4_on_galaxy
 @parametrize_mesh_with_fabric([(1, 4)])
 @pytest.mark.parametrize(
     "seq_len", [128, 1024, 1088, 8192, 16384, 16448], ids=["S128", "S1024", "S1088", "S8192", "S16384", "S16448"]
@@ -426,6 +429,7 @@ def test_routed_pair_positions_exact(mesh_device, device_params, seq_len, routed
         logger.info(f"S={seq_len} {name}: pair positions exact on {routed.num_devices} devices")
 
 
+@skip_1x4_on_galaxy
 @parametrize_mesh_with_fabric([(1, 4)])
 @pytest.mark.parametrize("seq_len", [1024, 8192], ids=["S1024", "S8192"])
 def test_routed_prefill_placement(mesh_device, device_params, seq_len, routed_env, monkeypatch, reset_seeds):
