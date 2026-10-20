@@ -1,108 +1,65 @@
 # DeepSeek-V4.1-Flash on Blackhole Galaxy: release notes
 
-Release `0.24.0-0655530-4743e01` (vLLM 0.31.0). Test logs, bisect tables and long-form findings: `RELEASE_DETAILS.md`. Setup: `GETTING_STARTED.md`.
+Release `0.24.0-0655530-4743e01` (vLLM 0.31.0), previous release `0.24.0-c9cfb00-ffd1a57`. Start-up commands: `GETTING_STARTED.md`. Test logs, bisect tables and long-form findings: `RELEASE_DETAILS.md`.
 
 | | |
 |---|---|
 | Image | `ghcr.io/tenstorrent/tt-inference-server/vllm-tt-metal-src-dsv4.1-flash:0.24.0-0655530-4743e01` |
-| tt-metal | `0655530d603` (branch `ssinghal/dsv4p1`) |
-| tt-inference-server | `4743e018` (branch `ssinghal/dsv4p1`) |
-| vllm-tt-plugin | `ff71d29` (branch `ssinghal/dsv4p1`) |
-| Previous release | `0.24.0-c9cfb00-ffd1a57` |
+| Commits (branch `ssinghal/dsv4p1`) | tt-metal `0655530d603`, tt-inference-server `4743e018`, vllm-tt-plugin `ff71d29` |
 
-## Highlights
+## What is supported
 
-- **16 users at 262,144 tokens and 4 users at 1,048,576 tokens**, speculative decoding k = 5, image input (up to 16 images per prompt).
-- **Speculative decoding now runs at any prompt depth.** It used to stop at 32,768 tokens: single-request TPOT at 1,000,028 tokens fell from 98 to 37 ms, at 250,028 tokens from 74 to 31.5 ms.
-- **1M server no longer crashes on long prompts with APC on** (the prefix-cache snapshot needed one 512 MiB DRAM buffer; it now reads 16 MiB pieces).
-- **Prefix caching (APC) and chunked prefill are available as opt-in specs** (`*_apc.json`). The default specs run with APC off and a token budget of 67,584, the previous release's settings.
-- **Shared tt_transformers sampler is the default** (plain decode and speculative verify). `top_k` above 32 is clamped to 32.
-- **Catalog defaults match the specs:** a launch without a runtime spec also gets APC off and budget 67,584.
-- **Batched serving is back to the previous release's speed** at 16 users and faster at 4 users (tables below).
+| | B=16 | B=4 |
+|---|---|---|
+| Users | 16 | 4 |
+| Max context | 262,144 tokens | 1,048,576 tokens |
+| Image input | up to 16 images per prompt (1,024 tokens each at most) | same |
+| Speculative decoding | k = 5, lossless, at every prompt length | same |
+| Runtime spec (`assets/`) | `runtime_spec_b16_k5_262144_vision.json` | `runtime_spec_b4_k5_1048576_vision.json` |
+| Start-up | about 25 minutes | about 31 minutes |
 
-## Configurations
+Serving features:
+- OpenAI-compatible API (chat, completions, streaming); requests beyond the user count queue.
+- On-device sampling: temperature, top-k (clamped to 32), top-p, per-request seed.
+- Chunked prefill (token budget 67,584 by default, 4,096 in the opt-in specs).
+- Prefix caching (APC): off by default, opt-in with the `*_apc.json` specs.
+- Not supported with speculation (HTTP 400): `logprobs`, structured output, `logit_bias`, `bad_words`, `allowed_token_ids`, `min_tokens`, `min_p`.
 
-| Configuration | Users | Context | Spec decode | Images | Runtime spec (`assets/`) |
-|---|---|---|---|---|---|
-| **Default** | 16 | 262,144 | k = 5 | yes | `runtime_spec_b16_k5_262144_vision.json` |
-| **Long context** | 4 | 1,048,576 | k = 5 | optional | `runtime_spec_b4_k5_1048576.json` / `_vision.json` |
-| Smaller context | 16 | 131,072 | k = 5 | optional | `runtime_spec_b16_k5_131072.json` / `_vision.json` |
-| APC + chunked prefill (opt-in, budget 4,096) | 16 | 262,144 | k = 5 | yes | `runtime_spec_b16_k5_262144_vision_apc.json` |
-| APC + chunked prefill (opt-in, budget 4,096) | 4 | 1,048,576 | k = 5 | yes | `runtime_spec_b4_k5_1048576_vision_apc.json` / `_apc.json` |
+## Performance change against the previous release
 
-4 users at 524,288 tokens (`runtime_spec_b4_k5_524288_vision.json`) stays in the assets, not recommended (see Known issues). 8 users at 1,048,576 tokens does not fit in DRAM.
+Short prompts, batched (`vllm bench serve`, random prompts, 128 output tokens, 3 repeats). TTFT ms / TPOT ms / output tok/s. ISL 4k was not measured; 1,024 and 8,192 bracket it.
 
-## What is new since `0.24.0-c9cfb00-ffd1a57`
-
-Both long-context configurations, image input, speculative decoding k = 5 and opt-in APC / chunked prefill already shipped in `c9cfb00`. New in this release:
-
-| Change | Detail |
-|---|---|
-| Speculation above 32,768 tokens | `DSV41_VLLM_SPEC_ISL_MAX` default 32768 -> unlimited. TPOT 98 -> 37.4 ms (1,000,028 tokens, 4 users), 74 -> 31.5 ms (250,028 tokens, 16 users) |
-| Small prefill context at max context >= 524,288 | Second prefill trace at a 16,384-token context for short prompts. Short-prompt TTFT at 4 users / 1M: 0.73 / 0.68 / 0.74 s at 1 / 2 / 4 requests (was 0.90 / 0.83 / 0.87 s). Off: `DSV41_PF_SMALL_BUCKET=0` |
-| Shared sampler default | `DSV41_SHARED_SAMPLER` and `DSV41_SHARED_SAMPLER_SPEC` default 1 (0 = previous sampler). Sampler time 1.2-1.9 ms per step against 1.5-3.6 ms |
-| Defaults: APC off, budget 67,584 | Default specs and the catalog. Opt-in `*_apc.json` keep the old defaults (APC on, budget 4,096) |
-| APC snapshot at >= 524,288 tokens | Fixed: no more device out-of-memory on the 1M server (`SNAP_PIECE_MIB` = 16) |
-| Index-key hand-off offset | Fixed for the column-sharded prefill key FIFO (offset was negative for a 100,033-token prompt; decode read zero keys for early entries) |
-| Long-prompt measurements | 1,000,028-token prompt completes at 4 users; 250,028-token prompt at 16 users (below) |
-
-## Performance
-
-Previous release `c9cfb00` against this release with the default specs. `vllm bench serve`, random prompts, OSL 128, 3 repeats with a different seed per repeat, images on, k = 5; 16 users measured on host .45, 4 users on host .46. TTFT ms / TPOT ms / output tok/s.
-
-| Config | Row | Previous release | This release | Change |
-|---|---|---|---|---|
-| 16 users / 262,144 | 16 x ISL 1,024 | 3588 / 164.6 / 81.0 | 3626 / 162.8 / 82.1 | +1.1 % / -1.1 % / +1.3 % |
-| 16 users / 262,144 | 16 x ISL 8,192 | 24904 / 499.9 / 22.9 | 26208 / 522.7 / 21.8 | +5.2 % / +4.6 % / -5.0 % |
-| 16 users / 262,144 | 1 x ISL 8,192 | 8547 / 47.4 / 8.8 | 8353 / 44.1 / 9.2 | -2.3 % / -7.1 % / +4.5 % |
-| 4 users / 1,048,576 | 4 x ISL 1,024 | 2752 / 90.2 / 34.9 | 1590 / 67.5 / 48.0 | -42 % / -25 % / +37 % |
-| 4 users / 1,048,576 | 4 x ISL 8,192 | 16853 / 183.4 / 12.6 | 9059 / 120.9 / 20.2 | -46 % / -34 % / +61 % |
-| 4 users / 1,048,576 | 1 x ISL 8,192 | 12138 / 45.2 / 7.2 | 6474 / 45.2 / 10.5 | -47 % / +0.1 % / +46 % |
-
-- 16 x ISL 8,192 is 5 % off the previous release; that is inside the previous release's own repeat spread (TTFT 21 %) and the host-to-host difference (up to 7 %).
-- Short prompts (GSM8K-style, about 700 tokens in, 256 out; measured on an earlier image), TPOT ms at concurrency 1 / 2 / 4 (/ 8 / 16): 16 users / 262,144: 26.4 / 34.8 / 36.1 / 53.4 / 71.0; 4 users / 1,048,576: 29.8 / 35.2 / 45.5.
-
-Long prompts, single request, 128 output tokens, speculation on:
-
-| Config | Prompt | TTFT | TPOT |
+| | Previous release | This release | Change |
 |---|---|---|---|
-| 4 users / 1,048,576 | 1,000,028 tokens | 1694 s | 36.7 ms |
-| 4 users / 1,048,576 | 599,955 tokens | 1002 s | n/a |
-| 16 users / 262,144 | 250,028 tokens | 283 s | 31.6 ms |
-| 16 users / 262,144 | 100,020 tokens | 116 s | n/a |
+| B=16, 16 requests, ISL 1,024 | 3588 / 164.6 / 81.0 | 3626 / 162.8 / 82.1 | +1 % / -1 % / +1 % |
+| B=16, 16 requests, ISL 8,192 | 24904 / 499.9 / 22.9 | 26208 / 522.7 / 21.8 | +5 % / +5 % / -5 % |
+| B=4, 4 requests, ISL 1,024 | 2752 / 90.2 / 34.9 | 1590 / 67.5 / 48.0 | -42 % / -25 % / +37 % |
+| B=4, 4 requests, ISL 8,192 | 16853 / 183.4 / 12.6 | 9059 / 120.9 / 20.2 | -46 % / -34 % / +61 % |
 
-Opt-in APC + chunked prefill (`*_apc.json`): a 100,000-token shared prefix answers in 42 s on a cache hit against 112 s cold (16 users); the worst decode stall while a 32k prompt prefills is 9.1 s (budget 4,096) against 32.9 s (budget 67,584, the default). The cost: batched serving at 16 users is up to 2x slower (16 x ISL 8,192 TTFT 49.8 s against 24.9 s), APC adds about 180 ms per 1k-token prefill call.
+Model maximum, one request, 128 output tokens (previous release: speculation stopped at 32,768 tokens):
 
-## Accuracy
+| | Previous release | This release |
+|---|---|---|
+| B=16, 250,028-token prompt | TTFT 311 s, TPOT 74 ms | TTFT 283 s, TPOT 31.6 ms |
+| B=4, 1,000,028-token prompt | TTFT 1676 s, TPOT 98 ms | TTFT 1694 s, TPOT 36.7 ms |
 
-GSM8K 8-shot, `dsv41_gsm8k_cot`, tt-inference-server `evals` workflow, 1319 questions (standard error about 0.6). These workflow scores were measured on earlier images of the same model code, none on this exact image:
+The previous-release numbers at the model maximum come from an earlier image with the same prefill and the same 32,768-token speculation limit.
 
-| Server | Score |
-|---|---|
-| 16 users, 262,144 tokens, images on (default spec, previous release `c9cfb00`) | 94.09 % |
-| 16 users, 262,144 tokens, images on (APC on, previous release `c9cfb00`) | 95.60 % |
-| 16 users, 131,072 tokens | 95.22 % |
-| 4 users, 1,048,576 tokens | 94.92 % |
+## What changed
 
-This release, sampled 256-question checks: 94.9 / 96.5 / 93.8 % on the 16-user default spec; 96.9-97.7 % on the 4-user 1M specs and 96.5 / 97.3 / 97.7 % on the 16-user `_apc` spec (candidate images with the same code). A full workflow run on this exact image was not made. 100,020-token needles at the start and at the end answer correctly on both configurations.
+- Speculative decoding now runs at any prompt depth (TPOT at 1M: 98 -> 37 ms).
+- The 4-user 1M build no longer crashes on prompts of 524,288 tokens or more when APC is on.
+- A prefill context of 16,384 tokens for short prompts on the 1M build (faster short-prompt TTFT).
+- Shared tt_transformers sampler by default (`DSV41_SHARED_SAMPLER=0` restores the previous one).
+- Index-key hand-off fixed for the column-sharded prefill key FIFO.
+- APC off and token budget 67,584 by default, in the runtime specs and in the catalog (the previous release's settings; APC on with budget 4,096 made batched serving up to 2x slower).
 
 ## Known issues
 
-- **16 users at 262,144 tokens score about 2 points lower on GSM8K** than at 131,072 tokens (about 93.5-95 % against 95.2-95.4 %). Cause not identified.
-- **APC is off by default.** With APC on and budget 4,096, batched serving at 16 users is 14-100 % slower than the previous release (APC: about 180 ms of snapshot copy per 1k-token prefill; budget 4,096: prompts prefilled in small pieces). Turning both off gives the previous speed back but means no prefix caching and, for a long prompt, a decode stall of other users (32.9 s for a 32k prompt).
-- **Concurrent long prompts are prefilled one after another** and other users' decode steps wait between pieces: 16 simultaneous 250,000-token prompts took 5,035 s (TPOT about 10 s); 4 simultaneous 1,000,000-token prompts 6,751 s.
-- **Decode is slower at deep context:** 31.5 ms (250,000 tokens) and 37.4 ms (1,000,000 tokens) per token against about 23 ms at 16k.
-- **Plain decode (requests that cannot speculate: frequency / presence / repetition penalty) loses accuracy on the long-context 4-user specs:** GSM8K 51.6-52.7 % at 1,048,576 tokens and 69 % at 524,288, against 97 % with speculation. Keep such requests to the 16-user 262,144-token spec. Cause not identified.
-- **APC must not be enabled with the 131,072-token specs** or with `DSV41_PIDX_SHARD=0` (restores answer wrongly). APC is skipped for prompts that contain images.
-- **Refused with HTTP 400 under speculation:** `logprobs`, structured output, `logit_bias`, `bad_words`, `allowed_token_ids`, `min_tokens`, `min_p`.
-- **Requests beyond the slots queue** and are served in order; more than 16 images per prompt is refused with HTTP 400.
+- B=16 at 262,144 tokens scores about 2 points lower on GSM8K than at 131,072 (about 93.5-95 % against 95.2-95.4 %); cause not identified.
+- With the default token budget a long prompt stalls the other users' decoding while it prefills (32k prompt: 32.9 s; 9.1 s with budget 4,096).
+- Concurrent long prompts are prefilled one after another (16 prompts of 250,000 tokens: 5,035 s in total).
+- Requests that cannot speculate (frequency / presence / repetition penalty) lose accuracy on the B=4 1M spec (GSM8K about 52 %, against 97 % with speculation); send them to B=16.
+- APC must not be enabled with the 131,072-token specs.
 
-## Next release
-
-Cheaper APC (asynchronous snapshots: branch `ssinghal/dsv4p1-apc-fast`), packing several prompts into one prefill call, and a host-tiered prefix cache on paged prefill (`PAGED_PREFILL_APC_DESIGN.md`, branch `ssinghal/dsv4p1-paged-apc-design`). Full list: `FUTURE_WORK.md`.
-
-## Upgrade notes
-
-- Pick the runtime spec with `SPEC=...` in step 3 of `GETTING_STARTED.md`; a launch without a spec uses the catalog, which now matches the default specs.
-- Startup of the long-context servers takes about 25-40 minutes on a cold cache (weights and kernels).
-- New or changed environment variables: `DSV41_VLLM_SPEC_ISL_MAX` (now unlimited), `DSV41_SHARED_SAMPLER` / `DSV41_SHARED_SAMPLER_SPEC` (default 1), `DSV41_PF_SMALL_BUCKET` and `DSV41_PF_SMALL_MIN_CTX`, `DSV41_APC` (1 = prefix caching, needs `enable-prefix-caching`), `DSV41_IDX_SWITCH` (262144), `DSV41_SPEC_MAX_CTX`.
+Next release: cheaper APC, host-tiered prefix cache on paged prefill (`PAGED_PREFILL_APC_DESIGN.md`), more in `FUTURE_WORK.md`.
