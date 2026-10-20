@@ -31,6 +31,7 @@ import torch
 
 import ttnn
 from models.demos.blackhole.deepseek_v41_flash.tt import paged_ops as P
+from models.demos.blackhole.deepseek_v41_flash.tt import prefill_paged as PG
 
 SKIP = 0xFFFFFFFF
 
@@ -80,7 +81,9 @@ def carried_specs(model):
         sp = getattr(pa, "sparse", None)
         if sp is None or not getattr(sp, "dyn_on", False):
             continue
-        if sp.kvt is not None:
+        if (
+            sp.kvt is not None and sp.kvt.t is not None
+        ):  # (paged prefill, DSV41_PF_PAGED=read: no table, the latents are the pool pages)
             add(CarriedSpec(f"L{lid}.kvt", sp.kvt.t, "tail", ratio=pa.ratio, end=sp.kvt.LAT))
         ix = sp.indexer
         if ix is not None and sp.owner and ix.key_owner is None:
@@ -263,6 +266,34 @@ class ApcUnsupported(RuntimeError):
     """the model build has no carried state the snapshot code knows (dense prefill path, fp8 kv table): prefix caching stays off"""
 
 
+def read_pool_latents(model, b, src, n):
+    """Paged prefill: entries [0, n) of kv-source layer ``src`` of user ``b`` -> torch bf16 [n, 512], gathered ON the device from the user's pool pages (``ttnn.embedding`` over the
+    bf16 pool, row ids of the user's mesh row; pieces of 16384 rows) and read from one device of the mesh row."""
+    pool, md, rows, cols = model.pool, model.md, model.rows, model.cols
+    assert pool.dtype == ttnn.bfloat16, "APC on the paged prefill needs the bf16 pool"
+    r = b // model.U
+    phys = pool.phys_rows(b, src, torch.arange(n)).long()
+    shard = ttnn.ShardTensor2dMesh(md, dims=(0, None), mesh_shape=(rows, cols))
+    out = []
+    for a in range(0, n, 16384):
+        m = min(16384, n - a)
+        ids = torch.zeros(rows, 1, 1, m, dtype=torch.int64)
+        ids[r, 0, 0] = phys[a : a + m]
+        d_ids = ttnn.from_torch(
+            ids.to(torch.int32),
+            device=md,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=shard,
+        )
+        g = ttnn.embedding(d_ids, pool.pool, layout=ttnn.ROW_MAJOR_LAYOUT)  # [1, 1, m, 512] per device
+        out.append(ttnn.to_torch(ttnn.get_device_tensors(g)[r * cols]).reshape(m, 512).clone())
+        ttnn.deallocate(g)
+        ttnn.deallocate(d_ids)
+    return torch.cat(out) if len(out) > 1 else out[0]
+
+
 def snapshot_user(model, b, s, toks):
     """State of user ``b`` right after a step that ended at position ``s`` (``model.pf_resume[b] == s``) -> PrefixSnapshot. ``toks``: the user's tokens [>= s]. The pool latents of the kv-source layers
     are NOT read from the pool (an fp8 pool, and reading it would mean the whole per-device pool): the kv table of a source layer holds the same bf16 latents (entry j = FIFO row LAT - n + j).
@@ -273,8 +304,9 @@ def snapshot_user(model, b, s, toks):
     cols = model.cols
     snap = PrefixSnapshot(s=s, toks=torch.as_tensor(toks).long().reshape(-1)[:s].clone())
     specs = carried_specs(model)
+    paged = PG.read_on()
     for src in _sources(model):
-        if f"L{src}.kvt" not in specs:
+        if not paged and f"L{src}.kvt" not in specs:
             raise ApcUnsupported(f"no kv table for source layer {src} (dense prefill path)")
     for name, sp in specs.items():
         if sp.tensor.dtype != ttnn.bfloat16:
@@ -303,7 +335,10 @@ def snapshot_user(model, b, s, toks):
             vals = [torch.cat(x, dim=2) if len(x) > 1 else x[0] for x in pieces]
         snap.carried[name] = vals * cols if sp.replicated else vals
     for src in _sources(model):
-        snap.pool[src] = snap.carried[f"L{src}.kvt"][0][0, 0]  # [s / ratio, 512], shared with the carried copy
+        if paged:  # no table: the latents are read from the user's pool pages
+            snap.pool[src] = read_pool_latents(model, b, src, s // P.SRC_RATIO[src])
+        else:
+            snap.pool[src] = snap.carried[f"L{src}.kvt"][0][0, 0]  # [s / ratio, 512], shared with the carried copy
     snap.seconds = time.perf_counter() - t0
     return snap
 

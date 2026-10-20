@@ -860,7 +860,9 @@ class DSV41PrefillSparse:
             else:
                 self.indexer.sh = None
         if paged and not hasattr(ctx, "pg"):
-            assert PG.BOUND["sink"].pool.dtype == ttnn.bfloat16, "DSV41_PF_PAGED=read needs a bf16 pool (P1)"
+            assert (
+                PG.BOUND["sink"].pool.dtype == ttnn.bfloat16 or os.environ.get("DSV41_PF_PAGED_FP8") == "1"
+            ), "DSV41_PF_PAGED=read needs a bf16 pool (P1); DSV41_PF_PAGED_FP8=1 reads an fp8 pool (P2a: window rows and latents rounded to fp8)"
             ctx.pg = PG.PagedCtx(self.md, ctx, self.U)
             ctx.upd_hooks.append(lambda c, s0: c.pg.update(s0))
         if not hasattr(ctx, "sp_win"):

@@ -1282,7 +1282,7 @@ class Model:
         from models.demos.blackhole.deepseek_v41_flash.tt.prefix_cache import PrefixCache
 
         self.apc = PrefixCache(self, int(os.environ.get("DSV41_VLLM_CHUNK", "512")), budget_bytes, policy, log=self.log)
-        self.apc.set_signature((tuple(self.layer_ids), self.pool.ring_rows, str(self.kv_dtype), self.Up))
+        self.apc.set_signature((tuple(self.layer_ids), self.pool.ring_rows, str(self.kv_dtype), self.Up, PGM.MODE))
         return self.apc
 
     def reset_prefix_cache(self):

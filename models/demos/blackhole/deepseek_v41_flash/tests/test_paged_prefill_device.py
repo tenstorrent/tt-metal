@@ -29,6 +29,11 @@ CHUNK = int(os.environ.get("PP_CHUNK", "512"))
 MODES = os.environ.get("PP_MODES", "0,write,read").split(",")
 REPS = int(os.environ.get("PP_REPS", "2"))
 LAYERS = os.environ.get("DSV41_LAYERS", "0-24")
+NEEDLE = (
+    os.environ.get("PP_NEEDLE") == "1"
+)  # needle-in-haystack prompts (depths PP_DEPTHS, one per user), exact length ISL, answers decoded
+DEPTHS = [float(x) for x in os.environ.get("PP_DEPTHS", "0.1,0.4,0.7,0.95").split(",")]
+DECODE = int(os.environ.get("PP_DECODE", "0"))  # plain greedy decode steps after every prefill (end-to-end check)
 
 
 @pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
@@ -83,12 +88,38 @@ def _run(mesh_device):
         log=log,
     )
     assert pool.scratch_rows > 0, "build with DSV41_PF_PAGED=write|read"
-    assert pool.dtype == ttnn.bfloat16 or set(MODES) == {"0"}, "write / read need a bf16 pool (P1)"
+    assert (
+        pool.dtype == ttnn.bfloat16 or set(MODES) == {"0"} or os.environ.get("DSV41_PF_PAGED_FP8") == "1"
+    ), "write / read need a bf16 pool (P1)"
     g = torch.Generator().manual_seed(4321)
     prompts = torch.randint(1000, 100000, (B, ISL), generator=g)
     users = [0, 5, 10, 15] if U >= 4 else [0, U]
     lens_pick = [ISL, ISL - 197, ISL - 1024 - 3, ISL - 512]  # aligned, unaligned, short unaligned, chunk-aligned
     lens = {u: lens_pick[i % 4] for i, u in enumerate(users)}
+    if NEEDLE:
+        tk = args.tokenizer
+        rng = torch.Generator().manual_seed(7)
+        words = "alpha beta gamma delta river stone cloud forest engine window garden bridge market".split()
+        filler = tk.encode(
+            " ".join(words[i] for i in torch.randint(0, len(words), (ISL,), generator=rng).tolist()),
+            add_special_tokens=False,
+        )
+        pre = tk.encode("The following is a long text with a hidden fact.\n\n", add_special_tokens=False)
+        post = tk.encode(
+            "\n\nQuestion: What is the secret code mentioned in the text above? Answer with just the number.\nAnswer:",
+            add_special_tokens=False,
+        )
+        codes = {}
+        for i, u in enumerate(users):
+            code = 4817 + 1111 * i
+            codes[u] = code
+            nd = tk.encode(f" The secret code is {code}. ", add_special_tokens=False)
+            room = ISL - len(pre) - len(post) - len(nd)
+            n1 = int(DEPTHS[i % len(DEPTHS)] * room)
+            ids = pre + filler[:n1] + nd + filler[n1:room] + post
+            assert len(ids) == ISL and len(filler) >= room
+            prompts[u] = torch.tensor(ids)
+        lens = {u: ISL for u in users}
     log(f"PP model: B={B} U={U} Up={m.Up} layers {LAYERS} chunk {CHUNK} S_pad {S_pad} lens {lens}")
 
     def snap():
@@ -98,7 +129,7 @@ def _run(mesh_device):
 
     results = {}
     for mode in MODES:
-        PG.set_mode(mode)
+        PG.set_mode(mode.split("#")[0])  # "0#b": a second dense run (run-to-run noise baseline)
         m.prefill_model.teardown_dyn()
         m.release_trace()
         m.pf_resume = {}
@@ -119,12 +150,35 @@ def _run(mesh_device):
             log(
                 f"PP mode {mode} rep {rep}: wall {wall:.2f}s replay_s {tm.get('replay_s', 0):.3f} replays {tm.get('replays')}"
             )
+        dec = None
+        if DECODE:
+            tok = torch.zeros(B, dtype=torch.long)
+            pos = torch.zeros(B, dtype=torch.long)
+            for u in users:
+                tok[u], pos[u] = int(res[u][0]), lens[u]
+            dec = {"tok": [], "logits": []}
+            t0 = time.perf_counter()
+            for step in range(DECODE):
+                out = m.decode_forward(tok, pos, enable_trace=True, reload_inputs=True)
+                lg = m.read_logits().clone()
+                dec["tok"].append(torch.stack([out[u].clone() for u in users]))
+                dec["logits"].append(lg[users].float().clone())
+                for u in users:
+                    tok[u], pos[u] = int(out[u]), pos[u] + 1
+            if NEEDLE:
+                for i, u in enumerate(users):
+                    ids = [int(res[u][0])] + [int(t[i]) for t in dec["tok"]]
+                    txt = tk.decode(ids)
+                    log(
+                        f"PP NEEDLE mode {mode} depth {DEPTHS[i % len(DEPTHS)]} user {u} code {codes[u]}: found {str(codes[u]) in txt} answer {txt[:60]!r}"
+                    )
+            log(f"PP mode {mode}: {DECODE} decode steps in {time.perf_counter() - t0:.1f}s")
         free = m.dram_snapshot()
         log(
             f"PP mode {mode}: DRAM per bank after capture+run: allocated {free[0]:.1f} MiB free {free[1]:.1f} MiB largest block {free[2]:.1f} MiB"
         )
         st = snap()
-        results[mode] = dict(res=res, pool=st, times=times, dram=free)
+        results[mode] = dict(res=res, pool=st, times=times, dram=free, dec=dec)
 
     if os.environ.get(
         "PP_SAVE"
@@ -165,6 +219,20 @@ def _run(mesh_device):
                 bad.append(f"mesh row {row}: {len(ne)} pool rows differ (first {ne[:6].tolist()})")
         log(f"PP {mode} vs {MODES[0]} pool (pages + rings): " + ("bit-identical" if not bad else "; ".join(bad)))
         ok &= not bad
+    if DECODE:
+        ref_dec = results[MODES[0]]["dec"]
+        for mode in MODES[1:]:
+            d = results[mode]["dec"]
+            toks_eq = all(torch.equal(a, b) for a, b in zip(ref_dec["tok"], d["tok"]))
+            lg_eq = sum(int(torch.equal(a, b)) for a, b in zip(ref_dec["logits"], d["logits"]))
+            first_diff = next(
+                (i for i, (a, b) in enumerate(zip(ref_dec["tok"], d["tok"])) if not torch.equal(a, b)), None
+            )
+            log(
+                f"PP DECODE {mode} vs {MODES[0]}: {DECODE} steps x {len(users)} users, generated ids identical {toks_eq} (first differing step {first_diff}), logits bit-identical in {lg_eq}/{DECODE} steps"
+            )
+            ok &= toks_eq
+        log("PP DECODE sample ids user " + str(users[0]) + ": " + str([int(t[0]) for t in ref_dec["tok"][:16]]))
     for mode in MODES:
         w = results[mode]["times"][-1]
         log(
