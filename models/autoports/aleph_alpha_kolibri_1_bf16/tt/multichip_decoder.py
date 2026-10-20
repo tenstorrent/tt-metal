@@ -131,7 +131,6 @@ class MeshPolicy:
     prefill_ccl_dtype: str = "bfloat8_b"
     num_links: int = 2
     fused_qkv: bool | str = False
-    fused_wo: bool = False
     ccl_mode: str = "direct"
 
 
@@ -149,7 +148,6 @@ class CollectiveWorkspace:
             policy.ccl_mode,
             policy.ccl_dtype,
             policy.num_links,
-            policy.fused_wo,
             policy.fused_qkv,
             tuple(policy.residual_grid),
         )
@@ -191,13 +189,6 @@ class CollectiveWorkspace:
             ]
             self.ar_semaphores = [ttnn.create_global_semaphore(self.device, self.ccl.ccl_cores, 0) for _ in range(2)]
             self.ar_index = 0
-        if self.policy.fused_wo:
-            self.mmrs_intermediate = ttnn.empty(
-                (2, 1, 1, 2560), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device, memory_config=DRAM
-            )
-            self.mmrs_output = ttnn.empty(
-                (1, 1, 1, 640), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device, memory_config=DRAM
-            )
         if policy.fused_qkv == "minimal":
             # Gather storage must match input dtype, independently of the BF16
             # matmul output. The op's automatic buffer takes output dtype.
@@ -543,7 +534,7 @@ class MultichipDecoder(OptimizedDecoder):
             block_w=bw,
             inplace=False,
         )
-        for name in ("ar_buffers", "ar_semaphores", "mmrs_intermediate", "mmrs_output", "qkv_gather"):
+        for name in ("ar_buffers", "ar_semaphores", "qkv_gather"):
             if hasattr(self.collective_workspace, name):
                 setattr(self, name, getattr(self.collective_workspace, name))
         self.ar_index = 0
@@ -1278,37 +1269,4 @@ class MultichipDecoder(OptimizedDecoder):
             activation_dtype = getattr(ttnn, self.policy.projection_activation_dtype)
             if x.dtype != activation_dtype:
                 x = ttnn.typecast(x, activation_dtype)
-        if self.policy.fused_wo and w is self.projections["o_proj"] and x.shape[-2] == 1:
-            if self.policy.residual_layout != "sharded":
-                raise ValueError("Fused WO candidate carries sharded residual")
-            x = ttnn.to_memory_config(x, DRAM)
-            program = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                compute_with_storage_grid_size=(8, 6),
-                in0_block_w=4,
-                out_subblock_h=1,
-                out_subblock_w=1,
-                per_core_M=1,
-                per_core_N=10,
-                out_block_w=5,
-                transpose_mcast=False,
-                fuse_batch=False,
-            )
-            _, result = ttnn.experimental.matmul_reduce_scatter_async(
-                x,
-                ttnn.reshape(w, (1, 1, 1536, 2560)),
-                persistent_intermediate_buffer=self.mmrs_intermediate,
-                persistent_output_buffer=self.mmrs_output,
-                dim=3,
-                multi_device_global_semaphore=self.ccl.get_rs_ping_pong_semaphore(),
-                reduce_scatter_core_grid_offset=(0, 6),
-                barrier_semaphore=self.ccl.get_barrier_semaphore(),
-                num_links=1,
-                memory_config_rs=DRAM,
-                memory_config_mm=DRAM,
-                topology=self.ccl.topology,
-                program_config=program,
-                compute_kernel_config=self.projection_info[id(w)]["compute"],
-                dtype=dtype,
-            )
-            return result
         return super()._linear(x, w, dtype=dtype, activation=activation)

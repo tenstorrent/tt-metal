@@ -109,7 +109,6 @@
     "prefill_ccl_dtype": "bfloat8_b",
     "num_links": 2,
     "fused_qkv": false,
-    "fused_wo": false,
     "ccl_mode": "direct"
   },
   "layer_exceptions": {},
