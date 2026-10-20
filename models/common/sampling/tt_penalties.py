@@ -429,7 +429,6 @@ class TTPenalties(LightweightModule):
         )
         original_shape = tt_logits.shape
         reshaped = ttnn.reshape(tt_logits, (-1, original_shape[-1]))
-        # Penalties are written in place; in a block-float format one penalized token re-quantizes its 15 neighbours.
         if reshaped.dtype in (ttnn.bfloat8_b, ttnn.bfloat4_b):
             reshaped = ttnn.typecast(reshaped, ttnn.bfloat16, **self._op_kwargs)
         apply_penalties(reshaped, context)

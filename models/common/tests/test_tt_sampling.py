@@ -1248,8 +1248,6 @@ class TestFrequencyPenaltyPerRequest:
 class TestPenaltiesOnBlockFloatLogits:
     @pytest.mark.parametrize("mesh_device", [1], indirect=True)
     def test_bfloat8_b_logits_leave_other_tokens_unchanged(self, mesh_device):
-        """The LM head hands over bfloat8_b logits, which share one exponent across 16 tokens of a
-        row. A penalty on one token must not re-quantize the logits of the tokens next to it."""
         torch.manual_seed(0)
         vocab_size = 1024
         penalized_token = 3
@@ -1263,7 +1261,6 @@ class TestPenaltiesOnBlockFloatLogits:
             dtype=ttnn.bfloat8_b,
             layout=ttnn.TILE_LAYOUT,
         )
-        # The values the module actually receives, after bfloat8_b quantization.
         logits_in = ttnn.to_torch(ttnn.get_device_tensors(logits_tt)[0]).float().reshape(BATCH_SIZE, vocab_size)
 
         result_tt = penalties.apply(logits_tt)
@@ -1273,7 +1270,6 @@ class TestPenaltiesOnBlockFloatLogits:
         others[penalized_token] = False
         mismatched = (result[:, others] != logits_in[:, others]).sum().item()
         assert mismatched == 0, f"{mismatched} logits of tokens that were not penalized changed"
-        # frequency 2.0 x 32 occurrences; just past -64 one bfloat16 step is 0.5
         assert torch.allclose(result[:, penalized_token], logits_in[:, penalized_token] - 64.0, atol=0.5)
 
 
