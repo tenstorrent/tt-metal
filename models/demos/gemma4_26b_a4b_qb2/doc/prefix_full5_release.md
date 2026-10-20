@@ -93,3 +93,22 @@ All iterative jobs must be visible in `tt-agentic-bringup-qb2/actions`; the
 user explicitly permits its experiment workflow branch. Final release is
 the previously requested Shield exception. No hidden remote execution,
 local validation, shared workflow mutation, or production PR update is used.
+
+## Final Shield dispatch — 2026-10-20
+
+The user explicitly authorized final dispatch despite the unresolved runner
+label limitation. Parent dispatched
+[39384889094](https://github.com/tenstorrent/tt-shield/actions/runs/39384889094)
+through `on-dispatch.yml@main`, runner `BH-Quietbox-2`, device `p300x2`,
+workflow `release`, CI scope 10/5/5. Exact inputs were Metal
+`84dd77aacd5c992700d2643add54e3f3e6c5a82f`, inference
+`29f1648bff455a330bafdcaedcf7fd37178cb54d`, and plugin
+`0a76258e14ca7237067ca9a22ec02e257bee570a`. The empty Docker-image input
+requests the one necessary exact-source build. No duplicate dispatch or
+build was started. This document may advance independently; the dispatched
+model ref remains immutable.
+
+Initial validation and SHA-resolution jobs passed. The inference-server
+image build started; image tag/digest and final model results are pending.
+If the known faulty worker is selected and fails fabric initialization,
+preserve that infrastructure evidence and do not blindly repeat the run.
