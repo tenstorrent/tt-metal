@@ -1,0 +1,14 @@
+fast-Bfp8_b-Float16_b-No-Half-r1c2
+fast-Bfp8_b-Float16_b-No-Half-r1c4
+fast-Bfp8_b-Float16_b-No-Half-r1c8
+fast-Bfp8_b-Float16_b-No-Half-r1c16
+fast-Bfp4_b-Float16_b-No-Half-r1c8
+fast-Float16_b-Float16_b-No-Half-r1c4
+fast-Float16_b-Float16_b-No-Half-r1c8
+fast-Bfp8_b-Float16_b-No-Full-r1c8
+fast-Float16_b-Float16_b-No-Half-r1c16
+fast-Bfp8_b-Float16_b-Yes-Half-r1c8
+fast-Bfp8_b-Float32-Yes-Half-r1c8
+fast-Float16_b-Float16_b-Yes-Half-r1c8
+fast-Float32-Float32-Yes-Half-r1c8
+fast-Float16_b-Float16_b-No-Full-r1c8

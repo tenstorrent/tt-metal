@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
-"""ELF guard: usage elfcheck.py SIDE=<build dir> ...  Keys every variant by its build.h without the UT_HEAD_API line
-(so a config has one key on every side), hashes the loadable sections of the unpack/math/pack ELFs. Requires: M2 == M on every common key;
-H1 != M and H2 != M on the pack ELF of every untilize_allcfg variant. Prints GUARD ok or GUARD FAIL."""
+"""ELF guard for the fast-untilize arms: usage elfcheck_fu.py SIDE=<build dir> ... Keys every variant by its build.h (without UT_HEAD_API),
+hashes the loadable sections. Requires: M2 == M on every common key; every D arm differs from H1 in the unpack ELF of some variant and is identical to H1 in
+the pack ELF on every common key; H1 differs from M in the pack ELF."""
 import glob, hashlib, struct, sys
 
 
 def alloc_hash(path):
-    """sha1 of the loadable sections (SHF_ALLOC, not NOBITS) of an ELF32: debug info carries build paths."""
     b = open(path, "rb").read()
     shoff, = struct.unpack_from("<I", b, 0x20); shentsize, shnum, shstrndx = struct.unpack_from("<HHH", b, 0x2E)
     sec = [struct.unpack_from("<IIIIIIIIII", b, shoff + i * shentsize) for i in range(shnum)]
@@ -15,6 +14,7 @@ def alloc_hash(path):
         if flags & 2 and typ != 8:
             h.update(struct.pack("<II", addr, size)); h.update(b[off:off + size])
     return h.hexdigest()[:12]
+
 
 def scan(d):
     out = {}
@@ -31,21 +31,29 @@ def scan(d):
         out[k] = h
     return out
 
+
 S = dict(a.split("=", 1) for a in sys.argv[1:]); E = {s: scan(d) for s, d in S.items()}
 ok = True
 for s, e in E.items():
     print(f"ELF {s}: {len(e)} variants")
-def cmp(a, b, src=None):
-    ks = [k for k in E[a] if k in E[b] and (src is None or k.startswith(src))]
+
+
+def cmp(a, b):
+    ks = [k for k in E[a] if k in E[b]]
     same = {t: sum(E[a][k][t] == E[b][k][t] for k in ks) for t in ("unpack", "math", "pack")}
-    print(f"ELF {a} vs {b} {src or 'all'}: {len(ks)} common, identical unpack/math/pack {same['unpack']}/{same['math']}/{same['pack']}")
+    print(f"ELF {a} vs {b}: {len(ks)} common, identical unpack/math/pack {same['unpack']}/{same['math']}/{same['pack']}")
     return ks, same
+
+
 if "M2" in E:
     ks, same = cmp("M", "M2")
     ok &= len(ks) > 0 and all(v == len(ks) for v in same.values())
-for h in ("H1", "H2"):
-    if h in E:
-        ks, same = cmp("M", h, "untilize_allcfg_perf.cpp")
-        ok &= len(ks) > 0 and same["pack"] == 0
-        cmp("M", h, "fast_untilize_test.cpp")
+if "H1" in E and "M" in E:
+    ks, same = cmp("M", "H1")
+    ok &= len(ks) > 0 and same["pack"] < len(ks)
+for h in E:
+    if h in ("M", "M2", "H1"):
+        continue
+    ks, same = cmp("H1", h)
+    ok &= len(ks) > 0 and same["unpack"] < len(ks) and same["pack"] == len(ks)
 print("GUARD ok" if ok else "GUARD FAIL")
