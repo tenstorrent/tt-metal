@@ -86,9 +86,15 @@ def test_mesh_model_chain_and_perf(mesh_device):
         out = model.mesh.to_host(streams_tr, rows=2 if model.mesh.rows > 1 else None).float()[0, 0]  # [U, 16384]
         outs.append(out)
     per_user = []
+    collapsed = outs[0].shape[-1] == cfg.hidden_size  # the last layer emitted the head's stream mean (collapse=True)
+    ref_cmp = ref.float().mean(1) if collapsed else ref
     for u in range(U):
-        chain = torch.stack([o[u] for o in outs]).reshape(S, 4, -1)
-        per_user.append(pcc(ref, chain))
+        chain = (
+            torch.stack([o[u] for o in outs]).reshape(S, -1)
+            if collapsed
+            else torch.stack([o[u] for o in outs]).reshape(S, 4, -1)
+        )
+        per_user.append(pcc(ref_cmp, chain))
     per_user.sort()
     # greedy ids of the last position vs the host head on HF's rows
     from models.demos.glm53_flash.reference.checkpoint import FINAL_NORM_KEY, LM_HEAD_KEY, load_tensors, shard_headers

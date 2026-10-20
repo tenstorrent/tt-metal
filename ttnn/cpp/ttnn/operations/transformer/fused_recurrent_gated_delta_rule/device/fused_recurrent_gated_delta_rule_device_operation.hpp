@@ -30,7 +30,8 @@ struct FusedRecurrentGatedDeltaRuleDeviceOperation {
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 };
 
-// Low-level primitive dispatch.
+// Low-level primitive dispatch. `per_channel_decay`: decay is [BH*T, 1, K] (KDA per-key-channel decay) instead
+// of the [BH*T, 1, 1] scalar.
 std::vector<Tensor> fused_recurrent_gated_delta_rule(
     const Tensor& q,
     const Tensor& k,
@@ -43,6 +44,7 @@ std::vector<Tensor> fused_recurrent_gated_delta_rule(
     bool output_final_state,
     bool output_per_token_state,
     const tt::tt_metal::MemoryConfig& output_mem_config,
-    const DeviceComputeKernelConfig& compute_kernel_config);
+    const DeviceComputeKernelConfig& compute_kernel_config,
+    bool per_channel_decay = false);
 
 }  // namespace ttnn::prim

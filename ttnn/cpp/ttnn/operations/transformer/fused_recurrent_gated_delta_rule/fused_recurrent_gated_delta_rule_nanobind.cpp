@@ -16,19 +16,22 @@ void bind_fused_recurrent_gated_delta_rule(nb::module_& mod) {
         R"doc(
         Fused recurrent Gated Delta Rule forward (flash-linear-attention algorithm).
 
-        Single-token decode (T=1) and K+1-token speculative verify are the same op: one Tensix core
-        per head walks the T token axis sequentially, holding the recurrent state on-core. Matches
-        FLA `naive_recurrent_gated_delta_rule` (fp32/HiFi4). q/k must be L2-normalized over K on host.
+        Single-token decode (T=1) and K+1-token speculative verify are the same op: the B*HV heads are
+        dealt round-robin over the Tensix cores (more heads than cores is fine) and each core walks its
+        heads one after another, per head the T token axis sequentially, holding the recurrent state
+        on-core. Matches FLA `naive_recurrent_gated_delta_rule` (fp32/HiFi4); with a per-key-channel g
+        it is the KDA (Kimi Delta Attention) recurrence. q/k must be L2-normalized over K on host.
 
         Args:
             q (ttnn.Tensor):    [B, T, H,  K]  (L2-normalized over K)
             k (ttnn.Tensor):    [B, T, H,  K]  (L2-normalized over K)
             v (ttnn.Tensor):    [B, T, HV, V]
-            g (ttnn.Tensor):    [B, T, HV]     log-space decay (exp(g) applied internally)
+            g (ttnn.Tensor):    [B, T, HV]     log-space decay (exp(g) applied internally), or
+                                [B, T, HV, K]  per-key-channel log decay (KDA): state row k decays by exp(g[k])
             beta (ttnn.Tensor): [B, T, HV]     gate (already sigmoid'd)
 
         Keyword Args:
-            scale (float, optional): query scale, defaults to K**-0.5.
+            scale (float, optional): query scale, defaults to K**-0.5 (1.0 skips the multiply).
             initial_state (ttnn.Tensor, optional): [B, HV, K, V]; in "ring" mode the [T*BH, K, V] ring
                 (see initial_state_block_idx).
             initial_state_block_idx (ttnn.Tensor, optional): enables "ring" mode: head h starts from ring

@@ -16,14 +16,17 @@ namespace ttnn::transformer {
  * Fused recurrent Gated Delta Rule forward (flash-linear-attention `fused_recurrent_gated_delta_rule`).
  *
  * The single-token decode kernel (T=1) and the K+1-token speculative-verify kernel are the same op:
- * one Tensix core per head walks the T token axis sequentially, holding the recurrent state on-core,
+ * the heads are dealt round-robin over the Tensix cores (B*HV may exceed the core count) and each
+ * core walks its heads one after another, per head the T token axis sequentially, holding the
+ * recurrent state on-core,
  * and matches FLA `naive_recurrent_gated_delta_rule` numerics (fp32/HiFi4). The vLLM
  * `fused_sigmoid_gating_delta_rule_update` is exactly this recurrence over the speculative tokens.
  *
  *   q    [B, T, H,  K]   (L2-normalized over K on host; use_qk_l2norm is not done here)
  *   k    [B, T, H,  K]   (L2-normalized over K on host)
  *   v    [B, T, HV, V]
- *   g    [B, T, HV]      log-space decay (the op applies exp(g) internally)
+ *   g    [B, T, HV]      log-space decay (the op applies exp(g) internally), or
+ *        [B, T, HV, K]   per-key-channel log decay (KDA): row k of the state decays by exp(g[k])
  *   beta [B, T, HV]      gate (already sigmoid'd by caller)
  *
  * Returns:

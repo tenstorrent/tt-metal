@@ -88,7 +88,12 @@ void FusedRecurrentGatedDeltaRuleDeviceOperation::validate_on_program_cache_miss
     check(in.q, "q", {BHT, 1u, K});
     check(in.k, "k", {BHT, 1u, K});
     check(in.v, "v", {BHT, 1u, V});
-    check(in.decay, "decay", {BHT, 1u, 1u});
+    // Scalar decay: exp(g_t) at tile element [0,0]. Per-channel (KDA): row 0 holds exp(g_t[k]) for each key channel.
+    if (attrs.per_channel_decay) {
+        check(in.decay, "decay", {BHT, 1u, K});
+    } else {
+        check(in.decay, "decay", {BHT, 1u, 1u});
+    }
     check(in.beta, "beta", {BHT, 1u, 1u});
     // Ring mode: initial_state is the [BH*T,K,V] ring (also the in-place state output); otherwise [BH,K,V].
     const bool ring = in.initial_state_block_idx.has_value();
@@ -177,7 +182,8 @@ std::vector<Tensor> fused_recurrent_gated_delta_rule(
     bool output_final_state,
     bool output_per_token_state,
     const tt::tt_metal::MemoryConfig& output_mem_config,
-    const DeviceComputeKernelConfig& compute_kernel_config) {
+    const DeviceComputeKernelConfig& compute_kernel_config,
+    bool per_channel_decay) {
     using OperationType = FusedRecurrentGatedDeltaRuleDeviceOperation;
 
     const auto& q_shape = q.logical_shape();  // [BH*T, 1, K]
@@ -198,6 +204,7 @@ std::vector<Tensor> fused_recurrent_gated_delta_rule(
         .val_dim = v_shape[2],
         .output_final_state = output_final_state,
         .output_per_token_state = output_per_token_state,
+        .per_channel_decay = per_channel_decay,
         .output_mem_config = output_mem_config,
         .compute_kernel_config = compute_kernel_config,
     };

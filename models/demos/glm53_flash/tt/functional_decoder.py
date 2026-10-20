@@ -378,22 +378,31 @@ class FunctionalDecoder(LightweightModule):
         self.next_start[user] = start + seq_len
         return out
 
-    def decode_forward(self, streams: ttnn.Tensor, *, positions: DecodePositions) -> ttnn.Tensor:
+    def decode_forward(
+        self, streams: ttnn.Tensor, *, positions: DecodePositions, collapse: bool = False
+    ) -> ttnn.Tensor:
         """One token per user slot. DSA layers pick the dense (traceable) or sparse path from the
-        host positions carried by ``positions``."""
+        host positions carried by ``positions``. ``collapse`` (the last layer): return the LM head's
+        mean over the 4 new streams ``[1,1,B,4096]`` fp32 instead of the streams (``TtMHCFast`` only)."""
         B = streams.shape[-2]
         layer = self._require_weights()
         if any(p >= self.max_seq_len for p in positions.host):
             raise ValueError(f"positions {positions.host} exceed max_seq_len {self.max_seq_len}")
         if self.mesh.rows > 1 and not self.is_kda and any(p > layer.attn.dense_exact_max_pos for p in positions.host):
             raise NotImplementedError("sparse DSA decode (positions > 2050) on a multi-row mesh is not wired yet")
-        out, new_state = layer.decode_forward(streams, self._state_for_decode(B), positions=positions)
+        out, new_state = layer.decode_forward(
+            streams, self._state_for_decode(B), positions=positions, collapse=collapse
+        )
         if self.is_kda:
             assert new_state.kda is self.kda_batched, "KDA decode must update the persistent state in place"
         self.next_start = [p + 1 for p in positions.host]  # a prefill chunk may continue after decode
         return out
 
     # ------------------------------------------------------------------- trace
+    @property
+    def supports_collapse(self) -> bool:
+        return bool(getattr(self.layer.ffn_hc, "supports_collapse", False)) if self.layer is not None else False
+
     def capture_decode_trace(
         self, streams: ttnn.Tensor, positions: DecodePositions, *, cq_id: int = 0, allow_sparse_range: bool = False
     ):

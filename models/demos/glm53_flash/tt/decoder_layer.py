@@ -139,6 +139,25 @@ class TtDecoderLayer(LightweightModule):
     def _norm(self, h: ttnn.Tensor, w: ttnn.Tensor) -> ttnn.Tensor:
         return ttnn.rms_norm(h, epsilon=self.cfg.rms_norm_eps, weight=w, compute_kernel_config=self.norm_compute)
 
+    def _hc_call(self, hc, streams, sublayer, norm_w, collapse: bool = False):
+        """Run a hyper-connection wrap around ``sublayer``. ``TtMHCFast`` applies the sublayer's input
+        RMSNorm inside its pre-block (``fuses_norm``: the collapsed hidden comes out normalised, bf16,
+        multicore); the composite ``TtMHCWrap`` hands over the raw bf16 hidden and the closure norms it.
+        ``collapse`` (the last layer's FFN wrap feeding the LM head): return the mean over the new
+        streams ``[1,1,B,hidden]`` fp32 instead of the streams (``supports_collapse`` wraps only)."""
+        if getattr(hc, "fuses_norm", False):
+            kw = dict(collapse=True) if collapse else {}
+            return hc.forward(
+                streams, sublayer, sublayer_dtype=ttnn.bfloat16, norm=(norm_w, self.cfg.rms_norm_eps), **kw
+            )
+        if collapse:
+            raise NotImplementedError("collapse needs a supports_collapse hyper-connection (TtMHCFast)")
+
+        def normed(h):
+            return sublayer(self._norm(h, norm_w))
+
+        return hc.forward(streams, normed, sublayer_dtype=ttnn.bfloat16)
+
     # ------------------------------------------------------------------ prefill
     def prefill_forward(
         self,
@@ -160,8 +179,7 @@ class TtDecoderLayer(LightweightModule):
         T = streams.shape[-2] * self.mesh.rows  # the chunk's rows (this chip holds T / rows of them)
         new_state = LayerState(kda=state.kda, cache=state.cache)
 
-        def attention(h):
-            h = self._norm(h, self.input_norm_w)  # [1,1,T/rows,hidden] bf16
+        def attention(h):  # h: [1,1,T/rows,hidden] bf16, input_layernorm applied
             if self.is_kda:
                 start_t = actual_start if actual_start is not None else self.attn.scalar(start)
                 end = actual_end
@@ -188,23 +206,21 @@ class TtDecoderLayer(LightweightModule):
             ttnn.deallocate(y_full)
             return ttnn.multiply(y, 1.0 / rows, output_tensor=y)
 
-        streams = self.attn_hc.forward(streams, attention, sublayer_dtype=ttnn.bfloat16)
-
-        def ffn(h):
-            return self.mlp(self._norm(h, self.post_norm_w))
-
-        streams = self.ffn_hc.forward(streams, ffn, sublayer_dtype=ttnn.bfloat16)
+        streams = self._hc_call(self.attn_hc, streams, attention, self.input_norm_w)
+        streams = self._hc_call(self.ffn_hc, streams, self.mlp, self.post_norm_w)
         return streams, new_state
 
     # ------------------------------------------------------------------- decode
-    def decode_forward(self, streams: ttnn.Tensor, state: LayerState, *, positions) -> tuple[ttnn.Tensor, LayerState]:
+    def decode_forward(
+        self, streams: ttnn.Tensor, state: LayerState, *, positions, collapse: bool = False
+    ) -> tuple[ttnn.Tensor, LayerState]:
         """streams [1,1,B,4*hidden] fp32 (one token per user); ``positions`` carries the persistent
         [B] int32 device tensors ``positions`` / ``pool_ids`` / ``ring_slots`` and the host values
-        (``FunctionalDecoder.DecodePositions``). KDA layers ignore it."""
+        (``FunctionalDecoder.DecodePositions``). KDA layers ignore it. ``collapse``: return the LM
+        head's mean over the new streams ``[1,1,B,hidden]`` fp32 instead (the last layer)."""
         new_state = LayerState(kda=state.kda, cache=state.cache)
 
-        def attention(h):
-            h = self._norm(h, self.input_norm_w)
+        def attention(h):  # h: [1,1,B,hidden] bf16, input_layernorm applied
             if self.is_kda:
                 y, new_state.kda = self.attn.decode_forward(h, state.kda, inplace=True)
                 return y
@@ -218,10 +234,6 @@ class TtDecoderLayer(LightweightModule):
                 dense_positions=getattr(positions, "dense_positions", None),
             )
 
-        streams = self.attn_hc.forward(streams, attention, sublayer_dtype=ttnn.bfloat16)
-
-        def ffn(h):
-            return self.mlp(self._norm(h, self.post_norm_w))
-
-        streams = self.ffn_hc.forward(streams, ffn, sublayer_dtype=ttnn.bfloat16)
+        streams = self._hc_call(self.attn_hc, streams, attention, self.input_norm_w)
+        streams = self._hc_call(self.ffn_hc, streams, self.mlp, self.post_norm_w, collapse=collapse)
         return streams, new_state

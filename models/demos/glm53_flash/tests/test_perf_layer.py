@@ -6,6 +6,8 @@ Collect (one layer kind at a time, device profiler only, no watcher):
 
     TT_VISIBLE_DEVICES=0 GLM53_PERF_LAYER=3 python -m tracy -r -p -v -m pytest \
         models/demos/glm53_flash/tests/test_perf_layer.py -s
+    GLM53_PERF_B=32 decodes 32 user slots (slot 0 prefilled, every slot fed the same token);
+    GLM53_KDA_FUSED=1 selects the fused KDA decode recurrence (tt/kda.py).
     tt-perf-report <ops_perf_results_*.csv> --start-signpost PERF_DECODE --end-signpost PERF_DECODE_END ...
 
 Pattern: compile/warm-up, synchronize, signpost start, measured warmed pass (traced for decode),
@@ -58,6 +60,7 @@ def _log_dram(device, when: str):
 
 
 LAYER = int(os.environ.get("GLM53_PERF_LAYER", "3"))
+B = int(os.environ.get("GLM53_PERF_B", "1"))  # decode users (user slots): B distinct real token rows at position S
 PREFILL_LEN = int(os.environ.get("GLM53_PERF_PREFILL", "1024"))
 DECODE_STEPS = int(os.environ.get("GLM53_PERF_DECODE_STEPS", "3"))
 # "both" | "prefill" | "decode": the Tracy device-zone hash table collides for the full prefill+decode kernel
@@ -72,7 +75,55 @@ SEED_ONLY = os.environ.get("GLM53_PERF_SEED_ONLY", "0") == "1"
 _DTYPES = {"bfp8": ttnn.bfloat8_b, "bfp4": ttnn.bfloat4_b}
 EXPERT_DTYPE = os.environ.get("GLM53_PERF_EXPERT_DTYPE", "bfp8")
 EXPERT_DOWN_DTYPE = os.environ.get("GLM53_PERF_EXPERT_DOWN_DTYPE", "bfp8")
+# 1: after the traced window, run ONE eager decode step inside PERF_EAGER .. PERF_EAGER_END with nested
+# per-module signposts (ATTN_HC / FFN_HC wraps, ATTN, NORM, ROUTER / EXPERTS / SHARED / MOE); it issues
+# the captured graph's ops in the same order, so tests/perf_layer_report.py can attribute every op of
+# the traced window to its module (the test_perf_mesh.py method)
+EAGER_PASS = os.environ.get("GLM53_PERF_EAGER", "0") == "1"
 DUMP = Path("bringup/references/glm53_flash/T4097")
+
+
+class _Labels:
+    """Wrap bound methods with BEGIN/END signposts for the eager attribution pass."""
+
+    def __init__(self):
+        self._undo = []
+
+    def wrap(self, obj, name: str, label: str):
+        orig = getattr(obj, name)
+
+        def wrapped(*args, **kwargs):
+            signpost(f"{label}_BEGIN")
+            try:
+                return orig(*args, **kwargs)
+            finally:
+                signpost(f"{label}_END")
+
+        setattr(obj, name, wrapped)
+        self._undo.append((obj, name, orig))
+
+    def restore(self):
+        for obj, name, orig in reversed(self._undo):
+            setattr(obj, name, orig)
+        self._undo.clear()
+
+
+def _label_modules(dec: FunctionalDecoder) -> _Labels:
+    lab = _Labels()
+    layer = dec.layer
+    lab.wrap(layer.attn_hc, "forward", "ATTN_HC")
+    lab.wrap(layer.ffn_hc, "forward", "FFN_HC")
+    lab.wrap(layer.attn, "decode_forward", "ATTN")
+    lab.wrap(layer, "_norm", "NORM")
+    mlp = layer.mlp
+    if hasattr(mlp, "router"):  # MoE layer
+        lab.wrap(mlp.router, "forward", "ROUTER")
+        lab.wrap(mlp.experts, "forward", "EXPERTS")
+        lab.wrap(mlp.shared, "forward", "SHARED")
+        lab.wrap(mlp, "forward", "MOE")
+    else:
+        lab.wrap(mlp, "forward", "DENSE_MLP")
+    return lab
 
 
 @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
@@ -88,7 +139,7 @@ def test_layer_perf(mesh_device):
         hf_config=cfg,
         layer_idx=LAYER,
         mesh_device=mesh_device,
-        max_batch=1,
+        max_batch=B,
         max_seq_len=S + 64,
         expert_dtype=_DTYPES[EXPERT_DTYPE],
         expert_down_dtype=_DTYPES[EXPERT_DOWN_DTYPE],
@@ -130,19 +181,20 @@ def test_layer_perf(mesh_device):
 
     # ---- decode: capture trace (warm-up inside), then measured replays
     streams_dev = ttnn.from_torch(
-        torch.zeros(1, 1, 1, cfg.hc_mult * cfg.hidden_size),
+        torch.zeros(1, 1, B, cfg.hc_mult * cfg.hidden_size),
         dtype=ttnn.float32,
         layout=ttnn.TILE_LAYOUT,
         device=mesh_device,
     )
     ttnn.copy_host_to_device_tensor(
         ttnn.from_torch(
-            pre["x_in"][:, S : S + 1].reshape(1, 1, 1, -1).float(), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT
+            pre["x_in"][:, S : S + B].reshape(1, 1, B, -1).float(), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT
         ),
         streams_dev,
     )
-    dp = dec.make_decode_positions([S])
+    dp = dec.make_decode_positions([S] * B)
     trace_id, out_dev, _ = dec.capture_decode_trace(streams_dev, dp)
+    _read_profiler(mesh_device)  # the warm-up + capture passes alone can fill the per-core marker buffers at B=32
     dec.replay_decode(trace_id)  # one warm replay
     ttnn.synchronize_device(mesh_device)
     _read_profiler(mesh_device)
@@ -155,7 +207,19 @@ def test_layer_perf(mesh_device):
     signpost("PERF_DECODE_END")
     _read_profiler(mesh_device)
     logger.info(
-        f"layer {LAYER} ({kind}) traced decode B=1: {t_decode*1e3:.2f} ms/step wall "
-        f"(single-layer rate {1/t_decode:.0f} tok/s/user; x45 layers -> {1/(45*t_decode):.1f} tok/s/user)"
+        f"layer {LAYER} ({kind}) traced decode B={B}: {t_decode*1e3:.2f} ms/step wall "
+        f"(single-layer rate {1/t_decode:.0f} tok/s/user, {B/t_decode:.0f} aggregate; "
+        f"x45 layers -> {1/(45*t_decode):.1f} tok/s/user)"
     )
+    if EAGER_PASS:
+        labels = _label_modules(dec)
+        try:
+            signpost("PERF_EAGER")
+            y = dec.decode_forward(streams_dev, positions=dp)
+            ttnn.synchronize_device(mesh_device)
+            signpost("PERF_EAGER_END")
+        finally:
+            labels.restore()
+        _read_profiler(mesh_device)
+        ttnn.deallocate(y)
     ttnn.release_trace(mesh_device, trace_id)
