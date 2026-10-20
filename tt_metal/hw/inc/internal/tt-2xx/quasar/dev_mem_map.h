@@ -473,8 +473,10 @@
 //   - Package-global SPA: 0x1280000000 + n * 4MB.
 //
 // Firmware is linked against the local CPU view, so MEM_CCE_SRAM_LOCAL_BASE is 0 and the offsets
-// below serve as both the hart's addresses and the HAL's. Metal cluster access uses the DRAM-core
-// coordinate plus MEM_CCE_L1_NOC_OFFSET; UMD maps that tagged window onto the host AXI view.
+// below serve as both the hart's addresses and the Mimir-local HAL's. Metal cluster access uses
+// the DRAM-core coordinate plus this tag; UMD maps that tagged window onto the host AXI view.
+// A package-ATT descriptor does not use this tag. Its HAL l1_noc_offset is the CCE SRAM window
+// at 0x1280000000.
 //
 #define MEM_CCE_L1_NOC_OFFSET 0x2000000000ULL
 #define MEM_CCE_SRAM_LOCAL_BASE 0x0
