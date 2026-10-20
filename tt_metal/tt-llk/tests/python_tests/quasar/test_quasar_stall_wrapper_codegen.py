@@ -48,35 +48,38 @@ _PROBE_SOURCE = """
 using namespace ckernel;
 using namespace ckernel::trisc;
 
-extern "C" void probe_none() { t6_semaphore_post<>(3); }
-extern "C" void ref_none() {}
+extern "C" {
+void probe_none(unsigned ix) { t6_semaphore_post<>(ix); }
+void ref_none() {}
 
-extern "C" void probe_w0() { t6_semaphore_post<p_stall::MATH>(3); }
-extern "C" void ref_w0() { TTI_STALLWAIT(p_stall::STALL_SYNC, p_stall::NOTHING, p_stall::NOTHING, p_stall::MATH); }
+void probe_w0(unsigned ix) { t6_semaphore_post<p_stall::MATH>(ix); }
+void ref_w0() { TTI_STALLWAIT(p_stall::STALL_SYNC, p_stall::NOTHING, p_stall::NOTHING, p_stall::MATH); }
 
-extern "C" void probe_w1() { t6_semaphore_post<p_stall::NOTHING, p_stall::MATH>(3); }
-extern "C" void ref_w1() { TTI_STALLWAIT(p_stall::STALL_SYNC, p_stall::NOTHING, p_stall::MATH, p_stall::NOTHING); }
+void probe_w1(unsigned ix) { t6_semaphore_post<p_stall::NOTHING, p_stall::MATH>(ix); }
+void ref_w1() { TTI_STALLWAIT(p_stall::STALL_SYNC, p_stall::NOTHING, p_stall::MATH, p_stall::NOTHING); }
 
-extern "C" void probe_w2() { t6_semaphore_post<p_stall::NOTHING, p_stall::NOTHING, p_stall::MATH>(3); }
-extern "C" void ref_w2() { TTI_STALLWAIT(p_stall::STALL_SYNC, p_stall::MATH, p_stall::NOTHING, p_stall::NOTHING); }
+void probe_w2(unsigned ix) { t6_semaphore_post<p_stall::NOTHING, p_stall::NOTHING, p_stall::MATH>(ix); }
+void ref_w2() { TTI_STALLWAIT(p_stall::STALL_SYNC, p_stall::MATH, p_stall::NOTHING, p_stall::NOTHING); }
 
-extern "C" void probe_all() { t6_semaphore_post<p_stall::THCON, p_stall::MATH, p_stall::PACK0>(3); }
-extern "C" void ref_all() { TTI_STALLWAIT(p_stall::STALL_SYNC, p_stall::PACK0, p_stall::MATH, p_stall::THCON); }
+void probe_all(unsigned ix) { t6_semaphore_post<p_stall::THCON, p_stall::MATH, p_stall::PACK0>(ix); }
+void ref_all() { TTI_STALLWAIT(p_stall::STALL_SYNC, p_stall::PACK0, p_stall::MATH, p_stall::THCON); }
 
-extern "C" void probe_get_none() { t6_semaphore_get<>(3); }
-extern "C" void ref_get_none() {}
+void probe_get_none(unsigned ix) { t6_semaphore_get<>(ix); }
+void ref_get_none() {}
 
-extern "C" void probe_get_w0() { t6_semaphore_get<p_stall::MATH>(3); }
-extern "C" void ref_get_w0() { TTI_STALLWAIT(p_stall::STALL_SYNC, p_stall::NOTHING, p_stall::NOTHING, p_stall::MATH); }
+void probe_get_w0(unsigned ix) { t6_semaphore_get<p_stall::MATH>(ix); }
+void ref_get_w0() { TTI_STALLWAIT(p_stall::STALL_SYNC, p_stall::NOTHING, p_stall::NOTHING, p_stall::MATH); }
 
-extern "C" void probe_get_w1() { t6_semaphore_get<p_stall::NOTHING, p_stall::MATH>(3); }
-extern "C" void ref_get_w1() { TTI_STALLWAIT(p_stall::STALL_SYNC, p_stall::NOTHING, p_stall::MATH, p_stall::NOTHING); }
+void probe_get_w1(unsigned ix) { t6_semaphore_get<p_stall::NOTHING, p_stall::MATH>(ix); }
+void ref_get_w1() { TTI_STALLWAIT(p_stall::STALL_SYNC, p_stall::NOTHING, p_stall::MATH, p_stall::NOTHING); }
 
-extern "C" void probe_get_w2() { t6_semaphore_get<p_stall::NOTHING, p_stall::NOTHING, p_stall::MATH>(3); }
-extern "C" void ref_get_w2() { TTI_STALLWAIT(p_stall::STALL_SYNC, p_stall::MATH, p_stall::NOTHING, p_stall::NOTHING); }
+void probe_get_w2(unsigned ix) { t6_semaphore_get<p_stall::NOTHING, p_stall::NOTHING, p_stall::MATH>(ix); }
+void ref_get_w2() { TTI_STALLWAIT(p_stall::STALL_SYNC, p_stall::MATH, p_stall::NOTHING, p_stall::NOTHING); }
 
-extern "C" void probe_get_all() { t6_semaphore_get<p_stall::THCON, p_stall::MATH, p_stall::PACK0>(3); }
-extern "C" void ref_get_all() { TTI_STALLWAIT(p_stall::STALL_SYNC, p_stall::PACK0, p_stall::MATH, p_stall::THCON); }
+void probe_get_all(unsigned ix) { t6_semaphore_get<p_stall::THCON, p_stall::MATH, p_stall::PACK0>(ix); }
+void ref_get_all() { TTI_STALLWAIT(p_stall::STALL_SYNC, p_stall::PACK0, p_stall::MATH, p_stall::THCON); }
+
+}
 """
 
 _LABEL = re.compile(r"^(probe_\w+|ref_\w+):")
@@ -112,6 +115,7 @@ def emitted(tmp_path_factory):
         [
             str(_COMPILER),
             "-mcpu=tt-qsr32-tensix",
+            "-save-temps=obj",
             "-std=c++17",
             "-S",
             "-O2",
