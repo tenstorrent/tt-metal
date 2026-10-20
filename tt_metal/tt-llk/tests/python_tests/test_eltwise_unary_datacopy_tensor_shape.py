@@ -91,18 +91,15 @@ def test_eltwise_unary_datacopy_tensor_shape(
     if dest_acc == DestAccumulation.No and formats.input_format.is_32_bit():
         pytest.skip("32-bit formats require dest accumulation")
 
-    # The column-broadcast MOP runs twice over two faces (4 SrcB faces), so it hangs on
-    # anything but a 32x32 tile. _llk_math_eltwise_unary_datacopy_init_ asserts this.
-    if broadcast_type == BroadcastType.Column and tile_dimensions != [32, 32]:
-        pytest.skip("Column broadcast datacopy supports only 32x32 tiles")
-
-    # Blackhole asserts on this one: it failed on ttsim and has no silicon coverage yet.
+    # Column broadcast through SrcB follows the face grid; the unpack-to-dest (32-bit) column
+    # broadcast is still 32x32-only and _llk_unpack_A_init_ asserts it.
     if (
-        get_chip_architecture() == ChipArchitecture.BLACKHOLE
-        and broadcast_type == BroadcastType.Row
-        and tile_dimensions == [32, 16]
+        broadcast_type == BroadcastType.Column
+        and tile_dimensions != [32, 32]
+        and formats.input_format.is_32_bit()
+        and dest_acc == DestAccumulation.Yes
     ):
-        pytest.skip("Row broadcast datacopy of a 32x16 tile is blocked on Blackhole")
+        pytest.skip("Unpack-to-dest column broadcast is 32x32-only")
 
     # Same known Wormhole issue as test_bcast.py::test_unpack_bcast.
     if (
@@ -134,6 +131,8 @@ def test_eltwise_unary_datacopy_tensor_shape(
             num_faces=num_faces,
             tile_cnt=tile_cnt_A,
             face_r_dim=face_r_dim,
+            num_faces_r_dim=num_faces_r_dim,
+            num_faces_c_dim=num_faces_c_dim,
         )
     else:
         golden_tensor = src_A.to(format_dict[formats.output_format])
