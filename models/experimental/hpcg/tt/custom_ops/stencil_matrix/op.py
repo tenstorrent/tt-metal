@@ -33,21 +33,9 @@ def _rows(device, n):
     return ttnn.empty(ttnn.Shape([n, TILE]), dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
 
 
-def _segment(head_words, tables, plan):
-    """A job's META segment for every core of its plan: head_words header words, then the tables (the same for every
-    core), then the window piece lo and l1 tables (R words each, R = the most pieces of a core; a core reads its own
-    count, [4]); [30 .. 34) and [34], [35] get their word offsets."""
-    tab = np.concatenate(tables, dtype=np.int32)
-    plo, _, pl1, npc = plan.piece_arrays
-    nc, w0, R = plan.nc, head_words + len(tab), int(npc.max())  # w0: word offset of the piece lo table
-    seg = np.zeros((nc, w0 + 2 * R), np.int32)  # the uploaded word type: no conversion
-    seg[:, 4] = npc
-    seg[:, 6 : 6 + plan.own[0].size] = plan.own.reshape(nc, -1)
-    seg[:, 34:36] = [w0, w0 + R]
-    seg[:, head_words:w0] = tab
-    seg[:, w0 : w0 + R] = plo[:, :R]  # zero past a core's own count
-    seg[:, w0 + R :] = pl1[:, :R]
-    return seg
+def _tables(L):
+    """Level L's storage-order tables (host/native_setup.cpp's Geo): line_band, band_y0, band_ny, band_start."""
+    return [L.line_band, L.band_y0, L.band_ny, L.band_start]
 
 
 class StencilJob:
@@ -66,11 +54,8 @@ class StencilJob:
         self.plan, self.ntlv = plan, L.stride // TILE
         self.values, self.offsets = (_rows(device, 27 * self.ntlv) for _ in range(2))
         self.b, self.zeros = b, list(zeros)
-        tables = [L.line_band, L.band_y0, L.band_ny, L.band_start]
-        self.seg = _segment(36, tables, plan)
-        self.seg[:, :4] = [L.nx, L.nb, L.nl, self.ntlv]
-        self.seg[:, 22:30] = [L.starts[c] + L.count(c) for c in range(8)]
-        self.seg[:, 30:34] = np.cumsum([36] + [len(t) for t in tables[:-1]])  # word offsets of the four tables
+        self.levels, self.hw = [L], 36  # levels whose tables the job reads; header words of its META segment
+        self.head = {0: [L.nx, L.nb, L.nl, self.ntlv], 22: [L.starts[c] + L.count(c) for c in range(8)]}
 
     def tensors(self):
         return [self.values, self.offsets] + self.zeros + ([self.b] if self.b is not None else [])
@@ -91,17 +76,14 @@ class TransferJob:
         NB = len(plan.out_blocks)
         pad = np.zeros(NB, np.int64)
         native.lib().hpcg_transfer_pad(self.kind, *F.geo(), *C.geo(), NB, pad)
-        ftab = [F.line_band, F.band_y0, F.band_ny, F.band_start]
-        ctab = [C.line_band, C.band_y0, C.band_ny, C.band_start]
-        self.seg = _segment(51, ftab + ctab, plan)
-        self.seg[:, :4] = [F.nx, F.nb, F.nl, self.ntlv]
         ob = range(8) if self.kind == 1 else [0]
-        self.seg[:, 22 : 22 + NB] = [O.starts[c] + O.count(c) for c in ob]
-        offs = np.cumsum([51] + [len(t) for t in ftab + ctab[:-1]])  # word offsets of the eight tables
-        self.seg[:, 30:34] = offs[:4]
-        self.seg[:, 36:39] = [C.nx, C.nb, C.nl]
-        self.seg[:, 39:43] = offs[4:]
-        self.seg[:, 43 : 43 + NB] = np.maximum(pad, 0)
+        self.levels, self.hw = [F, C], 51
+        self.head = {
+            0: [F.nx, F.nb, F.nl, self.ntlv],
+            22: [O.starts[c] + O.count(c) for c in ob],
+            36: [C.nx, C.nb, C.nl],
+            43: np.maximum(pad, 0),
+        }
         self.b, self.zeros = None, []
 
     def tensors(self):
@@ -115,28 +97,51 @@ class StencilMatrixOp:
     def __init__(self, device, jobs):
         g = device.compute_with_storage_grid_size()
         nc = max(j.plan.nc for j in jobs)
-        # each core's META row: the jobs' segments one after another (16-word aligned), in whole 4 KB pages: the
-        # tensor's page size is then the same for every launch, and so is the kernel binary (a tensor accessor's page
-        # size is a compile-time argument)
+        # META: a shared region read by every core (each level's storage-order tables, once), then one row per core
+        # (the jobs' segments one after another, 16-word aligned: header, then the core's window piece lo and l1
+        # tables). Both are whole 4 KB pages: the tensor's page size is then the same for every launch, and so is the
+        # kernel binary (a tensor accessor's page size is a compile-time argument). A core reads the shared pages and
+        # its row into one L1 buffer, so the word offsets in the headers count from the start of the shared region.
+        toff, shared, sw = {}, [], 0
+        for j in jobs:
+            for L in j.levels:
+                if id(L) not in toff:
+                    toff[id(L)] = sw + np.cumsum([0] + [len(t) for t in _tables(L)[:-1]])
+                    shared += _tables(L)
+                    sw += sum(len(t) for t in _tables(L))
+        S = -(-sw // TILE) * TILE
         at, w = [], 0
         for j in jobs:
-            at.append(w)
-            w += -(-j.seg.shape[1] // 16) * 16
+            at.append(S + w)  # the segment's first word in L1
+            w += -(-(j.hw + 2 * j.plan.piece_arrays[0].shape[1]) // 16) * 16
         w = -(-w // TILE) * TILE
-        meta = np.zeros((nc, w), np.int32)
+        meta = np.zeros(S + nc * w, np.int32)  # the uploaded word type: no conversion
+        meta[:sw] = np.concatenate(shared, dtype=np.int32)
+        rows = meta[S:].reshape(nc, w)
         for j, a in zip(jobs, at):
-            meta[: j.seg.shape[0], a : a + j.seg.shape[1]] = j.seg
+            plo, _, pl1, npc = j.plan.piece_arrays
+            k, R = j.plan.nc, plo.shape[1]
+            seg = rows[:k, a - S : a - S + j.hw + 2 * R]
+            for o, v in j.head.items():
+                seg[:, o : o + len(v)] = v
+            seg[:, 4] = npc
+            seg[:, 6 : 6 + j.plan.own[0].size] = j.plan.own.reshape(k, -1)
+            seg[:, 30:34] = toff[id(j.levels[0])]
+            seg[:, 34:36] = [a + j.hw, a + j.hw + R]
+            if len(j.levels) > 1:
+                seg[:, 39:43] = toff[id(j.levels[1])]
+            seg[:, j.hw : j.hw + R] = plo  # zero past a core's own count
+            seg[:, j.hw + R :] = pl1
         self.meta = u32_rows(device, meta.reshape(-1, TILE))
-        meta_pages = w // TILE
+        shared_pages, meta_pages = S // TILE, w // TILE
         cores = core_ranges(nc, g.x)
         defs = [(k, str(v)) for k, v in CB.items()]  # nothing grid-dependent: one binary for every job list and size
-        data = jobs[0].values
-        ct = ttnn.TensorAccessorArgs(data).get_compile_time_args()
-        for j in jobs:  # one accessor serves every table and vector: interleaved DRAM, the same arguments
-            for t in j.tensors():
-                assert ttnn.TensorAccessorArgs(t).get_compile_time_args() == ct, "tensors need one accessor layout"
+        # one accessor serves every table and vector (interleaved DRAM, the same arguments for both layouts used)
+        ct = ttnn.TensorAccessorArgs(jobs[0].values).get_compile_time_args()
+        vec = next((t for j in jobs for t in j.tensors()[2:]), None)  # a TILE vector (b or a zero vector), if any
+        assert vec is None or ttnn.TensorAccessorArgs(vec).get_compile_time_args() == ct, "one accessor layout"
         ct = list(ct) + list(ttnn.TensorAccessorArgs(self.meta).get_compile_time_args())
-        args = [self.meta.buffer_address(), meta_pages, len(jobs)]
+        args = [self.meta.buffer_address(), shared_pages, meta_pages, len(jobs)]
         for j, a in zip(jobs, at):
             bt = j.b if j.b is not None else j.values  # unused slots point at the values (never written)
             zt = j.zeros + [j.values] * (2 - len(j.zeros))
@@ -149,7 +154,7 @@ class StencilMatrixOp:
             return ttnn.CBDescriptor(total_size=nbytes, core_ranges=cores, format_descriptors=[fd])
 
         cbs = [cb(CB[f"CB_S{h}"], 2 * SET_PAGES * 4096, 4096) for h in (0, 1)]
-        cbs += [cb(CB[f"CB_M{h}"], meta_pages * 4096, 4096) for h in (0, 1)]
+        cbs += [cb(CB[f"CB_M{h}"], (shared_pages + meta_pages) * 4096, 4096) for h in (0, 1)]
         cbs.append(cb(CB["CB_Z"], 4096, 4096))
         cbs += [cb(CB[f"CB_X{h}"], 2 * XCAP * 4, 2 * XCAP * 4) for h in (0, 1)]
         kernels = []

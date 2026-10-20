@@ -199,9 +199,9 @@ class HPCG:
         # per-core dot partials, one 64-byte slot per core; zero beyond the slots (the finish adds whole pages).
         # Small constants are uploaded: a device fill would load one more kernel binary per process
         self.part = upload_zeros(device, ncv * TILE)
-        # CG scalars, one fp32 tile each (value at element (0, 0)); they never leave the device
+        # CG scalars, one 4 KB page each (the value in word 0); they never leave the device
         self._one, self._minus_one = (scalar_device(device, v) for v in (1.0, -1.0))
-        self._inf_slot = scalar_device(device, float("inf"), only_first=True)  # inf at element (0, 0), zeros elsewhere
+        self._inf_slot = scalar_device(device, float("inf"), only_first=True)  # inf in word 0, zeros elsewhere
         self.rtz, self.rtz_old, self.pAp, self.normr, self.normr0 = (scalar_device(device, 0.0) for _ in range(5))
         z = self.lv[0].z
         rz = CgVectorOp(device, "dot", self.r, z, part=self.part)

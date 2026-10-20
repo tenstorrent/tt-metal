@@ -18,8 +18,11 @@
 // Both data-movement RISCs run this kernel; RISC h takes the page-sized chunks of the core's rows with index % 2 == h.
 // Everything that depends on the grid comes in runtime arguments, so one compiled binary serves every job and grid
 // size (setup then only loads it from the kernel cache).
-// Common arguments: [0] grid width [1] h [2] META address [3] META pages per core [4] jobs, then per job (10 words):
-//   kind, cores in the job, word offset of the job's META segment, V, OFF, b, has_b, zero vectors, zero 0, zero 1.
+// Common arguments: [0] grid width [1] h [2] META address [3] META shared pages [4] META pages per core [5] jobs,
+//   then per job (10 words): kind, cores in the job, word offset of the job's META segment, V, OFF, b, has_b, zero
+//   vectors, zero 0, zero 1.
+// META: shared pages (every level's storage-order tables, read by every core), then each core's row of segments; a
+//   core reads both into one L1 buffer, and every word offset below counts from its start.
 // A job's META segment per core (uint32): [0] nx [1] nbands [2] nl [3] pages per slot [4] R window pieces [5] unused
 //   [6 .. 22) own row range (a, e) per out block  [22 .. 30) end of each block's real rows
 //   [30 .. 36) word offsets of: line_band, band_y0, band_ny, band_start, piece lo, piece l1 (layout: Geo in
@@ -89,29 +92,29 @@ struct Geo {
     const uint32_t* m;  // read once from DRAM before init (after invalidate_l1_cache), then constant
     uint32_t nx, nb, nl, R;
     const uint32_t *lb, *by0, *bny, *bst, *plo, *pl1;
-    void init(uint32_t addr) {
+    void init(const uint32_t* base, uint32_t addr) {  // base: the L1 META buffer (offsets count from it)
         m = (const uint32_t*)addr;
         nx = m[0];
         nb = m[1];
         nl = m[2];
         R = m[4];
-        lb = m + m[30];
-        by0 = m + m[31];
-        bny = m + m[32];
-        bst = m + m[33];
-        plo = m + m[34];
-        pl1 = m + m[35];
+        lb = base + m[30];
+        by0 = base + m[31];
+        bny = base + m[32];
+        bst = base + m[33];
+        plo = base + m[34];
+        pl1 = base + m[35];
     }
-    void init_coarse(uint32_t addr) {  // a transfer job's coarse level: [36 ..) of the segment
+    void init_coarse(const uint32_t* base, uint32_t addr) {  // a transfer job's coarse level: [36 ..) of the segment
         m = (const uint32_t*)addr;
         nx = m[36];
         nb = m[37];
         nl = m[38];
         R = 0;
-        lb = m + m[39];
-        by0 = m + m[40];
-        bny = m + m[41];
-        bst = m + m[42];
+        lb = base + m[39];
+        by0 = base + m[40];
+        bny = base + m[41];
+        bst = base + m[42];
         plo = pl1 = nullptr;
     }
     uint32_t cx(uint32_t p) const { return (nx - p + 1) / 2; }
@@ -320,10 +323,11 @@ void kernel_main() {
     // common arguments; this core's row follows from its logical position (arg 0: grid width)
     const uint32_t row = get_absolute_logical_y() * get_common_arg_val<uint32_t>(0) + get_absolute_logical_x();
     const uint32_t half = get_common_arg_val<uint32_t>(1), meta_addr = get_common_arg_val<uint32_t>(2);
-    const uint32_t meta_pages = get_common_arg_val<uint32_t>(3), njobs = get_common_arg_val<uint32_t>(4);
+    const uint32_t shared_pages = get_common_arg_val<uint32_t>(3), meta_pages = get_common_arg_val<uint32_t>(4);
+    const uint32_t njobs = get_common_arg_val<uint32_t>(5);
     constexpr auto ad = TensorAccessorArgs<0>();  // every table and vector: interleaved DRAM, 4 KB pages
     constexpr auto am = TensorAccessorArgs<ad.next_compile_time_args_offset()>();
-    const auto META = TensorAccessor(am, meta_addr, 4096);  // this core's row: pages row * meta_pages onwards
+    const auto META = TensorAccessor(am, meta_addr, 4096);  // shared pages, then this core's row of meta_pages
     const uint32_t zpage = get_write_ptr(CB_Z);             // 4 KB of zeros, the source of the zero vectors' writes
     {
         const uint64_t zsrc = get_noc_addr(MEM_ZEROS_BASE);
@@ -332,8 +336,11 @@ void kernel_main() {
         }
     }
     const uint32_t meta = get_write_ptr(half ? CB_M1 : CB_M0);
+    for (uint32_t p = 0; p < shared_pages; ++p) {
+        noc_async_read(META.get_noc_addr(p), meta + p * 4096, 4096);
+    }
     for (uint32_t p = 0; p < meta_pages; ++p) {
-        noc_async_read(META.get_noc_addr(row * meta_pages + p), meta + p * 4096, 4096);
+        noc_async_read(META.get_noc_addr(shared_pages + row * meta_pages + p), meta + (shared_pages + p) * 4096, 4096);
     }
     noc_async_read_barrier();
     invalidate_l1_cache();
@@ -344,7 +351,7 @@ void kernel_main() {
     fill_template((uint32_t*)(stage + SET + 27 * 4096));
     uint32_t set = 0, chunk = 0;
     for (uint32_t job = 0; job < njobs; ++job) {
-        const uint32_t J = 5 + 10 * job;
+        const uint32_t J = 6 + 10 * job;
         const uint32_t kind = get_common_arg_val<uint32_t>(J), ncj = get_common_arg_val<uint32_t>(J + 1);
         if (row >= ncj) {
             continue;  // this core has no rows in this job
@@ -357,9 +364,9 @@ void kernel_main() {
         const auto Z0 = TensorAccessor(ad, get_common_arg_val<uint32_t>(J + 8), 4096);
         const auto Z1 = TensorAccessor(ad, get_common_arg_val<uint32_t>(J + 9), 4096);
         Geo g, gc;
-        g.init(seg);
+        g.init((const uint32_t*)meta, seg);
         if (kind) {
-            gc.init_coarse(seg);
+            gc.init_coarse((const uint32_t*)meta, seg);
         }
         const uint32_t* m = g.m;
         const uint32_t ntlv = m[3];
