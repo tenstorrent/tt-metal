@@ -8,11 +8,12 @@
 
 // Page-table format of a paged KV cache, host and device side.
 //
-// The pool holds single-head pages [num_pages * num_layers, 1, page, head_dim]; physical page p of layer l is entry
-// pool_entry(p, l, num_layers). A request's row of the INT32 table maps every GLOBAL logical page q (sequence positions
-// [q * page, (q + 1) * page)) to a physical page in the pool of the chip at SP coordinate (q * page / chunk_local) % sp
-// along the cluster axis, or -1 when unmapped: positions are placed block-cyclically over the sp coordinates in runs of
-// chunk_local, the per-chip input seq of a write, so every write and read of a request must use the same chunk_local.
+// Every chip holds its own pool of single-head pages [num_pages * num_layers, 1, page, head_dim]; physical page p of
+// layer l is entry pool_entry(p, l, num_layers). A request's row of the INT32 table maps every GLOBAL logical page q
+// (sequence positions [q * page, (q + 1) * page)) to a physical page in the pool of the chip at SP coordinate
+// (q * page / chunk_local) % sp along the cluster axis, or -1 when unmapped: positions are placed block-cyclically over
+// the sp coordinates in slabs of chunk_local (a chip's share of one chunk, the per-chip input seq of a write), so every
+// write and read of a request must use the same chunk_local.
 // One replicated row serves the whole mesh; each chip reads only its own entries.
 //
 // This is not the page-table format of paged_update_cache / SDPA, whose INT32 entries are device-local blocks of a

@@ -87,11 +87,6 @@ void validate_paged(
     paged_kv::validate_page_table(*tensor_args.page_table, cache);
     paged_kv::validate_page_pool(cache);
     TT_FATAL(
-        cache.padded_shape()[0] % args.num_layers == 0,
-        "a paged cache's {} entries must be pages x num_layers {}",
-        cache.padded_shape()[0],
-        args.num_layers);
-    TT_FATAL(
         !tensor_args.rope.has_value() && !tensor_args.scales.has_value(),
         "a paged cache supports the plain copy path only (no rope / scales)");
     // Page ownership is defined over the SP coordinates of one cluster axis (paged_kv_table.hpp); neither the

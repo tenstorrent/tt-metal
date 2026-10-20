@@ -46,9 +46,9 @@ void bind_update_padded_kv_cache(nb::module_& mod) {
                 across chunks/users).
 
             Args:
-                cache (ttnn.Tensor): 4D KV cache tensor on device, TILE or ROW_MAJOR layout. Sharded
-                    across `cluster_axis` with `sp_factor` slots per chip. Outermost dim equals
-                    ``num_slots * num_layers`` (with ``page_table``, a page pool: see ``page_table``).
+                cache (ttnn.Tensor): 4D KV cache tensor on device, TILE or ROW_MAJOR layout. Without
+                    ``page_table``: sharded across `cluster_axis` with `sp_factor` slots per chip, outermost dim
+                    ``num_slots * num_layers``. With it, a per-chip page pool: see ``page_table``.
                     Layout/dtype must match ``input``: block-float
                     (bfloat8_b/bfloat4_b) requires TILE; FP8_E4M3 requires ROW_MAJOR (Blackhole).
                     Seq dims stay 32-aligned in both layouts, and TILE layout requires the standard
@@ -58,7 +58,8 @@ void bind_update_padded_kv_cache(nb::module_& mod) {
                 slot_idx (int | ttnn.Tensor): scalar form: user slot in the batched prefill cache, or with
                     ``page_table`` the request's page-table row.
                     per-element-tensor form: a 1-element uint32 DRAM tensor ([1,1,1,1], ROW_MAJOR,
-                    replicated across the mesh) whose element [0] is the user slot; read on-device.
+                    replicated across the mesh) whose element [0] is the user slot (with ``page_table``, the
+                    row); read on-device.
                 kv_actual_global (int | ttnn.Tensor): scalar form: prior valid global KV length in
                     tokens (tile-aligned). per-element-tensor form: a 1-element uint32 DRAM tensor
                     (same layout as ``slot_idx``) whose element [0] is that length; read on-device.
@@ -75,7 +76,8 @@ void bind_update_padded_kv_cache(nb::module_& mod) {
                     only the rows holding real tokens are written, so the cache must fit
                     ``ceil32(valid_global)`` rather than ``kv_actual_global + chunk_global``. The
                     32-token block holding the last real token is still written; clear it with
-                    ``zero_padded_kv_cache``. Omitted: the whole padded slab is written.
+                    ``zero_padded_kv_cache``, which takes no ``page_table``: a page pool keeps the input's pad
+                    rows there. Omitted: the whole padded slab is written.
                 tp_axis (int, optional): Second axis to also shard the cache across (KV dedup).
                     ``input`` must then be TP-replicated and single-head, and each chip persists only
                     its own ``1/tp`` seq window. Must differ from ``cluster_axis``.
@@ -90,17 +92,21 @@ void bind_update_padded_kv_cache(nb::module_& mod) {
                     operation using LLK. Cache is ROW_MAJOR FP8_E4M3 with 656-byte
                     rows containing the three fields. All fields share leading shapes.
                 page_table (ttnn.Tensor, optional): Selects a paged cache (not the ``paged_update_cache`` /
-                    SDPA ``page_table`` format). ``cache`` is then a pool of single-head pages
-                    ``[num_pages * num_layers, 1, page, head_dim]`` whose seq dim is the page size (a multiple of
-                    32 dividing the per-chip input seq); page ``p`` of layer ``l`` is entry ``p * num_layers + l``.
+                    SDPA ``page_table`` format). ``cache`` is then, on every chip, its own pool of single-head
+                    pages ``[num_pages * num_layers, 1, page, head_dim]`` (replicate it, or shard a
+                    ``[.., sp * page, ..]`` tensor along ``cluster_axis``) whose per-chip seq dim is the page size (a
+                    multiple of 32 dividing the per-chip input seq); page ``p`` of layer ``l`` is entry
+                    ``p * num_layers + l``.
                     ``page_table`` is an INT32 ROW_MAJOR DRAM tensor ``[rows, width]`` replicated across the
-                    mesh, and ``slot_idx`` selects the request's row, which holds at most ``width * page`` tokens.
+                    mesh, and ``slot_idx`` selects the request's row, which holds at most ``width * page`` tokens:
+                    the scalar form rejects a longer write, the tensor form writes only the row's pages.
                     Entry ``q`` names the physical page holding global positions ``[q * page, (q + 1) * page)``
                     in the pool of the chip at SP coordinate ``(q * page // chunk_local) % sp`` with
                     ``chunk_local`` the per-chip input seq and ``sp`` the mesh extent along ``cluster_axis``: every
                     write of a request must use the same ``chunk_local``. -1 is unmapped and its rows are not
                     written; neither is an entry outside the pool, which is invalid. The tensor form does not check
-                    ``slot_idx`` against the table's rows. The table's width is part of the program key, so a
+                    ``slot_idx`` against the table's rows: a row past them is read from beyond the table, and its
+                    writes land on arbitrary pool pages. The table's width is part of the program key, so a
                     workload keeps one fixed-width table. Plain copy path only (no ``rope``, ``scales`` or
                     ``tp_axis``); requires ``cluster_axis``. Format:
                     ``ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/update_padded_kv_cache/device/kernels/paged_kv_table.hpp``.
