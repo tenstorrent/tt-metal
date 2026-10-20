@@ -20,7 +20,9 @@ using namespace ckernel;
  *
  * A source bank's format tag is updated only by a real write; CLRSRC/ZEROSRC zero the data but keep the old tag. If the
  * cleared register was last written in a packed format (e.g. MxFp4_2x_B by a 2x matmul), ELWADD reads it through the
- * packed path and adds non-zero garbage. The returned single-row unpack (no dvalid, no index increment) gives the bank
+ * packed path and adds non-zero garbage. This holds even though the clear sets dvalid, which assembly.yaml describes as
+ * also setting the implied format from OUT_DATA_FORMAT: on emu-quasar that clear, with a non-packed OUT_DATA_FORMAT, still
+ * left the bank read through the packed path. The returned single-row unpack (no dvalid, no index increment) gives the bank
  * the unused unpacker's output format; the clear that follows zeroes the row. Costs one extra single-row unpack per tile
  * on the otherwise idle unpacker, in 32-bit Dest mode only.
  *
