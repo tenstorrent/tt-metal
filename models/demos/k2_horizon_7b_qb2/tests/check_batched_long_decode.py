@@ -1,12 +1,13 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Full-model batched decode beyond the stock bound: flash vs chunked-fallback logits.
+"""Full-model batched decode beyond the stock bound: fp32_accumulation vs the default recurrence.
 
 Mixed-length real-text prompts are prefilled once per case into one shuffled paged cache. Then one
-traced decode step runs per kernel from the same inputs: B32 at capacity 8192 (stock bound 4096),
-and B8 at capacity 131072 (stock bound 16384). Both kernels write identical K/V for the new position
+traced decode step runs per setting from the same inputs: B32 at capacity 8192 (stock bound 4096),
+and B8 at capacity 131072 (stock bound 16384). Both settings write identical K/V for the new position
 before attending, so the comparison is on the same cache. Reports logit PCC, max-abs difference and
-top-1 agreement per row.
+top-1 agreement per row between the production setting (SDPAProgramConfig.fp32_accumulation) and the
+op's default BF16 recurrence.
 """
 
 import argparse
@@ -54,18 +55,18 @@ def main():
             first = gen.prefill_forward(tokens, page_table=table, kv_cache=cache, prompt_lens=lengths)
             prefill_seconds = time.perf_counter() - start
             logits = {}
-            for kernel in ("flash", "chunked"):
-                MultichipDecoder.accurate_decode_kernel = kernel
+            for fp32 in (True, False):
+                MultichipDecoder.long_decode_fp32_accumulation = fp32
                 gen._release_traces(drop_state=True, next_batch=batch)
-                logits[kernel] = gen.decode_forward(
+                logits[fp32] = gen.decode_forward(
                     first.reshape(batch, 1).int(),
                     torch.tensor(lengths),
                     page_table=table,
                     kv_cache=cache,
                     sampling_mode="host",
                 ).float()
-            MultichipDecoder.accurate_decode_kernel = "flash"
-            f, c = logits["flash"], logits["chunked"]
+            MultichipDecoder.long_decode_fp32_accumulation = True
+            f, c = logits[True], logits[False]
             row = {
                 "batch": batch,
                 "capacity": capacity,

@@ -14,6 +14,7 @@
 
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/buffer.hpp>
+#include <tt-metalium/circular_buffer_constants.h>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -218,9 +219,17 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     // ========== Compute Kernel Config ==========
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
+    // FP32 online-softmax state (SDPAProgramConfig::fp32_accumulation, kernels/compute/fp32_accumulation.hpp).
+    const bool fp32_accumulation = program_config.has_value() && program_config->fp32_accumulation;
+    // The approximate exponential is the default, except under fp32_accumulation (validation rejects it there).
     const bool exp_approx_mode = program_config.has_value() && program_config->exp_approx_mode.has_value()
                                      ? program_config->exp_approx_mode.value()
-                                     : true;
+                                     : !fp32_accumulation;
+    TT_FATAL(
+        !fp32_accumulation || !has_block_padding,
+        "fp32_accumulation needs a paged KV block size of at least {} tokens, got {}",
+        TILE_HEIGHT,
+        original_block_size);
 
     // ========== Buffer Pointers & Metadata ==========
     auto* q_buffer = input_tensor_q.buffer();
@@ -489,9 +498,11 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     // ever addressed; the (num_cores_per_head - 1) sizing is legacy over-provisioning from
     // the pre-tree-reduction flat gather. Legacy sizing is kept verbatim off the spec path;
     // in spec mode each block is T times larger and the over-provisioning alone would blow
-    // L1 (110 tiles/block * 63 blocks = 14 MB at T=11, 64 cores/head).
-    const uint32_t intermed_output_blocks =
-        spec_multi_pos ? std::min(num_cores_per_head - 1, num_tree_reduction_rounds) : (num_cores_per_head - 1);
+    // L1 (110 tiles/block * 63 blocks = 14 MB at T=11, 64 cores/head). fp32_accumulation
+    // doubles every block, so it sizes by round as well.
+    const uint32_t intermed_output_blocks = (spec_multi_pos || fp32_accumulation)
+                                                ? std::min(num_cores_per_head - 1, num_tree_reduction_rounds)
+                                                : (num_cores_per_head - 1);
     const uint32_t intermed_output_tiles = (out_tiles + 2 * PNHt) * intermed_output_blocks;
 
     // ========== Data Formats ==========
@@ -504,13 +515,19 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
                                        : tt::DataFormat::Float16_b;
     const tt::DataFormat scalar_df =
         (input_tensor_q.dtype() == DataType::FLOAT32) ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
-    const tt::DataFormat im_df = tt::DataFormat::Float16_b;
+    // fp32_accumulation keeps scores, outputs, sums, correction factors and the tree-exchange buffers in FP32; the
+    // running maxima (c_27/c_28) keep stats_df. The writer sizes every exchanged l/m/o tile from c_16/c_19, so
+    // c_6/c_7/c_16..c_19 share one format.
+    const tt::DataFormat im_df = fp32_accumulation ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     const tt::DataFormat stats_df = tt::DataFormat::Float16_b;
+    const tt::DataFormat acc_stats_df = fp32_accumulation ? tt::DataFormat::Float32 : stats_df;
 
     // ========== Tile Configurations ==========
     const auto half_tile = tt::tt_metal::Tile({16, 32});
     const auto full_tile = tt::tt_metal::Tile({32, 32});
-    const bool use_half_tile = is_causal && num_q_heads <= 16 && q_df == tt::DataFormat::Float16_b;
+    // The FP32 unpack/pack path of fp32_accumulation needs full 32x32 tiles.
+    const bool use_half_tile =
+        is_causal && num_q_heads <= 16 && q_df == tt::DataFormat::Float16_b && !fp32_accumulation;
     if (spec_multi_pos) {
         // The mask generator writes one full 32x32 tile per (candidate, k-column) pair and
         // the writer's MQA full-tile output branch assumes full tiles, so half tiles must be
@@ -557,6 +574,7 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     const uint32_t scalar_tile_size = scalar_tile.get_tile_size(scalar_df);
     const uint32_t im_tile_size = im_tile.get_tile_size(im_df);
     const uint32_t stats_tile_size = stats_tile.get_tile_size(stats_df);
+    const uint32_t acc_stats_tile_size = stats_tile.get_tile_size(acc_stats_df);
 
     // ========== Debug Logging ==========
     log_debug(tt::LogOp, "Dimensions: B={}, PNH={}, S={}, DH={}, vDH={}, Bkv={}", B, PNH, S, DH, vDH, Bkv);
@@ -642,9 +660,10 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     if (use_attention_sink) {
         add_cb(CBIndex::c_4, statistics_tiles * stats_tile_size, stats_df, stats_tile_size, &stats_tile);
     }
-    add_cb(CBIndex::c_5, scale_tiles * scalar_tile_size, scalar_df, scalar_tile_size, &scalar_tile);   // scale
-    add_cb(CBIndex::c_6, statistics_tiles * stats_tile_size, stats_df, stats_tile_size, &stats_tile);  // m_in
-    add_cb(CBIndex::c_7, statistics_tiles * stats_tile_size, stats_df, stats_tile_size, &stats_tile);  // l_in
+    add_cb(CBIndex::c_5, scale_tiles * scalar_tile_size, scalar_df, scalar_tile_size, &scalar_tile);  // scale
+    // m_in, l_in
+    add_cb(CBIndex::c_6, statistics_tiles * acc_stats_tile_size, acc_stats_df, acc_stats_tile_size, &stats_tile);
+    add_cb(CBIndex::c_7, statistics_tiles * acc_stats_tile_size, acc_stats_df, acc_stats_tile_size, &stats_tile);
 
     // Optional input CBs (cur_pos and page_table - raw data, no tile dims)
     if (use_cur_pos_tensor) {
@@ -697,19 +716,20 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     add_cb(CBIndex::c_26, out_tiles * im_tile_size, im_df, im_tile_size, &im_tile);
     add_cb(CBIndex::c_27, statistics_tiles * stats_tile_size, stats_df, stats_tile_size, &stats_tile);
     add_cb(CBIndex::c_28, statistics_tiles * stats_tile_size, stats_df, stats_tile_size, &stats_tile);
-    add_cb(CBIndex::c_29, statistics_tiles * stats_tile_size, stats_df, stats_tile_size, &stats_tile);
-    add_cb(CBIndex::c_30, statistics_tiles * stats_tile_size, stats_df, stats_tile_size, &stats_tile);
-    add_cb(CBIndex::c_31, statistics_tiles * stats_tile_size, stats_df, stats_tile_size, &stats_tile);
-    add_cb(CBIndex::c_21, statistics_tiles * stats_tile_size, stats_df, stats_tile_size, &stats_tile);
-    add_cb(CBIndex::c_22, statistics_tiles * stats_tile_size, stats_df, stats_tile_size, &stats_tile);
+    add_cb(CBIndex::c_29, statistics_tiles * acc_stats_tile_size, acc_stats_df, acc_stats_tile_size, &stats_tile);
+    add_cb(CBIndex::c_30, statistics_tiles * acc_stats_tile_size, acc_stats_df, acc_stats_tile_size, &stats_tile);
+    add_cb(CBIndex::c_31, statistics_tiles * acc_stats_tile_size, acc_stats_df, acc_stats_tile_size, &stats_tile);
+    add_cb(CBIndex::c_21, statistics_tiles * acc_stats_tile_size, acc_stats_df, acc_stats_tile_size, &stats_tile);
+    add_cb(CBIndex::c_22, statistics_tiles * acc_stats_tile_size, acc_stats_df, acc_stats_tile_size, &stats_tile);
     add_cb(CBIndex::c_23, out_tiles * im_tile_size, im_df, im_tile_size, &im_tile);
 
     // Output CBs
-    add_cb(CBIndex::c_16, out_tiles * stats_tile_size, stats_df, stats_tile_size, &stats_tile);
-    add_cb(CBIndex::c_17, statistics_tiles * stats_tile_size, stats_df, stats_tile_size, &stats_tile);
-    add_cb(CBIndex::c_18, statistics_tiles * stats_tile_size, stats_df, stats_tile_size, &stats_tile);
+    add_cb(CBIndex::c_16, out_tiles * acc_stats_tile_size, acc_stats_df, acc_stats_tile_size, &stats_tile);
+    add_cb(CBIndex::c_17, statistics_tiles * acc_stats_tile_size, acc_stats_df, acc_stats_tile_size, &stats_tile);
+    add_cb(CBIndex::c_18, statistics_tiles * acc_stats_tile_size, acc_stats_df, acc_stats_tile_size, &stats_tile);
     if (intermed_output_tiles > 0) {
-        add_cb(CBIndex::c_19, intermed_output_tiles * stats_tile_size, stats_df, stats_tile_size, &stats_tile);
+        add_cb(
+            CBIndex::c_19, intermed_output_tiles * acc_stats_tile_size, acc_stats_df, acc_stats_tile_size, &stats_tile);
     }
     add_cb(
         CBIndex::c_20,
@@ -895,6 +915,9 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     std::map<std::string, std::string> compute_defines;
     compute_defines["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
     compute_defines["DHT_GRANULARITY"] = std::to_string(dht_granularity);
+    if (fp32_accumulation) {
+        compute_defines["SDPA_FP32_ACCUMULATION"] = "1";
+    }
 
     if (Sk_chunk_t > 0) {
         auto add_granularity = [&](const char* name, uint32_t value) {
@@ -943,10 +966,30 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     compute_desc.core_ranges = core_grid;
     compute_desc.compile_time_args = std::move(compute_compile_time_args_common);
     compute_desc.defines = std::move(compute_defines_vec);
+    // fp32_accumulation: state CBs read only by the SFPU helpers unpack straight to DEST, so FP32 values never pass
+    // through the 19-bit source registers. Scores (c_24) feed FPU matmuls and keep the default unpack mode.
+    ComputeConfigDescriptor::UnpackToDestModes unpack_to_dest_mode;
+    if (fp32_accumulation) {
+        unpack_to_dest_mode.assign(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+        for (const auto cb :
+             {CBIndex::c_7,
+              CBIndex::c_16,
+              CBIndex::c_21,
+              CBIndex::c_22,
+              CBIndex::c_23,
+              CBIndex::c_25,
+              CBIndex::c_26,
+              CBIndex::c_29,
+              CBIndex::c_30,
+              CBIndex::c_31}) {
+            unpack_to_dest_mode[static_cast<uint32_t>(cb)] = UnpackToDestMode::UnpackToDestFp32;
+        }
+    }
     compute_desc.config = ComputeConfigDescriptor{
         .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en,
         .dst_full_sync_en = dst_full_sync_en,
+        .unpack_to_dest_mode = std::move(unpack_to_dest_mode),
         .math_approx_mode = math_approx_mode,
     };
 

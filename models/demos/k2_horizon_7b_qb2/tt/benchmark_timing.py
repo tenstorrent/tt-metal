@@ -34,100 +34,57 @@ def _atomic_json(path, value):
     tmp.replace(path)
 
 
-def accurate_attention_groups(batch, limit):
-    """Mirror the decoder's host-known grouping; no tensor/device access."""
-    if not 1 <= batch <= 32 or limit not in (1, 2, 4, 8, 16, 32):
-        raise ValueError("Unsupported accurate-attention batch/group size")
-    groups = []
-    start = 0
-    while start < batch:
-        count = 1 << (min(limit, batch - start).bit_length() - 1)
-        groups.append({"row_start": start, "row_end": start + count, "batch": count})
-        start += count
-    return groups
-
-
-def accurate_attention_geometry(groups, transport):
-    geometry = []
-    for group in groups:
-        packed = transport == "packed_gqa_rows_v1" and group["batch"] > 1
-        geometry.append(
-            {
-                **group,
-                "logical_q_heads": 8,
-                "physical_q_heads": 2 if packed else 8,
-                "physical_q_rows": 32,
-                "useful_rows_per_head": 4 if packed else 1,
-                "query_buffer_factor": 1 if packed else 2 if group["batch"] > 8 else 1,
-                "offset_mode": "raw_clamped" if packed else "aligned32_clamped",
-                "mask_mode": "constant_raw_position" if packed else "causal_rows",
-            }
-        )
-    return geometry
-
-
-def _accurate_attention_identity(model):
-    """Pin the already-loaded private binding and its FP32 compute kernel."""
+def _long_context_attention_identity(model):
+    """Beyond the stock bounds, decode runs the stock paged SDPA decode with SDPAProgramConfig.fp32_accumulation
+    (FP32 scores and online-softmax state, accurate exponentials) and prefill the already-loaded model-local
+    FP32-recurrence kernel (tt/accurate_attention), pinned by its build provenance."""
     from .accurate_attention import _load
 
+    settings = {
+        (
+            layer.flash_decode_k_chunk,
+            layer.flash_decode_max_cores_per_head,
+            bool(layer.long_decode_fp32_accumulation),
+            tuple(layer.accurate_prefill_grid),
+            layer.accurate_prefill_q_chunk,
+            layer.accurate_prefill_max_k_chunk,
+        )
+        for layer in model.layers
+    }
+    if len(settings) != 1:
+        raise ValueError("All layers must share one long-context attention configuration")
+    k_chunk, max_cores, fp32_accumulation, grid, q_chunk, max_k_chunk = next(iter(settings))
     binding, kernel_path = _load()  # Already cached by every decoder's construction.
     root = Path(__file__).resolve().parent / "accurate_attention"
     provenance_path = root / ".build/provenance.json"
     provenance = json.loads(provenance_path.read_text())
-    limits = {int(getattr(layer, "accurate_attention_batch_size", 1)) for layer in model.layers}
-    if len(limits) != 1 or next(iter(limits)) not in (1, 2, 4, 8, 16, 32):
-        raise ValueError("All layers must expose one supported accurate-attention grouping")
-    transports = {getattr(layer, "accurate_attention_transport", "per_row_v1") for layer in model.layers}
-    if len(transports) != 1 or next(iter(transports)) not in ("per_row_v1", "grouped_rows_v1", "packed_gqa_rows_v1"):
-        raise ValueError("All layers must expose one supported accurate-attention transport")
-    grouped = next(iter(transports)) == "grouped_rows_v1"
-    packed = next(iter(transports)) == "packed_gqa_rows_v1"
     library = Path(binding.__file__).resolve()
     if _hash(library) != provenance["library_sha256"]:
         raise RuntimeError("Loaded accurate-attention binding provenance changed")
-    identity = {
-        "accounting_schema_version": 4 if packed else 3 if grouped else 2,
-        "transport": next(iter(transports)),
-        "max_group_size": next(iter(limits)),
-        "grouping": "largest_power_of_two_consecutive_rows",
-        "query_concat": "absent" if grouped or packed else "materialized_dram_for_group_gt_1",
-        "output_row_slice": (
-            "packed_first4_rows" if packed else "absent" if grouped else "materialized_dram_for_group_gt_1"
-        ),
-        "query_buffer_factor": "1" if packed else "2_if_group_gt8_else1",
-        "math_fidelity": "HiFi4",
-        "fp32_denominator": True,
-        "fp32_output_accumulator": True,
-        "grid": [8, 8],
-        "q_chunk_size": 32,
-        "k_chunk_size": 128,
-        "offset_reads_per_core": 2,
-        "offset_read_bytes": 4,
-        "library": {"path": str(library), "sha256": _hash(library)},
-        "provenance": {"path": str(provenance_path), "sha256": _hash(provenance_path), "data": provenance},
-        "compute_kernel": {"path": str(kernel_path), "sha256": _hash(kernel_path)},
-        "wrapper": {"path": str(root / "__init__.py"), "sha256": _hash(root / "__init__.py")},
+    return {
+        "accounting_schema_version": 6,
+        "decode": {
+            "op": "ttnn.transformer.paged_scaled_dot_product_attention_decode",
+            "fp32_accumulation": fp32_accumulation,
+            "k_chunk_size": k_chunk,
+            "max_cores_per_head_batch": max_cores,
+            "grid": [11, 10],
+            "math_fidelity": "HiFi4",
+        },
+        "prefill": {
+            "kernel": "model_local_accurate_attention",
+            "fp32_denominator": True,
+            "fp32_output_accumulator": True,
+            "grid": list(grid),
+            "q_chunk_size": q_chunk,
+            "max_k_chunk_size": max_k_chunk,
+            "math_fidelity": "HiFi4",
+            "library": {"path": str(library), "sha256": _hash(library)},
+            "provenance": {"path": str(provenance_path), "sha256": _hash(provenance_path), "data": provenance},
+            "compute_kernel": {"path": str(kernel_path), "sha256": _hash(kernel_path)},
+            "wrapper": {"path": str(root / "__init__.py"), "sha256": _hash(root / "__init__.py")},
+        },
     }
-    if packed:
-        mask = provenance["packed_gqa_mask"]
-        writer = Path(mask["writer_path"])
-        if (
-            mask["contract"] != "same_raw_position_for_all_query_rows_v1"
-            or mask["required_position_residues"] != list(range(32))
-            or _hash(writer) != mask["writer_sha256"]
-        ):
-            raise RuntimeError("Loaded packed GQA writer/mask provenance differs")
-        identity.update(
-            logical_q_heads_per_rank=8,
-            physical_q_heads_per_packed_group=2,
-            logical_kv_heads_per_rank=2,
-            query_pack_factor=4,
-            valid_packed_rows=4,
-            single_row_group="legacy_q8_aligned_offset",
-            packed_mask=mask,
-            packed_writer={"path": str(writer), "sha256": _hash(writer)},
-        )
-    return identity
 
 
 def runtime_identity(adapter):
@@ -218,7 +175,7 @@ def runtime_identity(adapter):
         "tp": 4,
         "dp": 1,
         "force_host_sampling": adapter.force_host_sampling,
-        "accurate_attention": _accurate_attention_identity(model),
+        "long_context_attention": _long_context_attention_identity(model),
         "host_sampler": (
             type(adapter.host_sampler).__module__ + "." + type(adapter.host_sampler).__qualname__
             if getattr(adapter, "host_sampler", None) is not None
@@ -349,35 +306,22 @@ class PhaseRecorder:
         effective = list(self.positions)
         threshold = 4096 * min(16, max(1, (64 // generated_batch) // 2))
         accurate = table_capacity > threshold
-        limit = int(self.identity.get("accurate_attention", {}).get("max_group_size", 1))
-        groups = accurate_attention_groups(generated_batch, limit) if accurate else []
-        grouped = accurate and any(group["batch"] > 1 for group in groups)
-        transport = self.identity.get("accurate_attention", {}).get("transport", "per_row_v1")
-        geometry = accurate_attention_geometry(groups, transport)
-        packed = grouped and transport == "packed_gqa_rows_v1"
+        fp32 = accurate and self.identity.get("long_context_attention", {}).get("decode", {}).get("fp32_accumulation")
         self.annotate(
             positions=effective,
             active_mask=[p >= 0 for p in effective],
             generated_batch=generated_batch,
             table_capacity=table_capacity,
             attention_branch=(
-                "accurate_attention_packed_gqa"
-                if packed
-                else (
-                    "accurate_attention_batched"
-                    if grouped
-                    else "accurate_attention_fallback"
-                    if accurate
-                    else "stock_paged_decode"
-                )
+                "stock_paged_decode_fp32_accumulation"
+                if fp32
+                else "stock_paged_decode_long"
+                if accurate
+                else "stock_paged_decode"
             ),
-            attention_groups=groups,
-            attention_transport=transport if accurate else None,
-            attention_query_buffer_factors=[group["query_buffer_factor"] for group in geometry],
-            attention_group_geometry=geometry,
             attention_effective_fidelity="HiFi4" if accurate else None,
-            attention_fp32_denominator=True if accurate else None,
-            attention_fp32_output_accumulator=True if accurate else None,
+            attention_fp32_denominator=bool(fp32) if accurate else None,
+            attention_fp32_output_accumulator=bool(fp32) if accurate else None,
             reset_inputs=bool(reload_inputs),
             layout_epoch=self.layout_epoch,
             physical_rows=32,
