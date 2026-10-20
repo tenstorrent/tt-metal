@@ -105,6 +105,42 @@ def test_chunk_positions_follow_the_rotated_tokens(start):
     assert (runtime._chunk_positions(start) == natural) == (start % 8192 == 0)
 
 
+@pytest.mark.parametrize(
+    "slot_id,previous_end,actual_start,actual_end",
+    [
+        (0, 8513, 8192, 12473),
+        (1, 32768, 8192, 12000),
+        (5, 16384, 8192, 16384),
+    ],
+    ids=["partial-tail-replay", "shorter-shared-prefix", "full-chunk-replay"],
+)
+def test_prefix_reuse_replays_computed_chunks(slot_id, previous_end, actual_start, actual_end):
+    runtime = Gemma4PrefillRuntime.__new__(Gemma4PrefillRuntime)
+    runtime.config = service_params()
+    runtime.slot_ends = [0] * runtime.config.num_users
+    runtime.slot_ends[slot_id] = previous_end
+    runtime.validate_chunk(slot_id, actual_start, actual_end)
+
+
+@pytest.mark.parametrize(
+    "previous_end,actual_start,actual_end,error",
+    [
+        (8513, 16384, 24576, "Slot 0 holds 8513 tokens, got a chunk at 16384"),
+        (0, 8192, 12473, "Slot 0 holds 0 tokens, got a chunk at 8192"),
+        (8513, 8512, 12473, "Chunk start"),
+        (8513, 8192, 8192, "Chunk must contain"),
+        (8513, 8192, 16385, "Chunk must contain"),
+    ],
+    ids=["gap", "empty-slot", "unaligned-replay", "empty-chunk", "oversized-chunk"],
+)
+def test_prefix_reuse_rejects_invalid_chunks(previous_end, actual_start, actual_end, error, expect_error):
+    runtime = Gemma4PrefillRuntime.__new__(Gemma4PrefillRuntime)
+    runtime.config = service_params()
+    runtime.slot_ends = [previous_end] + [0] * (runtime.config.num_users - 1)
+    with expect_error(ValueError, error):
+        runtime.validate_chunk(0, actual_start, actual_end)
+
+
 def test_prepared_prompts_use_shared_producer_format(tmp_path):
     from models.demos.common.prefill.runners.runner_utils import load_trace_token_ids
 
