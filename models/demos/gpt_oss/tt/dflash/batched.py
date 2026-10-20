@@ -422,7 +422,10 @@ class BatchedDraft:
                 [torch.cat([p[d * (p.shape[0] // D) : (d + 1) * (p.shape[0] // D)] for p in parts]) for d in range(D)]
             )
 
-        self.fc_full = put(w["fc.weight"].T)  # replicated: the features are replicated on every device
+        # replicated: the features are replicated on every device; BFP8 (the context pass's 83 MB BF16 read: round
+        # unchanged within 0.1 ms, acceptance in its spread; B32_DRAFT_FC_WDT=bf16: BF16)
+        fc_dt = {"bf16": ttnn.bfloat16, "bf8": ttnn.bfloat8_b}[os.environ.get("B32_DRAFT_FC_WDT", "bf8")]
+        self.fc_full = put(w["fc.weight"].T, dtype=fc_dt)
         self.hidden_norm = norm_w(w["hidden_norm.weight"])
         self.norm = norm_w(w["norm.weight"])
         self.L = []
@@ -461,9 +464,11 @@ class BatchedDraft:
         self.res_mc = width_sharded_memory_config(mesh, self.hidden, _TPAllReduce.CORES, rows=self.rows)
         self.norm_pc = sharded_norm_program_config(self.res_mc)
         self.kv_write = BatchedKVWrite(mesh, users, self.block, nkv, hd, block_size)
-        # attention: block attention (b1's kernels, uniform), 8 users per program on 4 x 3 cores each
+        # attention: block attention (b1's kernels, uniform), 16 users per program on 4 cores each
+        # (16 users x 1 history slice: the window bounds every core's history to ~33 chunks; vs 8 x 3: round 25.0 -> 24.8
+        # ms at ISL 256, 25.8 -> 25.4 at 1024)
         self.ba = _UserBlockAttention(
-            mesh, users, self.block, nq, nkv, hd, block_size, 8, 3, uniform=True, window=window or 0
+            mesh, users, self.block, nq, nkv, hd, block_size, 16, 1, uniform=True, window=window or 0
         )
         heads_split = ttnn.ShardTensorToMesh(mesh, dim=1)
         self.caches = []
@@ -534,7 +539,8 @@ class BatchedDraft:
         def norm_rope(t, w):
             n = ttnn.rms_norm(t, epsilon=self.eps, weight=w, compute_kernel_config=self.ck)
             t.deallocate(True)
-            out = ttnn.experimental.rotary_embedding_llama(n, cos, sin, trans, is_decode_mode=False)
+            out = ttnn.experimental.rotary_embedding_llama(n, cos, sin, trans, is_decode_mode=False,
+                                                           memory_config=ttnn.L1_MEMORY_CONFIG)  # fmt: skip
             n.deallocate(True)
             return out
 
@@ -636,16 +642,11 @@ class BatchedDraft:
             k.deallocate(True)
             v.deallocate(True)
             kc, vc = self.caches[li]
-            # block attention (b1's kernels, one instance per user, uniform): a user's 8 rows see the same positions
-            # (start .. start + 7, not causal), every user's K/V read once per layer
-            q = ttnn.permute(q_rows, (0, 2, 1, 3))  # [1, rows, heads, hd]
+            # block attention (b1's kernels, uniform): a user's 8 rows see the same positions (start .. start + 7, not
+            # causal), every user's K/V read once per layer; Q read in the heads layout, the output written in
+            # o_proj's (no transposes, no concat-heads op)
+            heads = self.ba(q_rows, kc, vc, pos[self.block], self.page_table, None, self.hd**-0.5, heads_io=True)
             q_rows.deallocate(True)
-            attn = self.ba(q, kc, vc, pos[self.block], self.page_table, None, self.hd**-0.5)
-            q.deallocate(True)
-            perm = ttnn.permute(attn, (0, 2, 1, 3))
-            attn.deallocate(True)
-            heads = ttnn.experimental.nlp_concat_heads(perm, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            perm.deallocate(True)
             partial = self._linear(heads, L["o"])
             heads.deallocate(True)
             o = _all_reduce(partial, None)  # (the residual's shards)
