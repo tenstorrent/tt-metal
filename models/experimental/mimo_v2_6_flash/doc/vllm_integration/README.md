@@ -3,7 +3,11 @@
 `tt/generator_vllm.py` (`MiMoV2ForCausalLM`) serves XiaomiMiMo/MiMo-V2.6-Flash-MOPD through
 [vllm-tt-plugin](https://github.com/tenstorrent/vllm-tt-plugin) (tracking issue tenstorrent/vllm-tt-plugin#216).
 `--data-parallel-size 4` runs as four in-process lanes, one TP=8 replica per Galaxy row (`MiMoGalaxyGenerator`).
-Sampling runs on the host; decode replays one trace per replica; prefill runs eagerly in chunks.
+Decode replays one trace per replica; greedy rows sample on device with async decode, other sampling runs on the host.
+Short first chunks prefill in traced batches; longer chunks and later chunks run eagerly.
+
+The tables below up to "Not done" were measured at 52f85d31b3e; the section "Throughput at concurrency 16" describes
+the branch `mimo-v2.6/vllm-c16` built on it.
 
 Measured 2026-10-20 on one BH Galaxy, tt-metal `mimo-v2.6/vllm` at 52f85d31b3e (the merge of
 `mimo-v2.6/vllm-prefill-trace`, `mimo-v2.6/slot-parity` and `mimo-v2.6/moe-prefill`, tenstorrent/tt-metal#61462),
@@ -40,6 +44,57 @@ step), per-step input copies and page-table bookkeeping. The expert-major MoE pr
 the p99 drop is the recapture that the first request used to pay. At concurrency 16, TTFT is still about 13x the
 single-request value (not investigated).
 
+## Throughput at concurrency 16 (branch `mimo-v2.6/vllm-c16`)
+
+Same benchmark (random 128 in / 128 out, `--ignore-eos`, greedy, 64 prompts at concurrency 16 and 4 at concurrency 1,
+DP=4 x 4 seqs, 32K server), plugin `mimo-v2.6-flash/c16-throughput`. Each step below adds to the one before it.
+
+| Step | c=16 output tok/s | c=16 TTFT median | c=16 TPOT mean / ITL median | c=1 TTFT / TPOT |
+|---|---|---|---|---|
+| merged branch (52f85d31b3e) | 263.4 | 3608 ms | 34.4 / 32.4 ms | 274 / 23.6 ms |
+| device greedy + async decode, batched first-chunk prefill | 644.5 | 1206 ms | 15.1 / 13.2 ms | 196 / 13.1 ms |
+| traced prefill batches, decode RoPE from device tables | 897.5 | 613 ms | 13.2 / 13.0 ms | 162 / 13.0 ms |
+| one logits row per user read back, plugin `prefill_gather_ms` 50 | 992.1 | 323 ms | 13.3 / 13.0 ms | 202 / 13.0 ms |
+| `prefill_gather_ms` 200 + `prefill_gather_quiet_ms` 25, four runs on two servers | 1009.6, 1024.2, 1012.0, 1001.6 | 306-324 ms | 13.2-13.6 / 13.0 ms | 175 / 13.0 ms |
+
+The rows from the second on ran with the other sessions' host-only CPU jobs paused (`vllm bench` processes trigger
+the pause); with them running, the host side of every step slows down and c=16 fell to 351-561 tok/s.
+
+What changed:
+
+- **Decode** (`decode_input_update_contract` 1, `supports_async_decode`, `supports_sample_on_device` with
+  `max_device_top_k` 1, no device penalties or logprobs): the vLLM-mode trace takes its greedy token from GreedyHead
+  (the lowest id on ties, like the host's argmax) and writes it into the next step's token input, so a steady step is
+  one trace replay per lane with no copies (the RoPE cos / sin come from device tables at the trace's own positions,
+  `setup_decode_rope_tables`, up to 128K context) and a non-blocking token read. Any non-greedy row, penalties,
+  logprobs (plugin capability `supports_device_logprobs`, new) or structured output send that step to host sampling,
+  which reloads the inputs.
+- **Prefill batches**: a lane's first chunks of one padded length (<= 512) run as one pass
+  (`TtMiMoModel.prefill_enqueue_batch`), replaying a trace per (users, padded length) captured after the decode trace
+  (28 per replica, `trace_region_size` 1 GB), and read back one logits row per user. A short prompt with a prefix-cache
+  hit is recomputed from position 0 in such a pass without writing its cached blocks. A pass of 4 x 128 tokens on all
+  4 lanes takes ~245 ms (device bound) against ~880 ms eagerly.
+- **Row invariance**: a user's prefill is bitwise the same alone or in any batch, which vLLM's seed / batch tests
+  need. `ttnn.all_reduce` and the auto-configured router linear are not row-invariant, so a batch reduces as
+  [users, 1, padded, hidden] (equal to each user's own reduce for padded >= 96, checked on device) or with a
+  chip-ordered fp32 sum (padded 32 / 64), the prefill router uses a fixed-K-block program config, and prefill never
+  takes the 32-row decode kernels (RMSNorm, layer 0's MLP, router).
+- **Plugin `prefill_gather_ms`** (lane-DP, default off): while no lane runs a request, a prefill step waits until the
+  oldest waiting request is that old, every slot has a request, or no request arrived for `prefill_gather_quiet_ms`
+  (default 10). A wave of 16 requests reaching an idle engine prefills in one step instead of two.
+
+Remaining time at c=16 (8.00-8.18 s for 64 x 128 tokens): 4 waves of 127 decode steps at 13.0 ms (6.6 s), one ~245 ms
+prefill step per wave, and ~0.1 s per wave between a wave's last token and the next requests reaching the engine.
+The first wave of a run can still split when the client ramps up more than 25 ms apart.
+
+Validation on this branch (48 layers, with the launch settings below): HTTP suite 78 passed, 1 skipped, 0 failed; greedy vs the standalone generator
+16/16 (each prompt with its own `cache_salt`: the four passage prompts share a prefix, and a prefix-cache hit on a
+long prompt computes a continuation chunk instead of the standalone's one-shot prefill); 0 decode-trace recaptures. In the smoke driver
+(tracked allocations, program-cache misses forbidden after the capture): batched and traced prefill bitwise equal to
+per-user eager prefill, device greedy equal to host greedy over 5 exact bf16 top-2 ties, device RoPE equal to host
+RoPE. The prefill numerics differ from 52f85d31b3e by the prefill router and the 32-row kernels (standalone greedy
+11/16 prompts identical over 32 tokens to the 52f85d31b3e standalone); decode numerics are unchanged.
+
 ## Launch
 
 ```bash
@@ -49,8 +104,11 @@ vllm serve /path/to/MiMo-V2.6-Flash-MOPD --served-model-name XiaomiMiMo/MiMo-V2.
   --data-parallel-size 4 --max-num-seqs 4 --max-model-len 32768 --block-size 64 \
   --enable-chunked-prefill --max-num-batched-tokens 2048 --enable-prefix-caching \
   --reasoning-parser mimo --tool-call-parser mimo --enable-auto-tool-choice \
-  --additional-config '{"tt": {"trace_mode": "decode_only", "trace_region_size": 150000000, "l1_small_size": 65536, "dispatch_core_axis": "col"}}'
+  --additional-config '{"tt": {"trace_mode": "decode_only", "trace_region_size": 1000000000, "l1_small_size": 65536, "dispatch_core_axis": "col", "sample_on_device_mode": "decode_only", "prefill_gather_ms": 200, "prefill_gather_quiet_ms": 25}}'
 ```
+
+- `trace_region_size` 1 GB holds the decode trace and the 28 prefill-batch traces per replica (150 MB is enough with
+  `MIMO_PREFILL_TRACE=0`). `sample_on_device_mode` and the prefill gather need plugin `mimo-v2.6-flash/c16-throughput`.
 
 - `--max-num-seqs` is per lane (16 users in total). `--block-size 64` is required.
 - vLLM starts one API server per DP rank (4) by default; that needs plugin 11dc5a9 or later (before it, every
@@ -123,7 +181,7 @@ A global layer's prefill chunk after the first (`_prefill_owner_chunk`) zeroes t
 ## Not done
 
 - Slot parity of chunked prefill (above).
-- Device sampling and async decode (host sampling reads every user's logit rows each step).
-- A 1M-token prompt, and the 1M server on the merged branch.
-- TTFT under concurrency (above).
-- Speculative decoding (lane DP refuses it), prefill tracing.
+- Device sampling beyond greedy (top-k / top-p / temperature, penalties, logprobs run on the host, synchronously).
+- A 1M-token prompt, and the 1M server on the c16 branch (decode RoPE tables are off past 128K context).
+- Prefill and decode in the same step for different lanes (the plugin runs a step as all-prefill or all-decode).
+- Speculative decoding (lane DP refuses it); tracing later prefill chunks and chunks longer than 512 tokens.
