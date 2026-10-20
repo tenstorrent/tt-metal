@@ -4,8 +4,9 @@
 
 """
 Takes a fabric snapshot of information, where L1 addresses and registers are named in the manifest, on every router core
-through a device, and writes the L1 bytes to a .bin file and everything else to a .json file beside it. README.md in
-this directory describes the format.
+through a device, and writes the L1 bytes to a .bin file and everything else to a .json file beside it. Before the main
+pass, liveness rounds sample every router's heartbeat and core registers a few times. README.md in this directory
+describes the format.
 """
 
 from __future__ import annotations
@@ -128,6 +129,7 @@ def _router_entry(router: RouterPlan) -> dict:
     return {
         "device": None,
         "core": {"translated": list(router.virtual_core), "logical": list(router.logical_core)},
+        "liveness": [],
         "started_ns": None,
         "finished_ns": None,
         "core_registers": {},
@@ -136,6 +138,39 @@ def _router_entry(router: RouterPlan) -> dict:
         "streams": {},
         "error": None,
     }
+
+
+def _sample_liveness(
+    device: Device,
+    plan: ReadPlan,
+    opened: dict[str, OpenedRouter],
+    routers: dict[str, dict],
+    rounds: int,
+    interval_s: float,
+    monotonic_ns: Callable[[], int],
+    sleep: Callable[[float], None],
+):
+    """
+    `rounds` rounds, `interval_s` apart, each sampling the heartbeat and then the core registers of every router without
+    an error, in manifest order.
+    """
+    for round_index in range(rounds):
+        if round_index > 0:
+            sleep(interval_s)
+        for router in plan.routers:
+            entry = routers[router.path]
+            if entry["error"] is not None:
+                continue
+            sample = {"t_ns": monotonic_ns(), "heartbeat": None, "core_registers": {}}
+            entry["liveness"].append(sample)
+            key = "heartbeat"
+            try:
+                if plan.heartbeat is not None:
+                    sample["heartbeat"] = _read_word(device, opened[router.path], plan.heartbeat)
+                for key, register in plan.core_registers.items():
+                    sample["core_registers"][key] = _read_word(device, opened[router.path], register)
+            except CaptureError as error:
+                entry["error"] = {"stage": "liveness", "path": key, "message": str(error)}
 
 
 def _read_router(
@@ -187,13 +222,17 @@ def take_snapshot(
     *,
     host: str,
     argv: list[str],
+    liveness_rounds: int,
+    liveness_interval_s: float,
     monotonic_ns: Callable[[], int] = time.monotonic_ns,
+    sleep: Callable[[float], None] = time.sleep,
     utc_now: Callable[[], datetime.datetime] = _utc_now,
 ) -> Snapshot:
     """
     Reads every local router of the manifest at `manifest_path` through `device`, and writes the snapshot to `out_dir`.
-    A router whose core can't be opened or read records the error and the rest carry on. Raises ManifestError, or
-    json.JSONDecodeError, when the manifest can't be used, before anything is read or written.
+    The main pass follows `liveness_rounds` liveness rounds, `liveness_interval_s` seconds apart. A router whose core
+    can't be opened or read records the error and the rest carry on. Raises ManifestError, or json.JSONDecodeError, when
+    the manifest can't be used, before anything is read or written.
     """
     # Load the manifest
     manifest_bytes = manifest_path.read_bytes()
@@ -224,11 +263,14 @@ def take_snapshot(
             continue
         entry["device"] = {"unique_id": f"0x{router.asic_id:016x}", "ttexalens_id": opened[router.path].ttexalens_id}
 
+    # Sample every router's heartbeat and core registers in liveness rounds
+    _sample_liveness(device, plan, opened, routers, liveness_rounds, liveness_interval_s, monotonic_ns, sleep)
+
     # Read the router information
     raw = _RawFile(bin_path)
     try:
         for router in plan.routers:
-            if router.path in opened:
+            if routers[router.path]["error"] is None:
                 _read_router(device, plan, router, opened[router.path], routers[router.path], raw, monotonic_ns)
     except BaseException:
         raw.discard()
@@ -250,6 +292,8 @@ def take_snapshot(
             "host": host,
             "argv": list(argv),
             "ttexalens": device.version,
+            "liveness_rounds": liveness_rounds,
+            "liveness_interval_s": liveness_interval_s,
         },
         "raw": {"file": bin_path.name, "size": raw.size, "sha256": raw.sha256.hexdigest()},
         "routers": routers,

@@ -13,6 +13,8 @@ whose bytes say what was read: a read's first word is its address and its second
 - each area's name and each region's path find, in the manifest, the address and size its entry copies;
 - each area's and region's bytes are at its offset in the .bin, and the entries fill the .bin end to end;
 - each register's value is the address the manifest gives it, base + id * stride + offset for a stream register;
+- each router has two liveness samples, taken before its main pass, whose heartbeat and core register values are the
+  addresses the manifest gives them;
 - the snapshot matches fabric_snapshot_schema.json, manifest.sha256 is the manifest file's and raw is the .bin's.
 Each snapshot is deleted once checked: express's is over 100 MB a rank. Fails when a check fails, or when it finds no
 manifests.
@@ -34,6 +36,7 @@ from tt_metal.fabric.debug.visualizer.capture.snapshot import OpenedRouter, take
 
 SCHEMA_PATH = pathlib.Path(__file__).resolve().parents[1] / "fabric_snapshot_schema.json"
 MAX_PROBLEMS_SHOWN = 20
+LIVENESS_ROUNDS = 2
 
 
 class RecordingDevice:
@@ -95,6 +98,8 @@ def check_routers(manifest: dict, snapshot: dict, raw_path: pathlib.Path) -> lis
     core_registers = {register["name"]: register["address"] for register in arch["core_registers"]}
     areas = arch["areas"]
     streams = arch["stream_registers"]
+    sample_words = {"heartbeat": None if areas.get("heartbeat") is None else areas["heartbeat"]["address"]}
+    sample_words.update(core_registers)
 
     paths = [router.path for router in plan.routers]
     if list(snapshot["routers"]) != paths:
@@ -124,6 +129,16 @@ def check_routers(manifest: dict, snapshot: dict, raw_path: pathlib.Path) -> lis
                 address = streams["base"] + int(stream_id) * streams["stride"] + streams["register_offsets"][name]
                 if values != {"before": address, "after": address}:
                     problems.append(f"{router.path}.streams.{stream_id}.{name} is {values}, not {address:#x}")
+
+        if len(entry["liveness"]) != LIVENESS_ROUNDS:
+            problems.append(f"{router.path}.liveness has {len(entry['liveness'])} samples, not {LIVENESS_ROUNDS}")
+        for round_index, sample in enumerate(entry["liveness"]):
+            words = {"heartbeat": sample["heartbeat"], **sample["core_registers"]}
+            if list(words.items()) != list(sample_words.items()):
+                problems.append(f"{router.path}.liveness[{round_index}] is {words}, not {sample_words}")
+        times = [sample["t_ns"] for sample in entry["liveness"]] + [entry["started_ns"]]
+        if times != sorted(times):
+            problems.append(f"{router.path}: the liveness samples' and main pass's times {times} are out of order")
 
         mesh_key, chip_key, router_key = router.path.split("/")
         router_node = manifest["meshes"][mesh_key]["chips"][chip_key]["routers"][router_key]
@@ -159,7 +174,13 @@ def check_manifest(manifest_path: pathlib.Path, validator) -> tuple:
     with tempfile.TemporaryDirectory() as out_dir:
         started = time.monotonic()
         result = take_snapshot(
-            manifest_path, pathlib.Path(out_dir), RecordingDevice(), host="check_capture", argv=[str(manifest_path)]
+            manifest_path,
+            pathlib.Path(out_dir),
+            RecordingDevice(),
+            host="check_capture",
+            argv=[str(manifest_path)],
+            liveness_rounds=LIVENESS_ROUNDS,
+            liveness_interval_s=0,
         )
         seconds = time.monotonic() - started
         snapshot = json.loads(result.json_path.read_text())

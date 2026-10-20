@@ -37,12 +37,17 @@ and won't overwrite a snapshot.
   "manifest": { "file": "/.../fabric_manifest_rank_1_of_1.json", "sha256": "...",
                 "run": { "arch": "wormhole_b0", ... } },
   "capture": { "started_at": "2026-10-19T15:30:00Z", "finished_at": "...", "host": "wh-lb-85", "argv": [...],
-               "ttexalens": "0.4.1" },
+               "ttexalens": "0.4.1", "liveness_rounds": 3, "liveness_interval_s": 1.0 },
   "raw": { "file": "fabric_snapshot_rank_1_of_1_20261019T153000Z.bin", "size": 6291296, "sha256": "..." },
   "routers": {
     "M0/C0/E1": {
       "device": { "unique_id": "0x000000036190302b", "ttexalens_id": 4 },
       "core": { "translated": [25, 16], "logical": [0, 0] },
+      "liveness": [
+        { "t_ns": 0, "heartbeat": 3703177291,
+          "core_registers": { "soft_reset": 290816, "wall_clock_low": 0, "wall_clock_high": 0 } },
+        ...
+      ],
       "started_ns": 0, "finished_ns": 0,
       "core_registers": { "soft_reset": 0, "wall_clock_low": 0, "wall_clock_high": 0 },
       "areas": { "heartbeat": { "address": 8064, "size": 4, "offset": 0 }, ... },
@@ -60,17 +65,23 @@ and won't overwrite a snapshot.
   own isn't a key.
 - **Areas and regions** copy `address` and `size` from the manifest and add `offset`, where their bytes start in the
   `.bin`. The copy lets decode check, region by region, that it has the right manifest.
-- **Words.** Core and stream register values are raw 32-bit words, read little-endian, with no masking or sign
-  conversion: that is decode's job.
-- **Order.** Capture first finds every router's chip and core. Then, router by router in manifest order, it reads the
-  core registers, the stream registers (`before`), the areas, the regions, and the stream registers again (`after`).
-  Each area and region is one read.
-- **Errors.** `error` is null, or `{stage, path, message}` for the read that failed. `stage` is `open`,
+- **Words.** Core and stream register values and liveness samples are raw 32-bit words, read little-endian, with no
+  masking or sign conversion: that is decode's job.
+- **Liveness rounds.** Before the main pass, capture makes `liveness_rounds` rounds, `liveness_interval_s` seconds
+  apart. Each round visits every router in manifest order and appends a sample to its `liveness`: the host time `t_ns`,
+  the `heartbeat` area's word, and the core registers. Rounds go across all routers, so samples from different routers
+  are close in time, and decode can tell whether each router's heartbeat and clock moved. `heartbeat` is null when the
+  manifest's `heartbeat` area is.
+- **Order.** Capture first finds every router's chip and core, then makes the liveness rounds. Then, router by router in
+  manifest order, it reads the core registers, the stream registers (`before`), the areas, the regions, and the stream
+  registers again (`after`). Each area and region is one read.
+- **Errors.** `error` is null, or `{stage, path, message}` for the read that failed. `stage` is `open`, `liveness`,
   `core_registers`, `streams_before`, `areas`, `regions` or `streams_after`. `path` is the area's, region's or core
-  register's key, `<stream id>/<register>` for a stream register, and null for `open`. The first error stops that
-  router; what it read before stays in the snapshot, and the other routers carry on.
-- **Times.** `started_ns` and `finished_ns` come from `time.monotonic_ns()`, so decode can tell how far apart two reads
-  were.
+  register's key (`heartbeat` or a core register's for `liveness`), `<stream id>/<register>` for a stream register, and
+  null for `open`. The first error stops that router for the rest of the capture, rounds included; what it read before
+  stays in the snapshot, and the other routers carry on.
+- **Times.** `t_ns`, `started_ns` and `finished_ns` come from `time.monotonic_ns()`, so decode can tell how far apart
+  two reads were and turn a wall clock's change into a rate.
 - **The manifest.** Capture reads the manifest file once, hashes those bytes and parses the same bytes, so
   `manifest.sha256` is the hash of exactly what it used. `run` is a copy, for people reading the file.
 
@@ -87,9 +98,10 @@ python3 -m tt_metal.fabric.debug.visualizer.capture generated/fabric
 ```
 
 Pass manifest files or directories; a directory stands for the `fabric_manifest_rank_*.json` files in it. Each snapshot
-is written next to its manifest, or into `-o DIR`. Capture prints one line per snapshot and one per router error. It
-exits non-zero when ttexalens doesn't start or a manifest can't be read or its snapshot written; a router error is only
-recorded in the snapshot.
+is written next to its manifest, or into `-o DIR`. Before each main pass, capture makes `--liveness-rounds` rounds
+(default 3; 0 turns them off), `--liveness-interval` seconds apart (default 1.0), so by default a snapshot takes at
+least 2 s. Capture prints one line per snapshot and one per router error. It exits non-zero when ttexalens doesn't start
+or a manifest can't be read or its snapshot written; a router error is only recorded in the snapshot.
 
 **Finding a router.** A router's chip is the one ttexalens has under the chip's `asic_id`, and it must be of `run.arch`.
 The router's core is `identity.virtual_core` as a translated coordinate, if ttexalens puts it at
@@ -101,7 +113,7 @@ When neither is at the logical core, that is an `open` error for the router.
 | File | What it does |
 | --- | --- |
 | [`reads.py`](reads.py) | `get_read_plan`: what to read on each router core, from the manifest |
-| [`snapshot.py`](snapshot.py) | `take_snapshot`: reads the plan through a device and writes the snapshot |
+| [`snapshot.py`](snapshot.py) | `take_snapshot`: makes the liveness rounds and the main pass through a device and writes the snapshot |
 | [`exalens.py`](exalens.py) | `open_exalens`: the device that reads through ttexalens. The only module that imports ttexalens |
 | [`__main__.py`](__main__.py) | The command line: takes a snapshot of each manifest given |
 | [`fabric_snapshot_schema.json`](fabric_snapshot_schema.json) | The snapshot `.json`'s JSON Schema |
@@ -124,8 +136,9 @@ As with decode's tests, `-t .` makes the repo root the top level the tests impor
 `tests/scripts/run_fabric_manifest_tests.sh` runs the same command, then runs `tests/check_capture.py` on every manifest
 it writes. The check takes a snapshot with a fake device whose bytes say what was read, so it can check that the
 snapshot has everything the manifest names and nothing else, that each area's and region's bytes are at its offset, that
-each register was read at the address the manifest gives it, and that the snapshot matches the schema. It needs
-`jsonschema`, and deletes each snapshot once checked. To run it on other manifests, pass their files or directories:
+each register was read at the address the manifest gives it, that each router has two liveness samples taken before its
+main pass, and that the snapshot matches the schema. It needs `jsonschema`, and deletes each snapshot once checked. To
+run it on other manifests, pass their files or directories:
 
 ```bash
 python3 -m tt_metal.fabric.debug.visualizer.capture.tests.check_capture generated/fabric

@@ -23,9 +23,11 @@
         "finished_at": { "$ref": "#/$defs/utc" },
         "host": { "type": "string" },
         "argv": { "type": "array", "items": { "type": "string" } },
-        "ttexalens": { "type": "string" }
+        "ttexalens": { "type": "string" },
+        "liveness_rounds": { "$ref": "#/$defs/count" },
+        "liveness_interval_s": { "type": "number", "minimum": 0 }
       },
-      "required": ["started_at", "finished_at", "host", "argv", "ttexalens"],
+      "required": ["started_at", "finished_at", "host", "argv", "ttexalens", "liveness_rounds", "liveness_interval_s"],
       "additionalProperties": false
     },
     "raw": {
@@ -62,6 +64,21 @@
       "maxItems": 2
     },
     "time_ns": { "oneOf": [{ "type": "integer" }, { "type": "null" }] },
+    "core_registers": {
+      "type": "object",
+      "propertyNames": { "$ref": "#/$defs/name" },
+      "additionalProperties": { "$ref": "#/$defs/word" }
+    },
+    "liveness_sample": {
+      "type": "object",
+      "properties": {
+        "t_ns": { "type": "integer" },
+        "heartbeat": { "oneOf": [{ "$ref": "#/$defs/word" }, { "type": "null" }] },
+        "core_registers": { "$ref": "#/$defs/core_registers" }
+      },
+      "required": ["t_ns", "heartbeat", "core_registers"],
+      "additionalProperties": false
+    },
     "l1": {
       "type": "object",
       "properties": {
@@ -84,7 +101,9 @@
     "error": {
       "type": "object",
       "properties": {
-        "stage": { "enum": ["open", "core_registers", "streams_before", "areas", "regions", "streams_after"] },
+        "stage": {
+          "enum": ["open", "liveness", "core_registers", "streams_before", "areas", "regions", "streams_after"]
+        },
         "path": { "oneOf": [{ "type": "string" }, { "type": "null" }] },
         "message": { "type": "string" }
       },
@@ -117,13 +136,10 @@
           "required": ["translated", "logical"],
           "additionalProperties": false
         },
+        "liveness": { "type": "array", "items": { "$ref": "#/$defs/liveness_sample" } },
         "started_ns": { "$ref": "#/$defs/time_ns" },
         "finished_ns": { "$ref": "#/$defs/time_ns" },
-        "core_registers": {
-          "type": "object",
-          "propertyNames": { "$ref": "#/$defs/name" },
-          "additionalProperties": { "$ref": "#/$defs/word" }
-        },
+        "core_registers": { "$ref": "#/$defs/core_registers" },
         "areas": {
           "type": "object",
           "propertyNames": { "$ref": "#/$defs/name" },
@@ -146,7 +162,8 @@
         "error": { "oneOf": [{ "$ref": "#/$defs/error" }, { "type": "null" }] }
       },
       "required": [
-        "device", "core", "started_ns", "finished_ns", "core_registers", "areas", "regions", "streams", "error"
+        "device", "core", "liveness", "started_ns", "finished_ns", "core_registers", "areas", "regions", "streams",
+        "error"
       ],
       "additionalProperties": false,
       "if": { "properties": { "error": { "type": "null" } } },
