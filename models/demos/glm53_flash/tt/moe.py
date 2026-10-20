@@ -19,6 +19,12 @@ runtime (a static nnz that disagrees with the mask deadlocks the op). Prefill pr
 sequence in 32-token blocks with the same code.
 
 Weight layout for sparse_matmul: W13 ``[1, E, H, 2I]`` (gate columns then up), W2 ``[1, E, I, H]``.
+
+Expert dtype knobs (design section 9): ``expert_dtype`` is the routed W13 (gate/up) format and
+``expert_down_dtype`` the routed W2 format, both ``bfloat8_b`` by default; ``bfloat4_b`` for W13 is
+the candidate that halves the dominant expert-streaming term and is adopted only if the eval-set
+accuracy is unchanged (``tests/test_expert_dtype.py`` carries the single-layer evidence). The shared
+expert stays on ``weight_dtype`` like the dense MLP.
 """
 
 from __future__ import annotations
@@ -158,7 +164,8 @@ class TtRoutedExperts(LightweightModule):
         gate_up: torch.Tensor,  # [E, 2I, H] (HF stacked: gate rows then up rows)
         down: torch.Tensor,  # [E, H, I]
         *,
-        weight_dtype=ttnn.bfloat8_b,
+        expert_dtype=ttnn.bfloat8_b,  # W13 (gate/up) format
+        expert_down_dtype=ttnn.bfloat8_b,  # W2 (down) format
         activation_dtype=ttnn.bfloat16,
         mesh: GLMMesh | None = None,
     ):
@@ -173,6 +180,8 @@ class TtRoutedExperts(LightweightModule):
         self.E, self.H, self.I = cfg.n_routed_experts, cfg.hidden_size, cfg.moe_intermediate_size
         self.limit = float(cfg.swiglu_limit)
         self.activation_dtype = activation_dtype
+        self.expert_dtype = expert_dtype
+        self.expert_down_dtype = expert_down_dtype
         assert tuple(gate_up.shape) == (self.E, 2 * self.I, self.H) and tuple(down.shape) == (self.E, self.H, self.I)
         ep, tpr = self.mesh.cols, self.mesh.rows
         assert self.E % ep == 0 and self.I % (tpr * TILE) == 0, (self.E, self.I, ep, tpr)
@@ -182,8 +191,8 @@ class TtRoutedExperts(LightweightModule):
         # [1,E,H,2I] in tpr blocks of [gate_r | up_r] so a row split of the last dim keeps the pairs
         w13 = interleave_blocks([gate, up], tpr, dim=-1).reshape(1, self.E, self.H, 2 * self.I)
         w2 = down.transpose(1, 2).contiguous().reshape(1, self.E, self.I, self.H)  # [1,E,I,H]
-        self.w13 = self.mesh.upload(w13, weight_dtype, rows=3, cols=1)
-        self.w2 = self.mesh.upload(w2, weight_dtype, rows=2, cols=1)
+        self.w13 = self.mesh.upload(w13, expert_dtype, rows=3, cols=1)
+        self.w2 = self.mesh.upload(w2, expert_down_dtype, rows=2, cols=1)
         # column c's expert selector: the [E, E_local] block of the identity for its experts
         self.select = (
             None if ep == 1 else self.mesh.upload(torch.eye(self.E, dtype=torch.float32), ttnn.float32, cols=-1)
@@ -285,12 +294,16 @@ class TtMoE(LightweightModule):
         mlp_state_dict: dict[str, torch.Tensor],
         *,
         weight_dtype=ttnn.bfloat8_b,
+        expert_dtype=ttnn.bfloat8_b,
+        expert_down_dtype=ttnn.bfloat8_b,
         mesh: GLMMesh | None = None,
     ):
         """``mlp_state_dict``: raw checkpoint tensors of ``mlp.`` (prefix stripped), experts as
         ``experts.N.{gate,up,down}_proj.weight`` or pre-stacked ``experts.gate_up_proj/down_proj``.
-        On a mesh (``tt/mesh.py``) the routed experts use the hybrid placement, the shared expert is
-        TP over the columns and the two partials share one all-reduce."""
+        ``weight_dtype`` is the shared expert's format; the routed experts take ``expert_dtype``
+        (gate/up) and ``expert_down_dtype`` (down). On a mesh (``tt/mesh.py``) the routed experts
+        use the hybrid placement, the shared expert is TP over the columns and the two partials
+        share one all-reduce."""
         self.cfg = cfg
         self.mesh = mesh if mesh is not None else single_chip(device)
         E, I, H = cfg.n_routed_experts, cfg.moe_intermediate_size, cfg.hidden_size
@@ -313,7 +326,15 @@ class TtMoE(LightweightModule):
         self.router = TtRouter(
             device, cfg, mlp_state_dict["gate.weight"], mlp_state_dict["gate.e_score_correction_bias"], mesh=self.mesh
         )
-        self.experts = TtRoutedExperts(device, cfg, gate_up, down, weight_dtype=weight_dtype, mesh=self.mesh)
+        self.experts = TtRoutedExperts(
+            device,
+            cfg,
+            gate_up,
+            down,
+            expert_dtype=expert_dtype,
+            expert_down_dtype=expert_down_dtype,
+            mesh=self.mesh,
+        )
         self.shared = TtClampedSwiGLU(
             device,
             mlp_state_dict["shared_experts.gate_proj.weight"],

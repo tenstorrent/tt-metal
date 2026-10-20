@@ -202,3 +202,17 @@ prefill at S = 1, 2, 3, 31, 33 (short-S control); sparse-path determinism.
 - layer3_dsa_moe traced decode re-profiled on the new decode path (dense flash-MLA for every slot + index maintenance, B=1, pos 1024,
   one replay, seed-only; wall 11.31 ms/step): 435 ops, 10.87 ms device per step, duplicate ids 0; top op classes: AccumulationDeviceOperation 2.64 ms x8, MatmulDeviceOperation 1.66 ms x13, UnaryDeviceOperation 1.42 ms x12, SparseMatmulDeviceOperation 1.11 ms x2, BinaryNgDeviceOperation 0.95 ms x92, TernaryDeviceOperation 0.62 ms x38.
   README decode row: layer 3 10.87 ms/step device (435 ops)
+
+## 2026-10-20: expert dtype gate (branch `arg/glm53_dtype`, chip 5)
+
+- Knobs `expert_dtype` (W13 gate/up) / `expert_down_dtype` (W2) on TtRoutedExperts -> TtMoE -> TtDecoderLayer ->
+  FunctionalDecoder.from_state_dict, defaults bfp8_b (unchanged); shared expert and dense MLP stay on `weight_dtype`.
+- `tests/test_expert_dtype.py` (6 cases, layers 3 and 4 x {bfp8, bfp4 gate/up, bfp4 all}, ~3 min per layer): MoE-only
+  T=256 PCC 0.99995 / 0.99968 / 0.99808 (L3) and 0.99995 / 0.99504 / 0.99141 (L4), router sets identical (255/256
+  everywhere); R4097 full-layer prefill 0.99994 / 0.99945 / 0.99767 (L3), 1.00000 / 0.99994 / 0.99990 (L4); decode worst
+  step 0.99996 / 0.99947 / 0.99775 (L3), 0.99996 / 0.99747 / 0.99628 (L4). Logs `_logs/dtype_sweep_layer{3,4}.log`.
+- Layer-4 traced decode under Tracy (one replay, same chip/session, `tracy/dtype_gate/`): 10.93 -> 10.80 (bfp4 gate/up)
+  -> 10.72 ms (bfp4 all) device; only the sparse matmuls change (W13 765 -> 624 us, W2 529 -> 465 us); the W13 matmul
+  runs at 35 % of DRAM peak in bfp8 (22 % in bfp4), so halving the bytes saves 18 %, not 50 %; baseline repeat 10.92 ms.
+- Evidence and recommendation: `doc/functional_decoder/dtype_gate.md` (keep bfp8 default; only bfp4 gate/up goes to the
+  eval-set gate; perf side to be re-measured on the Phase-2 layout).
