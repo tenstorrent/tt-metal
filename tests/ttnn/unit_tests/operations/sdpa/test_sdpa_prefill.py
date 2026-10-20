@@ -743,6 +743,58 @@ def test_sdpa_sliding_window_streaming_parity(
     )
 
 
+@pytest.mark.parametrize("sliding_window", [512, 2048], ids=["w512", "w2048"])
+@pytest.mark.parametrize("s", [2176, 3200, 4224])
+def test_sdpa_sliding_window_fp32_dest_partial_q_chunk(device, s, sliding_window):
+    """Causal sliding window with FP32 DEST when the padded last Q chunk reaches past the padded K extent (#61489).
+
+    q_chunk 256 / k_chunk 128 with S an odd multiple of 128 pads Q one K chunk beyond K. The Q chunks a core runs after
+    that partial chunk used to read their masks one K chunk late, so each 256-row block is checked on its own.
+    """
+    torch.manual_seed(0)
+    b, nh, nkv, d = 1, 8, 1, 128
+    q_chunk_size, k_chunk_size = 256, 128
+    Q = fa_rand(b, nh, s, d)
+    K = fa_rand(b, nkv, s, d)
+    V = fa_rand(b, nkv, s, d)
+
+    program_config = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(8, 8),
+        q_chunk_size=q_chunk_size,
+        k_chunk_size=k_chunk_size,
+        exp_approx_mode=False,
+    )
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
+    tt_out = ttnn.transformer.scaled_dot_product_attention(
+        ttnn.from_torch(Q, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device),
+        ttnn.from_torch(K, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device),
+        ttnn.from_torch(V, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device),
+        is_causal=True,
+        sliding_window_size=sliding_window,
+        program_config=program_config,
+        compute_kernel_config=compute_kernel_config,
+    )
+    tt_out = ttnn.to_torch(tt_out)[:, :, :s, :]
+
+    i = torch.arange(s)[:, None]
+    j = torch.arange(s)[None, :]
+    allowed = (j <= i) & (i - j < sliding_window)
+    gt = torch.nn.functional.scaled_dot_product_attention(
+        Q, K.expand(b, nh, s, d), V.expand(b, nh, s, d), attn_mask=allowed
+    )
+
+    for start in range(0, s, q_chunk_size):
+        end = min(start + q_chunk_size, s)
+        passed, pcc = comp_pcc(gt[:, :, start:end], tt_out[:, :, start:end], 0.99)
+        assert passed, f"rows {start}-{end}: {pcc}"
+
+
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])
 @pytest.mark.parametrize("is_causal", [True, False], ids=["causal", "noncausal"])
 @pytest.mark.parametrize("q_chunk_size", [32], ids=["q32"])
