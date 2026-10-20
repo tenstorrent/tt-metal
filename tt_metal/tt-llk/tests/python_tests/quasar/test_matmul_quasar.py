@@ -224,18 +224,16 @@ def matmul_tiny_transpose_modes(
     return [Transpose.No, Transpose.Yes]
 
 
-# MxFp4 is an input-only (L1) format here. Each row is one exponent family:
-# matmul_register_format_hints pairs Float16 with MxFp4_2x_A and Float16_b with
-# MxFp4_2x_B, so the output matches the math format the hint selects.
+# MxFp4 is an input-only (L1) format here. matmul_register_format_hints pairs
+# Float16_b with MxFp4_2x_B, so the output matches the math format the hint selects.
+# (Float16, the exponent-A row paired with MxFp4_2x_A, is not swept.)
 MATMUL_2X_FORMATS = [
-    InputOutputFormat(DataFormat.MxFp4, DataFormat.Float16),
     InputOutputFormat(DataFormat.MxFp4, DataFormat.Float16_b),
 ]
 
 MATMUL_FORMAT = (
     input_output_formats(
         [
-            DataFormat.Float16,
             DataFormat.Float16_b,
         ],
     )

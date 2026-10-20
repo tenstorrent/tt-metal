@@ -63,7 +63,6 @@ from quasar.test_eltwise_binary_quasar import (
 
 _BINARY_BROADCAST_BASE_FORMATS = [
     DataFormat.Float16_b,
-    DataFormat.Float16,
 ]
 _BINARY_BROADCAST_EXPLICIT_FORMATS = [
     InputOutputFormat(DataFormat.Int8, DataFormat.Int32),

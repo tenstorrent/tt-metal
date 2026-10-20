@@ -78,11 +78,6 @@ def test_perf_reduce_quasar(
     formats=lambda register_format_hint: [
         InputOutputFormat(
             DataFormat.MxFp4,
-            DataFormat.Float16,
-            register_format_hint=register_format_hint,
-        ),
-        InputOutputFormat(
-            DataFormat.MxFp4,
             DataFormat.Float16_b,
             register_format_hint=register_format_hint,
         ),

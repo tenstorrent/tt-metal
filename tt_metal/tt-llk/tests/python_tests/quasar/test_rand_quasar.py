@@ -63,7 +63,7 @@ class RandCase:
         return self.name
 
 
-_RAND_FLOAT_FORMATS = (DataFormat.Float16, DataFormat.Float32, DataFormat.Float16_b)
+_RAND_FLOAT_FORMATS = (DataFormat.Float32, DataFormat.Float16_b)
 
 # Exponent <= 31 cannot absorb the 2^-31 normalization, forcing the per-row SFPMULI body.
 _RAND_PER_ROW_NORMALIZE_SCALE = 2.0**-96

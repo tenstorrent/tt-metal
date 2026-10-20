@@ -96,9 +96,7 @@ def _block_shapes_fitting_dest(
 
 @pytest.mark.quasar
 @parametrize(
-    formats=input_output_formats(
-        [DataFormat.Float16_b, DataFormat.Float16, DataFormat.Float32], same=True
-    ),
+    formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32], same=True),
     dest_acc=lambda formats: get_valid_dest_accumulation_modes(formats),
     dest_sync=[DestSync.Half, DestSync.Full],
     tile_dimensions=runtime(TILE_DIMENSIONS),

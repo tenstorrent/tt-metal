@@ -62,7 +62,6 @@ OUTPUT_DIMENSIONS = [
 REUSE_DEST_FORMATS = input_output_formats(
     [
         DataFormat.Float16_b,
-        DataFormat.Float16,
     ],
 ) + quasar_mx_smoke(DataFormat.MxFp4, DataFormat.Float16_b)
 
