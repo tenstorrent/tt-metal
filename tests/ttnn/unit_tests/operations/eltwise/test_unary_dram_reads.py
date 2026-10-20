@@ -12,7 +12,7 @@ import pytest
 import torch
 import ttnn
 
-from models.common.utility_functions import is_blackhole, is_wormhole_b0
+from models.common.utility_functions import is_blackhole
 from tests.ttnn.utils_for_testing import assert_equal
 
 HEIGHT, WIDTH = ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.TensorMemoryLayout.WIDTH_SHARDED
@@ -134,7 +134,7 @@ def test_width_sharded(device, op_name, case, width, num_shards):
 @pytest.mark.parametrize("op_name", ["relu", "silu", "elu", "gelu_accurate"])
 def test_width_sharded_cores_start_in_few_shards(device, op_name):
     grid = device.compute_with_storage_grid_size()
-    num_shards = 12 if is_wormhole_b0() else device.dram_grid_size().x  # dram_grid_size() is 6 wide on Wormhole
+    num_shards = device.dram_grid_size().x
     shape = [1, 1, grid.x * grid.y // 2 * 32, num_shards * 1024]
     run_against_default_path(OPS[op_name], random_input(shape), device, dram_sharded(shape, WIDTH, num_shards))
 
