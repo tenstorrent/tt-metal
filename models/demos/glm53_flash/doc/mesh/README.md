@@ -359,3 +359,11 @@ full-mesh open. No process held a device. Host reboot by the user (~22:00); hear
 sanity passed, queue relaunched (`_logs/mesh/sched_v7.sh`). Merged meanwhile: deterministic indexer stems for
 chunked prefill (`prefill_linear`, 97642663bc2), partition_cols ROW_MAJOR path (586ad64479f), cache-hit shard
 shape (661c25de72c), partitioned-test sizing (ab6e38d1e71).
+
+### User-partitioned decode on the 8x4: first real exercise (23:30-23:45)
+
+The 16 K needle run reached the decode capture and failed in the heads <-> users exchange:
+`all_to_all_async_generic` grows `in_dim` and splits `out_dim` (the reverse of `GLMMesh.all_to_all_cols`'s
+documented split/concat), so the 4-user dim landed on the tile-row position, where the op only accepts
+multiples of 16. Fixed in the helper (cf302fd6434); the (2,4) partitioned test had never passed before, so
+this path is being validated for the first time by the 16 K / 131 K runs on the fixed code.
