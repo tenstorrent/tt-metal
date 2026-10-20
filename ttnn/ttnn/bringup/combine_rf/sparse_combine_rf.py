@@ -1226,7 +1226,7 @@ def sparse_combine_rf_prepare(
     probes=None,
     shared_rows=None,
     barrier=None,
-    piggyback_credits=False,
+    piggyback_credits=True,
     pool_slots=None,
 ):
     """rows_by_chip[coord] = list of (y row on that chip, home coord, home token t, link[, local expert]). cells: the
@@ -1260,7 +1260,8 @@ def sparse_combine_rf_prepare(
     tensor of >= 8 B per core on every core (zeros at creation, never rewritten by the caller): the program starts with
     a cross-chip barrier, so the caller may zero the arena right before it (no other sync in between).
     piggyback_credits: rows carry their link class's consumed counts back to the chip they go to (standalone credit
-    packets only when no row goes that way; a port per link, A <= 16, two links). pool_slots: the landing pool's slots
+    packets only when no row goes that way); on by default where it applies (a port per link, two links, A <= 16):
+    GLM-Flash S640 combine alone -3.5% uniform / -4.3% spread. pool_slots: the landing pool's slots
     exactly (e.g. another build's run.pool, when two builds share the arena: equal pools, so neither's CBs sit on the
     other's ring slots - whose trailer flags mark landed rows)."""
     R, C = tuple(mesh_device.shape)
@@ -1337,7 +1338,7 @@ def sparse_combine_rf_prepare(
     PIGGY = (pr.piggy == "1") if pr.piggy in ("0", "1") else bool(piggyback_credits)
     if pr.piggy == "fused":  # (probe: piggyback only in the L1 hand-off programs)
         PIGGY = l1 is not None
-    assert not PIGGY or (not PER_DIR and L == 2 and A0 <= 16), "piggyback_credits: a port per link, two links, A <= 16"
+    PIGGY = PIGGY and not PER_DIR and L == 2 and A0 <= 16  # (where it applies: a port per link, two links, A <= 16)
     SE_ON = shared_rows is not None
     assert not SE_ON or l1 is not None, "shared_rows: the L1 hand-off"
     assert not SE_ON or arena is not None, "shared_rows: the staging slots live in the arena"

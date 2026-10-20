@@ -1619,3 +1619,4 @@ Combine alone (fused) us, off -> on: GLM-Flash S640 uniform 1126 -> 1087, spread
 S256 464 -> 457, 517 -> 513; K3 986 -> 955, 1057 -> 1041, packed 2337 -> 2393; V4.1 603 -> 596. Fused within +-1.5%
 (the combine is hidden there). Credit packets per busy port 318 -> 124, their time 116 -> 34 us. A modest win: kept
 as an option (default off); the feeding flows' gaps are the larger loss.
+Piggybacked credits on by default where they apply (owner): harness S640 uniform alone 1092 us; GLM ts block test exact as before; K3 block PCC 0.99622, traced 3346 us (3333 before); GLM L4 block chunk 5120 2793 us (fused 1686; 1751-1812 run to run before); whole model 56k 4.79-4.80 s (unchanged), top1 0.659 / 0.650.
