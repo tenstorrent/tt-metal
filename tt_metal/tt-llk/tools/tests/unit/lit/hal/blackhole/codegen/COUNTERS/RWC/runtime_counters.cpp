@@ -11,7 +11,7 @@
 
 #include <cstdint>
 
-#include "hal/counters.h"
+#include "hal/tensix_counters.h"
 
 namespace counters = hal::counters;
 namespace rwc      = hal::counters::rwc;
