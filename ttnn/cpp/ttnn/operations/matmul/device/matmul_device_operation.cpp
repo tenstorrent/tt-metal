@@ -213,12 +213,12 @@ void validate_matmul_optional_tensors(
         const uint32_t out_tile_h = optional_output_tensor_c->tensor_spec().tile().get_height();
         const bool same_rows =
             optional_output_tensor_shape[-2] == computed_shape[-2] ||
-            (computed_shape[-2] % out_tile_h == 0 && optional_output_tensor_shape[-2] % out_tile_h == 0 &&
-             optional_output_tensor_shape.volume() == computed_shape.volume());
+            (computed_shape[-2] % out_tile_h == 0 && optional_output_tensor_shape[-2] % out_tile_h == 0);
         TT_FATAL(
-            optional_output_tensor_shape[-1] == computed_shape[-1] && same_rows,
-            "Shape of Optional Output Tensor {} doesn't match Output Tensor {}: the last dimension must match, and "
-            "leading dimensions may only be folded into whole tile rows",
+            optional_output_tensor_shape[-1] == computed_shape[-1] && same_rows &&
+                optional_output_tensor_shape.volume() == computed_shape.volume(),
+            "Shape of Optional Output Tensor {} doesn't match Output Tensor {}: the volume and the last dimension must "
+            "match, and leading dimensions may only be folded into whole tile rows",
             optional_output_tensor_shape,
             computed_shape);
         TT_FATAL(

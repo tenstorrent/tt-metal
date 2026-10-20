@@ -205,6 +205,7 @@ def test_optional_output_argument_with_tiny_tiles(device, n, c, m, k, n_out, til
         ((1, 1, 64, 128), (128,), (1, 1, 64), True),
         ((1, 1, 1, 128), (1, 1, 128, 64), (1, 1, 64, 1), True),
         ((1, 1, 96, 128), (1, 1, 128, 256), (2, 1, 48, 256), True),
+        ((2, 1, 64, 128), (2, 1, 128, 256), (1, 1, 64, 256), True),
         ((1, 1, 64, 128), (1, 1, 128, 256), (1, 1, 64, 256), False),
         ((1, 1, 64, 128), (1, 1, 128, 256), (64, 256), False),
         ((1, 1, 64, 128), (128,), (1, 1, 64, 1), False),
@@ -224,6 +225,20 @@ def test_optional_output_shape_must_match(device, a_shape, b_shape, out_shape, r
         return
     ttnn.matmul(a, b, optional_output_tensor=out)
     expected = torch.matmul(torch_a.float(), torch_b.float()).reshape(out_shape)
+    assert_with_pcc(expected, ttnn.to_torch(out).float(), 0.999)
+
+
+def test_linear_broadcast_bias_into_optional_output(device):
+    torch.manual_seed(0)
+    torch_a = torch.randn((1, 1, 32, 64), dtype=torch.bfloat16)
+    torch_b = torch.randn((64, 64), dtype=torch.bfloat16)
+    torch_bias = torch.randn((2, 1, 32, 64), dtype=torch.bfloat16)
+    a = ttnn.from_torch(torch_a, layout=ttnn.TILE_LAYOUT, device=device)
+    b = ttnn.from_torch(torch_b, layout=ttnn.TILE_LAYOUT, device=device)
+    bias = ttnn.from_torch(torch_bias, layout=ttnn.TILE_LAYOUT, device=device)
+    out = ttnn.from_torch(torch.zeros((2, 1, 32, 64), dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn.linear(a, b, bias=bias, optional_output_tensor=out)
+    expected = torch_a.float() @ torch_b.float() + torch_bias.float()
     assert_with_pcc(expected, ttnn.to_torch(out).float(), 0.999)
 
 

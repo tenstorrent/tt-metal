@@ -329,14 +329,23 @@ static ttnn::Tensor bound_matmul(
         parameters.user_fused_activation = std::nullopt;
     }
 
+    std::optional<Tensor> matmul_output_tensor = optional_output_tensor;
+    if (post_process_bias && optional_output_tensor.has_value() &&
+        optional_output_tensor->logical_shape().volume() !=
+            utilities::compute_matmul_output_shape(
+                input_tensor_a_adjusted, input_tensor_b_adjusted, parameters.transpose_a, parameters.transpose_b)
+                .volume()) {
+        matmul_output_tensor = std::nullopt;
+    }
+
     auto attributes = ttnn::prim::create_matmul_attributes(
-        input_tensor_a_adjusted, input_tensor_b_adjusted, parameters, {optional_output_tensor});
+        input_tensor_a_adjusted, input_tensor_b_adjusted, parameters, {matmul_output_tensor});
 
     auto output_tensor = ttnn::prim::matmul(
                              input_tensor_a_adjusted,
                              input_tensor_b_adjusted,
                              post_process_bias ? std::nullopt : bias,
-                             optional_output_tensor,
+                             matmul_output_tensor,
                              attributes)
                              .at(0);
 
@@ -353,7 +362,8 @@ static ttnn::Tensor bound_matmul(
             output_tensor,
             bias.value(),
             /*output_dtype=*/std::nullopt,
-            output_tensor.memory_config(),
+            optional_output_tensor.has_value() ? optional_output_tensor->memory_config()
+                                               : output_tensor.memory_config(),
             optional_output_tensor);
     }
 
