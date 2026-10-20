@@ -314,10 +314,13 @@ class TtRoutedExperts(LightweightModule):
         """Tensorbin paths of the routed-expert device tensors for this placement / format / layout."""
         tag = f"mesh{mesh.rows}x{mesh.cols}" + ("_dense" if dense else "")
         cache_dir = Path(cache_dir)
-        return {
+        files = {
             "w13": cache_dir / f"experts_w13_{expert_dtype.name}_{tag}.tensorbin",
             "w2": cache_dir / f"experts_w2_{expert_down_dtype.name}_{tag}.tensorbin",
         }
+        if dense:  # gate and up as two tensors (two matmuls instead of one matmul + two slices)
+            files["w13_up"] = cache_dir / f"experts_w13up_{expert_dtype.name}_{tag}.tensorbin"
+        return files
 
     @classmethod
     def cache_complete(
@@ -373,7 +376,7 @@ class TtRoutedExperts(LightweightModule):
         files = (
             self.cache_files(weight_cache_path, self.mesh, expert_dtype, expert_down_dtype, dense)
             if weight_cache_path is not None
-            else {"w13": None, "w2": None}
+            else {"w13": None, "w2": None, "w13_up": None}
         )
         if gate_up is None or down is None:
             if not self.cache_complete(weight_cache_path, self.mesh, expert_dtype, expert_down_dtype, dense):
@@ -396,16 +399,20 @@ class TtRoutedExperts(LightweightModule):
         def make_w2() -> torch.Tensor:
             return down.transpose(1, 2).contiguous().reshape(1, E, I, H)  # [1,E,I,H]
 
-        def make_w13_dense() -> torch.Tensor:
-            # [1, cols, H, rows * (2 * E_loc * I_loc)]: a column split of dim 1 and a row split of dim 3 hand chip
-            # (r, c) [H, gates(e in c, slice r) | ups(e in c, slice r)], (expert, i) order inside each half
-            def per_chip(t):  # [E, H, I] -> [cols, H, rows, E_loc * I_loc]
-                return t.reshape(ep, E_loc, H, tpr, I_loc).permute(0, 2, 3, 1, 4).reshape(ep, H, tpr, E_loc * I_loc)
+        def per_chip_dense(t):  # [E, H, I] -> [1, cols, H, rows * E_loc * I_loc]: a column split of dim 1 and a row
+            # split of dim 3 hand chip (r, c) [H, (e in c, i in slice r)]
+            return (
+                t.reshape(ep, E_loc, H, tpr, I_loc)
+                .permute(0, 2, 3, 1, 4)
+                .reshape(1, ep, H, tpr * E_loc * I_loc)
+                .contiguous()
+            )
 
-            gate = gate_up[:, :I, :].transpose(1, 2)
-            up = gate_up[:, I:, :].transpose(1, 2)
-            w = torch.cat([per_chip(gate), per_chip(up)], dim=-1)  # [cols, H, rows, 2 * E_loc * I_loc]
-            return w.reshape(1, ep, H, tpr * 2 * E_loc * I_loc).contiguous()
+        def make_w13_gate_dense() -> torch.Tensor:
+            return per_chip_dense(gate_up[:, :I, :].transpose(1, 2))
+
+        def make_w13_up_dense() -> torch.Tensor:
+            return per_chip_dense(gate_up[:, I:, :].transpose(1, 2))
 
         def make_w2_dense() -> torch.Tensor:
             # [1, cols, rows * (E_loc * I_loc), H]: chip (r, c) gets rows (e in c, i in slice r) of every W2
@@ -413,13 +420,12 @@ class TtRoutedExperts(LightweightModule):
             return w2.reshape(1, ep, tpr * E_loc * I_loc, H).contiguous()
 
         if dense:
+            shape13 = (1, ep, H, tpr * E_loc * I_loc)
             self.w13 = self.mesh.upload_cached(
-                make_w13_dense,
-                expert_dtype,
-                files["w13"],
-                rows=3,
-                cols=1,
-                expect_shape=(1, ep, H, tpr * 2 * E_loc * I_loc),
+                make_w13_gate_dense, expert_dtype, files["w13"], rows=3, cols=1, expect_shape=shape13
+            )
+            self.w13_up = self.mesh.upload_cached(
+                make_w13_up_dense, expert_dtype, files["w13_up"], rows=3, cols=1, expect_shape=shape13
             )
             self.w2 = self.mesh.upload_cached(
                 make_w2_dense,
@@ -429,13 +435,13 @@ class TtRoutedExperts(LightweightModule):
                 cols=1,
                 expect_shape=(1, ep, tpr * E_loc * I_loc, H),
             )
-            # routing weight expansion: [M, E_loc] @ [E_loc, E_loc * I_loc] repeats a token's weight for expert e
-            # over e's I_loc intermediate columns (0/1 entries: exact in bf16)
-            self.expand = self.mesh.upload(
-                torch.eye(E_loc, dtype=torch.bfloat16)
-                .repeat_interleave(I_loc, dim=1)
-                .reshape(1, 1, E_loc, E_loc * I_loc),
+            # routing-weight selection + expansion in ONE 0/1 constant: [E, E_loc * I_loc] per chip (column c keeps
+            # its experts' rows), so w_exp = dense_w @ sel_expand repeats token t's weight for local expert e over
+            # e's I_loc intermediate columns (exact in bf16; HiFi4 keeps the bf16 weights intact)
+            self.sel_expand = self.mesh.upload(
+                torch.eye(E, dtype=torch.bfloat16).repeat_interleave(I_loc, dim=1).reshape(1, 1, E, E * I_loc),
                 ttnn.bfloat16,
+                cols=-1,
             )
         else:
             self.w13 = self.mesh.upload_cached(
@@ -457,16 +463,21 @@ class TtRoutedExperts(LightweightModule):
         self.fp32 = _compute(device, ttnn.MathFidelity.HiFi4, packer_l1_acc=False)
 
     def _block(self, xb: ttnn.Tensor, dense_w: ttnn.Tensor) -> ttnn.Tensor:
-        """One token block (<= 32 rows). xb [1,1,M,H] bf16, dense_w [1,1,M,E] fp32 -> [1,1,M,H]
-        (this chip's experts and intermediate slice only)."""
+        """One token block (<= 32 rows). xb [1,1,M,H] bf16, dense_w [1,1,M,E] bf16 (fp32 costs two
+        typecasts) -> [1,1,M,H] (this chip's experts and intermediate slice only). 12 device ops plus the
+        two output zero-fills inside ``sparse_matmul``: select matmul, activity mask (sum + untilize), gate|up
+        sparse matmul, two slices, ``clamped_silu_glu``, the routing weights as [1,E,M,1] (one permute) and
+        their multiply, down sparse matmul, sum over the experts."""
         E, H, I = self.E_local, self.H, self.I_local
         M = xb.shape[-2]
         if self.select is not None:  # keep the routing weights of this column's experts: [1,1,M,E_local]
             sel = self.select if dense_w.dtype == ttnn.float32 else self.select_bf16
             dense_w = ttnn.matmul(dense_w, sel, dtype=dense_w.dtype, compute_kernel_config=self.fp32)
         # per-expert activity mask over the block (nonzero = active); bf16 ROW_MAJOR [1,1,1,E]
-        active = ttnn.sum(dense_w, dim=-2, keepdim=True)  # [1,1,1,E] fp32
-        sparsity = ttnn.to_layout(ttnn.typecast(active, ttnn.bfloat16), ttnn.ROW_MAJOR_LAYOUT)
+        active = ttnn.sum(dense_w, dim=-2, keepdim=True)  # [1,1,1,E]
+        if active.dtype != ttnn.bfloat16:
+            active = ttnn.typecast(active, ttnn.bfloat16)
+        sparsity = ttnn.to_layout(active, ttnn.ROW_MAJOR_LAYOUT)
         # gate|up for the active experts: [1,1,1,E,M,2I] (zeros for inactive experts)
         gu = ttnn.sparse_matmul(
             xb,
@@ -484,16 +495,14 @@ class TtRoutedExperts(LightweightModule):
         gate = ttnn.slice(gu, [0, 0, 0, 0], [1, E, M, I])
         up = ttnn.slice(gu, [0, 0, 0, I], [1, E, M, 2 * I])
         ttnn.deallocate(gu)
-        gate = ttnn.clamp(gate, min=None, max=self.limit, output_tensor=gate)
-        up = ttnn.clamp(up, min=-self.limit, max=self.limit, output_tensor=up)
-        act = ttnn.silu(gate, output_tensor=gate)
-        h = ttnn.multiply(act, up, output_tensor=act)  # [1,E,M,I]
+        h = ttnn.clamped_silu_glu(gate, up, self.limit)  # [1,E,M,I]
+        ttnn.deallocate(gate)
         ttnn.deallocate(up)
-        # weight each (expert, token) row by its routing weight before the down projection
+        # weight each (expert, token) row by its routing weight before the down projection: [1,1,M,E] -> [1,E,M,1]
         w16 = dense_w if dense_w.dtype == self.activation_dtype else ttnn.typecast(dense_w, self.activation_dtype)
-        w_cols = ttnn.transpose(w16, -2, -1)  # [1,1,E,M]
-        w_cols = ttnn.reshape(w_cols, [1, E, M, 1])
+        w_cols = ttnn.permute(w16, (0, 3, 2, 1))
         h = ttnn.multiply(h, w_cols, output_tensor=h)
+        ttnn.deallocate(w_cols)
         down = ttnn.sparse_matmul(
             h,
             self.w2,
@@ -513,34 +522,41 @@ class TtRoutedExperts(LightweightModule):
         return y
 
     def _block_dense(self, x: ttnn.Tensor, dense_w: ttnn.Tensor) -> ttnn.Tensor:
-        """All gathered tokens at once through the dense layout. x [1,1,T,H] bf16, dense_w [1,1,T,E]
-        fp32 -> [1,1,T,H] (this chip's expert slices, summed over its experts)."""
+        """All gathered tokens at once through the dense layout, 6 device ops: x [1,1,T,H] bf16, dense_w
+        [1,1,T,E] bf16 (fp32 costs one typecast) -> [1,1,T,H] (this chip's expert slices, summed over its
+        experts). Routing weights: one [T,E] x [E, E_loc*I_loc] matmul; gate and up: one matmul each (no
+        slices); activation: ``clamped_silu_glu``; the weight multiply; the W2 matmul (expert sum = K)."""
         E, H, I = self.E_local, self.H, self.I_local
         T = x.shape[-2]
-        if self.select is not None:
-            dense_w = ttnn.matmul(dense_w, self.select, dtype=ttnn.float32, compute_kernel_config=self.fp32)
-        gu = ttnn.matmul(
+        if dense_w.dtype != ttnn.bfloat16:
+            dense_w = ttnn.typecast(dense_w, ttnn.bfloat16)
+        w_exp = ttnn.matmul(
+            dense_w,
+            self.sel_expand,
+            program_config=dense_matmul_config(self.grid, T, E * I, self.E),
+            dtype=self.activation_dtype,
+            compute_kernel_config=self.fp32,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )  # [1,1,T,E*I]
+        gate = ttnn.matmul(
             x,
             self.w13,
-            program_config=dense_matmul_config(self.grid, T, 2 * E * I, H),
+            program_config=dense_matmul_config(self.grid, T, E * I, H),
             dtype=self.activation_dtype,
             compute_kernel_config=self.compute,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )  # [1,1,T, 2*E*I]: all gates, then all ups, (expert, i) order
-        gate = ttnn.slice(gu, [0, 0, 0, 0], [1, 1, T, E * I])
-        up = ttnn.slice(gu, [0, 0, 0, E * I], [1, 1, T, 2 * E * I])
-        ttnn.deallocate(gu)
-        gate = ttnn.clamp(gate, min=None, max=self.limit, output_tensor=gate)
-        up = ttnn.clamp(up, min=-self.limit, max=self.limit, output_tensor=up)
-        act = ttnn.silu(gate, output_tensor=gate)
-        h = ttnn.multiply(act, up, output_tensor=act)  # [1,1,T,E*I]
-        ttnn.deallocate(up)
-        w_exp = ttnn.matmul(
-            ttnn.typecast(dense_w, self.activation_dtype),
-            self.expand,
+        )  # [1,1,T,E*I], (expert, i) order
+        up = ttnn.matmul(
+            x,
+            self.w13_up,
+            program_config=dense_matmul_config(self.grid, T, E * I, H),
             dtype=self.activation_dtype,
             compute_kernel_config=self.compute,
-        )  # [1,1,T,E*I]
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        h = ttnn.clamped_silu_glu(gate, up, self.limit)  # silu(min(gate, limit)) * clamp(up, -limit, limit)
+        ttnn.deallocate(gate)
+        ttnn.deallocate(up)
         h = ttnn.multiply(h, w_exp, output_tensor=h)
         ttnn.deallocate(w_exp)
         y = ttnn.matmul(
