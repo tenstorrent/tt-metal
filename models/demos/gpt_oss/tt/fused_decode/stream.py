@@ -360,21 +360,39 @@ def row_placement(mesh_device, per_bank, exclude=()):
     5.689 -> 5.626 ms), then the row above (then below). Measured with every reader streaming one bank's share (16 KB
     trid-pipelined reads, one device): 490 GB/s (95.7 % of 512) vs 464 for the placement that spreads a bank's
     readers over neighbouring rows: readers off the bank's row lose NOC arbitration to the row's own and finish
-    their share late, and the bank finishes with its slowest reader. Returns {bank: [CoreCoord] * per_bank}."""
+    their share late, and the bank finishes with its slowest reader. Returns {bank: [CoreCoord] * per_bank}.
+
+    Harvest-robust (robust_readers): every reader stays on its bank's side of the DRAM columns on every device (east
+    banks: at or east of the bank worker; west banks: west of every device's east-bank worker, _bank_sides), and a
+    bank short of such cores on its own row takes them from the rows BELOW it. NOC0 moves data in +x then +y with
+    wraparound (tt_metal/impl/device/experimental/device.cpp noc_hop_distance), so a reader one row below the bank is
+    one extra hop, while a reader west of the DRAM column on its own row (what the non-robust placement does past its
+    segment on some chips) or one row above it waits for the data to go round the whole row or column: QuietBox 2
+    (17 x 12 grid) ~14 / ~13 hops vs 2-5. Logical row grid.y - 1 wraps to row 0 across the two non-worker rows."""
     opt = bank_workers(mesh_device)
     grid = mesh_device.compute_with_storage_grid_size()
     used = {tuple(c) for c in exclude}
     out = {}
     cand = {}
+    robust = robust_readers(mesh_device)
+    if robust:
+        west, east = _bank_sides(mesh_device)
     for b, w in enumerate(opt):
         mates = sorted(c.x for c in opt if c.y == w.y)
         k, n = mates.index(w.x), len(mates)
         lo = w.x if k else 0
         hi = mates[k + 1] if k + 1 < n else grid.x
-        # phases: own segment, what the row has left, the row above, the row below
-        cand[b] = [(w.y, range(lo, hi)), (w.y, range(grid.x)), (w.y - 1, range(grid.x)), (w.y + 1, range(grid.x))]
+        if robust:
+            side = range(w.x, grid.x) if w.x != west else range(west, east)
+            seg = range(max(lo, side.start), min(hi, side.stop))
+            # phases: own segment, the rest of the row's safe columns, then the safe columns of the rows below, nearest
+            # first (d rows below: d more NOC0 hops; still fewer than the row-long wrap of a wrong-side column)
+            cand[b] = [(w.y, seg), (w.y, side)] + [((w.y + d) % grid.y, side) for d in range(1, grid.y)]
+        else:
+            # phases: own segment, what the row has left, the row above, the row below
+            cand[b] = [(w.y, range(lo, hi)), (w.y, range(grid.x)), (w.y - 1, range(grid.x)), (w.y + 1, range(grid.x))]
         out[b] = []
-    for phase in range(4):  # every bank's segment before any bank takes leftovers
+    for phase in range(len(next(iter(cand.values())))):  # every bank's segment before any bank takes leftovers
         for b, w in enumerate(opt):
             y, xs = cand[b][phase]
             if not 0 <= y < grid.y:
