@@ -90,8 +90,9 @@ def sweep_cells(arch=None) -> List[Tuple[DataFormat, DataFormat, object, object]
     depend on which ``CHIP_ARCH`` the host happens to set.
 
     The grid is Wormhole's. On another arch only the Dest promotion is applied, not that
-    arch's own format support: Blackhole's functional drivers skip ``Float16`` with
-    ``dest_acc=No``, and Quasar has no ``Bfp8_b``. That is inert while every cell off
+    arch's own format support: Blackhole skips a ``Float16`` input with ``dest_acc=No``
+    (``_skip_if_unsupported`` in accuracy/test_sfpu_accuracy.py), and Quasar has no
+    ``Bfp8_b``. That is inert while every cell off
     Wormhole resolves to tolerance and skips, which holds because no ULP row names
     another ``arch``; test_ulp_sweep.py pins that, so the first such row has to bring
     those filters with it.

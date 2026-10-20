@@ -254,7 +254,9 @@ CommandList::Impl::Impl(
     command_buffer(std::move(command_buffer)),
     retained_binary_buffers(std::move(retained_binary_buffers)),
     bound_cq_id(cq_id),
-    sub_device_manager_id(sub_device_manager_id) {}
+    sub_device_manager_id(sub_device_manager_id) {
+    mesh_device.impl().register_command_list();
+}
 
 CommandList::Impl::~Impl() {
     try {
@@ -281,6 +283,7 @@ void CommandList::Impl::release_resources() noexcept {
     descriptor = {};
     retained_binary_buffers.clear();
     valid = false;
+    mesh_device->impl().unregister_command_list();
 }
 
 void CommandList::Impl::deallocate() {

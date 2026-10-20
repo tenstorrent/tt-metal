@@ -38,6 +38,17 @@ def _pcc(expected: torch.Tensor, actual: torch.Tensor) -> float:
     return float(torch.dot(expected_centered, actual_centered) / denominator)
 
 
+def _pcc_per_slice(expected: torch.Tensor, actual: torch.Tensor, keep_dims: Sequence[int]) -> torch.Tensor:
+    """PCC of each slice that ``keep_dims`` indexes, computed over the remaining dimensions."""
+    if not keep_dims:
+        return torch.tensor([_pcc(expected, actual)], dtype=torch.float64)
+    keep = sorted(dim % expected.ndim for dim in keep_dims)
+    order = keep + [dim for dim in range(expected.ndim) if dim not in keep]
+    slices = expected.permute(order).flatten(0, len(keep) - 1)
+    actual_slices = actual.permute(order).flatten(0, len(keep) - 1)
+    return torch.tensor([_pcc(e, a) for e, a in zip(slices, actual_slices)], dtype=torch.float64)
+
+
 NRMSE_FLOOR_FRACTION = 0.01
 
 
@@ -154,6 +165,7 @@ def assert_accurate(
     pcc_threshold: float = 0.999,
     nrmse_threshold: float | None,
     nrmse_keep_dims: Sequence[int] = (),
+    pcc_keep_dims: Sequence[int] = (),
     linf_threshold: float | None = None,
 ) -> float:
     """Require matching metadata, finite tensors, PCC, NRMSE and relative L-inf.
@@ -165,7 +177,7 @@ def assert_accurate(
     the clean NRMSE measured for the tensor at hand plus headroom, rounded down to one significant
     digit (0.0X5 if that leaves under 10%), or ``None`` to skip the NRMSE gate.
     With ``nrmse_keep_dims`` the gate applies to the worst slice (e.g. per head of a recurrent
-    state), so one drifting slice is not averaged away.
+    state), so one drifting slice is not averaged away; ``pcc_keep_dims`` does the same for PCC.
 
     Both still average: eleven wrong rows in 1280 held PCC at 0.9996 and lifted NRMSE only
     from 1.3e-2 to 1.6e-2, inside the BF16 output's own noise. Relative L-inf does not
@@ -187,7 +199,9 @@ def assert_accurate(
     if failures:
         raise AssertionError("\n".join(failures))
 
-    pcc = _pcc(expected, actual)
+    pcc_slices = _pcc_per_slice(expected, actual, pcc_keep_dims if expected.numel() else ())
+    pcc_worst_slice = int(pcc_slices.argmin()) if pcc_slices.numel() > 1 else None
+    pcc = float(pcc_slices.min())
     per_slice = nrmse(expected, actual, nrmse_keep_dims) if expected.numel() else torch.zeros(())
     worst_slice = int(per_slice.argmax()) if per_slice.numel() > 1 else None
     error = float(per_slice.max())
@@ -197,9 +211,10 @@ def assert_accurate(
     print(expected_summary)
     print(actual_summary)
     worst = "" if worst_slice is None else f" (worst slice {worst_slice} over dims {tuple(nrmse_keep_dims)})"
-    print(f"{name}: PCC={pcc:.6f}, NRMSE={error:.3e}{worst}, rel_Linf={linf:.3e}, max_abs={max_abs:.6e}")
+    pcc_worst = "" if pcc_worst_slice is None else f" (worst slice {pcc_worst_slice} over dims {tuple(pcc_keep_dims)})"
+    print(f"{name}: PCC={pcc:.6f}{pcc_worst}, NRMSE={error:.3e}{worst}, rel_Linf={linf:.3e}, max_abs={max_abs:.6e}")
     if pcc < pcc_threshold:
-        raise AssertionError(f"{name} PCC {pcc:.6f} < {pcc_threshold}")
+        raise AssertionError(f"{name} PCC {pcc:.6f}{pcc_worst} < {pcc_threshold}")
     if nrmse_threshold is not None and error > nrmse_threshold:
         raise AssertionError(f"{name} NRMSE {error:.3e}{worst} > {nrmse_threshold:.3e}")
     if linf_threshold is not None and linf > linf_threshold:

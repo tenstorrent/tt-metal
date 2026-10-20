@@ -336,6 +336,9 @@ struct DispatchSRelayInlineState {
 };
 
 struct PrefetchExecBufState {
+    // NoC transaction ID for exec_buf DRAM reads into cmddat_q
+    static constexpr uint32_t READ_TRID = 1U;
+
     uint32_t page_id;
     uint32_t base_addr;
     uint32_t log_page_size;
@@ -664,9 +667,13 @@ void fetch_q_get_cmds(uintptr_t& fence, uintptr_t& cmd_ptr, uint32_t& pcie_read_
     static uint32_t inflight_count = 0U;
     static uint32_t inflight_head = 0U;
 
-    // Reserve trid 0/1 for other traffic (0 is the default; 1 is used by exec_buf DRAM reads).
+    // NoC read transaction IDs used by the prefetcher:
+    //   0                                default
+    //   PrefetchExecBufState::READ_TRID  exec_buf DRAM reads (1)
+    //   PREFETCH_TRIDS                   in-flight fetch_q reads (2-5)
+    //   RELAY_LINEAR_TRIDS               relay_linear scratch DB halves (6-7)
     // Keep TRIDs unique across in-flight reads so retirement barriers only wait for the oldest read.
-    static constexpr uint32_t MIN_TRID = 2U;
+    static constexpr uint32_t MIN_TRID = PrefetchExecBufState::READ_TRID + 1U;
     static constexpr std::array<uint32_t, tt::tt_metal::PrefetchConstants::PREFETCH_MAX_OUTSTANDING_PCIE_READS>
         PREFETCH_TRIDS = {{
             MIN_TRID,
@@ -1823,7 +1830,7 @@ uint32_t process_relay_linear_cmd(uintptr_t cmd_ptr, uint32_t& downstream_data_p
     // DPRINT("relay_linear: cmd_ptr={} length={} read_addr={} noc_xy_addr={}\n", cmd_ptr, wlength, read_addr,
     // noc_xy_addr);
 
-    // TRIDs for the two scratch DB halves (unique from fetch_q's 2-5 and exec_buf's 1).
+    // TRIDs for the two scratch DB halves (unique from the others, see the table in fetch_q_get_cmds).
     // Each TRID is barriered before the next read to the same half, so the max outstanding
     // per TRID is ceil(scratch_db_half_size / NOC_MAX_BURST_SIZE).
     static_assert((scratch_db_half_size + NOC_MAX_BURST_SIZE - 1) / NOC_MAX_BURST_SIZE <= NOC_MAX_TRANSACTION_ID_COUNT);
@@ -1932,8 +1939,7 @@ void paged_read_into_cmddat_q(uintptr_t& cmd_ptr, PrefetchExecBufState& exec_buf
     }
 
     auto addr_gen = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), base_addr, page_size);
-    // set transaction ID to 1 for all read
-    noc_async_read_set_trid(1);
+    noc_async_read_set_trid(PrefetchExecBufState::READ_TRID);
     ASSERT(page_size <= NOC_MAX_BURST_SIZE);
     // Initialize the read size for all later commands.
     noc_read_with_state<DM_DEDICATED_NOC, read_cmd_buf, CQ_NOC_sndL, CQ_NOC_send, CQ_NOC_WAIT>(0, 0, 0, page_size);
@@ -1946,7 +1952,7 @@ void paged_read_into_cmddat_q(uintptr_t& cmd_ptr, PrefetchExecBufState& exec_buf
         pages -= initial_pages_at_once;
 
         while (initial_pages_at_once != 0) {
-            uint32_t pages_to_read = noc_available_transactions(noc_index, 1);
+            uint32_t pages_to_read = noc_available_transactions(noc_index, PrefetchExecBufState::READ_TRID);
             if (pages_to_read > initial_pages_at_once) {
                 pages_to_read = initial_pages_at_once;
             }
@@ -1960,7 +1966,7 @@ void paged_read_into_cmddat_q(uintptr_t& cmd_ptr, PrefetchExecBufState& exec_buf
                 pages_to_read--;
             }
         }
-        noc_async_read_barrier_with_trid(1);
+        noc_async_read_barrier_with_trid(PrefetchExecBufState::READ_TRID);
         // update length always after barrier to make sure data in cmddat_q
         exec_buf_state.page_id = page_id;
         exec_buf_state.pages = pages;
@@ -1969,7 +1975,7 @@ void paged_read_into_cmddat_q(uintptr_t& cmd_ptr, PrefetchExecBufState& exec_buf
     } else {
         ASSERT(exec_buf_state.length == 0);
         // add barrier to wait for prefetch noc read to complete
-        noc_async_read_barrier_with_trid(1);
+        noc_async_read_barrier_with_trid(PrefetchExecBufState::READ_TRID);
         // update always after barrier to make sure data in cmddat_q
         exec_buf_state.length += exec_buf_state.prefetch_length;
         exec_buf_state.prefetch_length = 0;
@@ -1989,7 +1995,7 @@ void paged_read_into_cmddat_q(uintptr_t& cmd_ptr, PrefetchExecBufState& exec_buf
         pages -= prefetch_pages_at_once;
 
         while (prefetch_pages_at_once != 0) {
-            uint32_t pages_to_read = noc_available_transactions(noc_index, 1);
+            uint32_t pages_to_read = noc_available_transactions(noc_index, PrefetchExecBufState::READ_TRID);
             if (pages_to_read > prefetch_pages_at_once) {
                 pages_to_read = prefetch_pages_at_once;
             }
@@ -2010,7 +2016,7 @@ void paged_read_into_cmddat_q(uintptr_t& cmd_ptr, PrefetchExecBufState& exec_buf
         exec_buf_state.read_ptr = read_ptr;
     }
 
-    // set transaction ID to 0 for other noc read to not use transaction id 1
+    // set transaction ID to 0 for other noc read to not use READ_TRID
     // to remove unnecessary barrier delay
     noc_async_read_set_trid(0);
     // Ensure reads receive the updated data.
@@ -2611,6 +2617,8 @@ bool process_cmd(
         case CQ_PREFETCH_CMD_EXEC_BUF_END:
             // DPRINT("exec_buf_end: {}\n", cmd_ptr);
             ASSERT(exec_buf);
+            // Read-ahead may still be landing in cmddat_q, which upstream reuses once exec_buf_end is relayed
+            noc_async_read_barrier_with_trid(PrefetchExecBufState::READ_TRID);
             stride = process_exec_buf_relay_inline_cmd<DispatchRelayInlineState>(
                 cmd_ptr, downstream_data_ptr, exec_buf_state);
             done = true;

@@ -103,7 +103,9 @@ bool MetalEnvImpl::check_use_count_zero() const {
 
 llrt::RunTimeOptions& MetalEnvImpl::get_rtoptions() { return *rtoptions_; }
 const Hal& MetalEnvImpl::get_hal() { return *hal_; }
+const Hal& MetalEnvImpl::get_hal() const { return *hal_; }
 Cluster& MetalEnvImpl::get_cluster() { return *cluster_; }
+const Cluster& MetalEnvImpl::get_cluster() const { return *cluster_; }
 const MetalEnvDescriptor& MetalEnvImpl::get_descriptor() const { return descriptor_; }
 
 namespace {
@@ -733,24 +735,30 @@ const FabricConfigDescriptor& MetalEnv::get_fabric_config_descriptor() const {
     return impl_->get_fabric_config_descriptor();
 }
 
-tt::ARCH MetalEnv::get_arch() const { return impl_->get_cluster().arch(); }
-std::string MetalEnv::get_arch_name() const { return tt::get_string_lowercase(get_arch()); }
 uint32_t MetalEnv::get_num_pcie_devices() const { return impl_->get_cluster().number_of_pci_devices(); }
 uint32_t MetalEnv::get_num_available_devices() const { return impl_->get_cluster().number_of_user_devices(); }
-uint32_t MetalEnv::get_l1_size() const {
+
+MetalDeviceProperties MetalEnv::get_device_properties() const { return MetalDeviceProperties(*impl_); }
+
+tt::ARCH MetalDeviceProperties::arch() const { return impl_->get_cluster().arch(); }
+std::string MetalDeviceProperties::arch_name() const { return tt::get_string_lowercase(arch()); }
+uint32_t MetalDeviceProperties::node_local_mem_size() const {
     return impl_->get_hal().get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE);
 }
-uint32_t MetalEnv::get_dram_alignment() const { return impl_->get_hal().get_alignment(HalMemType::DRAM); }
-uint32_t MetalEnv::get_l1_alignment() const { return impl_->get_hal().get_alignment(HalMemType::L1); }
-uint32_t MetalEnv::get_num_dataflow_buffers() const { return impl_->get_hal().get_num_dataflow_buffers(); }
-uint32_t MetalEnv::get_max_worker_l1_unreserved_size() const {
-    size_t l1_end = impl_->get_hal().get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE) +
-                    impl_->get_hal().get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE);
-    return l1_end - impl_->get_hal().get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::KERNEL_CONFIG);
+uint32_t MetalDeviceProperties::dram_alignment() const { return impl_->get_hal().get_alignment(HalMemType::DRAM); }
+uint32_t MetalDeviceProperties::node_local_mem_alignment() const {
+    return impl_->get_hal().get_alignment(HalMemType::L1);
 }
-float MetalEnv::get_eps() const { return impl_->get_hal().get_eps(); }
-float MetalEnv::get_nan() const { return impl_->get_hal().get_nan(); }
-float MetalEnv::get_inf() const { return impl_->get_hal().get_inf(); }
+uint32_t MetalDeviceProperties::num_dataflow_buffers() const { return impl_->get_hal().get_num_dataflow_buffers(); }
+uint32_t MetalDeviceProperties::max_worker_node_local_mem_unreserved_size() const {
+    const Hal& hal = impl_->get_hal();
+    size_t node_local_mem_end = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE) +
+                                hal.get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE);
+    return node_local_mem_end - hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::KERNEL_CONFIG);
+}
+float MetalDeviceProperties::sfpu_eps() const { return impl_->get_hal().get_eps(); }
+float MetalDeviceProperties::sfpu_nan() const { return impl_->get_hal().get_nan(); }
+float MetalDeviceProperties::sfpu_inf() const { return impl_->get_hal().get_inf(); }
 
 distributed::SystemMesh& MetalEnv::get_system_mesh() {
     impl_->ensure_context_registered(*this);

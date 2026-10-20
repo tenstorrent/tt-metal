@@ -6,17 +6,18 @@
 //
 // Diverges from kernels_dfb/dataflow/writer_no_bcast_dfb.cpp in three ways, all licensed by
 // matches_quasar_native_slice:
-//   - the nD stride cascade is gone: page = start_tile_id + k.
+//   - the nD stride cascade is gone: page = start_tile_id + k, or, beside a borrowed operand, the tile order of
+//     the program's anchor (SHARD_WALK_WIDTH, BANK_WALK_STRIDE).
 //   - the tile loop is per-thread. Thread t of N drains the STRIDED share {t, t+N, t+2N, ...}, which
 //     is the slot assignment the DFB gives consumer thread t.
 //   - for a borrowed output it writes back only the tail rings' results.
 // The output is written over the NoC, or borrowed from this core's L1 (DST_SHARDED): its shard, or its
-// slice of an L1-interleaved tensor, which the compute packs in place. The factory borrows all or none.
+// slice of an L1-interleaved tensor, which the compute packs in place.
 //
-// The writer's cascade is the milder case: an output is never broadcast, so its strides are dense. A
-// NoC-written sharded output needs no shard-row wrap: each core writes a linear page range, and the
-// sharding-aware TensorAccessor maps each page to its shard. The reader's cascade is the load-bearing
-// one; see the note in reader_no_bcast_dfb.cpp before widening the gate.
+// The writer's cascade is the milder case: an output is never broadcast, so its strides are dense. Without an
+// anchor each core writes a linear page range, and the sharding-aware TensorAccessor maps each page to its
+// shard. The reader's cascade is the load-bearing one; see the note in reader_no_bcast_dfb.cpp before widening
+// the gate.
 
 #include <cstdint>
 
@@ -31,9 +32,24 @@
 
 void kernel_main() {
 #if DST_SHARDED
-    // Borrowed output: the compute packs the borrowed part into the resident L1 shard or slice, so there is
-    // nothing to write for it, as on WH and BH. Its credits stay posted, which is safe: each launch resets the tile
-    // counters, and the firmware waits for the packs. Do not call finish() on it: nothing acks, so it hangs.
+    // Borrowed output: the compute packs it in place, so nothing of the borrowed part is written, as in the legacy
+    // writer. This thread still pops every entry, once per tile counter as the reader publishes a borrowed input: the
+    // compute's out destructor waits until the ring is empty.
+#if HAS_MAIN_RING
+    {
+        const uint32_t dst_num_tiles = get_arg(args::dst_num_tiles);
+        constexpr uint32_t num_tcs = get_arg(args::num_tcs);
+        const uint32_t num_threads = get_num_threads();
+        const uint32_t tile_step = num_tcs * num_threads;
+        DataflowBuffer dfb_out(dfb::out);
+        uint32_t first = get_my_thread_id();
+        for (uint32_t c = 0; c < num_tcs && first < dst_num_tiles; ++c, first += num_threads) {
+            const uint32_t n = (dst_num_tiles - first + tile_step - 1) / tile_step;
+            dfb_out.wait_front(n);
+            dfb_out.pop_front(n);
+        }
+    }
+#endif
 #if TAIL_TILES
     // Copy the real tail results into the shard just past the borrowed part, and drop the padding.
     {
@@ -61,8 +77,6 @@ void kernel_main() {
             }
             tail_out.pop_front(1);
         }
-        // Every tail entry was popped, so this returns at once; it keeps the drain protocol of the NoC path.
-        tail_out.finish();
     }
 #endif
 #else
@@ -83,6 +97,32 @@ void kernel_main() {
     // Entry i of a batch sits at i * stride_size, not i * entry_size -- see the reader.
     const uint32_t out_stride = dfb_out.get_stride_size();
 
+#if SHARD_WALK_WIDTH
+    // Beside borrowed inputs, this core writes the anchor's shard in its tile order -- see the reader.
+    const uint32_t row_tiles = get_arg(args::Wt);
+    auto anchor_page = [&](uint32_t k) {
+        return start_tile_id + (k / SHARD_WALK_WIDTH) * row_tiles + k % SHARD_WALK_WIDTH;
+    };
+#elif BANK_WALK_STRIDE
+    // Beside borrowed bank slices, this core writes the pages of its bank -- see the reader.
+    auto anchor_page = [&](uint32_t k) { return start_tile_id + k * BANK_WALK_STRIDE; };
+#endif
+#if SHARD_WALK_WIDTH || BANK_WALK_STRIDE
+#if WALK_PADS
+    // A pad slot must not be written: in a block or width shard, column Wt + j of row r is the page of column j
+    // of row r + 1, a REAL page. See the reader for the bounds.
+    const uint32_t valid_rows = get_arg(args::valid_rows);
+#if SHARD_WALK_WIDTH
+    const uint32_t valid_cols = get_arg(args::valid_cols);
+    auto in_tensor = [&](uint32_t k) { return k / SHARD_WALK_WIDTH < valid_rows && k % SHARD_WALK_WIDTH < valid_cols; };
+#else
+    auto in_tensor = [&](uint32_t k) { return k < valid_rows; };
+#endif
+#else
+    auto in_tensor = [](uint32_t) { return true; };
+#endif
+#endif
+
     // n of this thread's tiles starting at tile index k, spaced tile_step apart -- see the reader.
     auto write_batch = [&](uint32_t k, uint32_t n, uint32_t tile_step) {
         // DeviceZoneScopedSum* feeds the work-split gate (per-thread WR_WAIT / WR_BAR). Zero-cost
@@ -92,6 +132,17 @@ void kernel_main() {
             DeviceZoneScopedSumN1("WR_WAIT");
             dfb_out.wait_front(n);
         }
+#if SHARD_WALK_WIDTH || BANK_WALK_STRIDE
+        uint32_t tile = k;
+        uint32_t offset = 0;
+        for (uint32_t i = 0; i < n; ++i) {
+            if (in_tensor(tile)) {
+                noc.async_write(dfb_out, dst, dst_tile_bytes, {.offset_bytes = offset}, {.page_id = anchor_page(tile)});
+            }
+            tile += tile_step;
+            offset += out_stride;
+        }
+#else
         uint32_t page = start_tile_id + k;
         uint32_t offset = 0;
         for (uint32_t i = 0; i < n; ++i) {
@@ -99,6 +150,7 @@ void kernel_main() {
             page += tile_step;
             offset += out_stride;
         }
+#endif
         {
             DeviceZoneScopedSumN2("WR_BAR");
             noc.async_write_barrier();
@@ -134,9 +186,8 @@ void kernel_main() {
             }
         }
     }
-    // Drains this thread's outstanding credits; the ack wait is unguarded and runs even at zero tiles,
-    // which is benign there (posted == acked == 0). No deadlock because finish()'s thread barrier sits
-    // inside handle_final_credits, reached only via the NocOptions::TXN_ID overloads this kernel avoids.
-    dfb_out.finish();
+    // dfb_out's destructor drains this thread's credits at kernel exit. Keep explicit sync here: the implicit-sync
+    // overloads (NocOptions::TXN_ID with a DataflowBuffer endpoint) put a thread barrier in that drain,
+    // which deadlocks a thread with zero tiles.
 #endif
 }

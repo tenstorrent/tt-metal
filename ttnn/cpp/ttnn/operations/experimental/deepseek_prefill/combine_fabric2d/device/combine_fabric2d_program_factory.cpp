@@ -98,10 +98,11 @@ L1Layout compute_l1_layout(
     l.pkt_hdr_drain = base + PKT_HDR_DRAIN_OFF;
     l.drain_sink = base + DRAIN_SINK_OFF;
     l.ring = base + PROD_BUF_OFF;
-    // One prebuilt header per ring slot, past the ring itself. A slot is the token plus its metadata tail.
+    // One prebuilt header per packet of each ring slot, past the ring itself. A slot is the token plus its
+    // metadata tail.
     l.pkt_hdr_ring = l.ring + num_l1_slots * (token_size_bytes + cmbf2d::FORWARDING_METADATA_SIZE);
-    const uint32_t hdr_ring_bytes =
-        num_l1_slots * static_cast<uint32_t>(tt::tt_fabric::get_tt_fabric_packet_header_size_bytes());
+    const uint32_t hdr_ring_bytes = num_l1_slots * cmbf2d::packets_per_token(token_size_bytes) *
+                                    static_cast<uint32_t>(tt::tt_fabric::get_tt_fabric_packet_header_size_bytes());
     // 64-byte aligned: DRAM reads need a DRAM_ALIGNMENT-aligned L1 destination on Blackhole
     // (LOG_BASE_2_OF_DRAM_ALIGNMENT = 6), and the control region is read straight out of DRAM.
     l.control = align_l1(l.pkt_hdr_ring + hdr_ring_bytes);
@@ -278,8 +279,8 @@ KernelPlan make_kernel_plan(
     uint32_t pages_per_stream) {
     KernelPlan plan;
     plan.pages_per_stream = pages_per_stream;
-    plan.ring_filled_addr = static_cast<uint32_t>(sems.filled.address());
-    plan.ring_freed_addr = static_cast<uint32_t>(sems.freed.address());
+    plan.ring_filled_slot = static_cast<uint32_t>(sems.filled.address());
+    plan.ring_freed_slot = static_cast<uint32_t>(sems.freed.address());
     plan.fwd_arrived_addr = static_cast<uint32_t>(sems.fwd_arrived.address());
     plan.final_arrived_addr = static_cast<uint32_t>(sems.final_arrived.address());
     // Which of the `num_routed_experts` columns this chip hosts. The dispatch group is this device's position
@@ -429,7 +430,7 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             plan.my_index = j;
             plan.num_peers = static_cast<uint32_t>(groups[g].size());
             plan.control_addr = l1.unt_control;
-            plan.produced_addr = static_cast<uint32_t>(sems.untilized.at(j).address());
+            plan.produced_slot = static_cast<uint32_t>(sems.untilized.at(j).address());
             // A group serves one ring direction: group 0 is clockwise, matching untilizer_group_of.
             const StreamId first = make_stream_id(0, g == 0);
             plan.walks_down = stream_is_cw(first);

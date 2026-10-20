@@ -20,8 +20,8 @@ using McastDst = noc_traits_t<MulticastEndpoint>::dst_args_mcast_type;
 #endif
 
 // Zero out all tiles for a given circular buffer.
-template <uint32_t cb_id>
-FORCE_INLINE void zero_out_tiles(Noc noc, DataflowBuffer dfb) {
+template <uint32_t cb_id, typename DFB>
+FORCE_INLINE void zero_out_tiles(Noc noc, DFB dfb) {
     constexpr uint32_t tile_size = get_tile_size(cb_id);
     const uint32_t num_tiles = get_local_cb_interface(cb_id).fifo_num_pages;
     noc.async_write_zeros(dfb, tile_size * num_tiles);
@@ -77,9 +77,9 @@ FORCE_INLINE void read_kernel_w(Noc noc, uint32_t& l1_write_addr_act, uint32_t& 
     act_l1_offset += stride_h_bytes;
 }
 
-template <uint32_t cb_id_act, uint32_t act_cb_tiles, uint32_t window_reuse_offset>
+template <uint32_t cb_id_act, uint32_t act_cb_tiles, uint32_t window_reuse_offset, typename DFB>
 FORCE_INLINE void pass_to_the_next_image_width(
-    DataflowBuffer dfb_act,
+    DFB dfb_act,
     uint32_t& l1_write_addr_act,
     uint32_t cb_start_addr,
     uint32_t& pixel_row,
@@ -96,15 +96,14 @@ FORCE_INLINE void pass_to_the_next_image_width(
     }
 }
 
-template <uint32_t cb_id_act, uint32_t act_cb_w_tiles>
-FORCE_INLINE void push_full_tile_height(Noc noc, DataflowBuffer dfb_act) {
+template <uint32_t cb_id_act, uint32_t act_cb_w_tiles, typename DFB>
+FORCE_INLINE void push_full_tile_height(Noc noc, DFB dfb_act) {
     noc.async_read_barrier();
     dfb_act.push_back(act_cb_w_tiles);
 }
 
-template <uint32_t cb_id_act, uint32_t act_cb_w_tiles, uint32_t image_width_tiles>
-FORCE_INLINE void push_remaining_tiles(
-    DataflowBuffer dfb_act, uint32_t remaining_tiles_to_push, uint32_t cb_start_addr) {
+template <uint32_t cb_id_act, uint32_t act_cb_w_tiles, uint32_t image_width_tiles, typename DFB>
+FORCE_INLINE void push_remaining_tiles(DFB dfb_act, uint32_t remaining_tiles_to_push, uint32_t cb_start_addr) {
     constexpr uint32_t tiles_to_push = image_width_tiles * act_cb_w_tiles;
     for (uint32_t i = 0; i < remaining_tiles_to_push; i += image_width_tiles) {
         get_local_cb_interface(cb_id_act).fifo_wr_ptr = cb_start_addr;
@@ -120,14 +119,10 @@ template <
     uint32_t cb_id_act,
     uint32_t act_cb_w_tiles,
     uint32_t conv_act_c_read_bytes,
-    uint32_t act_block_w_extra_align_bytes>
+    uint32_t act_block_w_extra_align_bytes,
+    typename DFB>
 FORCE_INLINE void read_first_image_row_window(
-    Noc noc,
-    DataflowBuffer dfb_act,
-    uint32_t& l1_write_addr_act,
-    uint32_t reader_offset,
-    uint16_t ind,
-    uint32_t& pixel_column) {
+    Noc noc, DFB dfb_act, uint32_t& l1_write_addr_act, uint32_t reader_offset, uint16_t ind, uint32_t& pixel_column) {
     uint32_t act_l1_offset = reader_offset + (ind * conv_act_c_read_bytes);
     for (uint32_t outer = 0; outer < window_outer; outer++) {
         read_kernel_w<coalesced_read_bytes, stride_h_bytes>(noc, l1_write_addr_act, act_l1_offset);
@@ -193,10 +188,11 @@ template <
     uint32_t image_width_tiles,
     uint32_t output_image_width,
     uint32_t window_reuse_offset,
-    bool single_core_processes_multiple_batches>
+    bool single_core_processes_multiple_batches,
+    typename DFB>
 FORCE_INLINE void read_sticks_activation_reuse(
     Noc noc,
-    DataflowBuffer dfb_act,
+    DFB dfb_act,
     volatile tt_l1_ptr uint32_t* packed_reader_indices_ptr,
     uint32_t reader_offset,
     uint32_t& l1_write_addr_act,
@@ -352,8 +348,13 @@ FORCE_INLINE void read_sticks_activation_reuse(
     }
 }
 
-template <uint32_t dram_addr_index, uint32_t page_size_index, uint32_t tensor_args_index, uint32_t cb_reader_index>
-void load_config_tensor_if_in_dram(Noc noc, DataflowBuffer reader_dfb, uint32_t core_index) {
+template <
+    uint32_t dram_addr_index,
+    uint32_t page_size_index,
+    uint32_t tensor_args_index,
+    uint32_t cb_reader_index,
+    typename DFB>
+void load_config_tensor_if_in_dram(Noc noc, DFB reader_dfb, uint32_t core_index) {
 #ifdef CONFIG_TENSOR_IN_DRAM
     // TODO: Instead of all cores reading from dram, only the first column reads, and does an MCAST to all the other
     // cores in the row.

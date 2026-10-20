@@ -85,18 +85,24 @@ ttnn::device_operation::ProgramArtifacts AccumulationProgramFactory::create_prog
     const auto& output_tensor{tensor_return_value.mesh_tensor()};
     const auto& input_shape{input_tensor.padded_shape()};
 
+    const uint32_t input_rank{input_tensor.padded_shape().rank()};
+
+    const int32_t dim{
+        (operation_attributes.dim >= 0) ? operation_attributes.dim : (input_rank + operation_attributes.dim)};
+
+    // A scan along H or W reaches the device unpermuted only when the tile-axis kernel supports it
+    // (validated in validate_on_program_cache_miss).
+    if (dim >= static_cast<int32_t>(input_rank) - 2) {
+        return create_tile_axis_program_artifacts(operation_attributes, tensor_args, tensor_return_value);
+    }
+
     const tt::tt_metal::distributed::MeshDevice& device = input_tensor.device();
 
     const auto dst_cb_data_format{datatype_to_dataformat_converter(output_tensor.dtype())};
 
-    const uint32_t input_rank{input_tensor.padded_shape().rank()};
-
     auto grid = device.compute_with_storage_grid_size();
     const auto num_cores_y = grid.y;
     TT_FATAL(num_cores_y != 0, "Compute grid y-dimension must be non-zero");
-
-    const int32_t dim{
-        (operation_attributes.dim >= 0) ? operation_attributes.dim : (input_rank + operation_attributes.dim)};
 
     const auto& tile = input_tensor.tensor_spec().tile();
     // how many tiles along accumulation axis
@@ -397,6 +403,223 @@ ttnn::device_operation::ProgramArtifacts AccumulationProgramFactory::create_prog
         .name = "accumulation",
         .kernels = std::move(kernels),
         .dataflow_buffers = std::move(dataflow_buffers),
+        .tensor_parameters =
+            {TensorParameter{.unique_id = ACCUM_INPUT, .spec = input_tensor.tensor_spec()},
+             TensorParameter{.unique_id = ACCUM_OUTPUT, .spec = output_tensor.tensor_spec()}},
+        .work_units = std::move(work_units),
+    };
+
+    ProgramRunArgs run_args{
+        .kernel_run_args = std::move(kernel_run_args),
+        .tensor_args = {{ACCUM_INPUT, input_tensor}, {ACCUM_OUTPUT, output_tensor}},
+    };
+
+    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
+}
+
+// Accumulation along H (dim -2) or W (dim -1) without permuting the scan axis to dim 0, which
+// would pad each element of a thin tensor out to its own tile (#23264). A "row" here is the run of
+// tiles along the scan axis: Ht tiles Wt apart for H, Wt consecutive tiles for W. The reader and
+// writer address that run with the same (tiles_per_row, input_tile_offset) arguments as the
+// permuted path, so they are shared.
+ttnn::device_operation::ProgramArtifacts AccumulationProgramFactory::create_tile_axis_program_artifacts(
+    const AccumulationParams& operation_attributes,
+    const AccumulationInputs& tensor_args,
+    Tensor& tensor_return_value) {
+    using namespace tt;
+    using namespace tt::tt_metal;
+    using namespace tt::tt_metal::experimental;
+
+    const auto& input_tensor{tensor_args.input_tensor.mesh_tensor()};
+    const auto& output_tensor{tensor_return_value.mesh_tensor()};
+    const auto& padded_shape{input_tensor.padded_shape()};
+    const int32_t input_rank = padded_shape.rank();
+    const int32_t dim{
+        (operation_attributes.dim >= 0) ? operation_attributes.dim : (input_rank + operation_attributes.dim)};
+    const bool scan_width = dim == input_rank - 1;
+
+    const tt::tt_metal::distributed::MeshDevice& device = input_tensor.device();
+    auto grid = device.compute_with_storage_grid_size();
+    const auto num_cores_y = grid.y;
+    TT_FATAL(num_cores_y != 0, "Compute grid y-dimension must be non-zero");
+
+    const auto& tile = input_tensor.tensor_spec().tile();
+    const uint32_t Ht = padded_shape[-2] / tile.get_height();
+    const uint32_t Wt = padded_shape[-1] / tile.get_width();
+    const uint32_t num_tiles = input_tensor.physical_volume() / tile.get_tile_hw();
+    const uint32_t tiles_per_row = scan_width ? Wt : Ht;
+    const uint32_t input_tile_offset = scan_width ? 1 : Wt;
+    TT_FATAL(tiles_per_row != 0, "tiles_per_row must be non-zero (got 0 for dim={})", dim);
+    const uint32_t num_rows_total = num_tiles / tiles_per_row;
+
+    const auto
+        [num_cores, all_cores, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2] =
+            tt::tt_metal::split_work_to_cores(grid, num_rows_total);
+    TT_FATAL(
+        num_cores > 0, "Accumulation (cumsum) requires at least one worker core; num_rows_total={}", num_rows_total);
+
+    validate_reduce_op_program_grid("Accumulation", all_cores, grid, nullptr, true, {{&tensor_return_value, "output"}});
+
+    constexpr uint32_t in_tiles = 4;
+    constexpr uint32_t out_tiles = 4;
+    const auto input_dataformat = datatype_to_dataformat_converter(input_tensor.dtype());
+    const auto output_dataformat = datatype_to_dataformat_converter(output_tensor.dtype());
+
+    auto make_dfb = [](const DFBSpecName& unique_id, const tt::DataFormat& data_format, uint32_t num_entries) {
+        return DataflowBufferSpec{
+            .unique_id = unique_id,
+            .entry_size = tt::tile_size(data_format),
+            .num_entries = num_entries,
+            .data_format_metadata = data_format,
+        };
+    };
+
+    const Group<std::string> dataflow_rta_names{
+        "num_rows_per_core",
+        "tiles_per_row",
+        "input_tile_offset",
+        "start_id",
+        "low_rank_offset",
+        "high_rank_offset",
+        "flip"};
+
+    KernelSpec reader{
+        .unique_id = ACCUM_READER,
+        .source = AccumulationProgramFactory::KERNEL_PATHS[0],
+        .dfb_bindings = {DFBBinding{
+            .dfb_spec_name = ACCUM_SRC,
+            .accessor_name = "in",
+            .endpoint_type = DFBEndpointType::PRODUCER,
+        }},
+        .tensor_bindings = {TensorBinding{
+            .tensor_parameter_name = ACCUM_INPUT,
+            .accessor_name = "input",
+        }},
+        .runtime_arg_schema = {.runtime_arg_names = dataflow_rta_names},
+        .hw_config = ttnn::create_reader_datamovement_config(),
+    };
+
+    KernelSpec writer{
+        .unique_id = ACCUM_WRITER,
+        .source = AccumulationProgramFactory::KERNEL_PATHS[2],
+        .dfb_bindings = {DFBBinding{
+            .dfb_spec_name = ACCUM_DST,
+            .accessor_name = "out",
+            .endpoint_type = DFBEndpointType::CONSUMER,
+        }},
+        .tensor_bindings = {TensorBinding{
+            .tensor_parameter_name = ACCUM_OUTPUT,
+            .accessor_name = "output",
+        }},
+        .runtime_arg_schema = {.runtime_arg_names = dataflow_rta_names},
+        .hw_config = ttnn::create_writer_datamovement_config(),
+    };
+
+    // 32-bit Dest keeps the running totals in fp32; only the packed output is rounded to bf16. The
+    // bf16 input goes through SrcA, which holds it exactly, so it needs no unpack-mode entry.
+    const ComputeHardwareConfig compute_config{
+        .fpu_math_fidelity = MathFidelity::HiFi4,
+        .sfpu_precision_mode = Precision::Precise,
+        .enable_32_bit_dest = true,
+        .double_buffer_dest = true,
+    };
+
+    std::map<std::string, std::string> compute_defines_map;
+    if (scan_width) {
+        compute_defines_map["SCAN_WIDTH"] = "1";
+    }
+    const KernelSpec::CompilerOptions::Defines compute_defines(compute_defines_map);
+
+    const Group<DFBBinding> compute_bindings{
+        DFBBinding{
+            .dfb_spec_name = ACCUM_SRC,
+            .accessor_name = "in",
+            .endpoint_type = DFBEndpointType::CONSUMER,
+        },
+        DFBBinding{
+            .dfb_spec_name = ACCUM_DST,
+            .accessor_name = "out",
+            .endpoint_type = DFBEndpointType::PRODUCER,
+        }};
+
+    auto make_compute = [&](const KernelSpecName& unique_id) {
+        return KernelSpec{
+            .unique_id = unique_id,
+            .source = AccumulationProgramFactory::TILE_AXIS_COMPUTE_KERNEL_PATH,
+            .compiler_options = {.defines = compute_defines, .opt_level = KernelBuildOptLevel::O3},
+            .dfb_bindings = compute_bindings,
+            .runtime_arg_schema = {.runtime_arg_names = {"num_rows", "tiles_per_row"}},
+            .hw_config = ComputeHardwareConfig{compute_config},
+        };
+    };
+
+    const bool group_2_present = !core_group_2.ranges().empty();
+
+    KernelRunArgs reader_run_args{.kernel = ACCUM_READER};
+    KernelRunArgs writer_run_args{.kernel = ACCUM_WRITER};
+    KernelRunArgs compute_g1_run_args{.kernel = ACCUM_COMPUTE_G1};
+    KernelRunArgs compute_g2_run_args{.kernel = ACCUM_COMPUTE_G2};
+
+    for (uint32_t i{0}, row_offset = 0; i < num_cores; ++i) {
+        NodeCoord node{i / num_cores_y, i % num_cores_y};
+
+        uint32_t num_rows_per_core = 0;
+        if (core_group_1.contains(node)) {
+            num_rows_per_core = num_rows_per_core_group_1;
+        } else if (core_group_2.contains(node)) {
+            num_rows_per_core = num_rows_per_core_group_2;
+        } else {
+            TT_THROW("Core not in any predefined core range.");
+        }
+
+        // The reader and the writer address the same tile sequence, so they take the same arguments.
+        auto add_dataflow_args = [&](KernelRunArgs& run_args) {
+            AddRuntimeArgsForNode(
+                run_args.runtime_arg_values,
+                node,
+                {{"num_rows_per_core", num_rows_per_core},
+                 {"tiles_per_row", tiles_per_row},
+                 {"input_tile_offset", input_tile_offset},
+                 {"start_id", row_offset},
+                 {"low_rank_offset", row_offset / input_tile_offset},
+                 {"high_rank_offset", row_offset % input_tile_offset},
+                 {"flip", 0}});
+        };
+        add_dataflow_args(reader_run_args);
+        add_dataflow_args(writer_run_args);
+
+        auto& compute_run_args = core_group_1.contains(node) ? compute_g1_run_args : compute_g2_run_args;
+        AddRuntimeArgsForNode(
+            compute_run_args.runtime_arg_values,
+            node,
+            {{"num_rows", num_rows_per_core}, {"tiles_per_row", tiles_per_row}});
+
+        row_offset += num_rows_per_core;
+    }
+
+    Group<KernelSpec> kernels{std::move(reader), std::move(writer), make_compute(ACCUM_COMPUTE_G1)};
+    Group<KernelRunArgs> kernel_run_args{
+        std::move(reader_run_args), std::move(writer_run_args), std::move(compute_g1_run_args)};
+    Group<WorkUnitSpec> work_units{WorkUnitSpec{
+        .name = "accumulation_group_1",
+        .kernels = {ACCUM_READER, ACCUM_WRITER, ACCUM_COMPUTE_G1},
+        .target_nodes = core_group_1,
+    }};
+    if (group_2_present) {
+        kernels.push_back(make_compute(ACCUM_COMPUTE_G2));
+        kernel_run_args.push_back(std::move(compute_g2_run_args));
+        work_units.push_back(WorkUnitSpec{
+            .name = "accumulation_group_2",
+            .kernels = {ACCUM_READER, ACCUM_WRITER, ACCUM_COMPUTE_G2},
+            .target_nodes = core_group_2,
+        });
+    }
+
+    ProgramSpec spec{
+        .name = "accumulation_tile_axis",
+        .kernels = std::move(kernels),
+        .dataflow_buffers =
+            {make_dfb(ACCUM_SRC, input_dataformat, in_tiles), make_dfb(ACCUM_DST, output_dataformat, out_tiles)},
         .tensor_parameters =
             {TensorParameter{.unique_id = ACCUM_INPUT, .spec = input_tensor.tensor_spec()},
              TensorParameter{.unique_id = ACCUM_OUTPUT, .spec = output_tensor.tensor_spec()}},

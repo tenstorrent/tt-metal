@@ -78,6 +78,9 @@
 #include "mesh_device_view_impl.hpp"
 #include "dummy_mesh_command_queue.hpp"
 #include "impl/context/metal_env_accessor.hpp"
+#ifdef TT_METAL_USE_EMULE
+#include "emule_mesh_command_queue.hpp"
+#endif
 
 namespace tt::tt_metal {
 class SystemMemoryManager;
@@ -1253,6 +1256,9 @@ SubDeviceManagerId MeshDeviceImpl::acquire_command_list_builder() {
     auto lock = lock_api();
     TT_FATAL(!command_list_builder_active_, "Only one CommandListBuilder may exist for a MeshDevice");
     validate_sub_device_manager_tracker();
+    TT_FATAL(
+        sub_device_manager_tracker_->num_traces() == 0,
+        "Cannot create a CommandListBuilder while a trace exists on the MeshDevice");
     command_list_builder_active_ = true;
     return sub_device_manager_tracker_->get_active_sub_device_manager_id();
 }
@@ -1262,6 +1268,10 @@ void MeshDeviceImpl::release_command_list_builder() {
     TT_ASSERT(command_list_builder_active_);
     command_list_builder_active_ = false;
 }
+
+void MeshDeviceImpl::register_command_list() { ++num_command_lists_; }
+
+void MeshDeviceImpl::unregister_command_list() noexcept { --num_command_lists_; }
 
 SubDeviceManagerId MeshDeviceImpl::create_sub_device_manager(
     std::initializer_list<SubDevice> sub_devices, DeviceAddr local_l1_size) {
@@ -1580,7 +1590,11 @@ void MeshDeviceImpl::release_mesh_trace(const MeshTraceId& trace_id) {
     TracyTTMetalReleaseMeshTrace(*this, this->get_device_ids(), *trace_id);
 
     validate_sub_device_manager_tracker();
-    sub_device_manager_tracker_->get_active_sub_device_manager()->release_trace(trace_id);
+    {
+        // Serializes the trace-pool erase with the trace check in acquire_command_list_builder.
+        auto lock = lock_api();
+        sub_device_manager_tracker_->get_active_sub_device_manager()->release_trace(trace_id);
+    }
 
     // Drop any Tensor prefetcher requests captured under this trace so they don't outlive it.
     if (tensor_prefetcher_) {
@@ -1610,22 +1624,32 @@ void MeshDeviceImpl::begin_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id
         "CQ {} is already being used for tracing tid {}",
         (uint32_t)cq_id,
         *trace_id);
+
+    std::shared_ptr<MeshTraceDescriptor> trace_desc;
+    {
+        // Held from the check through trace creation so a CommandListBuilder cannot be created in between.
+        auto lock = lock_api();
+        TT_FATAL(
+            !command_list_builder_active_ && num_command_lists_ == 0,
+            "Cannot begin trace capture while a CommandListBuilder or CommandList exists on the MeshDevice");
+
+        // Create an empty trace buffer here. This will get initialized in end_trace
+        auto* active_sub_device_manager = sub_device_manager_tracker_->get_active_sub_device_manager();
+        TT_FATAL(
+            active_sub_device_manager->get_trace(trace_id) == nullptr,
+            "Trace already exists for tid {} on device {}'s active sub-device manager {}",
+            *trace_id,
+            this->mesh_id_,
+            active_sub_device_manager->id());
+        trace_desc = active_sub_device_manager->create_trace(trace_id)->desc;
+    }
+
     // Start tracking DRAM high water mark if trace_region_size is 0 (dynamic allocation mode)
     auto trace_region_size = this->allocator_impl()->get_config().trace_region_size;
     if (trace_region_size == 0) {
         this->allocator_impl()->begin_dram_high_water_mark_tracking();
     }
-
-    // Create an empty trace buffer here. This will get initialized in end_trace
-    auto* active_sub_device_manager = sub_device_manager_tracker_->get_active_sub_device_manager();
-    TT_FATAL(
-        active_sub_device_manager->get_trace(trace_id) == nullptr,
-        "Trace already exists for tid {} on device {}'s active sub-device manager {}",
-        *trace_id,
-        this->mesh_id_,
-        active_sub_device_manager->id());
-    auto& trace_buffer = active_sub_device_manager->create_trace(trace_id);
-    this->mesh_command_queues_[cq_id]->record_begin(trace_id, trace_buffer->desc);
+    this->mesh_command_queues_[cq_id]->record_begin(trace_id, trace_desc);
 }
 
 void MeshDeviceImpl::end_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id) {
@@ -1750,6 +1774,15 @@ bool MeshDeviceImpl::initialize_impl(
     mesh_command_queues_.reserve(this->num_hw_cqs());
     if (metal_env().get_rtoptions().get_fast_dispatch()) {
         for (std::size_t cq_id = 0; cq_id < this->num_hw_cqs(); cq_id++) {
+#ifdef TT_METAL_USE_EMULE
+            // Emulated devices have no dispatch firmware or sysmem command rings; tt-emule's queue gives the
+            // fast-dispatch semantics instead.
+            if (metal_env().get_cluster().get_target_device_type() == tt::TargetDevice::Emule) {
+                mesh_command_queues_.push_back(emule::create_mesh_command_queue(
+                    pimpl_wrapper, cq_id, std::bind(&MeshDeviceImpl::lock_api, this), active_distributed_context_));
+                continue;
+            }
+#endif
             mesh_command_queues_.push_back(std::make_unique<FDMeshCommandQueue>(
                 pimpl_wrapper,
                 cq_id,

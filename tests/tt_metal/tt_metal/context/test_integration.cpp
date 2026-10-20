@@ -297,6 +297,13 @@ void ExpectDeviceProfilerActiveOnSilicon(distributed::MeshDevice& silicon_mesh_d
         << "Test expects profiler host-device sync to be enabled.";
     EXPECT_TRUE(getDeviceProfilerState(silicon_mesh_device.impl().metal_env()))
         << "Device profiler must remain enabled on the real device";
+
+    // The silicon context is the one attached to the process-wide profiler, which serves the handle-less APIs.
+    const ProfilerStateManager* attached = nullptr;
+    ProfilerRegistry::instance().with_sole_attached([&](const ProfilerStateManager* psm) { attached = psm; });
+    EXPECT_EQ(attached, silicon_mesh_device.impl().metal_context().profiler_state_manager().get());
+    EXPECT_NO_THROW(experimental::GetLatestProgramsPerfData());
+    EXPECT_NO_THROW(experimental::GetAllProgramsPerfData());
 }
 
 // Even though profiling + sync were requested, the device profiler must never be started on a
@@ -314,6 +321,8 @@ void ExpectDeviceProfilerSkippedOnMock(distributed::MeshDevice& mock_mesh_device
             << "Device profiler was started on mock device " << device_id
             << " -- it must be skipped for mock/emulated clusters";
     }
+    EXPECT_FALSE(profiler_state_manager->attached_to_registry)
+        << "A mock context must not attach to the process-wide profiler";
 
 #if defined(TRACY_ENABLE)
     // The trace hooks must act on the mock mesh's own (empty) profiler state and never reach the silicon profiler's.
@@ -328,12 +337,22 @@ void ExpectDeviceProfilerSkippedOnMock(distributed::MeshDevice& mock_mesh_device
 #endif
 }
 
+// Once the silicon env is destroyed, nothing is attached to the process-wide profiler and the handle-less getters
+// return nothing.
+void ExpectNoProfiledContext() {
+    const ProfilerStateManager* attached = nullptr;
+    ProfilerRegistry::instance().with_sole_attached([&](const ProfilerStateManager* psm) { attached = psm; });
+    EXPECT_EQ(attached, nullptr);
+    EXPECT_TRUE(experimental::GetLatestProgramsPerfData().empty());
+    EXPECT_TRUE(experimental::GetAllProgramsPerfData().empty());
+}
+
 // Shared body: open a real silicon mesh first, then two mock meshes on the same arch. When
 // `expect_profiler` is set, also check the profiler stays on for silicon but is skipped for mock.
 void RunCoexistingMockAndSiliconDevice(bool expect_profiler) {
     // Create silicon mesh
     MetalEnv silicon_env;
-    const tt::ARCH silicon_arch = silicon_env.get_arch();
+    const tt::ARCH silicon_arch = silicon_env.get_device_properties().arch();
 
     auto mesh_shape = silicon_env.get_system_mesh().shape();
     auto mesh_device_config = distributed::MeshDeviceConfig(mesh_shape);
@@ -387,7 +406,7 @@ void RunCoexistingSiliconAndMockDevice(bool expect_profiler) {
     tt::ARCH silicon_arch;
     {
         MetalEnv probe;
-        silicon_arch = probe.get_arch();
+        silicon_arch = probe.get_device_properties().arch();
     }
 
     // Create mock mesh device with 1 chip on the silicon arch
@@ -460,9 +479,9 @@ TEST(MetalContextIntegrationTest, HelloWorldQueryThenCreate) {
     {
         MetalEnv env;
 
-        size_t l1_size = env.get_l1_size();
-        size_t trace_region_size = l1_size * 0.3;
-        size_t l1_small_region_size = l1_size * 0.05;
+        size_t node_local_mem_size = env.get_device_properties().node_local_mem_size();
+        size_t trace_region_size = node_local_mem_size * 0.3;
+        size_t l1_small_region_size = node_local_mem_size * 0.05;
 
         auto mesh_shape = env.get_system_mesh().shape();
         auto mesh_device_config = distributed::MeshDeviceConfig(mesh_shape);
@@ -647,6 +666,7 @@ TEST(MetalContextIntegrationTest, CoexistingSiliconAndMockDeviceWithProfilerSync
 #endif
     ScopedProfilerSyncEnv profiler_env;
     RunCoexistingSiliconAndMockDevice(/*expect_profiler=*/true);
+    ExpectNoProfiledContext();
 }
 
 // Same test as above but reverse the order to ensure no hangs due to unexpected internal objects created for the
@@ -663,6 +683,7 @@ TEST(MetalContextIntegrationTest, CoexistingMockAndSiliconDeviceWithProfilerSync
 #endif
     ScopedProfilerSyncEnv profiler_env;
     RunCoexistingMockAndSiliconDevice(/*expect_profiler=*/true);
+    ExpectNoProfiledContext();
 }
 
 TEST(MetalContextIntegrationTest, ForkMockAndRealDevice) {
@@ -670,11 +691,17 @@ TEST(MetalContextIntegrationTest, ForkMockAndRealDevice) {
     {
         MetalEnv env;
 
-        auto arch = env.get_arch();
-        auto l1_size = env.get_l1_size();
+        const auto props = env.get_device_properties();
+        auto arch = props.arch();
+        auto node_local_mem_size = props.node_local_mem_size();
         auto num_devices = env.get_num_available_devices();
-        log_info(tt::LogTest, "Pre-fork: arch={}, L1 size={}, num_devices={}", arch, l1_size, num_devices);
-        EXPECT_GT(l1_size, 0u);
+        log_info(
+            tt::LogTest,
+            "Pre-fork: arch={}, node local mem size={}, num_devices={}",
+            arch,
+            node_local_mem_size,
+            num_devices);
+        EXPECT_GT(node_local_mem_size, 0u);
         EXPECT_GT(num_devices, 0u);
     }
 
@@ -697,7 +724,7 @@ TEST(MetalContextIntegrationTest, ForkMockAndRealDevice) {
             _exit(1);
         }
 
-        if (mock_env.get_arch() != tt::ARCH::BLACKHOLE) {
+        if (mock_env.get_device_properties().arch() != tt::ARCH::BLACKHOLE) {
             _exit(2);
         }
 
@@ -721,10 +748,11 @@ TEST(MetalContextIntegrationTest, ForkMockAndRealDevice) {
 
     MetalEnv env;
 
-    auto real_arch = env.get_arch();
-    auto real_l1_size = env.get_l1_size();
-    log_info(tt::LogTest, "Parent (real): arch={}, L1 size={}", real_arch, real_l1_size);
-    EXPECT_GT(real_l1_size, 0u);
+    const auto real_props = env.get_device_properties();
+    auto real_arch = real_props.arch();
+    auto real_node_local_mem_size = real_props.node_local_mem_size();
+    log_info(tt::LogTest, "Parent (real): arch={}, node local mem size={}", real_arch, real_node_local_mem_size);
+    EXPECT_GT(real_node_local_mem_size, 0u);
 
     auto mesh_shape = env.get_system_mesh().shape();
     auto silicon_mesh_device = env.create_mesh_device(distributed::MeshDeviceConfig(mesh_shape));

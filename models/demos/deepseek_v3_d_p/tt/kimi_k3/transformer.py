@@ -489,7 +489,7 @@ class TtKimiK3Transformer(LightweightModule):
             f"snapshots, expected {self.inbound_planes - 1}"
         )
 
-        # Eager chunks build the KDA bounds and selection table once and share them across the KDA layers.
+        # Eager chunks build the KDA bounds once and share them across the KDA layers.
         kda_chunk = K3KdaChunk(actual_start, actual_end) if metadata is None else None
         try:
             for local_idx, layer in enumerate(self.layers):
