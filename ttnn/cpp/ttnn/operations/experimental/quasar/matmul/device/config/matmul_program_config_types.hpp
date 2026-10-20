@@ -99,19 +99,16 @@ struct MatmulUnifiedProgramConfig {
     // placements (the other fields are kept).
     tt::tt_metal::CoreRangeSet cores;
     // C slice (in tiles) each core produces in one go. A sharded C's shard is the C slice (a C slice given here must
-    // match it). Unset = auto: the largest C slice whose dims divide M / N split over the bounding box of `cores`
-    // that fits L1 (#57884).
+    // match it). Unset = auto: of the C slices whose dims divide M / N split over the bounding box of `cores`, the one
+    // whose plan has the lowest estimated cycles (auto fields are chosen together, see plan_unified_matmul).
     std::optional<std::size_t> C_slice_M_tiles;
     std::optional<std::size_t> C_slice_N_tiles;
     // K tiles multiplied per accumulation step: one A slice and one B slice are resident in L1 at a time and
-    // the partial sums round-trip L1 between steps. Must divide K_tiles. Unset = auto: the largest divisor of
-    // K_tiles whose buffers fit L1, capped at 8 unless the C slice is 4 tiles or fewer, which still leaves a K
-    // chunk per reader thread (#57884).
+    // the partial sums round-trip L1 between steps. Must divide K_tiles. Unset = auto (lowest estimated cycles).
     std::optional<std::size_t> K_chunk_tiles;
     // Subblock: the C slice's tiles accumulated in DST at once; holds <= 8 tiles (4 with fp32
     // accumulation). Need not divide the C slice: it is padded up to subblock multiples and the
-    // overshoot is clipped on write. Set both or neither; unset = auto: least work on the busiest compute thread,
-    // then max volume, then least padding.
+    // overshoot is clipped on write. Set both or neither; unset = auto (lowest estimated cycles).
     std::optional<std::size_t> subblock_M_tiles;
     std::optional<std::size_t> subblock_N_tiles;
     // Order `cores` are walked when handing out C slices: ROW_MAJOR x fastest, COL_MAJOR y fastest. A

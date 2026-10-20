@@ -17,8 +17,8 @@ tests that set num_compute_threads > 1 are skipped.
 DM threads and buffering: on Quasar up to four reader threads, no more than a C slice's K chunks, take each C
 slice's K chunks round-robin (padded to a multiple of the reader threads with credit-only K chunks) and two writer
 threads take the compute threads' entries of C; Wormhole / Blackhole have one reader and one writer. Cores with
-several C slices keep two in flight. These are fixed; the C slice, subblock and K chunk are sized to fit L1 with
-them. When each
+several C slices keep two in flight. These are fixed; an auto C slice, subblock and K chunk is the combination with
+the lowest estimated cycles among those that fit L1 with them. When each
 core produces one C slice on a rectangle laid out like the C slices, A is multicast along rows of cores and B down
 columns, each reader thread multicasting its own K chunks; when C is one row (column) of C slices, A (B) is multicast
 to every core.
@@ -199,7 +199,7 @@ AUTO_C_SLICE_GRIDS = [
 
 @pytest.mark.parametrize("name,cores", AUTO_C_SLICE_GRIDS, ids=[g[0] for g in AUTO_C_SLICE_GRIDS])
 def test_auto_C_slice_from_core_grid(device, name, cores):
-    """C_slice_M_tiles / C_slice_N_tiles left at 0: M / N split over the bounding box of the cores."""
+    """C_slice_M_tiles / C_slice_N_tiles unset: a C slice dividing M / N split over the bounding box of the cores."""
     gx, gy = _grid(device)
     x0, y0, x1, y1 = cores
     if x1 >= gx or y1 >= gy:
@@ -269,9 +269,7 @@ def test_edges_and_blocking(device, M, K, N, C_slice_M_tiles, C_slice_N_tiles, K
 
 
 def test_single_tile(device):
-    """The smallest problem: one tile, one core, 1x1 C slice. With one compute thread (the default on
-    Wormhole / Blackhole) the auto subblock pads the slice to 8 tiles, all but one of which are stale and must
-    be clipped; with four threads (the Quasar default) the auto subblock is 1x1 and nothing is padded."""
+    """The smallest problem: one tile, one core, 1x1 C slice."""
     M = K = N = TILE
     torch.manual_seed(2)
     a, b = _randn(1, 1, M, K), _randn(1, 1, K, N)
@@ -280,9 +278,8 @@ def test_single_tile(device):
     _check(out, _golden(a, b))
 
 
-def test_auto_K_chunk_falls_back_to_one(device):
-    """K_tiles = 11 has no divisor in [2, 8], so the auto K chunk search has to walk all the way down to 1
-    (11 K chunks, spill/reload between each)."""
+def test_auto_K_chunk_with_prime_K_tiles(device):
+    """K_tiles = 11 is prime: the auto K chunk is all of K or one tile (11 K chunks, spill/reload between each)."""
     M, K, N = 2 * TILE, 11 * TILE, 2 * TILE
     torch.manual_seed(9)
     a, b = _randn(1, 1, M, K), _randn(1, 1, K, N)
@@ -292,8 +289,8 @@ def test_auto_K_chunk_falls_back_to_one(device):
 
 
 def test_auto_C_slice_shrinks_to_fit_l1(device):
-    """One core, 64x64-tile C: the largest C slice (all of C) does not fit L1, so the auto C slice is the largest
-    one whose dims divide it that does."""
+    """One core, 64x64-tile C: the largest C slice (all of C) does not fit L1, so the auto C slice is a smaller one
+    whose dims divide it."""
     M, K, N = 64 * TILE, 2 * TILE, 64 * TILE
     torch.manual_seed(13)
     a, b = _randn(1, 1, M, K), _randn(1, 1, K, N)
@@ -301,10 +298,9 @@ def test_auto_C_slice_shrinks_to_fit_l1(device):
     _check(out, _golden(a, b))
 
 
-def test_small_C_slice_takes_long_K_chunks(device):
-    """A 1x1-tile C slice is not capped at 8 K tiles per chunk but leaves a K chunk per reader thread: K = 64 tiles
-    goes through in K chunks of 16 on Quasar, 32 elsewhere (fp32 accumulation, since 2048 products in 16-bit DST
-    drift past the 2% bound)."""
+def test_single_tile_C_slice_over_long_K(device):
+    """A 1x1-tile C slice over K = 64 tiles, at the auto K chunk (fp32 accumulation, since 2048 products in 16-bit
+    DST drift past the 2% bound)."""
     M, K, N = TILE, 64 * TILE, TILE
     torch.manual_seed(14)
     a, b = _randn(1, 1, M, K), _randn(1, 1, K, N)
@@ -324,8 +320,8 @@ def test_sub_tile_dims(device):
 
 
 def test_auto_subblock_falls_back_when_padding_does_not_fit(device):
-    """22x22-tile C slice: every max-volume subblock pads a dim to 24 and blows the DFB extent limit,
-    so auto must fall back to a smaller subblock (2x2 pads nothing) instead of failing."""
+    """22x22-tile C slice: subblocks that pad a dim to 24 blow the DFB extent limit, so auto must take one that
+    fits (2x2 pads nothing) instead of failing."""
     M = N = 22 * TILE
     K = TILE
     torch.manual_seed(4)
@@ -369,14 +365,19 @@ def test_ones_give_constant_k(device):
 
 def test_zeros_give_exact_zero(device):
     """in0 = 0: every output element is exactly 0; stale DFB entries or unclipped subblock padding
-    leak nonzeros here (the 2x3 C slice forces a padded auto subblock)."""
+    leak nonzeros here (the 2x4 subblock pads the 2x3 C slice)."""
     gx, gy = _grid(device)
     M, K, N = 5 * TILE, 6 * TILE, 7 * TILE
     torch.manual_seed(5)
     a = torch.zeros(1, 1, M, K, dtype=torch.bfloat16)
     b = _randn(1, 1, K, N)
     config = qsr.MatmulUnifiedProgramConfig(
-        cores=_rect(0, 0, min(gx, 2) - 1, min(gy, 2) - 1), C_slice_M_tiles=2, C_slice_N_tiles=3, K_chunk_tiles=2
+        cores=_rect(0, 0, min(gx, 2) - 1, min(gy, 2) - 1),
+        C_slice_M_tiles=2,
+        C_slice_N_tiles=3,
+        K_chunk_tiles=2,
+        subblock_M_tiles=2,
+        subblock_N_tiles=4,
     )
     out = _run(device, a, b, config)
     assert torch.equal(out.to(torch.float32), torch.zeros(1, 1, M, N))
@@ -505,9 +506,9 @@ def test_borrowed_B_over_several_K_chunks(device):
     _check(out, _golden(a, b))
 
 
-def test_borrowed_A_wins_over_subblock_padding(device):
-    """A's L1 shard is borrowable but its 7-tile height divides no max-volume subblock: the chooser must
-    keep the borrow (subblock_M divides 7) and take its volume from the N axis instead."""
+def test_borrowable_A_with_a_7_tile_C_slice_height(device):
+    """A's L1 shard is borrowable, but only by a subblock whose height divides 7 (padding voids the borrow): the
+    estimate weighs the A copy the borrow saves against subblock volume."""
     gx, gy = _grid(device)
     if gy < 2:
         pytest.skip("needs 2 rows")
@@ -617,12 +618,12 @@ def test_bfp8(device, in0_dtype, in1_dtype, out_dtype, rtol):
 
 
 @pytest.mark.parametrize(
-    "C_slice_M_tiles,C_slice_N_tiles",
-    [(4, 2), (3, 3)],
+    "C_slice_M_tiles,C_slice_N_tiles,subblock",
+    [(4, 2, (None, None)), (3, 3, (2, 2))],
     ids=["dividing_subblock", "padded_subblock"],
 )
-def test_fp32_dest_acc_and_fp32_out(device, C_slice_M_tiles, C_slice_N_tiles):
-    """fp32 accumulation caps the subblock at 4 tiles; the 3x3 slice forces padding under that cap.
+def test_fp32_dest_acc_and_fp32_out(device, C_slice_M_tiles, C_slice_N_tiles, subblock):
+    """fp32 accumulation caps the subblock at 4 tiles; a 2x2 subblock pads the 3x3 slice under that cap.
     fp32 output means partials and C differ in format."""
     M, K, N = 4 * TILE, 8 * TILE, 4 * TILE
     torch.manual_seed(10)
@@ -632,6 +633,8 @@ def test_fp32_dest_acc_and_fp32_out(device, C_slice_M_tiles, C_slice_N_tiles):
         C_slice_M_tiles=C_slice_M_tiles,
         C_slice_N_tiles=C_slice_N_tiles,
         K_chunk_tiles=2,
+        subblock_M_tiles=subblock[0],
+        subblock_N_tiles=subblock[1],
     )
     out = _run(device, a, b, config, out_dtype=ttnn.float32, fp32_dest_acc_en=True)
     _check(out, _golden(a, b), rtol=0.005)
@@ -788,14 +791,19 @@ def test_fused_activation(device, name, op, torch_op, rtol, K_chunk_tiles, with_
 
 
 def test_ragged_batched_spill_all_at_once(device):
-    """Ragged M / K / N, a batch, K spill with packer L1 accumulation, a padded auto subblock and an
+    """Ragged M / K / N, a batch, K spill with packer L1 accumulation, a padded subblock and an
     uneven C-slice split, all in one run."""
     gx, gy = _grid(device)
     B, M, K, N = 2, 7 * TILE + 13, 5 * TILE + 20, 9 * TILE + 5
     torch.manual_seed(17)
     a, b = _randn(1, B, M, K), _randn(1, B, K, N)
     config = qsr.MatmulUnifiedProgramConfig(
-        cores=_rect(0, 0, min(gx, 3) - 1, min(gy, 2) - 1), C_slice_M_tiles=3, C_slice_N_tiles=4, K_chunk_tiles=2
+        cores=_rect(0, 0, min(gx, 3) - 1, min(gy, 2) - 1),
+        C_slice_M_tiles=3,
+        C_slice_N_tiles=4,
+        K_chunk_tiles=2,
+        subblock_M_tiles=2,
+        subblock_N_tiles=4,
     )
     out = _run(device, a, b, config, packer_l1_acc=True)
     _check(out, _golden(a, b))
@@ -807,18 +815,18 @@ def test_ragged_batched_spill_all_at_once(device):
 
 # Subblocks are numbered across N then down M. With T threads, round r is subblocks r*T .. r*T + T - 1, one
 # per thread, so a C slice of S subblocks takes ceil(S / T) rounds and in the last round the threads past
-# S mod T are idle. K_tiles = 2 fits in one auto K chunk, so only the two cases that set K_chunk_tiles below
+# S mod T are idle. K_chunk_tiles = K_tiles = 2 keeps one K chunk, so only the two cases that set K_chunk_tiles below
 # K_tiles spill partials through C_partials.
 SUBBLOCK_SPLITS = [
-    # name, C slice (M, N tiles), subblock (M, N tiles), K_tiles, K_chunk_tiles (None = auto). At four threads: fewer
-    # subblocks than threads, a last round with idle threads, full rounds, and a padded C slice.
-    ("one_subblock", (2, 2), (2, 2), 2, None),
-    ("two_subblocks", (2, 4), (2, 2), 2, None),
-    ("three_subblocks", (3, 2), (1, 2), 2, None),
-    ("five_subblocks", (5, 2), (1, 2), 2, None),
-    ("six_subblocks", (3, 4), (1, 2), 2, None),
-    ("eight_subblocks", (4, 4), (1, 2), 2, None),
-    ("padded_slice_four_subblocks", (3, 3), (2, 2), 2, None),
+    # name, C slice (M, N tiles), subblock (M, N tiles), K_tiles, K_chunk_tiles. At four threads: fewer subblocks
+    # than threads, a last round with idle threads, full rounds, and a padded C slice.
+    ("one_subblock", (2, 2), (2, 2), 2, 2),
+    ("two_subblocks", (2, 4), (2, 2), 2, 2),
+    ("three_subblocks", (3, 2), (1, 2), 2, 2),
+    ("five_subblocks", (5, 2), (1, 2), 2, 2),
+    ("six_subblocks", (3, 4), (1, 2), 2, 2),
+    ("eight_subblocks", (4, 4), (1, 2), 2, 2),
+    ("padded_slice_four_subblocks", (3, 3), (2, 2), 2, 2),
     ("three_subblocks_K_spill", (3, 2), (1, 2), 4, 2),
     ("five_subblocks_K_spill", (5, 2), (1, 2), 4, 1),
 ]
