@@ -243,6 +243,110 @@ Tests with the kernel: `tests/test_mhc.py` 5 passed (hc_post vs composite exact,
 collapse), `tests/test_decoder_layer.py` 5 passed, `tests/test_decode_trace.py` 5 passed (unchanged PCCs).
 
 
+## Re-homed as a model-local generic op: `custom_ops/mhc_post_mix` (2026-10-20, user rule)
+
+Per the "custom kernels: model-local generic ops ONLY" rule the C++ op is gone from this branch: the same three
+kernels live in `models/demos/glm53_flash/custom_ops/mhc_post_mix/kernels/` and `custom_ops/mhc_post_mix/op.py`
+(`MhcPostMix`) builds the `ttnn.ProgramDescriptor` (CBs, the three `KernelDescriptor`s with the same compile-time
+args, per-core `RuntimeArgs` with `buffer_address()`es, `TensorAccessorArgs`, `ComputeConfigDescriptor` with
+`fp32_dest_acc_en` and `unpack_to_dest_mode[cb] = UnpackToDestFp32` for the fp32 operand CBs -- the descriptor API
+exposes it, sized to the build's 64 CB slots) and launches `ttnn.generic_op([x, y, post, comb, out], program)`
+with the output pre-allocated by the caller (`MhcPostMix.allocate_output`). The program-descriptor hash excludes
+runtime-arg values, so the cached program is reused across addresses (trace-safe; `test_post_mix_trace`). Runs
+against the main-tree build (no rebuild): `TtMHCFast(post_kernel=True)` / `GLM53_MHC_POST_KERNEL=1`.
+Contract and CB plan: `custom_ops/mhc_post_mix/README.md`. Validation (`tests/custom_ops/test_mhc_post_mix.py`,
+chip 1): random T=32/256 4.2e-8, decode B=1/4/32 (padded 32-row tile) 4.2e-8..4.9e-8, trace replay 4.1e-8, real
+layer-4 streams 5.2e-8 / 6.7e-8 vs float64 and 3.0e-8 / 3.4e-8 vs the composite chain -- the C++ op's numbers;
+`tests/test_mhc.py` with the kernel path: hc_post fast vs wrap 1.5e-8..3.3e-8 (`_logs/optmhc_cop_*.log`).
+
+
+## v2 post-block kernel: resident operands, lane-layout coefficients, SFPU FMAs (2026-10-20)
+
+`custom_ops/mhc_post_mix/kernels/{reader,writer,compute}_mhc_post_mix_v2.cpp` + `kernels/mhc_sfpu_x8.h`
+(`MhcPostMix(n, version=2)`, `GLM53_MHC_POST_KERNEL=2`). What changed against v1:
+- `dst_full_sync_en`: the 8-slot fp32 dest holds x_0..x_3, y, the current stream's coefficient tile, the post
+  tile and the output; after each output stream's pack the dest is released WITHOUT clearing
+  (`_llk_pack_dest_section_done_<DST_SYNC_MODE, true, false>`), so the operands are copied once per position.
+- y is read as the bf16 sublayer output (widened on unpack, exact): the typecast op is gone, the post-block is
+  the single generic op.
+- the per-row coefficient broadcast is done once per token-tile by hand-written SFPU code (mask lane k, three
+  subvector rotate-adds, two chains interleaved) into "lane-layout" tiles -- column group m = face m/2, column
+  parity m%2, the 32 datums one SFPU slot load covers -- so the per-position mix is plain slot loads + FMAs
+  (`mhc_sfpu::stream_mix`: per band 5 coefficient loads, 20 data loads, 20 SFPMADs, 4 stores; accumulators in
+  LREGs). The measured Blackhole dest geometry (a slot = 4 rows x the 8 same-parity columns of a face) differs
+  from the "columns 0-7 / 8-15" wording of tt-llk's `ckernel_sfpu_binary_bcast.h`; `_logs/optmhc_probe_v2c.log`
+  is the lane map that settled it, `tests/custom_ops/test_mhc_post_mix.py::expand_x8` the host reference.
+  The lane layout is also the natural output of the fused pre-block (the Sinkhorn coefficients land in it
+  directly, no expansion in the post kernel).
+- phase A (20 FPU column-broadcast datacopies per core) and the reader's column-tile building are gone.
+
+Precision (`tests/custom_ops/test_mhc_post_mix.py`, 32 passed): streams 3.2e-8, collapse 6.2e-8 vs float64;
+real layer-4 streams 3.0e-8 / 1.1e-7 vs the composite chain (streams / collapse); identical with raw
+coefficients (expanded on device), pre-expanded lane-layout tiles, fp32 or bf16 y, and under trace replay.
+
+| what (chip 1, main-tree build, `GLM53_KDA_FUSED=0`) | v1 custom op | v2 custom op |
+|---|---|---|
+| post-block ops per wrap | 2 (typecast + kernel) | 1 |
+| post-block device us per wrap, B=4 | 50 (3 + 47) | 32 |
+| whole wrap ops / device us, B=4 | 15 / 192 | 14 / 173 |
+| one wrap traced, T=32 / T=1024 (`test_mhc_perf.py`) | 0.199 / 2.789 ms | 0.178 / 2.549 ms |
+| layer-4 step wall, B=4 / B=32 | 7.78 / 20.00 ms | 7.75 / 19.95 ms |
+
+(B=32 Tracy: the post-processor dropped an op in this run; the B=4 per-op table is `layer4_B4_cop2/summary.md`.)
+The remaining 32 us at B=4 are ~1 position per core: dispatch, the 4 + 1 + 1 tile reads, the per-token-tile
+expansion on every core (~2 us) and the 4 x (copy + 360-instruction mix + pack); the fused pre-block will hand
+over lane-layout coefficients and the mix is then the floor.
+
+
+## Accuracy gate: the prefill path is now the composite's, op for op (2026-10-20)
+
+The 22-layer gate on the 2x4 block (test_mesh_model -k chain, 128-token prompt) put the composite at chain PCC
+0.965 vs HF with the right first token and the fast path at 0.903 with a wrong one; its decode chain is in the
+chaos regime for every variant, so the prefill (T > 32) path is what mattered. `tests/test_mhc_stages.py` isolates
+it per stage on real layer-4 streams (float64 rel rms; `_logs/optmhc_stages_{old,exact}.md` have T=4 and T=128 for
+both wraps). The old T > 32 path (stream-major n-split projection + `fast_reduce_nc`, broadcast multiply +
+`fast_reduce_nc` for h) vs the composite, hc_attn T=128:
+
+### hc_attn, T=128: rel rms (float64)
+| stage | fast vs wrap | wrap vs f64 | fast vs f64 |
+|---|---|---|---|
+| mixes (Sinkhorn input) | 3.20e-04 | 4.33e-05 | 2.99e-04 |
+| pre | 7.26e-04 | 3.59e-03 | 3.92e-03 |
+| post | 1.00e-03 | 2.97e-03 | 3.49e-03 |
+| comb | 1.14e-03 | 2.48e-03 | 2.48e-03 |
+| h = sum_i pre_i x_i | 1.87e-03 | 6.98e-03 | 7.71e-03 |
+| h vs f64 on own pre | nan | 4.34e-08 | 3.94e-04 |
+| post-block (same coefficients) | 2.16e-08 | 4.97e-08 | 4.98e-08 |
+| normed hidden (bf16 sublayer input) | 2.82e-03 | 3.57e-03 | 3.68e-03 |
+| wrap output (streams), same sublayer | 2.99e-03 | 4.77e-08 | nan |
+
+With `GLM53_MHC_PREFILL_EXACT=1` (default) `_project` calls the composite's `_project` (same `fn_T`, same
+matmul + sum of squares + rsqrt scale) and `_collapse` the composite's `_mix` (multiply + addcmul over stream
+slices) for T > 32, then the same typecast + rms_norm; the post-block stays the exact custom op:
+
+### hc_attn, T=128: rel rms (float64)
+| stage | fast vs wrap | wrap vs f64 | fast vs f64 |
+|---|---|---|---|
+| mixes (Sinkhorn input) | 0.00e+00 | 4.33e-05 | 4.33e-05 |
+| pre | 0.00e+00 | 3.59e-03 | 3.59e-03 |
+| post | 0.00e+00 | 2.97e-03 | 2.97e-03 |
+| comb | 0.00e+00 | 2.48e-03 | 2.48e-03 |
+| h = sum_i pre_i x_i | 0.00e+00 | 6.98e-03 | 6.98e-03 |
+| h vs f64 on own pre | nan | 4.34e-08 | 4.34e-08 |
+| post-block (same coefficients) | 2.16e-08 | 4.97e-08 | 4.98e-08 |
+| normed hidden (bf16 sublayer input) | 0.00e+00 | 3.57e-03 | 3.57e-03 |
+| wrap output (streams), same sublayer | 5.03e-08 | 4.77e-08 | nan |
+
+Two facts behind the gate bar: the composite's fp32 projection is itself 4-6e-5 off float64 (operand rounding
+in the HiFi4 matmul) and the shared Sinkhorn kernel is 5e-4..3.6e-3 off the float64 HF math (pre / post / comb,
+both implementations); an exact custom pre-block lands ~1e-7 from float64 and therefore ~4e-5 from the
+composite, so exact kernels are measured against float64 (<= 1e-6) with the 22-layer chain as the arbiter.
+The decode path (T <= 32) is made exact the same way behind `GLM53_MHC_DECODE_EXACT=1` (default): the K-split
+partials are summed with `ttnn.sum` (SFPU, exact) instead of `fast_reduce_nc`, and h = sum_i pre_i x_i runs
+through the post-mix kernel's pre-mix mode (`MhcPostMix.h_mix`, HMODE: the raw pre tile expanded like a post
+tile, `mhc_sfpu::pre_mix`) followed by the composite's typecast + rms_norm.
+
+
 ## Tests
 
 | test | what |
@@ -250,7 +354,8 @@ collapse), `tests/test_decoder_layer.py` 5 passed, `tests/test_decode_trace.py` 
 | `tests/test_mhc.py::test_mhc_fast_vs_wrap[attn,ffn]` | project / hc_pre / hc_post / forward / forward+fused norm / collapse vs `TtMHCWrap` and vs float64 at T = 1, 2, 32, 256, 1024 on real layer-4 streams and parameters |
 | `tests/test_mhc.py::test_mhc_fast_pad_rows` | the pad-row contract |
 | `tests/test_mhc.py::test_decoder_collapse` | `FunctionalDecoder.decode_forward(collapse=True)` vs the head's collapse of the streams (layer 4, B=2) |
-| `tests/test_mhc_post_mix.py` | the fused post-block kernel vs float64 and vs the composite chain (random + real, both modes, T=32/256) |
+| `tests/custom_ops/test_mhc_post_mix.py` | the fused post-block custom op vs float64 and vs the composite chain (random T=32/256, decode B=1/4/32, trace replay, real streams; both modes; mesh cases behind `GLM53_MESH_TESTS=1`) |
+| `tests/test_mhc_stages.py` | per-stage fast vs composite vs float64 table at T=4 and T=128 (the gate shapes), both wraps |
 | `tests/test_mhc.py::test_mhc_exact_residual` | residual update / collapse of exact = 0, 2, 3 vs the composite on non-bf16-exact fp32 streams (bars 5e-3 / 1e-5 / 1e-6) |
 | `tests/test_mhc_perf.py` | one wrap, traced, T=32 and T=1024, both implementations |
 | `tests/test_perf_layer.py` (`GLM53_PERF_B`, `GLM53_PERF_EAGER=1`) + `tests/perf_layer_report.py` | layer-4 traced decode step, wall and per-module Tracy attribution |
