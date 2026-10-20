@@ -294,6 +294,9 @@ def test_qwenimage_pipeline_performance(
                     value=benchmark_profiler.get_duration(step_name, iteration),
                     target=expected_metrics.get(metric),
                 )
+        benchmark_profiler.start("inference")
+        benchmark_profiler.end("inference")
+        benchmark_data.add_measurement(benchmark_profiler, 0, "inference", "fps", 1.0 / measurements["total_time"])
         dit = config.dit_parallel_config
         benchmark_data.save_partial_run_json(
             benchmark_profiler,
