@@ -21,15 +21,14 @@ struct L1TensorExtent {
     DeviceAddr size;
 };
 
-// owner_index identifies an owner tensor; offset is relative to its extent on this device/core.
+// Absolute address on one selected device/core; the caller owns and validates the backing storage.
 struct L1TensorViewPlacement {
     distributed::MeshCoordinate device_coord;
     CoreCoord core_coord;
-    size_t owner_index;
-    DeviceAddr offset;
+    DeviceAddr address;
 
-    L1TensorViewPlacement(distributed::MeshCoordinate device, CoreCoord core, size_t owner, DeviceAddr offset) :
-        device_coord(std::move(device)), core_coord(core), owner_index(owner), offset(offset) {}
+    L1TensorViewPlacement(distributed::MeshCoordinate device, CoreCoord core, DeviceAddr address) :
+        device_coord(std::move(device)), core_coord(core), address(address) {}
 };
 
 // Ordinary lockstep owners cover every worker core, range-lockstep/per-core owners
@@ -37,15 +36,13 @@ struct L1TensorViewPlacement {
 std::vector<L1TensorExtent> get_l1_tensor_owner_extents(
     const distributed::MeshBuffer& buffer, const std::vector<distributed::MeshCoordinate>& coords);
 
-// Creates no allocations. owner_pin must keep every supplied owner alive; explicit owner
-// deallocation while borrowed is prohibited. Placements cover every shard of each selected device.
+// Creates a non-owning view. The caller must retain backing storage until all uses finish.
+// Placements cover every shard of each selected device; this API cannot validate backing bounds.
 std::shared_ptr<distributed::MeshBuffer> create_l1_tensor_view(
     distributed::MeshDevice& mesh,
     const distributed::MeshBufferConfig& mesh_config,
     const distributed::DeviceLocalBufferConfig& local_config,
-    const std::vector<std::vector<L1TensorExtent>>& owners,
-    const std::vector<L1TensorViewPlacement>& placements,
-    std::shared_ptr<void> owner_pin);
+    const std::vector<L1TensorViewPlacement>& placements);
 
 // Per-core address for a core on a specific device. A per-core-allocated MeshBuffer allocates
 // each device independently, so the address is only defined once a device is named: there is
