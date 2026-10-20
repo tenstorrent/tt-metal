@@ -27,7 +27,10 @@ bool is_plain_interleaved(const tt::tt_metal::MemoryConfig& config) {
 
 bool standard_tile_with_tight_padding(const Tensor& input) {
     const auto& tile = input.tensor_spec().tile();
+    // The writers walk 16x16 faces; a 32x32 tile built with another face shape lays its datums out differently.
+    const auto face = tile.get_face_shape();
     if (tile.get_height() != tt::constants::TILE_HEIGHT || tile.get_width() != tt::constants::TILE_WIDTH ||
+        face[0] != tt::constants::FACE_HEIGHT || face[1] != tt::constants::FACE_WIDTH ||
         tile.get_transpose_of_faces() || tile.get_transpose_within_face()) {
         return false;
     }
