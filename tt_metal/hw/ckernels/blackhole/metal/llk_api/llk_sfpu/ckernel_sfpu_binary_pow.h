@@ -107,7 +107,6 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_21f_(sfpi::vFloat base, sfpi::vFloat
         sfpi::convert<sfpi::vFloat>(sfpi::as<sfpi::vSMag>(sfpi::vInt(0x560e) + zif), sfpi::RoundMode::Nearest);
 
     d2 = d1 * d2;
-    // d2 * d3 is in [2^13, 2^23): the conversion is a right shift.
     sfpi::vFloat d23 = d2 * d3;
     zif = sfpi::exman(d23, sfpi::MantissaMode::ImplicitOne);
     zif = sfpi::shft(zif, sfpi::exexp(d23) - 23, sfpi::ShiftMode::Logical);
@@ -125,13 +124,11 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_21f_(sfpi::vFloat base, sfpi::vFloat
     pow_bits = sfpi::shft(pow_bits, sfpi::exexp(pow_x) + 7, sfpi::ShiftMode::Logical);
     pow_bits = pow_bits + pow_bits;
 
-    // Negative base: the parity bit becomes the sign of y.
     y = sfpi::copysgn(y, sfpi::as<sfpi::vFloat>(pow_bits & sfpi::as<sfpi::vInt>(base)));
 
-    v_if(base < 0.0f) {  // negative base
+    v_if(base < 0.0f) {
         // Check for integer power, if it is not then overwrite result with NaN
-        // The clamp reads zero as 1/2: exclude it.
-        v_if((pow_bits + pow_bits) != 0 && abs_pow != 0.0f) {  // non-integer power: NaN
+        v_if((pow_bits + pow_bits) != 0 && abs_pow != 0.0f) {
             y = std::numeric_limits<float>::quiet_NaN();
         }
         v_endif;
@@ -218,7 +215,6 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_f32_(sfpi::vFloat base, sfpi::vFloat
 
     // Transform to z = (m - 1) / (m + 1)
     sfpi::vFloat m_plus_1 = m + 1.0f;  // t in [1.707, 2.414] since m in [sqrt(2)/2, sqrt(2)]
-    // 1/t: SFPARECIP, then three residual corrections y += y * (1 - t * y).
     sfpi::vFloat recip = sfpi::approx_recip(m_plus_1);
     recip = recip * (1.0f - m_plus_1 * recip) + recip;
     recip = recip * (1.0f - m_plus_1 * recip) + recip;
@@ -287,7 +283,6 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_f32_(sfpi::vFloat base, sfpi::vFloat
     sfpi::vFloat frac = (s - k) + e;
 
     // 2**frac via the accurate exp helper (frac is small), then scale by 2**k.
-    // |frac| stays inside the exp's range here (as in the Quasar copy).
     sfpi::vFloat y = _sfpu_exp_fp32_accurate_unsafe_(frac * LN2);
     // setexp writes the 8-bit exponent field and wraps instead of saturating, so an
     // overflowing magnitude silently becomes a finite value. Detect overflow from the
@@ -310,10 +305,9 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_f32_(sfpi::vFloat base, sfpi::vFloat
     pow_bits = pow_bits + pow_bits;
     y = sfpi::copysgn(y, sfpi::as<sfpi::vFloat>(pow_bits & sfpi::as<sfpi::vInt>(base)));
 
-    v_if(base < 0.0f) {  // negative base
+    v_if(base < 0.0f) {
         // Check for integer power, if it is not then overwrite result with NaN
-        // The clamp reads zero as 1/2, so zero is excluded.
-        v_if((pow_bits + pow_bits) != 0 && abs_pow != 0.0f) {  // non-integer power: NaN
+        v_if((pow_bits + pow_bits) != 0 && abs_pow != 0.0f) {
             y = std::numeric_limits<float>::quiet_NaN();
         }
         v_endif;
