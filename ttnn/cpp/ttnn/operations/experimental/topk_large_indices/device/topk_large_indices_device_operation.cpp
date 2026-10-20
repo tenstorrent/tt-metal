@@ -99,14 +99,19 @@ void validate_runtime_args(const operation_attributes_t& attrs, const tensor_arg
             "topk_large_indices valid_length_tensor must be on the same device as the input");
         TT_FATAL(m.dtype() == DataType::UINT32, "topk_large_indices valid_length_tensor must be UINT32");
         TT_FATAL(m.layout() == Layout::ROW_MAJOR, "topk_large_indices valid_length_tensor must be ROW_MAJOR");
+        const bool per_row = m.logical_volume() != 1;
         TT_FATAL(
-            m.logical_volume() == 1,
-            "topk_large_indices valid_length_tensor must hold exactly 1 element (got {})",
-            m.logical_volume());
+            m.logical_volume() == 1 ||
+                (m.logical_volume() == num_rows && m.logical_shape().rank() == 2 && m.logical_shape()[-1] == 1),
+            "topk_large_indices valid_length_tensor must hold exactly 1 element, or be [rows, 1] = one value per "
+            "input row ({} rows; got shape {})",
+            num_rows,
+            m.logical_shape());
         TT_FATAL(
             m.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
             "topk_large_indices valid_length_tensor must be interleaved (the kernel reads page 0 at a single "
-            "fixed address)");
+            "fixed address, or page `row` per row)");
+        (void)per_row;
         TT_FATAL(
             m.memory_config().buffer_type() == BufferType::DRAM,
             "topk_large_indices valid_length_tensor must be in DRAM");

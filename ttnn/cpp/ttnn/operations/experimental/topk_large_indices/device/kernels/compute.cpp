@@ -250,6 +250,7 @@ void kernel_main() {
     constexpr auto body_mode = static_cast<ComputeBodyMode>(get_compile_time_arg_val(3));
     constexpr bool valid_length_from_metadata = get_compile_time_arg_val(4) != 0;
     constexpr uint32_t meta_cb = get_compile_time_arg_val(5);
+    constexpr bool per_row_metadata = get_compile_time_arg_val(6) != 0;  // one bounds entry per row
 
     static_assert(K == 512 || K == 1024 || K == 2048, "K must be 512, 1024, or 2048");
     static_assert(
@@ -263,15 +264,18 @@ void kernel_main() {
     compute_kernel_hw_startup(input_cb, indices_cb);
     pack_untilize_dest_init<tiles_per_sequence, tiles_per_sequence>(indices_cb);
 
-    uint32_t num_chunks;
-    uint32_t tail_elements;
-    if constexpr (valid_length_from_metadata) {
-        CircularBuffer meta_cb_obj(meta_cb);
+    uint32_t num_chunks = 0;
+    uint32_t tail_elements = 0;
+    CircularBuffer meta_cb_obj(valid_length_from_metadata ? meta_cb : input_cb);
+    auto pop_bounds = [&]() {
         meta_cb_obj.wait_front(1);
         num_chunks = ckernel::read_tile_value(meta_cb, 0, topk_metadata_num_chunks_word);
         tail_elements = ckernel::read_tile_value(meta_cb, 0, topk_metadata_tail_elements_word);
         meta_cb_obj.pop_front(1);
-    } else {
+    };
+    if constexpr (valid_length_from_metadata && !per_row_metadata) {
+        pop_bounds();
+    } else if constexpr (!valid_length_from_metadata) {
         const auto bounds = calculate_topk_bounds(search_len, K);
         num_chunks = bounds.num_chunks;
         tail_elements = bounds.tail_elements;
@@ -281,6 +285,9 @@ void kernel_main() {
     CircularBuffer indices(indices_cb);
 
     for (uint32_t row = 0; row < num_rows; ++row) {
+        if constexpr (valid_length_from_metadata && per_row_metadata) {
+            pop_bounds();  // this row's bounds, pushed by the reader before its chunks
+        }
         tile_regs_acquire();
 
         if constexpr (body_mode == ComputeBodyMode::FusedSegmented) {

@@ -40,6 +40,7 @@ from models.demos.glm53_flash.tt.config import GLM53FlashConfig
 
 TILE = 32
 SENTINEL = 0xFFFFFFFF
+DECODE_SCORE_SLACK = 8  # pools per user hidden by the traced decode scorer's fixed chunk start (TILE // index_kpool)
 
 
 def _upload(device, t: torch.Tensor, dtype, layout=ttnn.TILE_LAYOUT):
@@ -72,15 +73,41 @@ def height_shard_rows(device, rows: ttnn.Tensor) -> ttnn.Tensor:
 
 
 class TtIndexCache:
-    """Per-layer pooled-key cache + raw rings for ``max_batch`` users."""
+    """Per-layer pooled-key cache + raw rings for ``max_batch`` slots.
 
-    def __init__(self, device, cfg: GLM53FlashConfig, *, max_batch: int, max_seq_len: int):
+    User-partitioned layout (``scratch`` set, see doc/mesh/sparse_1m.md section 3): the chip holds
+    ``users_per_chip`` local users in slots ``[0, users_per_chip)`` plus the prefill scratch slot ``scratch``
+    (= ``max_batch - 1``). Decode writes the local slots (page-table views of the first ``users_per_chip``
+    rows); prefill writes the scratch slot on every column chip and, on the owner column, the user's slot
+    (per-user sharded page tables), and reads the scratch slot everywhere."""
+
+    def __init__(
+        self,
+        device,
+        cfg: GLM53FlashConfig,
+        *,
+        max_batch: int,
+        max_seq_len: int,
+        mesh=None,
+        users_per_chip: int | None = None,
+        scratch: int | None = None,
+    ):
         self.device = device
+        self.mesh = mesh
         self.D = cfg.index_head_dim
         self.P = cfg.index_kpool
         self.max_batch = max_batch
+        self.partition = scratch is not None
+        self.users_per_chip = max_batch if users_per_chip is None else users_per_chip
+        self.scratch = scratch
         pools = -(-max_seq_len // self.P)
-        self.pools_per_user = -(-pools // TILE) * TILE  # tile-aligned rows per user
+        # tile-aligned rows per user, plus DECODE_SCORE_SLACK pools the traced decode scorer can never select:
+        # it scores with a fixed chunk start in the last 32-token block of the allocation (see
+        # TtDSAIndexer.score_decode_row), under which the final 8 pools of the row are causally hidden; and at
+        # least index_select_pools visible pools, the width the decode top-k ranks for every user (a short
+        # allocation then holds 544 pool rows = 136 KB per user)
+        pools = max(pools, cfg.index_select_pools)
+        self.pools_per_user = -(-(pools + DECODE_SCORE_SLACK) // TILE) * TILE
         self.pool_blocks = self.pools_per_user // TILE
         self.pool_cache = ttnn.zeros(
             (max_batch * self.pool_blocks, 1, TILE, self.D),
@@ -109,6 +136,63 @@ class TtIndexCache:
         rm = lambda t: ttnn.from_torch(t, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
         self._slot_ids = [rm(torch.tensor([j], dtype=torch.int32)) for j in range(self.P)]
         self._user_pts = [rm(torch.tensor([[u]], dtype=torch.int32)) for u in range(max_batch)]
+        # decode page-table views: the paged ops pair batch entry b with page-table row b, so a decode of the
+        # users_per_chip local users needs tables of exactly that many rows (the scratch slot is left out)
+        B = self.users_per_chip
+        if self.partition:
+            self._decode_pt = ttnn.slice(self.page_table, [0, 0], [B, self.pool_blocks])
+            self._decode_ring_pt = ttnn.slice(self.ring_page_table, [0, 0], [B, 1])
+        else:
+            self._decode_pt, self._decode_ring_pt = self.page_table, self.ring_page_table
+        self._prefill_views: dict[tuple, ttnn.Tensor] = {}
+
+    # ------------------------------------------------------ user-partitioned prefill
+    def prefill_slot(self, user: int) -> int:
+        """The slot every column chip READS during the prefill of ``user`` (the scratch slot when partitioned)."""
+        return self.scratch if self.partition else user
+
+    def _owner_rows(self, user: int, table_host: torch.Tensor) -> torch.Tensor:
+        """[cols, W] host rows: row c = the user's slot row of ``table_host`` on its owner column, the scratch row elsewhere."""
+        cols = self.mesh.cols
+        owner, slot = user // self.users_per_chip, user % self.users_per_chip
+        return torch.stack([table_host[slot] if c == owner else table_host[self.scratch] for c in range(cols)])
+
+    def prefill_pool_views(self, user: int) -> list[ttnn.Tensor]:
+        """Page-table views ([1, pool_blocks], batch_idx 0) a prefill of ``user`` fills: its own row when not
+        partitioned; partitioned: the per-chip owner/scratch row and the (replicated) scratch row."""
+        key = ("pools", user)
+        if not self.partition:
+            if key not in self._prefill_views:
+                self._prefill_views[key] = self._pool_table_row(user)
+            return [self._prefill_views[key]]
+        if key not in self._prefill_views:
+            pt = torch.arange(self.max_batch * self.pool_blocks, dtype=torch.int32).reshape(
+                self.max_batch, self.pool_blocks
+            )
+            self._prefill_views[key] = self.mesh.upload(
+                self._owner_rows(user, pt), ttnn.int32, cols=0, layout=ttnn.ROW_MAJOR_LAYOUT
+            )
+            if ("pools", "scratch") not in self._prefill_views:
+                self._prefill_views[("pools", "scratch")] = self.mesh.upload(
+                    pt[self.scratch : self.scratch + 1], ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT
+                )
+        return [self._prefill_views[key], self._prefill_views[("pools", "scratch")]]
+
+    def _pool_table_row(self, user: int) -> ttnn.Tensor:
+        """[1, pool_blocks] row ``user`` of the identity pool page table (a device slice, cached by the caller)."""
+        return ttnn.slice(self.page_table, [user, 0], [user + 1, self.pool_blocks])
+
+    def prefill_ring_tables(self, user: int) -> list[ttnn.Tensor]:
+        """[1, 1] ring page tables a prefill tail write of ``user`` goes to (owner/scratch per chip + scratch)."""
+        if not self.partition:
+            return [self._user_pts[user]]
+        key = ("ring", user)
+        if key not in self._prefill_views:
+            ids = torch.arange(self.max_batch, dtype=torch.int32).reshape(self.max_batch, 1)
+            self._prefill_views[key] = self.mesh.upload(
+                self._owner_rows(user, ids), ttnn.int32, cols=0, layout=ttnn.ROW_MAJOR_LAYOUT
+            )
+        return [self._prefill_views[key], self._user_pts[self.scratch]]
 
     def pools_batched(self) -> ttnn.Tensor:
         """[max_batch, 1, pools_per_user, D] view for scoring (taken after the latest writes)."""
@@ -122,7 +206,9 @@ class TtIndexCache:
         n = pooled.shape[-2]
         b0, r0 = start_pool // TILE, start_pool % TILE
         if r0:
-            blk = user * self.pool_blocks + b0  # identity page table: user u's pool blocks are contiguous
+            blk = (
+                self.prefill_slot(user) * self.pool_blocks + b0
+            )  # identity page table: a slot's pool blocks are contiguous
             prefix = ttnn.reshape(
                 ttnn.slice(self.pool_cache, [blk, 0, 0, 0], [blk + 1, 1, r0, self.D]), [1, 1, r0, self.D]
             )
@@ -132,19 +218,21 @@ class TtIndexCache:
         n_pad = -(-n // TILE) * TILE
         if n_pad != n:
             pooled = ttnn.pad(pooled, [(0, 0), (0, 0), (0, n_pad - n), (0, 0)], value=0.0)
-        if b0 == 0:
+        if b0 == 0 and not self.partition:
             ttnn.experimental.paged_fill_cache(self.pool_cache, pooled, self.page_table, batch_idx=user)
         else:
-            # page-table view of this user's blocks from b0 on (a device slice: no host upload in the pass)
-            view = ttnn.slice(self.page_table, [user, b0], [user + 1, self.pool_blocks])
-            ttnn.experimental.paged_fill_cache(self.pool_cache, pooled, view, batch_idx=0)
-            ttnn.deallocate(view)
+            # page-table view(s) of the target slot's blocks from b0 on (device slices: no host upload in the pass)
+            for full in self.prefill_pool_views(user):
+                view = full if b0 == 0 else ttnn.slice(full, [0, b0], [1, self.pool_blocks])
+                ttnn.experimental.paged_fill_cache(self.pool_cache, pooled, view, batch_idx=0)
+                if view is not full:
+                    ttnn.deallocate(view)
 
     def update_pools(self, pooled_rows: ttnn.Tensor, pool_ids: ttnn.Tensor):
         """pooled_rows [1,B,1,D] (one row per user slot), pool_ids [B] int32 -> pool rows (all users)."""
         sh = height_shard_rows(self.device, pooled_rows)
         ttnn.experimental.paged_update_cache(
-            self.pool_cache, sh, update_idxs_tensor=pool_ids, page_table=self.page_table
+            self.pool_cache, sh, update_idxs_tensor=pool_ids, page_table=self._decode_pt
         )
         ttnn.deallocate(sh)
 
@@ -153,15 +241,15 @@ class TtIndexCache:
     ):
         """k_rows/g_rows [1,N,1,D] bf16, slots [N] int32 (position % P). Row n goes to ring block
         ``page_table[n, 0]`` (default: user n), row ``slots[n]``."""
-        pt = self.ring_page_table if page_table is None else page_table
+        pt = self._decode_ring_pt if page_table is None else page_table
         for ring, rows in ((self.ring_k, k_rows), (self.ring_g, g_rows)):
             sh = height_shard_rows(self.device, rows)
             ttnn.experimental.paged_update_cache(ring, sh, update_idxs_tensor=slots, page_table=pt)
             ttnn.deallocate(sh)
 
     def rings(self) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        """Rows 0..P-1 of every user's rings: ([B,1,P,D], [B,1,P,D])."""
-        B = self.max_batch
+        """Rows 0..P-1 of every decode user's rings: ([B,1,P,D], [B,1,P,D]), B = the local users."""
+        B = self.users_per_chip
         return (
             ttnn.slice(self.ring_k, [0, 0, 0, 0], [B, 1, self.P, self.D]),
             ttnn.slice(self.ring_g, [0, 0, 0, 0], [B, 1, self.P, self.D]),
@@ -263,8 +351,9 @@ class TtDSAIndexer(LightweightModule):
             return
         if r:
             # complete the straddling pool start // P from the ring rows [0, r) + the chunk rows [0, lead)
-            rk = ttnn.reshape(ttnn.slice(cache.ring_k, [user, 0, 0, 0], [user + 1, 1, r, D]), [1, 1, r, D])
-            rg = ttnn.reshape(ttnn.slice(cache.ring_g, [user, 0, 0, 0], [user + 1, 1, r, D]), [1, 1, r, D])
+            s_ = cache.prefill_slot(user)
+            rk = ttnn.reshape(ttnn.slice(cache.ring_k, [s_, 0, 0, 0], [s_ + 1, 1, r, D]), [1, 1, r, D])
+            rg = ttnn.reshape(ttnn.slice(cache.ring_g, [s_, 0, 0, 0], [s_ + 1, 1, r, D]), [1, 1, r, D])
             kp = ttnn.concat([rk, ttnn.slice(k_idx, [0, 0, 0, 0], [1, 1, lead, D])], dim=-2)
             gp = ttnn.concat([rg, ttnn.slice(g_idx, [0, 0, 0, 0], [1, 1, lead, D])], dim=-2)
             pools.append(self.pool(kp, gp))  # [1,1,1,D]
@@ -301,7 +390,8 @@ class TtDSAIndexer(LightweightModule):
             row = row0 + j
             k_row = ttnn.reshape(ttnn.slice(k_idx, [0, 0, row, 0], [1, 1, row + 1, D]), [1, 1, 1, D])
             g_row = ttnn.reshape(ttnn.slice(g_idx, [0, 0, row, 0], [1, 1, row + 1, D]), [1, 1, 1, D])
-            cache.write_ring_rows(k_row, g_row, cache._slot_ids[slot0 + j], page_table=cache._user_pts[user])
+            for pt in cache.prefill_ring_tables(user):
+                cache.write_ring_rows(k_row, g_row, cache._slot_ids[slot0 + j], page_table=pt)
 
     def maintain_decode(
         self, x: ttnn.Tensor, cache: TtIndexCache, pool_ids: ttnn.Tensor, ring_slots: ttnn.Tensor, kg=None
@@ -310,11 +400,12 @@ class TtDSAIndexer(LightweightModule):
         ring_slots = a % P ([B] int32 device tensors). Writes the ring rows, then pool a // P.
         ``kg = (k_raw, g)``: the raw (un-normed) key and gate projections [1,1,B,D] when the caller's
         fused stem already computed them (the k LayerNorm is applied here)."""
-        B = x.shape[-2]
         if kg is None:
+            B = x.shape[-2]
             k_idx, g_idx = self.keys_and_gates(x)  # [1,1,B,D]
         else:
             k_raw, g_idx = kg
+            B = k_raw.shape[-2]
             k_idx = ttnn.layer_norm(
                 k_raw, weight=self.knorm_w, bias=self.knorm_b, epsilon=1e-6, compute_kernel_config=self.fp32
             )
@@ -417,6 +508,48 @@ class TtDSAIndexer(LightweightModule):
                 ttnn.deallocate(t)
         self._mark("ids_concat")
         return idx
+
+    # ------------------------------------------------- traced multi-user decode
+    def decode_chunk_start(self, cache: TtIndexCache) -> int:
+        """The fixed chunk start of the traced decode scorer: the last 32-token block of the user's pool
+        allocation. ``indexer_score_dsa`` masks pool t for query row s iff t >= floor((start + s + 1) / P), so
+        row 0 sees every pool below ``pools_per_user - 8``: the kernel's causal mask is thereby disabled and
+        the per-user causal bound (the user's complete pools) is applied by ``select_decode_pools`` instead.
+        A constant per cache geometry, so the captured program keeps it across replays."""
+        return cache.pools_per_user * self.P - TILE
+
+    def score_decode_row(
+        self, q_block: ttnn.Tensor, w_block: ttnn.Tensor, cache: TtIndexCache, user: int
+    ) -> ttnn.Tensor:
+        """Pool scores of ONE decode query against ``user``'s pooled keys, trace-safe: ``q_block`` [1,Hi,32,D]
+        and ``w_block`` [1,1,32,Hi] bf16 TILE carry the query in ROW 0 (the other rows are scored and
+        dropped); returns [1,1,1,pools_per_user] bf16 ROW_MAJOR with every pool below the slack visible
+        (finite): the user's incomplete / not yet written pools score against their current (finite)
+        content and are excluded by the top-k's valid length, never by this op."""
+        W = cache.pools_per_user
+        scores = ttnn.experimental.indexer_score_dsa(
+            q_block,
+            cache.pools_batched(),
+            w_block,
+            chunk_start_idx=self.decode_chunk_start(cache),
+            key_compression_ratio=self.P,
+            program_config=self.score_cfg,
+            cache_batch_idx=user,
+            kv_len=W,
+            seq_shard_axes=[0],
+        )  # [1,1,32,W] bf16 row-major
+        row = ttnn.slice(scores, [0, 0, 0, 0], [1, 1, 1, W])
+        ttnn.deallocate(scores)
+        return row
+
+    def select_decode_pools(self, score_row: ttnn.Tensor, valid_len: ttnn.Tensor) -> ttnn.Tensor:
+        """Top ``index_select_pools`` pool ids (descending score) of the [B,1,1,W] score rows over their first
+        ``valid_len`` columns: a 1-element uint32 device tensor (one bound for every row) or a [B, 1] tensor
+        (one bound per row), read at dispatch (the users' complete pools, trace-replay safe). Returns
+        [B,1,1,512] uint32 ROW_MAJOR."""
+        return ttnn.experimental.topk_large_indices(
+            score_row, k=self.cfg.index_select_pools, valid_length_tensor=valid_len
+        )
 
     def _pool_offsets(self, T: int) -> ttnn.Tensor:
         """fp32 [1,1,T,index_topk] of the in-pool offsets 0..P-1 repeated (cached per T)."""

@@ -241,6 +241,28 @@ class GLMMesh:
             kw["num_links"] = num_links
         return kw
 
+    def partition_cols(self, x: ttnn.Tensor, dim: int) -> ttnn.Tensor:
+        """Each column chip keeps its own ``1/cols`` slice of ``dim`` of a column-replicated tensor (a per-device
+        slice, no fabric traffic): the user-partitioned DSA cache's "my users" of a row-wide activation."""
+        if self.cols == 1:
+            return x
+        return ttnn.mesh_partition(x, dim, cluster_axis=TP_AXIS)
+
+    def all_to_all_cols(self, x: ttnn.Tensor, in_dim: int, out_dim: int, *, memory_config=None) -> ttnn.Tensor:
+        """Redistribute over the row's columns: ``in_dim`` is split into ``cols`` chunks (chunk c goes to column
+        c) and the received chunks are concatenated along ``out_dim`` (heads <-> users before / after the
+        user-partitioned attention, as DeepSeek-V3's decode does)."""
+        if self.cols == 1:
+            return x
+        return ttnn.experimental.all_to_all_async_generic(
+            x,
+            in_dim=in_dim,
+            out_dim=out_dim,
+            num_links=self.ccl.get_num_links(TP_AXIS),
+            memory_config=memory_config or ttnn.DRAM_MEMORY_CONFIG,
+            cluster_axis=TP_AXIS,
+        )
+
     def all_reduce_cols(self, x: ttnn.Tensor, *, memory_config=None, num_links=None) -> ttnn.Tensor:
         """Sum the TP partials of a row; result replicated over the row's columns."""
         if self.cols == 1:

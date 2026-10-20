@@ -74,6 +74,7 @@
 #include "ttnn/operations/experimental/deepseek/moe/moe_gate_mm/moe_gate_mm_nanobind.hpp"
 #include "ttnn/operations/experimental/topk_router_gpt/topk_router_gpt_nanobind.hpp"
 #include "ttnn/operations/experimental/topk_large_indices/topk_large_indices_nanobind.hpp"
+#include "ttnn/operations/experimental/paged_pool_gather/paged_pool_gather_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek/mla/matmul_wo/matmul_wo_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek/moe/deepseek_moe_gate/deepseek_moe_gate_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek/moe/generalized_moe_gate/generalized_moe_gate_nanobind.hpp"
@@ -223,6 +224,7 @@ void py_module(nb::module_& mod) {
     deepseek::moe::detail::bind_deepseek_moe_gate(mod);
     deepseek::moe::detail::bind_generalized_moe_gate(mod);
     topk_large_indices::detail::bind_topk_large_indices(mod);
+    paged_pool_gather::detail::bind_paged_pool_gather(mod);
     topk_router_gpt::detail::bind_topk_router_gpt(mod);
     deepseek::mla::detail::bind_matmul_wo(mod);
     indexer_score::detail::bind_indexer_score(mod);
