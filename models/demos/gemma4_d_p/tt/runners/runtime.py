@@ -120,8 +120,9 @@ class Gemma4PrefillRuntime:
             raise ValueError("Chunk start must be a nonnegative multiple of 8192")
         if not actual_start < actual_end <= min(actual_start + self.config.chunk_size, self.config.max_seq_len):
             raise ValueError("Chunk must contain 1 to 8192 real tokens within the 256K context")
-        if actual_start != 0 and actual_start != self.slot_ends[slot_id]:
-            raise ValueError(f"Slot {slot_id} expects position {self.slot_ends[slot_id]}, got {actual_start}")
+        # Prefix reuse may replay an aligned chunk within the slot's computed prefix.
+        if actual_start > self.slot_ends[slot_id]:
+            raise ValueError(f"Slot {slot_id} has KV through {self.slot_ends[slot_id]}, cannot start at {actual_start}")
 
     def prefill_chunk(
         self,
