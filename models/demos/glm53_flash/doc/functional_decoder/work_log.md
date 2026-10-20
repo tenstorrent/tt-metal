@@ -183,7 +183,7 @@ prefill at S = 1, 2, 3, 31, 33 (short-S control); sparse-path determinism.
   0.9999); random prompt 4097 0.99994 (rows<2048 0.99988, >=2048 0.99986; per position%4 all >= 0.9998), selection ids
   98-99 % common with contiguous rows, pool cache 0.999994; transition 2040..2063 both users >= 0.9995; 16K 0.99983
   (0.99988 / 0.99980); traced + two users (layer 3) unchanged; 8 users (layer 3) worst 0.99938; tails 2/3 (R2042/R2043):
-  prefill 0.99987/0.99990, 12 decode steps >= 0.9978, pool cache 0.999994 (worst row 0.99999).
+  prefill 0.99987/0.99990, 12 decode steps >= 0.99978, pool cache 0.999994 (worst row 0.99999).
 - Checkpoint: local `arg/glm53_flash` @ 4cd5f8fe829 (code + docs), upstream `origin/arg/glm-53-flash` @ 3ae53bf70ee.
   Running: full logged sweep (`_logs/sweep2_*.log`), watcher re-runs (`watcher2_*`), layer-3 decode perf re-collection.
 - Open design item carried into the next round (reviewer "other concern", design Phase-1 row: "chunked prefill"):
@@ -202,3 +202,61 @@ prefill at S = 1, 2, 3, 31, 33 (short-S control); sparse-path determinism.
 - layer3_dsa_moe traced decode re-profiled on the new decode path (dense flash-MLA for every slot + index maintenance, B=1, pos 1024,
   one replay, seed-only; wall 11.31 ms/step): 435 ops, 10.87 ms device per step, duplicate ids 0; top op classes: AccumulationDeviceOperation 2.64 ms x8, MatmulDeviceOperation 1.66 ms x13, UnaryDeviceOperation 1.42 ms x12, SparseMatmulDeviceOperation 1.11 ms x2, BinaryNgDeviceOperation 0.95 ms x92, TernaryDeviceOperation 0.62 ms x38.
   README decode row: layer 3 10.87 ms/step device (435 ops)
+
+## 2026-10-20: stage review 3 -> fixes (closure)
+
+Third independent review: `more-work-needed`, no P1, five P2 items. All runs on chip 0, logs `_logs/fix3_*.log`;
+the host carried a load average of 60-110 on 64 cores from other sessions' CPU jobs throughout (it stretched the HF
+references 3-7x, caused one 300 s pytest-timeout on the first batch attempt, and is the caveat on the wall number).
+
+- P2-1 stale contract text. `tt/functional_decoder.py` (module + `capture_decode_trace` docstrings), the README contract
+  rows and the `tt/dsa.py` module row now state what the code does: dense flash-MLA for every slot (HF-exact through
+  position 2050 = index_topk + index_kpool - 2, `dense_exact_max_pos`), per-user row overwrite for users at position
+  > 2050 (eager, host geometry), capture refused for max_seq_len > 2051 unless `allow_sparse_range`; no batch-wide
+  switch at 2047/2048 anywhere. `tt/moe.py` names the exact fp32 composite `TtRouter.forward` (not `moe_grouped_topk`),
+  `tt/config.py` refers to the Phase-2 mesh module (no `tt/mesh.py` created), `tests/test_decode_trace.py` docstring
+  rewritten, `tests/test_dsa_long.py` docstring: the switch is at 2051. `context_contract.json` mode_switch /
+  traced_decode were already right and are unchanged.
+- P2-2 numbers. (a) layer-3 warmed prefill re-measured once at 5c5122ccf3a + these fixes (plain pytest, no tracy):
+  `_logs/fix3_perf_layer3_prefill.log` "layer 3 (DSA+MoE) warmed prefill S=1024: 325.7 ms wall (3144 tok/s)"; the
+  314 ms README value predates eca757b2ffc/4cd5f8fe829 (prefill index maintenance added since; host load caveat
+  above). The layer-4 row is annotated: its 297.8 ms wall predates the cached-scalars fix 4cd5f8fe829, its device-time
+  table (293.4 ms, 1002 ops) is unaffected. (b) tails 2/3 from `_logs/sweep2_test_dsa_long.log`: "layer 3 dense
+  prefill S=2042 (tail 2): pcc 0.999871", "S=2043 (tail 3): pcc 0.999895", lowest decode "decode pos 2050 (tail 3):
+  pcc 0.999783" -> README, contract decode_evidence and the review-2 section above now say 0.99987 / 0.99990 and
+  >= 0.99978 (the ">= 0.9978" was a transcription error). (c) contract decode_evidence names both 8-user worsts:
+  0.99938 (layer 3) and 0.999363 (`_logs/sweep2_test_batch8.log` "layer 4 ... decode step 0: worst per-user pcc over
+  8 users 0.999363").
+- P2-3 single-chip capacity. `hard_limit_note` and README Known limits are two-part now. (i) decode at 1 M positions
+  for one user is not capacity-bound: 11 x 1,048,576 x 512 x 2 B = 11 GiB latent + pooled keys at 64 B/token (a [128]
+  bf16 row per 4 tokens; the old note's 32 B/token was wrong) = 0.69 GiB. (ii) single-shot prefill is: counted from
+  `tt/dsa.py::prefill_forward` + `tt/indexer.py::select` + ttnn `repeat_interleave.cpp` (last-dim repeat = transpose,
+  4x concat, transpose back), 22 * S * W bytes are live at that point (S = T - 2048, W = pools_per_user ~ T/4) plus
+  ~134 KiB/row of linear tensors; DRAM measured by the new `_log_dram` line of `test_perf_layer.py`: "8 banks x
+  3.979 GiB = 31.83 GiB allocatable, 7.35 GiB allocated, 24.48 GiB free" after the layer-3 build -> largest single-shot
+  T = 58368 (peak 24.4 GiB; computed, not validated; 16385 stays the validated point: 1.21 GiB quadratic, 3.35 GiB
+  peak, so the old "~0.5 GB at 16K" understated it); chunked prefill (other branch) removes the bound.
+- P2-4 batch 32. `tests/test_batch8.py` parametrized over B: 8 unchanged (lengths, offsets, 3 steps), 32 = lengths
+  1..200 mixed at offsets 90*u, 2 steps, max_seq_len 256; `@pytest.mark.timeout(3000)`; per-row stats logged; every
+  per-user sample held to 0.995 with the assertion deferred to the end (one short-prompt sample cannot hide the
+  decode evidence). `_decode_sdpa_config(32)` -> grid (12,10) = 120 cores; the op splits 3 cores/user (96 active,
+  2 tree-reduction rounds) and runs. `_logs/fix3_batch8_B32-4.log`: "layer 4 B=32 decode step 0: worst per-user pcc
+  over 32 users 0.999698", "step 1: ... 0.999944", PASSED (87 s). `_logs/fix3_batch8_B32-3.log`: "layer 3 B=32
+  decode step 0: worst per-user pcc over 32 users 0.997380", "step 1: ... 0.999489" (all 64 decode samples above the
+  bar) but FAILED on "user 18 prefill S=5 (offset 1620): pcc 0.994797  per-row pcc min 0.98025 p5 0.98383 median
+  0.99992 rows<0.997 1/5". `_logs/fix3_batch8_B8.log`: 2 passed, 0.999377 / 0.999363 as in sweep2. First attempt
+  `_logs/fix3_batch8_run1.log`: same user-18 failure plus a 300 s pytest-timeout on B=32 layer 4 under the host load.
+  Root cause of the sub-bar sample (`_logs/fix3_router_flip_user18.log`, HF 8th/9th biased-score gaps + the TT
+  router's indices captured on device): every low row is HF's 8th routed expert swapped for its 9th on a near tie:
+  "row 4: pcc 0.980249  gap(8th-9th) 2.95e-03  experts HF-only [188] TT-only [266] (9th by HF = 266)", "row 1: pcc
+  0.998170  gap(8th-9th) 2.78e-04  experts HF-only [210] TT-only [72]", the B=8 1-token user "row 0: pcc 0.996787
+  gap(8th-9th) 1.35e-03  experts HF-only [14] TT-only [260]"; rows with identical sets are at 0.9999. The gap is
+  < 1e-3 for 18 % and < 3e-3 for 39 % of tokens (512-token prompt), so swaps are common but mostly cheap; 21/2542 rows
+  < 0.997 over the 32 prompts. The 0.995 bar is kept: the B=32 layer-3 case is red on this draw and recorded in the
+  contract (`batch`, new capability_reductions item) and the README Known limits.
+- P2-5 index inside the traced graph. `tests/test_decode_trace.py::_check_index_after_replays` (DSA layer): after the
+  4 replays, all 65 complete pools and the 4 ring rows (positions 256..259) vs a host recomputation over the T256
+  prefill + decode inputs (`tests/utils.py`: `hf_index_stems` / `hf_pool` / `attention_input` / `per_row_stats`, moved
+  out of test_dsa_long). `_logs/fix3_decode_trace.log`: "index after the replays: 65 complete pools vs host pcc
+  0.999997 (worst row 0.99999); ring rows (positions [256, 257, 258, 259]) k 0.999994 gate 0.999995", 5 passed.
+- Commits (not pushed): code + tests in 8d70c106168, docs in the following commit (this note).
