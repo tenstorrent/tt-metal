@@ -36,17 +36,19 @@ The device sampler covers top_k 1..32. Requests it cannot serve (the model card'
 penalties, logprobs, structured outputs) and prefill steps with an intermediate chunk sample
 on the host; `MUSE_VLLM_ALLOW_HOST_SAMPLING=0` refuses them instead.
 
-## Results (CI, 32-slot server)
+## Results (CI release run, 32-slot server, vllm-tt-plugin main)
 
 | Point | TTFT | Decode |
 |---|---|---|
-| 1 user, 128/128 | 64 ms | 20.9 ms/token |
-| 32 users, 128/128 | 0.9 s | 930 tok/s total |
-| 1 user, 4096/128 | 0.8 s | 22.9 ms/token |
-| 1 user, 65536/128 | 59.5 s | 36.3 ms/token |
+| 1 user, 128/128 | 85 ms | 17.2 ms/token |
+| 32 users, 128/128 | 0.94 s | 996 tok/s total |
+| 1 user, 4096/128 | 1.4 s | 19.2 ms/token |
+| 1 user, 32768/128 | 22.6 s | 25.5 ms/token |
+| 1 user, 65536/128 | 70.2 s | 32.6 ms/token |
 
-AIME 2026 90.0 (30 problems, 64K budget; card 94.7), GPQA Diamond 82.5 (80 questions;
-card 83.5, GPU reference 82.83), SWE-bench Verified 5/10, Terminal-Bench 2.1 3/10.
+AIME 2026 93.3 (30 problems, 64K budget; card 94.7), GPQA Diamond 83.75 (80 questions;
+card 83.5, GPU reference 82.83), SWE-bench Verified 6/10, Terminal-Bench 2.1 2/10.
+Long-prompt prefill (~1.3-1.5K tok/s, prefix caching off) is the main performance gap.
 
 ## Test
 
