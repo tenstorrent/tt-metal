@@ -1,12 +1,12 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// LOCAL horizon_x2 spike (not for upstream): a kernel on one chip writes to another chip's Tensix
-// L1 through that chip's flat address (UMD TTDevice::get_flat_address), and the host checks that it
-// landed there and not on the writer's own chip. Needs a horizon_x2 run dir with both chips visible
-// (TT_VISIBLE_DEVICES unset), TT_UMD_NOC_ATT=horizon_x2, TT_METAL_NOC_ATT=horizon_2x3, and ATT
-// tables with the cross-chip tile routes (tt-umd-simulators emu/horizon_x2/horizon_x2_att.yaml).
+// A kernel on one chip writes to another chip's Tensix L1 through that chip's flat address (UMD
+// TTDevice::get_flat_address), and the host checks that it landed there and not on the writer's own chip. Needs a
+// horizon_x2 run dir with both chips visible (TT_VISIBLE_DEVICES unset), TT_UMD_NOC_ATT=horizon_x2,
+// TT_METAL_NOC_ATT=horizon_2x3, and ATT tables with the cross-chip tile routes (tt-umd-simulators
+// emu/horizon_x2/horizon_x2_att.yaml).
 
 #include "common/device_fixture.hpp"
 #include "context/metal_context.hpp"
@@ -15,10 +15,12 @@
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
-#include <umd/device/tt_device/tt_device.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
+#include <tt-umd/tt_device/tt_device.hpp>
 
 #include <cstdint>
 #include <cstdlib>
+#include <filesystem>
 #include <iostream>
 #include <vector>
 
@@ -41,6 +43,7 @@ std::shared_ptr<distributed::MeshBuffer> flat_write_l1_buffer(distributed::MeshD
         .page_size = FLAT_WRITE_BYTES,
         .buffer_type = BufferType::L1,
         .sharding_args = BufferShardingArgs(shard_spec, TensorMemoryLayout::HEIGHT_SHARDED),
+        .bottom_up = true,
     };
     return distributed::MeshBuffer::create(distributed::ReplicatedBufferConfig{.size = FLAT_WRITE_BYTES}, local_cfg, &device);
 }
@@ -86,10 +89,11 @@ void expect_flat_write_lands(
     const experimental::NodeCoord node{0, 0};
     const experimental::KernelSpecName KERNEL{"flat_write"};
     experimental::ProgramSpec spec{
-        .name = "flat_address_write",
+        .name = "horizon_x2_flat_address_write",
         .kernels = {experimental::KernelSpec{
             .unique_id = KERNEL,
-            .source = OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/flat_address_write.cpp",
+            .source = OVERRIDE_KERNEL_PREFIX
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/horizon_x2_flat_address_write.cpp",
             .num_threads = 1,
             .runtime_arg_schema = {.runtime_arg_names = {"src", "dst_lo", "dst_hi", "size", "posted"}},
             .hw_config = experimental::DataMovementHardwareConfig{},
@@ -131,30 +135,58 @@ void expect_flat_write_lands(
 }
 
 bool flat_write_two_chips() {
-    return std::getenv("TT_METAL_SIMULATOR") != nullptr &&
-           MetalContext::instance().get_cluster().number_of_devices() >= 2;
+    const auto& cluster = MetalContext::instance().get_cluster();
+    bool is_horizon = cluster.arch() == tt::ARCH::QUASAR &&
+                      cluster.get_soc_desc(0).get_arch_descriptor().get_ip_variant() == tt::IpVariant::HORIZON;
+    return is_horizon && std::getenv("TT_METAL_SIMULATOR") != nullptr && cluster.number_of_devices() >= 2;
 }
+
+// Sets the horizon_x2 chip mapping so get_fabric_node_id_from_physical_chip_id resolves
+// chips 0 and 1. Required because Horizon x2 has no Ethernet links and auto-discovery
+// maps nothing. Does NOT set FABRIC_1D — flat-address writes bypass the fabric router.
+class HorizonX2FlatWriteFixture : public QuasarMeshDeviceSingleCardFixture {
+protected:
+    void SetUp() override {
+        if (!flat_write_two_chips()) {
+            GTEST_SKIP() << "needs a horizon_x2 build with both chips visible";
+        }
+        auto mgd_path = (std::filesystem::path(MetalContext::instance().rtoptions().get_root_dir()) /
+                         "tt_metal/fabric/mesh_graph_descriptors/horizon_x2_mesh_graph_descriptor.textproto")
+                            .string();
+        MetalContext::instance().set_custom_fabric_topology(
+            mgd_path,
+            {{tt::tt_fabric::FabricNodeId(tt::tt_fabric::MeshId{0}, 0), 0},
+             {tt::tt_fabric::FabricNodeId(tt::tt_fabric::MeshId{0}, 1), 1}});
+        QuasarMeshDeviceSingleCardFixture::SetUp();
+    }
+};
 
 // Opens chip 1 instead of chip 0, for the reverse direction.
 class HorizonX2Chip1Fixture : public QuasarMeshDeviceSingleCardFixture {
 protected:
     void create_devices() override { AnyDispatchMeshDeviceSingleCardFixture::create_devices({1}); }
+
+    void SetUp() override {
+        if (MetalContext::instance().get_cluster().number_of_devices() < 2) {
+            GTEST_SKIP() << "needs a horizon_x2 build with both chips visible";
+        }
+        auto mgd_path = (std::filesystem::path(MetalContext::instance().rtoptions().get_root_dir()) /
+                         "tt_metal/fabric/mesh_graph_descriptors/horizon_x2_mesh_graph_descriptor.textproto")
+                            .string();
+        MetalContext::instance().set_custom_fabric_topology(
+            mgd_path,
+            {{tt::tt_fabric::FabricNodeId(tt::tt_fabric::MeshId{0}, 0), 0},
+             {tt::tt_fabric::FabricNodeId(tt::tt_fabric::MeshId{0}, 1), 1}});
+        QuasarMeshDeviceSingleCardFixture::SetUp();
+    }
 };
 
 }  // namespace
 
 // Chip 1's first access point is its NOC2AXI 0, at 0x20_...
-TEST_F(QuasarMeshDeviceSingleCardFixture, HorizonX2FlatWritePosted) {
-    if (!flat_write_two_chips()) {
-        GTEST_SKIP() << "needs a horizon_x2 build with both chips visible";
-    }
-    expect_flat_write_lands(*devices_[0], 0, 1, 0, true);
-}
+TEST_F(HorizonX2FlatWriteFixture, HorizonX2FlatWritePosted) { expect_flat_write_lands(*devices_[0], 0, 1, 0, true); }
 
-TEST_F(QuasarMeshDeviceSingleCardFixture, HorizonX2FlatWriteNonPosted) {
-    if (!flat_write_two_chips()) {
-        GTEST_SKIP() << "needs a horizon_x2 build with both chips visible";
-    }
+TEST_F(HorizonX2FlatWriteFixture, HorizonX2FlatWriteNonPosted) {
     expect_flat_write_lands(*devices_[0], 0, 1, 0, false);
 }
 

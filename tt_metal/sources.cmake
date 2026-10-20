@@ -59,6 +59,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/fabric/physical_system_descriptor.hpp
     api/tt-metalium/experimental/fabric/pipeline_builder.hpp
     api/tt-metalium/experimental/fabric/routing_table_generator.hpp
+    api/tt-metalium/experimental/fabric/fabric_over_noc_routing_table_generator.hpp
     api/tt-metalium/experimental/fabric/topology_mapper.hpp
     api/tt-metalium/experimental/fabric/topology_mapper_utils.hpp
     api/tt-metalium/experimental/fabric/topology_solver.hpp
