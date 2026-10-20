@@ -676,3 +676,80 @@ def test_quasar_s2i_oversized_grid(device, memory_layout, layout, shape, shard_s
 
     assert_equal(torch_input, ttnn.to_torch(output))
     assert_equal(torch_guard, ttnn.to_torch(guard))
+
+
+@pytest.mark.parametrize("input_dtype", [ttnn.bfloat16, ttnn.bfloat8_b], ids=["bf16", "bf8_b"])
+def test_quasar_untilize_with_unpadding_l1_output_reserved_in_budget(device, input_dtype):
+    """The L1 budget must reserve the op's own interleaved-L1 output and size it (and the output DFB)
+    by the output dtype. The prim emits BFLOAT16 for a BFLOAT8_B input.
+
+    A resident interleaved-L1 tensor leaves the free window between two thresholds for the full-row
+    factory's DFBs: the one the check computes without the fix, and the correct one that also holds the
+    pending L1 output.
+      bf16:  the unfixed check ignores the pending output (reservation 0 B).
+      bf8_b: additionally sized by the input dtype, so the output DFB estimate is a 1088 B tile and the
+             reservation is 0 B (a BFLOAT8_B ROW_MAJOR spec cannot be built).
+    Without the fix the window picks the full-row factory, whose DFBs clash with the L1 output; with it
+    the op takes the fallback.
+
+    Wt is fixed at 32 (and Ht at 32) so select_program_factory's independent wide-row heuristic
+    (num_tiles_per_row > 32) cannot pick the block factory regardless of the budget check.
+    """
+    tile_dim, bf16_tile_bytes, bf8_tile_bytes, bf16_bytes = 32, 2048, 1088, 2
+    in_tile_bytes = bf16_tile_bytes if input_dtype == ttnn.bfloat16 else bf8_tile_bytes
+    info = ttnn._ttnn.reports.get_device_info(device)
+    num_banks = info.l1_num_banks
+    l1_alignment, dram_alignment = ttnn.get_l1_alignment(), ttnn.get_dram_alignment()
+
+    def align(value, alignment):
+        return -(-value // alignment) * alignment
+
+    Wt, Ht = 32, 32
+    H, W = Ht * tile_dim, Wt * tile_dim
+    out_w = W - 1  # non-tile-aligned
+
+    # Mirrors get_pending_l1_output_reservation: busiest bank's alignment-padded pages, rounded up to
+    # the allocator's granule.
+    pages_on_fullest_bank = -(-H // num_banks)
+    row_bytes = align(out_w * bf16_bytes, l1_alignment)
+    pending = align(max(pages_on_fullest_bank * row_bytes, dram_alignment), dram_alignment)
+
+    # Full-row factory DFBs: one input tile plus one output tile per Wt.
+    correct_threshold = pending + Wt * (in_tile_bytes + bf16_tile_bytes)
+    unfixed_threshold = Wt * 2 * in_tile_bytes
+    assert unfixed_threshold < correct_threshold, "this shape does not separate the two checks"
+
+    headroom_target = (unfixed_threshold + correct_threshold) // 2
+    if info.cb_limit <= headroom_target:
+        pytest.skip(f"needs more than {headroom_target} B of CB space, device offers {info.cb_limit} B")
+    tiles_per_bank = (info.cb_limit - headroom_target) // bf16_tile_bytes
+    if tiles_per_bank <= 0:
+        pytest.skip("device L1 is too small to leave a meaningful headroom window")
+
+    torch.manual_seed(0)
+    x = torch.rand((1, 1, H, W), dtype=torch.bfloat16)
+    ttnn_in = ttnn.from_torch(x, layout=ttnn.TILE_LAYOUT, dtype=input_dtype, device=device)
+    # bfloat8_b rounds the values and untilize only relayouts them, so the host read-back is the golden.
+    golden = ttnn.to_torch(ttnn_in)[..., :out_w]
+
+    resident = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([1, 1, tile_dim * tiles_per_bank, tile_dim * num_banks]),
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
+        device,
+        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
+    )
+    try:
+        headroom = resident.buffer_address() - info.address_at_first_l1_cb_buffer
+        assert (
+            unfixed_threshold <= headroom < correct_threshold
+        ), f"resident L1 buffer left {headroom} B; need [{unfixed_threshold}, {correct_threshold})"
+
+        result = ttnn.experimental.quasar.untilize_with_unpadding(
+            ttnn_in, (0, 0, H - 1, out_w - 1), memory_config=ttnn.L1_MEMORY_CONFIG, use_multicore=True
+        )
+        assert result.layout == ttnn.ROW_MAJOR_LAYOUT
+        assert list(result.shape) == [1, 1, H, out_w]
+        assert_with_ulp(expected_result=golden, actual_result=ttnn.to_torch(result.cpu()), ulp_threshold=0)
+    finally:
+        ttnn.deallocate(resident)
