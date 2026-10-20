@@ -37,6 +37,14 @@ def _read(tensor):
     return ttnn.to_torch(ttnn.get_device_tensors(tensor)[0])
 
 
+def _view(mesh, spec, owner, placements):
+    """Create an address-based view after resolving this test's backing offsets."""
+    extents = {(tuple(e.device_coord), (e.core_coord.x, e.core_coord.y)): e for e in ttnn.experimental_l1_tensor_owned_extents(owner)}
+    addresses = [ttnn.L1TensorViewPlacement(coord, core, extents[tuple(coord), (core.x, core.y)].address + offset)
+                 for coord, core, offset in placements]
+    return ttnn.experimental_create_l1_tensor_view(mesh, spec, addresses)
+
+
 @pytest.mark.parametrize("per_core", [True, False])
 def test_view_retains_owner_and_preserves_neighbor_bytes(per_core_mesh_device, per_core):
     mesh = per_core_mesh_device
@@ -46,12 +54,12 @@ def test_view_retains_owner_and_preserves_neighbor_bytes(per_core_mesh_device, p
     spec = _spec([core], 256)
     before = ttnn.experimental_get_l1_occupied_ranges(mesh, coord, core)
     views = [
-        ttnn.experimental_create_l1_tensor_view(
-            mesh, spec, [owner], [ttnn.L1TensorViewPlacement(coord, core, 0, offset)]
-        )
+        _view(mesh, spec, owner, [(coord, core, offset)])
         for offset in (0, 256, 512)
     ]
     assert ttnn.experimental_get_l1_occupied_ranges(mesh, coord, core) == before
+    for view in views:
+        ttnn.experimental_retain_tensor_backing(view, [owner])
     del owner
     gc.collect()
     assert ttnn.experimental_get_l1_occupied_ranges(mesh, coord, core) == before
@@ -65,43 +73,37 @@ def test_view_retains_owner_and_preserves_neighbor_bytes(per_core_mesh_device, p
     assert ttnn.experimental_get_l1_occupied_ranges(mesh, coord, core) == baseline
 
 
-@pytest.mark.parametrize("bad", ["owner", "core", "alignment", "bounds", "duplicate", "missing"])
+@pytest.mark.parametrize("bad", ["core", "alignment", "duplicate", "missing"])
 def test_view_rejects_invalid_placements(per_core_mesh_device, bad):
     mesh = per_core_mesh_device
     coord, core = ttnn.MeshCoordinate(0, 0), ttnn.CoreCoord(0, 0)
     owner = _owner(mesh, core)
     spec = _spec([core], 256)
-    placement = ttnn.L1TensorViewPlacement(coord, core, 0, 0)
-    if bad == "owner":
-        placement = ttnn.L1TensorViewPlacement(coord, core, 1, 0)
-    elif bad == "core":
-        placement = ttnn.L1TensorViewPlacement(coord, ttnn.CoreCoord(1, 0), 0, 0)
+    (extent,) = ttnn.experimental_l1_tensor_owned_extents(owner)
+    placement = ttnn.L1TensorViewPlacement(coord, core, extent.address)
+    if bad == "core":
+        placement = ttnn.L1TensorViewPlacement(coord, ttnn.CoreCoord(1, 0), extent.address)
     elif bad == "alignment":
-        placement = ttnn.L1TensorViewPlacement(coord, core, 0, 1)
-    elif bad == "bounds":
-        (extent,) = ttnn.experimental_l1_tensor_owned_extents(owner)
-        placement = ttnn.L1TensorViewPlacement(coord, core, 0, extent.size)
+        placement = ttnn.L1TensorViewPlacement(coord, core, extent.address + 1)
     placements = [] if bad == "missing" else [placement]
     if bad == "duplicate":
         placements.append(placement)
     with pytest.raises(RuntimeError):
-        ttnn.experimental_create_l1_tensor_view(mesh, spec, [owner], placements)
+        ttnn.experimental_create_l1_tensor_view(mesh, spec, placements)
 
 
-def test_nested_view_cannot_borrow_parent_capacity(per_core_mesh_device):
+def test_nested_view_reports_only_its_own_extent(per_core_mesh_device):
     mesh = per_core_mesh_device
     coord, core = ttnn.MeshCoordinate(0, 0), ttnn.CoreCoord(0, 0)
     owner = _owner(mesh, core)
     spec = _spec([core], 256)
-    view = ttnn.experimental_create_l1_tensor_view(
-        mesh, spec, [owner], [ttnn.L1TensorViewPlacement(coord, core, 0, 256)]
-    )
+    view = _view(mesh, spec, owner, [(coord, core, 256)])
     (extent,) = ttnn.experimental_l1_tensor_owned_extents(view)
     assert extent.size == ttnn.experimental_l1_tensor_geometry(mesh, coord, spec).aligned_shard_size
-    with pytest.raises(RuntimeError):
-        ttnn.experimental_create_l1_tensor_view(
-            mesh, spec, [view], [ttnn.L1TensorViewPlacement(coord, core, 0, 256)]
-        )
+    nested = _view(mesh, _spec([core], 64), view, [(coord, core, 64)])
+    (child,) = ttnn.experimental_l1_tensor_owned_extents(nested)
+    assert child.address == extent.address + 64
+    assert child.size == 64
 
 
 def test_lockstep_view_requires_one_address(per_core_mesh_device):
@@ -110,16 +112,13 @@ def test_lockstep_view_requires_one_address(per_core_mesh_device):
     cores = [ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0)]
     owner = _owner(mesh, cores[0], per_core=False)
     spec = _spec(cores, 256, per_core=False)
-    view = ttnn.experimental_create_l1_tensor_view(
-        mesh, spec, [owner], [ttnn.L1TensorViewPlacement(coord, core, 0, 0) for core in cores]
-    )
+    view = _view(mesh, spec, owner, [(coord, core, 0) for core in cores])
     assert view.buffer_address() == owner.buffer_address()
     with pytest.raises(RuntimeError):
         ttnn.experimental_create_l1_tensor_view(
             mesh,
             spec,
-            [owner],
-            [ttnn.L1TensorViewPlacement(coord, core, 0, i * 256) for i, core in enumerate(cores)],
+            [ttnn.L1TensorViewPlacement(coord, core, owner.buffer_address() + i * 256) for i, core in enumerate(cores)],
         )
 
 
@@ -139,9 +138,8 @@ def test_view_preserves_selected_device_coverage(mesh_device):
     spec = _spec([core], 256)
     host = ttnn.from_torch(torch.arange(256, dtype=torch.uint8).reshape(1, 256), dtype=ttnn.uint8)
     owner = ttnn.experimental_to_single_device(host, mesh, coord, spec.memory_config)
-    view = ttnn.experimental_create_l1_tensor_view(
-        mesh, spec, [owner], [ttnn.L1TensorViewPlacement(coord, core, 0, 0)]
-    )
+    view = _view(mesh, spec, owner, [(coord, core, 0)])
+    ttnn.experimental_retain_tensor_backing(view, [owner])
     assert view.device_coords() == [coord]
     assert all(extent.device_coord == coord for extent in ttnn.experimental_l1_tensor_owned_extents(view))
     del owner

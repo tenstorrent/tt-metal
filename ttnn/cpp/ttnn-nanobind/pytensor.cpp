@@ -444,12 +444,11 @@ void pytensor_module_types(nb::module_& mod) {
         .def_ro("address", &L1TensorExtent::address)
         .def_ro("size", &L1TensorExtent::size);
     nb::class_<L1TensorViewPlacement>(
-        mod, "L1TensorViewPlacement", "Owner tensor index and byte offset on one device/core.")
-        .def(nb::init<distributed::MeshCoordinate, CoreCoord, size_t, DeviceAddr>())
+        mod, "L1TensorViewPlacement", "Absolute non-owning address on one device/core.")
+        .def(nb::init<distributed::MeshCoordinate, CoreCoord, DeviceAddr>())
         .def_ro("device_coord", &L1TensorViewPlacement::device_coord)
         .def_ro("core_coord", &L1TensorViewPlacement::core_coord)
-        .def_ro("owner_index", &L1TensorViewPlacement::owner_index)
-        .def_ro("offset", &L1TensorViewPlacement::offset);
+        .def_ro("address", &L1TensorViewPlacement::address);
     nb::class_<L1TensorGeometry>(mod, "L1TensorGeometry", "Logical shard footprint and physical allocator alignment.")
         .def_ro("packed_size", &L1TensorGeometry::packed_size)
         .def_ro("page_size", &L1TensorGeometry::page_size)
@@ -550,16 +549,7 @@ void pytensor_module(nb::module_& mod) {
         "experimental_create_l1_tensor_view",
         [](distributed::MeshDevice& mesh,
            const TensorSpec& spec,
-           const std::vector<Tensor>& owners,
            const std::vector<L1TensorViewPlacement>& placements) {
-            std::vector<std::vector<L1TensorExtent>> extents;
-            for (const auto& owner : owners) {
-                TT_FATAL(owner.storage_type() == StorageType::DEVICE, "L1 view owner must be a device tensor");
-                const auto& storage = owner.device_storage();
-                TT_FATAL(&storage.get_mesh_tensor().device() == &mesh, "L1 view owner uses a different MeshDevice");
-                extents.push_back(tt::tt_metal::experimental::per_core_allocation::get_l1_tensor_owner_extents(
-                    storage.get_mesh_buffer(), {storage.get_coords().begin(), storage.get_coords().end()}));
-            }
             auto buffer = tt::tt_metal::experimental::per_core_allocation::create_l1_tensor_view(
                 mesh,
                 tt::tt_metal::distributed::ReplicatedBufferConfig{.size = spec.compute_packed_buffer_size_bytes()},
@@ -567,9 +557,7 @@ void pytensor_module(nb::module_& mod) {
                     .page_size = spec.compute_page_size_bytes(),
                     .buffer_type = spec.memory_config().buffer_type(),
                     .sharding_args = spec.compute_buffer_sharding_args()},
-                extents,
-                placements,
-                std::make_shared<std::vector<Tensor>>(owners));
+                placements);
             std::vector<distributed::MeshCoordinate> coords;
             std::unordered_set<distributed::MeshCoordinate> seen;
             for (const auto& placement : placements) {
@@ -584,11 +572,22 @@ void pytensor_module(nb::module_& mod) {
         },
         nb::arg("mesh_device").noconvert(),
         nb::arg("tensor_spec"),
-        nb::arg("owners"),
         nb::arg("placements"),
         nb::keep_alive<0, 1>(),
-        "Create a native L1 tensor view; retains owners through ordinary lifetime. Explicit deallocation of borrowed "
-        "owners is prohibited.");
+        "Create a non-owning L1 tensor view. The caller must validate bounds and retain backing storage.");
+    mod.def(
+        "experimental_retain_tensor_backing",
+        [](Tensor& view, const std::vector<Tensor>& owners) {
+            std::vector<DeviceStorage> storage;
+            for (const auto& owner : owners) {
+                TT_FATAL(&owner.device_storage().get_mesh_tensor().device() == &view.device_storage().get_mesh_tensor().device(),
+                         "Backing storage uses a different mesh");
+                storage.push_back(owner.device_storage());
+            }
+            view.device_storage().retain_backing_storage(std::move(storage));
+        },
+        nb::arg("view"), nb::arg("owners"),
+        "Retain caller-validated backing through native tensor copies; explicit backing deallocation remains prohibited.");
     mod.def(
         "decorate_external_operation",
         [](const nb::callable& function, const std::optional<std::string>& function_name) -> nb::object {
