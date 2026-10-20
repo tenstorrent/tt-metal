@@ -61,10 +61,15 @@ def test_moe_ep_single_chip(mesh_device, weights, E_loc):
 @pytest.mark.timeout(3600)
 @pytest.mark.skipif(
     os.environ.get("GLM53_EP_A2A_TESTS", "0") != "1",
-    reason="the D = 1 all_to_all dispatch / combine plumbing (GLM53_EP_A2A_TESTS=1; needs the fabric)",
+    reason="all_to_all dispatch / combine need an initialized fabric context (control_plane.cpp: 'un-initialized "
+    "fabric context' without one) and a fabric config cannot be opened on one device (fabric_firmware_initializer: "
+    "devices > 1): the plumbing can only run on a mesh (GLM53_EP_A2A_TESTS=1 keeps the single-chip attempt for the record)",
 )
 @pytest.mark.parametrize(
-    "device_params", [{**DEVICE_PARAMS, "fabric_config": ttnn.FabricConfig.FABRIC_2D}], indirect=True
+    "device_params",
+    [DEVICE_PARAMS, {**DEVICE_PARAMS, "fabric_config": ttnn.FabricConfig.FABRIC_2D}],
+    ids=["nofabric", "fabric"],
+    indirect=True,
 )
 @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
 @pytest.mark.parametrize("E_loc", [9])
@@ -72,7 +77,11 @@ def test_moe_ep_single_chip_a2a(mesh_device, weights, E_loc, monkeypatch):
     """The mesh code path on one chip: all_to_all_dispatch of the tokens and of the weight lists, the EP op on the
     dispatched rows, all_to_all_combine (local reduce) -- with D = 1 every op is the identity, so the result must
     match the direct path exactly. Wrap the first run in `timeout 300` (a raw dispatch benchmark hung on a (2,4)
-    block with cluster_axis=None; this follows the DeepSeek-V3 decode pattern with cluster_axis=0)."""
+    block with cluster_axis=None; this follows the DeepSeek-V3 decode pattern with cluster_axis=0).
+    Measured 2026-10-20 on chip 2: the `fabric` variant fails at device open (fabric_firmware_initializer.cpp:317
+    devices_.size() > 1) and the `nofabric` variant inside the op (control_plane.cpp:3061 'un-initialized fabric
+    context'): the D = 1 plumbing check is impossible on one chip; the first dispatch / combine run is the (2,4)
+    block's `GLM53_MOE_LAYOUT=ep` test, under `timeout`."""
     monkeypatch.setenv("GLM53_EP_FORCE_A2A", "1")
     _run_single_chip(mesh_device, weights, E_loc)
 

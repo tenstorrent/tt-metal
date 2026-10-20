@@ -244,3 +244,78 @@ def test_expert_dispatch_ep_bfp4(mesh_device):
     )
     assert p_act > 0.9999, p_act
     assert p > 0.9999, p
+
+
+@pytest.mark.timeout(2400)
+@pytest.mark.parametrize(
+    "device_params", [{"l1_small_size": 32768, "trace_region_size": 64 * 1024 * 1024}], indirect=True
+)
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+@pytest.mark.parametrize(
+    "T, active, rows_per", [(32, 2, 5), (256, 3, 27), (256, 9, 28)], ids=["32-2", "256-3", "256-9"]
+)
+def test_expert_dispatch_ep_trace(mesh_device, T, active, rows_per):
+    """EP mode at the 8x4 shape (9 full-width experts, I = 2048) with `active` of them routed by `rows_per` tokens
+    each: traced total and the eager split (gate|up / down). GLM53_STREAM_KERNEL_DIR= an alternative kernel set for
+    an A/B."""
+    I, E_local, base, K = 2048, 9, 9, 8
+    w13, w2, w13_q, w2_q = upload(mesh_device, E_local, I, seed=base)
+    units = os.environ.get("GLM53_STREAM_UNITS", "0") == "1"
+    op = ExpertDispatch(
+        mesh_device, E_local, 4096, I, H, T, groups=GROUPS, down_readers=DOWN_READERS, ep=True, units=units
+    )
+    g = torch.Generator().manual_seed(T + active)
+    idx = torch.full((T, K), 4000, dtype=torch.long)  # other chips' experts
+    for a in range(active):
+        toks = torch.randperm(T, generator=g)[:rows_per]
+        idx[toks, a % K] = base + a  # one local expert per routed token slot
+    wts = (torch.rand(T, K, generator=g) + 0.2).bfloat16().float()
+    _, y_ref, passes = expert_dispatch_golden_ep(
+        x := torch.randn(T, 4096).bfloat16(), idx, wts, base, E_local, w13_q, w2_q
+    )
+    xd = ttnn.from_torch(x.reshape(1, 1, T, 4096), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device)
+    it, wt = ep_index_tiles(idx, wts, mesh_device, K)
+    bt = ep_base_tensor(base, mesh_device)
+
+    def run():
+        x_rm = ttnn.to_layout(xd, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
+        act, table, out = op.alloc(mesh_device)
+        op.forward(x_rm, wt, it, w13, w2, act, table, out, base=bt)
+        for t_ in (x_rm, act, table):
+            ttnn.deallocate(t_)
+        return out
+
+    out = run()
+    ttnn.synchronize_device(mesh_device)
+    ttnn.deallocate(out)
+    tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    out = run()
+    ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
+    ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=True)
+    t0 = time.perf_counter()
+    for _ in range(20):
+        ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=False)
+    ttnn.synchronize_device(mesh_device)
+    dt = (time.perf_counter() - t0) / 20
+    p = pcc(y_ref, ttnn.to_torch(out).float().reshape(T, H))
+    x_rm = ttnn.to_layout(xd, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
+    act, table, out2 = op.alloc(mesh_device)
+    split = {}
+    for name, fn in (
+        ("gate_up", lambda: op.gate_up(x_rm, wt, it, w13, act, table, base=bt)),
+        ("down", lambda: op.down(act, table, it, w2, out2, base=bt)),
+    ):
+        fn()
+        ttnn.synchronize_device(mesh_device)
+        t0 = time.perf_counter()
+        for _ in range(10):
+            fn()
+        ttnn.synchronize_device(mesh_device)
+        split[name] = (time.perf_counter() - t0) / 10 * 1e6
+    logger.info(
+        f"EP trace T {T}, {active} of 9 active x {rows_per} rows ({len(passes)} passes), "
+        f"{'units' if units else 'per-expert'} kernels: {dt*1e6:.1f} us per call "
+        f"(eager gate_up {split['gate_up']:.1f} us, down {split['down']:.1f} us), pcc {p:.6f}"
+    )
+    ttnn.release_trace(mesh_device, tid)
+    assert p > 0.9999, p
