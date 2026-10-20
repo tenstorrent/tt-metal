@@ -79,7 +79,7 @@ def prefill_warmup_chunks(max_tokens, max_seq_len, block_size, window):
 
 def prefill_warmup_batches(max_tokens, max_users, max_padded, max_seq_len):
     """(users, tokens) of first-chunk batches (TtMiMoModel.prefill_enqueue_batch) that together run every program a
-    batch of up to ``max_users`` users and ``max_tokens`` real tokens can: one per user count and padded length of at
+    batch of 1 to ``max_users`` users and ``max_tokens`` real tokens can: one per user count and padded length of at
     most ``max_padded``, each user with the fewest tokens padded to that length. Batch programs key on those two only
     (every chunk starts at 0)."""
     shortest = {}
@@ -87,7 +87,7 @@ def prefill_warmup_batches(max_tokens, max_users, max_padded, max_seq_len):
         shortest.setdefault(prefill_padded_len(n), n)
     return [
         (users, n)
-        for users in range(2, max_users + 1)
+        for users in range(1, max_users + 1)
         for padded, n in sorted(shortest.items())
         if padded <= max_padded and users * n <= max_tokens
     ]
@@ -201,6 +201,7 @@ class TtMiMoModel:
         self.table_scratch = None
         self.decode_trace = None
         self.greedy_head = None
+        self.prefill_traces = {}  # (users, padded length) -> traced prefill batch (setup_prefill_batch_trace)
         self.decode_users = None
         self.norm_buffers = None
         self.swa_table = None
@@ -577,29 +578,59 @@ class TtMiMoModel:
         return contextlib.nullcontext()
 
     def prefill_enqueue_batch(self, chunks, layers=None):
-        """First chunks of several users in one pass. ``chunks``: [(tokens 1D torch, slot)], each from position 0,
-        every one padded to the longest one's padded length S (at most PREFILL_BATCH_MAX_PADDED). The users' rows run
-        user after user ([1, 1, R * S, hidden]) through the norms, projections and MoE, and through attention as a
-        batch of R sequences. Only with vLLM's page tables (``setup_vllm_kv_cache``). Returns a pending handle for
-        ``prefill_read``, whose logits have one row per user."""
+        """First chunks of one or more users in one pass. ``chunks``: [(tokens 1D torch, slot)], each from position
+        0, every one padded to the longest one's padded length S (at most PREFILL_BATCH_MAX_PADDED). The users' rows
+        run user after user ([1, 1, R * S, hidden]) through the norms, projections and MoE, and through attention as
+        a batch of R sequences. Replays the pass's trace when one was captured (``capture_prefill_batch_trace``).
+        Only with vLLM's page tables (``setup_vllm_kv_cache``). Returns a pending handle for ``prefill_read``, whose
+        logits have one row per user."""
         assert self.layer_groups is not None, "a prefill batch writes through vLLM's page tables"
-        num = len(chunks)
-        assert num > 1, "a prefill batch has several users"
-        padded = max(prefill_padded_len(t.numel()) for t, _ in chunks)
+        num, padded = len(chunks), max(prefill_padded_len(t.numel()) for t, _ in chunks)
         assert padded <= self.PREFILL_BATCH_MAX_PADDED and padded <= self.max_seq_len, padded
+        trace = self.prefill_traces.get((num, padded)) if layers is None else None
+        if trace is not None and trace["id"] is not None:
+            return self._replay_prefill_batch(trace, chunks)
         layers = range(len(self.layers)) if layers is None else layers
+        keys = list(dict.fromkeys(self._table_key(i) for i in layers))
+        tokens, fills, starts, picks = self._prefill_batch_host(chunks, padded, keys)
         rows = kv_lib.replicated(self.plan, torch.arange(num, dtype=torch.int32), ttnn.uint32)
-        tables = {}
-        for i in layers:
-            key = self._table_key(i)
-            if key not in tables:
-                table, scratch = self._host_table(key)
-                slots = [slot for _, slot in chunks]
-                tables[key] = kv_lib.BatchFillTables(self.plan, table, slots, padded, self.block_size, scratch, rows)
+        tables = {
+            k: kv_lib.BatchFillTables(kv_lib.per_chip(self.plan, fills[k], ttnn.int32, ttnn.ROW_MAJOR_LAYOUT), rows)
+            for k in keys
+        }
+        ats = [kv_lib.replicated(self.plan, torch.tensor([0, 0, s, 0], dtype=torch.int32), ttnn.uint32) for s in starts]
+        tokens_tt = self._to_device_tokens(tokens)
         for setup in self.rope_setups.values():
             setup.begin_prefill_chunk()
+        logits = self._prefill_batch_device(tokens_tt, tables, ats, num, padded, layers)
+        for setup in self.rope_setups.values():
+            setup.end_prefill_chunk()
+        # Enqueued: freeing them now is ordered with the work that reads them.
+        for t in [*tables.values()]:
+            t.release()
+        for t in [rows, tokens_tt, *ats]:
+            t.deallocate(True)
+        return {"logits": logits, "row": picks, "hidden": None}
+
+    def _prefill_batch_host(self, chunks, padded, keys):
+        """Host inputs of a prefill batch: tokens int32 [R * S]; per page table key its fill rows [tp, R, blocks];
+        each user's last-token tile start in the pass's rows; each user's row in the logits."""
         tokens = torch.cat([torch.nn.functional.pad(t.to(torch.int32), (0, padded - t.numel())) for t, _ in chunks])
-        x = self._embed(tokens)
+        slots = [slot for _, slot in chunks]
+        fills = {}
+        for key in keys:
+            table, scratch = self._host_table(key)
+            fills[key] = kv_lib.batch_fill_rows(table, slots, padded, self.block_size, scratch)
+        starts = [r * padded + (t.numel() - 1) // TILE * TILE for r, (t, _) in enumerate(chunks)]
+        picks = [r * TILE + (t.numel() - 1) % TILE for r, (t, _) in enumerate(chunks)]
+        return tokens, fills, starts, picks
+
+    def _prefill_batch_device(self, tokens_tt, tables, ats, num, padded, layers):
+        """A prefill batch from device inputs only (trace-capturable when the RoPE mats are pinned): tokens [1, R * S]
+        uint32, {page table key: kv.BatchFillTables}, each user's last-token tile start (uint32 [4] slice starts).
+        Returns logits [1, 1, 32 * R, vocab / tp] (the users' last-token tiles, user after user)."""
+        x = ttnn.embedding(tokens_tt, self.embedding, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+        x = ttnn.reshape(x, (1, 1, num * padded, self.cfg.hidden_size))
         with self._prefill_reduce(padded):
             for i in layers:
                 y = self.layers[i].forward_prefill(
@@ -613,34 +644,105 @@ class TtMiMoModel:
                 )
                 x.deallocate(True)
                 x = y
-        for setup in self.rope_setups.values():
-            setup.end_prefill_chunk()
-        for t in tables.values():
-            t.release()
-        rows.deallocate(True)
-        # Each user's last token: the tile row holding it, through a tensor-args slice (keyed on the padded length).
-        parts, picks = [], []
-        for r, (t, _) in enumerate(chunks):
-            n = t.numel()
-            at = kv_lib.replicated(
-                self.plan, torch.tensor([0, 0, r * padded + (n - 1) // TILE * TILE, 0], dtype=torch.int32), ttnn.uint32
-            )
-            parts.append(ttnn.slice(x, at, at, slice_dim=2, num_devices=num * padded // TILE))
-            at.deallocate(True)
-            picks.append(r * TILE + (n - 1) % TILE)
-        x.deallocate(True)
-        last = ttnn.concat(parts, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        for t in parts:
-            t.deallocate(True)
+        if num * padded == TILE:
+            last = x  # a slice covering the whole tensor shares its buffer, so it must not be freed separately
+        else:
+            # Each user's last token: the tile row holding it, through a tensor-args slice (keyed on the length).
+            parts = [ttnn.slice(x, at, at, slice_dim=2, num_devices=num * padded // TILE) for at in ats]
+            x.deallocate(True)
+            last = ttnn.concat(parts, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG) if num > 1 else parts[0]
+            if num > 1:
+                for t in parts:
+                    t.deallocate(True)
         logits = self._logits(last, prefill=True)
         last.deallocate(True)
-        return {"logits": logits, "row": picks, "hidden": None}
+        return logits
+
+    # ------------------------------------------------------------------ traced prefill batches
+    def setup_prefill_batch_trace(self, num, padded):
+        """The persistent buffers of a traced prefill pass of ``num`` first chunks padded to ``padded``: its inputs
+        (tokens, fill tables, last-token slice starts, the RoPE mats of positions 0 .. padded - 1) and the logits it
+        copies its output into. Allocate before any trace capture: a buffer allocated after a capture can sit where
+        that trace's replays write."""
+        assert (num, padded) not in self.prefill_traces
+        keys = list(dict.fromkeys(self._table_key(i) for i in range(len(self.layers))))
+        blocks = -(-padded // self.block_size)
+        rows = kv_lib.replicated(self.plan, torch.arange(num, dtype=torch.int32), ttnn.uint32)
+        zero_fill = torch.zeros(self.plan.tp, num, blocks, dtype=torch.int32)
+        self.prefill_traces[(num, padded)] = {
+            "id": None,
+            "tokens": self._to_device_tokens(torch.zeros(num * padded, dtype=torch.int32)),
+            "rows": rows,
+            "tables": {
+                k: kv_lib.BatchFillTables(
+                    kv_lib.per_chip(self.plan, zero_fill, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT), rows
+                )
+                for k in keys
+            },
+            "ats": [kv_lib.replicated(self.plan, torch.zeros(4, dtype=torch.int32), ttnn.uint32) for _ in range(num)],
+            "rope": {name: setup.get_prefill_rot_mats(0, padded) for name, setup in self.rope_setups.items()},
+            "logits": ttnn.allocate_tensor_on_device(
+                ttnn.Shape([1, 1, TILE * num, self.vocab_local]),
+                ttnn.bfloat16,
+                ttnn.TILE_LAYOUT,
+                self.mesh_device,
+                ttnn.DRAM_MEMORY_CONFIG,
+            ),
+        }
+
+    def _prefill_batch_trace_body(self, trace, num, padded):
+        """The traced pass: reads only the trace's persistent inputs, writes the trace's persistent logits."""
+        for name, setup in self.rope_setups.items():
+            setup.begin_prefill_chunk(pinned={(0, padded): trace["rope"][name]})
+        logits = self._prefill_batch_device(
+            trace["tokens"], trace["tables"], trace["ats"], num, padded, range(len(self.layers))
+        )
+        for setup in self.rope_setups.values():
+            setup.end_prefill_chunk()
+        ttnn.copy(logits, trace["logits"])
+        logits.deallocate(True)
+
+    def warm_prefill_batch_trace(self, num, padded):
+        """Run the traced pass eagerly once (its zero fill tables write only vLLM's null block 0), compiling every
+        program it runs: do it before the decode capture, so capturing the pass later compiles nothing."""
+        self._prefill_batch_trace_body(self.prefill_traces[(num, padded)], num, padded)
+
+    def capture_prefill_batch_trace(self, num, padded):
+        """Capture the pass (after ``warm_prefill_batch_trace``). Every buffer the capture makes is freed by its end,
+        so nothing it allocated is alive at another trace's replay."""
+        trace = self.prefill_traces[(num, padded)]
+        assert trace["id"] is None
+        ttnn.synchronize_device(self.mesh_device)
+        trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
+        self._prefill_batch_trace_body(trace, num, padded)
+        ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
+        ttnn.synchronize_device(self.mesh_device)
+        trace["id"] = trace_id
+
+    def _replay_prefill_batch(self, trace, chunks):
+        """Copy a batch's inputs into its trace's buffers and replay it (non-blocking)."""
+        num, padded = len(chunks), max(prefill_padded_len(t.numel()) for t, _ in chunks)
+        tokens, fills, starts, picks = self._prefill_batch_host(chunks, padded, list(trace["tables"]))
+        ttnn.copy_host_to_device_tensor(
+            kv_lib.replicated(self.plan, tokens.reshape(1, -1), ttnn.uint32, device=False), trace["tokens"]
+        )
+        for key, table in trace["tables"].items():
+            host = kv_lib.per_chip(self.plan, fills[key], ttnn.int32, ttnn.ROW_MAJOR_LAYOUT, device=False)
+            ttnn.copy_host_to_device_tensor(host, table.fill)
+        for at, s in zip(trace["ats"], starts):
+            host = kv_lib.replicated(
+                self.plan, torch.tensor([0, 0, s, 0], dtype=torch.int32), ttnn.uint32, device=False
+            )
+            ttnn.copy_host_to_device_tensor(host, at)
+        ttnn.execute_trace(self.mesh_device, trace["id"], cq_id=0, blocking=False)
+        return {"logits": trace["logits"], "row": picks, "hidden": None, "persistent": True}
 
     def prefill_read(self, pending):
         """-> (last-token logits [vocab], per-layer hidden states [tokens, hidden] when requested). A batch's pending
         handle (``prefill_enqueue_batch``) gives [users, vocab]."""
         logits = self.plan.to_torch_tp_concat(pending["logits"], dim=-1).float()
-        pending["logits"].deallocate(True)
+        if not pending.get("persistent"):  # a traced pass's logits buffer is the trace's
+            pending["logits"].deallocate(True)
         out = logits.reshape(-1, logits.shape[-1])[pending["row"]]
         hidden = []
         for chunks in pending["hidden"] or []:
@@ -815,6 +917,13 @@ class TtMiMoModel:
         if self.decode_trace is not None:
             ttnn.release_trace(self.mesh_device, self.decode_trace["id"])
             self.decode_trace = None
+
+    def release_prefill_traces(self):
+        """Release the captured prefill traces (their buffers stay, for a later capture)."""
+        for trace in self.prefill_traces.values():
+            if trace["id"] is not None:
+                ttnn.release_trace(self.mesh_device, trace["id"])
+                trace["id"] = None
 
     def decode_enqueue(self, tokens, positions):
         """tokens, positions: torch [max_batch]; position -1 marks an empty slot. Non-blocking.

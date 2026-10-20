@@ -64,6 +64,8 @@ SWA_TOKENS_PER_USER = 5 * (math.ceil((127 + 4096) / BLOCK_SIZE) + 1) * BLOCK_SIZ
 TIMING = os.environ.get("MIMO_VLLM_TIMING") == "1"
 # MIMO_PREFILL_BATCH=0: prefill every row on its own (TtMiMoModel.prefill_enqueue_batch is not used).
 PREFILL_BATCH = os.environ.get("MIMO_PREFILL_BATCH", "1") == "1"
+# MIMO_PREFILL_TRACE=0: run prefill batches eagerly instead of replaying their traces.
+PREFILL_TRACE = os.environ.get("MIMO_PREFILL_TRACE", "1") == "1"
 
 
 def _model_path(hf_config):
@@ -324,6 +326,8 @@ class MiMoV2ForCausalLM:
         # A lane's first chunks of one padded length (at most PREFILL_BATCH_MAX_PADDED) go in one pass
         # (TtMiMoModel.prefill_enqueue_batch, which pads every chunk to the longest); the other rows one by one. Every
         # pass is enqueued before any is read, the lanes interleaved so all replicas have work.
+        # A lane's batch passes go before its other rows: a batch reads no cached KV (it starts at 0), and a traced
+        # batch's replay must not run while an eager pass's output of that lane is alive.
         by_lane = []
         for lane in range(self.dp):
             groups = {}
@@ -331,7 +335,8 @@ class MiMoV2ForCausalLM:
                 if p[1] == lane:
                     key = prefill_padded_len(p[4]) if self._batchable(p) else ("row", p[0])
                     groups.setdefault(key, []).append(p)
-            by_lane.append(list(groups.values()))
+            batches = [g for key, g in groups.items() if not isinstance(key, tuple)]
+            by_lane.append(batches + [g for key, g in groups.items() if isinstance(key, tuple)])
         order = [passes[k] for k in range(max(map(len, by_lane))) for passes in by_lane if k < len(passes)]
         programs = [model.mesh_device.num_program_cache_entries() for model in self.models]
         t0 = time.perf_counter()
@@ -341,7 +346,7 @@ class MiMoV2ForCausalLM:
             chunks = [
                 (torch.as_tensor(tokens[i, start:end]).to(torch.int32), slot) for i, _, slot, start, end in rows_of_pass
             ]
-            if len(chunks) > 1:
+            if self._batchable(rows_of_pass[0]):
                 handle = self.models[lane].prefill_enqueue_batch(chunks)
             else:
                 (chunk, slot), start = chunks[0], rows_of_pass[0][3]
@@ -608,7 +613,7 @@ class MiMoV2ForCausalLM:
         # Batches of first chunks (prefill_forward): every user count and padded length a lane's step can hold. Slots
         # 1 .. users - 1 write the blocks after slot 0's.
         batches = prefill_warmup_batches(max_tokens, self.per_lane, model0.PREFILL_BATCH_MAX_PADDED, self.max_seq_len)
-        batches = batches if PREFILL_BATCH else []
+        batches = batches if PREFILL_BATCH else []  # prefill_forward runs every batchable first chunk as a batch
         span = -(-model0.PREFILL_BATCH_MAX_PADDED // BLOCK_SIZE)
         if self.per_lane * span > blocks.numel():
             raise RuntimeError(f"{num_blocks} KV blocks cannot back the prefill warmup's batches {batches}")
@@ -622,6 +627,17 @@ class MiMoV2ForCausalLM:
         for model in self.models:
             empty = torch.zeros(width, dtype=torch.int32)
             model.set_vllm_page_tables({s: {g: empty for g in groups} for s in range(self.per_lane)})
+        # Traced batches: their persistent buffers now, before any capture, and one eager pass each through every
+        # layer (compiling whatever the capture will record); warmup_model_decode captures them after the decode trace.
+        if PREFILL_TRACE and PREFILL_BATCH:
+            for model in self.models:
+                for users, n in batches:
+                    padded = prefill_padded_len(n)
+                    if (users, padded) not in model.prefill_traces:
+                        model.setup_prefill_batch_trace(users, padded)
+                        model.warm_prefill_batch_trace(users, padded)
+            for model in self.models:
+                ttnn.synchronize_device(model.mesh_device)
         self.already_warmed_up_prefill = self.prefill_programs_compiled = True
         new = [m.mesh_device.num_program_cache_entries() - p for m, p in zip(self.models, programs)]
         logger.info(
@@ -637,6 +653,12 @@ class MiMoV2ForCausalLM:
                 if model.decode_trace is None:
                     model.capture_decode_trace()
                     logger.info(f"MiMo vLLM: replica {lane} decode trace captured")
+                pending = [key for key, t in model.prefill_traces.items() if t["id"] is None]
+                for k, (users, padded) in enumerate(pending):
+                    logger.debug(f"MiMo vLLM: replica {lane} capturing prefill trace {k + 1}/{len(pending)}")
+                    model.capture_prefill_batch_trace(users, padded)
+                if pending:
+                    logger.info(f"MiMo vLLM: replica {lane} prefill traces captured for (users, length) {pending}")
             else:
                 idle = torch.full((model.max_batch,), -1, dtype=torch.int32)
                 model.decode_read(model.decode_enqueue(torch.zeros(model.max_batch, dtype=torch.int32), idle))
@@ -644,3 +666,4 @@ class MiMoV2ForCausalLM:
     def release_persistent_capture(self):
         for model in self.models:
             model.release_decode_trace()
+            model.release_prefill_traces()

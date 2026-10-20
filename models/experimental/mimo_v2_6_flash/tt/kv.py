@@ -81,10 +81,14 @@ def per_chip(plan, t, dtype, layout, device=True):
     )
 
 
-def replicated(plan, t, dtype):
-    """Row-major ``t`` on every chip of the replica."""
+def replicated(plan, t, dtype, device=True):
+    """Row-major ``t`` on every chip of the replica (``device`` False: the host tensor, to copy into one)."""
     return ttnn.from_torch(
-        t, device=plan.mesh_device, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=plan.replicate()
+        t,
+        device=plan.mesh_device if device else None,
+        dtype=dtype,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        mesh_mapper=plan.replicate(),
     )
 
 
@@ -141,19 +145,23 @@ class PrefillTables:
 
 class BatchFillTables:
     """The KV blocks a batch of first chunks writes through one page table (TtMiMoAttention.forward_prefill with
-    ``users`` R > 1: R users, each from position 0 and padded to the same ``padded`` length): ``fill`` int32
-    [R, ceil(padded / block_size)] per chip, row r the blocks of user r's positions 0 .. padded - 1, and ``rows``
-    uint32 [R] = 0 .. R - 1 (shared by the batch's tables; the caller frees it), the row of ``fill`` each input batch
-    entry of the batched ``paged_fill_cache`` writes through. The shapes depend only on R and ``padded``."""
+    ``users`` R: R users, each from position 0 and padded to the same length S): ``fill`` int32 [R, ceil(S /
+    block_size)] per chip, row r the blocks of user r's positions 0 .. S - 1 (``batch_fill_rows``), and ``rows``
+    uint32 [R] = 0 .. R - 1 (shared by the batch's tables; the caller frees it), the row of ``fill`` each input
+    batch entry of the batched ``paged_fill_cache`` writes through. The shapes depend only on R and S."""
 
-    def __init__(self, plan, table, slots, padded, block_size, scratch, rows):
-        count = -(-padded // block_size)
-        fill = torch.cat([block_rows(table, slot, 0, count, scratch) for slot in slots], dim=1)  # [tp, R, count]
-        self.fill = per_chip(plan, fill, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
+    def __init__(self, fill, rows):
+        self.fill = fill
         self.rows = rows
 
     def release(self):
         self.fill.deallocate(True)
+
+
+def batch_fill_rows(table, slots, padded, block_size, scratch):
+    """table int32 [tp, max_batch, W] -> [tp, R, ceil(padded / block_size)]: the first blocks of each slot's row."""
+    count = -(-padded // block_size)
+    return torch.cat([block_rows(table, slot, 0, count, scratch) for slot in slots], dim=1)
 
 
 # Most padding a prefill chunk gets (model.prefill_padded_len rounds up to 32, then to 128 or 256 tokens).
