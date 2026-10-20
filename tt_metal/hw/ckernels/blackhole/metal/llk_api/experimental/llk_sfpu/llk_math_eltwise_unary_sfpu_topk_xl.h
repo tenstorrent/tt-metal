@@ -69,11 +69,12 @@ inline void llk_math_eltwise_unary_sfpu_topk_xl_add_lsb_indices(std::uint32_t ds
  * @brief Initialize the shared SFPU state for supplied-index packing.
  *
  * @note Call after loading the inputs and before @ref llk_math_topk_xl_pack_supplied_indices.
+ *       Programs ADDR_MOD_0; reinitialize datacopy before the next copy.
  *       Restore TopK state afterward as described by @ref topk_xl_pack_supplied_indices.
  */
 inline void llk_math_topk_xl_pack_supplied_indices_init() {
     SAN_HOOK(unsupported());
-    llk_math_eltwise_unary_sfpu_init<SfpuType::unused, DST_ACCUM_MODE>();
+    llk_math_eltwise_unary_sfpu_init<SfpuType::unused>(ckernel::sfpu::_topk_xl_pack_supplied_indices_init_);
 }
 
 /**

@@ -15,11 +15,11 @@ void kernel_main() {
     CircularBuffer input(tt::CBIndex::c_0);
     CircularBuffer output(tt::CBIndex::c_16);
     compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_16);
-    copy_init(tt::CBIndex::c_0);
     for (std::uint32_t tile = 0; tile < count; tile += block) {
         input.wait_front(block);
         output.reserve_back(block);
         tile_regs_acquire();
+        copy_init(tt::CBIndex::c_0);
         for (std::uint32_t i = 0; i < block; ++i) {
             copy_tile(tt::CBIndex::c_0, i, i);
         }
