@@ -172,6 +172,13 @@ inline void reblock_and_untilize(
     interm_dfb.pop_front(num_tiles_in_row_of_subblocks);
 }
 
+#if defined(ARCH_BLACKHOLE) && defined(TRISC_PACK)
+// The ARC firmware throttle word is odd while block matmuls are throttled, which makes a half sync block math bound and faster per tile.
+ALWI bool mm_pack_per_tile_throttled() { return DST_SYNC_MODE == DstSync::SyncHalf && (*ckernel::throttle_ptr % 2); }
+#else
+ALWI bool mm_pack_per_tile_throttled() { return false; }
+#endif
+
 void kernel_main() {
 // RUNTIME ARGS
 #ifdef MATMUL_DRAM_SHARDED
@@ -499,7 +506,7 @@ void kernel_main() {
 #endif
                                 uint32_t start_dst_index = 0;
 #ifdef ARCH_BLACKHOLE
-                                if constexpr (mm_out_block_pack) {
+                                if (mm_out_block_pack && !mm_pack_per_tile_throttled()) {
                                     pack_block(start_dst_index, mm_out_dfb_id, out_subblock_num_tiles);
                                 } else {
                                     PACK((llk_matmul_pack<DST_ACCUM_MODE, false, PackMode::Default>(
@@ -531,7 +538,7 @@ void kernel_main() {
 
                                 uint32_t start_dst_index = 0;
 #ifdef ARCH_BLACKHOLE
-                                if constexpr (mm_partials_block_pack) {
+                                if (mm_partials_block_pack && !mm_pack_per_tile_throttled()) {
                                     pack_block(start_dst_index, mm_partials_dfb_id, out_subblock_num_tiles);
                                 } else {
                                     PACK((llk_matmul_pack<DST_ACCUM_MODE, false, PackMode::Default>(
