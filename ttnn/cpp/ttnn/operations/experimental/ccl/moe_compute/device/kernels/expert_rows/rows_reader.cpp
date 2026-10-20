@@ -45,7 +45,6 @@ constexpr uint32_t global_experts = get_named_compile_time_arg_val("global_exper
 constexpr uint32_t index_page_bytes = get_named_compile_time_arg_val("index_page_bytes");
 constexpr uint32_t mapping_page_bytes = get_named_compile_time_arg_val("mapping_page_bytes");
 constexpr uint32_t tokens_per_source = get_named_compile_time_arg_val("tokens_per_source");
-constexpr uint32_t sources_per_core = get_named_compile_time_arg_val("sources_per_core");
 constexpr uint32_t expert_groups = get_named_compile_time_arg_val("expert_groups");
 constexpr uint32_t job_rows = get_named_compile_time_arg_val("job_rows");
 constexpr uint32_t row_cap = get_named_compile_time_arg_val("row_cap");
@@ -54,26 +53,26 @@ constexpr uint32_t grid_h = get_named_compile_time_arg_val("grid_h");
 constexpr uint32_t mask_words = get_named_compile_time_arg_val("mask_words");
 constexpr uint32_t sem_entries = get_named_compile_time_arg_val("sem_entries");
 constexpr uint32_t sem_table = get_named_compile_time_arg_val("sem_table");
-// cb_rt byte offsets (MoEExpertRowsRoutingLayout)
-constexpr uint32_t rt_own = get_named_compile_time_arg_val("rt_own");
-constexpr uint32_t rt_maps = get_named_compile_time_arg_val("rt_maps");
-constexpr uint32_t rt_ids = get_named_compile_time_arg_val("rt_ids");
-constexpr uint32_t rt_scores = get_named_compile_time_arg_val("rt_scores");
-constexpr uint32_t rt_ctl = get_named_compile_time_arg_val("rt_ctl");
-constexpr uint32_t rt_slots = get_named_compile_time_arg_val("rt_slots");
-constexpr uint32_t rt_counts = get_named_compile_time_arg_val("rt_counts");
-constexpr uint32_t rt_offsets = get_named_compile_time_arg_val("rt_offsets");
-constexpr uint32_t rt_table = get_named_compile_time_arg_val("rt_table");
-constexpr uint32_t rt_table_counts = get_named_compile_time_arg_val("rt_table_counts");
-constexpr uint32_t rt_table_offsets = get_named_compile_time_arg_val("rt_table_offsets");
-constexpr uint32_t rt_rows = get_named_compile_time_arg_val("rt_rows");
-constexpr uint32_t rt_entry_slots = get_named_compile_time_arg_val("rt_entry_slots");
-constexpr uint32_t rt_entry_tokens = get_named_compile_time_arg_val("rt_entry_tokens");
-constexpr uint32_t rt_entry_scores = get_named_compile_time_arg_val("rt_entry_scores");
-constexpr uint32_t rt_entry_k = get_named_compile_time_arg_val("rt_entry_k");
-constexpr uint32_t rt_table_bytes = get_named_compile_time_arg_val("rt_table_bytes");
-constexpr uint32_t rt_jobs = get_named_compile_time_arg_val("rt_jobs");
-constexpr uint32_t rt_areas = get_named_compile_time_arg_val("rt_areas");
+// cb_routing byte offsets (RoutingLayout in moe_expert_rows.cpp)
+constexpr uint32_t routing_own_mapping = get_named_compile_time_arg_val("routing_own_mapping");
+constexpr uint32_t routing_source_mappings = get_named_compile_time_arg_val("routing_source_mappings");
+constexpr uint32_t routing_token_ids = get_named_compile_time_arg_val("routing_token_ids");
+constexpr uint32_t routing_token_scores = get_named_compile_time_arg_val("routing_token_scores");
+constexpr uint32_t routing_ctl = get_named_compile_time_arg_val("routing_ctl");
+constexpr uint32_t routing_active_experts = get_named_compile_time_arg_val("routing_active_experts");
+constexpr uint32_t routing_expert_rows = get_named_compile_time_arg_val("routing_expert_rows");
+constexpr uint32_t routing_expert_first_rows = get_named_compile_time_arg_val("routing_expert_first_rows");
+constexpr uint32_t routing_table = get_named_compile_time_arg_val("routing_table");
+constexpr uint32_t routing_table_counts = get_named_compile_time_arg_val("routing_table_counts");
+constexpr uint32_t routing_table_offsets = get_named_compile_time_arg_val("routing_table_offsets");
+constexpr uint32_t routing_row_tokens = get_named_compile_time_arg_val("routing_row_tokens");
+constexpr uint32_t routing_entry_experts = get_named_compile_time_arg_val("routing_entry_experts");
+constexpr uint32_t routing_entry_tokens = get_named_compile_time_arg_val("routing_entry_tokens");
+constexpr uint32_t routing_entry_scores = get_named_compile_time_arg_val("routing_entry_scores");
+constexpr uint32_t routing_entry_k = get_named_compile_time_arg_val("routing_entry_k");
+constexpr uint32_t routing_table_bytes = get_named_compile_time_arg_val("routing_table_bytes");
+constexpr uint32_t routing_jobs = get_named_compile_time_arg_val("routing_jobs");
+constexpr uint32_t routing_entry_areas = get_named_compile_time_arg_val("routing_entry_areas");
 // weights in moe_compute's prepared layout (tiles, PreparedLayout in moe_expert_rows.cpp): the stride of a ring
 // position's W0/W1 column groups and a bank piece of W0/W1 per (layer, expert); the stride of its W2 output groups
 // and its W2 per (layer, expert)
@@ -105,7 +104,6 @@ constexpr uint32_t block_bytes = block_tiles * tile_bytes;
 constexpr uint32_t packet_tiles = (block_tiles + block_packets - 1) / block_packets;  // tiles per NoC packet of a block
 static_assert(packet_tiles * tile_bytes <= NOC_MAX_BURST_SIZE, "a block's packets fit a NoC burst each");
 static_assert(top_k >= 1 && top_k <= 32, "top-k (kMaxTopK in moe_expert_rows.cpp)");
-static_assert(sources_per_core >= 1, "sources per core");
 constexpr uint32_t entries_per_token = top_k;                  // local entries per token at most (one per k)
 constexpr uint32_t index_page_entries = index_page_bytes / 2;  // u16 per index page
 constexpr uint16_t not_local = 0xFFFFu;
@@ -147,7 +145,8 @@ FORCE_INLINE TokenRange token_range(uint32_t core_index, uint32_t program_cores)
     return {first, end, first_source, sources};
 }
 
-// Entry area of core i (rt_areas): u32 count, then u16 slot[capacity], token[capacity], score[capacity], k[capacity].
+// Entry area of core i (routing_entry_areas): u32 count, then u16 slot[capacity], token[capacity], score[capacity],
+// k[capacity].
 struct EntryArea {
     uint32_t addr;
     tt_l1_ptr uint16_t* slot;
@@ -158,7 +157,7 @@ struct EntryArea {
 };
 
 FORCE_INLINE EntryArea entry_area(uint32_t routing, uint32_t core, uint32_t area_bytes, uint32_t capacity) {
-    const uint32_t addr = routing + rt_areas + core * area_bytes;
+    const uint32_t addr = routing + routing_entry_areas + core * area_bytes;
     tt_l1_ptr uint16_t* slot = reinterpret_cast<tt_l1_ptr uint16_t*>(addr + 4);
     return {addr, slot, slot + capacity, slot + 2 * capacity, slot + 3 * capacity};
 }
@@ -173,11 +172,12 @@ FORCE_INLINE void read_routing_inputs(
     uint32_t routing,
     const TokenRange& range,
     uint32_t device_id) {
-    noc.async_read(mapping, CoreLocalMem<uint32_t>(routing + rt_own), global_experts * 2, {.page_id = device_id}, {});
+    noc.async_read(
+        mapping, CoreLocalMem<uint32_t>(routing + routing_own_mapping), global_experts * 2, {.page_id = device_id}, {});
     for (uint32_t s = 0; s < range.sources; ++s) {
         noc.async_read(
             mapping,
-            CoreLocalMem<uint32_t>(routing + rt_maps + s * global_experts * 2),
+            CoreLocalMem<uint32_t>(routing + routing_source_mappings + s * global_experts * 2),
             global_experts * 2,
             {.page_id = source_mapping_row(range.first_source + s)},
             {});
@@ -185,13 +185,13 @@ FORCE_INLINE void read_routing_inputs(
     for (uint32_t t = range.first; t < range.end; ++t) {
         noc.async_read(
             indices,
-            CoreLocalMem<uint32_t>(routing + rt_ids + (t - range.first) * index_page_bytes),
+            CoreLocalMem<uint32_t>(routing + routing_token_ids + (t - range.first) * index_page_bytes),
             index_page_bytes,
             {.page_id = t},
             {});
         noc.async_read(
             scores,
-            CoreLocalMem<uint32_t>(routing + rt_scores + (t - range.first) * index_page_bytes),
+            CoreLocalMem<uint32_t>(routing + routing_token_scores + (t - range.first) * index_page_bytes),
             index_page_bytes,
             {.page_id = t},
             {});
@@ -203,14 +203,14 @@ FORCE_INLINE void read_routing_inputs(
 // it to itself), each source's row the local slot of the experts that source sends to this device.
 FORCE_INLINE void map_to_local_slots(uint32_t routing, uint32_t sources, uint32_t device_id) {
     // this RISC alone works on the scratch after the reads: plain pointers
-    tt_l1_ptr uint16_t* local_slot = reinterpret_cast<tt_l1_ptr uint16_t*>(routing + rt_own);
+    tt_l1_ptr uint16_t* local_slot = reinterpret_cast<tt_l1_ptr uint16_t*>(routing + routing_own_mapping);
     uint32_t next_slot = 0;
     for (uint32_t e = 0; e < global_experts; ++e) {
         local_slot[e] = local_slot[e] == device_id ? next_slot++ : not_local;
     }
     for (uint32_t s = 0; s < sources; ++s) {
         tt_l1_ptr uint16_t* source_slot =
-            reinterpret_cast<tt_l1_ptr uint16_t*>(routing + rt_maps + s * global_experts * 2);
+            reinterpret_cast<tt_l1_ptr uint16_t*>(routing + routing_source_mappings + s * global_experts * 2);
         for (uint32_t e = 0; e < global_experts; ++e) {
             source_slot[e] = source_slot[e] == device_id ? local_slot[e] : not_local;
         }
@@ -219,12 +219,13 @@ FORCE_INLINE void map_to_local_slots(uint32_t routing, uint32_t sources, uint32_
 
 // This core's local entries (slot, token, score, k) in token order, then k order, into its entry area.
 FORCE_INLINE void collect_local_entries(uint32_t routing, const EntryArea& area, const TokenRange& range) {
-    const tt_l1_ptr uint16_t* token_ids = reinterpret_cast<const tt_l1_ptr uint16_t*>(routing + rt_ids);
-    const tt_l1_ptr uint16_t* token_scores = reinterpret_cast<const tt_l1_ptr uint16_t*>(routing + rt_scores);
+    const tt_l1_ptr uint16_t* token_ids = reinterpret_cast<const tt_l1_ptr uint16_t*>(routing + routing_token_ids);
+    const tt_l1_ptr uint16_t* token_scores =
+        reinterpret_cast<const tt_l1_ptr uint16_t*>(routing + routing_token_scores);
     uint32_t n = 0;
     for (uint32_t t = range.first; t < range.end; ++t) {
         const tt_l1_ptr uint16_t* source_slot = reinterpret_cast<const tt_l1_ptr uint16_t*>(
-            routing + rt_maps + (t / tokens_per_source - range.first_source) * global_experts * 2);
+            routing + routing_source_mappings + (t / tokens_per_source - range.first_source) * global_experts * 2);
         const tt_l1_ptr uint16_t* ids = token_ids + (t - range.first) * index_page_entries;
         uint16_t slots[top_k];
         for (uint32_t k = 0; k < top_k; ++k) {
@@ -300,13 +301,13 @@ FORCE_INLINE void lay_out_slots(RoutingTable& table) {
 }
 
 // Areas in core order = tokens ascending within a slot: each slot's rows in token order, and the same entries in
-// token order for the table (rt_entry_*). Entries past a slot's row_cap are dropped, as in count_slot_rows.
+// token order for the table (routing_entry_*). Entries past a slot's row_cap are dropped, as in count_slot_rows.
 FORCE_INLINE void fill_rows_and_entries(
     RoutingTable& table, uint32_t routing, uint32_t program_cores, uint32_t area_bytes, uint32_t capacity) {
-    tt_l1_ptr uint16_t* entry_slots = reinterpret_cast<tt_l1_ptr uint16_t*>(routing + rt_entry_slots);
-    tt_l1_ptr uint16_t* entry_tokens = reinterpret_cast<tt_l1_ptr uint16_t*>(routing + rt_entry_tokens);
-    tt_l1_ptr uint16_t* entry_scores = reinterpret_cast<tt_l1_ptr uint16_t*>(routing + rt_entry_scores);
-    tt_l1_ptr uint16_t* entry_k = reinterpret_cast<tt_l1_ptr uint16_t*>(routing + rt_entry_k);
+    tt_l1_ptr uint16_t* entry_slots = reinterpret_cast<tt_l1_ptr uint16_t*>(routing + routing_entry_experts);
+    tt_l1_ptr uint16_t* entry_tokens = reinterpret_cast<tt_l1_ptr uint16_t*>(routing + routing_entry_tokens);
+    tt_l1_ptr uint16_t* entry_scores = reinterpret_cast<tt_l1_ptr uint16_t*>(routing + routing_entry_scores);
+    tt_l1_ptr uint16_t* entry_k = reinterpret_cast<tt_l1_ptr uint16_t*>(routing + routing_entry_k);
     uint32_t q = 0;
     for (uint32_t i = 0; i < program_cores; ++i) {
         const EntryArea area = entry_area(routing, i, area_bytes, capacity);
@@ -392,7 +393,7 @@ FORCE_INLINE uint32_t deal_jobs(const RoutingTable& table, uint32_t routing, tt_
     // until the jobs are written: bucket lists of the slots with a partial job, that job's index
     tt_l1_ptr uint16_t* bucket_next = table.jobs;
     tt_l1_ptr uint16_t* partial_job = table.jobs + table.active;
-    tt_l1_ptr uint32_t* dealt = reinterpret_cast<tt_l1_ptr uint32_t*>(routing + rt_areas);
+    tt_l1_ptr uint32_t* dealt = reinterpret_cast<tt_l1_ptr uint32_t*>(routing + routing_entry_areas);
     uint32_t bucket_head[row_tiles + 1];
     for (uint32_t t = 0; t <= row_tiles; ++t) {
         bucket_head[t] = list_end;
@@ -440,9 +441,9 @@ FORCE_INLINE void write_table_head(
     ctl[0] = table_jobs;
     ctl[1] = table.active;
     ctl[2] = table.routed_rows;
-    *reinterpret_cast<tt_l1_ptr uint32_t*>(routing + rt_table) = table.routed_rows;
-    tt_l1_ptr uint16_t* head_slot_rows = reinterpret_cast<tt_l1_ptr uint16_t*>(routing + rt_table_counts);
-    tt_l1_ptr uint16_t* head_slot_first_row = reinterpret_cast<tt_l1_ptr uint16_t*>(routing + rt_table_offsets);
+    *reinterpret_cast<tt_l1_ptr uint32_t*>(routing + routing_table) = table.routed_rows;
+    tt_l1_ptr uint16_t* head_slot_rows = reinterpret_cast<tt_l1_ptr uint16_t*>(routing + routing_table_counts);
+    tt_l1_ptr uint16_t* head_slot_first_row = reinterpret_cast<tt_l1_ptr uint16_t*>(routing + routing_table_offsets);
     uint32_t first_row = 0;
     for (uint32_t l = 0; l < local_experts; ++l) {
         head_slot_rows[l] = table.slot_rows[l];
@@ -484,14 +485,14 @@ FORCE_INLINE uint32_t build_routing_table(
     const CommonArgs& common,
     uint32_t root_x,
     uint32_t root_y) {
-    volatile tt_l1_ptr uint32_t* ctl = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(routing + rt_ctl);
-    tt_l1_ptr uint16_t* group_first_job = reinterpret_cast<tt_l1_ptr uint16_t*>(routing + rt_ctl + 16);
+    volatile tt_l1_ptr uint32_t* ctl = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(routing + routing_ctl);
+    tt_l1_ptr uint16_t* group_first_job = reinterpret_cast<tt_l1_ptr uint16_t*>(routing + routing_ctl + 16);
     RoutingTable table{
-        .slot_rows = reinterpret_cast<tt_l1_ptr uint16_t*>(routing + rt_counts),
-        .slot_first_row = reinterpret_cast<tt_l1_ptr uint16_t*>(routing + rt_offsets),
-        .active_slots = reinterpret_cast<tt_l1_ptr uint16_t*>(routing + rt_slots),
-        .row_tokens = reinterpret_cast<tt_l1_ptr uint16_t*>(routing + rt_rows),
-        .jobs = reinterpret_cast<tt_l1_ptr uint16_t*>(routing + rt_jobs)};
+        .slot_rows = reinterpret_cast<tt_l1_ptr uint16_t*>(routing + routing_expert_rows),
+        .slot_first_row = reinterpret_cast<tt_l1_ptr uint16_t*>(routing + routing_expert_first_rows),
+        .active_slots = reinterpret_cast<tt_l1_ptr uint16_t*>(routing + routing_active_experts),
+        .row_tokens = reinterpret_cast<tt_l1_ptr uint16_t*>(routing + routing_row_tokens),
+        .jobs = reinterpret_cast<tt_l1_ptr uint16_t*>(routing + routing_jobs)};
     Semaphore<>(sem_entries).wait_min(program_cores - 1);
     invalidate_l1_cache();
     count_slot_rows(table, routing, program_cores, area_bytes, capacity);
@@ -506,19 +507,20 @@ FORCE_INLINE uint32_t build_routing_table(
     write_table_head(table, routing, ctl, table_jobs);
     signal_table_ready(noc, common, root_x, root_y);
     // drained before this kernel ends
-    noc.async_write(CoreLocalMem<uint32_t>(routing + rt_table), table_block, rt_table_bytes, {}, {.page_id = 0});
+    noc.async_write(
+        CoreLocalMem<uint32_t>(routing + routing_table), table_block, routing_table_bytes, {}, {.page_id = 0});
     return table_jobs;
 }
 
 // Every other core: the ctl block, the jobs and the routed rows' tokens from the root. Returns the job count.
 FORCE_INLINE uint32_t read_routing_table(const Noc& noc, uint32_t routing, uint32_t root_x, uint32_t root_y) {
-    volatile tt_l1_ptr uint32_t* ctl = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(routing + rt_ctl);
+    volatile tt_l1_ptr uint32_t* ctl = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(routing + routing_ctl);
     Semaphore<>(sem_table).wait_min(1);
     noc.async_read(
         UnicastEndpoint{},
-        CoreLocalMem<uint32_t>(routing + rt_ctl),
+        CoreLocalMem<uint32_t>(routing + routing_ctl),
         ctl_bytes,
-        {.noc_x = root_x, .noc_y = root_y, .addr = routing + rt_ctl},
+        {.noc_x = root_x, .noc_y = root_y, .addr = routing + routing_ctl},
         {});
     noc.async_read_barrier();
     const uint32_t table_jobs = ctl[0];
@@ -526,15 +528,15 @@ FORCE_INLINE uint32_t read_routing_table(const Noc& noc, uint32_t routing, uint3
     if (table_jobs) {
         noc.async_read(
             UnicastEndpoint{},
-            CoreLocalMem<uint32_t>(routing + rt_jobs),
+            CoreLocalMem<uint32_t>(routing + routing_jobs),
             (3 * table_jobs * 2 + 15) & ~15u,
-            {.noc_x = root_x, .noc_y = root_y, .addr = routing + rt_jobs},
+            {.noc_x = root_x, .noc_y = root_y, .addr = routing + routing_jobs},
             {});
         noc.async_read(
             UnicastEndpoint{},
-            CoreLocalMem<uint32_t>(routing + rt_rows),
+            CoreLocalMem<uint32_t>(routing + routing_row_tokens),
             (routed_rows * 2 + 15) & ~15u,
-            {.noc_x = root_x, .noc_y = root_y, .addr = routing + rt_rows},
+            {.noc_x = root_x, .noc_y = root_y, .addr = routing + routing_row_tokens},
             {});
         noc.async_read_barrier();
     }
@@ -553,12 +555,12 @@ struct GroupJobs {
 };
 
 FORCE_INLINE GroupJobs group_jobs(uint32_t routing, uint32_t group, uint32_t table_jobs) {
-    const tt_l1_ptr uint16_t* group_first_job = reinterpret_cast<const tt_l1_ptr uint16_t*>(routing + rt_ctl + 16);
+    const tt_l1_ptr uint16_t* group_first_job = reinterpret_cast<const tt_l1_ptr uint16_t*>(routing + routing_ctl + 16);
     const uint32_t count = weight_stationary
                                ? group_first_job[group + 1] - group_first_job[group]
                                : (table_jobs > group ? (table_jobs - group + expert_groups - 1) / expert_groups : 0);
     return {
-        .table = reinterpret_cast<const tt_l1_ptr uint16_t*>(routing + rt_jobs),
+        .table = reinterpret_cast<const tt_l1_ptr uint16_t*>(routing + routing_jobs),
         .group = group,
         .first = weight_stationary ? uint32_t(group_first_job[group]) : 0u,
         .count = count};
@@ -824,7 +826,7 @@ FORCE_INLINE void stream_weights(
 
 void kernel_main() {
     CircularBuffer cb_w(get_named_compile_time_arg_val("cb_w"));
-    CircularBuffer cb_routing(get_named_compile_time_arg_val("cb_rt"));
+    CircularBuffer cb_routing(get_named_compile_time_arg_val("cb_routing"));
     CircularBuffer cb_ctl(get_named_compile_time_arg_val("cb_ctl"));
     constexpr auto indices_args = TensorAccessorArgs<0>();
     constexpr auto scores_args = TensorAccessorArgs<indices_args.next_compile_time_args_offset()>();
@@ -868,7 +870,7 @@ void kernel_main() {
     if (!root) {
         send_entries_to_root(noc, area, area_bytes, root_x, root_y);
     }
-    const auto table_block = TensorAccessor(table_args, table_addr, rt_table_bytes);
+    const auto table_block = TensorAccessor(table_args, table_addr, routing_table_bytes);
     const uint32_t table_jobs =
         root ? build_routing_table(
                    noc, table_block, routing, program_cores, area_bytes, capacity, common, root_x, root_y)
