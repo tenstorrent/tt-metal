@@ -102,11 +102,6 @@ uint64_t gate_l1_budget(const Tensor& input, uint64_t reserved) {
     return saturating_sub(static_l1_ceiling(input), reserved);
 }
 
-uint32_t tile_page_bytes_as(const Tensor& input, DataType dtype) {
-    const auto format = tt::tt_metal::datatype_to_dataformat_converter(dtype);
-    return tt::round_up(input.tensor_spec().tile().get_tile_size(format), tt::tt_metal::hal::get_dram_alignment());
-}
-
 // The smallest CB plan must fit the static window; the program factory then scales the batching to the L1 that is
 // free when it builds.
 bool tile_fits_l1(const Tensor& input, const ttnn::prim::PadCodegenParams& attrs, uint64_t reserved) {
@@ -159,12 +154,15 @@ bool output_covers_input(const Tensor& input, const ttnn::prim::PadCodegenParams
 
 }  // namespace
 
-uint32_t tile_page_bytes(const Tensor& input) { return tile_page_bytes_as(input, input.dtype()); }
+uint32_t dram_aligned_tile_bytes(const Tensor& input, DataType dtype) {
+    const auto format = tt::tt_metal::datatype_to_dataformat_converter(dtype);
+    return tt::round_up(input.tensor_spec().tile().get_tile_size(format), tt::tt_metal::hal::get_dram_alignment());
+}
 
 uint64_t cb_footprint_bytes(const Tensor& input, const ttnn::prim::PadCodegenParams& attrs, const BatchPlan& batches) {
     // A composed block-float pad builds its program for the bfloat16 copy.
     const uint64_t tile_bytes =
-        tile_page_bytes_as(input, composes_via_bf16(input, attrs) ? DataType::BFLOAT16 : input.dtype());
+        dram_aligned_tile_bytes(input, composes_via_bf16(input, attrs) ? DataType::BFLOAT16 : input.dtype());
     return (static_cast<uint64_t>(cb_depth(batches.read_batch, batches.write_batch)) + 1) * tile_bytes;
 }
 

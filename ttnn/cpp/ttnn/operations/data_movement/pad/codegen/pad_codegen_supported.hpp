@@ -26,8 +26,8 @@ namespace ttnn::operations::data_movement::pad_codegen {
 // Output CB depth in pages for the given batching.
 uint32_t cb_depth(uint32_t read_batch, uint32_t write_batch);
 
-// Aligned bytes of one TILE page.
-uint32_t tile_page_bytes(const Tensor& input);
+// Bytes of one TILE page of `dtype`, rounded up to the DRAM alignment.
+uint32_t dram_aligned_tile_bytes(const Tensor& input, tt::tt_metal::DataType dtype);
 
 // Page batching of the tile pad's reader and writer.
 struct BatchPlan {

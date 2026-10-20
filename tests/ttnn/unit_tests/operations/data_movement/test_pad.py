@@ -1810,10 +1810,6 @@ def _torch_pad(x, padding, value):
     return torch.nn.functional.pad(x, _ttnn_padding_to_torch(padding), mode="constant", value=value)
 
 
-def _assert_pad_matches(expected, output):
-    assert_tensors_equal(expected.to(torch.float64), output.to(torch.float64))
-
-
 # A nonzero value is what exercises the partial-tile fill: from_torch already zeroes the unused lanes.
 _pad_codegen_cases = [
     pytest.param(
@@ -1904,7 +1900,7 @@ def test_pad_codegen(device, shape, padding, value, dtype, memory_config):
     x = _codegen_input(shape, dtype)
     xt = ttnn.from_torch(x, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config)
     output = ttnn.to_torch(_pad_force_codegen(xt, padding, value))
-    _assert_pad_matches(_torch_pad(x, padding, value), output)
+    assert_tensors_equal(_torch_pad(x, padding, value), output)
 
 
 @pytest.mark.parametrize(
@@ -1937,7 +1933,7 @@ def test_pad_auto_routes_to_codegen(device, shape, padding, value, dtype, memory
     _pad_force_native(xt, padding, value)
     entries_before = device.num_program_cache_entries()
     output = ttnn.to_torch(ttnn.pad(xt, padding, value))
-    _assert_pad_matches(_torch_pad(x, padding, value), output)
+    assert_tensors_equal(_torch_pad(x, padding, value), output)
     entries_after_auto = device.num_program_cache_entries()
     assert entries_after_auto > entries_before, "auto added no program over native's; expected the codegen path"
     _pad_force_codegen(xt, padding, value)
@@ -1959,7 +1955,7 @@ def test_pad_codegen_program_cache(device):
         resident.append(xt)
         output = _pad_force_codegen(xt, padding, value)
         outputs.append((output, _torch_pad(x, padding, value)))
-        _assert_pad_matches(outputs[-1][1], ttnn.to_torch(output))
+        assert_tensors_equal(outputs[-1][1], ttnn.to_torch(output))
         if entries is None:
             entries = device.num_program_cache_entries()
         else:
@@ -1977,7 +1973,7 @@ def test_pad_codegen_program_cache(device):
     # The first output is still alive, so the cache hit can only be correct if it rebound the output buffer.
     (first, first_expected), (second, _) = outputs
     assert first.buffer_address() != second.buffer_address(), "second output reused the first output's buffer"
-    _assert_pad_matches(first_expected, ttnn.to_torch(first))
+    assert_tensors_equal(first_expected, ttnn.to_torch(first))
 
 
 def test_pad_codegen_program_rekeys_when_l1_frontier_drops(device):
@@ -1997,7 +1993,7 @@ def test_pad_codegen_program_rekeys_when_l1_frontier_drops(device):
     x = _codegen_input(shape, ttnn.bfloat16)
     xt = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     expected = _torch_pad(x, padding, value)
-    _assert_pad_matches(expected, ttnn.to_torch(_pad_force_codegen(xt, padding, value)))
+    assert_tensors_equal(expected, ttnn.to_torch(_pad_force_codegen(xt, padding, value)))
     entries = device.num_program_cache_entries()
 
     info = ttnn._ttnn.reports.get_device_info(device)
@@ -2012,7 +2008,7 @@ def test_pad_codegen_program_rekeys_when_l1_frontier_drops(device):
     try:
         headroom = resident.buffer_address() - info.address_at_first_l1_cb_buffer
         assert min_plan_bytes <= headroom < full_plan_bytes, f"pinned tensor left {headroom} B of CB headroom"
-        _assert_pad_matches(expected, ttnn.to_torch(_pad_force_codegen(xt, padding, value)))
+        assert_tensors_equal(expected, ttnn.to_torch(_pad_force_codegen(xt, padding, value)))
         msg = "the dispatch under less L1 hit the program planned for a clear L1"
         assert device.num_program_cache_entries() == entries + 1, msg
     finally:
@@ -2098,7 +2094,7 @@ def test_pad_codegen_partial_tile_input_with_thousands_of_border_tiles_per_core(
     x = torch.rand(shape, dtype=torch.bfloat16)
     xt = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     output = ttnn.to_torch(_pad_force_codegen(xt, padding, value))
-    _assert_pad_matches(_torch_pad(x, padding, value), output)
+    assert_tensors_equal(_torch_pad(x, padding, value), output)
 
 
 def test_pad_codegen_uneven_core_split(device):
@@ -2114,7 +2110,7 @@ def test_pad_codegen_uneven_core_split(device):
     x = _codegen_input(shape, ttnn.bfloat16)
     xt = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     output = ttnn.to_torch(_pad_force_codegen(xt, padding, value))
-    _assert_pad_matches(_torch_pad(x, padding, value), output)
+    assert_tensors_equal(_torch_pad(x, padding, value), output)
 
 
 @pytest.mark.parametrize("value", [0.0, 2.0], ids=["zero", "nonzero"])
@@ -2147,7 +2143,7 @@ def test_pad_codegen_mixed_placement(device, input_placement, output_placement):
     xt = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=input_placement)
     output = _pad_force_codegen(xt, padding, value, memory_config=output_placement)
     assert output.memory_config().buffer_type == output_placement.buffer_type
-    _assert_pad_matches(_torch_pad(x, padding, value), ttnn.to_torch(output))
+    assert_tensors_equal(_torch_pad(x, padding, value), ttnn.to_torch(output))
 
 
 # The codegen program spreads work over the whole compute grid, so it cannot honour either control.

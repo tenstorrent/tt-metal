@@ -134,7 +134,7 @@ ProgramDescriptor build_pad_tiled(
     const auto tile = input.tensor_spec().tile();
     const uint32_t tile_h = tile.get_height();
     const uint32_t tile_w = tile.get_width();
-    const uint32_t tile_bytes = operations::data_movement::pad_codegen::tile_page_bytes(input);
+    const uint32_t tile_bytes = operations::data_movement::pad_codegen::dram_aligned_tile_bytes(input, input.dtype());
 
     const auto& in_shape = input.logical_shape();
     const Coord4 in_tiles{in_shape[0], in_shape[1], tt::div_up(in_shape[2], tile_h), tt::div_up(in_shape[3], tile_w)};
