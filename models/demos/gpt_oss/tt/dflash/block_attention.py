@@ -29,6 +29,7 @@ from ..fused_decode.boundary import KERNEL_DIR
 
 TILE = ttnn.TILE_SIZE
 TREE_SEM = 9
+OUT_SEM = 12  # BA_OUT_SPLIT: the reader's half of the root's output written
 LAND_SEM, COPY_SEM = 10, 11  # the shared K / V reads: groups landed in the leader / copied by its partner
 MIN_CHUNKS = 4  # 32-position chunks per slice at least
 G = 8  # chunks per K / V group (one running-softmax step)
@@ -279,10 +280,19 @@ class BlockAttention:
             defines += [("BA_Q_RSTRIDE", str(user[1]))]
             if heads_io:
                 defines += [("BA_Q_HEADS", str(q.shape[2] // TILE)), ("BA_OUT_CONCAT", str(out.shape[-1] // TILE))]
+                # the root's output writes split between the writer (column tile 0) and the reader (1)
+                defines += [
+                    ("BA_OUT_SPLIT", str(len(reader_common) + 1)),
+                    ("BA_OUT_SEM", str(OUT_SEM)),
+                    ("BA_CB_OUT", str(cb_out)),
+                ]
+                reader_ct += ttnn.TensorAccessorArgs(out).get_compile_time_args()
             else:
                 defines += [("BA_OUT_ROWS", "1")]
-            reader_common.append(user[0])
+            reader_common.append(user[0])  # (BA_USER_ARG)
             writer_common.append(user[0])
+            if heads_io:
+                reader_common.append(out.buffer_address())  # (BA_OUT_SPLIT)
         if self.window:  # one window for all rows
             defines.append(("BA_WINDOW", str(self.window)))
         if self.swin:
@@ -326,7 +336,8 @@ class BlockAttention:
     def semaphores(self):
         """The op's own program semaphores (besides the wait semaphore)."""
         return [
-            ttnn.SemaphoreDescriptor(i, ttnn.CoreType.WORKER, self.cores, 0) for i in (TREE_SEM, LAND_SEM, COPY_SEM)
+            ttnn.SemaphoreDescriptor(i, ttnn.CoreType.WORKER, self.cores, 0)
+            for i in (TREE_SEM, LAND_SEM, COPY_SEM, OUT_SEM)
         ]
 
 

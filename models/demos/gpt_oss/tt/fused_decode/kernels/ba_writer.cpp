@@ -105,7 +105,12 @@ void kernel_main() {
         // rt BA_OUT_CONCAT + c): packed row 8 i + j (block row 4 t + i, head 8 g + j) -> row R = (4 t + i) BA_Q_RSTRIDE
         // + user, column tiles 2 (8 g + j) + d, one 32-byte face row per (i, j, d, f)
         const uint32_t user = get_common_arg_val<uint32_t>(BA_USER_ARG_W) + grp / (BA_TQ * BA_NKV);
-        for (uint32_t d = 0; d < 2; ++d) {
+#ifdef BA_OUT_SPLIT
+        constexpr uint32_t n_d = 1;  // (the reader writes column tile 1)
+#else
+        constexpr uint32_t n_d = 2;
+#endif
+        for (uint32_t d = 0; d < n_d; ++d) {
             for (uint32_t i = 0; i < 4; ++i) {
                 const uint32_t R = (4 * t + i) * BA_Q_RSTRIDE + user, rr = R % 32;
                 for (uint32_t j = 0; j < 8; ++j) {
@@ -136,6 +141,16 @@ void kernel_main() {
         }
 #endif
         noc_async_write_barrier();
+#ifdef BA_OUT_SPLIT
+        {
+            volatile tt_l1_ptr uint32_t* done =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(BA_OUT_SEM));
+            while (*done == 0) {
+                invalidate_l1_cache();
+            }
+            *done = 0;
+        }
+#endif
 #ifdef BA_OUT_NOTIFY_N
         // a consumer in the same program (the drafter's o_proj, dflash/fused_draft.py): increment its semaphore
         // BA_OUT_NOTIFY_SEM on each of its cores (common args BA_OUT_NOTIFY_ARG..: noc (x << 8 | y), 2 per word)

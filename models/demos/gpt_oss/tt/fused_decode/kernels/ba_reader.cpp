@@ -77,6 +77,10 @@ void kernel_main() {
     constexpr auto pt_args = TensorAccessorArgs<pos_args.next_compile_time_args_offset()>();
     constexpr auto sink_args = TensorAccessorArgs<pt_args.next_compile_time_args_offset()>();
     constexpr auto lib_args = TensorAccessorArgs<sink_args.next_compile_time_args_offset()>();
+#ifdef BA_OUT_SPLIT
+    // (the second half of the root's output writes, BA_OUT_CONCAT: the output tensor, common arg BA_OUT_SPLIT)
+    constexpr auto out_args = TensorAccessorArgs<lib_args.next_compile_time_args_offset()>();
+#endif
 
     constexpr uint32_t tile = 2048;  // BF16 tile
     constexpr uint32_t Tt = M / 4;   // packed Q tiles per kv head
@@ -506,4 +510,29 @@ void kernel_main() {
     if (sl.recv_rounds) {
         noc_semaphore_set(tree_sem, 0);
     }
+#ifdef BA_OUT_SPLIT
+    // the root's output, column tile d = 1 of its packed tile (the writer writes d = 0; 64 32-byte writes each: the
+    // writer alone left a ~5 us tail after the compute's last tile); the writer pops cb_out after this core's flag
+    if (sl.send_round < 0) {
+        const auto s_out = TensorAccessor(out_args, get_common_arg_val<uint32_t>(BA_OUT_SPLIT), tile);
+        cb_wait_front(BA_CB_OUT, 2);
+        const uint32_t src = get_read_ptr(BA_CB_OUT);
+        constexpr uint32_t d = 1;
+        for (uint32_t i = 0; i < 4; ++i) {
+            const uint32_t R = (4 * t + i) * BA_Q_RSTRIDE + user, rr = R % 32;
+            for (uint32_t j = 0; j < 8; ++j) {
+                const uint64_t dst = s_out.get_noc_addr((R / 32) * BA_OUT_CONCAT + 2 * (8 * g + j) + d);
+                const uint32_t pr = 8 * i + j;
+                for (uint32_t f = 0; f < 2; ++f) {
+                    noc_async_write(
+                        src + d * tile + ((pr / 16) * 2 + f) * 512 + (pr % 16) * 32,
+                        dst + ((rr / 16) * 2 + f) * 512 + (rr % 16) * 32,
+                        32);
+                }
+            }
+        }
+        noc_async_write_barrier();
+        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(BA_OUT_SEM)) = 1;
+    }
+#endif
 }
