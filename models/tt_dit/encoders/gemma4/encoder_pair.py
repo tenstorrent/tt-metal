@@ -514,10 +514,11 @@ def _probe_stats(embeds: tuple[torch.Tensor, torch.Tensor | None], axis: str) ->
 
 
 def _broken_axes(embeds: tuple[torch.Tensor, torch.Tensor | None]) -> list[str]:
-    """The connector axes whose probe embeds are non-finite, or (video only) near all zeros.
+    """The connector axes whose probe embeds are non-finite or near all zeros.
 
-    Healthy 4x8 audio connectors embed every prompt to exact zeros (live and freshly rebuilt
-    ltx25_ic and sulphur25_ic caches alike), so zeros there say nothing about the cache.
+    Audio is held to the same floor as video. Healthy 4x8 audio connectors embed at absmean ~0.35;
+    the exact zeros once taken for healthy came from the #117 audio cache (weights absmean 0.0066 vs
+    ~0.83), which exabox job 139068 served unflagged.
     """
     video, audio = embeds
 
@@ -526,7 +527,7 @@ def _broken_axes(embeds: tuple[torch.Tensor, torch.Tensor | None]) -> list[str]:
             return False
         if not torch.isfinite(t).all():
             return True
-        return axis == "video" and t.abs().mean() < CONNECTOR_PROBE_MIN_ABSMEAN
+        return t.abs().mean() < CONNECTOR_PROBE_MIN_ABSMEAN
 
     return [axis for axis, t in (("video", video), ("audio", audio)) if broken(axis, t)]
 

@@ -44,8 +44,8 @@ GOOD = (torch.full((1, 8, 4096), 0.25), torch.full((1, 8, 2048), 0.25))
 def test_broken_axes():
     zeros = (torch.zeros(1, 8, 4096), torch.zeros(1, 8, 2048))
     assert ep._broken_axes(GOOD) == []
-    assert ep._broken_axes(zeros) == ["video"]
-    assert ep._broken_axes((GOOD[0], torch.zeros(1, 8, 2048))) == []  # healthy audio embeds to zeros
+    assert ep._broken_axes(zeros) == ["video", "audio"]
+    assert ep._broken_axes((GOOD[0], torch.zeros(1, 8, 2048))) == ["audio"]  # the #117 audio cache
     assert ep._broken_axes((GOOD[0], torch.full((1, 8, 2048), float("inf")))) == ["audio"]
     assert ep._broken_axes((torch.full((1, 8, 4096), float("nan")), None)) == ["video"]
 
@@ -183,8 +183,6 @@ def test_bad_connector_cache_is_rebuilt_on_load(*, mesh_device, tmp_path, monkey
     for axis, (key_dir, sources) in bad_files.items():
         aside = list(key_dir.parent.glob(f"{key_dir.name}.bad-*"))
         assert all(f.exists() for f in sources), "the original bad cache was touched"
-        if axis == "audio" and not aside:
-            continue  # the #117 audio cache embeds to zeros like a healthy one; only non-finite is rebuilt
         assert len(aside) == 1, f"the bad {axis} connector cache was not moved aside"
         assert all(p.is_symlink() for p in aside[0].iterdir()), f"the {axis} cache moved aside is not the bad one"
         assert (key_dir / cache_module.CACHE_DICT_FILE).is_file(), f"the {axis} connector cache was not rebuilt"
@@ -193,4 +191,4 @@ def test_bad_connector_cache_is_rebuilt_on_load(*, mesh_device, tmp_path, monkey
     video, audio = pair.encode(["a cat playing a piano in a jazz bar"])[0]
     logger.info(f"after rebuild: video absmean {video.abs().mean():.4f} | audio absmean {audio.abs().mean():.4f}")
     assert ep._broken_axes((video, audio)) == []
-    assert video.std() > 0.01
+    assert video.std() > 0.01 and audio.std() > 0.01

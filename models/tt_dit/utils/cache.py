@@ -9,6 +9,7 @@ import json
 import os
 import secrets
 import shutil
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple
 
@@ -31,6 +32,11 @@ CACHE_FORMAT = 1
 # shape or dtype — e.g. GemmaFeatureExtractor's D-major→layer-major column permutation.
 # Shape, dtype, layout and sharding changes need no bump: `module_signature` already sees them.
 CACHE_VERSION = 1
+
+# A cache hit up to this many bytes of tensorbins is scanned for NaN/inf before it is served
+# (TT_DIT_CACHE_VERIFY=1): connectors and VAEs, not a transformer, whose publish-time verify covers it.
+SCAN_MAX_BYTES_DEFAULT = 8 << 30
+_scanned_cache_dirs: set[str] = set()
 
 
 class MissingCacheError(Exception):
@@ -190,7 +196,9 @@ def load_model(
         ttnn.distributed_context_barrier()
         return
 
-    if _cache_is_complete(cache_dir, tt_model, key):
+    if _cache_is_complete(cache_dir, tt_model, key) and not (
+        get_torch_state_dict is not None and _set_aside_if_nonfinite(tt_model, cache_dir)
+    ):
         logger.info(f"loading cache at '{cache_dir}'.")
         with walltime.timed("weight_load", f"{model_name}/{subfolder}", cached=True):
             tt_model.load(cache_dir)
@@ -290,6 +298,11 @@ def verify_saved_model(tt_model: Module, cache_dir: str | Path, /, *, prefix: st
                     f"cache mismatch in '{path.name}': shards {bad or 'count'} differ "
                     f"({len(resident)} resident vs {len(fresh)} reloaded)"
                 )
+            elif nonfinite := [i for i, t in enumerate(fresh) if not torch.isfinite(t).all()]:
+                # Weights prepped on a faulty device read back exactly and are still garbage (#208: an
+                # ltx VAE encoder cache of inf/NaN). to_torch drops tile padding, so only real values count.
+                ok = False
+                logger.error(f"cache holds NaN or inf in '{path.name}': shards {nonfinite}")
         except RuntimeError as err:
             ok = False
             logger.error(f"cache unreadable: '{path.name}' failed to load or compare: {err}")
@@ -341,6 +354,61 @@ def model_cache_dir(
         path = path / ownership_suffix
 
     return path
+
+
+def nonfinite_tensorbins(tt_model: Module, cache_dir: str | Path) -> list[str]:
+    """The parameters of `tt_model` whose tensorbin in `cache_dir` holds NaN or inf, read on the host.
+
+    Only logical values count: to_torch drops tile padding. A file that does not load is listed too.
+    """
+    import torch
+
+    bad = []
+    for name, _ in _walk_parameters(tt_model):
+        try:
+            stored = ttnn.load_tensor(Path(cache_dir) / f"{name}.tensorbin", device=None)
+            if not all(torch.isfinite(ttnn.to_torch(t)).all() for t in ttnn.get_device_tensors(stored)):
+                bad.append(name)
+        except RuntimeError as err:
+            logger.warning(f"cache tensorbin '{name}' in '{cache_dir}' does not load on the host: {err}")
+            bad.append(name)
+    return bad
+
+
+def _set_aside_if_nonfinite(tt_model: Module, cache_dir: Path) -> bool:
+    """Whether a cache hit holds NaN or inf; if so it is moved aside, so `load_model` rebuilds it.
+
+    The manifest check sees only sizes, so a cache written from bad weights (a faulty device, a
+    torn prep) is otherwise served on every run until someone deletes it by hand (#208: an ltx VAE
+    encoder cache of inf/NaN). Opt-in with TT_DIT_CACHE_VERIFY=1, like the publish-time verify; once
+    per cache dir per process; single-process meshes only, since a rebuild on one rank alone would
+    leave the others waiting at its barriers; and only up to TT_DIT_CACHE_SCAN_MAX_BYTES of tensorbins.
+    """
+    if not _verify_env_enabled() or str(cache_dir) in _scanned_cache_dirs or _distributed_world_size() > 1:
+        return False
+    _scanned_cache_dirs.add(str(cache_dir))
+    size = sum(f.stat().st_size for f in cache_dir.glob("*.tensorbin"))
+    if size > int(os.environ.get("TT_DIT_CACHE_SCAN_MAX_BYTES", SCAN_MAX_BYTES_DEFAULT)):
+        return False
+    t0 = time.time()
+    bad = nonfinite_tensorbins(tt_model, cache_dir)
+    logger.info(f"scanned cache at '{cache_dir}' ({size / 2**30:.2f} GiB) for NaN/inf in {time.time() - t0:.1f}s")
+    if not bad:
+        return False
+    aside = cache_dir.with_name(f"{cache_dir.name}.bad-nonfinite-{time.strftime('%Y%m%d-%H%M%S')}-{os.getpid()}")
+    logger.warning(
+        f"cache at '{cache_dir}' holds NaN or inf in {len(bad)} tensors ({', '.join(bad[:5])}"
+        f"{', ...' if len(bad) > 5 else ''}); moving it to '{aside}' and rebuilding"
+    )
+    try:
+        cache_dir.rename(aside)
+    except FileNotFoundError:
+        pass  # another process moved it first
+    except OSError as err:
+        # Not ours to move (a cache root shared read-only): rebuilding could not publish over it either.
+        logger.error(f"cannot move the NaN/inf cache at '{cache_dir}' aside ({err}); serving it as it is")
+        return False
+    return True
 
 
 def miss_reason(cache_dir: str | Path) -> str:

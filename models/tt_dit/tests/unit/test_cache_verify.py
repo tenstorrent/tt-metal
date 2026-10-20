@@ -7,12 +7,15 @@ than raising, so the run that just built the weights can go on while the cache i
 
 from __future__ import annotations
 
+from typing import NamedTuple
+
 import pytest
 import torch
 
 import ttnn
 from models.tt_dit.layers.module import Module, Parameter
-from models.tt_dit.utils.cache import verify_saved_model
+from models.tt_dit.utils import cache as cache_module
+from models.tt_dit.utils.cache import nonfinite_tensorbins, verify_saved_model
 
 
 class TinyModel(Module):
@@ -69,3 +72,45 @@ def test_altered_values_fail_verification(mesh_device, tmp_path) -> None:
     assert verify_saved_model(model, tmp_path) is False
     # and the resident weights were left alone
     assert verify_saved_model(other, tmp_path) is True
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+def test_nonfinite_values_fail_verification(mesh_device, tmp_path) -> None:
+    """A cache that reads back exactly can still be garbage: weights prepped on a faulty device (#208)."""
+    model = TinyModel(device=mesh_device)
+    weight = torch.randn([32, 64])
+    weight[3, 5] = float("nan")
+    model.load_torch_state_dict({"weight": weight, "bias": torch.randn([64])})
+    model.save(tmp_path)
+    assert verify_saved_model(model, tmp_path) is False
+    assert nonfinite_tensorbins(model, tmp_path) == ["weight"]
+
+
+class _NoParallel(NamedTuple):
+    tensor_parallel: None = None
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+def test_load_model_rebuilds_a_nonfinite_cache(mesh_device, tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("TT_DIT_CACHE_DIR", str(tmp_path))
+    monkeypatch.setenv("TT_DIT_CACHE_VERIFY", "1")
+    monkeypatch.setattr(cache_module, "_scanned_cache_dirs", set())
+    good = {"weight": torch.randn([32, 64]), "bias": torch.randn([64])}
+    args = dict(
+        model_name="tiny", subfolder="m", parallel_config=_NoParallel(), mesh_shape=(1, 1), mesh_device=mesh_device
+    )
+    cache_module.load_model(TinyModel(device=mesh_device), **args, get_torch_state_dict=lambda: good)
+    cache_dir = cache_module.model_cache_dir(**args)
+    assert (cache_dir / cache_module.CACHE_DICT_FILE).is_file()
+
+    poisoned = TinyModel(device=mesh_device)
+    poisoned.load_torch_state_dict({"weight": torch.full([32, 64], float("inf")), "bias": good["bias"]})
+    poisoned.save(cache_dir)  # same shapes and sizes: the manifest check alone serves it
+
+    model = TinyModel(device=mesh_device)
+    cache_module.load_model(model, **args, get_torch_state_dict=lambda: good)
+    assert len(list(cache_dir.parent.glob(f"{cache_dir.name}.bad-nonfinite-*"))) == 1
+    assert nonfinite_tensorbins(model, cache_dir) == []
+    assert torch.allclose(
+        ttnn.to_torch(ttnn.get_device_tensors(model.weight.data)[0]).float(), good["weight"], atol=0.1
+    )
