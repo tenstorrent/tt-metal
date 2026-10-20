@@ -30,6 +30,8 @@ Residual convention: HF `[B, S, 4, 4096]` <-> packed `[1, 1, B*S, 16384]` (`host
 | `tt/moe.py` | router (exact fp32 composite top-8) + `sparse_matmul` experts per 32-token block + shared expert | gpt_oss sparse-matmul pattern |
 | `tt/mlp.py` | clamped SwiGLU (dense layers, shared expert) | |
 | `tt/decoder_layer.py` | mHC(attention) -> mHC(FFN) composition | |
+| `tt/embedding.py` | `TtEmbedding`: `embed_tokens` gather (uint32 ids `[1,1,1,T]`, bf16 table widened to fp32) + `ttnn.repeat` to the 4 packed streams | `tt_mhc.mhc_expand` |
+| `tt/model_head.py` | `TtModelHead`: unweighted stream mean -> final RMSNorm (fp32) -> LM head (bfp8, 5 vocab column chunks) -> `greedy` (multicore untilize + argmax); `last_token_logits` slices the stream row first | |
 | `reference/` | checkpoint access + fp8 dequant, HF layer reference runner (dumps), KDA reference equivalence check | transformers 5.20 `glm5_next` |
 
 ## Evidence (real weights, PCC vs HF)
@@ -44,6 +46,7 @@ Residual convention: HF `[B, S, 4, 4096]` <-> packed `[1, 1, B*S, 16384]` (`host
 | `test_dsa_sparse.py` | layer 3 at 4097 tokens (repeated prompt): dense rows [0,2048) + sparse rows, decode 4097..4100 | prefill 0.99992 (rows<2048 0.99994, rows>=2048 0.9999), decode 0.9999 |
 | `test_dsa_long.py` | random-token prompt: 4097 + 12 sparse decode steps with TT/HF selected-id sets (contiguous-prefix contract asserted) and the pooled-key cache vs a host recomputation; 2040-token dense prefill (slot 1, permuted page table) then decode 2040..2063 with the short user 0 checked every step; 16385-token prefill + 2 decode; prompts 2042/2043 (tails 2, 3) + 12 decode steps with the pool-cache check | prefill 0.99994 (rows<2048 0.99988, >=2048 0.99986), decode 0.9997+, 98-99 % ids common, pool cache 0.99999; transition >= 0.9996 both users; 16K 0.99983 (0.99988 / 0.99980); tails 2/3: prefill 0.9987-0.9990, decode >= 0.9978, pool cache 0.99999 |
 | `test_batch8.py` | 8 user slots (lengths 1..200, permuted page table), layers 3 and 4, 3 batched decode steps | prefill >= 0.9968 (1-token user), decode worst per user 0.9994 |
+| `test_embedding_head.py` | embedding of the 4097 R4097 prompt ids + 8 decode ids vs HF `embed_tokens` expanded; head on the layer-4 streams (stand-in for the layer-44 residual) 256 / 4097 rows and decode B=8 vs `lm_head(norm(mean))` in fp32 on the host; traced head+argmax replayed on new rows | embedding exact (max abs diff 0.0); head pcc 0.999966 / 0.999663 / 0.999980, top-1 agreement 0.973 / 0.978 / 8 of 8, top-5 overlap 0.977 / 0.983 / 0.975; replay bit-identical to eager, 2.36 ms per B=8 step; warm: embedding 1.8 ms (4128 rows), head 3.9 ms (256 rows) / 50.4 ms (4128 rows) |
 | `test_determinism.py` | layers 0, 3: repeated prefill and traced-decode replay with `throw_exception_on_fallback`; sparse prefill + sparse decode repeated | bit-identical outputs |
 | watcher | `TT_METAL_WATCHER=10` on the layer-3 dump test (`~/ashai/glm53/_logs/watcher_layer3`) | PASSED, 10 dumps, no watcher exceptions |
 | `test_perf_layer.py` | warmed prefill S=1024 (wall), traced decode B=1 (one replay, tt-perf-report `Device Time`) | prefill: layer 3 314 ms, layer 4 298 ms (device 293 ms, 1002 ops); decode: layer 3 10.87 ms/step device (435 ops, wall 11.31), layer 4 10.76 ms/step device (471 ops, wall 11.2) |
