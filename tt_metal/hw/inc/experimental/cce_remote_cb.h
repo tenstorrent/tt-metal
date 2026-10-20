@@ -36,7 +36,7 @@ static_assert(REMOTE_CIRCULAR_BUFFER_ALIGNED_PAGE_SIZE == tt::tt_metal::kDramRec
 inline constexpr uint32_t kCreditUnitBytes = tt::tt_metal::kDramReceiverCreditUnitBytes;
 inline constexpr uint32_t kCreditStrideWords = tt::tt_metal::kDramReceiverCreditStrideBytes / sizeof(uint32_t);
 
-enum class WaitResult : uint32_t { Ready = 0, Expired = 1 };
+enum class WaitResult : uint32_t { Ready = 0, Expired = 1, Stopped = 2 };
 
 FORCE_INLINE uint64_t read_cycle_counter() {
     uint64_t cycles;
@@ -192,13 +192,19 @@ FORCE_INLINE void pop_front(Receiver& receiver, uint32_t num_pages) {
 }
 
 // Moves rd_ptr to the new page size's next boundary. The padding is acked only once the sender has
-// credited it, so acked never passes sent; that wait is the bounded part.
-FORCE_INLINE WaitResult resize_receiver_bounded(Receiver& receiver, uint32_t page_size, uint64_t budget_cycles) {
+// credited it, so acked never passes sent; that wait is the bounded part, and it also ends with Stopped
+// once `stop_requested()` holds. Either way the interface is unchanged.
+template <typename StopRequested>
+FORCE_INLINE WaitResult
+resize_receiver_bounded(Receiver& receiver, uint32_t page_size, uint64_t budget_cycles, StopRequested stop_requested) {
     const FifoResize resize =
         fifo_resize(receiver.fifo_rd_ptr, page_size, receiver.fifo_start_addr, receiver.fifo_size);
     if (resize.padding_units != 0) {
         const WaitDeadline deadline(budget_cycles);
         while (received_units(receiver) < resize.padding_units) {
+            if (stop_requested()) {
+                return WaitResult::Stopped;
+            }
             if (deadline.expired()) {
                 return WaitResult::Expired;
             }

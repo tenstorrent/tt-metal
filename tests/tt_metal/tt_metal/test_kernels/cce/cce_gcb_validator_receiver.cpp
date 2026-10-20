@@ -4,12 +4,15 @@
 
 // Consumes a GlobalCircularBuffer receiver's schedule one page at a time and checks every word against the generator.
 // It records the first mismatch and keeps acking, so the sender completes. kCommandStop ends a page wait.
+// The first mismatched word is read again after a delay: if the re-read is right, the credit overtook the data.
 
 #include "cce_gcb_receiver_abi.h"
 #include "experimental/cce_remote_cb.h"
 
 namespace abi = cce_gcb_receiver_abi;
 namespace remote_cb = experimental::cce_remote_cb;
+
+constexpr uint64_t kMismatchRecheckDelayCycles = 1u << 16;
 
 struct ValidationProgress {
     uint32_t requests_done = 0;
@@ -20,6 +23,7 @@ struct ValidationProgress {
     uint32_t first_mismatch_word = 0;
     uint32_t observed = 0;
     uint32_t expected = 0;
+    uint32_t rechecked = 0;
 };
 
 uint32_t validate_schedule(
@@ -40,7 +44,12 @@ uint32_t validate_schedule(
         if (page_bytes == 0 || page_bytes % remote_cb::kCreditUnitBytes != 0 || page_bytes > receiver.fifo_size) {
             return abi::kCodeBadSchedule;
         }
-        if (remote_cb::resize_receiver_bounded(receiver, page_bytes, budget_cycles) == remote_cb::WaitResult::Expired) {
+        const remote_cb::WaitResult resized = remote_cb::resize_receiver_bounded(
+            receiver, page_bytes, budget_cycles, [command]() { return *command == abi::kCommandStop; });
+        if (resized == remote_cb::WaitResult::Stopped) {
+            return abi::kCodeStopped;
+        }
+        if (resized == remote_cb::WaitResult::Expired) {
             return abi::kCodeCreditTimeout;
         }
         const uint32_t page_words = page_bytes / sizeof(uint32_t);
@@ -67,6 +76,10 @@ uint32_t validate_schedule(
                     progress.first_mismatch_word = word;
                     progress.observed = observed;
                     progress.expected = expected;
+                    const remote_cb::WaitDeadline recheck_delay(kMismatchRecheckDelayCycles);
+                    while (!recheck_delay.expired()) {
+                    }
+                    progress.rechecked = words[word];
                 }
                 progress.mismatched_words++;
             }
@@ -101,6 +114,7 @@ void kernel_main() {
     status[abi::kStatusFirstMismatchWord] = progress.first_mismatch_word;
     status[abi::kStatusObserved] = progress.observed;
     status[abi::kStatusExpected] = progress.expected;
+    status[abi::kStatusRechecked] = progress.rechecked;
     asm volatile("fence w, w" ::: "memory");
     status[abi::kStatusMagic] = abi::kDoneMagic;
 }

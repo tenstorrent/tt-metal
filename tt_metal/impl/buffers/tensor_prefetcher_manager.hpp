@@ -23,7 +23,6 @@
 #include <tt-metalium/experimental/tensor_prefetcher.hpp>
 #include <tt-metalium/experimental/global_circular_buffer.hpp>
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
-#include <tt-metalium/experimental/sockets/h2d_socket.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_trace_id.hpp>
 
@@ -39,8 +38,10 @@ class Program;
 
 namespace distributed {
 
+class H2DSocketTransport;
 class MeshCommandQueue;
 class MeshDevice;
+class RequestTransport;
 
 struct TensorPrefetcherPreconditions {
     bool ok = false;
@@ -54,10 +55,15 @@ struct TensorPrefetcherPreconditions {
 // idle, so it holds while receiver Programs and prefetcher sessions run.
 TensorPrefetcherPreconditions tensor_prefetcher_preconditions(const MeshDevice& mesh_device);
 
+// TL1 offset of every Quasar CCE sender's control block (tensor_prefetcher_cce_abi.hpp). It depends only on
+// the mesh's DRISC L1 arena, so it holds before Start and after Stop.
+uint32_t cce_sender_control_base(const MeshDevice& mesh_device);
+
 // Long-lived Tensor prefetcher (DRISC) for a single MeshDevice. Holds the
-// per-device Programs, the per-(device, sender) H2D sockets, and the host worker
+// per-device Programs, the request transport (an H2D socket per (device, sender) on
+// Blackhole, a TL1 request ring per CCE sender on Quasar), and the host worker
 // thread that drains the request queue. It does NOT own or hold the queued tensors
-// or GCBs alive — queue() serializes each request into socket pages and keeps only
+// or GCBs alive — queue() serializes each request into request pages and keeps only
 // those bytes, so the caller must keep the tensors and GCB alive until stop() (see
 // the public tensor_prefetcher.hpp note).
 //
@@ -69,7 +75,7 @@ TensorPrefetcherPreconditions tensor_prefetcher_preconditions(const MeshDevice& 
 //     sender). Launches the programs (non-blocking — kernels park on
 //     socket_wait_for_pages) and spawns the host worker thread.
 //   * queue(gcb, subset, tensors) serializes the request into one or more
-//     fixed-size socket pages (splitting when the tensor list overflows a page)
+//     fixed-size request pages (splitting when the tensor list overflows a page)
 //     and pushes them onto the internal queue in order. The host worker thread
 //     fans each page out to every socket whose mesh coord is in `subset` via
 //     non-blocking try_write so one slow socket can't starve the others. The
@@ -85,8 +91,8 @@ public:
     // MeshDeviceImpl::lock_api). start()/queue()/stop() take it for the duration
     // of the call so prefetcher operations serialize against the rest of the
     // device API, mirroring MeshCommandQueueBase. enqueue_cq_signal_and_wait() also
-    // takes it, but only around its manager-state snapshot — it must release the lock
-    // before the dispatcher write, which re-locks the same (non-recursive) api_mutex_.
+    // holds it for the whole call, across the dispatcher write, which does not re-lock
+    // it, so the counter bump, that write and the WAIT_CQ are queued atomically.
     TensorPrefetcherManager(MeshDevice* mesh_device, std::function<std::lock_guard<std::mutex>()> lock_api_function);
     ~TensorPrefetcherManager();
 
@@ -143,7 +149,32 @@ public:
     void enqueue_cq_signal_and_wait(
         MeshCommandQueue& cq, ttsl::optional_reference<const MeshCoordinateRangeSet> device_subset);
 
+    // Stops the senders and releases this session. If waiting for the senders throws, it logs their
+    // statuses, releases everything but the DRISC L1 ranges a DRAIN was reading, and rethrows. If the
+    // worker gave up on a sender whose request ring took no page, it logs the statuses, keeps those ranges
+    // too, and throws once everything else is released. If a sender ended Failed but Stop otherwise
+    // succeeds, it logs the statuses and returns.
     void stop();
+
+    // stop() for the destructor and device close: a failure is logged, not thrown, and the worker thread is
+    // joined on every path.
+    void stop_without_throwing();
+
+    // Records `gcb` on its senders for Stop's DRAIN, as queueing a request to it would, without sending a
+    // request. For tests that drain a live GlobalCircularBuffer without the PREFETCH path.
+    void register_drain_target(const experimental::GlobalCircularBuffer& gcb);
+
+    // A WAIT_CQ the dispatcher never satisfies: the local DRISC L1 address of the CQ signal slot, the same on every
+    // provisioned sender, and the value the senders wait for there.
+    struct UnsignaledCqWait {
+        uint32_t slot_address = 0;
+        uint32_t value = 0;
+    };
+
+    // enqueue_cq_signal_and_wait for command queue 0 on every device, without the dispatcher write: it bumps the
+    // counter and queues the WAIT_CQ, so the senders wait until the caller writes `value` into the slot. For tests of
+    // the fence, which slow dispatch otherwise satisfies before the WAIT_CQ is queued.
+    UnsignaledCqWait queue_cq_wait_without_signal();
 
     bool is_active() const { return active_; }
 
@@ -156,7 +187,7 @@ private:
     // page is split across multiple pages.
 
     struct Request {
-        // One logical socket page. PREFETCH carries one page per entry in target_sender_indices:
+        // One logical request page. PREFETCH carries one page per entry in target_sender_indices:
         // the header names that sender's target state, and its layout slots that sender's slab
         // base. STOP / WAIT_CQ carry one
         // shared page and leave target_sender_indices empty to broadcast to every provisioned
@@ -208,19 +239,38 @@ private:
     void worker_loop();
     // Add `word` to sender slot `sender`'s drain targets, dropping the ones whose memory is gone.
     void record_drain_target(uint32_t sender, uint32_t word, const std::weak_ptr<DriscL1Allocation>& state);
+    // record_drain_target for each sender `target` maps to.
+    void record_drain_targets(const RequestTarget& target, const std::vector<uint32_t>& target_sender_indices);
     // One DRAIN request per page's worth of every sender's live drain targets, for stop to send ahead
     // of STOP.
     std::vector<Request> build_drain_requests();
+    // Queues one WAIT_CQ page for every provisioned sender of `target_devices`: wait until CQ signal slot `cq_id`
+    // reaches `signal_value`.
+    void queue_wait_cq_request(uint32_t cq_id, uint32_t signal_value, std::vector<MeshCoordinate> target_devices);
     // Provisions the senders of `sender_banks` (empty = every bank).
     void enumerate_dram_senders(const std::vector<uint32_t>& sender_banks);
     RequestTarget target_for(const experimental::GlobalCircularBuffer& gcb) const;
     RequestTarget target_for(
         const std::vector<std::reference_wrapper<const experimental::PrefetcherPipe>>& prefetcher_pipes) const;
     std::vector<uint32_t> sender_indices_for_target(const RequestTarget& target) const;
+    // A CCE runs one launch at a time, so a receiver on a provisioned sender CCE could never run.
+    void require_receivers_off_sender_cces(const RequestTarget& target) const;
     void build_and_launch_programs(
-        uint32_t stage_ring_base, uint32_t stage_ring_size, const std::optional<MpfePolicy>& mpfe_policy);
-    void allocate_sockets();
-    // Serialize a Queue call's tensors into one or more socket pages, deduplicating
+        const H2DSocketTransport& sockets,
+        uint32_t stage_ring_base,
+        uint32_t stage_ring_size,
+        const std::optional<MpfePolicy>& mpfe_policy);
+    // A launch onto a CCE still running a kernel is lost, so every provisioned sender CCE must be idle.
+    void require_idle_sender_cces() const;
+    // Zeroes each sender's CQ signal slots, ring meta and status, which the CCE kernel never does.
+    void zero_cce_sender_control_blocks() const;
+    void build_cce_sender_programs(uint64_t wait_budget_cycles);
+    void log_cce_sender_statuses() const;
+    // log_cce_sender_statuses when a sender ended Failed or its status cannot be read. Never throws.
+    void log_cce_sender_statuses_if_any_failed() const;
+    // Tells the worker to finish and joins it, if it is still running.
+    void join_worker();
+    // Serialize a Queue call's tensors into one or more request pages, deduplicating
     // tensor layouts within each page and splitting when a page fills. Returns one entry per
     // logical page, each a vector in target sender-mapping order. The entry and geometry bytes
     // are identical across senders, while the header carries that sender's state address and slab
@@ -250,6 +300,8 @@ private:
     // over NOC.
     uint32_t socket_config_l1_addr_ = 0;
     uint32_t socket_data_l1_addr_ = 0;
+    // TL1 base of each Quasar CCE sender's control block; uniform across sender cores.
+    uint32_t cce_control_base_ = 0;
     // Base (local DRISC L1) of this prefetcher's per-CQ signal slots; uniform
     // across all sender cores. Carved at the front of the kernel working region.
     uint32_t cq_signal_l1_addr_ = 0;
@@ -272,6 +324,9 @@ private:
     // The ranges stop is draining, held until the kernels have exited so none can be reused while a
     // DRAIN reads it.
     std::vector<std::shared_ptr<DriscL1Allocation>> drain_holds_;
+    // drain_holds_ of every Stop whose senders did not finish: a sender or receiver may still write those
+    // ranges, so they are never released while this manager lives.
+    std::vector<std::shared_ptr<DriscL1Allocation>> drain_holds_after_failed_stop_;
     // Host-side monotonic signal counter per command queue. enqueue_cq_signal_and_wait
     // pre-increments cq_signal_counter_[cq.id()] and uses it for both the dispatcher
     // write and the WAIT_CQ request value.
@@ -291,12 +346,21 @@ private:
     std::vector<std::unique_ptr<Program>> programs_;
     std::vector<IDevice*> devices_;
 
-    // sockets_[d * num_senders_ + s] = socket for (device d, sender s).
-    std::vector<std::unique_ptr<H2DSocket>> sockets_;
+    // Delivers request pages; endpoint d * num_senders_ + s is (device d, sender s).
+    std::unique_ptr<RequestTransport> transport_;
 
     // MeshCoordinate -> index into devices_, populated once at start() so
     // worker_loop fan-out is O(targets) instead of O(targets * devices).
     std::unordered_map<MeshCoordinate, uint32_t> device_index_by_coord_;
+
+    // How long the worker waits on a TL1 request ring that takes no page before it gives up on that sender. Set by
+    // start() before the worker runs.
+    std::chrono::steady_clock::duration request_ring_no_progress_limit_{};
+    // Whether the worker also gives up on a STOP page at that limit while its sender still runs. Only when
+    // TT_METAL_OPERATION_TIMEOUT_SECONDS is set, so stop() reaches WaitProgramDone and that times out.
+    bool request_ring_stop_bounded_ = false;
+    // Set by the worker when it gives up on a sender, so stop() reports the requests it dropped.
+    std::atomic<bool> worker_gave_up_on_sender_{false};
 
     // Host worker thread + queue
     std::thread host_worker_;

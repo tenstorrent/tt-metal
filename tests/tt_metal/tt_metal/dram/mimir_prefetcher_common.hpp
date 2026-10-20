@@ -83,14 +83,15 @@ inline uint8_t read_go_signal(IDevice* device, uint32_t cce_index) {
     return go_signal_of(read_go_word(device, cce_index));
 }
 
-// The hart every MM-7 test kernel runs on.
+// The hart an MM-7 test kernel runs on unless its launch names another.
 inline constexpr uint32_t kCceKernelHart = 0;
 
-// One kernel of a CCE Program, on kCceKernelHart.
+// One kernel of a CCE Program. Kernels on one CCE run on different harts.
 struct CceKernelLaunch {
     uint32_t cce_index = 0;
     std::string kernel_path;
     std::vector<uint32_t> runtime_args;
+    uint32_t hart = kCceKernelHart;
 };
 
 // A launch onto a CCE that is still running a kernel is lost: when that kernel finishes, firmware overwrites the new GO
@@ -121,7 +122,7 @@ inline std::unique_ptr<Program> launch_cce_program(IDevice* device, const std::v
             *program,
             launch.kernel_path,
             logical_core,
-            DramConfig{.processor = static_cast<DataMovementProcessor>(kCceKernelHart), .noc = NOC::NOC_0});
+            DramConfig{.processor = static_cast<DataMovementProcessor>(launch.hart), .noc = NOC::NOC_0});
         SetRuntimeArgs(*program, kernel, logical_core, launch.runtime_args);
     }
     detail::LaunchProgram(device, *program, /*wait_until_cores_done=*/false, /*force_slow_dispatch=*/true);
