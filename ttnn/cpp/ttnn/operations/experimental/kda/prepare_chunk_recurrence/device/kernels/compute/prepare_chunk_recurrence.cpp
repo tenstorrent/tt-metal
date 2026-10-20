@@ -518,8 +518,8 @@ KDA_PREP_HELPER void normalize_l2_rows(
     input.pop_front(matrix_tiles);
 }
 
-// beta = sigmoid(logits) in FP32, from the BF16 logits the reader moved into column 0. The SFPU sigmoid is the
-// accurate one ttnn.sigmoid runs; BF16 widens exactly into the FP32 destination.
+// beta = sigmoid(logits), from the BF16 logits the reader moved into column 0: only the left faces (VectorMode::C)
+// are computed, with the BF16-grade sigmoid (exp_21f, one Newton step; beta scales BF16-precision terms).
 template <uint32_t Ct, typename DFB0, typename DFB1>
 KDA_PREP_HELPER void activate_beta(DFB0& logits, DFB1& beta) {
     beta.reserve_back(Ct);
@@ -530,7 +530,7 @@ KDA_PREP_HELPER void activate_beta(DFB0& logits, DFB1& beta) {
     for (uint32_t tile = 0; tile < Ct; ++tile) {
         tile_regs_acquire();
         copy_tile(logits.get_id(), tile, 0);
-        sigmoid_tile<VectorMode::RC, false>(0);
+        sigmoid_tile<VectorMode::C, false, false>(0);
         tile_regs_commit();
         tile_regs_wait();
         pack_tile(0, beta.get_id(), tile);
