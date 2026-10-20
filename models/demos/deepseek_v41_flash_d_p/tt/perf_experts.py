@@ -15,6 +15,9 @@ test_unified_vs_loop: EXPERTS_KERNEL=unified vs loop on the same inputs (P.2: la
 test_weights_bfp4: EXPERTS_IMPL bfp8 vs bfp4 on the default path (P.10: flat + weighted combine, bf16 sums, glm;
 layers 0 / 24, 2x2, chunk 2048: 4.47 vs 3.47 ms per call; vs float64 bfp8 rel 0.020, bfp4 0.18-0.20, bfp4 vs
 float64 with bfp4-rounded weights 0.020).
+
+test_combine_planner: COMBINE_PLANNER one vs multi on the default path (P.11: layers 0 / 24, 2x2, chunk 2048: planner
+1572.7 vs 68.8 us device, experts ops 3427 vs 1912-1927 us, call 3.66-3.68 vs 2.10-2.16 ms; outputs bit-identical).
 """
 
 from __future__ import annotations
@@ -891,3 +894,94 @@ def test_weights_bfp4(mesh_device, layer, prof):
     print(f"BFP4_DETERMINISM L{layer:02d} bfp4 twice: {nd} of {b.numel()} elements differ")
     assert bool(torch.isfinite(b).all())
     assert nd == 0, f"bfp4 experts not bit-identical between calls ({nd} values)"
+
+
+@pytest.mark.timeout(3600)
+@pytest.mark.parametrize("device_params", [_weighted_params()], indirect=True, ids=["box_payload"])
+@pytest.mark.parametrize("mesh_device", [tuple(spec().mesh)], indirect=True, ids=["x".join(map(str, spec().mesh))])
+@pytest.mark.parametrize("layer", [0, 24], ids=["L00", "L24"])
+@pytest.mark.parametrize("prof", [False, True], ids=["time", "ops"])
+def test_combine_planner(mesh_device, layer, prof):
+    """COMBINE_PLANNER A/B (P.11) on the same random inputs, the current default path otherwise (EXPERTS_COMBINE=
+    weighted, COMBINE_ACC / EXPERTS_IMPL / EXPERTS_PRECISION / NUMERICS / FFN_NORM_DTYPE / CCL_IMPL settings): the
+    weighted combine's planner on one core vs the column multi-core planner. Per side the mean wall time of a whole
+    synchronized experts call (one layer's experts per chunk) and, with prof (ids "ops"; the profiler env of
+    testing/profiler.py), the device time per op of one more call (the planner is the generic op on the gathered
+    routing, [1, 1, 2048, 6]). The planners' tables are bit-identical, so the experts' outputs must be too (asserted).
+    """
+    from models.demos.deepseek_v41_flash_d_p.tt.settings import settings
+
+    S = spec()
+    ck, cfg = hooks._checkpoint(S), hooks._config(S)
+    chunk = hooks._chunk(S)
+    g = torch.Generator().manual_seed(0)
+    x = torch.randn(chunk, cfg.dim, generator=g)
+    sc = torch.rand(chunk, cfg.n_experts, generator=g)
+    top = sc.topk(cfg.topk_experts, dim=-1)
+    dense = torch.zeros(chunk, cfg.n_experts)
+    dense.scatter_(1, top.indices, 1.5 * top.values / top.values.sum(-1, keepdim=True))
+    xdt = ttnn.bfloat16 if settings.get("FFN_NORM_DTYPE") == "bf16" else ttnn.float32
+    keys = ("EXPERTS_IMPL", "COMBINE_ACC", "EXPERTS_PRECISION", "NUMERICS", "FFN_NORM_DTYPE", "CCL_IMPL")
+    tag = " ".join(f"{k}={settings.get(k)}" for k in keys)
+    outs = {}
+    for planner in ("one", "multi"):
+        t0 = time.time()
+        mod = E.build_experts(mesh_device, ck, cfg, layer, chunk, combine="weighted", combine_planner=planner)
+        load = time.time() - t0
+        wc = mod.wc
+        print(f"PLANNER_PLAN L{layer:02d} planner={planner} {wc.planner_desc} passes={wc.P} x {wc.S_pass}")
+        xd = row_split_to_device(mesh_device, x, dtype=xdt)
+        rd = row_split_to_device(mesh_device, dense)
+        for _ in range(2):
+            ttnn.deallocate(mod(xd, rd))
+        ttnn.synchronize_device(mesh_device)
+        t0 = time.time()
+        for _ in range(N_CALLS):
+            ttnn.deallocate(mod(xd, rd))
+        ttnn.synchronize_device(mesh_device)
+        dt = (time.time() - t0) / N_CALLS
+        od = mod(xd, rd)
+        outs[planner] = _host(mesh_device, od)
+        ttnn.deallocate(od)
+        if planner == "multi":  # (the multi-core planner's phase timestamps, pass 0, chip 0: cycles from its start)
+            tdbg = wc.planners[0].tdbg
+            if tdbg is not None:
+                d = ttnn.to_torch(ttnn.get_device_tensors(tdbg)[0]).to(torch.int64).reshape(-1, 16)[:, :12] & 0xFFFFFFFF
+                rel = torch.where(d > 0, (d - d[:, :1].min()) & 0xFFFFFFFF, torch.zeros_like(d))
+                print(
+                    f"PLANNER_PHASES L{layer:02d} (cycles; start, read, sort, sent, counts in, placed, plan, end, "
+                    "det: sums, schedules, order lists, owner's lists in)"
+                )
+                for p_ in range(rel.shape[0]):
+                    print(f"PLANNER_PHASES L{layer:02d} core {p_:2d} {rel[p_].tolist()}")
+        if prof:
+            from models.demos.common.bringup.testing import profiler
+
+            profiler.enable(mesh_device, ops=True)
+            profiler.signpost(f"experts_{planner}")
+            ttnn.deallocate(mod(xd, rd))
+            profiler.signpost("end")
+            res = profiler.result()
+            profiler.disable()
+            tot = 0.0
+            for key, rows_ in res["op_ns"].items():
+                if not key.startswith("experts_"):
+                    continue
+                for r_ in rows_:
+                    tot += r_["ns"]
+                    print(
+                        f"PLANNER_OPS L{layer:02d} {planner} {r_['op'][:60]:60s} calls {r_['calls']:3d} "
+                        f"{r_['ns'] / 1e3:9.1f} us  {r_['shape'][:70]}"
+                    )
+            print(f"PLANNER_OPS L{layer:02d} {planner} total {tot / 1e3:.1f} us (device, slowest chip per op)")
+        print(
+            f"PLANNER_TIME L{layer:02d} planner={planner} chunk={chunk} call_ms={dt * 1e3:.2f} load_s={load:.1f} {tag}"
+        )
+        for t in (xd, rd):
+            ttnn.deallocate(t)
+        mod.free()
+        del mod
+    nd = int((outs["one"] != outs["multi"]).sum().item())
+    print(f"PLANNER_CMP L{layer:02d} multi vs one: {nd} of {outs['one'].numel()} elements differ")
+    assert bool(torch.isfinite(outs["multi"]).all())
+    assert nd == 0, f"COMBINE_PLANNER=multi changed the experts' output ({nd} values)"
