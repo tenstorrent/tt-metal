@@ -1833,12 +1833,13 @@ def test_update_padded_kv_cache_paged(
     tile = ttnn.TILE_SIZE
     C = new_isl_tiles_per_dev * tile
     chunk_global = C * sp
-    # The first chunk ends two tiles into a slab. In the repr config on the row-major layout (several rows per core)
-    # the later writes then cross a slab boundary inside one core's run of rows on both the 13x10 and the 12x10 worker
-    # grid; with one row per core (tiled, or small) the crossing falls at a core's first row. padded_partial's last
-    # chunk is full, so the rows past those crossings are real rows the check compares.
+    # The first chunk ends three tiles into a slab, so the later chunks start mid-page with 64-token pages. In the repr
+    # config on the row-major layout (several rows per core) they also cross a slab boundary inside one core's run of
+    # rows on both the 13x10 and the 12x10 worker grid; with one row per core (tiled, or small) the crossing falls at a
+    # core's first row. padded_partial's last chunk is full, so the rows past those crossings are real rows the check
+    # compares.
     last_isl = sp * C if scenario == "padded_partial" else C + tile
-    new_actual_isls = [(sp - 1) * C + 2 * tile, 2 * C, last_isl]
+    new_actual_isls = [(sp - 1) * C + 3 * tile, 2 * C, last_isl]
     assert all(isl <= chunk_global for isl in new_actual_isls)
     cum_total = sum(new_actual_isls)
     cache_global = cache_tokens_per_dev * sp
@@ -2260,10 +2261,12 @@ def test_update_padded_kv_cache_paged_rejects(mesh_device, expect_error):
 @pytest.mark.parametrize("page_size", [32, 64], ids=["page32", "page64"])
 @skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
 @pytest.mark.timeout(0)
-def test_update_padded_kv_cache_paged_perf(mesh_device, page_size):
+def test_update_padded_kv_cache_paged_perf(mesh_device, page_size, is_ci_env, is_ci_v2_env):
     """A paged write of MiniMax-M3's per-chip K chunk (1024 rows of 128, bfloat8_b) against a contiguous one. Device
-    time is the slowest chip's, median of 7. The bound is absolute: paging adds a fixed cost per write (one table read
-    per core, a lookup per row), and a ratio on so short an op would gate on noise."""
+    time is the slowest chip's, median of 7. The bound is absolute: paging adds a fixed cost per write (a table read per
+    slab a core's rows touch, a lookup per page), and a ratio on so short an op would gate on noise."""
+    if is_ci_env or is_ci_v2_env:
+        pytest.skip("a timing gate: it needs the realtime profiler, which a CI runner need not have")
     require_realtime_profiler("update_padded_kv_cache paged perf")
     sp_axis = 0
     sp = mesh_device.shape[sp_axis]
