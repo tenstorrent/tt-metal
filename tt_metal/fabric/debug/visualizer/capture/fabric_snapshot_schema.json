@@ -1,0 +1,162 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Fabric snapshot",
+  "description": "The shape of a fabric snapshot's .json file (README.md in this directory). The L1 bytes are in the .bin file beside it; each area and region entry gives its offset there.",
+  "type": "object",
+  "properties": {
+    "kind": { "const": "fabric_snapshot" },
+    "snapshot_version": { "const": 1 },
+    "manifest": {
+      "type": "object",
+      "properties": {
+        "file": { "type": "string", "minLength": 1 },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "run": { "type": "object" }
+      },
+      "required": ["file", "sha256", "run"],
+      "additionalProperties": false
+    },
+    "capture": {
+      "type": "object",
+      "properties": {
+        "started_at": { "$ref": "#/$defs/utc" },
+        "finished_at": { "$ref": "#/$defs/utc" },
+        "host": { "type": "string" },
+        "argv": { "type": "array", "items": { "type": "string" } },
+        "ttexalens": { "type": "string" }
+      },
+      "required": ["started_at", "finished_at", "host", "argv", "ttexalens"],
+      "additionalProperties": false
+    },
+    "raw": {
+      "type": "object",
+      "properties": {
+        "file": { "type": "string", "pattern": "^fabric_snapshot_[^/]+\\.bin$" },
+        "size": { "$ref": "#/$defs/count" },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      },
+      "required": ["file", "size", "sha256"],
+      "additionalProperties": false
+    },
+    "routers": {
+      "type": "object",
+      "propertyNames": { "$ref": "#/$defs/router_path" },
+      "additionalProperties": { "$ref": "#/$defs/router" }
+    }
+  },
+  "required": ["kind", "snapshot_version", "manifest", "capture", "raw", "routers"],
+  "additionalProperties": false,
+
+  "$defs": {
+    "count": { "type": "integer", "minimum": 0 },
+    "name": { "type": "string", "pattern": "^[a-z0-9_]+$" },
+    "word": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "utc": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$" },
+    "router_path": { "type": "string", "pattern": "^M[0-9]+/C[0-9]+/[EWNSZ][0-9]+$" },
+    "region_path": { "type": "string", "pattern": "^[^/]+(/[^/]+)*$" },
+    "core": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/count" },
+      "minItems": 2,
+      "maxItems": 2
+    },
+    "time_ns": { "oneOf": [{ "type": "integer" }, { "type": "null" }] },
+    "l1": {
+      "type": "object",
+      "properties": {
+        "address": { "$ref": "#/$defs/count" },
+        "size": { "type": "integer", "minimum": 1 },
+        "offset": { "$ref": "#/$defs/count" }
+      },
+      "required": ["address", "size", "offset"],
+      "additionalProperties": false
+    },
+    "stream_register": {
+      "type": "object",
+      "properties": {
+        "before": { "$ref": "#/$defs/word" },
+        "after": { "$ref": "#/$defs/word" }
+      },
+      "required": ["before"],
+      "additionalProperties": false
+    },
+    "error": {
+      "type": "object",
+      "properties": {
+        "stage": { "enum": ["open", "core_registers", "streams_before", "areas", "regions", "streams_after"] },
+        "path": { "oneOf": [{ "type": "string" }, { "type": "null" }] },
+        "message": { "type": "string" }
+      },
+      "required": ["stage", "path", "message"],
+      "additionalProperties": false
+    },
+    "router": {
+      "type": "object",
+      "properties": {
+        "device": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "unique_id": { "type": "string", "pattern": "^0x[0-9a-f]{16}$" },
+                "ttexalens_id": { "type": "integer" }
+              },
+              "required": ["unique_id", "ttexalens_id"],
+              "additionalProperties": false
+            },
+            { "type": "null" }
+          ]
+        },
+        "core": {
+          "type": "object",
+          "properties": {
+            "translated": { "$ref": "#/$defs/core" },
+            "logical": { "$ref": "#/$defs/core" }
+          },
+          "required": ["translated", "logical"],
+          "additionalProperties": false
+        },
+        "started_ns": { "$ref": "#/$defs/time_ns" },
+        "finished_ns": { "$ref": "#/$defs/time_ns" },
+        "core_registers": {
+          "type": "object",
+          "propertyNames": { "$ref": "#/$defs/name" },
+          "additionalProperties": { "$ref": "#/$defs/word" }
+        },
+        "areas": {
+          "type": "object",
+          "propertyNames": { "$ref": "#/$defs/name" },
+          "additionalProperties": { "$ref": "#/$defs/l1" }
+        },
+        "regions": {
+          "type": "object",
+          "propertyNames": { "$ref": "#/$defs/region_path" },
+          "additionalProperties": { "$ref": "#/$defs/l1" }
+        },
+        "streams": {
+          "type": "object",
+          "propertyNames": { "pattern": "^[0-9]+$" },
+          "additionalProperties": {
+            "type": "object",
+            "propertyNames": { "$ref": "#/$defs/name" },
+            "additionalProperties": { "$ref": "#/$defs/stream_register" }
+          }
+        },
+        "error": { "oneOf": [{ "$ref": "#/$defs/error" }, { "type": "null" }] }
+      },
+      "required": [
+        "device", "core", "started_ns", "finished_ns", "core_registers", "areas", "regions", "streams", "error"
+      ],
+      "additionalProperties": false,
+      "if": { "properties": { "error": { "type": "null" } } },
+      "then": {
+        "properties": {
+          "device": { "type": "object" },
+          "started_ns": { "type": "integer" },
+          "finished_ns": { "type": "integer" }
+        }
+      }
+    }
+  }
+}
