@@ -20,6 +20,7 @@
 #include "ttnn/operations/reduction/reduction_common/reduction_common.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
+#include "ttnn/operations/data_movement/untilize/untilize.hpp"
 
 namespace ttnn::operations::data_movement {
 namespace {
@@ -447,9 +448,12 @@ Tensor scatter_codegen_dispatch(
         transformed_index_tensor.logical_shape(),
         final_memory_config);
     if (rerouted_to_row_major) {
-        transformed_input_tensor = ttnn::to_layout(transformed_input_tensor, Layout::ROW_MAJOR);
-        transformed_index_tensor = ttnn::to_layout(transformed_index_tensor, Layout::ROW_MAJOR);
-        transformed_source_tensor = ttnn::to_layout(transformed_source_tensor, Layout::ROW_MAJOR);
+        // ttnn::untilize, not to_layout: to_layout sends a padded operand (the transposed index and
+        // source, whose width is no longer tile-aligned) straight to the native untilize-with-unpadding
+        // kernel, while ttnn::untilize routes it through the codegen untilize when that is in scope.
+        transformed_input_tensor = ttnn::untilize(transformed_input_tensor);
+        transformed_index_tensor = ttnn::untilize(transformed_index_tensor);
+        transformed_source_tensor = ttnn::untilize(transformed_source_tensor);
     }
 
     Tensor output = ttnn::prim::scatter_codegen(
