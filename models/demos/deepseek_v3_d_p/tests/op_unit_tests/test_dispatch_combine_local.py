@@ -15,7 +15,7 @@ import pytest
 import torch
 
 import ttnn
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric_1d_device_params
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric_1d_device_params, torus_x_device_params
 
 NUM_ROUTED_EXPERTS = 64
 NUM_EXPERTS_PER_TOK = 6
@@ -102,8 +102,9 @@ def _round_trip(mesh_device, x, indices, capacity):
         ),
         pytest.param(
             (1, 4),
-            fabric_1d_device_params(),
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(1, 4), topology="linear"),
+            # QB2 only opens a 1x4 mesh on a wrapped fabric; the local path sends nothing over it.
+            torus_x_device_params(),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(1, 4), topology="ring"),
             id="local-1x4",
         ),
     ],
