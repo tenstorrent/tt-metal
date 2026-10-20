@@ -235,7 +235,6 @@ inline void calculate_gelu_appx() {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat in = sfpi::dst_reg[0];
-        // -inf would give -inf + inf = NaN below; -2^127 gives exactly 0.
         v_if(sfpi::is_inf(in) && in < 0.0f) { in = sfpi::setexp(in, 254); }
         v_endif;
         sfpi::vFloat half = sfpi::vConstFloatPrgm0;

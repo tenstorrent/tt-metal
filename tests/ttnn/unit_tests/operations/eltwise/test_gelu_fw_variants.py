@@ -297,7 +297,6 @@ def test_gelu_inf_nan_handling(device, variant_name, torch_dtype, tt_dtype):
     ids=["bf16", "fp32"],
 )
 def test_gelu_fast_lut_infinities(device, torch_dtype, tt_dtype):
-    """fast_and_approximate_mode=True must return gelu's limits at +-inf: 0 and +inf (#61309)."""
     inputs = torch.full((32, 32), float("-inf"), dtype=torch_dtype)
     inputs[1::2, :] = float("inf")
     tt_input = ttnn.from_torch(inputs, dtype=tt_dtype, layout=ttnn.TILE_LAYOUT, device=device)
