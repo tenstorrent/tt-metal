@@ -1304,6 +1304,58 @@ void kernel_main() {
                         fetch_k);
                 }
 
+                // Packed K/V where V starts inside K's columns: V's first v_from_k_tiles tile columns are K tile
+                // columns v_col_offset_t.. this core holds (K^T is [d][sk] raw tiles at stride k_rows). Copy them
+                // core-locally and read only V's tail from DRAM. Issues the reads; the caller waits for them.
+                [[maybe_unused]] const auto issue_v_overlap = [&](const auto& v_gen, uint32_t v_addr) {
+                    const uint32_t k_rows = k_slice.get_d2_size();
+                    const Slice v_tail(
+                        k_slice.d0, nq / q_heads_per_v, k_slice.d2_start, k_slice.d2_end, DHt, v_col_offset_t + vDHt);
+                    v_gen.issue_reads(
+                        v_tail,
+                        end_seq_tile,
+                        cb_v_in,
+                        v_addr + v_from_k_tiles * v_tile_bytes,
+                        vDHt * v_tile_bytes,
+                        v_tile_bytes,
+                        0);
+                    const uint8_t noc_id = noc.get_noc_id();
+                    UnicastEndpoint kt_src;
+                    noc.set_async_read_state<NocOptions::DEFAULT, k_tile_bytes>(
+                        kt_src,
+                        k_tile_bytes,
+                        {.noc_x = my_x[noc_id], .noc_y = my_y[noc_id], .addr = cb_k_start_address});
+                    for (uint32_t sk = 0; sk < k_rows; ++sk) {
+                        uint32_t v_dst = v_addr + sk * vDHt * v_tile_bytes;
+                        uint32_t kt_src_addr = cb_k_start_address + (v_col_offset_t * k_rows + sk) * k_tile_bytes;
+                        for (uint32_t vd = 0; vd < v_from_k_tiles; ++vd) {
+                            noc.async_read_with_state<NocOptions::DEFAULT, k_tile_bytes>(
+                                kt_src,
+                                CoreLocalMem<uint32_t>(v_dst),
+                                k_tile_bytes,
+                                {.noc_x = my_x[noc_id], .noc_y = my_y[noc_id], .addr = kt_src_addr},
+                                {});
+                            v_dst += v_tile_bytes;
+                            kt_src_addr += k_rows * k_tile_bytes;
+                        }
+                    }
+                };
+                // An injector issues V's reads before multicasting K, so they complete under the K multicast instead
+                // of after it. Only cores that read V themselves (not V-chain receivers), on real non-joint chunks.
+                [[maybe_unused]] bool v_issued_early = false;
+                if constexpr (v_overlaps_k && !has_sliding_window) {
+                    if (!is_padded_iter && !kv_chunk_is_joint && !v_chain.should_receive(nq / q_heads_per_v)) {
+                        CircularBuffer cb_v_early(cb_v_in);
+                        cb_v_early.reserve_back(v_cb_entry_tiles);
+                        if (source_is_local) {
+                            issue_v_overlap(v_generators.local, cb_v_early.get_write_ptr());
+                        } else {
+                            issue_v_overlap(v_generators.gathered, cb_v_early.get_write_ptr());
+                        }
+                        v_issued_early = true;
+                    }
+                }
+
                 // Forward K chunk via chain (uses K's data size explicitly)
                 if constexpr (!has_sliding_window) {
                     if (k_chain.should_forward(k_chain_head, q_iter_local)) {
@@ -1427,50 +1479,14 @@ void kernel_main() {
                             received_v_from_chain = true;
                         }
                     }
-                    if (!received_v_from_chain) {
+                    if (v_issued_early) {
+                        noc.async_read_barrier();
+                        noc.write_zeros_l1_barrier();
+                    } else if (!received_v_from_chain) {
                         const auto fetch_v = [&](const auto& v_gen) {
                             if constexpr (v_overlaps_k) {
                                 if (!kv_chunk_is_joint) {
-                                    // Packed K/V row: V's first v_from_k_tiles tile columns are K tile columns
-                                    // v_col_offset_t.. that this core already holds (K^T is [d][sk] raw tiles at
-                                    // stride k_rows). Copy them core-locally and read only V's tail from DRAM.
-                                    const uint32_t k_rows = k_slice.get_d2_size();
-                                    const Slice v_tail(
-                                        v_slice.d0,
-                                        v_slice.d1,
-                                        v_slice.d2_start,
-                                        v_slice.d2_end,
-                                        DHt,
-                                        v_col_offset_t + vDHt);
-                                    v_gen.issue_reads(
-                                        v_tail,
-                                        end_seq_tile,
-                                        cb_v_in,
-                                        cb_v_start_address + v_from_k_tiles * v_tile_bytes,
-                                        vDHt * v_tile_bytes,
-                                        v_tile_bytes,
-                                        0);
-                                    const uint8_t noc_id = noc.get_noc_id();
-                                    UnicastEndpoint kt_src;
-                                    noc.set_async_read_state<NocOptions::DEFAULT, k_tile_bytes>(
-                                        kt_src,
-                                        k_tile_bytes,
-                                        {.noc_x = my_x[noc_id], .noc_y = my_y[noc_id], .addr = cb_k_start_address});
-                                    for (uint32_t sk = 0; sk < k_rows; ++sk) {
-                                        uint32_t v_dst = cb_v_start_address + sk * vDHt * v_tile_bytes;
-                                        uint32_t kt_src_addr =
-                                            cb_k_start_address + (v_col_offset_t * k_rows + sk) * k_tile_bytes;
-                                        for (uint32_t vd = 0; vd < v_from_k_tiles; ++vd) {
-                                            noc.async_read_with_state<NocOptions::DEFAULT, k_tile_bytes>(
-                                                kt_src,
-                                                CoreLocalMem<uint32_t>(v_dst),
-                                                k_tile_bytes,
-                                                {.noc_x = my_x[noc_id], .noc_y = my_y[noc_id], .addr = kt_src_addr},
-                                                {});
-                                            v_dst += v_tile_bytes;
-                                            kt_src_addr += k_rows * k_tile_bytes;
-                                        }
-                                    }
+                                    issue_v_overlap(v_gen, cb_v_start_address);
                                     noc.async_read_barrier();
                                     noc.write_zeros_l1_barrier();
                                     return;
