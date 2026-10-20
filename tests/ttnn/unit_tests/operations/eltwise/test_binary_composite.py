@@ -66,11 +66,6 @@ def test_binary_atan2_ttnn(input_shapes, device):
 )
 @pytest.mark.parametrize("exponent", [0, 125, 126, 127])
 def test_binary_atan2_large_magnitude(ttnn_dtype, torch_dtype, ulp_threshold, exponent, device):
-    """Regression test for #55124: atan2 returned exactly 0 or ±π/2 (or ±π) whenever max(|x|, |y|) >= 2^126,
-    where the SFPU reciprocal of max(|x|, |y|) is 0.
-
-    The same operand pairs are scaled by 2^exponent, so every exponent sees the same angles.
-    """
     torch.manual_seed(0)
     shape = (1, 1, 64, 64)
     larger = (1 + 0.99 * torch.rand(shape)) * 2.0**exponent

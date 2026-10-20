@@ -26,10 +26,7 @@ sfpi_inline sfpi::vFloat _sfpu_atan2_(sfpi::vFloat y, sfpi::vFloat x) {
     // case handling.
     auto [min, max] = sfpi::min_max(sfpi::setsgn(x, 0), sfpi::setsgn(y, 0));
 
-    // a = -min / max on [-1, 0] (the angle stays negated until copysgn below). 1 / max flushes to 0 for
-    // max > 2^126, so divide by m = max * 2^(128 - max.Exp) in [2, 4) and scale min by -2^(128 - max.Exp).
     sfpi::vFloat negative_m = sfpi::copyman(-2.0f, max);
-    // Quadratic estimate of 1 / m and Newton steps as in sfpu_reciprocal_iter, coefficients scaled in init.
     sfpi::vFloat recip = sfpi::vConstFloatPrgm1 + sfpi::vConstFloatPrgm0 * negative_m;
     sfpi::vUInt scale_bits = ~sfpi::as<sfpi::vUInt>(max);
     recip = sfpi::vConstFloatPrgm2 + recip * negative_m;
@@ -135,7 +132,6 @@ inline void calculate_sfpu_atan2(const uint dst_index_in0, const uint dst_index_
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 inline void calculate_sfpu_atan2_init() {
-    // The reciprocal's minimax estimate for 1 / x on [1, 2), scaled so every step gives half of it for m = 2x.
     sfpi::vConstFloatPrgm0 = 0.3232325017452239990234375f / 8;
     sfpi::vConstFloatPrgm1 = 1.4545459747314453125f / 4;
     sfpi::vConstFloatPrgm2 = 2.121212482452392578125f / 2;
