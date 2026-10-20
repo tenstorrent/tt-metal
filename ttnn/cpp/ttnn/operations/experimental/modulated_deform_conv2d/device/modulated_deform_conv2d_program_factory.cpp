@@ -279,7 +279,7 @@ ProgramDescriptor ModulatedDeformConv2dOperation::create_descriptor(
             weight_sender_sem_id,
             weight_receiver_sem_id,
             chunk_tiles,
-            sharded_input ? 1u : 0u,
+            sharded_input ? input.shard_spec()->shape[0] : 0u,  // pages per shard
         };
         TensorAccessorArgs(*input.buffer()).append_to(ct);
         TensorAccessorArgs(*offset_mask.buffer()).append_to(ct);
