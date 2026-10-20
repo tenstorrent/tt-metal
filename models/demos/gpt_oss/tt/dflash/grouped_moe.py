@@ -74,13 +74,15 @@ class GroupedMoE:
         self.nu_down = hidden // TILE
         rep = ttnn.ReplicateTensorToMesh(mesh)
 
-        def zeros(shape, dtype):
+        def zeros(shape, dtype, mc=ttnn.DRAM_MEMORY_CONFIG):
             return ttnn.from_torch(torch.zeros(shape), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=mesh,
-                                   memory_config=ttnn.DRAM_MEMORY_CONFIG, mesh_mapper=rep)  # fmt: skip
+                                   memory_config=mc, mesh_mapper=rep)  # fmt: skip
 
         S = MAX_SLOTS * TILE
-        self.p1t = zeros([1, 1, S, rows], ttnn.bfloat16)
-        self.pw = zeros([1, 1, rows, S], ttnn.bfloat16)
+        # the gather / combine matrices in L1 (the route op writes them, the matmuls read them): route 54 -> 45 us,
+        # gather 39 -> 36 us per layer
+        self.p1t = zeros([1, 1, S, rows], ttnn.bfloat16, ttnn.L1_MEMORY_CONFIG)
+        self.pw = zeros([1, 1, rows, S], ttnn.bfloat16, ttnn.L1_MEMORY_CONFIG)
         # the plan table [tiles[E], base[E]] (written by the plan op, read by the grouped matmuls' readers)
         self.table = ttnn.from_torch(torch.zeros(1, 1, 1, 2 * E, dtype=torch.int32), dtype=ttnn.uint32,
                                      layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh, memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -195,6 +197,31 @@ class GroupedMoE:
         cbs = [self._cb(0, ttnn.bfloat16, scr, 1, cores)]
         ttnn.generic_op(io, ttnn.ProgramDescriptor(kernels=[k], semaphores=[], cbs=cbs))
 
+    def route(self, logits):
+        """The routing and the plan in one program (fused_decode/kernels/gmoe_route.cpp): logits [1, 1, rows, E] (BF16
+        tiles, the router matmul's) -> the dense routing weights W [1, 1, rows, E] (BF16, L1; the down bias's), and
+        self.p1t / self.pw / self.table as plan(). Replaces the router's top-k / softmax ops and the plan op."""
+        RW, RH = 9, MAX_SLOTS // 9
+        c0, c1 = ttnn.CoreCoord(0, 0), ttnn.CoreCoord(RW - 1, RH - 1)
+        cores = ttnn.CoreRangeSet([ttnn.CoreRange(c0, c1)])
+        a_, b_ = self.mesh.worker_core_from_logical_core(c0), self.mesh.worker_core_from_logical_core(c1)
+        w = ttnn.empty([1, 1, self.rows, E], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.mesh,
+                       memory_config=ttnn.L1_MEMORY_CONFIG)  # fmt: skip
+        io = [logits, w, self.p1t, self.pw, self.table]
+        ct = [0, RW, MAX_SLOTS, RW * RH, 0, 1]
+        for t in io:
+            ct += ttnn.TensorAccessorArgs(t).get_compile_time_args()
+        k = ttnn.KernelDescriptor(
+            kernel_source=str(KERNEL_DIR / "gmoe_route.cpp"), core_ranges=cores, compile_time_args=ct,
+            runtime_args=[], common_runtime_args=[t.buffer_address() for t in io] + [a_.x, a_.y, a_.x, a_.y, b_.x, b_.y],
+            config=ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.NOC_0),
+        )  # fmt: skip
+        scr = self.rows * 32 + 4 * 32 + 2048 + 4 * 64 + 2 * (self.rows // TILE) * 2048 + 8 * E
+        cbs = [self._cb(0, ttnn.bfloat16, scr, 1, cores)]
+        sems = [ttnn.SemaphoreDescriptor(i, ttnn.CoreType.WORKER, cores, 0) for i in (0, 1)]
+        ttnn.generic_op(io, ttnn.ProgramDescriptor(kernels=[k], semaphores=sems, cbs=cbs))
+        return w
+
     def gather(self, x8):
         """x8: [1, 1, rows, hidden] BFP8 -> X_g [1, 1, 72 x 32, hidden] BFP8 (L1)."""
         return ttnn.matmul(self.p1t, x8, program_config=self.gather_pc, compute_kernel_config=self.ck_hifi2,
@@ -289,10 +316,12 @@ class GroupedMoE:
         return ttnn.matmul(self.pw, self.yg, program_config=self.combine_pc, compute_kernel_config=self.ck_combine,
                            dtype=ttnn.bfloat16)  # fmt: skip
 
-    def __call__(self, li, x, ids, w):
+    def __call__(self, li, x, ids=None, w=None):
         """The routed experts' down outputs summed with their routing weights (no down bias, no all-reduce). x: the
-        normed rows [1, 1, rows, hidden] BF16 (DRAM); ids / w: the router's top-5 ids and dense weights."""
-        self.plan(ids, w)
+        normed rows [1, 1, rows, hidden] BF16 (DRAM); ids / w: the router's top-5 ids and dense weights (None: the
+        plan was made by route())."""
+        if ids is not None:
+            self.plan(ids, w)
         x8 = ttnn.typecast(x, ttnn.bfloat8_b)
         xg = self.gather(x8)
         x8.deallocate(True)

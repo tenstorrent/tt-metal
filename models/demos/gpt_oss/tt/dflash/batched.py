@@ -825,6 +825,7 @@ class BatchedVerify:
         self.argmax = _Argmax(model.lm_head_weight.shape[-1], model.vocab_size)
         # grouped MoE (dflash/grouped_moe.py): only the routed (row, expert) pairs; None: the dense MoE
         self.grouped = None
+        self.route_fused = os.environ.get("B32_GMOE_ROUTE", "1") == "1"
         from ..fused_decode.config import RESIDUAL_CORES, sdpa_decode_program_config, width_sharded_memory_config
 
         attn0 = model.layers[0].self_attn
@@ -906,9 +907,18 @@ class BatchedVerify:
     def _moe_grouped(self, li, layer, x):
         """Only the routed (row, expert) pairs (dflash/grouped_moe.py), plus the routing-weighted down bias."""
         W = self.moe[li]
-        w, ids = self._router(layer, x, with_ids=True)
-        down = self.grouped(li, x, ids, w)
-        ids.deallocate(True)
+        if self.route_fused:  # the router matmul, then routing + plan in one program (GroupedMoE.route)
+            r = layer.mlp.router
+            logits = ttnn.linear(x, r.weight, bias=r.bias, program_config=self.router_pc,
+                                 compute_kernel_config=self.router_ck, memory_config=ttnn.L1_MEMORY_CONFIG,
+                                 dtype=ttnn.bfloat16)  # fmt: skip
+            w = self.grouped.route(logits)
+            logits.deallocate(True)
+            down = self.grouped(li, x)
+        else:
+            w, ids = self._router(layer, x, with_ids=True)
+            down = self.grouped(li, x, ids, w)
+            ids.deallocate(True)
         bias = ttnn.matmul(w, W["down_bias"], dtype=ttnn.bfloat16)
         w.deallocate(True)
         down = ttnn.add(down, bias, output_tensor=down)
