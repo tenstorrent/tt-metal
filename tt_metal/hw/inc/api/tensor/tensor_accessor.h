@@ -747,7 +747,19 @@ public:
         accessor_ptr(&accessor),
         get_noc_addr_fn([](const void* accessor, uint32_t page_idx, uint32_t offset, uint8_t noc) {
             return static_cast<const Accessor*>(accessor)->get_noc_addr(page_idx, offset, noc);
-        }) {
+        }),
+        generated_noc_addr_fn(
+            [](const void* accessor, bool write, bool may_push, uint32_t page_idx, uint32_t offset, uint8_t noc) {
+                using tensor_accessor::detail::generated_noc_addr;
+                using tensor_accessor::detail::TransferDir;
+                const auto& a = *static_cast<const Accessor*>(accessor);
+                if (write) {
+                    return may_push ? generated_noc_addr<TransferDir::Write, true>(a, page_idx, offset, noc)
+                                    : generated_noc_addr<TransferDir::Write>(a, page_idx, offset, noc);
+                }
+                return may_push ? generated_noc_addr<TransferDir::Read, true>(a, page_idx, offset, noc)
+                                : generated_noc_addr<TransferDir::Read>(a, page_idx, offset, noc);
+            }) {
         // Op-to-op R/W inference: past this point the accessor's type is erased, so a NoC transfer through the wrapper
         // can't name its tensor, and the wrapper can't tell which the kernel will do.
         tt_buf_rw::note_read_write<tt_buf_rw::binding_of<Accessor>>();
@@ -758,10 +770,17 @@ public:
     }
 
 private:
+    // The NoC traits' generated address for the wrapped accessor (tensor_accessor::detail::generated_noc_addr).
+    template <tensor_accessor::detail::TransferDir Dir, bool MayPush>
+    friend uint64_t tensor_accessor::detail::generated_noc_addr(
+        const AbstractTensorAccessorWrapper& wrapper, uint32_t page_id, uint32_t offset, uint8_t noc);
+
     using GetNocAddrFn = uint64_t (*)(const void*, uint32_t, uint32_t, uint8_t);
+    using GeneratedNocAddrFn = uint64_t (*)(const void*, bool, bool, uint32_t, uint32_t, uint8_t);
 
     const void* accessor_ptr = nullptr;
     GetNocAddrFn get_noc_addr_fn = nullptr;
+    GeneratedNocAddrFn generated_noc_addr_fn = nullptr;
 };
 
 namespace tensor_accessor::detail {

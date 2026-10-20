@@ -995,9 +995,6 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             SLOTS_PER_UNTILIZER);  // per-untilizer ring depth on the sender's receive_buf
 
         std::map<std::string, std::string> writer_untilize_defines;
-        if (local_only) {
-            writer_untilize_defines["LOCAL_ONLY"] = "1";
-        }
         writer_untilize_defines["IS_TILE_LAYOUT"] = is_tile_layout ? "1" : "0";
         writer_untilize_defines["INIT_ZEROS"] = init_zeros ? "1" : "0";
 

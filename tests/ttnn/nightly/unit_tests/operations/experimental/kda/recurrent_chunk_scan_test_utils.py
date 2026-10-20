@@ -119,13 +119,19 @@ def segmented_summary_oracle(
 
 
 def assert_summary_reconstructs_state(
-    protocol: Sequence[torch.Tensor], affine_a: torch.Tensor, affine_b: torch.Tensor
+    protocol: Sequence[torch.Tensor], affine_a: torch.Tensor, affine_b: torch.Tensor, *, nrmse_threshold: float
 ) -> None:
     batch_heads, key_dim, value_dim = affine_a.shape
     state = initial_state(batch_heads, key_dim, value_dim, seed=3141)
     expected = _scan_state(protocol, state)
     reconstructed = torch.matmul(affine_a.float(), state) + affine_b.float()
-    assert_accurate(expected, reconstructed, name="semantic affine reconstruction", pcc_threshold=0.9999)
+    assert_accurate(
+        expected,
+        reconstructed,
+        name="semantic affine reconstruction",
+        pcc_threshold=0.9999,
+        nrmse_threshold=nrmse_threshold,
+    )
 
 
 def to_device(
@@ -198,6 +204,7 @@ def assert_runtime_contract(
     names: Sequence[str],
     dtypes: Sequence[ttnn.DataType],
     shapes: Sequence[tuple[int, ...]],
+    nrmse_threshold: float,
     pcc_threshold: float = 0.999,
     expected_memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
 ) -> list[ttnn.Tensor]:
@@ -224,7 +231,9 @@ def assert_runtime_contract(
 
     for name, golden, first_tt, traced_tt in zip(names, expected, first, traced, strict=True):
         actual = ttnn.to_torch(first_tt)
-        assert_accurate(golden.float(), actual.float(), name=name, pcc_threshold=pcc_threshold)
+        assert_accurate(
+            golden.float(), actual.float(), name=name, pcc_threshold=pcc_threshold, nrmse_threshold=nrmse_threshold
+        )
         assert_bit_identical(actual, ttnn.to_torch(traced_tt), name=f"{name} trace replay")
     for index, (snapshot, tensor) in enumerate(zip(snapshots, inputs, strict=True)):
         assert_bit_identical(snapshot, ttnn.to_torch(tensor), name=f"input {index} immutability")
@@ -238,6 +247,7 @@ def assert_outputs_accurate(
     *,
     names: Sequence[str],
     context: str,
+    nrmse_threshold: float,
     pcc_threshold: float = 0.999,
     linf_threshold: float | None = None,
 ) -> None:
@@ -247,6 +257,7 @@ def assert_outputs_accurate(
             ttnn.to_torch(actual_tt).float(),
             name=f"{context} {name}",
             pcc_threshold=pcc_threshold,
+            nrmse_threshold=nrmse_threshold,
             linf_threshold=linf_threshold,
         )
 

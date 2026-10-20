@@ -9,7 +9,7 @@ import torch.nn.functional as F
 
 import ttnn
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
-from models.common.utility_functions import torch_random
+from tt_py_test_utils_common.utility_functions import torch_random
 
 TEST_PADDING_VALUE = -42
 
@@ -1035,3 +1035,89 @@ def test_softmax_dim_out_of_range_reports_caller_dim(device, expect_error, op):
     tt_input = ttnn.from_torch(torch.randn((1, 1, 32, 32)), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     with expect_error(RuntimeError, r"expected to be in range of \[-4, 3\], but got -7"):
         op(tt_input, dim=-7)
+
+
+def test_softmax_explicit_fp32_acc_keeps_fp32_intermediates(device):
+    """An explicit fp32_dest_acc_en keeps the attention-optimized factory's bulk buffers in Float32,
+    so exp(x - max) is not rounded to bfloat16 before the sum and the final multiply. The defaulted
+    config (fp32 accumulation with 16-bit bulk buffers since #53643) is a different program and
+    must not share its cache entry with an explicit config, even one that matches the default."""
+    torch.manual_seed(0)
+    # Attention-score shape from Qwen3-TTS's talker (16 heads, T = 26), a short causal row.
+    torch_input = torch.randn((1, 16, 26, 26), dtype=torch.bfloat16) * 4
+    golden = F.softmax(torch_input.float(), dim=-1).to(torch.bfloat16)
+
+    explicit_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
+    tt_input = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+    explicit_out = ttnn.to_torch(ttnn.softmax(tt_input, dim=-1, compute_kernel_config=explicit_config))
+
+    # An explicit config with the same values as the softmax default still gets its own program.
+    is_wormhole = device.arch() == ttnn.device.Arch.WORMHOLE_B0
+    default_equal_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi3 if is_wormhole else ttnn.MathFidelity.HiFi4,
+        math_approx_mode=True,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
+    ttnn.softmax(tt_input, dim=-1, compute_kernel_config=default_equal_config)
+    entries_explicit = device.num_program_cache_entries()
+    ttnn.softmax(tt_input, dim=-1)
+    assert device.num_program_cache_entries() == entries_explicit + 1, "defaulted call reused the explicit program"
+
+    # Measured: 0.810 of outputs match the correctly rounded result with Float32 bulk buffers (WH N150 and
+    # BH P150), 0.728 when exp(x - max) is rounded to bfloat16 first (main after #53643, WH N150).
+    correctly_rounded = (explicit_out == golden).float().mean().item()
+    assert correctly_rounded >= 0.77, f"only {correctly_rounded:.3f} of outputs are correctly rounded"
+
+
+# The documented unsharded ROW_MAJOR mask form [B, 1, W/32, 32] must give the same result as the same mask as a
+# TILE [B, 1, 1, W] tensor. The in-place path used to hand it to the interleaved factory, which reads every mask
+# page as a tile (wrong result); for W < 1024 the mask height also made mask_Ht zero, a host divide-by-zero that
+# killed the process.
+@pytest.mark.parametrize("W", [384, 1024, 2048])
+@pytest.mark.parametrize("api", ["scale_mask_softmax_in_place", "attention_softmax_"])
+def test_scale_mask_softmax_in_place_row_major_mask(device, W, api):
+    torch.manual_seed(0)
+    B, C, H = 2, 4, 64
+    head_size = 64
+    scale = 1 / head_size**0.5
+    torch_input = torch.randn((B, C, H, W), dtype=torch.bfloat16)
+    mask = torch.where(torch.rand((B, 1, 1, W)) > 0.5, 0.0, -10000.0)
+    torch_output = F.softmax(torch_input.float() * scale + mask, dim=-1)
+
+    def run(ttnn_mask):
+        ttnn_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        if api == "scale_mask_softmax_in_place":
+            ttnn_output = ttnn.scale_mask_softmax_in_place(ttnn_input, scale, ttnn_mask)
+        else:
+            ttnn_output = ttnn.transformer.attention_softmax_(ttnn_input, head_size=head_size, attention_mask=ttnn_mask)
+        return ttnn.to_torch(ttnn_output).float()
+
+    row_major_mask = ttnn.from_torch(
+        mask.reshape(B, 1, W // 32, 32), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+    )
+    tile_mask = ttnn.from_torch(mask, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    output = run(row_major_mask)
+
+    assert torch.equal(output, run(tile_mask)), "ROW_MAJOR mask result differs from the same mask as TILE"
+    pcc = torch.corrcoef(torch.stack([output.flatten(), torch_output.flatten()]))[0, 1].item()
+    assert pcc > 0.998, f"pcc {pcc} against torch"
+
+
+# A ROW_MAJOR mask that is not in the documented [B, 1, W/32, 32] form must still be rejected.
+def test_scale_mask_softmax_in_place_row_major_mask_wrong_shape_rejected(device, expect_error):
+    B, C, H, W = 2, 4, 64, 2048
+    ttnn_input = ttnn.from_torch(torch.randn((B, C, H, W)), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_mask = ttnn.from_torch(
+        torch.zeros((B, 1, 32, W)), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+    )
+
+    with expect_error(RuntimeError, "Non-sharded mask shape must match expected shape"):
+        ttnn.scale_mask_softmax_in_place(ttnn_input, 0.125, ttnn_mask)
