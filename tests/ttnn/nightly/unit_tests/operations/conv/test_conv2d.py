@@ -3929,8 +3929,6 @@ def test_conv2d_with_fold_dram_path(
     padding,
     act_block_h_override,
 ):
-    # With the input in DRAM and no slice config, conv2d takes the DRAM path, which folds the input before calling
-    # conv2d_L1. The weights must still be folded with the original stride, or the kernel > stride cases go wrong.
     run_conv(
         device=device,
         torch_tensor_map=torch_tensor_map,

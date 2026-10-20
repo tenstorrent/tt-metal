@@ -61,8 +61,7 @@ Result conv2d_L1(
     const auto& weight_tensor = weight_tensor_;
     std::optional<ttnn::Tensor> bias_tensor = bias_tensor_;
     bool mm_conv = use_matmul_for_1x1_conv(kernel_size, stride, padding_n4, dilation, groups, conv_config);
-    // Store the original stride size for weight folding. conv2d_DRAM folds the input before calling in here, so stride
-    // is already {1, 1} on that path; it passes the pre-fold stride explicitly.
+    // Store the original stride size for weight folding
     auto orig_stride = weight_fold_stride.value_or(stride);
 
     auto input_tensor = fold_input_tensor_if_required(
@@ -758,7 +757,6 @@ Result conv2d_DRAM(
         !conv_config.override_output_sharding_config,
         "Conv2D DRAM slicing doesn't support override_output_sharding_config.");
 
-    // The weights are folded later, inside conv2d_L1, and need the stride from before the input is folded.
     const std::array<uint32_t, 2> orig_stride = stride;
     // Fold the input tensor if required - this may update mm_conv after folding
     ttnn::Tensor input_tensor_on_device = fold_input_tensor_if_required(
