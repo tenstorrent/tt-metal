@@ -1,0 +1,4 @@
+tt_metal/tt-llk/tests/helpers/include/topk_xl_split.h
+tt_metal/tt-llk/tests/sources/topk_xl_split_perf.cpp
+tt_metal/tt-llk/tests/sources/topk_xl_split_test.cpp
+tt_metal/tt-llk/tests/python_tests/test_topk_xl_split.py
