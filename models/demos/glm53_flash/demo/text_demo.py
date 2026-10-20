@@ -48,6 +48,9 @@ TRACE_MB = int(os.environ.get("GLM53_MODEL_TRACE_MB", "512"))
 _DT = {"bfp8": ttnn.bfloat8_b, "bfp4": ttnn.bfloat4_b}
 EXPERT_DTYPE = _DT[os.environ.get("GLM53_MODEL_EXPERT_DTYPE", "bfp8")]
 EXPERT_DOWN_DTYPE = _DT[os.environ.get("GLM53_MODEL_EXPERT_DOWN_DTYPE", "bfp8")]
+# tensorbin weight cache shared with tests/test_mesh_model.py ("none" disables)
+_cache_env = os.environ.get("GLM53_MESH_CACHE", "/home/ttuser/ashai/glm53/_cache/mesh")
+CACHE_ROOT = None if _cache_env.lower() == "none" else Path(_cache_env)
 WARMUP = int(os.environ.get("GLM53_DEMO_WARMUP", "2"))
 SAMPLE_DIR = Path(__file__).parent / "sample_prompts"
 TTT_SAMPLES = Path("models/tt_transformers/demo/sample_prompts")
@@ -131,6 +134,7 @@ def test_text_demo(mesh_device, input_prompts, users_per_row, max_seq_len, max_g
         layers,
         max_batch=users_per_row,
         max_seq_len=max_seq_len,
+        weight_cache_path=CACHE_ROOT,
         expert_dtype=EXPERT_DTYPE,
         expert_down_dtype=EXPERT_DOWN_DTYPE,
     )

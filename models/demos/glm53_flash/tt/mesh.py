@@ -38,10 +38,16 @@ def mesh_device_params(rows: int, cols: int, **overrides) -> dict:
 
         from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config, get_max_payload_size
 
-        torus = (rows, cols) == (8, 4) and os.environ.get(
-            "GLM53_FABRIC", "torus"
-        ) != "2d"  # GLM53_FABRIC=2d: mesh fabric
-        params["fabric_config"] = ttnn.FabricConfig.FABRIC_2D_TORUS_XY if torus else ttnn.FabricConfig.FABRIC_2D
+        # GLM53_FABRIC: torus (default on the 8x4) | 2d | 1d | 1d_ring. ``ttnn.all_to_all_dispatch`` /
+        # ``all_to_all_combine`` (the EP expert path) route with 1D hop counts along one axis and are only
+        # exercised under FABRIC_1D (blackhole CI, the DeepSeek-V3 Galaxy demo); under a 2D fabric they hang.
+        fabric = os.environ.get("GLM53_FABRIC", "torus" if (rows, cols) == (8, 4) else "2d")
+        params["fabric_config"] = {
+            "torus": ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
+            "2d": ttnn.FabricConfig.FABRIC_2D,
+            "1d": ttnn.FabricConfig.FABRIC_1D,
+            "1d_ring": ttnn.FabricConfig.FABRIC_1D_RING,
+        }[fabric]
         params["reliability_mode"] = ttnn.FabricReliabilityMode.RELAXED_INIT
         params["fabric_router_config"] = create_fabric_router_config(get_max_payload_size())
     params.update(overrides)

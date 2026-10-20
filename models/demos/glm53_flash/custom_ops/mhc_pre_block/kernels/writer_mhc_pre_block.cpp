@@ -146,4 +146,9 @@ void kernel_main() {
         noc.async_write_barrier();
         cbo.pop_front(1);
     }
+    // every NoC transaction this kernel issued (the cross-core semaphore increments above included) must be
+    // acknowledged before the kernel returns: an atomic acked after the next kernel's noc_local_state_init
+    // leaves that kernel's atomic counters unequal forever (its noc_async_atomic_barrier hangs; seen on the 8x4
+    // o_proj matmul in0 receiver after kda_decode, 2026-10-20)
+    noc_async_full_barrier();
 }

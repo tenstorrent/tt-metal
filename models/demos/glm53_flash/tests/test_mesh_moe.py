@@ -10,6 +10,9 @@ tokens (decode shape 2 users/row and a 32-token block/row).
 
 from __future__ import annotations
 
+import os
+import time
+
 import pytest
 import torch
 from loguru import logger
@@ -35,14 +38,23 @@ def test_mesh_moe_vs_hf(mesh_device, weights, rows_T):
     mlp["experts.gate_up_proj"] = sd["experts.gate_up_proj"]
     mlp["experts.down_proj"] = sd["experts.down_proj"]
     mesh = GLMMesh.from_device(mesh_device)
+    t0 = time.perf_counter()
     tt = TtMoE(mesh_device, cfg, mlp, mesh=mesh)
+    layout = os.environ.get("GLM53_MOE_LAYOUT", "hybrid")
+    logger.info(
+        f"{layout} MoE layer {LAYER} on {ROWS}x{COLS}: experts built + uploaded in {time.perf_counter() - t0:.1f} s"
+    )
     x = realistic_mlp_input(snapshot, text, raw, ROWS * 32).reshape(1, 1, ROWS * 32, -1)  # row r: rows [32r, 32r+T)
     xs = torch.cat([x[:, :, 32 * r : 32 * r + rows_T] for r in range(ROWS)], dim=2)  # [1,1,ROWS*T,4096]
     with torch.no_grad():
         y_hf = hf(xs.reshape(1, ROWS * rows_T, -1)).reshape(1, 1, ROWS * rows_T, -1)
     tt_x = mesh.upload(xs.bfloat16(), ttnn.bfloat16, rows=2)
     for it in range(2):
+        logger.info(f"{layout} MoE forward iter {it} (T={rows_T}/row) starting")
+        t0 = time.perf_counter()
         y = tt(tt_x)
+        ttnn.synchronize_device(mesh_device)
+        logger.info(f"{layout} MoE forward iter {it} done in {time.perf_counter() - t0:.2f} s")
         shards = [ttnn.to_torch(d).float() for d in mesh.device_tensors(y)]
         worst = 1.0
         for r in range(ROWS):
@@ -52,6 +64,6 @@ def test_mesh_moe_vs_hf(mesh_device, weights, rows_T):
                 if c:
                     assert torch.equal(shards[r * COLS + c], shards[r * COLS]), (r, c)
         logger.info(
-            f"hybrid MoE layer {LAYER} on {ROWS}x{COLS}, T={rows_T}/row, iter {it}: worst pcc vs HF {worst:.6f}"
+            f"{layout} MoE layer {LAYER} on {ROWS}x{COLS}, T={rows_T}/row, iter {it}: worst pcc vs HF {worst:.6f}"
         )
         assert worst > 0.995

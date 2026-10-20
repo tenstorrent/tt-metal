@@ -15,6 +15,8 @@ Checks, against torch, the three patterns every multi-chip sublayer uses (design
 
 from __future__ import annotations
 
+import os
+
 import pytest
 import torch
 from loguru import logger
@@ -23,7 +25,9 @@ import ttnn
 from models.demos.glm53_flash.tests.utils import pcc
 from models.demos.glm53_flash.tt.mesh import GLMMesh, interleave_blocks, mesh_device_params
 
-ROWS, COLS = 2, 4
+ROWS, COLS = (
+    int(v) for v in os.environ.get("GLM53_MESH_SHAPE", "2,4").split(",")
+)  # (8,4) = the whole Galaxy (torus fabric)
 H, I = 4096, 2048  # hidden, intermediate (per-TP slice 512)
 
 
