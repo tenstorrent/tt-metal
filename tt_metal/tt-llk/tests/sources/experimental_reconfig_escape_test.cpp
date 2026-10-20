@@ -231,12 +231,13 @@ static inline void math_experimental_(RUNTIME_PARAMETERS params, [[maybe_unused]
 // (ADDR_MOD_0/2/3) and (via the format reconfig) the ALU format/acc-ctrl state it depends on.
 static inline void math_datacopy_(RUNTIME_PARAMETERS params, const FormatConfig& formats)
 {
+    const ckernel::TensorShape datacopy_shape = ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, NUM_FACES);
     _llk_math_reconfig_data_format_<is_fp32_dest_acc_en, false /* to_from_int8 */>(formats.math, formats.math);
     _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false /* is_int_fpu_en */>(
-        ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, NUM_FACES), formats.math);
+        datacopy_shape, formats.math);
     _llk_math_wait_for_dest_available_<DST_SYNC>();
     _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en, BroadcastType::NONE, false /* unpack_to_dest */>(
-        0 /* dst_index */, formats.math, formats.math);
+        0 /* dst_index */, formats.math, formats.math, datacopy_shape);
     _llk_math_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
 }
 

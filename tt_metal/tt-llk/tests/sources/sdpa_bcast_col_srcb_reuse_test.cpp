@@ -177,15 +177,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     _llk_math_wait_for_dest_available_<DST_SYNC>();
 
+    // Same 8x32 shape as the unpack side.
+    const ckernel::TensorShape tensor_shape = {
+        static_cast<std::uint8_t>(params.in0_face_r_dim), static_cast<std::uint8_t>(FACE_C_DIM), 1 /* num_faces_r_dim */, 2 /* num_faces_c_dim */};
+
     // Step 1: copy the two column sources (unpacked into SrcA by unpack step 1) into DEST[SRC_INDEX] and
     // DEST[SRC_INDEX + 1]. The preamble's four MOVD2Bs read DEST rows 0-7 and 64-71, i.e. the first 8 rows
     // of each of these two 32x32 DEST tiles, into SrcB rows 0-7 (P1) and 8-15 (P2).
-    _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE>(
-        ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, num_faces), formats.math);
-    _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en>(
-        SRC_INDEX, formats.math, formats.math, ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, num_faces));
-    _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en>(
-        SRC_INDEX + 1, formats.math, formats.math, ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, num_faces));
+    _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE>(tensor_shape, formats.math);
+    _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en>(SRC_INDEX, formats.math, formats.math, tensor_shape);
+    _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en>(SRC_INDEX + 1, formats.math, formats.math, tensor_shape);
 
     // Step 2: SDPA column-broadcast SrcB-reuse eltwise.
     //   init      -> program addr_mods + the SRCB_BCAST_COL MUL MOP.
