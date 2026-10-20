@@ -268,9 +268,10 @@ class GroupedMoE:
             config=ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.NOC_0),
             defines=defines,
         )  # fmt: skip
-        scr = self.rows * 32 + 4 * 32 + 2048 + 4 * 64 + 2 * (self.rows // TILE) * 2048 + 8 * E + 12 * 1088
+        scr = self.rows * 32 + 64 + 4 * 32 + 2048 + 4 * 64 + 2 * (self.rows // TILE) * 2048 + 8 * E + 12 * 1088
         cbs = [self._cb(0, ttnn.bfloat16, scr, 1, cores)]
-        sems = [ttnn.SemaphoreDescriptor(i, ttnn.CoreType.WORKER, cores, 0) for i in (0, 1)]
+        # 0: arrivals, 1: go, 2 .. 12: the expert counts (atomic increments at the hub, zeroed by every launch)
+        sems = [ttnn.SemaphoreDescriptor(i, ttnn.CoreType.WORKER, cores, 0) for i in range(2 + (E + 2) // 3)]
         ttnn.generic_op(io, ttnn.ProgramDescriptor(kernels=[k], semaphores=sems, cbs=cbs))
         return w
 

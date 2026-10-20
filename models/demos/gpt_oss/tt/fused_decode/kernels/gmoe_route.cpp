@@ -7,11 +7,13 @@
 //   phase 1 (cores s < ROWS / 4, 4 rows each): each row's routed experts exactly as TopKRouter.dense_decode selects
 //     them (every logit >= the 4th largest, so a tie at the 4th routes more; at most K_IDS kept: logit order, then
 //     index), their softmax weights in integer fixed point (the RISC-V cores have no FPU: exp(d) = 2^(d log2 e), a
-//     Q30 polynomial; the division 64-bit), rounded to BF16; the row of W written, the row's (ids, weights) sent to the
-//     hub (core 0), which multicasts all rows' to every core once all have arrived (semaphores ARRIVE / GO; one core
-//     making every slot's entries serially was slower: 96 vs 66 us);
-//   phase 2 (every core = slot s): the plan from the rows' expert masks (counts, slots), slot s's stripes of P1T
-//     (one-hot rows) and Pw (the routing weights), core 0 the slot table.
+//     Q30 polynomial; one 64-bit reciprocal per row), rounded to BF16; the row of W written, each routed expert
+//     counted at the hub (atomic increments of its count semaphores, 3 x 10 bits per word), the row's (ids,
+//     weights) sent to the hub (core 0), which multicasts all rows and the counts to every core once all have arrived
+//     (semaphores ARRIVE / GO; one core making every slot's entries serially was slower: 96 vs 66 us);
+//   phase 2 (every core = slot s): the plan from the counts (counting the 256 rows' masks on every core took ~10 us:
+//     RISC-V L1 loads, a software ctz), slot s's stripes of P1T (one-hot rows) and Pw (the routing weights), core 0
+//     the slot table.
 // GMOE_BIAS_COPY (= hidden tiles; common args 11, 12: [down bias rows, Y_g]): the cores without phase-1 rows copy the
 //   layer's down bias rows into that slot of a shared Y_g.
 // GMOE_BIAS_SLOT (the last slot: never a routed one, at most (ROWS K_IDS + 31 E) / 32 = 71 slots are): phase 1 writes
@@ -122,6 +124,8 @@ void kernel_main() {
     constexpr uint32_t RPC = 4;  // rows per phase-1 core
     constexpr uint32_t N1 = ROWS / RPC;
     static_assert(N1 <= NCORES && E == 32);
+    constexpr uint32_t SEM_CNT0 = SEM_GO + 1, CNT_WORDS = (E + 2) / 3;  // count semaphores (10 bits per expert)
+    static_assert(ROWS < 1024);
 
     const uint32_t s = static_cast<uint32_t>(get_absolute_logical_y()) * RW + get_absolute_logical_x();
     const auto s_l = TensorAccessor(l_args, logits_addr, tile);
@@ -132,7 +136,10 @@ void kernel_main() {
 
     cb_reserve_back(cb_scr, 1);
     const uint32_t rows_l1 = get_write_ptr(cb_scr);  // every row's (ids, weights): ROWS x ROW_BYTES (hub + multicast)
-    const uint32_t mine_l1 = rows_l1 + ROWS * ROW_BYTES;  // this core's RPC rows before sending
+    // then the expert counts (the hub's count semaphores, CNT_WORDS words of 3 x 10 bits; with the rows in the
+    // multicast)
+    const uint32_t cnts_l1 = rows_l1 + ROWS * ROW_BYTES;
+    const uint32_t mine_l1 = cnts_l1 + 64;                // this core's RPC rows before sending
     const uint32_t lg_l1 = mine_l1 + RPC * ROW_BYTES;     // the logits tile of this core's rows
     const uint32_t wrow_l1 = lg_l1 + tile;                // this core's W rows: RPC x 64 bytes (two face rows each)
     const uint32_t p1t_l1 = wrow_l1 + RPC * 64;           // stripe: RT tiles [32 slot rows, 32 rows]
@@ -214,11 +221,18 @@ void kernel_main() {
                 wr[q] = 0;
             }
             *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mine_l1 + i * ROW_BYTES + 28) = taken;
+            // the row's experts counted at the hub (atomic increments of its count semaphores: 10 bits per expert)
+            for (uint32_t k = 0; k < n; ++k) {
+                noc_semaphore_inc(
+                    get_noc_addr(hub_x, hub_y, get_semaphore(SEM_CNT0 + sel[k] / 3)), 1u << (10 * (sel[k] % 3)));
+            }
+            // one 64-bit division per row (the RISC-V cores divide in software): inv = 2^62 / sum, w = ex inv / 2^32
+            const uint64_t inv = (1ULL << 62) / sum;
             for (uint32_t k = 0; k < K; ++k) {
                 ro[k] = k < n ? static_cast<uint8_t>(sel[k]) : 0xFF;
                 uint16_t wb = 0;
                 if (k < n) {
-                    wb = bf16_q30(static_cast<uint32_t>((static_cast<uint64_t>(ex[k]) << 30) / sum));
+                    wb = bf16_q30(static_cast<uint32_t>((static_cast<uint64_t>(ex[k]) * inv) >> 32));
                     const uint32_t e = sel[k];
                     *u16(wrow_l1 + i * 64 + (e / 16) * 32 + (e % 16) * 2) = wb;
                 }
@@ -237,6 +251,7 @@ void kernel_main() {
         // the rows to the hub, then its arrival count
         noc_async_write(mine_l1, get_noc_addr(hub_x, hub_y, rows_l1 + r0 * ROW_BYTES), RPC * ROW_BYTES);
         noc_async_write_barrier();
+        noc_async_atomic_barrier();  // (the count increments landed before the arrival)
         noc_semaphore_inc(get_noc_addr(hub_x, hub_y, get_semaphore(SEM_ARRIVE)), 1);
         noc_async_atomic_barrier();
     }
@@ -263,8 +278,13 @@ void kernel_main() {
     if (s == 0) {  // the hub: every row to every core, then GO
         volatile tt_l1_ptr uint32_t* arrive = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SEM_ARRIVE));
         noc_semaphore_wait(arrive, N1);
+        invalidate_l1_cache();
+        for (uint32_t w = 0; w < CNT_WORDS; ++w) {
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cnts_l1)[w] =
+                *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SEM_CNT0 + w));
+        }
         noc_async_write_multicast_loopback_src(
-            rows_l1, get_noc_multicast_addr(mx0, my0, mx1, my1, rows_l1), ROWS * ROW_BYTES, NCORES);
+            rows_l1, get_noc_multicast_addr(mx0, my0, mx1, my1, rows_l1), ROWS * ROW_BYTES + 64, NCORES);
         noc_async_write_barrier();
         *go = 1;
         noc_semaphore_set_multicast_loopback_src(
@@ -276,18 +296,11 @@ void kernel_main() {
     invalidate_l1_cache();
 
     // ---- phase 2: the plan from the rows' expert masks, slot s's stripes
-    uint32_t mask[ROWS];
-    for (uint32_t r = 0; r < ROWS; ++r) {
-        mask[r] = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(rows_l1 + r * ROW_BYTES + 28);
-    }
+    // the expert counts (the hub's, multicast with the rows; counting the 256 rows' masks on every core took ~10 us:
+    // RISC-V L1 loads and a software ctz)
     uint32_t cnt[E];
     for (uint32_t e = 0; e < E; ++e) {
-        cnt[e] = 0;
-    }
-    for (uint32_t r = 0; r < ROWS; ++r) {
-        for (uint32_t m = mask[r]; m; m &= m - 1) {
-            cnt[__builtin_ctz(m)]++;
-        }
+        cnt[e] = (reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cnts_l1)[e / 3] >> (10 * (e % 3))) & 0x3FF;
     }
     uint32_t es = E, lo = 0, base = 0;
     volatile tt_l1_ptr uint32_t* tb = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(table_l1);
@@ -308,7 +321,8 @@ void kernel_main() {
         const uint32_t hi = lo + 32;
         uint32_t rank = 0;
         for (uint32_t r = 0; r < ROWS && rank < hi; ++r) {
-            if (!((mask[r] >> es) & 1)) {
+            const uint32_t mask_r = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(rows_l1 + r * ROW_BYTES + 28);
+            if (!((mask_r >> es) & 1)) {
                 continue;
             }
             if (rank >= lo) {
