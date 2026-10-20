@@ -367,8 +367,10 @@ class BatchedDraft:
         mesh = mesh_device
         rep = ttnn.ReplicateTensorToMesh(mesh)
 
-        # BF16 weights (BF8: round 49.85 -> 49.69 ms, acceptance 4.59 -> 4.53 tokens per round: slower overall)
-        wdt = ttnn.bfloat16
+        # BFP8 weights (with the HiFi2 matmuls, mm_ck): round 27.3 -> 26.6 ms at ISL 256, 28.1 -> 27.5 at 1024, the
+        # acceptance within its run-to-run spread (4.92 / 4.98 -> 4.93 / 5.01 tokens per round). (At round 49.85 ms
+        # BF8 alone had been no faster.) B32_DRAFT_WDT=bf16: BF16 weights
+        wdt = {"bf16": ttnn.bfloat16, "bf8": ttnn.bfloat8_b}[os.environ.get("B32_DRAFT_WDT", "bf8")]
 
         def put(t, mapper=rep, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT):
             return ttnn.from_torch(
@@ -461,10 +463,11 @@ class BatchedDraft:
         self.ck = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=False
         )
-        # (HiFi2 / LoFi: no faster at 256 rows -- not compute-bound)
+        # (with BF16 weights HiFi2 / LoFi were no faster; with the BFP8 ones HiFi2 is: 26.8 -> 26.6 ms, LoFi as HiFi2)
         self.mm_ck = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=True
-        )
+            math_fidelity=getattr(ttnn.MathFidelity, os.environ.get("B32_DRAFT_MMFID", "HiFi2")), math_approx_mode=False,
+            fp32_dest_acc_en=True, packer_l1_acc=True,
+        )  # fmt: skip
         self.argmax = _Argmax(target.lm_head_weight.shape[-1], target.vocab_size)
         # the drafter's LM head on a BFP4 copy of the target's with BF8 rows: 0.89 -> 0.52 ms per pass, live-like
         # acceptance on a fixed text 3.07 (BF16 rows x BF8 weight: 3.05 / 3.10 in two runs)
@@ -854,6 +857,7 @@ class BatchedVerify:
         # full-attention layers: block attention (each user's K / V read once for its 8 rows), 8 users per program on 3
         # history slices each (96 cores): 24 layers' attention at 16K context 47.9 -> 18.1 ms (16 x 1: 20.3, 4 x 6:
         # 20.6), at 300 11.3 -> 10.9 ms
+        # (16 x 1 after the one-kernel-set change: round -0.4 ms at ISL 256 .. 4K, +2.4 ms at 16K)
         self.block_attn = _UserBlockAttention(
             self.mesh, users, block, self.local_heads, self.local_kv_heads, hd, kv_cache[1][0].shape[2], 8, 3
         )
