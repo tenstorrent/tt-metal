@@ -85,27 +85,7 @@ ttnn::device_operation::ProgramArtifacts PadTileMulticoreProgramFactory::create_
 
     TT_ASSERT(output.is_allocated(), "Output buffer should be allocated on device!");
 
-    uint32_t packed_pad_value;
-    bfloat16 bfloat_pad_value = bfloat16(pad_value);
-    switch (a.dtype()) {
-        case DataType::INT32:
-        case DataType::UINT32: packed_pad_value = pad_value; break;
-        case DataType::BFLOAT16:
-            packed_pad_value = pack_two_bfloat16_into_uint32({bfloat_pad_value, bfloat_pad_value});
-            break;
-        case DataType::UINT16:
-            packed_pad_value = ttnn::operations::data_movement::pack_two_uint16_into_uint32(
-                {ttnn::operations::data_movement::float_to_uint16(pad_value),
-                 ttnn::operations::data_movement::float_to_uint16(pad_value)});
-            break;
-        case DataType::FLOAT32: packed_pad_value = std::bit_cast<uint32_t>(pad_value); break;
-        default:
-            packed_pad_value = 0;
-            TT_ASSERT(
-                false,
-                "Unsupported datatype for pad tile multicore, can only support INT32, UINT32, BFLOAT16, UINT16, "
-                "FLOAT32");
-    }
+    const uint32_t packed_pad_value = ttnn::operations::data_movement::pack_scalar_into_uint32(a.dtype(), pad_value);
 
     // The four num_dims-long RTA blocks below (input/output page shapes and per-dim ids) are
     // reached by index in `for (d < num_dims)` loops, so they travel as runtime varargs rather
