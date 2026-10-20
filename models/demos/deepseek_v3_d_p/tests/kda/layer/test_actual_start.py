@@ -17,6 +17,7 @@ import torch
 import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.reference.kda import kda_forward_reference
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_x_device_params
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     LayerNrmseThresholds,
     assert_matches_reference,
@@ -29,14 +30,29 @@ from models.demos.deepseek_v3_d_p.tests.kda.utils import (
 from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_bit_identical, make_actual_start
 
+
+def _not_the_4x4_stage_layout(**params):
+    """On the 4x4 stage only TP on axis 0 is the deployed layout; SP's ring is axis 1."""
+    return params["mesh_device"] == (4, 4) and params["tensor_parallel_axis"] != 0
+
+
 pytestmark = [
     run_for_blackhole(),
-    pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True),
     pytest.mark.parametrize(
-        "device_params",
-        [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+        "mesh_device,device_params",
+        [
+            pytest.param((2, 4), {"fabric_config": ttnn.FabricConfig.FABRIC_1D}, id="2x4"),
+            # One 4x4 prefill stage (a Galaxy tray half): SP=4 on the axis-1 ring, TP=4 on the axis-0 line.
+            pytest.param(
+                (4, 4),
+                torus_x_device_params(),
+                marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+                id="4x4-torus-x",
+            ),
+        ],
         indirect=True,
     ),
+    pytest.mark.uncollect_if(pred=_not_the_4x4_stage_layout),
 ]
 
 SEQUENCE = 1280
@@ -165,11 +181,11 @@ def test_actual_start_is_deterministic_and_matches_reference(
     )
 
 
-def test_split_trace_replay_is_bit_identical(mesh_device: ttnn.MeshDevice) -> None:
+@pytest.mark.parametrize("tensor_parallel_axis", [1, 0])
+def test_split_trace_replay_is_bit_identical(mesh_device: ttnn.MeshDevice, tensor_parallel_axis: int) -> None:
     """Two replays of the complete split layer must produce identical outputs and carries."""
-    tensor_parallel_axis = 1
-    sp_axis = 0
-    sp_size = 2
+    sp_axis = 1 - tensor_parallel_axis
+    sp_size = tuple(mesh_device.shape)[sp_axis]
     local_rows = SEQUENCE // sp_size
     actual_start = local_rows + local_rows // 2
     config, weights, hidden, expected_output, expected_state = reference_case()
@@ -237,9 +253,14 @@ def test_split_trace_replay_is_bit_identical(mesh_device: ttnn.MeshDevice) -> No
             ttnn.deallocate(hidden_tt)
 
 
-def test_split_offset_continuation_preserves_nonzero_caller_carries(mesh_device: ttnn.MeshDevice) -> None:
+@pytest.mark.parametrize("tensor_parallel_axis", [1, 0])
+def test_split_offset_continuation_preserves_nonzero_caller_carries(
+    mesh_device: ttnn.MeshDevice, tensor_parallel_axis: int
+) -> None:
+    sp_axis = 1 - tensor_parallel_axis
+    sp_size = tuple(mesh_device.shape)[sp_axis]
     config, weights, _, _, _ = reference_case()
-    layer = build_layer(mesh_device, config, weights, 0, 1, active_seq_len=SEQUENCE)
+    layer = build_layer(mesh_device, config, weights, sp_axis, tensor_parallel_axis, active_seq_len=SEQUENCE)
     hidden = torch.randn(1, 3 * SEQUENCE, config.hidden_size, generator=torch.Generator().manual_seed(941)).to(
         torch.bfloat16
     )
@@ -249,8 +270,8 @@ def test_split_offset_continuation_preserves_nonzero_caller_carries(mesh_device:
         actual_start = SEQUENCE // 2 + 32 + chunk * SEQUENCE
         part = hidden[:, chunk * SEQUENCE : (chunk + 1) * SEQUENCE]
         expected_output, reference_state = kda_forward_reference(part, weights, config, reference_state)
-        permutation = mla_row_permutation(actual_start, 2, SEQUENCE // 2)
-        input_tt = to_sp_input(part[:, permutation, :], mesh_device, 0)
+        permutation = mla_row_permutation(actual_start, sp_size, SEQUENCE // sp_size)
+        input_tt = to_sp_input(part[:, permutation, :], mesh_device, sp_axis)
         previous = state
         before = [
             ttnn.to_torch(shard).clone()
@@ -270,8 +291,8 @@ def test_split_offset_continuation_preserves_nonzero_caller_carries(mesh_device:
                 expected_output=expected_output.to(torch.bfloat16),
                 expected_state=reference_state,
                 mesh_device=mesh_device,
-                sp_axis=0,
-                tp_axis=1,
+                sp_axis=sp_axis,
+                tp_axis=tensor_parallel_axis,
                 config=config,
                 label=f"split continuation chunk={chunk} start={actual_start}",
                 nrmse=LayerNrmseThresholds(output=0.02, recurrent=0.03, convolution=0.003),
