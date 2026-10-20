@@ -20,6 +20,7 @@ from models.experimental.hpcg.tt.custom_ops.cg_vector import CgVectorOp, DotFini
 from models.experimental.hpcg.tt.custom_ops.sparse_rows import SparseRowOp, SparseRowPlan, slot_pages
 from models.experimental.hpcg.tt.custom_ops.sparse_rows.op import debug_buffer, noc_coords
 from models.experimental.hpcg.tt.custom_ops.stencil_matrix import StencilMatrixOp
+from models.experimental.hpcg.tt.custom_ops.stencil_matrix.op import StencilJob, TransferJob
 from models.experimental.hpcg.tt.layout import (
     TILE,
     empty_device,
@@ -46,6 +47,8 @@ class DeviceLevel:
     """One multigrid level on device: matrix values and window offsets, and the level's work vectors.
     b: for the fine level, CG's right-hand side, which the device fills when it generates the matrix.
     zeros: vectors of the level to set to zero alongside (the fine level's x and p).
+    job: on the device-generated path, the StencilJob that writes values, offsets, b and zeros (the caller launches
+    it, StencilMatrixOp); None on the host-tables path.
     Work vectors are allocated without a fill: every launch writes them before any launch reads them."""
 
     def __init__(self, device, L, ncores, noc_xy, r=None, b=None, zeros=()):
@@ -62,11 +65,11 @@ class DeviceLevel:
                 ttnn.copy(to_device(device, L.B), b)
             for t in zeros:
                 ttnn.copy(to_device(device, np.zeros(L.P, np.float32)), t)
+            self.job = None
         else:  # the device writes the values, the offsets, b and the zero vectors; the host plans the windows only
             self.plan = SparseRowPlan(None, *plan_args, bands=bands, pout=L.P, stencil=L)
-            gen = StencilMatrixOp(device, L, self.plan, b=b, zeros=zeros)
-            gen()
-            self.values, self.offsets = gen.values, gen.offsets
+            self.job = StencilJob(device, L, self.plan, b=b, zeros=zeros)
+            self.values, self.offsets = self.job.values, self.job.offsets
         self.z, self.Az = (empty_device(device, L.P) for _ in range(2))
         self.r = r if r is not None else empty_device(device, L.P)  # the fine level shares CG's r
 
@@ -98,9 +101,38 @@ class HPCG:
         L0 = self.levels[0]
         self.r, self.b, self.x, self.p, self.Ap = (empty_device(device, L0.P) for _ in range(5))
         fine = dict(r=self.r, b=self.b, zeros=(self.x, self.p))  # x = 0 (initial guess) and p = 0 on the fine level
-        self.lv = [
-            DeviceLevel(device, L, min(nc, lc[l]), noc_xy, **(fine if l == 0 else {})) for l, L in enumerate(self.levels)
-        ]
+        # matrix generation in two launches: the fine level's as soon as it is planned (the device writes it while
+        # the host plans the rest), then the coarser levels' and the grid transfers' together
+        self.lv = [DeviceLevel(device, L0, min(nc, lc[0]), noc_xy, **fine)]
+        if self.lv[0].job is not None:
+            StencilMatrixOp(device, [self.lv[0].job])()
+        self.lv += [DeviceLevel(device, L, min(nc, lc[l]), noc_xy) for l, L in enumerate(self.levels) if l > 0]
+        jobs = [d.job for d in self.lv[1:] if d.job is not None]
+        # grid transfers l -> l + 1: restriction rc[qc] = Rw * t[R[qc]] (t = r - A z = block 0 of Az, written by the
+        # pre-smoother); prolongation z[block 0] += Pw * zc[Pm]. Planned from the two levels' storage-order formulas
+        # (no R / Pm tables) with the device writing weights and offsets, or from Level.link's tables on the
+        # host-tables path
+        for l in range(len(self.lv) - 1):
+            L, C, d = self.levels[l], self.levels[l + 1], self.lv[l]
+            nb0 = L.starts[1]
+            cblocks = [(C.starts[c], C.starts[c + 1]) for c in range(8)]
+            cb = C.bstarts if C.bands > 1 else None
+            fb = [L.bstarts[0]] if L.bands > 1 else None
+            if L.tables:
+                d.rp = SparseRowPlan(L.R[None, :], cblocks, [(0, nb0)], nc, noc_xy, False, bands=cb)
+                d.pp = SparseRowPlan(L.Pm[None, :], [(0, nb0)], cblocks, nc, noc_xy, False, bands=fb)
+                d.Rt, d.Roff = rows_to_device(device, L.Rw), rows_to_device(device, d.rp.off)
+                d.Pt, d.Poff = rows_to_device(device, L.Pw), rows_to_device(device, d.pp.off)
+                continue
+            tr = dict(transfer=("restrict", L, C), host_tables=False)
+            d.rp = SparseRowPlan(None, cblocks, [(0, nb0)], nc, noc_xy, False, bands=cb, pout=C.P, **tr)
+            tr = dict(transfer=("prolong", L, C), host_tables=False)
+            d.pp = SparseRowPlan(None, [(0, nb0)], cblocks, nc, noc_xy, False, bands=fb, pout=nb0, **tr)
+            jr, jp = TransferJob(device, d.rp), TransferJob(device, d.pp)
+            d.Rt, d.Roff, d.Pt, d.Poff = jr.values, jr.offsets, jp.values, jp.offsets
+            jobs += [jr, jp]
+        if jobs:
+            StencilMatrixOp(device, jobs)()
         self.debug = debug_buffer(device)  # per-core cycle counters, written by kernel_debug builds
         dbg = dict(kernel_debug=kernel_debug, debug=self.debug)
         self._dbg = dbg
@@ -134,38 +166,13 @@ class HPCG:
                 **dbg,
             )
             if l + 1 < len(self.lv):
-                C, dc = self.levels[l + 1], self.lv[l + 1]
-                nb0 = L.starts[1]
-                cblocks = [(C.starts[c], C.starts[c + 1]) for c in range(8)]
-                # restriction: rc[qc] = Rw * t[R[qc]], t = r - A z = block 0 of Az (written by the pre-smoother).
-                # Planned from the two levels' storage-order formulas (no R / Pm tables), or from Level.link's
-                # tables on the host-tables path
-                cb = C.bstarts if C.bands > 1 else None
-                if L.tables:
-                    rp = SparseRowPlan(L.R[None, :], cblocks, [(0, nb0)], nc, noc_xy, False, bands=cb)
-                    rw = L.Rw
-                else:
-                    tr = ("restrict", L, C)
-                    rp = SparseRowPlan(None, cblocks, [(0, nb0)], nc, noc_xy, False, bands=cb, pout=C.P, transfer=tr)
-                    rw = rp.weights
-                d.Rt = rows_to_device(device, rw)
-                d.Roff = rows_to_device(device, rp.off)
+                dc = self.lv[l + 1]
                 self.ops[("restrict", l)] = SparseRowOp(
-                    device, rp, d.Rt, d.Roff, "spmv", list(range(8)), d.Az, dc.r, **dbg
+                    device, d.rp, d.Rt, d.Roff, "spmv", list(range(8)), d.Az, dc.r, **dbg
                 )
-                # prolongation: z[block 0] = z[block 0] + Pw * zc[Pm], gather and add in one launch
-                fb = [L.bstarts[0]] if L.bands > 1 else None
-                if L.tables:
-                    pp = SparseRowPlan(L.Pm[None, :], [(0, nb0)], cblocks, nc, noc_xy, False, bands=fb)
-                    pw = L.Pw
-                else:
-                    tr = ("prolong", L, C)
-                    pp = SparseRowPlan(None, [(0, nb0)], cblocks, nc, noc_xy, False, bands=fb, pout=nb0, transfer=tr)
-                    pw = pp.weights
-                d.Pt = rows_to_device(device, pw)
-                d.Poff = rows_to_device(device, pp.off)
+                # prolongation: gather and add in one launch
                 self.ops[("prolong", l)] = SparseRowOp(
-                    device, pp, d.Pt, d.Poff, "spmv", [0], dc.z, d.z, b=d.z, addb=True, **dbg
+                    device, d.pp, d.Pt, d.Poff, "spmv", [0], dc.z, d.z, b=d.z, addb=True, **dbg
                 )
         # CG SpMV: an SpMV-only gs launch on the smoother plan, so cores move through the matrix in lockstep
         d0 = self.lv[0]

@@ -614,7 +614,8 @@ int64_t hpcg_plan_offsets(
 // Exchange entries of a Gauss-Seidel launch: for each block b, each core m that owns rows, and each piece of m's
 // window, every other core k whose own rows of block b overlap the piece gets an entry (k, b, m, s, f, dst): rows
 // [s, f) go to byte offset dst of m's window. With ent == nullptr only counts. Own ranges of a block are sorted by
-// core. Returns the number of entries.
+// core. Returns the number of entries. The (b, m) pairs run in parallel: counted, then each writes its entries at
+// its offset, so the order is the serial order (b, then m, then piece, then k).
 int64_t hpcg_plan_exchange(
     int32_t nc,
     int32_t NB,
@@ -625,7 +626,6 @@ int64_t hpcg_plan_exchange(
     const int64_t* piece_l1,
     const int64_t* npieces,
     int64_t* ent) {
-    int64_t n = 0;
     std::vector<uint8_t> has_rows(nc, 0);
     for (int32_t m = 0; m < nc; ++m) {
         for (int32_t b = 0; b < NB; ++b) {
@@ -634,43 +634,61 @@ int64_t hpcg_plan_exchange(
             }
         }
     }
-    std::vector<int64_t> E(nc);
+    std::vector<int64_t> E((size_t)NB * nc);  // E[b * nc + k]: end of core k's rows of block b
     for (int32_t b = 0; b < NB; ++b) {
         for (int32_t k = 0; k < nc; ++k) {
-            E[k] = own[(k * NB + b) * 2 + 1];
-        }
-        for (int32_t m = 0; m < nc; ++m) {
-            if (!has_rows[m]) {
-                continue;  // a core without rows reads no window: its placeholder piece gets nothing
-            }
-            for (int64_t p = 0; p < npieces[m]; ++p) {
-                const int64_t plo = piece_lo[m * max_pieces + p], phi = plo + piece_ln[m * max_pieces + p];
-                int32_t k =
-                    (int32_t)(std::upper_bound(E.begin(), E.end(), plo) - E.begin());  // first core with E > plo
-                for (; k < nc; ++k) {
-                    const int64_t A = own[(k * NB + b) * 2], Ek = E[k];
-                    if (A >= phi) {
-                        break;
-                    }
-                    if (Ek <= A || k == m) {
-                        continue;
-                    }
-                    const int64_t s = std::max(A, plo), f = std::min(Ek, phi);
-                    if (ent) {
-                        int64_t* e = ent + n * 6;
-                        e[0] = k;
-                        e[1] = b;
-                        e[2] = m;
-                        e[3] = s;
-                        e[4] = f;
-                        e[5] = piece_l1[m * max_pieces + p] + (s - plo) * 4;
-                    }
-                    ++n;
-                }
-            }
+            E[(size_t)b * nc + k] = own[(k * NB + b) * 2 + 1];
         }
     }
-    return n;
+    // entries of pair (b, m), written from out (counted only when out == nullptr)
+    auto pair = [&](int32_t b, int32_t m, int64_t* out) {
+        int64_t n = 0;
+        if (!has_rows[m]) {
+            return n;  // a core without rows reads no window: its placeholder piece gets nothing
+        }
+        const int64_t* Eb = E.data() + (size_t)b * nc;
+        for (int64_t p = 0; p < npieces[m]; ++p) {
+            const int64_t plo = piece_lo[m * max_pieces + p], phi = plo + piece_ln[m * max_pieces + p];
+            int32_t k = (int32_t)(std::upper_bound(Eb, Eb + nc, plo) - Eb);  // first core with E > plo
+            for (; k < nc; ++k) {
+                const int64_t A = own[(k * NB + b) * 2], Ek = Eb[k];
+                if (A >= phi) {
+                    break;
+                }
+                if (Ek <= A || k == m) {
+                    continue;
+                }
+                if (out) {
+                    const int64_t s = std::max(A, plo), f = std::min(Ek, phi);
+                    int64_t* e = out + n * 6;
+                    e[0] = k;
+                    e[1] = b;
+                    e[2] = m;
+                    e[3] = s;
+                    e[4] = f;
+                    e[5] = piece_l1[m * max_pieces + p] + (s - plo) * 4;
+                }
+                ++n;
+            }
+        }
+        return n;
+    };
+    const int64_t npair = (int64_t)NB * nc;
+    std::vector<int64_t> at(npair + 1, 0);
+#pragma omp parallel for schedule(dynamic, 8)
+    for (int64_t i = 0; i < npair; ++i) {
+        at[i + 1] = pair((int32_t)(i / nc), (int32_t)(i % nc), nullptr);
+    }
+    for (int64_t i = 0; i < npair; ++i) {
+        at[i + 1] += at[i];
+    }
+    if (ent) {
+#pragma omp parallel for schedule(dynamic, 8)
+        for (int64_t i = 0; i < npair; ++i) {
+            pair((int32_t)(i / nc), (int32_t)(i % nc), ent + at[i] * 6);
+        }
+    }
+    return at[npair];
 }
 
 // Per-core metadata rows of one sparse-row launch (layout in tt/custom_ops/sparse_rows/kernels/common.h), the
@@ -914,6 +932,41 @@ int64_t hpcg_transfer_tables(
         }
     }
     return bad;
+}
+
+// Each out block's padding column of a grid transfer launch (for_each_transfer_row: the column of the block's last
+// real row), for the device-generated tables (tt/custom_ops/stencil_matrix); -1 for a block without real rows.
+void hpcg_transfer_pad(
+    int32_t kind,
+    int32_t nx,
+    int32_t nbands,
+    int32_t nl,
+    const int32_t* line_band,
+    const int32_t* band_y0,
+    const int32_t* band_ny,
+    const int64_t* band_start,
+    int32_t cnx,
+    int32_t cnbands,
+    int32_t cnl,
+    const int32_t* cline_band,
+    const int32_t* cband_y0,
+    const int32_t* cband_ny,
+    const int64_t* cband_start,
+    int32_t NB,
+    int64_t* pad) {
+    const Geo F{nx, nbands, nl, line_band, band_y0, band_ny, band_start};
+    const Geo C{cnx, cnbands, cnl, cline_band, cband_y0, cband_ny, cband_start};
+    const Geo& O = kind == 1 ? C : F;
+    for (int32_t b = 0; b < NB; ++b) {
+        const int ob = kind == 1 ? b : 0;
+        const int64_t real_end = O.band_start[(int64_t)ob * O.nbands] + O.count(ob);
+        pad[b] = -1;
+        if (O.count(ob) > 0) {
+            for_each_transfer_row(kind, F, C, b, real_end - 1, real_end, [&](int64_t, int64_t col, bool) {
+                pad[b] = col;
+            });
+        }
+    }
 }
 
 // hpcg_plan_exchange's entries, already as SparseRowPlan uses them: grouped by (k, b) in their original order (a

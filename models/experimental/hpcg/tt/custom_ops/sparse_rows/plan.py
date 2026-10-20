@@ -25,7 +25,18 @@ class SparseRowPlan:
     planned on fewer cores."""
 
     def __new__(
-        cls, COL, out_blocks, src_regions, ncores, noc_xy, exchange, bands=None, pout=None, stencil=None, transfer=None
+        cls,
+        COL,
+        out_blocks,
+        src_regions,
+        ncores,
+        noc_xy,
+        exchange,
+        bands=None,
+        pout=None,
+        stencil=None,
+        transfer=None,
+        host_tables=True,
     ):
         """COL: [nslot, P] column indices (q order). out_blocks: (start, end) q ranges of the output rows, one per
         phase block (GS: one colour each). src_regions: q ranges of the input vector the columns fall in.
@@ -38,11 +49,12 @@ class SparseRowPlan:
         generates the offsets (tt/custom_ops/stencil_matrix). Gauss-Seidel plans only (exchange=True).
         transfer: (kind, F, C) with COL = None: a grid transfer launch between fine level F and coarse level C (kind
         "restrict" or "prolong"), planned from their storage-order formulas without Level.link's tables; off holds the
-        1-slot window offsets and weights the 1-slot values (exchange=False, pout = the out rows' vector length)."""
+        1-slot window offsets and weights the 1-slot values (exchange=False, pout = the out rows' vector length).
+        host_tables=False: off and weights are None (the device generates them, tt/custom_ops/stencil_matrix)."""
         nc = ncores
         while True:
             p = object.__new__(cls)
-            p._init(COL, out_blocks, src_regions, nc, noc_xy, exchange, bands, pout, stencil, transfer)
+            p._init(COL, out_blocks, src_regions, nc, noc_xy, exchange, bands, pout, stencil, transfer, host_tables)
             if not exchange or max((len(x) for x in p.nbr), default=0) <= MAX_NB or nc == 1:
                 return p
             nc = max(1, int(nc * 0.75))
@@ -51,7 +63,18 @@ class SparseRowPlan:
         pass
 
     def _init(
-        self, COL, out_blocks, src_regions, ncores, noc_xy, exchange, bands=None, pout=None, stencil=None, transfer=None
+        self,
+        COL,
+        out_blocks,
+        src_regions,
+        ncores,
+        noc_xy,
+        exchange,
+        bands=None,
+        pout=None,
+        stencil=None,
+        transfer=None,
+        host_tables=True,
     ):
         if stencil is not None:
             nslot, stride = 27, stencil.stride
@@ -84,10 +107,12 @@ class SparseRowPlan:
                 own[:, b, 0], own[:, b, 1] = a, np.minimum(e, a + per)
         ng = max(e for _, e in src_regions) // GRAN + 2  # granules of the input vector
         lib = native.lib()
-        self.weights = None
+        self.weights, self.transfer = None, transfer
         if transfer is not None:
             assert not exchange and lib is not None
-            pieces, off, own_l1, ents, self.weights = self._plan_transfer(lib, transfer, own, ng, src_regions[0][0], stride)
+            pieces, off, own_l1, ents, self.weights = self._plan_transfer(
+                lib, transfer, own, ng, src_regions[0][0], stride, host_tables
+            )
         elif stencil is not None:
             assert exchange and lib is not None
             pieces, off, own_l1, ents = self._plan_stencil(lib, stencil, own, ng, src_regions[0][0], noc_xy)
@@ -98,7 +123,6 @@ class SparseRowPlan:
             ents = self._group_exchange(ents, nc, NB, noc_xy)
         plo, pln, pl1, npc = pieces  # [nc, maxp] each (zero past npc[k]), and pieces per core
         self.piece_arrays = (plo, pln, pl1, npc)
-        pieces = [(plo[k, : npc[k]], pln[k, : npc[k]], pl1[k, : npc[k]]) for k in range(nc)]  # views, no copies
         words = pln.sum(axis=1)
         # window CB bytes: a multiple of 512 (ZEROX clears it in 512-B pieces from the hardware zero region)
         self.win_b = -(-int(words.max()) * 4 // 512) * 512
@@ -109,9 +133,15 @@ class SparseRowPlan:
         # s, f, L1 byte offset of s in m's window), grouped by (k, b) in their original order, and each core's
         # neighbours (sorted)
         self._exch_rows, self._exch_at, nbr = ents
-        self.nc, self.own, self.own_l1, self.pieces, self.nbr = nc, own, own_l1, pieces, nbr
+        self.nc, self.own, self.own_l1, self.nbr = nc, own, own_l1, nbr
         self.out_blocks = out_blocks
         self._tables = {}  # _core_tables cache
+
+    @property
+    def pieces(self):
+        """Each core's window pieces as (lo, words, L1 byte offset) arrays (views of piece_arrays)."""
+        plo, pln, pl1, npc = self.piece_arrays
+        return [(plo[k, : npc[k]], pln[k, : npc[k]], pl1[k, : npc[k]]) for k in range(self.nc)]
 
     @staticmethod
     def _group_exchange(ents, nc, NB, noc_xy):
@@ -172,9 +202,10 @@ class SparseRowPlan:
         return (lo2, ln2, l12, npc), None, own_l1, ents
 
     @staticmethod
-    def _plan_transfer(lib, transfer, own, ng, empty_lo, pout):
+    def _plan_transfer(lib, transfer, own, ng, empty_lo, pout, host_tables=True):
         """Window pieces, 1-slot offsets and weights of a grid transfer launch, from the storage-order formulas of its
-        two levels (host/native_setup.cpp's hpcg_plan_windows_transfer / hpcg_transfer_tables)."""
+        two levels (host/native_setup.cpp's hpcg_plan_windows_transfer / hpcg_transfer_tables). host_tables=False:
+        no offsets or weights (None), the device generates them."""
         kind, F, C = transfer
         k = {"restrict": 1, "prolong": 2}[kind]
         nc, NB = own.shape[:2]
@@ -187,10 +218,12 @@ class SparseRowPlan:
                 break
         else:
             raise ValueError(f"a core needs more than {maxp} window pieces")
-        off = native.zeros((1, pout), np.int32)
-        w = native.zeros((1, pout), np.float32)
-        bad = lib.hpcg_transfer_tables(k, *F.geo(), *C.geo(), nc, NB, own_f, maxp, plo, pln, pl1, npc, off, w)
-        assert bad == 0, "column outside its window piece"
+        off = w = None
+        if host_tables:
+            off = native.zeros((1, pout), np.int32)
+            w = native.zeros((1, pout), np.float32)
+            bad = lib.hpcg_transfer_tables(k, *F.geo(), *C.geo(), nc, NB, own_f, maxp, plo, pln, pl1, npc, off, w)
+            assert bad == 0, "column outside its window piece"
         pieces = tuple(x.reshape(nc, maxp) for x in (plo, pln, pl1)) + (npc,)
         ents = (np.zeros((0, 5), np.int64), np.zeros(nc * NB + 1, np.int64), [[] for _ in range(nc)])
         return pieces, off, np.zeros((nc, NB), np.int64), ents, w
@@ -308,9 +341,9 @@ class SparseRowPlan:
         NB = len(self.out_blocks)
         slot = {k: sorted(self.nbr[k]) for k in range(self.nc)}
         own, own_l1 = self.own.tolist(), self.own_l1.tolist()
-        out = []
+        out, views = [], self.pieces
         for k in range(self.nc):
-            lo, ln, l1 = self.pieces[k]
+            lo, ln, l1 = views[k]
             pieces = np.stack([lo, ln, l1], axis=1).reshape(-1).tolist()
             nb_words = [w for m in slot[k] for w in (noc_xy[m][0], noc_xy[m][1], 1 + slot[m].index(k))]  # my slot on m
             body, blk, nsegs = [], [], []
@@ -339,11 +372,13 @@ class SparseRowPlan:
         lib = native.lib()
         if lib is None:
             return self._meta_python(phases, noc_xy, tpw, align)
-        key = ("native", tuple(map(tuple, noc_xy)))
+        key = ("native", id(noc_xy))  # noc_xy: the device's cached list (sparse_rows.op.noc_coords)
         if key not in self._tables:
             NB = len(self.out_blocks)
-            pat = np.cumsum([0] + [len(p[0]) for p in self.pieces]).astype(np.int64)
-            plo, pln, pl1 = (np.concatenate([p[i] for p in self.pieces]).astype(np.int64) for i in range(3))
+            a2, ln2, l12, npc = self.piece_arrays
+            pat = np.concatenate([[0], np.cumsum(npc)]).astype(np.int64)
+            used = np.arange(a2.shape[1])[None, :] < npc[:, None]  # each core's pieces, core after core
+            plo, pln, pl1 = (np.ascontiguousarray(x[used], np.int64) for x in (a2, ln2, l12))
             slot = [sorted(self.nbr[k]) for k in range(self.nc)]
             nat = np.cumsum([0] + [len(s) for s in slot]).astype(np.int64)
             nbr = np.asarray([m for s in slot for m in s], np.int64)
@@ -352,14 +387,16 @@ class SparseRowPlan:
             xat = np.ascontiguousarray(self._exch_at, np.int64)
             xrows = np.ascontiguousarray(self._exch_rows.reshape(-1), np.int64)
             noc = np.ascontiguousarray(np.asarray(noc_xy, np.int64).reshape(-1))
-            self._tables[key] = (NB, [pat, plo, pln, pl1, nat, nbr, noc, own, own_l1, xat, xrows])
-        NB, args = self._tables[key]
+            arrays = [pat, plo, pln, pl1, nat, nbr, noc, own, own_l1, xat, xrows]
+            self._tables[key] = (NB, arrays, [a.ctypes.data for a in arrays])  # arrays kept alive with their pointers
+        NB, _, args = self._tables[key]
         ph = np.asarray(list(phases), np.int64)
-        counts = [np.zeros(self.nc, np.int64) for _ in range(3)]
-        longest = lib.hpcg_plan_meta(self.nc, NB, ph.size, ph, *args, tpw, 0, None, *counts)
+        counts = np.zeros((3, self.nc), np.int64)
+        cp = [counts.ctypes.data + 8 * self.nc * i for i in range(3)]
+        longest = lib.hpcg_plan_meta(self.nc, NB, ph.size, ph.ctypes.data, *args, tpw, 0, None, *cp)
         m = np.zeros((self.nc, -(-longest // align) * align), np.int32)
-        lib.hpcg_plan_meta(self.nc, NB, ph.size, ph, *args, tpw, m.shape[1], m.ctypes.data, *counts)
-        return (m,) + tuple(c.tolist() for c in counts) + (int(longest),)
+        lib.hpcg_plan_meta(self.nc, NB, ph.size, ph.ctypes.data, *args, tpw, m.shape[1], m.ctypes.data, *cp)
+        return (m,) + tuple(counts.tolist()) + (int(longest),)
 
     def _meta_python(self, phases, noc_xy, tpw=TILE, align=16):
         """meta() in Python: the readable definition, and the fallback without a C++ compiler."""

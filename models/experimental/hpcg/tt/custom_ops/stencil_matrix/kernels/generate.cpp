@@ -2,21 +2,30 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Stencil matrix generation (setup, one launch per level). Each core writes its own rows of the 27-slot matrix
-// values V and window byte offsets OFF (has_b: and of the right-hand side b) straight into DRAM, in the storage
-// order of reference/problem.py: the tables the host would otherwise build and upload.
+// Matrix generation (setup). One launch runs a list of jobs; each core writes its own rows of each job's tables
+// straight into DRAM, in the storage order of reference/problem.py: the tables the host would otherwise build and
+// upload.
+// Stencil job (kind 0): the 27-slot matrix values V and window byte offsets OFF of one level (has_b: and the
+// right-hand side b; nzero: and zero vectors):
 //   value of slot j: 26 on the diagonal, -1 for a neighbour inside the grid, 0 for a missing neighbour (whose column
 //   is the row itself); padding rows: 1 on the diagonal, 0 elsewhere.
 //   offset of column col: l1 + (col - lo) * 4 of the core's window piece (lo, l1) that holds col.
-//   b = 26 - (neighbours - 1) on real rows, 0 on padding rows.
-//   zero vectors (up to two, e.g. the initial guess x = 0 and CG's p): 0 on every row.
+//   b = 26 - (neighbours - 1) on real rows, 0 on padding rows; zero vectors: 0 on every row.
+// Transfer job (kind 1 restriction, 2 prolongation; host/native_setup.cpp's for_each_transfer_row): the 1-slot
+//   weights (1 on real rows, 0 on padding rows) and window byte offsets of a grid transfer launch. Restriction: the
+//   column of coarse point (x, y, z) is fine point (2x, 2y, 2z); prolongation: the column of fine point
+//   (2x, 2y, 2z) is coarse point (x, y, z); a padding row takes the column of its block's last real row.
 // Both data-movement RISCs run this kernel; RISC h takes the page-sized chunks of the core's rows with index % 2 == h.
-// Everything that depends on the grid comes in runtime arguments, so one compiled binary serves every level and grid
+// Everything that depends on the grid comes in runtime arguments, so one compiled binary serves every job and grid
 // size (setup then only loads it from the kernel cache).
-// META row per core (uint32): [0] nx [1] nbands [2] nl [3] pages per slot [4] R window pieces [5] unused
-//   [6 .. 22) own row range (a, e) per colour block  [22 .. 30) end of each block's real rows
+// Common arguments: [0] grid width [1] h [2] META address [3] META pages per core [4] jobs, then per job (10 words):
+//   kind, cores in the job, word offset of the job's META segment, V, OFF, b, has_b, zero vectors, zero 0, zero 1.
+// A job's META segment per core (uint32): [0] nx [1] nbands [2] nl [3] pages per slot [4] R window pieces [5] unused
+//   [6 .. 22) own row range (a, e) per out block  [22 .. 30) end of each block's real rows
 //   [30 .. 36) word offsets of: line_band, band_y0, band_ny, band_start, piece lo, piece l1 (layout: Geo in
-//   host/native_setup.cpp)
+//   host/native_setup.cpp). Transfer jobs: [0 .. 3) and [30 .. 34) describe the fine level, then
+//   [36 .. 39) the coarse level's nx, nbands, nl, [39 .. 43) its table offsets, [43 .. 51) each block's padding
+//   column.
 #include "api/dataflow/dataflow_api.h"
 #include <cstdint>
 
@@ -92,6 +101,18 @@ struct Geo {
         bst = m + m[33];
         plo = m + m[34];
         pl1 = m + m[35];
+    }
+    void init_coarse(uint32_t addr) {  // a transfer job's coarse level: [36 ..) of the segment
+        m = (const uint32_t*)addr;
+        nx = m[36];
+        nb = m[37];
+        nl = m[38];
+        R = 0;
+        lb = m + m[39];
+        by0 = m + m[40];
+        bny = m + m[41];
+        bst = m + m[42];
+        plo = pl1 = nullptr;
     }
     uint32_t cx(uint32_t p) const { return (nx - p + 1) / 2; }
     // q of the first point of grid line (y, z) in colour block cs
@@ -231,35 +252,84 @@ void fill_chunk(const Geo& g, uint32_t c, uint32_t q0, uint32_t q1, uint32_t rea
         }
     }
 }
+// a transfer job's out rows [q0, q1) of out block b (one DRAM page at most) into slot 0 of the staging set at base.
+// F holds the fine level and the core's window pieces, C the coarse level.
+void fill_transfer(
+    const Geo& F,
+    const Geo& C,
+    uint32_t kind,
+    uint32_t b,
+    uint32_t q0,
+    uint32_t q1,
+    uint32_t real_end,
+    uint32_t pad,
+    uint32_t base,
+    Exc& x) {
+    uint32_t* O = (uint32_t*)base;
+    uint32_t* Vv = O + 27 * 1024;
+    const Geo& G = kind == 1 ? C : F;  // the level whose rows are the out rows
+    const uint32_t ob = kind == 1 ? b : 0;
+    const uint32_t px = ob & 1, py = (ob >> 1) & 1, pz = ob >> 2, cxn = G.cx(px), k0 = ob * G.nb;
+    const uint32_t end = q1 < real_end ? q1 : real_end;
+    uint32_t jb = 0;
+    for (uint32_t q = q0; q < end;) {
+        while (jb + 1 < G.nb && G.bst[k0 + jb + 1] <= q) {
+            ++jb;
+        }
+        const uint32_t k = k0 + jb, l = q - G.bst[k], line = l / cxn, i0 = l % cxn;
+        const uint32_t len = (cxn - i0) < (end - q) ? (cxn - i0) : (end - q);
+        const uint32_t y = 2 * (G.by0[k] + line % G.bny[k]) + py, z = 2 * (line / G.bny[k]) + pz;
+        const uint32_t w = q & 1023;
+        if (kind == 1) {  // coarse x = 2 (i0 + t) + px -> fine column F.line_q(0, 2y, 2z) + x: every other word
+            const uint32_t col0 = F.line_q(0, 2 * y, 2 * z) + 2 * i0 + px;
+            const uint32_t off0 = F.piece_base(col0) + 4 * col0;  // a run's columns sit in one window piece
+            for (uint32_t t = 0; t < len; ++t) {
+                O[w + t] = off0 + 8 * t;
+                Vv[w + t] = F_1;
+            }
+        } else {  // fine block 0: x = 2 (i0 + t) -> coarse (i0 + t, y / 2, z / 2), x parity alternating
+            const uint32_t cy = y >> 1, cz = z >> 1;
+            uint32_t lq[2] = {0, 0}, pb[2] = {0, 0};
+            bool have[2] = {false, false};
+            for (uint32_t t = 0; t < len; ++t) {
+                const uint32_t cxv = i0 + t, p = cxv & 1;
+                if (!have[p]) {
+                    lq[p] = C.line_q(p + 2 * (cy & 1) + 4 * (cz & 1), cy, cz);
+                    pb[p] = F.piece_base(lq[p] + (cxv >> 1));
+                    have[p] = true;
+                }
+                O[w + t] = pb[p] + 4 * (lq[p] + (cxv >> 1));
+                Vv[w + t] = F_1;
+            }
+        }
+        q += len;
+    }
+    const uint32_t p0 = q0 > real_end ? q0 : real_end;
+    if (p0 < q1) {  // padding rows: the block's last real row's column, weight 0
+        const uint32_t off = F.piece_base(pad) + 4 * pad;
+        for (uint32_t q = p0; q < q1; ++q) {
+            O[q & 1023] = off;
+            Vv[q & 1023] = 0;
+        }
+    }
+    x.add(0, q0 & 1023, q1 - q0);  // slot 0 of the value template, put back once written
+}
 }  // namespace
 
 void kernel_main() {
-    const uint32_t v_addr = get_common_arg_val<uint32_t>(0), off_addr = get_common_arg_val<uint32_t>(1);
-    const uint32_t meta_addr = get_common_arg_val<uint32_t>(2), b_addr = get_common_arg_val<uint32_t>(3);
-    // common arguments; this core's row follows from its logical position (arg 4: grid width)
-    const uint32_t row = get_absolute_logical_y() * get_common_arg_val<uint32_t>(4) + get_absolute_logical_x();
-    const uint32_t half = get_common_arg_val<uint32_t>(5);
-    const uint32_t meta_pages = get_common_arg_val<uint32_t>(6), has_b = get_common_arg_val<uint32_t>(7);
-    const uint32_t nzero = get_common_arg_val<uint32_t>(8);  // vectors to zero over this core's rows (0, 1 or 2)
-    constexpr auto av = TensorAccessorArgs<0>();
-    constexpr auto ao = TensorAccessorArgs<av.next_compile_time_args_offset()>();
-    constexpr auto am = TensorAccessorArgs<ao.next_compile_time_args_offset()>();
-    constexpr auto ab = TensorAccessorArgs<am.next_compile_time_args_offset()>();
-    const auto V = TensorAccessor(av, v_addr, 4096);
-    const auto OFF = TensorAccessor(ao, off_addr, 4096);
+    // common arguments; this core's row follows from its logical position (arg 0: grid width)
+    const uint32_t row = get_absolute_logical_y() * get_common_arg_val<uint32_t>(0) + get_absolute_logical_x();
+    const uint32_t half = get_common_arg_val<uint32_t>(1), meta_addr = get_common_arg_val<uint32_t>(2);
+    const uint32_t meta_pages = get_common_arg_val<uint32_t>(3), njobs = get_common_arg_val<uint32_t>(4);
+    constexpr auto ad = TensorAccessorArgs<0>();  // every table and vector: interleaved DRAM, 4 KB pages
+    constexpr auto am = TensorAccessorArgs<ad.next_compile_time_args_offset()>();
     const auto META = TensorAccessor(am, meta_addr, 4096);  // this core's row: pages row * meta_pages onwards
-    const auto Bv = TensorAccessor(ab, b_addr, 4096);
-    constexpr auto az0 = TensorAccessorArgs<ab.next_compile_time_args_offset()>();
-    constexpr auto az1 = TensorAccessorArgs<az0.next_compile_time_args_offset()>();
-    const auto Z0 = TensorAccessor(az0, get_common_arg_val<uint32_t>(9), 4096);
-    const auto Z1 = TensorAccessor(az1, get_common_arg_val<uint32_t>(10), 4096);
-    const uint32_t zpage = get_write_ptr(CB_Z);  // 4 KB of zeros, the source of the zero vectors' writes
-    if (nzero) {
+    const uint32_t zpage = get_write_ptr(CB_Z);             // 4 KB of zeros, the source of the zero vectors' writes
+    {
         const uint64_t zsrc = get_noc_addr(MEM_ZEROS_BASE);
         for (uint32_t o = 0; o < 4096; o += MEM_ZEROS_SIZE) {
             noc_async_read(zsrc, zpage + o, MEM_ZEROS_SIZE);
         }
-        noc_async_read_barrier();
     }
     const uint32_t meta = get_write_ptr(half ? CB_M1 : CB_M0);
     for (uint32_t p = 0; p < meta_pages; ++p) {
@@ -267,44 +337,65 @@ void kernel_main() {
     }
     noc_async_read_barrier();
     invalidate_l1_cache();
-    Geo g;
-    g.init(meta);
-    const uint32_t* m = g.m;
-    const uint32_t ntlv = m[3];
     const uint32_t stage = get_write_ptr(half ? CB_S1 : CB_S0);
     const uint32_t xbuf = get_write_ptr(half ? CB_X1 : CB_X0);
     Exc xs[2] = {{(uint32_t*)xbuf, 0, false}, {(uint32_t*)xbuf + XCAP, 0, false}};
     fill_template((uint32_t*)(stage + 27 * 4096));
     fill_template((uint32_t*)(stage + SET + 27 * 4096));
     uint32_t set = 0, chunk = 0;
-    for (uint32_t c = 0; c < 8; ++c) {
-        const uint32_t a = m[6 + 2 * c], e = m[7 + 2 * c], real_end = m[22 + c];
-        for (uint32_t q0 = a; q0 < e;) {
-            const uint32_t q1 = (q0 / 1024 + 1) * 1024 < e ? (q0 / 1024 + 1) * 1024 : e;
-            if ((chunk++ & 1) == half) {
-                const uint32_t base = stage + set * SET;
-                // this set's previous chunk was written out before the last barrier: restore its value template
-                restore((uint32_t*)(base + 27 * 4096), xs[set]);
-                fill_chunk(g, c, q0, q1, real_end, base, xs[set]);
-                asm volatile("" ::: "memory");  // every staging store is issued before the NoC reads the pages
-                noc_async_write_barrier();  // the other set's writes have left L1 before it is filled again
-                const uint32_t t = q0 >> 10, wb = (q0 & 1023) * 4, nb = (q1 - q0) * 4;
-                for (uint32_t j = 0; j < 27; ++j) {
-                    noc_async_write(base + j * 4096 + wb, OFF.get_noc_addr(j * ntlv + t) + wb, nb);
-                    noc_async_write(base + (27 + j) * 4096 + wb, V.get_noc_addr(j * ntlv + t) + wb, nb);
+    for (uint32_t job = 0; job < njobs; ++job) {
+        const uint32_t J = 5 + 10 * job;
+        const uint32_t kind = get_common_arg_val<uint32_t>(J), ncj = get_common_arg_val<uint32_t>(J + 1);
+        if (row >= ncj) {
+            continue;  // this core has no rows in this job
+        }
+        const uint32_t seg = meta + get_common_arg_val<uint32_t>(J + 2) * 4;
+        const auto V = TensorAccessor(ad, get_common_arg_val<uint32_t>(J + 3), 4096);
+        const auto OFF = TensorAccessor(ad, get_common_arg_val<uint32_t>(J + 4), 4096);
+        const auto Bv = TensorAccessor(ad, get_common_arg_val<uint32_t>(J + 5), 4096);
+        const uint32_t has_b = get_common_arg_val<uint32_t>(J + 6), nzero = get_common_arg_val<uint32_t>(J + 7);
+        const auto Z0 = TensorAccessor(ad, get_common_arg_val<uint32_t>(J + 8), 4096);
+        const auto Z1 = TensorAccessor(ad, get_common_arg_val<uint32_t>(J + 9), 4096);
+        Geo g, gc;
+        g.init(seg);
+        if (kind) {
+            gc.init_coarse(seg);
+        }
+        const uint32_t* m = g.m;
+        const uint32_t ntlv = m[3];
+        for (uint32_t c = 0; c < 8; ++c) {
+            const uint32_t a = m[6 + 2 * c], e = m[7 + 2 * c], real_end = m[22 + c];
+            for (uint32_t q0 = a; q0 < e;) {
+                const uint32_t q1 = (q0 / 1024 + 1) * 1024 < e ? (q0 / 1024 + 1) * 1024 : e;
+                if ((chunk++ & 1) == half) {
+                    const uint32_t base = stage + set * SET;
+                    // this set's previous chunk was written out before the last barrier: restore its value template
+                    restore((uint32_t*)(base + 27 * 4096), xs[set]);
+                    if (kind) {
+                        fill_transfer(g, gc, kind, c, q0, q1, real_end, m[43 + c], base, xs[set]);
+                    } else {
+                        fill_chunk(g, c, q0, q1, real_end, base, xs[set]);
+                    }
+                    asm volatile("" ::: "memory");  // every staging store is issued before the NoC reads the pages
+                    noc_async_write_barrier();       // the other set's writes have left L1 before it is filled again
+                    const uint32_t t = q0 >> 10, wb = (q0 & 1023) * 4, nb = (q1 - q0) * 4;
+                    for (uint32_t j = 0; j < (kind ? 1u : 27u); ++j) {
+                        noc_async_write(base + j * 4096 + wb, OFF.get_noc_addr(j * ntlv + t) + wb, nb);
+                        noc_async_write(base + (27 + j) * 4096 + wb, V.get_noc_addr(j * ntlv + t) + wb, nb);
+                    }
+                    if (has_b) {
+                        noc_async_write(base + 54 * 4096 + wb, Bv.get_noc_addr(t) + wb, nb);
+                    }
+                    if (nzero > 0) {
+                        noc_async_write(zpage + wb, Z0.get_noc_addr(t) + wb, nb);
+                    }
+                    if (nzero > 1) {
+                        noc_async_write(zpage + wb, Z1.get_noc_addr(t) + wb, nb);
+                    }
+                    set ^= 1;
                 }
-                if (has_b) {
-                    noc_async_write(base + 54 * 4096 + wb, Bv.get_noc_addr(t) + wb, nb);
-                }
-                if (nzero > 0) {
-                    noc_async_write(zpage + wb, Z0.get_noc_addr(t) + wb, nb);
-                }
-                if (nzero > 1) {
-                    noc_async_write(zpage + wb, Z1.get_noc_addr(t) + wb, nb);
-                }
-                set ^= 1;
+                q0 = q1;
             }
-            q0 = q1;
         }
     }
     noc_async_write_barrier();

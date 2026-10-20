@@ -45,6 +45,21 @@ def test_hpcg_ops_and_cg(device, nx, bands):
         offs = ttnn.to_torch(d.offsets).numpy().view(np.int32).reshape(27, -1)[:, : L.P]
         assert np.array_equal(vals.view(np.int32), L.V.view(np.int32)), f"level {l} generated values"
         assert np.array_equal(offs, hp.off[:, : L.P]), f"level {l} generated offsets"
+        if l + 1 == len(levels):
+            continue
+        # grid transfer tables: against the plans and weights of Level.link's R / Pm tables
+        C, nb0 = levels[l + 1], L.starts[1]
+        cblocks = [(C.starts[c], C.starts[c + 1]) for c in range(8)]
+        cb = C.bstarts if C.bands > 1 else None
+        fb = [L.bstarts[0]] if L.bands > 1 else None
+        nc = g.x * g.y
+        rp = SparseRowPlan(L.R[None, :], cblocks, [(0, nb0)], nc, noc_coords(device), False, bands=cb)
+        pp = SparseRowPlan(L.Pm[None, :], [(0, nb0)], cblocks, nc, noc_coords(device), False, bands=fb)
+        for name, t, o, p, w in (("restriction", d.Rt, d.Roff, rp, L.Rw), ("prolongation", d.Pt, d.Poff, pp, L.Pw)):
+            got_w = ttnn.to_torch(t).numpy().reshape(-1)[: w.size]
+            got_o = ttnn.to_torch(o).numpy().view(np.int32).reshape(-1)[: w.size]
+            assert np.array_equal(got_w.view(np.int32), np.asarray(w, np.float32).view(np.int32)), f"{l} {name} w"
+            assert np.array_equal(got_o, p.off.reshape(-1)[: w.size]), f"level {l} generated {name} offsets"
     assert np.array_equal(from_device(h.b), levels[0].B.astype(np.float64)), "generated b"
     assert not np.any(from_device(h.x)) and not np.any(from_device(h.p)), "generated x = 0 and p = 0"
 

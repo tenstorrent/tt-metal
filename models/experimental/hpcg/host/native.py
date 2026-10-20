@@ -57,11 +57,15 @@ def _build():
     geo = [I32, I32, I32, i32p, i32p, i32p, i64p]  # nx, nbands, nl, line_band, band_y0, band_ny, band_start
     lib.hpcg_link.argtypes = geo + [I64] + geo + [I64, i32p, f32p, i32p, f32p]
     lib.hpcg_plan_meta.restype = I64
-    lib.hpcg_plan_meta.argtypes = [I32, I32, I32] + [i64p] * 12 + [I64, I64, ctypes.c_void_p] + [i64p] * 3
+    # raw pointers (SparseRowPlan.meta caches them): called for every launch, where ndpointer checks of 17 arrays
+    # cost more than the call
+    lib.hpcg_plan_meta.argtypes = [I32, I32, I32] + [ctypes.c_void_p] * 12 + [I64, I64] + [ctypes.c_void_p] * 4
     lib.hpcg_plan_windows_transfer.restype = I64
     lib.hpcg_plan_windows_transfer.argtypes = [I32] + geo + geo + [I32, I32, i64p, I32, I32, I64, I64, I64] + [i64p] * 4
     lib.hpcg_transfer_tables.restype = I64
     lib.hpcg_transfer_tables.argtypes = [I32] + geo + geo + [I32, I32, i64p, I64] + [i64p] * 4 + [i32p, f32p]
+    lib.hpcg_transfer_pad.restype = None
+    lib.hpcg_transfer_pad.argtypes = [I32] + geo + geo + [I32, i64p]
     lib.hpcg_plan_windows_stencil.restype = I64
     lib.hpcg_plan_windows_stencil.argtypes = geo + [I32, I32, i64p, I32, I32, I64, I64, I64, i64p, i64p, i64p, i64p]
     lib.hpcg_tile_permute.restype = None

@@ -69,6 +69,17 @@ def noc_coords(device):
     return _NOC_XY[id(device)]
 
 
+_COORDS = {}
+
+
+def logical_coords(device):
+    """ttnn.CoreCoord of every worker core, indexed by logical core id x + y * grid_x (made once per device)."""
+    if id(device) not in _COORDS:
+        g = device.compute_with_storage_grid_size()
+        _COORDS[id(device)] = [ttnn.CoreCoord(i % g.x, i // g.x) for i in range(g.x * g.y)]
+    return _COORDS[id(device)]
+
+
 def debug_buffer(device):
     """Per-core cycle counters written by KDEBUG builds: row 2 * core = reader, 2 * core + 1 = writer, 16 words.
     Every launch takes one as an argument (written only by kernel_debug builds)."""
@@ -85,6 +96,29 @@ def core_ranges(nc, gx):
     if part:
         rs.append(ttnn.CoreRange(ttnn.CoreCoord(0, full), ttnn.CoreCoord(part - 1, full)))
     return ttnn.CoreRangeSet(rs)
+
+
+def _flip_ranges(nc, gx, rect):
+    """The first nc logical cores split by whether they lie in rect (x0, x1, y0, y1; () for none) -> {flipped: [(x0,
+    x1, y0, y1) rectangles]}, each row's runs merged with the rows above when they span the same x range."""
+    out = {}
+    for y in range(-(-nc // gx)):
+        n = min(gx, nc - y * gx)  # cores in this row: x = 0 .. n - 1
+        f0 = rect and rect[2] <= y <= rect[3]
+        runs = [(False, 0, n - 1)] if not f0 else []
+        if f0:
+            a, b = rect[0], min(rect[1], n - 1)
+            runs = [(False, 0, min(a, n) - 1), (True, a, b), (False, b + 1, n - 1)]
+        for f, x0, x1 in runs:
+            if x1 < x0:
+                continue
+            rs = out.setdefault(bool(f), [])
+            last = rs[-1] if rs else None
+            if last and last[0] == x0 and last[1] == x1 and last[3] == y - 1:
+                rs[-1] = (x0, x1, last[2], y)
+            else:
+                rs.append((x0, x1, y, y))
+    return out
 
 
 def slot_pages(n_tiles):
@@ -192,7 +226,9 @@ class SparseRowOp:
         aout, ao2 = out.buffer_address(), o2.buffer_address()
         reader_common = [ax, av, aoff, ameta, ab, g.x, adbg, meta_pages, ntlv, plan.win_b, flags, meta_bytes]
         writer_common = [aout, ameta, g.x, aoff, 0, 0, adbg, av, ao2, ax, meta_pages, ntlv, flags, meta_bytes]
-        compute_args = {(i % g.x, i // g.x): [nseg[i], nseg_gs[i], nseg_r[i], flags] for i in range(plan.nc)}
+        # per-core arguments, as (core, list) pairs on cached CoreCoords: half the cost of filling a ttnn.RuntimeArgs
+        # core by core. (Moved into one common list, the counts made the coarse smoothers slower: +9 to +15 us)
+        compute_args = list(zip(logical_coords(device), [list(v) + [flags] for v in zip(nseg, nseg_gs, nseg_r)]))
 
         def accessors(*ts):
             return [a for t in ts for a in ttnn.TensorAccessorArgs(t).get_compile_time_args()]
@@ -278,21 +314,15 @@ class SparseRowOp:
 
         if noc_flip is None:
             noc_flip = NOC_FLIP_RECT if (mode == "spmv" or out2 is not None) else ()
-        flipped = {}
-        for i in range(plan.nc):
-            cx, cy = i % g.x, i // g.x
-            f = bool(noc_flip) and noc_flip[0] <= cx <= noc_flip[1] and noc_flip[2] <= cy <= noc_flip[3]
-            flipped.setdefault(f, []).append(i)
+        flipped = _flip_ranges(plan.nc, g.x, noc_flip)
         define_list = [(k, str(v)) for k, v in defs.items()]
         kernels = []
-        for f, idx in flipped.items():
-            cr = (
-                ttnn.CoreRangeSet(
-                    [ttnn.CoreRange(ttnn.CoreCoord(i % g.x, i // g.x), ttnn.CoreCoord(i % g.x, i // g.x)) for i in idx]
+        for f, rects in flipped.items():
+            cr = cores
+            if len(flipped) > 1:
+                cr = ttnn.CoreRangeSet(
+                    [ttnn.CoreRange(ttnn.CoreCoord(x0, y0), ttnn.CoreCoord(x1, y1)) for x0, x1, y0, y1 in rects]
                 )
-                if len(flipped) > 1
-                else cores
-            )
             rcfg = ttnn.DataMovementConfigDescriptor(
                 processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.NOC_1 if f else ttnn.NOC.NOC_0
             )
@@ -319,9 +349,6 @@ class SparseRowOp:
                     config=wcfg,
                 ),
             ]
-        ca = ttnn.RuntimeArgs()
-        for (cx, cy), v in compute_args.items():
-            ca[cx][cy] = v
         kernels.append(
             ttnn.KernelDescriptor(
                 kernel_source=f"{KERNEL_ROOT}/compute.cpp",
@@ -329,7 +356,7 @@ class SparseRowOp:
                 core_ranges=cores,
                 compile_time_args=[],
                 defines=define_list,
-                runtime_args=ca,
+                runtime_args=compute_args,
                 config=_compute_config(),
             )
         )
