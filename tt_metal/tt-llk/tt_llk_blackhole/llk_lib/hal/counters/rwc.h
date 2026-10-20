@@ -11,6 +11,7 @@
 
 #include <cstdint>
 
+#include "../utils/helpers.h"
 #include "ckernel.h"
 #include "llk_assert.h"
 
@@ -23,6 +24,29 @@
  */
 namespace hal::counters::rwc
 {
+
+/** @brief Operation applied to one counter. */
+enum class Op : std::uint8_t
+{
+    None,            ///< Counter is unchanged.
+    Set,             ///< See @ref Set.
+    Increment,       ///< See @ref Increment.
+    AdvanceAndReset, ///< See @ref AdvanceAndReset.
+    IncrementAndSave ///< See @ref IncrementAndSave.
+};
+
+/** @brief Select source operands whose banks SETRWC flips. */
+enum class Src : std::uint8_t
+{
+    None = 0x0, ///< No flip.
+    A    = 0x1, ///< SrcA.
+    B    = 0x2  ///< SrcB.
+};
+
+inline constexpr Src operator|(const Src lhs, const Src rhs)
+{
+    return static_cast<Src>(hal::to_underlying(lhs) | hal::to_underlying(rhs));
+}
 
 /** @brief Assign a counter and its CR shadow: X = X_Cr = value. */
 class Set
@@ -68,16 +92,6 @@ public:
     }
 };
 
-/** @brief Operation applied to one counter. */
-enum class Op : std::uint8_t
-{
-    None,            ///< Counter is unchanged.
-    Set,             ///< See @ref Set.
-    Increment,       ///< See @ref Increment.
-    AdvanceAndReset, ///< See @ref AdvanceAndReset.
-    IncrementAndSave ///< See @ref IncrementAndSave.
-};
-
 /** @brief Optional SrcA or SrcB update; omission leaves the counter unchanged. */
 class SrcUpdate
 {
@@ -115,25 +129,12 @@ public:
     }
 };
 
-/** @brief Select source operands whose banks SETRWC flips. */
-enum class Src : std::uint8_t
-{
-    None = 0x0, ///< No flip.
-    A    = 0x1, ///< SrcA.
-    B    = 0x2  ///< SrcB.
-};
-
-inline constexpr Src operator|(const Src lhs, const Src rhs)
-{
-    return static_cast<Src>(static_cast<std::uint8_t>(lhs) | static_cast<std::uint8_t>(rhs));
-}
-
 /**
  * @brief Describe a math-thread register-word-counter update independently of its instruction encoding.
  *
- * Set, IncrementAndSave, flip, and clear_fidelity need SETRWC; Increment needs INCRWC.
- * AdvanceAndReset joins SETRWC when one is issued, otherwise INCRWC. Updates needing both
- * instructions issue SETRWC first; the counters they touch are disjoint.
+ * Set, IncrementAndSave, flip, and clear_fidelity need SETRWC; Increment needs INCRWC; AdvanceAndReset
+ * fits either. The HAL issues the instructions the fields require, SETRWC first, and encodes each
+ * field in exactly one of them; see detail::plan() and detail::owner().
  *
  * @code
  * constexpr MathCounter next_face = MathCounter {.src_b = Set(0), .dest = AdvanceAndReset(8), .flip = Src::A | Src::B};
@@ -163,8 +164,9 @@ public:
      * @brief Encode the update as one instruction without issuing it.
      *
      * @return The encoded SETRWC or INCRWC instruction.
-     * @note Do not combine Increment with Set, IncrementAndSave, flip, or clear_fidelity; issue such
-     *       updates with set(). Invalid descriptors fail constant evaluation, or LLK_ASSERT at runtime.
+     * @note Do not combine Increment with Set, IncrementAndSave, flip, or clear_fidelity; such updates
+     *       need SETRWC and INCRWC, so issue them with set(). Invalid descriptors fail constant
+     *       evaluation, or LLK_ASSERT at runtime.
      */
     [[nodiscard]] constexpr std::uint32_t operation() const;
 };
@@ -174,28 +176,54 @@ namespace detail
 
 inline constexpr std::uint32_t RwcValueMax = 0xf; ///< Four-bit SETRWC/INCRWC immediate.
 
-inline __attribute__((always_inline)) constexpr bool any_op(const MathCounter& descriptor, const Op op)
+/** @brief Set of RWC instructions, one bit per instruction. */
+enum class Instr : std::uint8_t
 {
-    return descriptor.src_a.op == op || descriptor.src_b.op == op || descriptor.dest.op == op;
+    None   = 0x0, ///< No instruction.
+    Setrwc = 0x1, ///< SETRWC.
+    Incrwc = 0x2  ///< INCRWC.
+};
+
+inline __attribute__((always_inline)) constexpr Instr operator|(const Instr lhs, const Instr rhs)
+{
+    return static_cast<Instr>(hal::to_underlying(lhs) | hal::to_underlying(rhs));
 }
 
-/** @brief Test whether the update needs SETRWC. */
-inline __attribute__((always_inline)) constexpr bool needs_setrwc(const MathCounter& descriptor)
+inline __attribute__((always_inline)) constexpr Instr operator&(const Instr lhs, const Instr rhs)
 {
-    return any_op(descriptor, Op::Set) || any_op(descriptor, Op::IncrementAndSave) || descriptor.flip != Src::None || descriptor.clear_fidelity;
+    return static_cast<Instr>(hal::to_underlying(lhs) & hal::to_underlying(rhs));
 }
 
-/** @brief Test whether the update needs INCRWC. */
-inline __attribute__((always_inline)) constexpr bool needs_incrwc(const MathCounter& descriptor)
+/** @brief Test whether a set of instructions contains instr. */
+inline __attribute__((always_inline)) constexpr bool issues(const Instr instrs, const Instr instr)
 {
-    return any_op(descriptor, Op::Increment) || (!needs_setrwc(descriptor) && any_op(descriptor, Op::AdvanceAndReset));
+    return (instrs & instr) != Instr::None;
 }
 
-/** @brief Test whether the update is nonempty; ranges are checked by the encoders. */
-inline __attribute__((always_inline)) constexpr bool is_valid(const MathCounter& descriptor)
+/** @brief SETRWC write-mask bits. */
+enum class WriteBit : std::uint32_t
 {
-    return needs_setrwc(descriptor) || needs_incrwc(descriptor);
-}
+    SrcA     = 0x1, ///< Write SrcA.
+    SrcB     = 0x2, ///< Write SrcB.
+    Dest     = 0x4, ///< Write Dest.
+    Fidelity = 0x8  ///< Clear the fidelity phase.
+};
+
+/** @brief SETRWC and INCRWC CR-mask bits. */
+enum class CrBit : std::uint32_t
+{
+    SrcA      = 0x1, ///< Apply the SrcA value relative to its CR shadow.
+    SrcB      = 0x2, ///< Apply the SrcB value relative to its CR shadow.
+    Dest      = 0x4, ///< Apply the Dest value relative to its CR shadow.
+    DestCToCr = 0x8  ///< SETRWC only: apply the Dest value to the live counter and save it to the CR shadow.
+};
+
+/** @brief MathCounter fields that are not counter updates. */
+enum class Control : std::uint8_t
+{
+    Flip,         ///< Source-bank flip.
+    ClearFidelity ///< Fidelity-phase clear.
+};
 
 /**
  * @brief Fail constant evaluation, or LLK_ASSERT at runtime, when a condition does not hold.
@@ -219,71 +247,170 @@ inline __attribute__((always_inline)) constexpr void require(const bool valid)
 }
 
 /**
+ * @brief Reject MathCounter::operation() for a descriptor that needs both SETRWC and INCRWC.
+ *
+ * Not constexpr, so constant evaluation fails with an error naming this function.
+ */
+inline void reject_two_instructions()
+{
+    LLK_ASSERT(false, "MathCounter::operation() encodes one instruction, but this descriptor needs SETRWC and INCRWC; issue it with counters::set()");
+}
+
+/** @brief Instructions able to encode an operation. Edit this table for a different instruction set. */
+inline __attribute__((always_inline)) constexpr Instr encodable_in(const Op op)
+{
+    switch (op)
+    {
+        case Op::Set:
+        case Op::IncrementAndSave:
+            return Instr::Setrwc;
+        case Op::Increment:
+            return Instr::Incrwc;
+        case Op::AdvanceAndReset:
+            return Instr::Setrwc | Instr::Incrwc;
+        case Op::None:
+            break;
+    }
+    return Instr::None;
+}
+
+/** @brief Instructions able to encode a control. Edit this table for a different instruction set. */
+inline __attribute__((always_inline)) constexpr Instr encodable_in(const Control control)
+{
+    switch (control)
+    {
+        case Control::Flip:
+        case Control::ClearFidelity:
+            return Instr::Setrwc;
+    }
+    return Instr::None;
+}
+
+/** @brief Instruction a field with these capabilities forces to be issued, or Instr::None when it fits more than one. */
+inline __attribute__((always_inline)) constexpr Instr required_by(const Instr encodable)
+{
+    return encodable == Instr::Setrwc || encodable == Instr::Incrwc ? encodable : Instr::None;
+}
+
+/** @brief Test whether a field with these capabilities fits more than one instruction. */
+inline __attribute__((always_inline)) constexpr bool is_flexible(const Instr encodable)
+{
+    return encodable == (Instr::Setrwc | Instr::Incrwc);
+}
+
+/**
+ * @brief Select the instructions a descriptor issues.
+ *
+ * 1. Fields require SETRWC and INCRWC: issue both; flexible fields join SETRWC (see owner()).
+ * 2. Fields require one instruction: issue it; flexible fields join it.
+ * 3. Only flexible fields: issue INCRWC.
+ * 4. Nothing to update: issue nothing; the descriptor is invalid.
+ *
+ * @return The issued instructions, issued in the order SETRWC, INCRWC.
+ */
+inline __attribute__((always_inline)) constexpr Instr plan(const MathCounter& descriptor)
+{
+    const Instr flip     = descriptor.flip != Src::None ? encodable_in(Control::Flip) : Instr::None;
+    const Instr fidelity = descriptor.clear_fidelity ? encodable_in(Control::ClearFidelity) : Instr::None;
+    const Instr src_a    = encodable_in(descriptor.src_a.op);
+    const Instr src_b    = encodable_in(descriptor.src_b.op);
+    const Instr dest     = encodable_in(descriptor.dest.op);
+
+    const Instr required = required_by(flip) | required_by(fidelity) | required_by(src_a) | required_by(src_b) | required_by(dest);
+    if (required != Instr::None)
+    {
+        return required;
+    }
+    if (is_flexible(flip) || is_flexible(fidelity) || is_flexible(src_a) || is_flexible(src_b) || is_flexible(dest))
+    {
+        return Instr::Incrwc;
+    }
+    return Instr::None;
+}
+
+/**
+ * @brief Select the one issued instruction that encodes an operation.
+ *
+ * @param op: Counter operation.
+ * @param issued: Instructions from plan().
+ * @return SETRWC when issued and able to encode op, otherwise INCRWC when so, otherwise Instr::None.
+ */
+inline __attribute__((always_inline)) constexpr Instr owner(const Op op, const Instr issued)
+{
+    const Instr candidates = encodable_in(op) & issued;
+    return issues(candidates, Instr::Setrwc) ? Instr::Setrwc : candidates;
+}
+
+/**
  * @brief Encode one counter's share of an instruction.
  *
  * @param update: Counter update.
- * @param in_setrwc: True to encode for SETRWC, false for INCRWC.
- * @param bit: Counter's bit in the instruction's select and CR masks.
+ * @param instr: Instruction being encoded.
+ * @param issued: Instructions from plan().
+ * @param write_bit: Counter's bit in the SETRWC write mask.
+ * @param cr_bit: Counter's bit in the CR mask.
  * @param select: Accumulates the SETRWC write mask.
  * @param carry: Accumulates the CR mask.
- * @return The counter's immediate, or zero if the instruction leaves it unchanged.
+ * @return The counter's immediate, or zero if another instruction encodes it.
  */
 inline __attribute__((always_inline)) constexpr std::uint32_t encode_counter(
-    const SrcUpdate& update, const bool in_setrwc, const std::uint32_t bit, std::uint32_t& select, std::uint32_t& carry)
+    const SrcUpdate& update, const Instr instr, const Instr issued, const WriteBit write_bit, const CrBit cr_bit, std::uint32_t& select, std::uint32_t& carry)
 {
-    const bool encoded = in_setrwc ? update.op == Op::Set || update.op == Op::AdvanceAndReset || update.op == Op::IncrementAndSave
-                                   : update.op == Op::Increment || update.op == Op::AdvanceAndReset;
-    if (!encoded)
+    if (owner(update.op, issued) != instr)
     {
         return 0;
     }
     require(update.value <= RwcValueMax);
-    select |= bit;
+    select |= hal::to_underlying(write_bit);
     if (update.op == Op::AdvanceAndReset)
     {
-        carry |= bit;
+        carry |= hal::to_underlying(cr_bit);
     }
     else if (update.op == Op::IncrementAndSave)
     {
-        carry |= ckernel::p_setrwc::C_TO_CR_MODE;
+        carry |= hal::to_underlying(CrBit::DestCToCr);
     }
     return update.value;
 }
 
-/** @brief Encode the SETRWC share of a valid update. */
-inline __attribute__((always_inline)) constexpr std::uint32_t setrwc(const MathCounter& descriptor)
+/** @brief Encode the SETRWC share of an update. */
+inline __attribute__((always_inline)) constexpr std::uint32_t setrwc(const MathCounter& descriptor, const Instr issued)
 {
     std::uint32_t select = 0;
     std::uint32_t carry  = 0;
-    const auto d         = encode_counter(descriptor.dest, true, ckernel::p_setrwc::SET_D, select, carry);
-    const auto b         = encode_counter(descriptor.src_b, true, ckernel::p_setrwc::SET_B, select, carry);
-    const auto a         = encode_counter(descriptor.src_a, true, ckernel::p_setrwc::SET_A, select, carry);
+    const auto dest      = encode_counter(descriptor.dest, Instr::Setrwc, issued, WriteBit::Dest, CrBit::Dest, select, carry);
+    const auto src_b     = encode_counter(descriptor.src_b, Instr::Setrwc, issued, WriteBit::SrcB, CrBit::SrcB, select, carry);
+    const auto src_a     = encode_counter(descriptor.src_a, Instr::Setrwc, issued, WriteBit::SrcA, CrBit::SrcA, select, carry);
     if (descriptor.clear_fidelity)
     {
-        select |= ckernel::p_setrwc::SET_F;
+        select |= hal::to_underlying(WriteBit::Fidelity);
     }
-    return TT_OP_SETRWC(static_cast<std::uint32_t>(descriptor.flip), carry, d, b, a, select);
+    return TT_OP_SETRWC(hal::to_underlying(descriptor.flip), carry, dest, src_b, src_a, select);
 }
 
-/** @brief Encode the INCRWC share of a valid update. */
-inline __attribute__((always_inline)) constexpr std::uint32_t incrwc(const MathCounter& descriptor)
+/** @brief Encode the INCRWC share of an update. */
+inline __attribute__((always_inline)) constexpr std::uint32_t incrwc(const MathCounter& descriptor, const Instr issued)
 {
     // INCRWC has no write mask: omitted counters encode a zero increment without CR.
     std::uint32_t select = 0;
     std::uint32_t carry  = 0;
-    const auto d         = encode_counter(descriptor.dest, false, ckernel::p_setrwc::CR_D, select, carry);
-    const auto b         = encode_counter(descriptor.src_b, false, ckernel::p_setrwc::CR_B, select, carry);
-    const auto a         = encode_counter(descriptor.src_a, false, ckernel::p_setrwc::CR_A, select, carry);
-    return TT_OP_INCRWC(carry, d, b, a);
+    const auto dest      = encode_counter(descriptor.dest, Instr::Incrwc, issued, WriteBit::Dest, CrBit::Dest, select, carry);
+    const auto src_b     = encode_counter(descriptor.src_b, Instr::Incrwc, issued, WriteBit::SrcB, CrBit::SrcB, select, carry);
+    const auto src_a     = encode_counter(descriptor.src_a, Instr::Incrwc, issued, WriteBit::SrcA, CrBit::SrcA, select, carry);
+    return TT_OP_INCRWC(carry, dest, src_b, src_a);
 }
 
 } // namespace detail
 
 inline constexpr __attribute__((always_inline)) std::uint32_t MathCounter::operation() const
 {
-    const bool setrwc = detail::needs_setrwc(*this);
-    detail::require(setrwc != detail::needs_incrwc(*this));
-    return setrwc ? detail::setrwc(*this) : detail::incrwc(*this);
+    const detail::Instr issued = detail::plan(*this);
+    if (issued == (detail::Instr::Setrwc | detail::Instr::Incrwc))
+    {
+        detail::reject_two_instructions();
+    }
+    detail::require(issued != detail::Instr::None);
+    return issued == detail::Instr::Setrwc ? detail::setrwc(*this, issued) : detail::incrwc(*this, issued);
 }
 
 /**
@@ -295,15 +422,16 @@ inline constexpr __attribute__((always_inline)) std::uint32_t MathCounter::opera
 template <auto Descriptor>
 inline __attribute__((always_inline)) void set()
 {
-    static_assert(detail::is_valid(Descriptor), "math-counter descriptor must update a counter, flip a bank, or clear the fidelity phase");
-    if constexpr (detail::needs_setrwc(Descriptor))
+    constexpr detail::Instr issued = detail::plan(Descriptor);
+    static_assert(issued != detail::Instr::None, "math-counter descriptor must update a counter, flip a bank, or clear the fidelity phase");
+    if constexpr (detail::issues(issued, detail::Instr::Setrwc))
     {
-        constexpr std::uint32_t word = detail::setrwc(Descriptor);
+        constexpr std::uint32_t word = detail::setrwc(Descriptor, issued);
         TTI_INSN(word);
     }
-    if constexpr (detail::needs_incrwc(Descriptor))
+    if constexpr (detail::issues(issued, detail::Instr::Incrwc))
     {
-        constexpr std::uint32_t word = detail::incrwc(Descriptor);
+        constexpr std::uint32_t word = detail::incrwc(Descriptor, issued);
         TTI_INSN(word);
     }
 }
@@ -318,14 +446,15 @@ inline __attribute__((always_inline)) void set()
  */
 inline __attribute__((always_inline)) void set(const MathCounter descriptor)
 {
-    detail::require(detail::is_valid(descriptor));
-    if (detail::needs_setrwc(descriptor))
+    const detail::Instr issued = detail::plan(descriptor);
+    detail::require(issued != detail::Instr::None);
+    if (detail::issues(issued, detail::Instr::Setrwc))
     {
-        TT_INSN(detail::setrwc(descriptor));
+        TT_INSN(detail::setrwc(descriptor, issued));
     }
-    if (detail::needs_incrwc(descriptor))
+    if (detail::issues(issued, detail::Instr::Incrwc))
     {
-        TT_INSN(detail::incrwc(descriptor));
+        TT_INSN(detail::incrwc(descriptor, issued));
     }
 }
 
