@@ -1525,3 +1525,11 @@ link rate with the full-L1 arena, sparse dispatch 0.82, TP AG / RS 0.87 / 0.74, 
   3163 us); overlapped (AG + matmuls under router / gather / planner / dispatch, RS beside the combine) it is free in
   the model. Gather -> 2D owners = token-split within 0-4% once overlapped.
 - Combine levers at 16K (link-bound nearly everywhere): ties split -11..-16% on 8x4, fp8 rows -34..-43%.
+
+### GLM-5.3-Flash MoE block, every op (2026-10-20, L4 real weights, 2 x 4 bh-lb-09, eager, busiest chip per op)
+`/localdev/mstaletovic/blockops/run.sh <chunk>` (test_layer_perf GLM_LP_CALLS; calls in c<chunk>.L4.json). us, chunk 5120 / 2048:
+router linear 35 / 24, moe_grouped_topk 89 / 88 | SE x full-mesh all-gather (tiles) 421 / 186 | routing_pack 16 / 8,
+routing gather 38 / 38, planner 96 / 50, dispatch prep 31 / 13, arena zero 3 / 4, sparse dispatch 457 / 206, flat +
+combine 1638 / 1264, tilize 35 / 14 | SE (8-way I split over the mesh, all S tokens, HiFi4): gate/up linear 257 / 114,
+slice x2 + minimum + silu + clamp + multiply 182 / 102, down linear 252 / 97, fabric reduce-scatter (Ring) 471 / 196 |
+add 37 / 20. Total 4058 / 2423 us. x crosses the links twice (the SE's dense gather and the sparse dispatch).
