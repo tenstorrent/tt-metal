@@ -12,7 +12,7 @@ Every matrix and vector pass is a custom op (tt/custom_ops), including the final
 start (start()) and every iteration run on the device only and are trace-capturable; the CG scalars stay on device.
 """
 
-import threading
+from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 import ttnn
@@ -104,11 +104,12 @@ class HPCG:
         nc = g.x * g.y
         bands = list(bands) if bands is not None else [default_bands(nx >> l) for l in range(4)]
         noc_xy = noc_coords(device)
-        # the generation kernel's binaries load in a thread (TT-NN releases the GIL meanwhile) while this thread
-        # builds the levels and plans the fine one, host work only; the first generation launch then starts at once
-        warm = None if host_tables else threading.Thread(target=warm_up, args=(device,))
-        if warm is not None:
-            warm.start()
+        # generation launches go through one worker thread, in order (TT-NN releases the GIL while it builds and
+        # enqueues a program): first a launch with no jobs that loads the kernel binaries while this thread builds
+        # and plans the fine level, then each real launch, its program built there while this thread goes on. A
+        # launch is handed over only after its table upload returned, so the upload is ahead of it in the queue
+        gen = None if host_tables else ThreadPoolExecutor(max_workers=1)
+        launched = [] if gen is None else [gen.submit(warm_up, device)]
         self.order = list(order)
         lc = list(level_cores or []) + [nc] * 4  # cores per level for the smoothers (default: all)
         if host_tables:
@@ -117,14 +118,13 @@ class HPCG:
         else:  # the fine level first: the coarser ones are built after its generation launch
             L0 = Level(nx, bands[0], slot_stride, tables=False)
             plan0 = DeviceLevel.stencil_plan(L0, min(nc, lc[0]), noc_xy)
-            warm.join()
         self.r, self.b, self.x, self.p, self.Ap = (empty_device(device, L0.P) for _ in range(5))
         fine = dict(r=self.r, b=self.b, zeros=(self.x, self.p))  # x = 0 (initial guess) and p = 0 on the fine level
         # matrix generation in two launches: the fine level's as soon as it is planned (the device writes it while
         # the host plans the rest), then the coarser levels' and the grid transfers' together
         self.lv = [DeviceLevel(device, L0, min(nc, lc[0]), noc_xy, plan=plan0, **fine)]
         if self.lv[0].job is not None:
-            StencilMatrixOp(device, [self.lv[0].job])()
+            launched.append(gen.submit(StencilMatrixOp(device, [self.lv[0].job])))
             self.levels = build(nx, bands, slot_stride, tables=False, finest=L0)
         self.lv += [DeviceLevel(device, L, min(nc, lc[l]), noc_xy) for l, L in enumerate(self.levels) if l > 0]
         jobs = [d.job for d in self.lv[1:] if d.job is not None]
@@ -152,7 +152,7 @@ class HPCG:
             d.Rt, d.Roff, d.Pt, d.Poff = jr.values, jr.offsets, jp.values, jp.offsets
             jobs += [jr, jp]
         if jobs:
-            StencilMatrixOp(device, jobs)()
+            launched.append(gen.submit(StencilMatrixOp(device, jobs)))
         self.debug = debug_buffer(device)  # per-core cycle counters, written by kernel_debug builds
         dbg = dict(kernel_debug=kernel_debug, debug=self.debug)
         self._dbg = dbg
@@ -242,6 +242,10 @@ class HPCG:
             # r.z = inf + 0 + ... = inf whatever r.z held before (so start() can run again before an iteration)
             rtz_inf=DotFinishOp(device, self._inf_slot, 1, self.rtz),
         )
+        for f in launched:  # every generation launch is enqueued (and its errors raised) before any other launch
+            f.result()
+        if gen is not None:
+            gen.shutdown()
 
     def spmv(self, l):
         """A plain z -> Az launch of level l (used by tests and diagnostics, built on first use)."""
