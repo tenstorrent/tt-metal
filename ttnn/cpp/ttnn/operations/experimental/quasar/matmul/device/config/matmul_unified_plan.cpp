@@ -321,31 +321,36 @@ std::optional<MatmulUnifiedPlan> plan_unified_matmul(
         config.cores.str(),
         grid.x,
         grid.y);
-    const std::size_t requested_threads = config.num_compute_threads;  // checked before it narrows to uint32_t
+    // An unset field is auto; a set size is at least one tile.
     TT_FATAL(
-        requested_threads == 0 || requested_threads == 1 ||
-            (is_quasar && (requested_threads == 2 || requested_threads == 4)),
-        "MatmulUnifiedProgramConfig.num_compute_threads must be 0 (auto), 1, 2 or 4, and above 1 needs Quasar; got {}",
-        requested_threads);
+        config.C_slice_M_tiles.value_or(1) >= 1 && config.C_slice_N_tiles.value_or(1) >= 1 &&
+            config.K_chunk_tiles.value_or(1) >= 1 && config.subblock_M_tiles.value_or(1) >= 1 &&
+            config.subblock_N_tiles.value_or(1) >= 1,
+        "MatmulUnifiedProgramConfig sizes must be at least one tile; leave a field unset for auto");
+    const std::optional<std::size_t>& requested_threads = config.num_compute_threads;  // checked before it narrows
+    TT_FATAL(
+        !requested_threads.has_value() || *requested_threads == 1 ||
+            (is_quasar && (*requested_threads == 2 || *requested_threads == 4)),
+        "MatmulUnifiedProgramConfig.num_compute_threads must be 1, 2 or 4 (above 1 needs Quasar), or unset for auto; "
+        "got {}",
+        *requested_threads);
     const bool fp32_dest_acc_en = get_fp32_dest_acc_en(attributes.compute_kernel_config);
     const uint32_t dst_capacity_tiles = fp32_dest_acc_en ? 4 : 8;
     TT_FATAL(
-        (config.subblock_M_tiles == 0) == (config.subblock_N_tiles == 0),
-        "subblock_M_tiles and subblock_N_tiles must both be set or both be 0 (auto), got {}x{}",
-        config.subblock_M_tiles,
-        config.subblock_N_tiles);
+        config.subblock_M_tiles.has_value() == config.subblock_N_tiles.has_value(),
+        "subblock_M_tiles and subblock_N_tiles must both be set or both be unset (auto)");
     TT_FATAL(
-        config.subblock_M_tiles * config.subblock_N_tiles <= dst_capacity_tiles,
+        config.subblock_M_tiles.value_or(1) * config.subblock_N_tiles.value_or(1) <= dst_capacity_tiles,
         "subblock {}x{} holds {} tiles; DST fits {} (fp32 accumulation: {})",
-        config.subblock_M_tiles,
-        config.subblock_N_tiles,
-        config.subblock_M_tiles * config.subblock_N_tiles,
+        *config.subblock_M_tiles,
+        *config.subblock_N_tiles,
+        *config.subblock_M_tiles * *config.subblock_N_tiles,
         dst_capacity_tiles,
         fp32_dest_acc_en);
     TT_FATAL(
-        config.K_chunk_tiles == 0 || base.K_tiles % config.K_chunk_tiles == 0,
+        !config.K_chunk_tiles.has_value() || base.K_tiles % *config.K_chunk_tiles == 0,
         "K_chunk_tiles ({}) must divide K_tiles ({})",
-        config.K_chunk_tiles,
+        *config.K_chunk_tiles,
         base.K_tiles);
     TT_FATAL(
         !(bias_tile_bytes > 0 && fp32_dest_acc_en),
@@ -361,11 +366,23 @@ std::optional<MatmulUnifiedPlan> plan_unified_matmul(
             "A sharded C needs a tile-multiple shard shape, got {}x{}",
             C_shard_height,
             C_shard_width);
+        // A sharded C's shard is the C slice.
+        const uint32_t C_shard_M_tiles = C_shard_height / TILE_HEIGHT;
+        const uint32_t C_shard_N_tiles = C_shard_width / TILE_WIDTH;
+        TT_FATAL(
+            config.C_slice_M_tiles.value_or(C_shard_M_tiles) == C_shard_M_tiles &&
+                config.C_slice_N_tiles.value_or(C_shard_N_tiles) == C_shard_N_tiles,
+            "C is sharded, so its {}x{}-tile shard is the C slice; the config asks for a {}x{}-tile C slice",
+            C_shard_M_tiles,
+            C_shard_N_tiles,
+            config.C_slice_M_tiles.value_or(C_shard_M_tiles),
+            config.C_slice_N_tiles.value_or(C_shard_N_tiles));
     }
 
     // ---- 3. Fixed for every candidate: cores, threads, formats, L1 budget ----
     base.orientation = config.orientation;
-    base.num_compute_threads = requested_threads != 0 ? static_cast<uint32_t>(requested_threads) : (is_quasar ? 4 : 1);
+    base.num_compute_threads =
+        requested_threads.has_value() ? static_cast<uint32_t>(*requested_threads) : (is_quasar ? 4 : 1);
     // Writer thread t writes the entries of compute threads t, t + num_writer_threads, ...
     base.num_writer_threads =
         is_quasar && base.num_compute_threads % QUASAR_NUM_WRITER_THREADS == 0 ? QUASAR_NUM_WRITER_THREADS : 1;
@@ -381,21 +398,19 @@ std::optional<MatmulUnifiedPlan> plan_unified_matmul(
     const uint64_t l1_budget = l1_ceiling - l1_base;
 
     // ---- 4. C slice candidates ----
-    // The largest C slice: the output shard when C is sharded, else M / N split over the bounding box of the cores
-    // (one C slice per core). A C slice dim the config or the shard gives is fixed; an auto one divides the largest's.
-    const bool C_slice_from_shard = C_shard.has_value() && (config.C_slice_M_tiles == 0 || config.C_slice_N_tiles == 0);
-    const uint32_t C_shard_M_tiles = C_shard.has_value() ? C_shard->shape[0] / TILE_HEIGHT : 0;
-    const uint32_t C_shard_N_tiles = C_shard.has_value() ? C_shard->shape[1] / TILE_WIDTH : 0;
+    // A sharded C's shard is the C slice (checked above against the config's). Otherwise a C slice dim the config gives
+    // is fixed, and an auto one divides the largest C slice: M / N split over the bounding box of the cores (one C
+    // slice per core).
     const uint32_t core_rows = bounding_box.grid_size().y;
     const uint32_t core_columns = bounding_box.grid_size().x;
-    const uint32_t max_C_slice_M_tiles = config.C_slice_M_tiles != 0 ? config.C_slice_M_tiles
-                                         : C_slice_from_shard        ? C_shard_M_tiles
-                                                                     : tt::div_up(base.M_tiles, core_rows);
-    const uint32_t max_C_slice_N_tiles = config.C_slice_N_tiles != 0 ? config.C_slice_N_tiles
-                                         : C_slice_from_shard        ? C_shard_N_tiles
-                                                                     : tt::div_up(base.N_tiles, core_columns);
-    const bool M_fixed = config.C_slice_M_tiles != 0 || C_slice_from_shard;
-    const bool N_fixed = config.C_slice_N_tiles != 0 || C_slice_from_shard;
+    const bool M_fixed = C_shard.has_value() || config.C_slice_M_tiles.has_value();
+    const bool N_fixed = C_shard.has_value() || config.C_slice_N_tiles.has_value();
+    const uint32_t max_C_slice_M_tiles = C_shard.has_value()                  ? C_shard->shape[0] / TILE_HEIGHT
+                                         : config.C_slice_M_tiles.has_value() ? *config.C_slice_M_tiles
+                                                                              : tt::div_up(base.M_tiles, core_rows);
+    const uint32_t max_C_slice_N_tiles = C_shard.has_value()                  ? C_shard->shape[1] / TILE_WIDTH
+                                         : config.C_slice_N_tiles.has_value() ? *config.C_slice_N_tiles
+                                                                              : tt::div_up(base.N_tiles, core_columns);
 
     // Largest area first (ties: wider).
     std::vector<std::pair<uint32_t, uint32_t>> C_slice_shapes;
@@ -417,7 +432,7 @@ std::optional<MatmulUnifiedPlan> plan_unified_matmul(
     // The first C slice that fits wins, except one that fits only with K_chunk_tiles == 1 yields to a smaller C slice
     // with a longer K chunk and more work per L1 fill (C slice tiles x K chunk); the largest C slice is never shrunk if
     // it fits (#57884).
-    const uint32_t K_chunk_floor = config.K_chunk_tiles == 0 ? 1 : config.K_chunk_tiles;  // the shortest K chunk tried
+    const uint32_t K_chunk_floor = config.K_chunk_tiles.value_or(1);  // the shortest K chunk tried
     const uint32_t min_K_chunks = is_quasar ? QUASAR_NUM_READER_THREADS : MIN_OPERAND_BUFFER_DEPTH;
     std::optional<MatmulUnifiedPlan> best;
     uint64_t best_work = 0;
@@ -430,9 +445,9 @@ std::optional<MatmulUnifiedPlan> plan_unified_matmul(
         // shortest K chunk, so the K chunk search below always finds one. Never trade a borrow for subblock volume:
         // a subblock that pads a borrowable shard's dims is rejected; C's borrow needs subblocks spanning the C slice
         // width, achievable only when that width fits DST.
-        uint32_t subblock_M_tiles = config.subblock_M_tiles;
-        uint32_t subblock_N_tiles = config.subblock_N_tiles;
-        if (subblock_M_tiles == 0) {
+        uint32_t subblock_M_tiles = config.subblock_M_tiles.value_or(0);
+        uint32_t subblock_N_tiles = config.subblock_N_tiles.value_or(0);
+        if (!config.subblock_M_tiles.has_value()) {
             const auto subblock_viable = [&](uint32_t candidate_M_tiles, uint32_t candidate_N_tiles) {
                 const MatmulUnifiedPlan at_shortest_K_chunk = make_plan(
                     base,
@@ -477,13 +492,13 @@ std::optional<MatmulUnifiedPlan> plan_unified_matmul(
             subblock_N_tiles,
             base.K_tiles);
         const bool borrows_A_with_one_K_chunk =
-            config.K_chunk_tiles == 0 && candidate.borrow_A && dfbs_fit(candidate, l1_budget);
+            !config.K_chunk_tiles.has_value() && candidate.borrow_A && dfbs_fit(candidate, l1_budget);
         if (!borrows_A_with_one_K_chunk) {
             const uint32_t K_chunk_cap = C_slice_M_tiles * C_slice_N_tiles > SMALL_C_SLICE_TILES
                                              ? MAX_AUTO_K_CHUNK_TILES
                                              : std::max(MAX_AUTO_K_CHUNK_TILES, base.K_tiles / min_K_chunks);
             const uint32_t K_chunk_start =
-                config.K_chunk_tiles != 0 ? config.K_chunk_tiles : std::min(base.K_tiles, K_chunk_cap);
+                config.K_chunk_tiles.has_value() ? *config.K_chunk_tiles : std::min(base.K_tiles, K_chunk_cap);
             for (uint32_t K_chunk_tiles = K_chunk_start; K_chunk_tiles >= K_chunk_floor; --K_chunk_tiles) {
                 if (base.K_tiles % K_chunk_tiles != 0) {
                     continue;
@@ -644,9 +659,9 @@ std::optional<MatmulUnifiedProgramConfig> choose_unified_placement(
     const MatmulUnifiedProgramConfig& requested) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     TT_FATAL(
-        requested.C_slice_M_tiles == 0 && requested.C_slice_N_tiles == 0,
+        !requested.C_slice_M_tiles.has_value() && !requested.C_slice_N_tiles.has_value(),
         "MatmulUnifiedProgramConfig: with no cores the C slice is chosen with the placement; leave C_slice_M_tiles and "
-        "C_slice_N_tiles at 0");
+        "C_slice_N_tiles unset");
     if (find_unsupported_feature(A, B, attributes).has_value()) {
         return std::nullopt;
     }
@@ -668,13 +683,13 @@ std::optional<MatmulUnifiedProgramConfig> choose_unified_placement(
 
     std::optional<MatmulUnifiedProgramConfig> best;
     std::pair<double, double> best_estimate;
-    // Plans the placement (a 0 x 0 C slice: the plan picks it) and keeps it if its estimate is the lowest so far, the
+    // Plans the placement (an unset C slice: the plan picks it) and keeps it if its estimate is the lowest so far, the
     // first on a tie. False when it does not fit: cores beyond the device grid (a larger user_core_coord), DFBs beyond
     // L1, or C slices that do not tile a sharded output in the layout it asks for.
     const auto try_placement = [&](const CoreRangeSet& cores,
                                    tt::tt_metal::ShardOrientation orientation,
-                                   uint32_t C_slice_M_tiles,
-                                   uint32_t C_slice_N_tiles) {
+                                   std::optional<uint32_t> C_slice_M_tiles,
+                                   std::optional<uint32_t> C_slice_N_tiles) {
         const CoreCoord last_core = cores.bounding_box().end_coord;
         if (last_core.x >= device_grid.x || last_core.y >= device_grid.y) {
             return false;
@@ -734,7 +749,7 @@ std::optional<MatmulUnifiedProgramConfig> choose_unified_placement(
 
     // A sharded output's shard grid fixes the cores, and the plan takes the C slice from the shard: the only placement.
     if (C_memory.is_sharded() && C_shard.has_value()) {
-        try_placement(C_shard->grid, C_shard->orientation, /*C_slice_M_tiles=*/0, /*C_slice_N_tiles=*/0);
+        try_placement(C_shard->grid, C_shard->orientation, std::nullopt, std::nullopt);
         return best;
     }
 
@@ -743,8 +758,8 @@ std::optional<MatmulUnifiedProgramConfig> choose_unified_placement(
     try_placement(
         CoreRangeSet(CoreRange({0, 0}, {std::min(grid_columns, N_tiles) - 1, std::min(grid_rows, M_tiles) - 1})),
         ROW_MAJOR,
-        /*C_slice_M_tiles=*/0,
-        /*C_slice_N_tiles=*/0);
+        std::nullopt,
+        std::nullopt);
 
     // 1D across N (M): whole grid rows (part of one row for a narrow C) splitting C's columns (rows). With one C slice
     // per core every core needs the same A (B), which is multicast to all of them.
