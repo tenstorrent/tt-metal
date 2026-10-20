@@ -190,7 +190,7 @@ public:
     friend bool operator==(const move_only_function& f, std::nullptr_t) noexcept { return !f; }
 
 private:
-    [[noreturn]] static R call_empty(void*, Args&&...) { throw std::bad_function_call(); }
+    [[noreturn]] static R call_empty(void*, Args...) { throw std::bad_function_call(); }
 
     template <typename T>
     static T& inline_target(void* storage) noexcept {
@@ -203,7 +203,7 @@ private:
     }
 
     template <typename T>
-    static R call_inline(void* storage, Args&&... args) {
+    static R call_inline(void* storage, Args... args) {
         return detail::invoke_r<R>(inline_target<T>(storage), std::forward<Args>(args)...);
     }
 
@@ -220,13 +220,13 @@ private:
     }
 
     template <typename T>
-    static R call_heap(void* storage, Args&&... args) {
-        return detail::invoke_r<R>(*heap_target<T>(storage), std::forward<Args>(args)...);
+    static R call_heap(void* storage, Args... args) {
+        return detail::invoke_r<R>(heap_target<T>(storage), std::forward<Args>(args)...);
     }
 
     template <typename T>
     static void destroy_heap(void* storage) noexcept {
-        delete heap_target<T>(storage);
+        delete *std::launder(static_cast<T**>(storage));
     }
 
     static constexpr VTable kEmptyTable{&call_empty, nullptr, nullptr};
