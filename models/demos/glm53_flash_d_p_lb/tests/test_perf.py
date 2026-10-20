@@ -118,13 +118,22 @@ def test_perf(mesh_device):
     rows = list(range(chunk - 1))
     want = tokens[last + 1 : last + chunk]
     hits1 = hits5 = 0
+    saved = {"ids": [], "vals": []}  # (GLM_PERF_SAVE=file: the last chunk's top-5 and hidden, for run-to-run checks)
     for r0 in range(0, len(rows), 512):
         rr = rows[r0 : r0 + 512]
         lg = model.logits(hid, rr).float()
-        top5 = lg.topk(5, dim=-1).indices
+        tk = lg.topk(5, dim=-1)
+        top5 = tk.indices
+        saved["ids"].append(top5)
+        saved["vals"].append(tk.values)
         w = want[r0 : r0 + len(rr)]
         hits1 += int((top5[:, 0] == w).sum())
         hits5 += int((top5 == w[:, None]).any(-1).sum())
+    if os.environ.get("GLM_PERF_SAVE"):
+        torch.save(
+            {"ids": torch.cat(saved["ids"]), "vals": torch.cat(saved["vals"]), "hid": model.to_host(hid).float()},
+            os.environ["GLM_PERF_SAVE"],
+        )
     model.free(hid)
     top1, top5 = hits1 / len(rows), hits5 / len(rows)
     print(f"last chunk next-token vs text: top1 {top1:.4f} top5 {top5:.4f}", flush=True)

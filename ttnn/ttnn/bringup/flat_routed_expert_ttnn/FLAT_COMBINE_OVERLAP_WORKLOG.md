@@ -1620,3 +1620,24 @@ S256 464 -> 457, 517 -> 513; K3 986 -> 955, 1057 -> 1041, packed 2337 -> 2393; V
 (the combine is hidden there). Credit packets per busy port 318 -> 124, their time 116 -> 34 us. A modest win: kept
 as an option (default off); the feeding flows' gaps are the larger loss.
 Piggybacked credits on by default where they apply (owner): harness S640 uniform alone 1092 us; GLM ts block test exact as before; K3 block PCC 0.99622, traced 3346 us (3333 before); GLM L4 block chunk 5120 2793 us (fused 1686; 1751-1812 run to run before); whole model 56k 4.79-4.80 s (unchanged), top1 0.659 / 0.650.
+
+## Run-to-run spread of the whole model (2026-10-20)
+
+test_perf's last-chunk top-1 vs text moved 0.64-0.69 between runs of one config. Measured (zz_scratch_determ_model.py:
+the full 56k prefill twice in one process, every (chunk, layer) output compared; test_perf GLM_PERF_SAVE):
+- experts ag: bit-identical, all 45 layers, every chunk. ts with the separate shared expert and the deterministic
+  combine: bit-identical too. So every difference comes from the ts block's arrival-order sums.
+- The seed is what one expects of the combine: ~1 element in 21M of a MoE layer's output differs by one bf16 ulp
+  (fp32 sums in arrival order, one rounding). It first shows at L3 / L4 in every chunk.
+- The model amplifies it. KDA's recurrence spreads one element to every later token of the chunk, then bf16 roundings
+  flip: rel 1e-3 one layer later. Chunk 0, no context, ends at L44 ~1.7e-2. Chunks with context grow ~100x within 15
+  layers (KDA and DSA layers alike; the KDA carries and the caches of earlier chunks already differ): 9% at chunk
+  5120, 17-22% at chunk 51200, L44.
+- Last chunk, two runs: final hidden 22-26% apart, top-1 argmax agreement 86-89% (half of the rows have a top-1 /
+  top-2 logit margin < 2.2): top-1 vs text +-1.5 pts. Single top-1 numbers can't rank configs below ~3 pts.
+- The deterministic option does not cover the folded shared rows (its order table has no entries for them: the table
+  check fails and the accumulators fall back to arrival order), so folded + deterministic still diverges.
+- Bug found on the way: piggybacked credits + deterministic order deadlocked (separate SE, 2 of 2 runs hung in the
+  fused op). A port counts piggybacked credits as returned when it sends the row, but they reach the home's port only
+  when its accumulator takes the row, and the deterministic order leaves landed rows in their ring until their
+  token's turn. Fix: no piggybacking with the deterministic order (it is a debug / A/B mode).

@@ -1339,6 +1339,10 @@ def sparse_combine_rf_prepare(
     if pr.piggy == "fused":  # (probe: piggyback only in the L1 hand-off programs)
         PIGGY = l1 is not None
     PIGGY = PIGGY and not PER_DIR and L == 2 and A0 <= 16  # (where it applies: a port per link, two links, A <= 16)
+    # (not with the deterministic order: a piggybacked row's credits count as returned when it is sent but reach the
+    # port only when the home's accumulator takes the row, and that order leaves landed rows in their ring until their
+    # token's turn - the row next in order can be the one waiting on those credits: a deadlock)
+    PIGGY = PIGGY and not deterministic
     SE_ON = shared_rows is not None
     assert not SE_ON or l1 is not None, "shared_rows: the L1 hand-off"
     assert not SE_ON or arena is not None, "shared_rows: the staging slots live in the arena"

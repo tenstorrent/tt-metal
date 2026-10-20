@@ -85,6 +85,14 @@ def test_ab_layers(mesh_device):
     for i in layers:
         rel, pcc, nd = _cmp(again[i], base[i])
         print(f"[ab] base-again  L{i:02d} rel {rel:.3e} pcc {pcc:.7f} differing {nd}", flush=True)
+    prev = again
+    for k in range(int(os.environ.get("GLM_AB_AGAIN", "0"))):  # more repeats: each vs the base and vs the previous
+        cur = run()
+        for i in layers:
+            r0, _, n0 = _cmp(cur[i], base[i])
+            r1, _, n1 = _cmp(cur[i], prev[i])
+            print(f"[ab] again{k + 2} L{i:02d} vs base rel {r0:.3e} ({n0}) vs previous rel {r1:.3e} ({n1})", flush=True)
+        prev = cur
     # build-time switches (env read at model construction) need two processes: GLM_AB_SAVE=file keeps this build's
     # base outputs, GLM_AB_REF=file compares this build's base outputs against a saved one
     if os.environ.get("GLM_AB_SAVE"):
