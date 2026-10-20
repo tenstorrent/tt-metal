@@ -85,7 +85,8 @@ ROUTED_SCATTER_SPLIT_MIN_C = 1024
 ROUTED_SCATTER_GROUPS = 32
 # The combine reduces token blocks of at most this many tokens, so that the reduced [Cs, H] bf16 block (17 MiB at 3072)
 # lives in L1 and only its bf8 cast goes to DRAM. (Sized when the combine still gathered a [Cs, k, H] copy into L1:
-# 3072 vs 2048 measured b32 TTFT 512 -1.2%, 1K -0.5%, 2K -0.7%.)
+# 3072 vs 2048 measured b32 TTFT 512 -1.2%, 1K -0.5%, 2K -0.7%. One block per 16K chunk instead: 32K +0.8%, the
+# reduced block no longer fits L1.)
 ROUTED_COMBINE_BLOCK = 3072
 # Largest chunk-size-dependent transient this module places in L1 (per device, interleaved). Above it the tensor goes
 # to DRAM, so a larger GPT_OSS_ROUTED_PREFILL_CHUNK still runs instead of overflowing L1; the reduced combine block is

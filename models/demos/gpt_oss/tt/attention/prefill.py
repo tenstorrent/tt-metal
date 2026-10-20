@@ -13,7 +13,6 @@ from .operations import (
     apply_output_projection_fused_rs,
     apply_qkv_projection,
     apply_rope,
-    concat_heads,
     is_shape_fused_mm_rs_supported,
     split_qkv_heads_prefill,
 )
@@ -184,18 +183,18 @@ def prefill_forward(
         program_config=program_config.get_prefill_sdpa_config(mesh_device, seq_len, config.sliding_window),
         compute_kernel_config=program_config.get_prefill_sdpa_compute_kernel_config(mesh_device),
         attention_sink=weights.sinks,
+        # Heads written side by side, [B, 1, S, nh * dh]: what nlp_concat_heads makes of the default layout, without
+        # that op (measured 8K 182.6 -> 179.7 ms TTFT, bit-identical).
+        output_concat_heads=True,
     )
     tt_q.deallocate(True)
     tt_k.deallocate(True)
     tt_v.deallocate(True)
 
-    # Concat heads and apply output projection. Every o_proj path casts its input to bf8 first; the cast runs on the
-    # heads instead, so the concat moves bf8 tiles (half the bytes). A tile keeps its 32 x 32 values through the
-    # concat, so it packs to the same bf8 tile either way (bit-identical).
-    tt_sdpa_out_pre_concat = ttnn.typecast(tt_sdpa_out, ttnn.bfloat8_b)
+    # Every o_proj path casts its input to bf8 first; casting here instead is the same per-tile cast.
+    tt_sdpa_out_bf8 = ttnn.typecast(tt_sdpa_out, ttnn.bfloat8_b)
     tt_sdpa_out.deallocate(True)
-    tt_sdpa_out = concat_heads(tt_sdpa_out_pre_concat, is_decode_mode=False)
-    tt_sdpa_out_pre_concat.deallocate(True)
+    tt_sdpa_out = tt_sdpa_out_bf8
 
     # Flatten back for output projection: [B, 1, S, H] -> [1, 1, B*S, H]
     if batch_size > 1:
