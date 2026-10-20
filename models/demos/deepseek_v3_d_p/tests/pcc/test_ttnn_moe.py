@@ -1231,6 +1231,15 @@ def test_kimi_moe(
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="torus-xy-8x4",
         ),
+        # Galaxy with an SP=4 ring on mesh axis 1 (8 dispatch groups) and TP=8 on axis 0.
+        pytest.param(
+            (8, 4),
+            torus_xy_device_params(fabric_payload_size=moe_fabric_payload(KimiK3Config)),
+            2,
+            1,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="torus-xy-8x4-sp1",
+        ),
     ],
     indirect=["mesh_device", "device_params"],
 )
