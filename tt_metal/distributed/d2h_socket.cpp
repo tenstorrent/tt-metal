@@ -414,12 +414,13 @@ D2HSocket::D2HSocket(
     fifo_size_(fifo_size),
     pcie_alignment_(mesh_device->impl().metal_env().get_hal().get_alignment(HalMemType::HOST)),
     process_scope_(scope),
-    mesh_device_(mesh_device.get()) {
+    mesh_device_(mesh_device.get()),
+    rank_owns_endpoint_(rank_owns_host_socket_endpoint(mesh_device.get(), sender_core)) {
     // Checked on every rank before the collective allocation so co-owners fail together.
     TT_FATAL(fifo_size_ % pcie_alignment_ == 0, "FIFO size must be PCIe-aligned.");
     init_config_buffer(mesh_device);
     // Co-owners reserve the config buffer together; only the sender owner maps host memory.
-    if (!mesh_device->is_local(sender_core_.device_coord)) {
+    if (!rank_owns_endpoint_) {
         return;
     }
     init_common(mesh_device);
@@ -435,7 +436,8 @@ D2HSocket::D2HSocket(
     fifo_size_(fifo_size),
     pcie_alignment_(mesh_device->impl().metal_env().get_hal().get_alignment(HalMemType::HOST)),
     process_scope_(scope),
-    mesh_device_(mesh_device.get()) {
+    mesh_device_(mesh_device.get()),
+    rank_owns_endpoint_(rank_owns_host_socket_endpoint(mesh_device.get(), sender_core)) {
     TT_FATAL(external_config.address != 0, "External config buffer address must be non-zero.");
     const uint32_t l1_alignment = mesh_device->impl().metal_env().get_hal().get_alignment(HalMemType::L1);
     TT_FATAL(
@@ -454,6 +456,7 @@ D2HSocket::D2HSocket(
     fifo_size_(fifo_size),
     pcie_alignment_(mesh_device.impl().metal_env().get_hal().get_alignment(HalMemType::HOST)),
     mesh_device_(&mesh_device),
+    rank_owns_endpoint_(rank_owns_host_socket_endpoint(&mesh_device, sender_l2cpu)),
     is_l2cpu_(true) {
     // Helpers below still take a shared_ptr; the socket itself stores only a raw
     // MeshDevice* and does not extend the device's lifetime.
@@ -604,7 +607,7 @@ void D2HSocket::set_page_size(uint32_t page_size) {
 }
 
 bool D2HSocket::has_data(std::optional<uint32_t> num_bytes_to_check) {
-    validate_host_socket_access(mesh_device_, sender_core_);
+    validate_host_socket_access(rank_owns_endpoint_, sender_core_);
     TT_FATAL(page_size_ > 0, "Page size must be set before checking for data.");
     uint32_t num_bytes = num_bytes_to_check.value_or(page_size_);
     if (read_ptr_ + num_bytes >= fifo_curr_size_) {
@@ -675,7 +678,7 @@ void D2HSocket::pop_bytes(uint32_t num_bytes) {
 }
 
 uint32_t D2HSocket::discard_pending_pages() {
-    validate_host_socket_access(mesh_device_, sender_core_);
+    validate_host_socket_access(rank_owns_endpoint_, sender_core_);
     TT_FATAL(page_size_ > 0, "Page size must be set before discarding pages.");
     uint32_t bytes_sent_value;
     if (using_hugepage_) {
@@ -754,7 +757,7 @@ void D2HSocket::barrier(std::optional<uint32_t> timeout_ms) {
 }
 
 void D2HSocket::read(void* data, uint32_t num_pages, bool notify_sender) {
-    validate_host_socket_access(mesh_device_, sender_core_);
+    validate_host_socket_access(rank_owns_endpoint_, sender_core_);
     TT_FATAL(page_size_ > 0, "Page size must be set before reading.");
     uint32_t num_bytes = num_pages * page_size_;
     TT_FATAL(num_bytes <= fifo_curr_size_, "Cannot read more pages than the socket FIFO size.");
@@ -792,7 +795,7 @@ void D2HSocket::read_available(void* data, uint32_t num_bytes, bool notify_sende
 }
 
 bool D2HSocket::try_read_impl(void* data, uint32_t num_pages, bool notify_sender) {
-    validate_host_socket_access(mesh_device_, sender_core_);
+    validate_host_socket_access(rank_owns_endpoint_, sender_core_);
     TT_FATAL(page_size_ > 0, "Page size must be set before reading.");
     uint32_t num_bytes = num_pages * page_size_;
     TT_FATAL(num_bytes <= fifo_curr_size_, "Cannot read more pages than the socket FIFO size.");
@@ -821,7 +824,7 @@ bool D2HSocket::try_read_impl(void* data, uint32_t num_pages, bool notify_sender
 }
 
 void D2HSocket::pop(uint32_t num_pages, bool notify_sender) {
-    validate_host_socket_access(mesh_device_, sender_core_);
+    validate_host_socket_access(rank_owns_endpoint_, sender_core_);
     this->pop_bytes(num_pages * page_size_);
     if (notify_sender) {
         this->notify_sender();
@@ -829,7 +832,7 @@ void D2HSocket::pop(uint32_t num_pages, bool notify_sender) {
 }
 
 uint32_t D2HSocket::bytes_sent() const {
-    validate_host_socket_access(mesh_device_, sender_core_);
+    validate_host_socket_access(rank_owns_endpoint_, sender_core_);
     if (using_hugepage_) {
         _mm_clflush(const_cast<void*>(reinterpret_cast<const volatile void*>(hugepage_bytes_sent_host_ptr_)));
         _mm_lfence();
@@ -839,7 +842,7 @@ uint32_t D2HSocket::bytes_sent() const {
 }
 
 uint32_t D2HSocket::pages_available() {
-    validate_host_socket_access(mesh_device_, sender_core_);
+    validate_host_socket_access(rank_owns_endpoint_, sender_core_);
     TT_FATAL(page_size_ > 0, "Page size must be set before checking available pages.");
     uint32_t bytes_sent_value;
     if (using_hugepage_) {
@@ -856,7 +859,7 @@ uint32_t D2HSocket::pages_available() {
 }
 
 std::span<std::byte> D2HSocket::host_fifo() const {
-    validate_host_socket_access(mesh_device_, sender_core_);
+    validate_host_socket_access(rank_owns_endpoint_, sender_core_);
     TT_FATAL(!using_hugepage_, "D2HSocket::host_fifo: the hugepage fallback is not cache-coherent; use read()");
     return {reinterpret_cast<std::byte*>(host_buffer_.get()), fifo_size_};
 }
@@ -875,7 +878,7 @@ std::string D2HSocket::export_descriptor(const std::string& socket_id) {
 }
 
 HDSocketDescriptor D2HSocket::populate_descriptor() const {
-    validate_host_socket_access(mesh_device_, sender_core_);
+    validate_host_socket_access(rank_owns_endpoint_, sender_core_);
     TT_FATAL(is_owner_, "Only the owner process can populate a socket descriptor.");
     // The descriptor schema has no fields for the L2CPU LIM address, so a connector
     // could not rebuild the device side. Checked here rather than in export_descriptor()

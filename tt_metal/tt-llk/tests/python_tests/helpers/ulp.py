@@ -133,6 +133,19 @@ _FLUSHES_SUBNORMALS: Dict[torch.dtype, bool] = {
     torch.float16: False,
 }
 
+#: Subnormal *outputs* flushed when a step budget ranks a result, on every format, fp16
+#: included. The metric keeps fp16's subnormal band by default, but the golden keeps IEEE
+#: subnormals the pack path does not reproduce: a near-cancelling ``a - b`` lands there
+#: 140 steps from a correct kernel, and an exact unary op read 512 steps on
+#: Float16_b->Float16 from that band alone. One policy, named once: every step-budget gate
+#: hands it to ``passed_test_kwargs`` -- the binary and ternary gate
+#: (:func:`helpers.sfpu_accuracy_budget.assert_against_contract`), the scalar binop
+#: driver, the unary step-budget drivers, and the exhaustive unary sweep's emit and gate
+#: -- and their rows were measured that way. Also the ``--ulp-report``/``--ulp-measure``
+#: reading of a tolerance cell in ``passed_test``, so that figure is the one its gate
+#: would see if enrolled.
+FLUSH_SUBNORMAL_OUTPUTS = True
+
 # ttnn's sanity ceiling: 2**mantissa_bits is exactly one binade, so a budget past it says
 # the two values are more than a factor of two apart in the normal range -- at which point
 # ULP has stopped being the right metric and the op belongs on the tolerance one.
@@ -356,9 +369,14 @@ def ulp_elementwise_valid(
     where ``ulp(golden)`` collapses and any absolute error explodes into a step count
     that says nothing about the kernel.
 
-    Returns ``(is_valid, distance, rescued)``. A reporting caller has to exclude
-    *rescued*: those lanes hold the largest step counts by construction, so ranking every
-    lane names one that passed and never mentions the one that failed.
+    Returns ``(is_valid, distance, covered)``. *covered* is every lane the floor
+    judges -- in the band and within *near_zero_atol* -- whether or not it was also
+    within the step budget. A reporting caller has to exclude it: those lanes hold the
+    largest step counts by construction, so ranking every lane names one that passed and
+    never mentions the one that failed; and the emitter's residual (the number a floored
+    row's budget is derived from) is the maximum over the lanes *outside* the floor, so
+    a reader that ranked a covered lane within budget would read one step more than the
+    row records and show no headroom where there is some.
     """
     distance = ulp_distance(golden, result, flush_subnormals=flush_subnormals)
     both_nan = torch.isnan(golden) & torch.isnan(result)
@@ -405,7 +423,7 @@ def ulp_elementwise_valid(
             )
             near_zero = near_zero & (magnitude <= absolute_cut)
         absolute_error = (result.to(torch.float32) - golden.to(torch.float32)).abs()
-        rescued = near_zero & (absolute_error <= near_zero_atol) & ~in_budget
+        rescued = near_zero & (absolute_error <= near_zero_atol)
         valid = valid | rescued
 
     ok = valid & ~nonfinite_mismatches(golden, result)
@@ -599,13 +617,16 @@ def ulp_failure_message(
     *stats* lets a caller that already has them skip a second pass, and supplying it
     *asserts they came from the same* ``mask``. *flush_subnormals* carries the same
     obligation against *distance*, which fixed the count printed beside the step size.
-    *rescued* is the lane mask the near-zero floor accepted, which a ranking caller has
+    *rescued* is the lane mask the near-zero floor covers, which a ranking caller has
     already excluded from *mask*; reporting it is what lets a DEBUG export tell a
-    budget-carried pass from a floor-carried one.
+    budget-carried pass from a floor-carried one. Only its lanes past *max_ulp* are
+    counted: a covered lane within the budget needed no rescue.
     """
     if stats is None:
         stats = ulp_stats(distance, mask)
     label = fmt.name if fmt is not None else str(golden.dtype)
+    if rescued is not None and max_ulp is not None:
+        rescued = rescued & ((distance < 0) | (distance > max_ulp))
     floor = "" if rescued is None else f", {int(rescued.sum())} held by the floor"
     if stats["worst_index"] is None:
         if stats["unmeasurable"] == 0:
