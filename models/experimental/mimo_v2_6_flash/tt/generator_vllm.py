@@ -19,9 +19,10 @@ kv.SwaBlockTable keeps.
 
 Storage follows vLLM's sharing rule: the i-th layer of every group shares one buffer (``tensor_idx``), which is
 safe because a block id belongs to one group at a time. On a chip every layer's K cache is
-[num_blocks, 1, 64, 192] and is shared that way; V is 128 wide on the global layers and 192 wide (zero-padded,
-attention.py) on the SWA layers, so V is shared among layers of the same kind. The global layers keep both copies
-of their KV head on a chip pair (setup_vllm_kv_cache): a block can be shared by requests in slots of either parity.
+[num_blocks, 1, 64, 192] and every layer's V cache [num_blocks, 1, 64, 128] (attention.py keeps V's real dims on
+the SWA layers too), each shared that way: 9 K and 9 V buffers for 9 global and 39 SWA layers. The global layers
+keep both copies of their KV head on a chip pair (setup_vllm_kv_cache): a block can be shared by requests in slots
+of either parity.
 
 Sampling: prefill returns last-token logits [B, 1, vocab] for the host to sample. Decode replays one traced step
 per replica (captured in ``warmup_model_decode``) that also computes each slot's greedy token and writes it, with
@@ -54,8 +55,8 @@ from .model import prefill_padded_len, prefill_warmup_batches, prefill_warmup_ch
 TP = 8
 BLOCK_SIZE = 64
 # Per-chip bytes per token of the vLLM KV layout above for MiMo-V2.6-Flash (9 global, 39 SWA layers, so 9 shared K
-# buffers, 9 global V buffers and 8 SWA V buffers), BFP8: (9 * 192 + 9 * 128 + 8 * 192) values * 1088 / 1024 bytes.
-KV_BYTES_PER_TOKEN = (9 * 192 + 9 * 128 + 8 * 192) * 1088 / 1024
+# buffers and 9 shared V buffers), BFP8: (9 * 192 + 9 * 128) values * 1088 / 1024 bytes = 3060.
+KV_BYTES_PER_TOKEN = (9 * 192 + 9 * 128) * 1088 / 1024
 # Per-chip DRAM given to the KV pool when MIMO_KV_GB_PER_CHIP is unset (weights take 23.7 of 34 GB per chip).
 DEFAULT_KV_GB_PER_CHIP = 6.0
 # Blocks vLLM's sliding-window groups can hold per request while a prefill chunk of up to 4096 tokens is in flight
@@ -243,11 +244,10 @@ class MiMoV2ForCausalLM:
             buffers, caches = {}, []
             for layer, (_, _, t) in zip(model.layers, per_layer_specs):
                 attn = layer.attn
-                v_dim = attn.v_head_dim if attn.split_users else attn.head_dim
                 caches.append(
                     [
                         self._buffer(model, buffers, ("k", t, attn.head_dim), num_blocks, attn.head_dim),
-                        self._buffer(model, buffers, ("v", t, v_dim), num_blocks, v_dim),
+                        self._buffer(model, buffers, ("v", t, attn.v_head_dim), num_blocks, attn.v_head_dim),
                     ]
                 )
             model.setup_vllm_kv_cache(self.per_lane, caches, groups, table_width)

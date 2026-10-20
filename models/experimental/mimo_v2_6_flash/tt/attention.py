@@ -4,11 +4,13 @@
 """MiMo attention (SWA and global layers), tensor-parallel over one Galaxy row.
 
 SWA layers (8 KV heads): each chip has 8 Q heads and one KV head, in prefill and decode. V has
-128 dims; it is zero-padded to 192 (and so are the matching ``o_proj`` rows) so the SDPA kernels see
-one head dim. The SWA cache keeps only the in-window blocks per user (kv.SwaBlockTable), so the padding costs
-~nothing. Decode drops the
-padding columns after SDPA and uses an unpadded copy of ``o_proj`` (the dropped rows only ever multiplied
-zeros).
+128 dims; prefill zero-pads it to 192 (and so are the matching ``o_proj`` rows) so the prefill SDPA sees one
+head dim. Every V cache is 128 wide (as on the global layers): vLLM sizes each KV buffer to its whole block pool
+and shares it between one layer of each KV cache group, so a 192-wide SWA V cache would cost 1632 of 4692 bytes
+per token per chip, and with 128 the SWA V caches share the global layers' V buffers. Decode reads it with
+``paged_flash_multi_latent_attention_decode`` (``head_dim_v=128``, sinks, sliding window), whose output has no
+padding columns, and uses an unpadded copy of ``o_proj``; a later prefill chunk pads the cached window back to
+192.
 
 Global layers (4 KV heads over 8 chips): chips 2g and 2g+1 serve KV head g and split its users
 (see ``kv.py``). Decode gives each chip all 16 Q heads of its group for the slots it owns, with an
@@ -166,16 +168,18 @@ class SwaDecodeQkv:
         pt_page = page_table.shape[-1] * 4
         assert pt_page % 64 == 0, "the reader fetches the 64 B of the page table row that holds the entry"
         n = self.d_tiles
+        assert k_cache.shape[-1] == self.d and v_cache.shape[-1] % TILE == 0 and v_cache.shape[-1] <= self.d
         kernels = []
+        # (role, cores, first qkv tile column, cache, tile columns): V cores move only the V cache's real columns.
         roles = (
-            (self.ROLE_Q, self.q_cores, lambda i: i * n, None),
-            (self.ROLE_K, self.k_cores, lambda i: self.nh * n, k_cache),
-            (self.ROLE_V, self.v_cores, lambda i: (self.nh + 1) * n, v_cache),
+            (self.ROLE_Q, self.q_cores, lambda i: i * n, None, n),
+            (self.ROLE_K, self.k_cores, lambda i: self.nh * n, k_cache, n),
+            (self.ROLE_V, self.v_cores, lambda i: (self.nh + 1) * n, v_cache, v_cache.shape[-1] // TILE),
         )
         user_noc = []
         for c in self.user_noc:
             user_noc += [c.x, c.y]
-        for role, cores, first, cache in roles:
+        for role, cores, first, cache, role_tiles in roles:
             ranges = ttnn.CoreRangeSet([ttnn.CoreRange(cores[0], cores[-1])])
             reader_rt, writer_rt, compute_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
             for i, c in enumerate(cores):
@@ -204,7 +208,7 @@ class SwaDecodeQkv:
                 self.CB_TRANS,
                 self.CB_CACHE,
                 self.CB_META,
-                n,
+                role_tiles,
                 self.block_size,
                 pos_page,
                 pt_page,
@@ -218,7 +222,7 @@ class SwaDecodeQkv:
                 self.CB_C16,
                 self.CB_SIG,
                 self.CB_OUT8,
-                n,
+                role_tiles,
                 self.users,
                 cache_tile,
             ]
@@ -234,7 +238,7 @@ class SwaDecodeQkv:
                 self.CB_C16,
                 self.CB_SIG,
                 self.CB_OUT8,
-                n,
+                role_tiles,
             ]
             for name, ct, rt, config in (
                 ("swa_qkv_reader.cpp", reader_ct, reader_rt, ttnn.ReaderConfigDescriptor()),
@@ -597,10 +601,9 @@ class TtMiMoAttention:
         return max_seq_len
 
     def allocate_kv_cache(self, num_blocks, block_size, dtype=ttnn.bfloat8_b):
-        """[K, V] caches ``[num_blocks, kv_heads, block_size, dim]`` per chip; V is 128 wide when users are split."""
-        v_dim = self.v_head_dim if self.split_users else self.head_dim
+        """[K, V] caches ``[num_blocks, kv_heads, block_size, dim]`` per chip; V keeps its 128 real dims."""
         caches = []
-        for dim in (self.head_dim, v_dim):
+        for dim in (self.head_dim, self.v_head_dim):
             # Allocate and zero on device: at 1M context a host torch.zeros + conversion would move ~GBs per layer.
             cache = ttnn.allocate_tensor_on_device(
                 ttnn.Shape((num_blocks, self.nkv_local, block_size, dim)),
@@ -755,6 +758,10 @@ class TtMiMoAttention:
             lead = len(tables.window) * k_cache.shape[-2]
             k_win = self._cached_window(k_cache, tables.window)
             v_win = self._cached_window(v_cache, tables.window)
+            if v_win.shape[-1] < v.shape[-1]:  # the cache keeps V's real dims; the SDPA sees the padded head dim
+                padded = ttnn.pad(v_win, [(0, 0), (0, 0), (0, 0), (0, v.shape[-1] - v_win.shape[-1])], 0.0)
+                v_win.deallocate(True)
+                v_win = padded
         self._fill(kv_cache, k_rot, v, page_table, user_id, tables)
         if lead:
             q_lead = ttnn.zeros(
@@ -860,6 +867,19 @@ class TtMiMoAttention:
         return self.plan.all_reduce(out)
 
     # ---------------------------------------------------------------- decode
+    def _cache_width_v(self, v, batch, width):
+        """Decode V heads [1, B, 1, D] (height-sharded) -> the cache's ``width`` real dims, height-sharded for
+        paged_update_cache (the input is deallocated)."""
+        if v.shape[-1] == width:
+            return v
+        v_inter = ttnn.to_memory_config(v, ttnn.L1_MEMORY_CONFIG)
+        v.deallocate(True)
+        v_real = ttnn.slice(v_inter, (0, 0, 0, 0), (1, batch, 1, width))
+        v_inter.deallocate(True)
+        v_shard = ttnn.to_memory_config(v_real, self._height_sharded(batch, TILE, width))
+        v_real.deallocate(True)
+        return v_shard
+
     def _height_sharded(self, batch, rows, width):
         grid = ttnn.num_cores_to_corerangeset(batch, ttnn.CoreCoord(8, 8), row_wise=True)
         return ttnn.create_sharded_memory_config(
@@ -934,18 +954,20 @@ class TtMiMoAttention:
             q.deallocate(True)
             k.deallocate(True)
 
+            v_cached = self._cache_width_v(v, x.shape[-2], v_cache.shape[-1])
             update = dict(update_idxs_tensor=cur_pos, page_table=page_table)
             ttnn.experimental.paged_update_cache(k_cache, k_rot, **update)
-            ttnn.experimental.paged_update_cache(v_cache, v, **update)
+            ttnn.experimental.paged_update_cache(v_cache, v_cached, **update)
             k_rot.deallocate(True)
-            v.deallocate(True)
+            v_cached.deallocate(True)
 
-        attn = ttnn.transformer.paged_scaled_dot_product_attention_decode(
+        attn = ttnn.transformer.paged_flash_multi_latent_attention_decode(
             q_rot,
             k_cache,
             v_cache,
-            cur_pos_tensor=cur_pos,
+            head_dim_v=v_cache.shape[-1],
             page_table_tensor=page_table,
+            cur_pos_tensor=cur_pos,
             scale=self.scale,
             sliding_window_size=self.sliding_window,
             attention_sink=self.decode_sinks,
@@ -955,7 +977,7 @@ class TtMiMoAttention:
         )
         if not fused_qkv:
             q_rot.deallocate(True)
-        # Heads concatenated with only V's 128 real dims (the padding columns are zeros), in L1 for the o matmul.
+        # Heads concatenated (V's 128 real dims), in L1 for the o matmul.
         attn_cat = self.concat_heads(attn)
         attn.deallocate(True)
         return self._decode_o(attn_cat, compact)
@@ -996,13 +1018,7 @@ class TtMiMoAttention:
         q.deallocate(True)
         k.deallocate(True)
 
-        # The cache keeps only V's 128 real dims.
-        v_inter = ttnn.to_memory_config(v, ttnn.L1_MEMORY_CONFIG)
-        v.deallocate(True)
-        v_real = ttnn.slice(v_inter, (0, 0, 0, 0), (1, batch, 1, self.v_head_dim))
-        v_inter.deallocate(True)
-        v_shard = ttnn.to_memory_config(v_real, self._height_sharded(batch, TILE, self.v_head_dim))
-        v_real.deallocate(True)
+        v_shard = self._cache_width_v(v, batch, self.v_head_dim)
 
         k_cache, v_cache = kv_cache
         update = dict(update_idxs_tensor=pos_owned if pos_update is None else pos_update, page_table=page_table)
