@@ -108,9 +108,8 @@ void kernel_main() {
 
         // log(Wt) merge iterations; iteration n pairs tiles at distance 2^n.
         for (std::uint32_t m_iter = 0; m_iter < logWt; ++m_iter) {
-            process_iteration<network_stable, fused_keys, tie_order>(
+            process_iteration<network_stable, fused_keys, tie_order, K, logk>(
                 m_iter,
-                K,
                 Wt,
                 num_k_sequences,
                 tiles_per_seq,
@@ -122,7 +121,6 @@ void kernel_main() {
                 index_dest_end,
                 !direction_init,
                 switch_dir,
-                logk,
                 seq_per_2tiles,
                 largest);
         }
@@ -144,9 +142,8 @@ void kernel_main() {
             const bool merge_ascending = (largest == 0) != (((core_id >> (r + 1)) & 1) == 1);
             std::uint32_t merge_num_k_sequences = (2 * Kt * 32) / K;
             uint32_t merge_seq_per_2tiles = initial_seq_per_2tiles;
-            process_iteration<network_stable, fused_keys, tie_order>(
+            process_iteration<network_stable, fused_keys, tie_order, K, logk>(
                 0,  // Single merge step: at m_iter 0 tile t is paired with tile t + Kt
-                K,
                 2 * Kt,  // Own Kt tiles followed by the partner's Kt tiles
                 merge_num_k_sequences,
                 tiles_per_seq,
@@ -158,7 +155,6 @@ void kernel_main() {
                 index_dest_end,
                 !merge_ascending,  // process_iteration rebuilds the kept sequence with ascending = !largest
                 switch_dir,
-                logk,
                 merge_seq_per_2tiles,
                 largest);
 
