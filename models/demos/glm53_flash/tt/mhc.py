@@ -24,14 +24,14 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.demos.deepseek_v3_d_p.tt.mhc.tt_mhc import (  # noqa: F401
-    TtMHCWrap,
-    W,
-    _compute_kernel_config,
-    _upload,
-    build_consts,
-    mhc_expand,
-)
+from models.demos.deepseek_v3_d_p.tt.mhc.tt_mhc import _compute_kernel_config  # noqa: F401  (re-exported)
+from models.demos.deepseek_v3_d_p.tt.mhc.tt_mhc import mhc_expand  # noqa: F401  (re-exported: tt/embedding.py)
+from models.demos.deepseek_v3_d_p.tt.mhc.tt_mhc import TtMHCWrap, W  # noqa: F401  (re-exported)
+from models.demos.deepseek_v3_d_p.tt.mhc.tt_mhc import _cols as _composite_cols
+from models.demos.deepseek_v3_d_p.tt.mhc.tt_mhc import _mix as _composite_mix
+from models.demos.deepseek_v3_d_p.tt.mhc.tt_mhc import _project as _composite_project
+from models.demos.deepseek_v3_d_p.tt.mhc.tt_mhc import _streams as _composite_streams
+from models.demos.deepseek_v3_d_p.tt.mhc.tt_mhc import _upload, build_consts  # noqa: F401  (re-exported)
 from models.demos.glm53_flash.custom_ops.mhc_post_mix.op import MhcPostMix
 from models.demos.glm53_flash.tt.config import GLM53FlashConfig
 
@@ -45,9 +45,18 @@ MHC_IMPL = os.environ.get("GLM53_MHC_IMPL", "fast")
 # exact: both operands split into 3 bf16 parts, the 6 significant products in one stacked-K matmul (3e-9);
 # 2 = the cheaper 2-way split, 3 products (3e-6). See TtMHCFast._exact_mm.
 MHC_EXACT = {"0": 0, "1": 3, "2": 2, "3": 3}[os.environ.get("GLM53_MHC_EXACT", "0")]
-# 1: the fused exact fp32 post-block kernel custom_ops/mhc_post_mix (a model-local ttnn.generic_op: one program
-# replacing the coefficient extraction, the block-diagonal matmul and the addcmul; exact like the composite chain)
-MHC_POST_KERNEL = os.environ.get("GLM53_MHC_POST_KERNEL", "0") == "1"
+# 1/2: the fused exact fp32 post-block kernel custom_ops/mhc_post_mix (a model-local ttnn.generic_op: one program
+# replacing the coefficient extraction, the block-diagonal matmul and the addcmul; exact like the composite
+# chain); 2 = the v2 kernel (resident operands, x8 coefficient tiles, SFPU FMAs) reading the bf16 sublayer output
+# directly, so the post-block is the single op
+MHC_POST_KERNEL = int(os.environ.get("GLM53_MHC_POST_KERNEL", "0"))
+# prefill (T > 32) pre-block: 1 = the composite's projection and exact fp32 mix, op for op (default; the
+# accuracy gate); 0 = the earlier stream-major n-split matmul + fast_reduce_nc path (A/B only)
+MHC_PREFILL_EXACT = os.environ.get("GLM53_MHC_PREFILL_EXACT", "1") == "1"
+# decode (T <= 32) pre-block: 1 = exact fp32 reductions of the K-split partials (ttnn.sum, SFPU) instead of
+# fast_reduce_nc (bf16 rounding) and h through the post-mix kernel's pre-mix mode + the composite's typecast +
+# rms_norm (default, needs GLM53_MHC_POST_KERNEL=2); 0 = fast_reduce_nc + the P@x matmul + sharded norm (A/B)
+MHC_DECODE_EXACT = os.environ.get("GLM53_MHC_DECODE_EXACT", "1") == "1"
 
 
 @dataclass(frozen=True)
@@ -194,10 +203,11 @@ class TtMHCFast(LightweightModule):
         self.cfg = cfg
         self.exact = MHC_EXACT if exact is None else int(exact)  # residual update: 0 | 2 | 3 bf16 parts
         assert self.exact in (0, 2, 3), self.exact
-        self.post_kernel = MHC_POST_KERNEL if post_kernel is None else bool(post_kernel)
+        self.post_kernel = MHC_POST_KERNEL if post_kernel is None else int(post_kernel)  # 0 | 1 | 2 (version)
+        assert self.post_kernel in (0, 1, 2), self.post_kernel
         self.n = int(cfg.n)
         # the fused post-block as a model-local generic op (custom_ops/mhc_post_mix); output allocated per call
-        self.post_mix = MhcPostMix(self.n) if self.post_kernel else None
+        self.post_mix = MhcPostMix(self.n, version=self.post_kernel) if self.post_kernel else None
         self.C = int(cfg.dim)
         self.nC = self.n * self.C
         self.iters = int(cfg.sinkhorn_iters)
@@ -218,6 +228,9 @@ class TtMHCFast(LightweightModule):
         fn_t[:, :mix_hc] = fn.float().t() * (nC**0.5)
         self.fn_k = _upload(device, fn_t, (1, self.ks, nC // self.ks, W), dtype)
         self.fn_s = ttnn.reshape(self.fn_k, [1, n, C, W])
+        # prefill (T > 32): the composite's own projection weight and ops, so the Sinkhorn input is
+        # bit-identical to TtMHCWrap's (accuracy gate: the prefill path must match the composite)
+        self.fn_T = _upload(device, fn.float().t(), (1, 1, nC, mix_hc), dtype)
         self.eps_nc = self.norm_eps * nC
         self.consts = _upload(device, build_consts(cfg, scale, base), (8, W, W), dtype)
         # the K-split matmul's single output tile per batch: one core per batch (32 batches)
@@ -345,6 +358,10 @@ class TtMHCFast(LightweightModule):
         return c
 
     def _reduce_batches(self, t: ttnn.Tensor) -> ttnn.Tensor:
+        """``[1,K,Tp,w]`` -> ``[1,1,Tp,w]`` sum over the K-split batches: exact fp32 (``ttnn.sum``, SFPU; it
+        transposes, 15 us on these tiny tensors) or ``fast_reduce_nc`` (rounds the partials to bf16, 4e-4)."""
+        if MHC_DECODE_EXACT:
+            return ttnn.sum(t, dim=1, keepdim=True, compute_kernel_config=self.ckc)
         return ttnn.experimental.fast_reduce_nc(t, dims=[1], compute_kernel_config=self.ckc)
 
     def _rowmask_for(self, T: int) -> ttnn.Tensor:
@@ -408,6 +425,10 @@ class TtMHCFast(LightweightModule):
     def _project(self, x32: ttnn.Tensor, x_sm: ttnn.Tensor) -> ttnn.Tensor:
         """``[1,1,Tp,nC]`` -> mixes ``[1,1,Tp,32]`` = RMSNorm(x) @ fn_T (zero columns past mix_hc)."""
         Tp = x32.shape[-2]
+        if Tp != TILE and MHC_PREFILL_EXACT:
+            # prefill: the composite's projection, op for op (matmul + sum of squares + rsqrt scale), so
+            # mixes is bit-identical to TtMHCWrap.project; [1,1,Tp,24] (one tile wide)
+            return _composite_project(x32, self.fn_T, self.norm_eps, self.ckc)
         if Tp == TILE:
             xk, fn_k, pc = ttnn.experimental.view(x32, [1, self.ks, Tp, self.nC // self.ks]), self.fn_k, self.pc_ksplit
         else:
@@ -433,6 +454,19 @@ class TtMHCFast(LightweightModule):
         """h ``[1,1,Tp,C]`` = sum_i pre_i x_i (fp32 interleaved), or with ``norm = (weight, eps)`` the
         sublayer's input ``RMSNorm(h)`` in bf16 interleaved."""
         Tp = x32.shape[-2]
+        if Tp == TILE and MHC_DECODE_EXACT and self.post_kernel == 2:
+            # exact fp32 h = sum_i pre_i x_i through the post-mix kernel's pre-mix mode (the P@x matmul rounds
+            # its operands), then the composite's typecast + rms_norm so the sublayer input matches it
+            h = self.post_mix.allocate_h(x32)
+            self.post_mix.h_mix(x32, _view_rows(pre, Tp), h)
+            if norm is None:
+                return h
+            weight, eps = norm
+            hb = ttnn.typecast(h, ttnn.bfloat16)
+            ttnn.deallocate(h)
+            hn = ttnn.rms_norm(hb, epsilon=eps, weight=weight, compute_kernel_config=self.ckc)
+            ttnn.deallocate(hb)
+            return hn
         if Tp == TILE:
             v = ttnn.matmul(_view_tile_width(pre), self.s_pre, compute_kernel_config=self.ckc)  # [1,1,Tp,nTp]
             P = ttnn.multiply(v, self.i_pre)
@@ -464,11 +498,17 @@ class TtMHCFast(LightweightModule):
             h = ttnn.sharded_to_interleaved(hn, ttnn.DRAM_MEMORY_CONFIG)
             ttnn.deallocate(hn)
             return h
-        pre_c = self._coef(pre, self.m_pre)  # [1,n,Tp,1]
-        prod = ttnn.multiply(x_sm, pre_c)  # [1,n,Tp,C]
-        ttnn.deallocate(pre_c)
-        h = ttnn.experimental.fast_reduce_nc(prod, dims=[1], compute_kernel_config=self.ckc)
-        ttnn.deallocate(prod)
+        if MHC_PREFILL_EXACT:
+            # prefill: the composite's exact fp32 mix (multiply + addcmul over stream slices; fast_reduce_nc
+            # would round the partial products to bf16)
+            pre4 = ttnn.reshape(pre, [1, 1, Tp, self.n])
+            h = _composite_mix(_composite_streams(x32, self.n), _composite_cols(pre4, self.n))
+        else:
+            pre_c = self._coef(pre, self.m_pre)  # [1,n,Tp,1]
+            prod = ttnn.multiply(x_sm, pre_c)  # [1,n,Tp,C]
+            ttnn.deallocate(pre_c)
+            h = ttnn.experimental.fast_reduce_nc(prod, dims=[1], compute_kernel_config=self.ckc)
+            ttnn.deallocate(prod)
         if norm is None:
             return h
         weight, eps = norm
@@ -482,7 +522,10 @@ class TtMHCFast(LightweightModule):
         """x ``[1,1,T,nC]`` -> (h ``[1,1,T,C]``, post ``[Tp,n]``, comb ``[Tp,n*n]``, x32, x_sm, owned)."""
         T = x.shape[-2]
         x32 = _view_rows(x, _rows_up(T))
-        x_sm, owned = self._stream_major(x32)
+        if x32.shape[-2] != TILE and self.post_kernel and MHC_PREFILL_EXACT:
+            x_sm, owned = None, False  # prefill through the composite projection/mix + kernel post-block: unused
+        else:
+            x_sm, owned = self._stream_major(x32)
         mixes = self._project(x32, x_sm)
         pre, post, comb = ttnn.experimental.deepseek_prefill.mhc_split_sinkhorn(
             mixes, self.consts, self.n, self.iters, self.eps
@@ -565,7 +608,10 @@ class TtMHCFast(LightweightModule):
         """``[1,1,T,nC]`` -> mixes ``[1,1,T,32]`` (columns ``[mix_hc, 32)`` are zero)."""
         T = x.shape[-2]
         x32 = _view_rows(x, _rows_up(T))
-        x_sm, owned = self._stream_major(x32)
+        if x32.shape[-2] != TILE and self.post_kernel and MHC_PREFILL_EXACT:
+            x_sm, owned = None, False  # prefill through the composite projection/mix + kernel post-block: unused
+        else:
+            x_sm, owned = self._stream_major(x32)
         mixes = self._project(x32, x_sm)
         if owned:
             ttnn.deallocate(x_sm)
@@ -610,8 +656,10 @@ class TtMHCFast(LightweightModule):
             cast = ttnn.typecast(h, sublayer_dtype)
             ttnn.deallocate(h)
         out = sublayer(cast)
-        if sublayer_dtype is None:
-            y = out
+        if sublayer_dtype is None or self.post_kernel == 2:
+            y = out  # the v2 post-block kernel reads the bf16 sublayer output directly (widened on unpack)
+            if cast is not h and cast is not out:
+                ttnn.deallocate(cast)
         else:
             y = ttnn.typecast(out, x.dtype)
             ttnn.deallocate(out)

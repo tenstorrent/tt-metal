@@ -41,15 +41,18 @@ def _up(device, t: torch.Tensor, dtype=ttnn.float32) -> ttnn.Tensor:
 
 
 def expand_x8(post: torch.Tensor, comb: torch.Tensor, n: int):
-    """The v2 kernel's pre-expanded coefficient layout: post_x8 [T, 32] with post[:, j] in columns 8j..8j+7,
-    comb_x8 [T, n*32] with comb[:, i*n+j] in columns 32j + 8i .. +7 (tile j = stream j)."""
+    """The v2 kernel's pre-expanded coefficient ("lane") layout: column group m of a 32-wide tile = face m // 2
+    (columns 0-15 / 16-31), column parity m % 2; post_x8 [T, 32] holds post[:, m] in group m, comb_x8 [T, n*32]
+    holds comb[:, i*n+j] in group i of tile j (= stream j)."""
     T = post.shape[0]
     post_x8 = torch.zeros(T, 32, dtype=post.dtype)
     comb_x8 = torch.zeros(T, n * 32, dtype=comb.dtype)
-    for j in range(n):
-        post_x8[:, 8 * j : 8 * j + 8] = post[:, j : j + 1]
-        for i in range(n):
-            comb_x8[:, 32 * j + 8 * i : 32 * j + 8 * i + 8] = comb[:, i * n + j : i * n + j + 1]
+    cols = torch.arange(32)
+    group = (cols // 16) * 2 + (cols % 2)
+    for m in range(n):
+        post_x8[:, group == m] = post[:, m : m + 1]
+        for j in range(n):
+            comb_x8[:, 32 * j + cols[group == m]] = comb[:, m * n + j : m * n + j + 1]
     return post_x8, comb_x8
 
 
@@ -103,7 +106,7 @@ def test_post_mix_random(mesh_device, version, T, collapse):
 @pytest.mark.skipif(not HAS_V2, reason="v2 kernels not present")
 def test_post_mix_v2_layouts(mesh_device, T, collapse, y_dtype, x8):
     """v2 input variants: the bf16 sublayer output read directly (y bf16-exact, widened on unpack) and the
-    pre-expanded x8 coefficient tiles (what the fused pre-block will emit) instead of the raw Sinkhorn tiles."""
+    pre-expanded lane-layout coefficient tiles (what the fused pre-block will emit) instead of the raw tiles."""
     n, C = 4, 4096
     x, y, post, comb = _random_inputs(T, n, C, seed=3)
     if y_dtype == ttnn.bfloat16:
@@ -193,3 +196,27 @@ def test_post_mix_real(mesh_device, version, collapse):
         comp = comp.reshape(T, n, C).mean(1)
     rel_c = _err(f"v{version} real collapse={collapse} vs composite hc_post", comp, got)
     assert rel_c < 1e-6
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+@pytest.mark.parametrize("T", [32, 256])
+@pytest.mark.parametrize("lane", [False, True])
+@pytest.mark.skipif(not HAS_V2, reason="v2 kernels not present")
+def test_post_mix_hmode(mesh_device, T, lane):
+    """The pre-mix mode: h = sum_i pre_i x_i (the sublayer input before its norm) from the raw ``pre`` tile or its
+    lane layout, exact fp32."""
+    n, C = 4, 4096
+    g = torch.Generator().manual_seed(11)
+    x = torch.randn(T, n * C, generator=g)
+    pre = torch.sigmoid(torch.randn(T, n, generator=g)) + 1e-6
+    op = MhcPostMix(n, version=2)
+    xd = _up(mesh_device, x.reshape(1, 1, T, n * C))
+    pre_in = pre
+    if lane:
+        pre_in, _ = expand_x8(pre, torch.zeros(T, n * n), n)
+    h = op.allocate_h(xd)
+    op.h_mix(xd, _up(mesh_device, pre_in), h)
+    assert tuple(h.shape) == (1, 1, T, C), h.shape
+    ref = (pre.double()[:, :, None] * x.double().reshape(T, n, C)).sum(1)
+    rel = _err(f"v2 h-mode T={T} lane={lane}", ref, ttnn.to_torch(h)[0, 0])
+    assert rel < 1e-6

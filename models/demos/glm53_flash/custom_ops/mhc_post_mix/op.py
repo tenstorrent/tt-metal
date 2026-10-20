@@ -72,8 +72,9 @@ class MhcPostMix:
     CB_OUT = 16  # n (or 1) output tiles per position, double buffered
 
     # v2 CB plan: X, Y as above; RAW (c_2) the raw comb + post tiles of a token-tile (expanded by the compute
-    # kernel); COEF (c_3) the n + 1 "x8" coefficient tiles (comb of stream j: comb[:, i*n+j] in columns
-    # 8i..8i+7; post[:, j] in columns 8j..8j+7); OUT as above.
+    # kernel); COEF (c_3) the n + 1 lane-layout coefficient tiles (comb of stream j: comb[:, i*n+j] in column
+    # group i, post[:, j] in column group j; group m = face m//2 (columns 0-15 / 16-31), column parity m%2 --
+    # the column sets one SFPU slot load covers, see kernels/mhc_sfpu_x8.h); OUT as above.
     CB_COEF = 3
 
     def __init__(self, n: int = 4, math_fidelity=ttnn.MathFidelity.HiFi4, version: int = 1):
@@ -218,10 +219,19 @@ class MhcPostMix:
         return ttnn.generic_op([x, y, post, comb, out], program)
 
     # ------------------------------------------------------------------ v2
-    def _call_v2(self, x, y, post, comb, out, collapse):
-        """v2: resident operands in the 8-slot fp32 dest, x8 coefficient tiles, hand-written SFPU mix; y may be
-        the bf16 sublayer output. ``post``/``comb`` either raw (``[T,n]`` / ``[T,n*n]``, expanded on device once
-        per token-tile) or already in the x8 layout (``[T,32]`` / ``[T,n*32]``)."""
+    def h_mix(self, x: ttnn.Tensor, pre: ttnn.Tensor, out: ttnn.Tensor) -> ttnn.Tensor:
+        """The pre-mix h = sum_i pre_i x_i (the sublayer input before its norm), exact fp32: ``x [1,1,T,n*C]``,
+        ``pre [T,n]`` (raw, padded tile) or its lane layout ``[T,32]``, ``out [1,1,T,C]`` fp32 pre-allocated.
+        The v2 kernels in HMODE (one output tile per position, no y)."""
+        return self._call_v2(x, x, pre, x, out, collapse=True, hmode=True)
+
+    def allocate_h(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        return self.allocate_output(x, collapse=True)
+
+    def _call_v2(self, x, y, post, comb, out, collapse, hmode=False):
+        """v2: resident operands in the 8-slot fp32 dest, lane-layout coefficient tiles, hand-written SFPU mix;
+        y may be the bf16 sublayer output. ``post``/``comb`` either raw (``[T,n]`` / ``[T,n*n]``, expanded on
+        device once per token-tile) or already in the lane layout (``[T,32]`` / ``[T,n*32]``)."""
         n = self.n
         assert n in (2, 4), "v2 pairs coefficients in the expansion (n even, <= 4)"
         for name, t in (("x", x), ("post", post), ("comb", comb), ("out", out)):
@@ -231,18 +241,21 @@ class MhcPostMix:
             assert t.layout == ttnn.TILE_LAYOUT, f"mhc_post_mix: {name} must be TILE layout"
             assert not t.memory_config().is_sharded(), f"mhc_post_mix: {name} must be interleaved"
         T, Cn = x.padded_shape[-2], x.padded_shape[-1]
-        C = y.padded_shape[-1]
+        C = Cn // n if hmode else y.padded_shape[-1]  # hmode: no y (x stands in for the unused accessors)
         assert T % TILE == 0 and C % TILE == 0, f"mhc_post_mix: T={T}, C={C} must be tile multiples"
         assert Cn == n * C, f"mhc_post_mix: x width {Cn} != n*C = {n * C}"
         assert y.padded_shape[-2] == T and post.padded_shape[-2] == T and comb.padded_shape[-2] == T
-        if post.shape[-1] == n and comb.shape[-1] == n * n:
+        if hmode:
+            expand = post.shape[-1] == n  # raw pre [T,n] (expanded on device) or its lane layout [T,32]
+            assert post.padded_shape[-1] == TILE, "pre must be one tile wide"
+        elif post.shape[-1] == n and comb.shape[-1] == n * n:
             expand = True
             assert post.padded_shape[-1] == TILE and comb.padded_shape[-1] == TILE, "raw post/comb: one tile wide"
         else:
             expand = False
             assert (
                 post.padded_shape[-1] == TILE and comb.padded_shape[-1] == n * TILE
-            ), f"x8 post/comb must be [T,32] / [T,{n * TILE}] (got {post.padded_shape}, {comb.padded_shape})"
+            ), f"lane-layout post/comb must be [T,32] / [T,{n * TILE}] (got {post.padded_shape}, {comb.padded_shape})"
         assert list(out.padded_shape)[-2:] == [T, C if collapse else Cn], f"out {out.padded_shape} shape mismatch"
 
         R, Ct = T // TILE, C // TILE
@@ -262,12 +275,12 @@ class MhcPostMix:
         cbs = [
             cb(self.CB_X, 2 * n),
             cb(self.CB_Y, 2, y.dtype, y_bytes),
-            cb(self.CB_RAW, 2),
-            cb(self.CB_COEF, n + 1),
+            cb(self.CB_RAW, 1 if hmode else 2),
+            cb(self.CB_COEF, 1 if hmode else n + 1),
             cb(self.CB_OUT, 2 * out_tiles),
         ]
 
-        reader_ct = [self.CB_X, self.CB_Y, self.CB_RAW, self.CB_COEF, n, Ct, int(expand)]
+        reader_ct = [self.CB_X, self.CB_Y, self.CB_RAW, self.CB_COEF, n, Ct, int(expand), int(hmode)]
         for t in (x, y, post, comb):
             reader_ct += ttnn.TensorAccessorArgs(t).get_compile_time_args()
         writer_ct = [self.CB_OUT, n, Ct, int(collapse)] + ttnn.TensorAccessorArgs(out).get_compile_time_args()
@@ -282,6 +295,7 @@ class MhcPostMix:
             int(collapse),
             f32_bits(1.0 / n),
             int(expand),
+            int(hmode),
         ]
 
         reader_rt, writer_rt, compute_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
