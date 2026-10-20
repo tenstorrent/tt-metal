@@ -86,6 +86,18 @@ DEVICE_CONFIGS = {
         "tp_axis": 0,
         "cluster_axis": 0,
     },
+    # Same as wh_4x8_ring with 8 KB fabric packets (4 bf16 tiles per packet instead of 2).
+    "wh_4x8_ring_8k": {
+        "mesh_shape": (4, 8),
+        "fabric_config": "FABRIC_1D_RING",
+        "fabric_router_config_payload": 8192,
+        "topology": "Ring",
+        "num_links": 4,
+        "num_workers_per_link": 2,
+        "sp_axis": 1,
+        "tp_axis": 0,
+        "cluster_axis": 0,
+    },
     "wh_4x8_linear": {
         "mesh_shape": (4, 8),
         "fabric_config": "FABRIC_1D",
@@ -888,9 +900,11 @@ def _build_op_runner(cfg, mesh_device, M, K, N, dtype, is_agmm, uc_cfg, core_gri
     Non-AGMM path: replicated input/weight/bias; minimal_matmul or minimal_matmul_split
     based on use_case.
     """
+    # MM_SWEEP_FIDELITY=LoFi|HiFi2|HiFi3|HiFi4 overrides the model's HiFi2 for A/B runs.
+    fidelity = getattr(ttnn.MathFidelity, os.environ.get("MM_SWEEP_FIDELITY", "HiFi2"))
     compute_config = ttnn.init_device_compute_kernel_config(
         mesh_device.arch(),
-        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_fidelity=fidelity,
         math_approx_mode=uc_cfg.get("math_approx_mode", False),
         fp32_dest_acc_en=True,
         packer_l1_acc=True,
