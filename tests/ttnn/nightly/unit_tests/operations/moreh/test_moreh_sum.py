@@ -597,3 +597,17 @@ def test_moreh_sum_large_integer_magnitude(input_shape, dim, device):
     logger.debug(f"{torch.equal(torch_output, tt_output_cpu)}")
 
     assert torch.equal(torch_output, tt_output_cpu)
+
+
+@pytest.mark.parametrize(
+    "input_shape, dim",
+    [([16384, 32], 0), ([32, 16384], 1), ([128, 128], [0, 1]), ([16384, 1, 32, 32], 0)],
+    ids=["H", "W", "HW", "NC"],
+)
+def test_moreh_sum_bfloat16_long_reduction_default_config(input_shape, dim, device):
+    torch_input = torch.ones(input_shape, dtype=torch.bfloat16)
+    tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    tt_output = ttnn.to_torch(ttnn.operations.moreh.sum(tt_input, dim=dim, keepdim=True))
+
+    assert torch.equal(tt_output.float(), torch.sum(torch_input.float(), dim, keepdim=True))
