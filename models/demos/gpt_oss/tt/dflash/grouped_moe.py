@@ -64,6 +64,9 @@ class GroupedMoE:
         # weight reads in flight per core (units, split over both NOCs): gate|up 288 -> 241 us at 3 (vs 1); down: no
         # gain past 6
         self.gu_depth, self.dn_depth = 3, 6
+        # gate|up unit pages split in gu_split (consecutive pages in consecutive DRAM banks: one 103 KB page kept a core
+        # on one bank per unit; unit test 280 -> 251 us at 10)
+        self.gu_split = int(os.environ.get("B32_GMOE_GU_SPLIT", "10"))
         grid = mesh.compute_with_storage_grid_size()
         self.gx = grid.x
         self.cores_all = ttnn.CoreRangeSet(
@@ -124,7 +127,7 @@ class GroupedMoE:
             edge = ttnn.concat(edges, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             for t in edges:
                 t.deallocate(True)
-            gu = self._relayout(W["gate"], W["up"], E * self.ku, 2 * self.kt * 576, down=False)
+            gu = self._relayout(W["gate"], W["up"], E * self.ku, 2 * self.kt * 576, down=False, split=self.gu_split)
             dn = self._relayout(W["down"], edge, E * self.nu_down, self.ku * 576, down=True)
             edge.deallocate(True)
             self.layers.append(
@@ -153,12 +156,23 @@ class GroupedMoE:
         # gather [64 x 32, 256] x [256, hidden]: 10 x 8 cores, 8 x 9 output tiles each; combine [256, 64 x 32] x
         # [64 x 32, hidden]: 1 x 9 output tiles per core, 16-tile K blocks
         self.gather_pc = _pc2d(10, 8, rows // TILE, MAX_SLOTS // 8, self.kt // 10, 3)
+        # X_g block sharded as the gather's 10 x 8 output blocks (B32_GMOE_XG_SHARDED): a slot's row is 10 contiguous
+        # 9-tile runs, the gate|up reader loads it in 10 reads instead of 90 single-tile ones
+        self.xg_sharded = os.environ.get("B32_GMOE_XG_SHARDED", "1") == "1"
+        if self.xg_sharded:
+            self.xg_mc = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1,
+                ttnn.ShardSpec(ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(9, 7))]),
+                               [MAX_SLOTS // 8 * TILE, self.kt // 10 * TILE], ttnn.ShardOrientation.ROW_MAJOR),
+            )  # fmt: skip
+            self.xg_noc = [mesh.worker_core_from_logical_core(ttnn.CoreCoord(j, 0)).x for j in range(10)]
+            self.xg_noc += [mesh.worker_core_from_logical_core(ttnn.CoreCoord(0, i)).y for i in range(8)]
         self.combine_pc = _pc2d(10, 8, 8, 1, self.kt // 10, 3)
 
-    def _relayout(self, src0, src1, units, page, down):
+    def _relayout(self, src0, src1, units, page, down, split=1):
         """Every unit's weight tiles into one contiguous page (fused_decode/kernels/gmoe_relayout.cpp): a [units, page]
-        row-major DRAM tensor (BFP4 bytes)."""
-        dst = ttnn.empty([1, 1, units, page // 4], dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.mesh,
+        row-major DRAM tensor (BFP4 bytes); split: as [units x split, page / split]."""
+        dst = ttnn.empty([1, 1, units * split, page // 4 // split], dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.mesh,
                          memory_config=ttnn.DRAM_MEMORY_CONFIG)  # fmt: skip
         cores = self.cores_all
         nt = src0.shape[-1] // TILE
@@ -169,7 +183,7 @@ class GroupedMoE:
             kernel_source=str(KERNEL_DIR / "gmoe_relayout.cpp"), core_ranges=cores, compile_time_args=ct,
             runtime_args=[], common_runtime_args=[t.buffer_address() for t in (src0, src1, dst)],
             config=ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.NOC_0),
-            defines=[("GMOE_RELAYOUT_DOWN", "1")] if down else [],
+            defines=([("GMOE_RELAYOUT_DOWN", "1")] if down else []) + ([("GMOE_RELAYOUT_SPLIT", str(split))] if split > 1 else []),
         )  # fmt: skip
         cbs = [self._cb(0, ttnn.uint32, page, 1, cores)]
         ttnn.generic_op([src0, src1, dst], ttnn.ProgramDescriptor(kernels=[k], semaphores=[], cbs=cbs))
@@ -254,7 +268,7 @@ class GroupedMoE:
     def gather(self, x8):
         """x8: [1, 1, rows, hidden] BFP8 -> X_g [1, 1, 72 x 32, hidden] BFP8 (L1)."""
         return ttnn.matmul(self.p1t, x8, program_config=self.gather_pc, compute_kernel_config=self.ck_hifi2,
-                           dtype=ttnn.bfloat8_b, memory_config=ttnn.L1_MEMORY_CONFIG)  # fmt: skip
+                           dtype=ttnn.bfloat8_b, memory_config=self.xg_mc if self.xg_sharded else ttnn.L1_MEMORY_CONFIG)  # fmt: skip
 
     def _meta_cbs(self, cores, base):
         page = 16 * ((4 * (2 + 2 * E) + 15) // 16)
@@ -271,11 +285,17 @@ class GroupedMoE:
             rct += ttnn.TensorAccessorArgs(t).get_compile_time_args()
         wct = [cb_mw, cb_out, self.ku] + ttnn.TensorAccessorArgs(self.ag).get_compile_time_args()
         cct = [cb_mc, cb_x, cb_w, cb_b, cb_out, self.kt, self.ku, cb_mm]
+        rca = [t.buffer_address() for t in io]
+        xg_arg = len(rca)
+        if self.xg_sharded:
+            rca += self.xg_noc
         dm = ttnn.DataMovementConfigDescriptor
         kernels = [
             ttnn.KernelDescriptor(
                 kernel_source=str(KERNEL_DIR / "gmoe_gu_reader.cpp"), core_ranges=cores, compile_time_args=rct,
-                runtime_args=[], common_runtime_args=[t.buffer_address() for t in io], defines=[("GMOE_DEPTH", str(self.gu_depth))],
+                runtime_args=[], common_runtime_args=rca,
+                defines=[("GMOE_DEPTH", str(self.gu_depth)), ("GMOE_SPLIT", str(self.gu_split))]
+                + ([("GMOE_XG_SHARDED", str(xg_arg)), ("GMOE_XG_SX", "10"), ("GMOE_XG_RS", str(MAX_SLOTS // 8))] if self.xg_sharded else []),
                 config=dm(processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.NOC_0, noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC),
             ),
             ttnn.KernelDescriptor(

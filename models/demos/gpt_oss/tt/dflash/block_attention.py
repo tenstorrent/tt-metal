@@ -57,6 +57,7 @@ class BlockAttention:
         q_rows=False,
         min_chunks=None,
         swin=0,
+        users=1,
     ):
         """cores: cores_needed(n_kv, rows, slices) logical cores: (kv head g, tile group t, slice s) = cores[(g Tt + t)
         slices + s], each tile group (packed Q tile t, one per core) with its own slices and merge tree.
@@ -64,6 +65,8 @@ class BlockAttention:
         (uniform only): the rows attend the last `window` positions [pos[M - 1] + 1 - window, pos[M - 1]].
         q_rows: q comes in the rows layout [1, M, heads, 64] (the reader gathers the packed tiles: no repacking op).
         swin (not uniform): a sliding window, row r attends [pos[r] + 1 - swin, pos[r]] (with the sinks).
+        users (batch-32 verify, parts(user=...)): users side by side in one kernel set, cores user-major
+        (cores_needed cores each).
         """
         assert head_dim == 64 and n_heads // n_kv == 8 and rows == 8
         assert uniform or not window
@@ -73,7 +76,8 @@ class BlockAttention:
         self.uniform, self.window, self.q_rows, self.swin = uniform, window, q_rows, swin
         # one DRAM read of each K / V group per (kv head, slice): the tile-group-1 core copies it from the tile-group-0
         # core's L1
-        assert len(cores) == self.cores_needed(n_kv, rows, slices)
+        assert len(cores) == users * self.cores_needed(n_kv, rows, slices)
+        self.users = users
         self.core_list = list(cores)
         self.grid = mesh_device.compute_with_storage_grid_size()
         assert len(self.core_list) < 0xFF
@@ -150,8 +154,8 @@ class BlockAttention:
         INT32 [>= M] (row r at pos[r], non-decreasing, consecutive rows within 32 positions); page_table: INT32 [*,
         blocks] (row 0 used); sinks: the heads' [heads, 32] BF16 sink tile; wait = (semaphore id, count): the QKV
         writers' signal that q and the block's K / V rows are written.
-        user = (u, users) (batch-32 verify, q_rows): the block of user u among `users`: positions pos[M u ..], page table
-        row u, Q rows (and the output, `out` in the same rows layout [1, M users, heads, 64]) row r users + u.
+        user = (u, users) (batch-32 verify, q_rows): the block of user u among `users` (with self.users > 1: users u ..
+        u + self.users - 1, one per core group): positions pos[M u ..], page table row u, Q rows (and the output, `out` in the same rows layout [1, M users, heads, 64]) row r users + u.
         heads_io (with user): q in the heads layout [1, heads, M users, 64] (the RoPE output) and out in the
         concatenated-heads layout [1, 1, M users, heads * 64] (o_proj's input), row r users + u."""
         out = self.out if out is None else out
@@ -250,7 +254,7 @@ class BlockAttention:
             reader_common += [pn[w] | (pn[w + 1] << 16) for w in range(0, len(pn), 2)]
         writer_common = [out.buffer_address()] + idx_words + noc_words
         defines = [("BA_WAIT_SEM", str(wait[0])), ("BA_WAIT_N", str(wait[1])), ("BA_TREE_SEM", str(TREE_SEM))]
-        defines += [("BA_TQ", str(self.Tt)), ("BA_GX", str(gx))]
+        defines += [("BA_TQ", str(self.Tt)), ("BA_GX", str(gx)), ("BA_NKV", str(self.nkv))]
         defines += [("BA_NIDX", str(len(idx_words))), ("BA_CB_POS", str(cb_scr2))]
         defines += [("BA_LAND_SEM", str(LAND_SEM)), ("BA_COPY_SEM", str(COPY_SEM))]
         if self.uniform:

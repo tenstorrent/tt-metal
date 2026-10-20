@@ -21,7 +21,8 @@
 // common runtime args: [q_addr, k_addr, v_addr, pos_addr, pt_addr, sink_addr, mask_lib_addr, core index table
 // (BA_NIDX words, ba_common.hpp), noc (x << 8 | y) per core (2 per word), (BA_PATCH..: k_src, v_src, noc (x << 8 | y)
 // per block row (2 per word))]
-// BA_USER_ARG (batch-32 verify, dflash/batched.py): the block of user u = common arg BA_USER_ARG: its positions are
+// BA_USER_ARG (batch-32 verify, dflash/batched.py): the block of user u = common arg BA_USER_ARG + core index / (cores
+// per user: the program's users side by side, user-major core list): its positions are
 // pos[M u .. M u + M - 1], its page table row u, its Q rows (rows layout, BA_Q_ROWS) row r = q row r BA_Q_RSTRIDE + u.
 // BA_Q_HEADS (with BA_USER_ARG): Q in the heads layout [1, heads, rows, 64] (BA_Q_HEADS row tiles per head) instead.
 // BA_UNIFORM: every row attends [0, pos[M - 1]] (the drafter's block; [pos[M - 1] + 1 - BA_WINDOW, ..] with a window),
@@ -48,7 +49,7 @@ void kernel_main() {
     const uint32_t sink_addr = get_common_arg_val<uint32_t>(5);
     const uint32_t lib_addr = get_common_arg_val<uint32_t>(6);
     const uint32_t ci = ba_core_index(7);  // (kv head g, tile group t, slice s) = ((g BA_TQ + t) S + s)
-    const uint32_t g = ci / get_compile_time_arg_val(12) / BA_TQ;
+    const uint32_t g = (ci / get_compile_time_arg_val(12) / BA_TQ) % BA_NKV;
     const uint32_t s = ci % get_compile_time_arg_val(12);
     const uint32_t t = (ci / get_compile_time_arg_val(12)) % BA_TQ;  // this core's packed Q tile
 
@@ -91,7 +92,9 @@ void kernel_main() {
     cb_reserve_back(cb_scr, 1);
     const uint32_t scr = get_write_ptr(cb_scr);  // [pos page | page-table row]
 #ifdef BA_USER_ARG
-    const uint32_t user = get_common_arg_val<uint32_t>(BA_USER_ARG);
+    // (several users per program: core list user-major, BA_NKV x BA_TQ x S cores per user)
+    const uint32_t user =
+        get_common_arg_val<uint32_t>(BA_USER_ARG) + ci / (get_compile_time_arg_val(12) * BA_TQ * BA_NKV);
     // this user's M positions: the 64-byte aligned window holding them
     const uint32_t pos_off = user * M * 4, pos_a = pos_off & ~63u;
     noc_async_read(s_pos.get_noc_addr(0) + pos_a, scr, 64);

@@ -667,6 +667,8 @@ class _UserBlockAttention:
         per = BlockAttention.cores_needed(n_kv, block, slices)
         cores = [ttnn.CoreCoord(x, y) for y in range(grid.y) for x in range(grid.x)]
         assert per * per_program <= len(cores) and users % per_program == 0
+        # one kernel set for the program's users (a set per user: 3 x per_program kernel groups to dispatch, the
+        # sliding-window program 57 us)
         self.inst = [
             BlockAttention(
                 mesh,
@@ -675,15 +677,15 @@ class _UserBlockAttention:
                 n_kv,
                 head_dim,
                 block_size,
-                cores[j * per : (j + 1) * per],
+                cores[: per * per_program],
                 slices,
                 q_rows=True,
                 min_chunks=min_chunks,
                 uniform=uniform,
                 window=window,
                 swin=swin,
+                users=per_program,
             )
-            for j in range(per_program)
         ]
 
     def __call__(self, q, k_cache, v_cache, pos_ui, page_table, sinks, scale, heads_io=False):
@@ -700,7 +702,7 @@ class _UserBlockAttention:
             for j, inst in enumerate(self.inst):
                 kk, cc, tio = inst.parts(
                     q, k_cache, v_cache, pos_ui, page_table, sinks, scale, wait=(self.WAIT_SEM, 0),
-                    user=(p0 + j, self.users), out=out, heads_io=heads_io,
+                    user=(p0, self.users), out=out, heads_io=heads_io,
                 )  # fmt: skip
                 kernels += kk
                 cbs += cc

@@ -28,7 +28,7 @@ void kernel_main() {
     const uint32_t out_addr = get_common_arg_val<uint32_t>(0);
     const uint32_t ci = ba_core_index(1);
     const uint32_t grp = ci / get_compile_time_arg_val(5), s = ci % get_compile_time_arg_val(5);
-    const uint32_t g = grp / BA_TQ;
+    const uint32_t g = (grp / BA_TQ) % BA_NKV;
 
     constexpr uint32_t cb_out = get_compile_time_arg_val(0);
     constexpr uint32_t cb_scr = get_compile_time_arg_val(1);
@@ -104,7 +104,7 @@ void kernel_main() {
         // the concatenated-heads layout [1, 1, rows, heads * 64] (o_proj's input: row tile rt's column tile c at page
         // rt BA_OUT_CONCAT + c): packed row 8 i + j (block row 4 t + i, head 8 g + j) -> row R = (4 t + i) BA_Q_RSTRIDE
         // + user, column tiles 2 (8 g + j) + d, one 32-byte face row per (i, j, d, f)
-        const uint32_t user = get_common_arg_val<uint32_t>(BA_USER_ARG_W);
+        const uint32_t user = get_common_arg_val<uint32_t>(BA_USER_ARG_W) + grp / (BA_TQ * BA_NKV);
         for (uint32_t d = 0; d < 2; ++d) {
             for (uint32_t i = 0; i < 4; ++i) {
                 const uint32_t R = (4 * t + i) * BA_Q_RSTRIDE + user, rr = R % 32;
@@ -121,7 +121,7 @@ void kernel_main() {
             }
         }
 #elif defined(BA_OUT_ROWS)
-        const uint32_t user = get_common_arg_val<uint32_t>(BA_USER_ARG_W);
+        const uint32_t user = get_common_arg_val<uint32_t>(BA_USER_ARG_W) + grp / (BA_TQ * BA_NKV);
         for (uint32_t d = 0; d < 2; ++d) {
             for (uint32_t i = 0; i < 4; ++i) {
                 const uint64_t dst = s_out.get_noc_addr(2 * ((4 * t + i) * BA_Q_RSTRIDE + user) + d);

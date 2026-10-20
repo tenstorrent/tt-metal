@@ -5,7 +5,8 @@
 // (expert e, local column tile j of 23); per unit the expert's slot rows of X_g (all K tiles, once per expert while
 // they fit 4 slots, else per 4-slot group per unit), the gate and up column tiles of global column g0(e) + j
 // interleaved [k][gate, up] (one page of the relaid weights, gmoe_relayout.cpp: one large read), and the two column
-// tiles of the 32-row gate / up bias; up to GMOE_DEPTH units' reads in flight on both NOCs (dynamic NOC mode).
+// tiles of the 32-row gate / up bias; up to GMOE_DEPTH units' reads in flight on both NOCs (dynamic NOC mode). A
+// unit's weights are GMOE_SPLIT pages (consecutive pages sit in consecutive DRAM banks, not one 103 KB page in one).
 //
 // common runtime args: [plan table, xg, gate_up (relaid), gate_bias, up_bias]
 // compile-time args: [cb_scr, cb_meta_c, cb_meta_w, cb_x, cb_w, cb_b, NC, GX, KT, NT, NU, WC, CC,
@@ -50,7 +51,10 @@ void kernel_main() {
     const uint32_t c = static_cast<uint32_t>(get_absolute_logical_y()) * GX + get_absolute_logical_x();
     const auto s_table = TensorAccessor(table_args, table_addr, 8 * gmoe::E);
     const auto s_x = TensorAccessor(xg_args, xg_addr, x_tile);
-    const auto s_gu = TensorAccessor(gu_args, gu_addr, 2 * KT * w_tile);
+    constexpr uint32_t SPLIT = GMOE_SPLIT;            // pages per unit (gmoe_relayout.cpp GMOE_RELAYOUT_SPLIT)
+    constexpr uint32_t sp = 2 * KT * w_tile / SPLIT;  // bytes per page
+    static_assert(2 * KT % SPLIT == 0 && sp % 64 == 0);
+    const auto s_gu = TensorAccessor(gu_args, gu_addr, sp);
     const auto s_gb = TensorAccessor(gb_args, gb_addr, b_tile);
     const auto s_ub = TensorAccessor(ub_args, ub_addr, b_tile);
 
@@ -77,13 +81,38 @@ void kernel_main() {
         // one slot's KT tiles per transaction-id wait: a transaction id counts at most 255 outstanding requests (8
         // bits); 4 slots' 360 reads under one id wrapped it, and the wait returned before every tile had landed
         noc_async_read_set_trid(X_TRID, 0);
+        noc_async_read_set_trid(X_TRID, 1);
+#ifdef GMOE_XG_SHARDED
+        // X_g block sharded over a GMOE_XG_SX x GMOE_XG_SY core grid (the gather matmul's own output): slot s's row
+        // tile is row s % RS of the shards of core row s / RS, its KT tiles KT / SX contiguous tiles in each core of
+        // that row (common args GMOE_XG_SHARDED..: the grid's NOC x per column, then NOC y per row): SX reads per slot,
+        // half on each NOC
+        constexpr uint32_t SX = GMOE_XG_SX, CS = KT / SX, RS = GMOE_XG_RS;
+        for (uint32_t i = 0; i < n; ++i) {
+            const uint32_t s = s0 + i;
+            const uint32_t ny = get_common_arg_val<uint32_t>(GMOE_XG_SHARDED + SX + s / RS);
+            for (uint32_t j = 0; j < SX; ++j) {
+                const uint32_t nx = get_common_arg_val<uint32_t>(GMOE_XG_SHARDED + j);
+                const uint8_t nn = j % 2;
+                noc_async_read(
+                    get_noc_addr(nx, ny, xg_addr + (s % RS) * CS * x_tile, nn),
+                    l1 + (i * KT + j * CS) * x_tile,
+                    CS * x_tile,
+                    nn);
+            }
+        }
+        noc_async_read_barrier_with_trid(X_TRID, 0);
+        noc_async_read_barrier_with_trid(X_TRID, 1);
+#else
         for (uint32_t i = 0; i < n; ++i) {
             for (uint32_t k = 0; k < KT; ++k) {
                 noc_async_read(s_x.get_noc_addr((s0 + i) * KT + k, 0, 0), l1 + (i * KT + k) * x_tile, x_tile, 0);
             }
             noc_async_read_barrier_with_trid(X_TRID, 0);
         }
+#endif
         noc_async_read_set_trid(0, 0);
+        noc_async_read_set_trid(0, 1);
         cb_push_back(cb_x, GROUP * KT);
     };
     // weights + bias of up to DEPTH units in flight (transaction id 1 + slot on both NOCs; slot = unit count % DEPTH:
@@ -95,18 +124,20 @@ void kernel_main() {
     uint32_t issued = 0, pushed = 0, loaded = gmoe::E;
     auto push_one = [&]() {
         const uint32_t slot = pushed % DEPTH, u = ring[slot];
+        const uint32_t e = u / NU, m = p.tiles[e];
+        // a new expert's rows (one block) while its weights land: every earlier unit is pushed, so the compute frees
+        // the old block without waiting on this one (a multi-block expert loads after the push: its second block waits
+        // for the compute to finish the first, which needs these weights)
+        if (m <= GROUP && e != loaded) {
+            load_x(p.base[e], m);
+            loaded = e;
+        }
         noc_async_read_barrier_with_trid(1 + slot, 0);
         noc_async_read_barrier_with_trid(1 + slot, NOC_B);
         cb_push_back(cb_w, PW);
         cb_push_back(cb_b, 2);
         ++pushed;
-        const uint32_t e = u / NU, m = p.tiles[e];
-        if (m <= GROUP) {
-            if (e != loaded) {
-                load_x(p.base[e], m);
-                loaded = e;
-            }
-        } else {
+        if (m > GROUP) {
             loaded = gmoe::E;
             for (uint32_t g = 0; g < m; g += GROUP) {
                 load_x(p.base[e] + g, m - g < GROUP ? m - g : GROUP);
@@ -126,12 +157,20 @@ void kernel_main() {
         cb_reserve_back(cb_b, inflight * 2);
         const uint32_t wl1 = wbase + slot * PW * w_tile, bl1 = bbase + slot * 2 * b_tile;
         const uint32_t n = gmoe::g0(e) + j;  // global column tile
-        constexpr uint32_t half = (KT * w_tile) & ~63u;
         noc_async_read_set_trid(1 + slot, 0);
         noc_async_read_set_trid(1 + slot, NOC_B);
-        // the unit's [k][gate, up] tiles (one page of the relaid weights), half on each NOC
-        noc_async_read(s_gu.get_noc_addr(u, 0, 0), wl1, half, 0);
-        noc_async_read(s_gu.get_noc_addr(u, half, NOC_B), wl1 + half, PW * w_tile - half, NOC_B);
+        // the unit's [k][gate, up] tiles (SPLIT consecutive pages of the relaid weights: consecutive DRAM banks),
+        // alternating NOCs
+        if constexpr (SPLIT == 1) {  // (one page: half on each NOC)
+            constexpr uint32_t half = (KT * w_tile) & ~63u;
+            noc_async_read(s_gu.get_noc_addr(u, 0, 0), wl1, half, 0);
+            noc_async_read(s_gu.get_noc_addr(u, half, NOC_B), wl1 + half, PW * w_tile - half, NOC_B);
+        } else {
+            for (uint32_t q = 0; q < SPLIT; ++q) {
+                const uint8_t nn = q % 2 ? NOC_B : 0;
+                noc_async_read(s_gu.get_noc_addr(u * SPLIT + q, 0, nn), wl1 + q * sp, sp, nn);
+            }
+        }
         noc_async_read(s_gb.get_noc_addr(n, 0, 0), bl1, b_tile, 0);
         noc_async_read(s_ub.get_noc_addr(n, 0, NOC_B), bl1 + b_tile, b_tile, NOC_B);
         noc_async_read_set_trid(0, 0);  // (the trid register outlives the kernel: leave it 0)

@@ -7,6 +7,7 @@
 //   gate|up (default): unit u = (e, j), e = u / NU, j = u % NU, column n = g0(e) + j: [k][gate (k, n), up (k, n)];
 //   down (GMOE_RELAYOUT_DOWN): unit u = (e, c), c = u % NU: [k] down (g0(e) + k, c), the shared K tile (e even: its
 //   last, e odd: its first) from `edge` (row tile e: the neighbour's rows zeroed).
+// GMOE_RELAYOUT_SPLIT: each unit's page stored as that many consecutive smaller pages (spread over the DRAM banks).
 // Core i of NC takes units i, i + NC, ...
 //
 // common runtime args: [src0, src1, dst]; compile-time args: [cb_buf, NC, GX, UNITS, KT, NT, NU, KD, accessors
@@ -41,7 +42,11 @@ void kernel_main() {
     const uint32_t c = static_cast<uint32_t>(get_absolute_logical_y()) * GX + get_absolute_logical_x();
     const auto s0 = TensorAccessor(s0_args, src0_addr, w_tile);
     const auto s1 = TensorAccessor(s1_args, src1_addr, w_tile);
+#ifdef GMOE_RELAYOUT_SPLIT
+    const auto d = TensorAccessor(d_args, dst_addr, page / GMOE_RELAYOUT_SPLIT);
+#else
     const auto d = TensorAccessor(d_args, dst_addr, page);
+#endif
 
     cb_reserve_back(cb_buf, 1);
     const uint32_t buf = get_write_ptr(cb_buf);
@@ -62,7 +67,15 @@ void kernel_main() {
         }
 #endif
         noc_async_read_barrier();
+#ifdef GMOE_RELAYOUT_SPLIT
+        // the unit's page as GMOE_RELAYOUT_SPLIT consecutive pages (u SPLIT + q: spread over the DRAM banks)
+        constexpr uint32_t sp = page / GMOE_RELAYOUT_SPLIT;
+        for (uint32_t q = 0; q < GMOE_RELAYOUT_SPLIT; ++q) {
+            noc_async_write(buf + q * sp, d.get_noc_addr(u * GMOE_RELAYOUT_SPLIT + q), sp);
+        }
+#else
         noc_async_write(buf, d.get_noc_addr(u), page);
+#endif
         noc_async_write_barrier();
     }
 }
