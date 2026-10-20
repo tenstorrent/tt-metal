@@ -148,6 +148,7 @@ def build_and_serialize_kv_chunk_table(
         )
     index_k = kv_cache.index_k
     local_paged = getattr(kv_cache, "page_table", None) is not None
+    assert not local_paged or stage_page_table is not None, "a paged cache's chunks need its stage's page table"
     entries = (kv_cache.num_pages if local_paged else num_users) * num_layers
     for name, t in (("k", kv_cache.k), ("v", kv_cache.v), ("index_k", index_k)):
         assert t.shape[0] == entries, f"{name} cache batch dim {t.shape[0]} != {entries} (slots or pages x layers)"

@@ -74,10 +74,10 @@ CASES = {
 
 
 def build_table(kind, *, width, num_pages, seed):
-    """Host page table. ``ordered``: the runner's fixed page table, row r taking physical pages [r*n, (r+1)*n) of every
-    rank in position order. ``shuffled``: every row's pages drawn at random from each rank's pool. ``shared``: shuffled, and
-    row 1 maps row 0's pages under SHARED_PREFIX. ``request``: shuffled, and row 2 maps only the pages under its
-    C + 300 tokens."""
+    """Host page table. ``ordered``: the runner's fixed page table, row r taking physical pages [r*n, (r+1)*n) of
+    every rank in position order. ``shuffled``: every row's pages drawn at random from each rank's pool. ``shared``:
+    shuffled, and row 1 maps row 0's pages under SHARED_PREFIX. ``request``: shuffled, and row 2 maps only the pages
+    under its C + 300 tokens."""
     owner = [page_owner(q, chunk_local=C // SP, sp=SP) for q in range(width)]
     if kind == "ordered":
         table = fixed_page_table(num_users=USERS, max_seq_len=width * PAGE_SIZE, sp=SP, chunk_size=C)
