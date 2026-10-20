@@ -241,8 +241,9 @@
   model_family: Qwen
   skus:
     bh_quietbox_2:
-      # ~28.5 min measured incl. setup and the spec engine warmup; the margin is for the 64-layer NAS
-      # load in test_all_buckets_fit_trace_region (35 s typical, ~10 min seen on a slow NAS).
+      # 28 min assumed the 300 s cap on test_decode_bucketing; with its real cost (up to ~13 min on a
+      # cold NAS) the whole entry reconstructs to ~33 min from the 2026-09-08 run.
+      # The MTP spec files were added to the cmd after that run, so this may need another raise.
       timeout: 40
       tier: 1
   owner_id: U08HL8X1ECD # Aniruddha Tupe
