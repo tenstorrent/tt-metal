@@ -98,8 +98,28 @@ without tie split, and a prefetch running on its own sub-device rather than fuse
 | 150 | 768k | 1.013 | 0.771 | 0.735 | 1.315 | 1.380 |
 | 203 | 1,039k | 1.192 | 0.823 | 0.789 | 1.448 | 1.511 |
 
-This branch, with the fused push and tie split, measures at 1M: gather 1.193 s, push 0.817 s, push+prefetch
-0.782 s (1.52×).
+This branch (`e531b2443a9`: fused push, tie split, plan after the region), same sweep, same paths:
+
+| Chunk | Prefix | Gather | Push | Push + prefetch | Push × | Push + prefetch × |
+|---|---|---|---|---|---|---|
+| 0-9 | 0-46k | 0.52-0.55 s | ≈ gather | +0-18 ms | 0.98-1.04 | 0.97-1.00 |
+| 10 | 51k | 0.533 | 0.546 | 0.543 | 0.976 | 0.982 |
+| 15 | 77k | 0.552 | 0.557 | 0.553 | 0.990 | 0.997 |
+| 20 | 102k | 0.581 | 0.591 | 0.563 | 0.983 | 1.031 |
+| 25 | 128k | 0.577 | 0.563 | 0.557 | 1.025 | 1.036 |
+| 30 | 154k | 0.586 | 0.564 | 0.547 | 1.039 | 1.071 |
+| 40 | 205k | 0.616 | 0.582 | 0.555 | 1.059 | 1.109 |
+| 50 | 256k | 0.670 | 0.618 | 0.597 | 1.084 | 1.122 |
+| 60 | 307k | 0.720 | 0.661 | 0.627 | 1.089 | 1.148 |
+| 80 | 410k | 0.764 | 0.655 | 0.621 | 1.167 | 1.230 |
+| 100 | 512k | 0.850 | 0.707 | 0.675 | 1.202 | 1.258 |
+| 125 | 640k | 0.948 | 0.745 | 0.712 | 1.272 | 1.331 |
+| 150 | 768k | 1.013 | 0.763 | 0.728 | 1.328 | 1.391 |
+| 175 | 896k | 1.098 | 0.772 | 0.741 | 1.423 | 1.480 |
+| 203 | 1,039k | 1.192 | 0.816 | 0.782 | 1.460 | 1.524 |
+
+Against the measured branch, push+prefetch is 6-9 ms faster per chunk from 256k up (1.511× → 1.524× at 1M).
+The break-even prefix is unchanged at about 100k.
 
 **Per shared layer, op level, at 1M** (`sparse_sdpa` + push of the next layer's prefix + resume, exact):
 
