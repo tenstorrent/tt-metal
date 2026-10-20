@@ -110,8 +110,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         tile_b,
                         TILE_SIZE_UNPACK_A,
                         TILE_SIZE_UNPACK_B,
-                        ckernel::DEFAULT_TENSOR_SHAPE /* in0 */,
-                        ckernel::DEFAULT_TENSOR_SHAPE /* in1 */,
+                        ckernel::DEFAULT_TENSOR_SHAPE,
+                        ckernel::DEFAULT_TENSOR_SHAPE,
                         CT_DIM,
                         RT_DIM,
                         KT_DIM);
@@ -147,7 +147,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         START_PERF_MEASURE("INIT")
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
         _llk_math_matmul_init_<MATH_FIDELITY, THROTTLE_LEVEL>(
-            ckernel::DEFAULT_TENSOR_SHAPE /* in0 */, ckernel::DEFAULT_TENSOR_SHAPE /* in1 */, UNPACK_TRANSPOSE_FACES, CT_DIM, RT_DIM);
+            ckernel::DEFAULT_TENSOR_SHAPE, ckernel::DEFAULT_TENSOR_SHAPE, UNPACK_TRANSPOSE_FACES, CT_DIM, RT_DIM);
         _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
         PROFILER_SYNC();
     }

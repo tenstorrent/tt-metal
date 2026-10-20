@@ -38,8 +38,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         params.num_faces_B,
         params.TILE_SIZE_UNPACK_A,
         params.TILE_SIZE_UNPACK_B);
-    _llk_unpack_AB_matmul_init_<>(
-        0 /* transpose */, params.CT_DIM, params.RT_DIM, params.KT_DIM, ckernel::DEFAULT_TENSOR_SHAPE /* in0 */, ckernel::DEFAULT_TENSOR_SHAPE /* in1 */);
+    _llk_unpack_AB_matmul_init_<>(0 /* transpose */, params.CT_DIM, params.RT_DIM, params.KT_DIM, ckernel::DEFAULT_TENSOR_SHAPE, ckernel::DEFAULT_TENSOR_SHAPE);
     for (std::uint32_t phase = 0; phase < 2; phase++)
     {
         _llk_unpack_AB_matmul_set_in1_column_stride_(params.TILE_SIZE_UNPACK_B, phase == 0 ? params.KT_DIM : 1);
@@ -54,8 +53,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 in1_index,
                 params.TILE_SIZE_UNPACK_A,
                 params.TILE_SIZE_UNPACK_B,
-                ckernel::DEFAULT_TENSOR_SHAPE /* in0 */,
-                ckernel::DEFAULT_TENSOR_SHAPE /* in1 */,
+                ckernel::DEFAULT_TENSOR_SHAPE,
+                ckernel::DEFAULT_TENSOR_SHAPE,
                 params.CT_DIM,
                 params.RT_DIM,
                 params.KT_DIM);
