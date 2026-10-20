@@ -96,19 +96,23 @@ def _sharded_tensor_dims(placements: Optional[List[Any]]) -> set:
 
 
 def _already_fsdp_sharded(placements: Optional[List[Any]], axis_index: int, n_axes: int) -> bool:
-    """True if the param's placement on the FSDP axis is already a Shard.
+    """True if the parameter is already sharded on the FSDP axis; the callers then refuse to shard it again or to keep
+    it replicated there.
 
-    ``placements`` is read per mesh axis, so it must have one entry per axis (``n_axes``). A label with another count
-    is the collapsed 1-D ``{N}, [placement]`` of ttnn's default mappers: a single placement for the whole mesh.
-    Replicate there is replicated on every axis, so ``False``; a Shard there is sharded over every mesh axis at once,
-    which FSDP cannot layer onto or read per axis, so it is an error rather than a silent ``False`` (which would
-    re-shard an already sharded tensor and keep one shard). The count is checked before ``placements[axis_index]`` is
-    looked at: for an FSDP axis at index 0 that index exists in a collapsed label and would misreport "already
-    sharded on the FSDP axis".
+    A label made with a per-axis mapper has one placement per mesh axis (``n_axes`` entries), and the answer is whether
+    the entry for the FSDP axis is a Shard. ttnn's default mappers produce a different kind of label: one placement
+    that describes the whole mesh at once (the collapsed ``{N}, [placement]``). When that placement is Replicate, every
+    device holds the full tensor, so the parameter is not sharded on the FSDP axis and the answer is ``False``: FSDP
+    goes on to shard it. When that placement is a Shard, the tensor is already split across all N devices of the mesh
+    in one go, not along the FSDP axis with copies along the others, and neither answer is right. ``False`` would make
+    ``fully_shard`` take each device's piece for the full parameter and split it again along the FSDP axis, losing the
+    other pieces. ``True`` would report the parameter as sharded on the FSDP axis, which it is not, and send the caller
+    to the wrong remedy. So that case is an error of its own, naming the real remedy: create the parameter with a mapper
+    that has one placement per mesh axis.
     """
     if placements is None:
         return False
-    if len(placements) != n_axes:
+    if len(placements) != n_axes:  # a collapsed label has an entry at index 0; settle its kind before indexing
         if any(_is_shard(p) for p in placements):
             raise RuntimeError(
                 f"FSDP: parameter carries a collapsed 1-D topology label sharded over the whole mesh "
