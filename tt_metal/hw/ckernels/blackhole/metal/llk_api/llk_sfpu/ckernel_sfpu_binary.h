@@ -210,9 +210,8 @@ inline void calculate_sfpu_binary(
     }
 }
 
-constexpr std::uint32_t SFPMAD_MOD1_NEGATE_VC = 2;
-
 sfpi_inline sfpi::vFloat _sfpu_mul_signed_zero_(sfpi::vFloat a, sfpi::vFloat b) {
+    constexpr std::uint32_t SFPMAD_MOD1_NEGATE_VC = 2;
     return __builtin_rvtt_sfpmad(a.get(), b.get(), sfpi::vFloat(0.0f).get(), SFPMAD_MOD1_NEGATE_VC);
 }
 
