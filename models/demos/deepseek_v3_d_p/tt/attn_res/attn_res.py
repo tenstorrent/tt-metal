@@ -171,6 +171,9 @@ class TtAttnRes(LightweightModule):
         self._tp_sems = None if tt_ccl is not None else self._new_tp_semaphores()
 
         mesh_shape = tuple(mesh_device.shape)
+        # Both default, so moving only one (tp_axis=0 for SP on axis 1) would otherwise put the
+        # tokens and the hidden dim on the same axis without complaint.
+        assert {sp_axis, tp_axis} == {0, 1}, f"sp_axis {sp_axis} and tp_axis {tp_axis} must be mesh axes 0 and 1"
         self.tp_factor = mesh_shape[tp_axis]
         self.sp_factor = mesh_shape[sp_axis]
         self.topology = list(per_axis_topology()) if topology is None else topology
