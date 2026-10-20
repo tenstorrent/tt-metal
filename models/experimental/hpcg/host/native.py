@@ -69,6 +69,8 @@ def _build():
     # cost more than the call
     vp = ctypes.c_void_p
     lib.hpcg_plan_meta.argtypes = [I32, I32, I32, vp, I64] + [vp] * 11 + [I64, I64] + [vp] * 4
+    lib.hpcg_plan_meta_into.restype = I64
+    lib.hpcg_plan_meta_into.argtypes = [I32, I32, I32, vp, I64] + [vp] * 11 + [I64, I64, I64] + [vp] * 4
     lib.hpcg_plan_windows_transfer.restype = I64
     lib.hpcg_plan_windows_transfer.argtypes = [I32] + geo + geo + [I32, I32, i64p, I32, I32, I64, I64, I64] + [i64p] * 4
     lib.hpcg_transfer_tables.restype = I64

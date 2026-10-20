@@ -1190,6 +1190,46 @@ void hpcg_transfer_pad(
     }
 }
 
+// hpcg_plan_meta in one call: sizes the rows (their width the longest row rounded up to align words), and when
+// nc * width words fit in cap, writes them into m. Returns the longest row's length, or -(words needed) when they do
+// not fit.
+int64_t hpcg_plan_meta_into(
+    int32_t nc,
+    int32_t NB,
+    int32_t nph,
+    const int64_t* phases,
+    int64_t max_pieces,
+    const int64_t* plo,
+    const int64_t* pln,
+    const int64_t* pl1,
+    const int64_t* npieces,
+    const int64_t* nat,
+    const int64_t* nbr,
+    const int64_t* noc_xy,
+    const int64_t* own,
+    const int64_t* own_l1,
+    const int64_t* xat,
+    const int64_t* xrows,
+    int64_t tpw,
+    int64_t align,
+    int64_t cap,
+    int32_t* m,
+    int64_t* nseg,
+    int64_t* nseg_gs,
+    int64_t* nseg_r) {
+    const int64_t longest = hpcg_plan_meta(
+        nc, NB, nph, phases, max_pieces, plo, pln, pl1, npieces, nat, nbr, noc_xy, own, own_l1, xat, xrows, tpw, 0,
+        nullptr, nseg, nseg_gs, nseg_r);
+    const int64_t w = (longest + align - 1) / align * align;
+    if ((int64_t)nc * w > cap) {
+        return -(int64_t)nc * w;
+    }
+    hpcg_plan_meta(
+        nc, NB, nph, phases, max_pieces, plo, pln, pl1, npieces, nat, nbr, noc_xy, own, own_l1, xat, xrows, tpw, w, m,
+        nseg, nseg_gs, nseg_r);
+    return longest;
+}
+
 // hpcg_plan_exchange's entries, already as SparseRowPlan uses them: grouped by (k, b) in their original order (a
 // stable counting sort), each as (NoC x, NoC y of m, s, f, dst) in rows[at[k * NB + b] .. at[k * NB + b + 1]); and
 // every core's neighbours (the cores it sends rows to or receives rows from), sorted, in nbr[nat[k] .. nat[k + 1]].

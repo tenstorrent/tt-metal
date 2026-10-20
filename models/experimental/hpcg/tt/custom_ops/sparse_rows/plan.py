@@ -30,11 +30,12 @@ _SCRATCH = [np.zeros(0, np.int32)]
 
 
 def _scratch(n):
-    """n int32 words of a host buffer reused by every meta_tensor call (grown as needed, huge pages when large):
-    TT-NN copies the rows when it uploads them, so the buffer is free again once u32_rows returns."""
-    if _SCRATCH[0].size < n:
-        _SCRATCH[0] = native.zeros(max(n, 2 * _SCRATCH[0].size), np.int32)
-    return _SCRATCH[0][:n]
+    """At least n int32 words of a host buffer reused by every meta_tensor call (grown as needed, huge pages when
+    large): TT-NN copies the rows when it uploads them, so the buffer is free again once u32_rows returns. n = 0:
+    the buffer as it is (starting at 1 MB)."""
+    if _SCRATCH[0].size < max(n, 1 << 18):
+        _SCRATCH[0] = native.zeros(max(n, 2 * _SCRATCH[0].size, 1 << 18), np.int32)
+    return _SCRATCH[0] if n == 0 else _SCRATCH[0][:n]
 
 
 def _no_neighbours(nc):
@@ -501,11 +502,21 @@ class SparseRowPlan:
         ph = np.asarray(list(phases), np.int64)
         counts = np.zeros((3, self.nc), np.int64)
         cp = [counts.ctypes.data + 8 * self.nc * i for i in range(3)]
-        longest = lib.hpcg_plan_meta(self.nc, NB, ph.size, ph.ctypes.data, *args, tpw, 0, None, *cp)
-        shape = (self.nc, -(-longest // align) * align)
-        m = np.empty(shape, np.int32) if scratch is None else scratch(shape[0] * shape[1]).reshape(shape)
-        lib.hpcg_plan_meta(self.nc, NB, ph.size, ph.ctypes.data, *args, tpw, m.shape[1], m.ctypes.data, *cp)
-        return (m,) + tuple(counts.tolist()) + (int(longest),)
+        if scratch is None:
+            longest = lib.hpcg_plan_meta(self.nc, NB, ph.size, ph.ctypes.data, *args, tpw, 0, None, *cp)
+            m = np.empty((self.nc, -(-longest // align) * align), np.int32)
+            lib.hpcg_plan_meta(self.nc, NB, ph.size, ph.ctypes.data, *args, tpw, m.shape[1], m.ctypes.data, *cp)
+            return (m,) + tuple(counts.tolist()) + (int(longest),)
+        buf = scratch(0)  # the reused buffer as it is; one call sizes and writes the rows when they fit
+        while True:
+            longest = lib.hpcg_plan_meta_into(
+                self.nc, NB, ph.size, ph.ctypes.data, *args, tpw, align, buf.size, buf.ctypes.data, *cp
+            )
+            if longest >= 0:
+                break
+            buf = scratch(-longest)
+        w = -(-longest // align) * align
+        return (buf[: self.nc * w].reshape(self.nc, w),) + tuple(counts.tolist()) + (int(longest),)
 
     def _meta_python(self, phases, noc_xy, tpw=TILE, align=16):
         """meta() in Python: the readable definition, and the fallback without a C++ compiler."""
