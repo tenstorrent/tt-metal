@@ -1128,6 +1128,15 @@ class GRPOTrainer:
 
         # A constant LR needs no scheduler, so none is created: constructing one, even a no-op,
         # raises for optimizers with supports_lr_scheduling=False (MuonWithAdamW).
+        constant_lr = grpo_cfg.lr_scheduler_type == "constant" or (
+            grpo_cfg.lr_scheduler_type == "constant_with_warmup" and grpo_cfg.warmup_steps == 0
+        )
+        if not constant_lr and not getattr(optimizer, "supports_lr_scheduling", True):
+            raise ValueError(
+                f"{type(optimizer).__name__} does not support LR schedules; use lr_scheduler_type='constant', "
+                f"or 'constant_with_warmup' with warmup_steps=0 (got lr_scheduler_type="
+                f"{grpo_cfg.lr_scheduler_type!r}, warmup_steps={grpo_cfg.warmup_steps})."
+            )
         if grpo_cfg.lr_scheduler_type == "constant_with_warmup" and grpo_cfg.warmup_steps > 0:
             self._lr_scheduler = WarmupConstantScheduler(optimizer, grpo_cfg.warmup_steps)
         elif grpo_cfg.lr_scheduler_type == "cosine":
