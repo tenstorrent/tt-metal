@@ -142,10 +142,10 @@ template <uint32_t channel_tiles_per_block>
 // products onto them in place (pack_reconfig_l1_acc), in fp32: nothing is unpacked back into the engine, so no
 // tf32 rounding. The pages are reserved once per item, written out of order by tile index, and pushed to the
 // writer on the last own step.
-template <uint32_t channel_tiles_per_block, bool first, bool last>
-[[gnu::noinline]] void accumulate_grad_tap(DataflowBuffer& acc) {
+template <uint32_t channel_tiles_per_block>
+[[gnu::noinline]] void accumulate_grad_tap(DataflowBuffer& acc, bool first, bool last) {
     constexpr uint32_t total = tap_count * channel_tiles_per_block;
-    if constexpr (first) {
+    if (first) {
         acc.reserve_back(total);
     }
     for (uint32_t base = 0; base < total; base += dst_tiles) {
@@ -166,7 +166,7 @@ template <uint32_t channel_tiles_per_block, bool first, bool last>
         pack_reconfig_l1_acc(0);
         tile_regs_release();
     }
-    if constexpr (last) {
+    if (last) {
         acc.push_back(total);
     }
 }
@@ -216,18 +216,8 @@ TT_KERNEL void compute(uint32_t wi_start, uint32_t wi_count) {
             silu_backward<channel_tiles_per_block>(sigmoid, dc_tile);
             dc_tile.wait_front(channel_tiles_per_block);
             preact.pop_front(channel_tiles_per_block);
-            if (step < own_steps) {
-                const bool first = step == 0;
-                const bool last = step + 1 == own_steps;
-                if (first && last) {
-                    accumulate_grad_tap<channel_tiles_per_block, true, true>(acc);
-                } else if (first) {
-                    accumulate_grad_tap<channel_tiles_per_block, true, false>(acc);
-                } else if (last) {
-                    accumulate_grad_tap<channel_tiles_per_block, false, true>(acc);
-                } else {
-                    accumulate_grad_tap<channel_tiles_per_block, false, false>(acc);
-                }
+            if (step < own_steps) {  // the extra step's rows belong to the next core's partial
+                accumulate_grad_tap<channel_tiles_per_block>(acc, /*first=*/step == 0, /*last=*/step + 1 == own_steps);
             }
             compute_kernel_lib::untilize<channel_tiles_per_block, dfb::dc_tile, dfb::dc_rm>(1);
             rainbow_window.pop_front(tap_count * channel_tiles_per_block);
