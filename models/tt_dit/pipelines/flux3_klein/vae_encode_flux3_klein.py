@@ -42,6 +42,7 @@ from .vae_flux3_klein import (
     load_vae_torch_state,
     register_klein_conv_slices,
     release_module_trace,
+    set_conv_config_overrides,
     vae_model_name,
 )
 
@@ -63,6 +64,7 @@ def build_flux3_klein_vae_encoder(
         ccl_manager=ccl_manager,
         use_conv3d=False,
     )
+    set_conv_config_overrides(encoder, config_tensors_in_dram=True)
     return encoder, parallel_config
 
 

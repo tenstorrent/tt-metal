@@ -82,11 +82,38 @@ FLUX3_KLEIN_VAE_SCALE = 8
 # admitted sizes, logs/m8_verifier_device_slice_table_host.log; the shipped 1024 decode entries all sit inside the
 # bound, so the cap changes no count the M6 decode ran with).
 KLEIN_CONV_SLICES_PER_LEVEL = (
-    {(3, 128): 16, (128, 128): 16, (128, 3): 8, (256, 128): 16},
-    {(128, 256): 8, (256, 256): 4, (512, 256): 16},
+    # (256, 256) at level 0 and (512, 512) at level 1 are the two UPSAMPLER convs (``VaeUpsampler``: the 2x nearest
+    # upsample lands at the next level and its conv keeps the channel count); they were missing until 2026-10-20 and
+    # take the shipped 1024 ``slice_default`` counts ``(1024, 1024, 256, 256): 16`` / ``(512, 512, 512, 512): 16``.
+    {(3, 128): 16, (128, 128): 16, (128, 3): 8, (256, 128): 16, (256, 256): 16},
+    {(128, 256): 8, (256, 256): 4, (512, 256): 16, (512, 512): 16},
     {(256, 512): 8, (512, 512): 8},
     {(512, 512): 4, (512, 64): 4, (32, 512): 1},
 )
+# The DECODER's convolutions per level as ``(in_channels, out_channels, tensor_parallel)`` (``vae_flux2.py``:
+# ``channel_counts = [512, 512, 512, 256, 128]``; level 3 = ``conv_in`` 32 -> 512 + the mid / up-block resnets, each
+# upsampler conv runs at the level it upsamples INTO, ``conv_out`` 128 -> 3 has ``tensor_parallel=False``).
+KLEIN_DECODER_CONVS_PER_LEVEL = (
+    ((256, 256, True), (256, 128, True), (128, 128, True), (128, 3, False)),
+    ((512, 512, True), (512, 256, True), (256, 256, True)),
+    ((512, 512, True),),
+    ((32, 512, True), (512, 512, True)),
+)
+# H-PARTITIONED decoder (``h_axis`` set): ``Conv2d`` keys its slice table by the PER-DEVICE input shape, which under
+# an H split of factor F with the 3x3 pad-1 halo (``VaeConv2d``: ``neighbor_pad`` adds one row per side) is
+# ``(H_level / F + 2, W_level, cin, cout)`` -- NOT the full-image key above. Until 2026-10-20 the registration only
+# wrote full-image keys, so every partitioned-decoder lookup missed and the conv ran ttnn's AUTO slicer
+# (``op_slicing.cpp::determine_slice_config``: the smallest count whose modelled L1 use fits the L1 FREE AT THAT
+# MOMENT; the model does not include the L1_SMALL config tensors). That is why 2048x2048 decoded on a fresh mesh and
+# failed after other allocations existed (sweep 2026-10-20: "Not enough space to allocate ... L1_SMALL buffer",
+# then "circular buffers clash with L1 buffers" with a 256 KB L1_SMALL). Canvases up to ``AUTO_SLICE_MAX_AREA``
+# keep the auto path they were measured with (count 0 = ttnn auto); above it every decoder conv gets an EXPLICIT
+# count from a bytes-per-slice budget: ``DECODER_SLICE_BUDGET_BYTES`` = 4 MiB of bf16 input per slice per device,
+# the per-slice size of the shipped ``(1024, 1024, 128, 128): 16`` and ``(512, 512, 512, 512): 16`` entries on the
+# (1, 4) TP4 mesh (1024 rows x 64 columns x 32 channels x 2 B = 512 x 32 x 128 x 2 B = 4 MiB), capped by
+# ``conv_slice_cap``.
+AUTO_SLICE_MAX_AREA = 1536 * 1536
+DECODER_SLICE_BUDGET_BYTES = 4 << 20
 _registered_conv_slices: set[tuple] = set()
 
 
@@ -130,16 +157,80 @@ def klein_downsample_slices(height: int, width: int) -> dict[tuple[int, int, int
     return out
 
 
-def register_klein_conv_slices(mesh_shape: tuple[int, int], height: int, width: int) -> None:
-    """Make ``Conv2d.slice_params[mesh_shape]`` know the Klein VAE shapes of a ``height x width`` image (idempotent;
-    existing entries are never overwritten, so the shipped counts win where both exist)."""
-    key = (tuple(mesh_shape), int(height), int(width))
+def partitioned_conv_rows(level_height: int, h_factor: int, halo: int = 1) -> int:
+    """Rows of a conv's per-device input at a level of ``level_height`` rows under an H split of ``h_factor``: the
+    device's share plus the ``neighbor_pad`` halo (``halo`` rows per side); the full height when not split."""
+    if h_factor <= 1:
+        return int(level_height)
+    return int(level_height) // int(h_factor) + 2 * halo
+
+
+def decoder_slice_count(rows: int, width: int, cin: int, cout: int, tensor_parallel: bool, tp_factor: int) -> int:
+    """Explicit DRAM width-slice count for one decoder conv on one device: the bf16 input bytes per slice stay
+    under ``DECODER_SLICE_BUDGET_BYTES``. ``Conv2d`` shards the INPUT channels over ``tp_factor`` when the conv is
+    tensor-parallel and ``cin >= cout`` (``VaeConv2d``: ``out_is_greater`` picks the output axis instead, then the
+    input is replicated). Capped at ``conv_slice_cap(width)``, at least 1."""
+    cin_device = cin // tp_factor if (tensor_parallel and tp_factor > 1 and cin >= cout) else cin
+    cap = conv_slice_cap(width)
+    row_bytes = int(rows) * int(cin_device) * 2
+    count = max(1, -(-(row_bytes * int(width)) // DECODER_SLICE_BUDGET_BYTES))
+    # ttnn spreads the output columns as evenly as it can (``op_slicing.cpp``: ``ceil(width / count)`` at most per
+    # slice), so the widest slice decides; step up until it fits or the cap is reached.
+    while count < cap and row_bytes * (-(-int(width) // count)) > DECODER_SLICE_BUDGET_BYTES:
+        count += 1
+    return min(count, cap)
+
+
+def klein_partitioned_decoder_slices(
+    height: int, width: int, *, h_factor: int, tp_factor: int
+) -> dict[tuple[int, int, int, int], int]:
+    """``(rows_device, w_level, cin, cout) -> num_slices`` for every decoder conv of a ``height x width`` image on
+    the H-partitioned decoder (``h_factor > 1``; empty otherwise). ``0`` = ttnn's auto slicer (canvases up to
+    ``AUTO_SLICE_MAX_AREA``, the measured ones); larger canvases get ``decoder_slice_count``."""
+    if h_factor <= 1:
+        return {}
+    explicit = int(height) * int(width) > AUTO_SLICE_MAX_AREA
+    out, h, w = {}, int(height), int(width)
+    for level in KLEIN_DECODER_CONVS_PER_LEVEL:
+        rows = partitioned_conv_rows(h, h_factor)
+        for cin, cout, tensor_parallel in level:
+            count = decoder_slice_count(rows, w, cin, cout, tensor_parallel, tp_factor) if explicit else 0
+            out[(rows, w, cin, cout)] = count
+        h, w = downsample_extent(h), downsample_extent(w)
+    return out
+
+
+def register_klein_conv_slices(
+    mesh_shape: tuple[int, int], height: int, width: int, *, h_factor: int = 1, tp_factor: int = 1
+) -> None:
+    """Make ``Conv2d.slice_params[mesh_shape]`` know the Klein VAE shapes of a ``height x width`` image: the
+    full-image keys (encoder, replicated decoder) and, for ``h_factor > 1``, the per-device keys of the
+    H-partitioned decoder (``klein_partitioned_decoder_slices``). Idempotent; existing entries are never
+    overwritten, so the shipped counts win where both exist."""
+    key = (tuple(mesh_shape), int(height), int(width), int(h_factor), int(tp_factor))
     if key in _registered_conv_slices:
         return
     table = Conv2d.slice_params.setdefault(tuple(mesh_shape), dict(Conv2d.slice_default))
     for shape, slices in klein_conv_slices(height, width).items():
         table.setdefault(shape, slices)
+    for shape, slices in klein_partitioned_decoder_slices(
+        height, width, h_factor=h_factor, tp_factor=tp_factor
+    ).items():
+        table.setdefault(shape, slices)
     _registered_conv_slices.add(key)
+
+
+def set_conv_config_overrides(module, **overrides) -> int:
+    """Merge ``overrides`` into ``Conv2d.conv_config_overrides`` of every conv under ``module`` (per instance; the
+    class is untouched). Returns the number of convs changed. The Klein VAE sets ``config_tensors_in_dram=True``: the
+    halo / sliding-window config tensors otherwise live in the 64 KB L1_SMALL region, which the 2048+ decoder convs
+    exhausted (sweep 2026-10-20); Z-Image's VAE and the Qwen3 audio encoder run the same setting."""
+    changed = 0
+    for child in _walk_modules(module):
+        if hasattr(child, "conv_config_overrides"):
+            child.conv_config_overrides.update(overrides)
+            changed += 1
+    return changed
 
 
 def _walk_modules(module):
@@ -204,6 +295,7 @@ def build_flux3_klein_vae_decoder(
         ccl_manager=ccl_manager,
         use_conv3d=False,
     )
+    set_conv_config_overrides(decoder, config_tensors_in_dram=True)
     return decoder, parallel_config
 
 
@@ -341,8 +433,15 @@ class Flux3KleinVaeDecode:
         h, w = latent_shape(height, width)
         if h * w != num_image_rows:
             raise ValueError(f"{height}x{width} has {h * w} latent rows, got num_image_rows {num_image_rows}")
-        register_klein_conv_slices(tuple(self._device.shape), height, width)
         partitioned = self.partitioned(height, width)
+        tp_factor = int(self._device.shape[self._tp_axis]) if self._tp_axis is not None else 1
+        register_klein_conv_slices(
+            tuple(self._device.shape),
+            height,
+            width,
+            h_factor=self._h_factor if partitioned else 1,
+            tp_factor=tp_factor,
+        )
         decoder = self._decoder if partitioned else self._fallback_decoder()
         rows = self.gather_real_rows(state, num_image_rows=num_image_rows)
         if partitioned and self._h_axis is not None and self._h_factor > 1:
