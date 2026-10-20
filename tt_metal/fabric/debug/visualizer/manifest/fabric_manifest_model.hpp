@@ -253,8 +253,10 @@ struct DownstreamEdge {
 
 // One RISC the router's kernel runs on.
 struct Erisc {
-    // Physical processor the kernel runs on.
+    // The processor the kernel is created on, among the ones the HAL defines for the ERISC mode.
     tt::tt_metal::DataMovementProcessor processor = tt::tt_metal::DataMovementProcessor::RISCV_0;
+    // The ERISC on the Ethernet core that the processor runs on, which indexes CoreRegisters::reset_masks.
+    uint32_t physical_erisc = 0;
     // Per-ERISC fields passed to the kernel.
     std::vector<Field> fields;
 };
@@ -327,11 +329,22 @@ struct StreamRegisters {
     std::vector<std::pair<StreamRegister, uint32_t>> register_offsets;
 };
 
+// The addresses of a router core's soft reset and wall clock registers.
+struct CoreRegisters {
+    uint32_t soft_reset = 0;
+    // Indexed by physical ERISC: the soft_reset bit that holds it in reset.
+    std::vector<uint32_t> reset_masks;
+    // Reading the low word latches the high word, so the low word is read first.
+    uint32_t wall_clock_low = 0;
+    uint32_t wall_clock_high = 0;
+};
+
 // What the manifest describes of the architecture the routers run on.
 struct Arch {
     tt::ARCH arch = tt::ARCH::Invalid;
     ArchAreas areas;
     StreamRegisters stream_registers;
+    CoreRegisters core_registers;
     // Every struct a schema names, as laid out on this architecture.
     std::vector<layout::StructType> types;
 };
