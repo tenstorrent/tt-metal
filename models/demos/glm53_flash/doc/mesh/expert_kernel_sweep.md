@@ -132,3 +132,27 @@ gate|up, [2048, 4096] down, 8 active): legacy config 8.23 ms/step -> new config 
 
 `tests/test_moe.py` (single chip, sparse path, new config): router sets 32/32 and 255/256 identical to HF, MoE PCC 0.999930 (T = 32)
 / 0.999946 (T = 256) (`_logs/optexperts_test_moe.log`).
+
+## 7. Minimum op count of the expert block (2026-10-20, after the merge into `arg/glm53_mesh`)
+
+Rule applied: every data-movement op merged into a single op or removed before any compute tuning. Op counts
+are device operations of `TtRoutedExperts.forward` (from the router's dense matrix to the TP partial) from a
+graph capture with the fast runtime mode off, so the ops hidden inside `sparse_matmul` (its output zero-fill)
+and inside `ttnn.sum` (a pad fill for the non-tile-aligned 72 experts) count too; times are the traced replay of
+the whole block on real layer-4 tokens and routing (`tests/test_moe_block.py`, `_logs/optexperts_moe_block_{before,after}.log`,
+outputs compared against the saved pre-rewrite outputs `_logs/optexperts_block_ref.pt`).
+
+| path | device ops before -> after (per 32-token block) | what changed | M=32 us before -> after | M=256 us before -> after | PCC vs the pre-rewrite block (M=32 / 256) |
+|---|---|---|---|---|---|
+| dense (`_block_dense`) | 11 -> **6** | gate and up as two weight tensors (two matmuls, no slices); `clamped_silu_glu` for clamp+clamp+silu+mul; the expert selector and the per-column expansion folded into one 0/1 constant `sel_expand` [E, E_loc x I_loc] (one matmul from the router's bf16 matrix, no typecast); the routing-weight multiply; the W2 matmul | 747.1 -> **721.4** | 1474.7 -> **1230.5** (one pass) | 0.999986 / 0.999964 |
+| sparse (`_block`) | 18 (+2 input slices per block at M=256) -> **13** | mask: `sum` + `to_layout` on the router's bf16 matrix (no typecast); `clamped_silu_glu`; the [1,1,M,E] -> [1,E,M,1] routing weights as one `permute` (was typecast + transpose + reshape) | 699.9 -> **683.1** (legacy config 1355.8 -> 1338.8) | 5193.0 -> 5061.9 (8 blocks) | 1.000000 / 1.000000 |
+
+Remaining ops of the dense path: `matmul` (routing weights x `sel_expand`), `matmul` (gate), `matmul` (up),
+`clamped_silu_glu`, `multiply` (routing weights; it is what zeroes the non-routed experts, so it cannot fold into
+the GLU without a per-element scale input), `matmul` (W2, expert sum = K reduction). Remaining ops of the sparse
+path: pad-fill + `sum` + untilize (the ROW_MAJOR bf16 activity mask the sparse kernel requires: no single op
+produces it), `sparse_matmul` + its zero-fill, two slices (the kernel's one `[E, M, 2I]` output; `clamped_silu_glu`
+needs the halves as tensors), `clamped_silu_glu`, `permute`, `multiply`, `sparse_matmul` + its zero-fill,
+`sum` over the experts (the accumulate-over-experts mode is a kernel change). On a multi-column mesh both paths
+have one more matmul (the expert selector) unless the router emits the local columns directly.
+`test_moe.py` (single chip, sparse path, bf16 router matrix): router sets 32/32 and 255/256 identical to HF, MoE PCC 0.999930 (T = 32) / 0.999946 (T = 256), unchanged (`_logs/optexperts_test_moe_minops.log`).
