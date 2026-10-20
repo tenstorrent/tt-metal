@@ -3228,6 +3228,18 @@ void ControlPlane::clear_fabric_context() {
     asic_id_to_fabric_node_cache_.clear();
 }
 
+void ControlPlane::reset_fabric_config_after_disable() {
+    // Fabric was explicitly disabled (SetFabricConfig(DISABLED), driven by teardown / device close). The
+    // control plane's resolved fabric_config_ must follow the env back to DISABLED; otherwise a control plane
+    // that previously adopted FABRIC_1D (e.g. via a process-wide override set by a prior test) keeps reporting
+    // it through get_fabric_config() after teardown, which forces fabric back on for the next device open and
+    // trips the single-chip fabric guard on an auto-discovered 1-chip mesh (the civ2 regression). Reset to
+    // DISABLED, then re-adopt so an MGD that declares an explicit per-mesh fabric_config keeps it (adopt is a
+    // no-op when the mesh graph declares nothing explicit, leaving DISABLED -- the original default behaviour).
+    this->fabric_config_ = FabricConfig::DISABLED;
+    this->adopt_local_mesh_fabric_config();
+}
+
 bool ControlPlane::is_cross_host_eth_link(ChipId chip_id, chan_id_t chan_id) const {
     auto asic_id = this->cluster_.get().get_unique_chip_ids().at(chip_id);
     return this->physical_system_descriptor_->is_cross_host_eth_link(tt::tt_metal::AsicID{asic_id}, chan_id);
