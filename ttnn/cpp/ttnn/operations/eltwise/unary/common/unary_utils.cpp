@@ -6,18 +6,17 @@
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/operations/data_movement/common/synthesize_output_shard_spec.hpp"
-#include "ttnn/operations/eltwise/unary/device/kernels/dram_read_common.hpp"
 
+#include <tt-metalium/hal.hpp>
 #include <tt-metalium/math.hpp>
+#include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/work_split.hpp>
 
 #include <algorithm>
 #include <bit>
 #include <limits>
-#include <numeric>
 #include <mutex>
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/mesh_device.hpp>
+#include <numeric>
 
 namespace ttnn::operations::unary {
 
@@ -489,13 +488,11 @@ DramReadPlan get_dram_read_plan(
             pages_per_core,
             default_start_banks(reads, plan, total_pages, num_cores, num_dram_banks));
     }
-    // The queue's scheduler serves at most kMaxWorkers, and some compute kernels take a fixed tile count. With many
-    // cores per bank bursts stand in for the queue: fp32 logit and logsigmoid on shards over part of the banks took up
-    // to 34% less time with them than with the default path. With few cores per bank bursts are slower than the
-    // default path where the queue is faster.
+    // Some compute kernels take a fixed tile count and cannot run the queue. With many cores per bank bursts stand in
+    // for it: fp32 logit and logsigmoid on shards over part of the banks took up to 34% less time with them than with
+    // the default path. With few cores per bank bursts are slower than the default path where the queue is faster.
     if (plan.flow == DramReadFlow::WorkQueue &&
-        (num_cores > dram_read::kMaxWorkers ||
-         !utils::compute_kernel_supports_work_queue(op_chain[0].type(), input_spec.data_type()))) {
+        !utils::compute_kernel_supports_work_queue(op_chain[0].type(), input_spec.data_type())) {
         plan.flow = many_cores_per_bank ? DramReadFlow::StaticBurst : DramReadFlow::None;
     }
     if (plan.flow == DramReadFlow::None) {

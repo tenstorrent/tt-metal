@@ -17,7 +17,6 @@
 #include "api/semaphore.h"
 #include "experimental/kernel_args.h"
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
-#include "ttnn/operations/eltwise/unary/device/kernels/dram_read_common.hpp"
 
 namespace dram_read {
 
@@ -137,21 +136,37 @@ struct StaticRange {
 
 #if WORK_QUEUE
 // Work queue. Every core is a worker; the scheduler core's writer also hands out chunks.
-//   request  worker -> its word in the scheduler's request table: seq | x << 12 | y << 22, the worker's NoC
-//            coordinates for the reply and a sequence number that changes with every request (1 to kMaxSeq)
+//   request  worker -> its word in the scheduler's request table (see request_word): the worker's NoC coordinates for
+//            the reply and a sequence number that changes with every request
 //   reply    scheduler -> the worker's reply semaphore, incremented by chunk + 1; the worker clears it before asking
 // Each worker first clears its word in the table, waits for that write to land, then increments the scheduler's
-// cleared semaphore; the scheduler serves once every worker has, so 0 means no request.
-constexpr uint32_t kMaxSeq = 0xFFF;
+// cleared semaphore; the scheduler serves once every worker has, so 0 means no request. After the table, the requests
+// DFB holds the scheduler's copy of each worker's last served request.
 constexpr uint32_t kNoChunk = 0xFFFFFFFE;  // reply when every chunk is out; kNoChunk + 1 still fits
+
+// A request word: the sequence number in the low kSeqBits, then the worker's NoC x and y in kCoordBits each.
+constexpr uint32_t kSeqBits = 12;
+constexpr uint32_t kCoordBits = 10;
+constexpr uint32_t kMaxSeq = (1u << kSeqBits) - 1;
+constexpr uint32_t kCoordMask = (1u << kCoordBits) - 1;
+
+inline uint32_t request_word(uint32_t x, uint32_t y, uint32_t seq) {
+    return seq | ((x & kCoordMask) << kSeqBits) | ((y & kCoordMask) << (kSeqBits + kCoordBits));
+}
+inline uint32_t request_x(uint32_t word) { return (word >> kSeqBits) & kCoordMask; }
+inline uint32_t request_y(uint32_t word) { return word >> (kSeqBits + kCoordBits); }
+
+// NoC coordinates packed by the host as x | (y << 16).
+inline uint32_t packed_x(uint32_t xy) { return xy & 0xFFFF; }
+inline uint32_t packed_y(uint32_t xy) { return xy >> 16; }
 
 inline volatile tt_l1_ptr uint32_t* l1_words(uint32_t addr) {
     return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(addr);
 }
 
-// Writes one word to l1_addr on the core at NoC coordinates xy = x | (y << 16).
+// Writes one word to l1_addr on the core at packed NoC coordinates xy.
 inline void write_word(const Noc& noc, uint32_t xy, uint32_t l1_addr, uint32_t value) {
-    noc.inline_dw_write(UnicastEndpoint{}, value, {.noc_x = xy & 0xFFFF, .noc_y = xy >> 16, .addr = l1_addr});
+    noc.inline_dw_write(UnicastEndpoint{}, value, {.noc_x = packed_x(xy), .noc_y = packed_y(xy), .addr = l1_addr});
 }
 
 #ifdef READ_BURST  // the reader
@@ -163,9 +178,9 @@ struct QueueReader {
     uint32_t total_pages;
     uint32_t chunk_pages;
     uint32_t scheduler_xy;
-    // This worker's NoC coordinates, shifted into place. Tensix coordinates are translated, so they are the same on
-    // both NoCs.
-    uint32_t request_coords = ((my_x[noc_index] & 0x3FF) | ((my_y[noc_index] & 0x3FF) << 10)) << 12;
+    // This worker's request word without its sequence number. Tensix coordinates are translated, so they are the same
+    // on both NoCs.
+    uint32_t request_coords = request_word(my_x[noc_index], my_y[noc_index], 0);
     uint32_t table_slot = DataflowBuffer(dfb::requests).get_write_ptr() + sizeof(uint32_t) * worker_id;
     Semaphore<> reply{sem::reply};
     uint32_t seq = 0;
@@ -184,7 +199,7 @@ struct QueueReader {
     void for_each_chunk(Read read) {
         write_word(noc, scheduler_xy, table_slot, 0);
         noc.async_write_barrier();
-        Semaphore<>(sem::cleared).up(noc, scheduler_xy & 0xFFFF, scheduler_xy >> 16, 1);
+        Semaphore<>(sem::cleared).up(noc, packed_x(scheduler_xy), packed_y(scheduler_xy), 1);
         const uint32_t num_chunks = tt::data_movement::common::div_up(total_pages, chunk_pages);
         for (uint32_t chunk = worker_id; chunk != kNoChunk; chunk = wait_reply()) {
             request();
@@ -243,8 +258,10 @@ struct QueueWriter {
     uint32_t workers_done = 0;
     bool serving = false;  // set once every worker has cleared its word in the table
     volatile tt_l1_ptr uint32_t* table = l1_words(DataflowBuffer(dfb::requests).get_read_ptr());
+    // After the table; only this core reads and writes it, so it needs no volatile.
+    tt_l1_ptr uint32_t* last_request =
+        reinterpret_cast<tt_l1_ptr uint32_t*>(DataflowBuffer(dfb::requests).get_read_ptr()) + num_workers;
     Semaphore<> reply{sem::reply};
-    uint32_t last_request[kMaxWorkers] = {};
 
     static QueueWriter from_args(const Noc& noc) {
         // The middle worker schedules, to keep request round trips short.
@@ -258,6 +275,9 @@ struct QueueWriter {
     // Calls write(first, count) for every chunk the reader hands on, then keeps answering until every worker is done.
     template <typename Write>
     void for_each_chunk(Write write) {
+        if (is_scheduler) {
+            std::fill(last_request, last_request + num_workers, 0);
+        }
         DataflowBuffer from_reader(dfb::chunk_range);
         while (true) {
             serve_until([&] { return from_reader.pages_available_at_front(1); });
@@ -302,7 +322,7 @@ struct QueueWriter {
             } else {
                 workers_done++;
             }
-            reply.up(noc, (word >> 12) & 0x3FF, word >> 22, chunk + 1);
+            reply.up(noc, request_x(word), request_y(word), chunk + 1);
         }
     }
 };

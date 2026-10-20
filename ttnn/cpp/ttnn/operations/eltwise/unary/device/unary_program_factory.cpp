@@ -572,7 +572,7 @@ ttnn::device_operation::ProgramArtifacts UnaryDeviceOperation::ProgramFactory::c
 
     Group<SemaphoreSpec> semaphores;
     if (work_queue) {
-        // Control words: chunk tile counts for compute, chunk ranges for the writer, and the request table.
+        // Control words: chunk tile counts for compute, chunk ranges for the writer, and the scheduler's requests.
         constexpr uint32_t kCtrlEntryBytes = 16;
         constexpr uint32_t kChunksInFlight = 8;  // chunks the reader may hand on ahead of compute and the writer
         auto ctrl_dfb = [&](const DFBSpecName& name, uint32_t entries) {
@@ -585,7 +585,8 @@ ttnn::device_operation::ProgramArtifacts UnaryDeviceOperation::ProgramFactory::c
         };
         ctrl_dfb(CHUNK_COUNT_DFB, kChunksInFlight);
         ctrl_dfb(CHUNK_RANGE_DFB, kChunksInFlight);
-        ctrl_dfb(REQUESTS_DFB, tt::div_up(all_device_cores.num_cores() * sizeof(uint32_t), kCtrlEntryBytes));
+        // Two words per worker: its request, and the scheduler's copy of its last served request.
+        ctrl_dfb(REQUESTS_DFB, tt::div_up(2 * all_device_cores.num_cores() * sizeof(uint32_t), kCtrlEntryBytes));
         semaphores.push_back(SemaphoreSpec{.unique_id = REPLY_SEM, .target_nodes = all_device_cores});
         semaphores.push_back(SemaphoreSpec{.unique_id = CLEARED_SEM, .target_nodes = all_device_cores});
     }

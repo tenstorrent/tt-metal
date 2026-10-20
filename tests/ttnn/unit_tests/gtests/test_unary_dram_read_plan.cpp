@@ -127,8 +127,6 @@ TEST(UnaryDramReadPlan, ManyCoresPerBankLargePages) {
     // From 512 pages per core heavy ops take the queue; logit's and logsigmoid's kernels cannot run it, so bursts.
     EXPECT_EQ(flow(UnaryOpType::LOGIT, height_shards(7, 8100, DataType::FLOAT32), chip), kBurst);
     EXPECT_EQ(flow(UnaryOpType::LOGSIGMOID, height_shards(7, 8100, DataType::FLOAT32), chip), kBurst);
-    // More workers than the queue's scheduler serves: bursts too.
-    EXPECT_EQ(flow(UnaryOpType::RELU, interleaved(150 * 200), Chip{150, 8}), kBurst);
 }
 
 TEST(UnaryDramReadPlan, FewCoresPerBankGates) {
@@ -177,8 +175,6 @@ TEST(UnaryDramReadPlan, FewCoresPerBankCosts) {
     // With 4 KB pages relu stays light, and softplus counts as very heavy.
     EXPECT_EQ(flow(UnaryOpType::RELU, interleaved(chip.cores * 200, DataType::FLOAT32), chip), kQueue);
     EXPECT_EQ(flow(UnaryOpType::SOFTPLUS, interleaved(chip.cores * 200, DataType::FLOAT32), chip), kNone);
-    // More workers than the queue's scheduler serves: the default path, as bursts are slower there.
-    EXPECT_EQ(flow(UnaryOpType::RELU, interleaved(150 * 200), Chip{150, 20}), kNone);
 }
 
 TEST(UnaryDramReadPlan, KeepsDefaultPath) {
@@ -199,6 +195,12 @@ TEST(UnaryDramReadPlan, KeepsDefaultPath) {
                 .flow,
             kNone);
     }
+}
+
+TEST(UnaryDramReadPlan, WorkQueueAnyWorkerCount) {
+    // The scheduler keeps its per-worker state in L1, sized by the grid: no cap on the worker count.
+    EXPECT_EQ(flow(UnaryOpType::RELU, interleaved(200 * 200), Chip{200, 8}), kQueue);
+    EXPECT_EQ(flow(UnaryOpType::RELU, interleaved(150 * 200), Chip{150, 20}), kQueue);
 }
 
 TEST(UnaryDramReadPlan, WorkQueueChunks) {
