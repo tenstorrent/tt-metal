@@ -143,6 +143,33 @@ def _mm_config_256(k, n):
     )  # fmt: skip
 
 
+def _even_lm_head(model):
+    """The target's LM head [hidden, vocab] BF8, sharded evenly over the mesh columns (vocab / D columns per device). The
+    model's copy pads the vocabulary to 65536 columns per device before sharding (ttnn.topk's power-of-two path), so
+    every device multiplies 65536 columns (the last one holding 4480 real ones); the batch-32 LM heads (compute-bound at
+    256 rows) and _Argmax need no padding. Built once from the model's copy (the BF8 values exactly: 50272 columns per
+    device keep the 16-column exponent groups), cached under TT_CACHE_PATH; shared by the drafter and the verify."""
+    if getattr(model, "_b32_lm_head_even", None) is not None:
+        return model._b32_lm_head_even
+    import glob
+
+    mesh, D, V = model.mesh_device, model.mesh_device.shape[1], model.vocab_size
+    per = V // D
+    assert per * D == V and per % TILE == 0
+    cache = os.environ.get("TT_CACHE_PATH")
+    name = os.path.join(cache, "b32_lm_head_even.weight") if cache else None
+    full = None
+    if name is None or not glob.glob(name + "_dtype_*"):
+        w = model.lm_head_weight
+        full = ttnn.to_torch(w, mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=-1))
+        full = full.reshape(-1, full.shape[-1])[:, :V].reshape(1, 1, -1, V)
+    model._b32_lm_head_even = ttnn.as_tensor(
+        full, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=mesh, memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=-1), cache_file_name=name,
+    )  # fmt: skip
+    return model._b32_lm_head_even
+
+
 class _Argmax:
     """Row argmax over a vocabulary split over the mesh columns: each device's best (value, index) on device; the host
     combines the devices (read after the pass)."""
@@ -468,10 +495,12 @@ class BatchedDraft:
             math_fidelity=getattr(ttnn.MathFidelity, os.environ.get("B32_DRAFT_MMFID", "HiFi2")), math_approx_mode=False,
             fp32_dest_acc_en=True, packer_l1_acc=True,
         )  # fmt: skip
-        self.argmax = _Argmax(target.lm_head_weight.shape[-1], target.vocab_size)
         # the drafter's LM head on a BFP4 copy of the target's with BF8 rows: 0.89 -> 0.52 ms per pass, live-like
-        # acceptance on a fixed text 3.07 (BF16 rows x BF8 weight: 3.05 / 3.10 in two runs)
-        self.lm_head = ttnn.typecast(target.lm_head_weight, ttnn.bfloat4_b)
+        # acceptance on a fixed text 3.07 (BF16 rows x BF8 weight: 3.05 / 3.10 in two runs); the unpadded copy
+        # (_even_lm_head)
+        lm8 = _even_lm_head(target) if os.environ.get("B32_LM_EVEN", "1") == "1" else target.lm_head_weight
+        self.lm_head = ttnn.typecast(lm8, ttnn.bfloat4_b)
+        self.argmax = _Argmax(lm8.shape[-1], target.vocab_size)
 
     # -- pieces ----------------------------------------------------------------------------------------------------
     def _linear(self, x, w, bias=None):
@@ -833,7 +862,8 @@ class BatchedVerify:
             fp32_dest_acc_en=False,
             packer_l1_acc=True,
         )
-        self.argmax = _Argmax(model.lm_head_weight.shape[-1], model.vocab_size)
+        self.lm_head = _even_lm_head(model) if os.environ.get("B32_LM_EVEN", "1") == "1" else model.lm_head_weight
+        self.argmax = _Argmax(self.lm_head.shape[-1], model.vocab_size)
         # grouped MoE (dflash/grouped_moe.py): only the routed (row, expert) pairs; None: the dense MoE
         self.grouped = None
         self.route_fused = os.environ.get("B32_GMOE_ROUTE", "1") == "1"
@@ -1158,7 +1188,7 @@ class BatchedVerify:
         normed_s.deallocate(True)
         normed8 = ttnn.typecast(normed, ttnn.bfloat8_b)  # (to_memory_config to the same layout returns its input)
         normed.deallocate(True)
-        logits8 = ttnn.matmul(normed8, model.lm_head_weight, dtype=ttnn.bfloat8_b)  # as the batched decode's LM head
+        logits8 = ttnn.matmul(normed8, self.lm_head, dtype=ttnn.bfloat8_b)  # as the batched decode's LM head
         normed8.deallocate(True)
         if self.argmax.custom:  # (reads the BFP8 logits as stored)
             out = self.argmax.device(logits8)
