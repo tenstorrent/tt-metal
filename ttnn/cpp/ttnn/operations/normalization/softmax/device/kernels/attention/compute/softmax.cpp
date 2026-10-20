@@ -26,12 +26,20 @@ namespace ckl = compute_kernel_lib;
 // The buffer for the att mask is currently sized as (1t,Wt) so we only reuse it for one HtWt-sized batch of x
 // then read another Wt tiles of mask for the next batch
 
-template <std::uint32_t dfb_in, std::uint32_t dfb_max_scaler, std::uint32_t dfb_max, std::uint32_t dfb_out>
+template <
+    std::uint32_t dfb_in,
+    std::uint32_t dfb_max_scaler,
+    std::uint32_t dfb_max,
+    std::uint32_t dfb_out,
+    typename DFB0,
+    typename DFB1,
+    typename DFB2,
+    typename DFB3>
 void calc_numeric_stable(
-    DataflowBuffer& dfb_in_obj,
-    DataflowBuffer& dfb_max_scaler_obj,
-    DataflowBuffer& dfb_max_obj,
-    DataflowBuffer& dfb_out_obj,
+    DFB0& dfb_in_obj,
+    DFB1& dfb_max_scaler_obj,
+    DFB2& dfb_max_obj,
+    DFB3& dfb_out_obj,
     std::uint32_t Wt,
     std::uint32_t ndst) {
     // calculate max val per row
@@ -71,7 +79,8 @@ void calc_numeric_stable(
 // After a partial row (Wt not a multiple of the CB capacity), rd/wr sit at that offset.
 // Push/pop `pad` tiles to complete the cycle and return pointers to the CB base.
 // Same cycle as the copy in softmax_large_tensor.cpp, run through the kernel's DataflowBuffer object.
-ALWI void cycle_dfb_pad(DataflowBuffer& dfb, std::uint32_t pad) {
+template <typename DFB0>
+ALWI void cycle_dfb_pad(DFB0& dfb, std::uint32_t pad) {
     if (pad == 0) {
         return;
     }
@@ -82,7 +91,8 @@ ALWI void cycle_dfb_pad(DataflowBuffer& dfb, std::uint32_t pad) {
 }
 
 // Same, for CBs whose padding tiles the reader already pushed: only consume them.
-ALWI void drain_dfb_pad(DataflowBuffer& dfb, std::uint32_t pad) {
+template <typename DFB0>
+ALWI void drain_dfb_pad(DFB0& dfb, std::uint32_t pad) {
     if (pad == 0) {
         return;
     }
@@ -167,7 +177,7 @@ void kernel_main() {
 #else
     // Without numeric_stable, dfb_x aliases dfb_exps (Same-FIFO reuse) so exp results circulate in one buffer.
     constexpr auto dfb_x = dfb_exps;
-    DataflowBuffer& dfb_x_obj = dfb_exps_obj;
+    auto& dfb_x_obj = dfb_exps_obj;
 #endif
 
     dfb_max_scaler_obj.wait_front(1);  // comes from the reader
