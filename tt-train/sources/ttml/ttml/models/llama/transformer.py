@@ -161,6 +161,7 @@ class LlamaBlock(AbstractModuleBase):
         mlp_dropout: float = 0.0,
         intermediate_size: Optional[int] = None,
         attention_bias: bool = False,
+        rms_norm_eps: float = 1e-5,
         use_tp: bool = False,
         out_proj_init: Optional[Callable] = None,
         down_proj_init: Optional[Callable] = None,
@@ -175,8 +176,8 @@ class LlamaBlock(AbstractModuleBase):
             use_tp=use_tp,
             down_proj_init=down_proj_init,
         )
-        self.attention_norm = RMSNormLayer(hidden_size)
-        self.mlp_norm = RMSNormLayer(hidden_size)
+        self.attention_norm = RMSNormLayer(hidden_size, rms_norm_eps)
+        self.mlp_norm = RMSNormLayer(hidden_size, rms_norm_eps)
         self.attention = GroupedQueryAttention(
             embedding_size=hidden_size,
             num_heads=num_attention_heads,

@@ -26,14 +26,14 @@ python3 ./sources/examples/lora_llama/train_lora_llama.py \
 ```
 
 The architecture and vocabulary come from the checkpoint's `config.json`. The YAML then only
-sets training-time knobs: `max_sequence_length`, `runner_type` and `dropout_prob`. Under tensor parallelism
-the token embedding is vocab-sharded,
-the only layout a checkpoint with tied
-embeddings (e.g. Llama 3.2 1B) can load into.
+sets training-time knobs: `max_sequence_length`, `runner_type` and `dropout_prob`.
 
 Loading fails, rather than silently cropping or padding a weight, if a tensor in the checkpoint
 does not have the shape its `config.json` implies. It also fails if the tokenizer has more tokens
 than the checkpoint has embedding rows.
+
+Under tensor parallelism the token embedding is vocab-sharded, pretrained or not: it is the only
+layout tied embeddings (e.g. Llama 3.2 1B) can load into.
 
 ### Multi-device DDP (8 devices)
 

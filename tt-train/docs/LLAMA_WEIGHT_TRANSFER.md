@@ -193,7 +193,7 @@ embedding `(V, H)` / gamma `(H,)` shapes from §2 exactly.
 - **Q / K row order (RoPE convention).** ttml's
   `GroupedQueryAttention` applies RoPE on Meta-style
   interleaved-pair rotary `(h_0, h_1), (h_2, h_3), …`;
-  `safetensors_loader._unpermute_proj_rows` has already converted
+  `ttml.common.utils.unpermute_proj_rows` has already converted
   HF → Meta on load. tt-transformers' default for Llama-3.2-1B
   (`use_hf_rope = False`) uses the same Meta convention. So Q / K rows
   in the exported dict are already in the consumer's order; pass

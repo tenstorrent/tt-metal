@@ -30,8 +30,8 @@ from safetensors.torch import save_file
 from transformers import AutoTokenizer
 from ttml.common.config import TransformerConfig
 from ttml.common.utils import no_grad, round_up_to_tile
-from ttml.models import RunnerType, WeightTyingType
-from ttml.models.llama import LlamaConfig, LlamaRopeScalingConfig, load_from_safetensors
+from ttml.models import RunnerType
+from ttml.models.llama import LlamaConfig, load_from_safetensors
 from ttml.trainers.grpo_trainer import GRPOCompleter
 
 from .mpi_rollout import MPIRolloutClient
@@ -116,34 +116,23 @@ class LlamaCompleterRemoteRollout(GRPOCompleter):
         self._num_devices: int = mesh_device.get_num_devices()
 
         tokenizer = AutoTokenizer.from_pretrained(model_source)
-        tf_config.vocab_size = len(tokenizer)
 
-        rope_scaling = LlamaRopeScalingConfig(
-            scaling_factor=getattr(tf_config, "scaling_factor", 0.0) or 0.0,
-            high_freq_factor=getattr(tf_config, "high_freq_factor", 4.0) or 4.0,
-            low_freq_factor=getattr(tf_config, "low_freq_factor", 1.0) or 1.0,
-            original_context_length=getattr(tf_config, "original_context_length", 0) or 0,
-        )
+        if os.path.isdir(model_source) and any(f.endswith(".safetensors") for f in os.listdir(model_source)):
+            checkpoint_dir = model_source
+        else:
+            logging.info("Downloading model from HuggingFace: %s", model_source)
+            checkpoint_dir = snapshot_download(
+                repo_id=model_source,
+                allow_patterns=["*.safetensors", "*.bin", "*.json", "*.model", "*.txt"],
+            )
+            checkpoint_dir = _ensure_safetensors_dir(checkpoint_dir)
 
-        runner_type = RunnerType.from_string(str(tf_config.runner_type))
-        weight_tying = WeightTyingType.Disabled
-        if tf_config.weight_tying:
-            weight_tying = WeightTyingType.from_string(str(tf_config.weight_tying))
-
-        llama_cfg = LlamaConfig(
-            hidden_size=tf_config.embedding_dim,
-            intermediate_size=tf_config.intermediate_dim,
-            num_hidden_layers=tf_config.num_blocks,
-            num_attention_heads=tf_config.num_heads,
-            num_key_value_heads=tf_config.num_groups,
-            vocab_size=len(tokenizer),
+        llama_cfg = LlamaConfig.from_hf(
+            checkpoint_dir,
             max_position_embeddings=tf_config.max_sequence_length,
-            rope_theta=tf_config.theta or 10000.0,
             attention_dropout=tf_config.dropout_prob,
             mlp_dropout=tf_config.dropout_prob,
-            runner_type=runner_type,
-            weight_tying=weight_tying,
-            rope_scaling=rope_scaling,
+            runner_type=RunnerType.from_string(str(tf_config.runner_type)),
         )
 
         tt_model = LlamaCompositeKV(llama_cfg)
@@ -164,20 +153,8 @@ class LlamaCompleterRemoteRollout(GRPOCompleter):
             ttml.core.distributed.concat_mesh_to_tensor_composer(mesh_device, 0) if self._ddp_enabled else None
         )
 
-        local_safetensors = os.path.isdir(model_source) and any(
-            f.endswith(".safetensors") for f in os.listdir(model_source)
-        )
-        if local_safetensors:
-            logging.info("Loading model from local safetensors dir: %s", model_source)
-            load_from_safetensors(tt_model, model_source, llama_cfg)
-        else:
-            logging.info("Downloading model from HuggingFace: %s", model_source)
-            model_repo_path = snapshot_download(
-                repo_id=model_source,
-                allow_patterns=["*.safetensors", "*.bin", "*.json", "*.model", "*.txt"],
-            )
-            model_repo_path = _ensure_safetensors_dir(model_repo_path)
-            load_from_safetensors(tt_model, model_repo_path, llama_cfg)
+        logging.info("Loading model from safetensors dir: %s", checkpoint_dir)
+        print(load_from_safetensors(tt_model, checkpoint_dir))
 
         ctx._tokenizer = tokenizer
         if ctx._pad_token is None:

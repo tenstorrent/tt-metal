@@ -15,8 +15,8 @@ import ttnn
 import ttml
 from ttml.common.config import DeviceConfig, TransformerConfig
 from ttml.common.utils import no_grad, round_up_to_tile
-from ttml.models import RunnerType, WeightTyingType
-from ttml.models.llama import Llama, LlamaConfig, LlamaRopeScalingConfig, load_from_safetensors
+from ttml.models import RunnerType
+from ttml.models.llama import Llama, LlamaConfig, load_from_safetensors
 from huggingface_hub import snapshot_download
 from transformers import AutoTokenizer
 
@@ -83,17 +83,15 @@ class LlamaGRPOCompleter(GRPOCompleter):
     Args:
         ctx: Generation parameters. ``_tokenizer`` and ``_pad_token`` are set
             automatically from ``model_source``.
-        transformer_config: Model architecture config (a
-            :class:`ttml.common.config.TransformerConfig` instance, typically
-            built via ``get_model_config``).
+        transformer_config: A :class:`ttml.common.config.TransformerConfig`.
         device_config: Device mesh config (a
             :class:`ttml.common.config.DeviceConfig` instance). Device
             initialisation (``enable_fabric``, ``open_device``) is delegated
             to :meth:`setup_device`, which the constructor calls. Subclasses
             and tests may override ``setup_device`` to swap that behaviour
             (e.g. reuse an already-open device).
-        model_source: HuggingFace model ID or path to a local directory
-            containing ``model.safetensors``.
+        model_source: A HuggingFace model ID, or a checkpoint directory saved
+            by the GRPO trainer (``model.safetensors``, ``config.json`` and the tokenizer).
     """
 
     def setup_device(self, device_config: DeviceConfig) -> Any:
@@ -134,34 +132,24 @@ class LlamaGRPOCompleter(GRPOCompleter):
         self._num_devices: int = mesh_device.get_num_devices()
 
         tokenizer = AutoTokenizer.from_pretrained(model_source)
-        tf_config.vocab_size = len(tokenizer)
 
-        rope_scaling = LlamaRopeScalingConfig(
-            scaling_factor=getattr(tf_config, "scaling_factor", 0.0) or 0.0,
-            high_freq_factor=getattr(tf_config, "high_freq_factor", 4.0) or 4.0,
-            low_freq_factor=getattr(tf_config, "low_freq_factor", 1.0) or 1.0,
-            original_context_length=getattr(tf_config, "original_context_length", 0) or 0,
-        )
+        # A local model.safetensors is one this trainer saved, under TTML's parameter names.
+        local_checkpoint = os.path.isdir(model_source) and "model.safetensors" in os.listdir(model_source)
+        if local_checkpoint:
+            checkpoint_dir = model_source
+        else:
+            logging.info("Downloading model from HuggingFace: %s", model_source)
+            checkpoint_dir = snapshot_download(
+                repo_id=model_source,
+                allow_patterns=["*.safetensors", "*.json", "*.model", "*.txt"],
+            )
 
-        runner_type = RunnerType.from_string(str(tf_config.runner_type))
-        weight_tying = WeightTyingType.Disabled
-        if tf_config.weight_tying:
-            weight_tying = WeightTyingType.from_string(str(tf_config.weight_tying))
-
-        llama_cfg = LlamaConfig(
-            hidden_size=tf_config.embedding_dim,
-            intermediate_size=tf_config.intermediate_dim,
-            num_hidden_layers=tf_config.num_blocks,
-            num_attention_heads=tf_config.num_heads,
-            num_key_value_heads=tf_config.num_groups,
-            vocab_size=len(tokenizer),
+        llama_cfg = LlamaConfig.from_hf(
+            checkpoint_dir,
             max_position_embeddings=tf_config.max_sequence_length,
-            rope_theta=tf_config.theta or 10000.0,
             attention_dropout=tf_config.dropout_prob,
             mlp_dropout=tf_config.dropout_prob,
-            runner_type=runner_type,
-            weight_tying=weight_tying,
-            rope_scaling=rope_scaling,
+            runner_type=RunnerType.from_string(str(tf_config.runner_type)),
             # The completer emits non-broadcast (B, 1, S, S) masks, which only the composite kernel accepts.
             use_composite_sdpa=True,
         )
@@ -194,19 +182,11 @@ class LlamaGRPOCompleter(GRPOCompleter):
         ddp_axis = autograd_ctx.get_parallelism_context().get_ddp_axis() if self._ddp_enabled else None
         self._seed_axes: Any = [int(ddp_axis)] if ddp_axis is not None else None
 
-        local_safetensors = os.path.isdir(model_source) and any(
-            f == "model.safetensors" for f in os.listdir(model_source)
-        )
-        if local_safetensors:
+        if local_checkpoint:
             logging.info("Loading model from local safetensors: %s", model_source)
             load_checkpoint(tt_model, model_source, dp_mapper=self._dp_mapper)
         else:
-            logging.info("Downloading model from HuggingFace: %s", model_source)
-            model_repo_path = snapshot_download(
-                repo_id=model_source,
-                allow_patterns=["*.safetensors", "*.json", "*.model", "*.txt"],
-            )
-            load_from_safetensors(tt_model, model_repo_path, llama_cfg)
+            print(load_from_safetensors(tt_model, checkpoint_dir))
 
         ctx._tokenizer = tokenizer
         if ctx._pad_token is None:
@@ -379,15 +359,14 @@ class LlamaGRPOCompleter(GRPOCompleter):
         return stop_ids
 
     def _get_kv_cache(self, B: int) -> ttml.models.KvCache:
-        cfg = self.transformer_config
-        head_dim = getattr(cfg, "head_dim", None) or (cfg.embedding_dim // cfg.num_heads)
+        cfg = self._model.config
         if self._kv_cache is None or self._kv_cache_B != B:
             self._kv_cache = ttml.models.KvCache(
-                cfg.num_blocks,
+                cfg.num_hidden_layers,
                 B,
-                cfg.num_groups,
-                cfg.max_sequence_length,
-                head_dim,
+                cfg.num_key_value_heads,
+                cfg.max_position_embeddings,
+                cfg.hidden_size // cfg.num_attention_heads,
             )
             self._kv_cache_B = B
         self._kv_cache.reset()
@@ -409,7 +388,7 @@ class LlamaGRPOCompleter(GRPOCompleter):
         B_local = B // total_devices
 
         V = len(ctx._tokenizer)
-        padded_V = round_up_to_tile(V)
+        padded_V = self._model.config.vocab_size
 
         kv_cache = self._get_kv_cache(B_local)
         # Built lazily on the first step: the mask should match the LOGITS dtype (a mismatch costs
@@ -418,7 +397,7 @@ class LlamaGRPOCompleter(GRPOCompleter):
 
         tokens_to_complete = min(
             ctx.max_tokens_to_complete,
-            self.transformer_config.max_sequence_length - N,
+            self._model.config.max_position_embeddings - N,
         )
 
         mesh_device = self._mesh_device

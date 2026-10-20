@@ -75,6 +75,7 @@ class LlamaConfig:
     max_position_embeddings: int = 256
     rope_theta: float = 10000.0
     attention_bias: bool = False
+    rms_norm_eps: float = 1e-5
     attention_dropout: float = 0.0
     mlp_dropout: float = 0.0
     runner_type: RunnerType = RunnerType.Default
@@ -154,25 +155,32 @@ class LlamaConfig:
         model_type = hf_config.get("model_type", "llama")
         if model_type != "llama":
             raise ValueError(f"model_type {model_type!r} is not a Llama checkpoint")
-        if hf_config.get("mlp_bias", False):
-            raise ValueError("mlp_bias=true is not supported")
+        # The model has no MLP bias, and the loader cannot load attention biases.
+        for bias in ("attention_bias", "mlp_bias"):
+            if hf_config.get(bias, False):
+                raise ValueError(f"{bias}=true is not supported")
+        if (hidden_act := hf_config.get("hidden_act", "silu")) != "silu":
+            raise ValueError(f"hidden_act {hidden_act!r} is not supported, only 'silu'")
         hidden_size = hf_config["hidden_size"]
         num_heads = hf_config["num_attention_heads"]
         head_dim = hf_config.get("head_dim", hidden_size // num_heads)
         if head_dim * num_heads != hidden_size:
             raise ValueError(f"head_dim {head_dim} * num_attention_heads {num_heads} != hidden_size {hidden_size}")
 
-        rope_scaling = LlamaRopeScalingConfig()
-        if hf_rope_scaling := hf_config.get("rope_scaling"):
-            rope_type = hf_rope_scaling.get("rope_type", hf_rope_scaling.get("type"))
-            if rope_type != "llama3":
-                raise ValueError(f"rope_scaling type {rope_type!r} is not supported, only 'llama3'")
+        # transformers v5 writes rope_theta and the scaling as rope_parameters; v4 as rope_theta and rope_scaling.
+        rope = hf_config.get("rope_parameters") or hf_config.get("rope_scaling") or {}
+        rope_type = rope.get("rope_type", rope.get("type", "default"))
+        if rope_type == "llama3":
             rope_scaling = LlamaRopeScalingConfig(
-                scaling_factor=hf_rope_scaling["factor"],
-                high_freq_factor=hf_rope_scaling["high_freq_factor"],
-                low_freq_factor=hf_rope_scaling["low_freq_factor"],
-                original_context_length=hf_rope_scaling["original_max_position_embeddings"],
+                scaling_factor=rope["factor"],
+                high_freq_factor=rope["high_freq_factor"],
+                low_freq_factor=rope["low_freq_factor"],
+                original_context_length=rope["original_max_position_embeddings"],
             )
+        elif rope_type == "default":
+            rope_scaling = LlamaRopeScalingConfig()
+        else:
+            raise ValueError(f"rope type {rope_type!r} is not supported, only 'llama3' and 'default'")
 
         architecture = dict(
             hidden_size=hidden_size,
@@ -182,8 +190,8 @@ class LlamaConfig:
             num_key_value_heads=hf_config.get("num_key_value_heads", num_heads),
             vocab_size=hf_config["vocab_size"],
             max_position_embeddings=max_position_embeddings,
-            rope_theta=hf_config.get("rope_theta", 10000.0),
-            attention_bias=hf_config.get("attention_bias", False),
+            rope_theta=rope.get("rope_theta", hf_config.get("rope_theta", 10000.0)),
+            rms_norm_eps=hf_config.get("rms_norm_eps", 1e-6),  # HF's default
             weight_tying=(
                 WeightTyingType.Enabled if hf_config.get("tie_word_embeddings", False) else WeightTyingType.Disabled
             ),
@@ -295,6 +303,7 @@ class Llama(AbstractModuleBase):
                     mlp_dropout=config.mlp_dropout,
                     intermediate_size=config.intermediate_size,
                     attention_bias=config.attention_bias,
+                    rms_norm_eps=config.rms_norm_eps,
                     use_tp=config.use_tp,
                     out_proj_init=out_proj_init,
                     down_proj_init=down_proj_init,
@@ -304,7 +313,7 @@ class Llama(AbstractModuleBase):
             ]
         )
 
-        self.ln_fc = RMSNormLayer(config.hidden_size)
+        self.ln_fc = RMSNormLayer(config.hidden_size, config.rms_norm_eps)
 
     def forward(
         self,

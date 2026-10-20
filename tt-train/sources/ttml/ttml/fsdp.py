@@ -68,19 +68,9 @@ def _is_fsdp_wrapped_module(module: Any) -> bool:
     return getattr(module, "_fsdp_state", False) and module._fsdp_state is not None
 
 
-def _get_placements(autograd_tensor: Any) -> Optional[List[Any]]:
-    """Best-effort read of ``tensor_topology().placements()`` from the ttnn tensor.
-
-    Returns ``None`` if the topology is unavailable (e.g. unit mesh, older ttnn
-    builds, or an edge case where ``placements()`` throws). Callers must treat
-    a ``None`` return as "no useful placement info; assume replicated".
-    """
-    try:
-        tensor = autograd_tensor.get_value()
-        topology = tensor.tensor_topology()
-        return list(topology.placements())
-    except Exception:
-        return None
+def _get_placements(autograd_tensor: Any) -> List[Any]:
+    """Return the tensor's placement on each mesh axis; see :attr:`ttml.Sharding.placements`."""
+    return ttml.Sharding.from_tensor(autograd_tensor).placements
 
 
 def _is_shard(placement: Any) -> bool:
@@ -94,9 +84,9 @@ def _sharded_tensor_dims(placements: Optional[List[Any]]) -> set:
     return {p.dim for p in placements if _is_shard(p)}
 
 
-def _already_fsdp_sharded(placements: Optional[List[Any]], axis_index: int) -> bool:
+def _already_fsdp_sharded(placements: List[Any], axis_index: int) -> bool:
     """True if the param's placement on the FSDP axis is already a Shard."""
-    if placements is None or axis_index >= len(placements):
+    if axis_index >= len(placements):
         return False
     return _is_shard(placements[axis_index])
 
@@ -470,10 +460,9 @@ def _shard_replicated_param(
     n_axes = len(mesh_shape)
 
     placements = _get_placements(autograd_tensor)
-    if placements is None or len(placements) != n_axes:
-        # Tensor has no usable topology metadata (or it's stale). Default-
-        # initialised tensors from ttml.init.* are fully replicated, so this
-        # is the right fallback for the common path.
+    if len(placements) != n_axes:
+        # A tensor replicated by the default topology (e.g. one from ttml.init.*)
+        # flattens to a single Replicate; spell that out per axis.
         placements = [ttnn.PlacementReplicate()] * n_axes
 
     # Build a multi-axis composer that gathers the tensor onto host:

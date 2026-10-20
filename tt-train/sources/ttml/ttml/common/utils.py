@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import os, random
+import ml_dtypes
 import numpy as np
 import ttnn
 import ttml
@@ -163,6 +164,22 @@ def resolve_padded_load_shape(src_shape, target_shape, expected_shape=None, *, n
         f"Unexpected shape for {name}: got {src}, expected {tgt} or its pre-tile-padding source. "
         f"Check that the model config matches the checkpoint."
     )
+
+
+def unpermute_proj_rows(w: np.ndarray, n_heads: int) -> np.ndarray:
+    """Reorder axis 0 from HF's per-head ``[first_half, second_half]`` to the interleaved pairs TTML's
+    RoPE expects: ``[0, half, 1, half + 1, ...]``. Other axes are unchanged."""
+    rows = w.shape[0]
+    if rows % n_heads != 0:
+        raise RuntimeError(f"rows {rows} not divisible by n_heads {n_heads}")
+    per_head = rows // n_heads
+    if per_head % 2 != 0:
+        raise RuntimeError(f"rows per head {per_head} must be even")
+    return w.reshape(n_heads, 2, per_head // 2, *w.shape[1:]).swapaxes(1, 2).reshape(w.shape)
+
+
+def to_bf16_4d(arr: np.ndarray) -> np.ndarray:
+    return arr.reshape((1,) * (4 - arr.ndim) + arr.shape).astype(ml_dtypes.bfloat16, order="C", copy=False)
 
 
 def initialize_device(yaml_config: dict):

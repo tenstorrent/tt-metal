@@ -86,7 +86,7 @@ class TestLlamaConfigFromHf:
         assert config.rope_theta == 500000.0
         assert config.rope_scaling == LlamaRopeScalingConfig(32.0, 4.0, 1.0, 8192)
         assert config.weight_tying == WeightTyingType.Enabled
-        assert config.attention_bias is False
+        assert config.rms_norm_eps == 1e-5
 
     def test_sequence_length_is_the_callers_not_the_trained_context(self):
         config = LlamaConfig.from_hf(HF_LLAMA_3_2_1B, max_position_embeddings=2048)
@@ -112,15 +112,36 @@ class TestLlamaConfigFromHf:
         hf = {k: v for k, v in HF_LLAMA_3_2_1B.items() if k != "rope_scaling"}
         assert LlamaConfig.from_hf(hf, max_position_embeddings=256).rope_scaling == LlamaRopeScalingConfig()
 
+    def test_reads_the_rope_parameters_transformers_v5_writes(self):
+        """v5 moves rope_theta into the scaling dict and renames it."""
+        hf = {k: v for k, v in HF_LLAMA_3_2_1B.items() if k not in ("rope_scaling", "rope_theta")}
+        hf["rope_parameters"] = {**HF_LLAMA_3_2_1B["rope_scaling"], "rope_theta": HF_LLAMA_3_2_1B["rope_theta"]}
+        assert LlamaConfig.from_hf(hf, max_position_embeddings=256) == LlamaConfig.from_hf(
+            HF_LLAMA_3_2_1B, max_position_embeddings=256
+        )
+
+    def test_default_rope_type_means_no_scaling(self):
+        hf = {k: v for k, v in HF_LLAMA_3_2_1B.items() if k not in ("rope_scaling", "rope_theta")}
+        hf["rope_parameters"] = {"rope_type": "default", "rope_theta": 10000.0}
+        config = LlamaConfig.from_hf(hf, max_position_embeddings=256)
+        assert (config.rope_scaling, config.rope_theta) == (LlamaRopeScalingConfig(), 10000.0)
+
+    def test_norm_epsilon_defaults_to_hugging_faces(self):
+        hf = {k: v for k, v in HF_LLAMA_3_2_1B.items() if k != "rms_norm_eps"}
+        assert LlamaConfig.from_hf(hf, max_position_embeddings=256).rms_norm_eps == 1e-6
+
     @pytest.mark.parametrize(
         "patch,message",
         [
             ({"model_type": "qwen3"}, "not a Llama checkpoint"),
             ({"mlp_bias": True}, "mlp_bias"),
+            # The loader leaves biases at init, so a checkpoint that ships them cannot load.
+            ({"attention_bias": True}, "attention_bias"),
+            ({"hidden_act": "gelu"}, "hidden_act 'gelu'"),
             ({"head_dim": 128}, "head_dim"),
-            ({"rope_scaling": {"rope_type": "yarn", "factor": 4.0}}, "rope_scaling type 'yarn'"),
+            ({"rope_scaling": {"rope_type": "yarn", "factor": 4.0}}, "rope type 'yarn'"),
         ],
-        ids=["model_type", "mlp_bias", "head_dim", "rope_type"],
+        ids=["model_type", "mlp_bias", "attention_bias", "hidden_act", "head_dim", "rope_type"],
     )
     def test_rejects_what_the_model_cannot_express(self, patch, message, expect_error):
         with expect_error(ValueError, message):
