@@ -2765,3 +2765,35 @@ def test_unary_chain_rejects_bitcast_with_other_ops(device, bitcast_first, expec
     chain = [bitcast, relu] if bitcast_first else [relu, bitcast]
     with expect_error(RuntimeError, "BITCAST cannot share a chain with other ops"):
         ttnn.unary_chain(x, chain)
+
+
+@pytest.mark.parametrize("tile_shape", [(16, 32), (8, 32), (4, 32)], ids=lambda s: f"tile_{s[0]}x{s[1]}")
+def test_unary_rejects_non_default_tile(device, expect_error, tile_shape):
+    tensor = ttnn.from_torch(
+        torch.rand((1, 1, 64, 64), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        tile=ttnn.Tile(tile_shape),
+        device=device,
+    )
+    with expect_error(RuntimeError, "supports only 32x32 tiles"):
+        ttnn.relu(tensor)
+
+
+@pytest.mark.parametrize("tile_shape", [(16, 32), (8, 32), (4, 32)], ids=lambda s: f"tile_{s[0]}x{s[1]}")
+def test_unary_rejects_non_default_output_tile(device, expect_error, tile_shape):
+    tensor = ttnn.from_torch(
+        torch.rand((1, 1, 64, 64), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+    output = ttnn.from_torch(
+        torch.zeros((1, 1, 64, 64), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        tile=ttnn.Tile(tile_shape),
+        device=device,
+    )
+    with expect_error(RuntimeError, "supports only 32x32 tiles"):
+        ttnn.relu(tensor, output_tensor=output)
