@@ -55,8 +55,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             num_faces_B,
             TILE_SIZE_UNPACK_A,
             TILE_SIZE_UNPACK_B);
-        _llk_unpack_AB_matmul_init_<>(
-            0 /* transpose */, CT_DIM, RT_DIM, KT_DIM, ckernel::DEFAULT_TENSOR_SHAPE /* in0 */, ckernel::DEFAULT_TENSOR_SHAPE /* in1 */);
+        _llk_unpack_AB_matmul_init_<>(0 /* transpose */, CT_DIM, RT_DIM, KT_DIM, ckernel::DEFAULT_TENSOR_SHAPE, ckernel::DEFAULT_TENSOR_SHAPE);
         PROFILER_SYNC();
     }
     {
@@ -82,8 +81,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         j * CT_DIM,
                         TILE_SIZE_UNPACK_A,
                         TILE_SIZE_UNPACK_B,
-                        ckernel::DEFAULT_TENSOR_SHAPE /* in0 */,
-                        ckernel::DEFAULT_TENSOR_SHAPE /* in1 */,
+                        ckernel::DEFAULT_TENSOR_SHAPE,
+                        ckernel::DEFAULT_TENSOR_SHAPE,
                         CT_DIM,
                         RT_DIM,
                         KT_DIM);
