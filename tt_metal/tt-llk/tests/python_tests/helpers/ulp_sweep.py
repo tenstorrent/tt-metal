@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import math
 import re
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from fractions import Fraction
 from functools import lru_cache
 from typing import Dict, List, Optional, Set, Tuple, Union
@@ -90,8 +90,9 @@ def sweep_cells(arch=None) -> List[Tuple[DataFormat, DataFormat, object, object]
     depend on which ``CHIP_ARCH`` the host happens to set.
 
     The grid is Wormhole's. On another arch only the Dest promotion is applied, not that
-    arch's own format support: Blackhole's functional drivers skip ``Float16`` with
-    ``dest_acc=No``, and Quasar has no ``Bfp8_b``. That is inert while every cell off
+    arch's own format support: Blackhole skips a ``Float16`` input with ``dest_acc=No``
+    (``_skip_if_unsupported`` in accuracy/test_sfpu_accuracy.py), and Quasar has no
+    ``Bfp8_b``. That is inert while every cell off
     Wormhole resolves to tolerance and skips, which holds because no ULP row names
     another ``arch``; test_ulp_sweep.py pins that, so the first such row has to bring
     those filters with it.
@@ -184,13 +185,14 @@ def padding_lanes(src: torch.Tensor, input_format: DataFormat) -> torch.Tensor:
     return flat.reshape(src.shape)
 
 
-def received_inputs(src: torch.Tensor, input_format: DataFormat) -> torch.Tensor:
+def received_inputs(
+    src: torch.Tensor, input_format: DataFormat, output_format=None, dest_acc=None
+) -> torch.Tensor:
     """*src* as the op receives it: what ``quantize_input_to_unpack_format`` hands the
     golden, and the unpack hands the kernel. The same tensor on every format but a block
-    float -- and, not modelled here, a Float32 input at ``dest_acc=No``, which the unpack
-    and the golden both truncate to the 16-bit Dest. The lane checks below then judge the
-    value before truncation; harmless while truncation only moves toward zero, so at worst
-    a lane near a boundary is excused that the truncated value would not be.
+    float -- and, given the variant, a Float32 input at ``dest_acc=No``, which the unpack
+    and the golden both truncate to the 16-bit Dest: past 256 every truncated bf16 value
+    is an integer, so -8326436.5 arrives as the pole -8323072.
 
     The lane checks that ask where an input *is* -- on a singularity, inside the op's
     claim, inside a tracked issue's lanes -- have to ask it of this value, not of the one
@@ -200,6 +202,7 @@ def received_inputs(src: torch.Tensor, input_format: DataFormat) -> torch.Tensor
     """
     from helpers.bfp_format_utils import BFP_BLOCK
     from helpers.golden_generators import quantize_input_to_unpack_format
+    from helpers.sfpu_domains import _dest_acc_flag
 
     # The block quantizer works on whole BFP_BLOCK-lane blocks. A device sweep is a
     # multiple of that; a host test may hand in a fragment, so pad it with zeros, which
@@ -208,6 +211,17 @@ def received_inputs(src: torch.Tensor, input_format: DataFormat) -> torch.Tensor
     short = (-flat.numel()) % BFP_BLOCK
     padded = torch.cat([flat, torch.zeros(short, dtype=flat.dtype, device=flat.device)])
     received = quantize_input_to_unpack_format(padded, input_format)[: flat.numel()]
+    if (
+        input_format == DataFormat.Float32
+        and dest_acc is not None
+        and not _dest_acc_flag(dest_acc)
+    ):
+        from helpers.golden_generators import truncate_to_dest_width
+
+        width = _unpack_format(
+            input_format, output_format or DataFormat.Float16_b, dest_acc
+        )
+        received = truncate_to_dest_width(received.to(torch.float32), width)
     return received.reshape(src.shape)
 
 
@@ -255,6 +269,63 @@ def _unpack_format(input_format: DataFormat, output_format=None, dest_acc=None):
             unpacking_to_dest=unpacks_to_dest(input_format, dest_acc),
         )
     )
+
+
+def _dest_dtype(input_format: DataFormat, output_format=None, dest_acc=None):
+    """The torch dtype of the format the unpacker writes for this variant -- the lattice
+    the SFPU reads its input from and stores its answer to (:func:`_unpack_format`) --
+    or ``None`` when the caller did not name the variant, or that format has no float
+    dtype."""
+    from helpers.llk_params import format_dict
+
+    if output_format is None or dest_acc is None:
+        return None
+    dtype = format_dict.get(_unpack_format(input_format, output_format, dest_acc))
+    return dtype if dtype is not None and dtype.is_floating_point else None
+
+
+def dest_holds(
+    golden: torch.Tensor,
+    result: torch.Tensor,
+    input_format: DataFormat,
+    output_format=None,
+    dest_acc=None,
+) -> torch.Tensor:
+    """False on lanes an fp16 Dest (``dest_acc=No``) under a wider output lost: a golden
+    past 65504 answered by NaN or by the golden's sign in the Dest's top binade, or a
+    flush at the 2**-14 boundary (one side zero, the other at most 2**-14). Any other
+    answer -- wrong-signed, or more than 2x short of the edge -- is the op's."""
+    from helpers.llk_params import format_dict
+    from helpers.sfpu_domains import _dest_acc_flag
+
+    holds = torch.ones(golden.shape, dtype=torch.bool, device=golden.device)
+    # A 32-bit Dest at dest_acc=Yes, and a bf16 one (fp32's exponent range), hold
+    # every answer the output can.
+    if dest_acc is None or _dest_acc_flag(dest_acc):
+        return holds
+    dtype = _dest_dtype(input_format, output_format, dest_acc)
+    if dtype is not torch.float16:
+        return holds
+    dest = torch.finfo(dtype)
+    out = torch.finfo(format_dict[stimuli_format_for(output_format)])
+    if dest.max >= out.max and dest.tiny <= out.tiny:
+        return holds
+    g = golden.detach().to(torch.float32)
+    r = result.detach().to(torch.float32)
+    same_sign = torch.signbit(r) == torch.signbit(g)
+    # Past 65504 the golden is a stand-in (131008 for an fp16 inf), not the answer, so an
+    # answer near the edge cannot be ranked against it: I0(13.297) is 65772 and the
+    # kernel's 65440 is its usual 0.5%, which the stand-in reads as 8.4M fp32 steps.
+    top_binade = 2.0 ** (math.frexp(dest.max)[1] - 1)
+    overflowed = (g.abs() > dest.max) & (
+        torch.isnan(r) | (same_sign & (r.abs() >= top_binade))
+    )
+    # The generator zeroes a golden under 2**-14 before its fp16 cast, so the flushes
+    # the sweep sees are pairs across the boundary: 2**-14 against 0, or the reverse.
+    flushed = ((g == 0) & (r != 0) & (r.abs() <= dest.tiny)) | (
+        (r == 0) & (g != 0) & (g.abs() <= dest.tiny)
+    )
+    return holds & ~overflowed & ~flushed
 
 
 def _normal_input(
@@ -318,8 +389,8 @@ def measurable_mask(
     own, so there is nothing per-op to look up.
 
     The sweep feeds every non-special value of the format, with no per-op domain
-    clipping -- an op is measured wherever its format can reach. Four lane kinds come
-    back out, none of them a budget question (the last is two, on one boundary):
+    clipping -- an op is measured wherever its format can reach. Five lane kinds come
+    back out, none of them a budget question (the fourth is two, on one boundary):
 
     * either side NaN. :func:`ulp_distance` returns ``UNMEASURABLE`` there, and an op
       undefined at an input (``log`` of a negative) lands here on its own.
@@ -340,9 +411,16 @@ def measurable_mask(
       flushes below 2**-14 and *saturates* past 65504 -- about 44% of the strided lanes,
       whose golden sees the value as fed. Saturation, not a flush, and not the op's.
 
+    * answers the Dest lost (:func:`dest_holds`): an fp16 Dest's overflow past 65504
+      or its flush at 2**-14 under a wider output, which is the Dest's, not the op's.
+
     Subnormal *outputs* stay in. Where the golden underflows and the hardware writes
     zero the count is large but the lane is a real one the op produced -- Silu at
     ``x=-87.5`` is that case, and it is the op's own tail, not the unpack path.
+
+    Op-agnostic, so the op's *claim* is not read here: :func:`ranked_mask` ANDs
+    :func:`claimed_lanes` into this mask, so a lane past an argument-reduction limit
+    or on a pole sets no budget, just as it is no non-finite failure.
 
     The second kind is a *failure*, not a non-question, and dropping it here is only
     sound because :func:`nonfinite_failures` reports it separately -- less the lanes it
@@ -365,27 +443,32 @@ def measurable_mask(
         both_measurable
         & ~nonfinite_mismatches(golden, result)
         & normal_input
+        & dest_holds(golden, result, input_format, output_format, dest_acc)
         & ~padding_lanes(src, input_format)
     )
 
 
-#: The magnitude past which an op's argument reduction stops claiming a finite answer,
-#: per op and per *stimuli* format: ``{op: {stimuli_format: limit}}``. Only ops whose
-#: kernel reduces its argument belong here; anywhere else a non-finite answer against a
-#: finite golden is a failure over the whole format. Sin, Cos and Tan give up far
-#: outside [-pi, pi] -- `sin(2.6e28)` returns inf against a golden of -1, `tan(-3e38)`
-#: NaN against -2.4 -- and pi is the widest bound measured so far, so it is the claim
-#: until one is wider.
-#:
-#: Keyed on the format the kernel is handed (:func:`_unpack_format`), because the claim
-#: is about what that format can reach. 2.6e28 is a bfloat16 value (and a Float32 one);
-#: float16 ends at 65504, and Sin and Cos measure 1-4 steps over the whole float16
-#: format, so an fp16 input carries no limit and a non-finite answer anywhere in it is
-#: a failure. Keyed on the op alone, the pi claim silently covered the fp16 cells too,
-#: and a range-reduction regression on the ~46% of fp16 lanes past pi would have passed
-#: the gate and been emitted as a clean budget. Keyed on the input alone, it covered a
-#: Float32 input into a Float16 output at ``dest_acc=No`` too, which unpacks into a
-#: Float16 Dest and so reaches the kernel as fp16 values only.
+def ranked_mask(
+    op,
+    src: torch.Tensor,
+    golden: torch.Tensor,
+    result: torch.Tensor,
+    input_format: DataFormat,
+    output_format=None,
+    dest_acc=None,
+) -> torch.Tensor:
+    """The lanes a sweep ranks: :func:`measurable_mask` within *op*'s :func:`claimed_lanes`."""
+    return measurable_mask(
+        src, golden, result, input_format, output_format, dest_acc
+    ) & claimed_lanes(op, src, input_format, output_format, dest_acc)
+
+
+#: Where Sin, Cos and Tan's range reduction breaks (0-2 steps inside, inf/NaN past it).
+#: It equals fp16's max, so an fp16 input -- or one unpacked into an fp16 Dest -- has none.
+_TRIG_CLAIM_LIMIT = 65504.0
+
+#: ``{op: {format the kernel is handed (:func:`_unpack_format`): limit}}``, bounding
+#: both the ranking mask and the non-finite check.
 _CLAIM_LIMIT: Dict = {}
 
 
@@ -393,7 +476,10 @@ def _claim_limits() -> Dict:
     from helpers.llk_params import MathOperation
 
     if not _CLAIM_LIMIT:
-        wide_formats = {DataFormat.Float16_b: math.pi, DataFormat.Float32: math.pi}
+        wide_formats = {
+            DataFormat.Float16_b: _TRIG_CLAIM_LIMIT,
+            DataFormat.Float32: _TRIG_CLAIM_LIMIT,
+        }
         _CLAIM_LIMIT.update(
             {
                 MathOperation.Sin: wide_formats,
@@ -404,29 +490,25 @@ def _claim_limits() -> Dict:
     return _CLAIM_LIMIT
 
 
-def _claimed(
+def claimed_lanes(
     op,
     src: torch.Tensor,
     input_format: DataFormat,
     output_format=None,
     dest_acc=None,
 ) -> torch.Tensor:
-    """Lanes where *op* claims a finite, accurate answer: the whole format, less the
-    side of each ``_OP_SINGULARITIES`` point the op is undefined on, the point itself
-    for a pole, and any ``_CLAIM_LIMIT`` for the format the kernel is handed
-    (:func:`_unpack_format`; *input_format*'s own without the other two).
-    Judged on the input as received (:func:`received_inputs`): a Bfp8_b 0.996 that
-    arrives as 1.0 is ``acosh``'s defined side.
+    """Lanes where *op* claims an answer, judged on the input as received: all but its
+    singularities' undefined side, its poles, and anything past its ``_CLAIM_LIMIT``."""
+    from helpers.sfpu_domains import (
+        _NONPOSITIVE_INTEGER_POLES,
+        _OP_SINGULARITIES,
+        Operand,
+        SingularitySide,
+    )
 
-    Deliberately not the functional driver's sampling window, which is where a few
-    thousand points are drawn, not where the op stops being defined: Abs is sampled on
-    (-10, 10) and defined everywhere. Nor ``_SFPU_UNDEFINED_RANGES``, whose holes are
-    guard bands that keep a random draw off a singularity: Reciprocal's is
-    (-1e-6, 1e-6), and ``1/1e-7`` is a finite bf16 answer an inf must not be excused on.
-    """
-    from helpers.sfpu_domains import _OP_SINGULARITIES, Operand, SingularitySide
-
-    value = received_inputs(src, input_format).to(torch.float32)
+    value = received_inputs(src, input_format, output_format, dest_acc).to(
+        torch.float32
+    )
     claimed = torch.ones_like(value, dtype=torch.bool)
     for point, side in _OP_SINGULARITIES.get(op, {}).get(Operand.A, ()):
         # The defined side keeps the point: sqrt(0) and acosh(1) are answers. A golden
@@ -437,6 +519,12 @@ def _claimed(
             claimed &= value <= point
         else:
             claimed &= value != point
+    if op in _NONPOSITIVE_INTEGER_POLES:
+        # Every fp32 value of magnitude 2**23 or more is an integer, so for lgamma the
+        # whole negative tail past there is poles; on the pole itself the golden is a
+        # limit (torch's polygamma returns 4e15 at -6.0), and the kernel's inf is not
+        # what the cell measures.
+        claimed &= ~((value <= 0) & (value == torch.floor(value)))
     limit = (
         _claim_limits()
         .get(op, {})
@@ -447,12 +535,16 @@ def _claimed(
     return claimed
 
 
-def _at_a_singularity(op, src: torch.Tensor, input_format: DataFormat) -> torch.Tensor:
+def _at_a_singularity(
+    op, src: torch.Tensor, input_format: DataFormat, output_format=None, dest_acc=None
+) -> torch.Tensor:
     """Lanes received (:func:`received_inputs`) exactly on one of *op*'s
     ``_OP_SINGULARITIES`` points, either side."""
     from helpers.sfpu_domains import _OP_SINGULARITIES, Operand
 
-    value = received_inputs(src, input_format).to(torch.float32)
+    value = received_inputs(src, input_format, output_format, dest_acc).to(
+        torch.float32
+    )
     on_point = torch.zeros_like(value, dtype=torch.bool)
     for point, _side in _OP_SINGULARITIES.get(op, {}).get(Operand.A, ()):
         on_point |= value == point
@@ -755,12 +847,14 @@ def nonfinite_failures(
       fp16 Dest has no infinity, so ``log(0)`` answers -130560. Only the point: one step
       off it the op claims a finite answer again.
     * **the sweep's own zero padding**, which is not a value it chose to feed.
-    * **an input the op makes no claim on** (:func:`_claimed`): the op's own limit
+    * **an answer the Dest lost** (:func:`dest_holds`), on the same grounds as in the
+      mask: an fp16 Dest's overflow under a wider output, answered with the golden's
+      sign at the Dest's edge. A wrong-signed or finite small answer stays.
+    * **an input the op makes no claim on** (:func:`claimed_lanes`): the op's own limit
       rather than the sweep's -- the undefined side of a registered singularity, or
       past an argument-reduction limit on a format that reaches it. ``Sin`` and ``Cos``
-      disagree on ~21,000 bf16 lanes far outside ``[-pi, pi]``. The budget is still
-      measured over the whole format; it is only the *non-finite* answer that needs the
-      op to have been claiming something.
+      disagree on bf16 lanes far past 65504. The sweep ranks the claimed lanes only,
+      so the budget and this check agree on what the op answers for.
     * **a lane a tracked issue names** (:data:`_KNOWN_NONFINITE_LANES`): a defect
       already on the books, excused on its own cell and inputs so the rest of the cell
       keeps its step gate. The gate fails once the lanes stop disagreeing
@@ -787,13 +881,18 @@ def nonfinite_failures(
         # A bfloat16 pack cannot overflow that way -- its range is the Dest's.
         saturated |= same_sign & (result.detach().to(torch.float32).abs() == output_max)
     excused = torch.isnan(golden) | (
-        past_range & (saturated | _at_a_singularity(op, src, input_format))
+        past_range
+        & (
+            saturated
+            | _at_a_singularity(op, src, input_format, output_format, dest_acc)
+        )
     )
     return (
         nonfinite_mismatches(golden, result)
         & normal_input
+        & dest_holds(golden, result, input_format, output_format, dest_acc)
         & ~excused
-        & _claimed(op, src, input_format, output_format, dest_acc)
+        & claimed_lanes(op, src, input_format, output_format, dest_acc)
         & ~(
             known_nonfinite_lanes(
                 op,
@@ -863,8 +962,10 @@ WORKEROUTPUT_KEY = "ulp_measured"
 #: The axes of a ``MEASURED`` key, in key order, and the row fields they are written as.
 KEY_AXES = ("in", "out", "approx", "dest")
 
-#: {op_name: {(in, out, approx, dest): max_ulp}}, filled during an emitting session.
-MEASURED: Dict[str, Dict[Tuple[str, str, str, str], Union[int, str]]] = {}
+#: {op_name: {(in, out, approx, dest): max_ulp}}, filled during an emitting session. A
+#: value is the worst lane's step count, a :class:`Floored` measurement, or the reason
+#: a cell could not be measured.
+MEASURED: Dict[str, Dict[Tuple[str, str, str, str], Union[int, str, "Floored"]]] = {}
 
 #: Headroom over the measured worst lane. A 16-bit input is swept exhaustively, so unlike a
 #: sampled measurement there is no unseen tail to leave room for -- but a budget at
@@ -873,9 +974,97 @@ MEASURED: Dict[str, Dict[Tuple[str, str, str, str], Union[int, str]]] = {}
 #: and only its 0 is treated as a sample (:func:`_verdict`).
 EMIT_HEADROOM = 1.1
 
+#: The widest ``near_zero_atol`` the emitter writes on its own. A cell whose only
+#: over-ceiling lanes sit in the near-zero band is enrolled with the floor that covers
+#: them (:func:`near_zero_floor`); past this the floor would be forgiving a kernel's
+#: cut-off rather than its rounding -- Softplus answers 0 below x = -5 where the answer
+#: is up to 0.0065, the approximate Gelu is 0.024 off -- and that is a decision to make
+#: by hand, with the figure the demotion note records.
+EMIT_MAX_NEAR_ZERO_ATOL = 1e-3
 
-def record(op_name: str, key: Tuple[str, str, str, str], max_ulp: int) -> None:
+
+@dataclass(frozen=True)
+class Floored:
+    """A cell's measurement with the near-zero floor that makes it gateable: the worst
+    lane over every ranked lane, the worst lane outside the floor's band, and the
+    floor itself (see :func:`near_zero_floor`)."""
+
+    max_ulp: int
+    residual: int
+    atol: float
+
+
+#: Absorbs the float noise in ``x / scale``, so an *x* already on the grid (6.8e-05)
+#: is not bumped a grid step. It lets the result land a hair below *x*; the
+#: 1.1x headroom applied before rounding is what keeps a floor above its error.
+_ROUND_UP_SLACK = 1e-9
+
+
+def _round_up_sig(x: float, digits: int = 2) -> float:
+    """*x* rounded up to *digits* significant figures (see :data:`_ROUND_UP_SLACK`)."""
+    if x == 0:
+        return 0.0
+    exponent = math.floor(math.log10(x))
+    scale = 10.0 ** (exponent - digits + 1)
+    return math.ceil(x / scale - _ROUND_UP_SLACK) * scale
+
+
+def near_zero_floor(
+    golden: torch.Tensor,
+    result: torch.Tensor,
+    distance: torch.Tensor,
+    mask: torch.Tensor,
+    out_fmt: DataFormat,
+) -> Optional[Tuple[int, float]]:
+    """``(residual, atol)``: the worst lane outside the near-zero floor a demoted cell
+    needs, and that floor; ``None`` when the cell fits without one (see SFPU_ULP.md)."""
+    from helpers.sfpu_accuracy_budget import usable_budget_ceiling
+    from helpers.ulp import _ULP_PROXY_DTYPES, NEAR_ZERO_FRACTION
+
+    if out_fmt in _ULP_PROXY_DTYPES:
+        return None  # a block-float output is judged as a block; no floor applies
+    ceiling = usable_budget_ceiling(out_fmt)
+    flat = distance.reshape(-1).to(torch.int64)
+    selected = mask.reshape(-1) & (flat >= 0)
+    if not selected.any() or int(flat[selected].max()) <= ceiling:
+        return None
+    g = golden.detach().reshape(-1).to(torch.float32)
+    r = result.detach().reshape(-1).to(torch.float32)
+    magnitude = g.abs()
+    finite = selected & torch.isfinite(g)
+    if not finite.any():
+        return None
+    dynamic_range = float(magnitude[finite].max())
+    band = finite & (magnitude < NEAR_ZERO_FRACTION * dynamic_range)
+    if not band.any():
+        return None
+    absolute_error = (r - g).abs()
+    demoting = band & (flat > ceiling)
+    if not demoting.any():
+        return None
+    atol = _round_up_sig(float(absolute_error[demoting].max()) * EMIT_HEADROOM)
+    if atol == 0:
+        return None
+    atol = min(atol, EMIT_MAX_NEAR_ZERO_ATOL)
+    rescued = band & (magnitude <= atol / NEAR_ZERO_FRACTION) & (absolute_error <= atol)
+    kept = selected & ~rescued
+    residual = int(flat[kept].max()) if kept.any() else 0
+    # Past the ceiling even so, the cell demotes; _decide records the floor it tried.
+    return residual, atol
+
+
+def _max_of(value) -> int:
+    return value.max_ulp if isinstance(value, Floored) else int(value)
+
+
+def record(
+    op_name: str,
+    key: Tuple[str, str, str, str],
+    max_ulp: int,
+    floor: Optional[Tuple[int, float]] = None,
+) -> None:
     """Fold one measurement into the cell *key* names, keeping the *worst* lane.
+    *floor* is :func:`near_zero_floor`'s ``(residual, atol)`` when the cell has one.
 
     The sweep driver records each cell once per process, so a repeat comes from
     :func:`merge_measured` folding in another xdist worker's reading of it -- or from a
@@ -883,11 +1072,20 @@ def record(op_name: str, key: Tuple[str, str, str, str], max_ulp: int) -> None:
     keep whichever arrived last, which is the polarity that can hide error; ``max`` is
     the one that cannot. For the same reason a cell already recorded unmeasurable
     (:func:`record_unmeasurable`) stays so: a number arriving later does not rescue it.
+    A floor is derived from one reading's lanes, so two readings that differ keep the
+    worst lane with no floor, which can demote the cell but cannot hide error.
     """
     cells = MEASURED.setdefault(op_name, {})
-    if isinstance(cells.get(key), str):
+    current = cells.get(key)
+    if isinstance(current, str):
         return  # already unmeasurable; a reading elsewhere does not rescue it
-    cells[key] = max(cells.get(key, 0), max_ulp)
+    new = Floored(max_ulp, *floor) if floor else max_ulp
+    if current is None or current == new:
+        cells[key] = new
+    elif isinstance(new, Floored) or isinstance(current, Floored):
+        cells[key] = max(_max_of(new), _max_of(current))
+    elif new > current:
+        cells[key] = new
 
 
 def record_unmeasurable(op_name: str, key: Tuple[str, str, str, str], why: str) -> None:
@@ -903,9 +1101,9 @@ def record_unmeasurable(op_name: str, key: Tuple[str, str, str, str], why: str) 
 def export_measured() -> List[list]:
     """``MEASURED`` as plain lists, for an xdist worker to hand to the controller."""
     return [
-        [op, list(key), max_ulp]
+        [op, list(key), asdict(value) if isinstance(value, Floored) else value]
         for op, cells in MEASURED.items()
-        for key, max_ulp in cells.items()
+        for key, value in cells.items()
     ]
 
 
@@ -914,6 +1112,8 @@ def merge_measured(rows) -> None:
     for op, key, value in rows:
         if isinstance(value, str):
             record_unmeasurable(op, tuple(key), value)
+        elif isinstance(value, dict):
+            record(op, tuple(key), value["max_ulp"], (value["residual"], value["atol"]))
         else:
             record(op, tuple(key), value)
 
@@ -954,8 +1154,8 @@ def finish_emit(arch, testsfailed: int, path=None, exitstatus=0) -> str:
       write into. Every *other* op's block has already been rewritten, so a red emit is
       not an untouched table.
     * **written**, returning the summary line. An op kept verbatim -- a row the run
-      covers carries a field ``_render`` cannot put back, the ``near_zero_atol`` floors
-      and ``atol``/``rtol`` anchors -- is named in it: such a block is maintained by
+      covers carries a field ``_render`` cannot put back, such as an ``atol``/``rtol``
+      pair -- is named in it: such a block is maintained by
       hand by design, and failing on it would turn every whole-table emit red.
 
     *exitstatus* is pytest's ``session.exitstatus``, an ``ExitCode`` or a plain int.
@@ -1087,29 +1287,35 @@ def _verdict(
 
 
 def _decide(
-    cells: Dict[Tuple[str, str, str, str], Union[int, str]],
+    cells: Dict[Tuple[str, str, str, str], Union[int, str, Floored]],
     op_name: Optional[str] = None,
 ) -> Dict[Tuple, Tuple]:
-    """Each measured cell as ``(verdict, measured)``, an unmeasurable one as
-    ``(("unmeasurable", why), None)``. The verdict is :func:`_verdict`'s for the cell's
-    output *and* input format -- a strided Float32 0 is written as 1 -- and for whether
-    *op_name* is exact on that cell (:func:`_is_exact`)."""
-    return {
-        key: (
-            (("unmeasurable", v), None)
-            if isinstance(v, str)
-            else (
-                _verdict(
-                    v,
-                    key[1],
-                    key[0],
-                    op_name is not None and _is_exact(op_name, key[0], key[1], key[3]),
-                ),
-                v,
-            )
-        )
-        for key, v in cells.items()
-    }
+    """Each measured cell as ``(verdict, measured, extra)``; an unmeasurable one as
+    ``(("unmeasurable", why), None, None)``. The verdict is :func:`_verdict`'s for the
+    cell's output *and* input format -- a strided Float32 0 is written as 1 -- and for
+    whether *op_name* is exact on that cell (:func:`_is_exact`).
+
+    A :class:`Floored` cell whose worst lane demotes it is judged on the lanes outside
+    its floor: enrolled at the residual's budget with ``extra = ("floor", atol,
+    max_ulp)``, or, when even those are past the ceiling, demoted with the floor that
+    was tried in ``extra = ("floor_short", atol, residual)`` so the note can say so."""
+    decided = {}
+    for key, v in cells.items():
+        exact = op_name is not None and _is_exact(op_name, key[0], key[1], key[3])
+        if isinstance(v, str):
+            decided[key] = (("unmeasurable", v), None, None)
+        elif isinstance(v, Floored):
+            plain = _verdict(v.max_ulp, key[1], key[0], exact)
+            floored = _verdict(v.residual, key[1], key[0], exact)
+            if plain[0] == "tolerance" and floored[0] == "ulp":
+                decided[key] = (floored, v.residual, ("floor", v.atol, v.max_ulp))
+            elif plain[0] == "tolerance":
+                decided[key] = (plain, v.max_ulp, ("floor_short", v.atol, v.residual))
+            else:
+                decided[key] = (plain, v.max_ulp, None)
+        else:
+            decided[key] = (_verdict(v, key[1], key[0], exact), v, None)
+    return decided
 
 
 def _collapse(decided: Dict[Tuple, Tuple]) -> List[dict]:
@@ -1149,10 +1355,11 @@ def _collapse(decided: Dict[Tuple, Tuple]) -> List[dict]:
         merged[collapsed] = value
 
     rows = []
-    for key, (verdict, measured) in sorted(merged.items()):
+    for key, (verdict, measured, extra) in sorted(merged.items()):
         row = {axes[i]: v for i, v in zip(keep, key)}
         row["verdict"] = verdict
         row["measured"] = measured
+        row["extra"] = extra
         rows.append(row)
     return rows
 
@@ -1187,7 +1394,11 @@ _DATED = re.compile(r"\d{4}-\d{2}-\d{2}")
 #: same way -- Frac's `max 384 ULP, 40 variants / 737k lanes, ...` from a sample -- is
 #: not.
 _EMITTED_NOTE = re.compile(
-    r"max \d+ ULP(, budget \d+ > ceiling \d+|, block-quantized)?|not measurable: .+"
+    r"max \d+ ULP("
+    r", budget \d+ > ceiling \d+(; \d+ ULP outside a [0-9.e+-]+ near-zero floor)?"
+    r"|, block-quantized"
+    r"| outside a [0-9.e+-]+ near-zero floor \(\d+ steps over every lane\)"
+    r")?|not measurable: .+"
 )
 
 
@@ -1243,10 +1454,15 @@ def _render(key_line: str, rows: List[dict], suffix: str) -> List[str]:
             for k in KEY_AXES
             if k in row
         )
+        extra = row.get("extra")
         decided = (
             "max_ulp: {}".format(value) if metric == "ulp" else "metric: tolerance"
         )
+        if extra and extra[0] == "floor":
+            decided += f", near_zero_atol: {extra[1]:.2e}"
         pairs = f"{body}, {decided}" if body else decided
+        # The first figure is always the one the budget was derived from, which is
+        # what the provenance audit and the headroom report read back.
         note = f"max {row['measured']} ULP"
         if metric == "unmeasurable":
             note = f"not measurable: {value}"
@@ -1255,8 +1471,15 @@ def _render(key_line: str, rows: List[dict], suffix: str) -> List[str]:
             # keeps the claim checkable against `usable_budget_ceiling`.
             ceiling = usable_budget_ceiling(DataFormat[row["out"]])
             note += f", budget {value} > ceiling {ceiling:.0f}"
+            if extra and extra[0] == "floor_short":
+                note += f"; {extra[2]} ULP outside a {extra[1]:.2e} near-zero floor"
         elif metric == "block":
             note += ", block-quantized"
+        elif extra and extra[0] == "floor":
+            note += (
+                f" outside a {extra[1]:.2e} near-zero floor "
+                f"({extra[2]} steps over every lane)"
+            )
         out.append(f"  - {{{pairs}}}  # {note}\n")
     return out
 
@@ -1264,10 +1487,12 @@ def _render(key_line: str, rows: List[dict], suffix: str) -> List[str]:
 #: A ``name: value`` pair inside an inline row, with the value unquoted.
 _ROW_FIELD = re.compile(r'([A-Za-z_]\w*)\s*:\s*"?([^,}"]*)"?')
 
-#: What `_render` can put back. A row carrying anything else -- a `near_zero_atol`
-#: floor, an `atol`/`rtol` pair -- cannot be regenerated from a measurement, so it is
-#: preserved rather than replaced even when this sweep covers its cell.
-_RENDERABLE_FIELDS = frozenset({"in", "out", "approx", "dest", "max_ulp", "metric"})
+#: What `_render` can put back, a derived `near_zero_atol` floor included. A row
+#: carrying anything else -- an `atol`/`rtol` pair -- cannot be regenerated from a
+#: measurement, so it is preserved rather than replaced even when this sweep covers it.
+_RENDERABLE_FIELDS = frozenset(
+    {"in", "out", "approx", "dest", "max_ulp", "metric", "near_zero_atol"}
+)
 
 
 def _row_fields(line: str) -> Dict[str, str]:
@@ -1341,8 +1566,8 @@ def _replaceable(line: str, emitted_cells: Set[Tuple[str, str]]) -> bool:
     and the table's own header says to re-measure on Blackhole; specificity lets the two
     rows coexist, so regenerating one arch must not erase the other's contract.
 
-    Nor is a row carrying a field ``_render`` cannot put back -- a ``near_zero_atol``
-    floor, an ``atol``/``rtol`` pair. :func:`write_table` keeps such an op's block
+    Nor is a row carrying a field ``_render`` cannot put back, such as an
+    ``atol``/``rtol`` pair. :func:`write_table` keeps such an op's block
     verbatim and names it in its return, rather than quietly replacing or quietly
     duplicating the row.
     """
@@ -1404,7 +1629,7 @@ def write_table(path, suffix: str) -> Tuple[int, List[str]]:
     """Replace every swept op's block in the YAML with what the sweep measured.
 
     Returns how many blocks were rewritten, and the ops kept verbatim because a row the
-    sweep covers carries a field it cannot regenerate (a ``near_zero_atol`` floor).
+    sweep covers carries a field it cannot regenerate (an ``atol``/``rtol`` pair).
 
     Line-oriented on purpose. The table's comments *are* its provenance, and a load and
     re-dump through PyYAML would drop every one of them, including for the ops this
@@ -1450,7 +1675,7 @@ def write_table(path, suffix: str) -> Tuple[int, List[str]]:
                 if _unrenderable(l) and _pins_a_measured_cell(l, set(MEASURED[name]))
             ]
             if unrenderable:
-                # Emitting over it would drop the floor; keeping it as well would give
+                # Emitting over it would drop the field; keeping it as well would give
                 # the cell two equally specific keys, which `_load_table` refuses. So
                 # the op's block stays as it is, and the caller is told: the row is a
                 # judgement a measurement cannot re-derive. Every other op is written.
@@ -1464,7 +1689,7 @@ def write_table(path, suffix: str) -> Tuple[int, List[str]]:
             )
             out.extend(_render(line, _collapse(_decide(MEASURED[name], name)), suffix))
             # Rows this run did not supersede -- a format it does not reach, an
-            # arch-keyed entry, a floor `_render` cannot re-derive -- are the
+            # arch-keyed entry, a field `_render` cannot re-derive -- are the
             # measurement of a different run and stay as they are. Replacing a whole op
             # block deleted them.
             out.extend(kept)

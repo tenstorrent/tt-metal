@@ -9,6 +9,7 @@ import ttnn
 from models.demos.deepseek_v3_d_p.reference.kda import kda_forward_reference
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric_1d_device_params
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
+    KIMI_K3_CONVOLUTION_NRMSE,
     LayerNrmseThresholds,
     assert_matches_reference,
     build_layer,
@@ -207,7 +208,7 @@ def test_production_local_trace(mesh_device, tp_axis, device_params, local_rows)
                     label=f"compact SP{sp} start={actual_start}",
                     state_linf_threshold=None,
                     pcc_threshold=0.9995,
-                    nrmse=LayerNrmseThresholds(output=0.015, recurrent=0.05, convolution=0.007),
+                    nrmse=LayerNrmseThresholds(output=0.015, recurrent=0.05, convolution=KIMI_K3_CONVOLUTION_NRMSE),
                 )
         finally:
             ttnn.release_trace(mesh_device, trace)

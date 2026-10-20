@@ -787,7 +787,8 @@
 # Deploy mesh is SP=8 x TP=4 -> (8, 4) on BH Galaxy
 - name: MiniMax-M3 unit tests (1-card)
   cmd: |
-    pytest --timeout 300 models/demos/minimax_m3/tests/unit/ -k "1x1 and not msa_layer"
+    # Host-only layout tests (rotated / packed chunk layout) have no mesh id; run them here.
+    pytest --timeout 300 models/demos/minimax_m3/tests/unit/ -k "(1x1 and not msa_layer) or rotated_chunk_layout or packed_forward_layout"
   model: minimax-m3
   skus:
     bh_p150:
@@ -806,10 +807,9 @@
   model: minimax-m3
   skus:
     bh_galaxy:
-      # 15 -> 30 (2026-10-07): #58594 added four test_ep_moe_vs_ref cases (shared_schedule x3,
-      # overlap_release_recreate) at ~140-280 s each (host-side random-weight build + bf8 convert);
-      # the leg went from 700 s (last green, c187c31050b) to ~1410 s projected.
-      timeout: 30
+      # ~1750 s measured: the test_ep_moe_vs_ref cases take ~140-280 s each (host-side random-weight
+      # build + bf8 convert) and test_attention_packed_vs_alone ~85 s.
+      timeout: 38
       tier: 1
   owner_id: U08ECJQ848G # Viacheslav Melnykov
   team: models
@@ -1215,6 +1215,27 @@
   skus:
     wh_llmbox:
       timeout: 45 # 35m02s measured on run 33021627869, +~28% margin
+      tier: 1
+  owner_id: U0ATR08RCQ0 # James Lee
+  team: models
+  budget_type: unit
+
+# Mock-device memory gate: MiniMax-H3 ref2va's full warmup on a mock WH 4x8 mesh; see the test's docstring.
+- name: Minimax H3 Memory Test
+  cmd: |
+    export TT_METAL_MOCK_CLUSTER_DESC_PATH=tt_metal/third_party/tt-cluster-descriptors/wormhole/6u_cluster_desc/6u_cluster_desc.yaml
+    unset TT_METAL_WATCHER
+    export HF_HOME=/mnt/MLPerf/huggingface
+    unset HF_HUB_OFFLINE
+    export TT_DIT_ALLOW_HF_DOWNLOAD=1
+    export MINIMAX_H3_REQUIRE_WEIGHTS=1
+    export MINIMAX_H3_DRAM_PROBE=1
+    export TT_DIT_CACHE_DIR=/mnt/MLPerf/huggingface/tt_dit_cache/MiniMaxAI/MiniMax-H3
+    pytest --timeout 7200 -s models/tt_dit/tests/models/minimax_h3/test_mock_oom_minimax_h3.py
+  model: minimax-h3
+  skus:
+    wh_llmbox:
+      timeout: 180
       tier: 1
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
