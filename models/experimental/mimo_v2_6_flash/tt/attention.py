@@ -299,7 +299,8 @@ class ConcatHeads:
         mc = attn.memory_config()
         assert attn.layout == ttnn.TILE_LAYOUT and attn.dtype == ttnn.bfloat16
         assert mc.memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED
-        assert len(shape) == 4 and shape[0] == 1 and shape[1] == TILE and shape[2] >= self.num_heads
+        # shape[1]: the SDPA's batch, 32 or a compact batch of the first users (the other output rows are zeros)
+        assert len(shape) == 4 and shape[0] == 1 and shape[1] <= TILE and shape[2] >= self.num_heads
         assert shape[3] % TILE == 0
         d_tiles = shape[3] // TILE
         assert self.v_tiles <= d_tiles
@@ -337,6 +338,7 @@ class ConcatHeads:
                 in_dram,
                 1 if has_mask else 0,
                 mask_dram,
+                shape[1],
             ],
             runtime_args=rt,
             config=ttnn.DataMovementConfigDescriptor(
@@ -541,6 +543,23 @@ class TtMiMoAttention:
             k_chunk_size=128,
             exp_approx_mode=False,
         )
+        self._split_sdpa_programs = {}
+
+    def _split_sdpa_program(self, batch, table_tokens):
+        """Global decode SDPA program for a batch of ``batch`` page-table rows: every core of the 8 x 8 grid works
+        (64 / batch per user; the tree reduction allows up to 64) and 256-token K chunks where the table allows."""
+        if batch >= TILE:
+            return self.decode_sdpa_program
+        key = (batch, table_tokens)
+        if key not in self._split_sdpa_programs:
+            self._split_sdpa_programs[key] = ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=ttnn.CoreCoord(8, 8),
+                q_chunk_size=0,
+                k_chunk_size=256 if table_tokens % 256 == 0 else 128,
+                exp_approx_mode=False,
+                max_cores_per_head_batch=max(16, 64 // batch),
+            )
+        return self._split_sdpa_programs[key]
 
     def _interleaved_qkv(self, w, width):
         """DRAM-sharded fused qkv [K, n_pad] per chip -> DRAM-interleaved [K, width], padding columns dropped.
@@ -889,6 +908,8 @@ class TtMiMoAttention:
                     kv_cache,
                     compact,
                     pos_update=cur_pos.get("pos_update"),
+                    pos_sdpa=cur_pos.get("pos_sdpa"),
+                    page_table_sdpa=cur_pos.get("page_table_sdpa"),
                 )
             cur_pos = cur_pos["pos"]
         assert not self.split_users, "global layers on TP=8 need the per-chip owned positions"
@@ -940,12 +961,26 @@ class TtMiMoAttention:
         return self._decode_o(attn_cat, compact)
 
     def _forward_decode_split(
-        self, x, rot_mats, pos_owned, owner_mask, page_table, kv_cache, compact=False, pos_update=None
+        self,
+        x,
+        rot_mats,
+        pos_owned,
+        owner_mask,
+        page_table,
+        kv_cache,
+        compact=False,
+        pos_update=None,
+        pos_sdpa=None,
+        page_table_sdpa=None,
     ):
         """Global-layer decode: all 16 Q heads of this chip's KV group, for the slots this chip owns.
 
         ``pos_update``: the positions whose K / V this chip writes (default ``pos_owned``). With vLLM's page tables
-        both chips of the pair keep every slot's K / V, so the caller passes every slot's position."""
+        both chips of the pair keep every slot's K / V, so the caller passes every slot's position.
+        ``pos_sdpa`` / ``page_table_sdpa``: ``pos_owned`` and the page table cut to the first n decode slots (n < 32).
+        The SDPA takes its batch from the page table's rows and splits its cores evenly over that batch, so with the
+        32-row table each user gets 2 of 64 cores (21 ms per layer at 1M context); with n = 2 rows it gets 32 (1.15
+        ms)."""
         batch = x.shape[-2]
         xqkv = self._decode_qkv(x, self.wqkv_decode, self.decode_qkv_program)
         q, k, v = ttnn.experimental.nlp_create_qkv_heads_decode(
@@ -976,6 +1011,8 @@ class TtMiMoAttention:
         k_rot.deallocate(True)
         v_shard.deallocate(True)
 
+        if page_table_sdpa is not None:
+            page_table, pos_owned = page_table_sdpa, pos_sdpa
         attn = ttnn.transformer.paged_flash_multi_latent_attention_decode(
             q_rot,
             k_cache,
@@ -984,10 +1021,10 @@ class TtMiMoAttention:
             page_table_tensor=page_table,
             cur_pos_tensor=pos_owned,
             scale=self.scale,
-            program_config=self.decode_sdpa_program,
+            program_config=self._split_sdpa_program(page_table.shape[0], page_table.shape[-1] * k_cache.shape[-2]),
             compute_kernel_config=self.decode_sdpa_config,
             memory_config=ttnn.L1_MEMORY_CONFIG,
-        )  # [1, B, 16, 128]
+        )  # [1, B or n, 16, 128]
         q_rot.deallocate(True)
         # Heads concatenated in L1; slots owned by the other chip of the pair were skipped here, so the owner mask
         # zeroes their rows before the row all-reduce.
