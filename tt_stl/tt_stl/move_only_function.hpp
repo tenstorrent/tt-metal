@@ -40,6 +40,11 @@ struct is_in_place_type : std::false_type {};
 template <typename T>
 struct is_in_place_type<std::in_place_type_t<T>> : std::true_type {};
 
+// How the table's call entry takes each argument: scalars by value, so they can travel in registers,
+// anything else by reference, so a class-type argument is not moved again. libstdc++ does the same.
+template <typename T>
+using param_t = std::conditional_t<std::is_scalar_v<T>, T, T&&>;
+
 template <typename T>
 struct is_move_only_function : std::false_type {};
 template <typename Signature>
@@ -103,7 +108,7 @@ class move_only_function;
 template <typename R, typename... Args>
 class move_only_function<R(Args...)> {
     struct alignas(8) VTable {  // room for the three tag bits on 32-bit targets too
-        R (*call)(void* storage, Args... args);
+        R (*call)(void* storage, detail::param_t<Args>... args);
         void (*relocate)(void* dst, void* src) noexcept;  // move-construct into dst, then destroy src
         void (*destroy)(void* storage) noexcept;
     };
@@ -190,7 +195,7 @@ public:
     friend bool operator==(const move_only_function& f, std::nullptr_t) noexcept { return !f; }
 
 private:
-    [[noreturn]] static R call_empty(void*, Args...) { throw std::bad_function_call(); }
+    [[noreturn]] static R call_empty(void*, detail::param_t<Args>...) { throw std::bad_function_call(); }
 
     template <typename T>
     static T& inline_target(void* storage) noexcept {
@@ -203,8 +208,8 @@ private:
     }
 
     template <typename T>
-    static R call_inline(void* storage, Args... args) {
-        return detail::invoke_r<R>(inline_target<T>(storage), std::forward<Args>(args)...);
+    static R call_inline(void* storage, detail::param_t<Args>... args) {
+        return detail::invoke_r<R>(inline_target<T>(storage), std::forward<detail::param_t<Args>>(args)...);
     }
 
     template <typename T>
@@ -220,8 +225,8 @@ private:
     }
 
     template <typename T>
-    static R call_heap(void* storage, Args... args) {
-        return detail::invoke_r<R>(heap_target<T>(storage), std::forward<Args>(args)...);
+    static R call_heap(void* storage, detail::param_t<Args>... args) {
+        return detail::invoke_r<R>(heap_target<T>(storage), std::forward<detail::param_t<Args>>(args)...);
     }
 
     template <typename T>
