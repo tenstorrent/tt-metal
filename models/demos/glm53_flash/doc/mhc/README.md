@@ -344,7 +344,54 @@ composite, so exact kernels are measured against float64 (<= 1e-6) with the 22-l
 The decode path (T <= 32) is made exact the same way behind `GLM53_MHC_DECODE_EXACT=1` (default): the K-split
 partials are summed with `ttnn.sum` (SFPU, exact) instead of `fast_reduce_nc`, and h = sum_i pre_i x_i runs
 through the post-mix kernel's pre-mix mode (`MhcPostMix.h_mix`, HMODE: the raw pre tile expanded like a post
-tile, `mhc_sfpu::pre_mix`) followed by the composite's typecast + rms_norm.
+tile, `mhc_sfpu::pre_mix`) followed by the composite's typecast + rms_norm. Cost of the exact decode path (chip 1, B=4, `layer4_B4_exact/`):
+the wrap goes 14 ops / 173 us -> 17 ops / 237 us (`ttnn.sum` over the batch dim expands into transpose + reduce
++ fill_pad triplets, the interleaved rms_norm is 47 us on one core vs the 8 us sharded one, the pre-mix kernel
+18 us vs the 8 + 3 us matmul + typecast); walls 7.88 / 20.12 ms (B=4 / B=32), one wrap traced 0.198 ms at T=32
+and 2.580 ms at T=1024 (the composite-identical prefill projection and mix cost nothing measurable against the
+old 2.549). All of the decode pre-block's 16 ops are what the fused pre-block custom op (`custom_ops/mhc_pre_block`)
+replaces with one program.
+
+
+## Fused pre-block custom op: `custom_ops/mhc_pre_block` (2026-10-20)
+
+One `ttnn.generic_op` program on the whole 12x10 grid for a decode wrap's pre-block (T <= 32, with the fused
+norm; `GLM53_MHC_PRE_BLOCK=1`, needs `GLM53_MHC_POST_KERNEL=2`): projection, Sinkhorn, pre-mix and the sublayer
+RMSNorm, with `post` / `comb` coming out in the post kernel's lane layout (no expansion in the post kernel). Core
+k owns column tile(s) of the C-wide streams (128 tiles over 120 cores: 8 cores take two); per core: the 4 (8)
+stream tiles are split into three bf16 parts (x = hi + lo + lo2 exactly), 12 (24) FPU matmul tile-pairs
+accumulate the partial projection in fp32 and an SFPU routine adds the rows' sum of squares into column 24 of the
+same tile; the partials go up a two-level tree of exact SFPU adds (column leader (x, 0) -> coordinator (0, 0)) by
+unicast NoC writes into per-sender slots plus a counting semaphore; the coordinator scales the rows by
+rsqrt(col 24 + eps*nC) (a condition-code lane extract, since the other lanes of the statistics copy hold the
+rsqrt of negative numbers), runs the Sinkhorn kernel's tile sequence on one core, expands pre / post / comb into
+lane-layout tiles (`mhc_sfpu_x8.h`), writes post / comb to DRAM and fans the pre tile out to the leaders, whose
+readers fan it out to their columns; every core mixes h = sum_i pre_i x_i with SFPU FMAs, sends its rows' sums
+of h^2 up the same tree, receives rsqrt(total/C + eps) the same way and writes h * rs * w as bf16. Semaphores
+are reset by their waiters (trace replay); the dataflow kernels own the sync, the compute kernel the math.
+Contract, CB plan and the measured precision facts: `custom_ops/mhc_pre_block/README.md`.
+
+Two facts found on the way: (1) the packer's output format follows the CB it last packed into -- a kernel that
+packs into both bf16 and fp32 CBs must `pack_reconfig_data_format` per target (the first fp32 partials came out
+as bf16 bit patterns); (2) the FPU matmul is not exact even on bf16 x bf16 inputs (3.2e-4 rel rms vs float64 at
+K = 32, `ttnn.matmul` HiFi4 fp32-acc), so the 3-way split does not make the projection exact: the fused mixes
+land 5.9e-5 from float64, the composite's own projection 4.3e-5 (same mechanism); an exact projection is SFPU
+FMAs (~25 us per core at B=32), the planned exact variant.
+
+Precision (`tests/custom_ops/test_mhc_pre_block.py`, real layer-4 parameters, B = 1/4/32 and random streams,
+trace replay): post / comb lane tiles 3.2e-4 / 3.2e-4 vs the standalone Sinkhorn kernel on the float64 mixes
+(the FPU projection's rounding through the Sinkhorn; 0 at B=1) and 1-4e-3 vs the float64 HF math (the Sinkhorn
+kernel's own precision); hn bit-identical (B=1/4; 1.9e-7 at B=32, 4e-5 random) to the bf16 rounding of the
+float64 norm of h built from the kernel's own pre -- the mix and the norm are exact.
+
+Model path (chip 1, `GLM53_MHC_PRE_BLOCK=1 GLM53_MHC_POST_KERNEL=2`, `layer4_B4_preblock/`): a wrap is 2 ops
+(pre-block 101 us + post-block 33 us = 134 us at B=4; the exact decode path was 17 ops / 237 us, the inexact
+one 14 / 173, the composite 110 / 935 + 46), the traced layer-4 decode window 117 ops / 7.80 ms device;
+`tests/test_mhc.py` 5 passed, the T=4 stage table: the fused op's sublayer input differs from the composite's
+by bf16-ulp flips (3.0e-3 rel rms, the composite is 3.5e-3 from float64 itself) driven by the FPU-class mixes.
+The 101 us are dominated by the single-core Sinkhorn sequence (52 us standalone) and the two sync rounds; the
+projection itself is ~1 us (FPU) -- next: the Sinkhorn on dest-resident tiles, overlapping phase A with the
+coordinator's work, and the exact SFPU projection variant.
 
 
 ## Tests
@@ -355,6 +402,7 @@ tile, `mhc_sfpu::pre_mix`) followed by the composite's typecast + rms_norm.
 | `tests/test_mhc.py::test_mhc_fast_pad_rows` | the pad-row contract |
 | `tests/test_mhc.py::test_decoder_collapse` | `FunctionalDecoder.decode_forward(collapse=True)` vs the head's collapse of the streams (layer 4, B=2) |
 | `tests/custom_ops/test_mhc_post_mix.py` | the fused post-block custom op vs float64 and vs the composite chain (random T=32/256, decode B=1/4/32, trace replay, real streams; both modes; mesh cases behind `GLM53_MESH_TESTS=1`) |
+| `tests/custom_ops/test_mhc_pre_block.py` | the fused pre-block custom op vs float64 and vs the standalone Sinkhorn kernel (real parameters, B=1/4/32, random, trace replay) |
 | `tests/test_mhc_stages.py` | per-stage fast vs composite vs float64 table at T=4 and T=128 (the gate shapes), both wraps |
 | `tests/test_mhc.py::test_mhc_exact_residual` | residual update / collapse of exact = 0, 2, 3 vs the composite on non-bf16-exact fp32 streams (bars 5e-3 / 1e-5 / 1e-6) |
 | `tests/test_mhc_perf.py` | one wrap, traced, T=32 and T=1024, both implementations |

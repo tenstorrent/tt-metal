@@ -17,6 +17,7 @@ forward calls) and the DSA paged latent cache (``TtLatentCache``).
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -30,6 +31,21 @@ from models.demos.glm53_flash.tt.dsa import TtDSA, TtLatentCache
 from models.demos.glm53_flash.tt.kda import TtKDA
 from models.demos.glm53_flash.tt.mesh import GLMMesh, single_chip
 from models.demos.glm53_flash.tt.mhc import build_mhc
+
+_DUMPED: set = set()
+
+
+def _dump(dump_dir: str, name: str, t) -> None:
+    """Save device 0's shard of ``t`` as fp32 (prefill A/B dumps; see DecoderLayer._hc_call)."""
+    import os as _os
+
+    import torch as _torch
+
+    _os.makedirs(dump_dir, exist_ok=True)
+    shard = ttnn.get_device_tensors(t)[0]
+    _torch.save(ttnn.to_torch(shard).float(), _os.path.join(dump_dir, name + ".pt"))
+
+
 from models.demos.glm53_flash.tt.mlp import TtClampedSwiGLU
 from models.demos.glm53_flash.tt.moe import TtMoE
 
@@ -144,7 +160,29 @@ class TtDecoderLayer(LightweightModule):
         RMSNorm inside its pre-block (``fuses_norm``: the collapsed hidden comes out normalised, bf16,
         multicore); the composite ``TtMHCWrap`` hands over the raw bf16 hidden and the closure norms it.
         ``collapse`` (the last layer's FFN wrap feeding the LM head): return the mean over the new
-        streams ``[1,1,B,hidden]`` fp32 instead of the streams (``supports_collapse`` wraps only)."""
+        streams ``[1,1,B,hidden]`` fp32 instead of the streams (``supports_collapse`` wraps only).
+        ``GLM53_MHC_DUMP=<dir>``: the first prefill call of every wrap dumps its input streams, the
+        sublayer's input and output and the output streams (device 0's shard) for an A/B between
+        implementations (``tests/mhc_dump_diff.py``)."""
+        dump_dir = os.environ.get("GLM53_MHC_DUMP")
+        key = f"L{self.layer_idx:02d}_{'attn' if hc is self.attn_hc else 'ffn'}"
+        if dump_dir and streams.shape[-2] > 32 and key not in _DUMPED:
+            _DUMPED.add(key)
+            _dump(dump_dir, key + "_in", streams)
+            inner = sublayer
+
+            def sublayer(h, _inner=inner):  # noqa: F811
+                _dump(dump_dir, key + "_h", h)
+                y = _inner(h)
+                _dump(dump_dir, key + "_y", y)
+                return y
+
+            out = self._hc_call_impl(hc, streams, sublayer, norm_w, collapse)
+            _dump(dump_dir, key + "_out", out)
+            return out
+        return self._hc_call_impl(hc, streams, sublayer, norm_w, collapse)
+
+    def _hc_call_impl(self, hc, streams, sublayer, norm_w, collapse: bool = False):
         if getattr(hc, "fuses_norm", False):
             kw = dict(collapse=True) if collapse else {}
             return hc.forward(
