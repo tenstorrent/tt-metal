@@ -472,13 +472,22 @@ uint64_t BankManager::allocate_buffer(
     uint32_t num_banks = this->num_banks();
     bool is_sharded = false;
     if (num_shards.has_value()) {
-        auto num_compute_banks = compute_grid.num_cores();
         is_sharded = true;
-        TT_FATAL(
-            num_shards.value() <= num_compute_banks,
-            "Expected number of shards {} to be less than or equal to total number of L1 banks {} in compute cores",
-            num_shards.value(),
-            num_compute_banks);
+        if (buffer_type_ == BufferType::DRAM) {
+            TT_FATAL(
+                num_shards.value() <= num_banks,
+                "Expected number of shards {} to be less than or equal to total number of DRAM banks {}",
+                num_shards.value(),
+                num_banks);
+        } else {
+            uint32_t num_compute_banks = compute_grid.num_cores();
+            TT_FATAL(
+                num_shards.value() <= num_compute_banks,
+                "Expected number of shards {} to be less than or equal to total number of L1 banks {} in compute "
+                "cores",
+                num_shards.value(),
+                num_compute_banks);
+        }
         num_banks = num_shards.value();
     }
     DeviceAddr size_per_bank =
