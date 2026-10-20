@@ -208,6 +208,7 @@ class Runs:
     mode), or one that did not finish, is treated as missing, so it never reaches a chart."""
 
     output_root: Path
+    app_exe: Path
     app_args: List[str]
     telemetry_freq: int
     trim_ms: float
@@ -217,7 +218,9 @@ class Runs:
     def settings(self, op: str, subdir: str) -> Dict[str, object]:
         power_case = SUBDIR_TO_POWER_CASE[subdir]
         env = environ_with({"POWER_CASE": str(power_case), "LONG_MATMUL_OP": op})
-        return run_settings(self.app_args, env, self.telemetry_freq, self.trim_ms, self.slot_ms, self.device_id)
+        return run_settings(
+            self.app_exe, self.app_args, env, self.telemetry_freq, self.trim_ms, self.slot_ms, self.device_id
+        )
 
     def complete(self, op: str, subdir: str) -> bool:
         return run_status(self.output_root / op / subdir, self.settings(op, subdir)) == "done"
@@ -706,7 +709,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         output_root.mkdir(parents=True, exist_ok=True)
 
     cases_in_order: List[Tuple[str, str]] = [POWER_CASE_SPECS[i] for i in args.power_cases]
-    runs = Runs(output_root, list(args.app_args), args.telemetry_freq, args.trim_ms, args.slot_ms, args.device_id)
+    runs = Runs(
+        output_root, args.app_exe, list(args.app_args), args.telemetry_freq, args.trim_ms, args.slot_ms, args.device_id
+    )
 
     print(f"Output root: {output_root}", flush=True)
     print(f"Ops sweep: {args.ops}", flush=True)

@@ -17,6 +17,8 @@ tt-ember/
   compare_cases.py     Named use-case comparison — grouped bar charts per grid
   run_power_cases.py   POWER_CASE sweep runner — reset + auto.py per case + compare
   common.py            Helpers shared by the scripts above (reset, run bookkeeping)
+  tests/               Host-side tests of the analysis (no device needed):
+                       python3 -m pytest --confcutdir=tools/tt-ember tools/tt-ember/tests
   docs/
     device-side-instrumentation.md   Per-kernel (reader/compute/writer) analysis
 ```

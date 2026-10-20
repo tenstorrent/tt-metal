@@ -595,7 +595,9 @@ def main() -> int:
     elif args.fixed_blocks_per_core is not None:
         parser.error("--fixed-blocks-per-core only applies to long_matmul")
 
-    settings = run_settings(app_args, os.environ, args.telemetry_freq, args.trim_ms, args.slot_ms, args.device_id)
+    settings = run_settings(
+        args.app_exe, app_args, os.environ, args.telemetry_freq, args.trim_ms, args.slot_ms, args.device_id
+    )
 
     return run_workflow(
         settings=settings,

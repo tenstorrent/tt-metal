@@ -170,6 +170,7 @@ def reset_hardware(tt_smi_cmd: str, dry_run: bool = False) -> int:
 
 
 def run_settings(
+    app_exe: Path,
     app_args: List[str],
     env: Mapping[str, str],
     telemetry_freq_hz: int,
@@ -177,8 +178,10 @@ def run_settings(
     slot_ms: int,
     device_id: Optional[int],
 ) -> Dict[str, object]:
-    """Everything that decides what a run measured, as recorded in RUN_COMPLETE_FILE."""
+    """Everything that decides what a run measured, as recorded in RUN_COMPLETE_FILE. The app is
+    identified by its resolved path; a rebuild in place is not detected."""
     return {
+        "app_exe": str(Path(app_exe).expanduser().resolve()),
         "app_args": [str(a) for a in app_args],
         "env": {k: env[k] for k in WORKLOAD_ENV_VARS if env.get(k)},
         "telemetry_freq_hz": int(telemetry_freq_hz),

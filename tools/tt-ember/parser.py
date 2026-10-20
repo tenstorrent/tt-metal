@@ -34,6 +34,7 @@ from common import (
     EXIT_PROFILER_CSV_WITHOUT_PROGRAM_LOG,
     EXIT_PROGRAM_LOG_NOT_FOUND,
     EXIT_RUN_INCOMPLETE,
+    RUN_COMPLETE_FILE,
     save_figure,
     subdir_name,
 )
@@ -435,17 +436,19 @@ KERNEL_FIGURES_DIR = "kernel_figures"
 
 def check_marker_counts(markers: List[DeviceMarker], intervals: List[ProgramInterval]) -> bool:
     """Markers are assigned to runs by count, in cycle order, so every run must have recorded
-    exactly cores * (1 or 3) start and end markers per kernel. If any were lost, every later
+    exactly cores * (1 or 3) start, end, wait-cycle and active-cycle markers per kernel. If any were lost, every later
     run's numbers would land on the wrong grid; return False (and say so) in that case."""
     have: Dict[str, int] = defaultdict(int)
     for m in markers:
-        if RE_KERNEL_ZONE.match(m.zone_name):
-            have[m.zone_name] += 1
+        have[m.zone_name] += 1
     ok = True
     for kernel_name, multiplier in _KERNEL_CORE_MULTIPLIER.items():
         expected = sum(run.cores for run in intervals) * multiplier
-        for edge in ("START", "END"):
-            zone = f"{kernel_name}_KERNEL_{edge}"
+        # The wait and active-cycle totals come once per invocation too; without them the
+        # utilization rows would be NaN and charted as zero.
+        active = "COMPUTE" if kernel_name == "COMPUTE" else "TRANSFER"
+        for suffix in ("KERNEL_START", "KERNEL_END", "WAIT_CYCLES", f"{active}_CYCLES"):
+            zone = f"{kernel_name}_{suffix}"
             if have[zone] != expected:
                 print(f"WARNING: {zone}: {have[zone]} markers, expected {expected}", file=sys.stderr)
                 ok = False
@@ -1900,6 +1903,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     fig_dir = run_dir / "Figures"
 
     run_dir.mkdir(parents=True, exist_ok=True)
+    # This parse replaces the run's results, so the run is not complete until auto.py records it
+    # again after a successful parse (a re-parse with another --mode or --trim-ms included).
+    (run_dir / RUN_COMPLETE_FILE).unlink(missing_ok=True)
     fig_dir.mkdir(parents=True, exist_ok=True)
 
     # The kernel outputs are written only when a profiler CSV is given, so an earlier run's would

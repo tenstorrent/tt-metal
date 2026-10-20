@@ -220,7 +220,8 @@ python3 auto.py \
 If you already have `telemetry.txt` + `summary.txt` + `profile_log_device.csv` from a previous
 run (e.g. you only changed `parser.py`, not the kernels/app), you don't need to re-run the
 hardware — just re-invoke the parser directly against the existing files, writing back into
-the same run directory:
+the same run directory. This removes the run's `run_complete.json`, since its settings no longer
+describe the new results, so a later sweep into the same output root measures that run again.
 
 ```bash
 python3 parser.py \

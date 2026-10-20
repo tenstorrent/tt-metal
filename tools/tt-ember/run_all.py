@@ -51,7 +51,9 @@ FIXED_TPC_RUNS: List[RunSpec] = [
 
 
 def settings_for(spec: RunSpec, args: argparse.Namespace) -> dict:
-    return run_settings(spec.app_args, os.environ, args.telemetry_freq, args.trim_ms, args.slot_ms, args.device_id)
+    return run_settings(
+        args.app_exe, spec.app_args, os.environ, args.telemetry_freq, args.trim_ms, args.slot_ms, args.device_id
+    )
 
 
 def is_complete(spec: RunSpec, args: argparse.Namespace) -> bool:
