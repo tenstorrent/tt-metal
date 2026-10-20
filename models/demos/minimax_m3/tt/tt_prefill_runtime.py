@@ -627,7 +627,7 @@ class TtPrefillRuntime:
     def msa_layer_ids(self) -> set[int]:
         """Global ids of the MSA (block-sparse) layers — the only layers that write an index_k (layers 3-59 on
         M3). Read through the same helper as ``Layer``, so the table can't disagree with the model."""
-        ids = msa_layer_ids(self.hf_config)
+        ids = {i for i, f in enumerate(sparse_attention_freq(self.hf_config) or []) if f}
         if not ids:
             logger.warning(
                 "[migration] the config has no MSA layers (sparse_attention_freq missing or use_sparse_attention "
@@ -766,13 +766,8 @@ class TtPrefillRuntime:
         )
 
 
-def msa_layer_ids(hf_config) -> set[int]:
-    return {i for i, f in enumerate(sparse_attention_freq(hf_config) or []) if f}
-
-
 def stage_is_paged(hf_config, kv_num_pages, first_layer_idx, num_layers) -> bool:
     """Whether the stage holding layers ``[first_layer_idx, first_layer_idx + num_layers)`` runs a paged KV pool:
     paging is configured and every layer is MSA (only the MSA cache read is paged; ring_joint reads slots)."""
-    return kv_num_pages is not None and set(range(first_layer_idx, first_layer_idx + num_layers)) <= msa_layer_ids(
-        hf_config
-    )
+    msa = {i for i, f in enumerate(sparse_attention_freq(hf_config) or []) if f}
+    return kv_num_pages is not None and set(range(first_layer_idx, first_layer_idx + num_layers)) <= msa
