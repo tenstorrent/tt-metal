@@ -241,10 +241,10 @@
   model_family: Qwen
   skus:
     bh_quietbox_2:
-      # 28 min assumed the 300 s cap on test_decode_bucketing; with its real cost (up to ~13 min on a
-      # cold NAS) the whole entry reconstructs to ~33 min from the 2026-09-08 run.
-      # The MTP spec files were added to the cmd after that run, so this may need another raise.
-      timeout: 40
+      # 40 -> 50 (2026-10-20): with the MTP spec engine's full warmup (cold JIT cache) the files before
+      # test_all_buckets_fit_trace_region take ~31.5 min, and its 64-layer load takes up to ~13 min on a
+      # cold NAS: ~45 min worst case. The 40 min budget timed out in run 39303454645.
+      timeout: 50
       tier: 1
   owner_id: U08HL8X1ECD # Aniruddha Tupe
   team: models
