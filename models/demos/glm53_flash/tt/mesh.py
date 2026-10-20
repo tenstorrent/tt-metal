@@ -15,7 +15,10 @@ Galaxy); every collective must run once eagerly before a trace is captured.
 
 from __future__ import annotations
 
+import os
+from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 
 import torch
 
@@ -114,6 +117,50 @@ class GLMMesh:
             memory_config=memory_config,
             mesh_mapper=self.shard_2d(rows, cols),
         )
+
+    def upload_cached(
+        self,
+        make: Callable[[], torch.Tensor],
+        dtype,
+        cache_file: Path | str | None,
+        *,
+        cols: int | None = None,
+        rows: int | None = None,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        expect_shape: tuple[int, ...] | None = None,
+    ) -> ttnn.Tensor:
+        """``upload`` through a tensorbin cache: when ``cache_file`` exists the device tensor is
+        ``ttnn.load_tensor``-ed from it (the host tensor is never built: ``make`` is a callable so the
+        caller can skip reading / dequantizing the checkpoint on a hit); otherwise ``make()`` is
+        uploaded and dumped into the cache (written to a temporary file and renamed, so a reader never
+        sees a partial file). A hit is checked against ``dtype`` / ``layout`` / ``expect_shape``: a stale
+        or foreign file raises instead of silently feeding wrong weights. The caller puts the mesh
+        shape and placement into the file name (a (1, 1) dump must not be loaded onto a (2, 4) mesh).
+        Measured on one chip: the 7.7 GB bfp8 experts of a MoE layer load in ~2.6 s against ~50 s for
+        the host bfp8 conversion."""
+        if cache_file is not None:
+            cache_file = Path(cache_file)
+            if cache_file.is_file():
+                t = ttnn.load_tensor(cache_file, device=self.device)
+                shape_ok = expect_shape is None or tuple(t.shape) == tuple(expect_shape)
+                if t.dtype != dtype or t.layout != layout or not shape_ok:
+                    raise RuntimeError(
+                        f"weight cache {cache_file}: {t.dtype} {t.layout} {tuple(t.shape)} does not match the "
+                        f"expected {dtype} {layout} {expect_shape}; delete the stale file"
+                    )
+                return t
+        t = self.upload(make(), dtype, cols=cols, rows=rows, layout=layout, memory_config=memory_config)
+        if cache_file is not None:
+            cache_file.parent.mkdir(parents=True, exist_ok=True)
+            tmp = cache_file.with_name(f"{cache_file.stem}.tmp{os.getpid()}{cache_file.suffix}")
+            try:
+                ttnn.dump_tensor(tmp, t)
+                os.replace(tmp, cache_file)
+            except BaseException:
+                tmp.unlink(missing_ok=True)
+                raise
+        return t
 
     # ------------------------------------------------------------------ readback
     def device_tensors(self, x: ttnn.Tensor) -> list[ttnn.Tensor]:

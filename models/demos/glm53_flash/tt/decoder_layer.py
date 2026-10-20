@@ -64,6 +64,9 @@ class TtDecoderLayer(LightweightModule):
         prefix stripped and the fp8 groups dequantized (``reference/checkpoint.load_layer_raw``).
         ``weight_dtype`` covers the big non-expert matmuls (attention projections, dense MLP, shared
         expert); ``expert_dtype`` / ``expert_down_dtype`` the routed experts' gate/up and down weights.
+        ``weight_cache_path``: per-layer tensorbin directory for the KDA prefill weights and the routed
+        experts (``TtMoE.expert_cache_complete``: with a complete expert cache the state dict may omit
+        the ``mlp.experts.N.*`` tensors).
         ``mesh`` (``tt/mesh.py``): the multi-chip placement; the hyper-connections and norms are
         replicated, the sublayers are tensor-parallel over the columns."""
         self.device = device
@@ -112,6 +115,7 @@ class TtDecoderLayer(LightweightModule):
                 expert_dtype=expert_dtype,
                 expert_down_dtype=expert_down_dtype,
                 mesh=self.mesh,
+                weight_cache_path=weight_cache_path,
             )
         else:
             self.mlp = TtClampedSwiGLU(
