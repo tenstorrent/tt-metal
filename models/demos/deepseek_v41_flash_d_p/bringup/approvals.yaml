@@ -6,10 +6,10 @@ intake:
   note: ''
 plan:
   by: dnijemcevic
-  at: '2026-10-17T15:45:30'
+  at: '2026-10-21T12:04:05'
   files:
     models/demos/deepseek_v41_flash_d_p/bringup/plan.yaml: d14f97080020eb21633212f60a1c9155323686fee61ee09475626dd2e9cfbd5b
     models/demos/deepseek_v41_flash_d_p/bringup/plan.md: b92b4487dbb48f9a4902c58fde561b7e9fac782a654d11f8883c2713166a6b23
     models/demos/deepseek_v41_flash_d_p/bringup/components.yaml: 55b8a786e03feca60404e7f6c2235232ad50bc41f4c094ecabdf27edd9d4bd4f
   note: ''
-  ledger: b5222cf2e717f80f07832bcc3921f849ab33925de2c05c2622e38c6ada0e2268
+  ledger: ad9fc80a79c87de8dbf40730ac793ca9db2de0af770a974ab03ac78e57b2b55a
