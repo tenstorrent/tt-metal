@@ -916,7 +916,12 @@ _APPROX_MATHOPS = (
     MathOperation.Reciprocal,
     MathOperation.Rsqrt,
 )
-_QSR_EXTRA_MATHOPS = (MathOperation.Relu, MathOperation.Cumsum, MathOperation.Ema)
+_QSR_EXTRA_MATHOPS = (
+    MathOperation.Relu,
+    MathOperation.Cumsum,
+    MathOperation.Ema,
+    MathOperation.Dropout,
+)
 _BH_UNARY_OPS = sfpu_unary_ops()
 
 OP_CONFIGS = [
@@ -969,7 +974,7 @@ INT32_MATHOPS = list(UNARY_MAX_MIN_INT32_OPS)
 QSR_EXTRA_MATHOPS = [
     cfg.mathop for cfg in OP_CONFIGS if cfg.mathop in _QSR_EXTRA_MATHOPS
 ]
-_NON_MAIN_MATHOPS = set(COMP_MATHOPS + INT32_MATHOPS + QSR_EXTRA_MATHOPS)
+_NON_MAIN_MATHOPS = set(INT32_MATHOPS + QSR_EXTRA_MATHOPS)
 MAIN_MATHOPS = [
     cfg.mathop
     for cfg in OP_CONFIGS
@@ -977,18 +982,27 @@ MAIN_MATHOPS = [
 ]
 
 
-def _assert_op_families_partition_configs():
-    """Keep every configured op in exactly one primary parametrized family."""
-    families = (MAIN_MATHOPS, COMP_MATHOPS, INT32_MATHOPS, QSR_EXTRA_MATHOPS)
-    invalid = {
-        cfg.mathop.name: sum(cfg.mathop in family for family in families)
-        for cfg in OP_CONFIGS
-        if sum(cfg.mathop in family for family in families) != 1
-    }
-    assert not invalid, f"OP_CONFIGS family membership must be exactly one: {invalid}"
+def _assert_op_format_pairs_partition_configs():
+    """Keep every configured (op, format) pair in exactly one primary family."""
+    families = (
+        (MAIN_MATHOPS, SFPU_UNARY_FORMATS),
+        (COMP_MATHOPS, SFPU_COMP_EXTRA_FORMATS),
+        (INT32_MATHOPS, SFPU_INT32_FORMATS),
+        (QSR_EXTRA_MATHOPS, SFPU_UNARY_FORMATS),
+    )
+    invalid = {}
+    for cfg in OP_CONFIGS:
+        for formats in formats_for_op(cfg):
+            memberships = sum(
+                cfg.mathop in family_ops and formats in family_formats
+                for family_ops, family_formats in families
+            )
+            if memberships != 1:
+                invalid[f"{cfg.mathop.name}:{formats}"] = memberships
+    assert (
+        not invalid
+    ), f"OP_CONFIGS (op, format) membership must be exactly one: {invalid}"
 
-
-_assert_op_families_partition_configs()
 
 # Float formats whose 16-bit Dest route gets an explicit MOVA2D (FPU datacopy) signbit variant.
 SIGNBIT_MOVA2D_FORMATS = (DataFormat.Float16, DataFormat.Float16_b)
@@ -1038,6 +1052,9 @@ def formats_for_op(cfg: OpConfig) -> List[InputOutputFormat]:
     return SFPU_UNARY_FORMATS
 
 
+_assert_op_format_pairs_partition_configs()
+
+
 def _approx_modes_for_mathop(mathop):
     if mathop in _APPROX_MATHOPS:
         return [ApproximationMode.No, ApproximationMode.Yes]
@@ -1052,9 +1069,7 @@ def _float_formats_for_mathop(mathop):
 
 def _comp_formats_for_mathop(mathop):
     return unique_quasar_sfpu_formats(
-        generate_quasar_sfpu_format_variants(
-            mathop, formats_for_op(OP_CONFIG_BY_MATHOP[mathop])
-        )
+        generate_quasar_sfpu_format_variants(mathop, SFPU_COMP_EXTRA_FORMATS)
     )
 
 
