@@ -15,9 +15,6 @@
 
 namespace tt::tt_metal::experimental {
 
-// For an RawAllocation that do not own any resource
-struct NoAlloc {};
-
 // Retained for tensor-backed ownership; not used by the allocation representations below.
 struct TensorBackedResource {
     explicit TensorBackedResource(MeshTensor tensor) : resource(std::move(tensor)) {}
@@ -59,9 +56,9 @@ struct RangeLockstepAllocation {
 };
 
 struct RawAllocationImpl {
-    using AllocationLayout = std::variant<NoAlloc, LockstepAllocation, PerNodeAllocation, RangeLockstepAllocation>;
+    using AllocationLayout = std::variant<LockstepAllocation, PerNodeAllocation, RangeLockstepAllocation>;
 
-    RawAllocationImpl() = default;
+    RawAllocationImpl() = delete;
     explicit RawAllocationImpl(AllocationLayout detail, BackedResource backing = {}) :
         layout(std::move(detail)), backing(std::move(backing)) {}
 
