@@ -546,6 +546,52 @@ class TestFSDPEquivalence:
             )
             np.testing.assert_array_equal(fsdp_grads[name], ref_grads[name])
 
+    def test_accumulated_backward_matches_reference(self):
+        """Two micro-batches after the optimizer zeroed the gradients: each managed gradient accumulates in shard
+        shape, as the reference accumulates its full gradient."""
+        in_features, hidden, out_features = 64, 128, 64
+        inputs = [self._make_input(2, 32, in_features, seed=seed) for seed in (3, 4)]
+        mapper = _replicated_mapper()
+
+        def run(model):
+            model.train()
+            for _, t in model.named_parameters():
+                t.set_grad(ttml.core.zeros_like(t.get_value(ttml.autograd.PreferredPrecision.NATIVE)))
+            for input_np in inputs:
+                x = ttml.autograd.Tensor.from_numpy(input_np, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, mapper)
+                ttml.ops.unary.mean(model(x)).backward(False)
+                ttml.autograd.AutoContext.get_instance().reset_graph()
+
+        ref_model = _build_block_with_known_weights(in_features, hidden, out_features, seed=42)
+        run(ref_model)
+        fsdp_model = _build_block_with_known_weights(in_features, hidden, out_features, seed=42)
+        ttml.fsdp.fully_shard(fsdp_model)
+        run(fsdp_model)
+
+        fsdp_params = dict(fsdp_model.named_parameters())
+        for name, t in ref_model.named_parameters():
+            expected = _read_replicated_to_numpy(t.get_grad_tensor(), self.mesh)
+            f = fsdp_params[name]
+            assert ttml.fsdp.is_fsdp_managed(f), name
+            got = _read_fsdp_sharded_to_numpy(f.get_grad_tensor(), self.mesh, int(f._fsdp_shard_dim))
+            np.testing.assert_allclose(got, expected, rtol=1e-2, atol=1e-3, err_msg=name)
+
+    def test_an_unused_parameter_returns_to_its_shard(self):
+        """A managed parameter the forward does not use gets no gradient; backward_post still reshards it (and keeps
+        its accumulated gradient), so the next step gathers a shard, not the gathered tensor again."""
+        block = _build_block_with_known_weights(64, 128, 64, seed=42)
+        unused = LinearLayer(64, 64, has_bias=False)
+        block.unused = unused
+        ttml.fsdp.fully_shard(block)
+        local_shape = list(unused.weight.tensor.shape())
+        x_np = self._make_input(2, 32, 64, seed=5)
+        for _ in range(2):
+            block.train()
+            x = ttml.autograd.Tensor.from_numpy(x_np, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, _replicated_mapper())
+            ttml.ops.unary.mean(block(x)).backward(False)
+            ttml.autograd.AutoContext.get_instance().reset_graph()
+            assert list(unused.weight.tensor.shape()) == local_shape
+
     def test_sync_gradients_averages_replicated_grads(self):
         """With a different batch slice on each rank, ``sync_gradients`` averages a replicated grad."""
         in_features, hidden, out_features = 64, 128, 64

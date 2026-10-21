@@ -115,6 +115,10 @@ class FSDPState:
         # host roundtrip on every reshard.
         self._cached_shards: dict[int, Any] = {}
 
+        # id(autograd_tensor) -> the shard-shaped gradient accumulated by earlier
+        # micro-batches, set aside for the duration of one backward.
+        self._accumulated_grads: dict[int, Any] = {}
+
     # -- managed-param management --------------------------------------------
 
     def add_managed_param(self, parameter: Parameter, shard_dim: int) -> None:
@@ -158,17 +162,17 @@ class FSDPState:
            pass. If ``reshard_after_forward`` was False, the module is
            already UNSHARDED and the param gather is skipped.
 
-        2. Gradient accumulation: if any managed param's ``m_grad`` is
-           already initialised (carried over from a previous micro-batch's
-           ``backward_post`` reduce-scatter), it's currently in shard shape,
-           so we all-gather the shard grad here.
+        2. Gradient accumulation: a managed param's ``m_grad`` carried over from
+           earlier micro-batches (or zeroed by the optimizer) is in shard shape.
+           It is set aside, so this backward computes a fresh gathered-shape
+           gradient, and ``backward_post`` adds it to the reduce-scattered one.
 
         """
         if self.sharded_state == _ShardedState.SHARDED:
             self._gather_all_params()
             self.sharded_state = _ShardedState.UNSHARDED
 
-        self._gather_accumulated_grads()
+        self._set_aside_accumulated_grads()
 
     def backward_post(self) -> None:
         """Called after all of the module's internal backward closures have run.
@@ -182,6 +186,13 @@ class FSDPState:
         for parameter, shard_dim in self.managed:
             param_tensor = parameter.tensor
             if not param_tensor.is_grad_initialized():
+                # Unused by this backward: back to its shard, with whatever gradient it had accumulated.
+                gathered_value = param_tensor.get_value(ttml.autograd.PreferredPrecision.NATIVE)
+                param_tensor.set_value(self._cached_shards[id(param_tensor)])
+                ttnn.deallocate(gathered_value)
+                accumulated = self._accumulated_grads.pop(id(param_tensor), None)
+                if accumulated is not None:
+                    param_tensor.set_grad(accumulated)
                 continue
             # Pull a Python-side handle to the gathered grad before we reduce
             # it; we'll explicitly deallocate it after set_grad to release the
@@ -196,6 +207,9 @@ class FSDPState:
             # per DP rank; divide by axis_size to get the per-shard average,
             # matching the implicit averaging a DDP all-reduce would do.
             reduced = ttnn.multiply(reduced, 1.0 / float(self.axis_size))
+            accumulated = self._accumulated_grads.pop(id(param_tensor), None)
+            if accumulated is not None:
+                reduced = ttnn.add(accumulated, reduced)
 
             # Swap m_value to the cached shard and free the gathered weight,
             # then set_grad to the reduced shard. Order matters: set_grad
@@ -220,7 +234,7 @@ class FSDPState:
         """All-gather each managed param's value and swap it into the TensorPtr.
 
         Does NOT touch ``m_grad`` — grad reshaping lives in
-        ``_gather_accumulated_grads`` and ``backward_post``.
+        ``_set_aside_accumulated_grads`` and ``backward_post``.
         """
         for parameter, shard_dim in self.managed:
             param_tensor = parameter.tensor
@@ -230,26 +244,13 @@ class FSDPState:
             gathered = ttml.core.distributed.all_gather(param_tensor.get_value(), shard_dim, self.axis_index)
             param_tensor.set_value(gathered)
 
-    def _gather_accumulated_grads(self) -> None:
-        """All-gather any managed param ``m_grad`` that survived from a prior
-        micro-batch's ``backward_post``.
-
-        Call AFTER ``_gather_all_params`` so ``set_grad`` can shape-check the
-        gathered grad against the (now gathered) ``m_value``.
-
-        """
-        for parameter, shard_dim in self.managed:
+    def _set_aside_accumulated_grads(self) -> None:
+        """Take each managed param's shard-shaped ``m_grad`` out of the tensor until ``backward_post``."""
+        for parameter, _shard_dim in self.managed:
             param_tensor = parameter.tensor
-            if not param_tensor.is_grad_initialized():
-                continue
-            shard_grad = param_tensor.get_grad()
-            gathered_grad = ttml.core.distributed.all_gather(
-                shard_grad,
-                shard_dim,
-                self.axis_index,
-            )
-            param_tensor.set_grad(gathered_grad)
-            ttnn.deallocate(shard_grad)
+            if param_tensor.is_grad_initialized():
+                self._accumulated_grads[id(param_tensor)] = param_tensor.get_grad()
+                param_tensor.reset_grad()
 
     def _reshard_all_params(self) -> None:
         """Swap managed params back to their cached shard tensors.
