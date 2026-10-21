@@ -35,6 +35,10 @@ for a, b, n in ((BF, F32, "bf16_fp32"), (F32, BF, "fp32_bf16"), (BF, B8, "bf16_b
     CASES[f"typecast_{n}_d"] = ("typecast", a, b, (1, 1, 2048, 2048), 0)
     CASES[f"typecast_{n}_l1"] = ("typecast", a, b, (1, 1, 2048, 256), 8)
     CASES[f"typecast_{n}_s1"] = ("typecast", a, b, (1, 1, 32, 1024), 0)
+for a, b, n in ((BF, B8, "bf16_bfp8"), (F32, BF, "fp32_bf16"), (BF, F32, "bf16_fp32")):
+    CASES[f"i2s_{n}"] = ("i2s", a, b, (1, 1, 2048, 256), 8)
+    CASES[f"s2i_{n}"] = ("s2i", a, b, (1, 1, 2048, 256), 8)
+    CASES[f"copy_{n}_d"] = ("copy", a, b, (1, 1, 2048, 2048), 0)
 CASES["clone_bf16_fp32"] = ("clone", BF, F32, (1, 1, 2048, 2048), 0)
 CASES["clone_fp32_bf16_l1"] = ("clone", F32, BF, (1, 1, 2048, 256), 8)
 
@@ -52,7 +56,8 @@ def run_case(device, case):
     mc_in = DRAM
     if cores:
         mc_in = shard_mc(shp, cores)
-    t = ttnn.from_torch(x, dtype=din, layout=in_layout, device=device, memory_config=mc_in)
+    mc_src = mc_in if op != "i2s" else DRAM
+    t = ttnn.from_torch(x, dtype=din, layout=in_layout, device=device, memory_config=mc_src)
     if op == "tilize":
         out = ttnn.tilize(t, memory_config=mc_in)
     elif op == "untilize":
@@ -63,6 +68,14 @@ def run_case(device, case):
         out = ttnn.untilize_with_unpadding(t, [0, 0, 1999, 1999])
     elif op == "typecast":
         out = ttnn.typecast(t, dout, memory_config=mc_in)
+    elif op == "i2s":
+        out = ttnn.interleaved_to_sharded(t, mc_in, output_dtype=dout)
+    elif op == "s2i":
+        out = ttnn.sharded_to_interleaved(t, DRAM, output_dtype=dout)
+    elif op == "copy":
+        dst = ttnn.from_torch(torch.zeros(shp), dtype=dout, layout=T, device=device, memory_config=DRAM)
+        ttnn.copy(t, dst)
+        out = dst
     elif op == "clone":
         out = ttnn.clone(t, dtype=dout, memory_config=mc_in)
     ttnn.synchronize_device(device)
