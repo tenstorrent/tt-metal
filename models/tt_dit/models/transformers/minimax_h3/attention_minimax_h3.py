@@ -325,7 +325,9 @@ class MiniMaxH3Attention(Module):
 
     # ------------------------------------------------------------------ helpers
 
-    def _sdpa_program_config(self, seq_local: int, *, ring: bool, windowed: bool = False) -> ttnn.SDPAProgramConfig:
+    def _sdpa_program_config(
+        self, seq_local: int, *, ring: bool, windowed: bool = False, q_chunk: int | None = None
+    ) -> ttnn.SDPAProgramConfig:
         """Ring SDPA chunk sizes for a given per-device sequence length.
 
         Measured points come from the sweep in
@@ -353,15 +355,18 @@ class MiniMaxH3Attention(Module):
 
         `windowed` caps k at 256 so the on-device mask CB fits in L1.
         """
-        key = (seq_local, ring, windowed)
+        key = (seq_local, ring, windowed, q_chunk)
         if key not in self._sdpa_program_configs:
             tile = ttnn.TILE_SIZE
             measured = self.measured_sdpa_chunk_sizes.get(seq_local)
+            q_override = q_chunk
             if measured is not None:
                 q_chunk, k_chunk = measured
             else:
                 q_chunk = max(tile, min(256, (seq_local // tile) * tile))
                 k_chunk = max(tile, min(512, (seq_local // tile) * tile))
+            if q_override is not None:
+                q_chunk = q_override  # Sol resident mode: the 64-row query block is the compute unit
             if windowed:
                 k_chunk = min(k_chunk, 256)
             grid = (
@@ -516,7 +521,7 @@ class MiniMaxH3Attention(Module):
         assert self.sol_logical_n is not None, "set sol_logical_n (host int) before a sparse forward"
         rows = q_BHNE.shape[2]
         sp_factor = self.parallel_config.sequence_parallel.factor
-        cfg = self._sdpa_program_config(rows, ring=True)
+        cfg = self._sdpa_program_config(rows, ring=True, q_chunk=self._sol_q_chunk)
         geo = SolGeometry(
             shards=sp_factor,
             rows=rows,
@@ -534,7 +539,7 @@ class MiniMaxH3Attention(Module):
                 thresh_type=self.sol_thresh_type,
                 band=self.sol_band,
                 dense_prefix_queries=self.sol_prefix_mode == "fused",
-                mode=self.sol_mode,
+                mode=self._sol_prepass_mode,
                 # compaction generates the pooled-column bias on device, so the fused producer skips the ~87 MB bias write
                 **({"emit_bias": not self._sol_compact_family} if self.sol_fused else {}),
             )
@@ -549,10 +554,10 @@ class MiniMaxH3Attention(Module):
             "sol_pooled_v": out["pooled_v"],
         }
         if (
-            out.get("bias") is not None and not self._sol_compact_family
-        ):  # compact / pack generate the bias on device and reject a tensor
+            out.get("bias") is not None and not self._sol_compact_family and self.sol_mode != "resident"
+        ):  # compact / pack / resident generate the bias on device and reject a tensor
             kwargs["sol_bias"] = out["bias"]
-        if self._sol_compact_family:
+        if self._sol_compact_family or self.sol_mode == "resident":
             # Explicit op mode (sol-vid2's `sol_mode` keyword). The docstring never lists keyword names, so probe the raw
             # binding: calling it with no arguments raises a TypeError whose text lists the accepted keywords. Compact
             # must not silently fall back to gather (2026-10-16: every "compact" measurement before this fix was gather).
@@ -734,6 +739,19 @@ class MiniMaxH3Attention(Module):
         ttnn.deallocate(out_BHNE)
         return new_out
 
+    # Resident mode (sol_attn_status_2026-10-21.md 4a, M1): the op streams each K/V piece once per core and applies
+    # it to every resident 64-row query chunk, so the query chunk is the 64-token block (no union over blocks) and
+    # the mask is the chunk-form one the "chunk" pre-pass produces.
+    _SOL_RESIDENT_Q_CHUNK = 64
+
+    @property
+    def _sol_prepass_mode(self) -> str:
+        return "chunk" if self.sol_mode == "resident" else self.sol_mode
+
+    @property
+    def _sol_q_chunk(self) -> int | None:
+        return self._SOL_RESIDENT_Q_CHUNK if self.sol_mode == "resident" else None
+
     @property
     def _sol_compact_family(self) -> bool:
         """compact and pack: block mask streamed through the chains, bias generated on device."""
@@ -877,7 +895,9 @@ class MiniMaxH3Attention(Module):
                 ),
                 joint_strategy="rear",
                 logical_n=logical_n,
-                program_config=self._sdpa_program_config(q_BHNE.shape[2], ring=True),
+                program_config=self._sdpa_program_config(
+                    q_BHNE.shape[2], ring=True, q_chunk=self._sol_q_chunk if sol_kwargs else None
+                ),
                 compute_kernel_config=self.sdpa_compute_kernel_config,
                 dim=2,
                 multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(self.sp_mesh_axis),

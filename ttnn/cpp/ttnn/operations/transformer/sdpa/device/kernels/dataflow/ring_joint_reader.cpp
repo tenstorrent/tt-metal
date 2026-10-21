@@ -579,6 +579,10 @@ void kernel_main() {
     // packed pages go out on cb_k_in / cb_v_in exactly as chunks used to, which leaves compute's inner-step call
     // site untouched.
     constexpr bool sol_pack = get_named_compile_time_arg_val("sol_pack") == 1;
+    // Resident mode (sol_attn_status_2026-10-21.md 4a, M1): chunk-mode semantics, one pass of each K/V piece per
+    // ring iteration shared by every Q chunk the core owns. See the branch in the ring loop below.
+    constexpr bool sol_resident = get_named_compile_time_arg_val("sol_resident") == 1;
+    static_assert(!sol_resident || (sol_chunk_mode && !sol_compact && !sol_pack), "resident mode is a chunk mode");
     constexpr uint32_t cb_k_stage = get_named_compile_time_arg_val("cb_k_stage");
     constexpr uint32_t cb_v_stage = get_named_compile_time_arg_val("cb_v_stage");
     constexpr uint32_t sol_blocks_per_page = get_named_compile_time_arg_val("sol_blocks_per_page");
@@ -1325,7 +1329,259 @@ void kernel_main() {
         uint32_t gqa_group_q_iter = 0;
 
         [[maybe_unused]] const uint32_t do_pooled = (sol_pooled_pending && !sol_pooled_off) ? 1u : 0u;
-        if constexpr (sol_enabled && !sol_chunk_mode) {
+        if constexpr (sol_resident) {
+            // ---- Sol-Attn resident mode (sol_attn_status_2026-10-21.md 4a, M1). One pass of each K/V piece per
+            // ring iteration, applied by compute to every resident Q chunk (sdpa_ring_resident). This reader:
+            //   1. on the first active iteration reads every resident Q chunk into cb_q_in, once for the whole op;
+            //   2. per head the core's chunks fall in: the chain-wide kept union over every chunk of every chain
+            //      member, then one plan page per resident chunk [kept lo, hi, do_pooled, union lo, hi];
+            //   3. streams the shard's pieces once each, heads interleaved per k in head order, skipping a piece
+            //      no member of the head's chain needs (compute mirrors both rules);
+            //   4. on the first active iteration the pooled K/V chunks once per head, then one bias row per
+            //      resident chunk of that head -- K and V before the biases, so compute's first step on the entry
+            //      never waits for V behind a bias row the reader could not push yet.
+            constexpr uint32_t kResMax = 32;
+            const uint32_t n_res = q_per_core;
+            ASSERT(n_res >= 1 && n_res <= kResMax);
+            uint32_t res_nb[kResMax];
+            uint32_t res_nq[kResMax];
+            uint32_t res_qc[kResMax];
+            for (uint32_t i = 0; i < n_res; ++i) {
+                const auto d = decompose_global_q_index(global_q_start + i, num_q_chunks, NH, use_zigzag_balancing);
+                res_nb[i] = d.nb;
+                res_nq[i] = d.nq;
+                res_qc[i] = d.q_chunk;
+            }
+            // 1. Q, once. Before any chain forward of this op, so no NoC write is in flight across the read barrier.
+            if (!q_pushed) {
+                for (uint32_t i = 0; i < n_res; ++i) {
+                    const Slice q_slice(
+                        res_nb[i], res_nq[i], res_qc[i] * Sq_chunk_t, res_qc[i] * Sq_chunk_t + Sq_chunk_t, 0, DHt);
+                    read_block(
+                        q_generator, q_slice, q_local_padded_Nt, cb_q_in, q_tile_bytes, false, q_barrier_threshold);
+                }
+                q_pushed = true;
+            }
+            // 2. Kept bits and plans. The plan page's scratch (past the 64-byte header) holds one chunk row at a time.
+            CircularBuffer cb_plan(cb_sol_plan);
+            cb_plan.reserve_back(1);
+            const uint32_t plan_addr = cb_plan.get_write_ptr();
+            const uint32_t scratch = plan_addr + 64;
+            const auto read_chunk_row = [&](uint32_t nq, uint32_t qc) {
+                noc.async_read(
+                    sol_mask_reader,
+                    CoreLocalMem<uint32_t>(scratch),
+                    sol_mask_row_bytes,
+                    {.page_id = nq * sol_nqc_pad + qc},
+                    {});
+                noc.async_read_barrier();
+            };
+            // Kept local chunks of the row in the scratch; chunk 0 forced when the row is empty (every (Q chunk,
+            // shard) must compute at least one chunk, and compute creates each chunk's state on chunk 0).
+            const auto row_kept_bits = [&](uint32_t& lo, uint32_t& hi) {
+                CoreLocalMem<volatile uint32_t> row(scratch);
+                lo = 0;
+                hi = 0;
+                for (uint32_t k = 0; k < num_local_k_chunks; ++k) {
+                    if (row[ring_id * sol_nkc + k] != 0) {
+                        if (k < 32) {
+                            lo |= 1u << k;
+                        } else {
+                            hi |= 1u << (k - 32);
+                        }
+                    }
+                }
+                lo |= 1u;
+            };
+            uint32_t res_lo[kResMax];
+            uint32_t res_hi[kResMax];
+            uint32_t seg_ulo[kResMax];
+            uint32_t seg_uhi[kResMax];
+            for (uint32_t i = 0; i < n_res; ++i) {
+                read_chunk_row(res_nq[i], res_qc[i]);
+                row_kept_bits(res_lo[i], res_hi[i]);
+            }
+            // Head segments and their chain-wide unions. The chain members cover the head this core participates
+            // in; a segment of another head is a non-participant there (it reads its own K/V), so union = own.
+            for (uint32_t i0 = 0; i0 < n_res;) {
+                uint32_t i1 = i0;
+                uint32_t ulo = 0;
+                uint32_t uhi = 0;
+                while (i1 < n_res && res_nq[i1] == res_nq[i0]) {
+                    ulo |= res_lo[i1];
+                    uhi |= res_hi[i1];
+                    ++i1;
+                }
+                if (sol_n_members > 0 && head_cfg.participates && res_nq[i0] == head_cfg.head) {
+                    for (uint32_t m = 0; m < sol_n_members; ++m) {
+                        const uint32_t m_start = get_arg_val<uint32_t>(sol_members_base + 2 * m);
+                        const uint32_t m_count = get_arg_val<uint32_t>(sol_members_base + 2 * m + 1);
+                        for (uint32_t c = 0; c < m_count; ++c) {
+                            const uint32_t qc = m_start + c;
+                            if (qc >= res_qc[i0] && qc < res_qc[i0] + (i1 - i0)) {
+                                continue;  // this core's own chunks are already in
+                            }
+                            read_chunk_row(res_nq[i0], qc);
+                            uint32_t lo;
+                            uint32_t hi;
+                            row_kept_bits(lo, hi);
+                            ulo |= lo;
+                            uhi |= hi;
+                        }
+                    }
+                }
+                for (uint32_t i = i0; i < i1; ++i) {
+                    seg_ulo[i] = ulo;
+                    seg_uhi[i] = uhi;
+                }
+                i0 = i1;
+            }
+            for (uint32_t i = 0; i < n_res; ++i) {
+                if (i > 0) {
+                    cb_plan.reserve_back(1);  // one page: waits for compute to pop the previous plan
+                }
+                CoreLocalMem<volatile uint32_t> plan_words(cb_plan.get_write_ptr());
+                plan_words[0] = res_lo[i];
+                plan_words[1] = res_hi[i];
+                plan_words[2] = do_pooled;
+                plan_words[3] = seg_ulo[i];
+                plan_words[4] = seg_uhi[i];
+                cb_plan.push_back(1);
+            }
+            // 3. The shard's pieces, once each; heads interleaved per k in head order.
+            const bool source_is_local = ring_id == ring_index;
+            const uint32_t source_start_tile = ring_id * kv_local_padded_Nt;
+            const uint32_t source_valid_kv_tiles =
+                logical_nt > source_start_tile ? std::min(logical_nt - source_start_tile, kv_local_padded_Nt) : 0;
+            const uint32_t end_seq_tile =
+                source_is_local ? source_valid_kv_tiles : source_start_tile + source_valid_kv_tiles;
+            const auto stream_piece = [&](uint32_t nb, uint32_t nq, uint32_t k) {
+                const uint32_t nk = nq / q_heads_per_k;
+                const uint32_t nv = nq / q_heads_per_v;
+                const uint32_t kv_batch = indexed_kv_cache ? kv_cache_batch_idx : nb;
+                const uint32_t gathered_kv_batch = indexed_kv_cache ? 0 : nb;
+                const uint32_t src_batch = source_is_local ? kv_batch : gathered_kv_batch;
+                const uint32_t row0 = (source_is_local ? 0 : source_start_tile) + k * Sk_chunk_t;
+                const Slice k_slice(src_batch, nk, row0, row0 + Sk_chunk_t, 0, DHt);
+                // Chain scope keys: the query head for MHA chains, the KV head for grouped ones (as the dense loop).
+                const uint32_t k_head = gqa_grouped_kv ? nk : nq;
+                CircularBuffer cb_k(cb_k_in);
+                cb_k.reserve_back(k_chunk_tiles);
+                const uint32_t k_addr = cb_k.get_write_ptr();
+                if (k_chain.should_receive(k_head)) {
+                    k_chain.receive(noc);
+                } else if (source_is_local) {
+                    fetch_block(local_k_generator, k_slice, end_seq_tile, cb_k_in, k_addr, k_tile_bytes, true);
+                } else {
+                    fetch_block(gathered_k_generator, k_slice, end_seq_tile, cb_k_in, k_addr, k_tile_bytes, true);
+                }
+                if (k_chain.should_forward(k_head, 0)) {
+                    k_chain.forward(noc, k_addr, k_chunk_tiles, k_tile_bytes);
+                }
+                cb_k.push_back(k_chunk_tiles);
+                const Slice v_slice(src_batch, nv, row0, row0 + Sk_chunk_t, v_col_offset_t, v_col_offset_t + vDHt);
+                CircularBuffer cb_v(cb_v_in);
+                cb_v.reserve_back(v_cb_entry_tiles);
+                const uint32_t v_addr = cb_v.get_write_ptr();
+                if (v_chain.should_receive(nv)) {
+                    v_chain.receive(noc);
+                } else if (source_is_local) {
+                    fetch_block(local_v_generator, v_slice, end_seq_tile, cb_v_in, v_addr, v_tile_bytes, false);
+                } else {
+                    fetch_block(gathered_v_generator, v_slice, end_seq_tile, cb_v_in, v_addr, v_tile_bytes, false);
+                }
+                if (v_chain.should_forward(nv, 0)) {
+                    v_chain.forward(noc, v_addr);
+                }
+                cb_v.push_back(v_cb_entry_tiles);
+                KV_chunks_processed_in_iter++;
+            };
+            for (uint32_t k = 0; k < num_local_k_chunks; ++k) {
+                if (!chunked_kv_chunk_is_live<
+                        kv_pad_rotation_enabled,
+                        chunked_enabled,
+                        kv_local_padded_Nt,
+                        chunk_size_t,
+                        kv_region_Nt>(ring_id, k, Sk_chunk_t, logical_nt, causal_end_nt)) {
+                    continue;
+                }
+                for (uint32_t i0 = 0; i0 < n_res;) {
+                    uint32_t i1 = i0;
+                    while (i1 < n_res && res_nq[i1] == res_nq[i0]) {
+                        ++i1;
+                    }
+                    const bool union_kept =
+                        k < 32 ? ((seg_ulo[i0] >> k) & 1u) != 0 : ((seg_uhi[i0] >> (k - 32)) & 1u) != 0;
+                    if (union_kept) {
+                        stream_piece(res_nb[i0], res_nq[i0], k);
+                    }
+                    i0 = i1;
+                }
+            }
+            // 4. Pooled chunks, once per head, then one bias row per resident chunk of the head.
+            if constexpr (sol_gen_bias) {
+                if (do_pooled) {
+                    constexpr uint32_t pooled_rows_t = sol_n_blocks_pad / 32;
+                    const sol_bias_gen::Geometry geo{
+                        kv_local_padded_Nt * 32, sol_logical_n_tokens, sol_nb, sol_nb_pad, sol_nkc, Sk_chunk_t};
+                    for (uint32_t i0 = 0; i0 < n_res;) {
+                        uint32_t i1 = i0;
+                        while (i1 < n_res && res_nq[i1] == res_nq[i0]) {
+                            ++i1;
+                        }
+                        const uint32_t nq = res_nq[i0];
+                        for (uint32_t pc = 0; pc < sol_pooled_chunks; ++pc) {
+                            const uint32_t tiles = pc + 1 == sol_pooled_chunks ? sol_pooled_last_tiles : Sk_chunk_t;
+                            const uint32_t row0 = pc * Sk_chunk_t;
+                            CircularBuffer cb_k(cb_k_in);
+                            cb_k.reserve_back(k_chunk_tiles);
+                            sol_pk_generator.issue_reads(
+                                Slice(0, nq, row0, row0 + tiles, 0, DHt),
+                                pooled_rows_t,
+                                cb_k_in,
+                                cb_k.get_write_ptr(),
+                                k_tile_bytes,
+                                k_tile_bytes * Sk_chunk_t,
+                                0);
+                            noc.async_read_barrier();
+                            noc.write_zeros_l1_barrier();
+                            cb_k.push_back(k_chunk_tiles);
+                            CircularBuffer cb_v(cb_v_in);
+                            cb_v.reserve_back(v_cb_entry_tiles);
+                            sol_pv_generator.issue_reads(
+                                Slice(0, nq, row0, row0 + tiles, 0, vDHt),
+                                pooled_rows_t,
+                                cb_v_in,
+                                cb_v.get_write_ptr(),
+                                vDHt * v_tile_bytes,
+                                v_tile_bytes,
+                                0);
+                            noc.async_read_barrier();
+                            noc.write_zeros_l1_barrier();
+                            cb_v.push_back(v_cb_entry_tiles);
+                            KV_chunks_processed_in_iter++;
+                            for (uint32_t i = i0; i < i1; ++i) {
+                                // The chunk's own row back into the plan scratch: compute reads only the header
+                                // words of a plan page, and every page has been popped by now.
+                                read_chunk_row(nq, res_qc[i]);
+                                CircularBuffer cb_bias(cb_sol_bias);
+                                cb_bias.reserve_back(Sk_chunk_t);
+                                sol_bias_gen::generate_tiles<true, sol_bias_tile_bytes>(
+                                    noc,
+                                    cb_bias.get_write_ptr(),
+                                    row0,
+                                    tiles,
+                                    geo,
+                                    CoreLocalMem<volatile uint32_t>(scratch),
+                                    sol_len_bias_table_base);
+                                cb_bias.push_back(Sk_chunk_t);
+                            }
+                        }
+                        i0 = i1;
+                    }
+                }
+            }
+        } else if constexpr (sol_enabled && !sol_chunk_mode) {
             // ---- Sol-Attn block gathering: per Q chunk, gather this shard's kept 64-token blocks into dense
             // Sk-sized K/V chunks (8 blocks each); on the first active ring iteration also stream the pooled
             // K/V chunks with their per-Q-chunk column bias. Compute reads the plan words (n_gather,

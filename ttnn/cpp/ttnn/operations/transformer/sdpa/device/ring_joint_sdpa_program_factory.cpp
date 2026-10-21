@@ -195,6 +195,8 @@ RingJointInputParams resolve_ring_joint_input_params(
 constexpr uint32_t kReaderKernelIndex = 0;
 constexpr uint32_t kWriterKernelIndex = 1;
 constexpr uint32_t kComputeKernelIndex = 2;
+// Sol resident mode: Q chunks a core may hold in L1 at once (the kernels' per-chunk state is a 32-bit bitmask).
+constexpr uint32_t kSolResidentMaxSlots = 32;
 
 // Dense all-gather appends reader-forward, writer-forward, reader-backward, writer-backward.
 // Compact sliding appends only its predecessor reader/writer pair at indices 3 and 4.
@@ -1119,6 +1121,11 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // Selected with sol_mode="pack" (implies compact). It used to be the TT_SOL_PACK env var, which the program
     // hash could not see: a cache hit silently reused the pack-off program.
     const bool sol_pack = tensor_args.sol_pack_mode(args.sol_mode);
+    // Resident mode (sol_attn_status_2026-10-21.md §4a, M1): chunk-mode semantics with the K/V-once loop order.
+    // Each piece is streamed through a core once per ring iteration and applied to every resident Q chunk; the
+    // per-chunk accumulators live in an L1 FIFO (the staging CBs, max_q_per_core + 1 entries deep) for the whole
+    // op, so there is no per-chunk DRAM save/restore and the chain streams each shard once per core.
+    const bool sol_resident = tensor_args.sol_resident_mode(args.sol_mode);
     if (tensor_args.sol_enabled()) {
         // Emitted once per program creation (the kernels are created with these named args). The Sol tests read this
         // line back from stderr and fail when a requested mode did not resolve (a docstring-gated keyword once made
@@ -1127,7 +1134,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             tt::LogOp,
             "RingJointSDPA sol mode resolved: {} (requested '{}', compact={}, chunk={}, even_up={}, even_up_all={}, "
             "gen_bias={})",
-            sol_pack ? "pack" : (sol_compact ? "compact" : (sol_chunk_mode ? "chunk" : "gather")),
+            sol_resident ? "resident"
+                         : (sol_pack ? "pack" : (sol_compact ? "compact" : (sol_chunk_mode ? "chunk" : "gather"))),
             args.sol_mode,
             sol_compact ? 1 : 0,
             sol_chunk_mode && !sol_compact ? 1 : 0,
@@ -1427,7 +1435,13 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     const bool kt_inplace_v = kt_inplace_v_enabled(v_shares_k_buffer, Sq_chunk_t);
 
     // These tile capacity counts for CBs need to match the number of tiles expected by the kernel (softmax.cpp)
-    uint32_t q_tiles = Sq_chunk_t * DHt * q_buffer_factor;
+    // Resident mode keeps every Q chunk the core owns fronted in cb_q_in for the whole op (read once).
+    TT_FATAL(
+        !sol_resident || max_q_per_core <= kSolResidentMaxSlots,
+        "sol_mode=resident holds at most {} Q chunks per core, this split needs {}",
+        kSolResidentMaxSlots,
+        max_q_per_core);
+    uint32_t q_tiles = Sq_chunk_t * DHt * (sol_resident ? max_q_per_core : q_buffer_factor);
     // Latent-V keeps the K CB triple-buffered. With V rematerialized, the 3rd slot let the reader
     // build the next V while compute consumed the current one; with in-place latent V (kt_inplace_v)
     // there is no V entry, but the 3rd K^T slot still buys prefetch slack that hides the reader's
@@ -2137,10 +2151,14 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // reducer's partial results from the other bands. Unsplit sliding attention folds every K/V range into one pass per
     // Q and uses neither, so it aliases them to existing CBs to keep the compile-time ABI without reserving L1.
     const bool needs_accumulator_staging_cbs = !has_sliding_window || ksplit_count > 1;
-    const uint32_t cb_stats_in =
-        needs_accumulator_staging_cbs ? allocate_tile_cb(statistics_tiles, im_tile_size, im_df) : cb_max_A;
+    // Resident mode: the staging CBs (max, out, sum) are an L1 FIFO of one accumulator set per resident Q chunk,
+    // one entry deeper than the chunk count so a step can push the updated state before its old entry is popped.
+    const uint32_t fifo_entries = sol_resident ? max_q_per_core + 1 : 1;
+    const uint32_t cb_stats_in = needs_accumulator_staging_cbs
+                                     ? allocate_tile_cb(statistics_tiles * fifo_entries, im_tile_size, im_df)
+                                     : cb_max_A;
     const uint32_t cb_prev_out =
-        needs_accumulator_staging_cbs ? allocate_tile_cb(out_im_tiles, out_tile_size, out_df) : cb_out;
+        needs_accumulator_staging_cbs ? allocate_tile_cb(out_im_tiles * fifo_entries, out_tile_size, out_df) : cb_out;
     const uint32_t cb_stats_out =
         needs_accumulator_staging_cbs ? allocate_tile_cb(statistics_tiles, im_tile_size, im_df) : cb_max_B;
 
@@ -2155,10 +2173,11 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         use_streaming_compute
             ? (needs_accumulator_staging_cbs ? allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df) : cb_sum_A)
             : inactive_cb;
-    const uint32_t cb_sum_in =
-        use_streaming_compute
-            ? (needs_accumulator_staging_cbs ? allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df) : cb_sum_B)
-            : inactive_cb;
+    const uint32_t cb_sum_in = use_streaming_compute
+                                   ? (needs_accumulator_staging_cbs
+                                          ? allocate_tile_cb(statistics_tiles * fifo_entries, stats_tile_size, stats_df)
+                                          : cb_sum_B)
+                                   : inactive_cb;
 
     // Signal CB: compute signals writer when last K-chunk starts.
     // 1 page suffices: writer pops during SALAD before compute pushes the next Q's signal.
@@ -3290,6 +3309,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         // visits scale with density rather than chunk occupancy. Raw chunks land in the staging CBs (reader-only)
         // and compute sees only packed pages, on cb_k_in / cb_v_in as before.
         {"sol_pack", sol_pack ? 1u : 0u},
+        // Resident mode (see sol_resident above): the FIFO depth every core sizes its state arrays by.
+        {"sol_resident", sol_resident ? 1u : 0u},
+        {"sol_resident_slots", sol_resident ? max_q_per_core : 0u},
         {"cb_k_stage", cb_k_stage},
         {"cb_v_stage", cb_v_stage},
         // Blocks per packed page = blocks per K chunk, so a full page is exactly one chunk's worth of tiles and

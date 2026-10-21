@@ -141,7 +141,9 @@ def test_sol_bench_attention(mesh_device, sp_axis, tp_axis, num_links, topology,
             #                       drags those 4 chips to dense pace (26.6 ms at 10 s; the other 28 chips: 9 ms).
             #   off:                no exact recompute (the floor: the sparse op alone).
             # SOL_BENCH_DENSE_PREFIX=0 is the old spelling of "off".
-            prefix = os.environ.get("SOL_BENCH_PREFIX", "separate")
+            # Default "off" while the kernel work is measured (2026-10-21 decision: the prefix recompute waits
+            # until the other optimizations are done); pass SOL_BENCH_PREFIX=separate to include it.
+            prefix = os.environ.get("SOL_BENCH_PREFIX", "off")
             if os.environ.get("SOL_BENCH_DENSE_PREFIX", "1") == "0":
                 prefix = "off"
             tt_model.sol_prefix_mode = prefix

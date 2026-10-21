@@ -145,7 +145,10 @@ def _run(
         for x in (q, k, v)
     )
 
-    pre = SolPrepass(mesh_device=mesh_device, ccl_manager=ccl, sp_axis=sp_axis, tau=tau, mode=mode)
+    # "resident" is a chunk mode in the kernel; the pre-pass produces the same chunk-form mask as "chunk".
+    pre = SolPrepass(
+        mesh_device=mesh_device, ccl_manager=ccl, sp_axis=sp_axis, tau=tau, mode="chunk" if mode == "resident" else mode
+    )
     pre.prepare(geo, sink_tokens, scale)
     sol = pre(tq, tk, tv, scale=scale, report_density=True)
 
@@ -446,6 +449,28 @@ def test_q2_packing_matches_unpacked(mesh_device, sp_axis, tp_axis, num_links, t
 
 
 @GALAXY_RING
+def test_resident_matches_chunk(mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, reset_seeds, capfd):
+    """M1's correctness gate (sol_attn_status_2026-10-21.md 4a): resident mode is chunk mode with the K/V-once loop
+    order -- each piece streamed once per core and applied to every resident 64-row query chunk from L1.
+
+    Same inputs and the same chunk-form mask at 64-row query chunks; only the loop order and where the accumulators
+    live differ, so the two outputs must agree to bf16 noise. At rows=1024 a core holds about two resident chunks and
+    some cores straddle two heads, which exercises the interleaved per-head streaming.
+    """
+    kw = dict(tau=2.0, q_chunk=Q1_CHUNK)
+    base = _run(mesh_device, sp_axis, num_links, topology, capfd, mode="chunk", **kw)
+    res = _run(mesh_device, sp_axis, num_links, topology, capfd, mode="resident", want_dense=False, **kw)
+    p_chunk = _pcc(base.sol, res.sol, LOGICAL_N)
+    p_dense = _pcc(res.sol, base.dense, LOGICAL_N)
+    logger.info(
+        f"[resident] density {res.density:.4f}; pcc(resident, chunk) {p_chunk:.6f}; pcc(resident, dense) {p_dense:.5f}"
+    )
+    assert res.modes_logged == {"resident"}, f"factory compiled {sorted(res.modes_logged)}"
+    assert base.density == res.density, "the mask must be the chunk-mode one"
+    assert p_chunk > 0.999, p_chunk
+
+
+@GALAXY_RING
 @pytest.mark.parametrize("tau", [-1e4, 0.5, 1.0, 2.0])
 def test_q2_packing_across_densities(
     mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, tau, reset_seeds, capfd
@@ -644,7 +669,10 @@ def test_sol_op_timing(
         pre_ms = timed(lambda: pre(tq, tk, tv, scale=scale, report_density=False))
         sol = pre(tq, tk, tv, scale=scale, report_density=True)
         sol_kw = dict(
-            sol_block_mask=sol["block_mask"], sol_pooled_k=sol["pooled_k"], sol_pooled_v=sol["pooled_v"], sol_mode=sol_mode
+            sol_block_mask=sol["block_mask"],
+            sol_pooled_k=sol["pooled_k"],
+            sol_pooled_v=sol["pooled_v"],
+            sol_mode=sol_mode,
         )
         sol_ms = timed(lambda: launch(q_chunk, k_chunk, **sol_kw))
         modes = _drain_mode_log(capfd)

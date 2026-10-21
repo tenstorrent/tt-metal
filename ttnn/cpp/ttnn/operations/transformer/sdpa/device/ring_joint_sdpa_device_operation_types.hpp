@@ -222,8 +222,14 @@ struct RingJointSDPAInputs {
     bool sol_mask_is_chunk_width() const {
         return sol_enabled() && sol_block_mask->logical_shape()[3] != sol_pooled_k->logical_shape()[2];
     }
+    // "resident": chunk-mode semantics (chunk-width mask, chains on, pooled correction) with the K/V-once loop
+    // order: every K/V piece is streamed through a core once per ring iteration and applied to each of the
+    // core's resident Q chunks, whose accumulators stay in L1 for the whole op (sol_attn_status_2026-10-21.md
+    // §4a, milestone M1). Requires the generated bias.
+    bool sol_resident_mode(const std::string& mode) const { return sol_enabled() && mode == "resident"; }
     bool sol_chunk_mode(const std::string& mode) const {
-        return sol_enabled() && (mode == "chunk" || (mode == "auto" && sol_mask_is_chunk_width()));
+        return sol_enabled() &&
+               (mode == "chunk" || sol_resident_mode(mode) || (mode == "auto" && sol_mask_is_chunk_width()));
     }
     // "pack": compact plus Q2 cross-chunk packing (kept blocks appended into full pages). A mode rather than an
     // env var so it participates in the program hash and the kernels' named compile-time args.

@@ -910,6 +910,37 @@ void kernel_main() {
                     noc, gen, qi.out_slice, end_seq_tile, cb_out, tile_bytes, out_subblock_h, /*flush_trid=*/0);
             }
             noc.async_write_barrier();
+        } else if constexpr (get_named_compile_time_arg_val("sol_resident") == 1) {
+            // Sol resident mode: compute keeps every resident Q chunk's accumulators in L1 for the whole op, so
+            // there is no save/restore and no per-chunk signal. On the last active ring iteration compute leaves
+            // the normalized output of each resident chunk in cb_out, in Q-chunk order; write them out.
+            if (is_last_ring_iter) {
+                for (uint32_t q_index = 0; q_index + global_q_start < global_q_end; ++q_index) {
+                    const auto decoded_q =
+                        decompose_global_q_index(global_q_start + q_index, num_q_chunks, NH, use_zigzag_balancing);
+                    const auto qi = get_q_chunk_info<has_joint_q>(
+                        decoded_q.q_chunk,
+                        decoded_q.nb,
+                        decoded_q.nq,
+                        num_local_q_chunks,
+                        Sq_chunk_t,
+                        vDHt,
+                        Lt,
+                        q_local_padded_Nt);
+                    const uint32_t end_seq_tile =
+                        get_end_seq_tile<has_joint_q>(qi, ring_id / kv_stripe_split, Lt, q_local_padded_Nt);
+                    write_block_row_grouped_trid<output_has_no_padding>(
+                        noc,
+                        out_generator,
+                        qi.out_slice,
+                        end_seq_tile,
+                        cb_out,
+                        tile_bytes,
+                        out_subblock_h,
+                        /*flush_trid=*/0);
+                }
+                noc.async_write_barrier();
+            }
         } else if constexpr (use_streaming_compute) {
             // Deferred norm: accumulates across ring iterations with exponential rescaling.
             // Single Q-chunk: accumulators persist in L1, write final output on last ring_iter.

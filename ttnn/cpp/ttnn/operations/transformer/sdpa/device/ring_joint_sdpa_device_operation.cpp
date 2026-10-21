@@ -568,12 +568,15 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(args.get_k_chunk_size() % 64 == 0, "Sol-Attn mode needs k_chunk_size to be a multiple of 64 (block)");
         TT_FATAL(
             args.sol_mode == "auto" || args.sol_mode == "gather" || args.sol_mode == "chunk" ||
-                args.sol_mode == "compact" || args.sol_mode == "pack",
-            "sol_mode must be auto | gather | chunk | compact | pack, got {}",
+                args.sol_mode == "compact" || args.sol_mode == "pack" || args.sol_mode == "resident",
+            "sol_mode must be auto | gather | chunk | compact | pack | resident, got {}",
             args.sol_mode);
         TT_FATAL(
             !tensor_args.sol_compact_mode(args.sol_mode) || tensor_args.sol_bias_generated(),
             "sol_mode=compact generates its bias on device; do not pass sol_bias");
+        TT_FATAL(
+            !tensor_args.sol_resident_mode(args.sol_mode) || tensor_args.sol_bias_generated(),
+            "sol_mode=resident generates its bias on device; do not pass sol_bias");
         const auto& mask = tensor_args.sol_block_mask.value();
         const auto& pk = tensor_args.sol_pooled_k.value();
         const auto& pv = tensor_args.sol_pooled_v.value();
@@ -1305,6 +1308,7 @@ ttsl::hash::hash_t RingJointSDPADeviceOperation::compute_program_hash(
         tensor_args.sol_chunk_mode(args.sol_mode),
         tensor_args.sol_compact_mode(args.sol_mode),
         tensor_args.sol_pack_mode(args.sol_mode),
+        tensor_args.sol_resident_mode(args.sol_mode),
         tensor_args.sol_bias_generated(),
         args.joint_strategy,
         args.scale,

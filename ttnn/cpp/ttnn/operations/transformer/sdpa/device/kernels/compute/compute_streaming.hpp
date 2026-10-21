@@ -1502,7 +1502,9 @@ static void sdpa_inner_loop_step(
     // Packed split-KV K chunk: its column layout and mask runs. Contiguous for every other caller.
     [[maybe_unused]] const ring_joint::PackedKVChunkMask& packed_mask = {},
     // Sol-Attn: this chunk is a pooled chunk carrying a column bias.
-    [[maybe_unused]] const bool apply_col_bias = false) {
+    [[maybe_unused]] const bool apply_col_bias = false,
+    // Resident mode: several Q chunks consume the same K/V entry in turn, so only the last of them pops it.
+    const bool hold_kv = false) {
     // Callers guarantee active_Sk is evenly divisible by actual_sbw (via largest_factor_le).
     const uint32_t kt_num_full_subblocks = active_Sk / actual_sbw;
     constexpr uint32_t dst_size = compute_kernel_lib::DEST_AUTO_LIMIT;
@@ -1759,7 +1761,9 @@ static void sdpa_inner_loop_step(
     // In-place latent-V reads K^T again in Phase 2, so defer the K^T pop until after the
     // softmax@V matmul (handled where the materialized-V pop would normally fire).
     if constexpr (!kt_inplace_v) {
-        CircularBuffer(cb_kt_in).pop_front(DHt * KT_stride);
+        if (!hold_kv) {
+            CircularBuffer(cb_kt_in).pop_front(DHt * KT_stride);
+        }
     }
     if constexpr (use_col_bias) {
         if (apply_col_bias) {
@@ -2173,7 +2177,9 @@ static void sdpa_inner_loop_step(
         // For kt_inplace_v this is the deferred K^T pop: cb_v_in aliases cb_kt_in (v_shares_k_buffer),
         // and v_cb_physical_width_t == DHt, so this pops the same Sk_chunk_t*DHt entry that Phase 1
         // skipped. For the materialized path it pops the V entry as usual. Either way: one entry/chunk.
-        CircularBuffer(cb_v_in).pop_front(KT_stride * v_cb_physical_width_t);
+        if (!hold_kv) {
+            CircularBuffer(cb_v_in).pop_front(KT_stride * v_cb_physical_width_t);
+        }
         CircularBuffer(cb_qkt_im).pop_front(Sq_chunk_t * KT_stride);
     }
 }
@@ -3607,5 +3613,386 @@ void sdpa_ring_v2(
                 sdpa_cb_pop_front_out_of_line(cb_v_in, Sk_chunk_t * v_cb_physical_width_t);
             }
         }
+    }
+}
+
+// Rotate the front entry of a CB used as a FIFO to its back (tile copy through DEST). The CB must have room for
+// one more entry. Resident mode checks at compile time that the FIFO CBs share the step's data formats, so the
+// unpack/pack reconfiguration here leaves the state the next step expects.
+static __attribute__((noinline, noclone)) void sol_rotate_fifo_entry(uint32_t cb, uint32_t num_tiles) {
+    CircularBuffer fifo(cb);
+    reconfig_data_format_srca(cb);
+    pack_reconfig_data_format(cb);
+    configure_single_tile_pack(cb);
+    copy_init(cb);
+    fifo.wait_front(num_tiles);
+    fifo.reserve_back(num_tiles);
+#pragma GCC unroll 0
+    for (uint32_t i = 0; i < num_tiles; ++i) {
+        tile_regs_acquire();
+        copy_tile(cb, i, 0);
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile(0, cb);
+        tile_regs_release();
+        fifo.push_back(1);
+    }
+    fifo.pop_front(num_tiles);
+}
+
+/**
+ * Sol-Attn resident mode (sol_attn_status_2026-10-21.md 4a, milestone M1): one ring iteration.
+ *
+ * Loop order is piece, then resident Q chunk. Every K/V entry the reader pushes is consumed by each of this core's
+ * Q chunks that keeps it and popped once, after the last of them. The per-chunk flash state (running sum, running
+ * max, output accumulator) lives in the restore CBs {cb_sum_in, cb_max_in, cb_prev_out} used as an L1 FIFO,
+ * sol_resident_slots + 1 entries deep, in Q-chunk order. A step reads its chunk's state at the FIFO front (prev)
+ * and leaves the updated state at the FIFO back through the step's save redirects (out -> cb_prev_out, max ->
+ * cb_max_in, sum -> cb_sum_in), so once every chunk has taken its turn on a piece the FIFO order is back where it
+ * started. A chunk that does not keep the piece rotates its state with a copy instead (sol_rotate_fifo_entry).
+ * The first piece of the first active ring iteration creates the entries in Q-chunk order: the pre-pass forces
+ * chunk 0 of every shard kept for every Q chunk (the reader repairs an empty row the same way), so every state
+ * exists before any rotation.
+ *
+ * Chunk semantics (chunk-width mask): a kept piece is computed in full, dropped pieces are pooled by the column
+ * bias of the pooled chunks that follow the local pieces on the first active ring iteration (one bias row per
+ * resident chunk, pushed by the reader in Q-chunk order after the pooled K/V entry). The Q chunks a core owns can
+ * span two heads (a contiguous flat split); the reader streams the heads' pieces interleaved per k, in head order,
+ * and every entry rotates the whole FIFO, so the order invariant holds across heads.
+ *
+ * On the last ring iteration the normalized output of every resident chunk is left in cb_out, in Q-chunk order,
+ * for the writer, and the resident Q chunks are popped.
+ */
+template <
+    uint32_t Sq_chunk_t,
+    uint32_t Sk_chunk_t,
+    uint32_t DHt,
+    uint32_t vDHt,
+    uint32_t NH,
+    uint32_t scale_fp32,
+    uint32_t qkt_subblock_h,
+    uint32_t qkt_subblock_w,
+    uint32_t qktv_subblock_h,
+    uint32_t qktv_subblock_w,
+    uint32_t cb_q_in,
+    uint32_t cb_kt_in,
+    uint32_t cb_v_in,
+    uint32_t cb_qkt_im,
+    uint32_t cb_identity_scale_in,
+    uint32_t cb_exp_max_diff,
+    uint32_t cb_col_identity,
+    uint32_t cb_recip_scratch,
+    uint32_t cb_mask_in,
+    uint32_t cb_max_in,
+    uint32_t cb_prev_out,
+    uint32_t cb_out,
+    uint32_t cb_sum_in,
+    uint32_t local_padded_Nt,
+    uint32_t kv_region_Nt,
+    uint32_t chunk_size_t,
+    uint32_t v_cb_physical_width_t,
+    bool global_n_mask_enabled,
+    bool local_n_mask_enabled,
+    uint32_t cb_sol_plan,
+    uint32_t cb_sol_bias,
+    uint32_t sol_pooled_chunks,
+    uint32_t sol_pooled_last_tiles,
+    uint32_t sol_resident_slots,
+    uint32_t kv_cb_pages,
+    typename MaskCtx>
+void sdpa_ring_resident(
+    const uint32_t global_q_start,
+    const uint32_t global_q_end,
+    const uint32_t num_q_chunks,
+    const uint32_t ring_id,
+    const uint32_t num_local_k_chunks,
+    const uint32_t logical_nt,
+    const bool ring_iter_needs_global_n_mask,
+    const bool local_n_needs_masking,
+    const uint32_t global_n_mask_chunk_id,
+    const uint32_t local_n_mask_chunk_id,
+    RingAccumulatorState& acc_state,
+    const bool is_last_ring_iter,
+    const bool is_first_active_iter,
+    const MaskCtx& lw_mask) {
+    init_sdpa_streaming_semaphores();
+    static_assert(sol_resident_slots >= 1 && sol_resident_slots <= 32, "resident state is tracked in a 32-bit mask");
+    // The FIFO rotation reconfigures the unpacker/packer to the FIFO CBs' formats and does not restore them; the
+    // inner step only reconfigures where its compile-time old/new CB formats differ. Both are sound when the FIFO
+    // CBs carry the formats the step already uses.
+#if defined(TRISC_UNPACK) || defined(TRISC_MATH)
+    static_assert(
+        !sdpa_unpack_format_changed<cb_qkt_im, cb_prev_out>() && !sdpa_unpack_format_changed<cb_qkt_im, cb_max_in>() &&
+            !sdpa_unpack_format_changed<cb_qkt_im, cb_sum_in>(),
+        "resident mode: the state FIFO CBs must use the step's intermediate format");
+#endif
+#ifdef TRISC_PACK
+    static_assert(
+        pack_dst_format[cb_prev_out] == pack_dst_format[cb_qkt_im] &&
+            pack_dst_format[cb_max_in] == pack_dst_format[cb_qkt_im] &&
+            pack_dst_format[cb_sum_in] == pack_dst_format[cb_qkt_im],
+        "resident mode: the state FIFO CBs must use the step's intermediate format");
+#endif
+    constexpr uint32_t full_sbw = qkt_subblock_w;
+    constexpr bool can_reduce_trigger = reduce_trigger_supported && (Sk_chunk_t % qkt_subblock_w == 0) &&
+                                        (Sk_chunk_t / qkt_subblock_w > 1) && (Sk_chunk_t % 2 == 0);
+    constexpr uint32_t q_chunk_tiles = Sq_chunk_t * DHt;
+    constexpr uint32_t out_tiles = Sq_chunk_t * vDHt;
+    constexpr uint32_t kt_entry_tiles = DHt * Sk_chunk_t;
+    constexpr uint32_t v_entry_tiles = Sk_chunk_t * v_cb_physical_width_t;
+    constexpr uint32_t norm_dst_size = compute_kernel_lib::DEST_AUTO_LIMIT;
+
+    const uint32_t n_res = global_q_end - global_q_start;
+    ASSERT(n_res >= 1 && n_res <= sol_resident_slots);
+
+    // Resident chunk i: head and kept-piece bitmask for this ring iteration (plan words from the reader).
+    uint32_t res_head[sol_resident_slots];
+    uint32_t kept_lo[sol_resident_slots];
+    uint32_t kept_hi[sol_resident_slots];
+    uint32_t union_lo[sol_resident_slots];
+    uint32_t union_hi[sol_resident_slots];
+    uint32_t do_pooled = 0;
+    for (uint32_t i = 0; i < n_res; ++i) {
+        const uint32_t flat = global_q_start + i;
+        res_head[i] = (flat / num_q_chunks) % NH;
+        CircularBuffer(cb_sol_plan).wait_front(1);
+        kept_lo[i] = ckernel::read_tile_value(cb_sol_plan, 0, 0);
+        kept_hi[i] = ckernel::read_tile_value(cb_sol_plan, 0, 1);
+        do_pooled = ckernel::read_tile_value(cb_sol_plan, 0, 2);
+        union_lo[i] = ckernel::read_tile_value(cb_sol_plan, 0, 3);
+        union_hi[i] = ckernel::read_tile_value(cb_sol_plan, 0, 4);
+        CircularBuffer(cb_sol_plan).pop_front(1);
+    }
+    const auto bit = [](uint32_t lo, uint32_t hi, uint32_t k) -> bool {
+        return k < 32 ? ((lo >> k) & 1u) != 0 : ((hi >> (k - 32)) & 1u) != 0;
+    };
+    // Which resident chunks have a FIFO entry. Carried across ring iterations in acc_state.last_call_k_chunks
+    // (unused by this mode otherwise): the entries persist in L1 between calls.
+    uint32_t initialized = is_first_active_iter ? 0u : acc_state.last_call_k_chunks;
+
+    uint32_t KV_chunks_processed_in_iter = 0;
+
+    // One K/V entry, consumed by the resident chunks in `step_mask` (every other initialized chunk rotates).
+    const auto run_entry = [&](const uint32_t step_mask,
+                               const bool is_pooled,
+                               const uint32_t active_Sk_param,
+                               const bool apply_mask,
+                               const uint32_t lw_partial_tile_idx,
+                               const uint32_t k_start_tile) {
+        if (step_mask == 0) {
+            // Streamed for another chain member only: drain the entry.
+            CircularBuffer(cb_kt_in).wait_front(kt_entry_tiles);
+            sdpa_cb_pop_front_out_of_line(cb_kt_in, kt_entry_tiles);
+            CircularBuffer(cb_v_in).wait_front(v_entry_tiles);
+            sdpa_cb_pop_front_out_of_line(cb_v_in, v_entry_tiles);
+            return;
+        }
+        const uint32_t chunk_sbw =
+            active_Sk_param == Sk_chunk_t ? full_sbw : largest_factor_le(active_Sk_param, qkt_subblock_w);
+        uint32_t last_step = 0;
+        for (uint32_t i = 0; i < n_res; ++i) {
+            if ((step_mask >> i) & 1u) {
+                last_step = i;
+            }
+        }
+        for (uint32_t i = 0; i < n_res; ++i) {
+            const bool stepping = ((step_mask >> i) & 1u) != 0;
+            const bool first = ((initialized >> i) & 1u) == 0;
+            if (!stepping) {
+                if (!first) {
+                    sol_rotate_fifo_entry(cb_prev_out, out_tiles);
+                    sol_rotate_fifo_entry(cb_max_in, Sq_chunk_t);
+                    sol_rotate_fifo_entry(cb_sum_in, Sq_chunk_t);
+                }
+                continue;
+            }
+            // prev: this chunk's state at the FIFO front (ignored when first). cur: the scratch half for the max
+            // (the step mirrors it into cb_max_in); out and sum go straight to the FIFO back.
+            AccumulatorHalf prev = {cb_sum_in, cb_max_in, cb_prev_out};
+            AccumulatorHalf cur = acc_state.prev;
+            cur.sum = cb_sum_in;
+            {
+                MaybeDeviceZoneScopedN(kRingStepProfiling, "RING_STEP");
+                sdpa_inner_loop_step<
+                    kRingStepProfilingPhases,
+                    Sq_chunk_t,
+                    Sk_chunk_t,
+                    0,  // Skt: unused in ring mode
+                    DHt,
+                    vDHt,
+                    scale_fp32,
+                    qkt_subblock_h,
+                    qkt_subblock_w,
+                    qktv_subblock_h,
+                    qktv_subblock_w,
+                    false,  // use_padded_mask
+                    true,   // ring_mode
+                    false,  // causal
+                    cb_q_in,
+                    cb_kt_in,
+                    cb_v_in,
+                    cb_qkt_im,
+                    cb_identity_scale_in,
+                    cb_exp_max_diff,
+                    cb_col_identity,
+                    cb_recip_scratch,
+                    cb_out,
+                    cb_mask_in,
+                    Sk_chunk_t,
+                    false,  // kv_pad_rotation
+                    kv_region_Nt,
+                    chunk_size_t,
+                    local_padded_Nt,
+                    v_cb_physical_width_t,
+                    false,  // kt_inplace_v
+                    0,      // sliding window
+                    false,  // attention sink
+                    INVALID_CB,
+                    false,  // use_provided_mask
+                    true,   // has_q_base_tiles: Q chunk i sits at i * q_chunk_tiles from the CB front
+                    false,  // circular_kv_cache
+                    false,  // packed_kv_enabled
+                    true,   // use_col_bias (pooled entries only, runtime-gated)
+                    cb_sol_bias>(
+                    prev,
+                    cur,
+                    /*is_last_iter=*/false,
+                    first,
+                    apply_mask,
+                    lw_partial_tile_idx,
+                    active_Sk_param,
+                    can_reduce_trigger && (active_Sk_param == Sk_chunk_t) && !is_pooled,
+                    chunk_sbw,
+                    /*save_out_cb=*/cb_prev_out,
+                    /*save_max_cb=*/cb_max_in,
+                    /*apply_causal=*/false,
+                    0,
+                    k_start_tile,
+                    lw_mask.neginf_tile_idx,
+                    0,
+                    0,
+                    0,
+                    0,
+                    false,
+                    0,
+                    0,
+                    KVPadRotationContext{},
+                    /*q_base_tiles=*/i * q_chunk_tiles,
+                    {},
+                    /*apply_col_bias=*/is_pooled,
+                    /*hold_kv=*/i != last_step);
+            }
+            if (!first) {
+                // prev.out was popped row by row inside the step's SALAD correction.
+                sdpa_cb_pop_front_out_of_line(prev.max, Sq_chunk_t);
+                sdpa_cb_pop_front_out_of_line(prev.sum, Sq_chunk_t);
+            }
+            // The scratch copy of the new max (its FIFO copy was mirrored through save_max_cb).
+            sdpa_cb_pop_front_out_of_line(cur.max, Sq_chunk_t);
+            initialized |= 1u << i;
+        }
+    };
+
+    // Local pieces of shard ring_id. Heads are interleaved per k in head order, exactly as the reader streams them.
+    for (uint32_t k = 0; k < num_local_k_chunks; ++k) {
+        if (!kv_chunk_starts_before_logical_end<false, false, local_padded_Nt, chunk_size_t, kv_region_Nt>(
+                ring_id, k * Sk_chunk_t, logical_nt)) {
+            continue;
+        }
+        // Tail masking of this piece (shared by every resident chunk): the logical_n boundary chunk narrows and
+        // stamps its partial column; a padded local shard tail only narrows.
+        uint32_t active_Sk_param = Sk_chunk_t;
+        bool apply_mask = false;
+        uint32_t lw_partial_tile_idx = 0;
+        bool narrowed = false;
+        if constexpr (global_n_mask_enabled) {
+            if (ring_iter_needs_global_n_mask && k == global_n_mask_chunk_id) {
+                active_Sk_param = Sk_chunk_t - lw_mask.global_n_padded_tiles;
+                apply_mask = true;
+                lw_partial_tile_idx = lw_mask.global_n_partial_col > 0 ? lw_mask.global_n_partial_tile_idx : 0u;
+                narrowed = true;
+            }
+        }
+        if constexpr (local_n_mask_enabled) {
+            if (!narrowed && local_n_needs_masking && k == local_n_mask_chunk_id) {
+                active_Sk_param = Sk_chunk_t - lw_mask.local_n_padded_tiles;
+            }
+        }
+        // One pass per head whose chain streamed this piece; a head's streamed set is in its chunks' plan words.
+        uint32_t heads_done = 0;  // bitmask over resident chunk indices already covered by an earlier head
+        for (uint32_t i0 = 0; i0 < n_res; ++i0) {
+            if ((heads_done >> i0) & 1u) {
+                continue;
+            }
+            uint32_t head_mask = 0;
+            uint32_t step_mask = 0;
+            for (uint32_t i = i0; i < n_res; ++i) {
+                if (res_head[i] == res_head[i0]) {
+                    head_mask |= 1u << i;
+                    if (bit(kept_lo[i], kept_hi[i], k)) {
+                        step_mask |= 1u << i;
+                    }
+                }
+            }
+            heads_done |= head_mask;
+            if (!bit(union_lo[i0], union_hi[i0], k)) {
+                continue;  // nobody on this head's chain needs the piece: nothing was pushed
+            }
+            ASSERT(k != 0 || step_mask == head_mask);  // chunk 0 is forced kept: every state is created on it
+            run_entry(step_mask, false, active_Sk_param, apply_mask, lw_partial_tile_idx, k * Sk_chunk_t);
+            KV_chunks_processed_in_iter++;
+        }
+    }
+
+    // Pooled chunks (first active ring iteration): every resident chunk of the head steps on each, with its bias.
+    if (do_pooled) {
+        uint32_t heads_done = 0;
+        for (uint32_t i0 = 0; i0 < n_res; ++i0) {
+            if ((heads_done >> i0) & 1u) {
+                continue;
+            }
+            uint32_t head_mask = 0;
+            for (uint32_t i = i0; i < n_res; ++i) {
+                if (res_head[i] == res_head[i0]) {
+                    head_mask |= 1u << i;
+                }
+            }
+            heads_done |= head_mask;
+            for (uint32_t pc = 0; pc < sol_pooled_chunks; ++pc) {
+                const uint32_t active_Sk_param = (pc + 1 == sol_pooled_chunks) ? sol_pooled_last_tiles : Sk_chunk_t;
+                run_entry(head_mask, true, active_Sk_param, false, 0, 0);
+                KV_chunks_processed_in_iter++;
+            }
+        }
+    }
+    acc_state.last_call_k_chunks = initialized;
+
+    if (is_last_ring_iter) {
+        // Normalize every resident chunk, in Q-chunk order, into cb_out for the writer; then release Q.
+        for (uint32_t i = 0; i < n_res; ++i) {
+            ASSERT((initialized >> i) & 1u);
+            normalize_row_streaming<
+                false,
+                vDHt,
+                norm_dst_size,
+                cb_col_identity,
+                cb_recip_scratch,
+                cb_out,
+                scale_fp32,
+                false,
+                INVALID_CB>(cb_sum_in, cb_prev_out, Sq_chunk_t, cb_max_in);
+            sdpa_cb_pop_front_out_of_line(cb_max_in, Sq_chunk_t);
+        }
+        sdpa_cb_pop_front_out_of_line(cb_q_in, n_res * q_chunk_tiles);
+    }
+
+    // Phase alignment of the K/V CBs with the chained reader (same rule as sdpa_ring_v2).
+    for (uint32_t dummy_chunk = 0;
+         dummy_chunk < dummy_kv_chunks_for_phase_alignment<false, false, kv_cb_pages>(KV_chunks_processed_in_iter);
+         ++dummy_chunk) {
+        CircularBuffer(cb_kt_in).wait_front(kt_entry_tiles);
+        sdpa_cb_pop_front_out_of_line(cb_kt_in, kt_entry_tiles);
+        CircularBuffer(cb_v_in).wait_front(v_entry_tiles);
+        sdpa_cb_pop_front_out_of_line(cb_v_in, v_entry_tiles);
     }
 }
