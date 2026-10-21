@@ -1161,6 +1161,28 @@ def test_minimax_h3_transformer_block_perf(
     tt_block.load_torch_state_dict(torch_block.state_dict())
     del torch_block
 
+    # H3_BLOCK_PERF_LEGACY_PARTS=agmm_attn,agmm_ff1,sdpa,mmrs,gather puts those dynamic-length pins back on
+    # the legacy choice (sdpa320: the (320, 384) chunk pair), to attribute a block-level delta part by part.
+    legacy_parts = set(filter(None, os.environ.get("H3_BLOCK_PERF_LEGACY_PARTS", "").split(",")))
+    if dynamic_length and legacy_parts:
+        if "agmm_attn" in legacy_parts:
+            tt_block.attn._qkv_pin = tt_block.attn._out_pin = None
+        if "agmm_ff1" in legacy_parts:
+            tt_block._ff1_pin = None
+        if "sdpa" in legacy_parts:
+            tt_block.attn._ring_sdpa_config = None
+        if "sdpa320" in legacy_parts:
+            tt_block.attn._ring_sdpa_config = ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=ttnn.CoreCoord(*tt_block.attn.sdpa_worker_grid),
+                q_chunk_size=320,
+                k_chunk_size=384,
+                exp_approx_mode=False,
+            )
+        if "mmrs" in legacy_parts:
+            tt_block._mmrs_pin = None
+        if "gather" in legacy_parts:
+            tt_block.dynamic_length = False
+
     tt_spatial = bf16_tensor_2dshard(
         torch.randn(1, 1, padded_len, HIDDEN_SIZE),
         device=mesh_device,
@@ -1205,7 +1227,8 @@ def test_minimax_h3_transformer_block_perf(
             times_ms.append(1000 * (time.perf_counter() - t0))
         times_ms.sort()
         logger.info(
-            f"BLOCK_PERF dynamic_length={dynamic_length} duration={duration_s:g}s rows/device={padded_len // sp_factor} "
+            f"BLOCK_PERF dynamic_length={dynamic_length} legacy_parts={','.join(sorted(legacy_parts)) or '-'} "
+            f"duration={duration_s:g}s rows/device={padded_len // sp_factor} "
             f"iters={iters} min={times_ms[0]:.2f} ms median={times_ms[len(times_ms) // 2]:.2f} ms"
         )
 

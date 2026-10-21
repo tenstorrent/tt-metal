@@ -83,6 +83,13 @@ class DispatchTimer:
         self._t_last_post = now
 
     def _report(self, total_ns: int) -> None:
+        if ttnn.CONFIG.enable_fast_runtime_mode:
+            # FastOperation skips the hooks: only the wall time of the block is known.
+            logger.info(
+                f"dispatch timing [{self.label}]: {total_ns / 1e3:.0f} us wall, {self._syncs} synchronize_device; "
+                'the per-op table needs TTNN_CONFIG_OVERRIDES=\'{"enable_fast_runtime_mode": false}\''
+            )
+            return
         rows = sorted(self._ops.items(), key=lambda kv: kv[1][1], reverse=True)
         op_ns = sum(ns for _, ns in self._ops.values())
         lines = [
