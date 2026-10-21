@@ -10,6 +10,10 @@
 
 #include <cstdint>
 
+#define ELTWISE_BINARY_BCAST_BLOCK_UNPACK true
+#define ELTWISE_BINARY_PER_TILE_HANDOFF_BCAST true
+#define ELTWISE_BINARY_PER_TILE_HANDOFF true
+
 #define BCAST_LLKOP EltwiseBinaryType::ELWMUL
 #define BCAST_DIM BroadcastType::COL
 
