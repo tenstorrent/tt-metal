@@ -59,10 +59,8 @@ TEST_F(ProgramSpecTestQuasar, RawAllocationParameterZeroLockstepSize) {
 
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::AllOf(
-            ::testing::HasSubstr("arena"),
-            ::testing::ContainsRegex("per_bank_size"),
-            ::testing::Not(::testing::HasSubstr("not implemented")))));
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr(
+            "RawAllocationParameter 'arena' has per_bank_size = 0; per_bank_size must be greater than zero.")));
 }
 
 TEST_F(ProgramSpecTestQuasar, RawAllocationParameterZeroRangeLockstepSize) {
@@ -79,10 +77,8 @@ TEST_F(ProgramSpecTestQuasar, RawAllocationParameterZeroRangeLockstepSize) {
 
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::AllOf(
-            ::testing::HasSubstr("arena"),
-            ::testing::ContainsRegex("per_bank_size"),
-            ::testing::Not(::testing::HasSubstr("not implemented")))));
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr(
+            "RawAllocationParameter 'arena' has per_bank_size = 0; per_bank_size must be greater than zero.")));
 }
 
 TEST_F(ProgramSpecTestQuasar, RawAllocationParameterEmptyRangeLockstepNodes) {
@@ -100,10 +96,8 @@ TEST_F(ProgramSpecTestQuasar, RawAllocationParameterEmptyRangeLockstepNodes) {
 
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::AllOf(
-            ::testing::HasSubstr("arena"),
-            ::testing::ContainsRegex("(node|bank|core|empty)"),
-            ::testing::Not(::testing::HasSubstr("not implemented")))));
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr(
+            "RawAllocationParameter 'arena' has empty banks_to_be_allocated_on; at least one node is required.")));
 }
 
 }  // namespace
