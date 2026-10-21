@@ -259,3 +259,38 @@ def test_pc_with_different_shapes_in_sequence(device):
         for i in range(64):
             z_torch = ttnn.to_torch(z_tt[i : i + 1])
             assert torch.allclose(z_torch, y, atol=1e-2), f"z_torch[{i}] != y"
+
+
+@pytest.mark.parametrize(
+    "dtype, shape, grid, repeats",
+    [
+        (ttnn.uint32, [1, 7, 40], (4, 2), [1, 2, 1]),  # 20-byte shard rows
+        (ttnn.bfloat16, [63, 16], (1, 4), [3, 1]),  # 8-byte shard rows
+        (ttnn.bfloat16, [63, 16], (4, 2), [3, 1]),  # 4-byte shard rows
+        (ttnn.uint32, [1, 8, 64], (4, 2), [1, 2, 1]),  # control: 32-byte shard rows
+    ],
+)
+def test_repeat_width_sharded_row_major_subaligned_rows(device, dtype, shape, grid, repeats):
+    words = torch.arange(prod(shape), dtype=torch.int64).reshape(shape)
+    if dtype == ttnn.uint32:
+        torch_input = ((words * 1000003 + 7) % (2**32)).to(torch.int32)
+    else:
+        torch_input = (words % 251).to(torch.bfloat16)
+    memory_config = ttnn.create_sharded_memory_config(
+        shape,
+        core_grid=ttnn.CoreGrid(y=grid[0], x=grid[1]),
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    input_tensor = ttnn.from_torch(
+        torch_input, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=memory_config
+    )
+
+    def read(tensor):
+        result = ttnn.to_torch(tensor)
+        return result.to(torch.int64) & 0xFFFFFFFF if dtype == ttnn.uint32 else result
+
+    expected_input = torch_input.to(torch.int64) & 0xFFFFFFFF if dtype == ttnn.uint32 else torch_input
+    assert torch.equal(read(input_tensor), expected_input)
+    output = ttnn.repeat(input_tensor, ttnn.Shape(repeats))
+    assert torch.equal(read(output), expected_input.repeat(*repeats))

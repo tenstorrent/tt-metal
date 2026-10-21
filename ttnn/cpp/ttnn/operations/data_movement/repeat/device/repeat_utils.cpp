@@ -106,12 +106,21 @@ bool is_native_repeat_sharding(
             return false;
         }
     }
-    // RM WIDTH/BLOCK last-dim: reject (ttnn::view breaks shard width).
-    if (input_spec.layout() == tt::tt_metal::Layout::ROW_MAJOR && repeat_dim >= 0 &&
-        repeat_dim == static_cast<int32_t>(input_spec.logical_shape().rank()) - 1) {
+    // RM WIDTH/BLOCK: reject last-dim repeats (ttnn::view breaks shard width), and any repeat whose shard row
+    // is not buffer-aligned: noc_async_{read,write}_sharded size each chunk by the aligned page, so the tail of
+    // every sub-aligned row is never written.
+    if (input_spec.layout() == tt::tt_metal::Layout::ROW_MAJOR) {
         const auto in_layout = input_spec.memory_config().memory_layout();
         if (in_layout == TensorMemoryLayout::WIDTH_SHARDED || in_layout == TensorMemoryLayout::BLOCK_SHARDED) {
-            return false;
+            if (repeat_dim >= 0 && repeat_dim == static_cast<int32_t>(input_spec.logical_shape().rank()) - 1) {
+                return false;
+            }
+            const uint32_t alignment = input_spec.memory_config().buffer_type() == BufferType::DRAM
+                                           ? hal::get_dram_alignment()
+                                           : hal::get_l1_alignment();
+            if (input_spec.compute_page_size_bytes() % alignment != 0) {
+                return false;
+            }
         }
     }
     if (output_memory_config.has_value()) {
