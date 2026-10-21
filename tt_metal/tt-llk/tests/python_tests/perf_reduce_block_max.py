@@ -6,10 +6,7 @@ from helpers.param_config import parametrize
 from helpers.perf.core import ALL_PERF_RUN_TYPES
 from test_reduce_block_max import FORMATS, _run_reduce_block_max, block_max_num_faces
 
-# #60571 deletes PerfRunType::L1_CONGESTION. Filter by name so this sweep stays valid
-# before and after that lands, and so the kernel does not have to name the enumerator.
-# respect_trigger and overlap_first_half stay at their defaults (false): the pack
-# thread posts those semaphores once, before TILE_LOOP.
+# The kernel has no L1_CONGESTION branch, so filter it by name instead of naming the enumerator.
 _PERF_RUN_TYPES = [rt for rt in ALL_PERF_RUN_TYPES if rt.name != "L1_CONGESTION"]
 
 

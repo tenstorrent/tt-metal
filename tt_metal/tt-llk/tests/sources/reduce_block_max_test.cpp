@@ -69,19 +69,6 @@ std::uint32_t math_sync_tile_dst_index = 0;
 
 static constexpr DstSync DST_SYNC = DstSync::SyncHalf;
 
-// SPEED_OF_LIGHT must keep the shape constexpr: a const packed TensorShape is not folded and the reduce loop slows down.
-#ifdef SPEED_OF_LIGHT
-#define BLOCK_MAX_TENSOR_SHAPE_QUALIFIER constexpr
-#else
-#define BLOCK_MAX_TENSOR_SHAPE_QUALIFIER const
-#endif
-
-// 32x32 operand tile (2x2 faces) or 16x32 tiny tile (one face-row).
-constexpr ckernel::TensorShape make_block_max_tensor_shape(int num_faces_r_dim)
-{
-    return {FACE_R_DIM, FACE_C_DIM, static_cast<std::uint8_t>(num_faces_r_dim), MAX_NUM_FACES_C_DIM};
-}
-
 // RESPECT_TRIGGER / OVERLAP_FIRST_HALF are supplied by the Python driver (params.h).
 
 #ifdef LLK_TRISC_UNPACK
@@ -103,7 +90,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const Operand& buffer_A                = params.buffer_A;
     const Operand& buffer_B                = params.buffer_B;
 #endif
-    BLOCK_MAX_TENSOR_SHAPE_QUALIFIER ckernel::TensorShape tensor_shape = make_block_max_tensor_shape(num_faces_r_dim_A);
+    // 32x32 operand tile (2x2 faces) or 16x32 tiny tile (one face-row).
+    TEST_TENSOR_SHAPE(tensor_shape, FACE_R_DIM, FACE_C_DIM, num_faces_r_dim_A, MAX_NUM_FACES_C_DIM);
 
     {
         START_PERF_MEASURE("INIT")
@@ -290,7 +278,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
     const int num_faces_r_dim_A     = params.num_faces_r_dim_A;
 #endif
-    BLOCK_MAX_TENSOR_SHAPE_QUALIFIER ckernel::TensorShape tensor_shape = make_block_max_tensor_shape(num_faces_r_dim_A);
+    TEST_TENSOR_SHAPE(tensor_shape, FACE_R_DIM, FACE_C_DIM, num_faces_r_dim_A, MAX_NUM_FACES_C_DIM);
     constexpr bool sync_with_pack                                      = PERF_RUN_TYPE != PerfRunType::MATH_ISOLATE;
 
     {
@@ -367,7 +355,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const int num_faces_r_dim_A     = params.num_faces_r_dim_A;
     const Operand& buffer_Res       = params.buffer_Res;
 #endif
-    BLOCK_MAX_TENSOR_SHAPE_QUALIFIER ckernel::TensorShape tensor_shape = make_block_max_tensor_shape(num_faces_r_dim_A);
+    TEST_TENSOR_SHAPE(tensor_shape, FACE_R_DIM, FACE_C_DIM, num_faces_r_dim_A, MAX_NUM_FACES_C_DIM);
 
     const std::uint32_t tile_size = tensor_shape.total_tensor_size();
     const std::uint32_t num_faces = tensor_shape.total_num_faces();
