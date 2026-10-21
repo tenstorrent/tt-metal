@@ -2158,7 +2158,8 @@ def test_update_padded_kv_cache_paged_input_row_window(mesh_device, dtype, layou
     sp_axis, page_size, num_layers, layer_idx = 0, 64, 2, 1
     sp = mesh_device.shape[sp_axis]
     C = 2 * page_size
-    stacked_local = C * len(_PAGED_WINDOW_LANES)
+    # One spare tile: the stacked input is not a whole number of pages, only each window has to be.
+    stacked_local = C * len(_PAGED_WINDOW_LANES) + ttnn.TILE_SIZE
     pages_per_row = (max(depth for _, depth, _ in _PAGED_WINDOW_LANES) + 2) * C * sp // page_size
     table, num_pages = _shuffled_page_tables(
         num_users=len(_PAGED_WINDOW_LANES),
@@ -2484,6 +2485,21 @@ def test_update_padded_kv_cache_paged_rejects(mesh_device, expect_error):
     # A per-chip chunk of 96 rows splits a 64-token page across two chips.
     with expect_error(RuntimeError, "whole number of"):
         write(update=make(96))
+    # With an input row window the window is the chunk: 96 rows of the 128-row input split a page the same way.
+    slot_t, kv_t = _make_meta_tensors(mesh_device, kv_actual_global=0, slot_idx=0)
+    with expect_error(RuntimeError, "whole number of"):
+        ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+            pool,
+            tt_input,
+            slot_t,
+            kv_t,
+            layer_idx=0,
+            num_layers=num_layers,
+            cluster_axis=sp_axis,
+            page_table=good,
+            input_row_offset=0,
+            input_rows=96,
+        )
     two_head_pool = ttnn.from_torch(
         torch.zeros(8, 2, page_size, KVPE_HEAD_DIM, dtype=torch.bfloat16),
         device=mesh_device,
