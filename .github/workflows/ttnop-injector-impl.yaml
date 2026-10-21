@@ -116,7 +116,7 @@ jobs:
           count=${#selected_tests[@]}
           if [[ "$count" -gt 0 ]]; then
             mode=changed
-            shards=1  # TEMP verification: one WH machine only
+            shards=2  # TEMP verification: two WH machines only
           else
             mode=none
             shards=0
