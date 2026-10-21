@@ -372,7 +372,7 @@ struct ScratchpadAdvancedOptions {
     // The RawAllocationParameter is declared in ProgramAdvancedOptions::raw_allocation_parameters
     // and bound here. The actual RawAllocation is supplied at runtime via ProgramRunArgs.
     //
-    // The scratchpad's storage is placed borrowed_memory_offset bytes past the base address of
+    // The scratchpad's storage is placed borrowed_from->offset bytes past the base address of
     // the RawAllocation. This enables advanced users to handle their own Program-scope resource
     // allocation decisions (a form of arena allocation), e.g. packing several scratchpads and
     // DFBs into one RawAllocation.
@@ -383,17 +383,19 @@ struct ScratchpadAdvancedOptions {
     //
     // CONSTRAINTS:
     //  - The scratchpad must fit within the RawAllocation on every node it occupies, i.e.
-    //    borrowed_memory_offset plus size_per_node cannot exceed the RawAllocation's per-node size.
-    //  - borrowed_memory_offset must be a multiple of the L1 alignment.
-    //  - borrowed_memory_offset must be zero if borrowed_from is unset.
+    //    borrowed_from->offset plus size_per_node cannot exceed the RawAllocation's per-node size.
+    //  - borrowed_from->offset must be a multiple of the L1 alignment.
     //
     // CAUTION:
     //  - There are NO legality checks concerning the overlap of DFBs or Scratchpads
     //    allocated within the same RawAllocation. This permits advanced users to
     //    implement sophisticated temporal memory re-use strategies. Responsibility
     //    for ensuring correctness lies entirely with the user.
-    std::optional<RawAllocationParamName> borrowed_from = std::nullopt;
-    uint32_t borrowed_memory_offset = 0;  // in bytes
+    struct RawAllocationBorrowing {
+        RawAllocationParamName allocation;
+        uint32_t offset = 0;  // in bytes
+    };
+    std::optional<RawAllocationBorrowing> borrowed_from = std::nullopt;
 };
 
 struct AdvancedKernelRunArgs {
@@ -432,7 +434,7 @@ struct AdvancedProgramRunArgs {
     //
     // A different RawAllocation may be supplied for each Program execution. Every DFB and
     // scratchpad that borrows from the parameter is then placed at the new RawAllocation's
-    // base address, plus its borrowed_memory_offset.
+    // base address plus the borrower's offset.
     //
     // CAUTION: RawAllocation is an RAII object. The user is responsible for keeping it alive until
     //          the last Program execution that uses it has completed on the device. A stale binding
