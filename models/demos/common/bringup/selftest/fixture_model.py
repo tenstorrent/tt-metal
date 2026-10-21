@@ -120,7 +120,15 @@ class Reference:
     def chunk_context(self, layer, start, length, state):
         return Ctx(layer, start, length, state)
 
+    round_to = None  # F136: the official arithmetic's output dtype (reference())
+
     def component(self, layer, name):
+        fn = self._component(layer, name)
+        if self.round_to is None:
+            return fn
+        return lambda ctx, *x: fn(ctx, *x).to(self.round_to).float()
+
+    def _component(self, layer, name):
         w = self.w["layers"][layer]
 
         def attention(ctx, x):
@@ -255,8 +263,13 @@ class Tokenizer:
 
 
 # ---- hooks module interface (the selftest spec points "hooks" at this module)
-def reference(spec, layers=None, dtype=torch.float32, numerics="native"):  # F128: rounds nothing, both the same
-    return Reference(spec, layers, dtype, broken_graph=bool(spec.get("fixture.broken_graph")))
+def reference(spec, layers=None, dtype=torch.float32, numerics="native"):
+    """F136: 'official' at a 16-bit dtype rounds every step's output to it (the shipped code's arithmetic, the margin's
+    source); native, or official at fp32, rounds nothing."""
+    ref = Reference(spec, layers, dtype, broken_graph=bool(spec.get("fixture.broken_graph")))
+    if numerics == "official" and dtype != torch.float32:
+        ref.round_to = dtype
+    return ref
 
 
 def hf_model(spec, num_layers):

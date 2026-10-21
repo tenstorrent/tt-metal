@@ -188,6 +188,7 @@ def generate(spec, ref=None, early: bool = False) -> dict:
                     "golden_chunks": f"== {r['seq'] // r['chunk']}",
                     "golden_hash_ok": "== 1",
                     "drift_metrics": ">= 1",
+                    "drift_layers_above_res": ">= 1",  # F136: the reference's shipped precision moves something
                 },
             )
             golden_task[r["name"]] = tid
@@ -302,7 +303,12 @@ def generate(spec, ref=None, early: bool = False) -> dict:
             "reference",
             [comp_golden, "R.3"],
             f"{PY}.testing.official_floor",  # on the checkpoint the goldens come from (scaled on a scaled run)
-            {"official_taps_steps": ">= 1", "official_taps_errors": "== 0", "official_taps_unmapped": "== 0"},
+            {
+                "official_taps_steps": ">= 1",
+                "official_taps_errors": "== 0",
+                "official_taps_unmapped": "== 0",
+                "official_ref_vs_taps_errors": "== 0",  # F136: the margin's official numerics are the shipped code's
+            },
             paths=ref_paths,
         )
         floor_dep = ["R.5"]
