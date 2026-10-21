@@ -53,6 +53,7 @@ while IFS= read -r FILE; do
             # Pins the ttsim release that fetch-ttsim downloads for every sim_* SKU. An
             # incompatible simulator build breaks the ttsim pipelines and nothing else, so
             # this gets its own flag rather than the blanket ANY_CODE_CHANGED fanout.
+            # The Quasar LLK PR gate subscribes to the same flag.
             TTSIM_CI_CHANGED=true
             ;;
         tests/pipeline_reorg/ttsim_merge_gate_tests.yaml|tests/pipeline_reorg/ttsim_sanity_tests.yaml|tests/pipeline_reorg/ttsim_unit_tests.yaml|tests/pipeline_reorg/ttsim-skip-list.yaml)
@@ -132,7 +133,7 @@ while IFS= read -r FILE; do
         tt_metal/tt-llk/tests/**)
             LLK_TESTS_CHANGED=true
             ;;
-        .github/workflows/llk-*.yaml|.github/workflows/build-quasar-perf.yml|.github/scripts/llk-*.sh|tests/pipeline_reorg/llk_unit_tests.yaml|tests/pipeline_reorg/llk_merge_gate_tests.yaml)
+        .github/workflows/llk-*.yaml|.github/workflows/build-quasar-perf.yml|.github/scripts/llk-*.sh|tests/pipeline_reorg/llk_unit_tests.yaml|tests/pipeline_reorg/llk_merge_gate_tests.yaml|tests/pipeline_reorg/llk_pr_gate_tests.yaml)
             LLK_CI_CHANGED=true
             ;;
         tt_metal/**/*.@(h|hpp|inl|c|cpp|cc|py))
@@ -330,6 +331,14 @@ for submodule_path in $SUBMODULE_PATHS; do
         break
     fi
 done
+
+# A submodule bump (notably UMD) can change what the public headers should
+# include, e.g. when a header's symbol moves to another header. The api-header
+# include-cleaner gate sweeps every public header in ~40 s, so run it on any
+# submodule change instead of only when a tt_metal/api header is edited.
+if [ "$SUBMODULE_CHANGED" = true ]; then
+    TTMETALIUM_API_HEADERS_CHANGED=true
+fi
 
 # run-clang-tidy: should the code-analysis (clang-tidy) job run? Computed
 # from the dedicated C/C++-only scan and the RAW pre-fallback flags above

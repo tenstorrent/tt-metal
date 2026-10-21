@@ -21,12 +21,16 @@
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 #include "api/tensor/tensor_accessor.h"
+#if !defined(ARCH_QUASAR)
+#include "ckernel.h"
+#endif
 #include "experimental/kernel_args.h"
 
 // Pad-value fill helpers (moved here from the writer; identical logic). The reader produces cb_pad so a
 // single DM kernel no longer both produces and consumes it.
+template <typename DFB>
 inline __attribute__((always_inline)) void fill_pad_dfb_with_val(
-    Noc& noc, DataflowBuffer& cb, const uint32_t num_bytes_risc, uint32_t num_noc_transfer, const uint32_t val) {
+    Noc& noc, DFB& cb, const uint32_t num_bytes_risc, uint32_t num_noc_transfer, const uint32_t val) {
     volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb.get_write_ptr());
 
     for (uint32_t i = 0; i < num_bytes_risc / 2; ++i) {
@@ -34,6 +38,13 @@ inline __attribute__((always_inline)) void fill_pad_dfb_with_val(
     }
 
     uint32_t pad_val_addr = cb.get_write_ptr();
+    // The loop-back reads below source the words just stored, so the stores must reach L1 first.
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+    flush_l2_cache_range(
+        static_cast<uintptr_t>(pad_val_addr), static_cast<size_t>(num_bytes_risc / 2 * sizeof(uint32_t)));
+#else
+    (void)ckernel::load_blocking(ptr + (num_bytes_risc / 2) - 1);
+#endif
     uint32_t l1_write_addr = pad_val_addr;
 
     for (uint32_t i = 0; i < num_noc_transfer; ++i) {
@@ -51,8 +62,9 @@ inline __attribute__((always_inline)) void fill_pad_dfb_with_val(
     noc.async_read_barrier();
 }
 
+template <typename DFB>
 inline __attribute__((always_inline)) void fill_pad_dfb_with_zero(
-    Noc& noc, DataflowBuffer& cb, const uint32_t num_bytes_risc, uint32_t num_noc_transfer) {
+    Noc& noc, DFB& cb, const uint32_t num_bytes_risc, uint32_t num_noc_transfer) {
     noc.async_write_zeros(cb, num_bytes_risc * num_noc_transfer);
     noc.write_zeros_l1_barrier();
 }

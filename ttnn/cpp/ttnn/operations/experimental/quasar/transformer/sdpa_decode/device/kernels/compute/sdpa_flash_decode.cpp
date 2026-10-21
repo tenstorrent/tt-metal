@@ -33,6 +33,15 @@ constexpr uint32_t MAX_PACK_UNTILIZE_WIDTH = 8;
 #include "ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/kernel_lib/untilize_helpers.hpp"
 
+// Pops a constant the writer pushed once and compute read by index without popping. dummy_unpack orders the
+// pop after the wait on Quasar (a bare wait_front -> pop_front traps the unpacker).
+ALWI void release_writer_constant(uint32_t dfb_id, uint32_t num_tiles) {
+    DataflowBuffer dfb(dfb_id);
+    dfb.wait_front(num_tiles);
+    dummy_unpack(dfb_id);
+    dfb.pop_front(num_tiles);
+}
+
 void kernel_main() {
     // Quasar: reset the packer-operand tracker so the first pack of this launch re-inits the packer
     // descriptor regardless of any value left over from a prior launch. No-op on WH/BH.
@@ -798,4 +807,25 @@ void kernel_main() {
 
     // Free up dfb_q_in after Q chunks
     DataflowBuffer(dfb_q_in).pop_front(q_chunk_tiles);
+
+    // The writer pushes these constant tiles once on every core with local data; compute reads them by index
+    // (add_block_inplace<false>, the fused-mask matmul, reduce_c) without popping. Release them so the buffers
+    // are left balanced.
+    release_writer_constant(dfb_identity_scale_in, 2);  // reduce scaler + zero tile
+#ifdef HAS_BLOCK_PADDING
+    release_writer_constant(dfb_block_pad_mask, Sq_chunk_t * Sk_chunk_t_dynamic);
+#endif
+    if constexpr (is_causal) {
+        release_writer_constant(dfb_mask_in, Sq_chunk_t * Sk_chunk_t_dynamic);
+    }
+#ifdef SLIDING_WINDOW
+    if (k_chunk_start == window_start_chunk && window_start_unaligned > 0) {
+        release_writer_constant(dfb_sliding_window_mask_in, Sq_chunk_t * Sk_chunk_t_dynamic);
+    }
+#endif
+#ifdef USE_ATTENTION_SINK
+    // The reader pushes the attention sink (Sq_chunk_t tiles) on every core with local data; only the core
+    // that finalizes the output reads it (by index, never popped). Release it on every core.
+    release_writer_constant(dfb_attention_sink, Sq_chunk_t);
+#endif
 }

@@ -94,12 +94,16 @@ struct KernelGroup {
     std::vector<uint32_t> kernel_text_offsets;
     dev_msgs::launch_msg_t launch_msg;
     dev_msgs::go_msg_t go_msg;
+    // DFBs on the group's cores. Until the program's offsets are finalized, the launch message's local_cb_mask holds
+    // only the group's CB mask, which sizes the CB config region; finalize_dfb_masks then writes the DFBs there.
+    uint32_t num_local_dfbs{};
 
     KernelGroup(
         const detail::ProgramImpl& program,
         uint32_t programmable_core_type_index,
         std::vector<KernelHandle> kernel_ids,
         uint64_t local_cb_mask,
+        uint32_t num_local_dfbs,
         uint32_t min_remote_cb_start_index,
         const CoreRangeSet& new_ranges,
         const dev_msgs::Factory& dev_msgs_factory);
