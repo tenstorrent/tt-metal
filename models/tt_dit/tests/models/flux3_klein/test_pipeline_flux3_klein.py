@@ -1109,3 +1109,32 @@ def test_readback_fast_equals_legacy(mesh_device) -> None:
         assert np.array_equal(np.asarray(first.image), a), "capture-call render differs from the replay render"
     finally:
         pipeline.close()
+
+
+@mesh_rows
+def test_text_readback_one_replica(mesh_device) -> None:
+    """M10 (2026-10-21): the text encoder's host read takes ONE device per SP position instead of every replica;
+    the rows are bit-identical to the composer read and the read drops from ~1.0 s to ~0.02 s per prompt."""
+    from ....pipelines.flux3_klein.prompt_encoder import read_sp_sharded_one_replica
+    from ....utils import tensor as T
+
+    pipeline = build_pipeline(mesh_device)
+    try:
+        enc = pipeline.prompt_encoder
+        prompt = golden_prompt(golden_for("distilled"))
+        for i in range(2):
+            e = enc.encode(prompt)
+            ttnn.synchronize_device(mesh_device)
+            t0 = time.perf_counter()
+            old = T.to_torch(e.tokens, mesh_axes=[None, e.sp_axis, None])
+            t_old = time.perf_counter() - t0
+            t0 = time.perf_counter()
+            new = read_sp_sharded_one_replica(e.tokens, e.sp_axis)
+            t_new = time.perf_counter() - t0
+            logger.info(
+                f"RESULT text readback pass {i}: every-replica {t_old:.3f}s one-replica {t_new:.3f}s equal {torch.equal(old, new)}"
+            )
+            assert tuple(old.shape) == tuple(new.shape) and torch.equal(old, new), (old.shape, new.shape)
+            ttnn.deallocate(e.tokens)
+    finally:
+        pipeline.close()
