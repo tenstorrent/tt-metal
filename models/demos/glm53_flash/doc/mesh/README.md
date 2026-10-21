@@ -369,3 +369,14 @@ multiples of 16. Fixed in the helper (cf302fd6434); the (2,4) partitioned test h
 this path is being validated for the first time by the 16 K / 131 K runs on the fixed code.
 
 KDA sequence-parallel prefill on 8 rows: a 32 K chunk needs 128 summary-owner cores (8 groups x 16 local heads) but the grid has 120, so the long-context runs use 16 K chunks (64 owners); the limit is chunk <= 24 K on the 8x4 with the default group size <= 20.
+
+### 1 M needle run, stopped at a 512 K prefix for the optimization pass (2026-10-21 00:17-01:17)
+
+Single slot per chip (no user partition, 1 user per row), 16 K chunks, 1 K scorer sub-blocks, composite mHC, 45 layers bfp8:
+build 1026 s with the 1 M caches; decode capture at position 0 passed; prefill chunk times (s per 16 K tokens):
+
+| prefix at chunk start | 0 | 16 K | 32 K | 48 K | 64 K | 128 K | 256 K | 384 K | 512 K |
+|---|---|---|---|---|---|---|---|---|---|
+| seconds | 136 (compiles) | 71 | 58 | 66 | 58 | 62 | 72 | 84 | 94 |
+
+~52 s of prefix-independent work per chunk (~315 tok/s on 32 chips, ~0.3% of the compute roofline) plus ~10-12 s per 131 K of prefix (the whole-prefix latent copy per DSA layer). Projected 1 M TTFT ~98 min; the user stopped the run at chunk 32/64 to optimize first (prefix copy, slab-local attention, reference-path swaps, traced prefill).
