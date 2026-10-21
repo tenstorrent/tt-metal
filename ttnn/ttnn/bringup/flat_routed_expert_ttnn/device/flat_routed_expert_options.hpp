@@ -83,8 +83,14 @@ struct FlatProbes {
     std::optional<std::string> drisc_stream_split;  // MIMO_FL_DRISC_STREAM_SPLIT
     std::optional<std::string> drisc_tiles;         // MIMO_FL_DRISC_TILES
     std::optional<std::string> drisc_ub;            // MIMO_FL_DRISC_UB
-    std::optional<std::string> drisc_ns_max;        // MIMO_FL_DRISC_NS_MAX
-    std::optional<std::string> drisc_lean;          // MIMO_FL_DRISC_LEAN
+    // MIMO_FL_DRISC_NS_MAX: DRISC units in flight per job (default 7; up to 14 when a tile serves one job, which then
+    // takes transaction ids 1-14)
+    std::optional<std::string> drisc_ns_max;
+    // MIMO_FL_DRISC_LEAN: fewer register accesses per DRISC unit (se_drisc_gu.cpp SE_DRISC_LEAN). 1 (safe): the DMA
+    // source-high register written once per call, the DMA attribute word built once per job, the DMA completion count
+    // re-read only when the known completions are used up. 2 (measure only, unsafe): also no ready poll before the
+    // receivers' semaphore increment. Results: FLAT_EXPERT_WORKLOG.md (GLM-5.3, 2026-10-21)
+    std::optional<std::string> drisc_lean;
     std::optional<std::string> dump_rt;             // MIMO_FL_DUMP_RT (debug output)
     std::optional<std::string> dw_rot;              // MIMO_FL_DW_ROT
     std::optional<std::string> dyn_pull;            // MIMO_FL_DYN_PULL
