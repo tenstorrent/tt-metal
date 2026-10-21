@@ -7,6 +7,8 @@
 #include <fmt/ranges.h>
 #include <tt-logger/tt-logger.hpp>
 #include <unistd.h>
+#include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
@@ -26,6 +28,7 @@
 #include <impl/debug/watcher_server.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "hal_types.hpp"
+#include "internal/tt-1xx/blackhole/eth_fw_api.h"
 #include "llrt.hpp"
 #include "binary_metadata.hpp"
 #include "tt_elffile.hpp"
@@ -322,6 +325,64 @@ void write_binary_to_address(
     });
 }
 
+std::string eth_fw_stage_to_string(uint32_t stage) {
+    switch (stage) {
+        case ETH_FW_STAGE_UNKNOWN: return "UNKNOWN/BASE_FW";
+        case ETH_FW_STAGE_BASE_FW: return "BASE_FW";
+        case ETH_FW_STAGE_FW_INIT: return "APP_FW_INIT";
+        case ETH_FW_STAGE_FW_LOOP: return "APP_FW";
+        case ETH_FW_STAGE_KERNEL: return "KERNEL";
+        case ETH_FW_STAGE_BASE_INIT: return "BASE_INIT";
+        case ETH_FW_STAGE_BASE_MSG: return "BASE_MSG";
+        case ETH_FW_STAGE_API_REQUEST: return "API_REQUEST";
+        default: break;
+    }
+    // Unrecognized value: render the packed ASCII bytes (if printable) alongside the raw hex.
+    std::string ascii;
+    for (int i = 0; i < 4; i++) {
+        char c = static_cast<char>((stage >> (8 * i)) & 0xff);
+        ascii += (std::isprint(static_cast<unsigned char>(c)) ? c : '.');
+    }
+    return fmt::format("0x{:08x} ('{}')", stage, ascii);
+}
+
+std::vector<uint32_t> read_eth_fw_stages(
+    const tt_metal::Hal& hal,
+    const tt::Cluster& cluster,
+    ChipId device_id,
+    const tt::tt_metal::CoreCoord& virtual_core,
+    tt_metal::HalProgrammableCoreType core_type) {
+    // Slots past the processor count are never written (e.g. slot 1 in single-erisc mode).
+    const uint32_t num_slots = std::min<uint32_t>(
+        hal.get_dev_size(core_type, tt_metal::HalL1MemAddrType::FW_STAGE) / sizeof(uint32_t),
+        hal.get_num_risc_processors(core_type));
+    std::vector<uint32_t> stages(num_slots, 0);
+    if (num_slots != 0) {
+        cluster.read_core(
+            stages.data(),
+            num_slots * sizeof(uint32_t),
+            tt_cxy_pair(device_id, virtual_core),
+            hal.get_dev_noc_addr(core_type, tt_metal::HalL1MemAddrType::FW_STAGE));
+    }
+    return stages;
+}
+
+std::string format_eth_fw_stages(
+    const tt_metal::Hal& hal, tt_metal::HalProgrammableCoreType core_type, const std::vector<uint32_t>& stages) {
+    if (stages.empty()) {
+        return "n/a";
+    }
+    std::vector<std::string> entries;
+    entries.reserve(stages.size());
+    for (uint32_t processor = 0; processor < stages.size(); processor++) {
+        entries.push_back(fmt::format(
+            "{}={}",
+            hal.get_processor_class_name(core_type, processor, /*is_abbreviated=*/false),
+            eth_fw_stage_to_string(stages[processor])));
+    }
+    return fmt::format("{}", fmt::join(entries, ", "));
+}
+
 namespace internal_ {
 
 namespace {
@@ -395,12 +456,20 @@ void print_aerisc_training_status(
 
     const uint32_t heartbeat_end = read_u32(heartbeat_addr);
 
+    // Always-on Metal firmware stage breadcrumbs (independent of watcher). Distinguishes whether the
+    // core is in base FW, Metal application FW, or a launched kernel when it stalled.
+    const std::string fw_stages = format_eth_fw_stages(
+        hal,
+        tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH,
+        read_eth_fw_stages(hal, cluster, device_id, virtual_core, tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH));
+
     log_critical(
         tt::LogMetal,
         "Device {}: Virtual core {}, Port status: {:#x}, Retrain count: {:#x}, Rx link up: {:#x}, "
         "Train status: {:#x}, PCS status: {:#x}, SerDes reset status: {:#x}, Postcode: {:#x}, "
         "ERISC0 reset PC: {:#x}, ERISC1 reset PC: {:#x}, RISC soft reset: {:#x}, "
-        "Heartbeat start: {:#x}, Heartbeat end: {:#x}, Heartbeat changed: {}",
+        "Heartbeat start: {:#x}, Heartbeat end: {:#x}, Heartbeat changed: {}, "
+        "Metal FW stage: {}",
         device_id,
         virtual_core.str(),
         port_status,
@@ -415,7 +484,8 @@ void print_aerisc_training_status(
         risc_soft_reset,
         heartbeat_start,
         heartbeat_end,
-        heartbeat_start != heartbeat_end);
+        heartbeat_start != heartbeat_end,
+        fw_stages);
 }
 
 }  // namespace
