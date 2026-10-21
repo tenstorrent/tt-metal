@@ -6,6 +6,7 @@
 
 #include <optional>
 #include <sstream>
+#include <utility>
 
 #include "core/tt_profiler.hpp"
 #include "ttnn_fixed/distributed/tt_metal.hpp"
@@ -62,6 +63,18 @@ GradMode AutoContext::get_gradient_mode() const {
 
 void AutoContext::reset_graph() {
     m_graph.reset();
+}
+
+void AutoContext::queue_backward_end_callback(std::function<void()> callback) {
+    m_backward_end_callbacks.push_back(std::move(callback));
+}
+
+void AutoContext::run_backward_end_callbacks() {
+    // A callback may queue another for the next backward pass.
+    auto callbacks = std::exchange(m_backward_end_callbacks, {});
+    for (auto& callback : callbacks) {
+        callback();
+    }
 }
 
 void AutoContext::open_device(

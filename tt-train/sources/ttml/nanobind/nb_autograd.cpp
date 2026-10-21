@@ -253,6 +253,11 @@ void py_module(nb::module_& m) {
             nb::arg("links"),
             "Add backward graph node");
         py_auto_context.def("reset_graph", &AutoContext::reset_graph, "Reset graph");
+        py_auto_context.def(
+            "queue_backward_end_callback",
+            &AutoContext::queue_backward_end_callback,
+            nb::arg("callback"),
+            "Run `callback` once, when the backward pass in progress (or the next one) has run every node.");
         py_auto_context.def("set_gradient_mode", &AutoContext::set_gradient_mode, nb::arg("mode"), "Set gradient mode");
         py_auto_context.def("get_gradient_mode", &AutoContext::get_gradient_mode, "Get gradient mode");
         py_auto_context.def(

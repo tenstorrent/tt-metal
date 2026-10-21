@@ -5,6 +5,7 @@
 #pragma once
 
 #include <core/ttnn_all_includes.hpp>
+#include <functional>
 #include <memory>
 #include <random>
 #include <string>
@@ -92,6 +93,12 @@ public:
 
     void reset_graph();
 
+    // Runs `callback` once, when the backward pass in progress (or the next one) has run every node: for work that
+    // must follow all of a module's gradients, which no single node is guaranteed to (its input may need none).
+    void queue_backward_end_callback(std::function<void()> callback);
+    // Runs and clears the queued callbacks; called by Tensor::backward.
+    void run_backward_end_callbacks();
+
     void set_gradient_mode(GradMode mode);
 
     [[nodiscard]] GradMode get_gradient_mode() const;
@@ -136,6 +143,7 @@ private:
     GradMode m_grads_mode = GradMode::ENABLED;
 
     Graph m_graph;
+    std::vector<std::function<void()>> m_backward_end_callbacks;
     tt::tt_metal::distributed::MeshShape m_mesh_shape = tt::tt_metal::distributed::MeshShape(1, 1);
     std::unique_ptr<core::MeshDevice> m_device;
 

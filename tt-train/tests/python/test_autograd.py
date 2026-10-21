@@ -788,3 +788,26 @@ def test_to_numpy_reads_a_bf16_tensor_without_a_device_copy():
     assert array.dtype == np.float32
     np.testing.assert_array_equal(array, values.astype(ml_dtypes.bfloat16).astype(np.float32))
     assert usage.total_allocations - usage.total_deallocations == 0
+
+
+def test_backward_end_callbacks_run_once_after_every_node():
+    """A callback queued during a backward pass runs when the pass has run every node, then is cleared."""
+    events = []
+    x = ttml.autograd.Tensor.from_numpy(np.ones((1, 1, 32, 32), np.float32), ttnn.Layout.TILE, ttnn.DataType.BFLOAT16)
+    x.set_requires_grad(True)
+
+    def first_node_runs():
+        events.append("node")
+        ttml.autograd.AutoContext.get_instance().queue_backward_end_callback(lambda: events.append("end"))
+
+    y = ttml.autograd.callback(
+        ttml.ops.unary.mean(ttml.autograd.callback(x, lambda: events.append("last node"))), first_node_runs
+    )
+    y.backward(False)
+    ttml.autograd.AutoContext.get_instance().reset_graph()
+    assert events == ["node", "last node", "end"]
+
+    z = ttml.ops.unary.mean(x)
+    z.backward(False)
+    ttml.autograd.AutoContext.get_instance().reset_graph()
+    assert events == ["node", "last node", "end"], "a callback runs once"

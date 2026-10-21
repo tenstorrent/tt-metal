@@ -119,6 +119,11 @@ class FSDPState:
         # micro-batches, set aside for the duration of one backward.
         self._accumulated_grads: dict[int, Any] = {}
 
+        # Between backward_pre and backward_post. backward_post runs from a node on the module's input, which is in
+        # the backward graph only if the input takes a gradient (token ids do not), so the end of the backward pass
+        # finishes it otherwise.
+        self._in_backward = False
+
     # -- managed-param management --------------------------------------------
 
     def add_managed_param(self, parameter: Parameter, shard_dim: int) -> None:
@@ -168,6 +173,11 @@ class FSDPState:
            gradient, and ``backward_post`` adds it to the reduce-scattered one.
 
         """
+        if self._in_backward:
+            return
+        self._in_backward = True
+        ttml.autograd.AutoContext.get_instance().queue_backward_end_callback(self._end_backward)
+
         if self.sharded_state == _ShardedState.SHARDED:
             self._gather_all_params()
             self.sharded_state = _ShardedState.UNSHARDED
@@ -183,6 +193,9 @@ class FSDPState:
         restore the sharded m_value (in that order, so ``set_grad``'s shape
         check sees the shard-shaped m_value).
         """
+        if not self._in_backward:
+            return
+        self._in_backward = False
         for parameter, shard_dim in self.managed:
             param_tensor = parameter.tensor
             if not param_tensor.is_grad_initialized():
@@ -227,6 +240,10 @@ class FSDPState:
             ttnn.deallocate(gathered_grad)
 
         self.sharded_state = _ShardedState.SHARDED
+
+    def _end_backward(self) -> None:
+        if self._in_backward:
+            self.backward_post()
 
     # -- low-level helpers ---------------------------------------------------
 

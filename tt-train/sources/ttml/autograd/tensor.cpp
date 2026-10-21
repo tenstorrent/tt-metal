@@ -4,6 +4,7 @@
 
 #include "tensor.hpp"
 
+#include "autograd/auto_context.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
 
@@ -85,6 +86,7 @@ void Tensor::backward(bool retain_graph) {
             };
         }
     }
+    ctx().run_backward_end_callbacks();
 }
 
 bool Tensor::is_grad_initialized() const {
