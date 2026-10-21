@@ -1,0 +1,14 @@
+{
+  "utc": "2026-10-21T13:49:13.651754+00:00",
+  "status": "DONE",
+  "allocations": [
+    141422,
+    141554
+  ],
+  "states": {
+    "141422": "JobId=141422 JobName=no-shell UserId=divanovic(4225) GroupId=divanovic(4225) MCS_label=N/A Priority=1 Nice=0 Account=(null) QOS=(null) JobState=CANCELLED Reason=None Dependency=(null) Requeue=1 Restarts=0 BatchFlag=0 Reboot=0 ExitCode=0:0 RunTime=02:52:08 TimeLimit=06:00:00 TimeMin=N/A SubmitTime=2026-10-21T10:57:00 EligibleTime=2026-10-21T10:57:00 AccrueTime=Unknown ResizeTime=2026-10-21T11:39:12 StartTime=2026-10-21T10:57:00 EndTime=2026-10-21T13:49:08 Deadline=N/A PreemptEligibleTime=2026-10-21T10:57:00 PreemptTime=None SuspendTime=None SecsPreSuspend=0 LastSchedEval=2026-10-21T10:57:00 Scheduler=Main Partition=bh_sc36_2 AllocNode:Sid=localhost:714505 ReqNodeList=bh-glx-120-c05u02,bh-glx-120-c08u02 ExcNodeList=(null) NodeList=bh-glx-120-c05u02 BatchHost=bh-glx-120-c05u02 NumNodes=1 NumCPUs=1 NumTasks=1 CPUs/Task=1 ReqB:S:C:T=0:0:*:* ReqTRES=cpu=2,mem=2M,node=2,billing=2 AllocTRES=cpu=1,node=1,billing=1 Socks/Node=* NtasksPerN:B:S:C=0:0:*:* CoreSpec=* MinCPUsNode=1 MinMemoryNode=0 MinTmpDiskNode=0 Features=(null) DelayBoot=00:00:00 OverSubscribe=NO Contiguous=0 Licenses=(null) Network=(null) Command=(null) WorkDir=/home/divanovic Power=",
+    "141554": "JobId=141554 JobName=gptoss-payload4352-decode UserId=divanovic(4225) GroupId=divanovic(4225) MCS_label=N/A Priority=1 Nice=0 Account=(null) QOS=(null) JobState=CANCELLED Reason=None Dependency=(null) Requeue=1 Restarts=0 BatchFlag=0 Reboot=0 ExitCode=0:0 RunTime=02:10:43 TimeLimit=05:15:00 TimeMin=N/A SubmitTime=2026-10-21T11:38:25 EligibleTime=2026-10-21T11:38:25 AccrueTime=Unknown StartTime=2026-10-21T11:38:25 EndTime=2026-10-21T13:49:08 Deadline=N/A PreemptEligibleTime=2026-10-21T11:38:25 PreemptTime=None SuspendTime=None SecsPreSuspend=0 LastSchedEval=2026-10-21T11:38:25 Scheduler=Main Partition=bh_sc5_B2B9_D12 AllocNode:Sid=slurm-login-01.exabox.tenstorrent.com:81404 ReqNodeList=bh-glx-120-b03u02 ExcNodeList=(null) NodeList=bh-glx-120-b03u02 BatchHost=bh-glx-120-b03u02 NumNodes=1 NumCPUs=1 NumTasks=1 CPUs/Task=1 ReqB:S:C:T=0:0:*:* ReqTRES=cpu=1,mem=1M,node=1,billing=1 AllocTRES=cpu=1,node=1,billing=1 Socks/Node=* NtasksPerN:B:S:C=0:0:*:* CoreSpec=* MinCPUsNode=1 MinMemoryNode=0 MinTmpDiskNode=0 Features=(null) DelayBoot=00:00:00 OverSubscribe=NO Contiguous=0 Licenses=(null) Network=(null) Command=(null) WorkDir=/home/divanovic Power="
+  },
+  "remaining_squeue_entries": [],
+  "task_device_holders_checked_empty_before_release": true
+}

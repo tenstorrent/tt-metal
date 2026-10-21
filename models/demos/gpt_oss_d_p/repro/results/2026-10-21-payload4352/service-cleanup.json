@@ -1,0 +1,27 @@
+{
+  "utc": "2026-10-21T13:49:05.164863+00:00",
+  "status": "DONE",
+  "allocations": [
+    141422,
+    141554
+  ],
+  "allocation_released": false,
+  "checks": {
+    "bh-glx-120-c05u02": {
+      "task_processes": [],
+      "device_holders": "",
+      "fuser_exit": 1
+    },
+    "bh-glx-120-b03u02": {
+      "task_processes": [],
+      "device_holders": "",
+      "fuser_exit": 1
+    }
+  },
+  "prefill_shutdown": "Native sentinel; explicit mesh close; exit 0",
+  "decode_shutdown": "Owner-stop requested; all ranks and driver exited; MPI launcher reports improper rank-0 termination, exit 1",
+  "decode_graceful_shutdown_pass": false,
+  "decode_exit_code": 1,
+  "coordinator_exited": true,
+  "warning": "Decoder shutdown is not a clean-exit pass. Error occurred after the completed audited measurements; logs preserved. No remaining processes or device holders on either host."
+}

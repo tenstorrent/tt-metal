@@ -1,0 +1,21 @@
+{
+  "utc": "2026-10-21T12:52:28.394382+00:00",
+  "status": "DONE",
+  "source": "/data/divanovic/gptoss-payload4352-20261021/tt-metal",
+  "disposable_copy": "/data/divanovic/gptoss-payload4352-20261021/runtime/payload-hook-copy",
+  "file": "models/demos/deepseek_v3_d_p/reference/gpt_oss_120b_config.py",
+  "source_sha256": "69aa219abb010fbeacf12236600eea7453d43d39ed2e993e797b254ab7bd1a91",
+  "command": [
+    "/usr/local/bin/uvx",
+    "pre-commit",
+    "run",
+    "--files",
+    "models/demos/deepseek_v3_d_p/reference/gpt_oss_120b_config.py"
+  ],
+  "exit_code": 0,
+  "source_unchanged": true,
+  "formatted_sha256": "69aa219abb010fbeacf12236600eea7453d43d39ed2e993e797b254ab7bd1a91",
+  "copy_unchanged": true,
+  "ast_unchanged": true,
+  "seconds": 13.008525371551514
+}

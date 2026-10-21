@@ -1,0 +1,14 @@
+{
+  "pr": 60485,
+  "url": "https://github.com/tenstorrent/tt-metal/pull/60485",
+  "head": "b1b537740f5206e47cdbef3ecd5c880bbd197f06",
+  "pr_payload_bytes": 8704,
+  "measured_old_commits": [
+    "3441c663200ca87f7deafe7c48d39ba61c40d5c0",
+    "aa93f1b795694a2cea1dd8ceb952147dce620463"
+  ],
+  "old_payload_bytes": 2880,
+  "current_payload_bytes": 4352,
+  "verification": "Authenticated gh API PR head and config content; git show historical commits; each new group fabric-config.json. Read-only checks, no source changes.",
+  "checked_date_utc": "2026-10-21"
+}

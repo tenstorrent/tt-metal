@@ -1,0 +1,12 @@
+{
+  "cases": 29,
+  "requests": 116,
+  "warmups": 29,
+  "measured": 87,
+  "statistics_rows": 493,
+  "first_request_utc": "2026-10-21T12:27:05.775034+00:00",
+  "last_request_end_utc": "2026-10-21T13:38:47.166399+00:00",
+  "accepted_request_span_s": 4301.391364812851,
+  "sum_accepted_request_duration_s": 480.3816650429508,
+  "note": "Request span includes group switching and the prefill recovery gap; duration sum excludes setup and gaps. Neither includes initial decoder bringup."
+}

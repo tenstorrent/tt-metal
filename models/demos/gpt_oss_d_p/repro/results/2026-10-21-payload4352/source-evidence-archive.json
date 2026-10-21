@@ -1,0 +1,11 @@
+{
+  "utc": "2026-10-21T13:52:22.334439+00:00",
+  "status": "DONE",
+  "path": "/data/divanovic/gptoss-payload4352-20261021/archives/gptoss-payload4352-20261021-source-evidence.tar.gz",
+  "manifest": "/data/divanovic/gptoss-payload4352-20261021/archives/source-evidence-manifest.json",
+  "files": 3201,
+  "uncompressed_bytes": 776501817,
+  "archive_bytes": 67770826,
+  "sha256": "6f6c460a231e6d0da2991981c2753dd15f1d834cc0545908bdd5a3e98c715c56",
+  "verified_member_count": 3202
+}
