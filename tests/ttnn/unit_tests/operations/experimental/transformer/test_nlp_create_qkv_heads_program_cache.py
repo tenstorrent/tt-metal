@@ -122,7 +122,9 @@ def test_nlp_cqkv_interleaved_shape_change(device, isolate_program_cache, transp
         seq_len, heads, dtype = variant
         A, in_t = _make_interleaved_input(device, 1, seq_len, head_dim, heads, num_kv_heads, dtype, mem_config, seq_len)
         outs = _run_interleaved(in_t, heads, num_kv_heads, transpose_k_heads, mem_config)
-        _check(outs, _refs_interleaved(A, 1, seq_len, head_dim, heads, num_kv_heads, transpose_k_heads), 1.0)
+        # bfloat8_b is block-quantized on the way in, so only the bfloat16 variants are bit-exact.
+        pcc = 1.0 if dtype == ttnn.bfloat16 else 0.99
+        _check(outs, _refs_interleaved(A, 1, seq_len, head_dim, heads, num_kv_heads, transpose_k_heads), pcc)
 
     variants = [
         (128, num_q_heads, ttnn.bfloat16),
