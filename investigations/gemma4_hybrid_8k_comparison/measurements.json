@@ -1,0 +1,131 @@
+{
+  "complete": true,
+  "started_at": "2026-10-21T14:40:18.421847+00:00",
+  "git_revision": "b39d9efe92f679e1294c0b5d0f48bcfd4b4079a9",
+  "git_dirty": true,
+  "model": "google/gemma-4-31B-it",
+  "layers": 60,
+  "mesh": [
+    8,
+    4
+  ],
+  "chunk_size": 8192,
+  "requests": {
+    "legacy": [
+      8192
+    ],
+    "hybrid": [
+      512,
+      512,
+      1024,
+      1536,
+      2048,
+      2560
+    ]
+  },
+  "prefixes": [
+    0,
+    253952
+  ],
+  "repeats": 5,
+  "cache_history": "Synthetic KV; current chunks are overwritten on every replay",
+  "device_metric": "Maximum per-chip first-program-start to last-program-end span, including gaps",
+  "excluded": "Loading, compilation, capture, input/metadata staging, and warmup replays",
+  "baseline": "One full legacy request versus one hybrid batch; both process the same total number of tokens",
+  "results": [
+    {
+      "path": "legacy",
+      "request_lengths": [
+        8192
+      ],
+      "prefix": 0,
+      "real_tokens": 8192,
+      "device_us": {
+        "median": 111128.12882208644,
+        "min": 110999.13955183706,
+        "max": 111233.51717696594,
+        "samples": [
+          111128.12882208644,
+          110999.13955183706,
+          111038.789937479,
+          111139.89100405859,
+          111233.51717696594
+        ]
+      },
+      "device_us_per_token": 13.565445412852348
+    },
+    {
+      "path": "legacy",
+      "request_lengths": [
+        8192
+      ],
+      "prefix": 253952,
+      "real_tokens": 8192,
+      "device_us": {
+        "median": 268549.51340796845,
+        "min": 268350.7243361453,
+        "max": 268888.50695350696,
+        "samples": [
+          268365.4884569698,
+          268350.7243361453,
+          268888.50695350696,
+          268549.51340796845,
+          268816.4366159038
+        ]
+      },
+      "device_us_per_token": 32.78192302343365
+    },
+    {
+      "path": "hybrid",
+      "request_lengths": [
+        512,
+        512,
+        1024,
+        1536,
+        2048,
+        2560
+      ],
+      "prefix": 0,
+      "real_tokens": 8192,
+      "device_us": {
+        "median": 160112.11776523525,
+        "min": 160027.560021326,
+        "max": 160218.45722930715,
+        "samples": [
+          160096.82503666217,
+          160027.560021326,
+          160218.45722930715,
+          160112.11776523525,
+          160173.06890237564
+        ]
+      },
+      "device_us_per_token": 19.54493625063907
+    },
+    {
+      "path": "hybrid",
+      "request_lengths": [
+        512,
+        512,
+        1024,
+        1536,
+        2048,
+        2560
+      ],
+      "prefix": 253952,
+      "real_tokens": 8192,
+      "device_us": {
+        "median": 564690.4037183856,
+        "min": 564549.5413083424,
+        "max": 565069.9720481955,
+        "samples": [
+          565069.9720481955,
+          564690.4037183856,
+          564549.5413083424,
+          564589.4721888865,
+          564841.7403102509
+        ]
+      },
+      "device_us_per_token": 68.9319340476545
+    }
+  ]
+}
