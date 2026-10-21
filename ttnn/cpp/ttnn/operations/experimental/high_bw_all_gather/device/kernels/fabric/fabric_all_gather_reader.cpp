@@ -12,11 +12,13 @@
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/semaphore.h"
 #include "fabric_all_gather_common.hpp"
 
 void kernel_main() {
-    constexpr uint32_t chunk_cb = get_compile_time_arg_val(0);
-    constexpr uint32_t metadata_cb = get_compile_time_arg_val(1);
+    constexpr uint32_t chunk_cb_id = get_compile_time_arg_val(0);
+    constexpr uint32_t metadata_cb_id = get_compile_time_arg_val(1);
     constexpr uint32_t page_bytes = get_compile_time_arg_val(2);
     constexpr uint32_t pages_per_fabric_chunk = get_compile_time_arg_val(3);
     constexpr uint32_t num_dram_banks = get_compile_time_arg_val(4);
@@ -28,7 +30,7 @@ void kernel_main() {
     // link workers: program semaphore blocks_converted_semaphore_id + c = conversion blocks local copy core c has done
     constexpr uint32_t blocks_converted_semaphore_id = get_compile_time_arg_val(10);
     constexpr uint32_t num_local_copy_cores = get_compile_time_arg_val(11);
-    constexpr uint32_t input_run_cb =
+    constexpr uint32_t input_run_cb_id =
         get_compile_time_arg_val(12);  // copy cores: (flat_page, num_pages | last) per run
     constexpr auto input_args = TensorAccessorArgs<13>();
     constexpr auto output_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
@@ -39,15 +41,19 @@ void kernel_main() {
     constexpr uint32_t conversion_block_pages =
         pages_per_fabric_chunk * chunks_per_cb_batch * kCbBatchesPerConversionBlock;
 
+    Noc noc;
+    CircularBuffer chunk_cb(chunk_cb_id);
+
     // Common args: [0] input [1] output [2] shards-arrived counter [3] cache slot tensor [4] layers per user [5] layer
     // [6] cache slot first page (host) [7] pages per cache slot, then the chip shard geometry (common.hpp).
-    const uint32_t landing_l1 = get_write_ptr(metadata_cb);
+    const uint32_t landing_l1 = CircularBuffer(metadata_cb_id).get_write_ptr();
     const ChipShardGeometry geometry =
-        read_chip_shard_geometry<kValidPrefixFromMetadata>(landing_l1, valid_prefix_args);
+        read_chip_shard_geometry<kValidPrefixFromMetadata>(noc, landing_l1, valid_prefix_args);
     const uint32_t cache_slot_first_page =
-        read_cache_slot_first_page<kCacheSlotFromMetadata>(landing_l1, cache_slot_args);
+        read_cache_slot_first_page<kCacheSlotFromMetadata>(noc, landing_l1, cache_slot_args);
     const auto input = TensorAccessor(input_args, get_common_arg_val<uint32_t>(0), page_bytes);
     const auto output = TensorAccessor(output_args, get_common_arg_val<uint32_t>(1), page_bytes);
+    // a global semaphore (an L1 address; the Device 2.0 Semaphore is built from a program semaphore id only)
     auto* shards_arrived = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_common_arg_val<uint32_t>(2));
 
     // Per-core args: [0] first owned chunk [1] owned chunk stride [2] number of outgoing shards, then the outgoing
@@ -62,8 +68,8 @@ void kernel_main() {
     // end of every outgoing shard (so nothing is held while waiting for the next forwarded shard).
     uint32_t cb_chunk_offset = 0, chunks_in_batch = 0, batch_capacity = 0, write_ptr = 0;
     auto push_batch = [&]() {
-        noc_async_read_barrier();
-        cb_push_back(chunk_cb, pages_per_fabric_chunk * chunks_in_batch);
+        noc.async_read_barrier();
+        chunk_cb.push_back(pages_per_fabric_chunk * chunks_in_batch);
         cb_chunk_offset = (cb_chunk_offset + chunks_in_batch) % chunk_slots_in_cb;
         chunks_in_batch = 0;
     };
@@ -72,8 +78,8 @@ void kernel_main() {
             batch_capacity = chunks_per_cb_batch < chunk_slots_in_cb - cb_chunk_offset
                                  ? chunks_per_cb_batch
                                  : chunk_slots_in_cb - cb_chunk_offset;
-            cb_reserve_back(chunk_cb, pages_per_fabric_chunk * batch_capacity);
-            write_ptr = get_write_ptr(chunk_cb);
+            chunk_cb.reserve_back(pages_per_fabric_chunk * batch_capacity);
+            write_ptr = chunk_cb.get_write_ptr();
         }
         return write_ptr + chunks_in_batch * fabric_chunk_bytes;
     };
@@ -86,6 +92,7 @@ void kernel_main() {
     if constexpr (kLocalCopyCore && !kInputInterleaved) {
         const uint32_t local_copy_core_index = first_owned_chunk;
         const uint32_t num_converting_cores = owned_chunk_stride;
+        CircularBuffer input_run_cb(input_run_cb_id);
         for_each_contiguous_input_run(
             geometry,
             input,
@@ -96,17 +103,18 @@ void kernel_main() {
             local_copy_core_index,
             num_converting_cores,
             [&](uint32_t outer_slice, uint32_t page_in_slice, uint32_t num_pages, bool last_run_of_block) {
-                noc_async_read(
-                    input.get_noc_addr(
-                        cache_slot_first_page + outer_slice * geometry.pages_per_outer_slice + page_in_slice),
-                    next_chunk_slot(),
-                    num_pages * page_bytes);
+                noc.async_read(
+                    input,
+                    CoreLocalMem<uint32_t>(next_chunk_slot()),
+                    num_pages * page_bytes,
+                    {.page_id = cache_slot_first_page + outer_slice * geometry.pages_per_outer_slice + page_in_slice},
+                    {});
                 // the input run entry (chunk_walk.hpp): where the run goes and whether it ends a conversion block
-                cb_reserve_back(input_run_cb, 1);
-                auto* input_run = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(input_run_cb));
+                input_run_cb.reserve_back(1);
+                auto* input_run = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(input_run_cb.get_write_ptr());
                 input_run[0] = outer_slice * geometry.valid_pages_per_outer_slice + page_in_slice;  // flat_page
                 input_run[1] = num_pages | (last_run_of_block ? 0x80000000u : 0u);
-                cb_push_back(input_run_cb, 1);
+                input_run_cb.push_back(1);
                 ++chunks_in_batch;
                 if (chunks_in_batch == batch_capacity ||
                     last_run_of_block) {  // the writer signals whole conversion blocks
@@ -122,15 +130,14 @@ void kernel_main() {
         const uint32_t last_flat_page =
             outer_slice * geometry.valid_pages_per_outer_slice + page_in_slice + (num_pages - 1) * num_dram_banks;
         for (uint32_t copy_core = 0; copy_core < num_local_copy_cores; ++copy_core) {
-            auto* blocks_converted = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-                get_semaphore(blocks_converted_semaphore_id + copy_core));
+            const Semaphore<> blocks_converted(blocks_converted_semaphore_id + copy_core);
             const uint32_t needed_blocks =
                 conversion_blocks_needed(last_flat_page, conversion_block_pages, copy_core, num_local_copy_cores);
-            if (*blocks_converted < needed_blocks) {
+            if (blocks_converted.value() < needed_blocks) {
                 if (chunks_in_batch > 0) {
                     push_batch();  // never block while holding chunks that were already read
                 }
-                noc_semaphore_wait_min(blocks_converted, needed_blocks);
+                blocks_converted.wait_min(needed_blocks);
             }
         }
     };
@@ -165,17 +172,21 @@ void kernel_main() {
                 }
                 const uint32_t chunk_slot = next_chunk_slot();
                 if (read_from_output) {
-                    noc_async_read(
-                        output.get_noc_addr(output_page_index(
-                            geometry, outgoing_shard_rank(outgoing_shard), outer_slice, page_in_slice)),
-                        chunk_slot,
-                        num_pages * page_bytes);
+                    noc.async_read(
+                        output,
+                        CoreLocalMem<uint32_t>(chunk_slot),
+                        num_pages * page_bytes,
+                        {.page_id = output_page_index(
+                             geometry, outgoing_shard_rank(outgoing_shard), outer_slice, page_in_slice)},
+                        {});
                 } else {
-                    noc_async_read(
-                        input.get_noc_addr(
-                            cache_slot_first_page + outer_slice * geometry.pages_per_outer_slice + page_in_slice),
-                        chunk_slot,
-                        num_pages * page_bytes);
+                    noc.async_read(
+                        input,
+                        CoreLocalMem<uint32_t>(chunk_slot),
+                        num_pages * page_bytes,
+                        {.page_id =
+                             cache_slot_first_page + outer_slice * geometry.pages_per_outer_slice + page_in_slice},
+                        {});
                 }
                 chunk_slot_filled();
             });

@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <type_traits>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/circular_buffer.h"
 #include "hostdev/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
@@ -38,8 +39,8 @@ FORCE_INLINE void route_one_hop(volatile tt_l1_ptr PACKET_HEADER_TYPE* header, u
 }
 
 void kernel_main() {
-    constexpr uint32_t chunk_cb = get_compile_time_arg_val(0);
-    constexpr uint32_t metadata_cb = get_compile_time_arg_val(1);
+    constexpr uint32_t chunk_cb_id = get_compile_time_arg_val(0);
+    constexpr uint32_t metadata_cb_id = get_compile_time_arg_val(1);
     constexpr uint32_t page_bytes = get_compile_time_arg_val(2);
     constexpr uint32_t pages_per_fabric_chunk = get_compile_time_arg_val(3);
     constexpr uint32_t num_dram_banks = get_compile_time_arg_val(4);
@@ -51,9 +52,14 @@ void kernel_main() {
     constexpr uint32_t fabric_chunk_bytes = pages_per_fabric_chunk * page_bytes;
     constexpr uint32_t chunk_slots_in_cb = 2 * chunks_per_cb_batch;
 
+    Noc noc;
+    CircularBuffer chunk_cb(chunk_cb_id);
+
     // Common args: [0] output [1] shards-arrived counter [2] downstream-started counter, then the chip shard geometry.
-    const ChipShardGeometry geometry =
-        read_chip_shard_geometry<kValidPrefixFromMetadata>(get_write_ptr(metadata_cb), valid_prefix_args);
+    // Both counters are global semaphores (L1 addresses; the Device 2.0 Semaphore is built from a program semaphore id
+    // only).
+    const ChipShardGeometry geometry = read_chip_shard_geometry<kValidPrefixFromMetadata>(
+        noc, CircularBuffer(metadata_cb_id).get_write_ptr(), valid_prefix_args);
     const auto output = TensorAccessor(output_args, get_common_arg_val<uint32_t>(0), page_bytes);
     const uint32_t shards_arrived_addr = get_common_arg_val<uint32_t>(1);
     const uint32_t downstream_started_addr = get_common_arg_val<uint32_t>(2);
@@ -99,7 +105,7 @@ void kernel_main() {
         if (num_outgoing_shards > 0) {
             noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(downstream_started_addr), 1);
             noc_semaphore_inc(get_noc_addr(downstream_started_addr), 0u - 1u);
-            noc_async_atomic_barrier();
+            noc.async_atomic_barrier();
         }
 
         // 2. send, in CB batches (full, at the end of the CB, at the end of an outgoing shard)
@@ -108,7 +114,7 @@ void kernel_main() {
         uint32_t cb_chunk_offset = 0, next_header = 0, unflushed_headers = 0;
         auto next_free_header = [&]() {  // flush before a header is reused
             if (unflushed_headers == chunks_per_cb_batch) {
-                noc_async_writes_flushed();
+                noc.async_writes_flushed();
                 unflushed_headers = 0;
             }
             ++unflushed_headers;
@@ -127,9 +133,9 @@ void kernel_main() {
                 outgoing_shard_chunk_half(outgoing_shard));
             uint32_t chunks_in_batch = 0, chunks_sent = 0;
             auto pop_batch = [&]() {
-                noc_async_writes_flushed();  // the CB batch's chunks and headers have left L1
+                noc.async_writes_flushed();  // the CB batch's chunks and headers have left L1
                 unflushed_headers = 0;
-                cb_pop_front(chunk_cb, pages_per_fabric_chunk * chunks_in_batch);
+                chunk_cb.pop_front(pages_per_fabric_chunk * chunks_in_batch);
                 cb_chunk_offset = (cb_chunk_offset + chunks_in_batch) % chunk_slots_in_cb;
                 chunks_in_batch = 0;
             };
@@ -141,12 +147,12 @@ void kernel_main() {
                 owned_chunk_stride,
                 outgoing_shard_chunk_half(outgoing_shard),
                 [&](uint32_t outer_slice, uint32_t page_in_slice, uint32_t num_pages) {
-                    cb_wait_front(chunk_cb, pages_per_fabric_chunk * (chunks_in_batch + 1));
+                    chunk_cb.wait_front(pages_per_fabric_chunk * (chunks_in_batch + 1));
                     const uint64_t dst_noc_addr = output.get_noc_addr(
                         output_page_index(geometry, outgoing_shard_rank(outgoing_shard), outer_slice, page_in_slice),
                         0,
                         0);
-                    const uint32_t chunk_slot = get_read_ptr(chunk_cb) + chunks_in_batch * fabric_chunk_bytes;
+                    const uint32_t chunk_slot = chunk_cb.get_read_ptr() + chunks_in_batch * fabric_chunk_bytes;
                     const uint32_t chunk_payload_bytes = num_pages * page_bytes;
                     const bool last_chunk_of_shard = ++chunks_sent == shard_fabric_chunks;
                     for (uint32_t offset = 0; offset < chunk_payload_bytes; offset += fabric_payload_bytes) {
@@ -192,6 +198,6 @@ void kernel_main() {
         noc_semaphore_wait_min(
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(shards_arrived_addr), shards_expected_from_upstream);
         noc_semaphore_inc(get_noc_addr(shards_arrived_addr), 0u - shards_expected_from_upstream);
-        noc_async_atomic_barrier();
+        noc.async_atomic_barrier();
     }
 }
