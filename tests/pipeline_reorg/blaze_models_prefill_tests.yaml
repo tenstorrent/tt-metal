@@ -1386,8 +1386,8 @@
 # 0 / 143360 (p50) / 552960 (p90) x new 640 (p25) / 5120 (one chunk) / 51200 (p99), idle (3 iters) + loaded (4 users x
 # 240 chunks). The full 6x7 table of #57827 runs through the same env knobs (see ci/run_matrix_ci.sh). 16 ranks of
 # [2,4] over the 4 galaxies, placed by tt-run discovery on the z-chain mesh graph. Perf is reported (job summary +
-# artifact), not gated. One runner launch serves all rows at capacity 552960 + 51200, so the 0 and 143360 rows run on
-# an over-sized KV cache and are slower than the per-row-capacity numbers in #57827.
+# artifact), not gated. Like run_matrix.sh, each cached row gets its own runner launch with KV capacity cached + 51200,
+# so the numbers are comparable with #57827.
 - name: "(MiniMax-M3-428B) pipeline prefill perf matrix 3x3 16-stage, SC4"
   cmd: |
     set -euo pipefail
@@ -1409,7 +1409,7 @@
   skus:
     bh_sc4:
       # Smoke run 39584089519 (cached 0 x 2 cells, 2 users): 2m16s bring-up, 3m50s test step. Estimate for this table:
-      # ~23 min test step (9 loaded cells x 240 chunks at the ~420 ms period of the 604160-token cache dominate).
+      # ~21 min test step = 3 launches x ~3 min (bring-up + shutdown) + ~12 min of measurement (the 552960 row is ~9).
       # Lower once measured.
       timeout: 60
       tier: 2
