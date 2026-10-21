@@ -188,16 +188,73 @@ folded in.
 
 ## Where an architecture plugs in
 
-| Hook | Notes |
+An architecture is **assembled, not subclassed**. `ArchGolden` holds one unit
+per hardware stage, and `DataTransferBlocks` is a façade that delegates to
+them. Nothing overrides a method: there is exactly one implementation of each
+transfer, and architectures differ in the data their units are constructed
+with. See [arch.py](arch.py).
+
+| Where | What it carries |
 |---|---|
-| `SUPPORTED_L1_FORMATS` | Every L1 access is checked against it, so asking Quasar for `Bfp8_b` raises rather than quietly quantizing to something the hardware cannot store. |
-| `_src_format(l1_format)` | The L1 → src-register mapping. Override where an architecture diverges; `src_format()` does the support check first, because the base mapping is built from exponent-family predicates that would otherwise return a plausible answer for a format the hardware cannot read. |
-| `UNPACK_TO_SRC_FORMATS` | Legal `L1 format -> src format` pairs, checked on both the explicit and the defaulted path. Empty means unmodelled at this level, not "everything is legal". |
-| `EDGE_MASK_MASKED_WHEN_SET` | Edge-mask polarity: `True` where a set register bit masks the datum (Quasar), `False` where it keeps it (Wormhole/Blackhole). |
-| `PACK_TO_L1_FORMATS` | Legal `Dest format -> L1 format` pairs for the packer, the mirror of `UNPACK_TO_SRC_FORMATS`. Empty means unmodelled. |
-| `HAS_SRCS` | Whether the architecture has a SrcS register. `True` on Quasar only — Wormhole and Blackhole have no `UNP_S` unpacker and no `_is_srcs_32bit_mode_`, so `l1_to_srcS` and `srcs_format` refuse there rather than answering for a register that does not exist. |
-| `PROMOTES_OUTLIER_TO_32_BIT_DEST` | Whether `TestConfig` forces `dest_acc` on for an exponent-B input with a `Float16` output. `True` everywhere except Quasar, which it skips by name, so on Wormhole/Blackhole a `Float16_b` Dest packed to `Float16` is refused — the device would have run a 32-bit Dest. |
-| `l1_to_srcA` | Concrete in the base. Override only for an architecture whose unpack differs beyond its format metadata. |
+| `L1Support(name, formats)` | The architecture's L1 format set, the support checks, and the L1 read/write path. Shared by the unpacker and the packer, so it belongs to neither. `name` appears in refusals, so they say `Quasar cannot read Bfp8_b` rather than naming the shared class. |
+| `Unpack(l1, to_src_formats, to_dest_formats, has_srcs)` | The `L1 -> src` mapping, both legality tables, and whether this architecture has a SrcS register at all. Also the Dest-format derivation — Dest takes the format the *unpacker* landed in the src register, so that question is the unpacker's. |
+| `Fpu(l1)` | `src_to_dest` and the Dest→src feedback. Stateless today; every architecture constructs it the same way. |
+| `Pack(l1, to_l1_formats, edge_mask_masked_when_set, promotes_outlier_to_32_bit_dest)` | The `Dest -> L1` legality table, the edge-mask polarity, and the harness's outlier promotion. |
+
+An empty table means **unmodelled at that level of detail**, and a weaker check
+applies instead. It is not a claim that every pair is legal. Wormhole and
+Blackhole leave the unpacker's tables empty today.
+
+There is no `Sfpu` unit: nothing in this golden models the SFPU, so the class
+would be empty and every architecture would have to supply a no-op. It is added
+with the first real SFPU block.
+
+### Adding an architecture
+
+One `L1Support` and one class in [arch.py](arch.py):
+
+```python
+_NEWARCH_L1 = L1Support(name="NewArch", formats=frozenset({...}))
+
+
+class NewArch(ArchGolden):
+    l1 = _NEWARCH_L1
+    unpack = Unpack(_NEWARCH_L1, to_src_formats={...}, has_srcs=False)
+    fpu = Fpu(_NEWARCH_L1)
+    pack = Pack(_NEWARCH_L1)
+```
+
+plus a factory beside the others in
+[data_transfer_blocks.py](data_transfer_blocks.py):
+
+```python
+NewArchDataTransferBlocks = partial(DataTransferBlocks, NewArch())
+```
+
+`partial`, not a plain function: a function assigned to a class attribute
+becomes a *method*, so `self.blocks_class()` in the operations layer would pass
+`self` as the architecture and raise.
+
+### When a unit's behaviour genuinely differs
+
+Only then does a unit get a second implementation — and only that unit. Write a
+new class implementing the same surface, and name it after what differs rather
+than numbering it:
+
+```python
+class UnpackWithoutTf32(Unpack):   # or a standalone class on the same surface
+    ...
+
+class NewArch(ArchGolden):
+    unpack = UnpackWithoutTf32(_NEWARCH_L1, ...)
+    fpu = Fpu(_NEWARCH_L1)         # unchanged units are reused as-is
+    pack = Pack(_NEWARCH_L1)
+```
+
+Do **not** reach for this to express a different format table — that is what
+the constructor arguments are for. The tripwire: if more than two or three
+units end up with per-architecture variants, the data-vs-behaviour split has
+stopped paying and inheritance is the better tool again.
 
 ### The format divide
 
