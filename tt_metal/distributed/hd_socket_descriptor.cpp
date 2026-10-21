@@ -4,8 +4,7 @@
 
 #include <tt-metalium/experimental/sockets/hd_socket_descriptor.hpp>
 #include <tt-metalium/experimental/sockets/named_shm.hpp>
-#include "common/filesystem_utils.hpp"
-#include "hd_socket_descriptor_serialization.hpp"
+#include "hd_socket_descriptor_generated.h"
 
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/distributed.hpp>
@@ -13,7 +12,13 @@
 #include "impl/context/metal_env_impl.hpp"
 #include <tt-umd/pcie/pci_device.hpp>
 
-#include <vector>
+#include <cerrno>
+#include <chrono>
+#include <cstdio>
+#include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <thread>
 
 namespace tt::tt_metal::distributed {
 
@@ -53,80 +58,103 @@ void HDSocketDescriptor::populate_from_owner(
     pcie_alignment = mesh_device->impl().metal_env().get_hal().get_alignment(HalMemType::HOST);
 }
 
-flatbuffers::Offset<flatbuffer::HDSocketDescriptor> to_flatbuffer(
-    flatbuffers::FlatBufferBuilder& builder, const HDSocketDescriptor& desc) {
-    auto fb_socket_type = builder.CreateString(desc.socket_type);
-    auto fb_shm_name = builder.CreateString(desc.shm_name);
-    auto fb_mesh_coord = builder.CreateVector(desc.mesh_coord);
-    return flatbuffer::CreateHDSocketDescriptor(
+void HDSocketDescriptor::write_to_file(const std::string& path) const {
+    flatbuffers::FlatBufferBuilder builder(512);
+    auto fb_socket_type = builder.CreateString(socket_type);
+    auto fb_shm_name = builder.CreateString(shm_name);
+    auto fb_mesh_coord = builder.CreateVector(mesh_coord);
+
+    auto fb_desc = flatbuffer::CreateHDSocketDescriptor(
         builder,
         fb_socket_type,
         fb_shm_name,
-        desc.shm_size,
-        desc.data_offset,
-        desc.bytes_acked_offset,
-        desc.bytes_sent_offset,
-        desc.fifo_size,
-        desc.h2d_mode,
-        desc.config_buffer_address,
-        desc.aligned_data_buf_start,
-        desc.device_id,
-        desc.core_x,
-        desc.core_y,
-        desc.virtual_core_x,
-        desc.virtual_core_y,
-        desc.pcie_alignment,
-        desc.bytes_acked_device_offset,
-        desc.connector_state_offset,
+        shm_size,
+        data_offset,
+        bytes_acked_offset,
+        bytes_sent_offset,
+        fifo_size,
+        h2d_mode,
+        config_buffer_address,
+        aligned_data_buf_start,
+        device_id,
+        core_x,
+        core_y,
+        virtual_core_x,
+        virtual_core_y,
+        pcie_alignment,
+        bytes_acked_device_offset,
+        connector_state_offset,
         fb_mesh_coord);
-}
+    builder.Finish(fb_desc);
 
-HDSocketDescriptor from_flatbuffer(const flatbuffer::HDSocketDescriptor& fb) {
-    HDSocketDescriptor desc;
-    desc.socket_type = fb.socket_type() ? fb.socket_type()->str() : "";
-    desc.shm_name = fb.shm_name() ? fb.shm_name()->str() : "";
-    desc.shm_size = fb.shm_size();
-    desc.data_offset = fb.data_offset();
-    desc.bytes_acked_offset = fb.bytes_acked_offset();
-    desc.bytes_sent_offset = fb.bytes_sent_offset();
-    desc.fifo_size = fb.fifo_size();
-    desc.h2d_mode = fb.h2d_mode();
-    desc.config_buffer_address = fb.config_buffer_address();
-    desc.aligned_data_buf_start = fb.aligned_data_buf_start();
-    desc.device_id = fb.device_id();
-    desc.core_x = fb.core_x();
-    desc.core_y = fb.core_y();
-    if (fb.mesh_coord() != nullptr) {
-        desc.mesh_coord.assign(fb.mesh_coord()->begin(), fb.mesh_coord()->end());
-    }
-    desc.virtual_core_x = fb.virtual_core_x();
-    desc.virtual_core_y = fb.virtual_core_y();
-    desc.pcie_alignment = fb.pcie_alignment();
-    desc.bytes_acked_device_offset = fb.bytes_acked_device_offset();
-    desc.connector_state_offset = fb.connector_state_offset();
-    return desc;
-}
-
-void HDSocketDescriptor::write_to_file(const std::string& path) const {
-    flatbuffers::FlatBufferBuilder builder(512);
-    builder.Finish(to_flatbuffer(builder, *this));
-    tt::filesystem::write_file_atomically(
-        path, ttsl::Span<const uint8_t>(builder.GetBufferPointer(), builder.GetSize()));
+    std::string tmp_path = path + ".tmp";
+    std::ofstream ofs(tmp_path, std::ios::binary);
+    TT_FATAL(ofs.is_open(), "Failed to open descriptor file for writing: {}", tmp_path);
+    ofs.write(reinterpret_cast<const char*>(builder.GetBufferPointer()), builder.GetSize());
+    ofs.close();
+    TT_FATAL(!ofs.fail(), "Failed to write descriptor file: {}", tmp_path);
+    TT_FATAL(
+        std::rename(tmp_path.c_str(), path.c_str()) == 0,
+        "Failed to rename descriptor file from {} to {}: {}",
+        tmp_path,
+        path,
+        std::strerror(errno));
 }
 
 HDSocketDescriptor HDSocketDescriptor::read_from_file(const std::string& path) {
-    const auto bytes = tt::filesystem::read_file(path);
-    const auto* fb = flatbuffer::GetHDSocketDescriptor(bytes.data());
+    std::ifstream ifs(path, std::ios::binary | std::ios::ate);
+    TT_FATAL(ifs.is_open(), "Failed to open descriptor file for reading: {}", path);
+
+    auto pos = ifs.tellg();
+    TT_FATAL(pos > 0, "Descriptor file is empty or unreadable: {}", path);
+    auto size = static_cast<std::size_t>(pos);
+    ifs.seekg(0, std::ios::beg);
+    std::vector<uint8_t> buf(size);
+    ifs.read(reinterpret_cast<char*>(buf.data()), size);
+    TT_FATAL(!ifs.fail(), "Failed to read descriptor file: {}", path);
+
+    const auto* fb = flatbuffer::GetHDSocketDescriptor(buf.data());
     TT_FATAL(fb, "Failed to parse flatbuffer descriptor from: {}", path);
-    return from_flatbuffer(*fb);
+
+    HDSocketDescriptor desc;
+    desc.socket_type = fb->socket_type() ? fb->socket_type()->str() : "";
+    desc.shm_name = fb->shm_name() ? fb->shm_name()->str() : "";
+    desc.shm_size = fb->shm_size();
+    desc.data_offset = fb->data_offset();
+    desc.bytes_acked_offset = fb->bytes_acked_offset();
+    desc.bytes_sent_offset = fb->bytes_sent_offset();
+    desc.fifo_size = fb->fifo_size();
+    desc.h2d_mode = fb->h2d_mode();
+    desc.config_buffer_address = fb->config_buffer_address();
+    desc.aligned_data_buf_start = fb->aligned_data_buf_start();
+    desc.device_id = fb->device_id();
+    desc.core_x = fb->core_x();
+    desc.core_y = fb->core_y();
+    desc.virtual_core_x = fb->virtual_core_x();
+    desc.virtual_core_y = fb->virtual_core_y();
+    desc.pcie_alignment = fb->pcie_alignment();
+    desc.bytes_acked_device_offset = fb->bytes_acked_device_offset();
+    desc.connector_state_offset = fb->connector_state_offset();
+    if (const auto* mc = fb->mesh_coord()) {
+        desc.mesh_coord.assign(mc->begin(), mc->end());
+    }
+
+    return desc;
 }
 
 HDSocketDescriptor HDSocketDescriptor::wait_and_read(
     const std::string& descriptor_path, const std::string& expected_type, uint32_t timeout_ms) {
-    const auto bytes = tt::filesystem::wait_and_read_file(descriptor_path, timeout_ms);
-    const auto* fb = flatbuffer::GetHDSocketDescriptor(bytes.data());
-    TT_FATAL(fb, "Failed to parse flatbuffer descriptor from: {}", descriptor_path);
-    auto desc = from_flatbuffer(*fb);
+    auto start_time = std::chrono::high_resolution_clock::now();
+    while (!std::filesystem::exists(descriptor_path)) {
+        auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                              std::chrono::high_resolution_clock::now() - start_time)
+                              .count();
+        if (elapsed_ms > timeout_ms) {
+            TT_THROW("Timeout waiting for descriptor file to be created: {}", descriptor_path);
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    auto desc = read_from_file(descriptor_path);
     TT_FATAL(
         desc.socket_type == expected_type,
         "Descriptor type mismatch: expected '{}', got '{}'",
