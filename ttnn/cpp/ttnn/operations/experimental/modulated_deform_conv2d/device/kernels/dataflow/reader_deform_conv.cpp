@@ -141,7 +141,7 @@ constexpr uint16_t CLAMP_BF16 = static_cast<uint16_t>(CLAMP_EXPONENT << 7);
 
 // A value of magnitude OFFSET_CLAMP or more, inf and NaN, become +-OFFSET_CLAMP.
 inline uint32_t saturate_to_fp32(uint16_t bf16) {
-    if (((bf16 >> 7) & 0xFFu) >= CLAMP_EXPONENT) {
+    if (__builtin_expect(((bf16 >> 7) & 0xFFu) >= CLAMP_EXPONENT, 0)) {
         const bool negative = (bf16 & 0x8000u) && (bf16 & 0x7FFFu) <= 0x7F80u;  // NaN goes positive
         return static_cast<uint32_t>(negative ? (0x8000u | CLAMP_BF16) : CLAMP_BF16) << 16;
     }
@@ -341,14 +341,19 @@ void kernel_main() {
             // The mask logits follow the row's 2*K*K offsets.
             const tt_l1_ptr uint16_t* msk = off + 2 * kernel_positions;
             tt_l1_ptr uint32_t* row = geom + tile_element(r, 0);
+            // A kernel position's (dy, dx) pair is one aligned word of the row.
+            const tt_l1_ptr uint32_t* off_pairs = reinterpret_cast<const tt_l1_ptr uint32_t*>(off);
+#pragma GCC unroll 32
             for (uint32_t kk = 0; kk < kernel_positions; ++kk) {
                 tt_l1_ptr uint32_t* dst = row + tile_element(0, kk);
-                dst[IN_DY * TILE_ELEMENTS] = saturate_to_fp32(off[2 * kk]);
-                dst[IN_DX * TILE_ELEMENTS] = saturate_to_fp32(off[2 * kk + 1]);
+                const uint32_t pair = off_pairs[kk];
+                dst[IN_DY * TILE_ELEMENTS] = saturate_to_fp32(static_cast<uint16_t>(pair));
+                dst[IN_DX * TILE_ELEMENTS] = saturate_to_fp32(static_cast<uint16_t>(pair >> 16));
                 dst[IN_MASK * TILE_ELEMENTS] = saturate_to_fp32(msk[kk]);
-                dst[IN_ORIGIN_Y * TILE_ELEMENTS] = origin_y;
-                dst[IN_ORIGIN_X * TILE_ELEMENTS] = origin_x;
             }
+            // The window origin is the same at every kernel position; compute broadcasts column 0.
+            row[IN_ORIGIN_Y * TILE_ELEMENTS] = origin_y;
+            row[IN_ORIGIN_X * TILE_ELEMENTS] = origin_x;
             if (++w_o == OUT_W) {
                 w_o = 0;
                 if (++h_o == OUT_H) {
