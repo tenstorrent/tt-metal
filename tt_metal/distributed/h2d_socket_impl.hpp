@@ -14,6 +14,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/experimental/pinned_memory.hpp>
@@ -92,8 +93,8 @@ public:
     void write(void* data, uint32_t num_pages);
     // Non-blocking write; false when the FIFO cannot take `num_pages` right now.
     bool try_write(void* data, uint32_t num_pages);
-    // Stages up to `max_pages` pages without fences or a notification; see H2DSocket::try_stage_impl.
-    uint32_t try_stage(const void* data, uint32_t max_pages);
+    // Stages up to `num_pages` pages without fences or a notification; see H2DSocket::try_stage_impl.
+    uint32_t try_stage(const uint8_t* const* pages, uint32_t num_pages);
     // notify_receiver without its store fence; publish_staged fences a batch of sockets once.
     void notify_receiver_unfenced();
     void barrier(std::optional<uint32_t> timeout_ms);
@@ -162,6 +163,8 @@ private:
     std::unique_ptr<tt::umd::IoWindow> receiver_core_window_;
     std::shared_ptr<tt::tt_metal::experimental::PinnedMemory> pinned_memory_ = nullptr;
     std::shared_ptr<uint32_t[]> host_buffer_ = nullptr;
+    // HOST_PUSH only: try_stage gathers a run of pages here so that the run goes out in one write.
+    std::vector<uint8_t> stage_buffer_;
     uint32_t* bytes_acked_ptr_ = nullptr;
     std::function<void(void*, uint32_t, uint64_t)> pcie_writer = nullptr;
     H2DMode h2d_mode_ = H2DMode::HOST_PUSH;

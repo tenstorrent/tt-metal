@@ -198,6 +198,10 @@ private:
     // One DRAIN request per page's worth of every sender's live drain targets, for stop to send ahead
     // of STOP.
     std::vector<Request> build_drain_requests();
+    // TT_FATALs unless every page is one socket page, which is what worker_loop sends from each. Runs on
+    // the caller's thread before a request is queued, since a TT_FATAL on the worker thread would end
+    // the process.
+    void validate_request_pages(const std::vector<std::vector<uint8_t>>& sender_pages) const;
     void enumerate_dram_senders();
     RequestTarget target_for(const experimental::GlobalCircularBuffer& gcb) const;
     RequestTarget target_for(
@@ -291,6 +295,9 @@ private:
     std::mutex queue_mu_;
     std::condition_variable queue_cv_;
     std::deque<Request> pending_;
+    // Whether pending_ holds requests the worker has not taken; only written under queue_mu_. Lets
+    // worker_loop skip the lock while it waits for room in the socket FIFOs and nothing new has come.
+    std::atomic<bool> has_pending_{false};
     std::atomic<bool> stop_requested_{false};
 
     // Requests captured during trace capture, keyed by the recording trace's id. Populated by

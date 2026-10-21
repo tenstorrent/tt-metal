@@ -17,6 +17,7 @@
 #include "impl/dataflow_buffer/prefetcher_pipe.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -1493,6 +1494,9 @@ void TensorPrefetcherManager::queue_to_target(
     // requests, so the split is invisible to the receiver. Each logical page is materialized once
     // per mapped sender, since its header names that sender's target state and slab base.
     std::vector<std::vector<std::vector<uint8_t>>> pages = serialize_request_pages(target, tensors);
+    for (const auto& sender_pages : pages) {
+        validate_request_pages(sender_pages);
+    }
 
     // Target devices: subset if given, else full mesh. Caller is responsible
     // for keeping tensors and the target alive until stop() — see the public API doc.
@@ -1537,6 +1541,7 @@ void TensorPrefetcherManager::queue_to_target(
                 trace_requests_[*recording_trace_id].push_back(std::move(req));
             } else {
                 pending_.push_back(std::move(req));
+                has_pending_.store(true);
             }
         }
     }
@@ -1608,6 +1613,18 @@ std::vector<TensorPrefetcherManager::Request> TensorPrefetcherManager::build_dra
     return requests;
 }
 
+void TensorPrefetcherManager::validate_request_pages(const std::vector<std::vector<uint8_t>>& sender_pages) const {
+    // allocate_sockets gives every socket the same page size.
+    const uint32_t socket_page_bytes = sockets_.front()->get_page_size();
+    for (const auto& page : sender_pages) {
+        TT_FATAL(
+            page.size() == socket_page_bytes,
+            "Tensor prefetcher request page is {} B, but its socket's pages are {} B",
+            page.size(),
+            socket_page_bytes);
+    }
+}
+
 void TensorPrefetcherManager::replay_trace(const MeshTraceId& trace_id) {
     {
         std::lock_guard<std::mutex> lk(queue_mu_);
@@ -1619,6 +1636,7 @@ void TensorPrefetcherManager::replay_trace(const MeshTraceId& trace_id) {
         // Copy (not move) so the captured requests survive for the next replay. Pushed in
         // capture order so fifo_wr_ptr continuity matches the original Queue calls.
         pending_.insert(pending_.end(), it->second.begin(), it->second.end());
+        has_pending_.store(true);
     }
     queue_cv_.notify_one();
 }
@@ -1720,10 +1738,12 @@ void TensorPrefetcherManager::enqueue_cq_signal_and_wait(
     header->wait_cq.cq_index = static_cast<uint8_t>(cq_id);
     header->wait_cq.cq_wait_value = signal_value;
     req.target_devices = std::move(target_devices);
+    validate_request_pages(req.sender_pages);
 
     {
         std::lock_guard<std::mutex> lk(queue_mu_);
         pending_.push_back(std::move(req));
+        has_pending_.store(true);
     }
     queue_cv_.notify_one();
 }
@@ -1739,14 +1759,25 @@ void TensorPrefetcherManager::worker_loop() {
     // holding back the publish that lets the senders start.
     constexpr uint32_t kMaxPagesPerSocketWrite = 8;
 
-    // Each socket's unsent pages, in request order. They point into the requests in `taken`, which stay
-    // until every page is sent. A socket's pages reach its sender in request order; sockets advance
-    // independently, as nothing on the device orders one sender's requests against another's.
-    std::vector<std::deque<const uint8_t*>> unsent(sockets_.size());
-    std::deque<Request> taken;
+    // A request taken off pending_, with the number of its socket pages not yet written.
+    struct TakenRequest {
+        Request request;
+        size_t unsent_pages = 0;
+    };
+    struct UnsentPage {
+        const uint8_t* data = nullptr;
+        TakenRequest* owner = nullptr;
+    };
+    // Each socket's unsent pages, in request order. They point into the requests in `taken`, which are
+    // released in the order they were taken once all their pages are written. A socket's pages reach its
+    // sender in request order; sockets advance independently, as nothing on the device orders one sender's
+    // requests against another's.
+    std::vector<std::deque<UnsentPage>> unsent(sockets_.size());
+    std::deque<TakenRequest> taken;
 
     const auto take_request = [&](Request&& request) {
-        const Request& req = taken.emplace_back(std::move(request));
+        TakenRequest& taken_request = taken.emplace_back(TakenRequest{.request = std::move(request)});
+        const Request& req = taken_request.request;
         // PREFETCH targets only the sender cores mapped by its GCB. STOP / WAIT_CQ leave
         // target_sender_indices empty and broadcast to every provisioned sender.
         const bool fanout_all_senders = req.target_sender_indices.empty();
@@ -1758,12 +1789,8 @@ void TensorPrefetcherManager::worker_loop() {
             req.sender_pages.size(),
             req.target_sender_indices.size());
         const auto send_page = [&](uint32_t socket_index, const std::vector<uint8_t>& page) {
-            TT_FATAL(
-                page.size() == sockets_[socket_index]->get_page_size(),
-                "Tensor prefetcher request page is {} B, but its socket's pages are {} B",
-                page.size(),
-                sockets_[socket_index]->get_page_size());
-            unsent[socket_index].push_back(page.data());
+            unsent[socket_index].push_back(UnsentPage{.data = page.data(), .owner = &taken_request});
+            ++taken_request.unsent_pages;
         };
         for (const auto& dev_coord : req.target_devices) {
             auto it = device_index_by_coord_.find(dev_coord);
@@ -1795,17 +1822,14 @@ void TensorPrefetcherManager::worker_loop() {
     };
 
     std::deque<Request> incoming;
-    std::vector<uint8_t> run;
+    std::array<const uint8_t*, kMaxPagesPerSocketWrite> run{};
     std::vector<distributed::H2DSocket*> staged;
     staged.reserve(sockets_.size());
     while (true) {
         // A pass that starts with nothing unsent writes one page per socket, so that a request on its own,
         // or the first of a burst, is published without waiting for the pages behind it.
         const bool starting_idle = std::ranges::all_of(unsent, [](const auto& pages) { return pages.empty(); });
-        if (starting_idle) {
-            taken.clear();
-        }
-        {
+        if (starting_idle || has_pending_.load()) {
             std::unique_lock<std::mutex> lk(queue_mu_);
             if (starting_idle) {
                 queue_cv_.wait(lk, [&] { return !pending_.empty() || stop_requested_.load(); });
@@ -1816,6 +1840,7 @@ void TensorPrefetcherManager::worker_loop() {
                 }
             }
             incoming.swap(pending_);
+            has_pending_.store(false);
         }
         for (Request& req : incoming) {
             take_request(std::move(req));
@@ -1829,18 +1854,25 @@ void TensorPrefetcherManager::worker_loop() {
             if (pages.empty()) {
                 continue;
             }
-            distributed::H2DSocket& socket = *sockets_[socket_index];
-            const uint32_t page_bytes = socket.get_page_size();
             const auto num_pages = static_cast<uint32_t>(std::min<size_t>(max_pages, pages.size()));
-            run.resize(static_cast<size_t>(num_pages) * page_bytes);
             for (uint32_t i = 0; i < num_pages; ++i) {
-                std::memcpy(run.data() + static_cast<size_t>(i) * page_bytes, pages[i], page_bytes);
+                run[i] = pages[i].data;
             }
-            const uint32_t num_staged = experimental::detail::try_stage(socket, run.data(), num_pages);
-            if (num_staged > 0) {
-                pages.erase(pages.begin(), pages.begin() + num_staged);
-                staged.push_back(&socket);
+            distributed::H2DSocket& socket = *sockets_[socket_index];
+            const uint32_t num_staged =
+                experimental::detail::try_stage(socket, ttsl::Span<const uint8_t* const>(run.data(), num_pages));
+            if (num_staged == 0) {
+                continue;
             }
+            for (uint32_t i = 0; i < num_staged; ++i) {
+                --pages[i].owner->unsent_pages;
+            }
+            pages.erase(pages.begin(), pages.begin() + num_staged);
+            staged.push_back(&socket);
+        }
+        // try_stage has copied every page it wrote, so a request with none left unsent is no longer read.
+        while (!taken.empty() && taken.front().unsent_pages == 0) {
+            taken.pop_front();
         }
         if (staged.empty()) {
             // No socket had room this pass, so every socket with pages left is back-pressured;
@@ -1881,6 +1913,10 @@ void TensorPrefetcherManager::stop() {
     // Drain every target still in memory before STOP: the kernel exits on STOP, and receivers that
     // have not acked yet would otherwise land their acks in DRISC L1 the next program may reuse.
     std::vector<Request> drains = build_drain_requests();
+    for (const auto& drain : drains) {
+        validate_request_pages(drain.sender_pages);
+    }
+    validate_request_pages(sentinel.sender_pages);
 
     {
         std::lock_guard<std::mutex> lk(queue_mu_);
@@ -1888,6 +1924,7 @@ void TensorPrefetcherManager::stop() {
             pending_.push_back(std::move(drain));
         }
         pending_.push_back(std::move(sentinel));
+        has_pending_.store(true);
         stop_requested_.store(true);
     }
     queue_cv_.notify_all();

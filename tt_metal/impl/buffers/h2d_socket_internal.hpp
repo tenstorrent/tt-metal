@@ -23,7 +23,7 @@ namespace tt::tt_metal::experimental::detail {
 // public H2DSocket surface.
 struct H2DSocketTryWriteAccess {
     static bool try_write(distributed::H2DSocket& socket, void* data, uint32_t num_pages);
-    static uint32_t try_stage(distributed::H2DSocket& socket, const void* data, uint32_t max_pages);
+    static uint32_t try_stage(distributed::H2DSocket& socket, ttsl::Span<const uint8_t* const> pages);
     static void publish_staged(ttsl::Span<distributed::H2DSocket* const> sockets);
 };
 
@@ -35,13 +35,14 @@ inline bool try_write(distributed::H2DSocket& socket, void* data, uint32_t num_p
     return H2DSocketTryWriteAccess::try_write(socket, data, num_pages);
 }
 
-// Non-blocking writes to many sockets at once. try_stage writes as many of the `max_pages` consecutive
-// pages at `data` into one socket as its FIFO has room for and returns how many (0 if none fit);
-// publish_staged makes everything staged on `sockets` visible to their receivers. A staged page reaches
-// its receiver only through publish_staged. try_write fences each socket twice for each write; a batch
-// of pages on many sockets shares publish_staged's two fences.
-inline uint32_t try_stage(distributed::H2DSocket& socket, const void* data, uint32_t max_pages) {
-    return H2DSocketTryWriteAccess::try_stage(socket, data, max_pages);
+// Non-blocking writes to many sockets at once. try_stage writes as many of `pages` (one pointer per
+// page, each the socket's page size) into one socket as its FIFO has room for, in order, and returns how
+// many (0 if none fit); it reads only the pages it writes. publish_staged makes everything staged on
+// `sockets` visible to their receivers. A staged page reaches its receiver only through publish_staged.
+// try_write fences each socket twice for each write; a batch of pages on many sockets shares
+// publish_staged's two fences.
+inline uint32_t try_stage(distributed::H2DSocket& socket, ttsl::Span<const uint8_t* const> pages) {
+    return H2DSocketTryWriteAccess::try_stage(socket, pages);
 }
 
 inline void publish_staged(ttsl::Span<distributed::H2DSocket* const> sockets) {
