@@ -57,6 +57,7 @@ ttsl::hash::hash_t MinimalMatmulStridedReduceScatterAsync::compute_program_hash(
         spec_without_rows(tensor_args.addcmul_input_tensor1),
         spec_without_rows(tensor_args.addcmul_input_tensor2),
         b_broadcast,
+        attributes.fused_ternary_scalar.has_value(),
         spec_without_rows(tensor_args.mm_optional_input_tensor),
         full_spec(tensor_args.mm_progress_counters),
         full_spec(tensor_args.mm_credit_counters));

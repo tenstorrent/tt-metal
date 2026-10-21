@@ -111,6 +111,7 @@ ttsl::hash::hash_t AllGatherMinimalMatmulAsyncOp::compute_program_hash(
         rows_free(tensor_args.persistent_output_buffer),
         rows_free(tensor_args.fused_ternary_input_a),
         rows_free(tensor_args.fused_ternary_input_b),
+        attributes.fused_ternary_scalar.has_value(),
         tensor_args.persistent_weight_buffer);
 }
 
