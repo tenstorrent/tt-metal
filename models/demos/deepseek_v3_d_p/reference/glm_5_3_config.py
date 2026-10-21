@@ -30,6 +30,9 @@ class GLM53Config:
     # routed-expert matmul shape, expert count and activation (6144x2048, 256 experts, top-8, no
     # pre-projection, SiLU). Re-measure if any of those change.
     ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD = 320
+    # Opts this model into TtMoe's routed expert / combine_fabric2d overlap (Blackhole, traced only). Every
+    # config that does not name it runs the routed expert then combine as separate ops.
+    ROUTED_EXPERT_COMBINE_OVERLAP = True
     INTERMEDIATE_SIZE = 12288  # Dense FFN hidden dimension
 
     # MoE configuration
