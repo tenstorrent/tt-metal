@@ -8,6 +8,7 @@
 
 #include <cstdint>
 #include "api/compute/common_globals.h"
+#include "api/compute/experimental/2_0/dest_sync.h"
 #include "api/compute/experimental/2_0/llk_operand.h"
 #include "experimental/2_0/llk_2_0.h"  // id-free Quasar LLK API
 
@@ -16,70 +17,111 @@ namespace experimental {
 
 // clang-format off
 /**
- * Id-free pack init, Quasar. Programs a fresh pack buffer descriptor whose base is `out.l1_address` and the
- * one-tile pack MOP (pack TRISC). Tiles of the following pack_tile / pack_block calls are indexed relative to
- * that address, so call pack_init again whenever the output address changes (e.g. once per
- * DataflowBuffer::back()) -- on Quasar every op init must precede its op anyway. No uninit.
- *
- * Only 16-bit float operands (Float16_b, Float16) are supported.
+ * Id-free pack init, Quasar. Pack TRISC programs a Pack0 buffer descriptor at out's base, the packer input format
+ * (Float32 with a 32-bit Dest), no ReLU, L1 accumulation off, and the one-tile pack MOP. Joins the PACK unit to the
+ * Dest chain. out's base is the DFB ring base, so one init serves every back() of the ring. Re-init when another
+ * op ran in between (Quasar rule). No uninit. Only 16-bit float operands (Float16_b, Float16).
+ * Pack buffer descriptors: the pack TRISC owns 8 (ids 16..23), re-allocated round robin by each pack_init; an op
+ * only ever executes on the descriptor its own init programmed, so a kernel may call pack_init any number of times.
  *
  * | Param Type | Name                | Description                                       | Type        | Valid Range        | Required |
  * |------------|---------------------|---------------------------------------------------|-------------|--------------------|----------|
- * | Template   | is_fp32_dest_acc_en | fp32 dest-accumulate mode (unused on Quasar)      | bool        |                    | False    |
- * | Template   | Format              | Output L1 data format (deduced from LLKOperand)   | DataFormat  | Float16_b, Float16 | True     |
- * | Template   | Shape               | Output tile geometry (deduced from LLKOperand)    | TensorShape | N/A                | True     |
- * | Function   | out                 | Output operand; l1_address = tile 0 of the packs  | LLKOperand  | N/A                | True     |
+ * | Template   | is_fp32_dest_acc_en | fp32 dest-accumulate mode                         | bool        |                    | False    |
+ * | Template   | Format / Shape      | Output L1 format + geometry (deduced)             | DataFormat/TensorShape | Float16_b, Float16 | True |
+ * | Function   | out                 | Output operand (e.g. DataflowBuffer::back)        | LLKOperand  | N/A                | True     |
  */
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE, DataFormat Format, TensorShape Shape>
 ALWI void pack_init(LLKOperand<Format, Shape> out) {
     static_assert(llk_2_0::is_supported_format(Format), "pack_init (Quasar 2.0): only Float16_b / Float16.");
     static_assert(is_legal_tile_shape(Shape), "pack_init: illegal output tile shape.");
-    PACK((llk_2_0::pack_init<LLKOperand<Format, Shape>::descriptor>(out.l1_address)));
+    detail::dest_join<dest_dvalid_client::PACK>();
+    PACK((llk_2_0::pack_init<LLKOperand<Format, Shape>::descriptor, is_fp32_dest_acc_en>(out.l1_address)));
 }
 
 // clang-format off
 /**
- * Id-free pack, Quasar. Packs Dest tile `ifrom_dst` to output tile `itile` (relative to the address the
- * preceding pack_init programmed). `out` must be the operand passed to that pack_init. Dest synchronization is
- * outside this op: the pack client must hold Dest (dest_acquire) and later release it (dest_release).
+ * Id-free pack of one tile, Quasar: Dest tile `ifrom_dst` -> output tile `itile` of `out` (L1 tile
+ * out.entry_idx + itile * out.stride_tiles). Takes Dest for PACK inside the section the kernel opened with
+ * dest_acquire; PACK cannot be the first unit of a section.
  *
- * | Param Type | Name      | Description                                         | Type        | Valid Range              | Required |
- * |------------|-----------|-----------------------------------------------------|-------------|--------------------------|----------|
- * | Template   | Format    | Output L1 data format (deduced from LLKOperand)     | DataFormat  | Float16_b, Float16       | True     |
- * | Template   | Shape     | Output tile geometry (deduced from LLKOperand)      | TensorShape | N/A                      | True     |
- * | Function   | out       | Output operand (same as the preceding pack_init)    | LLKOperand  | N/A                      | True     |
- * | Function   | itile     | Output tile index relative to the pack_init address | uint32_t    | N/A                      | True     |
- * | Function   | ifrom_dst | Tile index in the Dest register                     | uint32_t    | < tiles per Dest section | True     |
+ * | Param Type | Name           | Description                                  | Type        | Valid Range            | Required |
+ * |------------|----------------|----------------------------------------------|-------------|------------------------|----------|
+ * | Template   | Format / Shape | Output L1 format + geometry (deduced)        | DataFormat/TensorShape | N/A   | True     |
+ * | Function   | out            | Output operand (its base = the pack_init's)  | LLKOperand  | N/A                    | True     |
+ * | Function   | itile          | Output tile index within out                 | uint32_t    | N/A                    | True     |
+ * | Function   | ifrom_dst      | Dest tile index                              | uint32_t    | < Dest tiles / section | True     |
  */
 // clang-format on
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE, DataFormat Format, TensorShape Shape>
-ALWI void pack_tile(LLKOperand<Format, Shape> /*out*/, std::uint32_t itile, std::uint32_t ifrom_dst) {
-    PACK((llk_2_0::pack<LLKOperand<Format, Shape>::descriptor>(ifrom_dst, itile)));
+template <DataFormat Format, TensorShape Shape>
+ALWI void pack_tile(LLKOperand<Format, Shape> out, std::uint32_t itile, std::uint32_t ifrom_dst) {
+    detail::dest_take<dest_dvalid_client::PACK>();
+    PACK((llk_2_0::pack<LLKOperand<Format, Shape>::descriptor>(out.l1_address, ifrom_dst, out.tile(itile))));
 }
 
 // clang-format off
 /**
- * Id-free block pack, Quasar: pack_tile over `ntiles` tiles (Dest tile ifrom_dst+i -> output tile
- * start_out_tile+i). Same init and Dest-sync contract as pack_tile.
+ * Id-free block pack, Quasar: pack_tile over a ct_dim x rt_dim block, Dest tiles start_idst + i -> output tiles
+ * start_itile + i, i < ct_dim * rt_dim. The block must fit one Dest section (static_assert).
  *
- * | Param Type | Name           | Description                                        | Type        | Valid Range                     | Required |
- * |------------|----------------|----------------------------------------------------|-------------|---------------------------------|----------|
- * | Template   | Format         | Output L1 data format (deduced from LLKOperand)    | DataFormat  | Float16_b, Float16              | True     |
- * | Template   | Shape          | Output tile geometry (deduced from LLKOperand)     | TensorShape | N/A                             | True     |
- * | Function   | out            | Output operand (same as the preceding pack_init)   | LLKOperand  | N/A                             | True     |
- * | Function   | ifrom_dst      | First Dest tile                                    | uint32_t    | N/A                             | True     |
- * | Function   | ntiles         | Number of tiles                                    | uint32_t    | ifrom_dst + ntiles <= section size | True  |
- * | Function   | start_out_tile | First output tile, relative to the pack_init address | uint32_t  | N/A                             | False    |
+ * | Param Type | Name                | Description                        | Type       | Valid Range                     | Required |
+ * |------------|---------------------|------------------------------------|------------|---------------------------------|----------|
+ * | Template   | ct_dim / rt_dim     | Block columns / rows (tiles)       | uint32_t   | ct_dim * rt_dim <= section size | True     |
+ * | Template   | is_fp32_dest_acc_en | fp32 dest-accumulate mode          | bool       |                                 | False    |
+ * | Function   | out                 | Output operand                     | LLKOperand | N/A                             | True     |
+ * | Function   | start_itile         | First output tile within out       | uint32_t   | N/A                             | True     |
+ * | Function   | start_idst          | First Dest tile                    | uint32_t   | N/A                             | False    |
+ */
+// clang-format on
+template <
+    std::uint32_t ct_dim,
+    std::uint32_t rt_dim,
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
+    DataFormat Format,
+    TensorShape Shape>
+ALWI void pack_block(LLKOperand<Format, Shape> out, std::uint32_t start_itile, std::uint32_t start_idst = 0) {
+    static_assert(
+        ct_dim * rt_dim <= detail::dest_section_tiles<is_fp32_dest_acc_en>(), "pack_block: block exceeds Dest");
+    for (std::uint32_t i = 0; i < ct_dim * rt_dim; ++i) {
+        pack_tile(out, start_itile + i, start_idst + i);
+    }
+}
+
+// clang-format off
+/**
+ * Id-free block pack with a runtime tile count (tails), Quasar: pack_tile over `ntiles` tiles, Dest tiles
+ * start_idst + i -> output tiles start_itile + i.
+ *
+ * | Param Type | Name                | Description                        | Type       | Valid Range                         | Required |
+ * |------------|---------------------|------------------------------------|------------|-------------------------------------|----------|
+ * | Template   | is_fp32_dest_acc_en | fp32 dest-accumulate mode          | bool       |                                     | False    |
+ * | Function   | out                 | Output operand                     | LLKOperand | N/A                                 | True     |
+ * | Function   | start_itile         | First output tile within out       | uint32_t   | N/A                                 | True     |
+ * | Function   | start_idst          | First Dest tile                    | uint32_t   | N/A                                 | True     |
+ * | Function   | ntiles              | Number of tiles                    | uint32_t   | start_idst + ntiles <= section size | True     |
  */
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE, DataFormat Format, TensorShape Shape>
 ALWI void pack_block(
-    LLKOperand<Format, Shape> out, std::uint32_t ifrom_dst, std::uint32_t ntiles, std::uint32_t start_out_tile = 0) {
+    LLKOperand<Format, Shape> out, std::uint32_t start_itile, std::uint32_t start_idst, std::uint32_t ntiles) {
+    LLK_ASSERT(
+        start_idst + ntiles <= detail::dest_section_tiles<is_fp32_dest_acc_en>(), "pack_block: block exceeds Dest");
     for (std::uint32_t i = 0; i < ntiles; ++i) {
-        pack_tile<is_fp32_dest_acc_en>(out, start_out_tile + i, ifrom_dst + i);
+        pack_tile(out, start_itile + i, start_idst + i);
     }
 }
+
+// clang-format off
+/**
+ * Packer L1 accumulation on/off, Quasar: the one runtime reconfig of the 2.0 API (pack_init turns it off). In a
+ * loop over N partial results the first pack overwrites and packs 1..N-1 accumulate, so it toggles mid-op.
+ *
+ * | Param Type | Name   | Description                               | Type | Valid Range | Required |
+ * |------------|--------|-------------------------------------------|------|-------------|----------|
+ * | Function   | enable | true: packs add into L1; false: overwrite | bool | N/A         | True     |
+ */
+// clang-format on
+ALWI void pack_reconfig_l1_acc(bool enable) { PACK((llk_2_0::pack_set_l1_acc(enable))); }
 
 }  // namespace experimental
 }  // namespace ckernel
