@@ -69,19 +69,9 @@ def _is_fsdp_wrapped_module(module: Any) -> bool:
     return getattr(module, "_fsdp_state", False) and module._fsdp_state is not None
 
 
-def _get_placements(autograd_tensor: Any) -> Optional[List[Any]]:
-    """Best-effort read of ``tensor_topology().placements()`` from the ttnn tensor.
-
-    Returns ``None`` if the topology is unavailable (e.g. unit mesh, older ttnn
-    builds, or an edge case where ``placements()`` throws). Callers must treat
-    a ``None`` return as "no useful placement info; assume replicated".
-    """
-    try:
-        tensor = autograd_tensor.get_value()
-        topology = tensor.tensor_topology()
-        return list(topology.placements())
-    except Exception:
-        return None
+def _get_placements(autograd_tensor: Any) -> List[Any]:
+    """Return the tensor's placement on each mesh axis; see :attr:`ttml.Sharding.placements`."""
+    return ttml.Sharding.from_tensor(autograd_tensor).placements
 
 
 def _is_shard(placement: Any) -> bool:
@@ -601,12 +591,10 @@ def _shard_replicated_param(
     new_placements[axis_index] = ttnn.PlacementShard(shard_dim)
     new_mapper = ttnn.create_mesh_mapper(device, ttnn.MeshMapperConfig(new_placements))
 
-    # Redistribute. Target dtype = the parameter's half-precision dtype
-    # (typically bfloat16); to_numpy returned float32 because the autograd
-    # FULL view is fp32, but from_numpy will convert during host→device.
-    target_dtype = autograd_tensor.get_value().dtype
-    new_at = ttml.autograd.Tensor.from_numpy(full_np, ttnn.Layout.TILE, target_dtype, new_mapper)
-    return new_at.get_value()
+    # Redistribute in the dtype the parameter is stored in. to_numpy gave a
+    # float32 array; from_numpy converts it back during host→device.
+    new_at = ttml.autograd.Tensor.from_numpy(full_np, ttnn.Layout.TILE, autograd_tensor.dtype(), new_mapper)
+    return new_at.get_value(ttml.autograd.PreferredPrecision.NATIVE)
 
 
 def _shard_lazy_param(

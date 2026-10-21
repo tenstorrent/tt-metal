@@ -279,7 +279,6 @@ static experimental::KernelSpec::CompilerOptions::Defines build_reduce_defines(c
         case ReduceType::MAX: reduce_defines.emplace("REDUCE_OP", "PoolType::MAX"); break;
     }
     reduce_defines.emplace("MATH_ONLY", test_config.math_only_reduce ? "1" : "0");
-    reduce_defines.emplace("DST_ACCUM_MODE", test_config.fp32_dest_acc_en ? "1" : "0");
     return reduce_defines;
 }
 
@@ -926,8 +925,8 @@ TEST_F(LLKMeshDeviceSingleCardFixture, TensixComputeReduceWTinyTiles) {
 // results via ELWADDDI (not op_mmul), which reads MxFp4_2x SrcA as zero.
 // Disabled due to hang: tenstorrent/tt-metal#59923
 TEST_F(LLKQuasarMeshDeviceSingleCardFixture, DISABLED_TensixComputeReduceColumnMxFp4X2) {
-    if (MetalContext::instance().rtoptions().get_quasar_arch_variant() == "quasar_4row") {
-        GTEST_SKIP() << "MxFp4_2x register formats do not exist on the 4-row Quasar variant";
+    if (MetalContext::instance().rtoptions().get_quasar_variant() == "trinity") {
+        GTEST_SKIP() << "MxFp4_2x register formats do not exist on Trinity";
     }
     ReduceConfig test_config = {
         .shape = {1, 1, TILE_HEIGHT, TILE_WIDTH},

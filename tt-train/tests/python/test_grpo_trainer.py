@@ -11,9 +11,9 @@ non-degenerate gradient update.
 
 Speed strategy:
   * Tiny random-init Llama (1 layer, hidden=64, head_dim=32).
-  * Skip the HuggingFace weight download by monkey-patching
-    ``snapshot_download`` and ``load_from_safetensors`` in
-    ``utils.llama_completer`` to no-ops; the model keeps its random init.
+  * Skip the HuggingFace weight download: ``snapshot_download`` is patched to
+    return a directory holding only the tiny model's ``config.json``, and
+    ``load_from_safetensors`` to do nothing, so the model keeps its random init.
   * ``max_completion_length=4`` so autoregressive generation is cheap.
   * Exactly one optimizer step (``gradient_accumulation_steps=1``,
     ``num_iterations=1``, ``prompts_to_train=2``). On this single device
@@ -32,6 +32,7 @@ which is a gated HuggingFace repo. To run this in CI without an
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 
@@ -44,7 +45,6 @@ from datasets import Dataset
 
 from ttml.common.config import DeviceConfig, TransformerConfig
 from ttml.trainers import GRPOConfig, GRPOTrainer, TrainerCallback
-
 
 # The ``LlamaGRPOCompleter`` reference implementation lives under the
 # examples tree, not under ``ttml`` proper. Surface its package on the
@@ -60,32 +60,17 @@ if _EXAMPLES_DIR not in sys.path:
 
 from grpo.utils.llama_completer import LlamaCompletionCtx, LlamaGRPOCompleter  # noqa: E402
 
-
 HF_MODEL_ID = "unsloth/Llama-3.2-1B-Instruct"  # not gated
 
 
+# The completer reads the architecture from the checkpoint's config.json; these only set the run.
 TINY_TRANSFORMER_CONFIG = TransformerConfig(
     {
         "transformer_config": {
             "model_type": "llama",
-            "num_heads": 2,
-            "num_groups": 1,
-            "embedding_dim": 64,
-            "intermediate_dim": 128,
             "dropout_prob": 0.0,
-            "num_blocks": 1,
-            "weight_tying": "enabled",
-            # Overwritten by ``len(tokenizer)`` inside the completer ctor.
-            "vocab_size": 32000,
             "max_sequence_length": 128,
             "runner_type": "memory_efficient",
-            "theta": 500000.0,
-            "rope_scaling": {
-                "scaling_factor": 32.0,
-                "high_freq_factor": 4.0,
-                "low_freq_factor": 1.0,
-                "original_context_length": 8192,
-            },
         }
     }
 )
@@ -94,26 +79,33 @@ LLAMA_1B_TRANSFORMER_CONFIG = TransformerConfig(
     {
         "transformer_config": {
             "model_type": "llama",
-            "num_heads": 32,
-            "num_groups": 8,
-            "embedding_dim": 2048,
-            "intermediate_dim": 8192,
             "dropout_prob": 0.0,
-            "num_blocks": 16,
-            "weight_tying": "enabled",
-            "vocab_size": 32000,
             "max_sequence_length": 1024,
             "runner_type": "memory_efficient",
-            "theta": 500000.0,
-            "rope_scaling": {
-                "scaling_factor": 32.0,
-                "high_freq_factor": 4.0,
-                "low_freq_factor": 1.0,
-                "original_context_length": 8192,
-            },
         }
     }
 )
+
+# Llama-3.2-1B shrunk to one narrow layer.
+TINY_HF_CONFIG = {
+    "model_type": "llama",
+    "hidden_size": 64,
+    "intermediate_size": 128,
+    "num_hidden_layers": 1,
+    "num_attention_heads": 2,
+    "num_key_value_heads": 1,
+    "vocab_size": 128256,
+    "rms_norm_eps": 1e-05,
+    "tie_word_embeddings": True,
+    "rope_theta": 500000.0,
+    "rope_scaling": {
+        "rope_type": "llama3",
+        "factor": 32.0,
+        "high_freq_factor": 4.0,
+        "low_freq_factor": 1.0,
+        "original_max_position_embeddings": 8192,
+    },
+}
 
 DEVICE_CONFIG = DeviceConfig(
     {
@@ -178,13 +170,57 @@ class _RecordingCallback(TrainerCallback):
         self.final_step_time_s = trainer.metrics.get("step_time_s")
 
 
-@pytest.fixture
-def patch_llama_weight_loading(monkeypatch):
-    """Skip the HF download / safetensors load so the tiny model keeps random init."""
+def _patch_tiny_checkpoint(monkeypatch, checkpoint_dir, **config_overrides) -> None:
+    """Point the completer at *checkpoint_dir*, holding only the tiny model's ``config.json``, and skip the
+    weight load so the model keeps its random init."""
     from grpo.utils import llama_completer
 
-    monkeypatch.setattr(llama_completer, "snapshot_download", lambda *args, **kwargs: "/tmp/unused")
+    (checkpoint_dir / "config.json").write_text(json.dumps({**TINY_HF_CONFIG, **config_overrides}))
+    monkeypatch.setattr(llama_completer, "snapshot_download", lambda *args, **kwargs: str(checkpoint_dir))
     monkeypatch.setattr(llama_completer, "load_from_safetensors", lambda *args, **kwargs: None)
+
+
+@pytest.fixture
+def patch_llama_weight_loading(monkeypatch, tmp_path_factory):
+    """Skip the HF download / safetensors load so the tiny model keeps random init."""
+    _patch_tiny_checkpoint(monkeypatch, tmp_path_factory.mktemp("tiny_llama"))
+
+
+def _tiny_completer(max_tokens_to_complete: int = 4) -> LlamaGRPOCompleter:
+    return LlamaGRPOCompleter(
+        ctx=LlamaCompletionCtx(max_tokens_to_complete=max_tokens_to_complete, temperature=1.0),
+        transformer_config=TINY_TRANSFORMER_CONFIG,
+        device_config=DEVICE_CONFIG,
+        model_source=HF_MODEL_ID,
+    )
+
+
+@pytest.mark.requires_device
+def test_rejects_a_tokenizer_larger_than_the_checkpoint_vocab(monkeypatch, tmp_path, expect_error):
+    """A token id past the checkpoint's vocab has no embedding row, so the completer refuses it up front."""
+    _patch_tiny_checkpoint(monkeypatch, tmp_path, vocab_size=128000)  # the tokenizer has 128256 tokens
+    with expect_error(ValueError, "the tokenizer has 128256 tokens but the checkpoint embeds 128000"):
+        _tiny_completer()
+
+
+@pytest.mark.requires_device
+def test_never_samples_a_checkpoint_row_past_the_tokenizer(monkeypatch, tmp_path):
+    """Rows past the tokenizer decode to nothing, so the logits mask covers them up to the logits' width: the
+    checkpoint's vocab, since the model slices off its tile padding. Here every such row outscores the real
+    ones, so one left unmasked gets sampled."""
+    _patch_tiny_checkpoint(monkeypatch, tmp_path, vocab_size=128256 + 8, tie_word_embeddings=False)
+    completer = _tiny_completer(max_tokens_to_complete=8)
+    model, num_tokens = completer.model, len(completer.tokenizer)
+    assert model.config.vocab_size > num_tokens, "premise: the checkpoint has rows past the tokenizer"
+
+    lm_head = np.zeros((model.padded_vocab_size, model.config.hidden_size), np.float32)
+    lm_head[num_tokens:] = np.random.default_rng(0).normal(0.0, 4.0, lm_head[num_tokens:].shape)
+    ttml.autograd.assign_numpy(model.fc.weight.tensor, lm_head)
+
+    completions = completer.generate([[1, 2, 3, 4]] * 4)
+
+    assert all(token < num_tokens for completion in completions for token in completion), completions
+    ttml.autograd.AutoContext.get_instance().reset_graph()
 
 
 @pytest.mark.requires_device

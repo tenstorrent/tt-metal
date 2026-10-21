@@ -137,7 +137,7 @@ class VocabParallelEmbedding(AbstractModuleBase):
         full ids, so a shard on the TP axis silently produces wrong embeddings.
         """
         placements = ttml.Sharding.from_tensor(x).placements
-        if placements is None or self.cluster_axis >= len(placements):
+        if self.cluster_axis >= len(placements):
             return
         p = placements[self.cluster_axis]
         if isinstance(p, ttnn.PlacementShard):
@@ -163,7 +163,7 @@ class VocabParallelEmbedding(AbstractModuleBase):
         # Ids stay row-major (arrive RM, gather needs RM), so the index math skips the
         # tile round-trip. int32 is signed, so out-of-range-below ids go negative for the
         # ge(., 0) check.
-        ids = x.get_value(ttml.autograd.PreferredPrecision.FULL)
+        ids = x.get_value(ttml.autograd.PreferredPrecision.NATIVE)
         ids_signed = ttnn.typecast(ids, ttnn.DataType.INT32)
 
         local = ttnn.subtract(ids_signed, self._vocab_start)
@@ -261,7 +261,7 @@ class FeatureParallelEmbedding(AbstractModuleBase):
         so each needs the complete ids; a TP shard would silently drop tokens.
         """
         placements = ttml.Sharding.from_tensor(x).placements
-        if placements is None or self.cluster_axis >= len(placements):
+        if self.cluster_axis >= len(placements):
             return
         p = placements[self.cluster_axis]
         if isinstance(p, ttnn.PlacementShard):
