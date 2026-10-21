@@ -63,7 +63,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     const std::optional<ttnn::Tensor>& kv_actual_isl_tensor,
     std::optional<uint32_t> kv_cache_num_layers,
     std::optional<uint32_t> kv_cache_layer_idx,
-    const std::optional<ttnn::Tensor>& kv_valid_end_tensor) {
+    const std::optional<ttnn::Tensor>& kv_valid_end_tensor,
+    bool dynamic_local_n) {
     auto strategy = use_column_major_ccl ? ttnn::ccl::CoreAllocationStrategy::COL_MAJOR
                                          : ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR;
 
@@ -105,7 +106,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
         kv_actual_isl_tensor,
         kv_cache_num_layers,
         kv_cache_layer_idx,
-        kv_valid_end_tensor);
+        kv_valid_end_tensor,
+        dynamic_local_n);
     return outputs;
 }
 
@@ -722,6 +724,11 @@ void bind_sdpa(nb::module_& mod) {
                 slot_id[0] * kv_cache_num_layers + kv_cache_layer_idx.
             kv_cache_layer_idx (int, optional): Layer within the cache-user slot. None uses 0 and the
                 value must be less than kv_cache_num_layers.
+            dynamic_local_n (bool): Treat the per-chip padded sequence length as a runtime quantity: the program
+                hash ignores it, so one cached program serves every per-chip length up to the persistent
+                buffers' capacity, and a cache hit rewrites the per-core work split only when the length changed.
+                Requires logical_n as a tensor, non-causal MHA with a separate V and no joint tensors. The
+                program config should then be fixed per capacity, not per length. Defaults to False.
             kv_valid_end_tensor (ttnn.Tensor, optional): Global count of real tokens, read on-device;
                 attention stops at the tile holding the last real token of a partially filled chunk. Output
                 rows in the tiles past it are not written and hold unspecified values. Same one-element
@@ -795,7 +802,8 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("kv_actual_isl_tensor").noconvert() = nb::none(),
         nb::arg("kv_cache_num_layers").noconvert() = nb::none(),
         nb::arg("kv_cache_layer_idx").noconvert() = nb::none(),
-        nb::arg("kv_valid_end_tensor").noconvert() = nb::none());
+        nb::arg("kv_valid_end_tensor").noconvert() = nb::none(),
+        nb::arg("dynamic_local_n") = false);
 
     const auto* const ring_mla_doc = R"doc(
         Causal Ring MLA attention over a single KV tensor.

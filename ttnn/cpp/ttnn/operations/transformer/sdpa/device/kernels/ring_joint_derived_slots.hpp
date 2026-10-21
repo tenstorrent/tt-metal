@@ -6,6 +6,8 @@
 
 #include <cstdint>
 
+#include "ttnn/operations/common/shared_with_host/runtime_length.hpp"
+
 // Shared host/kernel contract for the trace-safe logical_n / logical_l transport: the cb_kv_pad_derived
 // slot layout, the common-runtime-arg bases, the partial-tile forcing rule, and the tile-math helpers.
 namespace ttnn::operations::transformer::sdpa::ring_joint {
@@ -28,6 +30,50 @@ constexpr uint32_t kDerivedSlotCount = 9;
 // slot_id addr, num_layers, layer_idx, batch count, kv_actual_isl addr
 constexpr uint32_t kReaderMetadataCommonArgCount = 5;
 constexpr uint32_t kWriterMetadataCommonArgCount = 1;  // kv_actual_isl addr
+constexpr uint32_t kLogicalLengthCommonArgCount = 2;   // logical_n addr, logical_l addr (pair, when either is present)
+
+// dynamic_local_n: the per-chip padded length N_local (in tiles) is one common runtime word per kernel, placed
+// after every other common arg; every count below is derived from it on both sides.
+constexpr uint32_t dynamic_local_n_reader_common_arg(
+    bool slot_from_metadata, bool has_logical_length_tensor, bool has_kv_valid_end) {
+    return (slot_from_metadata ? kReaderMetadataCommonArgCount : 0u) +
+           (has_logical_length_tensor ? kLogicalLengthCommonArgCount : 0u) + (has_kv_valid_end ? 1u : 0u);
+}
+constexpr uint32_t dynamic_local_n_writer_common_arg(
+    bool kv_pad_from_metadata, bool has_logical_length_tensor, bool has_kv_valid_end) {
+    return (kv_pad_from_metadata ? kWriterMetadataCommonArgCount : 0u) +
+           (has_logical_length_tensor ? kLogicalLengthCommonArgCount : 0u) + (has_kv_valid_end ? 1u : 0u);
+}
+constexpr uint32_t kDynamicLocalNComputeCommonArg = 0;
+
+struct LocalNGeometry {
+    uint32_t q_local_padded_Nt;
+    uint32_t kv_local_padded_Nt;
+    uint32_t num_local_q_chunks;
+    uint32_t num_local_k_chunks;
+    uint32_t num_q_chunks;  // local + joint
+    uint32_t kv_region_Nt;
+    uint32_t q_chunk_group_tile_count;
+};
+
+// Q and K/V share the per-chip length on the dynamic path (validated non-chunked).
+constexpr LocalNGeometry derive_local_n_geometry(
+    uint32_t n_local_tiles,
+    uint32_t Sq_chunk_t,
+    uint32_t Sk_chunk_t,
+    uint32_t kv_stripe_split,
+    uint32_t ring_size,
+    uint32_t num_joint_q_chunks) {
+    const uint32_t kv_region_Nt = n_local_tiles / kv_stripe_split;
+    return LocalNGeometry{
+        n_local_tiles,
+        n_local_tiles,
+        ttnn::runtime_length::div_up(n_local_tiles, Sq_chunk_t),
+        ttnn::runtime_length::div_up(n_local_tiles, Sk_chunk_t),
+        ttnn::runtime_length::div_up(n_local_tiles, Sq_chunk_t) + num_joint_q_chunks,
+        kv_region_Nt,
+        kv_region_Nt * ring_size};
+}
 
 // A tile-aligned placeholder implies partial column 0, but a device tensor can land mid-tile at any
 // dispatch, so the boundary tile must exist in the CB layout whenever a length tensor is in play. The
