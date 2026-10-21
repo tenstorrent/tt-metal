@@ -64,7 +64,7 @@ def generate_qsr_pack_combinations(
     is_perf=False,
 ):
     """
-    Generate pack combinations for Quasar pack tests. Trigger PR checks.
+    Generate pack combinations for Quasar pack tests.
 
     Args:
         formats_list: List of input/output format pairs
