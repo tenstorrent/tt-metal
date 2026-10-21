@@ -1787,15 +1787,16 @@ void pytensor_module(nb::module_& mod) {
         [](distributed::MeshDevice& mesh, const distributed::MeshCoordinate& coord, const TensorSpec& spec) {
             // Reserve storage on the selected parent-mesh device without uploading any bytes.
             TT_FATAL(spec.memory_config().buffer_type() == BufferType::L1, "Extent acquisition requires SRAM");
+            const auto sharding_args = spec.compute_buffer_sharding_args();
             TT_FATAL(
-                experimental::per_core_allocation::is_per_core_allocation(spec.memory_config()),
+                experimental::per_core_allocation::is_per_core_allocation(sharding_args),
                 "Extent acquisition requires per-core allocation");
             auto buffer = experimental::per_core_allocation::create_on_single_device(
-                distributed::ReplicatedBufferConfig{.size = spec.compute_packed_buffer_size_bytes()},
-                distributed::DeviceLocalBufferConfig{
+                tt::tt_metal::distributed::ReplicatedBufferConfig{.size = spec.compute_packed_buffer_size_bytes()},
+                tt::tt_metal::distributed::DeviceLocalBufferConfig{
                     .page_size = spec.compute_page_size_bytes(),
                     .buffer_type = spec.memory_config().buffer_type(),
-                    .sharding_args = spec.compute_buffer_sharding_args()},
+                    .sharding_args = sharding_args},
                 &mesh,
                 coord);
             TensorTopology topology(
