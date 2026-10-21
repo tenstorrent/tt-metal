@@ -32,9 +32,10 @@ constexpr uint32_t global_row_of_local(uint32_t local_row, uint32_t rank, uint32
     return ((local_row / chunk_rows) * ranks + rank) * chunk_rows + local_row % chunk_rows;
 }
 
-// Table entries one writer window holds: one slab's run of at most chunk_rows / page_rows pages (a page never straddles
-// a slab), read in whole groups of `group` DRAM-aligned entries, plus one group of slack for the aligned start.
-constexpr uint32_t window_capacity(uint32_t chunk_rows, uint32_t page_rows, uint32_t group) {
+// Table entries one writer table window holds: one slab's run of at most chunk_rows / page_rows pages (a page never
+// straddles a slab), read in whole groups of `group` DRAM-aligned entries, plus one group of slack for the aligned
+// start.
+constexpr uint32_t table_window_capacity(uint32_t chunk_rows, uint32_t page_rows, uint32_t group) {
     return ((chunk_rows / page_rows + group - 1) / group + 1) * group;
 }
 

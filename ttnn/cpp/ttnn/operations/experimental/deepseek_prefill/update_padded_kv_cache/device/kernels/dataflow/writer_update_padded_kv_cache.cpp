@@ -26,14 +26,14 @@ inline uint32_t local_cache_offset(uint32_t prefix, uint32_t coordinate, uint32_
 
 // The two runs of the request's page-table row one write can touch, loaded into L1. A chip writes one contiguous
 // run of local rows, which crosses at most one slab boundary; each slab is one contiguous run of logical pages.
-struct PageWindows {
+struct TableWindows {
     uint32_t base[2] = {0, 0};
     uint32_t count[2] = {0, 0};
     uint32_t l1[2] = {0, 0};
 
     uint32_t lookup(uint32_t kv_page) const {
         for (uint32_t w = 0; w < 2; ++w) {
-            // Unsigned: a page below the window's base wraps past its count, so one compare tests both bounds.
+            // Unsigned: a page below the table window's base wraps past its count, so one compare tests both bounds.
             if (kv_page - base[w] < count[w]) {
                 return CoreLocalMem<volatile uint32_t>(l1[w])[kv_page - base[w]];
             }
@@ -42,14 +42,15 @@ struct PageWindows {
     }
 };
 
-// Loads the KV pages [first, end) of `row` into window `w`. The read starts on a DRAM-aligned entry and covers whole
-// aligned groups, which stay inside the row's DRAM page (the allocator pads every page to the DRAM alignment); the
-// window holds only [aligned first, end), so a page past `end` looks up as unmapped rather than as the row's padding.
+// Loads the KV pages [first, end) of `row` into table window `w`. The read starts on a DRAM-aligned entry and covers
+// whole aligned groups, which stay inside the row's DRAM page (the allocator pads every page to the DRAM alignment);
+// the table window holds only [aligned first, end), so a page past `end` looks up as unmapped rather than as the row's
+// padding.
 template <typename TableAccessor>
-inline void load_page_window(
+inline void load_table_window(
     Noc& noc,
     const TableAccessor& table,
-    PageWindows& windows,
+    TableWindows& table_windows,
     uint32_t w,
     uint32_t row,
     uint32_t first,
@@ -59,12 +60,12 @@ inline void load_page_window(
     const uint32_t entries = (end - aligned_first + align - 1) / align * align;
     noc.async_read(
         table,
-        CoreLocalMem<uint32_t>(windows.l1[w]),
+        CoreLocalMem<uint32_t>(table_windows.l1[w]),
         entries * sizeof(uint32_t),
         {.page_id = row, .offset_bytes = aligned_first * static_cast<uint32_t>(sizeof(uint32_t))},
         {});
-    windows.base[w] = aligned_first;
-    windows.count[w] = end - aligned_first;
+    table_windows.base[w] = aligned_first;
+    table_windows.count[w] = end - aligned_first;
 }
 
 }  // namespace
@@ -189,7 +190,7 @@ static void run_writer() {
     const uint32_t start_idx = batch_idx * cache_CHtWt + update_idxt * Wt;
 
     static_assert(!(Paged && (HasRope || HasScaled || TiledRope)), "a paged cache takes the plain copy path only");
-    PageWindows windows;
+    TableWindows table_windows;
     uint32_t rows_per_kv_page = 1;
     uint32_t pool_kv_pages = 0;
     if constexpr (Paged) {
@@ -209,21 +210,22 @@ static void run_writer() {
         CircularBuffer cb_table(get_compile_time_arg_val(10));
         cb_table.reserve_back(1);
         constexpr uint32_t align_bytes = DRAM_ALIGNMENT;
-        windows.l1[0] = (cb_table.get_write_ptr() + align_bytes - 1) / align_bytes * align_bytes;
-        windows.l1[1] =
-            windows.l1[0] +
-            paged::window_capacity(chunk_local_t, rows_per_kv_page, align_bytes / sizeof(uint32_t)) * sizeof(uint32_t);
+        table_windows.l1[0] = (cb_table.get_write_ptr() + align_bytes - 1) / align_bytes * align_bytes;
+        table_windows.l1[1] =
+            table_windows.l1[0] +
+            paged::table_window_capacity(chunk_local_t, rows_per_kv_page, align_bytes / sizeof(uint32_t)) *
+                sizeof(uint32_t);
 
         if (rows_to_write > 0) {
             const auto kv_page_of = [&](uint32_t local_row) {
                 return paged::global_row_of_local(local_row, my_sp_coord, sp_factor, chunk_local_t) / rows_per_kv_page;
             };
-            // Local rows [lo, hi] of one slab -> one window; KV pages past the row's width stay unmapped.
+            // Local rows [lo, hi] of one slab -> one table window; KV pages past the row's width stay unmapped.
             const auto load = [&](uint32_t w, uint32_t lo, uint32_t hi) {
                 const uint32_t first_kv_page = kv_page_of(lo);
                 const uint32_t end_kv_page = kv_page_of(hi) + 1 < table_width ? kv_page_of(hi) + 1 : table_width;
                 if (first_kv_page < end_kv_page) {
-                    load_page_window(noc, table, windows, w, slot_idx, first_kv_page, end_kv_page);
+                    load_table_window(noc, table, table_windows, w, slot_idx, first_kv_page, end_kv_page);
                 }
             };
             const uint32_t first = update_idxt;
@@ -280,15 +282,15 @@ static void run_writer() {
                 row_in_chunk = local_row % chunk_local_t;
                 row_in_kv_page = global_row % rows_per_kv_page;
                 kv_page = global_row / rows_per_kv_page;
-                physical = windows.lookup(kv_page);
+                physical = table_windows.lookup(kv_page);
             } else if (++row_in_chunk == chunk_local_t) {
                 row_in_chunk = 0;
                 row_in_kv_page = 0;
                 kv_page += slab_page_jump;
-                physical = windows.lookup(kv_page);
+                physical = table_windows.lookup(kv_page);
             } else if (++row_in_kv_page == rows_per_kv_page) {
                 row_in_kv_page = 0;
-                physical = windows.lookup(++kv_page);
+                physical = table_windows.lookup(++kv_page);
             }
             mapped = physical < pool_kv_pages;
             // A pool entry holds one head (validate_paged), so the head term of the contiguous address drops out.

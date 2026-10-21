@@ -93,7 +93,7 @@ constexpr uint32_t kMetaCbIndex = 1;
 // would race the writer's own metadata reads.
 constexpr uint32_t kReaderMetaCbIndex = 2;
 constexpr uint32_t kMetadataBytes = 16;
-// L1 windows of the request's page-table row (paged cache only).
+// L1 table windows of the request's page-table row (paged cache only).
 constexpr uint32_t kPageTableCbIndex = 4;
 
 namespace paged_kv = ttnn::operations::experimental::paged_kv;
@@ -798,12 +798,13 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
         }
     }
 
-    // Two windows of the page-table row, plus one DRAM alignment unit so the kernel can align them for DRAM reads.
+    // Two table windows of the page-table row, plus one DRAM alignment unit so the kernel can align them for DRAM
+    // reads.
     const uint32_t rows_per_kv_page = paged ? cache_shape[-2] / writer_tile_height : 1;
     if (paged) {
         const uint32_t align_bytes = tt::tt_metal::hal::get_dram_alignment();
         const uint32_t table_cb_bytes =
-            2 * paged_kv::window_capacity(chunk_local_t, rows_per_kv_page, align_bytes / sizeof(uint32_t)) *
+            2 * paged_kv::table_window_capacity(chunk_local_t, rows_per_kv_page, align_bytes / sizeof(uint32_t)) *
                 sizeof(uint32_t) +
             align_bytes;
         desc.cbs.push_back(CBDescriptor{
