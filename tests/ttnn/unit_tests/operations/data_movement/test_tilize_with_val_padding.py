@@ -912,6 +912,56 @@ def test_tilize_with_val_padding_program_cache_addr_change_interleaved_multicore
     )
 
 
+@pytest.mark.parametrize(
+    "tilize_op",
+    [ttnn.tilize_with_val_padding, ttnn.experimental.quasar.tilize_with_val_padding],
+    ids=["ttnn", "quasar"],
+)
+def test_tilize_with_val_padding_program_cache_ignores_unrelated_l1_allocations(device, tilize_op):
+    """Unrelated resident L1 tensors must not fork the program cache (#58402 item 9).
+
+    [1, 5120, 32] is one tile wide and 160 tiles tall, so CBs for a row of tiles need about 4 KB and
+    CBs for a column about 650 KB. Between the two calls a 1 MiB L1 tensor is allocated; L1 is
+    allocated in lockstep across cores, so it shrinks free L1 on every core to a few hundred KB.
+    A row still fits and a column no longer does. The program depends only on the row, so the
+    second call must hit the entry the first one created.
+    """
+    torch.manual_seed(0)
+    shape = ttnn.Shape([1, 5120, 32])
+    dram = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+    torch_input = torch.rand(list(shape), dtype=torch.bfloat16)
+    tt_input = ttnn.from_torch(
+        torch_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=dram
+    )
+
+    device.enable_program_cache()
+    device.clear_program_cache()
+
+    tt_output = tilize_op(tt_input, shape, 0.0, memory_config=dram, use_multicore=True)
+    assert_equal(torch_input, ttnn.to_torch(tt_output))
+    entries = device.num_program_cache_entries()
+    assert entries == 1, "the first invocation should have populated the program cache"
+
+    l1_shard = ttnn.ShardSpec(
+        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
+        [512, 1024],
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    keep_alive = ttnn.allocate_tensor_on_device(  # held across the second call so the L1 stays occupied
+        ttnn.Shape([512, 1024]),
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
+        device,
+        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, l1_shard),
+    )
+
+    tt_output = tilize_op(tt_input, shape, 0.0, memory_config=dram, use_multicore=True)
+    assert_equal(torch_input, ttnn.to_torch(tt_output))
+    assert (
+        device.num_program_cache_entries() == entries
+    ), "resident L1 allocations must not change tilize_with_val_padding's program-cache key"
+
+
 # TilizeWithValPaddingMultiCoreBlockInterleavedFactory gives cores one of two block widths, and a
 # block's width fixes the size of the buffers carrying it: the reader fills a block with one raw
 # linear write, and cb_push_back requires the producer to write contiguously, so a buffer whose
