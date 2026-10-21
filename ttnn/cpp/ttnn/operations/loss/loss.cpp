@@ -53,6 +53,14 @@ Tensor loss_function(
     }
 
     if (optional_output_tensor.has_value()) {
+        TT_FATAL(
+            optional_output_tensor.value().logical_shape() == reduced.logical_shape(),
+            "Loss reduction mode {} produces a tensor with logical shape {}, but optional_output_tensor has logical "
+            "shape {}",
+            reduce_mode,
+            reduced.logical_shape(),
+            optional_output_tensor.value().logical_shape());
+
         ttnn::copy(reduced, optional_output_tensor.value());
         return optional_output_tensor.value();
     }
@@ -69,7 +77,8 @@ Tensor mse_loss(
     operations::loss::LossReductionMode mode,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
-    return operations::loss::loss_utils::loss_function(ref, prediction, operations::loss::LossFunction::MSE, mode, memory_config, optional_output_tensor);
+    return operations::loss::loss_utils::loss_function(
+        ref, prediction, operations::loss::LossFunction::MSE, mode, memory_config, optional_output_tensor);
 }
 
 Tensor l1_loss(
@@ -78,7 +87,8 @@ Tensor l1_loss(
     operations::loss::LossReductionMode mode,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
-    return operations::loss::loss_utils::loss_function(ref, prediction, operations::loss::LossFunction::MAE, mode, memory_config, optional_output_tensor);
+    return operations::loss::loss_utils::loss_function(
+        ref, prediction, operations::loss::LossFunction::MAE, mode, memory_config, optional_output_tensor);
 }
 
 }  // namespace ttnn
