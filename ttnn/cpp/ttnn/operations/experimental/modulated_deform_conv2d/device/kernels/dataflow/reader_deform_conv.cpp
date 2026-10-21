@@ -409,12 +409,9 @@ void kernel_main() {
     for (uint32_t pass = 0; pass < PASSES; ++pass) {
         const uint32_t kk = pass / CHUNKS;
         const uint32_t chunk_offset = (pass % CHUNKS) * STICK_NBYTES;
-        if constexpr (LOADS_WEIGHT) {
-            // The next slice loads while compute works through this one; the CB holds two.
-            if (pass + 1 < PASSES) {
-                begin_weight_slice();
-            }
-        }
+        // The next slice's slot frees only once compute is through the previous pass, so it is
+        // claimed after this pass's first block of corners, not before them; the CB holds two.
+        bool slice_begun = !LOADS_WEIGHT || pass + 1 >= PASSES;
         uint32_t slot = 0;  // this copy's blocks, in order; their geometry stays in its CBs
         for (uint32_t j = BLOCK_PARITY; j < num_blocks; j += 2, ++slot) {
             const uint32_t block = start_block + j;
@@ -523,6 +520,10 @@ void kernel_main() {
                 Noc(1 - noc_index).async_read_barrier();
             }
             corner_block_cb.push_back(CORNERS * CHUNK_TILES);
+            if (!slice_begun) {
+                begin_weight_slice();
+                slice_begun = true;
+            }
             // Compute took this block's inputs before its geometry came back, so the slot is free
             // for the copy's next block, which compute needs once it is through this one.
             if (pass == 0 && j + 2 < num_blocks) {
@@ -531,6 +532,10 @@ void kernel_main() {
         }
         if constexpr (LOADS_WEIGHT) {
             if (pass + 1 < PASSES) {
+                // A copy without blocks still joins every slice's multicast.
+                if (!slice_begun) {
+                    begin_weight_slice();
+                }
                 finish_weight_slice(pass + 1);
             }
         }
