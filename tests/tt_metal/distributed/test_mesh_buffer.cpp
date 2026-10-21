@@ -4,6 +4,9 @@
 
 #include <boost/move/utility_core.hpp>
 #include <gtest/gtest.h>
+#include "gmock/gmock.h"
+#include <tt-metalium/tensor/spec/tensor_spec.hpp>
+#include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
 #include <algorithm>
 #include <cstdint>
 #include <cstdlib>
@@ -159,32 +162,64 @@ TEST_F(MeshBufferViewTest, RejectsInvalidPlacements) {
         .sharding_args = BufferShardingArgs(config.shard_parameters(), config.mem_config)};
     const ReplicatedBufferConfig replicated{.size = config.num_pages() * config.page_size()};
     auto owner = MeshBuffer::create(replicated, local, mesh_device_.get());
+    const TensorSpec spec(
+        Shape{2, 64},
+        TensorLayout(
+            DataType::UINT32,
+            PageConfig(Layout::ROW_MAJOR),
+            MemoryConfig(
+                TensorMemoryLayout::HEIGHT_SHARDED,
+                BufferType::L1,
+                ShardSpec(config.shard_grid(), {1, 64}, ShardOrientation::ROW_MAJOR))));
     const DeviceAddr address = owner->address();
     const MeshCoordinate coord(0, 0);
     const std::vector<SRAMTensorViewAddress> valid{
         {MeshCoreCoord{coord, CoreCoord(0, 0)}, address}, {MeshCoreCoord{coord, CoreCoord(1, 0)}, address}};
-    EXPECT_EQ(create_sram_buffer_view(*mesh_device_, replicated, local, valid).address(), address);
-    EXPECT_THROW(create_sram_buffer_view(*mesh_device_, replicated, local, {}), std::exception);
-    EXPECT_THROW(create_sram_buffer_view(*mesh_device_, replicated, local, {valid.front()}), std::exception);
+    using ::testing::HasSubstr;
+    using ::testing::ThrowsMessage;
+    EXPECT_EQ(create_sram_buffer_view(*mesh_device_, spec, valid).address(), address);
+    EXPECT_THAT(
+        [&] { create_sram_buffer_view(*mesh_device_, spec, {}); },
+        ThrowsMessage<std::runtime_error>(HasSubstr("requires addresses")));
+    EXPECT_THAT(
+        [&] { create_sram_buffer_view(*mesh_device_, spec, {valid.front()}); },
+        ThrowsMessage<std::runtime_error>(HasSubstr("must cover every configured data core")));
     auto invalid = valid;
     invalid.push_back(valid.front());
-    EXPECT_THROW(create_sram_buffer_view(*mesh_device_, replicated, local, invalid), std::exception);
+    EXPECT_THAT(
+        [&] { create_sram_buffer_view(*mesh_device_, spec, invalid); },
+        ThrowsMessage<std::runtime_error>(HasSubstr("Duplicate SRAM view placement")));
     invalid = valid;
     invalid.back().first.core_coord = CoreCoord(2, 0);
-    EXPECT_THROW(create_sram_buffer_view(*mesh_device_, replicated, local, invalid), std::exception);
+    EXPECT_THAT(
+        [&] { create_sram_buffer_view(*mesh_device_, spec, invalid); },
+        ThrowsMessage<std::runtime_error>(HasSubstr("core is not in the buffer configuration")));
     invalid = valid;
     invalid.back().second += 1;
-    EXPECT_THROW(create_sram_buffer_view(*mesh_device_, replicated, local, invalid), std::exception);
+    EXPECT_THAT(
+        [&] { create_sram_buffer_view(*mesh_device_, spec, invalid); },
+        ThrowsMessage<std::runtime_error>(HasSubstr("address must be aligned")));
     invalid.back().second = address + 256;
-    EXPECT_THROW(create_sram_buffer_view(*mesh_device_, replicated, local, invalid), std::exception);
+    EXPECT_THAT(
+        [&] { create_sram_buffer_view(*mesh_device_, spec, invalid); },
+        ThrowsMessage<std::runtime_error>(HasSubstr("requires one address on every core")));
     invalid = valid;
     invalid.front().first.device_coord = MeshCoordinate(0, 1);
-    EXPECT_THROW(create_sram_buffer_view(*mesh_device_, replicated, local, invalid), std::exception);
+    EXPECT_THAT(
+        [&] { create_sram_buffer_view(*mesh_device_, spec, invalid); },
+        ThrowsMessage<std::runtime_error>(HasSubstr("device coordinate is outside the mesh")));
     invalid = valid;
     for (auto& [location, value] : invalid) {
         value = mesh_device_->get_device(coord)->l1_size_per_core();
     }
-    EXPECT_THROW(create_sram_buffer_view(*mesh_device_, replicated, local, invalid), std::exception);
+    EXPECT_THAT(
+        [&] { create_sram_buffer_view(*mesh_device_, spec, invalid); },
+        ThrowsMessage<std::runtime_error>(HasSubstr("exceeds device SRAM")));
+    invalid = valid;
+    invalid.front().second = 0;
+    EXPECT_THAT(
+        [&] { create_sram_buffer_view(*mesh_device_, spec, invalid); },
+        ThrowsMessage<std::runtime_error>(HasSubstr("below allocatable SRAM")));
 }
 
 // Different per-core addresses must survive transfers and view destruction without touching neighbors.
@@ -204,11 +239,16 @@ TEST_F(MeshBufferViewTest, DistinctCoreAddressesPreserveBacking) {
     config.num_pages_per_core = {1, 1};
     local.sharding_args = BufferShardingArgs(config.shard_parameters(), config.mem_config);
     set_per_core_allocation(local.sharding_args, true);
+    MemoryConfig memory(
+        TensorMemoryLayout::HEIGHT_SHARDED,
+        BufferType::L1,
+        ShardSpec(config.shard_grid(), {1, 64}, ShardOrientation::ROW_MAJOR));
+    set_per_core_allocation(memory, true);
+    const TensorSpec spec(Shape{2, 64}, TensorLayout(DataType::UINT32, PageConfig(Layout::ROW_MAJOR), memory));
     // These legacy transfer helpers require shared ownership; the view factory itself does not.
     auto view = std::make_shared<MeshBuffer>(create_sram_buffer_view(
         *mesh_device_,
-        ReplicatedBufferConfig{.size = 512},
-        local,
+        spec,
         {{MeshCoreCoord{coord, CoreCoord(0, 0)}, owner->address()},
          {MeshCoreCoord{coord, CoreCoord(1, 0)}, owner->address() + 256}}));
     std::vector<uint32_t> values(128, 17);

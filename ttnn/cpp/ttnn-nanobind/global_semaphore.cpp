@@ -12,6 +12,8 @@
 #include "ttnn/global_semaphore.hpp"
 #include <tt-metalium/global_semaphore.hpp>
 #include <tt-metalium/experimental/forge_backdoor/global_semaphore.hpp>
+#include <tt-metalium/experimental/per_core_allocation/mesh_buffer.hpp>
+#include <tt-metalium/allocator.hpp>
 #include <nanobind/stl/optional.h>
 
 namespace ttnn::global_semaphore {
@@ -21,7 +23,22 @@ void py_module_types(nb::module_& mod) { nb::class_<GlobalSemaphore>(mod, "globa
 void py_module(nb::module_& mod) {
     mod.def(
         "experimental_create_global_semaphore_at_address",
-        &tt::tt_metal::experimental::CreateGlobalSemaphore,
+        [](tt::tt_metal::distributed::MeshDevice& mesh,
+           const tt::tt_metal::CoreRangeSet& cores,
+           std::optional<uint32_t> initial_value,
+           tt::tt_metal::BufferType buffer_type,
+           uint64_t address) {
+            // Validate every device before the backdoor performs any initialization writes.
+            using namespace tt::tt_metal;
+            TT_FATAL(buffer_type == BufferType::L1, "Address-based semaphores require ordinary SRAM");
+            for (auto* device : mesh.get_devices()) {
+                const uint64_t alignment = device->allocator()->get_alignment(BufferType::L1);
+                const auto footprint = ((sizeof(uint32_t) + alignment - 1) / alignment) * alignment;
+                tt::tt_metal::experimental::per_core_allocation::detail::validate_sram_address(
+                    *device, address, footprint);
+            }
+            return tt::tt_metal::experimental::CreateGlobalSemaphore(mesh, cores, initial_value, buffer_type, address);
+        },
         nb::arg("mesh_device"),
         nb::arg("cores"),
         nb::arg("initial_value"),
@@ -29,7 +46,8 @@ void py_module(nb::module_& mod) {
         nb::arg("address"),
         nb::keep_alive<0, 1>(),
         "Initialize a non-owning semaphore at one address on all supplied mesh devices and cores. "
-        "The caller retains backing and validates its padded write footprint.");
+        "Metal validates alignment and SRAM bounds; the caller retains backing and validates its padded write "
+        "footprint.");
     mod.def(
         "create_global_semaphore",
         &ttnn::global_semaphore::create_global_semaphore,
