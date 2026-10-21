@@ -4,8 +4,6 @@
 
 #pragma once
 
-#include <limits>
-
 #include "ckernel.h"
 #include "ckernel_sfpu_recip.h"
 #include "cmath_common.h"
@@ -17,17 +15,9 @@ inline void calculate_softsign() {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat v = sfpi::dst_reg[0];
-        sfpi::vFloat abs_v = sfpi::abs(v);
-        sfpi::vFloat result;
-        v_if(abs_v == std::numeric_limits<float>::infinity()) {
-            result = sfpi::setsgn(1.0f, v);
-        }
-        v_else {
-            sfpi::vFloat tmp = sfpu_reciprocal<APPROXIMATION_MODE>(abs_v + 1.0f);
-            result = v * tmp;
-        }
-        v_endif;
-        sfpi::dst_reg[0] = result;
+        sfpi::vFloat tmp = sfpi::abs(v) + 1.0f;
+        tmp = sfpu_reciprocal<APPROXIMATION_MODE>(tmp);
+        sfpi::dst_reg[0] = v * tmp;
         sfpi::dst_reg++;
     }
 }
