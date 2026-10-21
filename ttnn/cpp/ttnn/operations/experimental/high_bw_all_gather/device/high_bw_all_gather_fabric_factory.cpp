@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// high_bw_all_gather's default program factory (legacy=True selects the unicast one).
+// high_bw_all_gather's program factory.
 // Terms: kernels/fabric/fabric_all_gather_chunk_walk.hpp.
 //
 // build_gather_plan decides the rings, every fabric link worker's outgoing shards and every core's placement; the

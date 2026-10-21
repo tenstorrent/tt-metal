@@ -1,8 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""ttnn.experimental.high_bw_all_gather (the fabric program, and the deprecated legacy=True program), bit-exact against a
-torch reference on every chip.
+"""ttnn.experimental.high_bw_all_gather, bit-exact against a torch reference on every chip.
 
 Every output is preallocated and pre-filled with random bytes, so a case also checks what the op must leave untouched.
 Covered: TILE and ROW_MAJOR, interleaved and ND-sharded DRAM input into an interleaved DRAM output, every cluster_axis
@@ -52,7 +51,6 @@ TORUS_14K = pytest.param(_device_params(ttnn.FabricConfig.FABRIC_2D_TORUS_XY, 14
 MESH = pytest.mark.parametrize("mesh_device", [_system_mesh()], indirect=True)
 LAYOUTS = pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT], ids=["tile", "row_major"])
 INPUT_MEMORY = pytest.mark.parametrize("nd_sharded", [False, True], ids=["interleaved", "nd_sharded"])
-PROGRAMS = pytest.mark.parametrize("legacy", [False, True], ids=["fabric", "legacy"])
 
 
 def _random(shape, dtype):
@@ -137,7 +135,6 @@ _GATHER_CASES = [
     pytest.param(ttnn.TILE_LAYOUT, 1, id="tile-dim1"),
     pytest.param(ttnn.ROW_MAJOR_LAYOUT, 2, id="row_major-dim2"),
     pytest.param(ttnn.ROW_MAJOR_LAYOUT, 1, id="row_major-dim1"),
-    pytest.param(ttnn.ROW_MAJOR_LAYOUT, 3, id="row_major-dim3"),  # partial pages: always the legacy program
 ]
 
 
@@ -147,8 +144,7 @@ _GATHER_CASES = [
 @INPUT_MEMORY
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.uint32], ids=["bf16", "uint32"])
 @pytest.mark.parametrize("layout,dim", _GATHER_CASES)
-@PROGRAMS
-def test_gather(mesh_device, cluster_axis, nd_sharded, dtype, layout, dim, legacy):
+def test_gather(mesh_device, cluster_axis, nd_sharded, dtype, layout, dim):
     """Every chip ends with the whole gathered tensor. The second call is a program-cache hit on new input and output
     buffers, so the cached program must take its addresses from the call."""
     _skip_singleton(mesh_device, cluster_axis)
@@ -161,7 +157,7 @@ def test_gather(mesh_device, cluster_axis, nd_sharded, dtype, layout, dim, legac
         host = _random(gathered, dtype)
         inp = _input(mesh_device, host, dtype, layout, mapper(dim), nd_sharded, local_width=local[-1])
         out, _ = _output(mesh_device, gathered, dtype, layout)
-        result = _gather(mesh_device, inp, out, dim=dim, cluster_axis=cluster_axis, legacy=legacy)
+        result = _gather(mesh_device, inp, out, dim=dim, cluster_axis=cluster_axis)
         assert result.buffer_address() == out.buffer_address(), "the op must return the preallocated output"
         _check(out, host, f"call {call}")
 
@@ -228,8 +224,7 @@ def _slot_expected(expected, host, G, slot, extent):
 @pytest.mark.parametrize("cluster_axis", [1, None], ids=["axis1", "full_mesh"])
 @INPUT_MEMORY
 @LAYOUTS
-@PROGRAMS
-def test_slot_select_partial_extent(mesh_device, cluster_axis, nd_sharded, layout, legacy):
+def test_slot_select_partial_extent(mesh_device, cluster_axis, nd_sharded, layout):
     """input_batch_index + gathered_dim_size: one slot, a block-cyclic prefix; the output's other rows keep their bytes
     across calls (earlier, longer calls leave their rows in place)."""
     _skip_singleton(mesh_device, cluster_axis)
@@ -245,10 +240,24 @@ def test_slot_select_partial_extent(mesh_device, cluster_axis, nd_sharded, layou
             cluster_axis=cluster_axis,
             input_batch_index=slot,
             gathered_dim_size=extent,
-            legacy=legacy,
         )
         expected = _slot_expected(expected, host, G, slot, extent)
         _check(out, expected, f"slot {slot} extent {extent}")
+
+
+@pytest.mark.parametrize("device_params", [TORUS_6K], indirect=True)
+@MESH
+def test_row_major_innermost_dim_rejected(mesh_device, expect_error):
+    """Pages move whole: a ROW_MAJOR gather along the innermost dim (every output row mixes ranks) is rejected."""
+    G, mapper = _group(mesh_device, None)
+    host = _random((1, 1, 64, 64 * G), ttnn.bfloat16)
+    innermost = len(host.shape) - 1
+    inp = _input(mesh_device, host, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, mapper(innermost), nd_sharded=False)
+    out, _ = _output(mesh_device, host.shape, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT)
+    with expect_error(RuntimeError, "cannot gather a ROW_MAJOR tensor along its innermost dim"):
+        ttnn.experimental.high_bw_all_gather(
+            inp, dim=innermost, output_tensor=out, cluster_axis=None, num_links=NUM_LINKS
+        )
 
 
 @pytest.mark.parametrize("device_params", [TORUS_6K], indirect=True)
