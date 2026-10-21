@@ -830,7 +830,7 @@ private:
         // cache at all (P == 1 included). Compiles out on WH/BH, and sync_threads() returns
         // immediately when the kernel has one thread, so the single-thread path only pays
         // the one-time invalidate here and the flush in the dtor.
-        invalidate_local_credit_lines(/*lane_offset_bytes=*/0);
+        writeback_invalidate_local_credit_lines(/*lane_offset_bytes=*/0);
         sync_threads();
         if (dense_entry_size != applied_entry_size) {
             if (get_my_thread_id() == 0) {
@@ -911,7 +911,7 @@ private:
 
     // Quasar: write back and invalidate the cached copies (L1 D$ of this hart + shared L2) of the local credit lines,
     // so the next reads come from TL1. Not a discard, which would lose a dirty line's credit writes or neighbours.
-    FORCE_INLINE void invalidate_local_credit_lines(uint32_t lane_offset_bytes) const {
+    FORCE_INLINE void writeback_invalidate_local_credit_lines(uint32_t lane_offset_bytes) const {
 #ifdef ARCH_QUASAR
         uint32_t base = 0;
         uint32_t size = 0;
@@ -1022,7 +1022,7 @@ private:
     // remote_dfb_config_layout.h): Quasar's DM L2 writes back whole 64B lines, so a dirty line
     // may only ever contain words this core wrote. Peer-written words are always read through
     // load_remote_l1_credit. Cached copies are dropped at construction
-    // (invalidate_local_credit_lines) so a host reset in TL1 is observed while the lines are clean,
+    // (writeback_invalidate_local_credit_lines) so a host reset in TL1 is observed while the lines are clean,
     // and written back at destruction (flush_local_credit_lines) so the values persist into the next
     // program.
 
