@@ -169,7 +169,7 @@ ProgramDescriptor build_program_descriptor(
     TT_FATAL(
         mesh_view.is_mesh_2d(), "all-gather invoked with cluster_axis API on >2D mesh, which is currently unsupported");
 
-    const uint32_t coord_index = (operation_attributes.cluster_axis == 0) ? mesh_coordinate[0] : mesh_coordinate[1];
+    const uint32_t coord_index = mesh_coordinate[operation_attributes.cluster_axis];
     const auto fabric_node_ids = (operation_attributes.cluster_axis == 0)
                                      ? mesh_view.get_fabric_node_ids_on_column(mesh_coordinate[1])
                                      : mesh_view.get_fabric_node_ids_on_row(mesh_coordinate[0]);

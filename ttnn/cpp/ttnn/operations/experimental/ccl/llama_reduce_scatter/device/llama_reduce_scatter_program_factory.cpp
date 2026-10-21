@@ -356,7 +356,7 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_at_program_proc
 
     uint32_t ring_index = 0;  // Initialize device index
 
-    const uint32_t coord_index = (operation_attributes.cluster_axis == 0) ? mesh_coordinate[0] : mesh_coordinate[1];
+    const uint32_t coord_index = mesh_coordinate[operation_attributes.cluster_axis];
     const auto fabric_node_ids = (operation_attributes.cluster_axis == 0)
                                      ? mesh_view.get_fabric_node_ids_on_column(mesh_coordinate[1])
                                      : mesh_view.get_fabric_node_ids_on_row(mesh_coordinate[0]);

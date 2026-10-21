@@ -64,7 +64,7 @@ SliceReshardAsyncProgramFactory::cached_program_t SliceReshardAsyncProgramFactor
     const auto fabric_node_ids = (args.cluster_axis == 0) ? mesh_view.get_fabric_node_ids_on_column(mesh_coord[1])
                                                           : mesh_view.get_fabric_node_ids_on_row(mesh_coord[0]);
     const uint32_t ring_size = fabric_node_ids.size();
-    const uint32_t ring_index = (args.cluster_axis == 0) ? mesh_coord[0] : mesh_coord[1];
+    const uint32_t ring_index = mesh_coord[args.cluster_axis];
 
     std::optional<tt::tt_fabric::FabricNodeId> forward_fabric_node_id = std::nullopt;
     std::optional<tt::tt_fabric::FabricNodeId> backward_fabric_node_id = std::nullopt;

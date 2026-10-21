@@ -87,7 +87,7 @@ ProgramDescriptor build_rms_allgather_program_descriptor(
     const auto mesh_view = mesh_device->get_view();
     TT_FATAL(
         mesh_view.is_mesh_2d(), "all-gather invoked with cluster_axis API on >2D mesh, which is currently unsupported");
-    const uint32_t coord_index = (operation_attributes.cluster_axis == 0) ? mesh_coord[0] : mesh_coord[1];
+    const uint32_t coord_index = mesh_coord[operation_attributes.cluster_axis];
     const auto fabric_node_ids = (operation_attributes.cluster_axis == 0)
                                      ? mesh_view.get_fabric_node_ids_on_column(mesh_coord[1])
                                      : mesh_view.get_fabric_node_ids_on_row(mesh_coord[0]);

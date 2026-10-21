@@ -99,7 +99,7 @@ AttnResGatherSoftmaxMeshWorkloadFactory::cached_program_t AttnResGatherSoftmaxMe
     // This chip's rank names the slot of the statistics tensor it fills. It says nothing
     // about which way a peer lies: the routing tables answer that, and on an axis that
     // wraps they disagree with rank order.
-    const uint32_t my_rank = (cluster_axis == 0) ? mesh_coord[0] : mesh_coord[1];
+    const uint32_t my_rank = mesh_coord[cluster_axis];
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
