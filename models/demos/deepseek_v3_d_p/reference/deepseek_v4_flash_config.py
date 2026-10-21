@@ -47,6 +47,9 @@ class DeepSeekV4FlashConfig:
     NUM_LAYERS = 43
     NUM_DENSE_LAYERS = 0  # first_k_dense_replace - every layer is MoE
     NUM_HASH_LAYERS = 3
+    # Per-layer attention kind as config.json's compress_ratios encodes it: 0 sliding, 4 CSA, 128 HCA.
+    # Two bootstrap layers, then CSA / HCA alternating from layer 2.
+    COMPRESS_RATIOS = (0, 0) + tuple(4 if i % 2 == 0 else 128 for i in range(NUM_LAYERS - 2))
     VOCAB_SIZE = 129280
     SLIDING_WINDOW = 128
 
