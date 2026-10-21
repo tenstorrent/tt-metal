@@ -6,9 +6,6 @@ from helpers.param_config import parametrize
 from helpers.perf.core import ALL_PERF_RUN_TYPES
 from test_reduce_block_max import FORMATS, _run_reduce_block_max, block_max_num_faces
 
-# The kernel has no L1_CONGESTION branch, so filter it by name instead of naming the enumerator.
-_PERF_RUN_TYPES = [rt for rt in ALL_PERF_RUN_TYPES if rt.name != "L1_CONGESTION"]
-
 
 @pytest.mark.perf
 @parametrize(
@@ -16,7 +13,7 @@ _PERF_RUN_TYPES = [rt for rt in ALL_PERF_RUN_TYPES if rt.name != "L1_CONGESTION"
     block_ct_dim=[1, 2, 4, 8],
     num_faces=block_max_num_faces,
     use_runtime=[False, True],
-    run_types=[_PERF_RUN_TYPES],
+    run_types=[ALL_PERF_RUN_TYPES],
     loop_factor=[32],
 )
 def test_perf_reduce_block_max(

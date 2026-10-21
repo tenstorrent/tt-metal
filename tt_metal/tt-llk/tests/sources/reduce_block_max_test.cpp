@@ -294,7 +294,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
         }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
             // The reduce clears SrcA after every tile and the scaler SrcB once per block.
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
@@ -402,7 +402,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else
         {
-            constexpr bool sync_with_math = PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE;
+            constexpr bool sync_with_math = PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE && PERF_RUN_TYPE != PerfRunType::L1_CONGESTION;
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
                 // Single output tile: the per-row maxima live in column [0] of DEST[0].
