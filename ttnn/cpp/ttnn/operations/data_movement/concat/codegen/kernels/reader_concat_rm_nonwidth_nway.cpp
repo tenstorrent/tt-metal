@@ -2,16 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// N-way ROW_MAJOR non-width concat reader.
-//
-// Every output stick comes entirely from one original input.  The runtime
-// cursor walks per-input stick blocks for each outer prefix, avoiding the
-// pairwise intermediate cascade used by the two-input reader.
-//
-// CT: cb_id, BATCH, NUM_INPUTS, CB_PAGE_SIZE, IN_PAGE_SIZE,
-//     TensorAccessorArgs(shared interleaved input placement)
-// RT: num_sticks, current_input, current_input_stick,
-//     base_addr[N], sticks_per_block[N], source_stick_id[N]
+// N-way non-width reader: every output stick comes whole from one input, so a cursor walks per-input blocks.
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
@@ -28,13 +19,13 @@ void kernel_main() {
     constexpr uint32_t IN_PAGE_SIZE = get_compile_time_arg_val(4);
     constexpr auto src_args = TensorAccessorArgs<5>();
 
-    constexpr uint32_t BASE_OFFSET = 3;
+    constexpr uint32_t BASE_OFFSET = 0;
     constexpr uint32_t BLOCK_OFFSET = BASE_OFFSET + NUM_INPUTS;
-    constexpr uint32_t STICK_ID_OFFSET = BLOCK_OFFSET + NUM_INPUTS;
+    constexpr uint32_t STICK_ID_OFFSET = 3;
     uint32_t sticks_per_block[NUM_INPUTS];
     uint32_t stick_ids[NUM_INPUTS];
     for (uint32_t input = 0; input < NUM_INPUTS; ++input) {
-        sticks_per_block[input] = get_arg_val<uint32_t>(BLOCK_OFFSET + input);
+        sticks_per_block[input] = get_common_arg_val<uint32_t>(BLOCK_OFFSET + input);
         stick_ids[input] = get_arg_val<uint32_t>(STICK_ID_OFFSET + input);
     }
 
@@ -49,7 +40,7 @@ void kernel_main() {
 
         for (uint32_t stick = 0; stick < batch; ++stick) {
             const auto source =
-                TensorAccessor(src_args, get_arg_val<uint32_t>(BASE_OFFSET + current_input), IN_PAGE_SIZE);
+                TensorAccessor(src_args, get_common_arg_val<uint32_t>(BASE_OFFSET + current_input), IN_PAGE_SIZE);
             noc.async_read(
                 source, input_cb, IN_PAGE_SIZE, {.page_id = stick_ids[current_input]++}, {.offset_bytes = l1_offset});
             l1_offset += CB_PAGE_SIZE;

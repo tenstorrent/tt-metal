@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <optional>
 #include <variant>
 #include <vector>
 
@@ -25,14 +26,26 @@ struct ConcatCodegenDeviceOperation {
 
     static void validate_on_program_cache_miss(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
+    static void validate_on_program_cache_hit(
+        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 
     static spec_return_value_t compute_output_specs(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
     static tensor_return_value_t create_output_tensors(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
+
+    static ttsl::hash::hash_t compute_program_hash(
+        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
+
+    static tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> create_op_performance_model(
+        const operation_attributes_t& operation_attributes,
+        const tensor_args_t& tensor_args,
+        tensor_return_value_t& output_tensor);
 };
 
 ConcatCodegenDeviceOperation::tensor_return_value_t concat_codegen(
-    const std::vector<Tensor>& input_tensors, const ConcatCodegenParams& params);
+    const std::vector<Tensor>& input_tensors,
+    const ConcatCodegenParams& params,
+    std::optional<Tensor> optional_output_tensor = std::nullopt);
 
 }  // namespace ttnn::prim

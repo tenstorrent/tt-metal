@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <vector>
 
 #include <tt-metalium/program_descriptors.hpp>
@@ -22,6 +23,7 @@ struct ConcatCodegenParams {
 
 struct ConcatCodegenInputs {
     std::vector<Tensor> input_tensors;
+    std::optional<Tensor> optional_output_tensor;
 };
 
 struct ConcatCodegenProgramFactory {
