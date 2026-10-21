@@ -40,7 +40,7 @@ using expert_rows::JobRecord;
 
 constexpr uint32_t block_tiles = get_named_compile_time_arg_val("block_tiles");
 constexpr uint32_t block_packets = get_named_compile_time_arg_val("block_packets");
-constexpr uint32_t tile_bytes = get_named_compile_time_arg_val("tile_bytes");
+constexpr uint32_t weight_tile_bytes = get_named_compile_time_arg_val("weight_tile_bytes");
 constexpr uint32_t block_slots = get_named_compile_time_arg_val("block_slots");
 constexpr uint32_t blocks_in_flight = get_named_compile_time_arg_val("blocks_in_flight");
 constexpr uint32_t tokens = get_named_compile_time_arg_val("tokens");
@@ -108,9 +108,9 @@ constexpr uint32_t ctl_bytes =
     weight_stationary ? expert_rows::align_up(expert_rows::ctl_bytes(expert_groups), expert_rows::l1_word_bytes)
                       : expert_rows::ctl_header_bytes;
 
-constexpr uint32_t block_bytes = block_tiles * tile_bytes;
+constexpr uint32_t block_bytes = block_tiles * weight_tile_bytes;
 constexpr uint32_t packet_tiles = expert_rows::div_up(block_tiles, block_packets);  // tiles per NoC packet of a block
-static_assert(packet_tiles * tile_bytes <= NOC_MAX_BURST_SIZE, "a block's packets fit a NoC burst each");
+static_assert(packet_tiles * weight_tile_bytes <= NOC_MAX_BURST_SIZE, "a block's packets fit a NoC burst each");
 static_assert(
     top_k >= 1 && top_k <= 32, "top_k in 1..32 (kMaxTopK in moe_expert_rows.cpp): one u16 per k on the stack");
 constexpr uint32_t index_page_entries = index_page_bytes / expert_rows::u16_bytes;
@@ -126,16 +126,16 @@ constexpr uint32_t transaction_ids = block_slots < NOC_MAX_TRANSACTION_ID ? bloc
 static_assert(blocks_in_flight < transaction_ids, "blocks_in_flight < transaction_ids: one id per block in flight");
 
 // common args: source count, mapping row of each source, virtual x / y of the grid, mask of the program's cores, bank
-// of each W0/W1 piece (shard)
+// of each W0/W1 piece (shard); the index of the first arg of each list
 struct CommonArgs {
-    uint32_t virtual_x, virtual_y, all_cores_mask, piece_banks;
+    uint32_t virtual_x_arg, virtual_y_arg, all_cores_mask_arg, piece_banks_arg;
 };
 
 FORCE_INLINE CommonArgs common_args() {
-    const uint32_t virtual_x = get_common_arg_val<uint32_t>(0) + 1;
-    const uint32_t virtual_y = virtual_x + grid_w;
-    const uint32_t all_cores_mask = virtual_y + grid_h;
-    return {virtual_x, virtual_y, all_cores_mask, all_cores_mask + mask_words};
+    const uint32_t virtual_x_arg = get_common_arg_val<uint32_t>(0) + 1;
+    const uint32_t virtual_y_arg = virtual_x_arg + grid_w;
+    const uint32_t all_cores_mask_arg = virtual_y_arg + grid_h;
+    return {virtual_x_arg, virtual_y_arg, all_cores_mask_arg, all_cores_mask_arg + mask_words};
 }
 
 FORCE_INLINE uint32_t source_mapping_row(uint32_t source) { return get_common_arg_val<uint32_t>(1 + source); }
@@ -154,13 +154,13 @@ FORCE_INLINE TokenRange token_range(uint32_t core_index, uint32_t program_cores)
 }
 
 // Entry area of core i (routing_entry_areas, expert_rows::entry_area_bytes): u32 count, then u16 expert[capacity],
-// token[capacity], score[capacity], k[capacity].
+// token[capacity], score[capacity], k_index[capacity].
 struct EntryArea {
     uint32_t addr;
     tt_l1_ptr uint16_t* expert;
     tt_l1_ptr uint16_t* token;
     tt_l1_ptr uint16_t* score;
-    tt_l1_ptr uint16_t* k;
+    tt_l1_ptr uint16_t* k_index;
     FORCE_INLINE uint32_t count() const { return *reinterpret_cast<const tt_l1_ptr uint32_t*>(addr); }
 };
 
@@ -183,26 +183,26 @@ FORCE_INLINE void read_routing_inputs(
     constexpr uint32_t mapping_bytes = global_experts * expert_rows::u16_bytes;
     noc.async_read(
         mapping, CoreLocalMem<uint32_t>(routing + routing_own_mapping), mapping_bytes, {.page_id = device_id}, {});
-    for (uint32_t s = 0; s < range.sources; ++s) {
+    for (uint32_t source = 0; source < range.sources; ++source) {
         noc.async_read(
             mapping,
-            CoreLocalMem<uint32_t>(routing + routing_source_mappings + s * mapping_bytes),
+            CoreLocalMem<uint32_t>(routing + routing_source_mappings + source * mapping_bytes),
             mapping_bytes,
-            {.page_id = source_mapping_row(range.first_source + s)},
+            {.page_id = source_mapping_row(range.first_source + source)},
             {});
     }
-    for (uint32_t t = range.first; t < range.end; ++t) {
+    for (uint32_t token = range.first; token < range.end; ++token) {
         noc.async_read(
             indices,
-            CoreLocalMem<uint32_t>(routing + routing_token_ids + (t - range.first) * index_page_bytes),
+            CoreLocalMem<uint32_t>(routing + routing_token_ids + (token - range.first) * index_page_bytes),
             index_page_bytes,
-            {.page_id = t},
+            {.page_id = token},
             {});
         noc.async_read(
             scores,
-            CoreLocalMem<uint32_t>(routing + routing_token_scores + (t - range.first) * index_page_bytes),
+            CoreLocalMem<uint32_t>(routing + routing_token_scores + (token - range.first) * index_page_bytes),
             index_page_bytes,
-            {.page_id = t},
+            {.page_id = token},
             {});
     }
     noc.async_read_barrier();
@@ -214,14 +214,14 @@ FORCE_INLINE void map_to_local_experts(uint32_t routing, uint32_t sources, uint3
     // this RISC alone works on the scratch after the reads: plain pointers
     tt_l1_ptr uint16_t* local_expert = reinterpret_cast<tt_l1_ptr uint16_t*>(routing + routing_own_mapping);
     uint32_t next_local_expert = 0;
-    for (uint32_t e = 0; e < global_experts; ++e) {
-        local_expert[e] = local_expert[e] == device_id ? next_local_expert++ : not_local;
+    for (uint32_t expert = 0; expert < global_experts; ++expert) {
+        local_expert[expert] = local_expert[expert] == device_id ? next_local_expert++ : not_local;
     }
-    for (uint32_t s = 0; s < sources; ++s) {
+    for (uint32_t source = 0; source < sources; ++source) {
         tt_l1_ptr uint16_t* source_expert = reinterpret_cast<tt_l1_ptr uint16_t*>(
-            routing + routing_source_mappings + s * global_experts * expert_rows::u16_bytes);
-        for (uint32_t e = 0; e < global_experts; ++e) {
-            source_expert[e] = source_expert[e] == device_id ? local_expert[e] : not_local;
+            routing + routing_source_mappings + source * global_experts * expert_rows::u16_bytes);
+        for (uint32_t expert = 0; expert < global_experts; ++expert) {
+            source_expert[expert] = source_expert[expert] == device_id ? local_expert[expert] : not_local;
         }
     }
 }
@@ -231,28 +231,28 @@ FORCE_INLINE void collect_local_entries(uint32_t routing, const EntryArea& area,
     const tt_l1_ptr uint16_t* token_ids = reinterpret_cast<const tt_l1_ptr uint16_t*>(routing + routing_token_ids);
     const tt_l1_ptr uint16_t* token_scores =
         reinterpret_cast<const tt_l1_ptr uint16_t*>(routing + routing_token_scores);
-    uint32_t n = 0;
-    for (uint32_t t = range.first; t < range.end; ++t) {
+    uint32_t entry_count = 0;
+    for (uint32_t token = range.first; token < range.end; ++token) {
         const tt_l1_ptr uint16_t* source_expert = reinterpret_cast<const tt_l1_ptr uint16_t*>(
             routing + routing_source_mappings +
-            (t / tokens_per_source - range.first_source) * global_experts * expert_rows::u16_bytes);
-        const tt_l1_ptr uint16_t* ids = token_ids + (t - range.first) * index_page_entries;
+            (token / tokens_per_source - range.first_source) * global_experts * expert_rows::u16_bytes);
+        const tt_l1_ptr uint16_t* ids = token_ids + (token - range.first) * index_page_entries;
         uint16_t experts[top_k];
-        for (uint32_t k = 0; k < top_k; ++k) {
-            const uint32_t id = ids[k];
-            experts[k] = id < global_experts ? source_expert[id] : not_local;
+        for (uint32_t k_index = 0; k_index < top_k; ++k_index) {
+            const uint32_t id = ids[k_index];
+            experts[k_index] = id < global_experts ? source_expert[id] : not_local;
         }
-        for (uint32_t k = 0; k < top_k; ++k) {
-            if (experts[k] < local_experts) {
-                area.expert[n] = experts[k];
-                area.token[n] = t;
-                area.score[n] = token_scores[(t - range.first) * index_page_entries + k];
-                area.k[n] = k;
-                ++n;
+        for (uint32_t k_index = 0; k_index < top_k; ++k_index) {
+            if (experts[k_index] < local_experts) {
+                area.expert[entry_count] = experts[k_index];
+                area.token[entry_count] = token;
+                area.score[entry_count] = token_scores[(token - range.first) * index_page_entries + k_index];
+                area.k_index[entry_count] = k_index;
+                ++entry_count;
             }
         }
     }
-    *reinterpret_cast<tt_l1_ptr uint32_t*>(area.addr) = n;
+    *reinterpret_cast<tt_l1_ptr uint32_t*>(area.addr) = entry_count;
     asm volatile("" ::: "memory");  // the area's stores are issued before a NoC command reads it
 }
 
@@ -287,12 +287,12 @@ FORCE_INLINE void count_expert_rows(
     for (uint32_t expert = 0; expert < local_experts; ++expert) {
         table.expert_rows[expert] = 0;
     }
-    for (uint32_t i = 0; i < program_cores; ++i) {
-        const EntryArea area = entry_area(routing, i, area_bytes, capacity);
-        const uint32_t n = area.count();
-        for (uint32_t e = 0; e < n; ++e) {
-            if (table.expert_rows[area.expert[e]] < row_cap) {
-                table.expert_rows[area.expert[e]] = table.expert_rows[area.expert[e]] + 1;
+    for (uint32_t core = 0; core < program_cores; ++core) {
+        const EntryArea area = entry_area(routing, core, area_bytes, capacity);
+        const uint32_t entry_count = area.count();
+        for (uint32_t entry = 0; entry < entry_count; ++entry) {
+            if (table.expert_rows[area.expert[entry]] < row_cap) {
+                table.expert_rows[area.expert[entry]] = table.expert_rows[area.expert[entry]] + 1;
             }
         }
     }
@@ -318,22 +318,22 @@ FORCE_INLINE void fill_rows_and_entries(
     tt_l1_ptr uint16_t* entry_tokens = reinterpret_cast<tt_l1_ptr uint16_t*>(routing + routing_entry_tokens);
     tt_l1_ptr uint16_t* entry_scores = reinterpret_cast<tt_l1_ptr uint16_t*>(routing + routing_entry_scores);
     tt_l1_ptr uint16_t* entry_k = reinterpret_cast<tt_l1_ptr uint16_t*>(routing + routing_entry_k);
-    uint32_t q = 0;
-    for (uint32_t i = 0; i < program_cores; ++i) {
-        const EntryArea area = entry_area(routing, i, area_bytes, capacity);
-        const uint32_t n = area.count();
-        for (uint32_t e = 0; e < n; ++e) {
-            const uint32_t expert = area.expert[e];
+    uint32_t table_entry = 0;
+    for (uint32_t core = 0; core < program_cores; ++core) {
+        const EntryArea area = entry_area(routing, core, area_bytes, capacity);
+        const uint32_t entry_count = area.count();
+        for (uint32_t entry = 0; entry < entry_count; ++entry) {
+            const uint32_t expert = area.expert[entry];
             if (table.expert_rows[expert] == row_cap) {
                 continue;
             }
-            table.row_tokens[table.expert_first_row[expert] + table.expert_rows[expert]] = area.token[e];
+            table.row_tokens[table.expert_first_row[expert] + table.expert_rows[expert]] = area.token[entry];
             table.expert_rows[expert] = table.expert_rows[expert] + 1;
-            entry_experts[q] = expert;
-            entry_tokens[q] = area.token[e];
-            entry_scores[q] = area.score[e];
-            entry_k[q] = area.k[e];
-            ++q;
+            entry_experts[table_entry] = expert;
+            entry_tokens[table_entry] = area.token[entry];
+            entry_scores[table_entry] = area.score[entry];
+            entry_k[table_entry] = area.k_index[entry];
+            ++table_entry;
         }
     }
 }
@@ -341,8 +341,8 @@ FORCE_INLINE void fill_rows_and_entries(
 // One row tile per job: every expert's rows in jobs of at most job_rows, in expert order. Returns the job count.
 FORCE_INLINE uint32_t list_jobs_in_expert_order(const RoutingTable& table) {
     uint32_t count = 0;
-    for (uint32_t i = 0; i < table.active; ++i) {
-        const uint32_t expert = table.active_experts[i];
+    for (uint32_t active_slot = 0; active_slot < table.active; ++active_slot) {
+        const uint32_t expert = table.active_experts[active_slot];
         for (uint32_t first = 0; first < table.expert_rows[expert]; first += job_rows) {
             JobRecord& job = table.jobs[count];
             job.expert = expert;
@@ -371,35 +371,35 @@ struct JobDealer {
 
     explicit JobDealer(tt_l1_ptr Deal* deals) : deals(deals) {
 #pragma GCC unroll 32
-        for (uint32_t g = 0; g < expert_groups; ++g) {
-            finish[g] = 0;
-            work[g] = 0;
-            group_job_counts[g] = 0;
+        for (uint32_t group = 0; group < expert_groups; ++group) {
+            finish[group] = 0;
+            work[group] = 0;
+            group_job_counts[group] = 0;
         }
     }
 
     void deal(uint32_t job, uint32_t expert, uint32_t first_row, uint32_t rows) {
         const uint32_t job_row_tiles = expert_rows::row_tiles_of(rows);
         const uint32_t job_work = job_row_tiles > 1 ? job_row_tiles * deal_row_tile : deal_single;
-        uint32_t to = expert_groups, best_finish = 0xFFFFFFFF, best_work = 0xFFFFFFFF;
+        uint32_t best_group = expert_groups, best_finish = 0xFFFFFFFF, best_work = 0xFFFFFFFF;
 #pragma GCC unroll 32
-        for (uint32_t g = 0; g < expert_groups; ++g) {
-            const uint32_t group_finish = finish[g], group_work = work[g];
-            if (group_job_counts[g] + 1 < ctl_words &&
+        for (uint32_t group = 0; group < expert_groups; ++group) {
+            const uint32_t group_finish = finish[group], group_work = work[group];
+            if (group_job_counts[group] + 1 < ctl_words &&
                 (group_finish < best_finish || (group_finish == best_finish && group_work < best_work))) {
-                to = g;
+                best_group = group;
                 best_finish = group_finish;
                 best_work = group_work;
             }
         }
-        finish[to] += job_work > deal_stream ? job_work : deal_stream;
-        work[to] += job_work;
-        ++group_job_counts[to];
+        finish[best_group] += job_work > deal_stream ? job_work : deal_stream;
+        work[best_group] += job_work;
+        ++group_job_counts[best_group];
         Deal& dealt = deals[job];
         dealt.first_row = first_row;
         dealt.expert = expert;
         dealt.rows = rows;
-        dealt.group = to;
+        dealt.group = best_group;
     }
 };
 
@@ -417,36 +417,37 @@ FORCE_INLINE uint32_t deal_jobs(const RoutingTable& table, uint32_t routing, tt_
     tt_l1_ptr uint16_t* partial_job = bucket_next + table.active;
     tt_l1_ptr Deal* deals = reinterpret_cast<tt_l1_ptr Deal*>(routing + routing_entry_areas);
     uint32_t bucket_head[row_tiles + 1];
-    for (uint32_t t = 0; t <= row_tiles; ++t) {
-        bucket_head[t] = list_end;
+    for (uint32_t bucket = 0; bucket <= row_tiles; ++bucket) {
+        bucket_head[bucket] = list_end;
     }
     JobDealer dealer(deals);
     uint32_t count = 0;
-    for (uint32_t i = 0; i < table.active; ++i) {
-        const uint32_t expert = table.active_experts[i], rows = table.expert_rows[expert];
+    for (uint32_t active_slot = 0; active_slot < table.active; ++active_slot) {
+        const uint32_t expert = table.active_experts[active_slot], rows = table.expert_rows[expert];
         const uint32_t first = table.expert_first_row[expert];
         const uint32_t full = rows / job_rows, remainder = rows - full * job_rows;
-        for (uint32_t f = 0; f < full; ++f) {
-            dealer.deal(count++, expert, first + f * job_rows, job_rows);
+        for (uint32_t full_job = 0; full_job < full; ++full_job) {
+            dealer.deal(count++, expert, first + full_job * job_rows, job_rows);
         }
         if (remainder) {
             const uint32_t tiles = expert_rows::row_tiles_of(remainder);
-            bucket_next[i] = bucket_head[tiles];
-            bucket_head[tiles] = i;
-            partial_job[i] = count++;
+            bucket_next[active_slot] = bucket_head[tiles];
+            bucket_head[tiles] = active_slot;
+            partial_job[active_slot] = count++;
         }
     }
     for (uint32_t tiles = row_tiles; tiles >= 1; --tiles) {
-        for (uint32_t i = bucket_head[tiles]; i != list_end; i = bucket_next[i]) {
-            const uint32_t expert = table.active_experts[i], rows = table.expert_rows[expert];
+        for (uint32_t active_slot = bucket_head[tiles]; active_slot != list_end;
+             active_slot = bucket_next[active_slot]) {
+            const uint32_t expert = table.active_experts[active_slot], rows = table.expert_rows[expert];
             const uint32_t remainder = rows % job_rows;
-            dealer.deal(partial_job[i], expert, table.expert_first_row[expert] + rows - remainder, remainder);
+            dealer.deal(partial_job[active_slot], expert, table.expert_first_row[expert] + rows - remainder, remainder);
         }
     }
     group_first_job[0] = 0;
-    for (uint32_t g = 0; g < expert_groups; ++g) {
-        group_first_job[g + 1] = group_first_job[g] + dealer.group_job_counts[g];
-        dealer.group_job_counts[g] = group_first_job[g];  // write cursor
+    for (uint32_t group = 0; group < expert_groups; ++group) {
+        group_first_job[group + 1] = group_first_job[group] + dealer.group_job_counts[group];
+        dealer.group_job_counts[group] = group_first_job[group];  // write cursor
     }
     for (uint32_t job = 0; job < count; ++job) {
         const Deal dealt = deals[job];
@@ -480,14 +481,14 @@ FORCE_INLINE void write_table_head(
 // Every other core of the program: the table is ready.
 FORCE_INLINE void signal_table_ready(const Noc& noc, const CommonArgs& common, uint32_t root_x, uint32_t root_y) {
     Semaphore<> table_ready(sem_table);
-    for (uint32_t w = 0; w < mask_words; ++w) {
-        uint32_t bits = get_common_arg_val<uint32_t>(common.all_cores_mask + w);
+    for (uint32_t word = 0; word < mask_words; ++word) {
+        uint32_t bits = get_common_arg_val<uint32_t>(common.all_cores_mask_arg + word);
         while (bits) {
-            const uint32_t b = __builtin_ctz(bits);
+            const uint32_t bit = __builtin_ctz(bits);
             bits &= bits - 1;
-            const uint32_t core = w * 32 + b;
-            const uint32_t x = get_common_arg_val<uint32_t>(common.virtual_x + core / grid_h);
-            const uint32_t y = get_common_arg_val<uint32_t>(common.virtual_y + core % grid_h);
+            const uint32_t core = word * 32 + bit;
+            const uint32_t x = get_common_arg_val<uint32_t>(common.virtual_x_arg + core / grid_h);
+            const uint32_t y = get_common_arg_val<uint32_t>(common.virtual_y_arg + core % grid_h);
             if (x != root_x || y != root_y) {
                 table_ready.up(noc, x, y, 1);
             }
@@ -568,7 +569,7 @@ FORCE_INLINE uint32_t read_routing_table(const Noc& noc, uint32_t routing, uint3
     return table_jobs;
 }
 
-// This group's jobs (local index e): table jobs group, group + expert_groups, ... with one row tile per job, else as
+// This group's jobs by local index: table jobs group, group + expert_groups, ... with one row tile per job, else as
 // dealt (from group_first_job[group]).
 // count: the group's jobs.
 struct GroupJobs : expert_rows::GroupJobs<weight_stationary, expert_groups, const tt_l1_ptr JobRecord*> {
@@ -593,8 +594,8 @@ FORCE_INLINE void publish_group_jobs(CircularBuffer& cb_ctl, const GroupJobs& jo
     volatile tt_l1_ptr uint32_t* group_ctl = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_ctl.get_write_ptr());
     group_ctl[0] = jobs.count;
     if constexpr (weight_stationary) {
-        for (uint32_t e = 0; e < jobs.count && e + 1 < ctl_words; ++e) {
-            group_ctl[1 + e] = expert_rows::row_tiles_of(jobs.rows(e));
+        for (uint32_t job = 0; job < jobs.count && job + 1 < ctl_words; ++job) {
+            group_ctl[1 + job] = expert_rows::row_tiles_of(jobs.rows(job));
         }
     }
     cb_ctl.push_back(1);
@@ -614,9 +615,9 @@ struct CoreGroups {
 
 enum class Projection : bool { GateUp = false, Down = true };
 
-// K rows of chunk c of `chunks` chunks of `chunk` of the k_rows rows (the bias row ends the last)
-FORCE_INLINE uint32_t chunk_k_rows(uint32_t c, uint32_t chunk, uint32_t chunks, uint32_t k_rows) {
-    return (c + 1 < chunks ? chunk : k_rows - c * chunk) + (c + 1 == chunks ? bias_rows : 0);
+// K rows of chunk `chunk` of `chunks` chunks of chunk_rows of the k_rows rows (the bias row ends the last)
+FORCE_INLINE uint32_t chunk_k_rows(uint32_t chunk, uint32_t chunk_rows, uint32_t chunks, uint32_t k_rows) {
+    return (chunk + 1 < chunks ? chunk_rows : k_rows - chunk * chunk_rows) + (chunk + 1 == chunks ? bias_rows : 0);
 }
 
 FORCE_INLINE uint32_t unit_padding(uint32_t blocks) { return (unit_blocks - blocks % unit_blocks) % unit_blocks; }
@@ -625,45 +626,46 @@ FORCE_INLINE uint32_t unit_padding(uint32_t blocks) { return (unit_blocks - bloc
 inline uint32_t single_pass_blocks(const CoreGroups& groups, Projection projection) {
     uint32_t blocks = 0;
     if (projection == Projection::Down) {
-        for (uint32_t q = 0; q < groups.output_groups; ++q) {
-            blocks += expert_rows::run_blocks(groups.outputs().width(q), intermediate_tiles + bias_rows, block_tiles);
+        for (uint32_t output_group = 0; output_group < groups.output_groups; ++output_group) {
+            blocks += expert_rows::run_blocks(
+                groups.outputs().width(output_group), intermediate_tiles + bias_rows, block_tiles);
         }
         return blocks;
     }
-    for (uint32_t u = 0; u < groups.column_groups; ++u) {
-        for (uint32_t c = 0; c < single_chunks; ++c) {
+    for (uint32_t column_group = 0; column_group < groups.column_groups; ++column_group) {
+        for (uint32_t chunk = 0; chunk < single_chunks; ++chunk) {
             blocks += expert_rows::run_blocks(
-                groups.columns().width(u),
-                chunk_k_rows(c, single_chunk_tiles, single_chunks, hidden_tiles),
+                groups.columns().width(column_group),
+                chunk_k_rows(chunk, single_chunk_tiles, single_chunks, hidden_tiles),
                 block_tiles);
         }
     }
     return blocks;
 }
 
-// Pass s of the stream: gate/up(0), gate/up(1), down(0), gate/up(2), down(1), ..., down(jobs - 1)
+// Pass pass_index of the stream: gate/up(0), gate/up(1), down(0), gate/up(2), down(1), ..., down(jobs - 1)
 struct Pass {
     uint32_t job;
     Projection projection;
 };
 
-inline Pass pass_at(uint32_t s, uint32_t passes, uint32_t job_count) {
-    if (s == 0) {
+inline Pass pass_at(uint32_t pass_index, uint32_t passes, uint32_t job_count) {
+    if (pass_index == 0) {
         return {0, Projection::GateUp};
     }
-    if (s == passes - 1) {
+    if (pass_index == passes - 1) {
         return {job_count - 1, Projection::Down};
     }
-    const uint32_t job = (s + 1) >> 1;
-    return (s & 1) ? Pass{job, Projection::GateUp} : Pass{job - 1, Projection::Down};
+    const uint32_t job = (pass_index + 1) >> 1;
+    return (pass_index & 1) ? Pass{job, Projection::GateUp} : Pass{job - 1, Projection::Down};
 }
 
 // CB blocks of the whole stream: held passes of whole units, one-row-tile passes padded to whole units when held
 // units exist.
 FORCE_INLINE uint32_t stream_blocks(const GroupJobs& jobs, const CoreGroups& groups, uint32_t passes) {
     uint32_t total = 0;
-    for (uint32_t s = 0; s < passes; ++s) {
-        const Pass pass = pass_at(s, passes, jobs.count);
+    for (uint32_t pass_index = 0; pass_index < passes; ++pass_index) {
+        const Pass pass = pass_at(pass_index, passes, jobs.count);
         if (jobs.held(pass.job)) {
             total += (pass.projection == Projection::Down ? groups.output_groups * down_chunks
                                                           : groups.column_groups * gate_up_chunks) *
@@ -683,8 +685,8 @@ struct StreamCursor {
     const CoreGroups& groups;
     uint32_t passes;
     uint32_t w0_w1_addr, w2_addr;
-    uint32_t bank;  // this ring position's bank (its W2)
-    uint32_t piece_banks;
+    uint32_t bank;             // this ring position's bank (its W2)
+    uint32_t piece_banks_arg;  // common arg index of the first W0/W1 piece's bank
     // where the unit's next tiles are
     uint32_t addr = 0, read_bank, piece = 0, piece_left = 0;
     // the pass and its job's expert, its unit of units, the unit's block of blocks and tiles left to read
@@ -699,39 +701,42 @@ struct StreamCursor {
         uint32_t w0_w1_addr,
         uint32_t w2_addr,
         uint32_t bank,
-        uint32_t piece_banks) :
+        uint32_t piece_banks_arg) :
         jobs(jobs),
         groups(groups),
         passes(passes),
         w0_w1_addr(w0_w1_addr),
         w2_addr(w2_addr),
         bank(bank),
-        piece_banks(piece_banks),
+        piece_banks_arg(piece_banks_arg),
         read_bank(bank) {}
 
-    // Unit i of the open pass: read cursor, real tiles, CB blocks.
-    void locate_unit(uint32_t i, uint32_t& tiles) {
+    // Unit unit_index of the open pass: read cursor, real tiles, CB blocks.
+    void locate_unit(uint32_t unit_index, uint32_t& tiles) {
         if (projection == Projection::GateUp) {
-            const uint32_t chunk = held ? chunk_tiles : single_chunk_tiles,
+            const uint32_t chunk_rows = held ? chunk_tiles : single_chunk_tiles,
                            chunks = held ? gate_up_chunks : single_chunks;
-            const uint32_t u = i % groups.column_groups, c = i / groups.column_groups;
-            const uint32_t width = groups.columns().width(u);
-            const uint32_t at = groups.w0_w1_first_tile + u * w0_w1_group_tiles + width * c * chunk;  // stream tile
-            piece = at / w0_w1_piece_tiles;
-            piece_left = (piece + 1) * w0_w1_piece_tiles - at;
-            read_bank = get_common_arg_val<uint32_t>(piece_banks + piece);
-            addr = w0_w1_addr + (expert * w0_w1_piece_tiles + at - piece * w0_w1_piece_tiles) * tile_bytes;
-            tiles = width * chunk_k_rows(c, chunk, chunks, hidden_tiles);
+            const uint32_t column_group = unit_index % groups.column_groups, chunk = unit_index / groups.column_groups;
+            const uint32_t width = groups.columns().width(column_group);
+            // the unit's first tile in the (layer, expert) stream
+            const uint32_t unit_first_tile =
+                groups.w0_w1_first_tile + column_group * w0_w1_group_tiles + width * chunk * chunk_rows;
+            piece = unit_first_tile / w0_w1_piece_tiles;
+            piece_left = (piece + 1) * w0_w1_piece_tiles - unit_first_tile;
+            read_bank = get_common_arg_val<uint32_t>(piece_banks_arg + piece);
+            addr = w0_w1_addr +
+                   (expert * w0_w1_piece_tiles + unit_first_tile - piece * w0_w1_piece_tiles) * weight_tile_bytes;
+            tiles = width * chunk_k_rows(chunk, chunk_rows, chunks, hidden_tiles);
         } else {
-            const uint32_t chunk = held ? w2_chunk_rows : intermediate_tiles, chunks = held ? down_chunks : 1;
-            const uint32_t q = i / chunks, p = i % chunks;
-            const uint32_t width = groups.outputs().width(q);
+            const uint32_t chunk_rows = held ? w2_chunk_rows : intermediate_tiles, chunks = held ? down_chunks : 1;
+            const uint32_t output_group = unit_index / chunks, chunk = unit_index % chunks;
+            const uint32_t width = groups.outputs().width(output_group);
             read_bank = bank;
             piece_left = 0xFFFFFFFF;
-            addr = w2_addr +
-                   (expert * w2_slice_tiles + (groups.first_output_group + q) * w2_group_tiles + width * p * chunk) *
-                       tile_bytes;
-            tiles = width * chunk_k_rows(p, chunk, chunks, intermediate_tiles);
+            addr = w2_addr + (expert * w2_slice_tiles + (groups.first_output_group + output_group) * w2_group_tiles +
+                              width * chunk * chunk_rows) *
+                                 weight_tile_bytes;
+            tiles = width * chunk_k_rows(chunk, chunk_rows, chunks, intermediate_tiles);
         }
         blocks = held ? chunk_blocks : expert_rows::div_up(tiles, block_tiles);
     }
@@ -749,10 +754,10 @@ struct StreamCursor {
     }
 
     void open_pass() {
-        const Pass p = pass_at(pass, passes, jobs.count);
-        projection = p.projection;
-        expert = jobs.expert(p.job);
-        held = jobs.held(p.job);
+        const Pass opened = pass_at(pass, passes, jobs.count);
+        projection = opened.projection;
+        expert = jobs.expert(opened.job);
+        held = jobs.held(opened.job);
         units = projection == Projection::GateUp ? groups.column_groups * (held ? gate_up_chunks : single_chunks)
                                                  : (held ? groups.output_groups * down_chunks : groups.output_groups);
         unit = 0;
@@ -783,7 +788,7 @@ struct ReadState {
     uint32_t bank = 0, tiles = 0, bank_lo = 0;
     FORCE_INLINE void set(uint32_t new_bank, uint32_t new_tiles) {
         const uint64_t bank_noc = get_noc_addr_from_bank_id<true>(new_bank, 0);
-        noc_async_read_one_packet_set_state<true>(bank_noc, new_tiles * tile_bytes, 0);
+        noc_async_read_one_packet_set_state<true>(bank_noc, new_tiles * weight_tile_bytes, 0);
         bank_lo = (uint32_t)bank_noc;
         bank = new_bank;
         tiles = new_tiles;
@@ -796,8 +801,8 @@ FORCE_INLINE void read_block(StreamCursor& cursor, ReadState& state, uint32_t ds
     noc_async_read_set_trid(trid);
     for (uint32_t done = 0; done < tiles;) {
         if (cursor.piece_left == 0) {  // the stream goes on at this (layer, expert)'s start in the next bank
-            cursor.read_bank = get_common_arg_val<uint32_t>(cursor.piece_banks + ++cursor.piece);
-            cursor.addr -= w0_w1_piece_tiles * tile_bytes;
+            cursor.read_bank = get_common_arg_val<uint32_t>(cursor.piece_banks_arg + ++cursor.piece);
+            cursor.addr -= w0_w1_piece_tiles * weight_tile_bytes;
             cursor.piece_left = w0_w1_piece_tiles;
         }
         uint32_t packet = tiles - done < packet_tiles ? tiles - done : packet_tiles;
@@ -805,9 +810,10 @@ FORCE_INLINE void read_block(StreamCursor& cursor, ReadState& state, uint32_t ds
         if (cursor.read_bank != state.bank || packet != state.tiles) {
             state.set(cursor.read_bank, packet);
         }
-        noc_async_read_one_packet_with_state_with_trid(state.bank_lo, cursor.addr, dst + done * tile_bytes, trid);
+        noc_async_read_one_packet_with_state_with_trid(
+            state.bank_lo, cursor.addr, dst + done * weight_tile_bytes, trid);
         done += packet;
-        cursor.addr += packet * tile_bytes;
+        cursor.addr += packet * weight_tile_bytes;
         cursor.piece_left -= packet;
     }
 }
@@ -919,7 +925,7 @@ void kernel_main() {
         .half_column = half_column,
         .half_output = half_output};
     const uint32_t passes = 2 * jobs.count;
-    StreamCursor cursor(jobs, groups, passes, w0_w1_addr, w2_addr, bank, common.piece_banks);
+    StreamCursor cursor(jobs, groups, passes, w0_w1_addr, w2_addr, bank, common.piece_banks_arg);
     stream_weights(noc, cb_w, cursor, stream_blocks(jobs, groups, passes), bank);
     noc.async_write_barrier();  // the root's table block
 }
