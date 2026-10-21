@@ -114,7 +114,7 @@ TEST(MoEComputeHostHelpers, FusedSourceBufferLayoutRejectsBadInputs) {
 }  // namespace
 
 // Packed token lists of the local output path (moe_ring_common.h, moe_ring::token_list), mirrored by
-// ttnn/ttnn/_experimental/moe_compute_utils.py (token_list_*).
+// tests/nightly/tg/ccl/moe/test_moe_compute_6U.py (token_list_*).
 TEST(MoEComputeHostHelpers, TokenListLayoutForThePrefillSlab) {
     using namespace moe_ring::token_list;
     // 2048 tokens, K = 10, 128 experts per device, 32-token chunks.

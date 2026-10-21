@@ -683,8 +683,9 @@ tt::tt_metal::ProgramDescriptor build_moe_compute_program_descriptor(
     constexpr uint32_t tokens_per_chunk = moe_ring::TOKENS_PER_CHUNK;
 
     // Per-token L1 on the tilize cores: the fused-combine paths keep dense token lists and activation rows (about
-    // 4.6 KB per token); the local output path keeps pair lists (c_9 NCRISC, c_10 BRISC), the non-drain cores' lists
-    // staged on the drain (c_12) and the packed page (c_7, moe_ring::token_list), which admits a whole prefill slab.
+    // 36 B per token per local expert, 4.6 KB at 128 experts); the local output path keeps pair lists (c_9 NCRISC,
+    // c_10 BRISC), the non-drain cores' lists staged on the drain (c_12) and the packed page (c_7,
+    // moe_ring::token_list), which admits a whole prefill slab.
     uint32_t pairs_capacity_bytes = 0;
     if (local_output) {
         // The last tilize core takes the remainder of the token split (the runtime args below); each RISC
@@ -1306,7 +1307,7 @@ tt::tt_metal::ProgramDescriptor build_moe_compute_program_descriptor(
         tt::tt_metal::TensorAccessorArgs(*tensor->buffer()).append_to(matmul_compile_time_args);
     }
     if (local_output) {
-        // LOCAL_OUTPUT: dm1 reads the e_t pages and writes the final output. Accessor args follow the
+        // LOCAL_OUTPUT: dm1 reads the packed token-list page and writes the final output. Accessor args follow the
         // three matmul tensors; dm0 and compute stop after those. Addresses are Buffer* bindings below.
         TT_FATAL(
             tensor_return_value.size() == 6, "path=SingleCluster expects 6 output tensors, got {}", tensor_return_value.size());
@@ -1450,7 +1451,6 @@ tt::tt_metal::ProgramDescriptor build_moe_compute_program_descriptor(
         // page k * total_tokens + t from the expert's packed token-list entries.
         {"local_output", local_output ? 1u : 0u},
         {"total_tokens", tokens},
-        {"e_t_entry_size", l1_alignment},
         {"dram_alignment", dram_alignment},
         {"local_output_map_cb_id", local_output_map_cb_id},
     };

@@ -193,7 +193,7 @@ void bind_moe_compute(nb::module_& mod) {
           staged in the combine cores' L1, so the matmul-output tensor (slot 4) is not written on
           this path. That form does not support shared experts. Outputs 1 and 2 are a one-page
           placeholder and the packed ``(token, k)`` lists
-          (``moe_compute_utils.decode_packed_token_lists``) instead of the activation rows and the
+          (layout: ``moe_ring::token_list`` in ``moe_ring_common.h``) instead of the activation rows and the
           per-expert token pages, and a call is not capped at 32 tokens per combine core: the token
           id must fit 24 bits and k 8 bits.
 

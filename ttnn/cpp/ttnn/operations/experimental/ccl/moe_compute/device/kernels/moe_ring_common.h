@@ -321,7 +321,7 @@ struct MoeRingConfig {
 // `(k_slot << TOKEN_BITS) | token_id`. Segment starts are aligned to SEGMENT_ALIGN_ENTRIES entries (64 B) so that
 // dm1's per-chunk read of `tokens_per_chunk` entries at `(header_words + offsets[e] + tokens_per_chunk * c) * 4` B
 // starts on a DRAM-aligned address; the capacity keeps one chunk of tail (the bound needs half of one) so that read
-// never leaves the page. Mirrored by ttnn/ttnn/_experimental/moe_compute_utils.py (token_list_*).
+// never leaves the page. Mirrored by tests/nightly/tg/ccl/moe/test_moe_compute_6U.py (token_list_*).
 namespace token_list {
 
 constexpr uint32_t TOKEN_BITS = 24;
