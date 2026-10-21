@@ -216,7 +216,8 @@ def test_the_provenance_fields_are_the_loaders(tmp_path):
         " sampled: 2026-10-05}\n",
         encoding="utf-8",
     )
-    assert len(_load_table(path)[next(iter(_load_table(path)))]) == 2
+    (entries,) = _load_table(path).values()
+    assert len(entries) == 2
 
 
 def test_a_block_style_row_reads_its_own_fields_not_the_next_rows():

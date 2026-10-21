@@ -300,7 +300,7 @@ def test_unary_sfpu_ulp_sweep(mathop, in_fmt, out_fmt, approx_mode, dest_acc):
             _record_ulp_measurement(
                 distance,
                 mask=mask,
-                nonfinite=int(overflowed.sum()),
+                nonfinite=verdict.nonfinite,
             )
         if ulp_sweep.EMIT:
             ulp_sweep.record_unmeasurable(mathop.name, key, verdict)

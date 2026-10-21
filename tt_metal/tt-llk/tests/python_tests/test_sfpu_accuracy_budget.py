@@ -105,7 +105,7 @@ def _refuses(match, kind=ValueError):
 
 
 #: A measurement for a test row's budget, which the loader requires.
-_M = ", measured: 0, sampled: 2026-01-01"
+_MEASURED_FIELDS = ", measured: 0, sampled: 2026-01-01"
 
 
 def _table(tmp_path, text):
@@ -920,8 +920,8 @@ def test_arch_must_be_passed_explicitly():
         ),
         # Two list items with one key: nothing collapses them, the later would win.
         (
-            f"Abs:\n  - {{out: Float16_b, max_ulp: 1{_M}}}\n"
-            f"  - {{out: Float16_b, max_ulp: 4{_M}}}\n",
+            f"Abs:\n  - {{out: Float16_b, max_ulp: 1{_MEASURED_FIELDS}}}\n"
+            f"  - {{out: Float16_b, max_ulp: 4{_MEASURED_FIELDS}}}\n",
             "repeats BudgetKey",
         ),
         ("Nope:\n  - {max_ulp: 1}\n", "'Nope' is not a MathOperation"),
@@ -1018,7 +1018,7 @@ def test_the_loader_refuses_what_it_cannot_represent(tmp_path, text, match):
 def test_rows_with_different_keys_are_kept(tmp_path):
     table = _table(
         tmp_path,
-        f"Abs:\n  - {{max_ulp: 4{_M}}}\n  - {{out: Float16_b, max_ulp: 1{_M}}}\n",
+        f"Abs:\n  - {{max_ulp: 4{_MEASURED_FIELDS}}}\n  - {{out: Float16_b, max_ulp: 1{_MEASURED_FIELDS}}}\n",
     )
     assert len(table[MathOperation.Abs]) == 2
 
@@ -1063,9 +1063,12 @@ def test_a_merge_key_row_may_not_borrow_its_anchors_measurement(tmp_path, own):
 def test_a_quoted_and_an_unquoted_no_mean_the_same_thing(tmp_path):
     """YAML 1.1 reads bare ``No`` as ``False``; both spellings must load the same."""
     quoted = _table(
-        tmp_path, f'Abs:\n  - {{approx: "No", dest: "Yes", max_ulp: 1{_M}}}\n'
+        tmp_path,
+        f'Abs:\n  - {{approx: "No", dest: "Yes", max_ulp: 1{_MEASURED_FIELDS}}}\n',
     )
-    bare = _table(tmp_path, f"Abs:\n  - {{approx: No, dest: Yes, max_ulp: 1{_M}}}\n")
+    bare = _table(
+        tmp_path, f"Abs:\n  - {{approx: No, dest: Yes, max_ulp: 1{_MEASURED_FIELDS}}}\n"
+    )
     assert quoted == bare
     key = next(iter(quoted[MathOperation.Abs]))
     assert key.approx_mode is ApproximationMode.No
@@ -2189,7 +2192,9 @@ def test_a_row_parked_by_disagreeing_lanes_records_the_rest_of_its_cell():
     ]
     assert not bare, (
         f"{len(bare)} row(s) name the lanes that park their cell but not the maximum "
-        "over the rest of it; re-emit their ops:\n  " + "\n  ".join(bare)
+        "over the rest of it: re-emit their ops, or, where the emit still records no "
+        "figure (no lane of the cell is finite on both sides), list the row in "
+        "_EVERY_CLAIMED_LANE_NONFINITE:\n  " + "\n  ".join(bare)
     )
 
 

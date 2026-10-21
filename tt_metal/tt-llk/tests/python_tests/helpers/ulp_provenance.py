@@ -6,7 +6,7 @@
 Every row of ``sfpu_accuracy_budget.yaml`` that carries a budget says which measurement
 it came from in fields of its own -- ``measured``, ``measured_all``, ``nonfinite``, and
 ``run`` or ``sampled`` -- which PyYAML loads and the registry loader validates like any
-other field. The comment beside a row is prose for people; no code reads it.
+other field. The comment beside a row is prose for people; no verdict depends on it.
 :class:`Provenance` is the typed view of the fields, and :class:`BudgetTable` is the one
 walk over the file, locating rows through PyYAML's own event stream rather than by the
 shape of a line.
@@ -40,6 +40,11 @@ _LOADER = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
 _MERGE_TAG = "tag:yaml.org,2002:merge"
 
 
+def _at(where: str, node: yaml.Node) -> str:
+    """The ``<where> line <n>`` prefix of a refusal at *node*, 1-based as editors count."""
+    return f"{where} line {node.start_mark.line + 1}"
+
+
 def refuse_duplicate_keys(
     node: yaml.Node, where: str, _open: frozenset = frozenset()
 ) -> None:
@@ -53,8 +58,7 @@ def refuse_duplicate_keys(
     f-string, has a mapping for its key), and an anchor that contains itself."""
     if id(node) in _open:
         raise ValueError(
-            f"{where} line {node.start_mark.line + 1}: an anchor that contains itself "
-            "through an alias."
+            f"{_at(where, node)}: an anchor that contains itself through an alias."
         )
     _open = _open | {id(node)}
     if isinstance(node, yaml.MappingNode):
@@ -62,16 +66,16 @@ def refuse_duplicate_keys(
         for key, value in node.value:
             if not isinstance(key, yaml.ScalarNode):
                 raise ValueError(
-                    f"{where} line {key.start_mark.line + 1}: a key that is a "
+                    f"{_at(where, key)}: a key that is a "
                     f"{'list' if isinstance(key, yaml.SequenceNode) else 'mapping'}, "
                     "not a name. Doubled braces `{{...}}` read as a mapping inside one."
                 )
             if key.tag != _MERGE_TAG:
                 if key.value in seen:
                     raise ValueError(
-                        f"{where} line {key.start_mark.line + 1}: duplicate entry for "
-                        f"{key.value!r}. YAML keeps only the "
-                        "last, so the earlier one would vanish with nothing to catch it."
+                        f"{_at(where, key)}: duplicate entry for {key.value!r}. YAML "
+                        "keeps only the last, so the earlier one would vanish with "
+                        "nothing to catch it."
                     )
                 seen.add(key.value)
             refuse_duplicate_keys(value, where, _open)
@@ -113,10 +117,10 @@ def refuse_merged_provenance(node: yaml.Node, where: str) -> None:
         borrowed = sorted((merged - own) & set(PROVENANCE_FIELDS))
         if borrowed:
             raise ValueError(
-                f"{where} line {node.start_mark.line + 1}: "
-                f"{', '.join(f'`{k}`' for k in borrowed)} reaches a row only "
-                "through a `<<` merge key. A merged row is a cell of its own and needs "
-                "its own measurement fields; a plain `*alias` shares the anchor's."
+                f"{_at(where, node)}: {', '.join(f'`{k}`' for k in borrowed)} "
+                "reaches a row only through a `<<` merge key. A merged row is a cell "
+                "of its own and needs its own measurement fields; a plain `*alias` "
+                "shares the anchor's."
             )
     elif isinstance(node, yaml.SequenceNode):
         for item in node.value:
@@ -124,8 +128,9 @@ def refuse_merged_provenance(node: yaml.Node, where: str) -> None:
 
 
 def load_yaml(text: str, where: str) -> Any:
-    """*text* as PyYAML's safe loader reads it, refusing a repeated mapping key, a
-    top-level ``<<`` merge, and provenance borrowed through a merge key."""
+    """*text* as PyYAML's safe loader reads it, refusing a repeated mapping key, a key
+    that is not a scalar, an anchor that contains itself, a top-level ``<<`` merge, and
+    provenance borrowed through a merge key."""
     loader = _LOADER(text)
     try:
         node = loader.get_single_node()
@@ -298,7 +303,7 @@ class Row:
     fields: Tuple[Tuple[str, Any], ...]
     first_line: int
     last_line: int
-    #: The prose after the row's ``#``, for people. No code reads it.
+    #: The prose after the row's ``#``, for people. No verdict depends on it.
     comment: str = ""
     #: A ``- *anchor`` row, or one of an op whose whole row list is an alias (``Neg:
     #: *low``, located on the key line): its fields are not inline, so it pins nothing a

@@ -576,8 +576,8 @@ def _combined_remeasured(a: Optional[bool], b: Optional[bool]) -> Optional[bool]
 def _remeasured(
     base: Dict[Cell, Row],
     row: Optional[Row],
-    kind: str = "",
-    resolved_before: Optional[Row] = None,
+    kind: str,
+    resolved_before: Optional[Row],
 ) -> Optional[bool]:
     """Whether *row*, the head row deciding a cell, carries provenance the base table's
     same row did not; a row counts only with provenance fields of its own, and an alias
