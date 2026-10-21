@@ -137,9 +137,10 @@ How it differs from `run_matrix.sh`:
 * The 16 ranks are placed by tt-run discovery on `quad_bh_galaxy_16stage_2x4_z_chain.textproto` (`MATRIX_CI_LAUNCH=discovery`,
   the default), so the quad does not need to be wired as the exabox straight chain. `MATRIX_CI_LAUNCH=binding` falls
   back to `binding_16stage_quad.yaml.in`, with the hosts in the ring order of `/etc/ttop/rankfile`.
-* One runner launch for all cached rows, at a KV capacity of `max(CACHED) + MAX_NEW`. With several rows, the smaller
-  ones therefore run on an over-sized cache (see above), so compare their numbers with CI runs only, not with
-  `run_matrix.sh`.
+* As in `run_matrix.sh`, every cached row gets its own runner launch with the KV capacity fitted to `cached + MAX_NEW`,
+  so the numbers are comparable with the #57827 tables. The first launch forces tt-run discovery, and later rows reuse
+  the placement it found. If a runner has to be killed (it did not exit on the SHUTDOWN sentinel), the remaining rows
+  are skipped: there is no galaxy reset in the CI script.
 * It currently runs a reduced 3x3 table: cached 0 / 143360 / 552960 x new 640 / 5120 / 51200, 3 idle iterations,
   4 users x 240 chunks loaded. The full table uses the same env knobs (`CACHED`, `NEW`, `ITERS`, `USERS`, `TARGET_CHUNKS`, `CHUNK`, `LAYER_COUNTS`) set in
   the job's `cmd`.
