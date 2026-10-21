@@ -26,9 +26,12 @@ from collections import defaultdict
 
 from models.demos.common.bringup.core import metrics
 from models.demos.common.bringup.reference.golden import Golden
-from models.demos.common.bringup.testing import accuracy_guard, cpu_bridge, profiler
+from models.demos.common.bringup.testing import accuracy_guard, cpu_bridge
+from models.demos.common.bringup.testing import e2e_limits as E
+from models.demos.common.bringup.testing import profiler
 from models.demos.common.bringup.testing.harness import begin_chunk
 from models.demos.common.bringup.testing.host_transfers import HostTransfers
+from models.demos.common.bringup.testing.ladder import check_states
 
 WALL_RUNS = 20  # F114: timed runs of the clean wall measurement
 WALL_WARM = 10  # F114b: warm-up runs not counted (new buffer-address combinations miss the program cache; ~10 here)
@@ -306,10 +309,14 @@ def run_profile(s, mesh, rung_name: str | None = None) -> dict:
         if os.environ.get("BRINGUP_QUICK") == "1":  # F122: the quick A/B also checks every layer against the golden
             reload()
             pcc = run(count=True, per_layer=True)
+            drift, failed = E.load(g.dir), []  # F131: the ladder's limits, so a `>= limit` gate can judge the quick run
             for i, v in pcc.items():
                 metrics.record(f"pcc_layer_L{i:02d}", v)
+                E.check(drift, f"pcc_layer_L{i:02d}", v, failed)
+            check_states(state, g, layers, rung["seq"], drift, failed)
             metrics.record("host_transfers_per_layer", max(host) if host else 0)
             print(f"PROFILE quick: worst layer PCC {min(pcc.values()):.5f} (L{min(pcc, key=pcc.get):02d})")
+            print("".join(f"FAIL {f}\n" for f in failed) or "PROFILE quick: every layer and state within its limit")
         return {"wall_ms": med, "wall_runs_ms": walls}
     reload()
     cpu_bridge.STATS.reset()

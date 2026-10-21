@@ -68,6 +68,11 @@ def device_timeout(s):
 
 
 def threshold(s, key: str) -> float:
+    if key not in DEFAULT_THRESHOLDS:  # F131: layer / state / final_hidden / top5 went with F128
+        raise KeyError(
+            f"thresholds.{key} no longer exists (F128): an end-to-end limit is calib x the reference's drift, "
+            "testing/e2e_limits.py (check / state_limit on the rung's drift.json)"
+        )
     return s.threshold(key, DEFAULT_THRESHOLDS[key])
 
 
