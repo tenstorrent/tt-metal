@@ -2144,6 +2144,93 @@ def test_update_padded_kv_cache_paged(
     assert untouched.numel() > 0 and not untouched.any(), "a pool row no request maps to was written"
 
 
+# Lanes of one stacked input: (table row, chunks written before the lane, extra start tokens). The last lane starts one
+# tile past a chunk boundary, mid-page, so its write runs into the next chunk's pages.
+_PAGED_WINDOW_LANES = [(0, 0, 0), (2, 1, 0), (1, 2, ttnn.TILE_SIZE)]
+
+
+@pytest.mark.parametrize("mesh_device", [(2, 4), (8, 4)], ids=["2x4", "8x4"], indirect=True)
+@pytest.mark.parametrize("dtype, layout", DTYPE_LAYOUT_CASES[:2], ids=DTYPE_LAYOUT_IDS[:2])
+@pytest.mark.timeout(0)
+def test_update_padded_kv_cache_paged_input_row_window(mesh_device, dtype, layout):
+    """Windowed writes of a stacked input into a paged pool match slice-then-write bit for bit, and the windows share
+    one program whatever their offsets: the window picks the input rows, the page table where they land."""
+    sp_axis, page_size, num_layers, layer_idx = 0, 64, 2, 1
+    sp = mesh_device.shape[sp_axis]
+    C = 2 * page_size
+    stacked_local = C * len(_PAGED_WINDOW_LANES)
+    pages_per_row = (max(depth for _, depth, _ in _PAGED_WINDOW_LANES) + 2) * C * sp // page_size
+    table, num_pages = _shuffled_page_tables(
+        num_users=len(_PAGED_WINDOW_LANES),
+        pages_per_user=pages_per_row,
+        mapped_pages=pages_per_row,
+        page_size=page_size,
+        chunk_local=C,
+        sp=sp,
+        seed=7,
+    )
+    pools = [
+        _page_pool(
+            mesh_device,
+            page_size=page_size,
+            sp_axis=sp_axis,
+            num_pages=num_pages,
+            num_layers=num_layers,
+            dtype=dtype,
+            layout=layout,
+        )
+        for _ in range(2)
+    ]
+    tt_table = _page_table_tensor(mesh_device, table)
+    shard_dims = [None, None]
+    shard_dims[sp_axis] = 2
+    mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims)
+    torch.manual_seed(5)
+    stacked = _make_input(
+        torch.randn(1, 1, sp * stacked_local, KVPE_HEAD_DIM, dtype=torch.bfloat16), dtype, layout, mesh_device, mapper
+    )
+
+    def write(pool, tensor, row, kv_actual, **window):
+        # The window exists on the tensor-metadata form only, the one traced prefill uses.
+        slot_t, kv_t = _make_meta_tensors(mesh_device, kv_actual_global=kv_actual, slot_idx=row)
+        ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+            pool,
+            tensor,
+            slot_idx=slot_t,
+            kv_actual_global=kv_t,
+            layer_idx=layer_idx,
+            num_layers=num_layers,
+            cluster_axis=sp_axis,
+            page_table=tt_table,
+            **window,
+        )
+        ttnn.deallocate(slot_t)
+        ttnn.deallocate(kv_t)
+
+    mesh_device.enable_program_cache()
+    lanes = [(row, depth * C * sp + extra, i * C) for i, (row, depth, extra) in enumerate(_PAGED_WINDOW_LANES)]
+    for row, kv_actual, offset in lanes:
+        sliced = ttnn.slice(stacked, (0, 0, offset, 0), (1, 1, offset + C, KVPE_HEAD_DIM))
+        write(pools[0], sliced, row, kv_actual)
+        ttnn.deallocate(sliced)
+    entries_before = mesh_device.num_program_cache_entries()
+    for row, kv_actual, offset in lanes:
+        write(pools[1], stacked, row, kv_actual, input_row_offset=offset, input_rows=C)
+    ttnn.synchronize_device(mesh_device)
+    assert mesh_device.num_program_cache_entries() == entries_before + 1, (
+        f"{len(lanes)} same-size windows should add one program, added "
+        f"{mesh_device.num_program_cache_entries() - entries_before}"
+    )
+
+    reference, windowed = (
+        [ttnn.to_torch(t).to(torch.float32) for t in ttnn.get_device_tensors(pool.cpu())] for pool in pools
+    )
+    for chip, (a, b) in enumerate(zip(reference, windowed)):
+        assert torch.count_nonzero(a) > 0, f"chip {chip}: the reference wrote nothing"
+        assert torch.equal(a, b), f"chip {chip}: windowed paged write differs from slice + paged write"
+    logger.success(f"{len(lanes)} windows of a {stacked_local}-row stacked input match slice + write through the table")
+
+
 @pytest.mark.parametrize("mesh_device", [(2, 4)], ids=["2x4"], indirect=True)
 @pytest.mark.parametrize("path", ["metadata", "scalar"], ids=["metadata", "scalar"])
 @pytest.mark.timeout(0)
