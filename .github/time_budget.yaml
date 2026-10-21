@@ -387,7 +387,7 @@ models:
     bh_p300: 13
     bh_quietbox_2: 62
   unit_tier1:
-    wh_llmbox: 335
+    wh_llmbox: 347  # TT-DiT encoder unit leg 45 -> 60 min (PR #61849)
     wh_n150: 133
     wh_galaxy: 260
     wh_galaxy_perf: 65
