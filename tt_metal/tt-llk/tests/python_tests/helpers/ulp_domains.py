@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from enum import Enum, auto
 
 from .format_config import DataFormat
-from .ulp import MANTISSA_BITS_FOR_ULP, MAX_MEANINGFUL_ULP, ulp_dtype
+from .ulp import mantissa_bits, max_meaningful_ulp, ulp_dtype
 from .utils import tolerances
 
 
@@ -62,12 +62,12 @@ class TableError(ValueError):
 
 def usable_budget_ceiling(output_format: DataFormat) -> float:
     """The largest step budget still stronger than the ``rtol`` it replaces, rounded down
-    to a whole step: 419,430 for fp32, 51 for fp16, 6 for bf16. ``MAX_MEANINGFUL_ULP``
+    to a whole step: 419,430 for fp32, 51 for fp16, 6 for bf16. ``max_meaningful_ulp``
     (``2**mantissa_bits``, about 100% relative error) would admit budgets that gate
     nothing."""
     dtype = ulp_dtype(output_format)
-    by_rtol = tolerances[output_format].rtol * (1 << MANTISSA_BITS_FOR_ULP[dtype])
-    return float(math.floor(min(by_rtol, float(MAX_MEANINGFUL_ULP[dtype]))))
+    by_rtol = tolerances[output_format].rtol * (1 << mantissa_bits(dtype))
+    return float(math.floor(min(by_rtol, float(max_meaningful_ulp(dtype)))))
 
 
 # A binade with fewer lanes present joins its neighbour; with that many present but
