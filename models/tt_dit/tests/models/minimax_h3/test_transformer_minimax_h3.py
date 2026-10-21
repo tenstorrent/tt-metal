@@ -987,6 +987,40 @@ def test_minimax_h3_transformer_block(
     assert_quality(fixture.torch_out, tt_out, pcc=MIN_PCC)
 
 
+@GALAXY_RING
+@pytest.mark.parametrize(
+    ("num_text", "num_audio", "num_video"),
+    [
+        pytest.param(512, 256, 1280, id="dyn_s2048"),
+        pytest.param(512, 512, 3072, id="dyn_s4096"),
+    ],
+)
+def test_minimax_h3_transformer_block_dynamic_length(
+    mesh_device: ttnn.MeshDevice,
+    sp_axis: int,
+    tp_axis: int,
+    num_links: int,
+    num_text: int,
+    num_audio: int,
+    num_video: int,
+    is_fsdp: bool,
+    topology: ttnn.Topology,
+    reset_seeds,
+) -> None:
+    """The dynamic-length block (frozen AGMM/MMRS/SDPA configs, index gathers) matches the reference at two lengths."""
+    MIN_PCC = 0.9995
+
+    skip_if_unsupported_num_links(mesh_device, num_links)
+    fixture = _block_setup(mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, num_text, num_audio, num_video)
+    tt_model = MiniMaxH3TransformerBlock(**fixture.block_kwargs, dynamic_length=True)
+    tt_model.load_torch_state_dict(fixture.torch_model.state_dict())
+
+    before = mesh_device.num_program_cache_entries()
+    tt_out = fixture.run(tt_model)
+    logger.info(f"seq_len={fixture.seq_len}: +{mesh_device.num_program_cache_entries() - before} programs")
+    assert_quality(fixture.torch_out, tt_out, pcc=MIN_PCC)
+
+
 # ---- production-geometry block device-perf (Tracy signposts) ----
 #
 # Run under `scripts/run_safe_pytest.sh --profile`, one duration at a time with `-k`.
@@ -1045,6 +1079,13 @@ def _packed_sizes(duration_s: float, num_text_tokens: int) -> dict:
         pytest.param(4, id="sp_sim4"),
     ],
 )
+@pytest.mark.parametrize(
+    "dynamic_length",
+    [
+        pytest.param(False, id="legacy"),
+        pytest.param(True, id="dynamic"),
+    ],
+)
 def test_minimax_h3_transformer_block_perf(
     mesh_device: ttnn.MeshDevice,
     sp_axis: int,
@@ -1053,10 +1094,13 @@ def test_minimax_h3_transformer_block_perf(
     duration_s: float,
     num_text_tokens: int,
     sp_simulate: int,
+    dynamic_length: bool,
     is_fsdp: bool,
     topology: ttnn.Topology,
     reset_seeds,
 ) -> None:
+    """One block at the production geometry, legacy or dynamic-length configs. H3_BLOCK_PERF_ITERS=N adds N
+    timed warm iterations (host wall with a sync, min / median logged) after the profiled one."""
     skip_if_unsupported_num_links(mesh_device, num_links)
     # SP simulation emulates the Blackhole 4x32 quad's per-device shard by shrinking the sequence so a
     # 4x8 device carries what a 4x32 device would. There is no Wormhole quad, so sp_sim rows measure
@@ -1112,9 +1156,32 @@ def test_minimax_h3_transformer_block_perf(
         ccl_manager=ccl_manager,
         parallel_config=parallel_config,
         is_fsdp=is_fsdp,
+        dynamic_length=dynamic_length,
     )
     tt_block.load_torch_state_dict(torch_block.state_dict())
     del torch_block
+
+    # H3_BLOCK_PERF_LEGACY_PARTS=agmm_attn,agmm_ff1,sdpa,mmrs,gather puts those dynamic-length pins back on
+    # the legacy choice (sdpa320: the (320, 384) chunk pair), to attribute a block-level delta part by part.
+    legacy_parts = set(filter(None, os.environ.get("H3_BLOCK_PERF_LEGACY_PARTS", "").split(",")))
+    if dynamic_length and legacy_parts:
+        if "agmm_attn" in legacy_parts:
+            tt_block.attn._qkv_pin = tt_block.attn._out_pin = None
+        if "agmm_ff1" in legacy_parts:
+            tt_block._ff1_pin = None
+        if "sdpa" in legacy_parts:
+            tt_block.attn._ring_sdpa_config = None
+        if "sdpa320" in legacy_parts:
+            tt_block.attn._ring_sdpa_config = ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=ttnn.CoreCoord(*tt_block.attn.sdpa_worker_grid),
+                q_chunk_size=320,
+                k_chunk_size=384,
+                exp_approx_mode=False,
+            )
+        if "mmrs" in legacy_parts:
+            tt_block._mmrs_pin = None
+        if "gather" in legacy_parts:
+            tt_block.dynamic_length = False
 
     tt_spatial = bf16_tensor_2dshard(
         torch.randn(1, 1, padded_len, HIDDEN_SIZE),
@@ -1150,6 +1217,20 @@ def test_minimax_h3_transformer_block_perf(
     signpost("start")
     tt_out = run_block()
     signpost("stop")
+
+    iters = int(os.environ.get("H3_BLOCK_PERF_ITERS", "0"))
+    if iters:
+        times_ms = []
+        for _ in range(iters):
+            t0 = time.perf_counter()
+            run_block()
+            times_ms.append(1000 * (time.perf_counter() - t0))
+        times_ms.sort()
+        logger.info(
+            f"BLOCK_PERF dynamic_length={dynamic_length} legacy_parts={','.join(sorted(legacy_parts)) or '-'} "
+            f"duration={duration_s:g}s rows/device={padded_len // sp_factor} "
+            f"iters={iters} min={times_ms[0]:.2f} ms median={times_ms[len(times_ms) // 2]:.2f} ms"
+        )
 
     assert tuple(tt_out.shape) == (
         1,

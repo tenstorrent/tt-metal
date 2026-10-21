@@ -21,6 +21,14 @@ these shapes need an entry rather than falling back.
 
 from __future__ import annotations
 
+import functools
+import math
+from typing import NamedTuple
+
+import ttnn
+
+from ....utils.matmul import agmm_worker_grid
+
 # M parallelizes over 12 cores when transposed (M > N) and 10 otherwise (the op reserves the mux axis).
 _TILE = 32
 _M_CORES_TRANSPOSED = 12
@@ -77,6 +85,55 @@ AGMM_BLOCK_SIZES: dict[tuple[int, int, int], tuple[int, int, int]] = {
     (7168, 1344, 11): (6, 8, 6),
     (7168, 1344, 12): (6, 8, 8),
 }
+
+
+# Blocking of the dynamic-length path: one program per (K, N) for every M, the swept per_core_M=12 entry
+# (what the 10 s and 15 s points resolve to; to_qkv 4/6/16 and ff1 4/3/16 are also the measured picks).
+AGMM_PINNED_PER_CORE_M = 12
+
+
+class AgmmPin(NamedTuple):
+    """Frozen all-gather-matmul program of one layer: grid, blocking and orientation fixed for every M."""
+
+    config: ttnn.MinimalMatmulConfig
+    num_workers_per_link: int
+    transpose_core_grid: bool
+
+
+# Worker-grid orientation per layer, measured on 4x8 Blackhole: to_qkv non-transposed is 21 % faster
+# at 15 s than the transposed grid the op's `M > N` rule picks there, ff1 matches, to_out (N < M) transposed.
+AGMM_PINNED_TRANSPOSED: dict[tuple[int, int], bool] = {
+    (5376, 5376): False,
+    (5376, 7168): False,
+    (7168, 1344): True,
+}
+
+
+@functools.cache
+def agmm_orientation_pinnable() -> bool:
+    """Whether the op takes `transpose_core_grid`. Without it only the transposed orientation can be pinned
+    (`force_transpose`), so every layer then runs transposed at every length."""
+    return "transpose_core_grid" in (ttnn.experimental.all_gather_minimal_matmul_async.__doc__ or "")
+
+
+def agmm_pin(k: int, n: int, *, full_grid: ttnn.CoreCoord, num_links: int) -> AgmmPin:
+    """The M-independent AGMM program of a `(K, N)` layer: one worker-grid orientation at every length (the
+    op's own `M > N` rule would flip to_qkv and ff1 once M passes their N, inside the served envelope) and
+    the `AGMM_PINNED_PER_CORE_M` blocking."""
+    transposed = AGMM_PINNED_TRANSPOSED.get((k, n), True) if agmm_orientation_pinnable() else True
+    m_block, k_block, n_block = AGMM_BLOCK_SIZES[(k, n, AGMM_PINNED_PER_CORE_M)]
+    grid = agmm_worker_grid(full_grid, transposed, num_links)
+    config = ttnn.MinimalMatmulConfig(
+        M_block_size=m_block,
+        K_block_size=k_block,
+        N_block_size=n_block,
+        subblock_h=2,
+        subblock_w=2,
+        compute_with_storage_grid_size=grid,
+    )
+    # in0 senders group along the M-parallel axis (grid.x transposed, grid.y not) into `num_links` groups.
+    in0_axis = grid.x if transposed else grid.y
+    return AgmmPin(config, math.ceil(in0_axis / num_links), transposed)
 
 
 def agmm_block_size(k: int, n: int, m: int) -> tuple[int, int, int] | None:

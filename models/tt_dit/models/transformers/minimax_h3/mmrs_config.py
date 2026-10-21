@@ -65,9 +65,21 @@ _SWEPT_BLOCKINGS = {
 
 _DEVICE_GRID = ttnn.CoreCoord(12, 10)
 
+# Blocking of the dynamic-length path: one config for every M. It is the v2.3 rule pick over the whole
+# served envelope (M_block = min(6, ceil(pcM / 2)) rounds to 6 from 74 tile rows per device on), so a
+# length no longer changes the fused op's program; the window clamp in `get_params` stays at 2 there.
+_PINNED_BLOCKING = FusedMMRSConfig(ttnn.CoreCoord(12, 8), 6, 4, 8, 2, 2, None, 1)
+
 _TILE = 32
 # The swept blocking's K divisibility holds for the fixed K: K_block 2 divides K/32 = 112. The
 # rule engine guarantees the same for its own picks (K_block is chosen among divisors of K/32).
+
+
+def pinned_mmrs_config(k: int, n: int, core_grid: ttnn.CoreCoord) -> FusedMMRSConfig | None:
+    """The M-independent fused MM+RS blocking of ff2 on the grid it was fitted for, else None (unfused path)."""
+    if (k, n) == (_K, _N) and core_grid == _DEVICE_GRID:
+        return _PINNED_BLOCKING
+    return None
 
 
 def has_mmrs_config(m: int, k: int, n: int, core_grid: ttnn.CoreCoord) -> bool:

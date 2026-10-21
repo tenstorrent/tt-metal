@@ -36,6 +36,7 @@ from .common import GALAXY_MESHES
 from .common_av import (
     CALIBRATED_FOX_PROMPT,
     artifact_dir,
+    assert_generation_ok,
     check_audio_sanity,
     check_av_sync,
     check_spatial_seams,
@@ -130,6 +131,51 @@ def test_preset_bucket_ladder_is_aligned(task):
 @pytest.mark.parametrize("task", ["t2va", "ref2va"])
 def test_quad_preset_bucket_ladder_is_aligned(task):
     validate_bucket_ladder(_PRESETS_BH[(4, 32)]["bucket_ladder"][task], 32 * ttnn.TILE_SIZE)
+
+
+# Pure (no-device) coverage of the dynamic-length padding and admission rule.
+def test_dynamic_padded_length_admission(expect_error):
+    pipeline = MiniMaxH3Pipeline.__new__(MiniMaxH3Pipeline)
+    pipeline.sp_factor, pipeline.dynamic_length, pipeline.max_sequence_length = 8, True, 120320
+    pipeline._force_pad_to = None
+    assert pipeline._padded_length(37749) == 37888  # 256-aligned, not a ladder rung
+    assert pipeline._padded_length(120320) == 120320
+    with expect_error(ValueError, "beyond the longest served packed length"):
+        pipeline._padded_length(120321)
+    pipeline._force_pad_to = 120320  # the warm-up's capacity point
+    assert pipeline._padded_length(37749) == 120320
+    pipeline._force_pad_to = 18944
+    with expect_error(ValueError, "smaller than the packed length"):
+        pipeline._padded_length(37749)
+
+
+# The dynamic-length integration gate: one program set must serve every length. It passes only once every
+# length-dependent op of the step hashes without its row count, so CI runs it on request only.
+DYNAMIC_GATE_ENV = "MINIMAX_H3_DYNAMIC_GATE"
+
+
+@pytest.mark.skipif(
+    os.environ.get(DYNAMIC_GATE_ENV) != "1",
+    reason=f"the dynamic-length zero-miss gate needs every DiT op converted to runtime lengths; set {DYNAMIC_GATE_ENV}=1",
+)
+@pytest.mark.timeout(7200)
+@pytest.mark.parametrize(("mesh_device", "device_params"), GALAXY_MESHES, indirect=["mesh_device", "device_params"])
+def test_t2va_dynamic_length_zero_misses(mesh_device, reset_seeds):
+    """Warm quietly at 5 s, then measure at 10 s: a different padded length must add no program."""
+    weights = weights_dir("transformer", "text_encoder", "vae", "audio_vae")
+    height, width = resolve_canvas_size(16, 9)
+    pipeline = MiniMaxH3Pipeline.create_pipeline(
+        mesh_device=mesh_device, weights_dir=weights, vae_output_type="yuv420", dynamic_length=True
+    )
+    with pipeline.quiet():
+        pipeline(PROMPT, num_frames=get_num_frames(5), height=height, width=width, num_inference_steps=3, seed=SEED)
+    output = pipeline(
+        PROMPT, num_frames=get_num_frames(10), height=height, width=width, num_inference_steps=3, seed=SEED
+    )
+    assert_generation_ok(output, align_num_frames(get_num_frames(10)))
+    misses = pipeline.last_program_cache_misses
+    assert misses["denoising"] == 0, f"the 10 s request compiled {misses['denoising']} programs after the 5 s warm: {misses}"
+    pipeline.release_traces()
 
 
 @pytest.mark.timeout(7200)
