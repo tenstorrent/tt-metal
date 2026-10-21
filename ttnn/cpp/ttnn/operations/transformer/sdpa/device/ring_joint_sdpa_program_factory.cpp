@@ -3389,6 +3389,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         std::string(std::getenv("TT_SOL_STEP_PROFILE")) != "") {
         const std::string level = std::getenv("TT_SOL_STEP_PROFILE");
         compute_kernel.defines.emplace_back("SOL_STEP_PROFILE", "1");
+        // The reader's and writer's wait zones (SOL_ZONE in ring_joint_reader.cpp / ring_joint_writer.cpp).
+        reader_kernel.defines.emplace_back("SOL_STEP_PROFILE", "1");
+        writer_kernel.defines.emplace_back("SOL_STEP_PROFILE", "1");
         if (level == "2" || level == "3") {
             compute_kernel.defines.emplace_back("SOL_STEP_PROFILE_PHASES", "1");
         }

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import os
 import sys
+import time
 from dataclasses import dataclass
 
 import pytest
@@ -215,6 +216,7 @@ def _run(
         return host[0, :H].float()
 
     dense = launch() if want_dense else None
+    ag_line = None
     if want_dense:
         # All-gather slot check on the dense launch: which torch K shard does each device's slot hold? The
         # local slot (s == d) is never written by the fused all-gather and shows whatever was there.
@@ -228,10 +230,12 @@ def _run(
                 m = max(range(S), key=lambda i: pccs[i])
                 best.append(f"{m if pccs[m] > 0.99 else '?'}")
             lines.append(f"d{d}:[{','.join(best)}]")
-        logger.info(
-            "[ag] gathered-K slot -> torch shard per device (expect slot s = shard s, '?' at s = d): " + " ".join(lines)
+        ag_line = "[ag] gathered-K slot -> torch shard per device (expect slot s = shard s, '?' at s = d): " + " ".join(
+            lines
         )
     capfd.readouterr()  # discard dense-run output so the mode log below is only the sparse launch
+    if ag_line is not None:
+        logger.info(ag_line)  # after the discard, or capfd swallows it
     sol_kw = dict(
         sol_block_mask=sol["block_mask"],
         sol_pooled_k=sol["pooled_k"],
@@ -897,3 +901,116 @@ def test_production_5s_pack(mesh_device, sp_axis, tp_axis, num_links, topology, 
     logger.info(f"[5s pack] density {r.density:.4f} pcc vs dense {pcc:.5f} factory_logged={sorted(r.modes_logged)}")
     assert r.modes_logged == {"pack"}
     assert pcc > 0.99
+
+
+def _run_sequence(
+    mesh_device, sp_axis, num_links, topology, capfd, *, mode, tau, seeds, rows, logical_n, q_chunk, k_chunk
+):
+    """`mode` launched once per seed on ONE CCLManager, fresh Q/K/V each call; returns [(output, op ms)].
+
+    The bench's resident calls alternate 11.9 / 4.3 ms. A call that skipped an all-gather wait would compute on the
+    previous call's K/V and still pass on repeated inputs, so every call here gets new inputs and is judged on its
+    own. Prepass + launch per call, nothing else, so two sequences on the same seeds see the same device history.
+    """
+    S = tuple(mesh_device.shape)[sp_axis]
+    scale = D**-0.5
+    sink_tokens = 300 if rows < 4096 else 849
+    if mode == "resident" and q_chunk == Q_CHUNK:
+        q_chunk = int(os.environ.get("SOL_RESIDENT_Q_CHUNK", str(Q1_CHUNK)))
+    geo = SolGeometry(shards=S, rows=rows, logical_n=logical_n, q_chunk=q_chunk, k_chunk=k_chunk)
+    ccl = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
+    mesh_axes = [sp_axis, None, None, None]
+    pre = SolPrepass(
+        mesh_device=mesh_device, ccl_manager=ccl, sp_axis=sp_axis, tau=tau, mode="chunk" if mode == "resident" else mode
+    )
+    pre.prepare(geo, sink_tokens, scale)
+    grid = mesh_device.compute_with_storage_grid_size()
+    program_config = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(grid.x - 1, grid.y),
+        q_chunk_size=q_chunk,
+        k_chunk_size=k_chunk,
+        exp_approx_mode=False,
+    )
+    ckc = ttnn.init_device_compute_kernel_config(
+        mesh_device.arch(), math_fidelity=ttnn.MathFidelity.HiFi2, math_approx_mode=False, fp32_dest_acc_en=False
+    )
+    empty_joint = bf16_tensor(torch.zeros((1, H, 0, D)), device=mesh_device)
+    logical_n_t = logical_length_tensor(mesh_device, logical_n)
+    results = []
+    for seed in seeds:
+        q, k, v = _qkv(S, rows, seed)
+        tq, tk, tv = (
+            from_torch(x, device=mesh_device, dtype=ttnn.bfloat16, mesh_axes=mesh_axes, layout=ttnn.TILE_LAYOUT)
+            for x in (q, k, v)
+        )
+        sol = pre(tq, tk, tv, scale=scale, report_density=True)
+        sol_kw = dict(
+            sol_block_mask=sol["block_mask"], sol_pooled_k=sol["pooled_k"], sol_pooled_v=sol["pooled_v"], sol_mode=mode
+        )
+        pk = ccl.get_ag_ping_pong_buffer(tq.shape, 2, sp_axis, dtype=ttnn.bfloat16)
+        pv = ccl.get_ag_ping_pong_buffer(tq.shape, 2, sp_axis, dtype=ttnn.bfloat16)
+        sems = ccl.get_ag_ping_pong_semaphore(sp_axis)
+        ttnn.synchronize_device(mesh_device)
+        t0 = time.perf_counter()
+        out, _, _ = ttnn.transformer.ring_joint_scaled_dot_product_attention(
+            tq,
+            tk,
+            tv,
+            empty_joint,
+            empty_joint,
+            empty_joint,
+            persistent_output_buffer_k=pk,
+            persistent_output_buffer_v=pv,
+            joint_strategy="rear",
+            logical_n=logical_n_t,
+            program_config=program_config,
+            compute_kernel_config=ckc,
+            dim=2,
+            multi_device_global_semaphore=sems,
+            num_links=num_links,
+            cluster_axis=sp_axis,
+            mesh_device=mesh_device,
+            topology=topology,
+            subdevice_id=ccl.ccl_sub_device_id,
+            ccl_core_grid_offset=(grid.x - 1, 0),
+            use_column_major_ccl=True,
+            **sol_kw,
+        )
+        ttnn.synchronize_device(mesh_device)
+        ms = (time.perf_counter() - t0) * 1e3
+        host = ttnn.to_torch(
+            out,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(
+                mesh_device, dims=[1, 2] if sp_axis == 1 else [2, 1], mesh_shape=tuple(mesh_device.shape)
+            ),
+        )
+        results.append((host[0, :H].float(), ms, float(pre.last_density)))
+    _drain_mode_log(capfd)
+    return results
+
+
+@GALAXY_RING
+@pytest.mark.parametrize("rows,logical_n", [(1024, 8192), (1184, 9472)], ids=["r1024", "r1184"])
+def test_resident_call_parity(
+    mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, rows, logical_n, reset_seeds, capfd
+):
+    """Four resident calls in a row, fresh inputs each, each checked against chunk mode run the same way.
+
+    Resident at 5 s alternates 11.9 / 4.3 ms by call, and the profile shows the fast calls' compute finishing
+    before the all-gather has delivered every slab. Fresh inputs per call make a skipped wait visible as a wrong
+    answer (the previous call's K/V), and per-call timing ties the parity to it. 256-key pieces as in the bench.
+    """
+    kw = dict(tau=2.0, seeds=[11, 12, 13, 14], rows=rows, logical_n=logical_n, q_chunk=Q1_CHUNK, k_chunk=256)
+    res = _run_sequence(mesh_device, sp_axis, num_links, topology, capfd, mode="resident", **kw)
+    ref = _run_sequence(mesh_device, sp_axis, num_links, topology, capfd, mode="chunk", **kw)
+    pccs = []
+    for i, (seed, (r, r_ms, dens), (c, c_ms, _)) in enumerate(zip(kw["seeds"], res, ref)):
+        pcc = _pcc(r, c, logical_n)
+        sane = torch.isfinite(r[:, :logical_n]).all() and float(r[:, :logical_n].abs().max()) < 1e3
+        pccs.append(pcc)
+        logger.info(
+            f"[parity] rows={rows} call {i} seed {seed}: resident {r_ms:.2f} ms, chunk {c_ms:.2f} ms, "
+            f"pcc(resident, chunk) {pcc:.6f}, density {dens:.4f}, resident sane {bool(sane)}"
+        )
+    logger.info(f"[parity] rows={rows} resident ms: " + " / ".join(f"{m:.2f}" for _, m, _ in res))
+    assert min(pccs) > 0.99, f"a resident call disagrees with chunk mode on its own inputs: {pccs}"

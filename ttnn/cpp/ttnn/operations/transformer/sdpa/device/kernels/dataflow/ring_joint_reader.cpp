@@ -21,6 +21,14 @@
 #include "sol_bias_gen.hpp"
 #include "fused_op_receiver.hpp"
 #include "ring_utils.hpp"
+
+// Device-profiler zones around the reader's waits (TT_SOL_STEP_PROFILE=1 under TT_METAL_DEVICE_PROFILER=1), so a
+// stall shows up as a long RD_* zone on the core that waits instead of as a gap in the compute zones.
+#if defined(PROFILE_KERNEL) && defined(SOL_STEP_PROFILE)
+#define SOL_ZONE(name) DeviceZoneScopedN(name)
+#else
+#define SOL_ZONE(name)
+#endif
 #include "ttnn/operations/transformer/sdpa/device/kernels/ring_joint_chain_layout.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/sliding_window_work_plan.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/ring_joint_ksplit.hpp"
@@ -1228,12 +1236,14 @@ void kernel_main() {
             packed_sources || has_sliding_window || ((active_ring_iter_mask >> ring_iter) & 1u) != 0;
         // Sliding already advanced/synchronized the sequencer above and uses a synthetic local
         // iteration whose K loop decodes the real source ring ID for each chunk.
-        const uint32_t ring_id =
-            packed_sources ? packed_source_ids[0]
-            : has_sliding_window
-                ? ring_index
-                : ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
-                      fused_op_receiver.get_next_ring_id_and_sync(), mesh_rows, mesh_cols, snake_orientation);
+        const uint32_t ring_id = [&]() -> uint32_t {
+            SOL_ZONE("RD_SYNC");  // the wait for this iteration's all-gather arrival signal
+            return packed_sources ? packed_source_ids[0]
+                   : has_sliding_window
+                       ? ring_index
+                       : ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
+                             fused_op_receiver.get_next_ring_id_and_sync(), mesh_rows, mesh_cols, snake_orientation);
+        }();
         // Host precomputes which ring iterations have useful SDPA work; sync/ring-id sequencing
         // still advances above so reader stays aligned with compute, writer, and all-gather.
         if (!ring_iter_is_active) {
@@ -1354,6 +1364,7 @@ void kernel_main() {
             }
             // 1. Q, once. Before any chain forward of this op, so no NoC write is in flight across the read barrier.
             if (!q_pushed) {
+                SOL_ZONE("RD_RES_Q");
                 for (uint32_t i = 0; i < n_res; ++i) {
                     const Slice q_slice(
                         res_nb[i], res_nq[i], res_qc[i] * Sq_chunk_t, res_qc[i] * Sq_chunk_t + Sq_chunk_t, 0, DHt);
@@ -1397,9 +1408,12 @@ void kernel_main() {
             uint32_t res_hi[kResMax];
             uint32_t seg_ulo[kResMax];
             uint32_t seg_uhi[kResMax];
-            for (uint32_t i = 0; i < n_res; ++i) {
-                read_chunk_row(res_nq[i], res_qc[i]);
-                row_kept_bits(res_lo[i], res_hi[i]);
+            {
+                SOL_ZONE("RD_RES_BITS");  // mask rows of this core's chunks and of every chain member's
+                for (uint32_t i = 0; i < n_res; ++i) {
+                    read_chunk_row(res_nq[i], res_qc[i]);
+                    row_kept_bits(res_lo[i], res_hi[i]);
+                }
             }
             // Head segments and their chain-wide unions. The chain members cover the head this core participates
             // in; a segment of another head is a non-participant there (it reads its own K/V), so union = own.
@@ -1436,17 +1450,20 @@ void kernel_main() {
                 }
                 i0 = i1;
             }
-            for (uint32_t i = 0; i < n_res; ++i) {
-                if (i > 0) {
-                    cb_plan.reserve_back(1);  // one page: waits for compute to pop the previous plan
+            {
+                SOL_ZONE("RD_RES_PLAN");  // long when compute is behind: the reserve waits for the previous plan pop
+                for (uint32_t i = 0; i < n_res; ++i) {
+                    if (i > 0) {
+                        cb_plan.reserve_back(1);  // one page: waits for compute to pop the previous plan
+                    }
+                    CoreLocalMem<volatile uint32_t> plan_words(cb_plan.get_write_ptr());
+                    plan_words[0] = res_lo[i];
+                    plan_words[1] = res_hi[i];
+                    plan_words[2] = do_pooled;
+                    plan_words[3] = seg_ulo[i];
+                    plan_words[4] = seg_uhi[i];
+                    cb_plan.push_back(1);
                 }
-                CoreLocalMem<volatile uint32_t> plan_words(cb_plan.get_write_ptr());
-                plan_words[0] = res_lo[i];
-                plan_words[1] = res_hi[i];
-                plan_words[2] = do_pooled;
-                plan_words[3] = seg_ulo[i];
-                plan_words[4] = seg_uhi[i];
-                cb_plan.push_back(1);
             }
             // 3. The shard's pieces, once each; heads interleaved per k in head order.
             const bool source_is_local = ring_id == ring_index;
@@ -1469,13 +1486,17 @@ void kernel_main() {
                 cb_k.reserve_back(k_chunk_tiles);
                 const uint32_t k_addr = cb_k.get_write_ptr();
                 if (k_chain.should_receive(k_head)) {
+                    SOL_ZONE("RD_CHAIN_RX");  // member: ready signal, then the wait for the injector's forward
                     k_chain.receive(noc);
                 } else if (source_is_local) {
+                    SOL_ZONE("RD_FETCH_K");
                     fetch_block(local_k_generator, k_slice, end_seq_tile, cb_k_in, k_addr, k_tile_bytes, true);
                 } else {
+                    SOL_ZONE("RD_FETCH_K");
                     fetch_block(gathered_k_generator, k_slice, end_seq_tile, cb_k_in, k_addr, k_tile_bytes, true);
                 }
                 if (k_chain.should_forward(k_head, 0)) {
+                    SOL_ZONE("RD_CHAIN_TX");  // injector: the wait for every member's ready signal, then the write
                     k_chain.forward(noc, k_addr, k_chunk_tiles, k_tile_bytes);
                 }
                 cb_k.push_back(k_chunk_tiles);
@@ -1496,31 +1517,35 @@ void kernel_main() {
                 cb_v.push_back(v_cb_entry_tiles);
                 KV_chunks_processed_in_iter++;
             };
-            for (uint32_t k = 0; k < num_local_k_chunks; ++k) {
-                if (!chunked_kv_chunk_is_live<
-                        kv_pad_rotation_enabled,
-                        chunked_enabled,
-                        kv_local_padded_Nt,
-                        chunk_size_t,
-                        kv_region_Nt>(ring_id, k, Sk_chunk_t, logical_nt, causal_end_nt)) {
-                    continue;
-                }
-                for (uint32_t i0 = 0; i0 < n_res;) {
-                    uint32_t i1 = i0;
-                    while (i1 < n_res && res_nq[i1] == res_nq[i0]) {
-                        ++i1;
+            {
+                SOL_ZONE("RD_RES_PIECES");  // the whole piece stream of this iteration (fetch / chain / CB waits)
+                for (uint32_t k = 0; k < num_local_k_chunks; ++k) {
+                    if (!chunked_kv_chunk_is_live<
+                            kv_pad_rotation_enabled,
+                            chunked_enabled,
+                            kv_local_padded_Nt,
+                            chunk_size_t,
+                            kv_region_Nt>(ring_id, k, Sk_chunk_t, logical_nt, causal_end_nt)) {
+                        continue;
                     }
-                    const bool union_kept =
-                        k < 32 ? ((seg_ulo[i0] >> k) & 1u) != 0 : ((seg_uhi[i0] >> (k - 32)) & 1u) != 0;
-                    if (union_kept) {
-                        stream_piece(res_nb[i0], res_nq[i0], k);
+                    for (uint32_t i0 = 0; i0 < n_res;) {
+                        uint32_t i1 = i0;
+                        while (i1 < n_res && res_nq[i1] == res_nq[i0]) {
+                            ++i1;
+                        }
+                        const bool union_kept =
+                            k < 32 ? ((seg_ulo[i0] >> k) & 1u) != 0 : ((seg_uhi[i0] >> (k - 32)) & 1u) != 0;
+                        if (union_kept) {
+                            stream_piece(res_nb[i0], res_nq[i0], k);
+                        }
+                        i0 = i1;
                     }
-                    i0 = i1;
                 }
             }
             // 4. Pooled chunks, once per head, then one bias row per resident chunk of the head.
             if constexpr (sol_gen_bias) {
                 if (do_pooled) {
+                    SOL_ZONE("RD_RES_POOLED");
                     constexpr uint32_t pooled_rows_t = sol_n_blocks_pad / 32;
                     const sol_bias_gen::Geometry geo{
                         kv_local_padded_Nt * 32, sol_logical_n_tokens, sol_nb, sol_nb_pad, sol_nkc, Sk_chunk_t};
@@ -2602,6 +2627,7 @@ void kernel_main() {
             packed_readiness.drain(source_group_size, wait_packed_source);
         }
         if constexpr (!has_sliding_window) {
+            SOL_ZONE("RD_DUMMY");  // phase-alignment pushes: the reserves wait for compute to drain the K/V CBs
             for (uint32_t dummy_chunk = 0;
                  dummy_chunk < dummy_kv_chunks_for_phase_alignment<v_shares_k_buffer, kt_inplace_v, kv_cb_pages>(
                                    KV_chunks_processed_in_iter);

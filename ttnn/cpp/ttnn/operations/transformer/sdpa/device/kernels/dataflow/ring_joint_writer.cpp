@@ -12,6 +12,13 @@
 #include "api/core_local_mem.h"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
+
+// Device-profiler zones around the writer's waits (TT_SOL_STEP_PROFILE=1 under TT_METAL_DEVICE_PROFILER=1).
+#if defined(PROFILE_KERNEL) && defined(SOL_STEP_PROFILE)
+#define SOL_ZONE(name) DeviceZoneScopedN(name)
+#else
+#define SOL_ZONE(name)
+#endif
 #include "dataflow_common.hpp"
 #include "chunked_prefill_utils.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/ring_mla_packing_plan.hpp"
@@ -918,6 +925,7 @@ void kernel_main() {
                                                      ? ring_iter + 1 == sdpa_ring_iterations
                                                      : is_last_active_ring_iter(active_ring_iter_mask, ring_iter);
             if (resident_last_ring_iter) {
+                SOL_ZONE("WR_RES_OUT");  // cb_out waits (compute's final normalization) plus the output writes
                 for (uint32_t q_index = 0; q_index + global_q_start < global_q_end; ++q_index) {
                     const auto decoded_q =
                         decompose_global_q_index(global_q_start + q_index, num_q_chunks, NH, use_zigzag_balancing);

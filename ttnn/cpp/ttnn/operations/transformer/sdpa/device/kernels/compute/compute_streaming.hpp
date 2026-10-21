@@ -3781,6 +3781,7 @@ void sdpa_ring_resident(
                                const uint32_t k_start_tile) {
         if (step_mask == 0) {
             // Streamed for another chain member only: drain the entry.
+            MaybeDeviceZoneScopedN(kRingStepProfiling, "RES_DRAIN");
             CircularBuffer(cb_kt_in).wait_front(kt_entry_tiles);
             sdpa_cb_pop_front_out_of_line(cb_kt_in, kt_entry_tiles);
             CircularBuffer(cb_v_in).wait_front(v_entry_tiles);
@@ -3800,6 +3801,7 @@ void sdpa_ring_resident(
             const bool first = ((initialized >> i) & 1u) == 0;
             if (!stepping) {
                 if (!first) {
+                    MaybeDeviceZoneScopedN(kRingStepProfiling, "RES_ROT");
                     sol_rotate_fifo_entry(cb_prev_out, out_tiles);
                     sol_rotate_fifo_entry(cb_max_in, Sq_chunk_t);
                     sol_rotate_fifo_entry(cb_sum_in, Sq_chunk_t);
@@ -3969,6 +3971,7 @@ void sdpa_ring_resident(
 
     if (is_last_ring_iter) {
         // Normalize every resident chunk, in Q-chunk order, into cb_out for the writer; then release Q.
+        MaybeDeviceZoneScopedN(kRingStepProfiling, "RES_NORM");
         for (uint32_t i = 0; i < n_res; ++i) {
             ASSERT((initialized >> i) & 1u);
             normalize_row_streaming<
@@ -3987,12 +3990,15 @@ void sdpa_ring_resident(
     }
 
     // Phase alignment of the K/V CBs with the chained reader (same rule as sdpa_ring_v2).
-    for (uint32_t dummy_chunk = 0;
-         dummy_chunk < dummy_kv_chunks_for_phase_alignment<false, false, kv_cb_pages>(KV_chunks_processed_in_iter);
-         ++dummy_chunk) {
-        CircularBuffer(cb_kt_in).wait_front(kt_entry_tiles);
-        sdpa_cb_pop_front_out_of_line(cb_kt_in, kt_entry_tiles);
-        CircularBuffer(cb_v_in).wait_front(v_entry_tiles);
-        sdpa_cb_pop_front_out_of_line(cb_v_in, v_entry_tiles);
+    {
+        MaybeDeviceZoneScopedN(kRingStepProfiling, "RES_DUMMY");
+        for (uint32_t dummy_chunk = 0;
+             dummy_chunk < dummy_kv_chunks_for_phase_alignment<false, false, kv_cb_pages>(KV_chunks_processed_in_iter);
+             ++dummy_chunk) {
+            CircularBuffer(cb_kt_in).wait_front(kt_entry_tiles);
+            sdpa_cb_pop_front_out_of_line(cb_kt_in, kt_entry_tiles);
+            CircularBuffer(cb_v_in).wait_front(v_entry_tiles);
+            sdpa_cb_pop_front_out_of_line(cb_v_in, v_entry_tiles);
+        }
     }
 }
