@@ -236,6 +236,8 @@ def main() -> None:
         f"Run {path} on {args.arch}: failed in the last scheduled run" for path in retry
     ]
     result["base"], result["retry"] = base, retry
+    # TEMP verification: cap at 6 targets, retry files first.
+    result["tests"] = (retry + [t for t in result["tests"] if t not in retry])[:6]
     if args.paths:
         print("\n".join(result["tests"]))
     else:

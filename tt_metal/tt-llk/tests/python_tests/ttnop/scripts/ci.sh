@@ -66,6 +66,7 @@ if [[ -n "$CHANGED_SINCE" && -z "$NODEIDS" ]]; then
         exit 0
     fi
     echo ">> selected ${#TESTS[@]} changed LLK pytest file(s)"
+    printf '>> TEMP target %s\n' "${TESTS[@]}"  # TEMP verification
 fi
 
 if [[ ${#TESTS[@]} -eq 0 && -z "$NODEIDS" ]]; then
