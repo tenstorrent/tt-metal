@@ -1216,7 +1216,9 @@ def test_max_min_block_float_unaligned_width(device, op, shape, dim, keepdim, dt
     stored = ttnn.to_torch(tt_input).float()
     dims = tuple(range(len(shape))) if dim is None else (dim,)
     take_max = (op == "max") == (scalar > 0)
-    picked = torch.amax(stored, dim=dims, keepdim=keepdim) if take_max else torch.amin(stored, dim=dims, keepdim=keepdim)
+    picked = (
+        torch.amax(stored, dim=dims, keepdim=keepdim) if take_max else torch.amin(stored, dim=dims, keepdim=keepdim)
+    )
     expected = scalar * picked
 
     tt_output = getattr(ttnn, op)(tt_input, dim=dim, keepdim=keepdim, scalar=scalar)
