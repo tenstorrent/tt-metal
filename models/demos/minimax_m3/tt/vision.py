@@ -3,8 +3,9 @@
 """MiniMax-M3 vision tower on the prefill mesh: ViT, per-patch projector and 2x2 patch merge.
 
 Patches are sharded over the SP mesh axis and heads over the TP axis, as in the text prefill. Each layer all-gathers
-K and V over SP and runs windowed SDPA, so attention stays inside one image or one video segment; padding rows form
-windows of their own. The out-projection and fc2 are all-reduced over TP, so the residual stays TP-replicated. The
+K and V over SP in bfloat8_b and runs windowed SDPA, so attention stays inside one image or one video segment; padding
+rows form windows of their own. The out-projection and fc2 are all-reduced over TP, each device adding 1/tp of their
+biases, so the residual stays TP-replicated. The
 projector and the merge leave each output row's hidden dim sharded over TP, the token embedding's layout, and a
 final SP all-gather puts every row on every device.
 
@@ -28,6 +29,8 @@ from models.demos.minimax_m3.reference.vision import VisionArgs, rope_frequencie
 TILE = 32
 # windowed SDPA loads cu_window_seqlens into one uint32 tile
 CU_WINDOW_ENTRIES = TILE * TILE
+# host cos/sin tables kept for repeated batch shapes (same-size images)
+ROPE_TABLES_KEPT = 16
 # Per-device patch counts the tower is compiled for; a batch pads up to the next one.
 LOCAL_PATCH_BUCKETS = (128, 256, 384, 640, 1024, 1536, 2048, 3072, 4096, 5248, 6144, 8192, 10368, 12288, 16384)
 
@@ -215,12 +218,22 @@ class TtVisionTower:
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
-        self.sdpa_config = ttnn.init_device_compute_kernel_config(
+        # layer norm and RoPE: cheap, so always at full precision
+        self.precise_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi4,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
         )
+        # SDPA without fp32 accumulation: with it, a large image's tower takes about 1.8x as long for 0.001 of PCC
+        self.sdpa_config = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+        )
+        self.sdpa_q_chunk, self.sdpa_k_chunk = 128, 512
+        self._rope_tables: dict[tuple, tuple[torch.Tensor, torch.Tensor]] = {}
         self.trans_mat = ttnn.from_torch(
             _rot_transformation_mat(),
             device=mesh_device,
@@ -259,12 +272,12 @@ class TtVisionTower:
                 qkv_w=put(f"l{i}.qkv.weight"),
                 qkv_b=put(f"l{i}.qkv.bias"),
                 o_w=put(f"l{i}.o.weight"),
-                o_b=put(f"l{i}.o.bias"),
+                o_b=self._per_tp(put(f"l{i}.o.bias")),
                 ln2=(put(f"l{i}.ln2.weight"), put(f"l{i}.ln2.bias")),
                 fc1_w=put(f"l{i}.fc1.weight"),
                 fc1_b=put(f"l{i}.fc1.bias"),
                 fc2_w=put(f"l{i}.fc2.weight"),
-                fc2_b=put(f"l{i}.fc2.bias"),
+                fc2_b=self._per_tp(put(f"l{i}.fc2.bias")),
             )
             for i in range(self.args.layers)
         ]
@@ -272,6 +285,14 @@ class TtVisionTower:
         self.proj2 = (put("proj2.weight"), put("proj2.bias"))
         self.merge1 = (put("merge1.weight"), put("merge1.bias"))
         self.merge2 = (put("merge2.weight"), put("merge2.bias"))
+
+    def _per_tp(self, bias):
+        """A bias added to each TP partial sum before the all-reduce, so the sum carries it once."""
+        if self.tp == 1:
+            return bias
+        out = ttnn.multiply(bias, 1.0 / self.tp)
+        bias.deallocate(True)
+        return out
 
     # --- inputs --------------------------------------------------------------------------------------------------
 
@@ -295,11 +316,20 @@ class TtVisionTower:
         assert pixel_values.shape[0] == batch.patches, (pixel_values.shape, batch.patches)
         x = torch.zeros(batch.padded, self.patch_in, dtype=torch.bfloat16)
         x[: batch.patches, : a.patch_elems] = pixel_values.to(torch.bfloat16)
-        cos, sin = rope_tables(batch.segments, a, batch.padded)
+        key = (batch.segments, batch.padded)
+        if key not in self._rope_tables:
+            if len(self._rope_tables) >= ROPE_TABLES_KEPT:
+                self._rope_tables.pop(next(iter(self._rope_tables)))
+            self._rope_tables[key] = rope_tables(batch.segments, a, batch.padded)
+        cos, sin = self._rope_tables[key]
         dims = [None, None]
         dims[self.sp_axis] = 0
+        # Row-major upload and a device tilize: the host tilize of a large batch costs more than the transfer.
+        rm = self._shard_rows(x, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT)
+        patches = ttnn.to_layout(rm, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        rm.deallocate(True)
         inputs = dict(
-            patches=self._shard_rows(x, ttnn.bfloat16),
+            patches=patches,
             cos=self._shard_rows(cos, ttnn.bfloat16),
             sin=self._shard_rows(sin, ttnn.bfloat16),
             cu=ttnn.from_torch(
@@ -323,11 +353,20 @@ class TtVisionTower:
 
     # --- forward -------------------------------------------------------------------------------------------------
 
-    def _linear(self, x, w, b=None):
-        return ttnn.linear(x, w, bias=b, compute_kernel_config=self.mm_config, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    def _linear(self, x, w, b=None, activation=None):
+        return ttnn.linear(
+            x,
+            w,
+            bias=b,
+            activation=activation,
+            compute_kernel_config=self.mm_config,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
 
     def _layer_norm(self, x, wb):
-        return ttnn.layer_norm(x, epsilon=self.args.eps, weight=wb[0], bias=wb[1], compute_kernel_config=self.mm_config)
+        return ttnn.layer_norm(
+            x, epsilon=self.args.eps, weight=wb[0], bias=wb[1], compute_kernel_config=self.precise_config
+        )
 
     def _tp_allreduce(self, x):
         if self.tp == 1:
@@ -363,15 +402,19 @@ class TtVisionTower:
             inputs["sin"],
             self.trans_mat,
             is_decode_mode=False,
-            compute_kernel_config=self.sdpa_config,
+            compute_kernel_config=self.precise_config,
         )
         q_r, k_r = rope(q), rope(k)
         q.deallocate(True)
         k.deallocate(True)
-        k_all = self._sp_gather(k_r, dim=2)
-        v_all = self._sp_gather(v, dim=2)
+        # K and V in bfloat8_b: half the SP gather's traffic and of SDPA's K/V reads, which bound it at large sizes
+        k8, v8 = ttnn.typecast(k_r, ttnn.bfloat8_b), ttnn.typecast(v, ttnn.bfloat8_b)
         k_r.deallocate(True)
         v.deallocate(True)
+        k_all = self._sp_gather(k8, dim=2)
+        v_all = self._sp_gather(v8, dim=2)
+        k8.deallocate(True)
+        v8.deallocate(True)
         grid = self.mesh_device.compute_with_storage_grid_size()
         attn = ttnn.transformer.scaled_dot_product_attention(
             q_r,
@@ -381,8 +424,8 @@ class TtVisionTower:
             scale=self.scale,
             program_config=ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=grid,
-                q_chunk_size=min(local, 128),
-                k_chunk_size=min(local * self.sp, 512),
+                q_chunk_size=min(local, self.sdpa_q_chunk),
+                k_chunk_size=min(local * self.sp, self.sdpa_k_chunk),
                 exp_approx_mode=False,
             ),
             compute_kernel_config=self.sdpa_config,
@@ -392,7 +435,7 @@ class TtVisionTower:
         for t in (q_r, k_all, v_all):
             t.deallocate(True)
         attn = ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        out = self._linear(attn, L["o_w"])
+        out = self._linear(attn, L["o_w"], L["o_b"])
         attn.deallocate(True)
         return self._tp_allreduce(out)
 
@@ -400,15 +443,15 @@ class TtVisionTower:
         h = self._layer_norm(x, L["ln1"])
         attn = self._attention(h, L, inputs, local)
         h.deallocate(True)
-        x2 = ttnn.add(x, ttnn.add(attn, L["o_b"]))
+        x2 = ttnn.add(x, attn)
         attn.deallocate(True)
         x.deallocate(True)
         h = self._layer_norm(x2, L["ln2"])
-        f = ttnn.gelu(self._linear(h, L["fc1_w"], L["fc1_b"]), fast_and_approximate_mode=False)
+        f = self._linear(h, L["fc1_w"], L["fc1_b"], activation="gelu")
         h.deallocate(True)
-        f2 = self._tp_allreduce(self._linear(f, L["fc2_w"]))
+        f2 = self._tp_allreduce(self._linear(f, L["fc2_w"], L["fc2_b"]))
         f.deallocate(True)
-        out = ttnn.add(x2, ttnn.add(f2, L["fc2_b"]))
+        out = ttnn.add(x2, f2)
         f2.deallocate(True)
         x2.deallocate(True)
         return out
@@ -430,7 +473,7 @@ class TtVisionTower:
         for L in self.layers:
             x = self._block(x, L, inputs, batch.local)
 
-        y = ttnn.gelu(self._linear(x, *self.proj1), fast_and_approximate_mode=False)
+        y = self._linear(x, *self.proj1, activation="gelu")
         x.deallocate(True)
         y = ttnn.add(self._tp_reduce_scatter(self._linear(y, self.proj2[0])), self.proj2[1])
         y = self._merge_rows(y)

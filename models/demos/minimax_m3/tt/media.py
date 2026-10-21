@@ -50,13 +50,15 @@ def read_manifest(media_tag: int, root: str | None = None) -> dict:
 def read_patches(item_hash: str, root: str | None = None) -> tuple[torch.Tensor, tuple[int, int, int]]:
     """[patches, patch_elems] bf16 and the item's (t, h, w) patch grid."""
     path = os.path.join(root or media_dir(), f"{item_hash}.px")
-    with open(path, "rb") as f:
-        raw = f.read()
+    # Read into a writable buffer, which torch can share without a copy.
+    with open(path, "rb", buffering=0) as f:
+        raw = bytearray(os.fstat(f.fileno()).st_size)
+        f.readinto(raw)
     magic, version, _kind, patches, elems, dtype, t, h, w = PX_HEADER.unpack_from(raw, 0)
     if magic != PX_MAGIC or version != 1 or dtype != DTYPE_BF16:
         raise ValueError(f"{path}: not a v1 bf16 patch file")
     data = np.frombuffer(raw, dtype=np.uint16, count=patches * elems, offset=PX_HEADER_BYTES)
-    pv = torch.from_numpy(data.copy()).view(torch.bfloat16).reshape(patches, elems)
+    pv = torch.from_numpy(data).view(torch.bfloat16).reshape(patches, elems)
     return pv, (t, h, w)
 
 
