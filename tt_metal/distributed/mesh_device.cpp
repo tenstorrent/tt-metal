@@ -743,7 +743,7 @@ ContextId context_id_for_mesh_device(MetalEnv& env, bool& env_owns_context) {
 
 }  // namespace
 
-std::shared_ptr<MeshDevice> MeshDevice::create_mesh_device(
+std::shared_ptr<MeshDevice> MeshDevice::open_mesh_device(
     MetalEnv& env, const MeshDeviceConfig& config, const CreateMeshDeviceOptions& options) {
     // Associate a context ID for the mesh device's dependencies to easily access the MetalContext::instance(contextId)
     // TODO: Remove this and directly pass in the MetalEnv reference
@@ -766,7 +766,7 @@ std::shared_ptr<MeshDevice> MeshDevice::create_mesh_device(
     return mesh_device;
 }
 
-std::shared_ptr<MeshDevice> MeshDevice::create_unit_mesh(
+std::shared_ptr<MeshDevice> MeshDevice::open_unit_mesh(
     MetalEnv& env, ChipId device_id, const CreateMeshDeviceOptions& options) {
     bool env_owns_context = false;
     const ContextId context_id = context_id_for_mesh_device(env, env_owns_context);
@@ -787,7 +787,7 @@ std::shared_ptr<MeshDevice> MeshDevice::create_unit_mesh(
     return mesh_device;
 }
 
-std::map<ChipId, std::shared_ptr<MeshDevice>> MeshDevice::create_unit_meshes(
+std::map<ChipId, std::shared_ptr<MeshDevice>> MeshDevice::open_unit_meshes(
     MetalEnv& env, ttsl::Span<const ChipId> device_ids, const CreateMeshDeviceOptions& options) {
     bool env_owns_context = false;
     const ContextId context_id = context_id_for_mesh_device(env, env_owns_context);

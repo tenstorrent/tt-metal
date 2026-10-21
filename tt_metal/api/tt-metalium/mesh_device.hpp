@@ -73,7 +73,7 @@ using DeviceIds = std::vector<int>;
 // Options for creating a MeshDevice from a MetalEnv.
 //
 // num_command_queues, dispatch_core_config and worker_l1_size apply to the whole MetalEnv: while a MeshDevice created
-// from it is open, other create_* calls must pass the same values.
+// from it is open, other open_* calls must pass the same values.
 struct CreateMeshDeviceOptions {
     size_t l1_small_size = DEFAULT_L1_SMALL_SIZE;
     size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE;
@@ -354,16 +354,16 @@ public:
         ttsl::Span<const std::uint32_t> l1_bank_remap = {},
         size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE);
 
-    // Create a MeshDevice which will use the given MetalEnv.
-    static std::shared_ptr<MeshDevice> create_mesh_device(
+    // Open a MeshDevice which will use the given MetalEnv.
+    static std::shared_ptr<MeshDevice> open_mesh_device(
         MetalEnv& env, const MeshDeviceConfig& config, const CreateMeshDeviceOptions& options = {});
 
-    // Create a unit mesh for the physical device ID which will use the given MetalEnv.
-    static std::shared_ptr<MeshDevice> create_unit_mesh(
+    // Open a unit mesh for the physical device ID which will use the given MetalEnv.
+    static std::shared_ptr<MeshDevice> open_unit_mesh(
         MetalEnv& env, ChipId device_id, const CreateMeshDeviceOptions& options = {});
 
-    // Create a unit mesh for each physical device ID in the list which will use the given MetalEnv.
-    static std::map<ChipId, std::shared_ptr<MeshDevice>> create_unit_meshes(
+    // Open a unit mesh for each physical device ID in the list which will use the given MetalEnv.
+    static std::map<ChipId, std::shared_ptr<MeshDevice>> open_unit_meshes(
         MetalEnv& env, ttsl::Span<const ChipId> device_ids, const CreateMeshDeviceOptions& options = {});
 
     // Only for internal and testing purposes
