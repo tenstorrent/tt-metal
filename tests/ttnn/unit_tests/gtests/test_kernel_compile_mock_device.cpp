@@ -23,6 +23,7 @@
 #include <string>
 #include <string_view>
 #include <tuple>
+#include <utility>
 #include <vector>
 
 #include <tt-metalium/experimental/context/metal_env.hpp>
@@ -34,8 +35,11 @@
 #include <umd/device/types/arch.hpp>
 
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/core/to_memory_config/to_memory_config_op.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/concat/concat.hpp"
 #include "ttnn/operations/data_movement/gather/gather.hpp"
+#include "ttnn/operations/data_movement/move/move.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/data_movement/permute/permute.hpp"
 #include "ttnn/operations/data_movement/tilize/tilize.hpp"
@@ -44,14 +48,19 @@
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/binary/common/binary_op_types.hpp"
 #include "ttnn/operations/eltwise/binary_ng/device/binary_ng_device_operation.hpp"
+#include "ttnn/operations/eltwise/ternary/common/ternary_op_types.hpp"
+#include "ttnn/operations/eltwise/ternary/device/ternary_device_operation.hpp"
 #include "ttnn/operations/eltwise/ternary/ternary.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/operations/eltwise/unary/device/unary_device_operation.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/matmul/device/config/matmul_program_config_types.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
+#include "ttnn/operations/normalization/layernorm/layernorm.hpp"
 #include "ttnn/operations/reduction/prod/prod.hpp"
 #include "ttnn/operations/transformer/sdpa/sdpa.hpp"
+#include "ttnn/operations/transformer/sdpa/sparse_sdpa.hpp"
+#include "ttnn/operations/transformer/sdpa/sparse_sdpa_msa.hpp"
 #include "ttnn/operations/transformer/sdpa_config.hpp"
 #include "ttnn/operations/transformer/sdpa_decode/sdpa_decode.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -69,9 +78,13 @@ using tt::tt_metal::TensorSpec;
 using tt::tt_metal::distributed::MeshDevice;
 
 ttnn::Tensor device_tensor(
-    MeshDevice* device, const ttnn::Shape& shape, DataType dtype = DataType::BFLOAT16, Layout layout = Layout::TILE) {
+    MeshDevice* device,
+    const ttnn::Shape& shape,
+    DataType dtype = DataType::BFLOAT16,
+    Layout layout = Layout::TILE,
+    const ttnn::MemoryConfig& memory_config = ttnn::DRAM_MEMORY_CONFIG) {
     return ttnn::create_device_tensor(
-        TensorSpec(shape, TensorLayout(dtype, PageConfig(layout), ttnn::DRAM_MEMORY_CONFIG)), device);
+        TensorSpec(shape, TensorLayout(dtype, PageConfig(layout), memory_config)), device);
 }
 
 ttnn::DeviceComputeKernelConfig compute_config(MeshDevice* device, bool fp32_dest_acc) {
@@ -88,19 +101,14 @@ struct CompileCase {
 
 void PrintTo(const CompileCase& compile_case, std::ostream* os) { *os << compile_case.name; }
 
-std::vector<CompileCase> join(std::initializer_list<std::vector<CompileCase>> groups) {
-    std::vector<CompileCase> cases;
-    for (const auto& group : groups) {
-        cases.insert(cases.end(), group.begin(), group.end());
-    }
-    return cases;
-}
+const std::vector<DataType> kSweepDtypes = {DataType::BFLOAT16, DataType::INT32};
 
-// Tries BFLOAT16, then INT32. If the op rejects both on host the case is skipped; a kernel that does not
-// build always fails.
-void run_with_supported_dtype(const std::function<void(DataType)>& run) {
+// Runs with the first dtype the op accepts on host. If it accepts none the case is skipped; a kernel that
+// does not build always fails.
+void run_with_supported_dtype(
+    const std::function<void(DataType)>& run, const std::vector<DataType>& dtypes = kSweepDtypes) {
     std::string rejected;
-    for (const auto dtype : {DataType::BFLOAT16, DataType::INT32}) {
+    for (const auto dtype : dtypes) {
         try {
             run(dtype);
             return;
@@ -118,12 +126,20 @@ void run_with_supported_dtype(const std::function<void(DataType)>& run) {
 
 // One case per enum value, named <prefix>_<VALUE>.
 template <typename Enum, typename Run>
-std::vector<CompileCase> sweep(const std::string& prefix, Run run) {
+std::vector<CompileCase> sweep(const std::string& prefix, Run run, const std::vector<DataType>& dtypes = kSweepDtypes) {
     std::vector<CompileCase> cases;
     for (const auto& [value, name] : enchantum::entries_generator<Enum>) {
-        cases.push_back({prefix + "_" + std::string(name), [value, run](MeshDevice* device) {
-                             run_with_supported_dtype([&](DataType dtype) { run(device, value, dtype); });
+        cases.push_back({prefix + "_" + std::string(name), [value, run, dtypes](MeshDevice* device) {
+                             run_with_supported_dtype([&](DataType dtype) { run(device, value, dtype); }, dtypes);
                          }});
+    }
+    return cases;
+}
+
+std::vector<CompileCase> join(std::vector<std::vector<CompileCase>> groups) {
+    std::vector<CompileCase> cases;
+    for (auto& group : groups) {
+        cases.insert(cases.end(), group.begin(), group.end());
     }
     return cases;
 }
@@ -194,9 +210,8 @@ std::vector<CompileCase> unary_sweep_cases() {
     });
 }
 
-// Each broadcast kind has its own kernels, and an op's SFPU include can be missing from just one.
-// Tensor-tensor only: binary_ng has no tensor-scalar kernel for some ops (MAXIMUM, GCD, ...), which the
-// public API sends through unary.
+// Each broadcast kind has its own kernels. Tensor-tensor only: binary_ng has no tensor-scalar kernel for
+// some ops (MAXIMUM, GCD, ...), which the public API sends through unary.
 std::vector<CompileCase> binary_sweep_cases() {
     using ttnn::operations::binary::BinaryOpType;
     const std::vector<std::tuple<std::string, ttnn::Shape, ttnn::Shape>> broadcasts = {
@@ -206,13 +221,102 @@ std::vector<CompileCase> binary_sweep_cases() {
         {"row_col", ttnn::Shape({1, 1, 1, 64}), ttnn::Shape({1, 1, 64, 1})},
         {"scalar", kTileShape, ttnn::Shape({1, 1, 1, 1})},
     };
-    std::vector<CompileCase> cases;
+    std::vector<std::vector<CompileCase>> groups;
     for (const auto& [name, lhs, rhs] : broadcasts) {
-        auto group =
+        groups.push_back(
             sweep<BinaryOpType>("binary_" + name, [lhs, rhs](MeshDevice* device, BinaryOpType op_type, DataType dtype) {
                 ttnn::prim::binary_ng(device_tensor(device, lhs, dtype), device_tensor(device, rhs, dtype), op_type);
-            });
-        cases.insert(cases.end(), group.begin(), group.end());
+            }));
+    }
+    return join(std::move(groups));
+}
+
+// Each broadcast of the third operand, a scalar second or third operand, and each dtype.
+std::vector<CompileCase> ternary_sweep_cases() {
+    using ttnn::operations::ternary::TernaryOpType;
+    auto tensors = [](const ttnn::Shape& c_shape) {
+        return [c_shape](MeshDevice* device, TernaryOpType op_type, DataType dtype) {
+            ttnn::prim::ternary(
+                op_type,
+                device_tensor(device, kTileShape, dtype),
+                device_tensor(device, kTileShape, dtype),
+                device_tensor(device, c_shape, dtype));
+        };
+    };
+    std::vector<std::vector<CompileCase>> groups = {
+        sweep<TernaryOpType>("ternary_none", tensors(kTileShape)),
+        sweep<TernaryOpType>("ternary_row", tensors(ttnn::Shape({1, 1, 1, 64}))),
+        sweep<TernaryOpType>("ternary_col", tensors(ttnn::Shape({1, 1, 64, 1}))),
+        sweep<TernaryOpType>("ternary_scalar", tensors(ttnn::Shape({1, 1, 1, 1}))),
+        sweep<TernaryOpType>(
+            "ternary_tts",
+            [](MeshDevice* device, TernaryOpType op_type, DataType dtype) {
+                ttnn::prim::ternary(
+                    op_type, device_tensor(device, kTileShape, dtype), device_tensor(device, kTileShape, dtype), 1.0f);
+            }),
+        sweep<TernaryOpType>(
+            "ternary_tst",
+            [](MeshDevice* device, TernaryOpType op_type, DataType dtype) {
+                ttnn::prim::ternary(
+                    op_type, device_tensor(device, kTileShape, dtype), 1.0f, device_tensor(device, kTileShape, dtype));
+            }),
+    };
+    for (const auto dtype : {DataType::FLOAT32, DataType::INT32, DataType::UINT32}) {
+        groups.push_back(
+            sweep<TernaryOpType>("ternary_" + std::string(enchantum::to_string(dtype)), tensors(kTileShape), {dtype}));
+    }
+    return join(std::move(groups));
+}
+
+// Each op with DRAM in and out, or a sharded input or output, in TILE and ROW_MAJOR: sharded readers and
+// writers are separate kernels.
+std::vector<CompileCase> data_movement_sweep_cases() {
+    using ttnn::operations::data_movement::ShardStrategy;
+    using Op = std::function<void(const ttnn::Tensor&, const ttnn::MemoryConfig&)>;
+    const std::vector<std::pair<std::string, Op>> ops = {
+        {"permute_row_invariant", [](const auto& t, const auto& mem) { ttnn::permute(t, {1, 0, 2, 3}, mem); }},
+        {"permute_wh", [](const auto& t, const auto& mem) { ttnn::permute(t, {0, 1, 3, 2}, mem); }},
+        {"transpose_wh", [](const auto& t, const auto& mem) { ttnn::transpose(t, -2, -1, mem); }},
+        {"tilize", [](const auto& t, const auto& mem) { ttnn::tilize(t, mem); }},
+        {"untilize", [](const auto& t, const auto& mem) { ttnn::untilize(t, mem); }},
+        {"to_memory_config", [](const auto& t, const auto& mem) { ttnn::to_memory_config(t, mem); }},
+    };
+    // Name, input shard strategy, output shard strategy; none is DRAM.
+    using Strategy = std::optional<ShardStrategy>;
+    std::vector<std::tuple<std::string, Strategy, Strategy>> placements = {{"dram", std::nullopt, std::nullopt}};
+    for (const auto& [name, strategy] : std::vector<std::pair<std::string, ShardStrategy>>{
+             {"height", ShardStrategy::HEIGHT}, {"width", ShardStrategy::WIDTH}, {"block", ShardStrategy::BLOCK}}) {
+        placements.emplace_back(name + "_in", strategy, std::nullopt);
+        placements.emplace_back(name + "_out", std::nullopt, strategy);
+    }
+    std::vector<CompileCase> cases;
+    for (const auto layout : {Layout::TILE, Layout::ROW_MAJOR}) {
+        const std::string layout_name = layout == Layout::TILE ? "tile" : "row_major";
+        for (const auto& [op_name, op] : ops) {
+            for (const auto& [placement, input, output] : placements) {
+                cases.push_back(
+                    {"dm_" + op_name + "_" + placement + "_" + layout_name,
+                     [op, layout, input, output](MeshDevice* device) {
+                         const ttnn::Shape shape({1, 2, 128, 128});
+                         auto memory_config = [&](Strategy strategy) {
+                             return strategy ? ttnn::operations::data_movement::create_sharded_memory_config(
+                                                   shape,
+                                                   tt::tt_metal::CoreRangeSet(tt::tt_metal::CoreRange({0, 0}, {1, 1})),
+                                                   *strategy,
+                                                   tt::tt_metal::ShardOrientation::ROW_MAJOR,
+                                                   std::nullopt,
+                                                   layout)
+                                             : ttnn::DRAM_MEMORY_CONFIG;
+                         };
+                         run_with_supported_dtype(
+                             [&](DataType dtype) {
+                                 op(device_tensor(device, shape, dtype, layout, memory_config(input)),
+                                    memory_config(output));
+                             },
+                             {DataType::BFLOAT16});
+                     }});
+            }
+        }
     }
     return cases;
 }
@@ -299,17 +403,20 @@ std::vector<CompileCase> sdpa_cases() {
                 compute_config(device, fp32_dest_acc));
         };
     };
-    // Prefill: 1 user, 2 heads, 128 tokens, head dim 64, 64-token Q and K chunks.
-    auto prefill = [](bool is_causal, bool fp32_dest_acc) {
-        return [is_causal, fp32_dest_acc](MeshDevice* device) {
+    // Prefill: 1 user, 2 heads, 128 tokens, head dim 64, 64-token Q and K chunks. Non-causal uses a mask,
+    // or cu_window_seqlens when windowed, which selects the windowed branch of the kernels.
+    auto prefill = [](bool is_causal, bool fp32_dest_acc, bool windowed = false) {
+        return [is_causal, fp32_dest_acc, windowed](MeshDevice* device) {
             constexpr uint32_t b = 1, nh = 2, s = 128, d = 64;
             const auto program_config = ttnn::operations::transformer::SDPAProgramConfig{
                 .compute_with_storage_grid_size = device->compute_with_storage_grid_size(),
                 .q_chunk_size = 64,
                 .k_chunk_size = 64,
             };
-            std::optional<ttnn::Tensor> mask;
-            if (!is_causal) {
+            std::optional<ttnn::Tensor> mask, cu_window_seqlens;
+            if (windowed) {
+                cu_window_seqlens = device_tensor(device, ttnn::Shape({3}), DataType::INT32, Layout::ROW_MAJOR);
+            } else if (!is_causal) {
                 mask = device_tensor(device, ttnn::Shape({b, 1, s, s}));
             }
             ttnn::transformer::scaled_dot_product_attention(
@@ -322,7 +429,17 @@ std::vector<CompileCase> sdpa_cases() {
                 std::nullopt,
                 std::nullopt,
                 program_config,
-                compute_config(device, fp32_dest_acc));
+                compute_config(device, fp32_dest_acc),
+                std::nullopt,
+                cu_window_seqlens);
+        };
+    };
+    auto blackhole_only = [](std::function<void(MeshDevice*)> run) {
+        return [run](MeshDevice* device) {
+            if (device->arch() != tt::ARCH::BLACKHOLE) {
+                GTEST_SKIP() << "Blackhole-only op";
+            }
+            run(device);
         };
     };
     return {
@@ -331,6 +448,40 @@ std::vector<CompileCase> sdpa_cases() {
         {"sdpa_prefill_causal", prefill(true, false)},
         {"sdpa_prefill_causal_fp32_acc", prefill(true, true)},
         {"sdpa_prefill_masked", prefill(false, false)},
+        {"sdpa_windowed", prefill(false, false, true)},
+        {"sdpa_windowed_causal", prefill(true, false, true)},
+        {"sparse_sdpa", blackhole_only([](MeshDevice* device) {
+             ttnn::transformer::sparse_sdpa(
+                 device_tensor(device, ttnn::Shape({1, 32, 32, 64}), DataType::BFLOAT16, Layout::ROW_MAJOR),
+                 device_tensor(device, ttnn::Shape({1, 1, 128, 64}), DataType::BFLOAT16, Layout::ROW_MAJOR),
+                 device_tensor(device, ttnn::Shape({1, 1, 32, 128}), DataType::UINT32, Layout::ROW_MAJOR),
+                 64,
+                 ttnn::transformer::SparseKVFormat::BF16);
+         })},
+        {"sparse_sdpa_msa", blackhole_only([](MeshDevice* device) {
+             ttnn::transformer::sparse_sdpa_msa(
+                 device_tensor(device, ttnn::Shape({1, 16, 32, 64}), DataType::BFLOAT16, Layout::ROW_MAJOR),
+                 device_tensor(device, ttnn::Shape({1, 1, 128, 64})),
+                 device_tensor(device, ttnn::Shape({1, 1, 128, 64})),
+                 device_tensor(device, ttnn::Shape({1, 1, 32, 16}), DataType::UINT32, Layout::ROW_MAJOR));
+         })},
+    };
+}
+
+std::vector<CompileCase> normalization_cases() {
+    return {
+        {"layernorm_welford",
+         [](MeshDevice* device) {
+             ttnn::layer_norm(
+                 device_tensor(device, kTileShape),
+                 1e-5f,
+                 std::nullopt,
+                 std::nullopt,
+                 std::nullopt,
+                 std::nullopt,
+                 ttnn::prim::LayerNormDefaultProgramConfig{.use_welford = true},
+                 compute_config(device, true));
+         }},
     };
 }
 
@@ -346,6 +497,17 @@ std::vector<CompileCase> data_movement_cases() {
                 device_tensor(device, gather_shape, DataType::UINT32, layout),
                 false,
                 std::nullopt);
+        };
+    };
+    // Freeing a buffer just below the input makes the move output overlap it.
+    auto move_overlap = [](Layout layout) {
+        return [layout](MeshDevice* device) {
+            auto below = device_tensor(device, ttnn::Shape({1, 1, 32, 64}), DataType::BFLOAT16, layout);
+            auto input = device_tensor(device, ttnn::Shape({1, 1, 256, 64}), DataType::BFLOAT16, layout);
+            const auto below_address = below.buffer()->address();
+            below.deallocate(true);
+            const auto output = ttnn::move(input);
+            ASSERT_EQ(output.buffer()->address(), below_address) << "output does not overlap the input";
         };
     };
     return {
@@ -373,6 +535,15 @@ std::vector<CompileCase> data_movement_cases() {
         {"gather_multi_core", gather(64 * 32, Layout::TILE)},
         {"gather_row_major_single_core", gather(64, Layout::ROW_MAJOR)},
         {"gather_row_major_multi_core", gather(64 * 32, Layout::ROW_MAJOR)},
+        {"permute_row_invariant_height_sharded",
+         [](MeshDevice* device) {
+             ttnn::permute(
+                 device_tensor(device, ttnn::Shape({2, 1, 1, 64})),
+                 {2, 0, 1, 3},
+                 ttnn::MemoryConfig(tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED, tt::tt_metal::BufferType::L1));
+         }},
+        {"move_overlap_row_major", move_overlap(Layout::ROW_MAJOR)},
+        {"move_overlap_tile", move_overlap(Layout::TILE)},
         {"prod_dim_n", [](MeshDevice* device) { ttnn::prod(device_tensor(device, ttnn::Shape({2, 2, 64, 64})), 0); }},
         {"prod_dim_c", [](MeshDevice* device) { ttnn::prod(device_tensor(device, ttnn::Shape({2, 2, 64, 64})), 1); }},
     };
@@ -413,13 +584,18 @@ INSTANTIATE_TEST_SUITE_P(
     CPU_KernelCompile,
     KernelCompileMockDevice,
     ::testing::Combine(
-        kArchs, ::testing::ValuesIn(join({eltwise_cases(), matmul_cases(), sdpa_cases(), data_movement_cases()}))),
+        kArchs,
+        ::testing::ValuesIn(
+            join({eltwise_cases(), matmul_cases(), sdpa_cases(), normalization_cases(), data_movement_cases()}))),
     case_name);
 
 INSTANTIATE_TEST_SUITE_P(
     CPU_KernelCompileSweep,
     KernelCompileMockDevice,
-    ::testing::Combine(kArchs, ::testing::ValuesIn(join({unary_sweep_cases(), binary_sweep_cases()}))),
+    ::testing::Combine(
+        kArchs,
+        ::testing::ValuesIn(
+            join({unary_sweep_cases(), binary_sweep_cases(), ternary_sweep_cases(), data_movement_sweep_cases()}))),
     case_name);
 
 }  // namespace
