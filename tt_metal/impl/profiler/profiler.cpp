@@ -2404,7 +2404,7 @@ void DeviceProfiler::resetActiveDramBufferIndices() {
 
 DeviceAddr DeviceProfiler::getProfilerDramBufferAddress(uint8_t active_dram_buffer_index) const {
     const auto base_address = env_.get_hal().get_dev_addr(HalDramMemAddrType::PROFILER);
-    const auto offset = static_cast<DeviceAddr>(getProfileBufferBankSizeBytes()) * active_dram_buffer_index;
+    const auto offset = getProfileBufferBankSizeBytes() * active_dram_buffer_index;
     return base_address + offset;
 }
 
