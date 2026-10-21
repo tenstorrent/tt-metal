@@ -502,9 +502,6 @@ ttnn::Tensor concat_force_codegen(
     const std::optional<ttnn::CoreRangeSet>& sub_core_grids) {
     namespace cc = ttnn::operations::data_movement::concat_codegen;
     auto prepared = prepare_concat(input_tensors, dim, memory_config, groups);
-    if (input_tensors.size() == 1) {
-        return ttnn::to_memory_config(input_tensors.at(0), prepared.mem_config, std::nullopt);
-    }
     const ttnn::prim::ConcatCodegenParams params{
         .dim = static_cast<uint32_t>(prepared.dim), .output_mem_config = prepared.mem_config};
     TT_FATAL(
