@@ -245,7 +245,8 @@ void kernel_main() {
                                 DST_ACCUM_MODE,
                                 /*fused=*/false,
                                 /*rank_stamped=*/false,
-                                tie_order>(
+                                tie_order,
+                                /*ct_steps=*/stable>(
                                 /*idst=*/0, (int)dir, /*end_phase(log2(K))=*/5);
                         } else {
                             ckernel::topk_merge<64,
