@@ -19,14 +19,12 @@
 // the same order as with one row tile per job. With a single chunk (chunk_tiles covers x, w2_chunk_rows the W2 rows;
 // always with row_tiles = 1) nothing is spilled.
 #include <cstdint>
-#include "../moe_ring_common.h"
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/common.h"
 #include "api/compute/matmul.h"
 #include "api/compute/pack.h"
 #include "api/compute/reconfig_data_format.h"
-#include "api/compute/cb_api.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/eltwise_unary/fill.h"
 #include "api/dataflow/circular_buffer.h"
@@ -79,9 +77,9 @@ constexpr auto shard_columns = moe_ring::make_shard_lut<intermediate_tiles, ring
 constexpr moe_ring::ShardLUT<ring_cores> make_first_column_lut() {
     moe_ring::ShardLUT<ring_cores> first{};
     uint32_t column = 0;
-    for (uint32_t s = 0; s < ring_cores; ++s) {
-        first.data[s] = column;
-        column += moe_ring::shard_tiles(intermediate_tiles, s, ring_cores);
+    for (uint32_t shard = 0; shard < ring_cores; ++shard) {
+        first.data[shard] = column;
+        column += moe_ring::shard_tiles(intermediate_tiles, shard, ring_cores);
     }
     return first;
 }
@@ -102,7 +100,7 @@ struct CoreGroups {
 struct WeightStream {
     uint32_t left = 0, cur = 0;
     bool held = false;
-    FORCE_INLINE uint32_t take(uint32_t n) {
+    FORCE_INLINE uint32_t take(uint32_t tiles) {
         if (left == 0) {
             CircularBuffer cb_w(cb_w_id);
             if (held) {
@@ -113,10 +111,10 @@ struct WeightStream {
             left = block_tiles;
             cur = 0;
         }
-        const uint32_t i = cur;
-        cur += n;
-        left -= n;
-        return i;
+        const uint32_t first_tile = cur;
+        cur += tiles;
+        left -= tiles;
+        return first_tile;
     }
     FORCE_INLINE void end_run() {
         if (held) {
@@ -142,8 +140,8 @@ struct PackTarget {
     }
 };
 
-// The W2 rows of an output group in moe_compute's order (prepare_w2): this ring position's intermediate columns first,
-// then the previous ring positions'. next() is the intermediate column of the next W2 row.
+// The W2 rows of an output group in moe_compute's order (prepare_w2_tensor_for_moe_compute): this ring position's
+// intermediate columns first, then the previous ring positions'. next() is the intermediate column of the next W2 row.
 struct IntermediateColumnWalk {
     uint32_t position, column, left;
     explicit IntermediateColumnWalk(uint32_t ring_position) :
@@ -183,8 +181,8 @@ FORCE_INLINE void reload_partials(uint32_t cb_in0_id, uint32_t width) {
     reconfig_data_format_srca(cb_w_id, cb_partials_id);
     copy_init(cb_partials_id);
     cb_partials.wait_front(partial_slot_tiles);
-    for (uint32_t t = 0; t < width; ++t) {
-        copy_tile(cb_partials_id, t, t);
+    for (uint32_t group_tile = 0; group_tile < width; ++group_tile) {
+        copy_tile(cb_partials_id, group_tile, group_tile);
     }
     cb_partials.pop_front(partial_slot_tiles);
     reconfig_data_format_srca(cb_partials_id, cb_w_id);
@@ -197,8 +195,8 @@ FORCE_INLINE void pack_slot(uint32_t cb_id, uint32_t tiles) {
     CircularBuffer cb(cb_id);
     tile_regs_wait();
     cb.reserve_back(group_tiles);
-    for (uint32_t t = 0; t < tiles; ++t) {
-        pack_tile<true>(t, cb_id, t);
+    for (uint32_t slot_tile = 0; slot_tile < tiles; ++slot_tile) {
+        pack_tile<true>(slot_tile, cb_id, slot_tile);
     }
     cb.push_back(group_tiles);
 }
@@ -266,8 +264,8 @@ FORCE_INLINE void gate_up_one_row_tile(const CoreGroups& groups, WeightStream& w
             } else if (width != group_tiles) {
                 matmul_block_init(cb_x_id, cb_w_id, /*transpose=*/false, /*ct_dim=*/width, /*rt_dim=*/1, /*kt_dim=*/1);
             }
-            for (uint32_t kt = 0; kt < k_tiles; ++kt) {
-                matmul_block(cb_x_id, cb_w_id, kt, weights.take(width), 0, false, width, 1, 1);
+            for (uint32_t k_tile = 0; k_tile < k_tiles; ++k_tile) {
+                matmul_block(cb_x_id, cb_w_id, k_tile, weights.take(width), 0, false, width, 1, 1);
             }
             if constexpr (has_bias) {
                 if (last) {
@@ -316,8 +314,9 @@ FORCE_INLINE void gate_up_row_tiles(uint32_t job_row_tiles, const CoreGroups& gr
                 if (chunk > 0) {
                     reload_partials(cb_x_id, width);
                 }
-                for (uint32_t kt = 0; kt < k_tiles; ++kt) {
-                    matmul_block(cb_x_id, cb_w_id, kt * job_row_tiles + row_tile, width * kt, 0, false, width, 1, 1);
+                for (uint32_t k_tile = 0; k_tile < k_tiles; ++k_tile) {
+                    matmul_block(
+                        cb_x_id, cb_w_id, k_tile * job_row_tiles + row_tile, width * k_tile, 0, false, width, 1, 1);
                 }
                 if constexpr (has_bias) {
                     if (last) {
@@ -399,9 +398,9 @@ FORCE_INLINE void down_row_tiles(uint32_t job_row_tiles, const CoreGroups& group
                     reload_partials(cb_intermediate_id, width);
                 }
                 walk = chunk_start;
-                for (uint32_t i = 0; i < k_rows; ++i) {
+                for (uint32_t k_row = 0; k_row < k_rows; ++k_row) {
                     const uint32_t in0_tile = row_tile * intermediate_tiles + walk.next();
-                    matmul_block(cb_intermediate_id, cb_w_id, in0_tile, width * i, 0, false, width, 1, 1);
+                    matmul_block(cb_intermediate_id, cb_w_id, in0_tile, width * k_row, 0, false, width, 1, 1);
                 }
                 if constexpr (has_bias) {
                     if (last) {

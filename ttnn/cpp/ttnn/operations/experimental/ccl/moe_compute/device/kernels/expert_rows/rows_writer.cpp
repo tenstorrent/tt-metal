@@ -6,14 +6,14 @@
 // most 32 * row_tiles of its routed rows, from the routing table; job = its index in this group's list):
 // - x: the job's x moves in chunks of chunk_tiles hidden tiles (one chunk when chunk_tiles covers them all). Every
 //   group core owns an equal piece of each chunk (so all of them send at once): it reads that slice of each of the
-//   job's token rows from the row-major input, rearranges it into tile faces ([hidden tile][row tile], row p of the
-//   job = row p % 32 of row tile p / 32) and writes it into slot (chunk % x_slots) of every group core's cb_x, then
-//   increments that slot's semaphore on every group core.
+//   job's token rows from the row-major input, rearranges it into tile faces ([hidden tile][row tile]: the job's row
+//   `row` is row row % 32 of row tile row / 32) and writes it into slot (chunk % x_slots) of every group core's cb_x,
+//   then increments that slot's semaphore on every group core.
 // - intermediate exchange: this core's activated tiles (its real intermediate columns of every row tile) to slot
 //   (job % intermediate_slots) of every group core's cb_intermediate, one semaphore per slot.
 // - output rows: per W2 output group and row tile, the compute leaves 4 bf16 tiles in cb_rows; the job's real rows are
-//   copied out of the tile faces and written as posted writes to output row (first row of the job + p), columns of the
-//   group's real output tiles.
+//   copied out of the tile faces and written as posted writes to output row (first row of the job + row), columns of
+//   the group's real output tiles.
 // Slot reuse. With one x chunk per job and intermediate_slots >= 3 (no credits) the exchange orders it: once a core
 // holds every group core's activated tiles of job j, every core finished the gate/up projection of jobs j (x slot of
 // job j free) and j - 1, hence the down projection of job j - 3. With several chunks per job a slot is reused only
@@ -118,14 +118,14 @@ FORCE_INLINE uint32_t x_chunks(const GroupJobs& jobs, uint32_t job) {
     return expert_rows::div_up(hidden_tiles, tiles);
 }
 
-// This core's piece of x chunk c of a job: hidden tiles [c chunk + first, c chunk + first + tiles)
+// This core's piece of x chunk `chunk` of a job: hidden tiles [first, first + tiles) of that chunk
 struct XPiece {
     uint32_t first, tiles;
 };
 
-FORCE_INLINE XPiece x_piece(const GroupJobs& jobs, uint32_t job, uint32_t c, uint32_t member) {
-    const uint32_t chunk = x_chunk_tiles(jobs, job);
-    const uint32_t tiles = c + 1 < x_chunks(jobs, job) ? chunk : hidden_tiles - c * chunk;
+FORCE_INLINE XPiece x_piece(const GroupJobs& jobs, uint32_t job, uint32_t chunk, uint32_t member) {
+    const uint32_t job_chunk_tiles = x_chunk_tiles(jobs, job);
+    const uint32_t tiles = chunk + 1 < x_chunks(jobs, job) ? job_chunk_tiles : hidden_tiles - chunk * job_chunk_tiles;
     const uint32_t first = member * tiles / group_cores;
     return {first, (member + 1) * tiles / group_cores - first};
 }
@@ -140,43 +140,43 @@ FORCE_INLINE XPiece x_piece(const GroupJobs& jobs, uint32_t job, uint32_t c, uin
 template <typename XAccessor>
 struct XStream {
     CircularBuffer cb_x;
-    XAccessor x;
+    XAccessor x_tensor;
     volatile tt_l1_ptr uint16_t* row_tokens;  // token of each routed row
     uint32_t member;                          // index of this core in its group
     uint32_t staging;                         // tile_rows row_tiles rows of piece_row_stride
-    uint32_t piece_tiles;                     // [piece tile][row tile] bf16 tiles
+    uint32_t piece_tiles_addr;                // [piece tile][row tile] bf16 tiles
     uint32_t x_base;                          // cb_x, same L1 address on every group core
     uint32_t group_mask_arg;
 
-    // The piece of chunk c for every row of a job, as tiles [piece tile][row tile] in piece_tiles.
-    __attribute__((noinline)) void build_piece(const GroupJobs& jobs, uint32_t job, uint32_t c) const {
+    // The piece of chunk `chunk` for every row of a job, as tiles [piece tile][row tile] at piece_tiles_addr.
+    __attribute__((noinline)) void build_piece(const GroupJobs& jobs, uint32_t job, uint32_t chunk) const {
         const Noc noc;
         const uint32_t first_row = jobs.first_row(job), rows = jobs.rows(job);
         const uint32_t job_row_tiles = expert_rows::row_tiles_of(rows);
-        const XPiece piece = x_piece(jobs, job, c, member);
+        const XPiece piece = x_piece(jobs, job, chunk, member);
         if (piece.tiles == 0) {
             return;
         }
         // staging row stride = this piece (a one-row-tile job's piece is up to row_tiles times a held job's)
-        const uint32_t first_tile = c * x_chunk_tiles(jobs, job) + piece.first;
+        const uint32_t first_tile = chunk * x_chunk_tiles(jobs, job) + piece.first;
         const uint32_t stride = piece.tiles * tile_row_bytes;
-        for (uint32_t p = 0; p < rows; ++p) {
+        for (uint32_t row = 0; row < rows; ++row) {
             noc.async_read(
-                x,
-                CoreLocalMem<uint32_t>(staging + p * stride),
+                x_tensor,
+                CoreLocalMem<uint32_t>(staging + row * stride),
                 piece.tiles * tile_row_bytes,
-                {.page_id = row_tokens[first_row + p], .offset_bytes = first_tile * tile_row_bytes},
+                {.page_id = row_tokens[first_row + row], .offset_bytes = first_tile * tile_row_bytes},
                 {});
         }
         noc.async_read_barrier();
         // this core's own L1 as the read source: no Device 2.0 endpoint takes it (CoreLocalMem is a local source only)
         noc.set_async_read_state<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
             PrecomposedUnicastEndpoint{}, face_row_bytes, {.noc_addr = get_noc_addr(staging)});
-        for (uint32_t t = 0; t < piece.tiles; ++t) {
-            for (uint32_t p = 0; p < rows; ++p) {
-                const uint32_t src = staging + p * stride + t * tile_row_bytes;
-                const uint32_t dst =
-                    piece_tiles + (t * job_row_tiles + p / tile_rows) * tile_bytes + tile_row_offset(p % tile_rows);
+        for (uint32_t piece_tile = 0; piece_tile < piece.tiles; ++piece_tile) {
+            for (uint32_t row = 0; row < rows; ++row) {
+                const uint32_t src = staging + row * stride + piece_tile * tile_row_bytes;
+                const uint32_t dst = piece_tiles_addr + (piece_tile * job_row_tiles + row / tile_rows) * tile_bytes +
+                                     tile_row_offset(row % tile_rows);
                 noc.async_read_with_state<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
                     UnicastEndpoint{}, CoreLocalMem<uint32_t>(dst), face_row_bytes, {.addr = src}, {});
                 noc.async_read_with_state<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
@@ -190,9 +190,9 @@ struct XStream {
         noc.async_read_barrier();
     }
 
-    // The built piece of chunk c of a job, chunk number seq of this core's stream, to slot seq % x_slots of every group
-    // core's cb_x; then that slot's semaphore on every group core.
-    __attribute__((noinline)) void send_piece(const GroupJobs& jobs, uint32_t job, uint32_t c, uint32_t seq) {
+    // The built piece of chunk `chunk` of a job, chunk number seq of this core's stream, to slot seq % x_slots of every
+    // group core's cb_x; then that slot's semaphore on every group core.
+    __attribute__((noinline)) void send_piece(const GroupJobs& jobs, uint32_t job, uint32_t chunk, uint32_t seq) {
         const Noc noc;
         const uint32_t rows = jobs.rows(job);
         const uint32_t job_row_tiles = expert_rows::row_tiles_of(rows);
@@ -204,30 +204,30 @@ struct XStream {
                 Semaphore<>(sem_x_free + slot).wait_min(group_cores * use);
             }
         }
-        const XPiece piece = x_piece(jobs, job, c, member);
+        const XPiece piece = x_piece(jobs, job, chunk, member);
         if (piece.tiles) {
             const uint32_t dst = x_base + (slot * chunk_tiles * row_tiles + piece.first * job_row_tiles) * tile_bytes;
             if (job_row_tiles == 1 && rows <= expert_rows::face_rows) {  // the rows are in the top two faces of a tile
                 for (GroupCoreIterator core(group_mask_arg); core.next();) {
-                    for (uint32_t t = 0; t < piece.tiles; ++t) {
+                    for (uint32_t piece_tile = 0; piece_tile < piece.tiles; ++piece_tile) {
                         noc.async_write(
-                            CoreLocalMem<uint32_t>(piece_tiles + t * tile_bytes),
+                            CoreLocalMem<uint32_t>(piece_tiles_addr + piece_tile * tile_bytes),
                             UnicastEndpoint{},
                             rows * face_row_bytes,
                             {},
-                            {.noc_x = core.x, .noc_y = core.y, .addr = dst + t * tile_bytes});
+                            {.noc_x = core.x, .noc_y = core.y, .addr = dst + piece_tile * tile_bytes});
                         noc.async_write(
-                            CoreLocalMem<uint32_t>(piece_tiles + t * tile_bytes + face_bytes),
+                            CoreLocalMem<uint32_t>(piece_tiles_addr + piece_tile * tile_bytes + face_bytes),
                             UnicastEndpoint{},
                             rows * face_row_bytes,
                             {},
-                            {.noc_x = core.x, .noc_y = core.y, .addr = dst + t * tile_bytes + face_bytes});
+                            {.noc_x = core.x, .noc_y = core.y, .addr = dst + piece_tile * tile_bytes + face_bytes});
                     }
                 }
             } else {
                 for (GroupCoreIterator core(group_mask_arg); core.next();) {
                     noc.async_write(
-                        CoreLocalMem<uint32_t>(piece_tiles),
+                        CoreLocalMem<uint32_t>(piece_tiles_addr),
                         UnicastEndpoint{},
                         piece.tiles * job_row_tiles * tile_bytes,
                         {},
@@ -265,7 +265,7 @@ struct IntermediateExchange {
         const uint32_t job_row_tiles = expert_rows::row_tiles_of(jobs.rows(job));
         const uint32_t slot = job % intermediate_slots, use = job / intermediate_slots;
         cb_activated.wait_front(row_tiles * activated_tiles);
-        const uint32_t activated = cb_activated.get_read_ptr();
+        const uint32_t activated_addr = cb_activated.get_read_ptr();
         if constexpr (slot_credits) {
             cb_intermediate.reserve_back(row_tiles * intermediate_tiles);  // this core's compute popped the slot
             if (use > 0) {
@@ -274,10 +274,11 @@ struct IntermediateExchange {
             }
         }
         for (GroupCoreIterator core(group_mask_arg); core.next();) {
-            for (uint32_t r = 0; r < job_row_tiles; ++r) {
-                const uint32_t tile = slot * row_tiles * intermediate_tiles + r * intermediate_tiles + first_column;
+            for (uint32_t row_tile = 0; row_tile < job_row_tiles; ++row_tile) {
+                const uint32_t tile =
+                    slot * row_tiles * intermediate_tiles + row_tile * intermediate_tiles + first_column;
                 noc.async_write(
-                    CoreLocalMem<uint32_t>(activated + r * activated_tiles * tile_bytes),
+                    CoreLocalMem<uint32_t>(activated_addr + row_tile * activated_tiles * tile_bytes),
                     UnicastEndpoint{},
                     activated_columns * tile_bytes,
                     {},
@@ -311,20 +312,22 @@ struct OutputRows {
         const Noc noc;
         const uint32_t first_row = jobs.first_row(job), rows = jobs.rows(job);
         const uint32_t job_row_tiles = expert_rows::row_tiles_of(rows);
-        for (uint32_t q = 0; q < output_groups; ++q) {
-            for (uint32_t r = 0; r < job_row_tiles; ++r) {
+        for (uint32_t output_group = 0; output_group < output_groups; ++output_group) {
+            for (uint32_t row_tile = 0; row_tile < job_row_tiles; ++row_tile) {
                 cb_rows.wait_front(group_tiles);
-                const uint32_t tiles = cb_rows.get_read_ptr();
-                const uint32_t real_tiles =
-                    output_tiles - group_tiles * q < group_tiles ? output_tiles - group_tiles * q : group_tiles;
-                const uint32_t tile_real_rows = rows - tile_rows * r < tile_rows ? rows - tile_rows * r : tile_rows;
+                const uint32_t tiles_addr = cb_rows.get_read_ptr();
+                const uint32_t real_tiles = output_tiles - group_tiles * output_group < group_tiles
+                                                ? output_tiles - group_tiles * output_group
+                                                : group_tiles;
+                const uint32_t tile_real_rows =
+                    rows - tile_rows * row_tile < tile_rows ? rows - tile_rows * row_tile : tile_rows;
                 // this core's own L1 as the read source, as in XStream::build_piece
                 noc.set_async_read_state<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
-                    PrecomposedUnicastEndpoint{}, face_row_bytes, {.noc_addr = get_noc_addr(tiles)});
-                for (uint32_t t = 0; t < real_tiles; ++t) {
-                    for (uint32_t p = 0; p < tile_real_rows; ++p) {
-                        const uint32_t src = tiles + t * tile_bytes + tile_row_offset(p);
-                        const uint32_t dst = staging + p * output_row_stride + t * tile_row_bytes;
+                    PrecomposedUnicastEndpoint{}, face_row_bytes, {.noc_addr = get_noc_addr(tiles_addr)});
+                for (uint32_t group_tile = 0; group_tile < real_tiles; ++group_tile) {
+                    for (uint32_t row = 0; row < tile_real_rows; ++row) {
+                        const uint32_t src = tiles_addr + group_tile * tile_bytes + tile_row_offset(row);
+                        const uint32_t dst = staging + row * output_row_stride + group_tile * tile_row_bytes;
                         noc.async_read_with_state<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
                             UnicastEndpoint{}, CoreLocalMem<uint32_t>(dst), face_row_bytes, {.addr = src}, {});
                         noc.async_read_with_state<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
@@ -339,14 +342,14 @@ struct OutputRows {
                 cb_rows.pop_front(group_tiles);
                 // posted writes: non-posted row writes, many in flight under the weight stream, go unacknowledged and
                 // hang the device
-                const uint32_t column_offset = (first_output_tile + group_tiles * q) * tile_row_bytes;
-                for (uint32_t p = 0; p < tile_real_rows; ++p) {
+                const uint32_t column_offset = (first_output_tile + group_tiles * output_group) * tile_row_bytes;
+                for (uint32_t row = 0; row < tile_real_rows; ++row) {
                     noc.async_write<NocOptions::POSTED>(
-                        CoreLocalMem<uint32_t>(staging + p * output_row_stride),
+                        CoreLocalMem<uint32_t>(staging + row * output_row_stride),
                         row_buffer,
                         real_tiles * tile_row_bytes,
                         {},
-                        {.page_id = first_row + tile_rows * r + p, .offset_bytes = column_offset});
+                        {.page_id = first_row + tile_rows * row_tile + row, .offset_bytes = column_offset});
                 }
                 noc.async_writes_flushed<NocOptions::POSTED>();
             }
@@ -381,9 +384,9 @@ void kernel_main() {
     // cb_scratch: [x staging: tile_rows row_tiles rows of piece_row_stride][piece tiles: chunk_piece_max x row_tiles]
     // [output row staging: tile_rows rows of output_row_stride]
     const uint32_t x_staging = cb_scratch.get_write_ptr();
-    const uint32_t piece_tiles = x_staging + tile_rows * row_tiles * piece_row_stride;
-    const uint32_t row_staging = piece_tiles + chunk_piece_max * row_tiles * tile_bytes;
-    const auto x = TensorAccessor(x_args, x_addr, row_bytes);
+    const uint32_t piece_tiles_addr = x_staging + tile_rows * row_tiles * piece_row_stride;
+    const uint32_t row_staging = piece_tiles_addr + chunk_piece_max * row_tiles * tile_bytes;
+    const auto x_tensor = TensorAccessor(x_args, x_addr, row_bytes);
     const auto row_buffer = TensorAccessor(row_buffer_args, row_buffer_addr, row_bytes);
     const uint32_t x_base = cb_x.get_write_ptr();
     const uint32_t intermediate_base = cb_intermediate.get_write_ptr();
@@ -409,13 +412,13 @@ void kernel_main() {
         return;
     }
 
-    XStream<decltype(x)> x_stream{
+    XStream<decltype(x_tensor)> x_stream{
         .cb_x = cb_x,
-        .x = x,
+        .x_tensor = x_tensor,
         .row_tokens = row_tokens,
         .member = member,
         .staging = x_staging,
-        .piece_tiles = piece_tiles,
+        .piece_tiles_addr = piece_tiles_addr,
         .x_base = x_base,
         .group_mask_arg = group_mask_arg};
     IntermediateExchange intermediate{
@@ -468,15 +471,15 @@ void kernel_main() {
         for (uint32_t job = 0; job < job_count; ++job) {
             const uint32_t chunks = x_chunks(jobs, job);
             const uint32_t trigger = (x_slots < chunks ? x_slots : chunks) - 1;
-            for (uint32_t c = 0; c < chunks; ++c) {
-                x_stream.send_piece(jobs, job, c, seq);
-                if (c + 1 < chunks) {
-                    x_stream.build_piece(jobs, job, c + 1);
+            for (uint32_t chunk = 0; chunk < chunks; ++chunk) {
+                x_stream.send_piece(jobs, job, chunk, seq);
+                if (chunk + 1 < chunks) {
+                    x_stream.build_piece(jobs, job, chunk + 1);
                 } else if (job + 1 < job_count) {
                     x_stream.build_piece(jobs, job + 1, 0);
                 }
                 x_stream.push_chunk(seq++);
-                if (c == trigger && job >= 1) {
+                if (chunk == trigger && job >= 1) {
                     if (job >= 2) {
                         output_rows.write(jobs, job - 2);
                     }

@@ -50,14 +50,14 @@ struct SlicePieces {
     FORCE_INLINE SlicePieces(uint32_t first_tile, uint32_t tiles) {
         for (uint32_t tile = first_tile, done = 0; done < tiles && count < max_pieces; ++count) {
             const uint32_t in_shard = tile % shard_width_tiles;
-            const uint32_t n =
+            const uint32_t piece_tiles =
                 shard_width_tiles - in_shard < tiles - done ? shard_width_tiles - in_shard : tiles - done;
             slice_offset[count] = done * tile_width_bytes;
             shard[count] = tile / shard_width_tiles;
             shard_offset[count] = in_shard * tile_width_bytes;
-            bytes[count] = n * tile_width_bytes;
-            tile += n;
-            done += n;
+            bytes[count] = piece_tiles * tile_width_bytes;
+            tile += piece_tiles;
+            done += piece_tiles;
         }
     }
 };
@@ -92,14 +92,14 @@ FORCE_INLINE void read_batch(
     uint32_t first_tile,
     uint32_t tiles) {
     const uint32_t first = batch * batch_rows;
-    const uint32_t n = rows_in_batch(expert_rows, batch);
+    const uint32_t row_count = rows_in_batch(expert_rows, batch);
     const uint32_t buffer = staging_buffer(scratch, batch);
-    for (uint32_t i = 0; i < n; ++i) {
+    for (uint32_t batch_row = 0; batch_row < row_count; ++batch_row) {
         noc.async_read(
             rows,
-            CoreLocalMem<uint32_t>(buffer + i * slice_stride),
+            CoreLocalMem<uint32_t>(buffer + batch_row * slice_stride),
             tiles * tile_width_bytes,
-            {.page_id = expert_first_row + first + i, .offset_bytes = first_tile * tile_width_bytes},
+            {.page_id = expert_first_row + first + batch_row, .offset_bytes = first_tile * tile_width_bytes},
             {});
     }
 }
@@ -124,22 +124,22 @@ struct HeightShardCursor {
 // One staged batch to the combine cores' double-buffer half: each row's pieces to the shard the cursor is on.
 FORCE_INLINE void write_batch(
     uint32_t staged,
-    uint32_t n,
+    uint32_t row_count,
     const SlicePieces& pieces,
     uint32_t combine_cores_arg,
     uint32_t double_buffer,
     uint32_t half,
     HeightShardCursor& cursor) {
-    for (uint32_t i = 0; i < n; ++i) {
-        for (uint32_t p = 0; p < pieces.count; ++p) {
-            const uint32_t shard = cursor.shard * width_shards + pieces.shard[p];
+    for (uint32_t batch_row = 0; batch_row < row_count; ++batch_row) {
+        for (uint32_t piece = 0; piece < pieces.count; ++piece) {
+            const uint32_t shard = cursor.shard * width_shards + pieces.shard[piece];
             const uint32_t x = combine_core_x(combine_cores_arg, shard);
             const uint32_t y = combine_core_y(combine_cores_arg, shard);
             // dataflow_api write: with Noc::async_write (either endpoint) this per-row loop runs slower
             noc_async_write(
-                staged + i * slice_stride + pieces.slice_offset[p],
-                get_noc_addr(x, y, double_buffer + half + cursor.row * shard_row_bytes + pieces.shard_offset[p]),
-                pieces.bytes[p]);
+                staged + batch_row * slice_stride + pieces.slice_offset[piece],
+                get_noc_addr(x, y, double_buffer + half + cursor.row * shard_row_bytes + pieces.shard_offset[piece]),
+                pieces.bytes[piece]);
         }
         cursor.advance();
     }
@@ -148,9 +148,9 @@ FORCE_INLINE void write_batch(
 // Once per expert: one increment to every combine core of the feeder's width shards.
 FORCE_INLINE void signal_combine_cores(
     const Noc& noc, Semaphore<>& semaphore, const SlicePieces& pieces, uint32_t combine_cores_arg) {
-    for (uint32_t p = 0; p < pieces.count; ++p) {
-        for (uint32_t h = 0; h < height_shards; ++h) {
-            const uint32_t shard = h * width_shards + pieces.shard[p];
+    for (uint32_t piece = 0; piece < pieces.count; ++piece) {
+        for (uint32_t height_shard = 0; height_shard < height_shards; ++height_shard) {
+            const uint32_t shard = height_shard * width_shards + pieces.shard[piece];
             semaphore.up(noc, combine_core_x(combine_cores_arg, shard), combine_core_y(combine_cores_arg, shard), 1);
         }
     }
@@ -184,24 +184,24 @@ void kernel_main() {
     const auto rows = TensorAccessor(rows_args, rows_addr, row_bytes);
     Semaphore<> semaphore(combine_sync_semaphore_id);
     uint32_t released = 0;
-    for (uint32_t e = 0; e < local_experts; ++e) {
-        const uint32_t n = expert_row_counts[e], first_row = expert_first_rows[e];
-        const uint32_t half = (e & 1) * half_bytes;
-        const uint32_t batches = (n + batch_rows - 1) / batch_rows;
+    for (uint32_t expert = 0; expert < local_experts; ++expert) {
+        const uint32_t row_count = expert_row_counts[expert], first_row = expert_first_rows[expert];
+        const uint32_t half = (expert & 1) * half_bytes;
+        const uint32_t batches = (row_count + batch_rows - 1) / batch_rows;
         if (batches) {
-            read_batch(noc, rows, scratch, first_row, n, 0, first_tile, tiles);
+            read_batch(noc, rows, scratch, first_row, row_count, 0, first_tile, tiles);
         }
         semaphore.wait_min(released);  // the combine released this half
-        HeightShardCursor cursor(n);
+        HeightShardCursor cursor(row_count);
         for (uint32_t batch = 0; batch < batches; ++batch) {
             noc.async_read_barrier();
             noc.async_writes_flushed();  // the previous batch left the other staging buffer
             if (batch + 1 < batches) {
-                read_batch(noc, rows, scratch, first_row, n, batch + 1, first_tile, tiles);
+                read_batch(noc, rows, scratch, first_row, row_count, batch + 1, first_tile, tiles);
             }
             write_batch(
                 staging_buffer(scratch, batch),
-                rows_in_batch(n, batch),
+                rows_in_batch(row_count, batch),
                 pieces,
                 combine_cores_arg,
                 double_buffer,

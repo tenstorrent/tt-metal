@@ -1717,7 +1717,7 @@ def test_moe_compute_clamped_silu_limit_is_program_cache_key(mesh_device, mesh_s
         )
         ttnn.synchronize_device(mesh_device)
         cache_entries.append(mesh_device.num_program_cache_entries())
-    # one MoE call is one program on the ring path and two on the expert rows path (expert rows + combine side)
+    # one MoE call is one program on the ring path and two on the expert rows path (expert rows + placement)
     assert cache_entries[1] - cache_entries[0] in (
         1,
         2,
@@ -1800,24 +1800,24 @@ def test_moe_compute_precision_is_program_cache_key(mesh_device, mesh_shape):
         )
         ttnn.synchronize_device(mesh_device)
         cache_entries.append(mesh_device.num_program_cache_entries())
-    # one MoE call is one program on the ring path and two on the expert rows path (expert rows + combine side)
-    added = [b - a for a, b in zip(cache_entries[0:3], cache_entries[1:4])]
+    # one MoE call is one program on the ring path and two on the expert rows path (expert rows + placement)
+    added = [after - before for before, after in zip(cache_entries[0:3], cache_entries[1:4])]
     assert added[0] in (1, 2) and added == [added[0]] * 3, cache_entries
     assert cache_entries[4] == cache_entries[3], "returning to default precision must hit its cached program"
 
 
 # ---- expert rows path ----
-# On Blackhole, moe_compute runs the expert-row program plus a second program: metadata and placement (ComputeOnly), or
-# metadata, the double-buffer feed and selective_reduce_combine's own kernels (SingleDevice);
-# TT_METAL_MOE_COMPUTE_KERNEL=ring|expert_rows forces a path and TT_METAL_MOE_COMPUTE_ROW_TILES=M the expert rows path's
-# row tiles per job (M > 1: weight-stationary jobs). The tests below check, for both paths on the same inputs:
+# On Blackhole, moe_compute runs the expert rows program, then the placement program: outputs 0-2 and the double buffer
+# (ComputeOnly), or outputs 0-2, the double-buffer feed and selective_reduce_combine's own kernels (SingleDevice);
+# TT_METAL_MOE_COMPUTE_KERNEL=ring|expert_rows forces a path and TT_METAL_MOE_COMPUTE_ROW_TILES the expert rows path's
+# row tiles per job (more than 1: weight-stationary jobs). The tests below check, for both paths on the same inputs:
 #   - outputs 0-2 (counts, activation rows, e_t) against the 6U goldens, and equal between the two paths;
 #   - output 4: every row of the last two local experts (what moe_compute leaves in its double buffer) against an FP32
 #     golden on the BFP4-rounded weights;
 #   - SingleDevice output 5 (the combine output): bitwise equal between the paths, and against the FP32 golden;
 #   - a repeated call and a traced call bitwise equal to the eager call, in every DEST mode and with the defaults;
-#   - rows (output 4, and every row through the SingleDevice combine) of jobs of M row tiles bitwise equal to one row
-#     tile per job, in every DEST mode.
+#   - rows (output 4, and every row through the SingleDevice combine) of jobs of several row tiles bitwise equal to one
+#     row tile per job, in every DEST mode.
 
 # an e_t page: one u32 token per 16-byte entry (every _E_T_ENTRY_WORDS-th word), ended by _E_T_END
 _E_T_ENTRY_WORDS = 4
@@ -1829,6 +1829,14 @@ _EXPERT_ROWS_DEVICE_PARAMS = [
 ]
 _KERNEL_ENV = "TT_METAL_MOE_COMPUTE_KERNEL"
 _ROW_TILES_ENV = "TT_METAL_MOE_COMPUTE_ROW_TILES"
+
+_PRECISION_MODES = {
+    "default": {},
+    "lofi_bf16": dict(math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=False),
+    "lofi_fp32": dict(math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=True),
+    "hifi2_bf16": dict(math_fidelity=ttnn.MathFidelity.HiFi2, fp32_dest_acc_en=False),
+    "hifi4_fp32": dict(math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True),
+}
 
 
 @contextmanager
@@ -1857,11 +1865,11 @@ def _skip_unless_supported_arch(mesh_device):
 
 def _skip_row_tiles_on_wormhole(mesh_device):
     if mesh_device.arch() == ttnn.device.Arch.WORMHOLE_B0:
-        pytest.skip("Wormhole runs one row tile per job: the M > 1 kernels exceed its kernel config buffer")
+        pytest.skip("Wormhole runs one row tile per job: the kernels of several exceed its kernel config buffer")
 
 
-def _bfp4_round(w):
-    return ttnn.to_torch(ttnn.from_torch(w.float(), dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT)).float()
+def _bfp4_round(tensor):
+    return ttnn.to_torch(ttnn.from_torch(tensor.float(), dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT)).float()
 
 
 def _mismatch(a, b):
@@ -1920,7 +1928,7 @@ class _Case:
         limit=None,
         has_bias=False,
         kind="random",
-        ntp=4,
+        output_height_shard_dim=4,
         layers=1,
         goldens=True,
     ):
@@ -1934,12 +1942,15 @@ class _Case:
             intermediate_size,
             hidden_size,
         )
-        self.act, self.limit, self.has_bias, self.ntp, self.layers = act, limit, has_bias, ntp, layers
+        self.act, self.limit, self.has_bias = act, limit, has_bias
         mesh_shape = (1, 1)
-        self.dp = auto_output_width_shard_dim(hidden_size)
-        _xfail_on_short_wormhole_grid(mesh_device, ntp * self.dp)
-        drain = ttnn.experimental.get_moe_tilize_drain_core(mesh_device, ntp, self.dp, hidden_size)
-        drain_set = ttnn.CoreRangeSet({ttnn.CoreRange(drain, drain)})
+        output_width_shard_dim = auto_output_width_shard_dim(hidden_size)
+        self.output_height_shard_dim, self.output_width_shard_dim = output_height_shard_dim, output_width_shard_dim
+        _xfail_on_short_wormhole_grid(mesh_device, output_height_shard_dim * output_width_shard_dim)
+        drain_core_coord = ttnn.experimental.get_moe_tilize_drain_core(
+            mesh_device, output_height_shard_dim, output_width_shard_dim, hidden_size
+        )
+        tilize_drain_core = ttnn.CoreRangeSet({ttnn.CoreRange(drain_core_coord, drain_core_coord)})
         mapping = gen_expert_mapping(1, 1, None, local_experts, local_experts, local_experts)
         if kind == "random":
             sparse, indices, scores, _ = gen_sparse_buffer_and_indices(
@@ -1961,7 +1972,9 @@ class _Case:
             self.golden_act, _ = compute_expert_activation_golden(indices, scores, mapping, mesh_shape, None)
             self.golden_e_t, _ = compute_e_t_golden(indices, mapping, mesh_shape, None)
 
-        w01_map, w2_map, dram_set = get_weight_core_shard_maps(mesh_device, hidden_size, intermediate_size)
+        w0_w1_shard_map, w2_shard_map, dram_core_range_set = get_weight_core_shard_maps(
+            mesh_device, hidden_size, intermediate_size
+        )
         w0, w1, w2 = (
             create_torch_w0(layers, local_experts, hidden_size, intermediate_size),
             create_torch_w1(layers, local_experts, hidden_size, intermediate_size),
@@ -1972,76 +1985,99 @@ class _Case:
             b0 = (torch.randn(layers, local_experts, intermediate_size) * 0.12).to(torch.bfloat16)
             b1 = (torch.randn(layers, local_experts, intermediate_size) * 0.12).to(torch.bfloat16)
             b2 = (torch.randn(layers, local_experts, hidden_size) * 0.12).to(torch.bfloat16)
+
         # FP32 golden on the BFP4-rounded weights (bias tiles are BFP4 too)
-        rw = lambda w: torch.stack(
-            [torch.stack([_bfp4_round(w[l, e]) for e in range(local_experts)]) for l in range(layers)]
-        )  # noqa
-        r0, r1, r2 = rw(w0), rw(w1), rw(w2)
-        rb = lambda b: None if b is None else torch.stack([_bfp4_round(b[l].float()) for l in range(layers)])  # noqa
+        def bfp4_rounded_weights(weights):
+            return torch.stack(
+                [
+                    torch.stack([_bfp4_round(weights[layer, expert]) for expert in range(local_experts)])
+                    for layer in range(layers)
+                ]
+            )
+
+        def bfp4_rounded_bias(bias):
+            return None if bias is None else torch.stack([_bfp4_round(bias[layer].float()) for layer in range(layers)])
+
+        rounded_w0, rounded_w1, rounded_w2 = (bfp4_rounded_weights(weights) for weights in (w0, w1, w2))
         self.golden = (
             None
             if not goldens
             else compute_matmul_golden(
                 tilize.unsqueeze(0).repeat([layers] + [1] * tilize.dim()),
-                r0,
-                r1,
-                r2,
+                rounded_w0,
+                rounded_w1,
+                rounded_w2,
                 layers,
                 local_experts,
                 1,
                 tokens,
                 hidden_size,
-                torch_b0=rb(b0),
-                torch_b1=rb(b1),
-                torch_b2=rb(b2),
+                torch_b0=bfp4_rounded_bias(b0),
+                torch_b1=bfp4_rounded_bias(b1),
+                torch_b2=bfp4_rounded_bias(b2),
                 activation_type=act,
                 activation_limit=limit,
             ).float()
         )
-        m01, m2, _, _ = get_weight_mem_configs(
-            layers, local_experts, hidden_size, intermediate_size, w01_map, w2_map, dram_set, has_bias=has_bias
+        w0_w1_mem_config, w2_mem_config, _, _ = get_weight_mem_configs(
+            layers,
+            local_experts,
+            hidden_size,
+            intermediate_size,
+            w0_w1_shard_map,
+            w2_shard_map,
+            dram_core_range_set,
+            has_bias=has_bias,
         )
         if has_bias:
-            p01 = prepare_w0_w1_tensor_with_bias(
-                w0, w1, b0, b1, layers, local_experts, hidden_size, intermediate_size, w01_map
+            torch_w0_w1_reordered = prepare_w0_w1_tensor_with_bias(
+                w0, w1, b0, b1, layers, local_experts, hidden_size, intermediate_size, w0_w1_shard_map
             )
-            p2 = prepare_w2_tensor_with_bias(
-                w2, b2, layers, local_experts, intermediate_size, hidden_size, w2_map, w01_map
+            torch_w2_reordered = prepare_w2_tensor_with_bias(
+                w2, b2, layers, local_experts, intermediate_size, hidden_size, w2_shard_map, w0_w1_shard_map
             )
         else:
-            p01 = prepare_w0_w1_tensor_for_moe_compute(
-                w0, w1, layers, local_experts, hidden_size, intermediate_size, w01_map
+            torch_w0_w1_reordered = prepare_w0_w1_tensor_for_moe_compute(
+                w0, w1, layers, local_experts, hidden_size, intermediate_size, w0_w1_shard_map
             )
-            p2 = prepare_w2_tensor_for_moe_compute(
-                w2, layers, local_experts, intermediate_size, hidden_size, w2_map, w01_map
+            torch_w2_reordered = prepare_w2_tensor_for_moe_compute(
+                w2, layers, local_experts, intermediate_size, hidden_size, w2_shard_map, w0_w1_shard_map
             )
+
         # host BFP4 rounding, the same the golden's weights get
-        upload = lambda t, mc: ttnn.from_torch(  # noqa: E731
-            t, dtype=ttnn.bfloat4_b, device=mesh_device, layout=ttnn.TILE_LAYOUT, memory_config=mc
-        )
-        self.w01, self.w2 = upload(p01, m01), upload(p2, m2)
-        self.x = ttnn.from_torch(
+        def upload_bfp4(torch_tensor, memory_config):
+            return ttnn.from_torch(
+                torch_tensor,
+                dtype=ttnn.bfloat4_b,
+                device=mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=memory_config,
+            )
+
+        self.tt_w0_w1 = upload_bfp4(torch_w0_w1_reordered, w0_w1_mem_config)
+        self.tt_w2 = upload_bfp4(torch_w2_reordered, w2_mem_config)
+        self.tt_sparse_buffer = ttnn.from_torch(
             sparse,
             device=mesh_device,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-        self.idx = ttnn.from_torch(
+        self.tt_expert_indices = ttnn.from_torch(
             indices.reshape(1, tokens, top_k),
             device=mesh_device,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             dtype=ttnn.uint16,
-            memory_config=create_sharded_memory_config(drain_set, [tokens, top_k], ttnn.uint16),
+            memory_config=create_sharded_memory_config(tilize_drain_core, [tokens, top_k], ttnn.uint16),
         )
-        self.sc = ttnn.from_torch(
+        self.tt_expert_scores = ttnn.from_torch(
             scores.reshape(1, tokens, top_k),
             device=mesh_device,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             dtype=ttnn.bfloat16,
-            memory_config=create_sharded_memory_config(drain_set, [tokens, top_k], ttnn.bfloat16),
+            memory_config=create_sharded_memory_config(tilize_drain_core, [tokens, top_k], ttnn.bfloat16),
         )
-        self.map = ttnn.from_torch(
+        self.tt_expert_mapping = ttnn.from_torch(
             mapping,
             device=mesh_device,
             layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -2049,22 +2085,26 @@ class _Case:
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         grid = mesh_device.compute_with_storage_grid_size()
-        self.all_cores = ttnn.CoreRangeSet(
+        self.all_core_range_set = ttnn.CoreRangeSet(
             {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))}
         )
-        self.out_cores = ttnn.experimental.get_moe_combine_cores(mesh_device, ntp, self.dp, hidden_size)
-        self.bbox = ttnn.experimental.get_moe_worker_mcast_bounding_box(mesh_device, ntp, self.dp, hidden_size)
+        self.output_shard_cores = ttnn.experimental.get_moe_combine_cores(
+            mesh_device, output_height_shard_dim, output_width_shard_dim, hidden_size
+        )
+        self.worker_mcast_bbox = ttnn.experimental.get_moe_worker_mcast_bounding_box(
+            mesh_device, output_height_shard_dim, output_width_shard_dim, hidden_size
+        )
 
     def call(self, compute_only=True, out=None, layer_id=0, **precision):
         return ttnn.experimental.moe_compute(
-            self.x,
-            self.idx,
-            self.sc,
-            self.map,
-            self.w01,
-            self.w2,
+            self.tt_sparse_buffer,
+            self.tt_expert_indices,
+            self.tt_expert_scores,
+            self.tt_expert_mapping,
+            self.tt_w0_w1,
+            self.tt_w2,
             layer_id=layer_id,
-            output_height_shard_dim=self.ntp,
+            output_height_shard_dim=self.output_height_shard_dim,
             intermediate_size=self.intermediate_size,
             has_bias=self.has_bias,
             activation_type=self.act,
@@ -2086,12 +2126,12 @@ class _Case:
         """[top_k, tokens, hidden_size]: page (k, t) holds token t's row of its k-th expert; pages of no routed row stay
         zero."""
         out = torch.zeros(self.top_k, self.tokens, self.hidden_size)
-        for e in range(self.local_experts):
-            # one row per (token, k) naming e, in token order; a repeated id lands on its last k
-            tokens = [t for t in range(self.tokens) for _ in range(self.token_experts[t].count(e))]
-            for i, t in enumerate(tokens):
-                k_last = len(self.token_experts[t]) - 1 - self.token_experts[t][::-1].index(e)
-                out[k_last, t] = self.golden[0, 0, e, i]
+        for expert in range(self.local_experts):
+            # one row per (token, k) naming the expert, in token order; a repeated id lands on its last k
+            tokens = [token for token in range(self.tokens) for _ in range(self.token_experts[token].count(expert))]
+            for row, token in enumerate(tokens):
+                k_last = len(self.token_experts[token]) - 1 - self.token_experts[token][::-1].index(expert)
+                out[k_last, token] = self.golden[0, 0, expert, row]
         return out
 
     def combine_rel_l2(self, got):
@@ -2102,28 +2142,38 @@ class _Case:
         """Host copies: counts, activation, e_t (u32), and the last two experts' rows [2, rows, hidden_size] (bf16).
         check: the 6U validators on outputs 0-2."""
         assert len(outs) == 5, f"compute_only must return 5 tensors, got {len(outs)}"
-        dram = [ttnn.to_memory_config(t, ttnn.DRAM_MEMORY_CONFIG) for t in (outs[0], outs[1], outs[2], outs[4])]
+        dram = [
+            ttnn.to_memory_config(tensor, ttnn.DRAM_MEMORY_CONFIG) for tensor in (outs[0], outs[1], outs[2], outs[4])
+        ]
         if check:
             ok_counts = validate_per_expert_tokens(
-                self.mesh_device, self.local_experts, 1, dram[0], self.counts, self.bbox
+                self.mesh_device, self.local_experts, 1, dram[0], self.counts, self.worker_mcast_bbox
             )
             ok_act = validate_activation(self.mesh_device, self.local_experts, 1, dram[1], self.golden_act)
             ok_e_t = validate_e_t(self.mesh_device, self.tokens, self.local_experts, 1, dram[2], self.golden_e_t)
             assert ok_counts and ok_act and ok_e_t, f"metadata: counts {ok_counts} activation {ok_act} e_t {ok_e_t}"
-        host = [ttnn.to_torch(t) for t in dram]
+        host = [ttnn.to_torch(tensor) for tensor in dram]
         rows = None
         if self.counts is not None:
-            bufc = torch.zeros(2, dtype=self.counts.dtype)
-            for e in range(max(0, self.local_experts - 2), self.local_experts):
-                bufc[e % 2] = self.counts[0, e]
+            buffer_token_counts = torch.zeros(2, dtype=self.counts.dtype)
+            for expert in range(max(0, self.local_experts - 2), self.local_experts):
+                buffer_token_counts[expert % 2] = self.counts[0, expert]
             rows = prepare_output_tensor_from_combine_writer(
-                host[3], bufc, 0, self.all_cores, self.out_cores, self.ntp, self.dp, 2, self.hidden_size
+                host[3],
+                buffer_token_counts,
+                0,
+                self.all_core_range_set,
+                self.output_shard_cores,
+                self.output_height_shard_dim,
+                self.output_width_shard_dim,
+                2,
+                self.hidden_size,
             )
-        for t in dram:
-            ttnn.deallocate(t)
+        for tensor in dram:
+            ttnn.deallocate(tensor)
         if free:
-            for t in (outs[0], outs[1], outs[2], outs[4]):
-                ttnn.deallocate(t)
+            for tensor in (outs[0], outs[1], outs[2], outs[4]):
+                ttnn.deallocate(tensor)
         # activation rows: [token, k per expert, score bits per expert]; the row's alignment words are not defined
         words = 2 * self.local_experts + 1
         act = host[1].reshape(self.tokens, -1)[:, :words]
@@ -2131,10 +2181,10 @@ class _Case:
 
     def rows_rel_l2(self, got, layer=0):
         num = den = 0.0
-        for e in range(max(0, self.local_experts - 2), self.local_experts):
-            n = int(self.counts[0, e])
-            ref = self.golden[layer, 0, e, :n].float()
-            num += float((got["rows"][e % 2, :n].float() - ref).norm() ** 2)
+        for expert in range(max(0, self.local_experts - 2), self.local_experts):
+            row_count = int(self.counts[0, expert])
+            ref = self.golden[layer, 0, expert, :row_count].float()
+            num += float((got["rows"][expert % 2, :row_count].float() - ref).norm() ** 2)
             den += float(ref.norm() ** 2)
         return (num / den) ** 0.5 if den else 0.0
 
@@ -2144,26 +2194,29 @@ class _Case:
             return "counts"
         if not torch.equal(a["act"], b["act"]):
             return "activation"
-        for e, lst in enumerate(self.golden_e_t[0].values()):
-            n = len(lst) + 1
+        for expert, expert_tokens in enumerate(self.golden_e_t[0].values()):
+            entry_count = len(expert_tokens) + 1  # and the end marker
             if not torch.equal(
-                a["e_t"][e, : _E_T_ENTRY_WORDS * n : _E_T_ENTRY_WORDS],
-                b["e_t"][e, : _E_T_ENTRY_WORDS * n : _E_T_ENTRY_WORDS],
+                a["e_t"][expert, : _E_T_ENTRY_WORDS * entry_count : _E_T_ENTRY_WORDS],
+                b["e_t"][expert, : _E_T_ENTRY_WORDS * entry_count : _E_T_ENTRY_WORDS],
             ):
-                return f"e_t {e}"
-        for e in range(max(0, self.local_experts - 2), self.local_experts):
-            n = int(self.counts[0, e])
-            if not torch.equal(a["rows"][e % 2, :n].view(torch.int16), b["rows"][e % 2, :n].view(torch.int16)):
-                return f"rows {e}"
+                return f"e_t {expert}"
+        for expert in range(max(0, self.local_experts - 2), self.local_experts):
+            row_count = int(self.counts[0, expert])
+            if not torch.equal(
+                a["rows"][expert % 2, :row_count].view(torch.int16), b["rows"][expert % 2, :row_count].view(torch.int16)
+            ):
+                return f"rows {expert}"
         return None
 
 
 def _assert_rows_bitwise(case, got_read, want_read, label):
     """The last two local experts' rows of two reads (output 4) are bitwise equal."""
-    for e in range(max(0, case.local_experts - 2), case.local_experts):
-        n = int(case.counts[0, e])
-        got, want = got_read["rows"][e % 2, :n].view(torch.int16), want_read["rows"][e % 2, :n].view(torch.int16)
-        assert torch.equal(got, want), f"expert {e}: {label}: {_mismatch(got, want)}"
+    for expert in range(max(0, case.local_experts - 2), case.local_experts):
+        row_count = int(case.counts[0, expert])
+        got = got_read["rows"][expert % 2, :row_count].view(torch.int16)
+        want = want_read["rows"][expert % 2, :row_count].view(torch.int16)
+        assert torch.equal(got, want), f"expert {expert}: {label}: {_mismatch(got, want)}"
 
 
 def _traced(mesh_device, call, replays=1):
@@ -2180,9 +2233,9 @@ def _traced(mesh_device, call, replays=1):
     return outs, tid
 
 
-def _programs_added(mesh_device, fn):
+def _programs_added(mesh_device, call):
     before = mesh_device.num_program_cache_entries()
-    out = fn()
+    out = call()
     return out, mesh_device.num_program_cache_entries() - before
 
 
@@ -2192,7 +2245,7 @@ def _expert_rows_and_ring(case, **precision):
     accumulate every K row in the same order on the same weights)."""
     with _kernel("expert_rows"):
         outs, added = _programs_added(case.mesh_device, lambda: case.call(**precision))
-        assert added == 2, f"expert rows call compiled {added} programs, expected 2 (expert rows + metadata)"
+        assert added == 2, f"expert rows call compiled {added} programs, expected 2 (expert rows + placement)"
         expert_rows = case.read(outs, check=True)
     with _kernel("ring"):
         outs, added = _programs_added(case.mesh_device, lambda: case.call(**precision))
@@ -2245,7 +2298,7 @@ def test_moe_compute_expert_rows_shapes(mesh_device, mesh_shape, shape):
     _skip_unless_supported_arch(mesh_device)
     local_experts, tokens, top_k, intermediate_size, hidden_size, act, limit = _EXPERT_ROWS_SHAPES[shape]
     case = _Case(mesh_device, local_experts, tokens, top_k, intermediate_size, hidden_size, act=act, limit=limit)
-    expert_rows, ring = _expert_rows_and_ring(case, math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True)
+    expert_rows, ring = _expert_rows_and_ring(case, **_PRECISION_MODES["hifi4_fp32"])
     rel_expert_rows, rel_ring = case.rows_rel_l2(expert_rows), case.rows_rel_l2(ring)
     logger.debug(f"{shape}: rows rel L2 expert rows {rel_expert_rows:.5f} ring {rel_ring:.5f} (HiFi4, FP32 DEST)")
     assert rel_expert_rows <= 0.01, f"expert rows rel L2 {rel_expert_rows}"
@@ -2259,7 +2312,7 @@ def test_moe_compute_expert_rows_bias(mesh_device, mesh_shape, act):
     hidden_size = 2880 if act == MoEActivationFunction.SWIGLU else 2048
     intermediate_size = 2880 if act == MoEActivationFunction.SWIGLU else 1024
     case = _Case(mesh_device, 8, 32, 4, intermediate_size, hidden_size, act=act, has_bias=True)
-    expert_rows, ring = _expert_rows_and_ring(case, math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True)
+    expert_rows, ring = _expert_rows_and_ring(case, **_PRECISION_MODES["hifi4_fp32"])
     rel_expert_rows, rel_ring = case.rows_rel_l2(expert_rows), case.rows_rel_l2(ring)
     logger.debug(f"bias {act}: rows rel L2 expert rows {rel_expert_rows:.5f} ring {rel_ring:.5f}")
     assert rel_expert_rows <= 0.01, f"expert rows rel L2 {rel_expert_rows}"
@@ -2271,7 +2324,7 @@ def test_moe_compute_expert_rows_top_k_max(mesh_device, mesh_shape):
     """top_k 32, the expert rows reader's largest: both paths, outputs match the goldens."""
     _skip_unless_supported_arch(mesh_device)
     case = _Case(mesh_device, 64, 1, 32, 512, 2048)
-    expert_rows, _ = _expert_rows_and_ring(case, math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True)
+    expert_rows, _ = _expert_rows_and_ring(case, **_PRECISION_MODES["hifi4_fp32"])
     rel = case.rows_rel_l2(expert_rows)
     assert rel <= 0.01, f"expert rows rel L2 {rel}"
 
@@ -2283,7 +2336,7 @@ def test_moe_compute_expert_rows_top_k_over_max(mesh_device, mesh_shape, expect_
     ring (one program), whose outputs match the goldens."""
     _skip_unless_supported_arch(mesh_device)
     case = _Case(mesh_device, 64, 1, 33, 512, 2048)
-    precision = dict(math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True)
+    precision = _PRECISION_MODES["hifi4_fp32"]
     with _kernel("expert_rows"), expect_error(RuntimeError, "top_k 33 outside 1..32"):
         case.call(**precision)
     outs, added = _programs_added(mesh_device, lambda: case.call(**precision))
@@ -2306,11 +2359,13 @@ def test_moe_compute_expert_rows_rejects_activation_limit(mesh_device, mesh_shap
     """A forced expert rows call checks activation_limit before any kernel compiles."""
     _skip_unless_supported_arch(mesh_device)
     case = _Case(mesh_device, 8, 32, 4, 1024, 2048, act=act, limit=limit, goldens=False)
-    before = mesh_device.num_program_cache_entries()
-    with _kernel("expert_rows"), expect_error(RuntimeError, error):
-        case.call()
-    after = mesh_device.num_program_cache_entries()
-    assert after == before, f"a rejected call changed the program cache: {before} -> {after} entries"
+
+    def rejected_call():
+        with _kernel("expert_rows"), expect_error(RuntimeError, error):
+            case.call()
+
+    _, added = _programs_added(mesh_device, rejected_call)
+    assert added == 0, f"a rejected call added {added} programs to the program cache"
 
 
 @pytest.mark.parametrize("device_params", _EXPERT_ROWS_DEVICE_PARAMS, indirect=True)
@@ -2324,7 +2379,7 @@ def test_moe_compute_expert_rows_tokens(mesh_device, mesh_shape, cfg, tokens):
     local_experts, top_k, intermediate_size, hidden_size = cfg
     intermediate_size = max(intermediate_size, _TILE_WIDTH * effective_matmul_ring_size(mesh_device))
     case = _Case(mesh_device, local_experts, tokens, top_k, intermediate_size, hidden_size)
-    expert_rows, ring = _expert_rows_and_ring(case, math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True)
+    expert_rows, _ = _expert_rows_and_ring(case, **_PRECISION_MODES["hifi4_fp32"])
     rel = case.rows_rel_l2(expert_rows)
     assert rel <= 0.01, f"expert rows rel L2 {rel}"
 
@@ -2336,7 +2391,7 @@ def test_moe_compute_expert_rows_routing(mesh_device, mesh_shape, kind):
     """Uneven experts (one expert in every token: jobs of 32 rows chained) and experts with no token."""
     _skip_unless_supported_arch(mesh_device)
     case = _Case(mesh_device, 16, 128, 8, 512, 2048, kind=kind)
-    expert_rows, _ = _expert_rows_and_ring(case, math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True)
+    expert_rows, _ = _expert_rows_and_ring(case, **_PRECISION_MODES["hifi4_fp32"])
     rel = case.rows_rel_l2(expert_rows)
     assert rel <= 0.01, f"expert rows rel L2 {rel}"
 
@@ -2347,18 +2402,9 @@ def test_moe_compute_expert_rows_many_jobs_per_group(mesh_device, mesh_shape):
     """36 local experts, 128 tokens of top-8: more jobs than expert groups, every intermediate slot reused."""
     _skip_unless_supported_arch(mesh_device)
     case = _Case(mesh_device, 36, 128, 8, 2048, 4096)
-    expert_rows, _ = _expert_rows_and_ring(case, math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True)
+    expert_rows, _ = _expert_rows_and_ring(case, **_PRECISION_MODES["hifi4_fp32"])
     rel = case.rows_rel_l2(expert_rows)
     assert rel <= 0.01, f"expert rows rel L2 {rel}"
-
-
-_PRECISION_MODES = {
-    "default": {},
-    "lofi_bf16": dict(math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=False),
-    "lofi_fp32": dict(math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=True),
-    "hifi2_bf16": dict(math_fidelity=ttnn.MathFidelity.HiFi2, fp32_dest_acc_en=False),
-    "hifi4_fp32": dict(math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True),
-}
 
 
 @pytest.mark.parametrize("device_params", _EXPERT_ROWS_DEVICE_PARAMS, indirect=True)
@@ -2397,7 +2443,7 @@ def test_moe_compute_expert_rows_single_device(mesh_device, mesh_shape, shape):
     _skip_unless_supported_arch(mesh_device)
     local_experts, tokens, top_k, intermediate_size, hidden_size, act, limit = _EXPERT_ROWS_SHAPES[shape]
     case = _Case(mesh_device, local_experts, tokens, top_k, intermediate_size, hidden_size, act=act, limit=limit)
-    res = _single_device(case, math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True)
+    res = _single_device(case, **_PRECISION_MODES["hifi4_fp32"])
     rel = case.combine_rel_l2(res["expert_rows"])
     logger.debug(f"{shape}: SingleDevice combine rel L2 {rel:.5f} (HiFi4, FP32 DEST)")
     assert rel <= 0.01, f"combine output rel L2 {rel}"
@@ -2411,7 +2457,7 @@ def test_moe_compute_expert_rows_single_device_routing(mesh_device, mesh_shape, 
     """SingleDevice over token counts and uneven experts (experts with no token, one expert in every token)."""
     _skip_unless_supported_arch(mesh_device)
     case = _Case(mesh_device, 16, tokens, 8, 512, 2048, kind=kind)
-    res = _single_device(case, math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True)
+    res = _single_device(case, **_PRECISION_MODES["hifi4_fp32"])
     rel = case.combine_rel_l2(res["expert_rows"])
     assert rel <= 0.01, f"combine output rel L2 {rel}"
 
@@ -2455,7 +2501,7 @@ def test_moe_compute_expert_rows_layer_id(mesh_device, mesh_shape):
     programs compiled for the first layer serve the others (layer_id is a runtime offset, not a cache key)."""
     _skip_unless_supported_arch(mesh_device)
     case = _Case(mesh_device, 8, 32, 8, 512, 2048, layers=3)
-    precision = dict(math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True)
+    precision = _PRECISION_MODES["hifi4_fp32"]
     entries = []
     with _kernel("expert_rows"):
         for layer in (0, 1, 2, 1):
@@ -2479,7 +2525,7 @@ def test_moe_compute_expert_rows_duplicate_ids(mesh_device, mesh_shape, compute_
     counts against the ring path's."""
     _skip_unless_supported_arch(mesh_device)
     case = _Case(mesh_device, 16, 32, 8, 512, 2048, kind="dup")
-    precision = dict(math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True)
+    precision = _PRECISION_MODES["hifi4_fp32"]
     with _kernel("expert_rows"):
         out = None if compute_only else case.new_combine_output()
         outs = case.call(compute_only=compute_only, out=out, **precision)
@@ -2491,26 +2537,34 @@ def test_moe_compute_expert_rows_duplicate_ids(mesh_device, mesh_shape, compute_
     with _kernel("ring"):
         ring = case.read(case.call(**precision))
     lists = [
-        [t for t in range(case.tokens) for _ in range(case.token_experts[t].count(e))]
-        for e in range(case.local_experts)
+        [token for token in range(case.tokens) for _ in range(case.token_experts[token].count(expert))]
+        for expert in range(case.local_experts)
     ]
-    counts = [len(lst) for lst in lists]
+    counts = [len(listing) for listing in lists]
     got_counts = expert_rows["counts"][0, : case.local_experts].tolist()
     assert got_counts == counts, f"counts {got_counts}, expected one per (token, k): {counts}"
     got, want = expert_rows["counts"][:, : case.local_experts], ring["counts"][:, : case.local_experts]
     assert torch.equal(got, want), f"counts {got[0].tolist()} differ from the ring path's {want[0].tolist()}"
-    for e in range(case.local_experts):
-        n = counts[e]
-        page = expert_rows["e_t"][e, : _E_T_ENTRY_WORDS * n : _E_T_ENTRY_WORDS].tolist()
-        assert page == lists[e], f"e_t page {e}: {page}, expected {lists[e]}"
+    for expert in range(case.local_experts):
+        entry_count = counts[expert]
+        page = expert_rows["e_t"][expert, : _E_T_ENTRY_WORDS * entry_count : _E_T_ENTRY_WORDS].tolist()
+        assert page == lists[expert], f"e_t page {expert}: {page}, expected {lists[expert]}"
     act = expert_rows["act"].to(torch.int64)
-    rows = [t for t in range(case.tokens) if any(e < case.local_experts for e in case.token_experts[t])]
-    for r, t in enumerate(rows):
-        assert int(act[r, 0]) == t, f"activation row {r} is token {int(act[r, 0])}, expected {t}"
-        for e in range(case.local_experts):
-            ks = [k for k, x in enumerate(case.token_experts[t]) if x == e]
-            got = int(act[r, 1 + e])
-            assert (got == ks[-1]) if ks else (got >= case.top_k), f"token {t} expert {e}: k {got}, listed at {ks}"
+    rows = [
+        token
+        for token in range(case.tokens)
+        if any(listed_expert < case.local_experts for listed_expert in case.token_experts[token])
+    ]
+    for row, token in enumerate(rows):
+        assert int(act[row, 0]) == token, f"activation row {row} is token {int(act[row, 0])}, expected {token}"
+        for expert in range(case.local_experts):
+            k_indices = [
+                k_index for k_index, listed_expert in enumerate(case.token_experts[token]) if listed_expert == expert
+            ]
+            got = int(act[row, 1 + expert])
+            assert (
+                (got == k_indices[-1]) if k_indices else (got >= case.top_k)
+            ), f"token {token} expert {expert}: k {got}, listed at {k_indices}"
     rel = case.rows_rel_l2(expert_rows)
     assert rel <= 0.01, f"expert rows rel L2 {rel}"
     if combine is not None:
@@ -2535,9 +2589,9 @@ def test_moe_compute_expert_rows_listing_over_tokens(mesh_device, mesh_shape, co
             ttnn.deallocate(outs[5])
         got = case.read(outs[:5])
     assert int(got["counts"][0, 0]) == tokens, f"expert 0 keeps {int(got['counts'][0, 0])} rows, expected {tokens}"
-    others = [int(got["counts"][0, e]) for e in range(1, case.local_experts)]
+    others = [int(got["counts"][0, expert]) for expert in range(1, case.local_experts)]
     assert not any(others), f"experts 1..{case.local_experts - 1} keep rows: {others}"
-    expected = [t for t in range(tokens // top_k) for _ in range(top_k)]
+    expected = [token for token in range(tokens // top_k) for _ in range(top_k)]
     page = got["e_t"][0, : _E_T_ENTRY_WORDS * tokens : _E_T_ENTRY_WORDS].tolist()
     assert page == expected, f"expert 0's page {page}, expected the first tokens entries in token order {expected}"
     terminator = int(got["e_t"][0, _E_T_ENTRY_WORDS * tokens]) & _E_T_END
@@ -2562,6 +2616,23 @@ _ROW_TILE_SHAPES = {
     "h2880_n704_e8_t128_bias": (8, 128, 4, 704, 2880, MoEActivationFunction.SWIGLU, None, True),
     "h2048_n1792_e10_t96": (10, 96, 8, 1792, 2048, MoEActivationFunction.SILU, None, False),
 }
+
+
+def _row_tile_case(mesh_device, shape, kind):
+    """The _Case of a _ROW_TILE_SHAPES shape with `kind` routing."""
+    local_experts, tokens, top_k, intermediate_size, hidden_size, act, limit, bias = _ROW_TILE_SHAPES[shape]
+    return _Case(
+        mesh_device,
+        local_experts,
+        tokens,
+        top_k,
+        intermediate_size,
+        hidden_size,
+        act=act,
+        limit=limit,
+        has_bias=bias,
+        kind=kind,
+    )
 
 
 def _rows_with(case, row_tiles, **precision):
@@ -2592,35 +2663,23 @@ _ROW_TILE_CASES = [
 @pytest.mark.parametrize("shape, row_tiles, kind", _ROW_TILE_CASES)
 @pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
 def test_moe_compute_expert_rows_row_tiles(mesh_device, mesh_shape, shape, row_tiles, kind):
-    """Jobs of several row tiles (each expert's weights read once for up to 32 M rows), and jobs of one row tile in the
-    same program, give the rows of one row tile per job bitwise, and those equal the ring's."""
+    """Jobs of several row tiles (each expert's weights read once for up to 32 row_tiles rows), and jobs of one row tile
+    in the same program, give the rows of one row tile per job bitwise, and those equal the ring's."""
     _skip_unless_supported_arch(mesh_device)
     _skip_row_tiles_on_wormhole(mesh_device)
-    local_experts, tokens, top_k, intermediate_size, hidden_size, act, limit, bias = _ROW_TILE_SHAPES[shape]
-    case = _Case(
-        mesh_device,
-        local_experts,
-        tokens,
-        top_k,
-        intermediate_size,
-        hidden_size,
-        act=act,
-        limit=limit,
-        has_bias=bias,
-        kind=kind,
-    )
-    precision = dict(math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True)
+    case = _row_tile_case(mesh_device, shape, kind)
+    precision = _PRECISION_MODES["hifi4_fp32"]
     one = _rows_with(case, 1, **precision)
     many = _rows_with(case, row_tiles, **precision)
     assert (diff := case.defined_equal(one, many)) is None, f"{row_tiles} row tiles per job differ: {diff}"
     with _kernel("ring"):
         ring = case.read(case.call(**precision), check=True)
     # against the ring: counts and rows, as _expert_rows_and_ring (outputs 1 / 2 are checked against the goldens above)
-    got, want = many["counts"][:, :local_experts], ring["counts"][:, :local_experts]
+    got, want = many["counts"][:, : case.local_experts], ring["counts"][:, : case.local_experts]
     assert torch.equal(got, want), f"counts {got[0].tolist()} differ from the ring's {want[0].tolist()}"
     _assert_rows_bitwise(case, many, ring, f"{row_tiles} row tiles per job differ from the ring's rows")
     rel = case.rows_rel_l2(many)
-    logger.debug(f"{shape} {kind} M {row_tiles}: rows rel L2 {rel:.5f} (HiFi4, FP32 DEST)")
+    logger.debug(f"{shape} {kind} {row_tiles} row tiles per job: rows rel L2 {rel:.5f} (HiFi4, FP32 DEST)")
     assert rel <= 0.01, f"rows rel L2 {rel}"
 
 
@@ -2642,19 +2701,7 @@ def test_moe_compute_expert_rows_row_tiles_deterministic(mesh_device, mesh_shape
     _skip_unless_supported_arch(mesh_device)
     _skip_row_tiles_on_wormhole(mesh_device)
     precision = _PRECISION_MODES[mode]
-    local_experts, tokens, top_k, intermediate_size, hidden_size, act, limit, bias = _ROW_TILE_SHAPES[shape]
-    case = _Case(
-        mesh_device,
-        local_experts,
-        tokens,
-        top_k,
-        intermediate_size,
-        hidden_size,
-        act=act,
-        limit=limit,
-        has_bias=bias,
-        kind=kind,
-    )
+    case = _row_tile_case(mesh_device, shape, kind)
     one = _rows_with(case, 1, **precision)
     first = _rows_with(case, 4, **precision)
     assert (diff := case.defined_equal(one, first)) is None, f"4 row tiles per job differ from 1: {diff}"
@@ -2691,19 +2738,21 @@ def test_moe_compute_expert_rows_row_tiles_single_device(mesh_device, mesh_shape
         case.read(outs[:5], check=True)
         ttnn.deallocate(outs[5])
     got, want = many.view(torch.int16), res["expert_rows"].view(torch.int16)
-    assert torch.equal(got, want), f"combine output differs from M = 1: {_mismatch(got, want)}"
+    assert torch.equal(got, want), f"combine output differs from one row tile per job: {_mismatch(got, want)}"
 
 
 @pytest.mark.parametrize("device_params", _EXPERT_ROWS_DEVICE_PARAMS, indirect=True)
 @pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
 def test_moe_compute_expert_rows_row_tiles_refused_on_wormhole(mesh_device, mesh_shape, expect_error):
-    """Wormhole: a forced M > 1 is refused before any kernel compiles."""
+    """Wormhole: a forced row tile count above 1 is refused before any kernel compiles."""
     if mesh_device.arch() != ttnn.device.Arch.WORMHOLE_B0:
-        pytest.skip("Wormhole runs one row tile per job; other architectures run M > 1")
+        pytest.skip("Wormhole runs one row tile per job; other architectures run several")
     case = _Case(mesh_device, 16, 64, 8, 512, 2048, goldens=False)
-    before = mesh_device.num_program_cache_entries()
-    with _kernel("expert_rows"), _env(_ROW_TILES_ENV, 2):
-        with expect_error(RuntimeError, "Wormhole runs one row tile per job"):
-            case.call()
-    after = mesh_device.num_program_cache_entries()
-    assert after == before, f"a refused call changed the program cache: {before} -> {after} entries"
+
+    def refused_call():
+        with _kernel("expert_rows"), _env(_ROW_TILES_ENV, 2):
+            with expect_error(RuntimeError, "Wormhole runs one row tile per job"):
+                case.call()
+
+    _, added = _programs_added(mesh_device, refused_call)
+    assert added == 0, f"a refused call added {added} programs to the program cache"

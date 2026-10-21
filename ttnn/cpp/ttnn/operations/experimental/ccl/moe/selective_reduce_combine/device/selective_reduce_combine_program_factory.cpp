@@ -340,19 +340,8 @@ tt::tt_metal::WorkloadDescriptor UnifiedSelectReduce::create_workload_descriptor
 
     auto* mesh_device = tensor_args.dense_input_tensor.device();
     const ttnn::CoreRangeSet worker_core_range_set(operation_attributes.worker_cores);
-    // Carried counters: prefer L1_SMALL over general L1.
-    const auto sem_buffer_type = ttnn::ccl::prefer_l1_small_buffer_type(*mesh_device);
-    auto init_barrier_semaphore =
-        ttnn::global_semaphore::create_global_semaphore(mesh_device, worker_core_range_set, 0, sem_buffer_type);
-
-    auto final_barrier_semaphore = operation_attributes.optional_cross_device_semaphore.value_or(
-        ttnn::global_semaphore::create_global_semaphore(mesh_device, worker_core_range_set, 0, sem_buffer_type));
-
-    workload.semaphores.push_back(init_barrier_semaphore);
-    workload.semaphores.push_back(final_barrier_semaphore);
-
-    tt::tt_metal::distributed::Synchronize(
-        *mesh_device, std::nullopt, {});  // interaction with subdevice needs to be investigated
+    const auto [init_barrier_semaphore, final_barrier_semaphore] = add_selective_reduce_combine_barrier_semaphores(
+        workload, mesh_device, worker_core_range_set, operation_attributes.optional_cross_device_semaphore);
 
     for (const auto& coord : tensor_coords.coords()) {
         tt::tt_metal::ProgramDescriptor desc;
@@ -375,7 +364,7 @@ tt::tt_metal::WorkloadDescriptor UnifiedSelectReduce::create_workload_descriptor
     return workload;
 }
 
-void append_selective_reduce_combine_to_descriptor(
+uint32_t append_selective_reduce_combine_to_descriptor(
     tt::tt_metal::ProgramDescriptor& desc,
     const experimental::prim::SelectiveReduceCombineParams& operation_attributes,
     const MeshCoordinate& mesh_coordinate,
@@ -728,7 +717,7 @@ void append_selective_reduce_combine_to_descriptor(
                 }
             }
         }
-        return;
+        return writer_kernel_idx;
     }
 
     // ------------------------------------------------------------------------
@@ -895,6 +884,45 @@ void append_selective_reduce_combine_to_descriptor(
     }
 
     detail::add_mux_worker_kernels(*mesh_device, desc, mux_config, fabric_node_id, mux_placements);
+    return writer_kernel_idx;
+}
+
+std::pair<GlobalSemaphore, GlobalSemaphore> add_selective_reduce_combine_barrier_semaphores(
+    tt::tt_metal::WorkloadDescriptor& workload,
+    ttnn::MeshDevice* mesh_device,
+    const CoreRangeSet& combine_cores,
+    const std::optional<GlobalSemaphore>& cross_device_semaphore) {
+    // The barrier semaphores live as long as the cached program. Keep them in L1_SMALL, above every L1 tensor, circular
+    // buffer and the mux's ceiling, where the device has one: created in general L1 while a call's outputs are alive,
+    // they would stay in the middle of L1 after those are freed and refuse later calls their outputs.
+    const auto semaphore_buffer_type = ttnn::ccl::prefer_l1_small_buffer_type(*mesh_device);
+    GlobalSemaphore init_barrier_semaphore =
+        ttnn::global_semaphore::create_global_semaphore(mesh_device, combine_cores, 0, semaphore_buffer_type);
+    GlobalSemaphore final_barrier_semaphore =
+        cross_device_semaphore.has_value()
+            ? *cross_device_semaphore
+            : ttnn::global_semaphore::create_global_semaphore(mesh_device, combine_cores, 0, semaphore_buffer_type);
+
+    workload.semaphores.push_back(init_barrier_semaphore);
+    workload.semaphores.push_back(final_barrier_semaphore);
+
+    tt::tt_metal::distributed::Synchronize(
+        *mesh_device, std::nullopt, {});  // interaction with subdevice needs to be investigated
+    return {std::move(init_barrier_semaphore), std::move(final_barrier_semaphore)};
+}
+
+void override_selective_reduce_combine_cross_device_semaphore(
+    tt::tt_metal::Program& program, const uint32_t writer_kernel_idx, const GlobalSemaphore& cross_device_semaphore) {
+    const uint32_t cross_device_semaphore_addr = static_cast<uint32_t>(cross_device_semaphore.address());
+    auto& writer_args_by_core = tt::tt_metal::GetRuntimeArgs(program, writer_kernel_idx);
+    for (auto& writer_args_column : writer_args_by_core) {
+        for (auto& writer_args : writer_args_column) {
+            if (writer_args.size() == 0) {
+                continue;
+            }
+            writer_args[kWriterCrossDeviceSemaphoreArgIdx] = cross_device_semaphore_addr;
+        }
+    }
 }
 
 void UnifiedSelectReduce::override_runtime_arguments(
@@ -906,18 +934,8 @@ void UnifiedSelectReduce::override_runtime_arguments(
     if (!operation_attributes.optional_cross_device_semaphore.has_value()) {
         return;
     }
-    const uint32_t writer_kernel_idx = kWriterKernelIdx;
-    const uint32_t cross_device_semaphore_addr =
-        static_cast<uint32_t>(operation_attributes.optional_cross_device_semaphore->address());
-    auto& writer_args_by_core = tt::tt_metal::GetRuntimeArgs(program, writer_kernel_idx);
-    for (auto& writer_args_column : writer_args_by_core) {
-        for (auto& writer_args : writer_args_column) {
-            if (writer_args.size() == 0) {
-                continue;
-            }
-            writer_args[kWriterCrossDeviceSemaphoreArgIdx] = cross_device_semaphore_addr;
-        }
-    }
+    override_selective_reduce_combine_cross_device_semaphore(
+        program, kWriterKernelIdx, *operation_attributes.optional_cross_device_semaphore);
 }
 
 }  // namespace ttnn::experimental::prim

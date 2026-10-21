@@ -62,7 +62,7 @@ struct MoEExpertRowsParams {
     auto attributes() const {
         using ttsl::reflection::Attribute;
         std::vector<std::tuple<std::string, Attribute>> attrs;
-        attrs.reserve(17);
+        attrs.reserve(18);
         attrs.emplace_back("hidden_size", shape.hidden_size);
         attrs.emplace_back("intermediate_size", shape.intermediate_size);
         attrs.emplace_back("local_experts", shape.local_experts);
@@ -73,7 +73,7 @@ struct MoEExpertRowsParams {
         attrs.emplace_back("index_page_bytes", shape.index_page_bytes);
         attrs.emplace_back("row_cap", shape.row_cap);
         attrs.emplace_back("has_bias", shape.has_bias);
-        // layer_id is not a key: it only offsets the weight addresses (runtime arguments)
+        attrs.emplace_back("layer_id", layer_id);
         attrs.emplace_back("cluster_axis", cluster_axis);
         attrs.emplace_back("cb_budget", cb_budget);
         attrs.emplace_back("row_tiles", row_tiles);
