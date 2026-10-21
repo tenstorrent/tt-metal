@@ -441,28 +441,6 @@ SenderReceiverConfig get_device_sender_receiver_config_in_ring(
     return config;
 }
 
-std::vector<IDevice*> get_active_physical_devices(const Tensor& tensor) {
-    auto* mesh_device = tensor.device();
-    std::vector<IDevice*> devices = {};
-    devices.reserve(tensor.device_storage().get_coords().size());
-    for (const auto& coord : tensor.device_storage().get_coords()) {
-        devices.push_back(mesh_device->get_device(coord));
-    }
-    return devices;
-}
-
-std::vector<IDevice*> get_active_physical_devices(const std::vector<Tensor>& tensor_shards) {
-    std::vector<IDevice*> devices;
-    devices.reserve(tensor_shards.size());
-    for (const auto& tensor : tensor_shards) {
-        TT_FATAL(
-            tensor.device()->shape().mesh_size() == 1,
-            "Running a CCL over individual tensor shards requires the shards to be allocated on unit-meshes.");
-        devices.push_back(tensor.device()->get_device(MeshCoordinate(0, 0)));
-    }
-    return devices;
-}
-
 WorkerCoreSelection try_choose_worker_cores(
     size_t num_links,
     size_t num_workers_per_link,

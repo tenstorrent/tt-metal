@@ -601,9 +601,9 @@ def test_llk_pr_gate_uses_viommu_not_bh_p150b_civ2():
         "--event",
         "merge_group",
     )
-    assert concrete_skus(pr) == {"wh_n150_civ2", "bh_p150b_civ2_viommu"}
+    assert concrete_skus(pr) == {"wh_n150_civ2", "bh_p150b_civ2_viommu", "sim_quasar_xl"}
     assert "bh_p150b_civ2" not in concrete_skus(pr)
-    assert concrete_skus(mq) == {"wh_n150_civ2", "bh_p150b_civ2_viommu_prio"}
+    assert concrete_skus(mq) == {"wh_n150_civ2", "bh_p150b_civ2_viommu_prio", "sim_quasar_xl"}
 
 
 def test_pipeline_reorg_yamls_have_no_prio_sku_keys():

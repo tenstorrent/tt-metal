@@ -286,27 +286,27 @@ TEST_F(MeshDeviceView2x4Test, ViewGetFabricNodeIdsInRange) {
 TEST_F(MeshDeviceView2x4Test, ViewGetDevicesOnRow) {
     const auto& view = mesh_device_->get_view();
 
-    auto row_0_devices = view.get_devices_on_row(0);
+    auto row_0_devices = view.impl().get_devices_on_row(0);
     EXPECT_THAT(row_0_devices, SizeIs(4));
 
-    auto row_1_devices = view.get_devices_on_row(1);
+    auto row_1_devices = view.impl().get_devices_on_row(1);
     EXPECT_THAT(row_1_devices, SizeIs(4));
 
     // Out of bounds throws
-    EXPECT_ANY_THROW((void)view.get_devices_on_row(2));
+    EXPECT_ANY_THROW((void)view.impl().get_devices_on_row(2));
 }
 
 TEST_F(MeshDeviceView2x4Test, ViewGetDevicesOnColumn) {
     const auto& view = mesh_device_->get_view();
 
-    auto col_0_devices = view.get_devices_on_column(0);
+    auto col_0_devices = view.impl().get_devices_on_column(0);
     EXPECT_THAT(col_0_devices, SizeIs(2));
 
-    auto col_3_devices = view.get_devices_on_column(3);
+    auto col_3_devices = view.impl().get_devices_on_column(3);
     EXPECT_THAT(col_3_devices, SizeIs(2));
 
     // Out of bounds throws
-    EXPECT_ANY_THROW((void)view.get_devices_on_column(4));
+    EXPECT_ANY_THROW((void)view.impl().get_devices_on_column(4));
 }
 
 TEST_F(MeshDeviceView2x4Test, ViewGetFabricNodeIdsOnRow) {
@@ -431,14 +431,14 @@ TEST_F(MeshDeviceView2x4Test, View2DMethodsThrowOnNon2DMesh) {
 
     EXPECT_ANY_THROW((void)view_1d.num_rows());
     EXPECT_ANY_THROW((void)view_1d.num_cols());
-    EXPECT_ANY_THROW((void)view_1d.get_devices_on_row(0));
-    EXPECT_ANY_THROW((void)view_1d.get_devices_on_column(0));
+    EXPECT_ANY_THROW((void)view_1d.impl().get_devices_on_row(0));
+    EXPECT_ANY_THROW((void)view_1d.impl().get_devices_on_column(0));
     EXPECT_ANY_THROW((void)view_1d.get_fabric_node_ids_on_row(0));
     EXPECT_ANY_THROW((void)view_1d.get_fabric_node_ids_on_column(0));
     EXPECT_ANY_THROW((void)view_1d.get_line_coordinates());
     EXPECT_ANY_THROW((void)view_1d.get_ring_coordinates());
     EXPECT_ANY_THROW((void)view_1d.impl().get_line_devices());
-    EXPECT_ANY_THROW((void)view_1d.get_ring_devices());
+    EXPECT_ANY_THROW((void)view_1d.impl().get_ring_devices());
     EXPECT_ANY_THROW((void)view_1d.get_line_fabric_node_ids());
     EXPECT_ANY_THROW((void)view_1d.get_ring_fabric_node_ids());
 }
