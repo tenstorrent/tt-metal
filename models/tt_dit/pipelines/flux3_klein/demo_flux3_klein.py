@@ -115,10 +115,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--eager", action="store_true", help="run the denoise and decode without tracing")
     parser.add_argument(
         "--layout",
-        choices=("dual", "sp4tp8", "sp8tp4"),
-        default="dual",
-        help="DiT mesh layout: dual (default: SP4 x TP8, and SP8 x TP4 for requests of 16K+ tokens, i.e. 2048x2048 and "
-        "up; two weight sets resident), or one fixed layout",
+        choices=("sp4tp8", "sp8tp4", "dual"),
+        default="sp4tp8",
+        help="DiT mesh layout: sp4tp8 (default), sp8tp4, or dual (both resident, SP8 x TP4 from 16K tokens up). With "
+        "the ring SDPA grid chosen per length (2026-10-21) the two layouts are within 1 %% at 2K and 4K and SP8 x TP4 "
+        "is 19 %% slower at 1K, so dual buys nothing today; it stays for layouts that may diverge later",
     )
     parser.add_argument("--repeat", type=int, default=1, help="render N times (the second run replays the traces)")
     return parser.parse_args(argv)

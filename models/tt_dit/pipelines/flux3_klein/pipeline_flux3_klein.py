@@ -373,10 +373,11 @@ def layout_name(sp_axis: int, tp_axis: int, shape: tuple[int, ...] = (4, 8)) -> 
 
 LARGE_LAYOUT_MIN_TOKENS = 16384
 """Requests with at least this many DiT tokens (image + reference + text rows) take the large-canvas layout when one is
-resident. Measured 2026-10-21 (distilled, 4x8 ring, 160 W; docs/STAGE_TIMING.md): SP8 x TP4 against SP4 x TP8 is
-+13 % / +19 % / +8 % denoise at 768² / 1024² / 1536² (2.3K-9.2K tokens), equal at 1024² + 2 references (12.4K), and
--7 % at 2048² (16.4K), -4.5 % at 2048² + 2 references, -8 % at 4096x2304, -10 % at 4096² and -5 % at 4096² + 10
-references. The crossover is between 12K and 16K tokens."""
+resident. Measured 2026-10-21 (distilled, 4x8 ring, 160 W; docs/STAGE_TIMING.md), with the ring SDPA worker grid
+chosen per sequence length: SP8 x TP4 against SP4 x TP8 is +19 % denoise at 1024² (4.2K tokens), equal at 2048²
+(16.4K) and 4096x2304 (37K), and within 1 % at 4096² (66K). The first measurement of the day (-7 to -10 % at 2K/4K)
+was the grid pinned by each process's first forward, not the layout. So a second resident layout buys nothing today;
+the threshold is where SP8 x TP4 stops costing, kept for layouts that may diverge (reference-heavy 4K, base CFG)."""
 
 
 def pick_layout(
