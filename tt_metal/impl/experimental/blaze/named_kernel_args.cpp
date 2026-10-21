@@ -192,6 +192,32 @@ void process_named_args(Program& program, const KernelDescriptor& kernel_descrip
     kernel->set_named_ct_arg_namespaces(ct_ns_map);
 }
 
+void validate_cached_runtime_arg_counts(
+    Program& program, const KernelDescriptor& kernel_descriptor, uint32_t kernel_index) {
+    auto kernel = program.impl().get_kernel(kernel_index);
+    const auto expected_per_core = merge_per_core_runtime_args(kernel_descriptor);
+    for (const auto& [core, merged] : expected_per_core) {
+        const std::size_t cached = kernel->logical_runtime_arg_count(core);
+        TT_FATAL(cached == merged.size(), "Runtime args size mismatch: cached {} vs new {}", cached, merged.size());
+    }
+    // A cached core missing from the new descriptor is the same as an empty list.
+    for (const auto& core : kernel->cores_with_runtime_args()) {
+        if (expected_per_core.contains(core)) {
+            continue;
+        }
+        const std::size_t cached = kernel->logical_runtime_arg_count(core);
+        TT_FATAL(cached == 0, "Runtime args size mismatch: cached {} vs new {}", cached, 0);
+    }
+
+    const auto expected_common = merge_common_runtime_args(kernel_descriptor);
+    const std::size_t cached_common = kernel->logical_common_runtime_arg_count();
+    TT_FATAL(
+        cached_common == expected_common.size(),
+        "Common runtime args size mismatch: cached {} vs new {}",
+        cached_common,
+        expected_common.size());
+}
+
 void apply_named_runtime_args(Program& program, const KernelDescriptor& kernel_descriptor, uint32_t kernel_index) {
     const auto& named_args = kernel_descriptor.blaze_named_args;
 

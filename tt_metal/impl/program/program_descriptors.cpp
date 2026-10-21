@@ -186,23 +186,9 @@ static inline ttsl::hash::hash_t hash_semaphore_descriptor(const SemaphoreDescri
 }
 
 void apply_descriptor_runtime_args(Program& program, const ProgramDescriptor& desc) {
-    // Compare every incoming count, including empty lists, before writing any arg.
+    // Compare every merged count, including empty and omitted cores, before writing any arg.
     for (uint32_t k = 0; k < desc.kernels.size(); ++k) {
-        const auto& kernel = desc.kernels[k];
-        for (const auto& [core, args] : kernel.runtime_args) {
-            const auto& cached_args = GetRuntimeArgs(program, k, core);
-            TT_FATAL(
-                cached_args.size() == args.size(),
-                "Runtime args size mismatch: cached {} vs new {}",
-                cached_args.size(),
-                args.size());
-        }
-        const auto& cached_common_args = GetCommonRuntimeArgs(program, k);
-        TT_FATAL(
-            cached_common_args.size() == kernel.common_runtime_args.size(),
-            "Common runtime args size mismatch: cached {} vs new {}",
-            cached_common_args.size(),
-            kernel.common_runtime_args.size());
+        experimental::blaze::validate_cached_runtime_arg_counts(program, desc.kernels[k], k);
     }
 
     for (uint32_t k = 0; k < desc.kernels.size(); ++k) {

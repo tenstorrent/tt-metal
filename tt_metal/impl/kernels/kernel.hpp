@@ -271,6 +271,8 @@ public:
 
     // Note: When watcher assert is enabled, vector is stored as [count | args...]
     std::vector<uint32_t>& runtime_args(const CoreCoord& logical_core);
+    // User-arg count. Ignores the watcher count word and dispatch-view padding.
+    std::size_t logical_runtime_arg_count(const CoreCoord& logical_core) const;
     RuntimeArgsData& runtime_args_data(const CoreCoord& logical_core);
     std::vector<std::vector<std::vector<uint32_t>>>& runtime_args();
     std::vector<std::vector<RuntimeArgsData>>& runtime_args_data();
@@ -278,6 +280,7 @@ public:
 
     // Note: When watcher assert is enabled, vector is stored as [count | args...]
     std::vector<uint32_t>& common_runtime_args();
+    std::size_t logical_common_runtime_arg_count() const;
     RuntimeArgsData& common_runtime_args_data();
     void set_common_runtime_args_count(uint32_t count);
     uint32_t get_common_runtime_args_count() const { return this->common_runtime_args_count_; }

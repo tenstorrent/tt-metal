@@ -1824,6 +1824,77 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpCacheHitRejectsCommonRuntimeArgCountC
     EXPECT_EQ(this->device_->num_program_cache_entries(), cache_entries);
 }
 
+TEST_F(TTNNFixtureWithDevice, TestGenericOpCacheHitAcceptsUnequalRuntimeArgCounts) {
+    const std::vector<Tensor> io_tensors = make_io_tensors(this->device_);
+    ProgramDescriptor cached = make_single_core_program(kEmptyKernelSource);
+    cached.kernels[0].core_ranges = CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(0, 1)));
+    cached.kernels[0].runtime_args = {
+        {CoreCoord(0, 0), {1u, 2u}},
+        {CoreCoord(0, 1), {5u, 6u, 7u, 8u}},
+    };
+
+    ttnn::experimental::prepare_generic_op(io_tensors, cached);
+    const std::size_t cache_entries = this->device_->num_program_cache_entries();
+
+    ProgramDescriptor same_count = cached;
+    same_count.kernels[0].runtime_args[0].second = {3u, 4u};
+    same_count.kernels[0].runtime_args[1].second = {9u, 10u, 11u, 12u};
+    ttnn::experimental::prepare_generic_op(io_tensors, same_count);
+
+    // 2 -> 4 matches the dispatch padding of the longer core and must still be rejected.
+    ProgramDescriptor padded = same_count;
+    padded.kernels[0].runtime_args[0].second = {3u, 4u, 90u, 91u};
+    EXPECT_THAT(
+        [&] { ttnn::experimental::prepare_generic_op(io_tensors, padded); },
+        ThrowsMessage<std::runtime_error>(HasSubstr("Runtime args size mismatch")));
+    EXPECT_EQ(this->device_->num_program_cache_entries(), cache_entries);
+}
+
+TEST_F(TTNNFixtureWithDevice, TestGenericOpCacheHitRejectsMissingRuntimeArgCore) {
+    const std::vector<Tensor> io_tensors = make_io_tensors(this->device_);
+    // Dropping a core changes the default key, so a shared custom hash is what keeps the entry.
+    constexpr std::uint64_t kSharedProgramHash = 13;
+    ProgramDescriptor cached = make_single_core_program(kEmptyKernelSource);
+    cached.custom_program_hash = kSharedProgramHash;
+    cached.kernels[0].core_ranges = CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(0, 1)));
+    cached.kernels[0].runtime_args = {
+        {CoreCoord(0, 0), {1u, 2u, 3u, 4u}},
+        {CoreCoord(0, 1), {5u, 6u, 7u, 8u}},
+    };
+
+    ttnn::experimental::prepare_generic_op(io_tensors, cached);
+    const std::size_t cache_entries = this->device_->num_program_cache_entries();
+
+    ProgramDescriptor missing_core = cached;
+    missing_core.kernels[0].runtime_args = {{CoreCoord(0, 0), {1u, 2u, 3u, 4u}}};
+    EXPECT_THAT(
+        [&] { ttnn::experimental::prepare_generic_op(io_tensors, missing_core); },
+        ThrowsMessage<std::runtime_error>(HasSubstr("Runtime args size mismatch")));
+    EXPECT_EQ(this->device_->num_program_cache_entries(), cache_entries);
+}
+
+TEST_F(TTNNFixtureWithDevice, TestGenericOpCacheHitAcceptsEmptyCommonRuntimeArgs) {
+    const std::vector<Tensor> io_tensors = make_io_tensors(this->device_);
+    constexpr std::uint64_t kSharedProgramHash = 17;
+    ProgramDescriptor cached = make_single_core_program(kEmptyKernelSource);
+    cached.custom_program_hash = kSharedProgramHash;
+    cached.kernels[0].runtime_args = {{CoreCoord(0, 0), {1u, 2u, 3u, 4u}}};
+
+    ttnn::experimental::prepare_generic_op(io_tensors, cached);
+    const std::size_t cache_entries = this->device_->num_program_cache_entries();
+
+    ProgramDescriptor same = cached;
+    same.kernels[0].runtime_args[0].second = {9u, 8u, 7u, 6u};
+    ttnn::experimental::prepare_generic_op(io_tensors, same);
+
+    ProgramDescriptor nonempty = same;
+    nonempty.kernels[0].common_runtime_args = {1u};
+    EXPECT_THAT(
+        [&] { ttnn::experimental::prepare_generic_op(io_tensors, nonempty); },
+        ThrowsMessage<std::runtime_error>(HasSubstr("Common runtime args size mismatch")));
+    EXPECT_EQ(this->device_->num_program_cache_entries(), cache_entries);
+}
+
 // Kernels compile after the workload is created, so a compilation failure exercises the order in which a new workload
 // is used and then cached.
 TEST_F(TTNNFixtureWithDevice, TestGenericOpCompilationFailureLeavesProgramCacheUnchanged) {

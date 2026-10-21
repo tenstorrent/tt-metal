@@ -97,6 +97,10 @@ void process_named_args(Program& program, const KernelDescriptor& kernel_descrip
 // KernelHandle (the existing apply_descriptor_runtime_args convention).
 void apply_named_runtime_args(Program& program, const KernelDescriptor& kernel_descriptor, uint32_t kernel_index);
 
+// Reject a cache hit whose merged per-core or common counts differ, including empty and omitted cores.
+void validate_cached_runtime_arg_counts(
+    Program& program, const KernelDescriptor& kernel_descriptor, uint32_t kernel_index);
+
 // Hashes compile-time names/values and the runtime-arg SCHEMA for the program cache: names +
 // array lengths + dispatch kind (common vs per-core) + order. EXCLUDES runtime values — they are written per
 // enqueue and do not affect the JIT-generated header, so hashing them would cause needless
