@@ -1609,3 +1609,14 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
   - Selftests: test_text_guard.py (no stale phrase in agents / skills / briefs / README / templates / knowledge /
     orchestrator text; the six owner rules present in the skill), test_dashboard_limits.py (the trail's limits, no
     fixed line).
+- F142 (overseer, 2026-10-21): batched re-check. `core.verify --batch` runs the selected C.* / S.* tasks whose gate is
+  one test command over their frozen files grouped by block type (and runner words) in ONE pytest process
+  (`--no-precompile` for run_safe_pytest), the mesh opened and the layer loaded once per group instead of per task
+  (DeepSeek-V4.1: 266 per-step gates, ~8.75 h of device, mostly setup). testing/batch_tasks.py (a pytest plugin) sets
+  BRINGUP_TASK / BRINGUP_RECORD_TASK per test from its file's task, so the metrics land in each task's results file,
+  and records each task's outcome; each task is judged exactly as unbatched (outcome + gate metrics). A task whose
+  test never reported (the batch died) fails with the batch's exit code (rerun it unbatched). Compound gates, the
+  ladder and the contract run alone. `--tasks` order is kept (M.1 / L.* / K.1 first), dependency order within a
+  pattern. Only the verify dir is written (state.json, results/ untouched, as before).
+  - Selftest: test_verify.py::test_a_batched_verify_judges_every_task_as_its_own_gate (fixture model: the same
+    verdicts and metrics batched and unbatched, one process for the three test files, a failing task attributed).
