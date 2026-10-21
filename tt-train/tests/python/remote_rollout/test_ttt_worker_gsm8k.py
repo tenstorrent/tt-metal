@@ -80,6 +80,8 @@ def test_16_greedy_completions_are_identical():
                 f"(lens {len(completions[i])} vs {len(completions[0])}) -> submeshes diverged"
             )
     finally:
+        if sampler is not None:
+            sampler.close()
         sampler = None
         gc.collect()
         ttnn.close_mesh_device(mesh_device)
