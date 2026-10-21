@@ -11,6 +11,7 @@ Run 2026-10-20 by a Claude Code session for jameslee@tenstorrent.com.
 - **Only VAE decode misses its CI target, by 17–29%, and the chunking is why.** Denoise and total are 24–26% under target at the default limit. On 7-bank DRAM the branch decodes in chunks (`vae_t_chunk_size=7`). In an A/B on b10u20 at 480p, chunking costs about 52% in VAE time (0.52 s against 0.35 s full-T), or 0.18 s per video, about 0.3% of the total. Full-T meets the 0.42 s target on this machine.
 - **Against CI on 8-bank BH Galaxies, Bin6 costs little or nothing in denoise.** b10u20 at 75 W matches the slower CI hosts (`d04*`, about 56.5 s at 480p) to within 1–2%, and at 130 W it comes within 4–5% of the faster ones (`d06*`/`d07*`, about 39 s). CI misses the VAE target too, by more (0.70–0.76 s at 480p, full-T), and that is why the nightly job is red. CI's VAE is about 2x slower than full-T on b10u20 for reasons not yet known (see the comparison below).
 - **This branch on an 8-bank CI Galaxy matches `main` on the same host within ±0.5%,** so PR #60190 costs nothing there. The same CI run decodes the VAE full-T in 0.745 s, against 0.35 s for the same code on b10u20, so CI's slow VAE comes from the CI environment.
+- **At the same 130 W, b10u20 (7 banks) is still 3.6–4.6% slower in denoise than an 8-bank CI Galaxy.** This branch on CI with `TT_METAL_TDP_LIMIT_WATTS=130` forced on `d07u02`: 39.19 s at 480p and 123.89 s at 720p, against 40.99 s and 128.41 s on b10u20. Forcing 130 W changed nothing on `d07u02` compared with its nightly, so power doesn't explain the gap. The gap comes from either the missing DRAM bank or differences between machines. Unharvesting b10u20 (`gddr/README.md`) would separate the two.
 - **75 W is a `bh-mod` override; the stock limit is 130 W.** Every chip on b10u20 has `chip_limits.tdp_limit` = 75 against a firmware default of 130 (`bh-mod get --delta`), set together with the Bin6 soft harvest. `TT_METAL_TDP_LIMIT_WATTS=0` returns to the override (75 W), not to 130 W. So the "130 W" runs are at stock power, and the 75 W runs are at a deliberately reduced limit; going to 130 W makes every config 17–26% faster. This probably reverses the README's finding 5 for `b10u08`: setting 130 W restored stock power rather than capping it.
 
 ## Machine checks
@@ -63,7 +64,7 @@ Every frame range is 0–255 (not the flat grey of `main` on this hardware). The
 
 Source: the nightly `TT-DiT Wan2.2-T2V-A14B single galaxy e2e tests [bh_sc1]` job (`models-t1-e2e-tests.yaml` on `main`), which runs this same `ring_bh_4x8_sp1tp0` T2V test with the same environment. Numbers come from the job logs. The CI hosts have 8 DRAM banks: their 720p runs decode the full 21 latent frames in one pass, which runs out of memory on 7 banks (#59504), and UMD logs no "inconsistent DRAM harvesting" warning.
 
-Seconds, lower is better. Rows are grouped by speed: the `d04` hosts with b10u20 at 75 W, then the `d06`/`d07` hosts with b10u20 at 130 W. CI power limits are unknown.
+Seconds, lower is better. Rows are grouped by speed: the `d04` hosts with b10u20 at 75 W, then the `d06`/`d07` hosts with b10u20 at 130 W. Forcing 130 W on `d07u02` (run 39523036841, which set every chip to 130 W) left it as fast as its unforced nightly, so the `d06`/`d07` hosts already run at 130 W, the firmware default. The `d04` limit is still unknown; their match with b10u20 at 75 W suggests the same 75 W override, but that is not confirmed.
 
 | Run | Host | DRAM banks | VAE mode | 480p denoise | 480p VAE | 480p total | 720p denoise | 720p VAE | 720p total |
 |---|---|---|---|---|---|---|---|---|---|
@@ -77,6 +78,7 @@ Seconds, lower is better. Rows are grouped by speed: the `d04` hosts with b10u20
 | `main` nightly 10-17 (`628dbed7cc`) | bh-glx-120-d07u08 | 8 | full-T | 39.13 | 0.747 | 39.96 | 123.80 | 1.031 | 124.93 |
 | `main` nightly 10-18 (`9f98dee9c5`) | bh-glx-120-d07u08 | 8 | full-T | 39.12 | 0.736 | 39.94 | 123.96 | 1.024 | 125.07 |
 | **this branch on CI** ([run 39492727180](https://github.com/tenstorrent/tt-metal/actions/runs/39492727180), 10-20) | bh-glx-120-d06u08 | 8 | full-T | 38.99 | 0.745 | 39.82 | 122.36 | 1.024 | 123.49 |
+| **this branch on CI, forced 130 W** ([run 39523036841](https://github.com/tenstorrent/tt-metal/actions/runs/39523036841), 10-21) | bh-glx-120-d07u02 | 8 | full-T | 39.19 | 0.722 | 40.00 | 123.89 | 0.994 | 124.98 |
 | this branch, b10u20, 130 W | bh-glx-120-b10u20 | 7 | chunk 7 | 40.99 | 0.492 | 41.56 | 128.41 | 1.006 | 129.49 |
 
 (10-19 got no perf numbers.)
@@ -142,6 +144,7 @@ Chunking adds about 0.18 s (+52%) to the VAE and nothing to denoise. The work is
 
 - The perf test asserts on its targets after printing the results table. For these runs the assert was changed locally to a warning so that all 8 configs would report (not committed).
 - First run on a machine: converting each transformer's weights takes about 16 min. Use a pytest timeout above the default 1800 s or 2800 s for that run.
+- In run 39523036841, the job's `tdp 0` helper (meant to print the host's default limit before the run and restore it after) printed nothing. The bare `python3` it calls probably can't import `ttnn` outside the job's `run` wrapper, and the error was filtered out. So the run neither read `d07u02`'s default nor confirmed a restore. That host may stay at 130 W until its next reset. Its unforced speed suggests that is its default anyway.
 - The TDP limit outlives the process. Run `tt-smi -glx_reset` afterwards to return the board to 75 W.
 
 ## Reproduce
