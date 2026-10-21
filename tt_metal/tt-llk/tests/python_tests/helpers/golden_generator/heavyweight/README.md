@@ -316,8 +316,13 @@ Run the host tests. They are fast and need no device:
 
 ```
 CHIP_ARCH=quasar pytest test_heavyweight_data_transfer_blocks.py \
-    test_heavyweight_operations.py test_heavyweight_mismatch.py --compile-producer -q
+    test_heavyweight_mismatch.py --compile-producer -q
 ```
+
+They cover the blocks and the failure report. **The operations layer has no
+host tests** — the chains, the fidelity phases, matmul's operand order and the
+Dest-format derivation are exercised only by the three Quasar device tests, so
+changing them needs hardware to verify.
 
 ---
 
