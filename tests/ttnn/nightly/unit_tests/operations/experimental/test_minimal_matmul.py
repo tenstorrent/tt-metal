@@ -178,7 +178,9 @@ H3_PROJ_OUT_TILE_ROWS = (148, 74, 287, 427, 470)
 def test_linear_flat_cache_across_rows(device, K, N):
     torch.manual_seed(0)
     weights = {N: torch.randn((K, N), dtype=torch.float32), N + 32: torch.randn((K, N + 32), dtype=torch.float32)}
-    tt_weights = {n: ttnn.from_torch(w, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT) for n, w in weights.items()}
+    tt_weights = {
+        n: ttnn.from_torch(w, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT) for n, w in weights.items()
+    }
     compute_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
         math_fidelity=ttnn.MathFidelity.HiFi2,

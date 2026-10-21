@@ -361,7 +361,20 @@ def _fused_links(op_override):
 
 
 def _call_op(
-    inp, submesh, sem, cfg, topology, tp_axis, *, pob, num_links, weight, bias, rope, per_head_norm=None, row_capacity=None
+    inp,
+    submesh,
+    sem,
+    cfg,
+    topology,
+    tp_axis,
+    *,
+    pob,
+    num_links,
+    weight,
+    bias,
+    rope,
+    per_head_norm=None,
+    row_capacity=None,
 ):
     if per_head_norm is None:
         per_head_norm = cfg.per_head_norm
@@ -2032,7 +2045,17 @@ def test_h3_dynamic_rows_per_head_rope(mesh_device):
 
     def cfg_for(tile_rows, in_dtype="bf16"):
         return Cfg(
-            f"h3_qk_{tile_rows}", FLUX, tp, tile_rows * 32, _H3_QK_DIM, _H3_HEAD_DIM, True, _H3_HEADS, True, True, in_dtype
+            f"h3_qk_{tile_rows}",
+            FLUX,
+            tp,
+            tile_rows * 32,
+            _H3_QK_DIM,
+            _H3_HEAD_DIM,
+            True,
+            _H3_HEADS,
+            True,
+            True,
+            in_dtype,
         )
 
     variants = [(t, "bf16") for t in _H3_TILE_ROWS] + [(_H3_TILE_ROWS[0], "fp32")]

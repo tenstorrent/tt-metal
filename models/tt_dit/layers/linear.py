@@ -423,7 +423,9 @@ class ColParallelLinear(Module):
             # Restricted to chunks==1; other shapes fall through to the all_gather_minimal_matmul_async
             # path below. The op gathers on dim 3 of a rank-4 input, so every dim above the matmul's
             # (M, K) must be unit; _forward_fabric_agmm widens rank-3 activations to satisfy that.
-            fabric_cfg = None if matmul_config is not None else get_fabric_agmm_config(M, K, N, (self.chunks or 1), full_grid)
+            fabric_cfg = (
+                None if matmul_config is not None else get_fabric_agmm_config(M, K, N, (self.chunks or 1), full_grid)
+            )
             has_unit_batch = len(x.padded_shape) <= 4 and all(d == 1 for d in list(x.padded_shape)[:-2])
             if fabric_cfg is not None and self.chunks in (None, 1) and has_unit_batch and addcmul_a is None:
                 return self._forward_fabric_agmm(
@@ -531,7 +533,9 @@ class ColParallelLinear(Module):
                 if self.fused_activation_fn is not None or self.fuse_swiglu:
                     msg = "fused addcmul is not supported alongside a fused activation on the minimal_matmul path"
                     raise ValueError(msg)
-                matmul_config = matmul_config or get_matmul_config(M, x.padded_shape[-1], N, core_grid, default_block_size)
+                matmul_config = matmul_config or get_matmul_config(
+                    M, x.padded_shape[-1], N, core_grid, default_block_size
+                )
                 output = ttnn.experimental.dit_minimal_matmul_addcmul_fused(
                     x,
                     weight,

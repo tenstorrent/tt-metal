@@ -662,9 +662,7 @@ class MiniMaxH3Attention(Module):
             addcmul_a=addcmul_residual if fuse_gate else None,
             addcmul_b=addcmul_gate if fuse_gate else None,
             use_persistent_buffer=self.use_persistent_ccl_buffers,
-            **agmm_kwargs(
-                self._out_pins, self.inner_dim, self.hidden_size // tp_factor, spatial_1BND.padded_shape[-2]
-            ),
+            **agmm_kwargs(self._out_pins, self.inner_dim, self.hidden_size // tp_factor, spatial_1BND.padded_shape[-2]),
         )
         if addcmul_residual is not None and not fuse_gate:
             out = ttnn.addcmul(addcmul_residual, out, addcmul_gate)

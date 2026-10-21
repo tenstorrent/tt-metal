@@ -174,7 +174,9 @@ def test_t2va_dynamic_length_zero_misses(mesh_device, reset_seeds):
     )
     assert_generation_ok(output, align_num_frames(get_num_frames(10)))
     misses = pipeline.last_program_cache_misses
-    assert misses["denoising"] == 0, f"the 10 s request compiled {misses['denoising']} programs after the 5 s warm: {misses}"
+    assert (
+        misses["denoising"] == 0
+    ), f"the 10 s request compiled {misses['denoising']} programs after the 5 s warm: {misses}"
     pipeline.release_traces()
 
 

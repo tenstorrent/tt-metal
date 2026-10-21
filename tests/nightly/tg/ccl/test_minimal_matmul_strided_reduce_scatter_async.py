@@ -1334,7 +1334,9 @@ def test_minimal_matmul_strided_reduce_scatter_h3_nan_pad(mesh_device):
         else:
             # Rows beyond this call's length must still hold whatever the earlier calls left there.
             stale = previous[:, :, rows:, :]
-            assert torch.equal(beyond.nan_to_num(-1.0), stale.nan_to_num(-1.0)), "rows beyond the live length were written"
+            assert torch.equal(
+                beyond.nan_to_num(-1.0), stale.nan_to_num(-1.0)
+            ), "rows beyond the live length were written"
         assert torch.isnan(torch_out[:, :, cap_rows - 32 :, :]).all(), "capacity rows were written"
         previous = torch_out
     assert mesh_device.num_program_cache_entries() == 1, "the three lengths must share one program"

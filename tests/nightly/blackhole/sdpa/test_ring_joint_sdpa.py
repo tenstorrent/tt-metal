@@ -9215,7 +9215,9 @@ def test_ring_joint_attention_dynamic_local_n_flat_cache(length_class):
         gather_k, gather_v = _h3_dynamic_gather_buffers(runtime, mesh_config, H3_DYNAMIC_HEAD_DIM)
         semaphore_sets = [runtime.ccl_semaphore_handles, _h3_dynamic_semaphores(runtime)]
         # First and last head of every TP shard.
-        checked_heads = sorted({h for d in range(tp) for h in (d * H3_DYNAMIC_HEADS_PER_CHIP, (d + 1) * H3_DYNAMIC_HEADS_PER_CHIP - 1)})
+        checked_heads = sorted(
+            {h for d in range(tp) for h in (d * H3_DYNAMIC_HEADS_PER_CHIP, (d + 1) * H3_DYNAMIC_HEADS_PER_CHIP - 1)}
+        )
 
         def run(variant):
             tile_rows, pad_rows, semaphore_set = variant
@@ -9335,4 +9337,3 @@ def test_ring_joint_attention_dynamic_local_n_rejects_unsupported_features():
         assert mesh.num_program_cache_entries() == entries
     finally:
         close_ring_joint_sdpa_runtime(runtime, clear_program_cache=True)
-

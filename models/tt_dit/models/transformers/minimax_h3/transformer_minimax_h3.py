@@ -143,9 +143,7 @@ class MiniMaxH3AdaLayerNormOut(Module):
 
         def gather(table: ttnn.Tensor) -> ttnn.Tensor:
             return ttnn.unsqueeze(
-                ttnn.embedding(
-                    timestep_indices, table, layout=ttnn.TILE_LAYOUT, native_untilize=self.dynamic_length
-                ),
+                ttnn.embedding(timestep_indices, table, layout=ttnn.TILE_LAYOUT, native_untilize=self.dynamic_length),
                 0,
             )
 
