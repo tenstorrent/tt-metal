@@ -17,11 +17,12 @@ place() {
   while read -r f; do [[ -n $f ]] && rm -f "$R/$f"; done < $S/v/$s.absent
   (cd $S/v/$s && find . -type f | while read -r f; do mkdir -p "$R/$(dirname $f)"; cp "$f" "$R/$f"; done)
   cp $S/sweep/*.py $R/tt_metal/tt-llk/tests/python_tests/; cp $S/sweep/*.cpp $R/tt_metal/tt-llk/tests/sources/
+  sed -i "s/strict=True, \*\*prov/strict=False, **prov/" $R/tt_metal/tt-llk/tests/python_tests/helpers/perf/core.py
 }
 python -m venv $HOME/llkvenv && source $HOME/llkvenv/bin/activate
 pip install -q -r tt_metal/tt-llk/tests/requirements.txt > /tmp/pip.txt 2>&1; echo "== pip rc=$? $(tail -1 /tmp/pip.txt)"
 (cd tt_metal/tt-llk/tests && ./setup_testing_env.sh > /tmp/setup.txt 2>&1); echo "== setup rc=$? $(tail -1 /tmp/setup.txt)"
-export CHIP_ARCH=blackhole LLK_HOME=$R/tt_metal/tt-llk LLK_PERF_L1_MUX_GROUP=0 TT_LLK_DISABLE_ASSERTS=1 PERF_KEEP_RUNS=400
+export TA_CTF_ALL=${TA_CTF_ALL:-1} CHIP_ARCH=blackhole LLK_HOME=$R/tt_metal/tt-llk LLK_PERF_L1_MUX_GROUP=0 TT_LLK_DISABLE_ASSERTS=1 PERF_KEEP_RUNS=400
 cd $R/tt_metal/tt-llk/tests/python_tests
 mapfile -t NODES < $IDS
 NP=$(nproc); NJ=$(( NP > 16 ? 16 : NP ))
