@@ -78,6 +78,7 @@ class TtV4Transformer(LightweightModule):
         padding_side: str = "right",
         sparse_kv_cache_format=None,
         mtp_predictor=None,
+        tp_shard_kv: Optional[bool] = None,
         **block_kwargs,
     ):
         """``state_dict`` is ``{"embed_weight", "norm_weight", "hc_head": (fn, base, scale), "layers"}``,
@@ -95,6 +96,8 @@ class TtV4Transformer(LightweightModule):
             raise ValueError(
                 f"DeepSeek-V4 attention owns its own state and takes no KV cache format; got {sparse_kv_cache_format!r}"
             )
+        if tp_shard_kv:
+            raise ValueError("DeepSeek-V4 attention owns its state and has no KV cache to shard over TP")
         if kv_only_last_layer:
             raise ValueError("DeepSeek-V4 has no KV-only layer: the attention state is the whole sublayer's output")
         # Each attention state is one user's (every V4 attention asserts batch 1).

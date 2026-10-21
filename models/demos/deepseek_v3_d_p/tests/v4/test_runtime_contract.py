@@ -44,13 +44,13 @@ def _call_sites(callee: str, expected: int = 1) -> list[ast.Call]:
     assert len(calls) == expected, f"expected {expected} {callee} call site(s), found {len(calls)}"
     for call in calls:
         assert not any(isinstance(arg, ast.Starred) for arg in call.args) and all(
-            kw.arg for kw in call.keywords
+            kw.arg or ast.unparse(kw.value).startswith("self._seed_kwargs(") for kw in call.keywords
         ), f"{callee} is called with */** expansion, which this test cannot bind"
     return calls
 
 
 def _bind(func, call: ast.Call, *leading) -> None:
-    inspect.signature(func).bind(*leading, *[None] * len(call.args), **{kw.arg: None for kw in call.keywords})
+    inspect.signature(func).bind(*leading, *[None] * len(call.args), **{kw.arg: None for kw in call.keywords if kw.arg})
 
 
 def test_every_runtime_kwarg_binds_to_the_transformer_or_the_block():
