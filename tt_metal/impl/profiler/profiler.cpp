@@ -1325,7 +1325,7 @@ void DeviceProfiler::issueFastDispatchReadFromProfilerBuffer(
     ZoneScoped;
     TT_ASSERT(ctx_.device_manager()->is_dispatch_firmware_active());
     const DeviceAddr profiler_addr = getProfilerDramBufferAddress(active_dram_buffer_index);
-    uint32_t profile_buffer_idx = 0;
+    std::size_t profile_buffer_idx = 0;
 
     const CoreCoord dram_grid_size = device->dram_grid_size();
     for (uint32_t x = 0; x < dram_grid_size.x; ++x) {
@@ -1352,7 +1352,7 @@ void DeviceProfiler::issueSlowDispatchReadFromProfilerBuffer(IDevice* device, ui
     const DeviceAddr profiler_addr = getProfilerDramBufferAddress(active_dram_buffer_index);
     const uint32_t bank_size_bytes = getProfileBufferBankSizeBytes();
     const uint32_t bank_size_words = bank_size_bytes / sizeof(uint32_t);
-    uint32_t profile_buffer_idx = 0;
+    std::size_t profile_buffer_idx = 0;
 
     const int num_dram_channels = device->num_dram_channels();
     const auto& cluster = env_.get_cluster();
@@ -1575,8 +1575,8 @@ void DeviceProfiler::readRiscProfilerResults(
     const uint32_t profiler_dram_bank_vector_size_per_risc = profiler_dram_bank_size_per_risc_bytes / sizeof(uint32_t);
 
     const uint32_t coreFlatID = env_.get_cluster().get_virtual_routing_to_profiler_flat_id(device_id).at(worker_core);
-    const uint32_t startIndex =
-        coreFlatID * env_.get_hal().get_max_processors_per_core() * profiler_dram_bank_vector_size_per_risc;
+    const std::size_t startIndex = static_cast<std::size_t>(coreFlatID) * env_.get_hal().get_max_processors_per_core() *
+                                   profiler_dram_bank_vector_size_per_risc;
 
     // translate worker core virtual coord to phys coordinates
     const metal_SocDescriptor& soc_desc = env_.get_cluster().get_soc_desc(device_id);
@@ -1641,7 +1641,8 @@ void DeviceProfiler::readRiscProfilerResults(
         }
 
         if (bufferEndIndex > 0) {
-            uint32_t bufferRiscShift = (riscEndIndex * profiler_dram_bank_vector_size_per_risc) + startIndex;
+            std::size_t bufferRiscShift =
+                (static_cast<std::size_t>(riscEndIndex) * profiler_dram_bank_vector_size_per_risc) + startIndex;
             if (data_source == ProfilerDataBufferSource::L1) {
                 // Shift by L1 buffer size only
                 bufferRiscShift = riscEndIndex * kernel_profiler::PROFILER_L1_VECTOR_SIZE;
@@ -1685,7 +1686,7 @@ void DeviceProfiler::readRiscProfilerResults(
             };
             std::vector<PreSentinelMarker> pre_sentinel_markers;
 
-            for (int index = bufferRiscShift; index < (bufferRiscShift + bufferEndIndex);
+            for (std::size_t index = bufferRiscShift; index < (bufferRiscShift + bufferEndIndex);
                  index += kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE) {
                 if (!newRunStart && data_buffer.at(index) == 0 && data_buffer.at(index + 1) == 0) {
                     newRunStart = true;
@@ -1701,7 +1702,7 @@ void DeviceProfiler::readRiscProfilerResults(
                         kernel_profiler::PacketTypes pre_packet_type = get_packet_type(timer_id);
                         if (pre_packet_type == kernel_profiler::TS_DATA) {
                             uint32_t time_L = data_buffer.at(index + 1);
-                            int data_index = index + kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE;
+                            std::size_t data_index = index + kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE;
                             // Skip truncated TS_DATA at the end of this risc's region.
                             if (data_index + 1 < bufferRiscShift + bufferEndIndex) {
                                 uint64_t data_H = data_buffer.at(data_index);
@@ -2385,7 +2386,7 @@ uint32_t DeviceProfiler::getProfileBufferBankSizeBytes() const { return this->pr
 
 void DeviceProfiler::setProfileBufferBankSizeBytes(uint32_t size, uint32_t num_dram_banks) {
     this->profile_buffer_bank_size_bytes = size;
-    this->profile_buffer.resize(size * num_dram_banks / sizeof(uint32_t));
+    this->profile_buffer.resize(static_cast<std::size_t>(size) * num_dram_banks / sizeof(uint32_t));
 }
 
 void DeviceProfiler::clearStateForDeviceReinit() {
