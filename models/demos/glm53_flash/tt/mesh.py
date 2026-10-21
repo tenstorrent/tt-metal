@@ -323,6 +323,22 @@ class GLMMesh:
             cluster_axis=TP_AXIS,
         )
 
+    def all_to_all_rows(self, x: ttnn.Tensor, in_dim: int, out_dim: int, *, memory_config=None) -> ttnn.Tensor:
+        """``all_to_all_cols`` along the mesh rows (axis 0): ``in_dim`` is split into ``rows`` chunks (chunk r goes
+        to row r) and the received chunks are stacked along ``out_dim`` in sender-row order. TILE tensors only; a
+        split of the tile-row dim needs a per-row chunk that is a multiple of 16 rows (the op's padding rule). Used
+        by the EP combine (``TtEPExperts._combine_rows_a2a``: every expert chip's output rows back to their rows)."""
+        if self.rows == 1:
+            return x
+        return ttnn.experimental.all_to_all_async_generic(
+            x,
+            in_dim=out_dim,
+            out_dim=in_dim,
+            num_links=self.ccl.get_num_links(DP_AXIS),
+            memory_config=memory_config or ttnn.DRAM_MEMORY_CONFIG,
+            cluster_axis=DP_AXIS,
+        )
+
     def all_reduce_cols(self, x: ttnn.Tensor, *, memory_config=None, num_links=None) -> ttnn.Tensor:
         """Sum the TP partials of a row; result replicated over the row's columns."""
         if self.cols == 1:

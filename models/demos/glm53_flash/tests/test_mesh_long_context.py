@@ -192,16 +192,38 @@ def test_mesh_long_context(mesh_device):
             f"user {user_in_flight[0]} prefill chunk [{s0}, {e}) {e - s0} tokens: {sec:.2f} s ({(e - s0) / sec:.0f} tok/s)"
         )
 
-    firsts, ttfts = [], []
-    for u in range(N_USERS):
+    firsts, ttfts = [None] * N_USERS, [None] * N_USERS
+    # GLM53_LONG_USER_ORDER="3,0,1,2": prefill the users in that order (separates "column 3" from "prefilled last");
+    # GLM53_LONG_REPEAT_USER0=1: prefill user 0 once more at the end into its own slot and compare the first token
+    # and the last chunk's logits with the first pass (prefill determinism at this length and memory state)
+    order = [int(v) for v in os.environ.get("GLM53_LONG_USER_ORDER", "").split(",") if v] or list(range(N_USERS))
+    assert sorted(order) == list(range(N_USERS)), order
+    repeat0 = os.environ.get("GLM53_LONG_REPEAT_USER0", "0") == "1"
+    logits0_host = None
+    for u in order + ([0] if repeat0 else []):
+        is_repeat = repeat0 and firsts[0] is not None and u == 0
         user_in_flight[0] = u
         ttnn.synchronize_device(mesh_device)
         t0 = time.perf_counter()
         streams_last, logits_last, owner_row = model.prefill_chunked(
             torch.tensor(ids, dtype=torch.long), user=u, chunk=CHUNK, on_chunk=on_chunk
         )
-        firsts.append(model.first_token(logits_last, owner_row))
-        ttfts.append(time.perf_counter() - t0)
+        first_u, ttft_u = model.first_token(logits_last, owner_row), time.perf_counter() - t0
+        if is_repeat or (repeat0 and u == 0):
+            lh = model.mesh.to_host(logits_last).float().flatten() if logits_last is not None else None
+            if is_repeat:
+                same = first_u == firsts[0]
+                diff = (lh - logits0_host).abs().max().item() if lh is not None and logits0_host is not None else -1.0
+                logger.info(
+                    f"REPEAT user 0: first token {first_u} vs {firsts[0]} ({'same' if same else 'DIFFERENT'}); last-chunk "
+                    f"logits max abs diff {diff:.4g}; TTFT {ttft_u:.1f} s"
+                )
+                ttnn.deallocate(streams_last)
+                if logits_last is not None:
+                    ttnn.deallocate(logits_last)
+                continue
+            logits0_host = lh
+        firsts[u], ttfts[u] = first_u, ttft_u
         # the last chunk's streams ([1,1,T_loc,16384] fp32: 128 MB per chip at 16 K chunks on 8 rows) and logits are
         # released before the next user: kept alive they fragment the DRAM the next prompt's whole-prefix latent copy
         # and score blocks need (the 1 M x 4-user run OOM'd on a 260 MB score block with 532 MB free in 30 MB pieces)
@@ -209,8 +231,8 @@ def test_mesh_long_context(mesh_device):
         if logits_last is not None:
             ttnn.deallocate(logits_last)
         logger.info(
-            f"user {u}: TTFT {ttfts[-1]:.1f} s for {S} tokens ({S / ttfts[-1]:.0f} tok/s prefill); first token "
-            f"{firsts[-1]} {tok.decode([firsts[-1]])!r}"
+            f"user {u}: TTFT {ttfts[u]:.1f} s for {S} tokens ({S / ttfts[u]:.0f} tok/s prefill); first token "
+            f"{firsts[u]} {tok.decode([firsts[u]])!r}"
         )
         log_dram(mesh_device, f"after the prefill of user {u}")
     log_dram(mesh_device, "after prefill")

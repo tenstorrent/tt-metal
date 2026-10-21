@@ -1362,6 +1362,17 @@ class TtEPExperts(LightweightModule):
         # Blackhole CI configuration of these ops)
         links = int(os.environ.get("GLM53_A2A_LINKS", "0")) or None
         self.a2a_kwargs = dict(cluster_axis=0, memory_config=ttnn.L1_MEMORY_CONFIG, num_links=links, topology=topo)
+        # GLM53_EP_COMBINE=op (default): ttnn.all_to_all_combine(local_reduce) into the zeroed [K, T] slots, tilize,
+        # K-sum. a2a: the expert output [1, 1, rows*T, H] TILE (row r*T + t = this chip's weighted contribution to
+        # token t of row r; an exact zero row when none of its experts is in the token's list: the down kernel packs
+        # every row tile from zeroed gather slots) is exchanged densely along the rows with all_to_all_async_generic
+        # (chunk r of the row dim to row r, the senders stacked on dim 1) and summed over the senders with
+        # fast_reduce_nc: a bandwidth-bound exchange (2 MB per chip at 32 users/row, ~100 us) instead of the combine
+        # op's 2-core per-token scan (340-890 us on the 8x4 at 32 users/row: _agents/ep32_combine/ANALYSIS.md). It
+        # also drops the slot clone, the out untilize and the slot tilize. The generic a2a splits the tile-row dim in
+        # 16-row multiples only, so T % 16 != 0 (4 users/row) stays on the op.
+        self.combine_mode = os.environ.get("GLM53_EP_COMBINE", "op")
+        assert self.combine_mode in ("op", "a2a"), self.combine_mode
         # GLM53_EP_FORCE_A2A=1: run the dispatch / combine even on one chip (D = 1: the identity) to exercise the
         # mesh plumbing before a block is available
         self.force_a2a = os.environ.get("GLM53_EP_FORCE_A2A", "0") == "1"
@@ -1471,6 +1482,8 @@ class TtEPExperts(LightweightModule):
         K, H = meta.shape[-1], self.H
         l1 = ttnn.L1_MEMORY_CONFIG
         Td = out.shape[-2]
+        if self.combine_mode == "a2a" and T % 16 == 0 and Td == self.mesh.rows * T:
+            return self._combine_rows_a2a(out, T)
         out_rm = ttnn.reshape(ttnn.to_layout(out, ttnn.ROW_MAJOR_LAYOUT, memory_config=l1), (1, Td, 1, H))
         # the zeroed slot tensor as an L1 copy of a zero constant (ttnn.zeros is a host write: not allowed inside a
         # trace); the constant is made on the first (eager) call for this T and shared by every EP layer of the model
@@ -1504,6 +1517,19 @@ class TtEPExperts(LightweightModule):
         else:
             y_sum = ttnn.sum(y_t, dim=0, keepdim=True)  # [1,1,T,H]
         ttnn.deallocate(y_t)
+        return y_sum
+
+    def _combine_rows_a2a(self, out: ttnn.Tensor, T: int) -> ttnn.Tensor:
+        """Stage 3 as a dense row exchange (``GLM53_EP_COMBINE=a2a``): ``out`` [1, 1, rows*T, H] TILE (zero rows
+        where this chip holds none of the token's experts) -> chunk r (rows r*T .. r*T+T) to row r, the rows' chunks
+        stacked on dim 1 -> [1, rows, T, H] -> summed over the senders -> [1, 1, T, H]: the same sum the K-slot path
+        takes (each sender's row is already its weighted sum over its experts), with no slot clone / untilize /
+        tilize. The exchange is the DSA decode's ``all_to_all_async_generic`` along the other axis."""
+        y = self.mesh.all_to_all_rows(out, in_dim=2, out_dim=1)  # [1, rows, T, H] DRAM
+        y_sum = ttnn.experimental.fast_reduce_nc(y, dims=[1], output=None, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(y)
+        if y_sum.shape[-2] != T:  # the kernel reports the tile-padded row count (a view cannot shrink it)
+            y_sum = ttnn.slice(y_sum, [0, 0, 0, 0], [1, 1, T, self.H])
         return y_sum
 
 
