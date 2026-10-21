@@ -105,21 +105,25 @@ bool scatter_interleaved_fits_l1(
     uint64_t index_page_bytes,
     uint64_t src_page_bytes);
 
-// RM: whether the smallest viable plan -- the fully-resident input/output sticks (doubled again for
-// the FP32 accumulator when bf16_reduce is requested) plus the smallest NOC-alignment-safe index/src
-// chunk (32 elements) -- fits the device's STATIC per-core L1 window. The sticks stay fully resident
-// by construction (no shallower RM plan exists to scale down to), so a call this rejects has no
-// feasible RM dispatch at all and the routing gate must send it to native.
+// RM: the bytes a ROW_MAJOR factory keeps resident per core whatever the chunking -- the input and
+// output sticks, plus a same-sized FP32 accumulator (2x a BF16 page) for the bf16-reduce factory.
+// The one formula the routing gate, the program hash and both RM factories size from.
+uint64_t scatter_rm_fixed_bytes(uint64_t input_page_bytes, uint64_t output_page_bytes, bool bf16_reduce);
+
+// RM: whether the smallest viable plan -- scatter_rm_fixed_bytes() plus the smallest
+// NOC-alignment-safe index/src chunk (32 elements) -- fits the device's STATIC per-core L1 window. The sticks stay
+// fully resident by construction (no shallower RM plan exists to scale down to), so a call this rejects has no feasible
+// RM dispatch at all and the routing gate must send it to native.
 bool scatter_rm_min_plan_fits_l1(
     uint64_t static_l1, uint64_t input_page_bytes, uint32_t index_elem_size, uint32_t src_elem_size, bool bf16_reduce);
 
 // RM: index/src CB depth in elements, scaled down from the 8192-element default to whatever the live
 // L1 frontier leaves once the fully-resident input/output pages (and, for bf16_reduce, the FP32
 // accumulator page) are seated. Rounded to a multiple of 32 once scaling is actually needed, so every
-// chunk boundary offset stays a multiple of the 32-byte NOC alignment for every supported dtype, then
-// floored to that same 32-element minimum so a live frontier tighter than the static ceiling
-// supported_by_codegen() validated at routing time can never round the result down to zero (which
-// would stall the reader kernels' chunk loop instead of failing).
+// chunk boundary offset stays NOC-aligned on Wormhole (32 B) and Blackhole (64 B) for the 2- and
+// 4-byte dtypes in scope, then floored to that same 32-element minimum so a live frontier tighter than the static
+// ceiling supported_by_codegen() validated at routing time can never round the result down to zero (which would stall
+// the reader kernels' chunk loop instead of failing).
 uint32_t scatter_rm_chunk_elems(
     uint64_t usable_l1,
     uint64_t fixed_bytes,
