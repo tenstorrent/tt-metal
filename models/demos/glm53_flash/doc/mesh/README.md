@@ -514,11 +514,25 @@ prompt; with `GLM53_LONG_GEN=128` the same run (depth 0.5, probe 06:15) retrieve
 (the first filler half has 12275 sentences, the needle follows it). So the stack retrieves across 262 K tokens; from
 512 K on the model re-opens a reasoning block before answering although the prompt closes `<think></think>` (the chat
 template's "Reasoning Effort: Max" system line), while up to 256 K it answers directly. Needle runs at >= 512 K need
-`GLM53_LONG_GEN >= 128`. The 1 M text at 32 tokens continues the filler instead ("The survey team measured the salt
-flats and logged 421 entries before noon. On day 24178 ..."), a different symptom: 1 M probes with a 160-token budget at
-depth 0.5 and 0.98 (`_logs/mesh/sched_probes2.sh`) and a planted-key selection test at 131072 / 262144 pools
-(`tests/custom_ops/test_wide_pool_selection.py`: scorer -> bounded top-k, pools on both sides of 65536) follow.
-Per-chunk prefill at 512 K: 227.1 s for 525170 tokens (2313 tok/s) on the warm second run.
+`GLM53_LONG_GEN >= 128`.
+
+### 1 M retrieval probes (160 generated tokens, regions in 2048 sub-chunks, QBLOCK 512)
+
+| needle depth | distance to the question | first token | result |
+|---|---|---|---|
+| 0.98 | ~20 K tokens | 'amber' | found, direct answer: "amber-falcon-7391</think>The secret passphrase for the vault is 'amber-falcon-7391'." (TTFT 530 s, 1977 tok/s) |
+| 0.75 | ~262 K tokens | 'amber' | found, direct answer (TTFT 507 s, 2066 tok/s) |
+| 0.5 | ~523 K tokens | 'The' | MISSING: a degenerate filler loop ("On day 24178 the survey team measured a bakery and logged 878 entries ... lighthouse 729 ... tram depot 834 ..."), no task awareness (TTFT 458 s, 2288 tok/s) |
+
+So at 1 M the question is attended and retrieval works at 20 K and 262 K distances (the 262 K distance is the one that
+works at 512 K too); only the ~523 K distance fails, and it fails as a model-style collapse (filler continuation),
+not as corruption. The selection chain is verified at the 1 M width independently: `tests/custom_ops/
+test_wide_pool_selection.py` plants keys at pools 100 ... 262143 (both sides of 65536 and 131072) and every planted
+pool is the scorer's row maximum and inside the bounded top-512 at W = 131072 and 262144 (worst top-512 overlap with
+torch over the device scores 0.973 / 0.967, bf16 ties). A 1 M HF reference is out of reach on the host (the 64 K one
+took 2385 s of CPU prefill per 16 K), so whether a 523 K-token single-sentence needle is a model limit of the
+top-2048 sparse attention or a residual precision effect stays open; the next step is a hidden-state comparison
+against HF on a shorter prefix that still crosses the chunk carries, or a multi-needle prompt.
 
 Decode in these runs goes through the regions path (its per-expert lists replace the stacked expert tensors once
 built): 4.2-4.6 tok/s per user at ISL 64 K-1 M, below the stream path (6.7 tok/s at 16 K on a block). Keeping both
