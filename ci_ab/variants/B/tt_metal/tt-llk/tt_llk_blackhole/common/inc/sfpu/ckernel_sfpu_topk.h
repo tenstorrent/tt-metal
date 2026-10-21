@@ -345,6 +345,34 @@ inline void _topk_defuse_tile_(const int num_tiles)
 // write to LREG0..3 or a programmable-constant read. The standalone sweeps
 // below run while LREG4..7 are dead, so their load captures are harmless.
 
+// One Dst column vector of the stamp sweep: clear the stale tag field, fold -0.0 into +0.0, tag with the
+// sign-conditioned rank, and step to the next column.
+template <bool largest, std::uint32_t TAG_BITS>
+[[gnu::always_inline]] inline void topk_stamp_rows()
+{
+    TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
+    if constexpr (TAG_BITS == 16)
+    {
+        TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_LOWER, 0); // clear stale lo16 -> [bf16|0]
+    }
+    else
+    {
+        TTI_SFPAND(0, p_sfpu::LREG14, p_sfpu::LREG0, 0); // clear the stale tag field only
+    }
+    // -0.0 -> +0.0: (w << 1) == 0 exactly for the two zero encodings.
+    TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);
+    TTI_SFPSHFT(1, 0, p_sfpu::LREG1, 1);
+    TTI_SFPSETCC(0, p_sfpu::LREG1, 0, sfpi::SFPSETCC_MOD1_LREG_EQ0);
+    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, 0); // zero lanes -> +0.0
+    TOPK_SFPENCC_ALL_LANES_ON();
+    TTI_SFPOR(0, p_sfpu::LREG2, p_sfpu::LREG0, 0);
+    TTI_SFPSETCC(0, p_sfpu::LREG0, 0, largest ? sfpi::SFPSETCC_MOD1_LREG_GTE0 : sfpi::SFPSETCC_MOD1_LREG_LT0);
+    TTI_SFPXOR(0, p_sfpu::LREG12, p_sfpu::LREG0, 0);
+    TOPK_SFPENCC_ALL_LANES_ON();
+    TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
+    TTI_INCRWC(0, 2, 0, 0);
+}
+
 // Stamp one value tile (dst tile 0 or 1) with sign-conditioned rank tags rank_base + [0, 32) in a
 // TAG_BITS-wide field (see topk_tag_mask). rank_base must be a multiple of 32 and rank_base + 31
 // must fit the field. Clobbers LREG0..2 and leaves all lanes enabled.
@@ -379,46 +407,25 @@ inline void _topk_stamp_tile_rank_range_(std::uint32_t dst_tile_index, std::uint
         TTI_SFPOR(0, p_sfpu::LREG1, p_sfpu::LREG2, 0);
     }
 
-    for (int g = 0; g < 16; g++) // 4-row groups across the tile
-    {
-        for (int parity = 0; parity < 2; parity++) // even / odd Dst columns
+    // One 4-row group and the +4 rank step are a replay; the RISC issues the replay and, at a face pair, the rewind.
+    load_replay_buf<Exec>(
+        0,
+        27,
+        []
         {
-            TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
-            if constexpr (TAG_BITS == 16)
-            {
-                TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_LOWER, 0); // clear stale lo16 -> [bf16|0]
-            }
-            else
-            {
-                TTI_SFPAND(0, p_sfpu::LREG14, p_sfpu::LREG0, 0); // clear the stale tag field only
-            }
-            // -0.0 -> +0.0: (w << 1) == 0 exactly for the two zero encodings.
-            TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);
-            TTI_SFPSHFT(1, 0, p_sfpu::LREG1, 1);
-            TTI_SFPSETCC(0, p_sfpu::LREG1, 0, sfpi::SFPSETCC_MOD1_LREG_EQ0);
-            TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, 0); // zero lanes -> +0.0
-            TOPK_SFPENCC_ALL_LANES_ON();
-            // Tag with the sequence position, sign-conditioned.
-            TTI_SFPOR(0, p_sfpu::LREG2, p_sfpu::LREG0, 0);
-            TTI_SFPSETCC(0, p_sfpu::LREG0, 0, largest ? sfpi::SFPSETCC_MOD1_LREG_GTE0 : sfpi::SFPSETCC_MOD1_LREG_LT0);
-            TTI_SFPXOR(0, p_sfpu::LREG12, p_sfpu::LREG0, 0);
-            TOPK_SFPENCC_ALL_LANES_ON();
-            TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
-            TTI_INCRWC(0, 2, 0, 0);
-        }
-        // Advance the rank base to the next 4-row group: +4 within a face;
-        // when the group crosses into the paired face of the SAME sequence
-        // positions (rows 16..31 hold positions 0..15 of the other column
-        // half), rewind by 12 instead.
-        if ((g & 7) == 3)
-        {
-            TTI_SFPIADD((-12) & 0xFFF, p_sfpu::LREG2, p_sfpu::LREG2, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
-        }
-        else
-        {
+            topk_stamp_rows<largest, TAG_BITS>();
+            topk_stamp_rows<largest, TAG_BITS>();
             TTI_SFPIADD(4, p_sfpu::LREG2, p_sfpu::LREG2, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+        });
+    for (int g = 1; g < 16; g++)
+    {
+        if ((g & 7) == 4)
+        {
+            TTI_SFPIADD((-16) & 0xFFF, p_sfpu::LREG2, p_sfpu::LREG2, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
         }
+        lltt::replay(0, 27);
     }
+    topk_replay_init = 0;
 
     set_dst_write_addr(0);
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
@@ -929,18 +936,6 @@ inline void bitonic_topk_step_N(bool dir)
             TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG0, p_sfpswap::ALL_ROWS_MAX);
             TTI_SFPSWAP(0, p_sfpu::LREG3, p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
         }
-    }
-}
-
-// INCRWC adds at most 15, so a constant step needs about half the words of a run of 8s and nothing is looped.
-template <std::uint32_t INC, bool CR>
-[[gnu::always_inline]] inline void bitonic_topk_inc_dest_const()
-{
-    if constexpr (INC > 0)
-    {
-        constexpr std::uint32_t step = INC > 15 ? 15 : INC;
-        TTI_INCRWC(CR ? 0b100 : 0, step, 0, 0);
-        bitonic_topk_inc_dest_const<INC - step, CR>();
     }
 }
 
@@ -1993,13 +1988,7 @@ inline void _bitonic_topk_merge_rt_(const int m_iter, const int k)
 
     if constexpr (PER_GROUP)
     {
-        if constexpr (KT >= 32)
-        {
-            // k_max is 32 whatever k and m_iter: one block of 8 groups a quadrant at distance 32
-            topk_merge_replay_quadrants<is_fp32_dest_acc_en, top_min, STABLE_SORT, FUSED, RANK_STAMPED, TIE_ORDER, 32, 0>();
-            return;
-        }
-        else if constexpr (KT == 4 || KT == 8 || KT == 16)
+        if constexpr (KT == 4 || KT == 8 || (KT == 16 && FUSED))
         {
             // m_iter past the last distinct case (dist stays 32, the datums stop shrinking) reads like it
             constexpr std::uint32_t last_m = KT == 4 ? 3 : (KT == 8 ? 2 : 1);
@@ -2232,64 +2221,6 @@ inline void _topk_merge_k32_macros_()
     bitonic_topk_step_macro_drain<FUSED>();
 }
 
-// Macro merges with every group a constant: K >= 32 is one block of 8 groups a quadrant at distance 32 whatever m_iter, K 16
-// has two m_iter forms. The register set of each group, the group positions and the quadrant starts are fixed, so each set's
-// group is recorded once (executing, in the first quadrant) and every later group replays it after a counter step.
-template <bool is_fp32_dest_acc_en, bool top_min, bool FUSED, std::uint32_t K, std::uint32_t M, std::uint32_t Q, std::uint32_t G = 0>
-[[gnu::always_inline]] inline void topk_merge_quadrant_macros()
-{
-    using Geo                        = TopkMergeGeometry<K, M>;
-    constexpr std::uint32_t sets     = topk_merge_macro_sets<FUSED>();
-    constexpr std::uint32_t words    = FUSED ? 2 : 4;
-    if constexpr (G < Geo::groups)
-    {
-        if constexpr (G > 0)
-        {
-            topk_incr_dest_counter<Geo::pos(G) - Geo::pos(G - 1)>();
-        }
-        constexpr std::uint32_t set = (Q * Geo::groups + G) % sets;
-        if constexpr (Q == 0 && G < sets)
-        {
-            load_replay_buf<Exec>(
-                set * words,
-                words,
-                []
-                {
-                    bitonic_topk_merge_group_macro<is_fp32_dest_acc_en, FUSED, set>(top_min ? Geo::ld_dist : 0, top_min ? 0 : Geo::ld_dist);
-                });
-        }
-        else
-        {
-            lltt::replay(set * words, words);
-        }
-        topk_merge_quadrant_macros<is_fp32_dest_acc_en, top_min, FUSED, K, M, Q, G + 1>();
-    }
-}
-
-template <bool is_fp32_dest_acc_en, bool top_min, bool FUSED, std::uint32_t K, std::uint32_t M>
-inline void _topk_merge_macros_replay_()
-{
-    topk_uint16_clear_value_tiles_high_bits();
-    topk_validate_mode_combo<is_fp32_dest_acc_en, false, FUSED, false, TopkTieOrder::Unset>();
-    _topk_merge_macros_init_<FUSED>();
-    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
-    topk_merge_quadrant_macros<is_fp32_dest_acc_en, top_min, FUSED, K, M, 0>();
-    set_dst_write_addr(2);
-    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
-    topk_merge_quadrant_macros<is_fp32_dest_acc_en, top_min, FUSED, K, M, 1>();
-    set_dst_write_addr(4);
-    set_dst_write_addr(16);
-    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
-    topk_merge_quadrant_macros<is_fp32_dest_acc_en, top_min, FUSED, K, M, 2>();
-    set_dst_write_addr(18);
-    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
-    topk_merge_quadrant_macros<is_fp32_dest_acc_en, top_min, FUSED, K, M, 3>();
-    set_dst_write_addr(20);
-    set_dst_write_addr(16);
-    bitonic_topk_step_macro_drain<FUSED>();
-    topk_replay_init = 0;
-}
-
 // k from 32 up is the run-time-k merge unchanged. Below that, a k whose later m_iter cannot walk the dest counter
 // (dist not a multiple of 8, or at most 16 group words a quadrant) addresses each group on its own.
 template <
@@ -2305,25 +2236,13 @@ template <
 inline void _bitonic_topk_merge(const int m_iter)
 {
     static_assert(K > 0, "K is the merge's run length");
-    if constexpr (K == 16 && TOPK_STEP_LOADMACRO && !STABLE_SORT && !RANK_STAMPED)
-    {
-        if (m_iter == 0)
-        {
-            _topk_merge_macros_replay_<is_fp32_dest_acc_en, top_min, FUSED, 16, 0>();
-        }
-        else
-        {
-            _topk_merge_macros_replay_<is_fp32_dest_acc_en, top_min, FUSED, 16, 1>();
-        }
-        return;
-    }
+    constexpr bool per_group = ((K & 7) != 0) || (2 * K * (FUSED ? 4 : 8) <= 128);
     if constexpr (K >= 32 && TOPK_STEP_LOADMACRO && !STABLE_SORT && !RANK_STAMPED && (FUSED))
     {
         _topk_merge_k32_macros_<is_fp32_dest_acc_en, top_min, FUSED>();
         return;
     }
-    constexpr bool per_group = ((K & 7) != 0) || (2 * K * (FUSED ? 4 : 8) <= 128);
-    constexpr bool per_group_k = (K < 32 && (per_group || K == 16)) || (K >= 32 && (STABLE_SORT || RANK_STAMPED));
+    constexpr bool per_group_k = K < 32 && per_group;
     _bitonic_topk_merge_rt_<APPROXIMATION_MODE, is_fp32_dest_acc_en, top_min, STABLE_SORT, FUSED, RANK_STAMPED, TIE_ORDER, TAG_BITS, per_group_k, K>(
         m_iter, static_cast<int>(K));
 }
@@ -2365,16 +2284,16 @@ inline void bitonic_topk_rebuild_step(const std::uint32_t sorted_seq_length)
                 dst_offset = 2 * DIST;
                 if (blk < (num_blocks - 1))
                 {
-                    bitonic_topk_inc_dest_const<4 * DIST, true>();
+                    bitonic_topk_inc_x8_dest(4 * DIST, true);
                 }
             }
             else if (dst_offset == 16)
             {
-                bitonic_topk_inc_dest_const<32, true>();
+                bitonic_topk_inc_x8_dest(32, true);
             }
             else
             {
-                bitonic_topk_inc_dest_const<8, false>();
+                bitonic_topk_inc_x8_dest(8, false);
             }
         }
         dir = ((blk + 1) * 16 * inner_d == sorted_seq_length) ? !dir : dir;
@@ -2466,7 +2385,7 @@ inline void _bitonic_topk_rebuild_impl_(const bool idir, const int m_iter, const
                                 bitonic_topk_load8<is_fp32_dest_acc_en, FUSED, RANK_STAMPED>(0, ld_offset);
                                 bitonic_topk_ph1_st2_to_1<STABLE_SORT, TIE_ORDER>();
                                 bitonic_topk_store8<is_fp32_dest_acc_en, FUSED, RANK_STAMPED>(0, ld_offset);
-                                bitonic_topk_inc_dest_const<64, false>();
+                                bitonic_topk_inc_x8_dest(64, false);
                             }
                             else
                             {
@@ -2480,7 +2399,7 @@ inline void _bitonic_topk_rebuild_impl_(const bool idir, const int m_iter, const
                                             bitonic_topk_load8<is_fp32_dest_acc_en, FUSED, RANK_STAMPED>(0, ld_offset);
                                             bitonic_topk_ph1_st2_to_1<STABLE_SORT, TIE_ORDER>();
                                             bitonic_topk_store8<is_fp32_dest_acc_en, FUSED, RANK_STAMPED>(0, ld_offset);
-                                            bitonic_topk_inc_dest_const<64, false>();
+                                            bitonic_topk_inc_x8_dest(64, false);
                                         });
                                     init_rebuild = false;
                                 }
