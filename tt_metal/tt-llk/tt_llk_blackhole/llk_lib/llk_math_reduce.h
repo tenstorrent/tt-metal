@@ -214,7 +214,7 @@ inline void reduce_row_max_transpose_full_tile()
  * @brief REDUCE_SCALAR: transpose the partials of DEST row `row` into a SrcA column and pool it into DEST row 0, in the
  *        banks of the last pool (its SrcB row 0 is the scaler); releases them.
  */
-template <PoolType type, MathFidelity math_fidelity, std::uint32_t row, bool clear_32b = false>
+template <PoolType type, MathFidelity math_fidelity, std::uint32_t row, bool clear_32b = false, bool clear_scratch = true>
 inline void reduce_scalar_transpose_pool()
 {
     // Need row in dest as column in src A
@@ -230,7 +230,10 @@ inline void reduce_scalar_transpose_pool()
     TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 8, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, p_movb2a::SRCB_ROW16_OFFSET + 8);
     TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 12, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, p_movb2a::SRCB_ROW16_OFFSET + 12);
     // zero out scratch in dest
-    TTI_ZEROACC(p_zeroacc::CLR_SPECIFIC, clear_32b, 0, ADDR_MOD_0, row);
+    if constexpr (clear_scratch)
+    {
+        TTI_ZEROACC(p_zeroacc::CLR_SPECIFIC, clear_32b, 0, ADDR_MOD_0, row);
+    }
 
     if constexpr (type == PoolType::MAX)
     {
@@ -646,7 +649,8 @@ inline void _llk_math_reduce_(const std::uint32_t dst_index, const ckernel::Tens
         // Wait and pool
         reduce_pool_op<type, high_fidelity, p_setrwc::CLR_NONE, 4>();
 
-        reduce_scalar_transpose_pool<type, math_fidelity, 4>();
+        // A max clears its scratch row on entry, so the clear before the final pool would only repeat it.
+        reduce_scalar_transpose_pool<type, math_fidelity, 4, false, type != PoolType::MAX>();
     }
 }
 
