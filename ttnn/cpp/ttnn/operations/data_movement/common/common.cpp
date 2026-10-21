@@ -250,9 +250,55 @@ const std::map<uint32_t, std::array<float, 2>> noc_l1_local_bw = {
     {32768, {27.805, 50.123}},
     {65536, {27.84, 50.21}}};
 
+// The GB/s tables are absolute. Cycles produced from them are converted back to
+// nanoseconds by OpPerformanceModelGeneral at the live AICLK
+// (IDevice::get_clock_rate_mhz): 1000 MHz on Wormhole, 1350 MHz on Blackhole.
+// These two clocks have to be the same one. Treating every non-Wormhole arch as
+// Blackhole at 1.2 GHz made every Blackhole TM and CCL roofline report ideal_ns
+// 1.2/1.35 low and FPU utilization 1.35/1.2 high (issue #58402).
+int noc_bw_table_index(tt::ARCH arch) {
+    switch (arch) {
+        case tt::ARCH::WORMHOLE_B0: return WormholeIndex;
+        case tt::ARCH::BLACKHOLE: return BlackholeIndex;
+        default: TT_THROW("Unsupported architecture for NOC bandwidth model: {}", arch);
+    }
+}
+
+float noc_bw_model_clock_hz(tt::ARCH arch) {
+    switch (arch) {
+        case tt::ARCH::WORMHOLE_B0: return 1.0e9f;  // 1000 MHz
+        case tt::ARCH::BLACKHOLE: return 1.35e9f;   // 1350 MHz
+        default: TT_THROW("Unsupported architecture for NOC bandwidth model: {}", arch);
+    }
+}
+
+// Measured NOC pipeline-startup cycles. Same arch gate as the bandwidth tables:
+// an unknown arch must not silently inherit the Blackhole measurement.
+uint32_t measured_noc_latency_cycles(tt::ARCH arch, bool is_dram, bool is_local, bool is_write) {
+    switch (arch) {
+        case tt::ARCH::WORMHOLE_B0:
+            if (is_dram) {
+                return 358;
+            }
+            if (is_local) {
+                return 56;
+            }
+            return is_write ? 256u : 259u;
+        case tt::ARCH::BLACKHOLE:
+            if (is_dram) {
+                return 529;
+            }
+            if (is_local) {
+                return 88;
+            }
+            return is_write ? 404u : 403u;
+        default: TT_THROW("Unsupported architecture for NOC bandwidth model: {}", arch);
+    }
+}
+
 float get_transaction_noc_bw(uint32_t transaction_size, bool is_dram, bool is_local, bool is_read, tt::ARCH arch) {
     const auto& dict = is_dram ? noc_dram_bw : is_local ? noc_l1_local_bw : is_read ? noc_l1_read_bw : noc_l1_write_bw;
-    const int index = (arch == tt::ARCH::WORMHOLE_B0) ? WormholeIndex : BlackholeIndex;
+    const int index = noc_bw_table_index(arch);
 
     uint32_t lower_pow2 = std::pow(2, std::floor(std::log2(transaction_size)));
 
@@ -303,25 +349,16 @@ uint32_t get_effective_dram_cores(uint32_t transaction_size, tt::ARCH arch, bool
 
 std::pair<uint32_t, uint32_t> get_cycles_for_transaction_size(
     uint32_t transaction_size, bool is_dram, bool is_local, uint32_t num_transactions, tt::ARCH arch, bool is_read) {
-    bool is_write = !is_read;
-    // measured initial latency based on the transaction and device types
-    uint32_t latency_cyles = 1;
-    if (is_dram) {
-        latency_cyles = (arch == tt::ARCH::WORMHOLE_B0) ? 358 : 529;
-    } else if (is_local) {
-        latency_cyles = (arch == tt::ARCH::WORMHOLE_B0) ? 56 : 88;
-    } else if (is_write) {
-        latency_cyles = (arch == tt::ARCH::WORMHOLE_B0) ? 256 : 404;
-    } else {
-        latency_cyles = (arch == tt::ARCH::WORMHOLE_B0) ? 259 : 403;
-    }
+    const bool is_write = !is_read;
+    const uint32_t latency_cycles = measured_noc_latency_cycles(arch, is_dram, is_local, is_write);
 
     transaction_size = std::max(transaction_size, 16u);
-    auto transaction_bw = get_transaction_noc_bw(transaction_size, is_dram, is_local, is_read, arch);
-    float device_frequency_hz = (arch == tt::ARCH::WORMHOLE_B0) ? 1e9 : 1.2e9;
-    uint32_t cycles =
-        std::ceil((float)(num_transactions * transaction_size * device_frequency_hz) / (float)(transaction_bw * 1e9));
-    return {cycles, latency_cyles};
+    const auto transaction_bw = get_transaction_noc_bw(transaction_size, is_dram, is_local, is_read, arch);
+    const float device_frequency_hz = noc_bw_model_clock_hz(arch);
+    const uint32_t cycles = static_cast<uint32_t>(std::ceil(
+        static_cast<float>(num_transactions * transaction_size * device_frequency_hz) /
+        static_cast<float>(transaction_bw * 1e9)));
+    return {cycles, latency_cycles};
 }
 
 int common_tm_bw_model(
