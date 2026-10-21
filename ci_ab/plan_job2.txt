@@ -1,0 +1,12 @@
+# job 2: AB probes, UNPACK_ISOLATE and L1_TO_L1: P1 always stall, P2 always store, P3 no Z increment
+b1 M ids/sel.txt L1_TO_L1,UNPACK_ISOLATE
+b1 H ids/sel.txt L1_TO_L1,UNPACK_ISOLATE
+b1 P1 ids/sel.txt L1_TO_L1,UNPACK_ISOLATE
+b1 P2 ids/sel.txt L1_TO_L1,UNPACK_ISOLATE
+b1 P3 ids/sel.txt L1_TO_L1,UNPACK_ISOLATE
+b1 H2 ids/sel.txt L1_TO_L1,UNPACK_ISOLATE
+b2 P3 ids/sel.txt L1_TO_L1,UNPACK_ISOLATE
+b2 P2 ids/sel.txt L1_TO_L1,UNPACK_ISOLATE
+b2 P1 ids/sel.txt L1_TO_L1,UNPACK_ISOLATE
+b2 H ids/sel.txt L1_TO_L1,UNPACK_ISOLATE
+b2 M ids/sel.txt L1_TO_L1,UNPACK_ISOLATE
