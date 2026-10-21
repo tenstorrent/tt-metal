@@ -113,6 +113,16 @@ def cmd_freeze(a):
     from models.demos.common.bringup.core.runs import FreezeError, freeze_task
 
     spec, led = load(a)
+    if a.task == "goldens":  # F144: re-hash the golden files of every frozen block after a G task
+        from models.demos.common.bringup.core.runs import rehash_goldens
+
+        try:
+            done = rehash_goldens(spec, led)
+        except FreezeError as e:
+            print(f"FREEZE FAILED {e}")
+            return 1
+        print(f"re-hashed golden files in {len(done)} tasks: {', '.join(sorted(done)) or '-'}")
+        return 0
     try:
         rec = freeze_task(spec, led, a.task, files=a.files or None, commit=not a.no_commit)
     except FreezeError as e:

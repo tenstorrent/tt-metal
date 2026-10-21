@@ -1624,3 +1624,8 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
   FIX.<n>` can name a fix still in the queue (DeepSeek-V4.1 FIX.8 printed "nothing left to run": the --only filter ran
   before placement). Note: `--until X` stops only X's downstream tasks; independent tasks still run (use --only).
   Selftest: test_overseer.py::test_only_can_name_a_queued_fix.
+- F144 (overseer, 2026-10-21): `bringup freeze goldens` re-hashes only the golden files in every task's frozen block,
+  and only when the golden verifies against its own content_hash; test files keep their hashes (an edited test still
+  fails). DeepSeek-V4.1: F128's full-precision goldens replaced the frozen ones, so every C.* / S.* gate failed "frozen
+  file changed: .../manifest.json"; a full re-freeze would have run every test twice more on the device.
+  Selftest: test_reference.py::test_rehash_goldens_updates_only_verified_golden_files.
