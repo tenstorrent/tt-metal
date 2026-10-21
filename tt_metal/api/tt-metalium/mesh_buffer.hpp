@@ -75,20 +75,18 @@ enum class MeshBufferLayout : uint8_t { REPLICATED, SHARDED };
 using MeshBufferConfig = std::variant<ReplicatedBufferConfig, ShardedBufferConfig>;
 
 class MeshBuffer;
+struct MeshCoreCoord;
 
 }  // namespace tt::tt_metal::distributed
 
 // Forward declaration for experimental per-core allocation friend
 namespace tt::tt_metal::experimental::per_core_allocation {
-struct L1TensorExtent;
-struct L1TensorViewPlacement;
-std::vector<L1TensorExtent> get_l1_tensor_owner_extents(
-    const distributed::MeshBuffer&, const std::vector<distributed::MeshCoordinate>&);
+using SRAMTensorViewAddress = std::pair<distributed::MeshCoreCoord, DeviceAddr>;
 std::shared_ptr<distributed::MeshBuffer> create_l1_tensor_view(
     distributed::MeshDevice&,
     const distributed::MeshBufferConfig&,
     const distributed::DeviceLocalBufferConfig&,
-    const std::vector<L1TensorViewPlacement>&);
+    const std::vector<SRAMTensorViewAddress>&);
 std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> create_on_single_device(
     const tt::tt_metal::distributed::MeshBufferConfig& mesh_buffer_config,
     const tt::tt_metal::distributed::DeviceLocalBufferConfig& device_local_config,
@@ -207,14 +205,11 @@ private:
     using MeshBufferState = std::variant<OwnedBufferState, ExternallyOwnedState, DeallocatedState>;
     MeshBufferState state_;
 
-    friend std::vector<experimental::per_core_allocation::L1TensorExtent>
-    experimental::per_core_allocation::get_l1_tensor_owner_extents(
-        const MeshBuffer&, const std::vector<MeshCoordinate>&);
     friend std::shared_ptr<MeshBuffer> experimental::per_core_allocation::create_l1_tensor_view(
         MeshDevice&,
         const MeshBufferConfig&,
         const DeviceLocalBufferConfig&,
-        const std::vector<experimental::per_core_allocation::L1TensorViewPlacement>&);
+        const std::vector<experimental::per_core_allocation::SRAMTensorViewAddress>&);
 
     friend std::shared_ptr<MeshBuffer> tt::tt_metal::experimental::per_core_allocation::create_on_single_device(
         const tt::tt_metal::distributed::MeshBufferConfig&,
