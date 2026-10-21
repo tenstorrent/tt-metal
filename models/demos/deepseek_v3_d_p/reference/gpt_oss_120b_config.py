@@ -15,7 +15,7 @@ class GptOss120BConfig:
 
     # Core dimensions
     EMB_SIZE = 2880  # embedding dimension
-    FABRIC_PAYLOAD_SIZE = EMB_SIZE  # max fabric packet payload; must stay in sync with migration code
+    FABRIC_PAYLOAD_SIZE = 4352
     MOE_INTERMEDIATE_SIZE = 2880  # MoE FFN hidden dimension
     # Routed-expert hybrid split: experts with <= this many active tokens go to
     # moe_fused_swiglu, the rest to unified_routed_expert_moe. Measured under SwiGLU-OAI WITH the
