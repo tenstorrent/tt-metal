@@ -216,9 +216,8 @@ inline void _llk_unpack_AB_reduce_(const std::uint32_t address_a, const std::uin
     switch_config_context(unp_cfg_context);
 }
 
-// SCALAR SUM/AVG block in tile pairs (see reduce_scalar_paired): per face, the face of tile a goes to SrcA rows 0-15 and the
-// face of tile b to rows 16-31, one bank, no clear; the scaler row is the same in every face, so one SrcB row per bank.
-// An odd last tile fills rows 0-15 only. The write row of SrcA follows the channel 1 Z counter (one face of rows per step).
+// SCALAR SUM/AVG block in tile pairs (reduce_scalar_paired): per face, tile a goes to SrcA rows 0-15 and tile b to rows 16-31 of one
+// bank, no clear; an odd last tile fills rows 0-15 only. The SrcA write row follows the channel 1 Z counter.
 inline void _llk_unpack_AB_reduce_scalar_pairs_(
     std::uint32_t address_a, const std::uint32_t address_b, std::uint32_t num_tiles, const std::uint32_t tile_stride_16B, const bool contiguous)
 {

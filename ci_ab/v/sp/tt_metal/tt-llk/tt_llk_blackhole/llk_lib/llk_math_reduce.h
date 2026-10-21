@@ -352,9 +352,8 @@ inline void reduce_scalar_block_tile(const std::uint32_t num_faces, const bool l
     reduce_scalar_pool_faces<type, math_fidelity, row>(2, num_faces, last);
 }
 
-// REDUCE_SCALAR SUM/AVG block in tile pairs. The unpacker puts the same face of two tiles (a, b) in one SrcA bank (rows 0-15 and
-// 16-31), so their face chains (DEST rows ra, rb) issue alternately. The previous pair's transposed partials sit in rows 32-47 of
-// the banks of face 1 (a) and face 2 (b), where their final pools join the chains; the final pools stay in tile order on row 0.
+// REDUCE_SCALAR SUM/AVG block in tile pairs: the unpacker puts one face of tiles a and b in one SrcA bank (rows 0-15, 16-31), so their
+// chains (DEST rows ra, rb) issue alternately; the previous pair's transposed partials wait in rows 32-47 for the final pools.
 template <MathFidelity math_fidelity>
 constexpr std::uint32_t reduce_pair_phases = is_high_fidelity(math_fidelity) ? to_underlying(math_fidelity) : 1;
 
@@ -460,7 +459,7 @@ inline void reduce_pair_tail(const bool has_b)
             TTI_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_1, p_gpool::INDEX_DIS, 0);
         }
     }
-    TTI_GAPOOL(p_setrwc::CLR_AB, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0);
+    TTI_GAPOOL(p_setrwc::CLR_AB, p_gpool::DIM_16X16, ADDR_MOD_4, p_gpool::INDEX_DIS, 0);
 }
 
 // One pair on DEST rows (ra, rb); (pa, pb) are the previous pair's.
@@ -488,8 +487,7 @@ inline void reduce_scalar_pair_block(const std::uint32_t dst_index, const std::u
 {
     math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
 
-    // SrcA +16 (next tile of the bank), then back to row 0 with the next phase, back to row 0 with phase 0, +32 (a single tile
-    // reaches the transposed partials), +16 with phase 0 (the last final pools: a, then b's rows)
+    // SrcA steps: +16 (next tile), row 0 with the next phase, row 0 with phase 0, +32 (to the partials), +16 with phase 0
     addr_mod_t {
         .srca = {.incr = 16},
     }

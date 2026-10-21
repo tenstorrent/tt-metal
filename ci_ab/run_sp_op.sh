@@ -15,8 +15,12 @@ OBJ=$(find /work/runtime /opt -name riscv-tt-elf-objcopy -type f 2>/dev/null | h
 suffix() { echo "$1" | awk -F/ '{n=NF; print $(n-3)"/"$(n-2)"/"$(n-1)"/"$n}'; }
 declare -A PK
 while read -r rel; do PK[$rel]=$(find "$SP" -path "*/$(suffix $rel)" -type f 2>/dev/null); echo "== file $rel package copies: $(echo ${PK[$rel]} | wc -w)"; done < $S/opl/files_sp.txt
+uniq1() { echo $1 | tr ' ' '\n' | grep . | sort -u | wc -l; }
+one() { echo $1 | tr ' ' '\n' | grep . | head -1; }
+JITROOT=
 use() {
-  while read -r rel; do cp "$S/opv/$2/$rel" "/work/$rel"; for p in ${PK[$rel]}; do cp "$S/opv/$2/$rel" "$p"; done; done < $S/opl/files_sp.txt
+  while read -r rel; do cp "$S/opv/$2/$rel" "/work/$rel"; for p in ${PK[$rel]}; do cp "$S/opv/$2/$rel" "$p"; done
+    [[ -n $JITROOT && -f $JITROOT/$rel ]] && cp "$S/opv/$2/$rel" "$JITROOT/$rel"; done < $S/opl/files_sp.txt
   echo "== files $1 $(while read -r rel; do cat /work/$rel; done < $S/opl/files_sp.txt | md5sum | cut -c1-8)"
   export TT_METAL_CACHE=$OUT/cache_$1; mkdir -p $TT_METAL_CACHE
 }
@@ -25,7 +29,21 @@ elfsum() {
     $OBJ -O binary -j .text "$e" /tmp/e.bin 2>/dev/null && md5sum < /tmp/e.bin | cut -c1-12
   done | sort | md5sum | cut -c1-12
 }
+# The header the JIT build really read (its dependency list) tells where the compile root is; every arm copy goes there too.
+LH=tt_metal/tt-llk/tt_llk_blackhole/llk_lib/llk_math_reduce.h
+jitpath() { grep -ah -o "\"[^\"]*llk_math_reduce.h\"" $1/*/kernels/groupnorm/*/trisc1/trisck.o.dephash 2>/dev/null | head -1 | tr -d '"'; }
+echo "ci_ab/opl/test_sp_ab.py::test_gn[8x768x1x512_g32_ob2-HiFi2-device_params0]" > $OUT/probe_nodes.txt
+use S S; export TT_METAL_CACHE=$OUT/cache_probe; mkdir -p $TT_METAL_CACHE
+AB_NODES_FILE=$OUT/probe_nodes.txt R3_REPS=1 timeout -s INT -k 60 1200 python3 $S/opl/run_nodes.py > $OUT/probe.log 2>&1; prc=$?
+jp=$(jitpath $TT_METAL_CACHE); echo "== probe rc=$prc jit header: $jp"
+[[ -n $jp ]] && JITROOT=${jp%/$LH}
+echo "== JITROOT $JITROOT ($(ls $JITROOT | head -12 | tr '\n' ' '))"
 declare -A ES; r=0; fail=0
+jitcheck() {  # the compile read the arm's header: its md5 at the path the JIT used equals the arm file's
+  local p; p=$(jitpath $TT_METAL_CACHE)
+  local a b; a=$(md5sum < "$S/opv/$2/$LH" | cut -c1-8); b=$([[ -n $p ]] && md5sum < "$p" | cut -c1-8)
+  echo "== JITSRC $1 r$3 path=$p arm=$a read=$b $([[ $a == $b ]] && echo ok || echo BAD)"
+}
 for blk in 1 2; do for a in H S S2 S2 S H; do
   r=$((r+1)); src=${a%2}; use $a $src
   o=$OUT/${a}_r$r; mkdir -p $o; t0=$(date +%s)
@@ -33,10 +51,9 @@ for blk in 1 2; do for a in H S S2 S2 S H; do
   echo "== run $r $a rc=$rc $(( $(date +%s) - t0 )) s: $(grep -aE '[0-9]+ (passed|failed)' $o.log | tail -1)"
   [[ $rc -ne 0 ]] && { fail=1; grep -a -m5 -E '^(FAILED|ERROR)|Error' $o.log | cut -c1-200; }
   python3 $S/opl/sum_op19.py $o $a $r
-  e=$(elfsum $TT_METAL_CACHE); ES[$a]+=" $e"; echo "== elf $a r$r $e"
+  e=$(elfsum $TT_METAL_CACHE); ES[$a]+=" $e"; echo "== elf $a r$r $e"; jitcheck $a $src $r
+  if [[ $r == 2 && $(one "${ES[H]}") == $(one "${ES[S]}") ]]; then echo "== GUARD VOID early: H and S ELFs equal after run 2"; use H H; exit 1; fi
 done; done
-uniq1() { echo $1 | tr ' ' '\n' | grep . | sort -u | wc -l; }
-one() { echo $1 | tr ' ' '\n' | grep . | head -1; }
 gs=ok; for a in H S S2; do [[ $(uniq1 "${ES[$a]}") == 1 ]] || gs=UNSTABLE; done
 gx=$([[ $(one "${ES[S]}") == $(one "${ES[S2]}") ]] && echo ok || echo DIFF)
 gd=$([[ $(one "${ES[H]}") != $(one "${ES[S]}") && -n $OBJ ]] && echo ok || echo VOID)

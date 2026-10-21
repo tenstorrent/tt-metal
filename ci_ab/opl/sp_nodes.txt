@@ -22,3 +22,4 @@ ci_ab/opl/test_sp_ab.py::test_hw_big[sum_bf16-1x8x96x96]
 ci_ab/opl/test_sp_ab.py::test_hw_big[mean_bf16-1x8x96x96]
 ci_ab/opl/test_sp_ab.py::test_hw_big[sum_f32-1x8x96x96]
 ci_ab/opl/test_sp_ab.py::test_hw_big[mean_f32-1x8x96x96]
+ci_ab/opl/test_reduce_hw_batches.py
