@@ -12,7 +12,7 @@ pip install -q -r tt_metal/tt-llk/tests/requirements.txt > /tmp/pip.txt 2>&1; ec
 (cd tt_metal/tt-llk/tests && ./setup_testing_env.sh > /tmp/setup.txt 2>&1); echo "== setup rc=$?"
 export CHIP_ARCH=blackhole LLK_HOME=$R/tt_metal/tt-llk TT_LLK_DISABLE_ASSERTS=1 PYTHONPATH=$S/sweep:${PYTHONPATH:-}
 cd $R/tt_metal/tt-llk/tests/python_tests
-python -m pytest --collect-only -q -p no:cacheprovider test_reduce.py test_reduce_block.py 2>/dev/null | grep "::" | grep -i scalar > /tmp/ids.txt
+python -m pytest --collect-only -q -p no:cacheprovider test_reduce.py test_reduce_block.py 2>/dev/null | grep "::" | grep -i "${IDFILT:-scalar}" > /tmp/ids.txt
 echo "== ids $(wc -l < /tmp/ids.txt)"
 mapfile -t IDS < /tmp/ids.txt
 B=$HOME/redscbits_b; rm -rf $B; mkdir -p $B; NP=$(( $(nproc) < 16 ? $(nproc) : 16 ))

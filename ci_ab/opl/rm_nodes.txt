@@ -1,0 +1,2 @@
+ci_ab/opl/test_rm_ab.py
+tests/ttnn/unit_tests/operations/fused/test_softmax.py::test_softmax_numeric_stable_negative_rows
