@@ -22,12 +22,15 @@ these shapes need an entry rather than falling back.
 from __future__ import annotations
 
 import functools
+import inspect
 import math
+import re
 from typing import NamedTuple
 
 import ttnn
 
 from ....utils.matmul import agmm_worker_grid
+from .length_classes import LENGTH_CLASSES, length_class
 
 # M parallelizes over 12 cores when transposed (M > N) and 10 otherwise (the op reserves the mux axis).
 _TILE = 32
@@ -87,9 +90,14 @@ AGMM_BLOCK_SIZES: dict[tuple[int, int, int], tuple[int, int, int]] = {
 }
 
 
-# Blocking of the dynamic-length path: one program per (K, N) for every M, the swept per_core_M=12 entry
-# (what the 10 s and 15 s points resolve to; to_qkv 4/6/16 and ff1 4/3/16 are also the measured picks).
-AGMM_PINNED_PER_CORE_M = 12
+# Blocking of the dynamic-length path per (K, N) layer and length class, measured on 4x8 Blackhole: to_qkv
+# and to_out take one blocking at every length (faster than the per-M table at both ends), ff1 wants
+# 6/3/16 up to the short class and the table's 4/3/16 beyond it.
+AGMM_PINNED_BLOCKING: dict[tuple[int, int], dict[str, tuple[int, int, int]]] = {
+    (5376, 5376): {"short": (4, 6, 16), "long": (4, 6, 16)},
+    (5376, 7168): {"short": (6, 3, 16), "long": (4, 3, 16)},
+    (7168, 1344): {"short": (6, 8, 6), "long": (6, 8, 6)},
+}
 
 
 class AgmmPin(NamedTuple):
@@ -109,31 +117,61 @@ AGMM_PINNED_TRANSPOSED: dict[tuple[int, int], bool] = {
 }
 
 
+def op_takes_keyword(op, name: str) -> bool:
+    """Whether a ttnn op's binding takes keyword `name`. `inspect` cannot read the nanobind callable behind
+    ttnn's operation wrappers, so its per-overload signatures (`__nb_signature__`) are searched then."""
+    function = getattr(op, "function", op)
+    try:
+        return name in inspect.signature(function).parameters
+    except (TypeError, ValueError):
+        overloads = getattr(getattr(function, "__call__", None), "__nb_signature__", None) or ()
+        return any(re.search(rf"\b{name}\s*:", overload[0]) for overload in overloads)
+
+
 @functools.cache
 def agmm_orientation_pinnable() -> bool:
     """Whether the op takes `transpose_core_grid`. Without it only the transposed orientation can be pinned
     (`force_transpose`), so every layer then runs transposed at every length."""
-    return "transpose_core_grid" in (ttnn.experimental.all_gather_minimal_matmul_async.__doc__ or "")
+    return op_takes_keyword(ttnn.experimental.all_gather_minimal_matmul_async, "transpose_core_grid")
 
 
-def agmm_pin(k: int, n: int, *, full_grid: ttnn.CoreCoord, num_links: int) -> AgmmPin:
-    """The M-independent AGMM program of a `(K, N)` layer: one worker-grid orientation at every length (the
-    op's own `M > N` rule would flip to_qkv and ff1 once M passes their N, inside the served envelope) and
-    the `AGMM_PINNED_PER_CORE_M` blocking."""
+def agmm_pins(k: int, n: int, *, full_grid: ttnn.CoreCoord, num_links: int) -> dict[str, AgmmPin]:
+    """The AGMM program of a `(K, N)` layer per length class: one worker-grid orientation at every length (the
+    op's own `M > N` rule would flip to_qkv and ff1 once M passes their N, inside the served envelope) and the
+    class's `AGMM_PINNED_BLOCKING`; classes with the same blocking share one pin."""
     transposed = AGMM_PINNED_TRANSPOSED.get((k, n), True) if agmm_orientation_pinnable() else True
-    m_block, k_block, n_block = AGMM_BLOCK_SIZES[(k, n, AGMM_PINNED_PER_CORE_M)]
     grid = agmm_worker_grid(full_grid, transposed, num_links)
-    config = ttnn.MinimalMatmulConfig(
-        M_block_size=m_block,
-        K_block_size=k_block,
-        N_block_size=n_block,
-        subblock_h=2,
-        subblock_w=2,
-        compute_with_storage_grid_size=grid,
-    )
     # in0 senders group along the M-parallel axis (grid.x transposed, grid.y not) into `num_links` groups.
     in0_axis = grid.x if transposed else grid.y
-    return AgmmPin(config, math.ceil(in0_axis / num_links), transposed)
+    workers = math.ceil(in0_axis / num_links)
+    pins: dict[tuple[int, int, int], AgmmPin] = {}
+    for cls in LENGTH_CLASSES:
+        blocking = AGMM_PINNED_BLOCKING[(k, n)][cls.name]
+        if blocking not in pins:
+            m_block, k_block, n_block = blocking
+            config = ttnn.MinimalMatmulConfig(
+                M_block_size=m_block,
+                K_block_size=k_block,
+                N_block_size=n_block,
+                subblock_h=2,
+                subblock_w=2,
+                compute_with_storage_grid_size=grid,
+            )
+            pins[blocking] = AgmmPin(config, workers, transposed)
+    return {cls.name: pins[AGMM_PINNED_BLOCKING[(k, n)][cls.name]] for cls in LENGTH_CLASSES}
+
+
+def agmm_kwargs(pins: dict[str, AgmmPin] | None, k: int, n: int, rows: int) -> dict:
+    """The linear's blocking kwargs for a `(K, N)` layer at `rows` per-device rows: the length class's pin,
+    else (legacy path) the length-keyed swept table."""
+    if pins is None:
+        return {"default_block_size": agmm_block_size(k, n, rows)}
+    pin = pins[length_class(rows).name]
+    return {
+        "matmul_config": pin.config,
+        "num_workers_per_link": pin.num_workers_per_link,
+        "transpose_core_grid": pin.transpose_core_grid,
+    }
 
 
 def agmm_block_size(k: int, n: int, m: int) -> tuple[int, int, int] | None:

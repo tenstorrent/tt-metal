@@ -76,6 +76,7 @@ from ...models.audio_vae.minimax_h3.decoder_minimax_h3_audio import MiniMaxH3Aud
 from ...models.audio_vae.minimax_h3.encoder_minimax_h3_audio import MiniMaxH3AudioEncoder
 from ...models.transformers.minimax_h3.adaln_tilerow import DEFAULT_MAX_MIXED_TILES, tilerow_remap
 from ...models.transformers.minimax_h3.attention_minimax_h3 import prepare_rope_tables
+from ...models.transformers.minimax_h3.length_classes import uncovered_class_lengths
 from ...models.transformers.minimax_h3.transformer_minimax_h3 import MiniMaxH3Transformer3DModel
 from ...models.vae.minimax_h3.vae_minimax_h3 import MiniMaxH3Vae, MiniMaxH3VaeConfig
 from ...parallel.config import DiTParallelConfig, EncoderParallelConfig, ParallelFactor, VAEParallelConfig
@@ -516,9 +517,9 @@ class MiniMaxH3Pipeline:
         max_sequence_length: int | None = None,
     ) -> None:
         """`dynamic_length` serves every packed length up to `max_sequence_length` (default: the top rung of
-        the mesh's ladder) padded only to the SP alignment, with one program set, one request state and a
-        two-point warm-up instead of the bucket ladder. Eager only (a trace freezes the length). Off by
-        default: the presets keep bucketing, and the quad keeps bucketing plus tracing."""
+        the mesh's ladder) padded only to the SP alignment, with one program set per length class, one request
+        state and a warm-up of one point per class instead of the bucket ladder. Eager only (a trace freezes
+        the length). Off by default: the presets keep bucketing, and the quad keeps bucketing plus tracing."""
         self.mesh_device = mesh_device
         self.weights_dir = Path(weights_dir)
         supplied = (tp_axis, sp_axis, num_links, topology)
@@ -2377,8 +2378,9 @@ class MiniMaxH3Pipeline:
         self, prompt: str, generation_kwargs: dict, overrides: Mapping[int, dict]
     ) -> dict[int, dict]:
         """The dynamic-length warm-up: one forced two-step generation at `max_sequence_length` (binds the
-        largest buffers and shows the DRAM high-water) and one at the shortest served request (a second
-        length through the same program set). Returns the request that fit the capacity point."""
+        largest buffers and shows the DRAM high-water), one at the shortest served request, and one inside
+        every length class neither of those falls in, so each class's program set is built. Returns the
+        request that fit the capacity point."""
         cap = self.max_sequence_length
         request = self._run_forced_fit(cap, prompt, overrides.get(cap, generation_kwargs), shrink=cap not in overrides)
         fitted = {cap: request} if request is not None else {}
@@ -2395,8 +2397,12 @@ class MiniMaxH3Pipeline:
             aspect_ratio=(1, 1),
         )
         self._run_forced(None, prompt, short)
+        warmed = [cap, self.last_seq_len.padded]
+        for pad_to in uncovered_class_lengths(warmed, self.sp_factor):
+            self._run_forced(pad_to, prompt, short)
+            warmed.append(pad_to)
         self._host_log(
-            f"dynamic-length denoise warmed at padded lengths {cap} and {self.last_seq_len.padded}: "
+            f"dynamic-length denoise warmed at padded lengths {sorted(warmed)}: "
             f"{self.mesh_device.num_program_cache_entries()} programs cached"
         )
         return fitted

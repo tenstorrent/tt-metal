@@ -18,7 +18,7 @@ from ....parallel.config import DiTParallelConfig
 from ....parallel.manager import CCLManager
 from ....utils.substate import rename_substate
 from ....utils.tensor import bf16_tensor
-from .agmm_config import agmm_block_size, agmm_pin
+from .agmm_config import agmm_kwargs, agmm_pins
 from .attention_minimax_h3 import MiniMaxH3Attention, norm_capacity_kwargs
 from .mmrs_config import has_mmrs_config, pinned_mmrs_config, register_mmrs_config
 
@@ -164,12 +164,12 @@ class MiniMaxH3TransformerBlock(Module):
         self._eye_tables: dict[int, ttnn.Tensor] = {}
         # ff1 packs gate and up together for the fused SwiGLU, so its per-device N is 2 * ffn_dim / tp.
         self._ff1_kn = (hidden_size, 2 * ffn_dim // self.tp_factor)
-        # Dynamic-length pins, resolved once per layer: no table scan per call.
-        self._ff1_pin = self._mmrs_pin = None
+        # Dynamic-length pins (ff1 per length class), resolved once per layer: no table scan per call.
+        self._ff1_pins = self._mmrs_pin = None
         if dynamic_length:
             grid = mesh_device.compute_with_storage_grid_size()
             if self.use_fused_agmm:
-                self._ff1_pin = agmm_pin(*self._ff1_kn, full_grid=grid, num_links=ccl_manager.num_links)
+                self._ff1_pins = agmm_pins(*self._ff1_kn, full_grid=grid, num_links=ccl_manager.num_links)
             if self.tp_factor > 1 and ccl_manager.topology == ttnn.Topology.Ring:
                 self._mmrs_pin = pinned_mmrs_config(ffn_dim // self.tp_factor, hidden_size, grid)
 
@@ -425,11 +425,5 @@ class MiniMaxH3TransformerBlock(Module):
         return ttnn.addcmul(residual, ff_out, modulation(_GATE_MLP))
 
     def _ff1_kwargs(self, normed: ttnn.Tensor) -> dict:
-        """ff1's blocking kwargs: the frozen pin, else the length-keyed swept table."""
-        if self._ff1_pin is None:
-            return {"default_block_size": agmm_block_size(*self._ff1_kn, normed.padded_shape[-2])}
-        return {
-            "matmul_config": self._ff1_pin.config,
-            "num_workers_per_link": self._ff1_pin.num_workers_per_link,
-            "transpose_core_grid": self._ff1_pin.transpose_core_grid,
-        }
+        """ff1's blocking kwargs: the per-device length's class pin, else the length-keyed swept table."""
+        return agmm_kwargs(self._ff1_pins, *self._ff1_kn, normed.padded_shape[-2])

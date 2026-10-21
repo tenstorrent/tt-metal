@@ -365,6 +365,32 @@ app context only, so it reaches rank 0 and no one else. Anything the model branc
 identical on every rank -- a rank that takes a cache hit its peers miss skips collectives they are
 still waiting in, and the run deadlocks rather than failing.
 
+### Dynamic length on the 4x8
+
+`MiniMaxH3Pipeline.create_pipeline(..., dynamic_length=True)` (optional `max_sequence_length=`, default
+the top rung, 120320 for t2va) replaces the bucket ladder on the 4x8: a request is padded only to the SP
+alignment (256 rows), and the DiT ops that used to key a program on the padded length
+(`all_gather_minimal_matmul_async`, the fused ff2 MM+reduce-scatter, the ring SDPA, the standalone
+`minimal_matmul` heads) take the per-device row count as a runtime word instead. Eager only: a trace
+freezes the length, so the quad preset stays bucketed and traced, and the 4x8 preset still buckets
+unless the flag is passed.
+
+Every program choice is frozen at construction into **length classes** keyed on rows per device
+(padded length / 8), `models/transformers/minimax_h3/length_classes.py`:
+
+| class | rows/device | served points | ring SDPA chunks | ff1 blocking | to_qkv | to_out |
+|---|---|---|---|---|---|---|
+| short | <= 6144 | 4 s (2368), 5 s (4736) | (320, 384) | 6/3/16 | 4/6/16, 11x10 non-transposed | 6/8/6, 12x9 transposed |
+| long | > 6144 | 10 s (9184), 15 s (13664), capacity (15040) | (256, 512) | 4/3/16 | same | same |
+
+The fused ff2 MM+RS keeps one blocking (12x8, 6/4/8) for every length. A class value reaches the op as a
+config object, never as a shape, so a length inside a class never compiles anything; a new class costs
+one more program set. The warm-up runs one two-step generation at `max_sequence_length` (the capacity
+point), one at the shortest served request (4 s at 1:1, padded 18944) and one inside every class neither
+of those falls in, then the usual VAE / audio / prompt-encoder warms. The measured gate is
+`test_pipeline_minimax_h3.py::test_t2va_dynamic_length_zero_misses` (`MINIMAX_H3_DYNAMIC_GATE=1`): warm
+at 5 s, measure at 10 s, zero denoising cache misses.
+
 ## Fully-warm latency
 
 Measured by `pipelines/ltx`'s method so the two are comparable: warmup pass first, prepares and

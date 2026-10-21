@@ -1162,22 +1162,26 @@ def test_minimax_h3_transformer_block_perf(
     del torch_block
 
     # H3_BLOCK_PERF_LEGACY_PARTS=agmm_attn,agmm_ff1,sdpa,mmrs,gather puts those dynamic-length pins back on
-    # the legacy choice (sdpa320: the (320, 384) chunk pair), to attribute a block-level delta part by part.
+    # the legacy choice (sdpa320 / sdpa256: that chunk pair in every class), to attribute a delta part by part.
     legacy_parts = set(filter(None, os.environ.get("H3_BLOCK_PERF_LEGACY_PARTS", "").split(",")))
     if dynamic_length and legacy_parts:
         if "agmm_attn" in legacy_parts:
-            tt_block.attn._qkv_pin = tt_block.attn._out_pin = None
+            tt_block.attn._qkv_pins = tt_block.attn._out_pins = None
         if "agmm_ff1" in legacy_parts:
-            tt_block._ff1_pin = None
+            tt_block._ff1_pins = None
         if "sdpa" in legacy_parts:
-            tt_block.attn._ring_sdpa_config = None
-        if "sdpa320" in legacy_parts:
-            tt_block.attn._ring_sdpa_config = ttnn.SDPAProgramConfig(
-                compute_with_storage_grid_size=ttnn.CoreCoord(*tt_block.attn.sdpa_worker_grid),
-                q_chunk_size=320,
-                k_chunk_size=384,
-                exp_approx_mode=False,
-            )
+            tt_block.attn._ring_sdpa_configs = None
+        for part, (q_chunk, k_chunk) in (("sdpa320", (320, 384)), ("sdpa256", (256, 512))):
+            if part in legacy_parts:
+                tt_block.attn._ring_sdpa_configs = {
+                    name: ttnn.SDPAProgramConfig(
+                        compute_with_storage_grid_size=ttnn.CoreCoord(*tt_block.attn.sdpa_worker_grid),
+                        q_chunk_size=q_chunk,
+                        k_chunk_size=k_chunk,
+                        exp_approx_mode=False,
+                    )
+                    for name in tt_block.attn._ring_sdpa_configs
+                }
         if "mmrs" in legacy_parts:
             tt_block._mmrs_pin = None
         if "gather" in legacy_parts:

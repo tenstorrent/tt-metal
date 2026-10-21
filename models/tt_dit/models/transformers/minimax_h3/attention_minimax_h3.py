@@ -20,11 +20,12 @@ from ....parallel.manager import CCLManager
 from ....utils.mochi import get_rot_transformation_mat
 from ....utils.substate import pop_substate, rename_substate
 from ....utils.tensor import bf16_tensor
-from .agmm_config import agmm_block_size, agmm_pin
+from .agmm_config import agmm_kwargs, agmm_pins
+from .length_classes import LENGTH_CLASSES, length_class
 
-# Ring SDPA chunk pair of the dynamic-length path: one program for every per-device length. Measured per
-# block on 4x8: 5 % faster than (320, 384) at 13664 rows/chip, 5 % slower at 4736 (the swept 5 s pair).
-DYNAMIC_RING_SDPA_CHUNKS = (256, 512)
+# Ring SDPA chunk pair of the dynamic-length path per length class, one program each. Measured per block
+# on 4x8: (320, 384) is 5 % faster at 4736 rows/device, (256, 512) 5 % faster at 13664.
+DYNAMIC_RING_SDPA_CHUNKS: dict[str, tuple[int, int]] = {"short": (320, 384), "long": (256, 512)}
 
 
 _RING_SDPA_DYNAMIC_KWARG = "dynamic_local_n"
@@ -234,19 +235,22 @@ class MiniMaxH3Attention(Module):
         self.sdpa_worker_grid = (full_grid.x - 1, full_grid.y)  # reserve last column for CCL
         self._sdpa_program_configs: dict[tuple[int, bool, bool], ttnn.SDPAProgramConfig] = {}
 
-        # Dynamic-length pins, resolved once: no table scan and no orientation flip per call.
-        self._qkv_pin = self._out_pin = self._ring_sdpa_config = None
+        # Dynamic-length pins per length class, resolved once: no table scan and no orientation flip per call.
+        self._qkv_pins = self._out_pins = self._ring_sdpa_configs = None
         if dynamic_length and self.use_fused_agmm:
             pin_kwargs = dict(full_grid=full_grid, num_links=ccl_manager.num_links)
-            self._qkv_pin = agmm_pin(hidden_size, 3 * self.inner_dim // tp_factor, **pin_kwargs)
-            self._out_pin = agmm_pin(self.inner_dim, hidden_size // tp_factor, **pin_kwargs)
+            self._qkv_pins = agmm_pins(hidden_size, 3 * self.inner_dim // tp_factor, **pin_kwargs)
+            self._out_pins = agmm_pins(self.inner_dim, hidden_size // tp_factor, **pin_kwargs)
         if dynamic_length and self.use_ring:
-            self._ring_sdpa_config = ttnn.SDPAProgramConfig(
-                compute_with_storage_grid_size=ttnn.CoreCoord(*self.sdpa_worker_grid),
-                q_chunk_size=DYNAMIC_RING_SDPA_CHUNKS[0],
-                k_chunk_size=DYNAMIC_RING_SDPA_CHUNKS[1],
-                exp_approx_mode=False,
-            )
+            self._ring_sdpa_configs = {
+                cls.name: ttnn.SDPAProgramConfig(
+                    compute_with_storage_grid_size=ttnn.CoreCoord(*self.sdpa_worker_grid),
+                    q_chunk_size=DYNAMIC_RING_SDPA_CHUNKS[cls.name][0],
+                    k_chunk_size=DYNAMIC_RING_SDPA_CHUNKS[cls.name][1],
+                    exp_approx_mode=False,
+                )
+                for cls in LENGTH_CLASSES
+            }
 
         # The exp ring op walks head-SEGMENTS (a head's Q chunks split over segs_per_head rows) as
         # serial passes, ceil(n_local_heads * segs / rows) passes per row. Segmentation is what
@@ -571,7 +575,9 @@ class MiniMaxH3Attention(Module):
             parallel_config=matmul_parallel_config,
             force_transpose=False,
             use_persistent_buffer=self.use_persistent_ccl_buffers,
-            **self._agmm_kwargs(self._qkv_pin, self.hidden_size, 3 * self.inner_dim // tp_factor, spatial_1BND),
+            **agmm_kwargs(
+                self._qkv_pins, self.hidden_size, 3 * self.inner_dim // tp_factor, spatial_1BND.padded_shape[-2]
+            ),
         )
 
         def create_heads(inp: ttnn.Tensor) -> ttnn.Tensor:
@@ -644,7 +650,7 @@ class MiniMaxH3Attention(Module):
                 ),
                 joint_strategy="rear",
                 logical_n=logical_n,
-                program_config=self._ring_sdpa_config or self._sdpa_program_config(q_BHNE.shape[2], ring=True),
+                program_config=self._ring_sdpa_program_config(q_BHNE.shape[2]),
                 compute_kernel_config=self.sdpa_compute_kernel_config,
                 dim=2,
                 multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(self.sp_mesh_axis),
@@ -690,19 +696,16 @@ class MiniMaxH3Attention(Module):
             addcmul_a=addcmul_residual if fuse_gate else None,
             addcmul_b=addcmul_gate if fuse_gate else None,
             use_persistent_buffer=self.use_persistent_ccl_buffers,
-            **self._agmm_kwargs(self._out_pin, self.inner_dim, self.hidden_size // tp_factor, spatial_1BND),
+            **agmm_kwargs(
+                self._out_pins, self.inner_dim, self.hidden_size // tp_factor, spatial_1BND.padded_shape[-2]
+            ),
         )
         if addcmul_residual is not None and not fuse_gate:
             out = ttnn.addcmul(addcmul_residual, out, addcmul_gate)
         return out
 
-    @staticmethod
-    def _agmm_kwargs(pin, k: int, n: int, x: ttnn.Tensor) -> dict:
-        """The linear's blocking kwargs: the frozen pin, else the length-keyed swept table."""
-        if pin is None:
-            return {"default_block_size": agmm_block_size(k, n, x.padded_shape[-2])}
-        return {
-            "matmul_config": pin.config,
-            "num_workers_per_link": pin.num_workers_per_link,
-            "transpose_core_grid": pin.transpose_core_grid,
-        }
+    def _ring_sdpa_program_config(self, seq_local: int) -> ttnn.SDPAProgramConfig:
+        """The per-device length's class pin on the dynamic-length path, else the length-keyed table."""
+        if self._ring_sdpa_configs is None:
+            return self._sdpa_program_config(seq_local, ring=True)
+        return self._ring_sdpa_configs[length_class(seq_local).name]
