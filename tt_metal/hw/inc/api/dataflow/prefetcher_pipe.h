@@ -918,9 +918,9 @@ private:
         local_credit_range(lane_offset_bytes, base, size);
         constexpr uint32_t line = 64;
         for (uint32_t addr = base & ~(line - 1); addr < base + size; addr += line) {
-            flush_l1_dcache(addr);
+            invalidate_l1_dcache(addr);
         }
-        flush_l2_cache_range(base, size);
+        invalidate_l2_cache_range(base, size);
 #else
         (void)lane_offset_bytes;
 #endif
