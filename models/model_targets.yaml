@@ -428,8 +428,8 @@ targets:
             status: active
             perf:
               prefill_t/s: 54.80
-              decode_t/s/u: 7.02
-              decode_t/s: 7.02
+              decode_t/s/u: 36.7
+              decode_t/s: 36.7
               prefill_t_s_tolerance: 0.3
               decode_t_s_tolerance: 0.2
               decode_t_s_u_tolerance: 0.2
