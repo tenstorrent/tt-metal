@@ -84,13 +84,10 @@ ProgramDescriptor build_rms_allgather_program_descriptor(
     Tensor& tensor_return_value) {
     // Setup device information
     ttnn::MeshDevice* mesh_device = tensor_args.input.device();
-    auto* const target_device = mesh_device->get_device(mesh_coord);
     const auto mesh_view = mesh_device->get_view();
     TT_FATAL(
         mesh_view.is_mesh_2d(), "all-gather invoked with cluster_axis API on >2D mesh, which is currently unsupported");
-    std::vector<IDevice*> devices = (operation_attributes.cluster_axis == 0)
-                                        ? mesh_view.get_devices_on_column(mesh_coord[1])
-                                        : mesh_view.get_devices_on_row(mesh_coord[0]);
+    const uint32_t coord_index = mesh_coord[operation_attributes.cluster_axis];
     const auto fabric_node_ids = (operation_attributes.cluster_axis == 0)
                                      ? mesh_view.get_fabric_node_ids_on_column(mesh_coord[1])
                                      : mesh_view.get_fabric_node_ids_on_row(mesh_coord[0]);
@@ -99,7 +96,7 @@ ProgramDescriptor build_rms_allgather_program_descriptor(
     std::optional<tt::tt_fabric::FabricNodeId> backward_fabric_node_id = std::nullopt;
     uint32_t device_index = 0;
     for (uint32_t i = 0; i < operation_attributes.ring_size; ++i) {
-        if (devices.at(i) == target_device) {
+        if (i == coord_index) {
             device_index = i;
             if (i != 0) {
                 backward_fabric_node_id = fabric_node_ids.at(i - 1);

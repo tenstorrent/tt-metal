@@ -85,8 +85,14 @@ public:
     [[nodiscard]] bool is_mesh_2d() const;
     [[nodiscard]] size_t num_rows() const;
     [[nodiscard]] size_t num_cols() const;
-    [[nodiscard]] std::vector<IDevice*> get_devices_on_row(size_t row) const;
-    [[nodiscard]] std::vector<IDevice*> get_devices_on_column(size_t col) const;
+    [[deprecated(
+        "Deprecated, use get_fabric_node_ids_on_row or a MeshCoordinateRange over the row instead. This will be "
+        "removed after 2026-11-20.")]] [[nodiscard]] std::vector<IDevice*>
+    get_devices_on_row(size_t row) const;
+    [[deprecated(
+        "Deprecated, use get_fabric_node_ids_on_column or a MeshCoordinateRange over the column instead. This will "
+        "be removed after 2026-11-20.")]] [[nodiscard]] std::vector<IDevice*>
+    get_devices_on_column(size_t col) const;
     [[nodiscard]] std::vector<tt::tt_fabric::FabricNodeId> get_fabric_node_ids_on_row(size_t row) const;
     [[nodiscard]] std::vector<tt::tt_fabric::FabricNodeId> get_fabric_node_ids_on_column(size_t col) const;
 
@@ -106,7 +112,10 @@ public:
     [[nodiscard]] static std::vector<MeshCoordinate> get_ring_coordinates(
         const Shape2D& ring_shape, const Shape2D& mesh_shape);
     [[nodiscard]] std::vector<MeshCoordinate> get_ring_coordinates() const;
-    [[nodiscard]] std::vector<IDevice*> get_ring_devices() const;
+    [[deprecated(
+        "Deprecated, use get_ring_coordinates or get_ring_fabric_node_ids instead. This will be removed after "
+        "2026-11-20.")]] [[nodiscard]] std::vector<IDevice*>
+    get_ring_devices() const;
     [[deprecated(
         "Deprecated, use get_line_coordinates or get_line_fabric_node_ids instead. This will be removed after "
         "2026-11-19.")]] [[nodiscard]] std::vector<IDevice*>
