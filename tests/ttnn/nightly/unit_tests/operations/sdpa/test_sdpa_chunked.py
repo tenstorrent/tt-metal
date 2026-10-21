@@ -716,3 +716,65 @@ def test_sdpa_window_between_tile_boundaries(device, is_causal, fp32_dest_acc_en
     )
     passed, pcc = comp_pcc(expected, ttnn.to_torch(actual), 0.999)
     assert passed, pcc
+
+
+@pytest.mark.skipif(is_watcher_enabled(), reason="Kernel OOM with watcher enabled")
+@pytest.mark.parametrize("head_dim, q_chunk_size, k_chunk_size", [(128, 64, 32), (512, 32, 256)])
+def test_chunked_sdpa_fp32_output_accumulation_long_prefix(device, head_dim, q_chunk_size, k_chunk_size):
+    """A long, diffuse prefix (1024 K tiles per Q chunk) drifts with the BF16 running output sum;
+    SDPAProgramConfig(fp32_output_accumulation=True) keeps it in FP32 and must track the reference."""
+    torch.manual_seed(0)
+    heads, block = 4, 64
+    kv_len = 1024 * k_chunk_size
+    q_len = max(2 * q_chunk_size, k_chunk_size)
+    start = kv_len - q_len
+    # Score std ~2.5: diffuse over the prefix, like the long-context Gemma4 full-attention layers.
+    q = torch.randn(1, heads, q_len, head_dim) * 1.6 / head_dim**0.25
+    k = torch.randn(1, 1, kv_len, head_dim) * 1.6 / head_dim**0.25
+    v = torch.randn(1, 1, kv_len, head_dim)
+    q, k, v = (t.bfloat16().float() for t in (q, k, v))
+    scores = (q @ k.transpose(-1, -2)).masked_fill(
+        torch.arange(kv_len)[None, :] > torch.arange(start, kv_len)[:, None], float("-inf")
+    )
+    expected = scores.softmax(-1) @ v
+
+    pages = kv_len // block
+    permutation = torch.randperm(pages)
+
+    def paged(t):
+        return t.reshape(pages, block, head_dim)[permutation.argsort()].unsqueeze(1)
+
+    tt_k, tt_v = (
+        ttnn.from_torch(paged(t), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device) for t in (k, v)
+    )
+    tt_page_table = ttnn.from_torch(
+        permutation.reshape(1, pages).int(), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+    )
+    tt_q = ttnn.from_torch(q, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True
+    )
+    pccs = {}
+    for fp32_out in (False, True):
+        program_config = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+            q_chunk_size=q_chunk_size,
+            k_chunk_size=k_chunk_size,
+            exp_approx_mode=False,
+            fp32_output_accumulation=fp32_out,
+        )
+        actual = ttnn.transformer.chunked_scaled_dot_product_attention(
+            tt_q,
+            tt_k,
+            tt_v,
+            tt_page_table,
+            start,
+            scale=1.0,
+            program_config=program_config,
+            compute_kernel_config=compute_kernel_config,
+        )
+        pccs[fp32_out] = torch.corrcoef(torch.stack([expected.flatten(), ttnn.to_torch(actual).float().flatten()]))[
+            0, 1
+        ].item()
+    logger.info(f"long-prefix PCC: bf16 accumulator {pccs[False]}, fp32 accumulator {pccs[True]}")
+    assert pccs[True] >= 0.9999 and pccs[True] > pccs[False]
