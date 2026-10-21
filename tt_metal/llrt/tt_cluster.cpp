@@ -84,6 +84,22 @@ std::unique_ptr<tt::umd::ClusterDescriptor> get_mock_cluster_desc(const tt::llrt
     return mock_cluster_desc;
 }
 
+// Whether [addr, addr + size) lies entirely in the core's L1 or DRAM bank, where nothing is a register.
+bool is_in_core_memory(
+    const tt::umd::SocDescriptor& soc_desc, const tt::umd::CoreCoord& core, uint64_t addr, uint64_t size) {
+    uint64_t memory_size = 0;
+    switch (core.core_type) {
+        case tt::CoreType::TENSIX:
+        case tt::CoreType::WORKER: memory_size = soc_desc.worker_l1_size; break;
+        case tt::CoreType::ETH:
+        case tt::CoreType::ACTIVE_ETH:
+        case tt::CoreType::IDLE_ETH: memory_size = soc_desc.eth_l1_size; break;
+        case tt::CoreType::DRAM: memory_size = soc_desc.dram_bank_size; break;
+        default: return false;
+    }
+    return (addr < memory_size) && (size <= (memory_size - addr));
+}
+
 }  // namespace
 namespace tt {
 
@@ -975,9 +991,17 @@ void Cluster::write_core_immediate(const void* mem_ptr, uint32_t sz_in_bytes, tt
     }
 
     tt::umd::CoreCoord core_coord = soc_desc.get_coord_at(core, CoordSystem::TRANSLATED);
-    this->driver_->write_to_device_reg(mem_ptr, sz_in_bytes, core.chip, core_coord, addr);
+    const bool is_remote = this->get_cluster_desc()->is_chip_remote(chip_id);
+    if (is_remote && is_in_core_memory(soc_desc, core_coord, addr, sz_in_bytes)) {
+        // Write combining only splits writes through a local chip's TLB window. A remote chip's writes go over
+        // ethernet, where a register-width write costs one command per word, so a payload in L1 or a DRAM bank goes
+        // as a block. Registers keep register-width writes.
+        this->driver_->write_to_device(mem_ptr, sz_in_bytes, core.chip, core_coord, addr);
+    } else {
+        this->driver_->write_to_device_reg(mem_ptr, sz_in_bytes, core.chip, core_coord, addr);
+    }
 
-    if (this->get_cluster_desc()->is_chip_remote(chip_id)) {
+    if (is_remote) {
         this->driver_->wait_for_non_mmio_flush(chip_id);
     }
 }
