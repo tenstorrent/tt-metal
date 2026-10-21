@@ -25,13 +25,36 @@ ROOT = Path(E.__file__).resolve().parents[1]
 
 
 def test_the_limit_is_calib_times_the_reference_drift_and_never_below_resolution(monkeypatch):
+    """F135: the per-step convention end to end: calib x rel for an error, calib^2 on a PCC's miss, calib on an
+    overlap's miss; never below one rounding (one miss)."""
     monkeypatch.setattr(metrics, "record", lambda *a, **k: None)
-    d = {"pcc_layer_L00": {"drift": 0.99, "res": 0.99999}, "pcc_layer_L01": {"drift": 1.0, "res": 0.99999}}
-    assert E.limit(d, "pcc_layer_L00") == pytest.approx(1 - E.CALIB * 0.01)
-    assert E.limit(d, "pcc_layer_L01") == pytest.approx(1 - E.CALIB * 1e-5)  # an exact layer: the bf16 floor
+    d = {
+        "layer_L00": {"rel": 0.01, "rel_res": 0.002, "pcc": 0.9999, "pcc_res": 0.999998},
+        "layer_L01": {"rel": 0.0, "rel_res": 0.002, "pcc": 1.0, "pcc_res": 0.999998},
+        "top5": {"overlap": 0.99, "overlap_res": 0.999},
+    }
+    assert E.limit(d, "layer_L00", "err_layer_L00") == pytest.approx(E.CALIB * 0.01)
+    assert E.limit(d, "layer_L01", "err_layer_L01") == pytest.approx(E.CALIB * 0.002)  # an exact layer: one rounding
+    assert E.limit(d, "layer_L00", "pcc_layer_L00") == pytest.approx(1 - E.CALIB**2 * 1e-4)
+    assert E.limit(d, "top5", "top5_overlap") == pytest.approx(1 - E.CALIB * 0.01)
     failed = []
-    assert E.check(d, "pcc_layer_L00", 0.985, failed) and not failed
-    assert not E.check(d, "pcc_layer_L00", 0.97, failed) and "limit" in failed[0]
+    assert E.check(d, "layer_L00", "err_layer_L00", 0.015, failed) and not failed
+    assert not E.check(d, "layer_L00", "err_layer_L00", 0.03, failed) and "limit" in failed[0]
+
+
+def test_a_two_percent_scale_fails_end_to_end_though_its_pcc_is_one(monkeypatch):
+    """F81's reason end to end: PCC cannot see a scale; the gated rel error does."""
+    from models.demos.common.bringup.testing.ladder import rel
+
+    monkeypatch.setattr(metrics, "record", lambda *a, **k: None)
+    g = torch.Generator().manual_seed(0)
+    want = torch.randn(512, 64, generator=g)
+    official = want + 0.002 * torch.randn(512, 64, generator=g)
+    d = {"layer_L00": D._float_entry(official.bfloat16(), want)}
+    dev = 1.02 * want
+    assert metrics.pcc(dev, want) > 0.99999
+    assert not E.check(d, "layer_L00", "err_layer_L00", rel(dev, want), [])
+    assert E.check(d, "layer_L00", "err_layer_L00", rel(official, want), [])
 
 
 def test_a_rung_without_its_drift_fails_instead_of_falling_back(tmp_path):
@@ -73,9 +96,10 @@ def test_drift_measures_the_official_reference_against_full_precision():
     flipped = idx.clone()
     flipped[:4, 0] = 500
     d = _entries(_G({0: full}, {0: {"kv": full, "topk": idx}}), rounded, {"kv": rounded, "topk": flipped})
-    assert 0.99 < d["pcc_layer_L00"]["drift"] < 0.9999 and d["pcc_layer_L00"]["res"] > 0.9999
-    assert d["overlap_state_topk_L00"]["drift"] == pytest.approx(1 - 4 / 80)
-    assert set(d) == {"pcc_layer_L00", "pcc_state_kv_L00", "overlap_state_topk_L00"}
+    assert 0.01 < d["layer_L00"]["rel"] < 0.1 and d["layer_L00"]["rel_res"] < 0.01
+    assert 0.99 < d["layer_L00"]["pcc"] < 0.9999 and d["layer_L00"]["pcc_res"] > 0.9999
+    assert d["state_topk_L00"]["overlap"] == pytest.approx(1 - 4 / 80)
+    assert set(d) == {"layer_L00", "state_kv_L00", "state_topk_L00"}
 
 
 def test_the_drift_floor_is_one_rounding_in_the_stored_dtype_and_one_miss_per_selection(monkeypatch):
@@ -87,9 +111,9 @@ def test_the_drift_floor_is_one_rounding_in_the_stored_dtype_and_one_miss_per_se
     idx = torch.stack([torch.randperm(4096, generator=g)[:1000] for _ in range(100)])
     target = _G({0: full}, {0: {"rec": full, "topk": idx}})
     d = _entries(target, full.clone(), {"rec": full.clone(), "topk": idx.clone()}, keep=("rec",))
-    assert 1 - d["pcc_layer_L00"]["res"] > 1e-7  # stored bf16: a bf16 floor
-    assert 1 - d["pcc_state_rec_L00"]["res"] < 1e-12  # kept fp32
-    assert E.limit(d, "overlap_state_topk_L00") > 0.9999
+    assert d["layer_L00"]["rel_res"] > 1e-3  # stored bf16: a bf16 floor
+    assert 1e-9 < d["state_rec_L00"]["rel_res"] < 1e-6  # kept fp32: one fp32 rounding
+    assert E.limit(d, "state_topk_L00", "overlap_state_topk_L00") > 0.9999
 
 
 def test_no_hook_without_a_numerics_switch_falls_back_to_rounded_arithmetic():

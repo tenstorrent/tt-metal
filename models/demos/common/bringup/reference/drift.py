@@ -10,9 +10,11 @@ drift (testing/e2e_limits.py), never by a fixed bar.
 
     python -m models.demos.common.bringup.reference.drift --rung s55296
 
-Writes ``drift-<rung>.json`` into the full-precision golden: {metric: {"drift": value, "res": resolution floor,
-"region": [axis, lo, hi] | null}}. A float metric's floor is the same metric for the target rounded once to the dtype
-the official golden would store that tensor in (bf16, or fp32 for golden.keep_fp32; F133), an overlap's one miss among
+Writes ``drift-<rung>.json`` into the full-precision golden, one entry per compared tensor (``layer_L<i>``,
+``state_<name>_L<i>``, ``final_hidden``, ``top5``): a float tensor {"rel", "rel_res", "pcc", "pcc_res", "region"}, a
+selection {"overlap", "overlap_res", "region"}; testing/e2e_limits.py turns them into limits (F135: rel L2 gated, the
+same calib convention as per step). A float tensor's floor (_res) is the metric for the target rounded once to the
+dtype the official golden would store it in (bf16, or fp32 for golden.keep_fp32; F133), an overlap's one miss among
 the selected entries (rows for top-5). A state of a prefix rung is compared over the positions the device computed
 (``region``, along the axis the reference's state_tensors slices; the ladder applies the same region). On the contract
 rung, ``contract_state_<name>_L<i>`` entries: the state as the contract reads it back (every chunk, the last ending
@@ -52,12 +54,25 @@ def narrow(t: torch.Tensor, region) -> torch.Tensor:
     return t if not region else t.narrow(region[0], region[1], region[2] - region[1])
 
 
-def _pcc_entry(official: torch.Tensor, target: torch.Tensor, region=None) -> dict:
+def rel(a: torch.Tensor, b: torch.Tensor) -> float:
+    a, b = a.double().reshape(b.shape), b.double()
+    return float((a - b).norm() / b.norm().clamp_min(1e-300))
+
+
+def _float_entry(official: torch.Tensor, target: torch.Tensor, region=None) -> dict:
+    """F135: rel L2 (gated) and PCC (the contract's read-back, diagnostics), each with one rounding's floor."""
     from models.demos.common.bringup.testing.noise_floor import round_to
 
     t = narrow(target.float(), region)
     o = narrow(official.reshape(target.shape), region)
-    return {"drift": metrics.pcc(o.float(), t), "res": metrics.pcc(round_to(t, stored(o)), t), "region": region}
+    r = round_to(t, stored(o))
+    return {
+        "rel": rel(o, t),
+        "rel_res": rel(r, t),
+        "pcc": metrics.pcc(o.float(), t),
+        "pcc_res": metrics.pcc(r, t),
+        "region": region,
+    }
 
 
 def _overlap_res(ids: torch.Tensor) -> float:
@@ -155,30 +170,30 @@ def entries(s, ref, g: Golden, layers: list[int], rep: dict, first: int) -> dict
     last, seq, start = g.n_chunks - 1, g.seq, first * g.chunk
     out = {}
     for i in layers:
-        out[f"pcc_layer_L{i:02d}"] = _pcc_entry(store_dtype(rep["trail"][i], keep, "out"), g.layer(last, i)["out"])
+        out[f"layer_L{i:02d}"] = _float_entry(store_dtype(rep["trail"][i], keep, "out"), g.layer(last, i)["out"])
         got = ref.state_tensors(rep["state"], i, seq)
         pre = ref.state_tensors(rep["state"], i, start) if start else {}
         for name, want in g.state(i).items():
             region = _region(got[name], pre[name], True) if start and name not in fixed else None
             o = got[name]
             if want.is_floating_point():
-                out[f"pcc_state_{name}_L{i:02d}"] = _pcc_entry(store_dtype(o, keep, name), want, region)
+                out[f"state_{name}_L{i:02d}"] = _float_entry(store_dtype(o, keep, name), want, region)
             else:
                 w, o = narrow(want, region), narrow(o.reshape(want.shape), region)
-                out[f"overlap_state_{name}_L{i:02d}"] = {
-                    "drift": index_overlap(o, w),
-                    "res": _overlap_res(w),
+                out[f"state_{name}_L{i:02d}"] = {
+                    "overlap": index_overlap(o, w),
+                    "overlap_res": _overlap_res(w),
                     "region": region,
                 }
     if layers[-1] == s.num_layers - 1:
         gm = g.model(last)
-        out["pcc_final_hidden"] = _pcc_entry(store_dtype(rep["final_norm"], keep, "final_norm"), gm["final_norm"])
+        out["final_hidden"] = _float_entry(store_dtype(rep["final_norm"], keep, "final_norm"), gm["final_norm"])
         rows = sampled_rows(g.chunk)
         top1 = gm["top32_ids"][rows][:, 0].long()
         top5 = rep["logits"][rows].topk(5, dim=-1).indices
-        out["top5_overlap"] = {
-            "drift": float((top5 == top1[:, None]).any(-1).float().mean()),
-            "res": 1.0 - 1.0 / max(top1.numel(), 1),
+        out["top5"] = {
+            "overlap": float((top5 == top1[:, None]).any(-1).float().mean()),
+            "overlap_res": 1.0 - 1.0 / max(top1.numel(), 1),
             "region": None,
         }
     return out
@@ -203,7 +218,7 @@ def contract_entries(s, ref, g: Golden, layers: list[int], rep: dict, tail_at: i
             else:
                 region = _region(full[name], part[name], False)
                 o, w = full[name], want
-            out[f"contract_state_{name}_L{i:02d}"] = _pcc_entry(store_dtype(o, keep, name), w, region)
+            out[f"contract_state_{name}_L{i:02d}"] = _float_entry(store_dtype(o, keep, name), w, region)
     return out
 
 
@@ -271,12 +286,12 @@ def main(argv=None) -> None:
     p = drift_path(Golden.for_rung(spec, a.rung).dir, a.rung)
     p.write_text(json.dumps(d, indent=1, sort_keys=True))
     for k, v in d.items():
-        metrics.record(f"drift_{a.rung}_{k}", v["drift"])
+        metrics.record(f"drift_{a.rung}_{k}", v.get("rel", 1 - v.get("overlap", 1.0)))
     metrics.record(f"drift_metrics_{a.rung}", len(d))
-    worst = min(d, key=lambda k: d[k]["drift"])
+    worst = max(d, key=lambda k: d[k].get("rel", 1 - d[k].get("overlap", 1.0)))
     print(
         f"drift of the official reference fed as the device on {a.rung}: {len(d)} metrics, worst {worst} "
-        f"{d[worst]['drift']:.6f} -> {p.name}"
+        f"{d[worst].get('rel', 1 - d[worst].get('overlap', 1.0)):.6g} -> {p.name}"
     )
 
 

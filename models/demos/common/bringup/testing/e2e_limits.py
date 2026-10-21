@@ -2,8 +2,11 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 """F128 (owner): every end-to-end accuracy limit (ladder per layer, state and index overlap, final hidden, top-5; the
-contract's KV read-back) is calib x the reference's own drift from full precision on the same rung (reference/drift.py):
-limit = 1 - e2e.calib x max(1 - drift, 1 - res). No fixed bar; a rung without its drift.json fails, never falls back."""
+contract's KV read-back) is calib x the reference's own drift from full precision on the same comparison
+(reference/drift.py, F134). F135: the same convention as per step (testing/noise_floor.py): a float tensor is gated by
+its rel L2 error, limit = calib x max(the drift's rel, one rounding's rel); a selection by its overlap, limit =
+1 - calib x max(the drift's miss, one miss); a PCC (only where a read-back reports nothing else: the contract) at
+1 - calib^2 x its miss (1 - pcc ~ rel^2 / 2). No fixed bar; a rung without its drift fails, never falls back."""
 
 from __future__ import annotations
 
@@ -14,7 +17,7 @@ from pathlib import Path
 from models.demos.common.bringup.core import defaults, metrics
 
 CALIB = float(defaults.get("e2e.calib"))
-STATE_KEY = re.compile(r"^(pcc_state|contract_state)_(.+)_L\d+$")
+STATE_KEY = re.compile(r"^(state|contract_state)_(.+)_L\d+$")
 
 
 def load(golden_dir: Path, rung: str) -> dict:
@@ -30,25 +33,46 @@ def load(golden_dir: Path, rung: str) -> dict:
     return json.loads(p.read_text())
 
 
-def limit(drift: dict, metric: str) -> float:
-    e = drift[metric]
-    return 1.0 - CALIB * max(1.0 - e["drift"], 1.0 - e["res"])
+def err_limit(drift: dict, key: str) -> float:
+    e = drift[key]
+    return CALIB * max(e["rel"], e["rel_res"])
 
 
-def check(drift: dict, metric: str, value: float, failed: list[str]) -> bool:
-    """Records ``<metric>_limit`` (the gate's `>= limit`) and appends a failure when ``value`` is below it."""
-    lim = limit(drift, metric)
+def pcc_limit(drift: dict, key: str) -> float:
+    e = drift[key]
+    return 1.0 - CALIB * CALIB * max(1.0 - e["pcc"], 1.0 - e["pcc_res"])
+
+
+def overlap_limit(drift: dict, key: str) -> float:
+    e = drift[key]
+    return 1.0 - CALIB * max(1.0 - e["overlap"], 1.0 - e["overlap_res"])
+
+
+def limit(drift: dict, key: str, metric: str) -> float:
+    """The limit of ``metric`` (err_ / pcc_ / an overlap) on the drift entry ``key``."""
+    if metric.startswith("err_"):
+        return err_limit(drift, key)
+    return pcc_limit(drift, key) if metric.startswith("pcc_") else overlap_limit(drift, key)
+
+
+def check(drift: dict, key: str, metric: str, value: float, failed: list[str]) -> bool:
+    """Records ``<metric>_limit`` (the gate's `<= limit` for an error, `>= limit` otherwise) and appends a failure when
+    ``value`` is on the wrong side of it."""
+    lim = limit(drift, key, metric)
     metrics.record(f"{metric}_limit", lim)
-    if value < lim:
-        failed.append(f"{metric} {value:.5f} < limit {lim:.5f} (calib {CALIB} x the reference's drift)")
+    err = metric.startswith("err_")
+    if value > lim if err else value < lim:
+        failed.append(
+            f"{metric} {value:.5g} {'>' if err else '<'} limit {lim:.5g} (calib {CALIB} x the reference's drift)"
+        )
         return False
     return True
 
 
-def state_limit(drift: dict, name: str, kind: str = "pcc_state") -> float:
-    """The limit of a state tensor's worst layer (the contract's KV read-back reports each state's worst layer); kind
-    contract_state: the state as the contract reads it back (F134)."""
+def state_limit(drift: dict, name: str, kind: str = "contract_state") -> float:
+    """The PCC limit of a state tensor's worst layer (the contract's KV read-back reports each state's worst layer
+    as a PCC); kind state: the ladder's comparison."""
     keys = [k for k in drift if (m := STATE_KEY.match(k)) and m.group(1) == kind and m.group(2) == name]
     if not keys:
         raise KeyError(f"no {kind} drift for state {name!r} (F128)")
-    return min(limit(drift, k) for k in keys)
+    return min(pcc_limit(drift, k) for k in keys)

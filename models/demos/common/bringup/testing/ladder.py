@@ -9,12 +9,14 @@ except that with a non-contiguous layer subset each contiguous run starts from t
 layer (the gaps never run on the device). A rung may set ``layers`` to stack fewer layers (one layer, a subset).
 
 Metrics (last chunk unless noted):
-    pcc_layer_L{i}       per-layer output trail
-    pcc_state_min        worst state tensor over every layer and the whole sequence (and pcc_state_<name>_L{i})
+    err_layer_L{i}       per-layer output rel L2 (gated, F135; pcc_layer_L{i} the PCC trail, a diagnostic)
+    err_state_<name>_L{i}, overlap_state_<name>_L{i}   every state tensor (float: rel L2; index lists: overlap), over the
+                         positions the device computed (F134); err_state_max, pcc_state_min, overlap_state_min
     each gated metric also records <metric>_limit: calib x the reference's own drift from full precision (F128,
     testing/e2e_limits.py); the golden is the full-precision reference
     state_bits_<name>    bits per element of each state tensor the ladder ran on (state.formats(), optional hook)
-    pcc_final_hidden, top1_match, top5_overlap, pcc_logits_tail     only when the stack ends at the model's last layer
+    err_final_hidden, top5_overlap (gated), pcc_final_hidden, top1_match, pcc_logits_tail   only when the stack ends
+                         at the model's last layer
     chunk_seconds_c{c}, prefill_seconds, model_load_s, covered_layers, subset,
     host_transfers_per_layer (warm chunks only: the most host round-trips inside one model.layer call; a deferred
         step's CPU bridge is not counted), deferred_cpu_steps, deferred_cpu_ms (the bridge's steps and host time, F46)
@@ -130,10 +132,13 @@ def run_ladder(s, rung_name: str, mesh) -> dict:
     out = {"trail": {}, "failed": []}
     drift = E.load(g.dir, rung_name)  # F128 / F134: calib x the reference's drift, fed as the device is on this rung
     for i in layers:
-        p = metrics.pcc(trail[i], g.layer(last, i)["out"].float())
-        metrics.record(f"pcc_layer_L{i:02d}", p)
+        want = g.layer(last, i)["out"].float()
+        p = metrics.pcc(trail[i], want)
+        metrics.record(f"pcc_layer_L{i:02d}", p)  # F135: a diagnostic; the rel error gates
         out["trail"][i] = p
-        E.check(drift, f"pcc_layer_L{i:02d}", p, out["failed"])
+        e = rel(trail[i], want)
+        metrics.record(f"err_layer_L{i:02d}", e)
+        E.check(drift, f"layer_L{i:02d}", f"err_layer_L{i:02d}", e, out["failed"])
     worst_layer = min(out["trail"].values())
     print(f"worst layer pcc {worst_layer:.6f}")
 
@@ -142,7 +147,9 @@ def run_ladder(s, rung_name: str, mesh) -> dict:
         final = model.to_host(hidden).float()
         p = metrics.pcc(final, gm["final_norm"].float())
         metrics.record("pcc_final_hidden", p)
-        E.check(drift, "pcc_final_hidden", p, out["failed"])
+        e = rel(final, gm["final_norm"])
+        metrics.record("err_final_hidden", e)
+        E.check(drift, "final_hidden", "err_final_hidden", e, out["failed"])
         rows = sampled_rows(chunk)
         lg = model.logits(hidden, rows).float()
         tt5 = lg.topk(5, dim=-1).indices
@@ -152,40 +159,48 @@ def run_ladder(s, rung_name: str, mesh) -> dict:
         metrics.record("top1_match", top1)
         metrics.record("top5_overlap", top5)
         metrics.record("pcc_logits_tail", metrics.pcc(lg[-32:], gm["logits_tail"].float()))
-        print(f"final hidden pcc {p:.6f} top1 {top1:.4f} top5 {top5:.4f}")
-        E.check(drift, "top5_overlap", top5, out["failed"])
+        print(f"final hidden pcc {p:.6f} rel {e:.6f} top1 {top1:.4f} top5 {top5:.4f}")
+        E.check(drift, "top5", "top5_overlap", top5, out["failed"])
 
     check_states(state, g, layers, rung["seq"], drift, out["failed"])
     return out
 
 
+def rel(got: torch.Tensor, want: torch.Tensor) -> float:
+    """rel L2 of ``got`` vs ``want`` in float64 (F135: the gated end-to-end error, as per step)."""
+    w = want.double()
+    return float((got.double().reshape(w.shape) - w).norm() / w.norm().clamp_min(1e-300))
+
+
 def check_states(state, g: Golden, layers: list[int], seq: int, drift: dict, failed: list[str]) -> None:
     """Every layer's state after the rung vs the golden, each with its drift limit (F128), over the positions the
-    device computed (the drift entry's region, F134). F99: float states by PCC; integer states (top-k index lists) by
-    the selection overlap, not the PCC of the ids."""
+    device computed (the drift entry's region, F134). Float states by rel L2 (F135; PCC recorded), integer states
+    (top-k index lists) by the selection overlap, not the PCC of the ids (F99)."""
     from models.demos.common.bringup.reference.drift import narrow
 
-    worst, worst_ov = 1.0, 1.0
+    worst, worst_err, worst_ov = 1.0, 0.0, 1.0
     for i in layers:
         got = state.to_torch(i, seq)
         for name, want in g.state(i).items():
-            kind = "pcc" if want.is_floating_point() else "overlap"
-            region = (drift.get(f"{kind}_state_{name}_L{i:02d}") or {}).get("region")  # F134: the positions computed
+            key = f"state_{name}_L{i:02d}"
+            region = (drift.get(key) or {}).get("region")  # F134: the positions the device computed
             o = got[name].reshape(want.shape) if got[name].numel() == want.numel() else got[name]
             o, want = narrow(o, region), narrow(want, region)
             if want.is_floating_point():
-                p = metrics.pcc(o.float(), want.float())
-                metrics.record(f"pcc_state_{name}_L{i:02d}", p)
-                worst = min(worst, p)
-                E.check(drift, f"pcc_state_{name}_L{i:02d}", p, failed)
+                p, e = metrics.pcc(o.float(), want.float()), rel(o, want)
+                metrics.record(f"pcc_{key}", p)
+                metrics.record(f"err_{key}", e)
+                worst, worst_err = min(worst, p), max(worst_err, e)
+                E.check(drift, key, f"err_{key}", e, failed)
             else:
                 ov = index_overlap(o, want)
-                metrics.record(f"overlap_state_{name}_L{i:02d}", ov)
+                metrics.record(f"overlap_{key}", ov)
                 worst_ov = min(worst_ov, ov)
-                E.check(drift, f"overlap_state_{name}_L{i:02d}", ov, failed)
+                E.check(drift, key, f"overlap_{key}", ov, failed)
     metrics.record("pcc_state_min", worst)
+    metrics.record("err_state_max", worst_err)
     metrics.record("overlap_state_min", worst_ov)
-    print(f"worst state pcc {worst:.6f}, worst index-state overlap {worst_ov:.6f}")
+    print(f"worst state rel {worst_err:.6f} (pcc {worst:.6f}), worst index-state overlap {worst_ov:.6f}")
 
 
 def index_overlap(got: torch.Tensor, want: torch.Tensor) -> float:
