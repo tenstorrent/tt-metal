@@ -272,8 +272,8 @@ def test_trace_replay(case_factory):
     assert case.mesh.num_program_cache_entries() == entries
 
 
-@pytest.mark.parametrize("max_k_splits,segmented", [(2, False), (5, False), (1, True)])
-def test_compute_options(case_factory, max_k_splits, segmented):
+@pytest.mark.parametrize("k_splits,segmented", [(2, False), (4, False), (1, True)])
+def test_compute_options(case_factory, k_splits, segmented):
     case = case_factory(capacity=16384)
     case.stage(8192, slot=1)
     output, _ = case.call(
@@ -283,7 +283,7 @@ def test_compute_options(case_factory, max_k_splits, segmented):
             q_chunk_size=64,
             k_chunk_size=64,
             exp_approx_mode=False,
-            max_k_splits=max_k_splits,
+            k_splits=k_splits,
             segmented_accumulation=segmented,
             matmul_math_fidelity=ttnn.MathFidelity.LoFi,
         ),
