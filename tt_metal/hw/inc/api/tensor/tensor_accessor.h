@@ -132,7 +132,7 @@ public:
     explicit TensorAccessor(tensor_accessor::PerNodeTensorBindingToken<CTA_OFFSET, ADDR_RTA_OFFSET>) :
         TensorAccessor(size_t{0}, uint32_t{0}) {
         static_assert(
-            false,
+            !std::is_same_v<DSpec, DSpec>,
             "A per-node tensor binding cannot build a TensorAccessor: each node knows only its own address. "
             "Use LocalTensorAccessor instead.");
     }
