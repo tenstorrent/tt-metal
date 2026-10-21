@@ -4,12 +4,6 @@
 
 #pragma once
 
-// The experimental 2.0 compute API targets Blackhole and Quasar. llk_operand.h is included by every 2.0 op
-// header, so guarding it here hard-fails the compile of any 2.0 kernel built for another arch.
-#if !defined(ARCH_BLACKHOLE) && !defined(ARCH_QUASAR)
-#error "The experimental 2.0 compute API (LLKOperand) supports Blackhole and Quasar only."
-#endif
-
 #include <cstdint>
 
 #include "api/compute/common_globals.h"                            // DataFormat enum
@@ -48,6 +42,39 @@ namespace experimental {
  * | Function   | addr   | Absolute L1 tile base address (16B words) | uint32_t    | N/A         | True     |
  */
 // clang-format on
+#ifdef ARCH_QUASAR
+// clang-format off
+/**
+ * Quasar body of the operand. A Quasar unpack/pack addresses L1 as buffer-descriptor base + tile index, so the
+ * runtime "where" is three numbers: the base an op init programs into its buffer descriptor (bd_base), the tile index
+ * of the operand's first tile relative to that base (entry_idx), and the tile step between its consecutive tiles
+ * (stride_tiles). Tile i of the operand is entry_idx + i * stride_tiles. DataflowBuffer::front/back fill all three
+ * (bd_base = ring base, so one init covers the whole ring); a raw L1 address is {addr, 0, 1}.
+ *
+ * | Param Type | Name         | Description                                             | Type        | Valid Range | Required |
+ * |------------|--------------|---------------------------------------------------------|-------------|-------------|----------|
+ * | Template   | Format       | Buffer L1 data format                                   | DataFormat  | N/A         | True     |
+ * | Template   | Shape        | Tile geometry                                           | TensorShape | N/A         | True     |
+ * | Function   | addr         | Buffer-descriptor base address (16B words)              | uint32_t    | N/A         | True     |
+ * | Function   | entry        | Tile index of the operand's first tile, from addr       | uint32_t    | < 65536     | False    |
+ * | Function   | stride       | Tile step between consecutive tiles of the operand      | uint32_t    | 1 - 255     | False    |
+ */
+// clang-format on
+template <DataFormat Format, TensorShape Shape>
+struct LLKOperand {
+    std::uint32_t l1_address;    // bd_base: buffer-descriptor base (16B words)
+    std::uint16_t entry_idx;     // first tile, relative to l1_address
+    std::uint8_t stride_tiles;   // tile step between consecutive tiles
+    constexpr explicit LLKOperand(std::uint32_t addr, std::uint32_t entry = 0, std::uint32_t stride = 1) :
+        l1_address(addr), entry_idx(static_cast<std::uint16_t>(entry)), stride_tiles(static_cast<std::uint8_t>(stride)) {}
+
+    // L1 tile index (relative to l1_address) of the operand's tile i.
+    constexpr std::uint32_t tile(std::uint32_t i) const { return entry_idx + i * stride_tiles; }
+
+    // The descriptor the LLK APIs accept (buffer L1 format + geometry).
+    static constexpr LLKMemDescriptor descriptor = LLKMemDescriptor{Format, Shape};
+};
+#else
 template <DataFormat Format, TensorShape Shape>
 struct LLKOperand {
     std::uint32_t l1_address;  // runtime "where"; Format/Shape are the compile-time "what"
@@ -56,6 +83,7 @@ struct LLKOperand {
     // The descriptor the LLK APIs accept (buffer L1 format + geometry).
     static constexpr LLKMemDescriptor descriptor = LLKMemDescriptor{Format, Shape};
 };
+#endif
 
 #ifndef ARCH_QUASAR  // Quasar addresses tiles through the buffer descriptor programmed at init (base + index).
 namespace detail {

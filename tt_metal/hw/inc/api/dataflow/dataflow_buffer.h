@@ -400,6 +400,8 @@ public:
 #ifdef COMPILE_FOR_TRISC
     // Returns the LLKOperand pointing to the front (reading address) of the DFB
     // Functionalities meant to be used with LLKOperand for LLK 2.0
+    // Take the operand after wait_front() and before pop_front(): it names the waited entries.
+    // Quasar: {ring base (one buffer descriptor covers the ring), current read entry, stride in tiles}, no -1.
     //
     // Parameters:
     // - Operand: The LLKOperand type to return. (hint: use LLKOperandFrom<dfb::token>)
@@ -407,7 +409,8 @@ public:
     [[nodiscard]] Operand front() const {
 #ifdef ARCH_QUASAR
 #ifdef UCK_CHLKC_UNPACK
-        return Operand{get_read_ptr_impl()};  // 16B units == the buffer-descriptor base address
+        const auto& dfb = local_dfb_interface_;
+        return Operand{dfb.tc_slots[0].base_addr, dfb.tc_slots[dfb.tc_idx].rd_entry_idx, dfb.stride_size_tiles};
 #else
         return Operand{0};  // only the unpack TRISC reads the front; other TRISCs never use the address
 #endif
@@ -420,6 +423,8 @@ public:
 
     // Returns the LLKOperand pointing to the back (writing address) of the DFB
     // Functionalities meant to be used with LLKOperand for LLK 2.0
+    // Take the operand after reserve_back() and before push_back(): it names the reserved entries.
+    // Quasar: {ring base (one buffer descriptor covers the ring), current write entry, stride in tiles}, no -1.
     //
     // Parameters:
     // - Operand: The LLKOperand type to return. (hint: use LLKOperandFrom<dfb::token>)
@@ -427,7 +432,8 @@ public:
     [[nodiscard]] Operand back() const {
 #ifdef ARCH_QUASAR
 #ifdef UCK_CHLKC_PACK
-        return Operand{get_write_ptr_impl()};  // 16B units == the buffer-descriptor base address
+        const auto& dfb = local_dfb_interface_;
+        return Operand{dfb.tc_slots[0].base_addr, dfb.tc_slots[dfb.tc_idx].wr_entry_idx, dfb.stride_size_tiles};
 #else
         return Operand{0};  // only the pack TRISC writes the back; other TRISCs never use the address
 #endif
