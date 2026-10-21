@@ -100,6 +100,10 @@ inline ScalerMode derive_scaler_mode(
     if (math_op == ReduceOpMath::MAX || math_op == ReduceOpMath::MIN) {
         return ScalerMode::PostMul;
     }
+    // bfloat16 mean: multiplying by 1/N in the FPU scaler tile turns inf into a finite value.
+    if (math_op == ReduceOpMath::AVG && dtype == tt::tt_metal::DataType::BFLOAT16) {
+        return ScalerMode::PostMul;
+    }
     if (math_op == ReduceOpMath::SUM && dtype == tt::tt_metal::DataType::INT32) {
         return ScalerMode::PostMul;
     }

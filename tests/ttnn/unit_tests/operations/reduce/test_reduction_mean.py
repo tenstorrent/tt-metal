@@ -103,6 +103,26 @@ def test_mean_scaling_factor(device, shape, dim, scalar, dtype):
     assert_with_ulp(expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=1)
 
 
+@pytest.mark.parametrize("shape", [(1, 1, 32, 32), (1, 2, 64, 96)])
+@pytest.mark.parametrize("dim", [-1, -2, (-2, -1)])
+@pytest.mark.parametrize("value", [float("inf"), -float("inf"), float("nan")])
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT], ids=["tile", "row_major"])
+def test_mean_bfloat16_inf_nan(device, shape, dim, value, layout):
+    torch.manual_seed(0)
+    torch_input = torch.empty(shape, dtype=torch.bfloat16).uniform_(-1, 1)
+    torch_input[0, 0, 5, 7] = value
+    expected = torch.mean(torch_input.float(), dim=dim).bfloat16()
+
+    input_tensor = ttnn.from_torch(torch_input, layout=layout, device=device)
+    output = ttnn.to_torch(ttnn.mean(input_tensor, dim=dim)).reshape(expected.shape)
+
+    finite, inf = torch.isfinite(expected), torch.isinf(expected)
+    torch.testing.assert_close(output[finite].float(), expected[finite].float(), rtol=0.02, atol=0.02)
+    assert torch.equal(output[inf], expected[inf])
+    # a bfloat16 NaN may be packed as inf, so NaN only has to stay non-finite
+    assert not torch.isfinite(output[torch.isnan(expected)]).any()
+
+
 @pytest.mark.parametrize("mem_config", [None, ttnn.DRAM_MEMORY_CONFIG, "block", "height"])
 @pytest.mark.parametrize("keepdim", [True, False])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32], ids=["bf16", "fp32"])
