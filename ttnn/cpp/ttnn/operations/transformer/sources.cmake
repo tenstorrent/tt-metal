@@ -24,6 +24,12 @@ set(TTNN_OP_TRANSFORMER_SRCS
     sdpa/device/sparse_sdpa_msa_device_operation.cpp
     sdpa/device/sparse_sdpa_msa_program_factory.cpp
     sdpa/sparse_sdpa_msa.cpp
+    sdpa/device/deepseek_v4_prefill_sdpa_device_operation.cpp
+    sdpa/device/deepseek_v4_prefill_sdpa_program_factory.cpp
+    sdpa/deepseek_v4_prefill_sdpa.cpp
+    sdpa/device/deepseek_v4_prefill_indexer_select_device_operation.cpp
+    sdpa/device/deepseek_v4_prefill_indexer_select_program_factory.cpp
+    sdpa/deepseek_v4_prefill_indexer_select.cpp
     sdpa_decode/device/sdpa_decode_device_operation.cpp
     sdpa_decode/device/sdpa_decode_program_factory.cpp
     sdpa_decode/sdpa_decode.cpp

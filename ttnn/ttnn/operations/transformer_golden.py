@@ -802,6 +802,83 @@ def sparse_mla(q, kvpe, indices, scale, v_dim, attention_sink=None):
     return out.to(output_dtype)
 
 
+def deepseek_v4_prefill_sdpa_golden(
+    q,
+    window_kv,
+    start,
+    *,
+    cache_kv=None,
+    cache_idx=None,
+    window_size=128,
+    v_dim=None,
+    scale=None,
+    attention_sink=None,
+    compress_ratio=0,
+    empty_tail=False,
+    **_,
+):
+    """Torch reference for deepseek_v4_prefill_sdpa: query s attends window_kv rows s + 1 .. s + window_size that
+    hold positions >= 0 (none of the first window_size with ``empty_tail``), plus the cache_kv rows in cache_idx[s]
+    (MASKED_INDEX anywhere skips a slot, and with ``compress_ratio`` so does a row >= (start + s + 1) // ratio).
+        q [1,H,S,K_DIM], window_kv [1,1,window_size+S,K_DIM], cache_kv [1,1,T,K_DIM], cache_idx [1,1,S,k]
+        ->  out [1,H,S,v_dim]
+    """
+    import torch
+
+    S, k_dim = q.shape[2], q.shape[3]
+    v_dim = k_dim if v_dim is None else v_dim
+    scale = k_dim**-0.5 if scale is None else scale
+    start = int(_scalar(start, 0))
+    window = window_kv.reshape(-1, k_dim)
+    cache = window[:0] if cache_kv is None else cache_kv.reshape(-1, k_dim).to(window.dtype)
+    T = cache.shape[0]
+    # One KV table [cache | window]: window row r is row T + r.
+    rows = torch.arange(S).view(S, 1) + torch.arange(1, window_size + 1).view(1, window_size)
+    first_row = window_size if empty_tail else window_size - start
+    window_idx = torch.where(rows >= first_row, T + rows, torch.full_like(rows, MASKED_INDEX))
+    indices = window_idx
+    if cache_idx is not None:
+        selected = cache_idx.reshape(S, -1).to(torch.int64) & 0xFFFFFFFF
+        if compress_ratio:
+            visible = (start + torch.arange(S).view(S, 1) + 1) // compress_ratio
+            selected = torch.where(selected < visible, selected, torch.full_like(selected, MASKED_INDEX))
+        indices = torch.cat([selected, window_idx], dim=1)
+    if attention_sink is not None:
+        attention_sink = attention_sink.reshape(1, -1, 1, 1)
+    return sparse_mla(q, torch.cat([cache, window]), indices.view(1, 1, S, -1), scale, v_dim, attention_sink)
+
+
+def deepseek_v4_prefill_indexer_scores(q, weights, idx_keys, start, compress_ratio):
+    """fp32 indexer scores [T, E] of deepseek_v4_prefill_indexer_select, -inf where query s cannot see entry t."""
+    import torch
+
+    H, T = q.shape[1], q.shape[2]
+    keys = idx_keys.reshape(-1, q.shape[3]).float()
+    w = weights.reshape(T, H).float()
+    scores = torch.zeros(T, keys.shape[0])
+    for h in range(H):
+        scores += torch.relu(q[0, h].float() @ keys.T) * w[:, h : h + 1]
+    limits = (int(_scalar(start, 0)) + torch.arange(T) + 1) // compress_ratio
+    return scores.masked_fill(torch.arange(keys.shape[0]).view(1, -1) >= limits.view(-1, 1), float("-inf"))
+
+
+def deepseek_v4_prefill_indexer_select_golden(q, weights, idx_keys, start, *, compress_ratio, **_):
+    """Torch reference for deepseek_v4_prefill_indexer_select: the top 512 visible entries of
+    score[s, t] = sum_h relu(q[h, s] . idx_keys[t]) * weights[s, h], t < (start + s + 1) // compress_ratio.
+        q [1,H,T,D], weights [1,1,T,H], idx_keys [1,1,E,D]  ->  indices [1,1,T,512] int64, MASKED_INDEX-padded
+    Ties at the 512th score may resolve to different entries than the device's.
+    """
+    import torch
+
+    TOPK = 512
+    scores = deepseek_v4_prefill_indexer_scores(q, weights, idx_keys, start, compress_ratio)
+    values, indices = scores.topk(min(TOPK, scores.shape[1]), dim=1)
+    indices = torch.where(values == float("-inf"), torch.full_like(indices, MASKED_INDEX), indices)
+    out = torch.full((scores.shape[0], TOPK), MASKED_INDEX, dtype=torch.int64)
+    out[:, : indices.shape[1]] = indices
+    return out.view(1, 1, -1, TOPK)
+
+
 def _unpack_scaled_fp8_kv(kv, latent_dim, rope_dim):
     """Decode packed [FP8 latent | FP32 scales | BF16 RoPE] rows into logical BF16 [scaled latent || RoPE]."""
     import torch
@@ -1761,6 +1838,9 @@ __all__ = [
     "scaled_dot_product_attention_reference",
     "scaled_dot_product_attention_reference_prefill",
     "sparse_attention_ref_msa",
+    "deepseek_v4_prefill_sdpa_golden",
+    "deepseek_v4_prefill_indexer_scores",
+    "deepseek_v4_prefill_indexer_select_golden",
     "sparse_mla",
     "sparse_sdpa_golden",
     "sparse_sdpa_msa_golden",

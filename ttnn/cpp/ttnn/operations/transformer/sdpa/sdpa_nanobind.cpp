@@ -17,6 +17,8 @@
 #include "sdpa.hpp"
 #include "sparse_sdpa.hpp"
 #include "sparse_sdpa_msa.hpp"
+#include "deepseek_v4_prefill_sdpa.hpp"
+#include "deepseek_v4_prefill_indexer_select.hpp"
 #include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
@@ -424,6 +426,93 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("block_cyclic_chunk_local") = nb::none(),
         nb::arg("block_cyclic_cache_tp_sharded") = false,
         nb::arg("attention_sink") = nb::none());
+
+    ttnn::bind_function<"deepseek_v4_prefill_sdpa", "ttnn.transformer.">(
+        mod,
+        R"doc(
+        DeepSeek V4 prefill attention over two KV sources, Blackhole single-chip, with no mask tensor.
+        Query s attends rows s + 1 .. s + window_size of `window_kv` (its sliding window, ending at the token
+        itself; rows holding positions before 0 are skipped) plus the rows of `cache_kv` listed in
+        `cache_idx[s]`. Both sources share one softmax. K == V in both: V is the leading v_dim columns.
+
+        Args:
+            q (ttnn.Tensor):         [1, H, S, K_DIM] bf16 ROW_MAJOR DRAM, any H.
+            window_kv (ttnn.Tensor): [1, 1, window_size + S, K_DIM] bf16 ROW_MAJOR DRAM: the window_size tail
+                                     rows carried from the previous chunk, then the chunk's S rows.
+            start (ttnn.Tensor):     1-element uint32/int32 ROW_MAJOR DRAM: the absolute position of q's row 0.
+                                     Read on device, so a captured trace replays at a new position.
+
+        Keyword args:
+            cache_kv (ttnn.Tensor, optional):  [1, 1, T, K_DIM] bf16 ROW_MAJOR DRAM compressed KV cache. Changing
+                                               T does not recompile.
+            cache_idx (ttnn.Tensor, optional): [1, 1, S, TOPK] uint32 ROW_MAJOR DRAM rows of cache_kv per query.
+                                               0xFFFFFFFF skips a slot and may sit anywhere; a row may be all
+                                               sentinels. Given iff cache_kv is; valid entries must be < T.
+            window_size (int): defaults to 128.
+            v_dim (int, optional): output width; defaults to K_DIM.
+            scale (float, optional): defaults to K_DIM**-0.5.
+            k_chunk_size (int): keys per online-softmax step; a multiple of 32, defaults to 128.
+            compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional).
+            attention_sink (ttnn.Tensor, optional): [1, 1, 1, H] bf16 ROW_MAJOR DRAM, contributing to the softmax
+                denominator only. Pass (model_sink / scale) for DeepSeek-V4's scaled-logit sinks.
+            compress_ratio (int): > 0: cache row w pools tokens [w * ratio, (w + 1) * ratio), so query s sees it
+                only once w < (start + s + 1) // ratio; other listed rows are skipped like sentinels. Defaults to
+                0 (no such check).
+            empty_tail (bool): the window_size tail rows hold no token (the window restarts at the chunk),
+                whatever start is. Defaults to False.
+
+        Returns:
+            ttnn.Tensor: [1, H, S, v_dim] bf16 ROW_MAJOR, DRAM interleaved.
+        )doc",
+        &ttnn::transformer::deepseek_v4_prefill_sdpa,
+        nb::arg("q").noconvert(),
+        nb::arg("window_kv").noconvert(),
+        nb::arg("start").noconvert(),
+        nb::kw_only(),
+        nb::arg("cache_kv") = nb::none(),
+        nb::arg("cache_idx") = nb::none(),
+        nb::arg("window_size") = 128,
+        nb::arg("v_dim") = nb::none(),
+        nb::arg("scale") = nb::none(),
+        nb::arg("k_chunk_size") = 128,
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("attention_sink") = nb::none(),
+        nb::arg("compress_ratio") = 0,
+        nb::arg("empty_tail") = false);
+
+    ttnn::bind_function<"deepseek_v4_prefill_indexer_select", "ttnn.transformer.">(
+        mod,
+        R"doc(
+        DeepSeek V4 lightning-indexer top-k for a prefill chunk, Blackhole single-chip. Scores and selects in one
+        pass over only the entries each query can see, without materializing the [T, E] score matrix:
+        score[s, t] = sum_h relu(q[h, s] . idx_keys[t]) * weights[s, h] for t < (start + s + 1) // compress_ratio,
+        of which the top 512 are kept.
+
+        Args:
+            q (ttnn.Tensor):        [1, H, T, D] bf16 TILE DRAM, H and T multiples of 32.
+            weights (ttnn.Tensor):  [1, 1, T, H] bf16 TILE DRAM per-head gates, every scale folded in.
+            idx_keys (ttnn.Tensor): [1, 1, E, D] bf16 ROW_MAJOR DRAM indexer keys. Only the visible prefix is read;
+                                    changing E does not recompile. Visible entries must lie within E.
+            start (ttnn.Tensor):    1-element uint32/int32 ROW_MAJOR DRAM: the absolute position of q's row 0. Read
+                                    on device, so a captured trace replays at a new position.
+
+        Keyword args:
+            compress_ratio (int): tokens per entry; query s sees entries t < (start + s + 1) // compress_ratio.
+            compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): fidelity / approx mode (fp32 DEST and
+                full sync are forced).
+
+        Returns:
+            ttnn.Tensor: [1, 1, T, 512] uint32 ROW_MAJOR entry indices, unordered; 0xFFFFFFFF fills the slots of a
+            query that sees fewer than 512 entries.
+        )doc",
+        &ttnn::transformer::deepseek_v4_prefill_indexer_select,
+        nb::arg("q").noconvert(),
+        nb::arg("weights").noconvert(),
+        nb::arg("idx_keys").noconvert(),
+        nb::arg("start").noconvert(),
+        nb::kw_only(),
+        nb::arg("compress_ratio"),
+        nb::arg("compute_kernel_config") = nb::none());
 
     ttnn::bind_function<"sparse_sdpa_msa", "ttnn.transformer.">(
         mod,
