@@ -59,9 +59,7 @@ only tells you the tolerance is wide enough.
 Pick the golden for your architecture and hand it tensors. There is no setup.
 
 ```python
-from helpers.golden_generator.heavyweight.operations.quasar_operations import (
-    QuasarEltwiseBinaryGolden,
-)
+from helpers.golden_generator.heavyweight.operations import QuasarEltwiseBinaryGolden
 
 golden = QuasarEltwiseBinaryGolden(MathOperation.Elwmul, MathFidelity.HiFi4)
 expected = golden.run(
@@ -86,8 +84,14 @@ against `res_from_L1`.
 | `QuasarMatmulGolden` | `math_fidelity` |
 | `QuasarEltwiseBinaryReuseDestGolden` | `operation`, `math_fidelity`, `reuse_type` |
 
-Wormhole and Blackhole have datacopy / eltwise / matmul equivalents under
-`wormhole_operations` and `blackhole_operations`.
+Wormhole and Blackhole have datacopy / eltwise / matmul equivalents —
+`WormholeMatmulGolden`, `BlackholeEltwiseBinaryGolden` and so on. All of them
+come from the same place: `heavyweight.operations`.
+
+They are **factories, not classes**. Each is the generic op bound to an
+`ArchProfile` in [`operations/arch.py`](operations/arch.py), which states the
+architecture's facts — its blocks and its FPU mantissa split — once rather than
+once per operation.
 
 ### Arguments you will actually use
 
@@ -224,12 +228,17 @@ class MyOpGolden(Golden):
         return regs["srcA"].abs()      # your maths, on register-precision values
 ```
 
-Then one thin subclass per architecture binding `blocks_class`:
+Then one factory per architecture, beside the others in
+[`operations/arch.py`](operations/arch.py):
 
 ```python
-class QuasarMyOpGolden(MyOpGolden):
-    blocks_class = QuasarDataTransferBlocks
+QuasarMyOpGolden = _factory(MyOpGolden, QUASAR)
+WormholeMyOpGolden = _factory(MyOpGolden, WORMHOLE)
 ```
+
+No subclass: the architecture is an argument, so there is nothing for one to
+add. If your op models the FPU's fidelity split, read it from
+`self.mantissa_split` — it comes from the profile, so you do not restate it.
 
 Three things to get right:
 

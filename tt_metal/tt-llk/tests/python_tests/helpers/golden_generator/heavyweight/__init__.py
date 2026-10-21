@@ -23,7 +23,7 @@ highlighted, so use the two together.
 Writing a test touches only the first. Pick the golden for your architecture and
 hand it tensors::
 
-    from helpers.golden_generator.heavyweight.operations.quasar_operations import (
+    from helpers.golden_generator.heavyweight.operations import (
         QuasarDataCopyGolden,
     )
 
