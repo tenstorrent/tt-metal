@@ -52,7 +52,8 @@ pass of 286 tokens 457 s, decode passes 620-1030 s (16 tokens over three host re
 | streams from HF features: text rows and image rows vs HF inputs_embeds, text rows vs the device text embedding | bit-exact (PCC 1.000000, max diff 0 on both row sets); all 4 streams identical |
 | streams from TT features: image rows PCC vs HF inputs_embeds | 0.98823 (= the tower PCC), text rows bit-exact |
 | single chip, 45 layers streamed (`GLM53Model`, fullmodel tensorbin cache), `GLM53_MM_N=3` per job with the checkpointed continuation | first token 785 `'The'` == HF; **16/16 greedy tokens == HF** over six jobs (`'The image contains a red circle, a blue square, a green triangle, and'`, every HF token in the TT top-5 at every step); step-0 top-5 ids identical to HF's (TT logits 21.375 / 19.125 / 18.625 / 18.375 / 17.125 vs HF 21.75 / 19.0 / 18.625 / 18.5 / 18.0); device argmax == host argmax on every decode step. Prefill pass 417 s, decode passes 389 / 370 s, tower 7.5 s: 1192 s per job, so 3 tokens is the maximum under the 1500 s device-job cap (16 tokens would take ~85 min) |
-| mesh (`GLM53_MESH_SHAPE`): first token == HF; traced decode | pending |
+| mesh-model path on a (1,1) mesh (`demo/multimodal_demo.py`, `GLM53_DEMO_LAYERS=0-5`: resident `GLM53MeshModel.prefill_streams`, tower resident on the mesh device, traced decode after the multimodal prefill) | runs: tower build 3.2 s / forward 65 ms, TTFT 416 ms for the 286-token prompt (6 layers), traced decode 29.97 ms/step = 33.4 tok/s/user; text meaningless by construction (6 of 45 layers) |
+| mesh (`GLM53_MESH_SHAPE` 2x4 / 8x4, `-k mesh`): first token == HF; 16 traced tokens; multi-row stream sharding | pending a mesh grant |
 
 ## Reuse of the repo's reference implementations (standing rule)
 
