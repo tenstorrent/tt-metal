@@ -5,6 +5,7 @@
 #include "ttnn/operations/data_movement/concat/codegen/concat_codegen_program_factory.hpp"
 
 #include <algorithm>
+#include <string>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -31,16 +32,14 @@ namespace {
 constexpr uint32_t kCbOut = 0;
 constexpr uint32_t kCbScratch = 1;
 
-constexpr const char* kReaderRmInterleaved =
-    "ttnn/cpp/ttnn/operations/data_movement/concat/codegen/kernels/reader_concat_rm_interleaved.cpp";
-constexpr const char* kReaderRmNonwidthNway =
-    "ttnn/cpp/ttnn/operations/data_movement/concat/codegen/kernels/reader_concat_rm_nonwidth_nway.cpp";
-constexpr const char* kReaderRmWidthInterleaved =
-    "ttnn/cpp/ttnn/operations/data_movement/concat/codegen/kernels/reader_concat_rm_width_interleaved.cpp";
-constexpr const char* kReaderRmWidthNway =
-    "ttnn/cpp/ttnn/operations/data_movement/concat/codegen/kernels/reader_concat_rm_width_nway.cpp";
-constexpr const char* kWriterInterleaved =
-    "ttnn/cpp/ttnn/operations/data_movement/common/kernels/codegen/writer_interleaved.cpp";
+constexpr const char* kConcatKernelDir = "ttnn/cpp/ttnn/operations/data_movement/concat/codegen/kernels/";
+constexpr const char* kCommonKernelDir = "ttnn/cpp/ttnn/operations/data_movement/common/kernels/codegen/";
+
+constexpr const char* kReaderRmInterleaved = "reader_concat_rm_interleaved.cpp";
+constexpr const char* kReaderRmNonwidthNway = "reader_concat_rm_nonwidth_nway.cpp";
+constexpr const char* kReaderRmWidthInterleaved = "reader_concat_rm_width_interleaved.cpp";
+constexpr const char* kReaderRmWidthNway = "reader_concat_rm_width_nway.cpp";
+constexpr const char* kWriterInterleaved = "writer_interleaved.cpp";
 
 using RtArgs = std::vector<std::variant<uint32_t, Buffer*>>;
 
@@ -123,9 +122,10 @@ BlockCursor block_cursor(uint32_t start, const std::vector<uint32_t>& pages_per_
     return cursor;
 }
 
-KernelDescriptor make_kernel(const char* source, const CoreRangeSet& cores, std::vector<uint32_t> compile_time_args) {
+KernelDescriptor make_kernel(
+    const char* kernel_dir, const char* basename, const CoreRangeSet& cores, std::vector<uint32_t> compile_time_args) {
     KernelDescriptor desc;
-    desc.kernel_source = source;
+    desc.kernel_source = std::string(kernel_dir) + basename;
     desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     desc.core_ranges = cores;
     desc.compile_time_args = std::move(compile_time_args);
@@ -238,7 +238,8 @@ ProgramDescriptor ConcatCodegenProgramFactory::create_descriptor(
         TensorAccessorArgs(*src_buffers[0]).append_to(reader_ct_args);
     }
 
-    KernelDescriptor reader_desc = make_kernel(reader_source, split.all_cores, std::move(reader_ct_args));
+    KernelDescriptor reader_desc =
+        make_kernel(kConcatKernelDir, reader_source, split.all_cores, std::move(reader_ct_args));
     reader_desc.config = ReaderConfigDescriptor{};
     if (width && !two_input) {
         reader_desc.named_compile_time_args = {{"word_copy", 1}, {"direct_read", 1}};
@@ -246,7 +247,8 @@ ProgramDescriptor ConcatCodegenProgramFactory::create_descriptor(
 
     std::vector<uint32_t> writer_ct_args = {kCbOut, out_stick_bytes, batches->write_batch};
     TensorAccessorArgs(*dst_buffer).append_to(writer_ct_args);
-    KernelDescriptor writer_desc = make_kernel(kWriterInterleaved, split.all_cores, std::move(writer_ct_args));
+    KernelDescriptor writer_desc =
+        make_kernel(kCommonKernelDir, kWriterInterleaved, split.all_cores, std::move(writer_ct_args));
     writer_desc.config = WriterConfigDescriptor{};
 
     // Source addresses and per-input geometry are identical on every core, so they travel as common args.
