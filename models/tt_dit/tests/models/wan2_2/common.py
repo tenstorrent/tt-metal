@@ -4,9 +4,13 @@
 
 """Shared helpers for the WAN 2.2 pipeline tests."""
 
+import math
+from pathlib import Path
+
 import numpy as np
 import torch
 from loguru import logger
+from PIL import Image
 
 
 def check_output_sanity(frames, *, num_frames, height, width, log=True):
@@ -82,3 +86,45 @@ def check_first_frame_matches_seed(frames, *, seed_image, width, height, pcc_flo
         f"Decoded frame 0 barely correlates with the seed image (PCC={pcc:.3f}); "
         "the I2V image-conditioning path is likely broken"
     )
+
+
+# The official I2V example (Wan-Video/Wan2.2 README and wan/configs/wan_i2v_A14B.py). Image, prompt,
+# size, flow shift, boundary and seed match the diffusers reference run, and so does the noise: both
+# draw it from the CPU generator.
+OFFICIAL_IMAGE_URL = (
+    "https://raw.githubusercontent.com/Wan-Video/Wan2.2/1ea34ff48f87168174e12956e200b1d908b1c5ff/examples/i2v_input.JPG"
+)
+OFFICIAL_IMAGE_SHA256 = "077e3d965090c9028c69c00931675f42e1acc815c6eb450ab291b3b72d211a8e"
+OFFICIAL_PROMPT = (
+    "Summer beach vacation style, a white cat wearing sunglasses sits on a surfboard. The fluffy-furred feline "
+    "gazes directly at the camera with a relaxed expression. Blurred beach scenery forms the background featuring "
+    "crystal-clear waters, distant green hills, and a blue sky dotted with white clouds. The cat assumes a naturally "
+    "relaxed posture, as if savoring the sea breeze and warm sunlight. A close-up shot highlights the feline's "
+    "intricate details and the refreshing atmosphere of the seaside."
+)
+OFFICIAL_FLOW_SHIFT = 5.0
+OFFICIAL_BOUNDARY_RATIO = 0.9  # the checkpoint's model_index.json
+OFFICIAL_SEED = 0
+
+
+def official_image() -> Image.Image:
+    path = Path(torch.hub.get_dir()) / "wan2.2_i2v_input.jpg"
+    if not path.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        torch.hub.download_url_to_file(OFFICIAL_IMAGE_URL, str(path), hash_prefix=OFFICIAL_IMAGE_SHA256)
+    return Image.open(path).convert("RGB")
+
+
+def official_size(max_area: int, image: Image.Image) -> tuple[int, int]:
+    """Wan's image2video.py: the image's aspect ratio at max_area, in whole latent patches."""
+    aspect = image.height / image.width
+    lat_h = round(math.sqrt(max_area * aspect) // 8 // 2 * 2)
+    lat_w = round(math.sqrt(max_area / aspect) // 8 // 2 * 2)
+    return lat_w * 8, lat_h * 8
+
+
+def official_i2v_setup(max_area: int) -> tuple[Image.Image, int, int]:
+    """The official image resized to its aspect ratio at max_area, with that size."""
+    image = official_image()
+    width, height = official_size(max_area, image)
+    return image.resize((width, height)), width, height

@@ -8,7 +8,6 @@ import numpy as np
 import pytest
 import torch
 from loguru import logger
-from PIL import Image
 
 import ttnn
 from models.common.utility_functions import is_blackhole
@@ -26,6 +25,13 @@ from ....utils.test import (
     ring_params_8k_req_exact_devices,
     ring_params_req_exact_devices,
 )
+from .common import (
+    OFFICIAL_BOUNDARY_RATIO,
+    OFFICIAL_FLOW_SHIFT,
+    OFFICIAL_PROMPT,
+    OFFICIAL_SEED,
+    official_i2v_setup,
+)
 
 DEVICE_PARAMS = {"trace_region_size": 150000000}
 
@@ -35,16 +41,6 @@ BH_4X8_LINEAR_EXPECTED_METRICS_SLACK = 1.10
 
 def _scale_expected_metrics(expected_metrics: dict, factor: float) -> dict:
     return {k: v * factor for k, v in expected_metrics.items()}
-
-
-def create_fractal_image(width: int, height: int) -> Image.Image:
-    c = np.linspace(-2.0, 1.0, width)[None, :] + 1j * np.linspace(-1.5, 1.5, height)[:, None]
-    z = np.zeros_like(c)
-    img = np.zeros(c.shape, dtype=np.uint8)
-    for i in range(32):
-        z = z * z + c
-        img[(img == 0) & (np.abs(z) > 2)] = 255 - 8 * i
-    return Image.fromarray(np.dstack((img, np.roll(img, width // 10, 1), np.roll(img, height // 10, 0))), "RGB")
 
 
 def t2v_metrics(mesh_device, height):
@@ -134,13 +130,16 @@ def wan_pipeline_metrics_condimg(mesh_device, width, height, model_type, topolog
     else:
         pipeline_cls = WanPipelineI2V
         expected_metrics = i2v_metrics(mesh_device, height)
-        image_prompt = create_fractal_image(width, height)
+        # The official demo seed, at this resolution's area, as test_pipeline_wan_i2v runs it. The
+        # resolved size follows the image's aspect ratio, so it is not the nominal width x height --
+        # the expected metrics above are still keyed on the nominal one.
+        image_prompt, width, height = official_i2v_setup(width * height)
 
     # Only WH 4x8 uses ring; BH 4x8 linear is the distinct Linear case at this mesh shape.
     if tuple(mesh_device.shape) == (4, 8) and topology == ttnn.Topology.Linear:
         expected_metrics = _scale_expected_metrics(expected_metrics, BH_4X8_LINEAR_EXPECTED_METRICS_SLACK)
 
-    return pipeline_cls, image_prompt, expected_metrics
+    return pipeline_cls, image_prompt, expected_metrics, width, height
 
 
 @pytest.mark.parametrize(
@@ -262,11 +261,22 @@ def test_pipeline_performance(
     num_frames = 81
     num_inference_steps = 40
 
-    print(f"Parameters: {height}x{width}, {num_frames} frames, {num_inference_steps} steps")
-
-    pipeline_cls, image_prompt, expected_metrics = wan_pipeline_metrics_condimg(
+    pipeline_cls, image_prompt, expected_metrics, width, height = wan_pipeline_metrics_condimg(
         mesh_device, width, height, model_type, topology
     )
+
+    # I2V follows the official demo: its prompt, seed, flow shift and boundary, so the measured run
+    # is the one the pipeline test checks for quality. None leaves the pipeline's own defaults.
+    seed = 42
+    flow_shift = None
+    boundary_ratio = None
+    if model_type == "i2v":
+        prompts = [OFFICIAL_PROMPT]
+        seed = OFFICIAL_SEED
+        flow_shift = OFFICIAL_FLOW_SHIFT
+        boundary_ratio = OFFICIAL_BOUNDARY_RATIO
+
+    print(f"Parameters: {height}x{width}, {num_frames} frames, {num_inference_steps} steps")
 
     h_factor = tuple(mesh_device.shape)[tp_axis]
     w_factor = tuple(mesh_device.shape)[sp_axis]
@@ -310,6 +320,8 @@ def test_pipeline_performance(
                     image_prompt=image_prompt,
                     num_inference_steps=2,  # Small number of steps to reduce test time.
                     traced=traced,
+                    flow_shift=flow_shift,
+                    boundary_ratio=boundary_ratio,
                 )
 
     logger.info(f"Warmup completed in {benchmark_profiler.get_duration('run', 0):.2f}s")
@@ -333,9 +345,11 @@ def test_pipeline_performance(
                     image_prompt=image_prompt,
                     num_inference_steps=num_inference_steps,
                     on_event=profiler_event_callback(benchmark_profiler, i),
-                    seed=42,
+                    seed=seed,
                     traced=traced,
                     output_type="uint8",
+                    flow_shift=flow_shift,
+                    boundary_ratio=boundary_ratio,
                 )
                 ttnn.synchronize_device(mesh_device)
         logger.info(f"  Run {i+1} completed in {benchmark_profiler.get_duration('run', i):.2f}s")

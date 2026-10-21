@@ -3,12 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import itertools
-import math
 import os
-from pathlib import Path
 
 import numpy as np
-import PIL
 import pytest
 import torch
 from loguru import logger
@@ -26,42 +23,16 @@ from ....utils.test import (
     ring_params_req_exact_devices,
     skip_if_unsupported_num_links,
 )
-from .common import check_first_frame_matches_seed, check_output_sanity
-
-
-# The official I2V example (Wan-Video/Wan2.2 README and wan/configs/wan_i2v_A14B.py). Image, prompt,
-# size, flow shift, boundary and seed match the diffusers reference run, and so does the noise: both
-# draw it from the CPU generator.
-OFFICIAL_IMAGE_URL = (
-    "https://raw.githubusercontent.com/Wan-Video/Wan2.2/1ea34ff48f87168174e12956e200b1d908b1c5ff/examples/i2v_input.JPG"
+from .common import (
+    OFFICIAL_BOUNDARY_RATIO,
+    OFFICIAL_FLOW_SHIFT,
+    OFFICIAL_PROMPT,
+    OFFICIAL_SEED,
+    check_first_frame_matches_seed,
+    check_output_sanity,
+    official_image,
+    official_size,
 )
-OFFICIAL_IMAGE_SHA256 = "077e3d965090c9028c69c00931675f42e1acc815c6eb450ab291b3b72d211a8e"
-OFFICIAL_PROMPT = (
-    "Summer beach vacation style, a white cat wearing sunglasses sits on a surfboard. The fluffy-furred feline "
-    "gazes directly at the camera with a relaxed expression. Blurred beach scenery forms the background featuring "
-    "crystal-clear waters, distant green hills, and a blue sky dotted with white clouds. The cat assumes a naturally "
-    "relaxed posture, as if savoring the sea breeze and warm sunlight. A close-up shot highlights the feline's "
-    "intricate details and the refreshing atmosphere of the seaside."
-)
-OFFICIAL_FLOW_SHIFT = 5.0
-OFFICIAL_BOUNDARY_RATIO = 0.9  # the checkpoint's model_index.json
-OFFICIAL_SEED = 0
-
-
-def official_image() -> Image.Image:
-    path = Path(torch.hub.get_dir()) / "wan2.2_i2v_input.jpg"
-    if not path.exists():
-        path.parent.mkdir(parents=True, exist_ok=True)
-        torch.hub.download_url_to_file(OFFICIAL_IMAGE_URL, str(path), hash_prefix=OFFICIAL_IMAGE_SHA256)
-    return Image.open(path).convert("RGB")
-
-
-def official_size(max_area: int, image: Image.Image) -> tuple[int, int]:
-    """Wan's image2video.py: the image's aspect ratio at max_area, in whole latent patches."""
-    aspect = image.height / image.width
-    lat_h = round(math.sqrt(max_area * aspect) // 8 // 2 * 2)
-    lat_w = round(math.sqrt(max_area / aspect) // 8 // 2 * 2)
-    return lat_w * 8, lat_h * 8
 
 
 @pytest.mark.parametrize(
@@ -120,7 +91,7 @@ def test_pipeline_inference(
     if no_prompt:
         test_image = official_image()
     else:
-        test_image = PIL.Image.open("./prompt_image.png").convert("RGB")
+        test_image = Image.open("./prompt_image.png").convert("RGB")
     width, height = official_size(max_area, test_image)
     test_image = test_image.resize((width, height))
     image_prompt = [ImagePrompt(image=test_image, frame_pos=0)]
