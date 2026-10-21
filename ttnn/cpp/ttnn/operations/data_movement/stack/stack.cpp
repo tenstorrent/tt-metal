@@ -15,11 +15,12 @@ namespace ttnn {
 
 namespace {
 
-// Stacking row-major inputs on a new trailing axis through unsqueeze-then-concat is pathological:
-// the unsqueeze turns every input into one-element sticks on device, and concat on that axis
-// takes its transpose fallback. The same result is a free view (unsqueeze at 0), a whole-stick
-// concat, and one permute that moves the new axis to the end.
-Tensor stack_row_major_on_trailing_axis(const std::vector<Tensor>& input_tensors, const int rank) {
+// Stacking on a new trailing axis through unsqueeze-then-concat is pathological: for row-major
+// the unsqueeze turns every input into one-element sticks on device and concat on that axis takes
+// its transpose fallback; for tile layout the unsqueeze pads the two new inner dims to a full tile,
+// a 32x blowup materialized per input. Unsqueezing at 0 is a view in both layouts, concat at 0
+// copies whole pages, and one permute moves the new axis to the end.
+Tensor stack_via_leading_axis(const std::vector<Tensor>& input_tensors, const int rank) {
     std::vector<Tensor> leading;
     leading.reserve(input_tensors.size());
     for (const auto& tensor : input_tensors) {
@@ -50,13 +51,17 @@ Tensor stack(const std::vector<Tensor>& input_tensors, const int dim) {
         -(rank + 1),
         rank);
     // Sharded or mixed-layout inputs keep the unsqueeze-then-concat path, where concat's own checks
-    // decide what is supported; the leading-axis route is only measured for interleaved row-major.
-    const bool all_row_major_interleaved =
-        std::all_of(input_tensors.begin(), input_tensors.end(), [](const Tensor& tensor) {
-            return tensor.layout() == Layout::ROW_MAJOR && !tensor.memory_config().is_sharded();
+    // decide what is supported. Rank-1 tile inputs keep it too: a [W] tile tensor is physically a
+    // padded [32, W] row, so concat at 0 would cross a padded axis and run untilize and re-tilize.
+    const auto layout = first.layout();
+    const bool uniform_interleaved =
+        std::all_of(input_tensors.begin(), input_tensors.end(), [layout](const Tensor& tensor) {
+            return tensor.layout() == layout && !tensor.memory_config().is_sharded();
         });
-    if (all_row_major_interleaved && rank >= 1 && normalized_dim == rank) {
-        return stack_row_major_on_trailing_axis(input_tensors, rank);
+    const bool trailing_axis_on_pages =
+        (layout == Layout::ROW_MAJOR && rank >= 1) || (layout == Layout::TILE && rank >= 2);
+    if (uniform_interleaved && trailing_axis_on_pages && normalized_dim == rank) {
+        return stack_via_leading_axis(input_tensors, rank);
     }
     std::vector<Tensor> expanded_tensors;
     expanded_tensors.reserve(input_tensors.size());
