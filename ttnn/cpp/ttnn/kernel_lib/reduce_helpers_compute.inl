@@ -550,35 +550,44 @@ ALWI void reduce(
                 }
 
                 const uint32_t dst_idx = get_dst_index(accumulate);
-                for (uint32_t wt = 0; wt < Wt; ++wt) {
-                    if constexpr (is_sfpu) {
-                        constexpr uint32_t sfpu_work_dst = 1;
-                        const bool is_first_tile = detail::sfpu_is_first_tile(wt, accumulate);
-                        if constexpr (waits_per_tile(input_policy)) {
+#ifdef ARCH_BLACKHOLE
+                if constexpr (reduce_type == PoolType::MAX && !is_sfpu && !waits_per_tile(input_policy)) {
+                    // Resident row: one block call pools the tiles and transposes once.
+                    reduce_block<reduce_type, reduce_dim, DST_ACCUM_MODE, reduce_pow2_scaler>(
+                        input_dfb_id, scaler_dfb_id, waits_bulk(input_policy) ? 0 : index_offset, 0, dst_idx, Wt, 0);
+                } else
+#endif
+                {
+                    for (uint32_t wt = 0; wt < Wt; ++wt) {
+                        if constexpr (is_sfpu) {
+                            constexpr uint32_t sfpu_work_dst = 1;
+                            const bool is_first_tile = detail::sfpu_is_first_tile(wt, accumulate);
+                            if constexpr (waits_per_tile(input_policy)) {
+                                input_dfb.wait_front(onetile);
+                                detail::sfpu_copy_and_fold<reduce_type, reduce_format>(
+                                    input_dfb_id, 0, dst_idx, sfpu_work_dst, is_first_tile);
+                                input_dfb.pop_front(onetile);
+                            } else if constexpr (waits_bulk(input_policy)) {
+                                detail::sfpu_copy_and_fold<reduce_type, reduce_format>(
+                                    input_dfb_id, wt, dst_idx, sfpu_work_dst, is_first_tile);
+                            } else {
+                                detail::sfpu_copy_and_fold<reduce_type, reduce_format>(
+                                    input_dfb_id, wt + index_offset, dst_idx, sfpu_work_dst, is_first_tile);
+                            }
+                        } else if constexpr (waits_per_tile(input_policy)) {
+                            // One-at-a-time: wait/pop per tile
                             input_dfb.wait_front(onetile);
-                            detail::sfpu_copy_and_fold<reduce_type, reduce_format>(
-                                input_dfb_id, 0, dst_idx, sfpu_work_dst, is_first_tile);
+                            reduce_tile<reduce_type, reduce_dim, DST_ACCUM_MODE, reduce_pow2_scaler>(
+                                input_dfb_id, scaler_dfb_id, 0, 0, dst_idx);
                             input_dfb.pop_front(onetile);
                         } else if constexpr (waits_bulk(input_policy)) {
-                            detail::sfpu_copy_and_fold<reduce_type, reduce_format>(
-                                input_dfb_id, wt, dst_idx, sfpu_work_dst, is_first_tile);
-                        } else {
-                            detail::sfpu_copy_and_fold<reduce_type, reduce_format>(
-                                input_dfb_id, wt + index_offset, dst_idx, sfpu_work_dst, is_first_tile);
+                            // BulkWaitBulkPop: use indexed access
+                            reduce_tile<reduce_type, reduce_dim, DST_ACCUM_MODE, reduce_pow2_scaler>(
+                                input_dfb_id, scaler_dfb_id, wt, 0, dst_idx);
+                        } else {  // PreloadedPolicy or PersistentPolicy: indexed access
+                            reduce_tile<reduce_type, reduce_dim, DST_ACCUM_MODE, reduce_pow2_scaler>(
+                                input_dfb_id, scaler_dfb_id, wt + index_offset, 0, dst_idx);
                         }
-                    } else if constexpr (waits_per_tile(input_policy)) {
-                        // One-at-a-time: wait/pop per tile
-                        input_dfb.wait_front(onetile);
-                        reduce_tile<reduce_type, reduce_dim, DST_ACCUM_MODE, reduce_pow2_scaler>(
-                            input_dfb_id, scaler_dfb_id, 0, 0, dst_idx);
-                        input_dfb.pop_front(onetile);
-                    } else if constexpr (waits_bulk(input_policy)) {
-                        // BulkWaitBulkPop: use indexed access
-                        reduce_tile<reduce_type, reduce_dim, DST_ACCUM_MODE, reduce_pow2_scaler>(
-                            input_dfb_id, scaler_dfb_id, wt, 0, dst_idx);
-                    } else {  // PreloadedPolicy or PersistentPolicy: indexed access
-                        reduce_tile<reduce_type, reduce_dim, DST_ACCUM_MODE, reduce_pow2_scaler>(
-                            input_dfb_id, scaler_dfb_id, wt + index_offset, 0, dst_idx);
                     }
                 }
 

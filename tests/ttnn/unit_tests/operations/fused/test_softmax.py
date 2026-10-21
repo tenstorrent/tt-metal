@@ -1075,3 +1075,22 @@ def test_softmax_explicit_fp32_acc_keeps_fp32_intermediates(device):
     # BH P150), 0.728 when exp(x - max) is rounded to bfloat16 first (main after #53643, WH N150).
     correctly_rounded = (explicit_out == golden).float().mean().item()
     assert correctly_rounded >= 0.77, f"only {correctly_rounded:.3f} of outputs are correctly rounded"
+
+
+@pytest.mark.parametrize("w", [96, 256, 1024, 1056])
+def test_softmax_numeric_stable_negative_rows(device, w):
+    # Every row maximum is negative, so a row maximum that clamps at 0 turns the whole row into 0
+    torch.manual_seed(0)
+    torch_input_tensor = torch_random((1, 1, 64, w), -60, -20, dtype=torch.bfloat16)
+    torch_output_tensor = F.softmax(torch_input_tensor, dim=-1, dtype=torch.bfloat16)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn.to_torch(ttnn.softmax(input_tensor, dim=-1, numeric_stable=True))
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        pcc_threshold=0.999,
+        rtol=0.10,
+        atol=0.04,
+        frobenius_threshold=0.050,
+    )

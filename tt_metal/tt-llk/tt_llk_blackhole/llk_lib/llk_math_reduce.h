@@ -175,15 +175,17 @@ inline void reduce_row_max_set_src_zero_flag()
 }
 
 /**
- * @brief Pool the four faces of a 32x32 tile, face row 1 into DEST row 32 through the instruction's DEST offset.
+ * @brief Pool the four faces of a 32x32 tile, face row 1 into DEST row 32 through the instruction's DEST offset; the last
+ *        banks stay for the transposes unless `release`.
  */
+template <bool release = false>
 inline void reduce_row_max_pool_full_tile()
 {
     // Each second pool waits for the first one's DEST row; a counter advance between the rows would add to that chain.
     TTI_GMPOOL(p_setrwc::CLR_AB, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0);
     TTI_GMPOOL(p_setrwc::CLR_AB, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0);
     TTI_GMPOOL(p_setrwc::CLR_AB, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 32);
-    TTI_GMPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 32);
+    TTI_GMPOOL(release ? p_setrwc::CLR_AB : p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 32);
 }
 
 /**
@@ -841,6 +843,34 @@ inline void _llk_math_reduce_(const std::uint32_t dst_index, const ckernel::Tens
     }
 }
 
+// REDUCE_ROW MAX of full tiles accumulating into one DEST tile: every tile is pooled into DEST rows 0 and 32, and the
+// partials are transposed once (a max is exact in any order).
+inline void reduce_row_max_block_full_tile(const std::uint32_t dst_index, const std::uint32_t num_tiles)
+{
+    math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
+    const bool default_is_preserve = requires_disabled_src_zero_flag(math::src_zero_flag_srca_fmt, math::src_zero_flag_srcb_fmt);
+    if (default_is_preserve)
+    {
+        math::_configure_preserve_zero_flag_state_();
+    }
+    else
+    {
+        reduce_row_max_set_src_zero_flag<0>();
+    }
+    for (std::uint32_t tile = 0; tile + 1 < num_tiles; tile++)
+    {
+        reduce_row_max_pool_full_tile<true>();
+    }
+    reduce_row_max_pool_full_tile();
+    if (!default_is_preserve)
+    {
+        reduce_row_max_set_src_zero_flag<1>();
+    }
+    math::src_zero_flag_hw = 1;
+    reduce_row_max_transpose_full_tile();
+    TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_BD);
+}
+
 // A dst_stride of 0 accumulates the block into one tile; scalar_pair is the decision for the unpacker's pair layout (SCALAR SUM/AVG,
 // accumulating, full tiles).
 template <PoolType type, ReduceDim dim, bool is_fp32_dest_acc_en, MathFidelity math_fidelity, bool is_int_fpu_en = false>
@@ -853,7 +883,15 @@ inline void _llk_math_reduce_block_(
 {
     LLK_VALIDATE_TENSOR_SHAPE_MATH("_llk_math_reduce_block_", tensor_shape);
 
-    if constexpr (dim == ReduceDim::REDUCE_ROW && type != PoolType::MAX)
+    if constexpr (dim == ReduceDim::REDUCE_ROW && type == PoolType::MAX)
+    {
+        if (dst_stride == 0 && num_tiles > 1 && !is_int_fpu_en && tensor_shape.total_num_faces() == 4)
+        {
+            reduce_row_max_block_full_tile(dst_index, num_tiles);
+            return;
+        }
+    }
+    else if constexpr (dim == ReduceDim::REDUCE_ROW)
     {
         if (num_tiles > 1 && reduce_block_holds_scaler<type, dim>(tensor_shape))
         {
