@@ -80,7 +80,7 @@
 
 # --- PCIe host/device bandwidth (mem_bench) ---
 # Same benchmark filter and CIv2 P150b SKU as the former metal-run-microbenchmarks
-# "BH P150 PCIe Performance" job. Report only until it has a golden; keep it off
+# "BH P150 PCIe Performance" job. Report only until bandwidth is stable; keep it off
 # bare-metal perf runners so it does not block the dispatch/buffer jobs
 # (https://github.com/tenstorrent/tt-metal/pull/28148#issuecomment-3275595011).
 - name: runtime_perf_pcie_mem_bench

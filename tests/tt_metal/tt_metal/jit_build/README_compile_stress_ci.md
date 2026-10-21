@@ -38,8 +38,10 @@ lower is better). `kernels_per_sec_max` is recorded alongside it.
 
 The `jit_build` suite in [`tests/perf/suites.yaml`](../../../perf/suites.yaml) runs it
 through the generic runtime perf framework ([`tests/perf`](../../../perf/README.md)) as
-`runtime_perf_jit_build` on `wh_n300_civ2` and `bh_p150_perf`. Each of the 3
-repetitions launches the gtest in a fresh process with:
+`runtime_perf_jit_build` on `wh_n300_civ2` and `bh_p150_perf_high_core_count`. Compile
+time scales with host cores, which differ across the `bh_p150_perf` machines, so Blackhole
+runs on that single runner class. Each of the 3 repetitions launches the gtest in a fresh
+process with:
 
 - a per-rep seed → every rep is a genuine **cold** compile,
 - an isolated `TT_METAL_CACHE` in a scratch dir → no disk-cache carryover between reps,
@@ -58,8 +60,5 @@ Run it locally against a build:
 
 ```bash
 python -m pytest --noconftest -p tests.perf.plugin "tests/perf/test_suites.py::test_perf[jit_build]" \
-    --perf-environment=bh_p150_perf
+    --perf-environment=wh_n300_civ2
 ```
-
-The goldens started from the worst cold-compile min observed in CI per SKU
-(50700 ms on Wormhole, 44800 ms on Blackhole).
