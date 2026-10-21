@@ -224,7 +224,7 @@ class TtRouter(LightweightModule):
         self.tie_break = os.environ.get("GLM53_ROUTER_TIE_BREAK", "topk")  # topk (default) | rank | cumsum
         self._const: dict[tuple, ttnn.Tensor] = {}
 
-    def _forward_topk(self, scores, choice, T, dense_only=False):
+    def _forward_topk(self, scores, choice, T, dense_only=False, ep_rows=False):
         """One fp32 ``ttnn.topk`` (stable bitonic network: exact fp32 ranking, lowest index on ties) over the
         biased scores, the unbiased scores gathered at the winners, renormalized (sum -> scale/sum -> multiply;
         the sum of sigmoids is > 0, no epsilon) and scattered into the dense [1,1,T,E] matrix: 8 device ops
@@ -246,6 +246,9 @@ class TtRouter(LightweightModule):
         # scatter has no fp32 TILE path: the dense matrix is built in bf16, which is the dtype the expert
         # block applies anyway (it typecasts the fp32 weights to bf16 before weighting the expert outputs)
         w16 = ttnn.typecast(w, ttnn.bfloat16)
+        if ep_rows:  # the EP mesh path: the bf16 weights and the uint32 ids as topk ranked them, no dense matrix
+            ttnn.deallocate(w)
+            return w16, idx, None
         dense = ttnn.scatter(self._dense_zeros(T), -1, idx, w16)  # [1,1,T,E] bf16: weights at their columns
         ttnn.deallocate(w16)
         if dense_only:
@@ -262,9 +265,13 @@ class TtRouter(LightweightModule):
             )
         return self._const[key]
 
-    def forward(self, x: ttnn.Tensor, *, dense_only: bool = False) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
+    def forward(
+        self, x: ttnn.Tensor, *, dense_only: bool = False, ep_rows: bool = False
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
         """x [1,1,T,H] bf16 -> (weights [1,1,T,8] fp32, indices [1,1,T,8] fp32 (integral), dense [1,1,T,E] fp32).
         ``dense_only`` (the MoE forward): weights / indices come back as ``None`` (their host-side casts are skipped).
+        ``ep_rows`` (the EP mesh path, ``topk`` tie-break only): (weights [1,1,T,8] bf16, indices [1,1,T,8] uint32,
+        None): the exact ids for the all_to_all dispatch, no dense matrix.
 
         Exact fp32 selection (HF noaux_tc, n_group=1): ``choice = sigmoid(logits) + bias``, top-8 by
         iterative masked argmax, weights = unbiased scores at the selected experts, renormalized and
@@ -280,7 +287,8 @@ class TtRouter(LightweightModule):
             ttnn.deallocate(logits)
         choice = ttnn.add(scores, self.bias)
         if self.tie_break == "topk":
-            return self._forward_topk(scores, choice, T, dense_only=dense_only)
+            return self._forward_topk(scores, choice, T, dense_only=dense_only, ep_rows=ep_rows)
+        assert not ep_rows, "ep_rows needs the topk tie-break"
         dense = None  # selected unbiased scores at their expert columns, else 0
         idx_cols, w_cols = [], []
         for _ in range(self.k):
@@ -706,6 +714,16 @@ class TtRoutedExperts(LightweightModule):
         if self.mesh.rows > 1:
             x = self.mesh.all_gather_rows(x, dim=2)
             dense_w = self.mesh.all_gather_rows(dense_w, dim=2)
+        y = self._local_experts(x, dense_w)
+        if self.mesh.rows > 1:
+            ttnn.deallocate(x)
+            ttnn.deallocate(dense_w)
+            y = self.mesh.reduce_scatter_rows(y, dim=2)
+        return y
+
+    def _local_experts(self, x: ttnn.Tensor, dense_w: ttnn.Tensor) -> ttnn.Tensor:
+        """The chip's expert slices over the (gathered) tokens x [1,1,T,H] with the routing dense_w [1,1,T,E]:
+        the layout's block path (sparse 32-token blocks / dense / stream / dispatch) -> [1,1,T,H] partial."""
         T = x.shape[-2]
         block = self._block_stream if self.stream else self._block
         if self.dense:
@@ -726,10 +744,6 @@ class TtRoutedExperts(LightweightModule):
             y = ttnn.concat(outs, dim=-2)
             for o in outs:
                 ttnn.deallocate(o)
-        if self.mesh.rows > 1:
-            ttnn.deallocate(x)
-            ttnn.deallocate(dense_w)
-            y = self.mesh.reduce_scatter_rows(y, dim=2)
         return y
 
 
@@ -742,8 +756,15 @@ class TtEPExperts(LightweightModule):
     weight lists, the weights applied inside) runs on the dispatched rows, ``all_to_all_combine`` (local reduce)
     returns every token's weighted sum to its row; the result is the column's partial (the caller all-reduces
     over the columns). On one chip (``D = 1``) the dispatch / combine are the identity and skipped.
-    THE MESH PATH IS UNTESTED until a (2,4) block is available (single-chip path validated in
-    tests/test_moe_ep.py)."""
+
+    Mesh path (``forward`` with ``D > 1``, validated on a (2,4) block under FABRIC_1D: tests/test_mesh_moe.py with
+    GLM53_MOE_LAYOUT=ep, tests/test_a2a_perf.py::test_dispatch_combine_golden): the routing weights ride as a K-wide
+    bf16 tail of every token row (``[x | w]``, one dispatch instead of two), the ids as the dispatch's uint16
+    metadata (exact: bf16 tiles cannot hold ids 257..287), both read directly by the kernels (``ep_rm``); the
+    combine is ``local_reduce`` (one row per (device, token)) into a zeroed ``[K, T]`` slot tensor (it writes the
+    slot of the device's first expert in the token's list and leaves the others untouched) summed over K. The
+    fabric must be a 1D one (``GLM53_FABRIC=1d``, the default once GLM53_MOE_LAYOUT=ep: the dispatch writer sends 1D
+    hop packets and the Blackhole CI covers these ops under FABRIC_1D only)."""
 
     @staticmethod
     def cache_files(cache_dir: Path | str, mesh: GLMMesh, expert_dtype, expert_down_dtype) -> dict[str, Path]:
@@ -848,6 +869,8 @@ class TtEPExperts(LightweightModule):
         self.ops = {}
         self._pad = {}
         self.act_l1 = os.environ.get("GLM53_STREAM_ACT_L1", "1") == "1"
+        # GLM53_EP_KSUM=fast: the K-slot sum as one fast_reduce_nc kernel; sum: the generic ttnn.sum (3 ops)
+        self.ksum_fast = os.environ.get("GLM53_EP_KSUM", "sum") == "fast"
         # the DeepSeek-V3 decode call pattern (models/demos/deepseek_v3/tt/moe.py, its decode config): dispatch and
         # combine along the mesh rows, L1 outputs, the links chosen by the op. The topology is derived from the
         # active fabric by the op (``topology=None``: FABRIC_1D -> Linear, FABRIC_2D -> Mesh, the torus -> Ring on a
@@ -861,7 +884,10 @@ class TtEPExperts(LightweightModule):
             "torus": ttnn.Topology.Torus,
             "": None,
         }[os.environ.get("GLM53_A2A_TOPOLOGY", "").lower()]
-        self.a2a_kwargs = dict(cluster_axis=0, memory_config=ttnn.L1_MEMORY_CONFIG, num_links=None, topology=topo)
+        # links per axis: 1 is the Blackhole CI configuration of these ops (the control plane reports 2 on a block);
+        # GLM53_A2A_LINKS overrides (0 = the op's own choice)
+        links = int(os.environ.get("GLM53_A2A_LINKS", "1")) or None
+        self.a2a_kwargs = dict(cluster_axis=0, memory_config=ttnn.L1_MEMORY_CONFIG, num_links=links, topology=topo)
         # GLM53_EP_FORCE_A2A=1: run the dispatch / combine even on one chip (D = 1: the identity) to exercise the
         # mesh plumbing before a block is available
         self.force_a2a = os.environ.get("GLM53_EP_FORCE_A2A", "0") == "1"
@@ -870,9 +896,9 @@ class TtEPExperts(LightweightModule):
                 torch.ones(1, 1, self.E, 1, dtype=torch.int32), ttnn.uint16, layout=ttnn.ROW_MAJOR_LAYOUT
             )
 
-    def _op(self, T: int) -> ExpertDispatch:
-        if T not in self.ops:
-            self.ops[T] = ExpertDispatch(
+    def _op(self, T: int, rm: bool = False) -> ExpertDispatch:
+        if (T, rm) not in self.ops:
+            self.ops[(T, rm)] = ExpertDispatch(
                 self.device,
                 self.E_local,
                 self.H,
@@ -883,9 +909,10 @@ class TtEPExperts(LightweightModule):
                 down_readers=int(os.environ.get("GLM53_DISPATCH_DOWN_READERS", "8")),
                 ep=True,
                 w13_dtype=self.expert_dtype,
-                units=os.environ.get("GLM53_STREAM_UNITS", "0") == "1",  # pair-parallel units (36-expert chips)
+                units=not rm and os.environ.get("GLM53_STREAM_UNITS", "0") == "1",  # pair units (36-expert chips)
+                ep_rm=rm,
             )
-        return self.ops[T]
+        return self.ops[(T, rm)]
 
     def _index_tiles(self, idx: ttnn.Tensor, w: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """idx / w [1,1,T,K] (fp32 TILE: integral ids, weights) -> the [1,1,T,32] BF16 index / weight tiles the EP
@@ -908,8 +935,9 @@ class TtEPExperts(LightweightModule):
         return it, wt
 
     def forward(self, x: ttnn.Tensor, w: ttnn.Tensor, idx: ttnn.Tensor) -> ttnn.Tensor:
-        """x [1,1,T,H] bf16 (this row's tokens, replicated over the columns), w / idx [1,1,T,K] fp32 (the router's
-        top-k weights / global expert ids) -> [1,1,T,H]: this column's expert partial for the row's tokens."""
+        """x [1,1,T,H] bf16 (this row's tokens, replicated over the columns) -> [1,1,T,H]: this column's expert
+        partial for the row's tokens. One chip: w / idx [1,1,T,K] fp32 (the router's top-k weights / global ids).
+        Mesh: w [1,1,T,K] bf16, idx [1,1,T,K] uint32 (``TtRouter.forward(ep_rows=True)``)."""
         T = x.shape[-2]
         if self.D == 1 and not self.force_a2a:
             it, wt = self._index_tiles(idx, w)
@@ -920,28 +948,71 @@ class TtEPExperts(LightweightModule):
             for t in (x_rm, it, wt, act, table):
                 ttnn.deallocate(t)
             return out
-        # ---- mesh (UNTESTED on a mesh; D = 1 with GLM53_EP_FORCE_A2A=1 exercises the plumbing): dispatch along
-        # the rows, the EP op on the dispatched rows, combine back
-        K = idx.shape[-1]
-        x_rm = ttnn.reshape(ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT), (T, 1, 1, self.H))
-        idx_rm = ttnn.reshape(ttnn.to_layout(ttnn.typecast(idx, ttnn.uint16), ttnn.ROW_MAJOR_LAYOUT), (T, 1, 1, K))
-        w_rm = ttnn.reshape(ttnn.to_layout(ttnn.typecast(w, ttnn.bfloat16), ttnn.ROW_MAJOR_LAYOUT), (T, 1, 1, K))
-        tok, meta = ttnn.all_to_all_dispatch(x_rm, idx_rm, self.mapping, **self.a2a_kwargs)
-        wd, _ = ttnn.all_to_all_dispatch(w_rm, idx_rm, self.mapping, **self.a2a_kwargs)
-        Td = tok.shape[0] * tok.shape[1] * tok.shape[2]
-        tok = ttnn.reshape(tok, (1, 1, Td, self.H))
-        idx_d = ttnn.to_layout(ttnn.typecast(ttnn.reshape(meta, (1, 1, Td, K)), ttnn.float32), ttnn.TILE_LAYOUT)
-        w_d = ttnn.to_layout(ttnn.typecast(ttnn.reshape(wd, (1, 1, Td, K)), ttnn.float32), ttnn.TILE_LAYOUT)
-        it, wt = self._index_tiles(idx_d, w_d)
-        op = self._op(Td)
-        act, table, out = op.alloc(self.device, act_l1=self.act_l1)
-        op.forward(tok, wt, it, self.w13, self.w2, act, table, out, base=self.base)
-        out_rm = ttnn.reshape(ttnn.to_layout(out, ttnn.ROW_MAJOR_LAYOUT), (Td, 1, 1, self.H))
-        y = ttnn.all_to_all_combine(out_rm, meta, self.mapping, local_reduce=True, **self.a2a_kwargs)
-        y = ttnn.to_layout(ttnn.reshape(y, (1, 1, T, self.H)), ttnn.TILE_LAYOUT)
-        for t in (x_rm, idx_rm, w_rm, tok, meta, wd, it, wt, act, table, out, out_rm):
+        # ---- mesh: three stages (timed separately by tests/test_a2a_perf.py::test_moe_decode_components)
+        tok, meta = self.dispatch_rows(x, w, idx)
+        out = self.run_experts(tok, meta)
+        y = self.combine_rows(out, meta, T)
+        for t in (tok, meta, out):
             ttnn.deallocate(t)
         return y
+
+    def dispatch_rows(self, x: ttnn.Tensor, w: ttnn.Tensor, idx: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """Stage 1 (6 device ops + the dispatch): the [x | w] rows (the bf16 routing weights as a K-wide tail of
+        every token row) and the uint16 ids in ROW_MAJOR L1, ``all_to_all_dispatch`` along the mesh rows ->
+        (tok [1, Td, 1, H + K] = the rows of every token routed to one of this chip's experts, Td = rows * T,
+        garbage rows for the others; meta [1, Td, 1, K] = every row's ids)."""
+        T, K, H = x.shape[-2], idx.shape[-1], self.H
+        l1 = ttnn.L1_MEMORY_CONFIG
+        x_rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT, memory_config=l1)
+        w_rm = ttnn.to_layout(w, ttnn.ROW_MAJOR_LAYOUT, memory_config=l1)  # [1,1,T,K] bf16
+        xw = ttnn.concat([x_rm, w_rm], dim=-1, memory_config=l1)  # [1,1,T,H+K]
+        ttnn.deallocate(x_rm)
+        ttnn.deallocate(w_rm)
+        xw = ttnn.reshape(xw, (T, 1, 1, H + K))
+        idx16 = ttnn.typecast(idx, ttnn.uint16)
+        idx_rm = ttnn.reshape(ttnn.to_layout(idx16, ttnn.ROW_MAJOR_LAYOUT, memory_config=l1), (T, 1, 1, K))
+        ttnn.deallocate(idx16)
+        tok, meta = ttnn.all_to_all_dispatch(xw, idx_rm, self.mapping, **self.a2a_kwargs)
+        ttnn.deallocate(xw)
+        ttnn.deallocate(idx_rm)
+        return tok, meta
+
+    def run_experts(self, tok: ttnn.Tensor, meta: ttnn.Tensor) -> ttnn.Tensor:
+        """Stage 2 (the two expert ops): this chip's active experts over the dispatched rows, the routing read from
+        the metadata rows and the row tails (``ExpertDispatch(ep=True, ep_rm=True)``), tile-padded to a multiple
+        of 32 rows -> out [1, 1, Td, H] TILE (the weighted sum over the chip's experts per dispatched row)."""
+        Td = tok.shape[1]
+        T_pad = -(-Td // TILE) * TILE
+        op = self._op(T_pad, rm=True)
+        act, table, out = op.alloc(self.device, act_l1=self.act_l1, t_valid=Td)
+        op.forward(tok, tok, meta, self.w13, self.w2, act, table, out, base=self.base, t_valid=Td)
+        ttnn.deallocate(act)
+        ttnn.deallocate(table)
+        return out
+
+    def combine_rows(self, out: ttnn.Tensor, meta: ttnn.Tensor, T: int) -> ttnn.Tensor:
+        """Stage 3 (4 device ops + the combine): the contributions as rows, ``all_to_all_combine(local_reduce)``
+        into a zeroed [K, T, 1, H] slot tensor (slot k of token t = the contribution of the device owning its k-th
+        expert, untouched slots stay 0), tilized, summed over K -> [1, 1, T, H] (this column's partial)."""
+        K, H = meta.shape[-1], self.H
+        l1 = ttnn.L1_MEMORY_CONFIG
+        Td = out.shape[-2]
+        out_rm = ttnn.reshape(ttnn.to_layout(out, ttnn.ROW_MAJOR_LAYOUT, memory_config=l1), (1, Td, 1, H))
+        slots = ttnn.zeros(
+            (K, T, 1, H), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device, memory_config=l1
+        )
+        y = ttnn.all_to_all_combine(
+            out_rm, meta, self.mapping, local_reduce=True, output_tensor=slots, **self.a2a_kwargs
+        )  # [K, T, 1, H]
+        ttnn.deallocate(out_rm)
+        y_t = ttnn.to_layout(ttnn.reshape(y, (K, 1, T, H)), ttnn.TILE_LAYOUT)
+        ttnn.deallocate(y)
+        if self.ksum_fast:  # one kernel over dim 0 (ttnn.sum over dim 0 is permute + reduce + permute)
+            y_sum = ttnn.experimental.fast_reduce_nc(y_t, dims=[0], output=None, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        else:
+            y_sum = ttnn.sum(y_t, dim=0, keepdim=True)  # [1,1,T,H]
+        ttnn.deallocate(y_t)
+        return y_sum
 
 
 class TtMoE(LightweightModule):
@@ -1057,7 +1128,12 @@ class TtMoE(LightweightModule):
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """x [1,1,T,H] bf16 (T multiple of 32; replicated over the TP columns) -> [1,1,T,H] replicated."""
-        if self.layout == "ep":
+        if self.layout == "ep" and self.experts.D > 1:
+            w16, idx, _ = self.router(x, ep_rows=True)
+            routed = self.experts(x, w16, idx)
+            ttnn.deallocate(w16)
+            ttnn.deallocate(idx)
+        elif self.layout == "ep":
             w, idx, dense = self.router(x)
             routed = self.experts(x, w, idx)
             for t in (w, idx, dense):

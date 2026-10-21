@@ -38,10 +38,17 @@ def mesh_device_params(rows: int, cols: int, **overrides) -> dict:
 
         from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config, get_max_payload_size
 
-        # GLM53_FABRIC: torus (default on the 8x4) | 2d | 1d | 1d_ring. ``ttnn.all_to_all_dispatch`` /
-        # ``all_to_all_combine`` (the EP expert path) route with 1D hop counts along one axis and are only
-        # exercised under FABRIC_1D (blackhole CI, the DeepSeek-V3 Galaxy demo); under a 2D fabric they hang.
-        fabric = os.environ.get("GLM53_FABRIC", "torus" if (rows, cols) == (8, 4) else "2d")
+        # GLM53_FABRIC: torus (default on the 8x4) | 2d (default on a block) | 1d | 1d_ring. The EP expert layout
+        # (GLM53_MOE_LAYOUT=ep) defaults to 1d: ``ttnn.all_to_all_dispatch`` / ``all_to_all_combine`` send 1D hop
+        # packets under a Linear topology and are exercised under FABRIC_1D only (Blackhole CI, the DeepSeek-V3
+        # Galaxy model); the first block run under FABRIC_2D hung. Validated here under FABRIC_1D on a (2,4) block
+        # (tests/test_a2a_perf.py::test_dispatch_combine_golden, tests/test_mesh_moe.py with the ep layout).
+        default = (
+            "1d"
+            if os.environ.get("GLM53_MOE_LAYOUT", "hybrid") == "ep"
+            else ("torus" if (rows, cols) == (8, 4) else "2d")
+        )
+        fabric = os.environ.get("GLM53_FABRIC", default)
         params["fabric_config"] = {
             "torus": ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
             "2d": ttnn.FabricConfig.FABRIC_2D,
