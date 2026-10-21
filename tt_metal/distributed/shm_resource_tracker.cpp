@@ -13,56 +13,117 @@
 #include <cstring>
 #include <csignal>
 #include <dirent.h>
+#include <fcntl.h>
 #include <fstream>
+#include <string_view>
+#include <system_error>
+#include <sys/file.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
-#include <vector>
 
 namespace tt::tt_metal::distributed {
 
 namespace {
 
-pid_t extract_pid_from_manifest_name(const std::string& filename) {
-    // Expected format: tt_socket_manifest_<pid>
-    const std::string prefix = "tt_socket_manifest_";
-    if (!filename.starts_with(prefix)) {
-        return 0;
+constexpr std::string_view lease_prefix = "tt_socket_manifest_v2_";
+constexpr std::string_view lease_suffix = ".lock";
+
+struct FileDescriptor {
+    int fd = -1;
+    explicit FileDescriptor(int fd = -1) : fd(fd) {}
+    ~FileDescriptor() {
+        if (fd >= 0) {
+            ::close(fd);
+        }
     }
-    try {
-        return static_cast<pid_t>(std::stol(filename.substr(prefix.size())));
-    } catch (...) {
-        return 0;
-    }
+    FileDescriptor(const FileDescriptor&) = delete;
+    FileDescriptor& operator=(const FileDescriptor&) = delete;
+};
+
+bool same_file(int fd, const std::string& path) {
+    struct stat opened{}, current{};
+    return ::fstat(fd, &opened) == 0 && ::lstat(path.c_str(), &current) == 0 && S_ISREG(current.st_mode) &&
+           opened.st_dev == current.st_dev && opened.st_ino == current.st_ino;
 }
 
-pid_t extract_pid_from_shm_name(const std::string& filename) {
-    // Expected format: tt_{prefix}_{pid}_{counter}
-    if (!filename.starts_with("tt_")) {
-        return 0;
+// Keep the lease inode stable while flush_manifest atomically replaces the data
+// file. flock is independent of PID namespaces and is released even on SIGKILL.
+struct ManifestLease {
+    FileDescriptor descriptor;
+    std::string lock_path;
+    std::string manifest_path;
+
+    ManifestLease() {
+        for (;;) {
+            lock_path = fmt::format("/dev/shm/{}XXXXXX{}", lease_prefix, lease_suffix);
+            descriptor.fd = ::mkostemps(lock_path.data(), lease_suffix.size(), O_CLOEXEC);
+            if (descriptor.fd < 0) {
+                throw std::system_error(errno, std::generic_category(), "Create socket manifest lease");
+            }
+            int rc;
+            do {
+                rc = ::flock(descriptor.fd, LOCK_EX);
+            } while (rc < 0 && errno == EINTR);
+            if (rc < 0) {
+                const int error = errno;
+                ::unlink(lock_path.c_str());
+                throw std::system_error(error, std::generic_category(), "Lock socket manifest lease");
+            }
+            // A sweeper may have acquired the new file before our flock. In
+            // that case it has retired this inode; create a fresh lease.
+            if (same_file(descriptor.fd, lock_path)) {
+                break;
+            }
+            ::close(descriptor.fd);
+            descriptor.fd = -1;
+        }
+        manifest_path = lock_path.substr(0, lock_path.size() - lease_suffix.size());
     }
-    auto first = filename.find('_', 3);
-    if (first == std::string::npos) {
-        return 0;
+
+    ~ManifestLease() {
+        // If tracker cleanup threw, keep the unlocked lease discoverable so a
+        // later process can finish cleaning the remaining manifest.
+        struct stat st{};
+        if (::lstat(manifest_path.c_str(), &st) != 0 && errno == ENOENT) {
+            ::unlink(lock_path.c_str());
+        }
     }
-    auto second = filename.find('_', first + 1);
-    if (second == std::string::npos) {
-        return 0;
-    }
-    try {
-        return static_cast<pid_t>(std::stol(filename.substr(first + 1, second - first - 1)));
-    } catch (...) {
-        return 0;
-    }
+};
+
+ManifestLease& manifest_lease() {
+    // Constructed before the tracker, so its lock outlives tracker cleanup.
+    static ManifestLease lease;
+    return lease;
 }
 
-std::string manifest_path_for_pid(pid_t pid) { return fmt::format("/dev/shm/tt_socket_manifest_{}", pid); }
-
-bool is_pid_alive(pid_t pid) {
-    if (pid <= 0) {
-        return false;
+void cleanup_stale_manifest(const std::string& lock_path) {
+    FileDescriptor descriptor(::open(lock_path.c_str(), O_RDWR | O_CLOEXEC | O_NOFOLLOW));
+    if (descriptor.fd < 0 || ::flock(descriptor.fd, LOCK_EX | LOCK_NB) != 0 || !same_file(descriptor.fd, lock_path)) {
+        return;
     }
-    return kill(pid, 0) == 0 || errno == EPERM;
+
+    // Only an unlocked lease proves that its owner is gone. Keep the lock
+    // through all unlinks so concurrent sweepers cannot act on the same owner.
+    const std::string manifest = lock_path.substr(0, lock_path.size() - lease_suffix.size());
+    std::ifstream ifs(manifest);
+    std::string line;
+    while (std::getline(ifs, line)) {
+        if (line.starts_with("shm ")) {
+            const auto shm_name = line.substr(4);
+            if (::shm_unlink(shm_name.c_str()) == 0) {
+                log_info(LogMetal, "ShmResourceTracker: removed stale shm '{}'", shm_name);
+            }
+        } else if (line.starts_with("file ")) {
+            const auto file_path = line.substr(5);
+            if (::unlink(file_path.c_str()) == 0) {
+                log_info(LogMetal, "ShmResourceTracker: removed stale file '{}'", file_path);
+            }
+        }
+    }
+    ::unlink(manifest.c_str());
+    ::unlink((manifest + ".tmp").c_str());
+    ::unlink(lock_path.c_str());
 }
 
 struct sigaction prev_sigint, prev_sigterm;
@@ -92,7 +153,7 @@ void invoke_previous_handler(int sig, const struct sigaction& prev) {
 void signal_handler(int sig) {
     // Use try_lock to avoid deadlock if the signal interrupted a thread
     // holding mutex_. If we can't acquire the lock, the manifest file
-    // ensures the next process will clean up via stale-PID scan.
+    // ensures the next process will clean up via the released lease.
     ShmResourceTracker::instance().cleanup_from_signal();
 
     const struct sigaction& prev = (sig == SIGINT) ? prev_sigint : prev_sigterm;
@@ -101,7 +162,7 @@ void signal_handler(int sig) {
 
 }  // namespace
 
-ShmResourceTracker::ShmResourceTracker() : manifest_path_(manifest_path_for_pid(getpid())) {
+ShmResourceTracker::ShmResourceTracker() : manifest_path_(manifest_lease().manifest_path) {
     cleanup_stale_resources();
 
     struct sigaction sa{};
@@ -201,7 +262,7 @@ void ShmResourceTracker::cleanup_all() {
 void ShmResourceTracker::cleanup_from_signal() {
     // try_lock avoids deadlock if the signal interrupted a thread holding mutex_.
     // If we can't lock, leave the manifest intact so the next process can
-    // discover and clean up all resources via stale-PID scan.
+    // discover and clean up all resources via the released lease.
     if (!mutex_.try_lock()) {
         return;
     }
@@ -228,58 +289,17 @@ void ShmResourceTracker::cleanup_stale_resources() {
         return;
     }
 
-    std::vector<std::string> stale_manifests;
-    std::vector<std::string> stale_shm_names;
-
-    pid_t my_pid = getpid();
     struct dirent* entry;
     while ((entry = readdir(dir)) != nullptr) {
-        std::string name(entry->d_name);
-
-        // Check for manifest files from dead processes
-        pid_t manifest_pid = extract_pid_from_manifest_name(name);
-        if (manifest_pid > 0 && manifest_pid != my_pid && !is_pid_alive(manifest_pid)) {
-            stale_manifests.push_back("/dev/shm/" + name);
-            continue;
-        }
-
-        // Check for orphaned shm objects from dead processes
-        // Pattern: tt_{h2d|d2h}_{pid}_{counter}
-        pid_t shm_pid = extract_pid_from_shm_name(name);
-        if (shm_pid > 0 && shm_pid != my_pid && !is_pid_alive(shm_pid)) {
-            stale_shm_names.push_back(name);
+        const std::string_view name(entry->d_name);
+        if (name.starts_with(lease_prefix) && name.ends_with(lease_suffix) &&
+            name.size() == lease_prefix.size() + 6 + lease_suffix.size()) {
+            cleanup_stale_manifest("/dev/shm/" + std::string(name));
         }
     }
     closedir(dir);
-
-    // Clean up resources listed in stale manifests
-    for (const auto& manifest : stale_manifests) {
-        std::ifstream ifs(manifest);
-        std::string line;
-        while (std::getline(ifs, line)) {
-            if (line.starts_with("shm ")) {
-                std::string shm_name = line.substr(4);
-                if (shm_unlink(shm_name.c_str()) == 0) {
-                    log_info(LogMetal, "ShmResourceTracker: removed stale shm '{}'", shm_name);
-                }
-            } else if (line.starts_with("file ")) {
-                std::string file_path = line.substr(5);
-                if (std::remove(file_path.c_str()) == 0) {
-                    log_info(LogMetal, "ShmResourceTracker: removed stale file '{}'", file_path);
-                }
-            }
-        }
-        std::remove(manifest.c_str());
-        log_info(LogMetal, "ShmResourceTracker: removed stale manifest '{}'", manifest);
-    }
-
-    // Clean up orphaned shm objects not covered by any manifest
-    for (const auto& name : stale_shm_names) {
-        std::string shm_name = "/" + name;
-        if (shm_unlink(shm_name.c_str()) == 0) {
-            log_info(LogMetal, "ShmResourceTracker: removed orphaned shm '{}'", shm_name);
-        }
-    }
+    // Legacy manifests and untracked shm names have no namespace-independent
+    // ownership proof. Never infer that they are stale from kill(pid, 0).
 }
 
 }  // namespace tt::tt_metal::distributed
