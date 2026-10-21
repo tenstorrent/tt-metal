@@ -9,6 +9,7 @@
 #include <tt-metalium/mesh_buffer.hpp>
 
 #include "impl/buffers/semaphore.hpp"
+#include "impl/experimental/blaze/named_kernel_args_impl.hpp"
 #include "tt_stl/overloaded.hpp"
 #include <tt_stl/reflection.hpp>
 
