@@ -39,7 +39,7 @@ Every test source under `tests/sources/*_perf.cpp` is compiled twice from the sa
 
 | Build | `LLK_PROFILER` | `PERF_COUNTERS_COMPILED` | Active half(s) of `START_PERF_MEASURE` | What it measures |
 |-------|----------------|--------------------------|--------------------------------------|------------------|
-| NC (no counters) | defined | undefined | `ZONE_SCOPED` (timing) + `MEASURE_PERF_COUNTERS` (barrier only) | Per-zone wall-clock cycles (`RISCV_DEBUG_REG_WALL_CLOCK_L`), reported differently per run type: `L1_TO_L1` is the unpack-start to pack-end cross-thread span, the isolates are the measured thread's own zone, and `L1_CONGESTION` yields two columns, `[UNPACK]` and `[PACK]` |
+| NC (no counters) | defined | undefined | `ZONE_SCOPED` (timing) + `MEASURE_PERF_COUNTERS` (barrier only) | Per-zone wall-clock cycles (`RISCV_DEBUG_REG_WALL_CLOCK_L`), reported differently per run type: `L1_TO_L1` is the unpack-start to pack-end cross-thread span, and the isolates are the measured thread's own zone |
 | WC (with counters) | defined | defined | `MEASURE_PERF_COUNTERS` **and** `ZONE_SCOPED` | Per-zone HW counter snapshot **and** wall-clock cycles |
 
 `START_PERF_MEASURE(name)` expands to `MEASURE_PERF_COUNTERS(name)` + `ZONE_SCOPED(name)`. In the NC build, `MEASURE_PERF_COUNTERS` performs the same real rendezvous with an empty action (so it is not free, and it moves the NC baseline). The rendezvous has three threads on Wormhole and Blackhole and four on Quasar, where the SFPU TRISC takes part too: `sfpu_stub.h` opens the same `INIT` and `TILE_LOOP` zones, so a kernel with no SFPU half still completes it. In the WC build **both** are live: the counter scope performs the rendezvous *and* arms/freezes the HW counters, while `ZONE_SCOPED` records the per-zone wall-clock timestamps without adding another rendezvous. A single WC run therefore yields both counter and wall-clock data per zone under the same name; the host driver keys everything by `(test_variant, zone)` and can merge NC and WC results (or use the WC wall-clock directly).
@@ -68,20 +68,20 @@ Each zone is registered once at its first encounter (the counter half is RAII-sc
 
 ### `PerfRunType` and the single-thread arm/freeze model
 
-Each LLK perf test is associated with a `PerfRunType` (declared in `perf.h`): `L1_TO_L1` runs the full handshaked unpack → math → pack pipeline. `L1_CONGESTION` keeps unpack and pack real but decouples them (math is reduced to a dvalid drain and pack free-runs), so the two hammer L1 concurrently instead of forming a pipeline; `UNPACK_ISOLATE` / `MATH_ISOLATE` / `PACK_ISOLATE` exercise a single stage. The run type selects which threads do real work, whether they are handshaked or free-running, and whether the exit rendezvous exists. The other threads are not idle: they run the minimum dvalid and semaphore mocks in `perf.h` that the measured stage's hardware handshake requires.
+Each LLK perf test is associated with a `PerfRunType` (declared in `perf.h`): `L1_TO_L1` runs the full handshaked unpack → math → pack pipeline; `UNPACK_ISOLATE` / `MATH_ISOLATE` / `PACK_ISOLATE` exercise a single stage. The run type selects which threads do real work, whether they are handshaked or free-running, and whether the exit rendezvous exists. The other threads are not idle: they run the minimum dvalid and semaphore mocks in `perf.h` that the measured stage's hardware handshake requires.
 
 **Pack arms the counters for every run type.** `llk_barrier::is_action_thread()` in `barrier.h` returns true only on pack. Freezing is not uniform: see the table below. Arming can be fixed to one thread because:
 
 - The perf counters are **global hardware** driven by shared debug registers (`PERF_CNT_ALL` and the per-bank `*2` command registers), so any RISC can arm/freeze them. The identity of the issuing thread does not change what is counted.
 - The entry rendezvous waits for every thread before arming, so the window opens after all of them have finished the previous zone.
 
-Pack is chosen because a sweep found arming there halves the total `L1_CONGESTION` error against arming on TRISC0. Fixing it also matters for its own sake: letting the arming thread vary is how the two builds ended up releasing from different threads.
+Pack is chosen because a sweep found arming there halves the total counter error against arming on TRISC0. The sweep ran on the since-removed `L1_CONGESTION` run type only. Fixing it also matters for its own sake: letting the arming thread vary is how the two builds ended up releasing from different threads.
 
 **Freezing is per run type**, decided by `exit_barrier_for()` in `counters.h`, which defaults to `wants_exit_barrier()` unless `LLK_PERF_EXIT_BARRIER` overrides it:
 
 | Run type | Exit rendezvous | Freezing thread |
 |---|---|---|
-| `L1_TO_L1`, `L1_CONGESTION` | yes | pack, once all three have arrived |
+| `L1_TO_L1` | yes | pack, once all three have arrived |
 | `UNPACK_ISOLATE` | yes | pack, once all three have arrived |
 | `MATH_ISOLATE`, `PACK_ISOLATE` | no | the measured thread, just after its own `ZONE_END` |
 | `SFPU_ISOLATE` (Quasar) | no | the SFPU TRISC (`LLK_TRISC_ISOLATE_SFPU`), just after its own `ZONE_END` |
@@ -96,7 +96,7 @@ Expands to a `perf_counter_scoped<PERF_RUN_TYPE>` RAII object; the run type is a
 
 2. **Body.** Every thread runs the work inside the scope. Counters tick continuously on the shared backend.
 
-3. **Destructor (zone exit).** For the run types that keep the exit rendezvous, calls `llk_barrier::rendezvous(llk_barrier::is_action_thread(), freeze_and_read_all_counters)`; otherwise the measured thread freezes directly. Note `PROFILER_SYNC()` (`tensix_sync`) is a hand-written statement in each kernel and the isolate and congestion paths can `return` past it, so a thread's backend is not guaranteed drained when the stop bit is written; `fence_compiler()` around the rendezvous is a compiler barrier only. The **action thread (pack)** writes the rising-edge stop bit to the same four registers, then walks the shared 200-word config buffer at `0x169000` and reads every valid slot: for each it programs the bank's mode register with the `counter_sel`, reads `OUT_H` (the event count), and stores it in the per-zone data area (`OUT_L` is read once from the INSTRN_THREAD bank and copied into all five per-bank cycle words, so those five words always hold the same value). On Quasar slot 3 is the l1_client selection: its value is `l1_client_read()` of the clear-on-read `CNT` register and its cycles are the INSTRN bank's. It then sets the zone's `SYNC_ZONE_COMPLETE` flag and releases the others.
+3. **Destructor (zone exit).** For the run types that keep the exit rendezvous, calls `llk_barrier::rendezvous(llk_barrier::is_action_thread(), freeze_and_read_all_counters)`; otherwise the measured thread freezes directly. Note `PROFILER_SYNC()` (`tensix_sync`) is a hand-written statement in each kernel and the isolate paths can `return` past it, so a thread's backend is not guaranteed drained when the stop bit is written; `fence_compiler()` around the rendezvous is a compiler barrier only. The **action thread (pack)** writes the rising-edge stop bit to the same four registers, then walks the shared 200-word config buffer at `0x169000` and reads every valid slot: for each it programs the bank's mode register with the `counter_sel`, reads `OUT_H` (the event count), and stores it in the per-zone data area (`OUT_L` is read once from the INSTRN_THREAD bank and copied into all five per-bank cycle words, so those five words always hold the same value). On Quasar slot 3 is the l1_client selection: its value is `l1_client_read()` of the clear-on-read `CNT` register and its cycles are the INSTRN bank's. It then sets the zone's `SYNC_ZONE_COMPLETE` flag and releases the others.
 
 Each zone gets its own data block in L1 (see [L1 Layout](#l1-layout-and-zone-buffers)) so multiple measurement scopes in the same kernel produce independent snapshots. The device supports `PERF_COUNTERS_MAX_ZONES = 8` zones, but the host names only two: `perf.py` hard-codes zone 0 as `INIT` and zone 1 as `TILE_LOOP`, so a third counter zone appears in the CSV as the literal `ZONE_2` and never joins the wall-clock rows. Zone names in use are `INIT`, `TILE_LOOP`, and `UNINIT` in `fast_tilize_bh` / `fast_untilize` only; `UNINIT` uses bare `ZONE_SCOPED`, so it is timing-only with no rendezvous; identical names share a zone.
 
@@ -110,7 +110,7 @@ Every thread announces by incrementing; the action thread waits for all of them,
 
 The semaphore is used rather than L1 because its release is symmetric, detection is a short `pc_buf` poll, and it puts no traffic on the L1 being measured. Quasar uses the same implementation, only with a different pair of indices: it has 32 Tensix semaphores (`tt_tensix_pkg.sv` `SEM_COUNT`, reachable from a TRISC as four banks of eight through the PC buffer at words 32 to 63, each resetting to 0 with max 15) and every Quasar LLK op stays inside bank 0, so the barrier claims 8 and 9 in bank 1 where nothing can collide with live dataflow.
 
-Quasar reached that through an L1 generation barrier first, and the measurements are worth keeping: with waiters polling an L1 word and invalidating their data cache on every poll, the emulator showed the unpack windows up to 5.4% longer and `L1_CONGESTION` up to 5.0% longer than the no-counter build. Spacing the polls with 32 nops brought that into the noise but left a bias on `L1_TO_L1` (median +0.48%, worst 120 cycles over 12 variants), because Quasar has a fourth thread: the SFPU stub opens both zones and then waits for the whole pipeline window. On semaphores the same 12 variants give a median of -0.05% and a worst case of 21 cycles on that run type, the nop knob is gone, and both architectures compile the same barrier body.
+Quasar reached that through an L1 generation barrier first, and the measurements are worth keeping: with waiters polling an L1 word and invalidating their data cache on every poll, the emulator showed the unpack windows up to 5.4% longer than the no-counter build. Spacing the polls with 32 nops brought that into the noise but left a bias on `L1_TO_L1` (median +0.48%, worst 120 cycles over 12 variants), because Quasar has a fourth thread: the SFPU stub opens both zones and then waits for the whole pipeline window. On semaphores the same 12 variants give a median of -0.05% and a worst case of 21 cycles on that run type, the nop knob is gone, and both architectures compile the same barrier body.
 
 ### Configure-once from BRISC
 
@@ -228,15 +228,13 @@ A metric whose counters this architecture does not expose, or whose counter grou
 
 ## Notes and Caveats
 
-- **Four tests sit on a bistable L1 operating point.** `matmul`, `math_matmul`, `pack_dest_bank` and
-  `pack_untilize` each land on one of two discrete levels, chosen deterministically per binary and re-rolled
-  by any change to code layout. Worst observed spread is about 31 percent on `pack_dest_bank`. This is build
+- **Two tests sit on a bistable L1 operating point.** `pack_dest_bank` and `pack_untilize` each land on
+  one of two discrete levels, chosen deterministically per binary and re-rolled by any change to code layout. Worst observed spread is about 31 percent on `pack_dest_bank`. This is build
   sensitivity, not counter cost: the same two levels appear when one no-counter build is compared against
-  another that differs only in layout. If you see a large outlier on those four, check which level both
-  sides landed on before treating it as a regression. Tracked in #51901, #51902 and #51904.
+  another that differs only in layout. If you see a large outlier on those two, check which level both
+  sides landed on before treating it as a regression. Tracked in #51901.
 
 - **Never guard `PERF_RUN_TYPE` with `#ifndef`.** It arrives as a `constexpr` in the generated `build.h`, so a preprocessor guard cannot see it, always fires, and silently compiles every run type as the fallback. Identical values and identical `TEXT_SIZE` across run types is the symptom (PR #51918).
-- **`L1_CONGESTION` is not free-running everywhere yet.** `eltwise_binary_sfpu`, `eltwise_unary_sfpu`, `eltwise_unary_typecast`, `sfpu_binop_scalar` and `sfpu_ternary` still run its pack path on the math handshake, so they measure the handshake rather than L1 contention.
 - **`PACK_DONE` is reserved by the barrier.** It is safe only because the count returns to zero each time, so a measured kernel must not use `semaphore::PACK_DONE` for its own handshake.
 - **The host asserts zones do not overlap across threads.** No thread may open `TILE_LOOP` before every thread has closed `INIT`. A failure almost always means a kernel used `ZONE_SCOPED` instead of `START_PERF_MEASURE`, which is what supplies the entry rendezvous. A hang (`TENSIX TIMED OUT`) in every build means a thread skipped a zone: every thread must open every zone in every configuration, so a compile-time condition on a thread's work belongs inside the zone, not around it (the Quasar unpack-to-dest variants of the pack and unpack tests hung this way until their math zones were opened unconditionally).
 - **Both builds write the same report path.** `perf_data/<module>/<module>.csv` is written by whichever invocation ran last, so move the first report aside before running the second build; there is no cross-build merge in code.

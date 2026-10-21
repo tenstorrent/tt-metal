@@ -190,7 +190,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
     {
         START_PERF_MEASURE("TILE_LOOP")
-        if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
             if constexpr (!unpack_to_dest)
             {
@@ -260,7 +260,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     {
         START_PERF_MEASURE("INIT")
-        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
             // PACK runs without the L1_TO_L1 producer chain in isolated modes.
             set_up_zero_dest_dvalid_handshake_for_pack();
@@ -287,7 +287,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
     {
         START_PERF_MEASURE("TILE_LOOP")
-        if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {

@@ -70,10 +70,9 @@ ALL_PERF_RUN_TYPES = [
     PerfRunType.UNPACK_ISOLATE,
     PerfRunType.MATH_ISOLATE,
     PerfRunType.PACK_ISOLATE,
-    PerfRunType.L1_CONGESTION,
 ]
 
-# Run-type → kernel components for the ELF_SIZE column. L1_CONGESTION omitted.
+# Run-type → kernel components for the ELF_SIZE column.
 _CODE_SIZE_COMPONENTS = {
     PerfRunType.L1_TO_L1: ["unpack", "math", "pack"],
     PerfRunType.UNPACK_ISOLATE: ["unpack"],

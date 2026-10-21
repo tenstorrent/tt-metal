@@ -18,7 +18,7 @@ std::uint32_t unp_cfg_context          = 0;
 std::uint32_t pack_sync_tile_dst_ptr   = 0;
 std::uint32_t math_sync_tile_dst_index = 0;
 
-// Only modes supported are L1_TO_L1, PACK_ISOLATE and L1_CONGESTION
+// Only modes supported are L1_TO_L1 and PACK_ISOLATE
 static_assert(PERF_RUN_TYPE != PerfRunType::MATH_ISOLATE, "Math isolation not supported for this benchmark");
 static_assert(PERF_RUN_TYPE != PerfRunType::UNPACK_ISOLATE, "Unpack isolation not supported for this benchmark");
 
@@ -119,34 +119,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             return;
         }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
-        {
-            if constexpr (!unpack_to_dest)
-            {
-                _perf_math_loop_clear_valid<true, true>(LOOP_FACTOR * TILE_CNT * TILE_NUM_FACES);
-                return;
-            }
-
-            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
-            {
-                for (std::uint32_t block = 0; block < TILE_CNT / BLOCK_CT_DIM; block++)
-                {
-                    for (std::uint32_t block_tile = 0; block_tile < BLOCK_CT_DIM; block_tile++)
-                    {
-                        LLK_ASSERT(
-                            (block_tile < get_dest_max_tiles<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
-                            "Block tile index exceeds maximum destination tiles");
-                        // In this case, unpacker needs software synchronization from math - to acknowledge that destination register is
-                        // "consumed" and can be overwritten with new data.
-                        // Due to the fact that BROADCAST_TYPE is always NONE in the test and combination of unpack_to_dest and 32b data is always set,
-                        // this method will perform synchronization only and no actual data copy.
-                        _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
-                            block_tile, formats.math, formats.math);
-                    }
-                }
-            }
-            return;
-        }
 
         for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
         {
@@ -200,7 +172,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         START_PERF_MEASURE("TILE_LOOP")
 
-        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {

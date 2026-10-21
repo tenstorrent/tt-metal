@@ -138,7 +138,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
         }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
@@ -220,7 +220,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         START_PERF_MEASURE("INIT")
         // Match WH/BH PACK_ISOLATE: no math↔pack handshake; pack from whatever is in dest.
         // Explicitly clear wait_mask — CFG can persist across run-types in the same session.
-        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
             set_up_zero_dest_dvalid_handshake_for_pack();
         }
@@ -252,7 +252,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     {
                         _llk_pack_(block_tile, block_start + block_tile, tensor_shape_A);
                     }
-                    if constexpr (PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE && PERF_RUN_TYPE != PerfRunType::L1_CONGESTION)
+                    if constexpr (PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE)
                     {
                         _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
                     }

@@ -120,7 +120,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             return;
         }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
             _perf_math_loop_clear_valid<true, true>(LOOP_FACTOR * TILE_CNT * DVALIDS_PER_TILE);
             return;
@@ -200,7 +200,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             _llk_pack_reduce_mask_clear_();
             return;
         }
-        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {

@@ -33,7 +33,7 @@ using namespace ckernel;
 // Perf run types. Operands reach Dest through the unpack-to-dest engine, so there is no SrcA/SrcB
 // handshake here - the Dest dvalid chain is the only producer/consumer token. That means the two
 // isolate modes have nothing to mock: MATH_ISOLATE simply leaves the unpack thread idle, and
-// UNPACK_ISOLATE / L1_CONGESTION leave the math thread idle.
+// UNPACK_ISOLATE leaves the math thread idle.
 //
 // Each thread declares the shared chain only for L1_TO_L1 and zeroes its own wait mask otherwise,
 // so no run type inherits the chain from a previous one on the same device. Each also programs its
@@ -156,8 +156,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
     {
         START_PERF_MEASURE("TILE_LOOP")
-        // Skipped for UNPACK_ISOLATE / L1_CONGESTION (nothing to clear) and for PACK_ISOLATE.
-        if constexpr (PERF_RUN_TYPE != PerfRunType::UNPACK_ISOLATE && PERF_RUN_TYPE != PerfRunType::L1_CONGESTION && PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE)
+        // Skipped for UNPACK_ISOLATE (nothing to clear) and for PACK_ISOLATE.
+        if constexpr (PERF_RUN_TYPE != PerfRunType::UNPACK_ISOLATE && PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
@@ -257,7 +257,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
     {
         START_PERF_MEASURE("TILE_LOOP")
-        if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
