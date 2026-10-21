@@ -235,17 +235,23 @@ def resolve_thresholds(thr: dict, vals: dict, recorded: dict, status: str = "TOD
     """F76: a '<= limit' gate shows the limit its run recorded (<metric>_limit in state.json, else results/<task>.json).
     The word 'limit' never reaches the page (it cannot compare it: every such metric turned red). A metric without a
     recorded limit, or a passed step gated under an earlier rule (no metric of the current gate's name, e.g. pcc_* before
-    F81's err_*), is left out with a note; a pending step's gate is left out until it runs."""
+    F81's err_*, or a check added later, F130), is left out with a note; a pending step's gate is left out until it runs.
+    """
     import fnmatch
 
     out, note = {}, None
     done = status in ("PASS", "DEFERRED", "REJECTED")
     for g, cond in (thr or {}).items():
         op, v = str(cond).split()
+        hits = [k for k in vals if fnmatch.fnmatchcase(k, g) and not k.endswith("_limit")]
         if v != "limit":
+            if (
+                not hits and done
+            ):  # F130: a check added after the task passed (e.g. F128's drift_metrics) waits for a rerun
+                note = "gated under an earlier rule: passed the gate of its time; the new checks run at its rerun"
+                continue
             out[g] = cond
             continue
-        hits = [k for k in vals if fnmatch.fnmatchcase(k, g) and not k.endswith("_limit")]
         if not hits and done:
             note = "gated under an earlier rule (before the noise-floor error limits): passed the gate of its time"
         for k in hits:
