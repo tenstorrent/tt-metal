@@ -120,6 +120,35 @@ in the ttnn-free `matrix_math.py`, unit-tested by
 `models/demos/minimax_m3/tests/unit/test_prefill_matrix_math.py` (host-only, no device; run it with
 `pytest models/demos/minimax_m3/tests/unit/test_prefill_matrix_math.py`).
 
+## CI (Blaze prefill, SC4)
+
+`ci/run_matrix_ci.sh` runs the same measurement (`matrix_producer.py`, unchanged) as a CI job on the 4-galaxy
+`bh_sc4` pool: `"(MiniMax-M3-428B) pipeline prefill perf matrix smoke 16-stage, SC4"` in
+`tests/pipeline_reorg/blaze_models_prefill_tests.yaml`, `test_type: minimax_prefill_matrix`. Dispatch it alone with
+
+```bash
+gh workflow run blaze-models-prefill-tests.yaml -R tenstorrent/tt-metal --ref <branch> -f test-type=minimax_prefill_matrix
+```
+
+How it differs from `run_matrix.sh`:
+
+* No Slurm and no galaxy reset. Hosts come from `/etc/ttop/hostfile`, and the job's setup step has already reset and
+  validated the cluster.
+* The 16 ranks are placed by tt-run discovery on `quad_bh_galaxy_16stage_2x4_z_chain.textproto` (`MATRIX_CI_LAUNCH=discovery`,
+  the default), so the quad does not need to be wired as the exabox straight chain. `MATRIX_CI_LAUNCH=binding` falls
+  back to `binding_16stage_quad.yaml.in`, with the hosts in the ring order of `/etc/ttop/rankfile`.
+* One runner launch for all cached rows, at a KV capacity of `max(CACHED) + MAX_NEW`. With several rows, the smaller
+  ones therefore run on an over-sized cache (see above), so compare their numbers with CI runs only, not with
+  `run_matrix.sh`.
+* It is currently a smoke run: cached 0 x new 5120, 32768, 2 idle iterations, 2 users x 64 chunks loaded. The table
+  grows through the same env knobs (`CACHED`, `NEW`, `ITERS`, `USERS`, `TARGET_CHUNKS`, `CHUNK`, `LAYER_COUNTS`) set in
+  the job's `cmd`.
+* Perf is reported, not gated. The tables go to the job summary. The JSONL, CSV, runner/producer/rank logs and timing
+  CSVs are uploaded as the `prefill-results-sc4-*` artifact (`m3_prefill_matrix/`). The job fails only when the run
+  breaks (bring-up, a producer error, missing chunks).
+* `MATRIX_CI_DRY_RUN=1` prints the tt-run and producer commands without launching anything. `TTRUN_DIR` can point at
+  a fake `hostfile` / `rankfile` for that.
+
 ## Notes for comparing runs
 
 * Quote the galaxies and the commit: single-galaxy M3 prefill numbers differ by ~10% between
@@ -144,6 +173,7 @@ in the ttnn-free `matrix_math.py`, unit-tested by
 | `matrix_math.py` | stdlib-only measurement arithmetic used by the producer (unit-tested) |
 | `matrix_shutdown.py` | sends the SHUTDOWN sentinel to a live runner |
 | `matrix_table.py` | tables / CSV from a results JSONL |
+| `ci/run_matrix_ci.sh` | CI flavour (SC4, no Slurm): tt-run launch, one producer session per cached row, job-summary table |
 | `matrix_common.sh` | shared helpers sourced by the shell scripts: constants, ulimit raise, `srun` wrapper, producer/shutdown env, scoped runner shutdown + kill |
 | `binding_16stage_quad.yaml.in`, `quad_bh_galaxy_16stage_2x4_z_chain.textproto` | 4-galaxy 16-stage topology |
 | `binding_12stage_tri.yaml.in`, `tri_bh_galaxy_12stage_2x4_z_chain.textproto` | 3-galaxy 12-stage fallback |
