@@ -114,13 +114,33 @@
     set -e
     YAML=tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_multi_mesh_sanity_common.yaml
     MGDDIR=tests/tt_metal/tt_fabric/custom_mesh_descriptors
+    LOGDIR=$(mktemp -d)
+    # tt-run does NOT propagate the test binary's exit code: an mpirun SIGABRT from a
+    # TT_THROW still returns 0 to the shell, so `set -e` alone reports a crashed
+    # scenario as success (false green). Assert the test's own authoritative markers
+    # instead -- test_tt_fabric prints "All tests completed successfully" per rank only
+    # on full success, and a failure summary / abort signature otherwise.
+    assert_fabric_ok() {
+      local log="$1" mgd="$2"
+      if grep -qiE "Boundary exceeded|exited on signal|caught signal|signal 6|Aborted|terminate called|what\(\):|\bFATAL\b" "$log"; then
+        echo "::error::per-mesh scenario crashed/aborted: $mgd"; return 1
+      fi
+      if grep -qE "Tests: [0-9]+ executed, [1-9][0-9]* failed|Result: FAILED" "$log"; then
+        echo "::error::per-mesh scenario reported test failures: $mgd"; return 1
+      fi
+      if ! grep -q "All tests completed successfully" "$log"; then
+        echo "::error::per-mesh scenario did not reach the success marker (incomplete/crashed): $mgd"; return 1
+      fi
+    }
     for MGD in \
       $MGDDIR/single_galaxy_per_mesh_torus_yx_mesh_graph_descriptor.textproto \
       $MGDDIR/single_galaxy_split_2x4_per_mesh_mesh_graph_descriptor.textproto \
       $MGDDIR/single_galaxy_per_mesh_config_combo_mesh_graph_descriptor.textproto \
       $MGDDIR/single_galaxy_bigmesh_multirank_combo_mesh_graph_descriptor.textproto; do
       echo "=== per-mesh scenario: $MGD ==="
-      TT_METAL_OPERATION_TIMEOUT_SECONDS=0 tt-run --mesh-graph-descriptor $MGD --hosts "$(hostname)" --mpi-args "--allow-run-as-root" ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config $YAML
+      LOG="$LOGDIR/$(basename $MGD).log"
+      TT_METAL_OPERATION_TIMEOUT_SECONDS=0 tt-run --mesh-graph-descriptor $MGD --hosts "$(hostname)" --mpi-args "--allow-run-as-root" ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config $YAML 2>&1 | tee "$LOG"
+      assert_fabric_ok "$LOG" "$MGD"
     done
   skus:
     bh_galaxy:
@@ -140,8 +160,21 @@
     set -e
     YAML=tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_multi_mesh_sanity_common.yaml
     MGD=tests/tt_metal/tt_fabric/custom_mesh_descriptors/wh_galaxy_per_mesh_config_combo_mesh_graph_descriptor.textproto
+    LOG=$(mktemp)
+    # tt-run does NOT propagate the test binary's exit code (an mpirun SIGABRT from a
+    # TT_THROW returns 0 to the shell), so assert test_tt_fabric's own success marker
+    # instead of relying on `set -e`.
     echo "=== WH per-mesh config-combo scenario: $MGD ==="
-    TT_METAL_OPERATION_TIMEOUT_SECONDS=0 tt-run --mesh-graph-descriptor $MGD --hosts "$(hostname)" --mpi-args "--allow-run-as-root" ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config $YAML
+    TT_METAL_OPERATION_TIMEOUT_SECONDS=0 tt-run --mesh-graph-descriptor $MGD --hosts "$(hostname)" --mpi-args "--allow-run-as-root" ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config $YAML 2>&1 | tee "$LOG"
+    if grep -qiE "Boundary exceeded|exited on signal|caught signal|signal 6|Aborted|terminate called|what\(\):|\bFATAL\b" "$LOG"; then
+      echo "::error::WH per-mesh scenario crashed/aborted: $MGD"; exit 1
+    fi
+    if grep -qE "Tests: [0-9]+ executed, [1-9][0-9]* failed|Result: FAILED" "$LOG"; then
+      echo "::error::WH per-mesh scenario reported test failures: $MGD"; exit 1
+    fi
+    if ! grep -q "All tests completed successfully" "$LOG"; then
+      echo "::error::WH per-mesh scenario did not reach the success marker (incomplete/crashed): $MGD"; exit 1
+    fi
   skus:
     wh_galaxy:
       timeout: 20
