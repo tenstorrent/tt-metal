@@ -946,24 +946,22 @@ class BatchedDraft:
         return out
 
     # -- prompt context ---------------------------------------------------------------------------------------------
-    def add_prompt_context(self, features, user, chunk=2048):
-        """The prompt's context K / V (prefill-style, paged_fill_cache of block-aligned chunks)."""
-        n = features.shape[0]
+    def add_prompt_context(self, features, user, n, chunk=2048):
+        """The prompt's context K / V (prefill-style, paged_fill_cache of block-aligned chunks). features: the target
+        features of the first n prompt positions, [1, 1, >= n rows, ctx_in] BF16 on the device (TargetCapture.on_device:
+        rows past n, and the chunk's padding up to a block, are past the prompt: the rounds rewrite those positions
+        before they are read)."""
         mesh = self.mesh_device
         pt_host = self.user_tables[user][None]
         qw, kvw = self.nq * self.hd, self.nkv * self.hd
+        avail = features.shape[2]
         for s0 in range(0, n, chunk):
             rows = min(chunk, -(-(n - s0) // self.block_size) * self.block_size)
-            x = torch.zeros(1, 1, rows, self.ctx_in)
-            x[0, 0, : min(rows, n - s0)] = features[s0 : s0 + rows].float()
-            tx = ttnn.from_torch(
-                x,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=mesh,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
-            )
+            tx = ttnn.slice(features, [0, 0, s0, 0], [1, 1, min(s0 + rows, avail), self.ctx_in])
+            if s0 + rows > avail:
+                txp = ttnn.pad(tx, [(0, 0), (0, 0), (0, s0 + rows - avail), (0, 0)], value=0.0)
+                tx.deallocate(True)
+                tx = txp
             ctx = self._linear(tx, self.fc_full)
             tx.deallocate(True)
             ctx = ttnn.rms_norm(ctx, epsilon=self.eps, weight=self.hidden_norm, compute_kernel_config=self.ck)
@@ -1365,6 +1363,7 @@ class BatchedDFlashRunner:
         self.block = B = self.draft.block
         self.rows = users * B
         self.capture = TargetCapture(model, self.draft.target_layer_ids)
+        self.capture.on_device = True  # (the prompt features stay on the device: no host round trip per user)
         kv = kv_cache[0] if isinstance(kv_cache[0][0], list) else kv_cache
         self.verify = BatchedVerify(model, self.page_table, kv, users, B, self.draft.target_layer_ids)
         self.verify.trans_rows = self.draft.rope.get_both_trans_mats()["prefill"]  # (the target's RoPE)
@@ -1429,7 +1428,9 @@ class BatchedDFlashRunner:
                 warmup_prefill=False,
             )
             firsts.append(int(logits.reshape(-1)[: self.V].float().argmax()))
-            self.draft.add_prompt_context(self.capture.prefill_features(len(p)), user=u)
+            features = self.capture.prefill_features_device()
+            self.draft.add_prompt_context(features, user=u, n=len(p))
+            features.deallocate(True)
         return firsts
 
     # -- passes (eager, or captured once and replayed) ----------------------------------------------------------------
