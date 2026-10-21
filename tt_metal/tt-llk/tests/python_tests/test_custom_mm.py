@@ -34,8 +34,8 @@ Unpack MOP slot splits
 ----------------------
 The unpack MOP covers one k-tile per iteration and spreads its ``ct_dim - 1`` reuses over
 one, two or four template slots (llk_unpack_AB_custom_mm.h, _llk_unpack_AB_custom_mm_mop_config_):
-A0 alone for ct = 1, A0 + B for ct 2 to 18, A0..A3 for ct 19 to 34. Odd widths are the ones
-whose slots differ in length, so the sweeps include odd ct (7, 19, 25) as well as 1, even
+A0 alone for ct = 1, A0 + B for ct 2 and 3, A0..A3 for ct 4 to 34. Odd widths are the ones
+whose slots differ in length, so the sweeps include odd ct (3, 7, 25) as well as 1, even
 widths and both ends of each slot configuration.
 
 Blackhole only: these LLKs live only in the Blackhole tree and cannot run on WH/Quasar.
@@ -325,9 +325,10 @@ def _run_custom_mm(
 KT_DIMS = [2]
 
 # Dense layout, 32 DEST rows per output tile: 16 tiles fit a 16-bit SyncHalf DEST (512 rows), 8 a 32-bit one
-# (256 rows). 1 is the one-slot unpack MOP; 2, 7 and 16 two-slot ones, 7 with unequal slots.
-CT_DIMS_16BIT = [1, 2, 7, 16]
-CT_DIMS_32BIT = [1, 2, 7]
+# (256 rows). 1 is the one-slot unpack MOP, 2 and 3 the two-slot ones, 4 the narrowest four-slot one and 7 an uneven
+# four-slot split.
+CT_DIMS_16BIT = [1, 2, 3, 4, 7, 16]
+CT_DIMS_32BIT = [1, 3, 4, 7]
 
 
 @blackhole_only
@@ -382,9 +383,9 @@ def test_custom_mm_odd_k(formats, M, kt, ct):
 
 
 # Compact layout: 16 DEST rows per output tile, so a 16-bit SyncHalf DEST (512 rows) holds 32 tiles and a
-# 32-bit one (256 rows) 16. 18 is the widest two-slot unpack MOP; from 19 the MOP uses four slots, 19 and 32
-# being the narrowest and widest DEST-legal ones and 25 an uneven split of the reuses.
-COMPACT_CT_DIMS_16BIT = [1, 2, 7, 18, 19, 25, 32]
+# 32-bit one (256 rows) 16. 3 is the widest two-slot unpack MOP and 4 the narrowest four-slot one; 25 is an uneven
+# four-slot split and 32 the widest DEST-legal width.
+COMPACT_CT_DIMS_16BIT = [1, 3, 4, 7, 25, 32]
 COMPACT_CT_DIMS_32BIT = [1, 16]
 
 
@@ -467,11 +468,11 @@ COMPACT_WIDE_BFP_CASES = [
     pytest.param(
         8,
         3,
-        18,
+        3,
         InputOutputFormat(
             DataFormat.Float16_b, DataFormat.Float16_b, DataFormat.Bfp4_b
         ),
-        id="k3-ct18-bfp4-post1",
+        id="k3-ct3-bfp4-post1",
     ),
     pytest.param(
         8,
@@ -488,7 +489,7 @@ COMPACT_WIDE_BFP_CASES = [
 @blackhole_only
 @pytest.mark.parametrize("M,kt,ct,formats", COMPACT_WIDE_BFP_CASES)
 def test_custom_mm_compact_wide_bfp(formats, M, kt, ct):
-    """The post1 unpack tuning (Bfp4_b weights) at the widest two- and four-slot MOPs, where its slots run longest."""
+    """The post1 unpack tuning (Bfp4_b weights) at the widest two-slot MOP and the widest four-slot one."""
     _run_compact_against_default(M, kt, ct, formats, DestAccumulation.No)
 
 

@@ -120,15 +120,17 @@ inline void _llk_unpack_AB_custom_mm_mop_config_(const std::uint32_t ct_dim, con
     // Sequence per mop iteration: [full, reuse x (ct_dim - 2), final reuse], or [full] for ct_dim == 1
     // (block_increment == inner_increment then, so no final reuse is needed).
     //
-    // The ct_dim - 1 reuses split over as many template slots as they need, each slot a replay range:
+    // The ct_dim - 1 reuses split over the template slots, each slot a replay range:
     //   the first slot starts at the buffer beginning (offset by post1) and holds the full unpack plus some reuses,
     //   the last slot counts backwards from the buffer end so it always ends in the final reuse,
     //   any slots between replay reuse blocks from the start of the reuse range, since all reuses but the last
     //   are the same instructions.
-    //   ct_dim == 1:       A0 = full
-    //   ct_dim 2 to 18:    A0 = full + a reuses, B = d reuses              (a <= 8, d <= 9)
-    //   ct_dim 19 to 34:   A0 = full + a reuses, A1 = b, A2 = c, A3 = d    (a, b, c <= 8, d <= 9)
-    // The reuses split evenly, with any remainder going to the last slot first.
+    // Every slot the template issues must replay something, so the configuration follows the reuse count:
+    //   ct_dim == 1:       A0 = full                                       (no reuse for a B slot)
+    //   ct_dim 2 to 3:     A0 = full + a reuses, B = d reuses              (too few reuses for A1..A3)
+    //   ct_dim 4 to 34:    A0 = full + a reuses, A1 = b, A2 = c, A3 = d    (a, b, c <= 8, d <= 9)
+    // The reuses split evenly; the remainder goes to A3, A2 and A1 before A0, which already holds the full unpack,
+    // so A1..A3 get a reuse each from ct_dim 4 on.
     const std::uint32_t reuses          = ct_dim - 1;
     const auto full_and                 = [post1](const std::uint32_t n) { return lltt::replay_insn(post1 ? 1 : 0, (post1 ? 1 : 2) + (1 + n) * 3); };
     const auto final_reuses             = [](const std::uint32_t n) { return lltt::replay_insn(32 - n * 3, n * 3); };
@@ -140,7 +142,7 @@ inline void _llk_unpack_AB_custom_mm_mop_config_(const std::uint32_t ct_dim, con
     {
         a0 = full_and(0);
     }
-    else if (reuses <= 17)
+    else if (reuses < 3)
     {
         use_b = true;
         a0    = full_and(reuses >> 1);
@@ -151,9 +153,9 @@ inline void _llk_unpack_AB_custom_mm_mop_config_(const std::uint32_t ct_dim, con
         use_halo                 = true;
         const std::uint32_t base = reuses >> 2;
         const std::uint32_t rem  = reuses & 3;
-        a0                       = full_and(base + (rem > 1 ? 1 : 0));
+        a0                       = full_and(base);
         a1                       = lltt::replay_insn(reuse_start, (base + (rem > 2 ? 1 : 0)) * 3);
-        a2                       = lltt::replay_insn(reuse_start, base * 3);
+        a2                       = lltt::replay_insn(reuse_start, (base + (rem > 1 ? 1 : 0)) * 3);
         a3                       = final_reuses(base + (rem > 0 ? 1 : 0));
     }
 
