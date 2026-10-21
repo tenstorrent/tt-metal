@@ -932,6 +932,18 @@ inline void bitonic_topk_step_N(bool dir)
     }
 }
 
+// INCRWC adds at most 15, so a constant step needs about half the words of a run of 8s and nothing is looped.
+template <std::uint32_t INC, bool CR>
+[[gnu::always_inline]] inline void bitonic_topk_inc_dest_const()
+{
+    if constexpr (INC > 0)
+    {
+        constexpr std::uint32_t step = INC > 15 ? 15 : INC;
+        TTI_INCRWC(CR ? 0b100 : 0, step, 0, 0);
+        bitonic_topk_inc_dest_const<INC - step, CR>();
+    }
+}
+
 inline void bitonic_topk_inc_x8_dest(std::uint32_t inc, bool cr)
 {
     std::uint32_t inc_grp8 = inc >> 3;
@@ -2353,16 +2365,16 @@ inline void bitonic_topk_rebuild_step(const std::uint32_t sorted_seq_length)
                 dst_offset = 2 * DIST;
                 if (blk < (num_blocks - 1))
                 {
-                    bitonic_topk_inc_x8_dest(4 * DIST, true);
+                    bitonic_topk_inc_dest_const<4 * DIST, true>();
                 }
             }
             else if (dst_offset == 16)
             {
-                bitonic_topk_inc_x8_dest(32, true);
+                bitonic_topk_inc_dest_const<32, true>();
             }
             else
             {
-                bitonic_topk_inc_x8_dest(8, false);
+                bitonic_topk_inc_dest_const<8, false>();
             }
         }
         dir = ((blk + 1) * 16 * inner_d == sorted_seq_length) ? !dir : dir;
@@ -2454,7 +2466,7 @@ inline void _bitonic_topk_rebuild_impl_(const bool idir, const int m_iter, const
                                 bitonic_topk_load8<is_fp32_dest_acc_en, FUSED, RANK_STAMPED>(0, ld_offset);
                                 bitonic_topk_ph1_st2_to_1<STABLE_SORT, TIE_ORDER>();
                                 bitonic_topk_store8<is_fp32_dest_acc_en, FUSED, RANK_STAMPED>(0, ld_offset);
-                                bitonic_topk_inc_x8_dest(64, false);
+                                bitonic_topk_inc_dest_const<64, false>();
                             }
                             else
                             {
@@ -2468,7 +2480,7 @@ inline void _bitonic_topk_rebuild_impl_(const bool idir, const int m_iter, const
                                             bitonic_topk_load8<is_fp32_dest_acc_en, FUSED, RANK_STAMPED>(0, ld_offset);
                                             bitonic_topk_ph1_st2_to_1<STABLE_SORT, TIE_ORDER>();
                                             bitonic_topk_store8<is_fp32_dest_acc_en, FUSED, RANK_STAMPED>(0, ld_offset);
-                                            bitonic_topk_inc_x8_dest(64, false);
+                                            bitonic_topk_inc_dest_const<64, false>();
                                         });
                                     init_rebuild = false;
                                 }
