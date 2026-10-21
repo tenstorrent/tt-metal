@@ -10,7 +10,8 @@ slot) only, the decode step exchanges heads -> users before the traced sparse at
   (eager, then the captured trace replayed), every (row, user, step) output vs its HF dump > 0.995 and the two
   rows byte-equal (replicated prefill, identical tokens).
 * ``test_partitioned_1m_step``: one user per column at position 1 048 576 (cache 1 M + 64 per chip-slot, unseeded),
-  the traced layer step timed on the block.
+  the traced layer step timed on the block; logs the cache footprint and the allocator's DRAM view.
+Both run under either prefill layout (``GLM53_PREFILL_PARTITION=scratch`` (default) | ``heads2users``).
 
     TT_VISIBLE_DEVICES=27,26,31,30,23,22,19,18 TT_MESH_GRAPH_DESC_PATH=<p150_x8 descriptor> MESH_DEVICE=P150x8 \
         pytest models/demos/glm53_flash/tests/test_mesh_sparse_partitioned.py -s --timeout 3600
@@ -68,7 +69,9 @@ def test_partitioned_two_rows_four_users(mesh_device):
         max_seq_len=-(-max(S) // (32 * ROWS)) * (32 * ROWS) + 64,  # prompts pad to 32 * rows on the mesh
         partition_users=True,
     )
-    assert dec.cache.partition and dec.cache.users_per_chip == 1 and dec.cache.slots == 2
+    # the scratch layout holds the user's slot + the prefill scratch slot; heads2users the user's slot only
+    assert dec.cache.partition and dec.cache.users_per_chip == 1
+    assert dec.cache.slots == (1 if dec.cache.prefill_mode == "heads2users" else 2), dec.cache.prefill_mode
     for u, pre in enumerate(pres):
         y = dec.prefill_forward(host_streams_to_device(pre["x_in"], mesh_device, mesh=mesh), user=u, seq_len=S[u])
         out = mesh.to_host(y, rows=2 if mesh.rows > 1 else None).float()[0, 0, : S[u]]
