@@ -70,7 +70,8 @@ def _create_pair(sender_mesh, receiver_mesh, *, with_extras: bool):
         sender_worker_cores=_WORKER_CORES,
         receiver_worker_cores=_WORKER_CORES,
         metadata_size_bytes=_METADATA_SIZE_BYTES if with_extras else 0,
-        share_fabric_links=False,
+        # Lease mode, like the prefill runner: two pairs on one chip pair can't both own its link.
+        share_fabric_links=True,
         stage_gate=ttnn.D2DStageGateConfig(_NUM_GATES, 0, 4) if with_extras else None,
     )
 
