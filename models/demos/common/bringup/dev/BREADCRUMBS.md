@@ -1415,3 +1415,6 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
   it; the task gains the fix as a dep. Before, the fix depended on its gate task, so the unpassed task re-ran its known-
   failing gate first (DeepSeek-V4.1 X.3: 45 min) and could exhaust its attempts before the fix started.
   Selftest: test_overseer.py::test_a_fix_gated_on_an_unpassed_task_runs_before_it.
+- F127 (overseer, 2026-10-21): a fix job carries its own write paths (`overseer fix --paths`, default the model's tt/ dir)
+  on top of its gate tasks' paths. DeepSeek-V4.1 FIX.5 was gated on X.3, a scripted task with no paths, so its agent could
+  not edit tt/ and stopped without a change. Selftest: test_overseer.py.
