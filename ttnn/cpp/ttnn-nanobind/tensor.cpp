@@ -483,10 +483,6 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
         .def_prop_ro("tile", &tt::tt_metal::TensorSpec::tile, "Tile of a tensor")
         .def_prop_ro("memory_config", &tt::tt_metal::TensorSpec::memory_config, "Memory config of a tensor")
         .def(
-            "compute_data_cores",
-            &tt::tt_metal::TensorSpec::compute_data_cores,
-            "Return the cores containing tensor data without allocating storage.")
-        .def(
             "compute_page_size_bytes",
             &tt::tt_metal::TensorSpec::compute_page_size_bytes,
             "Return the unaligned transfer page size.")
@@ -500,12 +496,6 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
             nb::arg("page_alignment"),
             nb::arg("num_banks"),
             "Return the padded storage footprint per bank using the existing tensor layout calculation.")
-        .def(
-            "experimental_is_per_core_allocated",
-            [](const tt::tt_metal::TensorSpec& spec) {
-                // Read the existing placement policy without constructing a tensor.
-                return experimental::per_core_allocation::is_per_core_allocation(spec.memory_config());
-            })
         .def(nb::self == nb::self)
         .def(nb::self != nb::self);
 
@@ -564,6 +554,13 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
             },
             nb::arg("enable"),
             "Enable or disable experimental per-core L1 allocation on this MemoryConfig.")
+        .def(
+            "experimental_is_per_core_allocation",
+            [](const MemoryConfig& self) {
+                // Read the placement policy without constructing a tensor.
+                return experimental::per_core_allocation::is_per_core_allocation(self);
+            },
+            "Return whether this MemoryConfig requests per-core SRAM allocation.")
         .def(
             "experimental_set_range_lockstep_allocation",
             [](MemoryConfig& self, bool enable) {
