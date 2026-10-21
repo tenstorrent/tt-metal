@@ -584,6 +584,43 @@ L1 clash, "statically allocated circular buffers in program N clash with L1 buff
 token buffers overflow the L1 plan of the EP decode graph. Open item for the EP32 track; the hybrid layout is unaffected.
 The EP weight conversion is cold on the first run (43 s per layer, 33 min), cached afterwards.
 
+### EP32 L1 clash: root cause and fix (2026-10-21, ep32l1)
+
+Not the 32-way exchange. `TtEPExperts.combine_rows` pre-zeroes the `all_to_all_combine(local_reduce)` output by
+cloning a persistent zero constant `[K=8, T, 1, H]` bf16 ROW_MAJOR (`ttnn.zeros` is a host write, not allowed in a
+trace), and that constant was built **in L1, once per MoE layer**. Interleaved L1 pages are 8 KB and round-robin
+from bank 0, so every layer pinned 24 KB (32 users/row: 256 pages) / 8 KB (4 users/row: 32 pages) of the first
+cores' L1 for the life of the model, and the region left for the next program's static circular buffers shrank by
+that much per layer:
+
+| users/row | per-layer L1 constant | clash in the log | arithmetic |
+|---|---|---|---|
+| 32 | 2 MB = 24 KB on cores 0-15 | `paged_update_cache` (dataflow buffers end at 1361056), L1 buffers down to 1351232 | 1572864 - 1351232 = 216.4 KB = 9 MoE layers x 24 KB: the 10th MoE layer's DSA update fails |
+| 4 | 256 KB = 8 KB on cores 0-31 | gate|up dispatch op (CBs end at 1215872), L1 buffers down to 1207808 | 1572864 - 1207808 = 356.5 KB = 42 MoE layers x 8 KB + the op's own transients: the last layers fail |
+
+The footprint depends on T (users per row) only, not on the EP group size; the (2,4) block had only ever run ONE EP
+layer (`test_mesh_moe.py`), which is why "EP=8 passed". The hybrid layout has no such constant. Fix: the zero
+constant lives in DRAM and is shared by every EP layer of the model (`GLMMesh.const`, one tensor per shape); the
+op graph is unchanged (the per-call `ttnn.clone` into L1 now reads DRAM: 2 MB per layer at 32 users/row).
+`test_mesh_moe.py` now asserts that the L1 high-water mark (the address of a fresh one-tile L1 probe, top-down
+allocator) is identical before and after the MoE forward, so a lazily built per-layer L1 constant fails the
+single-layer block test. Validation on the rows-6-7 (2,4) block (EP = 8, FABRIC_1D, bfp8 experts, today's defaults:
+fast mHC; logs `_logs/agents/ep32l1/block_*.log`):
+
+| stage | code | config | result |
+|---|---|---|---|
+| pre-fix repro | arg/glm53_mesh @8b79b5d9f9a | layers 0-13, 32 users/row | the SAME clash as the 8x4: `paged_update_cache` program 244, dataflow region ends at 1361056, L1 buffers down to 1277440, core range [0-0 - 11-1] |
+| post-fix | arg/glm53_ep32l1 @835a23dc959 | layers 0-13, 32 users/row (64 users) | pass: chain PCC 0.992108 vs HF after layer 13 (greedy 100 %), decode 30.17 ms/step = 33.1 tok/s per user, 2121 tok/s aggregate; TTFT 128 tokens warm 272 ms, prefill PCC 0.997012, first token = host head |
+| post-fix | same | layers 0-21, 4 users/row (8 users) | pass: chain PCC 0.942429 (hybrid 22L reference 0.942288), decode 31.61 ms/step = 31.6 tok/s per user, 253 tok/s aggregate; TTFT warm 313 ms, prefill PCC 0.963906 |
+| post-fix | same | layers 0-21, 32 users/row (64 users) | pass (pre-fix: a clash after ~10 MoE layers): chain PCC 0.942429, decode 47.67 ms/step = 21.0 tok/s per user, 1342 tok/s aggregate; TTFT warm 429 ms, prefill PCC 0.963906 |
+| `test_mesh_moe.py` ep | same | T = 2 / 32 per row | 2 passed: PCC 0.999940 / 0.999923; L1 high-water mark [before, iter 0, iter 1] = [1538048, 1537600, 1537600] (the 448 B = the model's TT_CCL semaphores, allocated once on the first collective), no L1-resident module state |
+| `test_mesh_moe.py` hybrid (FABRIC_2D) | same | T = 2 / 32 per row | 2 passed: PCC 0.999939 / 0.999922; marks [1538048, 1534976, 1534976] / [1538048, 1535488, 1535488] (its collectives' semaphores, once), no L1-resident module state: the invariant holds for both layouts |
+
+For scale, the hybrid 22-layer block runs of 2026-10-20 (composite mHC then) took 39.27 ms/step at 4 users/row and
+92.0 ms at 32 (dense experts); the EP block decode at 32 users/row is 2.17 ms per layer against 2.16 at 14 layers,
+so the per-layer cost is flat in the layer count. The EP conversion of a block layer is cold at 80-130 s (36 full
+experts per chip), ~10-20 s from the `mesh2x4_ep` cache afterwards.
+
 ### Fresh-model TTFT and the keep-stacked decode (v19 / v20, 09:40-09:55)
 
 A fresh-model `-k ttft` with the fast configuration gives chain PCC 0.901 on the 128-token prompt (fresh wrap 0.944;
