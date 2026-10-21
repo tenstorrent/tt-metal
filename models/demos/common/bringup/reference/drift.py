@@ -8,8 +8,9 @@ may then miss the full-precision golden by calib x that drift (testing/e2e_limit
     python -m models.demos.common.bringup.reference.drift --rung s55296
 
 Writes ``drift.json`` into the full-precision golden: {metric: {"drift": value, "res": resolution floor}}; the floor
-of a float metric is the same metric for the target rounded once to bf16 (no device output can do better), of an
-index overlap one miss per hundred (defaults e2e.overlap_res). Records drift_<metric> for the gate.
+of a float metric is the same metric for the target rounded once to the dtype the official golden stores that tensor
+in (bf16, or fp32 for golden.keep_fp32: no output in that dtype can do better; F133), of an overlap one miss among
+the selected entries (rows for top-5). Records drift_<metric> for the gate.
 """
 
 from __future__ import annotations
@@ -19,15 +20,25 @@ import json
 
 import torch
 
-from models.demos.common.bringup.core import defaults, metrics
+from models.demos.common.bringup.core import metrics
 from models.demos.common.bringup.reference.golden import Golden, load_spec, official_dir, rung_dir
 
-OVERLAP_RES = float(defaults.get("e2e.overlap_res"))
+
+def stored(t: torch.Tensor) -> str:
+    """The dtype the official golden stores a tensor in (golden.store_dtype): fp32 or bf16."""
+    return "fp32" if t.dtype == torch.float32 else "bf16"
 
 
 def _pcc_entry(official: torch.Tensor, target: torch.Tensor) -> dict:
+    from models.demos.common.bringup.testing.noise_floor import round_to
+
     t = target.float()
-    return {"drift": metrics.pcc(official.float(), t), "res": metrics.pcc(t.bfloat16().float(), t)}
+    return {"drift": metrics.pcc(official.float(), t), "res": metrics.pcc(round_to(t, stored(official)), t)}
+
+
+def _overlap_res(ids: torch.Tensor) -> float:
+    """One miss among the selected entries (>= 0; negatives are padding), as the per-step index limits."""
+    return 1.0 - 1.0 / max(int((ids >= 0).sum().item()), 1)
 
 
 def drift(target: Golden, official: Golden, layers: list[int], full_stack: bool) -> dict:
@@ -42,14 +53,14 @@ def drift(target: Golden, official: Golden, layers: list[int], full_stack: bool)
             if t.is_floating_point():
                 out[f"pcc_state_{name}_L{i:02d}"] = _pcc_entry(got[name], t)
             else:
-                out[f"overlap_state_{name}_L{i:02d}"] = {"drift": index_overlap(got[name], t), "res": 1 - OVERLAP_RES}
+                out[f"overlap_state_{name}_L{i:02d}"] = {"drift": index_overlap(got[name], t), "res": _overlap_res(t)}
     if full_stack:
         gt, go = target.model(last), official.model(last)
         out["pcc_final_hidden"] = _pcc_entry(go["final_norm"], gt["final_norm"])
         top1 = gt["top32_ids"][:, 0].long()
         out["top5_overlap"] = {
             "drift": float((go["top32_ids"][:, :5].long() == top1[:, None]).any(-1).float().mean()),
-            "res": 1 - OVERLAP_RES,
+            "res": 1.0 - 1.0 / max(top1.numel(), 1),
         }
     return out
 
