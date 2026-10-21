@@ -56,14 +56,14 @@ class GateResult:
         return "\n".join([f"{self.verdict} {self.tid}"] + self.lines)
 
 
-STATE_METRICS_MAX = 64  # above this, state.json keeps only the gated metrics; results/<task>.json keeps them all
+# F129: state.json keeps only the gated metrics (and their limits); results/<task>.json keeps them all. The repo's
+# 500 KB large-file hook refused DeepSeek-V4.1's state.json (502 KB) at FIX.6's commit.
 
 
 def state_metrics(spec: dict[str, str], got: dict) -> dict:
-    """The metrics state.json records for a gate run: all of them, or the gated ones when a test records many
-    (swap tests record hundreds of informational metrics; the repo's 500 KB large-file hook caps state.json)."""
-    vals = {k: v["value"] for k, v in got.items()}
-    if len(vals) <= STATE_METRICS_MAX:
+    """The metrics state.json records for a gate run: the gated ones and their limits (F129)."""
+    vals = {k: (v["value"] if isinstance(v, dict) else v) for k, v in got.items()}
+    if not spec:  # a task without gated metrics keeps what it recorded
         return vals
     globs = list(spec or {})
     globs += [f"{g}_limit" for g in globs]  # F76: a '>= limit' gate's limit, for the dashboard
