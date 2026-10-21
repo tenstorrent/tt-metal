@@ -818,3 +818,15 @@ The column-3 first-token difference of the depth-0.5 run did not reproduce on th
 Next: the same depth-0.5 prompt with the users prefilled in the order 3,0,1,2 plus a repeat of user 0 at the end
 (`sched_1m_order_d50.sh`): same flip on user 3 = a column-3 property; flip on the user prefilled last = order / memory
 state; a repeat of user 0 with a different first token or logits = non-deterministic prefill at 1 M.
+
+**1 M x 4 users, depth-0.5 prompt, prefill order 3,0,1,2 + repeat of user 0 (21:09,
+`long_8x4_1M_4users_order3012_repeat0_d50.log`):** all four first tokens 785 'The' (user 3 prefilled first, user 2
+last: the original run's user-3 "'" did not follow the column or the last prefill); REPEAT user 0 after four 1 M
+prefills: same first token, last-chunk logits max abs diff 0 (the 1 M prefill is bit-deterministic in that memory
+state). Decode (64 tokens, degenerate depth-0.5 continuation): in EVERY row users 0, 1, 2 are bit-identical and user
+3 diverges (at token 5 / 48 / 5 / 27 / 21 / 5 / 21 / 21 per row). So slot 3 (column 3) is treated differently in the
+DECODE step by a last-ulp amount that only shows at near-ties; the d56 prompt (160 identical tokens for all 32) and
+256 K (8 tokens) never hit one. Candidates: the batched index scorer / two-stage segmented top-k (score ties at the
+top-512 boundary broken differently for the last user's segments), or the heads->users all-to-all's last chunk.
+Next: a single-chip tie-break test of the scorer + top-k with 4 identical users (tests/custom_ops), and a 1 M-step
+dump of user 0 vs user 3's selected pool ids.
