@@ -20,8 +20,12 @@ def test_slice_row_major_batch_preserves_live_l1(device, start, height):
 
     def run():
         result = ttnn.slice(
-            source, [0, 0, 0, start], [1, 1, height, start + 32], [1, 1, 1, 1],
-            memory_config=ttnn.DRAM_MEMORY_CONFIG, sub_core_grids=cores,
+            source,
+            [0, 0, 0, start],
+            [1, 1, height, start + 32],
+            [1, 1, 1, 1],
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            sub_core_grids=cores,
         )
         actual = ttnn.to_torch(result)
         ttnn.deallocate(result)
@@ -31,15 +35,21 @@ def test_slice_row_major_batch_preserves_live_l1(device, start, height):
     try:
         for words in (8192, 256, 16):
             memory = ttnn.MemoryConfig(
-                ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1,
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.BufferType.L1,
                 ttnn.ShardSpec(cores, [1, words], ttnn.ShardOrientation.ROW_MAJOR),
             )
             while True:
                 try:
-                    live.append(ttnn.from_torch(
-                        torch.full((2, words), sentinel, dtype=torch.int32), dtype=ttnn.uint32,
-                        layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=memory,
-                    ))
+                    live.append(
+                        ttnn.from_torch(
+                            torch.full((2, words), sentinel, dtype=torch.int32),
+                            dtype=ttnn.uint32,
+                            layout=ttnn.ROW_MAJOR_LAYOUT,
+                            device=device,
+                            memory_config=memory,
+                        )
+                    )
                 except RuntimeError:
                     break
         live.sort(key=lambda tensor: tensor.buffer_address())
@@ -54,7 +64,7 @@ def test_slice_row_major_batch_preserves_live_l1(device, start, height):
         assert live, "No live sentinels fit beside the slice program"
         changed = sum(int((ttnn.to_torch(tensor) != sentinel).sum()) for tensor in live)
         assert changed == 0, f"Slice overwrote {changed} words in unrelated live L1 tensors"
-        assert torch.equal(actual, values[..., start:start + 32])
+        assert torch.equal(actual, values[..., start : start + 32])
     finally:
         for tensor in live:
             ttnn.deallocate(tensor)
