@@ -181,6 +181,12 @@ inline void _llk_unpack_AB_reduce_init_(const ckernel::TensorShape tensor_shape)
 template <PoolType pool_type, ReduceDim reduce_dim>
 inline void _llk_unpack_AB_reduce_(const std::uint32_t address_a, const std::uint32_t address_b)
 {
+    // SCALAR reads the context count first so the semaphore load overlaps the counter reset
+    std::uint32_t contexts_in_use = 0;
+    if constexpr (reduce_dim == ReduceDim::REDUCE_SCALAR)
+    {
+        contexts_in_use = semaphore_read(semaphore::UNPACK_SYNC);
+    }
     // Reset address counters for both unpackers
     TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
 
@@ -189,7 +195,17 @@ inline void _llk_unpack_AB_reduce_(const std::uint32_t address_a, const std::uin
     volatile std::uint32_t tt_reg_ptr *cfg = get_cfg_pointer();
 
     // Wait for free context
-    wait_for_next_context(2);
+    if constexpr (reduce_dim == ReduceDim::REDUCE_SCALAR)
+    {
+        while (contexts_in_use >= 2)
+        {
+            contexts_in_use = semaphore_read(semaphore::UNPACK_SYNC);
+        }
+    }
+    else
+    {
+        wait_for_next_context(2);
+    }
 
     constexpr bool is_max        = pool_type == PoolType::MAX;
     constexpr bool swap_operands = (reduce_dim == ReduceDim::REDUCE_ROW) && !is_max;
