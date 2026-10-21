@@ -1,5 +1,8 @@
 # One elwadd packed into two separate outputs with different formats.
-# The first output is plain Float16, the second is Float32 with zero relu.
+# The first output is plain Float16_b, the second is Float32 with zero relu.
+
+# Quasar keeps its own copy with the plain output on Float16 (quasar/multi_pack.yaml).
+supported_archs: [wormhole, blackhole]
 
 dest_acc: true
 
@@ -12,7 +15,7 @@ operands:
     format: "Float16_b"
   - name: "out_plain"
     dims: [64, 64]
-    format: "Float16"
+    format: "Float16_b"
   - name: "out_relu"
     dims: [64, 64]
     format: "Float32"

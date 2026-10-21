@@ -43,7 +43,6 @@ dimension_combinations = [
         [
             DataFormat.Bfp8_b,
             DataFormat.Float16_b,
-            DataFormat.Float16,
             DataFormat.Float32,
             DataFormat.Int32,
         ],

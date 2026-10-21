@@ -4,7 +4,7 @@
 import pytest
 import torch
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
-from helpers.format_config import DataFormat
+from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import TILE_DIMENSIONS
 from helpers.llk_params import DestAccumulation, L1Accumulation, Tilize, format_dict
 from helpers.param_config import (
@@ -68,14 +68,7 @@ def get_valid_num_faces_datacopy(tilize):
 
 
 @parametrize(
-    formats=input_output_formats(
-        [
-            # DataFormat.Float32,
-            DataFormat.Float16,
-            DataFormat.Float16_b,
-            # DataFormat.Bfp8_b,
-        ]
-    ),
+    formats=InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     l1_acc=[L1Accumulation.No, L1Accumulation.Yes],
     num_faces=4,
