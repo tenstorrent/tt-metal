@@ -129,3 +129,46 @@ def test_the_g_task_writes_each_readers_drift_and_a_changed_drift_fails_the_pinn
     assert not freeze.verify(s.repo, task) and "frozen" not in led.task("C.x")
     D.drift_path(d, "last").write_text("{}")
     assert any("drift-last.json" in e for e in freeze.verify(s.repo, task))
+
+
+def test_a_reference_that_ignores_its_shipped_precision_stops_the_golden_task(fx, monkeypatch):
+    """F136 (V12): official == native (a hook that ignores numerics or dtype) gives every limit one rounding of the
+    target, a zero margin: the G task stops with 'no margin source'."""
+    from models.demos.common.bringup.core.spec import Spec
+    from models.demos.common.bringup.reference import generate_golden, prompt
+
+    native = fixture_model.reference
+    monkeypatch.setattr(
+        fixture_model,
+        "reference",
+        lambda spec, layers=None, dtype=torch.float32, numerics="native": native(spec, layers),
+    )
+    p = fx()
+    monkeypatch.setenv("BRINGUP_SPEC", p)
+    prompt.build(Spec.load(p))
+    with pytest.raises(SystemExit, match="no margin source"):
+        generate_golden.main(["--spec", p, "--rung", "s256", "--set"])
+    from models.demos.common.bringup.selftest.conftest import got
+
+    assert got()["drift_layers_above_res"] == 0 and got()["official_identical"] == 0  # stored bf16: not bit-equal
+
+
+def test_hf_official_is_the_owners_margin_source_for_layers_and_top5(gspec, monkeypatch):  # noqa: F811
+    """F136: reference.margin_source hf_official: the official modelling code at its shipped dtype gives the layer
+    outputs' and top-5's drift; a state has none, and its gate stops instead of falling back."""
+    s = gspec()
+    twin = fixture_model.hf_model
+
+    def rounded(spec, n):  # the 'official code' at bf16: every layer's output rounded
+        m = twin(spec, n)
+        for layer in m.model.layers:
+            layer.register_forward_hook(lambda mod, i, o: (o[0].bfloat16().float(),))
+        return m
+
+    monkeypatch.setattr(fixture_model, "hf_model", rounded)
+    s.data.setdefault("reference", {})["margin_source"] = "hf_official"
+    d = D.compute(s, "s512")
+    assert {e["source"] for e in d.values()} == {"hf_official"} and D.margin(d)["drift_layers_above_res"] >= 1
+    assert "layer_L00" in d and "top5" in d and not any(k.startswith("state_") for k in d)
+    with pytest.raises(KeyError, match="hf_official"):
+        E.err_limit(d, "state_key_L00")
