@@ -340,8 +340,7 @@ def main():
 
         autograd_ctx.reset_graph()
 
-        if use_ddp:
-            ttml.sync_gradients(model.parameters())
+        ttml.sync_gradients(model.parameters())
 
         optimizer.step()
         step_ms = (time.perf_counter() - t0) * 1000

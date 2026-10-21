@@ -13,6 +13,7 @@ import ttml
 from ttml.modules import AbstractModuleBase, Parameter, RunMode, LinearLayer, ColumnParallelLinear, RowParallelLinear
 
 from .gqattn import GroupedQueryAttention
+from ttml.parallel import TPStrategy, mark_sequence_parallel
 
 
 def compute_swiglu_intermediate_size(hidden_size: int, multiple_of: int = 256) -> int:
@@ -68,14 +69,20 @@ class LlamaMLP(AbstractModuleBase):
         embedding_size: int,
         intermediate_size: Optional[int] = None,
         dropout: float = 0.0,
-        use_tp: bool = False,
+        tp_strategy: TPStrategy = TPStrategy.NONE,
         down_proj_init: Optional[Callable] = None,
     ) -> None:
         super().__init__()
 
+        use_tp = tp_strategy.tensor_parallel
+        sequence_parallel = tp_strategy.sequence_parallel
+
         self.embedding_size = embedding_size
         self.dropout_prob = dropout
-        self.use_tp = use_tp
+        # Classic TP replicates activations across tp ranks, which must then drop the same units; one
+        # boolean cannot also decorrelate DP groups: https://github.com/tenstorrent/tt-metal/issues/55947.
+        # Under SP every rank holds different tokens.
+        self._per_device_dropout_seed = not use_tp or sequence_parallel
 
         if intermediate_size is None:
             intermediate_size = compute_swiglu_intermediate_size(embedding_size)
@@ -104,6 +111,7 @@ class LlamaMLP(AbstractModuleBase):
                 gate_up_size,
                 has_bias=False,
                 gather_output=False,
+                sequence_parallel=sequence_parallel,
                 axis_name="tp",
             )
             self.w2 = RowParallelLinear(
@@ -112,6 +120,7 @@ class LlamaMLP(AbstractModuleBase):
                 has_bias=False,
                 weight_init=down_proj_init,
                 input_is_parallel=True,
+                sequence_parallel=sequence_parallel,
                 axis_name="tp",
             )
         else:
@@ -141,9 +150,7 @@ class LlamaMLP(AbstractModuleBase):
         x = self.w2(h)
 
         if self.get_run_mode() == RunMode.TRAIN and self.dropout_prob > 0.0:
-            # One boolean cannot decorrelate DP groups, leaving a DP+TP mesh
-            # on a single mask: https://github.com/tenstorrent/tt-metal/issues/55947
-            x = ttml.ops.dropout.dropout(x, self.dropout_prob, use_per_device_seed=not self.use_tp)
+            x = ttml.ops.dropout.dropout(x, self.dropout_prob, use_per_device_seed=self._per_device_dropout_seed)
 
         return x
 
@@ -162,7 +169,7 @@ class LlamaBlock(AbstractModuleBase):
         intermediate_size: Optional[int] = None,
         attention_bias: bool = False,
         rms_norm_eps: float = 1e-5,
-        use_tp: bool = False,
+        tp_strategy: TPStrategy = TPStrategy.NONE,
         out_proj_init: Optional[Callable] = None,
         down_proj_init: Optional[Callable] = None,
         use_composite_sdpa: bool = False,
@@ -173,11 +180,14 @@ class LlamaBlock(AbstractModuleBase):
             hidden_size,
             intermediate_size,
             mlp_dropout,
-            use_tp=use_tp,
+            tp_strategy=tp_strategy,
             down_proj_init=down_proj_init,
         )
         self.attention_norm = RMSNormLayer(hidden_size, rms_norm_eps)
         self.mlp_norm = RMSNormLayer(hidden_size, rms_norm_eps)
+        if tp_strategy.sequence_parallel:
+            mark_sequence_parallel(self.attention_norm)
+            mark_sequence_parallel(self.mlp_norm)
         self.attention = GroupedQueryAttention(
             embedding_size=hidden_size,
             num_heads=num_attention_heads,
@@ -185,7 +195,7 @@ class LlamaBlock(AbstractModuleBase):
             dropout=attention_dropout,
             rope_params=rope_params,
             bias_linears=attention_bias,
-            use_tp=use_tp,
+            tp_strategy=tp_strategy,
             out_proj_init=out_proj_init,
             use_composite_sdpa=use_composite_sdpa,
         )

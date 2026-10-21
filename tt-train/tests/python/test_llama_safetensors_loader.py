@@ -36,6 +36,7 @@ from ttml.models.llama.safetensors_loader import (
     _sharded_dim,
     _tp_axis,
 )
+from ttml.parallel import TPStrategy
 
 HEAD_DIM = 8  # even: RoPE splits each head into two halves
 HIDDEN = 16
@@ -501,8 +502,8 @@ class TestSources:
 # ── End-to-end: a synthetic HF checkpoint through the real loader ──
 
 
-def e2e_config(use_tp: bool, placement: EmbeddingPlacement, tying=WeightTyingType.Disabled, **overrides):
-    return coverage_config(use_tp=use_tp, embedding_placement=placement, weight_tying=tying, **overrides)
+def e2e_config(tp_strategy: TPStrategy, placement: EmbeddingPlacement, tying=WeightTyingType.Disabled, **overrides):
+    return coverage_config(tp_strategy=tp_strategy, embedding_placement=placement, weight_tying=tying, **overrides)
 
 
 def hf_tensors(vocab: int = VOCAB, dtype=np.float32, tied: bool = False) -> dict[str, np.ndarray]:
@@ -650,7 +651,7 @@ class TestLoadIntoModel:
     @pytest.mark.parametrize("dtype", [np.float32, ml_dtypes.bfloat16], ids=["f32", "bf16"])
     def test_reports_a_clean_load(self, tmp_path, dtype):
         write_hf_checkpoint(tmp_path, hf_tensors(dtype=dtype))
-        model = Llama(e2e_config(False, EmbeddingPlacement.Replicated))
+        model = Llama(e2e_config(TPStrategy.NONE, EmbeddingPlacement.Replicated))
         result = load_from_safetensors(model, tmp_path)
 
         assert sorted(result.loaded) == sorted(model.parameters())
@@ -660,7 +661,7 @@ class TestLoadIntoModel:
         """A fused parameter needs all of its sources; a partial group must not load silently."""
         save_checkpoint(tmp_path, {k: v for k, v in hf_tensors().items() if "v_proj" not in k})
         with expect_error(RuntimeError, "the checkpoint has no"):
-            load_from_safetensors(Llama(e2e_config(False, EmbeddingPlacement.Replicated)), tmp_path)
+            load_from_safetensors(Llama(e2e_config(TPStrategy.NONE, EmbeddingPlacement.Replicated)), tmp_path)
 
     def test_a_failed_check_leaves_the_model_untouched(self, tmp_path, expect_error):
         """A bad tensor in the last layer must fail the load before any earlier layer is written."""
@@ -669,7 +670,7 @@ class TestLoadIntoModel:
             (MODEL_HIDDEN, INTERMEDIATE // 2), np.float32
         )
         write_hf_checkpoint(tmp_path, hf)
-        model = Llama(e2e_config(False, EmbeddingPlacement.Replicated))
+        model = Llama(e2e_config(TPStrategy.NONE, EmbeddingPlacement.Replicated))
         before = {name: param.to_numpy(ttnn.DataType.FLOAT32) for name, param in model.parameters().items()}
 
         with expect_error(RuntimeError, "does not match the config-implied shape"):
@@ -680,7 +681,7 @@ class TestLoadIntoModel:
     @pytest.mark.parametrize("tying", TYINGS, ids=lambda v: v.name)
     def test_every_parameter_holds_its_sources(self, tmp_path, tying):
         hf = write_hf_checkpoint(tmp_path, hf_tensors(tied=tying == WeightTyingType.Enabled))
-        model = Llama(e2e_config(False, EmbeddingPlacement.Replicated, tying))
+        model = Llama(e2e_config(TPStrategy.NONE, EmbeddingPlacement.Replicated, tying))
         load_from_safetensors(model, tmp_path)
         assert_every_parameter_loaded(model, hf)
 
@@ -689,7 +690,7 @@ class TestLoadIntoModel:
         """The model decides the precision and the checkpoint supplies the values: an fp32 parameter
         holds an fp32 checkpoint exactly, a bf16 one its rounding."""
         hf = write_hf_checkpoint(tmp_path, hf_tensors())
-        model = Llama(e2e_config(False, EmbeddingPlacement.Replicated))
+        model = Llama(e2e_config(TPStrategy.NONE, EmbeddingPlacement.Replicated))
         store_as(model, dtype)
         load_from_safetensors(model, tmp_path)
         for name, param in model.parameters().items():
@@ -700,14 +701,14 @@ class TestLoadIntoModel:
         hf = hf_tensors()
         hf["lm_head.weight"] = hf["model.embed_tokens.weight"].copy()
         write_hf_checkpoint(tmp_path, hf)
-        model = Llama(e2e_config(False, EmbeddingPlacement.Replicated, WeightTyingType.Enabled))
+        model = Llama(e2e_config(TPStrategy.NONE, EmbeddingPlacement.Replicated, WeightTyingType.Enabled))
         assert load_from_safetensors(model, tmp_path).unused == ("lm_head.weight",)
         assert_every_parameter_loaded(model, hf)
 
     def test_pads_the_vocab_the_model_rounds_up_to_a_tile(self, tmp_path):
         vocab = VOCAB - 8
         hf = write_hf_checkpoint(tmp_path, hf_tensors(vocab=vocab))
-        model = Llama(e2e_config(False, EmbeddingPlacement.Replicated, vocab_size=vocab))
+        model = Llama(e2e_config(TPStrategy.NONE, EmbeddingPlacement.Replicated, vocab_size=vocab))
         assert model.padded_vocab_size > vocab, "premise: the model rounds the vocab up"
         load_from_safetensors(model, tmp_path)
         assert_every_parameter_loaded(model, hf)
@@ -715,7 +716,7 @@ class TestLoadIntoModel:
     def test_rejects_a_checkpoint_whose_vocab_disagrees_with_the_config(self, tmp_path, expect_error):
         write_hf_checkpoint(tmp_path, hf_tensors(vocab=VOCAB - 8))
         with expect_error(RuntimeError, "does not match the config-implied shape"):
-            load_from_safetensors(Llama(e2e_config(False, EmbeddingPlacement.Replicated)), tmp_path)
+            load_from_safetensors(Llama(e2e_config(TPStrategy.NONE, EmbeddingPlacement.Replicated)), tmp_path)
 
 
 # ── Against HuggingFace ──
@@ -769,7 +770,7 @@ def ttml_logits(model: Llama, ids: np.ndarray) -> np.ndarray:
         ttml.autograd.Tensor.from_numpy(causal, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16),
     )
     composer = None
-    if model.config.use_tp:
+    if model.config.tp_strategy.tensor_parallel:
         device = ttml.autograd.AutoContext.get_instance().get_device()
         composer = ttml.core.distributed.concat_mesh_to_tensor_composer(device, COL_DIM)
     values = logits.to_numpy(ttnn.DataType.FLOAT32, composer=composer)
@@ -816,7 +817,14 @@ class TestCoverageAgainstRealTensorParallelModels:
         ids=lambda v: v.name,
     )
     def test_rules_cover_the_model(self, placement, tying):
-        config = coverage_config(use_tp=True, embedding_placement=placement, weight_tying=tying)
+        config = coverage_config(tp_strategy=TPStrategy.TENSOR, embedding_placement=placement, weight_tying=tying)
+        names = set(Llama(config).parameters())
+        _check_coverage(names, list(_rules(config, names)), frozenset())
+
+    def test_rules_cover_the_sequence_parallel_model(self):
+        config = coverage_config(
+            tp_strategy=TPStrategy.TENSOR_SEQUENCE, embedding_placement=EmbeddingPlacement.VocabParallel
+        )
         names = set(Llama(config).parameters())
         _check_coverage(names, list(_rules(config, names)), frozenset())
 
@@ -836,15 +844,22 @@ class TestLoadIntoTensorParallelModel:
     )
     def test_tensor_parallel_layout(self, tmp_path, placement, tying):
         hf = write_hf_checkpoint(tmp_path, hf_tensors(tied=tying == WeightTyingType.Enabled))
-        model = Llama(e2e_config(True, placement, tying))
+        model = Llama(e2e_config(TPStrategy.TENSOR, placement, tying))
         load_from_safetensors(model, tmp_path)
         assert_every_parameter_loaded(model, hf, ttml.mesh().axis_size("tp"), placement)
+
+    def test_sequence_parallel_layout_matches_tensor_parallel(self, tmp_path):
+        """SP changes the collectives, not the weight sharding, so the loader needs no SP path."""
+        hf = write_hf_checkpoint(tmp_path, hf_tensors())
+        model = Llama(e2e_config(TPStrategy.TENSOR_SEQUENCE, EmbeddingPlacement.VocabParallel))
+        load_from_safetensors(model, tmp_path)
+        assert_every_parameter_loaded(model, hf, ttml.mesh().axis_size("tp"), EmbeddingPlacement.VocabParallel)
 
     def test_pads_the_vocab_the_model_rounds_up_to_a_tile(self, tmp_path):
         """The one end-to-end vocab that is not tile-aligned: 120 rounds up to 128, and the pad rows shard too."""
         vocab = VOCAB - 8
         hf = write_hf_checkpoint(tmp_path, hf_tensors(vocab=vocab))
-        model = Llama(e2e_config(True, EmbeddingPlacement.VocabParallel, vocab_size=vocab))
+        model = Llama(e2e_config(TPStrategy.TENSOR, EmbeddingPlacement.VocabParallel, vocab_size=vocab))
         assert model.padded_vocab_size > vocab, "premise: the model rounds the vocab up"
         load_from_safetensors(model, tmp_path)
         assert_every_parameter_loaded(model, hf, ttml.mesh().axis_size("tp"), EmbeddingPlacement.VocabParallel)
@@ -852,7 +867,7 @@ class TestLoadIntoTensorParallelModel:
     def test_keeps_an_fp32_models_values(self, tmp_path):
         """The fused blocks are interleaved and sharded in the parameter's dtype, not rounded to bf16 on the way."""
         hf = write_hf_checkpoint(tmp_path, hf_tensors())
-        model = Llama(e2e_config(True, EmbeddingPlacement.VocabParallel))
+        model = Llama(e2e_config(TPStrategy.TENSOR, EmbeddingPlacement.VocabParallel))
         store_as(model, ttnn.DataType.FLOAT32)
         load_from_safetensors(model, tmp_path)
         for name, param in model.parameters().items():
@@ -861,7 +876,9 @@ class TestLoadIntoTensorParallelModel:
 
     def test_logits_match_hugging_face(self, tmp_path):
         """Tied and vocab-parallel, as LoRA loads Llama 3.2 1B, with the fused blocks interleaved per device."""
-        assert_logits_match_hf(tmp_path, tied=True, use_tp=True, embedding_placement=EmbeddingPlacement.VocabParallel)
+        assert_logits_match_hf(
+            tmp_path, tied=True, tp_strategy=TPStrategy.TENSOR, embedding_placement=EmbeddingPlacement.VocabParallel
+        )
 
 
 if __name__ == "__main__":
