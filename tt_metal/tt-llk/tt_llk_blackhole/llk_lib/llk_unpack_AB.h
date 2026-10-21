@@ -311,6 +311,8 @@ inline void _llk_unpack_AB_(
     [[maybe_unused]] const std::uint32_t bcast_row_idx = 0,
     [[maybe_unused]] const std::uint32_t srcb_format   = 0)
 {
+    // Read the context count first so the semaphore load overlaps the counter reset and address setup
+    std::uint32_t contexts_in_use = semaphore_read(semaphore::UNPACK_SYNC);
     TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111); // reset counters
 
     if constexpr (BType == BroadcastType::ROW)
@@ -345,7 +347,10 @@ inline void _llk_unpack_AB_(
     volatile std::uint32_t tt_reg_ptr *cfg = get_cfg_pointer(); // get pointer to registers for current state ID
 
     // Wait for free context
-    wait_for_next_context(2);
+    while (contexts_in_use >= 2)
+    {
+        contexts_in_use = semaphore_read(semaphore::UNPACK_SYNC);
+    }
 
     // Validate and configure addresses
     _llk_unpack_configure_addresses_(address_a, address_b, cfg);
