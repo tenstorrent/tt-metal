@@ -11,6 +11,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/constants.hpp>
 #include "all_gather_minimal_matmul_async_program_factory.hpp"
+#include "ttnn/operations/common/hash_without_rows.hpp"
 
 #include <tt-metalium/hal.hpp>
 
@@ -19,9 +20,98 @@ using namespace tt::tt_metal;
 
 namespace ttnn::experimental::prim {
 
+namespace {
+
+// Keeps this op's row-free hash from colliding with another op's: a custom hash drops the
+// framework's canonical-key guard.
+constexpr uint64_t kProgramHashSalt = 0x41474d4d52544d31ull;  // "AGMM" runtime-M v1
+
+// Rows (M) of the activation, upper dims folded in; the kernels take this count as a runtime word.
+uint32_t activation_rows(const Tensor& act_tensor) {
+    return act_tensor.physical_volume() / act_tensor.padded_shape()[-1];
+}
+
+// The checks that depend on M: cheap enough to run on every program-cache hit, and the only ones that
+// must, since the hash no longer carries the row count of the input, the gather buffer or the ternaries.
+void validate_rows(
+    const AllGatherMinimalMatmulAsyncParams& attributes, const AllGatherMinimalMatmulAsyncInputs& tensor_args) {
+    const auto& act_tensor = tensor_args.input_tensor;
+    const uint32_t M = activation_rows(act_tensor);
+    const uint32_t K = act_tensor.padded_shape()[-1] * attributes.ring_size;
+    TT_FATAL(
+        M > 0 && M % TILE_HEIGHT == 0,
+        "all_gather_minimal_matmul_async activation rows ({}) must be a positive multiple of {}",
+        M,
+        TILE_HEIGHT);
+    if (tensor_args.persistent_output_buffer.has_value()) {
+        const auto& ag = tensor_args.persistent_output_buffer.value();
+        const uint32_t ag_rows = ag.physical_volume() / ag.padded_shape()[-1];
+        TT_FATAL(
+            ag.padded_shape()[-1] == K && ag_rows >= M,
+            "all_gather_minimal_matmul_async persistent_output_buffer must be [>= M={}, K={}], got [{}, {}]",
+            M,
+            K,
+            ag_rows,
+            ag.padded_shape()[-1]);
+    }
+    if (attributes.fused_ternary_scalar.has_value() && tensor_args.fused_ternary_input_a.has_value() &&
+        tensor_args.fused_ternary_input_b.has_value()) {
+        const auto& a_logical = tensor_args.fused_ternary_input_a->logical_shape();
+        const auto& b_logical = tensor_args.fused_ternary_input_b->logical_shape();
+        TT_FATAL(a_logical[-2] == M, "fused_ternary_input_a rows must equal M={}, got {}", M, a_logical[-2]);
+        TT_FATAL(
+            b_logical[-2] == 1 || b_logical[-2] == M,
+            "fused_ternary_input_b rows must be 1 or M={}, got {}",
+            M,
+            b_logical[-2]);
+    }
+}
+
+}  // namespace
+
 AllGatherMinimalMatmulAsyncOp::program_factory_t AllGatherMinimalMatmulAsyncOp::select_program_factory(
     const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
     return AllGatherMinimalMatmulAsyncProgramFactory{};
+}
+
+void AllGatherMinimalMatmulAsyncOp::validate_on_program_cache_hit(
+    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+    validate_rows(attributes, tensor_args);
+}
+
+// Everything that changes the kernels, the CBs or the per-core layout, minus the row count of the
+// row-varying tensors. Sharded tensors keep their full spec: their accessor args carry the shape.
+ttsl::hash::hash_t AllGatherMinimalMatmulAsyncOp::compute_program_hash(
+    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+    const auto& act_tensor = tensor_args.input_tensor;
+    const auto& weight_tensor = tensor_args.weight_tensor;
+    const uint32_t M = activation_rows(act_tensor);
+    const uint32_t K = act_tensor.padded_shape()[-1] * attributes.ring_size;
+    const uint32_t N = weight_tensor.padded_shape()[-1];
+    const auto rows_free = [](const std::optional<Tensor>& tensor) -> ttsl::hash::hash_t {
+        if (tensor.has_value() && tensor->is_sharded()) {
+            return ttsl::hash::hash_objects_with_default_seed(kProgramHashSalt, tensor->tensor_spec());
+        }
+        return ttnn::operations::common::hash_spec_without_rows(tensor, kProgramHashSalt);
+    };
+    const bool fp32_dest_acc_en =
+        std::get<2>(get_compute_kernel_config_args(act_tensor.device()->arch(), attributes.compute_kernel_config));
+    // Without a config the block sizes come from the shape, so fold the ones the factory would pick.
+    const auto block_sizes = attributes.config.has_value()
+                                 ? std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t>{}
+                                 : default_block_sizes(M, K, N, fp32_dest_acc_en);
+    return ttsl::hash::hash_objects_with_default_seed(
+        kProgramHashSalt,
+        attributes,
+        resolve_transpose_core_grid(attributes, M, N),
+        block_sizes,
+        rows_free(act_tensor),
+        weight_tensor.tensor_spec(),
+        tensor_args.bias_tensor,
+        rows_free(tensor_args.persistent_output_buffer),
+        rows_free(tensor_args.fused_ternary_input_a),
+        rows_free(tensor_args.fused_ternary_input_b),
+        tensor_args.persistent_weight_buffer);
 }
 
 void AllGatherMinimalMatmulAsyncOp::validate_on_program_cache_miss(
@@ -98,6 +188,7 @@ void AllGatherMinimalMatmulAsyncOp::validate_on_program_cache_miss(
 
     TT_FATAL(K == K_w, "all_gather_minimal_matmul_async inner dimensions must match, got K={} and K_w={}", K, K_w);
     TT_FATAL(M > 0 && K > 0 && N > 0, "all_gather_minimal_matmul_async dimensions must be positive");
+    validate_rows(attributes, tensor_args);
 
     if (attributes.fuse_swiglu) {
         TT_FATAL(
@@ -462,7 +553,8 @@ std::vector<ttnn::Tensor> all_gather_minimal_matmul_async(
     const std::optional<ttnn::Tensor>& persistent_weight_buffer,
     std::optional<ttnn::ccl::Topology> fsdp_topology,
     bool fuse_swiglu,
-    const std::vector<uint32_t>& chunk_sizes) {
+    const std::vector<uint32_t>& chunk_sizes,
+    std::optional<bool> transpose_core_grid) {
     using OperationType = ttnn::experimental::prim::AllGatherMinimalMatmulAsyncOp;
 
     auto kernel_config_val = init_device_compute_kernel_config(
@@ -510,7 +602,8 @@ std::vector<ttnn::Tensor> all_gather_minimal_matmul_async(
         using_persistent_weight_buffer,
         fsdp_topology_,
         fuse_swiglu,
-        chunk_sizes};
+        chunk_sizes,
+        transpose_core_grid};
     auto tensor_args = OperationType::tensor_args_t{
         input_tensor,
         weight_tensor,
