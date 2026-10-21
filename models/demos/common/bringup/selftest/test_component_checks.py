@@ -20,11 +20,14 @@ from models.demos.common.bringup.testing.templates import render_component_test
 STEPS = ["attn_norm", "attention", "attn_residual", "ffn_norm", "mlp", "mlp_residual"]
 
 
-def test_checks_none_is_unchanged(gspec, noise):
+def test_no_fixed_number_judges_a_component(gspec, noise):
+    """F138: the golden-only path with a fixed threshold is gone; a literal THRESHOLD is recorded, never gated."""
     s = gspec()
     noise(1e-3)
-    assert run_component_test(s, "mlp", 0)
-    assert not [k for k in got() if k.startswith(("auto_", "sweep_"))], "checks=None records no built-in checks"
+    with pytest.raises(ValueError, match="F138"):
+        run_component_test(s, "mlp", 0, checks=None)
+    assert run_component_test(s, "mlp", 0, thr=1.01)  # PCC 1.01 is unreachable: it would fail if it gated
+    assert got()["mlp_threshold_literal"] == 1.01
     noise(0.5)
     assert not run_component_test(s, "mlp", 0)
 
@@ -171,13 +174,16 @@ def test_selection_checks():
     w = torch.zeros(400, 32)
     for r in range(400):
         w[r, torch.randperm(32, generator=torch.Generator().manual_seed(r))[:4]] = torch.tensor([0.4, 0.3, 0.2, 0.1])
-    assert not CC.selection_fails(w, w, lim)[1]
+    # the noise floor flips one row of 400 and moves the matched rows by 1e-3 (F138: limits only from a floor)
+    L = CC.selection_limits(lim, 2.0, 1.0, {"overlap": 1 - 1 / 400, "rel": 1e-3, "rowsum": 1e-3}, {}, 1600)
+    assert not CC.selection_fails(w, w, lim, L=L)[1]
     flip = w.clone()
     flip[3] = torch.roll(w[3], 1)  # one near-tie row: counted in the overlap, not failed by itself
-    assert not CC.selection_fails(flip, w, lim)[1]
+    assert not CC.selection_fails(flip, w, lim, L=L)[1]
     for kind in MU.FLOAT_KINDS:
-        assert CC.selection_fails(MU.mutate(w, kind), w, lim)[1], kind
-    assert CC.selection_fails(-w, w, lim)[1]
+        assert CC.selection_fails(MU.mutate(w, kind), w, lim, L=L)[1], kind
+    assert CC.selection_fails(-w, w, lim, L=L)[1]
+    assert not CC.selection_fails(MU.mutate(w, "scale1.02"), w, lim)[1]  # no floor: statistics only, no fixed limit
 
 
 class _Spec:
@@ -299,15 +305,16 @@ def test_every_column_is_checked_against_its_own_limit():
     want[:, 0] = 1e-5 * torch.rand(256)
     lim = CC.limits(_Spec())
     res = torch.full((8,), 2.0**-9)  # one bf16 rounding of each column
-    col_lim = CC.rel_limit(lim, torch.zeros(8), False, res)  # an exact model: every column at its bf16 resolution
-    L = CC.float_limits(lim, 1.0, 0.004, None, col_lim=col_lim)
+    col_lim = CC.rel_limit(lim, torch.zeros(8), res)  # an exact model: every column at its bf16 resolution
+    floor = {"rel": 2.0**-9, "row": 2.0**-9, "ratio_min": 1 - 2.0**-9, "ratio_max": 1 + 2.0**-9, "bias": 0.0}
+    L = CC.float_limits(lim, 1.0, 0.004, floor, col_lim=col_lim, res=floor, k=2.0)  # a floor of one bf16 rounding
     flipped = want.clone()
     flipped[:, 0] *= -1
     e, bad = CC.float_fails(flipped, want, L)
     assert e["rel"] < 1e-4 and len(bad) == 1 and bad[0].startswith("column 0 rel")
     assert not CC.float_fails(want * (1 + 1e-4), want, L)[1]
     # a column the precision model finds noisy gets a looser limit on its own terms
-    noisy = CC.rel_limit(lim, torch.tensor([0.0, 0.01]), False, res[:2])
+    noisy = CC.rel_limit(lim, torch.tensor([0.0, 0.01]), res[:2])
     assert noisy[0] == pytest.approx(2 * 2.0**-9) and noisy[1] == pytest.approx(0.02), "per column: 2 x e, no cap"
 
 

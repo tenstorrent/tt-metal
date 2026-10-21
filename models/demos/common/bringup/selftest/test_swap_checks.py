@@ -123,14 +123,15 @@ def test_steps_catch_a_cpu_bridge(gspec, noise, monkeypatch):
 def test_component_limits_are_read_from_the_frozen_component_test(gspec, monkeypatch):
     s = gspec()
     assert component_test_limits(s, "blk", "mlp") == (None, None)
-    render_component_test(s, "blk", "mlp", mode="pcc", thr=0.999)
-    assert component_test_limits(s, "blk", "mlp") == ("pcc", 0.999)
+    path = render_component_test(s, "blk", "mlp", mode="pcc")
+    assert component_test_limits(s, "blk", "mlp") == ("pcc", None)
     monkeypatch.setenv(IMPL_ENV, "reference")
-    # a component threshold the reference cannot meet on the golden fails the swap check (vs golden)
-    render_component_test(s, "blk", "attn_norm", thr=1.01)
-    assert run_swap_test(s, "blk", ["attn_norm"])
-    assert not run_swap_test(s, "blk", ["attn_norm"], checks="steps")
-    assert got()["swap_attn_norm_vs_cpu"] > 0.999999
+    # F138: an older frozen test's literal THRESHOLD (here one no output can meet) never gates the swap check
+    p = render_component_test(s, "blk", "attn_norm")
+    p.write_text(p.read_text().replace("THRESHOLD = None", "THRESHOLD = 1.01"))
+    assert component_test_limits(s, "blk", "attn_norm") == (None, 1.01)
+    assert run_swap_test(s, "blk", ["attn_norm"], checks="steps")
+    assert got()["swap_attn_norm_vs_cpu"] > 0.999999 and path.exists()
     _results(s, "C.blk.mlp", {"pcc_mlp_L00": 0.99995})
     assert abs(component_error(s, "blk", "mlp", 0) - 0.01) < 1e-6 and component_error(s, "blk", "attention", 0) is None
 

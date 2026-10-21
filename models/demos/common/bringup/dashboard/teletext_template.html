@@ -407,17 +407,17 @@ function pPcc(){
   /* the CPU reference and the latest device run only: more lines are unreadable at teletext resolution */
   const ALL = D.trails || [], DEV = ALL.filter(t => t.device), T = ALL.filter(t => !t.device).slice(0, 1).concat(DEV.slice(-1));
   const b = new Buf(), N = (D.layer_types || []).length || Math.max(1, ...T.flatMap(t => t.points.map(p => p[0] + 1)));
-  banner(b, "PCC trail", CYN, BLK, 0, 1, BLU);
-  b.t(3, 0, "1-PCC/layer, log, lower=better", CYN);
-  if (!T.length){ noData(b, 6, "No per-layer PCC recorded yet."); return [b]; }
-  const thr = [...new Set([D.thresholds && D.thresholds.layer, D.thresholds && D.thresholds.final_hidden].filter(v => v != null))];
-  const lv = v => Math.log10(Math.max(1 - v, 1e-16));
-  const all = T.flatMap(t => t.points.map(p => lv(p[1]))).concat(thr.map(lv));
-  let lo = Math.floor(Math.min(...all)), hi = Math.ceil(Math.max(...all)); if (hi - lo < 2) lo = hi - 2; hi = Math.min(0, Math.max(hi, lo + 2));
+  banner(b, "Error trail", CYN, BLK, 0, 1, BLU);
+  b.t(3, 0, "rel err/layer, log, lower=better", CYN);
+  if (!T.length){ noData(b, 6, "No per-layer error recorded yet."); return [b]; }
+  const LIM = (DEV.length ? DEV[DEV.length - 1].limits : null) || [];
+  const lv = v => Math.log10(Math.max(v, 1e-16));
+  const all = T.flatMap(t => t.points.map(p => lv(p[1]))).concat(LIM.map(p => lv(p[1])));
+  let lo = Math.floor(Math.min(...all)), hi = Math.ceil(Math.max(...all)); if (hi - lo < 2) lo = hi - 2; hi = Math.min(1, Math.max(hi, lo + 2));
   const RR = 16, PH = RR * 3, r0 = 4, c0 = 6, ppl = N <= 33 ? 2 : 1, PW = Math.ceil(N * ppl / 2) * 2;
   const yOf = e => Math.max(0, Math.min(PH - 1, Math.round((hi - e) / (hi - lo) * (PH - 1))));
   const px = canvas(PW, PH);
-  thr.forEach(p => { const y = yOf(lv(p)); for (let x = 0; x < PW; x += 2) px[y][x] = RED; });
+  LIM.forEach(([i, v]) => { const y = yOf(lv(v)); for (let q = 0; q < ppl; q++) if (i * ppl + q < PW) px[y][i * ppl + q] = RED; });
   const COLS = [YEL, GRN, MAG, WHT, CYN, RED];
   T.forEach((t, k) => { const col = COLS[k % COLS.length], pts = t.points.slice().sort((a, b2) => a[0] - b2[0]);
     const ys = new Map(pts.map(p => [p[0], yOf(lv(p[1]))]));
@@ -431,11 +431,10 @@ function pPcc(){
   for (let r = r0; r < r0 + RR; r++) b.m(r, c0 - 1, 42, WHT);
   for (let e = hi; e >= lo; e--){ const y = yOf(e), r = r0 + Math.floor(y / 3); if ((hi - e) % 2) continue;
     b.tr(r, c0 - 2, e === 0 ? "1" : `1E${e}`, WHT); }
-  thr.forEach(p => { const r = r0 + Math.floor(yOf(lv(p)) / 3), c = Math.min(c0 + PW / 2 + 1, W - 4); b.t(r, c, String(p).slice(0, 4), RED); });
   const step = ppl === 2 ? 5 : 10;
   for (let i = 0; i < N; i += step){ const c = c0 + Math.floor(i * ppl / 2), s = "L" + i; if (c + s.length <= W) b.t(r0 + RR, c, s, WHT); }
   T.forEach((t, k) => { const r = 21 + k, col = COLS[k % COLS.length];
-    const worst = Math.max(...t.points.map(p => 1 - p[1])), name = t.device ? t.label : "CPU reference vs HF";
+    const worst = Math.max(...t.points.map(p => p[1])), name = t.device ? t.label : "CPU reference vs HF";
     const tag = ` worst ${worst > 0 ? expo(worst) : "0"}`;
     b.m(r, 0, 63, col); b.t(r, 2, trunc(name, W - 3 - tag.length), WHT); b.tr(r, W - 1, tag, col); });
   if (ALL.length > T.length) b.tr(3, W - 1, `+${ALL.length - T.length} older`, YEL);
@@ -609,7 +608,7 @@ const PAGES = [
   {n:101, name:"Gate ladder", short:"Gates", build:pLadder},
   {n:102, name:"Model graph", short:"Graph", build:pGraph},
   {n:103, name:"Sharding", short:"Memory", build:pShard},
-  {n:104, name:"PCC trail", short:"PCC", build:pPcc},
+  {n:104, name:"Error trail", short:"ERR", build:pPcc},
   {n:105, name:"Timing and profile", short:"Timing", build:pTiming},
 ];
 if (D && D.prior) PAGES.push({n:107, name:"Versus prior", short:"Prior", build:pPrior});

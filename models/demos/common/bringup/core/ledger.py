@@ -33,6 +33,7 @@ from __future__ import annotations
 import contextlib
 import fcntl
 import json
+import re
 import time
 from pathlib import Path
 
@@ -48,6 +49,28 @@ def satisfied(status: str | None) -> bool:
 
 class LedgerError(ValueError):
     pass
+
+
+# F138: an accuracy metric of a device check is gated only against the limit its test records, never a number; the
+# reference's own checks (CPU vs CPU: HF parity, chunked == one-shot) keep theirs
+ACCURACY = re.compile(r"^(pcc_|err_|overlap_|top1|top5)")
+CPU_CHECK_STEPS = ("intake", "reference", "goldens")
+
+
+def fixed_accuracy(task: dict, conds: dict | None = None) -> list[str]:
+    """F138: the accuracy conditions of a device check (a device task or a perf pick) that hold a number instead of
+    the limit its test records."""
+    if task.get("step") in CPU_CHECK_STEPS or not (task.get("device") or task.get("step") == "perf"):
+        return []
+    out = []
+    for glob, cond in (conds if conds is not None else (task.get("gate") or {}).get("metrics") or {}).items():
+        parts = str(cond).split()
+        if ACCURACY.match(glob) and len(parts) == 2 and parts[1] != "limit":
+            out.append(
+                f"{glob} {cond}: a fixed accuracy number (F138); gate on '{parts[0]} limit' (the limit the test "
+                "records: calib x the reference's own noise floor or drift)"
+            )
+    return out
 
 
 class Ledger:
@@ -113,6 +136,8 @@ class Ledger:
                 parts = str(cond).split()
                 if len(parts) != 2 or parts[0] not in (">=", "<=", ">", "<", "=="):
                     errs.append(f"{tid}: bad threshold {glob}: {cond!r}")
+                else:
+                    errs += [f"{tid}: {e}" for e in fixed_accuracy(t, {glob: cond})]
         try:
             self.topo_order()
         except LedgerError as e:

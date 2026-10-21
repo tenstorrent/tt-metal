@@ -41,7 +41,7 @@ def pick(**kw):
         "paths": ["src"],
         "brief": {"details": "run the experts at HiFi2"},
         "ab": {"env": {"TOY_FIDELITY": "hifi4"}, "change": {"TOY_FIDELITY": "hifi2"}},
-        "gate": {"cmd": GATE, "metrics": {"device_ms_experts": "< 10", "pcc_chunk_out": ">= 0.97"}},
+        "gate": {"cmd": GATE, "metrics": {"device_ms_experts": "< 10"}},  # F138: accuracy only `limit` (tests below)
         "ab_mode": "full",  # F122: these tests cover the full A/B; the quick one has its own
     }
     t.update(kw)
@@ -360,7 +360,7 @@ def test_the_accept_reuses_the_on_side_when_the_code_is_unchanged(mk, sandbox):
         f"BRINGUP_RUNG=last scripts/run_safe_pytest.sh --no-precompile --run-all {LADDER} && TT_METAL_DEVICE_PROFILER=1 "
         f"scripts/run_safe_pytest.sh --run-all --no-precompile {PROFILE}"
     )
-    o = mk([pick(gate={"cmd": gate, "metrics": {"device_ms_experts": "< 10", "pcc_layer_L*": ">= 0.97"}})], CHANGE)
+    o = mk([pick(gate={"cmd": gate, "metrics": {"device_ms_experts": "< 10"}})], CHANGE)
     assert o.run() == HUMAN, mk.lines
     n = len(mk.calls)
     sandbox.git("commit", "-q", "--allow-empty", "-m", "a ledger commit in between")
@@ -375,7 +375,7 @@ def test_the_accept_reuses_the_on_side_when_the_code_is_unchanged(mk, sandbox):
 
 def test_the_accept_runs_the_gate_when_the_code_changed_since_the_ab(mk, sandbox):
     gate = f"BRINGUP_RUNG=last scripts/run_safe_pytest.sh --no-precompile --run-all {LADDER}"
-    o = mk([pick(gate={"cmd": gate, "metrics": {"pcc_layer_L*": ">= 0.97"}})], CHANGE)
+    o = mk([pick(gate={"cmd": gate, "metrics": {"device_ms_experts": "< 10"}})], CHANGE)
     assert o.run() == HUMAN, mk.lines
     (sandbox.repo / "src/impl.txt").write_text("hifi2 tuned\n")  # the code moved after the report
     assert o.ab_on_reuse(o.led.task("P.1"), o.led.state()["P.1"]["ab"]) is None
@@ -484,7 +484,7 @@ def test_the_quick_ab_runs_one_process_a_side(mk):
     """F122: the default A/B: one run a side (the last chunk after the golden prefix, every layer, clean wall)."""
     gate = {
         "cmd": GATE,
-        "metrics": {"device_ms_experts": "< 10", "pcc_layer_L*": ">= 0.97", "pcc_chunk_out": ">= 0.97"},
+        "metrics": {"device_ms_experts": "< 10"},
     }
     o = mk([pick(ab_mode="quick", gate=gate)], CHANGE)
     assert o.run() == HUMAN, mk.lines
@@ -503,8 +503,8 @@ def test_the_quick_ab_runs_one_process_a_side(mk):
 def test_a_quick_pick_is_accepted_now_and_its_full_gate_runs_once_before_the_final_task(mk, sandbox):
     """F122: accept on the quick A/B (no run), the pick's full gate pending; before the final task the pending gates
     run once, picks with the same gate command sharing one run."""
-    full = record_cmd(device_ms_experts=8.0, pcc_layer_L00=0.99, pcc_chunk_out=0.99)
-    gate = {"cmd": full, "metrics": {"device_ms_experts": "< 10", "pcc_layer_L*": ">= 0.97"}}
+    full = record_cmd(device_ms_experts=8.0, err_layer_L00=0.01, err_layer_L00_limit=0.02, pcc_chunk_out=0.99)
+    gate = {"cmd": full, "metrics": {"device_ms_experts": "< 10", "err_layer_L*": "<= limit"}}
     final = {"id": "X.3", "title": "final", "step": "perf", "deps": ["P.1", "P.2"], "gate": {"cmd": record_cmd(n=1)}}
     p2 = pick(id="P.2", ab_mode="quick", gate=gate, deps=["P.1"])
     o = mk(
