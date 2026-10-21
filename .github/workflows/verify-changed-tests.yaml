@@ -376,7 +376,7 @@ jobs:
              || needs.build-default.outputs.wheel-artifact-name
              || '' }}
           enable-watcher: ${{ contains(env.WATCHER_YAMLS, format('{0}.yaml', matrix.leg.source_yaml)) && 'true' || 'false' }}
-          auto-triage: false
+          auto-triage: true
 
       - name: ⬇️ Download packages artifact
         if: ${{ matrix.leg.gate_packages }}
