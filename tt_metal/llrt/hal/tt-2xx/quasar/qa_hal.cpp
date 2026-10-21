@@ -302,8 +302,7 @@ public:
 
         // Common includes for all core types
         // A Quasar IP variant's LLK headers go first so they shadow the base ones under tt_llk_quasar.
-        // defaults to Grendel if no variant is set
-        auto variant = hal_.get_quasar_arch_variant().value_or(IpVariant::GRENDEL);
+        auto variant = hal_.quasar_arch_variant_;
         const std::string lower_variant = [&]() {
             std::string result = std::string(enchantum::to_string(variant));
             std::transform(result.begin(), result.end(), result.begin(), ::tolower);
@@ -482,7 +481,8 @@ public:
     }
 };
 
-void Hal::initialize_qa(std::uint32_t profiler_dram_bank_size_per_risc_bytes, bool enable_dram_backed_cq) {
+void Hal::initialize_qa(
+    std::uint32_t profiler_dram_bank_size_per_risc_bytes, bool enable_dram_backed_cq, IpVariant quasar_arch_variant) {
     using namespace quasar;
     static_assert(static_cast<int>(HalProgrammableCoreType::TENSIX) == static_cast<int>(ProgrammableCoreType::TENSIX));
     static_assert(
@@ -492,6 +492,7 @@ void Hal::initialize_qa(std::uint32_t profiler_dram_bank_size_per_risc_bytes, bo
     static_assert(
         static_cast<int>(HalProgrammableCoreType::DISPATCH) == static_cast<int>(ProgrammableCoreType::DISPATCH));
 
+    this->quasar_arch_variant_ = quasar_arch_variant;
     this->core_info_.push_back(quasar::create_tensix_mem_map());
     this->core_info_.push_back(quasar::create_active_eth_mem_map());
     this->core_info_.push_back(quasar::create_idle_eth_mem_map());

@@ -85,7 +85,7 @@ std::string fds_tests_skip_reason(const distributed::MeshDevice& mesh_device) {
 }
 
 bool are_group_status_registers_sticky() {
-    const auto ip_variant = MetalContext::instance().hal().get_quasar_arch_variant().value_or(IpVariant::GRENDEL);
+    const auto ip_variant = MetalContext::instance().get_cluster().get_quasar_ip_variant();
     return ip_variant != IpVariant::GRENDEL;
 }
 

@@ -40,14 +40,16 @@ Hal::Hal(
     bool is_simulator,
     bool enable_blackhole_dram_programmable_cores,
     bool enable_aerisc_ptp_trace,
-    std::optional<IpVariant> quasar_arch_variant) :
-    arch_(arch), quasar_arch_variant_(quasar_arch_variant) {
+    IpVariant quasar_arch_variant) :
+    arch_(arch) {
     switch (this->arch_) {
         case tt::ARCH::WORMHOLE_B0:
             initialize_wh(is_base_routing_fw_enabled, profiler_dram_bank_size_per_risc_bytes, enable_dram_backed_cq);
             break;
 
-        case tt::ARCH::QUASAR: initialize_qa(profiler_dram_bank_size_per_risc_bytes, enable_dram_backed_cq); break;
+        case tt::ARCH::QUASAR:
+            initialize_qa(profiler_dram_bank_size_per_risc_bytes, enable_dram_backed_cq, quasar_arch_variant);
+            break;
 
         case tt::ARCH::BLACKHOLE:
             initialize_bh(

@@ -204,9 +204,8 @@ void MetalEnvImpl::initialize_base_objects() {
         should_enable_blackhole_dram_programmable_cores(*this->cluster_, *this->rtoptions_),
         this->rtoptions_->get_eth_ptp_trace(),
         // just take the descriptor of the first device
-        this->cluster_->get_soc_desc(*this->cluster_->all_chip_ids().begin()).get_arch_descriptor().get_ip_variant());
-    log_info(
-        tt::LogMetal, "Quasar arch variant: {}", this->hal_->get_quasar_arch_variant().value_or(IpVariant::GRENDEL));
+        this->cluster_->get_quasar_ip_variant());
+    log_info(tt::LogMetal, "Quasar IP variant: {}", this->cluster_->get_quasar_ip_variant());
 
     this->rtoptions_->ParseAllFeatureEnv(*hal_);
     this->cluster_->set_hal(hal_.get());
