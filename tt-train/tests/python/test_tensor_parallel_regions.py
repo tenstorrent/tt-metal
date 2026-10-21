@@ -17,6 +17,10 @@ import pytest
 
 import ttnn
 import ttml
+from dataclasses import replace
+
+from ttml.models.deepseek import DeepSeekConfig
+from ttml.models.deepseek.mla import MultiHeadLatentAttention
 from ttml.models.deepseek.transformer import DeepSeekMLP
 from ttml.modules import ColumnParallelLinear, LinearLayer, RowParallelLinear
 from ttml.parallel import SEQUENCE_DIM, sum_partials, whole
@@ -146,6 +150,39 @@ class TestDeepSeekMLP:
         ttml.ops.unary.mean(out).backward(False)
         ttml.ops.unary.mean(expected).backward(False)
         assert_close(full_grad(x), full_grad(x_ref), "input gradient")
+
+
+class TestDeepSeekMLA:
+    def test_tensor_parallel_matches_replicated(self):
+        """The rope key feeds every local head; its gradient is each rank's heads' share, summed at the region's
+        edge. It used to reach the replicated KV projection unsummed, mixed with the whole KV gradient."""
+        config = DeepSeekConfig(
+            dim=DIM,
+            n_heads=4,
+            q_lora_rank=32,
+            kv_lora_rank=32,
+            qk_nope_head_dim=32,
+            qk_rope_head_dim=32,
+            v_head_dim=32,
+            max_seq_len=SEQ,
+        )
+        rope = ttml.ops.rope.build_rope_params(SEQ, config.qk_rope_head_dim, config.rope_theta)
+        tp_attn = MultiHeadLatentAttention(replace(config, use_tp=True), rope)
+        ref = MultiHeadLatentAttention(config, rope)
+        copy_weights(tp_attn, ref)
+        data = random((1, 1, SEQ, DIM), 7)
+        x, x_ref = tensor(data), tensor(data)
+
+        out, expected = tp_attn(x), ref(x_ref)
+        assert_close(full(out), full(expected), "forward")
+        ttml.ops.unary.mean(out).backward(False)
+        ttml.ops.unary.mean(expected).backward(False)
+        ttml.sync_gradients(tp_attn.parameters())
+        assert_close(full_grad(x), full_grad(x_ref), "input gradient")
+        ref_params = ref.parameters()
+        for name, param in tp_attn.parameters().items():
+            got = ttml.Sharding.from_tensor(param).gather(param.get_grad_tensor()).astype(np.float64)
+            assert_close(got, full_grad(ref_params[name.replace(tp_attn.get_name(), ref.get_name(), 1)]), name)
 
 
 class TestCrossEntropy:

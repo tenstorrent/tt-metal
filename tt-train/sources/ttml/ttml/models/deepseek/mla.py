@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import ttml
 from ttml.modules import AbstractModuleBase, ColumnParallelLinear, LinearLayer, RowParallelLinear
+from ttml.parallel import whole
 
 from .transformer import RMSNormLayer
 from .autograd_ops import autograd_split
@@ -46,8 +47,10 @@ class MultiHeadLatentAttention(AbstractModuleBase):
         if use_tp:
             tp_size = ttml.mesh().axis_size("tp")
             self.n_heads = config.n_heads // tp_size
+            self._tp_axis = ttml.mesh().axis_index("tp")
         else:
             self.n_heads = config.n_heads
+            self._tp_axis = None
 
         self.q_lora_rank = config.q_lora_rank
         self.qk_nope_head_dim = config.qk_nope_head_dim
@@ -138,6 +141,9 @@ class MultiHeadLatentAttention(AbstractModuleBase):
 
         # RoPE on k_pe (shared across heads, shape [B, 1, S, qk_rope])
         k_pe = ttml.ops.rope.rope(k_pe, self.rope_params)
+        if self._tp_axis is not None:
+            # Under TP, k_pe joins this rank's heads only: its gradient here is their share, summed across tp.
+            k_pe = whole(k_pe, self._tp_axis)
 
         kv_up = self.wkv_b(self.kv_norm(kv))  # [B, 1, S, n_heads * (qk_nope + v_dim)]
 

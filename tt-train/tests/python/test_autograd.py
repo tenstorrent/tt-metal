@@ -790,6 +790,31 @@ def test_to_numpy_reads_a_bf16_tensor_without_a_device_copy():
     assert usage.total_allocations - usage.total_deallocations == 0
 
 
+def test_backward_end_callbacks_wait_for_the_outermost_backward():
+    """Activation recomputation runs a backward pass inside a node of another: callbacks queued in the outer pass run
+    when the outer pass ends, not when the inner one does."""
+    events = []
+    x = ttml.autograd.Tensor.from_numpy(np.ones((1, 1, 32, 32), np.float32), ttnn.Layout.TILE, ttnn.DataType.BFLOAT16)
+    x.set_requires_grad(True)
+
+    def nested_backward():
+        events.append("inner start")
+        inner = ttml.autograd.Tensor.from_numpy(
+            np.ones((1, 1, 32, 32), np.float32), ttnn.Layout.TILE, ttnn.DataType.BFLOAT16
+        )
+        inner.set_requires_grad(True)
+        ttml.ops.unary.mean(inner).backward(False)
+        events.append("inner end")
+
+    def queue():
+        ttml.autograd.AutoContext.get_instance().queue_backward_end_callback(lambda: events.append("callback"))
+
+    y = ttml.autograd.callback(ttml.autograd.callback(x, nested_backward), queue)
+    ttml.ops.unary.mean(y).backward(False)
+    ttml.autograd.AutoContext.get_instance().reset_graph()
+    assert events == ["inner start", "inner end", "callback"]
+
+
 def test_backward_end_callbacks_run_once_after_every_node():
     """A callback queued during a backward pass runs when the pass has run every node, then is cleared."""
     events = []

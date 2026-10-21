@@ -8,7 +8,8 @@ On an ``("fsdp", "tp")`` mesh, a Llama whose blocks are ``fully_shard``-ed must 
 replicated across ``fsdp`` (plain data parallelism): FSDP shards each parameter on a dim tensor parallelism left
 whole, gathers it for compute, reduce-scatters its gradient in the backward pass, and ``ttml.sync_gradients`` then
 sums sequence parallelism's partial gradients over ``tp``. Synced gradients are compared parameter by parameter,
-over two micro-batches so that FSDP's gradient accumulation is part of it.
+over two micro-batches so that FSDP's gradient accumulation is part of it, and with the memory-efficient runner,
+whose recomputation runs a backward pass inside the outer one.
 """
 
 from __future__ import annotations
@@ -18,7 +19,7 @@ import pytest
 
 import ttnn
 import ttml
-from ttml.models import EmbeddingPlacement, WeightTyingType
+from ttml.models import EmbeddingPlacement, RunnerType, WeightTyingType
 from ttml.models.llama import Llama, LlamaConfig
 from ttml.parallel import TPStrategy
 
@@ -39,7 +40,7 @@ def reset_graph():
     ttml.autograd.AutoContext.get_instance().reset_graph()
 
 
-def llama(strategy: TPStrategy) -> Llama:
+def llama(strategy: TPStrategy, runner: RunnerType = RunnerType.Default) -> Llama:
     ttml.manual_seed(0)
     return Llama(
         LlamaConfig(
@@ -53,6 +54,7 @@ def llama(strategy: TPStrategy) -> Llama:
             tp_strategy=strategy,
             embedding_placement=EmbeddingPlacement.VocabParallel,
             weight_tying=WeightTyingType.Disabled,
+            runner_type=runner,
         )
     )
 
@@ -91,10 +93,11 @@ def synced_grads(model) -> dict[str, np.ndarray]:
     return grads
 
 
+@pytest.mark.parametrize("runner", [RunnerType.Default, RunnerType.MemoryEfficient], ids=["default", "recompute"])
 @pytest.mark.parametrize("strategy", [TPStrategy.TENSOR, TPStrategy.TENSOR_SEQUENCE], ids=["tp", "sp"])
-def test_fully_sharded_matches_data_parallel(fsdp_tp_mesh, strategy):
-    replicated = llama(strategy)
-    sharded = llama(strategy)
+def test_fully_sharded_matches_data_parallel(fsdp_tp_mesh, strategy, runner):
+    replicated = llama(strategy, runner)
+    sharded = llama(strategy, runner)
     for block in sharded.blocks:
         ttml.fsdp.fully_shard(block)
     ttml.fsdp.fully_shard(sharded)

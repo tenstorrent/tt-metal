@@ -476,8 +476,7 @@ def run_backward_comparison(
     print(f"  [Backward] Starting backward with loss={loss_val:.6f}...")
     ttml_loss.backward(False)
 
-    if dp_size > 1:
-        ttml.sync_gradients(ttml_model.parameters())
+    ttml.sync_gradients(ttml_model.parameters())
 
     if track_memory:
         MemoryUsageTracker.snapshot("BACKWARD_PASS")

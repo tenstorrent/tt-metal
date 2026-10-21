@@ -26,6 +26,21 @@ void topological_sort(
     sorted_nodes.push_back(node_id);
 }
 
+void run_nodes(
+    std::vector<ttml::autograd::GraphNode>& graph_nodes, const std::vector<size_t>& sorted_nodes, bool retain_graph) {
+    for (const auto& node_id : sorted_nodes) {
+        graph_nodes[node_id].grad_function();
+        if (!retain_graph) {
+            graph_nodes[node_id].grad_function = [] {
+                throw std::runtime_error(
+                    "[Tensor::backward] This backward function should not be called! Memory from the node is released! "
+                    "Please consider tweaking the retain_graph parameter if you need to call backward twice on the "
+                    "same graph nodes.");
+            };
+        }
+    }
+}
+
 }  // namespace
 
 namespace ttml::autograd {
@@ -75,18 +90,14 @@ void Tensor::backward(bool retain_graph) {
     auto& graph_nodes = graph.get_graph_nodes();
     std::ranges::reverse(sorted_nodes);
     try_init_grad(/* init_ones */ true);
-    for (const auto& node_id : sorted_nodes) {
-        graph_nodes[node_id].grad_function();
-        if (!retain_graph) {
-            graph_nodes[node_id].grad_function = [] {
-                throw std::runtime_error(
-                    "[Tensor::backward] This backward function should not be called! Memory from the node is released! "
-                    "Please consider tweaking the retain_graph parameter if you need to call backward twice on the "
-                    "same graph nodes.");
-            };
-        }
+    ctx().begin_backward();
+    try {
+        run_nodes(graph_nodes, sorted_nodes, retain_graph);
+    } catch (...) {
+        ctx().end_backward(/* succeeded */ false);
+        throw;
     }
-    ctx().run_backward_end_callbacks();
+    ctx().end_backward(/* succeeded */ true);
 }
 
 bool Tensor::is_grad_initialized() const {

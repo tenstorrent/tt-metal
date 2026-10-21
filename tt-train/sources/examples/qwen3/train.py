@@ -861,11 +861,10 @@ def main():
             ctx.reset_graph()
             t0 = _tlog(step, "reset_graph", t0)
 
-        # Synchronize gradients across DP groups (all-reduce along mesh dim 0)
-        if dp_size > 1:
-            t0 = time.time()
-            ttml.sync_gradients(ttml_model.parameters())
-            t0 = _tlog(step, "sync_grads", t0)
+        # Average gradients across DP groups and sum the partial ones across TP (q/k norms, LoRA's lora_A)
+        t0 = time.time()
+        ttml.sync_gradients(ttml_model.parameters())
+        t0 = _tlog(step, "sync_grads", t0)
 
         # Average accumulated loss
         step_loss = accum_loss / accum_steps

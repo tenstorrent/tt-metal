@@ -96,8 +96,10 @@ public:
     // Runs `callback` once, when the backward pass in progress (or the next one) has run every node: for work that
     // must follow all of a module's gradients, which no single node is guaranteed to (its input may need none).
     void queue_backward_end_callback(std::function<void()> callback);
-    // Runs and clears the queued callbacks; called by Tensor::backward.
-    void run_backward_end_callbacks();
+    // Bracket a Tensor::backward call. Backward passes nest (activation recomputation runs one inside a node of
+    // another), so the queued callbacks run when the outermost pass ends, and are dropped if it failed.
+    void begin_backward();
+    void end_backward(bool succeeded);
 
     void set_gradient_mode(GradMode mode);
 
@@ -144,6 +146,7 @@ private:
 
     Graph m_graph;
     std::vector<std::function<void()>> m_backward_end_callbacks;
+    uint32_t m_backward_depth = 0;
     tt::tt_metal::distributed::MeshShape m_mesh_shape = tt::tt_metal::distributed::MeshShape(1, 1);
     std::unique_ptr<core::MeshDevice> m_device;
 

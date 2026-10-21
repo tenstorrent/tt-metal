@@ -25,12 +25,16 @@ namespace ttml::core {
 
 namespace {
 
-// The mesh axes a gradient is sharded on. Checked against its parameter's: clipping reads a gradient's layout as its
-// parameter's, which only holds once the gradients are synchronized (a partial gradient differs across ranks too).
+// The mesh axes with more than one rank a gradient is sharded on. Checked against its parameter's: clipping reads a
+// gradient's layout as its parameter's, which only holds once the gradients are synchronized (a partial gradient
+// differs across ranks too).
 std::vector<uint32_t> sharded_axes(const std::string& name, const autograd::TensorPtr& parameter) {
-    const auto rank = autograd::ctx().get_device().shape().dims();
+    const auto mesh_shape = autograd::ctx().get_device().shape();
     std::vector<uint32_t> axes;
-    for (uint32_t axis = 0; axis < rank; ++axis) {
+    for (uint32_t axis = 0; axis < mesh_shape.dims(); ++axis) {
+        if (mesh_shape[axis] == 1U) {
+            continue;
+        }
         const bool sharded = distributed::is_sharded_on_axis(parameter->get_grad(), axis);
         TT_FATAL(
             sharded == distributed::is_sharded_on_axis(parameter->get_value(), axis),

@@ -69,11 +69,20 @@ void AutoContext::queue_backward_end_callback(std::function<void()> callback) {
     m_backward_end_callbacks.push_back(std::move(callback));
 }
 
-void AutoContext::run_backward_end_callbacks() {
+void AutoContext::begin_backward() {
+    ++m_backward_depth;
+}
+
+void AutoContext::end_backward(bool succeeded) {
+    if (--m_backward_depth > 0U) {
+        return;
+    }
     // A callback may queue another for the next backward pass.
     auto callbacks = std::exchange(m_backward_end_callbacks, {});
-    for (auto& callback : callbacks) {
-        callback();
+    if (succeeded) {
+        for (auto& callback : callbacks) {
+            callback();
+        }
     }
 }
 

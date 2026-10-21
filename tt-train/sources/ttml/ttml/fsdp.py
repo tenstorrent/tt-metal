@@ -133,6 +133,8 @@ class FSDPState:
 
     def pre_forward(self) -> None:
         """Gather sharded parameters into their full form (idempotent)."""
+        # A backward pass that failed never finished this state's; a new forward starts afresh.
+        self._in_backward = False
         if self.sharded_state == _ShardedState.UNSHARDED:
             return
         self._gather_all_params()
