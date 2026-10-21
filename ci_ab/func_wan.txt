@@ -1,0 +1,1 @@
+tests/ttnn/nightly/unit_tests/operations/transformers/test_distributed_fused_rmsnorm.py

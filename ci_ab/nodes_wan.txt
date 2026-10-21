@@ -1,0 +1,4 @@
+ci_ab/test_wan_ab.py::test_wan[w_rope]
+ci_ab/test_wan_ab.py::test_wan[w_norope]
+ci_ab/test_wan_ab.py::test_wan[plain]
+ci_ab/test_wan_ab.py::test_wan[w_rope_2k]
