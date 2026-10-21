@@ -63,3 +63,8 @@ quasar:
   - tt_metal/tt-llk/tests/python_tests/quasar/test_eltwise_unary_sfpu_quasar.py::test_dropout_reseed_quasar
   - tt_metal/tt-llk/tests/python_tests/quasar/test_eltwise_unary_sfpu_quasar.py::test_eltwise_unary_sfpu_quasar[mathop_formats_dest_acc_sync_input_dims:(<MathOperation.Dropout:
   - tt_metal/tt-llk/tests/python_tests/quasar/test_fused_quasar.py::test_fuser[quasar/sfpu_dropout_
+  # ttsim: check_unpack_formats, Int4/UInt4 → Int8/UInt8 widening is unimplemented.
+  - tt_metal/tt-llk/tests/python_tests/quasar/test_unpack_unary_operand_quasar.py::test_unpack_unary_operand_quasar[formats_dest_acc_sync_transpose_unpack_sel_dims:(InputOutputFormat[A:Int4,
+  - tt_metal/tt-llk/tests/python_tests/quasar/test_unpack_unary_operand_quasar.py::test_unpack_unary_operand_quasar[formats_dest_acc_sync_transpose_unpack_sel_dims:(InputOutputFormat[A:UInt4,
+  - tt_metal/tt-llk/tests/python_tests/quasar/test_pack_quasar.py::test_pack_quasar[formats_dest_acc_sync_dims_relu:(InputOutputFormat[A:Int4,
+  - tt_metal/tt-llk/tests/python_tests/quasar/test_pack_quasar.py::test_pack_quasar[formats_dest_acc_sync_dims_relu:(InputOutputFormat[A:UInt4,
