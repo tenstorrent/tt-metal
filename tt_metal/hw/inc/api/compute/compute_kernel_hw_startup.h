@@ -127,6 +127,7 @@ ALWI void compute_kernel_hw_startup(uint32_t icb0, uint32_t ocb) {
  * and only then releases them -- the release is a RISC store, so the drain is
  * what orders it behind the writes. Safe to call mid-kernel without
  * re-running compute_kernel_hw_startup.
+ * The packer then recomputes PCK_DEST_RD_CTRL Read_int8 (the identity path) from Read_32b_data and its formats.
  *
  * All three TRISC threads must call this together. TRISC mailboxes must not
  * be in use.
@@ -159,6 +160,7 @@ ALWI void enable_fp32_dest_acc() {
  * retired, and only then releases them -- the release is a RISC store, so the
  * drain is what orders it behind the writes. Safe to call mid-kernel without
  * re-running compute_kernel_hw_startup.
+ * The packer then recomputes PCK_DEST_RD_CTRL Read_int8 (the identity path) from Read_32b_data and its formats.
  *
  * All three TRISC threads must call this together. TRISC mailboxes must not
  * be in use.
@@ -183,6 +185,7 @@ ALWI void disable_fp32_dest_acc() {
  *
  * Configures both the math pipeline (ALU_ACC_CTRL Fp32_enabled and
  * SFPU_Fp32_enabled) and the packer (PCK_DEST_RD_CTRL Read_32b_data).
+ * The packer then recomputes PCK_DEST_RD_CTRL Read_int8 (the identity path) from Read_32b_data and its formats.
  * This is a lightweight, standalone reconfiguration that is safe to call
  * mid-kernel without re-running compute_kernel_hw_startup.
  *
@@ -220,6 +223,7 @@ ALWI void set_fp32_dest_acc() {
  *
  * Configures both the math pipeline (ALU_ACC_CTRL Fp32_enabled and
  * SFPU_Fp32_enabled) and the packer (PCK_DEST_RD_CTRL Read_32b_data).
+ * The packer then recomputes PCK_DEST_RD_CTRL Read_int8 (the identity path) from Read_32b_data and its formats.
  * This is a lightweight, standalone reconfiguration that is safe to call
  * mid-kernel without re-running compute_kernel_hw_startup.
  *

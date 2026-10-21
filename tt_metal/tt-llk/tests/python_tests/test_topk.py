@@ -417,8 +417,9 @@ def test_topk_sfpu(
 # Bit-pattern stimuli (tie pileups, signed zeros, bf16 denormals, infinities, NaN
 # payloads) that the uniform stimuli above cannot produce, checked per row against
 # an in-test golden. Both engines canonicalize before sorting: +-0 and denormals
-# -> +0.0, NaN -> same-sign infinity bits, normals and +-inf kept, ties broken
-# index-ascending (measured on Blackhole silicon at the LLK level).
+# -> +0.0, normals and +-inf kept, ties broken index-ascending (measured on
+# Blackhole silicon at the LLK level). A NaN sorts as a same-sign infinity; with a
+# 16-bit Dst the identity pack still writes it out as a NaN.
 
 _BF16_SIGN_MASK = 0x8000
 _BF16_EXP_MASK = 0x7F80
@@ -486,16 +487,23 @@ def _model_write_path_bits(bits_u16):
     return b.to(torch.uint16)
 
 
-def _canon_stable_golden(row_bits_u16, K, descending):
+def _canon_stable_golden(row_bits_u16, K, descending, pack_keeps_nan):
     """(expected_value_bits, expected_indices) under the canonicalizing-engine
     hypothesis: stable torch argsort (index-ascending ties) over the
-    canonicalized values. Canonicalized outputs are normals / +0 / +-inf, all
-    preserved bit-exactly by the readback path, so the expected value bits
-    need no further transport modeling."""
+    canonicalized values. With a 16-bit Dst the bf16 identity pack writes a NaN
+    datum out as a NaN; a 32-bit Dst packs through a conversion that turns it into
+    the same-sign infinity, which is also its canonicalized value."""
     canon = _canon_bits(row_bits_u16)
     values = canon.view(torch.bfloat16).to(torch.float32)
     order = torch.argsort(values, descending=descending, stable=True)[:K]
-    return _gather_u16(canon, order), order
+    out_bits = canon
+    if pack_keeps_nan:
+        # The readback goes through a Python float, so any NaN reads back as 0x7FC0.
+        is_nan = _is_nan_bits(row_bits_u16.to(torch.int32))
+        out_bits = torch.where(is_nan, _BF16_QNAN, canon.to(torch.int32)).to(
+            torch.uint16
+        )
+    return _gather_u16(out_bits, order), order
 
 
 def _adversarial_value_bits(stimuli_class, num_rows, w_values):
@@ -716,7 +724,9 @@ def test_topk_sfpu_adversarial(
     as_written_bits = _model_write_path_bits(row_bits)
 
     for row in range(num_rows):
-        exp_bits, exp_idx = _canon_stable_golden(as_written_bits[row], K, descending)
+        exp_bits, exp_idx = _canon_stable_golden(
+            as_written_bits[row], K, descending, not (fused_stable or rank_stamped)
+        )
         if torch.equal(res_indices[row], exp_idx) and torch.equal(
             res_value_bits[row], exp_bits
         ):

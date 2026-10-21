@@ -31,6 +31,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 import torch
+from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import TILE_DIMENSIONS
 from helpers.llk_params import (
@@ -172,11 +173,11 @@ def test_tanh_specials(out_fmt, dest_acc):
     # byte-for-byte identical on main's 3-entry table, so none of it is a property of
     # any particular coefficient table.
     #
-    #   +-inf -> NaN on the fp32 path: segment 5 is the constant pair (A=0, B=1) and
+    #   +-inf -> NaN: segment 5 is the constant pair (A=0, B=1) and
     #            the hardware evaluates A*|x| + B, so an infinite input computes
     #            0 * inf + 1. IEEE tanh(+-inf) is +-1. This one *is* the LUT.
-    #   NaN   -> the sign survives: +NaN and -NaN give distinct results on the bf16
-    #            path (+inf and -inf), so the input path carries the sign bit.
+    #   NaN   -> NaN on both paths. Its sign cannot be observed here, because the
+    #            harness readback drops a NaN's sign.
     #   -0.0  -> +0.0, and this is NOT the LUT. SGN_RETAIN ends in copysign, and
     #            segment 0 computes A*0 + 0, so the LUT would return -0.0. The sign
     #            is already gone before the SFPU runs: the same stimuli through
@@ -187,13 +188,14 @@ def test_tanh_specials(out_fmt, dest_acc):
     #            the bf16 pack: SFPU negate turns +0.0 into -0.0 and that -0.0 reaches
     #            L1 intact with fp32 out but packs to +0.0 with bf16 out. Fixing
     #            either belongs to the unpack/pack path, not to this kernel.
-    #   On the bf16 path a NaN packs out as an infinity of the same sign -- a NaN only
-    #   survives to L1 on an fp32-end-to-end pipeline, so that arm says nothing about
-    #   the kernel.
+    #   The bf16 identity pack carries a NaN to L1 as a NaN, so on Blackhole the +-inf -> NaN
+    #   of the fp32 path shows on the bf16 path too. On Wormhole the 16-bit SFPU store
+    #   narrows the NaN to a same-sign infinity before the pack (n300), so bf16 keeps +-inf.
     #
     # Asserting the divergences on purpose: they predate this table, fixing them costs
     # instructions on every datum, and until that trade is made deliberately this test
     # is here to catch anyone changing them by accident.
+    on_wormhole = get_chip_architecture() == ChipArchitecture.WORMHOLE
     RECORDED = {
         DataFormat.Float32: {
             "+inf": "NaN",
@@ -204,10 +206,10 @@ def test_tanh_specials(out_fmt, dest_acc):
             "-0.0": "+0.0",
         },
         DataFormat.Float16_b: {
-            "+inf": "+inf",
-            "-inf": "-inf",
-            "NaN(+)": "+inf",
-            "NaN(-)": "-inf",
+            "+inf": "+inf" if on_wormhole else "NaN",
+            "-inf": "-inf" if on_wormhole else "NaN",
+            "NaN(+)": "+inf" if on_wormhole else "NaN",
+            "NaN(-)": "-inf" if on_wormhole else "NaN",
             "+0.0": "+0.0",
             "-0.0": "+0.0",
         },

@@ -23,6 +23,7 @@
  *
  * Drains the packer FIFO, waits for MATH to program dest-acc CFG (including PCK_DEST_RD_CTRL),
  * then STALLWAITs.
+ * It then recomputes PCK_DEST_RD_CTRL_Read_int8 from the new Read_32b_data and its pack formats.
  *
  * @note Must be called together with llk_unpack_wait_fp32_dest_acc and llk_math_set_fp32_dest_acc.
  */
