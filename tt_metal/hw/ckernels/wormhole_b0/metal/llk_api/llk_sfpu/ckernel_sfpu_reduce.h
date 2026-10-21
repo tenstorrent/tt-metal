@@ -198,24 +198,11 @@ inline void perform_int_average() {
 }
 
 // Programmable float constant register holding 1/32 (0.03125) for float AVG. Preloaded once by
-// init_reduce_sum_avg (only when pool_type == AVG and the format is float), so perform_float_average
-// avoids rebuilding the constant via two SFPLOADI on every column group. Maps to LREG12 on Wormhole B0
-// (sfpi::vConstFloatPrgm0); the float reduce path does not use the UInt16 high-bit mask, so this
+// init_reduce_sum_avg (only when pool_type == AVG and the format is float), so the column AVG multiply
+// in perform_reduce_col_sum_avg avoids rebuilding the constant via two SFPLOADI on every column group. Maps to LREG12
+// on Wormhole B0 (sfpi::vConstFloatPrgm0); the float reduce path does not use the UInt16 high-bit mask, so this
 // register is free to hold the constant across the whole reduce.
 constexpr std::uint32_t AVG_RECIP_REG = p_sfpu::LREG12;
-
-/**
- * @brief Perform floating-point averaging (multiply by 1/32)
- *
- * For a 32x32 tile, each column sum represents the sum of exactly 32 values (one per row).
- * This function divides by 32 by multiplying by the constant 1/32 (0.03125), which
- * init_reduce_sum_avg() preloaded into AVG_RECIP_REG (sfpi::vConstFloatPrgm0).
- */
-inline void perform_float_average() {
-    // Multiply by 1/32 (divide by 32) using the preloaded constant register.
-    TTI_SFPMUL(p_sfpu::LREG0, AVG_RECIP_REG, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
-    TTI_NOP;  // Required after SFPMUL due to 2-cycle latency
-}
 
 /**
  * @brief Row-average reciprocal (1 / num_cols) split into the two 16-bit halves an SFPLOADI accepts.
@@ -264,11 +251,38 @@ inline void perform_reduce_col_sum_avg() {
     // across registers, then add upper+lower faces (all 4 positions carry meaningful partial sums),
     // then transpose, then do a final half-reduce on LREG0-3 only. This eliminates one transpose
     // and halves the second reduction pass.
+    // Float arm only: SFPADD / SFPMUL need a cycle before their result is read, which the original body paid
+    // as SFPNOPs. SFPTRANSP consumes LREG4-7 too, so loads of the NEXT face pair's lower face cannot precede
+    // it, but the two NOP slots after it (after the half reduce, and after the AVG multiply) can each take one
+    // such load: the next iteration then issues 1 (SUM) or 2 (AVG) fewer loads. The lower face of face pair 0
+    // is loaded here in a prologue; the integer arm has no NOPs to fill and keeps the plain order.
+    if constexpr (!is_integer_mode) {
+        load_face_data<INSTRUCTION_MODE, clear_high_bits, p_sfpu::LREG4>(LOWER_FACE_ADDRS[0], COLUMN_OFFSETS[0]);
+    }
+
+#pragma GCC unroll 4
     for (std::uint32_t i = 0; i < NUM_FACES; i++) {
         const std::uint32_t upper_face_addr = UPPER_FACE_ADDRS[i];
         const std::uint32_t lower_face_addr = LOWER_FACE_ADDRS[i];
         const std::uint32_t column_offset = COLUMN_OFFSETS[i];
-        load_face_data<INSTRUCTION_MODE, clear_high_bits>(upper_face_addr, lower_face_addr, column_offset);
+        const bool has_next = (i + 1 < NUM_FACES);
+        const std::uint32_t next_lower_base = has_next ? LOWER_FACE_ADDRS[i + 1] + COLUMN_OFFSETS[i + 1] : 0;
+        if constexpr (is_integer_mode) {
+            load_face_data<INSTRUCTION_MODE, clear_high_bits>(upper_face_addr, lower_face_addr, column_offset);
+        } else {
+            load_face_data<INSTRUCTION_MODE, clear_high_bits, p_sfpu::LREG0>(upper_face_addr, column_offset);
+            if (i > 0) {
+                // LREG4 (and LREG5 for AVG) of this lower face were loaded in the previous iteration's NOP slots.
+                if constexpr (pool_type != PoolType::AVG) {
+                    load_and_clear_high_bits<clear_high_bits>(
+                        p_sfpu::LREG5, INSTRUCTION_MODE, ADDR_MOD_3, lower_face_addr + column_offset + ROWS_PER_LOAD);
+                }
+                load_and_clear_high_bits<clear_high_bits>(
+                    p_sfpu::LREG6, INSTRUCTION_MODE, ADDR_MOD_3, lower_face_addr + column_offset + 2 * ROWS_PER_LOAD);
+                load_and_clear_high_bits<clear_high_bits>(
+                    p_sfpu::LREG7, INSTRUCTION_MODE, ADDR_MOD_3, lower_face_addr + column_offset + 3 * ROWS_PER_LOAD);
+            }
+        }
 
         // Step 1: Tree-reduce across registers (LREG0-3→LREG0, LREG4-7→LREG4) without transpose.
         lltt::replay(0, 6);
@@ -291,11 +305,14 @@ inline void perform_reduce_col_sum_avg() {
             lltt::replay(0, 3);  // Reuse first 3 positions of sequential integer buffer (A1,A2,A3)
         } else {
             lltt::replay(6, 4);  // Half reduce with NOP for 2-cycle SFPADD latency
-            // The half reduce ends with an SFPADD producing LREG0 (2-cycle latency). The next consumer of
-            // LREG0 is either SFPSTORE (SUM path) or the SFPMUL in perform_float_average() (AVG path, which
-            // now reads the preloaded 1/32 constant register instead of rebuilding it with two independent
-            // SFPLOADI). Both consume LREG0 immediately, so a NOP is required in either case.
-            TTI_SFPNOP;
+            // The half reduce ends with an SFPADD producing LREG0; its next consumer (SFPSTORE for SUM, the
+            // SFPMUL for AVG) needs one cycle. LREG4-7 are dead after the transpose, so that slot takes the
+            // next face pair's first lower load instead of a NOP (a NOP on the last face pair).
+            if (has_next) {
+                load_and_clear_high_bits<clear_high_bits>(p_sfpu::LREG4, INSTRUCTION_MODE, ADDR_MOD_3, next_lower_base);
+            } else {
+                TTI_SFPNOP;
+            }
         }
 
         // Perform averaging if requested (different for int vs float)
@@ -303,7 +320,15 @@ inline void perform_reduce_col_sum_avg() {
             if constexpr (is_integer_mode) {
                 perform_int_average<INSTRUCTION_MODE, is_signed_int>();
             } else {
-                perform_float_average();
+                // Multiply by the preloaded 1/32 (AVG_RECIP_REG); the store needs one cycle after it, which takes
+                // the next face pair's second lower load (a NOP on the last face pair).
+                TTI_SFPMUL(p_sfpu::LREG0, AVG_RECIP_REG, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
+                if (has_next) {
+                    load_and_clear_high_bits<clear_high_bits>(
+                        p_sfpu::LREG5, INSTRUCTION_MODE, ADDR_MOD_3, next_lower_base + ROWS_PER_LOAD);
+                } else {
+                    TTI_SFPNOP;
+                }
             }
         }
         // Store the final column sum/average to the first row.
@@ -320,153 +345,157 @@ inline void perform_reduce_col_sum_avg() {
 }
 
 /**
- * @brief Performs two horizontal reductions in parallel (LREG0/LREG1 and LREG4/LREG5), interleaving
- *        instructions to hide SFPSHFT2 latency.
- *
- * SFPU hardware operates on 8 column slices in parallel but independently; column slices cannot
- * directly communicate. SFPSHFT2 is the only instruction that moves data across columns.
- * This function reduces 8 partial sums (one per column) in each of two LREG pairs down to a single
- * total sum in column 0 of 8 rows (LREG0 and LREG4).
- *
- * Interleaving: SFPSHFT2 has 2-cycle latency and would normally require SFPNOP after each use.
- * We run two reductions in lockstep (LREG0/LREG1 and LREG4/LREG5) so that the second SFPSHFT2
- * fills the latency slot of the first, avoiding extra NOPs and reducing total cycle count.
- *
- * Algorithm (log2(8) = 3 reduction stages). Each stage: copy to temp, rotate right by the appropriate
- * amount so columns align, then add (SFPIADD or SFPADD) to fold halves together.
- *
- *   Phase 1: Rotate by 4 and add -> 8 partial sums (cols 0-7) become 4 duplicated pair sums.
- *   Phase 2: Rotate by 2 and add -> pair sums become 2 duplicated quad sums.
- *   Phase 3: Rotate by 1 and add -> quad sums become the full 8-column sum in every column.
- *
- * @tparam is_integer_mode True for integer types (uses SFPIADD), false for float (uses SFPADD)
+ * @brief Rotate LREG1 and LREG5 right by one column, in place (one butterfly step for both pairs).
+ */
+inline void horizontal_reduce_rotate_step() {
+    TTI_SFPSHFT2(0, p_sfpu::LREG1, p_sfpu::LREG1, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+    TTI_SFPSHFT2(0, p_sfpu::LREG5, p_sfpu::LREG5, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+}
+
+/**
+ * @brief LREG1 = ror<shift>(LREG0) and LREG5 = ror<shift>(LREG4), 2 * shift instructions, no SFPMOV.
+ *        SFPSHFT2 SUBVEC_SHFLROR1 writes VD from VC with VD != VC (tt-isa SFPSHFT2.md), so the first
+ *        rotate of each pair reads the accumulator directly; the rest rotate in place.
+ */
+template <std::uint32_t shift>
+inline void horizontal_reduce_rotate() {
+    static_assert(shift == 4 || shift == 2 || shift == 1, "butterfly stages rotate by 4, 2 or 1 columns");
+    TTI_SFPSHFT2(0, p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+    TTI_SFPSHFT2(0, p_sfpu::LREG4, p_sfpu::LREG5, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+    if constexpr (shift >= 2) {
+        horizontal_reduce_rotate_step();
+    }
+    if constexpr (shift >= 4) {
+        horizontal_reduce_rotate_step();
+        horizontal_reduce_rotate_step();
+    }
+}
+
+/**
+ * @brief Fold the rotated copies into the accumulators: LREG0 += LREG1, LREG4 += LREG5.
+ *        Wormhole forbids SFPIADD on the cycle after an SFPSHFT2 SHFLROR1 (tt-isa SFPSHFT2.md scheduling
+ *        list); SFPADD is not on that list, so only the integer arm pays one SFPNOP.
+ */
+template <bool is_integer_mode>
+inline void horizontal_reduce_add() {
+    if constexpr (is_integer_mode) {
+        TTI_SFPNOP;
+        TTI_SFPIADD(0, p_sfpu::LREG1, p_sfpu::LREG0, 4);
+        TTI_SFPIADD(0, p_sfpu::LREG5, p_sfpu::LREG4, 4);
+    } else {
+        TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG1, p_sfpu::LREG0, 0);
+        TTI_SFPADD(p_sfpu::LREG4, p_sfpu::LCONST_1, p_sfpu::LREG5, p_sfpu::LREG4, 0);
+    }
+}
+
+/**
+ * @brief Fold by compare-and-swap: LREG0 / LREG4 keep the extreme (direction = SFPCONFIG bit 8 at issue time).
+ */
+inline void horizontal_reduce_swap() {
+    TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, 1);
+    TTI_SFPSWAP(0, p_sfpu::LREG4, p_sfpu::LREG5, 1);
+}
+
+/**
+ * @brief Horizontal SUM of the two accumulators, inline, once per 8-row group. Clobbers LREG1 / LREG5 only.
+ *        Float: 20 instructions (14 SFPSHFT2 + 6 SFPADD). Integer: 23 (3 SFPNOP for the SFPIADD hazard).
+ */
+// Replay window for the row SUM/AVG horizontal reduce, recorded ONCE by init_reduce_sum_avg above the column
+// tree-add window ([0, 6) integer, [0, 10) float). The integer body carries 3 SFPNOP (SFPIADD may not issue
+// the cycle after an SFPSHFT2 rotate), so its window is 23 slots; the float body is 20.
+template <bool is_integer_mode>
+constexpr std::uint32_t horizontal_sum_replay_len() {
+    return is_integer_mode ? 23 : 20;
+}
+template <bool is_integer_mode>
+constexpr std::uint32_t horizontal_sum_replay_start() {
+    return 32 - horizontal_sum_replay_len<is_integer_mode>();
+}
+static_assert(horizontal_sum_replay_start<true>() >= 6, "integer row SUM window overlaps the column window [0, 6)");
+static_assert(horizontal_sum_replay_start<false>() >= 10, "float row SUM window overlaps the column window [0, 10)");
+
+/**
+ * @brief Records the MOV-free horizontal SUM (rotate butterfly + adds) into its replay window. Called once from
+ *        init_reduce_sum_avg; never from a calculate.
+ */
+template <bool is_integer_mode>
+inline void record_horizontal_reduce_sum() {
+    lltt::record(horizontal_sum_replay_start<is_integer_mode>(), horizontal_sum_replay_len<is_integer_mode>());
+    horizontal_reduce_rotate<4 /*shift*/>();
+    horizontal_reduce_add<is_integer_mode>();
+    horizontal_reduce_rotate<2 /*shift*/>();
+    horizontal_reduce_add<is_integer_mode>();
+    horizontal_reduce_rotate<1 /*shift*/>();
+    horizontal_reduce_add<is_integer_mode>();
+}
+
+/**
+ * @brief Horizontal SUM of the two accumulators via the window recorded by record_horizontal_reduce_sum(): one
+ *        REPLAY issue per 8-row group. In: LREG0 / LREG4 = per-column partials of the two 4-row groups.
+ *        Out: LREG0 / LREG4 = the 8-column sum in every column. Clobbers LREG1 / LREG5 only.
  */
 template <bool is_integer_mode>
 inline void horizontal_reduce() {
-    // Phase 1: Rotate by 4 and add -> 8 partial sums (cols 0-7) become 4 duplicated pair sums.
-    TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);
-    TTI_SFPMOV(0, p_sfpu::LREG4, p_sfpu::LREG5, 0);
-
-    // Four right-rotates-by-1 in lockstep for both pairs; second SFPSHFT2 hides first's latency.
-    TTI_SFPSHFT2(0, p_sfpu::LREG1, p_sfpu::LREG1, 3);
-    TTI_SFPSHFT2(0, p_sfpu::LREG5, p_sfpu::LREG5, 3);
-    TTI_SFPSHFT2(0, p_sfpu::LREG1, p_sfpu::LREG1, 3);
-    TTI_SFPSHFT2(0, p_sfpu::LREG5, p_sfpu::LREG5, 3);
-    TTI_SFPSHFT2(0, p_sfpu::LREG1, p_sfpu::LREG1, 3);
-    TTI_SFPSHFT2(0, p_sfpu::LREG5, p_sfpu::LREG5, 3);
-    TTI_SFPSHFT2(0, p_sfpu::LREG1, p_sfpu::LREG1, 3);
-    TTI_SFPSHFT2(0, p_sfpu::LREG5, p_sfpu::LREG5, 3);
-
-    if constexpr (is_integer_mode) {
-        TTI_SFPNOP;
-        TTI_SFPIADD(0, p_sfpu::LREG1, p_sfpu::LREG0, 4);
-        TTI_SFPIADD(0, p_sfpu::LREG5, p_sfpu::LREG4, 4);
-    } else {
-        TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG1, p_sfpu::LREG0, 0);
-        TTI_SFPADD(p_sfpu::LREG4, p_sfpu::LCONST_1, p_sfpu::LREG5, p_sfpu::LREG4, 0);
-    }
-
-    // Phase 2: Rotate by 2 and add -> pair sums become 2 duplicated quad sums.
-    TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);
-    TTI_SFPMOV(0, p_sfpu::LREG4, p_sfpu::LREG5, 0);
-    TTI_SFPSHFT2(0, p_sfpu::LREG1, p_sfpu::LREG1, 3);
-    TTI_SFPSHFT2(0, p_sfpu::LREG5, p_sfpu::LREG5, 3);
-    TTI_SFPSHFT2(0, p_sfpu::LREG1, p_sfpu::LREG1, 3);
-    TTI_SFPSHFT2(0, p_sfpu::LREG5, p_sfpu::LREG5, 3);
-    if constexpr (is_integer_mode) {
-        TTI_SFPNOP;
-        TTI_SFPIADD(0, p_sfpu::LREG1, p_sfpu::LREG0, 4);
-        TTI_SFPIADD(0, p_sfpu::LREG5, p_sfpu::LREG4, 4);
-    } else {
-        TTI_SFPADD(
-            p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG1, p_sfpu::LREG0, 0);  // lreg0 = lreg0 * 1.0 + lreg1 (float)
-        TTI_SFPADD(
-            p_sfpu::LREG4, p_sfpu::LCONST_1, p_sfpu::LREG5, p_sfpu::LREG4, 0);  // lreg4 = lreg4 * 1.0 + lreg5 (float)
-    }
-
-    // Phase 3: Rotate by 1 and add -> quad sums become the full 8-column sum in every column.
-    TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);
-    TTI_SFPMOV(0, p_sfpu::LREG4, p_sfpu::LREG5, 0);
-    TTI_SFPSHFT2(0, p_sfpu::LREG1, p_sfpu::LREG1, 3);
-    TTI_SFPSHFT2(0, p_sfpu::LREG5, p_sfpu::LREG5, 3);
-    if constexpr (is_integer_mode) {
-        TTI_SFPNOP;
-        TTI_SFPIADD(0, p_sfpu::LREG1, p_sfpu::LREG0, 4);
-        TTI_SFPIADD(0, p_sfpu::LREG5, p_sfpu::LREG4, 4);
-    } else {
-        TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG1, p_sfpu::LREG0, 0);
-        TTI_SFPADD(p_sfpu::LREG4, p_sfpu::LCONST_1, p_sfpu::LREG5, p_sfpu::LREG4, 0);
-    }
-
-    // LREG0[0 column slice] = sum of all elements in the first 4 rows of this 8-row block (first half)
-    // LREG4[0 column slice] = sum of all elements in the next 4 rows of this 8-row block (second half)
+    lltt::replay(horizontal_sum_replay_start<is_integer_mode>(), horizontal_sum_replay_len<is_integer_mode>());
 }
 
-constexpr std::uint32_t HORIZONTAL_REDUCE_MAX_REPLAY_LEN = 16;
+/**
+ * @brief Horizontal MAX/MIN of the two accumulators: 20 instructions (14 SFPSHFT2 + 6 SFPSWAP), inline, once
+ *        per 8-row group. Writes no replay slot, so the column LOADMACRO window recorded by init survives a
+ *        row reduce under one shared init. The rotate butterfly leaves the extreme in every column, so no
+ *        trailing "move to column 0" rotate is needed.
+ */
+// Replay window for the float / UInt16 row MAX/MIN horizontal reduce. Recorded ONCE by init_reduce (not per
+// calculate), above the column LOADMACRO window [0, 11) so a column reduce after a row reduce under one shared
+// init still finds its own window intact. On Wormhole the Replay Expander emits a recorded instruction per
+// cycle without the RISC-V issuing it, which is why this path replays rather than issues inline (measured:
+// inline is slower than replay here, unlike Blackhole).
+constexpr std::uint32_t HORIZONTAL_MAX_REPLAY_START = 12;
+constexpr std::uint32_t HORIZONTAL_MAX_REPLAY_LEN = 20;  // 14 SFPSHFT2 + 6 SFPSWAP
+static_assert(HORIZONTAL_MAX_REPLAY_START >= 11, "must not overlap the column LOADMACRO window [0, 11)");
+static_assert(HORIZONTAL_MAX_REPLAY_START + HORIZONTAL_MAX_REPLAY_LEN <= 32, "replay buffer has 32 slots");
 
 /**
- * @brief Records phases 2-4 of horizontal max reduction into replay buffer at slot 0 (16 instructions).
- *
- * The full horizontal max reduction has 28 instructions across 4 phases:
- *   Phase 1: 2 MOV + 8 SHFT2 + 2 SWAP = 12 (inline, rotate-by-4)
- *   Phase 2: 2 MOV + 4 SHFT2 + 2 SWAP =  8 (replay, rotate-by-2)
- *   Phase 3: 2 MOV + 2 SHFT2 + 2 SWAP =  6 (replay, rotate-by-1)
- *   Phase 4: 2 SHFT2                   =  2 (replay, rotate to col 0, redundant after rotate reduction)
- *
- * Phase 1 (12 instr) stays inline; phases 2+3+4 (16 instr) fit exactly in one replay buffer.
- * Must be called once before perform_reduce_row_max_tile.
+ * @brief Records the 20-instruction MOV-free horizontal MAX/MIN reduce into [HORIZONTAL_MAX_REPLAY_START, +20).
+ *        Called once from init_reduce for the float / UInt16 MAX/MIN inits; never from a calculate.
  */
 inline void record_horizontal_reduce_max() {
-    // Record phases 2, 3, and 4 into replay buffer (16 instructions).
-    // Phase 1 (12 instructions) is too large to combine, so it stays inline.
-    lltt::record(0, HORIZONTAL_REDUCE_MAX_REPLAY_LEN);
-
-    // Phase 2: Rotate by 2 and max -> pair maxes become duplicated quad maxes.
-    TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);
-    TTI_SFPMOV(0, p_sfpu::LREG4, p_sfpu::LREG5, 0);
-    TTI_SFPSHFT2(0, p_sfpu::LREG1, p_sfpu::LREG1, 3);
-    TTI_SFPSHFT2(0, p_sfpu::LREG5, p_sfpu::LREG5, 3);
-    TTI_SFPSHFT2(0, p_sfpu::LREG1, p_sfpu::LREG1, 3);
-    TTI_SFPSHFT2(0, p_sfpu::LREG5, p_sfpu::LREG5, 3);
-    TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, 1);
-    TTI_SFPSWAP(0, p_sfpu::LREG4, p_sfpu::LREG5, 1);
-
-    // Phase 3: Rotate by 1 and max -> quad maxes become the full 8-column max in every column.
-    TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);
-    TTI_SFPMOV(0, p_sfpu::LREG4, p_sfpu::LREG5, 0);
-    TTI_SFPSHFT2(0, p_sfpu::LREG1, p_sfpu::LREG1, 3);
-    TTI_SFPSHFT2(0, p_sfpu::LREG5, p_sfpu::LREG5, 3);
-    TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, 1);
-    TTI_SFPSWAP(0, p_sfpu::LREG4, p_sfpu::LREG5, 1);
-
-    // Phase 4: Rotate right by 1 -> move single max from col 7 to col 0 for store.
-    TTI_SFPSHFT2(0, p_sfpu::LREG0, p_sfpu::LREG0, 3);
-    TTI_SFPSHFT2(0, p_sfpu::LREG4, p_sfpu::LREG4, 3);
+    lltt::record(HORIZONTAL_MAX_REPLAY_START, HORIZONTAL_MAX_REPLAY_LEN);
+    horizontal_reduce_rotate<4 /*shift*/>();
+    horizontal_reduce_swap();
+    horizontal_reduce_rotate<2 /*shift*/>();
+    horizontal_reduce_swap();
+    horizontal_reduce_rotate<1 /*shift*/>();
+    horizontal_reduce_swap();
 }
 
 /**
- * @brief Executes horizontal max reduction: phase 1 inline, phases 2-4 via replay buffer.
- *        record_horizontal_reduce_max() must have been called before first use.
+ * @brief Horizontal MAX/MIN of the two accumulators via the window recorded by record_horizontal_reduce_max():
+ *        one REPLAY issue per 8-row group. Direction = SFPCONFIG bit 8 at replay time.
  */
-inline void horizontal_reduce_max() {
-    // Phase 1 (inline): Rotate by 4 and max -> 8 values become 4 duplicated pair maxes.
-    TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);
-    TTI_SFPMOV(0, p_sfpu::LREG4, p_sfpu::LREG5, 0);
+inline void horizontal_reduce_max() { lltt::replay(HORIZONTAL_MAX_REPLAY_START, HORIZONTAL_MAX_REPLAY_LEN); }
 
-    TTI_SFPSHFT2(0, p_sfpu::LREG1, p_sfpu::LREG1, 3);
-    TTI_SFPSHFT2(0, p_sfpu::LREG5, p_sfpu::LREG5, 3);
-    TTI_SFPSHFT2(0, p_sfpu::LREG1, p_sfpu::LREG1, 3);
-    TTI_SFPSHFT2(0, p_sfpu::LREG5, p_sfpu::LREG5, 3);
-    TTI_SFPSHFT2(0, p_sfpu::LREG1, p_sfpu::LREG1, 3);
-    TTI_SFPSHFT2(0, p_sfpu::LREG5, p_sfpu::LREG5, 3);
-    TTI_SFPSHFT2(0, p_sfpu::LREG1, p_sfpu::LREG1, 3);
-    TTI_SFPSHFT2(0, p_sfpu::LREG5, p_sfpu::LREG5, 3);
+/**
+ * @brief Sets the SFPSWAP(VEC_MIN_MAX) direction in one instruction. SFPCONFIG with instr_mod1 = 1 writes
+ *        LaneConfig from the immediate (the form _init_sfpu_config_reg() uses), so it also resets the rest
+ *        of the register and clobbers no LREG. Bit 8 clear = MAX on the row paths, bit 8 set = MIN.
+ */
+template <bool invert>
+inline void set_sfpswap_direction() {
+    TTI_SFPCONFIG(invert ? 0x0100 : 0x0000, 0xF, 1);
+}
 
-    TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, 1);
-    TTI_SFPSWAP(0, p_sfpu::LREG4, p_sfpu::LREG5, 1);
-
-    // Phases 2, 3, 4 via replay buffer
-    lltt::replay(0, HORIZONTAL_REDUCE_MAX_REPLAY_LEN);
+/**
+ * @brief SFPSWAP direction for the manual column MAX/MIN paths, which read the LOW (VD) operand of each
+ *        compare-and-swap: MAX inverts (bit 8 set), MIN is the default, the opposite of the row paths.
+ *
+ * Called on entry by calculate_reduce_max_min_uint16 (UInt16 in a 32-bit Dest, and every non-Int32 format
+ * under DISABLE_SFPLOADMACRO) and calculate_reduce_max_min_int32_col, instead of trusting the init: under one
+ * shared init a preceding row MAX/MIN leaves the row convention in place (tt-metal#58551).
+ */
+template <PoolType pool_type>
+inline void set_manual_col_swap_direction() {
+    set_sfpswap_direction<pool_type == PoolType::MAX>();
 }
 
 /**
@@ -481,37 +510,17 @@ inline void horizontal_reduce_max() {
  */
 inline void horizontal_reduce_max_int32() {
     // Phase 1: rotate by 4 and compare -> 8 values become 4 duplicated pair extrema.
-    TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);
-    TTI_SFPMOV(0, p_sfpu::LREG4, p_sfpu::LREG5, 0);
-    TTI_SFPSHFT2(0, p_sfpu::LREG1, p_sfpu::LREG1, 3);
-    TTI_SFPSHFT2(0, p_sfpu::LREG5, p_sfpu::LREG5, 3);
-    TTI_SFPSHFT2(0, p_sfpu::LREG1, p_sfpu::LREG1, 3);
-    TTI_SFPSHFT2(0, p_sfpu::LREG5, p_sfpu::LREG5, 3);
-    TTI_SFPSHFT2(0, p_sfpu::LREG1, p_sfpu::LREG1, 3);
-    TTI_SFPSHFT2(0, p_sfpu::LREG5, p_sfpu::LREG5, 3);
-    TTI_SFPSHFT2(0, p_sfpu::LREG1, p_sfpu::LREG1, 3);
-    TTI_SFPSHFT2(0, p_sfpu::LREG5, p_sfpu::LREG5, 3);
+    horizontal_reduce_rotate<4 /*shift*/>();
     _emit_int32_signed_cswap_<p_sfpu::LREG0, p_sfpu::LREG1>();
     _emit_int32_signed_cswap_<p_sfpu::LREG4, p_sfpu::LREG5>();
 
     // Phase 2: rotate by 2 and compare -> pair extrema become duplicated quad extrema.
-    TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);
-    TTI_SFPMOV(0, p_sfpu::LREG4, p_sfpu::LREG5, 0);
-    TTI_SFPSHFT2(0, p_sfpu::LREG1, p_sfpu::LREG1, 3);
-    TTI_SFPSHFT2(0, p_sfpu::LREG5, p_sfpu::LREG5, 3);
-    TTI_SFPSHFT2(0, p_sfpu::LREG1, p_sfpu::LREG1, 3);
-    TTI_SFPSHFT2(0, p_sfpu::LREG5, p_sfpu::LREG5, 3);
+    horizontal_reduce_rotate<2 /*shift*/>();
     _emit_int32_signed_cswap_<p_sfpu::LREG0, p_sfpu::LREG1>();
     _emit_int32_signed_cswap_<p_sfpu::LREG4, p_sfpu::LREG5>();
 
-    // Phase 3: rotate by 1 and compare -> quad extrema become the full 8-column extreme in every column.
-    // This rotate butterfly leaves the extreme replicated across all 8 columns (not just col 7), so no
-    // final "move to col 0" rotate is needed before the store reads column 0 (unlike the shift-based
-    // float horizontal_reduce_max, whose phase 4 is likewise redundant after its rotate reduction).
-    TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);
-    TTI_SFPMOV(0, p_sfpu::LREG4, p_sfpu::LREG5, 0);
-    TTI_SFPSHFT2(0, p_sfpu::LREG1, p_sfpu::LREG1, 3);
-    TTI_SFPSHFT2(0, p_sfpu::LREG5, p_sfpu::LREG5, 3);
+    // Phase 3: rotate by 1 and compare -> the full 8-column extreme in every column.
+    horizontal_reduce_rotate<1 /*shift*/>();
     _emit_int32_signed_cswap_<p_sfpu::LREG0, p_sfpu::LREG1>();
     _emit_int32_signed_cswap_<p_sfpu::LREG4, p_sfpu::LREG5>();
 }
@@ -915,17 +924,10 @@ inline void perform_reduce_row_max_min(std::uint32_t block_ct_dim, std::uint32_t
     // (sign-magnitude) MAX/MIN init flips bit 8 and leaves that config in place. Resetting to the MAX
     // default (bit 8 = 0) here, then explicitly setting the MIN direction below, makes the row path
     // self-consistent regardless of what a preceding column calculate left in the config register.
-    _init_sfpu_config_reg();
+    set_sfpswap_direction<pool_type == PoolType::MIN>();
 
-    // Invert the SFPSWAP comparator for MIN (set SFPCONFIG bit 8). The default (bit 8 = 0) keeps the
-    // maximum on each compare-and-swap; setting bit 8 keeps the minimum.
-    if constexpr (pool_type == PoolType::MIN) {
-        TTI_SFPLOADI(ckernel::p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_LOWER, 0x0100);  // bit 8
-        TTI_SFPLOADI(ckernel::p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, 0x0000);
-        TTI_SFPCONFIG(0, 0xF, 0);
-    }
-
-    record_horizontal_reduce_max();
+    // Nothing is recorded here: the horizontal reduce replays the window init_reduce recorded above the
+    // column LOADMACRO window, so a column reduce after a row reduce under one shared init still works.
 
     // Single column tile => per-tile store is the final packer-visible result, which uses mode 9 only
     // when the OUTPUT is UInt16 in a 32-bit dest (pack_low16); otherwise it is intermediate and stays
@@ -1077,12 +1079,7 @@ inline void perform_reduce_row_max_min_int32(std::uint32_t block_ct_dim, std::ui
     // Re-establish the SFPSWAP direction (see perform_reduce_row_max_min): MAX is the default (bit 8 = 0),
     // MIN sets bit 8. The signed compare-and-swap's VEC_MIN_MAX obeys this bit; its both-negative fix is a
     // direction-independent unconditional exchange.
-    _init_sfpu_config_reg();
-    if constexpr (pool_type == PoolType::MIN) {
-        TTI_SFPLOADI(ckernel::p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_LOWER, 0x0100);  // bit 8
-        TTI_SFPLOADI(ckernel::p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, 0x0000);
-        TTI_SFPCONFIG(0, 0xF, 0);
-    }
+    set_sfpswap_direction<pool_type == PoolType::MIN>();
 
     // Int32 MAX/MIN never widens to a UInt16 output, so the per-tile store always uses the plain mode.
     const std::uint32_t tile_store_mode = static_cast<std::uint32_t>(INSTRUCTION_MODE);
@@ -1149,13 +1146,8 @@ inline void configure_addrmod_max_min(std::uint32_t num_cols) {
  */
 template <InstrModLoadStore INSTRUCTION_MODE, PoolType pool_type>
 inline void init_reduce_max_min_int32() {
-    // Initialize SFPU config and set swap direction
+    // The swap direction is set by each calculate on entry (set_manual_col_swap_direction / set_sfpswap_direction).
     _init_sfpu_config_reg();
-    if constexpr (pool_type == PoolType::MAX) {
-        TTI_SFPLOADI(ckernel::p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_LOWER, 0x0100);  // Load lower 16 bits (bit 8)
-        TTI_SFPLOADI(ckernel::p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, 0x0000);  // Load upper 16 bits
-        TTI_SFPCONFIG(0, 0xF, 0);
-    }
 
     lltt::record(0, 3);
     TTI_SFPSWAP(0, p_sfpu::LREG7, p_sfpu::LREG6, 1);
@@ -1173,12 +1165,8 @@ inline void init_reduce_max_min_int32() {
  */
 template <PoolType pool_type>
 inline void init_reduce_max_min_int32_signed() {
+    // The swap direction is set by each calculate on entry (set_manual_col_swap_direction / set_sfpswap_direction).
     _init_sfpu_config_reg();
-    if constexpr (pool_type == PoolType::MAX) {
-        TTI_SFPLOADI(ckernel::p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_LOWER, 0x0100);  // Load lower 16 bits (bit 8)
-        TTI_SFPLOADI(ckernel::p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, 0x0000);  // Load upper 16 bits
-        TTI_SFPCONFIG(0, 0xF, 0);
-    }
 
     lltt::record(0, 3 * INT32_SIGNED_CSWAP_LEN);
     _emit_int32_signed_cswap_<p_sfpu::LREG7, p_sfpu::LREG6>();
@@ -1206,15 +1194,9 @@ inline void init_reduce_max_min([[maybe_unused]] std::uint32_t num_cols) {
     return;
 #endif
 
-    // Initialize SFPU config and set swap direction before defining LOADMACRO sequences
-    _init_sfpu_config_reg();
-
-    // Invert swap direction for MIN operations, set 8th bit in SFPU config register
-    if constexpr (pool_type == PoolType::MIN) {
-        TTI_SFPLOADI(ckernel::p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_LOWER, 0x0100);  // Load lower 16 bits (bit 8)
-        TTI_SFPLOADI(ckernel::p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, 0x0000);  // Load upper 16 bits
-        TTI_SFPCONFIG(0, 0xF, 0);
-    }
+    // Reset the SFPU config and set the swap direction (MIN inverts) before defining the LOADMACRO sequences.
+    // The LOADMACRO column path is the one path that trusts this init's direction.
+    set_sfpswap_direction<pool_type == PoolType::MIN>();
 
     // Setup LOADMACRO sequence 0
     TTI_SFPSWAP(0, p_sfpu::LREG4, (0xC | p_sfpu::LREG0), 1);
@@ -1276,7 +1258,7 @@ inline void init_reduce_sum_avg() {
 
     // Float AVG divides by 32 by multiplying by 1/32. Preload that constant once here (only when it is
     // actually needed: float AVG) into the programmable float const register AVG_RECIP_REG so
-    // perform_float_average() collapses to a single SFPMUL instead of rebuilding the constant with two
+    // the column AVG multiply collapses to a single SFPMUL instead of rebuilding the constant with two
     // SFPLOADI on every column group. Integer AVG uses perform_int_average (shift) and pays nothing; SUM
     // never averages, so it pays nothing either.
     if constexpr (pool_type == PoolType::AVG && !is_integer_mode) {
@@ -1319,6 +1301,9 @@ inline void init_reduce_sum_avg() {
         TTI_SFPNOP;  // Cover A3 latency (A1 is already available)
         TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG2, p_sfpu::LREG0, 0);  // A2
     }
+
+    // Row SUM/AVG horizontal reduce window, recorded once here (hoisted out of the per-tile row body).
+    record_horizontal_reduce_sum<is_integer_mode>();
 }
 
 // ============================================================================
@@ -1339,7 +1324,7 @@ inline void init_reduce_sum_avg() {
  * we move LREG0-3 -> LREG4-7 to feed the recorded swap buffer. Final, packer-visible results are written
  * with SFPSTORE mode 9 (SFPSTORE_MOD0_FMT_LO16) so the packer reads the low bits.
  *
- * Reuses init_reduce_max_min_int32()'s 3-swap replay buffer and swap-direction config. Only a single
+ * Reuses init_reduce_max_min_int32()'s 3-swap replay buffer; the swap direction is set on entry. Only a single
  * 32x32 tile is processed per call, matching the column-reduce driver which invokes the kernel per tile.
  *
  * @tparam INSTRUCTION_MODE The instruction mode (INT32 for UInt16 in 32-bit dest)
@@ -1359,6 +1344,10 @@ inline void calculate_reduce_max_min_uint16() {
     static_assert(
         pool_type == PoolType::MAX || pool_type == PoolType::MIN,
         "Only MAX and MIN pool types are supported for this function");
+
+    // This path reads the low operand of every compare-and-swap, so MAX needs the inverted direction. Set it
+    // here rather than trusting the init: a row MAX/MIN under the same init leaves the opposite convention.
+    set_manual_col_swap_direction<pool_type>();
 
     constexpr std::uint32_t ODD_COLUMNS = 2;
     constexpr std::uint32_t COLUMN_OFFSETS[4] = {0, 2, 0, 2};  // even, odd, even, odd
@@ -1462,6 +1451,9 @@ inline void calculate_reduce_max_min_int32_col() {
 
     constexpr InstrModLoadStore INSTRUCTION_MODE = InstrModLoadStore::INT32;
     constexpr std::uint32_t REPLAY_LEN = 3 * INT32_SIGNED_CSWAP_LEN;
+
+    // See calculate_reduce_max_min_uint16: the manual column path reads the low operand, so MAX inverts.
+    set_manual_col_swap_direction<pool_type>();
 
     constexpr std::uint32_t ODD_COLUMNS = 2;
     constexpr std::uint32_t COLUMN_OFFSETS[4] = {0, 2, 0, 2};  // even, odd, even, odd
@@ -1744,6 +1736,11 @@ inline void init_reduce(std::uint32_t block_ct_dim = 1) {
             init_reduce_max_min_int32<INSTRUCTION_MODE, pool_type>();
         } else {
             init_reduce_max_min<INSTRUCTION_MODE, pool_type, false>(block_ct_dim);
+        }
+        if constexpr (!int32_max_min) {
+            // Hoisted out of perform_reduce_row_max_min: the row horizontal reduce window is recorded once here.
+            // (Int32/UInt32 row MAX/MIN keeps its inline signed compare-and-swap reduce and records nothing.)
+            record_horizontal_reduce_max();
         }
     } else if constexpr (pool_type == PoolType::SUM || pool_type == PoolType::AVG) {
         init_reduce_sum_avg<INSTRUCTION_MODE, pool_type>();
