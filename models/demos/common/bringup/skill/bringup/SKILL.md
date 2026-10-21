@@ -73,9 +73,8 @@ Ask in one message for what you cannot find out yourself, with defaults proposed
   options) is a `Setting` in `models/demos/<model>/tt/settings.py` (core/model_settings.py), with its default and the
   owner decision behind it. Agents add switches only there (the orchestrator lints every agent's changes); the last
   task, Z.1, runs the `settings-audit` agent (a smaller model) to move any that ended up elsewhere. Perf picks name
-  their A/B switch from that file. Component and swap tests always run at the model's max precision
-  (`max_precision` in that file); a precision drop from a perf pick is accepted on the end-to-end numbers (ladder,
-  contract tests), never judged by component limits.
+  their A/B switch from that file. Every test runs the shipped defaults; there is no device run at max
+  precision (F137); a failing per-step test is diagnosed on the CPU at the device's formats (agents' rule 14).
 - **tt-d-gen**: should the runner tests drive the model with tt-d-gen's real engine? Propose yes when the box is one
   tt-d-gen serves on (LoudBox, Galaxy), no otherwise (e.g. a QuietBox, where tt-d-gen does not run; the runner tests
   then use tt-metal's `prefill_producer` as a stand-in, and the dashboard says so). The answer goes in
@@ -245,6 +244,15 @@ done reaches the agents as a note, so the fix and its lesson land where the next
   write them at any time. Anything else in the tree only at a pause.
 
 ### Accuracy: the full-precision reference is the target; the reference's own precision is only the margin
+
+Owner rules on precision (keep them, word for word in substance):
+1. No device run at max precision, ever, and no max-precision device path: a separate path means different ops,
+   options or fork variants kept only for tests, which is debt. Add one only if a concrete case proves that the CPU
+   diagnosis (the step's CPU reference at the device's real formats on the same inputs) cannot separate a logic bug
+   from a precision gap, and then only as an owner decision, never as a default.
+2. Every device test runs the shipped realistic settings; the CPU reference is full precision; the margin is the real
+   reference's precision (its real dtypes, roundings and accumulation, e.g. fp32 accumulation wherever the reference
+   accumulates in fp32).
 
 Owner rule (stated many times; F80, F128). The device is always compared with the CPU reference at FULL precision
 (fp32, every quantize-dequantize of the shipped code off: `numerics: native`), never with the reference's rounded

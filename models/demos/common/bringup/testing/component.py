@@ -39,7 +39,7 @@ import torch
 
 from models.demos.common.bringup.core import defaults, metrics
 from models.demos.common.bringup.reference.interface import run_block, step_reference
-from models.demos.common.bringup.testing import accuracy_guard, determinism, model_precision
+from models.demos.common.bringup.testing import accuracy_guard, determinism
 from models.demos.common.bringup.testing.harness import (
     compare,
     component_golden,
@@ -96,7 +96,6 @@ def run_component_test(
     """checks=None: the gate vs the golden only (compare_mode, thr). checks="auto" (F56): also the built-in checks
     by output kind and the second inputs (testing/component_checks.py); BRINGUP_IMPL=mutations runs the freeze sweep
     (CPU) instead."""
-    model_precision.apply(s)  # framework rule: steps are checked at maximum precision
     if checks not in (None, "auto"):
         raise ValueError(f"checks={checks!r}: None or 'auto'")
     if checks == "auto":
@@ -201,6 +200,11 @@ def _run_auto(s, step, layer, mesh, compare_mode, thr, metric) -> bool:
     elif outs["golden"].numel() == want.numel():
         metrics.record(name, CC.gate_value(outs["golden"], want, ex.kind, compare_mode))  # PCC: a diagnostic only
     ok = not ex.evaluate(outs) and ok
+    if not ok and impl_mode() == "device" and ex.kind == "float":  # F137: logic or precision, on the CPU only
+        from models.demos.common.bringup.testing import devfmt
+
+        gold0 = next(x for x in ex.cases if x.name == "golden")
+        devfmt.diagnose(s, ref, layer, step, gold0, ex.cpu["golden"], outs["golden"], err_name)
     ok = NF.waive(s, s.block_type_of(layer), step, ok, outs["golden"], err_name, want)  # F85: an owner waiver, recorded
     # A, B, A: the second inputs above already ran after the golden (B); run the golden again and compare its bytes
     gold = next(x for x in ex.cases if x.name == "golden")
@@ -665,7 +669,6 @@ def run_swap_test(
     swapped step's own output, gated (module docstring). An optional model hook ``swap_context(spec, ref, layer,
     golden, chunk, rctx, dctx)`` may put what one block cannot compute into both contexts (e.g. another layer's top-k
     from the golden)."""
-    model_precision.apply(s)  # framework rule: steps are checked at maximum precision
     if checks not in (None, "steps"):
         raise ValueError(f"checks={checks!r}: None or 'steps'")
     g, c = component_golden(s)
