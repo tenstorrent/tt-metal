@@ -537,8 +537,12 @@ The MoE block's weight cache is keyed on what the device layout depends on, neve
 
 ## 15. North star: the fused MoE block (2026-10-21)
 
-Two programs per MoE layer for non-latent models (K2.7, GLM-5.3, M3), three for a latent MoE (K3); today main runs
-~18-22 per layer and the GLM-Flash bring-up block ~15.
+Two programs per MoE layer for non-latent models (K2.7, GLM-5.3, M3), three for a latent MoE (K3). Today main runs
+~20 per layer from the source (router 4, routing untilizes + bincount + cumsum 4, x all-gather, dispatch, shared expert
+5-6, experts, combine, weighted sum + reduce-scatter 2, add; K3 adds 7 for the latent down / up), and the GLM-Flash
+bring-up block 15, measured (blockops/pg5120.L4.json, LoudBox 2x4, chunk 5120): 11 before the dispatch (router linear,
+bias add, top-k + pack, routing gather, planner, dispatch prep, shared expert x gather, gate_up, GLU, down, untilize)
+and 4 from it (dispatch, combine tables, flat experts + combine, tilize + add).
 
 1. **Head**: ffn_norm (optional), router matmul (gate split along H), logits reduce-scatter to the token owners, top-k
    on the owners, routing gather over the mesh, combine plan + dispatch tables; on other cores / links in the same
