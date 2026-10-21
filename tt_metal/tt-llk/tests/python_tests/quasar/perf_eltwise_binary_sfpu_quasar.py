@@ -45,7 +45,6 @@ _FLOAT_PERF_SWEEP = {
 @pytest.mark.quasar
 @parametrize(
     **_func.INT_SWEEP,
-    sign_magnitude=[False, True],
     approx_mode=[ApproximationMode.No],
     **_PERF_AXES,
 )
