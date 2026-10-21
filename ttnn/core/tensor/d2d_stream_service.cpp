@@ -1948,14 +1948,15 @@ std::unique_ptr<D2DPipelineDescriptorFile> D2DStreamService::export_pipeline_des
     }
 
     D2DPipelineDescriptor pipeline;
+    pipeline.ranks.resize(world_size);
+    pipeline.ranks[rank] = std::move(local);
     for (int r = 0; r < world_size; ++r) {
         if (r == rank) {
-            pipeline.ranks.push_back(std::move(local));
             continue;
         }
         std::vector<uint8_t> bytes(statuses[r].payload_size);
         ctx->recv(as_bytes(bytes), Rank{r}, tag);
-        pipeline.ranks.push_back(D2DPipelineDescriptor::deserialize(bytes).ranks.at(0));
+        pipeline.ranks[r] = D2DPipelineDescriptor::deserialize(bytes).ranks.at(0);
     }
     return std::make_unique<D2DPipelineDescriptorFile>(path, pipeline);
 }
