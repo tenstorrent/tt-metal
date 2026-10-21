@@ -847,3 +847,20 @@ the host-head argmax (EP32 builds: token 39030, the same as the 10-20 evening ru
 and the block (bfp4, B=4) matches with the fused router on AND off (bit-identical chain PCC 0.823420:
 `ttft_2x4_router_fused_{0,1}.log`). So not the router. Queued on the 8x4 before the perf re-measures
 (`sched_ttft_ab.sh`): hybrid dense B=32 with the fused router 0 / 1 and hybrid sparse B=4 on today's code.
+
+**128-token first token: root cause and fix (22:28).** 8x4 A/B (`ttft_8x4_*.log`, 45 layers bfp8, composite = the
+fused router off):
+
+| build | router in the prefill slab | first token | chain PCC vs HF rows |
+|---|---|---|---|
+| hybrid dense, 32 users/row | composite | 102647 = HF | 0.895744 (= v17dense this morning) |
+| hybrid dense, 32 users/row | fused op | 99484 | 0.894983 |
+| hybrid sparse, 4 users/row, fix applied | composite | 102647 = HF | 0.900901 (= fresh_fast_v19 this morning) |
+
+A 128-token prompt sequence-parallel over the 8 rows gives every chip a 16-row slab, which satisfied the fused
+router's "decode shape" condition (T <= 32) although the op was only ever validated against the composite on decode
+inputs; its weights differ in the last bf16 ulp and the first token sat at a near-tie. The 2-row block (64-row
+slabs) never took the fused path, hence the bit-identical block A/B. Fix 6e5d736cd14: `TtMoE.forward(prefill=True)`
+from the decoder layer's prefill wrap keeps the composite router on prompt slabs; decode keeps the fused op (its
+ids are bit-exact there). The EP32 builds' wrong first tokens (39030 / 3147, PCC 0.79-0.82) predate the fix; the
+EP e2e re-measures that follow run with it and report whether EP32's own prefill path is also off.
