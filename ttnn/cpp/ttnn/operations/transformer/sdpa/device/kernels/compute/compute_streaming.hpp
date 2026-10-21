@@ -1398,6 +1398,70 @@ inline bool sdpa_packed_first_half_unmasked(
  * Phase 1: Q@KT directly into cb_qkt_im with cb_push_back_hold_wr_ptr, in-place sub_exp.
  * Phase 2: Drain + QKT@V with SALAD corrections, streaming normalization on last K iter.
  */
+// Lazy rescale: on a K step where no row's running max moved, the online-softmax correction factors are all 1, so
+// the rescale pass over the output accumulator only copies it. Such a step accumulates P@V straight onto the previous
+// accumulator (packer L1 accumulation; the accumulator CBs hold one entry, so the previous half's write pointer is
+// back on its data) and corrects only the row sums. The UNPACK thread compares the max tiles and mailboxes the
+// decision to MATH and PACK so every thread takes the same path.
+namespace lazy_rescale {
+inline uint32_t steps = 0, skips = 0;  // eligible steps / skipped rescales, for profiling
+
+template <uint32_t sq_tiles>
+ALWI bool max_unchanged(uint32_t prev_max_cb, uint32_t cur_max_cb) {
+    bool same = true;
+    UNPACK({
+        CircularBuffer(prev_max_cb).wait_front(sq_tiles);
+        CircularBuffer(cur_max_cb).wait_front(sq_tiles);
+        for (uint32_t t = 0; t < sq_tiles && same; ++t) {
+            const uint32_t pa = get_tile_l1_byte_address(get_operand_id(prev_max_cb), t);
+            const uint32_t ca = get_tile_l1_byte_address(get_operand_id(cur_max_cb), t);
+            for (uint32_t r = 0; r < 32; ++r) {
+                // Row r's max sits in column 0: face 0 for rows 0-15, face 2 for rows 16-31 (16-bit elements).
+                const uint32_t off = (r < 16 ? r * 16 : 512 + (r - 16) * 16) * 2;
+                if (*reinterpret_cast<volatile uint16_t*>(pa + off) !=
+                    *reinterpret_cast<volatile uint16_t*>(ca + off)) {
+                    same = false;
+                    break;
+                }
+            }
+        }
+        steps++;
+        skips += same;
+        mailbox_write(ckernel::ThreadId::MathThreadId, same);
+        mailbox_write(ckernel::ThreadId::PackThreadId, same);
+    })
+    MATH(same = mailbox_read(ckernel::ThreadId::UnpackThreadId);)
+    PACK(same = mailbox_read(ckernel::ThreadId::UnpackThreadId);)
+    return same;
+}
+}  // namespace lazy_rescale
+
+/**
+ * Sum-only SALAD correction: sum_out += sum_in * bcast for one row group (the sum half of salad_correct_fused).
+ * Caller enables packer L1 accumulation.
+ */
+template <uint32_t sbh_t>
+void salad_correct_sum_only(
+    uint32_t sum_in_cb, uint32_t bcast_cb, uint32_t sum_out_cb, uint32_t sum_q_subblock, uint32_t write_q_subblock) {
+    constexpr uint32_t tiles_per_row = sbh_t;
+    const uint32_t sum_row_base = sum_q_subblock * tiles_per_row;
+    const uint32_t write_row_base = write_q_subblock * tiles_per_row;
+    mul_bcast_cols_init(sum_in_cb, bcast_cb);
+    CircularBuffer(sum_in_cb).wait_front((sum_q_subblock + 1) * tiles_per_row);
+    CircularBuffer(bcast_cb).wait_front(tiles_per_row);
+    tile_regs_acquire();
+    for (uint32_t i = 0; i < tiles_per_row; i++) {
+        mul_tiles_bcast_cols(sum_in_cb, bcast_cb, sum_row_base + i, i, i);
+    }
+    tile_regs_commit();
+    tile_regs_wait();
+    configure_single_tile_pack(sum_out_cb);
+    for (uint32_t i = 0; i < tiles_per_row; i++) {
+        sdpa_pack_tile_ooo(i, sum_out_cb, write_row_base + i);
+    }
+    tile_regs_release();
+}
+
 template <
     bool profiling_enabled,
     uint32_t Sq_chunk_t,
@@ -1729,6 +1793,17 @@ static void sdpa_inner_loop_step(
 
     // Lightweight ring mask tiles are permanently fronted — no pop needed.
 
+    // Lazy rescale (see namespace lazy_rescale): every thread evaluates the same eligibility, then takes UNPACK's
+    // decision. Not on the first or last K step, nor where the step saves state or runs a special mode.
+    constexpr bool lazy_rescale_supported = !kt_inplace_v && !use_padded_mask && !has_q_base_tiles;
+    bool lazy_skip = false;
+    if constexpr (lazy_rescale_supported) {
+        if (!is_first_iter && !is_last_iter && save_out_cb == INVALID_CB && save_max_cb == INVALID_CB &&
+            !apply_sliding_window) {
+            lazy_skip = lazy_rescale::max_unchanged<Sq_chunk_t>(prev.max, cur.max);
+        }
+    }
+
     // ========== PHASE 2: Drain last row + QKT@V + SALAD ==========
     // After Phase 1: all rows are pushed (via hold_wr_ptr) in cb_qkt_im.
     // Rows 0..N-2 are softmax'd in-place; row N-1 has raw matmul output.
@@ -1758,11 +1833,16 @@ static void sdpa_inner_loop_step(
 
         // When save_out_cb is set, V matmul + SALAD write to save_out_cb (cb_out) instead of cur.out.
         // Writer drains save_out_cb row-by-row to DRAM during SALAD. cur.out stays empty.
-        const uint32_t out_cb = (save_out_cb != INVALID_CB) ? save_out_cb : cur.out;
+        // A lazy-skip step accumulates onto prev.out in place: no reserve (it holds the previous step's entry).
+        const uint32_t out_cb = (save_out_cb != INVALID_CB) ? save_out_cb : (lazy_skip ? prev.out : cur.out);
+        // Rows of cur.sum pushed on a lazy-skip step (prev.out rows are never pushed then).
+        uint32_t lazy_sum_pushed = 0;
 
         // V wait deferred: don't block here. The sub_exp drain loop below
         // doesn't touch V, so the reader's V DMA can overlap with the drain.
-        CircularBuffer(out_cb).reserve_back(qktv_output_num_tiles);
+        if (!lazy_skip) {
+            CircularBuffer(out_cb).reserve_back(qktv_output_num_tiles);
+        }
 
         // q_subblock 0: drain last row's sub_exp in-place + first QKT@V matmul
         {
@@ -1796,7 +1876,7 @@ static void sdpa_inner_loop_step(
                         CircularBuffer(cb_qkt_im).wait_front(qktv_in0_wait_tiles);
                         CircularBuffer(cb_v_in).wait_front(Sk_chunk_t * v_cb_physical_width_t);
                     }
-                    if (kt_sub > 0) {
+                    if (kt_sub > 0 || lazy_skip) {
                         PACK((llk_pack_reconfig_l1_acc(1)));
                     }
 
@@ -1835,7 +1915,7 @@ static void sdpa_inner_loop_step(
                         sdpa_maybe_reconfig_data_format<cb_v_in, cb_qkt_im, cb_qkt_im, cb_qkt_im>();
                     }
 
-                    if (kt_sub > 0) {
+                    if (kt_sub > 0 || lazy_skip) {
                         PACK((llk_pack_reconfig_l1_acc(0)));
                     }
                 }
@@ -1934,6 +2014,22 @@ static void sdpa_inner_loop_step(
         // prev.out is consumed row-by-row: always read from CB front, then pop after use.
         auto salad_correct_row = [&](uint32_t salad_row, uint32_t w_salad, uint32_t sbh) {
             PACK((llk_pack_reconfig_l1_acc(1)));
+            if (lazy_skip) {
+                // Factors are all 1: the accumulator already holds prev.out + P@V; correct the sums only.
+                if constexpr (has_qktv_remainder) {
+                    if (sbh == qktv_remainder_h) {
+                        salad_correct_sum_only<qktv_remainder_h>(
+                            prev.sum, cb_exp_max_diff, cur.sum, salad_row, w_salad);
+                    } else {
+                        salad_correct_sum_only<qktv_h>(prev.sum, cb_exp_max_diff, cur.sum, salad_row, w_salad);
+                    }
+                } else {
+                    salad_correct_sum_only<qktv_h>(prev.sum, cb_exp_max_diff, cur.sum, salad_row, w_salad);
+                }
+                CircularBuffer(cb_exp_max_diff).pop_front(sbh);
+                PACK((llk_pack_reconfig_l1_acc(0)));
+                return;
+            }
             {
                 MaybeDeviceZoneScopedN(profiling_enabled, "S_CORR_FUSED");
                 // ob_q_subblock=0: prev.out and cb_exp_max_diff are popped row-by-row (read from front).
@@ -1966,7 +2062,7 @@ static void sdpa_inner_loop_step(
             const bool is_remainder_iter = has_qktv_remainder && (q_subblock == qktv_q_num_subblocks);
             const uint32_t cur_h = is_remainder_iter ? qktv_remainder_h : qktv_h;
             uint32_t salad_row = q_subblock - 1;
-            uint32_t w_salad = salad_row - pushed_rows;
+            uint32_t w_salad = salad_row - (lazy_skip ? lazy_sum_pushed : pushed_rows);
             // For remainder: convert group index to tile-row index so pack addressing is correct
             // when cur_h < qktv_h (the matmul uses cur_h as subblock_h, so row_subblock_idx * cur_h
             // must equal the actual tile-row offset).
@@ -1982,6 +2078,9 @@ static void sdpa_inner_loop_step(
             }
 
             // V matmul for current row group — cur_h adapts for remainder
+            if (lazy_skip) {
+                PACK((llk_pack_reconfig_l1_acc(1)));
+            }
             if (is_remainder_iter) {
                 CircularBuffer(cb_qkt_im).wait_front(Sq_chunk_t * KT_stride);
             } else {
@@ -2021,6 +2120,9 @@ static void sdpa_inner_loop_step(
                 }
                 sdpa_maybe_reconfig_data_format<cb_v_in, cb_qkt_im, cb_qkt_im, cb_qkt_im>();
             }
+            if (lazy_skip) {
+                PACK((llk_pack_reconfig_l1_acc(0)));
+            }
 
             // SALAD corrections for previous group (always full, h=qktv_h) + row-by-row push
             if (!is_first_iter) {
@@ -2041,19 +2143,28 @@ static void sdpa_inner_loop_step(
                         normalize_row(pushed_rows, qktv_h);
                     } else {
                         CircularBuffer(cur.sum).push_back(qktv_h);
-                        CircularBuffer(out_cb).push_back(qktv_h * vDHt);
-                        pushed_rows++;
+                        if (lazy_skip) {
+                            lazy_sum_pushed++;
+                        } else {
+                            CircularBuffer(out_cb).push_back(qktv_h * vDHt);
+                            pushed_rows++;
+                        }
                     }
 
-                    const uint32_t drain_w = has_qktv_remainder ? ((qktv_q_num_subblocks - pushed_rows) * qktv_h)
-                                                                : (qktv_q_num_subblocks - 1 - pushed_rows);
+                    const uint32_t drain_pushed = lazy_skip ? lazy_sum_pushed : pushed_rows;
+                    const uint32_t drain_w = has_qktv_remainder ? ((qktv_q_num_subblocks - drain_pushed) * qktv_h)
+                                                                : (qktv_q_num_subblocks - 1 - drain_pushed);
                     salad_correct_row(drain_salad_row, drain_w, drain_h);
                     if (is_last_iter) {
                         normalize_row(pushed_rows, drain_h);
                     } else {
                         CircularBuffer(cur.sum).push_back(drain_h);
-                        CircularBuffer(out_cb).push_back(drain_h * vDHt);
-                        pushed_rows++;
+                        if (lazy_skip) {
+                            lazy_sum_pushed++;
+                        } else {
+                            CircularBuffer(out_cb).push_back(drain_h * vDHt);
+                            pushed_rows++;
+                        }
                     }
                 } else {
                     salad_correct_row(salad_row, w_salad, qktv_h);
@@ -2061,16 +2172,24 @@ static void sdpa_inner_loop_step(
                         normalize_row(pushed_rows, qktv_h);
                     } else {
                         CircularBuffer(cur.sum).push_back(qktv_h);
-                        CircularBuffer(out_cb).push_back(qktv_h * vDHt);
-                        pushed_rows++;
+                        if (lazy_skip) {
+                            lazy_sum_pushed++;
+                        } else {
+                            CircularBuffer(out_cb).push_back(qktv_h * vDHt);
+                            pushed_rows++;
+                        }
                     }
                 }
             } else if (is_last_iter) {
                 normalize_row(pushed_rows, qktv_h);
             } else {
                 CircularBuffer(cur.sum).push_back(qktv_h);
-                CircularBuffer(out_cb).push_back(qktv_h * vDHt);
-                pushed_rows++;
+                if (lazy_skip) {
+                    lazy_sum_pushed++;
+                } else {
+                    CircularBuffer(out_cb).push_back(qktv_h * vDHt);
+                    pushed_rows++;
+                }
             }
 
             qktv_in0_index_offset += cur_h * KT_stride;
@@ -2095,8 +2214,12 @@ static void sdpa_inner_loop_step(
                     normalize_row(pushed_rows, drain_h);
                 } else {
                     CircularBuffer(cur.sum).push_back(drain_h);
-                    CircularBuffer(out_cb).push_back(drain_h * vDHt);
-                    pushed_rows++;
+                    if (lazy_skip) {
+                        lazy_sum_pushed++;
+                    } else {
+                        CircularBuffer(out_cb).push_back(drain_h * vDHt);
+                        pushed_rows++;
+                    }
                 }
             } else {
                 // Drain was hoisted into the last main-loop iteration above.
@@ -2106,14 +2229,26 @@ static void sdpa_inner_loop_step(
                         normalize_row(pushed_rows, drain_h);
                     } else {
                         CircularBuffer(cur.sum).push_back(drain_h);
-                        CircularBuffer(out_cb).push_back(drain_h * vDHt);
-                        pushed_rows++;
+                        if (lazy_skip) {
+                            lazy_sum_pushed++;
+                        } else {
+                            CircularBuffer(out_cb).push_back(drain_h * vDHt);
+                            pushed_rows++;
+                        }
                     }
                 }
             }
         }
 
         // All rows pushed individually — no bulk push needed.
+
+        if (lazy_skip) {
+            // The accumulator stayed in prev.out. Swap the out halves so the caller's prev/cur swap keeps it as the
+            // next step's prev.out (and the next step writes the other half).
+            const uint32_t accumulator = prev.out;
+            prev.out = cur.out;
+            cur.out = accumulator;
+        }
 
         if constexpr (use_attention_sink) {
             if (is_last_iter) {

@@ -34,6 +34,7 @@ constexpr void assert_kv_pad_rotation_streaming_only() {
 }
 
 void kernel_main() {
+    lazy_rescale::steps = lazy_rescale::skips = 0;
     constexpr uint32_t NH = get_compile_time_arg_val(0);
     constexpr uint32_t DHt = get_compile_time_arg_val(1);
     constexpr uint32_t vDHt = get_compile_time_arg_val(2);
@@ -867,4 +868,7 @@ void kernel_main() {
             }
         }
     }
+    // Lazy-rescale counters (UNPACK); visible in the device profiler as LAZY-STEPS / LAZY-SKIPS.
+    DeviceTimestampedData("LAZY-STEPS", (uint64_t)lazy_rescale::steps);
+    DeviceTimestampedData("LAZY-SKIPS", (uint64_t)lazy_rescale::skips);
 }
