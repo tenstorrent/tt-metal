@@ -284,7 +284,9 @@ def test_helper_fp8_row_split(device, width, full_sync):
     _helper(device, ttnn.fp8_e4m3, width, full_sync)
 
 
-@pytest.mark.parametrize("width, full_sync", [(11, False), (13, False), (11, True), (17, True)])
+@pytest.mark.parametrize(
+    "width, full_sync", [(11, False), (13, False), (11, True), (17, True), (9, False), (15, False), (21, True)]
+)
 def test_helper_fp8_row_split_all_bf16(device, width, full_sync):
     # Every bf16 bit pattern untilized through the split row and through one-tile rows (full-width blocks, no pad); the bytes must match.
     tile_rows = -(-65536 // (width * TILE * TILE))

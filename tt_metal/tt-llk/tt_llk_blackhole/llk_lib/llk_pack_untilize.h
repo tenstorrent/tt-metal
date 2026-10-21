@@ -89,6 +89,31 @@ inline void _llk_pack_untilize_configure_first_tile_stream_addrmod_()
         .set(ADDR_MOD_3);
 }
 
+// The first tile of an odd block of an 8-bit output, packed as its own L1 stream.
+inline constexpr std::uint32_t _llk_pack_untilize_first_tile_stream_op_(const std::uint32_t pack_intf_sel)
+{
+    return TT_OP_PACR(
+        p_pacr::CFG_CTXT_0,
+        p_pacr::NO_ROW_PAD_ZERO,
+        p_pacr::DST_ACCESS_STRIDED_MODE,
+        ADDR_MOD_3,
+        p_pacr::ADDR_CNT_CTXT_0,
+        0,
+        pack_intf_sel,
+        0,
+        0,
+        p_pacr::NO_CTXT_CTRL,
+        0,
+        1);
+}
+
+// A block of an odd number of tiles in a row that is wider than the block, which an 8-bit output closes in two streams.
+template <std::uint32_t block_ct_dim, std::uint32_t full_ct_dim, bool narrow_row, bool dense>
+constexpr bool _llk_pack_untilize_odd_block_form_()
+{
+    return (full_ct_dim != block_ct_dim) && (block_ct_dim % 2 == 1) && (block_ct_dim > 1) && !narrow_row && !dense;
+}
+
 /*
 block_ct_dim represents the number of input tiles in a block.
 dense is used with num_faces == 2 and even block_ct_dim, where two 16x32 (or smaller) tiles are packed in a single 32x32 tile region in dest.
@@ -221,19 +246,7 @@ inline void _llk_pack_untilize_mop_config_(
         }
         if (first_tile_stream)
         {
-            tmp.set_start_op(TT_OP_PACR(
-                p_pacr::CFG_CTXT_0,
-                p_pacr::NO_ROW_PAD_ZERO,
-                p_pacr::DST_ACCESS_STRIDED_MODE,
-                ADDR_MOD_3,
-                p_pacr::ADDR_CNT_CTXT_0,
-                0,
-                PACK_INTF_SEL,
-                0,
-                0,
-                p_pacr::NO_CTXT_CTRL,
-                0,
-                1));
+            tmp.set_start_op(_llk_pack_untilize_first_tile_stream_op_(PACK_INTF_SEL));
         }
 
         tmp.program();
@@ -839,6 +852,8 @@ inline void _llk_pack_untilize_init_(
  * @param num_faces: Faces per tile, valid values = <1, 2, 4>
  * @tparam src_datum_size, dst_datum_size: As for @ref _llk_pack_untilize_init_, and the same values.
  * @tparam fp32_dest: True when DEST holds 32-bit data.
+ * @tparam pad_into_next_block: True when the caller packs the blocks of a row from the first column to the last and a later block
+ *         follows this one; the padded form applies to an 8-bit init only, and an odd block then takes one stream instead of two.
  * @param tile_dst_rt_offset: Runtime row-tile offset into the destination register.
  * @note Call @ref _llk_pack_untilize_init_ with matching template/runtime args before this function, and
  *       @ref _llk_pack_untilize_uninit_ once all untilize-pack calls are complete.
@@ -851,7 +866,8 @@ template <
     bool dense                       = false,
     std::uint32_t src_datum_size     = 0,
     std::uint32_t dst_datum_size     = 0,
-    bool fp32_dest                   = false>
+    bool fp32_dest                   = false,
+    bool pad_into_next_block         = false>
 inline void _llk_pack_untilize_(const std::uint32_t address, const std::uint32_t num_faces = 4, const std::uint32_t tile_dst_rt_offset = 0)
 {
     static_assert(block_ct_dim <= (dense ? 16 : 8), "block_ct_dim must be <= 8 when not dense, <= 16 when dense");
@@ -909,12 +925,30 @@ inline void _llk_pack_untilize_(const std::uint32_t address, const std::uint32_t
         TT_SETADC(p_setadc::PAC, p_setadc::CH_0, p_setadc::SET_W, tile_dst_offset);
     }
 
+    // The init of an 8-bit output made the block's first tile its own stream. When a later block of the row follows, one stream
+    // does: the zeros that pad it land on the next block's first tile, which that block rewrites.
+    constexpr bool one_stream = pad_into_next_block && _llk_pack_untilize_odd_block_form_<block_ct_dim, full_ct_dim, narrow_row, dense>();
+    [[maybe_unused]] volatile std::uint32_t *mop_cfg = reinterpret_cast<volatile std::uint32_t *>(TENSIX_MOP_CFG_BASE);
+    if constexpr (one_stream)
+    {
+        mop_sync();
+        mop_cfg[1] = block_ct_dim;
+        mop_cfg[2] = TT_OP_NOP;
+    }
+
     ckernel::ckernel_template::run();
     if (num_faces_per_rdim_tile > 1)
     {
         TTI_SETADC(p_setadc::PAC, p_setadc::CH_0, p_setadc::SET_Y, 2 * FACE_R_DIM);
         TTI_SETADC(p_setadc::PAC, p_setadc::CH_1, p_setadc::SET_Y, FACE_R_DIM);
         ckernel::ckernel_template::run();
+    }
+
+    if constexpr (one_stream)
+    {
+        mop_sync();
+        mop_cfg[1] = block_ct_dim - 1;
+        mop_cfg[2] = _llk_pack_untilize_first_tile_stream_op_(num_faces == 1 ? p_pacr::SINGLE_INTF_ACTIVE : p_pacr::TWO_INTFS_ACTIVE);
     }
 
     if constexpr (narrow_row)

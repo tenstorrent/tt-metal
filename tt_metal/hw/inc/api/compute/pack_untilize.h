@@ -278,11 +278,14 @@ ALWI void pack_untilize_unpack_block_row(uint32_t icb) {
 // clang-format on
 // math_clears_dest (Blackhole): the math thread clears each section and the pack release does not
 // (llk_pack_common_api.h).
+// blocks_ascend (Blackhole): the blocks of a row are packed from the first column to the last, which lets an odd block
+// of an 8-bit output take one stream.
 template <
     uint32_t block_ct_dim = 8,
     uint32_t full_ct_dim = block_ct_dim,
     bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
-    bool math_clears_dest = false>
+    bool math_clears_dest = false,
+    bool blocks_ascend = false>
 ALWI void pack_untilize_block(uint32_t icb, uint32_t block_rt_dim, uint32_t ocb, uint32_t block_c_index = 0) {
     LLK_SAN_FUNCTION();
 #ifdef ARCH_BLACKHOLE
@@ -324,7 +327,16 @@ ALWI void pack_untilize_block(uint32_t icb, uint32_t block_rt_dim, uint32_t ocb,
         }
         MATH((llk_math_dest_section_done<is_fp32_dest_acc_en>()));
         PACK((llk_packer_wait_for_math_done()));
+#ifdef ARCH_BLACKHOLE
+        if constexpr (blocks_ascend) {
+            PACK((llk_pack_untilize<block_ct_dim, full_ct_dim, false, false, TILE_C_DIM, 0, false, true>(
+                1 /*num_blocks*/, ocb, block_c_index)));
+        } else {
+            PACK((llk_pack_untilize<block_ct_dim, full_ct_dim>(1 /*num_blocks*/, ocb, block_c_index)));
+        }
+#else
         PACK((llk_pack_untilize<block_ct_dim, full_ct_dim>(1 /*num_blocks*/, ocb, block_c_index)));
+#endif
 #ifdef ARCH_BLACKHOLE
         PACK((llk_pack_dest_section_done<is_fp32_dest_acc_en, math_clears_dest, true>()));
 #else
