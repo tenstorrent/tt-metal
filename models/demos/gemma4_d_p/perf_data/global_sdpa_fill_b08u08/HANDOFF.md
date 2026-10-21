@@ -50,3 +50,14 @@ could not install its environments there. Use normal pre-commit where it works.
    (`patches/` of /data/mmanzoor/global_sdpa_gap_c04u02, branch `mmanzoor/gemma4-global-sdpa-gap`) deadlocks on
    main; debug with DPRINT of the reader's semaphore thresholds, under `timeout`, alone in a job.
 4. Lazy rescale with in-place accumulation (up to ~10% of global SDPA on ksplit8-q128).
+
+## Update 2026-10-21 (bh-glx-110-a02u08 report, bh-glx-110-a04u14 lazy rescale)
+
+- Report for 2K / 4K / 8K, first chunk / 100k / 256k: `../global_sdpa_report_a02u08/REPORT.md`.
+  Best: `mmanzoor/gemma4-gsdpa-ksplit8-q128-v-from-k` (-3.9% at 2K, 0 at 4K, -0.9% at 8K; KV PCC passes).
+  `v-from-k-overlap` fails at 8K (program 928 B over the kernel config buffer) — don't use.
+- Lazy rescale: `../global_sdpa_lazy_a04u14/LAZY_SUMMARY.md`. Ceiling -10.7 / -11.8 / -8.8% at 2K / 4K / 8K,
+  86-87% of row groups skippable; WIP branch `mmanzoor/gemma4-gsdpa-lazy-rescale` deadlocks (q128 x 5 bands, chunk 3).
+- Kyle's 8-band K split is PR #59939 (not merged, base Oct 8). Main #61291 (2026-10-21) makes `k_splits` exact
+  (renamed from `max_k_splits`) and rejects segmented accumulation with a K split: rebase `ksplit8-q128` and
+  the combined branch onto main and set `segmented=False` for the 2K q128 x 5-band entry before re-measuring.

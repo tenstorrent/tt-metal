@@ -1,0 +1,38 @@
+11:48:37 START ref_2k kind=layer arg=64:2048 branch=mmanzoor/gemma4-gsdpa-ksplit8-q128-v-from-k patch=- env=
+11:50:46   built branch mmanzoor/gemma4-gsdpa-ksplit8-q128-v-from-k at d1fd17139e7
+12:00:34 END ref_2k rc=0
+gemma4-layer-global-sz2048-chunk64: layer sum 3188.6 us over 41 ops; SDPA min/med/max 2337.8/2354.4/2365.5 us
+12:00:34 START glazy_2k kind=layer arg=64:2048 branch=mmanzoor/gemma4-gsdpa-ksplit8-q128-v-from-k patch=glazy_count.patch env=
+12:06:12 END glazy_2k rc=0
+gemma4-layer-global-sz2048-chunk64: layer sum 3369.4 us over 41 ops; SDPA min/med/max 2522.5/2531.5/2541.2 us
+12:06:13 START nosalad_2k kind=layer arg=64:2048 branch=mmanzoor/gemma4-gsdpa-ksplit8-q128-v-from-k patch=nosalad.patch env=
+12:12:03 END nosalad_2k rc=0
+gemma4-layer-global-sz2048-chunk64: layer sum 2929.1 us over 41 ops; SDPA min/med/max 2095.5/2101.9/2144.4 us
+12:12:04 START ref_4k kind=layer arg=32:4096 branch=mmanzoor/gemma4-gsdpa-ksplit8-q128-v-from-k patch=- env=
+12:17:47 END ref_4k rc=0
+gemma4-layer-global-sz4096-chunk32: layer sum 4799.1 us over 40 ops; SDPA min/med/max 3651.5/3655.0/3673.0 us
+12:17:48 START glazy_4k kind=layer arg=32:4096 branch=mmanzoor/gemma4-gsdpa-ksplit8-q128-v-from-k patch=glazy_count.patch env=
+12:23:50 END glazy_4k rc=0
+gemma4-layer-global-sz4096-chunk32: layer sum 5143.9 us over 40 ops; SDPA min/med/max 3993.6/3998.1/4016.1 us
+12:23:50 START nosalad_4k kind=layer arg=32:4096 branch=mmanzoor/gemma4-gsdpa-ksplit8-q128-v-from-k patch=nosalad.patch env=
+12:29:47 END nosalad_4k rc=0
+gemma4-layer-global-sz4096-chunk32: layer sum 4365.8 us over 40 ops; SDPA min/med/max 3215.2/3225.3/3238.7 us
+12:29:47 START ref_8k kind=layer arg=16:8192 branch=mmanzoor/gemma4-gsdpa-ksplit8-q128-v-from-k patch=- env=
+12:35:53 END ref_8k rc=0
+gemma4-layer-global-sz8192-chunk16: layer sum 9972.7 us over 39 ops; SDPA min/med/max 8062.7/8341.2/8501.2 us
+12:35:53 START glazy_8k kind=layer arg=16:8192 branch=mmanzoor/gemma4-gsdpa-ksplit8-q128-v-from-k patch=glazy_count.patch env=
+12:41:13 END glazy_8k rc=0
+  2026-10-21 12:37:17.165 | critical |          Always | TT_FATAL: Program size (72096) too large for kernel config buffer (70656) on TENSIX, 1440 B over:
+12:41:14 START nosalad_8k kind=layer arg=16:8192 branch=mmanzoor/gemma4-gsdpa-ksplit8-q128-v-from-k patch=nosalad.patch env=
+12:46:38 END nosalad_8k rc=0
+gemma4-layer-global-sz8192-chunk16: layer sum 9216.3 us over 39 ops; SDPA min/med/max 7331.0/7604.0/7749.7 us
+12:46:39 START lazy_acc kind=acc arg=test_ring_joint_attention_gemma4_global_ksplit_accuracy and packed_kv or test_ring_joint_attention_gemma4_global_lofi_matmul_accuracy or test_ring_joint_attention_gemma4_global_segmented_accuracy branch=mmanzoor/gemma4-gsdpa-lazy-rescale patch=- env=
+12:47:06   built branch mmanzoor/gemma4-gsdpa-lazy-rescale at df515ed52d6
+13:41:49 END lazy_acc rc=143
+  2026-10-21 12:48:51.390 | INFO     | tests.nightly.blackhole.sdpa.test_ring_joint_sdpa:record_chunk_accuracy:2290 - gemma4_global-q128-k256 chunk  2 [  8192,  12288) logical_n=12288: PCC=0.9996607726714271 RMSE=0.008741
+  2026-10-21 12:48:56.117 | INFO     | tests.nightly.blackhole.sdpa.test_ring_joint_sdpa:record_chunk_accuracy:2290 - gemma4_global-q128-k256 chunk  3 [ 12288,  16384) logical_n=16384: PCC=0.9996278349419203 RMSE=0.009829
+  2026-10-21 12:49:00.706 | INFO     | tests.nightly.blackhole.sdpa.test_ring_joint_sdpa:record_chunk_accuracy:2290 - gemma4_global-q128-k256 chunk  4 [ 16384,  20480) logical_n=20480: PCC=0.9995804833188962 RMSE=0.010948
+  2026-10-21 12:49:20.378 | INFO     | tests.nightly.blackhole.sdpa.test_ring_joint_sdpa:record_chunk_accuracy:2290 - gemma4_global-q128-k256 chunk  0 [     0,   4096) logical_n=4096: PCC=0.9997477783113545 RMSE=0.005147 -
+  2026-10-21 12:49:25.749 | INFO     | tests.nightly.blackhole.sdpa.test_ring_joint_sdpa:record_chunk_accuracy:2290 - gemma4_global-q128-k256 chunk  1 [  4096,   8192) logical_n=8192: PCC=0.999716332969077 RMSE=0.007046 ->
+  2026-10-21 12:49:31.153 | INFO     | tests.nightly.blackhole.sdpa.test_ring_joint_sdpa:record_chunk_accuracy:2290 - gemma4_global-q128-k256 chunk  2 [  8192,  12288) logical_n=12288: PCC=0.9996648684902193 RMSE=0.008692
+13:41:49 STOP

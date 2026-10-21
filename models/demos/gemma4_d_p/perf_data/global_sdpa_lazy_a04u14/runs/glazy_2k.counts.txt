@@ -1,0 +1,4 @@
+devices 32  steps 261888  row groups rescaled 523776
+  max unchanged (exact skip possible)          455572  =  87.0% of row groups
+  all factors >= 2^-4                          522620  =  99.8% of row groups
+  all factors >= 2^-8                          523583  = 100.0% of row groups

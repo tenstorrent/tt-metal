@@ -1,0 +1,7 @@
+context wall and device times (chunk_size=2048, 1k=1024 tokens; rounded up to whole chunks; N/A = context not reached):
+ Context | Chunks |    Wall (ms) |  Device (ms)
+      1k |      1 |         56.5 |         54.1
+     10k |      5 |        287.0 |        273.9
+    100k |     50 |       3299.4 |       3154.3
+    256k |    128 |      10262.1 |       9882.6
+PASSED

@@ -1,0 +1,224 @@
+02:37:25 START base_c2048_r1 kind=e2e arg=2048 branch=mmanzoor/gsdpa-base-909748641c1 patch=- env=
+02:38:28   built branch mmanzoor/gsdpa-base-909748641c1 at 909748641c1
+02:43:37 END base_c2048_r1 rc=1
+02:43:37 START base_c4096_r1 kind=e2e arg=4096 branch=mmanzoor/gsdpa-base-909748641c1 patch=- env=
+02:44:34 runner restarted: pytest --timeout raised (base_c2048_r1 hit the 300 s pytest.ini default on a cold box)
+02:44:34 START base_c2048_r1 kind=e2e arg=2048 branch=mmanzoor/gsdpa-base-909748641c1 patch=- env=
+02:47:11 END base_c2048_r1 rc=0
+   DEVICE 262144 tokens in 10270.0ms (25525 tok/s) | staging 382.4ms | wall 10702.8ms
+   ring-depth cost: first=53.4ms -> last=107.3ms = 2.01x over 127 extra chunks of history
+02:47:11 START base_c4096_r1 kind=e2e arg=4096 branch=mmanzoor/gsdpa-base-909748641c1 patch=- env=
+02:49:43 END base_c4096_r1 rc=0
+   DEVICE 262144 tokens in 7140.7ms (36711 tok/s) | staging 190.5ms | wall 7368.5ms
+   ring-depth cost: first=74.3ms -> last=150.5ms = 2.03x over 63 extra chunks of history
+02:49:44 START base_c8192_r1 kind=e2e arg=8192 branch=mmanzoor/gsdpa-base-909748641c1 patch=- env=
+02:51:54 END base_c8192_r1 rc=0
+   DEVICE 262144 tokens in 6371.3ms (41144 tok/s) | staging 92.7ms | wall 6478.0ms
+   ring-depth cost: first=112.4ms -> last=292.2ms = 2.60x over 31 extra chunks of history
+02:51:54 START base_c2048_r2 kind=e2e arg=2048 branch=mmanzoor/gsdpa-base-909748641c1 patch=- env=
+02:54:07 END base_c2048_r2 rc=0
+   DEVICE 262144 tokens in 10273.5ms (25517 tok/s) | staging 341.6ms | wall 10667.6ms
+   ring-depth cost: first=53.4ms -> last=107.3ms = 2.01x over 127 extra chunks of history
+02:54:07 START base_c4096_r2 kind=e2e arg=4096 branch=mmanzoor/gsdpa-base-909748641c1 patch=- env=
+02:56:05 END base_c4096_r2 rc=0
+   DEVICE 262144 tokens in 7140.7ms (36711 tok/s) | staging 177.3ms | wall 7342.8ms
+   ring-depth cost: first=74.2ms -> last=151.0ms = 2.04x over 63 extra chunks of history
+02:56:05 START base_c8192_r2 kind=e2e arg=8192 branch=mmanzoor/gsdpa-base-909748641c1 patch=- env=
+02:58:13 END base_c8192_r2 rc=0
+   DEVICE 262144 tokens in 6371.9ms (41141 tok/s) | staging 82.4ms | wall 6468.6ms
+   ring-depth cost: first=112.1ms -> last=291.2ms = 2.60x over 31 extra chunks of history
+02:58:13 START vfk_c2048_r1 kind=e2e arg=2048 branch=mmanzoor/gemma4-gsdpa-v-from-k patch=- env=
+02:58:40   built branch mmanzoor/gemma4-gsdpa-v-from-k at 2e8c27c99a7
+03:00:55 END vfk_c2048_r1 rc=0
+   DEVICE 262144 tokens in 9989.5ms (26242 tok/s) | staging 324.2ms | wall 10368.4ms
+   ring-depth cost: first=53.4ms -> last=103.0ms = 1.93x over 127 extra chunks of history
+03:00:55 START vfk_c4096_r1 kind=e2e arg=4096 branch=mmanzoor/gemma4-gsdpa-v-from-k patch=- env=
+03:02:55 END vfk_c4096_r1 rc=0
+   DEVICE 262144 tokens in 7136.8ms (36732 tok/s) | staging 152.7ms | wall 7317.8ms
+   ring-depth cost: first=74.2ms -> last=150.6ms = 2.03x over 63 extra chunks of history
+03:02:55 START vfk_c8192_r1 kind=e2e arg=8192 branch=mmanzoor/gemma4-gsdpa-v-from-k patch=- env=
+03:04:56 END vfk_c8192_r1 rc=0
+   DEVICE 262144 tokens in 6322.6ms (41461 tok/s) | staging 86.1ms | wall 6422.5ms
+   ring-depth cost: first=112.2ms -> last=287.9ms = 2.57x over 31 extra chunks of history
+03:04:56 START vfk_c2048_r2 kind=e2e arg=2048 branch=mmanzoor/gemma4-gsdpa-v-from-k patch=- env=
+03:06:49 END vfk_c2048_r2 rc=0
+   DEVICE 262144 tokens in 9990.2ms (26240 tok/s) | staging 358.0ms | wall 10402.1ms
+   ring-depth cost: first=53.4ms -> last=103.0ms = 1.93x over 127 extra chunks of history
+03:06:49 START vfk_c4096_r2 kind=e2e arg=4096 branch=mmanzoor/gemma4-gsdpa-v-from-k patch=- env=
+03:08:38 END vfk_c4096_r2 rc=0
+   DEVICE 262144 tokens in 7136.4ms (36733 tok/s) | staging 153.5ms | wall 7309.9ms
+   ring-depth cost: first=74.3ms -> last=150.5ms = 2.03x over 63 extra chunks of history
+03:08:38 START vfk_c8192_r2 kind=e2e arg=8192 branch=mmanzoor/gemma4-gsdpa-v-from-k patch=- env=
+03:10:47 END vfk_c8192_r2 rc=0
+   DEVICE 262144 tokens in 6309.1ms (41550 tok/s) | staging 95.1ms | wall 6418.4ms
+   ring-depth cost: first=112.2ms -> last=286.8ms = 2.55x over 31 extra chunks of history
+03:10:47 START ks8_c2048_r1 kind=e2e arg=2048 branch=mmanzoor/gemma4-gsdpa-ksplit8-q128 patch=- env=
+03:11:16   built branch mmanzoor/gemma4-gsdpa-ksplit8-q128 at d18cb26ad6c
+03:13:19 END ks8_c2048_r1 rc=0
+   DEVICE 262144 tokens in 9882.6ms (26526 tok/s) | staging 324.2ms | wall 10262.5ms
+   ring-depth cost: first=54.1ms -> last=100.3ms = 1.86x over 127 extra chunks of history
+03:13:19 START ks8_c4096_r1 kind=e2e arg=4096 branch=mmanzoor/gemma4-gsdpa-ksplit8-q128 patch=- env=
+03:15:30 END ks8_c4096_r1 rc=0
+   DEVICE 262144 tokens in 7144.1ms (36694 tok/s) | staging 220.1ms | wall 7392.6ms
+   ring-depth cost: first=74.3ms -> last=151.8ms = 2.04x over 63 extra chunks of history
+03:15:30 START ks8_c8192_r1 kind=e2e arg=8192 branch=mmanzoor/gemma4-gsdpa-ksplit8-q128 patch=- env=
+03:17:26 END ks8_c8192_r1 rc=0
+   DEVICE 262144 tokens in 6378.4ms (41099 tok/s) | staging 74.9ms | wall 6467.2ms
+   ring-depth cost: first=112.2ms -> last=291.0ms = 2.59x over 31 extra chunks of history
+03:17:26 START ks8_c2048_r2 kind=e2e arg=2048 branch=mmanzoor/gemma4-gsdpa-ksplit8-q128 patch=- env=
+03:19:55 END ks8_c2048_r2 rc=0
+   DEVICE 262144 tokens in 9882.7ms (26525 tok/s) | staging 255.6ms | wall 10180.7ms
+   ring-depth cost: first=54.0ms -> last=100.3ms = 1.86x over 127 extra chunks of history
+03:19:55 START ks8_c4096_r2 kind=e2e arg=4096 branch=mmanzoor/gemma4-gsdpa-ksplit8-q128 patch=- env=
+03:22:22 END ks8_c4096_r2 rc=0
+   DEVICE 262144 tokens in 7158.1ms (36622 tok/s) | staging 148.0ms | wall 7328.9ms
+   ring-depth cost: first=74.2ms -> last=152.0ms = 2.05x over 63 extra chunks of history
+03:22:22 START ks8_c8192_r2 kind=e2e arg=8192 branch=mmanzoor/gemma4-gsdpa-ksplit8-q128 patch=- env=
+03:23:47 END ks8_c8192_r2 rc=0
+   DEVICE 262144 tokens in 6376.9ms (41109 tok/s) | staging 74.8ms | wall 6465.8ms
+   ring-depth cost: first=112.4ms -> last=290.2ms = 2.58x over 31 extra chunks of history
+03:23:47 START combo_c2048_r1 kind=e2e arg=2048 branch=mmanzoor/gemma4-gsdpa-ksplit8-q128-v-from-k patch=- env=
+03:24:15   built branch mmanzoor/gemma4-gsdpa-ksplit8-q128-v-from-k at d1fd17139e7
+03:25:43 END combo_c2048_r1 rc=0
+   DEVICE 262144 tokens in 9876.7ms (26542 tok/s) | staging 313.9ms | wall 10245.6ms
+   ring-depth cost: first=54.1ms -> last=100.2ms = 1.85x over 127 extra chunks of history
+03:25:43 START combo_c4096_r1 kind=e2e arg=4096 branch=mmanzoor/gemma4-gsdpa-ksplit8-q128-v-from-k patch=- env=
+03:27:25 END combo_c4096_r1 rc=0
+   DEVICE 262144 tokens in 7144.1ms (36694 tok/s) | staging 151.9ms | wall 7325.3ms
+   ring-depth cost: first=74.3ms -> last=150.9ms = 2.03x over 63 extra chunks of history
+03:27:25 START combo_c8192_r1 kind=e2e arg=8192 branch=mmanzoor/gemma4-gsdpa-ksplit8-q128-v-from-k patch=- env=
+03:28:55 END combo_c8192_r1 rc=0
+   DEVICE 262144 tokens in 6312.3ms (41529 tok/s) | staging 112.0ms | wall 6446.6ms
+   ring-depth cost: first=112.3ms -> last=287.9ms = 2.56x over 31 extra chunks of history
+03:28:55 START combo_c2048_r2 kind=e2e arg=2048 branch=mmanzoor/gemma4-gsdpa-ksplit8-q128-v-from-k patch=- env=
+03:30:34 END combo_c2048_r2 rc=0
+   DEVICE 262144 tokens in 9874.6ms (26547 tok/s) | staging 363.3ms | wall 10291.5ms
+   ring-depth cost: first=54.0ms -> last=100.2ms = 1.86x over 127 extra chunks of history
+03:30:34 START combo_c4096_r2 kind=e2e arg=4096 branch=mmanzoor/gemma4-gsdpa-ksplit8-q128-v-from-k patch=- env=
+03:31:54 END combo_c4096_r2 rc=0
+   DEVICE 262144 tokens in 7156.2ms (36632 tok/s) | staging 152.0ms | wall 7336.7ms
+   ring-depth cost: first=74.3ms -> last=151.8ms = 2.04x over 63 extra chunks of history
+03:31:54 START combo_c8192_r2 kind=e2e arg=8192 branch=mmanzoor/gemma4-gsdpa-ksplit8-q128-v-from-k patch=- env=
+03:33:37 END combo_c8192_r2 rc=0
+   DEVICE 262144 tokens in 6318.2ms (41490 tok/s) | staging 97.8ms | wall 6430.6ms
+   ring-depth cost: first=112.4ms -> last=287.8ms = 2.56x over 31 extra chunks of history
+03:33:37 START combo_acc kind=acc arg=test_ring_joint_attention_gemma4_global_ksplit_accuracy and packed_kv or test_ring_joint_attention_gemma4_global_lofi_matmul_accuracy or test_ring_joint_attention_gemma4_global_segmented_accuracy branch=mmanzoor/gemma4-gsdpa-ksplit8-q128-v-from-k patch=- env=
+03:44:22 END combo_acc rc=0
+  2026-10-21 03:43:10.446 | INFO     | tests.nightly.blackhole.sdpa.test_ring_joint_sdpa:record_chunk_accuracy:2290 - gemma4_global-q96-k256 chunk  3 [ 24576,  32768) logical_n=32768: PCC=0.9993552639481916 RMSE=0.030428 -
+  2026-10-21 03:43:23.558 | INFO     | tests.nightly.blackhole.sdpa.test_ring_joint_sdpa:record_chunk_accuracy:2290 - gemma4_global-q96-k256 chunk  4 [ 32768,  40960) logical_n=40960: PCC=0.9992820459794002 RMSE=0.031972 -
+  2026-10-21 03:43:36.940 | INFO     | tests.nightly.blackhole.sdpa.test_ring_joint_sdpa:record_chunk_accuracy:2290 - gemma4_global-q96-k256 chunk  5 [ 40960,  49152) logical_n=49152: PCC=0.9992525796919709 RMSE=0.032712 -
+  2026-10-21 03:43:54.275 | INFO     | tests.nightly.blackhole.sdpa.test_ring_joint_sdpa:record_chunk_accuracy:2290 - gemma4_global-q96-k256 chunk  6 [ 49152,  57344) logical_n=57344: PCC=0.9992221782045082 RMSE=0.033383 -
+  2026-10-21 03:44:10.127 | INFO     | tests.nightly.blackhole.sdpa.test_ring_joint_sdpa:record_chunk_accuracy:2290 - gemma4_global-q96-k256 chunk  7 [ 57344,  65536) logical_n=65536: PCC=0.9991954698482705 RMSE=0.033945 -
+  ================ 9 passed, 404 deselected in 639.21s (0:10:39) =================
+03:44:22 START combo_kvpcc_c2048 kind=kvpcc arg=2048 branch=mmanzoor/gemma4-gsdpa-ksplit8-q128-v-from-k patch=- env=
+03:48:51 END combo_kvpcc_c2048 rc=0
+    Layer          PCC    Relative RMSE         RMSE
+  Worst head: layer=39 head=9 type=sliding_v PCC=0.943989
+  │ Minimum per-head PCC │ >= 0.928000 │ 0.943989 │ PASS   │
+  │ Overall PCC          │ >= 0.978000 │ 0.983214 │ PASS   │
+  │ Overall RRMSE        │ < 0.208000  │ 0.183518 │ PASS   │
+  ======================== 1 passed in 264.62s (0:04:24) =========================
+03:48:51 START combo_kvpcc_c4096 kind=kvpcc arg=4096 branch=mmanzoor/gemma4-gsdpa-ksplit8-q128-v-from-k patch=- env=
+03:52:17 END combo_kvpcc_c4096 rc=0
+    Layer          PCC    Relative RMSE         RMSE
+  Worst head: layer=39 head=9 type=sliding_v PCC=0.935430
+  │ Minimum per-head PCC │ >= 0.928000 │ 0.935430 │ PASS   │
+  │ Overall PCC          │ >= 0.978000 │ 0.980254 │ PASS   │
+  │ Overall RRMSE        │ < 0.208000  │ 0.199033 │ PASS   │
+  ======================== 1 passed in 200.93s (0:03:20) =========================
+03:52:17 START combo_kvpcc_c8192 kind=kvpcc arg=8192 branch=mmanzoor/gemma4-gsdpa-ksplit8-q128-v-from-k patch=- env=
+03:55:44 END combo_kvpcc_c8192 rc=0
+    Layer          PCC    Relative RMSE         RMSE
+  Worst head: layer=39 head=9 type=sliding_v PCC=0.938811
+  │ Minimum per-head PCC │ >= 0.928000 │ 0.938811 │ PASS   │
+  │ Overall PCC          │ >= 0.978000 │ 0.980850 │ PASS   │
+  │ Overall RRMSE        │ < 0.208000  │ 0.196003 │ PASS   │
+  ======================== 1 passed in 202.18s (0:03:22) =========================
+03:55:44 START ks8_kvpcc_c4096 kind=kvpcc arg=4096 branch=mmanzoor/gemma4-gsdpa-ksplit8-q128 patch=- env=
+03:56:11   built branch mmanzoor/gemma4-gsdpa-ksplit8-q128 at d18cb26ad6c
+03:58:56 END ks8_kvpcc_c4096 rc=0
+    Layer          PCC    Relative RMSE         RMSE
+  Worst head: layer=39 head=9 type=sliding_v PCC=0.935430
+  │ Minimum per-head PCC │ >= 0.928000 │ 0.935430 │ PASS   │
+  │ Overall PCC          │ >= 0.978000 │ 0.980254 │ PASS   │
+  │ Overall RRMSE        │ < 0.208000  │ 0.199033 │ PASS   │
+  ======================== 1 passed in 160.49s (0:02:40) =========================
+03:58:56 START vfk_kvpcc_c4096 kind=kvpcc arg=4096 branch=mmanzoor/gemma4-gsdpa-v-from-k patch=- env=
+03:59:26   built branch mmanzoor/gemma4-gsdpa-v-from-k at 2e8c27c99a7
+04:02:50 END vfk_kvpcc_c4096 rc=0
+    Layer          PCC    Relative RMSE         RMSE
+  Worst head: layer=39 head=9 type=sliding_v PCC=0.935430
+  │ Minimum per-head PCC │ >= 0.928000 │ 0.935430 │ PASS   │
+  │ Overall PCC          │ >= 0.978000 │ 0.980254 │ PASS   │
+  │ Overall RRMSE        │ < 0.208000  │ 0.199033 │ PASS   │
+  ======================== 1 passed in 199.21s (0:03:19) =========================
+04:02:50 START ks8_kvpcc_c8192 kind=kvpcc arg=8192 branch=mmanzoor/gemma4-gsdpa-ksplit8-q128 patch=- env=
+04:03:19   built branch mmanzoor/gemma4-gsdpa-ksplit8-q128 at d18cb26ad6c
+04:06:23 END ks8_kvpcc_c8192 rc=0
+    Layer          PCC    Relative RMSE         RMSE
+  Worst head: layer=39 head=9 type=sliding_v PCC=0.938811
+  │ Minimum per-head PCC │ >= 0.928000 │ 0.938811 │ PASS   │
+  │ Overall PCC          │ >= 0.978000 │ 0.980850 │ PASS   │
+  │ Overall RRMSE        │ < 0.208000  │ 0.196003 │ PASS   │
+  ======================== 1 passed in 178.80s (0:02:58) =========================
+04:06:23 START vfk_kvpcc_c8192 kind=kvpcc arg=8192 branch=mmanzoor/gemma4-gsdpa-v-from-k patch=- env=
+04:06:52   built branch mmanzoor/gemma4-gsdpa-v-from-k at 2e8c27c99a7
+04:10:40 END vfk_kvpcc_c8192 rc=0
+    Layer          PCC    Relative RMSE         RMSE
+  Worst head: layer=39 head=9 type=sliding_v PCC=0.938811
+  │ Minimum per-head PCC │ >= 0.928000 │ 0.938811 │ PASS   │
+  │ Overall PCC          │ >= 0.978000 │ 0.980850 │ PASS   │
+  │ Overall RRMSE        │ < 0.208000  │ 0.196003 │ PASS   │
+  ======================== 1 passed in 223.06s (0:03:43) =========================
+04:10:40 START ovl_c2048_r1 kind=e2e arg=2048 branch=mmanzoor/gemma4-gsdpa-v-from-k-overlap patch=- env=
+04:11:07   built branch mmanzoor/gemma4-gsdpa-v-from-k-overlap at 591414c1684
+04:12:57 END ovl_c2048_r1 rc=0
+   DEVICE 262144 tokens in 10026.3ms (26146 tok/s) | staging 314.3ms | wall 10394.6ms
+   ring-depth cost: first=53.4ms -> last=103.5ms = 1.94x over 127 extra chunks of history
+04:12:57 START ovl_c4096_r1 kind=e2e arg=4096 branch=mmanzoor/gemma4-gsdpa-v-from-k-overlap patch=- env=
+04:14:29 END ovl_c4096_r1 rc=0
+   DEVICE 262144 tokens in 7154.4ms (36641 tok/s) | staging 168.7ms | wall 7351.5ms
+   ring-depth cost: first=74.2ms -> last=151.3ms = 2.04x over 63 extra chunks of history
+04:14:29 START ovl_c8192_r1 kind=e2e arg=8192 branch=mmanzoor/gemma4-gsdpa-v-from-k-overlap patch=- env=
+04:15:45 END ovl_c8192_r1 rc=1
+  2026-10-21 04:15:37.008 | critical |          Always | TT_FATAL: Program size (71584) too large for kernel config buffer (70656) on TENSIX, 928 B over:
+04:15:45 START ovl_c2048_r2 kind=e2e arg=2048 branch=mmanzoor/gemma4-gsdpa-v-from-k-overlap patch=- env=
+04:17:23 END ovl_c2048_r2 rc=0
+   DEVICE 262144 tokens in 10025.1ms (26149 tok/s) | staging 308.3ms | wall 10385.6ms
+   ring-depth cost: first=53.4ms -> last=103.6ms = 1.94x over 127 extra chunks of history
+04:17:23 START ovl_c4096_r2 kind=e2e arg=4096 branch=mmanzoor/gemma4-gsdpa-v-from-k-overlap patch=- env=
+04:18:47 END ovl_c4096_r2 rc=0
+   DEVICE 262144 tokens in 7155.8ms (36634 tok/s) | staging 169.6ms | wall 7354.6ms
+   ring-depth cost: first=74.2ms -> last=151.4ms = 2.04x over 63 extra chunks of history
+04:18:47 START ovl_c8192_r2 kind=e2e arg=8192 branch=mmanzoor/gemma4-gsdpa-v-from-k-overlap patch=- env=
+04:19:56 END ovl_c8192_r2 rc=1
+  2026-10-21 04:19:48.958 | critical |          Always | TT_FATAL: Program size (71584) too large for kernel config buffer (70656) on TENSIX, 928 B over:
+04:19:56 START base_kvpcc_c2048 kind=kvpcc arg=2048 branch=mmanzoor/gsdpa-base-909748641c1 patch=- env=
+04:20:23   built branch mmanzoor/gsdpa-base-909748641c1 at 909748641c1
+04:23:30 END base_kvpcc_c2048 rc=0
+    Layer          PCC    Relative RMSE         RMSE
+  Worst head: layer=39 head=9 type=sliding_v PCC=0.941301
+  │ Minimum per-head PCC │ >= 0.928000 │ 0.941301 │ PASS   │
+  │ Overall PCC          │ >= 0.978000 │ 0.982643 │ PASS   │
+  │ Overall RRMSE        │ < 0.208000  │ 0.186612 │ PASS   │
+  ======================== 1 passed in 182.15s (0:03:02) =========================
+04:23:30 START base_kvpcc_c4096 kind=kvpcc arg=4096 branch=mmanzoor/gsdpa-base-909748641c1 patch=- env=
+04:26:26 END base_kvpcc_c4096 rc=0
+    Layer          PCC    Relative RMSE         RMSE
+  Worst head: layer=39 head=9 type=sliding_v PCC=0.935430
+  │ Minimum per-head PCC │ >= 0.928000 │ 0.935430 │ PASS   │
+  │ Overall PCC          │ >= 0.978000 │ 0.980254 │ PASS   │
+  │ Overall RRMSE        │ < 0.208000  │ 0.199033 │ PASS   │
+  ======================== 1 passed in 170.83s (0:02:50) =========================
+04:26:26 START base_kvpcc_c8192 kind=kvpcc arg=8192 branch=mmanzoor/gsdpa-base-909748641c1 patch=- env=
+04:29:41 END base_kvpcc_c8192 rc=0
+    Layer          PCC    Relative RMSE         RMSE
+  Worst head: layer=39 head=9 type=sliding_v PCC=0.938811
+  │ Minimum per-head PCC │ >= 0.928000 │ 0.938811 │ PASS   │
+  │ Overall PCC          │ >= 0.978000 │ 0.980850 │ PASS   │
+  │ Overall RRMSE        │ < 0.208000  │ 0.196003 │ PASS   │
+  ======================== 1 passed in 190.93s (0:03:10) =========================
+04:29:41 START restore kind=script arg=restore.py branch=- patch=- env=
+04:30:45 END restore rc=0
+MM restored
+04:30:45 STOP

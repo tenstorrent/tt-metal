@@ -1,0 +1,23 @@
+ref_2k|layer|64:2048|mmanzoor/gemma4-gsdpa-ksplit8-q128-v-from-k|-|
+glazy_2k|layer|64:2048|mmanzoor/gemma4-gsdpa-ksplit8-q128-v-from-k|glazy_count.patch|
+nosalad_2k|layer|64:2048|mmanzoor/gemma4-gsdpa-ksplit8-q128-v-from-k|nosalad.patch|
+ref_4k|layer|32:4096|mmanzoor/gemma4-gsdpa-ksplit8-q128-v-from-k|-|
+glazy_4k|layer|32:4096|mmanzoor/gemma4-gsdpa-ksplit8-q128-v-from-k|glazy_count.patch|
+nosalad_4k|layer|32:4096|mmanzoor/gemma4-gsdpa-ksplit8-q128-v-from-k|nosalad.patch|
+ref_8k|layer|16:8192|mmanzoor/gemma4-gsdpa-ksplit8-q128-v-from-k|-|
+glazy_8k|layer|16:8192|mmanzoor/gemma4-gsdpa-ksplit8-q128-v-from-k|glazy_count.patch|
+nosalad_8k|layer|16:8192|mmanzoor/gemma4-gsdpa-ksplit8-q128-v-from-k|nosalad.patch|
+lazy_acc|acc|test_ring_joint_attention_gemma4_global_ksplit_accuracy and packed_kv or test_ring_joint_attention_gemma4_global_lofi_matmul_accuracy or test_ring_joint_attention_gemma4_global_segmented_accuracy|mmanzoor/gemma4-gsdpa-lazy-rescale|-|
+STOP
+lazy_l2k|layer|64:2048|mmanzoor/gemma4-gsdpa-lazy-rescale|-|
+lazy_l4k|layer|32:4096|mmanzoor/gemma4-gsdpa-lazy-rescale|-|
+lazy_l8k|layer|16:8192|mmanzoor/gemma4-gsdpa-lazy-rescale|-|
+lazy_c2048_r1|e2e|2048|mmanzoor/gemma4-gsdpa-lazy-rescale|-|
+lazy_c4096_r1|e2e|4096|mmanzoor/gemma4-gsdpa-lazy-rescale|-|
+lazy_c8192_r1|e2e|8192|mmanzoor/gemma4-gsdpa-lazy-rescale|-|
+lazy_c2048_r2|e2e|2048|mmanzoor/gemma4-gsdpa-lazy-rescale|-|
+lazy_c4096_r2|e2e|4096|mmanzoor/gemma4-gsdpa-lazy-rescale|-|
+lazy_c8192_r2|e2e|8192|mmanzoor/gemma4-gsdpa-lazy-rescale|-|
+lazy_kvpcc_c2048|kvpcc|2048|mmanzoor/gemma4-gsdpa-lazy-rescale|-|
+lazy_kvpcc_c4096|kvpcc|4096|mmanzoor/gemma4-gsdpa-lazy-rescale|-|
+lazy_kvpcc_c8192|kvpcc|8192|mmanzoor/gemma4-gsdpa-lazy-rescale|-|

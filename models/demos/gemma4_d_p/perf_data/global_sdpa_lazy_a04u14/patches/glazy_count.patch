@@ -1,0 +1,83 @@
+diff --git a/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp b/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp
+index d56707feee2..2838a50c474 100644
+--- a/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp
++++ b/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp
+@@ -1398,6 +1398,14 @@ inline bool sdpa_packed_first_half_unmasked(
+  * Phase 1: Q@KT directly into cb_qkt_im with cb_push_back_hold_wr_ptr, in-place sub_exp.
+  * Phase 2: Drain + QKT@V with SALAD corrections, streaming normalization on last K iter.
+  */
++// EXPERIMENT glazy (count only, UNPACK thread): how often a row group's online-softmax correction factors
++// exp(prev_max - cur_max) are all exactly 1.0 (max unchanged) or all >= 2^-4 / 2^-8 (within a lazy-rescale
++// threshold). Read from cb_exp_max_diff (bf16, column 0 of each row) right before the rescale consumes it.
++namespace glazy {
++inline uint32_t groups = 0, all_one = 0, within_t4 = 0, within_t8 = 0, steps_skip_all = 0, steps = 0;
++inline bool step_all_one = true;
++}  // namespace glazy
++
+ template <
+     bool profiling_enabled,
+     uint32_t Sq_chunk_t,
+@@ -1473,6 +1481,12 @@ static void sdpa_inner_loop_step(
+     [[maybe_unused]] const ring_joint::PackedKVChunkMask& packed_mask = {}) {
+     // Callers guarantee active_Sk is evenly divisible by actual_sbw (via largest_factor_le).
+     const uint32_t kt_num_full_subblocks = active_Sk / actual_sbw;
++    UNPACK({
++        if (!is_first_iter) {
++            glazy::steps++;
++            glazy::step_all_one = true;
++        }
++    })
+     constexpr uint32_t dst_size = compute_kernel_lib::DEST_AUTO_LIMIT;
+     constexpr uint32_t in0_block_w = DHt;
+     constexpr uint32_t q_num_subblocks = Sq_chunk_t / qkt_subblock_h;
+@@ -1933,6 +1947,26 @@ static void sdpa_inner_loop_step(
+         // remainder (sbh=qktv_remainder_h). Normalization is independently guarded at call sites.
+         // prev.out is consumed row-by-row: always read from CB front, then pop after use.
+         auto salad_correct_row = [&](uint32_t salad_row, uint32_t w_salad, uint32_t sbh) {
++            UNPACK({
++                CircularBuffer(cb_exp_max_diff).wait_front(sbh);
++                bool one = true, t4 = true, t8 = true;
++                for (uint32_t t = 0; t < sbh; ++t) {
++                    const uint32_t base = get_tile_l1_byte_address(get_operand_id(cb_exp_max_diff), t);
++                    for (uint32_t r = 0; r < 32; ++r) {
++                        // Row r, column 0: face 0 (rows 0-15) or face 2 (rows 16-31); 16-bit elements.
++                        const uint32_t off = (r < 16 ? r * 16 : 512 + (r - 16) * 16) * 2;
++                        const uint16_t v = *reinterpret_cast<volatile uint16_t*>(base + off);
++                        one = one && v == 0x3F80;  // 1.0
++                        t4 = t4 && v >= 0x3D80;   // >= 2^-4
++                        t8 = t8 && v >= 0x3B80;   // >= 2^-8
++                    }
++                }
++                glazy::groups++;
++                glazy::all_one += one;
++                glazy::within_t4 += t4;
++                glazy::within_t8 += t8;
++                glazy::step_all_one = glazy::step_all_one && one;
++            })
+             PACK((llk_pack_reconfig_l1_acc(1)));
+             {
+                 MaybeDeviceZoneScopedN(profiling_enabled, "S_CORR_FUSED");
+diff --git a/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/ring_joint_sdpa.cpp b/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/ring_joint_sdpa.cpp
+index 7c76b0ca327..16614348122 100644
+--- a/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/ring_joint_sdpa.cpp
++++ b/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/ring_joint_sdpa.cpp
+@@ -34,6 +34,8 @@ constexpr void assert_kv_pad_rotation_streaming_only() {
+ }
+ 
+ void kernel_main() {
++    glazy::groups = glazy::all_one = glazy::within_t4 = glazy::within_t8 = 0;  // EXPERIMENT glazy
++    glazy::steps = glazy::steps_skip_all = 0;
+     constexpr uint32_t NH = get_compile_time_arg_val(0);
+     constexpr uint32_t DHt = get_compile_time_arg_val(1);
+     constexpr uint32_t vDHt = get_compile_time_arg_val(2);
+@@ -867,4 +869,10 @@ void kernel_main() {
+             }
+         }
+     }
++    // EXPERIMENT glazy emission (UNPACK counts; the other threads report zeros)
++    DeviceTimestampedData("GLAZY-GROUPS", (uint64_t)glazy::groups);
++    DeviceTimestampedData("GLAZY-ONE", (uint64_t)glazy::all_one);
++    DeviceTimestampedData("GLAZY-T4", (uint64_t)glazy::within_t4);
++    DeviceTimestampedData("GLAZY-T8", (uint64_t)glazy::within_t8);
++    DeviceTimestampedData("GLAZY-STEPS", (uint64_t)glazy::steps);
+ }
