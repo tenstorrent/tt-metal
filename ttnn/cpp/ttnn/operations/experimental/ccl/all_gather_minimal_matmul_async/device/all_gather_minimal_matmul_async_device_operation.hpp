@@ -33,6 +33,8 @@ struct AllGatherMinimalMatmulAsyncOp {
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
+    static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
+    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
@@ -70,6 +72,7 @@ std::vector<ttnn::Tensor> all_gather_minimal_matmul_async(
     const std::optional<ttnn::Tensor>& persistent_weight_buffer = std::nullopt,
     std::optional<ttnn::ccl::Topology> fsdp_topology = std::nullopt,
     bool fuse_swiglu = false,
-    const std::vector<uint32_t>& chunk_sizes = {});
+    const std::vector<uint32_t>& chunk_sizes = {},
+    std::optional<bool> transpose_core_grid = std::nullopt);
 
 }  // namespace ttnn::prim

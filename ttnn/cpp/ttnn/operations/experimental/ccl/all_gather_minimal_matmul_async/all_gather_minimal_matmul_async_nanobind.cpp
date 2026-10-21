@@ -147,6 +147,12 @@ void bind_all_gather_minimal_matmul_async(nb::module_& mod) {
             M <= N shapes. Note the non-transposed grid moves the in0 mux cores from the bottom row to
             the right column, so the caller's matmul core grid must leave that column free instead.
 
+        transpose_core_grid : Optional[bool], default: None
+            Pins the core-grid orientation: True transposes (M on grid.x), False does not (M on grid.y).
+            None keeps the `force_transpose or M > N` rule. Pin it when the same program must serve
+            several row counts M: the program cache ignores M, so a pinned orientation keeps one
+            cache entry per layer while the rule would re-orient (and rebuild) once M crosses N.
+
         num_workers_per_link : Optional[int], default: 1
             The number of worker cores per link to use for the all gather portion of the operation.  More than 1 typically
             alleviates DRAM-bound shapes, as long as there is enough tiles to justify more than 1 worker.  More than 2 workers
@@ -246,7 +252,8 @@ void bind_all_gather_minimal_matmul_async(nb::module_& mod) {
             nb::arg("persistent_weight_buffer") = nb::none(),
             nb::arg("fsdp_topology") = nb::none(),
             nb::arg("fuse_swiglu") = false,
-            nb::arg("chunk_sizes") = std::vector<uint32_t>{}});
+            nb::arg("chunk_sizes") = std::vector<uint32_t>{},
+            nb::arg("transpose_core_grid") = nb::none()});
 }
 
 }  // namespace ttnn::operations::experimental::ccl

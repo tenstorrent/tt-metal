@@ -32,7 +32,7 @@ constexpr uint32_t kComputeKernelIdx = 5;
 constexpr uint32_t kMuxKernelIdx = 6;
 constexpr uint32_t kFsdpMuxKernelIdx = 7;
 
-// in0 common: [in0, bias, ag_input, sem_backward, sem_forward, barrier_sem,
+// in0 common: [in0, bias, ag_input, sem_backward, sem_forward, barrier_sem, M_tiles,
 //              (ternary_a, ternary_b, broadcast)?, outputs...]
 constexpr uint32_t kIn0BufferSlot = 0;
 constexpr uint32_t kIn0BiasSlot = 1;
@@ -40,22 +40,26 @@ constexpr uint32_t kIn0InputSlot = 2;
 constexpr uint32_t kIn0SemBackwardSlot = 3;
 constexpr uint32_t kIn0SemForwardSlot = 4;
 constexpr uint32_t kIn0BarrierSemSlot = 5;
-constexpr uint32_t kIn0TernaryASlot = kIn0BarrierSemSlot + 1;
+constexpr uint32_t kIn0LenSlot = 6;
+constexpr uint32_t kIn0TernaryASlot = kIn0LenSlot + 1;
 
-// in1 common: [in1, bias, (ternary_a, ternary_b, broadcast)?, (local_weight, fsdp_sem_bwd, fsdp_sem_fwd)?, outputs...]
+// in1 common: [in1, bias, M_tiles, (ternary_a, ternary_b, broadcast)?, (local_weight, fsdp_sem_bwd, fsdp_sem_fwd)?,
+//              outputs...]
 constexpr uint32_t kIn1BufferSlot = 0;
 constexpr uint32_t kIn1BiasSlot = 1;
-constexpr uint32_t kIn1FixedArgCount = 2;
+constexpr uint32_t kIn1LenSlot = 2;
+constexpr uint32_t kIn1FixedArgCount = 3;
 constexpr uint32_t kIn1TernaryArgCount = 3;
 constexpr uint32_t kIn1FsdpLocalWeightArgCount = 1;
 constexpr uint32_t kIn1FsdpSemaphoreArgCount = 2;
 
-// compute common: [scalar, broadcast_ternary_b] when fused ternary is enabled
-constexpr uint32_t kComputeScalarSlot = 0;
-constexpr uint32_t kComputeBroadcastSlot = 1;
+// compute common: [M_tiles, (scalar, broadcast_ternary_b)?]
+constexpr uint32_t kComputeLenSlot = 0;
+constexpr uint32_t kComputeScalarSlot = 1;
+constexpr uint32_t kComputeBroadcastSlot = 2;
 
 constexpr uint32_t in0_output_start_slot(bool has_fused_ternary) {
-    return kIn0BarrierSemSlot + 1u + (has_fused_ternary ? kIn1TernaryArgCount : 0u);
+    return kIn0TernaryASlot + (has_fused_ternary ? kIn1TernaryArgCount : 0u);
 }
 
 constexpr uint32_t in1_local_weight_slot(bool has_fused_ternary) {
@@ -241,7 +245,7 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
     const std::vector<ttnn::GlobalSemaphore>& semaphore,
     const std::optional<ttnn::GlobalSemaphore>& barrier_semaphore,
     //    bool using_persistent_buffers,
-    const bool force_transpose,
+    const bool transpose_core_grid,
     const uint32_t num_workers_per_link,
     const uint32_t num_buffers_per_channel,
     uint32_t N_chunks,
@@ -311,14 +315,21 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
 
     auto in0_tensor_shape = ag_output_tensor.padded_shape();
     auto in1_tensor_shape = weight_tensor.padded_shape();
-    // Fold activation (LHS) upper dimensions into rows: M_total = prod(upper dims) * M
+    // Fold activation (LHS) upper dimensions into rows: M_total = prod(upper dims) * M. M comes from
+    // the input, not the gather buffer, so the buffer may be taller than this call's rows.
     uint32_t K = in0_tensor_shape[-1];
-    uint32_t M = ag_output_tensor.physical_volume() / K;
+    uint32_t M = input_tensor.physical_volume() / input_tensor.padded_shape()[-1];
     uint32_t N = in1_tensor_shape[-1];
 
     uint32_t M_tiles = M / tt::constants::TILE_HEIGHT;
     uint32_t K_tiles = K / tt::constants::TILE_WIDTH;
     uint32_t N_tiles = N / tt::constants::TILE_WIDTH;
+    const uint32_t ag_capacity_M_tiles = ag_output_tensor.physical_volume() / K / tt::constants::TILE_HEIGHT;
+    TT_FATAL(
+        M_tiles <= ag_capacity_M_tiles,
+        "all_gather_minimal_matmul_async gather buffer holds {} tile rows, fewer than the {} needed",
+        ag_capacity_M_tiles,
+        M_tiles);
 
     // Compute N_tiles_per_chunk for splitting
     const uint32_t N_tiles_per_chunk = N_tiles / N_chunks;
@@ -358,10 +369,7 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
     auto large_input_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
     auto large_input_risc = tt::tt_metal::DataMovementProcessor::RISCV_0;
 
-    // Transpose core grid if the output is wide (M > N)
     // If transpose core grid, we parallelize M on cores_x and N on cores_y and swap the NOCs and RISCVs
-    bool transpose_core_grid = force_transpose ? true : (M > N);
-
     auto in0_noc = transpose_core_grid ? large_input_noc : small_input_noc;
     auto in0_risc = transpose_core_grid ? large_input_risc : small_input_risc;
     uint32_t in0_parallel_axis_cores = transpose_core_grid ? grid_size.x : grid_size.y;
@@ -376,8 +384,9 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
      * Each core is assigned a certain number of tiles in M and N to compute.
      * Within a core, tiles are blocked by M_block_tiles and N_block_tiles.
      * Most output blocks are the full block size, but the last block in M or N can be partial.
+     * The M split is not computed here: every kernel derives it on device from the M_tiles common
+     * runtime arg and its in0 index (runtime_length.hpp), so one program serves every row count.
      */
-    uint32_t padded_M_tiles = tt::round_up(M_tiles, in0_parallel_axis_cores);
     uint32_t padded_K_tiles = tt::round_up(K_tiles, K_block_tiles);
 
     // SwiGLU partitions on gate/up PAIRS (= output tiles) so a pair never splits across cores.
@@ -399,10 +408,7 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
     uint32_t K_block_tail_tiles = K_tiles_per_device - (K_blocks_per_device - 1) * K_block_tiles;
     uint32_t K_blocks = K_blocks_per_device * ring_size;
 
-    uint32_t M_tiles_per_core = padded_M_tiles / in0_parallel_axis_cores;
     uint32_t N_tiles_per_core = padded_N_tiles / in1_parallel_axis_cores;
-
-    uint32_t M_blocks_per_core = tt::div_up(M_tiles_per_core, M_block_tiles);
     uint32_t N_blocks_per_core = tt::div_up(N_tiles_per_core, N_block_tiles);
 
     if (fuse_swiglu) {
@@ -415,9 +421,7 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
             N_block_tiles);
     }
 
-    log_debug(tt::LogOp, "M_tiles_per_core: {}", M_tiles_per_core);
     log_debug(tt::LogOp, "N_tiles_per_core: {}", N_tiles_per_core);
-    log_debug(tt::LogOp, "M_blocks_per_core: {}", M_blocks_per_core);
     log_debug(tt::LogOp, "N_blocks_per_core: {}", N_blocks_per_core);
 
     uint32_t in0_block_num_tiles = M_block_tiles * K_block_tiles;
@@ -699,7 +703,6 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
     log_debug(tt::LogOp, "out_cb_id: {}", out_cb_id);
     log_debug(tt::LogOp, "intermediate_cb_id: {}", intermediate_cb_id);
     log_debug(tt::LogOp, "M_tiles: {}", M_tiles);
-    log_debug(tt::LogOp, "padded_M_tiles: {}", padded_M_tiles);
     log_debug(tt::LogOp, "K_tiles: {}", K_tiles);
     log_debug(tt::LogOp, "padded_K_tiles: {}", padded_K_tiles);
     log_debug(tt::LogOp, "N_tiles: {}", N_tiles);
@@ -885,8 +888,6 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
     bool in1_is_output_writer = !transpose_core_grid;
 
     std::vector<uint32_t> in0_sender_compile_time_args = {
-        M_tiles,
-        padded_M_tiles,
         K_tiles,
         padded_K_tiles,
         N_tiles,
@@ -894,7 +895,6 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
         M_block_tiles,
         K_block_tiles,
         N_block_tiles,
-        M_blocks_per_core,
         N_blocks_per_core,
         in0_tile_size,
         out_tile_size,
@@ -912,6 +912,7 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
         N_tiles_per_chunk,  // N_tiles_per_chunk
         K_tiles_per_device,
         K_block_tail_tiles,
+        in0_parallel_axis_cores,
     };
     append_accessors(
         in0_sender_compile_time_args,
@@ -957,8 +958,6 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
         in0_defines);
 
     std::vector<uint32_t> in0_receiver_no_fabric_compile_time_args = {
-        M_tiles,
-        padded_M_tiles,
         K_tiles,
         padded_K_tiles,
         N_tiles,
@@ -966,7 +965,6 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
         M_block_tiles,
         K_block_tiles,
         N_block_tiles,
-        M_blocks_per_core,
         N_blocks_per_core,
         in0_tile_size,
         out_tile_size,
@@ -984,6 +982,7 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
         N_tiles_per_chunk,  // N_tiles_per_chunk
         K_tiles_per_device,
         K_block_tail_tiles,
+        in0_parallel_axis_cores,
     };
     append_accessors(
         in0_receiver_no_fabric_compile_time_args,
@@ -1004,8 +1003,6 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
         in0_defines);
 
     std::vector<uint32_t> in0_receiver_fabric_compile_time_args = {
-        M_tiles,
-        padded_M_tiles,
         K_tiles,
         padded_K_tiles,
         N_tiles,
@@ -1013,7 +1010,6 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
         M_block_tiles,
         K_block_tiles,
         N_block_tiles,
-        M_blocks_per_core,
         N_blocks_per_core,
         in0_tile_size,
         out_tile_size,
@@ -1031,6 +1027,7 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
         N_tiles_per_chunk,  // N_tiles_per_chunk
         K_tiles_per_device,
         K_block_tail_tiles,
+        in0_parallel_axis_cores,
     };
     fabric_mux_connection_ct_args(
         num_workers_per_link,
@@ -1069,8 +1066,6 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
 
     auto build_in1_ct_args = [&](bool is_injector) {
         std::vector<uint32_t> ct = {
-            M_tiles,
-            padded_M_tiles,
             K_tiles,
             padded_K_tiles,
             N_tiles,
@@ -1078,7 +1073,6 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
             M_block_tiles,
             K_block_tiles,
             N_block_tiles,
-            M_blocks_per_core,
             N_blocks_per_core,
             in1_tile_size,
             out_tile_size,
@@ -1092,6 +1086,7 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
             static_cast<uint32_t>(topology),  // topology
             K_tiles_per_device,
             K_block_tail_tiles,
+            in0_parallel_axis_cores,
         };
         // FSDP-only CT args. Order matches the kernel's parse order under FSDP_FUSED.
         if (fsdp_fused) {
@@ -1146,10 +1141,10 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
         M_block_tiles,
         K_block_tiles,
         N_block_tiles,
-        M_blocks_per_core,
         N_blocks_per_core,
         subblock_h,
-        subblock_w};
+        subblock_w,
+        in0_parallel_axis_cores};
 
     auto compute_defines = defines;
     if (topology == ttnn::ccl::Topology::Linear) {
@@ -1276,11 +1271,11 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
         }
     }
 
-    // Common runtime args (same for all cores). Buffer addresses, global-semaphore addresses, and the
-    // fused-ternary scalar are re-applied in override_runtime_arguments.
+    // Common runtime args (same for all cores). Buffer addresses, global-semaphore addresses, the row
+    // count M_tiles and the fused-ternary scalar are re-applied in override_runtime_arguments.
     // A repeated input Buffer* empties resolve_bindings; this workload path does not rebuild.
-    // in0 common args: [in0_addr, in2_addr, in3_addr, sem_backward, sem_forward, barrier_sem, [ternary_a, ternary_b],
-    // output_addrs...]
+    // in0 common args: [in0_addr, in2_addr, in3_addr, sem_backward, sem_forward, barrier_sem, M_tiles,
+    // [ternary_a, ternary_b, broadcast], output_addrs...]
     {
         tt::tt_metal::KernelDescriptor::RTArgList in0_common_args;
         in0_common_args.push_back(in0_buffer);
@@ -1293,6 +1288,7 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
         in0_common_args.push_back(sem_backward);  // smuggled-rta-ok: semaphore, override
         in0_common_args.push_back(sem_forward);   // smuggled-rta-ok: semaphore, override
         in0_common_args.push_back(barrier_sem);   // smuggled-rta-ok: semaphore, override
+        in0_common_args.push_back(M_tiles);       // smuggled-rta-ok: runtime length, override
         if (use_fused_ternary) {
             in0_common_args.push_back(allocated_buffer(fused_ternary_input_a.value(), "fused ternary a"));
             in0_common_args.push_back(allocated_buffer(fused_ternary_input_b.value(), "fused ternary b"));
@@ -1307,12 +1303,13 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
         desc.kernels[kIn0ReceiverNoFabricKernelIdx].emplace_common_runtime_args(in0_common_args);
     }
 
-    // in1 common args: [in1_addr, in2_addr, [ternary_a, ternary_b, broadcast_ternary_b],
+    // in1 common args: [in1_addr, in2_addr, M_tiles, [ternary_a, ternary_b, broadcast_ternary_b],
     //                   [local_weight_addr, fsdp_sem_backward, fsdp_sem_forward], output_addrs...]
     {
         tt::tt_metal::KernelDescriptor::RTArgList in1_common_args;
         in1_common_args.push_back(in1_buffer);
         in1_common_args.push_back(in2_buffer);
+        in1_common_args.push_back(M_tiles);  // smuggled-rta-ok: runtime length, override
         if (use_fused_ternary) {
             in1_common_args.push_back(allocated_buffer(fused_ternary_input_a.value(), "fused ternary a"));
             in1_common_args.push_back(allocated_buffer(fused_ternary_input_b.value(), "fused ternary b"));
@@ -1336,12 +1333,16 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
         desc.kernels[kIn1ReceiverKernelIdx].emplace_common_runtime_args(in1_common_args);
     }
 
-    // compute common args: [scalar, broadcast_ternary_b] (only if fused ternary)
-    if (use_fused_ternary) {
-        uint32_t ternary_b_M_tiles = fused_ternary_input_b.value().padded_shape()[-2] / tt::constants::TILE_HEIGHT;
+    // compute common args: [M_tiles, [scalar, broadcast_ternary_b]]
+    {
         tt::tt_metal::KernelDescriptor::RTArgList compute_common_args;
-        compute_common_args.push_back(std::bit_cast<uint32_t>(fused_ternary_scalar.value()));
-        compute_common_args.push_back(ternary_b_M_tiles == 1 ? 1u : 0u);  // broadcast_ternary_b
+        compute_common_args.push_back(M_tiles);  // smuggled-rta-ok: runtime length, override
+        if (use_fused_ternary) {
+            uint32_t ternary_b_M_tiles =
+                fused_ternary_input_b.value().padded_shape()[-2] / tt::constants::TILE_HEIGHT;
+            compute_common_args.push_back(std::bit_cast<uint32_t>(fused_ternary_scalar.value()));
+            compute_common_args.push_back(ternary_b_M_tiles == 1 ? 1u : 0u);  // broadcast_ternary_b
+        }
         desc.kernels[kComputeKernelIdx].emplace_common_runtime_args(compute_common_args);
     }
 
@@ -1393,9 +1394,8 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
          * the total number of blocks divisible by the number of cores.
          * We can't yet get rid of these blocks, since the receiver cores must ack
          * all blocks that sender cores are expected to send.
+         * The M range is derived on device from in0_idx and the M_tiles common arg.
          */
-        uint32_t M_start_tile = M_tiles_per_core * in0_idx;
-        uint32_t M_end_tile = M_tiles_per_core * (in0_idx + 1);
         uint32_t N_start_tile = N_tiles_per_core * in1_idx;
         uint32_t N_end_tile = N_tiles_per_core * (in1_idx + 1);
 
@@ -1418,8 +1418,7 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
             in0_sender_semaphore_id,
             in0_receiver_semaphore_id,
             in0_valid_semaphore_id,
-            M_start_tile,
-            M_end_tile,
+            in0_idx,
             N_start_tile,
             N_end_tile,
             defer_write_k_block,
@@ -1518,8 +1517,7 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
             in1_sender_semaphore_id,
             in1_receiver_semaphore_id,
             in1_valid_semaphore_id,
-            M_start_tile,
-            M_end_tile,
+            in0_idx,
             N_start_tile,
             N_end_tile,
             defer_write_k_block,
@@ -1672,10 +1670,9 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
             desc.kernels[kIn1ReceiverKernelIdx].emplace_runtime_args(core, as_runtime_args(in1_args));
         }
 
-        // Per-core compute args (scalar is in common args)
+        // Per-core compute args (M_tiles and the scalar are in common args)
         std::vector<uint32_t> compute_runtime_args = {
-            M_start_tile,
-            M_end_tile,
+            in0_idx,
             N_start_tile,
             N_end_tile,
         };
@@ -1688,6 +1685,11 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
 }  // namespace detail
 
 namespace ttnn::experimental::prim {
+
+std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t> default_block_sizes(
+    uint32_t M, uint32_t K, uint32_t N, bool fp32_dest_acc_en) {
+    return ::detail::determine_default_block_sizes(M, K, N, fp32_dest_acc_en);
+}
 
 tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory(
     const ttnn::Tensor& input_tensor,
@@ -1708,7 +1710,7 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory(
     const std::vector<ttnn::GlobalSemaphore>& semaphore,
     const std::optional<ttnn::GlobalSemaphore>& barrier_semaphore,
     // bool using_persistent_buffers,
-    const bool force_transpose,
+    const bool transpose_core_grid,
     const uint32_t num_workers_per_link,
     const uint32_t num_buffers_per_channel,
     uint32_t N_chunks,
@@ -1743,7 +1745,7 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory(
         semaphore,
         barrier_semaphore,
         // using_persistent_buffers,
-        force_transpose,
+        transpose_core_grid,
         num_workers_per_link,
         num_buffers_per_channel,
         N_chunks,
@@ -1792,6 +1794,9 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
     const auto& weight_tensor = tensor_args.weight_tensor;
     const auto& bias_tensor = tensor_args.bias_tensor;
     const auto& ag_output_tensor = output_tensor.at(0);
+    const uint32_t M = act_tensor.physical_volume() / act_tensor.padded_shape()[-1];
+    const bool transpose_core_grid =
+        resolve_transpose_core_grid(attributes, M, weight_tensor.padded_shape()[-1]);
 
     // Output layout: [ag_output, (optional: persistent_weight_buffer), chunks...]
     // Strip ag_output (always) and persistent_weight_buffer (if FSDP) from mm_output_tensors.
@@ -1820,7 +1825,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
         attributes.semaphore,
         attributes.barrier_semaphore,
         // attributes.using_persistent_buffers,
-        attributes.force_transpose,
+        transpose_core_grid,
         attributes.num_workers_per_link,
         attributes.num_buffers_per_channel,
         attributes.chunks,
@@ -1882,6 +1887,9 @@ void AllGatherMinimalMatmulAsyncProgramFactory::override_runtime_arguments(
     const uint32_t sem_forward = operation_attributes.semaphore.at(1).address();
     const uint32_t barrier_sem =
         operation_attributes.barrier_semaphore.has_value() ? operation_attributes.barrier_semaphore->address() : 0u;
+    const auto& act_tensor = tensor_args.input_tensor;
+    const uint32_t M_tiles =
+        act_tensor.physical_volume() / act_tensor.padded_shape()[-1] / tt::constants::TILE_HEIGHT;
 
     auto& in0_sender_common = tt::tt_metal::GetCommonRuntimeArgs(program, kIn0SenderKernelIdx);
     auto& in0_receiver_fabric_common = tt::tt_metal::GetCommonRuntimeArgs(program, kIn0ReceiverFabricKernelIdx);
@@ -1893,6 +1901,7 @@ void AllGatherMinimalMatmulAsyncProgramFactory::override_runtime_arguments(
         common[kIn0SemBackwardSlot] = sem_backward;
         common[kIn0SemForwardSlot] = sem_forward;
         common[kIn0BarrierSemSlot] = barrier_sem;
+        common[kIn0LenSlot] = M_tiles;
     };
     write_in0(in0_sender_common);
     write_in0(in0_receiver_fabric_common);
@@ -1903,6 +1912,7 @@ void AllGatherMinimalMatmulAsyncProgramFactory::override_runtime_arguments(
     auto write_in1_fixed = [&](auto& common) {
         common[kIn1BufferSlot] = in1_addr;
         common[kIn1BiasSlot] = bias_addr;
+        common[kIn1LenSlot] = M_tiles;
     };
     write_in1_fixed(in1_sender_common);
     write_in1_fixed(in1_receiver_common);
@@ -1910,9 +1920,12 @@ void AllGatherMinimalMatmulAsyncProgramFactory::override_runtime_arguments(
     if (has_fused_ternary) {
         const uint32_t ternary_a_addr = required_address(tensor_args.fused_ternary_input_a.value());
         const uint32_t ternary_b_addr = required_address(tensor_args.fused_ternary_input_b.value());
+        const uint32_t broadcast_ternary_b =
+            tensor_args.fused_ternary_input_b.value().padded_shape()[-2] / tt::constants::TILE_HEIGHT == 1 ? 1u : 0u;
         auto write_ternary = [&](auto& common, uint32_t ternary_a_slot) {
             common[ternary_a_slot] = ternary_a_addr;
             common[ternary_a_slot + 1] = ternary_b_addr;
+            common[ternary_a_slot + 2] = broadcast_ternary_b;
         };
         write_ternary(in0_sender_common, kIn0TernaryASlot);
         write_ternary(in0_receiver_fabric_common, kIn0TernaryASlot);
@@ -1957,15 +1970,14 @@ void AllGatherMinimalMatmulAsyncProgramFactory::override_runtime_arguments(
         in1_receiver_common[in1_out_slot + offset] = addr;
     }
 
-    // Same gate as create: compute common args exist only when the scalar is set.
+    auto& compute_common = tt::tt_metal::GetCommonRuntimeArgs(program, kComputeKernelIdx);
+    compute_common[kComputeLenSlot] = M_tiles;
+    // Same gate as create: the scalar slots exist only when the scalar is set.
     if (has_fused_ternary) {
-        const uint32_t scalar_as_uint = std::bit_cast<uint32_t>(operation_attributes.fused_ternary_scalar.value());
-        const uint32_t ternary_b_M_tiles =
-            tensor_args.fused_ternary_input_b.value().padded_shape()[-2] / tt::constants::TILE_HEIGHT;
-        const uint32_t broadcast_ternary_b = ternary_b_M_tiles == 1 ? 1u : 0u;
-        auto& compute_common = tt::tt_metal::GetCommonRuntimeArgs(program, kComputeKernelIdx);
-        compute_common[kComputeScalarSlot] = scalar_as_uint;
-        compute_common[kComputeBroadcastSlot] = broadcast_ternary_b;
+        compute_common[kComputeScalarSlot] =
+            std::bit_cast<uint32_t>(operation_attributes.fused_ternary_scalar.value());
+        compute_common[kComputeBroadcastSlot] =
+            tensor_args.fused_ternary_input_b.value().padded_shape()[-2] / tt::constants::TILE_HEIGHT == 1 ? 1u : 0u;
     }
 }
 
