@@ -12,7 +12,7 @@ import pytest
 
 from models.demos.blackhole.deepseek_v41_flash.tt import indexer as ix
 
-RATIO = 2
+RATIOS = (1, 2)  # compress ratios of the indexer layers (20 layers of ratio 1, 18 of ratio 2)
 
 
 @pytest.fixture(autouse=True)
@@ -30,27 +30,28 @@ class _Stub(ix.DSV41DecodeIndexer):
         pass
 
 
-def _n_alloc(ctx):
-    return -(-(ctx // RATIO + 32) // 32) * 32
+def _n_alloc(ctx, ratio):
+    return -(-(ctx // ratio + 32) // 32) * 32
 
 
-def _scored(max_ctx, pos):
+def _scored(max_ctx, pos, ratio):
     """key entries one index layer scores at decode position ``pos`` (+ the step's own row) on a build of ``max_ctx`` tokens"""
-    n_alloc = _n_alloc(max_ctx)
-    backend = ix.default_backend(max_ctx // RATIO)
+    n_alloc = _n_alloc(max_ctx, ratio)
+    backend = ix.default_backend(max_ctx // ratio)
     buckets = ix.pos_buckets(max_ctx + 64)
     P = next((b for b in buckets if pos + 1 <= b), None)
-    return _Stub(RATIO, n_alloc, backend).set_pos_bucket(P)
+    return _Stub(ratio, n_alloc, backend).set_pos_bucket(P)
 
 
+@pytest.mark.parametrize("ratio", RATIOS)
 @pytest.mark.parametrize("max_ctx", [65536, 131072, 262144, 524288, 1048576])
-def test_long_builds_use_the_bucketed_matmul_backend(max_ctx):
-    assert ix.default_backend(max_ctx // RATIO) == "matmul"
+def test_long_builds_use_the_bucketed_matmul_backend(max_ctx, ratio):
+    assert ix.default_backend(max_ctx // ratio) == "matmul"
 
 
 def test_backend_overrides(monkeypatch):
     monkeypatch.setenv("DSV41_IDX_BUCKETED", "0")
-    assert ix.default_backend(524288) == "fused"  # the old switch-only rule
+    assert ix.default_backend(524288) == "fused" and ix.default_backend(1048576) == "fused"  # the old switch-only rule
     assert ix.default_backend(131072) == "matmul"
     monkeypatch.setenv("DSV41_IDX_BACKEND", "fused")
     assert ix.default_backend(1000) == "fused"
@@ -67,15 +68,17 @@ def test_bucket_ladder_reaches_the_built_context(max_ctx):
     assert all(y == 2 * x for x, y in zip(ladder, ladder[1:]))
 
 
+@pytest.mark.parametrize("ratio", RATIOS)
 @pytest.mark.parametrize("pos", [33000, 40000, 65000, 70000, 100000, 131000, 200000, 262000, 400000, 524000])
-def test_scored_length_follows_the_positions_not_the_build(pos):
+def test_scored_length_follows_the_positions_not_the_build(pos, ratio):
     """at any position the 1M build scores at most 2x (+1 tile group) what a build just big enough for it scores"""
     small_ctx = 1 << max(16, (pos + 128).bit_length())  # the smallest power-of-two build holding the position
-    big, small = _scored(1048576, pos), _scored(small_ctx, pos)
+    big, small = _scored(1048576, pos, ratio), _scored(small_ctx, pos, ratio)
     assert big <= 2 * small + 64, (pos, big, small)
-    assert big <= 2 * (pos // RATIO) + 128, (pos, big)  # and within 2x of the entries the position can hold
+    assert big <= 2 * (pos // ratio) + 128, (pos, big)  # and within 2x of the entries the position can hold
 
 
+@pytest.mark.parametrize("ratio", RATIOS)
 @pytest.mark.parametrize("pos", [600, 5000, 20000, 32000])
-def test_short_positions_identical_on_every_build(pos):
-    assert _scored(65536, pos) == _scored(262144, pos) == _scored(1048576, pos)
+def test_short_positions_identical_on_every_build(pos, ratio):
+    assert _scored(65536, pos, ratio) == _scored(262144, pos, ratio) == _scored(1048576, pos, ratio)

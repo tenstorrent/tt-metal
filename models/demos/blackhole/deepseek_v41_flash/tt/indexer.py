@@ -54,7 +54,9 @@ def rope_rows(freqs_cis: torch.Tensor, positions: torch.Tensor):
     return C, S
 
 
-BUCKETED_MATMUL_MAX_ENTRIES = (1 << 19) + 64  # a 1,048,576-token build (ratio 2) + its 64 spare positions
+BUCKETED_MATMUL_MAX_ENTRIES = (
+    1 << 20
+) + 64  # a 1,048,576-token build of the ratio-1 layers (one entry per position, the 20 last layers) + its 64 spare positions
 
 
 def default_backend(n_entries: int) -> str:
