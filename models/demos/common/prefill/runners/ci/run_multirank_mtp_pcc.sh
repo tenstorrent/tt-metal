@@ -52,6 +52,8 @@ if [ -n "${PREFILL_NUM_USERS:-}" ]; then
   RUNNER_NUM_USERS=${PREFILL_NUM_USERS}
 fi
 RUNNER_NUM_USERS_EXPORT="${RUNNER_NUM_USERS:+export PREFILL_NUM_USERS=${RUNNER_NUM_USERS}; }"
+# Same for a cache-format override: every rank has to allocate the same KVPE format.
+RUNNER_NUM_USERS_EXPORT+="${PREFILL_SCALED_FP8_KV_CACHE:+export PREFILL_SCALED_FP8_KV_CACHE=${PREFILL_SCALED_FP8_KV_CACHE}; }"
 
 MANIFEST="${MANIFEST_DIR}/${MODEL}_${VARIANT}.json"
 [ -f "${MANIFEST}" ] || { echo "no manifest ${MODEL}_${VARIANT}.json in ${MANIFEST_DIR}" >&2; exit 2; }

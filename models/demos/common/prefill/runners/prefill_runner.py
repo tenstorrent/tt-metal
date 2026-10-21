@@ -692,6 +692,8 @@ def _assert_ranks_agree_on_config(rank: int, num_ranks: int) -> None:
         "mesh_shape": GLOBAL_MESH_SHAPE,
         "mtp_levels": MTP_LEVELS,
         "mtp_decode_levels": MTP_DECODE_LEVELS,
+        # Every rank sizes the KV chunk table from its own cache, so a format split misaddresses the others.
+        "sparse_kv_cache_format": _sparse_kv_cache_format(),
         "PREFILL_ENABLE_MIGRATION": migration_publish_enabled(),
         "PREFILL_MIGRATION_EXPORT_TO_FILE": migration_file_export_enabled(),
     }
