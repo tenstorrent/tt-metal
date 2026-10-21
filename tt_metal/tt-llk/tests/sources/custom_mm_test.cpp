@@ -28,10 +28,10 @@
 //
 // So the header restricts M to {1,2,4,8} rows: only those DEST rows are defined. The math
 // LLK (_llk_math_custom_mm_) runs one MVMUL walk per k-tile, accumulating A*B into DEST;
-// with split_acc=false / finalize=false there is NO finalization pass (finalize must be
-// false when split_acc is false -- custom_mm.h arg table, line 138), so DEST holds the
-// plain accumulated product. The result is packed as ct_dim output tiles; inside each tile
-// the two 16-col faces (M x 16, row-major) sit contiguously, then pad out to a full tile.
+// with split_acc (CUSTOM_MM_SPLIT_ACC) the second K half of every k-tile goes to the tile's rows
+// 8 and 24 and the last call's finalize adds it back, so DEST holds the accumulated product
+// either way. The result is packed as ct_dim output tiles; inside each tile the two 16-col
+// faces (M x 16, row-major) sit contiguously, then pad out to a full tile.
 //
 // The Python golden is exactly torch A[M,K] @ B[K,N] (MatmulGolden, LoFi), and it asserts
 // ONLY the M defined rows of each output tile against that product (the rest of each 32-row
@@ -45,10 +45,8 @@
 //                           SrcA CFGSHIFTMASK walk reads them with read_transposed=false,
 //                           block_increment = inner_increment = tile_size).
 //
-// The single unpack call issues one MOP covering the whole kt walk; the single math call
-// loops kt internally -- both are invoked ONCE (not per k-tile), exactly as the LLK's own
-// run wrappers do (_llk_unpack_AB_custom_mm_run_ issues TT_MOP once for kt/2-1; the finalize
-// path is disabled here).
+// Each call's unpack issues one MOP over its kt walk and its math loops kt internally (not per
+// k-tile), as the LLK's own run wrappers do; the last call finalizes when CUSTOM_MM_FINALIZE.
 
 #include <algorithm>
 #include <cstdint>
@@ -73,9 +71,13 @@ static_assert(kt_per_call * num_calls == KT_DIM, "K tiles must split evenly acro
 #ifdef LLK_TRISC_UNPACK
 
 #include "experimental/llk_unpack_AB_custom_mm.h"
+#include "experimental/llk_unpack_hw_cleanup.h"
 #include "llk_unpack_common.h"
 
-void run_kernel(RUNTIME_PARAMETERS params)
+// The kernel has one configuration, so any key but CUSTOM_MM_NO_BANK_KEY names it
+constexpr std::uint64_t BANK_KEY = 0;
+
+void run_custom_mm(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
@@ -108,6 +110,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // unpB_face_r_dim = in0 (SrcB) face rows in {1,2,4,8}; unpA_dst_format tunes the
     // instruction sequence (post1 only for Bfp4_b). transpose=false.
     _llk_unpack_AB_custom_mm_init_<false /* transpose */, true /* clear_src */>(params.in0_face_r_dim, formats.unpack_B_dst, CT_DIM);
+    if constexpr (CUSTOM_MM_BANKED)
+    {
+        _llk_unpack_AB_custom_mm_bank_init_(BANK_KEY);
+    }
 
     // SrcA=buffer_B (B matrix, full tiles), SrcB=buffer_A (A matrix). Call c takes K tiles
     // [c * kt_per_call, (c + 1) * kt_per_call): B is k-major, so its tiles start at c * kt_per_call * ct,
@@ -115,7 +121,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // Within a call the SrcA walk covers its kt*ct grid via CFGSHIFTMASK, the SrcB walk covers kt via counters.
     for (std::uint32_t call = 0; call < num_calls; call++)
     {
-        _llk_unpack_AB_custom_mm_<false /* read_transposed */>(
+        _llk_unpack_AB_custom_mm_<CUSTOM_MM_READ_TRANSPOSED, CUSTOM_MM_BANKED>(
             L1_ADDRESS(params.buffer_B[0]),
             L1_ADDRESS(params.buffer_A[0]) + call * kt_per_call * 4 * params.in0_face_r_dim,
             call * kt_per_call * CT_DIM /* tile_index_a */,
@@ -124,6 +130,30 @@ void run_kernel(RUNTIME_PARAMETERS params)
             params.TILE_SIZE_UNPACK_A,
             kt_per_call,
             CT_DIM);
+        if constexpr (CUSTOM_MM_BANK_SPLIT > 0)
+        {
+            if (call + 1 == CUSTOM_MM_BANK_SPLIT)
+            {
+                // End the sequence, on the second bank after an odd count, and start one whose init skips the copy
+                _llk_unpack_AB_custom_mm_bank_end_();
+                _llk_unpack_AB_custom_mm_bank_init_(BANK_KEY);
+            }
+        }
+    }
+    if constexpr (CUSTOM_MM_BANKED)
+    {
+        _llk_unpack_AB_custom_mm_bank_end_();
+    }
+}
+
+void run_kernel(RUNTIME_PARAMETERS params)
+{
+    run_custom_mm(params);
+    if constexpr (CUSTOM_MM_CLEANUP_RERUN)
+    {
+        // The cleanup leaves the canonical configuration in the second bank, so the same key's bank init must copy again
+        _llk_unpack_hw_cleanup_canonical_<is_fp32_dest_acc_en>();
+        run_custom_mm(params);
     }
 }
 
@@ -132,9 +162,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #ifdef LLK_TRISC_MATH
 
 #include "experimental/llk_math_custom_mm.h"
+#include "experimental/llk_math_custom_mm_reuse_dest_srcb.h"
+#include "experimental/llk_math_hw_cleanup.h"
 #include "llk_math_common.h"
 
-void run_kernel(RUNTIME_PARAMETERS params)
+void run_custom_mm(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
@@ -150,20 +182,20 @@ void run_kernel(RUNTIME_PARAMETERS params)
         math::_configure_preserve_zero_flag_state_();
     }
 
-    // split_acc=false, dense_packing=true, transpose=false. operandB_face_r_dim = in0 M.
-    // dense_packing MUST be true: the pack thread reads the ct output tiles with the
-    // dense-packing W-stride (consecutive tiles 32 DEST rows apart), so the math must lay
-    // them out 32 rows apart too (ADDR_MOD_2 DEST incr = 32, not 64). With dense_packing
-    // false the math strides output tiles 64 rows apart, so pack reads tile i>0 from the
-    // wrong DEST offset -- tile 0 is correct but every later tile is corrupt. Matches the
-    // proven compressed sibling (matmul_custom_compressed_test.cpp), which passes
-    // dense_packing=true for the identical pack setup.
-    _llk_math_custom_mm_init_<false /* transpose */, false /* split_acc */, true /* dense_packing */>(params.in0_face_r_dim, CT_DIM);
+    _llk_math_custom_mm_init_<false /* transpose */, CUSTOM_MM_SPLIT_ACC, CUSTOM_MM_DENSE_PACKING, CUSTOM_MM_GROUP_FINALIZE>(params.in0_face_r_dim, CT_DIM);
+    if constexpr (CUSTOM_MM_REUSE_REPLAY)
+    {
+        _llk_math_custom_mm_reuse_dest_srcb_replay_init_();
+    }
 
     _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
+    if constexpr (CUSTOM_MM_FINALIZE && !CUSTOM_MM_SPLIT_ACC)
+    {
+        // A finalize without split_acc adds DEST rows 8 and 24 of each tile, which no MVMUL wrote: start them at zero
+        _llk_math_clear_dest_section_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+        math::reset_counters(p_setrwc::SET_ABD_F);
+    }
 
-    // finalize MUST be false when split_acc is false (custom_mm.h arg table): with no split
-    // accumulation there are no partials to merge, and the DEST already holds A*B.
     for (std::uint32_t call = 0; call < num_calls; call++)
     {
         if constexpr (num_calls > 1)
@@ -174,35 +206,55 @@ void run_kernel(RUNTIME_PARAMETERS params)
             // writes. Without the delay math keeps up with the unpacker and the boundary is never contended.
             ckernel::wait(2000);
         }
-        _llk_math_custom_mm_<false /* finalize */>(params.in0_face_r_dim, 0 /* dst_index */, kt_per_call, CT_DIM);
+        if constexpr (CUSTOM_MM_FINALIZE)
+        {
+            if (call == num_calls - 1)
+            {
+                _llk_math_custom_mm_<true /* finalize */, CUSTOM_MM_GROUP_FINALIZE>(params.in0_face_r_dim, 0 /* dst_index */, kt_per_call, CT_DIM);
+                break;
+            }
+        }
+        _llk_math_custom_mm_<false /* finalize */, CUSTOM_MM_GROUP_FINALIZE>(params.in0_face_r_dim, 0 /* dst_index */, kt_per_call, CT_DIM);
     }
 
     _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+}
+
+void run_kernel(RUNTIME_PARAMETERS params)
+{
+    run_custom_mm(params);
+    if constexpr (CUSTOM_MM_CLEANUP_RERUN)
+    {
+        _llk_math_hw_cleanup_canonical_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+        run_custom_mm(params);
+    }
 }
 
 #endif
 
 #ifdef LLK_TRISC_PACK
 
+#include "experimental/llk_pack_hw_cleanup.h"
 #include "llk_lib_pack_wrappers.h"
 #include "llk_pack_common.h"
 
-void run_kernel(RUNTIME_PARAMETERS params)
+void run_custom_mm(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
 
     // Same pack setup the compressed driver uses: the in0 face geometry (M rows, 2 faces)
-    // is what lands in DEST, so pack with that geometry and the dense-packing W-stride
-    // (tiles 32 rows apart) that custom_mm_block_init installs for the [M,32] output tiles.
+    // is what lands in DEST, so pack with that geometry and the W-stride the math used: tiles
+    // 32 rows apart with dense packing (what custom_mm_block_init installs), 64 without.
     _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(
         formats.pack_src, formats.pack_dst, params.TILE_SIZE_PACK, params.in0_face_r_dim, TILE_C_DIM, params.num_faces, true);
 
     _llk_pack_init_<PackMode::Default, false /*zero_output*/, false /*skip_addrmod_config*/, true /*skip_packer_strides*/>(
         formats.pack_src, params.in0_face_r_dim, TILE_C_DIM, params.num_faces, 1 /*num_tiles*/, false /*skip_bh_tilize_workaround*/);
-    cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Wstride_RMW>((TILE_NUM_FACES / 2) * FACE_C_DIM * FACE_R_DIM * (is_fp32_dest_acc_en ? 4 : 2));
+    cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Wstride_RMW>(
+        (CUSTOM_MM_DENSE_PACKING ? TILE_NUM_FACES / 2 : TILE_NUM_FACES) * FACE_C_DIM * FACE_R_DIM * (is_fp32_dest_acc_en ? 4 : 2));
 
     _llk_packer_wait_for_math_done_();
 
@@ -214,6 +266,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 
     cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Wstride_RMW>(TILE_NUM_FACES * FACE_C_DIM * FACE_R_DIM * (is_fp32_dest_acc_en ? 4 : 2));
+}
+
+void run_kernel(RUNTIME_PARAMETERS params)
+{
+    run_custom_mm(params);
+    if constexpr (CUSTOM_MM_CLEANUP_RERUN)
+    {
+        _llk_pack_hw_cleanup_canonical_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+        run_custom_mm(params);
+    }
 }
 
 #endif

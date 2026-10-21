@@ -13,12 +13,13 @@
 #include "ckernel_template.h"
 #include "cunpack_common.h"
 #include "experimental/llk_unpack_AB_custom_mm.h"
+#include "experimental/llk_sdpa_custom_mm_common.h"
 #include "llk_assert.h"
 
 using namespace ckernel;
 using namespace ckernel::unpacker;
 
-template <bool read_transposed = false, bool configure_mask_extent = false>
+template <bool read_transposed = false, bool configure_mask_extent = false, bool wait_at_end = false>
 inline void _llk_unpack_AB_sdpa_custom_mm_(
     const std::uint32_t base_address_a,
     const std::uint32_t base_address_b,
@@ -65,5 +66,12 @@ inline void _llk_unpack_AB_sdpa_custom_mm_(
         }
     }
 
-    _llk_unpack_AB_custom_mm_run_(cfg, address_a, address_b, block_increment, inner_increment, kt_dim, ct_dim);
+    _llk_unpack_AB_custom_mm_run_(cfg, address_a, address_b, block_increment, inner_increment, kt_dim, ct_dim, wait_at_end);
+
+    if (mask_chunk)
+    {
+        // The mask unpack read unpacker 1's context-1 base: end on context 0 so a two-context follower cannot rewrite it.
+        wait_for_next_context(1);
+        reset_config_context();
+    }
 }

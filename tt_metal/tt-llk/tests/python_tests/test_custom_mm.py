@@ -19,10 +19,10 @@ A standard tiled matmul ``C[M,N] = A[M,K] @ B[K,N]`` with the header's tile-shap
   in1 (B)  -> SrcA, full ``[32,32]`` tiles.
   rt_dim = 1, ct_dim in [1,16], kt_dim in [1,256], LoFi only.
 
-``split_acc=false`` / ``finalize=false``, so there is no finalization merge and DEST
-holds the plain accumulated product (custom_mm.h: finalize must be false when split_acc
-is false). The result is packed as ``ct_dim`` output tiles; inside each tile the two
-16-col faces (M x 16, row-major) sit contiguously, then pad out to a full 32-row tile.
+With ``split_acc`` the finalize merges the two K halves of every output tile; without it
+DEST holds the plain accumulated product. The result is packed as ``ct_dim`` output tiles;
+inside each tile the two 16-col faces (M x 16, row-major) sit contiguously, then pad out
+to a full 32-row tile.
 
 Only defined lanes are asserted
 -------------------------------
@@ -50,7 +50,7 @@ from conftest import blackhole_only, skip_for_quasar, skip_for_wormhole
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import MatmulGolden
 from helpers.llk_params import DestAccumulation, MathFidelity
-from helpers.pack import pack_bfp4_b, pack_bfp8_b, pack_bfp16, pack_fp32
+from helpers.pack import pack_bfp2_b, pack_bfp4_b, pack_bfp8_b, pack_bfp16, pack_fp32
 from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_config import TestConfig
@@ -63,10 +63,37 @@ from helpers.test_variant_parameters import (
 )
 from helpers.tile_constants import DEFAULT_TILE_C_DIM, DEFAULT_TILE_R_DIM, FACE_C_DIM
 from helpers.tilize_untilize import tilize, untilize
-from helpers.unpack import unpack_bfp4_b, unpack_bfp8_b
+from helpers.unpack import unpack_bfp2_b, unpack_bfp4_b, unpack_bfp8_b
 from helpers.utils import passed_test
 
 pytestmark = [skip_for_wormhole, skip_for_quasar]
+
+
+@dataclass
+class CUSTOM_MM_SPLIT(TemplateParameter):
+    """split_acc puts the second K half of each K tile in rows 8 and 24, which the finalize adds onto rows 0 and 16;
+    dense_packing lays the output tiles 32 DEST rows apart instead of 64; reuse_replay loads the
+    custom_mm_reuse_dest_srcb replay program after the custom_mm init, as a chained matmul does.
+    """
+
+    custom_mm_split_acc: bool = False
+    custom_mm_finalize: bool = False
+    custom_mm_dense_packing: bool = True
+    custom_mm_reuse_replay: bool = False
+    custom_mm_group_finalize: bool = True
+
+    def convert_to_cpp(self) -> str:
+        return "\n".join(
+            f"constexpr bool {name} = {str(value).lower()};"
+            for name, value in (
+                ("CUSTOM_MM_SPLIT_ACC", self.custom_mm_split_acc),
+                ("CUSTOM_MM_FINALIZE", self.custom_mm_finalize),
+                ("CUSTOM_MM_DENSE_PACKING", self.custom_mm_dense_packing),
+                ("CUSTOM_MM_REUSE_REPLAY", self.custom_mm_reuse_replay),
+                ("CUSTOM_MM_GROUP_FINALIZE", self.custom_mm_group_finalize),
+            )
+        )
+
 
 # in0 (A/SrcB) row count. The header restricts this to {1,2,4,8}; 8 is the largest and
 # exercises both faces at full height, 1/2/4 cover the narrow-M cases.
@@ -80,11 +107,13 @@ _PACKERS = {
     DataFormat.Float32: pack_fp32,
     DataFormat.Bfp8_b: lambda tensor: bytes(pack_bfp8_b(tensor)),
     DataFormat.Bfp4_b: lambda tensor: bytes(pack_bfp4_b(tensor)),
+    DataFormat.Bfp2_b: lambda tensor: bytes(pack_bfp2_b(tensor)),
 }
 
 _BFP_UNPACKERS = {
     DataFormat.Bfp8_b: unpack_bfp8_b,
     DataFormat.Bfp4_b: unpack_bfp4_b,
+    DataFormat.Bfp2_b: unpack_bfp2_b,
 }
 
 
@@ -96,6 +125,24 @@ class CUSTOM_MM_PRESERVE_SRC_ZERO_FLAG(TemplateParameter):
 
     def convert_to_cpp(self) -> str:
         return f"constexpr bool CUSTOM_MM_PRESERVE_SRC_ZERO_FLAG = {str(self.preserve).lower()};"
+
+
+@dataclass
+class CUSTOM_MM_READ_TRANSPOSED(TemplateParameter):
+    custom_mm_read_transposed: bool = False
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr bool CUSTOM_MM_READ_TRANSPOSED = {str(self.custom_mm_read_transposed).lower()};"
+
+
+@dataclass
+class CUSTOM_MM_CLEANUP_RERUN(TemplateParameter):
+    """After the kernel's calls, every thread runs its hw_cleanup and the kernel runs again from the inits."""
+
+    rerun: bool = False
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr bool CUSTOM_MM_CLEANUP_RERUN = {str(self.rerun).lower()};"
 
 
 class CustomMMStimuliConfig(StimuliConfig):
@@ -135,13 +182,21 @@ def _run_custom_mm(
     formats,
     dest_acc,
     calls=CUSTOM_MM_CALLS(),
+    split_acc=False,
+    finalize=None,
+    dense_packing=True,
+    reuse_replay=False,
     preserve_zero_flag=False,
     operands=None,
+    read_transposed=False,
+    group_finalize=True,
+    cleanup_rerun=False,
 ):
     """Run custom_mm and check it against the golden; return the (M, N) result.
 
     ``operands`` optionally supplies ``(A, B)`` instead of the seeded random operands.
     """
+    finalize = split_acc if finalize is None else finalize
     K = kt * DEFAULT_TILE_R_DIM
     N = ct * DEFAULT_TILE_C_DIM
     in0_format = formats.input_format
@@ -218,7 +273,16 @@ def _run_custom_mm(
         templates=[
             CRK_TILE_DIMM(c_dimm=ct, r_dimm=1, k_dimm=kt),
             calls,
+            CUSTOM_MM_SPLIT(
+                custom_mm_split_acc=split_acc,
+                custom_mm_finalize=finalize,
+                custom_mm_dense_packing=dense_packing,
+                custom_mm_reuse_replay=reuse_replay,
+                custom_mm_group_finalize=group_finalize,
+            ),
             CUSTOM_MM_PRESERVE_SRC_ZERO_FLAG(preserve_zero_flag),
+            CUSTOM_MM_READ_TRANSPOSED(read_transposed),
+            CUSTOM_MM_CLEANUP_RERUN(cleanup_rerun),
         ],
         runtimes=[
             # Result / in0 use 2 faces (M x 16 each); in1 (B) uses 4 full faces.
@@ -262,7 +326,9 @@ def _run_custom_mm(
         active_golden = golden.abs()
         active_golden = active_golden[active_golden > 0]
         mean_active = active_golden.mean().item() if active_golden.numel() else 0.0
-        custom_atol = max(FLOAT16B_DEFAULT_ATOL, ACC_ATOL_PER_KT * kt * mean_active)
+        # split_acc's finalize adds the two bf16 partials: one more rounding step.
+        steps = kt + 1 if split_acc else kt
+        custom_atol = max(FLOAT16B_DEFAULT_ATOL, ACC_ATOL_PER_KT * steps * mean_active)
 
     assert passed_test(
         golden, res_tensor, out_format, custom_atol=custom_atol, print_pcc=True
@@ -300,6 +366,71 @@ def _dest_acc_for(formats):
 )
 def test_custom_mm(formats, M, kt, ct):
     _run_custom_mm(M, kt, ct, formats, _dest_acc_for(formats))
+
+
+@blackhole_only
+@parametrize(
+    formats=CUSTOM_MM_FORMATS,
+    M=list(SUPPORTED_M),
+    kt=[1, 2, 4],
+    ct=CT_DIMS + [3],
+)
+def test_custom_mm_split_acc(formats, M, kt, ct):
+    """split_acc with the finalize, which merges the two K halves of every output tile."""
+    _run_custom_mm(M, kt, ct, formats, _dest_acc_for(formats), split_acc=True)
+
+
+@blackhole_only
+@parametrize(
+    formats=CUSTOM_MM_FORMATS,
+    M=[1, 8],
+    ct=[1, 3, 4],
+    split_acc=[True, False],
+)
+def test_custom_mm_finalize_tile_stride(formats, M, ct, split_acc):
+    """The finalize with output tiles a full tile apart in DEST (dense_packing off), with and without split_acc."""
+    _run_custom_mm(
+        M,
+        2,
+        ct,
+        formats,
+        _dest_acc_for(formats),
+        split_acc=split_acc,
+        finalize=True,
+        dense_packing=False,
+    )
+
+
+@blackhole_only
+@parametrize(formats=CUSTOM_MM_FORMATS, M=[1, 8], kt=[1, 2], ct=[2, 3, 4])
+def test_custom_mm_split_acc_per_tile_finalize(formats, M, kt, ct):
+    """split_acc with group_finalize off, which 16-bit and 32-bit weights take."""
+    _run_custom_mm(
+        M, kt, ct, formats, _dest_acc_for(formats), split_acc=True, group_finalize=False
+    )
+
+
+@blackhole_only
+@parametrize(formats=CUSTOM_MM_FORMATS, M=[1, 8], kt=[1, 2], ct=[2, 4, 5, 16])
+def test_custom_mm_split_acc_reuse_replay(formats, M, kt, ct):
+    """The split_acc finalize with the reuse replay program loaded between the init and the call."""
+    _run_custom_mm(
+        M, kt, ct, formats, _dest_acc_for(formats), split_acc=True, reuse_replay=True
+    )
+
+
+@blackhole_only
+@parametrize(formats=CUSTOM_MM_FORMATS, M=[1, 8], ct=[1, 4])
+def test_custom_mm_finalize_without_split(formats, M, ct):
+    """A finalize without split_acc adds the zeroed rows 8 and 24 back, so the product is unchanged."""
+    _run_custom_mm(M, 2, ct, formats, _dest_acc_for(formats), finalize=True)
+
+
+@blackhole_only
+@parametrize(formats=CUSTOM_MM_FORMATS, M=[1, 8], kt=[2, 5])
+def test_custom_mm_read_transposed_one_column(formats, M, kt):
+    """At ct 1 the transposed walk is the contiguous one, so it must step one weight tile per k."""
+    _run_custom_mm(M, kt, 1, formats, _dest_acc_for(formats), read_transposed=True)
 
 
 ODD_K_CASES = [
@@ -363,16 +494,149 @@ MULTI_CALL_CASES = [
 
 
 @blackhole_only
+@pytest.mark.parametrize("banked", [False, True], ids=["one_bank", "banked"])
 @pytest.mark.parametrize(
     "M,kt,ct,num_calls,in1_format",
     [pytest.param(*case[1:], id=case[0]) for case in MULTI_CALL_CASES],
 )
-def test_custom_mm_multi_call(M, kt, ct, num_calls, in1_format):
-    """Back-to-back calls into one DEST, checked against the full-K golden."""
+def test_custom_mm_multi_call(M, kt, ct, num_calls, in1_format, banked):
+    """Back-to-back calls into one DEST against the full-K golden, on one bank or banked."""
     formats = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b, in1_format)
     _run_custom_mm(
-        M, kt, ct, formats, DestAccumulation.No, CUSTOM_MM_CALLS(num_calls=num_calls)
+        M,
+        kt,
+        ct,
+        formats,
+        DestAccumulation.No,
+        CUSTOM_MM_CALLS(num_calls=num_calls, banked=banked),
     )
+
+
+# The MoE SRAM expert loop: one split_acc call per expert into one DEST section, the finalize on the last.
+BANKED_SEQUENCE_CASES = [
+    # (id, M, kt, ct, calls, in1 format)
+    ("e4-ct1-kt28", 1, 112, 1, 4, DataFormat.Bfp4_b),
+    ("e8-ct1-kt28", 1, 224, 1, 8, DataFormat.Bfp4_b),
+    ("e4-ct2-kt8", 1, 32, 2, 4, DataFormat.Bfp4_b),
+    ("e8-ct2-kt8", 1, 64, 2, 8, DataFormat.Bfp4_b),
+    ("e3-ct4-kt4-m8", 8, 12, 4, 3, DataFormat.Bfp8_b),
+]
+
+
+@blackhole_only
+@pytest.mark.parametrize(
+    "banked,bank_split",
+    [(False, 0), (True, 0), (True, 1), (True, 2)],
+    ids=["one_bank", "banked", "banked_split", "banked_split_even"],
+)
+@pytest.mark.parametrize(
+    "M,kt,ct,num_calls,in1_format",
+    [pytest.param(*case[1:], id=case[0]) for case in BANKED_SEQUENCE_CASES],
+)
+def test_custom_mm_banked_sequence(
+    M, kt, ct, num_calls, in1_format, banked, bank_split
+):
+    """split_acc calls into one DEST section, the finalize on the last; the split cases start a second sequence."""
+    formats = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b, in1_format)
+    _run_custom_mm(
+        M,
+        kt,
+        ct,
+        formats,
+        DestAccumulation.No,
+        CUSTOM_MM_CALLS(num_calls=num_calls, banked=banked, bank_split=bank_split),
+        split_acc=True,
+    )
+
+
+@blackhole_only
+@pytest.mark.parametrize(
+    "M,kt,ct,num_calls,in1_format",
+    [pytest.param(*case[1:], id=case[0]) for case in BANKED_SEQUENCE_CASES],
+)
+def test_custom_mm_banked_after_hw_cleanup(M, kt, ct, num_calls, in1_format):
+    """A banked sequence, the hw_cleanup, then the same sequence with the same bank key.
+
+    The cleanup leaves the canonical Float16_b configuration in the second bank and must forget the key, so the
+    second bank init copies the block-float weights' configuration again; if it skipped the copy, the calls on the
+    second bank would read the weights as Float16_b.
+    """
+    formats = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b, in1_format)
+    _run_custom_mm(
+        M,
+        kt,
+        ct,
+        formats,
+        DestAccumulation.No,
+        CUSTOM_MM_CALLS(num_calls=num_calls, banked=True),
+        split_acc=True,
+        cleanup_rerun=True,
+    )
+
+
+BFP2_CASES = [
+    pytest.param(
+        8,
+        4,
+        4,
+        InputOutputFormat(
+            DataFormat.Float16_b, DataFormat.Float16_b, DataFormat.Bfp2_b
+        ),
+        id="M8-k4-ct4-bfp2",
+    ),
+    pytest.param(
+        8,
+        4,
+        8,
+        InputOutputFormat(
+            DataFormat.Float16_b, DataFormat.Float16_b, DataFormat.Bfp2_b
+        ),
+        id="M8-k4-ct8-bfp2",
+    ),
+    pytest.param(
+        8,
+        2,
+        1,
+        InputOutputFormat(
+            DataFormat.Float16_b, DataFormat.Float16_b, DataFormat.Bfp2_b
+        ),
+        id="M8-k2-ct1-bfp2",
+    ),
+    pytest.param(
+        1,
+        2,
+        2,
+        InputOutputFormat(
+            DataFormat.Float16_b, DataFormat.Float16_b, DataFormat.Bfp2_b
+        ),
+        id="M1-k2-ct2-bfp2",
+    ),
+    pytest.param(
+        8,
+        16,
+        8,
+        InputOutputFormat(
+            DataFormat.Float16_b, DataFormat.Float16_b, DataFormat.Bfp2_b
+        ),
+        id="M8-k16-ct8-bfp2",
+    ),
+    pytest.param(
+        4,
+        9,
+        3,
+        InputOutputFormat(
+            DataFormat.Float16_b, DataFormat.Float16_b, DataFormat.Bfp2_b
+        ),
+        id="M4-k9-ct3-bfp2",
+    ),
+]
+
+
+@blackhole_only
+@pytest.mark.parametrize("M,kt,ct,formats", BFP2_CASES)
+def test_custom_mm_bfp2_in1(formats, M, kt, ct):
+    """Bfp2_b weights on the plain (uncompressed) custom_mm path."""
+    _run_custom_mm(M, kt, ct, formats, DestAccumulation.No)
 
 
 # Smallest positive bf16 denormal, 2^-133; bf16 denormals are its multiples 1..127 (7 mantissa bits).
